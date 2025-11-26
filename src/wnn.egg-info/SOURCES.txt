@@ -1,0 +1,15 @@
+LICENSE
+README.md
+pyproject.toml
+src/wnn/__init__.py
+src/wnn.egg-info/PKG-INFO
+src/wnn.egg-info/SOURCES.txt
+src/wnn.egg-info/dependency_links.txt
+src/wnn.egg-info/top_level.txt
+src/wnn/ram/Memory.py
+src/wnn/ram/RAMAutomaton.py
+src/wnn/ram/RAMLayer.py
+src/wnn/ram/RAMLayerOriginal.py
+src/wnn/ram/RAMNeuron.py
+src/wnn/ram/RAMTransformer.py
+src/wnn/ram/__init__.py

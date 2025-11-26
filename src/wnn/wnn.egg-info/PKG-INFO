@@ -1,0 +1,6 @@
+Metadata-Version: 2.4
+Name: wnn
+Version: 0.1.0
+Summary: Weightless Neural Network
+Author: Luiz Alberto Crispiniano Garcia
+Requires-Python: >=3.9
