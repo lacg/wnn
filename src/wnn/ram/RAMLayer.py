@@ -12,9 +12,9 @@ class RAMLayer(Module):
 	"""
 	Layer of RAM neurons with 2-bit memory values stored as uint8.
 	Memory encoding:
-		EMPTY = 0
-		VAL0  = 1
-		VAL1  = 2
+		FALSE	= 0
+		TRUE	= 1
+		EMPTY	= 2
 
 	Connections are fixed (not trainable here).
 	"""
@@ -35,6 +35,11 @@ class RAMLayer(Module):
 
 
 	@property
+	def num_neurons(self) -> int:
+		return self.memory.num_neurons
+
+
+	@property
 	def memory(self) -> Memory:
 		return self._memory
 
@@ -46,23 +51,23 @@ class RAMLayer(Module):
 		self._memory = new_memory
 
 
-	def flip_memory(self, neuron_idx: Tensor, output: Tensor) -> None:
+	def flip_memory(self, neuron_index: int, layer_input_bits: Tensor) -> None:
 		"""
 		Randomly flip ONE address in the given layer’s memory
 		that corresponds to the given neuron index.
 		Used by A1.2-R influence propagation.
 		"""
-		self.memory.flip(neuron_idx, output)
+		self.memory.flip(neuron_index, layer_input_bits)
 
 
-	def forward(self, input_bits: Tensor) -> bool:
+	def forward(self, input_bits: Tensor) -> Tensor:
 		"""
 		Forward pass for RAM layer.
 		input_bits: [batch_size, total_input_bits], dtype bool or 0/1
 		returns: [batch_size, num_neurons] boolean outputs
 		"""
-		# actual bit output: True if MemoryVal.VAL1.value, otherwise False
-		return self.memory[input_bits] == MemoryVal.VAL1.value
+		# actual bit output: True if MemoryVal.TRUE.value, otherwise False
+		return self.memory(input_bits)
 
 
 	def get_addresses(self, input_bits: Tensor) -> int:
@@ -80,19 +85,19 @@ class RAMLayer(Module):
 		Write to memory directly (output layer only uses this after stability).
 		target_bits must be bool or {0,1}.
 		"""
-		self.memory[input_bits] = target_bits
+		self.memory.train_write(input_bits, target_bits)
 
 
-	def select_connection(self, neuron: Tensor) -> int:
+	def select_connection(self, neuron: int, use_high_impact: bool = True) -> int:
 		# RANDOM INFLUENCE:
-		# randomly flip 1 contributing hidden bit in output_layer_input
-		return self.memory.select_connection(neuron)
+		# randomly select a connection from the neuron to flip on the previous layer.
+		return self.memory.select_connection(neuron, use_high_impact)
 
 
-	def set_memory(self, neuron_indice: int, address: int, bits: int):
+	def set_memory(self, neuron_index: int, address: int, bit: bool):
 		"""
 		Used by EDRA: directly overwrite specific memory cells.
 		bits = 0/1
 		"""
-		self.memory.set_memory(neuron_indice, address, bits)
+		self.memory.set_memory(neuron_index, address, bit)
 
