@@ -15,3 +15,8 @@
 #
 # Requirements: torch
 # --------------------------------------------------------------------
+
+from .Memory import Memory
+from .Memory import MemoryVal
+from .RAMLayer import RAMLayer
+from .RAMTransformer import RAMTransformer
