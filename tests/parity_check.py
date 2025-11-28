@@ -6,48 +6,49 @@ import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
-from wnn.ram.RAMTransformer import RAMTransformer
+from wnn.ram import RAMTransformer
 
-n = 16
-epochs = 50
+n = 3
+epochs = 5000
+width = len(str(epochs))
 # ----------------------------
 # Build a tiny RAMTransformer
 # ----------------------------
 model = RAMTransformer(
-	input_bits=4,
-	n_input_neurons=5,
-	n_state_neurons=0,         # no state for this toy
+	input_bits=n,
+	n_input_neurons=2*n,
+	n_state_neurons=n,         # no state for this toy
 	n_output_neurons=1,
 	n_bits_per_input_neuron=2,
-	n_bits_per_state_neuron=0, # unused
-	n_bits_per_output_neuron=4,
+	n_bits_per_state_neuron=2, # unused
+	n_bits_per_output_neuron=3*n,
 	use_hashing=False,
 	rng=None,
 )
 
 # ----------------------------
-# Build parity dataset (all 16 examples)
+# Build parity dataset (all 2 ** n examples)
 # ----------------------------
 xs = []
 ys = []
-for i in range(n):
-	vec = [(i >> b) & 1 for b in range(4)]
+for i in range(2 ** n):
+	vec = [(i >> b) & 1 for b in range(n)]
 	xs.append(vec)
 	ys.append(sum(vec) % 2)  # odd parity
 
-xs = torch.tensor(xs, dtype=torch.bool)		# [16, 4]
-ys = torch.tensor(ys, dtype=torch.bool).unsqueeze(1)	# [16, 1]
+xs = torch.tensor(xs, dtype=torch.bool)		# [2 ** n, n]
+ys = torch.tensor(ys, dtype=torch.bool).unsqueeze(1)	# [2 ** n, 1]
 
 # ----------------------------
 # Training using EDRA (per-sample)
 # ----------------------------
 for epoch in range(epochs):   # a few passes is usually enough
-	for i in range(n):
+	for i in range(2 ** n):
 		x = xs[i:i+1]
 		y = ys[i:i+1]
 		model.train_one(x, y)
 
-	print(f"Epoch {epoch+1} done.")
+	print(f"\rEpoch {epoch+1:0{width}d} done.", end="", flush=True)
 
 # ----------------------------
 # Test after training
@@ -56,11 +57,11 @@ print("\nTesting after EDRA training:\n")
 
 with torch.no_grad():
 	count = 0
-	for i in range(n):
+	for i in range(2 ** n):
 		x = xs[i:i+1]
 		y_true = ys[i].item()
 		y_pred = model.forward(x).item()
-		print(f"{i:04b}: predicted={y_pred}   expected={y_true}")
+		print(f"{i:0{n}b}: predicted={y_pred}   expected={y_true}")
 		count += y_pred == y_true
-	acceptance_rate = count / n
+	acceptance_rate = count / (2 ** n)
 	print(f"Network acceptance rate: {acceptance_rate:.0%}")
