@@ -79,7 +79,7 @@ class RAMTransformer(Module):
 		if self.state_layer.num_neurons > 0:
 			self.state_bits = zeros(
 				batch_size,
-				self.n_state_neurons,
+				self.state_layer.num_neurons,
 				dtype=tbool,
 				device=device,
 			)
@@ -191,7 +191,7 @@ class RAMTransformer(Module):
 				# commit mappings
 				self.input_layer.train_write(input_bits, input_layer_output)
 
-				if self.n_state_neurons > 0:
+				if self.state_layer.num_neurons > 0:
 					state_layer_input = cat([input_layer_output, self.state_bits], dim=1)
 					self.state_layer.train_write(state_layer_input, state_layer_output)
 					self.state_bits = state_layer_output.detach().clone()
