@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
-#!/usr/bin/env python3
+
+from datetime import datetime
 import sys, os
+
+print(f"\n=== Starting Parity Check Run at {datetime.now()} ===\n")
 
 # Add project root to PYTHONPATH
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -16,12 +19,12 @@ width = len(str(epochs))
 # ----------------------------
 model = RAMTransformer(
 	input_bits=n,
-	n_input_neurons=2*n,
-	n_state_neurons=n,         # no state for this toy
+	n_input_neurons=n,
+	n_state_neurons=0,         # no state for this toy
 	n_output_neurons=1,
 	n_bits_per_input_neuron=2,
 	n_bits_per_state_neuron=2, # unused
-	n_bits_per_output_neuron=3*n,
+	n_bits_per_output_neuron=n,
 	use_hashing=False,
 	rng=None,
 )
@@ -65,3 +68,6 @@ with torch.no_grad():
 		count += y_pred == y_true
 	acceptance_rate = count / (2 ** n)
 	print(f"Network acceptance rate: {acceptance_rate:.0%}")
+
+print(f"\n=== End Parity Check Run at {datetime.now()} ===\n")
+print(model)   # calls __str__()

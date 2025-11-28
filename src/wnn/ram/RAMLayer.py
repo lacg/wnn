@@ -33,6 +33,17 @@ class RAMLayer(Module):
 			rng=rng,
 		)
 
+	def __repr__(self):
+		return (
+			f"RAMLayer"
+			f"("
+			f"{self.memory.__repr__()}"
+			f")"
+		)
+
+	def __str__(self):
+		return str(self.memory)
+
 	@property
 	def num_neurons(self) -> int:
 		return self.memory.num_neurons

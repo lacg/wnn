@@ -87,6 +87,37 @@ class Memory(Module):
 			assert conn.min().item() >= 0 and conn.max().item() < self.total_input_bits
 			self.register_buffer("connections", conn)
 
+	def __repr__(self):
+		return (
+			f"Memory"
+			f"("
+			f"neurons={self.num_neurons}, "
+			f"bits_per_neuron={self.n_bits_per_neuron}, "
+			f"memory_size={self.memory_size}"
+			f")"
+		)
+
+	def __str__(self):
+		lines = []
+		lines.append(f"\n=== Memory ===")
+		lines.append(f"total_input_bits = {self.total_input_bits}")
+		lines.append(f"num_neurons      = {self.num_neurons}")
+		lines.append(f"bits_per_neuron  = {self.n_bits_per_neuron}")
+		lines.append(f"memory_size      = {self.memory_size}")
+
+		lines.append("\nConnections:")
+		for i in range(self.num_neurons):
+			row = self.connections[i].tolist()
+			lines.append(f"\tneuron {i}: {row}")
+
+		lines.append("\nMemory Matrix:")
+		for neuron_index in range(self.num_neurons):
+			memory_vals = " ".join(str(mem_val) for mem_val in self.memory[neuron_index].tolist())
+			lines.append(f"\tneuron {neuron_index}: {memory_vals}")
+
+		lines.append("")  # final newline
+		return "\n".join(lines)
+
 	def _randomize_connections(self, rng: Optional[int]) -> Tensor:
 		"""
 		Random connectivity:

@@ -72,6 +72,46 @@ class RAMTransformer(Module):
 		# recurrent state bits (updated after stable examples)
 		self.state_bits: Optional[Tensor] = None
 
+	def __repr__(self):
+		return (
+			f"RAMTransformer"
+			f"("
+			f"InputLayer"
+			f"("
+			f"{self.input_layer.__repr__()}"
+			f")"
+			f"StateLayer"
+			f"("
+			f"{self.state_layer.__repr__()}"
+			f")"
+			f"OutputLayer"
+			f"("
+			f"{self.output_layer.__repr__()}"
+			f")"
+			f")"
+		)
+
+	def __str__(self):
+		lines = []
+		lines.append("\n==============================")
+		lines.append(" RAMTransformer Full Dump")
+		lines.append("==============================")
+
+		lines.append("\n--- Input Layer ---")
+		lines.append(str(self.input_layer))
+
+		lines.append("\n--- State Layer ---")
+		if self.n_state_neurons > 0:
+			lines.append(str(self.state_layer))
+		else:
+			lines.append(" (no state neurons)")
+
+		lines.append("\n--- Output Layer ---")
+		lines.append(str(self.output_layer))
+
+		lines.append("")  # newline
+		return "\n".join(lines)
+
 	def reset_state(self, batch_size: int, device) -> None:
 		"""
 		Initialize recurrent state to all False.
