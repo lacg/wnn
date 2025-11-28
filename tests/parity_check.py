@@ -3,7 +3,9 @@
 from datetime import datetime
 import sys, os
 
-print(f"\n=== Starting Parity Check Run at {datetime.now()} ===\n")
+start = datetime.now()
+
+print(f"\n=== Starting Parity Check Run at {start} ===\n")
 
 # Add project root to PYTHONPATH
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -69,5 +71,7 @@ with torch.no_grad():
 	acceptance_rate = count / (2 ** n)
 	print(f"Network acceptance rate: {acceptance_rate:.0%}")
 
-print(f"\n=== End Parity Check Run at {datetime.now()} ===\n")
+end = datetime.now()
+print(f"\n=== End Parity Check Run at {end} ===\n")
+print(f"\n=== Duration: {end - start} ===\n")
 print(model)   # calls __str__()

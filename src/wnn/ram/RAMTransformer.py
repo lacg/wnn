@@ -101,7 +101,7 @@ class RAMTransformer(Module):
 		lines.append(str(self.input_layer))
 
 		lines.append("\n--- State Layer ---")
-		if self.n_state_neurons > 0:
+		if self.state_layer.num_neurons > 0:
 			lines.append(str(self.state_layer))
 		else:
 			lines.append(" (no state neurons)")
