@@ -1,8 +1,0 @@
-Metadata-Version: 2.4
-Name: wnn
-Version: 2025.11.25.23.43
-Summary: Weightless Neural Network Research
-Author: Luiz Alberto Crispiniano Garcia
-Requires-Python: >=3.9
-License-File: LICENSE
-Dynamic: license-file
