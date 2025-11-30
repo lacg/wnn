@@ -156,7 +156,7 @@ class Memory(Module):
 
 		return stack(layer_connections, dim=0).long()
 
-	def get_address(self, input_bits: Tensor) -> Tensor:
+	def get_addresses(self, input_bits: Tensor) -> Tensor:
 		"""
 		Compute integer addresses [batch_size, num_neurons] for given input bits.
 		input_bits: [B, total_input_bits], bool or {0,1}
@@ -173,18 +173,34 @@ class Memory(Module):
 			address = address % self.memory_size
 		return address.long()
 
+	def get_address_for_neuron(self, neuron_index: int, input_bits: Tensor) -> int:
+		return int((input_bits.to(uint8) * self.binary_addresses[neuron_index]).sum().long().item())
+
+	def get_memories_for_bits(self, input_bits: Tensor) -> Tensor:
+		"""
+		Used by EDRA: directly get specific memory cell.
+		returns a MemoryVal.{x}.value
+		"""
+		addresses = self.get_addresses(input_bits)  # [B, N]
+		batch_size = addresses.shape[0]
+
+		neuron_index = arange(self.num_neurons, dtype=long, device=addresses.device).unsqueeze(0).expand(batch_size, -1)
+		return self.memory[neuron_index, addresses]  # [B, N]
+
+	def get_memory(self, neuron_index: int, address: int) -> int:
+		"""
+		Used by EDRA: directly get specific memory cell.
+		returns a MemoryVal.{x}.value
+		"""
+		return int(self.memory[neuron_index, address].item())
+
 	def forward(self, input_bits: Tensor) -> Tensor:
 		"""
 		Forward lookup: returns boolean outputs [B, num_neurons].
 		TRUE cells (1) → True
 		FALSE and EMPTY → False
 		"""
-		address = self.get_address(input_bits)  # [B, N]
-		batch_size = address.shape[0]
-
-		neuron_index = arange(self.num_neurons, dtype=long, device=address.device).unsqueeze(0).expand(batch_size, -1)
-		mem_vals = self.memory[neuron_index, address]  # [B, N]
-		return mem_vals == MemoryVal.TRUE.value
+		return self.get_memories_for_bits(input_bits) == MemoryVal.TRUE.value
 
 	def train_write(self, input_bits: Tensor, target_bits: Tensor) -> None:
 		"""
@@ -196,17 +212,16 @@ class Memory(Module):
 		if target_bits.dtype != tbool:
 			target_bits = target_bits.to(tbool)
 
-		address = self.get_address(input_bits)  # [B, N]
-		batch_size = address.shape[0]
+		addresses = self.get_addresses(input_bits)  # [B, N]
+		batch_size = addresses.shape[0]
 
-		neuron_index = arange(self.num_neurons, dtype=long, device=address.device).unsqueeze(0).expand(batch_size, -1)
+		neuron_index = arange(self.num_neurons, dtype=long, device=addresses.device).unsqueeze(0).expand(batch_size, -1)
 
-		encoded = where(
-			target_bits,
-			full_like(target_bits, MemoryVal.TRUE.value, dtype=uint8),
-			full_like(target_bits, MemoryVal.FALSE.value, dtype=uint8),
-		)
-		self.memory[neuron_index, address] = encoded
+		for batch in range(batch_size):
+			for neuron_index in range(self.num_neurons):
+				address = int(addresses[batch, neuron_index].item())
+				bit = bool(target_bits[batch, neuron_index].item())
+				self.set_memory(neuron_index, address, bit)
 
 	def select_connection(self, neuron_index: int, use_high_impact: bool = True) -> int:
 		"""
@@ -224,9 +239,10 @@ class Memory(Module):
 			pos = int(randint(0, num_bits, (1,), device=dev).item())
 		return int(self.connections[neuron_index, pos].item())
 
-	def set_memory(self, neuron_index: int, address: int, bit: bool) -> None:
+	def set_memory(self, neuron_index: int, address: int, bit: bool, allow_override: bool = False) -> None:
 		"""
 		Used by EDRA: directly overwrite specific memory cell (for one neuron & address).
 		bit = False/True
 		"""
-		self.memory[neuron_index, address] = MemoryVal.TRUE.value if bit else MemoryVal.FALSE.value
+		if self.get_memory(neuron_index, address) == MemoryVal.EMPTY.value or allow_override:
+			self.memory[neuron_index, address] = MemoryVal.TRUE.value if bit else MemoryVal.FALSE.value

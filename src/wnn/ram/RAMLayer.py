@@ -63,11 +63,24 @@ class RAMLayer(Module):
 		"""
 		self.memory.train_write(input_bits, target_bits)
 
-	def get_address(self, input_bits: Tensor) -> Tensor:
+	def get_addresses(self, input_bits: Tensor) -> Tensor:
 		"""
 		Expose Memory.get_address for EDRA use.
 		"""
-		return self.memory.get_address(input_bits)
+		return self.memory.get_addresses(input_bits)
+
+	def get_address_for_neuron(self, neuron_index: int, input_bits: Tensor) -> int:
+		return self.memory.get_address_for_neuron(neuron_index, input_bits)
+
+	def get_memories_for_bits(self, input_bits: Tensor) -> Tensor:
+		return self.memory.get_memories_for_bits(input_bits)
+
+	def get_memory(self, neuron_index: int, address: int) -> int:
+		"""
+		Used by EDRA: directly get specific memory cell.
+		returns a MemoryVal.{x}.value
+		"""
+		return self.memory.get_memory(neuron_index, address)
 
 	def select_connection(self, neuron_index: int, use_high_impact: bool = True) -> int:
 		"""
@@ -75,7 +88,7 @@ class RAMLayer(Module):
 		"""
 		return self.memory.select_connection(neuron_index, use_high_impact)
 
-	def set_memory(self, neuron_index: int, address: int, bit: bool) -> None:
+	def set_memory(self, neuron_index: int, address: int, bit: bool, allow_override: bool = False) -> None:
 		"""
 		Used by EDRA: directly overwrite specific memory cell.
 		bit = False/True

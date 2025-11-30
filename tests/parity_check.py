@@ -13,7 +13,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import torch
 from wnn.ram import RAMTransformer
 
-n = 3
+n = 4
 epochs = 5000
 width = len(str(epochs))
 # ----------------------------
@@ -69,9 +69,9 @@ with torch.no_grad():
 		print(f"{i:0{n}b}: predicted={y_pred}   expected={y_true}")
 		count += y_pred == y_true
 	acceptance_rate = count / (2 ** n)
-	print(f"Network acceptance rate: {acceptance_rate:.0%}")
 
 end = datetime.now()
+print(model)   # calls __str__()
+print(f"Network acceptance rate: {acceptance_rate:.0%}")
 print(f"\n=== End Parity Check Run at {end} ===\n")
 print(f"\n=== Duration: {end - start} ===\n")
-print(model)   # calls __str__()
