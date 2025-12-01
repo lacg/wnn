@@ -3,11 +3,9 @@ from typing import Optional
 
 from torch import arange
 from torch import argmax
-from torch import bool as tbool
 from torch import cat
 from torch import empty
 from torch import full
-from torch import full_like
 from torch import int64
 from torch import long
 from torch import manual_seed
@@ -15,7 +13,6 @@ from torch import randint
 from torch import randperm
 from torch import Tensor
 from torch import uint8
-from torch import where
 from torch import stack
 from torch.nn import Module
 
@@ -161,8 +158,8 @@ class Memory(Module):
 		Compute integer addresses [batch_size, num_neurons] for given input bits.
 		input_bits: [B, total_input_bits], bool or {0,1}
 		"""
-		if input_bits.dtype != tbool:
-			input_bits = input_bits.to(tbool)
+		if input_bits.dtype != uint8:
+			input_bits = input_bits.to(uint8)
 
 		# gather inputs for each neuron → [B, N, k]
 		gathered = input_bits[:, self.connections]
@@ -207,10 +204,10 @@ class Memory(Module):
 		Direct write: set memory for each (sample, neuron) to target bit (False/True).
 		target_bits must be bool or {0,1}.
 		"""
-		if input_bits.dtype != tbool:
-			input_bits = input_bits.to(tbool)
-		if target_bits.dtype != tbool:
-			target_bits = target_bits.to(tbool)
+		if input_bits.dtype != uint8:
+			input_bits = input_bits.to(uint8)
+		if target_bits.dtype != uint8:
+			target_bits = target_bits.to(uint8)
 
 		addresses = self.get_addresses(input_bits)  # [B, N]
 		batch_size = addresses.shape[0]
@@ -244,5 +241,7 @@ class Memory(Module):
 		Used by EDRA: directly overwrite specific memory cell (for one neuron & address).
 		bit = False/True
 		"""
-		if self.get_memory(neuron_index, address) == MemoryVal.EMPTY.value or allow_override:
-			self.memory[neuron_index, address] = MemoryVal.TRUE.value if bit else MemoryVal.FALSE.value
+		current_memory = self.get_memory(neuron_index, address)
+		new_memory = MemoryVal.TRUE.value if bit else MemoryVal.FALSE.value
+		if current_memory == MemoryVal.EMPTY.value or (allow_override and current_memory != new_memory):
+			self.memory[neuron_index, address] = new_memory

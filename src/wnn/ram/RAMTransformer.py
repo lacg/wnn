@@ -2,11 +2,10 @@ from random import choice
 
 from typing import Optional
 
-from torch import bool as tbool
 from torch import cat
-from torch import full
 from torch import nonzero
 from torch import randint
+from torch import uint8
 from torch import zeros
 from torch import Tensor
 from torch.nn import Module
@@ -75,6 +74,10 @@ class RAMTransformer(Module):
 		# recurrent state bits (updated after stable examples)
 		self.state_bits: Optional[Tensor] = None
 
+		# maps hidden_neuron → list of (output_neuron, bit_position)
+		self.inverse_output_connections = self._build_inverse_connections()
+		self.output_desired_bits = self._build_output_desired_bits()
+
 	def __repr__(self):
 		return (
 			f"RAMTransformer"
@@ -114,6 +117,20 @@ class RAMTransformer(Module):
 
 		lines.append("")  # newline
 		return "\n".join(lines)
+
+	def _build_inverse_connections(self):
+		conn = self.output_layer.memory.connections  # shape [N_out, bits_per_neuron]
+		inv_conn = []
+		
+		for out_neuron in range(conn.shape[0]):
+			inv_conn.append([int(conn[out_neuron, bit_pos].item()) for bit_pos in range(conn.shape[1])])
+		
+		return inv_conn
+
+	def _build_output_desired_bits(self):
+		n_bits = self.output_layer.memory.n_bits_per_neuron
+		return [self._get_desired_bits(n_bits, address) for address in range(2 ** (self.input_layer.num_neurons + self.state_layer.num_neurons))]
+
 
 	def _can_hidden_output(self, address: int, input_bits: Tensor, state_layer_input: Tensor) -> bool:
 		input_memories = self.input_layer.get_memories_for_bits(input_bits)
@@ -180,7 +197,7 @@ class RAMTransformer(Module):
 			state_layer_input = cat([input_layer_output, self.state_bits], dim=1)
 			state_layer_output = self.state_layer(state_layer_input)  # [B, N_state]
 		else:
-			state_layer_input = zeros(batch_size, 0, dtype=tbool, device=device)
+			state_layer_input = zeros(batch_size, 0, dtype=uint8, device=device)
 			state_layer_output = state_layer_input
 
 		output_layer_input = cat([input_layer_output, state_layer_output], dim=1)  # [B, N_in + N_state]
@@ -207,8 +224,8 @@ class RAMTransformer(Module):
 	def _normalize_bits(self, bits: Tensor) -> Tensor:
 		if bits.ndim == 1:
 			bits = bits.unsqueeze(0)
-		if bits.dtype != tbool:
-			bits = bits.to(tbool)
+		if bits.dtype != uint8:
+			bits = bits.to(uint8)
 		return bits
 
 	def _train_write(self, input_bits: Tensor, target_bits: Tensor, state_layer_input: Tensor, input_layer_output: Tensor, state_layer_output: Tensor, output_layer_input: Tensor) -> None:
@@ -270,11 +287,7 @@ class RAMTransformer(Module):
 			# -------------------------------------------------------
 			# Step 2: Decode output address → required hidden bits
 			# -------------------------------------------------------
-			desired_bits = self._get_desired_bits(self.output_layer.memory.n_bits_per_neuron, target_output_address)
-
-			# connections for this output neuron
-			neuron_connections = self.output_layer.memory.connections[neuron_index]
-			# this maps output-bit-position → hidden-neuron-index
+			desired_bits = self.output_desired_bits[target_output_address]
 
 			# -------------------------------------------------------
 			# Step 3: Update HIDDEN layer BEFORE output layer
@@ -282,7 +295,7 @@ class RAMTransformer(Module):
 			# -------------------------------------------------------
 			for pos in range(self.output_layer.memory.n_bits_per_neuron):
 
-					hidden_neuron_index = int(neuron_connections[pos].item())
+					hidden_neuron_index = self.inverse_output_connections[neuron_index][pos]
 					required_bit        = desired_bits[hidden_neuron_index]
 
 					# Force this hidden neuron to output required_bit
@@ -320,11 +333,11 @@ class RAMTransformer(Module):
 			self.state_bits = zeros(
 				batch_size,
 				self.state_layer.num_neurons,
-				dtype=tbool,
+				dtype=uint8,
 				device=device,
 			)
 		else:
-			self.state_bits = zeros(batch_size, 0, dtype=tbool, device=device)
+			self.state_bits = zeros(batch_size, 0, dtype=uint8, device=device)
 
 	def train_one(self, input_bits: Tensor, target_bits: Tensor, max_iters: int = 16) -> None:
 		"""

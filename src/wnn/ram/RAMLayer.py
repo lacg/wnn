@@ -4,7 +4,6 @@ from torch import Tensor
 from torch.nn import Module
 
 from wnn.ram.Memory import Memory
-from wnn.ram.Memory import MemoryVal
 
 
 class RAMLayer(Module):

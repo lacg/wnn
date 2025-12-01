@@ -21,12 +21,12 @@ width = len(str(epochs))
 # ----------------------------
 model = RAMTransformer(
 	input_bits=n,
-	n_input_neurons=n,
+	n_input_neurons=6,
 	n_state_neurons=0,         # no state for this toy
 	n_output_neurons=1,
-	n_bits_per_input_neuron=2,
+	n_bits_per_input_neuron=3,
 	n_bits_per_state_neuron=2, # unused
-	n_bits_per_output_neuron=n,
+	n_bits_per_output_neuron=6,
 	use_hashing=False,
 	rng=None,
 )
