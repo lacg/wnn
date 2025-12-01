@@ -41,7 +41,10 @@ class RAMLayer(Module):
 		)
 
 	def __str__(self):
-		return str(self.memory)
+		lines = []
+		lines.append("=== RAMLayer ===")
+		lines.append(str(self.memory))
+		return "\n".join(lines)
 
 	@property
 	def num_neurons(self) -> int:

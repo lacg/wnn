@@ -13,20 +13,20 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import torch
 from wnn.ram import RAMTransformer
 
-n = 4
-epochs = 5000
+n = 6
+epochs = 10000
 width = len(str(epochs))
 # ----------------------------
 # Build a tiny RAMTransformer
 # ----------------------------
 model = RAMTransformer(
 	input_bits=n,
-	n_input_neurons=6,
+	n_input_neurons=8,
 	n_state_neurons=0,         # no state for this toy
 	n_output_neurons=1,
-	n_bits_per_input_neuron=3,
+	n_bits_per_input_neuron=4,
 	n_bits_per_state_neuron=2, # unused
-	n_bits_per_output_neuron=6,
+	n_bits_per_output_neuron=8,
 	use_hashing=False,
 	rng=None,
 )

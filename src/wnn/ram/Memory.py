@@ -3,6 +3,7 @@ from typing import Optional
 
 from torch import arange
 from torch import argmax
+from torch import bool as tbool
 from torch import cat
 from torch import empty
 from torch import full
@@ -12,8 +13,8 @@ from torch import manual_seed
 from torch import randint
 from torch import randperm
 from torch import Tensor
-from torch import uint8
 from torch import stack
+from torch import where
 from torch.nn import Module
 
 
@@ -24,9 +25,9 @@ class MemoryVal(Enum):
 	- TRUE  = 1
 	- EMPTY = 2   (safe to overwrite; means "untrained")
 	"""
-	FALSE = 0
-	TRUE = 1
-	EMPTY = 2
+	FALSE	= 0
+	TRUE	= 1
+	EMPTY	= 2
 
 
 class Memory(Module):
@@ -44,6 +45,8 @@ class Memory(Module):
 		EMPTY = 2
 	"""
 
+	WORD_SIZE = 62
+
 	def __init__(
 		self,
 		total_input_bits: int,
@@ -56,24 +59,47 @@ class Memory(Module):
 	):
 		super().__init__()
 
+		assert total_input_bits >= 0
+		assert num_neurons >= 0
+		assert n_bits_per_neuron >= 0
+
 		self.total_input_bits = int(total_input_bits)
 		self.num_neurons = int(num_neurons)
 		self.n_bits_per_neuron = int(n_bits_per_neuron)
 		self.use_hashing = bool(use_hashing)
 		self.memory_size = int(hash_size if use_hashing else (1 << n_bits_per_neuron))
 
-		# 1) memory: [num_neurons, memory_size], initialized to EMPTY
+		# bit-packing constants
+		self.bits_per_cell	= 2
+		self.cells_per_word	= self.WORD_SIZE // self.bits_per_cell		# 32 cells per int64
+		self.words_per_neuron = (self.memory_size + self.cells_per_word - 1) // self.cells_per_word
+
+		# main storage: [num_neurons, words_per_neuron]
+		# initialized to all EMPTY, which we interpret as FALSE (0).
+		# EMPTY is explicitly written as MemoryVal.EMPTY.value (2).
+		EMPTY_WORD = 0
+		for i in range(self.cells_per_word):
+			EMPTY_WORD |= (MemoryVal.EMPTY.value << (i * self.bits_per_cell))
+
 		self.register_buffer(
-			"memory",
-			full((self.num_neurons, self.memory_size), MemoryVal.EMPTY.value, dtype=uint8),
+			"memory_words",
+			full((self.num_neurons, self.memory_size), EMPTY_WORD, dtype=int64),
 		)
 
+		# 1) memory: [num_neurons, memory_size], initialized to EMPTY
+		# self.register_buffer(
+		# 	"memory",
+		# 	full((self.num_neurons, self.memory_size), MemoryVal.EMPTY.value, dtype=uint8),
+		# )
+
 		# 2) binary address weights for each neuron: [num_neurons, n_bits_per_neuron]
-		addr_base = arange(self.n_bits_per_neuron, dtype=int64)
-		self.register_buffer(
-			"binary_addresses",
-			(2 ** addr_base).unsqueeze(0).repeat(self.num_neurons, 1),
-		)
+		# binary addresses: per-neuron weights [num_neurons, n_bits_per_neuron]
+		# 1, 2, 4, 8, ..., for each bit position
+		if self.n_bits_per_neuron > 0:
+			base = (2 ** arange(self.n_bits_per_neuron, dtype=int64)).unsqueeze(0)
+			self.register_buffer("binary_addresses", base.repeat(self.num_neurons, 1),)
+		else:
+			self.register_buffer("binary_addresses", empty(self.num_neurons, 0, dtype=int64),)
 
 		# 3) connections: [num_neurons, n_bits_per_neuron]
 		if connections is None:
@@ -109,21 +135,24 @@ class Memory(Module):
 
 		lines.append("\nMemory Matrix:")
 		for neuron_index in range(self.num_neurons):
-			memory_vals = " ".join(str(mem_val) for mem_val in self.memory[neuron_index].tolist())
-			lines.append(f"\tneuron {neuron_index}: {memory_vals}")
+			decoded = " ".join([str(self._read_cells_int(neuron_index, addr)) for addr in range(self.memory_size)])
+			lines.append(f"\tneuron {neuron_index}: {decoded}")
 
 		lines.append("")  # final newline
 		return "\n".join(lines)
 
 	def _randomize_connections(self, rng: Optional[int]) -> Tensor:
 		"""
-		Random connectivity:
-		- each neuron has n_bits_per_neuron distinct inputs when possible
-		- if n_bits_per_neuron > total_input_bits, we reuse inputs
+		Random connectivity, create connections with *distinct* inputs where possible.
+
+		- if n_bits_per_neuron <= total_input_bits:
+			use a random permutation and take the first k bits
+		- if n_bits_per_neuron > total_input_bits:
+			repeat the permutation as needed to fill k slots
 		"""
-		if self.num_neurons == 0:
+		if self.num_neurons == 0 or self.n_bits_per_neuron == 0 or self.total_input_bits == 0:
 			# Return empty tensor with correct shape and type
-			return empty(0, self.n_bits_per_neuron, dtype=long, device=self.memory.device)
+			return empty(self.num_neurons, self.n_bits_per_neuron, dtype=long, device=self.memory_words.device)
 
 		if rng is not None:
 			manual_seed(rng)
@@ -131,7 +160,7 @@ class Memory(Module):
 		layer_connections = []
 		for _ in range(self.num_neurons):
 			# Random permutation of all available bits
-			unique = randperm(self.total_input_bits, device=self.memory.device)
+			unique = randperm(self.total_input_bits, device=self.memory_words.device)
 
 			if self.n_bits_per_neuron <= self.total_input_bits:
 				# Enough bits available → take first k (all unique)
@@ -141,11 +170,11 @@ class Memory(Module):
 				full_cycles, remaining = divmod(self.n_bits_per_neuron, self.total_input_bits)
 
 				# Add repeated full cycles of the unique set (reshuffled each time)
-				partial_neuron_connections = [randperm(self.total_input_bits, device=self.memory.device) for _ in range(full_cycles)]
+				partial_neuron_connections = [randperm(self.total_input_bits, device=self.memory_words.device) for _ in range(full_cycles)]
 
 				# Add partial cycle for leftover bits
 				if remaining > 0:
-					partial_neuron_connections.append(randperm(self.total_input_bits, device=self.memory.device)[:remaining])
+					partial_neuron_connections.append(randperm(self.total_input_bits, device=self.memory_words.device)[:remaining])
 
 				neuron_connections = cat(partial_neuron_connections, dim=0)
 
@@ -153,43 +182,172 @@ class Memory(Module):
 
 		return stack(layer_connections, dim=0).long()
 
+	# ------------------------------------------------------------------
+	# Bit-packed cell helpers
+	# ------------------------------------------------------------------
+
+	def _cell_coords(self, address: Tensor) -> tuple[Tensor, Tensor]:
+		"""
+		Given addresses (int64), return:
+			word_idx:  address // cells_per_word
+			bit_shift: (address % cells_per_word) * bits_per_cell
+		"""
+		word_idx	= address // self.cells_per_word
+		cell_idx	= address % self.cells_per_word
+		bit_shift	= cell_idx * self.bits_per_cell
+		return word_idx, bit_shift
+
+	def _cell_coords_int(self, address: int) -> tuple[int, int]:
+		"""
+		Given addresses (int64), return:
+			word_idx:  address // cells_per_word
+			bit_shift: (address % cells_per_word) * bits_per_cell
+		"""
+		word_idx, cell_idx	= divmod(address, self.cells_per_word)
+		bit_shift	= cell_idx * self.bits_per_cell
+		return word_idx, bit_shift
+
+	def _read_cells(self, neuron_indices: Tensor, addresses: Tensor) -> int:
+		"""
+		Read bit-packed cells for given neurons & addresses.
+
+		neuron_indices: [flat] (int64) indices in [0, num_neurons)
+		addresses:      [flat] (int64) addresses in [0, memory_size)
+
+		Returns:
+			values: [flat] int64 in {0,1,2}  (FALSE, TRUE, EMPTY)
+		"""
+		word_idx, bit_shift = self._cell_coords(addresses)
+		words = self.memory_words[neuron_indices, word_idx]
+		return (words >> bit_shift) & 0b11
+
+	def _read_cells_int(self, neuron_index: int, address: int) -> int:
+		"""
+		Read bit-packed cells for given neurons & addresses.
+
+		neuron_indices: [flat] (int64) indices in [0, num_neurons)
+		addresses:      [flat] (int64) addresses in [0, memory_size)
+
+		Returns:
+			values: [flat] int64 in {0,1,2}  (FALSE, TRUE, EMPTY)
+		"""
+		word_idx, bit_shift = self._cell_coords_int(address)
+		words = self.memory_words[neuron_index, word_idx]
+		values = (words >> bit_shift) & 0b11
+		return int(values.item())
+
+	def _write_cells(self, neuron_indices: Tensor, addresses: Tensor, value: Tensor) -> None:
+		"""
+		Write bit-packed cells for given neurons & addresses.
+
+		values: int64 in {0,1,2} (FALSE, TRUE, EMPTY)
+		"""
+		word_idx, bit_shift = self._cell_coords(addresses)
+
+		# Gather the words we will modify
+		words = self.memory_words[neuron_indices, word_idx]
+
+		# For each element:
+		#	clear mask: ~(0b11 << shift)
+		#	write: (words & clear_mask) | (value << shift)
+		mask			= (3 << bit_shift)
+		clear_mask		= ~mask
+		value_shifted	= (value & 0b11) << bit_shift
+
+		new_words = (words & clear_mask) | value_shifted
+		self.memory_words[neuron_indices, word_idx] = new_words
+
+	def _write_cells_int(self, neuron_index: int, address: int, value: int) -> None:
+		"""
+		Write bit-packed cells for given neurons & addresses.
+
+		values: int64 in {0,1,2} (FALSE, TRUE, EMPTY)
+		"""
+		word_idx, bit_shift = self._cell_coords_int(address)
+
+		# Gather the words we will modify
+		words = self.memory_words[neuron_index, word_idx]
+
+		# For each element:
+		#	clear mask: ~(0b11 << shift)
+		#	write: (words & clear_mask) | (value << shift)
+		mask			= (3 << bit_shift)
+		clear_mask		= ~mask
+		value_shifted	= (value & 0b11) << bit_shift
+
+		new_words = (words & clear_mask) | value_shifted
+		self.memory_words[neuron_index, word_idx] = new_words
+
+	def flip(self, neuron_index: int, input_bits: Tensor) -> None:
+		"""
+		Flip one memory cell for given neuron, based on input_bits (batch size 1).
+
+		- FALSE -> TRUE
+		- TRUE  -> FALSE
+		- EMPTY -> TRUE (arbitrary but consistent choice)
+		"""
+		if self.num_neurons == 0:
+			return
+
+		addresses = self.get_addresses(input_bits)  # [B, N]
+		addr = int(addresses[0, neuron_index].item())
+		new_val = MemoryVal.FALSE.value if self._read_cells_int(neuron_index, addr) == MemoryVal.TRUE.value else MemoryVal.TRUE.value
+
+		self._write_cells_int(neuron_index, addr, new_val)
+
 	def get_addresses(self, input_bits: Tensor) -> Tensor:
 		"""
 		Compute integer addresses [batch_size, num_neurons] for given input bits.
 		input_bits: [B, total_input_bits], bool or {0,1}
 		"""
-		if input_bits.dtype != uint8:
-			input_bits = input_bits.to(uint8)
+		if self.num_neurons == 0:
+			return empty(input_bits.shape[0], 0, dtype=int64, device=input_bits.device)
 
-		# gather inputs for each neuron → [B, N, k]
-		gathered = input_bits[:, self.connections]
+		if input_bits.dtype == tbool:
+			input_bits64 = input_bits.to(int64)
+		else:
+			input_bits64 = (input_bits != 0).to(int64)
+
+		# input_bits64[:, connections] -> [B, N, k]
+		gathered = input_bits64[:, self.connections]  # advanced indexing
 
 		# compute addresses → [B, N]
-		address = (gathered.to(int64) * self.binary_addresses.unsqueeze(0)).sum(-1)
+		addresses = (gathered.to(int64) * self.binary_addresses.unsqueeze(0)).sum(-1)
 		if self.use_hashing:
-			address = address % self.memory_size
-		return address.long()
+			addresses = addresses % self.memory_size
+		return addresses.long()
 
 	def get_address_for_neuron(self, neuron_index: int, input_bits: Tensor) -> int:
-		return int((input_bits.to(uint8) * self.binary_addresses[neuron_index]).sum().long().item())
+		input_bits64 = input_bits.to(int64) if input_bits.dtype == tbool else (input_bits != 0).to(int64)
+
+		weights = self.binary_addresses[neuron_index].unsqueeze(0)  # [1, k]
+		addresses = (input_bits64 * weights).sum(-1)
+		if self.use_hashing:
+			addresses = addresses % self.memory_size
+		return int(addresses[0].item())
 
 	def get_memories_for_bits(self, input_bits: Tensor) -> Tensor:
 		"""
 		Used by EDRA: directly get specific memory cell.
 		returns a MemoryVal.{x}.value
 		"""
+		if self.num_neurons == 0:
+			return empty(input_bits.shape[0], 0, dtype=tbool, device=input_bits.device)
+
 		addresses = self.get_addresses(input_bits)  # [B, N]
 		batch_size = addresses.shape[0]
 
-		neuron_index = arange(self.num_neurons, dtype=long, device=addresses.device).unsqueeze(0).expand(batch_size, -1)
-		return self.memory[neuron_index, addresses]  # [B, N]
+		neuron_indices = arange(self.num_neurons, device=input_bits.device).unsqueeze(0).expand(batch_size, -1).reshape(-1)
+		addr_flat = addresses.reshape(-1)
+
+		return self._read_cells(neuron_indices, addr_flat).reshape(batch_size, self.num_neurons)
 
 	def get_memory(self, neuron_index: int, address: int) -> int:
 		"""
 		Used by EDRA: directly get specific memory cell.
 		returns a MemoryVal.{x}.value
 		"""
-		return int(self.memory[neuron_index, address].item())
+		return self._read_cells_int(neuron_index, address)
 
 	def forward(self, input_bits: Tensor) -> Tensor:
 		"""
@@ -199,27 +357,6 @@ class Memory(Module):
 		"""
 		return self.get_memories_for_bits(input_bits) == MemoryVal.TRUE.value
 
-	def train_write(self, input_bits: Tensor, target_bits: Tensor) -> None:
-		"""
-		Direct write: set memory for each (sample, neuron) to target bit (False/True).
-		target_bits must be bool or {0,1}.
-		"""
-		if input_bits.dtype != uint8:
-			input_bits = input_bits.to(uint8)
-		if target_bits.dtype != uint8:
-			target_bits = target_bits.to(uint8)
-
-		addresses = self.get_addresses(input_bits)  # [B, N]
-		batch_size = addresses.shape[0]
-
-		neuron_index = arange(self.num_neurons, dtype=long, device=addresses.device).unsqueeze(0).expand(batch_size, -1)
-
-		for batch in range(batch_size):
-			for neuron_index in range(self.num_neurons):
-				address = int(addresses[batch, neuron_index].item())
-				bit = bool(target_bits[batch, neuron_index].item())
-				self.set_memory(neuron_index, address, bit)
-
 	def select_connection(self, neuron_index: int, use_high_impact: bool = True) -> int:
 		"""
 		Select one contributing input-bit index for this neuron.
@@ -227,13 +364,15 @@ class Memory(Module):
 		Otherwise chooses a random connection.
 		Returns: integer index into the layer's input bit vector.
 		"""
-		num_bits = self.n_bits_per_neuron
+		if self.n_bits_per_neuron == 0:
+			return 0
+
 		if use_high_impact:
 			impacts = self.binary_addresses[neuron_index]  # [k]
 			pos = int(argmax(impacts).item())
 		else:
-			dev = self.memory.device
-			pos = int(randint(0, num_bits, (1,), device=dev).item())
+			pos = int(randint(0, self.n_bits_per_neuron, (1,), device=self.memory_words.device).item())
+
 		return int(self.connections[neuron_index, pos].item())
 
 	def set_memory(self, neuron_index: int, address: int, bit: bool, allow_override: bool = False) -> None:
@@ -241,7 +380,32 @@ class Memory(Module):
 		Used by EDRA: directly overwrite specific memory cell (for one neuron & address).
 		bit = False/True
 		"""
+		if self.num_neurons == 0:
+			return
+
 		current_memory = self.get_memory(neuron_index, address)
 		new_memory = MemoryVal.TRUE.value if bit else MemoryVal.FALSE.value
 		if current_memory == MemoryVal.EMPTY.value or (allow_override and current_memory != new_memory):
-			self.memory[neuron_index, address] = new_memory
+			self._write_cells_int(neuron_index, address, new_memory)
+
+	def train_write(self, input_bits: Tensor, target_bits: Tensor) -> None:
+		"""
+		Direct write: set memory for each (sample, neuron) to target bit (False/True).
+		target_bits must be bool or {0,1}.
+		"""
+		norm = lambda bits: bits.to(int64) if bits.dtype == tbool else (bits != 0).to(int64)
+		input_bits64 = norm(input_bits)
+		target_bits64 = norm(target_bits)
+
+		addresses = self.get_addresses(input_bits64)  # [B, N]
+		batch_size = addresses.shape[0]
+		cell_vals = where(target_bits64 == 1, MemoryVal.TRUE.value, MemoryVal.FALSE.value)
+		neuron_indices = arange(self.num_neurons, device=input_bits.device).unsqueeze(0).expand(batch_size, -1).reshape(-1)
+
+		self._write_cells(neuron_indices, addresses.reshape(-1), cell_vals.reshape(-1))
+		# for batch in range(batch_size):
+		# 	for neuron_index in range(self.num_neurons):
+		# 		address = int(addresses[batch, neuron_index].item())
+		# 		bit = bool(target_bits[batch, neuron_index].item())
+		# 		self.set_memory(neuron_index, address, bit)
+
