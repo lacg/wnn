@@ -1,4 +1,4 @@
-from enum import Enum
+from enum import IntEnum
 from typing import Optional
 
 from torch import arange
@@ -18,15 +18,15 @@ from torch import where
 from torch.nn import Module
 
 
-class MemoryVal(Enum):
+class MemoryVal(IntEnum):
 	"""
 	Ternary memory values stored as uint8:
 	- FALSE = 0
 	- TRUE  = 1
 	- EMPTY = 2   (safe to overwrite; means "untrained")
 	"""
-	FALSE	= 0
-	TRUE	= 1
+	FALSE	= False
+	TRUE	= True
 	EMPTY	= 2
 
 
@@ -76,20 +76,20 @@ class Memory(Module):
 
 		# main storage: [num_neurons, words_per_neuron]
 		# initialized to all EMPTY, which we interpret as FALSE (0).
-		# EMPTY is explicitly written as MemoryVal.EMPTY.value (2).
+		# EMPTY is explicitly written as MemoryVal.EMPTY (2).
 		EMPTY_WORD = 0
 		for i in range(self.cells_per_word):
-			EMPTY_WORD |= (MemoryVal.EMPTY.value << (i * self.bits_per_cell))
+			EMPTY_WORD |= (MemoryVal.EMPTY << (i * self.bits_per_cell))
 
 		self.register_buffer(
 			"memory_words",
-			full((self.num_neurons, self.memory_size), EMPTY_WORD, dtype=int64),
+			full((self.num_neurons, self.words_per_neuron), EMPTY_WORD, dtype=int64),
 		)
 
 		# 1) memory: [num_neurons, memory_size], initialized to EMPTY
 		# self.register_buffer(
 		# 	"memory",
-		# 	full((self.num_neurons, self.memory_size), MemoryVal.EMPTY.value, dtype=uint8),
+		# 	full((self.num_neurons, self.memory_size), MemoryVal.EMPTY, dtype=uint8),
 		# )
 
 		# 2) binary address weights for each neuron: [num_neurons, n_bits_per_neuron]
@@ -291,7 +291,7 @@ class Memory(Module):
 
 		addresses = self.get_addresses(input_bits)  # [B, N]
 		addr = int(addresses[0, neuron_index].item())
-		new_val = MemoryVal.FALSE.value if self._read_cells_int(neuron_index, addr) == MemoryVal.TRUE.value else MemoryVal.TRUE.value
+		new_val = MemoryVal.FALSE if self._read_cells_int(neuron_index, addr) == MemoryVal.TRUE else MemoryVal.TRUE
 
 		self._write_cells_int(neuron_index, addr, new_val)
 
@@ -329,7 +329,7 @@ class Memory(Module):
 	def get_memories_for_bits(self, input_bits: Tensor) -> Tensor:
 		"""
 		Used by EDRA: directly get specific memory cell.
-		returns a MemoryVal.{x}.value
+		returns a MemoryVal.{x}
 		"""
 		if self.num_neurons == 0:
 			return empty(input_bits.shape[0], 0, dtype=tbool, device=input_bits.device)
@@ -345,9 +345,57 @@ class Memory(Module):
 	def get_memory(self, neuron_index: int, address: int) -> int:
 		"""
 		Used by EDRA: directly get specific memory cell.
-		returns a MemoryVal.{x}.value
+		returns a MemoryVal.{x}
 		"""
 		return self._read_cells_int(neuron_index, address)
+
+	# In Memory class (near other helpers like get_memory, get_memories_for_bits)
+
+	def _get_memory_batch_raw(self, neuron_indices: Tensor, addresses: Tensor) -> Tensor:
+		"""
+		Vectorized raw read of K memory cells.
+
+		neuron_indices: [K]
+		addresses:      [K]
+		Returns:        [K] int64 in {0,1,2}
+		"""
+		# Determine word and bit-shift for each address
+		word_idx, bit_shift = self._cell_coords(addresses)
+
+		# Fetch words
+		words = self.memory_words[neuron_indices, word_idx]
+
+		# Extract the 2-bit cell
+		return (words >> bit_shift) & 0b11
+
+	def get_memory_row(self, neuron_index: int) -> Tensor:
+		"""
+		Vectorized read of all memory cells for a single neuron.
+		Returns: Tensor[memory_size] with values in {MemoryVal.FALSE, MemoryVal.TRUE, MemoryVal.EMPTY}
+		"""
+		device = self.memory_words.device
+
+		# addresses: 0..memory_size-1
+		addresses = arange(self.memory_size, dtype=int64, device=device)
+
+		# same neuron index for all addresses
+		neuron_indices = full((self.memory_size,), int(neuron_index), dtype=int64, device=device,)
+
+		# use bit-packed vectorized reader
+		return self._read_cells(neuron_indices, addresses)
+
+	def get_memory_row_raw(self, neuron_index: int) -> Tensor:
+		"""
+		Vectorized read of ALL memory cells for a single neuron.
+		Returns: Tensor[memory_size] int64 values in {0,1,2}
+		"""
+		device = self.memory_words.device
+
+		# addresses: 0...memory_size-1
+		addresses = arange(self.memory_size, dtype=int64, device=device)
+		neuron_vec = full((self.memory_size,), neuron_index, dtype=int64, device=device)
+
+		return self._get_memory_batch_raw(neuron_vec, addresses)
 
 	def forward(self, input_bits: Tensor) -> Tensor:
 		"""
@@ -355,7 +403,7 @@ class Memory(Module):
 		TRUE cells (1) → True
 		FALSE and EMPTY → False
 		"""
-		return self.get_memories_for_bits(input_bits) == MemoryVal.TRUE.value
+		return self.get_memories_for_bits(input_bits) == MemoryVal.TRUE
 
 	def select_connection(self, neuron_index: int, use_high_impact: bool = True) -> int:
 		"""
@@ -380,13 +428,73 @@ class Memory(Module):
 		Used by EDRA: directly overwrite specific memory cell (for one neuron & address).
 		bit = False/True
 		"""
-		if self.num_neurons == 0:
-			return
+		if self.num_neurons > 0:
+			current_memory = self.get_memory(neuron_index, address)
+			if current_memory == MemoryVal.EMPTY or (allow_override and bit != current_memory):
+				self._write_cells_int(neuron_index, address, bit)
 
-		current_memory = self.get_memory(neuron_index, address)
-		new_memory = MemoryVal.TRUE.value if bit else MemoryVal.FALSE.value
-		if current_memory == MemoryVal.EMPTY.value or (allow_override and current_memory != new_memory):
-			self._write_cells_int(neuron_index, address, new_memory)
+	def set_memory_batch(self, neuron_indices: Tensor, addresses: Tensor, bits: Tensor, allow_override: bool = True) -> None:
+		"""
+		Vectorized version of set_memory for K cells.
+		neuron_indices: [K]
+		addresses:      [K]
+		bits:           [K] bool or {0,1]
+		"""
+		if bits.dtype != tbool:
+			bits = bits.to(tbool)
+
+		device = self.memory_words.device  # or self.memory.device depending on your impl
+
+		neuron_indices = neuron_indices.to(device=device, dtype=long)
+		addresses      = addresses.to(device=device, dtype=long)
+
+		# Encode bits → {FALSE, TRUE}
+		# (EMPTY is only used when a cell was uninitialized; we don't "write EMPTY")
+		encoded = full(bits.shape, MemoryVal.FALSE, dtype=int64, device=device)
+		encoded = encoded.masked_fill(bits, MemoryVal.TRUE)
+
+		if not allow_override:
+			# Respect EMPTY-first policy: overwrite only if:
+			# - cell is EMPTY, or
+			# - cell already matches encoded
+			current = self._get_memory_batch_raw(neuron_indices, addresses)
+
+			mask_ok = (current == MemoryVal.EMPTY) | (current == encoded)
+			encoded = encoded.where(mask_ok, current)
+
+		# Finally write all at once.
+		self._set_memory_batch_raw(neuron_indices, addresses, encoded)
+
+	def _set_memory_batch_raw(self, neuron_indices: Tensor, addresses: Tensor, encoded_vals: Tensor) -> None:
+		"""
+		Vectorized write of K **already-encoded** values in {0,1,2}.
+		encoded_vals MUST be int64 and already contain the MemoryVal numbers.
+		"""
+		word_idx, bit_shift = self._cell_coords(addresses)
+
+		# Gather the words
+		words = self.memory_words[neuron_indices, word_idx]
+
+		# Build masks
+		mask        = (3 << bit_shift)     # which cell to update
+		clear_mask  = ~mask
+		val_shifted = (encoded_vals & 0b11) << bit_shift
+
+		# Perform packed write
+		new_words = (words & clear_mask) | val_shifted
+		self.memory_words[neuron_indices, word_idx] = new_words
+
+	def set_memory_row_raw(self, neuron_index: int, values: Tensor) -> None:
+		"""
+		Vectorized write of ALL memory cells for a neuron.
+		values must be shape [memory_size] and contain {0,1,2}
+		"""
+		device = self.memory_words.device
+
+		addresses = arange(self.memory_size, dtype=int64, device=device)
+		neuron_vec = full((self.memory_size,), neuron_index, dtype=int64, device=device)
+
+		self._set_memory_batch_raw(neuron_vec, addresses, values)
 
 	def train_write(self, input_bits: Tensor, target_bits: Tensor) -> None:
 		"""
@@ -399,7 +507,7 @@ class Memory(Module):
 
 		addresses = self.get_addresses(input_bits64)  # [B, N]
 		batch_size = addresses.shape[0]
-		cell_vals = where(target_bits64 == 1, MemoryVal.TRUE.value, MemoryVal.FALSE.value)
+		cell_vals = where(target_bits64 == 1, MemoryVal.TRUE, MemoryVal.FALSE)
 		neuron_indices = arange(self.num_neurons, device=input_bits.device).unsqueeze(0).expand(batch_size, -1).reshape(-1)
 
 		self._write_cells(neuron_indices, addresses.reshape(-1), cell_vals.reshape(-1))

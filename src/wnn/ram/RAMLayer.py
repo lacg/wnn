@@ -80,9 +80,12 @@ class RAMLayer(Module):
 	def get_memory(self, neuron_index: int, address: int) -> int:
 		"""
 		Used by EDRA: directly get specific memory cell.
-		returns a MemoryVal.{x}.value
+		returns a MemoryVal.{x}
 		"""
 		return self.memory.get_memory(neuron_index, address)
+
+	def get_memory_row(self, neuron_index: int) -> Tensor:
+		return self.memory.get_memory_row(neuron_index)
 
 	def select_connection(self, neuron_index: int, use_high_impact: bool = True) -> int:
 		"""
@@ -96,3 +99,13 @@ class RAMLayer(Module):
 		bit = False/True
 		"""
 		self.memory.set_memory(neuron_index, address, bit)
+
+	def set_memory_batch(self, neuron_indices: Tensor, addresses: Tensor, bits: Tensor, allow_override: bool = True) -> None:
+		"""
+		Vectorized memory set: writes many (neuron, address) cells in one call.
+
+		neuron_indices: [K] int64
+		addresses:      [K] int64
+		bits:           [K] bool or {0,1}
+		"""
+		self.memory.set_memory_batch(neuron_indices, addresses, bits, allow_override=allow_override)

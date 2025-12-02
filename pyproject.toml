@@ -1,6 +1,6 @@
 [project]
 name = "wnn"
-version = "2025.11.30.23.34"
+version = "2025.12.02.00.42"
 description = "Weightless Neural Network Research"
 authors = [{name="Luiz Alberto Crispiniano Garcia"}]
 requires-python = ">=3.9"
