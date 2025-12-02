@@ -136,6 +136,8 @@ class Memory(Module):
 		lines.append("\nMemory Matrix:")
 		for neuron_index in range(self.num_neurons):
 			decoded = " ".join([str(self._read_cells_int(neuron_index, addr)) for addr in range(self.memory_size)])
+			if len(decoded) > 256:
+				decoded = decoded[:256] + f"... (size {len(decoded)})"
 			lines.append(f"\tneuron {neuron_index}: {decoded}")
 
 		lines.append("")  # final newline
