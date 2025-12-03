@@ -13,23 +13,23 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import torch
 from wnn.ram import RAMTransformer
 
-n = 7
-epochs = 5000
+n = 12
+epochs = 30
 width = len(str(epochs))
 # ----------------------------
 # Build a tiny RAMTransformer
 # ----------------------------
 model = RAMTransformer(
 	input_bits=n,
-	n_input_neurons=14,
+	n_input_neurons=1,
 	n_state_neurons=0,         # no state for this toy
 	n_output_neurons=1,
-	n_bits_per_input_neuron=6,
+	n_bits_per_input_neuron=12,
 	n_bits_per_state_neuron=2, # unused
-	n_bits_per_output_neuron=14,
+	n_bits_per_output_neuron=1,
 	use_hashing=False,
 	rng=None,
-	max_iters=4,
+	max_iters=100,
 )
 
 # ----------------------------
@@ -63,11 +63,14 @@ print("\nTesting after EDRA training:\n")
 
 with torch.no_grad():
 	count = 0
-	for i in range(2 ** n):
+	total = 2 ** n
+	for i in range(total):
 		x = xs[i:i+1]
 		y_true = ys[i].item()
 		y_pred = model.forward(x).item()
-		print(f"{i:0{n}b}: predicted={y_pred}   expected={y_true}")
+		check = "✅" if y_true == y_pred else "❌"
+		if y_true != y_pred or total < 256:
+			print(f"{i:0{n}b}: predicted={y_pred}\t\texpected={y_true}\t\t{check}")
 		count += y_pred == y_true
 	acceptance_rate = count / (2 ** n)
 
