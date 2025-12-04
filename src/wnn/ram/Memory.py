@@ -5,6 +5,7 @@ from torch import arange
 from torch import argmax
 from torch import bool as tbool
 from torch import cat
+from torch import device
 from torch import empty
 from torch import full
 from torch import int64
@@ -154,7 +155,7 @@ class Memory(Module):
 		"""
 		if self.num_neurons == 0 or self.n_bits_per_neuron == 0 or self.total_input_bits == 0:
 			# Return empty tensor with correct shape and type
-			return empty(self.num_neurons, self.n_bits_per_neuron, dtype=long, device=self.memory_words.device)
+			return empty(self.num_neurons, self.n_bits_per_neuron, dtype=long, device=device("cpu"))
 
 		if rng is not None:
 			manual_seed(rng)
@@ -252,8 +253,8 @@ class Memory(Module):
 		# For each element:
 		#	clear mask: ~(0b11 << shift)
 		#	write: (words & clear_mask) | (value << shift)
-		mask			= (3 << bit_shift)
-		clear_mask		= ~mask
+		mask = (3 << bit_shift).to(int64)
+		clear_mask = (~mask) & ((1 << 64) - 1)   # ensure 64-bit width
 		value_shifted	= (value & 0b11) << bit_shift
 
 		new_words = (words & clear_mask) | value_shifted
@@ -273,8 +274,8 @@ class Memory(Module):
 		# For each element:
 		#	clear mask: ~(0b11 << shift)
 		#	write: (words & clear_mask) | (value << shift)
-		mask			= (3 << bit_shift)
-		clear_mask		= ~mask
+		mask = (3 << bit_shift)
+		clear_mask = (~mask) & ((1 << 64) - 1)   # ensure 64-bit width
 		value_shifted	= (value & 0b11) << bit_shift
 
 		new_words = (words & clear_mask) | value_shifted
@@ -331,7 +332,7 @@ class Memory(Module):
 	def get_memories_for_bits(self, input_bits: Tensor) -> Tensor:
 		"""
 		Used by EDRA: directly get specific memory cell.
-		returns a MemoryVal.{x}
+		returns ints
 		"""
 		if self.num_neurons == 0:
 			return empty(input_bits.shape[0], 0, dtype=tbool, device=input_bits.device)
@@ -513,9 +514,4 @@ class Memory(Module):
 		neuron_indices = arange(self.num_neurons, device=input_bits.device).unsqueeze(0).expand(batch_size, -1).reshape(-1)
 
 		self._write_cells(neuron_indices, addresses.reshape(-1), cell_vals.reshape(-1))
-		# for batch in range(batch_size):
-		# 	for neuron_index in range(self.num_neurons):
-		# 		address = int(addresses[batch, neuron_index].item())
-		# 		bit = bool(target_bits[batch, neuron_index].item())
-		# 		self.set_memory(neuron_index, address, bit)
 

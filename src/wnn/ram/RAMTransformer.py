@@ -9,8 +9,8 @@ from torch import long
 from torch import nonzero
 from torch import randint
 from torch import uint8
-from torch import zeros
 from torch import tensor
+from torch import zeros
 from torch import Tensor
 from torch.nn import Module
 
@@ -80,10 +80,6 @@ class RAMTransformer(Module):
 		# recurrent state bits (updated after stable examples)
 		self.state_bits: Optional[Tensor] = None
 
-		# maps hidden_neuron → list of (output_neuron, bit_position)
-		self.inverse_output_connections = self._build_inverse_connections()
-		self.output_desired_bits = self._build_output_desired_bits()
-
 	def __repr__(self):
 		return (
 			f"RAMTransformer"
@@ -124,20 +120,7 @@ class RAMTransformer(Module):
 		lines.append("")  # newline
 		return "\n".join(lines)
 
-	def _build_inverse_connections(self):
-		conn = self.output_layer.memory.connections  # shape [N_out, bits_per_neuron]
-		inv_conn = []
-		
-		for out_neuron in range(conn.shape[0]):
-			inv_conn.append([int(conn[out_neuron, bit_pos].item()) for bit_pos in range(conn.shape[1])])
-		
-		return inv_conn
-
-	def _build_output_desired_bits(self):
-		n_bits = self.output_layer.memory.n_bits_per_neuron
-		return [self._get_desired_bits(n_bits, address) for address in range(2 ** (self.input_layer.num_neurons + self.state_layer.num_neurons))]
-
-	def _can_hidden_output(self, addresses: Tensor, input_bits: Tensor, state_layer_input: Tensor) -> Tensor:
+	def _can_hidden_output(self, neuron_index: int, addresses: Tensor, input_bits: Tensor, input_addrs: Tensor, state_addrs: Optional[Tensor]) -> Tensor:
 		"""
 		Fully vectorized feasibility test WITHOUT recomputing hidden addresses.
 
@@ -163,30 +146,23 @@ class RAMTransformer(Module):
 		# ----------------------------------------------------
 		# 2. Retrieve the K contributing neurons (input or state)
 		# ----------------------------------------------------
-		hidden_indices = self.output_layer.memory.connections[0].to(input_bits.device, dtype=int64)          # [self.output_layer.memory.n_bits_per_neuron]
+		hidden_indices = self.output_layer.memory.connections[neuron_index].to(input_bits.device, dtype=int64)          # [self.output_layer.memory.n_bits_per_neuron]
 
 		# ---------------------------------------------------------
-		# 3) Compute memory addresses for *all* hidden neurons
-		#    input-layer first, then state-layer if present
-		# ---------------------------------------------------------
-		addr_input = self.input_layer.get_addresses(input_bits)[0]		# [self.input_layer.num_neurons]
-		addr_state = self.state_layer.get_addresses(state_layer_input)[0]	if self.state_layer.num_neurons > 0 else None # [self.state_layer.num_neurons]
-
-		# ---------------------------------------------------------
-		# 4) Get memory values for all hidden neurons (vectorized)
+		# 3) Get memory values for all hidden neurons (vectorized)
 		# ---------------------------------------------------------
 		hidden_addrs = empty((self.output_layer.memory.n_bits_per_neuron,), dtype=int64, device=input_bits.device)
 		# vectorized computation of hidden addresses
 		mask_input = hidden_indices < self.input_layer.num_neurons
 		if mask_input.any():
-			hidden_addrs[mask_input] = addr_input[hidden_indices[mask_input] ]
+			hidden_addrs[mask_input] = input_addrs[hidden_indices[mask_input] ]
 
 		mask_state = ~mask_input
 		if mask_state.any() and self.state_layer.num_neurons > 0:
-			hidden_addrs[mask_state] = addr_state[hidden_indices[mask_state] - self.input_layer.num_neurons]
+			hidden_addrs[mask_state] = state_addrs[hidden_indices[mask_state] - self.input_layer.num_neurons]
 
 		# ---------------------------------------------------------
-		# 5. Read hidden memory values (input + state layers)
+		# 4) Read hidden memory values (input + state layers)
 		# ---------------------------------------------------------
 		hidden_vals = empty((self.output_layer.memory.n_bits_per_neuron,), dtype=int64, device=input_bits.device)
 
@@ -206,7 +182,7 @@ class RAMTransformer(Module):
 		# But in that case mask_state is all False.
 
 		# ---------------------------------------------------------
-		# 6. Feasibility check: mem ∈ {EMPTY, desired_bit}
+		# 5) Feasibility check: mem ∈ {EMPTY, desired_bit}
 		# ---------------------------------------------------------
 		hidden_matrix = hidden_vals.unsqueeze(0).expand(M, self.output_layer.memory.n_bits_per_neuron)  # [M, self.output_layer.memory.n_bits_per_neuron]
 		ok = (hidden_matrix == MemoryVal.EMPTY) | (hidden_matrix == desired_bits)
@@ -248,13 +224,6 @@ class RAMTransformer(Module):
 
 		return True
 
-	def _get_desired_bits(self, bits_per_neuron: int, address: int) -> list[bool]:
-		desired_bits = []
-		for _ in range(bits_per_neuron):
-			desired_bits.append(bool(address & 1))
-			address >>= 1
-		return desired_bits[::-1]
-
 	def _get_outputs(self, input_bits: Tensor, update_state: bool = False) -> tuple[Tensor, Tensor, Tensor, Tensor]:
 		"""
 		Run full forward pass:
@@ -283,7 +252,7 @@ class RAMTransformer(Module):
 
 		return state_layer_input, input_layer_output, state_layer_output, output_layer_input, output_layer_output
 
-	def _get_target_addresses(self, neuron_index: int, desired_output: bool, current_address: int, input_bits: Tensor, state_layer_input: Tensor) -> int:
+	def _get_target_addresses(self, neuron_index: int, desired_output: bool, current_address: int, input_bits: Tensor, input_addrs: Tensor, state_addrs: Optional[Tensor]) -> int:
 		"""
 		Find a good output address for this neuron, using vectorized label filtering.
 		We only loop in Python over addresses that are EMPTY or already match desired_output.
@@ -301,7 +270,7 @@ class RAMTransformer(Module):
 		candidate_indices = label_mask.nonzero(as_tuple=False).view(-1).to(input_bits.device, dtype=int64)
 
 		# Vectorized check of hidden feasibility
-		ok_mask = self._can_hidden_output(candidate_indices, input_bits, state_layer_input)
+		ok_mask = self._can_hidden_output(neuron_index, candidate_indices, input_bits, input_addrs, state_addrs)
 		if not ok_mask.any():
 			return current_address
 
@@ -355,17 +324,19 @@ class RAMTransformer(Module):
 			# -------------------------------------------------------
 			# Step 1: Find a target address where desired label fits
 			# -------------------------------------------------------
-			target_output_address = self._get_target_addresses(neuron_index, desired_output_bit, current_address, input_bits, state_layer_input)
+			target_output_address = self._get_target_addresses(neuron_index, desired_output_bit, current_address, input_bits, input_addrs, state_addrs)
 
 			# -------------------------------------------------------
 			# Step 2: Decode address → self.output_layer.memory.n_bits_per_neuron desired bits (one per conn)
 			# -------------------------------------------------------
 			shifts = arange(self.output_layer.memory.n_bits_per_neuron, device=input_bits.device)
 			addr_tensor = tensor(target_output_address, device=input_bits.device, dtype=int64)
+
+			# bit p = (addr >> p) & 1  (LSB-first, matching connections)
 			# desired_bits[p] = bit p of address (LSB at p=0)
-			desired_bits = (((addr_tensor >> shifts) & 1) != 0)  # [self.output_layer.memory.n_bits_per_neuron] bool
+			desired_bits = ((addr_tensor >> shifts) & 1).to(tbool)
 			# Connections for this output neuron: which hidden neurons it sees
-			hidden_indices = tensor(self.inverse_output_connections[neuron_index], device=input_bits.device, dtype=long)
+			hidden_indices = self.output_layer.memory.connections[neuron_index].to(input_bits.device, dtype=long)
 
 
 			# -------------------------------------------------------
