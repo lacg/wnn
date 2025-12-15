@@ -11,22 +11,22 @@ print(f"\n=== Starting Parity Check Run at {start} ===\n")
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
-from wnn.ram import RAMTransformer
+from wnn.ram import RAMMultiStepTransformer
 
-n = 12
-epochs = 30
+n = 2
+epochs = 10
 width = len(str(epochs))
 # ----------------------------
 # Build a tiny RAMTransformer
 # ----------------------------
-model = RAMTransformer(
-	input_bits=n,
+model = RAMMultiStepTransformer(
+	input_bits=1,
 	n_input_neurons=1,
-	n_state_neurons=0,         # no state for this toy
+	n_state_neurons=1,         # no state for this toy
 	n_output_neurons=1,
-	n_bits_per_input_neuron=12,
+	n_bits_per_input_neuron=1,
 	n_bits_per_state_neuron=2, # unused
-	n_bits_per_output_neuron=1,
+	n_bits_per_output_neuron=2,
 	use_hashing=False,
 	rng=None,
 	max_iters=100,
@@ -50,9 +50,10 @@ ys = torch.tensor(ys, dtype=torch.bool).unsqueeze(1)	# [2 ** n, 1]
 # ----------------------------
 for epoch in range(epochs):   # a few passes is usually enough
 	for i in range(2 ** n):
-		x = xs[i:i+1]
-		y = ys[i:i+1]
-		model.train_one(x, y)
+		input_bits = xs[i:i+1]
+		target_bits = ys[i:i+1]
+		windows = model.make_windows(input_bits)
+		model.train_sequence_edra_bptt(windows, target_bits)
 
 	print(f"\rEpoch {epoch+1:0{width}d} done.", end="", flush=True)
 

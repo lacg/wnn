@@ -1,4 +1,5 @@
-from enum import IntEnum
+from wnn.ram.RAMEnums import MemoryVal
+
 from typing import Optional
 
 from torch import arange
@@ -13,23 +14,11 @@ from torch import long
 from torch import manual_seed
 from torch import randint
 from torch import randperm
+from torch import tensor
 from torch import Tensor
 from torch import stack
 from torch import where
 from torch.nn import Module
-
-
-class MemoryVal(IntEnum):
-	"""
-	Ternary memory values stored as uint8:
-	- FALSE = 0
-	- TRUE  = 1
-	- EMPTY = 2   (safe to overwrite; means "untrained")
-	"""
-	FALSE	= False
-	TRUE	= True
-	EMPTY	= 2
-
 
 class Memory(Module):
 	"""
@@ -48,16 +37,7 @@ class Memory(Module):
 
 	WORD_SIZE = 62
 
-	def __init__(
-		self,
-		total_input_bits: int,
-		num_neurons: int,
-		n_bits_per_neuron: int,
-		connections: Optional[Tensor] = None,
-		use_hashing: bool = False,
-		hash_size: int = 1024,
-		rng: Optional[int] = None,
-	):
+	def __init__(self, total_input_bits: int, num_neurons: int, n_bits_per_neuron: int, connections: Optional[Tensor] = None, use_hashing: bool = False, hash_size: int = 1024, rng: Optional[int] = None) -> None:
 		super().__init__()
 
 		assert total_input_bits >= 0
@@ -82,20 +62,8 @@ class Memory(Module):
 		for i in range(self.cells_per_word):
 			EMPTY_WORD |= (MemoryVal.EMPTY << (i * self.bits_per_cell))
 
-		self.register_buffer(
-			"memory_words",
-			full((self.num_neurons, self.words_per_neuron), EMPTY_WORD, dtype=int64),
-		)
+		self.register_buffer("memory_words", full((self.num_neurons, self.words_per_neuron), EMPTY_WORD, dtype=int64))
 
-		# 1) memory: [num_neurons, memory_size], initialized to EMPTY
-		# self.register_buffer(
-		# 	"memory",
-		# 	full((self.num_neurons, self.memory_size), MemoryVal.EMPTY, dtype=uint8),
-		# )
-
-		# 2) binary address weights for each neuron: [num_neurons, n_bits_per_neuron]
-		# binary addresses: per-neuron weights [num_neurons, n_bits_per_neuron]
-		# 1, 2, 4, 8, ..., for each bit position
 		if self.n_bits_per_neuron > 0:
 			base = (2 ** arange(self.n_bits_per_neuron, dtype=int64)).unsqueeze(0)
 			self.register_buffer("binary_addresses", base.repeat(self.num_neurons, 1),)
@@ -146,44 +114,69 @@ class Memory(Module):
 
 	def _randomize_connections(self, rng: Optional[int]) -> Tensor:
 		"""
-		Random connectivity, create connections with *distinct* inputs where possible.
+    Guaranteed-coverage connection initializer.
 
-		- if n_bits_per_neuron <= total_input_bits:
-			use a random permutation and take the first k bits
-		- if n_bits_per_neuron > total_input_bits:
-			repeat the permutation as needed to fill k slots
+    Goals:
+      - Every upstream index in [0, total_input_bits) is used at least once
+        across all neurons (global coverage).
+      - Each neuron receives `n_bits_per_neuron` *unique* connections.
+      - After guaranteeing coverage, we continue sampling from a shuffled pool
+        to fill the remainder uniformly.
+
+    Result:
+      Tensor[num_neurons, n_bits_per_neuron] of dtype long.
 		"""
+		def refill_pool():
+				nonlocal pool, pool_index
+				pool = randperm(self.total_input_bits, device=self.memory_words.device)
+				pool_index = 0
+
 		if self.num_neurons == 0 or self.n_bits_per_neuron == 0 or self.total_input_bits == 0:
 			# Return empty tensor with correct shape and type
 			return empty(self.num_neurons, self.n_bits_per_neuron, dtype=long, device=device("cpu"))
 
+		# ---------
+		# STEP 1: Guaranteed coverage bucket
+		# ---------
+		# First pass: assign each of the T bits exactly once.
+		# If we have more neuron slots than T, great — T assignments are done here.
+		# If num_neurons * n_bits_per_neuron < total_input_bits, the architecture is underspecified (user error).
+		total_slots = self.num_neurons * self.n_bits_per_neuron
+		# if total_slots < self.total_input_bits:
+		# 		raise RuntimeError(f"Cannot guarantee coverage: num_neurons * n_bits_per_neuron = {total_slots} < total_input_bits = {self.total_input_bits}")
+
 		if rng is not None:
 			manual_seed(rng)
 
-		layer_connections = []
-		for _ in range(self.num_neurons):
-			# Random permutation of all available bits
-			unique = randperm(self.total_input_bits, device=self.memory_words.device)
+		memory_connections = [[None] * self.n_bits_per_neuron for _ in range(self.num_neurons)]
 
-			if self.n_bits_per_neuron <= self.total_input_bits:
-				# Enough bits available → take first k (all unique)
-				neuron_connections = unique[: self.n_bits_per_neuron]
+		# --- GLOBAL SHUFFLED BAG OF INPUT BITS ---
+		pool = None
+		pool_index = filled = 0
+		refill_pool()
+
+		for i, conn in enumerate(pool):
+			row, col = divmod(i, self.n_bits_per_neuron)
+			if filled < total_slots:
+				memory_connections[row][col] = int(conn.item())
+				filled += 1
 			else:
-				# Not enough bits → need to recycle
-				full_cycles, remaining = divmod(self.n_bits_per_neuron, self.total_input_bits)
+				break
 
-				# Add repeated full cycles of the unique set (reshuffled each time)
-				partial_neuron_connections = [randperm(self.total_input_bits, device=self.memory_words.device) for _ in range(full_cycles)]
+		filled, (row, col) = self.total_input_bits, divmod(self.total_input_bits, self.n_bits_per_neuron)
+		while filled < total_slots:
+			# If pool is empty, reshuffle
+			if pool_index >= self.total_input_bits:
+				refill_pool()
 
-				# Add partial cycle for leftover bits
-				if remaining > 0:
-					partial_neuron_connections.append(randperm(self.total_input_bits, device=self.memory_words.device)[:remaining])
+			connection = int(pool[pool_index].item())
+			pool_index += 1
+			if connection not in memory_connections[row]:
+				memory_connections[row][col] = connection
+				filled += 1
+				row, col = divmod(filled, self.n_bits_per_neuron)
 
-				neuron_connections = cat(partial_neuron_connections, dim=0)
-
-			layer_connections.append(neuron_connections)
-
-		return stack(layer_connections, dim=0).long()
+		return stack([tensor(neuron_connections, dtype=long, device=self.memory_words.device) for neuron_connections in memory_connections], dim=0)
 
 	# ------------------------------------------------------------------
 	# Bit-packed cell helpers
@@ -433,16 +426,20 @@ class Memory(Module):
 		"""
 		if self.num_neurons > 0:
 			current_memory = self.get_memory(neuron_index, address)
-			if current_memory == MemoryVal.EMPTY or (allow_override and bit != current_memory):
-				self._write_cells_int(neuron_index, address, bit)
+			desired = MemoryVal.TRUE if bit else MemoryVal.FALSE
+			if current_memory == MemoryVal.EMPTY or (allow_override and desired != current_memory):
+				self._write_cells_int(neuron_index, address, desired)
 
-	def set_memory_batch(self, neuron_indices: Tensor, addresses: Tensor, bits: Tensor, allow_override: bool = True) -> None:
+	def set_memory_batch(self, neuron_indices: Tensor, addresses: Tensor, bits: Tensor, allow_override: bool = False) -> None:
 		"""
 		Vectorized version of set_memory for K cells.
 		neuron_indices: [K]
 		addresses:      [K]
 		bits:           [K] bool or {0,1]
 		"""
+		if self.num_neurons == 0:
+			return
+
 		if bits.dtype != tbool:
 			bits = bits.to(tbool)
 
@@ -456,17 +453,12 @@ class Memory(Module):
 		encoded = full(bits.shape, MemoryVal.FALSE, dtype=int64, device=device)
 		encoded = encoded.masked_fill(bits, MemoryVal.TRUE)
 
-		if not allow_override:
-			# Respect EMPTY-first policy: overwrite only if:
-			# - cell is EMPTY, or
-			# - cell already matches encoded
-			current = self._get_memory_batch_raw(neuron_indices, addresses)
+		current = self._get_memory_batch_raw(neuron_indices, addresses)
+		mask_write = (current != encoded) if allow_override else (current == MemoryVal.EMPTY)
 
-			mask_ok = (current == MemoryVal.EMPTY) | (current == encoded)
-			encoded = encoded.where(mask_ok, current)
-
-		# Finally write all at once.
-		self._set_memory_batch_raw(neuron_indices, addresses, encoded)
+		if bool(mask_write.any()):
+			# Finally write all at once.
+			self._set_memory_batch_raw(neuron_indices[mask_write], addresses[mask_write], encoded[mask_write])
 
 	def _set_memory_batch_raw(self, neuron_indices: Tensor, addresses: Tensor, encoded_vals: Tensor) -> None:
 		"""

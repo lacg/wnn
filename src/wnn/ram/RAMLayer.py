@@ -1,9 +1,15 @@
+from wnn.ram.Memory import Memory
+from wnn.ram.RAMEnums import MemoryVal
+
 from typing import Optional
 
+from torch import arange
+from torch import device
+from torch import int64
+from torch import randint
 from torch import Tensor
 from torch.nn import Module
 
-from wnn.ram.Memory import Memory
 
 
 class RAMLayer(Module):
@@ -50,6 +56,27 @@ class RAMLayer(Module):
 	def num_neurons(self) -> int:
 		return self.memory.num_neurons
 
+	def choose_address(self, neuron_index: int, desired_output: bool, current_address: int, dev: device) -> int:
+		"""
+		Generic helper: pick a memory address in `layer` for neuron_index that is
+		either EMPTY or already stores the desired_output label.
+
+		Hidden consistency is handled by EDRA writes afterwards.
+		"""
+		label_val = MemoryVal.TRUE if desired_output else MemoryVal.FALSE
+		if self.num_neurons == 0 or self.get_memory(neuron_index, current_address) in [MemoryVal.EMPTY, label_val]:
+			return current_address
+
+		row = self.get_memory_row(neuron_index)  # [memory_size]
+
+		label_mask = (row == MemoryVal.EMPTY) | (row == label_val)
+		if not label_mask.any():
+			return current_address
+
+		candidate_indices = label_mask.nonzero(as_tuple=False).view(-1).to(device=dev, dtype=int64)
+		idx = randint(0, candidate_indices.numel(), (1,), device=dev).item()
+		return int(candidate_indices[idx].item())
+
 	def forward(self, input_bits: Tensor) -> Tensor:
 		"""
 		Forward pass for RAM layer.
@@ -57,13 +84,6 @@ class RAMLayer(Module):
 		returns: [batch_size, num_neurons] boolean outputs
 		"""
 		return self.memory(input_bits)
-
-	def train_write(self, input_bits: Tensor, target_bits: Tensor) -> None:
-		"""
-		Write to memory directly.
-		target_bits must be bool or {0,1}.
-		"""
-		self.memory.train_write(input_bits, target_bits)
 
 	def get_addresses(self, input_bits: Tensor) -> Tensor:
 		"""
@@ -109,3 +129,77 @@ class RAMLayer(Module):
 		bits:           [K] bool or {0,1}
 		"""
 		self.memory.set_memory_batch(neuron_indices, addresses, bits, allow_override=allow_override)
+
+	def train_write(self, input_bits: Tensor, target_bits: Tensor) -> None:
+		"""
+		Write to memory directly.
+		target_bits must be bool or {0,1}.
+		"""
+		self.memory.train_write(input_bits, target_bits)
+
+	def resolve(self, addresses: Tensor, hidden_vals: Tensor) -> Tensor:
+		"""
+		Check EDRA feasibility for a set of candidate memory addresses.
+
+		addresses:   [M] int64 candidate addresses in [0, memory_size)
+		hidden_vals: [k] int64 memory values of each hidden neuron feeding this neuron
+		             (in the same order as self.memory.connections[neuron_index])
+		             values in {MemoryVal.FALSE, MemoryVal.TRUE, MemoryVal.EMPTY}
+
+		Returns:
+			ok_mask: [M] bool – True if for that address, for ALL hidden neurons:
+			         cell is either EMPTY or already equal to the desired bit.
+		"""
+		if addresses.numel() == 0 or self.memory.n_bits_per_neuron == 0:
+			return addresses == addresses  # all True / trivial
+
+		# Decode each address into k bits (LSB-first)
+		shifts = arange(self.memory.n_bits_per_neuron, device=addresses.device).unsqueeze(0)  # [1, self.memory.n_bits_per_neuron]
+		desired_bits = ((addresses.unsqueeze(1) >> shifts) & 1).to(int64)											# [M, self.memory.n_bits_per_neuron]
+
+		# Broadcast hidden values to [M, self.memory.n_bits_per_neuron]
+		hidden_vals = hidden_vals.to(int64)
+		hidden_matrix = hidden_vals.unsqueeze(0).expand(addresses.shape[0], self.memory.n_bits_per_neuron)
+
+		# Feasible if each cell is EMPTY or matches desired bit
+		ok = (hidden_matrix == MemoryVal.EMPTY) | (hidden_matrix == desired_bits)
+		return ok.all(dim=1)
+
+	def select_memory_address(self, neuron_index: int, desired_bit: bool, hidden_vals: Tensor) -> Optional[int]:
+		"""
+		Generic EDRA address selection for THIS layer & neuron.
+
+		neuron_index: which neuron in this layer
+		desired_bit:  bool, desired output for this neuron
+		hidden_vals:  [k] int64 memory values for each hidden neuron
+		              connected to this neuron, as seen at this timestep.
+
+		Returns:
+			address (int) in [0, memory_size), or None if no feasible address found.
+		"""
+		if self.num_neurons == 0:
+			return None
+
+		row = self.get_memory_row(neuron_index)   # [memory_size]
+
+		label_val = MemoryVal.TRUE if desired_bit else MemoryVal.FALSE
+
+		# Addresses that are label-compatible (EMPTY or already that label)
+		label_mask = (row == MemoryVal.EMPTY) | (row == label_val)
+		if not label_mask.any():
+			return None
+
+		candidates = label_mask.nonzero(as_tuple=False).view(-1).to(device=row.device, dtype=int64)
+
+		# Check hidden feasibility
+		ok_mask = self.resolve(candidates, hidden_vals)
+		if not ok_mask.any():
+			return None
+
+		valid = candidates[ok_mask]
+		if valid.numel() == 0:
+			return None
+
+		# Randomly pick one among valid addresses
+		idx = randint(0, valid.numel(), (1,), device=row.device).item()
+		return int(valid[idx].item())

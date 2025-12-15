@@ -18,7 +18,7 @@ from wnn.ram.RAMLayer import RAMLayer
 from wnn.ram.Memory import MemoryVal
 
 
-class RAMTransformer(Module):
+class RAMOneStepTransformer(Module):
 	"""
 	Three-layer RAM-based "transformer":
 	 - input_layer: sees raw input bits

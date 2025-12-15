@@ -16,8 +16,8 @@
 # Requirements: torch
 # --------------------------------------------------------------------
 
-from .Memory import Memory
-from .RAMEnums import MemoryVal
-from .RAMLayer import RAMLayer
-from .RAMMultiStepTransformer import RAMMultiStepTransformer
-from .RAMOneStepTransformer import RAMOneStepTransformer
+from .DecoderEnums import OutputMode
+from .TransformerBitWiseDecoder import TransformerBitWiseDecoder
+from .TransformerDecoder import TransformerDecoder
+from .TransformerDecoderFactory import TransformerDecoderFactory
+from .TransformerHammingDecoder import TransformerHammingDecoder
