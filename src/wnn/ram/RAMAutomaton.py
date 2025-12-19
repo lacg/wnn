@@ -59,7 +59,7 @@ class RAMAutomaton(Module):
 
 	def train_write_step(self, input_bits, prev_state_bits, target_input_bits, target_state_bits):
 		concat_input = cat([input_bits, prev_state_bits], dim=1)
-		self.input_layer.train_write(concat_input, target_input_bits)
+		self.input_layer.commit(concat_input, target_input_bits)
 
 		concat_state = cat([target_input_bits, prev_state_bits], dim=1)
-		self.state_layer.train_write(concat_state, target_state_bits)
+		self.state_layer.commit(concat_state, target_state_bits)

@@ -96,7 +96,7 @@ class RAMLayerOriginal(Module):
 		# Return bool tensor
 		return (mems & 1).to(torch.bool)
 
-	def train_write(self, input_bits: torch.Tensor, target_bits: torch.Tensor):
+	def commit(self, input_bits: torch.Tensor, target_bits: torch.Tensor):
 		"""
 		Write target bits to each neuron's memory according to connections.
 		- input_bits: [batch, total_input_bits]
@@ -106,4 +106,4 @@ class RAMLayerOriginal(Module):
 		assert target_bits.shape[1] == self.num_neurons
 		gathered = input_bits[:, self.connections]  # [batch, num_neurons, n_bits]
 		for i, neuron in enumerate(self.neurons):
-			neuron.train_write(gathered[:, i, :], target_bits[:, i])
+			neuron.commit(gathered[:, i, :], target_bits[:, i])

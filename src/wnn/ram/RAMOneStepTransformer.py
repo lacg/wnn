@@ -292,13 +292,13 @@ class RAMOneStepTransformer(Module):
 	def _train_write(self, input_bits: Tensor, target_bits: Tensor, state_layer_input: Tensor, input_layer_output: Tensor, state_layer_output: Tensor, output_layer_input: Tensor) -> None:
 		# ALL outputs correct → now final commit
 		# commit input memory
-		self.input_layer.train_write(input_bits, input_layer_output)
+		self.input_layer.commit(input_bits, input_layer_output)
 		# commit state memory
 		if self.state_layer.num_neurons > 0:
-			self.state_layer.train_write(state_layer_input, state_layer_output)
+			self.state_layer.commit(state_layer_input, state_layer_output)
 			self.state_bits = state_layer_output.detach().clone()
 		# commit output memory
-		self.output_layer.train_write(output_layer_input, target_bits)
+		self.output_layer.commit(output_layer_input, target_bits)
 
 	def _update_neurons(self, stable_mask: Tensor, input_bits: Tensor, target_bits: Tensor, state_layer_input: Tensor, output_layer_input: Tensor, input_addrs: Tensor, state_addrs: Optional[Tensor]) -> None:
 		"""
@@ -309,7 +309,7 @@ class RAMOneStepTransformer(Module):
 			2) Decode the address into k bits
 			3) For each connected hidden neuron:
 				* compute its address (from precomputed input_addrs/state_addrs)
-				* write required bit via set_memory_batch
+				* write required bit via explore_batch
 			4) Finally write the output memory cell for neuron j
 		"""
 		output_addresses = self.output_layer.get_addresses(output_layer_input)  # [1, self.output_layer.num_neurons]
@@ -355,20 +355,20 @@ class RAMOneStepTransformer(Module):
 				# req_bits = required_bits[mask_input]                     # bools
 				req_bits	= desired_bits[mask_input]              # [K_in] bool				
 				inp_addrs	= input_addrs[inp_idx]                  # [K_in]
-				self.input_layer.set_memory_batch(inp_idx, inp_addrs, req_bits, allow_override=True)
+				self.input_layer.explore_batch(inp_idx, inp_addrs, req_bits, allow_override=True)
 
 			# ----- STATE-LAYER SIDE -----
 			if mask_state.any() and self.state_layer.num_neurons > 0:
 				st_idx	 = hidden_indices[mask_state] - self.input_layer.num_neurons            # idx into state layer
 				req_bits = desired_bits[mask_state]
 				st_addrs = state_addrs[st_idx]                  # [K_in]
-				self.state_layer.set_memory_batch(st_idx, st_addrs, req_bits, allow_override=True)
+				self.state_layer.explore_batch(st_idx, st_addrs, req_bits, allow_override=True)
 
 		
 			# -------------------------------------------------------
 			# Step 4: Only AFTER hidden is corrected, write output mem
 			# -------------------------------------------------------
-			self.output_layer.set_memory(neuron_index, target_output_address, desired_output_bit, allow_override=True)
+			self.output_layer.explore(neuron_index, target_output_address, desired_output_bit, allow_override=True)
 
 	def forward(self, input_bits: Tensor) -> Tensor:
 		"""

@@ -7,9 +7,10 @@ class TransformerDecoderFactory:
 
 	@staticmethod
 	def create(mode: OutputMode, n_output_neurons: int) -> TransformerDecoder:
-		if mode == OutputMode.BITWISE:
-			return TransformerBitWiseDecoder()
-		elif mode == OutputMode.HAMMING:
-			return TransformerHammingDecoder(n_output_neurons)
-		else:
-			raise ValueError(f"Unsupported OutputMode: {mode}")
+		match mode:
+			case OutputMode.BITWISE:
+				return TransformerBitWiseDecoder()
+			case OutputMode.HAMMING:
+				return TransformerHammingDecoder(n_output_neurons)
+			case _:
+				raise ValueError(f"Unsupported OutputMode: {mode}")

@@ -61,7 +61,7 @@ class RAMNeuron(Module):
 		# logically 0/1, return as bool
 		return (mem & 1).to(tbool)
 
-	def train_write(self, bits: Tensor, target_bits: Tensor):
+	def commit(self, bits: Tensor, target_bits: Tensor):
 		"""
 		Direct write to memory table (supervised / teacher-forcing style).
 		bits: [batch, n_bits]

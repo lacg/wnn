@@ -13,20 +13,18 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import torch
 from wnn.ram import RAMMultiStepTransformer
 
-n = 2
-epochs = 10
+n = 12
+epochs = 250
 width = len(str(epochs))
 # ----------------------------
 # Build a tiny RAMTransformer
 # ----------------------------
 model = RAMMultiStepTransformer(
-	input_bits=1,
-	n_input_neurons=1,
-	n_state_neurons=1,         # no state for this toy
+	input_bits=12,
+	n_state_neurons=1,
 	n_output_neurons=1,
-	n_bits_per_input_neuron=1,
-	n_bits_per_state_neuron=2, # unused
-	n_bits_per_output_neuron=2,
+	n_bits_per_state_neuron=13,
+	n_bits_per_output_neuron=1,
 	use_hashing=False,
 	rng=None,
 	max_iters=100,
@@ -38,7 +36,7 @@ model = RAMMultiStepTransformer(
 xs = []
 ys = []
 for i in range(2 ** n):
-	vec = [(i >> b) & 1 for b in range(n)]
+	vec = [(i >> (n - 1 - b)) & 1 for b in range(n)]
 	xs.append(vec)
 	ys.append(sum(vec) % 2)  # odd parity
 
