@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 
+from wnn.ram import RAMRecurrentNetwork
+
 from datetime import datetime
-import sys, os
+
+import os
+import sys
+import torch
 
 start = datetime.now()
 
@@ -10,16 +15,13 @@ print(f"\n=== Starting Parity Check Run at {start} ===\n")
 # Add project root to PYTHONPATH
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import torch
-from wnn.ram import RAMMultiStepTransformer
-
 n = 12
 epochs = 250
 width = len(str(epochs))
 # ----------------------------
-# Build a tiny RAMTransformer
+# Build a RAMRecurrentNetwork
 # ----------------------------
-model = RAMMultiStepTransformer(
+model = RAMRecurrentNetwork(
 	input_bits=12,
 	n_state_neurons=1,
 	n_output_neurons=1,
@@ -51,7 +53,7 @@ for epoch in range(epochs):   # a few passes is usually enough
 		input_bits = xs[i:i+1]
 		target_bits = ys[i:i+1]
 		windows = model.make_windows(input_bits)
-		model.train_sequence_edra_bptt(windows, target_bits)
+		model.train(windows, target_bits)
 
 	print(f"\rEpoch {epoch+1:0{width}d} done.", end="", flush=True)
 

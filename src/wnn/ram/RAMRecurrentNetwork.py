@@ -1,4 +1,3 @@
-from wnn.ram import Memory
 from wnn.ram import RAMLayer
 from wnn.ram.decoders import OutputMode
 from wnn.ram.decoders import TransformerDecoder
@@ -7,26 +6,18 @@ from wnn.ram.decoders import TransformerDecoderFactory
 
 from typing import Optional
 
-from torch import arange
-from torch import bool as tbool
 from torch import cat
-from torch import device
-from torch import int64
-from torch import long
-from torch import randint
 from torch import uint8
-from torch import tensor
 from torch import zeros
 from torch import Tensor
 from torch.nn import Module
 
 
-class RAMMultiStepTransformer(Module):
+class RAMRecurrentNetwork(Module):
 	"""
-	Three-layer RAM-based "transformer":
-	 - input_layer: sees raw input bits
-	 - state_layer: sees [input_layer_output, previous_state_bits]
-	 - output_layer: sees [input_layer_output, current_state_bits]
+	Two-layer recurrent RAM-based network:
+	 - state_layer: sees [input, previous_state_bits]
+	 - output_layer: sees [current_state_bits]
 
 	All layers are trained via EDRA-style EMPTY-first steering.
 	"""
@@ -148,7 +139,7 @@ class RAMMultiStepTransformer(Module):
 		device = windows[0].device
 
 		# Reset recurrent state for this episode
-		self.reset_state(batch_size=1, device=device)
+		self._reset_state(batch_size=1, device=device)
 
 		contexts = []
 		for i in range(steps):
@@ -180,7 +171,7 @@ class RAMMultiStepTransformer(Module):
 		batch_size = window_bits.shape[0]
 
 		if self.state_bits is None or self.state_bits.shape[0] != batch_size:
-			self.reset_state(batch_size, device=window_bits.device)
+			self._reset_state(batch_size, device=window_bits.device)
 
 		# 1) State layer: [input_layer_output, prev_state_bits]
 		state_layer_input = cat([window_bits, self.state_bits], dim=1)
@@ -215,6 +206,12 @@ class RAMMultiStepTransformer(Module):
 			bits = bits.to(uint8)
 		return bits
 
+	def _reset_state(self, batch_size: int, device) -> None:
+		"""
+		Initialize recurrent state to all False.
+		"""
+		self.state_bits = zeros(batch_size, self.state_layer.num_neurons, dtype=uint8, device=device) if self.state_layer.num_neurons > 0 else zeros(batch_size, 0, dtype=uint8, device=device)
+
 
 	# ------------------------------------------------------------------
 	# Public API
@@ -223,7 +220,7 @@ class RAMMultiStepTransformer(Module):
 		"""
     Inference: run over all windows in sequence and return decoded output of last step.
 		"""
-		self.reset_state(input_bits.shape[0], input_bits.device)
+		self._reset_state(input_bits.shape[0], input_bits.device)
 		input_bits = self._normalize_bits(input_bits)													# [1, n_total_bits] or [B, n_total_bits]
 		assert input_bits.shape[0] == 1, "This forward() currently assumes batch_size=1"
 
@@ -269,13 +266,7 @@ class RAMMultiStepTransformer(Module):
 
 		return windows
 
-	def reset_state(self, batch_size: int, device) -> None:
-		"""
-		Initialize recurrent state to all False.
-		"""
-		self.state_bits = zeros(batch_size, self.state_layer.num_neurons, dtype=uint8, device=device) if self.state_layer.num_neurons > 0 else zeros(batch_size, 0, dtype=uint8, device=device)
-
-	def train_sequence_edra_bptt(self, windows: list[Tensor], target_bits: Tensor) -> None:
+	def train(self, windows: list[Tensor], target_bits: Tensor) -> None:
 		"""
 		Full EDRA-through-time (EDRA-BPTT):
 

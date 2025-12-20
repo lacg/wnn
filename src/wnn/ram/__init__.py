@@ -19,5 +19,4 @@
 from .Memory import Memory
 from .RAMEnums import MemoryVal
 from .RAMLayer import RAMLayer
-from .RAMMultiStepTransformer import RAMMultiStepTransformer
-from .RAMOneStepTransformer import RAMOneStepTransformer
+from .RAMRecurrentNetwork import RAMRecurrentNetwork
