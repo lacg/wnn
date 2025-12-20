@@ -21,3 +21,4 @@ from .TransformerBitWiseDecoder import TransformerBitWiseDecoder
 from .TransformerDecoder import TransformerDecoder
 from .TransformerDecoderFactory import TransformerDecoderFactory
 from .TransformerHammingDecoder import TransformerHammingDecoder
+from .TransformerRawDecoder import TransformerRawDecoder

@@ -2,6 +2,7 @@ from wnn.ram.decoders.DecoderEnums import OutputMode
 from wnn.ram.decoders.TransformerBitWiseDecoder import TransformerBitWiseDecoder
 from wnn.ram.decoders.TransformerDecoder import TransformerDecoder
 from wnn.ram.decoders.TransformerHammingDecoder import TransformerHammingDecoder
+from wnn.ram.decoders.TransformerRawDecoder import TransformerRawDecoder
 
 class TransformerDecoderFactory:
 
@@ -12,5 +13,7 @@ class TransformerDecoderFactory:
 				return TransformerBitWiseDecoder()
 			case OutputMode.HAMMING:
 				return TransformerHammingDecoder(n_output_neurons)
+			case OutputMode.RAW:
+				return TransformerRawDecoder()
 			case _:
 				raise ValueError(f"Unsupported OutputMode: {mode}")
