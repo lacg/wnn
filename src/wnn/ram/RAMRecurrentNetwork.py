@@ -56,8 +56,7 @@ class RAMRecurrentNetwork(Module):
 		)
 
 		# Output layer: sees [input_layer_output, current_state_bits]
-		self.output_layer = RAMLayer(
-			total_input_bits=n_state_neurons,
+		self.output_layer = self._create_output_layer(
 			num_neurons=n_output_neurons,
 			n_bits_per_neuron=n_bits_per_output_neuron,
 			use_hashing=use_hashing,
@@ -97,9 +96,32 @@ class RAMRecurrentNetwork(Module):
 		lines.append("")  # newline
 		return "\n".join(lines)
 
+	def _create_output_layer(self,
+		num_neurons: int,
+		n_bits_per_neuron: int,
+		use_hashing: bool = False,
+		hash_size: int = 1024,
+		rng: Optional[int] = None,
+	) -> RAMLayer:
+		return RAMLayer(
+			total_input_bits=self.state_layer.num_neurons,
+			num_neurons=num_neurons,
+			n_bits_per_neuron=n_bits_per_neuron,
+			use_hashing=use_hashing,
+			hash_size=hash_size,
+			rng=rng,
+		)
+		
+
 	# ------------------------------------------------------------------
 	# Utility helpers
 	# ------------------------------------------------------------------
+
+	def _calculate_state_output(self, window_bits: Tensor, desired_state_output: Tensor) -> tuple[Optional[slice], Tensor]:
+		return None, desired_state_output
+
+	def _return_state_output(self, window_bits: Tensor, desired_previous_state_input: Tensor, head: slice) -> Tensor:
+		return desired_previous_state_input[:, window_bits.shape[1]:]
 
 	def _commit(self, window_bits: Tensor, current_state_input: Tensor, desired_state_output: Tensor) -> tuple[bool, Optional[Tensor]]:
 		"""
@@ -110,12 +132,13 @@ class RAMRecurrentNetwork(Module):
 		if desired_state_output is None:
 			return False, None
 		assert current_state_input.shape[0] == self.input_bits + self.state_layer.num_neurons
-		desired_previous_state_input = self.state_layer.solve(current_state_input, desired_state_output, int(window_bits.shape[1]))
+		head, calculated_state_output = self._calculate_state_output(window_bits, desired_state_output)
+		desired_previous_state_input = self.state_layer.solve(current_state_input, calculated_state_output, int(window_bits.shape[1]))
 		if desired_previous_state_input is None:
 			return False, None
 		desired_previous_state_input = desired_previous_state_input.unsqueeze(0)	# [1, N_in+N_state]
-		changed = self.state_layer.commit(desired_previous_state_input, desired_state_output)
-		return (changed, desired_previous_state_input[:, window_bits.shape[1]:])
+		changed = self.state_layer.commit(desired_previous_state_input, calculated_state_output)
+		return (changed, self._return_state_output(window_bits, desired_previous_state_input, head))
 
 	def _get_contexts(self, windows: list[Tensor], steps: int) -> dict:
 		"""
@@ -144,11 +167,12 @@ class RAMRecurrentNetwork(Module):
 		contexts = []
 		for i in range(steps):
 			window_bits = windows[i]
-			(state_layer_input, state_layer_output, output_layer_output) = self._get_outputs(window_bits, update_state=True)
+			(state_layer_input, state_layer_output, output_layer_input, output_layer_output) = self._get_outputs(window_bits, update_state=True)
 			contexts.append({
 					"window_bits":					window_bits,
 					"state_layer_input":		state_layer_input,
 					"state_layer_output":		state_layer_output,
+					"output_layer_input":		output_layer_input,
 					"output_layer_output":	output_layer_output,
 				})
 		return contexts
@@ -162,7 +186,6 @@ class RAMRecurrentNetwork(Module):
 		Returns:
 			(
 				state_layer_input,   # [B, N_in + N_state] or [B, 0]
-				input_layer_output,  # [B, N_in]
 				state_layer_output,  # [B, N_state] or [B, 0]
 				output_layer_input,  # [B, N_in + N_state]
 				output_layer_output, # [B, N_out]
@@ -180,20 +203,27 @@ class RAMRecurrentNetwork(Module):
 		# 3) Output layer: [input_layer_output, current_state_bits]
 		output_layer_output = self.output_layer(state_layer_output)  # [B, N_out]
 
-		if update_state and self.state_layer.num_neurons > 0:
-			self.state_bits = state_layer_output.detach().clone()
+		if self._is_update_state(update_state, window_bits):
+			self.state_bits |= state_layer_output.detach()
 
-		return state_layer_input, state_layer_output, output_layer_output
+		return state_layer_input, state_layer_output, state_layer_output, output_layer_output
 
-	def _materialize_step(self, context) -> bool:
+	def _is_update_output(self, window_bits: Tensor) -> bool:
+		return True
+
+	def _is_update_state(self, update_state: bool, window_bits: Tensor) -> bool:
+		return update_state
+
+	def _materialize_step(self, context: dict) -> bool:
 		"""
 		Return:
 			changed:				True if state has changed, False otherwise.
 		"""
 		# STATE layer
-		state_changed = self.state_layer.commit(context["state_layer_input"], context["state_layer_output"], True)
+		state_changed = self.state_layer.commit(context["state_layer_input"], context["state_layer_output"], self._is_update_state(True, context["window_bits"]))
 		# OUTPUT layer - the context won't become stale if the output has changed.
-		self.output_layer.commit(context["state_layer_output"], context["output_layer_output"], True)
+		if self._is_update_output(context["window_bits"]):
+			self.output_layer.commit(context["output_layer_input"], context["output_layer_output"], True)
 		return state_changed
 
 	def _normalize_bits(self, bits: Tensor) -> Tensor:
@@ -212,6 +242,15 @@ class RAMRecurrentNetwork(Module):
 		"""
 		self.state_bits = zeros(batch_size, self.state_layer.num_neurons, dtype=uint8, device=device) if self.state_layer.num_neurons > 0 else zeros(batch_size, 0, dtype=uint8, device=device)
 
+	def _solve_output(self, context: dict, target_bits: Tensor) -> Tensor:
+		desired_state_output_bits_t = self.output_layer.solve(context["state_layer_output"][0], target_bits, 0)
+		if desired_state_output_bits_t is None:
+			return None	# no solution even with override (should be rare and a limit of the architecture).
+
+    # Commit output mapping: hidden_T -> target_bits
+		desired_state_output_bits_t = desired_state_output_bits_t.unsqueeze(0)
+		self.output_layer.commit(desired_state_output_bits_t, target_bits)
+		return desired_state_output_bits_t
 
 	# ------------------------------------------------------------------
 	# Public API
@@ -307,14 +346,9 @@ class RAMRecurrentNetwork(Module):
 
     # 1) Solve OUTPUT constraints at T-1:
     #    find desired hidden bits (input_out(T) + state_out(T)) that can yield target output.
-		desired_state_output_bits_t = self.output_layer.solve(context["state_layer_output"][0], target_bits, 0)
+		desired_state_output_bits_t = self._solve_output(context, target_bits)
 		if desired_state_output_bits_t is None:
 			return	# no solution even with override (should be rare and a limit of the architecture).
-
-    # Commit output mapping: hidden_T -> target_bits
-		desired_state_output_bits_t = desired_state_output_bits_t.unsqueeze(0)
-		self.output_layer.commit(desired_state_output_bits_t, target_bits)
-
 
 		# 2) Backprop through time over the STATE layer:
 		#    For t = T-1 ... 0:

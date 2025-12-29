@@ -20,3 +20,4 @@ from .Memory import Memory
 from .RAMEnums import MemoryVal
 from .RAMLayer import RAMLayer
 from .RAMRecurrentNetwork import RAMRecurrentNetwork
+from .RAMTransformer import RAMTransformer

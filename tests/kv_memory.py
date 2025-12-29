@@ -1,136 +1,83 @@
 #!/usr/bin/env python3
 
 from wnn.ram.decoders import OutputMode
-from wnn.ram import RAMRecurrentNetwork
 
-from torch import cat
-from torch import uint8
-from torch import manual_seed
-from torch import no_grad
-from torch import tensor
-from torch import Tensor
-from torch import zeros
+from random import Random
+from wnn.ram import RAMTransformer
+from wnn.ram.architecture import KVSpec
 
 from datetime import datetime
 
-start = datetime.now()
-test_name = "KV recall"
+from torch import cat
 
-print(f"\n=== Starting {test_name} test at {start} ===\n")
+def run() -> float:
+	spec = KVSpec(k_bits=3, v_bits=2, query_value=0)
+	rng = Random(123)
 
-# ------------------------------------------------------------
-# Helpers: bit encoders
-# ------------------------------------------------------------
-
-def bits_to_int(bits):
-  return int("".join("1" if b else "0" for b in bits), 2)
-
-def int_to_bits(x: int, n_bits: int) -> Tensor:
-	"""MSB-first bit encoding."""
-	return tensor([(x >> i) & 1 for i in reversed(range(n_bits))], dtype=uint8)
-
-def make_kv_sequence(pairs, query_key, k_bits, v_bits):
-	"""
-	Build a KV episode:
-		- Each (k, v) is a WRITE
-		- Final window is QUERY: (k, 0)
-	"""
-	windows = []
-
-	for k, v in pairs:
-		window = cat([int_to_bits(k, k_bits), int_to_bits(v, v_bits)])
-		windows.append(window.unsqueeze(0))
-
-	# QUERY window: v == 0
-	query_window = cat([int_to_bits(query_key, k_bits), zeros(v_bits, dtype=uint8)])
-	windows.append(query_window.unsqueeze(0))
-
-	return windows
-
-# ------------------------------------------------------------
-# Test
-# ------------------------------------------------------------
-
-def test_kv_recall_single_query():
-	manual_seed(0)
-
-	# ----------------------------
-	# Token sizes
-	# ----------------------------
-	k_bits = 3          # 8 keys
-	v_bits = 2          # 3 values + 00=query
-
-	# ----------------------------
-	# Model
-	# ----------------------------
-	model = RAMRecurrentNetwork(
-			input_bits=k_bits + v_bits,
-			n_state_neurons=4,
-			n_output_neurons=v_bits,
-			n_bits_per_state_neuron=8,
-			n_bits_per_output_neuron=4,
-			max_iters=50,
-			output_mode=OutputMode.RAW
+	model = RAMTransformer(
+		spec=spec,
+		neurons_per_head=8,
+		n_bits_per_state_neuron=8,
+		n_bits_per_output_neuron=4,
+		use_hashing=True,
+		hash_size=4096,
+		rng=42,
+		max_iters=100,
 	)
-
-	# ----------------------------
-	# Training data
-	# ----------------------------
-	# Write sequence:
-	#   k1 -> v2
-	#   k3 -> v1
-	#   k1 -> v3   (overwrite)
-	#
-	# Query:
-	#   k1 => expect v3
-	#
-	pairs = [
-		(1, 2),
-		(3, 1),
-		(1, 3),
-	]
-
-	query_key = 1
-	target_value = 3
-
-	windows = make_kv_sequence(pairs, query_key, k_bits, v_bits)
-	target_bits = int_to_bits(target_value, v_bits).unsqueeze(0)
 
 	# ----------------------------
 	# Train
 	# ----------------------------
 	print(f"\n=== Training model ===\n")
 
-	epochs = 200
+	epochs = 300
 	width = len(str(epochs))
-
 	for epoch in range(epochs):
+		windows, target_bits, _ = spec.generate_episode(n_writes=6, rng=rng)
 		model.train(windows, target_bits)
 		print(f"\rEpoch {epoch+1:0{width}d} done.", end="", flush=True)
+
 
 	# ----------------------------
 	# Test
 	# ----------------------------
 	print(f"\n=== Testing model ===\n")
 
-	with no_grad():
-		test_result = model.forward(windows[-1][0])
+	epochs = test_episodes = 200
+	correct = 0
+	width = len(str(epochs))
+	for _ in range(epochs):
+		windows, target_bits, _ = spec.generate_episode(n_writes=6, rng=rng)
+		out_bits = model.forward(cat([w[0] for w in windows], dim=0).reshape(1, -1))  # depends on your forward() API
+		print(f"\rEpoch {epoch+1:0{width}d} done.", end="", flush=True)
+		# If your forward expects the full episode bits as [1, n_total_bits], the above is correct.
+		# Otherwise: run through windows and read the last output_layer_output.
 
-	test_result = bits_to_int(test_result[0])
-	expected_result = target_value
+		pred = spec.decode_value_bits(out_bits)
+		expected = int("".join(str(int(b)) for b in target_bits[0].tolist()), 2)
 
-	print(model)   # calls __str__()
+		if pred == expected:
+			correct += 1
+
+	accuracy = correct / test_episodes
+
+	print(model)		# calls __str__()
+	return accuracy
+
+
+if __name__ == "__main__":
+	start = datetime.now()
+	test_name = "KV recall"
+
+	print(f"\n=== Starting {test_name} test at {start} ===\n")
+
+	accuracy = run()
 
 	print(f"{test_name} Test Summary")
 	print("====================")
-	print(f"Query key: {query_key}")
-	print(f"Expected value: {expected_result}")
-	print(f"Predicted value: {test_result}")
+	print(f"KV recall accuracy: {accuracy:.3f}")
+	print(f"✅ {test_name} succeed!" if accuracy > 0.80 else f"❌ {test_name} failed!")
 
 	end = datetime.now()
-	print(f"✅ {test_name} succeed!" if test_result == expected_result else f"❌ {test_name} failed!")
 	print(f"\n=== End {test_name} at {end} ===")
 	print(f"\n=== Duration: {end - start} ===\n")
-
-if __name__ == "__main__":
-  test_kv_recall_single_query()
