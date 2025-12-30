@@ -71,6 +71,11 @@ class RAMMultiHeadSequence(Module):
 		if n_bits_per_state_neuron is None:
 			n_bits_per_state_neuron = input_bits + n_state_neurons_per_head
 
+		# Cap output neuron connections at available input bits (state neurons)
+		# Output layer sees only state bits, so can't connect to more than that
+		if n_bits_per_output_neuron > n_state_neurons_per_head:
+			n_bits_per_output_neuron = n_state_neurons_per_head
+
 		# Create cost calculator for combining head outputs
 		match cost_calculator_type:
 			case CostCalculatorType.RAM:

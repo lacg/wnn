@@ -126,65 +126,70 @@ class Memory(Module):
 
 	def _randomize_connections(self, rng: Optional[int]) -> Tensor:
 		"""
-    Guaranteed-coverage connection initializer.
+		Guaranteed-coverage connection initializer.
 
-    Goals:
-      - Every upstream index in [0, total_input_bits) is used at least once
-        across all neurons (global coverage).
-      - Each neuron receives `n_bits_per_neuron` *unique* connections.
-      - After guaranteeing coverage, we continue sampling from a shuffled pool
-        to fill the remainder uniformly.
+		Goals:
+		  - Every upstream index in [0, total_input_bits) is used at least once
+		    across all neurons (global coverage).
+		  - Each neuron receives `n_bits_per_neuron` connections, unique when possible.
+		  - When n_bits_per_neuron > total_input_bits, allows rotation (duplicates)
+		    after all unique values are used.
+		  - After guaranteeing coverage, we continue sampling from a shuffled pool
+		    to fill the remainder uniformly.
 
-    Result:
-      Tensor[num_neurons, n_bits_per_neuron] of dtype long.
+		Result:
+		  Tensor[num_neurons, n_bits_per_neuron] of dtype long.
 		"""
 		def refill_pool():
-				nonlocal pool, pool_index
-				pool = randperm(self.total_input_bits, device=self.memory_words.device)
-				pool_index = 0
+			nonlocal pool, pool_index
+			pool = randperm(self.total_input_bits, device=self.memory_words.device)
+			pool_index = 0
 
 		if self.num_neurons == 0 or self.n_bits_per_neuron == 0 or self.total_input_bits == 0:
-			# Return empty tensor with correct shape and type
 			return empty(self.num_neurons, self.n_bits_per_neuron, dtype=long, device=device("cpu"))
 
-		# ---------
-		# STEP 1: Guaranteed coverage bucket
-		# ---------
-		# First pass: assign each of the T bits exactly once.
-		# If we have more neuron slots than T, great — T assignments are done here.
-		# If num_neurons * n_bits_per_neuron < total_input_bits, the architecture is underspecified (user error).
 		total_slots = self.num_neurons * self.n_bits_per_neuron
-		# if total_slots < self.total_input_bits:
-		# 		raise RuntimeError(f"Cannot guarantee coverage: num_neurons * n_bits_per_neuron = {total_slots} < total_input_bits = {self.total_input_bits}")
 
 		if rng is not None:
 			manual_seed(rng)
 
 		memory_connections = [[None] * self.n_bits_per_neuron for _ in range(self.num_neurons)]
 
-		# --- GLOBAL SHUFFLED BAG OF INPUT BITS ---
+		# Track unique connections per row for rotation detection
+		row_unique_counts = [0] * self.num_neurons
+
 		pool = None
 		pool_index = filled = 0
 		refill_pool()
 
+		# STEP 1: Guaranteed coverage - assign each input bit at least once
 		for i, conn in enumerate(pool):
 			row, col = divmod(i, self.n_bits_per_neuron)
-			if filled < total_slots:
+			if filled < total_slots and filled < self.total_input_bits:
 				memory_connections[row][col] = int(conn.item())
+				row_unique_counts[row] += 1
 				filled += 1
 			else:
 				break
 
-		filled, (row, col) = self.total_input_bits, divmod(self.total_input_bits, self.n_bits_per_neuron)
+		# STEP 2: Fill remaining slots
+		filled = min(self.total_input_bits, total_slots)
+		row, col = divmod(filled, self.n_bits_per_neuron)
+
 		while filled < total_slots:
-			# If pool is empty, reshuffle
 			if pool_index >= self.total_input_bits:
 				refill_pool()
 
 			connection = int(pool[pool_index].item())
 			pool_index += 1
-			if connection not in memory_connections[row]:
+
+			# Check if row already has all unique values (rotation mode)
+			row_is_full = row_unique_counts[row] >= self.total_input_bits
+
+			if row_is_full or connection not in memory_connections[row]:
 				memory_connections[row][col] = connection
+				if not row_is_full and connection not in memory_connections[row][:col]:
+					row_unique_counts[row] += 1
 				filled += 1
 				row, col = divmod(filled, self.n_bits_per_neuron)
 
