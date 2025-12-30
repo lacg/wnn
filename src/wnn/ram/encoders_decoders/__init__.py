@@ -22,3 +22,5 @@ from .TransformerDecoder import TransformerDecoder
 from .TransformerDecoderFactory import TransformerDecoderFactory
 from .TransformerHammingDecoder import TransformerHammingDecoder
 from .TransformerRawDecoder import TransformerRawDecoder
+from .TransformerTokenDecoder import TransformerTokenDecoder
+from .TransformerTokenListDecoder import TransformerTokenListDecoder

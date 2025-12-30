@@ -1,4 +1,4 @@
-from wnn.ram.decoders import TransformerDecoder
+from wnn.ram.encoders_decoders import TransformerDecoder
 from wnn.ram.cost import CostCalculator
 from wnn.ram.cost import CostCalculatorFactory
 from wnn.ram.cost import CostCalculatorType

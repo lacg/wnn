@@ -21,3 +21,4 @@ from .CostCalculatorArgMin import CostCalculatorArgMin
 from .CostCalculatorFactory import CostCalculatorFactory
 from .CostCalculatorStochastic import CostCalculatorStochastic
 from .CostCalculatorType import CostCalculatorType
+from .CostCalculatorVote import CostCalculatorVote

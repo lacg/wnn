@@ -3,7 +3,7 @@ from wnn.ram.architecture import KVSpec
 from wnn.ram.RAMEnums import MemoryVal
 from wnn.ram.RAMLayer import RAMLayer
 from wnn.ram.RAMRecurrentNetwork import RAMRecurrentNetwork
-from wnn.ram.decoders import OutputMode
+from wnn.ram.encoders_decoders import OutputMode
 
 from typing import Optional
 

@@ -1,4 +1,4 @@
-from wnn.ram.decoders.TransformerDecoder import TransformerDecoder
+from wnn.ram.encoders_decoders.TransformerDecoder import TransformerDecoder
 
 from torch import bool as tbool
 from torch import full

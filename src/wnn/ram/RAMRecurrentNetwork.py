@@ -1,7 +1,7 @@
 from wnn.ram import RAMLayer
-from wnn.ram.decoders import OutputMode
-from wnn.ram.decoders import TransformerDecoder
-from wnn.ram.decoders import TransformerDecoderFactory
+from wnn.ram.encoders_decoders import OutputMode
+from wnn.ram.encoders_decoders import TransformerDecoder
+from wnn.ram.encoders_decoders import TransformerDecoderFactory
 
 
 from typing import Optional
@@ -204,7 +204,7 @@ class RAMRecurrentNetwork(Module):
 		output_layer_output = self.output_layer(state_layer_output)  # [B, N_out]
 
 		if self._is_update_state(update_state, window_bits):
-			self.state_bits |= state_layer_output.detach()
+			self.state_bits = state_layer_output.detach().clone()
 
 		return state_layer_input, state_layer_output, state_layer_output, output_layer_output
 
