@@ -148,6 +148,11 @@ class Memory(Module):
 		if self.num_neurons == 0 or self.n_bits_per_neuron == 0 or self.total_input_bits == 0:
 			return empty(self.num_neurons, self.n_bits_per_neuron, dtype=long, device=device("cpu"))
 
+		# Full connectivity: use canonical connections for solve_constraints compatibility
+		if self.n_bits_per_neuron == self.total_input_bits:
+			canonical = arange(self.total_input_bits, dtype=long, device=self.memory_words.device)
+			return canonical.unsqueeze(0).expand(self.num_neurons, -1).clone()
+
 		total_slots = self.num_neurons * self.n_bits_per_neuron
 
 		if rng is not None:
@@ -500,144 +505,215 @@ class Memory(Module):
 		# use bit-packed vectorized reader
 		return self._read_cells(neuron_indices, addresses)
 
-	def solve_constraints(self, input_bits: Tensor, target_bits: Tensor, allow_override: bool = False, n_immutable_bits: int = 0, topk_per_candidate: int = 4) -> Optional[Tensor]:
+	def solve_constraints(self, input_bits: Tensor, target_bits: Tensor, allow_override: bool = False, n_immutable_bits: int = 0, topk_per_neuron: int = 4) -> Optional[Tensor]:
 		"""
-    Vectorized global constraint solver.
-		Find an alternative upstream input bits vector that would produce target_bits.
-		No memory is modified.
+		Constraint solver for finding input bits that produce target outputs.
+
+		Two modes:
+		  - Full connectivity (n_bits_per_neuron == total_input_bits): Uses fast
+		    global address search. Works because canonical connections ensure all
+		    neurons map input bits to addresses identically.
+		  - Partial connectivity: Uses per-neuron beam search to handle different
+		    connection patterns per neuron.
+
+		Args:
+			input_bits: Current input bit pattern
+			target_bits: Desired output bits for each neuron
+			allow_override: If True, allow conflicting memory writes
+			n_immutable_bits: Number of leading bits that cannot be changed
+			topk_per_neuron: Number of top addresses to consider per neuron
+
 		Returns:
-			- Tensor[new_input_bits] or
-			- None if no admissible solution exists
+			Tensor[new_input_bits] or None if no solution exists
 		"""
-    # ---- Normalize shapes ----
+		# ---- Normalize shapes ----
 		if input_bits.ndim == 2:
-				assert input_bits.shape[0] == 1
-				input_bits = input_bits[0]
+			assert input_bits.shape[0] == 1
+			input_bits = input_bits[0]
 		assert input_bits.ndim == 1 and input_bits.numel() == self.total_input_bits
 		assert target_bits.ndim == 2 and target_bits.shape[0] == 1
 		input_bits = input_bits.to(tbool)
 		target_bits = target_bits.to(tbool)
 
-    # ---- Constants ----
+		# Route to appropriate solver
+		if self.n_bits_per_neuron == self.total_input_bits:
+			return self._solve_full_connectivity(input_bits, target_bits, allow_override, n_immutable_bits, topk_per_neuron)
+		else:
+			return self._solve_partial_connectivity(input_bits, target_bits, allow_override, n_immutable_bits, topk_per_neuron)
+
+	def _solve_full_connectivity(self, input_bits: Tensor, target_bits: Tensor, allow_override: bool, n_immutable_bits: int, topk_per_candidate: int) -> Optional[Tensor]:
+		"""
+		Fast solver for full connectivity case.
+
+		With canonical connections [0,1,2,...,n-1], all neurons map input bits
+		to addresses identically. This allows picking a global address and
+		applying it to all neurons.
+		"""
 		MAX_BEAM_WIDTH, CONFLICT_COST, EMPTY_COST, HAMMING_COST = 32, 20, 10, 1
 		mutable_size = 2 ** (self.total_input_bits - n_immutable_bits)
 		beam_width = min(MAX_BEAM_WIDTH, mutable_size, max(4 * self.num_neurons, 1))
 		k_top = min(topk_per_candidate, self.memory_size)
 
-		# ---- Address bits [self.memory_size, self.n_bits_per_neuron] ----
-		memory_rows = stack([self.get_memory_row(neuron_index) for neuron_index in range(self.num_neurons)], dim=0)		# [self.num_neurons, self.memory_size]
-		desired_bits = target_bits[0].to(tbool)																		# [self.num_neurons]
-		desired_memories = where(desired_bits, MemoryVal.TRUE, MemoryVal.FALSE).unsqueeze(1)				# [self.num_neurons, 1]
+		memory_rows = stack([self.get_memory_row(n) for n in range(self.num_neurons)], dim=0)
+		desired_bits = target_bits[0].to(tbool)
+		desired_memories = where(desired_bits, MemoryVal.TRUE, MemoryVal.FALSE).unsqueeze(1)
 
-		# --- Conflict / empty masks ---
 		conflict = (memory_rows != MemoryVal.EMPTY) & (memory_rows != desired_memories)
-		empty    = (memory_rows == MemoryVal.EMPTY)
-
+		empty = (memory_rows == MemoryVal.EMPTY)
 		valid_memories = ones_like(conflict, dtype=tbool) if allow_override else ~conflict
 
-    # Candidate upstream assignments:
-    # -1 = unknown, 0/1 = fixed
 		candidate_bits = full((beam_width, self.total_input_bits), -1, dtype=int8, device=input_bits.device)
 		candidate_cost = zeros(beam_width, device=input_bits.device, dtype=float64)
 
-		# Seed: immutable bits fixed from input_bits
 		if n_immutable_bits > 0:
 			candidate_bits[:, :n_immutable_bits] = input_bits[:n_immutable_bits].to(int8)
-
-		# Keep only first candidate active initially
 		candidate_cost[1:] = float("inf")
 
-		# -------------------------------------------------------
-		# Address compatibility with candidate bits
-		# -------------------------------------------------------
-
-		# candidate_bits: [beam_width, total_input_bits]
-		# connections:    [self.num_neurons, self.n_bits_per_neuron]
-
-		# Project candidate bits → [beam_width, self.num_neurons, self.n_bits_per_neuron]
-		candidate_proj = candidate_bits[:, self.connections]   # [beam_width, self.num_neurons, self.n_bits_per_neuron]
-		fixed_mask     = candidate_proj != -1             # [beam_width, self.num_neurons, self.n_bits_per_neuron]
-
-		# Address bits: [self.memory_size, self.n_bits_per_neuron] → [1, 1, self.memory_size, self.n_bits_per_neuron]
+		candidate_proj = candidate_bits[:, self.connections]
+		fixed_mask = candidate_proj != -1
 		addresses_bits = self.addresses_bits.unsqueeze(0).unsqueeze(0)
-
-		# Expand to [beam_width, self.num_neurons, self.memory_size, self.n_bits_per_neuron]
 		candidate_proj = candidate_proj.unsqueeze(2)
-		fixed_mask     = fixed_mask.unsqueeze(2)
-
+		fixed_mask = fixed_mask.unsqueeze(2)
 		mismatch = fixed_mask & (addresses_bits != candidate_proj)
-		compatible = ~mismatch.any(dim=3)                 # [beam_width, self.num_neurons, self.memory_size]
+		compatible = ~mismatch.any(dim=3)
 
-		# -------------------------------------------------------
-		# Hamming cost (relative to current input)
-		# -------------------------------------------------------
+		current = input_bits[self.connections].to(int8)
+		hamming = (self.addresses_bits.unsqueeze(0) != current.unsqueeze(1)).sum(dim=2)
+		per_neuron_cost = (CONFLICT_COST * conflict.to(float64) + EMPTY_COST * empty.to(float64) + HAMMING_COST * hamming.to(float64))
 
-		current = input_bits[self.connections].to(int8)        # [self.num_neurons, self.n_bits_per_neuron]
-		hamming = (self.addresses_bits.unsqueeze(0) != current.unsqueeze(1)).sum(dim=2)  # [self.num_neurons, self.memory_size]
-
-		# -------------------------------------------------------
-		# Per-neuron per-address cost
-		# -------------------------------------------------------
-
-		per_neuron_cost = (CONFLICT_COST * conflict.to(float64) + EMPTY_COST * empty.to(float64) + HAMMING_COST * hamming.to(float64))	# [self.num_neurons, self.memory_size]
-
-		# -------------------------------------------------------
-		# Combine all neurons → total cost
-		# -------------------------------------------------------
-
-		# Expand to [beam_width, self.num_neurons, self.memory_size]
 		cost = per_neuron_cost.unsqueeze(0).expand(beam_width, -1, -1)
-
 		cost = cost.masked_fill(~valid_memories.unsqueeze(0), float("inf"))
 		cost = cost.masked_fill(~compatible, float("inf"))
-
-		# Sum neuron costs → [beam_width, self.memory_size]
 		cost = cost.sum(dim=1)
-
-		# Add candidate cost
 		cost = cost + candidate_cost.unsqueeze(1)
 
-		# -------------------------------------------------------
-		# Beam expansion
-		# -------------------------------------------------------
-
 		topk_cost, topk_index = cost.topk(k=k_top, dim=1, largest=False)
-
 		new_bits = candidate_bits.unsqueeze(1).expand(-1, k_top, -1).reshape(-1, self.total_input_bits).clone()
 		new_cost = topk_cost.reshape(-1)
+		chosen_addresses_index = topk_index.reshape(-1)
+		chosen_address_bits = self.addresses_bits[chosen_addresses_index]
 
-		# chosen addresses per expanded candidate
-		chosen_addresses_index = topk_index.reshape(-1)                 # [beam_width * k_top]
-
-		# bits of the chosen address
-		chosen_address_bits = self.addresses_bits[chosen_addresses_index]  # [beam_width * k_top, n_bits_per_neuron]
-
-		# Merge chosen address bits
 		for neuron_index in range(self.num_neurons):
-			neuron_connection = self.connections[neuron_index]		# [n_bits_per_neuron]
-
-			existing = new_bits[:, neuron_connection]							# [beam_width*k_top, n_bits_per_neuron]
-
+			neuron_connection = self.connections[neuron_index]
+			existing = new_bits[:, neuron_connection]
 			conflict_merge = (existing != -1) & (existing != chosen_address_bits)
 			new_cost = new_cost.masked_fill(conflict_merge.any(dim=1), float("inf"))
-
 			merged = where(existing != -1, existing, chosen_address_bits)
 			new_bits[:, neuron_connection] = merged
-		# -------------------------------------------------------
-		# Prune beam
-		# -------------------------------------------------------
 
 		best_cost, best_index = new_cost.topk(k=beam_width, largest=False)
 		candidate_bits = new_bits[best_index]
 		candidate_cost = best_cost
 
-		# ---- Select best candidate ----
 		if not isfinite(candidate_cost).any():
 			return None
 
 		best = candidate_bits[self.cost_calculator.calculate_index(candidate_cost)]
+		best = where(best == -1, input_bits.to(int8), best)
+		return best.to(tbool)
 
-		# Fill unconstrained bits from original input
+	def _solve_partial_connectivity(self, input_bits: Tensor, target_bits: Tensor, allow_override: bool, n_immutable_bits: int, topk_per_neuron: int) -> Optional[Tensor]:
+		"""
+		Per-neuron beam search for partial connectivity.
+
+		Handles different connection patterns per neuron by processing neurons
+		one at a time and checking constraint compatibility.
+		"""
+		MAX_BEAM_WIDTH = 64
+		CONFLICT_COST, EMPTY_COST, HAMMING_COST = 20.0, 10.0, 1.0
+		beam_width = min(MAX_BEAM_WIDTH, max(8 * self.num_neurons, 16))
+		k_top = min(topk_per_neuron, self.memory_size)
+		device = input_bits.device
+
+		# Precompute per-neuron costs
+		memory_rows = stack([self.get_memory_row(n) for n in range(self.num_neurons)], dim=0)
+		desired_bits = target_bits[0].to(tbool)
+		desired_memories = where(desired_bits, MemoryVal.TRUE, MemoryVal.FALSE).unsqueeze(1)
+
+		conflict = (memory_rows != MemoryVal.EMPTY) & (memory_rows != desired_memories)
+		empty = (memory_rows == MemoryVal.EMPTY)
+		valid = ~conflict if not allow_override else ones_like(conflict, dtype=tbool)
+
+		current_addr_bits = input_bits[self.connections].to(int8)
+		hamming = (self.addresses_bits.unsqueeze(0) != current_addr_bits.unsqueeze(1)).sum(dim=2).to(float64)
+
+		per_neuron_cost = (
+			CONFLICT_COST * conflict.to(float64) +
+			EMPTY_COST * empty.to(float64) +
+			HAMMING_COST * hamming
+		)
+		per_neuron_cost = per_neuron_cost.masked_fill(~valid, float("inf"))
+
+		# Initialize beam
+		candidate_bits = full((1, self.total_input_bits), -1, dtype=int8, device=device)
+		candidate_cost = zeros(1, dtype=float64, device=device)
+
+		if n_immutable_bits > 0:
+			candidate_bits[0, :n_immutable_bits] = input_bits[:n_immutable_bits].to(int8)
+
+		# Process each neuron
+		for neuron_idx in range(self.num_neurons):
+			neuron_conn = self.connections[neuron_idx]
+			neuron_costs = per_neuron_cost[neuron_idx]
+
+			topk_costs, topk_addrs = neuron_costs.topk(k_top, largest=False)
+			finite_mask = isfinite(topk_costs)
+			if not finite_mask.any():
+				return None
+
+			n_candidates = candidate_bits.shape[0]
+			n_addrs = finite_mask.sum().item()
+
+			expanded_bits = candidate_bits.unsqueeze(1).expand(-1, n_addrs, -1).reshape(-1, self.total_input_bits).clone()
+			expanded_cost = candidate_cost.unsqueeze(1).expand(-1, n_addrs).reshape(-1).clone()
+
+			valid_addrs = topk_addrs[finite_mask]
+			valid_addr_costs = topk_costs[finite_mask]
+			addr_bits = self.addresses_bits[valid_addrs]
+
+			addr_bits_tiled = addr_bits.unsqueeze(0).expand(n_candidates, -1, -1).reshape(-1, self.n_bits_per_neuron)
+			addr_costs_tiled = valid_addr_costs.unsqueeze(0).expand(n_candidates, -1).reshape(-1)
+
+			existing = expanded_bits[:, neuron_conn]
+
+			# Check immutable constraints
+			if n_immutable_bits > 0:
+				immutable_in_conn = neuron_conn < n_immutable_bits
+				if immutable_in_conn.any():
+					immutable_existing = existing[:, immutable_in_conn]
+					immutable_required = addr_bits_tiled[:, immutable_in_conn]
+					immutable_conflict = (immutable_existing != immutable_required).any(dim=1)
+					expanded_cost = expanded_cost.masked_fill(immutable_conflict, float("inf"))
+
+			# Check already-constrained conflicts
+			constrained_mask = existing != -1
+			constraint_conflict = constrained_mask & (existing != addr_bits_tiled)
+			has_conflict = constraint_conflict.any(dim=1)
+			expanded_cost = expanded_cost.masked_fill(has_conflict, float("inf"))
+
+			expanded_cost = expanded_cost + addr_costs_tiled
+
+			# Merge
+			merged = where(existing == -1, addr_bits_tiled, existing)
+			expanded_bits[:, neuron_conn] = merged
+
+			# Prune
+			if expanded_bits.shape[0] > beam_width:
+				best_costs, best_indices = expanded_cost.topk(beam_width, largest=False)
+				candidate_bits = expanded_bits[best_indices]
+				candidate_cost = best_costs
+			else:
+				candidate_bits = expanded_bits
+				candidate_cost = expanded_cost
+
+			if not isfinite(candidate_cost).any():
+				return None
+
+		if not isfinite(candidate_cost).any():
+			return None
+
+		best_idx = self.cost_calculator.calculate_index(candidate_cost)
+		best = candidate_bits[best_idx]
 		best = where(best == -1, input_bits.to(int8), best)
 		return best.to(tbool)
 
