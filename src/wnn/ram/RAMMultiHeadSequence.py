@@ -34,6 +34,7 @@ class RAMMultiHeadSequence(Module):
 		use_hashing: bool = False,
 		hash_size: int = 1024,
 		cost_calculator_type: CostCalculatorType = CostCalculatorType.VOTE,
+		capacity_margin: int = 1,  # Extra state neurons for memory headroom
 		rng: int | None = None,
 	):
 		"""
@@ -49,6 +50,7 @@ class RAMMultiHeadSequence(Module):
 			use_hashing: Whether to use hash-based addressing
 			hash_size: Hash table size if using hashing
 			cost_calculator_type: How to combine head outputs (VOTE, RAM, etc.)
+			capacity_margin: Extra state neurons beyond minimum (default 1, doubles capacity)
 			rng: Random seed
 		"""
 		super().__init__()
@@ -60,10 +62,15 @@ class RAMMultiHeadSequence(Module):
 
 		# Auto-calculate optimal state neurons per head
 		# Each head handles vocab_size / num_heads characters
+		# Add capacity_margin for memory headroom (each extra bit doubles capacity)
+		# Floor at vocab_size bits to ensure sufficient capacity for any head
 		if n_state_neurons_per_head is None:
 			chars_per_head = (vocab_size + num_heads - 1) // num_heads  # ceiling division
-			n_state_neurons_per_head = (chars_per_head - 1).bit_length()  # bits needed
-			print(f"[MultiHead] Auto: {chars_per_head} chars/head → {n_state_neurons_per_head} state neurons/head")
+			min_bits = (chars_per_head - 1).bit_length()  # minimum bits for partition
+			vocab_bits = (vocab_size - 1).bit_length()  # minimum bits for full vocab
+			calculated = min_bits + capacity_margin
+			n_state_neurons_per_head = max(calculated, vocab_bits)
+			print(f"[MultiHead] Auto: {chars_per_head} chars/head → {n_state_neurons_per_head} state neurons/head (calc={calculated}, vocab_floor={vocab_bits})")
 
 		self.n_state_neurons_per_head = n_state_neurons_per_head
 
