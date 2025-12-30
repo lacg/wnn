@@ -170,8 +170,15 @@ class RAMMultiHeadSequence(Module):
 		# Get predictions from all heads
 		head_outputs = [head.forward(input_bits) for head in self.heads]
 
+		# For RAM cost calculator, extract last window as context
+		# (full input may be multiple windows concatenated)
+		if input_bits.ndim == 1:
+			last_window = input_bits[-self.input_bits:]
+		else:
+			last_window = input_bits[:, -self.input_bits:]
+
 		# Combine using cost calculator
-		return self._combine_outputs(head_outputs, input_bits)
+		return self._combine_outputs(head_outputs, last_window)
 
 	def __repr__(self):
 		return (
