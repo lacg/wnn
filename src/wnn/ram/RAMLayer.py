@@ -1,5 +1,5 @@
-from wnn.ram import Memory
-from wnn.ram import MemoryVal
+from wnn.ram.Memory import Memory
+from wnn.ram.Memory import MemoryVal
 
 from typing import Optional
 

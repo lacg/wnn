@@ -48,71 +48,44 @@ def test_multihead():
 	print(f"\nTraining on {len(training_data)} sequences")
 	print(f"Testing on {len(test_data)} NEW sequences\n")
 
-	# Common architecture params
-	n_state_neurons = 5
-	n_bits_per_state_neuron = bits_per_token + n_state_neurons
-	total_input_bits = bits_per_token + n_state_neurons
-
-	# Create full connectivity connections
-	state_connections = []
-	for i in range(n_state_neurons):
-		connections = list(range(total_input_bits))
-		state_connections.append(connections)
-	state_connections_tensor = tensor(state_connections, dtype=tlong)
-
-	output_connections = []
-	for i in range(bits_per_token):
-		connections = list(range(n_state_neurons))
-		output_connections.append(connections)
-	output_connections_tensor = tensor(output_connections, dtype=tlong)
-
-	# Test configurations
+	# Test configurations with different cost calculators
 	configs = [
-		("Single-Head", 1),
-		("3-Head", 3),
-		("5-Head", 5),
+		("Single-Head", 1, CostCalculatorType.VOTE),
+		("3-Head VOTE", 3, CostCalculatorType.VOTE),
+		("3-Head RAM", 3, CostCalculatorType.RAM),
+		("5-Head VOTE", 5, CostCalculatorType.VOTE),
 	]
 
 	results = []
 
-	for config_name, num_heads in configs:
+	for config_name, num_heads, calc_type in configs:
 		print(f"\n{'='*60}")
 		print(f"Testing {config_name} Configuration")
 		print(f"{'='*60}")
 
 		if num_heads == 1:
-			# Single head (RAMSequence)
+			# Single head (RAMSequence) - manual setup for baseline
 			model = RAMSequence(
 				input_bits=bits_per_token,
-				n_state_neurons=n_state_neurons,
+				n_state_neurons=5,  # Manual: 2^5 = 32 states for 26 letters
 				n_output_neurons=bits_per_token,
-				n_bits_per_state_neuron=n_bits_per_state_neuron,
-				n_bits_per_output_neuron=bits_per_token,
+				n_bits_per_state_neuron=bits_per_token + 5,  # Full connectivity
+				n_bits_per_output_neuron=5,  # See all state bits
 				output_mode=OutputMode.TOKEN,
 				use_hashing=False,
 				rng=42,
 			)
-			model.state_layer.memory.connections = state_connections_tensor
-			model.output_layer.memory.connections = output_connections_tensor
 		else:
-			# Multi-head
+			# Multi-head with automatic calculation
 			model = RAMMultiHeadSequence(
 				num_heads=num_heads,
 				input_bits=bits_per_token,
-				n_state_neurons_per_head=n_state_neurons,
-				n_output_neurons=bits_per_token,
-				n_bits_per_state_neuron=n_bits_per_state_neuron,
-				n_bits_per_output_neuron=bits_per_token,
+				vocab_size=26,  # Auto-calculates optimal state neurons per head
 				output_mode=OutputMode.TOKEN,
-				routing_mode="vote",  # All heads vote
-				cost_calculator_type=CostCalculatorType.VOTE,
+				cost_calculator_type=calc_type,
 				use_hashing=False,
 				rng=42,
 			)
-			# Set connections for all heads
-			for head in model.heads:
-				head.state_layer.memory.connections = state_connections_tensor
-				head.output_layer.memory.connections = output_connections_tensor
 
 		# Train
 		epochs = 30

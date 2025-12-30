@@ -4,3 +4,4 @@ class CostCalculatorType(IntEnum):
 	ARGMIN			= 0
 	STOCHASTIC	= 1
 	VOTE				= 2
+	RAM					= 3
