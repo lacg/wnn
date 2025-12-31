@@ -33,6 +33,7 @@ from .RAMGeneralization import (
 	MapperFactory,
 )
 from .RAMFeedForward import RAMFeedForward, FFNMode
+from .RAMEmbedding import RAMEmbedding, PositionEncoding
 from .RAMSeq2Seq import RAMSeq2Seq
 from .RAMTrainer import RAMTrainer, TrainingStats, LayerState, LayerType
 from .RAMRecurrentNetwork import RAMRecurrentNetwork

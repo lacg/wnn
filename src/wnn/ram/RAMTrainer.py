@@ -19,6 +19,7 @@ This allows us to backpropagate "targets" through the network.
 """
 
 from wnn.ram.RAMSeq2Seq import RAMSeq2Seq
+from wnn.ram.RAMEmbedding import PositionEncoding
 
 from torch import Tensor
 from dataclasses import dataclass
@@ -28,11 +29,12 @@ from enum import IntEnum
 
 class LayerType(IntEnum):
 	"""Types of layers in the RAM Transformer."""
-	INPUT_PROJ = 0
-	ATTENTION = 1
-	FFN = 2
-	OUTPUT_PROJ = 3
-	TOKEN_MAPPER = 4
+	EMBEDDING = 0
+	INPUT_PROJ = 1
+	ATTENTION = 2
+	FFN = 3
+	OUTPUT_PROJ = 4
+	TOKEN_MAPPER = 5
 
 
 @dataclass
@@ -47,9 +49,11 @@ class LayerState:
 	@property
 	def name(self) -> str:
 		"""String name for display (e.g., 'attention_0', 'ffn_1')."""
-		if self.layer_type in (LayerType.ATTENTION, LayerType.FFN):
-			return f"{self.layer_type.name.lower()}_{self.index}"
-		return self.layer_type.name.lower()
+		match self.layer_type:
+			case LayerType.ATTENTION | LayerType.FFN:
+				return f"{self.layer_type.name.lower()}_{self.index}"
+			case _:
+				return self.layer_type.name.lower()
 
 
 @dataclass
@@ -100,8 +104,19 @@ class RAMTrainer:
 		trace = []
 		hidden = [t.squeeze() if t.ndim > 1 else t for t in tokens]
 
-		# Input projection
-		if self.model.input_proj is not None:
+		# Embedding layer (if present)
+		if self.model.embedding is not None:
+			input_to_embed = [h.clone() for h in hidden]
+			hidden = self.model.embedding(hidden, add_position=True)
+			trace.append(LayerState(
+				layer_type=LayerType.EMBEDDING,
+				index=0,
+				input=input_to_embed,
+				output=hidden,
+				after_residual=None,
+			))
+		# Input projection (fallback if no embedding)
+		elif self.model.input_proj is not None:
 			input_to_proj = [h.clone() for h in hidden]
 			hidden = [
 				self.model.input_proj(h.unsqueeze(0)).squeeze()
@@ -239,6 +254,11 @@ class RAMTrainer:
 				case LayerType.INPUT_PROJ:
 					targets[key] = current_target
 
+				case LayerType.EMBEDDING:
+					# Embedding layer: target is what we want the embedding to produce
+					targets[key] = current_target
+					# Note: Input to embedding is raw tokens, we don't backprop further
+
 		return targets
 
 	def _train_layer(
@@ -280,6 +300,23 @@ class RAMTrainer:
 					if not (current == tgt).all():
 						self.model.input_proj.commit(inp.unsqueeze(0), tgt.unsqueeze(0))
 						updates += 1
+
+			case LayerType.EMBEDDING if self.model.embedding is not None:
+				# Train embedding layer
+				# Position encoding uses XOR, which is self-inverse.
+				# To get desired token embedding: apply position XOR again to remove it.
+				for pos, (inp, tgt) in enumerate(zip(state.input, desired_output)):
+					if self.model.embedding.position_encoding != PositionEncoding.NONE:
+						# XOR is self-inverse: apply position encoding to target
+						# to back out and get the desired raw token embedding
+						desired_token_embed = self.model.embedding._apply_position_encoding(
+							tgt, pos
+						)
+					else:
+						desired_token_embed = tgt
+
+					trained = self.model.embedding.train_embedding(inp, desired_token_embed)
+					updates += trained
 
 			case LayerType.FFN if self.model.ffn_layers is not None:
 				# Train FFN layer

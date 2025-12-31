@@ -44,6 +44,7 @@ Architecture (with FFN):
 from wnn.ram.RAMLayer import RAMLayer
 from wnn.ram.RAMAttention import RAMAttention
 from wnn.ram.RAMFeedForward import RAMFeedForward, FFNMode
+from wnn.ram.RAMEmbedding import RAMEmbedding, PositionEncoding
 from wnn.ram.RAMGeneralization import (
 	MapperStrategy,
 	GeneralizingProjection,
@@ -78,6 +79,8 @@ class RAMSeq2Seq(Module):
 		use_ffn: bool = False,
 		ffn_expansion: int = 4,
 		ffn_mode: FFNMode = FFNMode.STANDARD,
+		use_embedding: bool = False,
+		embedding_position: PositionEncoding = PositionEncoding.NONE,
 		generalization: MapperStrategy | str = MapperStrategy.DIRECT,
 		rng: int | None = None,
 	):
@@ -94,6 +97,8 @@ class RAMSeq2Seq(Module):
 			use_ffn: Whether to include feed-forward layers after attention
 			ffn_expansion: Expansion factor for FFN hidden dimension
 			ffn_mode: FFN mode (STANDARD, GENERALIZED, GATED)
+			use_embedding: Whether to use learned embeddings (RAMEmbedding)
+			embedding_position: Position encoding in embedding (NONE, BINARY, LEARNED, SINUSOIDAL)
 			generalization: Strategy for better generalization (MapperStrategy enum)
 				- DIRECT: Standard RAM layers (no generalization)
 				- BIT_LEVEL: Learn bit-level transformations
@@ -112,6 +117,8 @@ class RAMSeq2Seq(Module):
 		self.use_residual = use_residual
 		self.use_ffn = use_ffn
 		self.ffn_mode = ffn_mode
+		self.use_embedding = use_embedding
+		self.embedding_position = embedding_position
 		self.position_mode = position_mode
 		# Convert string to enum if needed (backwards compatibility)
 		if isinstance(generalization, str):
@@ -121,8 +128,21 @@ class RAMSeq2Seq(Module):
 			generalization = MapperStrategy[name_map.get(generalization, generalization.upper())]
 		self.generalization = generalization
 
-		# Input projection (if hidden != input)
-		if self.hidden_bits != self.input_bits:
+		# Embedding layer (learned token representations)
+		if use_embedding:
+			self.embedding = RAMEmbedding(
+				token_bits=input_bits,
+				embedding_bits=self.hidden_bits,
+				max_seq_len=max_seq_len,
+				position_encoding=embedding_position,
+				strategy=MapperStrategy.DIRECT,  # Embeddings use direct lookup
+				rng=rng,
+			)
+		else:
+			self.embedding = None
+
+		# Input projection (if hidden != input and no embedding)
+		if self.hidden_bits != self.input_bits and not use_embedding:
 			self.input_proj = RAMLayer(
 				total_input_bits=input_bits,
 				num_neurons=self.hidden_bits,
@@ -192,9 +212,10 @@ class RAMSeq2Seq(Module):
 			self.token_mapper = None
 
 		ffn_str = f", ffn={ffn_mode.name}" if use_ffn else ""
+		embed_str = f", embed={embedding_position.name}" if use_embedding else ""
 		print(f"[RAMSeq2Seq] layers={num_layers}, heads={num_heads}, "
 			  f"dims={input_bits}->{self.hidden_bits}->{self.output_bits}, "
-			  f"pos={position_mode.name}, residual={use_residual}{ffn_str}, "
+			  f"pos={position_mode.name}, residual={use_residual}{ffn_str}{embed_str}, "
 			  f"generalization={self.generalization.name}")
 
 	def forward(self, tokens: list[Tensor]) -> list[Tensor]:
@@ -214,8 +235,11 @@ class RAMSeq2Seq(Module):
 		# Normalize inputs
 		hidden = [t.squeeze() if t.ndim > 1 else t for t in tokens]
 
-		# Input projection
-		if self.input_proj is not None:
+		# Embedding layer (if enabled)
+		if self.embedding is not None:
+			hidden = self.embedding(hidden, add_position=True)
+		# Input projection (fallback if no embedding)
+		elif self.input_proj is not None:
 			hidden = [
 				self.input_proj(h.unsqueeze(0)).squeeze()
 				for h in hidden
@@ -272,8 +296,11 @@ class RAMSeq2Seq(Module):
 		intermediates = []
 		hidden = [t.squeeze() if t.ndim > 1 else t for t in tokens]
 
-		# Input projection
-		if self.input_proj is not None:
+		# Embedding layer (if enabled)
+		if self.embedding is not None:
+			hidden = self.embedding(hidden, add_position=True)
+		# Input projection (fallback if no embedding)
+		elif self.input_proj is not None:
 			hidden = [
 				self.input_proj(h.unsqueeze(0)).squeeze()
 				for h in hidden
