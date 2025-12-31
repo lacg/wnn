@@ -22,6 +22,33 @@ Aggregation Strategies:
   - TOP_1: Winner-take-all (best for retrieval)
   - MAJORITY: Per-bit weighted voting (best for combining)
   - THRESHOLD: Include only above 50% votes
+
+Computed Operations (100% Generalization):
+  These operations compute transformations directly from bit patterns,
+  bypassing learned lookups for guaranteed generalization to unseen tokens.
+
+  Attention:
+    - SortingAttention: Sort tokens by numeric value
+    - MinMaxAttention: Find min/max token in sequence
+
+  Content Matching (ContentMatchMode):
+    - XOR_EQUAL: Attend if tokens match (XOR is all zeros)
+    - HAMMING_1/2: Attend if Hamming distance ≤ 1 or 2
+    - LESS_THAN/GREATER_THAN: Numeric comparison
+
+  Arithmetic FFN (ComputedArithmeticFFN):
+    - INCREMENT: value + 1
+    - DECREMENT: value - 1
+    - ADD_MOD: (value + k) mod N (Caesar cipher)
+    - SUBTRACT_MOD: (value - k) mod N
+    - ROT13: (value + 13) mod 26
+    - NEGATE: max_value - value
+
+Helper Functions:
+  - _bits_to_int(bits): Convert bit tensor to integer
+  - _int_to_bits(value, n): Convert integer to bit tensor
+  - _xor_match(a, b): Check equality via XOR
+  - _less_than(a, b): Numeric comparison
 """
 
 from wnn.ram.RAMLayer import RAMLayer

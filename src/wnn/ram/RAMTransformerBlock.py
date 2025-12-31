@@ -9,14 +9,54 @@ Architecture:
 
 Key Features:
     - Multiple attention modes (position-only, content-match, sorting, etc.)
-    - BIT_LEVEL generalization in feed-forward layers
+    - Computed FFN operations (increment, ROT13, Caesar) for 100% generalization
     - XOR-based residual connections (discrete analog of addition)
     - Stackable blocks for deep transformers
 
+Attention Types (AttentionType):
+    - SOFT_RAM: Standard learned attention (partial generalization)
+    - POSITION_ONLY: Position-based routing (100% generalization)
+    - SORTING: Computed sorting by token value (100% generalization)
+    - MIN_MAX: Find min/max token (100% generalization)
+    - CONTENT_MATCH: XOR-based content matching (100% generalization)
+
+FFN Types (FFNType):
+    Learned (may not generalize to unseen tokens):
+        - NONE: No FFN layer
+        - SINGLE: Single RAM layer projection
+        - TWO_LAYER: MLP with hidden expansion
+        - BIT_LEVEL: Per-bit learned transformation (partial generalization)
+
+    Computed (100% generalization, no training needed):
+        - INCREMENT: value + 1 (A→B, B→C, ...)
+        - DECREMENT: value - 1 (B→A, C→B, ...)
+        - ADD_MOD: (value + constant) mod N (Caesar cipher)
+        - SUBTRACT_MOD: (value - constant) mod N (inverse Caesar)
+        - ROT13: (value + 13) mod 26 (ROT13 cipher)
+        - NEGATE: max_value - value (bitwise complement)
+
+Factory Functions:
+    create_copy_transformer()       - Copy task (100%)
+    create_shift_transformer()      - Shift right (100%)
+    create_reverse_transformer()    - Reverse sequence (100%)
+    create_sorting_transformer()    - Sort by value (100%, no training)
+    create_increment_transformer()  - Add 1 to each token (100%, no training)
+    create_decrement_transformer()  - Subtract 1 from each token (100%)
+    create_rot13_transformer()      - ROT13 cipher (100%, no training)
+    create_caesar_transformer(N)    - Caesar cipher +N (100%, no training)
+    create_negate_transformer()     - Negate each token (100%)
+    create_multi_step_transformer() - Compose multiple operations
+
 Generalization Strategy:
-    - Attention: Use computed modes (position_only, XOR_EQUAL, sorting) for 100%
-    - FFN: Use BIT_LEVEL for partial generalization
+    - Attention: Use computed modes (SORTING, MIN_MAX, CONTENT_MATCH) for 100%
+    - FFN: Use computed types (INCREMENT, ROT13, etc.) for 100% generalization
+    - Position-only: Use POSITION_ONLY attention for shift/reverse/copy (100%)
     - Residual: XOR is computed, generalizes 100%
+
+Example:
+    # Sort then apply ROT13 cipher (100% generalization on any tokens)
+    model = create_multi_step_transformer(input_bits=5, steps=["sort", "rot13"])
+    # DCBA → ABCD → NOPQ (works on unseen tokens!)
 """
 
 from torch import Tensor, zeros, uint8, cat

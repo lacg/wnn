@@ -88,3 +88,69 @@ EDRA (Error Detection and Reconstruction Algorithm) is a credit assignment metho
 2. If output incorrect, solve output layer constraints
 3. Backpropagate desired states through time via state layer constraint solving
 4. Commit solutions to memory only when constraints are satisfiable
+
+### RAM Transformer Block (`RAMTransformerBlock.py`)
+
+A complete transformer block with attention and FFN layers, supporting both learned and computed operations.
+
+**Architecture:**
+```
+Input → Attention → XOR Residual → FFN → XOR Residual → Output
+```
+
+**Attention Types (AttentionType enum):**
+- `SOFT_RAM`: Standard learned attention (partial generalization)
+- `POSITION_ONLY`: Position-based routing (100% generalization)
+- `SORTING`: Computed sorting by token value (100% generalization)
+- `MIN_MAX`: Find min/max token (100% generalization)
+- `CONTENT_MATCH`: XOR-based content matching (100% generalization)
+
+**FFN Types (FFNType enum):**
+- Learned: `NONE`, `SINGLE`, `TWO_LAYER`, `BIT_LEVEL`
+- Computed (100% generalization):
+  - `INCREMENT`: value + 1
+  - `DECREMENT`: value - 1
+  - `ADD_MOD`: (value + k) mod N
+  - `SUBTRACT_MOD`: (value - k) mod N
+  - `ROT13`: (value + 13) mod 26
+  - `NEGATE`: max_value - value
+
+**Factory Functions:**
+```python
+create_copy_transformer()      # Copy task
+create_shift_transformer()     # Shift right
+create_reverse_transformer()   # Reverse sequence
+create_sorting_transformer()   # Sort by value
+create_increment_transformer() # Add 1 to each token
+create_rot13_transformer()     # ROT13 cipher
+create_caesar_transformer(N)   # Caesar cipher +N
+create_multi_step_transformer(steps)  # Compose operations
+```
+
+### Soft RAM Attention (`SoftRAMAttention.py`)
+
+Voting-based soft attention approximating continuous attention with discrete RAM lookups.
+
+**Key Classes:**
+- `SoftRAMAttention`: Multi-head attention with configurable content/position matching
+- `SortingAttention`: Computed sorting with 100% generalization
+- `MinMaxAttention`: Computed min/max finding
+- `ComputedArithmeticFFN`: Computed arithmetic transformations
+
+**Content Match Modes:**
+- `XOR_EQUAL`: Attend if tokens match (computed, 100%)
+- `HAMMING_1/2`: Attend if Hamming distance ≤ 1 or 2
+- `LESS_THAN`, `GREATER_THAN`: Numeric comparison (computed, 100%)
+
+### Generalization Strategy
+
+The key insight is distinguishing between **learned** and **computed** operations:
+
+| Operation Type | Generalization | Example |
+|---------------|----------------|---------|
+| Learned lookup | Limited to trained patterns | Content-based attention |
+| Computed comparison | 100% (any tokens) | Sorting, min/max |
+| Computed arithmetic | 100% (any tokens) | Increment, ROT13, Caesar |
+| Position-based | 100% (any tokens) | Shift, reverse, copy |
+
+See `docs/COMPUTED_OPERATIONS.md` for detailed documentation.
