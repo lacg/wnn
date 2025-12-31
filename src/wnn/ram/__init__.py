@@ -32,6 +32,7 @@ from .RAMGeneralization import (
 	GeneralizingProjection,
 	MapperFactory,
 )
+from .RAMFeedForward import RAMFeedForward, FFNMode
 from .RAMSeq2Seq import RAMSeq2Seq
 from .RAMRecurrentNetwork import RAMRecurrentNetwork
 from .RAMTransformer import RAMTransformer

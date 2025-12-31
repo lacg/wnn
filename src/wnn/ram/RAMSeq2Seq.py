@@ -7,7 +7,7 @@ Key differences from traditional transformers:
   - No gradient-based training - uses EDRA
   - Learned aggregation instead of weighted sums
 
-Architecture:
+Architecture (with FFN):
                     ┌─────────────────────────────────────┐
                     │         Token Embedding              │
   Input tokens ────▶│  (Optional: RAM-based projection)   │
@@ -17,11 +17,18 @@ Architecture:
                     │         Attention Layer 0           │
                     │  (multi-head, causal, learned)      │
                     └─────────────────────────────────────┘
-                                     │
                                      │ + residual (XOR)
-                                     │
+                    ┌────────────────▼────────────────────┐
+                    │         Feed-Forward Layer 0        │
+                    │  (expansion → projection)           │
+                    └─────────────────────────────────────┘
+                                     │ + residual (XOR)
                     ┌────────────────▼────────────────────┐
                     │         Attention Layer 1           │
+                    └─────────────────────────────────────┘
+                                     │ + residual (XOR)
+                    ┌────────────────▼────────────────────┐
+                    │         Feed-Forward Layer 1        │
                     └─────────────────────────────────────┘
                                      │
                                     ...
@@ -36,6 +43,7 @@ Architecture:
 
 from wnn.ram.RAMLayer import RAMLayer
 from wnn.ram.RAMAttention import RAMAttention
+from wnn.ram.RAMFeedForward import RAMFeedForward, FFNMode
 from wnn.ram.RAMGeneralization import (
 	MapperStrategy,
 	GeneralizingProjection,
@@ -67,6 +75,9 @@ class RAMSeq2Seq(Module):
 		position_mode: PositionMode = PositionMode.RELATIVE,
 		max_seq_len: int = 32,
 		use_residual: bool = True,
+		use_ffn: bool = False,
+		ffn_expansion: int = 4,
+		ffn_mode: FFNMode = FFNMode.STANDARD,
 		generalization: MapperStrategy | str = MapperStrategy.DIRECT,
 		rng: int | None = None,
 	):
@@ -80,6 +91,9 @@ class RAMSeq2Seq(Module):
 			position_mode: Position encoding mode (BINARY, RELATIVE, NONE)
 			max_seq_len: Maximum sequence length
 			use_residual: Whether to use residual connections (XOR)
+			use_ffn: Whether to include feed-forward layers after attention
+			ffn_expansion: Expansion factor for FFN hidden dimension
+			ffn_mode: FFN mode (STANDARD, GENERALIZED, GATED)
 			generalization: Strategy for better generalization (MapperStrategy enum)
 				- DIRECT: Standard RAM layers (no generalization)
 				- BIT_LEVEL: Learn bit-level transformations
@@ -96,6 +110,8 @@ class RAMSeq2Seq(Module):
 		self.num_heads = num_heads
 		self.max_seq_len = max_seq_len
 		self.use_residual = use_residual
+		self.use_ffn = use_ffn
+		self.ffn_mode = ffn_mode
 		self.position_mode = position_mode
 		# Convert string to enum if needed (backwards compatibility)
 		if isinstance(generalization, str):
@@ -129,6 +145,21 @@ class RAMSeq2Seq(Module):
 			for i in range(num_layers)
 		])
 
+		# Feed-forward layers (one per attention layer)
+		if use_ffn:
+			self.ffn_layers = ModuleList([
+				RAMFeedForward(
+					input_bits=self.hidden_bits,
+					expansion_factor=ffn_expansion,
+					mode=ffn_mode,
+					use_residual=use_residual,
+					rng=rng + i * 100 + 50 if rng else None,
+				)
+				for i in range(num_layers)
+			])
+		else:
+			self.ffn_layers = None
+
 		# Output projection (if output != hidden)
 		if self.output_bits != self.hidden_bits:
 			self.output_proj = RAMLayer(
@@ -160,9 +191,10 @@ class RAMSeq2Seq(Module):
 		else:
 			self.token_mapper = None
 
+		ffn_str = f", ffn={ffn_mode.name}" if use_ffn else ""
 		print(f"[RAMSeq2Seq] layers={num_layers}, heads={num_heads}, "
 			  f"dims={input_bits}->{self.hidden_bits}->{self.output_bits}, "
-			  f"pos={position_mode.name}, residual={use_residual}, "
+			  f"pos={position_mode.name}, residual={use_residual}{ffn_str}, "
 			  f"generalization={self.generalization.name}")
 
 	def forward(self, tokens: list[Tensor]) -> list[Tensor]:
@@ -189,15 +221,21 @@ class RAMSeq2Seq(Module):
 				for h in hidden
 			]
 
-		# Pass through stacked attention layers
-		for layer in self.attention_layers:
-			layer_output = layer.forward(hidden)
+		# Pass through stacked attention + FFN layers
+		for i, attn_layer in enumerate(self.attention_layers):
+			# Attention
+			layer_output = attn_layer.forward(hidden)
 
 			if self.use_residual:
 				# XOR residual connection
 				hidden = [h ^ out for h, out in zip(hidden, layer_output)]
 			else:
 				hidden = layer_output
+
+			# Feed-forward (if enabled)
+			if self.ffn_layers is not None:
+				ffn_layer = self.ffn_layers[i]
+				hidden = [ffn_layer(h) for h in hidden]
 
 		# Output projection
 		if self.output_proj is not None:
@@ -243,8 +281,8 @@ class RAMSeq2Seq(Module):
 		intermediates.append(list(hidden))
 
 		# Pass through layers
-		for layer in self.attention_layers:
-			layer_output = layer.forward(hidden)
+		for i, attn_layer in enumerate(self.attention_layers):
+			layer_output = attn_layer.forward(hidden)
 
 			if self.use_residual:
 				hidden = [h ^ out for h, out in zip(hidden, layer_output)]
@@ -252,6 +290,12 @@ class RAMSeq2Seq(Module):
 				hidden = layer_output
 
 			intermediates.append(list(hidden))
+
+			# Feed-forward (if enabled)
+			if self.ffn_layers is not None:
+				ffn_layer = self.ffn_layers[i]
+				hidden = [ffn_layer(h) for h in hidden]
+				intermediates.append(list(hidden))
 
 		# Output projection
 		if self.output_proj is not None:
