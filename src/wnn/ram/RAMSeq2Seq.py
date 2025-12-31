@@ -36,6 +36,10 @@ Architecture:
 
 from wnn.ram.RAMLayer import RAMLayer
 from wnn.ram.RAMAttention import RAMAttention
+from wnn.ram.RAMGeneralization import (
+	MapperStrategy,
+	GeneralizingProjection,
+)
 from wnn.ram.encoders_decoders import PositionMode
 
 from torch import Tensor, zeros, uint8, cat
@@ -63,6 +67,7 @@ class RAMSeq2Seq(Module):
 		position_mode: PositionMode = PositionMode.RELATIVE,
 		max_seq_len: int = 32,
 		use_residual: bool = True,
+		generalization: MapperStrategy | str = MapperStrategy.DIRECT,
 		rng: int | None = None,
 	):
 		"""
@@ -75,6 +80,11 @@ class RAMSeq2Seq(Module):
 			position_mode: Position encoding mode (BINARY, RELATIVE, NONE)
 			max_seq_len: Maximum sequence length
 			use_residual: Whether to use residual connections (XOR)
+			generalization: Strategy for better generalization (MapperStrategy enum)
+				- DIRECT: Standard RAM layers (no generalization)
+				- BIT_LEVEL: Learn bit-level transformations
+				- COMPOSITIONAL: Split into component groups
+				- HYBRID: Combine compositional + bit-level
 			rng: Random seed
 		"""
 		super().__init__()
@@ -87,6 +97,13 @@ class RAMSeq2Seq(Module):
 		self.max_seq_len = max_seq_len
 		self.use_residual = use_residual
 		self.position_mode = position_mode
+		# Convert string to enum if needed (backwards compatibility)
+		if isinstance(generalization, str):
+			# Map old string names to new enum
+			name_map = {"none": "DIRECT", "bit_level": "BIT_LEVEL",
+						"compositional": "COMPOSITIONAL", "hybrid": "HYBRID"}
+			generalization = MapperStrategy[name_map.get(generalization, generalization.upper())]
+		self.generalization = generalization
 
 		# Input projection (if hidden != input)
 		if self.hidden_bits != self.input_bits:
@@ -123,9 +140,30 @@ class RAMSeq2Seq(Module):
 		else:
 			self.output_proj = None
 
+		# Generalization layer (optional - for token transformations)
+		if self.generalization != MapperStrategy.DIRECT:
+			# Find a valid number of groups for compositional strategies
+			# Must divide n_bits evenly
+			n_groups = 1
+			for g in [5, 4, 3, 2]:  # Try common divisors
+				if self.output_bits % g == 0 and self.output_bits // g >= 1:
+					n_groups = g
+					break
+
+			self.token_mapper = GeneralizingProjection(
+				input_bits=self.output_bits,
+				output_bits=self.output_bits,
+				strategy=self.generalization,
+				n_groups=n_groups,
+				rng=rng + num_layers * 100 + 50 if rng else None,
+			)
+		else:
+			self.token_mapper = None
+
 		print(f"[RAMSeq2Seq] layers={num_layers}, heads={num_heads}, "
 			  f"dims={input_bits}->{self.hidden_bits}->{self.output_bits}, "
-			  f"pos={position_mode.name}, residual={use_residual}")
+			  f"pos={position_mode.name}, residual={use_residual}, "
+			  f"generalization={self.generalization.name}")
 
 	def forward(self, tokens: list[Tensor]) -> list[Tensor]:
 		"""
@@ -169,6 +207,10 @@ class RAMSeq2Seq(Module):
 			]
 		else:
 			outputs = hidden
+
+		# Apply token-level transformation (generalization layer)
+		if self.token_mapper is not None:
+			outputs = [self.token_mapper(o) for o in outputs]
 
 		return outputs
 
@@ -220,7 +262,52 @@ class RAMSeq2Seq(Module):
 		else:
 			outputs = hidden
 
+		# Apply token-level transformation (generalization layer)
+		if self.token_mapper is not None:
+			outputs = [self.token_mapper(o) for o in outputs]
+
 		return outputs, intermediates
+
+	def train_token_mapper(
+		self,
+		input_output_pairs: list[tuple[Tensor, Tensor]],
+		epochs: int = 10,
+		verbose: bool = True,
+	) -> dict:
+		"""
+		Train the token-level mapper on transformation patterns.
+
+		This is separate from attention training - it teaches the model
+		how to transform tokens (e.g., A->B, B->C for next-char).
+
+		Args:
+			input_output_pairs: List of (input_bits, output_bits) pairs
+			epochs: Number of training epochs
+			verbose: Print progress
+
+		Returns:
+			Training statistics
+		"""
+		if self.token_mapper is None:
+			raise ValueError("No token_mapper - set generalization != 'none'")
+
+		history = []
+		for epoch in range(epochs):
+			errors = 0
+			for inp, out in input_output_pairs:
+				trained = self.token_mapper.train_mapping(inp, out)
+				errors += trained
+
+			history.append(errors)
+			if verbose:
+				print(f"  Epoch {epoch + 1}/{epochs}: {errors} errors")
+
+			if errors == 0:
+				if verbose:
+					print(f"  Converged at epoch {epoch + 1}!")
+				break
+
+		return {"history": history, "final_errors": history[-1] if history else 0}
 
 	def generate(
 		self,

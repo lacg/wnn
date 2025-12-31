@@ -21,6 +21,17 @@ from .RAMEnums import MemoryVal
 from .RAMLayer import RAMLayer
 from .RAMAggregator import RAMAggregator
 from .RAMAttention import RAMAttention
+from .RAMGeneralization import (
+	# Enums
+	ContextMode,
+	OutputMode,
+	MapperStrategy,
+	# Classes
+	BitLevelMapper,
+	CompositionalMapper,
+	GeneralizingProjection,
+	MapperFactory,
+)
 from .RAMSeq2Seq import RAMSeq2Seq
 from .RAMRecurrentNetwork import RAMRecurrentNetwork
 from .RAMTransformer import RAMTransformer
