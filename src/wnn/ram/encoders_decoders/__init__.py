@@ -17,6 +17,7 @@
 # --------------------------------------------------------------------
 
 from .DecoderEnums import OutputMode
+from .DecoderEnums import PositionMode
 from .TransformerBitWiseDecoder import TransformerBitWiseDecoder
 from .TransformerDecoder import TransformerDecoder
 from .TransformerDecoderFactory import TransformerDecoderFactory
@@ -24,3 +25,9 @@ from .TransformerHammingDecoder import TransformerHammingDecoder
 from .TransformerRawDecoder import TransformerRawDecoder
 from .TransformerTokenDecoder import TransformerTokenDecoder
 from .TransformerTokenListDecoder import TransformerTokenListDecoder
+
+# Position encoders
+from .PositionEncoder import PositionEncoder
+from .BinaryPositionEncoder import BinaryPositionEncoder
+from .RelativePositionEncoder import RelativePositionEncoder
+from .PositionEncoderFactory import PositionEncoderFactory

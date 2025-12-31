@@ -6,23 +6,34 @@ Combines ensemble multi-head architecture with explicit KV operations:
 - Key-based routing to heads
 - Explicit Write(key, value) and Read(query) operations
 - Query detection via zero-value convention
+- Optional position encoding for position-aware retrieval
 
 Architecture:
-  Input: [key_bits | value_bits]
+  Input: [pos_bits? | key_bits | value_bits]
 
   If value_bits != 0 (WRITE):
-    head_idx = route(key_bits)
-    heads[head_idx].store(key_bits, value_bits)
+    full_key = [pos_bits, key_bits] if using positions else key_bits
+    head_idx = route(full_key)
+    heads[head_idx].store(full_key, value_bits)
 
   If value_bits == 0 (READ/QUERY):
-    head_idx = route(key_bits)
-    output = heads[head_idx].retrieve(key_bits)
+    full_key = [pos_bits, key_bits] if using positions else key_bits
+    head_idx = route(full_key)
+    output = heads[head_idx].retrieve(full_key)
+
+Position encoding enables:
+  - "A at position 0" ≠ "A at position 5"
+  - Position-dependent patterns
+  - Transformer-style positional awareness
 """
 
 from wnn.ram.RAMLayer import RAMLayer
 from wnn.ram.encoders_decoders import OutputMode
+from wnn.ram.encoders_decoders import PositionMode
 from wnn.ram.encoders_decoders import TransformerDecoder
 from wnn.ram.encoders_decoders import TransformerDecoderFactory
+from wnn.ram.encoders_decoders import PositionEncoder
+from wnn.ram.encoders_decoders import PositionEncoderFactory
 
 from typing import Optional
 
@@ -57,6 +68,9 @@ class RAMMultiHeadKV(Module):
 		neurons_per_head: int = 8,  # Memory capacity per head
 		n_bits_per_neuron: int | None = None,
 		output_mode: OutputMode = OutputMode.RAW,
+		position_mode: PositionMode = PositionMode.NONE,
+		n_position_bits: int | None = None,
+		max_seq_len: int | None = None,
 		use_hashing: bool = False,
 		hash_size: int = 1024,
 		rng: int | None = None,
@@ -69,6 +83,9 @@ class RAMMultiHeadKV(Module):
 			neurons_per_head: RAM neurons per head (memory capacity)
 			n_bits_per_neuron: Connections per neuron (auto if None)
 			output_mode: How to decode output (TOKEN, RAW, etc.)
+			position_mode: Position encoding mode (NONE, BINARY, RELATIVE)
+			n_position_bits: Bits for position encoding (auto if None)
+			max_seq_len: Maximum sequence length for position encoding
 			use_hashing: Use hash-based addressing
 			hash_size: Hash table size
 			rng: Random seed
@@ -79,28 +96,41 @@ class RAMMultiHeadKV(Module):
 		self.k_bits = k_bits
 		self.v_bits = v_bits
 		self.neurons_per_head = neurons_per_head
-		self.input_bits = k_bits + v_bits  # Full window size
 		self.output_mode = output_mode
+		self.position_mode = position_mode
+
+		# Create position encoder (if enabled)
+		self.position_encoder: PositionEncoder | None = PositionEncoderFactory.create(
+			position_mode,
+			n_position_bits=n_position_bits,
+			max_seq_len=max_seq_len,
+		)
+		self.n_position_bits = self.position_encoder.n_bits if self.position_encoder else 0
+		self.use_positions = self.position_encoder is not None
+
+		# Full key = [pos_bits | key_bits] when using positions
+		self.full_key_bits = self.n_position_bits + k_bits
+		self.input_bits = self.n_position_bits + k_bits + v_bits  # Full window size
 
 		# Auto-calculate connectivity
 		if n_bits_per_neuron is None:
-			# Memory neurons see key bits for addressing
-			n_bits_per_neuron = min(k_bits + neurons_per_head, 12)
+			# Memory neurons see full key bits for addressing
+			n_bits_per_neuron = min(self.full_key_bits + neurons_per_head, 12)
 
-		# Validate routing
-		max_addressable = 2 ** k_bits
+		# Validate routing (uses full key for routing)
+		max_addressable = 2 ** self.full_key_bits
 		if max_addressable < num_heads:
-			print(f"[MultiHeadKV] Warning: k_bits={k_bits} addresses {max_addressable} < {num_heads} heads")
+			print(f"[MultiHeadKV] Warning: full_key_bits={self.full_key_bits} addresses {max_addressable} < {num_heads} heads")
 
 		# Create decoder for output
 		self.decoder: TransformerDecoder = TransformerDecoderFactory.create(output_mode, v_bits)
 
 		# Each head has:
-		# 1. State layer: stores key→internal_state mappings
+		# 1. State layer: stores full_key→internal_state mappings
 		# 2. Output layer: maps internal_state→value
 		self.state_layers = ModuleList([
 			RAMLayer(
-				total_input_bits=k_bits + neurons_per_head,  # [key, prev_state]
+				total_input_bits=self.full_key_bits + neurons_per_head,  # [pos+key, prev_state]
 				num_neurons=neurons_per_head,
 				n_bits_per_neuron=n_bits_per_neuron,
 				use_hashing=use_hashing,
@@ -125,7 +155,11 @@ class RAMMultiHeadKV(Module):
 		# Per-head recurrent state
 		self.head_states: list[Tensor | None] = [None] * num_heads
 
-		print(f"[MultiHeadKV] Created: {num_heads} heads, k={k_bits}, v={v_bits}, neurons/head={neurons_per_head}")
+		# Current position tracker for sequential processing
+		self._current_position = 0
+
+		pos_info = f", pos_bits={self.n_position_bits}" if self.use_positions else ""
+		print(f"[MultiHeadKV] Created: {num_heads} heads, k={k_bits}, v={v_bits}{pos_info}, neurons/head={neurons_per_head}")
 
 	def _reset_states(self, device=None) -> None:
 		"""Reset all head states to zeros."""
@@ -133,66 +167,94 @@ class RAMMultiHeadKV(Module):
 			device = self.state_layers[0].memory.memory_words.device
 		for i in range(self.num_heads):
 			self.head_states[i] = zeros(1, self.neurons_per_head, dtype=uint8, device=device)
+		self._current_position = 0
 
-	def _extract_key(self, window_bits: Tensor) -> tuple[Tensor, int]:
+	def _extract_full_key(self, window_bits: Tensor) -> tuple[Tensor, int]:
 		"""
-		Extract key bits and compute head index.
+		Extract full key bits (pos + content key) and compute head index.
+
+		Window format:
+		  Without positions: [key_bits | value_bits]
+		  With positions:    [pos_bits | key_bits | value_bits]
 
 		Args:
-			window_bits: [1, k_bits + v_bits] or [k_bits + v_bits]
+			window_bits: [1, input_bits] or [input_bits]
 
 		Returns:
-			key_bits: [k_bits] tensor
+			full_key_bits: [full_key_bits] tensor (pos_bits + key_bits)
 			head_idx: int index of routed head
 		"""
 		if window_bits.ndim == 2:
 			window_bits = window_bits.squeeze(0)
 
-		key_bits = window_bits[:self.k_bits]
+		# Full key = [pos_bits | key_bits]
+		full_key_bits = window_bits[:self.full_key_bits]
 
-		# Convert to head index
+		# Convert to head index (using full key)
 		key_value = 0
-		for bit in key_bits:
+		for bit in full_key_bits:
 			key_value = (key_value << 1) | int(bit)
 
 		head_idx = key_value % self.num_heads
-		return key_bits, head_idx
+		return full_key_bits, head_idx
+
+	def _extract_key(self, window_bits: Tensor) -> tuple[Tensor, int]:
+		"""
+		Extract key bits and compute head index.
+		Alias for _extract_full_key for backward compatibility.
+		"""
+		return self._extract_full_key(window_bits)
 
 	def _extract_value(self, window_bits: Tensor) -> Tensor:
 		"""Extract value bits from window."""
 		if window_bits.ndim == 2:
 			window_bits = window_bits.squeeze(0)
-		return window_bits[self.k_bits:]
+		# Value bits come after full_key_bits (pos + key)
+		return window_bits[self.full_key_bits:]
+
+	def _extract_position(self, window_bits: Tensor) -> Tensor | None:
+		"""Extract position bits from window (if using positions)."""
+		if not self.use_positions:
+			return None
+		if window_bits.ndim == 2:
+			window_bits = window_bits.squeeze(0)
+		return window_bits[:self.n_position_bits]
+
+	def _extract_content_key(self, window_bits: Tensor) -> Tensor:
+		"""Extract content key bits (without position) from window."""
+		if window_bits.ndim == 2:
+			window_bits = window_bits.squeeze(0)
+		return window_bits[self.n_position_bits:self.n_position_bits + self.k_bits]
 
 	def is_query(self, window_bits: Tensor) -> bool:
 		"""Check if this is a query (read) operation. Query = all value bits are zero."""
 		value_bits = self._extract_value(window_bits)
 		return bool((value_bits == 0).all())
 
-	def _forward_head(self, head_idx: int, key_bits: Tensor, is_write: bool) -> Tensor:
+	def _forward_head(self, head_idx: int, full_key_bits: Tensor, is_write: bool) -> Tensor:
 		"""
 		Forward pass through a single head.
 
 		Args:
 			head_idx: Which head to use
-			key_bits: Key for addressing [k_bits]
+			full_key_bits: Full key for addressing [full_key_bits] (includes pos if enabled)
 			is_write: Whether to update state (write) or just read (query)
 
 		Returns:
 			Output value bits [v_bits]
 		"""
-		# Ensure key_bits is 2D
-		if key_bits.ndim == 1:
-			key_bits = key_bits.unsqueeze(0)
+		# Ensure full_key_bits is 2D
+		if full_key_bits.ndim == 1:
+			full_key_bits = full_key_bits.unsqueeze(0)
 
 		# Get current state for this head
 		if self.head_states[head_idx] is None:
-			self._reset_states(device=key_bits.device)
+			self._reset_states(device=full_key_bits.device)
 
 		state = self.head_states[head_idx]
 
-		# State layer: [key, prev_state] → new_state
-		state_input = cat([key_bits, state], dim=1)
+		# State layer: [full_key, prev_state] → new_state
+		state_input = cat([full_key_bits, state], dim=1)
 		new_state = self.state_layers[head_idx](state_input)
 
 		# Update state only for writes
@@ -270,7 +332,7 @@ class RAMMultiHeadKV(Module):
 		For QUERY operations: Learn to retrieve the correct target
 
 		Args:
-			windows: List of [1, k_bits + v_bits] tensors
+			windows: List of [1, input_bits] tensors (pos_bits? + k_bits + v_bits)
 			targets: Target values for QUERY operations (one per query)
 		"""
 		if len(windows) == 0:
@@ -298,15 +360,15 @@ class RAMMultiHeadKV(Module):
 		query_idx = 0
 
 		for t, window in enumerate(windows):
-			key_bits, head_idx = self._extract_key(window)
+			full_key_bits, head_idx = self._extract_full_key(window)
 			value_bits = self._extract_value(window)
 			is_write = not self.is_query(window)
 
-			# Ensure key_bits is 2D
-			if key_bits.ndim == 1:
-				key_bits_2d = key_bits.unsqueeze(0)
+			# Ensure full_key_bits is 2D
+			if full_key_bits.ndim == 1:
+				full_key_bits_2d = full_key_bits.unsqueeze(0)
 			else:
-				key_bits_2d = key_bits
+				full_key_bits_2d = full_key_bits
 
 			# Get current state
 			if self.head_states[head_idx] is None:
@@ -314,8 +376,8 @@ class RAMMultiHeadKV(Module):
 
 			state = self.head_states[head_idx]
 
-			# State layer forward
-			state_input = cat([key_bits_2d, state], dim=1)
+			# State layer forward: [full_key, prev_state] -> new_state
+			state_input = cat([full_key_bits_2d, state], dim=1)
 			new_state = self.state_layers[head_idx](state_input)
 
 			# Output layer forward
@@ -339,7 +401,7 @@ class RAMMultiHeadKV(Module):
 
 			contexts.append({
 				"window": window,
-				"key_bits": key_bits_2d,
+				"full_key_bits": full_key_bits_2d,
 				"head_idx": head_idx,
 				"is_write": is_write,
 				"state_input": state_input,
@@ -406,7 +468,7 @@ class RAMMultiHeadKV(Module):
 		desired_input = self.state_layers[head_idx].solve(
 			ctx["state_input"].squeeze(0),
 			desired_state_2d,
-			n_immutable_bits=self.k_bits  # Key bits are immutable
+			n_immutable_bits=self.full_key_bits  # Full key bits (pos + key) are immutable
 		)
 
 		if desired_input is None:
@@ -416,13 +478,14 @@ class RAMMultiHeadKV(Module):
 		desired_input_2d = desired_input.unsqueeze(0)
 		self.state_layers[head_idx].commit(desired_input_2d, desired_state_2d)
 
-	def write(self, key: str, value: str) -> None:
+	def write(self, key: str, value: str, position: int | None = None) -> None:
 		"""
 		Explicit write operation.
 
 		Args:
 			key: Key character (will be encoded to k_bits)
 			value: Value character (will be encoded to v_bits)
+			position: Optional position for position-aware storage
 		"""
 		key_bits = self.decoder.encode(key)
 		value_bits = self.decoder.encode(value)
@@ -442,15 +505,25 @@ class RAMMultiHeadKV(Module):
 			value_bits = cat([value_bits, zeros(self.v_bits - value_bits.numel(), dtype=uint8)])
 		value_bits = value_bits[:self.v_bits]
 
-		window = cat([key_bits, value_bits]).unsqueeze(0)
+		# Build window: [pos_bits? | key_bits | value_bits]
+		if self.use_positions:
+			if position is None:
+				position = self._current_position
+				self._current_position += 1
+			pos_bits = self.position_encoder.encode(position)
+			window = cat([pos_bits, key_bits, value_bits]).unsqueeze(0)
+		else:
+			window = cat([key_bits, value_bits]).unsqueeze(0)
+
 		self.train([window], None)
 
-	def read(self, key: str) -> str:
+	def read(self, key: str, position: int | None = None) -> str:
 		"""
 		Explicit read operation.
 
 		Args:
 			key: Key character to query
+			position: Optional position for position-aware retrieval
 
 		Returns:
 			Retrieved value character
@@ -466,20 +539,33 @@ class RAMMultiHeadKV(Module):
 			key_bits = cat([key_bits, zeros(self.k_bits - key_bits.numel(), dtype=uint8)])
 		key_bits = key_bits[:self.k_bits]
 
-		# Query = key + zeros
+		# Build window: [pos_bits? | key_bits | zeros]
 		value_bits = zeros(self.v_bits, dtype=uint8)
-		window = cat([key_bits, value_bits])
 
-		key_bits_only, head_idx = self._extract_key(window)
-		output = self._forward_head(head_idx, key_bits_only, is_write=False)
+		if self.use_positions:
+			if position is None:
+				position = self._current_position
+				self._current_position += 1
+			pos_bits = self.position_encoder.encode(position)
+			window = cat([pos_bits, key_bits, value_bits])
+		else:
+			window = cat([key_bits, value_bits])
+
+		full_key_bits, head_idx = self._extract_key(window)
+		output = self._forward_head(head_idx, full_key_bits, is_write=False)
 
 		return self.decoder.decode(output.unsqueeze(0))
 
+	def reset_position(self) -> None:
+		"""Reset the position counter to 0."""
+		self._current_position = 0
+
 	def __repr__(self):
+		pos_info = f", pos={self.n_position_bits}" if self.use_positions else ""
 		return (
 			f"RAMMultiHeadKV("
 			f"heads={self.num_heads}, "
 			f"k={self.k_bits}, "
-			f"v={self.v_bits}, "
+			f"v={self.v_bits}{pos_info}, "
 			f"neurons/head={self.neurons_per_head})"
 		)
