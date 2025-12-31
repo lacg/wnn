@@ -34,6 +34,8 @@ from .RAMGeneralization import (
 )
 from .RAMFeedForward import RAMFeedForward, FFNMode
 from .RAMEmbedding import RAMEmbedding, PositionEncoding
+from .RAMCrossAttention import RAMCrossAttention, CrossAttentionMode
+from .RAMEncoderDecoder import RAMEncoderDecoder
 from .RAMSeq2Seq import RAMSeq2Seq
 from .RAMTrainer import RAMTrainer, TrainingStats, LayerState, LayerType
 from .RAMRecurrentNetwork import RAMRecurrentNetwork
