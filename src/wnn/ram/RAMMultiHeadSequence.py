@@ -2,9 +2,12 @@ from wnn.ram.RAMSequence import RAMSequence
 from wnn.ram.encoders_decoders import OutputMode
 from wnn.ram.cost import CostCalculatorFactory
 from wnn.ram.cost import CostCalculatorType
+from wnn.ram.cost.CostCalculatorRAM import CostCalculatorRAM
 
 from torch import Tensor
 from torch import tensor
+from torch import zeros
+from torch import uint8
 from torch.nn import Module
 from torch.nn import ModuleList
 
@@ -15,7 +18,13 @@ class RAMMultiHeadSequence(Module):
 	Similar to multi-head attention in Transformers, but with discrete RAM neurons:
 	- Multiple heads process inputs in parallel
 	- Each head can specialize in different patterns
-	- Outputs are combined via CostCalculator (VOTE, RAM, etc.)
+	- Outputs are combined via CostCalculator (VOTE, RAM, etc.) or KV routing
+
+	KV Routing Mode (when k_bits > 0):
+	- Key bits extracted from input determine which head to use
+	- All heads still evolve state (temporal coherence preserved)
+	- Only the routed head's output is used
+	- Only the routed head receives EDRA error signal during training
 
 	Automatically calculates optimal state neurons per head based on
 	vocabulary partitioning: vocab_size / num_heads.
@@ -35,6 +44,10 @@ class RAMMultiHeadSequence(Module):
 		hash_size: int = 1024,
 		cost_calculator_type: CostCalculatorType = CostCalculatorType.VOTE,
 		capacity_margin: int = 1,  # Extra state neurons for memory headroom
+		k_bits: int = 0,  # Key bits for hard routing (0 = use cost calculator)
+		key_position: str = "first",  # "first" or "last" - where to extract key
+		selective_training: bool = False,  # Only train routed head at each timestep
+		use_learned_router: bool = False,  # Use RAM-based learned routing
 		rng: int | None = None,
 	):
 		"""
@@ -51,6 +64,12 @@ class RAMMultiHeadSequence(Module):
 			hash_size: Hash table size if using hashing
 			cost_calculator_type: How to combine head outputs (VOTE, RAM, etc.)
 			capacity_margin: Extra state neurons beyond minimum (default 1, doubles capacity)
+			k_bits: Number of input bits to use as key for hard routing (0 = disabled)
+			key_position: Where to extract key bits from input ("first" or "last")
+			selective_training: If True, only train the routed head at each timestep.
+			                    Requires k_bits > 0 or use_learned_router. Enables head specialization.
+			use_learned_router: If True, use RAM to learn which head to route to.
+			                    The router learns from which heads give correct answers.
 			rng: Random seed
 		"""
 		super().__init__()
@@ -59,6 +78,35 @@ class RAMMultiHeadSequence(Module):
 		self.input_bits = input_bits
 		self.vocab_size = vocab_size
 		self.cost_calculator_type = cost_calculator_type
+		self.k_bits = k_bits
+		self.key_position = key_position
+		self.use_kv_routing = k_bits > 0
+		self.use_learned_router = use_learned_router
+		self.selective_training = selective_training
+
+		# Validate k_bits can address all heads
+		if self.use_kv_routing:
+			max_addressable = 2 ** k_bits
+			if max_addressable < num_heads:
+				print(f"[MultiHead] Warning: k_bits={k_bits} can only address {max_addressable} heads, but num_heads={num_heads}")
+			if k_bits > input_bits:
+				raise ValueError(f"k_bits ({k_bits}) cannot exceed input_bits ({input_bits})")
+
+		# Validate selective_training requires routing
+		if selective_training and not (self.use_kv_routing or self.use_learned_router):
+			raise ValueError("selective_training=True requires k_bits > 0 or use_learned_router=True")
+
+		# Create learned router if requested
+		self.router: CostCalculatorRAM | None = None
+		if use_learned_router:
+			self.router = CostCalculatorRAM(
+				input_bits=input_bits,
+				num_options=num_heads,
+				n_bits_per_neuron=min(input_bits, 8),
+				use_hashing=use_hashing,
+				hash_size=hash_size,
+				rng=rng,
+			)
 
 		# Auto-calculate optimal state neurons per head
 		# Each head handles vocab_size / num_heads characters
@@ -119,6 +167,95 @@ class RAMMultiHeadSequence(Module):
 		# Store decoder from first head (all heads share same decoder type)
 		self.decoder = self.heads[0].decoder
 
+	def _extract_key(self, input_bits: Tensor) -> int:
+		"""
+		Extract key bits from input and convert to head index.
+
+		Args:
+			input_bits: Input tensor [total_bits] or [1, total_bits]
+
+		Returns:
+			Head index (0 to num_heads-1)
+		"""
+		if input_bits.ndim == 2:
+			input_bits = input_bits.squeeze(0)
+
+		# Extract key bits based on position
+		if self.key_position == "first":
+			key_bits = input_bits[:self.k_bits]
+		else:  # "last"
+			key_bits = input_bits[-self.k_bits:]
+
+		# Convert bits to integer
+		key_value = 0
+		for bit in key_bits:
+			key_value = (key_value << 1) | int(bit)
+
+		# Map to head index (modulo for safety)
+		return key_value % self.num_heads
+
+	def _get_routed_head(self, input_bits: Tensor) -> int:
+		"""
+		Get the head index to route to based on routing mode.
+
+		Args:
+			input_bits: Input tensor [total_bits] or [1, total_bits]
+
+		Returns:
+			Head index (0 to num_heads-1)
+		"""
+		if input_bits.ndim == 2:
+			input_bits = input_bits.squeeze(0)
+
+		if self.use_learned_router:
+			# Use RAM router to select head
+			return int(self.router.calculate_index(input_bits))
+		elif self.use_kv_routing:
+			# Use key-based routing
+			return self._extract_key(input_bits)
+		else:
+			# No routing - shouldn't be called
+			return 0
+
+	def _train_router(self, windows: list[Tensor], targets: list[str]) -> None:
+		"""
+		Train the learned router based on which heads give correct answers.
+
+		For each timestep:
+		1. Get predictions from all heads (without updating state)
+		2. Score heads: high score for correct, low for incorrect
+		3. Train router to produce these scores
+
+		Args:
+			windows: List of input tensors [1, input_bits]
+			targets: Target characters per timestep
+		"""
+		if self.router is None:
+			return
+
+		# Reset all head states for evaluation
+		for head in self.heads:
+			head._reset_state(batch_size=1, device=windows[0].device)
+
+		for t, (window, target) in enumerate(zip(windows, targets)):
+			window_bits = window.squeeze(0) if window.ndim == 2 else window
+
+			# Get predictions from all heads at this timestep
+			head_correct = []
+			for head in self.heads:
+				# Forward through head (updates its internal state)
+				_, _, _, output = head._get_outputs(window, update_state=True)
+				predicted = head.decoder.decode(output)
+				head_correct.append(predicted == target)
+
+			# Create target scores: 7 for correct, 0 for incorrect
+			target_scores = zeros(self.num_heads, dtype=uint8)
+			for head_idx, correct in enumerate(head_correct):
+				target_scores[head_idx] = 7 if correct else 0
+
+			# Train router to produce these scores
+			self.router.train_scores(window_bits, target_scores)
+
 	def _combine_outputs(self, head_outputs: list[str], input_bits: Tensor | None = None) -> str:
 		"""
 		Combine head outputs using CostCalculator.
@@ -154,19 +291,81 @@ class RAMMultiHeadSequence(Module):
 
 	def train(self, windows: list[Tensor], targets: str | list[str]) -> None:
 		"""
-		Train heads (all heads trained on all data for ensemble).
+		Train heads on sequence data.
+
+		Training Modes:
+		1. Ensemble (selective_training=False, default):
+		   - All heads trained on all timesteps
+		   - Maintains consistent state evolution
+		   - Routing only affects forward() output selection
+
+		2. Selective (selective_training=True):
+		   - Each head only trains on timesteps where it's routed
+		   - All heads still see all windows (state evolution preserved)
+		   - EDRA only triggers for routed timesteps
+		   - Enables true head specialization
+
+		3. Learned Routing (use_learned_router=True):
+		   - Router is trained to select heads that give correct answers
+		   - Can be combined with selective_training
 
 		Args:
 			windows: List of input tensors, one per timestep [1, input_bits]
 			targets: Either a string (one char per timestep) or list of strings
 		"""
-		# Train all heads on all data
-		for head in self.heads:
-			head.train(windows, targets)
+		n_steps = len(windows)
+		if n_steps == 0:
+			return
+
+		# Convert targets to list
+		if isinstance(targets, str):
+			target_list = list(targets)
+		else:
+			target_list = list(targets)
+
+		if not self.selective_training and not self.use_learned_router:
+			# Ensemble mode: train all heads on all data
+			for head in self.heads:
+				head.train(windows, targets)
+			return
+
+		# For selective training or learned routing, we need per-timestep analysis
+		# Compute per-head masks and track which heads are correct
+		head_masks: list[list[bool]] = [
+			[False] * n_steps for _ in range(self.num_heads)
+		]
+
+		for t, window in enumerate(windows):
+			window_bits = window.squeeze(0) if window.ndim == 2 else window
+			head_idx = self._get_routed_head(window_bits)
+			head_masks[head_idx][t] = True
+
+		# Train heads
+		if self.selective_training:
+			# Selective mode: train each head only on its routed timesteps
+			for head_idx, head in enumerate(self.heads):
+				mask = head_masks[head_idx]
+				if any(mask):
+					head.train_masked(windows, targets, mask)
+		else:
+			# Ensemble mode with learned routing
+			for head in self.heads:
+				head.train(windows, targets)
+
+		# Train the learned router if enabled
+		if self.use_learned_router:
+			self._train_router(windows, target_list)
 
 	def forward(self, input_bits: Tensor) -> str:
 		"""
 		Forward pass through all heads and combine outputs.
+
+		Routing modes:
+		- KV routing (k_bits > 0): Key bits determine which head to use
+		- Learned routing (use_learned_router): RAM router selects head
+		- No routing: All heads vote via CostCalculator
+
+		In all routing modes, all heads process input to maintain state evolution.
 
 		Args:
 			input_bits: Input tensor [batch_size, total_bits] or [total_bits]
@@ -174,23 +373,39 @@ class RAMMultiHeadSequence(Module):
 		Returns:
 			Predicted character string
 		"""
-		# Get predictions from all heads
-		head_outputs = [head.forward(input_bits) for head in self.heads]
-
-		# For RAM cost calculator, extract last window as context
-		# (full input may be multiple windows concatenated)
+		# Extract last window for routing decisions
 		if input_bits.ndim == 1:
 			last_window = input_bits[-self.input_bits:]
 		else:
 			last_window = input_bits[:, -self.input_bits:]
 
-		# Combine using cost calculator
-		return self._combine_outputs(head_outputs, last_window)
+		if self.use_kv_routing or self.use_learned_router:
+			# Routing mode: All heads process, router selects output
+			head_idx = self._get_routed_head(last_window)
+
+			# All heads must forward to maintain state evolution
+			for i, head in enumerate(self.heads):
+				output = head.forward(input_bits)
+				if i == head_idx:
+					selected_output = output
+
+			return selected_output
+		else:
+			# Standard: Get all outputs and combine via voting
+			head_outputs = [head.forward(input_bits) for head in self.heads]
+			return self._combine_outputs(head_outputs, last_window)
 
 	def __repr__(self):
+		train_mode = "selective" if self.selective_training else "ensemble"
+		if self.use_learned_router:
+			routing_info = f"learned_router, train={train_mode}"
+		elif self.use_kv_routing:
+			routing_info = f"k_bits={self.k_bits}, train={train_mode}"
+		else:
+			routing_info = f"cost={self.cost_calculator_type.name}"
 		return (
 			f"RAMMultiHeadSequence("
 			f"num_heads={self.num_heads}, "
-			f"cost_calculator={self.cost_calculator_type.name}, "
+			f"{routing_info}, "
 			f"state_neurons/head={self.n_state_neurons_per_head})"
 		)
