@@ -31,11 +31,11 @@ output_layer_output			final output									[1, N_out]
 | copy       | BIT_LEVEL     | 100%          | Per-bit context learning |
 | successor  | BIT_LEVEL     | 100%          | Per-bit context learning |
 
-## Future: Architectural Improvements
-- [ ] Learned Position Embeddings - Current RELATIVE mode is fixed; learned could adapt
-- [ ] Cross-Attention - Enable encoder-decoder for translation/summarization
-- [ ] Layer Normalization Equivalent - Stabilize training for deeper models
-- [ ] Sparse Attention Patterns - For longer sequences
+## Completed: Architectural Improvements
+- [x] Learned Position Embeddings - LearnedPositionEncoder with RAMLayer
+- [x] Cross-Attention - SoftRAMAttention supports key_bits and context parameter
+- [x] Layer Normalization Equivalent - DiscreteNormalization with ENSEMBLE_VOTE/BIT_BALANCE
+- [x] Sparse Attention Patterns - STRIDED, DILATED, LOCAL_GLOBAL in strategies/
 
 ## Future: Training Enhancements
 - [ ] Curriculum Learning Integration - Start with short sequences, gradually increase

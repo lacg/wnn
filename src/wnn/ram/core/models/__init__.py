@@ -15,6 +15,11 @@ from wnn.ram.core.models.computed_arithmetic import (
 # Attention mechanisms
 from wnn.ram.core.models.soft_ram_attention import SoftRAMAttention
 from wnn.ram.core.models.sorting_attention import ComputedSortingAttention, SortingAttention
+from wnn.ram.core.models.learned_sorting import (
+    LearnedComparator,
+    LearnedSortingAttention,
+    BitLevelComparator,
+)
 from wnn.ram.core.models.minmax_attention import ComputedMinMaxAttention, MinMaxAttention
 from wnn.ram.core.models.attention import RAMAttention, RAMCrossAttention, CrossAttentionMode
 from wnn.ram.core.models.attention_base import AttentionBase, LearnableAttention, ComputedAttention
@@ -73,6 +78,9 @@ __all__ = [
     'SoftRAMAttention',
     'ComputedSortingAttention',
     'SortingAttention',  # Alias for ComputedSortingAttention
+    'LearnedComparator',
+    'LearnedSortingAttention',
+    'BitLevelComparator',
     'ComputedMinMaxAttention',
     'MinMaxAttention',  # Alias for ComputedMinMaxAttention
     'RAMAttention',
