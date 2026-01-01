@@ -461,5 +461,237 @@ class RAMAttention(LearnableAttention):
 		)
 
 
+	# ------------------------------------------------------------------
+	# Pre-training Methods for Position-Based Patterns
+	# ------------------------------------------------------------------
+
+	def pretrain_copy(self, seq_len: int, head_idx: int = 0) -> int:
+		"""
+		Pre-train attention to copy: position i attends to position i.
+
+		This is the identity attention pattern - each position looks at itself.
+		Achieves 100% generalization for copy task.
+
+		Args:
+			seq_len: Sequence length to train on
+			head_idx: Which head to train (default: 0)
+
+		Returns:
+			Number of patterns written
+		"""
+		patterns = 0
+		for i in range(seq_len):
+			for j in range(seq_len):
+				should_attend = 1 if i == j else 0
+				if self.causal and j > i:
+					continue
+				self._write_position_pattern(i, j, should_attend, head_idx)
+				patterns += 1
+		return patterns
+
+	def pretrain_shift(self, seq_len: int, offset: int = 1, head_idx: int = 0) -> int:
+		"""
+		Pre-train attention to shift: position i attends to position i+offset.
+
+		Args:
+			seq_len: Sequence length to train on
+			offset: Shift amount (positive = look right, negative = look left)
+			head_idx: Which head to train
+
+		Returns:
+			Number of patterns written
+		"""
+		patterns = 0
+		for i in range(seq_len):
+			for j in range(seq_len):
+				target_j = i + offset
+				should_attend = 1 if j == target_j and 0 <= target_j < seq_len else 0
+				if self.causal and j > i:
+					continue
+				self._write_position_pattern(i, j, should_attend, head_idx)
+				patterns += 1
+		return patterns
+
+	def pretrain_reverse(self, seq_len: int, head_idx: int = 0) -> int:
+		"""
+		Pre-train attention to reverse: position i attends to position (n-1-i).
+
+		Args:
+			seq_len: Sequence length to train on
+			head_idx: Which head to train
+
+		Returns:
+			Number of patterns written
+		"""
+		patterns = 0
+		for i in range(seq_len):
+			for j in range(seq_len):
+				target_j = seq_len - 1 - i
+				should_attend = 1 if j == target_j else 0
+				if self.causal and j > i:
+					continue
+				self._write_position_pattern(i, j, should_attend, head_idx)
+				patterns += 1
+		return patterns
+
+	def pretrain_first(self, seq_len: int, head_idx: int = 0) -> int:
+		"""
+		Pre-train attention: all positions attend to position 0 (first).
+
+		Useful for tasks that need the first token (e.g., CLS token).
+
+		Args:
+			seq_len: Sequence length to train on
+			head_idx: Which head to train
+
+		Returns:
+			Number of patterns written
+		"""
+		patterns = 0
+		for i in range(seq_len):
+			for j in range(seq_len):
+				should_attend = 1 if j == 0 else 0
+				if self.causal and j > i:
+					continue
+				self._write_position_pattern(i, j, should_attend, head_idx)
+				patterns += 1
+		return patterns
+
+	def pretrain_last(self, seq_len: int, head_idx: int = 0) -> int:
+		"""
+		Pre-train attention: all positions attend to position n-1 (last).
+
+		Note: For causal attention, only the last position can attend to itself.
+
+		Args:
+			seq_len: Sequence length to train on
+			head_idx: Which head to train
+
+		Returns:
+			Number of patterns written
+		"""
+		patterns = 0
+		for i in range(seq_len):
+			for j in range(seq_len):
+				target_j = seq_len - 1
+				should_attend = 1 if j == target_j else 0
+				if self.causal and j > i:
+					continue
+				self._write_position_pattern(i, j, should_attend, head_idx)
+				patterns += 1
+		return patterns
+
+	def pretrain_causal_next(self, seq_len: int, head_idx: int = 0) -> int:
+		"""
+		Pre-train causal attention: position i attends to position i-1.
+
+		This is the autoregressive pattern for next-token prediction.
+		Position 0 attends to nothing (or itself if non-causal).
+
+		Args:
+			seq_len: Sequence length to train on
+			head_idx: Which head to train
+
+		Returns:
+			Number of patterns written
+		"""
+		patterns = 0
+		for i in range(seq_len):
+			for j in range(seq_len):
+				# Position i attends to i-1 (previous token)
+				target_j = i - 1 if i > 0 else 0
+				should_attend = 1 if j == target_j else 0
+				if self.causal and j > i:
+					continue
+				self._write_position_pattern(i, j, should_attend, head_idx)
+				patterns += 1
+		return patterns
+
+	def _write_position_pattern(
+		self,
+		query_pos: int,
+		key_pos: int,
+		should_attend: int,
+		head_idx: int,
+	) -> None:
+		"""
+		Write a position-based attention pattern to memory.
+
+		This writes directly to the similarity head's RAM, using
+		dummy token content (zeros) since the pattern is position-only.
+		"""
+		# Create dummy tokens (all zeros - pattern is position-based)
+		query = zeros(self.query_bits, dtype=uint8)
+		key = zeros(self.key_bits, dtype=uint8)
+
+		# Build similarity input with position encoding
+		parts = [query, key]
+
+		if isinstance(self.position_mode, CrossAttentionMode):
+			match self.position_mode:
+				case CrossAttentionMode.ENCODER_ONLY:
+					k_pos = self._encode_position(key_pos)
+					parts.append(k_pos)
+				case CrossAttentionMode.BOTH:
+					q_pos = self._encode_position(query_pos)
+					k_pos = self._encode_position(key_pos)
+					parts.extend([q_pos, k_pos])
+		else:
+			if self.position_mode == PositionMode.BINARY:
+				q_pos = self.position_encoder.encode(query_pos)
+				k_pos = self.position_encoder.encode(key_pos)
+				parts.extend([q_pos, k_pos])
+			elif self.position_mode == PositionMode.RELATIVE:
+				rel_dist = self.position_encoder.encode_relative(query_pos, key_pos)
+				parts.append(rel_dist)
+
+		similarity_input = cat(parts).unsqueeze(0)
+		target = tensor([[should_attend]], dtype=uint8)
+		self.similarity_heads[head_idx].commit(similarity_input, target)
+
+	def pretrain_identity_values(self, seq_len: int) -> int:
+		"""
+		Pre-train value heads to be identity (output = input).
+
+		This ensures attended values pass through unchanged.
+
+		Args:
+			seq_len: Sequence length (for position encoding)
+
+		Returns:
+			Number of patterns written
+		"""
+		patterns = 0
+
+		# For each possible position
+		for pos in range(min(seq_len, self.max_context_len)):
+			# For each head
+			for h in range(self.num_heads):
+				# Create identity mapping for common bit patterns
+				for val in range(min(4, 2 ** self.key_bits)):  # Sample patterns
+					# Create value bits
+					value = zeros(self.key_bits, dtype=uint8)
+					for b in range(self.key_bits):
+						value[b] = (val >> b) & 1
+
+					# Build input with position
+					if self.n_position_bits > 0:
+						if isinstance(self.position_mode, CrossAttentionMode) or \
+						   self.position_mode == PositionMode.RELATIVE:
+							pos_bits = self._encode_position(pos)
+						else:
+							pos_bits = self.position_encoder.encode(pos)
+						val_input = cat([value, pos_bits]).unsqueeze(0)
+					else:
+						val_input = value.unsqueeze(0)
+
+					# Target = same as input (identity)
+					target = value.unsqueeze(0)
+					self.value_heads[h].commit(val_input, target)
+					patterns += 1
+
+		return patterns
+
+
 # Backwards-compatible alias (will be removed)
 RAMCrossAttention = RAMAttention

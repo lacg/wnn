@@ -61,6 +61,8 @@ from wnn.ram.core.transformers import (
     RAMAttention,
     RAMCrossAttention,  # Alias
     CrossAttentionMode,
+    PositionOnlyAttention,
+    PositionPattern,
     # FFN
     TwoLayerFFN,
     RAMFeedForward,
@@ -123,6 +125,8 @@ __all__ = [
     'RAMAttention',
     'RAMCrossAttention',
     'CrossAttentionMode',
+    'PositionOnlyAttention',
+    'PositionPattern',
     'TwoLayerFFN',
     'RAMFeedForward',
     'RAMEmbedding',
