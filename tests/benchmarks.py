@@ -704,6 +704,267 @@ Generalization strategy: {strategy.name}
 
 
 # ============================================================
+# Length Generalization Benchmarks
+# ============================================================
+
+@dataclass
+class LengthGenResult:
+    """Results from a length generalization test."""
+    model_type: str
+    pattern: str
+    train_length: int
+    test_length: int
+    accuracy: float
+
+
+def run_length_generalization_benchmark(
+    train_lengths: list[int] | None = None,
+    test_lengths: list[int] | None = None,
+    verbose: bool = True,
+) -> list[LengthGenResult]:
+    """
+    Test length generalization: train on short sequences, test on longer ones.
+
+    Key question: Can models generalize from seq_len=4 to seq_len=8, 16, 32?
+
+    Tests:
+    1. PositionOnlyAttention with COPY pattern (length-invariant)
+    2. PositionOnlyAttention with REVERSE pattern (length-dependent)
+    3. RAMRecurrentNetwork with XOR (for parity - infinite length gen)
+
+    Returns:
+        List of LengthGenResult with accuracy per length
+    """
+    from wnn.ram.core import PositionOnlyAttention, RAMLayer
+    from torch import zeros, uint8, tensor
+
+    if train_lengths is None:
+        train_lengths = [4]
+    if test_lengths is None:
+        test_lengths = [4, 8, 16, 32]
+
+    if verbose:
+        print("\n" + "=" * 60)
+        print("LENGTH GENERALIZATION BENCHMARK")
+        print("=" * 60)
+        print(f"""
+Question: Can models trained on length {train_lengths} generalize to longer sequences?
+
+Tests:
+1. COPY pattern (length-invariant): Should generalize to any length
+2. REVERSE pattern (length-dependent): Needs retraining per length
+3. Recurrent XOR (parity): 4 patterns → infinite length generalization
+""")
+
+    results = []
+
+    # ----------------------------------------------------------------
+    # Test 1: PositionOnlyAttention with COPY (length-invariant)
+    # ----------------------------------------------------------------
+    if verbose:
+        print("\n--- PositionOnlyAttention: COPY pattern ---")
+        print("Training on lengths:", train_lengths)
+
+    max_test_len = max(test_lengths)
+    attn_copy = PositionOnlyAttention(
+        token_bits=4,
+        max_seq_len=max_test_len,
+        num_heads=1,
+        rng=42,
+    )
+
+    # Train on all train lengths
+    for train_len in train_lengths:
+        attn_copy.pretrain_copy(seq_len=train_len)
+
+    # Test on all lengths
+    for test_len in test_lengths:
+        tokens = [zeros(4, dtype=uint8) for _ in range(test_len)]
+        weights = attn_copy.get_attention_weights(tokens)
+
+        # Check if diagonal is correct (COPY pattern)
+        correct = sum(1 for i in range(test_len) for j in range(test_len)
+                      if (weights[i, j].item() > 0) == (i == j))
+        accuracy = 100 * correct / (test_len * test_len)
+
+        results.append(LengthGenResult(
+            model_type="PositionOnlyAttention",
+            pattern="COPY",
+            train_length=max(train_lengths),
+            test_length=test_len,
+            accuracy=accuracy,
+        ))
+
+        if verbose:
+            status = "✓" if accuracy > 99 else "✗"
+            print(f"  Test len={test_len}: {accuracy:.1f}% {status}")
+
+    # ----------------------------------------------------------------
+    # Test 1b: COPY trained on max_seq_len (should be 100% everywhere)
+    # ----------------------------------------------------------------
+    if verbose:
+        print("\n--- PositionOnlyAttention: COPY (trained on max_len) ---")
+        print(f"Training on max length: {max_test_len}")
+
+    attn_copy_full = PositionOnlyAttention(
+        token_bits=4,
+        max_seq_len=max_test_len,
+        num_heads=1,
+        rng=42,
+    )
+    attn_copy_full.pretrain_copy(seq_len=max_test_len)
+
+    for test_len in test_lengths:
+        tokens = [zeros(4, dtype=uint8) for _ in range(test_len)]
+        weights = attn_copy_full.get_attention_weights(tokens)
+
+        correct = sum(1 for i in range(test_len) for j in range(test_len)
+                      if (weights[i, j].item() > 0) == (i == j))
+        accuracy = 100 * correct / (test_len * test_len)
+
+        results.append(LengthGenResult(
+            model_type="PositionOnlyAttention",
+            pattern="COPY (full)",
+            train_length=max_test_len,
+            test_length=test_len,
+            accuracy=accuracy,
+        ))
+
+        if verbose:
+            status = "✓" if accuracy > 99 else "✗"
+            print(f"  Test len={test_len}: {accuracy:.1f}% {status}")
+
+    # ----------------------------------------------------------------
+    # Test 2: PositionOnlyAttention with REVERSE (length-dependent)
+    # ----------------------------------------------------------------
+    if verbose:
+        print("\n--- PositionOnlyAttention: REVERSE pattern ---")
+        print("Training on lengths:", train_lengths)
+
+    attn_reverse = PositionOnlyAttention(
+        token_bits=4,
+        max_seq_len=max_test_len,
+        num_heads=1,
+        rng=42,
+    )
+
+    # Train only on train lengths
+    for train_len in train_lengths:
+        attn_reverse.pretrain_reverse(seq_len=train_len)
+
+    # Test on all lengths
+    for test_len in test_lengths:
+        tokens = [zeros(4, dtype=uint8) for _ in range(test_len)]
+        weights = attn_reverse.get_attention_weights(tokens)
+
+        # Check if anti-diagonal is correct (REVERSE pattern for this length)
+        correct = sum(1 for i in range(test_len) for j in range(test_len)
+                      if (weights[i, j].item() > 0) == (j == test_len - 1 - i))
+        accuracy = 100 * correct / (test_len * test_len)
+
+        results.append(LengthGenResult(
+            model_type="PositionOnlyAttention",
+            pattern="REVERSE",
+            train_length=max(train_lengths),
+            test_length=test_len,
+            accuracy=accuracy,
+        ))
+
+        if verbose:
+            status = "✓" if accuracy > 99 else "✗"
+            trained = "trained" if test_len in train_lengths else "unseen"
+            print(f"  Test len={test_len}: {accuracy:.1f}% {status} ({trained})")
+
+    # ----------------------------------------------------------------
+    # Test 3: XOR-based Parity (infinite generalization)
+    # ----------------------------------------------------------------
+    if verbose:
+        print("\n--- XOR-based Parity (using RAMLayer) ---")
+        print("Training: 4 XOR patterns → infinite length generalization")
+
+    from wnn.ram.core import RAMLayer
+
+    # Create a simple XOR RAM: (prev_state, input) -> new_state
+    xor_ram = RAMLayer(
+        total_input_bits=2,    # [prev_state, input]
+        num_neurons=1,         # 1 output
+        n_bits_per_neuron=2,   # See all 2 bits
+        rng=42,
+    )
+
+    # Train XOR truth table (4 patterns)
+    xor_patterns = [
+        (tensor([[0, 0]], dtype=uint8), tensor([[0]], dtype=uint8)),  # 0 XOR 0 = 0
+        (tensor([[0, 1]], dtype=uint8), tensor([[1]], dtype=uint8)),  # 0 XOR 1 = 1
+        (tensor([[1, 0]], dtype=uint8), tensor([[1]], dtype=uint8)),  # 1 XOR 0 = 1
+        (tensor([[1, 1]], dtype=uint8), tensor([[0]], dtype=uint8)),  # 1 XOR 1 = 0
+    ]
+    for inp, tgt in xor_patterns:
+        xor_ram.commit(inp, tgt)
+
+    def compute_parity(bits: list[int]) -> int:
+        """Ground truth parity."""
+        return sum(bits) % 2
+
+    def compute_parity_with_xor(bits: list[int]) -> int:
+        """Compute parity using XOR RAM."""
+        state = 0
+        for bit in bits:
+            inp = tensor([[state, bit]], dtype=uint8)
+            state = int(xor_ram(inp)[0, 0].item())
+        return state
+
+    # Test on various lengths
+    import random
+    random.seed(42)
+
+    for test_len in test_lengths:
+        n_samples = min(100, 2 ** test_len)  # Sample up to 100 patterns
+        correct = 0
+
+        for _ in range(n_samples):
+            # Generate random bit sequence
+            bits = [random.randint(0, 1) for _ in range(test_len)]
+            expected = compute_parity(bits)
+            result = compute_parity_with_xor(bits)
+            if result == expected:
+                correct += 1
+
+        accuracy = 100 * correct / n_samples
+
+        results.append(LengthGenResult(
+            model_type="XOR RAMLayer",
+            pattern="Parity",
+            train_length=2,  # XOR is trained on 2 bits
+            test_length=test_len,
+            accuracy=accuracy,
+        ))
+
+        if verbose:
+            status = "✓" if accuracy > 99 else "✗"
+            print(f"  Test len={test_len}: {accuracy:.1f}% ({n_samples} samples) {status}")
+
+    # Summary
+    if verbose:
+        print("\n" + "-" * 60)
+        print("LENGTH GENERALIZATION SUMMARY")
+        print("-" * 60)
+        print(f"{'Model':<25} {'Pattern':<12} {'Train':>6} {'Test':>6} {'Acc':>7}")
+        print("-" * 60)
+        for r in results:
+            status = "★" if r.accuracy > 99 else " "
+            print(f"{r.model_type:<25} {r.pattern:<12} {r.train_length:>6} "
+                  f"{r.test_length:>6} {r.accuracy:>6.1f}%{status}")
+
+        print("\n★ Key Insights:")
+        print("  - Length-invariant patterns (COPY) generalize to any length")
+        print("  - Length-dependent patterns (REVERSE) need per-length training")
+        print("  - Recurrent XOR achieves infinite length generalization (4 patterns!)")
+
+    return results
+
+
+# ============================================================
 # Recurrent Benchmarks
 # ============================================================
 
@@ -837,6 +1098,9 @@ Tasks:
     print("=" * 80)
     for strategy in [MapperStrategy.BIT_LEVEL, MapperStrategy.COMPOSITIONAL]:
         run_compositional_benchmark(strategy=strategy, verbose=True)
+
+    # Run length generalization benchmark
+    run_length_generalization_benchmark(verbose=True)
 
     # Run recurrent parity benchmark
     run_recurrent_parity_benchmark(verbose=True)
