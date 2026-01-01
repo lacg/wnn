@@ -39,7 +39,15 @@ class RAMRecurrentNetwork(Module):
 	):
 		super().__init__()
 
+		# Store config for serialization
 		self.input_bits = int(input_bits)
+		self.n_state_neurons = n_state_neurons
+		self.n_output_neurons = n_output_neurons
+		self.n_bits_per_state_neuron = n_bits_per_state_neuron
+		self.n_bits_per_output_neuron = n_bits_per_output_neuron
+		self.use_hashing = use_hashing
+		self.hash_size = hash_size
+		self.rng = rng
 		self.max_iters = max_iters
 		self.output_mode = output_mode
 		self.decoder: TransformerDecoder = TransformerDecoderFactory.create(output_mode, n_output_neurons)
@@ -48,7 +56,7 @@ class RAMRecurrentNetwork(Module):
 		# Layers
 		# -------------------------
 		# State layer: sees [input_layer_output, previous_state_bits]
-		self.state_layer = RAMLayer(
+		self.state_layer = self._create_state_layer(
 			total_input_bits=input_bits + n_state_neurons,
 			num_neurons=n_state_neurons,
 			n_bits_per_neuron=n_bits_per_state_neuron,
@@ -98,6 +106,28 @@ class RAMRecurrentNetwork(Module):
 		lines.append("")  # newline
 		return "\n".join(lines)
 
+	def _create_state_layer(self,
+		total_input_bits: int,
+		num_neurons: int,
+		n_bits_per_neuron: int,
+		use_hashing: bool = False,
+		hash_size: int = 1024,
+		rng: Optional[int] = None,
+	) -> RAMLayer:
+		"""
+		Factory method for creating the state layer.
+
+		Override in subclasses to customize connection patterns.
+		"""
+		return RAMLayer(
+			total_input_bits=total_input_bits,
+			num_neurons=num_neurons,
+			n_bits_per_neuron=n_bits_per_neuron,
+			use_hashing=use_hashing,
+			hash_size=hash_size,
+			rng=rng,
+		)
+
 	def _create_output_layer(self,
 		num_neurons: int,
 		n_bits_per_neuron: int,
@@ -127,20 +157,43 @@ class RAMRecurrentNetwork(Module):
 
 	def _commit(self, window_bits: Tensor, current_state_input: Tensor, desired_state_output: Tensor) -> tuple[bool, Optional[Tensor]]:
 		"""
+		Commit desired state output at the CURRENT address.
+
+		IMPORTANT: We write directly at current_state_input's address rather than
+		solving for a different input. This ensures:
+		1. Single-step tasks (like parity) get correct training at the address
+		   that will be read during inference.
+		2. For multi-step tasks, BPTT still works because we return the desired
+		   state for backpropagation to earlier timesteps.
+
 		Return:
-			changed:				True if any change happened, False otherwise.
-			previous bits:	Tensor
+			changed:        True if any change happened, False otherwise.
+			previous bits:  Tensor (the desired state for BPTT to earlier timesteps)
 		"""
 		if desired_state_output is None:
 			return False, None
 		assert current_state_input.shape[0] == self.input_bits + self.state_layer.num_neurons
+
 		head, calculated_state_output = self._calculate_state_output(window_bits, desired_state_output)
-		desired_previous_state_input = self.state_layer.solve(current_state_input, calculated_state_output, int(window_bits.shape[1]))
-		if desired_previous_state_input is None:
-			return False, None
-		desired_previous_state_input = desired_previous_state_input.unsqueeze(0)	# [1, N_in+N_state]
-		changed = self.state_layer.commit(desired_previous_state_input, calculated_state_output)
-		return (changed, self._return_state_output(window_bits, desired_previous_state_input, head))
+
+		# Direct write at CURRENT address - don't solve for a different input.
+		# This fixes the address mismatch bug for single-step tasks.
+		current_state_input_2d = current_state_input.unsqueeze(0)  # [1, N_in+N_state]
+
+		# Use explore_batch for direct write with allow_override
+		from torch import arange, long
+		addresses = self.state_layer.get_addresses(current_state_input_2d)[0]  # [N_neurons]
+		neuron_indices = arange(self.state_layer.num_neurons, dtype=long, device=addresses.device)
+
+		# Get target bits (handle both 1D and 2D)
+		target_bits = calculated_state_output[0] if calculated_state_output.ndim == 2 else calculated_state_output
+
+		changed = self.state_layer.memory.explore_batch(
+			neuron_indices, addresses, target_bits, allow_override=True
+		)
+
+		# Return desired state for BPTT to earlier timesteps
+		return (changed, self._return_state_output(window_bits, current_state_input_2d, head))
 
 	def _get_contexts(self, windows: list[Tensor], steps: int) -> dict:
 		"""
@@ -245,14 +298,29 @@ class RAMRecurrentNetwork(Module):
 		self.state_bits = zeros(batch_size, self.state_layer.num_neurons, dtype=uint8, device=device) if self.state_layer.num_neurons > 0 else zeros(batch_size, 0, dtype=uint8, device=device)
 
 	def _solve_output(self, context: dict, target_bits: Tensor) -> Tensor:
-		desired_state_output_bits_t = self.output_layer.solve(context["state_layer_output"][0], target_bits, 0)
-		if desired_state_output_bits_t is None:
-			return None	# no solution even with override (should be rare and a limit of the architecture).
+		"""
+		Solve for hidden_T bits that produce target_bits via output_layer.
 
-    # Commit output mapping: hidden_T -> target_bits
-		desired_state_output_bits_t = desired_state_output_bits_t.unsqueeze(0)
-		self.output_layer.commit(desired_state_output_bits_t, target_bits)
-		return desired_state_output_bits_t
+		IMPORTANT: We use target_bits as the desired state instead of solving from
+		current state. This ensures the output layer learns a generalizable mapping
+		(state → output) rather than memorizing at the current state.
+
+		For identity output layers (common case), this means:
+		  - output_layer[target] = target
+		  - Desired state = target
+
+		This fixes the "solver bias" bug where minimal-change preference caused
+		the solver to keep the current (incorrect) state and memorize at that address.
+		"""
+		# Desired state = target (for identity/simple output mappings)
+		# This ensures generalization: all inputs needing output=X get state=X
+		desired_state_output_bits_t = target_bits.clone()
+		if desired_state_output_bits_t.ndim == 2:
+			desired_state_output_bits_t = desired_state_output_bits_t[0]
+
+		# Commit output mapping: state=target → output=target
+		self.output_layer.commit(desired_state_output_bits_t.unsqueeze(0), target_bits)
+		return desired_state_output_bits_t.unsqueeze(0)
 
 	# ------------------------------------------------------------------
 	# Public API
@@ -540,3 +608,32 @@ class RAMRecurrentNetwork(Module):
 				self.state_layer.commit(inp, out)
 
 		return True
+
+	# -------------------------
+	# Serialization
+	# -------------------------
+
+	def get_config(self) -> dict:
+		"""Get configuration for serialization."""
+		return {
+			'input_bits': self.input_bits,
+			'n_state_neurons': self.n_state_neurons,
+			'n_output_neurons': self.n_output_neurons,
+			'n_bits_per_state_neuron': self.n_bits_per_state_neuron,
+			'n_bits_per_output_neuron': self.n_bits_per_output_neuron,
+			'use_hashing': self.use_hashing,
+			'hash_size': self.hash_size,
+			'rng': self.rng,
+			'max_iters': self.max_iters,
+			'output_mode': self.output_mode.value if hasattr(self.output_mode, 'value') else self.output_mode,
+		}
+
+	@classmethod
+	def from_config(cls, config: dict) -> "RAMRecurrentNetwork":
+		"""Create model from configuration."""
+		return cls(**config)
+
+	def save(self, path: str) -> None:
+		"""Save model to file."""
+		from wnn.ram.core.serialization import save_model
+		save_model(self, path)

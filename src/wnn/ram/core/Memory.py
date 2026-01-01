@@ -23,9 +23,11 @@ from torch import stack
 from torch import uint8
 from torch import where
 from torch import zeros
-from torch.nn import Module
 
-class Memory(Module):
+from wnn.ram.core.base import RAMComponent
+
+
+class Memory(RAMComponent):
 	"""
 	Low-level RAM memory for a layer of RAM neurons.
 
@@ -577,6 +579,7 @@ class Memory(Module):
 
 		current = input_bits[self.connections].to(int8)
 		hamming = (self.addresses_bits.unsqueeze(0) != current.unsqueeze(1)).sum(dim=2)
+
 		per_neuron_cost = (CONFLICT_COST * conflict.to(float64) + EMPTY_COST * empty.to(float64) + HAMMING_COST * hamming.to(float64))
 
 		cost = per_neuron_cost.unsqueeze(0).expand(beam_width, -1, -1)
@@ -631,6 +634,22 @@ class Memory(Module):
 		conflict = (memory_rows != MemoryVal.EMPTY) & (memory_rows != desired_memories)
 		empty = (memory_rows == MemoryVal.EMPTY)
 		valid = ~conflict if not allow_override else ones_like(conflict, dtype=tbool)
+
+		# Pre-filter: mark inconsistent addresses as invalid for neurons with duplicate connections.
+		# When a neuron's connections have duplicates (multiple connections to same input bit),
+		# only addresses where all those connected bits are the same are reachable.
+		for neuron_idx in range(self.num_neurons):
+			neuron_conn = self.connections[neuron_idx]
+			unique_indices = neuron_conn.unique()
+			if len(unique_indices) < len(neuron_conn):
+				# Has duplicate connections - filter for consistency
+				for idx in unique_indices:
+					mask = neuron_conn == idx
+					if mask.sum() > 1:  # Multiple connections to this input bit
+						# For each address, check if all bits at these positions are the same
+						bits_at_positions = self.addresses_bits[:, mask]  # [memory_size, count]
+						inconsistent = (bits_at_positions != bits_at_positions[:, :1]).any(dim=1)
+						valid[neuron_idx] = valid[neuron_idx] & ~inconsistent
 
 		current_addr_bits = input_bits[self.connections].to(int8)
 		hamming = (self.addresses_bits.unsqueeze(0) != current_addr_bits.unsqueeze(1)).sum(dim=2).to(float64)
@@ -693,6 +712,21 @@ class Memory(Module):
 
 			# Merge
 			merged = where(existing == -1, addr_bits_tiled, existing)
+
+			# Check duplicate-index consistency: if neuron_conn has duplicate indices,
+			# all merged values mapping to the same input bit must agree.
+			# Without this check, addresses with inconsistent bit patterns appear valid
+			# but produce wrong results due to undefined behavior in duplicate-index assignment.
+			unique_indices = neuron_conn.unique()
+			if len(unique_indices) < len(neuron_conn):
+				# Has duplicate indices - check consistency
+				for idx in unique_indices:
+					mask = neuron_conn == idx
+					values_for_idx = merged[:, mask]  # [n_expanded, count_of_idx]
+					# All values in each row must be the same
+					inconsistent = (values_for_idx != values_for_idx[:, :1]).any(dim=1)
+					expanded_cost = expanded_cost.masked_fill(inconsistent, float("inf"))
+
 			expanded_bits[:, neuron_conn] = merged
 
 			# Prune
