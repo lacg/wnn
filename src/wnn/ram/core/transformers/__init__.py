@@ -19,6 +19,13 @@ from wnn.ram.core.transformers.minmax_attention import ComputedMinMaxAttention, 
 from wnn.ram.core.transformers.attention import RAMAttention, RAMCrossAttention, CrossAttentionMode
 from wnn.ram.core.transformers.attention_base import AttentionBase, LearnableAttention, ComputedAttention
 from wnn.ram.core.transformers.position_attention import PositionOnlyAttention, PositionPattern
+from wnn.ram.core.transformers.computed_attention import (
+    ComputedMedianAttention,
+    ComputedArgMaxAttention,
+    ComputedCountDistinctAttention,
+    ComputedSumAttention,
+    ComputedMeanAttention,
+)
 
 # FFN
 from wnn.ram.core.transformers.two_layer_ffn import TwoLayerFFN
@@ -57,6 +64,11 @@ __all__ = [
     'CrossAttentionMode',
     'PositionOnlyAttention',
     'PositionPattern',
+    'ComputedMedianAttention',
+    'ComputedArgMaxAttention',
+    'ComputedCountDistinctAttention',
+    'ComputedSumAttention',
+    'ComputedMeanAttention',
     # FFN
     'TwoLayerFFN',
     'RAMFeedForward',
