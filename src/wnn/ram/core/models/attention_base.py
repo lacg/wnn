@@ -9,12 +9,13 @@ This enables consistent usage across different attention implementations:
 - ComputedMinMaxAttention (computed, min/max selection)
 """
 
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from torch import Tensor
-from torch.nn import Module
+
+from wnn.ram.core.base import RAMSequenceModel
 
 
-class AttentionBase(Module, ABC):
+class AttentionBase(RAMSequenceModel):
 	"""
 	Abstract base class for all attention mechanisms.
 

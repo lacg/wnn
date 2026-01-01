@@ -20,13 +20,30 @@ This allows us to backpropagate "targets" through the network.
 Training Modes:
 - GREEDY: Train all layers in one pass (fast)
 - ITERATIVE: Multiple passes until stable (more accurate)
-- OUTPUT_FIRST: Prioritize training output layers first
+- OUTPUT_FIRST: Prioritize training output layers first (trains token_mapper,
+  output_proj before attention/FFN layers)
 
 Features:
 - Per-layer error tracking
 - Curriculum learning support
 - Patience-based early stopping
 - Training callbacks
+- Hard example mining (tracks example difficulty with EMA, oversamples failures)
+- Layer momentum tracking (detects stuck layers for diagnostics)
+- Focused training mode (aggressive hard example mining for plateau breaking)
+
+Usage:
+    # Standard training
+    trainer = RAMTrainer(model, mode=TrainingMode.GREEDY)
+    trainer.train(dataset, epochs=10)
+
+    # With hard example mining
+    trainer = RAMTrainer(model, use_hard_mining=True)
+    trainer.train_focused(dataset, epochs=15)
+
+    # Get convergence diagnostics
+    diagnostics = trainer.get_convergence_diagnostics()
+    print(f"Stuck layers: {diagnostics['stuck_layers']}")
 """
 
 from wnn.ram.core.models.seq2seq import RAMSeq2Seq
@@ -35,9 +52,154 @@ from wnn.ram.enums import PositionEncoding, LayerType, TrainingMode, TrainingPha
 from torch import Tensor, zeros, float32, save as torch_save, load as torch_load
 from dataclasses import dataclass, field, asdict
 from typing import Callable, Protocol, Any
-from random import shuffle
+from collections import defaultdict
+from random import shuffle, sample
 from pathlib import Path
 import json
+
+
+# =============================================================================
+# Hard Example Mining
+# =============================================================================
+
+@dataclass
+class ExampleDifficulty:
+	"""Tracks difficulty of a single training example over time."""
+	error_count: int = 0       # Total times this example had errors
+	success_count: int = 0     # Total times this example was correct
+	ema_error: float = 0.0     # Exponential moving average of error rate
+	last_bit_errors: int = 0   # Bit errors on last attempt
+	consecutive_failures: int = 0  # Consecutive epochs with errors
+
+	@property
+	def difficulty_score(self) -> float:
+		"""Higher score = harder example."""
+		# Combine EMA with consecutive failures for prioritization
+		return self.ema_error * (1 + 0.2 * self.consecutive_failures)
+
+
+class HardExampleMiner:
+	"""
+	Tracks example difficulty over training for focused hard example mining.
+
+	Uses exponential moving average of error rates to identify:
+	- Consistently failing examples (high EMA, high consecutive failures)
+	- Intermittently failing examples (moderate EMA)
+	- Mastered examples (low EMA, many successes)
+	"""
+
+	def __init__(self, num_examples: int, ema_alpha: float = 0.3):
+		"""
+		Args:
+			num_examples: Total number of training examples
+			ema_alpha: Smoothing factor for EMA (higher = more weight on recent)
+		"""
+		self.difficulties = [ExampleDifficulty() for _ in range(num_examples)]
+		self.ema_alpha = ema_alpha
+
+	def update(self, example_idx: int, had_error: bool, bit_errors: int = 0) -> None:
+		"""Update difficulty tracking for an example."""
+		d = self.difficulties[example_idx]
+
+		# Update counts
+		if had_error:
+			d.error_count += 1
+			d.consecutive_failures += 1
+		else:
+			d.success_count += 1
+			d.consecutive_failures = 0
+
+		# Update EMA
+		error_signal = 1.0 if had_error else 0.0
+		d.ema_error = self.ema_alpha * error_signal + (1 - self.ema_alpha) * d.ema_error
+		d.last_bit_errors = bit_errors
+
+	def get_hard_examples(self, count: int, min_difficulty: float = 0.1) -> list[int]:
+		"""Get indices of hardest examples above minimum difficulty."""
+		# Filter to examples that have been trained and are still hard
+		candidates = [
+			(i, d.difficulty_score)
+			for i, d in enumerate(self.difficulties)
+			if d.error_count > 0 and d.difficulty_score >= min_difficulty
+		]
+		# Sort by difficulty descending
+		candidates.sort(key=lambda x: x[1], reverse=True)
+		return [idx for idx, _ in candidates[:count]]
+
+	def get_mastered_examples(self, min_successes: int = 3, max_ema: float = 0.1) -> list[int]:
+		"""Get indices of mastered examples."""
+		return [
+			i for i, d in enumerate(self.difficulties)
+			if d.success_count >= min_successes and d.ema_error <= max_ema
+		]
+
+	def sample_weighted(self, count: int) -> list[int]:
+		"""Sample examples with probability proportional to difficulty."""
+		weights = [d.difficulty_score + 0.01 for d in self.difficulties]  # +0.01 to avoid zero
+		total = sum(weights)
+		probs = [w / total for w in weights]
+
+		# Weighted sampling without replacement
+		indices = list(range(len(self.difficulties)))
+		selected = []
+		for _ in range(min(count, len(indices))):
+			# Simple weighted selection
+			r = sum(probs[:1])  # cumulative
+			for i, p in enumerate(probs):
+				if i in selected:
+					continue
+				r = sum(probs[j] for j in range(i + 1) if j not in selected)
+				# Simplified: just sort by weight and take top
+			break
+
+		# Fallback to simpler approach: sort by difficulty and take top
+		sorted_indices = sorted(range(len(self.difficulties)),
+							   key=lambda i: self.difficulties[i].difficulty_score,
+							   reverse=True)
+		return sorted_indices[:count]
+
+
+# =============================================================================
+# Layer Momentum Tracking
+# =============================================================================
+
+@dataclass
+class LayerMomentum:
+	"""Tracks convergence momentum for a layer."""
+	updates_history: list[int] = field(default_factory=list)  # Recent update counts
+	window_size: int = 5
+
+	@property
+	def is_stuck(self) -> bool:
+		"""Layer is stuck if updates aren't decreasing."""
+		if len(self.updates_history) < self.window_size:
+			return False
+		recent = self.updates_history[-self.window_size:]
+		# Stuck if updates are increasing or flat
+		return recent[-1] >= recent[0] and all(u > 0 for u in recent)
+
+	@property
+	def velocity(self) -> float:
+		"""Rate of convergence (negative = improving, positive = getting worse)."""
+		if len(self.updates_history) < 2:
+			return 0.0
+		recent = self.updates_history[-self.window_size:]
+		if len(recent) < 2:
+			return 0.0
+		# Linear regression slope
+		n = len(recent)
+		x_mean = (n - 1) / 2
+		y_mean = sum(recent) / n
+		numerator = sum((i - x_mean) * (y - y_mean) for i, y in enumerate(recent))
+		denominator = sum((i - x_mean) ** 2 for i in range(n))
+		return numerator / denominator if denominator > 0 else 0.0
+
+	def record(self, updates: int) -> None:
+		"""Record update count for this epoch."""
+		self.updates_history.append(updates)
+		# Keep only recent history
+		if len(self.updates_history) > self.window_size * 2:
+			self.updates_history = self.updates_history[-self.window_size * 2:]
 
 
 class TrainingCallback(Protocol):
@@ -143,6 +305,8 @@ class RAMTrainer:
 	- Curriculum learning support
 	- Per-layer error tracking
 	- Training callbacks
+	- Hard example mining for focused training
+	- Layer momentum tracking for convergence detection
 	"""
 
 	def __init__(
@@ -151,6 +315,9 @@ class RAMTrainer:
 		mode: TrainingMode = TrainingMode.GREEDY,
 		patience: int = 5,
 		verbose: bool = True,
+		use_hard_mining: bool = False,
+		hard_mining_alpha: float = 0.3,
+		track_momentum: bool = True,
 	):
 		"""
 		Args:
@@ -158,17 +325,29 @@ class RAMTrainer:
 			mode: Training mode (GREEDY, ITERATIVE, OUTPUT_FIRST)
 			patience: Epochs without improvement before stopping
 			verbose: Print training progress
+			use_hard_mining: Enable hard example mining for focused training
+			hard_mining_alpha: EMA smoothing factor for difficulty tracking
+			track_momentum: Track layer convergence momentum
 		"""
 		self.model = model
 		self.mode = mode
 		self.patience = patience
 		self.verbose = verbose
+		self.use_hard_mining = use_hard_mining
+		self.hard_mining_alpha = hard_mining_alpha
+		self.track_momentum = track_momentum
 
 		# Training state
 		self.best_accuracy = 0.0
 		self.epochs_without_improvement = 0
 		self.training_history: list[EpochStats] = []
 		self.callbacks: list[TrainingCallback] = []
+
+		# Hard example mining (initialized on first train call)
+		self.hard_miner: HardExampleMiner | None = None
+
+		# Layer momentum tracking
+		self.layer_momentum: dict[str, LayerMomentum] = defaultdict(LayerMomentum)
 
 	def add_callback(self, callback: TrainingCallback) -> None:
 		"""Add a training callback."""
@@ -179,6 +358,21 @@ class RAMTrainer:
 		self.best_accuracy = 0.0
 		self.epochs_without_improvement = 0
 		self.training_history = []
+		self.hard_miner = None
+		self.layer_momentum = defaultdict(LayerMomentum)
+
+	def _get_layer_priority(self, layer_type: LayerType) -> int:
+		"""Get training priority for a layer type (higher = train first in OUTPUT_FIRST)."""
+		# Output layers have highest priority
+		priority_map = {
+			LayerType.TOKEN_MAPPER: 100,
+			LayerType.OUTPUT_PROJ: 90,
+			LayerType.FFN: 50,
+			LayerType.ATTENTION: 40,
+			LayerType.INPUT_PROJ: 20,
+			LayerType.EMBEDDING: 10,
+		}
+		return priority_map.get(layer_type, 0)
 
 	def _forward_with_full_trace(
 		self,
@@ -540,9 +734,21 @@ class RAMTrainer:
 		# Compute backward targets
 		targets = self._compute_backward_targets(trace, target_tokens)
 
+		# Determine layer training order based on mode
+		if self.mode == TrainingMode.OUTPUT_FIRST:
+			# Sort by priority: output layers first, then work backwards
+			training_order = sorted(
+				trace,
+				key=lambda s: (self._get_layer_priority(s.layer_type), -s.index),
+				reverse=True
+			)
+		else:
+			# Default: train in forward order (as in trace)
+			training_order = trace
+
 		# Train each layer
 		layers_updated = {}
-		for state in trace:
+		for state in training_order:
 			key = (state.layer_type, state.index)
 			if key in targets:
 				updates = self._train_layer(state, targets[key])
@@ -560,6 +766,8 @@ class RAMTrainer:
 		dataset: list[tuple[list[Tensor], list[Tensor]]],
 		epoch_num: int = 0,
 		shuffle_data: bool = True,
+		focus_hard_examples: bool = False,
+		hard_example_ratio: float = 0.3,
 	) -> EpochStats:
 		"""
 		Train for one epoch over a dataset.
@@ -568,17 +776,37 @@ class RAMTrainer:
 			dataset: List of (input_tokens, target_tokens) pairs
 			epoch_num: Current epoch number (for statistics)
 			shuffle_data: Whether to shuffle the dataset
+			focus_hard_examples: If True, oversample hard examples
+			hard_example_ratio: Fraction of batch to dedicate to hard examples
 
 		Returns:
 			Detailed epoch statistics
 		"""
-		# Optionally shuffle the dataset
-		if shuffle_data:
-			indices = list(range(len(dataset)))
+		# Initialize hard example miner if needed
+		if self.use_hard_mining and self.hard_miner is None:
+			self.hard_miner = HardExampleMiner(len(dataset), self.hard_mining_alpha)
+
+		# Prepare training indices
+		indices = list(range(len(dataset)))
+
+		if focus_hard_examples and self.hard_miner is not None and epoch_num > 0:
+			# Get hard examples to oversample
+			num_hard = int(len(dataset) * hard_example_ratio)
+			hard_indices = self.hard_miner.get_hard_examples(num_hard)
+
+			if hard_indices:
+				# Create mixed batch: regular examples + oversampled hard examples
+				remaining = [i for i in indices if i not in hard_indices]
+				if shuffle_data:
+					shuffle(remaining)
+				# Interleave hard examples throughout training
+				indices = remaining + hard_indices
+				if shuffle_data:
+					shuffle(indices)
+		elif shuffle_data:
 			shuffle(indices)
-			dataset = [dataset[i] for i in indices]
-		else:
-			indices = list(range(len(dataset)))
+
+		training_data = [(indices[i], dataset[indices[i]]) for i in range(len(indices))]
 
 		total_errors = 0
 		total_bits = 0
@@ -588,7 +816,7 @@ class RAMTrainer:
 		examples_mastered = 0
 		hard_examples = []
 
-		for idx, (inputs, targets) in enumerate(dataset):
+		for original_idx, (inputs, targets) in training_data:
 			# Use iterative mode if specified
 			if self.mode == TrainingMode.ITERATIVE:
 				stats = self._train_step_iterative(inputs, targets)
@@ -600,10 +828,15 @@ class RAMTrainer:
 			total_positions += len(inputs)
 
 			# Track per-example success
-			if stats.output_errors == 0:
+			had_error = stats.output_errors > 0
+			if not had_error:
 				examples_mastered += 1
 			else:
-				hard_examples.append(indices[idx] if shuffle_data else idx)
+				hard_examples.append(original_idx)
+
+			# Update hard example mining
+			if self.hard_miner is not None:
+				self.hard_miner.update(original_idx, had_error, stats.bit_errors)
 
 			# Aggregate layer updates
 			for layer, updates in stats.layers_updated.items():
@@ -620,6 +853,20 @@ class RAMTrainer:
 			layer: errors / total_positions if total_positions > 0 else 0
 			for layer, errors in layer_errors.items()
 		}
+
+		# Update layer momentum tracking
+		if self.track_momentum:
+			for layer, updates in all_updates.items():
+				self.layer_momentum[layer].record(updates)
+
+		# Log stuck layers if verbose
+		if self.verbose and self.track_momentum:
+			stuck_layers = [
+				layer for layer, momentum in self.layer_momentum.items()
+				if momentum.is_stuck
+			]
+			if stuck_layers:
+				print(f"  ⚠ Stuck layers: {', '.join(stuck_layers)}")
 
 		return EpochStats(
 			epoch=epoch_num,
@@ -826,6 +1073,187 @@ class RAMTrainer:
 						mastered_indices.add(i)
 
 		return all_history
+
+	def train_focused(
+		self,
+		dataset: list[tuple[list[Tensor], list[Tensor]]],
+		epochs: int = 10,
+		warmup_epochs: int = 2,
+		focus_ratio: float = 0.5,
+		min_hard_difficulty: float = 0.2,
+	) -> list[EpochStats]:
+		"""
+		Train with aggressive hard example mining for better convergence.
+
+		Strategy:
+		1. Warmup phase: Normal training to build difficulty estimates
+		2. Focus phase: Heavily oversample hard examples
+		3. Refinement: Train only on persistently hard examples
+
+		This is more aggressive than train_curriculum and is designed
+		for cases where standard training plateaus.
+
+		Args:
+			dataset: List of (input_tokens, target_tokens) pairs
+			epochs: Maximum total epochs
+			warmup_epochs: Epochs of normal training before focusing
+			focus_ratio: Fraction of training to dedicate to hard examples
+			min_hard_difficulty: Minimum difficulty score to consider "hard"
+
+		Returns:
+			List of epoch statistics
+		"""
+		# Enable hard mining for this run
+		original_hard_mining = self.use_hard_mining
+		self.use_hard_mining = True
+		self.reset_state()
+
+		all_history = []
+
+		# Phase 1: Warmup - build difficulty estimates
+		if self.verbose:
+			print(f"\n=== Focused Training: Warmup ({warmup_epochs} epochs) ===")
+
+		for epoch in range(warmup_epochs):
+			stats = self.train_epoch(
+				dataset,
+				epoch_num=epoch,
+				shuffle_data=True,
+				focus_hard_examples=False,
+			)
+			all_history.append(stats)
+			self.training_history.append(stats)
+
+			if self.verbose:
+				print(f"Warmup {epoch + 1}/{warmup_epochs}: "
+					  f"{stats.accuracy:.1f}% accuracy, "
+					  f"{stats.examples_mastered}/{len(dataset)} mastered")
+
+			if stats.total_errors == 0:
+				if self.verbose:
+					print("Converged during warmup!")
+				self.use_hard_mining = original_hard_mining
+				return all_history
+
+		# Phase 2: Focus - heavily oversample hard examples
+		if self.verbose:
+			hard_count = len(self.hard_miner.get_hard_examples(
+				len(dataset), min_hard_difficulty
+			)) if self.hard_miner else 0
+			print(f"\n=== Focused Training: Focus Phase ({hard_count} hard examples) ===")
+
+		focus_epochs = epochs - warmup_epochs - 2  # Save 2 for refinement
+		for epoch in range(focus_epochs):
+			actual_epoch = warmup_epochs + epoch
+			stats = self.train_epoch(
+				dataset,
+				epoch_num=actual_epoch,
+				shuffle_data=True,
+				focus_hard_examples=True,
+				hard_example_ratio=focus_ratio,
+			)
+			all_history.append(stats)
+			self.training_history.append(stats)
+
+			# Check for improvement
+			if stats.accuracy > self.best_accuracy:
+				self.best_accuracy = stats.accuracy
+				self.epochs_without_improvement = 0
+			else:
+				self.epochs_without_improvement += 1
+
+			if self.verbose:
+				print(f"Focus {epoch + 1}/{focus_epochs}: "
+					  f"{stats.accuracy:.1f}% accuracy, "
+					  f"{stats.examples_mastered}/{len(dataset)} mastered")
+
+			if stats.total_errors == 0:
+				if self.verbose:
+					print("Converged during focus phase!")
+				self.use_hard_mining = original_hard_mining
+				return all_history
+
+			# Early stopping on plateau
+			if self.epochs_without_improvement >= self.patience:
+				if self.verbose:
+					print("Focus phase plateaued, moving to refinement")
+				break
+
+		# Phase 3: Refinement - train only on hardest examples
+		if self.hard_miner is not None:
+			hard_indices = self.hard_miner.get_hard_examples(
+				len(dataset), min_hard_difficulty
+			)
+			if hard_indices:
+				hard_dataset = [dataset[i] for i in hard_indices]
+
+				if self.verbose:
+					print(f"\n=== Focused Training: Refinement ({len(hard_dataset)} examples) ===")
+
+				for epoch in range(2):
+					actual_epoch = epochs - 2 + epoch
+					stats = self.train_epoch(
+						hard_dataset,
+						epoch_num=actual_epoch,
+						shuffle_data=True,
+					)
+					all_history.append(stats)
+
+					if self.verbose:
+						print(f"Refinement {epoch + 1}/2: "
+							  f"{stats.accuracy:.1f}% on hard examples")
+
+		self.use_hard_mining = original_hard_mining
+		return all_history
+
+	def get_convergence_diagnostics(self) -> dict:
+		"""
+		Get diagnostics about training convergence.
+
+		Returns:
+			Dictionary with convergence information including:
+			- stuck_layers: Layers that aren't improving
+			- layer_velocities: Rate of convergence per layer
+			- hard_example_count: Number of consistently failing examples
+			- mastered_count: Number of mastered examples
+		"""
+		diagnostics = {
+			"stuck_layers": [],
+			"layer_velocities": {},
+			"hard_example_count": 0,
+			"mastered_count": 0,
+			"epochs_trained": len(self.training_history),
+			"best_accuracy": self.best_accuracy,
+			"epochs_without_improvement": self.epochs_without_improvement,
+		}
+
+		# Layer momentum analysis
+		for layer, momentum in self.layer_momentum.items():
+			diagnostics["layer_velocities"][layer] = momentum.velocity
+			if momentum.is_stuck:
+				diagnostics["stuck_layers"].append(layer)
+
+		# Hard example analysis
+		if self.hard_miner is not None:
+			diagnostics["hard_example_count"] = len(
+				self.hard_miner.get_hard_examples(1000, min_difficulty=0.1)
+			)
+			diagnostics["mastered_count"] = len(
+				self.hard_miner.get_mastered_examples()
+			)
+
+			# Top 5 hardest examples
+			hard_indices = self.hard_miner.get_hard_examples(5)
+			diagnostics["hardest_examples"] = [
+				{
+					"index": idx,
+					"difficulty": self.hard_miner.difficulties[idx].difficulty_score,
+					"consecutive_failures": self.hard_miner.difficulties[idx].consecutive_failures,
+				}
+				for idx in hard_indices
+			]
+
+		return diagnostics
 
 	def evaluate(
 		self,

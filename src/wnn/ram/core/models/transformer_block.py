@@ -6,8 +6,8 @@ Uses factory pattern for component creation.
 """
 
 from torch import Tensor, zeros, uint8
-from torch.nn import Module
 
+from wnn.ram.core.base import RAMSequenceModel
 from wnn.ram.enums import (
     AttentionType,
     FFNType,
@@ -20,7 +20,7 @@ from wnn.ram.factories.attention import AttentionFactory
 from wnn.ram.core.models.computed_arithmetic import bits_to_int
 
 
-class RAMTransformerBlock(Module):
+class RAMTransformerBlock(RAMSequenceModel):
     """
     A single RAM transformer block.
 
@@ -69,11 +69,21 @@ class RAMTransformerBlock(Module):
         """
         super().__init__()
 
+        # Store config for serialization
         self.input_bits = input_bits
         self.attention_type = attention_type
+        self.num_heads = num_heads
+        self.content_match = content_match
+        self.attention_combine = attention_combine
+        self.position_mode = position_mode
+        self.causal = causal
         self.ffn_type = ffn_type
+        self.ffn_hidden_bits = ffn_hidden_bits
+        self.ffn_constant = ffn_constant
+        self.ffn_modulo = ffn_modulo
         self.use_residual = use_residual
         self.max_seq_len = max_seq_len
+        self.rng = rng
 
         # Build attention using factory
         self.attention = AttentionFactory.create(
@@ -214,3 +224,36 @@ class RAMTransformerBlock(Module):
                 corrections += self.ffn.train_mapping(inp, tgt)
 
         return corrections
+
+    # -------------------------
+    # Serialization
+    # -------------------------
+
+    def get_config(self) -> dict:
+        """Get configuration for serialization."""
+        return {
+            'input_bits': self.input_bits,
+            'attention_type': self.attention_type.value if hasattr(self.attention_type, 'value') else self.attention_type,
+            'num_heads': self.num_heads,
+            'content_match': self.content_match.value if hasattr(self.content_match, 'value') else self.content_match,
+            'attention_combine': self.attention_combine.value if hasattr(self.attention_combine, 'value') else self.attention_combine,
+            'position_mode': self.position_mode.value if hasattr(self.position_mode, 'value') else self.position_mode,
+            'causal': self.causal,
+            'ffn_type': self.ffn_type.value if hasattr(self.ffn_type, 'value') else self.ffn_type,
+            'ffn_hidden_bits': self.ffn_hidden_bits,
+            'ffn_constant': self.ffn_constant,
+            'ffn_modulo': self.ffn_modulo,
+            'use_residual': self.use_residual,
+            'max_seq_len': self.max_seq_len,
+            'rng': self.rng,
+        }
+
+    @classmethod
+    def from_config(cls, config: dict) -> "RAMTransformerBlock":
+        """Create model from configuration."""
+        return cls(**config)
+
+    def save(self, path: str) -> None:
+        """Save model to file."""
+        from wnn.ram.core.serialization import save_model
+        save_model(self, path)

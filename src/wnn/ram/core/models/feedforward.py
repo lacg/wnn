@@ -29,13 +29,13 @@ Architecture:
 """
 
 from wnn.ram.core import RAMLayer, GeneralizingProjection
+from wnn.ram.core.base import RAMComponent
 from wnn.ram.enums import MapperStrategy, FFNMode
 
 from torch import Tensor, zeros, uint8
-from torch.nn import Module
 
 
-class RAMFeedForward(Module):
+class RAMFeedForward(RAMComponent):
 	"""
 	RAM-based feed-forward network.
 

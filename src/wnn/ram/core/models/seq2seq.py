@@ -42,6 +42,7 @@ Architecture (with FFN):
 """
 
 from wnn.ram.core import RAMLayer, GeneralizingProjection
+from wnn.ram.core.base import RAMSequenceModel
 from wnn.ram.enums import MapperStrategy
 from wnn.ram.core.models.attention import RAMAttention
 from wnn.ram.core.models.feedforward import RAMFeedForward, FFNMode
@@ -49,10 +50,10 @@ from wnn.ram.core.models.embedding import RAMEmbedding, PositionEncoding
 from wnn.ram.encoders_decoders import PositionMode
 
 from torch import Tensor, zeros, uint8, cat
-from torch.nn import Module, ModuleList
+from torch.nn import ModuleList
 
 
-class RAMSeq2Seq(Module):
+class RAMSeq2Seq(RAMSequenceModel):
 	"""
 	Decoder-only RAM transformer (like GPT).
 

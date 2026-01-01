@@ -5,8 +5,9 @@ Full RAM Transformer with multiple stacked blocks.
 """
 
 from torch import Tensor
-from torch.nn import Module, ModuleList
+from torch.nn import ModuleList
 
+from wnn.ram.core.base import RAMSequenceModel
 from wnn.ram.enums import (
     AttentionType,
     FFNType,
@@ -17,7 +18,7 @@ from wnn.ram.encoders_decoders import PositionMode
 from wnn.ram.core.models.transformer_block import RAMTransformerBlock
 
 
-class RAMTransformer(Module):
+class RAMTransformer(RAMSequenceModel):
     """
     Full RAM Transformer with multiple stacked blocks.
 

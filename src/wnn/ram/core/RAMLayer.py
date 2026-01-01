@@ -1,4 +1,5 @@
 from wnn.ram.core.Memory import Memory
+from wnn.ram.core.base import RAMComponent
 from wnn.ram.enums import MemoryVal
 
 from typing import Optional
@@ -8,11 +9,9 @@ from torch import device
 from torch import int64
 from torch import randint
 from torch import Tensor
-from torch.nn import Module
 
 
-
-class RAMLayer(Module):
+class RAMLayer(RAMComponent):
 	"""
 	Layer of RAM neurons backed by a shared Memory object.
 	"""
