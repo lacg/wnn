@@ -38,6 +38,21 @@ from wnn.ram.core.trainer import (
 )
 from wnn.ram.enums import LayerType, TrainingMode, TrainingPhase
 
+# Serialization (use model.save() / Model.load() instead)
+from wnn.ram.core.serialization import SERIALIZATION_VERSION
+
+# Batch processing utilities
+from wnn.ram.core.batch import (
+    BatchProcessor,
+    BatchResult,
+    pad_sequences,
+    collate_sequences,
+    uncollate_batch,
+)
+
+# Generation result types (use model.decode() / model.search() instead)
+from wnn.ram.core.generation import GenerationResult, BeamCandidate
+
 # Transformer components (submodule)
 from wnn.ram.core import transformers
 
@@ -107,6 +122,17 @@ __all__ = [
     'LayerType',
     'TrainingMode',
     'TrainingPhase',
+    # Serialization (use model.save() / Model.load())
+    'SERIALIZATION_VERSION',
+    # Batch processing utilities
+    'BatchProcessor',
+    'BatchResult',
+    'pad_sequences',
+    'collate_sequences',
+    'uncollate_batch',
+    # Generation types (use model.decode() / model.search())
+    'GenerationResult',
+    'BeamCandidate',
     # Submodules
     'transformers',
     # Transformer components (re-exported)

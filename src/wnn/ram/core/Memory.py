@@ -715,3 +715,30 @@ class Memory(Module):
 		best = where(best == -1, input_bits.to(int8), best)
 		return best.to(tbool)
 
+	# Serialization support
+	def get_config(self) -> dict:
+		"""Get configuration dict for model recreation."""
+		return {
+			'total_input_bits': self.total_input_bits,
+			'num_neurons': self.num_neurons,
+			'n_bits_per_neuron': self.n_bits_per_neuron,
+			'use_hashing': self.use_hashing,
+			'hash_size': self.memory_size if self.use_hashing else 1024,
+		}
+
+	@classmethod
+	def from_config(cls, config: dict) -> "Memory":
+		"""Create a Memory from a configuration dict."""
+		return cls(**config)
+
+	def save(self, path: str) -> None:
+		"""Save model to file."""
+		from wnn.ram.core.serialization import save_model
+		save_model(self, path)
+
+	@classmethod
+	def load(cls, path: str, device: str = 'cpu') -> "Memory":
+		"""Load model from file."""
+		from wnn.ram.core.serialization import load_model
+		return load_model(path, model_class=cls, device=device)
+

@@ -157,3 +157,30 @@ class RAMLayer(Module):
 			- None if no admissible solution exists
 		"""
 		return self.memory.solve_constraints(input_bits, target_bits, allow_override, n_immutable_bits)
+
+	# Serialization support
+	def get_config(self) -> dict:
+		"""Get configuration dict for model recreation."""
+		return {
+			'total_input_bits': self.memory.total_input_bits,
+			'num_neurons': self.memory.num_neurons,
+			'n_bits_per_neuron': self.memory.n_bits_per_neuron,
+			'use_hashing': self.memory.use_hashing,
+			'hash_size': self.memory.memory_size if self.memory.use_hashing else 1024,
+		}
+
+	@classmethod
+	def from_config(cls, config: dict) -> "RAMLayer":
+		"""Create a RAMLayer from a configuration dict."""
+		return cls(**config)
+
+	def save(self, path: str) -> None:
+		"""Save model to file."""
+		from wnn.ram.core.serialization import save_model
+		save_model(self, path)
+
+	@classmethod
+	def load(cls, path: str, device: str = 'cpu') -> "RAMLayer":
+		"""Load model from file."""
+		from wnn.ram.core.serialization import load_model
+		return load_model(path, model_class=cls, device=device)

@@ -32,6 +32,13 @@ from wnn.ram.core.transformers.xor_attention import (
     XORContentAddressableMemory,
 )
 
+# Attention masking
+from wnn.ram.core.transformers.attention_mask import (
+    AttentionMask,
+    MaskStrategy,
+    can_attend,
+)
+
 # FFN
 from wnn.ram.core.transformers.two_layer_ffn import TwoLayerFFN
 from wnn.ram.core.transformers.feedforward import RAMFeedForward, FFNMode
@@ -75,8 +82,13 @@ __all__ = [
     'ComputedSumAttention',
     'ComputedMeanAttention',
     'ComputedShiftAttention',
+    # XOR attention
     'XORCrossAttention',
     'XORContentAddressableMemory',
+    # Attention masking
+    'AttentionMask',
+    'MaskStrategy',
+    'can_attend',
     # FFN
     'TwoLayerFFN',
     'RAMFeedForward',

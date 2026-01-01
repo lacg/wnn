@@ -413,6 +413,74 @@ class RAMSeq2Seq(Module):
 
 		return sequence
 
+	def decode(
+		self,
+		start_token: Tensor,
+		max_len: int,
+		eos_value: int | None = None,
+	) -> "GenerationResult":
+		"""
+		Greedy decoding from a start token.
+
+		Args:
+			start_token: Initial token to start generation
+			max_len: Maximum number of tokens to generate
+			eos_value: End-of-sequence value (stops generation)
+
+		Returns:
+			GenerationResult with generated tokens and score
+		"""
+		from wnn.ram.core.generation import greedy_decode
+
+		# Wrap forward to ignore encoder_output (decoder-only model)
+		def decoder_fn(tokens, encoder_output=None):
+			return self.forward(tokens)
+
+		return greedy_decode(
+			model=decoder_fn,
+			encoder_output=None,
+			start_token=start_token,
+			max_len=max_len,
+			eos_value=eos_value,
+		)
+
+	def search(
+		self,
+		start_token: Tensor,
+		beam_width: int,
+		max_len: int,
+		eos_value: int | None = None,
+		length_penalty: float = 0.0,
+	) -> "GenerationResult":
+		"""
+		Beam search decoding from a start token.
+
+		Args:
+			start_token: Initial token to start generation
+			beam_width: Number of beams to maintain
+			max_len: Maximum number of tokens to generate
+			eos_value: End-of-sequence value
+			length_penalty: Penalize shorter sequences
+
+		Returns:
+			GenerationResult with best sequence and all candidates
+		"""
+		from wnn.ram.core.generation import beam_search
+
+		# Wrap forward to ignore encoder_output (decoder-only model)
+		def decoder_fn(tokens, encoder_output=None):
+			return self.forward(tokens)
+
+		return beam_search(
+			model=decoder_fn,
+			encoder_output=None,
+			start_token=start_token,
+			beam_width=beam_width,
+			max_len=max_len,
+			eos_value=eos_value,
+			length_penalty=length_penalty,
+		)
+
 	def train_step(
 		self,
 		input_tokens: list[Tensor],
