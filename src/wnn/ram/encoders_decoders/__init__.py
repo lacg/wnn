@@ -16,8 +16,7 @@
 # Requirements: torch
 # --------------------------------------------------------------------
 
-from .DecoderEnums import OutputMode
-from .DecoderEnums import PositionMode
+from wnn.ram.enums import OutputMode, PositionMode
 from .TransformerBitWiseDecoder import TransformerBitWiseDecoder
 from .TransformerDecoder import TransformerDecoder
 from .TransformerDecoderFactory import TransformerDecoderFactory

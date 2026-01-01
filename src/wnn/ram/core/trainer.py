@@ -47,7 +47,7 @@ Usage:
 """
 
 from wnn.ram.core.models.seq2seq import RAMSeq2Seq
-from wnn.ram.enums import PositionEncoding, LayerType, TrainingMode, TrainingPhase
+from wnn.ram.enums import PositionEncoding, LayerType, TrainingMode, TrainingPhase, MixingStrategy
 
 from torch import Tensor, zeros, float32, save as torch_save, load as torch_load
 from dataclasses import dataclass, field, asdict
@@ -55,7 +55,6 @@ from typing import Callable, Protocol, Any
 from collections import defaultdict
 from random import shuffle, sample
 from pathlib import Path
-from enum import IntEnum
 import json
 
 
@@ -1716,14 +1715,6 @@ class Task:
 	dataset: list[tuple[list[Tensor], list[Tensor]]]
 	weight: float = 1.0
 	shared_primitives: list[str] = field(default_factory=list)
-
-
-class MixingStrategy(IntEnum):
-	"""How to mix examples from multiple tasks."""
-	ROUND_ROBIN = 0      # Alternate between tasks
-	PROPORTIONAL = 1     # Sample proportional to dataset size
-	WEIGHTED = 2         # Sample proportional to task weight
-	INTERLEAVED = 3      # Mix all examples, shuffle
 
 
 class MultiTaskTrainer:

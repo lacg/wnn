@@ -39,3 +39,14 @@ class AggregationStrategy(IntEnum):
     TOP_1 = 0       # Winner-take-all (best for retrieval)
     MAJORITY = 1    # Per-bit weighted voting (best for combining)
     TOP_K = 2       # XOR top K highest-voted values
+
+
+class PositionPattern(IntEnum):
+    """Pre-defined position attention patterns."""
+    COPY = 0        # Position i attends to position i
+    SHIFT_LEFT = 1  # Position i attends to position i-1
+    SHIFT_RIGHT = 2 # Position i attends to position i+1
+    REVERSE = 3     # Position i attends to position n-1-i
+    FIRST = 4       # All positions attend to position 0
+    LAST = 5        # All positions attend to position n-1
+    BROADCAST = 6   # All positions attend to all positions

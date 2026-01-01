@@ -23,7 +23,8 @@ from wnn.ram.core.models.learned_sorting import (
 from wnn.ram.core.models.minmax_attention import ComputedMinMaxAttention, MinMaxAttention
 from wnn.ram.core.models.attention import RAMAttention, RAMCrossAttention, CrossAttentionMode
 from wnn.ram.core.models.attention_base import AttentionBase, LearnableAttention, ComputedAttention
-from wnn.ram.core.models.position_attention import PositionOnlyAttention, PositionPattern
+from wnn.ram.core.models.position_attention import PositionOnlyAttention
+from wnn.ram.enums import PositionPattern
 from wnn.ram.core.models.computed_attention import (
     ComputedMedianAttention,
     ComputedArgMaxAttention,

@@ -18,22 +18,11 @@ Pattern Categories:
   Example: REVERSE(i→n-1-i) - for n=8, position 0 attends to 7; for n=4, to 3.
 """
 
-from enum import IntEnum
 from torch import Tensor, zeros, uint8, tensor, cat
 from torch.nn import Module, ModuleList
 
 from wnn.ram.core import RAMLayer
-
-
-class PositionPattern(IntEnum):
-    """Pre-defined position attention patterns."""
-    COPY = 0       # Position i attends to position i
-    SHIFT_LEFT = 1   # Position i attends to position i-1
-    SHIFT_RIGHT = 2  # Position i attends to position i+1
-    REVERSE = 3    # Position i attends to position n-1-i
-    FIRST = 4      # All positions attend to position 0
-    LAST = 5       # All positions attend to position n-1
-    BROADCAST = 6  # All positions attend to all positions
+from wnn.ram.enums import PositionPattern
 
 
 class PositionOnlyAttention(Module):

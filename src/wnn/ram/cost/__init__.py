@@ -20,5 +20,5 @@ from .CostCalculator import CostCalculator
 from .CostCalculatorArgMin import CostCalculatorArgMin
 from .CostCalculatorFactory import CostCalculatorFactory
 from .CostCalculatorStochastic import CostCalculatorStochastic
-from .CostCalculatorType import CostCalculatorType
+from wnn.ram.enums import CostCalculatorType
 from .CostCalculatorVote import CostCalculatorVote

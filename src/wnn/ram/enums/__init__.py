@@ -24,7 +24,7 @@ from wnn.ram.enums.generalization import (
 from wnn.ram.enums.embedding import PositionEncoding
 
 # Trainer
-from wnn.ram.enums.trainer import LayerType, TrainingMode, TrainingPhase
+from wnn.ram.enums.trainer import LayerType, TrainingMode, TrainingPhase, MixingStrategy
 
 # Attention
 from wnn.ram.enums.attention import (
@@ -33,6 +33,7 @@ from wnn.ram.enums.attention import (
     ContentMatchMode,
     AttentionCombineMode,
     AggregationStrategy,
+    PositionPattern,
 )
 
 # FFN
@@ -76,12 +77,14 @@ __all__ = [
     'LayerType',
     'TrainingMode',
     'TrainingPhase',
+    'MixingStrategy',
     # Attention
     'CrossAttentionMode',
     'AttentionType',
     'ContentMatchMode',
     'AttentionCombineMode',
     'AggregationStrategy',
+    'PositionPattern',
     # FFN
     'FFNMode',
     'FFNType',

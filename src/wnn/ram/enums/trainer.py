@@ -43,3 +43,11 @@ class TrainingPhase(IntEnum):
 	WARMUP = 0
 	MAIN = 1
 	REFINEMENT = 2
+
+
+class MixingStrategy(IntEnum):
+	"""How to mix examples from multiple tasks."""
+	ROUND_ROBIN = 0   # Alternate between tasks
+	PROPORTIONAL = 1  # Sample proportional to dataset size
+	WEIGHTED = 2      # Sample proportional to task weight
+	INTERLEAVED = 3   # Mix all examples, shuffle
