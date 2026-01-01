@@ -18,6 +18,7 @@ Aggregation Strategies:
 from wnn.ram.core.RAMLayer import RAMLayer
 from wnn.ram.core.RAMGeneralization import GeneralizingProjection
 from wnn.ram.core.transformers.attention_base import LearnableAttention
+from wnn.ram.core.transformers.attention_mask import AttentionMask, MaskStrategy
 from wnn.ram.enums import (
     ContentMatchMode,
     AttentionCombineMode,
@@ -162,6 +163,10 @@ class SoftRAMAttention(LearnableAttention):
         position_mode: PositionMode = PositionMode.RELATIVE,
         max_seq_len: int = 16,
         causal: bool = True,
+        mask_strategy: MaskStrategy | None = None,  # Override causal
+        window_size: int = 3,  # For SLIDING_WINDOW
+        block_size: int = 4,  # For BLOCK
+        prefix_len: int = 2,  # For PREFIX
         top_k: int = 2,
         use_ensemble: bool = False,
         ensemble_sub_rams: int = 4,
@@ -178,13 +183,26 @@ class SoftRAMAttention(LearnableAttention):
         self.value_strategy = value_strategy
         self.top_k = top_k
         self.max_seq_len = max_seq_len
-        self.causal = causal
         self.position_mode = position_mode
         self.use_ensemble = use_ensemble
         self.ensemble_sub_rams = ensemble_sub_rams
         self.position_only = position_only
         self.content_match = content_match
         self.attention_combine = attention_combine
+
+        # Mask configuration
+        self.window_size = window_size
+        self.block_size = block_size
+        self.prefix_len = prefix_len
+
+        # Determine mask strategy
+        if mask_strategy is not None:
+            self.mask_strategy = mask_strategy
+        else:
+            self.mask_strategy = MaskStrategy.CAUSAL if causal else MaskStrategy.BIDIRECTIONAL
+
+        # Keep causal for backwards compatibility
+        self.causal = self.mask_strategy == MaskStrategy.CAUSAL
 
         # Position encoding setup
         if position_mode == PositionMode.NONE:
@@ -267,8 +285,27 @@ class SoftRAMAttention(LearnableAttention):
         pos_only_str = ", pos_only" if position_only else ""
         content_str = f", content={content_match.name}" if content_match != ContentMatchMode.NONE else ""
         combine_str = f", combine={attention_combine.name}" if attention_combine != AttentionCombineMode.CONTENT_ONLY else ""
+        mask_name = self.mask_strategy.name
         print(f"[SoftRAMAttention] heads={num_heads}, input={input_bits}b, "
-              f"aggregation={aggregation.name}, value={value_strategy.name}{ensemble_str}{pos_only_str}{content_str}{combine_str}, causal={causal}")
+              f"aggregation={aggregation.name}, value={value_strategy.name}{ensemble_str}{pos_only_str}{content_str}{combine_str}, mask={mask_name}")
+
+    def _get_mask(self, seq_len: int) -> Tensor:
+        """Get attention mask for the given sequence length."""
+        return AttentionMask.from_strategy(
+            strategy=self.mask_strategy,
+            seq_len=seq_len,
+            window_size=self.window_size,
+            block_size=self.block_size,
+            prefix_len=self.prefix_len,
+        )
+
+    def _can_attend(self, mask: Tensor, query_pos: int, key_pos: int) -> bool:
+        """Check if query position can attend to key position."""
+        return bool(mask[query_pos, key_pos].item())
+
+    def get_mask(self, seq_len: int) -> Tensor:
+        """Public method to get attention mask."""
+        return self._get_mask(seq_len)
 
     def _encode_weight(self, vote_count: int) -> Tensor:
         bits = zeros(self.weight_bits, dtype=uint8)
@@ -358,12 +395,16 @@ class SoftRAMAttention(LearnableAttention):
             case _:
                 return position_votes
 
-    def _compute_votes(self, query: Tensor, keys: list[Tensor], query_pos: int) -> list[int]:
+    def _compute_votes(self, query: Tensor, keys: list[Tensor], query_pos: int, mask: Tensor | None = None) -> list[int]:
         """Compute vote counts for each key position."""
+        # Get mask if not provided
+        if mask is None:
+            mask = self._get_mask(len(keys))
+
         votes = []
         for j, key in enumerate(keys):
-            # Causal mask
-            if self.causal and j > query_pos:
+            # Check mask instead of inline causal check
+            if not self._can_attend(mask, query_pos, j):
                 votes.append(0)
                 continue
 
@@ -455,6 +496,9 @@ class SoftRAMAttention(LearnableAttention):
         tokens = [t.squeeze() if t.ndim > 1 else t for t in tokens]
         seq_len = len(tokens)
 
+        # Pre-compute mask once
+        mask = self._get_mask(seq_len)
+
         # Project values
         values = []
         for tok in tokens:
@@ -467,7 +511,7 @@ class SoftRAMAttention(LearnableAttention):
         outputs = []
         for i in range(seq_len):
             query = tokens[i]
-            votes = self._compute_votes(query, tokens, i)
+            votes = self._compute_votes(query, tokens, i, mask=mask)
             output = self._aggregate(values, votes)
             outputs.append(output)
         return outputs
@@ -486,20 +530,25 @@ class SoftRAMAttention(LearnableAttention):
         tokens = [t.squeeze() if t.ndim > 1 else t for t in tokens]
         n = len(tokens)
 
+        # Pre-compute mask once
+        mask = self._get_mask(n)
+
         weights = zeros(n, n, dtype=float32)
         for i in range(n):
             query = tokens[i]
-            votes = self._compute_votes(query, tokens, i)
+            votes = self._compute_votes(query, tokens, i, mask=mask)
             for j, v in enumerate(votes):
                 weights[i, j] = v / self.num_heads
 
         return weights
 
-    def _get_weights_for_position(self, tokens: list[Tensor], query_pos: int) -> list[float]:
+    def _get_weights_for_position(self, tokens: list[Tensor], query_pos: int, mask: Tensor | None = None) -> list[float]:
         """Get attention weights for a single query position (internal helper)."""
         tokens = [t.squeeze() if t.ndim > 1 else t for t in tokens]
+        if mask is None:
+            mask = self._get_mask(len(tokens))
         query = tokens[query_pos]
-        votes = self._compute_votes(query, tokens, query_pos)
+        votes = self._compute_votes(query, tokens, query_pos, mask=mask)
         return [v / self.num_heads for v in votes]
 
     def train_step(
@@ -534,9 +583,14 @@ class SoftRAMAttention(LearnableAttention):
     def train_attention_weights(self, tokens: list[Tensor], query_pos: int, target_weights: list[float]) -> int:
         tokens = [t.squeeze() if t.ndim > 1 else t for t in tokens]
         query = tokens[query_pos]
+
+        # Pre-compute mask
+        mask = self._get_mask(len(tokens))
+
         corrections = 0
         for j, (key, target_w) in enumerate(zip(tokens, target_weights)):
-            if self.causal and j > query_pos:
+            # Use mask instead of inline causal check
+            if not self._can_attend(mask, query_pos, j):
                 continue
             target_votes = int(target_w * self.num_heads + 0.5)
             target_votes = max(0, min(self.num_heads, target_votes))
@@ -582,14 +636,23 @@ class SoftRAMAttentionV2(Module):
         position_mode: PositionMode = PositionMode.RELATIVE,
         max_seq_len: int = 16,
         causal: bool = True,
+        mask_strategy: MaskStrategy | None = None,
         rng: int | None = None,
     ):
         super().__init__()
         self.input_bits = input_bits
         self.num_heads = num_heads
         self.max_seq_len = max_seq_len
-        self.causal = causal
         self.position_mode = position_mode
+
+        # Mask configuration
+        if mask_strategy is not None:
+            self.mask_strategy = mask_strategy
+        else:
+            self.mask_strategy = MaskStrategy.CAUSAL if causal else MaskStrategy.BIDIRECTIONAL
+
+        # Keep causal for backwards compatibility
+        self.causal = self.mask_strategy == MaskStrategy.CAUSAL
 
         if position_mode == PositionMode.RELATIVE:
             self.position_encoder = PositionEncoderFactory.create(
@@ -612,12 +675,24 @@ class SoftRAMAttentionV2(Module):
             for i in range(num_heads)
         ])
         self.threshold = num_heads // 2
+        mask_name = self.mask_strategy.name
         print(f"[SoftRAMAttentionV2] heads={num_heads}, input={input_bits}b, "
-              f"threshold={self.threshold}, causal={causal}")
+              f"threshold={self.threshold}, mask={mask_name}")
+
+    def _get_mask(self, seq_len: int) -> Tensor:
+        """Get attention mask for the given sequence length."""
+        return AttentionMask.from_strategy(
+            strategy=self.mask_strategy,
+            seq_len=seq_len,
+        )
 
     def forward(self, tokens: list[Tensor]) -> list[Tensor]:
         tokens = [t.squeeze() if t.ndim > 1 else t for t in tokens]
         seq_len = len(tokens)
+
+        # Pre-compute mask
+        mask = self._get_mask(seq_len)
+
         outputs = []
         for i in range(seq_len):
             query = tokens[i]
@@ -625,7 +700,8 @@ class SoftRAMAttentionV2(Module):
             for head in self.value_heads:
                 head_result = zeros(self.input_bits, dtype=uint8)
                 for j in range(seq_len):
-                    if self.causal and j > i:
+                    # Use mask instead of inline causal check
+                    if not mask[i, j]:
                         continue
                     key = tokens[j]
                     parts = [query, key]

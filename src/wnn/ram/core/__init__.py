@@ -35,6 +35,7 @@ from wnn.ram.core.trainer import (
     LayerState,
     EpochStats,
     TrainingCallback,
+    Checkpoint,
 )
 from wnn.ram.enums import LayerType, TrainingMode, TrainingPhase
 
@@ -119,6 +120,7 @@ __all__ = [
     'LayerState',
     'EpochStats',
     'TrainingCallback',
+    'Checkpoint',
     'LayerType',
     'TrainingMode',
     'TrainingPhase',

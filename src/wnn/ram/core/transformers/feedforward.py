@@ -168,6 +168,7 @@ class RAMFeedForward(Module):
 		self,
 		input_bits: Tensor,
 		target_bits: Tensor,
+		use_backward_solve: bool = True,
 	) -> dict:
 		"""
 		Train the FFN on a single input/target pair.
@@ -175,11 +176,13 @@ class RAMFeedForward(Module):
 		Uses EDRA-style training:
 		1. Forward pass to get current output
 		2. If wrong, backpropagate error
-		3. Train layers to produce correct intermediate states
+		3. Solve for hidden states that produce correct output
+		4. Train up_proj to produce the desired hidden state
 
 		Args:
 			input_bits: Input tensor [input_bits]
 			target_bits: Target output [output_bits]
+			use_backward_solve: If True, use constraint solving to find hidden states
 
 		Returns:
 			Training statistics
@@ -207,7 +210,7 @@ class RAMFeedForward(Module):
 
 		# Check if correct
 		if (output_with_residual == target_bits).all():
-			return {"errors": 0, "up_trained": 0, "down_trained": 0}
+			return {"errors": 0, "up_trained": 0, "down_trained": 0, "solved": False}
 
 		# Compute desired output (before residual)
 		if self.use_residual and self.input_bits == self.output_bits:
@@ -215,25 +218,56 @@ class RAMFeedForward(Module):
 		else:
 			desired_output = target_bits
 
-		# Train down projection
 		down_trained = 0
-		if isinstance(self.down_proj, GeneralizingProjection):
-			down_trained = self.down_proj.train_mapping(hidden, desired_output)
-		else:
-			current = self.down_proj(hidden.unsqueeze(0)).squeeze()
-			if not (current == desired_output).all():
-				self.down_proj.commit(hidden.unsqueeze(0), desired_output.unsqueeze(0))
-				down_trained = 1
+		up_trained = 0
+		solved = False
 
-		# For the up projection, we need to solve for what hidden state
-		# would produce the correct output. This is complex for general
-		# mappings, so for now we just ensure the current path is trained.
-		# Full EDRA would solve constraints backwards.
+		# Backward constraint solving: find hidden states that produce desired output
+		if use_backward_solve and not isinstance(self.down_proj, GeneralizingProjection):
+			# Use RAMLayer.solve() to find modified hidden bits that produce desired output
+			# solve(input_bits, target_bits) returns modified input that achieves target
+			modified_hidden = self.down_proj.solve(
+				input_bits=hidden.unsqueeze(0),
+				target_bits=desired_output.unsqueeze(0),
+				n_immutable_bits=0,  # All hidden bits can be modified
+			)
+
+			if modified_hidden is not None:
+				# We found valid hidden state that would produce correct output
+				desired_hidden = modified_hidden.squeeze()
+
+				# Train up_proj to produce this modified hidden state
+				current_hidden = self.up_proj(input_bits.unsqueeze(0)).squeeze()
+				if not (current_hidden == desired_hidden).all():
+					self.up_proj.commit(input_bits.unsqueeze(0), desired_hidden.unsqueeze(0))
+					up_trained = 1
+					solved = True
+
+				# Also train down_proj with this hidden state for consistency
+				self.down_proj.commit(desired_hidden.unsqueeze(0), desired_output.unsqueeze(0))
+				down_trained = 1
+			else:
+				# No solution found - fall back to training current path
+				# Train down projection with current hidden state
+				current = self.down_proj(hidden.unsqueeze(0)).squeeze()
+				if not (current == desired_output).all():
+					self.down_proj.commit(hidden.unsqueeze(0), desired_output.unsqueeze(0))
+					down_trained = 1
+		else:
+			# GeneralizingProjection or backward solve disabled - train current path
+			if isinstance(self.down_proj, GeneralizingProjection):
+				down_trained = self.down_proj.train_mapping(hidden, desired_output)
+			else:
+				current = self.down_proj(hidden.unsqueeze(0)).squeeze()
+				if not (current == desired_output).all():
+					self.down_proj.commit(hidden.unsqueeze(0), desired_output.unsqueeze(0))
+					down_trained = 1
 
 		return {
 			"errors": 1,
-			"up_trained": 0,  # TODO: implement backward constraint solving
+			"up_trained": up_trained,
 			"down_trained": down_trained,
+			"solved": solved,
 		}
 
 	def train_batch(
@@ -242,6 +276,7 @@ class RAMFeedForward(Module):
 		targets: list[Tensor],
 		epochs: int = 10,
 		verbose: bool = True,
+		use_backward_solve: bool = True,
 	) -> list[dict]:
 		"""
 		Train on a batch of input/target pairs.
@@ -251,6 +286,7 @@ class RAMFeedForward(Module):
 			targets: List of target tensors
 			epochs: Number of training epochs
 			verbose: Print progress
+			use_backward_solve: If True, use EDRA constraint solving
 
 		Returns:
 			List of epoch statistics
@@ -259,22 +295,29 @@ class RAMFeedForward(Module):
 
 		for epoch in range(epochs):
 			total_errors = 0
+			total_up = 0
 			total_down = 0
+			total_solved = 0
 
 			for inp, tgt in zip(inputs, targets):
-				stats = self.train_step(inp, tgt)
+				stats = self.train_step(inp, tgt, use_backward_solve=use_backward_solve)
 				total_errors += stats["errors"]
+				total_up += stats["up_trained"]
 				total_down += stats["down_trained"]
+				total_solved += 1 if stats.get("solved", False) else 0
 
 			history.append({
 				"epoch": epoch + 1,
 				"errors": total_errors,
+				"up_trained": total_up,
 				"down_trained": total_down,
+				"solved": total_solved,
 			})
 
 			if verbose:
 				acc = 100 * (1 - total_errors / len(inputs))
-				print(f"  Epoch {epoch + 1}/{epochs}: {total_errors} errors ({acc:.1f}% acc)")
+				solve_info = f", solved={total_solved}" if use_backward_solve else ""
+				print(f"  Epoch {epoch + 1}/{epochs}: {total_errors} errors ({acc:.1f}% acc){solve_info}")
 
 			if total_errors == 0:
 				if verbose:

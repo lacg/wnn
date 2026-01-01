@@ -30,6 +30,7 @@ from wnn.ram.core.transformers.computed_attention import (
 from wnn.ram.core.transformers.xor_attention import (
     XORCrossAttention,
     XORContentAddressableMemory,
+    TopKAggregation,
 )
 
 # Attention masking
@@ -85,6 +86,7 @@ __all__ = [
     # XOR attention
     'XORCrossAttention',
     'XORContentAddressableMemory',
+    'TopKAggregation',
     # Attention masking
     'AttentionMask',
     'MaskStrategy',

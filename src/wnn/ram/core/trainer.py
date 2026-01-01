@@ -32,10 +32,12 @@ Features:
 from wnn.ram.core.transformers.seq2seq import RAMSeq2Seq
 from wnn.ram.enums import PositionEncoding, LayerType, TrainingMode, TrainingPhase
 
-from torch import Tensor, zeros, float32
-from dataclasses import dataclass, field
-from typing import Callable, Protocol
+from torch import Tensor, zeros, float32, save as torch_save, load as torch_load
+from dataclasses import dataclass, field, asdict
+from typing import Callable, Protocol, Any
 from random import shuffle
+from pathlib import Path
+import json
 
 
 class TrainingCallback(Protocol):
@@ -91,6 +93,37 @@ class EpochStats:
 	layer_error_rates: dict  # Per-layer error contribution
 	examples_mastered: int   # Number of examples with 100% accuracy
 	hard_examples: list      # Indices of examples that failed
+
+
+@dataclass
+class Checkpoint:
+	"""Training checkpoint for save/resume."""
+	epoch: int                   # Current epoch
+	best_accuracy: float         # Best accuracy seen so far
+	epochs_without_improvement: int  # Epochs without improvement
+	training_history: list       # History of epoch stats (as dicts)
+	mastered_indices: list       # Indices of mastered examples
+	training_mode: str           # Training mode name
+	phase: str | None            # Current curriculum phase
+	model_path: str              # Path to saved model weights
+
+	def to_dict(self) -> dict:
+		"""Convert to JSON-serializable dict."""
+		return {
+			"epoch": self.epoch,
+			"best_accuracy": self.best_accuracy,
+			"epochs_without_improvement": self.epochs_without_improvement,
+			"training_history": self.training_history,
+			"mastered_indices": list(self.mastered_indices),
+			"training_mode": self.training_mode,
+			"phase": self.phase,
+			"model_path": self.model_path,
+		}
+
+	@classmethod
+	def from_dict(cls, d: dict) -> "Checkpoint":
+		"""Create from dict."""
+		return cls(**d)
 
 
 class RAMTrainer:
@@ -839,3 +872,215 @@ class RAMTrainer:
 			"total": total,
 			"examples": examples,
 		}
+
+	def save_checkpoint(
+		self,
+		path: str,
+		epoch: int,
+		mastered_indices: set | None = None,
+		phase: str | None = None,
+	) -> str:
+		"""
+		Save training checkpoint to disk.
+
+		Creates two files:
+		- {path}.json: Training state (epoch, accuracy, history, etc.)
+		- {path}.model.pt: Model weights
+
+		Args:
+			path: Base path for checkpoint files (without extension)
+			epoch: Current epoch number
+			mastered_indices: Set of mastered example indices
+			phase: Current training phase (for curriculum learning)
+
+		Returns:
+			Path to the saved checkpoint JSON file
+		"""
+		path = Path(path)
+		model_path = str(path.with_suffix('.model.pt'))
+		checkpoint_path = str(path.with_suffix('.checkpoint.json'))
+
+		# Save model weights
+		self.model.save(model_path)
+
+		# Convert training history to JSON-serializable format
+		history_dicts = []
+		for stats in self.training_history:
+			if isinstance(stats, EpochStats):
+				history_dicts.append({
+					"epoch": stats.epoch,
+					"total_errors": stats.total_errors,
+					"bit_errors": stats.bit_errors,
+					"total_positions": stats.total_positions,
+					"accuracy": stats.accuracy,
+					"layer_updates": stats.layer_updates,
+					"layer_error_rates": stats.layer_error_rates,
+					"examples_mastered": stats.examples_mastered,
+					"hard_examples": stats.hard_examples,
+				})
+			else:
+				history_dicts.append(stats)
+
+		# Create checkpoint
+		checkpoint = Checkpoint(
+			epoch=epoch,
+			best_accuracy=self.best_accuracy,
+			epochs_without_improvement=self.epochs_without_improvement,
+			training_history=history_dicts,
+			mastered_indices=list(mastered_indices) if mastered_indices else [],
+			training_mode=self.mode.name,
+			phase=phase,
+			model_path=model_path,
+		)
+
+		# Save checkpoint JSON
+		with open(checkpoint_path, 'w') as f:
+			json.dump(checkpoint.to_dict(), f, indent=2)
+
+		if self.verbose:
+			print(f"Saved checkpoint to {checkpoint_path}")
+
+		return checkpoint_path
+
+	def load_checkpoint(self, path: str) -> Checkpoint:
+		"""
+		Load training checkpoint from disk.
+
+		Args:
+			path: Path to checkpoint JSON file
+
+		Returns:
+			Loaded Checkpoint object
+		"""
+		path = Path(path)
+		if not path.suffix:
+			path = path.with_suffix('.checkpoint.json')
+
+		with open(path, 'r') as f:
+			data = json.load(f)
+
+		checkpoint = Checkpoint.from_dict(data)
+
+		# Restore trainer state
+		self.best_accuracy = checkpoint.best_accuracy
+		self.epochs_without_improvement = checkpoint.epochs_without_improvement
+
+		# Restore training history as EpochStats objects
+		self.training_history = []
+		for stats_dict in checkpoint.training_history:
+			self.training_history.append(EpochStats(**stats_dict))
+
+		# Load model weights
+		if Path(checkpoint.model_path).exists():
+			self.model = type(self.model).load(checkpoint.model_path)
+
+		if self.verbose:
+			print(f"Loaded checkpoint from epoch {checkpoint.epoch}, "
+				  f"best_accuracy={checkpoint.best_accuracy:.1f}%")
+
+		return checkpoint
+
+	def train_with_checkpoints(
+		self,
+		dataset: list[tuple[list[Tensor], list[Tensor]]],
+		epochs: int = 10,
+		checkpoint_every: int = 5,
+		checkpoint_path: str = "training_checkpoint",
+		resume_from: str | None = None,
+		**kwargs,
+	) -> list[EpochStats]:
+		"""
+		Train with periodic checkpointing.
+
+		Args:
+			dataset: List of (input_tokens, target_tokens) pairs
+			epochs: Maximum number of epochs
+			checkpoint_every: Save checkpoint every N epochs
+			checkpoint_path: Base path for checkpoint files
+			resume_from: Path to checkpoint to resume from
+			**kwargs: Additional arguments passed to train()
+
+		Returns:
+			List of epoch statistics
+		"""
+		start_epoch = 0
+		mastered_indices: set = set()
+
+		# Resume from checkpoint if specified
+		if resume_from is not None:
+			checkpoint = self.load_checkpoint(resume_from)
+			start_epoch = checkpoint.epoch + 1
+			mastered_indices = set(checkpoint.mastered_indices)
+
+			if self.verbose:
+				print(f"Resuming from epoch {start_epoch}")
+
+		all_history = []
+
+		for epoch in range(start_epoch, epochs):
+			# Train one epoch
+			stats = self.train_epoch(dataset, epoch_num=epoch, shuffle_data=True)
+			all_history.append(stats)
+			self.training_history.append(stats)
+
+			# Update mastered indices
+			hard_set = set(stats.hard_examples)
+			for i in range(len(dataset)):
+				if i not in hard_set:
+					mastered_indices.add(i)
+
+			# Check for improvement
+			if stats.accuracy > self.best_accuracy:
+				old_acc = self.best_accuracy
+				self.best_accuracy = stats.accuracy
+				self.epochs_without_improvement = 0
+
+				for callback in self.callbacks:
+					if hasattr(callback, 'on_improvement'):
+						callback.on_improvement(epoch, old_acc, stats.accuracy)
+			else:
+				self.epochs_without_improvement += 1
+
+			# Verbose output
+			if self.verbose:
+				print(f"Epoch {epoch + 1}/{epochs}: "
+					  f"{stats.total_errors} errors, "
+					  f"{stats.accuracy:.1f}% accuracy, "
+					  f"{stats.examples_mastered}/{len(dataset)} mastered")
+
+			# Save checkpoint
+			if (epoch + 1) % checkpoint_every == 0:
+				self.save_checkpoint(
+					path=checkpoint_path,
+					epoch=epoch,
+					mastered_indices=mastered_indices,
+				)
+
+			# Notify callbacks
+			for callback in self.callbacks:
+				if hasattr(callback, 'on_epoch_end'):
+					should_continue = callback.on_epoch_end(epoch, stats.__dict__)
+					if should_continue is False:
+						if self.verbose:
+							print("Training stopped by callback")
+						return all_history
+
+			# Early stopping
+			if kwargs.get('early_stop', True) and stats.total_errors == 0:
+				if self.verbose:
+					print(f"Converged at epoch {epoch + 1}!")
+				break
+
+			if kwargs.get('use_patience', True) and self.epochs_without_improvement >= self.patience:
+				if self.verbose:
+					print(f"Early stopping: no improvement for {self.patience} epochs")
+				break
+
+		# Save final checkpoint
+		self.save_checkpoint(
+			path=checkpoint_path,
+			epoch=epoch,
+			mastered_indices=mastered_indices,
+		)
+
+		return all_history

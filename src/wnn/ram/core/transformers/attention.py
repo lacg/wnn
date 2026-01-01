@@ -19,6 +19,7 @@ Supports both:
 from wnn.ram.core import RAMLayer
 from wnn.ram.core import RAMAggregator
 from wnn.ram.core.transformers.attention_base import LearnableAttention
+from wnn.ram.core.transformers.attention_mask import AttentionMask, MaskStrategy
 from wnn.ram.encoders_decoders import PositionMode
 from wnn.ram.encoders_decoders import PositionEncoderFactory
 from wnn.ram.enums import CrossAttentionMode
@@ -33,12 +34,12 @@ class RAMAttention(LearnableAttention):
 
 	Self-attention (context=None):
 	  - Queries, keys, and values all come from same sequence
-	  - Supports causal masking
+	  - Supports flexible masking strategies (causal, sliding window, etc.)
 	  - Position modes: NONE, BINARY, RELATIVE
 
 	Cross-attention (context=encoder_output):
 	  - Queries from decoder, keys/values from encoder
-	  - Always non-causal (can attend to any encoder position)
+	  - Always bidirectional (can attend to any encoder position)
 	  - Position modes: NONE, ENCODER_ONLY, BOTH
 
 	Architecture:
@@ -57,7 +58,11 @@ class RAMAttention(LearnableAttention):
 		position_mode: PositionMode | CrossAttentionMode = PositionMode.BINARY,
 		max_seq_len: int = 16,
 		max_context_len: int | None = None,  # For cross-attention
-		causal: bool = True,  # Only for self-attention
+		causal: bool = True,  # Backwards compatibility (self-attention only)
+		mask_strategy: MaskStrategy | None = None,  # Override causal with flexible strategy
+		window_size: int = 3,  # For SLIDING_WINDOW strategy
+		block_size: int = 4,  # For BLOCK strategy
+		prefix_len: int = 2,  # For PREFIX strategy
 		rng: int | None = None,
 	):
 		"""
@@ -69,7 +74,11 @@ class RAMAttention(LearnableAttention):
 			position_mode: How to encode positions
 			max_seq_len: Maximum sequence length for queries
 			max_context_len: Maximum context length (for cross-attention)
-			causal: If True, position i can only attend to j <= i (self-attention only)
+			causal: If True, use CAUSAL mask (backwards compatible)
+			mask_strategy: Explicit masking strategy (overrides causal)
+			window_size: Window size for SLIDING_WINDOW strategy
+			block_size: Block size for BLOCK strategy
+			prefix_len: Prefix length for PREFIX strategy
 			rng: Random seed
 		"""
 		super().__init__()
@@ -81,10 +90,27 @@ class RAMAttention(LearnableAttention):
 		self.key_bits = key_bits or query_bits
 		self.is_cross_attention = key_bits is not None
 		self.num_heads = num_heads
-		self.causal = causal if not self.is_cross_attention else False  # Cross-attention is non-causal
 		self.max_seq_len = max_seq_len
 		self.max_context_len = max_context_len or max_seq_len
 		self.position_mode = position_mode
+
+		# Mask configuration
+		self.window_size = window_size
+		self.block_size = block_size
+		self.prefix_len = prefix_len
+
+		# Determine mask strategy
+		if self.is_cross_attention:
+			# Cross-attention is always bidirectional
+			self.mask_strategy = MaskStrategy.BIDIRECTIONAL
+		elif mask_strategy is not None:
+			self.mask_strategy = mask_strategy
+		else:
+			# Backwards compatibility: causal=True -> CAUSAL, causal=False -> BIDIRECTIONAL
+			self.mask_strategy = MaskStrategy.CAUSAL if causal else MaskStrategy.BIDIRECTIONAL
+
+		# Keep causal attribute for backwards compatibility
+		self.causal = self.mask_strategy == MaskStrategy.CAUSAL
 
 		# Determine position encoding setup
 		self._setup_position_encoding()
@@ -134,9 +160,10 @@ class RAMAttention(LearnableAttention):
 
 		attn_type = "cross" if self.is_cross_attention else "self"
 		pos_name = position_mode.name if hasattr(position_mode, 'name') else str(position_mode)
+		mask_name = self.mask_strategy.name
 		print(f"[RAMAttention] type={attn_type}, heads={num_heads}, "
 			  f"query={query_bits}b, key={self.key_bits}b, "
-			  f"pos={pos_name}, causal={self.causal}")
+			  f"pos={pos_name}, mask={mask_name}")
 
 	def _setup_position_encoding(self):
 		"""Configure position encoding based on mode."""
@@ -181,11 +208,51 @@ class RAMAttention(LearnableAttention):
 			pos >>= 1
 		return pos_bits
 
+	def _get_mask(self, query_len: int, key_len: int | None = None) -> Tensor:
+		"""
+		Get attention mask for the given sequence lengths.
+
+		Args:
+			query_len: Number of query positions
+			key_len: Number of key positions (default: same as query_len)
+
+		Returns:
+			Boolean mask [query_len, key_len] where True = can attend
+		"""
+		key_len = key_len or query_len
+
+		return AttentionMask.from_strategy(
+			strategy=self.mask_strategy,
+			seq_len=query_len,
+			key_len=key_len,
+			window_size=self.window_size,
+			block_size=self.block_size,
+			prefix_len=self.prefix_len,
+		)
+
+	def _can_attend(self, mask: Tensor, query_pos: int, key_pos: int) -> bool:
+		"""Check if query position can attend to key position."""
+		return bool(mask[query_pos, key_pos].item())
+
+	def get_mask(self, query_len: int, key_len: int | None = None) -> Tensor:
+		"""
+		Public method to get attention mask.
+
+		Args:
+			query_len: Number of query positions
+			key_len: Number of key positions (default: same as query_len)
+
+		Returns:
+			Boolean mask [query_len, key_len] where True = can attend
+		"""
+		return self._get_mask(query_len, key_len)
+
 	def _compute_attention_pattern(
 		self,
 		queries: list[Tensor],
 		keys: list[Tensor],
 		head_idx: int,
+		mask: Tensor | None = None,
 	) -> Tensor:
 		"""
 		Compute binary attention pattern for one head.
@@ -194,6 +261,7 @@ class RAMAttention(LearnableAttention):
 			queries: Query tokens
 			keys: Key tokens (same as queries for self-attention)
 			head_idx: Which attention head
+			mask: Pre-computed attention mask (optional, computed if None)
 
 		Returns:
 			attention: [num_queries, num_keys] binary tensor
@@ -202,10 +270,14 @@ class RAMAttention(LearnableAttention):
 		num_k = len(keys)
 		attention = zeros(num_q, num_k, dtype=uint8)
 
+		# Get mask if not provided
+		if mask is None:
+			mask = self._get_mask(num_q, num_k)
+
 		for i, q in enumerate(queries):
 			for j, k in enumerate(keys):
-				# Causal mask (self-attention only)
-				if self.causal and j > i:
+				# Check mask instead of inline causal check
+				if not self._can_attend(mask, i, j):
 					continue
 
 				# Build similarity input based on position mode
@@ -308,12 +380,15 @@ class RAMAttention(LearnableAttention):
 
 		outputs = []
 
+		# Pre-compute mask once for all heads
+		mask = self._get_mask(seq_len, key_len)
+
 		for i in range(seq_len):
 			head_outputs = []
 
 			for h in range(self.num_heads):
-				# Compute attention pattern
-				attention = self._compute_attention_pattern(queries, keys, head_idx=h)
+				# Compute attention pattern (pass pre-computed mask)
+				attention = self._compute_attention_pattern(queries, keys, head_idx=h, mask=mask)
 
 				# Project values
 				projected_values = self._project_values(keys, head_idx=h)
@@ -369,13 +444,16 @@ class RAMAttention(LearnableAttention):
 		targets = [t.squeeze() if t.ndim > 1 else t for t in targets]
 		keys = queries if context is None else [t.squeeze() if t.ndim > 1 else t for t in context]
 
+		# Pre-compute mask
+		mask = self._get_mask(len(queries), len(keys))
+
 		errors = 0
 
 		for i in range(len(queries)):
 			head_outputs = []
 
 			for h in range(self.num_heads):
-				attention = self._compute_attention_pattern(queries, keys, head_idx=h)
+				attention = self._compute_attention_pattern(queries, keys, head_idx=h, mask=mask)
 				projected_values = self._project_values(keys, head_idx=h)
 				aggregated = self._aggregate_values(projected_values, attention[i], head_idx=h)
 				head_outputs.append(aggregated)
@@ -411,10 +489,14 @@ class RAMAttention(LearnableAttention):
 		queries = [t.squeeze() if t.ndim > 1 else t for t in tokens]
 		keys = queries if context is None else [t.squeeze() if t.ndim > 1 else t for t in context]
 
+		# Pre-compute mask
+		mask = self._get_mask(len(queries), len(keys))
+
 		corrections = 0
 
 		for query_idx, key_idx, should_attend in attention_targets:
-			if self.causal and key_idx > query_idx:
+			# Use mask instead of inline causal check
+			if not self._can_attend(mask, query_idx, key_idx):
 				continue
 
 			q = queries[query_idx]
@@ -454,10 +536,11 @@ class RAMAttention(LearnableAttention):
 	def __repr__(self):
 		attn_type = "cross" if self.is_cross_attention else "self"
 		pos_name = self.position_mode.name if hasattr(self.position_mode, 'name') else str(self.position_mode)
+		mask_name = self.mask_strategy.name
 		return (
 			f"RAMAttention(type={attn_type}, heads={self.num_heads}, "
 			f"query={self.query_bits}b, key={self.key_bits}b, "
-			f"pos={pos_name}, causal={self.causal})"
+			f"pos={pos_name}, mask={mask_name})"
 		)
 
 
@@ -479,11 +562,12 @@ class RAMAttention(LearnableAttention):
 		Returns:
 			Number of patterns written
 		"""
+		mask = self._get_mask(seq_len)
 		patterns = 0
 		for i in range(seq_len):
 			for j in range(seq_len):
 				should_attend = 1 if i == j else 0
-				if self.causal and j > i:
+				if not self._can_attend(mask, i, j):
 					continue
 				self._write_position_pattern(i, j, should_attend, head_idx)
 				patterns += 1
@@ -501,12 +585,13 @@ class RAMAttention(LearnableAttention):
 		Returns:
 			Number of patterns written
 		"""
+		mask = self._get_mask(seq_len)
 		patterns = 0
 		for i in range(seq_len):
 			for j in range(seq_len):
 				target_j = i + offset
 				should_attend = 1 if j == target_j and 0 <= target_j < seq_len else 0
-				if self.causal and j > i:
+				if not self._can_attend(mask, i, j):
 					continue
 				self._write_position_pattern(i, j, should_attend, head_idx)
 				patterns += 1
@@ -523,12 +608,13 @@ class RAMAttention(LearnableAttention):
 		Returns:
 			Number of patterns written
 		"""
+		mask = self._get_mask(seq_len)
 		patterns = 0
 		for i in range(seq_len):
 			for j in range(seq_len):
 				target_j = seq_len - 1 - i
 				should_attend = 1 if j == target_j else 0
-				if self.causal and j > i:
+				if not self._can_attend(mask, i, j):
 					continue
 				self._write_position_pattern(i, j, should_attend, head_idx)
 				patterns += 1
@@ -547,11 +633,12 @@ class RAMAttention(LearnableAttention):
 		Returns:
 			Number of patterns written
 		"""
+		mask = self._get_mask(seq_len)
 		patterns = 0
 		for i in range(seq_len):
 			for j in range(seq_len):
 				should_attend = 1 if j == 0 else 0
-				if self.causal and j > i:
+				if not self._can_attend(mask, i, j):
 					continue
 				self._write_position_pattern(i, j, should_attend, head_idx)
 				patterns += 1
@@ -570,12 +657,13 @@ class RAMAttention(LearnableAttention):
 		Returns:
 			Number of patterns written
 		"""
+		mask = self._get_mask(seq_len)
 		patterns = 0
 		for i in range(seq_len):
 			for j in range(seq_len):
 				target_j = seq_len - 1
 				should_attend = 1 if j == target_j else 0
-				if self.causal and j > i:
+				if not self._can_attend(mask, i, j):
 					continue
 				self._write_position_pattern(i, j, should_attend, head_idx)
 				patterns += 1
@@ -595,13 +683,14 @@ class RAMAttention(LearnableAttention):
 		Returns:
 			Number of patterns written
 		"""
+		mask = self._get_mask(seq_len)
 		patterns = 0
 		for i in range(seq_len):
 			for j in range(seq_len):
 				# Position i attends to i-1 (previous token)
 				target_j = i - 1 if i > 0 else 0
 				should_attend = 1 if j == target_j else 0
-				if self.causal and j > i:
+				if not self._can_attend(mask, i, j):
 					continue
 				self._write_position_pattern(i, j, should_attend, head_idx)
 				patterns += 1
