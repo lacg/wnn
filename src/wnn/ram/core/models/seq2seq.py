@@ -656,6 +656,218 @@ class RAMSeq2Seq(RAMSequenceModel):
 
 		return history
 
+	# ─────────────────────────────────────────────────────────────────────────
+	# Scheduled Sampling
+	# ─────────────────────────────────────────────────────────────────────────
+
+	def train_step_scheduled(
+		self,
+		input_tokens: list[Tensor],
+		target_tokens: list[Tensor],
+		sampling_prob: float,
+		rng: "torch.Generator | None" = None,
+	) -> dict:
+		"""
+		Train with scheduled sampling for autoregressive sequences.
+
+		At each position, with probability `sampling_prob` we use ground truth,
+		otherwise we use the model's own prediction from the previous step.
+
+		This bridges the gap between teacher forcing (train) and autoregressive
+		generation (inference), reducing exposure bias.
+
+		Args:
+			input_tokens: Ground truth input sequence
+			target_tokens: Target output sequence
+			sampling_prob: Probability of using ground truth (1.0 = full teacher forcing)
+			rng: Optional random generator for reproducibility
+
+		Returns:
+			Dictionary with training statistics including scheduled sampling metrics
+		"""
+		import torch
+
+		seq_len = len(input_tokens)
+		input_tokens = [t.squeeze() if t.ndim > 1 else t for t in input_tokens]
+		target_tokens = [t.squeeze() if t.ndim > 1 else t for t in target_tokens]
+
+		# Build mixed input sequence using scheduled sampling
+		mixed_inputs = [input_tokens[0]]  # First token is always ground truth
+		model_uses = 0
+		gt_uses = 1  # First token counts as ground truth
+
+		for i in range(1, seq_len):
+			# Decide: ground truth or model prediction?
+			if rng is not None:
+				use_gt = torch.rand(1, generator=rng).item() < sampling_prob
+			else:
+				use_gt = torch.rand(1).item() < sampling_prob
+
+			if use_gt:
+				# Use ground truth
+				mixed_inputs.append(input_tokens[i])
+				gt_uses += 1
+			else:
+				# Use model's prediction from previous context
+				with torch.no_grad():
+					context = mixed_inputs[:i]
+					outputs = self.forward(context)
+					pred = outputs[-1]  # Last position's output
+				mixed_inputs.append(pred)
+				model_uses += 1
+
+		# Now train with the mixed inputs
+		outputs, intermediates = self.forward_with_intermediates(mixed_inputs)
+
+		# Count output errors (compared to target)
+		output_errors = sum(
+			1 for out, tgt in zip(outputs, target_tokens)
+			if not (out == tgt).all()
+		)
+
+		if output_errors == 0:
+			return {
+				"output_errors": 0,
+				"layer_updates": [0] * self.num_layers,
+				"gt_uses": gt_uses,
+				"model_uses": model_uses,
+				"sampling_prob": sampling_prob,
+			}
+
+		# Train output projection
+		if self.output_proj is not None:
+			hidden = intermediates[-1]
+			for h, tgt in zip(hidden, target_tokens):
+				out = self.output_proj(h.unsqueeze(0)).squeeze()
+				if not (out == tgt).all():
+					self.output_proj.commit(h.unsqueeze(0), tgt.unsqueeze(0))
+
+		# Backpropagate through layers (same as train_step)
+		layer_updates = []
+		for layer_idx in range(self.num_layers - 1, -1, -1):
+			layer = self.attention_layers[layer_idx]
+			layer_input = intermediates[layer_idx]
+			layer_output = layer.forward(layer_input)
+
+			if layer_idx == self.num_layers - 1:
+				if self.use_residual:
+					if self.output_proj is None:
+						desired_hidden = target_tokens
+						desired_layer_output = [
+							d ^ inp for d, inp in zip(desired_hidden, layer_input)
+						]
+					else:
+						desired_layer_output = layer_output
+				else:
+					desired_layer_output = target_tokens if self.output_proj is None else intermediates[layer_idx + 1]
+			else:
+				desired_layer_output = layer_output
+
+			updates = layer.train_step(layer_input, desired_layer_output)
+			layer_updates.append(updates)
+
+		layer_updates.reverse()
+
+		return {
+			"output_errors": output_errors,
+			"layer_updates": layer_updates,
+			"gt_uses": gt_uses,
+			"model_uses": model_uses,
+			"sampling_prob": sampling_prob,
+		}
+
+	def train_scheduled(
+		self,
+		dataset: list[tuple[list[Tensor], list[Tensor]]],
+		epochs: int = 10,
+		schedule: str = "linear",
+		start_prob: float = 1.0,
+		end_prob: float = 0.0,
+		verbose: bool = True,
+		rng_seed: int | None = None,
+	) -> list[dict]:
+		"""
+		Train with scheduled sampling across multiple epochs.
+
+		The sampling probability decreases according to the schedule,
+		gradually shifting from teacher forcing to model predictions.
+
+		Available schedules:
+		  - "linear": Linear decay from start_prob to end_prob
+		  - "inverse_sigmoid": Slower decay at start, faster at end
+		  - "exponential": Exponential decay
+
+		Args:
+			dataset: List of (input_tokens, target_tokens) pairs
+			epochs: Number of training epochs
+			schedule: Schedule type ("linear", "inverse_sigmoid", "exponential")
+			start_prob: Initial probability of using ground truth
+			end_prob: Final probability of using ground truth
+			verbose: Print progress
+			rng_seed: Random seed for reproducibility
+
+		Returns:
+			List of epoch statistics
+		"""
+		import torch
+		import math
+
+		rng = torch.Generator()
+		if rng_seed is not None:
+			rng.manual_seed(rng_seed)
+
+		history = []
+
+		for epoch in range(epochs):
+			# Calculate sampling probability for this epoch
+			progress = epoch / max(epochs - 1, 1)
+
+			if schedule == "linear":
+				prob = start_prob + (end_prob - start_prob) * progress
+			elif schedule == "inverse_sigmoid":
+				# k controls steepness (higher = steeper transition)
+				k = 5
+				prob = start_prob - (start_prob - end_prob) / (1 + math.exp(-k * (progress - 0.5)))
+			elif schedule == "exponential":
+				# Exponential decay
+				decay_rate = -math.log(max(end_prob / start_prob, 0.01))
+				prob = start_prob * math.exp(-decay_rate * progress)
+			else:
+				raise ValueError(f"Unknown schedule: {schedule}")
+
+			# Train epoch with scheduled sampling
+			total_errors = 0
+			total_positions = 0
+			total_gt_uses = 0
+			total_model_uses = 0
+
+			for inputs, targets in dataset:
+				stats = self.train_step_scheduled(inputs, targets, prob, rng)
+				total_errors += stats["output_errors"]
+				total_positions += len(inputs)
+				total_gt_uses += stats["gt_uses"]
+				total_model_uses += stats["model_uses"]
+
+			accuracy = 100 * (1 - total_errors / total_positions) if total_positions > 0 else 0
+			gt_ratio = total_gt_uses / (total_gt_uses + total_model_uses) if (total_gt_uses + total_model_uses) > 0 else 1.0
+
+			epoch_stats = {
+				"total_errors": total_errors,
+				"total_positions": total_positions,
+				"accuracy": accuracy,
+				"sampling_prob": prob,
+				"gt_ratio": gt_ratio,
+			}
+			history.append(epoch_stats)
+
+			if verbose:
+				print(f"Epoch {epoch + 1}/{epochs}: "
+					  f"{total_errors} errors, "
+					  f"{accuracy:.1f}% accuracy, "
+					  f"p(GT)={prob:.2f} (actual={gt_ratio:.2f})")
+
+		return history
+
 	def __repr__(self):
 		return (
 			f"RAMSeq2Seq(layers={self.num_layers}, heads={self.num_heads}, "
