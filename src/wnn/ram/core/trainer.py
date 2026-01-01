@@ -1953,3 +1953,431 @@ class MultiTaskTrainer:
 				primitive_usage[primitive].append(task.name)
 
 		return dict(primitive_usage)
+
+
+# =============================================================================
+# Contrastive Learning
+# =============================================================================
+
+def hamming_distance(a: Tensor, b: Tensor) -> int:
+	"""Compute Hamming distance between two bit tensors."""
+	return int((a.squeeze() != b.squeeze()).sum().item())
+
+
+def jaccard_similarity(a: Tensor, b: Tensor) -> float:
+	"""
+	Compute Jaccard similarity between two bit tensors.
+
+	Jaccard = |A ∩ B| / |A ∪ B| = count(both 1) / count(either 1)
+	"""
+	a_flat = a.squeeze().bool()
+	b_flat = b.squeeze().bool()
+	intersection = (a_flat & b_flat).sum().item()
+	union = (a_flat | b_flat).sum().item()
+	return intersection / union if union > 0 else 1.0
+
+
+def normalized_hamming_similarity(a: Tensor, b: Tensor) -> float:
+	"""
+	Compute normalized similarity based on Hamming distance.
+
+	Returns 1.0 for identical, 0.0 for maximally different.
+	"""
+	dist = hamming_distance(a, b)
+	max_dist = max(a.numel(), b.numel())
+	return 1.0 - (dist / max_dist) if max_dist > 0 else 1.0
+
+
+@dataclass
+class Triplet:
+	"""
+	A contrastive learning triplet.
+
+	Attributes:
+		anchor: The reference example
+		positive: An example similar to anchor (same class/output)
+		negative: An example different from anchor (different class/output)
+		hardness: How hard this triplet is (0=easy, 1=hard)
+	"""
+	anchor: tuple[list[Tensor], list[Tensor]]
+	positive: tuple[list[Tensor], list[Tensor]]
+	negative: tuple[list[Tensor], list[Tensor]]
+	hardness: float = 0.0
+
+
+class ContrastiveTrainer:
+	"""
+	Contrastive learning for RAM networks.
+
+	Trains the network to distinguish between similar patterns by:
+	1. Generating triplets (anchor, positive, negative)
+	2. Hard negative mining to find difficult cases
+	3. Prioritizing training on pairs the model confuses
+
+	Key insight: RAM networks can't use gradient-based contrastive loss,
+	but we can explicitly train on pairs that should produce different outputs.
+
+	Usage:
+		trainer = RAMTrainer(model)
+		contrastive = ContrastiveTrainer(trainer)
+
+		# Train with automatic triplet generation
+		contrastive.train(dataset, epochs=10)
+
+		# Or train with explicit triplets
+		triplets = contrastive.generate_triplets(dataset)
+		contrastive.train_on_triplets(triplets, epochs=5)
+	"""
+
+	def __init__(
+		self,
+		trainer: RAMTrainer,
+		similarity_fn: Callable[[Tensor, Tensor], float] = normalized_hamming_similarity,
+		margin: float = 0.3,
+		hard_negative_ratio: float = 0.5,
+	):
+		"""
+		Args:
+			trainer: Base RAMTrainer to use
+			similarity_fn: Function to compute similarity between tensors
+			margin: Minimum similarity margin between positive and negative
+			hard_negative_ratio: Fraction of hard negatives to sample
+		"""
+		self.trainer = trainer
+		self.similarity_fn = similarity_fn
+		self.margin = margin
+		self.hard_negative_ratio = hard_negative_ratio
+		self.triplet_stats: list[dict] = []
+
+	def _flatten_sequence(self, tokens: list[Tensor]) -> Tensor:
+		"""Flatten a sequence of tokens into a single tensor."""
+		from torch import cat
+		return cat([t.flatten() for t in tokens])
+
+	def _are_same_class(
+		self,
+		targets_a: list[Tensor],
+		targets_b: list[Tensor],
+	) -> bool:
+		"""Check if two examples have the same target output."""
+		if len(targets_a) != len(targets_b):
+			return False
+		for a, b in zip(targets_a, targets_b):
+			if not (a.squeeze() == b.squeeze()).all():
+				return False
+		return True
+
+	def generate_triplets(
+		self,
+		dataset: list[tuple[list[Tensor], list[Tensor]]],
+		max_triplets: int | None = None,
+	) -> list[Triplet]:
+		"""
+		Generate contrastive triplets from a dataset.
+
+		For each anchor, finds:
+		- Positive: Another example with the same target output
+		- Negative: An example with a different target output
+
+		Hard negatives are prioritized - those with similar inputs but different outputs.
+
+		Args:
+			dataset: List of (inputs, targets) pairs
+			max_triplets: Maximum number of triplets to generate (None = all possible)
+
+		Returns:
+			List of Triplet objects
+		"""
+		triplets = []
+
+		# Group examples by target output
+		class_examples: dict[str, list[int]] = defaultdict(list)
+		for i, (inputs, targets) in enumerate(dataset):
+			# Create a hashable key from targets
+			target_key = tuple(t.flatten().tolist() for t in targets)
+			class_examples[str(target_key)].append(i)
+
+		# For each anchor, create triplets
+		for anchor_idx, (anchor_inputs, anchor_targets) in enumerate(dataset):
+			anchor_key = str(tuple(t.flatten().tolist() for t in anchor_targets))
+
+			# Find positives (same class)
+			positive_indices = [
+				i for i in class_examples[anchor_key]
+				if i != anchor_idx
+			]
+
+			# Find negatives (different class)
+			negative_indices = [
+				i for key, indices in class_examples.items()
+				if key != anchor_key
+				for i in indices
+			]
+
+			if not positive_indices or not negative_indices:
+				continue
+
+			# Flatten anchor for similarity computation
+			anchor_flat = self._flatten_sequence(anchor_inputs)
+
+			# Rank negatives by similarity (hard negatives first)
+			neg_with_sim = []
+			for neg_idx in negative_indices:
+				neg_inputs, _ = dataset[neg_idx]
+				neg_flat = self._flatten_sequence(neg_inputs)
+				sim = self.similarity_fn(anchor_flat, neg_flat)
+				neg_with_sim.append((neg_idx, sim))
+
+			# Sort by similarity (highest = hardest negatives)
+			neg_with_sim.sort(key=lambda x: -x[1])
+
+			# Sample hard negatives
+			n_hard = max(1, int(len(neg_with_sim) * self.hard_negative_ratio))
+			hard_negatives = neg_with_sim[:n_hard]
+
+			# Create triplets
+			for pos_idx in positive_indices[:3]:  # Limit positives per anchor
+				for neg_idx, neg_sim in hard_negatives[:2]:  # Limit negatives
+					pos_inputs, pos_targets = dataset[pos_idx]
+					neg_inputs, neg_targets = dataset[neg_idx]
+
+					triplets.append(Triplet(
+						anchor=(anchor_inputs, anchor_targets),
+						positive=(pos_inputs, pos_targets),
+						negative=(neg_inputs, neg_targets),
+						hardness=neg_sim,  # Higher similarity = harder
+					))
+
+			if max_triplets and len(triplets) >= max_triplets:
+				break
+
+		# Sort by hardness for curriculum
+		triplets.sort(key=lambda t: t.hardness)
+
+		return triplets[:max_triplets] if max_triplets else triplets
+
+	def train_on_triplets(
+		self,
+		triplets: list[Triplet],
+		epochs: int = 5,
+		verbose: bool = True,
+	) -> list[dict]:
+		"""
+		Train on explicit triplets.
+
+		For each triplet (anchor, positive, negative):
+		1. Train anchor and positive to produce the same output
+		2. Train negative to produce its (different) output
+		3. This teaches the model to distinguish similar patterns
+
+		Args:
+			triplets: List of Triplet objects
+			epochs: Number of training epochs
+			verbose: Print progress
+
+		Returns:
+			List of per-epoch statistics
+		"""
+		history = []
+
+		if verbose:
+			print(f"Contrastive training: {len(triplets)} triplets")
+			avg_hardness = sum(t.hardness for t in triplets) / len(triplets) if triplets else 0
+			print(f"Average hardness: {avg_hardness:.3f}")
+
+		for epoch in range(epochs):
+			epoch_stats = {
+				'epoch': epoch,
+				'anchor_errors': 0,
+				'positive_errors': 0,
+				'negative_errors': 0,
+				'total_triplets': len(triplets),
+				'distinctions_correct': 0,
+			}
+
+			shuffle(triplets)
+
+			for triplet in triplets:
+				# Train on anchor
+				anchor_stats = self.trainer.train_step(
+					triplet.anchor[0], triplet.anchor[1]
+				)
+				epoch_stats['anchor_errors'] += anchor_stats.output_errors
+
+				# Train on positive (should produce same output as anchor)
+				pos_stats = self.trainer.train_step(
+					triplet.positive[0], triplet.positive[1]
+				)
+				epoch_stats['positive_errors'] += pos_stats.output_errors
+
+				# Train on negative (should produce different output)
+				neg_stats = self.trainer.train_step(
+					triplet.negative[0], triplet.negative[1]
+				)
+				epoch_stats['negative_errors'] += neg_stats.output_errors
+
+				# Check if model correctly distinguishes anchor from negative
+				anchor_out = self.trainer.model.forward(triplet.anchor[0])
+				neg_out = self.trainer.model.forward(triplet.negative[0])
+
+				if not self._are_same_class(anchor_out, neg_out):
+					epoch_stats['distinctions_correct'] += 1
+
+			# Compute accuracy
+			total_errors = (
+				epoch_stats['anchor_errors'] +
+				epoch_stats['positive_errors'] +
+				epoch_stats['negative_errors']
+			)
+			total_positions = 3 * len(triplets)
+			epoch_stats['accuracy'] = 100 * (1 - total_errors / total_positions) if total_positions > 0 else 0
+			epoch_stats['distinction_rate'] = 100 * epoch_stats['distinctions_correct'] / len(triplets) if triplets else 0
+
+			history.append(epoch_stats)
+			self.triplet_stats.append(epoch_stats)
+
+			if verbose:
+				print(f"Epoch {epoch + 1}/{epochs}: "
+					  f"accuracy={epoch_stats['accuracy']:.1f}%, "
+					  f"distinctions={epoch_stats['distinction_rate']:.1f}%")
+
+			# Early stop if perfect
+			if total_errors == 0 and epoch_stats['distinctions_correct'] == len(triplets):
+				if verbose:
+					print("Perfect contrastive training achieved!")
+				break
+
+		return history
+
+	def train(
+		self,
+		dataset: list[tuple[list[Tensor], list[Tensor]]],
+		epochs: int = 10,
+		triplets_per_epoch: int | None = None,
+		verbose: bool = True,
+	) -> list[dict]:
+		"""
+		Train with automatic triplet generation.
+
+		Generates triplets from the dataset and trains on them,
+		regenerating triplets each epoch to adapt to model progress.
+
+		Args:
+			dataset: List of (inputs, targets) pairs
+			epochs: Number of training epochs
+			triplets_per_epoch: Max triplets per epoch (None = all)
+			verbose: Print progress
+
+		Returns:
+			Training history
+		"""
+		if verbose:
+			print(f"Contrastive learning on {len(dataset)} examples")
+
+		all_history = []
+
+		for epoch in range(epochs):
+			# Generate fresh triplets (adapts to current model state)
+			triplets = self.generate_triplets(dataset, max_triplets=triplets_per_epoch)
+
+			if not triplets:
+				if verbose:
+					print("No triplets could be generated (need multiple classes)")
+				break
+
+			# Train on triplets for one epoch
+			epoch_history = self.train_on_triplets(
+				triplets,
+				epochs=1,
+				verbose=False,
+			)
+
+			if epoch_history:
+				stats = epoch_history[0]
+				stats['epoch'] = epoch
+				all_history.append(stats)
+
+				if verbose:
+					print(f"Epoch {epoch + 1}/{epochs}: "
+						  f"{len(triplets)} triplets, "
+						  f"accuracy={stats['accuracy']:.1f}%, "
+						  f"distinctions={stats['distinction_rate']:.1f}%")
+
+				# Early stop
+				if stats['accuracy'] == 100 and stats['distinction_rate'] == 100:
+					if verbose:
+						print("Perfect contrastive learning!")
+					break
+
+		return all_history
+
+	def mine_hard_negatives(
+		self,
+		dataset: list[tuple[list[Tensor], list[Tensor]]],
+		top_k: int = 10,
+	) -> list[tuple[int, int, float]]:
+		"""
+		Find the hardest negative pairs in the dataset.
+
+		These are pairs where:
+		- Inputs are very similar (high similarity)
+		- Outputs should be different
+
+		Args:
+			dataset: List of (inputs, targets) pairs
+			top_k: Number of hard pairs to return
+
+		Returns:
+			List of (idx_a, idx_b, similarity) tuples for hardest pairs
+		"""
+		hard_pairs = []
+
+		for i, (inputs_a, targets_a) in enumerate(dataset):
+			for j, (inputs_b, targets_b) in enumerate(dataset):
+				if i >= j:  # Skip duplicates and self-comparisons
+					continue
+
+				# Only consider pairs with different outputs
+				if self._are_same_class(targets_a, targets_b):
+					continue
+
+				# Compute input similarity
+				flat_a = self._flatten_sequence(inputs_a)
+				flat_b = self._flatten_sequence(inputs_b)
+				sim = self.similarity_fn(flat_a, flat_b)
+
+				# Only include if above margin (similar inputs)
+				if sim > self.margin:
+					hard_pairs.append((i, j, sim))
+
+		# Sort by similarity (hardest first)
+		hard_pairs.sort(key=lambda x: -x[2])
+
+		return hard_pairs[:top_k]
+
+	def get_confusion_matrix(
+		self,
+		dataset: list[tuple[list[Tensor], list[Tensor]]],
+	) -> dict[str, dict[str, int]]:
+		"""
+		Compute confusion matrix for the current model.
+
+		Shows which classes are being confused with each other.
+
+		Args:
+			dataset: List of (inputs, targets) pairs
+
+		Returns:
+			Nested dict: true_class -> predicted_class -> count
+		"""
+		confusion: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+
+		for inputs, targets in dataset:
+			outputs = self.trainer.model.forward(inputs)
+
+			true_key = str(tuple(t.flatten().tolist() for t in targets))
+			pred_key = str(tuple(o.flatten().tolist() for o in outputs))
+
+			confusion[true_key][pred_key] += 1
+
+		return {k: dict(v) for k, v in confusion.items()}

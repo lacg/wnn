@@ -52,6 +52,12 @@ from wnn.ram.core.trainer import (
     MultiTaskTrainer,
     Task,
     MixingStrategy,
+    # Contrastive learning
+    ContrastiveTrainer,
+    Triplet,
+    hamming_distance,
+    jaccard_similarity,
+    normalized_hamming_similarity,
 )
 from wnn.ram.enums import LayerType, TrainingMode, TrainingPhase
 
@@ -167,6 +173,12 @@ __all__ = [
     'MultiTaskTrainer',
     'Task',
     'MixingStrategy',
+    # Contrastive learning
+    'ContrastiveTrainer',
+    'Triplet',
+    'hamming_distance',
+    'jaccard_similarity',
+    'normalized_hamming_similarity',
     # Serialization (use model.save() / Model.load())
     'SERIALIZATION_VERSION',
     # Batch processing utilities

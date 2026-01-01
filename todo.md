@@ -44,9 +44,7 @@ output_layer_output			final output									[1, N_out]
 ## Completed: Training Enhancements
 - [x] Curriculum Learning Integration - CurriculumTrainer with configurable difficulty metrics
 - [x] Multi-Task Learning - MultiTaskTrainer with Task definitions and MixingStrategy
-
-## Future: Training Enhancements
-- [ ] Contrastive Learning - Learn representations that distinguish similar patterns
+- [x] Contrastive Learning - ContrastiveTrainer with triplet training and hard negative mining
 
 ## Completed: New Task Domains
 - [x] Sorting - BitLevelComparator decomposes comparison into bit-level ops (100% generalization)
