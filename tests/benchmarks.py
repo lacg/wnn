@@ -497,6 +497,213 @@ def print_strategy_analysis(results: list[BenchmarkResult]) -> None:
 
 
 # ============================================================
+# Compositional Benchmarks
+# ============================================================
+
+@dataclass
+class CompositionResult:
+    """Results from a compositional benchmark."""
+    primitive_a: str
+    primitive_b: str
+    composition: str
+    a_train_acc: float
+    a_test_acc: float
+    b_train_acc: float
+    b_test_acc: float
+    composed_train_acc: float
+    composed_test_acc: float  # Key metric: does composition generalize?
+
+
+def run_compositional_benchmark(
+    n_bits: int = 6,
+    train_ratio: float = 0.4,
+    strategy: MapperStrategy = MapperStrategy.BIT_LEVEL,
+    verbose: bool = True,
+) -> list[CompositionResult]:
+    """
+    Test compositional generalization: learn A, learn B, compose A∘B.
+
+    Key insight: If primitives generalize independently, does their
+    composition also generalize?
+
+    Tests:
+    1. COPY∘INCREMENT: Copy then add 1 (= INCREMENT)
+    2. INCREMENT∘COPY: Add 1 then copy (= INCREMENT)
+    3. COMPLEMENT∘COMPLEMENT: NOT then NOT (= IDENTITY)
+    4. INCREMENT∘INCREMENT: Add 1 twice (= ADD 2)
+
+    Args:
+        n_bits: Number of bits per value
+        train_ratio: Fraction of data for training
+        strategy: Generalization strategy to use (BIT_LEVEL, COMPOSITIONAL, etc.)
+        verbose: Print progress
+
+    Returns:
+        List of CompositionResult with accuracy metrics
+    """
+    from wnn.ram.factories import MapperFactory
+
+    if verbose:
+        print("\n" + "=" * 60)
+        print("COMPOSITIONAL GENERALIZATION BENCHMARK")
+        print("=" * 60)
+        print(f"""
+Strategy: Learn primitives A and B separately, then compose A∘B.
+Tests whether RAM networks support modular, reusable computation.
+Generalization strategy: {strategy.name}
+""")
+
+    max_val = 2 ** n_bits
+
+    # Split data
+    train_indices, test_indices = random_train_test_split(max_val, train_ratio)
+
+    # Define primitives
+    def copy_fn(x: int) -> int:
+        return x
+
+    def increment_fn(x: int) -> int:
+        return (x + 1) % max_val
+
+    def complement_fn(x: int) -> int:
+        return (~x) & (max_val - 1)
+
+    def double_fn(x: int) -> int:
+        return (2 * x) % max_val
+
+    primitives = {
+        'COPY': copy_fn,
+        'INCREMENT': increment_fn,
+        'COMPLEMENT': complement_fn,
+        'DOUBLE': double_fn,
+    }
+
+    # Compositions to test
+    compositions = [
+        ('COPY', 'INCREMENT', 'copy_then_inc'),
+        ('INCREMENT', 'COPY', 'inc_then_copy'),
+        ('COMPLEMENT', 'COMPLEMENT', 'not_not'),
+        ('INCREMENT', 'INCREMENT', 'add_2'),
+        ('DOUBLE', 'INCREMENT', 'double_then_inc'),
+    ]
+
+    results = []
+
+    for prim_a_name, prim_b_name, comp_name in compositions:
+        if verbose:
+            print(f"\n--- {prim_a_name} ∘ {prim_b_name} ({comp_name}) ---")
+
+        prim_a = primitives[prim_a_name]
+        prim_b = primitives[prim_b_name]
+
+        # Create layers for each primitive using the specified strategy
+        kwargs = {}
+        if strategy == MapperStrategy.COMPOSITIONAL:
+            kwargs['n_groups'] = 2 if n_bits % 2 == 0 else n_bits
+
+        layer_a = MapperFactory.create(
+            strategy=strategy,
+            n_bits=n_bits,
+            rng=42,
+            **kwargs,
+        )
+        layer_b = MapperFactory.create(
+            strategy=strategy,
+            n_bits=n_bits,
+            rng=43,
+            **kwargs,
+        )
+
+        # Train primitive A
+        for i in train_indices:
+            inp = int_to_bits(i, n_bits)
+            out = int_to_bits(prim_a(i), n_bits)
+            layer_a.train_mapping(inp, out)
+
+        # Train primitive B
+        for i in train_indices:
+            inp = int_to_bits(i, n_bits)
+            out = int_to_bits(prim_b(i), n_bits)
+            layer_b.train_mapping(inp, out)
+
+        # Evaluate primitives
+        def eval_layer(layer, fn, indices):
+            correct = 0
+            for i in indices:
+                inp = int_to_bits(i, n_bits)
+                result = layer(inp).squeeze()
+                expected = int_to_bits(fn(i), n_bits)
+                if (result == expected).all():
+                    correct += 1
+            return 100 * correct / len(indices) if indices else 0
+
+        a_train_acc = eval_layer(layer_a, prim_a, train_indices)
+        a_test_acc = eval_layer(layer_a, prim_a, test_indices)
+        b_train_acc = eval_layer(layer_b, prim_b, train_indices)
+        b_test_acc = eval_layer(layer_b, prim_b, test_indices)
+
+        if verbose:
+            print(f"  {prim_a_name}: train={a_train_acc:.1f}%, test={a_test_acc:.1f}%")
+            print(f"  {prim_b_name}: train={b_train_acc:.1f}%, test={b_test_acc:.1f}%")
+
+        # Evaluate composition: A∘B (apply A, then B)
+        def composed_fn(x: int) -> int:
+            return prim_b(prim_a(x))
+
+        def eval_composition(indices):
+            correct = 0
+            for i in indices:
+                # Apply A
+                inp = int_to_bits(i, n_bits)
+                intermediate = layer_a(inp)
+
+                # Apply B to A's output
+                final = layer_b(intermediate).squeeze()
+
+                # Check against ground truth
+                expected = int_to_bits(composed_fn(i), n_bits)
+                if (final == expected).all():
+                    correct += 1
+            return 100 * correct / len(indices) if indices else 0
+
+        composed_train_acc = eval_composition(train_indices)
+        composed_test_acc = eval_composition(test_indices)
+
+        if verbose:
+            gen_mark = "★" if composed_test_acc > 50 else " "
+            print(f"  {comp_name}: train={composed_train_acc:.1f}%, test={composed_test_acc:.1f}% {gen_mark}")
+
+        results.append(CompositionResult(
+            primitive_a=prim_a_name,
+            primitive_b=prim_b_name,
+            composition=comp_name,
+            a_train_acc=a_train_acc,
+            a_test_acc=a_test_acc,
+            b_train_acc=b_train_acc,
+            b_test_acc=b_test_acc,
+            composed_train_acc=composed_train_acc,
+            composed_test_acc=composed_test_acc,
+        ))
+
+    if verbose:
+        print("\n" + "-" * 60)
+        print("COMPOSITIONAL GENERALIZATION SUMMARY")
+        print("-" * 60)
+        print(f"{'Composition':<25} {'A test':>8} {'B test':>8} {'A∘B test':>10}")
+        print("-" * 60)
+        for r in results:
+            gen_mark = "★" if r.composed_test_acc > 50 else " "
+            print(f"{r.composition:<25} {r.a_test_acc:>7.1f}% {r.b_test_acc:>7.1f}% "
+                  f"{r.composed_test_acc:>9.1f}%{gen_mark}")
+
+        # Insight
+        print("\n★ Key Insight: Composition generalization depends on BOTH primitives")
+        print("  generalizing. If A or B fails to generalize, A∘B also fails.")
+
+    return results
+
+
+# ============================================================
 # Recurrent Benchmarks
 # ============================================================
 
@@ -623,6 +830,13 @@ Tasks:
     # Print summary
     print_summary_table(results)
     print_strategy_analysis(results)
+
+    # Run compositional benchmark with multiple strategies
+    print("\n" + "=" * 80)
+    print("COMPOSITIONAL BENCHMARKS")
+    print("=" * 80)
+    for strategy in [MapperStrategy.BIT_LEVEL, MapperStrategy.COMPOSITIONAL]:
+        run_compositional_benchmark(strategy=strategy, verbose=True)
 
     # Run recurrent parity benchmark
     run_recurrent_parity_benchmark(verbose=True)
