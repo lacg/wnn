@@ -32,6 +32,7 @@ output_layer_output			final output									[1, N_out]
 | successor  | BIT_LEVEL     | 100%          | Per-bit context learning |
 | sorting    | BIT_LEVEL     | 100%          | BitLevelComparator (70 patterns for 6-bit) |
 | addition   | RECURRENT     | 100%          | LearnedFullAdder (8 binary / 200 decimal patterns) |
+| multiply   | RECURRENT     | 100%          | Shift-and-add reuses addition (8 binary / 300 decimal) |
 
 ## Completed: Architectural Improvements
 - [x] Learned Position Embeddings - LearnedPositionEncoder with RAMLayer
@@ -47,6 +48,7 @@ output_layer_output			final output									[1, N_out]
 ## Completed: New Task Domains
 - [x] Sorting - BitLevelComparator decomposes comparison into bit-level ops (100% generalization)
 - [x] Arithmetic (Addition) - LearnedFullAdder with carry propagation (100% generalization)
+- [x] Arithmetic (Multiplication) - Shift-and-add reuses addition; binary needs 0 new patterns!
 
 ## Key Insight: The Decomposition Pattern
 RAM networks generalize when complex operations are decomposed into small learnable primitives:
@@ -57,10 +59,11 @@ RAM networks generalize when complex operations are decomposed into small learna
 | Comparison | bit-level <, == (8) | Cascade + prefix AND | 70 (6-bit) |
 | Sorting | BitLevelComparator | Rank counting | 70 (6-bit) |
 | Addition | Full adder (8/200) | Carry propagation | 8 (binary) / 200 (decimal) |
+| Multiply | Full adder + digit-mult | Shift-and-add | 8 (binary) / 300 (decimal) |
 
 The pattern: **Decompose → Learn primitives → Compose/Recur → Generalize**
 
 ## Future: New Task Domains
-- [ ] Arithmetic (Multiplication) - Can we decompose into learnable primitives?
 - [ ] Language Modeling - Character-level text generation
 - [ ] Sequence-to-Sequence - Translation, summarization with cross-attention
+- [ ] Division - Can we learn inverse of multiplication?
