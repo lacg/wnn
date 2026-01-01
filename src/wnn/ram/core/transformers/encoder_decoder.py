@@ -120,7 +120,10 @@ class RAMEncoderDecoder(Module):
 		self.max_decoder_len = max_decoder_len
 		self.use_residual = use_residual
 		self.use_ffn = use_ffn
+		self.ffn_expansion = ffn_expansion
 		self.use_embedding = use_embedding
+		self.embedding_position = embedding_position
+		self.cross_attention_mode = cross_attention_mode
 		self.position_mode = position_mode
 
 		# Convert generalization string to enum if needed
@@ -610,3 +613,41 @@ class RAMEncoderDecoder(Module):
 			f"RAMEncoderDecoder(enc={self.num_encoder_layers}, dec={self.num_decoder_layers}, "
 			f"heads={self.num_heads}, dims={self.input_bits}->{self.hidden_bits}->{self.output_bits})"
 		)
+
+	# Serialization support
+	def get_config(self) -> dict:
+		"""Get configuration dict for model recreation."""
+		return {
+			'input_bits': self.input_bits,
+			'hidden_bits': self.hidden_bits,
+			'output_bits': self.output_bits,
+			'num_encoder_layers': self.num_encoder_layers,
+			'num_decoder_layers': self.num_decoder_layers,
+			'num_heads': self.num_heads,
+			'position_mode': self.position_mode,
+			'max_encoder_len': self.max_encoder_len,
+			'max_decoder_len': self.max_decoder_len,
+			'use_residual': self.use_residual,
+			'use_ffn': self.use_ffn,
+			'ffn_expansion': self.ffn_expansion,
+			'use_embedding': self.use_embedding,
+			'embedding_position': self.embedding_position,
+			'cross_attention_mode': self.cross_attention_mode,
+			'generalization': self.generalization,
+		}
+
+	@classmethod
+	def from_config(cls, config: dict) -> "RAMEncoderDecoder":
+		"""Create model from configuration dict."""
+		return cls(**config)
+
+	def save(self, path: str) -> None:
+		"""Save model to file."""
+		from wnn.ram.core.serialization import save_model
+		save_model(self, path)
+
+	@classmethod
+	def load(cls, path: str, device: str = 'cpu') -> "RAMEncoderDecoder":
+		"""Load model from file."""
+		from wnn.ram.core.serialization import load_model
+		return load_model(path, model_class=cls, device=device)

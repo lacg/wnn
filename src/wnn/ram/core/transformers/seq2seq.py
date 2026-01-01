@@ -114,6 +114,7 @@ class RAMSeq2Seq(Module):
 		self.use_residual = use_residual
 		self.use_ffn = use_ffn
 		self.ffn_mode = ffn_mode
+		self.ffn_expansion = ffn_expansion
 		self.use_embedding = use_embedding
 		self.embedding_position = embedding_position
 		self.position_mode = position_mode
@@ -651,3 +652,39 @@ class RAMSeq2Seq(Module):
 			f"dims={self.input_bits}->{self.hidden_bits}->{self.output_bits}, "
 			f"pos={self.position_mode.name})"
 		)
+
+	# Serialization support
+	def get_config(self) -> dict:
+		"""Get configuration dict for model recreation."""
+		return {
+			'input_bits': self.input_bits,
+			'hidden_bits': self.hidden_bits,
+			'output_bits': self.output_bits,
+			'num_layers': self.num_layers,
+			'num_heads': self.num_heads,
+			'position_mode': self.position_mode,
+			'max_seq_len': self.max_seq_len,
+			'use_residual': self.use_residual,
+			'use_ffn': self.use_ffn,
+			'ffn_expansion': self.ffn_expansion,
+			'ffn_mode': self.ffn_mode,
+			'use_embedding': self.use_embedding,
+			'embedding_position': self.embedding_position,
+			'generalization': self.generalization,
+		}
+
+	@classmethod
+	def from_config(cls, config: dict) -> "RAMSeq2Seq":
+		"""Create model from configuration dict."""
+		return cls(**config)
+
+	def save(self, path: str) -> None:
+		"""Save model to file."""
+		from wnn.ram.core.serialization import save_model
+		save_model(self, path)
+
+	@classmethod
+	def load(cls, path: str, device: str = 'cpu') -> "RAMSeq2Seq":
+		"""Load model from file."""
+		from wnn.ram.core.serialization import load_model
+		return load_model(path, model_class=cls, device=device)

@@ -68,6 +68,17 @@ class RAMTransformer(Module):
         self.input_bits = input_bits
         self.num_blocks = num_blocks
         self.max_seq_len = max_seq_len
+        # Store defaults for serialization
+        self.attention_type = attention_type
+        self.num_heads = num_heads
+        self.content_match = content_match
+        self.position_mode = position_mode
+        self.causal = causal
+        self.ffn_type = ffn_type
+        self.ffn_constant = ffn_constant
+        self.ffn_modulo = ffn_modulo
+        self.use_residual = use_residual
+        self.block_configs = block_configs
 
         # Build blocks
         self.blocks = ModuleList()
@@ -113,3 +124,38 @@ class RAMTransformer(Module):
         for block in self.blocks:
             corrections += block.train_block(input_tokens, target_tokens, attention_pattern)
         return corrections
+
+    # Serialization support
+    def get_config(self) -> dict:
+        """Get configuration dict for model recreation."""
+        return {
+            'input_bits': self.input_bits,
+            'num_blocks': self.num_blocks,
+            'attention_type': self.attention_type,
+            'num_heads': self.num_heads,
+            'content_match': self.content_match,
+            'position_mode': self.position_mode,
+            'causal': self.causal,
+            'ffn_type': self.ffn_type,
+            'ffn_constant': self.ffn_constant,
+            'ffn_modulo': self.ffn_modulo,
+            'use_residual': self.use_residual,
+            'max_seq_len': self.max_seq_len,
+            'block_configs': self.block_configs,
+        }
+
+    @classmethod
+    def from_config(cls, config: dict) -> "RAMTransformer":
+        """Create model from configuration dict."""
+        return cls(**config)
+
+    def save(self, path: str) -> None:
+        """Save model to file."""
+        from wnn.ram.core.serialization import save_model
+        save_model(self, path)
+
+    @classmethod
+    def load(cls, path: str, device: str = 'cpu') -> "RAMTransformer":
+        """Load model from file."""
+        from wnn.ram.core.serialization import load_model
+        return load_model(path, model_class=cls, device=device)
