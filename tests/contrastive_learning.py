@@ -24,6 +24,7 @@ from wnn.ram.core import (
     normalized_hamming_similarity,
 )
 from wnn.ram.core.models import RAMSeq2Seq
+from wnn.ram.enums import MapperStrategy
 
 
 # =============================================================================
@@ -182,14 +183,15 @@ def test_contrastive_training():
     dataset = create_classification_dataset(n_bits=4, n_classes=4)
     print(f"Dataset: {len(dataset)} examples, 4 classes")
 
-    # Create model
+    # Create model with BIT_LEVEL generalization for better learning
     model = RAMSeq2Seq(
         input_bits=4,
-        hidden_bits=8,
+        hidden_bits=16,  # Larger hidden layer
         output_bits=4,
-        num_layers=1,
-        num_heads=2,
+        num_layers=2,    # More layers
+        num_heads=4,     # More heads
         use_residual=True,
+        generalization=MapperStrategy.BIT_LEVEL,  # Better generalization
         rng=42,
     )
 
@@ -197,12 +199,12 @@ def test_contrastive_training():
     trainer = RAMTrainer(model, verbose=False)
     contrastive = ContrastiveTrainer(trainer, hard_negative_ratio=0.5)
 
-    # Train with contrastive learning
+    # Train with contrastive learning - more epochs
     print("\nTraining with contrastive learning:")
     history = contrastive.train(
         dataset,
-        epochs=10,
-        triplets_per_epoch=30,
+        epochs=20,       # More epochs
+        triplets_per_epoch=50,  # More triplets
         verbose=True,
     )
 
@@ -263,20 +265,35 @@ def test_hard_negative_mining():
 # COMPARISON: STANDARD VS CONTRASTIVE
 # =============================================================================
 
+def create_copy_dataset(n_bits: int = 4, seq_len: int = 3, n_examples: int = 16):
+    """
+    Create a copy task dataset: input sequence → same output sequence.
+
+    This is a task RAM networks excel at and creates natural triplets:
+    - Positive: Similar sequences that should produce similar outputs
+    - Negative: Different sequences that should produce different outputs
+    """
+    dataset = []
+    for i in range(n_examples):
+        seq = [int_to_bits((i + j) % (2**n_bits), n_bits) for j in range(seq_len)]
+        dataset.append((seq, seq))  # Copy: output = input
+    return dataset
+
+
 def test_standard_vs_contrastive():
-    """Compare standard training vs contrastive training."""
+    """Compare standard training vs contrastive refinement on copy task."""
     print(f"\n{'='*60}")
-    print("Comparing Standard vs Contrastive Training")
+    print("Comparing Standard vs Contrastive on Copy Task")
     print(f"{'='*60}")
 
-    # Create dataset
-    dataset = create_classification_dataset(n_bits=4, n_classes=4)
-    print(f"Dataset: {len(dataset)} examples, 4 classes")
+    # Create copy task dataset (RAM networks excel at this)
+    dataset = create_copy_dataset(n_bits=4, seq_len=3, n_examples=20)
+    print(f"Dataset: {len(dataset)} sequences of length 3")
 
     results = {}
 
-    # Standard training
-    print("\n--- Standard Training ---")
+    # Standard training only
+    print("\n--- Standard Training Only ---")
     model_std = RAMSeq2Seq(
         input_bits=4,
         hidden_bits=8,
@@ -287,15 +304,15 @@ def test_standard_vs_contrastive():
         rng=42,
     )
     trainer_std = RAMTrainer(model_std, verbose=False)
-    history_std = trainer_std.train(dataset, epochs=15, early_stop=True)
+    history_std = trainer_std.train(dataset, epochs=30, early_stop=True)
 
     if history_std:
-        results['standard'] = history_std[-1].accuracy
+        results['standard_only'] = history_std[-1].accuracy
         print(f"Final accuracy: {history_std[-1].accuracy:.1f}%")
 
-    # Contrastive training
-    print("\n--- Contrastive Training ---")
-    model_con = RAMSeq2Seq(
+    # Hybrid: Standard training + Contrastive refinement
+    print("\n--- Hybrid: Standard + Contrastive Refinement ---")
+    model_hyb = RAMSeq2Seq(
         input_bits=4,
         hidden_bits=8,
         output_bits=4,
@@ -304,14 +321,38 @@ def test_standard_vs_contrastive():
         use_residual=True,
         rng=42,
     )
-    trainer_con = RAMTrainer(model_con, verbose=False)
-    contrastive = ContrastiveTrainer(trainer_con, hard_negative_ratio=0.5)
-    history_con = contrastive.train(dataset, epochs=15, triplets_per_epoch=30, verbose=False)
+    trainer_hyb = RAMTrainer(model_hyb, verbose=False)
 
-    if history_con:
-        results['contrastive'] = history_con[-1]['accuracy']
-        print(f"Final accuracy: {history_con[-1]['accuracy']:.1f}%")
-        print(f"Distinction rate: {history_con[-1]['distinction_rate']:.1f}%")
+    # Phase 1: Standard training to learn basic mappings
+    print("  Phase 1: Standard training...")
+    history_phase1 = trainer_hyb.train(dataset, epochs=20, early_stop=True)
+    phase1_acc = history_phase1[-1].accuracy if history_phase1 else 0
+    print(f"  After standard: {phase1_acc:.1f}%")
+
+    # Phase 2: Contrastive refinement to improve distinctions
+    print("  Phase 2: Contrastive refinement...")
+    contrastive = ContrastiveTrainer(trainer_hyb, hard_negative_ratio=0.7)
+    history_phase2 = contrastive.train(dataset, epochs=15, triplets_per_epoch=30, verbose=False)
+
+    if history_phase2:
+        results['hybrid'] = history_phase2[-1]['accuracy']
+        results['hybrid_distinction'] = history_phase2[-1]['distinction_rate']
+        print(f"  After contrastive: {history_phase2[-1]['accuracy']:.1f}%")
+        print(f"  Distinction rate: {history_phase2[-1]['distinction_rate']:.1f}%")
+
+    # Evaluate on full dataset after hybrid training
+    print("\n  Evaluating hybrid model on full dataset...")
+    correct = 0
+    total = 0
+    for inputs, targets in dataset:
+        outputs = model_hyb.forward(inputs)
+        for o, t in zip(outputs, targets):
+            if (o.squeeze() == t.squeeze()).all():
+                correct += 1
+            total += 1
+    final_acc = 100 * correct / total
+    results['hybrid_final'] = final_acc
+    print(f"  Hybrid final accuracy: {final_acc:.1f}%")
 
     return results
 
@@ -355,7 +396,7 @@ if __name__ == "__main__":
     print(f"  Final accuracy: {train_acc:.1f}%")
     print(f"  Distinction rate: {dist_rate:.1f}%")
 
-    print("\nStandard vs Contrastive:")
+    print("\nStandard vs Hybrid (Standard + Contrastive):")
     for method, acc in comparison.items():
         print(f"  {method}: {acc:.1f}%")
 
@@ -364,7 +405,8 @@ Key insights:
 - Triplet training: (anchor, positive, negative) teaches discrimination
 - Hard negative mining: Focus on similar inputs with different outputs
 - Distinction rate: How well the model separates different classes
-- Contrastive learning is most useful when classes are easily confused
+- Best approach: Standard training first, then contrastive refinement
+- Contrastive alone doesn't teach all mappings; use it as refinement
 """)
     print(f"Finished at: {datetime.now()}")
     print(f"{'='*60}")

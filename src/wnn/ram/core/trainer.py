@@ -2223,14 +2223,16 @@ class ContrastiveTrainer:
 				if not self._are_same_class(anchor_out, neg_out):
 					epoch_stats['distinctions_correct'] += 1
 
-			# Compute accuracy
+			# Compute accuracy (clamped to 0-100%)
 			total_errors = (
 				epoch_stats['anchor_errors'] +
 				epoch_stats['positive_errors'] +
 				epoch_stats['negative_errors']
 			)
 			total_positions = 3 * len(triplets)
-			epoch_stats['accuracy'] = 100 * (1 - total_errors / total_positions) if total_positions > 0 else 0
+			# Clamp accuracy to valid range (errors can exceed positions for multi-bit outputs)
+			error_rate = min(1.0, total_errors / total_positions) if total_positions > 0 else 0
+			epoch_stats['accuracy'] = 100 * (1 - error_rate)
 			epoch_stats['distinction_rate'] = 100 * epoch_stats['distinctions_correct'] / len(triplets) if triplets else 0
 
 			history.append(epoch_stats)
