@@ -19,6 +19,7 @@ from wnn.ram.core.RAMGeneralization import (
     GeneralizingProjection,
     HashMapper,
     ResidualMapper,
+    RecurrentParityMapper,
 )
 
 # Aggregation

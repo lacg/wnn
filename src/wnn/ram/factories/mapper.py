@@ -34,6 +34,7 @@ class MapperFactory:
 		cross_group_context: bool = True,
 		hash_bits: int = 6,
 		n_hash_functions: int = 3,
+		shift_offset: int = 1,
 		rng: int | None = None,
 	) -> Module:
 		"""
@@ -49,6 +50,7 @@ class MapperFactory:
 			cross_group_context: Whether groups can see each other
 			hash_bits: Number of hash bits for HASH strategy
 			n_hash_functions: Number of hash functions for HASH strategy
+			shift_offset: Offset for SHIFTED strategy (1=left, -1=right)
 			rng: Random seed
 
 		Returns:
@@ -62,6 +64,7 @@ class MapperFactory:
 			GeneralizingProjection,
 			HashMapper,
 			ResidualMapper,
+			RecurrentParityMapper,
 		)
 
 		# Convert string to enum if needed
@@ -115,6 +118,19 @@ class MapperFactory:
 					n_bits=n_bits,
 					context_mode=context_mode,
 					local_window=local_window,
+					rng=rng,
+				)
+			case MapperStrategy.SHIFTED:
+				return BitLevelMapper(
+					n_bits=n_bits,
+					context_mode=ContextMode.SHIFTED,
+					output_mode=BitMapperMode.OUTPUT,
+					shift_offset=shift_offset,
+					rng=rng,
+				)
+			case MapperStrategy.PARITY:
+				return RecurrentParityMapper(
+					n_bits=n_bits,
 					rng=rng,
 				)
 			case _:

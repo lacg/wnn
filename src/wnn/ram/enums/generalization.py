@@ -15,12 +15,14 @@ class ContextMode(IntEnum):
 	- LOCAL: Best when nearby bits matter most (local patterns)
 	- BIDIRECTIONAL: Best when both before/after matter (symmetric ops)
 	- CAUSAL: Best for autoregressive tasks (only sees past)
+	- SHIFTED: Best for position-based transforms (shift, rotate)
 	"""
 	CUMULATIVE = 0    # bit i sees bits 0..i-1 (only LOWER bits for flip)
 	FULL = 1          # each bit sees all bits
 	LOCAL = 2         # each bit sees nearby bits (sliding window)
 	BIDIRECTIONAL = 3 # bit i sees bits before AND after (symmetric window)
 	CAUSAL = 4        # bit i sees bits 0..i (autoregressive, includes self)
+	SHIFTED = 5       # bit i sees bit (i+offset) mod n (position-based transforms)
 
 
 class BitMapperMode(IntEnum):
@@ -49,6 +51,8 @@ class MapperStrategy(IntEnum):
 	- HYBRID: Combines compositional + bit-level
 	- HASH: Hash input to smaller lookup (loses precision but generalizes)
 	- RESIDUAL: Learn corrections to identity (good for small changes)
+	- SHIFTED: Position-based transforms (shift, rotate) - 100% generalization
+	- PARITY: Recurrent XOR for parity computation - 100% generalization
 	"""
 	DIRECT = 0        # Standard RAMLayer (no generalization)
 	BIT_LEVEL = 1     # Use BitLevelMapper
@@ -56,3 +60,5 @@ class MapperStrategy(IntEnum):
 	HYBRID = 3        # Combine compositional + bit-level
 	HASH = 4          # Hash input to reduce lookup space
 	RESIDUAL = 5      # Identity + learned correction
+	SHIFTED = 6       # BitLevelMapper with SHIFTED context (for shift/rotate)
+	PARITY = 7        # RecurrentParityMapper (for parity computation)

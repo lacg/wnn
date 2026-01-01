@@ -10,3 +10,41 @@ state_layer_input				[input_out(t), state(t-1)]		[1, N_in + N_state]
 state_layer_output			state(t)											[1, N_state]
 output_layer_input			[input_out(t), state(t)]			[1, N_in + N_state]
 output_layer_output			final output									[1, N_out]
+
+---
+
+# Transformer Improvement Roadmap
+
+## Completed
+- [x] Scheduled Sampling for autoregressive training
+- [x] Soft Attention via Voting (already existed)
+- [x] Hard Example Mining (already existed)
+
+## In Progress
+- [ ] Parity generalization (currently 53.8% test accuracy)
+- [ ] Shift-left generalization (currently 43.6% test accuracy)
+
+## Generalization Gaps (from benchmarks)
+| Task       | Best Strategy   | Test Accuracy | Status      |
+|------------|-----------------|---------------|-------------|
+| parity     | BIT_LEVEL       | 53.8%         | Needs work  |
+| shift_left | COMPOSITIONAL   | 43.6%         | Needs work  |
+| complement | COMPOSITIONAL   | 100%          | Done        |
+| copy       | BIT_LEVEL       | 100%          | Done        |
+| successor  | BIT_LEVEL       | 100%          | Done        |
+
+## Future: Architectural Improvements
+- [ ] Learned Position Embeddings - Current RELATIVE mode is fixed; learned could adapt
+- [ ] Cross-Attention - Enable encoder-decoder for translation/summarization
+- [ ] Layer Normalization Equivalent - Stabilize training for deeper models
+- [ ] Sparse Attention Patterns - For longer sequences
+
+## Future: Training Enhancements
+- [ ] Curriculum Learning Integration - Start with short sequences, gradually increase
+- [ ] Multi-Task Learning - Train on multiple tasks simultaneously
+- [ ] Contrastive Learning - Learn representations that distinguish similar patterns
+
+## Future: New Task Domains
+- [ ] Arithmetic - Multi-digit addition, multiplication
+- [ ] Sorting - Already have computed version; can we learn it?
+- [ ] Language Modeling - Character-level text generation

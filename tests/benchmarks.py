@@ -382,6 +382,8 @@ def run_full_benchmark(
             MapperStrategy.COMPOSITIONAL,
             MapperStrategy.HASH,
             MapperStrategy.RESIDUAL,
+            MapperStrategy.SHIFTED,  # Specialized for shift/rotate (100% generalization)
+            MapperStrategy.PARITY,   # Specialized for parity (100% generalization)
         ]
 
     all_results = []

@@ -54,6 +54,7 @@ class BitLevelMapper(Module):
 		context_mode: ContextMode | str = ContextMode.CUMULATIVE,
 		output_mode: OutputMode | str = OutputMode.FLIP,
 		local_window: int = 3,
+		shift_offset: int = 1,
 		rng: int | None = None,
 	):
 		"""
@@ -65,10 +66,12 @@ class BitLevelMapper(Module):
 				- LOCAL: each bit sees nearby bits (sliding window)
 				- BIDIRECTIONAL: bit i sees symmetric window before/after
 				- CAUSAL: bit i sees bits 0..i (autoregressive)
+				- SHIFTED: bit i sees bit (i+offset) mod n (for shift/rotate)
 			output_mode: What to learn (OutputMode enum)
 				- OUTPUT: Learn the output bit value directly
 				- FLIP: Learn whether to flip (XOR) the input bit
 			local_window: Window size for LOCAL/BIDIRECTIONAL modes
+			shift_offset: Offset for SHIFTED mode (1 = shift-left, -1 = shift-right)
 			rng: Random seed
 		"""
 		super().__init__()
@@ -82,6 +85,7 @@ class BitLevelMapper(Module):
 		self.context_mode = context_mode
 		self.output_mode = output_mode
 		self.local_window = local_window
+		self.shift_offset = shift_offset
 
 		# Create a mapper for each output bit
 		self.bit_mappers = ModuleList()
@@ -123,6 +127,11 @@ class BitLevelMapper(Module):
 			case ContextMode.CAUSAL:
 				# See bits 0..bit_pos (includes self)
 				return bit_pos + 1
+
+			case ContextMode.SHIFTED:
+				# Each output bit sees exactly one input bit (shifted position)
+				# This enables perfect generalization for shift/rotate operations
+				return 1
 
 			case _:
 				raise ValueError(f"Unknown context_mode: {self.context_mode}")
@@ -193,6 +202,16 @@ class BitLevelMapper(Module):
 				start = self.n_bits - bit_pos - 1
 				context = bits[start:].clone()
 				return context.flip(0)  # LSB first
+
+			case ContextMode.SHIFTED:
+				# SHIFTED mode works with ARRAY indices for position-based transforms
+				# For shift-left: output_array[i] = input_array[(i+1) % n]
+				# For shift-right: output_array[i] = input_array[(i-1) % n]
+				#
+				# We need to convert bit_pos (logical) to array index first
+				array_idx = self.n_bits - bit_pos - 1  # Current output array position
+				source_array_idx = (array_idx + self.shift_offset) % self.n_bits
+				return bits[source_array_idx:source_array_idx + 1].clone()
 
 			case _:
 				raise ValueError(f"Unknown context_mode: {self.context_mode}")
@@ -277,6 +296,114 @@ class BitLevelMapper(Module):
 
 	def __repr__(self):
 		return f"BitLevelMapper(bits={self.n_bits}, mode={self.context_mode})"
+
+
+class RecurrentParityMapper(Module):
+	"""
+	Recurrent parity mapper for computing XOR of all bits.
+
+	Uses a 1-bit state to compute parity incrementally:
+	  state[0] = input[0]
+	  state[i] = state[i-1] XOR input[i]
+	  parity = state[n-1]
+
+	Only needs to learn 4 patterns (XOR truth table):
+	  (0,0) -> 0, (0,1) -> 1, (1,0) -> 1, (1,1) -> 0
+
+	This achieves 100% generalization because all 4 patterns
+	are learned regardless of training set size.
+
+	For the parity task (output = input with last bit = parity):
+	  - Bits 0..n-2: Identity (copy input to output)
+	  - Bit n-1: Computed parity via recurrent XOR
+	"""
+
+	def __init__(self, n_bits: int, rng: int | None = None):
+		super().__init__()
+		self.n_bits = n_bits
+
+		# XOR mapper: sees (state, input) -> new_state
+		# 2 input bits, 1 output bit
+		self.xor_mapper = RAMLayer(
+			total_input_bits=2,
+			num_neurons=1,
+			n_bits_per_neuron=2,
+			rng=rng,
+		)
+
+	def _compute_parity(self, bits: Tensor) -> Tensor:
+		"""Compute parity using recurrent XOR."""
+		bits = bits.squeeze()
+		state = bits[0].clone()  # Start with first bit (MSB)
+
+		for i in range(1, self.n_bits):
+			# XOR state with next bit
+			xor_input = cat([state.unsqueeze(0), bits[i:i+1]])
+			state = self.xor_mapper(xor_input.unsqueeze(0)).squeeze()
+
+		return state
+
+	def forward(self, bits: Tensor) -> Tensor:
+		"""
+		Transform bits: output = input with last bit = parity.
+
+		Args:
+			bits: Input tensor [n_bits] (MSB first)
+
+		Returns:
+			Output tensor with parity in last bit
+		"""
+		if bits.ndim == 2:
+			bits = bits.squeeze(0)
+
+		# Copy all bits
+		output = bits.clone()
+
+		# Compute parity and set last bit
+		parity = self._compute_parity(bits)
+		output[-1] = parity
+
+		return output
+
+	def train_mapping(self, input_bits: Tensor, output_bits: Tensor) -> int:
+		"""
+		Train the XOR mapper on an example.
+
+		Only trains the XOR operation - identity bits need no training.
+
+		Returns:
+			Number of XOR patterns that needed training
+		"""
+		input_bits = input_bits.squeeze()
+		output_bits = output_bits.squeeze()
+
+		trained = 0
+
+		# Train XOR mapper by stepping through the recurrence
+		state = input_bits[0].clone()
+
+		for i in range(1, self.n_bits):
+			next_bit = input_bits[i]
+			xor_input = cat([state.unsqueeze(0), next_bit.unsqueeze(0)])
+
+			# Expected new state = state XOR next_bit
+			expected_state = (state ^ next_bit).to(uint8)
+
+			# Check current output
+			current = self.xor_mapper(xor_input.unsqueeze(0)).squeeze()
+
+			if current != expected_state:
+				trained += 1
+				target = tensor([[expected_state]], dtype=uint8)
+				self.xor_mapper.commit(xor_input.unsqueeze(0), target)
+
+			# Update state for next step (use expected, not predicted)
+			state = expected_state
+
+		return trained
+
+	def __repr__(self):
+		return f"RecurrentParityMapper(bits={self.n_bits})"
 
 
 class CompositionalMapper(Module):
