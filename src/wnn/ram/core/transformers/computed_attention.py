@@ -285,6 +285,89 @@ class ComputedSumAttention(ComputedAttention):
         return [sum_bits.clone() for _ in range(n)]
 
 
+class ComputedShiftAttention(ComputedAttention):
+    """
+    Shift attention: each position attends to a fixed offset position.
+
+    This solves DOUBLE (x * 2) and other permutation tasks:
+    - SHIFT_LEFT (offset=1): output[i] = input[i+1], solves DOUBLE
+    - SHIFT_RIGHT (offset=-1): output[i] = input[i-1], solves HALVE (integer div)
+
+    100% generalization because routing is computed, not learned.
+    """
+
+    def __init__(
+        self,
+        input_bits: int,
+        offset: int = 1,
+        fill_value: int = 0,
+        wrap: bool = False,
+        rng: int | None = None,
+    ):
+        """
+        Args:
+            input_bits: Bits per token (also determines sequence length)
+            offset: How many positions to shift (positive=left, negative=right)
+            fill_value: Value to fill shifted-in positions (0 or 1)
+            wrap: If True, wrap around (rotate); if False, fill with fill_value
+            rng: Random seed (unused)
+        """
+        super().__init__()
+        self.input_bits = input_bits
+        self.offset = offset
+        self.fill_value = fill_value
+        self.wrap = wrap
+
+        direction = "left" if offset > 0 else "right"
+        mode = "rotate" if wrap else "shift"
+        print(f"[ComputedShiftAttention] bits={input_bits}, {mode}_{direction} by {abs(offset)}")
+
+    def get_attention_weights(
+        self,
+        tokens: list[Tensor],
+        context: list[Tensor] | None = None,
+    ) -> Tensor:
+        """Get attention weights for shift pattern."""
+        n = len(tokens)
+        weights = zeros(n, n, dtype=float32)
+
+        for i in range(n):
+            src = i + self.offset
+            if self.wrap:
+                src = src % n
+            if 0 <= src < n:
+                weights[i, src] = 1.0
+            # else: no attention (will use fill_value)
+
+        return weights
+
+    def forward(
+        self,
+        tokens: list[Tensor],
+        context: list[Tensor] | None = None,
+    ) -> list[Tensor]:
+        """Apply shift to the token sequence."""
+        tokens = [t.squeeze() if t.ndim > 1 else t for t in tokens]
+        n = len(tokens)
+        token_bits = len(tokens[0]) if tokens else self.input_bits
+
+        outputs = []
+        for i in range(n):
+            src = i + self.offset
+            if self.wrap:
+                src = src % n
+            if 0 <= src < n:
+                outputs.append(tokens[src].clone())
+            else:
+                # Fill with fill_value
+                fill = zeros(token_bits, dtype=uint8)
+                if self.fill_value:
+                    fill.fill_(1)
+                outputs.append(fill)
+
+        return outputs
+
+
 class ComputedMeanAttention(ComputedAttention):
     """
     Compute the mean of all token values in the sequence.

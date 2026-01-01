@@ -25,6 +25,7 @@ from wnn.ram.core.transformers.computed_attention import (
     ComputedCountDistinctAttention,
     ComputedSumAttention,
     ComputedMeanAttention,
+    ComputedShiftAttention,
 )
 from wnn.ram.core.transformers.xor_attention import (
     XORCrossAttention,
@@ -73,6 +74,7 @@ __all__ = [
     'ComputedCountDistinctAttention',
     'ComputedSumAttention',
     'ComputedMeanAttention',
+    'ComputedShiftAttention',
     'XORCrossAttention',
     'XORContentAddressableMemory',
     # FFN
