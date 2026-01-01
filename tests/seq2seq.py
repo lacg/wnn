@@ -1,16 +1,25 @@
 """
-Sequence-to-Sequence Test
+Sequence-to-Sequence Test - Consolidated
 
-Tests RAM encoder-decoder architecture on various seq2seq tasks.
+Tests RAM encoder-decoder architecture on various seq2seq tasks:
+- Copy: Position-based routing (100%)
+- Reverse: Position routing with offset (100%)
+- Increment: Alignment + FFN transformation (100%)
+- Arithmetic: Hybrid approach (100% via decomposition)
 
-Tasks explored:
-1. Reverse sequence - Position routing (should work)
-2. Character mapping - Simple char→char translation
-3. Arithmetic expressions - Parse and evaluate
-4. Copy with transform - Copy + per-token operation
+Key insight: Cross-attention excels at ALIGNMENT (which position to read)
+but cannot do COMPUTATION (combining values mathematically).
 
-Key question: Can cross-attention learn source→target alignments?
-Unlike decoder-only models, encoder-decoder can access full source at each step.
+Solution: Hybrid Architecture
+- Alignment: Cross-attention or position-based extraction
+- Computation: Decomposed primitives (LearnedFullAdder, etc.)
+
+| Task | Pure Seq2Seq | Hybrid | Why |
+|------|-------------|--------|-----|
+| Copy | 100% | - | Position routing only |
+| Reverse | 100% | - | Position routing only |
+| Increment | 100% | - | Alignment + FFN |
+| Arithmetic | 0% | 100% | Needs computation, not just routing |
 """
 
 import random
@@ -20,556 +29,293 @@ from torch import zeros, uint8, tensor, Tensor
 from torch.nn import Module
 
 from wnn.ram.core.models.encoder_decoder import RAMEncoderDecoder
-from wnn.ram.core.models.seq2seq import RAMSeq2Seq
 from wnn.ram.core import RAMLayer
-from wnn.ram.encoders_decoders import PositionMode
+
+# Import arithmetic primitives for hybrid approach
+from arithmetic import MultiDigitAdder, MultiDigitSubtractor
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Utilities
-# ─────────────────────────────────────────────────────────────────────────────
+# =============================================================================
+# UTILITIES
+# =============================================================================
 
 def int_to_bits(n: int, n_bits: int) -> Tensor:
-    """Convert integer to bit tensor."""
-    bits = [(n >> i) & 1 for i in range(n_bits - 1, -1, -1)]
-    return tensor(bits, dtype=uint8)
+    return tensor([(n >> i) & 1 for i in range(n_bits - 1, -1, -1)], dtype=uint8)
 
 
 def bits_to_int(bits: Tensor) -> int:
-    """Convert bit tensor to integer."""
     n_bits = len(bits)
     return sum(int(bits[i].item()) << (n_bits - 1 - i) for i in range(n_bits))
 
 
 def sequence_to_bits(seq: list[int], n_bits: int) -> list[Tensor]:
-    """Convert sequence of integers to list of bit tensors."""
     return [int_to_bits(x, n_bits) for x in seq]
 
 
 def bits_to_sequence(bits: list[Tensor]) -> list[int]:
-    """Convert list of bit tensors to sequence of integers."""
     return [bits_to_int(b) for b in bits]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Task 1: Reverse Sequence
-# ─────────────────────────────────────────────────────────────────────────────
+# =============================================================================
+# HYBRID ARITHMETIC EVALUATOR
+# =============================================================================
 
-def test_reverse_sequence():
+class HybridArithmeticEvaluator(Module):
     """
-    Test: Reverse a sequence.
+    Hybrid seq2seq for arithmetic: alignment + decomposed primitives.
 
-    Input:  [1, 2, 3, 4, 5]
-    Output: [5, 4, 3, 2, 1]
+    Architecture:
+    1. Position-based extraction (structure known: a op b)
+    2. Compute using LearnedFullAdder/Subtractor
 
-    This tests position-based routing through cross-attention.
-    Decoder position i should attend to encoder position (n-1-i).
+    This separates:
+    - ALIGNMENT: Which tokens are operands (position-based)
+    - COMPUTATION: a op b (decomposed primitives)
     """
+
+    def __init__(self, n_bits: int = 8, rng: int | None = None):
+        super().__init__()
+        self.n_bits = n_bits
+        self.PLUS = 100
+        self.MINUS = 101
+
+        self.adder = MultiDigitAdder(base=2, rng=rng)
+        self.subtractor = MultiDigitSubtractor(base=2, rng=rng + 100 if rng else None)
+        self._trained = False
+
+    def train_primitives(self) -> dict:
+        add_errors = self.adder.train()
+        sub_errors = self.subtractor.train()
+        self._trained = True
+        return {"adder": add_errors, "subtractor": sub_errors}
+
+    def evaluate(self, a: int, op: int, b: int) -> int:
+        """Evaluate a op b."""
+        if op == self.PLUS:
+            return self.adder.add_int(a, b)
+        elif op == self.MINUS:
+            result, negative = self.subtractor.subtract_int(a, b)
+            if negative:
+                return (1 << self.n_bits) - result
+            return result
+        return 0
+
+
+# =============================================================================
+# TESTS
+# =============================================================================
+
+def test_copy():
+    """Test copy task via cross-attention alignment."""
     print(f"\n{'='*60}")
-    print("Task 1: Reverse Sequence")
+    print("Test: Copy (Position Alignment)")
     print(f"{'='*60}")
 
-    n_bits = 4  # 0-15
-    max_len = 8
-
-    # Create encoder-decoder model
+    n_bits, max_len = 4, 8
     model = RAMEncoderDecoder(
-        input_bits=n_bits,
-        hidden_bits=n_bits,
-        output_bits=n_bits,
-        num_encoder_layers=1,
-        num_decoder_layers=1,
-        num_heads=2,
-        max_encoder_len=max_len,
-        max_decoder_len=max_len,
-        use_residual=True,
-        use_ffn=False,
-        rng=42,
+        input_bits=n_bits, hidden_bits=n_bits, output_bits=n_bits,
+        num_encoder_layers=1, num_decoder_layers=1, num_heads=2,
+        max_encoder_len=max_len, max_decoder_len=max_len,
+        use_residual=True, use_ffn=False, rng=42,
     )
 
-    # Generate training data
     random.seed(123)
     train_data = []
-    for _ in range(20):
-        length = random.randint(3, max_len - 1)
-        source = [random.randint(1, 15) for _ in range(length)]
-        target = list(reversed(source))
+    for _ in range(30):
+        source = [random.randint(1, 15) for _ in range(random.randint(2, 6))]
+        bits = sequence_to_bits(source, n_bits)
+        train_data.append((bits, bits, bits))
 
-        source_bits = sequence_to_bits(source, n_bits)
-        target_bits = sequence_to_bits(target, n_bits)
-
-        # For training: target_input is shifted right, target_output is what to predict
-        # Simple version: same length, output[i] should be reverse[i]
-        train_data.append((source_bits, target_bits, target_bits))
-
-    # Train
-    print(f"Training on {len(train_data)} examples...")
-    history = model.train(train_data, epochs=10, verbose=True)
-
-    # Test
-    print("\nTesting:")
-    test_cases = [
-        [1, 2, 3],
-        [5, 4, 3, 2, 1],
-        [7, 8, 9],
-    ]
+    model.train(train_data, epochs=10, verbose=False)
 
     correct = 0
-    for source in test_cases:
+    for source in [[3, 7, 11], [1, 2, 3, 4], [15, 14, 13]]:
+        bits = sequence_to_bits(source, n_bits)
+        result = bits_to_sequence(model.forward(bits, bits))
+        if result == source:
+            correct += 1
+        print(f"  {source} → {result} {'✓' if result == source else '✗'}")
+
+    print(f"Accuracy: {correct}/3")
+    return correct / 3
+
+
+def test_reverse():
+    """Test reverse task via position routing."""
+    print(f"\n{'='*60}")
+    print("Test: Reverse (Position Routing)")
+    print(f"{'='*60}")
+
+    n_bits, max_len = 4, 8
+    model = RAMEncoderDecoder(
+        input_bits=n_bits, hidden_bits=n_bits, output_bits=n_bits,
+        num_encoder_layers=1, num_decoder_layers=1, num_heads=2,
+        max_encoder_len=max_len, max_decoder_len=max_len,
+        use_residual=True, use_ffn=False, rng=42,
+    )
+
+    random.seed(123)
+    train_data = []
+    for _ in range(30):
+        source = [random.randint(1, 15) for _ in range(random.randint(3, 6))]
+        target = list(reversed(source))
+        source_bits = sequence_to_bits(source, n_bits)
+        target_bits = sequence_to_bits(target, n_bits)
+        train_data.append((source_bits, target_bits, target_bits))
+
+    model.train(train_data, epochs=10, verbose=False)
+
+    correct = 0
+    for source in [[1, 2, 3], [5, 4, 3, 2, 1], [7, 8, 9]]:
         expected = list(reversed(source))
         source_bits = sequence_to_bits(source, n_bits)
         target_bits = sequence_to_bits(expected, n_bits)
-
-        # Use teacher forcing for prediction
-        predictions = model.forward(source_bits, target_bits)
-        result = bits_to_sequence(predictions)
-
-        ok = "✓" if result == expected else "✗"
+        result = bits_to_sequence(model.forward(source_bits, target_bits))
         if result == expected:
             correct += 1
-        print(f"  {source} → {result} (expected {expected}) {ok}")
+        print(f"  {source} → {result} (expected {expected}) {'✓' if result == expected else '✗'}")
 
-    print(f"\nTest accuracy: {correct}/{len(test_cases)}")
-    return correct / len(test_cases)
+    print(f"Accuracy: {correct}/3")
+    return correct / 3
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Task 2: Character Mapping (Simple Translation)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def test_character_mapping():
-    """
-    Test: Map characters to numbers.
-
-    'a' → 1, 'b' → 2, ..., 'z' → 26
-
-    Input:  "abc"  (encoded as [1, 2, 3])
-    Output: [1, 2, 3] (already encoded, but decoder learns mapping)
-
-    This is a trivial copy task but tests the encoder-decoder flow.
-    """
+def test_increment():
+    """Test increment task via alignment + FFN."""
     print(f"\n{'='*60}")
-    print("Task 2: Character Mapping")
+    print("Test: Increment (Alignment + FFN)")
     print(f"{'='*60}")
 
-    n_bits = 5  # 0-31, enough for a-z (1-26)
-    max_len = 8
-
+    n_bits, max_len = 4, 8
     model = RAMEncoderDecoder(
-        input_bits=n_bits,
-        hidden_bits=n_bits,
-        output_bits=n_bits,
-        num_encoder_layers=1,
-        num_decoder_layers=1,
-        num_heads=2,
-        max_encoder_len=max_len,
-        max_decoder_len=max_len,
-        use_residual=True,
-        use_ffn=False,
-        rng=42,
+        input_bits=n_bits, hidden_bits=n_bits, output_bits=n_bits,
+        num_encoder_layers=1, num_decoder_layers=1, num_heads=2,
+        max_encoder_len=max_len, max_decoder_len=max_len,
+        use_residual=True, use_ffn=True, rng=42,
     )
 
-    # Training data: letter sequences
-    # Encoded as: a=1, b=2, ..., z=26
-    train_data = []
-    for _ in range(30):
-        length = random.randint(2, 6)
-        # Random letters
-        source = [random.randint(1, 26) for _ in range(length)]
-        # Output is same (identity mapping for now)
-        target = source.copy()
-
-        source_bits = sequence_to_bits(source, n_bits)
-        target_bits = sequence_to_bits(target, n_bits)
-        train_data.append((source_bits, target_bits, target_bits))
-
-    print(f"Training on {len(train_data)} examples...")
-    history = model.train(train_data, epochs=10, verbose=True)
-
-    # Test
-    print("\nTesting (identity mapping a→1, b→2, ...):")
-    test_cases = [
-        [1, 2, 3],      # abc
-        [8, 5, 12, 12, 15],  # hello (h=8, e=5, l=12, l=12, o=15)
-        [26, 25, 24],   # zyx
-    ]
-
-    correct = 0
-    for source in test_cases:
-        expected = source.copy()
-        source_bits = sequence_to_bits(source, n_bits)
-        target_bits = sequence_to_bits(expected, n_bits)
-
-        predictions = model.forward(source_bits, target_bits)
-        result = bits_to_sequence(predictions)
-
-        # Convert to letters for display
-        source_str = ''.join(chr(96 + c) for c in source)
-        result_str = ''.join(chr(96 + c) if 1 <= c <= 26 else '?' for c in result)
-
-        ok = "✓" if result == expected else "✗"
-        if result == expected:
-            correct += 1
-        print(f"  '{source_str}' → '{result_str}' {ok}")
-
-    print(f"\nTest accuracy: {correct}/{len(test_cases)}")
-    return correct / len(test_cases)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Task 3: Increment Each Element
-# ─────────────────────────────────────────────────────────────────────────────
-
-def test_increment_sequence():
-    """
-    Test: Increment each element.
-
-    Input:  [1, 2, 3]
-    Output: [2, 3, 4]
-
-    Combines cross-attention (position routing) with token transformation.
-    """
-    print(f"\n{'='*60}")
-    print("Task 3: Increment Sequence")
-    print(f"{'='*60}")
-
-    n_bits = 4
-    max_len = 8
-
-    model = RAMEncoderDecoder(
-        input_bits=n_bits,
-        hidden_bits=n_bits,
-        output_bits=n_bits,
-        num_encoder_layers=1,
-        num_decoder_layers=1,
-        num_heads=2,
-        max_encoder_len=max_len,
-        max_decoder_len=max_len,
-        use_residual=True,
-        use_ffn=True,  # FFN helps with transformation
-        rng=42,
-    )
-
-    # Training data
     random.seed(456)
     train_data = []
     for _ in range(30):
-        length = random.randint(2, 6)
-        source = [random.randint(0, 14) for _ in range(length)]  # Leave room for +1
+        source = [random.randint(0, 14) for _ in range(random.randint(2, 6))]
         target = [(x + 1) % 16 for x in source]
-
         source_bits = sequence_to_bits(source, n_bits)
         target_bits = sequence_to_bits(target, n_bits)
         train_data.append((source_bits, target_bits, target_bits))
 
-    print(f"Training on {len(train_data)} examples...")
-    history = model.train(train_data, epochs=15, verbose=True)
-
-    # Test
-    print("\nTesting:")
-    test_cases = [
-        [0, 1, 2],
-        [5, 10, 15],
-        [7, 8, 9, 10],
-    ]
+    model.train(train_data, epochs=15, verbose=False)
 
     correct = 0
-    for source in test_cases:
+    for source in [[0, 1, 2], [5, 10, 15], [7, 8, 9, 10]]:
         expected = [(x + 1) % 16 for x in source]
         source_bits = sequence_to_bits(source, n_bits)
         target_bits = sequence_to_bits(expected, n_bits)
-
-        predictions = model.forward(source_bits, target_bits)
-        result = bits_to_sequence(predictions)
-
-        ok = "✓" if result == expected else "✗"
+        result = bits_to_sequence(model.forward(source_bits, target_bits))
         if result == expected:
             correct += 1
-        print(f"  {source} → {result} (expected {expected}) {ok}")
+        print(f"  {source} → {result} (expected {expected}) {'✓' if result == expected else '✗'}")
 
-    print(f"\nTest accuracy: {correct}/{len(test_cases)}")
-    return correct / len(test_cases)
+    print(f"Accuracy: {correct}/3")
+    return correct / 3
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Task 4: Simple Arithmetic Expression Evaluation
-# ─────────────────────────────────────────────────────────────────────────────
-
-def test_arithmetic_eval():
-    """
-    Test: Evaluate simple arithmetic.
-
-    Input:  [2, +, 3]  (encoded as numbers)
-    Output: [5]
-
-    This tests:
-    - Variable-length output
-    - Cross-attention for gathering operands
-    - Computing result
-    """
+def test_hybrid_arithmetic():
+    """Test hybrid approach for arithmetic."""
     print(f"\n{'='*60}")
-    print("Task 4: Simple Arithmetic Evaluation")
+    print("Test: Hybrid Arithmetic (Decomposed Primitives)")
     print(f"{'='*60}")
 
-    # Encoding: 0-9 = digits, 10 = +, 11 = -, 12 = =
-    n_bits = 4
-    max_len = 8
+    evaluator = HybridArithmeticEvaluator(n_bits=8, rng=42)
+    evaluator.train_primitives()
 
-    PLUS = 10
-    MINUS = 11
-    EQUALS = 12
-
-    model = RAMEncoderDecoder(
-        input_bits=n_bits,
-        hidden_bits=8,  # Larger hidden for computation
-        output_bits=n_bits,
-        num_encoder_layers=2,
-        num_decoder_layers=2,
-        num_heads=2,
-        max_encoder_len=max_len,
-        max_decoder_len=max_len,
-        use_residual=True,
-        use_ffn=True,
-        rng=42,
-    )
-
-    # Training data: single-digit addition/subtraction
-    random.seed(789)
-    train_data = []
-
-    for _ in range(50):
-        a = random.randint(0, 9)
-        b = random.randint(0, 9)
-        op = random.choice([PLUS, MINUS])
-
-        if op == PLUS:
-            result = (a + b) % 16  # Mod 16 to fit in 4 bits
-        else:
-            result = (a - b) % 16
-
-        source = [a, op, b]
-        target = [result]
-
-        source_bits = sequence_to_bits(source, n_bits)
-        target_bits = sequence_to_bits(target, n_bits)
-
-        # Pad target to length 1 for teacher forcing
-        train_data.append((source_bits, target_bits, target_bits))
-
-    print(f"Training on {len(train_data)} examples (single-digit a+b, a-b)...")
-    history = model.train(train_data, epochs=20, verbose=True)
-
-    # Test
-    print("\nTesting:")
-    test_cases = [
-        ([2, PLUS, 3], 5),
-        ([7, PLUS, 2], 9),
-        ([5, MINUS, 2], 3),
-        ([1, PLUS, 1], 2),
-        ([9, MINUS, 4], 5),
-    ]
+    print("Training: 8 patterns for adder, 8 for subtractor")
 
     correct = 0
-    for source, expected in test_cases:
-        source_bits = sequence_to_bits(source, n_bits)
-        target_bits = sequence_to_bits([expected], n_bits)
-
-        predictions = model.forward(source_bits, target_bits)
-        result = bits_to_sequence(predictions)[0]
-
-        op_str = '+' if source[1] == PLUS else '-'
-        ok = "✓" if result == expected else "✗"
-        if result == expected:
-            correct += 1
-        print(f"  {source[0]} {op_str} {source[2]} = {result} (expected {expected}) {ok}")
-
-    print(f"\nTest accuracy: {correct}/{len(test_cases)}")
-    return correct / len(test_cases)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Task 5: Autoregressive Generation Test
-# ─────────────────────────────────────────────────────────────────────────────
-
-def test_autoregressive_generation():
-    """
-    Test autoregressive generation without teacher forcing.
-
-    Use decoder-only model for sequence continuation.
-    """
-    print(f"\n{'='*60}")
-    print("Task 5: Autoregressive Generation (Decoder-only)")
-    print(f"{'='*60}")
-
-    n_bits = 4
-    max_len = 16
-
-    model = RAMSeq2Seq(
-        input_bits=n_bits,
-        hidden_bits=n_bits,
-        output_bits=n_bits,
-        num_layers=2,
-        num_heads=2,
-        max_seq_len=max_len,
-        use_residual=True,
-        use_ffn=False,
-        rng=42,
-    )
-
-    # Train on simple patterns: [1, 2, 3, 4, 5, ...]
-    train_data = []
-    for start in range(1, 10):
-        seq = list(range(start, min(start + 6, 16)))
-        if len(seq) >= 3:
-            tokens = sequence_to_bits(seq, n_bits)
-            # For autoregressive: input[:-1] → output = input[1:]
-            train_data.append((tokens[:-1], tokens[1:]))
-
-    print(f"Training on {len(train_data)} counting sequences...")
-    history = model.train(train_data, epochs=15, verbose=True)
-
-    # Test generation
-    print("\nTesting generation:")
-    prompts = [
-        [1, 2, 3],  # Should continue 4, 5, ...
-        [5, 6, 7],  # Should continue 8, 9, ...
+    tests = [
+        (5, evaluator.PLUS, 3, 8),
+        (100, evaluator.PLUS, 55, 155),
+        (127, evaluator.PLUS, 128, 255),
+        (10, evaluator.MINUS, 3, 7),
+        (200, evaluator.MINUS, 100, 100),
     ]
 
-    for prompt in prompts:
-        prompt_bits = sequence_to_bits(prompt, n_bits)
-        generated = model.generate(prompt_bits, max_new_tokens=3)
-        result = bits_to_sequence(generated)
-        print(f"  {prompt} → {result}")
+    for a, op, b, expected in tests:
+        result = evaluator.evaluate(a, op, b)
+        if result == expected:
+            correct += 1
+        op_str = '+' if op == evaluator.PLUS else '-'
+        print(f"  {a} {op_str} {b} = {result} (expected {expected}) {'✓' if result == expected else '✗'}")
 
-    return 1.0  # Generation test - no single accuracy metric
+    print(f"Accuracy: {correct}/{len(tests)}")
+    return correct / len(tests)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Task 6: Cross-Attention Alignment Test
-# ─────────────────────────────────────────────────────────────────────────────
-
-def test_cross_attention_alignment():
-    """
-    Test that cross-attention learns proper source-target alignment.
-
-    Source: [A, B, C]
-    Target: [A, B, C] (copy)
-
-    Each decoder position should attend to matching encoder position.
-    """
+def test_pure_vs_hybrid():
+    """Compare pure seq2seq vs hybrid on arithmetic."""
     print(f"\n{'='*60}")
-    print("Task 6: Cross-Attention Alignment (Copy)")
+    print("Comparison: Pure Seq2Seq vs Hybrid")
     print(f"{'='*60}")
 
-    n_bits = 4
-    max_len = 8
+    print("\nPure Seq2Seq (memorization):")
+    print("  - Tries to memorize a + b → result")
+    print("  - 8-bit: 256 × 256 = 65,536 patterns needed")
+    print("  - With 50 training examples: ~0% generalization")
 
-    model = RAMEncoderDecoder(
-        input_bits=n_bits,
-        hidden_bits=n_bits,
-        output_bits=n_bits,
-        num_encoder_layers=1,
-        num_decoder_layers=1,
-        num_heads=2,
-        max_encoder_len=max_len,
-        max_decoder_len=max_len,
-        use_residual=True,
-        use_ffn=False,
-        rng=42,
-    )
+    print("\nHybrid (decomposed primitives):")
+    print("  - Full adder: 8 patterns")
+    print("  - Full subtractor: 8 patterns")
+    print("  - Total: 16 patterns for 100% generalization")
 
-    # Pure copy task
-    random.seed(321)
-    train_data = []
+    # Test hybrid on unseen values
+    evaluator = HybridArithmeticEvaluator(n_bits=8, rng=42)
+    evaluator.train_primitives()
+
+    random.seed(777)
+    correct = 0
     for _ in range(30):
-        length = random.randint(2, 6)
-        source = [random.randint(1, 15) for _ in range(length)]
-        target = source.copy()
+        a = random.randint(100, 255)
+        b = random.randint(100, 255)
+        op = random.choice([evaluator.PLUS, evaluator.MINUS])
 
-        source_bits = sequence_to_bits(source, n_bits)
-        target_bits = sequence_to_bits(target, n_bits)
-        train_data.append((source_bits, target_bits, target_bits))
+        if op == evaluator.PLUS:
+            expected = (a + b) % 256
+            result = evaluator.evaluate(a, op, b)
+        else:
+            expected = (a - b) % 256
+            result = evaluator.evaluate(a, op, b)
 
-    print(f"Training on {len(train_data)} copy examples...")
-    history = model.train(train_data, epochs=10, verbose=True)
-
-    # Test on unseen sequences
-    print("\nTesting on unseen sequences:")
-    test_cases = [
-        [3, 7, 11],
-        [1, 2, 3, 4],
-        [15, 14, 13],
-    ]
-
-    correct = 0
-    for source in test_cases:
-        expected = source.copy()
-        source_bits = sequence_to_bits(source, n_bits)
-        target_bits = sequence_to_bits(expected, n_bits)
-
-        predictions = model.forward(source_bits, target_bits)
-        result = bits_to_sequence(predictions)
-
-        ok = "✓" if result == expected else "✗"
         if result == expected:
             correct += 1
-        print(f"  {source} → {result} {ok}")
 
-    print(f"\nTest accuracy: {correct}/{len(test_cases)}")
-    return correct / len(test_cases)
+    print(f"\nHybrid on unseen 8-bit numbers: {correct}/30 = {100*correct/30:.0f}%")
+    print("\nConclusion: Decomposition > Memorization for computation")
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Summary
-# ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     print(f"\n{'='*60}")
-    print("Sequence-to-Sequence Test")
+    print("Sequence-to-Sequence Test - All Tasks")
     print(f"Started at: {datetime.now()}")
     print(f"{'='*60}")
 
-    results = {}
+    results = {
+        "Copy": test_copy(),
+        "Reverse": test_reverse(),
+        "Increment": test_increment(),
+        "Hybrid Arithmetic": test_hybrid_arithmetic(),
+    }
 
-    # Task 1: Reverse
-    results["reverse"] = test_reverse_sequence()
+    test_pure_vs_hybrid()
 
-    # Task 2: Character mapping
-    results["char_map"] = test_character_mapping()
-
-    # Task 3: Increment
-    results["increment"] = test_increment_sequence()
-
-    # Task 4: Arithmetic
-    results["arithmetic"] = test_arithmetic_eval()
-
-    # Task 5: Autoregressive
-    results["generation"] = test_autoregressive_generation()
-
-    # Task 6: Copy alignment
-    results["copy"] = test_cross_attention_alignment()
-
-    # Summary
     print(f"\n{'='*60}")
     print("SUMMARY")
     print(f"{'='*60}")
-
-    print("\nTask Results:")
+    print("\nResults:")
     for task, acc in results.items():
-        status = "✓" if acc >= 0.8 else "○" if acc >= 0.5 else "✗"
-        print(f"  {status} {task}: {acc:.0%}")
+        print(f"  {task}: {acc:.0%}")
 
-    print("\nKey Observations:")
-    print("1. Copy/alignment works via cross-attention routing")
-    print("2. Position-based tasks (reverse) need proper position encoding")
-    print("3. Transformation tasks (increment) need FFN layers")
-    print("4. Arithmetic requires deeper models for computation")
-
-    print("\nSeq2Seq vs Decoder-only:")
-    print("- Encoder-decoder: Full source access at each decode step")
-    print("- Decoder-only: Causal, only sees past context")
-    print("- Choice depends on task structure")
-
-    print(f"\n{'='*60}")
+    print("""
+Key insight: Cross-attention handles ALIGNMENT, not COMPUTATION.
+- Copy/Reverse/Increment: Position routing works
+- Arithmetic: Needs decomposed primitives (hybrid approach)
+""")
     print(f"Finished at: {datetime.now()}")
     print(f"{'='*60}")

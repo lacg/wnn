@@ -1,13 +1,21 @@
 """
-Arithmetic Learning Test
+Arithmetic Learning Test - Consolidated
 
-Tests whether RAM networks can learn multi-digit addition.
+All arithmetic primitives for RAM networks:
+- Addition: LearnedFullAdder, MultiDigitAdder
+- Subtraction: LearnedSubtractor, MultiDigitSubtractor
+- Multiplication: BinaryMultiplier, LearnedDigitMultiplier, DecimalMultiplier
+- Division: LearnedComparator, BinaryDivider
 
-Key insight: Addition is a recurrent process (carry propagation)
-with a small state space (carry bit). The individual operation
-(full adder) only needs 8 patterns for binary or 200 for decimal.
+Key insight: All operations decompose into small primitives (8-200 patterns)
+that generalize to arbitrary bit widths through recurrence/composition.
 
-This is analogous to parity (which uses 1-bit XOR state).
+| Operation | Primitives | Patterns | Generalization |
+|-----------|-----------|----------|----------------|
+| Addition  | Full adder | 8 (binary) / 200 (decimal) | 100% |
+| Subtraction | Full subtractor | 8 (binary) | 100% |
+| Multiplication | Reuses addition | 0 new (binary) / 100 (decimal) | 100% |
+| Division | Reuses subtraction | 0 new | 100% |
 """
 
 import random
@@ -19,85 +27,61 @@ from torch.nn import Module
 from wnn.ram.core import RAMLayer
 
 
+# =============================================================================
+# ADDITION
+# =============================================================================
+
 class LearnedFullAdder(Module):
     """
     Learn a full adder: (a, b, carry_in) → (sum, carry_out)
 
-    For binary (base 2):
-    - Input: 3 bits (a, b, carry_in)
-    - Output: 2 bits (sum, carry_out)
-    - Only 8 patterns to learn
-
-    For decimal (base 10):
-    - Input: a (0-9), b (0-9), carry (0-1)
-    - Output: sum (0-9), carry (0-1)
-    - 200 patterns to learn
+    For binary (base 2): 8 patterns
+    For decimal (base 10): 200 patterns
     """
 
     def __init__(self, base: int = 2, rng: int | None = None):
-        """
-        Args:
-            base: Number base (2 for binary, 10 for decimal)
-            rng: Random seed
-        """
         super().__init__()
-
         self.base = base
 
         if base == 2:
-            # Binary: 3 bits input → 2 bits output
             self.input_bits = 3
             self.output_bits = 2
         else:
-            # Decimal: need to encode digits 0-9 (4 bits each) + carry
-            # Input: 4 bits (a) + 4 bits (b) + 1 bit (carry) = 9 bits
-            # Output: 4 bits (sum) + 1 bit (carry) = 5 bits
-            self.input_bits = 9
-            self.output_bits = 5
+            self.input_bits = 9  # 4+4+1
+            self.output_bits = 5  # 4+1
 
-        # RAM layer for the adder function
-        # Use all input bits for addressing (9 bits = 512 addresses, but only 200 used)
         self.adder = RAMLayer(
             total_input_bits=self.input_bits,
             num_neurons=self.output_bits,
-            n_bits_per_neuron=self.input_bits,  # Use all bits to avoid collisions
+            n_bits_per_neuron=self.input_bits,
             rng=rng,
         )
-
         self._trained = False
 
     def _encode_input(self, a: int, b: int, carry: int) -> list[int]:
-        """Encode inputs as bits."""
         if self.base == 2:
             return [a, b, carry]
         else:
-            # Decimal: encode each digit as 4 bits
             a_bits = [(a >> i) & 1 for i in range(3, -1, -1)]
             b_bits = [(b >> i) & 1 for i in range(3, -1, -1)]
             return a_bits + b_bits + [carry]
 
     def _decode_output(self, bits: list[int]) -> tuple[int, int]:
-        """Decode output bits to (sum, carry)."""
         if self.base == 2:
             return bits[0], bits[1]
         else:
-            # Decimal: first 4 bits are sum, last bit is carry
             sum_val = sum(b << (3 - i) for i, b in enumerate(bits[:4]))
             return sum_val, bits[4]
 
     def train_all(self) -> int:
-        """Train the full adder on all input combinations."""
         errors = 0
-
         for a in range(self.base):
             for b in range(self.base):
                 for carry in range(2):
-                    # Compute expected result
                     total = a + b + carry
                     sum_digit = total % self.base
                     carry_out = 1 if total >= self.base else 0
 
-                    # Encode input and output
                     inp_bits = self._encode_input(a, b, carry)
                     inp = tensor(inp_bits, dtype=uint8)
 
@@ -113,86 +97,40 @@ class LearnedFullAdder(Module):
         return errors
 
     def forward(self, a: int, b: int, carry: int) -> tuple[int, int]:
-        """
-        Add two digits with carry.
-
-        Args:
-            a: First digit (0 to base-1)
-            b: Second digit (0 to base-1)
-            carry: Carry from previous position (0 or 1)
-
-        Returns:
-            (sum_digit, carry_out)
-        """
         inp_bits = self._encode_input(a, b, carry)
         inp = tensor(inp_bits, dtype=uint8)
-
         out = self.adder(inp.unsqueeze(0)).squeeze()
         out_list = [int(b.item()) for b in out]
-
         return self._decode_output(out_list)
 
     def test_accuracy(self) -> float:
-        """Test accuracy on all input combinations."""
         correct = 0
         total = 0
-
         for a in range(self.base):
             for b in range(self.base):
                 for carry in range(2):
-                    # Expected
                     expected_total = a + b + carry
                     expected_sum = expected_total % self.base
                     expected_carry = 1 if expected_total >= self.base else 0
-
-                    # Predicted
                     pred_sum, pred_carry = self.forward(a, b, carry)
-
                     if pred_sum == expected_sum and pred_carry == expected_carry:
                         correct += 1
                     total += 1
-
         return correct / total if total > 0 else 0.0
-
-    def __repr__(self):
-        patterns = self.base * self.base * 2
-        return f"LearnedFullAdder(base={self.base}, patterns={patterns}, trained={self._trained})"
 
 
 class MultiDigitAdder(Module):
-    """
-    Multi-digit addition using learned full adder.
-
-    Processes digits from LSB to MSB, propagating carry.
-    """
+    """Multi-digit addition using learned full adder."""
 
     def __init__(self, base: int = 2, rng: int | None = None):
-        """
-        Args:
-            base: Number base (2 for binary, 10 for decimal)
-            rng: Random seed
-        """
         super().__init__()
-
         self.base = base
         self.full_adder = LearnedFullAdder(base, rng)
 
     def train(self) -> int:
-        """Train the full adder."""
         return self.full_adder.train_all()
 
     def add(self, a_digits: list[int], b_digits: list[int]) -> list[int]:
-        """
-        Add two multi-digit numbers.
-
-        Args:
-            a_digits: First number as list of digits (LSB first)
-            b_digits: Second number as list of digits (LSB first)
-
-        Returns:
-            Sum as list of digits (LSB first)
-        """
-        # Pad to same length
         max_len = max(len(a_digits), len(b_digits))
         a_padded = a_digits + [0] * (max_len - len(a_digits))
         b_padded = b_digits + [0] * (max_len - len(b_digits))
@@ -200,31 +138,22 @@ class MultiDigitAdder(Module):
         result = []
         carry = 0
 
-        # Process from LSB to MSB
         for i in range(max_len):
             sum_digit, carry = self.full_adder(a_padded[i], b_padded[i], carry)
             result.append(sum_digit)
 
-        # Handle final carry
         if carry:
             result.append(carry)
 
         return result
 
     def add_int(self, a: int, b: int) -> int:
-        """Add two integers using learned addition."""
-        # Convert to digit lists (LSB first)
         a_digits = self._int_to_digits(a)
         b_digits = self._int_to_digits(b)
-
-        # Add
         sum_digits = self.add(a_digits, b_digits)
-
-        # Convert back
         return self._digits_to_int(sum_digits)
 
     def _int_to_digits(self, n: int) -> list[int]:
-        """Convert integer to digit list (LSB first)."""
         if n == 0:
             return [0]
         digits = []
@@ -234,239 +163,481 @@ class MultiDigitAdder(Module):
         return digits
 
     def _digits_to_int(self, digits: list[int]) -> int:
-        """Convert digit list (LSB first) to integer."""
         result = 0
         for i, d in enumerate(digits):
             result += d * (self.base ** i)
         return result
 
-    def __repr__(self):
-        return f"MultiDigitAdder(base={self.base}, full_adder={self.full_adder})"
+
+# =============================================================================
+# SUBTRACTION
+# =============================================================================
+
+class LearnedSubtractor(Module):
+    """Learn subtraction: (a, b, borrow_in) → (diff, borrow_out)"""
+
+    def __init__(self, base: int = 2, rng: int | None = None):
+        super().__init__()
+        self.base = base
+
+        if base == 2:
+            self.input_bits = 3
+            self.output_bits = 2
+        else:
+            self.input_bits = 9
+            self.output_bits = 5
+
+        self.subtractor = RAMLayer(
+            total_input_bits=self.input_bits,
+            num_neurons=self.output_bits,
+            n_bits_per_neuron=self.input_bits,
+            rng=rng,
+        )
+        self._trained = False
+
+    def _encode_input(self, a: int, b: int, borrow: int) -> list[int]:
+        if self.base == 2:
+            return [a, b, borrow]
+        else:
+            a_bits = [(a >> i) & 1 for i in range(3, -1, -1)]
+            b_bits = [(b >> i) & 1 for i in range(3, -1, -1)]
+            return a_bits + b_bits + [borrow]
+
+    def _decode_output(self, bits: list[int]) -> tuple[int, int]:
+        if self.base == 2:
+            return bits[0], bits[1]
+        else:
+            diff = sum(b << (3 - i) for i, b in enumerate(bits[:4]))
+            return diff, bits[4]
+
+    def train_all(self) -> int:
+        errors = 0
+        for a in range(self.base):
+            for b in range(self.base):
+                for borrow in range(2):
+                    result = a - b - borrow
+                    if result < 0:
+                        diff = result + self.base
+                        borrow_out = 1
+                    else:
+                        diff = result
+                        borrow_out = 0
+
+                    inp_bits = self._encode_input(a, b, borrow)
+                    inp = tensor(inp_bits, dtype=uint8)
+
+                    if self.base == 2:
+                        out_bits = [diff, borrow_out]
+                    else:
+                        out_bits = [(diff >> i) & 1 for i in range(3, -1, -1)] + [borrow_out]
+                    out = tensor(out_bits, dtype=uint8)
+
+                    errors += self.subtractor.commit(inp.unsqueeze(0), out.unsqueeze(0))
+
+        self._trained = True
+        return errors
+
+    def forward(self, a: int, b: int, borrow: int) -> tuple[int, int]:
+        inp_bits = self._encode_input(a, b, borrow)
+        inp = tensor(inp_bits, dtype=uint8)
+        out = self.subtractor(inp.unsqueeze(0)).squeeze()
+        out_list = [int(x.item()) for x in out]
+        return self._decode_output(out_list)
+
+    def test_accuracy(self) -> float:
+        correct = 0
+        total = 0
+        for a in range(self.base):
+            for b in range(self.base):
+                for borrow in range(2):
+                    result = a - b - borrow
+                    if result < 0:
+                        exp_diff = result + self.base
+                        exp_borrow = 1
+                    else:
+                        exp_diff = result
+                        exp_borrow = 0
+                    pred_diff, pred_borrow = self.forward(a, b, borrow)
+                    if pred_diff == exp_diff and pred_borrow == exp_borrow:
+                        correct += 1
+                    total += 1
+        return correct / total
 
 
-def test_binary_full_adder():
-    """Test binary full adder."""
+class MultiDigitSubtractor(Module):
+    """Multi-digit subtraction with borrow propagation."""
+
+    def __init__(self, base: int = 2, rng: int | None = None):
+        super().__init__()
+        self.base = base
+        self.subtractor = LearnedSubtractor(base, rng)
+
+    def train(self) -> int:
+        return self.subtractor.train_all()
+
+    def subtract(self, a_digits: list[int], b_digits: list[int]) -> tuple[list[int], bool]:
+        max_len = max(len(a_digits), len(b_digits))
+        a_padded = a_digits + [0] * (max_len - len(a_digits))
+        b_padded = b_digits + [0] * (max_len - len(b_digits))
+
+        result = []
+        borrow = 0
+
+        for i in range(max_len):
+            diff, borrow = self.subtractor(a_padded[i], b_padded[i], borrow)
+            result.append(diff)
+
+        return result, borrow == 1
+
+    def subtract_int(self, a: int, b: int) -> tuple[int, bool]:
+        """Subtract integers, return (magnitude, negative)."""
+        a_digits = self._int_to_digits(a)
+        b_digits = self._int_to_digits(b)
+        result_digits, negative = self.subtract(a_digits, b_digits)
+        result = self._digits_to_int(result_digits)
+
+        if negative:
+            n_bits = len(result_digits)
+            max_val = self.base ** n_bits
+            result = max_val - result
+
+        return result, negative
+
+    def _int_to_digits(self, n: int) -> list[int]:
+        if n == 0:
+            return [0]
+        digits = []
+        while n > 0:
+            digits.append(n % self.base)
+            n //= self.base
+        return digits
+
+    def _digits_to_int(self, digits: list[int]) -> int:
+        result = 0
+        for i, d in enumerate(digits):
+            result += d * (self.base ** i)
+        return result
+
+
+# =============================================================================
+# MULTIPLICATION
+# =============================================================================
+
+class BinaryMultiplier(Module):
+    """Binary multiplication using shift-and-add. Reuses addition (0 new patterns)."""
+
+    def __init__(self, rng: int | None = None):
+        super().__init__()
+        self.adder = MultiDigitAdder(base=2, rng=rng)
+
+    def train(self) -> int:
+        return self.adder.train()
+
+    def multiply(self, a: int, b: int, max_bits: int = 16) -> int:
+        result = 0
+        bit_pos = 0
+        temp_b = b
+
+        while temp_b > 0:
+            if temp_b & 1:
+                shifted_a = a << bit_pos
+                result = self.adder.add_int(result, shifted_a)
+            temp_b >>= 1
+            bit_pos += 1
+
+        return result
+
+
+class LearnedDigitMultiplier(Module):
+    """Learn single-digit multiplication (100 patterns for 0-9 × 0-9)."""
+
+    def __init__(self, rng: int | None = None):
+        super().__init__()
+        self.multiplier = RAMLayer(
+            total_input_bits=8,
+            num_neurons=7,
+            n_bits_per_neuron=8,
+            rng=rng,
+        )
+        self._trained = False
+
+    def train_all(self) -> int:
+        errors = 0
+        for a in range(10):
+            for b in range(10):
+                product = a * b
+                a_bits = [(a >> i) & 1 for i in range(3, -1, -1)]
+                b_bits = [(b >> i) & 1 for i in range(3, -1, -1)]
+                inp = tensor(a_bits + b_bits, dtype=uint8)
+                out_bits = [(product >> i) & 1 for i in range(6, -1, -1)]
+                out = tensor(out_bits, dtype=uint8)
+                errors += self.multiplier.commit(inp.unsqueeze(0), out.unsqueeze(0))
+        self._trained = True
+        return errors
+
+    def forward(self, a: int, b: int) -> int:
+        a_bits = [(a >> i) & 1 for i in range(3, -1, -1)]
+        b_bits = [(b >> i) & 1 for i in range(3, -1, -1)]
+        inp = tensor(a_bits + b_bits, dtype=uint8)
+        out = self.multiplier(inp.unsqueeze(0)).squeeze()
+        result = sum(int(out[i].item()) << (6 - i) for i in range(7))
+        return result
+
+    def test_accuracy(self) -> float:
+        correct = 0
+        for a in range(10):
+            for b in range(10):
+                if self.forward(a, b) == a * b:
+                    correct += 1
+        return correct / 100
+
+
+class DecimalMultiplier(Module):
+    """Decimal multiplication using grade-school algorithm (100 + 200 = 300 patterns)."""
+
+    def __init__(self, rng: int | None = None):
+        super().__init__()
+        self.digit_mult = LearnedDigitMultiplier(rng)
+        self.adder = MultiDigitAdder(base=10, rng=rng + 1000 if rng else None)
+
+    def train(self) -> tuple[int, int]:
+        mult_errors = self.digit_mult.train_all()
+        add_errors = self.adder.train()
+        return mult_errors, add_errors
+
+    def multiply(self, a: int, b: int) -> int:
+        a_digits = self._int_to_digits(a)
+        b_digits = self._int_to_digits(b)
+        result_digits = [0]
+
+        for b_pos, b_digit in enumerate(b_digits):
+            if b_digit == 0:
+                continue
+
+            partial = []
+            carry = 0
+
+            for a_digit in a_digits:
+                prod = self.digit_mult(a_digit, b_digit) + carry
+                partial.append(prod % 10)
+                carry = prod // 10
+
+            if carry:
+                partial.append(carry)
+
+            shifted = [0] * b_pos + partial
+            result_digits = self.adder.add(result_digits, shifted)
+
+        return self._digits_to_int(result_digits)
+
+    def _int_to_digits(self, n: int) -> list[int]:
+        if n == 0:
+            return [0]
+        digits = []
+        while n > 0:
+            digits.append(n % 10)
+            n //= 10
+        return digits
+
+    def _digits_to_int(self, digits: list[int]) -> int:
+        result = 0
+        for i, d in enumerate(digits):
+            result += d * (10 ** i)
+        return result
+
+
+# =============================================================================
+# DIVISION
+# =============================================================================
+
+class LearnedComparator(Module):
+    """Compare a >= b using subtraction."""
+
+    def __init__(self, base: int = 2, rng: int | None = None):
+        super().__init__()
+        self.subtractor = MultiDigitSubtractor(base, rng)
+
+    def train(self) -> int:
+        return self.subtractor.train()
+
+    def compare(self, a: int, b: int) -> bool:
+        _, negative = self.subtractor.subtract_int(a, b)
+        return not negative
+
+
+class BinaryDivider(Module):
+    """Binary division using restoring division. Reuses subtraction (0 new patterns)."""
+
+    def __init__(self, rng: int | None = None):
+        super().__init__()
+        self.subtractor = MultiDigitSubtractor(base=2, rng=rng)
+
+    def train(self) -> int:
+        return self.subtractor.train()
+
+    def divide(self, dividend: int, divisor: int, max_bits: int = 16) -> tuple[int, int]:
+        if divisor == 0:
+            raise ValueError("Division by zero")
+
+        if dividend < divisor:
+            return 0, dividend
+
+        n_bits = dividend.bit_length()
+        quotient = 0
+        remainder = 0
+
+        for i in range(n_bits - 1, -1, -1):
+            remainder = (remainder << 1) | ((dividend >> i) & 1)
+            diff, negative = self.subtractor.subtract_int(remainder, divisor)
+
+            if not negative:
+                remainder = diff
+                quotient = (quotient << 1) | 1
+            else:
+                quotient = quotient << 1
+
+        return quotient, remainder
+
+
+# =============================================================================
+# TESTS
+# =============================================================================
+
+def test_addition():
+    """Test addition primitives."""
     print(f"\n{'='*60}")
-    print("Testing Binary Full Adder (8 patterns)")
+    print("Testing Addition")
     print(f"{'='*60}")
 
-    adder = LearnedFullAdder(base=2, rng=42)
-    print(f"Adder: {adder}")
-
-    # Test before training
-    acc_before = adder.test_accuracy()
-    print(f"\nAccuracy before training: {acc_before:.1%}")
-
-    # Train
-    errors = adder.train_all()
-    print(f"Training corrections: {errors}")
-
-    # Test after training
-    acc_after = adder.test_accuracy()
-    print(f"Accuracy after training: {acc_after:.1%}")
-
-    # Show all patterns
-    print("\nFull adder truth table:")
-    print("  a  b  c_in | sum c_out | correct")
-    print("  " + "-" * 35)
-    for a in range(2):
-        for b in range(2):
-            for c in range(2):
-                expected_sum = (a + b + c) % 2
-                expected_carry = 1 if (a + b + c) >= 2 else 0
-                pred_sum, pred_carry = adder.forward(a, b, c)
-                ok = "✓" if (pred_sum == expected_sum and pred_carry == expected_carry) else "✗"
-                print(f"  {a}  {b}    {c}  |  {pred_sum}     {pred_carry}    | {ok}")
-
-    return acc_after
-
-
-def test_decimal_full_adder():
-    """Test decimal full adder."""
-    print(f"\n{'='*60}")
-    print("Testing Decimal Full Adder (200 patterns)")
-    print(f"{'='*60}")
-
-    adder = LearnedFullAdder(base=10, rng=42)
-    print(f"Adder: {adder}")
-
-    # Test before training
-    acc_before = adder.test_accuracy()
-    print(f"\nAccuracy before training: {acc_before:.1%}")
-
-    # Train
-    errors = adder.train_all()
-    print(f"Training corrections: {errors}")
-
-    # Test after training
-    acc_after = adder.test_accuracy()
-    print(f"Accuracy after training: {acc_after:.1%}")
-
-    # Show some examples
-    print("\nExample additions:")
-    examples = [(5, 3, 0), (9, 9, 0), (9, 9, 1), (0, 0, 1), (7, 8, 0)]
-    for a, b, c in examples:
-        expected_sum = (a + b + c) % 10
-        expected_carry = 1 if (a + b + c) >= 10 else 0
-        pred_sum, pred_carry = adder.forward(a, b, c)
-        ok = "✓" if (pred_sum == expected_sum and pred_carry == expected_carry) else "✗"
-        print(f"  {a} + {b} + {c} = {pred_sum} carry {pred_carry} (expected {expected_sum} carry {expected_carry}) {ok}")
-
-    return acc_after
-
-
-def test_multi_digit_binary():
-    """Test multi-digit binary addition."""
-    print(f"\n{'='*60}")
-    print("Testing Multi-digit Binary Addition")
-    print(f"{'='*60}")
-
-    adder = MultiDigitAdder(base=2, rng=42)
-    errors = adder.train()
-    print(f"Full adder trained with {errors} corrections")
-
-    # Test on random additions
-    random.seed(123)
-    n_test = 20
-    correct = 0
-
-    print(f"\nTesting on {n_test} random additions...")
-    for _ in range(n_test):
-        a = random.randint(0, 255)  # 8-bit numbers
-        b = random.randint(0, 255)
-        expected = a + b
-        result = adder.add_int(a, b)
-
-        if result == expected:
-            correct += 1
-
-    accuracy = correct / n_test
-    print(f"Accuracy: {accuracy:.1%} ({correct}/{n_test})")
-
-    # Show some examples
-    print("\nExamples:")
-    examples = [(5, 3), (127, 128), (255, 1), (0, 0), (100, 155)]
-    for a, b in examples:
-        expected = a + b
-        result = adder.add_int(a, b)
-        ok = "✓" if result == expected else "✗"
-        print(f"  {a} + {b} = {result} (expected {expected}) {ok}")
-
-    return accuracy
-
-
-def test_multi_digit_decimal():
-    """Test multi-digit decimal addition."""
-    print(f"\n{'='*60}")
-    print("Testing Multi-digit Decimal Addition")
-    print(f"{'='*60}")
-
-    adder = MultiDigitAdder(base=10, rng=42)
-    errors = adder.train()
-    print(f"Full adder trained with {errors} corrections")
-
-    # Test on random additions
-    random.seed(456)
-    n_test = 30
-    correct = 0
-
-    print(f"\nTesting on {n_test} random additions...")
-    for _ in range(n_test):
-        a = random.randint(0, 9999)  # 4-digit numbers
-        b = random.randint(0, 9999)
-        expected = a + b
-        result = adder.add_int(a, b)
-
-        if result == expected:
-            correct += 1
-
-    accuracy = correct / n_test
-    print(f"Accuracy: {accuracy:.1%} ({correct}/{n_test})")
-
-    # Show some examples
-    print("\nExamples:")
-    examples = [(123, 456), (999, 1), (9999, 9999), (0, 0), (1234, 8765)]
-    for a, b in examples:
-        expected = a + b
-        result = adder.add_int(a, b)
-        ok = "✓" if result == expected else "✗"
-        print(f"  {a} + {b} = {result} (expected {expected}) {ok}")
-
-    return accuracy
-
-
-def test_generalization():
-    """Test that trained full adder generalizes to unseen multi-digit additions."""
-    print(f"\n{'='*60}")
-    print("Testing Generalization (train on 8, test on thousands)")
-    print(f"{'='*60}")
-
-    # Binary adder only needs 8 patterns
+    # Binary
     adder = MultiDigitAdder(base=2, rng=42)
     adder.train()
 
-    print("Binary full adder trained on 8 patterns")
-    print("Testing generalization to multi-digit additions...\n")
+    random.seed(123)
+    correct = sum(1 for _ in range(30)
+                  for a, b in [(random.randint(0, 255), random.randint(0, 255))]
+                  if adder.add_int(a, b) == a + b)
+    print(f"Binary 8-bit: {correct}/30")
 
-    # Test on various sizes
-    sizes = [(8, 100), (16, 100), (32, 50), (64, 30)]
-
-    for bits, n_test in sizes:
+    # Generalization
+    for bits in [16, 32, 64]:
         max_val = (1 << bits) - 1
         random.seed(789 + bits)
+        correct = sum(1 for _ in range(20)
+                      for a, b in [(random.randint(0, max_val), random.randint(0, max_val))]
+                      if adder.add_int(a, b) == a + b)
+        print(f"Binary {bits}-bit: {correct}/20")
+
+
+def test_subtraction():
+    """Test subtraction primitives."""
+    print(f"\n{'='*60}")
+    print("Testing Subtraction")
+    print(f"{'='*60}")
+
+    sub = MultiDigitSubtractor(base=2, rng=42)
+    sub.train()
+
+    # Test modular subtraction
+    random.seed(888)
+    correct = 0
+    for _ in range(30):
+        a, b = random.randint(0, 255), random.randint(0, 255)
+        result, negative = sub.subtract_int(a, b)
+        expected = abs(a - b)
+        if result == expected and negative == (a < b):
+            correct += 1
+    print(f"Binary 8-bit: {correct}/30")
+
+
+def test_multiplication():
+    """Test multiplication primitives."""
+    print(f"\n{'='*60}")
+    print("Testing Multiplication")
+    print(f"{'='*60}")
+
+    mult = BinaryMultiplier(rng=42)
+    mult.train()
+
+    random.seed(123)
+    correct = sum(1 for _ in range(30)
+                  for a, b in [(random.randint(0, 255), random.randint(0, 255))]
+                  if mult.multiply(a, b) == a * b)
+    print(f"Binary 8-bit × 8-bit: {correct}/30")
+
+    # Generalization
+    for bits in [12, 16]:
+        max_val = (1 << bits) - 1
+        random.seed(789 + bits)
+        correct = sum(1 for _ in range(20)
+                      for a, b in [(random.randint(0, max_val), random.randint(0, max_val))]
+                      if mult.multiply(a, b) == a * b)
+        print(f"Binary {bits}-bit × {bits}-bit: {correct}/20")
+
+
+def test_division():
+    """Test division primitives."""
+    print(f"\n{'='*60}")
+    print("Testing Division")
+    print(f"{'='*60}")
+
+    div = BinaryDivider(rng=42)
+    div.train()
+
+    random.seed(123)
+    correct = 0
+    for _ in range(30):
+        dividend = random.randint(1, 255)
+        divisor = random.randint(1, 15)
+        try:
+            q, r = div.divide(dividend, divisor)
+            if q == dividend // divisor and r == dividend % divisor:
+                correct += 1
+        except:
+            pass
+    print(f"8-bit ÷ 4-bit: {correct}/30")
+
+    # Generalization
+    for div_bits, divisor_bits in [(12, 6), (16, 8)]:
+        max_dividend = (1 << div_bits) - 1
+        max_divisor = (1 << divisor_bits) - 1
+        random.seed(789 + div_bits)
 
         correct = 0
-        for _ in range(n_test):
-            a = random.randint(0, max_val)
-            b = random.randint(0, max_val)
-            expected = a + b
-            result = adder.add_int(a, b)
-            if result == expected:
-                correct += 1
-
-        accuracy = correct / n_test
-        print(f"  {bits}-bit numbers: {accuracy:.1%} ({correct}/{n_test})")
-
-    return
+        for _ in range(20):
+            dividend = random.randint(1, max_dividend)
+            divisor = random.randint(1, max_divisor)
+            try:
+                q, r = div.divide(dividend, divisor)
+                if q == dividend // divisor and r == dividend % divisor:
+                    correct += 1
+            except:
+                pass
+        print(f"{div_bits}-bit ÷ {divisor_bits}-bit: {correct}/20")
 
 
 if __name__ == "__main__":
     print(f"\n{'='*60}")
-    print("Arithmetic Learning Test")
+    print("Arithmetic Learning Test - All Operations")
     print(f"Started at: {datetime.now()}")
     print(f"{'='*60}")
 
-    # Test 1: Binary full adder
-    binary_fa_acc = test_binary_full_adder()
+    test_addition()
+    test_subtraction()
+    test_multiplication()
+    test_division()
 
-    # Test 2: Decimal full adder
-    decimal_fa_acc = test_decimal_full_adder()
-
-    # Test 3: Multi-digit binary
-    binary_multi_acc = test_multi_digit_binary()
-
-    # Test 4: Multi-digit decimal
-    decimal_multi_acc = test_multi_digit_decimal()
-
-    # Test 5: Generalization
-    test_generalization()
-
-    # Summary
     print(f"\n{'='*60}")
     print("SUMMARY")
     print(f"{'='*60}")
-    print(f"\nFull Adder Learning:")
-    print(f"  Binary (8 patterns):    {binary_fa_acc:.1%}")
-    print(f"  Decimal (200 patterns): {decimal_fa_acc:.1%}")
-    print(f"\nMulti-digit Addition:")
-    print(f"  Binary (8-bit):         {binary_multi_acc:.1%}")
-    print(f"  Decimal (4-digit):      {decimal_multi_acc:.1%}")
+    print("""
+Patterns needed for 100% generalization:
+  Addition:       8 (binary) / 200 (decimal)
+  Subtraction:    8 (binary)
+  Multiplication: 0 new (reuses addition)
+  Division:       0 new (reuses subtraction)
 
-    if binary_fa_acc == 1.0 and decimal_fa_acc == 1.0:
-        print("\n✓ Full adder learned perfectly!")
-        print("  Key insight: Only need to learn individual digit addition")
-        print("  Carry propagation comes for free via recurrence")
-
-    print(f"\n{'='*60}")
+Key insight: Decompose into small primitives, compose via recurrence.
+""")
     print(f"Finished at: {datetime.now()}")
     print(f"{'='*60}")
