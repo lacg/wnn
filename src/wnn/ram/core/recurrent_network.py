@@ -2,9 +2,9 @@ from wnn.ram.core import RAMLayer
 from wnn.ram.encoders_decoders import OutputMode
 from wnn.ram.encoders_decoders import TransformerDecoder
 from wnn.ram.encoders_decoders import TransformerDecoderFactory
+from wnn.ram.enums import StateMode
 
 
-from enum import IntEnum
 from typing import Optional
 
 from torch import cat
@@ -13,14 +13,6 @@ from torch import uint8
 from torch import zeros
 from torch import Tensor
 from torch.nn import Module
-
-
-class StateMode(IntEnum):
-	"""State transition modes for recurrent networks."""
-	LEARNED = 0      # State transition learned via EDRA (default)
-	XOR = 1          # State = prev_state XOR input (for parity)
-	IDENTITY = 2     # State = input (no memory)
-	OR = 3           # State = prev_state OR input (for detection)
 
 
 class RAMRecurrentNetwork(Module):

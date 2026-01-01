@@ -21,7 +21,8 @@ from wnn.ram.core.RAMGeneralization import (
 from wnn.ram.core.RAMAggregator import RAMAggregator
 
 # Recurrent networks
-from wnn.ram.core.recurrent_network import RAMRecurrentNetwork, StateMode
+from wnn.ram.core.recurrent_network import RAMRecurrentNetwork
+from wnn.ram.enums import StateMode
 from wnn.ram.core.sequence import RAMSequence
 from wnn.ram.core.multihead_sequence import RAMMultiHeadSequence
 from wnn.ram.core.multihead_kv import RAMMultiHeadKV

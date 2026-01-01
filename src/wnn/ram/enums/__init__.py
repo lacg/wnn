@@ -48,6 +48,9 @@ from wnn.ram.enums.transformer import (
     RAMTransformerType,
 )
 
+# Recurrent
+from wnn.ram.enums.recurrent import StateMode
+
 
 __all__ = [
     # Memory
@@ -80,4 +83,6 @@ __all__ = [
     # Transformer
     'Step',
     'RAMTransformerType',
+    # Recurrent
+    'StateMode',
 ]
