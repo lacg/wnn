@@ -55,6 +55,7 @@ from typing import Callable, Protocol, Any
 from collections import defaultdict
 from random import shuffle, sample
 from pathlib import Path
+from enum import IntEnum
 import json
 
 
@@ -1512,3 +1513,452 @@ class RAMTrainer:
 		)
 
 		return all_history
+
+
+# =============================================================================
+# Enhanced Curriculum Learning
+# =============================================================================
+
+class DifficultyMetric(Protocol):
+	"""Protocol for difficulty estimation functions."""
+
+	def __call__(self, inputs: list[Tensor], targets: list[Tensor]) -> float:
+		"""Return difficulty score (higher = harder)."""
+		...
+
+
+def length_difficulty(inputs: list[Tensor], targets: list[Tensor]) -> float:
+	"""Difficulty based on sequence length."""
+	return float(len(inputs))
+
+
+def bit_count_difficulty(inputs: list[Tensor], targets: list[Tensor]) -> float:
+	"""Difficulty based on number of 1-bits (complexity proxy)."""
+	return sum(t.sum().item() for t in targets)
+
+
+def hamming_difficulty(inputs: list[Tensor], targets: list[Tensor]) -> float:
+	"""Difficulty based on Hamming distance between input and output."""
+	if len(inputs) != len(targets):
+		return float(len(targets))
+	return sum((i != t).sum().item() for i, t in zip(inputs, targets))
+
+
+def combined_difficulty(inputs: list[Tensor], targets: list[Tensor]) -> float:
+	"""Combined difficulty: length × transformation complexity."""
+	length = len(inputs)
+	hamming = hamming_difficulty(inputs, targets)
+	return length * (1 + hamming / max(1, length))
+
+
+@dataclass
+class CurriculumSchedule:
+	"""
+	Schedule for curriculum learning progression.
+
+	Defines how training progresses from easy to hard examples.
+	"""
+	num_stages: int = 5           # Number of difficulty stages
+	epochs_per_stage: int = 3     # Epochs at each stage
+	overlap: float = 0.2          # Fraction of next stage to include
+	patience_per_stage: int = 2   # Patience within each stage
+
+	def get_stage_range(self, stage: int, total_examples: int) -> tuple[int, int]:
+		"""Get (start, end) indices for examples in this stage."""
+		stage_size = total_examples // self.num_stages
+		overlap_size = int(stage_size * self.overlap)
+
+		start = max(0, stage * stage_size - overlap_size)
+		end = min(total_examples, (stage + 1) * stage_size + overlap_size)
+
+		return start, end
+
+
+class CurriculumTrainer:
+	"""
+	Enhanced curriculum learning with configurable difficulty metrics.
+
+	Features:
+	- Pluggable difficulty metrics (length, bit_count, hamming, combined)
+	- Gradual difficulty progression with overlapping stages
+	- Automatic difficulty estimation from data
+
+	Usage:
+		trainer = RAMTrainer(model)
+		curriculum = CurriculumTrainer(trainer)
+		curriculum.train(dataset, schedule=CurriculumSchedule(num_stages=5))
+	"""
+
+	def __init__(
+		self,
+		trainer: RAMTrainer,
+		difficulty_metric: DifficultyMetric = combined_difficulty,
+	):
+		"""
+		Args:
+			trainer: Base RAMTrainer to use
+			difficulty_metric: Function to estimate example difficulty
+		"""
+		self.trainer = trainer
+		self.difficulty_metric = difficulty_metric
+
+	def sort_by_difficulty(
+		self,
+		dataset: list[tuple[list[Tensor], list[Tensor]]],
+	) -> list[tuple[int, float, tuple[list[Tensor], list[Tensor]]]]:
+		"""
+		Sort dataset by difficulty (easiest first).
+
+		Returns:
+			List of (original_index, difficulty_score, example) tuples
+		"""
+		scored = [
+			(i, self.difficulty_metric(inputs, targets), (inputs, targets))
+			for i, (inputs, targets) in enumerate(dataset)
+		]
+		return sorted(scored, key=lambda x: x[1])
+
+	def train(
+		self,
+		dataset: list[tuple[list[Tensor], list[Tensor]]],
+		schedule: CurriculumSchedule | None = None,
+		verbose: bool = True,
+	) -> list[EpochStats]:
+		"""
+		Train with curriculum learning.
+
+		Args:
+			dataset: List of (input_tokens, target_tokens) pairs
+			schedule: Curriculum schedule (default: 5 stages, 3 epochs each)
+			verbose: Print progress
+
+		Returns:
+			Combined training history
+		"""
+		if schedule is None:
+			schedule = CurriculumSchedule()
+
+		# Sort dataset by difficulty
+		sorted_data = self.sort_by_difficulty(dataset)
+
+		if verbose:
+			difficulties = [d for _, d, _ in sorted_data]
+			print(f"Difficulty range: {min(difficulties):.1f} - {max(difficulties):.1f}")
+
+		all_history = []
+
+		for stage in range(schedule.num_stages):
+			start, end = schedule.get_stage_range(stage, len(sorted_data))
+			stage_data = [example for _, _, example in sorted_data[start:end]]
+
+			if verbose:
+				stage_difficulties = [d for _, d, _ in sorted_data[start:end]]
+				print(f"\n=== Stage {stage + 1}/{schedule.num_stages}: "
+					  f"{len(stage_data)} examples, "
+					  f"difficulty {min(stage_difficulties):.1f}-{max(stage_difficulties):.1f} ===")
+
+			# Reset patience for this stage
+			self.trainer.epochs_without_improvement = 0
+			original_patience = self.trainer.patience
+			self.trainer.patience = schedule.patience_per_stage
+
+			# Train on this stage
+			history = self.trainer.train(
+				stage_data,
+				epochs=schedule.epochs_per_stage,
+				early_stop=True,
+				use_patience=True,
+				shuffle_data=True,
+			)
+			all_history.extend(history)
+
+			# Restore patience
+			self.trainer.patience = original_patience
+
+			# Check if fully converged
+			if history and history[-1].total_errors == 0:
+				if verbose:
+					print(f"Converged at stage {stage + 1}!")
+
+				# Verify on full dataset
+				final_history = self.trainer.train(
+					dataset,
+					epochs=2,
+					early_stop=True,
+					use_patience=False,
+				)
+				all_history.extend(final_history)
+
+				if final_history and final_history[-1].total_errors == 0:
+					if verbose:
+						print("Full dataset converged!")
+					break
+
+		return all_history
+
+
+# =============================================================================
+# Multi-Task Learning
+# =============================================================================
+
+@dataclass
+class Task:
+	"""
+	Definition of a learning task for multi-task training.
+
+	Attributes:
+		name: Task identifier
+		dataset: List of (input, target) pairs
+		weight: Sampling weight (higher = more frequent)
+		shared_primitives: Names of primitives shared with other tasks
+	"""
+	name: str
+	dataset: list[tuple[list[Tensor], list[Tensor]]]
+	weight: float = 1.0
+	shared_primitives: list[str] = field(default_factory=list)
+
+
+class MixingStrategy(IntEnum):
+	"""How to mix examples from multiple tasks."""
+	ROUND_ROBIN = 0      # Alternate between tasks
+	PROPORTIONAL = 1     # Sample proportional to dataset size
+	WEIGHTED = 2         # Sample proportional to task weight
+	INTERLEAVED = 3      # Mix all examples, shuffle
+
+
+class MultiTaskTrainer:
+	"""
+	Multi-task learning for RAM networks.
+
+	Trains on multiple tasks simultaneously, which can:
+	- Share learned primitives (XOR, full adder, comparator)
+	- Improve generalization through task diversity
+	- Reduce training time by reusing patterns
+
+	Key insight: Tasks like parity (XOR), addition (full adder), and
+	comparison share underlying primitives that transfer between tasks.
+
+	Usage:
+		trainer = RAMTrainer(model)
+		mt = MultiTaskTrainer(trainer)
+
+		mt.add_task(Task("parity", parity_dataset, shared_primitives=["xor"]))
+		mt.add_task(Task("addition", addition_dataset, shared_primitives=["xor", "carry"]))
+
+		mt.train(epochs=10, mixing=MixingStrategy.INTERLEAVED)
+	"""
+
+	def __init__(
+		self,
+		trainer: RAMTrainer,
+		mixing: MixingStrategy = MixingStrategy.INTERLEAVED,
+	):
+		"""
+		Args:
+			trainer: Base RAMTrainer to use
+			mixing: Strategy for mixing task examples
+		"""
+		self.trainer = trainer
+		self.mixing = mixing
+		self.tasks: list[Task] = []
+		self.task_stats: dict[str, list[float]] = defaultdict(list)  # Per-task accuracy history
+
+	def add_task(self, task: Task) -> None:
+		"""Add a task to the training set."""
+		self.tasks.append(task)
+
+	def add_tasks(self, tasks: list[Task]) -> None:
+		"""Add multiple tasks."""
+		self.tasks.extend(tasks)
+
+	def _create_mixed_dataset(self) -> list[tuple[str, list[Tensor], list[Tensor]]]:
+		"""
+		Create a mixed dataset from all tasks.
+
+		Returns:
+			List of (task_name, inputs, targets) tuples
+		"""
+		mixed = []
+
+		if self.mixing == MixingStrategy.ROUND_ROBIN:
+			# Alternate between tasks
+			max_len = max(len(t.dataset) for t in self.tasks)
+			for i in range(max_len):
+				for task in self.tasks:
+					if i < len(task.dataset):
+						inputs, targets = task.dataset[i]
+						mixed.append((task.name, inputs, targets))
+
+		elif self.mixing == MixingStrategy.PROPORTIONAL:
+			# Sample proportional to dataset size
+			for task in self.tasks:
+				for inputs, targets in task.dataset:
+					mixed.append((task.name, inputs, targets))
+			shuffle(mixed)
+
+		elif self.mixing == MixingStrategy.WEIGHTED:
+			# Sample proportional to task weight
+			total_weight = sum(t.weight for t in self.tasks)
+			for task in self.tasks:
+				# Repeat examples based on weight
+				repeats = max(1, int(task.weight / total_weight * len(task.dataset)))
+				for inputs, targets in task.dataset:
+					for _ in range(repeats):
+						mixed.append((task.name, inputs, targets))
+			shuffle(mixed)
+
+		elif self.mixing == MixingStrategy.INTERLEAVED:
+			# Mix all, shuffle
+			for task in self.tasks:
+				for inputs, targets in task.dataset:
+					mixed.append((task.name, inputs, targets))
+			shuffle(mixed)
+
+		return mixed
+
+	def train_epoch(self, epoch_num: int = 0) -> dict[str, EpochStats]:
+		"""
+		Train one epoch on all tasks.
+
+		Returns:
+			Dictionary mapping task_name -> EpochStats
+		"""
+		mixed = self._create_mixed_dataset()
+
+		# Track per-task statistics
+		task_errors: dict[str, int] = defaultdict(int)
+		task_positions: dict[str, int] = defaultdict(int)
+		task_updates: dict[str, dict] = defaultdict(lambda: defaultdict(int))
+
+		for task_name, inputs, targets in mixed:
+			# Train on this example
+			stats = self.trainer.train_step(inputs, targets)
+
+			task_errors[task_name] += stats.output_errors
+			task_positions[task_name] += len(inputs)
+
+			for layer, updates in stats.layers_updated.items():
+				task_updates[task_name][layer] += updates
+
+		# Build per-task stats
+		results = {}
+		for task in self.tasks:
+			name = task.name
+			total = task_positions[name]
+			errors = task_errors[name]
+			accuracy = 100 * (1 - errors / total) if total > 0 else 0
+
+			self.task_stats[name].append(accuracy)
+
+			results[name] = EpochStats(
+				epoch=epoch_num,
+				total_errors=errors,
+				bit_errors=0,  # Not tracked per-task
+				total_positions=total,
+				accuracy=accuracy,
+				layer_updates=dict(task_updates[name]),
+				layer_error_rates={},
+				examples_mastered=0,
+				hard_examples=[],
+			)
+
+		return results
+
+	def train(
+		self,
+		epochs: int = 10,
+		early_stop: bool = True,
+		verbose: bool = True,
+	) -> dict[str, list[EpochStats]]:
+		"""
+		Train on all tasks for multiple epochs.
+
+		Args:
+			epochs: Maximum number of epochs
+			early_stop: Stop if all tasks converge
+			verbose: Print progress
+
+		Returns:
+			Dictionary mapping task_name -> list of EpochStats
+		"""
+		if not self.tasks:
+			raise ValueError("No tasks added. Use add_task() first.")
+
+		all_history: dict[str, list[EpochStats]] = {t.name: [] for t in self.tasks}
+
+		if verbose:
+			print(f"Multi-task training: {len(self.tasks)} tasks")
+			for task in self.tasks:
+				print(f"  - {task.name}: {len(task.dataset)} examples, "
+					  f"weight={task.weight:.1f}, "
+					  f"shared={task.shared_primitives}")
+
+		for epoch in range(epochs):
+			task_stats = self.train_epoch(epoch_num=epoch)
+
+			# Record history
+			for name, stats in task_stats.items():
+				all_history[name].append(stats)
+
+			# Check convergence
+			all_converged = all(
+				stats.total_errors == 0 for stats in task_stats.values()
+			)
+
+			if verbose:
+				task_summary = ", ".join(
+					f"{name}:{stats.accuracy:.0f}%"
+					for name, stats in task_stats.items()
+				)
+				total_errors = sum(s.total_errors for s in task_stats.values())
+				print(f"Epoch {epoch + 1}/{epochs}: {task_summary} (total errors: {total_errors})")
+
+			if early_stop and all_converged:
+				if verbose:
+					print(f"All tasks converged at epoch {epoch + 1}!")
+				break
+
+		return all_history
+
+	def evaluate(self, verbose: bool = True) -> dict[str, float]:
+		"""
+		Evaluate accuracy on each task.
+
+		Returns:
+			Dictionary mapping task_name -> accuracy
+		"""
+		results = {}
+
+		for task in self.tasks:
+			correct = 0
+			total = 0
+
+			for inputs, targets in task.dataset:
+				outputs = self.trainer.model.forward(inputs)
+				for out, tgt in zip(outputs, targets):
+					if (out.squeeze() == tgt.squeeze()).all():
+						correct += 1
+					total += 1
+
+			accuracy = 100 * correct / total if total > 0 else 0
+			results[task.name] = accuracy
+
+			if verbose:
+				print(f"{task.name}: {accuracy:.1f}% ({correct}/{total})")
+
+		return results
+
+	def get_shared_primitive_stats(self) -> dict[str, list[str]]:
+		"""
+		Get statistics about shared primitives across tasks.
+
+		Returns:
+			Dictionary mapping primitive_name -> list of task names using it
+		"""
+		primitive_usage: dict[str, list[str]] = defaultdict(list)
+
+		for task in self.tasks:
+			for primitive in task.shared_primitives:
+				primitive_usage[primitive].append(task.name)
+
+		return dict(primitive_usage)

@@ -41,9 +41,11 @@ output_layer_output			final output									[1, N_out]
 - [x] Layer Normalization Equivalent - DiscreteNormalization with ENSEMBLE_VOTE/BIT_BALANCE
 - [x] Sparse Attention Patterns - STRIDED, DILATED, LOCAL_GLOBAL in strategies/
 
+## Completed: Training Enhancements
+- [x] Curriculum Learning Integration - CurriculumTrainer with configurable difficulty metrics
+- [x] Multi-Task Learning - MultiTaskTrainer with Task definitions and MixingStrategy
+
 ## Future: Training Enhancements
-- [ ] Curriculum Learning Integration - Start with short sequences, gradually increase
-- [ ] Multi-Task Learning - Train on multiple tasks simultaneously
 - [ ] Contrastive Learning - Learn representations that distinguish similar patterns
 
 ## Completed: New Task Domains

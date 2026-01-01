@@ -41,6 +41,17 @@ from wnn.ram.core.trainer import (
     EpochStats,
     TrainingCallback,
     Checkpoint,
+    # Enhanced curriculum learning
+    CurriculumTrainer,
+    CurriculumSchedule,
+    length_difficulty,
+    bit_count_difficulty,
+    hamming_difficulty,
+    combined_difficulty,
+    # Multi-task learning
+    MultiTaskTrainer,
+    Task,
+    MixingStrategy,
 )
 from wnn.ram.enums import LayerType, TrainingMode, TrainingPhase
 
@@ -145,6 +156,17 @@ __all__ = [
     'LayerType',
     'TrainingMode',
     'TrainingPhase',
+    # Enhanced curriculum learning
+    'CurriculumTrainer',
+    'CurriculumSchedule',
+    'length_difficulty',
+    'bit_count_difficulty',
+    'hamming_difficulty',
+    'combined_difficulty',
+    # Multi-task learning
+    'MultiTaskTrainer',
+    'Task',
+    'MixingStrategy',
     # Serialization (use model.save() / Model.load())
     'SERIALIZATION_VERSION',
     # Batch processing utilities
