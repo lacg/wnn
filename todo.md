@@ -33,6 +33,7 @@ output_layer_output			final output									[1, N_out]
 | sorting    | BIT_LEVEL     | 100%          | BitLevelComparator (70 patterns for 6-bit) |
 | addition   | RECURRENT     | 100%          | LearnedFullAdder (8 binary / 200 decimal patterns) |
 | multiply   | RECURRENT     | 100%          | Shift-and-add reuses addition (8 binary / 300 decimal) |
+| division   | RECURRENT     | 100%          | Shift-and-subtract reuses subtraction (8 binary patterns) |
 
 ## Completed: Architectural Improvements
 - [x] Learned Position Embeddings - LearnedPositionEncoder with RAMLayer
@@ -49,6 +50,7 @@ output_layer_output			final output									[1, N_out]
 - [x] Sorting - BitLevelComparator decomposes comparison into bit-level ops (100% generalization)
 - [x] Arithmetic (Addition) - LearnedFullAdder with carry propagation (100% generalization)
 - [x] Arithmetic (Multiplication) - Shift-and-add reuses addition; binary needs 0 new patterns!
+- [x] Arithmetic (Division) - Shift-and-subtract reuses subtraction; 8 patterns for 100%!
 
 ## Key Insight: The Decomposition Pattern
 RAM networks generalize when complex operations are decomposed into small learnable primitives:
@@ -60,10 +62,25 @@ RAM networks generalize when complex operations are decomposed into small learna
 | Sorting | BitLevelComparator | Rank counting | 70 (6-bit) |
 | Addition | Full adder (8/200) | Carry propagation | 8 (binary) / 200 (decimal) |
 | Multiply | Full adder + digit-mult | Shift-and-add | 8 (binary) / 300 (decimal) |
+| Division | Full subtractor (8) | Shift-and-subtract | 8 (binary) |
 
 The pattern: **Decompose → Learn primitives → Compose/Recur → Generalize**
 
 ## Future: New Task Domains
-- [ ] Language Modeling - Character-level text generation
 - [ ] Sequence-to-Sequence - Translation, summarization with cross-attention
-- [ ] Division - Can we learn inverse of multiplication?
+
+## Explored: Language Modeling (Limited Generalization Expected)
+- [x] N-gram Language Model - Memorizes context→next mappings
+- [x] Recurrent Language Model - State-based character prediction
+
+**Key Finding**: Unlike arithmetic, language lacks universal primitives for decomposition:
+- Train accuracy: 100% on seen patterns
+- Test accuracy: ~57% on unseen combinations (21% gap)
+- This is **expected** - language is fundamentally about statistical patterns, not composable operations
+
+Language modeling shows where decomposition **doesn't** apply:
+| Aspect | Arithmetic | Language |
+|--------|------------|----------|
+| Primitives | Universal (XOR, carry) | Context-dependent |
+| Composition | Perfect (deterministic) | Probabilistic |
+| Generalization | 100% from primitives | Requires similar training contexts |
