@@ -30,6 +30,8 @@ output_layer_output			final output									[1, N_out]
 | complement | COMPOSITIONAL | 100%          | Group-based decomposition |
 | copy       | BIT_LEVEL     | 100%          | Per-bit context learning |
 | successor  | BIT_LEVEL     | 100%          | Per-bit context learning |
+| sorting    | BIT_LEVEL     | 100%          | BitLevelComparator (70 patterns for 6-bit) |
+| addition   | RECURRENT     | 100%          | LearnedFullAdder (8 binary / 200 decimal patterns) |
 
 ## Completed: Architectural Improvements
 - [x] Learned Position Embeddings - LearnedPositionEncoder with RAMLayer
@@ -42,7 +44,23 @@ output_layer_output			final output									[1, N_out]
 - [ ] Multi-Task Learning - Train on multiple tasks simultaneously
 - [ ] Contrastive Learning - Learn representations that distinguish similar patterns
 
+## Completed: New Task Domains
+- [x] Sorting - BitLevelComparator decomposes comparison into bit-level ops (100% generalization)
+- [x] Arithmetic (Addition) - LearnedFullAdder with carry propagation (100% generalization)
+
+## Key Insight: The Decomposition Pattern
+RAM networks generalize when complex operations are decomposed into small learnable primitives:
+
+| Operation | Primitives | Composition | Patterns |
+|-----------|-----------|-------------|----------|
+| Parity | XOR (4) | Recurrent state | 4 |
+| Comparison | bit-level <, == (8) | Cascade + prefix AND | 70 (6-bit) |
+| Sorting | BitLevelComparator | Rank counting | 70 (6-bit) |
+| Addition | Full adder (8/200) | Carry propagation | 8 (binary) / 200 (decimal) |
+
+The pattern: **Decompose → Learn primitives → Compose/Recur → Generalize**
+
 ## Future: New Task Domains
-- [ ] Arithmetic - Multi-digit addition, multiplication
-- [ ] Sorting - Already have computed version; can we learn it?
+- [ ] Arithmetic (Multiplication) - Can we decompose into learnable primitives?
 - [ ] Language Modeling - Character-level text generation
+- [ ] Sequence-to-Sequence - Translation, summarization with cross-attention
