@@ -19,19 +19,17 @@ output_layer_output			final output									[1, N_out]
 - [x] Scheduled Sampling for autoregressive training
 - [x] Soft Attention via Voting (already existed)
 - [x] Hard Example Mining (already existed)
+- [x] Parity generalization → 100% with RecurrentParityMapper (PARITY strategy)
+- [x] Shift-left generalization → 100% with SHIFTED context mode
 
-## In Progress
-- [ ] Parity generalization (currently 53.8% test accuracy)
-- [ ] Shift-left generalization (currently 43.6% test accuracy)
-
-## Generalization Gaps (from benchmarks)
-| Task       | Best Strategy   | Test Accuracy | Status      |
-|------------|-----------------|---------------|-------------|
-| parity     | BIT_LEVEL       | 53.8%         | Needs work  |
-| shift_left | COMPOSITIONAL   | 43.6%         | Needs work  |
-| complement | COMPOSITIONAL   | 100%          | Done        |
-| copy       | BIT_LEVEL       | 100%          | Done        |
-| successor  | BIT_LEVEL       | 100%          | Done        |
+## Generalization Results (all tasks at 100%)
+| Task       | Best Strategy | Test Accuracy | Solution |
+|------------|---------------|---------------|----------|
+| parity     | PARITY        | 100%          | RecurrentParityMapper (1-bit XOR state) |
+| shift_left | SHIFTED       | 100%          | SHIFTED context mode (offset routing) |
+| complement | COMPOSITIONAL | 100%          | Group-based decomposition |
+| copy       | BIT_LEVEL     | 100%          | Per-bit context learning |
+| successor  | BIT_LEVEL     | 100%          | Per-bit context learning |
 
 ## Future: Architectural Improvements
 - [ ] Learned Position Embeddings - Current RELATIVE mode is fixed; learned could adapt

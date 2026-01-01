@@ -54,6 +54,9 @@ from wnn.ram.enums.model import ModelType
 # Recurrent
 from wnn.ram.enums.recurrent import StateMode
 
+# Normalization
+from wnn.ram.enums.normalization import NormStrategy
+
 
 __all__ = [
     # Memory
@@ -90,4 +93,6 @@ __all__ = [
     'ModelType',
     # Recurrent
     'StateMode',
+    # Normalization
+    'NormStrategy',
 ]

@@ -8,10 +8,16 @@ Provides flexible attention mask generation for different attention patterns:
 - BLOCK: Attention within fixed-size blocks only
 - PREFIX: First k positions can attend bidirectionally, rest are causal
 - CUSTOM: User-provided mask function
+- STRIDED: Attend every k-th position (reduces O(n²) to O(n²/k))
+- DILATED: Exponentially increasing gaps [1, 2, 4, ...]
+- LOCAL_GLOBAL: Local window + global tokens (e.g., [CLS])
 
 Usage:
     mask = AttentionMask.causal(seq_len=10)
     mask = AttentionMask.sliding_window(seq_len=10, window_size=3)
+    mask = AttentionMask.strided(seq_len=10, stride=2)
+    mask = AttentionMask.dilated(seq_len=10, dilation_rates=[1, 2, 4])
+    mask = AttentionMask.local_global(seq_len=10, local_window=2, global_positions=[0])
     mask = AttentionMask.from_strategy(MaskStrategy.CAUSAL, seq_len=10)
 """
 
@@ -28,6 +34,10 @@ class MaskStrategy(Enum):
     BLOCK = auto()            # Same block only
     PREFIX = auto()           # Prefix bidirectional, rest causal
     CUSTOM = auto()           # User-defined
+    # Sparse patterns
+    STRIDED = auto()          # Every k-th position
+    DILATED = auto()          # Exponentially increasing gaps
+    LOCAL_GLOBAL = auto()     # Local window + global tokens
 
 
 class AttentionMask:
@@ -151,6 +161,123 @@ class AttentionMask:
         return mask
 
     @staticmethod
+    def strided(
+        seq_len: int,
+        stride: int = 2,
+        causal: bool = False,
+    ) -> Tensor:
+        """
+        Create strided attention mask.
+
+        Position i attends to positions 0, stride, 2*stride, ...
+        Reduces complexity from O(n²) to O(n²/stride).
+
+        Args:
+            seq_len: Sequence length
+            stride: Attend every stride-th position
+            causal: If True, also apply causal constraint (j <= i)
+
+        Returns:
+            Boolean mask [seq_len, seq_len]
+        """
+        mask = zeros(seq_len, seq_len, dtype=tbool)
+        for i in range(seq_len):
+            for j in range(0, seq_len, stride):
+                if not causal or j <= i:
+                    mask[i, j] = True
+            # Always attend to self
+            mask[i, i] = True
+        return mask
+
+    @staticmethod
+    def dilated(
+        seq_len: int,
+        dilation_rates: list[int] | None = None,
+        window_per_rate: int = 2,
+        causal: bool = False,
+    ) -> Tensor:
+        """
+        Create dilated attention mask with multiple dilation rates.
+
+        Each rate defines a sparse pattern: attend to positions at multiples
+        of that rate within a window. Captures local + global context.
+
+        Example with rates=[1,2,4], window_per_rate=2:
+        - Rate 1: attend at distances 0, 1, 2 (dense local)
+        - Rate 2: attend at distances 0, 2, 4 (sparse medium)
+        - Rate 4: attend at distances 0, 4, 8 (sparse global)
+
+        Args:
+            seq_len: Sequence length
+            dilation_rates: List of dilation rates (default: [1, 2, 4])
+            window_per_rate: How many steps per rate (default: 2)
+            causal: If True, only attend to positions j <= i
+
+        Returns:
+            Boolean mask [seq_len, seq_len]
+        """
+        if dilation_rates is None:
+            dilation_rates = [1, 2, 4]
+
+        mask = zeros(seq_len, seq_len, dtype=tbool)
+        for i in range(seq_len):
+            # Always attend to self
+            mask[i, i] = True
+
+            for rate in dilation_rates:
+                # Attend to positions at multiples of rate
+                for step in range(1, window_per_rate + 1):
+                    dist = rate * step
+                    # Look backward (always allowed)
+                    if i - dist >= 0:
+                        mask[i, i - dist] = True
+                    # Look forward (only if not causal)
+                    if not causal and i + dist < seq_len:
+                        mask[i, i + dist] = True
+
+        return mask
+
+    @staticmethod
+    def local_global(
+        seq_len: int,
+        local_window: int = 3,
+        global_positions: list[int] | None = None,
+        causal: bool = False,
+    ) -> Tensor:
+        """
+        Create local-global attention mask.
+
+        Combines local sliding window with global token access.
+        Global positions (e.g., [CLS], first/last) are visible to all.
+
+        Args:
+            seq_len: Sequence length
+            local_window: Local window size (left and right)
+            global_positions: Positions that all can attend to/from (default: [0])
+            causal: If True, apply causal constraint to local window
+
+        Returns:
+            Boolean mask [seq_len, seq_len]
+        """
+        if global_positions is None:
+            global_positions = [0]  # First position is global by default
+
+        mask = zeros(seq_len, seq_len, dtype=tbool)
+        for i in range(seq_len):
+            # Local window
+            start = max(0, i - local_window)
+            end = i + 1 if causal else min(seq_len, i + local_window + 1)
+            mask[i, start:end] = True
+
+            # Global positions: can attend to them and they attend to all
+            for g in global_positions:
+                if 0 <= g < seq_len:
+                    mask[i, g] = True  # i can attend to global
+                    mask[g, i] = True  # global can attend to i
+
+        return mask
+
+    @staticmethod
     def custom(
         query_len: int,
         key_len: int,
@@ -183,6 +310,11 @@ class AttentionMask:
         block_size: int = 4,
         prefix_len: int = 2,
         can_attend: Callable[[int, int], bool] | None = None,
+        stride: int = 2,
+        dilation_rates: list[int] | None = None,
+        window_per_rate: int = 2,
+        global_positions: list[int] | None = None,
+        causal: bool = False,
     ) -> Tensor:
         """
         Create mask from a predefined strategy.
@@ -191,10 +323,15 @@ class AttentionMask:
             strategy: The masking strategy to use
             seq_len: Query sequence length
             key_len: Key sequence length (for cross-attention)
-            window_size: Window size for SLIDING_WINDOW
+            window_size: Window size for SLIDING_WINDOW and LOCAL_GLOBAL
             block_size: Block size for BLOCK
             prefix_len: Prefix length for PREFIX
             can_attend: Function for CUSTOM strategy
+            stride: Stride for STRIDED strategy
+            dilation_rates: Dilation rates for DILATED strategy
+            window_per_rate: Steps per rate for DILATED strategy
+            global_positions: Global positions for LOCAL_GLOBAL strategy
+            causal: Whether to apply causal constraint (for sparse patterns)
 
         Returns:
             Boolean mask tensor
@@ -204,7 +341,7 @@ class AttentionMask:
         elif strategy == MaskStrategy.BIDIRECTIONAL:
             return AttentionMask.bidirectional(seq_len, key_len)
         elif strategy == MaskStrategy.SLIDING_WINDOW:
-            return AttentionMask.sliding_window(seq_len, window_size)
+            return AttentionMask.sliding_window(seq_len, window_size, causal)
         elif strategy == MaskStrategy.BLOCK:
             return AttentionMask.block(seq_len, block_size)
         elif strategy == MaskStrategy.PREFIX:
@@ -214,6 +351,12 @@ class AttentionMask:
                 raise ValueError("CUSTOM strategy requires can_attend function")
             key_len = key_len or seq_len
             return AttentionMask.custom(seq_len, key_len, can_attend)
+        elif strategy == MaskStrategy.STRIDED:
+            return AttentionMask.strided(seq_len, stride, causal)
+        elif strategy == MaskStrategy.DILATED:
+            return AttentionMask.dilated(seq_len, dilation_rates, window_per_rate, causal)
+        elif strategy == MaskStrategy.LOCAL_GLOBAL:
+            return AttentionMask.local_global(seq_len, window_size, global_positions, causal)
         else:
             raise ValueError(f"Unknown strategy: {strategy}")
 

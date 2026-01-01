@@ -23,6 +23,7 @@ from wnn.ram.enums import (
     AttentionCombineMode,
     AggregationStrategy,
     MapperStrategy,
+    CrossAttentionMode,
 )
 from wnn.ram.encoders_decoders import PositionMode, PositionEncoderFactory
 
@@ -124,11 +125,14 @@ class SoftRAMAttention(LearnableAttention):
     def __init__(
         self,
         input_bits: int,
+        key_bits: int | None = None,  # None = self-attention, else cross-attention
         num_heads: int = 8,
         aggregation: AggregationStrategy = AggregationStrategy.TOP_1,
         value_strategy: MapperStrategy = MapperStrategy.BIT_LEVEL,
         position_mode: PositionMode = PositionMode.RELATIVE,
+        cross_attention_mode: CrossAttentionMode = CrossAttentionMode.ENCODER_ONLY,
         max_seq_len: int = 16,
+        max_context_len: int | None = None,  # For cross-attention
         causal: bool = True,
         mask_strategy: MaskStrategy | None = None,  # Override causal
         window_size: int = 3,  # For SLIDING_WINDOW
@@ -145,12 +149,16 @@ class SoftRAMAttention(LearnableAttention):
         super().__init__()
 
         self.input_bits = input_bits
+        self.key_bits = key_bits or input_bits  # Default to self-attention
+        self.is_cross_attention = key_bits is not None
         self.num_heads = num_heads
         self.aggregation = aggregation
         self.value_strategy = value_strategy
         self.top_k = top_k
         self.max_seq_len = max_seq_len
+        self.max_context_len = max_context_len or max_seq_len
         self.position_mode = position_mode
+        self.cross_attention_mode = cross_attention_mode
         self.use_ensemble = use_ensemble
         self.ensemble_sub_rams = ensemble_sub_rams
         self.position_only = position_only
@@ -163,40 +171,65 @@ class SoftRAMAttention(LearnableAttention):
         self.prefix_len = prefix_len
 
         # Determine mask strategy
-        if mask_strategy is not None:
+        # Cross-attention is always bidirectional (no causal masking)
+        if self.is_cross_attention:
+            self.mask_strategy = MaskStrategy.BIDIRECTIONAL
+            self.causal = False
+        elif mask_strategy is not None:
             self.mask_strategy = mask_strategy
+            self.causal = self.mask_strategy == MaskStrategy.CAUSAL
         else:
             self.mask_strategy = MaskStrategy.CAUSAL if causal else MaskStrategy.BIDIRECTIONAL
-
-        # Keep causal for backwards compatibility
-        self.causal = self.mask_strategy == MaskStrategy.CAUSAL
+            self.causal = causal
 
         # Position encoding setup
-        if position_mode == PositionMode.NONE:
-            self.position_encoder = None
-            self.n_position_bits = 0
-        elif position_mode == PositionMode.RELATIVE:
-            self.position_encoder = PositionEncoderFactory.create(
-                PositionMode.RELATIVE,
-                max_distance=max_seq_len - 1,
-            )
-            self.n_position_bits = self.position_encoder.n_bits
-        elif position_mode == PositionMode.BINARY:
-            self.position_encoder = PositionEncoderFactory.create(
-                PositionMode.BINARY,
-                max_seq_len=max_seq_len,
-            )
-            self.n_position_bits = self.position_encoder.n_bits * 2
-        else:
-            raise ValueError(f"Unsupported position_mode: {position_mode}")
+        match position_mode:
+            case PositionMode.NONE:
+                self.position_encoder = None
+                self.n_position_bits = 0
 
-        # Similarity input size
+            case PositionMode.RELATIVE:
+                self.position_encoder = PositionEncoderFactory.create(
+                    PositionMode.RELATIVE,
+                    max_distance=max_seq_len - 1,
+                )
+                self.n_position_bits = self.position_encoder.n_bits
+
+            case PositionMode.BINARY:
+                self.position_encoder = PositionEncoderFactory.create(
+                    PositionMode.BINARY,
+                    max_seq_len=max_seq_len,
+                )
+                self.n_position_bits = self.position_encoder.n_bits * 2
+
+            case PositionMode.LEARNED:
+                # Learned position embeddings via RAMLayer
+                n_base_bits = max(4, max_seq_len.bit_length())
+                self.position_encoder = PositionEncoderFactory.create(
+                    PositionMode.LEARNED,
+                    n_position_bits=n_base_bits,
+                    max_seq_len=max_seq_len,
+                    rng=rng + 5000 if rng else None,
+                )
+                # Enable relative position learning
+                self.position_encoder.enable_relative(
+                    max_distance=max_seq_len - 1,
+                    rng=rng + 5001 if rng else None,
+                )
+                self.n_position_bits = self.position_encoder.n_bits
+
+            case _:
+                raise ValueError(f"Unsupported position_mode: {position_mode}")
+
+        # Similarity input size: [query, key, position]
         if position_only:
             similarity_input_bits = self.n_position_bits
             if similarity_input_bits == 0:
                 raise ValueError("position_only=True requires position_mode != NONE")
         else:
-            similarity_input_bits = 2 * input_bits + self.n_position_bits
+            # Cross-attention: query_bits + key_bits
+            # Self-attention: input_bits + input_bits
+            similarity_input_bits = input_bits + self.key_bits + self.n_position_bits
         self.similarity_input_bits = similarity_input_bits
 
         # Voting heads
@@ -221,11 +254,18 @@ class SoftRAMAttention(LearnableAttention):
                 for i in range(num_heads)
             ])
 
-        # Value projection
+        # Value projection: transforms context values (key_bits) to query space (input_bits)
+        # For cross-attention with different dimensions, use DIRECT strategy
+        effective_value_strategy = value_strategy
+        if self.is_cross_attention and self.key_bits != input_bits:
+            # BIT_LEVEL/RESIDUAL require same input/output dims
+            if value_strategy in (MapperStrategy.BIT_LEVEL, MapperStrategy.RESIDUAL):
+                effective_value_strategy = MapperStrategy.DIRECT
+
         self.value_projection = GeneralizingProjection(
-            input_bits=input_bits,
-            output_bits=input_bits,
-            strategy=value_strategy,
+            input_bits=self.key_bits,  # Values come from context
+            output_bits=input_bits,    # Output in query space
+            strategy=effective_value_strategy,
             rng=rng + num_heads if rng else None,
         )
 
@@ -252,15 +292,18 @@ class SoftRAMAttention(LearnableAttention):
         pos_only_str = ", pos_only" if position_only else ""
         content_str = f", content={content_match.name}" if content_match != ContentMatchMode.NONE else ""
         combine_str = f", combine={attention_combine.name}" if attention_combine != AttentionCombineMode.CONTENT_ONLY else ""
+        cross_str = f", cross={self.key_bits}b" if self.is_cross_attention else ""
         mask_name = self.mask_strategy.name
-        print(f"[SoftRAMAttention] heads={num_heads}, input={input_bits}b, "
+        print(f"[SoftRAMAttention] heads={num_heads}, input={input_bits}b{cross_str}, "
               f"aggregation={aggregation.name}, value={value_strategy.name}{ensemble_str}{pos_only_str}{content_str}{combine_str}, mask={mask_name}")
 
-    def _get_mask(self, seq_len: int) -> Tensor:
-        """Get attention mask for the given sequence length."""
+    def _get_mask(self, seq_len: int, key_len: int | None = None) -> Tensor:
+        """Get attention mask for the given sequence/key lengths."""
+        key_len = key_len or seq_len
         return AttentionMask.from_strategy(
             strategy=self.mask_strategy,
             seq_len=seq_len,
+            key_len=key_len,
             window_size=self.window_size,
             block_size=self.block_size,
             prefix_len=self.prefix_len,
@@ -291,18 +334,25 @@ class SoftRAMAttention(LearnableAttention):
     def _compute_position_votes(self, query: Tensor, key: Tensor, query_pos: int, key_pos: int) -> int:
         vote_count = 0
         for head in self.voting_heads:
-            if self.position_only:
-                parts = []
-            else:
-                parts = [query, key]
+            parts = [] if self.position_only else [query, key]
 
-            if self.position_mode == PositionMode.RELATIVE:
-                rel_dist = self.position_encoder.encode_relative(query_pos, key_pos)
-                parts.append(rel_dist)
-            elif self.position_mode == PositionMode.BINARY:
-                q_pos = self.position_encoder.encode(query_pos)
-                k_pos = self.position_encoder.encode(key_pos)
-                parts.extend([q_pos, k_pos])
+            match self.position_mode:
+                case PositionMode.RELATIVE:
+                    rel_dist = self.position_encoder.encode_relative(query_pos, key_pos)
+                    parts.append(rel_dist)
+
+                case PositionMode.BINARY:
+                    q_pos = self.position_encoder.encode(query_pos)
+                    k_pos = self.position_encoder.encode(key_pos)
+                    parts.extend([q_pos, k_pos])
+
+                case PositionMode.LEARNED:
+                    # Use learned relative position encoding
+                    rel_embed = self.position_encoder.encode_relative(query_pos, key_pos)
+                    parts.append(rel_embed)
+
+                case PositionMode.NONE:
+                    pass  # No position encoding
 
             similarity_input = cat(parts).unsqueeze(0)
             attend = head(similarity_input).squeeze().item()
@@ -411,18 +461,27 @@ class SoftRAMAttention(LearnableAttention):
 
         Args:
             tokens: Input tokens (queries)
-            context: Ignored (SoftRAMAttention is self-attention only)
+            context: Context tokens for cross-attention (keys/values).
+                     None for self-attention.
         """
         tokens = [t.squeeze() if t.ndim > 1 else t for t in tokens]
         seq_len = len(tokens)
 
-        # Pre-compute mask once
-        mask = self._get_mask(seq_len)
+        # Determine keys: context for cross-attention, tokens for self-attention
+        if context is not None:
+            keys = [t.squeeze() if t.ndim > 1 else t for t in context]
+            key_len = len(keys)
+        else:
+            keys = tokens
+            key_len = seq_len
 
-        # Project values
+        # Pre-compute mask once
+        mask = self._get_mask(seq_len, key_len)
+
+        # Project values (from keys, not queries)
         values = []
-        for tok in tokens:
-            proj = self.value_projection(tok)
+        for key in keys:
+            proj = self.value_projection(key)
             if proj.ndim > 1:
                 proj = proj.squeeze()
             values.append(proj)
@@ -431,7 +490,7 @@ class SoftRAMAttention(LearnableAttention):
         outputs = []
         for i in range(seq_len):
             query = tokens[i]
-            votes = self._compute_votes(query, tokens, i, mask=mask)
+            votes = self._compute_votes(query, keys, i, mask=mask)
             output = self._aggregate(values, votes)
             outputs.append(output)
         return outputs
@@ -450,13 +509,21 @@ class SoftRAMAttention(LearnableAttention):
         tokens = [t.squeeze() if t.ndim > 1 else t for t in tokens]
         n = len(tokens)
 
-        # Pre-compute mask once
-        mask = self._get_mask(n)
+        # Determine keys: context for cross-attention, tokens for self-attention
+        if context is not None:
+            keys = [t.squeeze() if t.ndim > 1 else t for t in context]
+            m = len(keys)
+        else:
+            keys = tokens
+            m = n
 
-        weights = zeros(n, n, dtype=float32)
+        # Pre-compute mask once
+        mask = self._get_mask(n, m)
+
+        weights = zeros(n, m, dtype=float32)
         for i in range(n):
             query = tokens[i]
-            votes = self._compute_votes(query, tokens, i, mask=mask)
+            votes = self._compute_votes(query, keys, i, mask=mask)
             for j, v in enumerate(votes):
                 weights[i, j] = v / self.num_heads
 

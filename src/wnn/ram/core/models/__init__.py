@@ -51,6 +51,9 @@ from wnn.ram.core.models.embedding import RAMEmbedding, PositionEncoding
 from wnn.ram.core.models.transformer_block import RAMTransformerBlock
 from wnn.ram.core.models.transformer import RAMTransformer
 
+# Normalization
+from wnn.ram.core.models.discrete_normalization import DiscreteNormalization
+
 # Seq2Seq models
 from wnn.ram.core.models.seq2seq import RAMSeq2Seq
 from wnn.ram.core.models.encoder_decoder import RAMEncoderDecoder
@@ -101,6 +104,8 @@ __all__ = [
     # Transformer
     'RAMTransformerBlock',
     'RAMTransformer',
+    # Normalization
+    'DiscreteNormalization',
     # Seq2Seq
     'RAMSeq2Seq',
     'RAMEncoderDecoder',

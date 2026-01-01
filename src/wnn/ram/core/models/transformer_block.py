@@ -13,8 +13,10 @@ from wnn.ram.enums import (
     FFNType,
     ContentMatchMode,
     AttentionCombineMode,
+    NormStrategy,
 )
 from wnn.ram.encoders_decoders import PositionMode
+from wnn.ram.core.models.discrete_normalization import DiscreteNormalization
 from wnn.ram.factories.ffn import FFNFactory
 from wnn.ram.factories.attention import AttentionFactory
 from wnn.ram.core.models.computed_arithmetic import bits_to_int
@@ -24,10 +26,14 @@ class RAMTransformerBlock(RAMSequenceModel):
     """
     A single RAM transformer block.
 
-    Architecture:
+    Architecture (without normalization):
         x -> Attention(x) -> x XOR attn_out -> FFN -> x XOR ffn_out -> output
 
-    Where XOR is the discrete residual connection.
+    Architecture (with normalization):
+        x -> Attention(x) -> x XOR attn_out -> Norm -> FFN -> x XOR ffn_out -> Norm -> output
+
+    Where XOR is the discrete residual connection and Norm is discrete
+    normalization using ensemble voting (multiple sub-networks vote per bit).
     """
 
     def __init__(
@@ -45,6 +51,10 @@ class RAMTransformerBlock(RAMSequenceModel):
         ffn_hidden_bits: int | None = None,
         ffn_constant: int = 1,
         ffn_modulo: int | None = None,
+        # Normalization
+        use_normalization: bool = False,
+        norm_strategy: NormStrategy = NormStrategy.ENSEMBLE_VOTE,
+        norm_sub_networks: int = 4,
         # Other
         use_residual: bool = True,
         max_seq_len: int = 16,
@@ -63,6 +73,9 @@ class RAMTransformerBlock(RAMSequenceModel):
             ffn_hidden_bits: Hidden dimension for TWO_LAYER FFN
             ffn_constant: Constant for computed arithmetic FFN
             ffn_modulo: Modulo for computed arithmetic FFN
+            use_normalization: Apply discrete normalization after residuals
+            norm_strategy: Normalization strategy (ENSEMBLE_VOTE or BIT_BALANCE)
+            norm_sub_networks: Number of sub-networks for ensemble voting
             use_residual: Use XOR residual connections
             max_seq_len: Maximum sequence length
             rng: Random seed
@@ -81,6 +94,9 @@ class RAMTransformerBlock(RAMSequenceModel):
         self.ffn_hidden_bits = ffn_hidden_bits
         self.ffn_constant = ffn_constant
         self.ffn_modulo = ffn_modulo
+        self.use_normalization = use_normalization
+        self.norm_strategy = norm_strategy
+        self.norm_sub_networks = norm_sub_networks
         self.use_residual = use_residual
         self.max_seq_len = max_seq_len
         self.rng = rng
@@ -108,12 +124,31 @@ class RAMTransformerBlock(RAMSequenceModel):
             rng=rng + 1000 if rng else None,
         )
 
+        # Build normalization layers (one after attention, one after FFN)
+        if use_normalization and norm_strategy != NormStrategy.NONE:
+            self.norm_attn = DiscreteNormalization(
+                input_bits=input_bits,
+                strategy=norm_strategy,
+                num_sub_networks=norm_sub_networks,
+                rng=rng + 2000 if rng else None,
+            )
+            self.norm_ffn = DiscreteNormalization(
+                input_bits=input_bits,
+                strategy=norm_strategy,
+                num_sub_networks=norm_sub_networks,
+                rng=rng + 3000 if rng else None,
+            )
+        else:
+            self.norm_attn = None
+            self.norm_ffn = None
+
         # Summary
         attn_name = attention_type.name
         ffn_name = ffn_type.name
         residual_str = "+residual" if use_residual else ""
+        norm_str = f"+norm({norm_strategy.name})" if use_normalization else ""
         print(f"[RAMTransformerBlock] {input_bits}b, attn={attn_name}, "
-              f"ffn={ffn_name}{residual_str}")
+              f"ffn={ffn_name}{residual_str}{norm_str}")
 
     def forward(self, tokens: list[Tensor]) -> list[Tensor]:
         """
@@ -135,6 +170,10 @@ class RAMTransformerBlock(RAMSequenceModel):
         if self.use_residual:
             attn_out = [t ^ r for t, r in zip(tokens, attn_out)]
 
+        # Post-attention normalization
+        if self.norm_attn is not None:
+            attn_out = [self.norm_attn(t) for t in attn_out]
+
         # FFN
         if self.ffn is not None:
             ffn_out = []
@@ -149,6 +188,10 @@ class RAMTransformerBlock(RAMSequenceModel):
             # Residual connection (XOR)
             if self.use_residual:
                 ffn_out = [t ^ r for t, r in zip(attn_out, ffn_out)]
+
+            # Post-FFN normalization
+            if self.norm_ffn is not None:
+                ffn_out = [self.norm_ffn(t) for t in ffn_out]
 
             return ffn_out
 
@@ -225,6 +268,40 @@ class RAMTransformerBlock(RAMSequenceModel):
 
         return corrections
 
+    def train_normalization(
+        self,
+        tokens: list[Tensor],
+        targets: list[Tensor] | None = None,
+    ) -> int:
+        """
+        Train normalization layers to preserve token identity.
+
+        For ENSEMBLE_VOTE, trains all sub-networks to output the target.
+        If targets is None, trains toward identity (input = output).
+
+        Args:
+            tokens: Input tokens
+            targets: Target outputs (None = identity mapping)
+
+        Returns:
+            Total errors across normalization layers
+        """
+        if targets is None:
+            targets = tokens
+
+        tokens = [t.squeeze() if t.ndim > 1 else t for t in tokens]
+        targets = [t.squeeze() if t.ndim > 1 else t for t in targets]
+
+        total_errors = 0
+
+        for t, tgt in zip(tokens, targets):
+            if self.norm_attn is not None:
+                total_errors += self.norm_attn.commit_ensemble(t, tgt)
+            if self.norm_ffn is not None:
+                total_errors += self.norm_ffn.commit_ensemble(t, tgt)
+
+        return total_errors
+
     # -------------------------
     # Serialization
     # -------------------------
@@ -243,6 +320,9 @@ class RAMTransformerBlock(RAMSequenceModel):
             'ffn_hidden_bits': self.ffn_hidden_bits,
             'ffn_constant': self.ffn_constant,
             'ffn_modulo': self.ffn_modulo,
+            'use_normalization': self.use_normalization,
+            'norm_strategy': self.norm_strategy.value if hasattr(self.norm_strategy, 'value') else self.norm_strategy,
+            'norm_sub_networks': self.norm_sub_networks,
             'use_residual': self.use_residual,
             'max_seq_len': self.max_seq_len,
             'rng': self.rng,

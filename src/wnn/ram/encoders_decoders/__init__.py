@@ -30,4 +30,5 @@ from .TransformerTokenListDecoder import TransformerTokenListDecoder
 from .PositionEncoder import PositionEncoder
 from .BinaryPositionEncoder import BinaryPositionEncoder
 from .RelativePositionEncoder import RelativePositionEncoder
+from .LearnedPositionEncoder import LearnedPositionEncoder
 from .PositionEncoderFactory import PositionEncoderFactory

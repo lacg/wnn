@@ -15,3 +15,4 @@ class PositionMode(IntEnum):
 	NONE				= 0  # No position encoding
 	BINARY			= 1  # Binary encoding: pos 5 → [1,0,1]
 	RELATIVE		= 2  # Relative position: distance from query
+	LEARNED			= 3  # Learned position embeddings via RAMLayer
