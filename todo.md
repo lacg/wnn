@@ -92,27 +92,33 @@ This is because language patterns are probabilistic, not deterministic.
 | Increment | 100% | Alignment + FFN transformation |
 | Arithmetic | 0% | Requires computation, not just routing |
 
-## Explored: Language Modeling (Improved with Pattern Abstraction)
+## Explored: Language Modeling (Improved with Pattern Abstraction + Frequency)
 - [x] N-gram Language Model - Memorizes context→next (39% generalization)
-- [x] Backoff N-gram - Falls back to shorter contexts (39%)
-- [x] Pattern Abstraction - Decomposes chars into features (**72%** generalization!)
-- [x] Hierarchical N-gram - Ensemble voting (61%)
+- [x] Backoff N-gram - Falls back to shorter contexts (42%)
+- [x] Pattern Abstraction - Decomposes chars into features (**74%** generalization)
+- [x] Hierarchical N-gram - Ensemble voting (63%)
+- [x] Combined (Exact+Pattern) - Exact match with pattern fallback (68%)
+- [x] Multi-Scale Pattern - Multi-gram voting (47%)
+- [x] **Frequency Aware** - Track all continuations, pick most common (**79%**!)
 
-**Key Finding**: Pattern Abstraction applies decomposition to language!
+**Key Finding**: Language has inherent ambiguity that limits accuracy!
 
-Decompose characters into **features** (like bits for numbers):
-- **Type**: vowel (V), consonant (C), space, punctuation (5 values)
-- **Position**: 0-25 for a-z (26 values)
-
-This reduces pattern space from O(26^n) to O(5^n × 26):
-- Original 3-gram: 26³ = 17,576 patterns
-- Pattern abstraction: 5³ × 26 = 3,250 patterns (5× reduction)
+Unlike arithmetic (100% deterministic), language is stochastic:
+- Same context "he " can lead to 'c' (cat), 'm' (mat), 'd' (dog), etc.
+- Ambiguous contexts account for ~34% of predictions
+- Frequency-based selection picks the most likely continuation
 
 | Approach | Generalization | Key Idea |
 |----------|---------------|----------|
 | Basic N-gram | 39% | Exact context memorization |
-| Backoff N-gram | 39% | Graceful degradation |
-| **Pattern Abstraction** | **72%** | **Character feature decomposition** |
-| Hierarchical | 61% | Ensemble voting |
+| Backoff N-gram | 42% | Graceful degradation |
+| Pattern Abstraction | 74% | Character feature decomposition |
+| Hierarchical | 63% | Ensemble voting |
+| Combined | 68% | Exact match + pattern fallback |
+| Multi-Scale | 47% | Multi-gram voting |
+| **Frequency Aware** | **79%** | **Track all continuations, pick most common** |
 
-Pattern Abstraction shows that **decomposition CAN improve language** - just need the right features!
+**Improvement strategies beyond 79%:**
+1. Longer context (reduces ambiguity)
+2. Word-level instead of character-level
+3. Accept probabilistic outputs instead of single predictions

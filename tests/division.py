@@ -159,11 +159,19 @@ class MultiDigitSubtractor(Module):
         return result, borrow == 1
 
     def subtract_int(self, a: int, b: int) -> tuple[int, bool]:
-        """Subtract integers, return (result, negative)."""
+        """Subtract integers, return (magnitude, negative)."""
         a_digits = self._int_to_digits(a)
         b_digits = self._int_to_digits(b)
         result_digits, negative = self.subtract(a_digits, b_digits)
         result = self._digits_to_int(result_digits)
+
+        if negative:
+            # Result is in two's complement form (2^n - |a-b|)
+            # Convert to magnitude: 2^n - result = |a-b|
+            n_bits = len(result_digits)
+            max_val = self.base ** n_bits
+            result = max_val - result
+
         return result, negative
 
     def _int_to_digits(self, n: int) -> list[int]:

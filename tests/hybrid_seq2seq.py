@@ -272,6 +272,7 @@ def test_hybrid_arithmetic():
     random.seed(999)
     gen_correct = 0
     gen_total = 20
+    failures = []
 
     for _ in range(gen_total):
         a = random.randint(0, 255)
@@ -280,17 +281,24 @@ def test_hybrid_arithmetic():
 
         if op == evaluator.PLUS:
             expected = (a + b) % 256
-            result = evaluator.evaluate_expression(a, evaluator.PLUS, b)
+            result = evaluator.evaluate_expression(a, evaluator.PLUS, b) % 256
             op_str = "+"
         else:
             expected = (a - b) % 256
-            result = evaluator.evaluate_expression(a, evaluator.MINUS, b)
+            result = evaluator.evaluate_expression(a, evaluator.MINUS, b) % 256
             op_str = "-"
 
         if result == expected:
             gen_correct += 1
+        else:
+            failures.append((a, op_str, b, result, expected))
 
     print(f"   Generalization: {gen_correct}/{gen_total} = {100*gen_correct/gen_total:.0f}%")
+
+    if failures:
+        print("   Failures (first 3):")
+        for a, op_str, b, result, expected in failures[:3]:
+            print(f"     {a} {op_str} {b} = {result} (expected {expected})")
 
     return (add_correct + sub_correct) / (len(add_tests) + len(sub_tests))
 
