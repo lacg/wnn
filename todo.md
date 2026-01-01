@@ -66,8 +66,22 @@ RAM networks generalize when complex operations are decomposed into small learna
 
 The pattern: **Decompose → Learn primitives → Compose/Recur → Generalize**
 
-## Future: New Task Domains
-- [ ] Sequence-to-Sequence - Translation, summarization with cross-attention
+## Explored: Sequence-to-Sequence (Cross-Attention)
+- [x] RAMEncoderDecoder - Full encoder-decoder with cross-attention
+- [x] Copy task - 100% (position alignment)
+- [x] Reverse task - 100% (position routing)
+- [x] Increment task - 100% (alignment + FFN transformation)
+- [x] Character mapping - 100% (identity alignment)
+- [ ] Arithmetic evaluation - 0% (requires computation, not just routing)
+
+**Key Finding**: Cross-attention excels at **alignment** (which source position to read) but cannot do **computation** (combining values mathematically). For arithmetic in seq2seq, would need to integrate decomposed primitives (LearnedFullAdder).
+
+| Seq2Seq Task | Accuracy | Why |
+|--------------|----------|-----|
+| Copy | 100% | Decoder[i] attends to Encoder[i] |
+| Reverse | 100% | Decoder[i] attends to Encoder[n-1-i] |
+| Increment | 100% | Alignment + FFN transformation |
+| Arithmetic | 0% | Requires computation, not just routing |
 
 ## Explored: Language Modeling (Limited Generalization Expected)
 - [x] N-gram Language Model - Memorizes context→next mappings
