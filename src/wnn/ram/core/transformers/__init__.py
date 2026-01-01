@@ -26,6 +26,10 @@ from wnn.ram.core.transformers.computed_attention import (
     ComputedSumAttention,
     ComputedMeanAttention,
 )
+from wnn.ram.core.transformers.xor_attention import (
+    XORCrossAttention,
+    XORContentAddressableMemory,
+)
 
 # FFN
 from wnn.ram.core.transformers.two_layer_ffn import TwoLayerFFN
@@ -69,6 +73,8 @@ __all__ = [
     'ComputedCountDistinctAttention',
     'ComputedSumAttention',
     'ComputedMeanAttention',
+    'XORCrossAttention',
+    'XORContentAddressableMemory',
     # FFN
     'TwoLayerFFN',
     'RAMFeedForward',
