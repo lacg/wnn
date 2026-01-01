@@ -30,7 +30,26 @@ python tests/parity_check.py
 
 # Run KV memory tests
 python tests/kv_memory.py
+
+# Run systematic benchmarks for generalization strategies
+python tests/benchmarks.py
 ```
+
+## Project Structure
+
+```
+src/wnn/ram/
+├── core/           # Core components (Memory, RAMLayer, networks, transformers)
+├── enums/          # ALL enumerations (MapperStrategy, TrainingMode, etc.)
+├── factories/      # ALL factory classes (MapperFactory, AttentionFactory, etc.)
+├── architecture/   # Configuration specs (KVSpec)
+├── decoders/       # Output interpretation strategies
+└── cost/           # Cost calculators for constraint solving
+```
+
+**Important conventions:**
+- All enums live in `wnn/ram/enums/` - no exceptions
+- All factories live in `wnn/ram/factories/` - no exceptions
 
 ## Architecture
 
@@ -53,7 +72,7 @@ python tests/kv_memory.py
 - Output layer: observes [current_state_bits]
 - Trained via EDRA-BPTT (Error Detection and Reconstruction Algorithm through time)
 
-**RAMTransformer** (`RAMTransformer.py`): Multi-head KV memory extending RAMRecurrentNetwork.
+**RAMKVMemory** (`kv_transformer.py`): Multi-head KV memory extending RAMRecurrentNetwork.
 - Hard key routing: k_bits determine which head to read/write
 - Query detection: value bits all zero indicates query operation
 - State is partitioned into heads (num_heads = 2^k_bits)
@@ -88,6 +107,61 @@ EDRA (Error Detection and Reconstruction Algorithm) is a credit assignment metho
 2. If output incorrect, solve output layer constraints
 3. Backpropagate desired states through time via state layer constraint solving
 4. Commit solutions to memory only when constraints are satisfiable
+
+**Training Modes** (`TrainingMode` enum):
+- `GREEDY`: Train all layers in single backward pass (fast)
+- `ITERATIVE`: Multiple passes until convergence (more accurate)
+- `LAYERWISE`: Train one layer at a time (most controlled)
+- `OUTPUT_FIRST`: Prioritize output layers
+
+**Curriculum Learning** (`TrainingPhase` enum):
+- `WARMUP`: Train on shortest/easiest sequences
+- `MAIN`: Train on full dataset
+- `REFINEMENT`: Focus on hard examples
+
+**Enhanced RAMTrainer:**
+```python
+trainer = RAMTrainer(model, mode=TrainingMode.ITERATIVE, patience=5)
+stats = trainer.train_curriculum(dataset, epochs_per_phase=5)
+```
+
+### Generalization Strategies
+
+RAM neurons naturally memorize (DIRECT strategy) but we need generalization for unseen inputs.
+
+**MapperStrategy** enum (in `wnn/ram/enums/generalization.py`):
+
+| Strategy | Description | Generalization |
+|----------|-------------|----------------|
+| `DIRECT` | Pure memorization | 0% on unseen |
+| `BIT_LEVEL` | Per-bit context learning | 95%+ on successor/copy |
+| `COMPOSITIONAL` | Group-based decomposition | Limited |
+| `HASH` | Locality-sensitive hashing | Limited |
+| `RESIDUAL` | Identity + learned correction | 95%+ on successor/copy |
+
+**Context Modes** for BIT_LEVEL/RESIDUAL:
+- `CUMULATIVE`: Bits 0..i for output bit i
+- `FULL`: All input bits for each output
+- `LOCAL`: Window around position i
+- `BIDIRECTIONAL`: Symmetric window before/after
+- `CAUSAL`: Autoregressive (only previous bits)
+
+**Usage:**
+```python
+from wnn.ram.factories import MapperFactory
+from wnn.ram.enums import MapperStrategy, ContextMode
+
+mapper = MapperFactory.create(
+    strategy=MapperStrategy.BIT_LEVEL,
+    n_bits=8,
+    context_mode=ContextMode.CUMULATIVE,
+)
+```
+
+**Benchmark results** (from `tests/benchmarks.py`):
+- BIT_LEVEL: 100% on copy, 95% on successor, 64% on complement
+- RESIDUAL: Same as BIT_LEVEL (uses it internally)
+- DIRECT: 100% train, ~0% test (no generalization)
 
 ### RAM Transformer Block (`RAMTransformerBlock.py`)
 
@@ -127,20 +201,26 @@ create_caesar_transformer(N)   # Caesar cipher +N
 create_multi_step_transformer(steps)  # Compose operations
 ```
 
-### Soft RAM Attention (`SoftRAMAttention.py`)
+### Attention Mechanisms
 
-Voting-based soft attention approximating continuous attention with discrete RAM lookups.
+Unified attention interface with both learned and computed implementations.
+
+**Base Interface** (`AttentionBase`):
+```python
+class AttentionBase(Module):
+    def forward(self, tokens: list[Tensor], context: list[Tensor] | None = None) -> list[Tensor]:
+        """context=None for self-attention, context=encoder_output for cross-attention"""
+```
 
 **Key Classes:**
-- `SoftRAMAttention`: Multi-head attention with configurable content/position matching
-- `SortingAttention`: Computed sorting with 100% generalization
-- `MinMaxAttention`: Computed min/max finding
+- `RAMAttention`: Unified self/cross-attention (replaces separate classes)
+- `SoftRAMAttention`: Voting-based soft attention with RAM lookups
+- `ComputedSortingAttention`: Computed sorting with 100% generalization
+- `ComputedMinMaxAttention`: Computed min/max finding
 - `ComputedArithmeticFFN`: Computed arithmetic transformations
 
-**Content Match Modes:**
+**Content Match Modes** (simplified):
 - `XOR_EQUAL`: Attend if tokens match (computed, 100%)
-- `HAMMING_1/2`: Attend if Hamming distance ≤ 1 or 2
-- `LESS_THAN`, `GREATER_THAN`: Numeric comparison (computed, 100%)
 
 ### Generalization Strategy
 

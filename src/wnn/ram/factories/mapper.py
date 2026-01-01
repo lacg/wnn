@@ -19,6 +19,8 @@ class MapperFactory:
 	Example:
 		mapper = MapperFactory.create(MapperStrategy.BIT_LEVEL, n_bits=8)
 		mapper = MapperFactory.create("bit_level", n_bits=8)  # string also works
+		mapper = MapperFactory.create("hash", n_bits=8, hash_bits=6)
+		mapper = MapperFactory.create("residual", n_bits=8)
 	"""
 
 	@staticmethod
@@ -30,6 +32,8 @@ class MapperFactory:
 		output_mode: BitMapperMode | str = BitMapperMode.FLIP,
 		local_window: int = 3,
 		cross_group_context: bool = True,
+		hash_bits: int = 6,
+		n_hash_functions: int = 3,
 		rng: int | None = None,
 	) -> Module:
 		"""
@@ -39,10 +43,12 @@ class MapperFactory:
 			strategy: MapperStrategy enum or string
 			n_bits: Number of bits to process
 			n_groups: Number of groups for compositional strategies
-			context_mode: Context mode for bit-level mapper
+			context_mode: Context mode for bit-level/residual mapper
 			output_mode: Output mode for bit-level mapper
-			local_window: Window size for LOCAL context mode
+			local_window: Window size for LOCAL/BIDIRECTIONAL context modes
 			cross_group_context: Whether groups can see each other
+			hash_bits: Number of hash bits for HASH strategy
+			n_hash_functions: Number of hash functions for HASH strategy
 			rng: Random seed
 
 		Returns:
@@ -54,6 +60,8 @@ class MapperFactory:
 			BitLevelMapper,
 			CompositionalMapper,
 			GeneralizingProjection,
+			HashMapper,
+			ResidualMapper,
 		)
 
 		# Convert string to enum if needed
@@ -93,6 +101,20 @@ class MapperFactory:
 					output_bits=n_bits,
 					strategy=MapperStrategy.HYBRID,
 					n_groups=n_groups,
+					rng=rng,
+				)
+			case MapperStrategy.HASH:
+				return HashMapper(
+					n_bits=n_bits,
+					hash_bits=hash_bits,
+					n_hash_functions=n_hash_functions,
+					rng=rng,
+				)
+			case MapperStrategy.RESIDUAL:
+				return ResidualMapper(
+					n_bits=n_bits,
+					context_mode=context_mode,
+					local_window=local_window,
 					rng=rng,
 				)
 			case _:

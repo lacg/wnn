@@ -1,0 +1,482 @@
+#!/usr/bin/env python3
+"""
+Systematic Benchmarks for RAM Networks
+
+Comprehensive test suite for:
+1. Generalization Strategies (DIRECT, BIT_LEVEL, COMPOSITIONAL, HASH, RESIDUAL)
+2. Training Modes (GREEDY, ITERATIVE)
+3. Tasks (Successor, Copy, Reverse, Increment, Parity)
+
+Run with: python tests/benchmarks.py
+"""
+
+import sys
+sys.path.insert(0, 'src')
+
+from torch import tensor, uint8, zeros
+from dataclasses import dataclass
+from time import perf_counter
+from typing import Callable
+
+from wnn.ram.factories import MapperFactory
+from wnn.ram.enums import MapperStrategy, ContextMode
+
+
+# ============================================================
+# Benchmark Infrastructure
+# ============================================================
+
+@dataclass
+class BenchmarkResult:
+    """Results from a single benchmark run."""
+    strategy: str
+    task: str
+    n_bits: int
+    train_examples: int
+    test_examples: int
+    train_accuracy: float
+    test_accuracy: float  # Generalization accuracy
+    training_time_ms: float
+    epochs: int
+
+
+@dataclass
+class BenchmarkTask:
+    """Definition of a benchmark task."""
+    name: str
+    description: str
+    generator: Callable[[int], tuple[list, list]]  # (train_data, test_data)
+    n_bits: int = 8
+
+
+def int_to_bits(n: int, n_bits: int) -> tensor:
+    """Convert integer to bit tensor (MSB first)."""
+    bits = []
+    for i in range(n_bits - 1, -1, -1):
+        bits.append((n >> i) & 1)
+    return tensor(bits, dtype=uint8)
+
+
+def bits_to_int(bits: tensor) -> int:
+    """Convert bit tensor to integer."""
+    bits = bits.squeeze()
+    n_bits = len(bits)
+    return sum(int(bits[i].item()) << (n_bits - 1 - i) for i in range(n_bits))
+
+
+# ============================================================
+# Task Generators
+# ============================================================
+
+def generate_successor_task(n_bits: int, train_ratio: float = 0.4):
+    """
+    Successor task: output = input + 1 (mod 2^n_bits)
+
+    Train on subset, test on all to measure generalization.
+    """
+    max_val = 2 ** n_bits
+    train_size = int(max_val * train_ratio)
+
+    # Train on first portion
+    train_data = []
+    for i in range(train_size):
+        inp = int_to_bits(i, n_bits)
+        out = int_to_bits((i + 1) % max_val, n_bits)
+        train_data.append((inp, out))
+
+    # Test on remaining (unseen)
+    test_data = []
+    for i in range(train_size, max_val):
+        inp = int_to_bits(i, n_bits)
+        out = int_to_bits((i + 1) % max_val, n_bits)
+        test_data.append((inp, out))
+
+    return train_data, test_data
+
+
+def generate_copy_task(n_bits: int, train_ratio: float = 0.4):
+    """
+    Copy task: output = input (identity)
+
+    Baseline task - should be easy for all strategies.
+    """
+    max_val = 2 ** n_bits
+    train_size = int(max_val * train_ratio)
+
+    train_data = []
+    for i in range(train_size):
+        bits = int_to_bits(i, n_bits)
+        train_data.append((bits.clone(), bits.clone()))
+
+    test_data = []
+    for i in range(train_size, max_val):
+        bits = int_to_bits(i, n_bits)
+        test_data.append((bits.clone(), bits.clone()))
+
+    return train_data, test_data
+
+
+def generate_complement_task(n_bits: int, train_ratio: float = 0.4):
+    """
+    Complement task: output = bitwise NOT of input
+
+    Tests bit-level operations.
+    """
+    max_val = 2 ** n_bits
+    train_size = int(max_val * train_ratio)
+
+    train_data = []
+    for i in range(train_size):
+        inp = int_to_bits(i, n_bits)
+        out = 1 - inp  # Bitwise complement
+        train_data.append((inp, out.to(uint8)))
+
+    test_data = []
+    for i in range(train_size, max_val):
+        inp = int_to_bits(i, n_bits)
+        out = 1 - inp
+        test_data.append((inp, out.to(uint8)))
+
+    return train_data, test_data
+
+
+def generate_parity_task(n_bits: int, train_ratio: float = 0.4):
+    """
+    Parity task: output bit 0 = XOR of all input bits
+
+    Classic hard task for neural networks.
+    Output is n_bits with only the last bit being the parity.
+    """
+    max_val = 2 ** n_bits
+    train_size = int(max_val * train_ratio)
+
+    def compute_parity(n: int) -> int:
+        parity = 0
+        while n:
+            parity ^= (n & 1)
+            n >>= 1
+        return parity
+
+    train_data = []
+    for i in range(train_size):
+        inp = int_to_bits(i, n_bits)
+        parity = compute_parity(i)
+        # Output: copy input but set last bit to parity
+        out = inp.clone()
+        out[-1] = parity
+        train_data.append((inp, out))
+
+    test_data = []
+    for i in range(train_size, max_val):
+        inp = int_to_bits(i, n_bits)
+        parity = compute_parity(i)
+        out = inp.clone()
+        out[-1] = parity
+        test_data.append((inp, out))
+
+    return train_data, test_data
+
+
+def generate_shift_left_task(n_bits: int, train_ratio: float = 0.4):
+    """
+    Shift left task: output = input << 1 (with wraparound)
+
+    Tests position-based transformations.
+    """
+    max_val = 2 ** n_bits
+    train_size = int(max_val * train_ratio)
+
+    train_data = []
+    for i in range(train_size):
+        inp = int_to_bits(i, n_bits)
+        # Shift left with wraparound
+        shifted = ((i << 1) | (i >> (n_bits - 1))) & (max_val - 1)
+        out = int_to_bits(shifted, n_bits)
+        train_data.append((inp, out))
+
+    test_data = []
+    for i in range(train_size, max_val):
+        inp = int_to_bits(i, n_bits)
+        shifted = ((i << 1) | (i >> (n_bits - 1))) & (max_val - 1)
+        out = int_to_bits(shifted, n_bits)
+        test_data.append((inp, out))
+
+    return train_data, test_data
+
+
+# ============================================================
+# Benchmark Runner
+# ============================================================
+
+def run_strategy_benchmark(
+    strategy: MapperStrategy,
+    train_data: list[tuple[tensor, tensor]],
+    test_data: list[tuple[tensor, tensor]],
+    n_bits: int,
+    max_epochs: int = 10,
+    **strategy_kwargs,
+) -> BenchmarkResult:
+    """
+    Run a single strategy benchmark.
+
+    Args:
+        strategy: The mapper strategy to test
+        train_data: List of (input, target) tensor pairs for training
+        test_data: List of (input, target) tensor pairs for testing
+        n_bits: Number of bits per example
+        max_epochs: Maximum training epochs
+        strategy_kwargs: Additional arguments for the strategy
+
+    Returns:
+        BenchmarkResult with accuracy and timing information
+    """
+    # Create mapper
+    try:
+        mapper = MapperFactory.create(
+            strategy=strategy,
+            n_bits=n_bits,
+            rng=42,
+            **strategy_kwargs,
+        )
+    except Exception as e:
+        return BenchmarkResult(
+            strategy=strategy.name,
+            task="",
+            n_bits=n_bits,
+            train_examples=len(train_data),
+            test_examples=len(test_data),
+            train_accuracy=0.0,
+            test_accuracy=0.0,
+            training_time_ms=0.0,
+            epochs=0,
+        )
+
+    # Training
+    start_time = perf_counter()
+
+    for epoch in range(max_epochs):
+        updates = 0
+        for inp, tgt in train_data:
+            if hasattr(mapper, 'train_mapping'):
+                updates += mapper.train_mapping(inp, tgt)
+            elif hasattr(mapper, 'commit'):
+                current = mapper(inp.unsqueeze(0)).squeeze()
+                if not (current == tgt).all():
+                    mapper.commit(inp.unsqueeze(0), tgt.unsqueeze(0))
+                    updates += 1
+
+        # Check if converged
+        if updates == 0:
+            break
+
+    training_time = (perf_counter() - start_time) * 1000
+
+    # Evaluate on training data
+    train_correct = 0
+    for inp, tgt in train_data:
+        result = mapper(inp)
+        if (result.squeeze() == tgt.squeeze()).all():
+            train_correct += 1
+    train_accuracy = 100 * train_correct / len(train_data) if train_data else 0
+
+    # Evaluate on test data (generalization)
+    test_correct = 0
+    for inp, tgt in test_data:
+        result = mapper(inp)
+        if (result.squeeze() == tgt.squeeze()).all():
+            test_correct += 1
+    test_accuracy = 100 * test_correct / len(test_data) if test_data else 0
+
+    return BenchmarkResult(
+        strategy=strategy.name,
+        task="",
+        n_bits=n_bits,
+        train_examples=len(train_data),
+        test_examples=len(test_data),
+        train_accuracy=train_accuracy,
+        test_accuracy=test_accuracy,
+        training_time_ms=training_time,
+        epochs=epoch + 1,
+    )
+
+
+def run_full_benchmark(
+    tasks: list[BenchmarkTask] | None = None,
+    strategies: list[MapperStrategy] | None = None,
+    verbose: bool = True,
+) -> list[BenchmarkResult]:
+    """
+    Run full benchmark suite.
+
+    Args:
+        tasks: List of benchmark tasks (default: all tasks)
+        strategies: List of strategies to test (default: all)
+        verbose: Print progress
+
+    Returns:
+        List of all benchmark results
+    """
+    if tasks is None:
+        tasks = [
+            BenchmarkTask("successor", "x → x+1", lambda n: generate_successor_task(n), n_bits=6),
+            BenchmarkTask("copy", "x → x", lambda n: generate_copy_task(n), n_bits=6),
+            BenchmarkTask("complement", "x → ~x", lambda n: generate_complement_task(n), n_bits=6),
+            BenchmarkTask("parity", "x → parity(x)", lambda n: generate_parity_task(n), n_bits=6),
+            BenchmarkTask("shift_left", "x → x<<1", lambda n: generate_shift_left_task(n), n_bits=6),
+        ]
+
+    if strategies is None:
+        strategies = [
+            MapperStrategy.DIRECT,
+            MapperStrategy.BIT_LEVEL,
+            MapperStrategy.COMPOSITIONAL,
+            MapperStrategy.HASH,
+            MapperStrategy.RESIDUAL,
+        ]
+
+    all_results = []
+
+    for task in tasks:
+        if verbose:
+            print(f"\n{'='*60}")
+            print(f"Task: {task.name} ({task.description})")
+            print(f"{'='*60}")
+
+        # Generate data
+        train_data, test_data = task.generator(task.n_bits)
+
+        if verbose:
+            print(f"  Train: {len(train_data)} examples, Test: {len(test_data)} examples")
+            print()
+
+        for strategy in strategies:
+            # Get strategy-specific kwargs
+            kwargs = {}
+            if strategy == MapperStrategy.COMPOSITIONAL:
+                # Need divisible n_bits
+                if task.n_bits % 2 == 0:
+                    kwargs['n_groups'] = 2
+                else:
+                    kwargs['n_groups'] = task.n_bits
+            elif strategy == MapperStrategy.HASH:
+                kwargs['hash_bits'] = max(4, task.n_bits - 2)
+
+            result = run_strategy_benchmark(
+                strategy=strategy,
+                train_data=train_data,
+                test_data=test_data,
+                n_bits=task.n_bits,
+                **kwargs,
+            )
+            result.task = task.name
+            all_results.append(result)
+
+            if verbose:
+                gen_indicator = "★" if result.test_accuracy > 50 else " "
+                print(f"  {strategy.name:15s}: train={result.train_accuracy:5.1f}% "
+                      f"test={result.test_accuracy:5.1f}% {gen_indicator} "
+                      f"({result.training_time_ms:.1f}ms, {result.epochs} epochs)")
+
+    return all_results
+
+
+def print_summary_table(results: list[BenchmarkResult]) -> None:
+    """Print a summary table of benchmark results."""
+    print("\n" + "=" * 80)
+    print("BENCHMARK SUMMARY")
+    print("=" * 80)
+
+    # Group by task
+    tasks = sorted(set(r.task for r in results))
+    strategies = sorted(set(r.strategy for r in results))
+
+    # Header
+    header = f"{'Task':<15}"
+    for s in strategies:
+        header += f" {s[:8]:>8}"
+    print(header)
+    print("-" * 80)
+
+    # Rows (test accuracy)
+    for task in tasks:
+        row = f"{task:<15}"
+        for strategy in strategies:
+            matching = [r for r in results if r.task == task and r.strategy == strategy]
+            if matching:
+                acc = matching[0].test_accuracy
+                marker = "★" if acc > 50 else " "
+                row += f" {acc:6.1f}%{marker}"
+            else:
+                row += "     N/A "
+        print(row)
+
+    print("-" * 80)
+    print("★ = Generalizes (>50% on unseen examples)")
+
+    # Best strategy per task
+    print("\nBest strategies per task:")
+    for task in tasks:
+        task_results = [r for r in results if r.task == task]
+        if task_results:
+            best = max(task_results, key=lambda r: r.test_accuracy)
+            print(f"  {task}: {best.strategy} ({best.test_accuracy:.1f}% test accuracy)")
+
+
+def print_strategy_analysis(results: list[BenchmarkResult]) -> None:
+    """Print analysis of each strategy's strengths."""
+    print("\n" + "=" * 80)
+    print("STRATEGY ANALYSIS")
+    print("=" * 80)
+
+    strategies = sorted(set(r.strategy for r in results))
+
+    for strategy in strategies:
+        strategy_results = [r for r in results if r.strategy == strategy]
+
+        avg_train = sum(r.train_accuracy for r in strategy_results) / len(strategy_results)
+        avg_test = sum(r.test_accuracy for r in strategy_results) / len(strategy_results)
+        avg_time = sum(r.training_time_ms for r in strategy_results) / len(strategy_results)
+
+        generalizes = [r.task for r in strategy_results if r.test_accuracy > 50]
+
+        print(f"\n{strategy}:")
+        print(f"  Average train accuracy: {avg_train:.1f}%")
+        print(f"  Average test accuracy:  {avg_test:.1f}% (generalization)")
+        print(f"  Average training time:  {avg_time:.1f}ms")
+        print(f"  Generalizes on: {', '.join(generalizes) if generalizes else 'none'}")
+
+
+# ============================================================
+# Main
+# ============================================================
+
+if __name__ == "__main__":
+    print("=" * 80)
+    print("RAM Network Systematic Benchmarks")
+    print("=" * 80)
+    print("""
+This benchmark suite tests generalization strategies on various tasks.
+
+Key metrics:
+- Train accuracy: How well the strategy learns training examples
+- Test accuracy: How well it generalizes to unseen examples (generalization!)
+- Training time: Computational efficiency
+
+Tasks:
+- successor: x → x+1 (requires learning increment pattern)
+- copy: x → x (baseline identity)
+- complement: x → ~x (bitwise NOT)
+- parity: x → parity(x) (classic hard problem)
+- shift_left: x → x<<1 (position transformation)
+""")
+
+    # Run benchmarks
+    results = run_full_benchmark(verbose=True)
+
+    # Print summary
+    print_summary_table(results)
+    print_strategy_analysis(results)
+
+    print("\n" + "=" * 80)
+    print("Benchmark complete!")
+    print("=" * 80)

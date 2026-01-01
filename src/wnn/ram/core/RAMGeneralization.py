@@ -63,10 +63,12 @@ class BitLevelMapper(Module):
 				- CUMULATIVE: bit i sees bits 0..i-1 (only LOWER bits for flip)
 				- FULL: each bit sees all bits
 				- LOCAL: each bit sees nearby bits (sliding window)
+				- BIDIRECTIONAL: bit i sees symmetric window before/after
+				- CAUSAL: bit i sees bits 0..i (autoregressive)
 			output_mode: What to learn (OutputMode enum)
 				- OUTPUT: Learn the output bit value directly
 				- FLIP: Learn whether to flip (XOR) the input bit
-			local_window: Window size for LOCAL mode
+			local_window: Window size for LOCAL/BIDIRECTIONAL modes
 			rng: Random seed
 		"""
 		super().__init__()
@@ -85,22 +87,7 @@ class BitLevelMapper(Module):
 		self.bit_mappers = ModuleList()
 
 		for bit_pos in range(n_bits):
-			if context_mode == ContextMode.CUMULATIVE:
-				if output_mode == OutputMode.FLIP:
-					# For flip mode, bit i only needs to see bits 0..i-1
-					# (the bits that determine if there's a carry)
-					# Bit 0 always flips, so it needs 0 context bits -> use 1
-					input_bits = max(1, bit_pos)
-				else:
-					# For output mode, include current bit too
-					input_bits = bit_pos + 1
-			elif context_mode == ContextMode.FULL:
-				input_bits = n_bits
-			elif context_mode == ContextMode.LOCAL:
-				input_bits = min(local_window, n_bits)
-			else:
-				raise ValueError(f"Unknown context_mode: {context_mode}")
-
+			input_bits = self._compute_context_size(bit_pos)
 			mapper = RAMLayer(
 				total_input_bits=input_bits,
 				num_neurons=1,  # Output: flip decision or output value
@@ -109,40 +96,99 @@ class BitLevelMapper(Module):
 			)
 			self.bit_mappers.append(mapper)
 
+	def _compute_context_size(self, bit_pos: int) -> int:
+		"""Compute the context size for a given bit position."""
+		match self.context_mode:
+			case ContextMode.CUMULATIVE:
+				if self.output_mode == OutputMode.FLIP:
+					# For flip mode, bit i only needs to see bits 0..i-1
+					# Bit 0 always flips, so it needs 0 context bits -> use 1
+					return max(1, bit_pos)
+				else:
+					# For output mode, include current bit too
+					return bit_pos + 1
+
+			case ContextMode.FULL:
+				return self.n_bits
+
+			case ContextMode.LOCAL:
+				return min(self.local_window, self.n_bits)
+
+			case ContextMode.BIDIRECTIONAL:
+				# Symmetric window around bit position
+				# Includes bits before and after
+				return min(self.local_window, self.n_bits)
+
+			case ContextMode.CAUSAL:
+				# See bits 0..bit_pos (includes self)
+				return bit_pos + 1
+
+			case _:
+				raise ValueError(f"Unknown context_mode: {self.context_mode}")
+
 	def _get_context_bits(self, bits: Tensor, bit_pos: int) -> Tensor:
 		"""Get the context bits for a given output bit position."""
-		if self.context_mode == ContextMode.CUMULATIVE:
-			if self.output_mode == OutputMode.FLIP:
-				# For flip mode: only look at LOWER bits (0..bit_pos-1)
-				# These determine the carry, not the current bit value
-				if bit_pos == 0:
-					# Bit 0 always flips, return dummy context
-					return zeros(1, dtype=uint8)
-				# Get bits 0..bit_pos-1 in LSB-first order
-				start = self.n_bits - bit_pos
-				context = bits[start:].clone()
-				return context.flip(0)  # LSB first
-			else:
-				# For output mode: include current bit too
+		match self.context_mode:
+			case ContextMode.CUMULATIVE:
+				if self.output_mode == OutputMode.FLIP:
+					# For flip mode: only look at LOWER bits (0..bit_pos-1)
+					# These determine the carry, not the current bit value
+					if bit_pos == 0:
+						# Bit 0 always flips, return dummy context
+						return zeros(1, dtype=uint8)
+					# Get bits 0..bit_pos-1 in LSB-first order
+					start = self.n_bits - bit_pos
+					context = bits[start:].clone()
+					return context.flip(0)  # LSB first
+				else:
+					# For output mode: include current bit too
+					start = self.n_bits - bit_pos - 1
+					context = bits[start:].clone()
+					return context.flip(0)  # LSB first
+
+			case ContextMode.FULL:
+				return bits.clone()
+
+			case ContextMode.LOCAL:
+				# Window centered on bit_pos (forward-looking)
+				half = self.local_window // 2
+				start = max(0, bit_pos - half)
+				end = min(self.n_bits, bit_pos + half + 1)
+				context = bits[self.n_bits - end:self.n_bits - start].clone()
+				# Pad if needed
+				if context.numel() < self.local_window:
+					padded = zeros(self.local_window, dtype=uint8)
+					padded[:context.numel()] = context
+					return padded
+				return context
+
+			case ContextMode.BIDIRECTIONAL:
+				# Symmetric window centered on bit_pos
+				# Unlike LOCAL, this explicitly includes both before and after
+				half = self.local_window // 2
+				# Convert bit_pos to array index (bits are stored MSB first)
+				idx = self.n_bits - bit_pos - 1
+				start_idx = max(0, idx - half)
+				end_idx = min(self.n_bits, idx + half + 1)
+				context = bits[start_idx:end_idx].clone()
+				# Pad symmetrically if at edges
+				if context.numel() < self.local_window:
+					padded = zeros(self.local_window, dtype=uint8)
+					# Center the actual bits in the padded window
+					offset = (self.local_window - context.numel()) // 2
+					padded[offset:offset + context.numel()] = context
+					return padded
+				return context
+
+			case ContextMode.CAUSAL:
+				# See bits 0..bit_pos (autoregressive, includes self)
+				# Return bits from position 0 to bit_pos in LSB-first order
 				start = self.n_bits - bit_pos - 1
 				context = bits[start:].clone()
 				return context.flip(0)  # LSB first
-		elif self.context_mode == ContextMode.FULL:
-			return bits.clone()
-		elif self.context_mode == ContextMode.LOCAL:
-			# Window centered on bit_pos
-			half = self.local_window // 2
-			start = max(0, bit_pos - half)
-			end = min(self.n_bits, bit_pos + half + 1)
-			context = bits[self.n_bits - end:self.n_bits - start].clone()
-			# Pad if needed
-			if context.numel() < self.local_window:
-				padded = zeros(self.local_window, dtype=uint8)
-				padded[:context.numel()] = context
-				return padded
-			return context
-		else:
-			raise ValueError(f"Unknown context_mode: {self.context_mode}")
+
+			case _:
+				raise ValueError(f"Unknown context_mode: {self.context_mode}")
 
 	def forward(self, bits: Tensor) -> Tensor:
 		"""
@@ -426,6 +472,227 @@ class CompositionalMapper(Module):
 	def __repr__(self):
 		return (f"CompositionalMapper(bits={self.n_bits}, "
 				f"groups={self.n_groups}, cross={self.cross_group_context})")
+
+
+class HashMapper(Module):
+	"""
+	Hash-based generalization mapper.
+
+	Reduces the pattern space by hashing input to a smaller key space.
+	Trade-off: May cause collisions but generalizes to unseen inputs.
+
+	For n-bit input hashed to h-bit key:
+	  - Full mapper: 2^n patterns
+	  - Hash mapper: 2^h patterns (with possible collisions)
+
+	Works well when similar inputs should produce similar outputs.
+	The hash function groups "similar" bit patterns together.
+	"""
+
+	def __init__(
+		self,
+		n_bits: int,
+		hash_bits: int = 6,
+		n_hash_functions: int = 3,
+		rng: int | None = None,
+	):
+		"""
+		Args:
+			n_bits: Number of bits per token
+			hash_bits: Bits for hash key (smaller = more generalization)
+			n_hash_functions: Number of hash functions for voting
+			rng: Random seed
+		"""
+		super().__init__()
+
+		self.n_bits = n_bits
+		self.hash_bits = hash_bits
+		self.n_hash_functions = n_hash_functions
+
+		# Create multiple hash-based mappers for voting
+		self.hash_mappers = ModuleList()
+		self.hash_masks = []
+
+		for h in range(n_hash_functions):
+			# Each hash function uses different random bit selection
+			# Create a random mask of which bits to use for hashing
+			import random
+			if rng is not None:
+				random.seed(rng + h * 1000)
+
+			# Select hash_bits positions from n_bits
+			positions = sorted(random.sample(range(n_bits), min(hash_bits, n_bits)))
+			self.hash_masks.append(positions)
+
+			mapper = RAMLayer(
+				total_input_bits=len(positions),
+				num_neurons=n_bits,  # Output full bits
+				n_bits_per_neuron=len(positions),
+				rng=rng + h * 100 if rng else None,
+			)
+			self.hash_mappers.append(mapper)
+
+	def _hash_input(self, bits: Tensor, mask_idx: int) -> Tensor:
+		"""Hash input bits using the specified mask."""
+		positions = self.hash_masks[mask_idx]
+		# Extract bits at the selected positions
+		return tensor([bits[self.n_bits - 1 - p].item() for p in positions], dtype=uint8)
+
+	def forward(self, bits: Tensor) -> Tensor:
+		"""
+		Transform input bits using hash-based voting.
+
+		Args:
+			bits: Input tensor [n_bits] or [batch, n_bits]
+
+		Returns:
+			Output tensor of same shape
+		"""
+		if bits.ndim == 1:
+			bits = bits.unsqueeze(0)
+			squeeze_output = True
+		else:
+			squeeze_output = False
+
+		batch_size = bits.shape[0]
+		outputs = zeros(batch_size, self.n_bits, dtype=uint8)
+
+		for b in range(batch_size):
+			# Collect votes from all hash functions
+			votes = zeros(self.n_bits, dtype=float)
+
+			for h in range(self.n_hash_functions):
+				hash_key = self._hash_input(bits[b], h)
+				result = self.hash_mappers[h](hash_key.unsqueeze(0)).squeeze()
+				votes += result.float()
+
+			# Majority vote
+			outputs[b] = (votes > self.n_hash_functions / 2).to(uint8)
+
+		if squeeze_output:
+			return outputs.squeeze(0)
+		return outputs
+
+	def train_mapping(
+		self,
+		input_bits: Tensor,
+		output_bits: Tensor,
+	) -> int:
+		"""
+		Train the hash mapping on a single example.
+
+		Args:
+			input_bits: Input tensor [n_bits]
+			output_bits: Target output tensor [n_bits]
+
+		Returns:
+			Number of hash functions that needed training
+		"""
+		input_bits = input_bits.squeeze()
+		output_bits = output_bits.squeeze()
+
+		trained = 0
+		for h in range(self.n_hash_functions):
+			hash_key = self._hash_input(input_bits, h)
+			current = self.hash_mappers[h](hash_key.unsqueeze(0)).squeeze()
+
+			if not (current == output_bits).all():
+				trained += 1
+				self.hash_mappers[h].commit(
+					hash_key.unsqueeze(0),
+					output_bits.unsqueeze(0)
+				)
+
+		return trained
+
+	def __repr__(self):
+		return (f"HashMapper(bits={self.n_bits}, "
+				f"hash_bits={self.hash_bits}, n_hash={self.n_hash_functions})")
+
+
+class ResidualMapper(Module):
+	"""
+	Residual generalization mapper.
+
+	Learns corrections to identity transformation.
+	Good for operations that make small changes to input.
+
+	output = input XOR correction
+
+	This is effective because:
+	1. For identity (no change), correction = 0 (easy to learn)
+	2. For small changes, only a few bits differ
+	3. The correction is typically simpler than the full transformation
+
+	Example: For successor operation (A→B), most bits stay the same.
+	Learning the difference is easier than learning the full mapping.
+	"""
+
+	def __init__(
+		self,
+		n_bits: int,
+		context_mode: ContextMode | str = ContextMode.CAUSAL,
+		local_window: int = 3,
+		rng: int | None = None,
+	):
+		"""
+		Args:
+			n_bits: Number of bits per token
+			context_mode: How much context the correction mapper sees
+			local_window: Window size for LOCAL/BIDIRECTIONAL modes
+			rng: Random seed
+		"""
+		super().__init__()
+
+		self.n_bits = n_bits
+		if isinstance(context_mode, str):
+			context_mode = ContextMode[context_mode.upper()]
+		self.context_mode = context_mode
+
+		# The correction mapper learns XOR differences
+		# Using bit-level mapper with FLIP mode (learns what to change)
+		self.correction = BitLevelMapper(
+			n_bits=n_bits,
+			context_mode=context_mode,
+			output_mode=OutputMode.FLIP,  # Learn whether to flip each bit
+			local_window=local_window,
+			rng=rng,
+		)
+
+	def forward(self, bits: Tensor) -> Tensor:
+		"""
+		Apply residual transformation: output = input XOR correction.
+
+		Args:
+			bits: Input tensor [n_bits] or [batch, n_bits]
+
+		Returns:
+			Output tensor of same shape
+		"""
+		# The BitLevelMapper with FLIP mode already applies XOR
+		return self.correction(bits)
+
+	def train_mapping(
+		self,
+		input_bits: Tensor,
+		output_bits: Tensor,
+	) -> int:
+		"""
+		Train the residual correction.
+
+		Args:
+			input_bits: Input tensor [n_bits]
+			output_bits: Target output tensor [n_bits]
+
+		Returns:
+			Number of bits that needed training
+		"""
+		# BitLevelMapper with FLIP mode learns to produce output directly
+		# (it internally computes and learns the XOR)
+		return self.correction.train_mapping(input_bits, output_bits)
+
+	def __repr__(self):
+		return f"ResidualMapper(bits={self.n_bits}, context={self.context_mode.name})"
 
 
 class GeneralizingProjection(Module):

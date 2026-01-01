@@ -24,7 +24,7 @@ from wnn.ram.enums.generalization import (
 from wnn.ram.enums.embedding import PositionEncoding
 
 # Trainer
-from wnn.ram.enums.trainer import LayerType
+from wnn.ram.enums.trainer import LayerType, TrainingMode, TrainingPhase
 
 # Attention
 from wnn.ram.enums.attention import (
@@ -65,6 +65,8 @@ __all__ = [
     'PositionEncoding',
     # Trainer
     'LayerType',
+    'TrainingMode',
+    'TrainingPhase',
     # Attention
     'CrossAttentionMode',
     'AttentionType',

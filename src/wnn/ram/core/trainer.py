@@ -16,14 +16,38 @@ So we can solve for desired layer output:
     layer_output = input ⊕ desired_output
 
 This allows us to backpropagate "targets" through the network.
+
+Training Modes:
+- GREEDY: Train all layers in one pass (fast)
+- ITERATIVE: Multiple passes until stable (more accurate)
+- OUTPUT_FIRST: Prioritize training output layers first
+
+Features:
+- Per-layer error tracking
+- Curriculum learning support
+- Patience-based early stopping
+- Training callbacks
 """
 
 from wnn.ram.core.transformers.seq2seq import RAMSeq2Seq
-from wnn.ram.enums import PositionEncoding, LayerType
+from wnn.ram.enums import PositionEncoding, LayerType, TrainingMode, TrainingPhase
 
-from torch import Tensor
-from dataclasses import dataclass
-from typing import Callable
+from torch import Tensor, zeros, float32
+from dataclasses import dataclass, field
+from typing import Callable, Protocol
+from random import shuffle
+
+
+class TrainingCallback(Protocol):
+	"""Protocol for training callbacks."""
+
+	def on_epoch_end(self, epoch: int, stats: dict) -> bool:
+		"""Called at end of each epoch. Return False to stop training."""
+		...
+
+	def on_improvement(self, epoch: int, old_acc: float, new_acc: float) -> None:
+		"""Called when accuracy improves."""
+		...
 
 
 @dataclass
@@ -52,6 +76,21 @@ class TrainingStats:
 	bit_errors: int            # Total bits that differ from target
 	layers_updated: dict       # Updates per layer
 	converged: bool            # Whether output matches target
+	layer_errors: dict = field(default_factory=dict)  # Per-layer error counts
+
+
+@dataclass
+class EpochStats:
+	"""Detailed statistics from a training epoch."""
+	epoch: int
+	total_errors: int
+	bit_errors: int
+	total_positions: int
+	accuracy: float
+	layer_updates: dict
+	layer_error_rates: dict  # Per-layer error contribution
+	examples_mastered: int   # Number of examples with 100% accuracy
+	hard_examples: list      # Indices of examples that failed
 
 
 class RAMTrainer:
@@ -64,20 +103,49 @@ class RAMTrainer:
 	- Residual connections
 	- Output projections
 	- Token mappers
+
+	Features:
+	- Multiple training modes (GREEDY, ITERATIVE, OUTPUT_FIRST)
+	- Patience-based early stopping
+	- Curriculum learning support
+	- Per-layer error tracking
+	- Training callbacks
 	"""
 
 	def __init__(
 		self,
 		model: RAMSeq2Seq,
+		mode: TrainingMode = TrainingMode.GREEDY,
+		patience: int = 5,
 		verbose: bool = True,
 	):
 		"""
 		Args:
 			model: RAMSeq2Seq model to train
+			mode: Training mode (GREEDY, ITERATIVE, OUTPUT_FIRST)
+			patience: Epochs without improvement before stopping
 			verbose: Print training progress
 		"""
 		self.model = model
+		self.mode = mode
+		self.patience = patience
 		self.verbose = verbose
+
+		# Training state
+		self.best_accuracy = 0.0
+		self.epochs_without_improvement = 0
+		self.training_history: list[EpochStats] = []
+		self.callbacks: list[TrainingCallback] = []
+
+	def add_callback(self, callback: TrainingCallback) -> None:
+		"""Add a training callback."""
+		self.callbacks.append(callback)
+
+	def reset_state(self) -> None:
+		"""Reset training state for a new training run."""
+		self.best_accuracy = 0.0
+		self.epochs_without_improvement = 0
+		self.training_history = []
 
 	def _forward_with_full_trace(
 		self,
@@ -315,18 +383,84 @@ class RAMTrainer:
 					updates += stats.get("down_trained", 0)
 
 			case LayerType.ATTENTION:
-				# Training attention is more complex - we need to train
-				# both the attention patterns AND the value aggregation
+				# Train attention layer using the train_step interface
 				attn = self.model.attention_layers[state.index]
+				updates += self._train_attention_layer(
+					attn, state.input, state.output, desired_output
+				)
 
-				# For now, train the output layer of attention
-				# Full attention training would require learning patterns
-				for pos, (inp, tgt) in enumerate(zip(state.input, desired_output)):
-					if hasattr(attn, 'output_layer'):
-						current = state.output[pos]
-						if not (current == tgt).all():
-							# Would need to train aggregation and value heads
-							updates += 1
+		return updates
+
+	def _train_attention_layer(
+		self,
+		attn,
+		inputs: list[Tensor],
+		actual_outputs: list[Tensor],
+		desired_outputs: list[Tensor],
+	) -> int:
+		"""
+		Train an attention layer to produce desired outputs.
+
+		Attention training is complex because it involves:
+		1. Similarity computation (which positions to attend to)
+		2. Value aggregation (how to combine attended values)
+		3. Output projection (final transformation)
+
+		We use the attention layer's train_step method if available,
+		otherwise fall back to training the output layer directly.
+
+		Args:
+			attn: The attention layer to train
+			inputs: Input tokens to the attention layer
+			actual_outputs: What the layer actually produced
+			desired_outputs: What we want it to produce
+
+		Returns:
+			Number of updates made
+		"""
+		updates = 0
+
+		# Method 1: Use attention's built-in train_step if available
+		# This trains the full attention mechanism properly
+		if hasattr(attn, 'train_step'):
+			try:
+				updates = attn.train_step(inputs, desired_outputs)
+				return updates
+			except Exception:
+				pass  # Fall through to other methods
+
+		# Method 2: Train output layer if available
+		if hasattr(attn, 'output_layer') and attn.output_layer is not None:
+			for pos, (actual, desired) in enumerate(zip(actual_outputs, desired_outputs)):
+				actual = actual.squeeze()
+				desired = desired.squeeze()
+				if not (actual == desired).all():
+					# The output layer maps aggregated values to final output
+					# We need to train it to produce the desired output
+					# given what the aggregation actually produced
+					if hasattr(attn.output_layer, 'commit'):
+						# Get the pre-output value (what went into output layer)
+						# This requires access to attention internals
+						attn.output_layer.commit(
+							actual.unsqueeze(0),
+							desired.unsqueeze(0)
+						)
+						updates += 1
+
+		# Method 3: Train value heads to produce correct outputs
+		# This is a simplified approach that may help in some cases
+		if hasattr(attn, 'value_heads') and updates == 0:
+			for pos, (inp, desired) in enumerate(zip(inputs, desired_outputs)):
+				# For each position, train value heads to produce
+				# values that would aggregate to the desired output
+				for head_idx, value_head in enumerate(attn.value_heads):
+					if hasattr(value_head, 'commit'):
+						# Simplified: train head to produce desired on input
+						value_head.commit(
+							inp.unsqueeze(0),
+							desired.unsqueeze(0)
+						)
+						updates += 1
 
 		return updates
 
@@ -391,46 +525,136 @@ class RAMTrainer:
 	def train_epoch(
 		self,
 		dataset: list[tuple[list[Tensor], list[Tensor]]],
-	) -> dict:
+		epoch_num: int = 0,
+		shuffle_data: bool = True,
+	) -> EpochStats:
 		"""
 		Train for one epoch over a dataset.
 
 		Args:
 			dataset: List of (input_tokens, target_tokens) pairs
+			epoch_num: Current epoch number (for statistics)
+			shuffle_data: Whether to shuffle the dataset
 
 		Returns:
-			Epoch statistics
+			Detailed epoch statistics
 		"""
+		# Optionally shuffle the dataset
+		if shuffle_data:
+			indices = list(range(len(dataset)))
+			shuffle(indices)
+			dataset = [dataset[i] for i in indices]
+		else:
+			indices = list(range(len(dataset)))
+
 		total_errors = 0
 		total_bits = 0
 		total_positions = 0
 		all_updates = {}
+		layer_errors = {}
+		examples_mastered = 0
+		hard_examples = []
 
-		for inputs, targets in dataset:
-			stats = self.train_step(inputs, targets)
+		for idx, (inputs, targets) in enumerate(dataset):
+			# Use iterative mode if specified
+			if self.mode == TrainingMode.ITERATIVE:
+				stats = self._train_step_iterative(inputs, targets)
+			else:
+				stats = self.train_step(inputs, targets)
+
 			total_errors += stats.output_errors
 			total_bits += stats.bit_errors
 			total_positions += len(inputs)
 
+			# Track per-example success
+			if stats.output_errors == 0:
+				examples_mastered += 1
+			else:
+				hard_examples.append(indices[idx] if shuffle_data else idx)
+
+			# Aggregate layer updates
 			for layer, updates in stats.layers_updated.items():
 				all_updates[layer] = all_updates.get(layer, 0) + updates
 
+			# Aggregate layer errors
+			for layer, errors in stats.layer_errors.items():
+				layer_errors[layer] = layer_errors.get(layer, 0) + errors
+
 		accuracy = 100 * (1 - total_errors / total_positions) if total_positions > 0 else 0
 
-		return {
-			"total_errors": total_errors,
-			"bit_errors": total_bits,
-			"total_positions": total_positions,
-			"accuracy": accuracy,
-			"layer_updates": all_updates,
+		# Compute per-layer error rates
+		layer_error_rates = {
+			layer: errors / total_positions if total_positions > 0 else 0
+			for layer, errors in layer_errors.items()
 		}
+
+		return EpochStats(
+			epoch=epoch_num,
+			total_errors=total_errors,
+			bit_errors=total_bits,
+			total_positions=total_positions,
+			accuracy=accuracy,
+			layer_updates=all_updates,
+			layer_error_rates=layer_error_rates,
+			examples_mastered=examples_mastered,
+			hard_examples=hard_examples[:10],  # Keep top 10 hard examples
+		)
+
+	def _train_step_iterative(
+		self,
+		input_tokens: list[Tensor],
+		target_tokens: list[Tensor],
+		max_iterations: int = 3,
+	) -> TrainingStats:
+		"""
+		Train with multiple iterations until stable or max iterations reached.
+
+		Args:
+			input_tokens: Input sequence
+			target_tokens: Target output sequence
+			max_iterations: Maximum number of training iterations
+
+		Returns:
+			Combined training statistics
+		"""
+		total_stats = TrainingStats(
+			output_errors=0,
+			bit_errors=0,
+			layers_updated={},
+			converged=False,
+			layer_errors={},
+		)
+
+		for iteration in range(max_iterations):
+			stats = self.train_step(input_tokens, target_tokens)
+
+			# Accumulate statistics
+			total_stats.output_errors = stats.output_errors
+			total_stats.bit_errors = stats.bit_errors
+			for layer, updates in stats.layers_updated.items():
+				total_stats.layers_updated[layer] = (
+					total_stats.layers_updated.get(layer, 0) + updates
+				)
+
+			# Stop if converged
+			if stats.converged:
+				total_stats.converged = True
+				break
+
+			# Stop if no updates made (stuck)
+			if sum(stats.layers_updated.values()) == 0:
+				break
+
+		return total_stats
 
 	def train(
 		self,
 		dataset: list[tuple[list[Tensor], list[Tensor]]],
 		epochs: int = 10,
 		early_stop: bool = True,
-	) -> list[dict]:
+		use_patience: bool = True,
+		shuffle_data: bool = True,
+	) -> list[EpochStats]:
 		"""
 		Train the model for multiple epochs.
 
@@ -438,35 +662,137 @@ class RAMTrainer:
 			dataset: List of (input_tokens, target_tokens) pairs
 			epochs: Maximum number of epochs
 			early_stop: Stop if accuracy reaches 100%
+			use_patience: Stop if no improvement for `patience` epochs
+			shuffle_data: Shuffle dataset each epoch
 
 		Returns:
 			List of epoch statistics
 		"""
+		self.reset_state()
 		history = []
 
 		for epoch in range(epochs):
-			stats = self.train_epoch(dataset)
+			stats = self.train_epoch(dataset, epoch_num=epoch, shuffle_data=shuffle_data)
 			history.append(stats)
+			self.training_history.append(stats)
 
+			# Check for improvement
+			if stats.accuracy > self.best_accuracy:
+				old_acc = self.best_accuracy
+				self.best_accuracy = stats.accuracy
+				self.epochs_without_improvement = 0
+
+				# Notify callbacks
+				for callback in self.callbacks:
+					if hasattr(callback, 'on_improvement'):
+						callback.on_improvement(epoch, old_acc, stats.accuracy)
+			else:
+				self.epochs_without_improvement += 1
+
+			# Verbose output
 			if self.verbose:
 				print(f"Epoch {epoch + 1}/{epochs}: "
-					  f"{stats['total_errors']} errors, "
-					  f"{stats['accuracy']:.1f}% accuracy")
+					  f"{stats.total_errors} errors, "
+					  f"{stats.accuracy:.1f}% accuracy, "
+					  f"{stats.examples_mastered}/{len(dataset)} examples mastered")
 
-				if stats['layer_updates']:
+				if stats.layer_updates:
 					updates_str = ", ".join(
-						f"{k}:{v}" for k, v in stats['layer_updates'].items()
+						f"{k}:{v}" for k, v in stats.layer_updates.items()
 						if v > 0
 					)
 					if updates_str:
 						print(f"  Updates: {updates_str}")
 
-			if early_stop and stats['total_errors'] == 0:
+			# Notify callbacks
+			for callback in self.callbacks:
+				if hasattr(callback, 'on_epoch_end'):
+					should_continue = callback.on_epoch_end(epoch, stats.__dict__)
+					if should_continue is False:
+						if self.verbose:
+							print("Training stopped by callback")
+						return history
+
+			# Early stopping conditions
+			if early_stop and stats.total_errors == 0:
 				if self.verbose:
 					print(f"Converged at epoch {epoch + 1}!")
 				break
 
+			if use_patience and self.epochs_without_improvement >= self.patience:
+				if self.verbose:
+					print(f"Early stopping: no improvement for {self.patience} epochs")
+				break
+
 		return history
+
+	def train_curriculum(
+		self,
+		dataset: list[tuple[list[Tensor], list[Tensor]]],
+		epochs_per_phase: int = 5,
+		phases: list[TrainingPhase] | None = None,
+	) -> list[EpochStats]:
+		"""
+		Train with curriculum learning: easy examples first, then harder.
+
+		Args:
+			dataset: List of (input_tokens, target_tokens) pairs
+			epochs_per_phase: Epochs to train per phase
+			phases: List of training phases (default: WARMUP, MAIN, REFINEMENT)
+
+		Returns:
+			Combined training history
+		"""
+		if phases is None:
+			phases = [TrainingPhase.WARMUP, TrainingPhase.MAIN, TrainingPhase.REFINEMENT]
+
+		all_history = []
+		mastered_indices = set()
+
+		for phase in phases:
+			if self.verbose:
+				print(f"\n=== Phase: {phase.name} ===")
+
+			# Select examples based on phase
+			if phase == TrainingPhase.WARMUP:
+				# Start with shortest sequences
+				sorted_dataset = sorted(dataset, key=lambda x: len(x[0]))
+				phase_dataset = sorted_dataset[:len(dataset) // 3]
+			elif phase == TrainingPhase.MAIN:
+				# Use all examples
+				phase_dataset = dataset
+			elif phase == TrainingPhase.REFINEMENT:
+				# Focus on hard examples (not mastered)
+				phase_dataset = [
+					dataset[i] for i in range(len(dataset))
+					if i not in mastered_indices
+				]
+				if not phase_dataset:
+					if self.verbose:
+						print("All examples mastered, skipping refinement")
+					continue
+			else:
+				phase_dataset = dataset
+
+			# Train on this phase
+			history = self.train(
+				phase_dataset,
+				epochs=epochs_per_phase,
+				early_stop=True,
+				use_patience=True,
+				shuffle_data=True,
+			)
+			all_history.extend(history)
+
+			# Update mastered examples
+			if history:
+				last_stats = history[-1]
+				hard_set = set(last_stats.hard_examples)
+				for i in range(len(dataset)):
+					if i not in hard_set:
+						mastered_indices.add(i)
+
+		return all_history
 
 	def evaluate(
 		self,

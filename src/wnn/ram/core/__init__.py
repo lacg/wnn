@@ -13,6 +13,8 @@ from wnn.ram.core.RAMGeneralization import (
     BitLevelMapper,
     CompositionalMapper,
     GeneralizingProjection,
+    HashMapper,
+    ResidualMapper,
 )
 
 # Aggregation
@@ -26,7 +28,14 @@ from wnn.ram.core.multihead_kv import RAMMultiHeadKV
 from wnn.ram.core.multihead_shared import RAMMultiHeadShared
 from wnn.ram.core.kv_transformer import RAMKVMemory
 from wnn.ram.core.automaton import RAMAutomaton
-from wnn.ram.core.trainer import RAMTrainer, TrainingStats, LayerState, LayerType
+from wnn.ram.core.trainer import (
+    RAMTrainer,
+    TrainingStats,
+    LayerState,
+    EpochStats,
+    TrainingCallback,
+)
+from wnn.ram.enums import LayerType, TrainingMode, TrainingPhase
 
 # Transformer components (submodule)
 from wnn.ram.core import transformers
@@ -74,6 +83,8 @@ __all__ = [
     'BitLevelMapper',
     'CompositionalMapper',
     'GeneralizingProjection',
+    'HashMapper',
+    'ResidualMapper',
     # Aggregation
     'RAMAggregator',
     # Recurrent networks
@@ -87,7 +98,11 @@ __all__ = [
     'RAMTrainer',
     'TrainingStats',
     'LayerState',
+    'EpochStats',
+    'TrainingCallback',
     'LayerType',
+    'TrainingMode',
+    'TrainingPhase',
     # Submodules
     'transformers',
     # Transformer components (re-exported)
