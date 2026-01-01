@@ -57,13 +57,21 @@ from torch.nn import Module, ModuleList
 
 class RAMEncoderDecoder(Module):
 	"""
-	RAM-based Encoder-Decoder for sequence-to-sequence tasks.
+	Encoder-Decoder RAM transformer (like T5/BART).
 
-	Combines:
-	- RAMAttention (self-attention) for both encoder and decoder
-	- RAMAttention with context (cross-attention) for decoder-to-encoder attention
-	- Optional RAMFeedForward layers
-	- Optional RAMEmbedding for learned representations
+	Architecture:
+	  - Encoder: Bidirectional self-attention over source sequence
+	  - Decoder: Causal self-attention + cross-attention to encoder
+	  - Two-stage process: encode source → decode to target
+
+	This is an encoder-decoder model for sequence-to-sequence tasks.
+	For decoder-only generation (like GPT), use RAMSeq2Seq instead.
+
+	Key components:
+	  - Encoder stack (bidirectional attention)
+	  - Decoder stack (causal attention + cross-attention)
+	  - Cross-attention connects decoder to encoder memory
+	  - Optional feed-forward layers and embeddings
 
 	Training uses EDRA backpropagation through all components.
 	"""

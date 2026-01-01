@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from wnn.ram import RAMRecurrentNetwork
+from wnn.ram.core import RAMRecurrentNetwork
 
 from datetime import datetime
 

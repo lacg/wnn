@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 
-from wnn.ram.decoders import OutputMode
+from wnn.ram.enums import OutputMode
+from wnn.ram.core import RAMKVMemory
 
 from random import Random
-from wnn.ram import RAMTransformer
 from wnn.ram.architecture import KVSpec
 
 from datetime import datetime
@@ -14,7 +14,7 @@ def run() -> float:
 	spec = KVSpec(k_bits=3, v_bits=2, query_value=0)
 	rng = Random(123)
 
-	model = RAMTransformer(
+	model = RAMKVMemory(
 		spec=spec,
 		neurons_per_head=8,
 		n_bits_per_state_neuron=8,

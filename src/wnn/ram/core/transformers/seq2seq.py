@@ -54,13 +54,22 @@ from torch.nn import Module, ModuleList
 
 class RAMSeq2Seq(Module):
 	"""
-	RAM-based sequence-to-sequence model with stacked attention.
+	Decoder-only RAM transformer (like GPT).
 
-	This is the closest we can get to a Transformer with RAM neurons:
-	- Stack of attention layers (depth)
-	- Multi-head attention in each layer
-	- Causal masking for autoregressive generation
-	- Optional residual connections (XOR-based)
+	Architecture:
+	  - Single stack of causal self-attention layers
+	  - Each position can only attend to previous positions
+	  - Autoregressive generation: predict next token from context
+
+	This is a decoder-only model. For encoder-decoder architectures
+	(like T5/BART for translation), use RAMEncoderDecoder instead.
+
+	Key components:
+	  - Stack of attention layers (depth)
+	  - Multi-head attention in each layer
+	  - Causal masking for autoregressive generation
+	  - Optional residual connections (XOR-based)
+	  - Optional feed-forward layers between attention
 	"""
 
 	def __init__(

@@ -11,7 +11,6 @@ Key insight: With enough heads, voting approximates continuous weights.
 Aggregation Strategies:
   - TOP_1: Winner-take-all (best for retrieval)
   - MAJORITY: Per-bit weighted voting (best for combining)
-  - THRESHOLD: Include only above 50% votes
   - TOP_K: XOR top K highest-voted values
 """
 
@@ -26,48 +25,16 @@ from wnn.ram.enums import (
     MapperStrategy,
 )
 from wnn.ram.encoders_decoders import PositionMode, PositionEncoderFactory
-from wnn.ram.core.transformers.computed_arithmetic import bits_to_int
 
 from torch import Tensor, zeros, uint8, cat, tensor, randperm, manual_seed, float32
 from torch.nn import Module, ModuleList
 import random
 
 
-def _hamming_distance(a: Tensor, b: Tensor) -> int:
-    """Count differing bits between two tensors."""
-    return (a != b).sum().item()
-
-
 def _xor_match(query: Tensor, key: Tensor) -> bool:
     """Check if query equals key using XOR (all zeros = equal)."""
     xor_result = query.squeeze() ^ key.squeeze()
     return (xor_result == 0).all().item()
-
-
-def _hamming_match(query: Tensor, key: Tensor, threshold: int) -> bool:
-    """Check if Hamming distance is within threshold."""
-    dist = _hamming_distance(query.squeeze(), key.squeeze())
-    return dist <= threshold
-
-
-def _less_than(a: Tensor, b: Tensor) -> bool:
-    """Check if a < b by comparing bit patterns as integers."""
-    return bits_to_int(a) < bits_to_int(b)
-
-
-def _less_equal(a: Tensor, b: Tensor) -> bool:
-    """Check if a <= b by comparing bit patterns as integers."""
-    return bits_to_int(a) <= bits_to_int(b)
-
-
-def _greater_than(a: Tensor, b: Tensor) -> bool:
-    """Check if a > b by comparing bit patterns as integers."""
-    return bits_to_int(a) > bits_to_int(b)
-
-
-def _greater_equal(a: Tensor, b: Tensor) -> bool:
-    """Check if a >= b by comparing bit patterns as integers."""
-    return bits_to_int(a) >= bits_to_int(b)
 
 
 class EnsembleVotingHead(Module):
@@ -318,18 +285,6 @@ class SoftRAMAttention(LearnableAttention):
         match self.content_match:
             case ContentMatchMode.XOR_EQUAL:
                 return _xor_match(query, key)
-            case ContentMatchMode.HAMMING_1:
-                return _hamming_match(query, key, threshold=1)
-            case ContentMatchMode.HAMMING_2:
-                return _hamming_match(query, key, threshold=2)
-            case ContentMatchMode.LESS_THAN:
-                return _less_than(key, query)
-            case ContentMatchMode.LESS_EQUAL:
-                return _less_equal(key, query)
-            case ContentMatchMode.GREATER_THAN:
-                return _greater_than(key, query)
-            case ContentMatchMode.GREATER_EQUAL:
-                return _greater_equal(key, query)
             case _:
                 return False
 
@@ -358,9 +313,6 @@ class SoftRAMAttention(LearnableAttention):
         self,
         content_matches: bool,
         position_votes: int,
-        query_pos: int,
-        key_pos: int,
-        num_keys: int,
     ) -> int:
         """Combine content matching and position votes based on combine mode."""
         match self.attention_combine:
@@ -376,21 +328,6 @@ class SoftRAMAttention(LearnableAttention):
                 if self.content_match != ContentMatchMode.NONE:
                     return position_votes if content_matches and position_votes > 0 else 0
                 return position_votes
-
-            case AttentionCombineMode.CONTENT_OR_POS:
-                if self.content_match != ContentMatchMode.NONE:
-                    if content_matches:
-                        return self.num_heads
-                    return position_votes if position_votes > 0 else 0
-                return position_votes
-
-            case AttentionCombineMode.CONTENT_BIASED:
-                if self.content_match != ContentMatchMode.NONE and content_matches:
-                    distance = abs(query_pos - key_pos)
-                    max_dist = num_keys - 1
-                    bias = 1.0 - (distance / max_dist) * 0.5 if max_dist > 0 else 1.0
-                    return int(self.num_heads * bias)
-                return 0
 
             case _:
                 return position_votes
@@ -417,9 +354,7 @@ class SoftRAMAttention(LearnableAttention):
             position_votes = self._compute_position_votes(query, key, query_pos, j)
 
             # Combine content and position
-            vote_count = self._combine_votes(
-                content_matches, position_votes, query_pos, j, len(keys)
-            )
+            vote_count = self._combine_votes(content_matches, position_votes)
             votes.append(vote_count)
 
         return votes
@@ -445,20 +380,6 @@ class SoftRAMAttention(LearnableAttention):
             result[bit_pos] = 1 if weighted_ones > weighted_zeros else 0
         return result
 
-    def _aggregate_threshold(self, values: list[Tensor], votes: list[int]) -> Tensor:
-        if not values:
-            return zeros(self.input_bits, dtype=uint8)
-        threshold = self.num_heads // 2
-        result = zeros(self.input_bits, dtype=uint8)
-        included = 0
-        for val, vote in zip(values, votes):
-            if vote >= threshold:
-                result = result ^ val
-                included += 1
-        if included == 0:
-            return self._aggregate_top_1(values, votes)
-        return result
-
     def _aggregate_top_k(self, values: list[Tensor], votes: list[int]) -> Tensor:
         if not values:
             return zeros(self.input_bits, dtype=uint8)
@@ -470,16 +391,15 @@ class SoftRAMAttention(LearnableAttention):
         return result
 
     def _aggregate(self, values: list[Tensor], votes: list[int]) -> Tensor:
-        if self.aggregation == AggregationStrategy.TOP_1:
-            return self._aggregate_top_1(values, votes)
-        elif self.aggregation == AggregationStrategy.MAJORITY:
-            return self._aggregate_majority(values, votes)
-        elif self.aggregation == AggregationStrategy.THRESHOLD:
-            return self._aggregate_threshold(values, votes)
-        elif self.aggregation == AggregationStrategy.TOP_K:
-            return self._aggregate_top_k(values, votes)
-        else:
-            raise ValueError(f"Unknown aggregation: {self.aggregation}")
+        match self.aggregation:
+            case AggregationStrategy.TOP_1:
+                return self._aggregate_top_1(values, votes)
+            case AggregationStrategy.MAJORITY:
+                return self._aggregate_majority(values, votes)
+            case AggregationStrategy.TOP_K:
+                return self._aggregate_top_k(values, votes)
+            case _:
+                raise ValueError(f"Unknown aggregation: {self.aggregation}")
 
     def forward(
         self,
