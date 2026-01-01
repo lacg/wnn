@@ -4,13 +4,23 @@ from wnn.ram.encoders_decoders import TransformerDecoder
 from wnn.ram.encoders_decoders import TransformerDecoderFactory
 
 
+from enum import IntEnum
 from typing import Optional
 
 from torch import cat
+from torch import tensor
 from torch import uint8
 from torch import zeros
 from torch import Tensor
 from torch.nn import Module
+
+
+class StateMode(IntEnum):
+	"""State transition modes for recurrent networks."""
+	LEARNED = 0      # State transition learned via EDRA (default)
+	XOR = 1          # State = prev_state XOR input (for parity)
+	IDENTITY = 2     # State = input (no memory)
+	OR = 3           # State = prev_state OR input (for detection)
 
 
 class RAMRecurrentNetwork(Module):
@@ -363,3 +373,178 @@ class RAMRecurrentNetwork(Module):
 				return
 			if changed and t > 0:
 				contexts = self._get_contexts(windows, t)
+
+	# ------------------------------------------------------------------
+	# XOR Pre-training for Parity
+	# ------------------------------------------------------------------
+
+	def pretrain_xor(self, neuron_idx: int = 0) -> bool:
+		"""
+		Pre-train a state neuron to compute XOR of input and previous state.
+
+		For parity computation, the state layer needs to learn:
+			new_state[i] = prev_state[i] XOR input[i]
+
+		This method directly writes the XOR truth table to the specified
+		state neuron's RAM, guaranteeing 100% generalization.
+
+		Args:
+			neuron_idx: Which state neuron to train (default: 0)
+
+		Returns:
+			True if successful, False if architecture doesn't support XOR
+
+		Requirements:
+			- input_bits >= 1
+			- n_state_neurons >= neuron_idx + 1
+			- State neuron must see both input bit and its previous state bit
+
+		Example:
+			>>> model = RAMRecurrentNetwork(input_bits=1, n_state_neurons=1, ...)
+			>>> model.pretrain_xor()  # Now computes running XOR
+			>>> model.pretrain_identity_output()  # Output = state
+		"""
+		if neuron_idx >= self.state_layer.num_neurons:
+			return False
+		if self.input_bits < 1:
+			return False
+
+		# XOR truth table: (prev_state, input) -> new_state
+		# We need to find which bits the neuron sees and write XOR patterns
+		xor_patterns = [
+			# (prev_state, input) -> output
+			([0, 0], 0),  # 0 XOR 0 = 0
+			([0, 1], 1),  # 0 XOR 1 = 1
+			([1, 0], 1),  # 1 XOR 0 = 1
+			([1, 1], 0),  # 1 XOR 1 = 0
+		]
+
+		# The state layer input is [input_bits..., prev_state_bits...]
+		# For XOR, we need input bit 0 and prev_state bit neuron_idx
+		# Total input size: input_bits + n_state_neurons
+
+		total_input = self.input_bits + self.state_layer.num_neurons
+		input_bit_idx = 0  # First input bit
+		state_bit_idx = self.input_bits + neuron_idx  # Corresponding state bit
+
+		# Generate all possible inputs and write XOR for this neuron
+		for prev_state, input_bit in [(0, 0), (0, 1), (1, 0), (1, 1)]:
+			# Create input tensor with all combinations of other bits = 0
+			inp = zeros(1, total_input, dtype=uint8)
+			inp[0, input_bit_idx] = input_bit
+			inp[0, state_bit_idx] = prev_state
+
+			# Expected output: XOR
+			expected = prev_state ^ input_bit
+			out = zeros(1, self.state_layer.num_neurons, dtype=uint8)
+			out[0, neuron_idx] = expected
+
+			# Commit to memory
+			self.state_layer.commit(inp, out)
+
+		return True
+
+	def pretrain_identity_output(self) -> bool:
+		"""
+		Pre-train output layer to be identity (output = state).
+
+		For parity, after XOR state transition, the output should simply
+		copy the state bit. This writes the identity mapping.
+
+		Returns:
+			True if successful
+		"""
+		if self.output_layer.num_neurons < 1:
+			return False
+
+		# Identity: for each state bit pattern, output the same pattern
+		n_states = self.state_layer.num_neurons
+		n_outputs = self.output_layer.num_neurons
+
+		# Only train mappings where we copy state to output
+		for state_val in range(min(2, 2 ** n_states)):
+			inp = zeros(1, n_states, dtype=uint8)
+			out = zeros(1, n_outputs, dtype=uint8)
+
+			# Set state bits
+			for b in range(n_states):
+				inp[0, b] = (state_val >> b) & 1
+
+			# Copy to output (as many bits as we can)
+			for b in range(min(n_states, n_outputs)):
+				out[0, b] = inp[0, b]
+
+			self.output_layer.commit(inp, out)
+
+		return True
+
+	def pretrain_for_parity(self) -> bool:
+		"""
+		Pre-train network for parity computation.
+
+		Configures state layer to compute XOR and output layer to be identity.
+		After this, the network computes parity of input bit sequence with
+		100% generalization to any sequence length.
+
+		Returns:
+			True if successful
+
+		Example:
+			>>> model = RAMRecurrentNetwork(
+			...     input_bits=1,
+			...     n_state_neurons=1,
+			...     n_output_neurons=1,
+			...     n_bits_per_state_neuron=2,  # Must see input + prev_state
+			...     n_bits_per_output_neuron=1,
+			... )
+			>>> model.pretrain_for_parity()
+			>>> # Now computes parity of any bit sequence
+			>>> parity = model.forward(tensor([1, 0, 1, 1, 0]))  # = 1
+		"""
+		xor_ok = self.pretrain_xor(neuron_idx=0)
+		identity_ok = self.pretrain_identity_output()
+		return xor_ok and identity_ok
+
+	def pretrain_state_function(self, mode: StateMode, neuron_idx: int = 0) -> bool:
+		"""
+		Pre-train state neuron with a specific boolean function.
+
+		Args:
+			mode: The state transition function to use
+			neuron_idx: Which state neuron to train
+
+		Returns:
+			True if successful
+		"""
+		if neuron_idx >= self.state_layer.num_neurons:
+			return False
+
+		total_input = self.input_bits + self.state_layer.num_neurons
+		input_bit_idx = 0
+		state_bit_idx = self.input_bits + neuron_idx
+
+		# Define function based on mode
+		def compute_output(prev_state: int, input_bit: int) -> int:
+			match mode:
+				case StateMode.XOR:
+					return prev_state ^ input_bit
+				case StateMode.IDENTITY:
+					return input_bit
+				case StateMode.OR:
+					return prev_state | input_bit
+				case _:
+					return 0
+
+		# Write all patterns
+		for prev_state in [0, 1]:
+			for input_bit in [0, 1]:
+				inp = zeros(1, total_input, dtype=uint8)
+				inp[0, input_bit_idx] = input_bit
+				inp[0, state_bit_idx] = prev_state
+
+				out = zeros(1, self.state_layer.num_neurons, dtype=uint8)
+				out[0, neuron_idx] = compute_output(prev_state, input_bit)
+
+				self.state_layer.commit(inp, out)
+
+		return True
