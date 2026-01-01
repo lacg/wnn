@@ -17,7 +17,7 @@ from wnn.ram.enums import (
 from wnn.ram.encoders_decoders import PositionMode
 from wnn.ram.factories.ffn import FFNFactory
 from wnn.ram.factories.attention import AttentionFactory
-from wnn.ram.core.transformers.computed_arithmetic import bits_to_int
+from wnn.ram.core.models.computed_arithmetic import bits_to_int
 
 
 class RAMTransformerBlock(Module):

@@ -269,7 +269,7 @@ def test_uncollate_batch():
 
 def test_causal_mask():
     """Test causal (autoregressive) mask."""
-    from wnn.ram.core.transformers.attention_mask import AttentionMask, can_attend
+    from wnn.ram.core.models.attention_mask import AttentionMask, can_attend
 
     mask = AttentionMask.causal(seq_len=4)
 
@@ -286,7 +286,7 @@ def test_causal_mask():
 
 def test_bidirectional_mask():
     """Test bidirectional (full attention) mask."""
-    from wnn.ram.core.transformers.attention_mask import AttentionMask, can_attend
+    from wnn.ram.core.models.attention_mask import AttentionMask, can_attend
 
     mask = AttentionMask.bidirectional(query_len=4)
 
@@ -298,7 +298,7 @@ def test_bidirectional_mask():
 
 def test_sliding_window_mask():
     """Test sliding window mask."""
-    from wnn.ram.core.transformers.attention_mask import AttentionMask, can_attend
+    from wnn.ram.core.models.attention_mask import AttentionMask, can_attend
 
     mask = AttentionMask.sliding_window(seq_len=6, window_size=1)
 
@@ -312,7 +312,7 @@ def test_sliding_window_mask():
 
 def test_combine_masks():
     """Test combining multiple masks."""
-    from wnn.ram.core.transformers.attention_mask import AttentionMask, can_attend
+    from wnn.ram.core.models.attention_mask import AttentionMask, can_attend
 
     causal = AttentionMask.causal(seq_len=4)
     window = AttentionMask.sliding_window(seq_len=4, window_size=1)

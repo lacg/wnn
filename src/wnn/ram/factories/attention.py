@@ -55,9 +55,9 @@ class AttentionFactory:
             Attention module
         """
         # Lazy imports to avoid circular dependencies
-        from wnn.ram.core.transformers.soft_ram_attention import SoftRAMAttention
-        from wnn.ram.core.transformers.sorting_attention import SortingAttention
-        from wnn.ram.core.transformers.minmax_attention import MinMaxAttention
+        from wnn.ram.core.models.soft_ram_attention import SoftRAMAttention
+        from wnn.ram.core.models.sorting_attention import SortingAttention
+        from wnn.ram.core.models.minmax_attention import MinMaxAttention
 
         match attention_type:
             case AttentionType.SORTING:

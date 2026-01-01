@@ -39,7 +39,7 @@ python tests/benchmarks.py
 
 ```
 src/wnn/ram/
-├── core/           # Core components (Memory, RAMLayer, networks, transformers)
+├── core/           # Core components (Memory, RAMLayer, networks, models)
 ├── enums/          # ALL enumerations (MapperStrategy, TrainingMode, etc.)
 ├── factories/      # ALL factory classes (MapperFactory, AttentionFactory, etc.)
 ├── architecture/   # Configuration specs (KVSpec)

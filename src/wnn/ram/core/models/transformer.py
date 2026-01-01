@@ -14,7 +14,7 @@ from wnn.ram.enums import (
     AttentionCombineMode,
 )
 from wnn.ram.encoders_decoders import PositionMode
-from wnn.ram.core.transformers.transformer_block import RAMTransformerBlock
+from wnn.ram.core.models.transformer_block import RAMTransformerBlock
 
 
 class RAMTransformer(Module):

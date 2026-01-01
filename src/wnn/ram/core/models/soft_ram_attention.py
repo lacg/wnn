@@ -16,8 +16,8 @@ Aggregation Strategies:
 
 from wnn.ram.core.RAMLayer import RAMLayer
 from wnn.ram.core.RAMGeneralization import GeneralizingProjection
-from wnn.ram.core.transformers.attention_base import LearnableAttention
-from wnn.ram.core.transformers.attention_mask import AttentionMask, MaskStrategy
+from wnn.ram.core.models.attention_base import LearnableAttention
+from wnn.ram.core.models.attention_mask import AttentionMask, MaskStrategy
 from wnn.ram.enums import (
     ContentMatchMode,
     AttentionCombineMode,

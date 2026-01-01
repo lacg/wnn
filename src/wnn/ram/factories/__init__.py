@@ -22,6 +22,9 @@ from wnn.ram.factories.attention import AttentionFactory
 from wnn.ram.factories.config import StepConfigurationFactory
 from wnn.ram.factories.transformer import RAMTransformerFactory
 
+# Unified model factory
+from wnn.ram.factories.models import ModelsFactory
+
 
 __all__ = [
     # Decoder
@@ -37,4 +40,6 @@ __all__ = [
     'AttentionFactory',
     'StepConfigurationFactory',
     'RAMTransformerFactory',
+    # Unified model factory
+    'ModelsFactory',
 ]

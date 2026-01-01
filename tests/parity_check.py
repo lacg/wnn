@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
-from wnn.ram.core import RAMRecurrentNetwork
+from wnn.ram.factories import ModelsFactory
+from wnn.ram.enums import ModelType
 
 from datetime import datetime
 
@@ -16,12 +17,13 @@ print(f"\n=== Starting Parity Check Run at {start} ===\n")
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 n = 12
-epochs = 250
+epochs = 50
 width = len(str(epochs))
 # ----------------------------
-# Build a RAMRecurrentNetwork
+# Build a RAMRecurrentNetwork via ModelsFactory
 # ----------------------------
-model = RAMRecurrentNetwork(
+model = ModelsFactory.create(
+	ModelType.RECURRENT,
 	input_bits=12,
 	n_state_neurons=1,
 	n_output_neurons=1,

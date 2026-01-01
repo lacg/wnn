@@ -10,8 +10,8 @@ with additional useful operations.
 
 from torch import Tensor, zeros, uint8, float32
 
-from wnn.ram.core.transformers.attention_base import ComputedAttention
-from wnn.ram.core.transformers.computed_arithmetic import bits_to_int, int_to_bits
+from wnn.ram.core.models.attention_base import ComputedAttention
+from wnn.ram.core.models.computed_arithmetic import bits_to_int, int_to_bits
 
 
 class ComputedMedianAttention(ComputedAttention):

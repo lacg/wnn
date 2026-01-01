@@ -44,8 +44,8 @@ class FFNFactory:
         # Lazy imports to avoid circular dependencies
         from wnn.ram.core.RAMLayer import RAMLayer
         from wnn.ram.core.RAMGeneralization import GeneralizingProjection, MapperStrategy
-        from wnn.ram.core.transformers.two_layer_ffn import TwoLayerFFN
-        from wnn.ram.core.transformers.computed_arithmetic import ComputedArithmeticFFN
+        from wnn.ram.core.models.two_layer_ffn import TwoLayerFFN
+        from wnn.ram.core.models.computed_arithmetic import ComputedArithmeticFFN
 
         match ffn_type:
             case FFNType.NONE:

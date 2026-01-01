@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
-from wnn.ram.enums import OutputMode
-from wnn.ram.core import RAMKVMemory
+from wnn.ram.factories import ModelsFactory
+from wnn.ram.enums import ModelType
 
 from random import Random
 from wnn.ram.architecture import KVSpec
@@ -14,7 +14,8 @@ def run() -> float:
 	spec = KVSpec(k_bits=3, v_bits=2, query_value=0)
 	rng = Random(123)
 
-	model = RAMKVMemory(
+	model = ModelsFactory.create(
+		ModelType.KV_MEMORY,
 		spec=spec,
 		neurons_per_head=8,
 		n_bits_per_state_neuron=8,
@@ -30,7 +31,7 @@ def run() -> float:
 	# ----------------------------
 	print(f"\n=== Training model ===\n")
 
-	epochs = 300
+	epochs = 50
 	width = len(str(epochs))
 	for epoch in range(epochs):
 		windows, target_bits, _ = spec.generate_episode(n_writes=6, rng=rng)

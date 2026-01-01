@@ -68,7 +68,7 @@ def greedy_decode(
     Returns:
         GenerationResult with generated sequence
     """
-    from wnn.ram.core.transformers.computed_arithmetic import bits_to_int
+    from wnn.ram.core.models.computed_arithmetic import bits_to_int
 
     generated = [start_token.clone()]
     total_score = 0.0
@@ -125,7 +125,7 @@ def beam_search(
     Returns:
         GenerationResult with best sequence and all candidates
     """
-    from wnn.ram.core.transformers.computed_arithmetic import bits_to_int, int_to_bits
+    from wnn.ram.core.models.computed_arithmetic import bits_to_int, int_to_bits
 
     token_bits = len(start_token)
     vocab_size = vocab_size or (2 ** token_bits)
@@ -222,7 +222,7 @@ def sample_decode(
     Returns:
         GenerationResult with sampled sequence
     """
-    from wnn.ram.core.transformers.computed_arithmetic import bits_to_int
+    from wnn.ram.core.models.computed_arithmetic import bits_to_int
     import random
 
     generated = [start_token.clone()]
@@ -282,7 +282,7 @@ def top_k_decode(
     Returns:
         GenerationResult
     """
-    from wnn.ram.core.transformers.computed_arithmetic import bits_to_int, int_to_bits
+    from wnn.ram.core.models.computed_arithmetic import bits_to_int, int_to_bits
     import random
 
     token_bits = len(start_token)
@@ -366,7 +366,7 @@ def stream_greedy_decode(
             if some_condition:
                 break  # Can stop early
     """
-    from wnn.ram.core.transformers.computed_arithmetic import bits_to_int
+    from wnn.ram.core.models.computed_arithmetic import bits_to_int
 
     generated = [start_token.clone()]
 
@@ -421,7 +421,7 @@ def stream_sample_decode(
     Yields:
         StreamToken for each sampled token
     """
-    from wnn.ram.core.transformers.computed_arithmetic import bits_to_int
+    from wnn.ram.core.models.computed_arithmetic import bits_to_int
     import random
 
     generated = [start_token.clone()]
@@ -480,7 +480,7 @@ def stream_top_k_decode(
     Yields:
         StreamToken for each generated token
     """
-    from wnn.ram.core.transformers.computed_arithmetic import bits_to_int, int_to_bits
+    from wnn.ram.core.models.computed_arithmetic import bits_to_int, int_to_bits
     import random
 
     token_bits = len(start_token)

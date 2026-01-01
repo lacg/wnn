@@ -4,6 +4,9 @@ RAM Core Components
 Fundamental building blocks for RAM neural networks.
 """
 
+# Base classes for RAM components
+from wnn.ram.core.base import RAMComponent, RAMSequenceModel, RAMTrainable
+
 # Fundamental storage and layer
 from wnn.ram.core.Memory import Memory
 from wnn.ram.core.SparseMemory import SparseMemory
@@ -67,10 +70,10 @@ from wnn.ram.core.generation import (
 from wnn.ram.core.sequence_generator import SequenceGenerator
 
 # Transformer components (submodule)
-from wnn.ram.core import transformers
+from wnn.ram.core import models
 
 # Re-export transformer components at core level for convenience
-from wnn.ram.core.transformers import (
+from wnn.ram.core.models import (
     # Computed operations
     ComputedArithmeticFFN,
     ComputedCopyFFN,
@@ -107,6 +110,10 @@ from wnn.ram.core.transformers import (
 
 
 __all__ = [
+    # Base classes
+    'RAMComponent',
+    'RAMSequenceModel',
+    'RAMTrainable',
     # Fundamental
     'Memory',
     'SparseMemory',
@@ -150,7 +157,7 @@ __all__ = [
     'BeamCandidate',
     'SequenceGenerator',
     # Submodules
-    'transformers',
+    'models',
     # Transformer components (re-exported)
     'ComputedArithmeticFFN',
     'ComputedCopyFFN',

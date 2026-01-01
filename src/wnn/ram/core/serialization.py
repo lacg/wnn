@@ -129,7 +129,7 @@ def _get_model_class(class_name: str) -> type:
         RAMKVMemory,
         RAMAutomaton,
     )
-    from wnn.ram.core.transformers import (
+    from wnn.ram.core.models import (
         RAMAttention,
         RAMTransformer,
         RAMSeq2Seq,

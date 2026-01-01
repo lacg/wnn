@@ -20,8 +20,8 @@ from torch import Tensor, zeros, uint8, float32, cat
 from torch.nn import Module, ModuleList
 
 from wnn.ram.core import RAMLayer
-from wnn.ram.core.transformers.attention_base import ComputedAttention
-from wnn.ram.core.transformers.computed_arithmetic import bits_to_int
+from wnn.ram.core.models.attention_base import ComputedAttention
+from wnn.ram.core.models.computed_arithmetic import bits_to_int
 
 
 class TopKAggregation(Enum):

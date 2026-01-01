@@ -18,8 +18,8 @@ Supports both:
 
 from wnn.ram.core import RAMLayer
 from wnn.ram.core import RAMAggregator
-from wnn.ram.core.transformers.attention_base import LearnableAttention
-from wnn.ram.core.transformers.attention_mask import AttentionMask, MaskStrategy
+from wnn.ram.core.models.attention_base import LearnableAttention
+from wnn.ram.core.models.attention_mask import AttentionMask, MaskStrategy
 from wnn.ram.encoders_decoders import PositionMode
 from wnn.ram.encoders_decoders import PositionEncoderFactory
 from wnn.ram.enums import CrossAttentionMode

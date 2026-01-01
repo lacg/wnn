@@ -43,9 +43,9 @@ Architecture (with FFN):
 
 from wnn.ram.core import RAMLayer, GeneralizingProjection
 from wnn.ram.enums import MapperStrategy
-from wnn.ram.core.transformers.attention import RAMAttention
-from wnn.ram.core.transformers.feedforward import RAMFeedForward, FFNMode
-from wnn.ram.core.transformers.embedding import RAMEmbedding, PositionEncoding
+from wnn.ram.core.models.attention import RAMAttention
+from wnn.ram.core.models.feedforward import RAMFeedForward, FFNMode
+from wnn.ram.core.models.embedding import RAMEmbedding, PositionEncoding
 from wnn.ram.encoders_decoders import PositionMode
 
 from torch import Tensor, zeros, uint8, cat

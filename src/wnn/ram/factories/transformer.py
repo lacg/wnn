@@ -47,7 +47,7 @@ class RAMTransformerFactory:
             Configured RAMTransformer instance
         """
         # Lazy import to avoid circular dependency
-        from wnn.ram.core.transformers.transformer import RAMTransformer
+        from wnn.ram.core.models.transformer import RAMTransformer
 
         match transformer_type:
             # Position-based transformers (100% generalization)
@@ -205,7 +205,7 @@ class RAMTransformerFactory:
         Returns:
             RAMTransformer with one block per step
         """
-        from wnn.ram.core.transformers.transformer import RAMTransformer
+        from wnn.ram.core.models.transformer import RAMTransformer
 
         block_configs = StepConfigurationFactory.create_many(steps)
 

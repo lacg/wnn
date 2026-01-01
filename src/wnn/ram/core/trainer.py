@@ -29,7 +29,7 @@ Features:
 - Training callbacks
 """
 
-from wnn.ram.core.transformers.seq2seq import RAMSeq2Seq
+from wnn.ram.core.models.seq2seq import RAMSeq2Seq
 from wnn.ram.enums import PositionEncoding, LayerType, TrainingMode, TrainingPhase
 
 from torch import Tensor, zeros, float32, save as torch_save, load as torch_load
