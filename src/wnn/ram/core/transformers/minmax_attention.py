@@ -1,0 +1,87 @@
+"""
+MinMax Attention
+
+Attention mechanism that finds minimum or maximum token.
+Uses computed comparisons for 100% generalization.
+"""
+
+from torch import Tensor, zeros, uint8
+from torch.nn import Module
+
+from wnn.ram.core.transformers.computed_arithmetic import bits_to_int
+
+
+class MinMaxAttention(Module):
+    """
+    Find minimum or maximum token using computed comparisons.
+
+    Every position outputs the min (or max) token from the sequence.
+    Generalizes 100% because comparison is computed, not learned.
+    """
+
+    def __init__(
+        self,
+        input_bits: int,
+        find_max: bool = False,
+        rng: int | None = None,
+    ):
+        """
+        Args:
+            input_bits: Bits per token
+            find_max: If True, find maximum instead of minimum
+            rng: Random seed (unused, for API compatibility)
+        """
+        super().__init__()
+
+        self.input_bits = input_bits
+        self.find_max = find_max
+
+        print(f"[MinMaxAttention] input={input_bits}b, "
+              f"mode={'max' if find_max else 'min'}")
+
+    def get_attention_weights(self, tokens: list[Tensor]) -> list[float]:
+        """
+        Get attention weights for min/max finding.
+
+        All positions attend to the min (or max) token.
+        """
+        tokens = [t.squeeze() if t.ndim > 1 else t for t in tokens]
+
+        # Find min or max value
+        values = [bits_to_int(t) for t in tokens]
+        if self.find_max:
+            target_val = max(values)
+        else:
+            target_val = min(values)
+
+        # Attend to position(s) with target value
+        weights = []
+        for val in values:
+            if val == target_val:
+                weights.append(1.0)
+            else:
+                weights.append(0.0)
+
+        return weights
+
+    def forward(self, tokens: list[Tensor]) -> list[Tensor]:
+        """
+        Output min (or max) at every position.
+        """
+        tokens = [t.squeeze() if t.ndim > 1 else t for t in tokens]
+        seq_len = len(tokens)
+
+        weights = self.get_attention_weights(tokens)
+
+        # Find the min/max token
+        min_max_token = None
+        for j, w in enumerate(weights):
+            if w > 0:
+                min_max_token = tokens[j].clone()
+                break
+
+        if min_max_token is None:
+            min_max_token = zeros(self.input_bits, dtype=uint8)
+
+        # Output same token at every position
+        return [min_max_token.clone() for _ in range(seq_len)]

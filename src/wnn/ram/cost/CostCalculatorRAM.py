@@ -1,5 +1,5 @@
 from wnn.ram.cost.CostCalculator import CostCalculator
-from wnn.ram.RAMLayer import RAMLayer
+from wnn.ram.core import RAMLayer
 
 from torch import Tensor
 from torch import zeros
