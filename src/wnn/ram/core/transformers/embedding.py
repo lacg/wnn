@@ -31,20 +31,12 @@ Architecture:
 """
 
 from wnn.ram.core import RAMLayer
-from wnn.ram.core.RAMGeneralization import MapperFactory
+from wnn.ram.factories import MapperFactory
 from wnn.ram.enums import MapperStrategy, ContextMode, BitMapperMode as OutputMode
+from wnn.ram.enums import PositionEncoding
 
 from torch import Tensor, zeros, uint8, arange
 from torch.nn import Module
-from enum import IntEnum
-
-
-class PositionEncoding(IntEnum):
-	"""How to encode position information."""
-	NONE = 0       # No position encoding
-	BINARY = 1     # Binary representation of position
-	LEARNED = 2    # Learned position embeddings
-	SINUSOIDAL = 3 # Discrete approximation of sinusoidal
 
 
 class RAMEmbedding(Module):

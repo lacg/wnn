@@ -17,6 +17,7 @@ Aggregation Strategies:
 
 from wnn.ram.core.RAMLayer import RAMLayer
 from wnn.ram.core.RAMGeneralization import GeneralizingProjection
+from wnn.ram.core.transformers.attention_base import LearnableAttention
 from wnn.ram.enums import (
     ContentMatchMode,
     AttentionCombineMode,
@@ -26,7 +27,7 @@ from wnn.ram.enums import (
 from wnn.ram.encoders_decoders import PositionMode, PositionEncoderFactory
 from wnn.ram.core.transformers.computed_arithmetic import bits_to_int
 
-from torch import Tensor, zeros, uint8, cat, tensor, randperm, manual_seed
+from torch import Tensor, zeros, uint8, cat, tensor, randperm, manual_seed, float32
 from torch.nn import Module, ModuleList
 import random
 
@@ -133,12 +134,23 @@ class EnsembleVotingHead(Module):
             ram.commit(projected, target_val.unsqueeze(0))
 
 
-class SoftRAMAttention(Module):
+class SoftRAMAttention(LearnableAttention):
     """
     Soft attention approximation using head voting.
 
     Each head votes on which positions to attend.
     Vote counts create pseudo-continuous attention weights.
+
+    Recommended Configurations:
+        Simple (position-based):
+            SoftRAMAttention(input_bits=8, num_heads=8)
+
+        Content matching (for retrieval):
+            SoftRAMAttention(input_bits=8, num_heads=8,
+                           content_match=ContentMatchMode.XOR_EQUAL)
+
+        Position-only (100% generalization):
+            SoftRAMAttention(input_bits=8, num_heads=8, position_only=True)
     """
 
     def __init__(
@@ -265,21 +277,24 @@ class SoftRAMAttention(Module):
         return bits
 
     def _compute_content_match(self, query: Tensor, key: Tensor) -> bool:
-        if self.content_match == ContentMatchMode.XOR_EQUAL:
-            return _xor_match(query, key)
-        elif self.content_match == ContentMatchMode.HAMMING_1:
-            return _hamming_match(query, key, threshold=1)
-        elif self.content_match == ContentMatchMode.HAMMING_2:
-            return _hamming_match(query, key, threshold=2)
-        elif self.content_match == ContentMatchMode.LESS_THAN:
-            return _less_than(key, query)
-        elif self.content_match == ContentMatchMode.LESS_EQUAL:
-            return _less_equal(key, query)
-        elif self.content_match == ContentMatchMode.GREATER_THAN:
-            return _greater_than(key, query)
-        elif self.content_match == ContentMatchMode.GREATER_EQUAL:
-            return _greater_equal(key, query)
-        return False
+        """Check if query and key match based on content_match mode."""
+        match self.content_match:
+            case ContentMatchMode.XOR_EQUAL:
+                return _xor_match(query, key)
+            case ContentMatchMode.HAMMING_1:
+                return _hamming_match(query, key, threshold=1)
+            case ContentMatchMode.HAMMING_2:
+                return _hamming_match(query, key, threshold=2)
+            case ContentMatchMode.LESS_THAN:
+                return _less_than(key, query)
+            case ContentMatchMode.LESS_EQUAL:
+                return _less_equal(key, query)
+            case ContentMatchMode.GREATER_THAN:
+                return _greater_than(key, query)
+            case ContentMatchMode.GREATER_EQUAL:
+                return _greater_equal(key, query)
+            case _:
+                return False
 
     def _compute_position_votes(self, query: Tensor, key: Tensor, query_pos: int, key_pos: int) -> int:
         vote_count = 0
@@ -302,59 +317,70 @@ class SoftRAMAttention(Module):
             vote_count += attend
         return vote_count
 
+    def _combine_votes(
+        self,
+        content_matches: bool,
+        position_votes: int,
+        query_pos: int,
+        key_pos: int,
+        num_keys: int,
+    ) -> int:
+        """Combine content matching and position votes based on combine mode."""
+        match self.attention_combine:
+            case AttentionCombineMode.CONTENT_ONLY:
+                if self.content_match != ContentMatchMode.NONE:
+                    return self.num_heads if content_matches else 0
+                return position_votes
+
+            case AttentionCombineMode.POSITION_ONLY:
+                return position_votes
+
+            case AttentionCombineMode.CONTENT_AND_POS:
+                if self.content_match != ContentMatchMode.NONE:
+                    return position_votes if content_matches and position_votes > 0 else 0
+                return position_votes
+
+            case AttentionCombineMode.CONTENT_OR_POS:
+                if self.content_match != ContentMatchMode.NONE:
+                    if content_matches:
+                        return self.num_heads
+                    return position_votes if position_votes > 0 else 0
+                return position_votes
+
+            case AttentionCombineMode.CONTENT_BIASED:
+                if self.content_match != ContentMatchMode.NONE and content_matches:
+                    distance = abs(query_pos - key_pos)
+                    max_dist = num_keys - 1
+                    bias = 1.0 - (distance / max_dist) * 0.5 if max_dist > 0 else 1.0
+                    return int(self.num_heads * bias)
+                return 0
+
+            case _:
+                return position_votes
+
     def _compute_votes(self, query: Tensor, keys: list[Tensor], query_pos: int) -> list[int]:
+        """Compute vote counts for each key position."""
         votes = []
         for j, key in enumerate(keys):
+            # Causal mask
             if self.causal and j > query_pos:
                 votes.append(0)
                 continue
 
+            # Content matching (if enabled)
             content_matches = False
             if self.content_match != ContentMatchMode.NONE:
                 content_matches = self._compute_content_match(query, key)
 
+            # Position-based votes
             position_votes = self._compute_position_votes(query, key, query_pos, j)
 
-            if self.attention_combine == AttentionCombineMode.CONTENT_ONLY:
-                if self.content_match != ContentMatchMode.NONE:
-                    vote_count = self.num_heads if content_matches else 0
-                else:
-                    vote_count = position_votes
-            elif self.attention_combine == AttentionCombineMode.POSITION_ONLY:
-                vote_count = position_votes
-            elif self.attention_combine == AttentionCombineMode.CONTENT_AND_POS:
-                if self.content_match != ContentMatchMode.NONE:
-                    if content_matches and position_votes > 0:
-                        vote_count = position_votes
-                    else:
-                        vote_count = 0
-                else:
-                    vote_count = position_votes
-            elif self.attention_combine == AttentionCombineMode.CONTENT_OR_POS:
-                if self.content_match != ContentMatchMode.NONE:
-                    if content_matches:
-                        vote_count = self.num_heads
-                    elif position_votes > 0:
-                        vote_count = position_votes
-                    else:
-                        vote_count = 0
-                else:
-                    vote_count = position_votes
-            elif self.attention_combine == AttentionCombineMode.CONTENT_BIASED:
-                if self.content_match != ContentMatchMode.NONE and content_matches:
-                    distance = abs(query_pos - j)
-                    max_dist = len(keys) - 1
-                    if max_dist > 0:
-                        bias = 1.0 - (distance / max_dist) * 0.5
-                    else:
-                        bias = 1.0
-                    vote_count = int(self.num_heads * bias)
-                else:
-                    vote_count = 0
-            else:
-                vote_count = position_votes
-
+            # Combine content and position
+            vote_count = self._combine_votes(
+                content_matches, position_votes, query_pos, j, len(keys)
+            )
             votes.append(vote_count)
+
         return votes
 
     def _aggregate_top_1(self, values: list[Tensor], votes: list[int]) -> Tensor:
@@ -414,15 +440,30 @@ class SoftRAMAttention(Module):
         else:
             raise ValueError(f"Unknown aggregation: {self.aggregation}")
 
-    def forward(self, tokens: list[Tensor]) -> list[Tensor]:
+    def forward(
+        self,
+        tokens: list[Tensor],
+        context: list[Tensor] | None = None,
+    ) -> list[Tensor]:
+        """
+        Forward pass (implements LearnableAttention interface).
+
+        Args:
+            tokens: Input tokens (queries)
+            context: Ignored (SoftRAMAttention is self-attention only)
+        """
         tokens = [t.squeeze() if t.ndim > 1 else t for t in tokens]
         seq_len = len(tokens)
+
+        # Project values
         values = []
         for tok in tokens:
             proj = self.value_projection(tok)
             if proj.ndim > 1:
                 proj = proj.squeeze()
             values.append(proj)
+
+        # Compute outputs
         outputs = []
         for i in range(seq_len):
             query = tokens[i]
@@ -431,11 +472,64 @@ class SoftRAMAttention(Module):
             outputs.append(output)
         return outputs
 
-    def get_attention_weights(self, tokens: list[Tensor], query_pos: int) -> list[float]:
+    def get_attention_weights(
+        self,
+        tokens: list[Tensor],
+        context: list[Tensor] | None = None,
+    ) -> Tensor:
+        """
+        Get attention weights matrix (implements LearnableAttention interface).
+
+        Returns:
+            Tensor [num_queries, num_keys] with normalized vote weights
+        """
+        tokens = [t.squeeze() if t.ndim > 1 else t for t in tokens]
+        n = len(tokens)
+
+        weights = zeros(n, n, dtype=float32)
+        for i in range(n):
+            query = tokens[i]
+            votes = self._compute_votes(query, tokens, i)
+            for j, v in enumerate(votes):
+                weights[i, j] = v / self.num_heads
+
+        return weights
+
+    def _get_weights_for_position(self, tokens: list[Tensor], query_pos: int) -> list[float]:
+        """Get attention weights for a single query position (internal helper)."""
         tokens = [t.squeeze() if t.ndim > 1 else t for t in tokens]
         query = tokens[query_pos]
         votes = self._compute_votes(query, tokens, query_pos)
         return [v / self.num_heads for v in votes]
+
+    def train_step(
+        self,
+        tokens: list[Tensor],
+        targets: list[Tensor],
+        context: list[Tensor] | None = None,
+    ) -> int:
+        """
+        Single training step (implements LearnableAttention interface).
+
+        Trains the attention mechanism to produce target outputs.
+
+        Args:
+            tokens: Input tokens
+            targets: Target outputs
+            context: Ignored (self-attention only)
+
+        Returns:
+            Number of updates made
+        """
+        tokens = [t.squeeze() if t.ndim > 1 else t for t in tokens]
+        targets = [t.squeeze() if t.ndim > 1 else t for t in targets]
+
+        # Simple training: just train value projection
+        corrections = 0
+        for tok, target in zip(tokens, targets):
+            corrections += self.value_projection.train_mapping(tok, target)
+
+        return corrections
 
     def train_attention_weights(self, tokens: list[Tensor], query_pos: int, target_weights: list[float]) -> int:
         tokens = [t.squeeze() if t.ndim > 1 else t for t in tokens]

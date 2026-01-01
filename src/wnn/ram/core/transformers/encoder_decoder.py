@@ -46,8 +46,7 @@ Use cases:
 
 from wnn.ram.core import RAMLayer, GeneralizingProjection
 from wnn.ram.enums import MapperStrategy
-from wnn.ram.core.transformers.attention import RAMAttention
-from wnn.ram.core.transformers.cross_attention import RAMCrossAttention, CrossAttentionMode
+from wnn.ram.core.transformers.attention import RAMAttention, CrossAttentionMode
 from wnn.ram.core.transformers.feedforward import RAMFeedForward, FFNMode
 from wnn.ram.core.transformers.embedding import RAMEmbedding, PositionEncoding
 from wnn.ram.encoders_decoders import PositionMode
@@ -62,7 +61,7 @@ class RAMEncoderDecoder(Module):
 
 	Combines:
 	- RAMAttention (self-attention) for both encoder and decoder
-	- RAMCrossAttention for decoder-to-encoder attention
+	- RAMAttention with context (cross-attention) for decoder-to-encoder attention
 	- Optional RAMFeedForward layers
 	- Optional RAMEmbedding for learned representations
 
@@ -159,7 +158,7 @@ class RAMEncoderDecoder(Module):
 		# Encoder self-attention layers (BIDIRECTIONAL - causal=False)
 		self.encoder_attention = ModuleList([
 			RAMAttention(
-				input_bits=self.hidden_bits,
+				query_bits=self.hidden_bits,  # key_bits=None -> self-attention
 				num_heads=num_heads,
 				position_mode=position_mode,
 				max_seq_len=max_encoder_len,
@@ -211,7 +210,7 @@ class RAMEncoderDecoder(Module):
 		# Decoder self-attention layers (CAUSAL - can only see past)
 		self.decoder_self_attention = ModuleList([
 			RAMAttention(
-				input_bits=self.hidden_bits,
+				query_bits=self.hidden_bits,  # key_bits=None -> self-attention
 				num_heads=num_heads,
 				position_mode=position_mode,
 				max_seq_len=max_decoder_len,
@@ -222,14 +221,16 @@ class RAMEncoderDecoder(Module):
 		])
 
 		# Decoder cross-attention layers (attends to encoder output)
+		# Uses unified RAMAttention with key_bits set (makes it cross-attention)
 		self.decoder_cross_attention = ModuleList([
-			RAMCrossAttention(
-				decoder_bits=self.hidden_bits,
-				encoder_bits=self.hidden_bits,
+			RAMAttention(
+				query_bits=self.hidden_bits,
+				key_bits=self.hidden_bits,  # Explicit key_bits = cross-attention mode
 				num_heads=num_heads,
 				position_mode=cross_attention_mode,
-				max_encoder_len=max_encoder_len,
-				max_decoder_len=max_decoder_len,
+				max_seq_len=max_decoder_len,
+				max_context_len=max_encoder_len,
+				causal=False,  # Cross-attention is always non-causal
 				rng=rng + 3000 + i * 100 if rng else None,
 			)
 			for i in range(num_decoder_layers)

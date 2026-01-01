@@ -11,9 +11,18 @@ from torch import cat
 from torch import full
 from torch import Tensor
 
-class RAMTransformer(RAMRecurrentNetwork):
+class RAMKVMemory(RAMRecurrentNetwork):
 	"""
 	RAM multi-head KV memory with hard key routing.
+
+	Uses recurrent state partitioned into heads, where key bits
+	determine which head to read/write. Value bits all zero = query.
+
+	Architecture:
+	  [k_bits | v_bits] → state_layer → head_state → output_layer → output
+
+	Different from RAMTransformer (transformers/transformer.py) which is
+	a stacked block architecture with attention + FFN.
 	"""
 
 	def __init__(

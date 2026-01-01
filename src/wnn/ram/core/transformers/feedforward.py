@@ -29,18 +29,10 @@ Architecture:
 """
 
 from wnn.ram.core import RAMLayer, GeneralizingProjection
-from wnn.ram.enums import MapperStrategy
+from wnn.ram.enums import MapperStrategy, FFNMode
 
 from torch import Tensor, zeros, uint8
 from torch.nn import Module
-from enum import IntEnum
-
-
-class FFNMode(IntEnum):
-	"""Feed-forward network mode."""
-	STANDARD = 0     # Two RAMLayer projections
-	GENERALIZED = 1  # Uses GeneralizingProjection for better generalization
-	GATED = 2        # Gated variant: output = gate * up_proj
 
 
 class RAMFeedForward(Module):

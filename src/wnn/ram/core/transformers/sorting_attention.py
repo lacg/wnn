@@ -1,17 +1,19 @@
 """
-Sorting Attention
+Computed Sorting Attention
 
 Attention mechanism that sorts tokens by their numeric value.
 Uses computed comparisons for 100% generalization.
+
+This is a COMPUTED (non-learnable) attention mechanism - no training required.
 """
 
-from torch import Tensor, zeros, uint8
-from torch.nn import Module
+from torch import Tensor, zeros, uint8, float32
 
+from wnn.ram.core.transformers.attention_base import ComputedAttention
 from wnn.ram.core.transformers.computed_arithmetic import bits_to_int
 
 
-class SortingAttention(Module):
+class ComputedSortingAttention(ComputedAttention):
     """
     Sorting attention using computed comparisons.
 
@@ -42,7 +44,7 @@ class SortingAttention(Module):
         self.input_bits = input_bits
         self.descending = descending
 
-        print(f"[SortingAttention] input={input_bits}b, "
+        print(f"[ComputedSortingAttention] input={input_bits}b, "
               f"order={'descending' if descending else 'ascending'}")
 
     def _count_smaller(self, token: Tensor, all_tokens: list[Tensor]) -> int:
@@ -68,13 +70,13 @@ class SortingAttention(Module):
     def get_attention_weights(
         self,
         tokens: list[Tensor],
-        query_pos: int,
-    ) -> list[float]:
+        context: list[Tensor] | None = None,
+    ) -> Tensor:
         """
-        Get attention weights for sorting.
+        Get attention weights for sorting (implements AttentionBase interface).
 
-        For output position query_pos, we want the (query_pos+1)th smallest token.
-        Handles duplicates by using stable sorting (preserving original order for ties).
+        Returns a [num_queries, num_keys] tensor where each row has exactly
+        one 1.0 at the position of the token that belongs at that output position.
         """
         tokens = [t.squeeze() if t.ndim > 1 else t for t in tokens]
         n = len(tokens)
@@ -89,20 +91,42 @@ class SortingAttention(Module):
         else:
             indexed.sort(key=lambda x: x[0])
 
-        # For output position query_pos, find which input position should go there
-        target_input_pos = indexed[query_pos][1]
-
-        # Create weights: 1.0 for the target position, 0.0 elsewhere
-        weights = [0.0] * n
-        weights[target_input_pos] = 1.0
+        # Build full attention matrix
+        weights = zeros(n, n, dtype=float32)
+        for query_pos in range(n):
+            target_input_pos = indexed[query_pos][1]
+            weights[query_pos, target_input_pos] = 1.0
 
         return weights
 
-    def forward(self, tokens: list[Tensor]) -> list[Tensor]:
+    def _get_weights_for_position(self, tokens: list[Tensor], query_pos: int) -> list[float]:
+        """Get attention weights for a single output position (internal helper)."""
+        tokens = [t.squeeze() if t.ndim > 1 else t for t in tokens]
+        n = len(tokens)
+
+        values = [bits_to_int(t) for t in tokens]
+        indexed = [(val, i) for i, val in enumerate(values)]
+
+        if self.descending:
+            indexed.sort(key=lambda x: -x[0])
+        else:
+            indexed.sort(key=lambda x: x[0])
+
+        target_input_pos = indexed[query_pos][1]
+        weights = [0.0] * n
+        weights[target_input_pos] = 1.0
+        return weights
+
+    def forward(
+        self,
+        tokens: list[Tensor],
+        context: list[Tensor] | None = None,
+    ) -> list[Tensor]:
         """
-        Sort the sequence.
+        Sort the sequence (implements AttentionBase interface).
 
         No learning required - attention is computed from token comparisons.
+        context parameter is ignored (sorting is always self-attention).
         """
         tokens = [t.squeeze() if t.ndim > 1 else t for t in tokens]
         seq_len = len(tokens)
@@ -110,7 +134,7 @@ class SortingAttention(Module):
         outputs = []
 
         for i in range(seq_len):
-            weights = self.get_attention_weights(tokens, i)
+            weights = self._get_weights_for_position(tokens, i)
 
             # Find the attended position (should be exactly one)
             for j, w in enumerate(weights):
@@ -128,14 +152,18 @@ class SortingAttention(Module):
         tokens = [t.squeeze() if t.ndim > 1 else t for t in tokens]
         seq_len = len(tokens)
 
-        lines = [f"Sorting Attention ({'descending' if self.descending else 'ascending'}):"]
+        lines = [f"ComputedSortingAttention ({'descending' if self.descending else 'ascending'}):"]
         lines.append("     " + " ".join(f"{j:4d}" for j in range(seq_len)))
 
         for i in range(seq_len):
-            weights = self.get_attention_weights(tokens, i)
+            weights = self._get_weights_for_position(tokens, i)
             row = f"{i:2d}: "
             for w in weights:
                 row += f"{w:4.2f} "
             lines.append(row)
 
         return "\n".join(lines)
+
+
+# Backwards-compatible alias
+SortingAttention = ComputedSortingAttention

@@ -24,7 +24,7 @@ from wnn.ram.core.sequence import RAMSequence
 from wnn.ram.core.multihead_sequence import RAMMultiHeadSequence
 from wnn.ram.core.multihead_kv import RAMMultiHeadKV
 from wnn.ram.core.multihead_shared import RAMMultiHeadShared
-from wnn.ram.core.kv_transformer import RAMTransformer as RAMKVTransformer
+from wnn.ram.core.kv_transformer import RAMKVMemory
 from wnn.ram.core.automaton import RAMAutomaton
 from wnn.ram.core.trainer import RAMTrainer, TrainingStats, LayerState, LayerType
 
@@ -38,12 +38,19 @@ from wnn.ram.core.transformers import (
     ComputedCopyFFN,
     bits_to_int,
     int_to_bits,
+    # Attention base classes
+    AttentionBase,
+    LearnableAttention,
+    ComputedAttention,
     # Attention mechanisms
     SoftRAMAttention,
-    SortingAttention,
-    MinMaxAttention,
+    ComputedSortingAttention,
+    SortingAttention,  # Alias
+    ComputedMinMaxAttention,
+    MinMaxAttention,  # Alias
     RAMAttention,
-    RAMCrossAttention,
+    RAMCrossAttention,  # Alias
+    CrossAttentionMode,
     # FFN
     TwoLayerFFN,
     RAMFeedForward,
@@ -75,7 +82,7 @@ __all__ = [
     'RAMMultiHeadSequence',
     'RAMMultiHeadKV',
     'RAMMultiHeadShared',
-    'RAMKVTransformer',
+    'RAMKVMemory',
     'RAMAutomaton',
     'RAMTrainer',
     'TrainingStats',
@@ -88,11 +95,17 @@ __all__ = [
     'ComputedCopyFFN',
     'bits_to_int',
     'int_to_bits',
+    'AttentionBase',
+    'LearnableAttention',
+    'ComputedAttention',
     'SoftRAMAttention',
+    'ComputedSortingAttention',
     'SortingAttention',
+    'ComputedMinMaxAttention',
     'MinMaxAttention',
     'RAMAttention',
     'RAMCrossAttention',
+    'CrossAttentionMode',
     'TwoLayerFFN',
     'RAMFeedForward',
     'RAMEmbedding',

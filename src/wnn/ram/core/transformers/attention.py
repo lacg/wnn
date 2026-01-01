@@ -1,5 +1,5 @@
 """
-RAM-based Attention Mechanism
+RAM-based Attention Mechanism (Unified Self + Cross Attention)
 
 Traditional Transformer Attention:
   scores = softmax(Q·K^T / √d)    # Continuous weights [0,1]
@@ -11,114 +11,86 @@ RAM Attention (Hard/Discrete):
     2. Select winner(s) via hard routing or voting
     3. Return selected value(s)
 
-Key differences:
-  - No continuous weights - discrete selection
-  - No weighted sums - winner-take-all or voting
-  - But: content-addressable, learnable, multi-head
-
-This is closer to:
-  - Slot attention (hard assignment)
-  - Sparse attention (attend to subset)
-  - Memory networks (discrete addressing)
+Supports both:
+  - Self-attention: tokens attend to themselves (context=None)
+  - Cross-attention: queries attend to context (context=encoder_output)
 """
 
 from wnn.ram.core import RAMLayer
 from wnn.ram.core import RAMAggregator
-from wnn.ram.encoders_decoders import OutputMode
-from wnn.ram.encoders_decoders import TransformerDecoderFactory
+from wnn.ram.core.transformers.attention_base import LearnableAttention
 from wnn.ram.encoders_decoders import PositionMode
 from wnn.ram.encoders_decoders import PositionEncoderFactory
+from wnn.ram.enums import CrossAttentionMode
 
-from torch import Tensor, zeros, ones, uint8, stack, cat, tensor
-from torch.nn import Module, ModuleList
-from typing import Optional
+from torch import Tensor, zeros, uint8, cat, tensor
+from torch.nn import ModuleList
 
 
-class RAMAttention(Module):
+class RAMAttention(LearnableAttention):
 	"""
-	RAM-based attention layer.
+	Unified RAM-based attention layer supporting self-attention and cross-attention.
 
-	Instead of soft attention (weighted sum), uses hard attention:
-	- Each query selects which keys to attend to
-	- Selection is discrete (binary: attend or not)
-	- Multiple heads allow different attention patterns
+	Self-attention (context=None):
+	  - Queries, keys, and values all come from same sequence
+	  - Supports causal masking
+	  - Position modes: NONE, BINARY, RELATIVE
+
+	Cross-attention (context=encoder_output):
+	  - Queries from decoder, keys/values from encoder
+	  - Always non-causal (can attend to any encoder position)
+	  - Position modes: NONE, ENCODER_ONLY, BOTH
 
 	Architecture:
-	  Input: sequence of tokens [t0, t1, t2, ..., tN]
-
-	  For each query position i:
-	    q_i = input[i]
-
-	    For each key position j:
-	      k_j = input[j]
-	      attend[i,j] = RAM_similarity(q_i, k_j)  # Binary: 0 or 1
-
-	    attended_values = [input[j] for j where attend[i,j] == 1]
-	    output[i] = aggregate(attended_values)  # Vote or first match
+	  similarity_heads: [query, key, positions] -> attend? (binary)
+	  value_heads: [value, position] -> projected_value
+	  aggregators: [attended_values] -> aggregated (learned, order-invariant)
+	  output_layer: [head_outputs] -> final_output
 	"""
 
 	def __init__(
 		self,
-		input_bits: int,
+		query_bits: int,
+		key_bits: int | None = None,  # None = same as query_bits (self-attention)
 		num_heads: int = 4,
 		neurons_per_head: int = 8,
-		position_mode: PositionMode = PositionMode.BINARY,
+		position_mode: PositionMode | CrossAttentionMode = PositionMode.BINARY,
 		max_seq_len: int = 16,
-		causal: bool = True,  # Only attend to past positions
+		max_context_len: int | None = None,  # For cross-attention
+		causal: bool = True,  # Only for self-attention
 		rng: int | None = None,
 	):
 		"""
 		Args:
-			input_bits: Bits per token
+			query_bits: Bits per query token
+			key_bits: Bits per key/value token (None = same as query_bits)
 			num_heads: Number of attention heads
-			neurons_per_head: RAM neurons per head
-			position_mode: How to encode positions (NONE, BINARY, RELATIVE)
-			max_seq_len: Maximum sequence length
-			causal: If True, position i can only attend to j <= i
+			neurons_per_head: RAM neurons per head (unused, kept for compatibility)
+			position_mode: How to encode positions
+			max_seq_len: Maximum sequence length for queries
+			max_context_len: Maximum context length (for cross-attention)
+			causal: If True, position i can only attend to j <= i (self-attention only)
 			rng: Random seed
-
-		Position modes:
-			NONE: No position encoding (content-only attention)
-			BINARY: Absolute positions [query_pos, key_pos] - 2 * pos_bits
-			RELATIVE: Relative distance [key_pos - query_pos] - 1 * pos_bits
 		"""
 		super().__init__()
 
-		self.input_bits = input_bits
+		# Store for potential future use (currently unused)
+		_ = neurons_per_head
+
+		self.query_bits = query_bits
+		self.key_bits = key_bits or query_bits
+		self.is_cross_attention = key_bits is not None
 		self.num_heads = num_heads
-		self.neurons_per_head = neurons_per_head
-		self.causal = causal
+		self.causal = causal if not self.is_cross_attention else False  # Cross-attention is non-causal
 		self.max_seq_len = max_seq_len
+		self.max_context_len = max_context_len or max_seq_len
 		self.position_mode = position_mode
 
-		# Position encoding
-		if position_mode == PositionMode.NONE:
-			self.position_encoder = None
-			self.n_position_bits = 0
-			self.n_similarity_position_bits = 0
-		elif position_mode == PositionMode.BINARY:
-			self.position_encoder = PositionEncoderFactory.create(
-				PositionMode.BINARY,
-				max_seq_len=max_seq_len,
-			)
-			self.n_position_bits = self.position_encoder.n_bits
-			# Binary mode uses both query and key positions
-			self.n_similarity_position_bits = 2 * self.n_position_bits
-		elif position_mode == PositionMode.RELATIVE:
-			# For relative, max_distance is max_seq_len - 1 (causal: only look back)
-			self.position_encoder = PositionEncoderFactory.create(
-				PositionMode.RELATIVE,
-				max_distance=max_seq_len - 1,
-			)
-			self.n_position_bits = self.position_encoder.n_bits
-			# Relative mode uses single distance encoding
-			self.n_similarity_position_bits = self.n_position_bits
-		else:
-			raise ValueError(f"Unsupported position_mode: {position_mode}")
+		# Determine position encoding setup
+		self._setup_position_encoding()
 
-		# Each head learns: (query, key) -> attend?
-		# Input to similarity network: [query_bits, key_bits, position_encoding]
-		similarity_input_bits = 2 * input_bits + self.n_similarity_position_bits
+		# Similarity network: [query, key, positions] -> attend?
+		similarity_input_bits = self.query_bits + self.key_bits + self.n_similarity_position_bits
 
 		self.similarity_heads = ModuleList([
 			RAMLayer(
@@ -130,45 +102,89 @@ class RAMAttention(Module):
 			for i in range(num_heads)
 		])
 
-		# Value projection per head (optional - can also use raw input)
-		# Value projection uses absolute position (not relative) for the token itself
-		value_position_bits = self.n_position_bits if position_mode != PositionMode.NONE else 0
+		# Value projection per head
+		value_input_bits = self.key_bits + self.n_position_bits
 		self.value_heads = ModuleList([
 			RAMLayer(
-				total_input_bits=input_bits + value_position_bits,
-				num_neurons=input_bits,  # Project to same size
-				n_bits_per_neuron=min(input_bits + value_position_bits, 10),
+				total_input_bits=value_input_bits,
+				num_neurons=self.query_bits,  # Project to query dimension
+				n_bits_per_neuron=min(value_input_bits, 10),
 				rng=rng + num_heads + i if rng else None,
 			)
 			for i in range(num_heads)
 		])
 
-		# Learned aggregation per head (replaces XOR)
+		# Learned aggregation per head
 		self.aggregators = ModuleList([
 			RAMAggregator(
-				value_bits=input_bits,
-				max_attended=max_seq_len,
+				value_bits=self.query_bits,
+				max_attended=self.max_context_len,
 				rng=rng + 2 * num_heads + i if rng else None,
 			)
 			for i in range(num_heads)
 		])
 
-		# Output combination (aggregate head outputs)
+		# Output combination
 		self.output_layer = RAMLayer(
-			total_input_bits=num_heads * input_bits,
-			num_neurons=input_bits,
-			n_bits_per_neuron=min(num_heads * input_bits, 12),
+			total_input_bits=num_heads * self.query_bits,
+			num_neurons=self.query_bits,
+			n_bits_per_neuron=min(num_heads * self.query_bits, 12),
 			rng=rng + 3 * num_heads if rng else None,
 		)
 
-		print(f"[RAMAttention] heads={num_heads}, input={input_bits}b, "
-			  f"pos_mode={position_mode.name}, pos_bits={self.n_position_bits}, "
-			  f"causal={causal}, aggregation=learned")
+		attn_type = "cross" if self.is_cross_attention else "self"
+		pos_name = position_mode.name if hasattr(position_mode, 'name') else str(position_mode)
+		print(f"[RAMAttention] type={attn_type}, heads={num_heads}, "
+			  f"query={query_bits}b, key={self.key_bits}b, "
+			  f"pos={pos_name}, causal={self.causal}")
+
+	def _setup_position_encoding(self):
+		"""Configure position encoding based on mode."""
+		max_len = max(self.max_seq_len, self.max_context_len)
+
+		if isinstance(self.position_mode, CrossAttentionMode):
+			# Cross-attention position modes
+			self.n_position_bits = max_len.bit_length()
+			self.position_encoder = None  # Use manual encoding
+
+			match self.position_mode:
+				case CrossAttentionMode.NONE:
+					self.n_similarity_position_bits = 0
+				case CrossAttentionMode.ENCODER_ONLY:
+					self.n_similarity_position_bits = self.n_position_bits
+				case CrossAttentionMode.BOTH:
+					self.n_similarity_position_bits = 2 * self.n_position_bits
+		else:
+			# Self-attention position modes (PositionMode)
+			if self.position_mode == PositionMode.NONE:
+				self.position_encoder = None
+				self.n_position_bits = 0
+				self.n_similarity_position_bits = 0
+			elif self.position_mode == PositionMode.BINARY:
+				self.position_encoder = PositionEncoderFactory.create(
+					PositionMode.BINARY, max_seq_len=max_len
+				)
+				self.n_position_bits = self.position_encoder.n_bits
+				self.n_similarity_position_bits = 2 * self.n_position_bits
+			elif self.position_mode == PositionMode.RELATIVE:
+				self.position_encoder = PositionEncoderFactory.create(
+					PositionMode.RELATIVE, max_distance=max_len - 1
+				)
+				self.n_position_bits = self.position_encoder.n_bits
+				self.n_similarity_position_bits = self.n_position_bits
+
+	def _encode_position(self, pos: int) -> Tensor:
+		"""Encode a position as binary bits."""
+		pos_bits = zeros(self.n_position_bits, dtype=uint8)
+		for b in range(self.n_position_bits - 1, -1, -1):
+			pos_bits[b] = pos & 1
+			pos >>= 1
+		return pos_bits
 
 	def _compute_attention_pattern(
 		self,
-		queries: list[Tensor],  # List of [input_bits] tensors
-		keys: list[Tensor],     # List of [input_bits] tensors
+		queries: list[Tensor],
+		keys: list[Tensor],
 		head_idx: int,
 	) -> Tensor:
 		"""
@@ -176,7 +192,7 @@ class RAMAttention(Module):
 
 		Args:
 			queries: Query tokens
-			keys: Key tokens
+			keys: Key tokens (same as queries for self-attention)
 			head_idx: Which attention head
 
 		Returns:
@@ -188,28 +204,34 @@ class RAMAttention(Module):
 
 		for i, q in enumerate(queries):
 			for j, k in enumerate(keys):
-				# Causal mask: can only attend to past/current
+				# Causal mask (self-attention only)
 				if self.causal and j > i:
 					continue
 
 				# Build similarity input based on position mode
 				parts = [q, k]
 
-				if self.position_mode == PositionMode.BINARY:
-					# Absolute positions: [query_pos, key_pos]
-					q_pos = self.position_encoder.encode(i)
-					k_pos = self.position_encoder.encode(j)
-					parts.extend([q_pos, k_pos])
-				elif self.position_mode == PositionMode.RELATIVE:
-					# Relative distance: key_pos - query_pos
-					# For causal attention, this is always <= 0
-					rel_dist = self.position_encoder.encode_relative(i, j)
-					parts.append(rel_dist)
-				# else: NONE - no position encoding
+				if isinstance(self.position_mode, CrossAttentionMode):
+					# Cross-attention position encoding
+					match self.position_mode:
+						case CrossAttentionMode.ENCODER_ONLY:
+							k_pos = self._encode_position(j)
+							parts.append(k_pos)
+						case CrossAttentionMode.BOTH:
+							q_pos = self._encode_position(i)
+							k_pos = self._encode_position(j)
+							parts.extend([q_pos, k_pos])
+				else:
+					# Self-attention position encoding
+					if self.position_mode == PositionMode.BINARY:
+						q_pos = self.position_encoder.encode(i)
+						k_pos = self.position_encoder.encode(j)
+						parts.extend([q_pos, k_pos])
+					elif self.position_mode == PositionMode.RELATIVE:
+						rel_dist = self.position_encoder.encode_relative(i, j)
+						parts.append(rel_dist)
 
 				similarity_input = cat(parts).unsqueeze(0)
-
-				# RAM neuron decides: attend or not?
 				attend = self.similarity_heads[head_idx](similarity_input)
 				attention[i, j] = attend.squeeze()
 
@@ -221,49 +243,68 @@ class RAMAttention(Module):
 		attention: Tensor,
 		head_idx: int,
 	) -> Tensor:
-		"""
-		Aggregate attended values for a single query using learned aggregation.
-
-		Uses RAMAggregator which:
-		1. Counts votes per bit position (order-invariant)
-		2. Learns aggregation rules via RAM
-
-		Args:
-			values: Projected value tensors
-			attention: Attention pattern for this query [num_keys]
-			head_idx: Which attention head (for selecting aggregator)
-
-		Returns:
-			aggregated: [input_bits] tensor
-		"""
+		"""Aggregate attended values using learned aggregation."""
 		attended_indices = (attention == 1).nonzero(as_tuple=True)[0]
 
 		if len(attended_indices) == 0:
-			# No attention - return zeros
-			return zeros(self.input_bits, dtype=uint8)
+			return zeros(self.query_bits, dtype=uint8)
 
-		# Collect attended values
 		attended_values = [values[idx.item()] for idx in attended_indices]
-
-		# Use learned aggregator for this head
 		return self.aggregators[head_idx](attended_values)
 
-	def forward(self, tokens: list[Tensor]) -> list[Tensor]:
+	def _project_values(
+		self,
+		tokens: list[Tensor],
+		head_idx: int,
+	) -> list[Tensor]:
+		"""Project tokens through value head."""
+		projected = []
+		for j, tok in enumerate(tokens):
+			if self.n_position_bits > 0:
+				if isinstance(self.position_mode, CrossAttentionMode) or \
+				   self.position_mode == PositionMode.RELATIVE:
+					pos_bits = self._encode_position(j)
+				else:
+					pos_bits = self.position_encoder.encode(j)
+				val_input = cat([tok, pos_bits]).unsqueeze(0)
+			else:
+				val_input = tok.unsqueeze(0)
+			proj = self.value_heads[head_idx](val_input).squeeze()
+			projected.append(proj)
+		return projected
+
+	def forward(
+		self,
+		tokens: list[Tensor],
+		context: list[Tensor] | None = None,
+	) -> list[Tensor]:
 		"""
-		Apply RAM attention to a sequence.
+		Apply attention to a sequence.
 
 		Args:
-			tokens: List of [input_bits] tensors, one per position
+			tokens: Query tokens (list of [query_bits] tensors)
+			context: Key/value tokens for cross-attention (None for self-attention)
 
 		Returns:
-			outputs: List of [input_bits] tensors after attention
+			outputs: Transformed tokens (list of [query_bits] tensors)
 		"""
-		seq_len = len(tokens)
+		# Determine queries and keys
+		queries = [t.squeeze() if t.ndim > 1 else t for t in tokens]
+
+		if context is None:
+			# Self-attention: keys = queries
+			keys = queries
+		else:
+			# Cross-attention: keys from context
+			keys = [t.squeeze() if t.ndim > 1 else t for t in context]
+
+		seq_len = len(queries)
+		key_len = len(keys)
+
 		if seq_len > self.max_seq_len:
 			raise ValueError(f"Sequence length {seq_len} exceeds max {self.max_seq_len}")
-
-		# Normalize inputs
-		tokens = [t.squeeze() if t.ndim > 1 else t for t in tokens]
+		if key_len > self.max_context_len:
+			raise ValueError(f"Context length {key_len} exceeds max {self.max_context_len}")
 
 		outputs = []
 
@@ -271,39 +312,15 @@ class RAMAttention(Module):
 			head_outputs = []
 
 			for h in range(self.num_heads):
-				# Compute attention pattern for this head
-				attention = self._compute_attention_pattern(
-					tokens, tokens, head_idx=h
-				)
+				# Compute attention pattern
+				attention = self._compute_attention_pattern(queries, keys, head_idx=h)
 
-				# Project values through this head
-				projected_values = []
-				for j, tok in enumerate(tokens):
-					if self.position_mode != PositionMode.NONE:
-						# For value projection, always use absolute position
-						# (even in RELATIVE mode, the value itself has an absolute position)
-						if self.position_mode == PositionMode.RELATIVE:
-							# RelativePositionEncoder.encode() takes a signed distance
-							# For absolute position, we need a different approach
-							# Use a simple binary encoding for value position
-							pos_bits = zeros(self.n_position_bits, dtype=uint8)
-							pos_val = j
-							for b in range(self.n_position_bits - 1, -1, -1):
-								pos_bits[b] = pos_val & 1
-								pos_val >>= 1
-						else:
-							pos_bits = self.position_encoder.encode(j)
-						val_input = cat([tok, pos_bits]).unsqueeze(0)
-					else:
-						val_input = tok.unsqueeze(0)
-					proj = self.value_heads[h](val_input).squeeze()
-					projected_values.append(proj)
+				# Project values
+				projected_values = self._project_values(keys, head_idx=h)
 
-				# Aggregate attended values using learned aggregator
+				# Aggregate attended values
 				aggregated = self._aggregate_values(
-					projected_values,
-					attention[i],
-					head_idx=h
+					projected_values, attention[i], head_idx=h
 				)
 				head_outputs.append(aggregated)
 
@@ -314,146 +331,117 @@ class RAMAttention(Module):
 
 		return outputs
 
-	def visualize_attention(self, tokens: list[Tensor], head_idx: int = 0) -> str:
+	def get_attention_weights(
+		self,
+		tokens: list[Tensor],
+		context: list[Tensor] | None = None,
+	) -> Tensor:
 		"""
-		Visualize attention pattern for a head.
+		Get attention weights (binary pattern).
 
-		Returns ASCII art of attention matrix.
+		Returns:
+			Tensor [num_queries, num_keys] with values 0 or 1
 		"""
-		attention = self._compute_attention_pattern(tokens, tokens, head_idx)
+		queries = [t.squeeze() if t.ndim > 1 else t for t in tokens]
+		keys = queries if context is None else [t.squeeze() if t.ndim > 1 else t for t in context]
 
-		lines = [f"Attention pattern (Head {head_idx}):"]
-		lines.append("    " + " ".join(f"{j:2d}" for j in range(len(tokens))))
-
-		for i in range(len(tokens)):
-			row = f"{i:2d}: "
-			for j in range(len(tokens)):
-				if self.causal and j > i:
-					row += " - "
-				elif attention[i, j] == 1:
-					row += " # "
-				else:
-					row += " . "
-			lines.append(row)
-
-		return "\n".join(lines)
+		# Return attention from head 0 (could aggregate across heads)
+		return self._compute_attention_pattern(queries, keys, head_idx=0).float()
 
 	def train_step(
 		self,
 		tokens: list[Tensor],
 		targets: list[Tensor],
+		context: list[Tensor] | None = None,
 	) -> int:
 		"""
-		Train the attention layer on input/target pairs.
-
-		This implements a form of EDRA through the attention mechanism:
-		1. Forward pass to get current outputs
-		2. For positions with errors, train output layer
-		3. Backpropagate to train heads, aggregators, values
+		Single training step.
 
 		Args:
-			tokens: Input token sequence
-			targets: Target output sequence (same length)
+			tokens: Input tokens (queries)
+			targets: Target outputs
+			context: Context for cross-attention
 
 		Returns:
-			Number of positions with errors (before training)
+			Number of positions with errors
 		"""
-		seq_len = len(tokens)
-		tokens = [t.squeeze() if t.ndim > 1 else t for t in tokens]
+		queries = [t.squeeze() if t.ndim > 1 else t for t in tokens]
 		targets = [t.squeeze() if t.ndim > 1 else t for t in targets]
+		keys = queries if context is None else [t.squeeze() if t.ndim > 1 else t for t in context]
 
 		errors = 0
 
-		for i in range(seq_len):
-			target = targets[i]
-
-			# Forward pass for this position
+		for i in range(len(queries)):
 			head_outputs = []
 
 			for h in range(self.num_heads):
-				attention = self._compute_attention_pattern(tokens, tokens, head_idx=h)
-
-				projected_values = []
-				for j, tok in enumerate(tokens):
-					if self.position_mode != PositionMode.NONE:
-						if self.position_mode == PositionMode.RELATIVE:
-							pos_bits = zeros(self.n_position_bits, dtype=uint8)
-							pos_val = j
-							for b in range(self.n_position_bits - 1, -1, -1):
-								pos_bits[b] = pos_val & 1
-								pos_val >>= 1
-						else:
-							pos_bits = self.position_encoder.encode(j)
-						val_input = cat([tok, pos_bits]).unsqueeze(0)
-					else:
-						val_input = tok.unsqueeze(0)
-					proj = self.value_heads[h](val_input).squeeze()
-					projected_values.append(proj)
-
-				aggregated = self._aggregate_values(
-					projected_values, attention[i], head_idx=h
-				)
+				attention = self._compute_attention_pattern(queries, keys, head_idx=h)
+				projected_values = self._project_values(keys, head_idx=h)
+				aggregated = self._aggregate_values(projected_values, attention[i], head_idx=h)
 				head_outputs.append(aggregated)
 
-			# Combine heads
 			combined_input = cat(head_outputs).unsqueeze(0)
 			output = self.output_layer(combined_input).squeeze()
 
-			# Check if output matches target
-			if not (output == target).all():
+			if not (output == targets[i]).all():
 				errors += 1
-
-				# Train output layer
-				self.output_layer.commit(combined_input, target.unsqueeze(0))
-
-				# For deeper training, we could also train:
-				# - aggregators to produce better head outputs
-				# - value heads to project better
-				# - similarity heads to attend to better positions
-				# This is left as optional deeper training
+				self.output_layer.commit(combined_input, targets[i].unsqueeze(0))
 
 		return errors
 
 	def train_attention_pattern(
 		self,
 		tokens: list[Tensor],
-		attention_targets: list[list[tuple[int, int, int]]],
+		attention_targets: list[tuple[int, int, int]],
 		head_idx: int = 0,
+		context: list[Tensor] | None = None,
 	) -> int:
 		"""
 		Train specific attention patterns for a head.
 
 		Args:
-			tokens: Token sequence
+			tokens: Query tokens
 			attention_targets: List of (query_idx, key_idx, should_attend) tuples
 			head_idx: Which head to train
+			context: Context for cross-attention
 
 		Returns:
 			Number of attention decisions corrected
 		"""
-		tokens = [t.squeeze() if t.ndim > 1 else t for t in tokens]
+		queries = [t.squeeze() if t.ndim > 1 else t for t in tokens]
+		keys = queries if context is None else [t.squeeze() if t.ndim > 1 else t for t in context]
+
 		corrections = 0
 
 		for query_idx, key_idx, should_attend in attention_targets:
 			if self.causal and key_idx > query_idx:
-				continue  # Skip invalid causal positions
+				continue
 
-			q = tokens[query_idx]
-			k = tokens[key_idx]
+			q = queries[query_idx]
+			k = keys[key_idx]
 
 			# Build similarity input
 			parts = [q, k]
-			if self.position_mode == PositionMode.BINARY:
-				q_pos = self.position_encoder.encode(query_idx)
-				k_pos = self.position_encoder.encode(key_idx)
-				parts.extend([q_pos, k_pos])
-			elif self.position_mode == PositionMode.RELATIVE:
-				rel_dist = self.position_encoder.encode_relative(query_idx, key_idx)
-				parts.append(rel_dist)
+
+			if isinstance(self.position_mode, CrossAttentionMode):
+				match self.position_mode:
+					case CrossAttentionMode.ENCODER_ONLY:
+						k_pos = self._encode_position(key_idx)
+						parts.append(k_pos)
+					case CrossAttentionMode.BOTH:
+						q_pos = self._encode_position(query_idx)
+						k_pos = self._encode_position(key_idx)
+						parts.extend([q_pos, k_pos])
+			else:
+				if self.position_mode == PositionMode.BINARY:
+					q_pos = self.position_encoder.encode(query_idx)
+					k_pos = self.position_encoder.encode(key_idx)
+					parts.extend([q_pos, k_pos])
+				elif self.position_mode == PositionMode.RELATIVE:
+					rel_dist = self.position_encoder.encode_relative(query_idx, key_idx)
+					parts.append(rel_dist)
 
 			similarity_input = cat(parts).unsqueeze(0)
-
-			# Check current attention
 			current = self.similarity_heads[head_idx](similarity_input).item()
 
 			if current != should_attend:
@@ -464,9 +452,14 @@ class RAMAttention(Module):
 		return corrections
 
 	def __repr__(self):
+		attn_type = "cross" if self.is_cross_attention else "self"
+		pos_name = self.position_mode.name if hasattr(self.position_mode, 'name') else str(self.position_mode)
 		return (
-			f"RAMAttention(heads={self.num_heads}, "
-			f"input={self.input_bits}b, "
-			f"pos={self.position_mode.name}, "
-			f"causal={self.causal})"
+			f"RAMAttention(type={attn_type}, heads={self.num_heads}, "
+			f"query={self.query_bits}b, key={self.key_bits}b, "
+			f"pos={pos_name}, causal={self.causal})"
 		)
+
+
+# Backwards-compatible alias (will be removed)
+RAMCrossAttention = RAMAttention

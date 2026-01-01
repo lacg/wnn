@@ -16,35 +16,15 @@ These components enable generalization by:
    - Configurable decomposition
    - Automatic pattern coverage
 
-4. MapperFactory: Creates the appropriate mapper based on strategy
+Note: MapperFactory is located in wnn.ram.factories.mapper
 """
 
 from wnn.ram.core.RAMLayer import RAMLayer
+from wnn.ram.enums import ContextMode, MapperStrategy
+from wnn.ram.enums.generalization import BitMapperMode as OutputMode  # Renamed to avoid conflict
 
 from torch import Tensor, zeros, uint8, cat, tensor
 from torch.nn import Module, ModuleList
-from enum import IntEnum
-
-
-class ContextMode(IntEnum):
-	"""How much context each bit sees in BitLevelMapper."""
-	CUMULATIVE = 0  # bit i sees bits 0..i-1 (only LOWER bits for flip)
-	FULL = 1        # each bit sees all bits
-	LOCAL = 2       # each bit sees nearby bits (sliding window)
-
-
-class OutputMode(IntEnum):
-	"""What to learn in BitLevelMapper."""
-	OUTPUT = 0  # Learn the output bit value directly
-	FLIP = 1    # Learn whether to flip (XOR) the input bit
-
-
-class MapperStrategy(IntEnum):
-	"""Generalization strategy for MapperFactory."""
-	DIRECT = 0        # Standard RAMLayer (no generalization)
-	BIT_LEVEL = 1     # Use BitLevelMapper
-	COMPOSITIONAL = 2 # Use CompositionalMapper
-	HYBRID = 3        # Combine compositional + bit-level
 
 
 class BitLevelMapper(Module):
@@ -493,6 +473,9 @@ class GeneralizingProjection(Module):
 		if strategy != MapperStrategy.DIRECT and input_bits != output_bits:
 			raise ValueError(f"{strategy.name} strategy requires input_bits == output_bits")
 
+		# Lazy import to avoid circular dependency
+		from wnn.ram.factories import MapperFactory
+
 		# Use match statement with factory for mapper creation
 		match strategy:
 			case MapperStrategy.DIRECT | MapperStrategy.BIT_LEVEL | MapperStrategy.COMPOSITIONAL:
@@ -559,89 +542,3 @@ class GeneralizingProjection(Module):
 
 	def __repr__(self):
 		return f"GeneralizingProjection(in={self.input_bits}, out={self.output_bits}, strategy={self.strategy.name})"
-
-
-class MapperFactory:
-	"""
-	Factory for creating mappers based on strategy.
-
-	This provides a clean interface for creating the appropriate mapper
-	without needing to import individual mapper classes.
-
-	Example:
-		mapper = MapperFactory.create(MapperStrategy.BIT_LEVEL, n_bits=8)
-		mapper = MapperFactory.create("bit_level", n_bits=8)  # string also works
-	"""
-
-	@staticmethod
-	def create(
-		strategy: MapperStrategy | str,
-		n_bits: int,
-		n_groups: int = 2,
-		context_mode: ContextMode | str = ContextMode.CUMULATIVE,
-		output_mode: OutputMode | str = OutputMode.FLIP,
-		local_window: int = 3,
-		cross_group_context: bool = True,
-		rng: int | None = None,
-	) -> Module:
-		"""
-		Create a mapper based on the specified strategy.
-
-		Args:
-			strategy: MapperStrategy enum or string
-			n_bits: Number of bits to process
-			n_groups: Number of groups for compositional strategies
-			context_mode: Context mode for bit-level mapper
-			output_mode: Output mode for bit-level mapper
-			local_window: Window size for LOCAL context mode
-			cross_group_context: Whether groups can see each other
-			rng: Random seed
-
-		Returns:
-			Configured mapper module
-		"""
-		# Convert string to enum if needed
-		if isinstance(strategy, str):
-			strategy = MapperStrategy[strategy.upper()]
-		if isinstance(context_mode, str):
-			context_mode = ContextMode[context_mode.upper()]
-		if isinstance(output_mode, str):
-			output_mode = OutputMode[output_mode.upper()]
-
-		if strategy == MapperStrategy.DIRECT:
-			return RAMLayer(
-				total_input_bits=n_bits,
-				num_neurons=n_bits,
-				n_bits_per_neuron=min(n_bits, 12),
-				rng=rng,
-			)
-		elif strategy == MapperStrategy.BIT_LEVEL:
-			return BitLevelMapper(
-				n_bits=n_bits,
-				context_mode=context_mode,
-				output_mode=output_mode,
-				local_window=local_window,
-				rng=rng,
-			)
-		elif strategy == MapperStrategy.COMPOSITIONAL:
-			return CompositionalMapper(
-				n_bits=n_bits,
-				n_groups=n_groups,
-				cross_group_context=cross_group_context,
-				rng=rng,
-			)
-		elif strategy == MapperStrategy.HYBRID:
-			return GeneralizingProjection(
-				input_bits=n_bits,
-				output_bits=n_bits,
-				strategy=MapperStrategy.HYBRID,
-				n_groups=n_groups,
-				rng=rng,
-			)
-		else:
-			raise ValueError(f"Unknown strategy: {strategy}")
-
-	@staticmethod
-	def available_strategies() -> list[str]:
-		"""Return list of available strategy names."""
-		return [s.name.lower() for s in MapperStrategy]

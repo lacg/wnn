@@ -10,3 +10,4 @@ class PositionEncoding(IntEnum):
 	NONE = 0       # No position encoding
 	BINARY = 1     # Binary representation of position
 	LEARNED = 2    # Learned position embeddings
+	SINUSOIDAL = 3 # Discrete approximation of sinusoidal

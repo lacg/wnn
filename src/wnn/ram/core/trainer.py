@@ -19,22 +19,11 @@ This allows us to backpropagate "targets" through the network.
 """
 
 from wnn.ram.core.transformers.seq2seq import RAMSeq2Seq
-from wnn.ram.core.transformers.embedding import PositionEncoding
+from wnn.ram.enums import PositionEncoding, LayerType
 
 from torch import Tensor
 from dataclasses import dataclass
 from typing import Callable
-from enum import IntEnum
-
-
-class LayerType(IntEnum):
-	"""Types of layers in the RAM Transformer."""
-	EMBEDDING = 0
-	INPUT_PROJ = 1
-	ATTENTION = 2
-	FFN = 3
-	OUTPUT_PROJ = 4
-	TOKEN_MAPPER = 5
 
 
 @dataclass

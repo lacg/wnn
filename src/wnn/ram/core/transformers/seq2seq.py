@@ -152,7 +152,7 @@ class RAMSeq2Seq(Module):
 		# Stacked attention layers
 		self.attention_layers = ModuleList([
 			RAMAttention(
-				input_bits=self.hidden_bits,
+				query_bits=self.hidden_bits,  # key_bits=None -> self-attention
 				num_heads=num_heads,
 				position_mode=position_mode,
 				max_seq_len=max_seq_len,
