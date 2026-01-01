@@ -742,3 +742,22 @@ class Memory(Module):
 		from wnn.ram.core.serialization import load_model
 		return load_model(path, model_class=cls, device=device)
 
+	# =========================================================================
+	# Device helpers
+	# =========================================================================
+
+	@property
+	def device(self) -> device:
+		"""Get the device this memory is on."""
+		return self.memory_words.device
+
+	def cuda(self, device_id: int | None = None) -> "Memory":
+		"""Move memory to GPU."""
+		if device_id is not None:
+			return self.to(device(f"cuda:{device_id}"))
+		return self.to(device("cuda"))
+
+	def cpu(self) -> "Memory":
+		"""Move memory to CPU."""
+		return self.to(device("cpu"))
+

@@ -6,6 +6,7 @@ Fundamental building blocks for RAM neural networks.
 
 # Fundamental storage and layer
 from wnn.ram.core.Memory import Memory
+from wnn.ram.core.SparseMemory import SparseMemory
 from wnn.ram.core.RAMLayer import RAMLayer
 
 # Generalization components
@@ -51,8 +52,19 @@ from wnn.ram.core.batch import (
     uncollate_batch,
 )
 
-# Generation result types (use model.decode() / model.search() instead)
-from wnn.ram.core.generation import GenerationResult, BeamCandidate
+# Generation result types and streaming functions
+from wnn.ram.core.generation import (
+    GenerationResult,
+    BeamCandidate,
+    StreamToken,
+    stream_greedy_decode,
+    stream_sample_decode,
+    stream_top_k_decode,
+    collect_stream,
+)
+
+# Sequence generator wrapper
+from wnn.ram.core.sequence_generator import SequenceGenerator
 
 # Transformer components (submodule)
 from wnn.ram.core import transformers
@@ -97,6 +109,7 @@ from wnn.ram.core.transformers import (
 __all__ = [
     # Fundamental
     'Memory',
+    'SparseMemory',
     'RAMLayer',
     # Generalization
     'BitLevelMapper',
@@ -132,9 +145,10 @@ __all__ = [
     'pad_sequences',
     'collate_sequences',
     'uncollate_batch',
-    # Generation types (use model.decode() / model.search())
+    # Generation types and wrapper
     'GenerationResult',
     'BeamCandidate',
+    'SequenceGenerator',
     # Submodules
     'transformers',
     # Transformer components (re-exported)

@@ -148,50 +148,55 @@ class XORCrossAttention(ComputedAttention):
         top_k_values = [values[idx] for _, idx in top_k_pairs]
         top_k_sims = [sim for sim, _ in top_k_pairs]
 
-        # Apply aggregation strategy
-        if self.aggregation == TopKAggregation.FIRST or k == 1:
-            # Just use the best match
+        # Short-circuit for k=1 (always returns first)
+        if k == 1:
             return top_k_values[0].clone()
 
-        elif self.aggregation == TopKAggregation.XOR:
-            # Bitwise XOR of all k values
-            result = top_k_values[0].clone()
-            for i in range(1, k):
-                result = result ^ top_k_values[i]
-            return result
-
-        elif self.aggregation == TopKAggregation.MAJORITY:
-            # Per-bit majority voting (unweighted)
-            n_bits = len(top_k_values[0])
-            result = zeros(n_bits, dtype=uint8)
-            threshold = k // 2
-
-            for bit in range(n_bits):
-                ones_count = sum(v[bit].item() for v in top_k_values)
-                result[bit] = 1 if ones_count > threshold else 0
-
-            return result
-
-        elif self.aggregation == TopKAggregation.WEIGHTED:
-            # Similarity-weighted per-bit voting
-            n_bits = len(top_k_values[0])
-            result = zeros(n_bits, dtype=uint8)
-            total_sim = sum(top_k_sims)
-
-            if total_sim == 0:
+        # Apply aggregation strategy
+        match self.aggregation:
+            case TopKAggregation.FIRST:
+                # Just use the best match
                 return top_k_values[0].clone()
 
-            for bit in range(n_bits):
-                weighted_ones = sum(
-                    sim for v, sim in zip(top_k_values, top_k_sims)
-                    if v[bit].item() == 1
-                )
-                result[bit] = 1 if weighted_ones > total_sim / 2 else 0
+            case TopKAggregation.XOR:
+                # Bitwise XOR of all k values
+                result = top_k_values[0].clone()
+                for i in range(1, k):
+                    result = result ^ top_k_values[i]
+                return result
 
-            return result
+            case TopKAggregation.MAJORITY:
+                # Per-bit majority voting (unweighted)
+                n_bits = len(top_k_values[0])
+                result = zeros(n_bits, dtype=uint8)
+                threshold = k // 2
 
-        else:
-            raise ValueError(f"Unknown aggregation: {self.aggregation}")
+                for bit in range(n_bits):
+                    ones_count = sum(v[bit].item() for v in top_k_values)
+                    result[bit] = 1 if ones_count > threshold else 0
+
+                return result
+
+            case TopKAggregation.WEIGHTED:
+                # Similarity-weighted per-bit voting
+                n_bits = len(top_k_values[0])
+                result = zeros(n_bits, dtype=uint8)
+                total_sim = sum(top_k_sims)
+
+                if total_sim == 0:
+                    return top_k_values[0].clone()
+
+                for bit in range(n_bits):
+                    weighted_ones = sum(
+                        sim for v, sim in zip(top_k_values, top_k_sims)
+                        if v[bit].item() == 1
+                    )
+                    result[bit] = 1 if weighted_ones > total_sim / 2 else 0
+
+                return result
+
+            case _:
+                raise ValueError(f"Unknown aggregation: {self.aggregation}")
 
     def get_attention_weights(
         self,
