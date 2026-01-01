@@ -112,7 +112,8 @@ class BitLevelMapper(Module):
 				return self.n_bits
 
 			case ContextMode.LOCAL:
-				return min(self.local_window, self.n_bits)
+				# local_window=0 means "just the current bit" (minimum 1)
+				return max(1, min(self.local_window, self.n_bits))
 
 			case ContextMode.BIDIRECTIONAL:
 				# Symmetric window around bit position
@@ -150,7 +151,13 @@ class BitLevelMapper(Module):
 				return bits.clone()
 
 			case ContextMode.LOCAL:
-				# Window centered on bit_pos (forward-looking)
+				# Window centered on bit_pos
+				# local_window=0 means "just the current bit"
+				if self.local_window == 0:
+					# Return just the current bit
+					idx = self.n_bits - bit_pos - 1
+					return bits[idx:idx+1].clone()
+
 				half = self.local_window // 2
 				start = max(0, bit_pos - half)
 				end = min(self.n_bits, bit_pos + half + 1)
