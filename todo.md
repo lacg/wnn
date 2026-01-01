@@ -63,8 +63,12 @@ RAM networks generalize when complex operations are decomposed into small learna
 | Addition | Full adder (8/200) | Carry propagation | 8 (binary) / 200 (decimal) |
 | Multiply | Full adder + digit-mult | Shift-and-add | 8 (binary) / 300 (decimal) |
 | Division | Full subtractor (8) | Shift-and-subtract | 8 (binary) |
+| Language | Type+Position features | Pattern abstraction | ~3,250 (vs 17,576) |
 
 The pattern: **Decompose → Learn primitives → Compose/Recur → Generalize**
+
+Note: Language decomposition improves from 39% → 72%, not 100% like arithmetic.
+This is because language patterns are probabilistic, not deterministic.
 
 ## Explored: Sequence-to-Sequence (Cross-Attention)
 - [x] RAMEncoderDecoder - Full encoder-decoder with cross-attention
@@ -72,9 +76,14 @@ The pattern: **Decompose → Learn primitives → Compose/Recur → Generalize**
 - [x] Reverse task - 100% (position routing)
 - [x] Increment task - 100% (alignment + FFN transformation)
 - [x] Character mapping - 100% (identity alignment)
-- [ ] Arithmetic evaluation - 0% (requires computation, not just routing)
+- [x] Arithmetic evaluation - 100% with HYBRID approach!
 
-**Key Finding**: Cross-attention excels at **alignment** (which source position to read) but cannot do **computation** (combining values mathematically). For arithmetic in seq2seq, would need to integrate decomposed primitives (LearnedFullAdder).
+**Key Finding**: Cross-attention excels at **alignment** (which source position to read) but cannot do **computation** (combining values mathematically).
+
+**Solution: Hybrid Seq2Seq** = Cross-attention (alignment) + Decomposed Primitives (computation)
+- Position-based operand extraction (alignment)
+- LearnedFullAdder/Subtractor for arithmetic (computation)
+- Result: 100% on test cases, 75%+ generalization
 
 | Seq2Seq Task | Accuracy | Why |
 |--------------|----------|-----|
@@ -83,18 +92,27 @@ The pattern: **Decompose → Learn primitives → Compose/Recur → Generalize**
 | Increment | 100% | Alignment + FFN transformation |
 | Arithmetic | 0% | Requires computation, not just routing |
 
-## Explored: Language Modeling (Limited Generalization Expected)
-- [x] N-gram Language Model - Memorizes context→next mappings
-- [x] Recurrent Language Model - State-based character prediction
+## Explored: Language Modeling (Improved with Pattern Abstraction)
+- [x] N-gram Language Model - Memorizes context→next (39% generalization)
+- [x] Backoff N-gram - Falls back to shorter contexts (39%)
+- [x] Pattern Abstraction - Decomposes chars into features (**72%** generalization!)
+- [x] Hierarchical N-gram - Ensemble voting (61%)
 
-**Key Finding**: Unlike arithmetic, language lacks universal primitives for decomposition:
-- Train accuracy: 100% on seen patterns
-- Test accuracy: ~57% on unseen combinations (21% gap)
-- This is **expected** - language is fundamentally about statistical patterns, not composable operations
+**Key Finding**: Pattern Abstraction applies decomposition to language!
 
-Language modeling shows where decomposition **doesn't** apply:
-| Aspect | Arithmetic | Language |
-|--------|------------|----------|
-| Primitives | Universal (XOR, carry) | Context-dependent |
-| Composition | Perfect (deterministic) | Probabilistic |
-| Generalization | 100% from primitives | Requires similar training contexts |
+Decompose characters into **features** (like bits for numbers):
+- **Type**: vowel (V), consonant (C), space, punctuation (5 values)
+- **Position**: 0-25 for a-z (26 values)
+
+This reduces pattern space from O(26^n) to O(5^n × 26):
+- Original 3-gram: 26³ = 17,576 patterns
+- Pattern abstraction: 5³ × 26 = 3,250 patterns (5× reduction)
+
+| Approach | Generalization | Key Idea |
+|----------|---------------|----------|
+| Basic N-gram | 39% | Exact context memorization |
+| Backoff N-gram | 39% | Graceful degradation |
+| **Pattern Abstraction** | **72%** | **Character feature decomposition** |
+| Hierarchical | 61% | Ensemble voting |
+
+Pattern Abstraction shows that **decomposition CAN improve language** - just need the right features!
