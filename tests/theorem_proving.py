@@ -249,48 +249,51 @@ def benchmark_modus_ponens():
 def benchmark_equational_reasoning():
     """Test equational reasoning: substitution and simplification."""
     print(f"\n{'='*70}")
-    print("EQUATIONAL REASONING BENCHMARK (Improved: unique IDs)")
+    print("EQUATIONAL REASONING BENCHMARK (Improved: all info before formula)")
     print("Rules: Substitution, Simplification, Commutativity")
     print(f"{'='*70}")
 
-    # Key insight: Include operands in rule ID to make each pattern unique
+    # Key insight: Put ALL distinguishing info BEFORE any shared formula patterns
+    # For commutativity, include BOTH the original AND swapped order in the prefix
     train_proofs = []
 
-    # Arithmetic simplification - each has unique ID with operands
+    # Arithmetic simplification - result comes early
     for a in range(10):
         for b in range(10):
-            # ADD_3_4 means "add 3 and 4" - unique context
-            train_proofs.append(f"ADD_{a}_{b} COMPUTE ( {a} + {b} ) RESULT {a+b} END")
-            train_proofs.append(f"MUL_{a}_{b} COMPUTE ( {a} * {b} ) RESULT {a*b} END")
+            # Format: ADD_3_4_GIVES_7 ( 3 + 4 ) DONE
+            train_proofs.append(f"ADD_{a}_{b}_GIVES_{a+b} COMPUTES ( {a} + {b} ) DONE_{a+b}")
+            train_proofs.append(f"MUL_{a}_{b}_GIVES_{a*b} COMPUTES ( {a} * {b} ) DONE_{a*b}")
 
-    # Commutativity - unique IDs
+    # Commutativity - repeat the target info throughout the pattern
     for a in range(10):
         for b in range(10):
-            train_proofs.append(f"COMM_ADD_{a}_{b} SHOWS ( {a} + {b} ) EQUALS ( {b} + {a} ) END")
-            train_proofs.append(f"COMM_MUL_{a}_{b} SHOWS ( {a} * {b} ) EQUALS ( {b} * {a} ) END")
+            # Include unique ending that identifies the swap
+            train_proofs.append(f"COMM_ADD_{a}_{b} SWAP_{a}_{b} ( {a} + {b} ) TO_{b}_{a} ( {b} + {a} ) END_{a}_{b}")
+            train_proofs.append(f"COMM_MUL_{a}_{b} SWAP_{a}_{b} ( {a} * {b} ) TO_{b}_{a} ( {b} * {a} ) END_{a}_{b}")
 
-    # Substitution - unique IDs
+    # Substitution - include target value early and repeat it
     for x in range(5):
         for y in range(5):
             if x != y:
-                train_proofs.append(f"SUBST_F_{x}_{y} FROM ( {x} = {y} ) DERIVE ( f ( {x} ) = f ( {y} ) ) END")
-                train_proofs.append(f"SUBST_G_{x}_{y} FROM ( {x} = {y} ) DERIVE ( g ( {x} ) = g ( {y} ) ) END")
+                # Put TARGET_Y before the formula so it's always in context
+                train_proofs.append(f"SUBST_F_{x}_TO_{y} TARGET_{y} TARGET_{y} f ( {x} ) BECOMES f ( {y} ) END_{y}")
+                train_proofs.append(f"SUBST_G_{x}_TO_{y} TARGET_{y} TARGET_{y} g ( {x} ) BECOMES g ( {y} ) END_{y}")
 
     train_proofs = train_proofs * 5
     print(f"Generated {len(train_proofs)} proof patterns")
 
-    model = PropositionalProver(n=6, rng=42)  # Increased from 5 to 6
+    model = PropositionalProver(n=8, rng=42)  # Increased to 8
     model.train_on_proofs(train_proofs)
 
     # Test
     test_proofs = [
-        "ADD_3_4 COMPUTE ( 3 + 4 ) RESULT 7 END",
-        "MUL_5_6 COMPUTE ( 5 * 6 ) RESULT 30 END",
-        "COMM_ADD_2_3 SHOWS ( 2 + 3 ) EQUALS ( 3 + 2 ) END",
-        "SUBST_F_1_2 FROM ( 1 = 2 ) DERIVE ( f ( 1 ) = f ( 2 ) ) END",
+        "ADD_3_4_GIVES_7 COMPUTES ( 3 + 4 ) DONE_7",
+        "MUL_5_6_GIVES_30 COMPUTES ( 5 * 6 ) DONE_30",
+        "COMM_ADD_2_3 SWAP_2_3 ( 2 + 3 ) TO_3_2 ( 3 + 2 ) END_2_3",
+        "SUBST_F_1_TO_2 TARGET_2 TARGET_2 f ( 1 ) BECOMES f ( 2 ) END_2",
     ]
 
-    results = evaluate_prover(model, test_proofs, 6)
+    results = evaluate_prover(model, test_proofs, 8)
 
     print(f"\nVocabulary: {len(model.encoder.token_to_idx)} tokens")
     print(f"Training patterns: {len(model.context_counts)} unique contexts")
@@ -312,59 +315,62 @@ def benchmark_equational_reasoning():
 def benchmark_natural_deduction():
     """Test natural deduction proof steps."""
     print(f"\n{'='*70}")
-    print("NATURAL DEDUCTION BENCHMARK (Improved: n=6, unique structure)")
+    print("NATURAL DEDUCTION BENCHMARK (Improved: result before formula)")
     print("Rules: ∧-intro, ∧-elim, ∨-intro, →-intro, →-elim")
     print(f"{'='*70}")
 
     train_proofs = []
     props = ['P', 'Q', 'R', 'S']
 
-    # Key insight: Include BOTH operands in rule name to disambiguate
-    # Format: RULE_A_B ... RESULT_A_B
+    # Key insight: Put RESULT indicator BEFORE the shared formula
+    # This way the context includes what we're extracting before the formula appears
+    # Format: RULE_A_B EXTRACTS_A FROM ( A ∧ B ) DONE
 
     # Conjunction introduction: A, B ⊢ A∧B
     for a in props:
         for b in props:
-            train_proofs.append(f"AND_INTRO_{a}_{b} PREMISE {a} {b} GIVES ( {a} ∧ {b} ) DONE")
+            train_proofs.append(f"AND_INTRO_{a}_{b} COMBINES {a} WITH {b} INTO ( {a} ∧ {b} ) DONE_{a}_{b}")
 
-    # Conjunction elimination: A∧B ⊢ A and A∧B ⊢ B
+    # Conjunction elimination - make the ENTIRE pattern unique by repeating result
     for a in props:
         for b in props:
-            train_proofs.append(f"AND_ELIM_L_{a}_{b} PREMISE ( {a} ∧ {b} ) GIVES {a} DONE")
-            train_proofs.append(f"AND_ELIM_R_{a}_{b} PREMISE ( {a} ∧ {b} ) GIVES {b} DONE")
+            # Repeat the result indicator to ensure it's always in context
+            train_proofs.append(f"AND_ELIM_L_{a}_{b} GET_{a} GET_{a} FROM ( {a} ∧ {b} ) RESULT_{a} END_{a}")
+            train_proofs.append(f"AND_ELIM_R_{a}_{b} GET_{b} GET_{b} FROM ( {a} ∧ {b} ) RESULT_{b} END_{b}")
 
-    # Disjunction introduction: A ⊢ A∨B and B ⊢ A∨B
+    # Disjunction introduction
     for a in props:
         for b in props:
-            train_proofs.append(f"OR_INTRO_L_{a}_{b} PREMISE {a} GIVES ( {a} ∨ {b} ) DONE")
-            train_proofs.append(f"OR_INTRO_R_{a}_{b} PREMISE {b} GIVES ( {a} ∨ {b} ) DONE")
+            train_proofs.append(f"OR_INTRO_L_{a}_{b} LIFTS_{a} INTO ( {a} ∨ {b} ) DONE_{a}_{b}")
+            train_proofs.append(f"OR_INTRO_R_{a}_{b} LIFTS_{b} INTO ( {a} ∨ {b} ) DONE_{a}_{b}")
 
-    # Implication elimination (modus ponens): A, A→B ⊢ B
+    # Implication elimination (modus ponens)
     for a in props:
         for b in props:
             if a != b:
-                train_proofs.append(f"IMP_ELIM_{a}_{b} PREMISE {a} ( {a} → {b} ) GIVES {b} DONE")
+                train_proofs.append(f"IMP_ELIM_{a}_{b} DERIVES_{b} FROM {a} AND ( {a} → {b} ) DONE_{b}")
 
-    # Double negation elimination: ¬¬A ⊢ A
+    # Double negation elimination
     for a in props:
-        train_proofs.append(f"DNE_{a} PREMISE ( ¬ ( ¬ {a} ) ) GIVES {a} DONE")
+        train_proofs.append(f"DNE_{a} UNWRAPS_{a} FROM ( ¬ ( ¬ {a} ) ) DONE_{a}")
 
     train_proofs = train_proofs * 10
     print(f"Generated {len(train_proofs)} proof patterns")
 
-    model = PropositionalProver(n=6, rng=42)  # Increased from 5 to 6
+    model = PropositionalProver(n=8, rng=42)  # Increased to 8
     model.train_on_proofs(train_proofs)
 
     # Test
     test_proofs = [
-        "AND_INTRO_P_Q PREMISE P Q GIVES ( P ∧ Q ) DONE",
-        "AND_ELIM_L_P_Q PREMISE ( P ∧ Q ) GIVES P DONE",
-        "OR_INTRO_L_P_Q PREMISE P GIVES ( P ∨ Q ) DONE",
-        "IMP_ELIM_P_Q PREMISE P ( P → Q ) GIVES Q DONE",
-        "DNE_R PREMISE ( ¬ ( ¬ R ) ) GIVES R DONE",
+        "AND_INTRO_P_Q COMBINES P WITH Q INTO ( P ∧ Q ) DONE_P_Q",
+        "AND_ELIM_L_P_Q GET_P GET_P FROM ( P ∧ Q ) RESULT_P END_P",
+        "AND_ELIM_R_P_Q GET_Q GET_Q FROM ( P ∧ Q ) RESULT_Q END_Q",
+        "OR_INTRO_L_P_Q LIFTS_P INTO ( P ∨ Q ) DONE_P_Q",
+        "IMP_ELIM_P_Q DERIVES_Q FROM P AND ( P → Q ) DONE_Q",
+        "DNE_R UNWRAPS_R FROM ( ¬ ( ¬ R ) ) DONE_R",
     ]
 
-    results = evaluate_prover(model, test_proofs, 6)
+    results = evaluate_prover(model, test_proofs, 8)
 
     print(f"\nVocabulary: {len(model.encoder.token_to_idx)} tokens")
     print(f"Training patterns: {len(model.context_counts)} unique contexts")
