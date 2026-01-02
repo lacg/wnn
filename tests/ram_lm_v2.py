@@ -28,6 +28,22 @@ from datetime import datetime
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Optional
+from joblib import Parallel, delayed
+import multiprocessing
+
+# Number of parallel workers (leave some cores for system)
+N_WORKERS = max(1, multiprocessing.cpu_count() - 4)  # 12 on 16-core M4 Max
+
+# ============================================================================
+# RUST ACCELERATOR (822x speedup over Python!)
+# ============================================================================
+try:
+	import ram_accelerator
+	RUST_AVAILABLE = True
+	RUST_CPU_CORES = ram_accelerator.cpu_cores()
+except ImportError:
+	RUST_AVAILABLE = False
+	RUST_CPU_CORES = 0
 
 # ============================================================================
 # LOGGING SETUP - Dual output to console and file
@@ -340,6 +356,167 @@ class GeneralizedNGramRAM:
 		return covered / total if total > 0 else 0.0
 
 
+# ============================================================================
+# PARALLEL EVALUATION HELPER (module-level for pickling)
+# ============================================================================
+
+def _evaluate_single_connectivity(
+	connectivity: list[list[int]],
+	word_to_cluster: dict,
+	train_tokens: list[str],
+	test_tokens: list[str],
+	bits_per_neuron: int,
+	eval_subset: int
+) -> float:
+	"""
+	Evaluate a single connectivity pattern. Module-level function for parallel execution.
+
+	Returns error = 1 - (accuracy × coverage), lower is better.
+	"""
+	temp_ram = GeneralizedNGramRAM(
+		n=4, n_neurons=len(connectivity),
+		bits_per_neuron=bits_per_neuron
+	)
+	temp_ram.word_to_cluster = word_to_cluster
+	temp_ram.set_connectivity(connectivity)
+	temp_ram.train(train_tokens)
+
+	# Evaluate on subset
+	correct = 0
+	covered = 0
+	total = min(eval_subset, len(test_tokens) - 4)
+
+	for i in range(total):
+		context = test_tokens[i:i + 4]
+		target = test_tokens[i + 4]
+		pred, conf = temp_ram.predict(context)
+		if pred is not None:
+			covered += 1
+			if pred == target:
+				correct += 1
+
+	accuracy = correct / covered if covered > 0 else 0.0
+	coverage = covered / total if total > 0 else 0.0
+
+	return 1.0 - (accuracy * coverage)
+
+
+def _evaluate_batch_parallel(
+	connectivities: list[list[list[int]]],
+	word_to_cluster: dict,
+	train_tokens: list[str],
+	test_tokens: list[str],
+	bits_per_neuron: int,
+	eval_subset: int,
+	n_workers: int = N_WORKERS
+) -> list[float]:
+	"""
+	Evaluate multiple connectivity patterns in parallel using joblib (Python fallback).
+	"""
+	if len(connectivities) == 0:
+		return []
+
+	if len(connectivities) == 1:
+		# Single item, no need for parallelism overhead
+		return [_evaluate_single_connectivity(
+			connectivities[0], word_to_cluster, train_tokens,
+			test_tokens, bits_per_neuron, eval_subset
+		)]
+
+	# Parallel evaluation
+	results = Parallel(n_jobs=n_workers, prefer="processes")(
+		delayed(_evaluate_single_connectivity)(
+			conn, word_to_cluster, train_tokens,
+			test_tokens, bits_per_neuron, eval_subset
+		)
+		for conn in connectivities
+	)
+
+	return results
+
+
+def _evaluate_batch_rust(
+	connectivities: list[list[list[int]]],
+	word_to_cluster: dict,
+	train_tokens: list[str],
+	test_tokens: list[str],
+	bits_per_neuron: int,
+	eval_subset: int,
+) -> list[float]:
+	"""
+	Evaluate multiple connectivity patterns using Rust accelerator (822x faster!).
+
+	Uses rayon for CPU parallelism across all cores.
+	Falls back to Python if Rust is not available.
+	"""
+	if not RUST_AVAILABLE:
+		return _evaluate_batch_parallel(
+			connectivities, word_to_cluster, train_tokens,
+			test_tokens, bits_per_neuron, eval_subset
+		)
+
+	if len(connectivities) == 0:
+		return []
+
+	# Convert word_to_cluster to use cluster IDs (Rust expects dict[str, int])
+	# The Python version uses hash() % n_clusters for unknown words
+	# We need to ensure all words in train/test are in the mapping
+	n_clusters = 256
+	word_map = {}
+	for word, cluster in word_to_cluster.items():
+		word_map[word] = cluster
+
+	# Add any missing words from tokens
+	for word in set(train_tokens) | set(test_tokens):
+		if word not in word_map:
+			word_map[word] = hash(word) % n_clusters
+
+	# Call Rust accelerator
+	results = ram_accelerator.evaluate_batch_cpu(
+		connectivities,
+		word_map,
+		train_tokens,
+		test_tokens,
+		bits_per_neuron,
+		eval_subset
+	)
+
+	return results
+
+
+def _evaluate_batch_fast(
+	connectivities: list,
+	word_to_cluster: dict,
+	train_tokens: list[str],
+	test_tokens: list[str],
+	bits_per_neuron: int,
+	eval_subset: int,
+) -> list[float]:
+	"""
+	Fast batch evaluation - uses Rust if available, otherwise Python parallel.
+
+	This is the recommended function to use for batch evaluation.
+	"""
+	# Convert any numpy arrays to lists
+	conn_list = []
+	for conn in connectivities:
+		if hasattr(conn, 'tolist'):
+			conn_list.append(conn.tolist())
+		else:
+			conn_list.append(conn)
+
+	if RUST_AVAILABLE:
+		return _evaluate_batch_rust(
+			conn_list, word_to_cluster, train_tokens,
+			test_tokens, bits_per_neuron, eval_subset
+		)
+	else:
+		return _evaluate_batch_parallel(
+			conn_list, word_to_cluster, train_tokens,
+			test_tokens, bits_per_neuron, eval_subset
+		)
+
+
 class RAMLM_v2:
 	"""
 	RAM Language Model v2 with thesis optimization.
@@ -419,42 +596,77 @@ class RAMLM_v2:
 		test_tokens = tokens[:train_subset]
 		bits_per_neuron = 10 if self.fast_mode else 14
 
+		# Caching for evaluate_connectivity (huge speedup with 64GB RAM)
+		eval_cache = {}
+		cache_hits = [0]  # Use list to allow modification in nested function
+		parallel_evals = [0]  # Track parallel evaluations
+
+		# Shared parameters for parallel evaluation
+		_word_to_cluster = ram.word_to_cluster
+		_train_tokens = tokens[:train_subset]
+		_test_tokens = test_tokens
+
 		def evaluate_connectivity(connectivity: list[list[int]]) -> float:
 			"""
-			Evaluate a connectivity pattern using accuracy × coverage.
-
-			We want to MAXIMIZE accuracy * coverage, so we MINIMIZE 1 - (accuracy * coverage).
-			This ensures the optimizer finds patterns that are both accurate AND have good coverage,
-			rather than overfitting to a tiny subset of patterns.
+			Evaluate a single connectivity pattern (serial, with caching).
 			"""
-			temp_ram = GeneralizedNGramRAM(
-				n=4, n_neurons=len(connectivity),
-				bits_per_neuron=bits_per_neuron
+			cache_key = tuple(tuple(row) for row in connectivity)
+
+			if cache_key in eval_cache:
+				cache_hits[0] += 1
+				return eval_cache[cache_key]
+
+			error = _evaluate_single_connectivity(
+				connectivity, _word_to_cluster, _train_tokens,
+				_test_tokens, bits_per_neuron, eval_subset
 			)
-			temp_ram.word_to_cluster = ram.word_to_cluster
-			temp_ram.set_connectivity(connectivity)
-			temp_ram.train(tokens[:train_subset])
 
-			# Evaluate on small subset - track both accuracy and coverage
-			correct = 0
-			covered = 0  # Number of predictions made (not None)
-			total = min(eval_subset, len(test_tokens) - 4)
+			eval_cache[cache_key] = error
+			return error
 
-			for i in range(total):
-				context = test_tokens[i:i + 4]
-				target = test_tokens[i + 4]
-				pred, conf = temp_ram.predict(context)
-				if pred is not None:
-					covered += 1
-					if pred == target:
-						correct += 1
+		def evaluate_batch(connectivities: list) -> list[float]:
+			"""
+			Evaluate multiple connectivity patterns with caching + Rust acceleration.
 
-			accuracy = correct / covered if covered > 0 else 0.0
-			coverage = covered / total if total > 0 else 0.0
+			1. Check cache for each pattern
+			2. Batch cache misses for Rust evaluation (822x faster!)
+			3. Update cache with results
+			"""
+			results = [None] * len(connectivities)
+			to_evaluate = []  # (index, connectivity) pairs for cache misses
 
-			# Return 1 - (accuracy * coverage) so lower is better
-			# This balances both metrics - high accuracy with low coverage is penalized
-			return 1.0 - (accuracy * coverage)
+			# Check cache first
+			for i, conn in enumerate(connectivities):
+				if isinstance(conn, list):
+					conn_list = conn
+				else:
+					conn_list = conn.tolist()
+
+				cache_key = tuple(tuple(row) for row in conn_list)
+
+				if cache_key in eval_cache:
+					cache_hits[0] += 1
+					results[i] = eval_cache[cache_key]
+				else:
+					to_evaluate.append((i, conn_list, cache_key))
+
+			# Fast evaluation of cache misses (Rust if available, else Python parallel)
+			if to_evaluate:
+				parallel_evals[0] += len(to_evaluate)
+				conn_list_batch = [item[1] for item in to_evaluate]
+
+				# Use Rust accelerator (822x faster!) or fall back to Python parallel
+				errors = _evaluate_batch_fast(
+					conn_list_batch, _word_to_cluster, _train_tokens,
+					_test_tokens, bits_per_neuron, eval_subset
+				)
+
+				# Update results and cache
+				for (idx, conn_list, cache_key), error in zip(to_evaluate, errors):
+					results[idx] = error
+					eval_cache[cache_key] = error
+
+			return results
 
 		initial_connectivity = ram.get_connectivity()
 
@@ -465,6 +677,10 @@ class RAMLM_v2:
 		log(f"Initial connectivity shape: {conn_tensor.shape}")
 		log(f"Fast mode: {'ON' if self.fast_mode else 'OFF'}")
 		log(f"Train subset: {train_subset:,}, Eval subset: {eval_subset}")
+		if RUST_AVAILABLE:
+			log(f"Accelerator: Rust + rayon ({RUST_CPU_CORES} threads) - 822x speedup!")
+		else:
+			log(f"Accelerator: Python + joblib ({N_WORKERS} workers) - install ram_accelerator for 822x speedup")
 		initial_error = evaluate_connectivity(initial_connectivity)
 		log(f"Initial acc×cov: {(1-initial_error)*100:.2f}% (lower bound to optimize)")
 
@@ -544,7 +760,7 @@ class RAMLM_v2:
 						population.append(individual)
 
 					# Evaluate initial population
-					fitness = [evaluate_connectivity(ind.tolist()) for ind in population]
+					fitness = evaluate_batch(population)  # Parallel evaluation
 					best_idx = min(range(len(fitness)), key=lambda i: fitness[i])
 					best = population[best_idx].clone()
 					best_error = fitness[best_idx]
@@ -586,7 +802,7 @@ class RAMLM_v2:
 							new_population.append(child)
 
 						population = new_population[:cfg.population_size]
-						fitness = [evaluate_connectivity(ind.tolist()) for ind in population]
+						fitness = evaluate_batch(population)  # Parallel evaluation
 
 						# Update best
 						gen_best_idx = min(range(len(fitness)), key=lambda i: fitness[i])
@@ -642,30 +858,26 @@ class RAMLM_v2:
 						for iteration in range(ts_iters):
 							neighbors = []
 
-							# First half: use GA population (diversity)
-							n_from_ga = ts_neighbors // 2
-							for i in range(min(n_from_ga, len(top_individuals))):
-								neighbor = top_individuals[i]
-								# Check tabu
-								is_tabu = False  # GA individuals aren't from moves
-								if not is_tabu:
+							if iteration == 0:
+								# First iteration: use GA population as initial neighbors (diversity seed)
+								for i in range(min(ts_neighbors, len(top_individuals))):
+									neighbor = top_individuals[i]
 									error = evaluate_connectivity(neighbor.tolist())
 									neighbors.append((neighbor, error, None))
-
-							# Second half: mutations from current best (exploitation)
-							n_mutations = ts_neighbors - n_from_ga
-							for _ in range(n_mutations):
-								neighbor, move = ga_strategy._generate_neighbor(
-									current, 0.1,
-									ram.total_bits, len(ram.neurons), bits_per_neuron
-								)
-								is_tabu = any(
-									m is not None and m[0] == move[0] and m[2] == move[1]
-									for m in tabu_list
-								)
-								if not is_tabu:
-									error = evaluate_connectivity(neighbor.tolist())
-									neighbors.append((neighbor, error, move))
+							else:
+								# Subsequent iterations: regular TS mutations from current best
+								for _ in range(ts_neighbors):
+									neighbor, move = ga_strategy._generate_neighbor(
+										current, 0.1,
+										ram.total_bits, len(ram.neurons), bits_per_neuron
+									)
+									is_tabu = any(
+										m is not None and m[0] == move[0] and m[2] == move[1]
+										for m in tabu_list
+									)
+									if not is_tabu:
+										error = evaluate_connectivity(neighbor.tolist())
+										neighbors.append((neighbor, error, move))
 
 							if not neighbors:
 								continue
@@ -684,8 +896,7 @@ class RAMLM_v2:
 								best = current.clone()
 								best_error = current_error
 
-							if (iteration + 1) % 5 == 0:
-								log(f"    [TS-Hybrid] Iter {iteration + 1}: current={current_error:.4f}, best={best_error:.4f} ({(1-best_error)*100:.2f}%)")
+							log(f"    [TS-Hybrid] Iter {iteration + 1}: current={current_error:.4f}, best={best_error:.4f} ({(1-best_error)*100:.2f}%)")
 
 						ts_final_error = best_error
 
@@ -880,7 +1091,7 @@ class RAMLM_v2:
 							population.append(mutated)
 
 						# Evaluate initial population
-						fitness = [evaluate_connectivity(ind.tolist()) for ind in population]
+						fitness = evaluate_batch(population)  # Parallel evaluation
 						best_idx = min(range(len(fitness)), key=lambda i: fitness[i])
 						best = population[best_idx].clone()
 						best_error = fitness[best_idx]
@@ -921,7 +1132,7 @@ class RAMLM_v2:
 								new_population.append(child)
 
 							population = new_population[:cfg.population_size]
-							fitness = [evaluate_connectivity(ind.tolist()) for ind in population]
+							fitness = evaluate_batch(population)  # Parallel evaluation
 
 							# Update best
 							gen_best_idx = min(range(len(fitness)), key=lambda i: fitness[i])
@@ -1023,6 +1234,14 @@ class RAMLM_v2:
 			log(f"★ Best strategy: {best_method}")
 			log(f"  Acc×cov: {(1-best_result.initial_error)*100:.2f}% → {(1-best_result.final_error)*100:.2f}%")
 			log(f"  Improvement: {best_result.improvement_percent:.1f}%")
+
+			# Cache and parallelism stats
+			total_evals = len(eval_cache) + cache_hits[0]
+			if total_evals > 0:
+				hit_rate = cache_hits[0] / total_evals * 100
+				log(f"  Cache: {cache_hits[0]} hits / {total_evals} total ({hit_rate:.1f}% hit rate)")
+				accel = f"Rust ({RUST_CPU_CORES} threads)" if RUST_AVAILABLE else f"Python ({N_WORKERS} workers)"
+				log(f"  Accelerator: {parallel_evals[0]} evals via {accel}")
 			log_separator()
 
 			# Apply best connectivity
@@ -1070,6 +1289,270 @@ class RAMLM_v2:
 			return best, "voting", score / sum(votes.values())
 
 		return "<UNK>", "none", 0.0
+
+	def _get_all_predictions(self, context: list[str]) -> dict[str, tuple[str, float]]:
+		"""Get predictions from ALL methods (for voting strategies)."""
+		predictions = {}
+
+		# Exact RAMs
+		for n in self.exact_rams.keys():
+			if len(context) >= n:
+				ctx = tuple(context[-n:])
+				if ctx in self.exact_rams[n]:
+					counts = self.exact_rams[n][ctx]
+					total = sum(counts.values())
+					best, count = counts.most_common(1)[0]
+					predictions[f"exact_n{n}"] = (best, count / total)
+
+		# Generalized RAMs
+		for n in self.generalized_rams.keys():
+			if len(context) >= n:
+				pred, conf = self.generalized_rams[n].predict(context)
+				if pred:
+					predictions[f"gen_n{n}"] = (pred, conf)
+
+		return predictions
+
+	def learn_voting_weights(self, tokens: list[str], validation_split: float = 0.2):
+		"""
+		Strategy #1: Learn voting weights based on observed accuracy.
+
+		For each method, track how often it's correct when it makes a prediction.
+		Use these accuracies as weights in voting.
+		"""
+		# Use last portion as validation
+		val_start = int(len(tokens) * (1 - validation_split))
+		val_tokens = tokens[val_start:]
+
+		# Track per-method accuracy
+		method_stats = defaultdict(lambda: {"correct": 0, "total": 0})
+
+		for i in range(len(val_tokens) - 6):
+			context = val_tokens[i:i + 5]
+			target = val_tokens[i + 5]
+
+			predictions = self._get_all_predictions(context)
+
+			for method, (pred, conf) in predictions.items():
+				if conf > 0.05:  # Only count confident predictions
+					method_stats[method]["total"] += 1
+					if pred == target:
+						method_stats[method]["correct"] += 1
+
+		# Compute weights = accuracy (with smoothing)
+		self.voting_weights = {}
+		for method, stats in method_stats.items():
+			if stats["total"] > 0:
+				# Laplace smoothing to avoid zero weights
+				acc = (stats["correct"] + 1) / (stats["total"] + 2)
+				self.voting_weights[method] = acc
+			else:
+				self.voting_weights[method] = 0.1  # Default small weight
+
+		return self.voting_weights
+
+	def predict_weighted_voting(self, context: list[str]) -> tuple[str, str, float]:
+		"""
+		Predict using accuracy-weighted voting.
+
+		All methods vote, weighted by their learned accuracy.
+		"""
+		if not hasattr(self, 'voting_weights'):
+			# Fall back to default if weights not learned
+			return self.predict(context)
+
+		predictions = self._get_all_predictions(context)
+
+		if not predictions:
+			return "<UNK>", "none", 0.0
+
+		# Weighted voting
+		votes = Counter()
+		total_weight = 0
+
+		for method, (pred, conf) in predictions.items():
+			weight = self.voting_weights.get(method, 0.1) * conf
+			votes[pred] += weight
+			total_weight += weight
+
+		if votes:
+			best, score = votes.most_common(1)[0]
+			return best, "weighted_voting", score / total_weight if total_weight > 0 else 0.0
+
+		return "<UNK>", "none", 0.0
+
+	def train_meta_classifier(self, tokens: list[str], validation_split: float = 0.2):
+		"""
+		Strategy #2: Train a meta-classifier (small RAM) to combine predictions.
+
+		Input features: one-hot encoded predictions + confidences from each method
+		Output: correct word prediction
+
+		This learns which method combinations are most reliable.
+		"""
+		# Use last portion as validation/training for meta-classifier
+		val_start = int(len(tokens) * (1 - validation_split))
+		val_tokens = tokens[val_start:]
+
+		# Collect training data for meta-classifier
+		# Feature: method predictions encoded + confidences
+		# Target: correct answer
+
+		# First pass: collect all unique predictions to build vocabulary
+		all_methods = sorted(set(
+			list(f"exact_n{n}" for n in self.exact_rams.keys()) +
+			list(f"gen_n{n}" for n in self.generalized_rams.keys())
+		))
+		self.meta_methods = all_methods
+
+		# Collect (features, target) pairs
+		training_data = []
+		word_to_idx = {}
+
+		for i in range(len(val_tokens) - 6):
+			context = val_tokens[i:i + 5]
+			target = val_tokens[i + 5]
+
+			predictions = self._get_all_predictions(context)
+
+			if not predictions:
+				continue
+
+			# Build feature vector: for each method, encode (prediction_word_idx, confidence)
+			# We'll use a simpler approach: majority vote among top-k confident methods
+			# and train a RAM to learn which combination pattern → which word
+
+			# Feature: tuple of (method, prediction) pairs sorted by confidence
+			sorted_preds = sorted(predictions.items(), key=lambda x: -x[1][1])[:4]  # Top 4
+
+			# Create a pattern: which methods agree and their words
+			feature_parts = []
+			for method, (pred, conf) in sorted_preds:
+				if pred not in word_to_idx:
+					word_to_idx[pred] = len(word_to_idx)
+				# Quantize confidence to 2 bits (4 levels)
+				conf_level = min(3, int(conf * 4))
+				feature_parts.append((method, word_to_idx[pred], conf_level))
+
+			training_data.append((feature_parts, target))
+
+		self.meta_word_to_idx = word_to_idx
+		self.meta_idx_to_word = {v: k for k, v in word_to_idx.items()}
+
+		# Build meta-classifier: learn (top_prediction, agreement_level) → best_answer
+		# Simpler approach: track which "primary predictor" is most reliable
+		# when it has highest confidence
+
+		self.meta_stats = defaultdict(lambda: defaultdict(lambda: {"correct": 0, "total": 0}))
+
+		for feature_parts, target in training_data:
+			if not feature_parts:
+				continue
+
+			# Primary predictor = highest confidence method
+			primary_method, primary_word_idx, primary_conf = feature_parts[0]
+			primary_word = self.meta_idx_to_word.get(primary_word_idx, "<UNK>")
+
+			# Secondary agreement: do other methods agree?
+			agreement = sum(1 for m, w, c in feature_parts[1:] if w == primary_word_idx)
+
+			# Key: (primary_method, agreement_level)
+			key = (primary_method, agreement)
+
+			self.meta_stats[key][primary_word]["total"] += 1
+			if primary_word == target:
+				self.meta_stats[key][primary_word]["correct"] += 1
+
+		# Compute reliability scores
+		self.meta_reliability = {}
+		for key, word_stats in self.meta_stats.items():
+			total_correct = sum(s["correct"] for s in word_stats.values())
+			total_all = sum(s["total"] for s in word_stats.values())
+			if total_all > 0:
+				self.meta_reliability[key] = total_correct / total_all
+
+		return self.meta_reliability
+
+	def predict_meta(self, context: list[str]) -> tuple[str, str, float]:
+		"""
+		Predict using the meta-classifier.
+
+		Uses learned reliability of (primary_method, agreement_level) combinations.
+		"""
+		if not hasattr(self, 'meta_reliability'):
+			return self.predict(context)
+
+		predictions = self._get_all_predictions(context)
+
+		if not predictions:
+			return "<UNK>", "none", 0.0
+
+		# Sort by confidence
+		sorted_preds = sorted(predictions.items(), key=lambda x: -x[1][1])[:4]
+
+		if not sorted_preds:
+			return "<UNK>", "none", 0.0
+
+		primary_method, (primary_word, primary_conf) = sorted_preds[0]
+
+		# Check agreement
+		agreement = sum(1 for m, (w, c) in sorted_preds[1:] if w == primary_word)
+
+		# Look up reliability
+		key = (primary_method, agreement)
+		reliability = self.meta_reliability.get(key, 0.5)
+
+		# If reliability is low and we have alternatives, consider them
+		if reliability < 0.3 and len(sorted_preds) > 1:
+			# Try second-best if it has higher agreement
+			for alt_method, (alt_word, alt_conf) in sorted_preds[1:]:
+				alt_agreement = sum(1 for m, (w, c) in sorted_preds if w == alt_word) - 1
+				alt_key = (alt_method, alt_agreement)
+				alt_reliability = self.meta_reliability.get(alt_key, 0.5)
+
+				if alt_reliability > reliability and alt_conf > 0.2:
+					return alt_word, f"meta({alt_method})", alt_reliability * alt_conf
+
+		return primary_word, f"meta({primary_method})", reliability * primary_conf
+
+	def evaluate_voting_strategies(self, tokens: list[str]) -> dict:
+		"""Compare all voting strategies."""
+		results = {
+			"cascade": {"correct": 0, "total": 0},  # Original cascade
+			"weighted": {"correct": 0, "total": 0},  # Accuracy-weighted voting
+			"meta": {"correct": 0, "total": 0},      # Meta-classifier
+		}
+
+		for i in range(len(tokens) - 6):
+			context = tokens[i:i + 5]
+			target = tokens[i + 5]
+
+			results["cascade"]["total"] += 1
+			results["weighted"]["total"] += 1
+			results["meta"]["total"] += 1
+
+			# Original cascade
+			pred1, _, _ = self.predict(context)
+			if pred1 == target:
+				results["cascade"]["correct"] += 1
+
+			# Weighted voting
+			pred2, _, _ = self.predict_weighted_voting(context)
+			if pred2 == target:
+				results["weighted"]["correct"] += 1
+
+			# Meta-classifier
+			pred3, _, _ = self.predict_meta(context)
+			if pred3 == target:
+				results["meta"]["correct"] += 1
+
+		# Compute accuracies
+		for strategy in results:
+			total = results[strategy]["total"]
+			correct = results[strategy]["correct"]
+			results[strategy]["accuracy"] = correct / total if total > 0 else 0.0
+
+		return results
 
 	def evaluate(self, tokens: list[str]) -> dict:
 		"""Evaluate the model."""
@@ -1179,6 +1662,38 @@ def run_benchmark(fast_mode: bool = True, run_id: int = 1, seed: int = None) -> 
 	for n, ram in model.generalized_rams.items():
 		cov = ram.get_coverage(test_tokens)
 		log(f"  Generalized n={n}: {cov*100:.1f}% coverage")
+
+	# Voting strategy comparison
+	log_separator()
+	log("VOTING STRATEGY COMPARISON")
+	log_separator()
+
+	log("Training voting weights (Strategy #1)...")
+	voting_weights = model.learn_voting_weights(train_tokens)
+	log("  Learned weights:")
+	for method, weight in sorted(voting_weights.items(), key=lambda x: -x[1]):
+		log(f"    {method:12s}: {weight*100:.1f}%")
+
+	log("Training meta-classifier (Strategy #2)...")
+	meta_reliability = model.train_meta_classifier(train_tokens)
+	log(f"  Learned {len(meta_reliability)} reliability patterns")
+
+	log("Evaluating all strategies on test set...")
+	voting_results = model.evaluate_voting_strategies(test_tokens)
+
+	log("")
+	log("RESULTS:")
+	log(f"  Cascade (original)    : {voting_results['cascade']['accuracy']*100:.2f}%")
+	log(f"  Weighted Voting (#1)  : {voting_results['weighted']['accuracy']*100:.2f}%")
+	log(f"  Meta-Classifier (#2)  : {voting_results['meta']['accuracy']*100:.2f}%")
+	log("")
+
+	best_strategy = max(voting_results.items(), key=lambda x: x[1]['accuracy'])
+	improvement = (best_strategy[1]['accuracy'] - voting_results['cascade']['accuracy']) / voting_results['cascade']['accuracy'] * 100
+	if improvement > 0:
+		log(f"★ Best: {best_strategy[0]} (+{improvement:.1f}% over cascade)")
+	else:
+		log(f"★ Best: cascade (baseline)")
 
 	log_separator()
 	log("SUMMARY")

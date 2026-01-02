@@ -1,0 +1,31 @@
+[package]
+name = "ram_accelerator"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "ram_accelerator"
+crate-type = ["cdylib"]
+path = "lib.rs"  # Source file in same directory
+
+[dependencies]
+# Python bindings
+pyo3 = { version = "0.20", features = ["extension-module"] }
+
+# CPU parallelism (like joblib but faster)
+rayon = "1.8"
+
+# Metal GPU (Apple Silicon)
+metal = "0.27"
+objc = "0.2"
+
+# Fast hash maps
+rustc-hash = "1.1"
+
+# For bit manipulation
+bitvec = "1.0"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
