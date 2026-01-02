@@ -35,6 +35,7 @@ class MaskStrategy(Enum):
     STRIDED = auto()          # Every k-th position
     DILATED = auto()          # Exponentially increasing gaps
     LOCAL_GLOBAL = auto()     # Local window + global tokens
+    LEARNED = auto()          # RAM-learned position-pair patterns
 
 
 class AttentionMaskStrategy(ABC):
@@ -278,6 +279,157 @@ class CustomMask(AttentionMaskStrategy):
         return mask
 
 
+class LearnedSparseMask(AttentionMaskStrategy):
+    """
+    Learned sparse attention: RAMLayer learns which position pairs should attend.
+
+    Uses a RAMLayer to learn (query_pos, key_pos) → should_attend mapping.
+    Enables automatic pattern discovery without hand-designed sparsity.
+
+    Usage:
+        mask_strategy = LearnedSparseMask(max_seq_len=32, position_bits=5)
+
+        # Train on desired patterns
+        mask_strategy.train_pattern(query_pos=5, key_pos=3, should_attend=True)
+        mask_strategy.train_pattern(query_pos=5, key_pos=10, should_attend=False)
+
+        # Or train from an existing mask
+        causal_mask = CausalMask().create_mask(seq_len=16)
+        mask_strategy.train_from_mask(causal_mask)
+
+        # Use in attention
+        mask = mask_strategy.create_mask(seq_len=16)
+    """
+
+    def __init__(
+        self,
+        max_seq_len: int = 32,
+        position_bits: int | None = None,
+        causal_init: bool = False,
+        rng: int | None = None,
+    ):
+        """
+        Args:
+            max_seq_len: Maximum sequence length to support
+            position_bits: Bits per position (default: ceil(log2(max_seq_len)))
+            causal_init: Initialize with causal pattern (vs empty)
+            rng: Random seed for RAMLayer
+        """
+        from wnn.ram.core import RAMLayer
+        import math
+
+        self.max_seq_len = max_seq_len
+        self.position_bits = position_bits or max(1, math.ceil(math.log2(max_seq_len + 1)))
+
+        # Input: [query_pos_bits, key_pos_bits]
+        total_input_bits = self.position_bits * 2
+
+        # RAMLayer learns: (query_pos, key_pos) → attend (1 bit)
+        self.pattern_layer = RAMLayer(
+            total_input_bits=total_input_bits,
+            num_neurons=1,  # Single output: attend or not
+            n_bits_per_neuron=min(total_input_bits, 12),
+            rng=rng,
+        )
+
+        # Optionally initialize with causal pattern
+        if causal_init:
+            self._init_causal()
+
+    def _init_causal(self) -> None:
+        """Initialize with causal attention pattern."""
+        import torch
+        for i in range(self.max_seq_len):
+            for j in range(i + 1):  # j <= i for causal
+                self.train_pattern(i, j, should_attend=True)
+
+    def _encode_positions(self, query_pos: int, key_pos: int) -> Tensor:
+        """Encode position pair as binary tensor."""
+        import torch
+        # Binary encode query position
+        q_bits = [(query_pos >> b) & 1 for b in range(self.position_bits)]
+        # Binary encode key position
+        k_bits = [(key_pos >> b) & 1 for b in range(self.position_bits)]
+        # Concatenate
+        bits = q_bits + k_bits
+        return torch.tensor(bits, dtype=torch.uint8)
+
+    @property
+    def strategy_type(self) -> MaskStrategy:
+        return MaskStrategy.LEARNED
+
+    def train_pattern(
+        self,
+        query_pos: int,
+        key_pos: int,
+        should_attend: bool,
+    ) -> None:
+        """
+        Train a single position pair.
+
+        Args:
+            query_pos: Query position index
+            key_pos: Key position index
+            should_attend: Whether query should attend to key
+        """
+        import torch
+        if query_pos >= self.max_seq_len or key_pos >= self.max_seq_len:
+            raise ValueError(f"Position exceeds max_seq_len={self.max_seq_len}")
+
+        inputs = self._encode_positions(query_pos, key_pos).unsqueeze(0)
+        target = torch.tensor([[1 if should_attend else 0]], dtype=torch.uint8)
+        self.pattern_layer.commit(inputs, target)
+
+    def train_from_mask(self, mask: Tensor) -> int:
+        """
+        Train from an existing attention mask.
+
+        Args:
+            mask: Boolean mask [seq_len, key_len]
+
+        Returns:
+            Number of patterns trained
+        """
+        seq_len, key_len = mask.shape
+        count = 0
+        for i in range(min(seq_len, self.max_seq_len)):
+            for j in range(min(key_len, self.max_seq_len)):
+                should_attend = bool(mask[i, j].item())
+                self.train_pattern(i, j, should_attend)
+                count += 1
+        return count
+
+    def create_mask(self, seq_len: int, key_len: int | None = None) -> Tensor:
+        """
+        Create attention mask using learned patterns.
+
+        Args:
+            seq_len: Query sequence length
+            key_len: Key sequence length (default: same as seq_len)
+
+        Returns:
+            Boolean mask [seq_len, key_len]
+        """
+        import torch
+        key_len = key_len or seq_len
+        mask = zeros(seq_len, key_len, dtype=tbool)
+
+        for i in range(seq_len):
+            for j in range(key_len):
+                if i < self.max_seq_len and j < self.max_seq_len:
+                    inputs = self._encode_positions(i, j).unsqueeze(0)
+                    output = self.pattern_layer(inputs)
+                    mask[i, j] = output[0, 0].item() == 1
+                # Positions beyond max_seq_len default to False
+
+        return mask
+
+    def get_sparsity(self, seq_len: int) -> float:
+        """Get sparsity ratio (fraction of True values) for a sequence length."""
+        mask = self.create_mask(seq_len)
+        return mask.sum().item() / mask.numel()
+
+
 class MaskStrategyFactory:
     """Factory for creating attention mask strategies."""
 
@@ -293,6 +445,10 @@ class MaskStrategyFactory:
         global_positions: list[int] | None = None,
         causal: bool = False,
         can_attend_fn: Callable[[int, int], bool] | None = None,
+        max_seq_len: int = 32,
+        position_bits: int | None = None,
+        causal_init: bool = False,
+        rng: int | None = None,
     ) -> AttentionMaskStrategy:
         """
         Create an attention mask strategy.
@@ -308,6 +464,10 @@ class MaskStrategyFactory:
             global_positions: For LOCAL_GLOBAL
             causal: For strategies that support causal variant
             can_attend_fn: For CUSTOM strategy
+            max_seq_len: For LEARNED strategy
+            position_bits: For LEARNED strategy
+            causal_init: For LEARNED strategy (initialize with causal pattern)
+            rng: Random seed for LEARNED strategy
 
         Returns:
             Configured AttentionMaskStrategy instance
@@ -333,6 +493,8 @@ class MaskStrategyFactory:
                 if can_attend_fn is None:
                     raise ValueError("CUSTOM strategy requires can_attend_fn")
                 return CustomMask(can_attend_fn)
+            case MaskStrategy.LEARNED:
+                return LearnedSparseMask(max_seq_len, position_bits, causal_init, rng)
             case _:
                 raise ValueError(f"Unknown strategy: {strategy}")
 

@@ -83,6 +83,7 @@ from wnn.ram.strategies.attention_mask import (
     DilatedMask,
     LocalGlobalMask,
     CustomMask,
+    LearnedSparseMask,
     MaskStrategyFactory,
     combine_masks,
 )
@@ -135,6 +136,7 @@ __all__ = [
     'DilatedMask',
     'LocalGlobalMask',
     'CustomMask',
+    'LearnedSparseMask',
     'MaskStrategyFactory',
     'combine_masks',
 ]
