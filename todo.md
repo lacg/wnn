@@ -90,12 +90,47 @@ This is the **SAME pattern as arithmetic**:
 
 Total patterns needed: **6** (4 actions + 2 directions) - not 4×2×8 = 64!
 
-### 4. Hybrid Architectures
+### 4. Real-World Language Benchmarks ✅
+- [x] WikiText-2 Language Modeling
+- [x] English → French Translation
+- [x] IMDB Sentiment Classification
+- [x] Hybrid connectivity (fully + partially connected RAM)
+- [x] Connectivity optimization (SA/TS/GA)
+
+**Results:**
+
+| Model | Accuracy | Improvement |
+|-------|----------|-------------|
+| Pure n-gram (baseline) | 2.5% | - |
+| Voting ensemble (partial connectivity) | 12.0% | 4.9x |
+| **Combined (exact + voting)** | **14.5%** | **5.9x** |
+
+**Breakdown by method:**
+| Method | Accuracy | Coverage | Contribution |
+|--------|----------|----------|--------------|
+| Exact n=4 (fully connected) | 26.4% | 4.7% | 1.25% |
+| Exact n=3 | 19.9% | 9.6% | 1.91% |
+| Exact n=2 | 19.4% | 21.9% | 4.25% |
+| Voting (partial connectivity) | 11.1% | 63.8% | 7.09% |
+
+**Key Findings:**
+1. **Hybrid connectivity works**: Fully connected for exact patterns, partial for generalization
+2. **Connectivity pattern matters**: Diverse > Position-biased > Random (+22.6% improvement)
+3. **Optimization helps**: GA achieved 16.7% improvement over random search
+4. **RAM CAN learn features**: Co-occurrence clustering, not hand-coded
+5. **RAM CAN learn analogies**: Via distributional semantics (king/queen share contexts)
+
+**Bottleneck Analysis:**
+- Coverage was 8% with n-gram → 100% with voting
+- Ambiguity limits accuracy: ~50% of contexts have multiple valid continuations
+- This is language's inherent stochasticity, not RAM's limitation
+
+### 5. Hybrid Architectures
 - [ ] RAM attention + gradient-based FFN
 - [ ] RAM for routing, traditional weights for values
 - [ ] Mixture of experts with RAM gating
 
-### 5. Theoretical Analysis
+### 6. Theoretical Analysis
 - [ ] Formal capacity bounds for RAM networks
 - [ ] Comparison with Hopfield networks / modern Hopfield
 - [ ] Connection to kernel methods
