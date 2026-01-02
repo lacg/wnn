@@ -2,38 +2,38 @@
 RAM-based Aggregator for combining multiple attended values.
 
 In standard transformers, aggregation is a weighted sum:
-    output = Σ attention[i,j] * value[j]
+	output = Σ attention[i,j] * value[j]
 
 With discrete/hard attention, we need a different approach.
 This module learns how to combine multiple binary vectors
 using vote counting (order-invariant) and a learned RAM.
 
 Architecture:
-    attended_values: [v0, v1, v2, ...]  (variable count, each K bits)
-           │
-           ▼
-    ┌─────────────────────────────────┐
-    │  Vote Counting (per bit)        │
-    │  count[b] = Σ v[b] for all v    │
-    │  (order-invariant summary)      │
-    └─────────────────────────────────┘
-           │
-           ▼
-    ┌─────────────────────────────────┐
-    │  Encode counts as bits          │
-    │  (each count needs log2 bits)   │
-    └─────────────────────────────────┘
-           │
-           ▼
-    ┌─────────────────────────────────┐
-    │  RAMLayer (learned)             │
-    │  Input: [count_bits...]         │
-    │  Output: [output_bits]          │
-    │  Learns: vote thresholds        │
-    └─────────────────────────────────┘
-           │
-           ▼
-    output: (K bits)
+	attended_values: [v0, v1, v2, ...]  (variable count, each K bits)
+			 │
+			 ▼
+	┌─────────────────────────────────┐
+	│  Vote Counting (per bit)        │
+	│  count[b] = Σ v[b] for all v    │
+	│  (order-invariant summary)      │
+	└─────────────────────────────────┘
+			 │
+			 ▼
+	┌─────────────────────────────────┐
+	│  Encode counts as bits          │
+	│  (each count needs log2 bits)   │
+	└─────────────────────────────────┘
+			 │
+			 ▼
+	┌─────────────────────────────────┐
+	│  RAMLayer (learned)             │
+	│  Input: [count_bits...]         │
+	│  Output: [output_bits]          │
+	│  Learns: vote thresholds        │
+	└─────────────────────────────────┘
+			 │
+			 ▼
+	output: (K bits)
 """
 
 from wnn.ram.core.RAMLayer import RAMLayer

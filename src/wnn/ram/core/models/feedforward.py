@@ -2,30 +2,30 @@
 RAM-based Feed-Forward Network
 
 In traditional transformers, the FFN is:
-    Linear(d_model → d_ff) → Activation → Linear(d_ff → d_model)
+	Linear(d_model → d_ff) → Activation → Linear(d_ff → d_model)
 
 For RAM networks:
-    RAMLayer(input → hidden) → RAMLayer(hidden → output)
+	RAMLayer(input → hidden) → RAMLayer(hidden → output)
 
 RAM lookups are inherently non-linear (discrete lookup tables),
 so no explicit activation function is needed.
 
 Architecture:
-                    ┌─────────────────────────────────────┐
-                    │         Expansion Layer             │
-  Input bits ──────▶│  RAMLayer: input_bits → hidden_bits │
-                    └─────────────────────────────────────┘
-                                     │
-                                     │ (non-linear RAM lookup)
-                                     │
-                    ┌────────────────▼────────────────────┐
-                    │         Projection Layer            │
-                    │  RAMLayer: hidden_bits → output_bits│
-                    └─────────────────────────────────────┘
-                                     │
-                                     │ + residual (XOR)
-                                     │
-  Output bits ◀─────────────────────┘
+					┌─────────────────────────────────────┐
+					│         Expansion Layer             │
+	Input bits ──────▶│  RAMLayer: input_bits → hidden_bits │
+					└─────────────────────────────────────┘
+									 │
+									 │ (non-linear RAM lookup)
+									 │
+					┌────────────────▼────────────────────┐
+					│         Projection Layer            │
+					│  RAMLayer: hidden_bits → output_bits│
+					└─────────────────────────────────────┘
+									 │
+									 │ + residual (XOR)
+									 │
+	Output bits ◀─────────────────────┘
 """
 
 from wnn.ram.core import RAMLayer, GeneralizingProjection

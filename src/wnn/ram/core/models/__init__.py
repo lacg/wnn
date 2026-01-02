@@ -6,19 +6,19 @@ Classes for building RAM-based transformer architectures.
 
 # Computed operations
 from wnn.ram.core.models.computed_arithmetic import (
-    ComputedArithmeticFFN,
-    ComputedCopyFFN,
-    bits_to_int,
-    int_to_bits,
+	ComputedArithmeticFFN,
+	ComputedCopyFFN,
+	bits_to_int,
+	int_to_bits,
 )
 
 # Attention mechanisms
 from wnn.ram.core.models.soft_ram_attention import SoftRAMAttention
 from wnn.ram.core.models.sorting_attention import ComputedSortingAttention, SortingAttention
 from wnn.ram.core.models.learned_sorting import (
-    LearnedComparator,
-    LearnedSortingAttention,
-    BitLevelComparator,
+	LearnedComparator,
+	LearnedSortingAttention,
+	BitLevelComparator,
 )
 from wnn.ram.core.models.minmax_attention import ComputedMinMaxAttention, MinMaxAttention
 from wnn.ram.core.models.attention import RAMAttention, RAMCrossAttention, CrossAttentionMode
@@ -26,24 +26,24 @@ from wnn.ram.core.models.attention_base import AttentionBase, LearnableAttention
 from wnn.ram.core.models.position_attention import PositionOnlyAttention
 from wnn.ram.enums import PositionPattern
 from wnn.ram.core.models.computed_attention import (
-    ComputedMedianAttention,
-    ComputedArgMaxAttention,
-    ComputedCountDistinctAttention,
-    ComputedSumAttention,
-    ComputedMeanAttention,
-    ComputedShiftAttention,
+	ComputedMedianAttention,
+	ComputedArgMaxAttention,
+	ComputedCountDistinctAttention,
+	ComputedSumAttention,
+	ComputedMeanAttention,
+	ComputedShiftAttention,
 )
 from wnn.ram.core.models.xor_attention import (
-    XORCrossAttention,
-    XORContentAddressableMemory,
-    TopKAggregation,
+	XORCrossAttention,
+	XORContentAddressableMemory,
+	TopKAggregation,
 )
 
 # Attention masking
 from wnn.ram.core.models.attention_mask import (
-    AttentionMask,
-    MaskStrategy,
-    can_attend,
+	AttentionMask,
+	MaskStrategy,
+	can_attend,
 )
 
 # FFN
@@ -66,56 +66,56 @@ from wnn.ram.core.models.encoder_decoder import RAMEncoderDecoder
 
 
 __all__ = [
-    # Computed operations
-    'ComputedArithmeticFFN',
-    'ComputedCopyFFN',
-    'bits_to_int',
-    'int_to_bits',
-    # Attention base classes
-    'AttentionBase',
-    'LearnableAttention',
-    'ComputedAttention',
-    # Attention mechanisms
-    'SoftRAMAttention',
-    'ComputedSortingAttention',
-    'SortingAttention',  # Alias for ComputedSortingAttention
-    'LearnedComparator',
-    'LearnedSortingAttention',
-    'BitLevelComparator',
-    'ComputedMinMaxAttention',
-    'MinMaxAttention',  # Alias for ComputedMinMaxAttention
-    'RAMAttention',
-    'RAMCrossAttention',  # Alias for RAMAttention (cross-attention mode)
-    'CrossAttentionMode',
-    'PositionOnlyAttention',
-    'PositionPattern',
-    'ComputedMedianAttention',
-    'ComputedArgMaxAttention',
-    'ComputedCountDistinctAttention',
-    'ComputedSumAttention',
-    'ComputedMeanAttention',
-    'ComputedShiftAttention',
-    # XOR attention
-    'XORCrossAttention',
-    'XORContentAddressableMemory',
-    'TopKAggregation',
-    # Attention masking
-    'AttentionMask',
-    'MaskStrategy',
-    'can_attend',
-    # FFN
-    'TwoLayerFFN',
-    'RAMFeedForward',
-    'FFNMode',
-    # Embeddings
-    'RAMEmbedding',
-    'PositionEncoding',
-    # Transformer
-    'RAMTransformerBlock',
-    'RAMTransformer',
-    # Normalization
-    'DiscreteNormalization',
-    # Seq2Seq
-    'RAMSeq2Seq',
-    'RAMEncoderDecoder',
+	# Computed operations
+	'ComputedArithmeticFFN',
+	'ComputedCopyFFN',
+	'bits_to_int',
+	'int_to_bits',
+	# Attention base classes
+	'AttentionBase',
+	'LearnableAttention',
+	'ComputedAttention',
+	# Attention mechanisms
+	'SoftRAMAttention',
+	'ComputedSortingAttention',
+	'SortingAttention',  # Alias for ComputedSortingAttention
+	'LearnedComparator',
+	'LearnedSortingAttention',
+	'BitLevelComparator',
+	'ComputedMinMaxAttention',
+	'MinMaxAttention',  # Alias for ComputedMinMaxAttention
+	'RAMAttention',
+	'RAMCrossAttention',  # Alias for RAMAttention (cross-attention mode)
+	'CrossAttentionMode',
+	'PositionOnlyAttention',
+	'PositionPattern',
+	'ComputedMedianAttention',
+	'ComputedArgMaxAttention',
+	'ComputedCountDistinctAttention',
+	'ComputedSumAttention',
+	'ComputedMeanAttention',
+	'ComputedShiftAttention',
+	# XOR attention
+	'XORCrossAttention',
+	'XORContentAddressableMemory',
+	'TopKAggregation',
+	# Attention masking
+	'AttentionMask',
+	'MaskStrategy',
+	'can_attend',
+	# FFN
+	'TwoLayerFFN',
+	'RAMFeedForward',
+	'FFNMode',
+	# Embeddings
+	'RAMEmbedding',
+	'PositionEncoding',
+	# Transformer
+	'RAMTransformerBlock',
+	'RAMTransformer',
+	# Normalization
+	'DiscreteNormalization',
+	# Seq2Seq
+	'RAMSeq2Seq',
+	'RAMEncoderDecoder',
 ]

@@ -8,13 +8,13 @@ Two main families:
 2. RAMSequenceModel - Sequence-to-sequence models (Transformers, Attention)
 
 Usage:
-    class MyMapper(RAMComponent):
-        def forward(self, bits: Tensor) -> Tensor:
-            ...
+	class MyMapper(RAMComponent):
+		def forward(self, bits: Tensor) -> Tensor:
+			...
 
-    class MyTransformer(RAMSequenceModel):
-        def forward(self, tokens: list[Tensor]) -> list[Tensor]:
-            ...
+	class MyTransformer(RAMSequenceModel):
+		def forward(self, tokens: list[Tensor]) -> list[Tensor]:
+			...
 """
 
 from abc import ABC, abstractmethod

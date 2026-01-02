@@ -2,18 +2,18 @@
 RAM-based Attention Mechanism (Unified Self + Cross Attention)
 
 Traditional Transformer Attention:
-  scores = softmax(Q·K^T / √d)    # Continuous weights [0,1]
-  output = scores · V              # Weighted sum of all values
+	scores = softmax(Q·K^T / √d)    # Continuous weights [0,1]
+	output = scores · V              # Weighted sum of all values
 
 RAM Attention (Hard/Discrete):
-  For each query position:
-    1. Compute similarity to ALL keys (using RAM neurons)
-    2. Select winner(s) via hard routing or voting
-    3. Return selected value(s)
+	For each query position:
+	1. Compute similarity to ALL keys (using RAM neurons)
+	2. Select winner(s) via hard routing or voting
+	3. Return selected value(s)
 
 Supports both:
-  - Self-attention: tokens attend to themselves (context=None)
-  - Cross-attention: queries attend to context (context=encoder_output)
+	- Self-attention: tokens attend to themselves (context=None)
+	- Cross-attention: queries attend to context (context=encoder_output)
 """
 
 from wnn.ram.core import RAMLayer

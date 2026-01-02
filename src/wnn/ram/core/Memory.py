@@ -619,9 +619,15 @@ class Memory(RAMComponent):
 
 		Handles different connection patterns per neuron by processing neurons
 		one at a time and checking constraint compatibility.
+
+		Cost function inspired by Garcia (2003) thesis on connectivity optimization:
+		- CONFLICT_COST: Penalty for addresses with incompatible values
+		- EMPTY_COST: Small cost for empty cells (prefer already-trained addresses)
+		- HAMMING_COST: Prefer addresses close to current state
+		- SATURATION_COST: Penalize neurons with high memory occupancy (avoids degradation)
 		"""
 		MAX_BEAM_WIDTH = 64
-		CONFLICT_COST, EMPTY_COST, HAMMING_COST = 20.0, 10.0, 1.0
+		CONFLICT_COST, EMPTY_COST, HAMMING_COST, SATURATION_COST = 20.0, 10.0, 1.0, 15.0
 		beam_width = min(MAX_BEAM_WIDTH, max(8 * self.num_neurons, 16))
 		k_top = min(topk_per_neuron, self.memory_size)
 		device = input_bits.device
@@ -634,6 +640,11 @@ class Memory(RAMComponent):
 		conflict = (memory_rows != MemoryVal.EMPTY) & (memory_rows != desired_memories)
 		empty = (memory_rows == MemoryVal.EMPTY)
 		valid = ~conflict if not allow_override else ones_like(conflict, dtype=tbool)
+
+		# Saturation penalty: neurons with high occupancy are more likely to have conflicts
+		# This heuristic from Garcia (2003) helps avoid connecting to "noisy" neurons
+		occupancy = (memory_rows != MemoryVal.EMPTY).sum(dim=1).to(float64) / self.memory_size  # [num_neurons]
+		saturation_penalty = SATURATION_COST * occupancy.unsqueeze(1)  # [num_neurons, 1] broadcast to all addresses
 
 		# Pre-filter: mark inconsistent addresses as invalid for neurons with duplicate connections.
 		# When a neuron's connections have duplicates (multiple connections to same input bit),
@@ -657,7 +668,8 @@ class Memory(RAMComponent):
 		per_neuron_cost = (
 			CONFLICT_COST * conflict.to(float64) +
 			EMPTY_COST * empty.to(float64) +
-			HAMMING_COST * hamming
+			HAMMING_COST * hamming +
+			saturation_penalty  # Penalize saturated neurons
 		)
 		per_neuron_cost = per_neuron_cost.masked_fill(~valid, float("inf"))
 

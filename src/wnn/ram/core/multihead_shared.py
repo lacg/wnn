@@ -31,14 +31,14 @@ class RAMMultiHeadShared(Module):
 
 	Architecture:
 	  input[t] + state[t-1] → state_layer → state[t]
-                                              ↓
-                              ┌───────────────┼───────────────┐
-                              ↓               ↓               ↓
-                         output_head[0]  output_head[1]  output_head[2]
-                              ↓               ↓               ↓
-                           pred[0]         pred[1]         pred[2]
-                                              ↓
-                                     router selects one
+												↓
+								┌───────────────┼───────────────┐
+								↓               ↓               ↓
+						 output_head[0]  output_head[1]  output_head[2]
+								↓               ↓               ↓
+							 pred[0]         pred[1]         pred[2]
+												↓
+									 router selects one
 	"""
 
 	def __init__(

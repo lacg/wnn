@@ -234,3 +234,9 @@ The key insight is distinguishing between **learned** and **computed** operation
 | Position-based | 100% (any tokens) | Shift, reverse, copy |
 
 See `docs/COMPUTED_OPERATIONS.md` for detailed documentation.
+
+## Coding Style
+
+- **Indentation**: Use tabs (not spaces), displayed as 2-space width
+- **Line length**: Keep reasonable (no hard limit but prefer readable lines)
+- **Naming**: snake_case for functions/variables, PascalCase for classes

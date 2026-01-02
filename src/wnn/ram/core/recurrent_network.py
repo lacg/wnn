@@ -327,7 +327,7 @@ class RAMRecurrentNetwork(Module):
 	# ------------------------------------------------------------------
 	def forward(self, input_bits: Tensor) -> Tensor:
 		"""
-    Inference: run over all windows in sequence and return decoded output of last step.
+	Inference: run over all windows in sequence and return decoded output of last step.
 		"""
 		self._reset_state(input_bits.shape[0], input_bits.device)
 		input_bits = self._normalize_bits(input_bits)													# [1, n_total_bits] or [B, n_total_bits]
@@ -405,7 +405,7 @@ class RAMRecurrentNetwork(Module):
 
 		# Final output at n_steps-1
 		final_output = context["output_layer_output"]
-    # If already correct, you can optionally "materialize" EMPTY paths here (you already did that)
+	# If already correct, you can optionally "materialize" EMPTY paths here (you already did that)
 		if bool((final_output == target_bits).all()):
 			# Reinforce EMPTY memories to answer FALSE
 			for i in range(n_steps-1, -1, -1):
@@ -414,8 +414,8 @@ class RAMRecurrentNetwork(Module):
 			# Now, NN will converge correctly, nothing else to do.
 			return
 
-    # 1) Solve OUTPUT constraints at T-1:
-    #    find desired hidden bits (input_out(T) + state_out(T)) that can yield target output.
+	# 1) Solve OUTPUT constraints at T-1:
+	#    find desired hidden bits (input_out(T) + state_out(T)) that can yield target output.
 		desired_state_output_bits_t = self._solve_output(context, target_bits)
 		if desired_state_output_bits_t is None:
 			return	# no solution even with override (should be rare and a limit of the architecture).

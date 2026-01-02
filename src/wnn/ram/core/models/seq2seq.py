@@ -3,42 +3,42 @@ RAM-based Sequence-to-Sequence Model
 
 A transformer-like architecture using RAM attention layers.
 Key differences from traditional transformers:
-  - Discrete attention (binary) instead of continuous
-  - No gradient-based training - uses EDRA
-  - Learned aggregation instead of weighted sums
+	- Discrete attention (binary) instead of continuous
+	- No gradient-based training - uses EDRA
+	- Learned aggregation instead of weighted sums
 
 Architecture (with FFN):
-                    ┌─────────────────────────────────────┐
-                    │         Token Embedding              │
-  Input tokens ────▶│  (Optional: RAM-based projection)   │
-                    └─────────────────────────────────────┘
-                                     │
-                    ┌────────────────▼────────────────────┐
-                    │         Attention Layer 0           │
-                    │  (multi-head, causal, learned)      │
-                    └─────────────────────────────────────┘
-                                     │ + residual (XOR)
-                    ┌────────────────▼────────────────────┐
-                    │         Feed-Forward Layer 0        │
-                    │  (expansion → projection)           │
-                    └─────────────────────────────────────┘
-                                     │ + residual (XOR)
-                    ┌────────────────▼────────────────────┐
-                    │         Attention Layer 1           │
-                    └─────────────────────────────────────┘
-                                     │ + residual (XOR)
-                    ┌────────────────▼────────────────────┐
-                    │         Feed-Forward Layer 1        │
-                    └─────────────────────────────────────┘
-                                     │
-                                    ...
-                                     │
-                    ┌────────────────▼────────────────────┐
-                    │         Output Projection           │
-                    │  (RAM layer: hidden -> output)      │
-                    └─────────────────────────────────────┘
-                                     │
-  Output tokens ◀───────────────────┘
+					┌─────────────────────────────────────┐
+					│         Token Embedding              │
+	Input tokens ────▶│  (Optional: RAM-based projection)   │
+					└─────────────────────────────────────┘
+									 │
+					┌────────────────▼────────────────────┐
+					│         Attention Layer 0           │
+					│  (multi-head, causal, learned)      │
+					└─────────────────────────────────────┘
+									 │ + residual (XOR)
+					┌────────────────▼────────────────────┐
+					│         Feed-Forward Layer 0        │
+					│  (expansion → projection)           │
+					└─────────────────────────────────────┘
+									 │ + residual (XOR)
+					┌────────────────▼────────────────────┐
+					│         Attention Layer 1           │
+					└─────────────────────────────────────┘
+									 │ + residual (XOR)
+					┌────────────────▼────────────────────┐
+					│         Feed-Forward Layer 1        │
+					└─────────────────────────────────────┘
+									 │
+									...
+									 │
+					┌────────────────▼────────────────────┐
+					│         Output Projection           │
+					│  (RAM layer: hidden -> output)      │
+					└─────────────────────────────────────┘
+									 │
+	Output tokens ◀───────────────────┘
 """
 
 from wnn.ram.core import RAMLayer, GeneralizingProjection

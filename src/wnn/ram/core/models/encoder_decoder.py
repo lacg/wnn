@@ -2,46 +2,46 @@
 RAM-based Encoder-Decoder Architecture
 
 Full sequence-to-sequence model with:
-  - Encoder: Processes source sequence (bidirectional self-attention)
-  - Decoder: Generates target sequence (causal self-attention + cross-attention)
+	- Encoder: Processes source sequence (bidirectional self-attention)
+	- Decoder: Generates target sequence (causal self-attention + cross-attention)
 
 Architecture:
-                        Source Sequence
-                              │
-                    ┌─────────▼─────────┐
-                    │     Encoder        │
-                    │  (Self-Attention)  │
-                    │   [Bidirectional]  │
-                    └─────────┬─────────┘
-                              │
-                    Encoder Output (Memory)
-                              │
-        Target Sequence       │
-              │               │
-    ┌─────────▼─────────┐     │
-    │     Decoder        │    │
-    │  ┌─────────────┐  │     │
-    │  │Self-Attention│ │     │
-    │  │  [Causal]   │  │     │
-    │  └──────┬──────┘  │     │
-    │         │         │     │
-    │  ┌──────▼──────┐  │     │
-    │  │Cross-Attend │◀─┼─────┘
-    │  │ to Encoder  │  │
-    │  └──────┬──────┘  │
-    │         │         │
-    │  ┌──────▼──────┐  │
-    │  │    FFN      │  │
-    │  └──────┬──────┘  │
-    └─────────┬─────────┘
-              │
-        Output Sequence
+						Source Sequence
+								│
+					┌─────────▼─────────┐
+					│     Encoder        │
+					│  (Self-Attention)  │
+					│   [Bidirectional]  │
+					└─────────┬─────────┘
+								│
+					Encoder Output (Memory)
+								│
+		Target Sequence       │
+				│               │
+	┌─────────▼─────────┐     │
+	│     Decoder        │    │
+	│  ┌─────────────┐  │     │
+	│  │Self-Attention│ │     │
+	│  │  [Causal]   │  │     │
+	│  └──────┬──────┘  │     │
+	│         │         │     │
+	│  ┌──────▼──────┐  │     │
+	│  │Cross-Attend │◀─┼─────┘
+	│  │ to Encoder  │  │
+	│  └──────┬──────┘  │
+	│         │         │
+	│  ┌──────▼──────┐  │
+	│  │    FFN      │  │
+	│  └──────┬──────┘  │
+	└─────────┬─────────┘
+				│
+		Output Sequence
 
 Use cases:
-  - Machine translation (source → target language)
-  - Summarization (document → summary)
-  - Question answering (question → answer)
-  - Code generation (description → code)
+	- Machine translation (source → target language)
+	- Summarization (document → summary)
+	- Question answering (question → answer)
+	- Code generation (description → code)
 """
 
 from wnn.ram.core import RAMLayer, GeneralizingProjection

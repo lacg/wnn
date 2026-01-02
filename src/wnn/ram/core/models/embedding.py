@@ -12,22 +12,22 @@ Key differences:
 - Can use generalization strategies for unseen tokens
 
 Architecture:
-                    ┌─────────────────────────────────────┐
-                    │         Token Input                 │
-  Token bits ──────▶│  (e.g., 5-bit ASCII encoding)       │
-                    └─────────────────────────────────────┘
-                                     │
-                    ┌────────────────▼────────────────────┐
-                    │         Embedding Projection        │
-                    │  RAMLayer: token_bits → embed_bits  │
-                    └─────────────────────────────────────┘
-                                     │
-                    ┌────────────────▼────────────────────┐
-                    │    (Optional) Position Encoding     │
-                    │         XOR with position bits      │
-                    └─────────────────────────────────────┘
-                                     │
-  Embedding ◀──────────────────────┘
+					┌─────────────────────────────────────┐
+					│         Token Input                 │
+	Token bits ──────▶│  (e.g., 5-bit ASCII encoding)       │
+					└─────────────────────────────────────┘
+									 │
+					┌────────────────▼────────────────────┐
+					│         Embedding Projection        │
+					│  RAMLayer: token_bits → embed_bits  │
+					└─────────────────────────────────────┘
+									 │
+					┌────────────────▼────────────────────┐
+					│    (Optional) Position Encoding     │
+					│         XOR with position bits      │
+					└─────────────────────────────────────┘
+									 │
+	Embedding ◀──────────────────────┘
 """
 
 from wnn.ram.core import RAMLayer

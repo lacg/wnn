@@ -10,10 +10,10 @@ discrete RAM networks without gradients by:
 4. Reconstruction: Train each layer to produce desired output
 
 Key insight: With XOR residual connections:
-    output = input ⊕ layer_output
+	output = input ⊕ layer_output
 
 So we can solve for desired layer output:
-    layer_output = input ⊕ desired_output
+	layer_output = input ⊕ desired_output
 
 This allows us to backpropagate "targets" through the network.
 
@@ -21,7 +21,7 @@ Training Modes:
 - GREEDY: Train all layers in one pass (fast)
 - ITERATIVE: Multiple passes until stable (more accurate)
 - OUTPUT_FIRST: Prioritize training output layers first (trains token_mapper,
-  output_proj before attention/FFN layers)
+	output_proj before attention/FFN layers)
 
 Features:
 - Per-layer error tracking
@@ -33,17 +33,17 @@ Features:
 - Focused training mode (aggressive hard example mining for plateau breaking)
 
 Usage:
-    # Standard training
-    trainer = RAMTrainer(model, mode=TrainingMode.GREEDY)
-    trainer.train(dataset, epochs=10)
+	# Standard training
+	trainer = RAMTrainer(model, mode=TrainingMode.GREEDY)
+	trainer.train(dataset, epochs=10)
 
-    # With hard example mining
-    trainer = RAMTrainer(model, use_hard_mining=True)
-    trainer.train_focused(dataset, epochs=15)
+	# With hard example mining
+	trainer = RAMTrainer(model, use_hard_mining=True)
+	trainer.train_focused(dataset, epochs=15)
 
-    # Get convergence diagnostics
-    diagnostics = trainer.get_convergence_diagnostics()
-    print(f"Stuck layers: {diagnostics['stuck_layers']}")
+	# Get convergence diagnostics
+	diagnostics = trainer.get_convergence_diagnostics()
+	print(f"Stuck layers: {diagnostics['stuck_layers']}")
 """
 
 from wnn.ram.core.models.seq2seq import RAMSeq2Seq

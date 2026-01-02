@@ -9,22 +9,22 @@ Combines ensemble multi-head architecture with explicit KV operations:
 - Optional position encoding for position-aware retrieval
 
 Architecture:
-  Input: [pos_bits? | key_bits | value_bits]
+	Input: [pos_bits? | key_bits | value_bits]
 
-  If value_bits != 0 (WRITE):
-    full_key = [pos_bits, key_bits] if using positions else key_bits
-    head_idx = route(full_key)
-    heads[head_idx].store(full_key, value_bits)
+	If value_bits != 0 (WRITE):
+	full_key = [pos_bits, key_bits] if using positions else key_bits
+	head_idx = route(full_key)
+	heads[head_idx].store(full_key, value_bits)
 
-  If value_bits == 0 (READ/QUERY):
-    full_key = [pos_bits, key_bits] if using positions else key_bits
-    head_idx = route(full_key)
-    output = heads[head_idx].retrieve(full_key)
+	If value_bits == 0 (READ/QUERY):
+	full_key = [pos_bits, key_bits] if using positions else key_bits
+	head_idx = route(full_key)
+	output = heads[head_idx].retrieve(full_key)
 
 Position encoding enables:
-  - "A at position 0" ≠ "A at position 5"
-  - Position-dependent patterns
-  - Transformer-style positional awareness
+	- "A at position 0" ≠ "A at position 5"
+	- Position-dependent patterns
+	- Transformer-style positional awareness
 """
 
 from wnn.ram.core import RAMLayer

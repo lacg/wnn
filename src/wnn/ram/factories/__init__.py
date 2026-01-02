@@ -27,19 +27,19 @@ from wnn.ram.factories.models import ModelsFactory
 
 
 __all__ = [
-    # Decoder
-    'TransformerDecoderFactory',
-    # Position
-    'PositionEncoderFactory',
-    # Cost
-    'CostCalculatorFactory',
-    # Mapper/Generalization
-    'MapperFactory',
-    # Transformer components
-    'FFNFactory',
-    'AttentionFactory',
-    'StepConfigurationFactory',
-    'RAMTransformerFactory',
-    # Unified model factory
-    'ModelsFactory',
+	# Decoder
+	'TransformerDecoderFactory',
+	# Position
+	'PositionEncoderFactory',
+	# Cost
+	'CostCalculatorFactory',
+	# Mapper/Generalization
+	'MapperFactory',
+	# Transformer components
+	'FFNFactory',
+	'AttentionFactory',
+	'StepConfigurationFactory',
+	'RAMTransformerFactory',
+	# Unified model factory
+	'ModelsFactory',
 ]

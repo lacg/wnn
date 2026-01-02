@@ -15,9 +15,9 @@ from wnn.ram.enums.cost import CostCalculatorType
 
 # Generalization
 from wnn.ram.enums.generalization import (
-    ContextMode,
-    BitMapperMode,
-    MapperStrategy,
+	ContextMode,
+	BitMapperMode,
+	MapperStrategy,
 )
 
 # Embedding
@@ -28,25 +28,25 @@ from wnn.ram.enums.trainer import LayerType, TrainingMode, TrainingPhase, Mixing
 
 # Attention
 from wnn.ram.enums.attention import (
-    CrossAttentionMode,
-    AttentionType,
-    ContentMatchMode,
-    AttentionCombineMode,
-    AggregationStrategy,
-    PositionPattern,
+	CrossAttentionMode,
+	AttentionType,
+	ContentMatchMode,
+	AttentionCombineMode,
+	AggregationStrategy,
+	PositionPattern,
 )
 
 # FFN
 from wnn.ram.enums.ffn import (
-    FFNMode,
-    FFNType,
-    ArithmeticOp,
+	FFNMode,
+	FFNType,
+	ArithmeticOp,
 )
 
 # Transformer
 from wnn.ram.enums.transformer import (
-    Step,
-    RAMTransformerType,
+	Step,
+	RAMTransformerType,
 )
 
 # Model types
@@ -58,44 +58,49 @@ from wnn.ram.enums.recurrent import StateMode
 # Normalization
 from wnn.ram.enums.normalization import NormStrategy
 
+# Connectivity Optimization
+from wnn.ram.enums.connectivity import OptimizationMethod
+
 
 __all__ = [
-    # Memory
-    'MemoryVal',
-    # Decoder
-    'OutputMode',
-    'PositionMode',
-    # Cost
-    'CostCalculatorType',
-    # Generalization
-    'ContextMode',
-    'BitMapperMode',
-    'MapperStrategy',
-    # Embedding
-    'PositionEncoding',
-    # Trainer
-    'LayerType',
-    'TrainingMode',
-    'TrainingPhase',
-    'MixingStrategy',
-    # Attention
-    'CrossAttentionMode',
-    'AttentionType',
-    'ContentMatchMode',
-    'AttentionCombineMode',
-    'AggregationStrategy',
-    'PositionPattern',
-    # FFN
-    'FFNMode',
-    'FFNType',
-    'ArithmeticOp',
-    # Transformer
-    'Step',
-    'RAMTransformerType',
-    # Model types
-    'ModelType',
-    # Recurrent
-    'StateMode',
-    # Normalization
-    'NormStrategy',
+	# Memory
+	'MemoryVal',
+	# Decoder
+	'OutputMode',
+	'PositionMode',
+	# Cost
+	'CostCalculatorType',
+	# Generalization
+	'ContextMode',
+	'BitMapperMode',
+	'MapperStrategy',
+	# Embedding
+	'PositionEncoding',
+	# Trainer
+	'LayerType',
+	'TrainingMode',
+	'TrainingPhase',
+	'MixingStrategy',
+	# Attention
+	'CrossAttentionMode',
+	'AttentionType',
+	'ContentMatchMode',
+	'AttentionCombineMode',
+	'AggregationStrategy',
+	'PositionPattern',
+	# FFN
+	'FFNMode',
+	'FFNType',
+	'ArithmeticOp',
+	# Transformer
+	'Step',
+	'RAMTransformerType',
+	# Model types
+	'ModelType',
+	# Recurrent
+	'StateMode',
+	# Normalization
+	'NormStrategy',
+	# Connectivity Optimization
+	'OptimizationMethod',
 ]
