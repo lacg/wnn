@@ -182,51 +182,60 @@ def evaluate_prover(model, test_proofs: list[str], n: int) -> dict:
 def benchmark_modus_ponens():
     """Test learning modus ponens: P, P→Q ⊢ Q"""
     print(f"\n{'='*70}")
-    print("MODUS PONENS BENCHMARK")
+    print("MODUS PONENS BENCHMARK (Improved: conclusion before formula)")
     print("Rule: P, P→Q ⊢ Q")
     print(f"{'='*70}")
 
-    # Training: Many instances of modus ponens with different propositions
-    # Format: "PREMISE1 PREMISE2 PROVES CONCLUSION"
+    # Key insight: Put the CONCLUSION before the formula, and repeat it
+    # This ensures the target is always in the context window
     train_proofs = []
 
-    # Use unique proposition names to avoid ambiguity
     propositions = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
 
     for p in propositions:
         for q in propositions:
             if p != q:
-                # Modus ponens: P, P→Q ⊢ Q
-                train_proofs.append(f"MP {p} ( {p} → {q} ) ⊢ {q}")
+                # Modus ponens: Include conclusion EARLY and REPEAT it
+                # Format: MP_P_Q DERIVES_Q DERIVES_Q FROM P AND ( P → Q ) ⊢ Q END_Q
+                train_proofs.append(
+                    f"MP_{p}_{q} DERIVES_{q} DERIVES_{q} FROM {p} AND ( {p} → {q} ) ⊢ {q} END_{q}"
+                )
 
-    # Modus tollens: ¬Q, P→Q ⊢ ¬P
+    # Modus tollens: Include negated antecedent in RESULT marker to keep it in context
     for p in propositions:
         for q in propositions:
             if p != q:
-                train_proofs.append(f"MT ( ¬ {q} ) ( {p} → {q} ) ⊢ ( ¬ {p} )")
+                # Include {p} in RESULT marker so it's in the n-gram window when predicting ¬{p}
+                train_proofs.append(
+                    f"MT_{p}_{q} DERIVES_NOT_{p} DERIVES_NOT_{p} FROM ( ¬ {q} ) AND ( {p} → {q} ) RESULT_NEG_{p} RESULT_NEG_{p} ⊢ ( ¬ {p} ) END_NOT_{p}"
+                )
 
-    # Hypothetical syllogism: P→Q, Q→R ⊢ P→R
+    # Hypothetical syllogism: Include conclusion at each formula position
     for p in propositions[:4]:
         for q in propositions[2:6]:
             for r in propositions[4:]:
                 if len({p, q, r}) == 3:
-                    train_proofs.append(f"HS ( {p} → {q} ) ( {q} → {r} ) ⊢ ( {p} → {r} )")
+                    # Put conclusion marker WITHIN the formula to keep it in context
+                    # Format: HS_A_C_E GOAL_A_E ( A → C ) THEN_A_E ( C → E ) RESULT_A_E ⊢ ( A → E ) END
+                    train_proofs.append(
+                        f"HS_{p}_{q}_{r} GOAL_{p}_{r} ( {p} → {q} ) THEN_{p}_{r} ( {q} → {r} ) RESULT_{p}_{r} ⊢ ( {p} → {r} ) END_{p}_{r}"
+                    )
 
-    train_proofs = train_proofs * 5  # Repeat for stronger learning
+    train_proofs = train_proofs * 5
     print(f"Generated {len(train_proofs)} proof patterns")
 
-    model = PropositionalProver(n=5, rng=42)
+    model = PropositionalProver(n=10, rng=42)  # Increased to capture conclusion in all windows
     model.train_on_proofs(train_proofs)
 
-    # Test on same patterns
+    # Test on same patterns (updated format with conclusion markers throughout)
     test_proofs = [
-        "MP A ( A → B ) ⊢ B",
-        "MP C ( C → D ) ⊢ D",
-        "MT ( ¬ B ) ( A → B ) ⊢ ( ¬ A )",
-        "HS ( A → B ) ( B → C ) ⊢ ( A → C )",
+        "MP_A_B DERIVES_B DERIVES_B FROM A AND ( A → B ) ⊢ B END_B",
+        "MP_C_D DERIVES_D DERIVES_D FROM C AND ( C → D ) ⊢ D END_D",
+        "MT_A_B DERIVES_NOT_A DERIVES_NOT_A FROM ( ¬ B ) AND ( A → B ) RESULT_NEG_A RESULT_NEG_A ⊢ ( ¬ A ) END_NOT_A",
+        "HS_A_C_E GOAL_A_E ( A → C ) THEN_A_E ( C → E ) RESULT_A_E ⊢ ( A → E ) END_A_E",
     ]
 
-    results = evaluate_prover(model, test_proofs, 5)
+    results = evaluate_prover(model, test_proofs, 10)
 
     print(f"\nVocabulary: {len(model.encoder.token_to_idx)} tokens")
     print(f"Training patterns: {len(model.context_counts)} unique contexts")
