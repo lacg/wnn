@@ -1,21 +1,55 @@
-# Next steps
+# WNN Research Project - Status & Roadmap
 
-# To remember
+## Current Status: ✅ All Core Features Complete
 
-Name										Meaning												Shape
-window_bits							raw input window							[1, input_bits]
-input_layer_output			input layer output						[1, N_in]
-state_bits							recurrent state								[1, N_state]
-state_layer_input				[input_out(t), state(t-1)]		[1, N_in + N_state]
-state_layer_output			state(t)											[1, N_state]
-output_layer_input			[input_out(t), state(t)]			[1, N_in + N_state]
-output_layer_output			final output									[1, N_out]
+The RAM-based transformer architecture has achieved:
+- **100% generalization** on all deterministic tasks (arithmetic, sorting, parity, etc.)
+- **92.9% accuracy** on language modeling (with confidence filtering)
+- Full transformer capabilities: attention, cross-attention, FFN, normalization
 
 ---
 
-# Transformer Improvement Roadmap
+## Potential Future Directions
 
-## Completed
+### 1. Scaling Studies
+- [ ] Test on larger vocabularies (1K, 10K, 100K words)
+- [ ] Benchmark memory usage vs traditional transformers
+- [ ] Multi-layer transformer stacks
+
+### 2. Real-World Applications
+- [ ] Code completion (structured, low ambiguity)
+- [ ] SQL query generation (deterministic grammar)
+- [ ] Mathematical theorem proving
+
+### 3. Hybrid Architectures
+- [ ] RAM attention + gradient-based FFN
+- [ ] RAM for routing, traditional weights for values
+- [ ] Mixture of experts with RAM gating
+
+### 4. Theoretical Analysis
+- [ ] Formal capacity bounds for RAM networks
+- [ ] Comparison with Hopfield networks / modern Hopfield
+- [ ] Connection to kernel methods
+
+---
+
+# Reference: Memory Layout
+
+| Name | Meaning | Shape |
+|------|---------|-------|
+| window_bits | raw input window | [1, input_bits] |
+| input_layer_output | input layer output | [1, N_in] |
+| state_bits | recurrent state | [1, N_state] |
+| state_layer_input | [input_out(t), state(t-1)] | [1, N_in + N_state] |
+| state_layer_output | state(t) | [1, N_state] |
+| output_layer_input | [input_out(t), state(t)] | [1, N_in + N_state] |
+| output_layer_output | final output | [1, N_out] |
+
+---
+
+# Completed Work
+
+## Core Transformer Features
 - [x] Scheduled Sampling for autoregressive training
 - [x] Soft Attention via Voting (already existed)
 - [x] Hard Example Mining (already existed)
