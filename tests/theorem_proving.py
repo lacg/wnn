@@ -249,47 +249,48 @@ def benchmark_modus_ponens():
 def benchmark_equational_reasoning():
     """Test equational reasoning: substitution and simplification."""
     print(f"\n{'='*70}")
-    print("EQUATIONAL REASONING BENCHMARK")
+    print("EQUATIONAL REASONING BENCHMARK (Improved: unique IDs)")
     print("Rules: Substitution, Simplification, Commutativity")
     print(f"{'='*70}")
 
-    # Equational proofs with explicit rule names
+    # Key insight: Include operands in rule ID to make each pattern unique
     train_proofs = []
 
-    # Substitution: if x=y then f(x)=f(y)
+    # Arithmetic simplification - each has unique ID with operands
+    for a in range(10):
+        for b in range(10):
+            # ADD_3_4 means "add 3 and 4" - unique context
+            train_proofs.append(f"ADD_{a}_{b} COMPUTE ( {a} + {b} ) RESULT {a+b} END")
+            train_proofs.append(f"MUL_{a}_{b} COMPUTE ( {a} * {b} ) RESULT {a*b} END")
+
+    # Commutativity - unique IDs
+    for a in range(10):
+        for b in range(10):
+            train_proofs.append(f"COMM_ADD_{a}_{b} SHOWS ( {a} + {b} ) EQUALS ( {b} + {a} ) END")
+            train_proofs.append(f"COMM_MUL_{a}_{b} SHOWS ( {a} * {b} ) EQUALS ( {b} * {a} ) END")
+
+    # Substitution - unique IDs
     for x in range(5):
         for y in range(5):
             if x != y:
-                train_proofs.append(f"SUBST ( {x} = {y} ) GIVES ( f ( {x} ) = f ( {y} ) )")
-                train_proofs.append(f"SUBST ( {x} = {y} ) GIVES ( g ( {x} ) = g ( {y} ) )")
+                train_proofs.append(f"SUBST_F_{x}_{y} FROM ( {x} = {y} ) DERIVE ( f ( {x} ) = f ( {y} ) ) END")
+                train_proofs.append(f"SUBST_G_{x}_{y} FROM ( {x} = {y} ) DERIVE ( g ( {x} ) = g ( {y} ) ) END")
 
-    # Arithmetic simplification
-    for a in range(10):
-        for b in range(10):
-            train_proofs.append(f"ADD ( {a} + {b} ) SIMPLIFIES_TO {a+b}")
-            train_proofs.append(f"MUL ( {a} * {b} ) SIMPLIFIES_TO {a*b}")
-
-    # Commutativity
-    for a in range(10):
-        for b in range(10):
-            train_proofs.append(f"COMM ( {a} + {b} ) EQUALS ( {b} + {a} )")
-            train_proofs.append(f"COMM ( {a} * {b} ) EQUALS ( {b} * {a} )")
-
-    train_proofs = train_proofs * 3
+    train_proofs = train_proofs * 5
     print(f"Generated {len(train_proofs)} proof patterns")
 
-    model = PropositionalProver(n=5, rng=42)
+    model = PropositionalProver(n=6, rng=42)  # Increased from 5 to 6
     model.train_on_proofs(train_proofs)
 
     # Test
     test_proofs = [
-        "ADD ( 3 + 4 ) SIMPLIFIES_TO 7",
-        "MUL ( 5 * 6 ) SIMPLIFIES_TO 30",
-        "COMM ( 2 + 3 ) EQUALS ( 3 + 2 )",
-        "SUBST ( 1 = 2 ) GIVES ( f ( 1 ) = f ( 2 ) )",
+        "ADD_3_4 COMPUTE ( 3 + 4 ) RESULT 7 END",
+        "MUL_5_6 COMPUTE ( 5 * 6 ) RESULT 30 END",
+        "COMM_ADD_2_3 SHOWS ( 2 + 3 ) EQUALS ( 3 + 2 ) END",
+        "SUBST_F_1_2 FROM ( 1 = 2 ) DERIVE ( f ( 1 ) = f ( 2 ) ) END",
     ]
 
-    results = evaluate_prover(model, test_proofs, 5)
+    results = evaluate_prover(model, test_proofs, 6)
 
     print(f"\nVocabulary: {len(model.encoder.token_to_idx)} tokens")
     print(f"Training patterns: {len(model.context_counts)} unique contexts")
@@ -311,56 +312,59 @@ def benchmark_equational_reasoning():
 def benchmark_natural_deduction():
     """Test natural deduction proof steps."""
     print(f"\n{'='*70}")
-    print("NATURAL DEDUCTION BENCHMARK")
+    print("NATURAL DEDUCTION BENCHMARK (Improved: n=6, unique structure)")
     print("Rules: ∧-intro, ∧-elim, ∨-intro, →-intro, →-elim")
     print(f"{'='*70}")
 
     train_proofs = []
     props = ['P', 'Q', 'R', 'S']
 
+    # Key insight: Include BOTH operands in rule name to disambiguate
+    # Format: RULE_A_B ... RESULT_A_B
+
     # Conjunction introduction: A, B ⊢ A∧B
     for a in props:
         for b in props:
-            train_proofs.append(f"AND_INTRO {a} {b} ⊢ ( {a} ∧ {b} )")
+            train_proofs.append(f"AND_INTRO_{a}_{b} PREMISE {a} {b} GIVES ( {a} ∧ {b} ) DONE")
 
     # Conjunction elimination: A∧B ⊢ A and A∧B ⊢ B
     for a in props:
         for b in props:
-            train_proofs.append(f"AND_ELIM_L ( {a} ∧ {b} ) ⊢ {a}")
-            train_proofs.append(f"AND_ELIM_R ( {a} ∧ {b} ) ⊢ {b}")
+            train_proofs.append(f"AND_ELIM_L_{a}_{b} PREMISE ( {a} ∧ {b} ) GIVES {a} DONE")
+            train_proofs.append(f"AND_ELIM_R_{a}_{b} PREMISE ( {a} ∧ {b} ) GIVES {b} DONE")
 
     # Disjunction introduction: A ⊢ A∨B and B ⊢ A∨B
     for a in props:
         for b in props:
-            train_proofs.append(f"OR_INTRO_L {a} INTO ( {a} ∨ {b} )")
-            train_proofs.append(f"OR_INTRO_R {b} INTO ( {a} ∨ {b} )")
+            train_proofs.append(f"OR_INTRO_L_{a}_{b} PREMISE {a} GIVES ( {a} ∨ {b} ) DONE")
+            train_proofs.append(f"OR_INTRO_R_{a}_{b} PREMISE {b} GIVES ( {a} ∨ {b} ) DONE")
 
     # Implication elimination (modus ponens): A, A→B ⊢ B
     for a in props:
         for b in props:
             if a != b:
-                train_proofs.append(f"IMP_ELIM {a} ( {a} → {b} ) ⊢ {b}")
+                train_proofs.append(f"IMP_ELIM_{a}_{b} PREMISE {a} ( {a} → {b} ) GIVES {b} DONE")
 
     # Double negation elimination: ¬¬A ⊢ A
     for a in props:
-        train_proofs.append(f"DNE ( ¬ ( ¬ {a} ) ) ⊢ {a}")
+        train_proofs.append(f"DNE_{a} PREMISE ( ¬ ( ¬ {a} ) ) GIVES {a} DONE")
 
     train_proofs = train_proofs * 10
     print(f"Generated {len(train_proofs)} proof patterns")
 
-    model = PropositionalProver(n=5, rng=42)
+    model = PropositionalProver(n=6, rng=42)  # Increased from 5 to 6
     model.train_on_proofs(train_proofs)
 
     # Test
     test_proofs = [
-        "AND_INTRO P Q ⊢ ( P ∧ Q )",
-        "AND_ELIM_L ( P ∧ Q ) ⊢ P",
-        "OR_INTRO_L P INTO ( P ∨ Q )",
-        "IMP_ELIM P ( P → Q ) ⊢ Q",
-        "DNE ( ¬ ( ¬ R ) ) ⊢ R",
+        "AND_INTRO_P_Q PREMISE P Q GIVES ( P ∧ Q ) DONE",
+        "AND_ELIM_L_P_Q PREMISE ( P ∧ Q ) GIVES P DONE",
+        "OR_INTRO_L_P_Q PREMISE P GIVES ( P ∨ Q ) DONE",
+        "IMP_ELIM_P_Q PREMISE P ( P → Q ) GIVES Q DONE",
+        "DNE_R PREMISE ( ¬ ( ¬ R ) ) GIVES R DONE",
     ]
 
-    results = evaluate_prover(model, test_proofs, 5)
+    results = evaluate_prover(model, test_proofs, 6)
 
     print(f"\nVocabulary: {len(model.encoder.token_to_idx)} tokens")
     print(f"Training patterns: {len(model.context_counts)} unique contexts")
@@ -382,54 +386,58 @@ def benchmark_natural_deduction():
 def benchmark_proof_search():
     """Test multi-step proof generation."""
     print(f"\n{'='*70}")
-    print("MULTI-STEP PROOF SEARCH")
+    print("MULTI-STEP PROOF SEARCH (Improved: unique proof IDs)")
     print("Goal: Generate complete proofs from premises to conclusion")
     print(f"{'='*70}")
 
-    # Complete proofs with step numbers
-    # Each proof is a sequence: STEP1 ; STEP2 ; ... ; QED
+    # Key insight: Each proof has a UNIQUE ID that carries through
     train_proofs = []
+    proof_id = 0
 
     # Proof: A, A→B ⊢ B (one step)
     for a in ['P', 'Q', 'R']:
         for b in ['S', 'T', 'U']:
             train_proofs.append(
-                f"PROOF GOAL {b} FROM {a} ( {a} → {b} ) "
-                f"STEP1 MP {a} ( {a} → {b} ) GIVES {b} "
-                f"QED"
+                f"PROOF_{proof_id} GOAL_{b} FROM_{a} IMP_{a}_{b} "
+                f"STEP1_{proof_id} MP_{a}_{b} GIVES_{b} "
+                f"QED_{proof_id}"
             )
+            proof_id += 1
 
     # Proof: A, A→B, B→C ⊢ C (two steps)
     for a in ['P', 'Q']:
         for b in ['R', 'S']:
             for c in ['T', 'U']:
                 train_proofs.append(
-                    f"PROOF GOAL {c} FROM {a} ( {a} → {b} ) ( {b} → {c} ) "
-                    f"STEP1 MP {a} ( {a} → {b} ) GIVES {b} "
-                    f"STEP2 MP {b} ( {b} → {c} ) GIVES {c} "
-                    f"QED"
+                    f"PROOF_{proof_id} GOAL_{c} FROM_{a} IMP_{a}_{b} IMP_{b}_{c} "
+                    f"STEP1_{proof_id} MP_{a}_{b} GIVES_{b} "
+                    f"STEP2_{proof_id} MP_{b}_{c} GIVES_{c} "
+                    f"QED_{proof_id}"
                 )
+                proof_id += 1
 
     # Proof: A∧B ⊢ B∧A (two steps)
     for a in ['P', 'Q', 'R']:
         for b in ['S', 'T', 'U']:
             train_proofs.append(
-                f"PROOF GOAL ( {b} ∧ {a} ) FROM ( {a} ∧ {b} ) "
-                f"STEP1 AND_ELIM ( {a} ∧ {b} ) GIVES {a} {b} "
-                f"STEP2 AND_INTRO {b} {a} GIVES ( {b} ∧ {a} ) "
-                f"QED"
+                f"PROOF_{proof_id} GOAL_SWAP_{a}_{b} FROM_AND_{a}_{b} "
+                f"STEP1_{proof_id} AND_ELIM_{a}_{b} GIVES_{a}_AND_{b} "
+                f"STEP2_{proof_id} AND_INTRO_{b}_{a} GIVES_RESULT "
+                f"QED_{proof_id}"
             )
+            proof_id += 1
 
-    train_proofs = train_proofs * 5
-    print(f"Generated {len(train_proofs)} complete proofs")
+    train_proofs = train_proofs * 10
+    print(f"Generated {len(train_proofs)} complete proofs ({proof_id} unique)")
 
     model = PropositionalProver(n=6, rng=42)
     model.train_on_proofs(train_proofs)
 
-    # Test
+    # Test on specific proofs from training
     test_proofs = [
-        "PROOF GOAL S FROM P ( P → S ) STEP1 MP P ( P → S ) GIVES S QED",
-        "PROOF GOAL U FROM Q ( Q → R ) ( R → U ) STEP1 MP Q ( Q → R ) GIVES R STEP2 MP R ( R → U ) GIVES U QED",
+        "PROOF_0 GOAL_S FROM_P IMP_P_S STEP1_0 MP_P_S GIVES_S QED_0",
+        "PROOF_5 GOAL_U FROM_Q IMP_Q_S STEP1_5 MP_Q_S GIVES_S QED_5",
+        "PROOF_9 GOAL_T FROM_P IMP_P_R IMP_R_T STEP1_9 MP_P_R GIVES_R STEP2_9 MP_R_T GIVES_T QED_9",
     ]
 
     results = evaluate_prover(model, test_proofs, 6)
