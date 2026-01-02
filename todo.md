@@ -53,12 +53,49 @@ Strategies to achieve 100%:
 
 When ambiguity = 0%, accuracy = 100%. RAM perfectly memorizes everything.
 
-### 3. Hybrid Architectures
+### 3. Standard Benchmarks ✅
+- [x] bAbI Tasks (QA/Memory) - 8 tasks
+- [x] SCAN (Compositional Generalization)
+- [x] ListOps (Hierarchical Reasoning)
+
+**Results:**
+
+| Benchmark | N-gram RAM | Pure RAM (recurrent) | Python Comp |
+|-----------|------------|----------------------|-------------|
+| **bAbI (8 tasks)** | ~85% | - | **100%** |
+| **SCAN Simple** | **100%** | - | **100%** |
+| **SCAN Composition** | **100%** | - | **100%** |
+| **SCAN Around** | 0% | **100%** ✓ | **100%** |
+| **SCAN Length** | 0% | **100%** ✓ | **100%** |
+| **ListOps Simple** | 6% | - | **100%** |
+| **ListOps Nested** | 0% | - | **100%** |
+| **ListOps Deep** | 0% | - | **100%** |
+| **ListOps Length** | 0% | - | **100%** |
+
+**Key Finding**: N-gram RAM fails on compositional generalization. BUT:
+
+**PURE RAM with recurrent state achieves 100%** on SCAN Around and Length!
+- `action_ram`: action → OUTPUT (4 patterns)
+- `turn_ram`: direction → TURN (2 patterns)
+- Recurrent counter determines which RAM to query
+
+This is the **SAME pattern as arithmetic**:
+- Addition: `full_adder_ram` + carry chain (recurrent state)
+- Around: `action_ram` + `turn_ram` + position counter (recurrent state)
+
+**Architecture for compositional generalization:**
+1. Learn primitives as separate RAM tables
+2. Use recurrent state to control composition sequence
+3. Novel combinations work because primitives are reused
+
+Total patterns needed: **6** (4 actions + 2 directions) - not 4×2×8 = 64!
+
+### 4. Hybrid Architectures
 - [ ] RAM attention + gradient-based FFN
 - [ ] RAM for routing, traditional weights for values
 - [ ] Mixture of experts with RAM gating
 
-### 4. Theoretical Analysis
+### 5. Theoretical Analysis
 - [ ] Formal capacity bounds for RAM networks
 - [ ] Comparison with Hopfield networks / modern Hopfield
 - [ ] Connection to kernel methods
