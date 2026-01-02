@@ -6,7 +6,7 @@ Each strategy encapsulates its mask generation logic and parameters.
 
 Usage:
     strategy = MaskStrategyFactory.create(MaskStrategy.CAUSAL)
-    mask = strategy.create_mask(seq_len=10)
+    mask = strategy.create(seq_len=10)
 
     # Or with parameters
     strategy = MaskStrategyFactory.create(
@@ -14,11 +14,11 @@ Usage:
         window_size=3,
         causal=True,
     )
-    mask = strategy.create_mask(seq_len=10)
+    mask = strategy.create(seq_len=10)
 """
 
 from abc import ABC, abstractmethod
-from typing import Callable, Protocol
+from typing import Callable
 from enum import Enum, auto
 from torch import Tensor, zeros, ones, tril, bool as tbool
 
@@ -53,7 +53,7 @@ class AttentionMaskStrategy(ABC):
         pass
 
     @abstractmethod
-    def create_mask(self, seq_len: int, key_len: int | None = None) -> Tensor:
+    def create(self, seq_len: int, key_len: int | None = None) -> Tensor:
         """
         Create attention mask for given sequence length.
 
@@ -78,7 +78,7 @@ class CausalMask(AttentionMaskStrategy):
     def strategy_type(self) -> MaskStrategy:
         return MaskStrategy.CAUSAL
 
-    def create_mask(self, seq_len: int, key_len: int | None = None) -> Tensor:
+    def create(self, seq_len: int, key_len: int | None = None) -> Tensor:
         key_len = key_len or seq_len
         if key_len != seq_len:
             # Cross-attention: full mask (causal doesn't apply)
@@ -93,7 +93,7 @@ class BidirectionalMask(AttentionMaskStrategy):
     def strategy_type(self) -> MaskStrategy:
         return MaskStrategy.BIDIRECTIONAL
 
-    def create_mask(self, seq_len: int, key_len: int | None = None) -> Tensor:
+    def create(self, seq_len: int, key_len: int | None = None) -> Tensor:
         key_len = key_len or seq_len
         return ones(seq_len, key_len, dtype=tbool)
 
@@ -109,7 +109,7 @@ class SlidingWindowMask(AttentionMaskStrategy):
     def strategy_type(self) -> MaskStrategy:
         return MaskStrategy.SLIDING_WINDOW
 
-    def create_mask(self, seq_len: int, key_len: int | None = None) -> Tensor:
+    def create(self, seq_len: int, key_len: int | None = None) -> Tensor:
         key_len = key_len or seq_len
         mask = zeros(seq_len, key_len, dtype=tbool)
         for i in range(seq_len):
@@ -129,7 +129,7 @@ class BlockMask(AttentionMaskStrategy):
     def strategy_type(self) -> MaskStrategy:
         return MaskStrategy.BLOCK
 
-    def create_mask(self, seq_len: int, key_len: int | None = None) -> Tensor:
+    def create(self, seq_len: int, key_len: int | None = None) -> Tensor:
         key_len = key_len or seq_len
         mask = zeros(seq_len, key_len, dtype=tbool)
         for i in range(seq_len):
@@ -149,7 +149,7 @@ class PrefixMask(AttentionMaskStrategy):
     def strategy_type(self) -> MaskStrategy:
         return MaskStrategy.PREFIX
 
-    def create_mask(self, seq_len: int, key_len: int | None = None) -> Tensor:
+    def create(self, seq_len: int, key_len: int | None = None) -> Tensor:
         key_len = key_len or seq_len
         mask = zeros(seq_len, key_len, dtype=tbool)
         for i in range(seq_len):
@@ -174,7 +174,7 @@ class StridedMask(AttentionMaskStrategy):
     def strategy_type(self) -> MaskStrategy:
         return MaskStrategy.STRIDED
 
-    def create_mask(self, seq_len: int, key_len: int | None = None) -> Tensor:
+    def create(self, seq_len: int, key_len: int | None = None) -> Tensor:
         key_len = key_len or seq_len
         mask = zeros(seq_len, key_len, dtype=tbool)
         for i in range(seq_len):
@@ -204,7 +204,7 @@ class DilatedMask(AttentionMaskStrategy):
     def strategy_type(self) -> MaskStrategy:
         return MaskStrategy.DILATED
 
-    def create_mask(self, seq_len: int, key_len: int | None = None) -> Tensor:
+    def create(self, seq_len: int, key_len: int | None = None) -> Tensor:
         key_len = key_len or seq_len
         mask = zeros(seq_len, key_len, dtype=tbool)
         for i in range(seq_len):
@@ -241,7 +241,7 @@ class LocalGlobalMask(AttentionMaskStrategy):
     def strategy_type(self) -> MaskStrategy:
         return MaskStrategy.LOCAL_GLOBAL
 
-    def create_mask(self, seq_len: int, key_len: int | None = None) -> Tensor:
+    def create(self, seq_len: int, key_len: int | None = None) -> Tensor:
         key_len = key_len or seq_len
         mask = zeros(seq_len, key_len, dtype=tbool)
         for i in range(seq_len):
@@ -269,7 +269,7 @@ class CustomMask(AttentionMaskStrategy):
     def strategy_type(self) -> MaskStrategy:
         return MaskStrategy.CUSTOM
 
-    def create_mask(self, seq_len: int, key_len: int | None = None) -> Tensor:
+    def create(self, seq_len: int, key_len: int | None = None) -> Tensor:
         key_len = key_len or seq_len
         mask = zeros(seq_len, key_len, dtype=tbool)
         for i in range(seq_len):
@@ -294,11 +294,11 @@ class LearnedSparseMask(AttentionMaskStrategy):
         mask_strategy.train_pattern(query_pos=5, key_pos=10, should_attend=False)
 
         # Or train from an existing mask
-        causal_mask = CausalMask().create_mask(seq_len=16)
+        causal_mask = CausalMask().create(seq_len=16)
         mask_strategy.train_from_mask(causal_mask)
 
         # Use in attention
-        mask = mask_strategy.create_mask(seq_len=16)
+        mask = mask_strategy.create(seq_len=16)
     """
 
     def __init__(
@@ -338,21 +338,20 @@ class LearnedSparseMask(AttentionMaskStrategy):
 
     def _init_causal(self) -> None:
         """Initialize with causal attention pattern."""
-        import torch
         for i in range(self.max_seq_len):
             for j in range(i + 1):  # j <= i for causal
                 self.train_pattern(i, j, should_attend=True)
 
     def _encode_positions(self, query_pos: int, key_pos: int) -> Tensor:
         """Encode position pair as binary tensor."""
-        import torch
+        from torch import tensor, uint8
         # Binary encode query position
         q_bits = [(query_pos >> b) & 1 for b in range(self.position_bits)]
         # Binary encode key position
         k_bits = [(key_pos >> b) & 1 for b in range(self.position_bits)]
         # Concatenate
         bits = q_bits + k_bits
-        return torch.tensor(bits, dtype=torch.uint8)
+        return tensor(bits, dtype=uint8)
 
     @property
     def strategy_type(self) -> MaskStrategy:
@@ -399,7 +398,7 @@ class LearnedSparseMask(AttentionMaskStrategy):
                 count += 1
         return count
 
-    def create_mask(self, seq_len: int, key_len: int | None = None) -> Tensor:
+    def create(self, seq_len: int, key_len: int | None = None) -> Tensor:
         """
         Create attention mask using learned patterns.
 
@@ -426,7 +425,7 @@ class LearnedSparseMask(AttentionMaskStrategy):
 
     def get_sparsity(self, seq_len: int) -> float:
         """Get sparsity ratio (fraction of True values) for a sequence length."""
-        mask = self.create_mask(seq_len)
+        mask = self.create(seq_len)
         return mask.sum().item() / mask.numel()
 
 
