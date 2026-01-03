@@ -191,6 +191,7 @@ fn evaluate_fullnetwork_perplexity_batch_cpu(
     exact_probs: Vec<Option<f64>>,
     eval_subset: usize,
     vocab_size: usize,
+    cascade_threshold: f64,
 ) -> PyResult<Vec<f64>> {
     let word_map: FxHashMap<String, u64> = word_to_cluster.into_iter().collect();
 
@@ -204,6 +205,7 @@ fn evaluate_fullnetwork_perplexity_batch_cpu(
         &exact_probs,
         eval_subset,
         vocab_size,
+        cascade_threshold,
     );
 
     Ok(results)

@@ -805,7 +805,7 @@ class RAMLM_v2:
 			total_bits = ram.total_bits
 
 			# Create batch evaluation function using PERPLEXITY (lower is better)
-			def create_perplexity_batch_fn(ram_idx, target_n, exact_probs_ref, vocab_size_ref, pop_size):
+			def create_perplexity_batch_fn(ram_idx, target_n, exact_probs_ref, vocab_size_ref, cascade_threshold_ref, pop_size):
 				eval_count = [0]
 				global_best = [float('inf')]  # Track best perplexity (lower is better)
 				def batch_eval(candidates):
@@ -817,7 +817,8 @@ class RAMLM_v2:
 						perplexities = ram_accelerator.evaluate_fullnetwork_perplexity_batch_cpu(
 							current_all_conns, candidate_lists, ram_idx,
 							word_to_bits, train_tokens, test_tokens,
-							exact_probs_ref, eval_subset, vocab_size_ref
+							exact_probs_ref, eval_subset, vocab_size_ref,
+							cascade_threshold_ref
 						)
 						elapsed = time_module.time() - start
 						eval_count[0] += 1
@@ -888,7 +889,7 @@ class RAMLM_v2:
 						return errors
 				return batch_eval
 
-			batch_fn = create_perplexity_batch_fn(ram_idx, n, exact_probs, vocab_size, ga_pop)
+			batch_fn = create_perplexity_batch_fn(ram_idx, n, exact_probs, vocab_size, self.cascade_threshold, ga_pop)
 
 			# Initial perplexity (using same code path as optimization)
 			initial_ppls = batch_fn([conn_tensor])

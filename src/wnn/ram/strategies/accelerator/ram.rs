@@ -525,6 +525,7 @@ pub fn evaluate_fullnetwork_perplexity<S: AsRef<str>>(
     exact_probs: &[Option<f64>],   // Pre-computed: Some(prob) if exact covers, None if not
     eval_subset: usize,
     vocab_size: usize,             // For smoothing when no prediction
+    cascade_threshold: f64,        // Confidence threshold for cascade
 ) -> f64 {
     // Build all 5 RAMs
     let n_values = [2, 3, 4, 5, 6];
@@ -546,7 +547,6 @@ pub fn evaluate_fullnetwork_perplexity<S: AsRef<str>>(
 
     for i in 0..total {
         let target = test_tokens[i + 6].as_ref();
-        let target_word_id = word_to_bits.get(target).copied();
 
         // Get probability for this position
         let prob: f64 = if let Some(exact_prob) = exact_probs[i] {
@@ -567,15 +567,14 @@ pub fn evaluate_fullnetwork_perplexity<S: AsRef<str>>(
                     .collect();
 
                 if let Some((pred_word_id, conf)) = rams[ram_idx].predict(&context) {
-                    if conf > 0.1 {
-                        // Check if prediction matches target
-                        if let Some(tid) = target_word_id {
-                            if pred_word_id == tid as u32 {
+                    if (conf as f64) > cascade_threshold {
+                        // FIX: Compare strings, not numeric IDs!
+                        if let Some(pred_word) = rams[ram_idx].get_word(pred_word_id) {
+                            if pred_word == target {
                                 // Correct prediction - use confidence as probability
                                 found_prob = Some((conf as f64).max(min_prob));
                             } else {
                                 // Wrong prediction - assign low probability to target
-                                // The model is confident about wrong answer
                                 found_prob = Some(min_prob);
                             }
                         }
@@ -586,7 +585,7 @@ pub fn evaluate_fullnetwork_perplexity<S: AsRef<str>>(
 
             // Voting fallback
             if found_prob.is_none() {
-                let mut votes: std::collections::HashMap<u32, f32> = std::collections::HashMap::new();
+                let mut votes: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
                 let mut total_weight = 0.0f32;
 
                 for (ram_idx, &n) in n_values.iter().enumerate() {
@@ -599,19 +598,20 @@ pub fn evaluate_fullnetwork_perplexity<S: AsRef<str>>(
                         .collect();
 
                     if let Some((word_id, conf)) = rams[ram_idx].predict(&context) {
-                        let weight = conf * (n as f32);
-                        *votes.entry(word_id).or_insert(0.0) += weight;
-                        total_weight += weight;
+                        // FIX: Use actual word string as vote key
+                        if let Some(word) = rams[ram_idx].get_word(word_id) {
+                            let weight = conf * (n as f32);
+                            *votes.entry(word.to_string()).or_insert(0.0) += weight;
+                            total_weight += weight;
+                        }
                     }
                 }
 
                 if total_weight > 0.0 {
-                    // Get probability assigned to target
-                    if let Some(tid) = target_word_id {
-                        let target_votes = votes.get(&(tid as u32)).copied().unwrap_or(0.0);
-                        let prob = (target_votes / total_weight) as f64;
-                        found_prob = Some(prob.max(min_prob));
-                    }
+                    // Get probability assigned to target word
+                    let target_votes = votes.get(target).copied().unwrap_or(0.0);
+                    let prob = (target_votes / total_weight) as f64;
+                    found_prob = Some(prob.max(min_prob));
                 }
             }
 
@@ -641,6 +641,7 @@ pub fn evaluate_fullnetwork_perplexity_batch<S: AsRef<str> + Sync>(
     exact_probs: &[Option<f64>],
     eval_subset: usize,
     vocab_size: usize,
+    cascade_threshold: f64,
 ) -> Vec<f64> {
     use rayon::prelude::*;
 
@@ -654,6 +655,6 @@ pub fn evaluate_fullnetwork_perplexity_batch<S: AsRef<str> + Sync>(
             }
         }
 
-        evaluate_fullnetwork_perplexity(&conns, word_to_bits, train_tokens, test_tokens, exact_probs, eval_subset, vocab_size)
+        evaluate_fullnetwork_perplexity(&conns, word_to_bits, train_tokens, test_tokens, exact_probs, eval_subset, vocab_size, cascade_threshold)
     }).collect()
 }
