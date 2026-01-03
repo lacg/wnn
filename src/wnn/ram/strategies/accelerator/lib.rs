@@ -118,12 +118,106 @@ fn cpu_cores() -> usize {
     rayon::current_num_threads()
 }
 
+/// Evaluate cascade with all RAMs, optimizing one at a time
+/// base_connectivities: [n2_conn, n3_conn, n4_conn, n5_conn, n6_conn]
+/// candidates: candidate connectivities for the RAM at target_ram_idx
+/// target_ram_idx: 0=n2, 1=n3, 2=n4, 3=n5, 4=n6
+#[pyfunction]
+fn evaluate_cascade_batch_cpu(
+    base_connectivities: Vec<Vec<Vec<i64>>>,  // 5 RAMs: [n2, n3, n4, n5, n6]
+    candidates: Vec<Vec<Vec<i64>>>,            // candidate patterns for target RAM
+    target_ram_idx: usize,
+    word_to_cluster: std::collections::HashMap<String, u64>,
+    train_tokens: Vec<String>,
+    test_tokens: Vec<String>,
+    eval_subset: usize,
+) -> PyResult<Vec<f64>> {
+    let word_map: FxHashMap<String, u64> = word_to_cluster.into_iter().collect();
+
+    let results = ram::evaluate_cascade_batch(
+        &base_connectivities,
+        &candidates,
+        target_ram_idx,
+        &word_map,
+        &train_tokens,
+        &test_tokens,
+        eval_subset,
+    );
+
+    Ok(results)
+}
+
+/// Evaluate FULL NETWORK (exact + generalized + voting) with pre-computed exact results
+/// exact_results: For each test position - None (not covered), Some(true) (correct), Some(false) (incorrect)
+/// Only evaluates generalized RAMs for positions not covered by exact
+#[pyfunction]
+fn evaluate_fullnetwork_batch_cpu(
+    base_connectivities: Vec<Vec<Vec<i64>>>,  // 5 RAMs: [n2, n3, n4, n5, n6]
+    candidates: Vec<Vec<Vec<i64>>>,            // candidate patterns for target RAM
+    target_ram_idx: usize,
+    word_to_cluster: std::collections::HashMap<String, u64>,
+    train_tokens: Vec<String>,
+    test_tokens: Vec<String>,
+    exact_results: Vec<Option<bool>>,          // Pre-computed exact RAM results
+    eval_subset: usize,
+) -> PyResult<Vec<f64>> {
+    let word_map: FxHashMap<String, u64> = word_to_cluster.into_iter().collect();
+
+    let results = ram::evaluate_fullnetwork_batch(
+        &base_connectivities,
+        &candidates,
+        target_ram_idx,
+        &word_map,
+        &train_tokens,
+        &test_tokens,
+        &exact_results,
+        eval_subset,
+    );
+
+    Ok(results)
+}
+
+/// Evaluate FULL NETWORK using PERPLEXITY as metric (lower is better)
+/// exact_probs: For each test position - None (not covered by exact), Some(prob) (probability assigned to target)
+/// Returns perplexity = exp(mean cross-entropy) for each candidate
+#[pyfunction]
+fn evaluate_fullnetwork_perplexity_batch_cpu(
+    base_connectivities: Vec<Vec<Vec<i64>>>,
+    candidates: Vec<Vec<Vec<i64>>>,
+    target_ram_idx: usize,
+    word_to_cluster: std::collections::HashMap<String, u64>,
+    train_tokens: Vec<String>,
+    test_tokens: Vec<String>,
+    exact_probs: Vec<Option<f64>>,
+    eval_subset: usize,
+    vocab_size: usize,
+) -> PyResult<Vec<f64>> {
+    let word_map: FxHashMap<String, u64> = word_to_cluster.into_iter().collect();
+
+    let results = ram::evaluate_fullnetwork_perplexity_batch(
+        &base_connectivities,
+        &candidates,
+        target_ram_idx,
+        &word_map,
+        &train_tokens,
+        &test_tokens,
+        &exact_probs,
+        eval_subset,
+        vocab_size,
+    );
+
+    Ok(results)
+}
+
 /// Python module definition
 #[pymodule]
 fn ram_accelerator(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(evaluate_connectivity_cpu, m)?)?;
     m.add_function(wrap_pyfunction!(evaluate_batch_cpu, m)?)?;
     m.add_function(wrap_pyfunction!(evaluate_batch_metal, m)?)?;
+    m.add_function(wrap_pyfunction!(evaluate_cascade_batch_cpu, m)?)?;
+    m.add_function(wrap_pyfunction!(evaluate_fullnetwork_batch_cpu, m)?)?;
+    m.add_function(wrap_pyfunction!(evaluate_fullnetwork_perplexity_batch_cpu, m)?)?;
     m.add_function(wrap_pyfunction!(metal_available, m)?)?;
     m.add_function(wrap_pyfunction!(metal_device_info, m)?)?;
     m.add_function(wrap_pyfunction!(cpu_cores, m)?)?;

@@ -46,6 +46,15 @@ from wnn.ram.strategies.connectivity.genetic_algorithm import (
 	GeneticAlgorithmConfig,
 )
 from wnn.ram.strategies.connectivity.factory import OptimizerStrategyFactory
+from wnn.ram.strategies.connectivity.accelerated import (
+	AcceleratedOptimizer,
+	OptimizerConfig,
+	EvaluationContext,
+	OptimizationStrategy,
+	create_optimizer,
+	RUST_AVAILABLE,
+	RUST_CPU_CORES,
+)
 
 
 __all__ = [
@@ -63,4 +72,12 @@ __all__ = [
 	'GeneticAlgorithmConfig',
 	# Factory
 	'OptimizerStrategyFactory',
+	# Accelerated (recommended)
+	'AcceleratedOptimizer',
+	'OptimizerConfig',
+	'EvaluationContext',
+	'OptimizationStrategy',
+	'create_optimizer',
+	'RUST_AVAILABLE',
+	'RUST_CPU_CORES',
 ]

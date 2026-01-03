@@ -31,6 +31,8 @@ from typing import Optional
 from joblib import Parallel, delayed
 import multiprocessing
 
+from wnn.ram.enums import BenchmarkMode, TokenizerType
+
 # Number of parallel workers (leave some cores for system)
 N_WORKERS = max(1, multiprocessing.cpu_count() - 4)  # 12 on 16-core M4 Max
 
@@ -44,6 +46,62 @@ try:
 except ImportError:
 	RUST_AVAILABLE = False
 	RUST_CPU_CORES = 0
+
+# ============================================================================
+# TOKENIZER FACTORY - For fair comparison to published benchmarks
+# ============================================================================
+def get_tokenizer(tokenizer_type: TokenizerType):
+	"""
+	Get tokenizer function based on type.
+
+	Published WikiText-2 perplexity benchmarks:
+	- Word-level (WIKITEXT_WORD): LSTM ~65-100, AWD-LSTM ~57
+	- GPT-2 BPE (GPT2_BPE): GPT-2 Small ~29, GPT-2 Large ~22
+
+	Note: Word-level and BPE perplexities are NOT directly comparable!
+	"""
+	import re
+
+	if tokenizer_type == TokenizerType.SIMPLE:
+		# Original simple tokenizer (not standard, just for testing)
+		def tokenize(text):
+			return re.findall(r"\w+|[^\w\s]", text.lower())
+		return tokenize, None  # No special vocab
+
+	elif tokenizer_type == TokenizerType.WIKITEXT_WORD:
+		# Standard WikiText-2 word-level preprocessing
+		# - Lowercase (optional, some benchmarks don't)
+		# - Keep punctuation as tokens
+		# - Replace rare words with <unk> (we skip this, just use all words)
+		def tokenize(text):
+			# WikiText uses space-separated tokens with special handling
+			# Raw WikiText-2 has tokens separated by spaces
+			tokens = text.split()
+			# Filter empty and normalize
+			tokens = [t for t in tokens if t.strip()]
+			return tokens
+		return tokenize, None
+
+	elif tokenizer_type == TokenizerType.GPT2_BPE:
+		# GPT-2 BPE tokenization - requires tiktoken
+		try:
+			import tiktoken
+			enc = tiktoken.get_encoding("gpt2")
+
+			def tokenize(text):
+				# Returns token IDs, we convert to strings for compatibility
+				token_ids = enc.encode(text)
+				# Convert IDs to string representation for our word-based model
+				return [str(tid) for tid in token_ids]
+
+			return tokenize, enc
+		except ImportError:
+			print("WARNING: tiktoken not installed. Install with: pip install tiktoken")
+			print("Falling back to WIKITEXT_WORD tokenizer.")
+			return get_tokenizer(TokenizerType.WIKITEXT_WORD)
+
+	else:
+		raise ValueError(f"Unknown tokenizer type: {tokenizer_type}")
 
 # ============================================================================
 # LOGGING SETUP - Dual output to console and file
@@ -137,14 +195,8 @@ class LogCapture:
 	def flush(self):
 		pass
 
-# Import thesis optimization strategies
-from wnn.ram.enums import OptimizationMethod
-from wnn.ram.strategies.connectivity import (
-	OptimizerStrategyFactory,
-	TabuSearchStrategy, TabuSearchConfig,
-	SimulatedAnnealingStrategy, SimulatedAnnealingConfig,
-	GeneticAlgorithmStrategy, GeneticAlgorithmConfig,
-)
+# Import thesis optimization strategies (now using AcceleratedOptimizer internally)
+from wnn.ram.strategies.connectivity import OptimizerResult
 
 
 # Timeout handling
@@ -458,23 +510,39 @@ def _evaluate_batch_rust(
 	if len(connectivities) == 0:
 		return []
 
-	# Convert word_to_cluster to use cluster IDs (Rust expects dict[str, int])
-	# The Python version uses hash() % n_clusters for unknown words
-	# We need to ensure all words in train/test are in the mapping
+	# Precompute full 12-bit encoding for each word (7 cluster + 5 hash bits)
+	# This MUST match Python's _word_to_bits() exactly for Rust to produce same results
 	n_clusters = 256
-	word_map = {}
+	word_to_bits = {}
+
+	def compute_word_bits(word: str, cluster: int) -> int:
+		"""Compute 12-bit encoding: 7 cluster bits + 5 hash bits"""
+		h = hash(word)
+		bits = 0
+		# First 7 bits from cluster
+		for i in range(7):
+			if (cluster >> i) & 1:
+				bits |= 1 << i
+		# Next 5 bits from hash
+		for i in range(5):
+			if (h >> i) & 1:
+				bits |= 1 << (7 + i)
+		return bits
+
+	# Encode all words from word_to_cluster
 	for word, cluster in word_to_cluster.items():
-		word_map[word] = cluster
+		word_to_bits[word] = compute_word_bits(word, cluster)
 
-	# Add any missing words from tokens
+	# Add any missing words from tokens (use hash-based cluster)
 	for word in set(train_tokens) | set(test_tokens):
-		if word not in word_map:
-			word_map[word] = hash(word) % n_clusters
+		if word not in word_to_bits:
+			cluster = hash(word) % n_clusters
+			word_to_bits[word] = compute_word_bits(word, cluster)
 
-	# Call Rust accelerator
+	# Call Rust accelerator with precomputed bits
 	results = ram_accelerator.evaluate_batch_cpu(
 		connectivities,
-		word_map,
+		word_to_bits,  # Now passes full 12-bit encoding, not just cluster
 		train_tokens,
 		test_tokens,
 		bits_per_neuron,
@@ -522,9 +590,9 @@ class RAMLM_v2:
 	RAM Language Model v2 with thesis optimization.
 	"""
 
-	def __init__(self, freq_threshold: int = 50, fast_mode: bool = True):
+	def __init__(self, freq_threshold: int = 50, mode: BenchmarkMode = BenchmarkMode.FAST):
 		self.freq_threshold = freq_threshold
-		self.fast_mode = fast_mode  # For faster testing
+		self.mode = mode
 		self.word_counts = Counter()
 		self.high_freq_words = set()
 
@@ -558,9 +626,9 @@ class RAMLM_v2:
 
 		# Train generalized RAMs with partial connectivity
 		log("Training generalized RAMs (partial connectivity)...")
-		# Reduced params for fast_mode
-		n_neurons = 16 if self.fast_mode else 64
-		bits_per_neuron = 10 if self.fast_mode else 14
+		# Parameters scale with benchmark mode
+		n_neurons = 16 if self.mode == BenchmarkMode.FAST else 64
+		bits_per_neuron = 10 if self.mode == BenchmarkMode.FAST else 14
 
 		for n in [2, 3, 4, 5, 6]:  # Added n=6 for longer context
 			ram = GeneralizedNGramRAM(
@@ -582,677 +650,375 @@ class RAMLM_v2:
 			self._optimize_connectivity(tokens)
 
 	def _optimize_connectivity(self, tokens: list[str]):
-		"""Optimize connectivity patterns using thesis methods."""
+		"""
+		Optimize connectivity patterns for ALL generalized RAMs using CASCADE ACCURACY.
+
+		This method optimizes each RAM's connectivity while evaluating the full
+		cascade prediction accuracy (not individual RAM accuracy), ensuring
+		optimization aligns with the actual goal.
+		"""
+		from wnn.ram.strategies.connectivity import (
+			OptimizationStrategy,
+			RUST_AVAILABLE as ACCEL_RUST_AVAILABLE,
+			RUST_CPU_CORES as ACCEL_RUST_CORES,
+		)
+		from wnn.ram.strategies.connectivity.genetic_algorithm import (
+			GeneticAlgorithmStrategy, GeneticAlgorithmConfig
+		)
+		from wnn.ram.strategies.connectivity.tabu_search import (
+			TabuSearchStrategy, TabuSearchConfig
+		)
+		import torch
+
 		log_separator()
 		log("CONNECTIVITY OPTIMIZATION (Garcia 2003)")
+		log("Using PERPLEXITY as optimization goal (lower is better)")
+		log("(exact RAMs → generalized cascade → voting fallback)")
 		log_separator()
 
-		# Use n=4 for optimization (the problematic one)
-		ram = self.generalized_rams[4]
+		# Evaluation parameters (scale with mode)
+		train_subset = 10000 if self.mode == BenchmarkMode.FAST else 50000
+		eval_subset = 300 if self.mode == BenchmarkMode.FAST else 3000
+		train_tokens = tokens[:train_subset]
+		# Use DIFFERENT tokens for evaluation (after training portion)
+		test_tokens = tokens[train_subset:train_subset + eval_subset * 2]
 
-		# Fast mode: use tiny subset for evaluation (key speedup!)
-		train_subset = 10000 if self.fast_mode else 50000
-		eval_subset = 300 if self.fast_mode else 3000
-		test_tokens = tokens[:train_subset]
-		bits_per_neuron = 10 if self.fast_mode else 14
+		# Strategy parameters (scale with mode)
+		if self.mode == BenchmarkMode.FAST:
+			ga_pop, ga_gens = 10, 5
+			ts_neighbors, ts_iters = 10, 5
+		elif self.mode == BenchmarkMode.OVERNIGHT:
+			# Extended overnight parameters for thorough optimization
+			ga_pop, ga_gens = 40, 200
+			ts_neighbors, ts_iters = 40, 25
+		else:  # BenchmarkMode.FULL
+			ga_pop, ga_gens = 30, 50
+			ts_neighbors, ts_iters = 30, 15
 
-		# Caching for evaluate_connectivity (huge speedup with 64GB RAM)
-		eval_cache = {}
-		cache_hits = [0]  # Use list to allow modification in nested function
-		parallel_evals = [0]  # Track parallel evaluations
+		run_id = getattr(self, '_current_run_id', 1)
+		use_ga_first = (run_id % 2 == 1)
+		strategy_name = "GA→TS" if use_ga_first else "TS→GA"
 
-		# Shared parameters for parallel evaluation
-		_word_to_cluster = ram.word_to_cluster
-		_train_tokens = tokens[:train_subset]
-		_test_tokens = test_tokens
+		bits_per_neuron = 10 if self.mode == BenchmarkMode.FAST else 14
+		n_values = sorted(self.generalized_rams.keys())
 
-		def evaluate_connectivity(connectivity: list[list[int]]) -> float:
-			"""
-			Evaluate a single connectivity pattern (serial, with caching).
-			"""
-			cache_key = tuple(tuple(row) for row in connectivity)
-
-			if cache_key in eval_cache:
-				cache_hits[0] += 1
-				return eval_cache[cache_key]
-
-			error = _evaluate_single_connectivity(
-				connectivity, _word_to_cluster, _train_tokens,
-				_test_tokens, bits_per_neuron, eval_subset
-			)
-
-			eval_cache[cache_key] = error
-			return error
-
-		def evaluate_batch(connectivities: list) -> list[float]:
-			"""
-			Evaluate multiple connectivity patterns with caching + Rust acceleration.
-
-			1. Check cache for each pattern
-			2. Batch cache misses for Rust evaluation (822x faster!)
-			3. Update cache with results
-			"""
-			results = [None] * len(connectivities)
-			to_evaluate = []  # (index, connectivity) pairs for cache misses
-
-			# Check cache first
-			for i, conn in enumerate(connectivities):
-				if isinstance(conn, list):
-					conn_list = conn
-				else:
-					conn_list = conn.tolist()
-
-				cache_key = tuple(tuple(row) for row in conn_list)
-
-				if cache_key in eval_cache:
-					cache_hits[0] += 1
-					results[i] = eval_cache[cache_key]
-				else:
-					to_evaluate.append((i, conn_list, cache_key))
-
-			# Fast evaluation of cache misses (Rust if available, else Python parallel)
-			if to_evaluate:
-				parallel_evals[0] += len(to_evaluate)
-				conn_list_batch = [item[1] for item in to_evaluate]
-
-				# Use Rust accelerator (822x faster!) or fall back to Python parallel
-				errors = _evaluate_batch_fast(
-					conn_list_batch, _word_to_cluster, _train_tokens,
-					_test_tokens, bits_per_neuron, eval_subset
-				)
-
-				# Update results and cache
-				for (idx, conn_list, cache_key), error in zip(to_evaluate, errors):
-					results[idx] = error
-					eval_cache[cache_key] = error
-
-			return results
-
-		initial_connectivity = ram.get_connectivity()
-
-		# Convert to tensor format for optimizer
-		import torch
-		conn_tensor = torch.tensor(initial_connectivity, dtype=torch.long)
-
-		log(f"Initial connectivity shape: {conn_tensor.shape}")
-		log(f"Fast mode: {'ON' if self.fast_mode else 'OFF'}")
+		log(f"Optimizing {len(n_values)} RAMs: n={n_values}")
+		log(f"Mode: {self.mode.name}")
 		log(f"Train subset: {train_subset:,}, Eval subset: {eval_subset}")
-		if RUST_AVAILABLE:
-			log(f"Accelerator: Rust + rayon ({RUST_CPU_CORES} threads) - 822x speedup!")
+		log(f"Strategy: {strategy_name}")
+		ga_elitism = max(2, ga_pop // 10)
+		ga_eval_per_gen = ga_pop - ga_elitism
+		log(f"GA: {ga_pop} pop × {ga_gens} gens (elite={ga_elitism}, eval={ga_eval_per_gen}/gen)")
+		log(f"TS: {ts_neighbors} neighbors × {ts_iters} iters")
+		if ACCEL_RUST_AVAILABLE:
+			log(f"Accelerator: Rust PERPLEXITY eval ({ACCEL_RUST_CORES} threads)")
 		else:
-			log(f"Accelerator: Python + joblib ({N_WORKERS} workers) - install ram_accelerator for 822x speedup")
-		initial_error = evaluate_connectivity(initial_connectivity)
-		log(f"Initial acc×cov: {(1-initial_error)*100:.2f}% (lower bound to optimize)")
-
-		results = {}
-
-		# Fast mode: reduced iterations for initial testing
-		if self.fast_mode:
-			# Fast mode: simple sequential run
-			ga_gens, ga_pop = 5, 10
-			ts_iters, ts_neighbors = 5, 10
-			hybrid_mode = None  # No hybrid in fast mode
-		else:
-			# Full mode: HYBRID approaches
-			# Options: "GA_TS" (GA first), "TS_GA" (TS first), or None
-			ga_gens, ga_pop = 20, 50  # GA: 50 pop × 20 gens
-			ts_iters, ts_neighbors = 20, 40  # TS: 40 neighbors × 20 iters
-			# Alternate between modes based on run_id (if available)
-			run_id = getattr(self, '_current_run_id', 1)
-			hybrid_mode = "GA_TS" if run_id % 2 == 1 else "TS_GA"
-
-		# Timeout per strategy (3 hours = 10800 seconds for full mode)
-		strategy_timeout = 10800 if not self.fast_mode else 300
-
-		strategy_results = {}
-
-		if hybrid_mode == "GA_TS":
-			# =================================================================
-			# HYBRID GA→TS OPTIMIZATION (Garcia 2003 + modern insights)
-			# =================================================================
-			# Phase 1: GA explores diverse regions (50 pop × 20 gens)
-			# Phase 2: TS refines using GA's top population as neighbor pool
-			# =================================================================
-
-			log_separator("-")
-			log(f"HYBRID STRATEGY: GA ({ga_pop} pop × {ga_gens} gens) → TS ({ts_neighbors} neighbors × {ts_iters} iters)")
-			log(f"  Total timeout: {strategy_timeout}s ({strategy_timeout//60} min)")
-			log_separator("-")
-
-			hybrid_start = time.time()
-
-			# --- PHASE 1: GA EXPLORATION ---
-			log("")
-			log("Phase 1: GA Exploration")
-			log(f"  Population: {ga_pop}, Generations: {ga_gens}")
-
-			ga_config = GeneticAlgorithmConfig(
-				population_size=ga_pop,
-				generations=ga_gens,
-				mutation_rate=0.05,
-				crossover_rate=0.8,
-				elitism=max(2, ga_pop // 10)
-			)
-			ga_strategy = GeneticAlgorithmStrategy(config=ga_config, seed=42, verbose=True)
-
-			ga_population = None  # Will store final population
-			ga_fitness = None
-
-			try:
-				with timeout(strategy_timeout // 2, "GA-Phase"), LogCapture():
-					# Run GA and capture the final population
-					# We need to access the internal state, so we'll run it manually
-					import torch
-
-					ga_strategy._ensure_rng()
-					cfg = ga_strategy._config
-
-					# Initialize population
-					population = []
-					for i in range(cfg.population_size):
-						if i == 0:
-							individual = conn_tensor.clone()
-						else:
-							individual, _ = ga_strategy._generate_neighbor(
-								conn_tensor, cfg.mutation_rate * 10,
-								ram.total_bits, len(ram.neurons), bits_per_neuron
-							)
-						population.append(individual)
-
-					# Evaluate initial population
-					fitness = evaluate_batch(population)  # Parallel evaluation
-					best_idx = min(range(len(fitness)), key=lambda i: fitness[i])
-					best = population[best_idx].clone()
-					best_error = fitness[best_idx]
-					ga_initial_error = initial_error
-
-					log(f"    [GA] Initial best: {(1-best_error)*100:.2f}% acc×cov")
-
-					# Evolution loop
-					for generation in range(cfg.generations):
-						new_population = []
-
-						# Elitism
-						sorted_indices = sorted(range(len(fitness)), key=lambda i: fitness[i])
-						for i in range(cfg.elitism):
-							new_population.append(population[sorted_indices[i]].clone())
-
-						# Generate rest
-						while len(new_population) < cfg.population_size:
-							# Tournament selection
-							def tournament_select():
-								indices = random.sample(range(len(population)), min(3, len(population)))
-								return population[min(indices, key=lambda i: fitness[i])]
-
-							p1, p2 = tournament_select(), tournament_select()
-
-							# Crossover
-							if random.random() < cfg.crossover_rate:
-								child = p1.clone()
-								cp = random.randint(1, len(ram.neurons) - 1)
-								child[cp:] = p2[cp:].clone()
-							else:
-								child = p1.clone()
-
-							# Mutation
-							child, _ = ga_strategy._generate_neighbor(
-								child, cfg.mutation_rate,
-								ram.total_bits, len(ram.neurons), bits_per_neuron
-							)
-							new_population.append(child)
-
-						population = new_population[:cfg.population_size]
-						fitness = evaluate_batch(population)  # Parallel evaluation
-
-						# Update best
-						gen_best_idx = min(range(len(fitness)), key=lambda i: fitness[i])
-						if fitness[gen_best_idx] < best_error:
-							best = population[gen_best_idx].clone()
-							best_error = fitness[gen_best_idx]
-
-						if (generation + 1) % 5 == 0:
-							avg_fit = sum(fitness) / len(fitness)
-							log(f"    [GA] Gen {generation + 1}: best={best_error:.4f} ({(1-best_error)*100:.2f}%), avg={avg_fit:.4f}")
-
-					# Store final population for TS
-					ga_population = population
-					ga_fitness = fitness
-					ga_best = best
-					ga_best_error = best_error
-
-				ga_elapsed = time.time() - hybrid_start
-				log(f"  Phase 1 complete: {(1-ga_best_error)*100:.2f}% acc×cov in {ga_elapsed:.1f}s")
-
-			except TimeoutError:
-				ga_elapsed = time.time() - hybrid_start
-				log(f"  Phase 1 timeout after {ga_elapsed:.1f}s")
-				ga_population = None
-
-			# --- PHASE 2: TS REFINEMENT WITH GA POPULATION ---
-			if ga_population is not None:
-				log("")
-				log("Phase 2: TS Refinement (using GA population as neighbor pool)")
-				log(f"  Taking top {ts_neighbors} from GA population")
-
-				ts_start = time.time()
-
-				try:
-					with timeout(strategy_timeout // 2, "TS-Phase"), LogCapture():
-						# Sort GA population by fitness and take top N
-						sorted_pop = sorted(zip(ga_population, ga_fitness), key=lambda x: x[1])
-						top_individuals = [ind.clone() for ind, _ in sorted_pop[:ts_neighbors]]
-
-						# Custom TS with GA-seeded neighbors
-						from collections import deque
-
-						current = ga_best.clone()
-						current_error = ga_best_error
-						best = current.clone()
-						best_error = current_error
-						ts_initial_error = ga_best_error
-
-						tabu_list = deque(maxlen=5)
-
-						log(f"    [TS-Hybrid] Starting from GA best: {(1-best_error)*100:.2f}%")
-
-						for iteration in range(ts_iters):
-							neighbors = []
-
-							if iteration == 0:
-								# First iteration: use GA population as initial neighbors (diversity seed)
-								for i in range(min(ts_neighbors, len(top_individuals))):
-									neighbor = top_individuals[i]
-									error = evaluate_connectivity(neighbor.tolist())
-									neighbors.append((neighbor, error, None))
-							else:
-								# Subsequent iterations: regular TS mutations from current best
-								for _ in range(ts_neighbors):
-									neighbor, move = ga_strategy._generate_neighbor(
-										current, 0.1,
-										ram.total_bits, len(ram.neurons), bits_per_neuron
-									)
-									is_tabu = any(
-										m is not None and m[0] == move[0] and m[2] == move[1]
-										for m in tabu_list
-									)
-									if not is_tabu:
-										error = evaluate_connectivity(neighbor.tolist())
-										neighbors.append((neighbor, error, move))
-
-							if not neighbors:
-								continue
-
-							# Select best neighbor
-							neighbors.sort(key=lambda x: x[1])
-							best_neighbor, best_neighbor_error, best_move = neighbors[0]
-
-							current = best_neighbor
-							current_error = best_neighbor_error
-
-							if best_move:
-								tabu_list.append(best_move)
-
-							if current_error < best_error:
-								best = current.clone()
-								best_error = current_error
-
-							log(f"    [TS-Hybrid] Iter {iteration + 1}: current={current_error:.4f}, best={best_error:.4f} ({(1-best_error)*100:.2f}%)")
-
-						ts_final_error = best_error
-
-					ts_elapsed = time.time() - ts_start
-					hybrid_elapsed = time.time() - hybrid_start
-
-					# Calculate improvement
-					improvement_pct = ((initial_error - best_error) / initial_error * 100) if best_error < initial_error else 0.0
-
-					# Create result object
-					class HybridResult:
-						def __init__(self):
-							self.initial_error = initial_error
-							self.final_error = best_error
-							self.improvement_percent = improvement_pct
-							self.optimized_connections = best
-
-					hybrid_result = HybridResult()
-					results['Hybrid_GA_TS'] = hybrid_result
-					strategy_results['Hybrid_GA_TS'] = StrategyResult(
-						name='Hybrid_GA_TS',
-						initial_error=initial_error,
-						final_error=best_error,
-						improvement_percent=improvement_pct,
-						elapsed_seconds=hybrid_elapsed,
-						timed_out=False
-					)
-
-					log(f"  Phase 2 complete: {(1-best_error)*100:.2f}% acc×cov in {ts_elapsed:.1f}s")
-					log_separator("-")
-					log(f"  ✓ Hybrid complete: {(1-initial_error)*100:.2f}% → {(1-best_error)*100:.2f}% acc×cov")
-					log(f"  Total improvement: {improvement_pct:.1f}%")
-					log(f"  Total elapsed: {hybrid_elapsed:.1f}s ({hybrid_elapsed/60:.1f} min)")
-
-				except TimeoutError:
-					ts_elapsed = time.time() - ts_start
-					log(f"  Phase 2 timeout after {ts_elapsed:.1f}s")
-
-		elif hybrid_mode == "TS_GA":
-			# =================================================================
-			# HYBRID TS→GA OPTIMIZATION (Alternative approach)
-			# =================================================================
-			# Phase 1: TS finds good local optima (20 iters × 40 neighbors)
-			# Phase 2: GA combines features via crossover (20 gens × 50 pop)
-			# =================================================================
-
-			log_separator("-")
-			log(f"HYBRID STRATEGY: TS ({ts_iters} iters × {ts_neighbors} neighbors) → GA ({ga_pop} pop × {ga_gens} gens)")
-			log(f"  Total timeout: {strategy_timeout}s ({strategy_timeout//60} min)")
-			log_separator("-")
-
-			hybrid_start = time.time()
-
-			# --- PHASE 1: TS EXPLORATION ---
-			log("")
-			log("Phase 1: TS Exploration (finding diverse local optima)")
-			log(f"  Iterations: {ts_iters}, Neighbors: {ts_neighbors}")
-
-			# We'll collect the best solutions found during TS
-			ts_best_solutions = []  # List of (connectivity, error) tuples
-
-			try:
-				with timeout(strategy_timeout // 2, "TS-Phase"), LogCapture():
-					import torch
-					from collections import deque
-
-					current = conn_tensor.clone()
-					current_error = evaluate_connectivity(current.tolist())
-
-					best = current.clone()
-					best_error = current_error
-
-					tabu_list = deque(maxlen=5)
-
-					# Track top solutions found
-					top_k = ts_neighbors // 2  # Keep top 20 solutions
-					ts_best_solutions = [(current.clone(), current_error)]
-
-					log(f"    [TS] Initial: {(1-current_error)*100:.2f}% acc×cov")
-
-					# Create a strategy for neighbor generation
-					ts_config = TabuSearchConfig(
-						iterations=ts_iters,
-						neighbors_per_iter=ts_neighbors,
-						tabu_size=5,
-						mutation_rate=0.1
-					)
-					ts_strategy = TabuSearchStrategy(config=ts_config, seed=42, verbose=False)
-					ts_strategy._ensure_rng()
-
-					for iteration in range(ts_iters):
-						neighbors = []
-
-						for _ in range(ts_neighbors):
-							neighbor, move = ts_strategy._generate_neighbor(
-								current, 0.1,
-								ram.total_bits, len(ram.neurons), bits_per_neuron
-							)
-
-							is_tabu = any(
-								m[0] == move[0] and m[2] == move[1]
-								for m in tabu_list
-							)
-
-							if not is_tabu:
-								error = evaluate_connectivity(neighbor.tolist())
-								neighbors.append((neighbor, error, move))
-
-								# Track for GA seeding
-								ts_best_solutions.append((neighbor.clone(), error))
-
-						if not neighbors:
-							continue
-
-						# Select best neighbor
-						neighbors.sort(key=lambda x: x[1])
-						best_neighbor, best_neighbor_error, best_move = neighbors[0]
-
-						current = best_neighbor
-						current_error = best_neighbor_error
-						tabu_list.append(best_move)
-
-						if current_error < best_error:
-							best = current.clone()
-							best_error = current_error
-
-						if (iteration + 1) % 5 == 0:
-							log(f"    [TS] Iter {iteration + 1}: best={best_error:.4f} ({(1-best_error)*100:.2f}%)")
-
-					# Keep only top K unique solutions for GA
-					ts_best_solutions.sort(key=lambda x: x[1])
-					seen = set()
-					unique_solutions = []
-					for sol, err in ts_best_solutions:
-						sol_key = tuple(sol.flatten().tolist())
-						if sol_key not in seen:
-							seen.add(sol_key)
-							unique_solutions.append((sol, err))
-							if len(unique_solutions) >= top_k:
-								break
-
-					ts_best_solutions = unique_solutions
-					ts_best = best
-					ts_best_error = best_error
-
-				ts_elapsed = time.time() - hybrid_start
-				log(f"  Phase 1 complete: {(1-ts_best_error)*100:.2f}% acc×cov, found {len(ts_best_solutions)} unique solutions")
-
-			except TimeoutError:
-				ts_elapsed = time.time() - hybrid_start
-				log(f"  Phase 1 timeout after {ts_elapsed:.1f}s")
-				ts_best_solutions = []
-
-			# --- PHASE 2: GA REFINEMENT WITH TS POPULATION ---
-			if len(ts_best_solutions) > 0:
-				log("")
-				log("Phase 2: GA Refinement (crossover combines TS solutions)")
-				log(f"  Initial population: {len(ts_best_solutions)} from TS + {ga_pop - len(ts_best_solutions)} mutations")
-
-				ga_start = time.time()
-
-				try:
-					with timeout(strategy_timeout // 2, "GA-Phase"), LogCapture():
-						import torch
-
-						# Initialize population from TS solutions + mutations
-						population = []
-
-						# Add TS solutions
-						for sol, _ in ts_best_solutions:
-							population.append(sol.clone())
-
-						# Fill rest with mutations of TS solutions
-						ga_config = GeneticAlgorithmConfig(
-							population_size=ga_pop,
-							generations=ga_gens,
-							mutation_rate=0.05,
-							crossover_rate=0.8,
-							elitism=max(2, ga_pop // 10)
+			log(f"Accelerator: Python (install ram_accelerator for speedup)")
+		log("")
+
+		# Pre-calculate exact RAM probabilities (these don't change during optimization)
+		# exact_probs[i] = P(target|context) if covered by exact RAM, None if not covered
+		# Also track exact_results for accuracy reporting
+		exact_probs = []
+		exact_results = []  # Keep for backward compatibility
+		for i in range(min(eval_subset, len(test_tokens) - 6)):
+			target = test_tokens[i + 6]
+
+			# Try exact RAMs in priority order (n=4, n=3, n=2) - same as predict()
+			exact_prob = None
+			exact_pred = None
+			for n in sorted(self.exact_rams.keys(), reverse=True):
+				ctx = tuple(test_tokens[i + 6 - n:i + 6])
+				if ctx in self.exact_rams[n]:
+					counts = self.exact_rams[n][ctx]
+					total = sum(counts.values())
+					best, count = counts.most_common(1)[0]
+					conf = count / total
+					if conf > 0.2 or total >= 3:
+						# Get probability for target (not just best)
+						target_count = counts.get(target, 0)
+						exact_prob = target_count / total if total > 0 else 0.0
+						exact_pred = (best == target)
+						break
+
+			exact_probs.append(exact_prob)
+			exact_results.append(exact_pred)
+
+		exact_covered = sum(1 for x in exact_probs if x is not None)
+		exact_correct = sum(1 for x in exact_results if x is True)
+		avg_exact_prob = sum(p for p in exact_probs if p is not None) / exact_covered if exact_covered > 0 else 0.0
+		log(f"Pre-calculated exact RAM predictions:")
+		log(f"  Covered: {exact_covered}/{len(exact_probs)} ({exact_covered/len(exact_probs)*100:.1f}%)")
+		log(f"  Correct: {exact_correct}/{exact_covered} ({exact_correct/exact_covered*100:.1f}% of covered)")
+		log(f"  Avg P(target): {avg_exact_prob:.3f}")
+		log("")
+
+		# Get initial connectivities for all RAMs
+		all_connectivities = []
+		for n in n_values:
+			ram = self.generalized_rams[n]
+			all_connectivities.append(ram.get_connectivity())
+
+		# Build word_to_bits mapping (same for all RAMs)
+		ram = self.generalized_rams[n_values[0]]
+		word_to_bits = {}
+		for word, cluster in ram.word_to_cluster.items():
+			word_hash = hash(word) & 0x1F  # 5 bits
+			encoding = (cluster << 5) | word_hash
+			word_to_bits[word] = encoding
+
+		# Check if Rust evaluators are available
+		try:
+			import ram_accelerator
+			has_perplexity = hasattr(ram_accelerator, 'evaluate_fullnetwork_perplexity_batch_cpu')
+			has_fullnetwork = hasattr(ram_accelerator, 'evaluate_fullnetwork_batch_cpu')
+			has_cascade = hasattr(ram_accelerator, 'evaluate_cascade_batch_cpu')
+		except ImportError:
+			has_perplexity = False
+			has_fullnetwork = False
+			has_cascade = False
+
+		# Get vocabulary size for perplexity smoothing
+		vocab_size = len(self.word_counts)
+
+		self._strategy_results = {}
+		total_start = time.time()
+
+		# Optimize each RAM using PERPLEXITY as the goal (lower is better)
+		for ram_idx, n in enumerate(n_values):
+			ram = self.generalized_rams[n]
+			log(f"--- Optimizing n={n} RAM ({len(ram.neurons)} neurons) ---")
+			# Debug: show first few values of each connectivity to verify updates
+			if ram_idx > 0:
+				prev_conn_sample = all_connectivities[ram_idx-1][0][:3]
+				log(f"  [DEBUG] n={n_values[ram_idx-1]} connectivity sample: {prev_conn_sample}")
+
+			conn_tensor = torch.tensor(all_connectivities[ram_idx], dtype=torch.long)
+			num_neurons = len(ram.neurons)
+			total_bits = ram.total_bits
+
+			# Create batch evaluation function using PERPLEXITY (lower is better)
+			def create_perplexity_batch_fn(ram_idx, target_n, exact_probs_ref, vocab_size_ref):
+				eval_count = [0]
+				global_best = [float('inf')]  # Track best perplexity (lower is better)
+				def batch_eval(candidates):
+					if has_perplexity:
+						import time as time_module
+						start = time_module.time()
+						current_all_conns = all_connectivities
+						candidate_lists = [c.tolist() if hasattr(c, 'tolist') else c for c in candidates]
+						perplexities = ram_accelerator.evaluate_fullnetwork_perplexity_batch_cpu(
+							current_all_conns, candidate_lists, ram_idx,
+							word_to_bits, train_tokens, test_tokens,
+							exact_probs_ref, eval_subset, vocab_size_ref
 						)
-						ga_strategy = GeneticAlgorithmStrategy(config=ga_config, seed=42, verbose=False)
-						ga_strategy._ensure_rng()
-						cfg = ga_strategy._config
+						elapsed = time_module.time() - start
+						eval_count[0] += 1
+						batch_best_ppl = min(perplexities)
+						if batch_best_ppl < global_best[0]:
+							global_best[0] = batch_best_ppl
+						# Log every 5th batch
+						if eval_count[0] % 5 == 1:
+							msg = f"[Rust n={target_n}] Batch {eval_count[0]}: {len(candidates)} new | {elapsed*1000:.0f}ms | batch PPL: {batch_best_ppl:.1f}, global PPL: {global_best[0]:.1f}"
+							log(msg)
+						return perplexities
+					elif has_fullnetwork:
+						# Fallback to accuracy-based (convert to perplexity-like score)
+						import time as time_module
+						start = time_module.time()
+						current_all_conns = all_connectivities
+						candidate_lists = [c.tolist() if hasattr(c, 'tolist') else c for c in candidates]
+						# Use exact_results (bool) for accuracy-based fallback
+						exact_results_fallback = [x is True if x is not None else None for x in exact_probs_ref]
+						errors = ram_accelerator.evaluate_fullnetwork_batch_cpu(
+							current_all_conns, candidate_lists, ram_idx,
+							word_to_bits, train_tokens, test_tokens,
+							exact_results_fallback, eval_subset
+						)
+						elapsed = time_module.time() - start
+						eval_count[0] += 1
+						batch_best_err = min(errors)
+						batch_best_acc = (1 - batch_best_err) * 100
+						if batch_best_err < global_best[0]:
+							global_best[0] = batch_best_err
+						global_best_acc = (1 - global_best[0]) * 100
+						if eval_count[0] % 5 == 1:
+							msg = f"[Rust n={target_n}] Batch {eval_count[0]}: {len(candidates)} new | {elapsed*1000:.0f}ms | batch: {batch_best_acc:.2f}%, global: {global_best_acc:.2f}%"
+							log(msg)
+						return errors
+					elif has_cascade:
+						# Fallback to cascade-only (old behavior)
+						import time as time_module
+						start = time_module.time()
+						current_all_conns = all_connectivities
+						candidate_lists = [c.tolist() if hasattr(c, 'tolist') else c for c in candidates]
+						errors = ram_accelerator.evaluate_cascade_batch_cpu(
+							current_all_conns, candidate_lists, ram_idx,
+							word_to_bits, train_tokens, test_tokens, eval_subset
+						)
+						elapsed = time_module.time() - start
+						eval_count[0] += 1
+						batch_best_err = min(errors)
+						batch_best_acc = (1 - batch_best_err) * 100
+						if batch_best_err < global_best[0]:
+							global_best[0] = batch_best_err
+						global_best_acc = (1 - global_best[0]) * 100
+						if eval_count[0] % 5 == 1:
+							msg = f"[Rust n={target_n}] Batch {eval_count[0]}: {len(candidates)} new | {elapsed*1000:.0f}ms | batch: {batch_best_acc:.2f}%, global: {global_best_acc:.2f}%"
+							log(msg)
+						return errors
+					else:
+						# Python fallback (slower)
+						errors = []
+						for cand in candidates:
+							# Temporarily apply candidate
+							old_conn = current_all_conns[ram_idx]
+							current_all_conns[ram_idx] = cand.tolist() if hasattr(cand, 'tolist') else cand
+							# Evaluate cascade (simplified Python version)
+							err = self._evaluate_cascade_python(train_tokens, test_tokens[:eval_subset])
+							current_all_conns[ram_idx] = old_conn
+							errors.append(err)
+						return errors
+				return batch_eval
 
-						while len(population) < ga_pop:
-							# Mutate a random TS solution
-							base_sol = ts_best_solutions[random.randint(0, len(ts_best_solutions) - 1)][0]
-							mutated, _ = ga_strategy._generate_neighbor(
-								base_sol, cfg.mutation_rate * 5,
-								ram.total_bits, len(ram.neurons), bits_per_neuron
-							)
-							population.append(mutated)
+			batch_fn = create_perplexity_batch_fn(ram_idx, n, exact_probs, vocab_size)
 
-						# Evaluate initial population
-						fitness = evaluate_batch(population)  # Parallel evaluation
-						best_idx = min(range(len(fitness)), key=lambda i: fitness[i])
-						best = population[best_idx].clone()
-						best_error = fitness[best_idx]
+			# Initial perplexity (using same code path as optimization)
+			initial_ppls = batch_fn([conn_tensor])
+			initial_ppl = initial_ppls[0]
 
-						log(f"    [GA] Initial best (from TS): {(1-best_error)*100:.2f}% acc×cov")
+			# Log initial perplexity only for the first RAM
+			if ram_idx == 0:
+				log(f"Initial PERPLEXITY: {initial_ppl:.1f}")
+				log("")
+			else:
+				# VERIFICATION: This should match previous RAM's final perplexity!
+				log(f"  Initial PERPLEXITY: {initial_ppl:.1f} (should match prev final)")
 
-						# Evolution loop
-						for generation in range(cfg.generations):
-							new_population = []
-
-							# Elitism
-							sorted_indices = sorted(range(len(fitness)), key=lambda i: fitness[i])
-							for i in range(cfg.elitism):
-								new_population.append(population[sorted_indices[i]].clone())
-
-							# Generate rest
-							while len(new_population) < cfg.population_size:
-								# Tournament selection
-								def tournament_select():
-									indices = random.sample(range(len(population)), min(3, len(population)))
-									return population[min(indices, key=lambda i: fitness[i])]
-
-								p1, p2 = tournament_select(), tournament_select()
-
-								# Crossover - key for combining TS solutions!
-								if random.random() < cfg.crossover_rate:
-									child = p1.clone()
-									cp = random.randint(1, len(ram.neurons) - 1)
-									child[cp:] = p2[cp:].clone()
-								else:
-									child = p1.clone()
-
-								# Mutation
-								child, _ = ga_strategy._generate_neighbor(
-									child, cfg.mutation_rate,
-									ram.total_bits, len(ram.neurons), bits_per_neuron
-								)
-								new_population.append(child)
-
-							population = new_population[:cfg.population_size]
-							fitness = evaluate_batch(population)  # Parallel evaluation
-
-							# Update best
-							gen_best_idx = min(range(len(fitness)), key=lambda i: fitness[i])
-							if fitness[gen_best_idx] < best_error:
-								best = population[gen_best_idx].clone()
-								best_error = fitness[gen_best_idx]
-
-							if (generation + 1) % 5 == 0:
-								avg_fit = sum(fitness) / len(fitness)
-								log(f"    [GA] Gen {generation + 1}: best={best_error:.4f} ({(1-best_error)*100:.2f}%), avg={avg_fit:.4f}")
-
-						ga_final_error = best_error
-
-					ga_elapsed = time.time() - ga_start
-					hybrid_elapsed = time.time() - hybrid_start
-
-					# Calculate improvement
-					improvement_pct = ((initial_error - best_error) / initial_error * 100) if best_error < initial_error else 0.0
-
-					# Create result object
-					class HybridResult:
-						def __init__(self):
-							self.initial_error = initial_error
-							self.final_error = best_error
-							self.improvement_percent = improvement_pct
-							self.optimized_connections = best
-
-					hybrid_result = HybridResult()
-					results['Hybrid_TS_GA'] = hybrid_result
-					strategy_results['Hybrid_TS_GA'] = StrategyResult(
-						name='Hybrid_TS_GA',
-						initial_error=initial_error,
-						final_error=best_error,
-						improvement_percent=improvement_pct,
-						elapsed_seconds=hybrid_elapsed,
-						timed_out=False
-					)
-
-					log(f"  Phase 2 complete: {(1-best_error)*100:.2f}% acc×cov in {ga_elapsed:.1f}s")
-					log_separator("-")
-					log(f"  ✓ Hybrid complete: {(1-initial_error)*100:.2f}% → {(1-best_error)*100:.2f}% acc×cov")
-					log(f"  Total improvement: {improvement_pct:.1f}%")
-					log(f"  Total elapsed: {hybrid_elapsed:.1f}s ({hybrid_elapsed/60:.1f} min)")
-
-				except TimeoutError:
-					ga_elapsed = time.time() - ga_start
-					log(f"  Phase 2 timeout after {ga_elapsed:.1f}s")
-
-		else:
-			# =================================================================
-			# FAST MODE: Simple GA only (hybrid_mode is None)
-			# =================================================================
-			log_separator("-")
-			log(f"STRATEGY: GA only ({ga_pop} pop × {ga_gens} gens) - Fast mode")
-			log_separator("-")
-
+			# Run GA
 			ga_config = GeneticAlgorithmConfig(
-				population_size=ga_pop,
-				generations=ga_gens,
-				mutation_rate=0.05,
-				crossover_rate=0.8,
-				elitism=max(2, ga_pop // 10)
+				population_size=ga_pop, generations=ga_gens,
+				mutation_rate=0.01, crossover_rate=0.7, elitism=max(2, ga_pop // 10)
 			)
-			ga_strategy = GeneticAlgorithmStrategy(config=ga_config, seed=42, verbose=True)
+			ga = GeneticAlgorithmStrategy(config=ga_config, seed=42+n, verbose=True)
 
-			ga_start = time.time()
-			try:
-				with timeout(strategy_timeout, "GA"), LogCapture():
-					ga_result = ga_strategy.optimize(
-						connections=conn_tensor,
-						evaluate_fn=lambda c: evaluate_connectivity(c.tolist()),
-						total_input_bits=ram.total_bits,
-						num_neurons=len(ram.neurons),
-						n_bits_per_neuron=bits_per_neuron,
-					)
-				ga_elapsed = time.time() - ga_start
-				results['GeneticAlgorithm'] = ga_result
-				strategy_results['GeneticAlgorithm'] = StrategyResult(
-					name='GeneticAlgorithm',
-					initial_error=ga_result.initial_error,
-					final_error=ga_result.final_error,
-					improvement_percent=ga_result.improvement_percent,
-					elapsed_seconds=ga_elapsed,
-					timed_out=False
-				)
-				log(f"  ✓ Complete: {(1-ga_result.final_error)*100:.2f}% acc×cov")
-			except TimeoutError:
-				ga_elapsed = time.time() - ga_start
-				log(f"  ✗ Timeout after {ga_elapsed:.1f}s")
+			start_time = time.time()
+			# Track best across BOTH phases (lower perplexity is better)
+			best_ppl = initial_ppl
+			best_connectivity = conn_tensor.clone()
 
-		# Store strategy results for multi-run analysis
-		self._strategy_results = strategy_results
+			if use_ga_first:
+				# GA first
+				log(f"  [GA phase] Starting...")
+				ga_result = ga.optimize(conn_tensor, lambda x: batch_fn([x])[0],
+					total_bits, num_neurons, bits_per_neuron, batch_fn)
+				ga_ppl = ga_result.final_error  # Now this is perplexity
+				log(f"  [GA phase] Done: PPL {ga_ppl:.1f}")
 
-		# Use best result (if any completed)
-		if results:
-			best_method = min(results, key=lambda k: results[k].final_error)
-			best_result = results[best_method]
-			log_separator()
-			log(f"★ Best strategy: {best_method}")
-			log(f"  Acc×cov: {(1-best_result.initial_error)*100:.2f}% → {(1-best_result.final_error)*100:.2f}%")
-			log(f"  Improvement: {best_result.improvement_percent:.1f}%")
+				# Track if GA is best so far (lower is better)
+				if ga_result.final_error < best_ppl:
+					best_ppl = ga_result.final_error
+					best_connectivity = ga_result.optimized_connections.clone()
 
-			# Cache and parallelism stats
-			total_evals = len(eval_cache) + cache_hits[0]
-			if total_evals > 0:
-				hit_rate = cache_hits[0] / total_evals * 100
-				log(f"  Cache: {cache_hits[0]} hits / {total_evals} total ({hit_rate:.1f}% hit rate)")
-				accel = f"Rust ({RUST_CPU_CORES} threads)" if RUST_AVAILABLE else f"Python ({N_WORKERS} workers)"
-				log(f"  Accelerator: {parallel_evals[0]} evals via {accel}")
-			log_separator()
+				# Then TS refinement (starts from GA's best)
+				log(f"  [TS phase] Starting...")
+				ts_config = TabuSearchConfig(iterations=ts_iters, neighbors_per_iter=ts_neighbors)
+				ts = TabuSearchStrategy(config=ts_config, seed=42+n, verbose=True)
+				ts_result = ts.optimize(ga_result.optimized_connections, lambda x: batch_fn([x])[0],
+					total_bits, num_neurons, bits_per_neuron, batch_fn)
+				ts_ppl = ts_result.final_error
+				log(f"  [TS phase] Done: PPL {ts_ppl:.1f}")
 
-			# Apply best connectivity
-			ram.set_connectivity(best_result.optimized_connections.tolist())
-			ram.train(tokens)  # Retrain with optimized connectivity
-			self._best_strategy = best_method
-		else:
-			log_separator()
-			log("⚠ WARNING: All strategies timed out! Using initial connectivity.")
-			log_separator()
-			self._best_strategy = "none"
+				# Only update if TS found better than GA
+				if ts_result.final_error < best_ppl:
+					best_ppl = ts_result.final_error
+					best_connectivity = ts_result.optimized_connections.clone()
+					log(f"  [BEST] TS improved: PPL {best_ppl:.1f}")
+				else:
+					log(f"  [BEST] Keeping GA result: PPL {best_ppl:.1f}")
+			else:
+				# TS first
+				log(f"  [TS phase] Starting...")
+				ts_config = TabuSearchConfig(iterations=ts_iters, neighbors_per_iter=ts_neighbors)
+				ts = TabuSearchStrategy(config=ts_config, seed=42+n, verbose=True)
+				ts_result = ts.optimize(conn_tensor, lambda x: batch_fn([x])[0],
+					total_bits, num_neurons, bits_per_neuron, batch_fn)
+				ts_ppl = ts_result.final_error
+				log(f"  [TS phase] Done: PPL {ts_ppl:.1f}")
+
+				# Track if TS is best so far
+				if ts_result.final_error < best_ppl:
+					best_ppl = ts_result.final_error
+					best_connectivity = ts_result.optimized_connections.clone()
+
+				# Then GA (starts from TS's best)
+				log(f"  [GA phase] Starting...")
+				ga_result = ga.optimize(ts_result.optimized_connections, lambda x: batch_fn([x])[0],
+					total_bits, num_neurons, bits_per_neuron, batch_fn)
+				ga_ppl = ga_result.final_error
+				log(f"  [GA phase] Done: PPL {ga_ppl:.1f}")
+
+				# Only update if GA found better than TS
+				if ga_result.final_error < best_ppl:
+					best_ppl = ga_result.final_error
+					best_connectivity = ga_result.optimized_connections.clone()
+					log(f"  [BEST] GA improved: PPL {best_ppl:.1f}")
+				else:
+					log(f"  [BEST] Keeping TS result: PPL {best_ppl:.1f}")
+
+			elapsed = time.time() - start_time
+			final_ppl = best_ppl
+
+			# Update connectivity with THE BEST from either phase
+			all_connectivities[ram_idx] = best_connectivity.tolist()
+			updated_sample = all_connectivities[ram_idx][0][:3]
+			log(f"  [DEBUG] Updated n={n} connectivity sample: {updated_sample}")
+
+			# VERIFICATION: Re-evaluate with updated connectivity
+			verify_ppls = batch_fn([best_connectivity])
+			verify_ppl = verify_ppls[0]
+			if abs(verify_ppl - final_ppl) > 0.1:
+				log(f"  [WARNING] Verification mismatch! Expected PPL {final_ppl:.1f}, got {verify_ppl:.1f}")
+
+			# Apply optimized connectivity
+			ram.set_connectivity(best_connectivity.tolist())
+			ram.train(tokens)
+
+			# Store results (using perplexity - lower is better)
+			ppl_improvement = ((initial_ppl - final_ppl) / initial_ppl * 100) if initial_ppl > 0 else 0
+			self._strategy_results[f"n{n}_{strategy_name}"] = StrategyResult(
+				name=f"n{n}_{strategy_name}",
+				initial_error=initial_ppl,  # Store perplexity in error field
+				final_error=final_ppl,
+				improvement_percent=ppl_improvement,
+				elapsed_seconds=elapsed,
+				timed_out=False,
+			)
+
+			log(f"  n={n}: PPL {initial_ppl:.1f} → {final_ppl:.1f} "
+				f"({ppl_improvement:+.1f}%) in {elapsed:.1f}s")
+
+		total_elapsed = time.time() - total_start
+		log_separator()
+		log(f"★ All RAMs optimized in {total_elapsed:.1f}s ({total_elapsed/60:.1f} min)")
+		log_separator()
+		self._best_strategy = strategy_name
+
+	def _evaluate_cascade_python(self, train_tokens: list[str], test_tokens: list[str]) -> float:
+		"""Python fallback for cascade evaluation."""
+		correct = 0
+		total = min(len(test_tokens) - 6, len(test_tokens))
+		for i in range(total):
+			context = test_tokens[max(0, i):i+6]
+			target = test_tokens[i+6] if i+6 < len(test_tokens) else None
+			if target is None:
+				break
+			# Try cascade prediction
+			pred, _, _ = self.predict(context)
+			if pred == target:
+				correct += 1
+		accuracy = correct / total if total > 0 else 0
+		return 1 - accuracy  # Return error
 
 	def predict(self, context: list[str]) -> tuple[str, str, float]:
 		"""Predict next word."""
@@ -1562,9 +1328,9 @@ class RAMLM_v2:
 			"by_method": defaultdict(lambda: {"correct": 0, "total": 0})
 		}
 
-		for i in range(len(tokens) - 5):
-			context = tokens[i:i + 5]
-			target = tokens[i + 5]
+		for i in range(len(tokens) - 6):
+			context = tokens[i:i + 6]
+			target = tokens[i + 6]
 
 			pred, method, conf = self.predict(context)
 
@@ -1578,16 +1344,29 @@ class RAMLM_v2:
 		return results
 
 
-def run_benchmark(fast_mode: bool = True, run_id: int = 1, seed: int = None) -> BenchmarkRun:
+def run_benchmark(
+	mode: BenchmarkMode = BenchmarkMode.FAST,
+	run_id: int = 1,
+	seed: int = None,
+	tokenizer_type: TokenizerType = TokenizerType.WIKITEXT_WORD
+) -> BenchmarkRun:
 	"""Run the v2 benchmark."""
 	if seed is not None:
 		random.seed(seed)
 
+	# Mode descriptions
+	mode_descs = {
+		BenchmarkMode.FAST: "FAST (reduced params)",
+		BenchmarkMode.FULL: "FULL (3h timeout per strategy)",
+		BenchmarkMode.OVERNIGHT: "OVERNIGHT (extended: GA 40×200, TS 40×25)",
+	}
+	mode_desc = mode_descs[mode]
+
 	log_separator()
 	log(f"RAM LANGUAGE MODEL v2 - RUN {run_id}")
 	log("With Full Thesis Optimization (2024 Hardware)")
-	log(f"Mode: {'FAST (reduced params)' if fast_mode else 'FULL (3h timeout per strategy)'}")
-	if not fast_mode:
+	log(f"Mode: {mode_desc}")
+	if mode != BenchmarkMode.FAST:
 		hybrid_label = "GA→TS" if run_id % 2 == 1 else "TS→GA"
 		log(f"Hybrid: {hybrid_label}")
 	if seed is not None:
@@ -1597,18 +1376,18 @@ def run_benchmark(fast_mode: bool = True, run_id: int = 1, seed: int = None) -> 
 	run_start = time.time()
 
 	# Load data - reduced for fast mode
-	train_limit = 30000 if fast_mode else 150000
-	test_limit = 5000 if fast_mode else 20000
+	train_limit = 30000 if mode == BenchmarkMode.FAST else 150000
+	test_limit = 5000 if mode == BenchmarkMode.FAST else 20000
 
 	try:
 		from datasets import load_dataset
-		import re
 
 		log("Loading WikiText-2...")
+		log(f"Tokenizer: {tokenizer_type.name} (for comparable perplexity)")
 		dataset = load_dataset("wikitext", "wikitext-2-raw-v1")
 
-		def tokenize(text):
-			return re.findall(r"\w+|[^\w\s]", text.lower())
+		# Get tokenizer based on parameter
+		tokenize, _ = get_tokenizer(tokenizer_type)
 
 		train_text = " ".join(dataset["train"]["text"])
 		test_text = " ".join(dataset["test"]["text"])
@@ -1616,8 +1395,13 @@ def run_benchmark(fast_mode: bool = True, run_id: int = 1, seed: int = None) -> 
 		train_tokens = tokenize(train_text)[:train_limit]
 		test_tokens = tokenize(test_text)[:test_limit]
 
-		log(f"Train: {len(train_tokens):,} tokens")
-		log(f"Test: {len(test_tokens):,} tokens")
+		# Log vocabulary size for reference
+		train_vocab = set(train_tokens)
+		test_vocab = set(test_tokens)
+		total_vocab = train_vocab | test_vocab
+		log(f"Train: {len(train_tokens):,} tokens, Vocab: {len(train_vocab):,}")
+		log(f"Test: {len(test_tokens):,} tokens, Vocab: {len(test_vocab):,}")
+		log(f"Total unique tokens: {len(total_vocab):,}")
 
 	except Exception as e:
 		log(f"Error loading data: {e}")
@@ -1630,7 +1414,8 @@ def run_benchmark(fast_mode: bool = True, run_id: int = 1, seed: int = None) -> 
 
 	# Train model
 	log_separator()
-	model = RAMLM_v2(freq_threshold=30, fast_mode=fast_mode)
+	model = RAMLM_v2(freq_threshold=30, mode=mode)
+	model._current_run_id = run_id  # Set run_id for hybrid strategy selection
 
 	start = time.time()
 	model.train(train_tokens, optimize_connectivity=True)
@@ -1700,10 +1485,9 @@ def run_benchmark(fast_mode: bool = True, run_id: int = 1, seed: int = None) -> 
 	log_separator()
 
 	gen_n4_coverage = model.generalized_rams[4].get_coverage(test_tokens)
-	mode_desc = "FAST (reduced for testing)" if fast_mode else "FULL"
 	run_elapsed = time.time() - run_start
 
-	log(f"MODE: {mode_desc}")
+	log(f"MODE: {mode.name}")
 	log("")
 	log("IMPROVEMENTS IN v2:")
 	log("1. Partial connectivity for generalization (not just exact matching)")
@@ -1738,12 +1522,24 @@ def run_benchmark(fast_mode: bool = True, run_id: int = 1, seed: int = None) -> 
 	return benchmark_run
 
 
-def run_multi_benchmark(n_runs: int = 3, fast_mode: bool = False):
+def run_multi_benchmark(
+	n_runs: int = 3,
+	mode: BenchmarkMode = BenchmarkMode.FULL,
+	tokenizer_type: TokenizerType = TokenizerType.WIKITEXT_WORD
+):
 	"""Run the benchmark multiple times and summarize results."""
+	# Mode descriptions
+	mode_descs = {
+		BenchmarkMode.FAST: "FAST",
+		BenchmarkMode.FULL: "FULL (3h timeout per strategy)",
+		BenchmarkMode.OVERNIGHT: "OVERNIGHT (extended: GA 40×200, TS 40×25)",
+	}
+
 	log_separator()
 	log(f"MULTI-RUN BENCHMARK: {n_runs} runs")
-	log(f"Mode: {'FAST' if fast_mode else 'FULL (3h timeout per strategy)'}")
-	if not fast_mode:
+	log(f"Mode: {mode_descs[mode]}")
+	log(f"Tokenizer: {tokenizer_type.name}")
+	if mode != BenchmarkMode.FAST:
 		log("Hybrid schedule:")
 		for r in range(1, n_runs + 1):
 			hybrid = "GA→TS" if r % 2 == 1 else "TS→GA"
@@ -1761,7 +1557,7 @@ def run_multi_benchmark(n_runs: int = 3, fast_mode: bool = False):
 		log_separator("#")
 
 		seed = 42 + i * 1000  # Different seed for each run
-		run_result = run_benchmark(fast_mode=fast_mode, run_id=i+1, seed=seed)
+		run_result = run_benchmark(mode=mode, run_id=i+1, seed=seed, tokenizer_type=tokenizer_type)
 		runs.append(run_result)
 
 		# Save intermediate results
@@ -1852,9 +1648,31 @@ def run_multi_benchmark(n_runs: int = 3, fast_mode: bool = False):
 if __name__ == "__main__":
 	import argparse
 	parser = argparse.ArgumentParser()
-	parser.add_argument("--full", action="store_true", help="Run full benchmark (slower, 3h per strategy)")
+	parser.add_argument("--full", action="store_true", help="Run full benchmark (GA 30×50, TS 30×15)")
+	parser.add_argument("--overnight", action="store_true", help="Run extended overnight benchmark (GA 40×200, TS 40×25)")
 	parser.add_argument("--runs", type=int, default=1, help="Number of runs (default: 1)")
+	parser.add_argument("--tokenizer", type=str, default="word",
+		choices=["simple", "word", "gpt2"],
+		help="Tokenizer: simple (original), word (WikiText-2 standard), gpt2 (BPE)")
 	args = parser.parse_args()
+
+	# Map tokenizer arg to enum
+	tokenizer_type = TokenizerType[args.tokenizer.upper().replace("-", "_")]
+
+	# Determine mode from flags
+	if args.overnight:
+		mode = BenchmarkMode.OVERNIGHT
+	elif args.full:
+		mode = BenchmarkMode.FULL
+	else:
+		mode = BenchmarkMode.FAST
+
+	# Mode descriptions for logging
+	mode_descs = {
+		BenchmarkMode.FAST: "FAST",
+		BenchmarkMode.FULL: "FULL (GA 30×50, TS 30×15)",
+		BenchmarkMode.OVERNIGHT: "OVERNIGHT (GA 40×200, TS 40×25)",
+	}
 
 	# Setup logging to file and console
 	log_file = setup_logging()
@@ -1869,17 +1687,22 @@ if __name__ == "__main__":
 	log("RAM LM v2 BENCHMARK - SESSION START")
 	log_separator()
 	log(f"Log file: {log_file}")
-	log(f"Mode: {'FULL' if args.full else 'FAST'}")
+	log(f"Mode: {mode_descs[mode]}")
+	log(f"Tokenizer: {tokenizer_type.name}")
 	log(f"Runs: {args.runs}")
-	if args.full:
+	if mode == BenchmarkMode.OVERNIGHT:
+		# Estimate: ~30 min per RAM × 5 RAMs × runs
+		est_hours = args.runs * 2.5
+		log(f"Estimated time: ~{est_hours:.1f} hours ({args.runs} runs × ~2.5h each)")
+	elif mode == BenchmarkMode.FULL:
 		log(f"Timeout per strategy: 3 hours")
 		log(f"Estimated max time: {args.runs * 9} hours ({args.runs} runs × 3 strategies × 3h)")
 	log_separator()
 
 	if args.runs > 1:
-		run_multi_benchmark(n_runs=args.runs, fast_mode=not args.full)
+		run_multi_benchmark(n_runs=args.runs, mode=mode, tokenizer_type=tokenizer_type)
 	else:
-		run_benchmark(fast_mode=not args.full)
+		run_benchmark(mode=mode, tokenizer_type=tokenizer_type)
 
 	# Final log
 	log_separator()

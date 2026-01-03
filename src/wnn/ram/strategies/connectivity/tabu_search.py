@@ -77,6 +77,7 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 		total_input_bits: int,
 		num_neurons: int,
 		n_bits_per_neuron: int,
+		batch_evaluate_fn: Optional[Callable[[list], list[float]]] = None,
 	) -> OptimizerResult:
 		"""
 		Run Tabu Search optimization.
@@ -87,12 +88,16 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 		3. Select best non-tabu neighbor
 		4. Add move to tabu list (avoid reverting)
 		5. Repeat for configured iterations
+
+		Args:
+			batch_evaluate_fn: Optional function to evaluate multiple patterns at once.
+				If provided, uses batch evaluation for massive speedup with Rust/joblib.
 		"""
 		self._ensure_rng()
 		cfg = self._config
 
 		current = connections.clone()
-		current_error = evaluate_fn(current)
+		current_error = evaluate_fn(current) if batch_evaluate_fn is None else batch_evaluate_fn([current])[0]
 
 		best = current.clone()
 		best_error = current_error
@@ -105,11 +110,11 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 		history = [(0, current_error)]
 
 		if self._verbose:
-			print(f"[TS] Initial error: {current_error:.4f}")
+			print(f"[TS] Initial error: {current_error:.4f}", flush=True)
 
 		for iteration in range(cfg.iterations):
-			# Generate neighbors
-			neighbors = []
+			# Generate all neighbors first (for batch evaluation)
+			neighbor_candidates = []
 			for _ in range(cfg.neighbors_per_iter):
 				neighbor, move = self._generate_neighbor(
 					current, cfg.mutation_rate,
@@ -123,11 +128,17 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 				)
 
 				if not is_tabu:
-					error = evaluate_fn(neighbor)
-					neighbors.append((neighbor, error, move))
+					neighbor_candidates.append((neighbor, move))
 
-			if not neighbors:
+			if not neighbor_candidates:
 				continue
+
+			# Batch evaluate all non-tabu neighbors at once
+			if batch_evaluate_fn is not None:
+				errors = batch_evaluate_fn([n for n, _ in neighbor_candidates])
+				neighbors = [(n, e, m) for (n, m), e in zip(neighbor_candidates, errors)]
+			else:
+				neighbors = [(n, evaluate_fn(n), m) for n, m in neighbor_candidates]
 
 			# Select best non-tabu neighbor
 			neighbors.sort(key=lambda x: x[1])
@@ -148,7 +159,7 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 			history.append((iteration + 1, best_error))
 
 			if self._verbose:
-				print(f"[TS] Iter {iteration + 1}: current={current_error:.4f}, best={best_error:.4f}")
+				print(f"[TS] Iter {iteration + 1}: current={current_error:.4f} ({(1-current_error)*100:.1f}%), best={best_error:.4f}", flush=True)
 
 		improvement_pct = ((initial_error - best_error) / initial_error * 100) if best_error < initial_error else 0.0
 

@@ -61,6 +61,12 @@ from wnn.ram.enums.normalization import NormStrategy
 # Connectivity Optimization
 from wnn.ram.enums.connectivity import OptimizationMethod
 
+# Benchmark
+from wnn.ram.enums.benchmark import BenchmarkMode
+
+# Tokenizer
+from wnn.ram.enums.tokenizer import TokenizerType
+
 
 __all__ = [
 	# Memory
@@ -103,4 +109,8 @@ __all__ = [
 	'NormStrategy',
 	# Connectivity Optimization
 	'OptimizationMethod',
+	# Benchmark
+	'BenchmarkMode',
+	# Tokenizer
+	'TokenizerType',
 ]

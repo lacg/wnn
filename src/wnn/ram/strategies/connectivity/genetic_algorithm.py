@@ -76,22 +76,53 @@ class GeneticAlgorithmStrategy(OptimizerStrategyBase):
 		total_input_bits: int,
 		num_neurons: int,
 		n_bits_per_neuron: int,
+		batch_evaluate_fn: Optional[Callable[[list], list[float]]] = None,
 	) -> OptimizerResult:
 		"""
-		Run Genetic Algorithm optimization.
+		Run Genetic Algorithm optimization with fitness caching.
 
 		The algorithm:
 		1. Initialize population from variations of initial connections
-		2. Evaluate fitness of all individuals
+		2. Evaluate fitness of all individuals (cached for elite)
 		3. Select parents via tournament selection
 		4. Apply crossover and mutation
-		5. Preserve elite individuals
+		5. Preserve elite individuals WITH their cached fitness
 		6. Repeat for configured generations
+
+		Args:
+			batch_evaluate_fn: Optional function to evaluate multiple patterns at once.
+				If provided, uses batch evaluation for massive speedup with Rust/joblib.
 		"""
 		self._ensure_rng()
 		cfg = self._config
 
+		# Helper to evaluate only individuals with unknown fitness
+		def eval_with_cache(pop_with_fitness: list[tuple]) -> list[tuple]:
+			"""Evaluate individuals with None fitness, keep cached values."""
+			# Separate known and unknown fitness
+			unknown_indices = [i for i, (_, f) in enumerate(pop_with_fitness) if f is None]
+
+			if not unknown_indices:
+				return pop_with_fitness  # All cached
+
+			# Extract individuals needing evaluation
+			to_eval = [pop_with_fitness[i][0] for i in unknown_indices]
+
+			# Batch evaluate
+			if batch_evaluate_fn is not None:
+				new_fitness = batch_evaluate_fn(to_eval)
+			else:
+				new_fitness = [evaluate_fn(ind) for ind in to_eval]
+
+			# Update fitness values
+			result = list(pop_with_fitness)
+			for idx, fit in zip(unknown_indices, new_fitness):
+				result[idx] = (result[idx][0], fit)
+
+			return result
+
 		# Initialize population with variations of initial connections
+		# All start with fitness=None (need evaluation)
 		population = []
 		for i in range(cfg.population_size):
 			if i == 0:
@@ -101,35 +132,38 @@ class GeneticAlgorithmStrategy(OptimizerStrategyBase):
 					connections, cfg.mutation_rate * 10,
 					total_input_bits, num_neurons, n_bits_per_neuron
 				)
-			population.append(individual)
+			population.append((individual, None))  # (individual, fitness)
 
 		# Evaluate initial population
-		fitness = [evaluate_fn(ind) for ind in population]
+		population = eval_with_cache(population)
+		fitness = [f for _, f in population]
 
 		best_idx = min(range(len(fitness)), key=lambda i: fitness[i])
-		best = population[best_idx].clone()
+		best = population[best_idx][0].clone()
 		best_error = fitness[best_idx]
-		initial_error = evaluate_fn(connections)
+		initial_error = fitness[0]  # First individual is the original
 
 		history = [(0, best_error)]
 
 		if self._verbose:
-			print(f"[GA] Initial best error: {best_error:.4f}")
+			print(f"[GA] Initial best error: {best_error:.4f}", flush=True)
 
 		for generation in range(cfg.generations):
 			# Selection and reproduction
 			new_population = []
 
-			# Elitism: keep best individuals
+			# Elitism: keep best individuals WITH their cached fitness
 			sorted_indices = sorted(range(len(fitness)), key=lambda i: fitness[i])
 			for i in range(cfg.elitism):
-				new_population.append(population[sorted_indices[i]].clone())
+				elite_idx = sorted_indices[i]
+				# Clone individual but KEEP the cached fitness
+				new_population.append((population[elite_idx][0].clone(), fitness[elite_idx]))
 
-			# Generate rest of population
+			# Generate rest of population (new children have fitness=None)
 			while len(new_population) < cfg.population_size:
-				# Tournament selection
-				p1 = self._tournament_select(population, fitness)
-				p2 = self._tournament_select(population, fitness)
+				# Tournament selection (using cached fitness)
+				p1 = self._tournament_select_cached(population)
+				p2 = self._tournament_select_cached(population)
 
 				# Crossover
 				if random.random() < cfg.crossover_rate:
@@ -142,22 +176,24 @@ class GeneticAlgorithmStrategy(OptimizerStrategyBase):
 					child, cfg.mutation_rate,
 					total_input_bits, num_neurons, n_bits_per_neuron
 				)
-				new_population.append(child)
+				new_population.append((child, None))  # New child needs evaluation
 
 			population = new_population[:cfg.population_size]
-			fitness = [evaluate_fn(ind) for ind in population]
+			population = eval_with_cache(population)  # Only evaluates None fitness!
+			fitness = [f for _, f in population]
 
 			# Update best
 			gen_best_idx = min(range(len(fitness)), key=lambda i: fitness[i])
 			if fitness[gen_best_idx] < best_error:
-				best = population[gen_best_idx].clone()
+				best = population[gen_best_idx][0].clone()
 				best_error = fitness[gen_best_idx]
 
 			history.append((generation + 1, best_error))
 
-			if self._verbose and (generation + 1) % 10 == 0:
+			if self._verbose and (generation + 1) % 5 == 0:
 				avg_fitness = sum(fitness) / len(fitness)
-				print(f"[GA] Gen {generation + 1}: best={best_error:.4f}, avg={avg_fitness:.4f}")
+				cached_count = sum(1 for _, f in new_population[:cfg.elitism] if f is not None)
+				print(f"[GA] Gen {generation + 1}: best={best_error:.4f} ({(1-best_error)*100:.1f}%), avg={avg_fitness:.4f}, cached={cached_count}", flush=True)
 
 		improvement_pct = ((initial_error - best_error) / initial_error * 100) if best_error < initial_error else 0.0
 
@@ -182,6 +218,17 @@ class GeneticAlgorithmStrategy(OptimizerStrategyBase):
 		indices = random.sample(range(len(population)), min(tournament_size, len(population)))
 		best_idx = min(indices, key=lambda i: fitness[i])
 		return population[best_idx]
+
+	def _tournament_select_cached(
+		self,
+		population: list[tuple],
+		tournament_size: int = 3
+	) -> Tensor:
+		"""Tournament selection with cached fitness: pick best from random subset."""
+		indices = random.sample(range(len(population)), min(tournament_size, len(population)))
+		# population is list of (individual, fitness) tuples
+		best_idx = min(indices, key=lambda i: population[i][1])
+		return population[best_idx][0]  # Return just the individual
 
 	def _crossover(self, parent1: Tensor, parent2: Tensor, num_neurons: int) -> Tensor:
 		"""Single-point crossover: exchange neuron connections."""
