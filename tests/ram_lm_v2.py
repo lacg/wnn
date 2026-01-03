@@ -876,18 +876,33 @@ class RAMLM_v2:
 							log(msg)
 						return errors
 					else:
-						# Python fallback (slower)
-						current_all_conns = all_connectivities
-						errors = []
+						# Python fallback (slower but correct perplexity)
+						import time as time_module
+						start = time_module.time()
+						perplexities = []
+						ram = self.generalized_rams[target_n]
+						old_conn = ram.get_connectivity()
 						for cand in candidates:
-							# Temporarily apply candidate
-							old_conn = current_all_conns[ram_idx]
-							current_all_conns[ram_idx] = cand.tolist() if hasattr(cand, 'tolist') else cand
-							# Evaluate cascade (simplified Python version)
-							err = self._evaluate_cascade_python(train_tokens, test_tokens[:eval_subset])
-							current_all_conns[ram_idx] = old_conn
-							errors.append(err)
-						return errors
+							# Temporarily apply candidate connectivity
+							cand_list = cand.tolist() if hasattr(cand, 'tolist') else cand
+							ram.set_connectivity(cand_list)
+							# Evaluate perplexity (matches Rust logic)
+							ppl = self._evaluate_perplexity_python(
+								test_tokens, exact_probs_ref, vocab_size_ref,
+								cascade_threshold_ref, eval_subset
+							)
+							perplexities.append(ppl)
+						# Restore original connectivity
+						ram.set_connectivity(old_conn)
+						elapsed = time_module.time() - start
+						eval_count[0] += 1
+						batch_best_ppl = min(perplexities)
+						if batch_best_ppl < global_best[0]:
+							global_best[0] = batch_best_ppl
+						if eval_count[0] % 5 == 1:
+							msg = f"[Python n={target_n}] Batch {eval_count[0]}: {pop_size} total population ({len(candidates)} new) | {elapsed*1000:.0f}ms | batch PPL: {batch_best_ppl:.1f}, global PPL: {global_best[0]:.1f}"
+							log(msg)
+						return perplexities
 				return batch_eval
 
 			batch_fn = create_perplexity_batch_fn(ram_idx, n, exact_probs, vocab_size, self.cascade_threshold, ga_pop)
@@ -1028,6 +1043,69 @@ class RAMLM_v2:
 				correct += 1
 		accuracy = correct / total if total > 0 else 0
 		return 1 - accuracy  # Return error
+
+	def _evaluate_perplexity_python(self, test_tokens: list[str], exact_probs: list,
+									vocab_size: int, cascade_threshold: float, eval_subset: int) -> float:
+		"""Python fallback for perplexity evaluation (matches Rust logic)."""
+		import math
+
+		min_prob = 1.0 / vocab_size
+		total_log_prob = 0.0
+		n_values = [2, 3, 4, 5, 6]
+
+		total = min(eval_subset, len(test_tokens) - 6)
+		for i in range(total):
+			target = test_tokens[i + 6]
+
+			# Use pre-computed exact prob if available
+			if exact_probs[i] is not None:
+				prob = max(exact_probs[i], min_prob)
+			else:
+				# Try cascade prediction (highest n first)
+				found_prob = None
+				for n in reversed(n_values):
+					if n not in self.generalized_rams:
+						continue
+					context = test_tokens[max(0, i+6-n):i+6]
+					if len(context) < n:
+						continue
+					pred, conf = self.generalized_rams[n].predict(context)
+					if pred and conf > cascade_threshold:
+						if pred == target:
+							found_prob = max(float(conf), min_prob)
+						else:
+							found_prob = min_prob
+						break
+
+				# Voting fallback if no confident cascade prediction
+				if found_prob is None:
+					votes = {}
+					total_weight = 0.0
+					for n in n_values:
+						if n not in self.generalized_rams:
+							continue
+						context = test_tokens[max(0, i+6-n):i+6]
+						if len(context) < n:
+							continue
+						pred, conf = self.generalized_rams[n].predict(context)
+						if pred:
+							weight = conf * n
+							votes[pred] = votes.get(pred, 0.0) + weight
+							total_weight += weight
+
+					if total_weight > 0:
+						target_votes = votes.get(target, 0.0)
+						found_prob = max(target_votes / total_weight, min_prob)
+					else:
+						found_prob = min_prob
+
+				prob = found_prob
+
+			total_log_prob += math.log(prob)
+
+		# Perplexity = exp(-avg_log_prob)
+		avg_log_prob = total_log_prob / total if total > 0 else 0
+		return math.exp(-avg_log_prob)
 
 	def predict(self, context: list[str], cascade_threshold: float = None) -> tuple[str, str, float]:
 		"""Predict next word.
