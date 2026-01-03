@@ -708,8 +708,8 @@ class RAMLM_v2:
 			ts_neighbors, ts_iters = 48, 1000
 			ga_elitism_pct = 0.25
 		else:  # BenchmarkMode.FULL
-			ga_pop, ga_gens = 32, 100
-			ts_neighbors, ts_iters = 32, 50
+			ga_pop, ga_gens = 48, 100
+			ts_neighbors, ts_iters = 48, 50
 			ga_elitism_pct = 0.25
 
 		# Configurable strategy sequence (default: GA then TS)
@@ -1553,7 +1553,7 @@ def run_benchmark(
 	# Mode descriptions
 	mode_descs = {
 		BenchmarkMode.FAST: "FAST (GA 16×10, TS 16×10)",
-		BenchmarkMode.FULL: "FULL (GA 32×100, TS 32×50)",
+		BenchmarkMode.FULL: "FULL (GA 48×100, TS 48×50)",
 		BenchmarkMode.OVERNIGHT: "OVERNIGHT (GA 48×1000, TS 48×1000 + early stop)",
 	}
 	mode_desc = mode_descs[mode]
@@ -1761,7 +1761,7 @@ def run_multi_benchmark(
 	# Mode descriptions
 	mode_descs = {
 		BenchmarkMode.FAST: "FAST (GA 16×10, TS 16×10)",
-		BenchmarkMode.FULL: "FULL (GA 32×100, TS 32×50)",
+		BenchmarkMode.FULL: "FULL (GA 48×100, TS 48×50)",
 		BenchmarkMode.OVERNIGHT: "OVERNIGHT (GA 48×1000, TS 48×1000 + early stop)",
 	}
 
@@ -1917,7 +1917,7 @@ if __name__ == "__main__":
 	# Mode descriptions for logging
 	mode_descs = {
 		BenchmarkMode.FAST: "FAST (GA 16×10, TS 16×10)",
-		BenchmarkMode.FULL: "FULL (GA 32×100, TS 32×50)",
+		BenchmarkMode.FULL: "FULL (GA 48×100, TS 48×50)",
 		BenchmarkMode.OVERNIGHT: "OVERNIGHT (GA 48×1000, TS 48×1000 + early stop)",
 	}
 
