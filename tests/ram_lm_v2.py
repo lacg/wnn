@@ -1011,6 +1011,9 @@ class RAMLM_v2:
 		log_separator()
 		self._best_strategy = strategy_name
 
+		# Store final optimization PPL for reporting (this is on held-out training data)
+		self._optimization_final_ppl = final_ppl
+
 	def _evaluate_cascade_python(self, train_tokens: list[str], test_tokens: list[str]) -> float:
 		"""Python fallback for cascade evaluation."""
 		correct = 0
@@ -1652,7 +1655,11 @@ def run_benchmark(
 	)
 
 	log(f"OVERALL ACCURACY: {accuracy*100:.2f}%")
-	log(f"PERPLEXITY: {perplexity:.1f}")
+	# Report both PPLs for clarity
+	optimization_ppl = getattr(model, '_optimization_final_ppl', None)
+	if optimization_ppl:
+		log(f"PERPLEXITY (held-out train): {optimization_ppl:.1f}  ← optimized for this")
+	log(f"PERPLEXITY (test set): {perplexity:.1f}  ← generalization")
 	log("By method:")
 	for method, stats in sorted(results["by_method"].items(),
 								key=lambda x: -x[1]["total"]):
@@ -1689,10 +1696,15 @@ def run_benchmark(
 	voting_results = model.evaluate_voting_strategies(test_tokens)
 
 	log("")
-	log("RESULTS:")
+	log("RESULTS (accuracy on test set):")
 	log(f"  Cascade (original)    : {voting_results['cascade']['accuracy']*100:.2f}%")
 	log(f"  Weighted Voting (#1)  : {voting_results['weighted']['accuracy']*100:.2f}%")
 	log(f"  Meta-Classifier (#2)  : {voting_results['meta']['accuracy']*100:.2f}%")
+	log("")
+	log("PERPLEXITY SUMMARY:")
+	if optimization_ppl:
+		log(f"  Optimization (held-out train): {optimization_ppl:.1f}")
+	log(f"  Generalization (test set)    : {perplexity:.1f}")
 	log("")
 
 	best_strategy = max(voting_results.items(), key=lambda x: x[1]['accuracy'])
@@ -1729,7 +1741,9 @@ def run_benchmark(
 		log(f"- v2 gen_n6: ~{gen_n6_coverage*100:.1f}% coverage (new longer context)")
 	log("")
 	log(f"FINAL ACCURACY: {accuracy*100:.2f}%")
-	log(f"FINAL PERPLEXITY: {perplexity:.1f}")
+	if optimization_ppl:
+		log(f"FINAL PPL (held-out train): {optimization_ppl:.1f}")
+	log(f"FINAL PPL (test set): {perplexity:.1f}")
 	log("")
 	log(f"Run {run_id} elapsed: {run_elapsed:.1f}s ({run_elapsed/60:.1f} min)")
 
