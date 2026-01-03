@@ -590,17 +590,28 @@ class RAMLM_v2:
 	RAM Language Model v2 with thesis optimization.
 	"""
 
-	def __init__(self, freq_threshold: int = 50, mode: BenchmarkMode = BenchmarkMode.FAST):
+	def __init__(self, freq_threshold: int = 50, mode: BenchmarkMode = BenchmarkMode.FAST,
+				 n_neurons: int = None, cascade_threshold: float = 0.1):
 		self.freq_threshold = freq_threshold
 		self.mode = mode
 		self.word_counts = Counter()
 		self.high_freq_words = set()
+
+		# Configurable parameters (with mode-based defaults)
+		if n_neurons is None:
+			self.n_neurons = 16 if mode == BenchmarkMode.FAST else 64
+		else:
+			self.n_neurons = n_neurons
+		self.cascade_threshold = cascade_threshold
 
 		# Exact RAMs for high-freq (still useful for common patterns)
 		self.exact_rams = {n: defaultdict(Counter) for n in [2, 3, 4]}
 
 		# Generalized RAMs with partial connectivity (KEY IMPROVEMENT)
 		self.generalized_rams = {}
+
+		# Track prediction method usage
+		self.prediction_stats = Counter()
 
 	def train(self, tokens: list[str], optimize_connectivity: bool = True):
 		"""Train the model."""
@@ -625,15 +636,13 @@ class RAMLM_v2:
 			log(f"  n={n}: {len(self.exact_rams[n]):,} patterns")
 
 		# Train generalized RAMs with partial connectivity
-		log("Training generalized RAMs (partial connectivity)...")
-		# Parameters scale with benchmark mode
-		n_neurons = 16 if self.mode == BenchmarkMode.FAST else 64
+		log(f"Training generalized RAMs ({self.n_neurons} neurons)...")
 		bits_per_neuron = 10 if self.mode == BenchmarkMode.FAST else 14
 
 		for n in [2, 3, 4, 5, 6]:  # Added n=6 for longer context
 			ram = GeneralizedNGramRAM(
 				n=n,
-				n_neurons=n_neurons,
+				n_neurons=self.n_neurons,
 				bits_per_neuron=bits_per_neuron,
 				bits_per_word=12
 			)
@@ -817,7 +826,7 @@ class RAMLM_v2:
 							global_best[0] = batch_best_ppl
 						# Log every 5th batch
 						if eval_count[0] % 5 == 1:
-							msg = f"[Rust n={target_n}] Batch {eval_count[0]}: {pop_size} total ({len(candidates)} new) | {elapsed*1000:.0f}ms | batch PPL: {batch_best_ppl:.1f}, global PPL: {global_best[0]:.1f}"
+							msg = f"[Rust n={target_n}] Batch {eval_count[0]}: {pop_size} total population ({len(candidates)} new) | {elapsed*1000:.0f}ms | batch PPL: {batch_best_ppl:.1f}, global PPL: {global_best[0]:.1f}"
 							log(msg)
 						return perplexities
 					elif has_fullnetwork:
@@ -841,7 +850,7 @@ class RAMLM_v2:
 							global_best[0] = batch_best_err
 						global_best_acc = (1 - global_best[0]) * 100
 						if eval_count[0] % 5 == 1:
-							msg = f"[Rust n={target_n}] Batch {eval_count[0]}: {pop_size} total ({len(candidates)} new) | {elapsed*1000:.0f}ms | batch: {batch_best_acc:.2f}%, global: {global_best_acc:.2f}%"
+							msg = f"[Rust n={target_n}] Batch {eval_count[0]}: {pop_size} total population ({len(candidates)} new) | {elapsed*1000:.0f}ms | batch: {batch_best_acc:.2f}%, global: {global_best_acc:.2f}%"
 							log(msg)
 						return errors
 					elif has_cascade:
@@ -862,7 +871,7 @@ class RAMLM_v2:
 							global_best[0] = batch_best_err
 						global_best_acc = (1 - global_best[0]) * 100
 						if eval_count[0] % 5 == 1:
-							msg = f"[Rust n={target_n}] Batch {eval_count[0]}: {pop_size} total ({len(candidates)} new) | {elapsed*1000:.0f}ms | batch: {batch_best_acc:.2f}%, global: {global_best_acc:.2f}%"
+							msg = f"[Rust n={target_n}] Batch {eval_count[0]}: {pop_size} total population ({len(candidates)} new) | {elapsed*1000:.0f}ms | batch: {batch_best_acc:.2f}%, global: {global_best_acc:.2f}%"
 							log(msg)
 						return errors
 					else:
@@ -1018,8 +1027,15 @@ class RAMLM_v2:
 		accuracy = correct / total if total > 0 else 0
 		return 1 - accuracy  # Return error
 
-	def predict(self, context: list[str]) -> tuple[str, str, float]:
-		"""Predict next word."""
+	def predict(self, context: list[str], cascade_threshold: float = None) -> tuple[str, str, float]:
+		"""Predict next word.
+
+		Args:
+			context: List of previous words
+			cascade_threshold: Confidence threshold for generalized RAMs (default: self.cascade_threshold)
+		"""
+		if cascade_threshold is None:
+			cascade_threshold = getattr(self, 'cascade_threshold', 0.1)
 
 		# 1. Try exact match for high-freq contexts
 		for n in sorted(self.exact_rams.keys(), reverse=True):
@@ -1031,14 +1047,18 @@ class RAMLM_v2:
 					best, count = counts.most_common(1)[0]
 					conf = count / total
 					if conf > 0.2 or total >= 3:
-						return best, f"exact_n{n}", conf
+						method = f"exact_n{n}"
+						self.prediction_stats[method] += 1
+						return best, method, conf
 
 		# 2. Try generalized RAMs (partial connectivity)
 		for n in sorted(self.generalized_rams.keys(), reverse=True):
 			if len(context) >= n:
 				pred, conf = self.generalized_rams[n].predict(context)
-				if pred and conf > 0.1:
-					return pred, f"gen_n{n}", conf
+				if pred and conf > cascade_threshold:
+					method = f"gen_n{n}"
+					self.prediction_stats[method] += 1
+					return pred, method, conf
 
 		# 3. Fallback: vote across all scales
 		votes = Counter()
@@ -1050,7 +1070,73 @@ class RAMLM_v2:
 
 		if votes:
 			best, score = votes.most_common(1)[0]
+			self.prediction_stats["voting"] += 1
 			return best, "voting", score / sum(votes.values())
+
+		self.prediction_stats["none"] += 1
+		return "<UNK>", "none", 0.0
+
+	def log_prediction_stats(self):
+		"""Log prediction method usage statistics."""
+		total = sum(self.prediction_stats.values())
+		if total == 0:
+			log("No predictions made yet.")
+			return
+
+		log("Prediction method usage:")
+		# Sort by n-level (exact first, then gen, then voting/none)
+		for method in ["exact_n4", "exact_n3", "exact_n2",
+					   "gen_n6", "gen_n5", "gen_n4", "gen_n3", "gen_n2",
+					   "voting", "none"]:
+			count = self.prediction_stats.get(method, 0)
+			if count > 0:
+				pct = 100 * count / total
+				log(f"  {method}: {count:,} ({pct:.1f}%)")
+
+	def reset_prediction_stats(self):
+		"""Reset prediction statistics."""
+		self.prediction_stats = Counter()
+
+	def predict_threshold_voting(self, context: list[str], min_conf: float = None) -> tuple[str, str, float]:
+		"""
+		Strategy #3: Threshold-filtered voting.
+
+		Only include votes from RAMs with confidence > min_conf.
+		This filters out garbage predictions that pollute voting.
+		"""
+		if min_conf is None:
+			min_conf = self.cascade_threshold
+
+		# 1. Try exact match first (same as regular predict)
+		for n in sorted(self.exact_rams.keys(), reverse=True):
+			if len(context) >= n:
+				ctx = tuple(context[-n:])
+				if ctx in self.exact_rams[n]:
+					counts = self.exact_rams[n][ctx]
+					total = sum(counts.values())
+					best, count = counts.most_common(1)[0]
+					conf = count / total
+					if conf > 0.2 or total >= 3:
+						return best, f"exact_n{n}", conf
+
+		# 2. Try generalized RAMs with confidence threshold
+		for n in sorted(self.generalized_rams.keys(), reverse=True):
+			if len(context) >= n:
+				pred, conf = self.generalized_rams[n].predict(context)
+				if pred and conf > self.cascade_threshold:
+					return pred, f"gen_n{n}", conf
+
+		# 3. Threshold-filtered voting: only include votes with conf > min_conf
+		votes = Counter()
+		for n, ram in self.generalized_rams.items():
+			if len(context) >= n:
+				pred, conf = ram.predict(context)
+				if pred and conf > min_conf:
+					votes[pred] += conf * n
+
+		if votes:
+			best, score = votes.most_common(1)[0]
+			return best, "threshold_voting", score / sum(votes.values())
 
 		return "<UNK>", "none", 0.0
 
@@ -1098,7 +1184,7 @@ class RAMLM_v2:
 			predictions = self._get_all_predictions(context)
 
 			for method, (pred, conf) in predictions.items():
-				if conf > 0.05:  # Only count confident predictions
+				if conf > self.cascade_threshold:  # Only count confident predictions
 					method_stats[method]["total"] += 1
 					if pred == target:
 						method_stats[method]["correct"] += 1
@@ -1281,19 +1367,25 @@ class RAMLM_v2:
 
 	def evaluate_voting_strategies(self, tokens: list[str]) -> dict:
 		"""Compare all voting strategies."""
+		# Test multiple confidence thresholds
+		thresholds = [0.01, 0.02, 0.03, 0.05, 0.07, 0.10]
+
 		results = {
 			"cascade": {"correct": 0, "total": 0},  # Original cascade
 			"weighted": {"correct": 0, "total": 0},  # Accuracy-weighted voting
 			"meta": {"correct": 0, "total": 0},      # Meta-classifier
 		}
+		# Add threshold strategies
+		for t in thresholds:
+			results[f"thresh_{t:.2f}"] = {"correct": 0, "total": 0}
 
 		for i in range(len(tokens) - 6):
 			context = tokens[i:i + 5]
 			target = tokens[i + 5]
 
-			results["cascade"]["total"] += 1
-			results["weighted"]["total"] += 1
-			results["meta"]["total"] += 1
+			# Increment totals for all strategies
+			for key in results:
+				results[key]["total"] += 1
 
 			# Original cascade
 			pred1, _, _ = self.predict(context)
@@ -1310,6 +1402,12 @@ class RAMLM_v2:
 			if pred3 == target:
 				results["meta"]["correct"] += 1
 
+			# Threshold voting at various levels
+			for t in thresholds:
+				pred, _, _ = self.predict_threshold_voting(context, min_conf=t)
+				if pred == target:
+					results[f"thresh_{t:.2f}"]["correct"] += 1
+
 		# Compute accuracies
 		for strategy in results:
 			total = results[strategy]["total"]
@@ -1320,6 +1418,8 @@ class RAMLM_v2:
 
 	def evaluate(self, tokens: list[str]) -> dict:
 		"""Evaluate the model."""
+		self.reset_prediction_stats()  # Reset for fresh stats
+
 		results = {
 			"correct": 0,
 			"total": 0,
@@ -1330,7 +1430,7 @@ class RAMLM_v2:
 			context = tokens[i:i + 6]
 			target = tokens[i + 6]
 
-			pred, method, conf = self.predict(context)
+			pred, method, _ = self.predict(context)
 
 			results["total"] += 1
 			results["by_method"][method]["total"] += 1
@@ -1339,7 +1439,35 @@ class RAMLM_v2:
 				results["correct"] += 1
 				results["by_method"][method]["correct"] += 1
 
+		# Log usage and accuracy by method
+		self.log_accuracy_by_method(results["by_method"])
+
 		return results
+
+	def log_accuracy_by_method(self, by_method: dict):
+		"""Log accuracy breakdown by prediction method."""
+		total_preds = sum(m["total"] for m in by_method.values())
+		if total_preds == 0:
+			log("No predictions made yet.")
+			return
+
+		log("Accuracy by prediction method:")
+		log(f"  {'Method':<12} {'Usage':>8} {'Accuracy':>10} {'Correct':>10}")
+		log(f"  {'-'*12} {'-'*8} {'-'*10} {'-'*10}")
+
+		# Sort by cascade priority (exact first, then gen by n, then voting/none)
+		method_order = ["exact_n4", "exact_n3", "exact_n2",
+						"gen_n6", "gen_n5", "gen_n4", "gen_n3", "gen_n2",
+						"voting", "none"]
+
+		for method in method_order:
+			if method in by_method:
+				stats = by_method[method]
+				total = stats["total"]
+				correct = stats["correct"]
+				usage_pct = 100 * total / total_preds
+				acc = 100 * correct / total if total > 0 else 0
+				log(f"  {method:<12} {usage_pct:>7.1f}% {acc:>9.1f}% {correct:>6}/{total:<6}")
 
 
 def run_benchmark(
