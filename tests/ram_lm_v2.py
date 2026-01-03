@@ -235,6 +235,7 @@ class BenchmarkRun:
 	"""Results from a single benchmark run."""
 	run_id: int
 	accuracy: float
+	perplexity: float
 	coverage_n4: float
 	strategy_results: dict = field(default_factory=dict)
 	best_strategy: str = ""
@@ -591,7 +592,8 @@ class RAMLM_v2:
 	"""
 
 	def __init__(self, freq_threshold: int = 50, mode: BenchmarkMode = BenchmarkMode.FAST,
-				 n_neurons: int = None, cascade_threshold: float = 0.1):
+				 n_neurons: int = None, cascade_threshold: float = 0.1,
+				 strategy_sequence: list = None):
 		self.freq_threshold = freq_threshold
 		self.mode = mode
 		self.word_counts = Counter()
@@ -603,9 +605,11 @@ class RAMLM_v2:
 		else:
 			self.n_neurons = n_neurons
 		self.cascade_threshold = cascade_threshold
+		self.strategy_sequence = strategy_sequence if strategy_sequence else ['GA', 'TS']
 
 		# Exact RAMs for high-freq (still useful for common patterns)
-		self.exact_rams = {n: defaultdict(Counter) for n in [2, 3, 4]}
+		# Now includes n=5 and n=6 for better coverage
+		self.exact_rams = {n: defaultdict(Counter) for n in [2, 3, 4, 5, 6]}
 
 		# Generalized RAMs with partial connectivity (KEY IMPROVEMENT)
 		self.generalized_rams = {}
@@ -693,20 +697,24 @@ class RAMLM_v2:
 		test_tokens = tokens[train_subset:train_subset + eval_subset * 2]
 
 		# Strategy parameters (scale with mode)
+		# Population sizes are multiples of 16 (CPU cores) for optimal parallel batching
 		if self.mode == BenchmarkMode.FAST:
-			ga_pop, ga_gens = 10, 5
-			ts_neighbors, ts_iters = 10, 5
+			ga_pop, ga_gens = 16, 10
+			ts_neighbors, ts_iters = 16, 10
+			ga_elitism_pct = 0.25  # 25% elitism
 		elif self.mode == BenchmarkMode.OVERNIGHT:
-			# Extended overnight parameters for thorough optimization
-			ga_pop, ga_gens = 40, 200
-			ts_neighbors, ts_iters = 40, 50
+			# Extended overnight: max 1000 iterations with early stopping
+			ga_pop, ga_gens = 48, 1000
+			ts_neighbors, ts_iters = 48, 1000
+			ga_elitism_pct = 0.25
 		else:  # BenchmarkMode.FULL
-			ga_pop, ga_gens = 30, 50
-			ts_neighbors, ts_iters = 30, 15
+			ga_pop, ga_gens = 32, 100
+			ts_neighbors, ts_iters = 32, 50
+			ga_elitism_pct = 0.25
 
-		run_id = getattr(self, '_current_run_id', 1)
-		use_ga_first = (run_id % 2 == 1)
-		strategy_name = "GA→TS" if use_ga_first else "TS→GA"
+		# Configurable strategy sequence (default: GA then TS)
+		strategy_sequence = getattr(self, 'strategy_sequence', ['GA', 'TS'])
+		strategy_name = "→".join(strategy_sequence)
 
 		bits_per_neuron = 10 if self.mode == BenchmarkMode.FAST else 14
 		n_values = sorted(self.generalized_rams.keys())
@@ -714,11 +722,11 @@ class RAMLM_v2:
 		log(f"Optimizing {len(n_values)} RAMs: n={n_values}")
 		log(f"Mode: {self.mode.name}")
 		log(f"Train subset: {train_subset:,}, Eval subset: {eval_subset}")
-		log(f"Strategy: {strategy_name}")
-		ga_elitism = max(2, ga_pop // 10)
+		log(f"Strategy sequence: {strategy_name}")
+		ga_elitism = max(2, int(ga_pop * ga_elitism_pct))
 		ga_eval_per_gen = ga_pop - ga_elitism
-		log(f"GA: {ga_pop} pop × {ga_gens} gens (elite={ga_elitism}, eval={ga_eval_per_gen}/gen)")
-		log(f"TS: {ts_neighbors} neighbors × {ts_iters} iters")
+		log(f"GA: {ga_pop} pop × {ga_gens} max gens (elite={ga_elitism} ({ga_elitism_pct*100:.0f}%), eval={ga_eval_per_gen}/gen, early_stop=0.1 PPL/5 gens)")
+		log(f"TS: {ts_neighbors} neighbors × {ts_iters} max iters (early_stop=0.1 PPL/5 iters)")
 		if ACCEL_RUST_AVAILABLE:
 			log(f"Accelerator: Rust PERPLEXITY eval ({ACCEL_RUST_CORES} threads)")
 		else:
@@ -919,76 +927,50 @@ class RAMLM_v2:
 				# VERIFICATION: This should match previous RAM's final perplexity!
 				log(f"  Initial PERPLEXITY: {initial_ppl:.1f} (should match prev final)")
 
-			# Run GA
-			ga_config = GeneticAlgorithmConfig(
-				population_size=ga_pop, generations=ga_gens,
-				mutation_rate=0.01, crossover_rate=0.7, elitism=max(2, ga_pop // 10)
-			)
-			ga = GeneticAlgorithmStrategy(config=ga_config, seed=42+n, verbose=True)
-
 			start_time = time.time()
-			# Track best across BOTH phases (lower perplexity is better)
+			# Track best across all phases (lower perplexity is better)
 			best_ppl = initial_ppl
 			best_connectivity = conn_tensor.clone()
+			current_connectivity = conn_tensor.clone()
 
-			if use_ga_first:
-				# GA first
-				log(f"  [GA phase] Starting...")
-				ga_result = ga.optimize(conn_tensor, lambda x: batch_fn([x])[0],
-					total_bits, num_neurons, bits_per_neuron, batch_fn)
-				ga_ppl = ga_result.final_error  # Now this is perplexity
-				log(f"  [GA phase] Done: PPL {ga_ppl:.1f}")
-
-				# Track if GA is best so far (lower is better)
-				if ga_result.final_error < best_ppl:
-					best_ppl = ga_result.final_error
-					best_connectivity = ga_result.optimized_connections.clone()
-
-				# Then TS refinement (starts from GA's best)
-				log(f"  [TS phase] Starting...")
-				ts_config = TabuSearchConfig(iterations=ts_iters, neighbors_per_iter=ts_neighbors)
-				ts = TabuSearchStrategy(config=ts_config, seed=42+n, verbose=True)
-				ts_result = ts.optimize(ga_result.optimized_connections, lambda x: batch_fn([x])[0],
-					total_bits, num_neurons, bits_per_neuron, batch_fn)
-				ts_ppl = ts_result.final_error
-				log(f"  [TS phase] Done: PPL {ts_ppl:.1f}")
-
-				# Only update if TS found better than GA
-				if ts_result.final_error < best_ppl:
-					best_ppl = ts_result.final_error
-					best_connectivity = ts_result.optimized_connections.clone()
-					log(f"  [BEST] TS improved: PPL {best_ppl:.1f}")
+			# Run strategy sequence (e.g., ['GA', 'TS'] or ['TS', 'GA', 'GA'])
+			for step_idx, strategy_type in enumerate(strategy_sequence):
+				step_num = step_idx + 1
+				if strategy_type.upper() == 'GA':
+					log(f"  [{step_num}/{len(strategy_sequence)} GA] Starting...")
+					ga_config = GeneticAlgorithmConfig(
+						population_size=ga_pop, generations=ga_gens,
+						mutation_rate=0.01, crossover_rate=0.7, elitism=ga_elitism,
+						early_stop_patience=5, early_stop_threshold=0.1
+					)
+					ga = GeneticAlgorithmStrategy(config=ga_config, seed=42+n+step_idx, verbose=True)
+					result = ga.optimize(current_connectivity, lambda x: batch_fn([x])[0],
+						total_bits, num_neurons, bits_per_neuron, batch_fn)
+					log(f"  [{step_num}/{len(strategy_sequence)} GA] Done: PPL {result.final_error:.1f}")
+				elif strategy_type.upper() == 'TS':
+					log(f"  [{step_num}/{len(strategy_sequence)} TS] Starting...")
+					ts_config = TabuSearchConfig(
+						iterations=ts_iters, neighbors_per_iter=ts_neighbors,
+						early_stop_patience=5, early_stop_threshold=0.1
+					)
+					ts = TabuSearchStrategy(config=ts_config, seed=42+n+step_idx, verbose=True)
+					result = ts.optimize(current_connectivity, lambda x: batch_fn([x])[0],
+						total_bits, num_neurons, bits_per_neuron, batch_fn)
+					log(f"  [{step_num}/{len(strategy_sequence)} TS] Done: PPL {result.final_error:.1f}")
 				else:
-					log(f"  [BEST] Keeping GA result: PPL {best_ppl:.1f}")
-			else:
-				# TS first
-				log(f"  [TS phase] Starting...")
-				ts_config = TabuSearchConfig(iterations=ts_iters, neighbors_per_iter=ts_neighbors)
-				ts = TabuSearchStrategy(config=ts_config, seed=42+n, verbose=True)
-				ts_result = ts.optimize(conn_tensor, lambda x: batch_fn([x])[0],
-					total_bits, num_neurons, bits_per_neuron, batch_fn)
-				ts_ppl = ts_result.final_error
-				log(f"  [TS phase] Done: PPL {ts_ppl:.1f}")
+					log(f"  [WARNING] Unknown strategy: {strategy_type}, skipping")
+					continue
 
-				# Track if TS is best so far
-				if ts_result.final_error < best_ppl:
-					best_ppl = ts_result.final_error
-					best_connectivity = ts_result.optimized_connections.clone()
+				# Update current for next phase in sequence
+				current_connectivity = result.optimized_connections.clone()
 
-				# Then GA (starts from TS's best)
-				log(f"  [GA phase] Starting...")
-				ga_result = ga.optimize(ts_result.optimized_connections, lambda x: batch_fn([x])[0],
-					total_bits, num_neurons, bits_per_neuron, batch_fn)
-				ga_ppl = ga_result.final_error
-				log(f"  [GA phase] Done: PPL {ga_ppl:.1f}")
-
-				# Only update if GA found better than TS
-				if ga_result.final_error < best_ppl:
-					best_ppl = ga_result.final_error
-					best_connectivity = ga_result.optimized_connections.clone()
-					log(f"  [BEST] GA improved: PPL {best_ppl:.1f}")
+				# Track global best
+				if result.final_error < best_ppl:
+					best_ppl = result.final_error
+					best_connectivity = result.optimized_connections.clone()
+					log(f"  [BEST] {strategy_type} improved: PPL {best_ppl:.1f}")
 				else:
-					log(f"  [BEST] Keeping TS result: PPL {best_ppl:.1f}")
+					log(f"  [BEST] Keeping previous: PPL {best_ppl:.1f}")
 
 			elapsed = time.time() - start_time
 			final_ppl = best_ppl
@@ -1556,17 +1538,22 @@ def run_benchmark(
 	seed: int = None,
 	tokenizer_type: TokenizerType = TokenizerType.WIKITEXT_WORD,
 	n_neurons: int = None,
-	cascade_threshold: float = 0.1
+	cascade_threshold: float = 0.1,
+	strategy_sequence: list = None
 ) -> BenchmarkRun:
 	"""Run the v2 benchmark."""
 	if seed is not None:
 		random.seed(seed)
 
+	# Default strategy sequence
+	if strategy_sequence is None:
+		strategy_sequence = ['GA', 'TS']
+
 	# Mode descriptions
 	mode_descs = {
-		BenchmarkMode.FAST: "FAST (reduced params)",
-		BenchmarkMode.FULL: "FULL (3h timeout per strategy)",
-		BenchmarkMode.OVERNIGHT: "OVERNIGHT (extended: GA 40×200, TS 40×25)",
+		BenchmarkMode.FAST: "FAST (GA 16×10, TS 16×10)",
+		BenchmarkMode.FULL: "FULL (GA 32×100, TS 32×50)",
+		BenchmarkMode.OVERNIGHT: "OVERNIGHT (GA 48×1000, TS 48×1000 + early stop)",
 	}
 	mode_desc = mode_descs[mode]
 
@@ -1622,9 +1609,10 @@ def run_benchmark(
 
 	# Train model
 	log_separator()
-	model = RAMLM_v2(freq_threshold=30, mode=mode, n_neurons=n_neurons, cascade_threshold=cascade_threshold)
-	model._current_run_id = run_id  # Set run_id for hybrid strategy selection
+	model = RAMLM_v2(freq_threshold=30, mode=mode, n_neurons=n_neurons, cascade_threshold=cascade_threshold,
+					 strategy_sequence=strategy_sequence)
 	log(f"Model config: n_neurons={model.n_neurons}, cascade_threshold={model.cascade_threshold}")
+	log(f"Strategy sequence: {' → '.join(strategy_sequence)}")
 
 	start = time.time()
 	model.train(train_tokens, optimize_connectivity=True)
@@ -1639,7 +1627,31 @@ def run_benchmark(
 	results = model.evaluate(test_tokens)
 	accuracy = results["correct"] / results["total"] if results["total"] > 0 else 0
 
+	# Calculate perplexity on test set
+	# First compute exact_probs for the test set
+	eval_subset = min(3000, len(test_tokens) - 6)
+	exact_probs = []
+	for i in range(eval_subset):
+		target = test_tokens[i + 6]
+		exact_prob = None
+		for n in sorted(model.exact_rams.keys(), reverse=True):
+			ctx = tuple(test_tokens[i + 6 - n:i + 6])
+			if ctx in model.exact_rams[n]:
+				counts = model.exact_rams[n][ctx]
+				total = sum(counts.values())
+				if counts.most_common(1)[0][1] / total > 0.2 or total >= 3:
+					target_count = counts.get(target, 0)
+					exact_prob = target_count / total if total > 0 else 0.0
+					break
+		exact_probs.append(exact_prob)
+
+	vocab_size = len(model.word_counts)
+	perplexity = model._evaluate_perplexity_python(
+		test_tokens, exact_probs, vocab_size, model.cascade_threshold, eval_subset
+	)
+
 	log(f"OVERALL ACCURACY: {accuracy*100:.2f}%")
+	log(f"PERPLEXITY: {perplexity:.1f}")
 	log("By method:")
 	for method, stats in sorted(results["by_method"].items(),
 								key=lambda x: -x[1]["total"]):
@@ -1716,6 +1728,7 @@ def run_benchmark(
 		log(f"- v2 gen_n6: ~{gen_n6_coverage*100:.1f}% coverage (new longer context)")
 	log("")
 	log(f"FINAL ACCURACY: {accuracy*100:.2f}%")
+	log(f"FINAL PERPLEXITY: {perplexity:.1f}")
 	log("")
 	log(f"Run {run_id} elapsed: {run_elapsed:.1f}s ({run_elapsed/60:.1f} min)")
 
@@ -1723,6 +1736,7 @@ def run_benchmark(
 	benchmark_run = BenchmarkRun(
 		run_id=run_id,
 		accuracy=accuracy,
+		perplexity=perplexity,
 		coverage_n4=gen_n4_coverage,
 		strategy_results=getattr(model, '_strategy_results', {}),
 		best_strategy=getattr(model, '_best_strategy', 'unknown'),
@@ -1736,14 +1750,18 @@ def run_multi_benchmark(
 	mode: BenchmarkMode = BenchmarkMode.FULL,
 	tokenizer_type: TokenizerType = TokenizerType.WIKITEXT_WORD,
 	n_neurons: int = None,
-	cascade_threshold: float = 0.1
+	cascade_threshold: float = 0.1,
+	strategy_sequence: list = None
 ):
 	"""Run the benchmark multiple times and summarize results."""
+	if strategy_sequence is None:
+		strategy_sequence = ['GA', 'TS']
+
 	# Mode descriptions
 	mode_descs = {
-		BenchmarkMode.FAST: "FAST",
-		BenchmarkMode.FULL: "FULL (3h timeout per strategy)",
-		BenchmarkMode.OVERNIGHT: "OVERNIGHT (extended: GA 40×200, TS 40×25)",
+		BenchmarkMode.FAST: "FAST (GA 16×10, TS 16×10)",
+		BenchmarkMode.FULL: "FULL (GA 32×100, TS 32×50)",
+		BenchmarkMode.OVERNIGHT: "OVERNIGHT (GA 48×1000, TS 48×1000 + early stop)",
 	}
 
 	log_separator()
@@ -1751,11 +1769,7 @@ def run_multi_benchmark(
 	log(f"Mode: {mode_descs[mode]}")
 	log(f"Tokenizer: {tokenizer_type.name}")
 	log(f"Neurons: {n_neurons if n_neurons else 'default'}, Threshold: {cascade_threshold}")
-	if mode != BenchmarkMode.FAST:
-		log("Hybrid schedule:")
-		for r in range(1, n_runs + 1):
-			hybrid = "GA→TS" if r % 2 == 1 else "TS→GA"
-			log(f"  Run {r}: {hybrid}")
+	log(f"Strategy sequence: {' → '.join(strategy_sequence)}")
 	log_separator()
 
 	total_start = time.time()
@@ -1764,19 +1778,20 @@ def run_multi_benchmark(
 	for i in range(n_runs):
 		log_separator("#")
 		log(f"# STARTING RUN {i+1} of {n_runs}")
-		hybrid_label = "GA→TS" if (i+1) % 2 == 1 else "TS→GA"
-		log(f"# Hybrid: {hybrid_label}")
+		log(f"# Strategy: {' → '.join(strategy_sequence)}")
 		log_separator("#")
 
 		seed = 42 + i * 1000  # Different seed for each run
 		run_result = run_benchmark(mode=mode, run_id=i+1, seed=seed, tokenizer_type=tokenizer_type,
-								   n_neurons=n_neurons, cascade_threshold=cascade_threshold)
+								   n_neurons=n_neurons, cascade_threshold=cascade_threshold,
+								   strategy_sequence=strategy_sequence)
 		runs.append(run_result)
 
 		# Save intermediate results
 		log_separator("-")
 		log(f"[Run {i+1}/{n_runs} COMPLETE]")
 		log(f"  Accuracy: {run_result.accuracy*100:.2f}%")
+		log(f"  Perplexity: {run_result.perplexity:.1f}")
 		log(f"  Best strategy: {run_result.best_strategy}")
 		log(f"  Elapsed: {run_result.elapsed_seconds/60:.1f} min ({run_result.elapsed_seconds/3600:.2f} hours)")
 		log_separator("-")
@@ -1798,6 +1813,14 @@ def run_multi_benchmark(
 	log(f"  Mean: {sum(accuracies)/len(accuracies)*100:.2f}%")
 	log(f"  Min:  {min(accuracies)*100:.2f}%")
 	log(f"  Max:  {max(accuracies)*100:.2f}%")
+
+	# Perplexity stats
+	perplexities = [r.perplexity for r in runs]
+	log("")
+	log("Perplexity (lower is better):")
+	log(f"  Mean: {sum(perplexities)/len(perplexities):.1f}")
+	log(f"  Min:  {min(perplexities):.1f}")
+	log(f"  Max:  {max(perplexities):.1f}")
 
 	# Coverage stats
 	coverages = [r.coverage_n4 for r in runs]
@@ -1861,8 +1884,8 @@ def run_multi_benchmark(
 if __name__ == "__main__":
 	import argparse
 	parser = argparse.ArgumentParser()
-	parser.add_argument("--full", action="store_true", help="Run full benchmark (GA 30×50, TS 30×15)")
-	parser.add_argument("--overnight", action="store_true", help="Run extended overnight benchmark (GA 40×200, TS 40×50)")
+	parser.add_argument("--full", action="store_true", help="Run full benchmark (GA 32×100, TS 32×50)")
+	parser.add_argument("--overnight", action="store_true", help="Run extended overnight benchmark (GA 48×1000, TS 48×1000 with early stopping)")
 	parser.add_argument("--runs", type=int, default=1, help="Number of runs (default: 1)")
 	parser.add_argument("--tokenizer", type=str, default="word",
 		choices=["simple", "word", "gpt2"],
@@ -1871,6 +1894,8 @@ if __name__ == "__main__":
 		help="Number of neurons per RAM (default: 16 FAST, 64 FULL/OVERNIGHT)")
 	parser.add_argument("--threshold", type=float, default=0.1,
 		help="Cascade confidence threshold (default: 0.1)")
+	parser.add_argument("--strategy", type=str, default="GA,TS",
+		help="Optimization strategy sequence, comma-separated (default: GA,TS). Examples: GA, TS, GA,TS, TS,GA, GA,TS,GA")
 	args = parser.parse_args()
 
 	# Map tokenizer arg to enum
@@ -1885,11 +1910,14 @@ if __name__ == "__main__":
 	else:
 		mode = BenchmarkMode.FAST
 
+	# Parse strategy sequence
+	strategy_sequence = [s.strip().upper() for s in args.strategy.split(',')]
+
 	# Mode descriptions for logging
 	mode_descs = {
-		BenchmarkMode.FAST: "FAST",
-		BenchmarkMode.FULL: "FULL (GA 30×50, TS 30×15)",
-		BenchmarkMode.OVERNIGHT: "OVERNIGHT (GA 40×200, TS 40×25)",
+		BenchmarkMode.FAST: "FAST (GA 16×10, TS 16×10)",
+		BenchmarkMode.FULL: "FULL (GA 32×100, TS 32×50)",
+		BenchmarkMode.OVERNIGHT: "OVERNIGHT (GA 48×1000, TS 48×1000 + early stop)",
 	}
 
 	# Setup logging to file and console
@@ -1909,6 +1937,7 @@ if __name__ == "__main__":
 	log(f"Tokenizer: {tokenizer_type.name}")
 	log(f"Neurons: {args.neurons if args.neurons else 'default (16 FAST, 64 otherwise)'}")
 	log(f"Cascade threshold: {args.threshold}")
+	log(f"Strategy: {' → '.join(strategy_sequence)}")
 	log(f"Runs: {args.runs}")
 	if mode == BenchmarkMode.OVERNIGHT:
 		# Estimate: ~30 min per RAM × 5 RAMs × runs
@@ -1921,10 +1950,12 @@ if __name__ == "__main__":
 
 	if args.runs > 1:
 		run_multi_benchmark(n_runs=args.runs, mode=mode, tokenizer_type=tokenizer_type,
-							n_neurons=args.neurons, cascade_threshold=args.threshold)
+							n_neurons=args.neurons, cascade_threshold=args.threshold,
+							strategy_sequence=strategy_sequence)
 	else:
 		run_benchmark(mode=mode, tokenizer_type=tokenizer_type,
-					  n_neurons=args.neurons, cascade_threshold=args.threshold)
+					  n_neurons=args.neurons, cascade_threshold=args.threshold,
+					  strategy_sequence=strategy_sequence)
 
 	# Final log
 	log_separator()

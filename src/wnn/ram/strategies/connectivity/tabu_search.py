@@ -30,11 +30,15 @@ class TabuSearchConfig:
 	- neighbors_per_iter: 30 neighbors tested per iteration
 	- tabu_size: 5 recent moves stored to avoid cycling
 	- mutation_rate: 0.001 per-connection probability
+	- early_stop_patience: iterations without improvement before stopping
+	- early_stop_threshold: minimum improvement required to reset patience
 	"""
 	iterations: int = 5
 	neighbors_per_iter: int = 30
 	tabu_size: int = 5
 	mutation_rate: float = 0.001
+	early_stop_patience: int = 5  # Stop if no improvement for 5 iterations
+	early_stop_threshold: float = 0.1  # Minimum PPL improvement to count
 
 
 class TabuSearchStrategy(OptimizerStrategyBase):
@@ -109,6 +113,10 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 
 		history = [(0, current_error)]
 
+		# Early stopping tracking
+		patience_counter = 0
+		prev_best_for_patience = best_error
+
 		if self._verbose:
 			print(f"[TS] Initial error: {current_error:.4f}", flush=True)
 
@@ -158,8 +166,24 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 
 			history.append((iteration + 1, best_error))
 
-			if self._verbose:
-				print(f"[TS] Iter {iteration + 1}: current={current_error:.4f} ({(1-current_error)*100:.1f}%), best={best_error:.4f}", flush=True)
+			# Early stopping check every 5 iterations
+			if (iteration + 1) % 5 == 0:
+				improvement_since_check = prev_best_for_patience - best_error
+				if improvement_since_check >= cfg.early_stop_threshold:
+					patience_counter = 0
+					prev_best_for_patience = best_error
+				else:
+					patience_counter += 1
+
+				if self._verbose:
+					print(f"[TS] Iter {iteration + 1}: current={current_error:.4f}, best={best_error:.4f}, patience={cfg.early_stop_patience - patience_counter}", flush=True)
+
+				if patience_counter >= cfg.early_stop_patience:
+					if self._verbose:
+						print(f"[TS] Early stop at iter {iteration + 1}: no improvement >= {cfg.early_stop_threshold} for {patience_counter * 5} iterations", flush=True)
+					break
+			elif self._verbose:
+				print(f"[TS] Iter {iteration + 1}: current={current_error:.4f}, best={best_error:.4f}", flush=True)
 
 		improvement_pct = ((initial_error - best_error) / initial_error * 100) if best_error < initial_error else 0.0
 

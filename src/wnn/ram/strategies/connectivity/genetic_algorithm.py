@@ -30,12 +30,16 @@ class GeneticAlgorithmConfig:
 	- mutation_rate: 0.01 per-connection
 	- crossover_rate: 0.7 probability of crossover
 	- elitism: 2 best individuals preserved each generation
+	- early_stop_patience: generations without improvement before stopping
+	- early_stop_threshold: minimum improvement required to reset patience
 	"""
 	population_size: int = 30
 	generations: int = 50
 	mutation_rate: float = 0.01
 	crossover_rate: float = 0.7
 	elitism: int = 2
+	early_stop_patience: int = 5  # Stop if no improvement for 5 generations
+	early_stop_threshold: float = 0.1  # Minimum PPL improvement to count
 
 
 class GeneticAlgorithmStrategy(OptimizerStrategyBase):
@@ -145,6 +149,10 @@ class GeneticAlgorithmStrategy(OptimizerStrategyBase):
 
 		history = [(0, best_error)]
 
+		# Early stopping tracking
+		patience_counter = 0
+		prev_best_for_patience = best_error
+
 		if self._verbose:
 			print(f"[GA] Initial best error: {best_error:.4f}", flush=True)
 
@@ -190,10 +198,24 @@ class GeneticAlgorithmStrategy(OptimizerStrategyBase):
 
 			history.append((generation + 1, best_error))
 
-			if self._verbose and (generation + 1) % 5 == 0:
-				avg_fitness = sum(fitness) / len(fitness)
-				cached_count = sum(1 for _, f in new_population[:cfg.elitism] if f is not None)
-				print(f"[GA] Gen {generation + 1}: best={best_error:.4f} ({(1-best_error)*100:.1f}%), avg={avg_fitness:.4f}, cached={cached_count}", flush=True)
+			# Early stopping check every 5 generations
+			if (generation + 1) % 5 == 0:
+				improvement_since_check = prev_best_for_patience - best_error
+				if improvement_since_check >= cfg.early_stop_threshold:
+					patience_counter = 0
+					prev_best_for_patience = best_error
+				else:
+					patience_counter += 1
+
+				if self._verbose:
+					avg_fitness = sum(fitness) / len(fitness)
+					cached_count = sum(1 for _, f in new_population[:cfg.elitism] if f is not None)
+					print(f"[GA] Gen {generation + 1}: best={best_error:.4f}, avg={avg_fitness:.4f}, cached={cached_count}, patience={cfg.early_stop_patience - patience_counter}", flush=True)
+
+				if patience_counter >= cfg.early_stop_patience:
+					if self._verbose:
+						print(f"[GA] Early stop at gen {generation + 1}: no improvement >= {cfg.early_stop_threshold} for {patience_counter * 5} generations", flush=True)
+					break
 
 		improvement_pct = ((initial_error - best_error) / initial_error * 100) if best_error < initial_error else 0.0
 
