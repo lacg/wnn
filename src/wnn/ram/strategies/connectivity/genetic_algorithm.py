@@ -39,7 +39,7 @@ class GeneticAlgorithmConfig:
 	crossover_rate: float = 0.7
 	elitism: int = 2
 	early_stop_patience: int = 5  # Stop if no improvement for 5 generations
-	early_stop_threshold_pct: float = 0.1  # Minimum % improvement required (0.1 = 0.1%)
+	early_stop_threshold_pct: float = 0.02  # Minimum % improvement required (0.02 = 0.02%)
 
 
 class GeneticAlgorithmStrategy(OptimizerStrategyBase):

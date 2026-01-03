@@ -38,7 +38,7 @@ class TabuSearchConfig:
 	tabu_size: int = 5
 	mutation_rate: float = 0.001
 	early_stop_patience: int = 5  # Stop if no improvement for 5 iterations
-	early_stop_threshold_pct: float = 0.1  # Minimum % improvement required (0.1 = 0.1%)
+	early_stop_threshold_pct: float = 0.02  # Minimum % improvement required (0.02 = 0.02%)
 
 
 class TabuSearchStrategy(OptimizerStrategyBase):
