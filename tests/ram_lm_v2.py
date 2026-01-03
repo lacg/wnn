@@ -586,6 +586,138 @@ def _evaluate_batch_fast(
 		)
 
 
+class RAMMetaClassifier:
+	"""
+	RAM-based meta-classifier for selecting which prediction method to trust.
+
+	Architecture:
+	- Input layer: prediction features (24 bits) + agreement (2 bits) = 26 bits
+	- Output layer: RAM neurons vote on which method to trust
+
+	Uses agreement as additional signal - when multiple methods agree,
+	that prediction is more likely correct.
+	"""
+
+	def __init__(self, methods: list[str], n_neurons: int = 32, bits_per_neuron: int = 10,
+				 state_history: int = 0):  # state_history kept for API compatibility
+		self.methods = methods  # e.g., ['exact_n2', 'gen_n2', 'exact_n3', ...]
+		self.n_methods = len(methods)
+		self.method_to_idx = {m: i for i, m in enumerate(methods)}
+		self.n_neurons = n_neurons
+		self.bits_per_neuron = bits_per_neuron
+
+		# Create RAM neurons for each method (voting ensemble)
+		self.neurons_per_method = {m: [] for m in methods}
+
+		# Input encoding:
+		# - Prediction features: top-4 methods × (method_id: 4 bits + conf: 2 bits) = 24 bits
+		# - Agreement pattern: 2 bits (how many of top-4 agree)
+		self.pred_bits = 24
+		self.agree_bits = 2
+		self.input_bits = self.pred_bits + self.agree_bits
+
+		# Create neurons with random connectivity
+		for method in methods:
+			neurons = []
+			for _ in range(n_neurons):
+				connected = random.sample(range(self.input_bits), min(bits_per_neuron, self.input_bits))
+				neurons.append({
+					'connected': connected,
+					'ram': defaultdict(lambda: {'correct': 0, 'total': 0})
+				})
+			self.neurons_per_method[method] = neurons
+
+	def reset_state(self):
+		"""Reset state (no-op - kept for API compatibility)."""
+		pass
+
+	def _encode_agreement(self, sorted_preds: list) -> list:
+		"""Encode agreement level (how many methods agree with top prediction)."""
+		if not sorted_preds:
+			return [0, 0]
+
+		top_word = sorted_preds[0][1][0]  # Word predicted by top method
+		agree_count = sum(1 for _, (w, _) in sorted_preds[1:4] if w == top_word)
+		# Encode as 2 bits: 0=none agree, 1=one agrees, 2=two agree, 3=all agree
+		level = min(3, agree_count)
+		return [(level >> 1) & 1, level & 1]
+
+	def _encode_input(self, sorted_preds: list) -> tuple:
+		"""Encode predictions + agreement into input bits (26 bits total)."""
+		bits = []
+
+		# Part 1: Prediction features (24 bits)
+		for i in range(4):
+			if i < len(sorted_preds):
+				method, (word, conf) = sorted_preds[i]
+				method_id = self.method_to_idx.get(method, 0)
+				conf_level = min(3, int(conf * 4))
+
+				# 4 bits for method_id
+				for b in range(4):
+					bits.append((method_id >> (3 - b)) & 1)
+				# 2 bits for confidence
+				for b in range(2):
+					bits.append((conf_level >> (1 - b)) & 1)
+			else:
+				bits.extend([0] * 6)
+
+		# Part 2: Agreement pattern
+		bits.extend(self._encode_agreement(sorted_preds))
+
+		return tuple(bits)
+
+	def update_state(self, method: str, was_correct: bool):
+		"""Update state (no-op - kept for API compatibility)."""
+		pass
+
+	def _get_address(self, full_bits: tuple, connected: list) -> tuple:
+		"""Extract address from connected bits."""
+		return tuple(full_bits[b] for b in connected if b < len(full_bits))
+
+	def train(self, sorted_preds: list, correct_method: str):
+		"""Train on one example."""
+		input_bits = self._encode_input(sorted_preds)
+
+		# Train each method's neurons
+		for method, neurons in self.neurons_per_method.items():
+			is_correct = (method == correct_method)
+			for neuron in neurons:
+				addr = self._get_address(input_bits, neuron['connected'])
+				if addr:
+					neuron['ram'][addr]['total'] += 1
+					if is_correct:
+						neuron['ram'][addr]['correct'] += 1
+
+	def predict(self, sorted_preds: list) -> tuple[str, float]:
+		"""Predict which method to trust."""
+		input_bits = self._encode_input(sorted_preds)
+
+		# Collect votes from all neurons for each method
+		method_scores = {}
+
+		for method, neurons in self.neurons_per_method.items():
+			votes = []
+			for neuron in neurons:
+				addr = self._get_address(input_bits, neuron['connected'])
+				if addr and addr in neuron['ram']:
+					stats = neuron['ram'][addr]
+					if stats['total'] > 0:
+						reliability = stats['correct'] / stats['total']
+						votes.append(reliability)
+
+			if votes:
+				method_scores[method] = sum(votes) / len(votes)
+			else:
+				method_scores[method] = 0.5
+
+		if not method_scores:
+			return sorted_preds[0][0] if sorted_preds else None, 0.5
+
+		best_method = max(method_scores, key=method_scores.get)
+		return best_method, method_scores[best_method]
+
+
 class RAMLM_v2:
 	"""
 	RAM Language Model v2 with thesis optimization.
@@ -1431,6 +1563,103 @@ class RAMLM_v2:
 
 		return primary_word, f"meta({primary_method})", reliability * primary_conf
 
+	def train_ram_meta_classifier(self, tokens: list[str], n_neurons: int = 32,
+								   bits_per_neuron: int = 12, state_history: int = 4,
+								   validation_split: float = 0.2):
+		"""
+		Strategy #3: Train a RAM-based meta-classifier with STATE LAYER.
+
+		Unlike the statistics-based meta-classifier, this uses actual RAM neurons
+		with temporal context to learn complex patterns about which method to trust.
+
+		The state layer tracks recent prediction outcomes, enabling patterns like:
+		- "After gen_n3 was wrong twice, trust exact RAMs more"
+		- "When in a run of correct predictions, keep trusting current method"
+		"""
+		# Build list of all methods
+		all_methods = sorted(set(
+			list(f"exact_n{n}" for n in self.exact_rams.keys()) +
+			list(f"gen_n{n}" for n in self.generalized_rams.keys())
+		))
+
+		# Create RAM meta-classifier with state layer
+		self.ram_meta = RAMMetaClassifier(all_methods, n_neurons, bits_per_neuron, state_history)
+
+		# Use last portion as validation/training
+		val_start = int(len(tokens) * (1 - validation_split))
+		val_tokens = tokens[val_start:]
+
+		# Reset state before training
+		self.ram_meta.reset_state()
+
+		trained_count = 0
+		for i in range(len(val_tokens) - 6):
+			context = val_tokens[i:i + 5]
+			target = val_tokens[i + 5]
+
+			predictions = self._get_all_predictions(context)
+
+			if not predictions:
+				continue
+
+			# Sort predictions by confidence
+			sorted_preds = sorted(predictions.items(), key=lambda x: -x[1][1])[:4]
+
+			# Find which method(s) predicted correctly
+			correct_methods = [m for m, (w, _) in predictions.items() if w == target]
+
+			if correct_methods:
+				# Train: prefer exact over generalized, higher n over lower
+				# Priority: exact_n6 > exact_n5 > ... > gen_n6 > gen_n5 > ...
+				def method_priority(m):
+					is_exact = m.startswith('exact')
+					n = int(m.split('_n')[1])
+					return (is_exact, n)
+
+				best_correct = max(correct_methods, key=method_priority)
+				self.ram_meta.train(sorted_preds, best_correct)
+				trained_count += 1
+
+				# Update state: best_correct method was correct
+				self.ram_meta.update_state(best_correct, was_correct=True)
+			else:
+				# No method was correct - still update state with top method being wrong
+				if sorted_preds:
+					top_method = sorted_preds[0][0]
+					self.ram_meta.update_state(top_method, was_correct=False)
+
+		return trained_count
+
+	def predict_ram_meta(self, context: list[str]) -> tuple[str, str, float]:
+		"""
+		Predict using the RAM-based meta-classifier.
+		"""
+		if not hasattr(self, 'ram_meta'):
+			return self.predict(context)
+
+		predictions = self._get_all_predictions(context)
+
+		if not predictions:
+			return "<UNK>", "none", 0.0
+
+		# Sort by confidence
+		sorted_preds = sorted(predictions.items(), key=lambda x: -x[1][1])[:4]
+
+		if not sorted_preds:
+			return "<UNK>", "none", 0.0
+
+		# Ask RAM meta-classifier which method to trust
+		best_method, ram_confidence = self.ram_meta.predict(sorted_preds)
+
+		# Find that method's prediction
+		if best_method in predictions:
+			word, conf = predictions[best_method]
+			return word, f"ram_meta({best_method})", ram_confidence * conf
+
+		# Fallback to highest confidence
+		method, (word, conf) = sorted_preds[0]
+		return word, f"ram_meta_fallback({method})", conf
+
 	def evaluate_voting_strategies(self, tokens: list[str]) -> dict:
 		"""Compare all voting strategies."""
 		# Test multiple confidence thresholds
@@ -1439,11 +1668,16 @@ class RAMLM_v2:
 		results = {
 			"cascade": {"correct": 0, "total": 0},  # Original cascade
 			"weighted": {"correct": 0, "total": 0},  # Accuracy-weighted voting
-			"meta": {"correct": 0, "total": 0},      # Meta-classifier
+			"meta": {"correct": 0, "total": 0},      # Statistics-based meta-classifier
+			"ram_meta": {"correct": 0, "total": 0},  # RAM-based meta-classifier with state
 		}
 		# Add threshold strategies
 		for t in thresholds:
 			results[f"thresh_{t:.2f}"] = {"correct": 0, "total": 0}
+
+		# Reset RAM meta state before evaluation (fresh temporal context)
+		if hasattr(self, 'ram_meta'):
+			self.ram_meta.reset_state()
 
 		for i in range(len(tokens) - 6):
 			context = tokens[i:i + 5]
@@ -1463,10 +1697,25 @@ class RAMLM_v2:
 			if pred2 == target:
 				results["weighted"]["correct"] += 1
 
-			# Meta-classifier
+			# Statistics-based meta-classifier
 			pred3, _, _ = self.predict_meta(context)
 			if pred3 == target:
 				results["meta"]["correct"] += 1
+
+			# RAM-based meta-classifier with state tracking
+			if hasattr(self, 'ram_meta'):
+				pred4, method4, _ = self.predict_ram_meta(context)
+				is_correct = (pred4 == target)
+				if is_correct:
+					results["ram_meta"]["correct"] += 1
+
+				# Update state with actual outcome (enables temporal learning)
+				# Extract method name from "ram_meta(method)" format
+				if '(' in method4:
+					used_method = method4.split('(')[1].rstrip(')')
+				else:
+					used_method = method4
+				self.ram_meta.update_state(used_method, is_correct)
 
 			# Threshold voting at various levels
 			for t in thresholds:
@@ -1692,6 +1941,11 @@ def run_benchmark(
 	meta_reliability = model.train_meta_classifier(train_tokens)
 	log(f"  Learned {len(meta_reliability)} reliability patterns")
 
+	log("Training RAM meta-classifier (Strategy #3)...")
+	# 32 neurons × 10 bits for 26-bit input space (pred features + agreement)
+	ram_meta_trained = model.train_ram_meta_classifier(train_tokens, n_neurons=32, bits_per_neuron=10)
+	log(f"  Trained on {ram_meta_trained} examples (32 neurons × 10 bits)")
+
 	log("Evaluating all strategies on test set...")
 	voting_results = model.evaluate_voting_strategies(test_tokens)
 
@@ -1700,6 +1954,7 @@ def run_benchmark(
 	log(f"  Cascade (original)    : {voting_results['cascade']['accuracy']*100:.2f}%")
 	log(f"  Weighted Voting (#1)  : {voting_results['weighted']['accuracy']*100:.2f}%")
 	log(f"  Meta-Classifier (#2)  : {voting_results['meta']['accuracy']*100:.2f}%")
+	log(f"  RAM Meta (#3)         : {voting_results['ram_meta']['accuracy']*100:.2f}%")
 	log("")
 	log("PERPLEXITY SUMMARY:")
 	if optimization_ppl:
