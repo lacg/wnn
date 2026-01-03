@@ -1657,7 +1657,8 @@ if __name__ == "__main__":
 	args = parser.parse_args()
 
 	# Map tokenizer arg to enum
-	tokenizer_type = TokenizerType[args.tokenizer.upper().replace("-", "_")]
+	tokenizer_map = {"simple": TokenizerType.SIMPLE, "word": TokenizerType.WIKITEXT_WORD, "gpt2": TokenizerType.GPT2_BPE}
+	tokenizer_type = tokenizer_map[args.tokenizer]
 
 	# Determine mode from flags
 	if args.overnight:
