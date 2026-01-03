@@ -699,7 +699,7 @@ class RAMLM_v2:
 		elif self.mode == BenchmarkMode.OVERNIGHT:
 			# Extended overnight parameters for thorough optimization
 			ga_pop, ga_gens = 40, 200
-			ts_neighbors, ts_iters = 40, 25
+			ts_neighbors, ts_iters = 40, 50
 		else:  # BenchmarkMode.FULL
 			ga_pop, ga_gens = 30, 50
 			ts_neighbors, ts_iters = 30, 15
@@ -877,6 +877,7 @@ class RAMLM_v2:
 						return errors
 					else:
 						# Python fallback (slower)
+						current_all_conns = all_connectivities
 						errors = []
 						for cand in candidates:
 							# Temporarily apply candidate
@@ -1783,7 +1784,7 @@ if __name__ == "__main__":
 	import argparse
 	parser = argparse.ArgumentParser()
 	parser.add_argument("--full", action="store_true", help="Run full benchmark (GA 30×50, TS 30×15)")
-	parser.add_argument("--overnight", action="store_true", help="Run extended overnight benchmark (GA 40×200, TS 40×25)")
+	parser.add_argument("--overnight", action="store_true", help="Run extended overnight benchmark (GA 40×200, TS 40×50)")
 	parser.add_argument("--runs", type=int, default=1, help="Number of runs (default: 1)")
 	parser.add_argument("--tokenizer", type=str, default="word",
 		choices=["simple", "word", "gpt2"],
