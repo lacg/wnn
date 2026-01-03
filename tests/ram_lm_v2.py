@@ -724,7 +724,7 @@ class RAMLM_v2:
 	"""
 
 	def __init__(self, freq_threshold: int = 50, mode: BenchmarkMode = BenchmarkMode.FAST,
-				 n_neurons: int = None, cascade_threshold: float = 0.1,
+				 n_neurons: int = None, bits_per_neuron: int = None, cascade_threshold: float = 0.1,
 				 strategy_sequence: list = None):
 		self.freq_threshold = freq_threshold
 		self.mode = mode
@@ -736,6 +736,10 @@ class RAMLM_v2:
 			self.n_neurons = 16 if mode == BenchmarkMode.FAST else 64
 		else:
 			self.n_neurons = n_neurons
+		if bits_per_neuron is None:
+			self.bits_per_neuron = 10 if mode == BenchmarkMode.FAST else 14
+		else:
+			self.bits_per_neuron = bits_per_neuron
 		self.cascade_threshold = cascade_threshold
 		self.strategy_sequence = strategy_sequence if strategy_sequence else ['GA', 'TS']
 
@@ -848,7 +852,7 @@ class RAMLM_v2:
 		strategy_sequence = getattr(self, 'strategy_sequence', ['GA', 'TS'])
 		strategy_name = "→".join(strategy_sequence)
 
-		bits_per_neuron = 10 if self.mode == BenchmarkMode.FAST else 14
+		bits_per_neuron = self.bits_per_neuron
 		n_values = sorted(self.generalized_rams.keys())
 
 		log(f"Optimizing {len(n_values)} RAMs: n={n_values}")
@@ -1791,6 +1795,7 @@ def run_benchmark(
 	seed: int = None,
 	tokenizer_type: TokenizerType = TokenizerType.WIKITEXT_WORD,
 	n_neurons: int = None,
+	bits_per_neuron: int = None,
 	cascade_threshold: float = 0.1,
 	strategy_sequence: list = None
 ) -> BenchmarkRun:
@@ -1862,9 +1867,9 @@ def run_benchmark(
 
 	# Train model
 	log_separator()
-	model = RAMLM_v2(freq_threshold=30, mode=mode, n_neurons=n_neurons, cascade_threshold=cascade_threshold,
-					 strategy_sequence=strategy_sequence)
-	log(f"Model config: n_neurons={model.n_neurons}, cascade_threshold={model.cascade_threshold}")
+	model = RAMLM_v2(freq_threshold=30, mode=mode, n_neurons=n_neurons, bits_per_neuron=bits_per_neuron,
+					 cascade_threshold=cascade_threshold, strategy_sequence=strategy_sequence)
+	log(f"Model config: n_neurons={model.n_neurons}, bits_per_neuron={model.bits_per_neuron}, cascade_threshold={model.cascade_threshold}")
 	log(f"Strategy sequence: {' → '.join(strategy_sequence)}")
 
 	start = time.time()
@@ -2020,6 +2025,7 @@ def run_multi_benchmark(
 	mode: BenchmarkMode = BenchmarkMode.FULL,
 	tokenizer_type: TokenizerType = TokenizerType.WIKITEXT_WORD,
 	n_neurons: int = None,
+	bits_per_neuron: int = None,
 	cascade_threshold: float = 0.1,
 	strategy_sequence: list = None
 ):
@@ -2053,8 +2059,8 @@ def run_multi_benchmark(
 
 		seed = 42 + i * 1000  # Different seed for each run
 		run_result = run_benchmark(mode=mode, run_id=i+1, seed=seed, tokenizer_type=tokenizer_type,
-								   n_neurons=n_neurons, cascade_threshold=cascade_threshold,
-								   strategy_sequence=strategy_sequence)
+								   n_neurons=n_neurons, bits_per_neuron=bits_per_neuron,
+								   cascade_threshold=cascade_threshold, strategy_sequence=strategy_sequence)
 		runs.append(run_result)
 
 		# Save intermediate results
@@ -2162,6 +2168,8 @@ if __name__ == "__main__":
 		help="Tokenizer: simple (original), word (WikiText-2 standard), gpt2 (BPE)")
 	parser.add_argument("--neurons", type=int, default=None,
 		help="Number of neurons per RAM (default: 16 FAST, 64 FULL/OVERNIGHT)")
+	parser.add_argument("--bits", type=int, default=None,
+		help="Bits per neuron (connectivity, default: 10 FAST, 14 FULL/OVERNIGHT)")
 	parser.add_argument("--threshold", type=float, default=0.1,
 		help="Cascade confidence threshold (default: 0.1)")
 	parser.add_argument("--strategy", type=str, default="GA,TS",
@@ -2206,6 +2214,7 @@ if __name__ == "__main__":
 	log(f"Mode: {mode_descs[mode]}")
 	log(f"Tokenizer: {tokenizer_type.name}")
 	log(f"Neurons: {args.neurons if args.neurons else 'default (16 FAST, 64 otherwise)'}")
+	log(f"Bits per neuron: {args.bits if args.bits else 'default (10 FAST, 14 otherwise)'}")
 	log(f"Cascade threshold: {args.threshold}")
 	log(f"Strategy: {' → '.join(strategy_sequence)}")
 	log(f"Runs: {args.runs}")
@@ -2220,12 +2229,12 @@ if __name__ == "__main__":
 
 	if args.runs > 1:
 		run_multi_benchmark(n_runs=args.runs, mode=mode, tokenizer_type=tokenizer_type,
-							n_neurons=args.neurons, cascade_threshold=args.threshold,
-							strategy_sequence=strategy_sequence)
+							n_neurons=args.neurons, bits_per_neuron=args.bits,
+							cascade_threshold=args.threshold, strategy_sequence=strategy_sequence)
 	else:
 		run_benchmark(mode=mode, tokenizer_type=tokenizer_type,
-					  n_neurons=args.neurons, cascade_threshold=args.threshold,
-					  strategy_sequence=strategy_sequence)
+					  n_neurons=args.neurons, bits_per_neuron=args.bits,
+					  cascade_threshold=args.threshold, strategy_sequence=strategy_sequence)
 
 	# Final log
 	log_separator()
