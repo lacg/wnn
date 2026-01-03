@@ -817,7 +817,7 @@ class RAMLM_v2:
 							global_best[0] = batch_best_ppl
 						# Log every 5th batch
 						if eval_count[0] % 5 == 1:
-							msg = f"[Rust n={target_n}] Batch {eval_count[0]}: {pop_size} ({len(candidates)} new) | {elapsed*1000:.0f}ms | batch PPL: {batch_best_ppl:.1f}, global PPL: {global_best[0]:.1f}"
+							msg = f"[Rust n={target_n}] Batch {eval_count[0]}: {pop_size} total ({len(candidates)} new) | {elapsed*1000:.0f}ms | batch PPL: {batch_best_ppl:.1f}, global PPL: {global_best[0]:.1f}"
 							log(msg)
 						return perplexities
 					elif has_fullnetwork:
@@ -841,7 +841,7 @@ class RAMLM_v2:
 							global_best[0] = batch_best_err
 						global_best_acc = (1 - global_best[0]) * 100
 						if eval_count[0] % 5 == 1:
-							msg = f"[Rust n={target_n}] Batch {eval_count[0]}: {len(candidates)} new | {elapsed*1000:.0f}ms | batch: {batch_best_acc:.2f}%, global: {global_best_acc:.2f}%"
+							msg = f"[Rust n={target_n}] Batch {eval_count[0]}: {pop_size} total ({len(candidates)} new) | {elapsed*1000:.0f}ms | batch: {batch_best_acc:.2f}%, global: {global_best_acc:.2f}%"
 							log(msg)
 						return errors
 					elif has_cascade:
@@ -862,7 +862,7 @@ class RAMLM_v2:
 							global_best[0] = batch_best_err
 						global_best_acc = (1 - global_best[0]) * 100
 						if eval_count[0] % 5 == 1:
-							msg = f"[Rust n={target_n}] Batch {eval_count[0]}: {len(candidates)} new | {elapsed*1000:.0f}ms | batch: {batch_best_acc:.2f}%, global: {global_best_acc:.2f}%"
+							msg = f"[Rust n={target_n}] Batch {eval_count[0]}: {pop_size} total ({len(candidates)} new) | {elapsed*1000:.0f}ms | batch: {batch_best_acc:.2f}%, global: {global_best_acc:.2f}%"
 							log(msg)
 						return errors
 					else:
