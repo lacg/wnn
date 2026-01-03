@@ -1474,7 +1474,9 @@ def run_benchmark(
 	mode: BenchmarkMode = BenchmarkMode.FAST,
 	run_id: int = 1,
 	seed: int = None,
-	tokenizer_type: TokenizerType = TokenizerType.WIKITEXT_WORD
+	tokenizer_type: TokenizerType = TokenizerType.WIKITEXT_WORD,
+	n_neurons: int = None,
+	cascade_threshold: float = 0.1
 ) -> BenchmarkRun:
 	"""Run the v2 benchmark."""
 	if seed is not None:
@@ -1540,8 +1542,9 @@ def run_benchmark(
 
 	# Train model
 	log_separator()
-	model = RAMLM_v2(freq_threshold=30, mode=mode)
+	model = RAMLM_v2(freq_threshold=30, mode=mode, n_neurons=n_neurons, cascade_threshold=cascade_threshold)
 	model._current_run_id = run_id  # Set run_id for hybrid strategy selection
+	log(f"Model config: n_neurons={model.n_neurons}, cascade_threshold={model.cascade_threshold}")
 
 	start = time.time()
 	model.train(train_tokens, optimize_connectivity=True)
@@ -1651,7 +1654,9 @@ def run_benchmark(
 def run_multi_benchmark(
 	n_runs: int = 3,
 	mode: BenchmarkMode = BenchmarkMode.FULL,
-	tokenizer_type: TokenizerType = TokenizerType.WIKITEXT_WORD
+	tokenizer_type: TokenizerType = TokenizerType.WIKITEXT_WORD,
+	n_neurons: int = None,
+	cascade_threshold: float = 0.1
 ):
 	"""Run the benchmark multiple times and summarize results."""
 	# Mode descriptions
@@ -1665,6 +1670,7 @@ def run_multi_benchmark(
 	log(f"MULTI-RUN BENCHMARK: {n_runs} runs")
 	log(f"Mode: {mode_descs[mode]}")
 	log(f"Tokenizer: {tokenizer_type.name}")
+	log(f"Neurons: {n_neurons if n_neurons else 'default'}, Threshold: {cascade_threshold}")
 	if mode != BenchmarkMode.FAST:
 		log("Hybrid schedule:")
 		for r in range(1, n_runs + 1):
@@ -1683,7 +1689,8 @@ def run_multi_benchmark(
 		log_separator("#")
 
 		seed = 42 + i * 1000  # Different seed for each run
-		run_result = run_benchmark(mode=mode, run_id=i+1, seed=seed, tokenizer_type=tokenizer_type)
+		run_result = run_benchmark(mode=mode, run_id=i+1, seed=seed, tokenizer_type=tokenizer_type,
+								   n_neurons=n_neurons, cascade_threshold=cascade_threshold)
 		runs.append(run_result)
 
 		# Save intermediate results
@@ -1780,6 +1787,10 @@ if __name__ == "__main__":
 	parser.add_argument("--tokenizer", type=str, default="word",
 		choices=["simple", "word", "gpt2"],
 		help="Tokenizer: simple (original), word (WikiText-2 standard), gpt2 (BPE)")
+	parser.add_argument("--neurons", type=int, default=None,
+		help="Number of neurons per RAM (default: 16 FAST, 64 FULL/OVERNIGHT)")
+	parser.add_argument("--threshold", type=float, default=0.1,
+		help="Cascade confidence threshold (default: 0.1)")
 	args = parser.parse_args()
 
 	# Map tokenizer arg to enum
@@ -1816,6 +1827,8 @@ if __name__ == "__main__":
 	log(f"Log file: {log_file}")
 	log(f"Mode: {mode_descs[mode]}")
 	log(f"Tokenizer: {tokenizer_type.name}")
+	log(f"Neurons: {args.neurons if args.neurons else 'default (16 FAST, 64 otherwise)'}")
+	log(f"Cascade threshold: {args.threshold}")
 	log(f"Runs: {args.runs}")
 	if mode == BenchmarkMode.OVERNIGHT:
 		# Estimate: ~30 min per RAM × 5 RAMs × runs
@@ -1827,9 +1840,11 @@ if __name__ == "__main__":
 	log_separator()
 
 	if args.runs > 1:
-		run_multi_benchmark(n_runs=args.runs, mode=mode, tokenizer_type=tokenizer_type)
+		run_multi_benchmark(n_runs=args.runs, mode=mode, tokenizer_type=tokenizer_type,
+							n_neurons=args.neurons, cascade_threshold=args.threshold)
 	else:
-		run_benchmark(mode=mode, tokenizer_type=tokenizer_type)
+		run_benchmark(mode=mode, tokenizer_type=tokenizer_type,
+					  n_neurons=args.neurons, cascade_threshold=args.threshold)
 
 	# Final log
 	log_separator()
