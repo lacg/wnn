@@ -38,7 +38,7 @@ class TabuSearchConfig:
 	tabu_size: int = 5
 	mutation_rate: float = 0.001
 	early_stop_patience: int = 5  # Stop if no improvement for 5 iterations
-	early_stop_threshold: float = 0.1  # Minimum PPL improvement to count
+	early_stop_threshold_pct: float = 0.1  # Minimum % improvement required (0.1 = 0.1%)
 
 
 class TabuSearchStrategy(OptimizerStrategyBase):
@@ -169,18 +169,21 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 			# Early stopping check every 5 iterations
 			if (iteration + 1) % 5 == 0:
 				improvement_since_check = prev_best_for_patience - best_error
-				if improvement_since_check >= cfg.early_stop_threshold:
+				# Relative threshold: need X% improvement of previous best
+				required_improvement = prev_best_for_patience * (cfg.early_stop_threshold_pct / 100.0)
+				if improvement_since_check >= required_improvement:
 					patience_counter = 0
 					prev_best_for_patience = best_error
 				else:
 					patience_counter += 1
 
 				if self._verbose:
-					print(f"[TS] Iter {iteration + 1}: current={current_error:.4f}, best={best_error:.4f}, patience={cfg.early_stop_patience - patience_counter}", flush=True)
+					pct_improved = (improvement_since_check / prev_best_for_patience * 100) if prev_best_for_patience > 0 else 0
+					print(f"[TS] Iter {iteration + 1}: current={current_error:.4f}, best={best_error:.4f}, Δ={pct_improved:.2f}%, patience={cfg.early_stop_patience - patience_counter}", flush=True)
 
 				if patience_counter >= cfg.early_stop_patience:
 					if self._verbose:
-						print(f"[TS] Early stop at iter {iteration + 1}: no improvement >= {cfg.early_stop_threshold} for {patience_counter * 5} iterations", flush=True)
+						print(f"[TS] Early stop at iter {iteration + 1}: no improvement >= {cfg.early_stop_threshold_pct}% for {patience_counter * 5} iterations", flush=True)
 					break
 			elif self._verbose:
 				print(f"[TS] Iter {iteration + 1}: current={current_error:.4f}, best={best_error:.4f}", flush=True)

@@ -39,7 +39,7 @@ class GeneticAlgorithmConfig:
 	crossover_rate: float = 0.7
 	elitism: int = 2
 	early_stop_patience: int = 5  # Stop if no improvement for 5 generations
-	early_stop_threshold: float = 0.1  # Minimum PPL improvement to count
+	early_stop_threshold_pct: float = 0.1  # Minimum % improvement required (0.1 = 0.1%)
 
 
 class GeneticAlgorithmStrategy(OptimizerStrategyBase):
@@ -201,7 +201,9 @@ class GeneticAlgorithmStrategy(OptimizerStrategyBase):
 			# Early stopping check every 5 generations
 			if (generation + 1) % 5 == 0:
 				improvement_since_check = prev_best_for_patience - best_error
-				if improvement_since_check >= cfg.early_stop_threshold:
+				# Relative threshold: need X% improvement of previous best
+				required_improvement = prev_best_for_patience * (cfg.early_stop_threshold_pct / 100.0)
+				if improvement_since_check >= required_improvement:
 					patience_counter = 0
 					prev_best_for_patience = best_error
 				else:
@@ -210,11 +212,12 @@ class GeneticAlgorithmStrategy(OptimizerStrategyBase):
 				if self._verbose:
 					avg_fitness = sum(fitness) / len(fitness)
 					cached_count = sum(1 for _, f in new_population[:cfg.elitism] if f is not None)
-					print(f"[GA] Gen {generation + 1}: best={best_error:.4f}, avg={avg_fitness:.4f}, cached={cached_count}, patience={cfg.early_stop_patience - patience_counter}", flush=True)
+					pct_improved = (improvement_since_check / prev_best_for_patience * 100) if prev_best_for_patience > 0 else 0
+					print(f"[GA] Gen {generation + 1}: best={best_error:.4f}, avg={avg_fitness:.4f}, Δ={pct_improved:.2f}%, patience={cfg.early_stop_patience - patience_counter}", flush=True)
 
 				if patience_counter >= cfg.early_stop_patience:
 					if self._verbose:
-						print(f"[GA] Early stop at gen {generation + 1}: no improvement >= {cfg.early_stop_threshold} for {patience_counter * 5} generations", flush=True)
+						print(f"[GA] Early stop at gen {generation + 1}: no improvement >= {cfg.early_stop_threshold_pct}% for {patience_counter * 5} generations", flush=True)
 					break
 
 		improvement_pct = ((initial_error - best_error) / initial_error * 100) if best_error < initial_error else 0.0
