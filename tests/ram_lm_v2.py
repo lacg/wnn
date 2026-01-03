@@ -785,20 +785,18 @@ class RAMLM_v2:
 		total_start = time.time()
 
 		# Optimize each RAM using PERPLEXITY as the goal (lower is better)
-		for ram_idx, n in enumerate(n_values):
+		# IMPORTANT: Optimize from highest n to lowest (n=6 → n=2)
+		# Higher n RAMs have priority in cascade, so optimizing them first has more impact
+		for ram_idx, n in reversed(list(enumerate(n_values))):
 			ram = self.generalized_rams[n]
 			log(f"--- Optimizing n={n} RAM ({len(ram.neurons)} neurons) ---")
-			# Debug: show first few values of each connectivity to verify updates
-			if ram_idx > 0:
-				prev_conn_sample = all_connectivities[ram_idx-1][0][:3]
-				log(f"  [DEBUG] n={n_values[ram_idx-1]} connectivity sample: {prev_conn_sample}")
 
 			conn_tensor = torch.tensor(all_connectivities[ram_idx], dtype=torch.long)
 			num_neurons = len(ram.neurons)
 			total_bits = ram.total_bits
 
 			# Create batch evaluation function using PERPLEXITY (lower is better)
-			def create_perplexity_batch_fn(ram_idx, target_n, exact_probs_ref, vocab_size_ref):
+			def create_perplexity_batch_fn(ram_idx, target_n, exact_probs_ref, vocab_size_ref, pop_size):
 				eval_count = [0]
 				global_best = [float('inf')]  # Track best perplexity (lower is better)
 				def batch_eval(candidates):
@@ -819,7 +817,7 @@ class RAMLM_v2:
 							global_best[0] = batch_best_ppl
 						# Log every 5th batch
 						if eval_count[0] % 5 == 1:
-							msg = f"[Rust n={target_n}] Batch {eval_count[0]}: {len(candidates)} new | {elapsed*1000:.0f}ms | batch PPL: {batch_best_ppl:.1f}, global PPL: {global_best[0]:.1f}"
+							msg = f"[Rust n={target_n}] Batch {eval_count[0]}: {pop_size} ({len(candidates)} new) | {elapsed*1000:.0f}ms | batch PPL: {batch_best_ppl:.1f}, global PPL: {global_best[0]:.1f}"
 							log(msg)
 						return perplexities
 					elif has_fullnetwork:
@@ -881,7 +879,7 @@ class RAMLM_v2:
 						return errors
 				return batch_eval
 
-			batch_fn = create_perplexity_batch_fn(ram_idx, n, exact_probs, vocab_size)
+			batch_fn = create_perplexity_batch_fn(ram_idx, n, exact_probs, vocab_size, ga_pop)
 
 			# Initial perplexity (using same code path as optimization)
 			initial_ppls = batch_fn([conn_tensor])
