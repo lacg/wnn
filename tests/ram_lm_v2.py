@@ -2084,18 +2084,18 @@ def run_benchmark(
 
 	log("")
 	log("RESULTS SUMMARY (table format):")
-	log("─" * 78)
-	log(f"{'Metric':<30} {'Cascade':>10} {'Vote #1':>10} {'Vote #2':>10} {'Vote #3':>10}")
-	log("─" * 78)
-	log(f"{'Accuracy (%):':<30} {acc_cascade:>10.2f} {acc_weighted:>10.2f} {acc_meta:>10.2f} {acc_ram_meta:>10.2f}")
-	log(f"{'Test PPL (after opt):':<30} {ppl_cascade:>10.1f} {ppl_weighted:>10.1f} {ppl_meta:>10.1f} {ppl_ram_meta:>10.1f}")
+	log("─" * 85)
+	log(f"{'Metric':<35} {'Cascade':>10} {'Vote #1':>10} {'Vote #2':>10} {'Vote #3':>10}")
+	log("─" * 85)
+	log(f"{'Accuracy (%):':<35} {acc_cascade:>10.2f} {acc_weighted:>10.2f} {acc_meta:>10.2f} {acc_ram_meta:>10.2f}")
 	if optimization_ppl:
-		log(f"{'Optimization PPL (train):':<30} {optimization_ppl:>10.1f} {'-':>10} {'-':>10} {'-':>10}")
+		log(f"{'Optimization PPL (train):':<35} {optimization_ppl:>10.1f} {'-':>10} {'-':>10} {'-':>10}")
 	if validation_ppl:
-		log(f"{'Optimization PPL (val):':<30} {validation_ppl:>10.1f} {'-':>10} {'-':>10} {'-':>10}")
+		log(f"{'Optimization PPL (validation):':<35} {validation_ppl:>10.1f} {'-':>10} {'-':>10} {'-':>10}")
 	if pre_test_ppl:
-		log(f"{'Test PPL (BEFORE opt):':<30} {pre_test_ppl:>10.1f} {'-':>10} {'-':>10} {'-':>10}")
-	log("─" * 78)
+		log(f"{'Test PPL (before optimization):':<35} {pre_test_ppl:>10.1f} {'-':>10} {'-':>10} {'-':>10}")
+	log(f"{'Test PPL (after optimization):':<35} {ppl_cascade:>10.1f} {ppl_weighted:>10.1f} {ppl_meta:>10.1f} {ppl_ram_meta:>10.1f}")
+	log("─" * 85)
 
 	# Find best strategy by perplexity (lower is better)
 	main_strategies = ['cascade', 'weighted', 'meta', 'ram_meta']
