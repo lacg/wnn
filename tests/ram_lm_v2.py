@@ -2070,44 +2070,64 @@ def run_benchmark(
 	log("Evaluating all strategies on test set...")
 	voting_results = model.evaluate_voting_strategies(test_tokens)
 
+	# Get perplexities for table
+	ppl_cascade = voting_results['cascade']['perplexity']
+	ppl_weighted = voting_results['weighted']['perplexity']
+	ppl_meta = voting_results['meta']['perplexity']
+	ppl_ram_meta = voting_results['ram_meta']['perplexity']
+
+	# Get accuracies for table
+	acc_cascade = voting_results['cascade']['accuracy'] * 100
+	acc_weighted = voting_results['weighted']['accuracy'] * 100
+	acc_meta = voting_results['meta']['accuracy'] * 100
+	acc_ram_meta = voting_results['ram_meta']['accuracy'] * 100
+
 	log("")
-	log("RESULTS (accuracy on test set):")
-	log(f"  Cascade (original)    : {voting_results['cascade']['accuracy']*100:.2f}%")
-	log(f"  Weighted Voting (#1)  : {voting_results['weighted']['accuracy']*100:.2f}%")
-	log(f"  Meta-Classifier (#2)  : {voting_results['meta']['accuracy']*100:.2f}%")
-	log(f"  RAM Meta (#3)         : {voting_results['ram_meta']['accuracy']*100:.2f}%")
-	log("")
-	log("PERPLEXITY SUMMARY:")
+	log("RESULTS SUMMARY (table format):")
+	log("─" * 78)
+	log(f"{'Metric':<30} {'Cascade':>10} {'Vote #1':>10} {'Vote #2':>10} {'Vote #3':>10}")
+	log("─" * 78)
+	log(f"{'Accuracy (%):':<30} {acc_cascade:>10.2f} {acc_weighted:>10.2f} {acc_meta:>10.2f} {acc_ram_meta:>10.2f}")
+	log(f"{'Test PPL (after opt):':<30} {ppl_cascade:>10.1f} {ppl_weighted:>10.1f} {ppl_meta:>10.1f} {ppl_ram_meta:>10.1f}")
 	if optimization_ppl:
-		log(f"  Optimization (held-out train): {optimization_ppl:.1f}")
+		log(f"{'Optimization PPL (train):':<30} {optimization_ppl:>10.1f} {'-':>10} {'-':>10} {'-':>10}")
 	if validation_ppl:
-		log(f"  Optimization (validation):     {validation_ppl:.1f}  ← overfitting check")
+		log(f"{'Optimization PPL (val):':<30} {validation_ppl:>10.1f} {'-':>10} {'-':>10} {'-':>10}")
 	if pre_test_ppl:
-		log(f"  Test set (BEFORE opt):         {pre_test_ppl:.1f}  ← baseline")
-	log(f"  Test set (AFTER opt):")
-	log(f"    Cascade (original)  : {voting_results['cascade']['perplexity']:.1f}")
-	log(f"    Weighted Voting (#1): {voting_results['weighted']['perplexity']:.1f}")
-	log(f"    Meta-Classifier (#2): {voting_results['meta']['perplexity']:.1f}")
-	log(f"    RAM Meta (#3)       : {voting_results['ram_meta']['perplexity']:.1f}")
-	log("")
+		log(f"{'Test PPL (BEFORE opt):':<30} {pre_test_ppl:>10.1f} {'-':>10} {'-':>10} {'-':>10}")
+	log("─" * 78)
 
 	# Find best strategy by perplexity (lower is better)
 	main_strategies = ['cascade', 'weighted', 'meta', 'ram_meta']
+	strategy_names = {'cascade': 'Cascade', 'weighted': 'Vote #1', 'meta': 'Vote #2', 'ram_meta': 'Vote #3'}
+
 	best_ppl_strategy = min(main_strategies, key=lambda x: voting_results[x]['perplexity'])
 	best_ppl = voting_results[best_ppl_strategy]['perplexity']
-	cascade_ppl = voting_results['cascade']['perplexity']
-	ppl_improvement = (cascade_ppl - best_ppl) / cascade_ppl * 100 if cascade_ppl > 0 else 0
-	if ppl_improvement > 0:
-		log(f"★ Best PPL: {best_ppl_strategy} ({best_ppl:.1f}, -{ppl_improvement:.1f}% vs cascade)")
-	else:
-		log(f"★ Best PPL: cascade ({cascade_ppl:.1f}, baseline)")
+	ppl_improvement = (ppl_cascade - best_ppl) / ppl_cascade * 100 if ppl_cascade > 0 else 0
 
-	best_strategy = max(voting_results.items(), key=lambda x: x[1]['accuracy'])
-	improvement = (best_strategy[1]['accuracy'] - voting_results['cascade']['accuracy']) / voting_results['cascade']['accuracy'] * 100
-	if improvement > 0:
-		log(f"★ Best: {best_strategy[0]} (+{improvement:.1f}% over cascade)")
+	best_acc_strategy = max(main_strategies, key=lambda x: voting_results[x]['accuracy'])
+	best_acc = voting_results[best_acc_strategy]['accuracy'] * 100
+	acc_improvement = (best_acc - acc_cascade) / acc_cascade * 100 if acc_cascade > 0 else 0
+
+	log("")
+	if ppl_improvement > 0.1:
+		log(f"★ Best PPL: {strategy_names[best_ppl_strategy]} ({best_ppl:.1f}, -{ppl_improvement:.1f}% vs Cascade)")
 	else:
-		log(f"★ Best: cascade (baseline)")
+		log(f"★ Best PPL: Cascade ({ppl_cascade:.1f}, baseline)")
+
+	if acc_improvement > 0.1:
+		log(f"★ Best ACC: {strategy_names[best_acc_strategy]} ({best_acc:.2f}%, +{acc_improvement:.1f}% vs Cascade)")
+	else:
+		log(f"★ Best ACC: Cascade ({acc_cascade:.2f}%, baseline)")
+
+	# Show test PPL improvement if we have before/after
+	if pre_test_ppl:
+		test_change = ppl_cascade - pre_test_ppl
+		test_change_pct = (test_change / pre_test_ppl * 100) if pre_test_ppl > 0 else 0
+		if test_change < 0:
+			log(f"★ Optimization IMPROVED test PPL by {-test_change:.1f} ({-test_change_pct:.1f}%)")
+		else:
+			log(f"⚠️ Optimization DEGRADED test PPL by {test_change:.1f} (+{test_change_pct:.1f}%)")
 
 	log_separator()
 	log("SUMMARY")
