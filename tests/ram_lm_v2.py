@@ -943,7 +943,7 @@ class RAMLM_v2:
 		# Higher n RAMs have priority in cascade, so optimizing them first has more impact
 		for ram_idx, n in reversed(list(enumerate(n_values))):
 			ram = self.generalized_rams[n]
-			log(f"--- Optimizing n={n} RAM ({len(ram.neurons)} neurons) ---")
+			log(f"--- Optimizing n={n} RAM ({len(ram.neurons)} neurons × {bits_per_neuron} bits) ---")
 
 			conn_tensor = torch.tensor(all_connectivities[ram_idx], dtype=torch.long)
 			num_neurons = len(ram.neurons)
