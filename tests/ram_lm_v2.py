@@ -871,9 +871,11 @@ class RAMLM_v2:
 		log(f"Strategy sequence: {strategy_name}")
 		ga_elitism = max(2, int(ga_pop * ga_elitism_pct))
 		ga_eval_per_gen = ga_pop - ga_elitism
+		early_stop_patience = 1  # Must match GA/TS config defaults
+		early_stop_threshold_pct = 0.02
 		log(f"GA: {ga_pop} pop × {ga_gens} max gens (elite={ga_elitism} ({ga_elitism_pct*100:.0f}%), eval={ga_eval_per_gen}/gen)")
 		log(f"TS: {ts_neighbors} neighbors × {ts_iters} max iters")
-		log(f"Early stopping: <0.02% improvement over 10 gens/iters (2 checks)")
+		log(f"Early stopping: <{early_stop_threshold_pct}% improvement over {(early_stop_patience+1)*5} gens/iters ({early_stop_patience+1} checks)")
 		if ACCEL_RUST_AVAILABLE:
 			log(f"Accelerator: Rust PERPLEXITY eval ({ACCEL_RUST_CORES} threads)")
 		else:
@@ -1135,7 +1137,7 @@ class RAMLM_v2:
 					ga_config = GeneticAlgorithmConfig(
 						population_size=ga_pop, generations=ga_gens,
 						mutation_rate=0.01, crossover_rate=0.7, elitism=ga_elitism,
-						early_stop_patience=5, early_stop_threshold_pct=0.02
+						early_stop_patience=early_stop_patience, early_stop_threshold_pct=early_stop_threshold_pct
 					)
 					ga = GeneticAlgorithmStrategy(config=ga_config, seed=42+n+step_idx, verbose=True)
 					result = ga.optimize(current_connectivity, lambda x: batch_fn([x])[0],
@@ -1145,7 +1147,7 @@ class RAMLM_v2:
 					log(f"  [{step_num}/{len(strategy_sequence)} TS] Starting...")
 					ts_config = TabuSearchConfig(
 						iterations=ts_iters, neighbors_per_iter=ts_neighbors,
-						early_stop_patience=5, early_stop_threshold_pct=0.02
+						early_stop_patience=early_stop_patience, early_stop_threshold_pct=early_stop_threshold_pct
 					)
 					ts = TabuSearchStrategy(config=ts_config, seed=42+n+step_idx, verbose=True)
 					result = ts.optimize(current_connectivity, lambda x: batch_fn([x])[0],
