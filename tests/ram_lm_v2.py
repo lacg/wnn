@@ -753,13 +753,14 @@ class RAMLM_v2:
 		# Track prediction method usage
 		self.prediction_stats = Counter()
 
-	def train(self, tokens: list[str], optimize_connectivity: bool = True, final_test_tokens: list[str] = None):
+	def train(self, tokens: list[str], optimize_connectivity: bool = True, final_test_tokens: list[str] = None, validation_tokens: list[str] = None):
 		"""Train the model.
 
 		Args:
 			tokens: Training tokens
 			optimize_connectivity: Whether to run connectivity optimization
 			final_test_tokens: Optional test tokens for pre/post optimization comparison
+			validation_tokens: Optional validation tokens for overfitting detection during optimization
 		"""
 		log(f"Training on {len(tokens):,} tokens...")
 
@@ -802,9 +803,9 @@ class RAMLM_v2:
 
 		# Optimize connectivity if requested
 		if optimize_connectivity:
-			self._optimize_connectivity(tokens, final_test_tokens)
+			self._optimize_connectivity(tokens, final_test_tokens, validation_tokens)
 
-	def _optimize_connectivity(self, tokens: list[str], final_test_tokens: list[str] = None):
+	def _optimize_connectivity(self, tokens: list[str], final_test_tokens: list[str] = None, validation_tokens: list[str] = None):
 		"""
 		Optimize connectivity patterns for ALL generalized RAMs using CASCADE ACCURACY.
 
@@ -834,14 +835,38 @@ class RAMLM_v2:
 
 		# Evaluation parameters (scale with mode)
 		train_subset = 10000 if self.mode == BenchmarkMode.FAST else 50000
-		eval_total = 300 if self.mode == BenchmarkMode.FAST else 3000
-		# Split eval into train (for optimization) and validation (for overfitting detection)
-		eval_train = int(eval_total * 0.67)  # 2000 for FULL mode (67%)
-		eval_val = eval_total - eval_train    # 1000 for FULL mode (33%)
 		train_tokens = tokens[:train_subset]
-		# Use DIFFERENT tokens for evaluation (after training portion)
-		# Need enough tokens for both train and validation eval sets
-		test_tokens = tokens[train_subset:train_subset + eval_total * 2]
+
+		# Multi-window sampling: sample N windows from across the 2M token corpus
+		# Each window is continuous (for valid n-gram contexts), but windows come from
+		# different Wikipedia articles - reduces topical bias in optimization evaluation
+		# Standard: 100 windows × 200 tokens = 20k eval tokens (10x more than before)
+		num_windows = 20 if self.mode == BenchmarkMode.FAST else 100
+		window_size = 200  # Large enough for 6-gram contexts with margin
+
+		# Sample random windows from across the FULL training corpus
+		# Not just after train_subset - we want diversity from all 2M tokens
+		corpus_end = len(tokens) - window_size - 10  # Safety margin
+		if corpus_end > window_size * num_windows:
+			import random as rand_module
+			# Consistent seed for reproducibility (different from model seed)
+			sampling_rng = rand_module.Random(42)
+			window_starts = sampling_rng.sample(range(0, corpus_end), num_windows)
+			window_starts.sort()  # Cache-friendly access
+			# Concatenate windows into test_tokens for optimization evaluation
+			test_tokens = []
+			for start in window_starts:
+				test_tokens.extend(tokens[start:start + window_size])
+			log(f"Multi-window sampling: {num_windows} windows × {window_size} tokens = {len(test_tokens):,} eval tokens")
+		else:
+			# Fallback if corpus too small
+			test_tokens = tokens[train_subset:train_subset + num_windows * window_size]
+			log(f"Single-window fallback: {len(test_tokens):,} eval tokens")
+
+		eval_total = len(test_tokens) - 6  # Usable positions (need 6 for context)
+		# Split eval into train (for optimization) and validation (for overfitting detection)
+		eval_train = int(eval_total * 0.67)  # ~13k for optimization
+		eval_val = eval_total - eval_train    # ~7k for validation
 
 		# Strategy parameters (scale with mode)
 		# Population sizes are multiples of 16 (CPU cores) for optimal parallel batching
@@ -868,7 +893,7 @@ class RAMLM_v2:
 
 		log(f"Optimizing {len(n_values)} RAMs: n={n_values}")
 		log(f"Mode: {self.mode.name}")
-		log(f"Train subset: {train_subset:,}, Eval: {eval_train} train + {eval_val} validation")
+		log(f"Train: {train_subset:,} tokens | Eval: {num_windows} windows × {window_size} = {eval_train:,} opt + {eval_val:,} val")
 		log(f"Strategy sequence: {strategy_name}")
 		ga_elitism = max(2, int(ga_pop * ga_elitism_pct))
 		ga_eval_per_gen = ga_pop - ga_elitism
@@ -883,17 +908,12 @@ class RAMLM_v2:
 			log(f"Accelerator: Python (install ram_accelerator for speedup)")
 		log("")
 
-		# Pre-calculate exact RAM probabilities (these don't change during optimization)
+		# Pre-calculate exact RAM probabilities for OPTIMIZATION (from multi-window sampled training data)
 		# exact_probs[i] = P(target|context) if covered by exact RAM, None if not covered
-		# Also track exact_results for accuracy reporting
-		# We calculate for BOTH train and validation portions
 		exact_probs_train = []
-		exact_probs_val = []
-		exact_results = []  # Keep for backward compatibility (train portion only)
+		exact_results = []
 		for i in range(min(eval_total, len(test_tokens) - 6)):
 			target = test_tokens[i + 6]
-
-			# Try exact RAMs in priority order (n=4, n=3, n=2) - same as predict()
 			exact_prob = None
 			exact_pred = None
 			for n in sorted(self.exact_rams.keys(), reverse=True):
@@ -904,31 +924,45 @@ class RAMLM_v2:
 					best, count = counts.most_common(1)[0]
 					conf = count / total
 					if conf > 0.2 or total >= 3:
-						# Get probability for target (not just best)
 						target_count = counts.get(target, 0)
 						exact_prob = target_count / total if total > 0 else 0.0
 						exact_pred = (best == target)
 						break
+			exact_probs_train.append(exact_prob)
+			exact_results.append(exact_pred)
 
-			# Split into train (first eval_train) and validation (remaining)
-			if i < eval_train:
-				exact_probs_train.append(exact_prob)
-				exact_results.append(exact_pred)
-			else:
-				exact_probs_val.append(exact_prob)
-
-		# Report train portion stats
 		exact_covered_train = sum(1 for x in exact_probs_train if x is not None)
 		exact_correct_train = sum(1 for x in exact_results if x is True)
 		avg_exact_prob_train = sum(p for p in exact_probs_train if p is not None) / exact_covered_train if exact_covered_train > 0 else 0.0
-		log(f"Pre-calculated exact RAM predictions (train portion):")
+		log(f"Exact RAM predictions (optimization eval - from train corpus):")
 		log(f"  Covered: {exact_covered_train}/{len(exact_probs_train)} ({exact_covered_train/len(exact_probs_train)*100:.1f}%)")
 		log(f"  Correct: {exact_correct_train}/{exact_covered_train} ({exact_correct_train/exact_covered_train*100:.1f}% of covered)")
 		log(f"  Avg P(target): {avg_exact_prob_train:.3f}")
-		# Report validation portion stats
+
+		# Pre-calculate exact RAM probabilities for VALIDATION (WikiText-2 validation split)
+		# This is DIFFERENT articles from train - detects true generalization issues
+		val_tokens_for_eval = validation_tokens if validation_tokens is not None else test_tokens
+		val_eval_size = min(5000, len(val_tokens_for_eval) - 6)  # Use 5k from validation split
+		exact_probs_val = []
+		for i in range(val_eval_size):
+			target = val_tokens_for_eval[i + 6]
+			exact_prob = None
+			for n in sorted(self.exact_rams.keys(), reverse=True):
+				ctx = tuple(val_tokens_for_eval[i + 6 - n:i + 6])
+				if ctx in self.exact_rams[n]:
+					counts = self.exact_rams[n][ctx]
+					total = sum(counts.values())
+					best, count = counts.most_common(1)[0]
+					conf = count / total
+					if conf > 0.2 or total >= 3:
+						target_count = counts.get(target, 0)
+						exact_prob = target_count / total if total > 0 else 0.0
+						break
+			exact_probs_val.append(exact_prob)
+
 		exact_covered_val = sum(1 for x in exact_probs_val if x is not None)
 		avg_exact_prob_val = sum(p for p in exact_probs_val if p is not None) / exact_covered_val if exact_covered_val > 0 else 0.0
-		log(f"Pre-calculated exact RAM predictions (validation portion):")
+		log(f"Exact RAM predictions (validation - WikiText-2 validation split):")
 		log(f"  Covered: {exact_covered_val}/{len(exact_probs_val)} ({exact_covered_val/len(exact_probs_val)*100:.1f}%)")
 		log(f"  Avg P(target): {avg_exact_prob_val:.3f}")
 		log("")
@@ -940,12 +974,22 @@ class RAMLM_v2:
 			all_connectivities.append(ram.get_connectivity())
 
 		# Build word_to_bits mapping (same for all RAMs)
+		# Include both training AND validation vocabulary
 		ram = self.generalized_rams[n_values[0]]
 		word_to_bits = {}
 		for word, cluster in ram.word_to_cluster.items():
 			word_hash = hash(word) & 0x1F  # 5 bits
 			encoding = (cluster << 5) | word_hash
 			word_to_bits[word] = encoding
+
+		# Add validation vocabulary words not in training (use hash-only encoding)
+		# These words won't have learned clusters, so use cluster 0 + hash
+		if validation_tokens is not None:
+			for word in set(validation_tokens):
+				if word not in word_to_bits:
+					word_hash = hash(word) & 0x1F  # 5 bits
+					encoding = word_hash  # cluster 0 + hash
+					word_to_bits[word] = encoding
 
 		# Check if Rust evaluators are available
 		try:
@@ -1010,7 +1054,8 @@ class RAMLM_v2:
 			total_bits = ram.total_bits
 
 			# Create batch evaluation function using PERPLEXITY (lower is better)
-			def create_perplexity_batch_fn(ram_idx, target_n, exact_probs_ref, eval_size, vocab_size_ref, cascade_threshold_ref, pop_size):
+			# eval_tokens: tokens to evaluate on (test_tokens for optimization, val_tokens_for_eval for validation)
+			def create_perplexity_batch_fn(ram_idx, target_n, exact_probs_ref, eval_size, vocab_size_ref, cascade_threshold_ref, pop_size, eval_tokens):
 				eval_count = [0]
 				global_best = [float('inf')]  # Track best perplexity (lower is better)
 				def batch_eval(candidates):
@@ -1021,7 +1066,7 @@ class RAMLM_v2:
 						candidate_lists = [c.tolist() if hasattr(c, 'tolist') else c for c in candidates]
 						perplexities = ram_accelerator.evaluate_fullnetwork_perplexity_batch_cpu(
 							current_all_conns, candidate_lists, ram_idx,
-							word_to_bits, train_tokens, test_tokens,
+							word_to_bits, train_tokens, eval_tokens,
 							exact_probs_ref, eval_size, vocab_size_ref,
 							cascade_threshold_ref
 						)
@@ -1045,7 +1090,7 @@ class RAMLM_v2:
 						exact_results_fallback = [x is True if x is not None else None for x in exact_probs_ref]
 						errors = ram_accelerator.evaluate_fullnetwork_batch_cpu(
 							current_all_conns, candidate_lists, ram_idx,
-							word_to_bits, train_tokens, test_tokens,
+							word_to_bits, train_tokens, eval_tokens,
 							exact_results_fallback, eval_size
 						)
 						elapsed = time_module.time() - start
@@ -1067,7 +1112,7 @@ class RAMLM_v2:
 						candidate_lists = [c.tolist() if hasattr(c, 'tolist') else c for c in candidates]
 						errors = ram_accelerator.evaluate_cascade_batch_cpu(
 							current_all_conns, candidate_lists, ram_idx,
-							word_to_bits, train_tokens, test_tokens, eval_size
+							word_to_bits, train_tokens, eval_tokens, eval_size
 						)
 						elapsed = time_module.time() - start
 						eval_count[0] += 1
@@ -1093,7 +1138,7 @@ class RAMLM_v2:
 							ram.set_connectivity(cand_list)
 							# Evaluate perplexity (matches Rust logic)
 							ppl = self._evaluate_perplexity_python(
-								test_tokens, exact_probs_ref, vocab_size_ref,
+								eval_tokens, exact_probs_ref, vocab_size_ref,
 								cascade_threshold_ref, eval_size
 							)
 							perplexities.append(ppl)
@@ -1110,10 +1155,11 @@ class RAMLM_v2:
 						return perplexities
 				return batch_eval
 
-			batch_fn = create_perplexity_batch_fn(ram_idx, n, exact_probs_train, eval_train, vocab_size, self.cascade_threshold, ga_pop)
+			batch_fn = create_perplexity_batch_fn(ram_idx, n, exact_probs_train, eval_total, vocab_size, self.cascade_threshold, ga_pop, test_tokens)
 
 			# Create validation batch function for overfitting detection DURING optimization
-			val_batch_fn = create_perplexity_batch_fn(ram_idx, n, exact_probs_val, eval_val, vocab_size, self.cascade_threshold, 1)
+			# Uses WikiText-2 VALIDATION split (different articles from train) for true generalization check
+			val_batch_fn = create_perplexity_batch_fn(ram_idx, n, exact_probs_val, val_eval_size, vocab_size, self.cascade_threshold, 1, val_tokens_for_eval)
 
 			# Overfitting monitor: tiered response based on train/val gap
 			# - gap < 5%:  Healthy → exit diversity mode
@@ -1255,22 +1301,6 @@ class RAMLM_v2:
 		# Store final optimization PPL for reporting (this is on held-out training data)
 		self._optimization_final_ppl = final_ppl
 		self._optimization_val_ppl = val_ppl  # Store validation PPL for overfitting analysis
-
-	def _evaluate_cascade_python(self, train_tokens: list[str], test_tokens: list[str]) -> float:
-		"""Python fallback for cascade evaluation."""
-		correct = 0
-		total = min(len(test_tokens) - 6, len(test_tokens))
-		for i in range(total):
-			context = test_tokens[max(0, i):i+6]
-			target = test_tokens[i+6] if i+6 < len(test_tokens) else None
-			if target is None:
-				break
-			# Try cascade prediction
-			pred, _, _ = self.predict(context)
-			if pred == target:
-				correct += 1
-		accuracy = correct / total if total > 0 else 0
-		return 1 - accuracy  # Return error
 
 	def _evaluate_perplexity_python(self, test_tokens: list[str], exact_probs: list,
 									vocab_size: int, cascade_threshold: float, eval_subset: int) -> float:
@@ -1608,11 +1638,11 @@ class RAMLM_v2:
 				continue
 
 			# Primary predictor = highest confidence method
-			primary_method, primary_word_idx, primary_conf = feature_parts[0]
+			primary_method, primary_word_idx, _ = feature_parts[0]
 			primary_word = self.meta_idx_to_word.get(primary_word_idx, "<UNK>")
 
 			# Secondary agreement: do other methods agree?
-			agreement = sum(1 for m, w, c in feature_parts[1:] if w == primary_word_idx)
+			agreement = sum(1 for _, w, _ in feature_parts[1:] if w == primary_word_idx)
 
 			# Key: (primary_method, agreement_level)
 			key = (primary_method, agreement)
@@ -1654,7 +1684,7 @@ class RAMLM_v2:
 		primary_method, (primary_word, primary_conf) = sorted_preds[0]
 
 		# Check agreement
-		agreement = sum(1 for m, (w, c) in sorted_preds[1:] if w == primary_word)
+		agreement = sum(1 for _, (w, _) in sorted_preds[1:] if w == primary_word)
 
 		# Look up reliability
 		key = (primary_method, agreement)
@@ -1664,7 +1694,7 @@ class RAMLM_v2:
 		if reliability < 0.3 and len(sorted_preds) > 1:
 			# Try second-best if it has higher agreement
 			for alt_method, (alt_word, alt_conf) in sorted_preds[1:]:
-				alt_agreement = sum(1 for m, (w, c) in sorted_preds if w == alt_word) - 1
+				alt_agreement = sum(1 for _, (w, _) in sorted_preds if w == alt_word) - 1
 				alt_key = (alt_method, alt_agreement)
 				alt_reliability = self.meta_reliability.get(alt_key, 0.5)
 
@@ -1979,9 +2009,38 @@ def run_benchmark(
 
 		train_text = " ".join(dataset["train"]["text"])
 		test_text = " ".join(dataset["test"]["text"])
+		validation_text = " ".join(dataset["validation"]["text"])
 
-		train_tokens = tokenize(train_text)[:train_limit]
-		test_tokens = tokenize(test_text)[:test_limit]
+		# Tokenize full corpora first
+		all_train_tokens = tokenize(train_text)
+		all_test_tokens = tokenize(test_text)
+		all_validation_tokens = tokenize(validation_text)
+
+		# Helper function for multi-window sampling
+		def sample_windows(all_tokens, total_tokens, window_size, seed, name):
+			"""Sample N windows from corpus to reduce topical bias."""
+			import random as rand_module
+			num_windows = total_tokens // window_size
+			corpus_end = len(all_tokens) - window_size - 10
+			if corpus_end > window_size * num_windows:
+				rng = rand_module.Random(seed)
+				starts = rng.sample(range(0, corpus_end), num_windows)
+				starts.sort()
+				tokens = []
+				for start in starts:
+					tokens.extend(all_tokens[start:start + window_size])
+				log(f"{name}: {num_windows} windows × {window_size:,} = {len(tokens):,} tokens (multi-window)")
+				return tokens
+			else:
+				tokens = all_tokens[:total_tokens]
+				log(f"{name}: {len(tokens):,} tokens (single-window fallback)")
+				return tokens
+
+		# Multi-window sampling for all splits - reduces topical bias
+		# Each split uses different seed for independence
+		train_tokens = sample_windows(all_train_tokens, train_limit, 10000, seed=123, name="Train")
+		test_tokens = sample_windows(all_test_tokens, test_limit, 2000, seed=456, name="Test")
+		validation_tokens = sample_windows(all_validation_tokens, test_limit, 2000, seed=789, name="Validation")
 
 		# Log vocabulary size for reference
 		train_vocab = set(train_tokens)
@@ -1999,6 +2058,7 @@ def run_benchmark(
 		words = ["the", "cat", "sat", "on", "mat", "dog", "ran", "to", "house", "tree"]
 		train_tokens = [random.choice(words) for _ in range(train_limit)]
 		test_tokens = [random.choice(words) for _ in range(test_limit)]
+		validation_tokens = [random.choice(words) for _ in range(test_limit)]
 
 	# Train model
 	log_separator()
@@ -2008,7 +2068,7 @@ def run_benchmark(
 	log(f"Strategy sequence: {' → '.join(strategy_sequence)}")
 
 	start = time.time()
-	model.train(train_tokens, optimize_connectivity=True, final_test_tokens=test_tokens)
+	model.train(train_tokens, optimize_connectivity=True, final_test_tokens=test_tokens, validation_tokens=validation_tokens)
 	train_time = time.time() - start
 	log(f"Training time: {train_time:.1f}s ({train_time/60:.1f} min)")
 
