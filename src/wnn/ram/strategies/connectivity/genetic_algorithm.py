@@ -266,9 +266,9 @@ class GeneticAlgorithmStrategy(OptimizerStrategyBase):
 						cfg.mutation_rate = original_mutation_rate
 						self._log(f"[GA] Diversity mode OFF: restored pop={cfg.population_size}, elite={cfg.elitism}, mut={cfg.mutation_rate:.4f}")
 						# Shrink population back to original size (keep best)
-						sorted_pop = sorted(zip(population, fitness), key=lambda x: x[1])
-						population = [p for p, _ in sorted_pop[:cfg.population_size]]
-						population = [(p, f) for (p, _), (_, f) in zip(sorted_pop[:cfg.population_size], sorted_pop[:cfg.population_size])]
+						# Population is already list[tuple[Tensor, float]], sort by fitness
+						sorted_pop = sorted(population, key=lambda x: x[1])
+						population = sorted_pop[:cfg.population_size]
 						fitness = [f for _, f in population]
 
 		improvement_pct = ((initial_error - best_error) / initial_error * 100) if best_error < initial_error else 0.0
