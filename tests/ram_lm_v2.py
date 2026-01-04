@@ -1934,16 +1934,19 @@ class RAMLM_v2:
 			weighted_prob = self._compute_weighted_target_probability(context, target)
 			calculators["weighted"].add_from_probability(weighted_prob, is_correct=(pred2 == target))
 
-			# META: Meta-classifier - use cascade probability as approximation
-			pred3, _, conf3 = self.predict_meta(context)
-			# Meta just picks a method, so use that method's probability
-			calculators["meta"].add_from_prediction(pred3, target, conf3)
+			# META: Meta-classifier - use cascade probability for proper P(target)
+			pred3, _, _ = self.predict_meta(context)
+			# Use cascade probability for partial credit (meta just picks a method)
+			meta_prob = self._compute_target_probability(context, target)
+			calculators["meta"].add_from_probability(meta_prob, is_correct=(pred3 == target))
 
 			# RAM_META: RAM-based meta-classifier with state tracking
 			if hasattr(self, 'ram_meta'):
-				pred4, method4, conf4 = self.predict_ram_meta(context)
+				pred4, method4, _ = self.predict_ram_meta(context)
 				is_correct = (pred4 == target)
-				calculators["ram_meta"].add_from_prediction(pred4, target, conf4)
+				# Use cascade probability for partial credit
+				ram_meta_prob = self._compute_target_probability(context, target)
+				calculators["ram_meta"].add_from_probability(ram_meta_prob, is_correct=is_correct)
 
 				# Update state with actual outcome (enables temporal learning)
 				if '(' in method4:
