@@ -827,10 +827,14 @@ class RAMLM_v2:
 
 		# Evaluation parameters (scale with mode)
 		train_subset = 10000 if self.mode == BenchmarkMode.FAST else 50000
-		eval_subset = 300 if self.mode == BenchmarkMode.FAST else 3000
+		eval_total = 300 if self.mode == BenchmarkMode.FAST else 3000
+		# Split eval into train (for optimization) and validation (for overfitting detection)
+		eval_train = int(eval_total * 0.67)  # 2000 for FULL mode (67%)
+		eval_val = eval_total - eval_train    # 1000 for FULL mode (33%)
 		train_tokens = tokens[:train_subset]
 		# Use DIFFERENT tokens for evaluation (after training portion)
-		test_tokens = tokens[train_subset:train_subset + eval_subset * 2]
+		# Need enough tokens for both train and validation eval sets
+		test_tokens = tokens[train_subset:train_subset + eval_total * 2]
 
 		# Strategy parameters (scale with mode)
 		# Population sizes are multiples of 16 (CPU cores) for optimal parallel batching
@@ -857,7 +861,7 @@ class RAMLM_v2:
 
 		log(f"Optimizing {len(n_values)} RAMs: n={n_values}")
 		log(f"Mode: {self.mode.name}")
-		log(f"Train subset: {train_subset:,}, Eval subset: {eval_subset}")
+		log(f"Train subset: {train_subset:,}, Eval: {eval_train} train + {eval_val} validation")
 		log(f"Strategy sequence: {strategy_name}")
 		ga_elitism = max(2, int(ga_pop * ga_elitism_pct))
 		ga_eval_per_gen = ga_pop - ga_elitism
@@ -873,9 +877,11 @@ class RAMLM_v2:
 		# Pre-calculate exact RAM probabilities (these don't change during optimization)
 		# exact_probs[i] = P(target|context) if covered by exact RAM, None if not covered
 		# Also track exact_results for accuracy reporting
-		exact_probs = []
-		exact_results = []  # Keep for backward compatibility
-		for i in range(min(eval_subset, len(test_tokens) - 6)):
+		# We calculate for BOTH train and validation portions
+		exact_probs_train = []
+		exact_probs_val = []
+		exact_results = []  # Keep for backward compatibility (train portion only)
+		for i in range(min(eval_total, len(test_tokens) - 6)):
 			target = test_tokens[i + 6]
 
 			# Try exact RAMs in priority order (n=4, n=3, n=2) - same as predict()
@@ -895,16 +901,27 @@ class RAMLM_v2:
 						exact_pred = (best == target)
 						break
 
-			exact_probs.append(exact_prob)
-			exact_results.append(exact_pred)
+			# Split into train (first eval_train) and validation (remaining)
+			if i < eval_train:
+				exact_probs_train.append(exact_prob)
+				exact_results.append(exact_pred)
+			else:
+				exact_probs_val.append(exact_prob)
 
-		exact_covered = sum(1 for x in exact_probs if x is not None)
-		exact_correct = sum(1 for x in exact_results if x is True)
-		avg_exact_prob = sum(p for p in exact_probs if p is not None) / exact_covered if exact_covered > 0 else 0.0
-		log(f"Pre-calculated exact RAM predictions:")
-		log(f"  Covered: {exact_covered}/{len(exact_probs)} ({exact_covered/len(exact_probs)*100:.1f}%)")
-		log(f"  Correct: {exact_correct}/{exact_covered} ({exact_correct/exact_covered*100:.1f}% of covered)")
-		log(f"  Avg P(target): {avg_exact_prob:.3f}")
+		# Report train portion stats
+		exact_covered_train = sum(1 for x in exact_probs_train if x is not None)
+		exact_correct_train = sum(1 for x in exact_results if x is True)
+		avg_exact_prob_train = sum(p for p in exact_probs_train if p is not None) / exact_covered_train if exact_covered_train > 0 else 0.0
+		log(f"Pre-calculated exact RAM predictions (train portion):")
+		log(f"  Covered: {exact_covered_train}/{len(exact_probs_train)} ({exact_covered_train/len(exact_probs_train)*100:.1f}%)")
+		log(f"  Correct: {exact_correct_train}/{exact_covered_train} ({exact_correct_train/exact_covered_train*100:.1f}% of covered)")
+		log(f"  Avg P(target): {avg_exact_prob_train:.3f}")
+		# Report validation portion stats
+		exact_covered_val = sum(1 for x in exact_probs_val if x is not None)
+		avg_exact_prob_val = sum(p for p in exact_probs_val if p is not None) / exact_covered_val if exact_covered_val > 0 else 0.0
+		log(f"Pre-calculated exact RAM predictions (validation portion):")
+		log(f"  Covered: {exact_covered_val}/{len(exact_probs_val)} ({exact_covered_val/len(exact_probs_val)*100:.1f}%)")
+		log(f"  Avg P(target): {avg_exact_prob_val:.3f}")
 		log("")
 
 		# Get initial connectivities for all RAMs
@@ -950,7 +967,7 @@ class RAMLM_v2:
 			total_bits = ram.total_bits
 
 			# Create batch evaluation function using PERPLEXITY (lower is better)
-			def create_perplexity_batch_fn(ram_idx, target_n, exact_probs_ref, vocab_size_ref, cascade_threshold_ref, pop_size):
+			def create_perplexity_batch_fn(ram_idx, target_n, exact_probs_ref, eval_size, vocab_size_ref, cascade_threshold_ref, pop_size):
 				eval_count = [0]
 				global_best = [float('inf')]  # Track best perplexity (lower is better)
 				def batch_eval(candidates):
@@ -962,7 +979,7 @@ class RAMLM_v2:
 						perplexities = ram_accelerator.evaluate_fullnetwork_perplexity_batch_cpu(
 							current_all_conns, candidate_lists, ram_idx,
 							word_to_bits, train_tokens, test_tokens,
-							exact_probs_ref, eval_subset, vocab_size_ref,
+							exact_probs_ref, eval_size, vocab_size_ref,
 							cascade_threshold_ref
 						)
 						elapsed = time_module.time() - start
@@ -986,7 +1003,7 @@ class RAMLM_v2:
 						errors = ram_accelerator.evaluate_fullnetwork_batch_cpu(
 							current_all_conns, candidate_lists, ram_idx,
 							word_to_bits, train_tokens, test_tokens,
-							exact_results_fallback, eval_subset
+							exact_results_fallback, eval_size
 						)
 						elapsed = time_module.time() - start
 						eval_count[0] += 1
@@ -1007,7 +1024,7 @@ class RAMLM_v2:
 						candidate_lists = [c.tolist() if hasattr(c, 'tolist') else c for c in candidates]
 						errors = ram_accelerator.evaluate_cascade_batch_cpu(
 							current_all_conns, candidate_lists, ram_idx,
-							word_to_bits, train_tokens, test_tokens, eval_subset
+							word_to_bits, train_tokens, test_tokens, eval_size
 						)
 						elapsed = time_module.time() - start
 						eval_count[0] += 1
@@ -1034,7 +1051,7 @@ class RAMLM_v2:
 							# Evaluate perplexity (matches Rust logic)
 							ppl = self._evaluate_perplexity_python(
 								test_tokens, exact_probs_ref, vocab_size_ref,
-								cascade_threshold_ref, eval_subset
+								cascade_threshold_ref, eval_size
 							)
 							perplexities.append(ppl)
 						# Restore original connectivity
@@ -1050,7 +1067,7 @@ class RAMLM_v2:
 						return perplexities
 				return batch_eval
 
-			batch_fn = create_perplexity_batch_fn(ram_idx, n, exact_probs, vocab_size, self.cascade_threshold, ga_pop)
+			batch_fn = create_perplexity_batch_fn(ram_idx, n, exact_probs_train, eval_train, vocab_size, self.cascade_threshold, ga_pop)
 
 			# Initial perplexity (using same code path as optimization)
 			initial_ppls = batch_fn([conn_tensor])
@@ -1123,6 +1140,18 @@ class RAMLM_v2:
 			if abs(verify_ppl - final_ppl) > 0.1:
 				log(f"  [WARNING] Verification mismatch! Expected PPL {final_ppl:.1f}, got {verify_ppl:.1f}")
 
+			# VALIDATION: Evaluate on held-out validation set to detect overfitting
+			# Create a validation batch function with exact_probs_val and eval_val
+			val_batch_fn = create_perplexity_batch_fn(ram_idx, n, exact_probs_val, eval_val, vocab_size, self.cascade_threshold, 1)
+			val_ppls = val_batch_fn([best_connectivity])
+			val_ppl = val_ppls[0]
+			train_val_gap = val_ppl - final_ppl
+			gap_pct = (train_val_gap / final_ppl * 100) if final_ppl > 0 else 0
+			if gap_pct > 10:
+				log(f"  [VALIDATION] Train PPL: {final_ppl:.1f}, Val PPL: {val_ppl:.1f} (gap: +{gap_pct:.1f}% ⚠️ overfitting)")
+			else:
+				log(f"  [VALIDATION] Train PPL: {final_ppl:.1f}, Val PPL: {val_ppl:.1f} (gap: +{gap_pct:.1f}%)")
+
 			# Apply optimized connectivity
 			ram.set_connectivity(best_connectivity.tolist())
 			ram.train(tokens)
@@ -1138,17 +1167,19 @@ class RAMLM_v2:
 				timed_out=False,
 			)
 
-			log(f"  n={n}: PPL {initial_ppl:.1f} → {final_ppl:.1f} "
-				f"({ppl_improvement:+.1f}%) in {elapsed:.1f}s")
+			log(f"  n={n}: Train PPL {initial_ppl:.1f} → {final_ppl:.1f} "
+				f"({ppl_improvement:+.1f}%), Val PPL: {val_ppl:.1f}, in {elapsed:.1f}s")
 
 		total_elapsed = time.time() - total_start
 		log_separator()
 		log(f"★ All RAMs optimized in {total_elapsed:.1f}s ({total_elapsed/60:.1f} min)")
+		log(f"★ Final Train PPL: {final_ppl:.1f}, Final Val PPL: {val_ppl:.1f}")
 		log_separator()
 		self._best_strategy = strategy_name
 
 		# Store final optimization PPL for reporting (this is on held-out training data)
 		self._optimization_final_ppl = final_ppl
+		self._optimization_val_ppl = val_ppl  # Store validation PPL for overfitting analysis
 
 	def _evaluate_cascade_python(self, train_tokens: list[str], test_tokens: list[str]) -> float:
 		"""Python fallback for cascade evaluation."""
@@ -1909,11 +1940,14 @@ def run_benchmark(
 	)
 
 	log(f"OVERALL ACCURACY: {accuracy*100:.2f}%")
-	# Report both PPLs for clarity
+	# Report all PPLs for clarity
 	optimization_ppl = getattr(model, '_optimization_final_ppl', None)
+	validation_ppl = getattr(model, '_optimization_val_ppl', None)
 	if optimization_ppl:
-		log(f"PERPLEXITY (held-out train): {optimization_ppl:.1f}  ← optimized for this")
-	log(f"PERPLEXITY (test set): {perplexity:.1f}  ← generalization")
+		log(f"PERPLEXITY (optimization train): {optimization_ppl:.1f}  ← optimized for this")
+	if validation_ppl:
+		log(f"PERPLEXITY (optimization val):   {validation_ppl:.1f}  ← overfitting check")
+	log(f"PERPLEXITY (test set):           {perplexity:.1f}  ← generalization")
 	log("By method:")
 	for method, stats in sorted(results["by_method"].items(),
 								key=lambda x: -x[1]["total"]):
