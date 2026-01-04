@@ -83,10 +83,12 @@ class OverfittingMonitor:
 		self._grace_checks = grace_checks
 		self._logger = logger
 		self._check_count = 0
+		self._in_diversity_mode = False  # Track current diversity mode state
 
 	def reset(self) -> None:
-		"""Reset check count for a new optimization run."""
+		"""Reset state for a new optimization run."""
 		self._check_count = 0
+		self._in_diversity_mode = False
 
 	def _log(self, msg: str) -> None:
 		if self._logger:
@@ -111,27 +113,35 @@ class OverfittingMonitor:
 
 		in_grace_period = self._check_count <= self._grace_checks
 
+		# Log validation check with explicit VAL PPL label
+		self._log(f"    [VAL PPL: {val_fitness:.1f}] Train: {train_fitness:.1f}, gap: +{gap_pct:.1f}%")
+
 		if gap_pct > self._critical_threshold:
 			if in_grace_period:
-				self._log(f"    [OVERFIT] Train: {train_fitness:.1f}, Val: {val_fitness:.1f} "
-						  f"(gap: +{gap_pct:.1f}% → DIVERSITY MODE, grace {self._check_count}/{self._grace_checks})")
+				self._log(f"    [OVERFIT] gap > {self._critical_threshold}% → DIVERSITY MODE (grace {self._check_count}/{self._grace_checks})")
+				self._in_diversity_mode = True
 				return OverfittingControl(early_stop=False, diversity_mode=True)
 			else:
-				self._log(f"    [OVERFIT] Train: {train_fitness:.1f}, Val: {val_fitness:.1f} "
-						  f"(gap: +{gap_pct:.1f}% → EARLY STOP)")
+				self._log(f"    [OVERFIT] gap > {self._critical_threshold}% → EARLY STOP")
 				return OverfittingControl(early_stop=True, diversity_mode=False)
 
 		elif gap_pct > self._warning_threshold:
-			self._log(f"    [OVERFIT] Train: {train_fitness:.1f}, Val: {val_fitness:.1f} "
-					  f"(gap: +{gap_pct:.1f}% → DIVERSITY MODE)")
+			self._log(f"    [OVERFIT] gap > {self._warning_threshold}% → DIVERSITY MODE")
+			self._in_diversity_mode = True
 			return OverfittingControl(early_stop=False, diversity_mode=True)
 
 		elif gap_pct > self._healthy_threshold:
-			# Between healthy and warning: stay in diversity mode if active
-			return OverfittingControl(early_stop=False, diversity_mode=True)
+			# Between healthy (5%) and warning (10%): maintain current state
+			# Only stay in diversity mode if we were already in it
+			if self._in_diversity_mode:
+				self._log(f"    [OVERFIT] gap {self._healthy_threshold}-{self._warning_threshold}% → staying in DIVERSITY MODE")
+			return OverfittingControl(early_stop=False, diversity_mode=self._in_diversity_mode)
 
 		else:
-			# Healthy: gap below threshold, can exit diversity mode
+			# Healthy: gap below threshold, exit diversity mode
+			if self._in_diversity_mode:
+				self._log(f"    [HEALTHY] gap < {self._healthy_threshold}% → exiting DIVERSITY MODE")
+				self._in_diversity_mode = False
 			return OverfittingControl(early_stop=False, diversity_mode=False)
 
 	@property
