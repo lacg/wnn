@@ -1050,6 +1050,9 @@ class RAMLM_v2:
 		# Optimize each RAM using PERPLEXITY as the goal (lower is better)
 		# IMPORTANT: Optimize from highest n to lowest (n=6 → n=2)
 		# Higher n RAMs have priority in cascade, so optimizing them first has more impact
+		# Track global baseline for overfitting detection (set from first RAM's initial values)
+		global_baseline_ratio = None  # Will be set from first RAM's initial train/val PPL
+
 		for ram_idx, n in reversed(list(enumerate(n_values))):
 			ram = self.generalized_rams[n]
 			log(f"--- Optimizing n={n} RAM ({len(ram.neurons)} neurons × {bits_per_neuron} bits) ---")
@@ -1166,8 +1169,28 @@ class RAMLM_v2:
 			# Uses WikiText-2 VALIDATION split (different articles from train) for true generalization check
 			val_batch_fn = create_perplexity_batch_fn(ram_idx, n, exact_probs_val, val_eval_size, vocab_size, self.cascade_threshold, 1, val_tokens_for_eval)
 
+			# Initial perplexity (using same code path as optimization)
+			initial_ppls = batch_fn([conn_tensor])
+			initial_ppl = initial_ppls[0]
+
+			# Calculate initial validation PPL for baseline
+			initial_val_ppls = val_batch_fn([conn_tensor])
+			initial_val_ppl = initial_val_ppls[0]
+
+			# For first RAM (n=6), set global baseline ratio
+			is_first_ram = (n == max(n_values))
+			if is_first_ram and global_baseline_ratio is None:
+				global_baseline_ratio = initial_val_ppl / initial_ppl if initial_ppl > 0 else 1.0
+				log(f"  Initial PERPLEXITY: train={initial_ppl:.1f}, val={initial_val_ppl:.1f}")
+				log(f"  Global baseline ratio: {global_baseline_ratio:.2f}x (val/train)")
+				log(f"  Overfitting thresholds: <5% healthy, >10% warn, >20% stop")
+				log("")
+			else:
+				# VERIFICATION: This should match previous RAM's final perplexity!
+				log(f"  Initial PERPLEXITY: {initial_ppl:.1f} (should match prev final)")
+
 			# Overfitting monitor: BASELINE-RELATIVE gap detection
-			# Monitors val/train RATIO increase from initial baseline (not absolute gap)
+			# Monitors val/train RATIO increase from GLOBAL baseline (not per-RAM)
 			# This works when train/val have different distributions (1000%+ absolute gaps)
 			# - ratio increase < 5%:  Healthy → exit diversity mode
 			# - ratio increase > 10%: Warning → activate diversity mode
@@ -1179,19 +1202,8 @@ class RAMLM_v2:
 				critical_threshold=20.0, # ratio increase above 20% = early stop
 				grace_checks=1,  # 1 check = 5 generations grace period
 				logger=log,
+				global_baseline_ratio=global_baseline_ratio,  # Use global baseline from first RAM
 			)
-
-			# Initial perplexity (using same code path as optimization)
-			initial_ppls = batch_fn([conn_tensor])
-			initial_ppl = initial_ppls[0]
-
-			# Log initial perplexity only for the first RAM
-			if ram_idx == 0:
-				log(f"Initial PERPLEXITY: {initial_ppl:.1f}")
-				log("")
-			else:
-				# VERIFICATION: This should match previous RAM's final perplexity!
-				log(f"  Initial PERPLEXITY: {initial_ppl:.1f} (should match prev final)")
 
 			start_time = time.time()
 			# Track best across all phases (lower perplexity is better)
@@ -1272,13 +1284,20 @@ class RAMLM_v2:
 			# (val_batch_fn already created earlier for callback)
 			val_ppls = val_batch_fn([best_connectivity])
 			val_ppl = val_ppls[0]
-			train_val_gap = val_ppl - final_ppl
-			gap_pct = (train_val_gap / final_ppl * 100) if final_ppl > 0 else 0
+			current_ratio = val_ppl / final_ppl if final_ppl > 0 else 1.0
+			ratio_delta_pct = ((current_ratio - global_baseline_ratio) / global_baseline_ratio * 100) if global_baseline_ratio and global_baseline_ratio > 0 else 0
 			overfit_note = " (early stopped)" if any_overfitting_stop else ""
-			if gap_pct > 10:
-				log(f"  [VALIDATION] Train PPL: {final_ppl:.1f}, Val PPL: {val_ppl:.1f} (gap: +{gap_pct:.1f}% ⚠️ overfitting){overfit_note}")
+
+			# Status indicator based on ratio delta
+			if ratio_delta_pct > 20:
+				status = "🔴"
+			elif ratio_delta_pct > 10:
+				status = "🟡"
+			elif ratio_delta_pct > 5:
+				status = "🟠"
 			else:
-				log(f"  [VALIDATION] Train PPL: {final_ppl:.1f}, Val PPL: {val_ppl:.1f} (gap: +{gap_pct:.1f}%){overfit_note}")
+				status = "🟢"
+			log(f"  [VALIDATION] train={final_ppl:.1f}, val={val_ppl:.1f}, ratio={current_ratio:.2f}x (Δ={ratio_delta_pct:+.1f}% vs baseline {global_baseline_ratio:.2f}x) {status}{overfit_note}")
 
 			# Apply optimized connectivity
 			ram.set_connectivity(best_connectivity.tolist())
@@ -1969,7 +1988,8 @@ def run_benchmark(
 	n_neurons: int = None,
 	bits_per_neuron: int = None,
 	cascade_threshold: float = 0.1,
-	strategy_sequence: list = None
+	strategy_sequence: list = None,
+	full_data: bool = False
 ) -> BenchmarkRun:
 	"""Run the v2 benchmark."""
 	if seed is not None:
@@ -2000,9 +2020,14 @@ def run_benchmark(
 
 	run_start = time.time()
 
-	# Load data - reduced for fast mode
-	train_limit = 30000 if mode == BenchmarkMode.FAST else 150000
-	test_limit = 5000 if mode == BenchmarkMode.FAST else 20000
+	# Load data - reduced for fast mode, full for --full-data
+	if full_data:
+		train_limit = None  # Use all ~2M tokens
+		test_limit = None   # Use all ~245k test, ~214k validation
+		log("Using FULL WikiText-2 dataset (~2M train, ~245k test, ~214k validation)")
+	else:
+		train_limit = 30000 if mode == BenchmarkMode.FAST else 150000
+		test_limit = 5000 if mode == BenchmarkMode.FAST else 20000
 
 	try:
 		from datasets import load_dataset
@@ -2043,11 +2068,21 @@ def run_benchmark(
 				log(f"{name}: {len(tokens):,} tokens (single-window fallback)")
 				return tokens
 
-		# Multi-window sampling for all splits - reduces topical bias
-		# Each split uses different seed for independence
-		train_tokens = sample_windows(all_train_tokens, train_limit, 10000, seed=123, name="Train")
-		test_tokens = sample_windows(all_test_tokens, test_limit, 2000, seed=456, name="Test")
-		validation_tokens = sample_windows(all_validation_tokens, test_limit, 2000, seed=789, name="Validation")
+		# Data sampling strategy
+		if full_data:
+			# Use all tokens directly (no sampling)
+			train_tokens = all_train_tokens
+			test_tokens = all_test_tokens
+			validation_tokens = all_validation_tokens
+			log(f"Train: {len(train_tokens):,} tokens (full dataset)")
+			log(f"Test: {len(test_tokens):,} tokens (full dataset)")
+			log(f"Validation: {len(validation_tokens):,} tokens (full dataset)")
+		else:
+			# Multi-window sampling for all splits - reduces topical bias
+			# Each split uses different seed for independence
+			train_tokens = sample_windows(all_train_tokens, train_limit, 10000, seed=123, name="Train")
+			test_tokens = sample_windows(all_test_tokens, test_limit, 2000, seed=456, name="Test")
+			validation_tokens = sample_windows(all_validation_tokens, test_limit, 2000, seed=789, name="Validation")
 
 		# Log vocabulary size for reference
 		train_vocab = set(train_tokens)
@@ -2063,9 +2098,11 @@ def run_benchmark(
 
 		# Fallback to synthetic
 		words = ["the", "cat", "sat", "on", "mat", "dog", "ran", "to", "house", "tree"]
-		train_tokens = [random.choice(words) for _ in range(train_limit)]
-		test_tokens = [random.choice(words) for _ in range(test_limit)]
-		validation_tokens = [random.choice(words) for _ in range(test_limit)]
+		fallback_train = train_limit if train_limit else 100000
+		fallback_test = test_limit if test_limit else 10000
+		train_tokens = [random.choice(words) for _ in range(fallback_train)]
+		test_tokens = [random.choice(words) for _ in range(fallback_test)]
+		validation_tokens = [random.choice(words) for _ in range(fallback_test)]
 
 	# Train model
 	log_separator()
@@ -2282,7 +2319,8 @@ def run_multi_benchmark(
 	n_neurons: int = None,
 	bits_per_neuron: int = None,
 	cascade_threshold: float = 0.1,
-	strategy_sequence: list = None
+	strategy_sequence: list = None,
+	full_data: bool = False
 ):
 	"""Run the benchmark multiple times and summarize results."""
 	if strategy_sequence is None:
@@ -2315,7 +2353,8 @@ def run_multi_benchmark(
 		seed = 42 + i * 1000  # Different seed for each run
 		run_result = run_benchmark(mode=mode, run_id=i+1, seed=seed, tokenizer_type=tokenizer_type,
 								   n_neurons=n_neurons, bits_per_neuron=bits_per_neuron,
-								   cascade_threshold=cascade_threshold, strategy_sequence=strategy_sequence)
+								   cascade_threshold=cascade_threshold, strategy_sequence=strategy_sequence,
+								   full_data=full_data)
 		runs.append(run_result)
 
 		# Save intermediate results
@@ -2429,6 +2468,8 @@ if __name__ == "__main__":
 		help="Cascade confidence threshold (default: 0.1)")
 	parser.add_argument("--strategy", type=str, default="GA,TS",
 		help="Optimization strategy sequence, comma-separated (default: GA,TS). Examples: GA, TS, GA,TS, TS,GA, GA,TS,GA")
+	parser.add_argument("--full-data", action="store_true",
+		help="Use full WikiText-2 dataset (2M train, 245k test, 214k val) instead of subsampled data")
 	args = parser.parse_args()
 
 	# Map tokenizer arg to enum
@@ -2472,6 +2513,7 @@ if __name__ == "__main__":
 	log(f"Bits per neuron: {args.bits if args.bits else 'default (10 FAST, 14 otherwise)'}")
 	log(f"Cascade threshold: {args.threshold}")
 	log(f"Strategy: {' → '.join(strategy_sequence)}")
+	log(f"Data: {'FULL WikiText-2 (~2M train, ~245k test, ~214k val)' if args.full_data else 'sampled'}")
 	log(f"Runs: {args.runs}")
 	if mode == BenchmarkMode.OVERNIGHT:
 		# Estimate: ~30 min per RAM × 5 RAMs × runs
@@ -2485,11 +2527,13 @@ if __name__ == "__main__":
 	if args.runs > 1:
 		run_multi_benchmark(n_runs=args.runs, mode=mode, tokenizer_type=tokenizer_type,
 							n_neurons=args.neurons, bits_per_neuron=args.bits,
-							cascade_threshold=args.threshold, strategy_sequence=strategy_sequence)
+							cascade_threshold=args.threshold, strategy_sequence=strategy_sequence,
+							full_data=args.full_data)
 	else:
 		run_benchmark(mode=mode, tokenizer_type=tokenizer_type,
 					  n_neurons=args.neurons, bits_per_neuron=args.bits,
-					  cascade_threshold=args.threshold, strategy_sequence=strategy_sequence)
+					  cascade_threshold=args.threshold, strategy_sequence=strategy_sequence,
+					  full_data=args.full_data)
 
 	# Final log
 	log_separator()

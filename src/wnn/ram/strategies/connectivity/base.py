@@ -76,6 +76,7 @@ class OverfittingMonitor:
 		critical_threshold: float = 20.0,
 		grace_checks: int = 1,
 		logger: Optional[Callable[[str], None]] = None,
+		global_baseline_ratio: Optional[float] = None,
 	):
 		"""
 		Args:
@@ -87,6 +88,8 @@ class OverfittingMonitor:
 			grace_checks: Number of checks before allowing early stop (default: 1).
 				Each check happens every 5 generations/iterations.
 			logger: Optional logging function for status messages.
+			global_baseline_ratio: Optional pre-computed baseline ratio (val/train).
+				If set, this persists across reset() calls.
 		"""
 		self._validation_fn = validation_fn
 		self._healthy_threshold = healthy_threshold
@@ -96,13 +99,32 @@ class OverfittingMonitor:
 		self._logger = logger
 		self._check_count = 0
 		self._in_diversity_mode = False
-		self._baseline_ratio: Optional[float] = None  # Set on first check
+		self._global_baseline_ratio: Optional[float] = global_baseline_ratio  # Set once, persists across reset()
+		self._local_baseline_ratio: Optional[float] = None   # Set per RAM, reset with reset()
+
+	def set_global_baseline(self, train_ppl: float, val_ppl: float) -> None:
+		"""
+		Set the global baseline ratio from pre-optimization evaluation.
+		This baseline persists across reset() calls.
+
+		Args:
+			train_ppl: Training perplexity before optimization
+			val_ppl: Validation perplexity before optimization
+		"""
+		self._global_baseline_ratio = val_ppl / train_ppl if train_ppl > 0 else 1.0
+		self._log(f"  Global baseline set: train={train_ppl:.1f}, val={val_ppl:.1f}, ratio={self._global_baseline_ratio:.2f}x")
+		self._log(f"  Thresholds: healthy <{self._healthy_threshold}%, warning >{self._warning_threshold}%, critical >{self._critical_threshold}%")
 
 	def reset(self) -> None:
-		"""Reset state for a new optimization run."""
+		"""Reset state for a new optimization run (per-RAM). Global baseline is preserved."""
 		self._check_count = 0
 		self._in_diversity_mode = False
-		self._baseline_ratio = None  # Reset baseline for new optimization phase
+		self._local_baseline_ratio = None  # Reset local baseline, keep global
+
+	@property
+	def baseline_ratio(self) -> Optional[float]:
+		"""Get the active baseline ratio (global if set, otherwise local)."""
+		return self._global_baseline_ratio if self._global_baseline_ratio is not None else self._local_baseline_ratio
 
 	def _log(self, msg: str) -> None:
 		if self._logger:
@@ -125,45 +147,59 @@ class OverfittingMonitor:
 		# Calculate current ratio (val/train)
 		current_ratio = val_fitness / train_fitness if train_fitness > 0 else 1.0
 
-		# Establish baseline on first check
-		if self._baseline_ratio is None:
-			self._baseline_ratio = current_ratio
-			self._log(f"    [VAL PPL: {val_fitness:.1f}] Train: {train_fitness:.1f}, baseline ratio: {current_ratio:.2f}x")
+		# Use global baseline if set, otherwise establish local baseline on first check
+		baseline = self.baseline_ratio
+		if baseline is None:
+			self._local_baseline_ratio = current_ratio
+			baseline = current_ratio
+			self._log(f"    [VAL] val={val_fitness:.1f}, train={train_fitness:.1f}, ratio={current_ratio:.2f}x (local baseline)")
+			self._log(f"         thresholds: <{self._healthy_threshold}% healthy, >{self._warning_threshold}% warn, >{self._critical_threshold}% stop")
 			# First check always healthy (establishing baseline)
 			return OverfittingControl(early_stop=False, diversity_mode=False)
 
 		# Calculate ratio INCREASE from baseline (as percentage)
-		ratio_increase_pct = ((current_ratio - self._baseline_ratio) / self._baseline_ratio * 100) if self._baseline_ratio > 0 else 0
+		ratio_increase_pct = ((current_ratio - baseline) / baseline * 100) if baseline > 0 else 0
 
 		in_grace_period = self._check_count <= self._grace_checks + 1  # +1 because first check sets baseline
 
-		# Log with baseline-relative info
-		self._log(f"    [VAL PPL: {val_fitness:.1f}] Train: {train_fitness:.1f}, ratio: {current_ratio:.2f}x (baseline: {self._baseline_ratio:.2f}x, Δ: {ratio_increase_pct:+.1f}%)")
+		# Determine status and symbol
+		if ratio_increase_pct > self._critical_threshold:
+			status = "🔴 CRITICAL"
+		elif ratio_increase_pct > self._warning_threshold:
+			status = "🟡 WARNING"
+		elif ratio_increase_pct > self._healthy_threshold:
+			status = "🟠 CAUTION"
+		else:
+			status = "🟢 HEALTHY"
+
+		# Compact log with status indicator
+		baseline_type = "global" if self._global_baseline_ratio is not None else "local"
+		self._log(f"    [VAL] val={val_fitness:.1f}, train={train_fitness:.1f}, ratio={current_ratio:.2f}x (Δ={ratio_increase_pct:+.1f}% vs {baseline_type} {baseline:.2f}x) {status}")
 
 		if ratio_increase_pct > self._critical_threshold:
 			if in_grace_period:
-				self._log(f"    [OVERFIT] ratio increase > {self._critical_threshold}% → DIVERSITY MODE (grace {self._check_count-1}/{self._grace_checks})")
+				self._log(f"         → DIVERSITY MODE (grace {self._check_count-1}/{self._grace_checks}, need >{self._critical_threshold}% for stop)")
 				self._in_diversity_mode = True
 				return OverfittingControl(early_stop=False, diversity_mode=True)
 			else:
-				self._log(f"    [OVERFIT] ratio increase > {self._critical_threshold}% → EARLY STOP")
+				self._log(f"         → EARLY STOP (ratio increase >{self._critical_threshold}%)")
 				return OverfittingControl(early_stop=True, diversity_mode=False)
 
 		elif ratio_increase_pct > self._warning_threshold:
-			self._log(f"    [OVERFIT] ratio increase > {self._warning_threshold}% → DIVERSITY MODE")
+			self._log(f"         → DIVERSITY MODE (>{self._warning_threshold}%)")
 			self._in_diversity_mode = True
 			return OverfittingControl(early_stop=False, diversity_mode=True)
 
 		elif ratio_increase_pct > self._healthy_threshold:
 			# Between healthy and warning: maintain current state
 			if self._in_diversity_mode:
-				self._log(f"    [CAUTION] ratio increase {self._healthy_threshold}-{self._warning_threshold}% → staying in DIVERSITY MODE")
+				self._log(f"         → staying in DIVERSITY MODE ({self._healthy_threshold}-{self._warning_threshold}%)")
 			return OverfittingControl(early_stop=False, diversity_mode=self._in_diversity_mode)
 
 		else:
 			# Healthy: ratio increase below threshold
 			if self._in_diversity_mode:
-				self._log(f"    [HEALTHY] ratio increase < {self._healthy_threshold}% → exiting DIVERSITY MODE")
+				self._log(f"         → exiting DIVERSITY MODE (<{self._healthy_threshold}%)")
 				self._in_diversity_mode = False
 			return OverfittingControl(early_stop=False, diversity_mode=False)
 
@@ -171,12 +207,6 @@ class OverfittingMonitor:
 	def check_count(self) -> int:
 		"""Number of times this monitor has been called."""
 		return self._check_count
-
-	@property
-	def baseline_ratio(self) -> Optional[float]:
-		"""The baseline val/train ratio established on first check."""
-		return self._baseline_ratio
-
 
 @dataclass
 class OptimizerResult:
