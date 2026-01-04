@@ -113,7 +113,12 @@ def setup_logging(log_dir: str = None) -> str:
 	global LOG_FILENAME
 
 	if log_dir is None:
-		log_dir = os.path.dirname(os.path.abspath(__file__))
+		# Use date-based folder structure: wnn/logs/YYYY/MM/DD/
+		script_dir = os.path.dirname(os.path.abspath(__file__))
+		project_root = os.path.dirname(script_dir)  # Go up from tests/ to wnn/
+		now = datetime.now()
+		log_dir = os.path.join(project_root, "logs", now.strftime("%Y"), now.strftime("%m"), now.strftime("%d"))
+		os.makedirs(log_dir, exist_ok=True)
 
 	timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 	LOG_FILENAME = os.path.join(log_dir, f"ram_lm_v2_{timestamp}.log")
