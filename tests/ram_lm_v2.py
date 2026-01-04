@@ -873,7 +873,7 @@ class RAMLM_v2:
 		ga_eval_per_gen = ga_pop - ga_elitism
 		log(f"GA: {ga_pop} pop × {ga_gens} max gens (elite={ga_elitism} ({ga_elitism_pct*100:.0f}%), eval={ga_eval_per_gen}/gen)")
 		log(f"TS: {ts_neighbors} neighbors × {ts_iters} max iters")
-		log(f"Early stopping: <0.02% improvement over 5 gens/iters")
+		log(f"Early stopping: <0.02% improvement over 10 gens/iters (2 checks)")
 		if ACCEL_RUST_AVAILABLE:
 			log(f"Accelerator: Rust PERPLEXITY eval ({ACCEL_RUST_CORES} threads)")
 		else:

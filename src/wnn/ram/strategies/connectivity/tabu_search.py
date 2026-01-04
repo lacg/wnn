@@ -181,7 +181,7 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 					pct_improved = (improvement_since_check / prev_best_for_patience * 100) if prev_best_for_patience > 0 else 0
 					print(f"[TS] Iter {iteration + 1}: current={current_error:.4f}, best={best_error:.4f}, Δ={pct_improved:.2f}%, patience={cfg.early_stop_patience - patience_counter}", flush=True)
 
-				if patience_counter >= cfg.early_stop_patience:
+				if patience_counter > cfg.early_stop_patience:
 					if self._verbose:
 						print(f"[TS] Early stop at iter {iteration + 1}: no improvement >= {cfg.early_stop_threshold_pct}% for {patience_counter * 5} iterations", flush=True)
 					break
