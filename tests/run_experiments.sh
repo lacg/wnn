@@ -2,7 +2,13 @@
 # Run a sequence of RAM LM v2 experiments with different configurations
 # Each experiment is separated by 10s to avoid timestamp collisions
 
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
+
+# Activate virtual environment
+source wnn/bin/activate
+export PYTHONPATH="$(pwd)/src/wnn:$PYTHONPATH"
+
+cd tests
 
 echo "========================================"
 echo "RAM LM v2 EXPERIMENT SEQUENCE"
