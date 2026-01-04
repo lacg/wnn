@@ -1,3 +1,25 @@
+# Overview
+
+  WikiText-2 Dataset Structure:
+  - train: ~2M tokens from Wikipedia articles (for training)
+  - test: ~245k tokens from different Wikipedia articles (for final evaluation)
+  - validation: ~214k tokens from different Wikipedia articles (for hyperparameter tuning)
+
+  The key insight: these are completely different articles, not random splits of the same data. This explains why optimizing on train data doesn't generalize to test data!
+  ─────────────────────────────────────────────────
+
+# Limitations
+
+  Why only 2-3k samples for optimization evaluation?
+
+  The optimization loop evaluates every candidate connectivity (30 population members × 50 generations = 1500 evaluations). Each evaluation does a full forward pass through the model. Using the full 50k training tokens for each evaluation would be:
+  - 50,000 tokens × 1,500 evaluations = 75 million token evaluations
+  - That would take hours per optimization run
+
+  The 2-3k sample is a trade-off for speed. But the real problem is that we're sampling from train data, not test/validation data.
+
+# Quick tests
+
   Quick test results with WIKITEXT_WORD tokenizer:
   - Vocab: ~6,500 tokens (standard word-level)
   - Initial PPL: ~1482 (high - room for improvement)

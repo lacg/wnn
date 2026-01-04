@@ -17,10 +17,16 @@ class OverfittingControl:
 	"""
 	Control signal from overfitting callback to optimizer.
 
-	Used to dynamically adjust optimizer behavior based on train/validation gap:
-	- gap < 5%:  Healthy → normal operation
-	- gap > 10%: Warning → activate diversity_mode
-	- gap > 15%: Critical → early_stop
+	Uses BASELINE-RELATIVE gap detection: monitors how much the val/train ratio
+	INCREASES from the initial baseline, not absolute gap percentage.
+
+	This is crucial when train and validation come from different distributions
+	(e.g., different Wikipedia articles), where absolute gaps can be 1000%+.
+
+	Thresholds are based on gap ratio INCREASE from baseline:
+	- increase < 5%:  Healthy → normal operation
+	- increase > 10%: Warning → activate diversity_mode
+	- increase > 20%: Critical → early_stop
 
 	When diversity_mode is True, optimizers should:
 	- GA: ↑population, ↓elitism, ↑mutation_rate
@@ -37,15 +43,21 @@ OverfittingCallback = Callable[[Tensor, float], OverfittingControl]
 
 class OverfittingMonitor:
 	"""
-	Monitors train/validation gap and returns control signals for optimizers.
+	Monitors train/validation gap using BASELINE-RELATIVE detection.
 
-	Implements tiered response based on gap percentage:
-	- gap < healthy_threshold (5%):  Normal operation, exit diversity mode
-	- gap > warning_threshold (10%): Activate diversity mode
-	- gap > critical_threshold (15%): Early stop (after grace period)
+	Instead of absolute gap thresholds (which fail when train/val distributions
+	differ significantly, e.g., 1000%+ gaps), this monitors how much the
+	val/train RATIO increases from the initial baseline.
 
-	The grace period allows the optimizer to stabilize before triggering
-	early stop. During grace period, critical gaps only trigger diversity mode.
+	Thresholds are based on ratio INCREASE from baseline:
+	- increase < healthy_threshold (5%):  Normal operation, exit diversity mode
+	- increase > warning_threshold (10%): Activate diversity mode
+	- increase > critical_threshold (20%): Early stop (after grace period)
+
+	Example:
+		- Baseline: train=180, val=2160 → ratio=12.0x
+		- Later: train=170, val=2200 → ratio=12.9x → increase=+7.5% → healthy
+		- Later: train=160, val=2400 → ratio=15.0x → increase=+25% → critical!
 
 	Usage:
 		monitor = OverfittingMonitor(
@@ -61,7 +73,7 @@ class OverfittingMonitor:
 		validation_fn: Callable[[Tensor], float],
 		healthy_threshold: float = 5.0,
 		warning_threshold: float = 10.0,
-		critical_threshold: float = 15.0,
+		critical_threshold: float = 20.0,
 		grace_checks: int = 1,
 		logger: Optional[Callable[[str], None]] = None,
 	):
@@ -69,9 +81,9 @@ class OverfittingMonitor:
 		Args:
 			validation_fn: Function that evaluates connectivity on validation set.
 				Takes Tensor, returns validation fitness (e.g., perplexity).
-			healthy_threshold: Gap % below which to exit diversity mode (default: 5%)
-			warning_threshold: Gap % above which to enter diversity mode (default: 10%)
-			critical_threshold: Gap % above which to early stop (default: 15%)
+			healthy_threshold: Ratio increase % below which to exit diversity mode (default: 5%)
+			warning_threshold: Ratio increase % above which to enter diversity mode (default: 10%)
+			critical_threshold: Ratio increase % above which to early stop (default: 20%)
 			grace_checks: Number of checks before allowing early stop (default: 1).
 				Each check happens every 5 generations/iterations.
 			logger: Optional logging function for status messages.
@@ -83,12 +95,14 @@ class OverfittingMonitor:
 		self._grace_checks = grace_checks
 		self._logger = logger
 		self._check_count = 0
-		self._in_diversity_mode = False  # Track current diversity mode state
+		self._in_diversity_mode = False
+		self._baseline_ratio: Optional[float] = None  # Set on first check
 
 	def reset(self) -> None:
 		"""Reset state for a new optimization run."""
 		self._check_count = 0
 		self._in_diversity_mode = False
+		self._baseline_ratio = None  # Reset baseline for new optimization phase
 
 	def _log(self, msg: str) -> None:
 		if self._logger:
@@ -96,7 +110,7 @@ class OverfittingMonitor:
 
 	def __call__(self, connectivity: Tensor, train_fitness: float) -> OverfittingControl:
 		"""
-		Check for overfitting and return control signal.
+		Check for overfitting using baseline-relative gap detection.
 
 		Args:
 			connectivity: Current best connectivity pattern
@@ -108,39 +122,48 @@ class OverfittingMonitor:
 		self._check_count += 1
 		val_fitness = self._validation_fn(connectivity)
 
-		# Calculate gap percentage (assumes lower is better, like perplexity)
-		gap_pct = ((val_fitness - train_fitness) / train_fitness * 100) if train_fitness > 0 else 0
+		# Calculate current ratio (val/train)
+		current_ratio = val_fitness / train_fitness if train_fitness > 0 else 1.0
 
-		in_grace_period = self._check_count <= self._grace_checks
+		# Establish baseline on first check
+		if self._baseline_ratio is None:
+			self._baseline_ratio = current_ratio
+			self._log(f"    [VAL PPL: {val_fitness:.1f}] Train: {train_fitness:.1f}, baseline ratio: {current_ratio:.2f}x")
+			# First check always healthy (establishing baseline)
+			return OverfittingControl(early_stop=False, diversity_mode=False)
 
-		# Log validation check with explicit VAL PPL label
-		self._log(f"    [VAL PPL: {val_fitness:.1f}] Train: {train_fitness:.1f}, gap: +{gap_pct:.1f}%")
+		# Calculate ratio INCREASE from baseline (as percentage)
+		ratio_increase_pct = ((current_ratio - self._baseline_ratio) / self._baseline_ratio * 100) if self._baseline_ratio > 0 else 0
 
-		if gap_pct > self._critical_threshold:
+		in_grace_period = self._check_count <= self._grace_checks + 1  # +1 because first check sets baseline
+
+		# Log with baseline-relative info
+		self._log(f"    [VAL PPL: {val_fitness:.1f}] Train: {train_fitness:.1f}, ratio: {current_ratio:.2f}x (baseline: {self._baseline_ratio:.2f}x, Δ: {ratio_increase_pct:+.1f}%)")
+
+		if ratio_increase_pct > self._critical_threshold:
 			if in_grace_period:
-				self._log(f"    [OVERFIT] gap > {self._critical_threshold}% → DIVERSITY MODE (grace {self._check_count}/{self._grace_checks})")
+				self._log(f"    [OVERFIT] ratio increase > {self._critical_threshold}% → DIVERSITY MODE (grace {self._check_count-1}/{self._grace_checks})")
 				self._in_diversity_mode = True
 				return OverfittingControl(early_stop=False, diversity_mode=True)
 			else:
-				self._log(f"    [OVERFIT] gap > {self._critical_threshold}% → EARLY STOP")
+				self._log(f"    [OVERFIT] ratio increase > {self._critical_threshold}% → EARLY STOP")
 				return OverfittingControl(early_stop=True, diversity_mode=False)
 
-		elif gap_pct > self._warning_threshold:
-			self._log(f"    [OVERFIT] gap > {self._warning_threshold}% → DIVERSITY MODE")
+		elif ratio_increase_pct > self._warning_threshold:
+			self._log(f"    [OVERFIT] ratio increase > {self._warning_threshold}% → DIVERSITY MODE")
 			self._in_diversity_mode = True
 			return OverfittingControl(early_stop=False, diversity_mode=True)
 
-		elif gap_pct > self._healthy_threshold:
-			# Between healthy (5%) and warning (10%): maintain current state
-			# Only stay in diversity mode if we were already in it
+		elif ratio_increase_pct > self._healthy_threshold:
+			# Between healthy and warning: maintain current state
 			if self._in_diversity_mode:
-				self._log(f"    [OVERFIT] gap {self._healthy_threshold}-{self._warning_threshold}% → staying in DIVERSITY MODE")
+				self._log(f"    [CAUTION] ratio increase {self._healthy_threshold}-{self._warning_threshold}% → staying in DIVERSITY MODE")
 			return OverfittingControl(early_stop=False, diversity_mode=self._in_diversity_mode)
 
 		else:
-			# Healthy: gap below threshold, exit diversity mode
+			# Healthy: ratio increase below threshold
 			if self._in_diversity_mode:
-				self._log(f"    [HEALTHY] gap < {self._healthy_threshold}% → exiting DIVERSITY MODE")
+				self._log(f"    [HEALTHY] ratio increase < {self._healthy_threshold}% → exiting DIVERSITY MODE")
 				self._in_diversity_mode = False
 			return OverfittingControl(early_stop=False, diversity_mode=False)
 
@@ -148,6 +171,11 @@ class OverfittingMonitor:
 	def check_count(self) -> int:
 		"""Number of times this monitor has been called."""
 		return self._check_count
+
+	@property
+	def baseline_ratio(self) -> Optional[float]:
+		"""The baseline val/train ratio established on first check."""
+		return self._baseline_ratio
 
 
 @dataclass

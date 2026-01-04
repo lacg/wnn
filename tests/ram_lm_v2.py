@@ -1161,15 +1161,17 @@ class RAMLM_v2:
 			# Uses WikiText-2 VALIDATION split (different articles from train) for true generalization check
 			val_batch_fn = create_perplexity_batch_fn(ram_idx, n, exact_probs_val, val_eval_size, vocab_size, self.cascade_threshold, 1, val_tokens_for_eval)
 
-			# Overfitting monitor: tiered response based on train/val gap
-			# - gap < 5%:  Healthy → exit diversity mode
-			# - gap > 10%: Warning → activate diversity mode
-			# - gap > 15%: Critical → early stop (after 1 grace check = 5 generations)
+			# Overfitting monitor: BASELINE-RELATIVE gap detection
+			# Monitors val/train RATIO increase from initial baseline (not absolute gap)
+			# This works when train/val have different distributions (1000%+ absolute gaps)
+			# - ratio increase < 5%:  Healthy → exit diversity mode
+			# - ratio increase > 10%: Warning → activate diversity mode
+			# - ratio increase > 20%: Critical → early stop (after 1 grace check = 5 generations)
 			overfitting_monitor = OverfittingMonitor(
 				validation_fn=lambda conn: val_batch_fn([conn])[0],
-				healthy_threshold=5.0,
-				warning_threshold=10.0,
-				critical_threshold=15.0,
+				healthy_threshold=5.0,   # ratio increase below 5% = healthy
+				warning_threshold=10.0,  # ratio increase above 10% = diversity mode
+				critical_threshold=20.0, # ratio increase above 20% = early stop
 				grace_checks=1,  # 1 check = 5 generations grace period
 				logger=log,
 			)
