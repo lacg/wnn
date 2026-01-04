@@ -898,7 +898,7 @@ class RAMLM_v2:
 		ga_elitism = max(2, int(ga_pop * ga_elitism_pct))
 		ga_eval_per_gen = ga_pop - ga_elitism
 		early_stop_patience = 1  # Must match GA/TS config defaults
-		early_stop_threshold_pct = 0.02
+		early_stop_threshold_pct = 0.1  # Require 0.1% improvement to continue (was 0.02% - too aggressive)
 		log(f"GA: {ga_pop} pop × {ga_gens} max gens (elite={ga_elitism} ({ga_elitism_pct*100:.0f}%), eval={ga_eval_per_gen}/gen)")
 		log(f"TS: {ts_neighbors} neighbors × {ts_iters} max iters")
 		log(f"Early stopping: <{early_stop_threshold_pct}% improvement over {(early_stop_patience+1)*5} gens/iters ({early_stop_patience+1} checks)")
