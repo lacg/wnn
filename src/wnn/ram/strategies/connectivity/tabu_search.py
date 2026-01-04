@@ -62,8 +62,9 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 		config: Optional[TabuSearchConfig] = None,
 		seed: Optional[int] = None,
 		verbose: bool = False,
+		logger: Optional[Callable[[str], None]] = None,
 	):
-		super().__init__(seed=seed, verbose=verbose)
+		super().__init__(seed=seed, verbose=verbose, logger=logger)
 		self._config = config or TabuSearchConfig()
 
 	@property
@@ -117,8 +118,7 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 		patience_counter = 0
 		prev_best_for_patience = best_error
 
-		if self._verbose:
-			print(f"[TS] Initial error: {current_error:.4f}", flush=True)
+		self._log(f"[TS] Initial error: {current_error:.4f}")
 
 		for iteration in range(cfg.iterations):
 			# Generate all neighbors first (for batch evaluation)
@@ -179,14 +179,13 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 
 				if self._verbose:
 					pct_improved = (improvement_since_check / prev_best_for_patience * 100) if prev_best_for_patience > 0 else 0
-					print(f"[TS] Iter {iteration + 1}: current={current_error:.4f}, best={best_error:.4f}, Δ={pct_improved:.2f}%, patience={cfg.early_stop_patience - patience_counter}", flush=True)
+					self._log(f"[TS] Iter {iteration + 1}: current={current_error:.4f}, best={best_error:.4f}, Δ={pct_improved:.2f}%, patience={cfg.early_stop_patience - patience_counter}")
 
 				if patience_counter > cfg.early_stop_patience:
-					if self._verbose:
-						print(f"[TS] Early stop at iter {iteration + 1}: no improvement >= {cfg.early_stop_threshold_pct}% for {patience_counter * 5} iterations", flush=True)
+					self._log(f"[TS] Early stop at iter {iteration + 1}: no improvement >= {cfg.early_stop_threshold_pct}% for {patience_counter * 5} iterations")
 					break
-			elif self._verbose:
-				print(f"[TS] Iter {iteration + 1}: current={current_error:.4f}, best={best_error:.4f}", flush=True)
+			else:
+				self._log(f"[TS] Iter {iteration + 1}: current={current_error:.4f}, best={best_error:.4f}")
 
 		improvement_pct = ((initial_error - best_error) / initial_error * 100) if best_error < initial_error else 0.0
 

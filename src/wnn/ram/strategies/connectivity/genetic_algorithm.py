@@ -61,8 +61,9 @@ class GeneticAlgorithmStrategy(OptimizerStrategyBase):
 		config: Optional[GeneticAlgorithmConfig] = None,
 		seed: Optional[int] = None,
 		verbose: bool = False,
+		logger: Optional[Callable[[str], None]] = None,
 	):
-		super().__init__(seed=seed, verbose=verbose)
+		super().__init__(seed=seed, verbose=verbose, logger=logger)
 		self._config = config or GeneticAlgorithmConfig()
 
 	@property
@@ -153,8 +154,7 @@ class GeneticAlgorithmStrategy(OptimizerStrategyBase):
 		patience_counter = 0
 		prev_best_for_patience = best_error
 
-		if self._verbose:
-			print(f"[GA] Initial best error: {best_error:.4f}", flush=True)
+		self._log(f"[GA] Initial best error: {best_error:.4f}")
 
 		for generation in range(cfg.generations):
 			# Selection and reproduction
@@ -211,13 +211,11 @@ class GeneticAlgorithmStrategy(OptimizerStrategyBase):
 
 				if self._verbose:
 					avg_fitness = sum(fitness) / len(fitness)
-					cached_count = sum(1 for _, f in new_population[:cfg.elitism] if f is not None)
 					pct_improved = (improvement_since_check / prev_best_for_patience * 100) if prev_best_for_patience > 0 else 0
-					print(f"[GA] Gen {generation + 1}: best={best_error:.4f}, avg={avg_fitness:.4f}, Δ={pct_improved:.2f}%, patience={cfg.early_stop_patience - patience_counter}", flush=True)
+					self._log(f"[GA] Gen {generation + 1}: best={best_error:.4f}, avg={avg_fitness:.4f}, Δ={pct_improved:.2f}%, patience={cfg.early_stop_patience - patience_counter}")
 
 				if patience_counter > cfg.early_stop_patience:
-					if self._verbose:
-						print(f"[GA] Early stop at gen {generation + 1}: no improvement >= {cfg.early_stop_threshold_pct}% for {patience_counter * 5} generations", flush=True)
+					self._log(f"[GA] Early stop at gen {generation + 1}: no improvement >= {cfg.early_stop_threshold_pct}% for {patience_counter * 5} generations")
 					break
 
 		improvement_pct = ((initial_error - best_error) / initial_error * 100) if best_error < initial_error else 0.0

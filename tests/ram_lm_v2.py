@@ -1139,7 +1139,7 @@ class RAMLM_v2:
 						mutation_rate=0.01, crossover_rate=0.7, elitism=ga_elitism,
 						early_stop_patience=early_stop_patience, early_stop_threshold_pct=early_stop_threshold_pct
 					)
-					ga = GeneticAlgorithmStrategy(config=ga_config, seed=42+n+step_idx, verbose=True)
+					ga = GeneticAlgorithmStrategy(config=ga_config, seed=42+n+step_idx, verbose=True, logger=log)
 					result = ga.optimize(current_connectivity, lambda x: batch_fn([x])[0],
 						total_bits, num_neurons, bits_per_neuron, batch_fn)
 					log(f"  [{step_num}/{len(strategy_sequence)} GA] Done: PPL {result.final_error:.1f}")
@@ -1149,7 +1149,7 @@ class RAMLM_v2:
 						iterations=ts_iters, neighbors_per_iter=ts_neighbors,
 						early_stop_patience=early_stop_patience, early_stop_threshold_pct=early_stop_threshold_pct
 					)
-					ts = TabuSearchStrategy(config=ts_config, seed=42+n+step_idx, verbose=True)
+					ts = TabuSearchStrategy(config=ts_config, seed=42+n+step_idx, verbose=True, logger=log)
 					result = ts.optimize(current_connectivity, lambda x: batch_fn([x])[0],
 						total_bits, num_neurons, bits_per_neuron, batch_fn)
 					log(f"  [{step_num}/{len(strategy_sequence)} TS] Done: PPL {result.final_error:.1f}")

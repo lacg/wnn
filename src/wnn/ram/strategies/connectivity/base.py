@@ -57,10 +57,21 @@ class OptimizerStrategyBase(ABC):
 		)
 	"""
 
-	def __init__(self, seed: Optional[int] = None, verbose: bool = False):
+	def __init__(
+		self,
+		seed: Optional[int] = None,
+		verbose: bool = False,
+		logger: Optional[Callable[[str], None]] = None,
+	):
 		self._seed = seed
 		self._verbose = verbose
+		self._logger = logger or print
 		self._rng_initialized = False
+
+	def _log(self, msg: str) -> None:
+		"""Log a message using the configured logger."""
+		if self._verbose:
+			self._logger(msg)
 
 	@property
 	def seed(self) -> Optional[int]:
