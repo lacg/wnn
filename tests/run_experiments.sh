@@ -24,7 +24,7 @@ echo ""
 
 # Experiment 1: FULL 128×6 GA→TS
 echo "[$(date '+%H:%M:%S')] Starting: FULL 128×6 GA→TS"
-python ram_lm_v2.py --full --neurons 128 --bits 6 --strategy GA,TS --tokenizer gpt2_bpe
+python ram_lm_v2.py --full --neurons 128 --bits 6 --strategy GA,TS --tokenizer gpt2
 echo "[$(date '+%H:%M:%S')] Completed: FULL 128×6 GA→TS"
 echo ""
 
@@ -32,7 +32,7 @@ sleep 10
 
 # Experiment 2: OVERNIGHT 128×6 GA→TS
 echo "[$(date '+%H:%M:%S')] Starting: OVERNIGHT 128×6 GA→TS"
-python ram_lm_v2.py --overnight --neurons 128 --bits 6 --strategy GA,TS --tokenizer gpt2_bpe
+python ram_lm_v2.py --overnight --neurons 128 --bits 6 --strategy GA,TS --tokenizer gpt2
 echo "[$(date '+%H:%M:%S')] Completed: OVERNIGHT 128×6 GA→TS"
 echo ""
 
@@ -40,7 +40,7 @@ sleep 10
 
 # Experiment 3: OVERNIGHT 128×8 GA→TS
 echo "[$(date '+%H:%M:%S')] Starting: OVERNIGHT 128×8 GA→TS"
-python ram_lm_v2.py --overnight --neurons 128 --bits 8 --strategy GA,TS --tokenizer gpt2_bpe
+python ram_lm_v2.py --overnight --neurons 128 --bits 8 --strategy GA,TS --tokenizer gpt2
 echo "[$(date '+%H:%M:%S')] Completed: OVERNIGHT 128×8 GA→TS"
 echo ""
 
@@ -48,7 +48,7 @@ sleep 10
 
 # Experiment 4: OVERNIGHT 128×10 GA→TS
 echo "[$(date '+%H:%M:%S')] Starting: OVERNIGHT 128×10 GA→TS"
-python ram_lm_v2.py --overnight --neurons 128 --bits 10 --strategy GA,TS --tokenizer gpt2_bpe
+python ram_lm_v2.py --overnight --neurons 128 --bits 10 --strategy GA,TS --tokenizer gpt2
 echo "[$(date '+%H:%M:%S')] Completed: OVERNIGHT 128×10 GA→TS"
 echo ""
 
@@ -56,7 +56,7 @@ sleep 10
 
 # Experiment 5: OVERNIGHT 128×12 GA→TS
 echo "[$(date '+%H:%M:%S')] Starting: OVERNIGHT 128×12 GA→TS"
-python ram_lm_v2.py --overnight --neurons 128 --bits 12 --strategy GA,TS --tokenizer gpt2_bpe
+python ram_lm_v2.py --overnight --neurons 128 --bits 12 --strategy GA,TS --tokenizer gpt2
 echo "[$(date '+%H:%M:%S')] Completed: OVERNIGHT 128×12 GA→TS"
 echo ""
 
