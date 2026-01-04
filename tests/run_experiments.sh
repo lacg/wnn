@@ -7,6 +7,7 @@ cd "$(dirname "$0")/.."
 # Activate virtual environment
 source wnn/bin/activate
 export PYTHONPATH="$(pwd)/src/wnn:$PYTHONPATH"
+export COLUMNS=200  # Ensure wide terminal for formatting
 
 cd tests
 
