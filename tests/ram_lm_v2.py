@@ -753,8 +753,14 @@ class RAMLM_v2:
 		# Track prediction method usage
 		self.prediction_stats = Counter()
 
-	def train(self, tokens: list[str], optimize_connectivity: bool = True):
-		"""Train the model."""
+	def train(self, tokens: list[str], optimize_connectivity: bool = True, final_test_tokens: list[str] = None):
+		"""Train the model.
+
+		Args:
+			tokens: Training tokens
+			optimize_connectivity: Whether to run connectivity optimization
+			final_test_tokens: Optional test tokens for pre/post optimization comparison
+		"""
 		log(f"Training on {len(tokens):,} tokens...")
 
 		self.word_counts = Counter(tokens)
@@ -796,9 +802,9 @@ class RAMLM_v2:
 
 		# Optimize connectivity if requested
 		if optimize_connectivity:
-			self._optimize_connectivity(tokens)
+			self._optimize_connectivity(tokens, final_test_tokens)
 
-	def _optimize_connectivity(self, tokens: list[str]):
+	def _optimize_connectivity(self, tokens: list[str], final_test_tokens: list[str] = None):
 		"""
 		Optimize connectivity patterns for ALL generalized RAMs using CASCADE ACCURACY.
 
@@ -954,6 +960,40 @@ class RAMLM_v2:
 
 		self._strategy_results = {}
 		total_start = time.time()
+
+		# PRE-OPTIMIZATION: Evaluate on final test set if provided
+		# This gives us a baseline to compare with post-optimization
+		self._pre_optimization_test_ppl = None
+		if final_test_tokens is not None and len(final_test_tokens) > 6:
+			log("")
+			log("╔══════════════════════════════════════════════════════════════════╗")
+			log("║  PRE-OPTIMIZATION TEST SET EVALUATION (baseline)                 ║")
+			log("╚══════════════════════════════════════════════════════════════════╝")
+			test_eval_size = min(3000, len(final_test_tokens) - 6)
+			# Calculate exact_probs for final test set
+			test_exact_probs = []
+			for i in range(test_eval_size):
+				target = final_test_tokens[i + 6]
+				exact_prob = None
+				for n in sorted(self.exact_rams.keys(), reverse=True):
+					ctx = tuple(final_test_tokens[i + 6 - n:i + 6])
+					if ctx in self.exact_rams[n]:
+						counts = self.exact_rams[n][ctx]
+						total = sum(counts.values())
+						best, count = counts.most_common(1)[0]
+						conf = count / total
+						if conf > 0.2 or total >= 3:
+							target_count = counts.get(target, 0)
+							exact_prob = target_count / total if total > 0 else 0.0
+							break
+				test_exact_probs.append(exact_prob)
+
+			pre_test_ppl = self._evaluate_perplexity_python(
+				final_test_tokens, test_exact_probs, vocab_size, self.cascade_threshold, test_eval_size
+			)
+			self._pre_optimization_test_ppl = pre_test_ppl
+			log(f"★ TEST SET PPL (before optimization): {pre_test_ppl:.1f}")
+			log("")
 
 		# Optimize each RAM using PERPLEXITY as the goal (lower is better)
 		# IMPORTANT: Optimize from highest n to lowest (n=6 → n=2)
@@ -1904,7 +1944,7 @@ def run_benchmark(
 	log(f"Strategy sequence: {' → '.join(strategy_sequence)}")
 
 	start = time.time()
-	model.train(train_tokens, optimize_connectivity=True)
+	model.train(train_tokens, optimize_connectivity=True, final_test_tokens=test_tokens)
 	train_time = time.time() - start
 	log(f"Training time: {train_time:.1f}s ({train_time/60:.1f} min)")
 
@@ -1943,11 +1983,22 @@ def run_benchmark(
 	# Report all PPLs for clarity
 	optimization_ppl = getattr(model, '_optimization_final_ppl', None)
 	validation_ppl = getattr(model, '_optimization_val_ppl', None)
+	pre_test_ppl = getattr(model, '_pre_optimization_test_ppl', None)
 	if optimization_ppl:
 		log(f"PERPLEXITY (optimization train): {optimization_ppl:.1f}  ← optimized for this")
 	if validation_ppl:
 		log(f"PERPLEXITY (optimization val):   {validation_ppl:.1f}  ← overfitting check")
-	log(f"PERPLEXITY (test set):           {perplexity:.1f}  ← generalization")
+	if pre_test_ppl:
+		log(f"PERPLEXITY (test BEFORE opt):    {pre_test_ppl:.1f}  ← baseline")
+	log(f"PERPLEXITY (test AFTER opt):     {perplexity:.1f}  ← generalization")
+	# Show improvement/degradation
+	if pre_test_ppl:
+		test_change = perplexity - pre_test_ppl
+		test_change_pct = (test_change / pre_test_ppl * 100) if pre_test_ppl > 0 else 0
+		if test_change < 0:
+			log(f"★ Test PPL IMPROVED by {-test_change:.1f} ({-test_change_pct:.1f}%) - optimization helps generalization!")
+		else:
+			log(f"⚠️ Test PPL DEGRADED by {test_change:.1f} (+{test_change_pct:.1f}%) - optimization hurts generalization")
 	log("By method:")
 	for method, stats in sorted(results["by_method"].items(),
 								key=lambda x: -x[1]["total"]):
