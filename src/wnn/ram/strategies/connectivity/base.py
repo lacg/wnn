@@ -13,6 +13,134 @@ from torch import Tensor, manual_seed
 
 
 @dataclass
+class OverfittingControl:
+	"""
+	Control signal from overfitting callback to optimizer.
+
+	Used to dynamically adjust optimizer behavior based on train/validation gap:
+	- gap < 5%:  Healthy → normal operation
+	- gap > 10%: Warning → activate diversity_mode
+	- gap > 15%: Critical → early_stop
+
+	When diversity_mode is True, optimizers should:
+	- GA: ↑population, ↓elitism, ↑mutation_rate
+	- TS: ↑neighbors, ↑mutation_rate, ↑tabu_size
+	"""
+	early_stop: bool = False
+	diversity_mode: bool = False
+
+
+# Type alias for overfitting callback
+# Args: (current_best_connectivity, train_fitness) → control signal
+OverfittingCallback = Callable[[Tensor, float], OverfittingControl]
+
+
+class OverfittingMonitor:
+	"""
+	Monitors train/validation gap and returns control signals for optimizers.
+
+	Implements tiered response based on gap percentage:
+	- gap < healthy_threshold (5%):  Normal operation, exit diversity mode
+	- gap > warning_threshold (10%): Activate diversity mode
+	- gap > critical_threshold (15%): Early stop (after grace period)
+
+	The grace period allows the optimizer to stabilize before triggering
+	early stop. During grace period, critical gaps only trigger diversity mode.
+
+	Usage:
+		monitor = OverfittingMonitor(
+			validation_fn=lambda conn: val_batch_fn([conn])[0],
+			logger=log,
+		)
+		# Pass monitor as callback to optimizer
+		result = ga.optimize(..., overfitting_callback=monitor)
+	"""
+
+	def __init__(
+		self,
+		validation_fn: Callable[[Tensor], float],
+		healthy_threshold: float = 5.0,
+		warning_threshold: float = 10.0,
+		critical_threshold: float = 15.0,
+		grace_checks: int = 1,
+		logger: Optional[Callable[[str], None]] = None,
+	):
+		"""
+		Args:
+			validation_fn: Function that evaluates connectivity on validation set.
+				Takes Tensor, returns validation fitness (e.g., perplexity).
+			healthy_threshold: Gap % below which to exit diversity mode (default: 5%)
+			warning_threshold: Gap % above which to enter diversity mode (default: 10%)
+			critical_threshold: Gap % above which to early stop (default: 15%)
+			grace_checks: Number of checks before allowing early stop (default: 1).
+				Each check happens every 5 generations/iterations.
+			logger: Optional logging function for status messages.
+		"""
+		self._validation_fn = validation_fn
+		self._healthy_threshold = healthy_threshold
+		self._warning_threshold = warning_threshold
+		self._critical_threshold = critical_threshold
+		self._grace_checks = grace_checks
+		self._logger = logger
+		self._check_count = 0
+
+	def reset(self) -> None:
+		"""Reset check count for a new optimization run."""
+		self._check_count = 0
+
+	def _log(self, msg: str) -> None:
+		if self._logger:
+			self._logger(msg)
+
+	def __call__(self, connectivity: Tensor, train_fitness: float) -> OverfittingControl:
+		"""
+		Check for overfitting and return control signal.
+
+		Args:
+			connectivity: Current best connectivity pattern
+			train_fitness: Current training fitness (e.g., perplexity)
+
+		Returns:
+			OverfittingControl with early_stop and diversity_mode flags
+		"""
+		self._check_count += 1
+		val_fitness = self._validation_fn(connectivity)
+
+		# Calculate gap percentage (assumes lower is better, like perplexity)
+		gap_pct = ((val_fitness - train_fitness) / train_fitness * 100) if train_fitness > 0 else 0
+
+		in_grace_period = self._check_count <= self._grace_checks
+
+		if gap_pct > self._critical_threshold:
+			if in_grace_period:
+				self._log(f"    [OVERFIT] Train: {train_fitness:.1f}, Val: {val_fitness:.1f} "
+						  f"(gap: +{gap_pct:.1f}% → DIVERSITY MODE, grace {self._check_count}/{self._grace_checks})")
+				return OverfittingControl(early_stop=False, diversity_mode=True)
+			else:
+				self._log(f"    [OVERFIT] Train: {train_fitness:.1f}, Val: {val_fitness:.1f} "
+						  f"(gap: +{gap_pct:.1f}% → EARLY STOP)")
+				return OverfittingControl(early_stop=True, diversity_mode=False)
+
+		elif gap_pct > self._warning_threshold:
+			self._log(f"    [OVERFIT] Train: {train_fitness:.1f}, Val: {val_fitness:.1f} "
+					  f"(gap: +{gap_pct:.1f}% → DIVERSITY MODE)")
+			return OverfittingControl(early_stop=False, diversity_mode=True)
+
+		elif gap_pct > self._healthy_threshold:
+			# Between healthy and warning: stay in diversity mode if active
+			return OverfittingControl(early_stop=False, diversity_mode=True)
+
+		else:
+			# Healthy: gap below threshold, can exit diversity mode
+			return OverfittingControl(early_stop=False, diversity_mode=False)
+
+	@property
+	def check_count(self) -> int:
+		"""Number of times this monitor has been called."""
+		return self._check_count
+
+
+@dataclass
 class OptimizerResult:
 	"""Result of connectivity optimization."""
 
@@ -24,6 +152,7 @@ class OptimizerResult:
 	iterations_run: int
 	method_name: str
 	history: list = field(default_factory=list)
+	early_stopped_overfitting: bool = False  # True if stopped due to overfitting
 
 	def __repr__(self) -> str:
 		return (

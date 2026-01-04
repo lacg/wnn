@@ -17,6 +17,8 @@ from torch import Tensor
 from wnn.ram.strategies.connectivity.base import (
 	OptimizerResult,
 	OptimizerStrategyBase,
+	OverfittingControl,
+	OverfittingCallback,
 )
 
 
@@ -83,6 +85,7 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 		num_neurons: int,
 		n_bits_per_neuron: int,
 		batch_evaluate_fn: Optional[Callable[[list], list[float]]] = None,
+		overfitting_callback: Optional[OverfittingCallback] = None,
 	) -> OptimizerResult:
 		"""
 		Run Tabu Search optimization.
@@ -97,9 +100,19 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 		Args:
 			batch_evaluate_fn: Optional function to evaluate multiple patterns at once.
 				If provided, uses batch evaluation for massive speedup with Rust/joblib.
+			overfitting_callback: Optional callback for overfitting detection.
+				Called every 5 iterations with (best_connectivity, train_fitness).
+				Returns OverfittingControl to signal diversity mode or early stop.
 		"""
 		self._ensure_rng()
 		cfg = self._config
+
+		# Diversity mode tracking - store original values for restoration
+		in_diversity_mode = False
+		original_neighbors = cfg.neighbors_per_iter
+		original_mutation_rate = cfg.mutation_rate
+		original_tabu_size = cfg.tabu_size
+		early_stopped_overfitting = False
 
 		current = connections.clone()
 		current_error = evaluate_fn(current) if batch_evaluate_fn is None else batch_evaluate_fn([current])[0]
@@ -184,6 +197,37 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 				if patience_counter > cfg.early_stop_patience:
 					self._log(f"[TS] Early stop at iter {iteration + 1}: no improvement >= {cfg.early_stop_threshold_pct}% for {patience_counter * 5} iterations")
 					break
+
+				# Overfitting callback check
+				if overfitting_callback is not None:
+					control = overfitting_callback(best, best_error)
+
+					if control.early_stop:
+						self._log(f"[TS] Overfitting early stop at iter {iteration + 1}")
+						early_stopped_overfitting = True
+						break
+
+					if control.diversity_mode and not in_diversity_mode:
+						# Activate diversity mode: ↑neighbors, ↑mutation, ↑tabu_size
+						in_diversity_mode = True
+						cfg.neighbors_per_iter = int(original_neighbors * 2)
+						cfg.mutation_rate = original_mutation_rate * 2
+						cfg.tabu_size = max(original_tabu_size * 2, 10)
+						# Resize tabu list to new size
+						new_tabu: deque = deque(tabu_list, maxlen=cfg.tabu_size)
+						tabu_list = new_tabu
+						self._log(f"[TS] Diversity mode ON: neighbors={cfg.neighbors_per_iter}, mut={cfg.mutation_rate:.4f}, tabu={cfg.tabu_size}")
+
+					elif not control.diversity_mode and in_diversity_mode:
+						# Back to normal: restore original hyperparameters
+						in_diversity_mode = False
+						cfg.neighbors_per_iter = original_neighbors
+						cfg.mutation_rate = original_mutation_rate
+						cfg.tabu_size = original_tabu_size
+						# Shrink tabu list back
+						new_tabu = deque(list(tabu_list)[-cfg.tabu_size:], maxlen=cfg.tabu_size)
+						tabu_list = new_tabu
+						self._log(f"[TS] Diversity mode OFF: restored neighbors={cfg.neighbors_per_iter}, mut={cfg.mutation_rate:.4f}, tabu={cfg.tabu_size}")
 			else:
 				self._log(f"[TS] Iter {iteration + 1}: current={current_error:.4f}, best={best_error:.4f}")
 
@@ -195,9 +239,10 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 			initial_error=initial_error,
 			final_error=best_error,
 			improvement_percent=improvement_pct,
-			iterations_run=cfg.iterations,
+			iterations_run=iteration + 1,
 			method_name=self.name,
 			history=history,
+			early_stopped_overfitting=early_stopped_overfitting,
 		)
 
 	def __repr__(self) -> str:

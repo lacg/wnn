@@ -816,6 +816,7 @@ class RAMLM_v2:
 			OptimizationStrategy,
 			RUST_AVAILABLE as ACCEL_RUST_AVAILABLE,
 			RUST_CPU_CORES as ACCEL_RUST_CORES,
+			OverfittingMonitor,
 		)
 		from wnn.ram.strategies.connectivity.genetic_algorithm import (
 			GeneticAlgorithmStrategy, GeneticAlgorithmConfig
@@ -1111,6 +1112,22 @@ class RAMLM_v2:
 
 			batch_fn = create_perplexity_batch_fn(ram_idx, n, exact_probs_train, eval_train, vocab_size, self.cascade_threshold, ga_pop)
 
+			# Create validation batch function for overfitting detection DURING optimization
+			val_batch_fn = create_perplexity_batch_fn(ram_idx, n, exact_probs_val, eval_val, vocab_size, self.cascade_threshold, 1)
+
+			# Overfitting monitor: tiered response based on train/val gap
+			# - gap < 5%:  Healthy → exit diversity mode
+			# - gap > 10%: Warning → activate diversity mode
+			# - gap > 15%: Critical → early stop (after 1 grace check = 5 generations)
+			overfitting_monitor = OverfittingMonitor(
+				validation_fn=lambda conn: val_batch_fn([conn])[0],
+				healthy_threshold=5.0,
+				warning_threshold=10.0,
+				critical_threshold=15.0,
+				grace_checks=1,  # 1 check = 5 generations grace period
+				logger=log,
+			)
+
 			# Initial perplexity (using same code path as optimization)
 			initial_ppls = batch_fn([conn_tensor])
 			initial_ppl = initial_ppls[0]
@@ -1129,9 +1146,15 @@ class RAMLM_v2:
 			best_connectivity = conn_tensor.clone()
 			current_connectivity = conn_tensor.clone()
 
+			# Track if any optimizer early-stopped due to overfitting
+			any_overfitting_stop = False
+
 			# Run strategy sequence (e.g., ['GA', 'TS'] or ['TS', 'GA', 'GA'])
 			for step_idx, strategy_type in enumerate(strategy_sequence):
 				step_num = step_idx + 1
+				# Reset monitor for each strategy so each gets its own grace period
+				overfitting_monitor.reset()
+
 				if strategy_type.upper() == 'GA':
 					log(f"  [{step_num}/{len(strategy_sequence)} GA] Starting...")
 					ga_config = GeneticAlgorithmConfig(
@@ -1141,8 +1164,13 @@ class RAMLM_v2:
 					)
 					ga = GeneticAlgorithmStrategy(config=ga_config, seed=42+n+step_idx, verbose=True, logger=log)
 					result = ga.optimize(current_connectivity, lambda x: batch_fn([x])[0],
-						total_bits, num_neurons, bits_per_neuron, batch_fn)
-					log(f"  [{step_num}/{len(strategy_sequence)} GA] Done: PPL {result.final_error:.1f}")
+						total_bits, num_neurons, bits_per_neuron, batch_fn,
+						overfitting_callback=overfitting_monitor)
+					if result.early_stopped_overfitting:
+						any_overfitting_stop = True
+						log(f"  [{step_num}/{len(strategy_sequence)} GA] Done: PPL {result.final_error:.1f} (stopped: overfitting)")
+					else:
+						log(f"  [{step_num}/{len(strategy_sequence)} GA] Done: PPL {result.final_error:.1f}")
 				elif strategy_type.upper() == 'TS':
 					log(f"  [{step_num}/{len(strategy_sequence)} TS] Starting...")
 					ts_config = TabuSearchConfig(
@@ -1151,8 +1179,13 @@ class RAMLM_v2:
 					)
 					ts = TabuSearchStrategy(config=ts_config, seed=42+n+step_idx, verbose=True, logger=log)
 					result = ts.optimize(current_connectivity, lambda x: batch_fn([x])[0],
-						total_bits, num_neurons, bits_per_neuron, batch_fn)
-					log(f"  [{step_num}/{len(strategy_sequence)} TS] Done: PPL {result.final_error:.1f}")
+						total_bits, num_neurons, bits_per_neuron, batch_fn,
+						overfitting_callback=overfitting_monitor)
+					if result.early_stopped_overfitting:
+						any_overfitting_stop = True
+						log(f"  [{step_num}/{len(strategy_sequence)} TS] Done: PPL {result.final_error:.1f} (stopped: overfitting)")
+					else:
+						log(f"  [{step_num}/{len(strategy_sequence)} TS] Done: PPL {result.final_error:.1f}")
 				else:
 					log(f"  [WARNING] Unknown strategy: {strategy_type}, skipping")
 					continue
@@ -1182,17 +1215,17 @@ class RAMLM_v2:
 			if abs(verify_ppl - final_ppl) > 0.1:
 				log(f"  [WARNING] Verification mismatch! Expected PPL {final_ppl:.1f}, got {verify_ppl:.1f}")
 
-			# VALIDATION: Evaluate on held-out validation set to detect overfitting
-			# Create a validation batch function with exact_probs_val and eval_val
-			val_batch_fn = create_perplexity_batch_fn(ram_idx, n, exact_probs_val, eval_val, vocab_size, self.cascade_threshold, 1)
+			# VALIDATION: Final evaluation on held-out validation set
+			# (val_batch_fn already created earlier for callback)
 			val_ppls = val_batch_fn([best_connectivity])
 			val_ppl = val_ppls[0]
 			train_val_gap = val_ppl - final_ppl
 			gap_pct = (train_val_gap / final_ppl * 100) if final_ppl > 0 else 0
+			overfit_note = " (early stopped)" if any_overfitting_stop else ""
 			if gap_pct > 10:
-				log(f"  [VALIDATION] Train PPL: {final_ppl:.1f}, Val PPL: {val_ppl:.1f} (gap: +{gap_pct:.1f}% ⚠️ overfitting)")
+				log(f"  [VALIDATION] Train PPL: {final_ppl:.1f}, Val PPL: {val_ppl:.1f} (gap: +{gap_pct:.1f}% ⚠️ overfitting){overfit_note}")
 			else:
-				log(f"  [VALIDATION] Train PPL: {final_ppl:.1f}, Val PPL: {val_ppl:.1f} (gap: +{gap_pct:.1f}%)")
+				log(f"  [VALIDATION] Train PPL: {final_ppl:.1f}, Val PPL: {val_ppl:.1f} (gap: +{gap_pct:.1f}%){overfit_note}")
 
 			# Apply optimized connectivity
 			ram.set_connectivity(best_connectivity.tolist())

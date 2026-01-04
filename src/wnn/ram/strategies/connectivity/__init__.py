@@ -31,6 +31,9 @@ Usage:
 from wnn.ram.strategies.connectivity.base import (
 	OptimizerResult,
 	OptimizerStrategyBase,
+	OverfittingControl,
+	OverfittingCallback,
+	OverfittingMonitor,
 )
 
 from wnn.ram.strategies.connectivity.tabu_search import (
@@ -61,6 +64,9 @@ __all__ = [
 	# Base
 	'OptimizerResult',
 	'OptimizerStrategyBase',
+	'OverfittingControl',
+	'OverfittingCallback',
+	'OverfittingMonitor',
 	# Tabu Search
 	'TabuSearchStrategy',
 	'TabuSearchConfig',
