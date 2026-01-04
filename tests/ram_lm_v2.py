@@ -1738,19 +1738,25 @@ class RAMLM_v2:
 		return word, f"ram_meta_fallback({method})", conf
 
 	def evaluate_voting_strategies(self, tokens: list[str]) -> dict:
-		"""Compare all voting strategies."""
+		"""Compare all voting strategies (accuracy and perplexity)."""
+		import math
+
 		# Test multiple confidence thresholds
 		thresholds = [0.01, 0.02, 0.03, 0.05, 0.07, 0.10]
 
 		results = {
-			"cascade": {"correct": 0, "total": 0},  # Original cascade
-			"weighted": {"correct": 0, "total": 0},  # Accuracy-weighted voting
-			"meta": {"correct": 0, "total": 0},      # Statistics-based meta-classifier
-			"ram_meta": {"correct": 0, "total": 0},  # RAM-based meta-classifier with state
+			"cascade": {"correct": 0, "total": 0, "log_prob_sum": 0.0},  # Original cascade
+			"weighted": {"correct": 0, "total": 0, "log_prob_sum": 0.0},  # Accuracy-weighted voting
+			"meta": {"correct": 0, "total": 0, "log_prob_sum": 0.0},      # Statistics-based meta-classifier
+			"ram_meta": {"correct": 0, "total": 0, "log_prob_sum": 0.0},  # RAM-based meta-classifier with state
 		}
 		# Add threshold strategies
 		for t in thresholds:
-			results[f"thresh_{t:.2f}"] = {"correct": 0, "total": 0}
+			results[f"thresh_{t:.2f}"] = {"correct": 0, "total": 0, "log_prob_sum": 0.0}
+
+		# Get vocab size for minimum probability
+		vocab_size = len(self.word_counts) if hasattr(self, 'word_counts') else 10000
+		min_prob = 1.0 / vocab_size
 
 		# Reset RAM meta state before evaluation (fresh temporal context)
 		if hasattr(self, 'ram_meta'):
@@ -1765,26 +1771,42 @@ class RAMLM_v2:
 				results[key]["total"] += 1
 
 			# Original cascade
-			pred1, _, _ = self.predict(context)
+			pred1, _, conf1 = self.predict(context)
 			if pred1 == target:
 				results["cascade"]["correct"] += 1
+				prob1 = max(float(conf1), min_prob)
+			else:
+				prob1 = min_prob
+			results["cascade"]["log_prob_sum"] += math.log(prob1)
 
 			# Weighted voting
-			pred2, _, _ = self.predict_weighted_voting(context)
+			pred2, _, conf2 = self.predict_weighted_voting(context)
 			if pred2 == target:
 				results["weighted"]["correct"] += 1
+				prob2 = max(float(conf2), min_prob)
+			else:
+				prob2 = min_prob
+			results["weighted"]["log_prob_sum"] += math.log(prob2)
 
 			# Statistics-based meta-classifier
-			pred3, _, _ = self.predict_meta(context)
+			pred3, _, conf3 = self.predict_meta(context)
 			if pred3 == target:
 				results["meta"]["correct"] += 1
+				prob3 = max(float(conf3), min_prob)
+			else:
+				prob3 = min_prob
+			results["meta"]["log_prob_sum"] += math.log(prob3)
 
 			# RAM-based meta-classifier with state tracking
 			if hasattr(self, 'ram_meta'):
-				pred4, method4, _ = self.predict_ram_meta(context)
+				pred4, method4, conf4 = self.predict_ram_meta(context)
 				is_correct = (pred4 == target)
 				if is_correct:
 					results["ram_meta"]["correct"] += 1
+					prob4 = max(float(conf4), min_prob)
+				else:
+					prob4 = min_prob
+				results["ram_meta"]["log_prob_sum"] += math.log(prob4)
 
 				# Update state with actual outcome (enables temporal learning)
 				# Extract method name from "ram_meta(method)" format
@@ -1796,15 +1818,22 @@ class RAMLM_v2:
 
 			# Threshold voting at various levels
 			for t in thresholds:
-				pred, _, _ = self.predict_threshold_voting(context, min_conf=t)
+				pred, _, conf = self.predict_threshold_voting(context, min_conf=t)
 				if pred == target:
 					results[f"thresh_{t:.2f}"]["correct"] += 1
+					prob = max(float(conf), min_prob)
+				else:
+					prob = min_prob
+				results[f"thresh_{t:.2f}"]["log_prob_sum"] += math.log(prob)
 
-		# Compute accuracies
+		# Compute accuracies and perplexities
 		for strategy in results:
 			total = results[strategy]["total"]
 			correct = results[strategy]["correct"]
 			results[strategy]["accuracy"] = correct / total if total > 0 else 0.0
+			# Perplexity = exp(-avg_log_prob)
+			avg_log_prob = results[strategy]["log_prob_sum"] / total if total > 0 else 0.0
+			results[strategy]["perplexity"] = math.exp(-avg_log_prob)
 
 		return results
 
@@ -2051,8 +2080,27 @@ def run_benchmark(
 	log("PERPLEXITY SUMMARY:")
 	if optimization_ppl:
 		log(f"  Optimization (held-out train): {optimization_ppl:.1f}")
-	log(f"  Generalization (test set)    : {perplexity:.1f}")
+	if validation_ppl:
+		log(f"  Optimization (validation):     {validation_ppl:.1f}  ← overfitting check")
+	if pre_test_ppl:
+		log(f"  Test set (BEFORE opt):         {pre_test_ppl:.1f}  ← baseline")
+	log(f"  Test set (AFTER opt):")
+	log(f"    Cascade (original)  : {voting_results['cascade']['perplexity']:.1f}")
+	log(f"    Weighted Voting (#1): {voting_results['weighted']['perplexity']:.1f}")
+	log(f"    Meta-Classifier (#2): {voting_results['meta']['perplexity']:.1f}")
+	log(f"    RAM Meta (#3)       : {voting_results['ram_meta']['perplexity']:.1f}")
 	log("")
+
+	# Find best strategy by perplexity (lower is better)
+	main_strategies = ['cascade', 'weighted', 'meta', 'ram_meta']
+	best_ppl_strategy = min(main_strategies, key=lambda x: voting_results[x]['perplexity'])
+	best_ppl = voting_results[best_ppl_strategy]['perplexity']
+	cascade_ppl = voting_results['cascade']['perplexity']
+	ppl_improvement = (cascade_ppl - best_ppl) / cascade_ppl * 100 if cascade_ppl > 0 else 0
+	if ppl_improvement > 0:
+		log(f"★ Best PPL: {best_ppl_strategy} ({best_ppl:.1f}, -{ppl_improvement:.1f}% vs cascade)")
+	else:
+		log(f"★ Best PPL: cascade ({cascade_ppl:.1f}, baseline)")
 
 	best_strategy = max(voting_results.items(), key=lambda x: x[1]['accuracy'])
 	improvement = (best_strategy[1]['accuracy'] - voting_results['cascade']['accuracy']) / voting_results['cascade']['accuracy'] * 100
