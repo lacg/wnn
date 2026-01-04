@@ -88,6 +88,9 @@ from wnn.ram.strategies.attention_mask import (
 	combine_masks,
 )
 
+# Perplexity calculation
+from wnn.ram.strategies.perplexity import PerplexityCalculator
+
 __all__ = [
 	# Training strategies
 	'GreedyTrainStrategy',
@@ -139,4 +142,6 @@ __all__ = [
 	'LearnedSparseMask',
 	'MaskStrategyFactory',
 	'combine_masks',
+	# Perplexity
+	'PerplexityCalculator',
 ]

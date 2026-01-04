@@ -32,6 +32,7 @@ from joblib import Parallel, delayed
 import multiprocessing
 
 from wnn.ram.enums import BenchmarkMode, TokenizerType
+from wnn.ram.strategies import PerplexityCalculator
 
 # Number of parallel workers (leave some cores for system)
 N_WORKERS = max(1, multiprocessing.cpu_count() - 4)  # 12 on 16-core M4 Max
@@ -1527,6 +1528,68 @@ class RAMLM_v2:
 
 		return predictions
 
+	def _compute_target_probability(self, context: list[str], target: str) -> float:
+		"""
+		Compute P(target) using the cascade prediction logic.
+
+		This matches the logic in _evaluate_perplexity_python for consistent PPL.
+		Uses:
+		1. Exact RAM count-based probability if available
+		2. Generalized RAM confidence if cascade match
+		3. Vote-weighted probability if voting fallback
+
+		IMPORTANT: This gives partial credit to targets that received some
+		probability mass, even if they didn't win the argmax prediction.
+		"""
+		min_prob = 1.0 / len(self.word_counts) if hasattr(self, 'word_counts') else 1e-4
+		n_values = [2, 3, 4, 5, 6]
+
+		# 1. Try exact match first (count-based probability)
+		for n in sorted(self.exact_rams.keys(), reverse=True):
+			if len(context) >= n:
+				ctx = tuple(context[-n:])
+				if ctx in self.exact_rams[n]:
+					counts = self.exact_rams[n][ctx]
+					total = sum(counts.values())
+					# Check if prediction is confident enough
+					if counts.most_common(1)[0][1] / total > 0.2 or total >= 3:
+						# Return P(target) from count distribution
+						target_count = counts.get(target, 0)
+						return max(target_count / total, min_prob)
+
+		# 2. Try generalized RAMs with cascade
+		for n in sorted(self.generalized_rams.keys(), reverse=True):
+			if n not in self.generalized_rams:
+				continue
+			if len(context) >= n:
+				pred, conf = self.generalized_rams[n].predict(context)
+				if pred and conf > self.cascade_threshold:
+					# Cascade match - if correct, use confidence; else min_prob
+					if pred == target:
+						return max(float(conf), min_prob)
+					else:
+						return min_prob
+
+		# 3. Voting fallback - aggregate votes and compute P(target)
+		votes = {}
+		total_weight = 0.0
+		for n in n_values:
+			if n not in self.generalized_rams:
+				continue
+			if len(context) >= n:
+				pred, conf = self.generalized_rams[n].predict(context)
+				if pred:
+					weight = conf * n
+					votes[pred] = votes.get(pred, 0.0) + weight
+					total_weight += weight
+
+		if total_weight > 0:
+			# Return P(target) from vote distribution (partial credit!)
+			target_votes = votes.get(target, 0.0)
+			return max(target_votes / total_weight, min_prob)
+
+		return min_prob
+
 	def learn_voting_weights(self, tokens: list[str], validation_split: float = 0.2):
 		"""
 		Strategy #1: Learn voting weights based on observed accuracy.
@@ -1827,25 +1890,30 @@ class RAMLM_v2:
 		return word, f"ram_meta_fallback({method})", conf
 
 	def evaluate_voting_strategies(self, tokens: list[str]) -> dict:
-		"""Compare all voting strategies (accuracy and perplexity)."""
+		"""
+		Compare all voting strategies (accuracy and perplexity).
+
+		IMPORTANT: Uses PerplexityCalculator for consistent PPL calculation.
+		For "cascade" strategy, uses _compute_target_probability() to match
+		the logic in _evaluate_perplexity_python (TRUE perplexity with partial credit).
+		"""
 		import math
 
 		# Test multiple confidence thresholds
 		thresholds = [0.01, 0.02, 0.03, 0.05, 0.07, 0.10]
 
-		results = {
-			"cascade": {"correct": 0, "total": 0, "log_prob_sum": 0.0},  # Original cascade
-			"weighted": {"correct": 0, "total": 0, "log_prob_sum": 0.0},  # Accuracy-weighted voting
-			"meta": {"correct": 0, "total": 0, "log_prob_sum": 0.0},      # Statistics-based meta-classifier
-			"ram_meta": {"correct": 0, "total": 0, "log_prob_sum": 0.0},  # RAM-based meta-classifier with state
-		}
-		# Add threshold strategies
-		for t in thresholds:
-			results[f"thresh_{t:.2f}"] = {"correct": 0, "total": 0, "log_prob_sum": 0.0}
-
-		# Get vocab size for minimum probability
+		# Get vocab size for perplexity calculation
 		vocab_size = len(self.word_counts) if hasattr(self, 'word_counts') else 10000
-		min_prob = 1.0 / vocab_size
+
+		# Create PerplexityCalculators for each strategy
+		calculators = {
+			"cascade": PerplexityCalculator(vocab_size),
+			"weighted": PerplexityCalculator(vocab_size),
+			"meta": PerplexityCalculator(vocab_size),
+			"ram_meta": PerplexityCalculator(vocab_size),
+		}
+		for t in thresholds:
+			calculators[f"thresh_{t:.2f}"] = PerplexityCalculator(vocab_size)
 
 		# Reset RAM meta state before evaluation (fresh temporal context)
 		if hasattr(self, 'ram_meta'):
@@ -1855,76 +1923,120 @@ class RAMLM_v2:
 			context = tokens[i:i + 5]
 			target = tokens[i + 5]
 
-			# Increment totals for all strategies
-			for key in results:
-				results[key]["total"] += 1
+			# CASCADE: Use _compute_target_probability() for TRUE perplexity
+			# This matches _evaluate_perplexity_python and gives partial credit
+			cascade_prob = self._compute_target_probability(context, target)
+			pred1, _, _ = self.predict(context)
+			calculators["cascade"].add_from_probability(cascade_prob, is_correct=(pred1 == target))
 
-			# Original cascade
-			pred1, _, conf1 = self.predict(context)
-			if pred1 == target:
-				results["cascade"]["correct"] += 1
-				prob1 = max(float(conf1), min_prob)
-			else:
-				prob1 = min_prob
-			results["cascade"]["log_prob_sum"] += math.log(prob1)
-
-			# Weighted voting
+			# WEIGHTED: Use weighted vote distribution for P(target)
 			pred2, _, conf2 = self.predict_weighted_voting(context)
-			if pred2 == target:
-				results["weighted"]["correct"] += 1
-				prob2 = max(float(conf2), min_prob)
-			else:
-				prob2 = min_prob
-			results["weighted"]["log_prob_sum"] += math.log(prob2)
+			weighted_prob = self._compute_weighted_target_probability(context, target)
+			calculators["weighted"].add_from_probability(weighted_prob, is_correct=(pred2 == target))
 
-			# Statistics-based meta-classifier
+			# META: Meta-classifier - use cascade probability as approximation
 			pred3, _, conf3 = self.predict_meta(context)
-			if pred3 == target:
-				results["meta"]["correct"] += 1
-				prob3 = max(float(conf3), min_prob)
-			else:
-				prob3 = min_prob
-			results["meta"]["log_prob_sum"] += math.log(prob3)
+			# Meta just picks a method, so use that method's probability
+			calculators["meta"].add_from_prediction(pred3, target, conf3)
 
-			# RAM-based meta-classifier with state tracking
+			# RAM_META: RAM-based meta-classifier with state tracking
 			if hasattr(self, 'ram_meta'):
 				pred4, method4, conf4 = self.predict_ram_meta(context)
 				is_correct = (pred4 == target)
-				if is_correct:
-					results["ram_meta"]["correct"] += 1
-					prob4 = max(float(conf4), min_prob)
-				else:
-					prob4 = min_prob
-				results["ram_meta"]["log_prob_sum"] += math.log(prob4)
+				calculators["ram_meta"].add_from_prediction(pred4, target, conf4)
 
 				# Update state with actual outcome (enables temporal learning)
-				# Extract method name from "ram_meta(method)" format
 				if '(' in method4:
 					used_method = method4.split('(')[1].rstrip(')')
 				else:
 					used_method = method4
 				self.ram_meta.update_state(used_method, is_correct)
 
-			# Threshold voting at various levels
+			# THRESHOLD: Use threshold-filtered vote distribution
 			for t in thresholds:
 				pred, _, conf = self.predict_threshold_voting(context, min_conf=t)
-				if pred == target:
-					results[f"thresh_{t:.2f}"]["correct"] += 1
-					prob = max(float(conf), min_prob)
-				else:
-					prob = min_prob
-				results[f"thresh_{t:.2f}"]["log_prob_sum"] += math.log(prob)
+				thresh_prob = self._compute_threshold_target_probability(context, target, t)
+				calculators[f"thresh_{t:.2f}"].add_from_probability(thresh_prob, is_correct=(pred == target))
 
-		# Compute accuracies and perplexities
-		for strategy in results:
-			total = results[strategy]["total"]
-			correct = results[strategy]["correct"]
-			results[strategy]["accuracy"] = correct / total if total > 0 else 0.0
-			# Perplexity = exp(-avg_log_prob)
-			avg_log_prob = results[strategy]["log_prob_sum"] / total if total > 0 else 0.0
-			results[strategy]["perplexity"] = math.exp(-avg_log_prob)
+		# Collect results from all calculators
+		results = {}
+		for strategy, calc in calculators.items():
+			stats = calc.get_stats()
+			results[strategy] = {
+				"correct": stats["correct"],
+				"total": stats["total"],
+				"accuracy": stats["accuracy"],
+				"perplexity": stats["perplexity"],
+			}
 
 		return results
+
+	def _compute_weighted_target_probability(self, context: list[str], target: str) -> float:
+		"""Compute P(target) using weighted voting (with learned weights)."""
+		min_prob = 1.0 / len(self.word_counts) if hasattr(self, 'word_counts') else 1e-4
+
+		if not hasattr(self, 'voting_weights') or not self.voting_weights:
+			return self._compute_target_probability(context, target)
+
+		predictions = self._get_all_predictions(context)
+		if not predictions:
+			return min_prob
+
+		# Build weighted vote distribution
+		votes = {}
+		total_weight = 0.0
+		for method, (pred, conf) in predictions.items():
+			weight = self.voting_weights.get(method, 0.1) * conf
+			votes[pred] = votes.get(pred, 0.0) + weight
+			total_weight += weight
+
+		if total_weight > 0:
+			target_votes = votes.get(target, 0.0)
+			return max(target_votes / total_weight, min_prob)
+
+		return min_prob
+
+	def _compute_threshold_target_probability(self, context: list[str], target: str, min_conf: float) -> float:
+		"""Compute P(target) using threshold-filtered voting."""
+		min_prob = 1.0 / len(self.word_counts) if hasattr(self, 'word_counts') else 1e-4
+
+		# 1. Try exact match first
+		for n in sorted(self.exact_rams.keys(), reverse=True):
+			if len(context) >= n:
+				ctx = tuple(context[-n:])
+				if ctx in self.exact_rams[n]:
+					counts = self.exact_rams[n][ctx]
+					total = sum(counts.values())
+					if counts.most_common(1)[0][1] / total > 0.2 or total >= 3:
+						target_count = counts.get(target, 0)
+						return max(target_count / total, min_prob)
+
+		# 2. Try generalized cascade
+		for n in sorted(self.generalized_rams.keys(), reverse=True):
+			if len(context) >= n:
+				pred, conf = self.generalized_rams[n].predict(context)
+				if pred and conf > self.cascade_threshold:
+					if pred == target:
+						return max(float(conf), min_prob)
+					else:
+						return min_prob
+
+		# 3. Threshold-filtered voting
+		votes = {}
+		total_weight = 0.0
+		for n, ram in self.generalized_rams.items():
+			if len(context) >= n:
+				pred, conf = ram.predict(context)
+				if pred and conf > min_conf:
+					weight = conf * n
+					votes[pred] = votes.get(pred, 0.0) + weight
+					total_weight += weight
+
+		if total_weight > 0:
+			target_votes = votes.get(target, 0.0)
+			return max(target_votes / total_weight, min_prob)
+
+		return min_prob
 
 	def evaluate(self, tokens: list[str]) -> dict:
 		"""Evaluate the model."""
