@@ -34,12 +34,14 @@ from wnn.ram.strategies.connectivity.base import (
 	OverfittingControl,
 	OverfittingCallback,
 	OverfittingMonitor,
-	# Threshold constants (use these to avoid duplication)
+	# Backward-compatible threshold constants
 	HEALTHY_THRESHOLD,
 	WARNING_THRESHOLD,
 	SEVERE_THRESHOLD,
 	CRITICAL_THRESHOLD,
 )
+# Preferred: use enum instead of constants
+from wnn.core.thresholds import OverfitThreshold, EarlyStopThreshold
 
 from wnn.ram.strategies.connectivity.tabu_search import (
 	TabuSearchStrategy,
@@ -72,7 +74,10 @@ __all__ = [
 	'OverfittingControl',
 	'OverfittingCallback',
 	'OverfittingMonitor',
-	# Threshold constants
+	# Threshold enums (preferred)
+	'OverfitThreshold',
+	'EarlyStopThreshold',
+	# Backward-compatible constants
 	'HEALTHY_THRESHOLD',
 	'WARNING_THRESHOLD',
 	'SEVERE_THRESHOLD',

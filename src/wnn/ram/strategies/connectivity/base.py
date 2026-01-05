@@ -11,6 +11,8 @@ from typing import Callable, Optional
 
 from torch import Tensor, manual_seed
 
+from wnn.core.thresholds import OverfitThreshold
+
 
 @dataclass
 class OverfittingControl:
@@ -24,10 +26,10 @@ class OverfittingControl:
 	(e.g., different Wikipedia articles), where absolute gaps can be 1000%+.
 
 	Thresholds are based on delta (ratio CHANGE from baseline):
-	- delta < -5%:  Healthy (improving) → exit diversity_mode
-	- delta > 0%:   Warning (mild worsening) → activate diversity_mode
-	- delta > 5%:   Severe (significant worsening) → activate SEVERE diversity_mode
-	- delta > 20%:  Critical → early_stop
+	- delta < HEALTHY (-5%):  Improving → exit diversity_mode
+	- delta > WARNING (0%):   Mild worsening → activate diversity_mode
+	- delta > SEVERE (5%):    Significant worsening → activate SEVERE diversity_mode
+	- delta > CRITICAL (15%): Early stop
 
 	This creates hysteresis: diversity kicks IN at 0%, kicks OFF at -5%.
 	This prevents rapid toggling and ensures meaningful improvement before exiting.
@@ -45,11 +47,11 @@ class OverfittingControl:
 	severe_diversity_mode: bool = False  # More aggressive diversity for >5% delta
 
 
-# Default threshold values - use these in all places to avoid duplication
-HEALTHY_THRESHOLD = -5.0    # delta < -5% = healthy (improving)
-WARNING_THRESHOLD = 0.0     # delta > 0% = warning (mild diversity)
-SEVERE_THRESHOLD = 5.0      # delta > 5% = severe (aggressive diversity)
-CRITICAL_THRESHOLD = 15.0   # delta > 15% = critical (early stop)
+# Backward-compatible constants (use OverfitThreshold enum in new code)
+HEALTHY_THRESHOLD = float(OverfitThreshold.HEALTHY)    # -5%
+WARNING_THRESHOLD = float(OverfitThreshold.WARNING)    # 0%
+SEVERE_THRESHOLD = float(OverfitThreshold.SEVERE)      # 5%
+CRITICAL_THRESHOLD = float(OverfitThreshold.CRITICAL)  # 15%
 
 
 # Type alias for overfitting callback
