@@ -939,3 +939,92 @@ pub fn predict_all_batch(
         })
         .collect()
 }
+
+/// Compute exact RAM probabilities for each position in tokens.
+/// Returns Vec<Option<f64>> where Some(prob) is P(target|context) if exact match found.
+///
+/// This is a HUGE speedup over Python: ~287k positions × 5 n-grams = 1.4M lookups.
+/// Python loop: ~10+ minutes. Rust parallel: ~seconds.
+pub fn compute_exact_probs_batch(
+    exact_rams: &[(
+        usize,
+        std::collections::HashMap<Vec<u64>, std::collections::HashMap<String, u32>>,
+    )],
+    word_to_bits: &FxHashMap<String, u64>,
+    tokens: &[String],
+) -> Vec<Option<f64>> {
+    use rayon::prelude::*;
+
+    if tokens.len() <= MAX_NGRAM {
+        return vec![];
+    }
+
+    // Build exact RAMs (sorted by n descending for search order)
+    let mut exact_ram_structs: Vec<PretrainedExactRAM> = exact_rams
+        .iter()
+        .map(|(n, contexts)| PretrainedExactRAM::new(*n, contexts))
+        .collect();
+    exact_ram_structs.sort_by(|a, b| b.n.cmp(&a.n)); // Descending n order
+
+    let exact_ram_structs = Arc::new(exact_ram_structs);
+    let word_to_bits = Arc::new(word_to_bits.clone());
+    let tokens = Arc::new(tokens.to_vec());
+
+    let n_positions = tokens.len() - MAX_NGRAM;
+
+    (0..n_positions)
+        .into_par_iter()
+        .map(|pos| {
+            let context_start = pos;
+            let context_end = pos + MAX_NGRAM;
+            let target = &tokens[context_end];
+
+            // Search exact RAMs from largest n to smallest
+            for exact_ram in exact_ram_structs.iter() {
+                if exact_ram.n > MAX_NGRAM {
+                    continue;
+                }
+
+                // Get context slice for this n
+                let ctx_start = context_end - exact_ram.n;
+                let ctx: Vec<&str> = tokens[ctx_start..context_end]
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect();
+
+                // Encode context to bits
+                let ctx_bits = exact_ram.encode_context(&ctx, &word_to_bits);
+
+                // Look up in exact RAM
+                if let Some(counts) = exact_ram.contexts.get(&ctx_bits) {
+                    if counts.is_empty() {
+                        continue;
+                    }
+
+                    let total: u32 = counts.values().sum();
+
+                    // Find most common word and its count
+                    let (_, best_count) = counts
+                        .iter()
+                        .max_by(|(_, &count_a), (_, &count_b)| count_a.cmp(&count_b))
+                        .unwrap();
+
+                    let conf = *best_count as f64 / total as f64;
+
+                    // Confidence check: conf > 0.2 or total >= 3
+                    if conf > 0.2 || total >= 3 {
+                        let target_count = counts.get(target).copied().unwrap_or(0);
+                        let prob = if total > 0 {
+                            target_count as f64 / total as f64
+                        } else {
+                            0.0
+                        };
+                        return Some(prob);
+                    }
+                }
+            }
+
+            None // No exact match found
+        })
+        .collect()
+}

@@ -331,6 +331,26 @@ fn predict_all_batch_hybrid(
     })
 }
 
+/// Compute exact RAM probabilities in parallel (HUGE speedup over Python)
+/// Returns Vec<Option<f64>> where Some(prob) is P(target|context) if exact match found.
+/// Python: ~10+ min for 287k tokens. Rust: ~seconds.
+#[pyfunction]
+fn compute_exact_probs_batch(
+    py: Python<'_>,
+    exact_rams: Vec<(
+        usize,
+        std::collections::HashMap<Vec<u64>, std::collections::HashMap<String, u32>>,
+    )>,
+    word_to_bits: std::collections::HashMap<String, u64>,
+    tokens: Vec<String>,
+) -> PyResult<Vec<Option<f64>>> {
+    py.allow_threads(|| {
+        let word_map: FxHashMap<String, u64> = word_to_bits.into_iter().collect();
+        let results = ram::compute_exact_probs_batch(&exact_rams, &word_map, &tokens);
+        Ok(results)
+    })
+}
+
 /// Python module definition
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -347,5 +367,7 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(predict_all_batch_cpu, m)?)?;
     m.add_function(wrap_pyfunction!(predict_all_batch_metal, m)?)?;
     m.add_function(wrap_pyfunction!(predict_all_batch_hybrid, m)?)?;
+    // Exact probs acceleration
+    m.add_function(wrap_pyfunction!(compute_exact_probs_batch, m)?)?;
     Ok(())
 }

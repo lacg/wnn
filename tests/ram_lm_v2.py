@@ -1389,9 +1389,18 @@ class RAMLM_v2:
 			log("║  PRE-OPTIMIZATION BASELINE EVALUATION                            ║")
 			log("╚══════════════════════════════════════════════════════════════════╝")
 
+			# Check if Rust exact_probs is available (HUGE speedup: 10+ min → seconds)
+			has_rust_exact_probs = ACCEL_RUST_AVAILABLE and hasattr(ram_accelerator, 'compute_exact_probs_batch')
+
 			# Helper to compute exact_probs for a token set (needed for PPL calculation)
 			def compute_exact_probs(tokens_to_eval):
 				"""Compute exact_probs (from exact RAMs) - P(target|context) or None."""
+				# Use Rust accelerator if available (parallel across all positions)
+				if has_rust_exact_probs:
+					_, exact_rams_export, w2b = self._export_rams_for_rust()
+					return ram_accelerator.compute_exact_probs_batch(exact_rams_export, w2b, tokens_to_eval)
+
+				# Fallback to Python (slow for large datasets)
 				eval_size = len(tokens_to_eval) - MAX_NGRAM
 				exact_probs = []
 				for i in range(eval_size):
@@ -1603,7 +1612,7 @@ class RAMLM_v2:
 				global_baseline_ratio = initial_val_ppl / initial_ppl if initial_ppl > 0 else 1.0
 				log(f"  Initial PERPLEXITY: train={initial_ppl:.1f}, val={initial_val_ppl:.1f}")
 				log(f"  Global baseline ratio: {global_baseline_ratio:.2f}x (val/train)")
-				log(f"  Overfitting thresholds: <{HEALTHY_THRESHOLD}% healthy, >{WARNING_THRESHOLD}% warn, >{CRITICAL_THRESHOLD}% stop")
+				log(f"  Overfitting thresholds: <{HEALTHY_THRESHOLD}% healthy, >{WARNING_THRESHOLD}% warn, >{SEVERE_THRESHOLD}% severe, >{CRITICAL_THRESHOLD}% stop")
 				log("")
 			else:
 				# VERIFICATION: This should match previous RAM's final perplexity!
