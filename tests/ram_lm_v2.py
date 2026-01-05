@@ -31,8 +31,9 @@ from typing import Optional
 from joblib import Parallel, delayed
 import multiprocessing
 
-from wnn.ram.enums import BenchmarkMode, TokenizerType
+from wnn.ram.enums import BenchmarkMode
 from wnn.ram.strategies import PerplexityCalculator
+from wnn.tokenizers import TokenizerType, TokenizerFactory, Tokenizer
 
 # Number of parallel workers (leave some cores for system)
 N_WORKERS = max(1, multiprocessing.cpu_count() - 4)  # 12 on 16-core M4 Max
@@ -51,55 +52,82 @@ except ImportError:
 # ============================================================================
 # TOKENIZER FACTORY - For fair comparison to published benchmarks
 # ============================================================================
-def get_tokenizer(tokenizer_type: TokenizerType):
+def get_tokenizer(tokenizer_type: TokenizerType, bpe_vocab_size: int = 32000):
 	"""
 	Get tokenizer function based on type.
 
+	Uses the new wnn.tokenizers module for consistent tokenization.
+
 	Published WikiText-2 perplexity benchmarks:
-	- Word-level (WIKITEXT_WORD): LSTM ~65-100, AWD-LSTM ~57
-	- GPT-2 BPE (GPT2_BPE): GPT-2 Small ~29, GPT-2 Large ~22
+	- Word-level (WORD): LSTM ~65-100, AWD-LSTM ~57
+	- GPT-2 BPE (GPT2): GPT-2 Small ~29, GPT-2 Large ~22
 
 	Note: Word-level and BPE perplexities are NOT directly comparable!
+
+	Args:
+		tokenizer_type: Type of tokenizer to use
+		bpe_vocab_size: Vocabulary size for trainable BPE (default 32k)
+
+	Returns:
+		Tuple of (tokenize_function, tokenizer_instance)
 	"""
 	import re
 
-	if tokenizer_type == TokenizerType.SIMPLE:
+	if tokenizer_type == TokenizerType.SIMPLE_WORD:
 		# Original simple tokenizer (not standard, just for testing)
 		def tokenize(text):
 			return re.findall(r"\w+|[^\w\s]", text.lower())
-		return tokenize, None  # No special vocab
-
-	elif tokenizer_type == TokenizerType.WIKITEXT_WORD:
-		# Standard WikiText-2 word-level preprocessing
-		# - Lowercase (optional, some benchmarks don't)
-		# - Keep punctuation as tokens
-		# - Replace rare words with <unk> (we skip this, just use all words)
-		def tokenize(text):
-			# WikiText uses space-separated tokens with special handling
-			# Raw WikiText-2 has tokens separated by spaces
-			tokens = text.split()
-			# Filter empty and normalize
-			tokens = [t for t in tokens if t.strip()]
-			return tokens
 		return tokenize, None
 
-	elif tokenizer_type == TokenizerType.GPT2_BPE:
-		# GPT-2 BPE tokenization - requires tiktoken
+	elif tokenizer_type == TokenizerType.WORD:
+		# Standard WikiText-2 word-level preprocessing
+		# Raw WikiText-2 has tokens separated by spaces
+		def tokenize(text):
+			tokens = text.split()
+			return [t for t in tokens if t.strip()]
+		return tokenize, None
+
+	elif tokenizer_type == TokenizerType.GPT2:
+		# Pre-trained GPT-2 BPE tokenization
 		try:
-			import tiktoken
-			enc = tiktoken.get_encoding("gpt2")
+			tokenizer = TokenizerFactory.create(TokenizerType.GPT2)
 
 			def tokenize(text):
-				# Returns token IDs, we convert to strings for compatibility
-				token_ids = enc.encode(text)
-				# Convert IDs to string representation for our word-based model
+				# Returns token IDs as strings for compatibility with our word-based model
+				token_ids = tokenizer.encode(text)
 				return [str(tid) for tid in token_ids]
 
-			return tokenize, enc
-		except ImportError:
-			print("WARNING: tiktoken not installed. Install with: pip install tiktoken")
-			print("Falling back to WIKITEXT_WORD tokenizer.")
-			return get_tokenizer(TokenizerType.WIKITEXT_WORD)
+			return tokenize, tokenizer
+		except ImportError as e:
+			print(f"WARNING: GPT-2 tokenizer unavailable: {e}")
+			print("Falling back to WORD tokenizer.")
+			return get_tokenizer(TokenizerType.WORD)
+
+	elif tokenizer_type == TokenizerType.BPE:
+		# Trainable BPE - needs to be trained on corpus before use
+		# Returns the tokenizer instance; caller must train it
+		tokenizer = TokenizerFactory.create(
+			TokenizerType.BPE,
+			vocab_size=bpe_vocab_size,
+			show_progress=True
+		)
+
+		def tokenize(text):
+			# After training, encode returns token IDs as strings
+			token_ids = tokenizer.encode(text)
+			return [str(tid) for tid in token_ids]
+
+		return tokenize, tokenizer
+
+	elif tokenizer_type == TokenizerType.CHARACTER:
+		# Character-level tokenization
+		tokenizer = TokenizerFactory.create(TokenizerType.CHARACTER)
+
+		def tokenize(text):
+			# Return characters as tokens
+			return list(text)
+
+		return tokenize, tokenizer
 
 	else:
 		raise ValueError(f"Unknown tokenizer type: {tokenizer_type}")
@@ -2101,7 +2129,7 @@ def run_benchmark(
 	mode: BenchmarkMode = BenchmarkMode.FAST,
 	run_id: int = 1,
 	seed: int = None,
-	tokenizer_type: TokenizerType = TokenizerType.WIKITEXT_WORD,
+	tokenizer_type: TokenizerType = TokenizerType.WORD,
 	n_neurons: int = None,
 	bits_per_neuron: int = None,
 	cascade_threshold: float = 0.1,
@@ -2154,13 +2182,21 @@ def run_benchmark(
 		dataset = load_dataset("wikitext", "wikitext-2-raw-v1")
 
 		# Get tokenizer based on parameter
-		tokenize, _ = get_tokenizer(tokenizer_type)
+		tokenize, tokenizer_instance = get_tokenizer(tokenizer_type)
 
 		train_text = " ".join(dataset["train"]["text"])
 		test_text = " ".join(dataset["test"]["text"])
 		validation_text = " ".join(dataset["validation"]["text"])
 
-		# Tokenize full corpora first
+		# For trainable tokenizers (BPE, CHARACTER), train on the corpus first
+		if tokenizer_instance is not None and hasattr(tokenizer_instance, 'is_trainable') and tokenizer_instance.is_trainable:
+			if not tokenizer_instance.is_trained:
+				log(f"Training {tokenizer_type.name} tokenizer on corpus...")
+				# Train on training text only (not test/val to avoid data leakage)
+				tokenizer_instance.train([train_text])
+				log(f"  Vocabulary size: {tokenizer_instance.vocab_size:,}")
+
+		# Tokenize full corpora
 		all_train_tokens = tokenize(train_text)
 		all_test_tokens = tokenize(test_text)
 		all_validation_tokens = tokenize(validation_text)
@@ -2432,7 +2468,7 @@ def run_benchmark(
 def run_multi_benchmark(
 	n_runs: int = 3,
 	mode: BenchmarkMode = BenchmarkMode.FULL,
-	tokenizer_type: TokenizerType = TokenizerType.WIKITEXT_WORD,
+	tokenizer_type: TokenizerType = TokenizerType.WORD,
 	n_neurons: int = None,
 	bits_per_neuron: int = None,
 	cascade_threshold: float = 0.1,
@@ -2575,8 +2611,8 @@ if __name__ == "__main__":
 	parser.add_argument("--overnight", action="store_true", help="Run extended overnight benchmark (GA 48×1000, TS 48×1000 with early stopping)")
 	parser.add_argument("--runs", type=int, default=1, help="Number of runs (default: 1)")
 	parser.add_argument("--tokenizer", type=str, default="word",
-		choices=["simple", "word", "gpt2"],
-		help="Tokenizer: simple (original), word (WikiText-2 standard), gpt2 (BPE)")
+		choices=["simple", "word", "bpe", "gpt2", "char"],
+		help="Tokenizer: simple, word (WikiText-2), bpe (trainable 32k), gpt2 (50k), char")
 	parser.add_argument("--neurons", type=int, default=None,
 		help="Number of neurons per RAM (default: 16 FAST, 64 FULL/OVERNIGHT)")
 	parser.add_argument("--bits", type=int, default=None,
@@ -2590,7 +2626,13 @@ if __name__ == "__main__":
 	args = parser.parse_args()
 
 	# Map tokenizer arg to enum
-	tokenizer_map = {"simple": TokenizerType.SIMPLE, "word": TokenizerType.WIKITEXT_WORD, "gpt2": TokenizerType.GPT2_BPE}
+	tokenizer_map = {
+		"simple": TokenizerType.SIMPLE_WORD,
+		"word": TokenizerType.WORD,
+		"bpe": TokenizerType.BPE,
+		"gpt2": TokenizerType.GPT2,
+		"char": TokenizerType.CHARACTER,
+	}
 	tokenizer_type = tokenizer_map[args.tokenizer]
 
 	# Determine mode from flags
