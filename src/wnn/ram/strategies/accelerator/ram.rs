@@ -9,6 +9,10 @@ use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Maximum n-gram order (6 = use 6-grams, predict 7th token from 6-token context)
+/// Must match MAX_NGRAM in Python (ram_lm_v2.py)
+pub const MAX_NGRAM: usize = 6;
+
 /// A single RAM neuron that stores WORD COUNTS at each address
 /// This matches Python's: self.ram = defaultdict(Counter)
 pub struct RAMNeuron {
@@ -305,10 +309,10 @@ pub fn evaluate_cascade<S: AsRef<str>>(
 
     // Evaluate cascade - try higher n first
     let mut correct = 0u32;
-    let total = eval_subset.min(test_tokens.len().saturating_sub(6));  // Need at least n=6 context
+    let total = eval_subset.min(test_tokens.len().saturating_sub(MAX_NGRAM));  // Need at least MAX_NGRAM context
 
     for i in 0..total {
-        let target = test_tokens[i + 6].as_ref();
+        let target = test_tokens[i + MAX_NGRAM].as_ref();
 
         // Try each RAM from highest n to lowest
         let mut predicted = false;
@@ -316,7 +320,7 @@ pub fn evaluate_cascade<S: AsRef<str>>(
             if i + n > test_tokens.len() - 1 {
                 continue;
             }
-            let context: Vec<&str> = test_tokens[i + 6 - n..i + 6]
+            let context: Vec<&str> = test_tokens[i + MAX_NGRAM - n..i + MAX_NGRAM]
                 .iter()
                 .map(|s| s.as_ref())
                 .collect();
@@ -400,7 +404,7 @@ pub fn evaluate_fullnetwork<S: AsRef<str>>(
 
     // Evaluate full network
     let mut correct = 0u32;
-    let total = eval_subset.min(test_tokens.len().saturating_sub(6)).min(exact_results.len());
+    let total = eval_subset.min(test_tokens.len().saturating_sub(MAX_NGRAM)).min(exact_results.len());
 
     for i in 0..total {
         // Check if exact RAM covers this position
@@ -411,7 +415,7 @@ pub fn evaluate_fullnetwork<S: AsRef<str>>(
             }
         } else {
             // No exact coverage - try generalized RAM cascade, then voting fallback
-            let target = test_tokens[i + 6].as_ref();
+            let target = test_tokens[i + MAX_NGRAM].as_ref();
             let mut found_confident = false;
 
             // Try each RAM from highest n to lowest (cascade)
@@ -419,7 +423,7 @@ pub fn evaluate_fullnetwork<S: AsRef<str>>(
                 if i + n > test_tokens.len() - 1 {
                     continue;
                 }
-                let context: Vec<&str> = test_tokens[i + 6 - n..i + 6]
+                let context: Vec<&str> = test_tokens[i + MAX_NGRAM - n..i + MAX_NGRAM]
                     .iter()
                     .map(|s| s.as_ref())
                     .collect();
@@ -442,10 +446,10 @@ pub fn evaluate_fullnetwork<S: AsRef<str>>(
                 let mut votes: std::collections::HashMap<u32, f32> = std::collections::HashMap::new();
 
                 for (ram_idx, &n) in n_values.iter().enumerate() {
-                    if i + 6 < n {
+                    if i + MAX_NGRAM < n {
                         continue;
                     }
-                    let context: Vec<&str> = test_tokens[i + 6 - n..i + 6]
+                    let context: Vec<&str> = test_tokens[i + MAX_NGRAM - n..i + MAX_NGRAM]
                         .iter()
                         .map(|s| s.as_ref())
                         .collect();
@@ -541,13 +545,13 @@ pub fn evaluate_fullnetwork_perplexity<S: AsRef<str>>(
 
     // Evaluate perplexity
     let mut total_cross_entropy = 0.0f64;
-    let total = eval_subset.min(test_tokens.len().saturating_sub(6)).min(exact_probs.len());
+    let total = eval_subset.min(test_tokens.len().saturating_sub(MAX_NGRAM)).min(exact_probs.len());
 
     // Minimum probability to avoid -inf (equivalent to vocab_size uniform)
     let min_prob = 1.0 / (vocab_size as f64);
 
     for i in 0..total {
-        let target = test_tokens[i + 6].as_ref();
+        let target = test_tokens[i + MAX_NGRAM].as_ref();
 
         // Get probability for this position
         let prob: f64 = if let Some(exact_prob) = exact_probs[i] {
@@ -559,10 +563,10 @@ pub fn evaluate_fullnetwork_perplexity<S: AsRef<str>>(
 
             // Try each RAM from highest n to lowest (cascade)
             for (ram_idx, &n) in n_values.iter().enumerate().rev() {
-                if i + 6 < n {
+                if i + MAX_NGRAM < n {
                     continue;
                 }
-                let context: Vec<&str> = test_tokens[i + 6 - n..i + 6]
+                let context: Vec<&str> = test_tokens[i + MAX_NGRAM - n..i + MAX_NGRAM]
                     .iter()
                     .map(|s| s.as_ref())
                     .collect();
@@ -590,10 +594,10 @@ pub fn evaluate_fullnetwork_perplexity<S: AsRef<str>>(
                 let mut total_weight = 0.0f32;
 
                 for (ram_idx, &n) in n_values.iter().enumerate() {
-                    if i + 6 < n {
+                    if i + MAX_NGRAM < n {
                         continue;
                     }
-                    let context: Vec<&str> = test_tokens[i + 6 - n..i + 6]
+                    let context: Vec<&str> = test_tokens[i + MAX_NGRAM - n..i + MAX_NGRAM]
                         .iter()
                         .map(|s| s.as_ref())
                         .collect();
@@ -896,13 +900,14 @@ pub fn predict_all_batch(
     let word_to_bits = Arc::new(word_to_bits.clone());
     let test_tokens = Arc::new(test_tokens.to_vec());
 
-    let n_positions = test_tokens.len().saturating_sub(6);
+    let n_positions = test_tokens.len().saturating_sub(MAX_NGRAM);
 
     // Parallel prediction over all positions
+    // Use MAX_NGRAM-token contexts to predict token at i+MAX_NGRAM
     (0..n_positions)
         .into_par_iter()
         .map(|i| {
-            let context: Vec<&str> = test_tokens[i..i + 5]
+            let context: Vec<&str> = test_tokens[i..i + MAX_NGRAM]
                 .iter()
                 .map(|s| s.as_str())
                 .collect();

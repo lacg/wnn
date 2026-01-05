@@ -47,6 +47,10 @@ from wnn.representations import RepresentationType, create_encoder
 # Number of parallel workers (leave some cores for system)
 N_WORKERS = max(1, multiprocessing.cpu_count() - 4)  # 12 on 16-core M4 Max
 
+# Maximum n-gram order (6 = use 6-grams, predict 7th token from 6-token context)
+# This is used for indexing: context = tokens[i:i+MAX_NGRAM], target = tokens[i+MAX_NGRAM]
+MAX_NGRAM = 6
+
 # ============================================================================
 # RUST ACCELERATOR (822x speedup over Python!)
 # ============================================================================
@@ -1188,7 +1192,7 @@ class RAMLM_v2:
 			test_tokens = tokens[train_subset:train_subset + num_windows * window_size]
 			log(f"Single-window fallback: {len(test_tokens):,} eval tokens")
 
-		eval_total = len(test_tokens) - 6  # Usable positions (need 6 for context)
+		eval_total = len(test_tokens) - MAX_NGRAM  # Usable positions (need MAX_NGRAM for context)
 		# Split eval into train (for optimization) and validation (for overfitting detection)
 		eval_train = int(eval_total * 0.67)  # ~13k for optimization
 		eval_val = eval_total - eval_train    # ~7k for validation
@@ -1239,12 +1243,12 @@ class RAMLM_v2:
 		# exact_probs[i] = P(target|context) if covered by exact RAM, None if not covered
 		exact_probs_train = []
 		exact_results = []
-		for i in range(min(eval_total, len(test_tokens) - 6)):
-			target = test_tokens[i + 6]
+		for i in range(min(eval_total, len(test_tokens) - MAX_NGRAM)):
+			target = test_tokens[i + MAX_NGRAM]
 			exact_prob = None
 			exact_pred = None
 			for n in sorted(self.exact_rams.keys(), reverse=True):
-				ctx = tuple(test_tokens[i + 6 - n:i + 6])
+				ctx = tuple(test_tokens[i + MAX_NGRAM - n:i + MAX_NGRAM])
 				if ctx in self.exact_rams[n]:
 					counts = self.exact_rams[n][ctx]
 					total = sum(counts.values())
@@ -1269,13 +1273,13 @@ class RAMLM_v2:
 		# Pre-calculate exact RAM probabilities for VALIDATION (WikiText-2 validation split)
 		# This is DIFFERENT articles from train - detects true generalization issues
 		val_tokens_for_eval = validation_tokens if validation_tokens is not None else test_tokens
-		val_eval_size = min(5000, len(val_tokens_for_eval) - 6)  # Use 5k from validation split
+		val_eval_size = min(5000, len(val_tokens_for_eval) - MAX_NGRAM)  # Use 5k from validation split
 		exact_probs_val = []
 		for i in range(val_eval_size):
-			target = val_tokens_for_eval[i + 6]
+			target = val_tokens_for_eval[i + MAX_NGRAM]
 			exact_prob = None
 			for n in sorted(self.exact_rams.keys(), reverse=True):
-				ctx = tuple(val_tokens_for_eval[i + 6 - n:i + 6])
+				ctx = tuple(val_tokens_for_eval[i + MAX_NGRAM - n:i + MAX_NGRAM])
 				if ctx in self.exact_rams[n]:
 					counts = self.exact_rams[n][ctx]
 					total = sum(counts.values())
@@ -1340,7 +1344,7 @@ class RAMLM_v2:
 		self._pre_optimization_test_ppl = None
 		self._pre_optimization_val_ppl = None
 		self._cached_test_exact_probs = None  # Cache for reuse in final evaluation
-		if final_test_tokens is not None and len(final_test_tokens) > 6:
+		if final_test_tokens is not None and len(final_test_tokens) > MAX_NGRAM:
 			log("")
 			log("╔══════════════════════════════════════════════════════════════════╗")
 			log("║  PRE-OPTIMIZATION BASELINE EVALUATION                            ║")
@@ -1349,13 +1353,13 @@ class RAMLM_v2:
 			# Helper function to compute exact_probs and PPL for a token set
 			def compute_exact_probs_and_ppl(tokens_to_eval):
 				"""Compute exact_probs (from exact RAMs) and perplexity."""
-				eval_size = len(tokens_to_eval) - 6  # Full dataset
+				eval_size = len(tokens_to_eval) - MAX_NGRAM  # Full dataset
 				exact_probs = []
 				for i in range(eval_size):
-					target = tokens_to_eval[i + 6]
+					target = tokens_to_eval[i + MAX_NGRAM]
 					exact_prob = None
 					for n in sorted(self.exact_rams.keys(), reverse=True):
-						ctx = tuple(tokens_to_eval[i + 6 - n:i + 6])
+						ctx = tuple(tokens_to_eval[i + MAX_NGRAM - n:i + MAX_NGRAM])
 						if ctx in self.exact_rams[n]:
 							counts = self.exact_rams[n][ctx]
 							total = sum(counts.values())
@@ -1674,11 +1678,11 @@ class RAMLM_v2:
 
 		min_prob = 1.0 / vocab_size
 		total_log_prob = 0.0
-		n_values = [2, 3, 4, 5, 6]
+		n_values = list(range(2, MAX_NGRAM + 1))  # [2, 3, 4, 5, 6] for MAX_NGRAM=6
 
-		total = min(eval_subset, len(test_tokens) - 6)
+		total = min(eval_subset, len(test_tokens) - MAX_NGRAM)
 		for i in range(total):
-			target = test_tokens[i + 6]
+			target = test_tokens[i + MAX_NGRAM]
 
 			# Use pre-computed exact prob if available
 			if exact_probs[i] is not None:
@@ -1689,7 +1693,7 @@ class RAMLM_v2:
 				for n in reversed(n_values):
 					if n not in self.generalized_rams:
 						continue
-					context = test_tokens[max(0, i+6-n):i+6]
+					context = test_tokens[max(0, i + MAX_NGRAM - n):i + MAX_NGRAM]
 					if len(context) < n:
 						continue
 					pred, conf = self.generalized_rams[n].predict(context)
@@ -1707,7 +1711,7 @@ class RAMLM_v2:
 					for n in n_values:
 						if n not in self.generalized_rams:
 							continue
-						context = test_tokens[max(0, i+6-n):i+6]
+						context = test_tokens[max(0, i + MAX_NGRAM - n):i + MAX_NGRAM]
 						if len(context) < n:
 							continue
 						pred, conf = self.generalized_rams[n].predict(context)
@@ -1977,12 +1981,12 @@ class RAMLM_v2:
 
 		Uses Rust accelerator when available for maximum performance (rayon CPU parallelism).
 
-		Returns: List of dicts, one per position (len = len(tokens) - 6)
+		Returns: List of dicts, one per position (len = len(tokens) - MAX_NGRAM)
 		"""
 		if n_workers is None:
 			n_workers = get_effective_cores(ACCELERATION_MODE)
 
-		n_positions = len(tokens) - 6
+		n_positions = len(tokens) - MAX_NGRAM
 		if n_positions <= 0:
 			return []
 
@@ -1996,7 +2000,8 @@ class RAMLM_v2:
 				print(f"  [Rust prediction failed: {e}, using Python]", file=sys.stderr)
 
 		# Python fallback with joblib parallelism
-		contexts = [tokens[i:i + 5] for i in range(n_positions)]
+		# Use MAX_NGRAM-token contexts to predict token at i+MAX_NGRAM
+		contexts = [tokens[i:i + MAX_NGRAM] for i in range(n_positions)]
 		chunk_size = max(1000, n_positions // n_workers)
 
 		def process_chunk(start_idx: int, end_idx: int) -> list[dict]:
@@ -2533,6 +2538,35 @@ class RAMLM_v2:
 		method, (word, conf) = sorted_preds[0]
 		return word, f"ram_meta_fallback({method})", conf
 
+	def _compute_exact_probs(self, tokens: list[str]) -> list:
+		"""
+		Pre-compute exact RAM probabilities for P(target) calculation.
+
+		This gives the ACTUAL probability of the target word from exact RAM
+		count distributions, not just winner confidence. Essential for
+		accurate perplexity calculation.
+
+		Returns: List of (exact_prob or None) for each position
+		"""
+		eval_size = len(tokens) - MAX_NGRAM
+		exact_probs = []
+		for i in range(eval_size):
+			target = tokens[i + MAX_NGRAM]
+			exact_prob = None
+			for n in sorted(self.exact_rams.keys(), reverse=True):
+				ctx = tuple(tokens[i + MAX_NGRAM - n:i + MAX_NGRAM])
+				if ctx in self.exact_rams[n]:
+					counts = self.exact_rams[n][ctx]
+					total = sum(counts.values())
+					_, count = counts.most_common(1)[0]
+					conf = count / total
+					if conf > 0.2 or total >= 3:
+						target_count = counts.get(target, 0)
+						exact_prob = target_count / total if total > 0 else 0.0
+						break
+			exact_probs.append(exact_prob)
+		return exact_probs
+
 	def evaluate_voting_strategies(self, tokens: list[str], max_samples: int = None) -> dict:
 		"""
 		Compare all voting strategies (accuracy and perplexity).
@@ -2543,8 +2577,8 @@ class RAMLM_v2:
 				Pass the same value as main evaluation's eval_subset for consistency.
 
 		IMPORTANT: Uses PerplexityCalculator for consistent PPL calculation.
-		For "cascade" strategy, uses cached predictions to match the logic in
-		_evaluate_perplexity_python (TRUE perplexity with partial credit).
+		For "cascade" strategy, uses exact_probs (actual P(target) from count
+		distributions) to match the main evaluation's perplexity calculation.
 
 		ACCELERATED: Pre-computes all predictions in parallel, then evaluates
 		strategies using cached predictions. RAM_META still runs sequentially
@@ -2567,11 +2601,15 @@ class RAMLM_v2:
 			calculators[f"thresh_{t:.2f}"] = PerplexityCalculator(vocab_size)
 
 		# Limit tokens if max_samples specified (for consistency with main eval)
-		n_available = len(tokens) - 6
+		n_available = len(tokens) - MAX_NGRAM
 		if max_samples is not None and max_samples < n_available:
-			eval_tokens = tokens[:max_samples + 6]  # Need 6 extra for context
+			eval_tokens = tokens[:max_samples + MAX_NGRAM]  # Need MAX_NGRAM extra for context
 		else:
 			eval_tokens = tokens
+
+		# Pre-compute exact_probs for accurate P(target) from exact RAMs
+		# This is CRITICAL: cached predictions only have winner, not full distribution
+		exact_probs = self._compute_exact_probs(eval_tokens)
 
 		# Pre-compute all predictions in parallel (KEY ACCELERATION!)
 		all_predictions = self._precompute_all_predictions(eval_tokens)
@@ -2580,14 +2618,19 @@ class RAMLM_v2:
 		if hasattr(self, 'ram_meta'):
 			self.ram_meta.reset_state()
 
+		min_prob = 1.0 / vocab_size
+
 		# Evaluate each position using cached predictions
 		for i, predictions in enumerate(all_predictions):
-			context = eval_tokens[i:i + 5]
-			target = eval_tokens[i + 5]
+			context = eval_tokens[i:i + MAX_NGRAM]  # MAX_NGRAM-token context to predict i+MAX_NGRAM
+			target = eval_tokens[i + MAX_NGRAM]
 
-			# CASCADE: Use cached predictions for acceleration (100x+ faster)
-			# This replicates _evaluate_perplexity_python logic using pre-computed data
-			cascade_prob = self._compute_target_probability_from_cached(predictions, target)
+			# CASCADE: Use exact_probs when available (matches main eval exactly)
+			if exact_probs[i] is not None:
+				cascade_prob = max(exact_probs[i], min_prob)
+			else:
+				# Fall back to cached predictions for generalized RAM cascade
+				cascade_prob = self._compute_target_probability_from_cached(predictions, target)
 			pred1, _, _ = self._predict_cascade_from_cached(predictions)
 			calculators["cascade"].add_from_probability(cascade_prob, is_correct=(pred1 == target))
 
@@ -2874,7 +2917,7 @@ class RAMLM_v2:
 		all_predictions = self._precompute_all_predictions(tokens)
 
 		for i, predictions in enumerate(all_predictions):
-			target = tokens[i + 6]  # Context is tokens[i:i+6], target is i+6
+			target = tokens[i + MAX_NGRAM]  # Context is tokens[i:i+MAX_NGRAM], target is i+MAX_NGRAM
 
 			# Use cached prediction instead of fresh lookup
 			pred, method, _ = self._predict_cascade_from_cached(predictions)
@@ -3086,17 +3129,17 @@ def run_benchmark(
 	# Calculate perplexity on FULL test set (no sampling - use cached data)
 	# exact_probs don't change during optimization (exact RAMs are dict-based)
 	# so we reuse the cached version from pre-optimization baseline
-	eval_subset = len(test_tokens) - 6  # Use all positions
+	eval_subset = len(test_tokens) - MAX_NGRAM  # Use all positions
 	exact_probs = getattr(model, '_cached_test_exact_probs', None)
 	if exact_probs is None:
 		# Fallback: compute if not cached (shouldn't happen in normal flow)
 		log("Computing exact_probs (not cached)...")
 		exact_probs = []
 		for i in range(eval_subset):
-			target = test_tokens[i + 6]
+			target = test_tokens[i + MAX_NGRAM]
 			exact_prob = None
 			for n in sorted(model.exact_rams.keys(), reverse=True):
-				ctx = tuple(test_tokens[i + 6 - n:i + 6])
+				ctx = tuple(test_tokens[i + MAX_NGRAM - n:i + MAX_NGRAM])
 				if ctx in model.exact_rams[n]:
 					counts = model.exact_rams[n][ctx]
 					total = sum(counts.values())

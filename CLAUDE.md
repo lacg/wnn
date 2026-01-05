@@ -295,10 +295,11 @@ The project includes a Rust/Metal accelerator for high-performance RAM evaluatio
 
 **Building the Accelerator:**
 ```bash
-# Activate virtual environment first (required for Python linking)
-source wnn/bin/activate
+# If CONDA_PREFIX is set (conflicts with VIRTUAL_ENV), use this one-liner:
+cd src/wnn/ram/strategies/accelerator && env -u CONDA_PREFIX bash -c 'source ../../../../wnn/bin/activate && maturin develop --release'
 
-# Build and install with maturin
+# Or manually (if no conda conflict):
+source wnn/bin/activate
 cd src/wnn/ram/strategies/accelerator
 maturin develop --release
 
@@ -306,7 +307,9 @@ maturin develop --release
 python -c "import ram_accelerator; print(ram_accelerator.cpu_cores())"
 ```
 
-**Important:** Never use `cargo build` directly - it will fail with Python linking errors. Always use `maturin develop --release` which handles Python bindings correctly.
+**Important:**
+- Never use `cargo build` directly - it will fail with Python linking errors. Always use `maturin develop --release` which handles Python bindings correctly.
+- If you see "Both VIRTUAL_ENV and CONDA_PREFIX are set" error, use `env -u CONDA_PREFIX` to unset conda before building.
 
 **Key Functions:**
 | Function | Description |
