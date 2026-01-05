@@ -190,15 +190,34 @@ With LSH, similar contexts map to nearby addresses → transfer learning.
 
 **Expected impact**: Enable generalization between semantically similar contexts.
 
-### 9. Dynamic Attention Mechanism
-- [ ] Move beyond fixed n-gram windows (2-6 tokens)
-- [ ] Implement variable-length context selection
-- [ ] Learn which context positions matter for prediction
-- [ ] Consider sparse attention patterns for efficiency
+### 9. Dynamic Attention Mechanism ✅ COMPLETE
+- [x] Move beyond fixed n-gram windows (2-6 tokens)
+- [x] Implement variable-length context selection
+- [x] Learn which context positions matter for prediction
+- [x] Consider sparse attention patterns for efficiency
 - [ ] Benchmark vs fixed n-gram cascade
 
+**Implementation** (`src/wnn/attention/`):
+- `base.py`: Abstract `AttentionMechanism` with train/get_weights/get_top_positions
+  - `PositionAttention`: Learn position importance from prediction accuracy correlation
+  - `ContentAttention`: TF-IDF-like word importance (rare words → higher weight)
+  - `HybridAttention`: Combine position and content attention (α weighting)
+- `sparse.py`: Sparse attention patterns
+  - `SparseAttention`: Top-k position selection with adaptive k
+  - `WindowedSparseAttention`: Local + global pattern (like Longformer)
+- `__init__.py`: `AttentionFactory`, `AttentionType` IntEnum
+
+**Usage**: `python tests/ram_lm_v2.py --attention hybrid` (or `position`, `content`, `sparse`)
+
+**Key features**:
+- **No neural networks**: Learn from frequency statistics, not backprop
+- Position weights from accuracy correlation (which positions predict correctly?)
+- Content weights from inverse document frequency (rare words are informative)
+- Sparse patterns: only attend to top-k positions (reduces RAM address space)
+- Windowed: local window + global tokens (like Longformer/BigBird)
+
 **Why it matters**: LLMs dynamically attend to relevant positions.
-RAM uses fixed windows - position 1 always matters same as position 5.
+RAM now learns which positions matter most for each context.
 
 **Expected impact**: Better context utilization, especially for long-range dependencies.
 
@@ -261,8 +280,8 @@ Our RAM sees only WikiText-2 (~2M tokens from Wikipedia).
 | 1 | **Subword Tokenization** | Medium | High (eliminates OOV) | ✅ Done |
 | 2 | **Kneser-Ney Smoothing** | Low | Medium (better fallback) | ✅ Done |
 | 3 | **LSH Context Hashing** | High | High (similarity-based generalization) | ✅ Done |
-| 4 | **Dynamic Attention** | High | Medium (better context selection) | 🔜 Next |
-| 5 | **Learned Representations** | Very High | Very High (semantic encoding) | |
+| 4 | **Dynamic Attention** | High | Medium (better context selection) | ✅ Done |
+| 5 | **Learned Representations** | Very High | Very High (semantic encoding) | 🔜 Next |
 | 6 | **Pre-training Scale** | Infrastructure | High (coverage) | |
 
 ---

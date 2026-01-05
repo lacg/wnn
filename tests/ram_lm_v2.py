@@ -35,6 +35,7 @@ from wnn.ram.enums import BenchmarkMode
 from wnn.ram.strategies import PerplexityCalculator
 from wnn.tokenizers import TokenizerType, TokenizerFactory, Tokenizer
 from wnn.lsh import RandomProjectionHasher, SimHasher, LSHType
+from wnn.attention import AttentionType, create_attention
 
 # Number of parallel workers (leave some cores for system)
 N_WORKERS = max(1, multiprocessing.cpu_count() - 4)  # 12 on 16-core M4 Max
@@ -809,7 +810,8 @@ class RAMLM_v2:
 	def __init__(self, freq_threshold: int = 50, mode: BenchmarkMode = BenchmarkMode.FAST,
 				 n_neurons: int = None, bits_per_neuron: int = None, cascade_threshold: float = 0.1,
 				 strategy_sequence: list = None, smoothing_type: str = "none",
-				 use_lsh: bool = False, lsh_type: str = "simhash"):
+				 use_lsh: bool = False, lsh_type: str = "simhash",
+				 attention_type: AttentionType = AttentionType.NONE):
 		self.freq_threshold = freq_threshold
 		self.mode = mode
 		self.word_counts = Counter()
@@ -818,6 +820,8 @@ class RAMLM_v2:
 		self.smoothing = None  # Trained during train()
 		self.use_lsh = use_lsh
 		self.lsh_type = lsh_type
+		self.attention_type = attention_type
+		self.attention = None  # Trained during train()
 
 		# Configurable parameters (with mode-based defaults)
 		if n_neurons is None:
@@ -882,6 +886,13 @@ class RAMLM_v2:
 				self.smoothing = AddKSmoothing(max_order=6, k=0.5)
 			self.smoothing.train(tokens)
 			log(f"  Vocab size: {self.smoothing.vocab_size:,}")
+
+		# Train attention mechanism if enabled
+		if self.attention_type != AttentionType.NONE:
+			log(f"Training {self.attention_type.name.lower()} attention...")
+			self.attention = create_attention(self.attention_type, max_context=6)
+			self.attention.train(tokens)
+			log(f"  Attention trained on {len(tokens):,} tokens")
 
 		# Train generalized RAMs with partial connectivity
 		lsh_label = f" + {self.lsh_type.upper()} LSH" if self.use_lsh else ""
@@ -1528,13 +1539,24 @@ class RAMLM_v2:
 					self.prediction_stats[method] += 1
 					return pred, method, conf
 
-		# 3. Fallback: vote across all scales
+		# 3. Fallback: vote across all scales (with optional attention weighting)
 		votes = Counter()
+
+		# Get attention weights if enabled
+		if self.attention is not None:
+			attn_weights = self.attention.get_weights(context[-6:])
+			# Average attention weight for context gives importance multiplier
+			attn_multiplier = float(attn_weights.mean()) * len(attn_weights)
+		else:
+			attn_multiplier = 1.0
+
 		for n, ram in self.generalized_rams.items():
 			if len(context) >= n:
 				pred, conf = ram.predict(context)
 				if pred:
-					votes[pred] += conf * n  # Weight by context length
+					# Weight by context length and attention importance
+					weight = conf * n * attn_multiplier
+					votes[pred] += weight
 
 		if votes:
 			best, score = votes.most_common(1)[0]
@@ -2222,6 +2244,7 @@ def run_benchmark(
 	smoothing_type: str = "none",
 	use_lsh: bool = False,
 	lsh_type: str = "simhash",
+	attention_type: AttentionType = AttentionType.NONE,
 ) -> BenchmarkRun:
 	"""Run the v2 benchmark."""
 	if seed is not None:
@@ -2348,10 +2371,13 @@ def run_benchmark(
 	log_separator()
 	model = RAMLM_v2(freq_threshold=30, mode=mode, n_neurons=n_neurons, bits_per_neuron=bits_per_neuron,
 					 cascade_threshold=cascade_threshold, strategy_sequence=strategy_sequence,
-					 smoothing_type=smoothing_type, use_lsh=use_lsh, lsh_type=lsh_type)
+					 smoothing_type=smoothing_type, use_lsh=use_lsh, lsh_type=lsh_type,
+					 attention_type=attention_type)
 	log(f"Model config: n_neurons={model.n_neurons}, bits_per_neuron={model.bits_per_neuron}, cascade_threshold={model.cascade_threshold}")
 	if smoothing_type != "none":
 		log(f"Smoothing: {smoothing_type}")
+	if attention_type != AttentionType.NONE:
+		log(f"Attention: {attention_type.name.lower()}")
 	if use_lsh:
 		log(f"LSH: {lsh_type} (similarity-preserving context hashing)")
 	log(f"Strategy sequence: {' → '.join(strategy_sequence)}")
@@ -2569,6 +2595,7 @@ def run_multi_benchmark(
 	smoothing_type: str = "none",
 	use_lsh: bool = False,
 	lsh_type: str = "simhash",
+	attention_type: AttentionType = AttentionType.NONE,
 ):
 	"""Run the benchmark multiple times and summarize results."""
 	if strategy_sequence is None:
@@ -2603,7 +2630,8 @@ def run_multi_benchmark(
 								   n_neurons=n_neurons, bits_per_neuron=bits_per_neuron,
 								   cascade_threshold=cascade_threshold, strategy_sequence=strategy_sequence,
 								   full_data=full_data, smoothing_type=smoothing_type,
-								   use_lsh=use_lsh, lsh_type=lsh_type)
+								   use_lsh=use_lsh, lsh_type=lsh_type,
+								   attention_type=attention_type)
 		runs.append(run_result)
 
 		# Save intermediate results
@@ -2727,6 +2755,9 @@ if __name__ == "__main__":
 	parser.add_argument("--lsh-type", type=str, default="simhash",
 		choices=["simhash", "random_projection"],
 		help="LSH algorithm: simhash (fast) or random_projection (learned embeddings)")
+	parser.add_argument("--attention", type=str, default="none",
+		choices=["none", "position", "content", "hybrid", "sparse"],
+		help="Attention mechanism: none (default), position, content, hybrid, sparse")
 	args = parser.parse_args()
 
 	# Map tokenizer arg to enum
@@ -2749,6 +2780,16 @@ if __name__ == "__main__":
 
 	# Parse strategy sequence
 	strategy_sequence = [s.strip().upper() for s in args.strategy.split(',')]
+
+	# Map attention arg to enum
+	attention_map = {
+		"none": AttentionType.NONE,
+		"position": AttentionType.POSITION,
+		"content": AttentionType.CONTENT,
+		"hybrid": AttentionType.HYBRID,
+		"sparse": AttentionType.SPARSE,
+	}
+	attention_type = attention_map[args.attention]
 
 	# Mode descriptions for logging
 	mode_descs = {
@@ -2777,6 +2818,9 @@ if __name__ == "__main__":
 	log(f"Cascade threshold: {args.threshold}")
 	log(f"Strategy: {' → '.join(strategy_sequence)}")
 	log(f"Data: {'FULL WikiText-2 (~2M train, ~245k test, ~214k val)' if args.full_data else 'sampled'}")
+	log(f"Smoothing: {args.smoothing}")
+	log(f"LSH: {'enabled (' + args.lsh_type + ')' if args.lsh else 'disabled'}")
+	log(f"Attention: {attention_type.name.lower()}")
 	log(f"Runs: {args.runs}")
 	if mode == BenchmarkMode.OVERNIGHT:
 		# Estimate: ~30 min per RAM × 5 RAMs × runs
@@ -2792,13 +2836,15 @@ if __name__ == "__main__":
 							n_neurons=args.neurons, bits_per_neuron=args.bits,
 							cascade_threshold=args.threshold, strategy_sequence=strategy_sequence,
 							full_data=args.full_data, smoothing_type=args.smoothing,
-							use_lsh=args.lsh, lsh_type=args.lsh_type)
+							use_lsh=args.lsh, lsh_type=args.lsh_type,
+							attention_type=attention_type)
 	else:
 		run_benchmark(mode=mode, tokenizer_type=tokenizer_type,
 					  n_neurons=args.neurons, bits_per_neuron=args.bits,
 					  cascade_threshold=args.threshold, strategy_sequence=strategy_sequence,
 					  full_data=args.full_data, smoothing_type=args.smoothing,
-					  use_lsh=args.lsh, lsh_type=args.lsh_type)
+					  use_lsh=args.lsh, lsh_type=args.lsh_type,
+					  attention_type=attention_type)
 
 	# Final log
 	log_separator()
