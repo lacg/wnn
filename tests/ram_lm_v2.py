@@ -1267,15 +1267,15 @@ class RAMLM_v2:
 		log(f"GA: {ga_pop} pop × {ga_gens} max gens (elite={ga_elitism} ({ga_elitism_pct*100:.0f}%), eval={ga_eval_per_gen}/gen)")
 		log(f"TS: {ts_neighbors} neighbors × {ts_iters} max iters")
 		log(f"Early stopping: <{early_stop_threshold_pct}% improvement over {(early_stop_patience+1)*5} gens/iters ({early_stop_patience+1} checks)")
-		if ACCEL_RUST_AVAILABLE:
-			if ACCELERATION_MODE == AccelerationMode.HYBRID and METAL_AVAILABLE:
+		match (ACCEL_RUST_AVAILABLE, ACCELERATION_MODE, METAL_AVAILABLE):
+			case (True, AccelerationMode.HYBRID, True):
 				log(f"Accelerator: Rust PERPLEXITY eval (HYBRID: {ACCEL_RUST_CORES} CPU + {METAL_GPU_CORES} GPU = {ACCEL_RUST_CORES + METAL_GPU_CORES} cores)")
-			elif ACCELERATION_MODE == AccelerationMode.METAL and METAL_AVAILABLE:
+			case (True, AccelerationMode.METAL, True):
 				log(f"Accelerator: Rust PERPLEXITY eval (METAL: {METAL_GPU_CORES} GPU cores)")
-			else:
+			case (True, _, _):
 				log(f"Accelerator: Rust PERPLEXITY eval (CPU: {ACCEL_RUST_CORES} threads)")
-		else:
-			log(f"Accelerator: Python (install ram_accelerator for speedup)")
+			case _:
+				log(f"Accelerator: Python (install ram_accelerator for speedup)")
 		log("")
 
 		# Pre-calculate exact RAM probabilities for OPTIMIZATION (from multi-window sampled training data)
