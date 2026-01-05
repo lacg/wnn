@@ -44,22 +44,24 @@ from wnn.representations.cooccurrence import CooccurrenceCodes
 
 class RepresentationType(IntEnum):
     """Binary representation learning strategies."""
-    COOCCURRENCE = 0    # SVD on co-occurrence matrix, binarized
-    MUTUAL_INFO = 1     # Iterative bit selection maximizing MI
-    RAM_LEARNED = 2     # RAM-based context → code learning
+    HASH = 0            # Simple hash-based encoding (fast, no learning, no generalization)
+    RAM_LEARNED = 1     # RAM-based context → code learning (fast, discrete)
+    MUTUAL_INFO = 2     # Iterative bit selection maximizing MI (medium speed)
+    COOCCURRENCE = 3    # SVD on co-occurrence matrix, binarized (SLOW, weighted NN baseline)
 
 
 class RepresentationFactory:
     """Factory for creating binary encoders."""
 
     _TYPE_TO_CLASS: dict[RepresentationType, Type[BinaryEncoder]] = {
-        RepresentationType.COOCCURRENCE: CooccurrenceCodes,
-        RepresentationType.MUTUAL_INFO: MutualInfoEncoder,
+        # HASH doesn't need an encoder - uses simple hash function
         RepresentationType.RAM_LEARNED: RAMBinaryEncoder,
+        RepresentationType.MUTUAL_INFO: MutualInfoEncoder,
+        RepresentationType.COOCCURRENCE: CooccurrenceCodes,
     }
 
     @classmethod
-    def create(cls, rep_type: RepresentationType, **kwargs) -> BinaryEncoder:
+    def create(cls, rep_type: RepresentationType, **kwargs) -> BinaryEncoder | None:
         """
         Create a binary encoder.
 
@@ -68,8 +70,12 @@ class RepresentationFactory:
             **kwargs: Encoder-specific parameters
 
         Returns:
-            BinaryEncoder instance
+            BinaryEncoder instance, or None for HASH type (no encoder needed)
         """
+        # HASH type uses simple hash function - no encoder needed
+        if rep_type == RepresentationType.HASH:
+            return None
+
         encoder_class = cls._TYPE_TO_CLASS.get(rep_type)
         if encoder_class is None:
             raise ValueError(f"Unknown representation type: {rep_type}")
@@ -80,7 +86,7 @@ class RepresentationFactory:
 def create_encoder(
     rep_type: RepresentationType = RepresentationType.RAM_LEARNED,
     **kwargs,
-) -> BinaryEncoder:
+) -> BinaryEncoder | None:
     """Convenience function to create a binary encoder."""
     return RepresentationFactory.create(rep_type, **kwargs)
 

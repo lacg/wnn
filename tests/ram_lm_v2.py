@@ -347,10 +347,15 @@ class GeneralizedNGramRAM:
 	With LSH enabled, similar contexts map to SIMILAR addresses, enabling:
 	- "the cat ate" ≈ "the dog ate" → can share learned patterns
 	- Better generalization for semantically related contexts
+
+	With learned encoder, similar words get similar binary codes:
+	- "cat" ≈ "dog" → similar addresses → shared learned patterns
+	- Enables semantic generalization (cat/dog both work in pet contexts)
 	"""
 
 	def __init__(self, n: int, n_neurons: int = 32, bits_per_neuron: int = 12,
-				 bits_per_word: int = 12, use_lsh: bool = False, lsh_type: str = "simhash"):
+				 bits_per_word: int = 12, use_lsh: bool = False, lsh_type: str = "simhash",
+				 encoder=None):
 		self.n = n
 		self.n_neurons = n_neurons
 		self.bits_per_neuron = bits_per_neuron
@@ -367,8 +372,32 @@ class GeneralizedNGramRAM:
 		self._lsh_hasher = None
 		self._lsh_trained = False
 
+		# Learned encoder for semantic word representations
+		# If None, uses simple hash-based encoding (fast but no generalization)
+		self.encoder = encoder
+		self._word_code_cache = {}  # Cache encoder results for speed
+
 	def _word_to_bits(self, word: str) -> tuple:
-		"""Convert word to bits."""
+		"""
+		Convert word to bits using encoder (learned) or hash (fallback).
+
+		With learned encoder: similar words → similar codes → generalization
+		With hash fallback: random codes → no semantic generalization
+		"""
+		# Try learned encoder first (cached for speed)
+		if self.encoder is not None:
+			if word not in self._word_code_cache:
+				code = self.encoder.encode(word)
+				self._word_code_cache[word] = code
+			code = self._word_code_cache[word]
+
+			# Convert int code to bit tuple
+			bits = []
+			for i in range(self.bits_per_word):
+				bits.append((code >> i) & 1)
+			return tuple(bits)
+
+		# Fallback: simple hash-based encoding (fast, no generalization)
 		cluster = self.word_to_cluster.get(word, hash(word) % self.n_clusters)
 		h = hash(word)
 
@@ -1089,21 +1118,25 @@ class RAMLM_v2:
 			self.attention.train(tokens)
 			log(f"  Attention trained on {len(tokens):,} tokens")
 
-		# Train binary encoder for learned representations
-		log(f"Training {self.representation_type.name.lower()} binary encoder...")
+		# Train binary encoder for learned representations (if not HASH type)
 		self.binary_encoder = create_encoder(
 			self.representation_type,
 			n_bits=12,
 			context_window=2,
 			min_freq=3,
 		)
-		self.binary_encoder.train(tokens)
-		stats = self.binary_encoder.get_stats()
-		log(f"  Vocab: {stats['vocab_size']:,}, Unique codes: {stats.get('unique_codes', 'N/A')}")
+		if self.binary_encoder is not None:
+			log(f"Training {self.representation_type.name.lower()} binary encoder...")
+			self.binary_encoder.train(tokens)
+			stats = self.binary_encoder.get_stats()
+			log(f"  Vocab: {stats['vocab_size']:,}, Unique codes: {stats.get('unique_codes', 'N/A')}")
+		else:
+			log(f"Using {self.representation_type.name.lower()} encoding (no training needed)")
 
 		# Train generalized RAMs with partial connectivity
 		lsh_label = f" + {self.lsh_type.upper()} LSH" if self.use_lsh else ""
-		log(f"Training generalized RAMs ({self.n_neurons} neurons{lsh_label})...")
+		encoder_label = f" + {self.representation_type.name}" if self.binary_encoder else ""
+		log(f"Training generalized RAMs ({self.n_neurons} neurons{lsh_label}{encoder_label})...")
 		bits_per_neuron = 10 if self.mode == BenchmarkMode.FAST else 14
 
 		for n in [2, 3, 4, 5, 6]:  # Added n=6 for longer context
@@ -1114,6 +1147,7 @@ class RAMLM_v2:
 				bits_per_word=12,
 				use_lsh=self.use_lsh,
 				lsh_type=self.lsh_type,
+				encoder=self.binary_encoder,  # Pass learned encoder for semantic generalization
 			)
 			ram.learn_clusters(tokens)
 			# Train LSH hasher if enabled (before train())
@@ -1906,24 +1940,29 @@ class RAMLM_v2:
 		gen_rams_export = []
 		word_to_bits = {}
 
+		# Helper to encode a word to bits (uses learned encoder or hash fallback)
+		def encode_word(word: str) -> int:
+			"""Convert word to 12-bit code using encoder or hash fallback."""
+			if self.binary_encoder is not None:
+				# Use learned encoder (returns 12-bit code directly)
+				return self.binary_encoder.encode(word)
+			else:
+				# Hash fallback: 7 cluster bits + 5 hash bits = 12 bits
+				h = hash(word)
+				cluster = h % 128  # 7 bits for cluster
+				bits = cluster  # bits 0-6
+				for i in range(5):  # bits 7-11
+					if (h >> (i + 7)) & 1:
+						bits |= (1 << (7 + i))
+				return bits
+
 		for n in sorted(self.generalized_rams.keys()):
 			ram = self.generalized_rams[n]
 
 			# Build word_to_bits from the RAM's word_to_cluster mapping
-			for word, cluster in ram.word_to_cluster.items():
+			for word in ram.word_to_cluster.keys():
 				if word not in word_to_bits:
-					# Compute full bits representation as u64
-					h = hash(word)
-					bits = 0
-					# Cluster bits (7)
-					for i in range(7):
-						if (cluster >> i) & 1:
-							bits |= (1 << i)
-					# Hash bits (5)
-					for i in range(5):
-						if (h >> i) & 1:
-							bits |= (1 << (7 + i))
-					word_to_bits[word] = bits
+					word_to_bits[word] = encode_word(word)
 
 			# Export connectivity and memory for each neuron
 			connectivity = []
@@ -1952,21 +1991,9 @@ class RAMLM_v2:
 				# Convert context words to bits and pack
 				ctx_bits = []
 				for word in ctx_words:
-					if word in word_to_bits:
-						ctx_bits.append(word_to_bits[word])
-					else:
-						# Unknown word - use hash
-						h = hash(word)
-						bits = 0
-						cluster = h % 256
-						for i in range(7):
-							if (cluster >> i) & 1:
-								bits |= (1 << i)
-						for i in range(5):
-							if (h >> i) & 1:
-								bits |= (1 << (7 + i))
-						ctx_bits.append(bits)
-						word_to_bits[word] = bits
+					if word not in word_to_bits:
+						word_to_bits[word] = encode_word(word)
+					ctx_bits.append(word_to_bits[word])
 				contexts[tuple(ctx_bits)] = dict(word_counts)
 			exact_rams_export.append((n, contexts))
 
@@ -3488,9 +3515,9 @@ if __name__ == "__main__":
 	parser.add_argument("--full", action="store_true", help="Run full benchmark (GA 32×100, TS 32×50)")
 	parser.add_argument("--overnight", action="store_true", help="Run extended overnight benchmark (GA 48×1000, TS 48×1000 with early stopping)")
 	parser.add_argument("--runs", type=int, default=1, help="Number of runs (default: 1)")
-	parser.add_argument("--tokenizer", type=str, default="word",
+	parser.add_argument("--tokenizer", type=str, default="gpt2",
 		choices=["simple", "word", "bpe", "gpt2", "char"],
-		help="Tokenizer: simple, word (WikiText-2), bpe (trainable 32k), gpt2 (50k), char")
+		help="Tokenizer: simple, word (WikiText-2), bpe (trainable 32k), gpt2 (50k, default), char")
 	parser.add_argument("--neurons", type=int, default=None,
 		help="Number of neurons per RAM (default: 16 FAST, 64 FULL/OVERNIGHT)")
 	parser.add_argument("--bits", type=int, default=None,
@@ -3501,23 +3528,25 @@ if __name__ == "__main__":
 		help="Optimization strategy sequence, comma-separated (default: GA,TS). Examples: GA, TS, GA,TS, TS,GA, GA,TS,GA")
 	parser.add_argument("--full-data", action="store_true",
 		help="Use full WikiText-2 dataset (2M train, 245k test, 214k val) instead of subsampled data")
-	parser.add_argument("--smoothing", type=str, default="none",
+	parser.add_argument("--smoothing", type=str, default="kneser_ney",
 		choices=["none", "kneser_ney", "backoff", "add_k"],
-		help="Smoothing for cascade fallback: none (1/vocab), kneser_ney (recommended), backoff, add_k")
-	parser.add_argument("--lsh", action="store_true",
-		help="Enable LSH context hashing for similarity-preserving addresses")
+		help="Smoothing for cascade fallback: none (1/vocab), kneser_ney (default, recommended), backoff, add_k")
+	parser.add_argument("--lsh", action="store_true", default=True,
+		help="Enable LSH context hashing (default: enabled)")
+	parser.add_argument("--no-lsh", action="store_false", dest="lsh",
+		help="Disable LSH context hashing")
 	parser.add_argument("--lsh-type", type=str, default="simhash",
 		choices=["simhash", "random_projection"],
 		help="LSH algorithm: simhash (fast) or random_projection (learned embeddings)")
-	parser.add_argument("--attention", type=str, default="none",
+	parser.add_argument("--attention", type=str, default="hybrid",
 		choices=["none", "position", "content", "hybrid", "sparse"],
-		help="Attention mechanism: none (default), position, content, hybrid, sparse")
-	parser.add_argument("--representation", type=str, default="cooccurrence",
-		choices=["cooccurrence", "mutual_info", "ram_learned"],
-		help="Binary representation: cooccurrence (SVD baseline), mutual_info (MI bits), ram_learned (RAM-based)")
-	parser.add_argument("--accel", type=str, default="cpu",
+		help="Attention mechanism: none, position, content, hybrid (default), sparse")
+	parser.add_argument("--representation", type=str, default="ram_learned",
+		choices=["hash", "cooccurrence", "mutual_info", "ram_learned"],
+		help="Binary representation: hash (simple), ram_learned (default, fast, 4x accuracy), mutual_info, cooccurrence (SLOW)")
+	parser.add_argument("--accel", type=str, default="hybrid",
 		choices=["cpu", "metal", "hybrid"],
-		help="Acceleration: cpu (16 cores), metal (40 GPU cores), hybrid (56 cores = CPU+GPU)")
+		help="Acceleration: cpu (16 cores), metal (40 GPU cores), hybrid (default, 56 cores = CPU+GPU)")
 	args = parser.parse_args()
 
 	# Map tokenizer arg to enum
@@ -3553,6 +3582,7 @@ if __name__ == "__main__":
 
 	# Map representation arg to enum
 	representation_map = {
+		"hash": RepresentationType.HASH,
 		"cooccurrence": RepresentationType.COOCCURRENCE,
 		"mutual_info": RepresentationType.MUTUAL_INFO,
 		"ram_learned": RepresentationType.RAM_LEARNED,
