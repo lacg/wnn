@@ -31,7 +31,13 @@ from typing import Optional
 from joblib import Parallel, delayed
 import multiprocessing
 
-from wnn.ram.core import BenchmarkMode, AccelerationMode
+from wnn.ram.core import (
+	BenchmarkMode,
+	AccelerationMode,
+	get_effective_cores,
+	get_batch_size_for_mode,
+	set_detected_cores,
+)
 from wnn.ram.strategies import PerplexityCalculator
 from wnn.tokenizers import TokenizerType, TokenizerFactory, Tokenizer
 from wnn.lsh import RandomProjectionHasher, SimHasher, LSHType
@@ -56,6 +62,8 @@ try:
 	else:
 		METAL_INFO = None
 		METAL_GPU_CORES = 0
+	# Register detected cores with wnn.ram.core for centralized access
+	set_detected_cores(RUST_CPU_CORES, METAL_GPU_CORES, METAL_AVAILABLE)
 except ImportError:
 	RUST_AVAILABLE = False
 	RUST_CPU_CORES = 0
@@ -1184,21 +1192,23 @@ class RAMLM_v2:
 		eval_train = int(eval_total * 0.67)  # ~13k for optimization
 		eval_val = eval_total - eval_train    # ~7k for validation
 
-		# Strategy parameters (scale with mode)
-		# Population sizes are multiples of 16 (CPU cores) for optimal parallel batching
+		# Strategy parameters (scale with mode and available cores)
+		# Population sizes scale with effective cores for optimal parallel batching
 		# Elitism 25% across all modes
 		ga_elitism_pct = 0.25
+
+		# Get batch sizes based on acceleration mode and benchmark mode
+		ga_pop, ga_gens = get_batch_size_for_mode(ACCELERATION_MODE, self.mode)
+		ts_neighbors, ts_iters = ga_pop, ga_gens  # Same sizing for TS
+
+		# Adjust iterations for different modes (get_batch_size_for_mode returns base values)
 		match self.mode:
-			case BenchmarkMode.FAST:
-				ga_pop, ga_gens = 16, 10
-				ts_neighbors, ts_iters = 16, 10
 			case BenchmarkMode.FULL:
-				ga_pop, ga_gens = 32, 100
-				ts_neighbors, ts_iters = 32, 50
+				ts_iters = 50  # TS uses fewer iterations than GA in FULL mode
 			case BenchmarkMode.OVERNIGHT:
-				# Extended overnight: max 1000 iterations with early stopping
-				ga_pop, ga_gens = 48, 1000
-				ts_neighbors, ts_iters = 48, 1000
+				pass  # Keep 1000 for both GA and TS
+			case _:
+				pass  # FAST uses same for both
 
 		# Configurable strategy sequence (default: GA then TS)
 		strategy_sequence = getattr(self, 'strategy_sequence', ['GA', 'TS'])
@@ -1848,6 +1858,59 @@ class RAMLM_v2:
 
 		return predictions
 
+	def _precompute_all_predictions(self, tokens: list[str], n_workers: int = None) -> list[dict]:
+		"""
+		Pre-compute predictions for ALL positions in tokens using parallel workers.
+
+		This is a key acceleration: instead of calling _get_all_predictions()
+		245k times sequentially, we batch them and process in parallel.
+
+		Returns: List of dicts, one per position (len = len(tokens) - 6)
+		"""
+		if n_workers is None:
+			n_workers = get_effective_cores(ACCELERATION_MODE)
+
+		n_positions = len(tokens) - 6
+		if n_positions <= 0:
+			return []
+
+		# Collect all contexts
+		contexts = [tokens[i:i + 5] for i in range(n_positions)]
+
+		# Process in parallel chunks to reduce overhead
+		chunk_size = max(1000, n_positions // n_workers)
+
+		def process_chunk(start_idx: int, end_idx: int) -> list[dict]:
+			"""Process a chunk of contexts."""
+			results = []
+			for i in range(start_idx, end_idx):
+				results.append(self._get_all_predictions(contexts[i]))
+			return results
+
+		# Split into chunks
+		chunks = []
+		for start in range(0, n_positions, chunk_size):
+			end = min(start + chunk_size, n_positions)
+			chunks.append((start, end))
+
+		# Use joblib for parallel processing (if worthwhile)
+		if n_workers > 1 and n_positions > 10000:
+			# Parallel processing for large datasets
+			results_by_chunk = Parallel(n_jobs=n_workers, prefer="threads")(
+				delayed(process_chunk)(start, end) for start, end in chunks
+			)
+			# Flatten results
+			all_predictions = []
+			for chunk_results in results_by_chunk:
+				all_predictions.extend(chunk_results)
+		else:
+			# Sequential for small datasets (avoid overhead)
+			all_predictions = []
+			for start, end in chunks:
+				all_predictions.extend(process_chunk(start, end))
+
+		return all_predictions
+
 	def _compute_target_probability(self, context: list[str], target: str) -> float:
 		"""
 		Compute P(target) using the cascade prediction logic.
@@ -1929,19 +1992,21 @@ class RAMLM_v2:
 
 		For each method, track how often it's correct when it makes a prediction.
 		Use these accuracies as weights in voting.
+
+		ACCELERATED: Uses parallel pre-computation of predictions.
 		"""
 		# Use last portion as validation
 		val_start = int(len(tokens) * (1 - validation_split))
 		val_tokens = tokens[val_start:]
 
-		# Track per-method accuracy
+		# Pre-compute all predictions in parallel (key acceleration!)
+		all_predictions = self._precompute_all_predictions(val_tokens)
+
+		# Track per-method accuracy (fast aggregation over cached predictions)
 		method_stats = defaultdict(lambda: {"correct": 0, "total": 0})
 
-		for i in range(len(val_tokens) - 6):
-			context = val_tokens[i:i + 5]
+		for i, predictions in enumerate(all_predictions):
 			target = val_tokens[i + 5]
-
-			predictions = self._get_all_predictions(context)
 
 			for method, (pred, conf) in predictions.items():
 				if conf > self.cascade_threshold:  # Only count confident predictions
@@ -1999,10 +2064,15 @@ class RAMLM_v2:
 		Output: correct word prediction
 
 		This learns which method combinations are most reliable.
+
+		ACCELERATED: Uses parallel pre-computation of predictions.
 		"""
 		# Use last portion as validation/training for meta-classifier
 		val_start = int(len(tokens) * (1 - validation_split))
 		val_tokens = tokens[val_start:]
+
+		# Pre-compute all predictions in parallel (key acceleration!)
+		all_predictions = self._precompute_all_predictions(val_tokens)
 
 		# Collect training data for meta-classifier
 		# Feature: method predictions encoded + confidences
@@ -2015,15 +2085,12 @@ class RAMLM_v2:
 		))
 		self.meta_methods = all_methods
 
-		# Collect (features, target) pairs
+		# Collect (features, target) pairs using cached predictions
 		training_data = []
 		word_to_idx = {}
 
-		for i in range(len(val_tokens) - 6):
-			context = val_tokens[i:i + 5]
+		for i, predictions in enumerate(all_predictions):
 			target = val_tokens[i + 5]
-
-			predictions = self._get_all_predictions(context)
 
 			if not predictions:
 				continue
@@ -2137,6 +2204,9 @@ class RAMLM_v2:
 		The state layer tracks recent prediction outcomes, enabling patterns like:
 		- "After gen_n3 was wrong twice, trust exact RAMs more"
 		- "When in a run of correct predictions, keep trusting current method"
+
+		ACCELERATED: Pre-computes predictions in parallel, then trains sequentially
+		(state updates require sequential ordering).
 		"""
 		# Build list of all methods
 		all_methods = sorted(set(
@@ -2151,15 +2221,16 @@ class RAMLM_v2:
 		val_start = int(len(tokens) * (1 - validation_split))
 		val_tokens = tokens[val_start:]
 
+		# Pre-compute all predictions in parallel (key acceleration!)
+		all_predictions = self._precompute_all_predictions(val_tokens)
+
 		# Reset state before training
 		self.ram_meta.reset_state()
 
+		# Training loop is sequential (state updates depend on order)
 		trained_count = 0
-		for i in range(len(val_tokens) - 6):
-			context = val_tokens[i:i + 5]
+		for i, predictions in enumerate(all_predictions):
 			target = val_tokens[i + 5]
-
-			predictions = self._get_all_predictions(context)
 
 			if not predictions:
 				continue
@@ -2229,6 +2300,10 @@ class RAMLM_v2:
 		IMPORTANT: Uses PerplexityCalculator for consistent PPL calculation.
 		For "cascade" strategy, uses _compute_target_probability() to match
 		the logic in _evaluate_perplexity_python (TRUE perplexity with partial credit).
+
+		ACCELERATED: Pre-computes all predictions in parallel, then evaluates
+		strategies using cached predictions. RAM_META still runs sequentially
+		due to state updates, but predictions are cached.
 		"""
 		# Test multiple confidence thresholds
 		thresholds = [0.01, 0.02, 0.03, 0.05, 0.07, 0.10]
@@ -2246,11 +2321,15 @@ class RAMLM_v2:
 		for t in thresholds:
 			calculators[f"thresh_{t:.2f}"] = PerplexityCalculator(vocab_size)
 
+		# Pre-compute all predictions in parallel (KEY ACCELERATION!)
+		all_predictions = self._precompute_all_predictions(tokens)
+
 		# Reset RAM meta state before evaluation (fresh temporal context)
 		if hasattr(self, 'ram_meta'):
 			self.ram_meta.reset_state()
 
-		for i in range(len(tokens) - 6):
+		# Evaluate each position using cached predictions
+		for i, predictions in enumerate(all_predictions):
 			context = tokens[i:i + 5]
 			target = tokens[i + 5]
 
@@ -2261,12 +2340,13 @@ class RAMLM_v2:
 			calculators["cascade"].add_from_probability(cascade_prob, is_correct=(pred1 == target))
 
 			# WEIGHTED: Use weighted vote distribution for P(target)
-			pred2, _, _ = self.predict_weighted_voting(context)
-			weighted_prob = self._compute_weighted_target_probability(context, target)
+			# Use cached predictions for weighted voting
+			pred2 = self._predict_weighted_from_cached(predictions)
+			weighted_prob = self._compute_weighted_prob_from_cached(predictions, target)
 			calculators["weighted"].add_from_probability(weighted_prob, is_correct=(pred2 == target))
 
 			# META: Meta-classifier - use cascade probability for proper P(target)
-			pred3, _, _ = self.predict_meta(context)
+			pred3 = self._predict_meta_from_cached(predictions)
 			# Use cascade probability for partial credit (meta just picks a method)
 			meta_prob = self._compute_target_probability(context, target)
 			calculators["meta"].add_from_probability(meta_prob, is_correct=(pred3 == target))
@@ -2288,8 +2368,8 @@ class RAMLM_v2:
 
 			# THRESHOLD: Use threshold-filtered vote distribution
 			for t in thresholds:
-				pred, _, _ = self.predict_threshold_voting(context, min_conf=t)
-				thresh_prob = self._compute_threshold_target_probability(context, target, t)
+				pred = self._predict_threshold_from_cached(predictions, context, t)
+				thresh_prob = self._compute_threshold_prob_from_cached(predictions, context, target, t)
 				calculators[f"thresh_{t:.2f}"].add_from_probability(thresh_prob, is_correct=(pred == target))
 
 		# Collect results from all calculators
@@ -2304,6 +2384,127 @@ class RAMLM_v2:
 			}
 
 		return results
+
+	def _predict_weighted_from_cached(self, predictions: dict) -> str:
+		"""Predict using weighted voting from cached predictions."""
+		if not predictions or not hasattr(self, 'voting_weights'):
+			return "<UNK>"
+
+		votes = Counter()
+		for method, (pred, conf) in predictions.items():
+			weight = self.voting_weights.get(method, 0.1) * conf
+			votes[pred] += weight
+
+		if votes:
+			return votes.most_common(1)[0][0]
+		return "<UNK>"
+
+	def _compute_weighted_prob_from_cached(self, predictions: dict, target: str) -> float:
+		"""Compute P(target) using weighted voting from cached predictions."""
+		min_prob = 1.0 / len(self.word_counts) if hasattr(self, 'word_counts') else 1e-4
+
+		if not predictions or not hasattr(self, 'voting_weights'):
+			return min_prob
+
+		votes = {}
+		total_weight = 0.0
+		for method, (pred, conf) in predictions.items():
+			weight = self.voting_weights.get(method, 0.1) * conf
+			votes[pred] = votes.get(pred, 0.0) + weight
+			total_weight += weight
+
+		if total_weight > 0:
+			return max(votes.get(target, 0.0) / total_weight, min_prob)
+		return min_prob
+
+	def _predict_meta_from_cached(self, predictions: dict) -> str:
+		"""Predict using meta-classifier from cached predictions."""
+		if not predictions or not hasattr(self, 'meta_reliability'):
+			return "<UNK>"
+
+		# Sort by confidence
+		sorted_preds = sorted(predictions.items(), key=lambda x: -x[1][1])[:4]
+		if not sorted_preds:
+			return "<UNK>"
+
+		primary_method, (primary_word, primary_conf) = sorted_preds[0]
+
+		# Count agreement
+		primary_word_idx = self.meta_word_to_idx.get(primary_word, -1)
+		agreement = 0
+		if primary_word_idx >= 0:
+			for method, (pred, _) in sorted_preds[1:]:
+				if self.meta_word_to_idx.get(pred, -1) == primary_word_idx:
+					agreement += 1
+
+		return primary_word
+
+	def _predict_threshold_from_cached(self, predictions: dict, context: list[str], min_conf: float) -> str:
+		"""Predict using threshold voting from cached predictions."""
+		# 1. Try exact match first (from predictions dict)
+		for n in sorted(self.exact_rams.keys(), reverse=True):
+			key = f"exact_n{n}"
+			if key in predictions:
+				pred, conf = predictions[key]
+				if conf > 0.2:
+					return pred
+
+		# 2. Try generalized cascade
+		for n in sorted(self.generalized_rams.keys(), reverse=True):
+			key = f"gen_n{n}"
+			if key in predictions:
+				pred, conf = predictions[key]
+				if conf > self.cascade_threshold:
+					return pred
+
+		# 3. Threshold-filtered voting
+		votes = Counter()
+		for method, (pred, conf) in predictions.items():
+			if conf > min_conf:
+				n = int(method.split('_n')[1]) if '_n' in method else 1
+				weight = conf * n
+				votes[pred] += weight
+
+		if votes:
+			return votes.most_common(1)[0][0]
+		return "<UNK>"
+
+	def _compute_threshold_prob_from_cached(self, predictions: dict, context: list[str], target: str, min_conf: float) -> float:
+		"""Compute P(target) using threshold voting from cached predictions."""
+		min_prob = 1.0 / len(self.word_counts) if hasattr(self, 'word_counts') else 1e-4
+
+		# 1. Try exact match first
+		for n in sorted(self.exact_rams.keys(), reverse=True):
+			if len(context) >= n:
+				ctx = tuple(context[-n:])
+				if ctx in self.exact_rams[n]:
+					counts = self.exact_rams[n][ctx]
+					total = sum(counts.values())
+					if counts.most_common(1)[0][1] / total > 0.2 or total >= 3:
+						target_count = counts.get(target, 0)
+						return max(target_count / total, min_prob)
+
+		# 2. Try generalized cascade
+		for n in sorted(self.generalized_rams.keys(), reverse=True):
+			key = f"gen_n{n}"
+			if key in predictions:
+				pred, conf = predictions[key]
+				if conf > self.cascade_threshold:
+					return max(float(conf), min_prob) if pred == target else min_prob
+
+		# 3. Threshold-filtered voting
+		votes = {}
+		total_weight = 0.0
+		for method, (pred, conf) in predictions.items():
+			if conf > min_conf:
+				n = int(method.split('_n')[1]) if '_n' in method else 1
+				weight = conf * n
+				votes[pred] = votes.get(pred, 0.0) + weight
+				total_weight += weight
+
+		if total_weight > 0:
+			return max(votes.get(target, 0.0) / total_weight, min_prob)
+		return min_prob
 
 	def _compute_weighted_target_probability(self, context: list[str], target: str) -> float:
 		"""Compute P(target) using weighted voting (with learned weights)."""

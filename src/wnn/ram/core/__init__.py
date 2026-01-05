@@ -182,6 +182,124 @@ class AccelerationMode(IntEnum):
 
 
 # =============================================================================
+# Acceleration Helpers
+# =============================================================================
+
+# Default core counts (can be overridden by actual hardware detection)
+_DEFAULT_CPU_CORES = 16   # M4 Max CPU cores
+_DEFAULT_GPU_CORES = 40   # M4 Max Metal GPU cores
+
+# Runtime-detected values (set by ram_accelerator if available)
+_detected_cpu_cores: int | None = None
+_detected_gpu_cores: int | None = None
+_metal_available: bool | None = None
+
+
+def set_detected_cores(cpu_cores: int, gpu_cores: int, metal_available: bool) -> None:
+	"""
+	Set runtime-detected core counts (called by ram_accelerator on import).
+
+	Args:
+		cpu_cores: Number of CPU cores (from rayon)
+		gpu_cores: Number of GPU cores (from Metal)
+		metal_available: Whether Metal GPU is available
+	"""
+	global _detected_cpu_cores, _detected_gpu_cores, _metal_available
+	_detected_cpu_cores = cpu_cores
+	_detected_gpu_cores = gpu_cores
+	_metal_available = metal_available
+
+
+def get_effective_cores(
+	mode: AccelerationMode,
+	cpu_cores: int | None = None,
+	gpu_cores: int | None = None,
+) -> int:
+	"""
+	Get effective parallel worker count for acceleration mode.
+
+	Uses runtime-detected values if available, otherwise defaults.
+	Can override with explicit core counts.
+
+	Args:
+		mode: AccelerationMode (CPU, METAL, or HYBRID)
+		cpu_cores: Override CPU core count (default: detected or 16)
+		gpu_cores: Override GPU core count (default: detected or 40)
+
+	Returns:
+		Number of effective parallel workers
+
+	Examples:
+		>>> get_effective_cores(AccelerationMode.CPU)
+		16
+		>>> get_effective_cores(AccelerationMode.METAL)
+		40
+		>>> get_effective_cores(AccelerationMode.HYBRID)
+		56
+	"""
+	# Use provided, detected, or default values
+	cpu = cpu_cores or _detected_cpu_cores or _DEFAULT_CPU_CORES
+	gpu = gpu_cores or _detected_gpu_cores or _DEFAULT_GPU_CORES
+
+	match mode:
+		case AccelerationMode.CPU:
+			return cpu
+		case AccelerationMode.METAL:
+			# Fall back to CPU if Metal not available
+			if _metal_available is False:
+				return cpu
+			return gpu
+		case AccelerationMode.HYBRID:
+			# Fall back to CPU if Metal not available
+			if _metal_available is False:
+				return cpu
+			return cpu + gpu
+		case _:
+			return cpu
+
+
+def get_batch_size_for_mode(
+	mode: AccelerationMode,
+	benchmark_mode: BenchmarkMode,
+	cpu_cores: int | None = None,
+	gpu_cores: int | None = None,
+) -> tuple[int, int]:
+	"""
+	Get recommended population/batch sizes for optimization.
+
+	Scales batch sizes based on available cores and benchmark intensity.
+
+	Args:
+		mode: AccelerationMode (CPU, METAL, HYBRID)
+		benchmark_mode: BenchmarkMode (FAST, FULL, OVERNIGHT)
+		cpu_cores: Override CPU core count
+		gpu_cores: Override GPU core count
+
+	Returns:
+		Tuple of (population_size, iterations/generations)
+
+	Examples:
+		>>> get_batch_size_for_mode(AccelerationMode.CPU, BenchmarkMode.FAST)
+		(16, 10)
+		>>> get_batch_size_for_mode(AccelerationMode.HYBRID, BenchmarkMode.FAST)
+		(56, 10)
+		>>> get_batch_size_for_mode(AccelerationMode.HYBRID, BenchmarkMode.FULL)
+		(112, 100)
+	"""
+	cores = get_effective_cores(mode, cpu_cores, gpu_cores)
+
+	match benchmark_mode:
+		case BenchmarkMode.FAST:
+			return (cores, 10)
+		case BenchmarkMode.FULL:
+			return (cores * 2, 100)
+		case BenchmarkMode.OVERNIGHT:
+			return (cores * 3, 1000)
+		case _:
+			return (cores, 10)
+
+
+# =============================================================================
 # Component Imports
 # =============================================================================
 
