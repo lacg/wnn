@@ -276,16 +276,32 @@ Learned representations capture semantic structure.
 **Expected impact**: More efficient RAM addressing, better generalization.
 
 ### 12. Pre-training & Transfer Learning
-- [ ] Pre-train on massive diverse corpus (like modern LLMs)
-- [ ] Learn general language patterns, not just task-specific
-- [ ] Investigate if RAM patterns can transfer between domains
-- [ ] Fine-tuning strategies for RAM networks
-- [ ] Measure few-shot learning capability
+
+#### 6a. Scaling Study
+- [ ] Train on larger corpus (BookCorpus, OpenWebText, or The Pile subset)
+- [ ] Measure: coverage %, accuracy, PPL vs corpus size
+- [ ] Analyze scaling curve: does more data always help?
+- [ ] Study collision rate: more patterns = more context ambiguity?
+
+#### 6b. Cross-Domain Transfer
+- [ ] Train on one domain (e.g., Wikipedia), test on another (e.g., news, code)
+- [ ] Measure pattern overlap between domains
+- [ ] Test if shared n-grams transfer (e.g., "the" patterns work across domains)
+- [ ] Compare: retrain from scratch vs expand existing tables
+
+#### 6c. Few-Shot Learning
+- [ ] How many examples does RAM need to learn a pattern?
+- [ ] Compare: RAM (1 example = learned) vs neural (needs many examples)
+- [ ] Test few-shot on new vocabulary/domains
+- [ ] Measure: accuracy vs number of training examples
 
 **Why it matters**: GPT/Claude see trillions of tokens from diverse sources.
 Our RAM sees only WikiText-2 (~2M tokens from Wikipedia).
 
-**Expected impact**: Better coverage of language patterns.
+**Key insight**: RAM generalization comes from **connectivity patterns**, not just data volume.
+Partially connected networks generalize by design - inputs sharing observed bits map to same address.
+
+**Expected impact**: Better coverage + understanding of RAM scaling properties.
 
 ---
 
@@ -298,7 +314,10 @@ Our RAM sees only WikiText-2 (~2M tokens from Wikipedia).
 | 3 | **LSH Context Hashing** | High | High (similarity-based generalization) | ✅ Done |
 | 4 | **Dynamic Attention** | High | Medium (better context selection) | ✅ Done |
 | 5 | **Learned Representations** | Very High | Very High (semantic encoding) | ✅ Done |
-| 6 | **Pre-training Scale** | Infrastructure | High (coverage) | 🔜 Next |
+| - | **Benchmark Phases 1-5** | Low | Critical (validate progress) | 🔜 Next |
+| 6a | **Scaling Study** | Medium | High (coverage) | Pending |
+| 6b | **Cross-Domain Transfer** | Medium | Medium (transfer understanding) | Pending |
+| 6c | **Few-Shot Learning** | Low | Medium (practical measure) | Pending |
 
 ---
 
