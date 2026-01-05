@@ -1033,7 +1033,8 @@ class RAMLM_v2:
 				 strategy_sequence: list = None, smoothing_type: str = "none",
 				 use_lsh: bool = False, lsh_type: str = "simhash",
 				 attention_type: AttentionType = AttentionType.NONE,
-				 representation_type: RepresentationType = RepresentationType.COOCCURRENCE):
+				 representation_type: RepresentationType = RepresentationType.COOCCURRENCE,
+				 ga_early_stop_pct: float = 0.05, ts_early_stop_pct: float = 0.5):
 		self.freq_threshold = freq_threshold
 		self.mode = mode
 		self.word_counts = Counter()
@@ -1058,6 +1059,8 @@ class RAMLM_v2:
 			self.bits_per_neuron = bits_per_neuron
 		self.cascade_threshold = cascade_threshold
 		self.strategy_sequence = strategy_sequence if strategy_sequence else ['GA', 'TS']
+		self.ga_early_stop_pct = ga_early_stop_pct
+		self.ts_early_stop_pct = ts_early_stop_pct
 
 		# Exact RAMs for high-freq (still useful for common patterns)
 		# Now includes n=5 and n=6 for better coverage
@@ -1263,10 +1266,12 @@ class RAMLM_v2:
 		ga_elitism = max(2, int(ga_pop * ga_elitism_pct))
 		ga_eval_per_gen = ga_pop - ga_elitism
 		early_stop_patience = 1  # Must match GA/TS config defaults
-		early_stop_threshold_pct = 0.1  # Require 0.1% improvement to continue (was 5.0% - stopped too early)
+		# Separate thresholds: GA needs diversity (lower threshold), TS is focused (higher threshold)
+		ga_early_stop_pct = self.ga_early_stop_pct  # Default 0.05%
+		ts_early_stop_pct = self.ts_early_stop_pct  # Default 0.5%
 		log(f"GA: {ga_pop} pop × {ga_gens} max gens (elite={ga_elitism} ({ga_elitism_pct*100:.0f}%), eval={ga_eval_per_gen}/gen)")
 		log(f"TS: {ts_neighbors} neighbors × {ts_iters} max iters")
-		log(f"Early stopping: <{early_stop_threshold_pct}% improvement over {(early_stop_patience+1)*5} gens/iters ({early_stop_patience+1} checks)")
+		log(f"Early stopping: GA <{ga_early_stop_pct}%, TS <{ts_early_stop_pct}% over {(early_stop_patience+1)*5} gens/iters")
 		match (ACCEL_RUST_AVAILABLE, ACCELERATION_MODE, METAL_AVAILABLE):
 			case (True, AccelerationMode.HYBRID, True):
 				log(f"Accelerator: Rust PERPLEXITY eval ({ACCELERATION_MODE.name}: {ACCEL_RUST_CORES} CPU + {METAL_GPU_CORES} GPU = {ACCEL_RUST_CORES + METAL_GPU_CORES} cores)")
@@ -1653,7 +1658,7 @@ class RAMLM_v2:
 					ga_config = GeneticAlgorithmConfig(
 						population_size=ga_pop, generations=ga_gens,
 						mutation_rate=0.01, crossover_rate=0.7, elitism=ga_elitism,
-						early_stop_patience=early_stop_patience, early_stop_threshold_pct=early_stop_threshold_pct
+						early_stop_patience=early_stop_patience, early_stop_threshold_pct=ga_early_stop_pct
 					)
 					ga = GeneticAlgorithmStrategy(config=ga_config, seed=42+n+step_idx, verbose=True, logger=log)
 					result = ga.optimize(current_connectivity, lambda x: batch_fn([x])[0],
@@ -1668,7 +1673,7 @@ class RAMLM_v2:
 					log(f"  [{step_num}/{len(strategy_sequence)} TS] Starting...")
 					ts_config = TabuSearchConfig(
 						iterations=ts_iters, neighbors_per_iter=ts_neighbors,
-						early_stop_patience=early_stop_patience, early_stop_threshold_pct=early_stop_threshold_pct
+						early_stop_patience=early_stop_patience, early_stop_threshold_pct=ts_early_stop_pct
 					)
 					ts = TabuSearchStrategy(config=ts_config, seed=42+n+step_idx, verbose=True, logger=log)
 					result = ts.optimize(current_connectivity, lambda x: batch_fn([x])[0],
@@ -3053,6 +3058,8 @@ def run_benchmark(
 	lsh_type: str = "simhash",
 	attention_type: AttentionType = AttentionType.NONE,
 	representation_type: RepresentationType = RepresentationType.COOCCURRENCE,
+	ga_early_stop_pct: float = 0.05,
+	ts_early_stop_pct: float = 0.5,
 ) -> BenchmarkRun:
 	"""Run the v2 benchmark."""
 	if seed is not None:
@@ -3180,7 +3187,8 @@ def run_benchmark(
 	model = RAMLM_v2(freq_threshold=30, mode=mode, n_neurons=n_neurons, bits_per_neuron=bits_per_neuron,
 					 cascade_threshold=cascade_threshold, strategy_sequence=strategy_sequence,
 					 smoothing_type=smoothing_type, use_lsh=use_lsh, lsh_type=lsh_type,
-					 attention_type=attention_type, representation_type=representation_type)
+					 attention_type=attention_type, representation_type=representation_type,
+					 ga_early_stop_pct=ga_early_stop_pct, ts_early_stop_pct=ts_early_stop_pct)
 	log(f"Model config: n_neurons={model.n_neurons}, bits_per_neuron={model.bits_per_neuron}, cascade_threshold={model.cascade_threshold}")
 	if smoothing_type != "none":
 		log(f"Smoothing: {smoothing_type}")
@@ -3427,6 +3435,8 @@ def run_multi_benchmark(
 	lsh_type: str = "simhash",
 	attention_type: AttentionType = AttentionType.NONE,
 	representation_type: RepresentationType = RepresentationType.COOCCURRENCE,
+	ga_early_stop_pct: float = 0.05,
+	ts_early_stop_pct: float = 0.5,
 ):
 	"""Run the benchmark multiple times and summarize results."""
 	if strategy_sequence is None:
@@ -3463,7 +3473,9 @@ def run_multi_benchmark(
 								   full_data=full_data, smoothing_type=smoothing_type,
 								   use_lsh=use_lsh, lsh_type=lsh_type,
 								   attention_type=attention_type,
-								   representation_type=representation_type)
+								   representation_type=representation_type,
+								   ga_early_stop_pct=ga_early_stop_pct,
+								   ts_early_stop_pct=ts_early_stop_pct)
 		runs.append(run_result)
 
 		# Save intermediate results
@@ -3598,6 +3610,10 @@ if __name__ == "__main__":
 	parser.add_argument("--accel", type=str, default="hybrid",
 		choices=["cpu", "metal", "hybrid"],
 		help="Acceleration: cpu (16 cores), metal (40 GPU cores), hybrid (default, 56 cores = CPU+GPU)")
+	parser.add_argument("--ga-early-stop", type=float, default=0.05,
+		help="GA early stop threshold %% (default: 0.05%% - GA needs diversity, lower threshold)")
+	parser.add_argument("--ts-early-stop", type=float, default=0.5,
+		help="TS early stop threshold %% (default: 0.5%% - TS is focused, stop sooner if not improving)")
 	args = parser.parse_args()
 
 	# Map tokenizer arg to enum
@@ -3702,7 +3718,9 @@ if __name__ == "__main__":
 							full_data=args.full_data, smoothing_type=args.smoothing,
 							use_lsh=args.lsh, lsh_type=args.lsh_type,
 							attention_type=attention_type,
-							representation_type=representation_type)
+							representation_type=representation_type,
+							ga_early_stop_pct=args.ga_early_stop,
+							ts_early_stop_pct=args.ts_early_stop)
 	else:
 		run_benchmark(mode=mode, tokenizer_type=tokenizer_type,
 					  n_neurons=args.neurons, bits_per_neuron=args.bits,
@@ -3710,7 +3728,9 @@ if __name__ == "__main__":
 					  full_data=args.full_data, smoothing_type=args.smoothing,
 					  use_lsh=args.lsh, lsh_type=args.lsh_type,
 					  attention_type=attention_type,
-					  representation_type=representation_type)
+					  representation_type=representation_type,
+					  ga_early_stop_pct=args.ga_early_stop,
+					  ts_early_stop_pct=args.ts_early_stop)
 
 	# Final log
 	log_separator()
