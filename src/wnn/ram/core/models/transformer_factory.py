@@ -13,7 +13,7 @@ from wnn.ram.core.models import (
 	Step,
 )
 from wnn.ram.encoders_decoders import PositionMode
-from wnn.ram.factories.config import StepConfigurationFactory
+from wnn.ram.core.models.step_config_factory import StepConfigurationFactory
 
 
 class RAMTransformerFactory:

@@ -86,7 +86,7 @@ class RAMEmbedding(Module):
 			)
 		else:
 			# Use MapperFactory for generalization strategies (lazy import to avoid circular)
-			from wnn.ram.factories import MapperFactory
+			from wnn.ram.core.mapper_factory import MapperFactory
 			# Note: requires token_bits == embedding_bits for some strategies
 			self.token_embed = MapperFactory.create(
 				strategy=strategy,

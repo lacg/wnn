@@ -250,6 +250,9 @@ from wnn.ram.core.generation import (
 # Sequence generator wrapper
 from wnn.ram.core.sequence_generator import SequenceGenerator
 
+# Factories (self-contained in core)
+from wnn.ram.core.mapper_factory import MapperFactory
+
 # Transformer components (submodule)
 from wnn.ram.core import models
 
@@ -318,6 +321,8 @@ __all__ = [
 	'GeneralizingProjection',
 	'HashMapper',
 	'ResidualMapper',
+	# Factories
+	'MapperFactory',
 	# Aggregation
 	'RAMAggregator',
 	# Recurrent networks

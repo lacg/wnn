@@ -874,7 +874,7 @@ class GeneralizingProjection(Module):
 			raise ValueError(f"{strategy.name} strategy requires input_bits == output_bits")
 
 		# Lazy import to avoid circular dependency
-		from wnn.ram.factories import MapperFactory
+		from wnn.ram.core.mapper_factory import MapperFactory
 
 		# Use match statement with factory for mapper creation
 		match strategy:

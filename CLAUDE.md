@@ -154,8 +154,7 @@ RAM neurons naturally memorize (DIRECT strategy) but we need generalization for 
 
 **Usage:**
 ```python
-from wnn.ram.factories import MapperFactory
-from wnn.ram.enums import MapperStrategy, ContextMode
+from wnn.ram.core import MapperFactory, MapperStrategy, ContextMode
 
 mapper = MapperFactory.create(
     strategy=MapperStrategy.BIT_LEVEL,

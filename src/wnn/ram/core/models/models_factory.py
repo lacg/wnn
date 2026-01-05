@@ -5,8 +5,7 @@ Single entry point for creating all RAM model types.
 Uses match-case dispatch on ModelType enum with explicit parameters.
 
 Usage:
-	from wnn.ram.factories import ModelsFactory
-	from wnn.ram.core.models import ModelType, RAMTransformerType
+	from wnn.ram.core.models import ModelsFactory, ModelType, RAMTransformerType
 
 	# Create a transformer (preset type)
 	model = ModelsFactory.create(
@@ -137,7 +136,7 @@ class ModelsFactory:
 			case ModelType.TRANSFORMER:
 				# Preset type takes priority
 				if transformer_type is not None:
-					from wnn.ram.factories.transformer import RAMTransformerFactory
+					from wnn.ram.core.models.transformer_factory import RAMTransformerFactory
 					return RAMTransformerFactory.create(
 						transformer_type=transformer_type,
 						input_bits=input_bits,
@@ -148,7 +147,7 @@ class ModelsFactory:
 
 				# Multi-step pipeline
 				if steps is not None:
-					from wnn.ram.factories.transformer import RAMTransformerFactory
+					from wnn.ram.core.models.transformer_factory import RAMTransformerFactory
 					return RAMTransformerFactory.create_multi_step(
 						input_bits=input_bits,
 						steps=steps,

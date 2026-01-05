@@ -17,8 +17,8 @@ from wnn.ram.core.models import (
 )
 from wnn.ram.encoders_decoders import PositionMode
 from wnn.ram.core.models.discrete_normalization import DiscreteNormalization
-from wnn.ram.factories.ffn import FFNFactory
-from wnn.ram.factories.attention import AttentionFactory
+from wnn.ram.core.models.ffn_factory import FFNFactory
+from wnn.ram.core.models.attention_factory import AttentionFactory
 from wnn.ram.core.models.computed_arithmetic import bits_to_int
 
 

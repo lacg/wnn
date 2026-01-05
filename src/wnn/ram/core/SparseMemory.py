@@ -55,7 +55,7 @@ from torch.nn import Module
 
 from wnn.ram.cost import CostCalculatorType
 from wnn.ram.core import MemoryVal
-from wnn.ram.factories.cost import CostCalculatorFactory
+from wnn.ram.cost import CostCalculatorFactory
 
 
 class SparseMemory(Module):

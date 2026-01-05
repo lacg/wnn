@@ -341,6 +341,23 @@ def __getattr__(name: str):
 		from wnn.ram.core.models.encoder_decoder import RAMEncoderDecoder
 		return RAMEncoderDecoder
 
+	# Factories (self-contained in models)
+	if name == 'FFNFactory':
+		from wnn.ram.core.models.ffn_factory import FFNFactory
+		return FFNFactory
+	if name == 'AttentionFactory':
+		from wnn.ram.core.models.attention_factory import AttentionFactory
+		return AttentionFactory
+	if name == 'StepConfigurationFactory':
+		from wnn.ram.core.models.step_config_factory import StepConfigurationFactory
+		return StepConfigurationFactory
+	if name == 'RAMTransformerFactory':
+		from wnn.ram.core.models.transformer_factory import RAMTransformerFactory
+		return RAMTransformerFactory
+	if name == 'ModelsFactory':
+		from wnn.ram.core.models.models_factory import ModelsFactory
+		return ModelsFactory
+
 	raise AttributeError(f"module 'wnn.ram.core.models' has no attribute '{name}'")
 
 
@@ -409,4 +426,10 @@ __all__ = [
 	# Seq2Seq
 	'RAMSeq2Seq',
 	'RAMEncoderDecoder',
+	# Factories (lazy-loaded)
+	'FFNFactory',
+	'AttentionFactory',
+	'StepConfigurationFactory',
+	'RAMTransformerFactory',
+	'ModelsFactory',
 ]
