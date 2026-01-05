@@ -37,6 +37,7 @@ from wnn.ram.strategies.connectivity.base import (
 	# Threshold constants (use these to avoid duplication)
 	HEALTHY_THRESHOLD,
 	WARNING_THRESHOLD,
+	SEVERE_THRESHOLD,
 	CRITICAL_THRESHOLD,
 )
 
@@ -74,6 +75,7 @@ __all__ = [
 	# Threshold constants
 	'HEALTHY_THRESHOLD',
 	'WARNING_THRESHOLD',
+	'SEVERE_THRESHOLD',
 	'CRITICAL_THRESHOLD',
 	# Tabu Search
 	'TabuSearchStrategy',

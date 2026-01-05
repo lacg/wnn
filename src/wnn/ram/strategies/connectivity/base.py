@@ -25,24 +25,31 @@ class OverfittingControl:
 
 	Thresholds are based on delta (ratio CHANGE from baseline):
 	- delta < -5%:  Healthy (improving) → exit diversity_mode
-	- delta > 0%:   Warning (worsening) → activate diversity_mode
+	- delta > 0%:   Warning (mild worsening) → activate diversity_mode
+	- delta > 5%:   Severe (significant worsening) → activate SEVERE diversity_mode
 	- delta > 20%:  Critical → early_stop
 
 	This creates hysteresis: diversity kicks IN at 0%, kicks OFF at -5%.
 	This prevents rapid toggling and ensures meaningful improvement before exiting.
 
 	When diversity_mode is True, optimizers should:
-	- GA: ↑population, ↓elitism, ↑mutation_rate
-	- TS: ↑neighbors, ↑mutation_rate, ↑tabu_size
+	- GA: ↑population (1.5x), same elitism, ↑mutation_rate (1.5x)
+	- TS: ↑neighbors (2x), ↑mutation_rate (2x), ↑tabu_size (2x)
+
+	When severe_diversity_mode is True (more aggressive):
+	- GA: ↑population (2x), same elitism, ↑mutation_rate (2x)
+	- TS: ↑neighbors (3x), ↑mutation_rate (3x), ↑tabu_size (3x)
 	"""
 	early_stop: bool = False
 	diversity_mode: bool = False
+	severe_diversity_mode: bool = False  # More aggressive diversity for >5% delta
 
 
 # Default threshold values - use these in all places to avoid duplication
 HEALTHY_THRESHOLD = -5.0    # delta < -5% = healthy (improving)
-WARNING_THRESHOLD = 0.0     # delta > 0% = warning (any worsening)
-CRITICAL_THRESHOLD = 20.0   # delta > 20% = critical (early stop)
+WARNING_THRESHOLD = 0.0     # delta > 0% = warning (mild diversity)
+SEVERE_THRESHOLD = 5.0      # delta > 5% = severe (aggressive diversity)
+CRITICAL_THRESHOLD = 15.0   # delta > 15% = critical (early stop)
 
 
 # Type alias for overfitting callback
@@ -61,6 +68,7 @@ class OverfittingMonitor:
 	Thresholds create hysteresis to prevent rapid toggling:
 	- delta < healthy_threshold (-5%): Healthy (improving) → exit diversity mode
 	- delta > warning_threshold (0%):  Warning (any worsening) → activate diversity mode
+	- delta > severe_threshold (5%):   Severe → activate SEVERE diversity mode
 	- delta > critical_threshold (20%): Critical → early stop (after grace period)
 
 	The hysteresis means:
@@ -88,6 +96,7 @@ class OverfittingMonitor:
 		validation_fn: Callable[[Tensor], float],
 		healthy_threshold: float = HEALTHY_THRESHOLD,
 		warning_threshold: float = WARNING_THRESHOLD,
+		severe_threshold: float = SEVERE_THRESHOLD,
 		critical_threshold: float = CRITICAL_THRESHOLD,
 		grace_checks: int = 1,
 		logger: Optional[Callable[[str], None]] = None,
@@ -98,7 +107,8 @@ class OverfittingMonitor:
 			validation_fn: Function that evaluates connectivity on validation set.
 				Takes Tensor, returns validation fitness (e.g., perplexity).
 			healthy_threshold: Delta % below which to exit diversity mode (default: -5%)
-			warning_threshold: Delta % above which to enter diversity mode (default: 0%)
+			warning_threshold: Delta % above which to enter mild diversity mode (default: 0%)
+			severe_threshold: Delta % above which to enter severe diversity mode (default: 5%)
 			critical_threshold: Delta % above which to early stop (default: 20%)
 			grace_checks: Number of checks before allowing early stop (default: 1).
 				Each check happens every 5 generations/iterations.
@@ -109,11 +119,13 @@ class OverfittingMonitor:
 		self._validation_fn = validation_fn
 		self._healthy_threshold = healthy_threshold
 		self._warning_threshold = warning_threshold
+		self._severe_threshold = severe_threshold
 		self._critical_threshold = critical_threshold
 		self._grace_checks = grace_checks
 		self._logger = logger
 		self._check_count = 0
 		self._in_diversity_mode = False
+		self._in_severe_mode = False
 		self._global_baseline_ratio: Optional[float] = global_baseline_ratio  # Set once, persists across reset()
 		self._local_baseline_ratio: Optional[float] = None   # Set per RAM, reset with reset()
 
@@ -134,6 +146,7 @@ class OverfittingMonitor:
 		"""Reset state for a new optimization run (per-RAM). Global baseline is preserved."""
 		self._check_count = 0
 		self._in_diversity_mode = False
+		self._in_severe_mode = False
 		self._local_baseline_ratio = None  # Reset local baseline, keep global
 
 	@property
@@ -154,7 +167,7 @@ class OverfittingMonitor:
 			train_fitness: Current training fitness (e.g., perplexity)
 
 		Returns:
-			OverfittingControl with early_stop and diversity_mode flags
+			OverfittingControl with early_stop, diversity_mode, and severe_diversity_mode flags
 		"""
 		self._check_count += 1
 		val_fitness = self._validation_fn(connectivity)
@@ -168,9 +181,9 @@ class OverfittingMonitor:
 			self._local_baseline_ratio = current_ratio
 			baseline = current_ratio
 			self._log(f"    [VAL] val={val_fitness:.1f}, train={train_fitness:.1f}, ratio={current_ratio:.2f}x (local baseline)")
-			self._log(f"         thresholds: <{self._healthy_threshold}% healthy, >{self._warning_threshold}% warn, >{self._critical_threshold}% stop")
+			self._log(f"         thresholds: <{self._healthy_threshold}% healthy, >{self._warning_threshold}% warn, >{self._severe_threshold}% severe, >{self._critical_threshold}% stop")
 			# First check always healthy (establishing baseline)
-			return OverfittingControl(early_stop=False, diversity_mode=False)
+			return OverfittingControl(early_stop=False, diversity_mode=False, severe_diversity_mode=False)
 
 		# Calculate ratio INCREASE from baseline (as percentage)
 		ratio_increase_pct = ((current_ratio - baseline) / baseline * 100) if baseline > 0 else 0
@@ -180,10 +193,12 @@ class OverfittingMonitor:
 		# Determine status and symbol
 		if ratio_increase_pct > self._critical_threshold:
 			status = "🔴 CRITICAL"
+		elif ratio_increase_pct > self._severe_threshold:
+			status = "🟠 SEVERE"
 		elif ratio_increase_pct > self._warning_threshold:
 			status = "🟡 WARNING"
 		elif ratio_increase_pct > self._healthy_threshold:
-			status = "🟠 CAUTION"
+			status = "🟡 CAUTION"
 		else:
 			status = "🟢 HEALTHY"
 
@@ -193,30 +208,40 @@ class OverfittingMonitor:
 
 		if ratio_increase_pct > self._critical_threshold:
 			if in_grace_period:
-				self._log(f"         → DIVERSITY MODE (grace {self._check_count-1}/{self._grace_checks}, need >{self._critical_threshold}% for stop)")
+				self._log(f"         → SEVERE DIVERSITY (grace {self._check_count-1}/{self._grace_checks}, need >{self._critical_threshold}% for stop)")
 				self._in_diversity_mode = True
-				return OverfittingControl(early_stop=False, diversity_mode=True)
+				self._in_severe_mode = True
+				return OverfittingControl(early_stop=False, diversity_mode=True, severe_diversity_mode=True)
 			else:
 				self._log(f"         → EARLY STOP (ratio increase >{self._critical_threshold}%)")
-				return OverfittingControl(early_stop=True, diversity_mode=False)
+				return OverfittingControl(early_stop=True, diversity_mode=False, severe_diversity_mode=False)
+
+		elif ratio_increase_pct > self._severe_threshold:
+			self._log(f"         → SEVERE DIVERSITY MODE (>{self._severe_threshold}%)")
+			self._in_diversity_mode = True
+			self._in_severe_mode = True
+			return OverfittingControl(early_stop=False, diversity_mode=True, severe_diversity_mode=True)
 
 		elif ratio_increase_pct > self._warning_threshold:
 			self._log(f"         → DIVERSITY MODE (>{self._warning_threshold}%)")
 			self._in_diversity_mode = True
-			return OverfittingControl(early_stop=False, diversity_mode=True)
+			self._in_severe_mode = False
+			return OverfittingControl(early_stop=False, diversity_mode=True, severe_diversity_mode=False)
 
 		elif ratio_increase_pct > self._healthy_threshold:
 			# Between healthy and warning: maintain current state
 			if self._in_diversity_mode:
-				self._log(f"         → staying in DIVERSITY MODE ({self._healthy_threshold}-{self._warning_threshold}%)")
-			return OverfittingControl(early_stop=False, diversity_mode=self._in_diversity_mode)
+				mode_type = "SEVERE " if self._in_severe_mode else ""
+				self._log(f"         → staying in {mode_type}DIVERSITY MODE ({self._healthy_threshold}-{self._warning_threshold}%)")
+			return OverfittingControl(early_stop=False, diversity_mode=self._in_diversity_mode, severe_diversity_mode=self._in_severe_mode)
 
 		else:
 			# Healthy: ratio increase below threshold
 			if self._in_diversity_mode:
 				self._log(f"         → exiting DIVERSITY MODE (<{self._healthy_threshold}%)")
 				self._in_diversity_mode = False
-			return OverfittingControl(early_stop=False, diversity_mode=False)
+				self._in_severe_mode = False
+			return OverfittingControl(early_stop=False, diversity_mode=False, severe_diversity_mode=False)
 
 	@property
 	def check_count(self) -> int:

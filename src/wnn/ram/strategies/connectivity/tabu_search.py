@@ -109,6 +109,7 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 
 		# Diversity mode tracking - store original values for restoration
 		in_diversity_mode = False
+		in_severe_mode = False
 		original_neighbors = cfg.neighbors_per_iter
 		original_mutation_rate = cfg.mutation_rate
 		original_tabu_size = cfg.tabu_size
@@ -211,17 +212,48 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 					if control.diversity_mode and not in_diversity_mode:
 						# Activate diversity mode: ↑neighbors, ↑mutation, ↑tabu_size
 						in_diversity_mode = True
-						cfg.neighbors_per_iter = int(original_neighbors * 2)
-						cfg.mutation_rate = original_mutation_rate * 2
-						cfg.tabu_size = max(original_tabu_size * 2, 10)
+						in_severe_mode = control.severe_diversity_mode
+						if control.severe_diversity_mode:
+							# SEVERE: 3x neighbors, 3x mutation, 3x tabu
+							cfg.neighbors_per_iter = int(original_neighbors * 3)
+							cfg.mutation_rate = original_mutation_rate * 3
+							cfg.tabu_size = max(original_tabu_size * 3, 15)
+							self._log(f"[TS] SEVERE Diversity ON: neighbors={cfg.neighbors_per_iter}, mut={cfg.mutation_rate:.4f}, tabu={cfg.tabu_size}")
+						else:
+							# MILD: 2x neighbors, 2x mutation, 2x tabu
+							cfg.neighbors_per_iter = int(original_neighbors * 2)
+							cfg.mutation_rate = original_mutation_rate * 2
+							cfg.tabu_size = max(original_tabu_size * 2, 10)
+							self._log(f"[TS] Diversity mode ON: neighbors={cfg.neighbors_per_iter}, mut={cfg.mutation_rate:.4f}, tabu={cfg.tabu_size}")
 						# Resize tabu list to new size
 						new_tabu: deque = deque(tabu_list, maxlen=cfg.tabu_size)
 						tabu_list = new_tabu
-						self._log(f"[TS] Diversity mode ON: neighbors={cfg.neighbors_per_iter}, mut={cfg.mutation_rate:.4f}, tabu={cfg.tabu_size}")
+
+					elif control.diversity_mode and in_diversity_mode:
+						# Check if severity level changed
+						if control.severe_diversity_mode and not in_severe_mode:
+							# Escalate to severe
+							in_severe_mode = True
+							cfg.neighbors_per_iter = int(original_neighbors * 3)
+							cfg.mutation_rate = original_mutation_rate * 3
+							cfg.tabu_size = max(original_tabu_size * 3, 15)
+							new_tabu = deque(tabu_list, maxlen=cfg.tabu_size)
+							tabu_list = new_tabu
+							self._log(f"[TS] Escalating to SEVERE: neighbors={cfg.neighbors_per_iter}, mut={cfg.mutation_rate:.4f}, tabu={cfg.tabu_size}")
+						elif not control.severe_diversity_mode and in_severe_mode:
+							# De-escalate from severe to mild
+							in_severe_mode = False
+							cfg.neighbors_per_iter = int(original_neighbors * 2)
+							cfg.mutation_rate = original_mutation_rate * 2
+							cfg.tabu_size = max(original_tabu_size * 2, 10)
+							new_tabu = deque(list(tabu_list)[-cfg.tabu_size:], maxlen=cfg.tabu_size)
+							tabu_list = new_tabu
+							self._log(f"[TS] De-escalating to mild: neighbors={cfg.neighbors_per_iter}, mut={cfg.mutation_rate:.4f}, tabu={cfg.tabu_size}")
 
 					elif not control.diversity_mode and in_diversity_mode:
 						# Back to normal: restore original hyperparameters
 						in_diversity_mode = False
+						in_severe_mode = False
 						cfg.neighbors_per_iter = original_neighbors
 						cfg.mutation_rate = original_mutation_rate
 						cfg.tabu_size = original_tabu_size

@@ -109,6 +109,7 @@ class GeneticAlgorithmStrategy(OptimizerStrategyBase):
 
 		# Diversity mode tracking - store original values for restoration
 		in_diversity_mode = False
+		in_severe_mode = False
 		original_population_size = cfg.population_size
 		original_elitism = cfg.elitism
 		original_mutation_rate = cfg.mutation_rate
@@ -242,12 +243,19 @@ class GeneticAlgorithmStrategy(OptimizerStrategyBase):
 						break
 
 					if control.diversity_mode and not in_diversity_mode:
-						# Activate diversity mode: ↑population, ↓elitism, ↑mutation
+						# Activate diversity mode: ↑population, same elitism, ↑mutation
 						in_diversity_mode = True
-						cfg.population_size = int(original_population_size * 1.5)
-						cfg.elitism = max(1, original_elitism // 2)
-						cfg.mutation_rate = original_mutation_rate * 1.5
-						self._log(f"[GA] Diversity mode ON: pop={cfg.population_size}, elite={cfg.elitism}, mut={cfg.mutation_rate:.4f}")
+						in_severe_mode = control.severe_diversity_mode
+						if control.severe_diversity_mode:
+							# SEVERE: 2x population, same elitism, 2x mutation
+							cfg.population_size = int(original_population_size * 2)
+							cfg.mutation_rate = original_mutation_rate * 2
+							self._log(f"[GA] SEVERE Diversity ON: pop={cfg.population_size}, elite={original_elitism}, mut={cfg.mutation_rate:.4f}")
+						else:
+							# MILD: 1.5x population, same elitism, 1.5x mutation
+							cfg.population_size = int(original_population_size * 1.5)
+							cfg.mutation_rate = original_mutation_rate * 1.5
+							self._log(f"[GA] Diversity mode ON: pop={cfg.population_size}, elite={original_elitism}, mut={cfg.mutation_rate:.4f}")
 
 						# Expand population with new random individuals
 						while len(population) < cfg.population_size:
@@ -259,9 +267,38 @@ class GeneticAlgorithmStrategy(OptimizerStrategyBase):
 						population = eval_with_cache(population)
 						fitness = [f for _, f in population]
 
+					elif control.diversity_mode and in_diversity_mode:
+						# Check if severity level changed
+						if control.severe_diversity_mode and not in_severe_mode:
+							# Escalate to severe
+							in_severe_mode = True
+							cfg.population_size = int(original_population_size * 2)
+							cfg.mutation_rate = original_mutation_rate * 2
+							self._log(f"[GA] Escalating to SEVERE: pop={cfg.population_size}, mut={cfg.mutation_rate:.4f}")
+							# Expand population
+							while len(population) < cfg.population_size:
+								new_ind, _ = self._generate_neighbor(
+									best, cfg.mutation_rate * 5,
+									total_input_bits, num_neurons, n_bits_per_neuron
+								)
+								population.append((new_ind, None))
+							population = eval_with_cache(population)
+							fitness = [f for _, f in population]
+						elif not control.severe_diversity_mode and in_severe_mode:
+							# De-escalate from severe to mild
+							in_severe_mode = False
+							cfg.population_size = int(original_population_size * 1.5)
+							cfg.mutation_rate = original_mutation_rate * 1.5
+							self._log(f"[GA] De-escalating to mild: pop={cfg.population_size}, mut={cfg.mutation_rate:.4f}")
+							# Shrink population (keep best)
+							sorted_pop = sorted(population, key=lambda x: x[1])
+							population = sorted_pop[:cfg.population_size]
+							fitness = [f for _, f in population]
+
 					elif not control.diversity_mode and in_diversity_mode:
 						# Back to normal: restore original hyperparameters
 						in_diversity_mode = False
+						in_severe_mode = False
 						cfg.population_size = original_population_size
 						cfg.elitism = original_elitism
 						cfg.mutation_rate = original_mutation_rate
