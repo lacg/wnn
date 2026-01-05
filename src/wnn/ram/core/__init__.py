@@ -163,6 +163,24 @@ class BenchmarkMode(IntEnum):
 	OVERNIGHT = 2 # Extended: thorough overnight optimization
 
 
+class AccelerationMode(IntEnum):
+	"""Hardware acceleration modes for RAM evaluation.
+
+	Controls which compute resources are used:
+	- CPU: Rust + rayon parallelism (16 cores on M4 Max)
+	- METAL: Metal GPU compute shaders (40 cores on M4 Max)
+	- HYBRID: Both CPU + GPU in parallel (56 cores total)
+
+	Usage:
+		python ram_lm_v2.py --accel cpu    # 16 cores
+		python ram_lm_v2.py --accel metal  # 40 cores
+		python ram_lm_v2.py --accel hybrid # 56 cores
+	"""
+	CPU = 0      # Rust + rayon CPU parallelism
+	METAL = 1    # Metal GPU compute shaders
+	HYBRID = 2   # Both CPU + GPU in parallel
+
+
 # =============================================================================
 # Component Imports
 # =============================================================================

@@ -31,7 +31,7 @@ from typing import Optional
 from joblib import Parallel, delayed
 import multiprocessing
 
-from wnn.ram.enums import BenchmarkMode
+from wnn.ram.core import BenchmarkMode, AccelerationMode
 from wnn.ram.strategies import PerplexityCalculator
 from wnn.tokenizers import TokenizerType, TokenizerFactory, Tokenizer
 from wnn.lsh import RandomProjectionHasher, SimHasher, LSHType
@@ -48,9 +48,23 @@ try:
 	import ram_accelerator
 	RUST_AVAILABLE = True
 	RUST_CPU_CORES = ram_accelerator.cpu_cores()
+	METAL_AVAILABLE = ram_accelerator.metal_available()
+	if METAL_AVAILABLE:
+		METAL_INFO = ram_accelerator.metal_device_info()
+		# M4 Max has 40 GPU cores - use as parallel workers
+		METAL_GPU_CORES = 40  # Could parse from METAL_INFO if available
+	else:
+		METAL_INFO = None
+		METAL_GPU_CORES = 0
 except ImportError:
 	RUST_AVAILABLE = False
 	RUST_CPU_CORES = 0
+	METAL_AVAILABLE = False
+	METAL_INFO = None
+	METAL_GPU_CORES = 0
+
+# Acceleration mode (set via command line, enum imported from wnn.ram.core)
+ACCELERATION_MODE = AccelerationMode.CPU  # Default
 
 # ============================================================================
 # TOKENIZER FACTORY - For fair comparison to published benchmarks
@@ -638,6 +652,151 @@ def _evaluate_batch_rust(
 	return results
 
 
+def _evaluate_batch_metal(
+	connectivities: list[list[list[int]]],
+	word_to_cluster: dict,
+	train_tokens: list[str],
+	test_tokens: list[str],
+	bits_per_neuron: int,
+	eval_subset: int,
+) -> list[float]:
+	"""
+	Evaluate multiple connectivity patterns using Metal GPU (40 cores on M4 Max).
+
+	Falls back to CPU if Metal is not available.
+	"""
+	if not RUST_AVAILABLE or not METAL_AVAILABLE:
+		return _evaluate_batch_rust(
+			connectivities, word_to_cluster, train_tokens,
+			test_tokens, bits_per_neuron, eval_subset
+		)
+
+	if len(connectivities) == 0:
+		return []
+
+	# Precompute word bits (same as CPU version)
+	n_clusters = 256
+	word_to_bits = {}
+
+	def compute_word_bits(word: str, cluster: int) -> int:
+		h = hash(word)
+		bits = 0
+		for i in range(7):
+			if (cluster >> i) & 1:
+				bits |= 1 << i
+		for i in range(5):
+			if (h >> i) & 1:
+				bits |= 1 << (7 + i)
+		return bits
+
+	for word, cluster in word_to_cluster.items():
+		word_to_bits[word] = compute_word_bits(word, cluster)
+
+	for word in set(train_tokens) | set(test_tokens):
+		if word not in word_to_bits:
+			cluster = hash(word) % n_clusters
+			word_to_bits[word] = compute_word_bits(word, cluster)
+
+	# Call Metal accelerator
+	results = ram_accelerator.evaluate_batch_metal(
+		connectivities,
+		word_to_bits,
+		train_tokens,
+		test_tokens,
+		bits_per_neuron,
+		eval_subset
+	)
+
+	return results
+
+
+def _evaluate_batch_hybrid(
+	connectivities: list[list[list[int]]],
+	word_to_cluster: dict,
+	train_tokens: list[str],
+	test_tokens: list[str],
+	bits_per_neuron: int,
+	eval_subset: int,
+) -> list[float]:
+	"""
+	Evaluate using BOTH CPU (16 cores) and Metal GPU (40 cores) = 56 parallel workers.
+
+	Splits the batch: 71% to GPU, 29% to CPU, runs in parallel, combines results.
+	"""
+	if not RUST_AVAILABLE or not METAL_AVAILABLE:
+		return _evaluate_batch_rust(
+			connectivities, word_to_cluster, train_tokens,
+			test_tokens, bits_per_neuron, eval_subset
+		)
+
+	if len(connectivities) == 0:
+		return []
+
+	# Split ratio based on core counts: GPU gets 40/(40+16) = 71%
+	n_total = len(connectivities)
+	gpu_ratio = METAL_GPU_CORES / (METAL_GPU_CORES + RUST_CPU_CORES)
+	n_gpu = int(n_total * gpu_ratio)
+	n_cpu = n_total - n_gpu
+
+	# Split connectivities
+	conn_gpu = connectivities[:n_gpu]
+	conn_cpu = connectivities[n_gpu:]
+
+	# Precompute word bits once (shared by both)
+	n_clusters = 256
+	word_to_bits = {}
+
+	def compute_word_bits(word: str, cluster: int) -> int:
+		h = hash(word)
+		bits = 0
+		for i in range(7):
+			if (cluster >> i) & 1:
+				bits |= 1 << i
+		for i in range(5):
+			if (h >> i) & 1:
+				bits |= 1 << (7 + i)
+		return bits
+
+	for word, cluster in word_to_cluster.items():
+		word_to_bits[word] = compute_word_bits(word, cluster)
+
+	for word in set(train_tokens) | set(test_tokens):
+		if word not in word_to_bits:
+			cluster = hash(word) % n_clusters
+			word_to_bits[word] = compute_word_bits(word, cluster)
+
+	# Run GPU and CPU in parallel using threads
+	import concurrent.futures
+
+	results_gpu = []
+	results_cpu = []
+
+	def run_gpu():
+		nonlocal results_gpu
+		if conn_gpu:
+			results_gpu = ram_accelerator.evaluate_batch_metal(
+				conn_gpu, word_to_bits, train_tokens, test_tokens,
+				bits_per_neuron, eval_subset
+			)
+
+	def run_cpu():
+		nonlocal results_cpu
+		if conn_cpu:
+			results_cpu = ram_accelerator.evaluate_batch_cpu(
+				conn_cpu, word_to_bits, train_tokens, test_tokens,
+				bits_per_neuron, eval_subset
+			)
+
+	with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+		gpu_future = executor.submit(run_gpu)
+		cpu_future = executor.submit(run_cpu)
+		gpu_future.result()
+		cpu_future.result()
+
+	# Combine results in original order
+	return list(results_gpu) + list(results_cpu)
+
+
 def _evaluate_batch_fast(
 	connectivities: list,
 	word_to_cluster: dict,
@@ -647,10 +806,17 @@ def _evaluate_batch_fast(
 	eval_subset: int,
 ) -> list[float]:
 	"""
-	Fast batch evaluation - uses Rust if available, otherwise Python parallel.
+	Fast batch evaluation - uses selected acceleration mode.
+
+	Modes:
+	- CPU: Rust + rayon parallelism (16 cores)
+	- METAL: Metal GPU (40 cores)
+	- HYBRID: Both CPU + GPU (56 cores)
 
 	This is the recommended function to use for batch evaluation.
 	"""
+	global ACCELERATION_MODE
+
 	# Convert any numpy arrays to lists
 	conn_list = []
 	for conn in connectivities:
@@ -659,13 +825,26 @@ def _evaluate_batch_fast(
 		else:
 			conn_list.append(conn)
 
-	if RUST_AVAILABLE:
-		return _evaluate_batch_rust(
+	if not RUST_AVAILABLE:
+		return _evaluate_batch_parallel(
+			conn_list, word_to_cluster, train_tokens,
+			test_tokens, bits_per_neuron, eval_subset
+		)
+
+	# Use selected acceleration mode
+	if ACCELERATION_MODE == AccelerationMode.HYBRID and METAL_AVAILABLE:
+		return _evaluate_batch_hybrid(
+			conn_list, word_to_cluster, train_tokens,
+			test_tokens, bits_per_neuron, eval_subset
+		)
+	elif ACCELERATION_MODE == AccelerationMode.METAL and METAL_AVAILABLE:
+		return _evaluate_batch_metal(
 			conn_list, word_to_cluster, train_tokens,
 			test_tokens, bits_per_neuron, eval_subset
 		)
 	else:
-		return _evaluate_batch_parallel(
+		# Default to CPU (Rust + rayon)
+		return _evaluate_batch_rust(
 			conn_list, word_to_cluster, train_tokens,
 			test_tokens, bits_per_neuron, eval_subset
 		)
@@ -2781,6 +2960,9 @@ if __name__ == "__main__":
 	parser.add_argument("--representation", type=str, default="cooccurrence",
 		choices=["cooccurrence", "mutual_info", "ram_learned"],
 		help="Binary representation: cooccurrence (SVD baseline), mutual_info (MI bits), ram_learned (RAM-based)")
+	parser.add_argument("--accel", type=str, default="cpu",
+		choices=["cpu", "metal", "hybrid"],
+		help="Acceleration: cpu (16 cores), metal (40 GPU cores), hybrid (56 cores = CPU+GPU)")
 	args = parser.parse_args()
 
 	# Map tokenizer arg to enum
@@ -2822,6 +3004,14 @@ if __name__ == "__main__":
 	}
 	representation_type = representation_map[args.representation]
 
+	# Map acceleration arg to enum and set global
+	accel_map = {
+		"cpu": AccelerationMode.CPU,
+		"metal": AccelerationMode.METAL,
+		"hybrid": AccelerationMode.HYBRID,
+	}
+	ACCELERATION_MODE = accel_map[args.accel]
+
 	# Mode descriptions for logging
 	mode_descs = {
 		BenchmarkMode.FAST: "FAST (GA 16×10, TS 16×10)",
@@ -2853,6 +3043,12 @@ if __name__ == "__main__":
 	log(f"LSH: {'enabled (' + args.lsh_type + ')' if args.lsh else 'disabled'}")
 	log(f"Attention: {attention_type.name.lower()}")
 	log(f"Representation: {representation_type.name.lower()}")
+	accel_desc = {
+		AccelerationMode.CPU: f"CPU ({RUST_CPU_CORES} cores)",
+		AccelerationMode.METAL: f"Metal GPU ({METAL_GPU_CORES} cores)" if METAL_AVAILABLE else "Metal (unavailable, fallback to CPU)",
+		AccelerationMode.HYBRID: f"Hybrid CPU+GPU ({RUST_CPU_CORES}+{METAL_GPU_CORES}={RUST_CPU_CORES+METAL_GPU_CORES} cores)" if METAL_AVAILABLE else "Hybrid (unavailable, fallback to CPU)",
+	}
+	log(f"Acceleration: {accel_desc[ACCELERATION_MODE]}")
 	log(f"Runs: {args.runs}")
 	if mode == BenchmarkMode.OVERNIGHT:
 		# Estimate: ~30 min per RAM × 5 RAMs × runs

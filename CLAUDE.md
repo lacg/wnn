@@ -35,6 +35,53 @@ python tests/kv_memory.py
 python tests/benchmarks.py
 ```
 
+## Language Model Benchmarks
+
+```bash
+# Run Phase 1-5 benchmark suite
+./tests/run_experiments.sh
+
+# Manual runs with specific options
+cd tests
+
+# Basic run (FAST mode, sampled data)
+python ram_lm_v2.py --tokenizer gpt2
+
+# FULL mode with complete dataset
+python ram_lm_v2.py --full --full-data --tokenizer gpt2
+
+# With all LLM features (Phase 1-5)
+python ram_lm_v2.py --tokenizer gpt2 --smoothing kneser_ney --lsh --attention hybrid --representation ram_learned
+```
+
+**Available Flags:**
+
+| Flag | Options | Description |
+|------|---------|-------------|
+| `--tokenizer` | word, bpe, gpt2, char | Tokenization strategy |
+| `--smoothing` | none, kneser_ney, backoff, add_k | N-gram smoothing |
+| `--lsh` | (flag) | Enable LSH context hashing |
+| `--lsh-type` | simhash, random_projection | LSH algorithm |
+| `--attention` | none, position, content, hybrid, sparse | Dynamic attention |
+| `--representation` | cooccurrence, mutual_info, ram_learned | Binary encoding |
+| `--accel` | cpu, metal, hybrid | Hardware acceleration |
+
+**Hardware Acceleration (M4 Max):**
+
+| Mode | Cores | Description |
+|------|-------|-------------|
+| `--accel cpu` | 16 | Rust + rayon CPU parallelism |
+| `--accel metal` | 40 | Metal GPU compute shaders |
+| `--accel hybrid` | 56 | Both CPU + GPU in parallel |
+
+```bash
+# Use Metal GPU (40 cores)
+python ram_lm_v2.py --accel metal --tokenizer gpt2
+
+# Use Hybrid CPU+GPU (56 cores)
+python ram_lm_v2.py --accel hybrid --full --full-data --tokenizer gpt2
+```
+
 ## Project Structure
 
 ```
