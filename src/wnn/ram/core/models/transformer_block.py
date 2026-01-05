@@ -8,7 +8,7 @@ Uses factory pattern for component creation.
 from torch import Tensor, zeros, uint8
 
 from wnn.ram.core.base import RAMSequenceModel
-from wnn.ram.enums import (
+from wnn.ram.core.models import (
 	AttentionType,
 	FFNType,
 	ContentMatchMode,

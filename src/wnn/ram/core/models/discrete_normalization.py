@@ -18,7 +18,7 @@ Usage:
 from torch import Tensor, zeros, uint8
 from torch.nn import Module, ModuleList
 
-from wnn.ram.enums import NormStrategy
+from wnn.ram.core.models import NormStrategy
 
 
 class DiscreteNormalization(Module):
@@ -76,8 +76,7 @@ class DiscreteNormalization(Module):
 
 			case NormStrategy.BIT_BALANCE:
 				# Single network that learns balanced transformations
-				from wnn.ram.core import BitLevelMapper
-				from wnn.ram.enums import ContextMode, BitMapperMode
+				from wnn.ram.core import BitLevelMapper, ContextMode, BitMapperMode
 
 				self.bit_transform = BitLevelMapper(
 					n_bits=input_bits,

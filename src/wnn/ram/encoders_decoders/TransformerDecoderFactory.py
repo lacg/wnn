@@ -1,4 +1,4 @@
-from wnn.ram.enums import OutputMode
+from wnn.ram.encoders_decoders import OutputMode
 from wnn.ram.encoders_decoders.TransformerBitWiseDecoder import TransformerBitWiseDecoder
 from wnn.ram.encoders_decoders.TransformerDecoder import TransformerDecoder
 from wnn.ram.encoders_decoders.TransformerHammingDecoder import TransformerHammingDecoder

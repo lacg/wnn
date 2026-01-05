@@ -8,7 +8,7 @@ Achieves 100% generalization with no training.
 from torch import Tensor, zeros, uint8
 from torch.nn import Module
 
-from wnn.ram.enums import ArithmeticOp
+from wnn.ram.core.models import ArithmeticOp
 
 
 def bits_to_int(bits: Tensor) -> int:

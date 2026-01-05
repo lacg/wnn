@@ -1,6 +1,6 @@
 
 from wnn.ram.architecture import KVSpec
-from wnn.ram.enums import MemoryVal
+from wnn.ram.core import MemoryVal
 from wnn.ram.core import RAMLayer
 from wnn.ram.core.recurrent_network import RAMRecurrentNetwork
 from wnn.ram.encoders_decoders import OutputMode

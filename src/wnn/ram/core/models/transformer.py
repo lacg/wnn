@@ -8,7 +8,7 @@ from torch import Tensor
 from torch.nn import ModuleList
 
 from wnn.ram.core.base import RAMSequenceModel
-from wnn.ram.enums import (
+from wnn.ram.core.models import (
 	AttentionType,
 	FFNType,
 	ContentMatchMode,

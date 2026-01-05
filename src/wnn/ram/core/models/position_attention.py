@@ -22,7 +22,7 @@ from torch import Tensor, zeros, uint8, tensor, cat
 from torch.nn import Module, ModuleList
 
 from wnn.ram.core import RAMLayer
-from wnn.ram.enums import PositionPattern
+from wnn.ram.core.models import PositionPattern
 
 
 class PositionOnlyAttention(Module):

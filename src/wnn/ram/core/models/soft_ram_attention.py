@@ -18,13 +18,13 @@ from wnn.ram.core.RAMLayer import RAMLayer
 from wnn.ram.core.RAMGeneralization import GeneralizingProjection
 from wnn.ram.core.models.attention_base import LearnableAttention
 from wnn.ram.core.models.attention_mask import AttentionMask, MaskStrategy
-from wnn.ram.enums import (
+from wnn.ram.core.models import (
 	ContentMatchMode,
 	AttentionCombineMode,
 	AggregationStrategy,
-	MapperStrategy,
 	CrossAttentionMode,
 )
+from wnn.ram.core import MapperStrategy
 from wnn.ram.encoders_decoders import PositionMode, PositionEncoderFactory
 
 from torch import Tensor, zeros, uint8, cat, tensor, randperm, manual_seed, float32

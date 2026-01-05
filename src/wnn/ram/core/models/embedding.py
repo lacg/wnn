@@ -31,9 +31,9 @@ Architecture:
 """
 
 from wnn.ram.core import RAMLayer
-from wnn.ram.factories import MapperFactory
-from wnn.ram.enums import MapperStrategy, ContextMode, BitMapperMode as OutputMode
-from wnn.ram.enums import PositionEncoding
+# MapperFactory imported lazily to avoid circular import
+from wnn.ram.core.models import PositionEncoding
+from wnn.ram.core import MapperStrategy, ContextMode, BitMapperMode as OutputMode
 
 from torch import Tensor, zeros, uint8, arange
 from torch.nn import Module
@@ -85,7 +85,8 @@ class RAMEmbedding(Module):
 				rng=rng,
 			)
 		else:
-			# Use MapperFactory for generalization strategies
+			# Use MapperFactory for generalization strategies (lazy import to avoid circular)
+			from wnn.ram.factories import MapperFactory
 			# Note: requires token_bits == embedding_bits for some strategies
 			self.token_embed = MapperFactory.create(
 				strategy=strategy,

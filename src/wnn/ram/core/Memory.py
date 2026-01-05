@@ -1,6 +1,7 @@
 from wnn.ram.encoders_decoders import TransformerDecoder
 from wnn.ram.factories.cost import CostCalculatorFactory
-from wnn.ram.enums import CostCalculatorType, MemoryVal
+from wnn.ram.cost import CostCalculatorType
+from wnn.ram.core import MemoryVal
 
 from typing import Optional
 

@@ -20,8 +20,7 @@ Note: MapperFactory is located in wnn.ram.factories.mapper
 """
 
 from wnn.ram.core.RAMLayer import RAMLayer
-from wnn.ram.enums import ContextMode, MapperStrategy
-from wnn.ram.enums.generalization import BitMapperMode as OutputMode  # Renamed to avoid conflict
+from wnn.ram.core import ContextMode, MapperStrategy, BitMapperMode as OutputMode
 
 from torch import Tensor, zeros, uint8, cat, tensor
 from torch.nn import Module, ModuleList

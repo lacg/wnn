@@ -4,7 +4,7 @@ Cost Calculator Factory
 Factory for creating cost calculators based on CostCalculatorType.
 """
 
-from wnn.ram.enums import CostCalculatorType
+from wnn.ram.cost import CostCalculatorType
 
 
 class CostCalculatorFactory:

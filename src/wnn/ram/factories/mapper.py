@@ -6,7 +6,7 @@ Factory for creating mapper instances based on MapperStrategy.
 
 from torch.nn import Module
 
-from wnn.ram.enums import MapperStrategy, ContextMode, BitMapperMode
+from wnn.ram.core import MapperStrategy, ContextMode, BitMapperMode
 
 
 class MapperFactory:

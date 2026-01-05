@@ -5,7 +5,7 @@ Factory for creating pre-configured RAM Transformers.
 Uses match-case for clean dispatch.
 """
 
-from wnn.ram.enums import (
+from wnn.ram.core.models import (
 	RAMTransformerType,
 	AttentionType,
 	FFNType,

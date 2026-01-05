@@ -2,7 +2,7 @@
 Factory for creating position encoders.
 """
 
-from wnn.ram.enums import PositionMode
+from wnn.ram.encoders_decoders import PositionMode
 from wnn.ram.encoders_decoders.PositionEncoder import PositionEncoder
 from wnn.ram.encoders_decoders.BinaryPositionEncoder import BinaryPositionEncoder
 from wnn.ram.encoders_decoders.RelativePositionEncoder import RelativePositionEncoder

@@ -43,7 +43,7 @@ Architecture (with FFN):
 
 from wnn.ram.core import RAMLayer, GeneralizingProjection
 from wnn.ram.core.base import RAMSequenceModel
-from wnn.ram.enums import MapperStrategy
+from wnn.ram.core import MapperStrategy
 from wnn.ram.core.models.attention import RAMAttention
 from wnn.ram.core.models.feedforward import RAMFeedForward, FFNMode
 from wnn.ram.core.models.embedding import RAMEmbedding, PositionEncoding

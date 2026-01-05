@@ -1,6 +1,6 @@
 from wnn.ram.core.Memory import Memory
 from wnn.ram.core.base import RAMComponent
-from wnn.ram.enums import MemoryVal
+from wnn.ram.core import MemoryVal
 
 from typing import Optional
 

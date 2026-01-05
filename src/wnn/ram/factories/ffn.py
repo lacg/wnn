@@ -7,7 +7,7 @@ Uses match-case for clean dispatch.
 
 from torch.nn import Module
 
-from wnn.ram.enums import FFNType, ArithmeticOp
+from wnn.ram.core.models import FFNType, ArithmeticOp
 
 
 class FFNFactory:

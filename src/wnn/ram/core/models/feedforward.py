@@ -30,7 +30,8 @@ Architecture:
 
 from wnn.ram.core import RAMLayer, GeneralizingProjection
 from wnn.ram.core.base import RAMComponent
-from wnn.ram.enums import MapperStrategy, FFNMode
+from wnn.ram.core.models import FFNMode
+from wnn.ram.core import MapperStrategy
 
 from torch import Tensor, zeros, uint8
 

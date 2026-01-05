@@ -1,29 +1,38 @@
-# --------------------------------------------------------------------
-# Author: Luiz Alberto Crispiniano Garcia
-# Weightless RAM neural network primitives:
-# - RAMNeuron: bool output, uint8-backed memory table (classic RAM neuron) - Originally, it was necessary. It evolved to be not used.
-# The reason is that RAMLayer now have a RAMNeuron as a tensor. This way, it is GPU friendly and much faster.
-# - RAMLayer: many RAMNeurons (originally) => Neuron Tensors + connectivity matrix (random or user-specified)
-# - RAMAutomaton: recurrent composition (input-layer + state-layer)
-#
-# Notes:
-# - Each RAMNeuron with k input bits has memory size 2**k (can blow up fast).
-# - For large k, use hashing (use_hashing=True) with controlled hash_size to reduce memory.
-# - Memory dtype is uint8 for alignment; stored values are 0/1 logically.
-# - EDRA = “Error Detection and Reconstruction Algorithm” a way to backpropagate the conflicts on higher layers to lower layers
-# 	(output layer to input layer for example).
-#
-# Requirements: torch
-# --------------------------------------------------------------------
+"""
+Encoders and Decoders for RAM Transformers.
 
-from wnn.ram.enums import OutputMode, PositionMode
-from .TransformerBitWiseDecoder import TransformerBitWiseDecoder
+Decoders: Interpret output bits as predictions
+Position Encoders: Encode sequence positions into bits
+"""
+
+from enum import IntEnum
+
+
+class OutputMode(IntEnum):
+	"""How to decode output layer bits into predictions."""
+	BITWISE = 0
+	HAMMING = 1
+	RAW = 2
+	TOKEN = 3
+	TOKEN_LIST = 4
+
+
+class PositionMode(IntEnum):
+	"""How to encode sequence positions into bits."""
+	NONE = 0      # No position encoding
+	BINARY = 1    # Binary encoding: pos 5 → [1,0,1]
+	RELATIVE = 2  # Relative position: distance from query
+	LEARNED = 3   # Learned position embeddings via RAMLayer
+
+
+# Decoders
 from .TransformerDecoder import TransformerDecoder
-from .TransformerDecoderFactory import TransformerDecoderFactory
+from .TransformerBitWiseDecoder import TransformerBitWiseDecoder
 from .TransformerHammingDecoder import TransformerHammingDecoder
 from .TransformerRawDecoder import TransformerRawDecoder
 from .TransformerTokenDecoder import TransformerTokenDecoder
 from .TransformerTokenListDecoder import TransformerTokenListDecoder
+from .TransformerDecoderFactory import TransformerDecoderFactory
 
 # Position encoders
 from .PositionEncoder import PositionEncoder
@@ -31,3 +40,24 @@ from .BinaryPositionEncoder import BinaryPositionEncoder
 from .RelativePositionEncoder import RelativePositionEncoder
 from .LearnedPositionEncoder import LearnedPositionEncoder
 from .PositionEncoderFactory import PositionEncoderFactory
+
+
+__all__ = [
+	# Enums
+	"OutputMode",
+	"PositionMode",
+	# Decoders
+	"TransformerDecoder",
+	"TransformerBitWiseDecoder",
+	"TransformerHammingDecoder",
+	"TransformerRawDecoder",
+	"TransformerTokenDecoder",
+	"TransformerTokenListDecoder",
+	"TransformerDecoderFactory",
+	# Position encoders
+	"PositionEncoder",
+	"BinaryPositionEncoder",
+	"RelativePositionEncoder",
+	"LearnedPositionEncoder",
+	"PositionEncoderFactory",
+]

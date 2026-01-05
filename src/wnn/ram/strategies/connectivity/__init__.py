@@ -5,7 +5,7 @@ Based on Garcia (2003) thesis on global optimization methods for
 choosing connectivity patterns of weightless neural networks.
 
 Usage:
-	from wnn.ram.enums import OptimizationMethod
+	from wnn.ram.core import OptimizationMethod
 	from wnn.ram.strategies.connectivity import OptimizerStrategyFactory
 
 	# Create strategy (Tabu Search recommended - best results from thesis)

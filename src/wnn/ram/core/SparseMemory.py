@@ -53,7 +53,8 @@ from torch import where
 from torch import zeros
 from torch.nn import Module
 
-from wnn.ram.enums import CostCalculatorType, MemoryVal
+from wnn.ram.cost import CostCalculatorType
+from wnn.ram.core import MemoryVal
 from wnn.ram.factories.cost import CostCalculatorFactory
 
 

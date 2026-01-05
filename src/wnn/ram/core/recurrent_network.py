@@ -2,7 +2,7 @@ from wnn.ram.core import RAMLayer
 from wnn.ram.encoders_decoders import OutputMode
 from wnn.ram.encoders_decoders import TransformerDecoder
 from wnn.ram.encoders_decoders import TransformerDecoderFactory
-from wnn.ram.enums import StateMode
+from wnn.ram.core import StateMode
 
 
 from typing import Optional

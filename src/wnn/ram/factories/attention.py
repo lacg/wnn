@@ -7,14 +7,14 @@ Uses match-case for clean dispatch.
 
 from torch.nn import Module
 
-from wnn.ram.enums import (
+from wnn.ram.core.models import (
 	AttentionType,
 	ContentMatchMode,
 	AttentionCombineMode,
 	AggregationStrategy,
 )
 from wnn.ram.encoders_decoders import PositionMode
-from wnn.ram.enums import MapperStrategy
+from wnn.ram.core import MapperStrategy
 
 
 class AttentionFactory:

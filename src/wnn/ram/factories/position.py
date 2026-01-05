@@ -4,7 +4,7 @@ Position Encoder Factory
 Factory for creating position encoders based on PositionMode.
 """
 
-from wnn.ram.enums import PositionMode
+from wnn.ram.encoders_decoders import PositionMode
 
 
 class PositionEncoderFactory:

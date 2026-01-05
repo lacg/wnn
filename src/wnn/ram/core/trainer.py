@@ -47,7 +47,10 @@ Usage:
 """
 
 from wnn.ram.core.models.seq2seq import RAMSeq2Seq
-from wnn.ram.enums import PositionEncoding, LayerType, TrainingMode, TrainingPhase, MixingStrategy
+# Enums now in core - import from core module (defined before this file is imported)
+from wnn.ram.core import LayerType, TrainingMode, TrainingPhase, MixingStrategy
+# PositionEncoding is in core.models
+from wnn.ram.core.models import PositionEncoding
 
 from torch import Tensor, zeros, float32, save as torch_save, load as torch_load
 from dataclasses import dataclass, field, asdict

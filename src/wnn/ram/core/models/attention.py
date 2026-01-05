@@ -22,7 +22,7 @@ from wnn.ram.core.models.attention_base import LearnableAttention
 from wnn.ram.core.models.attention_mask import AttentionMask, MaskStrategy
 from wnn.ram.encoders_decoders import PositionMode
 from wnn.ram.encoders_decoders import PositionEncoderFactory
-from wnn.ram.enums import CrossAttentionMode
+from wnn.ram.core.models import CrossAttentionMode
 
 from torch import Tensor, zeros, uint8, cat, tensor
 from torch.nn import ModuleList

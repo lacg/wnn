@@ -4,7 +4,7 @@ Transformer Decoder Factory
 Factory for creating decoder instances based on OutputMode.
 """
 
-from wnn.ram.enums import OutputMode
+from wnn.ram.encoders_decoders import OutputMode
 
 
 class TransformerDecoderFactory:

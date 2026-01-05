@@ -45,7 +45,7 @@ Use cases:
 """
 
 from wnn.ram.core import RAMLayer, GeneralizingProjection
-from wnn.ram.enums import MapperStrategy
+from wnn.ram.core import MapperStrategy
 from wnn.ram.core.models.attention import RAMAttention, CrossAttentionMode
 from wnn.ram.core.models.feedforward import RAMFeedForward, FFNMode
 from wnn.ram.core.models.embedding import RAMEmbedding, PositionEncoding

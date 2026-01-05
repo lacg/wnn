@@ -6,7 +6,7 @@ Uses match-case dispatch on ModelType enum with explicit parameters.
 
 Usage:
 	from wnn.ram.factories import ModelsFactory
-	from wnn.ram.enums import ModelType, RAMTransformerType
+	from wnn.ram.core.models import ModelType, RAMTransformerType
 
 	# Create a transformer (preset type)
 	model = ModelsFactory.create(
@@ -26,7 +26,7 @@ Usage:
 
 from typing import Optional
 
-from wnn.ram.enums import (
+from wnn.ram.core.models import (
 	ModelType,
 	RAMTransformerType,
 	AttentionType,

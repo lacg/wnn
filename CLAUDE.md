@@ -38,18 +38,24 @@ python tests/benchmarks.py
 ## Project Structure
 
 ```
-src/wnn/ram/
-├── core/           # Core components (Memory, RAMLayer, networks, models)
-├── enums/          # ALL enumerations (MapperStrategy, TrainingMode, etc.)
-├── factories/      # ALL factory classes (MapperFactory, AttentionFactory, etc.)
-├── architecture/   # Configuration specs (KVSpec)
-├── decoders/       # Output interpretation strategies
-└── cost/           # Cost calculators for constraint solving
+src/wnn/
+├── attention/         # LM attention mechanisms (self-contained)
+├── lsh/              # Locality-sensitive hashing (self-contained)
+├── representations/  # Binary word representations (self-contained)
+├── smoothing/        # N-gram smoothing (self-contained)
+├── tokenizers/       # Tokenization (self-contained)
+└── ram/              # Core RAM architecture
+    ├── core/         # Memory, RAMLayer, networks, models + related enums/factories
+    ├── cost/         # Cost calculators + CostCalculatorType enum + factory
+    ├── strategies/   # Optimization strategies + related enums/factories
+    ├── encoders_decoders/  # Decoders + OutputMode, PositionMode enums + factory
+    └── architecture/ # Configuration specs (KVSpec)
 ```
 
 **Important conventions:**
-- All enums live in `wnn/ram/enums/` - no exceptions
-- All factories live in `wnn/ram/factories/` - no exceptions
+- Each module is **self-contained**: enums and factories live WITH their related code
+- Import pattern: `from wnn.module import SomeType, SomeFactory` (not from central folders)
+- Example: `from wnn.attention import AttentionType` not `from wnn.ram.enums import AttentionType`
 
 ## Architecture
 

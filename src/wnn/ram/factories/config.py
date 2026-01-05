@@ -5,7 +5,7 @@ Factory for creating block configurations for multi-step transformers.
 Uses match-case for clean dispatch.
 """
 
-from wnn.ram.enums import Step, AttentionType, FFNType
+from wnn.ram.core.models import Step, AttentionType, FFNType
 from wnn.ram.encoders_decoders import PositionMode
 
 

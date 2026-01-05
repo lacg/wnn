@@ -4,7 +4,7 @@ Factory for creating connectivity optimization strategies.
 
 from typing import Optional, Union
 
-from wnn.ram.enums import OptimizationMethod
+from wnn.ram.core import OptimizationMethod
 from wnn.ram.strategies.connectivity.base import OptimizerStrategyBase
 from wnn.ram.strategies.connectivity.tabu_search import TabuSearchStrategy, TabuSearchConfig
 from wnn.ram.strategies.connectivity.simulated_annealing import SimulatedAnnealingStrategy, SimulatedAnnealingConfig

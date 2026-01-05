@@ -1,7 +1,7 @@
 from wnn.ram.cost.CostCalculator import CostCalculator
 from wnn.ram.cost.CostCalculatorArgMin import CostCalculatorArgMin
 from wnn.ram.cost.CostCalculatorStochastic import CostCalculatorStochastic
-from wnn.ram.enums import CostCalculatorType
+from wnn.ram.cost import CostCalculatorType
 from wnn.ram.cost.CostCalculatorVote import CostCalculatorVote
 
 class CostCalculatorFactory:
