@@ -1389,10 +1389,10 @@ class RAMLM_v2:
 			log("║  PRE-OPTIMIZATION BASELINE EVALUATION                            ║")
 			log("╚══════════════════════════════════════════════════════════════════╝")
 
-			# Helper function to compute exact_probs and PPL for a token set
-			def compute_exact_probs_and_ppl(tokens_to_eval):
-				"""Compute exact_probs (from exact RAMs) and perplexity."""
-				eval_size = len(tokens_to_eval) - MAX_NGRAM  # Full dataset
+			# Helper to compute exact_probs for a token set (needed for PPL calculation)
+			def compute_exact_probs(tokens_to_eval):
+				"""Compute exact_probs (from exact RAMs) - P(target|context) or None."""
+				eval_size = len(tokens_to_eval) - MAX_NGRAM
 				exact_probs = []
 				for i in range(eval_size):
 					target = tokens_to_eval[i + MAX_NGRAM]
@@ -1409,20 +1409,56 @@ class RAMLM_v2:
 								exact_prob = target_count / total if total > 0 else 0.0
 								break
 					exact_probs.append(exact_prob)
-				ppl = self._evaluate_perplexity_python(
-					tokens_to_eval, exact_probs, vocab_size, self.cascade_threshold, eval_size
+				return exact_probs
+
+			# Helper to compute PPL using Rust accelerator (batch of 1 = current connectivity)
+			def compute_ppl_rust(tokens_to_eval, exact_probs_list):
+				"""Compute PPL using Rust accelerator with current connectivity."""
+				eval_size = len(tokens_to_eval) - MAX_NGRAM
+				# Get current connectivities from all RAMs
+				n_values = sorted(self.generalized_rams.keys())
+				all_conns = [
+					[list(neuron.connected_bits) for neuron in self.generalized_rams[n].neurons]
+					for n in n_values
+				]
+				# Use first RAM's connectivity as dummy candidate (we evaluate current state)
+				dummy_candidate = all_conns[0][0] if all_conns and all_conns[0] else [0, 1, 2]
+				# Export word_to_bits
+				_, _, w2b = self._export_rams_for_rust()
+				# Call Rust with batch of 1 (current connectivity, ram_idx=0 is ignored for full eval)
+				perplexities = ram_accelerator.evaluate_fullnetwork_perplexity_batch_cpu(
+					all_conns, [dummy_candidate], 0,  # ram_idx=0, single candidate
+					w2b, tokens[:train_subset], tokens_to_eval,
+					exact_probs_list, eval_size, vocab_size, self.cascade_threshold
 				)
-				return exact_probs, ppl
+				return perplexities[0] if perplexities else float('inf')
+
+			# Check if Rust accelerator with perplexity is available
+			has_rust_ppl = ACCEL_RUST_AVAILABLE and hasattr(ram_accelerator, 'evaluate_fullnetwork_perplexity_batch_cpu')
 
 			# Test set baseline (cache exact_probs - they don't change during optimization)
-			test_exact_probs, pre_test_ppl = compute_exact_probs_and_ppl(final_test_tokens)
+			test_exact_probs = compute_exact_probs(final_test_tokens)
 			self._cached_test_exact_probs = test_exact_probs
+			if has_rust_ppl:
+				pre_test_ppl = compute_ppl_rust(final_test_tokens, test_exact_probs)
+			else:
+				pre_test_ppl = self._evaluate_perplexity_python(
+					final_test_tokens, test_exact_probs, vocab_size, self.cascade_threshold,
+					len(final_test_tokens) - MAX_NGRAM
+				)
 			self._pre_optimization_test_ppl = pre_test_ppl
 			log(f"★ TEST SET PPL (before optimization): {pre_test_ppl:.1f}")
 
-			# Validation set baseline (same tokens used during optimization)
-			if validation_tokens is not None and len(validation_tokens) > 6:
-				_, pre_val_ppl = compute_exact_probs_and_ppl(validation_tokens)
+			# Validation set baseline
+			if validation_tokens is not None and len(validation_tokens) > MAX_NGRAM:
+				val_exact_probs = compute_exact_probs(validation_tokens)
+				if has_rust_ppl:
+					pre_val_ppl = compute_ppl_rust(validation_tokens, val_exact_probs)
+				else:
+					pre_val_ppl = self._evaluate_perplexity_python(
+						validation_tokens, val_exact_probs, vocab_size, self.cascade_threshold,
+						len(validation_tokens) - MAX_NGRAM
+					)
 				self._pre_optimization_val_ppl = pre_val_ppl
 				log(f"★ VALIDATION SET PPL (before optimization): {pre_val_ppl:.1f}")
 			log("")
