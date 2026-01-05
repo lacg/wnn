@@ -1397,12 +1397,17 @@ class RAMLM_v2:
 			# Check if Rust exact_probs is available (HUGE speedup: 10+ min → seconds)
 			has_rust_exact_probs = ACCEL_RUST_AVAILABLE and hasattr(ram_accelerator, 'compute_exact_probs_batch')
 
+			# Cache the export (expensive with 5M+ patterns) - only compute once
+			cached_rust_export = None
+			if has_rust_exact_probs:
+				cached_rust_export = self._export_rams_for_rust()
+
 			# Helper to compute exact_probs for a token set (needed for PPL calculation)
 			def compute_exact_probs(tokens_to_eval):
 				"""Compute exact_probs (from exact RAMs) - P(target|context) or None."""
 				# Use Rust accelerator if available (parallel across all positions)
-				if has_rust_exact_probs:
-					_, exact_rams_export, w2b = self._export_rams_for_rust()
+				if has_rust_exact_probs and cached_rust_export is not None:
+					_, exact_rams_export, w2b = cached_rust_export
 					return ram_accelerator.compute_exact_probs_batch(exact_rams_export, w2b, tokens_to_eval)
 
 				# Fallback to Python (slow for large datasets)
