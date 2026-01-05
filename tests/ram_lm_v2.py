@@ -34,6 +34,7 @@ import multiprocessing
 from wnn.ram.enums import BenchmarkMode
 from wnn.ram.strategies import PerplexityCalculator
 from wnn.tokenizers import TokenizerType, TokenizerFactory, Tokenizer
+from wnn.lsh import RandomProjectionHasher, SimHasher, LSHType
 
 # Number of parallel workers (leave some cores for system)
 N_WORKERS = max(1, multiprocessing.cpu_count() - 4)  # 12 on 16-core M4 Max
@@ -314,10 +315,14 @@ class GeneralizedNGramRAM:
 
 	- Exact match: needs all 48 bits (4 words × 12 bits) to match
 	- Partial (12 bits): only needs 12 bits to match → 40x more coverage!
+
+	With LSH enabled, similar contexts map to SIMILAR addresses, enabling:
+	- "the cat ate" ≈ "the dog ate" → can share learned patterns
+	- Better generalization for semantically related contexts
 	"""
 
 	def __init__(self, n: int, n_neurons: int = 32, bits_per_neuron: int = 12,
-				 bits_per_word: int = 12):
+				 bits_per_word: int = 12, use_lsh: bool = False, lsh_type: str = "simhash"):
 		self.n = n
 		self.n_neurons = n_neurons
 		self.bits_per_neuron = bits_per_neuron
@@ -327,6 +332,12 @@ class GeneralizedNGramRAM:
 		self.neurons = []
 		self.word_to_cluster = {}
 		self.n_clusters = 256
+
+		# LSH support for similarity-preserving hashing
+		self.use_lsh = use_lsh
+		self.lsh_type = lsh_type
+		self._lsh_hasher = None
+		self._lsh_trained = False
 
 	def _word_to_bits(self, word: str) -> tuple:
 		"""Convert word to bits."""
@@ -342,11 +353,49 @@ class GeneralizedNGramRAM:
 		return tuple(bits)
 
 	def _context_to_bits(self, context: list[str]) -> tuple:
-		"""Convert context to bit vector."""
-		bits = []
-		for word in context[-self.n:]:
-			bits.extend(self._word_to_bits(word))
-		return tuple(bits)
+		"""
+		Convert context to bit vector.
+
+		With LSH enabled, similar contexts map to similar bit patterns,
+		enabling generalization between semantically related patterns.
+		"""
+		if self.use_lsh and self._lsh_trained:
+			# LSH: project context to bits preserving similarity
+			ctx = context[-self.n:]
+			address = self._lsh_hasher.hash_context(ctx)
+			# Convert integer to bit tuple
+			bits = []
+			for i in range(self.total_bits):
+				bits.append((address >> i) & 1)
+			return tuple(bits)
+		else:
+			# Standard: concatenate word bits
+			bits = []
+			for word in context[-self.n:]:
+				bits.extend(self._word_to_bits(word))
+			return tuple(bits)
+
+	def train_lsh(self, tokens: list[str], seed: int = 42) -> None:
+		"""
+		Train LSH hasher on corpus.
+
+		Must be called before train() if use_lsh=True.
+		"""
+		if not self.use_lsh:
+			return
+
+		# Create hasher with appropriate bit count
+		if self.lsh_type == "simhash":
+			self._lsh_hasher = SimHasher(n_bits=self.total_bits)
+		else:
+			self._lsh_hasher = RandomProjectionHasher(
+				n_bits=self.total_bits,
+				embedding_dim=64,
+				min_count=2,
+			)
+
+		self._lsh_hasher.train(tokens, seed=seed)
+		self._lsh_trained = True
 
 	def create_diverse_connectivity(self):
 		"""Create neurons with diverse connectivity patterns."""
@@ -759,13 +808,16 @@ class RAMLM_v2:
 
 	def __init__(self, freq_threshold: int = 50, mode: BenchmarkMode = BenchmarkMode.FAST,
 				 n_neurons: int = None, bits_per_neuron: int = None, cascade_threshold: float = 0.1,
-				 strategy_sequence: list = None, smoothing_type: str = "none"):
+				 strategy_sequence: list = None, smoothing_type: str = "none",
+				 use_lsh: bool = False, lsh_type: str = "simhash"):
 		self.freq_threshold = freq_threshold
 		self.mode = mode
 		self.word_counts = Counter()
 		self.high_freq_words = set()
 		self.smoothing_type = smoothing_type
 		self.smoothing = None  # Trained during train()
+		self.use_lsh = use_lsh
+		self.lsh_type = lsh_type
 
 		# Configurable parameters (with mode-based defaults)
 		if n_neurons is None:
@@ -832,7 +884,8 @@ class RAMLM_v2:
 			log(f"  Vocab size: {self.smoothing.vocab_size:,}")
 
 		# Train generalized RAMs with partial connectivity
-		log(f"Training generalized RAMs ({self.n_neurons} neurons)...")
+		lsh_label = f" + {self.lsh_type.upper()} LSH" if self.use_lsh else ""
+		log(f"Training generalized RAMs ({self.n_neurons} neurons{lsh_label})...")
 		bits_per_neuron = 10 if self.mode == BenchmarkMode.FAST else 14
 
 		for n in [2, 3, 4, 5, 6]:  # Added n=6 for longer context
@@ -840,9 +893,14 @@ class RAMLM_v2:
 				n=n,
 				n_neurons=self.n_neurons,
 				bits_per_neuron=bits_per_neuron,
-				bits_per_word=12
+				bits_per_word=12,
+				use_lsh=self.use_lsh,
+				lsh_type=self.lsh_type,
 			)
 			ram.learn_clusters(tokens)
+			# Train LSH hasher if enabled (before train())
+			if self.use_lsh:
+				ram.train_lsh(tokens)
 			ram.create_diverse_connectivity()
 			ram.train(tokens)
 
@@ -2162,6 +2220,8 @@ def run_benchmark(
 	strategy_sequence: list = None,
 	full_data: bool = False,
 	smoothing_type: str = "none",
+	use_lsh: bool = False,
+	lsh_type: str = "simhash",
 ) -> BenchmarkRun:
 	"""Run the v2 benchmark."""
 	if seed is not None:
@@ -2288,10 +2348,12 @@ def run_benchmark(
 	log_separator()
 	model = RAMLM_v2(freq_threshold=30, mode=mode, n_neurons=n_neurons, bits_per_neuron=bits_per_neuron,
 					 cascade_threshold=cascade_threshold, strategy_sequence=strategy_sequence,
-					 smoothing_type=smoothing_type)
+					 smoothing_type=smoothing_type, use_lsh=use_lsh, lsh_type=lsh_type)
 	log(f"Model config: n_neurons={model.n_neurons}, bits_per_neuron={model.bits_per_neuron}, cascade_threshold={model.cascade_threshold}")
 	if smoothing_type != "none":
 		log(f"Smoothing: {smoothing_type}")
+	if use_lsh:
+		log(f"LSH: {lsh_type} (similarity-preserving context hashing)")
 	log(f"Strategy sequence: {' → '.join(strategy_sequence)}")
 
 	start = time.time()
@@ -2505,6 +2567,8 @@ def run_multi_benchmark(
 	strategy_sequence: list = None,
 	full_data: bool = False,
 	smoothing_type: str = "none",
+	use_lsh: bool = False,
+	lsh_type: str = "simhash",
 ):
 	"""Run the benchmark multiple times and summarize results."""
 	if strategy_sequence is None:
@@ -2538,7 +2602,8 @@ def run_multi_benchmark(
 		run_result = run_benchmark(mode=mode, run_id=i+1, seed=seed, tokenizer_type=tokenizer_type,
 								   n_neurons=n_neurons, bits_per_neuron=bits_per_neuron,
 								   cascade_threshold=cascade_threshold, strategy_sequence=strategy_sequence,
-								   full_data=full_data, smoothing_type=smoothing_type)
+								   full_data=full_data, smoothing_type=smoothing_type,
+								   use_lsh=use_lsh, lsh_type=lsh_type)
 		runs.append(run_result)
 
 		# Save intermediate results
@@ -2657,6 +2722,11 @@ if __name__ == "__main__":
 	parser.add_argument("--smoothing", type=str, default="none",
 		choices=["none", "kneser_ney", "backoff", "add_k"],
 		help="Smoothing for cascade fallback: none (1/vocab), kneser_ney (recommended), backoff, add_k")
+	parser.add_argument("--lsh", action="store_true",
+		help="Enable LSH context hashing for similarity-preserving addresses")
+	parser.add_argument("--lsh-type", type=str, default="simhash",
+		choices=["simhash", "random_projection"],
+		help="LSH algorithm: simhash (fast) or random_projection (learned embeddings)")
 	args = parser.parse_args()
 
 	# Map tokenizer arg to enum
@@ -2721,12 +2791,14 @@ if __name__ == "__main__":
 		run_multi_benchmark(n_runs=args.runs, mode=mode, tokenizer_type=tokenizer_type,
 							n_neurons=args.neurons, bits_per_neuron=args.bits,
 							cascade_threshold=args.threshold, strategy_sequence=strategy_sequence,
-							full_data=args.full_data, smoothing_type=args.smoothing)
+							full_data=args.full_data, smoothing_type=args.smoothing,
+							use_lsh=args.lsh, lsh_type=args.lsh_type)
 	else:
 		run_benchmark(mode=mode, tokenizer_type=tokenizer_type,
 					  n_neurons=args.neurons, bits_per_neuron=args.bits,
 					  cascade_threshold=args.threshold, strategy_sequence=strategy_sequence,
-					  full_data=args.full_data, smoothing_type=args.smoothing)
+					  full_data=args.full_data, smoothing_type=args.smoothing,
+					  use_lsh=args.lsh, lsh_type=args.lsh_type)
 
 	# Final log
 	log_separator()

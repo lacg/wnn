@@ -165,15 +165,28 @@ Current word-level has 76k vocab with many unseen test words → PPL explosion.
 
 **Expected impact**: Reduce test PPL significantly by eliminating OOV penalty.
 
-### 8. Embedding Similarity / Locality-Sensitive Hashing (LSH)
-- [ ] Research LSH for context hashing (similar contexts → same RAM address)
-- [ ] Implement SimHash or MinHash for n-gram contexts
-- [ ] Test if similar contexts can share predictions
-- [ ] Compare with learned embeddings quantized to bits
-- [ ] Measure generalization improvement
+### 8. Embedding Similarity / Locality-Sensitive Hashing (LSH) ✅ COMPLETE
+- [x] Research LSH for context hashing (similar contexts → same RAM address)
+- [x] Implement SimHash or MinHash for n-gram contexts
+- [x] Test if similar contexts can share predictions
+- [x] Compare with learned embeddings quantized to bits
+- [ ] Measure generalization improvement (benchmark needed)
+
+**Implementation** (`src/wnn/lsh/`):
+- `base.py`: Abstract `ContextHasher` and `EmbeddingHasher` interfaces
+- `random_projection.py`: `RandomProjectionHasher` (learned), `SimHasher` (fast), `PretrainedEmbeddingHasher`
+- `__init__.py`: `LSHFactory`, `LSHType` enum
+
+**Usage**: `python tests/ram_lm_v2.py --lsh` (or `--lsh --lsh-type random_projection`)
+
+**Key features**:
+- SimHash: Simple +1/-1 vectors per word, weighted sum, binarize
+- RandomProjection: Learn embeddings from co-occurrence (PPMI + SVD), project to bits
+- PretrainedEmbedding: Use word2vec/GloVe embeddings
+- Similar contexts map to SIMILAR addresses → generalization!
 
 **Why it matters**: Currently "cat ate fish" and "dog ate fish" are completely unrelated.
-With LSH, similar contexts could map to same RAM address → transfer learning.
+With LSH, similar contexts map to nearby addresses → transfer learning.
 
 **Expected impact**: Enable generalization between semantically similar contexts.
 
@@ -247,8 +260,8 @@ Our RAM sees only WikiText-2 (~2M tokens from Wikipedia).
 |-------|---------|------------|-----------------|--------|
 | 1 | **Subword Tokenization** | Medium | High (eliminates OOV) | ✅ Done |
 | 2 | **Kneser-Ney Smoothing** | Low | Medium (better fallback) | ✅ Done |
-| 3 | **LSH Context Hashing** | High | High (similarity-based generalization) | 🔜 Next |
-| 4 | **Dynamic Attention** | High | Medium (better context selection) | |
+| 3 | **LSH Context Hashing** | High | High (similarity-based generalization) | ✅ Done |
+| 4 | **Dynamic Attention** | High | Medium (better context selection) | 🔜 Next |
 | 5 | **Learned Representations** | Very High | Very High (semantic encoding) | |
 | 6 | **Pre-training Scale** | Infrastructure | High (coverage) | |
 
