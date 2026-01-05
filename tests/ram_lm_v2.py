@@ -2604,9 +2604,9 @@ class RAMLM_v2:
 			calculators["meta"].add_from_probability(meta_prob, is_correct=(pred3 == target))
 
 			# RAM_META: RAM-based meta-classifier with state tracking
-			# NOTE: This still needs sequential evaluation due to state updates
+			# Uses cached predictions + sequential state updates
 			if hasattr(self, 'ram_meta'):
-				pred4, method4, _ = self.predict_ram_meta(context)
+				pred4, method4, _ = self._predict_ram_meta_from_cached(predictions)
 				is_correct = (pred4 == target)
 				# Use cached cascade probability for partial credit
 				ram_meta_prob = self._compute_target_probability_from_cached(predictions, target)
@@ -2691,6 +2691,34 @@ class RAMLM_v2:
 					agreement += 1
 
 		return primary_word
+
+	def _predict_ram_meta_from_cached(self, predictions: dict) -> tuple[str, str, float]:
+		"""
+		Predict using RAM-based meta-classifier from CACHED predictions.
+
+		This is the accelerated version of predict_ram_meta() that uses
+		pre-computed predictions instead of doing fresh lookups.
+		"""
+		if not predictions or not hasattr(self, 'ram_meta'):
+			# Fallback to cascade from cached
+			return self._predict_cascade_from_cached(predictions)
+
+		# Sort by confidence (same as predict_ram_meta)
+		sorted_preds = sorted(predictions.items(), key=lambda x: -x[1][1])[:4]
+		if not sorted_preds:
+			return "<UNK>", "none", 0.0
+
+		# Ask RAM meta-classifier which method to trust
+		best_method, ram_confidence = self.ram_meta.predict(sorted_preds)
+
+		# Find that method's prediction
+		if best_method in predictions:
+			word, conf = predictions[best_method]
+			return word, f"ram_meta({best_method})", ram_confidence * conf
+
+		# Fallback to highest confidence
+		method, (word, conf) = sorted_preds[0]
+		return word, f"ram_meta_fallback({method})", conf
 
 	def _predict_threshold_from_cached(self, predictions: dict, context: list[str], min_conf: float) -> str:
 		"""Predict using threshold voting from cached predictions."""
