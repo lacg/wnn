@@ -18,15 +18,18 @@ class OverfittingControl:
 	Control signal from overfitting callback to optimizer.
 
 	Uses BASELINE-RELATIVE gap detection: monitors how much the val/train ratio
-	INCREASES from the initial baseline, not absolute gap percentage.
+	CHANGES from the initial baseline (delta), not absolute gap percentage.
 
 	This is crucial when train and validation come from different distributions
 	(e.g., different Wikipedia articles), where absolute gaps can be 1000%+.
 
-	Thresholds are based on gap ratio INCREASE from baseline:
-	- increase < 5%:  Healthy → normal operation
-	- increase > 10%: Warning → activate diversity_mode
-	- increase > 20%: Critical → early_stop
+	Thresholds are based on delta (ratio CHANGE from baseline):
+	- delta < -5%:  Healthy (improving) → exit diversity_mode
+	- delta > 0%:   Warning (worsening) → activate diversity_mode
+	- delta > 20%:  Critical → early_stop
+
+	This creates hysteresis: diversity kicks IN at 0%, kicks OFF at -5%.
+	This prevents rapid toggling and ensures meaningful improvement before exiting.
 
 	When diversity_mode is True, optimizers should:
 	- GA: ↑population, ↓elitism, ↑mutation_rate
@@ -34,6 +37,12 @@ class OverfittingControl:
 	"""
 	early_stop: bool = False
 	diversity_mode: bool = False
+
+
+# Default threshold values - use these in all places to avoid duplication
+HEALTHY_THRESHOLD = -5.0    # delta < -5% = healthy (improving)
+WARNING_THRESHOLD = 0.0     # delta > 0% = warning (any worsening)
+CRITICAL_THRESHOLD = 20.0   # delta > 20% = critical (early stop)
 
 
 # Type alias for overfitting callback
@@ -47,17 +56,23 @@ class OverfittingMonitor:
 
 	Instead of absolute gap thresholds (which fail when train/val distributions
 	differ significantly, e.g., 1000%+ gaps), this monitors how much the
-	val/train RATIO increases from the initial baseline.
+	val/train RATIO CHANGES from the initial baseline (delta).
 
-	Thresholds are based on ratio INCREASE from baseline:
-	- increase < healthy_threshold (5%):  Normal operation, exit diversity mode
-	- increase > warning_threshold (10%): Activate diversity mode
-	- increase > critical_threshold (20%): Early stop (after grace period)
+	Thresholds create hysteresis to prevent rapid toggling:
+	- delta < healthy_threshold (-5%): Healthy (improving) → exit diversity mode
+	- delta > warning_threshold (0%):  Warning (any worsening) → activate diversity mode
+	- delta > critical_threshold (20%): Critical → early stop (after grace period)
+
+	The hysteresis means:
+	- Diversity kicks IN when delta > 0% (any worsening)
+	- Diversity kicks OFF when delta < -5% (meaningful improvement)
+	- Between -5% and 0%: maintain current state
 
 	Example:
 		- Baseline: train=180, val=2160 → ratio=12.0x
-		- Later: train=170, val=2200 → ratio=12.9x → increase=+7.5% → healthy
-		- Later: train=160, val=2400 → ratio=15.0x → increase=+25% → critical!
+		- Later: train=170, val=2050 → ratio=12.06x → delta=+0.5% → WARNING (diversity ON)
+		- Later: train=165, val=1900 → ratio=11.5x → delta=-4.2% → CAUTION (stay in diversity)
+		- Later: train=160, val=1800 → ratio=11.25x → delta=-6.3% → HEALTHY (diversity OFF)
 
 	Usage:
 		monitor = OverfittingMonitor(
@@ -71,9 +86,9 @@ class OverfittingMonitor:
 	def __init__(
 		self,
 		validation_fn: Callable[[Tensor], float],
-		healthy_threshold: float = 5.0,
-		warning_threshold: float = 10.0,
-		critical_threshold: float = 20.0,
+		healthy_threshold: float = HEALTHY_THRESHOLD,
+		warning_threshold: float = WARNING_THRESHOLD,
+		critical_threshold: float = CRITICAL_THRESHOLD,
 		grace_checks: int = 1,
 		logger: Optional[Callable[[str], None]] = None,
 		global_baseline_ratio: Optional[float] = None,
@@ -82,9 +97,9 @@ class OverfittingMonitor:
 		Args:
 			validation_fn: Function that evaluates connectivity on validation set.
 				Takes Tensor, returns validation fitness (e.g., perplexity).
-			healthy_threshold: Ratio increase % below which to exit diversity mode (default: 5%)
-			warning_threshold: Ratio increase % above which to enter diversity mode (default: 10%)
-			critical_threshold: Ratio increase % above which to early stop (default: 20%)
+			healthy_threshold: Delta % below which to exit diversity mode (default: -5%)
+			warning_threshold: Delta % above which to enter diversity mode (default: 0%)
+			critical_threshold: Delta % above which to early stop (default: 20%)
 			grace_checks: Number of checks before allowing early stop (default: 1).
 				Each check happens every 5 generations/iterations.
 			logger: Optional logging function for status messages.

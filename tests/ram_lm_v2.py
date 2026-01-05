@@ -824,6 +824,9 @@ class RAMLM_v2:
 			RUST_AVAILABLE as ACCEL_RUST_AVAILABLE,
 			RUST_CPU_CORES as ACCEL_RUST_CORES,
 			OverfittingMonitor,
+			HEALTHY_THRESHOLD,
+			WARNING_THRESHOLD,
+			CRITICAL_THRESHOLD,
 		)
 		from wnn.ram.strategies.connectivity.genetic_algorithm import (
 			GeneticAlgorithmStrategy, GeneticAlgorithmConfig
@@ -904,7 +907,7 @@ class RAMLM_v2:
 		ga_elitism = max(2, int(ga_pop * ga_elitism_pct))
 		ga_eval_per_gen = ga_pop - ga_elitism
 		early_stop_patience = 1  # Must match GA/TS config defaults
-		early_stop_threshold_pct = 0.1  # Require 0.1% improvement to continue (was 0.02% - too aggressive)
+		early_stop_threshold_pct = 1.0  # Require 1% improvement to continue (was 0.1% - triggered too often)
 		log(f"GA: {ga_pop} pop × {ga_gens} max gens (elite={ga_elitism} ({ga_elitism_pct*100:.0f}%), eval={ga_eval_per_gen}/gen)")
 		log(f"TS: {ts_neighbors} neighbors × {ts_iters} max iters")
 		log(f"Early stopping: <{early_stop_threshold_pct}% improvement over {(early_stop_patience+1)*5} gens/iters ({early_stop_patience+1} checks)")
@@ -1184,23 +1187,22 @@ class RAMLM_v2:
 				global_baseline_ratio = initial_val_ppl / initial_ppl if initial_ppl > 0 else 1.0
 				log(f"  Initial PERPLEXITY: train={initial_ppl:.1f}, val={initial_val_ppl:.1f}")
 				log(f"  Global baseline ratio: {global_baseline_ratio:.2f}x (val/train)")
-				log(f"  Overfitting thresholds: <5% healthy, >10% warn, >20% stop")
+				log(f"  Overfitting thresholds: <{HEALTHY_THRESHOLD}% healthy, >{WARNING_THRESHOLD}% warn, >{CRITICAL_THRESHOLD}% stop")
 				log("")
 			else:
 				# VERIFICATION: This should match previous RAM's final perplexity!
 				log(f"  Initial PERPLEXITY: {initial_ppl:.1f} (should match prev final)")
 
-			# Overfitting monitor: BASELINE-RELATIVE gap detection
-			# Monitors val/train RATIO increase from GLOBAL baseline (not per-RAM)
+			# Overfitting monitor: BASELINE-RELATIVE gap detection with hysteresis
+			# Monitors val/train RATIO CHANGE (delta) from GLOBAL baseline (not per-RAM)
 			# This works when train/val have different distributions (1000%+ absolute gaps)
-			# - ratio increase < 5%:  Healthy → exit diversity mode
-			# - ratio increase > 10%: Warning → activate diversity mode
-			# - ratio increase > 20%: Critical → early stop (after 1 grace check = 5 generations)
+			# Uses thresholds from base.py (single source of truth):
+			# - delta < HEALTHY_THRESHOLD (-5%):  Improving → exit diversity mode
+			# - delta > WARNING_THRESHOLD (0%):   Any worsening → activate diversity mode
+			# - delta > CRITICAL_THRESHOLD (20%): Severe → early stop (after grace period)
 			overfitting_monitor = OverfittingMonitor(
 				validation_fn=lambda conn: val_batch_fn([conn])[0],
-				healthy_threshold=5.0,   # ratio increase below 5% = healthy
-				warning_threshold=10.0,  # ratio increase above 10% = diversity mode
-				critical_threshold=20.0, # ratio increase above 20% = early stop
+				# Use default thresholds from base.py constants
 				grace_checks=1,  # 1 check = 5 generations grace period
 				logger=log,
 				global_baseline_ratio=global_baseline_ratio,  # Use global baseline from first RAM

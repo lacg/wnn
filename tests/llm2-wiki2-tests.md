@@ -8,6 +8,33 @@
   The key insight: these are completely different articles, not random splits of the same data. This explains why optimizing on train data doesn't generalize to test data!
   ─────────────────────────────────────────────────
 
+# Next improvements
+
+  ★ Insight ─────────────────────────────────────
+  Why Modern LLMs Generalize Better
+
+  | Feature                                           | RAM-based LM              | Modern LLMs (GPT/Claude)          |
+  |---------------------------------------------------|---------------------------|-----------------------------------|
+  | Tokenization                                      | Word-level (76k vocab)    | Subword BPE (~32k), handles OOV   |
+  | Lookup                                            | Exact binary match        | Soft attention over embeddings    |
+  | Context                                           | Fixed n-gram window (2-6) | Dynamic attention (any position)  |
+  | Similarity                                        | None ("cat" ≠ "dog")      | Embedding space (cat ≈ dog)       |
+  | Smoothing                                         | Cascade fallback          | Softmax + temperature + smoothing |
+  | ───────────────────────────────────────────────── |                           |                                   |
+
+  Key techniques we're missing:
+
+  1. Subword tokenization (BPE): Modern LLMs break "unfamiliar" → "un" + "familiar". Your RAM model has 76k word vocabulary; unseen words = completely unknown. BPE has ~32k tokens and can compose ANY word.
+  2. Embedding similarity: In LLMs, "cat" and "dog" are nearby in vector space. If model learned "cat ate fish", it generalizes to "dog ate fish". In RAMs, they're completely unrelated bit patterns.
+  3. Attention mechanism: LLMs dynamically decide which context positions matter. Your RAM uses fixed 2-6 gram windows. LLMs can attend to position 1 AND position 100 if both are relevant.
+  4. Softmax smoothing: LLMs output probability over ALL tokens. Even wrong predictions get partial credit. Your cascade gives 1/vocab for misses - harsh penalty.
+
+  What could help your architecture:
+  - Locality-sensitive hashing (LSH) for contexts → similar contexts hit same RAM address
+  - Subword tokenization → smaller vocab, no OOV
+  - Learned context embedding → compress context to bits that preserve similarity
+
+
 # Limitations
 
   Why only 2-3k samples for optimization evaluation?

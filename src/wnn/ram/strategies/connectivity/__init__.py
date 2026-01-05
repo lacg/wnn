@@ -34,6 +34,10 @@ from wnn.ram.strategies.connectivity.base import (
 	OverfittingControl,
 	OverfittingCallback,
 	OverfittingMonitor,
+	# Threshold constants (use these to avoid duplication)
+	HEALTHY_THRESHOLD,
+	WARNING_THRESHOLD,
+	CRITICAL_THRESHOLD,
 )
 
 from wnn.ram.strategies.connectivity.tabu_search import (
@@ -67,6 +71,10 @@ __all__ = [
 	'OverfittingControl',
 	'OverfittingCallback',
 	'OverfittingMonitor',
+	# Threshold constants
+	'HEALTHY_THRESHOLD',
+	'WARNING_THRESHOLD',
+	'CRITICAL_THRESHOLD',
 	# Tabu Search
 	'TabuSearchStrategy',
 	'TabuSearchConfig',
