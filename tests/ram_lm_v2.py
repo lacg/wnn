@@ -1387,7 +1387,10 @@ class RAMLM_v2:
 			def create_perplexity_batch_fn(ram_idx, target_n, exact_probs_ref, eval_size, vocab_size_ref, cascade_threshold_ref, pop_size, eval_tokens):
 				eval_count = [0]
 				global_best = [float('inf')]  # Track best perplexity (lower is better)
-				def batch_eval(candidates):
+				def batch_eval(candidates, total_pop=None):
+					# total_pop: actual population size (including cached elites)
+					# len(candidates): new candidates being evaluated this batch
+					actual_total_pop = total_pop if total_pop is not None else len(candidates)
 					if has_perplexity:
 						import time as time_module
 						start = time_module.time()
@@ -1406,7 +1409,7 @@ class RAMLM_v2:
 							global_best[0] = batch_best_ppl
 						# Log every 5th batch
 						if eval_count[0] % 5 == 1:
-							msg = f"[Rust n={target_n}] Batch {eval_count[0]}: {pop_size} total population ({len(candidates)} new) | {elapsed*1000:.0f}ms | batch PPL: {batch_best_ppl:.1f}, global PPL: {global_best[0]:.1f}"
+							msg = f"[Rust n={target_n}] Batch {eval_count[0]}: {actual_total_pop} total population ({len(candidates)} new) | {elapsed*1000:.0f}ms | batch PPL: {batch_best_ppl:.1f}, global PPL: {global_best[0]:.1f}"
 							log(msg)
 						return perplexities
 					elif has_fullnetwork:
@@ -1430,7 +1433,7 @@ class RAMLM_v2:
 							global_best[0] = batch_best_err
 						global_best_acc = (1 - global_best[0]) * 100
 						if eval_count[0] % 5 == 1:
-							msg = f"[Rust n={target_n}] Batch {eval_count[0]}: {pop_size} total population ({len(candidates)} new) | {elapsed*1000:.0f}ms | batch: {batch_best_acc:.2f}%, global: {global_best_acc:.2f}%"
+							msg = f"[Rust n={target_n}] Batch {eval_count[0]}: {actual_total_pop} total population ({len(candidates)} new) | {elapsed*1000:.0f}ms | batch: {batch_best_acc:.2f}%, global: {global_best_acc:.2f}%"
 							log(msg)
 						return errors
 					elif has_cascade:
@@ -1451,7 +1454,7 @@ class RAMLM_v2:
 							global_best[0] = batch_best_err
 						global_best_acc = (1 - global_best[0]) * 100
 						if eval_count[0] % 5 == 1:
-							msg = f"[Rust n={target_n}] Batch {eval_count[0]}: {pop_size} total population ({len(candidates)} new) | {elapsed*1000:.0f}ms | batch: {batch_best_acc:.2f}%, global: {global_best_acc:.2f}%"
+							msg = f"[Rust n={target_n}] Batch {eval_count[0]}: {actual_total_pop} total population ({len(candidates)} new) | {elapsed*1000:.0f}ms | batch: {batch_best_acc:.2f}%, global: {global_best_acc:.2f}%"
 							log(msg)
 						return errors
 					else:
@@ -1479,7 +1482,7 @@ class RAMLM_v2:
 						if batch_best_ppl < global_best[0]:
 							global_best[0] = batch_best_ppl
 						if eval_count[0] % 5 == 1:
-							msg = f"[Python n={target_n}] Batch {eval_count[0]}: {pop_size} total population ({len(candidates)} new) | {elapsed*1000:.0f}ms | batch PPL: {batch_best_ppl:.1f}, global PPL: {global_best[0]:.1f}"
+							msg = f"[Python n={target_n}] Batch {eval_count[0]}: {actual_total_pop} total population ({len(candidates)} new) | {elapsed*1000:.0f}ms | batch PPL: {batch_best_ppl:.1f}, global PPL: {global_best[0]:.1f}"
 							log(msg)
 						return perplexities
 				return batch_eval

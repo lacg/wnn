@@ -126,9 +126,10 @@ class GeneticAlgorithmStrategy(OptimizerStrategyBase):
 			# Extract individuals needing evaluation
 			to_eval = [pop_with_fitness[i][0] for i in unknown_indices]
 
-			# Batch evaluate
+			# Batch evaluate (pass total_pop for accurate logging)
+			total_pop = len(pop_with_fitness)
 			if batch_evaluate_fn is not None:
-				new_fitness = batch_evaluate_fn(to_eval)
+				new_fitness = batch_evaluate_fn(to_eval, total_pop=total_pop)
 			else:
 				new_fitness = [evaluate_fn(ind) for ind in to_eval]
 

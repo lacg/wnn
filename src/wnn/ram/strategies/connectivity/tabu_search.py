@@ -115,7 +115,7 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 		early_stopped_overfitting = False
 
 		current = connections.clone()
-		current_error = evaluate_fn(current) if batch_evaluate_fn is None else batch_evaluate_fn([current])[0]
+		current_error = evaluate_fn(current) if batch_evaluate_fn is None else batch_evaluate_fn([current], total_pop=1)[0]
 
 		best = current.clone()
 		best_error = current_error
@@ -156,7 +156,8 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 
 			# Batch evaluate all non-tabu neighbors at once
 			if batch_evaluate_fn is not None:
-				errors = batch_evaluate_fn([n for n, _ in neighbor_candidates])
+				to_eval = [n for n, _ in neighbor_candidates]
+				errors = batch_evaluate_fn(to_eval, total_pop=len(to_eval))
 				neighbors = [(n, e, m) for (n, m), e in zip(neighbor_candidates, errors)]
 			else:
 				neighbors = [(n, evaluate_fn(n), m) for n, m in neighbor_candidates]
