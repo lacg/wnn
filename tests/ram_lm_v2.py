@@ -3172,17 +3172,27 @@ def run_benchmark(
 	ram_meta_trained = model.train_ram_meta_classifier(train_tokens, n_neurons=32, bits_per_neuron=10)
 	log(f"  Trained on {ram_meta_trained} examples (32 neurons × 10 bits)")
 
+	# Evaluate voting strategies on VALIDATION set (for overfitting comparison)
+	log("Evaluating all strategies on validation set...")
+	val_voting_results = model.evaluate_voting_strategies(validation_tokens)
+
+	# Get validation PPLs
+	val_ppl_cascade = val_voting_results['cascade']['perplexity']
+	val_ppl_weighted = val_voting_results['weighted']['perplexity']
+	val_ppl_meta = val_voting_results['meta']['perplexity']
+	val_ppl_ram_meta = val_voting_results['ram_meta']['perplexity']
+
+	# Evaluate voting strategies on TEST set (for generalization)
 	log("Evaluating all strategies on test set...")
-	# Use full test set - acceleration makes this fast now
 	voting_results = model.evaluate_voting_strategies(test_tokens)
 
-	# Get perplexities for table
+	# Get test PPLs
 	ppl_cascade = voting_results['cascade']['perplexity']
 	ppl_weighted = voting_results['weighted']['perplexity']
 	ppl_meta = voting_results['meta']['perplexity']
 	ppl_ram_meta = voting_results['ram_meta']['perplexity']
 
-	# Get accuracies for table
+	# Get accuracies for table (from test set)
 	acc_cascade = voting_results['cascade']['accuracy'] * 100
 	acc_weighted = voting_results['weighted']['accuracy'] * 100
 	acc_meta = voting_results['meta']['accuracy'] * 100
@@ -3196,8 +3206,9 @@ def run_benchmark(
 	log(f"{'Accuracy (%):':<35} {acc_cascade:>10.2f} {acc_weighted:>10.2f} {acc_meta:>10.2f} {acc_ram_meta:>10.2f}")
 	if optimization_ppl:
 		log(f"{'Optimization PPL (train):':<35} {optimization_ppl:>10.1f} {'-':>10} {'-':>10} {'-':>10}")
-	if optimization_val_ppl:
-		log(f"{'Optimization PPL (validation):':<35} {optimization_val_ppl:>10.1f} {'-':>10} {'-':>10} {'-':>10}")
+	if pre_val_ppl:
+		log(f"{'Val PPL (before optimization):':<35} {pre_val_ppl:>10.1f} {'-':>10} {'-':>10} {'-':>10}")
+	log(f"{'Val PPL (after optimization):':<35} {val_ppl_cascade:>10.1f} {val_ppl_weighted:>10.1f} {val_ppl_meta:>10.1f} {val_ppl_ram_meta:>10.1f}")
 	if pre_test_ppl:
 		log(f"{'Test PPL (before optimization):':<35} {pre_test_ppl:>10.1f} {'-':>10} {'-':>10} {'-':>10}")
 	log(f"{'Test PPL (after optimization):':<35} {ppl_cascade:>10.1f} {ppl_weighted:>10.1f} {ppl_meta:>10.1f} {ppl_ram_meta:>10.1f}")
