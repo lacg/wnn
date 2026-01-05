@@ -1268,7 +1268,12 @@ class RAMLM_v2:
 		log(f"TS: {ts_neighbors} neighbors × {ts_iters} max iters")
 		log(f"Early stopping: <{early_stop_threshold_pct}% improvement over {(early_stop_patience+1)*5} gens/iters ({early_stop_patience+1} checks)")
 		if ACCEL_RUST_AVAILABLE:
-			log(f"Accelerator: Rust PERPLEXITY eval ({ACCEL_RUST_CORES} threads)")
+			if ACCELERATION_MODE == AccelerationMode.HYBRID and METAL_AVAILABLE:
+				log(f"Accelerator: Rust PERPLEXITY eval (HYBRID: {ACCEL_RUST_CORES} CPU + {METAL_GPU_CORES} GPU = {ACCEL_RUST_CORES + METAL_GPU_CORES} cores)")
+			elif ACCELERATION_MODE == AccelerationMode.METAL and METAL_AVAILABLE:
+				log(f"Accelerator: Rust PERPLEXITY eval (METAL: {METAL_GPU_CORES} GPU cores)")
+			else:
+				log(f"Accelerator: Rust PERPLEXITY eval (CPU: {ACCEL_RUST_CORES} threads)")
 		else:
 			log(f"Accelerator: Python (install ram_accelerator for speedup)")
 		log("")
