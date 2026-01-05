@@ -2115,6 +2115,101 @@ class RAMLM_v2:
 
 		return min_prob
 
+	def _predict_cascade_from_cached(self, predictions: dict) -> tuple[str, str, float]:
+		"""
+		Cascade prediction using CACHED predictions (from _precompute_all_predictions).
+
+		Replicates the logic of predict() but uses cached data instead of fresh lookups.
+		This is 100x+ faster when evaluating 287k positions.
+
+		Returns: (prediction, method, confidence)
+		"""
+		# 1. Try exact match first (highest n to lowest)
+		for n in sorted(self.exact_rams.keys(), reverse=True):
+			key = f"exact_n{n}"
+			if key in predictions:
+				pred, conf = predictions[key]
+				# Exact match uses conf > 0.2 or total >= 3 (encoded in caching)
+				if conf > 0.2:
+					return pred, key, conf
+
+		# 2. Try generalized RAMs with cascade threshold
+		for n in sorted(self.generalized_rams.keys(), reverse=True):
+			key = f"gen_n{n}"
+			if key in predictions:
+				pred, conf = predictions[key]
+				if pred and conf > self.cascade_threshold:
+					return pred, key, conf
+
+		# 3. Voting fallback
+		votes = Counter()
+		for method, (pred, conf) in predictions.items():
+			if pred:
+				n = int(method.split("_n")[1]) if "_n" in method else 1
+				weight = conf * n
+				votes[pred] += weight
+
+		if votes:
+			best, score = votes.most_common(1)[0]
+			total_weight = sum(votes.values())
+			return best, "vote", score / total_weight if total_weight > 0 else 0.0
+
+		return "<UNK>", "none", 0.0
+
+	def _compute_target_probability_from_cached(self, predictions: dict, target: str) -> float:
+		"""
+		Compute P(target) using CACHED predictions (from _precompute_all_predictions).
+
+		Replicates the logic of _compute_target_probability() but uses cached data.
+		This is 100x+ faster when evaluating 287k positions.
+
+		NOTE: This is an approximation for exact RAMs - we only cache the winner's
+		confidence, not the full count distribution. For cascade evaluation this
+		is acceptable since the probability model is:
+		- If winner == target: P(target) = confidence
+		- If winner != target: P(target) = min_prob (or smoothing)
+		"""
+		min_prob = 1.0 / len(self.word_counts) if hasattr(self, 'word_counts') else 1e-4
+
+		# 1. Try exact match first (highest n to lowest)
+		for n in sorted(self.exact_rams.keys(), reverse=True):
+			key = f"exact_n{n}"
+			if key in predictions:
+				pred, conf = predictions[key]
+				if conf > 0.2:  # Confident exact match
+					if pred == target:
+						return max(conf, min_prob)
+					# Target not the winner - try smoothing or continue cascade
+					break
+
+		# 2. Try generalized RAMs with cascade
+		for n in sorted(self.generalized_rams.keys(), reverse=True):
+			key = f"gen_n{n}"
+			if key in predictions:
+				pred, conf = predictions[key]
+				if pred and conf > self.cascade_threshold:
+					if pred == target:
+						return max(float(conf), min_prob)
+					# Wrong prediction - return min_prob (matches cascade behavior)
+					return min_prob
+
+		# 3. Voting fallback - aggregate votes and compute P(target)
+		votes = {}
+		total_weight = 0.0
+		for method, (pred, conf) in predictions.items():
+			if pred:
+				n = int(method.split("_n")[1]) if "_n" in method else 1
+				weight = conf * n
+				votes[pred] = votes.get(pred, 0.0) + weight
+				total_weight += weight
+
+		if total_weight > 0:
+			target_votes = votes.get(target, 0.0)
+			if target_votes > 0:
+				return max(target_votes / total_weight, min_prob)
+
+		return min_prob
+
 	def learn_voting_weights(self, tokens: list[str], validation_split: float = 0.2):
 		"""
 		Strategy #1: Learn voting weights based on observed accuracy.
@@ -2422,13 +2517,18 @@ class RAMLM_v2:
 		method, (word, conf) = sorted_preds[0]
 		return word, f"ram_meta_fallback({method})", conf
 
-	def evaluate_voting_strategies(self, tokens: list[str]) -> dict:
+	def evaluate_voting_strategies(self, tokens: list[str], max_samples: int = None) -> dict:
 		"""
 		Compare all voting strategies (accuracy and perplexity).
 
+		Args:
+			tokens: List of tokens to evaluate on.
+			max_samples: Maximum number of samples to evaluate. If None, uses all.
+				Pass the same value as main evaluation's eval_subset for consistency.
+
 		IMPORTANT: Uses PerplexityCalculator for consistent PPL calculation.
-		For "cascade" strategy, uses _compute_target_probability() to match
-		the logic in _evaluate_perplexity_python (TRUE perplexity with partial credit).
+		For "cascade" strategy, uses cached predictions to match the logic in
+		_evaluate_perplexity_python (TRUE perplexity with partial credit).
 
 		ACCELERATED: Pre-computes all predictions in parallel, then evaluates
 		strategies using cached predictions. RAM_META still runs sequentially
@@ -2450,8 +2550,15 @@ class RAMLM_v2:
 		for t in thresholds:
 			calculators[f"thresh_{t:.2f}"] = PerplexityCalculator(vocab_size)
 
+		# Limit tokens if max_samples specified (for consistency with main eval)
+		n_available = len(tokens) - 6
+		if max_samples is not None and max_samples < n_available:
+			eval_tokens = tokens[:max_samples + 6]  # Need 6 extra for context
+		else:
+			eval_tokens = tokens
+
 		# Pre-compute all predictions in parallel (KEY ACCELERATION!)
-		all_predictions = self._precompute_all_predictions(tokens)
+		all_predictions = self._precompute_all_predictions(eval_tokens)
 
 		# Reset RAM meta state before evaluation (fresh temporal context)
 		if hasattr(self, 'ram_meta'):
@@ -2459,13 +2566,13 @@ class RAMLM_v2:
 
 		# Evaluate each position using cached predictions
 		for i, predictions in enumerate(all_predictions):
-			context = tokens[i:i + 5]
-			target = tokens[i + 5]
+			context = eval_tokens[i:i + 5]
+			target = eval_tokens[i + 5]
 
-			# CASCADE: Use _compute_target_probability() for TRUE perplexity
-			# This matches _evaluate_perplexity_python and gives partial credit
-			cascade_prob = self._compute_target_probability(context, target)
-			pred1, _, _ = self.predict(context)
+			# CASCADE: Use cached predictions for acceleration (100x+ faster)
+			# This replicates _evaluate_perplexity_python logic using pre-computed data
+			cascade_prob = self._compute_target_probability_from_cached(predictions, target)
+			pred1, _, _ = self._predict_cascade_from_cached(predictions)
 			calculators["cascade"].add_from_probability(cascade_prob, is_correct=(pred1 == target))
 
 			# WEIGHTED: Use weighted vote distribution for P(target)
@@ -2474,18 +2581,19 @@ class RAMLM_v2:
 			weighted_prob = self._compute_weighted_prob_from_cached(predictions, target)
 			calculators["weighted"].add_from_probability(weighted_prob, is_correct=(pred2 == target))
 
-			# META: Meta-classifier - use cascade probability for proper P(target)
+			# META: Meta-classifier - use cached cascade probability
 			pred3 = self._predict_meta_from_cached(predictions)
-			# Use cascade probability for partial credit (meta just picks a method)
-			meta_prob = self._compute_target_probability(context, target)
+			# Use cached cascade probability for partial credit (meta just picks a method)
+			meta_prob = self._compute_target_probability_from_cached(predictions, target)
 			calculators["meta"].add_from_probability(meta_prob, is_correct=(pred3 == target))
 
 			# RAM_META: RAM-based meta-classifier with state tracking
+			# NOTE: This still needs sequential evaluation due to state updates
 			if hasattr(self, 'ram_meta'):
 				pred4, method4, _ = self.predict_ram_meta(context)
 				is_correct = (pred4 == target)
-				# Use cascade probability for partial credit
-				ram_meta_prob = self._compute_target_probability(context, target)
+				# Use cached cascade probability for partial credit
+				ram_meta_prob = self._compute_target_probability_from_cached(predictions, target)
 				calculators["ram_meta"].add_from_probability(ram_meta_prob, is_correct=is_correct)
 
 				# Update state with actual outcome (enables temporal learning)
@@ -2922,9 +3030,9 @@ def run_benchmark(
 	results = model.evaluate(test_tokens)
 	accuracy = results["correct"] / results["total"] if results["total"] > 0 else 0
 
-	# Calculate perplexity on test set
+	# Calculate perplexity on FULL test set (no sampling - use acceleration)
 	# First compute exact_probs for the test set
-	eval_subset = min(3000, len(test_tokens) - 6)
+	eval_subset = len(test_tokens) - 6  # Use all positions
 	exact_probs = []
 	for i in range(eval_subset):
 		target = test_tokens[i + 6]
@@ -3003,6 +3111,7 @@ def run_benchmark(
 	log(f"  Trained on {ram_meta_trained} examples (32 neurons × 10 bits)")
 
 	log("Evaluating all strategies on test set...")
+	# Use full test set - acceleration makes this fast now
 	voting_results = model.evaluate_voting_strategies(test_tokens)
 
 	# Get perplexities for table
