@@ -7,6 +7,7 @@
 
 use rustc_hash::FxHashMap;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// A single RAM neuron that stores WORD COUNTS at each address
 /// This matches Python's: self.ram = defaultdict(Counter)
@@ -657,4 +658,279 @@ pub fn evaluate_fullnetwork_perplexity_batch<S: AsRef<str> + Sync>(
 
         evaluate_fullnetwork_perplexity(&conns, word_to_bits, train_tokens, test_tokens, exact_probs, eval_subset, vocab_size, cascade_threshold)
     }).collect()
+}
+
+// =============================================================================
+// BATCH PREDICTION WITH PRE-TRAINED RAMs
+// =============================================================================
+
+/// Pre-trained neuron for fast prediction (no training, just lookup)
+struct PretrainedNeuron {
+    connectivity: Vec<usize>,
+    memory: FxHashMap<u64, HashMap<String, u32>>,
+}
+
+impl PretrainedNeuron {
+    fn new(
+        connectivity: &[i64],
+        memory: &std::collections::HashMap<u64, std::collections::HashMap<String, u32>>,
+    ) -> Self {
+        let conn: Vec<usize> = connectivity.iter().map(|&x| x as usize).collect();
+        let mem: FxHashMap<u64, HashMap<String, u32>> = memory
+            .iter()
+            .map(|(&addr, counts)| (addr, counts.clone()))
+            .collect();
+        Self {
+            connectivity: conn,
+            memory: mem,
+        }
+    }
+
+    #[inline]
+    fn compute_address(&self, input_bits: &[u64]) -> u64 {
+        let mut address = 0u64;
+        for (i, &bit_idx) in self.connectivity.iter().enumerate() {
+            let word_idx = bit_idx / 64;
+            let bit_pos = bit_idx % 64;
+            if word_idx < input_bits.len() {
+                let bit = (input_bits[word_idx] >> bit_pos) & 1;
+                address |= bit << i;
+            }
+        }
+        address
+    }
+
+    fn predict(&self, input_bits: &[u64]) -> Option<(String, f32)> {
+        let address = self.compute_address(input_bits);
+        self.memory.get(&address).and_then(|counts| {
+            if counts.is_empty() {
+                return None;
+            }
+            let total: u32 = counts.values().sum();
+            let (best_word, best_count) = counts
+                .iter()
+                .max_by(|(word_a, &count_a), (word_b, &count_b)| {
+                    count_a.cmp(&count_b).then_with(|| word_b.cmp(word_a))
+                })?;
+            Some((best_word.clone(), *best_count as f32 / total as f32))
+        })
+    }
+}
+
+/// Pre-trained generalized RAM for fast prediction
+struct PretrainedGeneralizedRAM {
+    n: usize,
+    neurons: Vec<PretrainedNeuron>,
+}
+
+impl PretrainedGeneralizedRAM {
+    const BITS_PER_WORD: usize = 12;
+
+    fn new(
+        n: usize,
+        connectivity: &[Vec<i64>],
+        memory: &[std::collections::HashMap<u64, std::collections::HashMap<String, u32>>],
+    ) -> Self {
+        let neurons: Vec<PretrainedNeuron> = connectivity
+            .iter()
+            .zip(memory.iter())
+            .map(|(conn, mem)| PretrainedNeuron::new(conn, mem))
+            .collect();
+        Self { n, neurons }
+    }
+
+    fn encode_context(&self, context: &[&str], word_to_bits: &FxHashMap<String, u64>) -> Vec<u64> {
+        let total_bits = context.len() * Self::BITS_PER_WORD;
+        let num_words = (total_bits + 63) / 64;
+        let mut bits = vec![0u64; num_words];
+
+        for (word_idx, word) in context.iter().enumerate() {
+            let word_bits = word_to_bits.get(*word).copied().unwrap_or(0);
+            let bit_offset = word_idx * Self::BITS_PER_WORD;
+
+            for bit in 0..Self::BITS_PER_WORD {
+                if (word_bits >> bit) & 1 == 1 {
+                    let global_bit = bit_offset + bit;
+                    let word_pos = global_bit / 64;
+                    let bit_pos = global_bit % 64;
+                    if word_pos < bits.len() {
+                        bits[word_pos] |= 1u64 << bit_pos;
+                    }
+                }
+            }
+        }
+        bits
+    }
+
+    fn predict(&self, context: &[&str], word_to_bits: &FxHashMap<String, u64>) -> Option<(String, f32)> {
+        if context.len() < self.n {
+            return None;
+        }
+
+        let ctx = &context[context.len() - self.n..];
+        let input_bits = self.encode_context(ctx, word_to_bits);
+
+        let mut votes: HashMap<String, f32> = HashMap::new();
+        let mut num_predictions = 0;
+
+        for neuron in self.neurons.iter() {
+            if let Some((word, conf)) = neuron.predict(&input_bits) {
+                *votes.entry(word).or_insert(0.0) += conf;
+                num_predictions += 1;
+            }
+        }
+
+        if votes.is_empty() {
+            return None;
+        }
+
+        let (best_word, best_score) = votes
+            .iter()
+            .max_by(|(word_a, score_a), (word_b, score_b)| {
+                score_a.partial_cmp(score_b)
+                    .unwrap()
+                    .then_with(|| word_b.cmp(word_a))
+            })?;
+
+        Some((best_word.clone(), *best_score / num_predictions as f32))
+    }
+}
+
+/// Pre-trained exact RAM for fast prediction
+struct PretrainedExactRAM {
+    n: usize,
+    contexts: FxHashMap<Vec<u64>, HashMap<String, u32>>,
+}
+
+impl PretrainedExactRAM {
+    const BITS_PER_WORD: usize = 12;
+
+    fn new(
+        n: usize,
+        contexts: &std::collections::HashMap<Vec<u64>, std::collections::HashMap<String, u32>>,
+    ) -> Self {
+        let ctx_map: FxHashMap<Vec<u64>, HashMap<String, u32>> = contexts
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        Self { n, contexts: ctx_map }
+    }
+
+    fn encode_context(&self, context: &[&str], word_to_bits: &FxHashMap<String, u64>) -> Vec<u64> {
+        let total_bits = context.len() * Self::BITS_PER_WORD;
+        let num_words = (total_bits + 63) / 64;
+        let mut bits = vec![0u64; num_words];
+
+        for (word_idx, word) in context.iter().enumerate() {
+            let word_bits = word_to_bits.get(*word).copied().unwrap_or(0);
+            let bit_offset = word_idx * Self::BITS_PER_WORD;
+
+            for bit in 0..Self::BITS_PER_WORD {
+                if (word_bits >> bit) & 1 == 1 {
+                    let global_bit = bit_offset + bit;
+                    let word_pos = global_bit / 64;
+                    let bit_pos = global_bit % 64;
+                    if word_pos < bits.len() {
+                        bits[word_pos] |= 1u64 << bit_pos;
+                    }
+                }
+            }
+        }
+        bits
+    }
+
+    fn predict(&self, context: &[&str], word_to_bits: &FxHashMap<String, u64>) -> Option<(String, f32)> {
+        if context.len() < self.n {
+            return None;
+        }
+
+        let ctx = &context[context.len() - self.n..];
+        let ctx_bits = self.encode_context(ctx, word_to_bits);
+
+        self.contexts.get(&ctx_bits).and_then(|counts| {
+            if counts.is_empty() {
+                return None;
+            }
+            let total: u32 = counts.values().sum();
+            let (best_word, best_count) = counts
+                .iter()
+                .max_by(|(word_a, &count_a), (word_b, &count_b)| {
+                    count_a.cmp(&count_b).then_with(|| word_b.cmp(word_a))
+                })?;
+            Some((best_word.clone(), *best_count as f32 / total as f32))
+        })
+    }
+}
+
+/// Batch predict using pre-trained RAMs
+/// Returns predictions for each position from each RAM
+pub fn predict_all_batch(
+    generalized_rams: &[(
+        usize,
+        Vec<Vec<i64>>,
+        Vec<std::collections::HashMap<u64, std::collections::HashMap<String, u32>>>,
+    )],
+    exact_rams: &[(
+        usize,
+        std::collections::HashMap<Vec<u64>, std::collections::HashMap<String, u32>>,
+    )],
+    word_to_bits: &FxHashMap<String, u64>,
+    test_tokens: &[String],
+) -> Vec<std::collections::HashMap<String, (String, f32)>> {
+    use rayon::prelude::*;
+
+    // Build pre-trained RAM structures
+    let gen_rams: Vec<PretrainedGeneralizedRAM> = generalized_rams
+        .iter()
+        .map(|(n, conn, mem)| PretrainedGeneralizedRAM::new(*n, conn, mem))
+        .collect();
+
+    let exact_ram_structs: Vec<PretrainedExactRAM> = exact_rams
+        .iter()
+        .map(|(n, contexts)| PretrainedExactRAM::new(*n, contexts))
+        .collect();
+
+    // Wrap in Arc for sharing across threads
+    let gen_rams = Arc::new(gen_rams);
+    let exact_ram_structs = Arc::new(exact_ram_structs);
+    let word_to_bits = Arc::new(word_to_bits.clone());
+    let test_tokens = Arc::new(test_tokens.to_vec());
+
+    let n_positions = test_tokens.len().saturating_sub(6);
+
+    // Parallel prediction over all positions
+    (0..n_positions)
+        .into_par_iter()
+        .map(|i| {
+            let context: Vec<&str> = test_tokens[i..i + 5]
+                .iter()
+                .map(|s| s.as_str())
+                .collect();
+
+            let mut predictions: std::collections::HashMap<String, (String, f32)> =
+                std::collections::HashMap::new();
+
+            // Exact RAMs
+            for exact_ram in exact_ram_structs.iter() {
+                if context.len() >= exact_ram.n {
+                    if let Some((word, conf)) = exact_ram.predict(&context, &word_to_bits) {
+                        let method = format!("exact_n{}", exact_ram.n);
+                        predictions.insert(method, (word, conf));
+                    }
+                }
+            }
+
+            // Generalized RAMs
+            for gen_ram in gen_rams.iter() {
+                if context.len() >= gen_ram.n {
+                    if let Some((word, conf)) = gen_ram.predict(&context, &word_to_bits) {
+                        let method = format!("gen_n{}", gen_ram.n);
+                        predictions.insert(method, (word, conf));
+                    }
+                }
+            }
+
+            predictions
+        })
+        .collect()
 }

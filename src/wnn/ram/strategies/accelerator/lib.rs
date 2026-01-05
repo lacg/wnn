@@ -4,6 +4,7 @@
 //! using Metal compute shaders on M-series Macs.
 
 use pyo3::prelude::*;
+use pyo3::types::PyModule;
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
@@ -211,9 +212,128 @@ fn evaluate_fullnetwork_perplexity_batch_cpu(
     Ok(results)
 }
 
+// =============================================================================
+// BATCH PREDICTION WITH PRE-TRAINED RAMs (for voting strategies acceleration)
+// =============================================================================
+
+/// Batch predict using pre-trained RAMs on CPU (rayon parallel)
+///
+/// This is the key acceleration for evaluate_voting_strategies():
+/// - Takes pre-trained RAM data (connectivity + memory tables)
+/// - Predicts for all test positions in parallel
+/// - Returns predictions for each position from each RAM
+///
+/// Args:
+///   generalized_rams: List of (n, connectivity, memory) for each RAM
+///     - n: context length (2-6)
+///     - connectivity: Vec<Vec<i64>> - which bits each neuron observes
+///     - memory: Vec<HashMap<u64, HashMap<String, u32>>> - per neuron lookup tables
+///   exact_rams: List of (n, contexts) for each exact RAM
+///     - n: context length
+///     - contexts: HashMap<Vec<u64>, HashMap<String, u32>> - context bits → word counts
+///   word_to_bits: HashMap<String, u64> - word encoding
+///   test_tokens: Vec<String> - tokens to predict
+///
+/// Returns: Vec<HashMap<String, (String, f32)>> - per position: method → (word, confidence)
+#[pyfunction]
+fn predict_all_batch_cpu(
+    py: Python<'_>,
+    generalized_rams: Vec<(
+        usize,  // n
+        Vec<Vec<i64>>,  // connectivity per neuron
+        Vec<std::collections::HashMap<u64, std::collections::HashMap<String, u32>>>,  // memory per neuron
+    )>,
+    exact_rams: Vec<(
+        usize,  // n
+        std::collections::HashMap<Vec<u64>, std::collections::HashMap<String, u32>>,  // context → word counts
+    )>,
+    word_to_bits: std::collections::HashMap<String, u64>,
+    test_tokens: Vec<String>,
+) -> PyResult<Vec<std::collections::HashMap<String, (String, f32)>>> {
+    py.allow_threads(|| {
+        let word_map: FxHashMap<String, u64> = word_to_bits.into_iter().collect();
+
+        let results = ram::predict_all_batch(
+            &generalized_rams,
+            &exact_rams,
+            &word_map,
+            &test_tokens,
+        );
+
+        Ok(results)
+    })
+}
+
+/// Batch predict using pre-trained RAMs on Metal GPU
+/// Same interface as predict_all_batch_cpu but uses GPU parallelism
+#[pyfunction]
+fn predict_all_batch_metal(
+    py: Python<'_>,
+    generalized_rams: Vec<(
+        usize,
+        Vec<Vec<i64>>,
+        Vec<std::collections::HashMap<u64, std::collections::HashMap<String, u32>>>,
+    )>,
+    exact_rams: Vec<(
+        usize,
+        std::collections::HashMap<Vec<u64>, std::collections::HashMap<String, u32>>,
+    )>,
+    word_to_bits: std::collections::HashMap<String, u64>,
+    test_tokens: Vec<String>,
+) -> PyResult<Vec<std::collections::HashMap<String, (String, f32)>>> {
+    // For now, fall back to CPU - Metal implementation would require
+    // significant shader work to handle HashMap lookups on GPU
+    // The CPU rayon version is already very fast for this workload
+    py.allow_threads(|| {
+        let word_map: FxHashMap<String, u64> = word_to_bits.into_iter().collect();
+
+        let results = ram::predict_all_batch(
+            &generalized_rams,
+            &exact_rams,
+            &word_map,
+            &test_tokens,
+        );
+
+        Ok(results)
+    })
+}
+
+/// Batch predict using hybrid CPU+GPU
+/// Uses CPU for HashMap-heavy prediction (better suited than GPU for this)
+#[pyfunction]
+fn predict_all_batch_hybrid(
+    py: Python<'_>,
+    generalized_rams: Vec<(
+        usize,
+        Vec<Vec<i64>>,
+        Vec<std::collections::HashMap<u64, std::collections::HashMap<String, u32>>>,
+    )>,
+    exact_rams: Vec<(
+        usize,
+        std::collections::HashMap<Vec<u64>, std::collections::HashMap<String, u32>>,
+    )>,
+    word_to_bits: std::collections::HashMap<String, u64>,
+    test_tokens: Vec<String>,
+) -> PyResult<Vec<std::collections::HashMap<String, (String, f32)>>> {
+    // HashMap lookups don't parallelize well on GPU (memory divergence)
+    // Use CPU rayon which is optimal for this workload
+    py.allow_threads(|| {
+        let word_map: FxHashMap<String, u64> = word_to_bits.into_iter().collect();
+
+        let results = ram::predict_all_batch(
+            &generalized_rams,
+            &exact_rams,
+            &word_map,
+            &test_tokens,
+        );
+
+        Ok(results)
+    })
+}
+
 /// Python module definition
 #[pymodule]
-fn ram_accelerator(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
+fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(evaluate_connectivity_cpu, m)?)?;
     m.add_function(wrap_pyfunction!(evaluate_batch_cpu, m)?)?;
     m.add_function(wrap_pyfunction!(evaluate_batch_metal, m)?)?;
@@ -223,5 +343,9 @@ fn ram_accelerator(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(metal_available, m)?)?;
     m.add_function(wrap_pyfunction!(metal_device_info, m)?)?;
     m.add_function(wrap_pyfunction!(cpu_cores, m)?)?;
+    // New batch prediction functions
+    m.add_function(wrap_pyfunction!(predict_all_batch_cpu, m)?)?;
+    m.add_function(wrap_pyfunction!(predict_all_batch_metal, m)?)?;
+    m.add_function(wrap_pyfunction!(predict_all_batch_hybrid, m)?)?;
     Ok(())
 }

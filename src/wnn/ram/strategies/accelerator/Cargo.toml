@@ -9,8 +9,8 @@ crate-type = ["cdylib"]
 path = "lib.rs"  # Source file in same directory
 
 [dependencies]
-# Python bindings
-pyo3 = { version = "0.20", features = ["extension-module"] }
+# Python bindings (0.23+ supports Python 3.13)
+pyo3 = { version = "0.23", features = ["extension-module"] }
 
 # CPU parallelism (like joblib but faster)
 rayon = "1.8"

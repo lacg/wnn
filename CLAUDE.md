@@ -287,6 +287,42 @@ The key insight is distinguishing between **learned** and **computed** operation
 
 See `docs/COMPUTED_OPERATIONS.md` for detailed documentation.
 
+## Rust Accelerator
+
+The project includes a Rust/Metal accelerator for high-performance RAM evaluation.
+
+**Location:** `src/wnn/ram/strategies/accelerator/`
+
+**Building the Accelerator:**
+```bash
+# Activate virtual environment first (required for Python linking)
+source wnn/bin/activate
+
+# Build and install with maturin
+cd src/wnn/ram/strategies/accelerator
+maturin develop --release
+
+# Verify installation
+python -c "import ram_accelerator; print(ram_accelerator.cpu_cores())"
+```
+
+**Important:** Never use `cargo build` directly - it will fail with Python linking errors. Always use `maturin develop --release` which handles Python bindings correctly.
+
+**Key Functions:**
+| Function | Description |
+|----------|-------------|
+| `evaluate_batch_cpu()` | Evaluate connectivity patterns (rayon parallel) |
+| `evaluate_batch_metal()` | Evaluate on Metal GPU |
+| `predict_all_batch_cpu()` | Batch prediction with pre-trained RAMs |
+| `predict_all_batch_metal()` | Batch prediction on GPU |
+| `predict_all_batch_hybrid()` | Batch prediction CPU+GPU |
+
+**Adding New Functions:**
+1. Add function to `ram.rs` (core implementation)
+2. Add PyO3 wrapper to `lib.rs`
+3. Register in `#[pymodule]` block
+4. Rebuild with `maturin develop --release`
+
 ## Coding Style
 
 - **Indentation**: Use tabs (not spaces), displayed as 2-space width

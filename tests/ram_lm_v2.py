@@ -1858,12 +1858,105 @@ class RAMLM_v2:
 
 		return predictions
 
+	def _export_rams_for_rust(self) -> tuple:
+		"""
+		Export RAM data in Rust-compatible format for batch prediction.
+
+		Returns:
+			(generalized_rams, exact_rams, word_to_bits) tuple where:
+			- generalized_rams: List of (n, connectivity, memory_per_neuron)
+			  - connectivity: List of bit indices per neuron
+			  - memory: List of {address_u64: {word: count}} per neuron
+			- exact_rams: List of (n, contexts)
+			  - contexts: {context_bits_as_tuple: {word: count}}
+			- word_to_bits: {word: bits_as_u64}
+		"""
+		def bits_tuple_to_u64(bits: tuple) -> int:
+			"""Convert tuple of bits to packed u64."""
+			result = 0
+			for i, bit in enumerate(bits):
+				if bit:
+					result |= (1 << i)
+			return result
+
+		# Export generalized RAMs
+		gen_rams_export = []
+		word_to_bits = {}
+
+		for n in sorted(self.generalized_rams.keys()):
+			ram = self.generalized_rams[n]
+
+			# Build word_to_bits from the RAM's word_to_cluster mapping
+			for word, cluster in ram.word_to_cluster.items():
+				if word not in word_to_bits:
+					# Compute full bits representation as u64
+					h = hash(word)
+					bits = 0
+					# Cluster bits (7)
+					for i in range(7):
+						if (cluster >> i) & 1:
+							bits |= (1 << i)
+					# Hash bits (5)
+					for i in range(5):
+						if (h >> i) & 1:
+							bits |= (1 << (7 + i))
+					word_to_bits[word] = bits
+
+			# Export connectivity and memory for each neuron
+			connectivity = []
+			memory_per_neuron = []
+
+			for neuron in ram.neurons:
+				# Connectivity: list of bit indices
+				connectivity.append(neuron.connected_bits)
+
+				# Memory: convert tuple addresses to u64
+				neuron_memory = {}
+				for addr_tuple, word_counts in neuron.ram.items():
+					addr_u64 = bits_tuple_to_u64(addr_tuple)
+					# Convert Counter to regular dict
+					neuron_memory[addr_u64] = dict(word_counts)
+
+				memory_per_neuron.append(neuron_memory)
+
+			gen_rams_export.append((n, connectivity, memory_per_neuron))
+
+		# Export exact RAMs
+		exact_rams_export = []
+		for n in sorted(self.exact_rams.keys()):
+			contexts = {}
+			for ctx_words, word_counts in self.exact_rams[n].items():
+				# Convert context words to bits and pack
+				ctx_bits = []
+				for word in ctx_words:
+					if word in word_to_bits:
+						ctx_bits.append(word_to_bits[word])
+					else:
+						# Unknown word - use hash
+						h = hash(word)
+						bits = 0
+						cluster = h % 256
+						for i in range(7):
+							if (cluster >> i) & 1:
+								bits |= (1 << i)
+						for i in range(5):
+							if (h >> i) & 1:
+								bits |= (1 << (7 + i))
+						ctx_bits.append(bits)
+						word_to_bits[word] = bits
+				contexts[tuple(ctx_bits)] = dict(word_counts)
+			exact_rams_export.append((n, contexts))
+
+		return gen_rams_export, exact_rams_export, word_to_bits
+
 	def _precompute_all_predictions(self, tokens: list[str], n_workers: int = None) -> list[dict]:
 		"""
 		Pre-compute predictions for ALL positions in tokens using parallel workers.
 
 		This is a key acceleration: instead of calling _get_all_predictions()
 		245k times sequentially, we batch them and process in parallel.
+
+		Uses Rust accelerator when available for maximum performance (rayon CPU parallelism).
 
 		Returns: List of dicts, one per position (len = len(tokens) - 6)
 		"""
@@ -1874,10 +1967,17 @@ class RAMLM_v2:
 		if n_positions <= 0:
 			return []
 
-		# Collect all contexts
-		contexts = [tokens[i:i + 5] for i in range(n_positions)]
+		# Try Rust acceleration first (much faster for batch prediction)
+		if RUST_AVAILABLE and n_positions > 1000:
+			try:
+				return self._precompute_with_rust(tokens)
+			except Exception as e:
+				# Fall back to Python if Rust fails
+				import sys
+				print(f"  [Rust prediction failed: {e}, using Python]", file=sys.stderr)
 
-		# Process in parallel chunks to reduce overhead
+		# Python fallback with joblib parallelism
+		contexts = [tokens[i:i + 5] for i in range(n_positions)]
 		chunk_size = max(1000, n_positions // n_workers)
 
 		def process_chunk(start_idx: int, end_idx: int) -> list[dict]:
@@ -1910,6 +2010,32 @@ class RAMLM_v2:
 				all_predictions.extend(process_chunk(start, end))
 
 		return all_predictions
+
+	def _precompute_with_rust(self, tokens: list[str]) -> list[dict]:
+		"""
+		Use Rust accelerator for batch prediction (rayon parallel).
+
+		This is significantly faster than Python/joblib for large datasets
+		because Rust uses efficient FxHashMap and parallel iteration.
+		"""
+		# Export RAM data to Rust format
+		gen_rams, exact_rams, word_to_bits = self._export_rams_for_rust()
+
+		# Call appropriate Rust function based on acceleration mode
+		if ACCELERATION_MODE == AccelerationMode.METAL and METAL_AVAILABLE:
+			results = ram_accelerator.predict_all_batch_metal(
+				gen_rams, exact_rams, word_to_bits, tokens
+			)
+		elif ACCELERATION_MODE == AccelerationMode.HYBRID and METAL_AVAILABLE:
+			results = ram_accelerator.predict_all_batch_hybrid(
+				gen_rams, exact_rams, word_to_bits, tokens
+			)
+		else:
+			results = ram_accelerator.predict_all_batch_cpu(
+				gen_rams, exact_rams, word_to_bits, tokens
+			)
+
+		return results
 
 	def _compute_target_probability(self, context: list[str], target: str) -> float:
 		"""
