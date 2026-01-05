@@ -1421,8 +1421,9 @@ class RAMLM_v2:
 					[list(neuron.connected_bits) for neuron in self.generalized_rams[n].neurons]
 					for n in n_values
 				]
-				# Use first RAM's connectivity as dummy candidate (we evaluate current state)
-				dummy_candidate = all_conns[0][0] if all_conns and all_conns[0] else [0, 1, 2]
+				# Use first RAM's full connectivity as dummy candidate (we evaluate current state)
+				# candidates expects list of full RAM connectivities, not single neuron
+				dummy_candidate = all_conns[0] if all_conns else [[0, 1, 2]]
 				# Export word_to_bits
 				_, _, w2b = self._export_rams_for_rust()
 				# Call Rust with batch of 1 (current connectivity, ram_idx=0 is ignored for full eval)
