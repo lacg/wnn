@@ -137,6 +137,112 @@ Total patterns needed: **6** (4 actions + 2 directions) - not 4×2×8 = 64!
 
 ---
 
+## 🚀 PRIORITY: Modern LLM Techniques Adaptation
+
+**Current Gap**: RAM LM achieves PPL ~18 on training data but ~4650 on test data (260x gap).
+This is because RAM uses exact binary matching with no similarity or smoothing.
+
+Modern LLMs use several techniques that enable generalization to unseen data.
+We need to adapt these for RAM architecture.
+
+### 7. Subword Tokenization (BPE) ⭐ HIGH PRIORITY
+- [ ] Implement BPE tokenizer (or use existing: `tokenizers`, `sentencepiece`)
+- [ ] Replace word-level vocabulary (76k) with subword (32k)
+- [ ] Handle OOV words by decomposition ("unfamiliar" → "un" + "familiar")
+- [ ] Benchmark PPL improvement on test set
+- [ ] Adapt exact RAMs and generalized RAMs for subword tokens
+
+**Why it matters**: Eliminates OOV problem. Any word can be represented.
+Current word-level has 76k vocab with many unseen test words → PPL explosion.
+
+**Expected impact**: Reduce test PPL significantly by eliminating OOV penalty.
+
+### 8. Embedding Similarity / Locality-Sensitive Hashing (LSH)
+- [ ] Research LSH for context hashing (similar contexts → same RAM address)
+- [ ] Implement SimHash or MinHash for n-gram contexts
+- [ ] Test if similar contexts can share predictions
+- [ ] Compare with learned embeddings quantized to bits
+- [ ] Measure generalization improvement
+
+**Why it matters**: Currently "cat ate fish" and "dog ate fish" are completely unrelated.
+With LSH, similar contexts could map to same RAM address → transfer learning.
+
+**Expected impact**: Enable generalization between semantically similar contexts.
+
+### 9. Dynamic Attention Mechanism
+- [ ] Move beyond fixed n-gram windows (2-6 tokens)
+- [ ] Implement variable-length context selection
+- [ ] Learn which context positions matter for prediction
+- [ ] Consider sparse attention patterns for efficiency
+- [ ] Benchmark vs fixed n-gram cascade
+
+**Why it matters**: LLMs dynamically attend to relevant positions.
+RAM uses fixed windows - position 1 always matters same as position 5.
+
+**Expected impact**: Better context utilization, especially for long-range dependencies.
+
+### 10. Probability Smoothing & Calibration
+- [ ] Implement Kneser-Ney smoothing for n-gram fallback
+- [ ] Add temperature scaling for prediction confidence
+- [ ] Better handling of unseen contexts (not just 1/vocab)
+- [ ] Explore interpolation between n-gram orders
+- [ ] Calibrate probabilities to match true frequencies
+
+**Why it matters**: Current cascade gives 1/vocab (~1e-5) for misses.
+This harsh penalty dominates PPL on test data.
+
+**Expected impact**: More realistic probability estimates → lower PPL.
+
+### 11. Context Compression / Learned Representations
+- [ ] Learn to compress context into fixed-size bit patterns
+- [ ] Preserve semantic similarity in compressed space
+- [ ] Use autoencoders or VAEs for context encoding
+- [ ] Quantize continuous embeddings to discrete bits for RAM lookup
+- [ ] Measure information preservation vs compression ratio
+
+**Why it matters**: Raw token IDs waste bits on arbitrary assignments.
+Learned representations capture semantic structure.
+
+**Expected impact**: More efficient RAM addressing, better generalization.
+
+### 12. Pre-training & Transfer Learning
+- [ ] Pre-train on massive diverse corpus (like modern LLMs)
+- [ ] Learn general language patterns, not just task-specific
+- [ ] Investigate if RAM patterns can transfer between domains
+- [ ] Fine-tuning strategies for RAM networks
+- [ ] Measure few-shot learning capability
+
+**Why it matters**: GPT/Claude see trillions of tokens from diverse sources.
+Our RAM sees only WikiText-2 (~2M tokens from Wikipedia).
+
+**Expected impact**: Better coverage of language patterns.
+
+---
+
+### Implementation Priority Order
+
+| Phase | Feature | Complexity | Expected Impact |
+|-------|---------|------------|-----------------|
+| 1 | **Subword Tokenization** | Medium | High (eliminates OOV) |
+| 2 | **Kneser-Ney Smoothing** | Low | Medium (better fallback) |
+| 3 | **LSH Context Hashing** | High | High (similarity-based generalization) |
+| 4 | **Dynamic Attention** | High | Medium (better context selection) |
+| 5 | **Learned Representations** | Very High | Very High (semantic encoding) |
+| 6 | **Pre-training Scale** | Infrastructure | High (coverage) |
+
+---
+
+### Success Metrics
+
+| Metric | Current | Target | Notes |
+|--------|---------|--------|-------|
+| Test PPL | ~4650 | <1000 | Subword + smoothing |
+| Train/Test Ratio | 260x | <10x | Better generalization |
+| OOV Rate | ~30% | <5% | Subword tokenization |
+| Context Similarity | 0% | >50% | LSH-based matching |
+
+---
+
 # Reference: Memory Layout
 
 | Name | Meaning | Shape |
