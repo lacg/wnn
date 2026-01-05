@@ -36,6 +36,7 @@ from wnn.ram.strategies import PerplexityCalculator
 from wnn.tokenizers import TokenizerType, TokenizerFactory, Tokenizer
 from wnn.lsh import RandomProjectionHasher, SimHasher, LSHType
 from wnn.attention import AttentionType, create_attention
+from wnn.representations import RepresentationType, create_encoder
 
 # Number of parallel workers (leave some cores for system)
 N_WORKERS = max(1, multiprocessing.cpu_count() - 4)  # 12 on 16-core M4 Max
@@ -811,7 +812,8 @@ class RAMLM_v2:
 				 n_neurons: int = None, bits_per_neuron: int = None, cascade_threshold: float = 0.1,
 				 strategy_sequence: list = None, smoothing_type: str = "none",
 				 use_lsh: bool = False, lsh_type: str = "simhash",
-				 attention_type: AttentionType = AttentionType.NONE):
+				 attention_type: AttentionType = AttentionType.NONE,
+				 representation_type: RepresentationType = RepresentationType.COOCCURRENCE):
 		self.freq_threshold = freq_threshold
 		self.mode = mode
 		self.word_counts = Counter()
@@ -822,6 +824,8 @@ class RAMLM_v2:
 		self.lsh_type = lsh_type
 		self.attention_type = attention_type
 		self.attention = None  # Trained during train()
+		self.representation_type = representation_type
+		self.binary_encoder = None  # Trained during train()
 
 		# Configurable parameters (with mode-based defaults)
 		if n_neurons is None:
@@ -893,6 +897,18 @@ class RAMLM_v2:
 			self.attention = create_attention(self.attention_type, max_context=6)
 			self.attention.train(tokens)
 			log(f"  Attention trained on {len(tokens):,} tokens")
+
+		# Train binary encoder for learned representations
+		log(f"Training {self.representation_type.name.lower()} binary encoder...")
+		self.binary_encoder = create_encoder(
+			self.representation_type,
+			n_bits=12,
+			context_window=2,
+			min_freq=3,
+		)
+		self.binary_encoder.train(tokens)
+		stats = self.binary_encoder.get_stats()
+		log(f"  Vocab: {stats['vocab_size']:,}, Unique codes: {stats.get('unique_codes', 'N/A')}")
 
 		# Train generalized RAMs with partial connectivity
 		lsh_label = f" + {self.lsh_type.upper()} LSH" if self.use_lsh else ""
@@ -2245,6 +2261,7 @@ def run_benchmark(
 	use_lsh: bool = False,
 	lsh_type: str = "simhash",
 	attention_type: AttentionType = AttentionType.NONE,
+	representation_type: RepresentationType = RepresentationType.COOCCURRENCE,
 ) -> BenchmarkRun:
 	"""Run the v2 benchmark."""
 	if seed is not None:
@@ -2372,12 +2389,13 @@ def run_benchmark(
 	model = RAMLM_v2(freq_threshold=30, mode=mode, n_neurons=n_neurons, bits_per_neuron=bits_per_neuron,
 					 cascade_threshold=cascade_threshold, strategy_sequence=strategy_sequence,
 					 smoothing_type=smoothing_type, use_lsh=use_lsh, lsh_type=lsh_type,
-					 attention_type=attention_type)
+					 attention_type=attention_type, representation_type=representation_type)
 	log(f"Model config: n_neurons={model.n_neurons}, bits_per_neuron={model.bits_per_neuron}, cascade_threshold={model.cascade_threshold}")
 	if smoothing_type != "none":
 		log(f"Smoothing: {smoothing_type}")
 	if attention_type != AttentionType.NONE:
 		log(f"Attention: {attention_type.name.lower()}")
+	log(f"Representation: {representation_type.name.lower()}")
 	if use_lsh:
 		log(f"LSH: {lsh_type} (similarity-preserving context hashing)")
 	log(f"Strategy sequence: {' → '.join(strategy_sequence)}")
@@ -2596,6 +2614,7 @@ def run_multi_benchmark(
 	use_lsh: bool = False,
 	lsh_type: str = "simhash",
 	attention_type: AttentionType = AttentionType.NONE,
+	representation_type: RepresentationType = RepresentationType.COOCCURRENCE,
 ):
 	"""Run the benchmark multiple times and summarize results."""
 	if strategy_sequence is None:
@@ -2631,7 +2650,8 @@ def run_multi_benchmark(
 								   cascade_threshold=cascade_threshold, strategy_sequence=strategy_sequence,
 								   full_data=full_data, smoothing_type=smoothing_type,
 								   use_lsh=use_lsh, lsh_type=lsh_type,
-								   attention_type=attention_type)
+								   attention_type=attention_type,
+								   representation_type=representation_type)
 		runs.append(run_result)
 
 		# Save intermediate results
@@ -2758,6 +2778,9 @@ if __name__ == "__main__":
 	parser.add_argument("--attention", type=str, default="none",
 		choices=["none", "position", "content", "hybrid", "sparse"],
 		help="Attention mechanism: none (default), position, content, hybrid, sparse")
+	parser.add_argument("--representation", type=str, default="cooccurrence",
+		choices=["cooccurrence", "mutual_info", "ram_learned"],
+		help="Binary representation: cooccurrence (SVD baseline), mutual_info (MI bits), ram_learned (RAM-based)")
 	args = parser.parse_args()
 
 	# Map tokenizer arg to enum
@@ -2791,6 +2814,14 @@ if __name__ == "__main__":
 	}
 	attention_type = attention_map[args.attention]
 
+	# Map representation arg to enum
+	representation_map = {
+		"cooccurrence": RepresentationType.COOCCURRENCE,
+		"mutual_info": RepresentationType.MUTUAL_INFO,
+		"ram_learned": RepresentationType.RAM_LEARNED,
+	}
+	representation_type = representation_map[args.representation]
+
 	# Mode descriptions for logging
 	mode_descs = {
 		BenchmarkMode.FAST: "FAST (GA 16×10, TS 16×10)",
@@ -2821,6 +2852,7 @@ if __name__ == "__main__":
 	log(f"Smoothing: {args.smoothing}")
 	log(f"LSH: {'enabled (' + args.lsh_type + ')' if args.lsh else 'disabled'}")
 	log(f"Attention: {attention_type.name.lower()}")
+	log(f"Representation: {representation_type.name.lower()}")
 	log(f"Runs: {args.runs}")
 	if mode == BenchmarkMode.OVERNIGHT:
 		# Estimate: ~30 min per RAM × 5 RAMs × runs
@@ -2837,14 +2869,16 @@ if __name__ == "__main__":
 							cascade_threshold=args.threshold, strategy_sequence=strategy_sequence,
 							full_data=args.full_data, smoothing_type=args.smoothing,
 							use_lsh=args.lsh, lsh_type=args.lsh_type,
-							attention_type=attention_type)
+							attention_type=attention_type,
+							representation_type=representation_type)
 	else:
 		run_benchmark(mode=mode, tokenizer_type=tokenizer_type,
 					  n_neurons=args.neurons, bits_per_neuron=args.bits,
 					  cascade_threshold=args.threshold, strategy_sequence=strategy_sequence,
 					  full_data=args.full_data, smoothing_type=args.smoothing,
 					  use_lsh=args.lsh, lsh_type=args.lsh_type,
-					  attention_type=attention_type)
+					  attention_type=attention_type,
+					  representation_type=representation_type)
 
 	# Final log
 	log_separator()

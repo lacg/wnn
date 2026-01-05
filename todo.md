@@ -247,12 +247,28 @@ This harsh penalty dominates PPL on test data.
 
 **Expected impact**: More realistic probability estimates → lower PPL.
 
-### 11. Context Compression / Learned Representations
-- [ ] Learn to compress context into fixed-size bit patterns
-- [ ] Preserve semantic similarity in compressed space
-- [ ] Use autoencoders or VAEs for context encoding
-- [ ] Quantize continuous embeddings to discrete bits for RAM lookup
+### 11. Context Compression / Learned Representations ✅ COMPLETE
+- [x] Learn to compress context into fixed-size bit patterns
+- [x] Preserve semantic similarity in compressed space
+- [x] RAM-based binary encoder (no neural networks!)
+- [x] Quantize continuous embeddings to discrete bits for RAM lookup
 - [ ] Measure information preservation vs compression ratio
+
+**Implementation** (`src/wnn/representations/`):
+- `base.py`: Abstract `BinaryEncoder` with encode/decode/similarity/nearest_neighbors
+- `mutual_info.py`: `MutualInfoEncoder` - iterative bit selection maximizing MI
+- `ram_encoder.py`: `RAMBinaryEncoder` - RAM-based context → code learning
+- `cooccurrence.py`: `CooccurrenceCodes` - SVD on co-occurrence matrix (baseline)
+- `__init__.py`: `RepresentationFactory`, `RepresentationType` IntEnum
+
+**Usage**: `python tests/ram_lm_v2.py --representation ram_learned` (or `mutual_info`, `cooccurrence`)
+
+**Key features**:
+- **No neural networks**: Uses RAM lookup tables, not backprop
+- **RAMBinaryEncoder**: Each bit is a RAM classifier (context_hash → 0/1)
+- **MutualInfoEncoder**: Random projections on context vectors, maximizing MI
+- **CooccurrenceCodes**: PPMI + SVD baseline (like GloVe but binary)
+- Similar words get similar codes (low Hamming distance)
 
 **Why it matters**: Raw token IDs waste bits on arbitrary assignments.
 Learned representations capture semantic structure.
@@ -281,8 +297,8 @@ Our RAM sees only WikiText-2 (~2M tokens from Wikipedia).
 | 2 | **Kneser-Ney Smoothing** | Low | Medium (better fallback) | ✅ Done |
 | 3 | **LSH Context Hashing** | High | High (similarity-based generalization) | ✅ Done |
 | 4 | **Dynamic Attention** | High | Medium (better context selection) | ✅ Done |
-| 5 | **Learned Representations** | Very High | Very High (semantic encoding) | 🔜 Next |
-| 6 | **Pre-training Scale** | Infrastructure | High (coverage) | |
+| 5 | **Learned Representations** | Very High | Very High (semantic encoding) | ✅ Done |
+| 6 | **Pre-training Scale** | Infrastructure | High (coverage) | 🔜 Next |
 
 ---
 
