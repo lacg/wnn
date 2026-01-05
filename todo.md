@@ -145,12 +145,20 @@ This is because RAM uses exact binary matching with no similarity or smoothing.
 Modern LLMs use several techniques that enable generalization to unseen data.
 We need to adapt these for RAM architecture.
 
-### 7. Subword Tokenization (BPE) ⭐ HIGH PRIORITY
-- [ ] Implement BPE tokenizer (or use existing: `tokenizers`, `sentencepiece`)
-- [ ] Replace word-level vocabulary (76k) with subword (32k)
-- [ ] Handle OOV words by decomposition ("unfamiliar" → "un" + "familiar")
+### 7. Subword Tokenization (BPE) ✅ COMPLETE
+- [x] Implement BPE tokenizer (or use existing: `tokenizers`, `sentencepiece`)
+- [x] Replace word-level vocabulary (76k) with subword (32k)
+- [x] Handle OOV words by decomposition ("unfamiliar" → "un" + "familiar")
 - [ ] Benchmark PPL improvement on test set
 - [ ] Adapt exact RAMs and generalized RAMs for subword tokens
+
+**Implementation** (`src/wnn/tokenizers/`):
+- `base.py`: Abstract `Tokenizer` interface with encode/decode/train
+- `word.py`: `WordTokenizer` (WikiText-2 compatible), `SimpleWordTokenizer`
+- `bpe.py`: `BPETokenizer` (trainable), `GPT2Tokenizer` (pre-trained), `CharacterTokenizer`
+- `__init__.py`: `TokenizerFactory`, `TokenizerType` enum
+
+**Usage**: `python tests/ram_lm_v2.py --tokenizer bpe` (or `gpt2`, `char`)
 
 **Why it matters**: Eliminates OOV problem. Any word can be represented.
 Current word-level has 76k vocab with many unseen test words → PPL explosion.
@@ -181,12 +189,26 @@ RAM uses fixed windows - position 1 always matters same as position 5.
 
 **Expected impact**: Better context utilization, especially for long-range dependencies.
 
-### 10. Probability Smoothing & Calibration
-- [ ] Implement Kneser-Ney smoothing for n-gram fallback
-- [ ] Add temperature scaling for prediction confidence
-- [ ] Better handling of unseen contexts (not just 1/vocab)
-- [ ] Explore interpolation between n-gram orders
+### 10. Probability Smoothing & Calibration ✅ COMPLETE
+- [x] Implement Kneser-Ney smoothing for n-gram fallback
+- [x] Add temperature scaling for prediction confidence
+- [x] Better handling of unseen contexts (not just 1/vocab)
+- [x] Explore interpolation between n-gram orders
 - [ ] Calibrate probabilities to match true frequencies
+
+**Implementation** (`src/wnn/smoothing/`):
+- `base.py`: Abstract `SmoothingStrategy` with train/probability/perplexity
+- `kneser_ney.py`: `KneserNeySmoothing` (gold standard), `SimpleBackoffSmoothing`, `AddKSmoothing`
+- `ram_integration.py`: `SmoothedRAMPredictor` (hybrid RAM + smoothing fallback)
+- `__init__.py`: `SmoothingFactory`, `SmoothingType` enum
+
+**Usage**: `python tests/ram_lm_v2.py --smoothing kneser_ney` (or `backoff`, `add_k`)
+
+**Key features**:
+- Modified Kneser-Ney with D₁, D₂, D₃+ discounts
+- Continuation probability for unigram fallback
+- Interpolation across n-gram orders (not just backoff)
+- Integrated into RAM cascade as final fallback
 
 **Why it matters**: Current cascade gives 1/vocab (~1e-5) for misses.
 This harsh penalty dominates PPL on test data.
@@ -221,14 +243,14 @@ Our RAM sees only WikiText-2 (~2M tokens from Wikipedia).
 
 ### Implementation Priority Order
 
-| Phase | Feature | Complexity | Expected Impact |
-|-------|---------|------------|-----------------|
-| 1 | **Subword Tokenization** | Medium | High (eliminates OOV) |
-| 2 | **Kneser-Ney Smoothing** | Low | Medium (better fallback) |
-| 3 | **LSH Context Hashing** | High | High (similarity-based generalization) |
-| 4 | **Dynamic Attention** | High | Medium (better context selection) |
-| 5 | **Learned Representations** | Very High | Very High (semantic encoding) |
-| 6 | **Pre-training Scale** | Infrastructure | High (coverage) |
+| Phase | Feature | Complexity | Expected Impact | Status |
+|-------|---------|------------|-----------------|--------|
+| 1 | **Subword Tokenization** | Medium | High (eliminates OOV) | ✅ Done |
+| 2 | **Kneser-Ney Smoothing** | Low | Medium (better fallback) | ✅ Done |
+| 3 | **LSH Context Hashing** | High | High (similarity-based generalization) | 🔜 Next |
+| 4 | **Dynamic Attention** | High | Medium (better context selection) | |
+| 5 | **Learned Representations** | Very High | Very High (semantic encoding) | |
+| 6 | **Pre-training Scale** | Infrastructure | High (coverage) | |
 
 ---
 

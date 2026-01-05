@@ -759,11 +759,13 @@ class RAMLM_v2:
 
 	def __init__(self, freq_threshold: int = 50, mode: BenchmarkMode = BenchmarkMode.FAST,
 				 n_neurons: int = None, bits_per_neuron: int = None, cascade_threshold: float = 0.1,
-				 strategy_sequence: list = None):
+				 strategy_sequence: list = None, smoothing_type: str = "none"):
 		self.freq_threshold = freq_threshold
 		self.mode = mode
 		self.word_counts = Counter()
 		self.high_freq_words = set()
+		self.smoothing_type = smoothing_type
+		self.smoothing = None  # Trained during train()
 
 		# Configurable parameters (with mode-based defaults)
 		if n_neurons is None:
@@ -815,6 +817,19 @@ class RAMLM_v2:
 				if all(w in self.high_freq_words for w in context):
 					self.exact_rams[n][tuple(context)][target] += 1
 			log(f"  n={n}: {len(self.exact_rams[n]):,} patterns")
+
+		# Train smoothing model if enabled
+		if self.smoothing_type != "none":
+			log(f"Training {self.smoothing_type} smoothing model...")
+			from wnn.smoothing import KneserNeySmoothing, SimpleBackoffSmoothing, AddKSmoothing
+			if self.smoothing_type == "kneser_ney":
+				self.smoothing = KneserNeySmoothing(max_order=6)
+			elif self.smoothing_type == "backoff":
+				self.smoothing = SimpleBackoffSmoothing(max_order=6)
+			elif self.smoothing_type == "add_k":
+				self.smoothing = AddKSmoothing(max_order=6, k=0.5)
+			self.smoothing.train(tokens)
+			log(f"  Vocab size: {self.smoothing.vocab_size:,}")
 
 		# Train generalized RAMs with partial connectivity
 		log(f"Training generalized RAMs ({self.n_neurons} neurons)...")
@@ -1565,8 +1580,9 @@ class RAMLM_v2:
 		This matches the logic in _evaluate_perplexity_python for consistent PPL.
 		Uses:
 		1. Exact RAM count-based probability if available
-		2. Generalized RAM confidence if cascade match
+		2. Generalized RAM confidence if cascade match (with optional smoothing interpolation)
 		3. Vote-weighted probability if voting fallback
+		4. Smoothing fallback for unseen contexts (if enabled)
 
 		IMPORTANT: This gives partial credit to targets that received some
 		probability mass, even if they didn't win the argmax prediction.
@@ -1585,7 +1601,9 @@ class RAMLM_v2:
 					if counts.most_common(1)[0][1] / total > 0.2 or total >= 3:
 						# Return P(target) from count distribution
 						target_count = counts.get(target, 0)
-						return max(target_count / total, min_prob)
+						if target_count > 0:
+							return max(target_count / total, min_prob)
+						# Target not in exact counts - fall through to other methods
 
 		# 2. Try generalized RAMs with cascade
 		for n in sorted(self.generalized_rams.keys(), reverse=True):
@@ -1594,10 +1612,14 @@ class RAMLM_v2:
 			if len(context) >= n:
 				pred, conf = self.generalized_rams[n].predict(context)
 				if pred and conf > self.cascade_threshold:
-					# Cascade match - if correct, use confidence; else min_prob
+					# Cascade match - if correct, use confidence
 					if pred == target:
 						return max(float(conf), min_prob)
 					else:
+						# Wrong prediction - use smoothing if available
+						if self.smoothing is not None:
+							ctx_tuple = tuple(context[-5:]) if len(context) >= 5 else tuple(context)
+							return self.smoothing.probability(target, ctx_tuple)
 						return min_prob
 
 		# 3. Voting fallback - aggregate votes and compute P(target)
@@ -1616,7 +1638,13 @@ class RAMLM_v2:
 		if total_weight > 0:
 			# Return P(target) from vote distribution (partial credit!)
 			target_votes = votes.get(target, 0.0)
-			return max(target_votes / total_weight, min_prob)
+			if target_votes > 0:
+				return max(target_votes / total_weight, min_prob)
+
+		# 4. Smoothing fallback for unseen contexts
+		if self.smoothing is not None:
+			ctx_tuple = tuple(context[-5:]) if len(context) >= 5 else tuple(context)
+			return self.smoothing.probability(target, ctx_tuple)
 
 		return min_prob
 
@@ -1927,8 +1955,6 @@ class RAMLM_v2:
 		For "cascade" strategy, uses _compute_target_probability() to match
 		the logic in _evaluate_perplexity_python (TRUE perplexity with partial credit).
 		"""
-		import math
-
 		# Test multiple confidence thresholds
 		thresholds = [0.01, 0.02, 0.03, 0.05, 0.07, 0.10]
 
@@ -1960,7 +1986,7 @@ class RAMLM_v2:
 			calculators["cascade"].add_from_probability(cascade_prob, is_correct=(pred1 == target))
 
 			# WEIGHTED: Use weighted vote distribution for P(target)
-			pred2, _, conf2 = self.predict_weighted_voting(context)
+			pred2, _, _ = self.predict_weighted_voting(context)
 			weighted_prob = self._compute_weighted_target_probability(context, target)
 			calculators["weighted"].add_from_probability(weighted_prob, is_correct=(pred2 == target))
 
@@ -1987,7 +2013,7 @@ class RAMLM_v2:
 
 			# THRESHOLD: Use threshold-filtered vote distribution
 			for t in thresholds:
-				pred, _, conf = self.predict_threshold_voting(context, min_conf=t)
+				pred, _, _ = self.predict_threshold_voting(context, min_conf=t)
 				thresh_prob = self._compute_threshold_target_probability(context, target, t)
 				calculators[f"thresh_{t:.2f}"].add_from_probability(thresh_prob, is_correct=(pred == target))
 
@@ -2134,7 +2160,8 @@ def run_benchmark(
 	bits_per_neuron: int = None,
 	cascade_threshold: float = 0.1,
 	strategy_sequence: list = None,
-	full_data: bool = False
+	full_data: bool = False,
+	smoothing_type: str = "none",
 ) -> BenchmarkRun:
 	"""Run the v2 benchmark."""
 	if seed is not None:
@@ -2260,8 +2287,11 @@ def run_benchmark(
 	# Train model
 	log_separator()
 	model = RAMLM_v2(freq_threshold=30, mode=mode, n_neurons=n_neurons, bits_per_neuron=bits_per_neuron,
-					 cascade_threshold=cascade_threshold, strategy_sequence=strategy_sequence)
+					 cascade_threshold=cascade_threshold, strategy_sequence=strategy_sequence,
+					 smoothing_type=smoothing_type)
 	log(f"Model config: n_neurons={model.n_neurons}, bits_per_neuron={model.bits_per_neuron}, cascade_threshold={model.cascade_threshold}")
+	if smoothing_type != "none":
+		log(f"Smoothing: {smoothing_type}")
 	log(f"Strategy sequence: {' → '.join(strategy_sequence)}")
 
 	start = time.time()
@@ -2473,7 +2503,8 @@ def run_multi_benchmark(
 	bits_per_neuron: int = None,
 	cascade_threshold: float = 0.1,
 	strategy_sequence: list = None,
-	full_data: bool = False
+	full_data: bool = False,
+	smoothing_type: str = "none",
 ):
 	"""Run the benchmark multiple times and summarize results."""
 	if strategy_sequence is None:
@@ -2507,7 +2538,7 @@ def run_multi_benchmark(
 		run_result = run_benchmark(mode=mode, run_id=i+1, seed=seed, tokenizer_type=tokenizer_type,
 								   n_neurons=n_neurons, bits_per_neuron=bits_per_neuron,
 								   cascade_threshold=cascade_threshold, strategy_sequence=strategy_sequence,
-								   full_data=full_data)
+								   full_data=full_data, smoothing_type=smoothing_type)
 		runs.append(run_result)
 
 		# Save intermediate results
@@ -2623,6 +2654,9 @@ if __name__ == "__main__":
 		help="Optimization strategy sequence, comma-separated (default: GA,TS). Examples: GA, TS, GA,TS, TS,GA, GA,TS,GA")
 	parser.add_argument("--full-data", action="store_true",
 		help="Use full WikiText-2 dataset (2M train, 245k test, 214k val) instead of subsampled data")
+	parser.add_argument("--smoothing", type=str, default="none",
+		choices=["none", "kneser_ney", "backoff", "add_k"],
+		help="Smoothing for cascade fallback: none (1/vocab), kneser_ney (recommended), backoff, add_k")
 	args = parser.parse_args()
 
 	# Map tokenizer arg to enum
@@ -2687,12 +2721,12 @@ if __name__ == "__main__":
 		run_multi_benchmark(n_runs=args.runs, mode=mode, tokenizer_type=tokenizer_type,
 							n_neurons=args.neurons, bits_per_neuron=args.bits,
 							cascade_threshold=args.threshold, strategy_sequence=strategy_sequence,
-							full_data=args.full_data)
+							full_data=args.full_data, smoothing_type=args.smoothing)
 	else:
 		run_benchmark(mode=mode, tokenizer_type=tokenizer_type,
 					  n_neurons=args.neurons, bits_per_neuron=args.bits,
 					  cascade_threshold=args.threshold, strategy_sequence=strategy_sequence,
-					  full_data=args.full_data)
+					  full_data=args.full_data, smoothing_type=args.smoothing)
 
 	# Final log
 	log_separator()
