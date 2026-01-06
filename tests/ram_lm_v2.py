@@ -2801,14 +2801,10 @@ class RAMLM_v2:
 	def _compute_weighted_prob_from_cached(self, predictions: dict, target: str, context: list[str] = None) -> float:
 		"""Compute P(target) using weighted voting from cached predictions.
 
-		Uses interpolation between vote distribution and smoothing model:
-		- vote_lambda (0.8): weight for vote-based probability
-		- (1-vote_lambda): weight for smoothing fallback (Kneser-Ney)
-
-		This prevents PPL explosion when target is not in votes.
+		Uses PerplexityCalculator.interpolated_vote_prob() for consistent
+		interpolation between vote distribution and smoothing model.
 		"""
 		min_prob = 1.0 / len(self.word_counts) if hasattr(self, 'word_counts') else 1e-4
-		vote_lambda = 0.8  # 80% vote, 20% smoothing
 
 		# Get smoothing probability as fallback
 		smoothing_prob = min_prob
@@ -2821,20 +2817,15 @@ class RAMLM_v2:
 		if not predictions or not hasattr(self, 'voting_weights'):
 			return smoothing_prob
 
+		# Build weighted vote distribution
 		votes = {}
-		total_weight = 0.0
 		for method, (pred, conf) in predictions.items():
 			weight = self.voting_weights.get(method, 0.1) * conf
 			votes[pred] = votes.get(pred, 0.0) + weight
-			total_weight += weight
 
-		if total_weight > 0:
-			# Vote probability: share of votes for target
-			vote_prob = votes.get(target, 0.0) / total_weight
-			# Interpolate: vote_lambda * vote + (1-vote_lambda) * smoothing
-			return vote_lambda * vote_prob + (1 - vote_lambda) * smoothing_prob
-
-		return smoothing_prob
+		return PerplexityCalculator.interpolated_vote_prob(
+			votes, target, smoothing_prob, min_prob, vote_lambda=0.8
+		)
 
 	def _predict_meta_from_cached(self, predictions: dict) -> str:
 		"""Predict using meta-classifier from cached predictions."""
@@ -2919,10 +2910,10 @@ class RAMLM_v2:
 	def _compute_threshold_prob_from_cached(self, predictions: dict, context: list[str], target: str, min_conf: float) -> float:
 		"""Compute P(target) using threshold voting from cached predictions.
 
-		Uses interpolation with smoothing to prevent PPL explosion for unseen words.
+		Uses PerplexityCalculator.interpolated_vote_prob() for consistent
+		interpolation with smoothing to prevent PPL explosion.
 		"""
 		min_prob = 1.0 / len(self.word_counts) if hasattr(self, 'word_counts') else 1e-4
-		vote_lambda = 0.8  # 80% vote, 20% smoothing
 
 		# Get smoothing probability as fallback
 		smoothing_prob = min_prob
@@ -2949,24 +2940,23 @@ class RAMLM_v2:
 			if key in predictions:
 				pred, conf = predictions[key]
 				if conf > self.cascade_threshold:
-					vote_prob = float(conf) if pred == target else 0.0
-					return vote_lambda * vote_prob + (1 - vote_lambda) * smoothing_prob
+					# Single prediction as vote distribution
+					votes = {pred: conf}
+					return PerplexityCalculator.interpolated_vote_prob(
+						votes, target, smoothing_prob, min_prob, vote_lambda=0.8
+					)
 
 		# 3. Threshold-filtered voting (interpolate with smoothing)
 		votes = {}
-		total_weight = 0.0
 		for method, (pred, conf) in predictions.items():
 			if conf > min_conf:
 				n = int(method.split('_n')[1]) if '_n' in method else 1
 				weight = conf * n
 				votes[pred] = votes.get(pred, 0.0) + weight
-				total_weight += weight
 
-		if total_weight > 0:
-			vote_prob = votes.get(target, 0.0) / total_weight
-			return vote_lambda * vote_prob + (1 - vote_lambda) * smoothing_prob
-
-		return smoothing_prob
+		return PerplexityCalculator.interpolated_vote_prob(
+			votes, target, smoothing_prob, min_prob, vote_lambda=0.8
+		)
 
 	def _compute_weighted_target_probability(self, context: list[str], target: str) -> float:
 		"""Compute P(target) using weighted voting (with learned weights)."""

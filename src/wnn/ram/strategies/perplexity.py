@@ -106,6 +106,51 @@ class PerplexityCalculator:
 			if winner == target:
 				self._correct += 1
 
+	def add_from_vote_with_smoothing(
+		self,
+		votes: dict[str, float],
+		target: str,
+		smoothing_prob: Optional[float] = None,
+		vote_lambda: float = 0.8,
+	):
+		"""
+		Add observation from voting distribution interpolated with smoothing.
+
+		Interpolates vote-based probability with smoothing fallback to prevent
+		PPL explosion when target is not in the vote distribution:
+
+			P(target) = vote_lambda * P_vote(target) + (1-vote_lambda) * P_smooth(target)
+
+		Args:
+			votes: dict mapping predictions to vote weights
+			target: the actual target word
+			smoothing_prob: probability from smoothing model (e.g., Kneser-Ney).
+			                If None, uses min_prob as fallback.
+			vote_lambda: interpolation weight for votes (default 0.8 = 80% vote, 20% smooth)
+		"""
+		# Get smoothing fallback
+		smooth_p = max(smoothing_prob, self.min_prob) if smoothing_prob else self.min_prob
+
+		# Calculate vote probability
+		total_weight = sum(votes.values()) if votes else 0
+		if total_weight > 0:
+			vote_p = votes.get(target, 0.0) / total_weight
+		else:
+			vote_p = 0.0
+
+		# Interpolate: vote_lambda * vote + (1 - vote_lambda) * smoothing
+		final_prob = vote_lambda * vote_p + (1 - vote_lambda) * smooth_p
+		final_prob = max(final_prob, self.min_prob)
+
+		self._log_probs.append(log(final_prob))
+		self._total += 1
+
+		# Track accuracy: correct if target got highest votes
+		if votes:
+			winner = max(votes, key=votes.get)
+			if winner == target:
+				self._correct += 1
+
 	def add_from_prediction(self, prediction: str, target: str, confidence: float):
 		"""
 		Add observation from argmax prediction + confidence.
@@ -156,6 +201,40 @@ class PerplexityCalculator:
 			return float('inf')
 		avg_log_prob = sum(log_probs) / len(log_probs)
 		return exp(-avg_log_prob)
+
+	@staticmethod
+	def interpolated_vote_prob(
+		votes: dict[str, float],
+		target: str,
+		smoothing_prob: float,
+		min_prob: float = 1e-4,
+		vote_lambda: float = 0.8,
+	) -> float:
+		"""
+		Compute interpolated probability without adding to the calculator.
+
+		Use this when you need the probability value but don't want to accumulate.
+
+		Args:
+			votes: dict mapping predictions to vote weights
+			target: the target word
+			smoothing_prob: probability from smoothing model
+			min_prob: minimum probability floor (default 1e-4)
+			vote_lambda: interpolation weight (default 0.8)
+
+		Returns:
+			Interpolated probability: vote_lambda * vote_prob + (1-vote_lambda) * smoothing_prob
+		"""
+		smooth_p = max(smoothing_prob, min_prob) if smoothing_prob else min_prob
+
+		total_weight = sum(votes.values()) if votes else 0
+		if total_weight > 0:
+			vote_p = votes.get(target, 0.0) / total_weight
+		else:
+			vote_p = 0.0
+
+		final_prob = vote_lambda * vote_p + (1 - vote_lambda) * smooth_p
+		return max(final_prob, min_prob)
 
 	@staticmethod
 	def log_prob(prob: float, min_prob: float = 1e-10) -> float:
