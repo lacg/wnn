@@ -1394,23 +1394,15 @@ class RAMLM_v2:
 			log("║  PRE-OPTIMIZATION BASELINE EVALUATION                            ║")
 			log("╚══════════════════════════════════════════════════════════════════╝")
 
-			# Check if Rust exact_probs is available (HUGE speedup: 10+ min → seconds)
-			has_rust_exact_probs = ACCEL_RUST_AVAILABLE and hasattr(ram_accelerator, 'compute_exact_probs_batch')
-
-			# Cache the export (expensive with 5M+ patterns) - only compute once
-			cached_rust_export = None
-			if has_rust_exact_probs:
-				cached_rust_export = self._export_rams_for_rust()
+			# NOTE: Rust compute_exact_probs_batch requires exporting 5M+ patterns to bit-encoded
+			# format first, which takes longer than Python's direct dict lookups.
+			# The export overhead (30+ min) exceeds Python lookup time (~10 min).
+			# TODO: Make Rust accept word-based contexts directly to avoid export.
 
 			# Helper to compute exact_probs for a token set (needed for PPL calculation)
 			def compute_exact_probs(tokens_to_eval):
 				"""Compute exact_probs (from exact RAMs) - P(target|context) or None."""
-				# Use Rust accelerator if available (parallel across all positions)
-				if has_rust_exact_probs and cached_rust_export is not None:
-					_, exact_rams_export, w2b = cached_rust_export
-					return ram_accelerator.compute_exact_probs_batch(exact_rams_export, w2b, tokens_to_eval)
-
-				# Fallback to Python (slow for large datasets)
+				# Pure Python with direct dict lookups (faster than Rust due to export overhead)
 				eval_size = len(tokens_to_eval) - MAX_NGRAM
 				exact_probs = []
 				for i in range(eval_size):
