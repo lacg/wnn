@@ -1912,10 +1912,10 @@ class RAMLM_v2:
 			return
 
 		log("Prediction method usage:")
-		# Sort by n-level (exact first, then gen, then voting/none)
-		for method in ["exact_n4", "exact_n3", "exact_n2",
+		# Sort by n-level (exact first by n desc, then gen by n desc, then voting/none)
+		for method in ["exact_n6", "exact_n5", "exact_n4", "exact_n3", "exact_n2",
 					   "gen_n6", "gen_n5", "gen_n4", "gen_n3", "gen_n2",
-					   "voting", "none"]:
+					   "vote", "voting", "none"]:
 			count = self.prediction_stats.get(method, 0)
 			if count > 0:
 				pct = 100 * count / total
@@ -2738,9 +2738,9 @@ class RAMLM_v2:
 			calculators["cascade"].add_from_probability(cascade_prob, is_correct=(pred1 == target))
 
 			# WEIGHTED: Use weighted vote distribution for P(target)
-			# Use cached predictions for weighted voting
+			# Use cached predictions for weighted voting + smoothing interpolation
 			pred2 = self._predict_weighted_from_cached(predictions)
-			weighted_prob = self._compute_weighted_prob_from_cached(predictions, target)
+			weighted_prob = self._compute_weighted_prob_from_cached(predictions, target, context)
 			calculators["weighted"].add_from_probability(weighted_prob, is_correct=(pred2 == target))
 
 			# META: Meta-classifier - use cached cascade probability
@@ -2798,12 +2798,28 @@ class RAMLM_v2:
 			return votes.most_common(1)[0][0]
 		return "<UNK>"
 
-	def _compute_weighted_prob_from_cached(self, predictions: dict, target: str) -> float:
-		"""Compute P(target) using weighted voting from cached predictions."""
+	def _compute_weighted_prob_from_cached(self, predictions: dict, target: str, context: list[str] = None) -> float:
+		"""Compute P(target) using weighted voting from cached predictions.
+
+		Uses interpolation between vote distribution and smoothing model:
+		- vote_lambda (0.8): weight for vote-based probability
+		- (1-vote_lambda): weight for smoothing fallback (Kneser-Ney)
+
+		This prevents PPL explosion when target is not in votes.
+		"""
 		min_prob = 1.0 / len(self.word_counts) if hasattr(self, 'word_counts') else 1e-4
+		vote_lambda = 0.8  # 80% vote, 20% smoothing
+
+		# Get smoothing probability as fallback
+		smoothing_prob = min_prob
+		if hasattr(self, 'smoothing') and self.smoothing and context:
+			try:
+				smoothing_prob = max(self.smoothing.probability(target, context), min_prob)
+			except:
+				pass
 
 		if not predictions or not hasattr(self, 'voting_weights'):
-			return min_prob
+			return smoothing_prob
 
 		votes = {}
 		total_weight = 0.0
@@ -2813,8 +2829,12 @@ class RAMLM_v2:
 			total_weight += weight
 
 		if total_weight > 0:
-			return max(votes.get(target, 0.0) / total_weight, min_prob)
-		return min_prob
+			# Vote probability: share of votes for target
+			vote_prob = votes.get(target, 0.0) / total_weight
+			# Interpolate: vote_lambda * vote + (1-vote_lambda) * smoothing
+			return vote_lambda * vote_prob + (1 - vote_lambda) * smoothing_prob
+
+		return smoothing_prob
 
 	def _predict_meta_from_cached(self, predictions: dict) -> str:
 		"""Predict using meta-classifier from cached predictions."""
@@ -2897,10 +2917,22 @@ class RAMLM_v2:
 		return "<UNK>"
 
 	def _compute_threshold_prob_from_cached(self, predictions: dict, context: list[str], target: str, min_conf: float) -> float:
-		"""Compute P(target) using threshold voting from cached predictions."""
-		min_prob = 1.0 / len(self.word_counts) if hasattr(self, 'word_counts') else 1e-4
+		"""Compute P(target) using threshold voting from cached predictions.
 
-		# 1. Try exact match first
+		Uses interpolation with smoothing to prevent PPL explosion for unseen words.
+		"""
+		min_prob = 1.0 / len(self.word_counts) if hasattr(self, 'word_counts') else 1e-4
+		vote_lambda = 0.8  # 80% vote, 20% smoothing
+
+		# Get smoothing probability as fallback
+		smoothing_prob = min_prob
+		if hasattr(self, 'smoothing') and self.smoothing and context:
+			try:
+				smoothing_prob = max(self.smoothing.probability(target, context), min_prob)
+			except:
+				pass
+
+		# 1. Try exact match first (exact RAMs have proper distributions)
 		for n in sorted(self.exact_rams.keys(), reverse=True):
 			if len(context) >= n:
 				ctx = tuple(context[-n:])
@@ -2911,15 +2943,16 @@ class RAMLM_v2:
 						target_count = counts.get(target, 0)
 						return max(target_count / total, min_prob)
 
-		# 2. Try generalized cascade
+		# 2. Try generalized cascade (interpolate with smoothing)
 		for n in sorted(self.generalized_rams.keys(), reverse=True):
 			key = f"gen_n{n}"
 			if key in predictions:
 				pred, conf = predictions[key]
 				if conf > self.cascade_threshold:
-					return max(float(conf), min_prob) if pred == target else min_prob
+					vote_prob = float(conf) if pred == target else 0.0
+					return vote_lambda * vote_prob + (1 - vote_lambda) * smoothing_prob
 
-		# 3. Threshold-filtered voting
+		# 3. Threshold-filtered voting (interpolate with smoothing)
 		votes = {}
 		total_weight = 0.0
 		for method, (pred, conf) in predictions.items():
@@ -2930,8 +2963,10 @@ class RAMLM_v2:
 				total_weight += weight
 
 		if total_weight > 0:
-			return max(votes.get(target, 0.0) / total_weight, min_prob)
-		return min_prob
+			vote_prob = votes.get(target, 0.0) / total_weight
+			return vote_lambda * vote_prob + (1 - vote_lambda) * smoothing_prob
+
+		return smoothing_prob
 
 	def _compute_weighted_target_probability(self, context: list[str], target: str) -> float:
 		"""Compute P(target) using weighted voting (with learned weights)."""
@@ -3048,10 +3083,10 @@ class RAMLM_v2:
 		log(f"  {'Method':<12} {'Usage':>8} {'Accuracy':>10} {'Correct':>10}")
 		log(f"  {'-'*12} {'-'*8} {'-'*10} {'-'*10}")
 
-		# Sort by cascade priority (exact first, then gen by n, then voting/none)
-		method_order = ["exact_n4", "exact_n3", "exact_n2",
+		# Sort by cascade priority (exact first by n desc, then gen by n desc, then voting/none)
+		method_order = ["exact_n6", "exact_n5", "exact_n4", "exact_n3", "exact_n2",
 						"gen_n6", "gen_n5", "gen_n4", "gen_n3", "gen_n2",
-						"voting", "none"]
+						"vote", "voting", "none"]
 
 		for method in method_order:
 			if method in by_method:
