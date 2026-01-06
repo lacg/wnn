@@ -517,8 +517,16 @@ class GeneralizedNGramRAM:
 			for neuron in self.neurons:
 				neuron.train(full_bits, target)
 
-	def predict(self, context: list[str]) -> tuple[str, float]:
-		"""Predict using voting."""
+	def predict(self, context: list[str], attention_weights: list[float] = None) -> tuple[str, float]:
+		"""
+		Predict using voting with optional attention weighting.
+
+		Args:
+			context: List of context words
+			attention_weights: Optional per-position attention weights (length = self.n)
+				If provided, each neuron's vote is weighted by the attention
+				to the positions it observes via its connectivity pattern.
+		"""
 		if len(context) < self.n:
 			return None, 0.0
 
@@ -528,11 +536,30 @@ class GeneralizedNGramRAM:
 		for neuron in self.neurons:
 			pred, conf = neuron.predict(full_bits)
 			if pred:
-				votes[pred] += conf
+				# Weight vote by attention to observed positions
+				if attention_weights is not None and len(attention_weights) >= self.n:
+					# Map neuron's connected bits to positions
+					# bits 0..bits_per_word-1 → position 0, etc.
+					observed_positions = set()
+					for bit_idx in neuron.connected_bits:
+						pos = bit_idx // self.bits_per_word
+						if pos < self.n:
+							observed_positions.add(pos)
+
+					# Average attention weight for observed positions
+					if observed_positions:
+						attn_weight = sum(attention_weights[-(self.n - p)] for p in observed_positions) / len(observed_positions)
+					else:
+						attn_weight = 1.0
+
+					votes[pred] += conf * attn_weight
+				else:
+					votes[pred] += conf
 
 		if votes:
 			best, score = votes.most_common(1)[0]
-			return best, score / len(self.neurons)
+			total_votes = sum(votes.values())
+			return best, score / total_votes if total_votes > 0 else 0.0
 		return None, 0.0
 
 	def get_coverage(self, test_tokens: list[str]) -> float:
@@ -1810,10 +1837,10 @@ class RAMLM_v2:
 	def _evaluate_perplexity_python(self, test_tokens: list[str], exact_probs: list,
 									vocab_size: int, cascade_threshold: float, eval_subset: int) -> float:
 		"""
-		Python perplexity evaluation using Max(KN, RAM) strategy.
+		Python perplexity evaluation using Max(KN, RAM) with position-weighted attention.
 
 		Key insight: Always use Kneser-Ney as baseline, RAM only boosts when better.
-		This achieves ~170 PPL vs ~2200 with old fallback approach.
+		Attention weights each neuron's vote by the positions it observes.
 		"""
 		import math
 
@@ -1826,6 +1853,12 @@ class RAMLM_v2:
 			target = test_tokens[i + MAX_NGRAM]
 			context = test_tokens[i:i + MAX_NGRAM]
 
+			# Get attention weights for this context
+			attn_weights = None
+			if self.attention is not None:
+				attn_weights = self.attention.get_weights(context[-6:])
+				attn_weights = [float(w) for w in attn_weights]
+
 			# 1. ALWAYS get Kneser-Ney baseline (key fix!)
 			kn_prob = min_prob
 			if self.smoothing is not None:
@@ -1837,7 +1870,7 @@ class RAMLM_v2:
 				ram_prob = exact_probs[i]
 				prob = max(kn_prob, ram_prob)  # MAX(KN, RAM)
 			else:
-				# 3. Try generalized cascade - MAX with KN
+				# 3. Try generalized cascade with attention - MAX with KN
 				ram_prob = None
 				for n in reversed(n_values):
 					if n not in self.generalized_rams:
@@ -1845,14 +1878,15 @@ class RAMLM_v2:
 					gen_context = test_tokens[max(0, i + MAX_NGRAM - n):i + MAX_NGRAM]
 					if len(gen_context) < n:
 						continue
-					pred, conf = self.generalized_rams[n].predict(gen_context)
+					# Pass attention weights for position-weighted voting
+					pred, conf = self.generalized_rams[n].predict(gen_context, attn_weights)
 					if pred and conf > cascade_threshold:
 						if pred == target:
 							ram_prob = float(conf)
 						# Don't penalize wrong predictions - just use KN
 						break
 
-				# 4. Voting fallback - MAX with KN
+				# 4. Voting fallback with attention - MAX with KN
 				if ram_prob is None:
 					votes = {}
 					total_weight = 0.0
@@ -1862,7 +1896,8 @@ class RAMLM_v2:
 						gen_context = test_tokens[max(0, i + MAX_NGRAM - n):i + MAX_NGRAM]
 						if len(gen_context) < n:
 							continue
-						pred, conf = self.generalized_rams[n].predict(gen_context)
+						# Pass attention weights
+						pred, conf = self.generalized_rams[n].predict(gen_context, attn_weights)
 						if pred:
 							weight = conf * n
 							votes[pred] = votes.get(pred, 0.0) + weight
@@ -1883,7 +1918,7 @@ class RAMLM_v2:
 		return math.exp(-avg_log_prob)
 
 	def predict(self, context: list[str], cascade_threshold: float = None) -> tuple[str, str, float]:
-		"""Predict next word.
+		"""Predict next word with position-weighted attention.
 
 		Args:
 			context: List of previous words
@@ -1892,7 +1927,14 @@ class RAMLM_v2:
 		if cascade_threshold is None:
 			cascade_threshold = getattr(self, 'cascade_threshold', 0.1)
 
-		# 1. Try exact match for high-freq contexts
+		# Get per-position attention weights once (used throughout cascade)
+		attn_weights = None
+		if self.attention is not None:
+			attn_weights = self.attention.get_weights(context[-6:])
+			# Convert to list for easier indexing
+			attn_weights = [float(w) for w in attn_weights]
+
+		# 1. Try exact match for high-freq contexts (no attention needed - exact match)
 		for n in sorted(self.exact_rams.keys(), reverse=True):
 			if len(context) >= n:
 				ctx = tuple(context[-n:])
@@ -1906,32 +1948,26 @@ class RAMLM_v2:
 						self.prediction_stats[method] += 1
 						return best, method, conf
 
-		# 2. Try generalized RAMs (partial connectivity)
+		# 2. Try generalized RAMs with position-weighted attention
 		for n in sorted(self.generalized_rams.keys(), reverse=True):
 			if len(context) >= n:
-				pred, conf = self.generalized_rams[n].predict(context)
+				# Pass attention weights for position-weighted voting within RAM
+				pred, conf = self.generalized_rams[n].predict(context, attn_weights)
 				if pred and conf > cascade_threshold:
 					method = f"gen_n{n}"
 					self.prediction_stats[method] += 1
 					return pred, method, conf
 
-		# 3. Fallback: vote across all scales (with optional attention weighting)
+		# 3. Fallback: vote across all scales with per-RAM attention weighting
 		votes = Counter()
-
-		# Get attention weights if enabled
-		if self.attention is not None:
-			attn_weights = self.attention.get_weights(context[-6:])
-			# Average attention weight for context gives importance multiplier
-			attn_multiplier = float(attn_weights.mean()) * len(attn_weights)
-		else:
-			attn_multiplier = 1.0
 
 		for n, ram in self.generalized_rams.items():
 			if len(context) >= n:
-				pred, conf = ram.predict(context)
+				# Each RAM uses attention-weighted voting internally
+				pred, conf = ram.predict(context, attn_weights)
 				if pred:
-					# Weight by context length and attention importance
-					weight = conf * n * attn_multiplier
+					# Weight by context length (higher n = more context)
+					weight = conf * n
 					votes[pred] += weight
 
 		if votes:
@@ -2206,7 +2242,7 @@ class RAMLM_v2:
 
 	def _compute_target_probability(self, context: list[str], target: str) -> float:
 		"""
-		Compute P(target) using Max(KN, RAM) strategy.
+		Compute P(target) using Max(KN, RAM) strategy with position-weighted attention.
 
 		Key insight: Use Kneser-Ney as baseline, RAM only helps when it provides
 		a HIGHER probability than KN. This achieves ~170 PPL vs ~2200 with old approach.
@@ -2214,8 +2250,15 @@ class RAMLM_v2:
 		Strategy: MAX(kn_prob, ram_prob) - best of both worlds
 		- When RAM has seen exact context: may have more accurate prob than smoothed KN
 		- When RAM hasn't seen context: KN smoothing provides good fallback
+		- Attention weights each neuron's vote by the positions it observes
 		"""
 		min_prob = 1.0 / len(self.word_counts) if hasattr(self, 'word_counts') else 1e-4
+
+		# Get attention weights for position-weighted voting
+		attn_weights = None
+		if self.attention is not None:
+			attn_weights = self.attention.get_weights(context[-6:])
+			attn_weights = [float(w) for w in attn_weights]
 
 		# 1. ALWAYS get Kneser-Ney baseline probability (key fix!)
 		kn_prob = min_prob
@@ -2240,13 +2283,13 @@ class RAMLM_v2:
 						# Target not in counts - KN is our best bet
 						break
 
-		# 3. Try generalized RAMs - compare with KN
-		n_values = [2, 3, 4, 5, 6]
+		# 3. Try generalized RAMs with attention - compare with KN
 		for n in sorted(self.generalized_rams.keys(), reverse=True):
 			if n not in self.generalized_rams:
 				continue
 			if len(context) >= n:
-				pred, conf = self.generalized_rams[n].predict(context)
+				# Pass attention weights for position-weighted voting
+				pred, conf = self.generalized_rams[n].predict(context, attn_weights)
 				if pred and conf > self.cascade_threshold:
 					if pred == target:
 						# RAM predicts target - use MAX of confidence and KN
@@ -2254,14 +2297,13 @@ class RAMLM_v2:
 					# RAM predicts wrong word - still use KN (don't penalize)
 					break
 
-		# 4. Voting fallback - compare vote prob with KN
+		# 4. Voting fallback with attention - compare vote prob with KN
 		votes = {}
 		total_weight = 0.0
-		for n in n_values:
-			if n not in self.generalized_rams:
-				continue
+		for n, ram in self.generalized_rams.items():
 			if len(context) >= n:
-				pred, conf = self.generalized_rams[n].predict(context)
+				# Pass attention weights for position-weighted voting
+				pred, conf = ram.predict(context, attn_weights)
 				if pred:
 					weight = conf * n
 					votes[pred] = votes.get(pred, 0.0) + weight
