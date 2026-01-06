@@ -3630,10 +3630,10 @@ if __name__ == "__main__":
 	parser.add_argument("--accel", type=str, default="hybrid",
 		choices=["cpu", "metal", "hybrid"],
 		help="Acceleration: cpu (16 cores), metal (40 GPU cores), hybrid (default, 56 cores = CPU+GPU)")
-	parser.add_argument("--ga-early-stop", type=float, default=0.05,
-		help="GA early stop threshold %% (default: 0.05%% - GA needs diversity, lower threshold)")
-	parser.add_argument("--ts-early-stop", type=float, default=0.5,
-		help="TS early stop threshold %% (default: 0.5%% - TS is focused, stop sooner if not improving)")
+	parser.add_argument("--ga-early-stop", type=float, default=0.01,
+		help="GA early stop threshold %% (default: 0.01%% - GA needs diversity, very low threshold)")
+	parser.add_argument("--ts-early-stop", type=float, default=0.1,
+		help="TS early stop threshold %% (default: 0.1%% - TS is focused, low threshold for thorough search)")
 	args = parser.parse_args()
 
 	# Map tokenizer arg to enum
