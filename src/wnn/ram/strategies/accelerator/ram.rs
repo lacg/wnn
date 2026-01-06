@@ -1028,3 +1028,169 @@ pub fn compute_exact_probs_batch(
         })
         .collect()
 }
+
+// ============================================================================
+// WORD-BASED EXACT RAM STORE
+// ============================================================================
+//
+// A reusable, high-performance store for exact RAM lookups using String contexts.
+// This avoids the expensive Python→Rust bit-encoding overhead by working with
+// words directly.
+//
+// Design principles:
+// - Zero-copy where possible (Arc for shared data)
+// - Parallel iteration with rayon
+// - FxHashMap for fast String-based lookups
+// - Sorted n-gram order for longest-match-first semantics
+
+/// Word-based exact RAM storage for high-performance lookups.
+///
+/// Unlike bit-encoded RAMs, this stores contexts as word vectors directly,
+/// avoiding the expensive Python encoding step (5M+ patterns → 30+ min).
+///
+/// # Example
+/// ```ignore
+/// let store = ExactRAMWordStore::new(exact_rams_data);
+/// let probs = store.compute_exact_probs(&tokens);
+/// ```
+pub struct ExactRAMWordStore {
+    /// RAMs indexed by n-gram order, sorted descending for longest-match-first
+    rams: Vec<ExactRAMWords>,
+}
+
+/// Single n-gram exact RAM with word-based contexts
+struct ExactRAMWords {
+    /// N-gram order (2-6)
+    n: usize,
+    /// Context (word sequence) → {target_word → count}
+    contexts: FxHashMap<Vec<String>, HashMap<String, u32>>,
+}
+
+impl ExactRAMWordStore {
+    /// Confidence threshold for using an exact match
+    const MIN_CONFIDENCE: f64 = 0.2;
+    /// Minimum total count for using an exact match
+    const MIN_COUNT: u32 = 3;
+
+    /// Create from Python-compatible data structure.
+    ///
+    /// # Arguments
+    /// * `data` - Vec of (n, contexts) where contexts is HashMap<Vec<String>, HashMap<String, u32>>
+    pub fn new(
+        data: Vec<(usize, std::collections::HashMap<Vec<String>, std::collections::HashMap<String, u32>>)>
+    ) -> Self {
+        let mut rams: Vec<ExactRAMWords> = data
+            .into_iter()
+            .map(|(n, contexts)| {
+                // Convert std HashMap to FxHashMap for faster lookups
+                let ctx_map: FxHashMap<Vec<String>, HashMap<String, u32>> = contexts
+                    .into_iter()
+                    .map(|(k, v)| (k, v.into_iter().collect()))
+                    .collect();
+                ExactRAMWords { n, contexts: ctx_map }
+            })
+            .collect();
+
+        // Sort by n descending (longest match first)
+        rams.sort_by(|a, b| b.n.cmp(&a.n));
+
+        Self { rams }
+    }
+
+    /// Look up exact probability for a single position.
+    ///
+    /// Searches RAMs from longest n-gram to shortest, returning the first
+    /// confident match (confidence > 0.2 or count >= 3).
+    ///
+    /// # Arguments
+    /// * `context` - Full context window (at least MAX_NGRAM tokens)
+    /// * `target` - The target word to get probability for
+    ///
+    /// # Returns
+    /// * `Some(probability)` if exact match found
+    /// * `None` if no confident match
+    #[inline]
+    pub fn lookup(&self, context: &[&str], target: &str) -> Option<f64> {
+        for ram in &self.rams {
+            if context.len() < ram.n {
+                continue;
+            }
+
+            // Get the last n words as context
+            let ctx: Vec<String> = context[context.len() - ram.n..]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+
+            if let Some(counts) = ram.contexts.get(&ctx) {
+                if counts.is_empty() {
+                    continue;
+                }
+
+                let total: u32 = counts.values().sum();
+                let best_count = *counts.values().max().unwrap_or(&0);
+                let confidence = best_count as f64 / total as f64;
+
+                // Check confidence threshold
+                if confidence > Self::MIN_CONFIDENCE || total >= Self::MIN_COUNT {
+                    let target_count = *counts.get(target).unwrap_or(&0);
+                    return Some(target_count as f64 / total as f64);
+                }
+            }
+        }
+        None
+    }
+
+    /// Compute exact probabilities for all positions in parallel.
+    ///
+    /// This is the main acceleration function - processes 280k+ positions
+    /// in parallel using rayon, with zero Python encoding overhead.
+    ///
+    /// # Arguments
+    /// * `tokens` - Full token sequence
+    ///
+    /// # Returns
+    /// * Vec of Option<f64> - probability for each position, None if no exact match
+    pub fn compute_exact_probs(&self, tokens: &[String]) -> Vec<Option<f64>> {
+        use rayon::prelude::*;
+
+        if tokens.len() <= MAX_NGRAM {
+            return vec![];
+        }
+
+        let n_positions = tokens.len() - MAX_NGRAM;
+
+        (0..n_positions)
+            .into_par_iter()
+            .map(|pos| {
+                let context_end = pos + MAX_NGRAM;
+                let target = &tokens[context_end];
+
+                // Build context slice
+                let context: Vec<&str> = tokens[pos..context_end]
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect();
+
+                self.lookup(&context, target)
+            })
+            .collect()
+    }
+}
+
+/// Compute exact probabilities using word-based exact RAMs (no bit encoding).
+///
+/// This is the main entry point from Python. It constructs an ExactRAMWordStore
+/// and computes probabilities in parallel.
+///
+/// # Performance
+/// - Python loop: ~10+ min for 287k tokens (sequential, dict lookups)
+/// - Rust parallel: ~seconds for 287k tokens (rayon, FxHashMap)
+/// - No encoding overhead (works with Strings directly)
+pub fn compute_exact_probs_words(
+    exact_rams: Vec<(usize, std::collections::HashMap<Vec<String>, std::collections::HashMap<String, u32>>)>,
+    tokens: &[String],
+) -> Vec<Option<f64>> {
+    let store = ExactRAMWordStore::new(exact_rams);
+    store.compute_exact_probs(tokens)
+}

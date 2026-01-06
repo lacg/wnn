@@ -351,6 +351,29 @@ fn compute_exact_probs_batch(
     })
 }
 
+/// Compute exact probabilities using word-based exact RAMs (no bit encoding).
+///
+/// This is the FAST version - works with String contexts directly, avoiding
+/// the expensive Python bit-encoding step that takes 30+ minutes for 5M+ patterns.
+///
+/// # Performance
+/// - Python loop: ~10+ min for 287k tokens
+/// - Rust parallel: ~seconds for 287k tokens
+#[pyfunction]
+fn compute_exact_probs_words(
+    py: Python<'_>,
+    exact_rams: Vec<(
+        usize,
+        std::collections::HashMap<Vec<String>, std::collections::HashMap<String, u32>>,
+    )>,
+    tokens: Vec<String>,
+) -> PyResult<Vec<Option<f64>>> {
+    py.allow_threads(|| {
+        let results = ram::compute_exact_probs_words(exact_rams, &tokens);
+        Ok(results)
+    })
+}
+
 /// Python module definition
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -367,7 +390,9 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(predict_all_batch_cpu, m)?)?;
     m.add_function(wrap_pyfunction!(predict_all_batch_metal, m)?)?;
     m.add_function(wrap_pyfunction!(predict_all_batch_hybrid, m)?)?;
-    // Exact probs acceleration
+    // Exact probs acceleration (bit-encoded - deprecated, slow due to export)
     m.add_function(wrap_pyfunction!(compute_exact_probs_batch, m)?)?;
+    // Exact probs acceleration (word-based - FAST, no export overhead)
+    m.add_function(wrap_pyfunction!(compute_exact_probs_words, m)?)?;
     Ok(())
 }

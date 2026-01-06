@@ -1394,15 +1394,26 @@ class RAMLM_v2:
 			log("║  PRE-OPTIMIZATION BASELINE EVALUATION                            ║")
 			log("╚══════════════════════════════════════════════════════════════════╝")
 
-			# NOTE: Rust compute_exact_probs_batch requires exporting 5M+ patterns to bit-encoded
-			# format first, which takes longer than Python's direct dict lookups.
-			# The export overhead (30+ min) exceeds Python lookup time (~10 min).
-			# TODO: Make Rust accept word-based contexts directly to avoid export.
+			# Check if Rust word-based exact_probs is available (FAST: no encoding overhead)
+			has_rust_exact_probs = ACCEL_RUST_AVAILABLE and hasattr(ram_accelerator, 'compute_exact_probs_words')
+
+			# Convert exact_rams to Rust format once (list keys, dict values)
+			# This is O(5M) but only done once, and iteration is faster than encoding
+			rust_exact_rams = None
+			if has_rust_exact_probs:
+				rust_exact_rams = [
+					(n, {list(ctx): dict(counts) for ctx, counts in ram.items()})
+					for n, ram in sorted(self.exact_rams.items())
+				]
 
 			# Helper to compute exact_probs for a token set (needed for PPL calculation)
 			def compute_exact_probs(tokens_to_eval):
 				"""Compute exact_probs (from exact RAMs) - P(target|context) or None."""
-				# Pure Python with direct dict lookups (faster than Rust due to export overhead)
+				# Use Rust word-based acceleration if available (parallel, no encoding)
+				if has_rust_exact_probs and rust_exact_rams is not None:
+					return ram_accelerator.compute_exact_probs_words(rust_exact_rams, tokens_to_eval)
+
+				# Fallback to Python (slower but works without Rust)
 				eval_size = len(tokens_to_eval) - MAX_NGRAM
 				exact_probs = []
 				for i in range(eval_size):
