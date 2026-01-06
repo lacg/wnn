@@ -356,6 +356,11 @@ fn compute_exact_probs_batch(
 /// This is the FAST version - works with String contexts directly, avoiding
 /// the expensive Python bit-encoding step that takes 30+ minutes for 5M+ patterns.
 ///
+/// # Arguments
+/// * `exact_rams` - Vec of (n, contexts) where contexts is Vec<(context_words, {target: count})>
+///   Note: Using Vec of tuples because Python can't have list keys in dicts
+/// * `tokens` - Token sequence to evaluate
+///
 /// # Performance
 /// - Python loop: ~10+ min for 287k tokens
 /// - Rust parallel: ~seconds for 287k tokens
@@ -364,7 +369,7 @@ fn compute_exact_probs_words(
     py: Python<'_>,
     exact_rams: Vec<(
         usize,
-        std::collections::HashMap<Vec<String>, std::collections::HashMap<String, u32>>,
+        Vec<(Vec<String>, std::collections::HashMap<String, u32>)>,
     )>,
     tokens: Vec<String>,
 ) -> PyResult<Vec<Option<f64>>> {

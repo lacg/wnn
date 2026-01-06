@@ -1075,15 +1075,16 @@ impl ExactRAMWordStore {
     /// Create from Python-compatible data structure.
     ///
     /// # Arguments
-    /// * `data` - Vec of (n, contexts) where contexts is HashMap<Vec<String>, HashMap<String, u32>>
+    /// * `data` - Vec of (n, contexts_list) where contexts_list is Vec<(context_words, {target: count})>
+    ///           Using Vec of tuples because Python can't have list keys in dicts
     pub fn new(
-        data: Vec<(usize, std::collections::HashMap<Vec<String>, std::collections::HashMap<String, u32>>)>
+        data: Vec<(usize, Vec<(Vec<String>, std::collections::HashMap<String, u32>)>)>
     ) -> Self {
         let mut rams: Vec<ExactRAMWords> = data
             .into_iter()
-            .map(|(n, contexts)| {
-                // Convert std HashMap to FxHashMap for faster lookups
-                let ctx_map: FxHashMap<Vec<String>, HashMap<String, u32>> = contexts
+            .map(|(n, contexts_list)| {
+                // Convert Vec of tuples to FxHashMap for fast lookups
+                let ctx_map: FxHashMap<Vec<String>, HashMap<String, u32>> = contexts_list
                     .into_iter()
                     .map(|(k, v)| (k, v.into_iter().collect()))
                     .collect();
@@ -1188,7 +1189,7 @@ impl ExactRAMWordStore {
 /// - Rust parallel: ~seconds for 287k tokens (rayon, FxHashMap)
 /// - No encoding overhead (works with Strings directly)
 pub fn compute_exact_probs_words(
-    exact_rams: Vec<(usize, std::collections::HashMap<Vec<String>, std::collections::HashMap<String, u32>>)>,
+    exact_rams: Vec<(usize, Vec<(Vec<String>, std::collections::HashMap<String, u32>)>)>,
     tokens: &[String],
 ) -> Vec<Option<f64>> {
     let store = ExactRAMWordStore::new(exact_rams);

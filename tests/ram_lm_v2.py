@@ -1394,43 +1394,55 @@ class RAMLM_v2:
 			log("║  PRE-OPTIMIZATION BASELINE EVALUATION                            ║")
 			log("╚══════════════════════════════════════════════════════════════════╝")
 
-			# Check if Rust word-based exact_probs is available (FAST: no encoding overhead)
-			has_rust_exact_probs = ACCEL_RUST_AVAILABLE and hasattr(ram_accelerator, 'compute_exact_probs_words')
-
-			# Convert exact_rams to Rust format once (list keys, dict values)
-			# This is O(5M) but only done once, and iteration is faster than encoding
-			rust_exact_rams = None
-			if has_rust_exact_probs:
-				rust_exact_rams = [
-					(n, {list(ctx): dict(counts) for ctx, counts in ram.items()})
-					for n, ram in sorted(self.exact_rams.items())
-				]
-
 			# Helper to compute exact_probs for a token set (needed for PPL calculation)
+			# Uses joblib parallelization for speed (no Rust conversion overhead)
 			def compute_exact_probs(tokens_to_eval):
-				"""Compute exact_probs (from exact RAMs) - P(target|context) or None."""
-				# Use Rust word-based acceleration if available (parallel, no encoding)
-				if has_rust_exact_probs and rust_exact_rams is not None:
-					return ram_accelerator.compute_exact_probs_words(rust_exact_rams, tokens_to_eval)
+				"""Compute exact_probs (from exact RAMs) - P(target|context) or None.
 
-				# Fallback to Python (slower but works without Rust)
+				Uses joblib parallelization to process chunks of positions in parallel.
+				This avoids the expensive Rust conversion of 5M+ patterns.
+				"""
 				eval_size = len(tokens_to_eval) - MAX_NGRAM
-				exact_probs = []
-				for i in range(eval_size):
-					target = tokens_to_eval[i + MAX_NGRAM]
-					exact_prob = None
-					for n in sorted(self.exact_rams.keys(), reverse=True):
-						ctx = tuple(tokens_to_eval[i + MAX_NGRAM - n:i + MAX_NGRAM])
-						if ctx in self.exact_rams[n]:
-							counts = self.exact_rams[n][ctx]
-							total = sum(counts.values())
-							_, count = counts.most_common(1)[0]
-							conf = count / total
-							if conf > 0.2 or total >= 3:
-								target_count = counts.get(target, 0)
-								exact_prob = target_count / total if total > 0 else 0.0
-								break
-					exact_probs.append(exact_prob)
+				exact_rams = self.exact_rams  # Local reference for closure
+				n_keys_desc = sorted(exact_rams.keys(), reverse=True)  # Pre-sort once
+
+				def process_chunk(start, end):
+					"""Process a chunk of positions [start, end)."""
+					chunk_probs = []
+					for i in range(start, end):
+						target = tokens_to_eval[i + MAX_NGRAM]
+						exact_prob = None
+						for n in n_keys_desc:
+							ctx = tuple(tokens_to_eval[i + MAX_NGRAM - n:i + MAX_NGRAM])
+							if ctx in exact_rams[n]:
+								counts = exact_rams[n][ctx]
+								total = sum(counts.values())
+								_, count = counts.most_common(1)[0]
+								conf = count / total
+								if conf > 0.2 or total >= 3:
+									target_count = counts.get(target, 0)
+									exact_prob = target_count / total if total > 0 else 0.0
+									break
+						chunk_probs.append(exact_prob)
+					return chunk_probs
+
+				# Parallelize with joblib threading backend (avoids pickle overhead for 5M+ patterns)
+				# Threading works well for dict lookups (hash operations release GIL briefly)
+				n_workers = min(N_WORKERS, eval_size // 10000 + 1)  # At least 10k per worker
+				if n_workers > 1 and eval_size > 50000:
+					chunk_size = (eval_size + n_workers - 1) // n_workers
+					chunks = [(i, min(i + chunk_size, eval_size)) for i in range(0, eval_size, chunk_size)]
+					results = Parallel(n_jobs=n_workers, backend='threading')(
+						delayed(process_chunk)(start, end) for start, end in chunks
+					)
+					# Flatten results
+					exact_probs = []
+					for chunk_result in results:
+						exact_probs.extend(chunk_result)
+				else:
+					# Small dataset or single worker - no parallelization overhead
+					exact_probs = process_chunk(0, eval_size)
+
 				return exact_probs
 
 			# Helper to compute PPL using Rust accelerator (batch of 1 = current connectivity)
