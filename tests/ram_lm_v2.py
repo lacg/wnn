@@ -38,7 +38,7 @@ from wnn.ram.core import (
 	get_batch_size_for_mode,
 	set_detected_cores,
 )
-from wnn.ram.strategies import PerplexityCalculator
+from wnn.ram.strategies import PerplexityCalculator, pack_context_bits
 from wnn.tokenizers import TokenizerType, TokenizerFactory, Tokenizer
 from wnn.lsh import RandomProjectionHasher, SimHasher, LSHType
 from wnn.attention import AttentionType, create_attention
@@ -616,8 +616,10 @@ def _evaluate_batch_parallel(
 			test_tokens, bits_per_neuron, eval_subset
 		)]
 
-	# Parallel evaluation
-	results = Parallel(n_jobs=n_workers, prefer="processes")(
+	# Parallel evaluation using threading backend to avoid loky process leaks
+	# Note: Threading works for this function since most work is dict operations
+	# which release GIL. For CPU-bound work, use Rust accelerator instead.
+	results = Parallel(n_jobs=n_workers, prefer="threads")(
 		delayed(_evaluate_single_connectivity)(
 			conn, word_to_cluster, train_tokens,
 			test_tokens, bits_per_neuron, eval_subset
@@ -1752,9 +1754,33 @@ class RAMLM_v2:
 				status = "🟢"
 			log(f"  [VALIDATION] train={final_ppl:.1f}, val={val_ppl:.1f}, ratio={current_ratio:.2f}x (Δ={ratio_delta_pct:+.1f}% vs baseline {global_baseline_ratio:.2f}x) {status}{overfit_note}")
 
-			# Apply optimized connectivity
+			# Apply optimized connectivity and retrain with new neuron structure
 			ram.set_connectivity(best_connectivity.tolist())
-			ram.train(tokens)
+			log(f"  [DEBUG] Retraining n={n} RAM...")
+			import sys, os, gc
+			sys.stdout.flush(); sys.stderr.flush()
+
+			# Force loky shutdown and garbage collection before training
+			os.environ['LOKY_MAX_CPU_COUNT'] = '1'
+			try:
+				from joblib.externals.loky import get_reusable_executor
+				get_reusable_executor().shutdown(wait=True)
+			except:
+				pass
+			gc.collect()
+
+			# Simple training loop (no batching needed, just log progress)
+			total = len(tokens) - ram.n
+			for i in range(total):
+				context = tokens[i:i + ram.n]
+				target = tokens[i + ram.n]
+				full_bits = ram._context_to_bits(context)
+				for neuron in ram.neurons:
+					neuron.train(full_bits, target)
+				if i > 0 and i % 500000 == 0:
+					log(f"    [DEBUG] Trained {i:,}/{total:,} patterns")
+					sys.stdout.flush()
+			log(f"  [DEBUG] Retraining complete for n={n}")
 
 			# Store results (using perplexity - lower is better)
 			ppl_improvement = ((initial_ppl - final_ppl) / initial_ppl * 100) if initial_ppl > 0 else 0
@@ -2059,18 +2085,20 @@ class RAMLM_v2:
 
 			gen_rams_export.append((n, connectivity, memory_per_neuron))
 
-		# Export exact RAMs
+		# Export exact RAMs (using pack_context_bits from wnn.ram.strategies)
 		exact_rams_export = []
 		for n in sorted(self.exact_rams.keys()):
 			contexts = {}
 			for ctx_words, word_counts in self.exact_rams[n].items():
-				# Convert context words to bits and pack
-				ctx_bits = []
+				# Convert context words to bits
+				word_bits_list = []
 				for word in ctx_words:
 					if word not in word_to_bits:
 						word_to_bits[word] = encode_word(word)
-					ctx_bits.append(word_to_bits[word])
-				contexts[tuple(ctx_bits)] = dict(word_counts)
+					word_bits_list.append(word_to_bits[word])
+				# Pack into u64s matching Rust's format
+				ctx_bits_packed = pack_context_bits(word_bits_list)
+				contexts[ctx_bits_packed] = dict(word_counts)
 			exact_rams_export.append((n, contexts))
 
 		return gen_rams_export, exact_rams_export, word_to_bits
@@ -3253,6 +3281,16 @@ def run_benchmark(
 	log_separator()
 	log("EVALUATION")
 	log_separator()
+
+	# Force cleanup of loky workers before evaluation to prevent semaphore leaks
+	import gc
+	os.environ['LOKY_MAX_CPU_COUNT'] = '1'
+	try:
+		from joblib.externals.loky import get_reusable_executor
+		get_reusable_executor().shutdown(wait=True)
+	except:
+		pass
+	gc.collect()
 
 	results = model.evaluate(test_tokens)
 	accuracy = results["correct"] / results["total"] if results["total"] > 0 else 0

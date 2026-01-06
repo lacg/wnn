@@ -91,6 +91,13 @@ from wnn.ram.strategies.attention_mask import (
 # Perplexity calculation
 from wnn.ram.strategies.perplexity import PerplexityCalculator
 
+# Bit packing utilities (Rust-compatible)
+from wnn.ram.strategies.bit_packing import (
+	ContextBitPacker,
+	pack_context_bits,
+	unpack_context_bits,
+)
+
 __all__ = [
 	# Training strategies
 	'GreedyTrainStrategy',
@@ -144,4 +151,8 @@ __all__ = [
 	'combine_masks',
 	# Perplexity
 	'PerplexityCalculator',
+	# Bit packing
+	'ContextBitPacker',
+	'pack_context_bits',
+	'unpack_context_bits',
 ]
