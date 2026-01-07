@@ -26,12 +26,12 @@ class OverfittingControl:
 	(e.g., different Wikipedia articles), where absolute gaps can be 1000%+.
 
 	Thresholds are based on delta (ratio CHANGE from baseline):
-	- delta < HEALTHY (-5%):  Improving → exit diversity_mode
+	- delta < HEALTHY (-1%):  Improving → exit diversity_mode
 	- delta > WARNING (0%):   Mild worsening → activate diversity_mode
-	- delta > SEVERE (5%):    Significant worsening → activate SEVERE diversity_mode
-	- delta > CRITICAL (15%): Early stop
+	- delta > SEVERE (1%):    Significant worsening → activate SEVERE diversity_mode
+	- delta > CRITICAL (3%):  Early stop
 
-	This creates hysteresis: diversity kicks IN at 0%, kicks OFF at -5%.
+	This creates hysteresis: diversity kicks IN at 0%, kicks OFF at -1%.
 	This prevents rapid toggling and ensures meaningful improvement before exiting.
 
 	When diversity_mode is True, optimizers should:
@@ -44,14 +44,14 @@ class OverfittingControl:
 	"""
 	early_stop: bool = False
 	diversity_mode: bool = False
-	severe_diversity_mode: bool = False  # More aggressive diversity for >5% delta
+	severe_diversity_mode: bool = False  # More aggressive diversity for >1% delta
 
 
 # Backward-compatible constants (use OverfitThreshold enum in new code)
-HEALTHY_THRESHOLD = float(OverfitThreshold.HEALTHY)    # -5%
+HEALTHY_THRESHOLD = float(OverfitThreshold.HEALTHY)    # -1%
 WARNING_THRESHOLD = float(OverfitThreshold.WARNING)    # 0%
-SEVERE_THRESHOLD = float(OverfitThreshold.SEVERE)      # 5%
-CRITICAL_THRESHOLD = float(OverfitThreshold.CRITICAL)  # 15%
+SEVERE_THRESHOLD = float(OverfitThreshold.SEVERE)      # 1%
+CRITICAL_THRESHOLD = float(OverfitThreshold.CRITICAL)  # 3%
 
 
 # Type alias for overfitting callback
@@ -68,21 +68,21 @@ class OverfittingMonitor:
 	val/train RATIO CHANGES from the initial baseline (delta).
 
 	Thresholds create hysteresis to prevent rapid toggling:
-	- delta < healthy_threshold (-5%): Healthy (improving) → exit diversity mode
+	- delta < healthy_threshold (-1%): Healthy (improving) → exit diversity mode
 	- delta > warning_threshold (0%):  Warning (any worsening) → activate diversity mode
-	- delta > severe_threshold (5%):   Severe → activate SEVERE diversity mode
-	- delta > critical_threshold (20%): Critical → early stop (after grace period)
+	- delta > severe_threshold (1%):   Severe → activate SEVERE diversity mode
+	- delta > critical_threshold (3%): Critical → early stop (after grace period)
 
 	The hysteresis means:
 	- Diversity kicks IN when delta > 0% (any worsening)
-	- Diversity kicks OFF when delta < -5% (meaningful improvement)
-	- Between -5% and 0%: maintain current state
+	- Diversity kicks OFF when delta < -1% (meaningful improvement)
+	- Between -1% and 0%: maintain current state
 
 	Example:
 		- Baseline: train=180, val=2160 → ratio=12.0x
 		- Later: train=170, val=2050 → ratio=12.06x → delta=+0.5% → WARNING (diversity ON)
-		- Later: train=165, val=1900 → ratio=11.5x → delta=-4.2% → CAUTION (stay in diversity)
-		- Later: train=160, val=1800 → ratio=11.25x → delta=-6.3% → HEALTHY (diversity OFF)
+		- Later: train=168, val=2000 → ratio=11.9x → delta=-0.8% → CAUTION (stay in diversity)
+		- Later: train=165, val=1940 → ratio=11.76x → delta=-2.0% → HEALTHY (diversity OFF)
 
 	Usage:
 		monitor = OverfittingMonitor(

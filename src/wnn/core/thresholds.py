@@ -28,20 +28,20 @@ class OverfitThreshold(IntEnum):
     The val/train ratio is compared to a baseline. The delta (% change from
     baseline) determines the overfitting status:
 
-    HEALTHY: delta < -5% (improving - val/train ratio decreasing)
+    HEALTHY: delta < -1% (improving - val/train ratio decreasing)
     WARNING: delta > 0% (mild overfitting - ratio starting to increase)
-    SEVERE: delta > 5% (significant overfitting - needs aggressive action)
-    CRITICAL: delta > 15% (severe overfitting - should stop)
+    SEVERE: delta > 1% (significant overfitting - needs aggressive action)
+    CRITICAL: delta > 3% (severe overfitting - should stop)
 
     Example:
         Baseline ratio: 250x (val=2000, train=8)
         Current ratio: 262.5x (val=2100, train=8)
         Delta: +5% -> SEVERE threshold exceeded
     """
-    HEALTHY = -5    # < -5%: ratio improving, exit diversity mode
+    HEALTHY = -1    # < -1%: ratio improving, exit diversity mode
     WARNING = 0     # > 0%: any ratio increase, enter mild diversity
-    SEVERE = 5      # > 5%: significant increase, enter aggressive diversity
-    CRITICAL = 15   # > 15%: severe overfitting, early stop
+    SEVERE = 1      # > 1%: significant increase, enter aggressive diversity
+    CRITICAL = 3    # > 3%: severe overfitting, early stop
 
     def as_float(self) -> float:
         """Return threshold as float percentage."""
