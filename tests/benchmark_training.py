@@ -9,7 +9,7 @@ sys.path.insert(0, 'src/wnn')
 from wnn.ram.core.models.ramlm import RAMLM
 
 
-def benchmark_training():
+def benchmark_training(num_tokens=5000, batch_size=500):
 	"""Compare PyTorch and Rust training backends."""
 	print("=" * 60)
 	print("RAMLM Training Backend Benchmark")
@@ -18,12 +18,17 @@ def benchmark_training():
 	# Create test data
 	vocab_size = 1000
 	context_size = 4
-	num_tokens = 5000  # Small dataset for quick comparison
+
+	total_examples = num_tokens - context_size
+	num_batches = (total_examples + batch_size - 1) // batch_size
 
 	print(f"\nConfig:")
 	print(f"  vocab_size: {vocab_size}")
 	print(f"  context_size: {context_size}")
 	print(f"  num_tokens: {num_tokens}")
+	print(f"  batch_size: {batch_size}")
+	print(f"  total_examples: {total_examples}")
+	print(f"  num_batches: {num_batches}")
 
 	# Generate random token sequence
 	torch.manual_seed(42)
@@ -45,7 +50,7 @@ def benchmark_training():
 	stats_pt = model_pt.train_epoch_fast(
 		token_ids,
 		global_top_k=100,
-		batch_size=500,
+		batch_size=batch_size,
 		verbose=False,
 	)
 	pt_time = time.perf_counter() - start
@@ -83,11 +88,21 @@ def benchmark_training():
 		model_rs.layer.memory.connections = model_pt.layer.memory.connections.clone()
 		model_rs._global_top_k = model_pt._global_top_k
 
+		# Debug: Check initial memory state
+		init_mem = model_rs.layer.memory.memory_words.flatten()
+		expected_empty = 0x2AAAAAAAAAAAAAAA
+		is_all_empty = (init_mem == expected_empty).all().item()
+		print(f"  Initial memory check: {'ALL EMPTY ✓' if is_all_empty else 'NOT EMPTY ✗'}")
+		if not is_all_empty:
+			sample_vals = init_mem[:5].tolist()
+			print(f"    Sample values: {[hex(v) for v in sample_vals]}")
+			print(f"    Expected: {hex(expected_empty)}")
+
 		start = time.perf_counter()
 		stats_rs = model_rs.train_epoch_fast_rust(
 			token_ids,
 			global_top_k=100,
-			batch_size=500,
+			batch_size=batch_size,
 			verbose=False,
 		)
 		rs_time = time.perf_counter() - start
@@ -197,4 +212,10 @@ def benchmark_training():
 
 
 if __name__ == "__main__":
-	benchmark_training()
+	import sys
+	if len(sys.argv) > 1 and sys.argv[1] == "--single-batch":
+		# Test with single batch to isolate batch accumulation issues
+		print("Testing with SINGLE BATCH (100 tokens, batch_size=100)")
+		benchmark_training(num_tokens=104, batch_size=200)  # 100 examples, 1 batch
+	else:
+		benchmark_training()

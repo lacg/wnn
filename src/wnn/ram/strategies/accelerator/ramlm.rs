@@ -10,7 +10,7 @@
 //! - Cell values: FALSE=0, TRUE=1, EMPTY=2
 
 use rayon::prelude::*;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, Ordering, fence};
 
 /// Memory cell values (2 bits each)
 const FALSE: i64 = 0;
@@ -67,7 +67,8 @@ fn write_cell(
     let new_bits = value << shift;
 
     loop {
-        let old_word = memory_words[word_offset].load(Ordering::Relaxed);
+        // Use Acquire ordering to ensure we see writes from other threads
+        let old_word = memory_words[word_offset].load(Ordering::Acquire);
         let old_cell = (old_word >> shift) & CELL_MASK;
 
         // Only write if EMPTY or allow_override
@@ -85,8 +86,8 @@ fn write_cell(
         match memory_words[word_offset].compare_exchange(
             old_word,
             new_word,
-            Ordering::SeqCst,
-            Ordering::Relaxed,
+            Ordering::AcqRel,  // Acquire on success, Release semantics for the write
+            Ordering::Acquire, // Acquire on failure to see latest value
         ) {
             Ok(_) => return true,
             Err(_) => continue,  // Retry on conflict
@@ -136,7 +137,8 @@ pub fn train_batch(
     };
 
     // ========== PHASE 1: Write ALL TRUEs first ==========
-    // This ensures correct answers are written before negatives
+    // TRUE writes always succeed (can overwrite FALSE from previous batches)
+    // This ensures correct answers take priority over negatives across batches
     let true_modified: usize = (0..num_examples).into_par_iter().map(|ex_idx| {
         let input_start = ex_idx * total_input_bits;
         let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
@@ -153,13 +155,19 @@ pub fn train_batch(
 
             let address = compute_address(input_bits, connections, bits_per_neuron);
 
-            if write_cell(atomic_memory, neuron_idx, address, TRUE, words_per_neuron, allow_override) {
+            // TRUE writes use allow_override=true to overwrite FALSE from previous batches
+            // This ensures TRUE always takes priority, even across batch boundaries
+            if write_cell(atomic_memory, neuron_idx, address, TRUE, words_per_neuron, true) {
                 ex_modified += 1;
             }
         }
 
         ex_modified
     }).sum();
+
+    // Memory fence to ensure ALL Phase 1 writes are visible before Phase 2 starts
+    // This is critical on ARM (Apple Silicon) where relaxed ordering can cause issues
+    fence(Ordering::SeqCst);
 
     // ========== PHASE 2: Write ALL FALSEs second ==========
     // FALSE only writes to EMPTY cells (TRUE cells from Phase 1 are preserved)
