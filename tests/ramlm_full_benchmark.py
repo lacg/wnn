@@ -24,9 +24,11 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 import argparse
+import logging
 import time
 from collections import Counter
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Optional
 
 import torch
@@ -35,6 +37,57 @@ from wnn.ram.core import AccelerationMode, OptimizationMethod
 from wnn.ram.core.models.ramlm import RAMLM
 from wnn.ram.strategies.connectivity import ConnectivityOptimizer, OptimizationConfig
 from wnn.tokenizers import TokenizerType, TokenizerFactory
+
+
+# ============================================================================
+# LOGGING SETUP
+# ============================================================================
+LOG_FILENAME = None
+
+def setup_logging(log_dir: str = None) -> str:
+	"""Setup logging to both console and file. Returns log filename."""
+	global LOG_FILENAME
+
+	if log_dir is None:
+		# Use date-based folder structure: wnn/logs/YYYY/MM/DD/
+		script_dir = os.path.dirname(os.path.abspath(__file__))
+		project_root = os.path.dirname(script_dir)  # Go up from tests/ to wnn/
+		now = datetime.now()
+		log_dir = os.path.join(project_root, "logs", now.strftime("%Y"), now.strftime("%m"), now.strftime("%d"))
+		os.makedirs(log_dir, exist_ok=True)
+
+	timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+	LOG_FILENAME = os.path.join(log_dir, f"ramlm_benchmark_{timestamp}.log")
+
+	# Create logger
+	logger = logging.getLogger('ramlm_benchmark')
+	logger.setLevel(logging.INFO)
+	logger.handlers.clear()
+
+	# File handler
+	file_handler = logging.FileHandler(LOG_FILENAME)
+	file_handler.setLevel(logging.INFO)
+	file_handler.setFormatter(logging.Formatter('%(message)s'))
+	logger.addHandler(file_handler)
+
+	# Console handler
+	console_handler = logging.StreamHandler()
+	console_handler.setLevel(logging.INFO)
+	console_handler.setFormatter(logging.Formatter('%(message)s'))
+	logger.addHandler(console_handler)
+
+	return LOG_FILENAME
+
+
+def log(message: str = ""):
+	"""Log message to both console and file."""
+	logger = logging.getLogger('ramlm_benchmark')
+	logger.info(message)
+
+
+def log_separator(char: str = "=", width: int = 70):
+	"""Log a separator line."""
+	log(char * width)
 
 
 # ============================================================================
@@ -89,14 +142,14 @@ def load_wikitext2(tokenizer_type: TokenizerType = TokenizerType.GPT2,
 	try:
 		from datasets import load_dataset
 	except ImportError:
-		print("ERROR: datasets library not installed. Run: pip install datasets")
+		log("ERROR: datasets library not installed. Run: pip install datasets")
 		sys.exit(1)
 
-	print("Loading WikiText-2 dataset...")
+	log("Loading WikiText-2 dataset...")
 	dataset = load_dataset("wikitext", "wikitext-2-raw-v1")
 
 	# Get GPT-2 tokenizer
-	print(f"Using {tokenizer_type.name} tokenizer...")
+	log(f"Using {tokenizer_type.name} tokenizer...")
 	if tokenizer_type == TokenizerType.GPT2:
 		tokenizer = TokenizerFactory.create(TokenizerType.GPT2)
 		vocab_size = tokenizer.vocab_size
@@ -115,50 +168,50 @@ def load_wikitext2(tokenizer_type: TokenizerType = TokenizerType.GPT2,
 	test_tokens = tokenize_split("test", test_limit)
 	val_tokens = tokenize_split("validation", val_limit)
 
-	print(f"  Train: {len(train_tokens):,} tokens")
-	print(f"  Test: {len(test_tokens):,} tokens")
-	print(f"  Validation: {len(val_tokens):,} tokens")
-	print(f"  Vocab size: {vocab_size:,}")
+	log(f"  Train: {len(train_tokens):,} tokens")
+	log(f"  Test: {len(test_tokens):,} tokens")
+	log(f"  Validation: {len(val_tokens):,} tokens")
+	log(f"  Vocab size: {vocab_size:,}")
 
 	return train_tokens, test_tokens, val_tokens, vocab_size
 
 
-def print_header(title: str):
-	"""Print a formatted header."""
-	print()
-	print("=" * 70)
-	print(f"  {title}")
-	print("=" * 70)
+def log_header(title: str):
+	"""Log a formatted header."""
+	log()
+	log_separator("=")
+	log(f"  {title}")
+	log_separator("=")
 
 
-def print_section(title: str):
-	"""Print a section divider."""
-	print()
-	print("-" * 50)
-	print(f"  {title}")
-	print("-" * 50)
+def log_section(title: str):
+	"""Log a section divider."""
+	log()
+	log("-" * 50)
+	log(f"  {title}")
+	log("-" * 50)
 
 
 def run_benchmark(config: BenchmarkConfig):
 	"""Run the RAMLM benchmark."""
-	print_header("RAMLM Full Benchmark")
+	log_header("RAMLM Full Benchmark")
 
-	# Print configuration
-	print("\nConfiguration:")
-	print(f"  neurons_per_cluster: {config.neurons_per_cluster}")
-	print(f"  bits_per_neuron: {config.bits_per_neuron}")
-	print(f"  context_size: {config.context_size}")
-	print(f"  global_top_k: {config.global_top_k}")
-	print(f"  batch_size: {config.batch_size}")
-	print(f"  optimize: {config.optimize}")
+	# Log configuration
+	log("\nConfiguration:")
+	log(f"  neurons_per_cluster: {config.neurons_per_cluster}")
+	log(f"  bits_per_neuron: {config.bits_per_neuron}")
+	log(f"  context_size: {config.context_size}")
+	log(f"  global_top_k: {config.global_top_k}")
+	log(f"  batch_size: {config.batch_size}")
+	log(f"  optimize: {config.optimize}")
 	if config.optimize:
-		print(f"  strategy: {config.strategy}")
-	print(f"  Rust available: {RUST_AVAILABLE}")
-	print(f"  CPU cores: {RUST_CPU_CORES}")
-	print(f"  Metal available: {METAL_AVAILABLE}")
+		log(f"  strategy: {config.strategy}")
+	log(f"  Rust available: {RUST_AVAILABLE}")
+	log(f"  CPU cores: {RUST_CPU_CORES}")
+	log(f"  Metal available: {METAL_AVAILABLE}")
 
 	# Load data
-	print_section("Loading Data")
+	log_section("Loading Data")
 	train_tokens, test_tokens, val_tokens, vocab_size = load_wikitext2(
 		TokenizerType.GPT2,
 		train_limit=config.train_limit,
@@ -167,13 +220,13 @@ def run_benchmark(config: BenchmarkConfig):
 	)
 
 	# Compute global top-k from training data
-	print_section("Computing Global Top-K")
+	log_section("Computing Global Top-K")
 	token_counts = Counter(train_tokens)
 	global_top_k_tokens = [t for t, _ in token_counts.most_common(config.global_top_k)]
-	print(f"  Top-{config.global_top_k} tokens cover {sum(token_counts[t] for t in global_top_k_tokens)/len(train_tokens)*100:.1f}% of training data")
+	log(f"  Top-{config.global_top_k} tokens cover {sum(token_counts[t] for t in global_top_k_tokens)/len(train_tokens)*100:.1f}% of training data")
 
 	# Create RAMLM
-	print_section("Creating RAMLM Model")
+	log_section("Creating RAMLM Model")
 	model = RAMLM(
 		vocab_size=vocab_size,
 		context_size=config.context_size,
@@ -183,12 +236,15 @@ def run_benchmark(config: BenchmarkConfig):
 	# Set global top-k
 	model._global_top_k = global_top_k_tokens
 
-	print(f"  Total neurons: {model.layer.total_neurons:,}")
-	print(f"  Total input bits: {model.total_input_bits}")
-	print(f"  Memory addresses per neuron: {2**config.bits_per_neuron}")
+	log(f"  Total neurons: {model.layer.total_neurons:,}")
+	log(f"  Total input bits: {model.total_input_bits}")
+	log(f"  Memory addresses per neuron: {2**config.bits_per_neuron}")
 
 	# Initial training (no optimization)
-	print_section("Initial Training (Rust-Accelerated)")
+	log_section("Initial Training (Rust-Accelerated)")
+	total_examples = len(train_tokens) - config.context_size
+	log(f"Training on {total_examples:,} examples (batch_size={config.batch_size})...")
+	log("  Encoding contexts and training batches...")
 	start = time.perf_counter()
 
 	if RUST_AVAILABLE:
@@ -196,7 +252,7 @@ def run_benchmark(config: BenchmarkConfig):
 			train_tokens,
 			global_top_k=config.global_top_k,
 			batch_size=config.batch_size,
-			verbose=True,
+			verbose=False,  # Suppress print, we log ourselves
 		)
 		backend = "Rust"
 	else:
@@ -204,42 +260,44 @@ def run_benchmark(config: BenchmarkConfig):
 			train_tokens,
 			global_top_k=config.global_top_k,
 			batch_size=config.batch_size,
-			verbose=True,
+			verbose=False,  # Suppress print, we log ourselves
 		)
 		backend = "PyTorch"
 
 	train_time = time.perf_counter() - start
-	print(f"\n  Backend: {backend}")
-	print(f"  Training time: {train_time:.2f}s")
-	print(f"  Modified cells: {stats['modified']:,}")
-	print(f"  Examples: {stats['examples']:,}")
-	print(f"  Throughput: {stats['examples']/train_time:,.0f} examples/sec")
+	log(f"  Backend: {backend}")
+	log(f"  Training time: {train_time:.2f}s")
+	log(f"  Modified cells: {stats['modified']:,}")
+	log(f"  Examples: {stats['examples']:,}")
+	log(f"  Throughput: {stats['examples']/train_time:,.0f} examples/sec")
 
 	# Evaluate on validation set
-	print_section("Initial Evaluation (Validation Set)")
+	log_section("Initial Evaluation (Validation Set)")
+	val_examples = len(val_tokens) - config.context_size
+	log(f"Evaluating on {val_examples:,} examples...")
 	start = time.perf_counter()
 	val_stats = model.evaluate_fast(
 		val_tokens,
 		batch_size=config.batch_size * 2,
 		backend=AccelerationMode.AUTO,
-		verbose=True,
+		verbose=False,  # Suppress print, we log ourselves
 	)
 	eval_time = time.perf_counter() - start
 
-	print(f"\n  Evaluation time: {eval_time:.2f}s")
-	print(f"  Cross-entropy: {val_stats['cross_entropy']:.4f}")
-	print(f"  Perplexity: {val_stats['perplexity']:.2f}")
-	print(f"  Accuracy: {val_stats['accuracy']:.2%}")
+	log(f"  Evaluation time: {eval_time:.2f}s")
+	log(f"  Cross-entropy: {val_stats['cross_entropy']:.4f}")
+	log(f"  Perplexity: {val_stats['perplexity']:.2f}")
+	log(f"  Accuracy: {val_stats['accuracy']:.2%}")
 
 	# Connectivity optimization
 	if config.optimize:
-		print_section("Connectivity Optimization")
+		log_section("Connectivity Optimization")
 
 		# Parse strategy sequence
 		strategies = [s.strip().upper() for s in config.strategy.split(',')]
 
 		for strategy_name in strategies:
-			print(f"\n  Running {strategy_name} optimization...")
+			log(f"\n  Running {strategy_name} optimization...")
 
 			# Map strategy name to enum
 			method_map = {
@@ -249,7 +307,7 @@ def run_benchmark(config: BenchmarkConfig):
 			}
 
 			if strategy_name not in method_map:
-				print(f"  WARNING: Unknown strategy {strategy_name}, skipping")
+				log(f"  WARNING: Unknown strategy {strategy_name}, skipping")
 				continue
 
 			method = method_map[strategy_name]
@@ -301,46 +359,50 @@ def run_benchmark(config: BenchmarkConfig):
 			)
 			opt_time = time.perf_counter() - start
 
-			print(f"\n  {strategy_name} Results:")
-			print(f"    Time: {opt_time:.1f}s")
-			print(f"    Initial CE: {result.initial_cross_entropy:.4f}")
-			print(f"    Final CE: {result.final_cross_entropy:.4f}")
-			print(f"    Improvement: {result.improvement_percent:.2f}%")
-			print(f"    Iterations: {result.iterations_run}")
+			log(f"\n  {strategy_name} Results:")
+			log(f"    Time: {opt_time:.1f}s")
+			log(f"    Initial CE: {result.initial_cross_entropy:.4f}")
+			log(f"    Final CE: {result.final_cross_entropy:.4f}")
+			log(f"    Improvement: {result.improvement_percent:.2f}%")
+			log(f"    Iterations: {result.iterations_run}")
 
 	# Final evaluation on test set
-	print_section("Final Evaluation (Test Set)")
+	log_section("Final Evaluation (Test Set)")
+	test_examples = len(test_tokens) - config.context_size
+	log(f"Evaluating on {test_examples:,} examples...")
 	start = time.perf_counter()
 	test_stats = model.evaluate_fast(
 		test_tokens,
 		batch_size=config.batch_size * 2,
 		backend=AccelerationMode.AUTO,
-		verbose=True,
+		verbose=False,  # Suppress print, we log ourselves
 	)
 	eval_time = time.perf_counter() - start
 
-	print(f"\n  Evaluation time: {eval_time:.2f}s")
-	print(f"  Cross-entropy: {test_stats['cross_entropy']:.4f}")
-	print(f"  Perplexity: {test_stats['perplexity']:.2f}")
-	print(f"  Accuracy: {test_stats['accuracy']:.2%}")
+	log(f"  Evaluation time: {eval_time:.2f}s")
+	log(f"  Cross-entropy: {test_stats['cross_entropy']:.4f}")
+	log(f"  Perplexity: {test_stats['perplexity']:.2f}")
+	log(f"  Accuracy: {test_stats['accuracy']:.2%}")
 
 	# Summary
-	print_header("Summary")
-	print(f"Model: RAMLM (vocab={vocab_size}, neurons={config.neurons_per_cluster}/cluster, bits={config.bits_per_neuron})")
-	print(f"Data: WikiText-2 (train={len(train_tokens):,}, val={len(val_tokens):,}, test={len(test_tokens):,})")
-	print(f"Backend: {backend} ({'Rust + rayon parallel' if RUST_AVAILABLE else 'PyTorch vectorized'})")
-	print()
-	print("Results:")
-	print(f"  Validation PPL: {val_stats['perplexity']:.2f}")
-	print(f"  Validation Acc: {val_stats['accuracy']:.2%}")
-	print(f"  Test PPL: {test_stats['perplexity']:.2f}")
-	print(f"  Test Acc: {test_stats['accuracy']:.2%}")
+	log_header("Summary")
+	log(f"Model: RAMLM (vocab={vocab_size}, neurons={config.neurons_per_cluster}/cluster, bits={config.bits_per_neuron})")
+	log(f"Data: WikiText-2 (train={len(train_tokens):,}, val={len(val_tokens):,}, test={len(test_tokens):,})")
+	log(f"Backend: {backend} ({'Rust + rayon parallel' if RUST_AVAILABLE else 'PyTorch vectorized'})")
+	log()
+	log("Results:")
+	log(f"  Validation PPL: {val_stats['perplexity']:.2f}")
+	log(f"  Validation Acc: {val_stats['accuracy']:.2%}")
+	log(f"  Test PPL: {test_stats['perplexity']:.2f}")
+	log(f"  Test Acc: {test_stats['accuracy']:.2%}")
 
 	if config.optimize:
-		print(f"  Optimization: {config.strategy}")
+		log(f"  Optimization: {config.strategy}")
 
-	print()
-	print("=" * 70)
+	log()
+	log_separator("=")
+	log(f"Log file: {LOG_FILENAME}")
+	log_separator("=")
 
 	return {
 		"val_stats": val_stats,
@@ -396,6 +458,20 @@ if __name__ == "__main__":
 
 	args = parser.parse_args()
 
+	# Setup logging first
+	log_file = setup_logging()
+	print(f"\n{'='*70}")
+	print(f"LOG FILE: {log_file}")
+	print(f"{'='*70}")
+	print(f"Tail command: tail -f \"{log_file}\"")
+	print(f"{'='*70}\n")
+
+	# Log session start
+	log_separator()
+	log("RAMLM BENCHMARK - SESSION START")
+	log(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+	log_separator()
+
 	# Configure based on mode
 	config = BenchmarkConfig()
 	config.context_size = args.context
@@ -440,5 +516,18 @@ if __name__ == "__main__":
 	# Override optimization parameters if specified
 	config.ts_neighbors = args.ts_neighbors
 
+	# Log configuration
+	log(f"Mode: {args.mode.upper()}")
+	log(f"Full data: {args.full_data}")
+	log(f"Optimize: {args.optimize}")
+	if args.optimize:
+		log(f"Strategy: {args.strategy}")
+
 	# Run benchmark
 	results = run_benchmark(config)
+
+	# Log session end
+	log_separator()
+	log("SESSION COMPLETE")
+	log(f"Log file: {LOG_FILENAME}")
+	log_separator()
