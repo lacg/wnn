@@ -35,7 +35,17 @@ import torch
 
 from wnn.ram.core import AccelerationMode, OptimizationMethod
 from wnn.ram.core.models.ramlm import RAMLM
-from wnn.ram.strategies.connectivity import ConnectivityOptimizer, OptimizationConfig
+from wnn.ram.strategies.connectivity import (
+	OverfittingMonitor,
+	GeneticAlgorithmStrategy,
+	GeneticAlgorithmConfig,
+	TabuSearchStrategy,
+	TabuSearchConfig,
+	HEALTHY_THRESHOLD,
+	WARNING_THRESHOLD,
+	SEVERE_THRESHOLD,
+	CRITICAL_THRESHOLD,
+)
 from wnn.tokenizers import TokenizerType, TokenizerFactory
 
 
@@ -128,10 +138,15 @@ class BenchmarkConfig:
 	# TS parameters
 	ts_iterations: int = 10
 	ts_neighbors: int = 30
+	ts_early_stop_pct: float = 0.5  # TS is focused, higher threshold (0.5%)
 
 	# GA parameters
 	ga_population: int = 20
 	ga_generations: int = 50
+	ga_early_stop_pct: float = 0.05  # GA needs diversity, lower threshold (0.05%)
+
+	# Early stopping (checks every 5 gens/iters, patience=1 means 10 total)
+	early_stop_patience: int = 1
 
 
 def load_wikitext2(tokenizer_type: TokenizerType = TokenizerType.GPT2,
@@ -296,75 +311,145 @@ def run_benchmark(config: BenchmarkConfig):
 		# Parse strategy sequence
 		strategies = [s.strip().upper() for s in config.strategy.split(',')]
 
+		# Get model dimensions
+		total_input_bits = model.total_input_bits
+		num_neurons = model.layer.total_neurons
+		bits_per_neuron = model.layer.bits_per_neuron
+		current_connections = model.layer.memory.connections.clone()
+
+		# Create evaluation function that trains and evaluates
+		def evaluate_connectivity(conn: torch.Tensor) -> float:
+			"""Train model with connectivity and return cross-entropy."""
+			model.layer.memory.connections = conn
+			model.reset_memory()
+
+			# Train
+			if RUST_AVAILABLE:
+				model.train_epoch_fast_rust(
+					train_tokens,
+					global_top_k=config.global_top_k,
+					batch_size=config.batch_size,
+					verbose=False,
+				)
+			else:
+				model.train_epoch_fast(
+					train_tokens,
+					global_top_k=config.global_top_k,
+					batch_size=config.batch_size,
+					verbose=False,
+				)
+
+			# Evaluate on validation subset
+			stats = model.evaluate_fast(
+				val_tokens[:min(50000, len(val_tokens))],
+				batch_size=config.batch_size * 2,
+				backend=AccelerationMode.AUTO,
+				verbose=False,
+			)
+			return stats['cross_entropy']
+
+		# Batch evaluation function
+		def batch_evaluate(connectivities: list) -> list:
+			return [evaluate_connectivity(conn) for conn in connectivities]
+
+		# Compute initial train/val ratio for overfitting baseline
+		initial_train_ce = val_stats['cross_entropy']  # Already have this from initial eval
+		initial_val_ce = model.evaluate_fast(
+			val_tokens[:min(50000, len(val_tokens))],
+			batch_size=config.batch_size * 2,
+			backend=AccelerationMode.AUTO,
+			verbose=False,
+		)['cross_entropy']
+		global_baseline_ratio = initial_val_ce / initial_train_ce if initial_train_ce > 0 else 1.0
+
+		log(f"\nOptimization config:")
+		log(f"  GA: {config.ga_population} pop × {config.ga_generations} max gens, early_stop <{config.ga_early_stop_pct}%")
+		log(f"  TS: {config.ts_neighbors} neighbors × {config.ts_iterations} max iters, early_stop <{config.ts_early_stop_pct}%")
+		log(f"  Early stop patience: {config.early_stop_patience} (checks every 5 = {(config.early_stop_patience+1)*5} gens/iters)")
+		log(f"  Overfitting thresholds: <{HEALTHY_THRESHOLD}% healthy, >{WARNING_THRESHOLD}% warn, >{SEVERE_THRESHOLD}% severe, >{CRITICAL_THRESHOLD}% stop")
+		log(f"  Baseline val/train ratio: {global_baseline_ratio:.2f}x")
+
 		for strategy_name in strategies:
 			log(f"\n  Running {strategy_name} optimization...")
 
-			# Map strategy name to enum
-			method_map = {
-				"GA": OptimizationMethod.GENETIC_ALGORITHM,
-				"TS": OptimizationMethod.TABU_SEARCH,
-				"SA": OptimizationMethod.SIMULATED_ANNEALING,
-			}
+			# Create overfitting monitor with validation function
+			def val_eval_fn(conn: torch.Tensor) -> float:
+				model.layer.memory.connections = conn
+				model.reset_memory()
+				if RUST_AVAILABLE:
+					model.train_epoch_fast_rust(train_tokens, global_top_k=config.global_top_k, batch_size=config.batch_size, verbose=False)
+				else:
+					model.train_epoch_fast(train_tokens, global_top_k=config.global_top_k, batch_size=config.batch_size, verbose=False)
+				return model.evaluate_fast(val_tokens[:min(50000, len(val_tokens))], batch_size=config.batch_size * 2, backend=AccelerationMode.AUTO, verbose=False)['cross_entropy']
 
-			if strategy_name not in method_map:
+			overfitting_monitor = OverfittingMonitor(
+				validation_fn=val_eval_fn,
+				grace_checks=1,
+				logger=log,
+				global_baseline_ratio=global_baseline_ratio,
+			)
+
+			start = time.perf_counter()
+
+			if strategy_name == "GA":
+				ga_config = GeneticAlgorithmConfig(
+					population_size=config.ga_population,
+					generations=config.ga_generations,
+					mutation_rate=0.01,
+					crossover_rate=0.7,
+					elitism=max(2, config.ga_population // 10),
+					early_stop_patience=config.early_stop_patience,
+					early_stop_threshold_pct=config.ga_early_stop_pct,
+				)
+				strategy = GeneticAlgorithmStrategy(config=ga_config, seed=42, verbose=True, logger=log)
+				result = strategy.optimize(
+					current_connections,
+					evaluate_connectivity,
+					total_input_bits,
+					num_neurons,
+					bits_per_neuron,
+					batch_evaluate,
+					overfitting_callback=overfitting_monitor,
+				)
+
+			elif strategy_name == "TS":
+				ts_config = TabuSearchConfig(
+					iterations=config.ts_iterations,
+					neighbors_per_iter=config.ts_neighbors,
+					early_stop_patience=config.early_stop_patience,
+					early_stop_threshold_pct=config.ts_early_stop_pct,
+				)
+				strategy = TabuSearchStrategy(config=ts_config, seed=42, verbose=True, logger=log)
+				result = strategy.optimize(
+					current_connections,
+					evaluate_connectivity,
+					total_input_bits,
+					num_neurons,
+					bits_per_neuron,
+					batch_evaluate,
+					overfitting_callback=overfitting_monitor,
+				)
+
+			else:
 				log(f"  WARNING: Unknown strategy {strategy_name}, skipping")
 				continue
 
-			method = method_map[strategy_name]
-
-			# Create optimizer config
-			opt_config = OptimizationConfig(
-				method=method,
-				ts_iterations=config.ts_iterations,
-				ts_neighbors_per_iter=config.ts_neighbors,
-				ga_population_size=config.ga_population,
-				ga_generations=config.ga_generations,
-				verbose=True,
-			)
-
-			optimizer = ConnectivityOptimizer(config=opt_config)
-
-			# Define train/eval functions for optimizer
-			def train_fn():
-				if RUST_AVAILABLE:
-					model.train_epoch_fast_rust(
-						train_tokens,
-						global_top_k=config.global_top_k,
-						batch_size=config.batch_size,
-						verbose=False,
-					)
-				else:
-					model.train_epoch_fast(
-						train_tokens,
-						global_top_k=config.global_top_k,
-						batch_size=config.batch_size,
-						verbose=False,
-					)
-
-			def eval_fn() -> float:
-				stats = model.evaluate_fast(
-					val_tokens[:min(50000, len(val_tokens))],  # Use subset for faster eval
-					batch_size=config.batch_size * 2,
-					backend=AccelerationMode.AUTO,
-					verbose=False,
-				)
-				return stats['cross_entropy']
-
-			# Run optimization
-			start = time.perf_counter()
-			result = optimizer.optimize(
-				model=model,
-				train_fn=train_fn,
-				eval_fn=eval_fn,
-			)
 			opt_time = time.perf_counter() - start
 
+			# Update current connections for next strategy in sequence
+			current_connections = result.optimized_connections.clone()
+			model.layer.memory.connections = current_connections
+
+			# Report results
+			improvement = ((result.initial_error - result.final_error) / result.initial_error * 100) if result.initial_error > 0 else 0
 			log(f"\n  {strategy_name} Results:")
 			log(f"    Time: {opt_time:.1f}s")
-			log(f"    Initial CE: {result.initial_cross_entropy:.4f}")
-			log(f"    Final CE: {result.final_cross_entropy:.4f}")
-			log(f"    Improvement: {result.improvement_percent:.2f}%")
+			log(f"    Initial CE: {result.initial_error:.4f}")
+			log(f"    Final CE: {result.final_error:.4f}")
+			log(f"    Improvement: {improvement:.2f}%")
 			log(f"    Iterations: {result.iterations_run}")
+			if result.early_stopped_overfitting:
+				log(f"    Early stopped: overfitting detected")
 
 	# Final evaluation on test set
 	log_section("Final Evaluation (Test Set)")
