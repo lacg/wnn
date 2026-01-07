@@ -259,8 +259,17 @@ def run_benchmark(config: BenchmarkConfig):
 	log_section("Initial Training (Rust-Accelerated)")
 	total_examples = len(train_tokens) - config.context_size
 	log(f"Training on {total_examples:,} examples (batch_size={config.batch_size})...")
-	log("  Encoding contexts and training batches...")
-	start = time.perf_counter()
+
+	# Step 1: Encode contexts
+	log("  Step 1/2: Encoding contexts...")
+	encode_start = time.perf_counter()
+	all_bits = model.encode_sequence(train_tokens)
+	encode_time = time.perf_counter() - encode_start
+	log(f"    Encoded {all_bits.shape[0]:,} contexts in {encode_time:.1f}s ({all_bits.shape[0]/encode_time:,.0f}/sec)")
+
+	# Step 2: Rust/PyTorch training
+	log("  Step 2/2: Training batches...")
+	train_start = time.perf_counter()
 
 	if RUST_AVAILABLE:
 		stats = model.train_epoch_fast_rust(
@@ -279,12 +288,15 @@ def run_benchmark(config: BenchmarkConfig):
 		)
 		backend = "PyTorch"
 
-	train_time = time.perf_counter() - start
+	train_time = time.perf_counter() - train_start
+	total_time = time.perf_counter() - encode_start
 	log(f"  Backend: {backend}")
-	log(f"  Training time: {train_time:.2f}s")
+	log(f"  Encoding time: {encode_time:.1f}s")
+	log(f"  Training time: {train_time:.1f}s")
+	log(f"  Total time: {total_time:.1f}s")
 	log(f"  Modified cells: {stats['modified']:,}")
 	log(f"  Examples: {stats['examples']:,}")
-	log(f"  Throughput: {stats['examples']/train_time:,.0f} examples/sec")
+	log(f"  Throughput: {stats['examples']/total_time:,.0f} examples/sec")
 
 	# Evaluate on validation set
 	log_section("Initial Evaluation (Validation Set)")
