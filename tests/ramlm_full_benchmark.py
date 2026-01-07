@@ -386,22 +386,40 @@ def run_benchmark(config: BenchmarkConfig):
 		def batch_evaluate(connectivities: list, **kwargs) -> list:
 			return [evaluate_connectivity(conn) for conn in connectivities]
 
-		# Compute initial train/val ratio for overfitting baseline
-		initial_train_ce = val_stats['cross_entropy']  # Already have this from initial eval
-		initial_val_ce = model.evaluate_fast(
+		# Compute baselines for overfitting detection
+		# Train baseline: evaluate on training subset (same used for optimization)
+		log(f"\nComputing baselines for overfitting detection...")
+		baseline_train_stats = model.evaluate_fast(
+			opt_train_tokens[:min(20000, len(opt_train_tokens))],
+			batch_size=config.batch_size * 2,
+			backend=AccelerationMode.AUTO,
+			verbose=False,
+		)
+		baseline_train_ce = baseline_train_stats['cross_entropy']
+		baseline_train_ppl = baseline_train_stats['perplexity']
+
+		# Validation baseline: evaluate on validation subset
+		baseline_val_stats = model.evaluate_fast(
 			val_tokens[:min(50000, len(val_tokens))],
 			batch_size=config.batch_size * 2,
 			backend=AccelerationMode.AUTO,
 			verbose=False,
-		)['cross_entropy']
-		global_baseline_ratio = initial_val_ce / initial_train_ce if initial_train_ce > 0 else 1.0
+		)
+		baseline_val_ce = baseline_val_stats['cross_entropy']
+		baseline_val_ppl = baseline_val_stats['perplexity']
+
+		global_baseline_ratio = baseline_val_ce / baseline_train_ce if baseline_train_ce > 0 else 1.0
+
+		log(f"\nOptimization baselines:")
+		log(f"  Train CE: {baseline_train_ce:.4f} (PPL: {baseline_train_ppl:.2f})")
+		log(f"  Val CE: {baseline_val_ce:.4f} (PPL: {baseline_val_ppl:.2f})")
+		log(f"  Val/Train ratio: {global_baseline_ratio:.2f}x")
 
 		log(f"\nOptimization config:")
 		log(f"  GA: {config.ga_population} pop × {config.ga_generations} max gens, early_stop <{config.ga_early_stop_pct}%")
 		log(f"  TS: {config.ts_neighbors} neighbors × {config.ts_iterations} max iters, early_stop <{config.ts_early_stop_pct}%")
 		log(f"  Early stop patience: {config.early_stop_patience} (checks every 5 = {(config.early_stop_patience+1)*5} gens/iters)")
 		log(f"  Overfitting thresholds: <{HEALTHY_THRESHOLD}% healthy, >{WARNING_THRESHOLD}% warn, >{SEVERE_THRESHOLD}% severe, >{CRITICAL_THRESHOLD}% stop")
-		log(f"  Baseline val/train ratio: {global_baseline_ratio:.2f}x")
 
 		for strategy_name in strategies:
 			log(f"\n  Running {strategy_name} optimization...")

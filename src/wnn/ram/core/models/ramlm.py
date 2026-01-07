@@ -791,10 +791,9 @@ class RAMLM(RAMComponent):
 		# Get all targets
 		targets = tensor(token_ids[self.context_size:], dtype=long)  # [num_examples]
 
-		# Accumulators
-		total_log_prob = 0.0
-		correct = 0
-		min_prob = 1.0 / self.vocab_size
+		# Use PerplexityCalculator for consistent normalized perplexity
+		from wnn.ram.strategies.perplexity import PerplexityCalculator
+		calc = PerplexityCalculator(vocab_size=self.vocab_size)
 
 		num_batches = (total_examples + batch_size - 1) // batch_size
 
@@ -810,40 +809,18 @@ class RAMLM(RAMComponent):
 			batch_targets = targets[start:end]  # [batch_len]
 
 			# Batch forward pass with selected backend
-			probs = self.forward(batch_bits, backend=backend)  # [batch_len, vocab_size]
+			scores = self.forward(batch_bits, backend=backend)  # [batch_len, vocab_size]
 
-			# Get target probabilities using advanced indexing
-			batch_indices = arange(end - start)
-			target_probs = probs[batch_indices, batch_targets]  # [batch_len]
-
-			# Clamp probabilities and compute log
-			target_probs = target_probs.clamp(min=min_prob)
-			total_log_prob += target_probs.log().sum().item()
-
-			# Count correct predictions
-			predicted = probs.argmax(dim=-1)  # [batch_len]
-			correct += (predicted == batch_targets).sum().item()
+			# Add to calculator - it handles softmax normalization internally
+			calc.add_from_scores_batch(scores, batch_targets, normalize=True)
 
 			if verbose and (batch_idx + 1) % max(1, num_batches // 5) == 0:
 				pct = (end / total_examples) * 100
-				current_ce = -total_log_prob / end
-				current_ppl = 2 ** current_ce if current_ce < 20 else float('inf')
-				current_acc = correct / end
-				print(f"    {pct:5.1f}% - CE: {current_ce:.4f}, PPL: {current_ppl:.2f}, Acc: {current_acc:.2%}")
+				stats = calc.get_stats()
+				print(f"    {pct:5.1f}% - CE: {stats['cross_entropy']:.4f}, PPL: {stats['perplexity']:.2f}, Acc: {stats['accuracy']:.2%}")
 
-		# Compute final stats
-		cross_entropy = -total_log_prob / total_examples
-		from math import exp
-		perplexity = exp(cross_entropy) if cross_entropy < 100 else float('inf')
-		accuracy = correct / total_examples
-
-		stats = {
-			'cross_entropy': cross_entropy,
-			'perplexity': perplexity,
-			'accuracy': accuracy,
-			'correct': correct,
-			'total': total_examples,
-		}
+		# Get final stats from calculator
+		stats = calc.get_stats()
 
 		if verbose:
 			print(f"  Cross-entropy: {stats['cross_entropy']:.4f}")

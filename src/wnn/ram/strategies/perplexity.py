@@ -267,3 +267,68 @@ class PerplexityCalculator:
 	def log_prob(prob: float, min_prob: float = 1e-10) -> float:
 		"""Static helper to safely compute log probability."""
 		return log(max(prob, min_prob))
+
+	def add_from_scores_batch(
+		self,
+		scores: 'Tensor',
+		targets: 'Tensor',
+		normalize: bool = True,
+	) -> None:
+		"""
+		Add observations from batch of unnormalized scores (e.g., from RAMClusterLayer).
+
+		CRITICAL: RAMClusterLayer outputs independent scores per cluster that don't
+		sum to 1. This method applies softmax normalization to get true probabilities
+		for perplexity calculation.
+
+		Args:
+			scores: [batch, vocab_size] tensor of unnormalized scores
+			targets: [batch] tensor of target indices
+			normalize: Whether to apply softmax normalization (default True).
+			          Set False if scores are already proper probabilities.
+		"""
+		from torch import arange
+		from torch.nn.functional import softmax
+
+		batch_size = scores.shape[0]
+
+		if normalize:
+			# Apply softmax to convert scores to proper probability distribution
+			probs = softmax(scores, dim=-1)  # [batch, vocab_size], sums to 1
+		else:
+			probs = scores
+
+		# Get target probabilities
+		batch_indices = arange(batch_size, device=scores.device)
+		target_probs = probs[batch_indices, targets]  # [batch]
+
+		# Clamp and compute log probabilities
+		target_probs = target_probs.clamp(min=self.min_prob)
+		log_probs = target_probs.log()
+
+		# Add to accumulator
+		for lp in log_probs.tolist():
+			self._log_probs.append(lp)
+
+		# Track accuracy: correct if argmax == target
+		predicted = probs.argmax(dim=-1)  # [batch]
+		correct_mask = (predicted == targets)
+		self._correct += correct_mask.sum().item()
+		self._total += batch_size
+
+	@staticmethod
+	def normalize_scores(scores: 'Tensor') -> 'Tensor':
+		"""
+		Apply softmax normalization to convert scores to probabilities.
+
+		Use this when you need normalized probabilities but don't want to
+		accumulate statistics.
+
+		Args:
+			scores: [batch, vocab_size] tensor of unnormalized scores
+
+		Returns:
+			[batch, vocab_size] tensor of probabilities (sums to 1 per row)
+		"""
+		from torch.nn.functional import softmax
+		return softmax(scores, dim=-1)
