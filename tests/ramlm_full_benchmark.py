@@ -158,6 +158,10 @@ class BenchmarkConfig:
 	opt_train_windows: int = 50      # 50 windows × 200 = 10k tokens for training
 	opt_eval_windows: int = 20       # 20 windows × 200 = 4k tokens for evaluation
 
+	# Skip initial full training (2.4M tokens) and go straight to optimization
+	# Useful for faster iteration when tuning connectivity
+	skip_initial_training: bool = False
+
 
 def load_wikitext2(tokenizer_type: TokenizerType = TokenizerType.GPT2,
 					train_limit: Optional[int] = None,
@@ -265,53 +269,60 @@ def run_benchmark(config: BenchmarkConfig):
 	log(f"  Total input bits: {model.total_input_bits}")
 	log(f"  Memory addresses per neuron: {2**config.bits_per_neuron}")
 
-	# Initial training (no optimization)
-	log_section("Initial Training (Rust-Accelerated)")
-	total_examples = len(train_tokens) - config.context_size
-	log(f"Training on {total_examples:,} examples (batch_size={config.batch_size})...")
-	start = time.perf_counter()
+	# Determine backend for logging
+	backend = "Rust" if RUST_AVAILABLE else "PyTorch"
+	val_stats = None  # Will be set if initial training runs
 
-	if RUST_AVAILABLE:
-		stats = model.train_epoch_fast_rust(
-			train_tokens,
-			global_top_k=config.global_top_k,
-			batch_size=config.batch_size,
-			verbose=True,  # Show progress
-		)
-		backend = "Rust"
+	# Initial training (skip if optimizing with subsets only)
+	if config.skip_initial_training:
+		log_section("Skipping Initial Full Training")
+		log(f"  (Will train on {config.opt_train_windows}×{config.opt_window_size}={config.opt_train_windows * config.opt_window_size:,} tokens per iteration)")
+		train_time = 0
 	else:
-		stats = model.train_epoch_fast(
-			train_tokens,
-			global_top_k=config.global_top_k,
-			batch_size=config.batch_size,
-			verbose=True,  # Show progress
+		log_section("Initial Training (Rust-Accelerated)")
+		total_examples = len(train_tokens) - config.context_size
+		log(f"Training on {total_examples:,} examples (batch_size={config.batch_size})...")
+		start = time.perf_counter()
+
+		if RUST_AVAILABLE:
+			stats = model.train_epoch_fast_rust(
+				train_tokens,
+				global_top_k=config.global_top_k,
+				batch_size=config.batch_size,
+				verbose=True,  # Show progress
+			)
+		else:
+			stats = model.train_epoch_fast(
+				train_tokens,
+				global_top_k=config.global_top_k,
+				batch_size=config.batch_size,
+				verbose=True,  # Show progress
+			)
+
+		train_time = time.perf_counter() - start
+		log(f"  Backend: {backend}")
+		log(f"  Training time: {train_time:.1f}s")
+		log(f"  Modified cells: {stats['modified']:,}")
+		log(f"  Examples: {stats['examples']:,}")
+		log(f"  Throughput: {stats['examples']/train_time:,.0f} examples/sec")
+
+		# Evaluate on validation set
+		log_section("Initial Evaluation (Validation Set)")
+		val_examples = len(val_tokens) - config.context_size
+		log(f"Evaluating on {val_examples:,} examples...")
+		start = time.perf_counter()
+		val_stats = model.evaluate_fast(
+			val_tokens,
+			batch_size=config.batch_size * 2,
+			backend=AccelerationMode.AUTO,
+			verbose=False,  # Suppress print, we log ourselves
 		)
-		backend = "PyTorch"
+		eval_time = time.perf_counter() - start
 
-	train_time = time.perf_counter() - start
-	log(f"  Backend: {backend}")
-	log(f"  Training time: {train_time:.1f}s")
-	log(f"  Modified cells: {stats['modified']:,}")
-	log(f"  Examples: {stats['examples']:,}")
-	log(f"  Throughput: {stats['examples']/train_time:,.0f} examples/sec")
-
-	# Evaluate on validation set
-	log_section("Initial Evaluation (Validation Set)")
-	val_examples = len(val_tokens) - config.context_size
-	log(f"Evaluating on {val_examples:,} examples...")
-	start = time.perf_counter()
-	val_stats = model.evaluate_fast(
-		val_tokens,
-		batch_size=config.batch_size * 2,
-		backend=AccelerationMode.AUTO,
-		verbose=False,  # Suppress print, we log ourselves
-	)
-	eval_time = time.perf_counter() - start
-
-	log(f"  Evaluation time: {eval_time:.2f}s")
-	log(f"  Cross-entropy: {val_stats['cross_entropy']:.4f}")
-	log(f"  Perplexity: {val_stats['perplexity']:.2f}")
-	log(f"  Accuracy: {val_stats['accuracy']:.2%}")
+		log(f"  Evaluation time: {eval_time:.2f}s")
+		log(f"  Cross-entropy: {val_stats['cross_entropy']:.4f}")
+		log(f"  Perplexity: {val_stats['perplexity']:.2f}")
+		log(f"  Accuracy: {val_stats['accuracy']:.2%}")
 
 	# Connectivity optimization
 	if config.optimize:
@@ -563,8 +574,11 @@ def run_benchmark(config: BenchmarkConfig):
 	log(f"Backend: {backend} ({'Rust + rayon parallel' if RUST_AVAILABLE else 'PyTorch vectorized'})")
 	log()
 	log("Results:")
-	log(f"  Validation PPL: {val_stats['perplexity']:.2f}")
-	log(f"  Validation Acc: {val_stats['accuracy']:.2%}")
+	if val_stats:
+		log(f"  Validation PPL: {val_stats['perplexity']:.2f}")
+		log(f"  Validation Acc: {val_stats['accuracy']:.2%}")
+	else:
+		log(f"  Validation: (skipped initial training)")
 	log(f"  Test PPL: {test_stats['perplexity']:.2f}")
 	log(f"  Test Acc: {test_stats['accuracy']:.2%}")
 
@@ -615,6 +629,8 @@ if __name__ == "__main__":
 	# Optimization
 	parser.add_argument("--optimize", action="store_true",
 		help="Run connectivity optimization after initial training")
+	parser.add_argument("--skip-initial-training", action="store_true",
+		help="Skip initial 2.4M token training, go straight to optimization subsets")
 	parser.add_argument("--strategy", type=str, default="TS",
 		help="Optimization strategy: GA, TS, SA, or comma-separated sequence like GA,TS (default: TS)")
 
@@ -651,6 +667,7 @@ if __name__ == "__main__":
 	config.batch_size = args.batch_size
 	config.optimize = args.optimize
 	config.strategy = args.strategy
+	config.skip_initial_training = args.skip_initial_training
 
 	if args.mode == "fast":
 		# Quick test with smaller data
