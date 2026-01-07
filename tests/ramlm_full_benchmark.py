@@ -152,11 +152,11 @@ class BenchmarkConfig:
 	# Early stopping (checks every 5 gens/iters, patience=1 means 10 total)
 	early_stop_patience: int = 1
 
-	# Optimization subset sizes (like ram_lm_v2.py)
-	# Training on full 2.4M tokens per eval takes ~20 min - use subset for optimization
-	opt_train_subset: int = 50000  # 50k tokens for optimization training
-	opt_num_windows: int = 100     # Number of eval windows to sample
-	opt_window_size: int = 200     # Size of each eval window
+	# Optimization subset sizes - multi-window sampling for diversity
+	# Both train and eval use windows sampled from across the entire corpus
+	opt_window_size: int = 200       # Size of each window (tokens)
+	opt_train_windows: int = 50      # 50 windows × 200 = 10k tokens for training
+	opt_eval_windows: int = 20       # 20 windows × 200 = 4k tokens for evaluation
 
 
 def load_wikitext2(tokenizer_type: TokenizerType = TokenizerType.GPT2,
@@ -328,28 +328,42 @@ def run_benchmark(config: BenchmarkConfig):
 		current_connections = model.layer.memory.connections.clone()
 
 		# ========================================================================
-		# Create optimization subsets (like ram_lm_v2.py)
-		# Training on full 2.4M tokens per eval takes ~20 min - use subset instead
+		# Create optimization subsets using multi-window sampling
+		# Both train and eval sample windows from across the ENTIRE corpus
+		# This ensures diversity and avoids distribution mismatch
 		# ========================================================================
-		opt_train_tokens = train_tokens[:config.opt_train_subset]
-
-		# Multi-window sampling for evaluation: sample random windows from FULL corpus
-		# This gives diversity from all 2M tokens, not just first 50k
 		corpus_end = len(train_tokens) - config.opt_window_size - 10
-		if corpus_end > config.opt_window_size * config.opt_num_windows:
-			sampling_rng = rand_module.Random(42)  # Consistent seed for reproducibility
-			window_starts = sampling_rng.sample(range(0, corpus_end), config.opt_num_windows)
-			window_starts.sort()  # Cache-friendly access
+		total_windows_needed = config.opt_train_windows + config.opt_eval_windows
+
+		sampling_rng = rand_module.Random(42)  # Consistent seed for reproducibility
+
+		if corpus_end > config.opt_window_size * total_windows_needed:
+			# Sample all windows at once, then split between train and eval
+			all_window_starts = sampling_rng.sample(range(0, corpus_end), total_windows_needed)
+			all_window_starts.sort()  # Cache-friendly access
+
+			# Split: first N for train, rest for eval (both from same distribution)
+			train_starts = all_window_starts[:config.opt_train_windows]
+			eval_starts = all_window_starts[config.opt_train_windows:]
+
+			opt_train_tokens = []
+			for start in train_starts:
+				opt_train_tokens.extend(train_tokens[start:start + config.opt_window_size])
+
 			opt_eval_tokens = []
-			for start in window_starts:
+			for start in eval_starts:
 				opt_eval_tokens.extend(train_tokens[start:start + config.opt_window_size])
-			log(f"Optimization data: {len(opt_train_tokens):,} train tokens")
-			log(f"Multi-window eval: {config.opt_num_windows} windows × {config.opt_window_size} = {len(opt_eval_tokens):,} tokens")
+
+			log(f"Multi-window train: {config.opt_train_windows} windows × {config.opt_window_size} = {len(opt_train_tokens):,} tokens")
+			log(f"Multi-window eval: {config.opt_eval_windows} windows × {config.opt_window_size} = {len(opt_eval_tokens):,} tokens")
 		else:
-			# Fallback if corpus too small
-			opt_eval_tokens = train_tokens[config.opt_train_subset:config.opt_train_subset + config.opt_num_windows * config.opt_window_size]
-			log(f"Optimization data: {len(opt_train_tokens):,} train tokens")
-			log(f"Single-window eval: {len(opt_eval_tokens):,} tokens")
+			# Fallback if corpus too small - use sequential
+			train_size = config.opt_train_windows * config.opt_window_size
+			eval_size = config.opt_eval_windows * config.opt_window_size
+			opt_train_tokens = train_tokens[:train_size]
+			opt_eval_tokens = train_tokens[train_size:train_size + eval_size]
+			log(f"Sequential train: {len(opt_train_tokens):,} tokens (corpus too small for multi-window)")
+			log(f"Sequential eval: {len(opt_eval_tokens):,} tokens")
 
 		# Create evaluation function that trains and evaluates on SUBSETS
 		def evaluate_connectivity(conn: torch.Tensor) -> float:
@@ -357,7 +371,7 @@ def run_benchmark(config: BenchmarkConfig):
 			model.layer.memory.connections = conn
 			model.reset_memory()
 
-			# Train on SUBSET (50k tokens, ~30s instead of 2.4M tokens, ~20 min)
+			# Train on multi-window subset (10k tokens by default)
 			if RUST_AVAILABLE:
 				model.train_epoch_fast_rust(
 					opt_train_tokens,
@@ -651,7 +665,7 @@ if __name__ == "__main__":
 
 	elif args.mode == "full":
 		# Standard benchmark
-		config.neurons_per_cluster = args.neurons or 4
+		config.neurons_per_cluster = args.neurons or 8
 		config.bits_per_neuron = args.bits or 10
 		config.train_limit = None if args.full_data else 200000
 		config.test_limit = None if args.full_data else 50000
