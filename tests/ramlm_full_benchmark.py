@@ -74,16 +74,20 @@ def setup_logging(log_dir: str = None) -> str:
 	logger.setLevel(logging.INFO)
 	logger.handlers.clear()
 
-	# File handler
+	# Timestamp format for log entries
+	timestamp_format = '%(asctime)s | %(message)s'
+	date_format = '%H:%M:%S'
+
+	# File handler (with timestamps)
 	file_handler = logging.FileHandler(LOG_FILENAME)
 	file_handler.setLevel(logging.INFO)
-	file_handler.setFormatter(logging.Formatter('%(message)s'))
+	file_handler.setFormatter(logging.Formatter(timestamp_format, datefmt=date_format))
 	logger.addHandler(file_handler)
 
-	# Console handler
+	# Console handler (with timestamps)
 	console_handler = logging.StreamHandler()
 	console_handler.setLevel(logging.INFO)
-	console_handler.setFormatter(logging.Formatter('%(message)s'))
+	console_handler.setFormatter(logging.Formatter(timestamp_format, datefmt=date_format))
 	logger.addHandler(console_handler)
 
 	return LOG_FILENAME
