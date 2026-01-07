@@ -152,6 +152,12 @@ class BenchmarkConfig:
 	# Early stopping (checks every 5 gens/iters, patience=1 means 10 total)
 	early_stop_patience: int = 1
 
+	# Optimization subset sizes (like ram_lm_v2.py)
+	# Training on full 2.4M tokens per eval takes ~20 min - use subset for optimization
+	opt_train_subset: int = 50000  # 50k tokens for optimization training
+	opt_num_windows: int = 100     # Number of eval windows to sample
+	opt_window_size: int = 200     # Size of each eval window
+
 
 def load_wikitext2(tokenizer_type: TokenizerType = TokenizerType.GPT2,
 					train_limit: Optional[int] = None,
@@ -263,24 +269,14 @@ def run_benchmark(config: BenchmarkConfig):
 	log_section("Initial Training (Rust-Accelerated)")
 	total_examples = len(train_tokens) - config.context_size
 	log(f"Training on {total_examples:,} examples (batch_size={config.batch_size})...")
-
-	# Step 1: Encode contexts
-	log("  Step 1/2: Encoding contexts...")
-	encode_start = time.perf_counter()
-	all_bits = model.encode_sequence(train_tokens)
-	encode_time = time.perf_counter() - encode_start
-	log(f"    Encoded {all_bits.shape[0]:,} contexts in {encode_time:.1f}s ({all_bits.shape[0]/encode_time:,.0f}/sec)")
-
-	# Step 2: Rust/PyTorch training
-	log("  Step 2/2: Training batches...")
-	train_start = time.perf_counter()
+	start = time.perf_counter()
 
 	if RUST_AVAILABLE:
 		stats = model.train_epoch_fast_rust(
 			train_tokens,
 			global_top_k=config.global_top_k,
 			batch_size=config.batch_size,
-			verbose=False,  # Suppress print, we log ourselves
+			verbose=True,  # Show progress
 		)
 		backend = "Rust"
 	else:
@@ -288,19 +284,16 @@ def run_benchmark(config: BenchmarkConfig):
 			train_tokens,
 			global_top_k=config.global_top_k,
 			batch_size=config.batch_size,
-			verbose=False,  # Suppress print, we log ourselves
+			verbose=True,  # Show progress
 		)
 		backend = "PyTorch"
 
-	train_time = time.perf_counter() - train_start
-	total_time = time.perf_counter() - encode_start
+	train_time = time.perf_counter() - start
 	log(f"  Backend: {backend}")
-	log(f"  Encoding time: {encode_time:.1f}s")
 	log(f"  Training time: {train_time:.1f}s")
-	log(f"  Total time: {total_time:.1f}s")
 	log(f"  Modified cells: {stats['modified']:,}")
 	log(f"  Examples: {stats['examples']:,}")
-	log(f"  Throughput: {stats['examples']/total_time:,.0f} examples/sec")
+	log(f"  Throughput: {stats['examples']/train_time:,.0f} examples/sec")
 
 	# Evaluate on validation set
 	log_section("Initial Evaluation (Validation Set)")
@@ -323,6 +316,7 @@ def run_benchmark(config: BenchmarkConfig):
 	# Connectivity optimization
 	if config.optimize:
 		log_section("Connectivity Optimization")
+		import random as rand_module
 
 		# Parse strategy sequence
 		strategies = [s.strip().upper() for s in config.strategy.split(',')]
@@ -333,31 +327,55 @@ def run_benchmark(config: BenchmarkConfig):
 		bits_per_neuron = model.layer.bits_per_neuron
 		current_connections = model.layer.memory.connections.clone()
 
-		# Create evaluation function that trains and evaluates
+		# ========================================================================
+		# Create optimization subsets (like ram_lm_v2.py)
+		# Training on full 2.4M tokens per eval takes ~20 min - use subset instead
+		# ========================================================================
+		opt_train_tokens = train_tokens[:config.opt_train_subset]
+
+		# Multi-window sampling for evaluation: sample random windows from FULL corpus
+		# This gives diversity from all 2M tokens, not just first 50k
+		corpus_end = len(train_tokens) - config.opt_window_size - 10
+		if corpus_end > config.opt_window_size * config.opt_num_windows:
+			sampling_rng = rand_module.Random(42)  # Consistent seed for reproducibility
+			window_starts = sampling_rng.sample(range(0, corpus_end), config.opt_num_windows)
+			window_starts.sort()  # Cache-friendly access
+			opt_eval_tokens = []
+			for start in window_starts:
+				opt_eval_tokens.extend(train_tokens[start:start + config.opt_window_size])
+			log(f"Optimization data: {len(opt_train_tokens):,} train tokens")
+			log(f"Multi-window eval: {config.opt_num_windows} windows × {config.opt_window_size} = {len(opt_eval_tokens):,} tokens")
+		else:
+			# Fallback if corpus too small
+			opt_eval_tokens = train_tokens[config.opt_train_subset:config.opt_train_subset + config.opt_num_windows * config.opt_window_size]
+			log(f"Optimization data: {len(opt_train_tokens):,} train tokens")
+			log(f"Single-window eval: {len(opt_eval_tokens):,} tokens")
+
+		# Create evaluation function that trains and evaluates on SUBSETS
 		def evaluate_connectivity(conn: torch.Tensor) -> float:
-			"""Train model with connectivity and return cross-entropy."""
+			"""Train model with connectivity on subset and return cross-entropy."""
 			model.layer.memory.connections = conn
 			model.reset_memory()
 
-			# Train
+			# Train on SUBSET (50k tokens, ~30s instead of 2.4M tokens, ~20 min)
 			if RUST_AVAILABLE:
 				model.train_epoch_fast_rust(
-					train_tokens,
+					opt_train_tokens,
 					global_top_k=config.global_top_k,
 					batch_size=config.batch_size,
 					verbose=False,
 				)
 			else:
 				model.train_epoch_fast(
-					train_tokens,
+					opt_train_tokens,
 					global_top_k=config.global_top_k,
 					batch_size=config.batch_size,
 					verbose=False,
 				)
 
-			# Evaluate on validation subset
+			# Evaluate on multi-window sampled tokens
 			stats = model.evaluate_fast(
-				val_tokens[:min(50000, len(val_tokens))],
+				opt_eval_tokens,
 				batch_size=config.batch_size * 2,
 				backend=AccelerationMode.AUTO,
 				verbose=False,
@@ -388,14 +406,14 @@ def run_benchmark(config: BenchmarkConfig):
 		for strategy_name in strategies:
 			log(f"\n  Running {strategy_name} optimization...")
 
-			# Create overfitting monitor with validation function
+			# Create overfitting monitor with validation function (also uses subset)
 			def val_eval_fn(conn: torch.Tensor) -> float:
 				model.layer.memory.connections = conn
 				model.reset_memory()
 				if RUST_AVAILABLE:
-					model.train_epoch_fast_rust(train_tokens, global_top_k=config.global_top_k, batch_size=config.batch_size, verbose=False)
+					model.train_epoch_fast_rust(opt_train_tokens, global_top_k=config.global_top_k, batch_size=config.batch_size, verbose=False)
 				else:
-					model.train_epoch_fast(train_tokens, global_top_k=config.global_top_k, batch_size=config.batch_size, verbose=False)
+					model.train_epoch_fast(opt_train_tokens, global_top_k=config.global_top_k, batch_size=config.batch_size, verbose=False)
 				return model.evaluate_fast(val_tokens[:min(50000, len(val_tokens))], batch_size=config.batch_size * 2, backend=AccelerationMode.AUTO, verbose=False)['cross_entropy']
 
 			overfitting_monitor = OverfittingMonitor(
@@ -466,6 +484,27 @@ def run_benchmark(config: BenchmarkConfig):
 			log(f"    Iterations: {result.iterations_run}")
 			if result.early_stopped_overfitting:
 				log(f"    Early stopped: overfitting detected")
+
+		# Retrain on FULL data with optimized connectivity
+		log(f"\n  Retraining on full data with optimized connectivity...")
+		model.reset_memory()
+		start = time.perf_counter()
+		if RUST_AVAILABLE:
+			model.train_epoch_fast_rust(
+				train_tokens,
+				global_top_k=config.global_top_k,
+				batch_size=config.batch_size,
+				verbose=True,
+			)
+		else:
+			model.train_epoch_fast(
+				train_tokens,
+				global_top_k=config.global_top_k,
+				batch_size=config.batch_size,
+				verbose=True,
+			)
+		retrain_time = time.perf_counter() - start
+		log(f"  Full retraining time: {retrain_time:.1f}s")
 
 	# Final evaluation on test set
 	log_section("Final Evaluation (Test Set)")
