@@ -167,18 +167,21 @@ class AccelerationMode(IntEnum):
 	"""Hardware acceleration modes for RAM evaluation.
 
 	Controls which compute resources are used:
+	- AUTO: Auto-select best backend based on batch size (recommended)
+	- PYTORCH: Pure PyTorch (best for small batches, no Rust dependency)
 	- CPU: Rust + rayon parallelism (16 cores on M4 Max)
 	- METAL: Metal GPU compute shaders (40 cores on M4 Max)
-	- HYBRID: Both CPU + GPU in parallel (56 cores total)
+	- HYBRID: Both CPU + GPU in parallel (56 cores total, best for large batches)
 
 	Usage:
-		python ram_lm_v2.py --accel cpu    # 16 cores
-		python ram_lm_v2.py --accel metal  # 40 cores
-		python ram_lm_v2.py --accel hybrid # 56 cores
+		model.forward(bits, backend=AccelerationMode.AUTO)    # Auto-select
+		model.forward(bits, backend=AccelerationMode.HYBRID)  # Force hybrid
 	"""
-	CPU = 0      # Rust + rayon CPU parallelism
-	METAL = 1    # Metal GPU compute shaders
-	HYBRID = 2   # Both CPU + GPU in parallel
+	AUTO = 0     # Auto-select best backend based on batch size
+	PYTORCH = 1  # Pure PyTorch (no Rust dependency)
+	CPU = 2      # Rust + rayon CPU parallelism
+	METAL = 3    # Metal GPU compute shaders
+	HYBRID = 4   # Both CPU + GPU in parallel
 
 
 # =============================================================================
@@ -242,6 +245,13 @@ def get_effective_cores(
 	gpu = gpu_cores or _detected_gpu_cores or _DEFAULT_GPU_CORES
 
 	match mode:
+		case AccelerationMode.AUTO:
+			# Auto mode uses hybrid if available, else CPU
+			if _metal_available is False:
+				return cpu
+			return cpu + gpu
+		case AccelerationMode.PYTORCH:
+			return 1  # PyTorch uses its own threading
 		case AccelerationMode.CPU:
 			return cpu
 		case AccelerationMode.METAL:
@@ -310,6 +320,7 @@ from wnn.ram.core.base import RAMComponent, RAMSequenceModel, RAMTrainable
 from wnn.ram.core.Memory import Memory
 from wnn.ram.core.SparseMemory import SparseMemory
 from wnn.ram.core.RAMLayer import RAMLayer
+from wnn.ram.core.RAMClusterLayer import RAMClusterLayer, bits_needed
 
 # Generalization components
 from wnn.ram.core.RAMGeneralization import (
@@ -426,6 +437,8 @@ from wnn.ram.core.models import (
 	# Seq2Seq
 	RAMSeq2Seq,
 	RAMEncoderDecoder,
+	# Language Models
+	RAMLM,
 )
 
 
@@ -442,6 +455,7 @@ __all__ = [
 	'StateMode',
 	'OptimizationMethod',
 	'BenchmarkMode',
+	'AccelerationMode',
 	# ==== Components ====
 	# Base classes
 	'RAMComponent',
@@ -451,6 +465,8 @@ __all__ = [
 	'Memory',
 	'SparseMemory',
 	'RAMLayer',
+	'RAMClusterLayer',
+	'bits_needed',
 	# Generalization
 	'BitLevelMapper',
 	'CompositionalMapper',
@@ -533,4 +549,6 @@ __all__ = [
 	'RAMTransformer',
 	'RAMSeq2Seq',
 	'RAMEncoderDecoder',
+	# Language Models
+	'RAMLM',
 ]

@@ -6,6 +6,123 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a Weightless Neural Network (WNN) research project implementing RAM-based neurons in PyTorch. The goal is to create Transformer architectures using RAM neurons instead of traditional weighted neural networks.
 
+## ⚠️ CRITICAL: Architecture Integrity
+
+**Do NOT create any RAM neurons, or similar objects, without thorough discussion first.**
+
+Always use the existing core architecture (`Memory`, `RAMLayer`, `RAMRecurrentNetwork`, etc.) from `wnn/ram/core/`. If the existing architecture is insufficient, or there's a better approach:
+1. **Discuss first** - explain what's missing and why
+2. **Propose alternatives** - don't just implement ad-hoc solutions
+3. **Never** put ad-hoc implementations in test scripts that bypass the core architecture
+
+The core architecture was methodically designed. Any new patterns should be deliberate extensions, not workarounds.
+
+## 🧠 FOUNDATIONAL: How RAM WNNs Actually Learn
+
+**This section is critical for understanding the project. Read it carefully.**
+
+### The Two Components of Learning
+
+RAM WNN learning requires BOTH:
+
+| Component | What it does | Analogy to Weighted NN |
+|-----------|--------------|------------------------|
+| **Connectivity map** | Determines which input bits each neuron observes | Like learned weights - determines feature importance |
+| **Memory writes** | Stores the actual input→output mappings | Like final weight values after training |
+
+**The connectivity map is NOT a detail to hand-wave. It IS the generalization mechanism.**
+
+### Why Partial Connectivity Enables Generalization
+
+- Fully connected RAM = lookup table = memorization = NO generalization
+- Partial connectivity = neurons see SOME bits = similar inputs share addresses = generalization
+
+Example:
+- Neuron sees bits [2, 5, 11] out of 48 total bits
+- Many different inputs share the same values at positions [2, 5, 11]
+- Those inputs map to the SAME address → trigger SAME response
+- The neuron learned a **feature** (the pattern at those positions)
+- New inputs with that feature → correct classification, even if never seen before
+
+**This is the magic.** Not counting. Not dictionaries. The architecture itself generalizes.
+
+### What is NOT a RAM WNN
+
+Using Python dicts/Counters to count occurrences and compute probabilities is **NOT** a RAM WNN:
+```python
+# THIS IS NOT A RAM WNN - it's just n-gram counting:
+self.ram = defaultdict(Counter)
+self.ram[addr][target] += 1
+prob = count / total
+```
+
+A real RAM WNN uses:
+- `Memory` class with bit-packed cells (TRUE/FALSE/EMPTY)
+- `RAMLayer` with proper partial connectivity
+- EDRA backpropagation for training
+- Connectivity optimization (GA/TS/SA) for learning the right feature selection
+
+### Universality Principle
+
+**Anything a weighted neural network can do, a weightless neural network can do.**
+
+The difference is HOW:
+- Weighted NN: learns via gradient descent on continuous weights
+- RAM WNN: learns via connectivity optimization + memory writes
+
+Both are universal function approximators. RAM WNNs achieve this through:
+- Partial connectivity (feature selection)
+- Multiple neurons with different connectivity (ensemble of perspectives)
+- Output clustering (multiple neurons per class for probabilistic output)
+- Layered architecture (composition of functions)
+
+### Architecture Design Space for Language Modeling
+
+**Input Encoding:** (existing infrastructure)
+- Context tokens → bits via vocabulary encoding
+- Existing classes in `wnn/tokenizers/` and `wnn/representations/`
+
+**Output Encoding:** (needs design)
+- Multiple neurons per output class (clustering)
+- Interpretation of neuron outputs: 0=0.0, 1=1.0, 2(EMPTY)=0.5
+- For 50K vocab: ~150-200K neurons (3-4 per class) - feasible with modern HW
+
+**Architecture:**
+- Typically 2-3 layers (input layer, output layer, optional state layer)
+- Deeper = harder learning, diminishing returns
+- Recurrent vs feedforward: depends on task
+- Partial connectivity: initialize random, optimize with GA/TS/SA
+
+**Training:**
+- EDRA for backpropagation through layers
+- Connectivity optimization for generalization
+- Curriculum learning for complex tasks
+
+### Current Status (as of 2026-01-06)
+
+The `tests/ram_lm_v2.py` benchmark contains an ad-hoc `RAMNeuron` class that uses
+Counter-based voting. **This is NOT using the real RAM WNN architecture.** It needs
+to be redesigned to use `Memory`/`RAMLayer` with proper partial connectivity.
+
+The path forward:
+1. Design proper output encoding (OutputLayer with clustering)
+2. Design the full architecture (layers, connectivity)
+3. Implement using core `Memory`/`RAMLayer` classes
+4. Train with EDRA + connectivity optimization
+
+## Development Hardware
+
+**Mac Studio M4 Max (2025)**
+- CPU: 16 cores
+- GPU: 40 cores (Metal)
+- Neural Engine: 16 cores
+- RAM: 64GB unified memory
+
+This hardware enables:
+- Hybrid CPU+GPU acceleration (56 total compute cores)
+- Large model training (~93MB for full LM architecture)
+- Population-based optimization (50+ candidates feasible)
+
 ## Development Setup
 
 ```bash

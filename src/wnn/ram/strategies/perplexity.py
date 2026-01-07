@@ -174,8 +174,34 @@ class PerplexityCalculator:
 		self._log_probs.append(log(prob))
 		self._total += 1
 
+	def get_cross_entropy(self) -> float:
+		"""
+		Calculate average cross-entropy from accumulated observations.
+
+		Cross-entropy = -avg(log(P(target)))
+
+		This is the preferred metric for optimization (GA/TS) as it provides
+		a more granular signal than perplexity. Lower is better.
+
+		Relationship to perplexity: PPL = exp(cross_entropy)
+
+		Returns:
+			Average cross-entropy (negative log probability). Lower is better.
+			Returns inf if no observations.
+		"""
+		if not self._log_probs:
+			return float('inf')
+		return -sum(self._log_probs) / len(self._log_probs)
+
 	def get_perplexity(self) -> float:
-		"""Calculate perplexity from accumulated observations."""
+		"""
+		Calculate perplexity from accumulated observations.
+
+		PPL = exp(-avg(log(P(target)))) = exp(cross_entropy)
+
+		Returns:
+			Perplexity. Lower is better. 1.0 = perfect, vocab_size = random.
+		"""
 		if not self._log_probs:
 			return float('inf')
 		avg_log_prob = sum(self._log_probs) / len(self._log_probs)
@@ -188,6 +214,7 @@ class PerplexityCalculator:
 	def get_stats(self) -> dict:
 		"""Get all statistics."""
 		return {
+			'cross_entropy': self.get_cross_entropy(),
 			'perplexity': self.get_perplexity(),
 			'accuracy': self.get_accuracy(),
 			'correct': self._correct,

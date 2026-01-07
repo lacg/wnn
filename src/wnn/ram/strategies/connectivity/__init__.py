@@ -65,6 +65,11 @@ from wnn.ram.strategies.connectivity.accelerated import (
 	RUST_AVAILABLE,
 	RUST_CPU_CORES,
 )
+from wnn.ram.strategies.connectivity.model_optimizer import (
+	ConnectivityOptimizer,
+	OptimizationConfig,
+	OptimizationResult,
+)
 
 
 __all__ = [
@@ -101,4 +106,8 @@ __all__ = [
 	'create_optimizer',
 	'RUST_AVAILABLE',
 	'RUST_CPU_CORES',
+	# High-level model optimizer
+	'ConnectivityOptimizer',
+	'OptimizationConfig',
+	'OptimizationResult',
 ]

@@ -12,6 +12,9 @@ path = "lib.rs"  # Source file in same directory
 # Python bindings (0.23+ supports Python 3.13)
 pyo3 = { version = "0.23", features = ["extension-module"] }
 
+# NumPy support for zero-copy array access
+numpy = "0.23"
+
 # CPU parallelism (like joblib but faster)
 rayon = "1.8"
 

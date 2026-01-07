@@ -358,6 +358,11 @@ def __getattr__(name: str):
 		from wnn.ram.core.models.models_factory import ModelsFactory
 		return ModelsFactory
 
+	# Language Models
+	if name == 'RAMLM':
+		from wnn.ram.core.models.ramlm import RAMLM
+		return RAMLM
+
 	raise AttributeError(f"module 'wnn.ram.core.models' has no attribute '{name}'")
 
 
@@ -432,4 +437,6 @@ __all__ = [
 	'StepConfigurationFactory',
 	'RAMTransformerFactory',
 	'ModelsFactory',
+	# Language Models
+	'RAMLM',
 ]

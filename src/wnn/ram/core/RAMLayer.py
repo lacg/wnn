@@ -157,6 +157,15 @@ class RAMLayer(RAMComponent):
 		"""
 		return self.memory.solve_constraints(input_bits, target_bits, allow_override, n_immutable_bits)
 
+	def reset_memory(self) -> None:
+		"""
+		Reset all memory cells to EMPTY, preserving connectivity.
+
+		Clears all learned mappings while keeping the connectivity pattern.
+		Useful for retraining after connectivity optimization.
+		"""
+		self.memory.reset()
+
 	# Serialization support
 	def get_config(self) -> dict:
 		"""Get configuration dict for model recreation."""

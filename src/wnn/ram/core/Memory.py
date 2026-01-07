@@ -125,6 +125,19 @@ class Memory(RAMComponent):
 		lines.append("")  # final newline
 		return "\n".join(lines)
 
+	def reset(self) -> None:
+		"""
+		Reset all memory cells to EMPTY, preserving connectivity.
+
+		This clears all learned mappings while keeping the same
+		connectivity pattern. Useful for retraining after connectivity
+		optimization.
+		"""
+		EMPTY_WORD = 0
+		for i in range(self.cells_per_word):
+			EMPTY_WORD |= (MemoryVal.EMPTY << (i * self.bits_per_cell))
+		self.memory_words.fill_(EMPTY_WORD)
+
 	def _randomize_connections(self, rng: Optional[int]) -> Tensor:
 		"""
 		Guaranteed-coverage connection initializer.
@@ -465,6 +478,49 @@ class Memory(RAMComponent):
 		addresses = (gathered.to(int64) * self.binary_addresses.unsqueeze(0)).sum(-1)
 		if self.use_hashing:
 			addresses = addresses % self.memory_size
+		return addresses.long()
+
+	def get_addresses_for_neurons(self, input_bits: Tensor, neuron_indices: Tensor) -> Tensor:
+		"""
+		Compute addresses only for specified neurons (much faster for sparse access).
+
+		Args:
+			input_bits: [B, total_input_bits] boolean tensor
+			neuron_indices: [K] indices of neurons to compute addresses for
+
+		Returns:
+			[B, K] tensor of addresses
+
+		This is orders of magnitude faster than get_addresses() when K << num_neurons.
+		For example, with 250K neurons but only needing 500 cluster neurons (K=500*5=2500),
+		this computes 500x less work.
+		"""
+		if input_bits.ndim == 1:
+			input_bits = input_bits.unsqueeze(0)
+
+		B = input_bits.shape[0]
+		K = neuron_indices.shape[0]
+
+		if input_bits.dtype == tbool:
+			input_bits64 = input_bits.to(int64)
+		else:
+			input_bits64 = (input_bits != 0).to(int64)
+
+		# Get connections for specified neurons only: [K, bits_per_neuron]
+		selected_connections = self.connections[neuron_indices]
+
+		# Gather input bits for these neurons: [B, K, bits_per_neuron]
+		gathered = input_bits64[:, selected_connections]
+
+		# Get binary weights for selected neurons: [K, bits_per_neuron]
+		selected_weights = self.binary_addresses[neuron_indices]
+
+		# Compute addresses: [B, K]
+		addresses = (gathered * selected_weights.unsqueeze(0)).sum(-1)
+
+		if self.use_hashing:
+			addresses = addresses % self.memory_size
+
 		return addresses.long()
 
 	def get_memories_for_bits(self, input_bits: Tensor) -> Tensor:
