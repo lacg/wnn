@@ -411,8 +411,29 @@ def run_benchmark(config: BenchmarkConfig):
 		def batch_evaluate(connectivities: list, **kwargs) -> list:
 			return [evaluate_connectivity(conn) for conn in connectivities]
 
+		# If we skipped initial full training, do a quick pretrain on subset first
+		# This gives us a real baseline instead of random (PPL = vocab_size)
+		if config.skip_initial_training:
+			log(f"\nPretraining on {len(opt_train_tokens):,} tokens for baseline...")
+			start = time.perf_counter()
+			if RUST_AVAILABLE:
+				pretrain_stats = model.train_epoch_fast_rust(
+					opt_train_tokens,
+					global_top_k=config.global_top_k,
+					batch_size=config.batch_size,
+					verbose=False,
+				)
+			else:
+				pretrain_stats = model.train_epoch_fast(
+					opt_train_tokens,
+					global_top_k=config.global_top_k,
+					batch_size=config.batch_size,
+					verbose=False,
+				)
+			pretrain_time = time.perf_counter() - start
+			log(f"  Pretrain time: {pretrain_time:.1f}s, modified {pretrain_stats['modified']:,} cells")
+
 		# Compute baselines for overfitting detection
-		# Train baseline: evaluate on training subset (same used for optimization)
 		log(f"\nComputing baselines for overfitting detection...")
 		baseline_train_stats = model.evaluate_fast(
 			opt_train_tokens[:min(20000, len(opt_train_tokens))],
