@@ -414,7 +414,8 @@ def run_benchmark(config: BenchmarkConfig):
 		# If we skipped initial full training, do a quick pretrain on subset first
 		# This gives us a real baseline instead of random (PPL = vocab_size)
 		if config.skip_initial_training:
-			log(f"\nPretraining on {len(opt_train_tokens):,} tokens for baseline...")
+			log("")
+			log(f"Pretraining on {len(opt_train_tokens):,} tokens for baseline...")
 			start = time.perf_counter()
 			if RUST_AVAILABLE:
 				pretrain_stats = model.train_epoch_fast_rust(
@@ -434,7 +435,8 @@ def run_benchmark(config: BenchmarkConfig):
 			log(f"  Pretrain time: {pretrain_time:.1f}s, modified {pretrain_stats['modified']:,} cells")
 
 		# Compute baselines for overfitting detection
-		log(f"\nComputing baselines for overfitting detection...")
+		log("")
+		log(f"Computing baselines for overfitting detection...")
 		baseline_train_stats = model.evaluate_fast(
 			opt_train_tokens[:min(20000, len(opt_train_tokens))],
 			batch_size=config.batch_size * 2,
@@ -456,19 +458,22 @@ def run_benchmark(config: BenchmarkConfig):
 
 		global_baseline_ratio = baseline_val_ce / baseline_train_ce if baseline_train_ce > 0 else 1.0
 
-		log(f"\nOptimization baselines:")
+		log("")
+		log(f"Optimization baselines:")
 		log(f"  Train CE: {baseline_train_ce:.4f} (PPL: {baseline_train_ppl:.2f})")
 		log(f"  Val CE: {baseline_val_ce:.4f} (PPL: {baseline_val_ppl:.2f})")
 		log(f"  Val/Train ratio: {global_baseline_ratio:.2f}x")
 
-		log(f"\nOptimization config:")
+		log("")
+		log(f"Optimization config:")
 		log(f"  GA: {config.ga_population} pop × {config.ga_generations} max gens, early_stop <{config.ga_early_stop_pct}%")
 		log(f"  TS: {config.ts_neighbors} neighbors × {config.ts_iterations} max iters, early_stop <{config.ts_early_stop_pct}%")
 		log(f"  Early stop patience: {config.early_stop_patience} (checks every 5 = {(config.early_stop_patience+1)*5} gens/iters)")
 		log(f"  Overfitting thresholds: <{HEALTHY_THRESHOLD}% healthy, >{WARNING_THRESHOLD}% warn, >{SEVERE_THRESHOLD}% severe, >{CRITICAL_THRESHOLD}% stop")
 
 		for strategy_name in strategies:
-			log(f"\n  Running {strategy_name} optimization...")
+			log("")
+			log(f"Running {strategy_name} optimization...")
 
 			# Create overfitting monitor with validation function (also uses subset)
 			def val_eval_fn(conn: torch.Tensor) -> float:
@@ -540,7 +545,8 @@ def run_benchmark(config: BenchmarkConfig):
 
 			# Report results
 			improvement = ((result.initial_error - result.final_error) / result.initial_error * 100) if result.initial_error > 0 else 0
-			log(f"\n  {strategy_name} Results:")
+			log("")
+			log(f"{strategy_name} Results:")
 			log(f"    Time: {opt_time:.1f}s")
 			log(f"    Initial CE: {result.initial_error:.4f}")
 			log(f"    Final CE: {result.final_error:.4f}")
@@ -550,7 +556,8 @@ def run_benchmark(config: BenchmarkConfig):
 				log(f"    Early stopped: overfitting detected")
 
 		# Retrain on FULL data with optimized connectivity
-		log(f"\n  Retraining on full data with optimized connectivity...")
+		log("")
+		log(f"Retraining on full data with optimized connectivity...")
 		model.reset_memory()
 		start = time.perf_counter()
 		if RUST_AVAILABLE:
