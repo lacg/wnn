@@ -181,6 +181,10 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 
 			history.append((iteration + 1, best_error))
 
+			# Log every iteration for progress visibility
+			if self._verbose:
+				self._log(f"[TS] Iter {iteration + 1}/{cfg.iterations}: current={current_error:.4f}, best={best_error:.4f}")
+
 			# Early stopping check every 5 iterations
 			if (iteration + 1) % 5 == 0:
 				improvement_since_check = prev_best_for_patience - best_error
@@ -194,7 +198,7 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 
 				if self._verbose:
 					pct_improved = (improvement_since_check / prev_best_for_patience * 100) if prev_best_for_patience > 0 else 0
-					self._log(f"[TS] Iter {iteration + 1}: current={current_error:.4f}, best={best_error:.4f}, Δ={pct_improved:.2f}%, patience={cfg.early_stop_patience - patience_counter}")
+					self._log(f"[TS] Early stop check: Δ={pct_improved:.2f}%, patience={cfg.early_stop_patience - patience_counter}/{cfg.early_stop_patience}")
 
 				if patience_counter > cfg.early_stop_patience:
 					self._log(f"[TS] Early stop at iter {iteration + 1}: no improvement >= {cfg.early_stop_threshold_pct}% for {patience_counter * 5} iterations")
@@ -261,8 +265,6 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 						new_tabu = deque(list(tabu_list)[-cfg.tabu_size:], maxlen=cfg.tabu_size)
 						tabu_list = new_tabu
 						self._log(f"[TS] Diversity mode OFF: restored neighbors={cfg.neighbors_per_iter}, mut={cfg.mutation_rate:.4f}, tabu={cfg.tabu_size}")
-			else:
-				self._log(f"[TS] Iter {iteration + 1}: current={current_error:.4f}, best={best_error:.4f}")
 
 		improvement_pct = ((initial_error - best_error) / initial_error * 100) if best_error < initial_error else 0.0
 
