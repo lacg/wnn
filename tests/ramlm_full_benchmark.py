@@ -382,8 +382,8 @@ def run_benchmark(config: BenchmarkConfig):
 			)
 			return stats['cross_entropy']
 
-		# Batch evaluation function
-		def batch_evaluate(connectivities: list) -> list:
+		# Batch evaluation function (accepts **kwargs for compatibility with GA/TS)
+		def batch_evaluate(connectivities: list, **kwargs) -> list:
 			return [evaluate_connectivity(conn) for conn in connectivities]
 
 		# Compute initial train/val ratio for overfitting baseline
