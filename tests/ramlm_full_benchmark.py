@@ -371,32 +371,54 @@ def run_benchmark(config: BenchmarkConfig):
 		# Get model dimensions - handle both uniform and tiered
 		total_input_bits = model.total_input_bits
 
-		# For tiered models, we'll optimize each tier sequentially
-		# For uniform models, we have a single tier (the whole layer)
+		# For tiered models, use JOINT optimization (all tiers together)
+		# This is ~3x faster than per-tier optimization because we only train once per evaluation
 		if config.tiers:
-			# Build list of (tier_idx, memory, num_neurons, bits_per_neuron) tuples
-			optimization_tiers = [
-				(i, mem, tc.total_neurons, tc.bits_per_neuron)
-				for i, (tc, mem) in enumerate(zip(model.layer.tier_configs, model.layer.tier_memories))
-			]
-			log(f"Tiered optimization: {len(optimization_tiers)} tiers")
+			# Verify all tiers have same bits_per_neuron (required for joint optimization)
+			bits_per_neuron = model.layer.tier_configs[0].bits_per_neuron
+			if not all(tc.bits_per_neuron == bits_per_neuron for tc in model.layer.tier_configs):
+				raise ValueError(
+					f"Joint optimization requires all tiers to have same bits_per_neuron. "
+					f"Got: {[tc.bits_per_neuron for tc in model.layer.tier_configs]}"
+				)
+
+			num_neurons = model.layer.total_neurons
+			log(f"Joint tiered optimization: {len(model.layer.tier_configs)} tiers → {num_neurons:,} neurons × {bits_per_neuron} bits")
+
 			# Find max widths for alignment
 			max_clusters = max(tc.cluster_count for tc in model.layer.tier_configs)
-			max_neurons = max(tc.neurons_per_cluster for tc in model.layer.tier_configs)
+			max_neurons_pc = max(tc.neurons_per_cluster for tc in model.layer.tier_configs)
 			max_total = max(tc.total_neurons for tc in model.layer.tier_configs)
 			cw = len(f"{max_clusters:,}")  # cluster width
-			nw = len(f"{max_neurons}")      # neurons per cluster width
+			nw = len(f"{max_neurons_pc}")   # neurons per cluster width
 			tw = len(f"{max_total:,}")      # total neurons width
 			for tier_idx, tc in enumerate(model.layer.tier_configs):
 				log(f"  Tier {tier_idx}: {tc.cluster_count:>{cw},} clusters × {tc.neurons_per_cluster:>{nw}} neurons × {tc.bits_per_neuron} bits = {tc.total_neurons:>{tw},} neurons")
-		else:
-			# Single "tier" for uniform model
-			optimization_tiers = [
-				(0, model.layer.memory, model.layer.total_neurons, model.layer.bits_per_neuron)
-			]
 
-		# Current connections per tier
-		current_connections_per_tier = [mem.connections.clone() for _, mem, _, _ in optimization_tiers]
+			# Helper functions to get/set combined connectivity across all tiers
+			def get_combined_connections() -> torch.Tensor:
+				"""Concatenate all tier connectivities into one tensor."""
+				return torch.cat([mem.connections for mem in model.layer.tier_memories], dim=0)
+
+			def set_combined_connections(combined: torch.Tensor) -> None:
+				"""Split combined tensor and set each tier's connectivity."""
+				offset = 0
+				for tc, mem in zip(model.layer.tier_configs, model.layer.tier_memories):
+					mem.connections = combined[offset:offset + tc.total_neurons].clone()
+					offset += tc.total_neurons
+
+			is_tiered = True
+		else:
+			# Uniform model - single layer
+			num_neurons = model.layer.total_neurons
+			bits_per_neuron = model.layer.bits_per_neuron
+			is_tiered = False
+
+		# Current connections (combined for tiered, direct for uniform)
+		if is_tiered:
+			current_connections = get_combined_connections()
+		else:
+			current_connections = model.layer.memory.connections.clone()
 
 		# ========================================================================
 		# Create optimization subsets using multi-window sampling
@@ -436,46 +458,43 @@ def run_benchmark(config: BenchmarkConfig):
 			log(f"Sequential train: {len(opt_train_tokens):,} tokens (corpus too small for multi-window)")
 			log(f"Sequential eval: {len(opt_eval_tokens):,} tokens")
 
-		# Create evaluation function factory (returns functions bound to a specific tier)
-		def make_evaluate_connectivity(tier_memory):
-			"""Create evaluation function that sets connectivity for a specific tier."""
-			def evaluate_connectivity(conn: torch.Tensor) -> float:
-				"""Train model with connectivity on subset and return cross-entropy."""
-				tier_memory.connections = conn
-				model.reset_memory()
+		# Create evaluation function (handles both tiered and uniform)
+		def evaluate_connectivity(conn: torch.Tensor) -> float:
+			"""Train model with connectivity and return cross-entropy."""
+			if is_tiered:
+				set_combined_connections(conn)
+			else:
+				model.layer.memory.connections = conn
+			model.reset_memory()
 
-				# Train on multi-window subset (10k tokens by default)
-				if RUST_AVAILABLE:
-					model.train_epoch_fast_rust(
-						opt_train_tokens,
-						global_top_k=config.global_top_k,
-						batch_size=config.batch_size,
-						verbose=False,
-					)
-				else:
-					model.train_epoch_fast(
-						opt_train_tokens,
-						global_top_k=config.global_top_k,
-						batch_size=config.batch_size,
-						verbose=False,
-					)
-
-				# Evaluate on multi-window sampled tokens
-				stats = model.evaluate_fast(
-					opt_eval_tokens,
-					batch_size=config.batch_size * 2,
-					backend=AccelerationMode.AUTO,
+			# Train on multi-window subset (10k tokens by default)
+			if RUST_AVAILABLE:
+				model.train_epoch_fast_rust(
+					opt_train_tokens,
+					global_top_k=config.global_top_k,
+					batch_size=config.batch_size,
 					verbose=False,
 				)
-				return stats['cross_entropy']
-			return evaluate_connectivity
+			else:
+				model.train_epoch_fast(
+					opt_train_tokens,
+					global_top_k=config.global_top_k,
+					batch_size=config.batch_size,
+					verbose=False,
+				)
 
-		# Batch evaluation function factory
-		def make_batch_evaluate(tier_memory):
-			eval_fn = make_evaluate_connectivity(tier_memory)
-			def batch_evaluate(connectivities: list, **kwargs) -> list:
-				return [eval_fn(conn) for conn in connectivities]
-			return batch_evaluate
+			# Evaluate on multi-window sampled tokens
+			stats = model.evaluate_fast(
+				opt_eval_tokens,
+				batch_size=config.batch_size * 2,
+				backend=AccelerationMode.AUTO,
+				verbose=False,
+			)
+			return stats['cross_entropy']
+
+		# Batch evaluation function
+		def batch_evaluate(connectivities: list, **kwargs) -> list:
+			return [evaluate_connectivity(conn) for conn in connectivities]
 
 		# If using windowed pretrain, train on 10k subset first for baseline
 		# This gives us a real baseline instead of random (PPL = vocab_size)
@@ -537,102 +556,97 @@ def run_benchmark(config: BenchmarkConfig):
 		log(f"  Early stop patience: {config.early_stop_patience} (checks every 5 = {(config.early_stop_patience+1)*5} gens/iters)")
 		log(f"  Overfitting thresholds: <{HEALTHY_THRESHOLD}% healthy, >{WARNING_THRESHOLD}% warn, >{SEVERE_THRESHOLD}% severe, >{CRITICAL_THRESHOLD}% stop")
 
-		# Optimize each tier (for uniform models, there's just one "tier")
-		for tier_idx, tier_memory, num_neurons, bits_per_neuron in optimization_tiers:
-			tier_label = f"Tier {tier_idx}" if len(optimization_tiers) > 1 else "Layer"
+		# Create overfitting monitor with validation function
+		def val_eval_fn(conn: torch.Tensor) -> float:
+			if is_tiered:
+				set_combined_connections(conn)
+			else:
+				model.layer.memory.connections = conn
+			model.reset_memory()
+			if RUST_AVAILABLE:
+				model.train_epoch_fast_rust(opt_train_tokens, global_top_k=config.global_top_k, batch_size=config.batch_size, verbose=False)
+			else:
+				model.train_epoch_fast(opt_train_tokens, global_top_k=config.global_top_k, batch_size=config.batch_size, verbose=False)
+			return model.evaluate_fast(val_tokens[:min(50000, len(val_tokens))], batch_size=config.batch_size * 2, backend=AccelerationMode.AUTO, verbose=False)['cross_entropy']
 
-			for strategy_name in strategies:
-				log("")
-				log(f"[{tier_label}] Running {strategy_name} optimization ({num_neurons:,} neurons × {bits_per_neuron} bits)...")
+		overfitting_monitor = OverfittingMonitor(
+			validation_fn=val_eval_fn,
+			grace_checks=1,
+			logger=log,
+			global_baseline_ratio=global_baseline_ratio,
+		)
 
-				# Get current connections for this tier
-				current_connections = current_connections_per_tier[tier_idx]
+		# Run optimization strategies (joint for tiered, same code for uniform)
+		arch_label = "Joint tiered" if is_tiered else "Uniform"
+		for strategy_name in strategies:
+			log("")
+			log(f"[{arch_label}] Running {strategy_name} optimization ({num_neurons:,} neurons × {bits_per_neuron} bits)...")
 
-				# Create evaluation functions bound to this tier
-				evaluate_connectivity = make_evaluate_connectivity(tier_memory)
-				batch_evaluate = make_batch_evaluate(tier_memory)
+			start = time.perf_counter()
 
-				# Create overfitting monitor with validation function (also uses subset)
-				def make_val_eval_fn(mem):
-					def val_eval_fn(conn: torch.Tensor) -> float:
-						mem.connections = conn
-						model.reset_memory()
-						if RUST_AVAILABLE:
-							model.train_epoch_fast_rust(opt_train_tokens, global_top_k=config.global_top_k, batch_size=config.batch_size, verbose=False)
-						else:
-							model.train_epoch_fast(opt_train_tokens, global_top_k=config.global_top_k, batch_size=config.batch_size, verbose=False)
-						return model.evaluate_fast(val_tokens[:min(50000, len(val_tokens))], batch_size=config.batch_size * 2, backend=AccelerationMode.AUTO, verbose=False)['cross_entropy']
-					return val_eval_fn
-
-				overfitting_monitor = OverfittingMonitor(
-					validation_fn=make_val_eval_fn(tier_memory),
-					grace_checks=1,
-					logger=log,
-					global_baseline_ratio=global_baseline_ratio,
+			if strategy_name == "GA":
+				ga_config = GeneticAlgorithmConfig(
+					population_size=config.ga_population,
+					generations=config.ga_generations,
+					mutation_rate=0.01,
+					crossover_rate=0.7,
+					elitism=max(2, config.ga_population // 10),
+					early_stop_patience=config.early_stop_patience,
+					early_stop_threshold_pct=config.ga_early_stop_pct,
+				)
+				strategy_obj = GeneticAlgorithmStrategy(config=ga_config, seed=42, verbose=True, logger=log)
+				result = strategy_obj.optimize(
+					current_connections,
+					evaluate_connectivity,
+					total_input_bits,
+					num_neurons,
+					bits_per_neuron,
+					batch_evaluate,
+					overfitting_callback=overfitting_monitor,
 				)
 
-				start = time.perf_counter()
+			elif strategy_name == "TS":
+				ts_config = TabuSearchConfig(
+					iterations=config.ts_iterations,
+					neighbors_per_iter=config.ts_neighbors,
+					early_stop_patience=config.early_stop_patience,
+					early_stop_threshold_pct=config.ts_early_stop_pct,
+				)
+				strategy_obj = TabuSearchStrategy(config=ts_config, seed=42, verbose=True, logger=log)
+				result = strategy_obj.optimize(
+					current_connections,
+					evaluate_connectivity,
+					total_input_bits,
+					num_neurons,
+					bits_per_neuron,
+					batch_evaluate,
+					overfitting_callback=overfitting_monitor,
+				)
 
-				if strategy_name == "GA":
-					ga_config = GeneticAlgorithmConfig(
-						population_size=config.ga_population,
-						generations=config.ga_generations,
-						mutation_rate=0.01,
-						crossover_rate=0.7,
-						elitism=max(2, config.ga_population // 10),
-						early_stop_patience=config.early_stop_patience,
-						early_stop_threshold_pct=config.ga_early_stop_pct,
-					)
-					strategy_obj = GeneticAlgorithmStrategy(config=ga_config, seed=42, verbose=True, logger=log)
-					result = strategy_obj.optimize(
-						current_connections,
-						evaluate_connectivity,
-						total_input_bits,
-						num_neurons,
-						bits_per_neuron,
-						batch_evaluate,
-						overfitting_callback=overfitting_monitor,
-					)
+			else:
+				log(f"  WARNING: Unknown strategy {strategy_name}, skipping")
+				continue
 
-				elif strategy_name == "TS":
-					ts_config = TabuSearchConfig(
-						iterations=config.ts_iterations,
-						neighbors_per_iter=config.ts_neighbors,
-						early_stop_patience=config.early_stop_patience,
-						early_stop_threshold_pct=config.ts_early_stop_pct,
-					)
-					strategy_obj = TabuSearchStrategy(config=ts_config, seed=42, verbose=True, logger=log)
-					result = strategy_obj.optimize(
-						current_connections,
-						evaluate_connectivity,
-						total_input_bits,
-						num_neurons,
-						bits_per_neuron,
-						batch_evaluate,
-						overfitting_callback=overfitting_monitor,
-					)
+			opt_time = time.perf_counter() - start
 
-				else:
-					log(f"  WARNING: Unknown strategy {strategy_name}, skipping")
-					continue
+			# Update current connections (for next strategy in sequence)
+			current_connections = result.optimized_connections.clone()
+			if is_tiered:
+				set_combined_connections(current_connections)
+			else:
+				model.layer.memory.connections = current_connections
 
-				opt_time = time.perf_counter() - start
-
-				# Update current connections for this tier (for next strategy in sequence)
-				current_connections_per_tier[tier_idx] = result.optimized_connections.clone()
-				tier_memory.connections = result.optimized_connections.clone()
-
-				# Report results for this strategy
-				improvement = ((result.initial_error - result.final_error) / result.initial_error * 100) if result.initial_error > 0 else 0
-				log("")
-				log(f"[{tier_label}] {strategy_name} Results:")
-				log(f"    Time: {opt_time:.1f}s")
-				log(f"    Initial CE: {result.initial_error:.4f}")
-				log(f"    Final CE: {result.final_error:.4f}")
-				log(f"    Improvement: {improvement:.2f}%")
-				log(f"    Iterations: {result.iterations_run}")
-				if result.early_stopped_overfitting:
-					log(f"    Early stopped: overfitting detected")
+			# Report results for this strategy
+			improvement = ((result.initial_error - result.final_error) / result.initial_error * 100) if result.initial_error > 0 else 0
+			log("")
+			log(f"[{arch_label}] {strategy_name} Results:")
+			log(f"    Time: {opt_time:.1f}s")
+			log(f"    Initial CE: {result.initial_error:.4f}")
+			log(f"    Final CE: {result.final_error:.4f}")
+			log(f"    Improvement: {improvement:.2f}%")
+			log(f"    Iterations: {result.iterations_run}")
+			if result.early_stopped_overfitting:
+				log(f"    Early stopped: overfitting detected")
 
 		# Retrain on FULL data with optimized connectivity
 		log("")
