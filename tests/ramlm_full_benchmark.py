@@ -380,8 +380,15 @@ def run_benchmark(config: BenchmarkConfig):
 				for i, (tc, mem) in enumerate(zip(model.layer.tier_configs, model.layer.tier_memories))
 			]
 			log(f"Tiered optimization: {len(optimization_tiers)} tiers")
-			for tier_idx, _, num_n, bits_n in optimization_tiers:
-				log(f"  Tier {tier_idx}: {num_n:,} neurons × {bits_n} bits")
+			# Find max widths for alignment
+			max_clusters = max(tc.cluster_count for tc in model.layer.tier_configs)
+			max_neurons = max(tc.neurons_per_cluster for tc in model.layer.tier_configs)
+			max_total = max(tc.total_neurons for tc in model.layer.tier_configs)
+			cw = len(f"{max_clusters:,}")  # cluster width
+			nw = len(f"{max_neurons}")      # neurons per cluster width
+			tw = len(f"{max_total:,}")      # total neurons width
+			for tier_idx, tc in enumerate(model.layer.tier_configs):
+				log(f"  Tier {tier_idx}: {tc.cluster_count:>{cw},} clusters × {tc.neurons_per_cluster:>{nw}} neurons × {tc.bits_per_neuron} bits = {tc.total_neurons:>{tw},} neurons")
 		else:
 			# Single "tier" for uniform model
 			optimization_tiers = [
