@@ -332,3 +332,34 @@ class PerplexityCalculator:
 		"""
 		from torch.nn.functional import softmax
 		return softmax(scores, dim=-1)
+
+	@staticmethod
+	def ce_to_ppl(ce: float) -> float:
+		"""Convert cross-entropy to perplexity. PPL = exp(CE)."""
+		return exp(ce)
+
+	@staticmethod
+	def ppl_to_ce(ppl: float) -> float:
+		"""Convert perplexity to cross-entropy. CE = log(PPL)."""
+		return log(ppl)
+
+	@staticmethod
+	def ppl_improvement_pct(prev_ce: float, curr_ce: float) -> float:
+		"""
+		Calculate PPL improvement percentage from CE values.
+
+		Since PPL = exp(CE), a decrease in CE means a decrease in PPL.
+		Returns positive value if improved (curr < prev), negative if worse.
+
+		Args:
+			prev_ce: Previous cross-entropy value
+			curr_ce: Current cross-entropy value
+
+		Returns:
+			Percentage improvement in PPL: (prev_ppl - curr_ppl) / prev_ppl * 100
+		"""
+		prev_ppl = exp(prev_ce)
+		curr_ppl = exp(curr_ce)
+		if prev_ppl == 0:
+			return 0.0
+		return (prev_ppl - curr_ppl) / prev_ppl * 100

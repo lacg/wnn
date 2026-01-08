@@ -682,6 +682,24 @@ def run_benchmark(config: BenchmarkConfig):
 		retrain_time = time.perf_counter() - start
 		log(f"  Full retraining time: {retrain_time:.1f}s")
 
+	# Final evaluation on validation set (always evaluate, even if windowed pretrain was used)
+	log_section("Final Evaluation (Validation Set)")
+	val_examples = len(val_tokens) - config.context_size
+	log(f"Evaluating on {val_examples:,} examples...")
+	start = time.perf_counter()
+	final_val_stats = model.evaluate_fast(
+		val_tokens,
+		batch_size=config.batch_size * 2,
+		backend=AccelerationMode.AUTO,
+		verbose=False,
+	)
+	val_eval_time = time.perf_counter() - start
+
+	log(f"  Evaluation time: {val_eval_time:.2f}s")
+	log(f"  Cross-entropy: {final_val_stats['cross_entropy']:.4f}")
+	log(f"  Perplexity: {final_val_stats['perplexity']:.2f}")
+	log(f"  Accuracy: {final_val_stats['accuracy']:.2%}")
+
 	# Final evaluation on test set
 	log_section("Final Evaluation (Test Set)")
 	test_examples = len(test_tokens) - config.context_size
@@ -691,7 +709,7 @@ def run_benchmark(config: BenchmarkConfig):
 		test_tokens,
 		batch_size=config.batch_size * 2,
 		backend=AccelerationMode.AUTO,
-		verbose=False,  # Suppress print, we log ourselves
+		verbose=False,
 	)
 	eval_time = time.perf_counter() - start
 
@@ -711,11 +729,8 @@ def run_benchmark(config: BenchmarkConfig):
 	log(f"Backend: {backend} ({'Rust + rayon parallel' if RUST_AVAILABLE else 'PyTorch vectorized'})")
 	log()
 	log("Results:")
-	if val_stats:
-		log(f"  Validation PPL: {val_stats['perplexity']:.2f}")
-		log(f"  Validation Acc: {val_stats['accuracy']:.2%}")
-	else:
-		log(f"  Validation: (used windowed pretrain)")
+	log(f"  Validation PPL: {final_val_stats['perplexity']:.2f}")
+	log(f"  Validation Acc: {final_val_stats['accuracy']:.2%}")
 	log(f"  Test PPL: {test_stats['perplexity']:.2f}")
 	log(f"  Test Acc: {test_stats['accuracy']:.2%}")
 

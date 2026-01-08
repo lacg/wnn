@@ -20,6 +20,7 @@ from wnn.ram.strategies.connectivity.base import (
 	OverfittingControl,
 	OverfittingCallback,
 )
+from wnn.ram.strategies.perplexity import PerplexityCalculator
 
 
 @dataclass
@@ -33,14 +34,14 @@ class TabuSearchConfig:
 	- tabu_size: 5 recent moves stored to avoid cycling
 	- mutation_rate: 0.001 per-connection probability
 	- early_stop_patience: iterations without improvement before stopping
-	- early_stop_threshold: minimum improvement required to reset patience
+	- early_stop_threshold: minimum PPL % improvement required to reset patience
 	"""
 	iterations: int = 5
 	neighbors_per_iter: int = 30
 	tabu_size: int = 5
 	mutation_rate: float = 0.001
 	early_stop_patience: int = 1  # Stop if no improvement for 1 check (5 iterations)
-	early_stop_threshold_pct: float = 0.02  # Minimum % improvement required (0.02 = 0.02%)
+	early_stop_threshold_pct: float = 0.02  # Minimum PPL % improvement required (0.02 = 0.02%)
 
 
 class TabuSearchStrategy(OptimizerStrategyBase):
@@ -186,22 +187,22 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 				self._log(f"[TS] Iter {iteration + 1}/{cfg.iterations}: current={current_error:.4f}, best={best_error:.4f}")
 
 			# Early stopping check every 5 iterations
+			# Uses PPL-based improvement: since PPL = exp(CE), small CE changes = large PPL changes
 			if (iteration + 1) % 5 == 0:
-				improvement_since_check = prev_best_for_patience - best_error
-				# Relative threshold: need X% improvement of previous best
-				required_improvement = prev_best_for_patience * (cfg.early_stop_threshold_pct / 100.0)
-				if improvement_since_check >= required_improvement:
+				# Calculate PPL improvement percentage
+				ppl_improvement = PerplexityCalculator.ppl_improvement_pct(prev_best_for_patience, best_error)
+
+				if ppl_improvement >= cfg.early_stop_threshold_pct:
 					patience_counter = 0
 					prev_best_for_patience = best_error
 				else:
 					patience_counter += 1
 
 				if self._verbose:
-					pct_improved = (improvement_since_check / prev_best_for_patience * 100) if prev_best_for_patience > 0 else 0
-					self._log(f"[TS] Early stop check: Δ={pct_improved:.2f}%, patience={cfg.early_stop_patience - patience_counter}/{cfg.early_stop_patience}")
+					self._log(f"[TS] Early stop check: PPL Δ={ppl_improvement:.2f}%, patience={cfg.early_stop_patience - patience_counter}/{cfg.early_stop_patience}")
 
 				if patience_counter > cfg.early_stop_patience:
-					self._log(f"[TS] Early stop at iter {iteration + 1}: no improvement >= {cfg.early_stop_threshold_pct}% for {patience_counter * 5} iterations")
+					self._log(f"[TS] Early stop at iter {iteration + 1}: no PPL improvement >= {cfg.early_stop_threshold_pct}% for {patience_counter * 5} iterations")
 					break
 
 				# Overfitting callback check
