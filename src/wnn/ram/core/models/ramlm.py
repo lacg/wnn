@@ -13,19 +13,28 @@ Architecture:
 
 Key features:
 	- Direct binary encoding of token IDs (no embedding layer)
-	- Single RAMClusterLayer for prediction
+	- Single RAMClusterLayer for prediction (uniform or tiered)
 	- Hybrid top-k training: TRUE for target, FALSE for confusing alternatives
 	- Connectivity optimization via GA/TS for generalization
+	- Tiered architecture: different neurons/bits per token frequency tier
 
 Usage:
 	from wnn.ram.core.models import RAMLM
 
-	# Create model
+	# Create uniform model
 	model = RAMLM(
 		vocab_size=50257,
 		context_size=6,
 		neurons_per_cluster=7,
 		bits_per_neuron=10,
+	)
+
+	# Create tiered model (different capacity per frequency tier)
+	model = RAMLM(
+		vocab_size=50257,
+		context_size=4,
+		tiers=[(100, 11, 8), (400, 7, 8), (None, 5, 8)],
+		cluster_order=sorted_token_ids_by_frequency,
 	)
 
 	# Train
@@ -49,6 +58,7 @@ from torch import zeros
 
 from wnn.ram.core.base import RAMComponent
 from wnn.ram.core.RAMClusterLayer import RAMClusterLayer, bits_needed
+from wnn.ram.core.TieredRAMClusterLayer import TieredRAMClusterLayer
 from wnn.ram.core import AccelerationMode
 
 
@@ -80,6 +90,9 @@ class RAMLM(RAMComponent):
 		pad_token_id: int = 50256,
 		tokenizer: Optional[str] = None,
 		rng: Optional[int] = None,
+		# Tiered architecture (mutually exclusive with neurons_per_cluster/bits_per_neuron)
+		tiers: Optional[list[tuple[Optional[int], int, int]]] = None,
+		cluster_order: Optional[list[int]] = None,
 	):
 		"""
 		Initialize RAMLM.
@@ -88,10 +101,21 @@ class RAMLM(RAMComponent):
 			vocab_size: Size of vocabulary (default 50257 for GPT-2)
 			context_size: Number of context tokens (default 6)
 			neurons_per_cluster: Neurons per output cluster (default 7, odd for majority)
+			                    Ignored if tiers is provided.
 			bits_per_neuron: Bits each neuron observes (default 10)
+			                 Ignored if tiers is provided.
 			pad_token_id: Token ID for padding (default 50256 for GPT-2)
 			tokenizer: Optional tokenizer name ("gpt2") or None for token-ID-only mode
 			rng: Random seed for reproducible connectivity initialization
+
+			# Tiered architecture parameters:
+			tiers: Optional list of (count, neurons, bits) tuples for tiered architecture.
+			       Each tier specifies how many clusters get how many neurons with how many bits.
+			       Use count=None for the final "rest" tier.
+			       Example: [(100, 11, 8), (400, 7, 8), (None, 5, 8)]
+			cluster_order: Optional list mapping logical tier index to physical cluster.
+			               Pass sorted token IDs by frequency to assign frequent tokens to tier 0.
+			               If None, clusters 0..N are assigned in order.
 		"""
 		super().__init__()
 
@@ -103,14 +127,30 @@ class RAMLM(RAMComponent):
 		# Total input bits
 		self.total_input_bits = context_size * self.bits_per_token
 
-		# Create the RAMClusterLayer
-		self.layer = RAMClusterLayer(
-			total_input_bits=self.total_input_bits,
-			num_clusters=vocab_size,
-			neurons_per_cluster=neurons_per_cluster,
-			bits_per_neuron=bits_per_neuron,
-			rng=rng,
-		)
+		# Store tier config for serialization
+		self._tiers = tiers
+		self._cluster_order = cluster_order
+		self._is_tiered = tiers is not None
+
+		# Create the appropriate layer type
+		if tiers is not None:
+			# Tiered architecture
+			self.layer = TieredRAMClusterLayer(
+				total_input_bits=self.total_input_bits,
+				num_clusters=vocab_size,
+				tiers=tiers,
+				cluster_order=cluster_order,
+				rng=rng,
+			)
+		else:
+			# Uniform architecture
+			self.layer = RAMClusterLayer(
+				total_input_bits=self.total_input_bits,
+				num_clusters=vocab_size,
+				neurons_per_cluster=neurons_per_cluster,
+				bits_per_neuron=bits_per_neuron,
+				rng=rng,
+			)
 
 		# Optional tokenizer
 		self._tokenizer = None
@@ -128,15 +168,28 @@ class RAMLM(RAMComponent):
 		)
 
 	def __repr__(self) -> str:
-		return (
-			f"RAMLM("
-			f"vocab={self.vocab_size}, "
-			f"context={self.context_size}, "
-			f"bits_per_token={self.bits_per_token}, "
-			f"total_input_bits={self.total_input_bits}, "
-			f"neurons_per_cluster={self.layer.neurons_per_cluster}, "
-			f"bits_per_neuron={self.layer.bits_per_neuron})"
-		)
+		if self._is_tiered:
+			tier_str = ", ".join(
+				f"({tc.cluster_count}, {tc.neurons_per_cluster}, {tc.bits_per_neuron})"
+				for tc in self.layer.tier_configs
+			)
+			return (
+				f"RAMLM("
+				f"vocab={self.vocab_size}, "
+				f"context={self.context_size}, "
+				f"tiers=[{tier_str}], "
+				f"total_neurons={self.layer.total_neurons})"
+			)
+		else:
+			return (
+				f"RAMLM("
+				f"vocab={self.vocab_size}, "
+				f"context={self.context_size}, "
+				f"bits_per_token={self.bits_per_token}, "
+				f"total_input_bits={self.total_input_bits}, "
+				f"neurons_per_cluster={self.layer.neurons_per_cluster}, "
+				f"bits_per_neuron={self.layer.bits_per_neuron})"
+			)
 
 	def __str__(self) -> str:
 		lines = [
@@ -145,13 +198,29 @@ class RAMLM(RAMComponent):
 			f"  Context size: {self.context_size} tokens",
 			f"  Bits per token: {self.bits_per_token}",
 			f"  Total input bits: {self.total_input_bits}",
-			f"  Neurons per cluster: {self.layer.neurons_per_cluster}",
-			f"  Bits per neuron: {self.layer.bits_per_neuron}",
-			f"  Total neurons: {self.layer.total_neurons:,}",
+		]
+
+		if self._is_tiered:
+			lines.append(f"  Architecture: Tiered ({len(self.layer.tier_configs)} tiers)")
+			lines.append(f"  Total neurons: {self.layer.total_neurons:,}")
+			lines.append(f"  Total memory cells: {self.layer.total_memory_cells:,}")
+			lines.append("  Tiers:")
+			for i, tc in enumerate(self.layer.tier_configs):
+				lines.append(
+					f"    Tier {i}: {tc.cluster_count:,} clusters × "
+					f"{tc.neurons_per_cluster} neurons × {tc.bits_per_neuron} bits"
+				)
+		else:
+			lines.append(f"  Architecture: Uniform")
+			lines.append(f"  Neurons per cluster: {self.layer.neurons_per_cluster}")
+			lines.append(f"  Bits per neuron: {self.layer.bits_per_neuron}")
+			lines.append(f"  Total neurons: {self.layer.total_neurons:,}")
+
+		lines.extend([
 			f"  PAD token ID: {self.pad_token_id}",
 			f"  Tokenizer: {'GPT-2' if self._tokenizer else 'None (token IDs only)'}",
 			f"  Global top-k: {len(self._global_top_k) if self._global_top_k else 'Not set'}",
-		]
+		])
 		return "\n".join(lines)
 
 	# =========================================================================
@@ -858,13 +927,22 @@ class RAMLM(RAMComponent):
 
 	def get_config(self) -> dict:
 		"""Get configuration for model recreation."""
-		return {
+		config = {
 			"vocab_size": self.vocab_size,
 			"context_size": self.context_size,
-			"neurons_per_cluster": self.layer.neurons_per_cluster,
-			"bits_per_neuron": self.layer.bits_per_neuron,
 			"pad_token_id": self.pad_token_id,
 		}
+
+		if self._is_tiered:
+			config["tiers"] = self._tiers
+			# Note: cluster_order is large, only include if explicitly set
+			if self._cluster_order is not None:
+				config["cluster_order"] = self._cluster_order
+		else:
+			config["neurons_per_cluster"] = self.layer.neurons_per_cluster
+			config["bits_per_neuron"] = self.layer.bits_per_neuron
+
+		return config
 
 	@classmethod
 	def from_config(cls, config: dict) -> "RAMLM":

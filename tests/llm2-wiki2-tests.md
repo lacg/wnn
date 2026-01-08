@@ -61,11 +61,54 @@
   | GPT-2 Small | ~29      |
   | GPT-2 Large | ~22      |
 
-Key ideas:
 
-  1. More neurons (256-512): 128 neurons may be saturating. More neurons = more patterns captured.
-  2. Add exact RAMs for n=5, n=6: Currently only n=2,3,4 have exact matching. High-frequency 5-grams and 6-grams would improve the "covered" percentage significantly.
-  3. Probability distribution output: Instead of predicting one word, have each RAM output a distribution. When voting, aggregate distributions rather than discrete votes. This gives much better perplexity since we're measuring probability, not just correctness.
-  4. Higher cascade threshold: 0.05 is very low - RAMs are outputting low-confidence guesses. Try 0.15-0.2 to force only confident predictions to be used, falling back to voting more often but with better calibration.
-  5. Learned voting weights in perplexity path: Your meta-classifier got +2.9% over cascade. Use those learned weights in the actual perplexity calculation, not just evaluation.
-  6. n=7 context: Longer range patterns could help with the 26% of cases going to voting.
+#  Ways to Lower PPL with RAM Architecture
+
+  1. More Neurons Per Cluster (High Impact)
+
+  Currently: 4 neurons → only 4 different "perspectives" per token
+
+  neurons_per_cluster: 4 → 8, 16, or 32
+  - More neurons = more patterns stored per vocab token
+  - Each neuron sees different input bits (partial connectivity)
+  - More coverage of the address space → less EMPTY cells
+
+  2. Connectivity Optimization (What GA/TS is doing now)
+
+  This is the "weight learning" for RAMs:
+  - Determines which input bits each neuron observes
+  - Better connectivity = neurons learn more discriminative features
+  - This is why we're running GA/TS!
+
+  3. Better Input Encoding
+
+  Currently: Direct token ID → binary (16 bits per token)
+
+  Could use:
+  - LSH (SimHash): Group similar contexts together
+  - Learned embeddings → binary: More semantic encoding
+  - Position-weighted bits: Emphasize recent tokens
+
+  4. Cascaded/Hierarchical Approach (like ram_lm_v2.py)
+
+  if exact_4gram_match:     → use exact probability (high confidence)
+  elif exact_3gram_match:   → use 3-gram fallback
+  elif generalized_ram:     → use partial connectivity RAM
+  else:                     → smoothing/backoff
+
+  5. More Bits Per Neuron
+
+  Currently: 10 bits = 1024 addresses
+
+  Trade-off:
+  - More bits → more specific patterns → better precision
+  - But also sparser training → fewer examples per address
+
+  6. Architecture Parameters Summary
+
+  | Parameter           | Current | Can Increase | Trade-off               |
+  |---------------------|---------|--------------|-------------------------|
+  | neurons_per_cluster | 4       | 8-32         | Memory vs accuracy      |
+  | bits_per_neuron     | 10      | 12-16        | Specificity vs sparsity |
+  | context_size        | 4       | 6-8          | Information vs sparsity |
+  | global_top_k        | 100     | 500-1000     | FALSE training coverage |

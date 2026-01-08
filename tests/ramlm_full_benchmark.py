@@ -121,10 +121,15 @@ except ImportError:
 @dataclass
 class BenchmarkConfig:
 	"""Configuration for RAMLM benchmark."""
-	# Model architecture
+	# Model architecture (uniform mode)
 	neurons_per_cluster: int = 3
 	bits_per_neuron: int = 8
 	context_size: int = 4  # 4-gram context
+
+	# Tiered architecture (overrides neurons_per_cluster/bits_per_neuron when set)
+	# Format: [(count, neurons, bits), ...] where count=None means "rest"
+	# Example: [(100, 11, 8), (400, 7, 8), (None, 5, 8)]
+	tiers: Optional[list[tuple[Optional[int], int, int]]] = None
 
 	# Training
 	global_top_k: int = 100
@@ -158,9 +163,9 @@ class BenchmarkConfig:
 	opt_train_windows: int = 50      # 50 windows × 200 = 10k tokens for training
 	opt_eval_windows: int = 20       # 20 windows × 200 = 4k tokens for evaluation
 
-	# Skip initial full training (2.4M tokens) and go straight to optimization
-	# Useful for faster iteration when tuning connectivity
-	skip_initial_training: bool = False
+	# Use windowed 10k pretrain instead of full 2.4M initial training
+	# Faster optimization iterations, full retrain at end with best connectivity
+	windowed_pretrain: bool = False
 
 
 def load_wikitext2(tokenizer_type: TokenizerType = TokenizerType.GPT2,
@@ -227,8 +232,15 @@ def run_benchmark(config: BenchmarkConfig):
 
 	# Log configuration
 	log("\nConfiguration:")
-	log(f"  neurons_per_cluster: {config.neurons_per_cluster}")
-	log(f"  bits_per_neuron: {config.bits_per_neuron}")
+	if config.tiers:
+		log(f"  architecture: Tiered")
+		for i, (count, neurons, bits) in enumerate(config.tiers):
+			count_str = str(count) if count is not None else "rest"
+			log(f"    tier {i}: {count_str} clusters × {neurons} neurons × {bits} bits")
+	else:
+		log(f"  architecture: Uniform")
+		log(f"  neurons_per_cluster: {config.neurons_per_cluster}")
+		log(f"  bits_per_neuron: {config.bits_per_neuron}")
 	log(f"  context_size: {config.context_size}")
 	log(f"  global_top_k: {config.global_top_k}")
 	log(f"  batch_size: {config.batch_size}")
@@ -256,27 +268,51 @@ def run_benchmark(config: BenchmarkConfig):
 
 	# Create RAMLM
 	log_section("Creating RAMLM Model")
-	model = RAMLM(
-		vocab_size=vocab_size,
-		context_size=config.context_size,
-		neurons_per_cluster=config.neurons_per_cluster,
-		bits_per_neuron=config.bits_per_neuron,
-	)
+
+	if config.tiers:
+		# Tiered architecture: assign clusters by frequency
+		# cluster_order maps logical tier position → physical cluster (token ID)
+		# So logical position 0 (tier 0) → most frequent token
+		# Include all tokens in vocab, even those not in training data
+		seen_tokens = set(t for t, _ in token_counts.most_common())
+		unseen_tokens = [t for t in range(vocab_size) if t not in seen_tokens]
+		cluster_order = [t for t, _ in token_counts.most_common()] + unseen_tokens
+
+		model = RAMLM(
+			vocab_size=vocab_size,
+			context_size=config.context_size,
+			tiers=config.tiers,
+			cluster_order=cluster_order,
+		)
+		log(f"  Architecture: Tiered ({len(model.layer.tier_configs)} tiers)")
+		log(f"  Total neurons: {model.layer.total_neurons:,}")
+		log(f"  Total memory cells: {model.layer.total_memory_cells:,}")
+		for i, tc in enumerate(model.layer.tier_configs):
+			log(f"    Tier {i}: {tc.cluster_count:,} clusters × {tc.neurons_per_cluster} neurons × {tc.bits_per_neuron} bits")
+	else:
+		# Uniform architecture
+		model = RAMLM(
+			vocab_size=vocab_size,
+			context_size=config.context_size,
+			neurons_per_cluster=config.neurons_per_cluster,
+			bits_per_neuron=config.bits_per_neuron,
+		)
+		log(f"  Architecture: Uniform")
+		log(f"  Total neurons: {model.layer.total_neurons:,}")
+		log(f"  Memory addresses per neuron: {2**config.bits_per_neuron}")
+
 	# Set global top-k
 	model._global_top_k = global_top_k_tokens
-
-	log(f"  Total neurons: {model.layer.total_neurons:,}")
 	log(f"  Total input bits: {model.total_input_bits}")
-	log(f"  Memory addresses per neuron: {2**config.bits_per_neuron}")
 
 	# Determine backend for logging
 	backend = "Rust" if RUST_AVAILABLE else "PyTorch"
 	val_stats = None  # Will be set if initial training runs
 
-	# Initial training (skip if optimizing with subsets only)
-	if config.skip_initial_training:
-		log_section("Skipping Initial Full Training")
-		log(f"  (Will train on {config.opt_train_windows}×{config.opt_window_size}={config.opt_train_windows * config.opt_window_size:,} tokens per iteration)")
+	# Initial training (use windowed pretrain if optimizing for faster iterations)
+	if config.windowed_pretrain:
+		log_section("Using Windowed Pretrain (10k tokens)")
+		log(f"  (Will pretrain on {config.opt_train_windows}×{config.opt_window_size}={config.opt_train_windows * config.opt_window_size:,} tokens, full retrain after optimization)")
 		train_time = 0
 	else:
 		log_section("Initial Training (Rust-Accelerated)")
@@ -332,11 +368,28 @@ def run_benchmark(config: BenchmarkConfig):
 		# Parse strategy sequence
 		strategies = [s.strip().upper() for s in config.strategy.split(',')]
 
-		# Get model dimensions
+		# Get model dimensions - handle both uniform and tiered
 		total_input_bits = model.total_input_bits
-		num_neurons = model.layer.total_neurons
-		bits_per_neuron = model.layer.bits_per_neuron
-		current_connections = model.layer.memory.connections.clone()
+
+		# For tiered models, we'll optimize each tier sequentially
+		# For uniform models, we have a single tier (the whole layer)
+		if config.tiers:
+			# Build list of (tier_idx, memory, num_neurons, bits_per_neuron) tuples
+			optimization_tiers = [
+				(i, mem, tc.total_neurons, tc.bits_per_neuron)
+				for i, (tc, mem) in enumerate(zip(model.layer.tier_configs, model.layer.tier_memories))
+			]
+			log(f"Tiered optimization: {len(optimization_tiers)} tiers")
+			for tier_idx, _, num_n, bits_n in optimization_tiers:
+				log(f"  Tier {tier_idx}: {num_n:,} neurons × {bits_n} bits")
+		else:
+			# Single "tier" for uniform model
+			optimization_tiers = [
+				(0, model.layer.memory, model.layer.total_neurons, model.layer.bits_per_neuron)
+			]
+
+		# Current connections per tier
+		current_connections_per_tier = [mem.connections.clone() for _, mem, _, _ in optimization_tiers]
 
 		# ========================================================================
 		# Create optimization subsets using multi-window sampling
@@ -376,44 +429,50 @@ def run_benchmark(config: BenchmarkConfig):
 			log(f"Sequential train: {len(opt_train_tokens):,} tokens (corpus too small for multi-window)")
 			log(f"Sequential eval: {len(opt_eval_tokens):,} tokens")
 
-		# Create evaluation function that trains and evaluates on SUBSETS
-		def evaluate_connectivity(conn: torch.Tensor) -> float:
-			"""Train model with connectivity on subset and return cross-entropy."""
-			model.layer.memory.connections = conn
-			model.reset_memory()
+		# Create evaluation function factory (returns functions bound to a specific tier)
+		def make_evaluate_connectivity(tier_memory):
+			"""Create evaluation function that sets connectivity for a specific tier."""
+			def evaluate_connectivity(conn: torch.Tensor) -> float:
+				"""Train model with connectivity on subset and return cross-entropy."""
+				tier_memory.connections = conn
+				model.reset_memory()
 
-			# Train on multi-window subset (10k tokens by default)
-			if RUST_AVAILABLE:
-				model.train_epoch_fast_rust(
-					opt_train_tokens,
-					global_top_k=config.global_top_k,
-					batch_size=config.batch_size,
+				# Train on multi-window subset (10k tokens by default)
+				if RUST_AVAILABLE:
+					model.train_epoch_fast_rust(
+						opt_train_tokens,
+						global_top_k=config.global_top_k,
+						batch_size=config.batch_size,
+						verbose=False,
+					)
+				else:
+					model.train_epoch_fast(
+						opt_train_tokens,
+						global_top_k=config.global_top_k,
+						batch_size=config.batch_size,
+						verbose=False,
+					)
+
+				# Evaluate on multi-window sampled tokens
+				stats = model.evaluate_fast(
+					opt_eval_tokens,
+					batch_size=config.batch_size * 2,
+					backend=AccelerationMode.AUTO,
 					verbose=False,
 				)
-			else:
-				model.train_epoch_fast(
-					opt_train_tokens,
-					global_top_k=config.global_top_k,
-					batch_size=config.batch_size,
-					verbose=False,
-				)
+				return stats['cross_entropy']
+			return evaluate_connectivity
 
-			# Evaluate on multi-window sampled tokens
-			stats = model.evaluate_fast(
-				opt_eval_tokens,
-				batch_size=config.batch_size * 2,
-				backend=AccelerationMode.AUTO,
-				verbose=False,
-			)
-			return stats['cross_entropy']
+		# Batch evaluation function factory
+		def make_batch_evaluate(tier_memory):
+			eval_fn = make_evaluate_connectivity(tier_memory)
+			def batch_evaluate(connectivities: list, **kwargs) -> list:
+				return [eval_fn(conn) for conn in connectivities]
+			return batch_evaluate
 
-		# Batch evaluation function (accepts **kwargs for compatibility with GA/TS)
-		def batch_evaluate(connectivities: list, **kwargs) -> list:
-			return [evaluate_connectivity(conn) for conn in connectivities]
-
-		# If we skipped initial full training, do a quick pretrain on subset first
+		# If using windowed pretrain, train on 10k subset first for baseline
 		# This gives us a real baseline instead of random (PPL = vocab_size)
-		if config.skip_initial_training:
+		if config.windowed_pretrain:
 			log("")
 			log(f"Pretraining on {len(opt_train_tokens):,} tokens for baseline...")
 			start = time.perf_counter()
@@ -471,89 +530,102 @@ def run_benchmark(config: BenchmarkConfig):
 		log(f"  Early stop patience: {config.early_stop_patience} (checks every 5 = {(config.early_stop_patience+1)*5} gens/iters)")
 		log(f"  Overfitting thresholds: <{HEALTHY_THRESHOLD}% healthy, >{WARNING_THRESHOLD}% warn, >{SEVERE_THRESHOLD}% severe, >{CRITICAL_THRESHOLD}% stop")
 
-		for strategy_name in strategies:
-			log("")
-			log(f"Running {strategy_name} optimization...")
+		# Optimize each tier (for uniform models, there's just one "tier")
+		for tier_idx, tier_memory, num_neurons, bits_per_neuron in optimization_tiers:
+			tier_label = f"Tier {tier_idx}" if len(optimization_tiers) > 1 else "Layer"
 
-			# Create overfitting monitor with validation function (also uses subset)
-			def val_eval_fn(conn: torch.Tensor) -> float:
-				model.layer.memory.connections = conn
-				model.reset_memory()
-				if RUST_AVAILABLE:
-					model.train_epoch_fast_rust(opt_train_tokens, global_top_k=config.global_top_k, batch_size=config.batch_size, verbose=False)
+			for strategy_name in strategies:
+				log("")
+				log(f"[{tier_label}] Running {strategy_name} optimization ({num_neurons:,} neurons × {bits_per_neuron} bits)...")
+
+				# Get current connections for this tier
+				current_connections = current_connections_per_tier[tier_idx]
+
+				# Create evaluation functions bound to this tier
+				evaluate_connectivity = make_evaluate_connectivity(tier_memory)
+				batch_evaluate = make_batch_evaluate(tier_memory)
+
+				# Create overfitting monitor with validation function (also uses subset)
+				def make_val_eval_fn(mem):
+					def val_eval_fn(conn: torch.Tensor) -> float:
+						mem.connections = conn
+						model.reset_memory()
+						if RUST_AVAILABLE:
+							model.train_epoch_fast_rust(opt_train_tokens, global_top_k=config.global_top_k, batch_size=config.batch_size, verbose=False)
+						else:
+							model.train_epoch_fast(opt_train_tokens, global_top_k=config.global_top_k, batch_size=config.batch_size, verbose=False)
+						return model.evaluate_fast(val_tokens[:min(50000, len(val_tokens))], batch_size=config.batch_size * 2, backend=AccelerationMode.AUTO, verbose=False)['cross_entropy']
+					return val_eval_fn
+
+				overfitting_monitor = OverfittingMonitor(
+					validation_fn=make_val_eval_fn(tier_memory),
+					grace_checks=1,
+					logger=log,
+					global_baseline_ratio=global_baseline_ratio,
+				)
+
+				start = time.perf_counter()
+
+				if strategy_name == "GA":
+					ga_config = GeneticAlgorithmConfig(
+						population_size=config.ga_population,
+						generations=config.ga_generations,
+						mutation_rate=0.01,
+						crossover_rate=0.7,
+						elitism=max(2, config.ga_population // 10),
+						early_stop_patience=config.early_stop_patience,
+						early_stop_threshold_pct=config.ga_early_stop_pct,
+					)
+					strategy_obj = GeneticAlgorithmStrategy(config=ga_config, seed=42, verbose=True, logger=log)
+					result = strategy_obj.optimize(
+						current_connections,
+						evaluate_connectivity,
+						total_input_bits,
+						num_neurons,
+						bits_per_neuron,
+						batch_evaluate,
+						overfitting_callback=overfitting_monitor,
+					)
+
+				elif strategy_name == "TS":
+					ts_config = TabuSearchConfig(
+						iterations=config.ts_iterations,
+						neighbors_per_iter=config.ts_neighbors,
+						early_stop_patience=config.early_stop_patience,
+						early_stop_threshold_pct=config.ts_early_stop_pct,
+					)
+					strategy_obj = TabuSearchStrategy(config=ts_config, seed=42, verbose=True, logger=log)
+					result = strategy_obj.optimize(
+						current_connections,
+						evaluate_connectivity,
+						total_input_bits,
+						num_neurons,
+						bits_per_neuron,
+						batch_evaluate,
+						overfitting_callback=overfitting_monitor,
+					)
+
 				else:
-					model.train_epoch_fast(opt_train_tokens, global_top_k=config.global_top_k, batch_size=config.batch_size, verbose=False)
-				return model.evaluate_fast(val_tokens[:min(50000, len(val_tokens))], batch_size=config.batch_size * 2, backend=AccelerationMode.AUTO, verbose=False)['cross_entropy']
+					log(f"  WARNING: Unknown strategy {strategy_name}, skipping")
+					continue
 
-			overfitting_monitor = OverfittingMonitor(
-				validation_fn=val_eval_fn,
-				grace_checks=1,
-				logger=log,
-				global_baseline_ratio=global_baseline_ratio,
-			)
+				opt_time = time.perf_counter() - start
 
-			start = time.perf_counter()
+				# Update current connections for this tier (for next strategy in sequence)
+				current_connections_per_tier[tier_idx] = result.optimized_connections.clone()
+				tier_memory.connections = result.optimized_connections.clone()
 
-			if strategy_name == "GA":
-				ga_config = GeneticAlgorithmConfig(
-					population_size=config.ga_population,
-					generations=config.ga_generations,
-					mutation_rate=0.01,
-					crossover_rate=0.7,
-					elitism=max(2, config.ga_population // 10),
-					early_stop_patience=config.early_stop_patience,
-					early_stop_threshold_pct=config.ga_early_stop_pct,
-				)
-				strategy = GeneticAlgorithmStrategy(config=ga_config, seed=42, verbose=True, logger=log)
-				result = strategy.optimize(
-					current_connections,
-					evaluate_connectivity,
-					total_input_bits,
-					num_neurons,
-					bits_per_neuron,
-					batch_evaluate,
-					overfitting_callback=overfitting_monitor,
-				)
-
-			elif strategy_name == "TS":
-				ts_config = TabuSearchConfig(
-					iterations=config.ts_iterations,
-					neighbors_per_iter=config.ts_neighbors,
-					early_stop_patience=config.early_stop_patience,
-					early_stop_threshold_pct=config.ts_early_stop_pct,
-				)
-				strategy = TabuSearchStrategy(config=ts_config, seed=42, verbose=True, logger=log)
-				result = strategy.optimize(
-					current_connections,
-					evaluate_connectivity,
-					total_input_bits,
-					num_neurons,
-					bits_per_neuron,
-					batch_evaluate,
-					overfitting_callback=overfitting_monitor,
-				)
-
-			else:
-				log(f"  WARNING: Unknown strategy {strategy_name}, skipping")
-				continue
-
-			opt_time = time.perf_counter() - start
-
-			# Update current connections for next strategy in sequence
-			current_connections = result.optimized_connections.clone()
-			model.layer.memory.connections = current_connections
-
-			# Report results
-			improvement = ((result.initial_error - result.final_error) / result.initial_error * 100) if result.initial_error > 0 else 0
-			log("")
-			log(f"{strategy_name} Results:")
-			log(f"    Time: {opt_time:.1f}s")
-			log(f"    Initial CE: {result.initial_error:.4f}")
-			log(f"    Final CE: {result.final_error:.4f}")
-			log(f"    Improvement: {improvement:.2f}%")
-			log(f"    Iterations: {result.iterations_run}")
-			if result.early_stopped_overfitting:
-				log(f"    Early stopped: overfitting detected")
+				# Report results for this strategy
+				improvement = ((result.initial_error - result.final_error) / result.initial_error * 100) if result.initial_error > 0 else 0
+				log("")
+				log(f"[{tier_label}] {strategy_name} Results:")
+				log(f"    Time: {opt_time:.1f}s")
+				log(f"    Initial CE: {result.initial_error:.4f}")
+				log(f"    Final CE: {result.final_error:.4f}")
+				log(f"    Improvement: {improvement:.2f}%")
+				log(f"    Iterations: {result.iterations_run}")
+				if result.early_stopped_overfitting:
+					log(f"    Early stopped: overfitting detected")
 
 		# Retrain on FULL data with optimized connectivity
 		log("")
@@ -597,7 +669,11 @@ def run_benchmark(config: BenchmarkConfig):
 
 	# Summary
 	log_header("Summary")
-	log(f"Model: RAMLM (vocab={vocab_size}, neurons={config.neurons_per_cluster}/cluster, bits={config.bits_per_neuron})")
+	if config.tiers:
+		tier_summary = ", ".join(f"{tc.cluster_count}×{tc.neurons_per_cluster}n" for tc in model.layer.tier_configs)
+		log(f"Model: RAMLM Tiered (vocab={vocab_size}, tiers=[{tier_summary}], total_neurons={model.layer.total_neurons:,})")
+	else:
+		log(f"Model: RAMLM (vocab={vocab_size}, neurons={config.neurons_per_cluster}/cluster, bits={config.bits_per_neuron})")
 	log(f"Data: WikiText-2 (train={len(train_tokens):,}, val={len(val_tokens):,}, test={len(test_tokens):,})")
 	log(f"Backend: {backend} ({'Rust + rayon parallel' if RUST_AVAILABLE else 'PyTorch vectorized'})")
 	log()
@@ -606,7 +682,7 @@ def run_benchmark(config: BenchmarkConfig):
 		log(f"  Validation PPL: {val_stats['perplexity']:.2f}")
 		log(f"  Validation Acc: {val_stats['accuracy']:.2%}")
 	else:
-		log(f"  Validation: (skipped initial training)")
+		log(f"  Validation: (used windowed pretrain)")
 	log(f"  Test PPL: {test_stats['perplexity']:.2f}")
 	log(f"  Test Acc: {test_stats['accuracy']:.2%}")
 
@@ -642,11 +718,14 @@ if __name__ == "__main__":
 
 	# Model architecture
 	parser.add_argument("--neurons", type=int, default=None,
-		help="Neurons per cluster (default: 3 fast, 4 full, 6 overnight)")
+		help="Neurons per cluster (default: 3 fast, 4 full, 6 overnight). Ignored if --tiered is set.")
 	parser.add_argument("--bits", type=int, default=None,
-		help="Bits per neuron (default: 8 fast, 10 full, 12 overnight)")
+		help="Bits per neuron (default: 8 fast, 10 full, 12 overnight). Ignored if --tiered is set.")
 	parser.add_argument("--context", type=int, default=4,
 		help="Context size in tokens (default: 4)")
+	parser.add_argument("--tiered", type=str, default=None,
+		help="Tiered architecture spec: 'count1,neurons1,bits1;count2,neurons2,bits2;...' "
+		     "Use 'rest' for remaining clusters. Example: '100,11,8;400,7,8;rest,5,8'")
 
 	# Training
 	parser.add_argument("--top-k", type=int, default=100,
@@ -657,8 +736,8 @@ if __name__ == "__main__":
 	# Optimization
 	parser.add_argument("--optimize", action="store_true",
 		help="Run connectivity optimization after initial training")
-	parser.add_argument("--skip-initial-training", action="store_true",
-		help="Skip initial 2.4M token training, go straight to optimization subsets")
+	parser.add_argument("--windowed-pretrain", action="store_true",
+		help="Use windowed 10k pretrain instead of full 2.4M initial training (faster optimization)")
 	parser.add_argument("--strategy", type=str, default="TS",
 		help="Optimization strategy: GA, TS, SA, or comma-separated sequence like GA,TS (default: TS)")
 
@@ -695,7 +774,7 @@ if __name__ == "__main__":
 	config.batch_size = args.batch_size
 	config.optimize = args.optimize
 	config.strategy = args.strategy
-	config.skip_initial_training = args.skip_initial_training
+	config.windowed_pretrain = args.windowed_pretrain
 
 	if args.mode == "fast":
 		# Quick test with smaller data
@@ -733,12 +812,29 @@ if __name__ == "__main__":
 	# Override optimization parameters if specified
 	config.ts_neighbors = args.ts_neighbors
 
+	# Parse tiered architecture if specified
+	if args.tiered:
+		tiers = []
+		for tier_spec in args.tiered.split(';'):
+			parts = tier_spec.strip().split(',')
+			if len(parts) != 3:
+				print(f"ERROR: Invalid tier spec '{tier_spec}'. Expected 'count,neurons,bits'")
+				sys.exit(1)
+			count_str, neurons_str, bits_str = parts
+			count = None if count_str.lower() == 'rest' else int(count_str)
+			neurons = int(neurons_str)
+			bits = int(bits_str)
+			tiers.append((count, neurons, bits))
+		config.tiers = tiers
+
 	# Log configuration
 	log(f"Mode: {args.mode.upper()}")
 	log(f"Full data: {args.full_data}")
 	log(f"Optimize: {args.optimize}")
 	if args.optimize:
 		log(f"Strategy: {args.strategy}")
+	if config.tiers:
+		log(f"Tiered: {config.tiers}")
 
 	# Run benchmark
 	results = run_benchmark(config)
