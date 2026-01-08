@@ -729,8 +729,26 @@ def run_benchmark(config: BenchmarkConfig):
 	log(f"Backend: {backend} ({'Rust + rayon parallel' if RUST_AVAILABLE else 'PyTorch vectorized'})")
 	log()
 	log("Results:")
-	log(f"  Validation PPL: {final_val_stats['perplexity']:.2f}")
-	log(f"  Validation Acc: {final_val_stats['accuracy']:.2%}")
+
+	# Show before/after comparison if we have initial stats
+	if val_stats is not None and config.optimize:
+		# Validation PPL
+		val_ppl_before = val_stats['perplexity']
+		val_ppl_after = final_val_stats['perplexity']
+		val_ppl_delta = (val_ppl_after - val_ppl_before) / val_ppl_before * 100
+		val_ppl_sign = "+" if val_ppl_delta >= 0 else ""
+		log(f"  Validation PPL: {val_ppl_before:.2f} → {val_ppl_after:.2f} ({val_ppl_sign}{val_ppl_delta:.2f}%)")
+
+		# Validation Acc
+		val_acc_before = val_stats['accuracy']
+		val_acc_after = final_val_stats['accuracy']
+		val_acc_delta = (val_acc_after - val_acc_before) / val_acc_before * 100 if val_acc_before > 0 else 0
+		val_acc_sign = "+" if val_acc_delta >= 0 else ""
+		log(f"  Validation Acc: {val_acc_before:.2%} → {val_acc_after:.2%} ({val_acc_sign}{val_acc_delta:.2f}%)")
+	else:
+		log(f"  Validation PPL: {final_val_stats['perplexity']:.2f}")
+		log(f"  Validation Acc: {final_val_stats['accuracy']:.2%}")
+
 	log(f"  Test PPL: {test_stats['perplexity']:.2f}")
 	log(f"  Test Acc: {test_stats['accuracy']:.2%}")
 
