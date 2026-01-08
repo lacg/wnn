@@ -42,13 +42,29 @@ Test how bits_per_neuron and context_size affect model performance.
 
 **Conclusion:** 3 neurons/cluster in rest tier gives nearly identical PPL with ~7-9% worse accuracy, but uses **39% fewer neurons** and runs **3-4x faster**.
 
-### 3 Neurons/Cluster (tier 1 + rest) - pending
+### 3 Neurons/Cluster (tier 1 + rest)
 
 | Mode | Bits | Ctx | Tiers | Total Neurons | Time | Val PPL | Val Acc | Test PPL | Test Acc | Notes |
 |------|------|-----|-------|---------------|------|---------|---------|----------|----------|-------|
-| fast | 8    | 4   | 100×11, 400×3, rest×3 | - | - | -  | -   | -   | -    | Pending |
-| fast | 10   | 4   | 100×11, 400×3, rest×3 | - | - | -  | -   | -   | -    | Pending |
-| fast | 12   | 4   | 100×11, 400×3, rest×3 | - | - | -  | -   | -   | -    | Pending |
+| fast | 8    | 4   | 100×11, 400×3, rest×3 | 151,571 | ~5m  | 40,981  | 5.39%   | 40,523   | 4.94%    | PPL same, acc worse |
+| fast | 10   | 4   | 100×11, 400×3, rest×3 | 151,571 | ~10m | 43,242  | 7.80%   | 43,024   | 7.50%    | PPL same, acc worse |
+| fast | 12   | 4   | 100×11, 400×3, rest×3 | 151,571 | ~24m | 45,370  | 8.32%   | 45,244   | 8.04%    | PPL same, acc worse |
+
+### 3 Neurons/Cluster (all tiers) - pending
+
+| Mode | Bits | Ctx | Tiers | Total Neurons | Time | Val PPL | Val Acc | Test PPL | Test Acc | Notes |
+|------|------|-----|-------|---------------|------|---------|---------|----------|----------|-------|
+| fast | 8    | 4   | 100×3, 400×3, rest×3 | - | - | -  | -   | -   | -    | Pending |
+| fast | 10   | 4   | 100×3, 400×3, rest×3 | - | - | -  | -   | -   | -    | Pending |
+| fast | 12   | 4   | 100×3, 400×3, rest×3 | - | - | -  | -   | -   | -    | Pending |
+
+### 1 Neuron/Cluster (all tiers) - pending
+
+| Mode | Bits | Ctx | Tiers | Total Neurons | Time | Val PPL | Val Acc | Test PPL | Test Acc | Notes |
+|------|------|-----|-------|---------------|------|---------|---------|----------|----------|-------|
+| fast | 8    | 4   | 100×1, 400×1, rest×1 | - | - | -  | -   | -   | -    | Pending |
+| fast | 10   | 4   | 100×1, 400×1, rest×1 | - | - | -  | -   | -   | -    | Pending |
+| fast | 12   | 4   | 100×1, 400×1, rest×1 | - | - | -  | -   | -   | -    | Pending |
 
 ---
 
