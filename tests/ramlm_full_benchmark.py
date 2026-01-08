@@ -541,12 +541,24 @@ def run_benchmark(config: BenchmarkConfig):
 		baseline_val_ce = baseline_val_stats['cross_entropy']
 		baseline_val_ppl = baseline_val_stats['perplexity']
 
+		# Optimization eval baseline: evaluate on opt_eval_tokens (same as GA fitness)
+		# This should match the GA initial best error
+		baseline_opt_eval_stats = model.evaluate_fast(
+			opt_eval_tokens,
+			batch_size=config.batch_size * 2,
+			backend=AccelerationMode.AUTO,
+			verbose=False,
+		)
+		baseline_opt_eval_ce = baseline_opt_eval_stats['cross_entropy']
+		baseline_opt_eval_ppl = baseline_opt_eval_stats['perplexity']
+
 		global_baseline_ratio = baseline_val_ce / baseline_train_ce if baseline_train_ce > 0 else 1.0
 
 		log("")
 		log(f"Optimization baselines:")
-		log(f"  Train CE: {baseline_train_ce:.4f} (PPL: {baseline_train_ppl:.2f})")
-		log(f"  Val CE: {baseline_val_ce:.4f} (PPL: {baseline_val_ppl:.2f})")
+		log(f"  Train CE: {baseline_train_ce:.4f} (PPL: {baseline_train_ppl:.2f}) - opt_train_tokens")
+		log(f"  Opt Eval CE: {baseline_opt_eval_ce:.4f} (PPL: {baseline_opt_eval_ppl:.2f}) - opt_eval_tokens (GA fitness)")
+		log(f"  Val CE: {baseline_val_ce:.4f} (PPL: {baseline_val_ppl:.2f}) - val_tokens")
 		log(f"  Val/Train ratio: {global_baseline_ratio:.2f}x")
 
 		log("")
