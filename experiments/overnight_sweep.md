@@ -63,6 +63,36 @@ python tests/run_overnight_sweep.py --full-data --experiments tier0_16bit,tier0_
 
 Results are saved to `experiments/overnight_sweep_results.json` with intermediate saves after each experiment.
 
+## Baseline Results (Per-Tier Sweep)
+
+Results from 15 experiments using DENSE backend (fast mode):
+
+| Experiment | PPL | Accuracy | T0 PPL | T0 Acc | Notes |
+|------------|-----|----------|--------|--------|-------|
+| neurons_3_uniform | **40,515** | 2.70% | 34,072 | 5.7% | Best PPL |
+| neurons_5_uniform | 40,564 | 4.99% | 34,063 | 10.5% | |
+| neurons_7_uniform | 40,614 | 5.47% | 34,239 | 11.5% | |
+| **baseline_8bit** | 40,651 | 6.93% | 34,286 | 14.6% | Reference |
+| neurons_11_uniform | 40,654 | 6.59% | 34,288 | 13.9% | |
+| context_5 | 40,752 | 6.09% | 34,355 | 12.8% | |
+| context_6 | 40,835 | 6.29% | 34,387 | 13.2% | |
+| bits_10_uniform | 43,294 | 7.87% | 38,041 | 16.5% | |
+| bits_12_uniform | 45,753 | **9.37%** | 42,127 | **19.4%** | Best Acc |
+
+### Key Findings
+
+1. **Neurons vs PPL**: Fewer neurons (3-5) slightly improve PPL but significantly hurt accuracy
+2. **Bits vs Accuracy**: More bits (10-12) improve accuracy by 35-50% but hurt PPL by 7-12%
+3. **Context**: 5-6 tokens shows minimal improvement over 4 tokens
+4. **Trade-off**: Clear PPL↔Accuracy trade-off with current DENSE backend
+
+### Implications for Overnight Experiments
+
+The SPARSE backend experiments (16-20 bits) may show different patterns because:
+- Higher bits = more address space = less collision = potentially better PPL
+- SPARSE only stores written cells, avoiding the "EMPTY cell" penalty
+- Combined with more neurons, may break the PPL↔Accuracy trade-off
+
 ## Hypotheses
 
 1. **More bits = better discrimination**: 16-20 bits should significantly outperform 8-bit for tier0 (frequent tokens) because each neuron can distinguish more patterns.
