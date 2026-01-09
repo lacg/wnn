@@ -355,10 +355,11 @@ class BenchmarkConfig:
 	early_stop_patience: int = 1
 
 	# Optimization subset sizes - multi-window sampling for diversity
-	# Both train and eval use windows sampled from across the entire corpus
+	# Train from wiki2 train, eval/dev from wiki2 test (different distribution)
 	opt_window_size: int = 200       # Size of each window (tokens)
-	opt_train_windows: int = 50      # 50 windows × 200 = 10k tokens for training
-	opt_eval_windows: int = 20       # 20 windows × 200 = 4k tokens for evaluation
+	opt_train_windows: int = 50      # 50 windows × 200 = 10k tokens for training (from wiki2 train)
+	opt_eval_windows: int = 20       # 20 windows × 200 = 4k tokens for optimizer fitness (from wiki2 test)
+	opt_dev_windows: int = 20        # 20 windows × 200 = 4k tokens for overfitting detection (from wiki2 test, different windows)
 
 	# Use windowed 10k pretrain instead of full 2.4M initial training
 	# Faster optimization iterations, full retrain at end with best connectivity
@@ -629,41 +630,54 @@ def run_benchmark(config: BenchmarkConfig):
 
 		# ========================================================================
 		# Create optimization subsets using multi-window sampling
-		# Both train and eval sample windows from across the ENTIRE corpus
-		# This ensures diversity and avoids distribution mismatch
+		# - opt_train: from wiki2 TRAIN (what we train on)
+		# - opt_eval: from wiki2 TEST (optimizer fitness - different distribution)
+		# - opt_dev: from wiki2 TEST (overfitting detection - different windows)
 		# ========================================================================
-		corpus_end = len(train_tokens) - config.opt_window_size - 10
-		total_windows_needed = config.opt_train_windows + config.opt_eval_windows
-
 		sampling_rng = rand_module.Random(42)  # Consistent seed for reproducibility
 
-		if corpus_end > config.opt_window_size * total_windows_needed:
-			# Sample all windows at once, then split between train and eval
-			all_window_starts = sampling_rng.sample(range(0, corpus_end), total_windows_needed)
-			all_window_starts.sort()  # Cache-friendly access
-
-			# Split: first N for train, rest for eval (both from same distribution)
-			train_starts = all_window_starts[:config.opt_train_windows]
-			eval_starts = all_window_starts[config.opt_train_windows:]
-
+		# Sample opt_train windows from TRAIN corpus
+		train_corpus_end = len(train_tokens) - config.opt_window_size - 10
+		if train_corpus_end > config.opt_window_size * config.opt_train_windows:
+			train_starts = sampling_rng.sample(range(0, train_corpus_end), config.opt_train_windows)
+			train_starts.sort()  # Cache-friendly access
 			opt_train_tokens = []
 			for start in train_starts:
 				opt_train_tokens.extend(train_tokens[start:start + config.opt_window_size])
+		else:
+			train_size = config.opt_train_windows * config.opt_window_size
+			opt_train_tokens = train_tokens[:train_size]
+
+		# Sample opt_eval and opt_dev windows from TEST corpus (different distribution!)
+		test_corpus_end = len(test_tokens) - config.opt_window_size - 10
+		total_test_windows = config.opt_eval_windows + config.opt_dev_windows
+
+		if test_corpus_end > config.opt_window_size * total_test_windows:
+			# Sample all test windows at once, then split between eval and dev
+			all_test_starts = sampling_rng.sample(range(0, test_corpus_end), total_test_windows)
+			all_test_starts.sort()  # Cache-friendly access
+
+			# Split: first N for eval (optimizer fitness), rest for dev (overfitting detection)
+			eval_starts = all_test_starts[:config.opt_eval_windows]
+			dev_starts = all_test_starts[config.opt_eval_windows:]
 
 			opt_eval_tokens = []
 			for start in eval_starts:
-				opt_eval_tokens.extend(train_tokens[start:start + config.opt_window_size])
+				opt_eval_tokens.extend(test_tokens[start:start + config.opt_window_size])
 
-			log(f"Multi-window train: {config.opt_train_windows} windows × {config.opt_window_size} = {len(opt_train_tokens):,} tokens")
-			log(f"Multi-window eval: {config.opt_eval_windows} windows × {config.opt_window_size} = {len(opt_eval_tokens):,} tokens")
+			opt_dev_tokens = []
+			for start in dev_starts:
+				opt_dev_tokens.extend(test_tokens[start:start + config.opt_window_size])
 		else:
-			# Fallback if corpus too small - use sequential
-			train_size = config.opt_train_windows * config.opt_window_size
+			# Fallback if test corpus too small - use sequential
 			eval_size = config.opt_eval_windows * config.opt_window_size
-			opt_train_tokens = train_tokens[:train_size]
-			opt_eval_tokens = train_tokens[train_size:train_size + eval_size]
-			log(f"Sequential train: {len(opt_train_tokens):,} tokens (corpus too small for multi-window)")
-			log(f"Sequential eval: {len(opt_eval_tokens):,} tokens")
+			dev_size = config.opt_dev_windows * config.opt_window_size
+			opt_eval_tokens = test_tokens[:eval_size]
+			opt_dev_tokens = test_tokens[eval_size:eval_size + dev_size]
+
+		log(f"Multi-window train: {config.opt_train_windows} windows × {config.opt_window_size} = {len(opt_train_tokens):,} tokens (from wiki2 train)")
+		log(f"Multi-window eval: {config.opt_eval_windows} windows × {config.opt_window_size} = {len(opt_eval_tokens):,} tokens (from wiki2 test - optimizer fitness)")
+		log(f"Multi-window dev: {config.opt_dev_windows} windows × {config.opt_window_size} = {len(opt_dev_tokens):,} tokens (from wiki2 test - overfitting detection)")
 
 		# Create evaluation function (handles both tiered and uniform)
 		def evaluate_connectivity(conn: torch.Tensor) -> float:
@@ -758,6 +772,8 @@ def run_benchmark(config: BenchmarkConfig):
 		# Compute baselines for overfitting detection
 		log("")
 		log(f"Computing baselines for overfitting detection...")
+
+		# Baseline on opt_train (from wiki2 train)
 		baseline_train_stats = model.evaluate_fast(
 			opt_train_tokens[:min(20000, len(opt_train_tokens))],
 			batch_size=config.batch_size * 2,
@@ -767,18 +783,7 @@ def run_benchmark(config: BenchmarkConfig):
 		baseline_train_ce = baseline_train_stats['cross_entropy']
 		baseline_train_ppl = baseline_train_stats['perplexity']
 
-		# Validation baseline: evaluate on validation subset
-		baseline_val_stats = model.evaluate_fast(
-			val_tokens[:min(50000, len(val_tokens))],
-			batch_size=config.batch_size * 2,
-			backend=AccelerationMode.AUTO,
-			verbose=False,
-		)
-		baseline_val_ce = baseline_val_stats['cross_entropy']
-		baseline_val_ppl = baseline_val_stats['perplexity']
-
-		# Optimization eval baseline: evaluate on opt_eval_tokens (same as GA fitness)
-		# This should match the GA initial best error
+		# Baseline on opt_eval (from wiki2 test - optimizer fitness target)
 		baseline_opt_eval_stats = model.evaluate_fast(
 			opt_eval_tokens,
 			batch_size=config.batch_size * 2,
@@ -788,14 +793,37 @@ def run_benchmark(config: BenchmarkConfig):
 		baseline_opt_eval_ce = baseline_opt_eval_stats['cross_entropy']
 		baseline_opt_eval_ppl = baseline_opt_eval_stats['perplexity']
 
-		global_baseline_ratio = baseline_val_ce / baseline_train_ce if baseline_train_ce > 0 else 1.0
+		# Baseline on opt_dev (from wiki2 test - overfitting detection, different windows)
+		baseline_opt_dev_stats = model.evaluate_fast(
+			opt_dev_tokens,
+			batch_size=config.batch_size * 2,
+			backend=AccelerationMode.AUTO,
+			verbose=False,
+		)
+		baseline_opt_dev_ce = baseline_opt_dev_stats['cross_entropy']
+		baseline_opt_dev_ppl = baseline_opt_dev_stats['perplexity']
+
+		# Baseline on val_tokens (from wiki2 validation - final evaluation only)
+		baseline_val_stats = model.evaluate_fast(
+			val_tokens[:min(50000, len(val_tokens))],
+			batch_size=config.batch_size * 2,
+			backend=AccelerationMode.AUTO,
+			verbose=False,
+		)
+		baseline_val_ce = baseline_val_stats['cross_entropy']
+		baseline_val_ppl = baseline_val_stats['perplexity']
+
+		# Baseline ratio: opt_dev vs opt_eval (both from test, should be ~1.0)
+		# If this ratio increases, optimizer is overfitting to opt_eval
+		global_baseline_ratio = baseline_opt_dev_ce / baseline_opt_eval_ce if baseline_opt_eval_ce > 0 else 1.0
 
 		log("")
 		log(f"Optimization baselines:")
-		log(f"  Train CE: {baseline_train_ce:.4f} (PPL: {baseline_train_ppl:.2f}) - opt_train_tokens")
-		log(f"  Opt Eval CE: {baseline_opt_eval_ce:.4f} (PPL: {baseline_opt_eval_ppl:.2f}) - opt_eval_tokens (GA fitness)")
-		log(f"  Val CE: {baseline_val_ce:.4f} (PPL: {baseline_val_ppl:.2f}) - val_tokens")
-		log(f"  Val/Train ratio: {global_baseline_ratio:.2f}x")
+		log(f"  Train CE: {baseline_train_ce:.4f} (PPL: {baseline_train_ppl:.2f}) - opt_train (wiki2 train)")
+		log(f"  Eval CE: {baseline_opt_eval_ce:.4f} (PPL: {baseline_opt_eval_ppl:.2f}) - opt_eval (wiki2 test - optimizer fitness)")
+		log(f"  Dev CE: {baseline_opt_dev_ce:.4f} (PPL: {baseline_opt_dev_ppl:.2f}) - opt_dev (wiki2 test - overfitting detection)")
+		log(f"  Val CE: {baseline_val_ce:.4f} (PPL: {baseline_val_ppl:.2f}) - val (wiki2 validation - final eval only)")
+		log(f"  Dev/Eval ratio: {global_baseline_ratio:.2f}x (should stay ~1.0, increase = overfitting to opt_eval)")
 
 		log("")
 		log(f"Optimization config:")
@@ -804,8 +832,10 @@ def run_benchmark(config: BenchmarkConfig):
 		log(f"  Early stop patience: {config.early_stop_patience} (checks every 5 = {(config.early_stop_patience+1)*5} gens/iters)")
 		log(f"  Overfitting thresholds: <{HEALTHY_THRESHOLD}% healthy, >{WARNING_THRESHOLD}% warn, >{SEVERE_THRESHOLD}% severe, >{CRITICAL_THRESHOLD}% stop")
 
-		# Create overfitting monitor with validation function
-		def val_eval_fn(conn: torch.Tensor) -> float:
+		# Create overfitting monitor with dev evaluation function
+		# This evaluates on opt_dev (different windows from wiki2 test) to detect
+		# if we're overfitting to opt_eval (the optimizer's fitness target)
+		def dev_eval_fn(conn: torch.Tensor) -> float:
 			if is_tiered:
 				set_combined_connections(conn)
 			else:
@@ -815,10 +845,11 @@ def run_benchmark(config: BenchmarkConfig):
 				model.train_epoch_fast_rust(opt_train_tokens, global_top_k=config.global_top_k, batch_size=config.batch_size, verbose=False)
 			else:
 				model.train_epoch_fast(opt_train_tokens, global_top_k=config.global_top_k, batch_size=config.batch_size, verbose=False)
-			return model.evaluate_fast(val_tokens[:min(50000, len(val_tokens))], batch_size=config.batch_size * 2, backend=AccelerationMode.AUTO, verbose=False)['cross_entropy']
+			# Evaluate on opt_dev (different windows from wiki2 test)
+			return model.evaluate_fast(opt_dev_tokens, batch_size=config.batch_size * 2, backend=AccelerationMode.AUTO, verbose=False)['cross_entropy']
 
 		overfitting_monitor = OverfittingMonitor(
-			validation_fn=val_eval_fn,
+			validation_fn=dev_eval_fn,
 			grace_checks=1,
 			logger=log,
 			global_baseline_ratio=global_baseline_ratio,
