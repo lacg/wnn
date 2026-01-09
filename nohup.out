@@ -1,0 +1,89 @@
+
+======================================================================
+LOG FILE: /Users/lacg/Library/Mobile Documents/com~apple~CloudDocs/Studies/research/wnn/logs/2026/01/09/ramlm_benchmark_20260109_155435.log
+======================================================================
+Tail command: tail -f "/Users/lacg/Library/Mobile Documents/com~apple~CloudDocs/Studies/research/wnn/logs/2026/01/09/ramlm_benchmark_20260109_155435.log"
+======================================================================
+
+15:54:35 | ======================================================================
+15:54:35 | RAMLM BENCHMARK - SESSION START
+15:54:35 | Timestamp: 2026-01-09 15:54:35
+15:54:35 | ======================================================================
+15:54:35 | Mode: FULL
+15:54:35 | Full data: True
+15:54:35 | Optimize: True
+15:54:35 | Strategy: GA,TS
+15:54:35 | Tiered: [(100, 12, 14), (400, 8, 12), (None, 5, 10)]
+15:54:35 | 
+15:54:35 | ======================================================================
+15:54:35 |   RAMLM Full Benchmark
+15:54:35 | ======================================================================
+15:54:35 | 
+Configuration:
+15:54:35 |   architecture: Tiered
+15:54:35 |     tier 0: 100 clusters × 12 neurons × 14 bits
+15:54:35 |     tier 1: 400 clusters × 8 neurons × 12 bits
+15:54:35 |     tier 2: rest clusters × 5 neurons × 10 bits
+15:54:35 |   context_size: 4
+15:54:35 |   global_top_k: 100
+15:54:35 |   batch_size: 500
+15:54:35 |   optimize: True
+15:54:35 |   strategy: GA,TS
+15:54:35 |   Rust available: True
+15:54:35 |   CPU cores: 16
+15:54:35 |   Metal available: True
+15:54:35 | 
+15:54:35 | --------------------------------------------------
+15:54:35 |   Loading Data
+15:54:35 | --------------------------------------------------
+15:54:35 | Loading WikiText-2 dataset...
+15:54:38 | Using GPT2 tokenizer...
+15:54:39 |   Train: 2,428,601 tokens
+15:54:39 |   Test: 287,644 tokens
+15:54:39 |   Validation: 251,048 tokens
+15:54:39 |   Vocab size: 50,257
+15:54:39 | 
+15:54:39 | --------------------------------------------------
+15:54:39 |   Computing Global Top-K
+15:54:39 | --------------------------------------------------
+15:54:39 |   Top-100 tokens cover 47.0% of training data
+15:54:39 | 
+15:54:39 | --------------------------------------------------
+15:54:39 |   Creating RAMLM Model
+15:54:39 | --------------------------------------------------
+15:54:41 |   Architecture: Tiered (3 tiers)
+15:54:41 |   Total neurons: 253,185
+15:54:41 |   Total memory cells: 287,523,840
+15:54:41 |     Tier 0: 100 clusters × 12 neurons × 14 bits
+15:54:41 |     Tier 1: 400 clusters × 8 neurons × 12 bits
+15:54:41 |     Tier 2: 49,757 clusters × 5 neurons × 10 bits
+15:54:41 |   Total input bits: 64
+15:54:41 | 
+15:54:41 | --------------------------------------------------
+15:54:41 |   Initial Training (Rust-Accelerated)
+15:54:41 | --------------------------------------------------
+15:54:41 | Training on 2,428,597 examples (batch_size=500)...
+Training on 2,428,597 examples (batch_size=500, backend=Rust)...
+  Encoding contexts...
+  Training batches (Rust)...
+     10.0% (242,500/2,428,597)
+     20.0% (485,000/2,428,597)
+     30.0% (727,500/2,428,597)
+     39.9% (970,000/2,428,597)
+     49.9% (1,212,500/2,428,597)
+     59.9% (1,455,000/2,428,597)
+     69.9% (1,697,500/2,428,597)
+     79.9% (1,940,000/2,428,597)
+     89.9% (2,182,500/2,428,597)
+     99.9% (2,425,000/2,428,597)
+Training complete. Modified 7,495,647 memory cells.
+16:26:17 |   Backend: Rust
+16:26:17 |   Training time: 1896.1s
+16:26:17 |   Modified cells: 7,495,647
+16:26:17 |   Examples: 2,428,597
+16:26:17 |   Throughput: 1,281 examples/sec
+16:26:17 | 
+16:26:17 | --------------------------------------------------
+16:26:17 |   Initial Evaluation (Validation Set)
+16:26:17 | --------------------------------------------------
+16:26:17 | Evaluating on 251,044 examples...

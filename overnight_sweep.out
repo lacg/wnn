@@ -1,0 +1,78 @@
+
+######################################################################
+# Overnight High-Capacity Sweep
+# Set: quick (4 new + 0 completed)
+# Mode: full
+# Optimization: GA,TS
+# Estimated runtime: 9.0 hours
+# Output: overnight_optimized_results.json
+######################################################################
+
+Experiments to run:
+  1. tier0_16bit: Tier0: 15 neurons, 16 bits (SPARSE) - best capacity boost
+  2. balanced_14bit: Balanced SPARSE: 14→12→10 bits gradient
+  3. neurons_20_tier0: High neurons: 20→12→7 with moderate bits
+  4. context_6_sparse: Context 6 with SPARSE tier0/tier1
+
+Starting at 2026-01-09 13:40:20
+Expected completion: ~9.0 hours
+
+
+[1/4] tier0_16bit
+
+======================================================================
+Running: tier0_16bit
+Config: 100,15,16;400,10,10;rest,5,8
+Context: 4
+Optimize: True (GA,TS)
+Description: Tier0: 15 neurons, 16 bits (SPARSE) - best capacity boost
+======================================================================
+
+ERROR: Experiment failed with return code 1
+14:17:39 | 
+14:17:39 | Optimization baselines:
+14:17:39 |   Train CE: 10.7548 (PPL: 46856.36) - opt_train_tokens
+14:17:39 |   Opt Eval CE: 10.7552 (PPL: 46873.59) - opt_eval_tokens (GA fitness)
+14:17:39 |   Val CE: 10.7610 (PPL: 47146.62) - val_tokens
+14:17:39 |   Val/Train ratio: 1.00x
+14:17:39 | 
+14:17:39 | Optimization config:
+14:17:39 |   GA: 20 pop × 50 max gens, early_stop <0.05%
+14:17:39 |   TS: 30 neighbors × 10 max iters, early_stop <0.5%
+14:17:39 |   Early stop patience: 1 (checks every 5 = 10 gens/iters)
+14:17:39 |   Overfitting thresholds: <-1.0% healthy, >0.0% warn, >1.0% severe, >3.0% stop
+14:17:39 | 
+14:17:39 | [Joint tiered] Running GA optimization (254,285 neurons, bits=[16, 10, 8])...
+Traceback (most recent call last):
+  File "/Users/lacg/Library/Mobile Documents/com~apple~CloudDocs/Studies/research/wnn/tests/ramlm_full_benchmark.py", line 1175, in <module>
+  File "/Users/lacg/Library/Mobile Documents/com~apple~CloudDocs/Studies/research/wnn/tests/ramlm_full_benchmark.py", line 847, in run_benchmark
+    	early_stop_threshold_pct=config.ga_early_stop_pct,
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	bits_per_neuron,
+    
+  File "/Users/lacg/Library/Mobile Documents/com~apple~CloudDocs/Studies/research/wnn/tests/../src/wnn/ram/strategies/connectivity/genetic_algorithm.py", line 152, in optimize
+    individual, _ = self._generate_neighbor(
+                    ~~~~~~~~~~~~~~~~~~~~~~~^
+    	connections, cfg.mutation_rate * 10,
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    	total_input_bits, num_neurons, n_bits_per_neuron
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Users/lacg/Library/Mobile Documents/com~apple~CloudDocs/Studies/research/wnn/tests/../src/wnn/ram/strategies/connectivity/base.py", line 389, in _generate_neighbor
+    old_value = int(neighbor[neuron_idx, conn_idx].item())
+                    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+IndexError: too many indices for tensor of dimension 1
+
+
+[2/4] balanced_14bit
+
+======================================================================
+Running: balanced_14bit
+Config: 100,12,14;400,8,12;rest,5,10
+Context: 4
+Optimize: True (GA,TS)
+Description: Balanced SPARSE: 14→12→10 bits gradient
+======================================================================
+

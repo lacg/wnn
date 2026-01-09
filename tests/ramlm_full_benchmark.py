@@ -93,10 +93,13 @@ def setup_logging(log_dir: str = None) -> str:
 	return LOG_FILENAME
 
 
-def log(message: str = ""):
+def log(message: str = "", flush: bool = True):
 	"""Log message to both console and file."""
 	logger = logging.getLogger('ramlm_benchmark')
 	logger.info(message)
+	if flush:
+		for handler in logger.handlers:
+			handler.flush()
 
 
 def log_separator(char: str = "=", width: int = 70):
