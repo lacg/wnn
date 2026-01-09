@@ -436,43 +436,50 @@ def print_summary_table(results: list[ExperimentResult]):
 	# Check if any results have optimization data
 	has_opt = any(r.optimization_results for r in results)
 
-	print("\n" + "="*160)
+	print("\n" + "="*200)
 	print("OVERNIGHT SWEEP RESULTS")
-	print("="*160)
+	print("="*200)
 
 	if has_opt:
 		# CE % = cross-entropy improvement (GA+TS optimizer fitness)
 		# PPL % = actual validation PPL improvement
-		print(f"\n{'Experiment':<20} {'Config':<28} {'PPL':>8} {'Acc':>6} | {'GA CE%':>7} {'TS CE%':>7} | {'Val PPL%':>8} | {'T0 PPL':>7} {'T0 Acc':>6}")
-		print("-"*160)
+		print(f"\n{'Experiment':<20} {'Config':<26} {'PPL':>7} {'Acc':>5} | {'GA%':>5} {'TS%':>5} {'Val%':>5} | {'T0 PPL':>7} {'T0 Ac':>5} {'T1 PPL':>7} {'T1 Ac':>5} {'T2 PPL':>7} {'T2 Ac':>5}")
+		print("-"*200)
 	else:
-		print(f"\n{'Experiment':<25} {'Config':<35} {'PPL':>10} {'Acc':>8} | {'T0 PPL':>9} {'T0 Acc':>7}")
-		print("-"*110)
+		print(f"\n{'Experiment':<20} {'Config':<30} {'PPL':>8} {'Acc':>6} | {'T0 PPL':>7} {'T0 Ac':>5} {'T1 PPL':>7} {'T1 Ac':>5} {'T2 PPL':>7} {'T2 Ac':>5}")
+		print("-"*150)
 
 	for r in sorted(results, key=lambda x: x.overall_ppl):
 		t0 = next((t for t in r.tier_results if t.tier == 0), None)
-		t0_ppl = f"{t0.ppl:.0f}" if t0 else "N/A"
-		t0_acc = f"{t0.accuracy:.1%}" if t0 else "N/A"
+		t1 = next((t for t in r.tier_results if t.tier == 1), None)
+		t2 = next((t for t in r.tier_results if t.tier == 2), None)
+
+		t0_ppl = f"{t0.ppl:.0f}" if t0 else "-"
+		t0_acc = f"{t0.accuracy:.1%}" if t0 else "-"
+		t1_ppl = f"{t1.ppl:.0f}" if t1 else "-"
+		t1_acc = f"{t1.accuracy:.1%}" if t1 else "-"
+		t2_ppl = f"{t2.ppl:.0f}" if t2 else "-"
+		t2_acc = f"{t2.accuracy:.1%}" if t2 else "-"
 
 		if has_opt:
 			ga_imp = ts_imp = val_imp = "-"
 			if r.optimization_results:
 				for opt in r.optimization_results:
 					if opt.strategy == "GA":
-						ga_imp = f"{opt.improvement_pct:.2f}"
+						ga_imp = f"{opt.improvement_pct:.1f}"
 					elif opt.strategy == "TS":
-						ts_imp = f"{opt.improvement_pct:.2f}"
+						ts_imp = f"{opt.improvement_pct:.1f}"
 			if r.val_ppl_improvement_pct is not None:
-				val_imp = f"{r.val_ppl_improvement_pct:.2f}"
+				val_imp = f"{r.val_ppl_improvement_pct:.1f}"
 
-			print(f"{r.name:<20} {r.config:<28} {r.overall_ppl:>8.0f} {r.overall_accuracy:>6.2%} | {ga_imp:>7} {ts_imp:>7} | {val_imp:>8} | {t0_ppl:>7} {t0_acc:>6}")
+			print(f"{r.name:<20} {r.config:<26} {r.overall_ppl:>7.0f} {r.overall_accuracy:>5.1%} | {ga_imp:>5} {ts_imp:>5} {val_imp:>5} | {t0_ppl:>7} {t0_acc:>5} {t1_ppl:>7} {t1_acc:>5} {t2_ppl:>7} {t2_acc:>5}")
 		else:
-			print(f"{r.name:<25} {r.config:<35} {r.overall_ppl:>10.1f} {r.overall_accuracy:>8.2%} | {t0_ppl:>9} {t0_acc:>7}")
+			print(f"{r.name:<20} {r.config:<30} {r.overall_ppl:>8.0f} {r.overall_accuracy:>6.1%} | {t0_ppl:>7} {t0_acc:>5} {t1_ppl:>7} {t1_acc:>5} {t2_ppl:>7} {t2_acc:>5}")
 
 	if has_opt:
-		print("-"*160)
+		print("-"*200)
 	else:
-		print("-"*110)
+		print("-"*150)
 
 	# Best result
 	best = min(results, key=lambda x: x.overall_ppl)
