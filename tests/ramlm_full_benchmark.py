@@ -118,6 +118,200 @@ except ImportError:
 	METAL_AVAILABLE = False
 
 
+# ============================================================================
+# PARALLEL TIERED CANDIDATE EVALUATOR
+# ============================================================================
+class ParallelTieredEvaluator:
+	"""
+	Prepares data and evaluates GA/TS candidates in parallel using Rust.
+
+	Supports two modes:
+	- CPU-only (16 cores via rayon): ~16x speedup
+	- Hybrid CPU+GPU (16 + 40 cores): ~32x speedup on M4 Max
+
+	The hybrid mode uses:
+	- CPU for training (DashMap is optimal for parallel writes)
+	- GPU for evaluation (Metal binary search on sparse memory)
+	"""
+
+	def __init__(
+		self,
+		model,
+		train_tokens: list[int],
+		eval_tokens: list[int],
+		global_top_k: list[int],
+		tier_configs: list[tuple[int, int, int]],  # [(end_cluster, neurons, bits), ...]
+		logger=None,
+		use_hybrid: bool = True,  # Use hybrid CPU+GPU if available
+	):
+		"""
+		Initialize evaluator with pre-encoded training/eval data.
+
+		Args:
+			model: RAMLM model (for encoding)
+			train_tokens: Training token sequence
+			eval_tokens: Evaluation token sequence
+			global_top_k: Global top-k token IDs for negative sampling
+			tier_configs: Tier configurations [(end_cluster, neurons_per_cluster, bits_per_neuron), ...]
+			logger: Optional logging function
+			use_hybrid: Use hybrid CPU+GPU evaluation if available (default True)
+		"""
+		self.model = model
+		self.tier_configs = tier_configs
+		self.num_tiers = len(tier_configs)
+		self.log = logger or print
+
+		# Check hybrid availability
+		self.use_hybrid = use_hybrid and RUST_AVAILABLE and hasattr(ram_accelerator, 'evaluate_candidates_parallel_hybrid')
+		if self.use_hybrid:
+			# Verify sparse Metal is available
+			self.use_hybrid = ram_accelerator.sparse_metal_available()
+
+		mode_str = "hybrid CPU+GPU (56 cores)" if self.use_hybrid else "CPU-only (16 cores)"
+		self.log(f"  Preparing parallel evaluator ({mode_str})...")
+
+		# Pre-encode training data
+		self._prepare_data(train_tokens, eval_tokens, global_top_k)
+
+	def _prepare_data(self, train_tokens: list[int], eval_tokens: list[int], global_top_k: list[int]):
+		"""Pre-encode all training and evaluation data."""
+		# Encode training contexts
+		train_bits = self.model.encode_sequence(train_tokens)  # [num_train, total_input_bits]
+		self.num_train = train_bits.shape[0]
+		self.total_input_bits = train_bits.shape[1]
+
+		# Flatten to list for Rust
+		self.train_input_bits = train_bits.flatten().bool().tolist()
+
+		# Training targets
+		self.train_true_clusters = train_tokens[self.model.context_size:]
+
+		# Training negatives (expand global_top_k for each example)
+		self.num_negatives = len(global_top_k)
+		self.train_false_clusters = []
+		for i in range(self.num_train):
+			self.train_false_clusters.extend(global_top_k)
+
+		# Encode evaluation contexts
+		eval_bits = self.model.encode_sequence(eval_tokens)  # [num_eval, total_input_bits]
+		self.num_eval = eval_bits.shape[0]
+		self.eval_input_bits = eval_bits.flatten().bool().tolist()
+
+		# Evaluation targets
+		self.eval_targets = eval_tokens[self.model.context_size:]
+
+		# Tier configs for Rust (flattened)
+		self.tier_configs_flat = []
+		for end_cluster, neurons, bits in self.tier_configs:
+			self.tier_configs_flat.extend([end_cluster, neurons, bits])
+
+		# Compute connection size per candidate
+		self.conn_size_per_candidate = 0
+		for end_cluster, neurons, bits in self.tier_configs:
+			# Each tier contributes: num_clusters_in_tier * neurons * bits
+			start = 0 if len(self.tier_configs_flat) <= 3 else self.tier_configs[self.tier_configs.index((end_cluster, neurons, bits)) - 1][0] if self.tier_configs.index((end_cluster, neurons, bits)) > 0 else 0
+			# Actually, we need cumulative neuron count * bits
+			pass  # Will compute below
+
+		# Compute total neurons and connection size
+		self.num_clusters = self.model.vocab_size
+		total_neurons = 0
+		start_cluster = 0
+		for end_cluster, neurons_per_cluster, bits in self.tier_configs:
+			num_tier_clusters = end_cluster - start_cluster
+			total_neurons += num_tier_clusters * neurons_per_cluster
+			start_cluster = end_cluster
+
+		# Connection size: sum of (neurons_in_tier * bits_per_neuron) for all tiers
+		# For simplicity, use the model's flattened connection size
+		# Each candidate's connections are flattened: [neuron_0_connections, neuron_1_connections, ...]
+		# where each neuron has bits_per_neuron connections
+
+		# For tiered, we need variable-length per neuron based on tier
+		# But for Rust, we flatten with proper indexing
+		# The Rust code expects connections laid out per-neuron with each neuron's bits_per_neuron
+		self._compute_conn_layout()
+
+		self.log(f"    Train: {self.num_train:,} examples, {len(self.train_input_bits):,} bits")
+		self.log(f"    Eval: {self.num_eval:,} examples")
+		self.log(f"    Negatives: {self.num_negatives}")
+		self.log(f"    Total neurons: {total_neurons:,}")
+		self.log(f"    Connection size per candidate: {self.conn_size_per_candidate:,}")
+
+	def _compute_conn_layout(self):
+		"""Compute connection layout for tiered architecture."""
+		# For each neuron, we need bits_per_neuron connections
+		# Neurons are organized by tier: tier0 neurons, then tier1 neurons, etc.
+		self.conn_size_per_candidate = 0
+		start_cluster = 0
+		for end_cluster, neurons_per_cluster, bits_per_neuron in self.tier_configs:
+			num_tier_clusters = end_cluster - start_cluster
+			num_tier_neurons = num_tier_clusters * neurons_per_cluster
+			self.conn_size_per_candidate += num_tier_neurons * bits_per_neuron
+			start_cluster = end_cluster
+
+	def evaluate_candidates(self, candidates: list[torch.Tensor]) -> list[float]:
+		"""
+		Evaluate multiple candidate connectivities in parallel.
+
+		Args:
+			candidates: List of connectivity tensors
+
+		Returns:
+			List of cross-entropy scores (lower is better)
+		"""
+		if not RUST_AVAILABLE:
+			raise RuntimeError("Rust accelerator not available for parallel evaluation")
+
+		num_candidates = len(candidates)
+
+		# Flatten all candidates into single array
+		# Each candidate's connections need to be laid out correctly for tiered architecture
+		candidates_flat = []
+		for conn in candidates:
+			candidates_flat.extend(conn.flatten().tolist())
+
+		# Call Rust parallel evaluation (hybrid or CPU-only)
+		if self.use_hybrid:
+			results = ram_accelerator.evaluate_candidates_parallel_hybrid(
+				candidates_flat,
+				num_candidates,
+				self.conn_size_per_candidate,
+				self.train_input_bits,
+				self.train_true_clusters,
+				self.train_false_clusters,
+				self.eval_input_bits,
+				self.eval_targets,
+				self.tier_configs_flat,
+				self.num_tiers,
+				self.num_train,
+				self.num_eval,
+				self.total_input_bits,
+				self.num_clusters,
+				self.num_negatives,
+			)
+		else:
+			results = ram_accelerator.evaluate_candidates_parallel_tiered(
+				candidates_flat,
+				num_candidates,
+				self.conn_size_per_candidate,
+				self.train_input_bits,
+				self.train_true_clusters,
+				self.train_false_clusters,
+				self.eval_input_bits,
+				self.eval_targets,
+				self.tier_configs_flat,
+				self.num_tiers,
+				self.num_train,
+				self.num_eval,
+				self.total_input_bits,
+				self.num_clusters,
+				self.num_negatives,
+			)
+
+		return results
+
+
 @dataclass
 class BenchmarkConfig:
 	"""Configuration for RAMLM benchmark."""
@@ -169,6 +363,9 @@ class BenchmarkConfig:
 
 	# Per-tier metrics tracking (for tiered architectures)
 	per_tier: bool = False
+
+	# Acceleration mode
+	cpu_only: bool = False  # Force CPU-only (disable hybrid CPU+GPU)
 
 
 def load_wikitext2(tokenizer_type: TokenizerType = TokenizerType.GPT2,
@@ -377,16 +574,14 @@ def run_benchmark(config: BenchmarkConfig):
 		# For tiered models, use JOINT optimization (all tiers together)
 		# This is ~3x faster than per-tier optimization because we only train once per evaluation
 		if config.tiers:
-			# Verify all tiers have same bits_per_neuron (required for joint optimization)
-			bits_per_neuron = model.layer.tier_configs[0].bits_per_neuron
-			if not all(tc.bits_per_neuron == bits_per_neuron for tc in model.layer.tier_configs):
-				raise ValueError(
-					f"Joint optimization requires all tiers to have same bits_per_neuron. "
-					f"Got: {[tc.bits_per_neuron for tc in model.layer.tier_configs]}"
-				)
-
 			num_neurons = model.layer.total_neurons
-			log(f"Joint tiered optimization: {len(model.layer.tier_configs)} tiers → {num_neurons:,} neurons × {bits_per_neuron} bits")
+			bits_per_tier = [tc.bits_per_neuron for tc in model.layer.tier_configs]
+			is_variable_bits = len(set(bits_per_tier)) > 1
+
+			if is_variable_bits:
+				log(f"Joint tiered optimization: {len(model.layer.tier_configs)} tiers → {num_neurons:,} neurons (variable bits: {bits_per_tier})")
+			else:
+				log(f"Joint tiered optimization: {len(model.layer.tier_configs)} tiers → {num_neurons:,} neurons × {bits_per_tier[0]} bits")
 
 			# Find max widths for alignment
 			max_clusters = max(tc.cluster_count for tc in model.layer.tier_configs)
@@ -399,23 +594,29 @@ def run_benchmark(config: BenchmarkConfig):
 				log(f"  Tier {tier_idx}: {tc.cluster_count:>{cw},} clusters × {tc.neurons_per_cluster:>{nw}} neurons × {tc.bits_per_neuron} bits = {tc.total_neurons:>{tw},} neurons")
 
 			# Helper functions to get/set combined connectivity across all tiers
+			# FLATTEN to 1D to handle variable bits_per_neuron across tiers
 			def get_combined_connections() -> torch.Tensor:
-				"""Concatenate all tier connectivities into one tensor."""
-				return torch.cat([mem.connections for mem in model.layer.tier_memories], dim=0)
+				"""Concatenate all tier connectivities into one flattened tensor."""
+				return torch.cat([mem.connections.flatten() for mem in model.layer.tier_memories])
 
 			def set_combined_connections(combined: torch.Tensor) -> None:
-				"""Split combined tensor and set each tier's connectivity."""
+				"""Split flattened tensor and reshape each tier's connectivity."""
 				offset = 0
 				for tc, mem in zip(model.layer.tier_configs, model.layer.tier_memories):
-					mem.connections = combined[offset:offset + tc.total_neurons].clone()
-					offset += tc.total_neurons
+					size = tc.total_neurons * tc.bits_per_neuron
+					mem.connections = combined[offset:offset + size].view(tc.total_neurons, tc.bits_per_neuron).clone()
+					offset += size
 
 			is_tiered = True
+			# For GA/TS mutation bounds, use max bits (connections are bounded by total_input_bits anyway)
+			bits_per_neuron = max(bits_per_tier)
 		else:
 			# Uniform model - single layer
 			num_neurons = model.layer.total_neurons
 			bits_per_neuron = model.layer.bits_per_neuron
+			bits_per_tier = [bits_per_neuron]
 			is_tiered = False
+			is_variable_bits = False
 
 		# Current connections (combined for tiered, direct for uniform)
 		if is_tiered:
@@ -495,8 +696,37 @@ def run_benchmark(config: BenchmarkConfig):
 			)
 			return stats['cross_entropy']
 
+		# Create parallel evaluator for tiered architectures (HUGE speedup)
+		parallel_evaluator = None
+		if is_tiered and RUST_AVAILABLE and hasattr(ram_accelerator, 'evaluate_candidates_parallel_tiered'):
+			try:
+				# Build tier configs for Rust: [(end_cluster, neurons_per_cluster, bits_per_neuron), ...]
+				rust_tier_configs = []
+				for tc in model.layer.tier_configs:
+					rust_tier_configs.append((tc.cluster_end, tc.neurons_per_cluster, tc.bits_per_neuron))
+
+				parallel_evaluator = ParallelTieredEvaluator(
+					model=model,
+					train_tokens=opt_train_tokens,
+					eval_tokens=opt_eval_tokens,
+					global_top_k=list(model._global_top_k) if model._global_top_k else list(range(config.global_top_k)),
+					tier_configs=rust_tier_configs,
+					logger=log,
+					use_hybrid=not config.cpu_only,  # Use hybrid unless --cpu-only
+				)
+				mode_cores = "16 CPU" if config.cpu_only else "56 CPU+GPU"
+				log(f"  Parallel evaluator ready ({mode_cores} cores)")
+			except Exception as e:
+				log(f"  WARNING: Failed to create parallel evaluator: {e}")
+				log(f"  Falling back to sequential evaluation")
+				parallel_evaluator = None
+
 		# Batch evaluation function
-		def batch_evaluate(connectivities: list, **kwargs) -> list:
+		def batch_evaluate(connectivities: list, **_kwargs) -> list:
+			# Use parallel evaluator if available (16x speedup for tiered architectures)
+			if parallel_evaluator is not None and len(connectivities) > 1:
+				return parallel_evaluator.evaluate_candidates(connectivities)
+			# Fallback to sequential evaluation
 			return [evaluate_connectivity(conn) for conn in connectivities]
 
 		# If using windowed pretrain, train on 10k subset first for baseline
@@ -595,7 +825,11 @@ def run_benchmark(config: BenchmarkConfig):
 		arch_label = "Joint tiered" if is_tiered else "Uniform"
 		for strategy_name in strategies:
 			log("")
-			log(f"[{arch_label}] Running {strategy_name} optimization ({num_neurons:,} neurons × {bits_per_neuron} bits)...")
+			if is_tiered and is_variable_bits:
+				log(f"[{arch_label}] Running {strategy_name} optimization ({num_neurons:,} neurons, bits={bits_per_tier})...")
+			else:
+				bits_str = bits_per_tier[0] if is_tiered else bits_per_neuron
+				log(f"[{arch_label}] Running {strategy_name} optimization ({num_neurons:,} neurons × {bits_str} bits)...")
 
 			start = time.perf_counter()
 
@@ -828,8 +1062,8 @@ if __name__ == "__main__":
 		help="Run connectivity optimization after initial training")
 	parser.add_argument("--windowed-pretrain", action="store_true",
 		help="Use windowed 10k pretrain instead of full 2.4M initial training (faster optimization)")
-	parser.add_argument("--strategy", type=str, default="TS",
-		help="Optimization strategy: GA, TS, SA, or comma-separated sequence like GA,TS (default: TS)")
+	parser.add_argument("--strategy", type=str, default="GA,TS",
+		help="Optimization strategy: GA, TS, SA, or comma-separated sequence like GA,TS (default: GA,TS)")
 
 	# Optimization parameters
 	parser.add_argument("--ts-iters", type=int, default=None,
@@ -844,6 +1078,10 @@ if __name__ == "__main__":
 	# Evaluation options
 	parser.add_argument("--per-tier", action="store_true",
 		help="Track per-tier PPL and accuracy (only for tiered architectures)")
+
+	# Acceleration options
+	parser.add_argument("--cpu-only", action="store_true",
+		help="Force CPU-only evaluation (disable hybrid CPU+GPU). Default uses hybrid if available.")
 
 	args = parser.parse_args()
 
@@ -870,6 +1108,7 @@ if __name__ == "__main__":
 	config.strategy = args.strategy
 	config.windowed_pretrain = args.windowed_pretrain
 	config.per_tier = args.per_tier
+	config.cpu_only = args.cpu_only
 
 	if args.mode == "fast":
 		# Quick test with smaller data

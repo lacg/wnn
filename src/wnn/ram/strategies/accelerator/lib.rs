@@ -1187,6 +1187,221 @@ fn sparse_forward_batch(
     })
 }
 
+/// Evaluate multiple connectivity patterns in parallel (for GA/TS optimization)
+///
+/// This is the KEY function for accelerating GA/TS optimization.
+/// Instead of evaluating candidates sequentially in Python, this evaluates
+/// all candidates in parallel using rayon, with each candidate getting
+/// its own fresh sparse memory.
+///
+/// Expected speedup: 8-16x on 16-core M4 Max
+///
+/// Args:
+///   candidates_flat: Flattened connectivity patterns [num_candidates * num_neurons * bits_per_neuron]
+///   num_candidates: Number of candidate patterns
+///   train_input_bits: Training input bits [num_train * total_input_bits]
+///   train_true_clusters: Target clusters for training [num_train]
+///   train_false_clusters: Negative clusters for training [num_train * num_negatives]
+///   eval_input_bits: Evaluation input bits [num_eval * total_input_bits]
+///   eval_targets: Target clusters for evaluation [num_eval]
+///   num_train_examples: Number of training examples
+///   num_eval_examples: Number of evaluation examples
+///   total_input_bits: Total input bits (context_size * bits_per_token)
+///   bits_per_neuron: Bits per neuron for this layer
+///   neurons_per_cluster: Neurons per output cluster
+///   num_clusters: Number of output clusters (vocab_size)
+///   num_negatives: Number of negative samples per training example
+///
+/// Returns: Cross-entropy for each candidate [num_candidates]
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn evaluate_candidates_parallel(
+    py: Python<'_>,
+    candidates_flat: Vec<i64>,
+    num_candidates: usize,
+    train_input_bits: Vec<bool>,
+    train_true_clusters: Vec<i64>,
+    train_false_clusters: Vec<i64>,
+    eval_input_bits: Vec<bool>,
+    eval_targets: Vec<i64>,
+    num_train_examples: usize,
+    num_eval_examples: usize,
+    total_input_bits: usize,
+    bits_per_neuron: usize,
+    neurons_per_cluster: usize,
+    num_clusters: usize,
+    num_negatives: usize,
+) -> PyResult<Vec<f64>> {
+    py.allow_threads(|| {
+        let results = sparse_memory::evaluate_candidates_parallel(
+            &candidates_flat,
+            num_candidates,
+            &train_input_bits,
+            &train_true_clusters,
+            &train_false_clusters,
+            &eval_input_bits,
+            &eval_targets,
+            num_train_examples,
+            num_eval_examples,
+            total_input_bits,
+            bits_per_neuron,
+            neurons_per_cluster,
+            num_clusters,
+            num_negatives,
+        );
+        Ok(results)
+    })
+}
+
+/// Evaluate multiple TIERED connectivity patterns in parallel (for GA/TS optimization)
+///
+/// This is the KEY function for accelerating GA/TS optimization with tiered architectures.
+/// Each candidate gets its own fresh tiered sparse memory, and all candidates are
+/// evaluated in parallel using rayon.
+///
+/// Expected speedup: 8-16x on 16-core M4 Max (evaluating 50 candidates in parallel)
+///
+/// Args:
+///   candidates_flat: Flattened connectivity patterns [num_candidates * conn_size_per_candidate]
+///   num_candidates: Number of candidate patterns to evaluate
+///   conn_size_per_candidate: Size of connections per candidate (sum of all tier neuron*bits)
+///   train_input_bits: Pre-encoded training input bits [num_train * total_input_bits]
+///   train_true_clusters: Target cluster indices for training [num_train]
+///   train_false_clusters: Negative cluster indices for training [num_train * num_negatives]
+///   eval_input_bits: Pre-encoded evaluation input bits [num_eval * total_input_bits]
+///   eval_targets: Target cluster indices for evaluation [num_eval]
+///   tier_configs_flat: Flattened tier configs [num_tiers * 3]: (end_cluster, neurons_per_cluster, bits_per_neuron)
+///   num_tiers: Number of tiers
+///   num_train_examples: Number of training examples
+///   num_eval_examples: Number of evaluation examples
+///   total_input_bits: Total input bits (context_size * bits_per_token)
+///   num_clusters: Total number of output clusters (vocab_size)
+///   num_negatives: Number of negative samples per training example
+///
+/// Returns: Cross-entropy for each candidate [num_candidates]
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn evaluate_candidates_parallel_tiered(
+    py: Python<'_>,
+    candidates_flat: Vec<i64>,
+    num_candidates: usize,
+    conn_size_per_candidate: usize,
+    train_input_bits: Vec<bool>,
+    train_true_clusters: Vec<i64>,
+    train_false_clusters: Vec<i64>,
+    eval_input_bits: Vec<bool>,
+    eval_targets: Vec<i64>,
+    tier_configs_flat: Vec<i64>,
+    num_tiers: usize,
+    num_train_examples: usize,
+    num_eval_examples: usize,
+    total_input_bits: usize,
+    num_clusters: usize,
+    num_negatives: usize,
+) -> PyResult<Vec<f64>> {
+    py.allow_threads(|| {
+        // Convert flat tier configs to tuple format
+        let tier_configs: Vec<(usize, usize, usize)> = (0..num_tiers)
+            .map(|i| {
+                let base = i * 3;
+                (
+                    tier_configs_flat[base] as usize,      // end_cluster
+                    tier_configs_flat[base + 1] as usize,  // neurons_per_cluster
+                    tier_configs_flat[base + 2] as usize,  // bits_per_neuron
+                )
+            })
+            .collect();
+
+        let results = sparse_memory::evaluate_candidates_parallel_tiered(
+            &candidates_flat,
+            num_candidates,
+            conn_size_per_candidate,
+            &train_input_bits,
+            &train_true_clusters,
+            &train_false_clusters,
+            &eval_input_bits,
+            &eval_targets,
+            &tier_configs,
+            num_train_examples,
+            num_eval_examples,
+            total_input_bits,
+            num_clusters,
+            num_negatives,
+        );
+        Ok(results)
+    })
+}
+
+/// Evaluate multiple TIERED connectivity patterns using HYBRID CPU+GPU (56 cores on M4 Max)
+///
+/// This is the ULTIMATE acceleration for GA/TS optimization:
+/// - Training: CPU with DashMap (optimal for parallel writes)
+/// - Evaluation: GPU with Metal binary search (massive parallelism)
+/// - Candidates: Processed in parallel via rayon
+///
+/// Expected speedup: 20-40x on M4 Max (16 CPU + 40 GPU cores)
+///
+/// Args: Same as evaluate_candidates_parallel_tiered
+/// Returns: Cross-entropy for each candidate [num_candidates]
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn evaluate_candidates_parallel_hybrid(
+    py: Python<'_>,
+    candidates_flat: Vec<i64>,
+    num_candidates: usize,
+    conn_size_per_candidate: usize,
+    train_input_bits: Vec<bool>,
+    train_true_clusters: Vec<i64>,
+    train_false_clusters: Vec<i64>,
+    eval_input_bits: Vec<bool>,
+    eval_targets: Vec<i64>,
+    tier_configs_flat: Vec<i64>,
+    num_tiers: usize,
+    num_train_examples: usize,
+    num_eval_examples: usize,
+    total_input_bits: usize,
+    num_clusters: usize,
+    num_negatives: usize,
+) -> PyResult<Vec<f64>> {
+    py.allow_threads(|| {
+        // Convert flat tier configs to tuple format
+        let tier_configs: Vec<(usize, usize, usize)> = (0..num_tiers)
+            .map(|i| {
+                let base = i * 3;
+                (
+                    tier_configs_flat[base] as usize,      // end_cluster
+                    tier_configs_flat[base + 1] as usize,  // neurons_per_cluster
+                    tier_configs_flat[base + 2] as usize,  // bits_per_neuron
+                )
+            })
+            .collect();
+
+        let results = sparse_memory::evaluate_candidates_parallel_hybrid(
+            &candidates_flat,
+            num_candidates,
+            conn_size_per_candidate,
+            &train_input_bits,
+            &train_true_clusters,
+            &train_false_clusters,
+            &eval_input_bits,
+            &eval_targets,
+            &tier_configs,
+            num_train_examples,
+            num_eval_examples,
+            total_input_bits,
+            num_clusters,
+            num_negatives,
+        );
+        Ok(results)
+    })
+}
+
+/// Check if sparse Metal GPU is available
+#[pyfunction]
+fn sparse_metal_available() -> bool {
+    metal_ramlm::MetalSparseEvaluator::new().is_ok()
+}
+
 /// Python module definition
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -1226,5 +1441,12 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SparseMemory>()?;
     m.add_function(wrap_pyfunction!(sparse_train_batch, m)?)?;
     m.add_function(wrap_pyfunction!(sparse_forward_batch, m)?)?;
+    // Parallel GA/TS candidate evaluation (KEY optimization)
+    m.add_function(wrap_pyfunction!(evaluate_candidates_parallel, m)?)?;
+    // Parallel GA/TS for TIERED architectures (16 cores parallel)
+    m.add_function(wrap_pyfunction!(evaluate_candidates_parallel_tiered, m)?)?;
+    // Parallel GA/TS HYBRID CPU+GPU (56 cores - ULTIMATE optimization)
+    m.add_function(wrap_pyfunction!(evaluate_candidates_parallel_hybrid, m)?)?;
+    m.add_function(wrap_pyfunction!(sparse_metal_available, m)?)?;
     Ok(())
 }

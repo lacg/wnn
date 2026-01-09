@@ -25,6 +25,9 @@ objc = "0.2"
 # Fast hash maps
 rustc-hash = "1.1"
 
+# Lock-free concurrent HashMap (faster than RwLock<FxHashMap>)
+dashmap = "6.1"
+
 # For bit manipulation
 bitvec = "1.0"
 
