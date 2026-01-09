@@ -1481,6 +1481,122 @@ fn evaluate_candidates_parallel_hybrid(
     })
 }
 
+/// Hybrid CPU+GPU evaluation with explicit memory budget
+///
+/// Same as evaluate_candidates_parallel_hybrid but with memory_budget_gb parameter
+/// to control memory usage. Use this when you want to limit RAM consumption.
+///
+/// Args:
+///   memory_budget_gb: Maximum memory to use for sparse memory pool (in GB).
+///                     If None, auto-detects and uses 60% of available RAM.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn evaluate_candidates_parallel_hybrid_with_budget(
+    py: Python<'_>,
+    candidates_flat: Vec<i64>,
+    num_candidates: usize,
+    conn_size_per_candidate: usize,
+    train_input_bits: Vec<bool>,
+    train_true_clusters: Vec<i64>,
+    train_false_clusters: Vec<i64>,
+    eval_input_bits: Vec<bool>,
+    eval_targets: Vec<i64>,
+    tier_configs_flat: Vec<i64>,
+    num_tiers: usize,
+    num_train_examples: usize,
+    num_eval_examples: usize,
+    total_input_bits: usize,
+    num_clusters: usize,
+    num_negatives: usize,
+    memory_budget_gb: Option<f64>,
+) -> PyResult<Vec<f64>> {
+    py.allow_threads(|| {
+        // Convert flat tier configs to tuple format
+        let tier_configs: Vec<(usize, usize, usize)> = (0..num_tiers)
+            .map(|i| {
+                let base = i * 3;
+                (
+                    tier_configs_flat[base] as usize,      // end_cluster
+                    tier_configs_flat[base + 1] as usize,  // neurons_per_cluster
+                    tier_configs_flat[base + 2] as usize,  // bits_per_neuron
+                )
+            })
+            .collect();
+
+        let results = match memory_budget_gb {
+            Some(budget) => sparse_memory::evaluate_candidates_parallel_hybrid_with_budget(
+                &candidates_flat,
+                num_candidates,
+                conn_size_per_candidate,
+                &train_input_bits,
+                &train_true_clusters,
+                &train_false_clusters,
+                &eval_input_bits,
+                &eval_targets,
+                &tier_configs,
+                num_train_examples,
+                num_eval_examples,
+                total_input_bits,
+                num_clusters,
+                num_negatives,
+                budget,
+            ),
+            None => sparse_memory::evaluate_candidates_parallel_hybrid(
+                &candidates_flat,
+                num_candidates,
+                conn_size_per_candidate,
+                &train_input_bits,
+                &train_true_clusters,
+                &train_false_clusters,
+                &eval_input_bits,
+                &eval_targets,
+                &tier_configs,
+                num_train_examples,
+                num_eval_examples,
+                total_input_bits,
+                num_clusters,
+                num_negatives,
+            ),
+        };
+        Ok(results)
+    })
+}
+
+/// Get estimated memory per sparse memory object (for debugging/tuning)
+#[pyfunction]
+fn estimate_sparse_memory_gb(
+    tier_configs_flat: Vec<i64>,
+    num_tiers: usize,
+    num_clusters: usize,
+    num_train_examples: usize,
+    num_negatives: usize,
+) -> f64 {
+    let tier_configs: Vec<(usize, usize, usize)> = (0..num_tiers)
+        .map(|i| {
+            let base = i * 3;
+            (
+                tier_configs_flat[base] as usize,
+                tier_configs_flat[base + 1] as usize,
+                tier_configs_flat[base + 2] as usize,
+            )
+        })
+        .collect();
+
+    let bytes = sparse_memory::estimate_memory_per_tiered_sparse(
+        &tier_configs,
+        num_clusters,
+        num_train_examples,
+        num_negatives,
+    );
+    bytes as f64 / (1024.0 * 1024.0 * 1024.0)
+}
+
+/// Get available system memory in GB
+#[pyfunction]
+fn get_system_memory_gb() -> f64 {
+    sparse_memory::get_available_memory_gb()
+}
+
 /// Check if sparse Metal GPU is available
 #[pyfunction]
 fn sparse_metal_available() -> bool {
@@ -1531,8 +1647,13 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(evaluate_candidates_parallel, m)?)?;
     // Parallel GA/TS for TIERED architectures (16 cores parallel)
     m.add_function(wrap_pyfunction!(evaluate_candidates_parallel_tiered, m)?)?;
-    // Parallel GA/TS HYBRID CPU+GPU (56 cores - ULTIMATE optimization)
+    // Parallel GA/TS HYBRID CPU+GPU (memory-adaptive, pipelined)
     m.add_function(wrap_pyfunction!(evaluate_candidates_parallel_hybrid, m)?)?;
+    // Hybrid with explicit memory budget
+    m.add_function(wrap_pyfunction!(evaluate_candidates_parallel_hybrid_with_budget, m)?)?;
+    // Memory estimation utilities
+    m.add_function(wrap_pyfunction!(estimate_sparse_memory_gb, m)?)?;
+    m.add_function(wrap_pyfunction!(get_system_memory_gb, m)?)?;
     m.add_function(wrap_pyfunction!(sparse_metal_available, m)?)?;
     Ok(())
 }

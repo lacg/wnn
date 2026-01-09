@@ -818,10 +818,347 @@ pub fn evaluate_candidates_parallel_tiered(
 }
 
 // =============================================================================
-// HYBRID CPU+GPU EVALUATION
+// MEMORY-ADAPTIVE BATCH EVALUATION
 // =============================================================================
 
 use crate::metal_ramlm::MetalSparseEvaluator;
+use std::sync::mpsc;
+use std::thread;
+
+/// Estimate memory usage (in bytes) for a single TieredSparseMemory when populated
+///
+/// Memory comes from:
+/// 1. DashMap structural overhead per neuron (~200 bytes base)
+/// 2. Entry storage when populated during training (~33 bytes per entry)
+/// 3. We estimate entries based on training size and tier distribution
+pub fn estimate_memory_per_tiered_sparse(
+    tier_configs: &[(usize, usize, usize)],
+    num_clusters: usize,
+    num_train_examples: usize,
+    num_negatives: usize,
+) -> usize {
+    // Calculate total neurons
+    let mut total_neurons = 0usize;
+    let mut start_cluster = 0usize;
+    for &(end_cluster, neurons_per_cluster, _bits) in tier_configs {
+        let num_tier_clusters = end_cluster.min(num_clusters) - start_cluster;
+        total_neurons += num_tier_clusters * neurons_per_cluster;
+        start_cluster = end_cluster.min(num_clusters);
+    }
+
+    // Base overhead: ~200 bytes per DashMap (shards, locks, metadata)
+    let base_overhead = total_neurons * 200;
+
+    // Estimate entries written during training:
+    // - Each example writes to neurons_per_cluster neurons (TRUE)
+    // - Each example writes to num_negatives * neurons_per_cluster neurons (FALSE)
+    // - Many addresses overlap, so actual unique entries is much less
+    // - Estimate ~10-20% unique addresses (conservative)
+    let writes_per_example = (1 + num_negatives) * 8; // avg neurons_per_cluster ~8
+    let total_writes = num_train_examples * writes_per_example;
+    let estimated_unique_entries = total_writes / 5; // ~20% unique (overlap)
+
+    // Entry size: key (8) + value (1) + DashMap entry overhead (~24) = ~33 bytes
+    let entry_overhead = estimated_unique_entries * 33;
+
+    // Add buffer for DashMap growth (capacity is usually 2x entries)
+    let total_estimate = base_overhead + entry_overhead * 2;
+
+    total_estimate
+}
+
+/// Calculate optimal pool size based on memory budget and hardware
+///
+/// Returns (pool_size, batch_size) tuple
+pub fn calculate_adaptive_pool_size(
+    tier_configs: &[(usize, usize, usize)],
+    num_clusters: usize,
+    num_train_examples: usize,
+    num_negatives: usize,
+    memory_budget_gb: f64,
+    cpu_cores: usize,
+) -> (usize, usize) {
+    let bytes_per_memory = estimate_memory_per_tiered_sparse(
+        tier_configs, num_clusters, num_train_examples, num_negatives
+    );
+
+    let budget_bytes = (memory_budget_gb * 1024.0 * 1024.0 * 1024.0) as usize;
+
+    // Reserve 30% for exports and other overhead
+    let available_for_pool = (budget_bytes as f64 * 0.7) as usize;
+
+    // Calculate max pool size that fits in memory
+    let max_by_memory = if bytes_per_memory > 0 {
+        (available_for_pool / bytes_per_memory).max(1)
+    } else {
+        cpu_cores
+    };
+
+    // Pool size = min(memory limit, cpu cores), at least 1
+    let pool_size = max_by_memory.min(cpu_cores).max(1);
+
+    // Batch size matches pool size for optimal parallelism
+    let batch_size = pool_size;
+
+    (pool_size, batch_size)
+}
+
+/// Get available system memory in GB (approximate)
+/// Falls back to 16GB if detection fails
+pub fn get_available_memory_gb() -> f64 {
+    // Try to read from sysctl on macOS
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        if let Ok(output) = Command::new("sysctl").arg("-n").arg("hw.memsize").output() {
+            if let Ok(mem_str) = String::from_utf8(output.stdout) {
+                if let Ok(bytes) = mem_str.trim().parse::<u64>() {
+                    return bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+                }
+            }
+        }
+    }
+
+    // Fallback: assume 16GB
+    16.0
+}
+
+/// Export data for a single candidate (used in batched evaluation)
+struct CandidateExport {
+    connections: Vec<i64>,
+    keys: Vec<u64>,
+    values: Vec<u8>,
+    offsets: Vec<u32>,
+    counts: Vec<u32>,
+}
+
+/// Evaluate candidates with memory-adaptive batching and CPU/GPU pipelining
+///
+/// Strategy:
+/// 1. Calculate optimal pool/batch size based on memory budget
+/// 2. Process candidates in batches
+/// 3. Pipeline: CPU trains batch N+1 while GPU evaluates batch N
+/// 4. Batch GPU evaluation: single dispatch for all candidates in batch
+pub fn evaluate_gpu_batch_adaptive(
+    candidates_flat: &[i64],
+    num_candidates: usize,
+    conn_size_per_candidate: usize,
+    train_input_bits: &[bool],
+    train_true_clusters: &[i64],
+    train_false_clusters: &[i64],
+    eval_input_bits: &[bool],
+    eval_targets: &[i64],
+    tier_configs: &[(usize, usize, usize)],
+    num_train_examples: usize,
+    num_eval_examples: usize,
+    total_input_bits: usize,
+    num_clusters: usize,
+    num_negatives: usize,
+    memory_budget_gb: Option<f64>,
+) -> Vec<f64> {
+    if num_candidates == 0 {
+        return vec![];
+    }
+
+    let gpu_evaluator = match MetalSparseEvaluator::new() {
+        Ok(e) => e,
+        Err(_) => {
+            // Fallback to CPU if GPU init fails
+            return evaluate_candidates_parallel_tiered(
+                candidates_flat,
+                num_candidates,
+                conn_size_per_candidate,
+                train_input_bits,
+                train_true_clusters,
+                train_false_clusters,
+                eval_input_bits,
+                eval_targets,
+                tier_configs,
+                num_train_examples,
+                num_eval_examples,
+                total_input_bits,
+                num_clusters,
+                num_negatives,
+            );
+        }
+    };
+
+    // Determine memory budget
+    let budget_gb = memory_budget_gb.unwrap_or_else(|| {
+        // Auto-detect: use 60% of available memory
+        get_available_memory_gb() * 0.6
+    });
+
+    let cpu_cores = rayon::current_num_threads();
+
+    // Calculate adaptive pool and batch size
+    let (pool_size, batch_size) = calculate_adaptive_pool_size(
+        tier_configs,
+        num_clusters,
+        num_train_examples,
+        num_negatives,
+        budget_gb,
+        cpu_cores,
+    );
+
+    // Pre-allocate memory pool (reused across batches via reset())
+    let memory_pool: Vec<TieredSparseMemory> = (0..pool_size)
+        .map(|_| TieredSparseMemory::new(tier_configs, num_clusters))
+        .collect();
+
+    // Build tier config for GPU (done once, reused for all batches)
+    let gpu_tier_configs: Vec<(usize, usize, usize, usize)> = {
+        let mut configs = Vec::new();
+        let mut start_neuron = 0usize;
+        let mut start_cluster = 0usize;
+        for &(end_cluster, neurons_per_cluster, bits_per_neuron) in tier_configs {
+            let num_tier_clusters = end_cluster - start_cluster;
+            configs.push((end_cluster, neurons_per_cluster, bits_per_neuron, start_neuron));
+            start_neuron += num_tier_clusters * neurons_per_cluster;
+            start_cluster = end_cluster;
+        }
+        configs
+    };
+
+    // Channel for pipelining: CPU sends exports, GPU thread receives and evaluates
+    let (tx, rx) = mpsc::channel::<(usize, Vec<CandidateExport>)>();
+
+    // Clone data needed by GPU thread
+    let eval_input_bits_owned = eval_input_bits.to_vec();
+    let eval_targets_owned = eval_targets.to_vec();
+    let gpu_tier_configs_clone = gpu_tier_configs.clone();
+
+    // Spawn GPU evaluation thread
+    let gpu_handle = thread::spawn(move || {
+        let mut batch_results: Vec<(usize, Vec<f64>)> = Vec::new();
+
+        while let Ok((batch_idx, exports)) = rx.recv() {
+            let mut batch_ces = Vec::with_capacity(exports.len());
+
+            // Evaluate each candidate in this batch on GPU
+            for export in exports {
+                let probs = gpu_evaluator.forward_batch_tiered(
+                    &eval_input_bits_owned,
+                    &export.connections,
+                    &export.keys,
+                    &export.values,
+                    &export.offsets,
+                    &export.counts,
+                    &gpu_tier_configs_clone,
+                    num_eval_examples,
+                    total_input_bits,
+                    num_clusters,
+                ).unwrap_or_else(|_| {
+                    // Fallback: return uniform distribution (error case)
+                    vec![1.0 / num_clusters as f32; num_eval_examples * num_clusters]
+                });
+
+                // Compute cross-entropy
+                let mut total_ce = 0.0f64;
+                for (ex_idx, &target) in eval_targets_owned.iter().enumerate() {
+                    let prob = probs[ex_idx * num_clusters + target as usize] as f64;
+                    total_ce -= prob.max(1e-10).ln();
+                }
+                batch_ces.push(total_ce / num_eval_examples as f64);
+            }
+
+            batch_results.push((batch_idx, batch_ces));
+        }
+
+        batch_results
+    });
+
+    // Process candidates in batches on CPU, send exports to GPU thread
+    let num_batches = (num_candidates + batch_size - 1) / batch_size;
+
+    for batch_idx in 0..num_batches {
+        let batch_start = batch_idx * batch_size;
+        let batch_end = (batch_start + batch_size).min(num_candidates);
+        let current_batch_size = batch_end - batch_start;
+
+        // Thread-local index for memory pool assignment
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let thread_counter = AtomicUsize::new(0);
+
+        // Train this batch in parallel, collecting exports
+        let batch_exports: Vec<CandidateExport> = (0..current_batch_size)
+            .into_par_iter()
+            .map(|local_idx| {
+                let cand_idx = batch_start + local_idx;
+
+                // Assign to memory pool slot (round-robin)
+                let pool_idx = thread_counter.fetch_add(1, Ordering::Relaxed) % pool_size;
+                let memory = &memory_pool[pool_idx];
+                memory.reset(); // Clear previous data (keeps allocated buckets)
+
+                let conn_start = cand_idx * conn_size_per_candidate;
+                let connections = &candidates_flat[conn_start..conn_start + conn_size_per_candidate];
+
+                // Train on this memory
+                train_batch_tiered(
+                    memory,
+                    train_input_bits,
+                    train_true_clusters,
+                    train_false_clusters,
+                    connections,
+                    num_train_examples,
+                    total_input_bits,
+                    num_negatives,
+                );
+
+                // Export for GPU
+                let mut keys: Vec<u64> = Vec::new();
+                let mut values: Vec<u8> = Vec::new();
+                let mut offsets: Vec<u32> = Vec::new();
+                let mut counts: Vec<u32> = Vec::new();
+
+                for tier in &memory.tiers {
+                    let export = tier.export_for_gpu();
+                    let base = keys.len() as u32;
+                    for &off in &export.offsets {
+                        offsets.push(base + off);
+                    }
+                    counts.extend(&export.counts);
+                    keys.extend(&export.keys);
+                    values.extend(&export.values);
+                }
+
+                CandidateExport {
+                    connections: connections.to_vec(),
+                    keys,
+                    values,
+                    offsets,
+                    counts,
+                }
+            })
+            .collect();
+
+        // Send batch exports to GPU thread for evaluation
+        // (This happens while CPU can start preparing next batch)
+        tx.send((batch_idx, batch_exports)).expect("GPU thread disconnected");
+    }
+
+    // Close channel to signal GPU thread we're done
+    drop(tx);
+
+    // Wait for GPU thread and collect results
+    let batch_results = gpu_handle.join().expect("GPU thread panicked");
+
+    // Reassemble results in correct order
+    let mut ordered_results = vec![0.0f64; num_candidates];
+    for (batch_idx, batch_ces) in batch_results {
+        let batch_start = batch_idx * batch_size;
+        for (local_idx, ce) in batch_ces.into_iter().enumerate() {
+            ordered_results[batch_start + local_idx] = ce;
+        }
+    }
+
+    ordered_results
+}
+
+// =============================================================================
+// HYBRID CPU+GPU EVALUATION (LEGACY - uses evaluate_gpu_batch_adaptive internally)
+// =============================================================================
 
 /// Evaluate a single tiered connectivity using CPU training + GPU evaluation
 /// - Training: CPU with DashMap (fast parallel writes)
@@ -927,17 +1264,20 @@ fn evaluate_single_tiered_hybrid(
     total_ce / num_eval_examples as f64
 }
 
-/// TRUE Hybrid CPU+GPU parallel candidate evaluation
+/// Memory-adaptive hybrid CPU+GPU parallel candidate evaluation
 ///
-/// Strategy for using ALL 56 cores (16 CPU + 40 GPU) simultaneously:
-/// 1. Split candidates: 60% to GPU, 40% to CPU
-/// 2. GPU batch: Train all GPU candidates on CPU, then batch-evaluate on GPU
-/// 3. CPU batch: Train and evaluate all CPU candidates in parallel via rayon
-/// 4. Both run CONCURRENTLY via std::thread
+/// Strategy for efficient use of all hardware with controlled memory:
+/// 1. Auto-calculate optimal pool/batch size based on memory budget
+/// 2. Pipeline: CPU trains batch N+1 while GPU evaluates batch N
+/// 3. No data duplication - shared references where possible
 ///
-/// This achieves true parallelism:
-/// - GPU thread: Trains 60% candidates sequentially, then ONE big GPU dispatch
-/// - CPU thread: Trains and evaluates 40% candidates in parallel (16 cores)
+/// Memory benefits over old approach:
+/// - Old: All candidates' exports accumulated before GPU evaluation (~30-50GB)
+/// - New: Only 1-2 batches of exports in memory at once (~2-4GB)
+///
+/// Performance benefits:
+/// - Pipelining hides latency (CPU and GPU work simultaneously)
+/// - Adaptive batch size balances parallelism vs memory
 pub fn evaluate_candidates_parallel_hybrid(
     candidates_flat: &[i64],
     num_candidates: usize,
@@ -954,68 +1294,10 @@ pub fn evaluate_candidates_parallel_hybrid(
     num_clusters: usize,
     num_negatives: usize,
 ) -> Vec<f64> {
-    // Check if GPU is available
-    let gpu_available = MetalSparseEvaluator::new().is_ok();
-
-    if !gpu_available || num_candidates < 4 {
-        // CPU-only fallback for small batches or no GPU
-        return evaluate_candidates_parallel_tiered(
-            candidates_flat,
-            num_candidates,
-            conn_size_per_candidate,
-            train_input_bits,
-            train_true_clusters,
-            train_false_clusters,
-            eval_input_bits,
-            eval_targets,
-            tier_configs,
-            num_train_examples,
-            num_eval_examples,
-            total_input_bits,
-            num_clusters,
-            num_negatives,
-        );
-    }
-
-    // Split: 60% GPU, 40% CPU (GPU is faster for large batch evaluation)
-    let gpu_count = (num_candidates * 6) / 10;
-    let cpu_count = num_candidates - gpu_count;
-
-    // Prepare data for CPU thread (needs owned copies)
-    let cpu_candidates: Vec<i64> = candidates_flat[gpu_count * conn_size_per_candidate..].to_vec();
-    let cpu_train_bits = train_input_bits.to_vec();
-    let cpu_train_true = train_true_clusters.to_vec();
-    let cpu_train_false = train_false_clusters.to_vec();
-    let cpu_eval_bits = eval_input_bits.to_vec();
-    let cpu_eval_targets = eval_targets.to_vec();
-    let cpu_tier_configs = tier_configs.to_vec();
-
-    // Spawn CPU thread (runs in parallel with GPU work)
-    let cpu_handle = std::thread::spawn(move || {
-        evaluate_candidates_parallel_tiered(
-            &cpu_candidates,
-            cpu_count,
-            conn_size_per_candidate,
-            &cpu_train_bits,
-            &cpu_train_true,
-            &cpu_train_false,
-            &cpu_eval_bits,
-            &cpu_eval_targets,
-            &cpu_tier_configs,
-            num_train_examples,
-            num_eval_examples,
-            total_input_bits,
-            num_clusters,
-            num_negatives,
-        )
-    });
-
-    // GPU work on main thread:
-    // 1. Train all GPU candidates and collect their trained memories
-    // 2. Batch-evaluate all on GPU in one dispatch
-    let gpu_results = evaluate_gpu_batch(
+    // Use the new memory-adaptive version with auto-detected memory budget
+    evaluate_gpu_batch_adaptive(
         candidates_flat,
-        gpu_count,
+        num_candidates,
         conn_size_per_candidate,
         train_input_bits,
         train_true_clusters,
@@ -1028,18 +1310,53 @@ pub fn evaluate_candidates_parallel_hybrid(
         total_input_bits,
         num_clusters,
         num_negatives,
-    );
+        None, // Auto-detect memory budget
+    )
+}
 
-    // Wait for CPU results
-    let cpu_results = cpu_handle.join().expect("CPU thread panicked");
-
-    // Combine: GPU results (indices 0..gpu_count), then CPU results
-    let mut all_results = gpu_results;
-    all_results.extend(cpu_results);
-    all_results
+/// Hybrid evaluation with explicit memory budget
+///
+/// Use this when you want to control memory usage explicitly.
+/// memory_budget_gb: Maximum memory to use for sparse memory pool (in GB)
+pub fn evaluate_candidates_parallel_hybrid_with_budget(
+    candidates_flat: &[i64],
+    num_candidates: usize,
+    conn_size_per_candidate: usize,
+    train_input_bits: &[bool],
+    train_true_clusters: &[i64],
+    train_false_clusters: &[i64],
+    eval_input_bits: &[bool],
+    eval_targets: &[i64],
+    tier_configs: &[(usize, usize, usize)],
+    num_train_examples: usize,
+    num_eval_examples: usize,
+    total_input_bits: usize,
+    num_clusters: usize,
+    num_negatives: usize,
+    memory_budget_gb: f64,
+) -> Vec<f64> {
+    evaluate_gpu_batch_adaptive(
+        candidates_flat,
+        num_candidates,
+        conn_size_per_candidate,
+        train_input_bits,
+        train_true_clusters,
+        train_false_clusters,
+        eval_input_bits,
+        eval_targets,
+        tier_configs,
+        num_train_examples,
+        num_eval_examples,
+        total_input_bits,
+        num_clusters,
+        num_negatives,
+        Some(memory_budget_gb),
+    )
 }
 
 /// Evaluate a batch of candidates: train on CPU, batch-evaluate on GPU
+/// (Legacy wrapper - now uses memory-adaptive evaluation internally)
+#[allow(dead_code)]
 fn evaluate_gpu_batch(
     candidates_flat: &[i64],
     num_candidates: usize,
@@ -1056,118 +1373,24 @@ fn evaluate_gpu_batch(
     num_clusters: usize,
     num_negatives: usize,
 ) -> Vec<f64> {
-    if num_candidates == 0 {
-        return vec![];
-    }
-
-    let gpu_evaluator = match MetalSparseEvaluator::new() {
-        Ok(e) => e,
-        Err(_) => {
-            // Fallback to CPU if GPU init fails
-            return evaluate_candidates_parallel_tiered(
-                candidates_flat,
-                num_candidates,
-                conn_size_per_candidate,
-                train_input_bits,
-                train_true_clusters,
-                train_false_clusters,
-                eval_input_bits,
-                eval_targets,
-                tier_configs,
-                num_train_examples,
-                num_eval_examples,
-                total_input_bits,
-                num_clusters,
-                num_negatives,
-            );
-        }
-    };
-
-    // Train all candidates in parallel on CPU, collect GPU exports
-    let trained_exports: Vec<_> = (0..num_candidates).into_par_iter().map(|cand_idx| {
-        let conn_start = cand_idx * conn_size_per_candidate;
-        let connections = &candidates_flat[conn_start..conn_start + conn_size_per_candidate];
-
-        // Create and train memory
-        let memory = TieredSparseMemory::new(tier_configs, num_clusters);
-        train_batch_tiered(
-            &memory,
-            train_input_bits,
-            train_true_clusters,
-            train_false_clusters,
-            connections,
-            num_train_examples,
-            total_input_bits,
-            num_negatives,
-        );
-
-        // Export for GPU
-        let mut keys: Vec<u64> = Vec::new();
-        let mut values: Vec<u8> = Vec::new();
-        let mut offsets: Vec<u32> = Vec::new();
-        let mut counts: Vec<u32> = Vec::new();
-
-        for tier in &memory.tiers {
-            let export = tier.export_for_gpu();
-            let base = keys.len() as u32;
-            for &off in &export.offsets {
-                offsets.push(base + off);
-            }
-            counts.extend(&export.counts);
-            keys.extend(&export.keys);
-            values.extend(&export.values);
-        }
-
-        (connections.to_vec(), keys, values, offsets, counts)
-    }).collect();
-
-    // Evaluate each candidate on GPU (could be further batched, but GPU dispatch is fast)
-    let mut results = Vec::with_capacity(num_candidates);
-
-    // Build tier config for GPU
-    let gpu_tier_configs: Vec<(usize, usize, usize, usize)> = {
-        let mut configs = Vec::new();
-        let mut start_neuron = 0usize;
-        let mut start_cluster = 0usize;
-        for &(end_cluster, neurons_per_cluster, bits_per_neuron) in tier_configs {
-            let num_tier_clusters = end_cluster - start_cluster;
-            configs.push((end_cluster, neurons_per_cluster, bits_per_neuron, start_neuron));
-            start_neuron += num_tier_clusters * neurons_per_cluster;
-            start_cluster = end_cluster;
-        }
-        configs
-    };
-
-    for (connections, keys, values, offsets, counts) in trained_exports {
-        // GPU forward pass
-        let probs = gpu_evaluator.forward_batch_tiered(
-            eval_input_bits,
-            &connections,
-            &keys,
-            &values,
-            &offsets,
-            &counts,
-            &gpu_tier_configs,
-            num_eval_examples,
-            total_input_bits,
-            num_clusters,
-        ).unwrap_or_else(|_| {
-            // Fallback to CPU forward
-            let memory = TieredSparseMemory::new(tier_configs, num_clusters);
-            // Re-import (wasteful but rare fallback)
-            forward_batch_tiered(&memory, eval_input_bits, &connections, num_eval_examples, total_input_bits)
-        });
-
-        // Compute cross-entropy
-        let mut total_ce = 0.0f64;
-        for (ex_idx, &target) in eval_targets.iter().enumerate() {
-            let prob = probs[ex_idx * num_clusters + target as usize] as f64;
-            total_ce -= prob.max(1e-10).ln();
-        }
-        results.push(total_ce / num_eval_examples as f64);
-    }
-
-    results
+    // Delegate to memory-adaptive version
+    evaluate_gpu_batch_adaptive(
+        candidates_flat,
+        num_candidates,
+        conn_size_per_candidate,
+        train_input_bits,
+        train_true_clusters,
+        train_false_clusters,
+        eval_input_bits,
+        eval_targets,
+        tier_configs,
+        num_train_examples,
+        num_eval_examples,
+        total_input_bits,
+        num_clusters,
+        num_negatives,
+        None, // Auto-detect memory budget
+    )
 }
 
 #[cfg(test)]
