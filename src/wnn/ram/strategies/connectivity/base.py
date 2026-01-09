@@ -375,6 +375,10 @@ class OptimizerStrategyBase(ABC):
 		- Generate random value 0..total_input_bits-1
 		- Allows changing which input bit a connection observes
 
+		Supports both:
+		- 2D tensors: shape (num_neurons, n_bits_per_neuron) for uniform architectures
+		- 1D tensors: flattened for tiered architectures with variable bits per neuron
+
 		Returns:
 			(new_connections, move) where move = (neuron_idx, old_value, new_value)
 		"""
@@ -383,13 +387,26 @@ class OptimizerStrategyBase(ABC):
 		neighbor = connections.clone()
 		last_move = (0, 0, 0)
 
-		for neuron_idx in range(num_neurons):
-			for conn_idx in range(n_bits_per_neuron):
+		# Handle both 2D (uniform) and 1D (tiered/flattened) tensors
+		if neighbor.dim() == 1:
+			# Flattened tensor - mutate by flat index
+			total_connections = neighbor.shape[0]
+			for flat_idx in range(total_connections):
 				if random.random() < mutation_rate:
-					old_value = int(neighbor[neuron_idx, conn_idx].item())
+					old_value = int(neighbor[flat_idx].item())
 					new_value = random.randint(0, total_input_bits - 1)
-					neighbor[neuron_idx, conn_idx] = new_value
-					last_move = (neuron_idx, old_value, new_value)
+					neighbor[flat_idx] = new_value
+					# For flat tensor, use flat_idx as neuron_idx proxy
+					last_move = (flat_idx, old_value, new_value)
+		else:
+			# 2D tensor - original logic
+			for neuron_idx in range(num_neurons):
+				for conn_idx in range(n_bits_per_neuron):
+					if random.random() < mutation_rate:
+						old_value = int(neighbor[neuron_idx, conn_idx].item())
+						new_value = random.randint(0, total_input_bits - 1)
+						neighbor[neuron_idx, conn_idx] = new_value
+						last_move = (neuron_idx, old_value, new_value)
 
 		return neighbor, last_move
 
