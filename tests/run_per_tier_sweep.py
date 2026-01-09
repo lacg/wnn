@@ -59,35 +59,59 @@ class ExperimentResult:
 
 
 def parse_tier_results(output: str) -> tuple[dict, list[TierResult]]:
-	"""Parse the benchmark output to extract per-tier results."""
+	"""Parse the benchmark output to extract per-tier results.
+
+	Handles timestamped log output like:
+		21:50:53 |   Test PPL: 43339.71
+		21:50:53 | Tier 0          100       11    47.5%      38173.3    16.21%
+	"""
+	import re
 	lines = output.split('\n')
 
 	overall = {'ppl': 0.0, 'accuracy': 0.0}
 	tier_results = []
 
-	# Find overall results
+	# Find overall results - use regex to handle timestamp prefix
+	# Match pattern like "Test PPL: 43339.71" anywhere in line
 	for line in lines:
-		if 'Test PPL:' in line:
-			overall['ppl'] = float(line.split(':')[1].strip())
-		elif 'Test Acc:' in line:
-			acc_str = line.split(':')[1].strip().replace('%', '')
-			overall['accuracy'] = float(acc_str) / 100
+		ppl_match = re.search(r'Test PPL:\s*([\d.]+)', line)
+		if ppl_match:
+			overall['ppl'] = float(ppl_match.group(1))
+
+		acc_match = re.search(r'Test Acc:\s*([\d.]+)%', line)
+		if acc_match:
+			overall['accuracy'] = float(acc_match.group(1)) / 100
 
 	# Find per-tier results
+	# Match lines like: "Tier 0          100       11    47.5%      38173.3    16.21%"
+	# Pattern: Tier <idx> <clusters> <neurons> <data%> <ppl> <acc%>
+	tier_pattern = re.compile(
+		r'Tier\s+(\d+)\s+'           # Tier index
+		r'([\d,]+)\s+'               # Clusters (may have commas)
+		r'(\d+)\s+'                  # Neurons
+		r'([\d.]+)%\s+'              # Data percentage
+		r'([\d.]+)\s+'               # PPL
+		r'([\d.]+)%'                 # Accuracy
+	)
+
 	in_tier_section = False
 	for line in lines:
 		if 'Per-Tier Test Results' in line:
 			in_tier_section = True
 			continue
-		if in_tier_section and line.startswith('Tier ') and 'Clusters' not in line:
-			parts = line.split()
-			if len(parts) >= 6:
-				tier_idx = int(parts[1])
-				clusters = int(parts[2].replace(',', ''))
-				neurons = int(parts[3])
-				data_pct = float(parts[4].replace('%', ''))
-				ppl = float(parts[5])
-				accuracy = float(parts[6].replace('%', '')) / 100
+		if in_tier_section and 'TOTAL' in line:
+			in_tier_section = False
+			continue
+
+		if in_tier_section:
+			match = tier_pattern.search(line)
+			if match:
+				tier_idx = int(match.group(1))
+				clusters = int(match.group(2).replace(',', ''))
+				neurons = int(match.group(3))
+				data_pct = float(match.group(4))
+				ppl = float(match.group(5))
+				accuracy = float(match.group(6)) / 100
 
 				tier_results.append(TierResult(
 					tier=tier_idx,
@@ -99,8 +123,6 @@ def parse_tier_results(output: str) -> tuple[dict, list[TierResult]]:
 					ppl=ppl,
 					accuracy=accuracy,
 				))
-		if in_tier_section and 'TOTAL' in line:
-			in_tier_section = False
 
 	return overall, tier_results
 

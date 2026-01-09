@@ -33,6 +33,9 @@ mod metal_evaluator;
 #[path = "metal_ramlm.rs"]
 mod metal_ramlm;
 
+#[path = "sparse_memory.rs"]
+mod sparse_memory;
+
 pub use ram::RAMNeuron;
 pub use metal_evaluator::MetalEvaluator;
 pub use metal_ramlm::MetalRAMLMEvaluator;
@@ -1042,6 +1045,148 @@ fn ramlm_forward_batch_hybrid_numpy<'py>(
     })
 }
 
+// =============================================================================
+// SPARSE MEMORY BACKEND (for >10 bits per neuron)
+// =============================================================================
+
+/// Python wrapper for SparseLayerMemory
+/// Provides HashMap-based sparse storage for neurons with >10 bits
+#[pyclass]
+struct SparseMemory {
+    inner: Arc<sparse_memory::SparseLayerMemory>,
+    num_neurons: usize,
+    bits_per_neuron: usize,
+}
+
+#[pymethods]
+impl SparseMemory {
+    /// Create a new sparse memory layer
+    #[new]
+    fn new(num_neurons: usize, bits_per_neuron: usize) -> Self {
+        Self {
+            inner: Arc::new(sparse_memory::SparseLayerMemory::new(num_neurons, bits_per_neuron)),
+            num_neurons,
+            bits_per_neuron,
+        }
+    }
+
+    /// Read a single cell value (returns 0=FALSE, 1=TRUE, 2=EMPTY)
+    fn read_cell(&self, neuron_idx: usize, address: u64) -> u8 {
+        self.inner.read_cell(neuron_idx, address)
+    }
+
+    /// Write a single cell value
+    /// Returns True if the cell was modified
+    fn write_cell(&self, neuron_idx: usize, address: u64, value: u8, allow_override: bool) -> bool {
+        self.inner.write_cell(neuron_idx, address, value, allow_override)
+    }
+
+    /// Get total number of written cells across all neurons
+    fn total_cells(&self) -> usize {
+        self.inner.total_cells()
+    }
+
+    /// Get per-neuron cell counts
+    fn cell_counts(&self) -> Vec<usize> {
+        self.inner.cell_counts()
+    }
+
+    /// Export to list of (neuron_idx, address, value) tuples
+    fn export(&self) -> Vec<(usize, u64, u8)> {
+        self.inner.export()
+    }
+
+    /// Import from list of (neuron_idx, address, value) tuples
+    fn import_cells(&self, cells: Vec<(usize, u64, u8)>) {
+        self.inner.import(&cells);
+    }
+
+    /// Reset all memory to empty
+    fn reset(&self) {
+        self.inner.reset();
+    }
+
+    /// Get number of neurons
+    #[getter]
+    fn num_neurons(&self) -> usize {
+        self.num_neurons
+    }
+
+    /// Get bits per neuron
+    #[getter]
+    fn bits_per_neuron(&self) -> usize {
+        self.bits_per_neuron
+    }
+
+    /// Memory size if this were dense (for comparison)
+    #[getter]
+    fn dense_memory_size(&self) -> u64 {
+        1u64 << self.bits_per_neuron
+    }
+}
+
+/// Batch training for sparse memory backend (parallel)
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn sparse_train_batch(
+    py: Python<'_>,
+    memory: &SparseMemory,
+    input_bits_flat: Vec<bool>,
+    true_clusters: Vec<i64>,
+    false_clusters_flat: Vec<i64>,
+    connections_flat: Vec<i64>,
+    num_examples: usize,
+    total_input_bits: usize,
+    neurons_per_cluster: usize,
+    num_negatives: usize,
+    allow_override: bool,
+) -> PyResult<usize> {
+    py.allow_threads(|| {
+        let modified = sparse_memory::train_batch_sparse(
+            &memory.inner,
+            &input_bits_flat,
+            &true_clusters,
+            &false_clusters_flat,
+            &connections_flat,
+            num_examples,
+            total_input_bits,
+            memory.bits_per_neuron,
+            neurons_per_cluster,
+            num_negatives,
+            allow_override,
+        );
+        Ok(modified)
+    })
+}
+
+/// Batch forward pass for sparse memory backend (parallel)
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn sparse_forward_batch(
+    py: Python<'_>,
+    memory: &SparseMemory,
+    input_bits_flat: Vec<bool>,
+    connections_flat: Vec<i64>,
+    num_examples: usize,
+    total_input_bits: usize,
+    neurons_per_cluster: usize,
+    num_clusters: usize,
+) -> PyResult<Vec<f32>> {
+    py.allow_threads(|| {
+        let probs = sparse_memory::forward_batch_sparse(
+            &memory.inner,
+            &input_bits_flat,
+            &connections_flat,
+            num_examples,
+            total_input_bits,
+            memory.bits_per_neuron,
+            neurons_per_cluster,
+            num_clusters,
+        );
+        Ok(probs)
+    })
+}
+
 /// Python module definition
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -1077,5 +1222,9 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ramlm_init_metal, m)?)?;
     m.add_function(wrap_pyfunction!(ramlm_forward_batch_metal_cached, m)?)?;
     m.add_function(wrap_pyfunction!(ramlm_forward_batch_hybrid_cached, m)?)?;
+    // Sparse memory backend (for >10 bits per neuron)
+    m.add_class::<SparseMemory>()?;
+    m.add_function(wrap_pyfunction!(sparse_train_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(sparse_forward_batch, m)?)?;
     Ok(())
 }

@@ -16,13 +16,46 @@ Where:
     - TRUE (1): Strong evidence for this class
     - FALSE (0): Evidence against this class
     - EMPTY (2): No evidence (treated as 0.5 uncertainty)
+
+Memory Backend Selection:
+    - "auto" (default): Uses dense for ≤10 bits, sparse for >10 bits
+    - "dense": Force dense bit-packed storage (good for ≤10 bits)
+    - "sparse": Force Rust HashMap-based sparse storage (good for >10 bits)
+
+    Dense memory: O(neurons × 2^bits_per_neuron) - exponential in bits!
+    Sparse memory: O(written_cells) - linear in training examples
 """
 
 from wnn.ram.core.Memory import Memory
 from wnn.ram.core.base import RAMComponent
 from wnn.ram.core import MemoryVal
 
+from enum import IntEnum
 from typing import Optional
+
+
+class MemoryBackend(IntEnum):
+	"""
+	Memory storage backend selection for RAMClusterLayer.
+
+	Trade-offs:
+		DENSE:  O(neurons × 2^bits) memory, O(1) lookup - best for ≤10 bits
+		SPARSE: O(written_cells) memory, O(1) avg lookup - best for 11-30 bits
+		LSH:    O(written_cells) memory, approximate lookup - best for 31-60 bits
+		AUTO:   Automatically selects based on bits_per_neuron thresholds
+	"""
+	AUTO = 0    # Auto-select based on bits_per_neuron
+	DENSE = 1   # Bit-packed dense storage (exponential memory)
+	SPARSE = 2  # HashMap-based sparse storage (linear memory)
+	LSH = 3     # Locality-sensitive hashing (approximate, very large bits)
+
+
+# Auto-selection thresholds
+# Dense: ≤10 bits (1K cells/neuron, ~72 bytes/neuron)
+# Sparse: 11-30 bits (HashMap, exact lookup)
+# LSH: >30 bits (approximate lookup, for very large address spaces)
+SPARSE_THRESHOLD_BITS = 10
+LSH_THRESHOLD_BITS = 30
 
 from torch import arange
 from torch import long
@@ -83,6 +116,7 @@ class RAMClusterLayer(RAMComponent):
 		use_hashing: bool = False,
 		hash_size: int = 1024,
 		rng: Optional[int] = None,
+		backend: MemoryBackend = MemoryBackend.AUTO,
 	):
 		"""
 		Initialize RAMClusterLayer.
@@ -96,6 +130,11 @@ class RAMClusterLayer(RAMComponent):
 			use_hashing: Whether to hash addresses (for very large connectivity)
 			hash_size: Hash table size if use_hashing=True
 			rng: Random seed for reproducible connectivity initialization
+			backend: Memory backend selection (MemoryBackend enum):
+				- AUTO: Dense for ≤10 bits, sparse for 11-30, LSH for >30
+				- DENSE: Force dense bit-packed storage
+				- SPARSE: Force Rust HashMap-based sparse storage
+				- LSH: Force LSH-based approximate storage (for >30 bits)
 		"""
 		super().__init__()
 
@@ -103,16 +142,78 @@ class RAMClusterLayer(RAMComponent):
 		self.neurons_per_cluster = neurons_per_cluster
 		self.total_neurons = num_clusters * neurons_per_cluster
 
-		# Create underlying Memory with total neurons
-		self.memory = Memory(
-			total_input_bits=total_input_bits,
-			num_neurons=self.total_neurons,
-			n_bits_per_neuron=bits_per_neuron,
-			connections=connections,
-			use_hashing=use_hashing,
-			hash_size=hash_size,
-			rng=rng,
-		)
+		# Determine effective backend based on selection and bits_per_neuron
+		if backend == MemoryBackend.AUTO:
+			if bits_per_neuron > LSH_THRESHOLD_BITS:
+				self._backend = MemoryBackend.LSH
+			elif bits_per_neuron > SPARSE_THRESHOLD_BITS:
+				self._backend = MemoryBackend.SPARSE
+			else:
+				self._backend = MemoryBackend.DENSE
+		else:
+			self._backend = backend
+
+		self._bits_per_neuron = bits_per_neuron
+		self._total_input_bits = total_input_bits
+
+		# Initialize storage based on backend
+		self._sparse_memory = None
+		self._lsh_memory = None
+
+		match self._backend:
+			case MemoryBackend.LSH:
+				# Use LSH-based approximate storage (for very large address spaces)
+				import ram_accelerator
+				# LSH uses same sparse storage but with hashed addresses
+				self._lsh_memory = ram_accelerator.SparseMemory(
+					self.total_neurons,
+					bits_per_neuron
+				)
+				# Number of hash bits for LSH (reduce address space)
+				self._lsh_bits = min(20, bits_per_neuron)  # Cap at 20 bits (~1M buckets)
+				# Create minimal Memory just for connections (no dense storage)
+				self.memory = Memory(
+					total_input_bits=total_input_bits,
+					num_neurons=self.total_neurons,
+					n_bits_per_neuron=min(8, bits_per_neuron),  # Minimal bits for connections only
+					connections=connections,
+					use_hashing=True,  # Force hashing to avoid dense allocation
+					hash_size=1024,
+					rng=rng,
+				)
+				# Override n_bits_per_neuron after creation
+				self.memory.n_bits_per_neuron = bits_per_neuron
+
+			case MemoryBackend.SPARSE:
+				# Use Rust-accelerated sparse storage
+				import ram_accelerator
+				self._sparse_memory = ram_accelerator.SparseMemory(
+					self.total_neurons,
+					bits_per_neuron
+				)
+				# Create Memory for connections (with hashing to avoid large allocation)
+				# For >10 bits, we use sparse Rust storage, so use_hashing prevents dense alloc
+				self.memory = Memory(
+					total_input_bits=total_input_bits,
+					num_neurons=self.total_neurons,
+					n_bits_per_neuron=bits_per_neuron,
+					connections=connections,
+					use_hashing=use_hashing if bits_per_neuron <= 16 else True,
+					hash_size=hash_size if bits_per_neuron <= 16 else min(hash_size, 2**16),
+					rng=rng,
+				)
+
+			case _:
+				# DENSE backend: Create full Memory with dense storage
+				self.memory = Memory(
+					total_input_bits=total_input_bits,
+					num_neurons=self.total_neurons,
+					n_bits_per_neuron=bits_per_neuron,
+					connections=connections,
+					use_hashing=use_hashing,
+					hash_size=hash_size,
+					rng=rng,
+				)
 
 	def __repr__(self) -> str:
 		return (
@@ -120,22 +221,38 @@ class RAMClusterLayer(RAMComponent):
 			f"clusters={self.num_clusters}, "
 			f"neurons_per_cluster={self.neurons_per_cluster}, "
 			f"total_neurons={self.total_neurons}, "
-			f"bits_per_neuron={self.memory.n_bits_per_neuron}, "
-			f"input_bits={self.memory.total_input_bits})"
+			f"bits_per_neuron={self._bits_per_neuron}, "
+			f"input_bits={self._total_input_bits}, "
+			f"backend={self._backend.name})"
 		)
 
 	def __str__(self) -> str:
+		match self._backend:
+			case MemoryBackend.SPARSE:
+				cells_info = f"  Written cells: {self._sparse_memory.total_cells():,}"
+			case MemoryBackend.LSH:
+				cells_info = f"  LSH buckets: {self._lsh_memory.total_cells():,} (hash_bits={self._lsh_bits})"
+			case MemoryBackend.DENSE:
+				cells_info = f"  Total memory cells: {self.total_neurons * self.memory.memory_size:,}"
+			case _:
+				cells_info = "  Unknown backend"
+
 		lines = [
 			"=== RAMClusterLayer ===",
 			f"  Clusters: {self.num_clusters}",
 			f"  Neurons per cluster: {self.neurons_per_cluster}",
 			f"  Total neurons: {self.total_neurons}",
-			f"  Input bits: {self.memory.total_input_bits}",
-			f"  Bits per neuron: {self.memory.n_bits_per_neuron}",
-			f"  Memory cells per neuron: {self.memory.memory_size}",
-			f"  Total memory cells: {self.total_neurons * self.memory.memory_size:,}",
+			f"  Input bits: {self._total_input_bits}",
+			f"  Bits per neuron: {self._bits_per_neuron}",
+			f"  Backend: {self._backend.name}",
+			cells_info,
 		]
 		return "\n".join(lines)
+
+	@property
+	def backend(self) -> MemoryBackend:
+		"""Return the memory backend type."""
+		return self._backend
 
 	@property
 	def total_input_bits(self) -> int:
@@ -190,9 +307,10 @@ class RAMClusterLayer(RAMComponent):
 		"""
 		Auto-optimized forward pass that picks the best backend.
 
-		Transparently selects between PyTorch and Metal GPU based on batch size:
-		- Batch < 1000: PyTorch (optimized for small batches, ~1700 ex/s)
-		- Batch >= 1000: Metal GPU (optimized for large batches, ~2400 ex/s)
+		Automatically selects between:
+		- Sparse (forward_sparse): When using sparse memory backend (>10 bits)
+		- Metal GPU: Dense, large batches (>1000 examples)
+		- PyTorch: Dense, small batches
 
 		This provides the best performance without manual backend selection.
 
@@ -206,19 +324,23 @@ class RAMClusterLayer(RAMComponent):
 		if input_bits.ndim == 1:
 			input_bits = input_bits.unsqueeze(0)
 
-		batch_size = input_bits.shape[0]
+		# Dispatch based on backend
+		match self._backend:
+			case MemoryBackend.SPARSE:
+				return self.forward_sparse(input_bits)
+			case MemoryBackend.LSH:
+				return self.forward_lsh(input_bits)
+			case MemoryBackend.DENSE:
+				batch_size = input_bits.shape[0]
+				# Threshold determined by benchmarking on M4 Max
+				METAL_THRESHOLD = 1000
 
-		# Threshold determined by benchmarking on M4 Max:
-		# - PyTorch peaks at batch ~200 with 1700 ex/s
-		# - Metal becomes faster at batch 1000+ and scales to 2400+ ex/s
-		METAL_THRESHOLD = 1000
-
-		if batch_size < METAL_THRESHOLD:
-			# Use PyTorch for small batches (lower per-call overhead)
-			return self.forward(input_bits)
-		else:
-			# Use Metal GPU for large batches (better parallelism)
-			return self._forward_metal_cached(input_bits)
+				if batch_size < METAL_THRESHOLD:
+					return self.forward(input_bits)
+				else:
+					return self._forward_metal_cached(input_bits)
+			case _:
+				raise ValueError(f"Unknown backend: {self._backend}")
 
 	def _forward_metal_cached(self, input_bits: Tensor) -> Tensor:
 		"""
@@ -876,8 +998,9 @@ class RAMClusterLayer(RAMComponent):
 		Auto-optimized training that picks the best backend.
 
 		Automatically selects between:
-		- PyTorch (train_batch): Best for small batches (< 100 examples)
-		- Rust numpy (train_multi_examples_rust_numpy): Best for large batches
+		- Sparse (train_sparse): When using sparse memory backend (>10 bits)
+		- Rust numpy (train_multi_examples_rust_numpy): Dense, large batches
+		- PyTorch (train_batch): Dense, small batches
 
 		Args:
 			input_bits: [num_examples, total_input_bits] or [total_input_bits] input patterns
@@ -896,20 +1019,299 @@ class RAMClusterLayer(RAMComponent):
 		if false_clusters.ndim == 1:
 			false_clusters = false_clusters.unsqueeze(0)
 
+		# Dispatch based on backend
+		match self._backend:
+			case MemoryBackend.SPARSE:
+				return self.train_sparse(input_bits, true_clusters, false_clusters, allow_override)
+			case MemoryBackend.LSH:
+				return self.train_lsh(input_bits, true_clusters, false_clusters, allow_override)
+			case MemoryBackend.DENSE:
+				# Dense backend: choose between PyTorch and Rust
+				batch_size = input_bits.shape[0]
+				RUST_THRESHOLD = 100
+
+				if batch_size < RUST_THRESHOLD:
+					return self.train_batch(input_bits, true_clusters, false_clusters, allow_override)
+				else:
+					try:
+						return self.train_multi_examples_rust_numpy(
+							input_bits, true_clusters, false_clusters, allow_override
+						)
+					except (ImportError, RuntimeError):
+						return self.train_batch(input_bits, true_clusters, false_clusters, allow_override)
+			case _:
+				raise ValueError(f"Unknown backend: {self._backend}")
+
+	def train_sparse(
+		self,
+		input_bits: Tensor,
+		true_clusters: Tensor,
+		false_clusters: Tensor,
+		allow_override: bool = False,
+	) -> int:
+		"""
+		Training using Rust sparse memory backend.
+
+		Uses HashMap-based sparse storage for memory-efficient training
+		with >10 bits per neuron.
+
+		Args:
+			input_bits: [num_examples, total_input_bits] input patterns
+			true_clusters: [num_examples] cluster indices to train as TRUE
+			false_clusters: [num_examples, num_negatives] cluster indices to train as FALSE
+			allow_override: Whether to override existing non-EMPTY cells
+
+		Returns:
+			Number of memory cells modified
+		"""
+		if self._backend != MemoryBackend.SPARSE:
+			raise RuntimeError(f"train_sparse called but layer is using {self._backend.name} backend")
+
+		import ram_accelerator
+
+		# Handle single example case
+		if input_bits.ndim == 1:
+			input_bits = input_bits.unsqueeze(0)
+		if true_clusters.ndim == 0:
+			true_clusters = true_clusters.unsqueeze(0)
+		if false_clusters.ndim == 1:
+			false_clusters = false_clusters.unsqueeze(0)
+
+		num_examples = input_bits.shape[0]
+		num_negatives = false_clusters.shape[1]
+
+		# Flatten tensors for Rust
+		input_bits_flat = input_bits.flatten().bool().tolist()
+		true_clusters_list = true_clusters.tolist()
+		false_clusters_flat = false_clusters.flatten().tolist()
+		connections_flat = self.memory.connections.flatten().tolist()
+
+		# Call Rust sparse training
+		modified = ram_accelerator.sparse_train_batch(
+			self._sparse_memory,
+			input_bits_flat,
+			true_clusters_list,
+			false_clusters_flat,
+			connections_flat,
+			num_examples,
+			self._total_input_bits,
+			self.neurons_per_cluster,
+			num_negatives,
+			allow_override,
+		)
+
+		return modified
+
+	def forward_sparse(self, input_bits: Tensor) -> Tensor:
+		"""
+		Forward pass using Rust sparse memory backend.
+
+		Uses HashMap-based sparse storage for memory-efficient inference
+		with >10 bits per neuron.
+
+		Args:
+			input_bits: [batch_size, total_input_bits] or [total_input_bits] input patterns
+
+		Returns:
+			Tensor [batch_size, num_clusters] of probabilities
+		"""
+		if self._backend != MemoryBackend.SPARSE:
+			raise RuntimeError(f"forward_sparse called but layer is using {self._backend.name} backend")
+
+		import ram_accelerator
+		from torch import tensor as torch_tensor, float32
+
+		# Handle single example
+		if input_bits.ndim == 1:
+			input_bits = input_bits.unsqueeze(0)
+
 		batch_size = input_bits.shape[0]
 
-		# Threshold for switching to Rust
-		RUST_THRESHOLD = 100
+		# Flatten tensors for Rust
+		input_bits_flat = input_bits.flatten().bool().tolist()
+		connections_flat = self.memory.connections.flatten().tolist()
 
-		if batch_size < RUST_THRESHOLD:
-			# Small batch: use PyTorch
-			return self.train_batch(input_bits, true_clusters, false_clusters, allow_override)
-		else:
-			# Large batch: try Rust numpy, fall back to PyTorch
-			try:
-				return self.train_multi_examples_rust_numpy(
-					input_bits, true_clusters, false_clusters, allow_override
-				)
-			except (ImportError, RuntimeError):
-				# Rust not available, fall back to PyTorch
-				return self.train_batch(input_bits, true_clusters, false_clusters, allow_override)
+		# Call Rust sparse forward
+		probs_flat = ram_accelerator.sparse_forward_batch(
+			self._sparse_memory,
+			input_bits_flat,
+			connections_flat,
+			batch_size,
+			self._total_input_bits,
+			self.neurons_per_cluster,
+			self.num_clusters,
+		)
+
+		# Reshape to [batch_size, num_clusters]
+		probs = torch_tensor(probs_flat, dtype=float32).view(batch_size, self.num_clusters)
+		return probs
+
+	def _lsh_hash_address(self, address: int) -> int:
+		"""
+		Hash a large address (30-60 bits) down to lsh_bits using XOR folding.
+
+		XOR folding preserves locality: addresses that differ in few bits
+		are likely to hash to nearby buckets, enabling approximate matching.
+
+		Example for 40-bit address → 20-bit hash:
+			Split: [bits 0-19] XOR [bits 20-39] = 20-bit result
+		"""
+		result = 0
+		mask = (1 << self._lsh_bits) - 1  # e.g., 0xFFFFF for 20 bits
+
+		# Fold the address by XORing chunks of lsh_bits
+		remaining = address
+		while remaining > 0:
+			result ^= (remaining & mask)
+			remaining >>= self._lsh_bits
+
+		return result
+
+	def train_lsh(
+		self,
+		input_bits: Tensor,
+		true_clusters: Tensor,
+		false_clusters: Tensor,
+		allow_override: bool = False,
+	) -> int:
+		"""
+		Training using LSH (Locality-Sensitive Hashing) backend.
+
+		Uses XOR-folding to hash large addresses (30-60 bits) down to
+		a manageable size (~20 bits). This provides approximate lookups
+		where similar inputs map to similar buckets.
+
+		Trade-off: Some accuracy loss due to hash collisions, but enables
+		very large address spaces that would be impossible otherwise.
+
+		Args:
+			input_bits: [num_examples, total_input_bits] input patterns
+			true_clusters: [num_examples] cluster indices to train as TRUE
+			false_clusters: [num_examples, num_negatives] cluster indices to train as FALSE
+			allow_override: Whether to override existing non-EMPTY cells
+
+		Returns:
+			Number of memory cells modified
+		"""
+		if self._backend != MemoryBackend.LSH:
+			raise RuntimeError(f"train_lsh called but layer is using {self._backend.name} backend")
+
+		import ram_accelerator
+
+		# Handle single example case
+		if input_bits.ndim == 1:
+			input_bits = input_bits.unsqueeze(0)
+		if true_clusters.ndim == 0:
+			true_clusters = true_clusters.unsqueeze(0)
+		if false_clusters.ndim == 1:
+			false_clusters = false_clusters.unsqueeze(0)
+
+		num_examples = input_bits.shape[0]
+		num_negatives = false_clusters.shape[1]
+
+		# For LSH, we compute addresses, hash them, then train
+		# We need to do this in Python since the hash is custom
+		modified = 0
+
+		for ex_idx in range(num_examples):
+			ex_input = input_bits[ex_idx]
+			true_cluster = true_clusters[ex_idx].item()
+
+			# Train TRUE cluster neurons
+			for neuron_offset in range(self.neurons_per_cluster):
+				neuron_idx = true_cluster * self.neurons_per_cluster + neuron_offset
+				connections = self.memory.connections[neuron_idx]
+
+				# Compute full address from input bits
+				address = 0
+				for bit_pos, conn_idx in enumerate(connections):
+					if ex_input[conn_idx]:
+						address |= 1 << (self._bits_per_neuron - 1 - bit_pos)
+
+				# Hash the address for LSH
+				hashed_addr = self._lsh_hash_address(address)
+
+				# Write TRUE (with override for priority)
+				if self._lsh_memory.write_cell(neuron_idx, hashed_addr, 1, True):
+					modified += 1
+
+			# Train FALSE cluster neurons
+			for neg_idx in range(num_negatives):
+				false_cluster = false_clusters[ex_idx, neg_idx].item()
+
+				for neuron_offset in range(self.neurons_per_cluster):
+					neuron_idx = false_cluster * self.neurons_per_cluster + neuron_offset
+					connections = self.memory.connections[neuron_idx]
+
+					# Compute full address
+					address = 0
+					for bit_pos, conn_idx in enumerate(connections):
+						if ex_input[conn_idx]:
+							address |= 1 << (self._bits_per_neuron - 1 - bit_pos)
+
+					# Hash the address
+					hashed_addr = self._lsh_hash_address(address)
+
+					# Write FALSE (only to EMPTY cells)
+					if self._lsh_memory.write_cell(neuron_idx, hashed_addr, 0, allow_override):
+						modified += 1
+
+		return modified
+
+	def forward_lsh(self, input_bits: Tensor) -> Tensor:
+		"""
+		Forward pass using LSH (Locality-Sensitive Hashing) backend.
+
+		Uses XOR-folding to hash addresses, then looks up in sparse storage.
+		Provides approximate lookups for very large address spaces (30-60 bits).
+
+		Args:
+			input_bits: [batch_size, total_input_bits] or [total_input_bits] input patterns
+
+		Returns:
+			Tensor [batch_size, num_clusters] of probabilities
+		"""
+		if self._backend != MemoryBackend.LSH:
+			raise RuntimeError(f"forward_lsh called but layer is using {self._backend.name} backend")
+
+		from torch import zeros, float32
+
+		# Handle single example
+		if input_bits.ndim == 1:
+			input_bits = input_bits.unsqueeze(0)
+
+		batch_size = input_bits.shape[0]
+		probs = zeros(batch_size, self.num_clusters, dtype=float32)
+
+		for ex_idx in range(batch_size):
+			ex_input = input_bits[ex_idx]
+
+			for cluster_idx in range(self.num_clusters):
+				count_true = 0
+				count_empty = 0
+
+				for neuron_offset in range(self.neurons_per_cluster):
+					neuron_idx = cluster_idx * self.neurons_per_cluster + neuron_offset
+					connections = self.memory.connections[neuron_idx]
+
+					# Compute full address
+					address = 0
+					for bit_pos, conn_idx in enumerate(connections):
+						if ex_input[conn_idx]:
+							address |= 1 << (self._bits_per_neuron - 1 - bit_pos)
+
+					# Hash the address
+					hashed_addr = self._lsh_hash_address(address)
+
+					# Look up in LSH memory
+					cell_value = self._lsh_memory.read_cell(neuron_idx, hashed_addr)
+
+					if cell_value == 1:  # TRUE
+						count_true += 1
+					elif cell_value == 2:  # EMPTY
+						count_empty += 1
+
+				# Probability formula
+				probs[ex_idx, cluster_idx] = (count_true + 0.5 * count_empty) / self.neurons_per_cluster
+
+		return probs
