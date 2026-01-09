@@ -17,6 +17,12 @@ Usage:
 
     # Single experiment test
     python tests/run_overnight_sweep.py --experiments tier0_16bit
+
+    # With GA+TS optimization (captures improvement metrics)
+    python tests/run_overnight_sweep.py --full-data --set quick --optimize
+
+    # With specific optimization strategy
+    python tests/run_overnight_sweep.py --full-data --set quick --optimize --strategy GA
 """
 
 import argparse
@@ -40,6 +46,9 @@ class ExperimentConfig:
 	full_data: bool = True
 	description: str = ""
 	priority: int = 1  # 1=quick, 2=standard, 3=extended
+	# Optimization settings
+	optimize: bool = False
+	strategy: str = "GA,TS"  # GA, TS, or GA,TS
 
 
 @dataclass
@@ -56,6 +65,16 @@ class TierResult:
 
 
 @dataclass
+class OptimizationResult:
+	"""Results from optimization phase."""
+	strategy: str
+	initial_ce: float
+	final_ce: float
+	improvement_pct: float
+	iterations: int
+
+
+@dataclass
 class ExperimentResult:
 	"""Results from a single experiment."""
 	name: str
@@ -67,15 +86,20 @@ class ExperimentResult:
 	train_time: float
 	eval_time: float
 	timestamp: str
+	# Optimization results (None if not optimized)
+	initial_ppl: Optional[float] = None  # PPL before optimization
+	optimization_results: Optional[list[OptimizationResult]] = None
+	total_improvement_pct: Optional[float] = None
 
 
-def parse_tier_results(output: str) -> tuple[dict, list[TierResult]]:
-	"""Parse the benchmark output to extract per-tier results."""
+def parse_tier_results(output: str) -> tuple[dict, list[TierResult], dict]:
+	"""Parse the benchmark output to extract per-tier results and optimization data."""
 	import re
 	lines = output.split('\n')
 
 	overall = {'ppl': 0.0, 'accuracy': 0.0}
 	tier_results = []
+	opt_data = {'initial_ppl': None, 'optimizations': [], 'total_improvement': None}
 
 	for line in lines:
 		ppl_match = re.search(r'Test PPL:\s*([\d.]+)', line)
@@ -85,6 +109,70 @@ def parse_tier_results(output: str) -> tuple[dict, list[TierResult]]:
 		acc_match = re.search(r'Test Acc:\s*([\d.]+)%', line)
 		if acc_match:
 			overall['accuracy'] = float(acc_match.group(1)) / 100
+
+		# Parse initial evaluation PPL (before optimization)
+		if 'Initial Evaluation' in line:
+			# Look ahead for perplexity
+			pass
+		init_ppl_match = re.search(r'Initial.*Perplexity:\s*([\d.]+)', line)
+		if init_ppl_match:
+			opt_data['initial_ppl'] = float(init_ppl_match.group(1))
+
+	# Parse optimization results (GA/TS)
+	# Format: "[Joint tiered] GA Results:" or "[Joint tiered] TS Results:"
+	# "    Initial CE: 10.7152"
+	# "    Final CE: 10.7094"
+	# "    Improvement: 0.05%"
+	# "    Iterations: 5"
+	current_strategy = None
+	current_opt = {}
+
+	for i, line in enumerate(lines):
+		# Detect strategy result section
+		strat_match = re.search(r'\[(.*?)\]\s*(GA|TS)\s*Results:', line)
+		if strat_match:
+			if current_strategy and current_opt:
+				opt_data['optimizations'].append(OptimizationResult(
+					strategy=current_strategy,
+					initial_ce=current_opt.get('initial_ce', 0),
+					final_ce=current_opt.get('final_ce', 0),
+					improvement_pct=current_opt.get('improvement', 0),
+					iterations=current_opt.get('iterations', 0),
+				))
+			current_strategy = strat_match.group(2)
+			current_opt = {}
+
+		if current_strategy:
+			init_ce_match = re.search(r'Initial CE:\s*([\d.]+)', line)
+			if init_ce_match:
+				current_opt['initial_ce'] = float(init_ce_match.group(1))
+
+			final_ce_match = re.search(r'Final CE:\s*([\d.]+)', line)
+			if final_ce_match:
+				current_opt['final_ce'] = float(final_ce_match.group(1))
+
+			imp_match = re.search(r'Improvement:\s*([\d.]+)%', line)
+			if imp_match:
+				current_opt['improvement'] = float(imp_match.group(1))
+
+			iter_match = re.search(r'Iterations:\s*(\d+)', line)
+			if iter_match:
+				current_opt['iterations'] = int(iter_match.group(1))
+
+	# Add last strategy if present
+	if current_strategy and current_opt:
+		opt_data['optimizations'].append(OptimizationResult(
+			strategy=current_strategy,
+			initial_ce=current_opt.get('initial_ce', 0),
+			final_ce=current_opt.get('final_ce', 0),
+			improvement_pct=current_opt.get('improvement', 0),
+			iterations=current_opt.get('iterations', 0),
+		))
+
+	# Calculate total improvement
+	if opt_data['optimizations']:
+		total_imp = sum(o.improvement_pct for o in opt_data['optimizations'])
+		opt_data['total_improvement'] = total_imp
 
 	tier_pattern = re.compile(
 		r'Tier\s+(\d+)\s+'
@@ -125,7 +213,7 @@ def parse_tier_results(output: str) -> tuple[dict, list[TierResult]]:
 					accuracy=accuracy,
 				))
 
-	return overall, tier_results
+	return overall, tier_results, opt_data
 
 
 def run_experiment(config: ExperimentConfig) -> Optional[ExperimentResult]:
@@ -134,6 +222,7 @@ def run_experiment(config: ExperimentConfig) -> Optional[ExperimentResult]:
 	print(f"Running: {config.name}")
 	print(f"Config: {config.tiered}")
 	print(f"Context: {config.context}")
+	print(f"Optimize: {config.optimize} ({config.strategy})" if config.optimize else "Optimize: False")
 	print(f"Description: {config.description}")
 	print(f"{'='*70}\n")
 
@@ -148,14 +237,21 @@ def run_experiment(config: ExperimentConfig) -> Optional[ExperimentResult]:
 	if config.full_data:
 		cmd.append("--full-data")
 
+	if config.optimize:
+		cmd.append("--optimize")
+		cmd.extend(["--strategy", config.strategy])
+
 	start_time = time.perf_counter()
+
+	# Longer timeout for optimized experiments
+	timeout = 14400 if config.optimize else 7200  # 4 hours vs 2 hours
 
 	try:
 		result = subprocess.run(
 			cmd,
 			capture_output=True,
 			text=True,
-			timeout=7200,  # 2 hour timeout per experiment
+			timeout=timeout,
 			cwd=Path(__file__).parent.parent,
 		)
 		elapsed = time.perf_counter() - start_time
@@ -166,10 +262,15 @@ def run_experiment(config: ExperimentConfig) -> Optional[ExperimentResult]:
 			return None
 
 		output = result.stdout + result.stderr
-		overall, tier_results = parse_tier_results(output)
+		overall, tier_results, opt_data = parse_tier_results(output)
 
 		print(f"\nCompleted in {elapsed/60:.1f} minutes")
 		print(f"Overall PPL: {overall['ppl']:.1f}, Accuracy: {overall['accuracy']:.2%}")
+		if opt_data['optimizations']:
+			for opt in opt_data['optimizations']:
+				print(f"  {opt.strategy}: {opt.improvement_pct:.2f}% improvement")
+			if opt_data['total_improvement']:
+				print(f"  Total: {opt_data['total_improvement']:.2f}% improvement")
 
 		return ExperimentResult(
 			name=config.name,
@@ -181,10 +282,14 @@ def run_experiment(config: ExperimentConfig) -> Optional[ExperimentResult]:
 			train_time=elapsed,
 			eval_time=0.0,
 			timestamp=datetime.now().isoformat(),
+			initial_ppl=opt_data['initial_ppl'],
+			optimization_results=opt_data['optimizations'] if opt_data['optimizations'] else None,
+			total_improvement_pct=opt_data['total_improvement'],
 		)
 
 	except subprocess.TimeoutExpired:
-		print(f"ERROR: Experiment timed out after 2 hours")
+		timeout_hrs = timeout / 3600
+		print(f"ERROR: Experiment timed out after {timeout_hrs:.0f} hours")
 		return None
 	except Exception as e:
 		print(f"ERROR: {e}")
@@ -292,25 +397,55 @@ def define_experiments() -> list[ExperimentConfig]:
 
 def print_summary_table(results: list[ExperimentResult]):
 	"""Print a summary table of all results."""
-	print("\n" + "="*110)
-	print("OVERNIGHT SWEEP RESULTS")
-	print("="*110)
+	# Check if any results have optimization data
+	has_opt = any(r.optimization_results for r in results)
 
-	print(f"\n{'Experiment':<25} {'Config':<35} {'PPL':>10} {'Acc':>8} | {'T0 PPL':>9} {'T0 Acc':>7}")
-	print("-"*110)
+	print("\n" + "="*140)
+	print("OVERNIGHT SWEEP RESULTS")
+	print("="*140)
+
+	if has_opt:
+		print(f"\n{'Experiment':<22} {'Config':<30} {'PPL':>9} {'Acc':>7} | {'GA %':>6} {'TS %':>6} {'Tot %':>6} | {'T0 PPL':>8} {'T0 Acc':>6}")
+		print("-"*140)
+	else:
+		print(f"\n{'Experiment':<25} {'Config':<35} {'PPL':>10} {'Acc':>8} | {'T0 PPL':>9} {'T0 Acc':>7}")
+		print("-"*110)
 
 	for r in sorted(results, key=lambda x: x.overall_ppl):
 		t0 = next((t for t in r.tier_results if t.tier == 0), None)
 		t0_ppl = f"{t0.ppl:.0f}" if t0 else "N/A"
 		t0_acc = f"{t0.accuracy:.1%}" if t0 else "N/A"
 
-		print(f"{r.name:<25} {r.config:<35} {r.overall_ppl:>10.1f} {r.overall_accuracy:>8.2%} | {t0_ppl:>9} {t0_acc:>7}")
+		if has_opt:
+			ga_imp = ts_imp = tot_imp = "-"
+			if r.optimization_results:
+				for opt in r.optimization_results:
+					if opt.strategy == "GA":
+						ga_imp = f"{opt.improvement_pct:.2f}"
+					elif opt.strategy == "TS":
+						ts_imp = f"{opt.improvement_pct:.2f}"
+				if r.total_improvement_pct is not None:
+					tot_imp = f"{r.total_improvement_pct:.2f}"
 
-	print("-"*110)
+			print(f"{r.name:<22} {r.config:<30} {r.overall_ppl:>9.1f} {r.overall_accuracy:>7.2%} | {ga_imp:>6} {ts_imp:>6} {tot_imp:>6} | {t0_ppl:>8} {t0_acc:>6}")
+		else:
+			print(f"{r.name:<25} {r.config:<35} {r.overall_ppl:>10.1f} {r.overall_accuracy:>8.2%} | {t0_ppl:>9} {t0_acc:>7}")
+
+	if has_opt:
+		print("-"*140)
+	else:
+		print("-"*110)
 
 	# Best result
 	best = min(results, key=lambda x: x.overall_ppl)
 	print(f"\nBest PPL: {best.name} with {best.overall_ppl:.1f}")
+
+	# Best optimization improvement if available
+	if has_opt:
+		opt_results = [r for r in results if r.total_improvement_pct]
+		if opt_results:
+			best_opt = max(opt_results, key=lambda x: x.total_improvement_pct or 0)
+			print(f"Best optimization: {best_opt.name} with {best_opt.total_improvement_pct:.2f}% total improvement")
 
 
 def estimate_runtime(experiments: list[ExperimentConfig]) -> float:
@@ -327,7 +462,9 @@ def estimate_runtime(experiments: list[ExperimentConfig]) -> float:
 		bits_adj = max(0, (max_bits - 10) // 2) * 5
 		# Context adjustment: +10 min per context above 4
 		ctx_adj = max(0, exp.context - 4) * 10
-		total_minutes += base + bits_adj + ctx_adj
+		# Optimization adjustment: +60-90 min for GA+TS
+		opt_adj = 75 if exp.optimize else 0
+		total_minutes += base + bits_adj + ctx_adj + opt_adj
 	return total_minutes / 60
 
 
@@ -354,6 +491,31 @@ def load_existing_results(output_path: Path) -> list[dict]:
 		return []
 
 
+def deserialize_result(r: dict) -> ExperimentResult:
+	"""Deserialize a result dict to ExperimentResult, handling optional fields."""
+	tier_results = [TierResult(**t) for t in r.get('tier_results', [])]
+
+	# Handle optimization results if present
+	opt_results = None
+	if r.get('optimization_results'):
+		opt_results = [OptimizationResult(**o) for o in r['optimization_results']]
+
+	return ExperimentResult(
+		name=r['name'],
+		config=r['config'],
+		context=r['context'],
+		overall_ppl=r['overall_ppl'],
+		overall_accuracy=r['overall_accuracy'],
+		tier_results=tier_results,
+		train_time=r.get('train_time', 0.0),
+		eval_time=r.get('eval_time', 0.0),
+		timestamp=r.get('timestamp', ''),
+		initial_ppl=r.get('initial_ppl'),
+		optimization_results=opt_results,
+		total_improvement_pct=r.get('total_improvement_pct'),
+	)
+
+
 def main():
 	parser = argparse.ArgumentParser(description="Overnight High-Capacity Sweep")
 	parser.add_argument("--full-data", action="store_true",
@@ -368,6 +530,10 @@ def main():
 		help="Skip experiments already in output file (default: True)")
 	parser.add_argument("--force-rerun", action="store_true",
 		help="Re-run all experiments even if already completed")
+	parser.add_argument("--optimize", action="store_true",
+		help="Run GA+TS connectivity optimization after training")
+	parser.add_argument("--strategy", type=str, default="GA,TS",
+		help="Optimization strategy: GA, TS, or GA,TS (default: GA,TS)")
 	args = parser.parse_args()
 
 	# Define experiments
@@ -404,17 +570,16 @@ def main():
 		# Show existing results
 		existing = load_existing_results(output_path)
 		if existing:
-			print_summary_table([ExperimentResult(**{
-				**r,
-				'tier_results': [TierResult(**t) for t in r['tier_results']]
-			}) for r in existing])
+			print_summary_table([deserialize_result(r) for r in existing])
 		return 0
 
-	# Update mode based on full-data flag
+	# Update mode based on full-data flag and optimization settings
 	mode = "full" if args.full_data else "fast"
 	for exp in experiments:
 		exp.mode = mode
 		exp.full_data = args.full_data
+		exp.optimize = args.optimize
+		exp.strategy = args.strategy
 
 	# Estimate runtime
 	est_hours = estimate_runtime(experiments)
@@ -423,6 +588,8 @@ def main():
 	print(f"# Overnight High-Capacity Sweep")
 	print(f"# Set: {args.set} ({len(experiments)} new + {len(completed)} completed)")
 	print(f"# Mode: {mode}")
+	if args.optimize:
+		print(f"# Optimization: {args.strategy}")
 	print(f"# Estimated runtime: {est_hours:.1f} hours")
 	print(f"# Output: {args.output}")
 	print(f"{'#'*70}")
@@ -457,12 +624,7 @@ def main():
 
 	# Print combined summary if there were previous results
 	if existing_results:
-		all_results = [
-			ExperimentResult(**{
-				**r,
-				'tier_results': [TierResult(**t) for t in r['tier_results']]
-			}) for r in existing_results
-		] + results
+		all_results = [deserialize_result(r) for r in existing_results] + results
 		print("\n--- All Experiments (Previous + New) ---")
 		print_summary_table(all_results)
 

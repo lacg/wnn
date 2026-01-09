@@ -208,5 +208,47 @@
     "train_time": 5425.159123333171,
     "eval_time": 0.0,
     "timestamp": "2026-01-09T06:23:37.027505"
+  },
+  {
+    "name": "neurons_25_gradient",
+    "config": "100,25,14;400,15,10;rest,7,8",
+    "context": 4,
+    "overall_ppl": 37995.0,
+    "overall_accuracy": 0.020499999999999997,
+    "tier_results": [
+      {
+        "tier": 0,
+        "name": "tier_0",
+        "clusters": 100,
+        "neurons": 25,
+        "bits": 8,
+        "data_pct": 46.5,
+        "ppl": 36245.7,
+        "accuracy": 0.0431
+      },
+      {
+        "tier": 1,
+        "name": "tier_1",
+        "clusters": 400,
+        "neurons": 15,
+        "bits": 8,
+        "data_pct": 13.0,
+        "ppl": 35972.6,
+        "accuracy": 0.0013
+      },
+      {
+        "tier": 2,
+        "name": "tier_2",
+        "clusters": 49757,
+        "neurons": 7,
+        "bits": 8,
+        "data_pct": 40.4,
+        "ppl": 40825.2,
+        "accuracy": 0.0007000000000000001
+      }
+    ],
+    "train_time": 6936.045572957955,
+    "eval_time": 0.0,
+    "timestamp": "2026-01-09T08:19:13.054366"
   }
 ]
