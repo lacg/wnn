@@ -199,6 +199,40 @@ python ram_lm_v2.py --accel metal --tokenizer gpt2
 python ram_lm_v2.py --accel hybrid --full --full-data --tokenizer gpt2
 ```
 
+## Running Overnight Sweeps
+
+**IMPORTANT:** Always use the venv with unbuffered output for background experiments.
+
+```bash
+# Activate venv and run overnight sweep in background
+cd /Users/lacg/Library/Mobile\ Documents/com~apple~CloudDocs/Studies/research/wnn
+source wnn/bin/activate
+export PYTHONPATH="$(pwd)/src/wnn:$PYTHONPATH"
+PYTHONUNBUFFERED=1 nohup python -u tests/run_overnight_sweep.py [OPTIONS] > nohup.out 2>&1 &
+
+# Example: Quick sweep with GA+TS optimization
+PYTHONUNBUFFERED=1 nohup python -u tests/run_overnight_sweep.py \
+  --full-data --set quick --optimize --strategy GA,TS \
+  --output overnight_optimized_results.json > nohup.out 2>&1 &
+
+# Monitor progress
+tail -f nohup.out
+
+# Check running experiments
+ps aux | grep -E "overnight|ramlm" | grep -v grep
+```
+
+**Sweep Options:**
+
+| Flag | Description |
+|------|-------------|
+| `--full-data` | Use full WikiText-2 dataset |
+| `--set quick/standard/extended` | Experiment set (4/6/10 experiments) |
+| `--optimize` | Enable GA+TS connectivity optimization |
+| `--strategy GA,TS` | Optimization strategy (GA, TS, or GA,TS) |
+| `--output FILE.json` | Output file for results |
+| `--force-rerun` | Re-run completed experiments |
+
 ## Project Structure
 
 ```
