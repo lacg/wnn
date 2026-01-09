@@ -314,6 +314,7 @@ Partially connected networks generalize by design - inputs sharing observed bits
 | 3 | **LSH Context Hashing** | High | High (similarity-based generalization) | ✅ Done |
 | 4 | **Dynamic Attention** | High | Medium (better context selection) | ✅ Done |
 | 5 | **Learned Representations** | Very High | Very High (semantic encoding) | ✅ Done |
+| - | **Per-Tier Metrics** | Low | High (diagnostic insight) | ✅ Done |
 | - | **Benchmark Phases 1-5** | Low | Critical (validate progress) | 🔜 Next |
 | 6a | **Scaling Study** | Medium | High (coverage) | Pending |
 | 6b | **Cross-Domain Transfer** | Medium | Medium (transfer understanding) | Pending |

@@ -253,18 +253,24 @@ Bits per neuron determines the address space size:
 
 ## Roadmap: Next Experiments
 
-### 1. Per-Tier PPL/Accuracy Metrics
+### 1. Per-Tier PPL/Accuracy Metrics ✅ IMPLEMENTED
 **Goal:** Understand which tier contributes most to errors
 
-**Implementation:**
-- Modify evaluation to track per-tier statistics
-- Separate predictions by token frequency tier
-- Metrics: PPL, accuracy, confidence distribution per tier
+**Implementation:** DONE (commit 5dcb6f3)
+- Extended `PerplexityCalculator` with category tracking
+- Added `per_tier` parameter to `RAMLM.evaluate_fast()`
+- Added `--per-tier` flag to benchmark script
 
-**Hypothesis:**
-- Tier 0 (top 100, 49% of data) dominates overall metrics
-- Tier 2 (rare tokens) likely has worst accuracy but minimal PPL impact
-- This will inform where to allocate neurons/bits
+**Initial Results (8-bit, 100×11/400×7/rest×5, fast mode):**
+
+| Tier | Clusters | Data % | PPL | Accuracy |
+|------|----------|--------|-----|----------|
+| 0 | 100 | 47.5% | 34,292 | **13.92%** |
+| 1 | 400 | 10.8% | 42,833 | 0.00% |
+| 2 | 49,757 | 41.7% | 48,769 | 0.00% |
+
+**Key Finding:** ALL accuracy comes from Tier 0. Tier 1/2 are essentially random.
+This confirms the hypothesis - now we need to understand WHY and how to fix it.
 
 ### 2. Memory Hashing for 20-60 Bits
 **Goal:** Scale beyond 12 bits without exponential memory growth
