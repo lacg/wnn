@@ -87,9 +87,11 @@ class ExperimentResult:
 	eval_time: float
 	timestamp: str
 	# Optimization results (None if not optimized)
-	initial_ppl: Optional[float] = None  # PPL before optimization
+	initial_val_ppl: Optional[float] = None  # Validation PPL before optimization
+	final_val_ppl: Optional[float] = None    # Validation PPL after optimization (same as overall_ppl)
+	val_ppl_improvement_pct: Optional[float] = None  # Actual PPL improvement on validation
 	optimization_results: Optional[list[OptimizationResult]] = None
-	total_improvement_pct: Optional[float] = None
+	total_ce_improvement_pct: Optional[float] = None  # CE improvement from GA+TS
 
 
 def parse_tier_results(output: str) -> tuple[dict, list[TierResult], dict]:
@@ -99,24 +101,47 @@ def parse_tier_results(output: str) -> tuple[dict, list[TierResult], dict]:
 
 	overall = {'ppl': 0.0, 'accuracy': 0.0}
 	tier_results = []
-	opt_data = {'initial_ppl': None, 'optimizations': [], 'total_improvement': None}
+	opt_data = {
+		'initial_val_ppl': None,
+		'final_val_ppl': None,
+		'optimizations': [],
+		'total_ce_improvement': None,
+		'val_ppl_improvement': None,
+	}
 
-	for line in lines:
-		ppl_match = re.search(r'Test PPL:\s*([\d.]+)', line)
+	# Track which section we're in for PPL parsing
+	in_initial_eval = False
+	in_final_eval = False
+
+	for i, line in enumerate(lines):
+		# Track sections
+		if 'Initial Evaluation (Validation Set)' in line:
+			in_initial_eval = True
+			in_final_eval = False
+		elif 'Final Evaluation (Validation Set)' in line:
+			in_initial_eval = False
+			in_final_eval = True
+		elif 'Final Evaluation (Test Set)' in line:
+			in_initial_eval = False
+			in_final_eval = False
+
+		# Parse PPL based on section
+		ppl_match = re.search(r'Perplexity:\s*([\d.]+)', line)
 		if ppl_match:
-			overall['ppl'] = float(ppl_match.group(1))
+			ppl_val = float(ppl_match.group(1))
+			if in_initial_eval and opt_data['initial_val_ppl'] is None:
+				opt_data['initial_val_ppl'] = ppl_val
+			elif in_final_eval and opt_data['final_val_ppl'] is None:
+				opt_data['final_val_ppl'] = ppl_val
+
+		# Test PPL for overall results
+		test_ppl_match = re.search(r'Test PPL:\s*([\d.]+)', line)
+		if test_ppl_match:
+			overall['ppl'] = float(test_ppl_match.group(1))
 
 		acc_match = re.search(r'Test Acc:\s*([\d.]+)%', line)
 		if acc_match:
 			overall['accuracy'] = float(acc_match.group(1)) / 100
-
-		# Parse initial evaluation PPL (before optimization)
-		if 'Initial Evaluation' in line:
-			# Look ahead for perplexity
-			pass
-		init_ppl_match = re.search(r'Initial.*Perplexity:\s*([\d.]+)', line)
-		if init_ppl_match:
-			opt_data['initial_ppl'] = float(init_ppl_match.group(1))
 
 	# Parse optimization results (GA/TS)
 	# Format: "[Joint tiered] GA Results:" or "[Joint tiered] TS Results:"
@@ -169,10 +194,17 @@ def parse_tier_results(output: str) -> tuple[dict, list[TierResult], dict]:
 			iterations=current_opt.get('iterations', 0),
 		))
 
-	# Calculate total improvement
+	# Calculate total CE improvement from GA+TS
 	if opt_data['optimizations']:
 		total_imp = sum(o.improvement_pct for o in opt_data['optimizations'])
-		opt_data['total_improvement'] = total_imp
+		opt_data['total_ce_improvement'] = total_imp
+
+	# Calculate validation PPL improvement (lower is better, so improvement = (initial - final) / initial)
+	if opt_data['initial_val_ppl'] and opt_data['final_val_ppl']:
+		init_ppl = opt_data['initial_val_ppl']
+		final_ppl = opt_data['final_val_ppl']
+		if init_ppl > 0:
+			opt_data['val_ppl_improvement'] = ((init_ppl - final_ppl) / init_ppl) * 100
 
 	tier_pattern = re.compile(
 		r'Tier\s+(\d+)\s+'
@@ -268,9 +300,11 @@ def run_experiment(config: ExperimentConfig) -> Optional[ExperimentResult]:
 		print(f"Overall PPL: {overall['ppl']:.1f}, Accuracy: {overall['accuracy']:.2%}")
 		if opt_data['optimizations']:
 			for opt in opt_data['optimizations']:
-				print(f"  {opt.strategy}: {opt.improvement_pct:.2f}% improvement")
-			if opt_data['total_improvement']:
-				print(f"  Total: {opt_data['total_improvement']:.2f}% improvement")
+				print(f"  {opt.strategy}: {opt.improvement_pct:.2f}% CE improvement")
+			if opt_data['total_ce_improvement']:
+				print(f"  Total CE: {opt_data['total_ce_improvement']:.2f}% improvement")
+		if opt_data['val_ppl_improvement']:
+			print(f"  Val PPL: {opt_data['initial_val_ppl']:.0f} → {opt_data['final_val_ppl']:.0f} ({opt_data['val_ppl_improvement']:.2f}% improvement)")
 
 		return ExperimentResult(
 			name=config.name,
@@ -282,9 +316,11 @@ def run_experiment(config: ExperimentConfig) -> Optional[ExperimentResult]:
 			train_time=elapsed,
 			eval_time=0.0,
 			timestamp=datetime.now().isoformat(),
-			initial_ppl=opt_data['initial_ppl'],
+			initial_val_ppl=opt_data['initial_val_ppl'],
+			final_val_ppl=opt_data['final_val_ppl'],
+			val_ppl_improvement_pct=opt_data['val_ppl_improvement'],
 			optimization_results=opt_data['optimizations'] if opt_data['optimizations'] else None,
-			total_improvement_pct=opt_data['total_improvement'],
+			total_ce_improvement_pct=opt_data['total_ce_improvement'],
 		)
 
 	except subprocess.TimeoutExpired:
@@ -400,13 +436,15 @@ def print_summary_table(results: list[ExperimentResult]):
 	# Check if any results have optimization data
 	has_opt = any(r.optimization_results for r in results)
 
-	print("\n" + "="*140)
+	print("\n" + "="*160)
 	print("OVERNIGHT SWEEP RESULTS")
-	print("="*140)
+	print("="*160)
 
 	if has_opt:
-		print(f"\n{'Experiment':<22} {'Config':<30} {'PPL':>9} {'Acc':>7} | {'GA %':>6} {'TS %':>6} {'Tot %':>6} | {'T0 PPL':>8} {'T0 Acc':>6}")
-		print("-"*140)
+		# CE % = cross-entropy improvement (GA+TS optimizer fitness)
+		# PPL % = actual validation PPL improvement
+		print(f"\n{'Experiment':<20} {'Config':<28} {'PPL':>8} {'Acc':>6} | {'GA CE%':>7} {'TS CE%':>7} | {'Val PPL%':>8} | {'T0 PPL':>7} {'T0 Acc':>6}")
+		print("-"*160)
 	else:
 		print(f"\n{'Experiment':<25} {'Config':<35} {'PPL':>10} {'Acc':>8} | {'T0 PPL':>9} {'T0 Acc':>7}")
 		print("-"*110)
@@ -417,22 +455,22 @@ def print_summary_table(results: list[ExperimentResult]):
 		t0_acc = f"{t0.accuracy:.1%}" if t0 else "N/A"
 
 		if has_opt:
-			ga_imp = ts_imp = tot_imp = "-"
+			ga_imp = ts_imp = val_imp = "-"
 			if r.optimization_results:
 				for opt in r.optimization_results:
 					if opt.strategy == "GA":
 						ga_imp = f"{opt.improvement_pct:.2f}"
 					elif opt.strategy == "TS":
 						ts_imp = f"{opt.improvement_pct:.2f}"
-				if r.total_improvement_pct is not None:
-					tot_imp = f"{r.total_improvement_pct:.2f}"
+			if r.val_ppl_improvement_pct is not None:
+				val_imp = f"{r.val_ppl_improvement_pct:.2f}"
 
-			print(f"{r.name:<22} {r.config:<30} {r.overall_ppl:>9.1f} {r.overall_accuracy:>7.2%} | {ga_imp:>6} {ts_imp:>6} {tot_imp:>6} | {t0_ppl:>8} {t0_acc:>6}")
+			print(f"{r.name:<20} {r.config:<28} {r.overall_ppl:>8.0f} {r.overall_accuracy:>6.2%} | {ga_imp:>7} {ts_imp:>7} | {val_imp:>8} | {t0_ppl:>7} {t0_acc:>6}")
 		else:
 			print(f"{r.name:<25} {r.config:<35} {r.overall_ppl:>10.1f} {r.overall_accuracy:>8.2%} | {t0_ppl:>9} {t0_acc:>7}")
 
 	if has_opt:
-		print("-"*140)
+		print("-"*160)
 	else:
 		print("-"*110)
 
@@ -442,10 +480,17 @@ def print_summary_table(results: list[ExperimentResult]):
 
 	# Best optimization improvement if available
 	if has_opt:
-		opt_results = [r for r in results if r.total_improvement_pct]
+		# Best CE improvement
+		opt_results = [r for r in results if r.total_ce_improvement_pct]
 		if opt_results:
-			best_opt = max(opt_results, key=lambda x: x.total_improvement_pct or 0)
-			print(f"Best optimization: {best_opt.name} with {best_opt.total_improvement_pct:.2f}% total improvement")
+			best_ce = max(opt_results, key=lambda x: x.total_ce_improvement_pct or 0)
+			print(f"Best CE improvement: {best_ce.name} with {best_ce.total_ce_improvement_pct:.2f}%")
+
+		# Best Val PPL improvement
+		ppl_results = [r for r in results if r.val_ppl_improvement_pct]
+		if ppl_results:
+			best_ppl = max(ppl_results, key=lambda x: x.val_ppl_improvement_pct or 0)
+			print(f"Best Val PPL improvement: {best_ppl.name} with {best_ppl.val_ppl_improvement_pct:.2f}%")
 
 
 def estimate_runtime(experiments: list[ExperimentConfig]) -> float:
@@ -510,9 +555,11 @@ def deserialize_result(r: dict) -> ExperimentResult:
 		train_time=r.get('train_time', 0.0),
 		eval_time=r.get('eval_time', 0.0),
 		timestamp=r.get('timestamp', ''),
-		initial_ppl=r.get('initial_ppl'),
+		initial_val_ppl=r.get('initial_val_ppl') or r.get('initial_ppl'),  # backwards compat
+		final_val_ppl=r.get('final_val_ppl'),
+		val_ppl_improvement_pct=r.get('val_ppl_improvement_pct'),
 		optimization_results=opt_results,
-		total_improvement_pct=r.get('total_improvement_pct'),
+		total_ce_improvement_pct=r.get('total_ce_improvement_pct') or r.get('total_improvement_pct'),  # backwards compat
 	)
 
 
