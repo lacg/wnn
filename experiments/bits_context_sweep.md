@@ -84,6 +84,117 @@ Test how bits_per_neuron and context_size affect model performance.
 
 ---
 
+## Mechanism Analysis: Why PPL and Accuracy Trade Off
+
+### Why Fewer Neurons → Better PPL
+
+**The Voting/Hedging Mechanism:**
+
+When multiple neurons per cluster have different connectivity maps, they see different "views" of the input and often disagree on predictions:
+
+```
+Example: Token cluster with 5 neurons
+  Neuron 1 (sees bits 2,5,11): predicts "the" with 100% confidence
+  Neuron 2 (sees bits 3,8,14): predicts "a" with 100% confidence
+  Neuron 3 (sees bits 1,6,12): predicts "the" with 100% confidence
+  Neuron 4 (sees bits 4,9,15): predicts "an" with 100% confidence
+  Neuron 5 (sees bits 2,7,13): predicts "the" with 100% confidence
+
+  Aggregated output: "the" 60%, "a" 20%, "an" 20%
+```
+
+This **hedging** behavior hurts PPL:
+- Cross-entropy = -log(P(correct))
+- If correct answer is "the": -log(0.60) = 0.51 nats
+- With 1 neuron (100% confident): -log(1.0) = 0.0 nats
+
+**With 1 neuron per cluster:**
+- Prediction is always 100% or 0% (binary RAM output)
+- No probability dilution from disagreeing neurons
+- When correct → perfect cross-entropy (0 nats)
+- Result: Lower PPL (39,538 vs 40,506 baseline)
+
+**But accuracy collapses:**
+- Accuracy only cares about argmax (is top prediction correct?)
+- With 5 neurons voting, the "ensemble" can correct individual neuron errors
+- With 1 neuron, a single wrong RAM lookup = wrong answer
+- Result: 0.15% accuracy (essentially random guessing)
+
+### Why More Bits → Worse PPL but Better Accuracy
+
+**The Collision/Isolation Mechanism:**
+
+Bits per neuron determines the address space size:
+- 8 bits → 256 addresses
+- 10 bits → 1,024 addresses
+- 12 bits → 4,096 addresses
+
+**Fewer bits = More collisions = Implicit smoothing:**
+
+```
+8-bit neuron: Many different contexts hash to same address
+  Context "the quick brown" → address 42
+  Context "a fast brown"    → address 42  (collision!)
+
+  RAM[42] trained on both → predicts average of their targets
+  Result: Smoother, less confident predictions
+```
+
+**More bits = Fewer collisions = Spikier predictions:**
+
+```
+12-bit neuron: Fewer collisions, more isolated predictions
+  Context "the quick brown" → address 2847
+  Context "a fast brown"    → address 1392  (no collision)
+
+  Each address trained on specific context → confident predictions
+  Result: Spikier, more confident predictions
+```
+
+**The trade-off in action:**
+
+| Scenario | 8-bit (smooth) | 12-bit (spiky) |
+|----------|----------------|----------------|
+| Correct prediction | P=0.6, CE=0.51 | P=0.9, CE=0.11 |
+| Wrong prediction | P=0.3 on wrong, CE=1.2 | P=0.9 on wrong, CE=2.3 |
+
+- **Accuracy favors spiky**: Higher confidence on correct → more wins in argmax
+- **PPL penalizes confident wrong**: A 90% confident wrong answer is worse than 30%
+
+**Why collisions help PPL:**
+- Collisions force probability mass to spread across likely tokens
+- This "hedges" against confident wrong answers
+- Even when wrong, the model isn't catastrophically confident
+- Net effect: Lower cross-entropy on average
+
+**Why isolation helps accuracy:**
+- Spikier predictions win more argmax battles
+- Even if PPL is higher due to occasional confident mistakes
+- Net effect: Higher accuracy
+
+### Summary: The Fundamental Trade-off
+
+| Metric | Optimized by | Mechanism |
+|--------|--------------|-----------|
+| **PPL** | Fewer neurons + fewer bits | Avoid hedging + leverage collision smoothing |
+| **Accuracy** | More neurons + more bits | Ensemble voting + isolated confident predictions |
+
+**Best configurations by goal:**
+
+| Goal | Config | PPL | Accuracy |
+|------|--------|-----|----------|
+| Best PPL | 1n-all, 8-bit | 39,538 | 0.15% |
+| Best Accuracy | 5n-baseline, 12-bit | 45,434 | 9.24% |
+| Balanced | 5n-baseline, 8-bit | 40,506 | 6.28% |
+
+**The insight for architecture design:**
+- More neurons = better accuracy (voting ensemble)
+- More bits = better accuracy but worse PPL (isolation)
+- Tier 0 (top 100 tokens) needs more neurons for accuracy (49% of data)
+- Rare tokens (tier 2) can use fewer neurons with minimal PPL impact
+
+---
+
 ## Key Observations
 
 ### Bits Comparison (complete)
@@ -137,3 +248,93 @@ Test how bits_per_neuron and context_size affect model performance.
   - Val PPL: 41,074 | Val Acc: 6.75%
   - Test PPL: 40,574 | Test Acc: 6.18%
 - Notes: More context doesn't help
+
+---
+
+## Roadmap: Next Experiments
+
+### 1. Per-Tier PPL/Accuracy Metrics
+**Goal:** Understand which tier contributes most to errors
+
+**Implementation:**
+- Modify evaluation to track per-tier statistics
+- Separate predictions by token frequency tier
+- Metrics: PPL, accuracy, confidence distribution per tier
+
+**Hypothesis:**
+- Tier 0 (top 100, 49% of data) dominates overall metrics
+- Tier 2 (rare tokens) likely has worst accuracy but minimal PPL impact
+- This will inform where to allocate neurons/bits
+
+### 2. Memory Hashing for 20-60 Bits
+**Goal:** Scale beyond 12 bits without exponential memory growth
+
+**Current limitation:**
+- 12 bits = 4,096 addresses per neuron = 4KB RAM per neuron
+- 20 bits = 1M addresses = 1MB per neuron (50GB for 50K vocab!)
+- 60 bits = infeasible direct storage
+
+**Proposed solutions:**
+
+| Approach | Description | Trade-off |
+|----------|-------------|-----------|
+| **LSH buckets** | Hash 60-bit address to 12-bit bucket | Controlled collisions |
+| **Bloom filters** | Probabilistic membership | False positives, no values |
+| **Sparse storage** | Only store non-empty addresses | Memory proportional to data |
+| **Hierarchical** | Tree of smaller RAMs | Slower lookup, more flexible |
+
+**Experiment:** Compare 12-bit direct vs 20-bit with LSH hashing
+
+### 3. Asymmetric Tier Configurations
+**Goal:** Optimize neuron allocation based on tier importance
+
+**Experiments to run:**
+
+| Config | Rationale |
+|--------|-----------|
+| 11n tier0, 1n rest | Maximize tier 0 accuracy (49% of data) |
+| 11n tier0, 3n tier1, 1n rest | Gradual reduction |
+| 5n tier0, 5n tier1, 1n rest | Flat top tiers, minimal rest |
+
+**Hypothesis:** Tier 0 neurons matter most; can reduce tier 2 to 1n with minimal accuracy loss
+
+### 4. Hybrid Bit Configurations
+**Goal:** Different bits per tier to balance PPL/accuracy
+
+**Experiments to run:**
+
+| Config | Rationale |
+|--------|-----------|
+| 12-bit tier0, 8-bit rest | High accuracy for common tokens, smooth rare |
+| 8-bit tier0, 12-bit rest | Opposite: smooth common, precise rare |
+| 10-bit all tiers | Uniform middle ground |
+
+**Hypothesis:** 12-bit tier0 + 8-bit rest may give best of both worlds
+
+### 5. Optimal Tier 0 Neuron Count
+**Goal:** Find diminishing returns point for tier 0 neurons
+
+**Experiments to run:**
+- 100×3, 100×5, 100×7, 100×9, 100×11, 100×15, 100×20 (tier 0 only)
+- Keep tier 1 and rest at 1n to isolate tier 0 effect
+
+**Expected outcome:** Accuracy improvement curve that flattens around some neuron count
+
+---
+
+## Future Directions
+
+### Architecture Improvements
+- [ ] Learned connectivity via backprop (vs random + optimization)
+- [ ] Attention over context tokens (vs fixed concatenation)
+- [ ] Hierarchical token clustering (vs frequency-based tiers)
+
+### Training Improvements
+- [ ] Curriculum learning: easy contexts first
+- [ ] Hard example mining: focus on high-loss contexts
+- [ ] Ensemble of models with different random seeds
+
+### Evaluation Improvements
+- [ ] Per-token-frequency accuracy curves
+- [ ] Confidence calibration analysis
+- [ ] Error analysis: which contexts fail?

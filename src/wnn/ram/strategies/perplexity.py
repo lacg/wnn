@@ -3,10 +3,15 @@ Perplexity Calculator - Unified logic for consistent PPL calculation.
 
 This module provides a centralized perplexity calculation class to ensure
 consistency across the codebase. Use this instead of scattered PPL logic.
+
+Features:
+- Consistent PPL/CE/accuracy calculation
+- Optional per-category tracking (e.g., per-tier, per-frequency-bucket)
+- Batch processing support for efficiency
 """
 
 from math import exp, log
-from typing import Optional
+from typing import Optional, Callable, Union
 
 
 class PerplexityCalculator:
@@ -42,16 +47,37 @@ class PerplexityCalculator:
 		acc = calc.get_accuracy()
 	"""
 
-	def __init__(self, vocab_size: int):
+	def __init__(
+		self,
+		vocab_size: int,
+		num_categories: Optional[int] = None,
+		category_names: Optional[list[str]] = None,
+	):
 		"""
 		Initialize the calculator.
 
 		Args:
 			vocab_size: Size of vocabulary (used for min_prob = 1/vocab_size)
+			num_categories: Optional number of categories for per-category tracking.
+			                When set, enables per-category stats (e.g., per-tier metrics).
+			category_names: Optional names for categories (for better reporting).
+			                If None, uses ["cat_0", "cat_1", ...].
 		"""
 		self.vocab_size = vocab_size
 		self.min_prob = 1.0 / vocab_size
 		self._log_min_prob = log(self.min_prob)
+
+		# Category tracking setup
+		self.num_categories = num_categories
+		if num_categories is not None:
+			if category_names is not None:
+				assert len(category_names) == num_categories
+				self.category_names = category_names
+			else:
+				self.category_names = [f"cat_{i}" for i in range(num_categories)]
+		else:
+			self.category_names = None
+
 		self.reset()
 
 	def reset(self):
@@ -59,6 +85,16 @@ class PerplexityCalculator:
 		self._log_probs: list[float] = []
 		self._correct: int = 0
 		self._total: int = 0
+
+		# Per-category accumulators (if enabled)
+		if self.num_categories is not None:
+			self._cat_log_probs: list[list[float]] = [[] for _ in range(self.num_categories)]
+			self._cat_correct: list[int] = [0] * self.num_categories
+			self._cat_total: list[int] = [0] * self.num_categories
+		else:
+			self._cat_log_probs = None
+			self._cat_correct = None
+			self._cat_total = None
 
 	def add_from_probability(self, target_prob: float, is_correct: Optional[bool] = None):
 		"""
@@ -211,15 +247,82 @@ class PerplexityCalculator:
 		"""Get accuracy from accumulated observations."""
 		return self._correct / self._total if self._total > 0 else 0.0
 
-	def get_stats(self) -> dict:
-		"""Get all statistics."""
+	def get_category_stats(self, category: int) -> dict:
+		"""
+		Get statistics for a specific category.
+
+		Args:
+			category: Category index (0 to num_categories-1)
+
+		Returns:
+			Dict with cross_entropy, perplexity, accuracy, correct, total for this category.
+			Returns empty dict if category tracking is not enabled or category is invalid.
+		"""
+		if self.num_categories is None or category < 0 or category >= self.num_categories:
+			return {}
+
+		log_probs = self._cat_log_probs[category]
+		correct = self._cat_correct[category]
+		total = self._cat_total[category]
+
+		if not log_probs:
+			return {
+				'cross_entropy': float('inf'),
+				'perplexity': float('inf'),
+				'accuracy': 0.0,
+				'correct': 0,
+				'total': 0,
+			}
+
+		avg_log_prob = sum(log_probs) / len(log_probs)
 		return {
+			'cross_entropy': -avg_log_prob,
+			'perplexity': exp(-avg_log_prob),
+			'accuracy': correct / total if total > 0 else 0.0,
+			'correct': correct,
+			'total': total,
+		}
+
+	def get_all_category_stats(self) -> Optional[list[dict]]:
+		"""
+		Get statistics for all categories.
+
+		Returns:
+			List of category stat dicts (each with name, cross_entropy, perplexity, etc.)
+			Returns None if category tracking is not enabled.
+		"""
+		if self.num_categories is None:
+			return None
+
+		results = []
+		for i in range(self.num_categories):
+			stats = self.get_category_stats(i)
+			stats['name'] = self.category_names[i] if self.category_names else f"cat_{i}"
+			stats['category'] = i
+			results.append(stats)
+		return results
+
+	def get_stats(self) -> dict:
+		"""
+		Get all statistics.
+
+		Returns:
+			Dict with cross_entropy, perplexity, accuracy, correct, total.
+			If category tracking is enabled, also includes 'by_category' list.
+		"""
+		stats = {
 			'cross_entropy': self.get_cross_entropy(),
 			'perplexity': self.get_perplexity(),
 			'accuracy': self.get_accuracy(),
 			'correct': self._correct,
 			'total': self._total,
 		}
+
+		# Include per-category stats if enabled
+		if self.num_categories is not None:
+			stats['by_category'] = self.get_all_category_stats()
+
+		return stats
 
 	@staticmethod
 	def calculate_ppl_from_log_probs(log_probs: list[float]) -> float:
@@ -273,6 +376,7 @@ class PerplexityCalculator:
 		scores: 'Tensor',
 		targets: 'Tensor',
 		normalize: bool = True,
+		categories: Optional['Tensor'] = None,
 	) -> None:
 		"""
 		Add observations from batch of unnormalized scores (e.g., from RAMClusterLayer).
@@ -286,6 +390,9 @@ class PerplexityCalculator:
 			targets: [batch] tensor of target indices
 			normalize: Whether to apply softmax normalization (default True).
 			          Set False if scores are already proper probabilities.
+			categories: Optional [batch] tensor of category indices for per-category
+			           tracking. Each value should be in [0, num_categories).
+			           Only used if num_categories was set in constructor.
 		"""
 		from torch import arange
 		from torch.nn.functional import softmax
@@ -306,15 +413,28 @@ class PerplexityCalculator:
 		target_probs = target_probs.clamp(min=self.min_prob)
 		log_probs = target_probs.log()
 
-		# Add to accumulator
-		for lp in log_probs.tolist():
-			self._log_probs.append(lp)
-
 		# Track accuracy: correct if argmax == target
 		predicted = probs.argmax(dim=-1)  # [batch]
 		correct_mask = (predicted == targets)
+
+		# Add to overall accumulator
+		log_probs_list = log_probs.tolist()
+		correct_list = correct_mask.tolist()
+
+		for lp in log_probs_list:
+			self._log_probs.append(lp)
 		self._correct += correct_mask.sum().item()
 		self._total += batch_size
+
+		# Add to per-category accumulators if enabled
+		if self.num_categories is not None and categories is not None:
+			cat_list = categories.tolist()
+			for i, (lp, is_correct, cat) in enumerate(zip(log_probs_list, correct_list, cat_list)):
+				if 0 <= cat < self.num_categories:
+					self._cat_log_probs[cat].append(lp)
+					if is_correct:
+						self._cat_correct[cat] += 1
+					self._cat_total[cat] += 1
 
 	@staticmethod
 	def normalize_scores(scores: 'Tensor') -> 'Tensor':

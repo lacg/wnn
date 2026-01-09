@@ -167,6 +167,9 @@ class BenchmarkConfig:
 	# Faster optimization iterations, full retrain at end with best connectivity
 	windowed_pretrain: bool = False
 
+	# Per-tier metrics tracking (for tiered architectures)
+	per_tier: bool = False
+
 
 def load_wikitext2(tokenizer_type: TokenizerType = TokenizerType.GPT2,
 					train_limit: Optional[int] = None,
@@ -692,6 +695,7 @@ def run_benchmark(config: BenchmarkConfig):
 		batch_size=config.batch_size * 2,
 		backend=AccelerationMode.AUTO,
 		verbose=False,
+		per_tier=config.per_tier,
 	)
 	val_eval_time = time.perf_counter() - start
 
@@ -710,6 +714,7 @@ def run_benchmark(config: BenchmarkConfig):
 		batch_size=config.batch_size * 2,
 		backend=AccelerationMode.AUTO,
 		verbose=False,
+		per_tier=config.per_tier,
 	)
 	eval_time = time.perf_counter() - start
 
@@ -754,6 +759,25 @@ def run_benchmark(config: BenchmarkConfig):
 
 	if config.optimize:
 		log(f"  Optimization: {config.strategy}")
+
+	# Per-tier breakdown (if enabled and tiered)
+	if config.per_tier and 'by_tier' in test_stats:
+		log()
+		log("Per-Tier Test Results:")
+		log("=" * 70)
+
+		# Header
+		log(f"{'Tier':<8} {'Clusters':>10} {'Neurons':>8} {'Data %':>8} {'PPL':>12} {'Accuracy':>10}")
+		log("-" * 70)
+
+		for ts in test_stats['by_tier']:
+			tier_name = ts['name'].replace('tier_', 'Tier ')
+			log(f"{tier_name:<8} {ts['cluster_count']:>10,} {ts['neurons_per_cluster']:>8} "
+				f"{ts['data_pct']:>7.1f}% {ts['perplexity']:>12.1f} {ts['accuracy']:>9.2%}")
+
+		log("-" * 70)
+		log(f"{'TOTAL':<8} {sum(ts['cluster_count'] for ts in test_stats['by_tier']):>10,} "
+			f"{'':>8} {'100.0':>7}% {test_stats['perplexity']:>12.1f} {test_stats['accuracy']:>9.2%}")
 
 	log()
 	log_separator("=")
@@ -817,6 +841,10 @@ if __name__ == "__main__":
 	parser.add_argument("--ga-gens", type=int, default=None,
 		help="GA generations (default: 20 fast, 50 full, 100 overnight)")
 
+	# Evaluation options
+	parser.add_argument("--per-tier", action="store_true",
+		help="Track per-tier PPL and accuracy (only for tiered architectures)")
+
 	args = parser.parse_args()
 
 	# Setup logging first
@@ -841,6 +869,7 @@ if __name__ == "__main__":
 	config.optimize = args.optimize
 	config.strategy = args.strategy
 	config.windowed_pretrain = args.windowed_pretrain
+	config.per_tier = args.per_tier
 
 	if args.mode == "fast":
 		# Quick test with smaller data

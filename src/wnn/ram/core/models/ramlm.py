@@ -828,6 +828,7 @@ class RAMLM(RAMComponent):
 		batch_size: int = 5000,
 		backend: AccelerationMode = AccelerationMode.AUTO,
 		verbose: bool = True,
+		per_tier: bool = False,
 	) -> dict:
 		"""
 		Fast batch evaluation on a sequence of token IDs.
@@ -840,9 +841,13 @@ class RAMLM(RAMComponent):
 			batch_size: Number of examples to process per batch
 			backend: Acceleration backend (AUTO, PYTORCH, CPU, METAL, HYBRID)
 			verbose: Print progress
+			per_tier: If True and model is tiered, track per-tier PPL/accuracy.
+			         Returns 'by_category' (aliased 'by_tier') in stats dict.
 
 		Returns:
 			Dict with cross_entropy, perplexity, accuracy, etc.
+			If per_tier=True and model is tiered, includes 'by_tier' list with
+			per-tier breakdowns.
 		"""
 		from math import log
 
@@ -860,9 +865,31 @@ class RAMLM(RAMComponent):
 		# Get all targets
 		targets = tensor(token_ids[self.context_size:], dtype=long)  # [num_examples]
 
-		# Use PerplexityCalculator for consistent normalized perplexity
+		# Setup per-tier tracking if enabled and model is tiered
 		from wnn.ram.strategies.perplexity import PerplexityCalculator
-		calc = PerplexityCalculator(vocab_size=self.vocab_size)
+
+		use_per_tier = per_tier and self._is_tiered
+		if use_per_tier:
+			num_tiers = len(self.layer.tier_configs)
+			tier_names = [f"tier_{i}" for i in range(num_tiers)]
+			calc = PerplexityCalculator(
+				vocab_size=self.vocab_size,
+				num_categories=num_tiers,
+				category_names=tier_names,
+			)
+
+			# Pre-compute tier for each target token (vectorized lookup)
+			# _cluster_to_tier[token_id] = (tier_idx, local_cluster_idx)
+			tier_lookup = tensor([
+				self.layer._cluster_to_tier[tid][0]
+				for tid in range(self.vocab_size)
+			], dtype=long)
+
+			if verbose:
+				print(f"  Per-tier tracking enabled ({num_tiers} tiers)")
+		else:
+			calc = PerplexityCalculator(vocab_size=self.vocab_size)
+			tier_lookup = None
 
 		num_batches = (total_examples + batch_size - 1) // batch_size
 
@@ -880,8 +907,12 @@ class RAMLM(RAMComponent):
 			# Batch forward pass with selected backend
 			scores = self.forward(batch_bits, backend=backend)  # [batch_len, vocab_size]
 
-			# Add to calculator - it handles softmax normalization internally
-			calc.add_from_scores_batch(scores, batch_targets, normalize=True)
+			# Get tier categories for this batch if needed
+			if use_per_tier:
+				batch_tiers = tier_lookup[batch_targets]  # [batch_len]
+				calc.add_from_scores_batch(scores, batch_targets, normalize=True, categories=batch_tiers)
+			else:
+				calc.add_from_scores_batch(scores, batch_targets, normalize=True)
 
 			if verbose and (batch_idx + 1) % max(1, num_batches // 5) == 0:
 				pct = (end / total_examples) * 100
@@ -891,10 +922,28 @@ class RAMLM(RAMComponent):
 		# Get final stats from calculator
 		stats = calc.get_stats()
 
+		# Rename 'by_category' to 'by_tier' for clarity
+		if use_per_tier and 'by_category' in stats:
+			stats['by_tier'] = stats.pop('by_category')
+			# Add tier config info to each tier's stats
+			for tier_stat, tc in zip(stats['by_tier'], self.layer.tier_configs):
+				tier_stat['cluster_count'] = tc.cluster_count
+				tier_stat['neurons_per_cluster'] = tc.neurons_per_cluster
+				tier_stat['bits_per_neuron'] = tc.bits_per_neuron
+				# Calculate percentage of total data
+				tier_stat['data_pct'] = tier_stat['total'] / stats['total'] * 100 if stats['total'] > 0 else 0
+
 		if verbose:
 			print(f"  Cross-entropy: {stats['cross_entropy']:.4f}")
 			print(f"  Perplexity: {stats['perplexity']:.2f}")
 			print(f"  Accuracy: {stats['accuracy']:.2%}")
+
+			# Print per-tier breakdown if available
+			if use_per_tier and 'by_tier' in stats:
+				print("  Per-tier breakdown:")
+				for ts in stats['by_tier']:
+					print(f"    {ts['name']}: PPL={ts['perplexity']:.1f}, Acc={ts['accuracy']:.2%}, "
+						  f"Data={ts['data_pct']:.1f}% ({ts['cluster_count']} clusters × {ts['neurons_per_cluster']}n)")
 
 		return stats
 
