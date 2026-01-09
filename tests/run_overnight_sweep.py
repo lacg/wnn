@@ -331,6 +331,29 @@ def estimate_runtime(experiments: list[ExperimentConfig]) -> float:
 	return total_minutes / 60
 
 
+def load_completed_experiments(output_path: Path) -> set[str]:
+	"""Load names of already-completed experiments from results file."""
+	if not output_path.exists():
+		return set()
+	try:
+		with open(output_path) as f:
+			data = json.load(f)
+		return {r['name'] for r in data}
+	except (json.JSONDecodeError, KeyError):
+		return set()
+
+
+def load_existing_results(output_path: Path) -> list[dict]:
+	"""Load existing results for merging."""
+	if not output_path.exists():
+		return []
+	try:
+		with open(output_path) as f:
+			return json.load(f)
+	except json.JSONDecodeError:
+		return []
+
+
 def main():
 	parser = argparse.ArgumentParser(description="Overnight High-Capacity Sweep")
 	parser.add_argument("--full-data", action="store_true",
@@ -341,10 +364,17 @@ def main():
 		default="standard", help="Experiment set to run")
 	parser.add_argument("--experiments", type=str, default=None,
 		help="Comma-separated list of specific experiments to run")
+	parser.add_argument("--skip-completed", action="store_true", default=True,
+		help="Skip experiments already in output file (default: True)")
+	parser.add_argument("--force-rerun", action="store_true",
+		help="Re-run all experiments even if already completed")
 	args = parser.parse_args()
 
 	# Define experiments
 	all_experiments = define_experiments()
+
+	# Output path
+	output_path = Path("experiments") / args.output
 
 	# Filter by set or specific experiments
 	if args.experiments:
@@ -358,6 +388,28 @@ def main():
 		max_priority = {"quick": 1, "standard": 2, "extended": 3}[args.set]
 		experiments = [e for e in all_experiments if e.priority <= max_priority]
 
+	# Skip completed experiments (unless --force-rerun)
+	completed = set()
+	if args.skip_completed and not args.force_rerun:
+		completed = load_completed_experiments(output_path)
+		if completed:
+			original_count = len(experiments)
+			experiments = [e for e in experiments if e.name not in completed]
+			skipped = original_count - len(experiments)
+			if skipped > 0:
+				print(f"\nSkipping {skipped} already-completed experiments: {sorted(completed)}")
+
+	if not experiments:
+		print("\nAll experiments already completed! Use --force-rerun to re-run them.")
+		# Show existing results
+		existing = load_existing_results(output_path)
+		if existing:
+			print_summary_table([ExperimentResult(**{
+				**r,
+				'tier_results': [TierResult(**t) for t in r['tier_results']]
+			}) for r in existing])
+		return 0
+
 	# Update mode based on full-data flag
 	mode = "full" if args.full_data else "fast"
 	for exp in experiments:
@@ -369,7 +421,7 @@ def main():
 
 	print(f"\n{'#'*70}")
 	print(f"# Overnight High-Capacity Sweep")
-	print(f"# Set: {args.set} ({len(experiments)} experiments)")
+	print(f"# Set: {args.set} ({len(experiments)} new + {len(completed)} completed)")
 	print(f"# Mode: {mode}")
 	print(f"# Estimated runtime: {est_hours:.1f} hours")
 	print(f"# Output: {args.output}")
@@ -382,30 +434,45 @@ def main():
 	print(f"\nStarting at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 	print(f"Expected completion: ~{est_hours:.1f} hours\n")
 
+	# Load existing results for merging
+	existing_results = load_existing_results(output_path)
 	results = []
+
 	for i, config in enumerate(experiments):
 		print(f"\n[{i+1}/{len(experiments)}] {config.name}")
 		result = run_experiment(config)
 		if result:
 			results.append(result)
-			# Save intermediate results
-			output_path = Path("experiments") / args.output
+			# Merge with existing and save
+			merged = existing_results + [asdict(r) for r in results]
 			output_path.parent.mkdir(exist_ok=True)
 			with open(output_path, 'w') as f:
-				json.dump([asdict(r) for r in results], f, indent=2, default=str)
-			print(f"Saved intermediate results to {output_path}")
+				json.dump(merged, f, indent=2, default=str)
+			print(f"Saved to {output_path} ({len(existing_results)} previous + {len(results)} new)")
 
-	# Print summary
+	# Print summary (new experiments only)
 	if results:
+		print("\n--- New Experiments ---")
 		print_summary_table(results)
 
-		output_path = Path("experiments") / args.output
-		with open(output_path, 'w') as f:
-			json.dump([asdict(r) for r in results], f, indent=2, default=str)
-		print(f"\nFinal results saved to: {output_path}")
+	# Print combined summary if there were previous results
+	if existing_results:
+		all_results = [
+			ExperimentResult(**{
+				**r,
+				'tier_results': [TierResult(**t) for t in r['tier_results']]
+			}) for r in existing_results
+		] + results
+		print("\n--- All Experiments (Previous + New) ---")
+		print_summary_table(all_results)
+
+	if results:
+		print(f"\nResults saved to: {output_path}")
+		print(f"  Previous: {len(existing_results)}, New: {len(results)}, Total: {len(existing_results) + len(results)}")
 	else:
-		print("\nNo successful experiments!")
-		return 1
+		print("\nNo new experiments completed!")
+		if not existing_results:
+			return 1
 
 	return 0
 
