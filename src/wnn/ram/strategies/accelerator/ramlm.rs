@@ -269,3 +269,187 @@ pub fn get_memory_values(
         read_cell(memory_words, neuron_idx as usize, address as usize, words_per_neuron)
     }).collect()
 }
+
+/// Tier configuration for tiered training
+#[derive(Clone, Copy)]
+pub struct TierConfig {
+    pub cluster_start: usize,      // First global cluster index for this tier
+    pub cluster_end: usize,        // Last+1 global cluster index for this tier
+    pub neurons_per_cluster: usize,
+    pub bits_per_neuron: usize,
+    pub words_per_neuron: usize,
+    pub memory_offset: usize,      // Offset into flattened memory array
+    pub conn_offset: usize,        // Offset into flattened connections array
+}
+
+/// Batch training for tiered RAMLM - processes ALL tiers in a single Rust call
+///
+/// This eliminates Python loop overhead by handling tier assignment and training
+/// entirely in Rust with full parallelization.
+///
+/// Args:
+///   input_bits_flat: [num_examples * total_input_bits] flattened bool array
+///   true_clusters: [num_examples] global cluster indices
+///   false_clusters_flat: [num_examples * num_negatives] global cluster indices
+///   connections_flat: All tiers' connections concatenated [tier0_conns..., tier1_conns..., ...]
+///   memory_words_flat: All tiers' memory concatenated [tier0_mem..., tier1_mem..., ...]
+///   tier_configs: [(cluster_start, cluster_end, neurons_per_cluster, bits_per_neuron,
+///                   words_per_neuron, memory_offset, conn_offset), ...]
+///
+/// Returns: (total_modified, updated_memory_words_flat)
+pub fn train_batch_tiered(
+    input_bits_flat: &[bool],
+    true_clusters: &[i64],
+    false_clusters_flat: &[i64],
+    connections_flat: &[i64],
+    memory_words: &mut [i64],
+    num_examples: usize,
+    total_input_bits: usize,
+    num_negatives: usize,
+    tier_configs: &[TierConfig],
+    allow_override: bool,
+) -> usize {
+    let num_tiers = tier_configs.len();
+
+    // Build lookup table: global_cluster -> (tier_idx, local_cluster)
+    let max_cluster = tier_configs.iter().map(|t| t.cluster_end).max().unwrap_or(0);
+    let mut cluster_to_tier: Vec<(usize, usize)> = vec![(0, 0); max_cluster];
+    for (tier_idx, tc) in tier_configs.iter().enumerate() {
+        for global_cluster in tc.cluster_start..tc.cluster_end {
+            let local_cluster = global_cluster - tc.cluster_start;
+            cluster_to_tier[global_cluster] = (tier_idx, local_cluster);
+        }
+    }
+
+    // Convert memory to atomic for thread-safe writes
+    let atomic_memory: &[AtomicI64] = unsafe {
+        std::slice::from_raw_parts(
+            memory_words.as_ptr() as *const AtomicI64,
+            memory_words.len(),
+        )
+    };
+
+    // ========== PHASE 1: Write ALL TRUEs first ==========
+    let true_modified: usize = (0..num_examples).into_par_iter().map(|ex_idx| {
+        let input_start = ex_idx * total_input_bits;
+        let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
+
+        let mut ex_modified = 0usize;
+
+        let true_cluster = true_clusters[ex_idx] as usize;
+        if true_cluster >= max_cluster {
+            return 0;
+        }
+
+        let (tier_idx, local_cluster) = cluster_to_tier[true_cluster];
+        let tc = &tier_configs[tier_idx];
+
+        let true_start_neuron = local_cluster * tc.neurons_per_cluster;
+
+        for neuron_offset in 0..tc.neurons_per_cluster {
+            let local_neuron_idx = true_start_neuron + neuron_offset;
+            let conn_start = tc.conn_offset + local_neuron_idx * tc.bits_per_neuron;
+            let connections = &connections_flat[conn_start..conn_start + tc.bits_per_neuron];
+
+            let address = compute_address(input_bits, connections, tc.bits_per_neuron);
+
+            // Compute global memory position
+            let mem_neuron_offset = tc.memory_offset + local_neuron_idx * tc.words_per_neuron;
+
+            if write_cell_offset(atomic_memory, mem_neuron_offset, address, TRUE, tc.words_per_neuron, true) {
+                ex_modified += 1;
+            }
+        }
+
+        ex_modified
+    }).sum();
+
+    fence(Ordering::SeqCst);
+
+    // ========== PHASE 2: Write ALL FALSEs second ==========
+    let false_modified: usize = (0..num_examples).into_par_iter().map(|ex_idx| {
+        let input_start = ex_idx * total_input_bits;
+        let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
+
+        let mut ex_modified = 0usize;
+
+        let false_start = ex_idx * num_negatives;
+        for neg_idx in 0..num_negatives {
+            let false_cluster = false_clusters_flat[false_start + neg_idx] as usize;
+            if false_cluster >= max_cluster {
+                continue;
+            }
+
+            let (tier_idx, local_cluster) = cluster_to_tier[false_cluster];
+            let tc = &tier_configs[tier_idx];
+
+            let false_start_neuron = local_cluster * tc.neurons_per_cluster;
+
+            for neuron_offset in 0..tc.neurons_per_cluster {
+                let local_neuron_idx = false_start_neuron + neuron_offset;
+                let conn_start = tc.conn_offset + local_neuron_idx * tc.bits_per_neuron;
+                let connections = &connections_flat[conn_start..conn_start + tc.bits_per_neuron];
+
+                let address = compute_address(input_bits, connections, tc.bits_per_neuron);
+
+                let mem_neuron_offset = tc.memory_offset + local_neuron_idx * tc.words_per_neuron;
+
+                if write_cell_offset(atomic_memory, mem_neuron_offset, address, FALSE, tc.words_per_neuron, allow_override) {
+                    ex_modified += 1;
+                }
+            }
+        }
+
+        ex_modified
+    }).sum();
+
+    true_modified + false_modified
+}
+
+/// Write cell with pre-computed memory offset (for tiered training)
+#[inline]
+fn write_cell_offset(
+    memory_words: &[AtomicI64],
+    mem_neuron_offset: usize,
+    address: usize,
+    value: i64,
+    words_per_neuron: usize,
+    allow_override: bool,
+) -> bool {
+    let word_idx = address / CELLS_PER_WORD;
+    let cell_idx = address % CELLS_PER_WORD;
+    let word_offset = mem_neuron_offset + word_idx;
+
+    if word_offset >= memory_words.len() {
+        return false;
+    }
+
+    let shift = cell_idx * BITS_PER_CELL;
+    let mask = CELL_MASK << shift;
+    let new_bits = value << shift;
+
+    loop {
+        let old_word = memory_words[word_offset].load(Ordering::Acquire);
+        let old_cell = (old_word >> shift) & CELL_MASK;
+
+        if !allow_override && old_cell != EMPTY {
+            return false;
+        }
+
+        if old_cell == value {
+            return false;
+        }
+
+        let new_word = (old_word & !mask) | new_bits;
+
+        match memory_words[word_offset].compare_exchange(
+            old_word,
+            new_word,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return true,
+            Err(_) => continue,
+        }
+    }
+}

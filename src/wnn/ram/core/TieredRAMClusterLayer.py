@@ -503,8 +503,8 @@ class TieredRAMClusterLayer(RAMComponent):
 		"""
 		Rust-accelerated training for tiered models.
 
-		Groups examples by tier and uses Rust training on each tier's Memory.
-		Provides significant speedup over PyTorch for large batches.
+		Uses optimized single-call Rust function that handles ALL tiers internally.
+		This eliminates Python loop overhead and provides full parallelization.
 
 		Args:
 			input_bits: [num_examples, total_input_bits] input patterns
@@ -517,6 +517,11 @@ class TieredRAMClusterLayer(RAMComponent):
 		"""
 		try:
 			import ram_accelerator
+			# Check if optimized tiered function is available
+			if not hasattr(ram_accelerator, 'ramlm_train_batch_tiered_numpy'):
+				return self._train_multi_examples_rust_numpy_legacy(
+					input_bits, true_clusters, false_clusters, allow_override
+				)
 		except ImportError:
 			# Fall back to PyTorch if Rust not available
 			return self.train_multi_examples(input_bits, true_clusters, false_clusters, allow_override)
@@ -526,7 +531,83 @@ class TieredRAMClusterLayer(RAMComponent):
 
 		num_examples = input_bits.shape[0]
 		num_negatives = false_clusters.shape[1]
-		device = input_bits.device
+
+		# Flatten all inputs to numpy
+		input_bits_np = input_bits.flatten().bool().numpy().astype(np.uint8)
+		true_clusters_np = true_clusters.cpu().numpy().astype(np.int64)
+		false_clusters_np = false_clusters.flatten().cpu().numpy().astype(np.int64)
+
+		# Build tier configs with offsets
+		# Format: (cluster_start, cluster_end, neurons_per_cluster, bits_per_neuron,
+		#          words_per_neuron, memory_offset, conn_offset)
+		tier_configs = []
+		memory_offset = 0
+		conn_offset = 0
+		cluster_start = 0
+
+		for tc, memory in zip(self.tier_configs, self.tier_memories):
+			tier_configs.append((
+				cluster_start,                    # cluster_start (global)
+				cluster_start + tc.cluster_count, # cluster_end (global)
+				tc.neurons_per_cluster,
+				tc.bits_per_neuron,
+				memory.words_per_neuron,
+				memory_offset,
+				conn_offset,
+			))
+			cluster_start += tc.cluster_count
+			memory_offset += tc.total_neurons * memory.words_per_neuron
+			conn_offset += tc.total_neurons * tc.bits_per_neuron
+
+		# Concatenate all tier connections and memory
+		connections_list = [m.connections.flatten().numpy().astype(np.int64) for m in self.tier_memories]
+		memory_list = [m.memory_words.flatten().numpy().astype(np.int64) for m in self.tier_memories]
+
+		connections_flat = np.concatenate(connections_list)
+		memory_flat = np.concatenate(memory_list)
+
+		# Call optimized Rust function (all tiers in one call)
+		modified, new_memory = ram_accelerator.ramlm_train_batch_tiered_numpy(
+			input_bits_np,
+			true_clusters_np,
+			false_clusters_np,
+			connections_flat,
+			memory_flat,
+			num_examples,
+			self.total_input_bits,
+			num_negatives,
+			tier_configs,
+			allow_override,
+		)
+
+		# Split returned memory back to individual tiers
+		offset = 0
+		for tc, memory in zip(self.tier_configs, self.tier_memories):
+			tier_size = tc.total_neurons * memory.words_per_neuron
+			tier_memory = new_memory[offset:offset + tier_size]
+			memory.memory_words[:] = torch_tensor(tier_memory, dtype=int64).view_as(memory.memory_words)
+			offset += tier_size
+
+		return modified
+
+	def _train_multi_examples_rust_numpy_legacy(
+		self,
+		input_bits: Tensor,
+		true_clusters: Tensor,
+		false_clusters: Tensor,
+		allow_override: bool = False,
+	) -> int:
+		"""
+		Legacy Rust-accelerated training (calls Rust per-tier).
+
+		Used as fallback if optimized tiered function is not available.
+		"""
+		import ram_accelerator
+		import numpy as np
+		from torch import tensor as torch_tensor, int64
+
+		num_examples = input_bits.shape[0]
+		num_negatives = false_clusters.shape[1]
 		modified = 0
 
 		# Pre-compute tier assignments using numpy for speed

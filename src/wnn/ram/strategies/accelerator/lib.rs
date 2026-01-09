@@ -535,6 +535,91 @@ fn ramlm_train_batch_numpy<'py>(
     })
 }
 
+/// Tiered batch training - ALL tiers in a single Rust call (eliminates Python loop overhead)
+///
+/// This is the optimized training function for tiered architectures. Instead of calling
+/// Rust separately for each tier (with Python overhead between), this function handles
+/// ALL tiers internally with full rayon parallelization.
+///
+/// Args:
+///   input_bits: [num_examples * total_input_bits] u8 numpy array (0/1 values)
+///   true_clusters: [num_examples] i64 numpy array of global cluster indices
+///   false_clusters: [num_examples * num_negatives] i64 numpy array of global cluster indices
+///   connections_flat: All tiers' connections concatenated (tier0..tier1..tier2..)
+///   memory_words_flat: All tiers' memory concatenated (tier0..tier1..tier2..)
+///   tier_configs: List of (cluster_start, cluster_end, neurons_per_cluster, bits_per_neuron,
+///                         words_per_neuron, memory_offset, conn_offset) tuples
+///
+/// Returns: (num_modified, updated_memory_words_flat)
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn ramlm_train_batch_tiered_numpy<'py>(
+    py: Python<'py>,
+    input_bits: PyReadonlyArray1<'py, u8>,
+    true_clusters: PyReadonlyArray1<'py, i64>,
+    false_clusters: PyReadonlyArray1<'py, i64>,
+    connections_flat: PyReadonlyArray1<'py, i64>,
+    memory_words_flat: PyReadonlyArray1<'py, i64>,
+    num_examples: usize,
+    total_input_bits: usize,
+    num_negatives: usize,
+    tier_configs: Vec<(usize, usize, usize, usize, usize, usize, usize)>,
+    allow_override: bool,
+) -> PyResult<(usize, Vec<i64>)> {
+    // Extract data from numpy arrays BEFORE allow_threads
+    let input_slice = input_bits.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Input array not contiguous: {}", e))
+    })?;
+    let true_slice = true_clusters.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("True clusters array not contiguous: {}", e))
+    })?;
+    let false_slice = false_clusters.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("False clusters array not contiguous: {}", e))
+    })?;
+    let conn_slice = connections_flat.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Connections array not contiguous: {}", e))
+    })?;
+    let mem_slice = memory_words_flat.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Memory array not contiguous: {}", e))
+    })?;
+
+    // Convert to Rust types
+    let input_bools: Vec<bool> = input_slice.iter().map(|&b| b != 0).collect();
+    let true_vec: Vec<i64> = true_slice.to_vec();
+    let false_vec: Vec<i64> = false_slice.to_vec();
+    let conn_vec: Vec<i64> = conn_slice.to_vec();
+    let mut mem_vec: Vec<i64> = mem_slice.to_vec();
+
+    // Convert tier configs to struct
+    let tier_structs: Vec<ramlm::TierConfig> = tier_configs.iter().map(|&(cluster_start, cluster_end, neurons_per_cluster, bits_per_neuron, words_per_neuron, memory_offset, conn_offset)| {
+        ramlm::TierConfig {
+            cluster_start,
+            cluster_end,
+            neurons_per_cluster,
+            bits_per_neuron,
+            words_per_neuron,
+            memory_offset,
+            conn_offset,
+        }
+    }).collect();
+
+    py.allow_threads(|| {
+        let modified = ramlm::train_batch_tiered(
+            &input_bools,
+            &true_vec,
+            &false_vec,
+            &conn_vec,
+            &mut mem_vec,
+            num_examples,
+            total_input_bits,
+            num_negatives,
+            &tier_structs,
+            allow_override,
+        );
+        Ok((modified, mem_vec))
+    })
+}
+
 /// Batch forward pass for RAMClusterLayer (CPU - rayon parallel)
 ///
 /// Computes probabilities for all clusters for all examples in parallel.
@@ -1425,6 +1510,7 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // RAMLM acceleration (proper RAM WNN architecture)
     m.add_function(wrap_pyfunction!(ramlm_train_batch, m)?)?;
     m.add_function(wrap_pyfunction!(ramlm_train_batch_numpy, m)?)?;  // FAST numpy-based training
+    m.add_function(wrap_pyfunction!(ramlm_train_batch_tiered_numpy, m)?)?;  // FAST tiered training (all tiers in one call)
     m.add_function(wrap_pyfunction!(ramlm_forward_batch, m)?)?;
     // RAMLM Metal GPU acceleration
     m.add_function(wrap_pyfunction!(ramlm_forward_batch_metal, m)?)?;
