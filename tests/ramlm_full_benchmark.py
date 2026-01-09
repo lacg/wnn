@@ -903,7 +903,14 @@ if __name__ == "__main__":
 		log(f"Tiered: {config.tiers}")
 
 	# Run benchmark
+	session_start = time.perf_counter()
 	results = run_benchmark(config)
+	session_duration = time.perf_counter() - session_start
+
+	# Log total duration
+	minutes = int(session_duration // 60)
+	seconds = int(session_duration % 60)
+	log(f"Total Duration: {minutes}m {seconds}s")
 
 	# Log session end
 	log_separator()

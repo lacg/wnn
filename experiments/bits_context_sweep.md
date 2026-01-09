@@ -50,21 +50,37 @@ Test how bits_per_neuron and context_size affect model performance.
 | fast | 10   | 4   | 100×11, 400×3, rest×3 | 151,571 | ~10m | 43,242  | 7.80%   | 43,024   | 7.50%    | PPL same, acc worse |
 | fast | 12   | 4   | 100×11, 400×3, rest×3 | 151,571 | ~24m | 45,370  | 8.32%   | 45,244   | 8.04%    | PPL same, acc worse |
 
-### 3 Neurons/Cluster (all tiers) - pending
+### 3 Neurons/Cluster (all tiers)
 
 | Mode | Bits | Ctx | Tiers | Total Neurons | Time | Val PPL | Val Acc | Test PPL | Test Acc | Notes |
 |------|------|-----|-------|---------------|------|---------|---------|----------|----------|-------|
-| fast | 8    | 4   | 100×3, 400×3, rest×3 | - | - | -  | -   | -   | -    | Pending |
-| fast | 10   | 4   | 100×3, 400×3, rest×3 | - | - | -  | -   | -   | -    | Pending |
-| fast | 12   | 4   | 100×3, 400×3, rest×3 | - | - | -  | -   | -   | -    | Pending |
+| fast | 8    | 4   | 100×3, 400×3, rest×3 | 150,771 | ~5m  | 40,650  | 2.74%   | 40,194   | 1.95%    | Best PPL! Worst acc |
+| fast | 10   | 4   | 100×3, 400×3, rest×3 | 150,771 | ~10m | 42,783  | 4.89%   | 42,527   | 4.68%    | Good PPL, poor acc |
+| fast | 12   | 4   | 100×3, 400×3, rest×3 | 150,771 | ~24m | 45,094  | 5.36%   | 44,807   | 4.75%    | Good PPL, poor acc |
 
-### 1 Neuron/Cluster (all tiers) - pending
+### 1 Neuron/Cluster (all tiers)
 
 | Mode | Bits | Ctx | Tiers | Total Neurons | Time | Val PPL | Val Acc | Test PPL | Test Acc | Notes |
 |------|------|-----|-------|---------------|------|---------|---------|----------|----------|-------|
-| fast | 8    | 4   | 100×1, 400×1, rest×1 | - | - | -  | -   | -   | -    | Pending |
-| fast | 10   | 4   | 100×1, 400×1, rest×1 | - | - | -  | -   | -   | -    | Pending |
-| fast | 12   | 4   | 100×1, 400×1, rest×1 | - | - | -  | -   | -   | -    | Pending |
+| fast | 8    | 4   | 100×1, 400×1, rest×1 | 50,257  | ~1m  | 39,888  | 0.14%   | 39,538   | 0.15%    | BEST PPL! ~random acc |
+| fast | 10   | 4   | 100×1, 400×1, rest×1 | 50,257  | ~2m  | 41,721  | 0.53%   | 41,346   | 0.57%    | No voting = no acc |
+| fast | 12   | 4   | 100×1, 400×1, rest×1 | 50,257  | ~8m  | 43,443  | 1.09%   | 43,114   | 1.20%    | No voting = no acc |
+
+### Full Summary: Neurons vs PPL vs Accuracy
+
+| Config | 8-bit PPL | 8-bit Acc | 10-bit PPL | 10-bit Acc | 12-bit PPL | 12-bit Acc |
+|--------|-----------|-----------|------------|------------|------------|------------|
+| 5n baseline | 40,506 | 6.28% | 42,961 | 8.52% | 45,434 | 9.24% |
+| 3n (rest) | 40,539 | 5.71% | 43,024 | 7.89% | 45,409 | 8.60% |
+| 3n (tier1+rest) | 40,523 | 4.94% | 43,024 | 7.50% | 45,244 | 8.04% |
+| 3n (all) | 40,194 | 1.95% | 42,527 | 4.68% | 44,807 | 4.75% |
+| 1n (all) | 39,538 | 0.15% | 41,346 | 0.57% | 43,114 | 1.20% |
+
+**Key Insights:**
+1. **PPL improves with fewer neurons** - 1n gives best PPL (39,538 vs 40,506 baseline)
+2. **Accuracy requires voting** - 1n has ~random accuracy (0.15%), 3n is poor (1.95%)
+3. **Tier 0 neurons matter most for accuracy** - going 11n→3n in tier 0 destroys accuracy
+4. **Trade-off is severe** - 2.4% PPL improvement costs 97% accuracy with 1n
 
 ---
 
