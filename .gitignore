@@ -264,3 +264,4 @@ Thumbs.db
 # For large binary assets you might keep outside the repo
 # (uncomment if you store them in a folder called `data/` and want to ignore)
 # data/
+nohup.out
