@@ -32,6 +32,60 @@ pub const EMPTY: u8 = 2;
 /// Fast hasher type for DashMap
 type FxBuildHasher = BuildHasherDefault<FxHasher>;
 
+// =============================================================================
+// SOFTMAX CROSS-ENTROPY COMPUTATION
+// =============================================================================
+
+/// Compute cross-entropy with softmax normalization (matches Python's behavior)
+///
+/// CRITICAL: Raw scores from forward pass are NOT probabilities (don't sum to 1).
+/// We must apply softmax to get proper probabilities before computing CE.
+///
+/// CE = -mean(log(softmax(scores)[target]))
+///
+/// For numerical stability, we use the log-sum-exp trick:
+/// log(softmax(x)[i]) = x[i] - log(sum(exp(x)))
+///                    = x[i] - max(x) - log(sum(exp(x - max(x))))
+fn compute_ce_with_softmax(
+    scores: &[f32],
+    targets: &[i64],
+    num_examples: usize,
+    num_clusters: usize,
+) -> f64 {
+    let mut total_ce = 0.0f64;
+
+    for ex_idx in 0..num_examples {
+        let score_start = ex_idx * num_clusters;
+        let target = targets[ex_idx] as usize;
+
+        // Find max for numerical stability
+        let mut max_score = f32::NEG_INFINITY;
+        for c in 0..num_clusters {
+            let s = scores[score_start + c];
+            if s > max_score {
+                max_score = s;
+            }
+        }
+
+        // Compute log-sum-exp: log(sum(exp(s - max)))
+        let mut sum_exp = 0.0f64;
+        for c in 0..num_clusters {
+            let s = scores[score_start + c] as f64;
+            sum_exp += (s - max_score as f64).exp();
+        }
+        let log_sum_exp = sum_exp.ln();
+
+        // log(softmax(target)) = target_score - max - log_sum_exp
+        let target_score = scores[score_start + target] as f64;
+        let log_prob = target_score - max_score as f64 - log_sum_exp;
+
+        // CE contribution: -log(prob)
+        total_ce -= log_prob;
+    }
+
+    total_ce / num_examples as f64
+}
+
 /// Sparse memory storage for all neurons in a layer
 /// Uses DashMap for lock-free concurrent access (much faster than RwLock)
 pub struct SparseLayerMemory {
@@ -440,17 +494,8 @@ fn evaluate_single_connectivity(
         num_clusters,
     );
 
-    // Compute cross-entropy: -sum(log(p[target])) / num_examples
-    let mut total_ce = 0.0f64;
-    for (ex_idx, &target) in eval_targets.iter().enumerate() {
-        let prob_start = ex_idx * num_clusters;
-        let prob = probs[prob_start + target as usize] as f64;
-        // Clamp probability to avoid log(0)
-        let prob_clamped = prob.max(1e-10);
-        total_ce -= prob_clamped.ln();
-    }
-
-    total_ce / num_eval_examples as f64
+    // Compute cross-entropy with softmax normalization (matches Python)
+    compute_ce_with_softmax(&probs, eval_targets, num_eval_examples, num_clusters)
 }
 
 /// Evaluate multiple connectivity patterns in parallel
@@ -769,16 +814,8 @@ fn evaluate_single_tiered(
         total_input_bits,
     );
 
-    // Compute cross-entropy
-    let mut total_ce = 0.0f64;
-    for (ex_idx, &target) in eval_targets.iter().enumerate() {
-        let prob_start = ex_idx * num_clusters;
-        let prob = probs[prob_start + target as usize] as f64;
-        let prob_clamped = prob.max(1e-10);
-        total_ce -= prob_clamped.ln();
-    }
-
-    total_ce / num_eval_examples as f64
+    // Compute cross-entropy with softmax normalization (matches Python)
+    compute_ce_with_softmax(&probs, eval_targets, num_eval_examples, num_clusters)
 }
 
 /// Evaluate multiple tiered connectivity patterns in parallel
@@ -1065,13 +1102,9 @@ pub fn evaluate_gpu_batch_adaptive(
                     vec![1.0 / num_clusters as f32; num_eval_examples * num_clusters]
                 });
 
-                // Compute cross-entropy
-                let mut total_ce = 0.0f64;
-                for (ex_idx, &target) in eval_targets_owned.iter().enumerate() {
-                    let prob = probs[ex_idx * num_clusters + target as usize] as f64;
-                    total_ce -= prob.max(1e-10).ln();
-                }
-                batch_ces.push(total_ce / num_eval_examples as f64);
+                // Compute cross-entropy with softmax normalization (matches Python)
+                let ce = compute_ce_with_softmax(&probs, &eval_targets_owned, num_eval_examples, num_clusters);
+                batch_ces.push(ce);
             }
 
             batch_results.push((batch_idx, batch_ces));
@@ -1264,16 +1297,8 @@ fn evaluate_single_tiered_hybrid(
         )
     });
 
-    // Compute cross-entropy
-    let mut total_ce = 0.0f64;
-    for (ex_idx, &target) in eval_targets.iter().enumerate() {
-        let prob_start = ex_idx * num_clusters;
-        let prob = probs[prob_start + target as usize] as f64;
-        let prob_clamped = prob.max(1e-10);
-        total_ce -= prob_clamped.ln();
-    }
-
-    total_ce / num_eval_examples as f64
+    // Compute cross-entropy with softmax normalization (matches Python)
+    compute_ce_with_softmax(&probs, eval_targets, num_eval_examples, num_clusters)
 }
 
 /// Memory-adaptive hybrid CPU+GPU parallel candidate evaluation

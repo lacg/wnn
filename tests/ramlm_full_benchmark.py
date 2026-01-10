@@ -1028,7 +1028,26 @@ def run_benchmark(config: BenchmarkConfig):
 	if config.optimize:
 		log(f"  Optimization: {config.strategy}")
 
-	# Per-tier breakdown (if enabled and tiered)
+	# Per-tier breakdown for validation (if enabled and tiered)
+	if config.per_tier and 'by_tier' in final_val_stats:
+		log()
+		log("Per-Tier Validation Results:")
+		log("=" * 70)
+
+		# Header
+		log(f"{'Tier':<8} {'Clusters':>10} {'Neurons':>8} {'Data %':>8} {'PPL':>12} {'Accuracy':>10}")
+		log("-" * 70)
+
+		for vs in final_val_stats['by_tier']:
+			tier_name = vs['name'].replace('tier_', 'Tier ')
+			log(f"{tier_name:<8} {vs['cluster_count']:>10,} {vs['neurons_per_cluster']:>8} "
+				f"{vs['data_pct']:>7.1f}% {vs['perplexity']:>12.1f} {vs['accuracy']:>9.2%}")
+
+		log("-" * 70)
+		log(f"{'TOTAL':<8} {sum(vs['cluster_count'] for vs in final_val_stats['by_tier']):>10,} "
+			f"{'':>8} {'100.0':>7}% {final_val_stats['perplexity']:>12.1f} {final_val_stats['accuracy']:>9.2%}")
+
+	# Per-tier breakdown for test (if enabled and tiered)
 	if config.per_tier and 'by_tier' in test_stats:
 		log()
 		log("Per-Tier Test Results:")
