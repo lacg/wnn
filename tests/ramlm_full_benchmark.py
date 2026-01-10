@@ -8,7 +8,7 @@ This benchmark tests the core RAMLM using:
 - Rust-accelerated training (3.35x faster than PyTorch)
 - ConnectivityOptimizer with GA/TS for connectivity optimization
 
-Usage:
+Usage (Single Run):
 	# Quick test (smaller data, fewer iterations)
 	python tests/ramlm_full_benchmark.py --mode fast
 
@@ -17,6 +17,22 @@ Usage:
 
 	# Full data with GA then TS optimization
 	python tests/ramlm_full_benchmark.py --full-data --optimize --strategy GA,TS
+
+Usage (Sweep Mode - Multiple Experiments):
+	# Quick sweep (~4-6 hours, 4 experiments, GA+TS enabled by default)
+	python tests/ramlm_full_benchmark.py --sweep --set quick
+
+	# Standard sweep (~8-10 hours, 6 experiments)
+	python tests/ramlm_full_benchmark.py --sweep --set standard
+
+	# Extended sweep (~16-20 hours, 10 experiments)
+	python tests/ramlm_full_benchmark.py --sweep --set extended
+
+	# Run specific experiments
+	python tests/ramlm_full_benchmark.py --sweep --experiments tier0_16bit,balanced_14bit
+
+	# Disable optimization in sweep mode
+	python tests/ramlm_full_benchmark.py --sweep --set quick --no-optimize
 """
 
 import sys
@@ -24,11 +40,14 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 import argparse
+import json
 import logging
+import subprocess
 import time
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 import torch
@@ -370,6 +389,144 @@ class BenchmarkConfig:
 
 	# Acceleration mode
 	cpu_only: bool = False  # Force CPU-only (disable hybrid CPU+GPU)
+
+
+# ============================================================================
+# Sweep Mode - Multiple Experiment Support
+# ============================================================================
+
+@dataclass
+class SweepExperiment:
+	"""Configuration for a single sweep experiment."""
+	name: str
+	tiered: str
+	context: int = 4
+	description: str = ""
+	priority: int = 1  # 1=quick, 2=standard, 3=extended
+
+
+@dataclass
+class SweepTierResult:
+	"""Results for a single tier in sweep output."""
+	tier: int
+	name: str
+	clusters: int
+	neurons: int
+	bits: int
+	data_pct: float
+	ppl: float
+	accuracy: float
+
+
+@dataclass
+class SweepOptResult:
+	"""Results from optimization phase."""
+	strategy: str
+	initial_ce: float
+	final_ce: float
+	improvement_pct: float
+	iterations: int
+
+
+@dataclass
+class SweepResult:
+	"""Results from a single sweep experiment."""
+	name: str
+	config: str
+	context: int
+	overall_ppl: float
+	overall_accuracy: float
+	tier_results: list[SweepTierResult]
+	train_time: float
+	eval_time: float
+	timestamp: str
+	initial_val_ppl: Optional[float] = None
+	final_val_ppl: Optional[float] = None
+	val_ppl_improvement_pct: Optional[float] = None
+	optimization_results: Optional[list[SweepOptResult]] = None
+	total_ce_improvement_pct: Optional[float] = None
+
+
+def define_sweep_experiments() -> list[SweepExperiment]:
+	"""Define sweep experiments with priority levels.
+
+	Priority levels:
+	- 1 = quick set (4 experiments, ~4-6 hours)
+	- 2 = standard set (6 experiments, ~8-10 hours)
+	- 3 = extended set (10 experiments, ~16-20 hours)
+	"""
+	experiments = []
+
+	# Priority 1: Quick set (~4-6 hours)
+	experiments.append(SweepExperiment(
+		name="tier0_16bit",
+		tiered="100,15,16;400,10,10;rest,5,8",
+		description="Tier0: 15 neurons, 16 bits (SPARSE) - best capacity boost",
+		priority=1,
+	))
+	experiments.append(SweepExperiment(
+		name="balanced_14bit",
+		tiered="100,12,14;400,8,12;rest,5,10",
+		description="Balanced SPARSE: 14→12→10 bits gradient",
+		priority=1,
+	))
+	experiments.append(SweepExperiment(
+		name="neurons_20_tier0",
+		tiered="100,20,12;400,12,10;rest,7,8",
+		description="High neurons: 20→12→7 with moderate bits",
+		priority=1,
+	))
+	experiments.append(SweepExperiment(
+		name="context_6_sparse",
+		tiered="100,12,14;400,8,10;rest,5,8",
+		context=6,
+		description="Context 6 with SPARSE tier0/tier1",
+		priority=1,
+	))
+
+	# Priority 2: Standard set (~8-10 hours total)
+	experiments.append(SweepExperiment(
+		name="tier0_18bit",
+		tiered="100,15,18;400,10,12;rest,5,8",
+		description="Tier0: 18 bits (262K addresses per neuron)",
+		priority=2,
+	))
+	experiments.append(SweepExperiment(
+		name="neurons_25_gradient",
+		tiered="100,25,14;400,15,10;rest,7,8",
+		description="Max neurons: 25→15→7 gradient",
+		priority=2,
+	))
+
+	# Priority 3: Extended/weekend set (~16-20 hours total)
+	experiments.append(SweepExperiment(
+		name="tier0_20bit",
+		tiered="100,15,20;400,10,12;rest,5,8",
+		description="Tier0: 20 bits (1M addresses per neuron)",
+		priority=3,
+	))
+	experiments.append(SweepExperiment(
+		name="all_sparse_16bit",
+		tiered="100,15,16;400,12,16;rest,8,16",
+		description="All tiers 16-bit SPARSE",
+		priority=3,
+	))
+	experiments.append(SweepExperiment(
+		name="context_8_high_cap",
+		tiered="100,15,12;400,10,10;rest,7,8",
+		context=8,
+		description="Context 8 with high capacity",
+		priority=3,
+	))
+	experiments.append(SweepExperiment(
+		name="extreme_tier0",
+		tiered="100,30,16;400,12,12;rest,5,8",
+		context=5,
+		description="Extreme: 30 neurons, 16 bits tier0",
+		priority=3,
+	))
+
+	return experiments
 
 
 def load_wikitext2(tokenizer_type: TokenizerType = TokenizerType.GPT2,
@@ -1099,6 +1256,371 @@ def run_benchmark(config: BenchmarkConfig):
 	}
 
 
+# ============================================================================
+# Sweep Mode Functions
+# ============================================================================
+
+def parse_sweep_output(output: str) -> tuple[dict, list[SweepTierResult], dict]:
+	"""Parse benchmark output to extract per-tier results and optimization data."""
+	import re
+	lines = output.split('\n')
+
+	overall = {'ppl': 0.0, 'accuracy': 0.0}
+	tier_results = []
+	opt_data = {
+		'initial_val_ppl': None,
+		'final_val_ppl': None,
+		'optimizations': [],
+		'total_ce_improvement': None,
+		'val_ppl_improvement': None,
+	}
+
+	in_initial_eval = False
+	in_final_eval = False
+
+	for line in lines:
+		# Track sections
+		if 'Initial Evaluation (Validation Set)' in line:
+			in_initial_eval = True
+			in_final_eval = False
+		elif 'Final Evaluation (Validation Set)' in line:
+			in_initial_eval = False
+			in_final_eval = True
+		elif 'Final Evaluation (Test Set)' in line:
+			in_initial_eval = False
+			in_final_eval = False
+
+		# Parse PPL based on section
+		ppl_match = re.search(r'Perplexity:\s*([\d.]+)', line)
+		if ppl_match:
+			ppl_val = float(ppl_match.group(1))
+			if in_initial_eval and opt_data['initial_val_ppl'] is None:
+				opt_data['initial_val_ppl'] = ppl_val
+			elif in_final_eval and opt_data['final_val_ppl'] is None:
+				opt_data['final_val_ppl'] = ppl_val
+
+		# Test PPL for overall results
+		test_ppl_match = re.search(r'Test PPL:\s*([\d.]+)', line)
+		if test_ppl_match:
+			overall['ppl'] = float(test_ppl_match.group(1))
+
+		acc_match = re.search(r'Test Acc:\s*([\d.]+)%', line)
+		if acc_match:
+			overall['accuracy'] = float(acc_match.group(1)) / 100
+
+	# Parse optimization results
+	opt_pattern = re.compile(r'\[(GA|TS)\] (?:Final|Results).*?(?:CE|error).*?([\d.]+)')
+	init_pattern = re.compile(r'\[(GA|TS)\] Initial.*?(?:CE|error).*?([\d.]+)')
+
+	init_ces = {}
+	final_ces = {}
+
+	for line in lines:
+		init_match = init_pattern.search(line)
+		if init_match:
+			strategy = init_match.group(1)
+			init_ces[strategy] = float(init_match.group(2))
+
+		# Look for improvement percentages
+		imp_match = re.search(r'\[(GA|TS)\].*Improvement:\s*([\d.]+)%', line)
+		if imp_match:
+			strategy = imp_match.group(1)
+			improvement = float(imp_match.group(2))
+			opt_data['optimizations'].append(SweepOptResult(
+				strategy=strategy,
+				initial_ce=init_ces.get(strategy, 0.0),
+				final_ce=0.0,
+				improvement_pct=improvement,
+				iterations=0,
+			))
+
+	# Calculate total CE improvement
+	if opt_data['optimizations']:
+		total_imp = sum(o.improvement_pct for o in opt_data['optimizations'])
+		opt_data['total_ce_improvement'] = total_imp
+
+	# Calculate validation PPL improvement
+	if opt_data['initial_val_ppl'] and opt_data['final_val_ppl']:
+		init_ppl = opt_data['initial_val_ppl']
+		final_ppl = opt_data['final_val_ppl']
+		if init_ppl > 0:
+			opt_data['val_ppl_improvement'] = ((init_ppl - final_ppl) / init_ppl) * 100
+
+	# Parse tier results
+	tier_pattern = re.compile(
+		r'Tier\s+(\d+)\s+'
+		r'([\d,]+)\s+'
+		r'(\d+)\s+'
+		r'([\d.]+)%\s+'
+		r'([\d.]+)\s+'
+		r'([\d.]+)%'
+	)
+
+	in_tier_section = False
+	for line in lines:
+		if 'Per-Tier Test Results' in line:
+			in_tier_section = True
+			continue
+		if in_tier_section and 'TOTAL' in line:
+			in_tier_section = False
+			continue
+
+		if in_tier_section:
+			match = tier_pattern.search(line)
+			if match:
+				tier_results.append(SweepTierResult(
+					tier=int(match.group(1)),
+					name=f"tier_{match.group(1)}",
+					clusters=int(match.group(2).replace(',', '')),
+					neurons=int(match.group(3)),
+					bits=8,
+					data_pct=float(match.group(4)),
+					ppl=float(match.group(5)),
+					accuracy=float(match.group(6)) / 100,
+				))
+
+	return overall, tier_results, opt_data
+
+
+def estimate_sweep_runtime(experiments: list[SweepExperiment], optimize: bool) -> float:
+	"""Estimate total runtime in hours."""
+	total_minutes = 0
+	for exp in experiments:
+		base = 45  # minutes
+		parts = exp.tiered.split(';')
+		max_bits = max(int(p.split(',')[2]) for p in parts)
+		bits_adj = max(0, (max_bits - 10) // 2) * 5
+		ctx_adj = max(0, exp.context - 4) * 10
+		opt_adj = 75 if optimize else 0
+		total_minutes += base + bits_adj + ctx_adj + opt_adj
+	return total_minutes / 60
+
+
+def load_sweep_completed(output_path: Path) -> set[str]:
+	"""Load names of already-completed experiments."""
+	if not output_path.exists():
+		return set()
+	try:
+		with open(output_path) as f:
+			data = json.load(f)
+		return {r['name'] for r in data}
+	except (json.JSONDecodeError, KeyError):
+		return set()
+
+
+def load_sweep_results(output_path: Path) -> list[dict]:
+	"""Load existing results for merging."""
+	if not output_path.exists():
+		return []
+	try:
+		with open(output_path) as f:
+			return json.load(f)
+	except json.JSONDecodeError:
+		return []
+
+
+def print_sweep_summary(results: list[SweepResult]):
+	"""Print a summary table of sweep results."""
+	has_opt = any(r.optimization_results for r in results)
+
+	print("\n" + "=" * 150)
+	print("SWEEP RESULTS")
+	print("=" * 150)
+
+	if has_opt:
+		print(f"\n{'Experiment':<20} {'Config':<26} {'PPL':>7} {'Acc':>5} | {'GA%':>5} {'TS%':>5} {'Val%':>5} | {'T0 PPL':>7} {'T0 Ac':>5} {'T1 PPL':>7} {'T1 Ac':>5} {'T2 PPL':>7} {'T2 Ac':>5}")
+		print("-" * 150)
+	else:
+		print(f"\n{'Experiment':<20} {'Config':<30} {'PPL':>8} {'Acc':>6} | {'T0 PPL':>7} {'T0 Ac':>5} {'T1 PPL':>7} {'T1 Ac':>5} {'T2 PPL':>7} {'T2 Ac':>5}")
+		print("-" * 130)
+
+	for r in sorted(results, key=lambda x: x.overall_ppl):
+		t0 = next((t for t in r.tier_results if t.tier == 0), None)
+		t1 = next((t for t in r.tier_results if t.tier == 1), None)
+		t2 = next((t for t in r.tier_results if t.tier == 2), None)
+
+		t0_ppl = f"{t0.ppl:.0f}" if t0 else "-"
+		t0_acc = f"{t0.accuracy:.1%}" if t0 else "-"
+		t1_ppl = f"{t1.ppl:.0f}" if t1 else "-"
+		t1_acc = f"{t1.accuracy:.1%}" if t1 else "-"
+		t2_ppl = f"{t2.ppl:.0f}" if t2 else "-"
+		t2_acc = f"{t2.accuracy:.1%}" if t2 else "-"
+
+		if has_opt:
+			ga_imp = ts_imp = val_imp = "-"
+			if r.optimization_results:
+				for opt in r.optimization_results:
+					if opt.strategy == "GA":
+						ga_imp = f"{opt.improvement_pct:.1f}"
+					elif opt.strategy == "TS":
+						ts_imp = f"{opt.improvement_pct:.1f}"
+			if r.val_ppl_improvement_pct is not None:
+				val_imp = f"{r.val_ppl_improvement_pct:.1f}"
+
+			print(f"{r.name:<20} {r.config:<26} {r.overall_ppl:>7.0f} {r.overall_accuracy:>5.1%} | {ga_imp:>5} {ts_imp:>5} {val_imp:>5} | {t0_ppl:>7} {t0_acc:>5} {t1_ppl:>7} {t1_acc:>5} {t2_ppl:>7} {t2_acc:>5}")
+		else:
+			print(f"{r.name:<20} {r.config:<30} {r.overall_ppl:>8.0f} {r.overall_accuracy:>6.1%} | {t0_ppl:>7} {t0_acc:>5} {t1_ppl:>7} {t1_acc:>5} {t2_ppl:>7} {t2_acc:>5}")
+
+	print("-" * (150 if has_opt else 130))
+
+	best = min(results, key=lambda x: x.overall_ppl)
+	print(f"\nBest PPL: {best.name} with {best.overall_ppl:.1f}")
+
+
+def run_single_experiment(exp: SweepExperiment, optimize: bool, strategy: str) -> Optional[SweepResult]:
+	"""Run a single sweep experiment."""
+	print(f"\n{'=' * 70}")
+	print(f"Running: {exp.name}")
+	print(f"Config: {exp.tiered}")
+	print(f"Context: {exp.context}")
+	print(f"Optimize: {optimize} ({strategy})" if optimize else "Optimize: False")
+	print(f"Description: {exp.description}")
+	print(f"{'=' * 70}\n")
+
+	cmd = [
+		sys.executable, __file__,
+		"--mode", "full",
+		"--tiered", exp.tiered,
+		"--context", str(exp.context),
+		"--per-tier",
+		"--full-data",
+	]
+
+	if optimize:
+		cmd.append("--optimize")
+		cmd.extend(["--strategy", strategy])
+
+	start_time = time.perf_counter()
+	timeout = 14400 if optimize else 7200  # 4 hours vs 2 hours
+
+	try:
+		result = subprocess.run(
+			cmd,
+			capture_output=True,
+			text=True,
+			timeout=timeout,
+		)
+		elapsed = time.perf_counter() - start_time
+
+		if result.returncode != 0:
+			print(f"ERROR: Experiment failed with return code {result.returncode}")
+			print(result.stderr[-2000:] if len(result.stderr) > 2000 else result.stderr)
+			return None
+
+		output = result.stdout + result.stderr
+		overall, tier_results, opt_data = parse_sweep_output(output)
+
+		print(f"\nCompleted in {elapsed / 60:.1f} minutes")
+		print(f"Overall PPL: {overall['ppl']:.1f}, Accuracy: {overall['accuracy']:.2%}")
+
+		return SweepResult(
+			name=exp.name,
+			config=exp.tiered,
+			context=exp.context,
+			overall_ppl=overall['ppl'],
+			overall_accuracy=overall['accuracy'],
+			tier_results=tier_results,
+			train_time=elapsed,
+			eval_time=0.0,
+			timestamp=datetime.now().isoformat(),
+			initial_val_ppl=opt_data['initial_val_ppl'],
+			final_val_ppl=opt_data['final_val_ppl'],
+			val_ppl_improvement_pct=opt_data['val_ppl_improvement'],
+			optimization_results=opt_data['optimizations'] if opt_data['optimizations'] else None,
+			total_ce_improvement_pct=opt_data['total_ce_improvement'],
+		)
+
+	except subprocess.TimeoutExpired:
+		print(f"ERROR: Experiment timed out after {timeout / 3600:.0f} hours")
+		return None
+	except Exception as e:
+		print(f"ERROR: {e}")
+		return None
+
+
+def run_sweep(args) -> int:
+	"""Run multiple experiments in sweep mode."""
+	all_experiments = define_sweep_experiments()
+
+	# Determine output path
+	output_file = args.output or "sweep_results.json"
+	output_path = Path("experiments") / output_file
+
+	# Filter by set or specific experiments
+	if args.experiments:
+		names = [n.strip() for n in args.experiments.split(',')]
+		experiments = [e for e in all_experiments if e.name in names]
+		if not experiments:
+			print(f"ERROR: No experiments matched: {names}")
+			print(f"Available: {[e.name for e in all_experiments]}")
+			return 1
+	else:
+		max_priority = {"quick": 1, "standard": 2, "extended": 3}[args.set]
+		experiments = [e for e in all_experiments if e.priority <= max_priority]
+
+	# Skip completed experiments (unless --force-rerun)
+	completed = set()
+	if not args.force_rerun:
+		completed = load_sweep_completed(output_path)
+		if completed:
+			original_count = len(experiments)
+			experiments = [e for e in experiments if e.name not in completed]
+			skipped = original_count - len(experiments)
+			if skipped > 0:
+				print(f"\nSkipping {skipped} already-completed experiments: {sorted(completed)}")
+
+	if not experiments:
+		print("\nAll experiments already completed! Use --force-rerun to re-run them.")
+		return 0
+
+	# Optimization settings (GA,TS enabled by default in sweep mode)
+	optimize = not args.no_optimize
+	strategy = args.strategy
+
+	# Estimate runtime
+	est_hours = estimate_sweep_runtime(experiments, optimize)
+
+	print(f"\n{'#' * 70}")
+	print(f"# RAMLM Sweep Mode")
+	print(f"# Set: {args.set} ({len(experiments)} new + {len(completed)} completed)")
+	if optimize:
+		print(f"# Optimization: {strategy} (enabled by default)")
+	else:
+		print(f"# Optimization: disabled (use without --no-optimize to enable)")
+	print(f"# Estimated runtime: {est_hours:.1f} hours")
+	print(f"# Output: {output_path}")
+	print(f"{'#' * 70}")
+
+	print(f"\nExperiments to run:")
+	for i, exp in enumerate(experiments, 1):
+		print(f"  {i}. {exp.name}: {exp.description}")
+
+	print(f"\nStarting at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+	# Load existing results for merging
+	existing_results = load_sweep_results(output_path)
+	results = []
+
+	for i, exp in enumerate(experiments):
+		print(f"\n[{i + 1}/{len(experiments)}] {exp.name}")
+		result = run_single_experiment(exp, optimize, strategy)
+		if result:
+			results.append(result)
+			# Merge with existing and save
+			merged = existing_results + [asdict(r) for r in results]
+			output_path.parent.mkdir(exist_ok=True)
+			with open(output_path, 'w') as f:
+				json.dump(merged, f, indent=2, default=str)
+			print(f"Saved to {output_path}")
+
+	# Print summary
+	if results:
+		print_sweep_summary(results)
+		print(f"\nResults saved to: {output_path}")
+
+	return 0
+
+
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser(
 		description="RAMLM Full Benchmark with Rust Acceleration and GA/TS Optimization"
@@ -1156,7 +1678,26 @@ if __name__ == "__main__":
 	parser.add_argument("--cpu-only", action="store_true",
 		help="Force CPU-only evaluation (disable hybrid CPU+GPU). Default uses hybrid if available.")
 
+	# Sweep mode (multi-experiment)
+	parser.add_argument("--sweep", action="store_true",
+		help="Run multiple experiments from a predefined set (GA,TS optimization enabled by default)")
+	parser.add_argument("--set", type=str, default="quick",
+		choices=["quick", "standard", "extended"],
+		help="Experiment set for sweep mode: quick (4), standard (6), extended (10)")
+	parser.add_argument("--experiments", type=str, default=None,
+		help="Comma-separated list of specific experiments to run in sweep mode")
+	parser.add_argument("--output", type=str, default=None,
+		help="Output JSON file for sweep results (default: sweep_results.json)")
+	parser.add_argument("--force-rerun", action="store_true",
+		help="Re-run completed experiments in sweep mode")
+	parser.add_argument("--no-optimize", action="store_true",
+		help="Disable optimization in sweep mode (optimization is ON by default in sweep)")
+
 	args = parser.parse_args()
+
+	# Handle sweep mode separately (no logging setup needed - each experiment has its own)
+	if args.sweep:
+		sys.exit(run_sweep(args))
 
 	# Setup logging first
 	log_file = setup_logging()
