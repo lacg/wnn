@@ -81,7 +81,7 @@ class OverfittingMonitor:
 	Example:
 		- Baseline: train=180, val=2160 → ratio=12.0x
 		- Later: train=170, val=2050 → ratio=12.06x → delta=+0.5% → WARNING (diversity ON)
-		- Later: train=168, val=2000 → ratio=11.9x → delta=-0.8% → CAUTION (stay in diversity)
+		- Later: train=168, val=2000 → ratio=11.9x → delta=-0.8% → NEUTRAL (stay in diversity)
 		- Later: train=165, val=1940 → ratio=11.76x → delta=-2.0% → HEALTHY (diversity OFF)
 
 	Usage:
@@ -200,7 +200,7 @@ class OverfittingMonitor:
 		elif ratio_increase_pct > self._warning_threshold:
 			status = "🟡 WARNING"
 		elif ratio_increase_pct > self._healthy_threshold:
-			status = "🟡 CAUTION"
+			status = "⚪ NEUTRAL"
 		else:
 			status = "🟢 HEALTHY"
 
