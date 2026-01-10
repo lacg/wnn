@@ -52,7 +52,7 @@ from typing import Optional
 
 import torch
 
-from wnn.ram.core import AccelerationMode, OptimizationMethod
+from wnn.ram.core import AccelerationMode, OptimizationMethod, TierResultsTable
 from wnn.ram.core.models.ramlm import RAMLM
 from wnn.ram.strategies.connectivity import (
 	OverfittingMonitor,
@@ -725,21 +725,7 @@ def run_benchmark(config: BenchmarkConfig):
 		# Per-tier breakdown for initial evaluation (if enabled and tiered)
 		if config.per_tier and 'by_tier' in val_stats:
 			log()
-			log("Per-Tier Initial Validation Results:")
-			log("=" * 78)
-
-			# Header
-			log(f"{'Tier':<8} {'Clusters':>10} {'Neurons':>8} {'Bits':>6} {'Data %':>8} {'PPL':>12} {'Accuracy':>10}")
-			log("-" * 78)
-
-			for vs in val_stats['by_tier']:
-				tier_name = vs['name'].replace('tier_', 'Tier ')
-				log(f"{tier_name:<8} {vs['cluster_count']:>10,} {vs['neurons_per_cluster']:>8} {vs['bits_per_neuron']:>6} "
-					f"{vs['data_pct']:>7.1f}% {vs['perplexity']:>12.1f} {vs['accuracy']:>9.2%}")
-
-			log("-" * 78)
-			log(f"{'TOTAL':<8} {sum(vs['cluster_count'] for vs in val_stats['by_tier']):>10,} "
-				f"{'':>8} {'':>6} {'100.0':>7}% {val_stats['perplexity']:>12.1f} {val_stats['accuracy']:>9.2%}")
+			TierResultsTable.from_stats("Initial Validation", val_stats).print(log)
 
 	# Connectivity optimization
 	if config.optimize:
@@ -1208,40 +1194,12 @@ def run_benchmark(config: BenchmarkConfig):
 	# Per-tier breakdown for validation (if enabled and tiered)
 	if config.per_tier and 'by_tier' in final_val_stats:
 		log()
-		log("Per-Tier Validation Results:")
-		log("=" * 78)
-
-		# Header
-		log(f"{'Tier':<8} {'Clusters':>10} {'Neurons':>8} {'Bits':>6} {'Data %':>8} {'PPL':>12} {'Accuracy':>10}")
-		log("-" * 78)
-
-		for vs in final_val_stats['by_tier']:
-			tier_name = vs['name'].replace('tier_', 'Tier ')
-			log(f"{tier_name:<8} {vs['cluster_count']:>10,} {vs['neurons_per_cluster']:>8} {vs['bits_per_neuron']:>6} "
-				f"{vs['data_pct']:>7.1f}% {vs['perplexity']:>12.1f} {vs['accuracy']:>9.2%}")
-
-		log("-" * 78)
-		log(f"{'TOTAL':<8} {sum(vs['cluster_count'] for vs in final_val_stats['by_tier']):>10,} "
-			f"{'':>8} {'':>6} {'100.0':>7}% {final_val_stats['perplexity']:>12.1f} {final_val_stats['accuracy']:>9.2%}")
+		TierResultsTable.from_stats("Validation", final_val_stats).print(log)
 
 	# Per-tier breakdown for test (if enabled and tiered)
 	if config.per_tier and 'by_tier' in test_stats:
 		log()
-		log("Per-Tier Test Results:")
-		log("=" * 78)
-
-		# Header
-		log(f"{'Tier':<8} {'Clusters':>10} {'Neurons':>8} {'Bits':>6} {'Data %':>8} {'PPL':>12} {'Accuracy':>10}")
-		log("-" * 78)
-
-		for ts in test_stats['by_tier']:
-			tier_name = ts['name'].replace('tier_', 'Tier ')
-			log(f"{tier_name:<8} {ts['cluster_count']:>10,} {ts['neurons_per_cluster']:>8} {ts['bits_per_neuron']:>6} "
-				f"{ts['data_pct']:>7.1f}% {ts['perplexity']:>12.1f} {ts['accuracy']:>9.2%}")
-
-		log("-" * 78)
-		log(f"{'TOTAL':<8} {sum(ts['cluster_count'] for ts in test_stats['by_tier']):>10,} "
-			f"{'':>8} {'':>6} {'100.0':>7}% {test_stats['perplexity']:>12.1f} {test_stats['accuracy']:>9.2%}")
+		TierResultsTable.from_stats("Test", test_stats).print(log)
 
 	log()
 	log_separator("=")

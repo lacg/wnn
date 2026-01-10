@@ -442,6 +442,9 @@ from wnn.ram.core.models import (
 	RAMLM,
 )
 
+# Reporting utilities
+from wnn.ram.core.reporting import TierResultsTable, TierResultRow
+
 
 __all__ = [
 	# ==== Core Enums (self-contained) ====
@@ -554,4 +557,7 @@ __all__ = [
 	'RAMEncoderDecoder',
 	# Language Models
 	'RAMLM',
+	# Reporting utilities
+	'TierResultsTable',
+	'TierResultRow',
 ]
