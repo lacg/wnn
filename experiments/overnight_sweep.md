@@ -116,19 +116,20 @@ Full WikiText-2 dataset (2.4M train, 251K val, 288K test tokens) with GA+TS opti
 | Rank | Experiment | Config | Ctx | Test PPL | Test Acc | Notes |
 |------|------------|--------|-----|----------|----------|-------|
 | 🥇 **1** | **tier0_20bit** | `100,15,20;400,10,12;rest,5,8` | 4 | **36,853** | **5.28%** | ⭐ Best overall |
-| 🥈 2 | context_8_high_cap | `100,15,12;400,10,10;rest,7,8` | 8 | 39,508 | 1.26% | Higher context |
-| 3 | asymmetric_extreme_t0 | `100,25,24;400,8,10;rest,5,8` | 8 | 39,503 | 1.35% | 25n×24b tier0 |
+| 🥈 2 | asymmetric_extreme_t0 | `100,25,24;400,8,10;rest,5,8` | 8 | 39,503 | 1.35% | 25n×24b tier0 |
+| 🥉 3 | context_8_high_cap | `100,15,12;400,10,10;rest,7,8` | 8 | 39,508 | 1.26% | Higher context |
 | 4 | asymmetric_expanded_t0 | `200,25,20;300,8,10;rest,4,8` | 8 | 40,047 | 1.26% | 200 tokens tier0 |
-| 🥉 5 | extreme_tier0 | `100,30,16;400,12,12;rest,5,8` | 5 | 40,934 | 0.13% | 30 neurons |
-| 6 | two_tier_simple | `500,15,16;rest,4,6` | 8 | 41,883 | 0.03% | 2-tier only |
-| 7 | neurons_20_tier0 | `100,20,12;400,12,10;rest,7,8` | 4 | 46,358 | 0.02% | |
-| 8 | context_6_sparse | `100,12,14;400,8,10;rest,5,8` | 6 | 46,584 | 0.02% | |
-| 9 | neurons_25_gradient | `100,25,14;400,15,10;rest,7,8` | 4 | 46,677 | 0.02% | |
-| 10 | tier0_16bit | `100,15,16;400,10,10;rest,5,8` | 4 | 46,787 | 0.01% | |
-| 11 | all_sparse_16bit | `100,15,16;400,12,16;rest,8,16` | 4 | 47,060 | 2.70% | Uniform 16b |
-| 12 | tier0_18bit | `100,15,18;400,10,12;rest,5,8` | 4 | 47,075 | 0.02% | |
-| 13 | balanced_14bit | `100,12,14;400,8,12;rest,5,10` | 4 | 47,181 | 0.13% | |
-| 14 | uniform_20bit_ctx8 | `100,15,20;400,10,20;rest,5,20` | 8 | 49,675 | 1.81% | ❌ Uniform worse |
+| 5 | extreme_tier0 | `100,30,16;400,12,12;rest,5,8` | 5 | 40,934 | 0.13% | 30 neurons |
+| 6 | five_tier_gradient | `50,37,22;50,31,20;400,11,12;20000,7,10;rest,3,11` | 8 | 41,001 | 0.83% | 5-tier |
+| 7 | two_tier_simple | `500,15,16;rest,4,6` | 8 | 41,883 | 0.03% | 2-tier only |
+| 8 | neurons_20_tier0 | `100,20,12;400,12,10;rest,7,8` | 4 | 46,358 | 0.02% | |
+| 9 | context_6_sparse | `100,12,14;400,8,10;rest,5,8` | 6 | 46,584 | 0.02% | |
+| 10 | neurons_25_gradient | `100,25,14;400,15,10;rest,7,8` | 4 | 46,677 | 0.02% | |
+| 11 | tier0_16bit | `100,15,16;400,10,10;rest,5,8` | 4 | 46,787 | 0.01% | |
+| 12 | all_sparse_16bit | `100,15,16;400,12,16;rest,8,16` | 4 | 47,060 | 2.70% | Uniform 16b |
+| 13 | tier0_18bit | `100,15,18;400,10,12;rest,5,8` | 4 | 47,075 | 0.02% | |
+| 14 | balanced_14bit | `100,12,14;400,8,12;rest,5,10` | 4 | 47,181 | 0.13% | |
+| 15 | uniform_20bit_ctx8 | `100,15,20;400,10,20;rest,5,20` | 8 | 49,675 | 1.81% | ❌ Uniform worse |
 
 #### Per-Tier Breakdown (Top 3 Experiments)
 
