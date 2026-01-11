@@ -566,6 +566,15 @@ def define_sweep_experiments() -> list[SweepExperiment]:
 		priority=5,
 	))
 
+	# Priority 6: Minimal tier architecture (opposite of 5-tier)
+	experiments.append(SweepExperiment(
+		name="two_tier_20bit",
+		tiered="500,15,20;rest,5,8",
+		context=4,
+		description="Two-tier: 500 tokens at 15n×20b, rest at 5n×8b",
+		priority=6,
+	))
+
 	return experiments
 
 
