@@ -550,6 +550,15 @@ def define_sweep_experiments() -> list[SweepExperiment]:
 		priority=4,
 	))
 
+	# Priority 5: Fine-grained 5-tier architecture
+	experiments.append(SweepExperiment(
+		name="five_tier_gradient",
+		tiered="50,37,22;50,31,20;400,11,12;20000,7,10;rest,3,11",
+		context=8,
+		description="5-tier: 50/50/400/20K/rest with gradient neurons",
+		priority=5,
+	))
+
 	return experiments
 
 

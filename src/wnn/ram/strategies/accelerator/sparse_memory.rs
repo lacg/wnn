@@ -564,6 +564,7 @@ pub struct TierConfig {
     pub neurons_per_cluster: usize,
     pub bits_per_neuron: usize,
     pub start_neuron: usize,    // first neuron index for this tier
+    pub connection_offset: usize,  // starting index in connections_flat for this tier
 }
 
 /// Tiered sparse memory - multiple tiers with different configurations
@@ -582,6 +583,7 @@ impl TieredSparseMemory {
         let mut configs = Vec::new();
         let mut start_cluster = 0;
         let mut start_neuron = 0;
+        let mut connection_offset = 0;
 
         for &(end_cluster, neurons_per_cluster, bits_per_neuron) in tier_configs {
             let num_tier_clusters = end_cluster - start_cluster;
@@ -594,9 +596,11 @@ impl TieredSparseMemory {
                 neurons_per_cluster,
                 bits_per_neuron,
                 start_neuron,
+                connection_offset,
             });
 
             start_neuron += num_tier_neurons;
+            connection_offset += num_tier_neurons * bits_per_neuron;
             start_cluster = end_cluster;
         }
 
@@ -676,8 +680,9 @@ pub fn train_batch_tiered(
             let local_neuron_idx = local_start_neuron + neuron_offset;
             let global_neuron_idx = global_start_neuron + neuron_offset;
 
-            // Get connections for this neuron
-            let conn_start = global_neuron_idx * config.bits_per_neuron;
+            // Get connections for this neuron (using tier-specific offset for variable bits per tier)
+            let neuron_in_tier = global_neuron_idx - config.start_neuron;
+            let conn_start = config.connection_offset + neuron_in_tier * config.bits_per_neuron;
             let connections = &connections_flat[conn_start..conn_start + config.bits_per_neuron];
 
             let address = compute_address(input_bits, connections, config.bits_per_neuron);
@@ -711,7 +716,9 @@ pub fn train_batch_tiered(
                 let local_neuron_idx = local_start_neuron + neuron_offset;
                 let global_neuron_idx = global_start_neuron + neuron_offset;
 
-                let conn_start = global_neuron_idx * config.bits_per_neuron;
+                // Use tier-specific connection offset for variable bits per tier
+                let neuron_in_tier = global_neuron_idx - config.start_neuron;
+                let conn_start = config.connection_offset + neuron_in_tier * config.bits_per_neuron;
                 let connections = &connections_flat[conn_start..conn_start + config.bits_per_neuron];
 
                 let address = compute_address(input_bits, connections, config.bits_per_neuron);
@@ -759,7 +766,9 @@ pub fn forward_batch_tiered(
                 let local_neuron_idx = local_start_neuron + neuron_offset;
                 let global_neuron_idx = global_start_neuron + neuron_offset;
 
-                let conn_start = global_neuron_idx * config.bits_per_neuron;
+                // Use tier-specific connection offset for variable bits per tier
+                let neuron_in_tier = global_neuron_idx - config.start_neuron;
+                let conn_start = config.connection_offset + neuron_in_tier * config.bits_per_neuron;
                 let connections = &connections_flat[conn_start..conn_start + config.bits_per_neuron];
 
                 let address = compute_address(input_bits, connections, config.bits_per_neuron);

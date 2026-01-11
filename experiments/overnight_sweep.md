@@ -117,15 +117,18 @@ Full WikiText-2 dataset (2.4M train, 251K val, 288K test tokens) with GA+TS opti
 |------|------------|--------|-----|----------|----------|-------|
 | 🥇 **1** | **tier0_20bit** | `100,15,20;400,10,12;rest,5,8` | 4 | **36,853** | **5.28%** | ⭐ Best overall |
 | 🥈 2 | context_8_high_cap | `100,15,12;400,10,10;rest,7,8` | 8 | 39,508 | 1.26% | Higher context |
-| 🥉 3 | extreme_tier0 | `100,30,16;400,12,12;rest,5,8` | 5 | 40,934 | 0.13% | 30 neurons |
-| 4 | neurons_20_tier0 | `100,20,12;400,12,10;rest,7,8` | 4 | 46,358 | 0.02% | |
-| 5 | context_6_sparse | `100,12,14;400,8,10;rest,5,8` | 6 | 46,584 | 0.02% | |
-| 6 | neurons_25_gradient | `100,25,14;400,15,10;rest,7,8` | 4 | 46,677 | 0.02% | |
-| 7 | tier0_16bit | `100,15,16;400,10,10;rest,5,8` | 4 | 46,787 | 0.01% | |
-| 8 | all_sparse_16bit | `100,15,16;400,12,16;rest,8,16` | 4 | 47,060 | 2.70% | Uniform 16b |
-| 9 | tier0_18bit | `100,15,18;400,10,12;rest,5,8` | 4 | 47,075 | 0.02% | |
-| 10 | balanced_14bit | `100,12,14;400,8,12;rest,5,10` | 4 | 47,181 | 0.13% | |
-| 11 | uniform_20bit_ctx8 | `100,15,20;400,10,20;rest,5,20` | 8 | 49,675 | 1.81% | ❌ Uniform worse |
+| 3 | asymmetric_extreme_t0 | `100,25,24;400,8,10;rest,5,8` | 8 | 39,503 | 1.35% | 25n×24b tier0 |
+| 4 | asymmetric_expanded_t0 | `200,25,20;300,8,10;rest,4,8` | 8 | 40,047 | 1.26% | 200 tokens tier0 |
+| 🥉 5 | extreme_tier0 | `100,30,16;400,12,12;rest,5,8` | 5 | 40,934 | 0.13% | 30 neurons |
+| 6 | two_tier_simple | `500,15,16;rest,4,6` | 8 | 41,883 | 0.03% | 2-tier only |
+| 7 | neurons_20_tier0 | `100,20,12;400,12,10;rest,7,8` | 4 | 46,358 | 0.02% | |
+| 8 | context_6_sparse | `100,12,14;400,8,10;rest,5,8` | 6 | 46,584 | 0.02% | |
+| 9 | neurons_25_gradient | `100,25,14;400,15,10;rest,7,8` | 4 | 46,677 | 0.02% | |
+| 10 | tier0_16bit | `100,15,16;400,10,10;rest,5,8` | 4 | 46,787 | 0.01% | |
+| 11 | all_sparse_16bit | `100,15,16;400,12,16;rest,8,16` | 4 | 47,060 | 2.70% | Uniform 16b |
+| 12 | tier0_18bit | `100,15,18;400,10,12;rest,5,8` | 4 | 47,075 | 0.02% | |
+| 13 | balanced_14bit | `100,12,14;400,8,12;rest,5,10` | 4 | 47,181 | 0.13% | |
+| 14 | uniform_20bit_ctx8 | `100,15,20;400,10,20;rest,5,20` | 8 | 49,675 | 1.81% | ❌ Uniform worse |
 
 #### Per-Tier Breakdown (Top 3 Experiments)
 
@@ -173,15 +176,32 @@ The uniform_20bit experiment showed **worse results** than tier0_20bit:
 
 **Root cause**: Rare tokens in tier-2 have too few training examples to fill the 2^20 = 1M address space. Most cells remain empty, leading to near-random predictions.
 
-#### Next Experiments (Priority 4)
+#### ❌ Pushing Beyond Sweet Spot (Priority 4 Results)
 
-Based on these insights, new asymmetric experiments are queued:
+The asymmetric experiments (completed 2026-01-11) tested pushing tier0 capacity further:
+
+| Experiment | Change from Champion | Result | Finding |
+|------------|---------------------|--------|---------|
+| asymmetric_extreme_t0 | 15n→25n, 20b→24b | PPL +7.2% | Too much capacity |
+| asymmetric_expanded_t0 | 100→200 tokens | PPL +8.7% | Spreads data too thin |
+| two_tier_simple | 2 tiers only | PPL +13.6% | Loses tier granularity |
+
+**Key insight**: The champion's configuration (15 neurons, 20 bits for top 100 tokens) is near-optimal. Going beyond shows diminishing returns - more capacity without proportionally more data leads to underfitting.
+
+#### Next Experiment (Priority 5)
+
+Fine-grained 5-tier architecture to test more granular frequency-based allocation:
 
 | Name | Config | Ctx | Rationale |
 |------|--------|-----|-----------|
-| asymmetric_extreme_t0 | `100,25,24;400,8,10;rest,5,8` | 8 | Push tier0 to 25n×24b |
-| asymmetric_expanded_t0 | `200,25,20;300,8,10;rest,4,8` | 8 | Expand tier0 to 200 tokens |
-| two_tier_simple | `500,15,16;rest,4,6` | 8 | Simplify to 2 tiers |
+| five_tier_gradient | `50,37,22;50,31,20;400,11,12;20000,7,10;rest,3,11` | 8 | 5-tier with neuron gradient |
+
+Tier breakdown:
+- Tier 0: 50 most frequent (37n×22b) - maximum capacity
+- Tier 1: next 50 (31n×20b) - high capacity
+- Tier 2: next 400 (11n×12b) - medium
+- Tier 3: next 20K (7n×10b) - low
+- Tier 4: rest ~30K (3n×11b) - minimal
 
 ### Hypotheses Status (Updated)
 
@@ -191,6 +211,8 @@ Based on these insights, new asymmetric experiments are queued:
 | Uniform bits | ❌ **Rejected** | Asymmetric allocation dramatically outperforms uniform |
 | Tier0 focus | ✅ **Confirmed** | Investing capacity in tier0 yields best returns |
 | Context 8 | ⚠️ **Mixed** | Helps PPL but needs right bit configuration |
+| More neurons/bits always better | ❌ **Rejected** | 15n×20b optimal; 25n×24b performs worse |
+| Expanding tier0 tokens | ❌ **Rejected** | 100 tokens optimal; 200-500 spreads data too thin |
 
 ### Usage
 
@@ -201,7 +223,7 @@ python tests/ramlm_full_benchmark.py --sweep --set quick
 # Extended sweep (10 experiments, ~16-20 hours)
 python tests/ramlm_full_benchmark.py --sweep --set extended
 
-# New asymmetric experiments (priority 4)
-python tests/ramlm_full_benchmark.py --sweep --experiments asymmetric_extreme_t0,asymmetric_expanded_t0,two_tier_simple \
-    --generations 1000 --iterations 1000 --patience 5
+# Run 5-tier experiment
+python tests/ramlm_full_benchmark.py --sweep --experiments five_tier_gradient \
+    --ga-gens 1000 --ts-iters 1000 --patience 5
 ```
