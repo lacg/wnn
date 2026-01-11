@@ -170,13 +170,24 @@ def run_hybrid_experiment(config: str):
 
 
 def run_extended_sweep():
-    """Run the extended sweep (adds 4 more experiments to standard)."""
+    """Run the extended sweep (adds 4 more experiments to standard).
+
+    Uses the existing standard sweep results file to skip already-completed experiments.
+    """
     print("\n" + "=" * 80)
     print("STARTING EXTENDED SWEEP")
     print("=" * 80)
 
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    output_file = f"sweep_extended_{timestamp}.json"
+    # Find the latest standard sweep results to continue from
+    # This ensures we don't re-run experiments that already completed
+    existing_results = find_latest_results_file()
+    if existing_results:
+        output_file = existing_results.name
+        print(f"Continuing from existing results: {output_file}")
+    else:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        output_file = f"sweep_extended_{timestamp}.json"
+        print(f"Starting fresh: {output_file}")
 
     cmd = [
         sys.executable,
