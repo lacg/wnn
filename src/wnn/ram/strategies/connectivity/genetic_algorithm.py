@@ -216,8 +216,9 @@ class GeneticAlgorithmStrategy(OptimizerStrategyBase):
 
 			# Log every generation for progress visibility
 			if self._verbose:
+				gen_best_error = fitness[gen_best_idx]
 				avg_fitness = sum(fitness) / len(fitness)
-				self._log(f"[GA] Gen {generation + 1}/{cfg.generations}: best={best_error:.4f}, avg={avg_fitness:.4f}")
+				self._log(f"[GA] Gen {generation + 1}/{cfg.generations}: current={gen_best_error:.4f}, best={best_error:.4f}, avg={avg_fitness:.4f}")
 
 			# Early stopping check every 5 generations
 			# Uses PPL-based improvement: since PPL = exp(CE), small CE changes = large PPL changes
