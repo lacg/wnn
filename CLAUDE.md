@@ -119,6 +119,49 @@ The path forward:
 3. Implement using core `Memory`/`RAMLayer` classes
 4. Train with EDRA + connectivity optimization
 
+## 🔬 KEY INSIGHT: Asymmetric Tiered Architecture
+
+**Discovery (2026-01-11):** Asymmetric bit allocation dramatically outperforms uniform configurations for tiered language models.
+
+### The Finding
+
+| Configuration | Tier 0 | Tier 1 | Tier 2 | Test PPL |
+|---------------|--------|--------|--------|----------|
+| **Asymmetric (best)** | 20 bits | 12 bits | 8 bits | **36,853** |
+| Uniform 20-bit | 20 bits | 20 bits | 20 bits | 49,675 |
+
+The asymmetric config achieves **35% better PPL** than uniform.
+
+### Why This Works
+
+The key is **training data density per address space**:
+
+| Tier | Tokens | Data % | Examples/Token | Can Fill |
+|------|--------|--------|----------------|----------|
+| Tier 0 | 100 frequent | 46% | ~11,000 | 2^20 addresses ✓ |
+| Tier 1 | 400 medium | 13% | ~800 | 2^12 addresses ✓ |
+| Tier 2 | 50K rare | 40% | ~20 | 2^8 addresses ✗ |
+
+- **Frequent tokens** (tier 0) have enough training examples to fill large address spaces → more bits = better discrimination
+- **Rare tokens** (tier 2) have too few examples → more bits = empty cells = random predictions
+
+### Design Principle
+
+**Match address space size to training data density:**
+- High-frequency tiers → more bits (can utilize the capacity)
+- Low-frequency tiers → fewer bits (can't fill large spaces anyway)
+
+### Best Configuration So Far
+
+```
+tier0_20bit: 100,15,20;400,10,12;rest,5,8 (context=4)
+- Test PPL: 36,853
+- Test Accuracy: 5.28%
+- Tier 0 Accuracy: 11.23%
+```
+
+See `experiments/overnight_sweep.md` for full rankings and per-tier breakdowns.
+
 ## Development Hardware
 
 **Mac Studio M4 Max (2025)**
@@ -217,30 +260,43 @@ python ram_lm_v2.py --accel hybrid --full --full-data --tokenizer gpt2
 cd /Users/lacg/Library/Mobile\ Documents/com~apple~CloudDocs/Studies/research/wnn
 source wnn/bin/activate
 export PYTHONPATH="$(pwd)/src/wnn:$PYTHONPATH"
-PYTHONUNBUFFERED=1 nohup python -u tests/run_overnight_sweep.py [OPTIONS] > nohup.out 2>&1 &
 
-# Example: Quick sweep with GA+TS optimization
-PYTHONUNBUFFERED=1 nohup python -u tests/run_overnight_sweep.py \
-  --full-data --set quick --optimize --strategy GA,TS \
-  --output overnight_optimized_results.json > nohup.out 2>&1 &
+# Quick sweep (4 experiments, ~4-6 hours)
+PYTHONUNBUFFERED=1 nohup python -u tests/ramlm_full_benchmark.py \
+  --sweep --set quick --full-data \
+  --output experiments/sweep_results.json > nohup.out 2>&1 &
+
+# Run specific experiments with weekend mode (1000 gens/iters, patience 5)
+PYTHONUNBUFFERED=1 nohup python -u tests/ramlm_full_benchmark.py \
+  --sweep --experiments asymmetric_extreme_t0,asymmetric_expanded_t0,two_tier_simple \
+  --full-data --ga-gens 1000 --ts-iters 1000 --patience 5 \
+  --output experiments/sweep_asymmetric.json > nohup.out 2>&1 &
 
 # Monitor progress
 tail -f nohup.out
 
 # Check running experiments
-ps aux | grep -E "overnight|ramlm" | grep -v grep
+ps aux | grep ramlm | grep -v grep
 ```
 
 **Sweep Options:**
 
 | Flag | Description |
 |------|-------------|
+| `--sweep` | Enable sweep mode (run multiple experiments) |
+| `--set quick/standard/extended` | Experiment set (4/6/10/13 experiments by priority) |
+| `--experiments name1,name2` | Run specific experiments by name |
 | `--full-data` | Use full WikiText-2 dataset |
-| `--set quick/standard/extended` | Experiment set (4/6/10 experiments) |
-| `--optimize` | Enable GA+TS connectivity optimization |
-| `--strategy GA,TS` | Optimization strategy (GA, TS, or GA,TS) |
+| `--ga-gens N` | GA generations (default: 50, weekend: 1000) |
+| `--ts-iters N` | TS iterations (default: 100, weekend: 1000) |
+| `--patience N` | Early stop patience (default: 1, weekend: 5+) |
 | `--output FILE.json` | Output file for results |
 | `--force-rerun` | Re-run completed experiments |
+| `--no-optimize` | Disable GA+TS optimization |
+
+**Experiment Priorities:**
+- Priority 1-3: Quick/Standard/Extended sets (original experiments)
+- Priority 4: Asymmetric experiments (based on key insight above)
 
 ## Project Structure
 
