@@ -774,6 +774,8 @@ class TieredRAMClusterLayer(RAMComponent):
 		"""
 		Forward pass using Rust sparse tiered memory backend.
 
+		Uses numpy arrays for fast data transfer (avoids Python list conversion).
+
 		Args:
 			input_bits: [batch_size, total_input_bits] boolean tensor
 
@@ -785,7 +787,7 @@ class TieredRAMClusterLayer(RAMComponent):
 
 		import ram_accelerator
 		import numpy as np
-		from torch import tensor as torch_tensor, float32
+		from torch import from_numpy
 
 		# Handle single example
 		if input_bits.ndim == 1:
@@ -793,25 +795,27 @@ class TieredRAMClusterLayer(RAMComponent):
 
 		batch_size = input_bits.shape[0]
 
-		# Flatten inputs for Rust
-		input_bits_flat = input_bits.flatten().bool().tolist()
+		# Flatten inputs to numpy (u8 for efficiency)
+		input_bits_np = input_bits.flatten().bool().numpy().astype(np.uint8)
 
-		# Build flattened connections for ALL neurons across tiers
-		connections_list = []
-		for memory in self.tier_memories:
-			connections_list.append(memory.connections.flatten().numpy().astype(np.int64))
-		connections_flat = np.concatenate(connections_list).tolist()
+		# Build flattened connections for ALL neurons across tiers (cache if not exists)
+		if not hasattr(self, '_connections_flat_cache'):
+			connections_list = []
+			for memory in self.tier_memories:
+				connections_list.append(memory.connections.flatten().numpy().astype(np.int64))
+			self._connections_flat_cache = np.concatenate(connections_list)
 
-		# Call Rust sparse forward
-		probs_flat = ram_accelerator.sparse_forward_batch_tiered(
+		# Call Rust sparse forward with numpy arrays
+		probs_np = ram_accelerator.sparse_forward_batch_tiered_numpy(
 			self._sparse_memory,
-			input_bits_flat,
-			connections_flat,
+			input_bits_np,
+			self._connections_flat_cache,
 			batch_size,
 			self.total_input_bits,
 		)
 
-		return torch_tensor(probs_flat, dtype=float32).view(batch_size, self.num_clusters)
+		# Convert numpy result to torch tensor (zero-copy when possible)
+		return from_numpy(probs_np).view(batch_size, self.num_clusters)
 
 	def reset_memory(self) -> None:
 		"""Reset all memory cells to EMPTY, preserving connectivity."""

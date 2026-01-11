@@ -1353,6 +1353,7 @@ fn sparse_train_batch_tiered(
 }
 
 /// Batch forward pass for tiered sparse memory backend (parallel)
+/// Legacy version using Vec - prefer sparse_forward_batch_tiered_numpy for speed
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn sparse_forward_batch_tiered(
@@ -1373,6 +1374,53 @@ fn sparse_forward_batch_tiered(
         );
         Ok(probs)
     })
+}
+
+/// Batch forward pass for tiered sparse memory using NumPy arrays (FAST)
+///
+/// Uses numpy arrays to avoid Python list conversion overhead.
+/// Returns probabilities as a flat numpy array [num_examples * num_clusters].
+///
+/// Args:
+///   input_bits: [num_examples * total_input_bits] u8 numpy array (0/1 values)
+///   connections_flat: [total_neurons * max_bits_per_neuron] i64 numpy array
+///
+/// Returns: [num_examples * num_clusters] f32 numpy array of probabilities
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn sparse_forward_batch_tiered_numpy<'py>(
+    py: Python<'py>,
+    memory: &TieredSparseMemory,
+    input_bits: PyReadonlyArray1<'py, u8>,
+    connections_flat: PyReadonlyArray1<'py, i64>,
+    num_examples: usize,
+    total_input_bits: usize,
+) -> PyResult<Py<numpy::PyArray1<f32>>> {
+    // Extract slices before allow_threads
+    let input_slice = input_bits.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Input array not contiguous: {}", e))
+    })?;
+    let conn_slice = connections_flat.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Connections array not contiguous: {}", e))
+    })?;
+
+    // Convert u8 to bool
+    let input_bools: Vec<bool> = input_slice.iter().map(|&b| b != 0).collect();
+    let conn_vec: Vec<i64> = conn_slice.to_vec();
+
+    // Run forward pass in parallel (releases GIL)
+    let probs = py.allow_threads(|| {
+        sparse_memory::forward_batch_tiered(
+            &memory.inner,
+            &input_bools,
+            &conn_vec,
+            num_examples,
+            total_input_bits,
+        )
+    });
+
+    // Convert to numpy array
+    Ok(numpy::PyArray1::from_vec(py, probs).into())
 }
 
 /// Evaluate multiple connectivity patterns in parallel (for GA/TS optimization)
@@ -1750,6 +1798,7 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<TieredSparseMemory>()?;
     m.add_function(wrap_pyfunction!(sparse_train_batch_tiered, m)?)?;
     m.add_function(wrap_pyfunction!(sparse_forward_batch_tiered, m)?)?;
+    m.add_function(wrap_pyfunction!(sparse_forward_batch_tiered_numpy, m)?)?;
     // Parallel GA/TS candidate evaluation (KEY optimization)
     m.add_function(wrap_pyfunction!(evaluate_candidates_parallel, m)?)?;
     // Parallel GA/TS for TIERED architectures (16 cores parallel)
