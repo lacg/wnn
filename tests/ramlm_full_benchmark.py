@@ -1628,6 +1628,8 @@ if __name__ == "__main__":
 		help="GA population size (default: 10 fast, 20 full, 30 overnight)")
 	parser.add_argument("--ga-gens", type=int, default=None,
 		help="GA generations (default: 20 fast, 50 full, 100 overnight)")
+	parser.add_argument("--patience", type=int, default=None,
+		help="Early stop patience (checks every 5 gens/iters). Default: 1. Weekend mode: 20+")
 
 	# Evaluation options
 	parser.add_argument("--per-tier", action="store_true",
@@ -1718,6 +1720,8 @@ if __name__ == "__main__":
 
 	# Override optimization parameters if specified
 	config.ts_neighbors = args.ts_neighbors
+	if args.patience is not None:
+		config.early_stop_patience = args.patience
 
 	# Parse tiered architecture if specified
 	if args.tiered:
