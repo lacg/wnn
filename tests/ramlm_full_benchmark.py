@@ -526,6 +526,30 @@ def define_sweep_experiments() -> list[SweepExperiment]:
 		priority=3,
 	))
 
+	# Priority 4: Asymmetric capacity experiments (based on insight that
+	# frequent tokens benefit from more capacity, rare tokens need minimal)
+	experiments.append(SweepExperiment(
+		name="asymmetric_extreme_t0",
+		tiered="100,25,24;400,8,10;rest,5,8",
+		context=8,
+		description="Extreme tier0: 25n×24b, minimal tier1/2",
+		priority=4,
+	))
+	experiments.append(SweepExperiment(
+		name="asymmetric_expanded_t0",
+		tiered="200,25,20;300,8,10;rest,4,8",
+		context=8,
+		description="Expanded tier0: 200 tokens, 25n×20b",
+		priority=4,
+	))
+	experiments.append(SweepExperiment(
+		name="two_tier_simple",
+		tiered="500,15,16;rest,4,6",
+		context=8,
+		description="Two-tier: 500 frequent vs rest rare",
+		priority=4,
+	))
+
 	return experiments
 
 

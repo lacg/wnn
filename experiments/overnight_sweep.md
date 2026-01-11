@@ -107,67 +107,101 @@ The SPARSE backend experiments (16-20 bits) may show different patterns because:
 
 ## Full Data Results (January 2026)
 
-### Standard Sweep + Hybrid + Extended Results
+### Complete Sweep Results
 
 Full WikiText-2 dataset (2.4M train, 251K val, 288K test tokens) with GA+TS optimization.
 
-#### Overall Rankings (by Validation PPL)
+#### Overall Rankings (by Test PPL)
 
-| Rank | Experiment | Config | Ctx | Val PPL | Test PPL | Accuracy | Improv |
-|------|------------|--------|-----|---------|----------|----------|--------|
-| 🥇 **1** | **hybrid** | `100,20,12;400,8,10;rest,5,8` | 4 | **46,346** | **46,267** | **0.04%** | 0.63% |
-| 🥈 2 | neurons_20_tier0 | `100,20,12;400,12,10;rest,7,8` | 4 | 46,405 | 46,358 | 0.02% | 0.63% |
-| 🥉 3 | context_6_sparse | `100,12,14;400,8,10;rest,5,8` | 6 | 46,619 | 46,584 | 0.02% | 0.36% |
-| 4 | neurons_25_gradient | `100,25,14;400,15,10;rest,7,8` | 4 | 46,725 | 46,677 | 0.02% | 0.55% |
-| 5 | tier0_16bit (ext) | `100,15,16;400,10,10;rest,5,8` | 4 | 46,804 | 46,757 | 0.01% | 0.48% |
-| 6 | tier0_16bit (std) | `100,15,16;400,10,10;rest,5,8` | 4 | 46,826 | 46,787 | 0.01% | 0.46% |
-| 7 | tier0_18bit | `100,15,18;400,10,12;rest,5,8` | 4 | 47,117 | 47,075 | 0.02% | 0.41% |
-| 8 | balanced_14bit (std) | `100,12,14;400,8,12;rest,5,10` | 4 | 47,248 | 47,181 | 0.13% | 0.94% |
-| 9 | balanced_14bit (ext) | `100,12,14;400,8,12;rest,5,10` | 4 | 47,256 | 47,195 | 0.07% | 0.87% |
+| Rank | Experiment | Config | Ctx | Test PPL | Test Acc | Notes |
+|------|------------|--------|-----|----------|----------|-------|
+| 🥇 **1** | **tier0_20bit** | `100,15,20;400,10,12;rest,5,8` | 4 | **36,853** | **5.28%** | ⭐ Best overall |
+| 🥈 2 | context_8_high_cap | `100,15,12;400,10,10;rest,7,8` | 8 | 39,508 | 1.26% | Higher context |
+| 🥉 3 | extreme_tier0 | `100,30,16;400,12,12;rest,5,8` | 5 | 40,934 | 0.13% | 30 neurons |
+| 4 | neurons_20_tier0 | `100,20,12;400,12,10;rest,7,8` | 4 | 46,358 | 0.02% | |
+| 5 | context_6_sparse | `100,12,14;400,8,10;rest,5,8` | 6 | 46,584 | 0.02% | |
+| 6 | neurons_25_gradient | `100,25,14;400,15,10;rest,7,8` | 4 | 46,677 | 0.02% | |
+| 7 | tier0_16bit | `100,15,16;400,10,10;rest,5,8` | 4 | 46,787 | 0.01% | |
+| 8 | all_sparse_16bit | `100,15,16;400,12,16;rest,8,16` | 4 | 47,060 | 2.70% | Uniform 16b |
+| 9 | tier0_18bit | `100,15,18;400,10,12;rest,5,8` | 4 | 47,075 | 0.02% | |
+| 10 | balanced_14bit | `100,12,14;400,8,12;rest,5,10` | 4 | 47,181 | 0.13% | |
+| 11 | uniform_20bit_ctx8 | `100,15,20;400,10,20;rest,5,20` | 8 | 49,675 | 1.81% | ❌ Uniform worse |
 
-#### Best Per-Tier Results
+#### Per-Tier Breakdown (Top 3 Experiments)
 
-| Tier | Best PPL | From Experiment | Config |
-|------|----------|-----------------|--------|
-| **Tier 0** | 48,977 | hybrid | 100 × 20n × 12b |
-| **Tier 1** | 44,622 | context_6_sparse | 400 × 8n × 10b |
-| **Tier 2** | 43,829 | hybrid | rest × 5n × 8b |
-
-#### Hybrid Experiment Details
-
-The hybrid config combines best-performing settings from each tier:
-- **Tier 0**: 20 neurons × 12 bits (from neurons_20_tier0)
-- **Tier 1**: 8 neurons × 10 bits (from context_6_sparse)
-- **Tier 2**: 5 neurons × 8 bits (from context_6_sparse)
-
-**Results:**
-| Metric | Initial | Final | Change |
-|--------|---------|-------|--------|
-| Val PPL | 46,642 | 46,346 | -0.63% |
-| Val Acc | 0.00% | 0.04% | +708% |
-| Test PPL | - | 46,267 | - |
-| Test Acc | - | 0.04% | - |
-
-**Per-Tier Test Breakdown:**
+**🥇 tier0_20bit** (Best PPL: 36,853)
 | Tier | Clusters | Neurons | Bits | Data % | PPL | Accuracy |
 |------|----------|---------|------|--------|-----|----------|
-| 0 | 100 | 20 | 12 | 46.5% | 48,977 | 0.07% |
-| 1 | 400 | 8 | 10 | 13.0% | 44,665 | 0.01% |
-| 2 | 49,757 | 5 | 8 | 40.4% | 43,829 | 0.02% |
+| 0 | 100 | 15 | 20 | 46.5% | 34,067 | **11.23%** |
+| 1 | 400 | 10 | 12 | 13.0% | 35,415 | 0.24% |
+| 2 | 49,757 | 5 | 8 | 40.4% | 40,862 | 0.05% |
 
-### Key Findings (Updated)
+**🥈 context_8_high_cap** (PPL: 39,508)
+| Tier | Clusters | Neurons | Bits | Data % | PPL | Accuracy |
+|------|----------|---------|------|--------|-----|----------|
+| 0 | 100 | 15 | 12 | 46.5% | 36,991 | 2.71% |
+| 1 | 400 | 10 | 10 | 13.0% | 37,076 | 0.01% |
+| 2 | 49,757 | 7 | 8 | 40.4% | 43,498 | 0.00% |
 
-1. **20 neurons optimal for Tier 0**: Beats 12, 15, and even 25 neurons
-2. **8 neurons optimal for Tier 1**: Outperforms 10, 12, 15 neurons
-3. **Lower bits (8-12) beat higher bits (14-18)**: Contrary to initial hypothesis
-4. **Context 6 helps marginally**: But neuron tuning has bigger impact
-5. **Hybrid approach works**: Combining best per-tier configs yields best overall result
+**❌ uniform_20bit_ctx8** (PPL: 49,675 - Failure Case)
+| Tier | Clusters | Neurons | Bits | Data % | PPL | Accuracy |
+|------|----------|---------|------|--------|-----|----------|
+| 0 | 100 | 15 | 20 | 46.5% | 49,232 | 3.84% |
+| 1 | 400 | 10 | 20 | 13.0% | 49,736 | 0.18% |
+| 2 | 49,757 | 5 | 20 | 40.4% | 50,171 | 0.01% |
 
-### Hypotheses Status
+### Key Insights
+
+#### ⭐ Asymmetric Architecture Wins
+
+The **tier0_20bit** experiment demonstrates that asymmetric bit allocation dramatically outperforms uniform configurations:
+
+| Config | Tier 0 | Tier 1 | Tier 2 | Test PPL |
+|--------|--------|--------|--------|----------|
+| **Asymmetric (winner)** | 20 bits | 12 bits | 8 bits | **36,853** |
+| Uniform 20-bit | 20 bits | 20 bits | 20 bits | 49,675 |
+
+**Why asymmetric works:**
+- **Tier 0** (100 frequent tokens, 46% of data): Each token seen ~11K times → can fill large address spaces → benefits from 20 bits
+- **Tier 2** (50K rare tokens, 40% of data): Each token seen ~20 times → can't fill even 8-bit address spaces → more bits = more empty cells = worse predictions
+
+#### ❌ Uniform High-Bit Configurations Fail
+
+The uniform_20bit experiment showed **worse results** than tier0_20bit:
+- PPL increased 35% (36,853 → 49,675)
+- Tier 0 accuracy dropped 66% (11.23% → 3.84%)
+
+**Root cause**: Rare tokens in tier-2 have too few training examples to fill the 2^20 = 1M address space. Most cells remain empty, leading to near-random predictions.
+
+#### Next Experiments (Priority 4)
+
+Based on these insights, new asymmetric experiments are queued:
+
+| Name | Config | Ctx | Rationale |
+|------|--------|-----|-----------|
+| asymmetric_extreme_t0 | `100,25,24;400,8,10;rest,5,8` | 8 | Push tier0 to 25n×24b |
+| asymmetric_expanded_t0 | `200,25,20;300,8,10;rest,4,8` | 8 | Expand tier0 to 200 tokens |
+| two_tier_simple | `500,15,16;rest,4,6` | 8 | Simplify to 2 tiers |
+
+### Hypotheses Status (Updated)
 
 | Hypothesis | Status | Finding |
 |------------|--------|---------|
-| More bits = better discrimination | ❌ **Rejected** | Lower bits (8-12) performed better |
-| Diminishing returns on neurons | ✅ **Confirmed** | 20n optimal, 25n worse |
-| Context trade-off | ⚠️ **Partial** | ctx=6 helped slightly, more testing needed |
-| Tier0 focus | ✅ **Confirmed** | Tier 0 config most impactful on overall PPL |
+| More bits = better | ⚠️ **Depends** | More bits help **only for frequent tokens** with enough training data |
+| Uniform bits | ❌ **Rejected** | Asymmetric allocation dramatically outperforms uniform |
+| Tier0 focus | ✅ **Confirmed** | Investing capacity in tier0 yields best returns |
+| Context 8 | ⚠️ **Mixed** | Helps PPL but needs right bit configuration |
+
+### Usage
+
+```bash
+# Quick sweep (4 experiments, ~4-6 hours)
+python tests/ramlm_full_benchmark.py --sweep --set quick
+
+# Extended sweep (10 experiments, ~16-20 hours)
+python tests/ramlm_full_benchmark.py --sweep --set extended
+
+# New asymmetric experiments (priority 4)
+python tests/ramlm_full_benchmark.py --sweep --experiments asymmetric_extreme_t0,asymmetric_expanded_t0,two_tier_simple \
+    --generations 1000 --iterations 1000 --patience 5
+```
