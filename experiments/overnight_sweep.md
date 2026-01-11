@@ -102,3 +102,72 @@ The SPARSE backend experiments (16-20 bits) may show different patterns because:
 3. **Context trade-off**: Larger context provides more information but expands address space. Context 6-8 may help if bits are high enough.
 
 4. **Tier0 focus**: Since tier0 handles 47% of data (frequent tokens), investing capacity there should yield the best PPL improvement.
+
+---
+
+## Full Data Results (January 2026)
+
+### Standard Sweep + Hybrid + Extended Results
+
+Full WikiText-2 dataset (2.4M train, 251K val, 288K test tokens) with GA+TS optimization.
+
+#### Overall Rankings (by Validation PPL)
+
+| Rank | Experiment | Config | Ctx | Val PPL | Test PPL | Accuracy | Improv |
+|------|------------|--------|-----|---------|----------|----------|--------|
+| 🥇 **1** | **hybrid** | `100,20,12;400,8,10;rest,5,8` | 4 | **46,346** | **46,267** | **0.04%** | 0.63% |
+| 🥈 2 | neurons_20_tier0 | `100,20,12;400,12,10;rest,7,8` | 4 | 46,405 | 46,358 | 0.02% | 0.63% |
+| 🥉 3 | context_6_sparse | `100,12,14;400,8,10;rest,5,8` | 6 | 46,619 | 46,584 | 0.02% | 0.36% |
+| 4 | neurons_25_gradient | `100,25,14;400,15,10;rest,7,8` | 4 | 46,725 | 46,677 | 0.02% | 0.55% |
+| 5 | tier0_16bit (ext) | `100,15,16;400,10,10;rest,5,8` | 4 | 46,804 | 46,757 | 0.01% | 0.48% |
+| 6 | tier0_16bit (std) | `100,15,16;400,10,10;rest,5,8` | 4 | 46,826 | 46,787 | 0.01% | 0.46% |
+| 7 | tier0_18bit | `100,15,18;400,10,12;rest,5,8` | 4 | 47,117 | 47,075 | 0.02% | 0.41% |
+| 8 | balanced_14bit (std) | `100,12,14;400,8,12;rest,5,10` | 4 | 47,248 | 47,181 | 0.13% | 0.94% |
+| 9 | balanced_14bit (ext) | `100,12,14;400,8,12;rest,5,10` | 4 | 47,256 | 47,195 | 0.07% | 0.87% |
+
+#### Best Per-Tier Results
+
+| Tier | Best PPL | From Experiment | Config |
+|------|----------|-----------------|--------|
+| **Tier 0** | 48,977 | hybrid | 100 × 20n × 12b |
+| **Tier 1** | 44,622 | context_6_sparse | 400 × 8n × 10b |
+| **Tier 2** | 43,829 | hybrid | rest × 5n × 8b |
+
+#### Hybrid Experiment Details
+
+The hybrid config combines best-performing settings from each tier:
+- **Tier 0**: 20 neurons × 12 bits (from neurons_20_tier0)
+- **Tier 1**: 8 neurons × 10 bits (from context_6_sparse)
+- **Tier 2**: 5 neurons × 8 bits (from context_6_sparse)
+
+**Results:**
+| Metric | Initial | Final | Change |
+|--------|---------|-------|--------|
+| Val PPL | 46,642 | 46,346 | -0.63% |
+| Val Acc | 0.00% | 0.04% | +708% |
+| Test PPL | - | 46,267 | - |
+| Test Acc | - | 0.04% | - |
+
+**Per-Tier Test Breakdown:**
+| Tier | Clusters | Neurons | Bits | Data % | PPL | Accuracy |
+|------|----------|---------|------|--------|-----|----------|
+| 0 | 100 | 20 | 12 | 46.5% | 48,977 | 0.07% |
+| 1 | 400 | 8 | 10 | 13.0% | 44,665 | 0.01% |
+| 2 | 49,757 | 5 | 8 | 40.4% | 43,829 | 0.02% |
+
+### Key Findings (Updated)
+
+1. **20 neurons optimal for Tier 0**: Beats 12, 15, and even 25 neurons
+2. **8 neurons optimal for Tier 1**: Outperforms 10, 12, 15 neurons
+3. **Lower bits (8-12) beat higher bits (14-18)**: Contrary to initial hypothesis
+4. **Context 6 helps marginally**: But neuron tuning has bigger impact
+5. **Hybrid approach works**: Combining best per-tier configs yields best overall result
+
+### Hypotheses Status
+
+| Hypothesis | Status | Finding |
+|------------|--------|---------|
+| More bits = better discrimination | ❌ **Rejected** | Lower bits (8-12) performed better |
+| Diminishing returns on neurons | ✅ **Confirmed** | 20n optimal, 25n worse |
+| Context trade-off | ⚠️ **Partial** | ctx=6 helped slightly, more testing needed |
+| Tier0 focus | ✅ **Confirmed** | Tier 0 config most impactful on overall PPL |
