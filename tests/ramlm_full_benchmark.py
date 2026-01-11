@@ -558,6 +558,13 @@ def define_sweep_experiments() -> list[SweepExperiment]:
 		description="5-tier: 50/50/400/20K/rest with gradient neurons",
 		priority=5,
 	))
+	experiments.append(SweepExperiment(
+		name="five_tier_balanced",
+		tiered="50,27,21;450,23,20;10000,5,12;10000,5,10;rest,5,8",
+		context=8,
+		description="5-tier: 50/450/10K/10K/rest with balanced neurons",
+		priority=5,
+	))
 
 	return experiments
 
