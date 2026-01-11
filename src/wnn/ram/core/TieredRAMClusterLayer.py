@@ -170,6 +170,26 @@ class TieredRAMClusterLayer(RAMComponent):
 			tc.total_neurons * tc.memory_size for tc in self.tier_configs
 		)
 
+		# Check if any tier needs sparse backend (>10 bits)
+		self._use_sparse = any(tc.bits_per_neuron > 10 for tc in self.tier_configs)
+		self._sparse_memory = None
+
+		if self._use_sparse:
+			# Initialize Rust sparse tiered memory
+			try:
+				import ram_accelerator
+				# Build tier configs for Rust: (end_cluster, neurons_per_cluster, bits_per_neuron)
+				rust_tier_configs = [
+					(tc.cluster_end, tc.neurons_per_cluster, tc.bits_per_neuron)
+					for tc in self.tier_configs
+				]
+				self._sparse_memory = ram_accelerator.TieredSparseMemory(
+					rust_tier_configs, num_clusters
+				)
+			except (ImportError, AttributeError):
+				# Fall back to dense if Rust sparse not available
+				self._use_sparse = False
+
 		# Build lookup tables for fast cluster → tier mapping
 		# For each physical cluster, store (tier_idx, local_cluster_idx)
 		self._cluster_to_tier: list[tuple[int, int]] = []
@@ -222,6 +242,11 @@ class TieredRAMClusterLayer(RAMComponent):
 		return "\n".join(lines)
 
 	@property
+	def use_sparse_backend(self) -> bool:
+		"""Check if using sparse memory backend."""
+		return self._use_sparse and self._sparse_memory is not None
+
+	@property
 	def connections(self) -> list[Tensor]:
 		"""Get connectivity matrices for all tiers."""
 		return [mem.connections for mem in self.tier_memories]
@@ -241,12 +266,18 @@ class TieredRAMClusterLayer(RAMComponent):
 		"""
 		Forward pass returning probabilities per cluster.
 
+		For architectures with >10 bits per neuron, uses sparse memory backend.
+
 		Args:
 			input_bits: [batch, total_input_bits] boolean or 0/1 tensor
 
 		Returns:
 			[batch, num_clusters] float tensor of probabilities in [0, 1]
 		"""
+		# Use sparse forward if available (for >10 bits per neuron)
+		if self._use_sparse and self._sparse_memory is not None:
+			return self.forward_sparse(input_bits)
+
 		if input_bits.ndim == 1:
 			input_bits = input_bits.unsqueeze(0)
 
@@ -279,8 +310,7 @@ class TieredRAMClusterLayer(RAMComponent):
 		"""
 		Auto-optimized forward pass.
 
-		For tiered models, this currently uses the standard forward pass.
-		Metal/Rust acceleration for tiered models can be added later.
+		Uses sparse backend for >10 bits per neuron, otherwise standard forward.
 
 		Args:
 			input_bits: [batch, total_input_bits] boolean or 0/1 tensor
@@ -288,7 +318,7 @@ class TieredRAMClusterLayer(RAMComponent):
 		Returns:
 			[batch, num_clusters] float tensor of probabilities
 		"""
-		# TODO: Add Metal/Rust acceleration for tiered models
+		# forward() already handles sparse dispatch
 		return self.forward(input_bits)
 
 	def train_batch(
@@ -506,6 +536,9 @@ class TieredRAMClusterLayer(RAMComponent):
 		Uses optimized single-call Rust function that handles ALL tiers internally.
 		This eliminates Python loop overhead and provides full parallelization.
 
+		For architectures with >10 bits per neuron, automatically uses sparse
+		memory backend to avoid massive data transfer overhead.
+
 		Args:
 			input_bits: [num_examples, total_input_bits] input patterns
 			true_clusters: [num_examples] physical cluster indices to train as TRUE
@@ -515,6 +548,10 @@ class TieredRAMClusterLayer(RAMComponent):
 		Returns:
 			Number of memory cells modified
 		"""
+		# Use sparse training if available (for >10 bits per neuron)
+		if self._use_sparse and self._sparse_memory is not None:
+			return self.train_sparse(input_bits, true_clusters, false_clusters, allow_override)
+
 		try:
 			import ram_accelerator
 			# Check if optimized tiered function is available
@@ -677,10 +714,112 @@ class TieredRAMClusterLayer(RAMComponent):
 
 		return modified
 
+	def train_sparse(
+		self,
+		input_bits: Tensor,
+		true_clusters: Tensor,
+		false_clusters: Tensor,
+		allow_override: bool = False,
+	) -> int:
+		"""
+		Training using Rust sparse tiered memory backend.
+
+		Memory stays in Rust - only returns count of modified cells.
+		This avoids the massive data transfer overhead of dense training.
+
+		Args:
+			input_bits: [num_examples, total_input_bits] input patterns
+			true_clusters: [num_examples] physical cluster indices to train as TRUE
+			false_clusters: [num_examples, num_negatives] physical cluster indices to train as FALSE
+			allow_override: Whether to override existing non-EMPTY cells (ignored for sparse)
+
+		Returns:
+			Number of memory cells modified
+		"""
+		if not self._use_sparse or self._sparse_memory is None:
+			raise RuntimeError("train_sparse called but sparse memory not initialized")
+
+		import ram_accelerator
+		import numpy as np
+
+		num_examples = input_bits.shape[0]
+		num_negatives = false_clusters.shape[1]
+
+		# Flatten inputs for Rust
+		input_bits_flat = input_bits.flatten().bool().tolist()
+		true_clusters_list = true_clusters.tolist()
+		false_clusters_flat = false_clusters.flatten().tolist()
+
+		# Build flattened connections for ALL neurons across tiers
+		connections_list = []
+		for memory in self.tier_memories:
+			connections_list.append(memory.connections.flatten().numpy().astype(np.int64))
+		connections_flat = np.concatenate(connections_list).tolist()
+
+		# Call Rust sparse tiered training
+		modified = ram_accelerator.sparse_train_batch_tiered(
+			self._sparse_memory,
+			input_bits_flat,
+			true_clusters_list,
+			false_clusters_flat,
+			connections_flat,
+			num_examples,
+			self.total_input_bits,
+			num_negatives,
+		)
+
+		return modified
+
+	def forward_sparse(self, input_bits: Tensor) -> Tensor:
+		"""
+		Forward pass using Rust sparse tiered memory backend.
+
+		Args:
+			input_bits: [batch_size, total_input_bits] boolean tensor
+
+		Returns:
+			[batch_size, num_clusters] float tensor of probabilities
+		"""
+		if not self._use_sparse or self._sparse_memory is None:
+			raise RuntimeError("forward_sparse called but sparse memory not initialized")
+
+		import ram_accelerator
+		import numpy as np
+		from torch import tensor as torch_tensor, float32
+
+		# Handle single example
+		if input_bits.ndim == 1:
+			input_bits = input_bits.unsqueeze(0)
+
+		batch_size = input_bits.shape[0]
+
+		# Flatten inputs for Rust
+		input_bits_flat = input_bits.flatten().bool().tolist()
+
+		# Build flattened connections for ALL neurons across tiers
+		connections_list = []
+		for memory in self.tier_memories:
+			connections_list.append(memory.connections.flatten().numpy().astype(np.int64))
+		connections_flat = np.concatenate(connections_list).tolist()
+
+		# Call Rust sparse forward
+		probs_flat = ram_accelerator.sparse_forward_batch_tiered(
+			self._sparse_memory,
+			input_bits_flat,
+			connections_flat,
+			batch_size,
+			self.total_input_bits,
+		)
+
+		return torch_tensor(probs_flat, dtype=float32).view(batch_size, self.num_clusters)
+
 	def reset_memory(self) -> None:
 		"""Reset all memory cells to EMPTY, preserving connectivity."""
 		for memory in self.tier_memories:
 			memory.reset()
+		# Also reset sparse memory if using it
+		if self._sparse_memory is not None:
+			self._sparse_memory.reset()
 
 	def get_config(self) -> dict:
 		"""Get configuration dict for model recreation."""

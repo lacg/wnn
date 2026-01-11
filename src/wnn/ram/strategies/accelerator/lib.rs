@@ -1272,6 +1272,109 @@ fn sparse_forward_batch(
     })
 }
 
+// =============================================================================
+// TIERED SPARSE MEMORY (for variable bits-per-tier architectures)
+// =============================================================================
+
+/// Python wrapper for TieredSparseMemory
+/// Provides tiered sparse storage for architectures with different bits per tier
+#[pyclass]
+struct TieredSparseMemory {
+    inner: Arc<sparse_memory::TieredSparseMemory>,
+    num_clusters: usize,
+    tier_configs: Vec<(usize, usize, usize)>,  // (end_cluster, neurons_per_cluster, bits_per_neuron)
+}
+
+#[pymethods]
+impl TieredSparseMemory {
+    /// Create a new tiered sparse memory
+    /// tier_configs: List of (end_cluster, neurons_per_cluster, bits_per_neuron) tuples
+    ///               Tiers must be consecutive starting from 0
+    #[new]
+    fn new(tier_configs: Vec<(usize, usize, usize)>, num_clusters: usize) -> Self {
+        Self {
+            inner: Arc::new(sparse_memory::TieredSparseMemory::new(&tier_configs, num_clusters)),
+            num_clusters,
+            tier_configs,
+        }
+    }
+
+    /// Get total number of written cells across all tiers
+    fn total_cells(&self) -> usize {
+        self.inner.total_cells()
+    }
+
+    /// Reset all memory to empty
+    fn reset(&self) {
+        self.inner.reset();
+    }
+
+    /// Get number of clusters
+    #[getter]
+    fn num_clusters(&self) -> usize {
+        self.num_clusters
+    }
+
+    /// Get tier configurations
+    #[getter]
+    fn tier_configs(&self) -> Vec<(usize, usize, usize)> {
+        self.tier_configs.clone()
+    }
+}
+
+/// Batch training for tiered sparse memory backend (parallel)
+/// Memory stays in Rust - only returns count of modified cells
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn sparse_train_batch_tiered(
+    py: Python<'_>,
+    memory: &TieredSparseMemory,
+    input_bits_flat: Vec<bool>,
+    true_clusters: Vec<i64>,
+    false_clusters_flat: Vec<i64>,
+    connections_flat: Vec<i64>,
+    num_examples: usize,
+    total_input_bits: usize,
+    num_negatives: usize,
+) -> PyResult<usize> {
+    py.allow_threads(|| {
+        let modified = sparse_memory::train_batch_tiered(
+            &memory.inner,
+            &input_bits_flat,
+            &true_clusters,
+            &false_clusters_flat,
+            &connections_flat,
+            num_examples,
+            total_input_bits,
+            num_negatives,
+        );
+        Ok(modified)
+    })
+}
+
+/// Batch forward pass for tiered sparse memory backend (parallel)
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn sparse_forward_batch_tiered(
+    py: Python<'_>,
+    memory: &TieredSparseMemory,
+    input_bits_flat: Vec<bool>,
+    connections_flat: Vec<i64>,
+    num_examples: usize,
+    total_input_bits: usize,
+) -> PyResult<Vec<f32>> {
+    py.allow_threads(|| {
+        let probs = sparse_memory::forward_batch_tiered(
+            &memory.inner,
+            &input_bits_flat,
+            &connections_flat,
+            num_examples,
+            total_input_bits,
+        );
+        Ok(probs)
+    })
+}
+
 /// Evaluate multiple connectivity patterns in parallel (for GA/TS optimization)
 ///
 /// This is the KEY function for accelerating GA/TS optimization.
@@ -1643,6 +1746,10 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SparseMemory>()?;
     m.add_function(wrap_pyfunction!(sparse_train_batch, m)?)?;
     m.add_function(wrap_pyfunction!(sparse_forward_batch, m)?)?;
+    // Tiered sparse memory backend (for variable bits per tier)
+    m.add_class::<TieredSparseMemory>()?;
+    m.add_function(wrap_pyfunction!(sparse_train_batch_tiered, m)?)?;
+    m.add_function(wrap_pyfunction!(sparse_forward_batch_tiered, m)?)?;
     // Parallel GA/TS candidate evaluation (KEY optimization)
     m.add_function(wrap_pyfunction!(evaluate_candidates_parallel, m)?)?;
     // Parallel GA/TS for TIERED architectures (16 cores parallel)

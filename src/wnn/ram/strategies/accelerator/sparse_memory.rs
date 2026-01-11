@@ -630,6 +630,11 @@ impl TieredSparseMemory {
             tier.reset();
         }
     }
+
+    /// Get total number of written cells across all tiers
+    pub fn total_cells(&self) -> usize {
+        self.tiers.iter().map(|t| t.total_cells()).sum()
+    }
 }
 
 /// Train batch on tiered sparse memory (PARALLEL version)
