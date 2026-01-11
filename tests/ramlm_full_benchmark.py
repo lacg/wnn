@@ -826,6 +826,13 @@ def run_benchmark(config: BenchmarkConfig):
 			is_tiered = True
 			# For GA/TS mutation bounds, use max bits (connections are bounded by total_input_bits anyway)
 			bits_per_neuron = max(bits_per_tier)
+
+			# Compute neuron_offsets for GA crossover to respect neuron boundaries
+			# neuron_offsets[i] = starting connection index for neuron i
+			neuron_offsets = [0]
+			for tc in model.layer.tier_configs:
+				for _ in range(tc.total_neurons):
+					neuron_offsets.append(neuron_offsets[-1] + tc.bits_per_neuron)
 		else:
 			# Uniform model - single layer
 			num_neurons = model.layer.total_neurons
@@ -833,6 +840,7 @@ def run_benchmark(config: BenchmarkConfig):
 			bits_per_tier = [bits_per_neuron]
 			is_tiered = False
 			is_variable_bits = False
+			neuron_offsets = None  # Not needed for uniform architectures
 
 		# Current connections (combined for tiered, direct for uniform)
 		if is_tiered:
@@ -1098,6 +1106,7 @@ def run_benchmark(config: BenchmarkConfig):
 					bits_per_neuron,
 					batch_evaluate,
 					overfitting_callback=overfitting_monitor,
+					neuron_offsets=neuron_offsets,  # For tiered crossover at neuron boundaries
 				)
 
 			elif strategy_name == "TS":

@@ -73,25 +73,52 @@ Pick 3 random individuals, return the one with lowest error.
 ### 4. Crossover (Single-Point, Neuron-Level)
 
 ```python
-def crossover(parent1, parent2, crossover_rate=0.7):
+def crossover(parent1, parent2, num_neurons, neuron_offsets=None):
     if random.random() > crossover_rate:
         return parent1.clone()
 
     crossover_point = random.randint(1, num_neurons - 1)
     child = parent1.clone()
-    child[crossover_point:] = parent2[crossover_point:]
+
+    if parent1.dim() == 1 and neuron_offsets:
+        # Tiered: use neuron boundary from offsets
+        conn_boundary = neuron_offsets[crossover_point]
+        child[conn_boundary:] = parent2[conn_boundary:]
+    else:
+        # Uniform 2D: crossover at row
+        child[crossover_point:] = parent2[crossover_point:]
     return child
 ```
 
-**Example**:
+**Example (Uniform 2D)**:
 ```
 Parent 1: [[2,5,11,14], [0,3,8,12], [1,6,9,15]]
 Parent 2: [[4,7,10,13], [2,5,8,11], [0,3,6,9]]
                         ^ crossover point = 1
 
 Child:    [[2,5,11,14], [2,5,8,11], [0,3,6,9]]
-           from P1       from P2     from P2
+           from P1       from P2
 ```
+
+**Example (Tiered 1D with variable bits/neuron)**:
+```
+Architecture: Tier 0 = 500 clusters × 3 neurons × 20 bits = 1500 neurons
+              Tier 1 = rest clusters × 3 neurons × 8 bits
+
+neuron_offsets = [0, 20, 40, ..., 29980, 30000, 30008, 30016, ...]
+                 |---- tier0 (20 bits/neuron) ----||-- tier1 (8 bits) --|
+                 neuron 0,1,2...                   neuron 1500,1501...
+
+Parent 1 (flat): [c0-c19 | c20-c39 | ... | c30000-c30007 | ...]
+                  N0        N1             N1500
+
+crossover_point = 1500 → conn_boundary = neuron_offsets[1500] = 30000
+
+Child: [c0...c29999 | C30000...C_end]
+       from P1         from P2
+```
+
+This ensures crossover respects neuron boundaries even when neurons have different bits.
 
 ### 5. Mutation (Per-Connection)
 

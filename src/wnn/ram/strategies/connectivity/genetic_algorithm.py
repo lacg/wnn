@@ -86,6 +86,7 @@ class GeneticAlgorithmStrategy(OptimizerStrategyBase):
 		n_bits_per_neuron: int,
 		batch_evaluate_fn: Optional[Callable[[list], list[float]]] = None,
 		overfitting_callback: Optional[OverfittingCallback] = None,
+		neuron_offsets: Optional[list[int]] = None,
 	) -> OptimizerResult:
 		"""
 		Run Genetic Algorithm optimization with fitness caching.
@@ -104,9 +105,24 @@ class GeneticAlgorithmStrategy(OptimizerStrategyBase):
 			overfitting_callback: Optional callback for overfitting detection.
 				Called every 5 generations with (best_connectivity, train_fitness).
 				Returns OverfittingControl to signal diversity mode or early stop.
+			neuron_offsets: Optional list of cumulative connection offsets for each neuron.
+				Required for tiered architectures with variable bits per neuron.
+				Example: [0, 20, 40, 60, 68, 76] means neuron 0 has connections 0-19,
+				neuron 1 has 20-39, neuron 2 has 40-59, neuron 3 has 60-67, etc.
+				If not provided, assumes uniform n_bits_per_neuron for all neurons.
 		"""
 		self._ensure_rng()
 		cfg = self._config
+
+		# Compute neuron offsets for tiered architectures
+		# For 1D tensors with variable bits per neuron, we need boundaries for crossover
+		if neuron_offsets is None and connections.dim() == 1:
+			# Assume uniform bits per neuron
+			neuron_offsets = [i * n_bits_per_neuron for i in range(num_neurons + 1)]
+		elif neuron_offsets is not None:
+			# Ensure we have the final offset (total connections)
+			if len(neuron_offsets) == num_neurons:
+				neuron_offsets = list(neuron_offsets) + [connections.shape[0]]
 
 		# Diversity mode tracking - store original values for restoration
 		in_diversity_mode = False
@@ -191,7 +207,7 @@ class GeneticAlgorithmStrategy(OptimizerStrategyBase):
 
 				# Crossover
 				if random.random() < cfg.crossover_rate:
-					child = self._crossover(p1, p2, num_neurons)
+					child = self._crossover(p1, p2, num_neurons, neuron_offsets)
 				else:
 					child = p1.clone()
 
@@ -351,11 +367,41 @@ class GeneticAlgorithmStrategy(OptimizerStrategyBase):
 		best_idx = min(indices, key=lambda i: population[i][1])
 		return population[best_idx][0]  # Return just the individual
 
-	def _crossover(self, parent1: Tensor, parent2: Tensor, num_neurons: int) -> Tensor:
-		"""Single-point crossover: exchange neuron connections."""
+	def _crossover(
+		self,
+		parent1: Tensor,
+		parent2: Tensor,
+		num_neurons: int,
+		neuron_offsets: Optional[list[int]] = None,
+	) -> Tensor:
+		"""
+		Single-point crossover: exchange neuron connections at neuron boundaries.
+
+		For 2D tensors [num_neurons, bits_per_neuron]:
+			Crossover at row (neuron) boundary.
+
+		For 1D flattened tensors (tiered architectures):
+			Uses neuron_offsets to find neuron boundaries and crossover there.
+			This ensures we don't split a neuron's connections between parents.
+
+		Args:
+			parent1: First parent connectivity
+			parent2: Second parent connectivity
+			num_neurons: Total number of neurons
+			neuron_offsets: Cumulative connection offsets [0, n0, n0+n1, ...] for 1D tensors
+		"""
 		child = parent1.clone()
 		crossover_point = random.randint(1, num_neurons - 1)
-		child[crossover_point:] = parent2[crossover_point:].clone()
+
+		if parent1.dim() == 1 and neuron_offsets is not None:
+			# 1D flattened tensor - use neuron_offsets to find boundary
+			# crossover_point is neuron index, convert to connection index
+			conn_boundary = neuron_offsets[crossover_point]
+			child[conn_boundary:] = parent2[conn_boundary:].clone()
+		else:
+			# 2D tensor - crossover at row boundary
+			child[crossover_point:] = parent2[crossover_point:].clone()
+
 		return child
 
 	def __repr__(self) -> str:
