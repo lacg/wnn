@@ -497,8 +497,13 @@ class ClusterOptimizer:
     This is the core reusable component - it handles:
     1. Extracting examples for this cluster
     2. Computing discriminative fitness
-    3. Running GA/TS optimization
+    3. Running GA/TS optimization with BATCH evaluation
     4. Returning optimized connectivity
+
+    Key difference from global optimization:
+    - Only operates on this cluster's neurons
+    - Uses discriminative fitness (fire for correct token, don't fire for others)
+    - Batch evaluation of population for efficiency
     """
 
     def __init__(
@@ -511,7 +516,7 @@ class ClusterOptimizer:
         self.evaluator = evaluator
         self.fitness_mode = fitness_mode
         self.seed = seed
-        self._log = logger or print
+        self._log = logger or (lambda x: None)
 
         if seed is not None:
             random.seed(seed)
@@ -527,16 +532,89 @@ class ClusterOptimizer:
         Optimize a cluster's connectivity using Genetic Algorithm.
 
         The GA operates ONLY on this cluster's neurons:
-        - Population: 30 variants of this cluster's connectivity
+        - Population: N variants of this cluster's connectivity
         - Crossover: Swap neurons within this cluster only
         - Mutation: Mutate connections within this cluster only
-        - Fitness: Discriminative accuracy for this cluster's token
+        - Fitness: Discriminative fitness for this cluster's token
+        - BATCH evaluation: All population members evaluated together
         """
-        # TODO: Implement per-cluster GA
-        # Key difference from global GA:
-        # - Only mutate/crossover this cluster's neurons
-        # - Fitness = discriminative_fitness(cluster_id, connectivity)
-        raise NotImplementedError("Per-cluster GA - to be implemented")
+        num_neurons, bits_per_neuron = initial_connectivity.shape
+        total_bits = self.evaluator.context_bits
+        pop_size = config.ga_population
+        elitism = max(1, pop_size // 10)
+
+        # Initialize population
+        population = [initial_connectivity.clone()]
+        for _ in range(pop_size - 1):
+            variant = self._random_connectivity(num_neurons, bits_per_neuron, total_bits)
+            population.append(variant)
+
+        # Evaluate initial population (BATCH)
+        fitness = self.evaluator.evaluate_cluster_variants_batch(
+            cluster_id, population, self.fitness_mode
+        )
+
+        # Track best
+        best_idx = max(range(len(fitness)), key=lambda i: fitness[i])
+        best_conn = population[best_idx].clone()
+        best_fitness = fitness[best_idx]
+        initial_fitness = self.evaluator.evaluate_cluster_variant(
+            cluster_id, initial_connectivity, self.fitness_mode
+        )
+
+        # Evolution loop
+        for gen in range(config.ga_gens):
+            # Sort by fitness (descending - higher is better)
+            sorted_indices = sorted(range(len(fitness)), key=lambda i: fitness[i], reverse=True)
+
+            # Elitism: keep top individuals
+            new_population = [population[sorted_indices[i]].clone() for i in range(elitism)]
+
+            # Generate offspring
+            while len(new_population) < pop_size:
+                # Tournament selection
+                p1 = self._tournament_select(population, fitness)
+                p2 = self._tournament_select(population, fitness)
+
+                # Crossover
+                if random.random() < 0.7:
+                    child = self._crossover(p1, p2)
+                else:
+                    child = p1.clone()
+
+                # Mutation
+                child = self._mutate(child, config.mutation_rate, total_bits)
+                new_population.append(child)
+
+            population = new_population[:pop_size]
+
+            # Batch evaluate new population
+            fitness = self.evaluator.evaluate_cluster_variants_batch(
+                cluster_id, population, self.fitness_mode
+            )
+
+            # Update best
+            gen_best_idx = max(range(len(fitness)), key=lambda i: fitness[i])
+            if fitness[gen_best_idx] > best_fitness:
+                best_conn = population[gen_best_idx].clone()
+                best_fitness = fitness[gen_best_idx]
+
+        # Get tier from evaluator
+        start, end = self.evaluator.cluster_to_neurons.get(cluster_id, (0, 1))
+        tier = 0  # Default, should be computed from cluster_id
+
+        improvement = ((best_fitness - initial_fitness) / abs(initial_fitness) * 100) if initial_fitness != 0 else 0
+
+        return ClusterOptResult(
+            cluster_id=cluster_id,
+            tier=tier,
+            initial_accuracy=initial_fitness,
+            final_accuracy=best_fitness,
+            initial_connectivity=initial_connectivity,
+            final_connectivity=best_conn,
+            improvement_pct=improvement,
+            generations_run=config.ga_gens,
+        )
 
     def optimize_cluster_ts(
         self,
@@ -548,12 +626,173 @@ class ClusterOptimizer:
         Optimize a cluster's connectivity using Tabu Search.
 
         TS operates ONLY on this cluster's neurons:
-        - Generate neighbors by mutating only this cluster's connections
-        - Tabu list tracks moves within this cluster
-        - Fitness: Discriminative accuracy for this cluster's token
+        - Generate N neighbors by mutating only this cluster's connections
+        - Tabu list tracks recent moves to avoid cycling
+        - Always move to best non-tabu neighbor
+        - BATCH evaluation: All neighbors evaluated together
         """
-        # TODO: Implement per-cluster TS
-        raise NotImplementedError("Per-cluster TS - to be implemented")
+        num_neurons, bits_per_neuron = initial_connectivity.shape
+        total_bits = self.evaluator.context_bits
+
+        # Current solution
+        current = initial_connectivity.clone()
+        current_fitness = self.evaluator.evaluate_cluster_variant(
+            cluster_id, current, self.fitness_mode
+        )
+        initial_fitness = current_fitness
+
+        # Best solution
+        best = current.clone()
+        best_fitness = current_fitness
+
+        # Tabu list: stores (neuron_idx, old_value, new_value) tuples
+        from collections import deque
+        tabu_list: deque = deque(maxlen=5)
+
+        # TS iterations
+        for iteration in range(config.ts_iters):
+            # Generate neighbors
+            neighbors = []
+            moves = []
+            for _ in range(config.ts_neighbors):
+                neighbor, move = self._generate_neighbor(
+                    current, config.mutation_rate, total_bits
+                )
+                # Skip if move is tabu
+                if not self._is_tabu(move, tabu_list):
+                    neighbors.append(neighbor)
+                    moves.append(move)
+
+            if len(neighbors) == 0:
+                # All moves are tabu, reduce tabu size or break
+                continue
+
+            # Batch evaluate neighbors
+            neighbor_fitness = self.evaluator.evaluate_cluster_variants_batch(
+                cluster_id, neighbors, self.fitness_mode
+            )
+
+            # Pick best neighbor (even if worse - TS characteristic)
+            best_neighbor_idx = max(range(len(neighbor_fitness)), key=lambda i: neighbor_fitness[i])
+            best_neighbor = neighbors[best_neighbor_idx]
+            best_neighbor_fit = neighbor_fitness[best_neighbor_idx]
+            best_move = moves[best_neighbor_idx]
+
+            # Move to best neighbor
+            current = best_neighbor
+            current_fitness = best_neighbor_fit
+            tabu_list.append(best_move)
+
+            # Update global best
+            if current_fitness > best_fitness:
+                best = current.clone()
+                best_fitness = current_fitness
+
+        # Get tier
+        tier = 0  # Default
+
+        improvement = ((best_fitness - initial_fitness) / abs(initial_fitness) * 100) if initial_fitness != 0 else 0
+
+        return ClusterOptResult(
+            cluster_id=cluster_id,
+            tier=tier,
+            initial_accuracy=initial_fitness,
+            final_accuracy=best_fitness,
+            initial_connectivity=initial_connectivity,
+            final_connectivity=best,
+            improvement_pct=improvement,
+            generations_run=config.ts_iters,
+        )
+
+    # =========================================================================
+    # GA/TS Helper Methods
+    # =========================================================================
+
+    def _random_connectivity(
+        self,
+        num_neurons: int,
+        bits_per_neuron: int,
+        total_bits: int,
+    ) -> Tensor:
+        """Generate random connectivity for a cluster."""
+        return torch.randint(0, total_bits, (num_neurons, bits_per_neuron))
+
+    def _tournament_select(
+        self,
+        population: List[Tensor],
+        fitness: List[float],
+        tournament_size: int = 3,
+    ) -> Tensor:
+        """Tournament selection: pick best from random subset."""
+        indices = random.sample(range(len(population)), min(tournament_size, len(population)))
+        best_idx = max(indices, key=lambda i: fitness[i])
+        return population[best_idx]
+
+    def _crossover(self, parent1: Tensor, parent2: Tensor) -> Tensor:
+        """Single-point crossover at neuron level."""
+        num_neurons = parent1.shape[0]
+        if num_neurons <= 1:
+            return parent1.clone()
+
+        crossover_point = random.randint(1, num_neurons - 1)
+        child = parent1.clone()
+        child[crossover_point:] = parent2[crossover_point:].clone()
+        return child
+
+    def _mutate(
+        self,
+        connectivity: Tensor,
+        mutation_rate: float,
+        total_bits: int,
+    ) -> Tensor:
+        """Mutate connectivity with given probability per connection."""
+        mutated = connectivity.clone()
+        num_neurons, bits_per_neuron = mutated.shape
+
+        for n in range(num_neurons):
+            for b in range(bits_per_neuron):
+                if random.random() < mutation_rate:
+                    mutated[n, b] = random.randint(0, total_bits - 1)
+
+        return mutated
+
+    def _generate_neighbor(
+        self,
+        connectivity: Tensor,
+        mutation_rate: float,
+        total_bits: int,
+    ) -> Tuple[Tensor, Tuple[int, int, int]]:
+        """Generate a neighbor by mutation. Returns (neighbor, move)."""
+        neighbor = connectivity.clone()
+        num_neurons, bits_per_neuron = neighbor.shape
+
+        # Make at least one mutation
+        mutations_made = 0
+        last_move = (0, 0, 0)
+
+        for n in range(num_neurons):
+            for b in range(bits_per_neuron):
+                if random.random() < mutation_rate or mutations_made == 0:
+                    old_val = int(neighbor[n, b].item())
+                    new_val = random.randint(0, total_bits - 1)
+                    neighbor[n, b] = new_val
+                    last_move = (n * bits_per_neuron + b, old_val, new_val)
+                    mutations_made += 1
+
+        return neighbor, last_move
+
+    def _is_tabu(
+        self,
+        move: Tuple[int, int, int],
+        tabu_list: deque,
+    ) -> bool:
+        """Check if move reverses a recent tabu move."""
+        # move = (flat_idx, old_val, new_val)
+        for tabu_move in tabu_list:
+            # Tabu if same index and reverses the change
+            if tabu_move[0] == move[0] and tabu_move[2] == move[1]:
+                return True
+        return False
 
     def compute_discriminative_fitness(
         self,
