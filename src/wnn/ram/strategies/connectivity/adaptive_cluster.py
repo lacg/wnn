@@ -621,8 +621,14 @@ class AdaptiveClusterOptimizer:
 		# Initialize population
 		population = self._init_population(init_strategy)
 
-		# Evaluate initial population
-		fitness = [self.evaluate_fn(g) for g in population]
+		# Evaluate initial population with progress logging
+		self._log(f"[AdaptiveGA] Evaluating initial population ({cfg.population_size} genomes)...")
+		fitness = []
+		for i, genome in enumerate(population):
+			fit = self.evaluate_fn(genome)
+			fitness.append(fit)
+			self._log(f"  [{i+1}/{cfg.population_size}] CE={fit:.4f}")
+
 		best_idx = min(range(len(fitness)), key=lambda i: fitness[i])
 		best_genome = population[best_idx].clone()
 		best_fitness = fitness[best_idx]
@@ -667,7 +673,11 @@ class AdaptiveClusterOptimizer:
 			population = new_population
 
 			# Evaluate new population
-			fitness = [self.evaluate_fn(g) for g in population]
+			self._log(f"[AdaptiveGA] Gen {gen + 1}: evaluating {cfg.population_size} genomes...")
+			fitness = []
+			for i, genome in enumerate(population):
+				fit = self.evaluate_fn(genome)
+				fitness.append(fit)
 			gen_best_idx = min(range(len(fitness)), key=lambda i: fitness[i])
 
 			if fitness[gen_best_idx] < best_fitness:
@@ -677,14 +687,14 @@ class AdaptiveClusterOptimizer:
 			avg_fitness = sum(fitness) / len(fitness)
 			history.append((gen + 1, best_fitness, avg_fitness))
 
-			# Log progress
-			if (gen + 1) % 5 == 0 or gen == 0:
-				stats = best_genome.stats()
-				self._log(
-					f"[AdaptiveGA] Gen {gen + 1}/{cfg.generations}: "
-					f"best={best_fitness:.4f}, avg={avg_fitness:.4f}, "
-					f"bits=[{stats['min_bits']}-{stats['max_bits']}]"
-				)
+			# Log progress every generation
+			stats = best_genome.stats()
+			self._log(
+				f"[AdaptiveGA] Gen {gen + 1}/{cfg.generations}: "
+				f"best={best_fitness:.4f}, avg={avg_fitness:.4f}, "
+				f"bits=[{stats['min_bits']}-{stats['max_bits']}], "
+				f"neurons=[{stats['min_neurons']}-{stats['max_neurons']}]"
+			)
 
 			# Early stopping check
 			improvement_pct = (prev_best - best_fitness) / prev_best * 100 if prev_best > 0 else 0
