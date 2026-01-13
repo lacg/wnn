@@ -292,6 +292,9 @@ def __getattr__(name: str):
 	if name == 'can_attend':
 		from wnn.ram.core.models.attention_mask import can_attend
 		return can_attend
+	if name == 'LearnedSparseMask':
+		from wnn.ram.core.models.attention_mask import LearnedSparseMask
+		return LearnedSparseMask
 
 	# Computed operations
 	if name == 'ComputedArithmeticFFN':
@@ -418,6 +421,7 @@ __all__ = [
 	'AttentionMask',
 	'MaskStrategy',
 	'can_attend',
+	'LearnedSparseMask',
 	# FFN
 	'TwoLayerFFN',
 	'RAMFeedForward',

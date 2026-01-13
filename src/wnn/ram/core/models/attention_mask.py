@@ -11,6 +11,7 @@ Provides flexible attention mask generation for different attention patterns:
 - STRIDED: Attend every k-th position (reduces O(n²) to O(n²/k))
 - DILATED: Exponentially increasing gaps [1, 2, 4, ...]
 - LOCAL_GLOBAL: Local window + global tokens (e.g., [CLS])
+- LEARNED: RAMLayer learns which position pairs should attend
 
 Usage:
 	mask = AttentionMask.causal(seq_len=10)
@@ -19,6 +20,11 @@ Usage:
 	mask = AttentionMask.dilated(seq_len=10, dilation_rates=[1, 2, 4])
 	mask = AttentionMask.local_global(seq_len=10, local_window=2, global_positions=[0])
 	mask = AttentionMask.from_strategy(MaskStrategy.CAUSAL, seq_len=10)
+
+	# Learned sparse mask (trainable)
+	learned_mask = LearnedSparseMask(max_seq_len=64, position_bits=6)
+	learned_mask.train(training_data)  # Train on examples
+	mask = learned_mask.generate(seq_len=10)
 """
 
 from enum import Enum, auto
@@ -38,6 +44,7 @@ class MaskStrategy(Enum):
 	STRIDED = auto()          # Every k-th position
 	DILATED = auto()          # Exponentially increasing gaps
 	LOCAL_GLOBAL = auto()     # Local window + global tokens
+	LEARNED = auto()          # RAMLayer learns position pairs
 
 
 class AttentionMask:
@@ -357,6 +364,11 @@ class AttentionMask:
 			return AttentionMask.dilated(seq_len, dilation_rates, window_per_rate, causal)
 		elif strategy == MaskStrategy.LOCAL_GLOBAL:
 			return AttentionMask.local_global(seq_len, window_size, global_positions, causal)
+		elif strategy == MaskStrategy.LEARNED:
+			raise ValueError(
+				"LEARNED strategy requires a trained LearnedSparseMask instance. "
+				"Use LearnedSparseMask class directly instead of from_strategy()."
+			)
 		else:
 			raise ValueError(f"Unknown strategy: {strategy}")
 
@@ -403,6 +415,204 @@ class AttentionMask:
 		result = zeros(mask.shape, dtype=float32)
 		result[~mask] = fill_value
 		return result
+
+
+class LearnedSparseMask:
+	"""
+	Trainable sparse attention mask using RAMLayer.
+
+	Instead of hardcoded patterns, this class learns which (query_pos, key_pos)
+	pairs should attend to each other based on training data.
+
+	The RAMLayer takes position pair as input and outputs TRUE (attend) or
+	FALSE (don't attend). The pattern is learned during training.
+
+	Example:
+		mask = LearnedSparseMask(max_seq_len=64, position_bits=6)
+
+		# Train from attention weights or supervision
+		mask.train_from_weights(attention_weights)  # [seq, seq] float
+		mask.train_from_mask(target_mask)  # [seq, seq] bool
+
+		# Generate mask for inference
+		generated = mask.generate(seq_len=32)
+	"""
+
+	def __init__(
+		self,
+		max_seq_len: int = 64,
+		position_bits: int | None = None,
+		threshold: float = 0.5,
+		causal: bool = False,
+		rng: int | None = None,
+	):
+		"""
+		Initialize learned sparse mask.
+
+		Args:
+			max_seq_len: Maximum sequence length to support
+			position_bits: Bits to encode each position (default: auto from max_seq_len)
+			threshold: Threshold for attention weights when training (default: 0.5)
+			causal: If True, enforce causal constraint (query can only attend to key <= query)
+			rng: Random seed for RAMLayer initialization
+		"""
+		from wnn.ram.core import RAMLayer
+
+		if position_bits is None:
+			# Auto-compute bits needed to encode max_seq_len
+			position_bits = max(1, (max_seq_len - 1).bit_length())
+
+		self.max_seq_len = max_seq_len
+		self.position_bits = position_bits
+		self.threshold = threshold
+		self.causal = causal
+
+		# Input: [query_pos_bits, key_pos_bits] -> 2 * position_bits
+		# Output: 1 neuron that outputs attend/not-attend
+		input_bits = 2 * position_bits
+		self.ram = RAMLayer(
+			total_input_bits=input_bits,
+			num_neurons=1,
+			n_bits_per_neuron=input_bits,  # Fully connected to all input bits
+			rng=rng,
+		)
+
+	def _encode_position(self, pos: int) -> list[bool]:
+		"""Encode position as binary bits."""
+		bits = []
+		for i in range(self.position_bits):
+			bits.append(bool((pos >> i) & 1))
+		return bits
+
+	def _encode_pair(self, query_pos: int, key_pos: int) -> list[bool]:
+		"""Encode position pair as input for RAMLayer."""
+		query_bits = self._encode_position(query_pos)
+		key_bits = self._encode_position(key_pos)
+		return query_bits + key_bits
+
+	def query(self, query_pos: int, key_pos: int) -> bool:
+		"""
+		Query if query_pos should attend to key_pos.
+
+		Args:
+			query_pos: Query position
+			key_pos: Key position
+
+		Returns:
+			True if should attend, False otherwise
+		"""
+		from torch import tensor, bool as tbool
+
+		# Enforce causal constraint if enabled
+		if self.causal and key_pos > query_pos:
+			return False
+
+		input_bits = self._encode_pair(query_pos, key_pos)
+		input_tensor = tensor([input_bits], dtype=tbool)
+		output = self.ram.forward(input_tensor)
+		return bool(output[0, 0].item())
+
+	def train_pair(self, query_pos: int, key_pos: int, should_attend: bool):
+		"""
+		Train a single position pair.
+
+		Args:
+			query_pos: Query position
+			key_pos: Key position
+			should_attend: Whether query should attend to key
+		"""
+		from torch import tensor, bool as tbool
+
+		# Skip if causal constraint would block anyway
+		if self.causal and key_pos > query_pos and should_attend:
+			return
+
+		input_bits = self._encode_pair(query_pos, key_pos)
+		input_tensor = tensor([input_bits], dtype=tbool)
+		output_tensor = tensor([[should_attend]], dtype=tbool)
+		self.ram.commit(input_tensor, output_tensor)
+
+	def train_from_mask(self, mask: Tensor):
+		"""
+		Train from a target boolean mask.
+
+		Args:
+			mask: Boolean mask [seq_len, seq_len] where True = attend
+		"""
+		seq_len = mask.shape[0]
+		for i in range(seq_len):
+			for j in range(seq_len):
+				should_attend = bool(mask[i, j].item())
+				self.train_pair(i, j, should_attend)
+
+	def train_from_weights(self, weights: Tensor, threshold: float | None = None):
+		"""
+		Train from attention weights by thresholding.
+
+		Args:
+			weights: Attention weights [seq_len, seq_len] (float, 0-1)
+			threshold: Threshold for converting to boolean (default: self.threshold)
+		"""
+		if threshold is None:
+			threshold = self.threshold
+
+		mask = weights >= threshold
+		self.train_from_mask(mask)
+
+	def generate(self, seq_len: int) -> Tensor:
+		"""
+		Generate attention mask for given sequence length.
+
+		Args:
+			seq_len: Sequence length
+
+		Returns:
+			Boolean mask [seq_len, seq_len]
+		"""
+		mask = zeros(seq_len, seq_len, dtype=tbool)
+		for i in range(seq_len):
+			for j in range(seq_len):
+				if self.query(i, j):
+					mask[i, j] = True
+		return mask
+
+	def sparsity(self, seq_len: int) -> float:
+		"""
+		Compute sparsity ratio of the learned mask.
+
+		Args:
+			seq_len: Sequence length to test
+
+		Returns:
+			Fraction of positions that are masked (0.0 = dense, 1.0 = empty)
+		"""
+		mask = self.generate(seq_len)
+		total = seq_len * seq_len
+		attend_count = mask.sum().item()
+		return 1.0 - (attend_count / total)
+
+	def stats(self, seq_len: int) -> dict:
+		"""
+		Get statistics about the learned mask.
+
+		Args:
+			seq_len: Sequence length to test
+
+		Returns:
+			Dict with mask statistics
+		"""
+		mask = self.generate(seq_len)
+		total = seq_len * seq_len
+		attend_count = int(mask.sum().item())
+
+		return {
+			"seq_len": seq_len,
+			"total_pairs": total,
+			"attend_pairs": attend_count,
+			"masked_pairs": total - attend_count,
+			"sparsity": 1.0 - (attend_count / total),
+			"density": attend_count / total,
+		}
 
 
 def can_attend(mask: Tensor, query_pos: int, key_pos: int) -> bool:
