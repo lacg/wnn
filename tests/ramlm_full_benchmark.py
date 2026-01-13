@@ -65,7 +65,31 @@ from wnn.ram.strategies.connectivity import (
 	SEVERE_THRESHOLD,
 	CRITICAL_THRESHOLD,
 )
+from wnn.ram.strategies.connectivity.per_cluster import (
+	FitnessMode,
+	TierOptConfig,
+	IncrementalEvaluator,
+	PerClusterOptimizer,
+	RustPerClusterOptimizer,
+	create_rust_optimizer,
+	_check_rust_per_cluster,
+)
 from wnn.tokenizers import TokenizerType, TokenizerFactory
+
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+def get_fitness_mode(mode_str: str) -> FitnessMode:
+	"""Convert fitness mode string to FitnessMode enum."""
+	mode_map = {
+		"SIMPLE": FitnessMode.SIMPLE,
+		"CE": FitnessMode.CROSS_ENTROPY,
+		"PENALIZE": FitnessMode.PENALIZE_HIGH_VOTES,
+		"ACCURACY": FitnessMode.ACCURACY,
+	}
+	return mode_map.get(mode_str.upper(), FitnessMode.SIMPLE)
 
 
 # ============================================================================
@@ -389,6 +413,13 @@ class BenchmarkConfig:
 
 	# Acceleration mode
 	cpu_only: bool = False  # Force CPU-only (disable hybrid CPU+GPU)
+
+	# Iterative refinement with grouped optimization
+	iterative_passes: int = 1   # Number of optimization passes (2-3 for iterative refinement)
+	group_size: int = 10        # Group size for joint optimization of tier 0/1 (0 disables)
+
+	# Fitness function for PC optimization
+	fitness_mode: str = "SIMPLE"  # SIMPLE, CE, or PENALIZE
 
 
 # ============================================================================
@@ -1127,6 +1158,369 @@ def run_benchmark(config: BenchmarkConfig):
 					overfitting_callback=overfitting_monitor,
 				)
 
+			elif strategy_name == "PC":
+				# ================================================================
+				# PER-CLUSTER OPTIMIZATION (replaces global GA/TS)
+				# Each cluster is optimized independently with discriminative fitness
+				# Uses Rust accelerator when available (16x faster)
+				# Uses GLOBAL CE fitness (softmax over all 50K clusters) for true PPL optimization
+				# ================================================================
+				use_rust_pc = _check_rust_per_cluster()
+				log(f"  Setting up per-cluster optimization (Rust: {use_rust_pc})...")
+
+				# Encode tokens to binary contexts
+				log("  Encoding contexts to binary...")
+				train_contexts = model.encode_sequence(opt_train_tokens)  # [N, total_input_bits]
+				train_targets = torch.tensor(opt_train_tokens[model.context_size:], dtype=torch.long)
+				eval_contexts = model.encode_sequence(opt_eval_tokens)
+				eval_targets = torch.tensor(opt_eval_tokens[model.context_size:], dtype=torch.long)
+
+				log(f"    Train: {train_contexts.shape[0]:,} examples × {train_contexts.shape[1]} bits")
+				log(f"    Eval: {eval_contexts.shape[0]:,} examples")
+
+				# Result adapter for compatibility with rest of benchmark
+				from dataclasses import dataclass as dc
+				@dc
+				class PCResultAdapter:
+					optimized_connections: torch.Tensor
+					initial_error: float
+					final_error: float
+					iterations_run: int
+					early_stopped_overfitting: bool
+
+				total_clusters_optimized = 0
+				all_tier_summaries = {}
+
+				if is_tiered:
+					# Process each tier separately (different bits_per_neuron per tier)
+					log(f"  Processing {len(model.layer.tier_configs)} tiers...")
+
+					# ============================================================
+					# GLOBAL CE SETUP: Build mappings for ALL tiers first
+					# This enables true global CE (softmax over all 50K clusters)
+					# ============================================================
+					all_cluster_to_neurons = {}  # cluster_id -> (start, end) in its tier's connectivity
+					all_cluster_to_bits = {}     # cluster_id -> bits_per_neuron
+					tier_info = []               # [(tier_idx, cluster_ids, tier_connectivity)]
+
+					for tier_idx, tc in enumerate(model.layer.tier_configs):
+						tier_clusters = []
+						for local_idx, cluster_id in enumerate(range(tc.cluster_start, tc.cluster_end)):
+							start_neuron = local_idx * tc.neurons_per_cluster
+							end_neuron = start_neuron + tc.neurons_per_cluster
+							all_cluster_to_neurons[cluster_id] = (start_neuron, end_neuron)
+							all_cluster_to_bits[cluster_id] = tc.bits_per_neuron
+							tier_clusters.append(cluster_id)
+						tier_connectivity = model.layer.tier_memories[tier_idx].connections.clone()
+						tier_info.append((tier_idx, tier_clusters, tier_connectivity, tc))
+
+					# Create ONE Rust optimizer for global CE
+					rust_optimizer = None
+					if use_rust_pc:
+						log(f"  Creating global optimizer for {len(all_cluster_to_neurons)} clusters...")
+						rust_optimizer = create_rust_optimizer(
+							train_contexts=train_contexts,
+							train_targets=train_targets,
+							eval_contexts=eval_contexts,
+							eval_targets=eval_targets,
+							context_bits=total_input_bits,
+							cluster_to_neurons=all_cluster_to_neurons,
+							cluster_to_bits=all_cluster_to_bits,
+							num_clusters=model.vocab_size,
+							fitness_mode=get_fitness_mode(config.fitness_mode),
+							logger=log,
+						)
+
+						# Precompute GLOBAL baseline (votes for ALL clusters)
+						# This enables true global CE during optimization
+						log(f"  Precomputing global baseline (enables true global CE)...")
+						all_connectivities = {}
+						for tier_idx, tier_clusters, tier_connectivity, tc in tier_info:
+							for local_idx, cluster_id in enumerate(tier_clusters):
+								start = local_idx * tc.neurons_per_cluster
+								end = start + tc.neurons_per_cluster
+								cluster_conn = tier_connectivity[start:end]  # [num_neurons, bits]
+								all_connectivities[cluster_id] = cluster_conn.flatten().long().tolist()
+
+						rust_optimizer.precompute_global_baseline(all_connectivities)
+
+					# ============================================================
+					# Iterative refinement: multiple passes with grouped optimization
+					# ============================================================
+					num_passes = config.iterative_passes
+					use_grouped = config.group_size > 0
+
+					if num_passes > 1 or use_grouped:
+						log(f"")
+						log(f"  Iterative refinement: {num_passes} passes, group_size={config.group_size}")
+
+					for pass_idx in range(num_passes):
+						if num_passes > 1:
+							log(f"")
+							log(f"  ===== Pass {pass_idx + 1}/{num_passes} =====")
+
+						# ============================================================
+						# Optimize each tier using global CE fitness
+						# ============================================================
+						for tier_idx, tier_clusters, tier_connectivity, tc in tier_info:
+							# Scale effort by tier: tier0=100%, tier1=30%, tier2=10%
+							tier_scale = 1.0 / (3 ** tier_idx)
+							ga_gens = max(5, int(config.ga_generations * tier_scale))
+							ts_iters = max(5, int(config.ts_iterations * tier_scale))
+
+							# For subsequent passes, reduce iterations (refinement)
+							if pass_idx > 0:
+								ga_gens = max(3, ga_gens // 2)
+								ts_iters = max(3, ts_iters // 2)
+
+							log(f"")
+							log(f"  Tier {tier_idx}: {tc.cluster_count} clusters × {tc.neurons_per_cluster} neurons × {tc.bits_per_neuron} bits")
+							log(f"    Budget: GA {ga_gens} gens, TS {ts_iters} iters")
+							log(f"    Connectivity shape: {tier_connectivity.shape}")
+
+							# Build tier-local mappings (neuron indices are LOCAL to tier's connectivity)
+							cluster_to_neurons = {}
+							cluster_to_bits = {}
+							for local_idx, cluster_id in enumerate(tier_clusters):
+								start_neuron = local_idx * tc.neurons_per_cluster
+								end_neuron = start_neuron + tc.neurons_per_cluster
+								cluster_to_neurons[cluster_id] = (start_neuron, end_neuron)
+								cluster_to_bits[cluster_id] = tc.bits_per_neuron
+
+							# Create tier config
+							tier_opt_config = TierOptConfig(
+								tier=tier_idx,
+								ga_gens=ga_gens,
+								ga_population=config.ga_population,
+								ts_iters=ts_iters,
+								ts_neighbors=config.ts_neighbors,
+								mutation_rate=0.01,
+								enabled=True,
+							)
+
+							if use_rust_pc and rust_optimizer is not None:
+								# Use Rust-accelerated per-cluster optimization with GLOBAL CE
+								# Decide whether to use grouped or individual optimization
+								# Use grouped for tier 0/1 if group_size > 0 and cluster count is reasonable
+								use_grouped_for_tier = (
+									use_grouped and
+									tier_idx <= 1 and  # Only for tier 0 and 1
+									tc.cluster_count <= 500  # Don't group if too many clusters
+								)
+
+								if use_grouped_for_tier:
+									# Group size scales with tier (tier 0: full group, tier 1: half)
+									effective_group_size = config.group_size if tier_idx == 0 else max(2, config.group_size // 2)
+									tier_results = rust_optimizer.optimize_tier_grouped(
+										tier=tier_idx,
+										cluster_ids=tier_clusters,
+										current_connectivity=tier_connectivity,
+										config=tier_opt_config,
+										group_size=effective_group_size,
+										seed=42 + tier_idx + pass_idx * 100,
+									)
+								else:
+									# Individual optimization (for tier 2 or when grouping disabled)
+									tier_results = rust_optimizer.optimize_tier(
+										tier=tier_idx,
+										cluster_ids=tier_clusters,
+										current_connectivity=tier_connectivity,
+										config=tier_opt_config,
+										seed=42 + tier_idx + pass_idx * 100,
+									)
+
+								# Update tier's connectivity
+								tier_connectivity = rust_optimizer.update_connectivity(
+									tier_connectivity, tier_results
+								)
+
+								# Update global baseline with optimized connectivities
+								for result in tier_results:
+									rust_optimizer.update_global_baseline(
+										result.cluster_id,
+										result.final_connectivity.flatten().long().tolist()
+									)
+
+								total_clusters_optimized += len(tier_results)
+
+								# Build summary (for final pass only to avoid double-counting)
+								if pass_idx == num_passes - 1 and tier_results:
+									avg_improvement = sum(r.improvement_pct for r in tier_results) / len(tier_results)
+									all_tier_summaries[tier_idx] = {
+										"clusters": len(tier_results),
+										"avg_improvement": avg_improvement,
+									}
+							else:
+								# Use Python fallback
+								evaluator = IncrementalEvaluator(
+									train_contexts=train_contexts,
+									train_targets=train_targets,
+									eval_contexts=eval_contexts,
+									eval_targets=eval_targets,
+									context_bits=total_input_bits,
+									cluster_to_neurons=cluster_to_neurons,
+									cluster_to_bits=cluster_to_bits,
+									num_clusters=model.vocab_size,
+									logger=log,
+								)
+
+								pc_optimizer = PerClusterOptimizer(
+									tier_configs=[tier_opt_config],
+									evaluator=evaluator,
+									fitness_mode=get_fitness_mode(config.fitness_mode),
+									cluster_order="random",
+									seed=42 + tier_idx + pass_idx * 100,
+									logger=log,
+								)
+
+								# Run optimization
+								pc_result = pc_optimizer.optimize_all_tiers(
+									initial_connectivity=tier_connectivity,
+									tier_to_clusters={tier_idx: tier_clusters},
+								)
+
+								# Update tier's connectivity in place
+								for cr in pc_result.cluster_results:
+									start, end = cluster_to_neurons[cr.cluster_id]
+									tier_connectivity[start:end] = cr.final_connectivity
+
+								total_clusters_optimized += pc_result.total_clusters_optimized
+								if pass_idx == num_passes - 1 and pc_result.tier_summaries:
+									all_tier_summaries[tier_idx] = pc_result.tier_summaries.get(tier_idx, {})
+
+							# Update model connectivity for next tier in this pass
+							model.layer.tier_memories[tier_idx].connections = tier_connectivity
+
+							# Also update tier_info for next pass
+							tier_info[tier_idx] = (tier_idx, tier_clusters, tier_connectivity, tc)
+
+					# Update current_connections from optimized tier_memories
+					current_connections = get_combined_connections()
+
+				else:
+					# Uniform architecture: single tier with all clusters
+					log("  Processing uniform architecture...")
+
+					cluster_to_neurons = {}
+					cluster_to_bits = {}
+					for cluster_id in range(model.vocab_size):
+						start_neuron = cluster_id * model.layer.neurons_per_cluster
+						end_neuron = start_neuron + model.layer.neurons_per_cluster
+						cluster_to_neurons[cluster_id] = (start_neuron, end_neuron)
+						cluster_to_bits[cluster_id] = model.layer.bits_per_neuron
+
+					log(f"    Clusters: {len(cluster_to_neurons):,}")
+
+					tier_opt_config = TierOptConfig(
+						tier=0,
+						ga_gens=config.ga_generations,
+						ga_population=config.ga_population,
+						ts_iters=config.ts_iterations,
+						ts_neighbors=config.ts_neighbors,
+						mutation_rate=0.01,
+						enabled=True,
+					)
+
+					all_clusters = list(range(model.vocab_size))
+
+					if use_rust_pc:
+						# Use Rust-accelerated per-cluster optimization
+						rust_optimizer = create_rust_optimizer(
+							train_contexts=train_contexts,
+							train_targets=train_targets,
+							eval_contexts=eval_contexts,
+							eval_targets=eval_targets,
+							context_bits=total_input_bits,
+							cluster_to_neurons=cluster_to_neurons,
+							cluster_to_bits=cluster_to_bits,
+							num_clusters=model.vocab_size,
+							fitness_mode=get_fitness_mode(config.fitness_mode),
+							logger=log,
+						)
+
+						# Precompute GLOBAL baseline (votes for ALL clusters)
+						# This enables true global CE during optimization
+						log(f"  Precomputing global baseline for {len(all_clusters)} clusters...")
+						all_connectivities = {}
+						for cluster_id in all_clusters:
+							start, end = cluster_to_neurons[cluster_id]
+							cluster_conn = current_connections[start:end]  # [num_neurons, bits]
+							all_connectivities[cluster_id] = cluster_conn.flatten().long().tolist()
+						rust_optimizer.precompute_global_baseline(all_connectivities)
+
+						# Run optimization via Rust
+						tier_results = rust_optimizer.optimize_tier(
+							tier=0,
+							cluster_ids=all_clusters,
+							current_connectivity=current_connections,
+							config=tier_opt_config,
+							seed=42,
+						)
+
+						# Update connectivity
+						current_connections = rust_optimizer.update_connectivity(
+							current_connections, tier_results
+						)
+						total_clusters_optimized = len(tier_results)
+
+						# Build summary
+						if tier_results:
+							avg_improvement = sum(r.improvement_pct for r in tier_results) / len(tier_results)
+							all_tier_summaries = {0: {
+								"clusters": len(tier_results),
+								"avg_improvement": avg_improvement,
+							}}
+					else:
+						# Use Python fallback
+						evaluator = IncrementalEvaluator(
+							train_contexts=train_contexts,
+							train_targets=train_targets,
+							eval_contexts=eval_contexts,
+							eval_targets=eval_targets,
+							context_bits=total_input_bits,
+							cluster_to_neurons=cluster_to_neurons,
+							cluster_to_bits=cluster_to_bits,
+							num_clusters=model.vocab_size,
+							logger=log,
+						)
+
+						pc_optimizer = PerClusterOptimizer(
+							tier_configs=[tier_opt_config],
+							evaluator=evaluator,
+							fitness_mode=get_fitness_mode(config.fitness_mode),
+							cluster_order="random",
+							seed=42,
+							logger=log,
+						)
+
+						pc_result = pc_optimizer.optimize_all_tiers(
+							initial_connectivity=current_connections,
+							tier_to_clusters={0: all_clusters},
+						)
+
+						# Update connectivity
+						for cr in pc_result.cluster_results:
+							start, end = cluster_to_neurons[cr.cluster_id]
+							current_connections[start:end] = cr.final_connectivity
+
+						total_clusters_optimized = pc_result.total_clusters_optimized
+						all_tier_summaries = pc_result.tier_summaries
+
+				result = PCResultAdapter(
+					optimized_connections=current_connections.clone(),
+					initial_error=0.0,  # Will be computed from CE below
+					final_error=0.0,
+					iterations_run=total_clusters_optimized,
+					early_stopped_overfitting=False,
+				)
+
+				log(f"")
+				log(f"  Per-cluster optimization complete:")
+				log(f"    Total clusters optimized: {total_clusters_optimized}")
+				for tier_idx, summary in all_tier_summaries.items():
+					if summary:
+						log(f"    Tier {tier_idx}: {summary.get('clusters', 0)} clusters, avg improvement: {summary.get('avg_improvement', 0):.2f}%")
+
 			else:
 				log(f"  WARNING: Unknown strategy {strategy_name}, skipping")
 				continue
@@ -1674,8 +2068,11 @@ if __name__ == "__main__":
 		help="Run connectivity optimization after initial training")
 	parser.add_argument("--windowed-pretrain", action="store_true",
 		help="Use windowed 10k pretrain instead of full 2.4M initial training (faster optimization)")
-	parser.add_argument("--strategy", type=str, default="GA,TS",
-		help="Optimization strategy: GA, TS, SA, or comma-separated sequence like GA,TS (default: GA,TS)")
+	parser.add_argument("--strategy", type=str, default="PC",
+		help="Optimization strategy: PC (per-cluster), GA, TS, SA, or comma-separated like GA,TS (default: PC)")
+	parser.add_argument("--fitness", type=str, default="SIMPLE",
+		choices=["SIMPLE", "CE", "PENALIZE", "ACCURACY"],
+		help="Fitness function: SIMPLE (+vote correct, -vote wrong), CE (cross-entropy), PENALIZE (penalize high votes), ACCURACY (count wins when should win). Default: SIMPLE")
 
 	# Optimization parameters
 	parser.add_argument("--ts-iters", type=int, default=None,
@@ -1688,6 +2085,18 @@ if __name__ == "__main__":
 		help="GA generations (default: 20 fast, 50 full, 100 overnight)")
 	parser.add_argument("--patience", type=int, default=None,
 		help="Early stop patience (checks every 5 gens/iters). Default: 1. Weekend mode: 20+")
+
+	# Iterative refinement options
+	parser.add_argument("--iterative-passes", type=int, default=1,
+		help="Number of optimization passes for iterative refinement (default: 1)")
+	parser.add_argument("--group-size", type=int, default=10,
+		help="Group size for joint optimization of tier 0/1 (default: 10). 0 disables grouping.")
+
+	# Optimization sample size
+	parser.add_argument("--opt-train-windows", type=int, default=None,
+		help="Training windows for optimization (default: 50). Each window is 200 tokens.")
+	parser.add_argument("--opt-eval-windows", type=int, default=None,
+		help="Eval windows for optimization (default: 20). Each window is 200 tokens.")
 
 	# Evaluation options
 	parser.add_argument("--per-tier", action="store_true",
@@ -1739,9 +2148,17 @@ if __name__ == "__main__":
 	config.batch_size = args.batch_size
 	config.optimize = args.optimize
 	config.strategy = args.strategy
+	config.fitness_mode = args.fitness
 	config.windowed_pretrain = args.windowed_pretrain
 	config.per_tier = args.per_tier
 	config.cpu_only = args.cpu_only
+	config.iterative_passes = args.iterative_passes
+	config.group_size = args.group_size
+	if args.opt_train_windows:
+		config.opt_train_windows = args.opt_train_windows
+	if args.opt_eval_windows:
+		config.opt_eval_windows = args.opt_eval_windows
+		config.opt_dev_windows = args.opt_eval_windows  # Keep dev same as eval
 
 	if args.mode == "fast":
 		# Quick test with smaller data

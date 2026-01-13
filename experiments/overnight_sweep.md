@@ -228,3 +228,100 @@ python tests/ramlm_full_benchmark.py --sweep --set extended
 python tests/ramlm_full_benchmark.py --sweep --experiments five_tier_gradient \
     --ga-gens 1000 --ts-iters 1000 --patience 5
 ```
+
+---
+
+## Per-Cluster Optimization Experiments (2026-01-12)
+
+### Context
+
+Per-cluster (PC) optimization uses GA+TS to optimize neuron connectivity for each output cluster independently. This is the correct granularity for language modeling where each cluster predicts a specific token.
+
+**Key question:** Can per-cluster connectivity optimization improve PPL (not just accuracy)?
+
+### Fitness Function Comparison
+
+Tested different fitness functions with uniform architecture (3 neurons × 8 bits, 50K clusters):
+
+| Fitness Function | Val PPL Δ | Val Acc Δ | Notes |
+|------------------|-----------|-----------|-------|
+| No optimization (baseline) | 0% | 2.18-2.83% | Initial random connectivity |
+| **SIMPLE** | +7.88% ❌ | -43% ❌ | `Σvote_correct - Σvote_wrong` |
+| **SIMPLE + Groups(50)** | +9.33% ❌ | -64% ❌ | Joint optimization of 50 clusters |
+| **ACCURACY** | +3.25% ❌ | +67% ✓ | Count top-1 wins |
+| **Global CE** | +1.38% ❌ | +32.5% ✓ | Softmax over all 50K clusters |
+
+### Key Findings
+
+#### ❌ Per-Cluster Optimization Degrades PPL
+
+All fitness functions tested resulted in **worse PPL** after optimization:
+
+1. **SIMPLE fitness** (`+vote when correct, -vote when wrong`):
+   - Optimizes individual cluster discrimination
+   - Caused PPL to increase by 7.88%
+   - Reason: Doesn't account for false positives from other clusters
+
+2. **ACCURACY fitness** (count how often cluster wins top-1):
+   - Best accuracy improvement (+67%)
+   - Still degraded PPL (+3.25%)
+   - Reason: Optimizes for rank position, not probability calibration
+
+3. **Global CE fitness** (true softmax over all 50K clusters):
+   - Most theoretically correct (matches eval metric)
+   - Still degraded PPL (+1.38%)
+   - Only 5% of clusters improved (2613/50257)
+   - Reason: Per-cluster optimization can't coordinate between clusters
+
+#### Why Per-Cluster Fails
+
+The fundamental issue is **coordination**. When optimizing cluster A:
+- If A's connectivity changes to increase its votes
+- Other clusters' relative votes change too
+- But those other clusters were optimized with different connectivity
+- After retraining, the global distribution shifts unpredictably
+
+**Analogy**: Like tuning each instrument in an orchestra separately - they might each sound "better" alone but worse together.
+
+#### ✓ Accuracy vs PPL Trade-off
+
+Interestingly, accuracy improved substantially even as PPL degraded:
+- ACCURACY fitness: +67% accuracy, +3.25% PPL
+- Global CE: +32.5% accuracy, +1.38% PPL
+
+This suggests:
+- Connectivity optimization CAN find better discriminative features
+- But the probability calibration (softmax distribution) gets worse
+- The model becomes "more confident but less calibrated"
+
+### Architecture Comparison
+
+| Architecture | Global Baseline? | Fitness Mode | Results |
+|--------------|------------------|--------------|---------|
+| Uniform (--mode fast) | ✓ (fixed 2026-01-12) | Global CE | PPL +1.38% |
+| Tiered (sweep experiments) | ✓ (always had) | Per-tier CE | See sweep results above |
+
+**Note:** The full-data sweep experiments (tier0_20bit, etc.) used tiered architecture with GA+TS optimization. Those experiments showed different dynamics because:
+1. Different tiers have different cluster frequencies
+2. Optimization happens per-tier, not per-cluster
+3. Frequent tokens (tier 0) benefit more from optimization
+
+### Implications
+
+1. **Per-cluster connectivity optimization alone is insufficient** for language modeling
+2. **Need coordinated optimization** across clusters (e.g., joint loss, alternating optimization)
+3. **Tiered architecture with asymmetric capacity** remains the best approach (see tier0_20bit results)
+4. **Future direction**: Consider whole-model optimization or learned connectivity initialization
+
+### Commands Used
+
+```bash
+# ACCURACY fitness
+python tests/ramlm_full_benchmark.py --mode fast --optimize --strategy PC --fitness ACCURACY
+
+# Global CE fitness
+python tests/ramlm_full_benchmark.py --mode fast --optimize --strategy PC --fitness CE
+
+# SIMPLE fitness
+python tests/ramlm_full_benchmark.py --mode fast --optimize --strategy PC --fitness SIMPLE
+```

@@ -36,7 +36,11 @@ mod metal_ramlm;
 #[path = "sparse_memory.rs"]
 mod sparse_memory;
 
+#[path = "per_cluster.rs"]
+mod per_cluster;
+
 pub use ram::RAMNeuron;
+pub use per_cluster::{PerClusterEvaluator, FitnessMode, TierOptConfig, ClusterOptResult, TierOptResult};
 pub use metal_evaluator::MetalEvaluator;
 pub use metal_ramlm::MetalRAMLMEvaluator;
 
@@ -1754,6 +1758,460 @@ fn sparse_metal_available() -> bool {
     metal_ramlm::MetalSparseEvaluator::new().is_ok()
 }
 
+// ============================================================================
+// Per-Cluster Optimization (Rust-accelerated discriminative optimization)
+// ============================================================================
+
+// Global cache for per-cluster evaluators (shared across all functions)
+static PER_CLUSTER_EVALUATORS: OnceLock<Mutex<Vec<per_cluster::PerClusterEvaluator>>> = OnceLock::new();
+
+fn get_per_cluster_evaluators() -> &'static Mutex<Vec<per_cluster::PerClusterEvaluator>> {
+    PER_CLUSTER_EVALUATORS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Create a per-cluster evaluator for discriminative optimization
+///
+/// This is the Rust-accelerated version of the Python IncrementalEvaluator.
+/// Use this for per-cluster GA/TS optimization with discriminative fitness.
+///
+/// Args:
+///     train_contexts_flat: Training contexts as flat bools [num_train * context_bits]
+///     train_targets: Training target cluster IDs [num_train]
+///     eval_contexts_flat: Eval contexts as flat bools [num_eval * context_bits]
+///     eval_targets: Eval target cluster IDs [num_eval]
+///     context_bits: Total bits per context
+///     cluster_neurons: List of (cluster_id, start_neuron, end_neuron)
+///     cluster_bits: List of (cluster_id, bits_per_neuron)
+///     num_clusters: Total number of clusters (vocab size)
+///
+/// Returns:
+///     Evaluator ID for subsequent calls
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn per_cluster_create_evaluator(
+    py: Python<'_>,
+    train_contexts_flat: Vec<bool>,
+    train_targets: Vec<usize>,
+    eval_contexts_flat: Vec<bool>,
+    eval_targets: Vec<usize>,
+    context_bits: usize,
+    cluster_neurons: Vec<(usize, usize, usize)>,  // (cluster_id, start, end)
+    cluster_bits: Vec<(usize, usize)>,            // (cluster_id, bits)
+    num_clusters: usize,
+) -> PyResult<usize> {
+    // Build maps
+    let mut cluster_to_neurons = FxHashMap::default();
+    let mut cluster_to_bits = FxHashMap::default();
+
+    for (cluster_id, start, end) in cluster_neurons {
+        cluster_to_neurons.insert(cluster_id, (start, end));
+    }
+    for (cluster_id, bits) in cluster_bits {
+        cluster_to_bits.insert(cluster_id, bits);
+    }
+
+    let evaluator = per_cluster::PerClusterEvaluator::new(
+        &train_contexts_flat,
+        &train_targets,
+        &eval_contexts_flat,
+        &eval_targets,
+        context_bits,
+        cluster_to_neurons,
+        cluster_to_bits,
+        num_clusters,
+    );
+
+    // Store in global cache and return ID
+    let mut guard = get_per_cluster_evaluators().lock().unwrap();
+    let id = guard.len();
+    guard.push(evaluator);
+
+    Ok(id)
+}
+
+/// Evaluate multiple connectivity variants for a cluster (batch)
+///
+/// This is the key acceleration point - evaluates entire GA population
+/// or TS neighbor set in parallel using rayon.
+///
+/// Args:
+///     evaluator_id: ID from per_cluster_create_evaluator
+///     cluster_id: Cluster being optimized
+///     variants: List of connectivity variants [num_variants][neurons * bits]
+///     fitness_mode: 1=PositiveOnly, 2=PenalizeWins, 3=PenalizeHighVotes (default)
+///
+/// Returns:
+///     Fitness scores for each variant [num_variants]
+#[pyfunction]
+fn per_cluster_evaluate_batch(
+    py: Python<'_>,
+    evaluator_id: usize,
+    cluster_id: usize,
+    variants: Vec<Vec<i64>>,
+    fitness_mode: i32,
+) -> PyResult<Vec<f64>> {
+    py.allow_threads(|| {
+        let guard = get_per_cluster_evaluators().lock().unwrap();
+
+        if evaluator_id >= guard.len() {
+            return Err(pyo3::exceptions::PyValueError::new_err("Invalid evaluator ID"));
+        }
+
+        let mode = per_cluster::FitnessMode::from(fitness_mode);
+        let results = guard[evaluator_id].evaluate_variants_batch(cluster_id, &variants, mode);
+        Ok(results)
+    })
+}
+
+/// Optimize a single cluster using GA
+///
+/// Args:
+///     evaluator_id: ID from per_cluster_create_evaluator
+///     cluster_id: Cluster to optimize
+///     initial_connectivity: Starting connectivity [neurons * bits]
+///     ga_gens: Number of GA generations
+///     ga_population: Population size
+///     mutation_rate: Mutation probability per connection
+///     seed: Random seed
+///
+/// Returns:
+///     (final_connectivity, initial_fitness, final_fitness, improvement_pct)
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn per_cluster_optimize_ga(
+    py: Python<'_>,
+    evaluator_id: usize,
+    cluster_id: usize,
+    initial_connectivity: Vec<i64>,
+    ga_gens: usize,
+    ga_population: usize,
+    mutation_rate: f64,
+    seed: u64,
+) -> PyResult<(Vec<i64>, f64, f64, f64)> {
+    py.allow_threads(|| {
+        let guard = get_per_cluster_evaluators().lock().unwrap();
+
+        if evaluator_id >= guard.len() {
+            return Err(pyo3::exceptions::PyValueError::new_err("Invalid evaluator ID"));
+        }
+
+        let config = per_cluster::TierOptConfig {
+            tier: 0,
+            ga_gens,
+            ga_population,
+            ts_iters: 0,
+            ts_neighbors: 0,
+            mutation_rate,
+            enabled: true,
+            fitness_mode: per_cluster::FitnessMode::SimpleDiscriminative,
+        };
+
+        let result = guard[evaluator_id].optimize_cluster_ga(
+            cluster_id,
+            &initial_connectivity,
+            &config,
+            seed,
+        );
+
+        Ok((
+            result.final_connectivity,
+            result.initial_fitness,
+            result.final_fitness,
+            result.improvement_pct,
+        ))
+    })
+}
+
+/// Optimize a single cluster using Tabu Search
+///
+/// Args:
+///     evaluator_id: ID from per_cluster_create_evaluator
+///     cluster_id: Cluster to optimize
+///     initial_connectivity: Starting connectivity [neurons * bits]
+///     ts_iters: Number of TS iterations
+///     ts_neighbors: Neighbors per iteration
+///     mutation_rate: Mutation probability
+///     seed: Random seed
+///
+/// Returns:
+///     (final_connectivity, initial_fitness, final_fitness, improvement_pct)
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn per_cluster_optimize_ts(
+    py: Python<'_>,
+    evaluator_id: usize,
+    cluster_id: usize,
+    initial_connectivity: Vec<i64>,
+    ts_iters: usize,
+    ts_neighbors: usize,
+    mutation_rate: f64,
+    seed: u64,
+) -> PyResult<(Vec<i64>, f64, f64, f64)> {
+    py.allow_threads(|| {
+        let guard = get_per_cluster_evaluators().lock().unwrap();
+
+        if evaluator_id >= guard.len() {
+            return Err(pyo3::exceptions::PyValueError::new_err("Invalid evaluator ID"));
+        }
+
+        let config = per_cluster::TierOptConfig {
+            tier: 0,
+            ga_gens: 0,
+            ga_population: 0,
+            ts_iters,
+            ts_neighbors,
+            mutation_rate,
+            enabled: true,
+            fitness_mode: per_cluster::FitnessMode::SimpleDiscriminative,
+        };
+
+        let result = guard[evaluator_id].optimize_cluster_ts(
+            cluster_id,
+            &initial_connectivity,
+            &config,
+            seed,
+        );
+
+        Ok((
+            result.final_connectivity,
+            result.initial_fitness,
+            result.final_fitness,
+            result.improvement_pct,
+        ))
+    })
+}
+
+/// Precompute global baseline votes for ALL clusters (enables true global CE)
+///
+/// This enables exact global CE computation during optimization.
+/// Memory: num_eval * num_clusters * 8 bytes (e.g., 4K * 50K * 8 = 1.6GB)
+/// Time: ~3s for 50K clusters (parallelized with rayon)
+///
+/// Call this ONCE before optimization starts. After this, all CE fitness
+/// computations will use true global softmax over all 50K clusters.
+///
+/// Args:
+///     evaluator_id: ID from per_cluster_create_evaluator
+///     all_connectivities: Dict mapping cluster_id -> connectivity for ALL clusters
+///
+/// Returns:
+///     True if successful
+#[pyfunction]
+fn per_cluster_precompute_global_baseline(
+    py: Python<'_>,
+    evaluator_id: usize,
+    all_connectivities: std::collections::HashMap<usize, Vec<i64>>,
+) -> PyResult<bool> {
+    py.allow_threads(|| {
+        let mut guard = get_per_cluster_evaluators().lock().unwrap();
+
+        if evaluator_id >= guard.len() {
+            return Err(pyo3::exceptions::PyValueError::new_err("Invalid evaluator ID"));
+        }
+
+        // Convert to FxHashMap
+        let conns: FxHashMap<usize, Vec<i64>> = all_connectivities.into_iter().collect();
+
+        guard[evaluator_id].precompute_global_baseline(&conns);
+
+        Ok(true)
+    })
+}
+
+/// Update global baseline for a specific cluster after optimization
+///
+/// Call this after optimizing a cluster to update the cached baseline
+/// with the new connectivity's votes. This keeps the cache accurate
+/// for subsequent cluster optimizations.
+///
+/// Args:
+///     evaluator_id: ID from per_cluster_create_evaluator
+///     cluster_id: Cluster that was just optimized
+///     new_connectivity: The optimized connectivity pattern
+///
+/// Returns:
+///     True if successful
+#[pyfunction]
+fn per_cluster_update_global_baseline(
+    py: Python<'_>,
+    evaluator_id: usize,
+    cluster_id: usize,
+    new_connectivity: Vec<i64>,
+) -> PyResult<bool> {
+    py.allow_threads(|| {
+        let mut guard = get_per_cluster_evaluators().lock().unwrap();
+
+        if evaluator_id >= guard.len() {
+            return Err(pyo3::exceptions::PyValueError::new_err("Invalid evaluator ID"));
+        }
+
+        // Compute new votes for this cluster
+        let new_votes = guard[evaluator_id].train_and_vote(cluster_id, &new_connectivity);
+
+        // Update the global baseline
+        guard[evaluator_id].update_global_baseline(cluster_id, &new_votes);
+
+        Ok(true)
+    })
+}
+
+/// Optimize all clusters in a tier (parallel)
+///
+/// This is the main acceleration function - optimizes all clusters
+/// in a tier using parallel processing (rayon).
+///
+/// Args:
+///     evaluator_id: ID from per_cluster_create_evaluator
+///     tier: Tier index
+///     cluster_ids: List of cluster IDs in this tier
+///     initial_connectivities: Dict mapping cluster_id -> connectivity
+///     ga_gens, ga_population, ts_iters, ts_neighbors, mutation_rate: Config
+///     seed: Base random seed
+///
+/// Returns:
+///     List of (cluster_id, final_connectivity, initial_fitness, final_fitness, improvement_pct)
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn per_cluster_optimize_tier(
+    py: Python<'_>,
+    evaluator_id: usize,
+    tier: usize,
+    cluster_ids: Vec<usize>,
+    initial_connectivities: std::collections::HashMap<usize, Vec<i64>>,
+    ga_gens: usize,
+    ga_population: usize,
+    ts_iters: usize,
+    ts_neighbors: usize,
+    mutation_rate: f64,
+    seed: u64,
+    fitness_mode: i32,
+) -> PyResult<Vec<(usize, Vec<i64>, f64, f64, f64)>> {
+    py.allow_threads(|| {
+        let mut guard = get_per_cluster_evaluators().lock().unwrap();
+
+        if evaluator_id >= guard.len() {
+            return Err(pyo3::exceptions::PyValueError::new_err("Invalid evaluator ID"));
+        }
+
+        let config = per_cluster::TierOptConfig {
+            tier,
+            ga_gens,
+            ga_population,
+            ts_iters,
+            ts_neighbors,
+            mutation_rate,
+            enabled: true,
+            fitness_mode: per_cluster::FitnessMode::from(fitness_mode),
+        };
+
+        // Convert to FxHashMap
+        let conns: FxHashMap<usize, Vec<i64>> = initial_connectivities.into_iter().collect();
+
+        let result = guard[evaluator_id].optimize_tier(
+            tier,
+            &cluster_ids,
+            &conns,
+            &config,
+            seed,
+        );
+
+        // Convert to Python-friendly format
+        let py_results: Vec<(usize, Vec<i64>, f64, f64, f64)> = result
+            .cluster_results
+            .into_iter()
+            .map(|r| (
+                r.cluster_id,
+                r.final_connectivity,
+                r.initial_fitness,
+                r.final_fitness,
+                r.improvement_pct,
+            ))
+            .collect();
+
+        Ok(py_results)
+    })
+}
+
+/// Optimize clusters in groups for joint optimization (iterative refinement)
+///
+/// Clusters are split into groups of `group_size` and each group is optimized
+/// jointly. This captures inter-cluster competition (if cluster A gets stronger,
+/// cluster B must adapt). Groups are processed in parallel.
+///
+/// Args:
+///     evaluator_id: ID from per_cluster_create_evaluator
+///     tier: Tier index
+///     cluster_ids: List of cluster IDs in this tier
+///     initial_connectivities: Dict mapping cluster_id -> connectivity
+///     group_size: Number of clusters per group (e.g., 10 for top tokens)
+///     ga_gens, ga_population, ts_iters, ts_neighbors, mutation_rate: Config
+///     seed: Base random seed
+///
+/// Returns:
+///     List of (cluster_id, final_connectivity, initial_fitness, final_fitness, improvement_pct)
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn per_cluster_optimize_tier_grouped(
+    py: Python<'_>,
+    evaluator_id: usize,
+    tier: usize,
+    cluster_ids: Vec<usize>,
+    initial_connectivities: std::collections::HashMap<usize, Vec<i64>>,
+    group_size: usize,
+    ga_gens: usize,
+    ga_population: usize,
+    ts_iters: usize,
+    ts_neighbors: usize,
+    mutation_rate: f64,
+    seed: u64,
+    fitness_mode: i32,
+) -> PyResult<Vec<(usize, Vec<i64>, f64, f64, f64)>> {
+    py.allow_threads(|| {
+        let guard = get_per_cluster_evaluators().lock().unwrap();
+
+        if evaluator_id >= guard.len() {
+            return Err(pyo3::exceptions::PyValueError::new_err("Invalid evaluator ID"));
+        }
+
+        let config = per_cluster::TierOptConfig {
+            tier,
+            ga_gens,
+            ga_population,
+            ts_iters,
+            ts_neighbors,
+            mutation_rate,
+            enabled: true,
+            fitness_mode: per_cluster::FitnessMode::from(fitness_mode),
+        };
+
+        // Convert to FxHashMap
+        let conns: FxHashMap<usize, Vec<i64>> = initial_connectivities.into_iter().collect();
+
+        let result = guard[evaluator_id].optimize_tier_grouped(
+            &cluster_ids,
+            &conns,
+            group_size,
+            &config,
+            seed,
+        );
+
+        // Convert to Python-friendly format
+        let py_results: Vec<(usize, Vec<i64>, f64, f64, f64)> = result
+            .cluster_results
+            .into_iter()
+            .map(|r| (
+                r.cluster_id,
+                r.final_connectivity,
+                r.initial_fitness,
+                r.final_fitness,
+                r.improvement_pct,
+            ))
+            .collect();
+
+        Ok(py_results)
+    })
+}
+
 /// Python module definition
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -1811,5 +2269,16 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(estimate_sparse_memory_gb, m)?)?;
     m.add_function(wrap_pyfunction!(get_system_memory_gb, m)?)?;
     m.add_function(wrap_pyfunction!(sparse_metal_available, m)?)?;
+    // Per-cluster optimization (Rust-accelerated discriminative optimization)
+    m.add_function(wrap_pyfunction!(per_cluster_create_evaluator, m)?)?;
+    m.add_function(wrap_pyfunction!(per_cluster_evaluate_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(per_cluster_optimize_ga, m)?)?;
+    m.add_function(wrap_pyfunction!(per_cluster_optimize_ts, m)?)?;
+    m.add_function(wrap_pyfunction!(per_cluster_optimize_tier, m)?)?;
+    // Global CE with caching (true global softmax over all 50K clusters)
+    m.add_function(wrap_pyfunction!(per_cluster_precompute_global_baseline, m)?)?;
+    m.add_function(wrap_pyfunction!(per_cluster_update_global_baseline, m)?)?;
+    // Group-based optimization for iterative refinement
+    m.add_function(wrap_pyfunction!(per_cluster_optimize_tier_grouped, m)?)?;
     Ok(())
 }

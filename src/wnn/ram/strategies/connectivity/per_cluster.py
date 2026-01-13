@@ -36,9 +36,12 @@ Tier budgets follow Pareto principle:
 - Tier 2+ (rare tokens, <5% of predictions): Minimal effort
 """
 
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Callable, Optional, List, Dict, Tuple
 from enum import IntEnum
+import multiprocessing as mp
 import random
 
 import torch
@@ -54,7 +57,10 @@ class FitnessMode(IntEnum):
     """
     POSITIVE_ONLY = 1       # Only reward correct predictions for this cluster
     PENALIZE_WINS = 2       # Also penalize when cluster wrongly wins
-    PENALIZE_HIGH_VOTES = 3 # Penalize high votes even if doesn't win (smoothest, DEFAULT)
+    PENALIZE_HIGH_VOTES = 3 # Penalize high votes even if doesn't win (smoothest)
+    CROSS_ENTROPY = 4       # Use actual cross-entropy with global softmax
+    SIMPLE = 5              # Simple: +vote when correct, -vote when wrong (intuitive)
+    ACCURACY = 6            # Count wins when should win (directly optimizes top-1)
 
 
 @dataclass
@@ -187,15 +193,20 @@ class IncrementalEvaluator:
 
     def precompute_baseline(self, full_connectivity: Tensor) -> None:
         """
-        Precompute votes for all clusters with current connectivity.
-        Called once before per-cluster optimization starts.
+        Precompute votes for clusters in cluster_to_neurons mapping.
+        Only computes for clusters that will be optimized (not all vocab).
         """
         self._log("Precomputing baseline votes...")
         num_eval = len(self.eval_contexts)
+        # Only allocate for clusters being optimized
         self._baseline_votes = torch.zeros(num_eval, self.num_clusters)
         self._baseline_rams = {}
 
-        for cluster_id in range(self.num_clusters):
+        # Only iterate over clusters in the mapping (the ones being optimized)
+        clusters_to_process = sorted(self.cluster_to_neurons.keys())
+        total = len(clusters_to_process)
+
+        for i, cluster_id in enumerate(clusters_to_process):
             cluster_conn = self._extract_cluster_connectivity(full_connectivity, cluster_id)
             bits = self.cluster_to_bits.get(cluster_id, 8)
 
@@ -204,10 +215,10 @@ class IncrementalEvaluator:
             self._baseline_rams[cluster_id] = rams
             self._baseline_votes[:, cluster_id] = votes
 
-            if (cluster_id + 1) % 1000 == 0:
-                self._log(f"    Baseline: {cluster_id + 1}/{self.num_clusters} clusters")
+            if (i + 1) % 50 == 0 or (i + 1) == total:
+                self._log(f"    Baseline: {i + 1}/{total} clusters")
 
-        self._log(f"  Baseline complete: {self._baseline_votes.shape}")
+        self._log(f"  Baseline complete for {total} clusters")
 
     def _extract_cluster_connectivity(self, full_conn: Tensor, cluster_id: int) -> Tensor:
         """Extract connectivity for a single cluster."""
@@ -866,11 +877,34 @@ class PerClusterOptimizer:
             logger=logger,
         )
 
+    def _optimize_single_cluster(
+        self,
+        cluster_id: int,
+        cluster_conn: Tensor,
+        config: TierOptConfig,
+    ) -> ClusterOptResult:
+        """Optimize a single cluster (can be called in parallel)."""
+        # Run GA then TS
+        if config.ga_gens > 0:
+            result = self._cluster_optimizer.optimize_cluster_ga(
+                cluster_id, cluster_conn, config
+            )
+            cluster_conn = result.final_connectivity
+
+        if config.ts_iters > 0:
+            result = self._cluster_optimizer.optimize_cluster_ts(
+                cluster_id, cluster_conn, config
+            )
+
+        return result
+
     def optimize_tier(
         self,
         tier: int,
         cluster_ids: List[int],
         current_connectivity: Tensor,
+        parallel: bool = True,
+        max_workers: Optional[int] = None,
     ) -> Tuple[Tensor, List[ClusterOptResult]]:
         """
         Optimize all clusters in a tier.
@@ -879,6 +913,8 @@ class PerClusterOptimizer:
             tier: Tier index (0, 1, 2, ...)
             cluster_ids: List of cluster IDs in this tier
             current_connectivity: Current full connectivity tensor
+            parallel: Use parallel processing for cluster optimization
+            max_workers: Max parallel workers (default: CPU count)
 
         Returns:
             (updated_connectivity, list of ClusterOptResult)
@@ -888,43 +924,77 @@ class PerClusterOptimizer:
             self._log(f"  Tier {tier}: Skipped (disabled)")
             return current_connectivity, []
 
-        self._log(f"  Tier {tier}: Optimizing {len(cluster_ids)} clusters ({config})")
+        num_clusters = len(cluster_ids)
+        n_workers = max_workers or min(mp.cpu_count(), num_clusters)
+
+        if parallel and num_clusters > 1:
+            self._log(f"  Tier {tier}: Optimizing {num_clusters} clusters in parallel ({n_workers} workers) ({config})")
+        else:
+            self._log(f"  Tier {tier}: Optimizing {num_clusters} clusters ({config})")
 
         # Order clusters
         ordered_clusters = self._order_clusters(cluster_ids)
 
+        # Extract all cluster connectivities upfront
+        cluster_conns = {}
+        for cluster_id in ordered_clusters:
+            cluster_conns[cluster_id] = self._extract_cluster_connectivity(
+                current_connectivity, cluster_id
+            )
+
         results = []
         updated_connectivity = current_connectivity.clone()
 
-        for i, cluster_id in enumerate(ordered_clusters):
-            # Extract this cluster's connectivity slice
-            cluster_conn = self._extract_cluster_connectivity(
-                updated_connectivity, cluster_id
-            )
+        if parallel and num_clusters > 1:
+            # Parallel optimization - clusters are independent!
+            # We use ThreadPoolExecutor because the GIL is released during
+            # torch tensor operations, giving good parallelism
+            completed = 0
+            with ThreadPoolExecutor(max_workers=n_workers) as executor:
+                futures = {
+                    executor.submit(
+                        self._optimize_single_cluster,
+                        cluster_id,
+                        cluster_conns[cluster_id],
+                        config
+                    ): cluster_id
+                    for cluster_id in ordered_clusters
+                }
 
-            # Run GA then TS
-            if config.ga_gens > 0:
-                result = self._cluster_optimizer.optimize_cluster_ga(
-                    cluster_id, cluster_conn, config
+                for future in as_completed(futures):
+                    cluster_id = futures[future]
+                    try:
+                        result = future.result()
+                        results.append(result)
+
+                        # Update connectivity
+                        updated_connectivity = self._update_cluster_connectivity(
+                            updated_connectivity, cluster_id, result.final_connectivity
+                        )
+
+                        completed += 1
+                        if completed % 10 == 0 or completed == num_clusters:
+                            self._log(f"    Progress: {completed}/{num_clusters} clusters optimized")
+
+                    except Exception as e:
+                        self._log(f"    ERROR optimizing cluster {cluster_id}: {e}")
+
+        else:
+            # Sequential optimization
+            for i, cluster_id in enumerate(ordered_clusters):
+                cluster_conn = cluster_conns[cluster_id]
+                result = self._optimize_single_cluster(cluster_id, cluster_conn, config)
+
+                # Update full connectivity with optimized cluster
+                updated_connectivity = self._update_cluster_connectivity(
+                    updated_connectivity, cluster_id, result.final_connectivity
                 )
-                cluster_conn = result.final_connectivity
 
-            if config.ts_iters > 0:
-                result = self._cluster_optimizer.optimize_cluster_ts(
-                    cluster_id, cluster_conn, config
-                )
+                results.append(result)
 
-            # Update full connectivity with optimized cluster
-            updated_connectivity = self._update_cluster_connectivity(
-                updated_connectivity, cluster_id, result.final_connectivity
-            )
-
-            results.append(result)
-
-            # Progress callback
-            if self._progress_callback and (i + 1) % 10 == 0:
-                # TODO: Compute current PPL
-                self._progress_callback(i + 1, len(ordered_clusters), 0.0)
+                # Progress callback
+                if self._progress_callback and (i + 1) % 10 == 0:
+                    self._progress_callback(i + 1, num_clusters, 0.0)
 
         return updated_connectivity, results
 
@@ -1037,6 +1107,402 @@ class PerClusterOptimizer:
 
 
 # =============================================================================
+# Rust Accelerator Integration
+# =============================================================================
+
+def _check_rust_per_cluster() -> bool:
+    """Check if Rust per-cluster acceleration is available."""
+    try:
+        import ram_accelerator
+        return hasattr(ram_accelerator, 'per_cluster_create_evaluator')
+    except ImportError:
+        return False
+
+
+class RustPerClusterOptimizer:
+    """
+    Rust-accelerated per-cluster optimizer.
+
+    This class wraps the Rust accelerator functions for maximum performance.
+    Falls back to Python implementation if Rust is not available.
+
+    Usage:
+        optimizer = RustPerClusterOptimizer(
+            train_contexts=train_ctx,  # [N, context_bits] bool tensor
+            train_targets=train_tgt,   # [N] int tensor
+            eval_contexts=eval_ctx,    # [M, context_bits] bool tensor
+            eval_targets=eval_tgt,     # [M] int tensor
+            context_bits=48,
+            cluster_to_neurons={0: (0, 15), 1: (15, 30), ...},
+            cluster_to_bits={0: 20, 1: 20, ...},
+            num_clusters=50257,
+        )
+        results = optimizer.optimize_tier(
+            tier=0,
+            cluster_ids=[0, 1, 2, ...],
+            current_connectivity=conn_tensor,
+            config=TierOptConfig(tier=0, ga_gens=50, ts_iters=20),
+        )
+    """
+
+    def __init__(
+        self,
+        train_contexts: Tensor,      # [N, context_bits] bool
+        train_targets: Tensor,       # [N] int
+        eval_contexts: Tensor,       # [M, context_bits] bool
+        eval_targets: Tensor,        # [M] int
+        context_bits: int,
+        cluster_to_neurons: Dict[int, Tuple[int, int]],
+        cluster_to_bits: Dict[int, int],
+        num_clusters: int,
+        fitness_mode: FitnessMode = FitnessMode.SIMPLE,
+        logger: Optional[Callable[[str], None]] = None,
+    ):
+        self.context_bits = context_bits
+        self.cluster_to_neurons = cluster_to_neurons
+        self.cluster_to_bits = cluster_to_bits
+        self.num_clusters = num_clusters
+        self.fitness_mode = fitness_mode
+        self._log = logger or print
+
+        self._rust_available = _check_rust_per_cluster()
+        self._evaluator_id: Optional[int] = None
+
+        if self._rust_available:
+            self._log("  Rust per-cluster accelerator: creating evaluator...")
+            import ram_accelerator
+
+            # Flatten contexts to 1D bool list
+            train_flat = train_contexts.flatten().tolist()
+            eval_flat = eval_contexts.flatten().tolist()
+
+            # Convert targets to list of usize
+            train_tgt = train_targets.tolist()
+            eval_tgt = eval_targets.tolist()
+
+            # Convert mappings to lists of tuples
+            cluster_neurons_list = [
+                (cid, start, end)
+                for cid, (start, end) in cluster_to_neurons.items()
+            ]
+            cluster_bits_list = [
+                (cid, bits)
+                for cid, bits in cluster_to_bits.items()
+            ]
+
+            self._evaluator_id = ram_accelerator.per_cluster_create_evaluator(
+                train_contexts_flat=train_flat,
+                train_targets=train_tgt,
+                eval_contexts_flat=eval_flat,
+                eval_targets=eval_tgt,
+                context_bits=context_bits,
+                cluster_neurons=cluster_neurons_list,
+                cluster_bits=cluster_bits_list,
+                num_clusters=num_clusters,
+            )
+            self._log(f"  Rust evaluator created (ID={self._evaluator_id})")
+            self._global_baseline_computed = False
+        else:
+            self._log("  Rust per-cluster accelerator: NOT available (using Python fallback)")
+            self._global_baseline_computed = False
+
+    def precompute_global_baseline(
+        self,
+        all_connectivities: Dict[int, List[int]],
+    ) -> None:
+        """
+        Precompute baseline votes for ALL clusters (enables true global CE).
+
+        This enables exact global CE computation during optimization.
+        Memory: num_eval * num_clusters * 8 bytes (e.g., 4K * 50K * 8 = 1.6GB)
+        Time: ~3s for 50K clusters (parallelized with rayon)
+
+        Call this ONCE before optimization starts. After this, all CE fitness
+        computations will use true global softmax over all 50K clusters.
+
+        Args:
+            all_connectivities: Dict mapping cluster_id -> connectivity for ALL clusters
+        """
+        if not self._rust_available or self._evaluator_id is None:
+            raise RuntimeError("Rust accelerator not available")
+
+        import ram_accelerator
+        import time
+
+        self._log(f"  Precomputing global baseline for {len(all_connectivities)} clusters...")
+        t0 = time.time()
+
+        ram_accelerator.per_cluster_precompute_global_baseline(
+            evaluator_id=self._evaluator_id,
+            all_connectivities=all_connectivities,
+        )
+
+        elapsed = time.time() - t0
+        memory_gb = len(all_connectivities) * 4000 * 8 / (1024**3)  # Rough estimate
+        self._log(f"  Global baseline computed in {elapsed:.1f}s (~{memory_gb:.1f}GB)")
+        self._global_baseline_computed = True
+
+    def update_global_baseline(
+        self,
+        cluster_id: int,
+        new_connectivity: List[int],
+    ) -> None:
+        """
+        Update global baseline for a specific cluster after optimization.
+
+        Call this after optimizing a cluster to keep the cache accurate
+        for subsequent cluster optimizations.
+        """
+        if not self._rust_available or self._evaluator_id is None:
+            return
+        if not self._global_baseline_computed:
+            return
+
+        import ram_accelerator
+        ram_accelerator.per_cluster_update_global_baseline(
+            evaluator_id=self._evaluator_id,
+            cluster_id=cluster_id,
+            new_connectivity=new_connectivity,
+        )
+
+    def optimize_tier(
+        self,
+        tier: int,
+        cluster_ids: List[int],
+        current_connectivity: Tensor,
+        config: TierOptConfig,
+        seed: int = 42,
+    ) -> List[ClusterOptResult]:
+        """
+        Optimize all clusters in a tier using Rust acceleration.
+
+        Args:
+            tier: Tier index
+            cluster_ids: List of cluster IDs in this tier
+            current_connectivity: Current connectivity tensor
+            config: Optimization configuration
+            seed: Random seed
+
+        Returns:
+            List of ClusterOptResult for each optimized cluster
+        """
+        if not self._rust_available or self._evaluator_id is None:
+            raise RuntimeError("Rust accelerator not available")
+
+        import ram_accelerator
+        import time
+
+        self._log(f"  Tier {tier}: Optimizing {len(cluster_ids)} clusters via Rust")
+        self._log(f"    Config: GA {config.ga_gens} gens × {config.ga_population} pop, TS {config.ts_iters} iters × {config.ts_neighbors} neighbors")
+        fitness_mode_name = self.fitness_mode.name
+        baseline_info = " (with global baseline)" if self._global_baseline_computed else ""
+        self._log(f"    Fitness: {fitness_mode_name}{baseline_info}")
+
+        # Extract connectivity for each cluster
+        t0 = time.time()
+        initial_connectivities: Dict[int, List[int]] = {}
+        for cluster_id in cluster_ids:
+            start, end = self.cluster_to_neurons[cluster_id]
+            cluster_conn = current_connectivity[start:end]  # [num_neurons, bits]
+            # Flatten to 1D list
+            initial_connectivities[cluster_id] = cluster_conn.flatten().long().tolist()
+        prep_time = time.time() - t0
+
+        # Call Rust optimizer (includes baseline precomputation + GA/TS)
+        self._log(f"    Starting optimization (prep took {prep_time:.1f}s)...")
+        t0 = time.time()
+        rust_results = ram_accelerator.per_cluster_optimize_tier(
+            evaluator_id=self._evaluator_id,
+            tier=tier,
+            cluster_ids=cluster_ids,
+            initial_connectivities=initial_connectivities,
+            ga_gens=config.ga_gens,
+            ga_population=config.ga_population,
+            ts_iters=config.ts_iters,
+            ts_neighbors=config.ts_neighbors,
+            mutation_rate=config.mutation_rate,
+            seed=seed,
+            fitness_mode=int(self.fitness_mode),
+        )
+        opt_time = time.time() - t0
+
+        # Convert Rust results to ClusterOptResult
+        results = []
+        total_init_fit = 0.0
+        total_final_fit = 0.0
+        improved_count = 0
+
+        for cluster_id, final_conn, initial_fit, final_fit, improvement in rust_results:
+            start, end = self.cluster_to_neurons[cluster_id]
+            num_neurons = end - start
+            bits = self.cluster_to_bits[cluster_id]
+
+            # Reshape connectivity back to tensor
+            initial_tensor = torch.tensor(
+                initial_connectivities[cluster_id]
+            ).view(num_neurons, bits)
+            final_tensor = torch.tensor(final_conn).view(num_neurons, bits)
+
+            results.append(ClusterOptResult(
+                cluster_id=cluster_id,
+                tier=tier,
+                initial_accuracy=initial_fit,
+                final_accuracy=final_fit,
+                initial_connectivity=initial_tensor,
+                final_connectivity=final_tensor,
+                improvement_pct=improvement,
+                generations_run=config.ga_gens + config.ts_iters,
+            ))
+
+            total_init_fit += initial_fit
+            total_final_fit += final_fit
+            if improvement > 0:
+                improved_count += 1
+
+        # Log summary stats
+        n = len(results)
+        avg_init = total_init_fit / n if n > 0 else 0
+        avg_final = total_final_fit / n if n > 0 else 0
+        avg_improvement = ((avg_final - avg_init) / abs(avg_init) * 100) if avg_init != 0 else 0
+
+        self._log(f"    Done in {opt_time:.1f}s ({opt_time/n*1000:.1f}ms/cluster)")
+        self._log(f"    CE fitness: {avg_init:.4f} → {avg_final:.4f} (avg {avg_improvement:+.1f}%)")
+        self._log(f"    Improved: {improved_count}/{n} clusters ({improved_count/n*100:.0f}%)")
+        return results
+
+    def optimize_tier_grouped(
+        self,
+        tier: int,
+        cluster_ids: List[int],
+        current_connectivity: Tensor,
+        config: TierOptConfig,
+        group_size: int = 10,
+        seed: int = 42,
+    ) -> List[ClusterOptResult]:
+        """
+        Optimize all clusters in a tier using joint group optimization.
+
+        Instead of optimizing each cluster independently, clusters are grouped
+        and optimized jointly. This captures inter-cluster competition:
+        if cluster A gets stronger, cluster B must adapt.
+
+        Args:
+            tier: Tier index
+            cluster_ids: List of cluster IDs in this tier
+            current_connectivity: Current connectivity tensor
+            config: Optimization configuration
+            group_size: Number of clusters per group (e.g., 10 for top-k tokens)
+            seed: Random seed
+
+        Returns:
+            List of ClusterOptResult for each optimized cluster
+        """
+        if not self._rust_available or self._evaluator_id is None:
+            raise RuntimeError("Rust accelerator not available")
+
+        if not self._global_baseline_computed:
+            raise RuntimeError("Global baseline must be computed before grouped optimization")
+
+        import ram_accelerator
+        import time
+
+        num_groups = (len(cluster_ids) + group_size - 1) // group_size
+        self._log(f"  Tier {tier}: Group optimization ({len(cluster_ids)} clusters in {num_groups} groups of {group_size})")
+        self._log(f"    Config: GA {config.ga_gens} gens × {config.ga_population} pop")
+        self._log(f"    Fitness: {self.fitness_mode.name} (joint group)")
+
+        # Extract connectivity for each cluster
+        t0 = time.time()
+        initial_connectivities: Dict[int, List[int]] = {}
+        for cluster_id in cluster_ids:
+            start, end = self.cluster_to_neurons[cluster_id]
+            cluster_conn = current_connectivity[start:end]  # [num_neurons, bits]
+            initial_connectivities[cluster_id] = cluster_conn.flatten().long().tolist()
+        prep_time = time.time() - t0
+
+        # Call Rust grouped optimizer
+        self._log(f"    Starting optimization (prep took {prep_time:.1f}s)...")
+        t0 = time.time()
+        rust_results = ram_accelerator.per_cluster_optimize_tier_grouped(
+            evaluator_id=self._evaluator_id,
+            tier=tier,
+            cluster_ids=cluster_ids,
+            initial_connectivities=initial_connectivities,
+            group_size=group_size,
+            ga_gens=config.ga_gens,
+            ga_population=config.ga_population,
+            ts_iters=config.ts_iters,
+            ts_neighbors=config.ts_neighbors,
+            mutation_rate=config.mutation_rate,
+            seed=seed,
+            fitness_mode=int(self.fitness_mode),
+        )
+        opt_time = time.time() - t0
+
+        # Convert Rust results to ClusterOptResult
+        results = []
+        total_init_fit = 0.0
+        total_final_fit = 0.0
+        improved_count = 0
+
+        for cluster_id, final_conn, initial_fit, final_fit, improvement in rust_results:
+            start, end = self.cluster_to_neurons[cluster_id]
+            num_neurons = end - start
+            bits = self.cluster_to_bits[cluster_id]
+
+            # Reshape connectivity back to tensor
+            initial_tensor = torch.tensor(
+                initial_connectivities[cluster_id]
+            ).view(num_neurons, bits)
+            final_tensor = torch.tensor(final_conn).view(num_neurons, bits)
+
+            results.append(ClusterOptResult(
+                cluster_id=cluster_id,
+                tier=tier,
+                initial_accuracy=initial_fit,
+                final_accuracy=final_fit,
+                initial_connectivity=initial_tensor,
+                final_connectivity=final_tensor,
+                improvement_pct=improvement,
+                generations_run=config.ga_gens,
+            ))
+
+            total_init_fit += initial_fit
+            total_final_fit += final_fit
+            if improvement > 0:
+                improved_count += 1
+
+        # Log summary stats
+        n = len(results)
+        avg_init = total_init_fit / n if n > 0 else 0
+        avg_final = total_final_fit / n if n > 0 else 0
+        avg_improvement = ((avg_final - avg_init) / abs(avg_init) * 100) if avg_init != 0 else 0
+
+        self._log(f"    Done in {opt_time:.1f}s ({opt_time/n*1000:.1f}ms/cluster)")
+        self._log(f"    CE fitness: {avg_init:.4f} → {avg_final:.4f} (avg {avg_improvement:+.1f}%)")
+        self._log(f"    Improved: {improved_count}/{n} clusters ({improved_count/n*100:.0f}%)")
+        return results
+
+    def update_connectivity(
+        self,
+        full_connectivity: Tensor,
+        results: List[ClusterOptResult],
+    ) -> Tensor:
+        """Update full connectivity tensor with optimized cluster connectivities."""
+        updated = full_connectivity.clone()
+
+        for result in results:
+            start, end = self.cluster_to_neurons[result.cluster_id]
+            updated[start:end] = result.final_connectivity
+
+        return updated
+
+    @property
+    def rust_available(self) -> bool:
+        return self._rust_available
+
+
+# =============================================================================
 # Factory function for easy creation
 # =============================================================================
 
@@ -1083,3 +1549,52 @@ def create_per_cluster_optimizer(
     # This requires extracting cluster->neuron mappings from the model
 
     raise NotImplementedError("Factory function - needs model integration")
+
+
+def create_rust_optimizer(
+    train_contexts: Tensor,
+    train_targets: Tensor,
+    eval_contexts: Tensor,
+    eval_targets: Tensor,
+    context_bits: int,
+    cluster_to_neurons: Dict[int, Tuple[int, int]],
+    cluster_to_bits: Dict[int, int],
+    num_clusters: int,
+    fitness_mode: FitnessMode = FitnessMode.SIMPLE,
+    logger: Optional[Callable[[str], None]] = None,
+) -> Optional[RustPerClusterOptimizer]:
+    """
+    Create a Rust-accelerated per-cluster optimizer if available.
+
+    Args:
+        train_contexts: Training context bit vectors [N, context_bits]
+        train_targets: Training target cluster IDs [N]
+        eval_contexts: Eval context bit vectors [M, context_bits]
+        eval_targets: Eval target cluster IDs [M]
+        context_bits: Total context bits
+        cluster_to_neurons: Mapping from cluster ID to (start, end) neuron indices
+        cluster_to_bits: Mapping from cluster ID to bits_per_neuron
+        num_clusters: Total number of clusters (vocab size)
+        fitness_mode: Fitness calculation mode
+        logger: Optional logging function
+
+    Returns:
+        RustPerClusterOptimizer if Rust is available, None otherwise
+    """
+    if not _check_rust_per_cluster():
+        if logger:
+            logger("Rust per-cluster accelerator not available")
+        return None
+
+    return RustPerClusterOptimizer(
+        train_contexts=train_contexts,
+        train_targets=train_targets,
+        eval_contexts=eval_contexts,
+        eval_targets=eval_targets,
+        context_bits=context_bits,
+        cluster_to_neurons=cluster_to_neurons,
+        cluster_to_bits=cluster_to_bits,
+        num_clusters=num_clusters,
+        fitness_mode=fitness_mode,
+        logger=logger,
+    )
