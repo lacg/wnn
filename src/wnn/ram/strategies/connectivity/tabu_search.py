@@ -87,6 +87,7 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 		n_bits_per_neuron: int,
 		batch_evaluate_fn: Optional[Callable[[list], list[float]]] = None,
 		overfitting_callback: Optional[OverfittingCallback] = None,
+		initial_error_hint: Optional[float] = None,
 	) -> OptimizerResult:
 		"""
 		Run Tabu Search optimization.
@@ -104,6 +105,9 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 			overfitting_callback: Optional callback for overfitting detection.
 				Called every 5 iterations with (best_connectivity, train_fitness).
 				Returns OverfittingControl to signal diversity mode or early stop.
+			initial_error_hint: Optional initial error from previous optimizer (e.g., GA).
+				If provided, uses this as baseline instead of re-evaluating.
+				This ensures consistent baselines when chaining GA → TS.
 		"""
 		self._ensure_rng()
 		cfg = self._config
@@ -117,7 +121,13 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 		early_stopped_overfitting = False
 
 		current = connections.clone()
-		current_error = evaluate_fn(current) if batch_evaluate_fn is None else batch_evaluate_fn([current], total_pop=1)[0]
+
+		# Use hint if provided (for GA → TS chaining), otherwise evaluate
+		if initial_error_hint is not None:
+			current_error = initial_error_hint
+			self._log(f"[TS] Using inherited baseline from previous optimizer: {current_error:.4f}")
+		else:
+			current_error = evaluate_fn(current) if batch_evaluate_fn is None else batch_evaluate_fn([current], total_pop=1)[0]
 
 		best = current.clone()
 		best_error = current_error

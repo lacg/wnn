@@ -1108,6 +1108,7 @@ def run_benchmark(config: BenchmarkConfig):
 
 		# Run optimization strategies (joint for tiered, same code for uniform)
 		arch_label = "Joint tiered" if is_tiered else "Uniform"
+		prev_optimizer_final_error: float | None = None  # For GA → TS chaining
 		for strategy_name in strategies:
 			log("")
 			if is_tiered and is_variable_bits:
@@ -1156,6 +1157,7 @@ def run_benchmark(config: BenchmarkConfig):
 					bits_per_neuron,
 					batch_evaluate,
 					overfitting_callback=overfitting_monitor,
+					initial_error_hint=prev_optimizer_final_error,  # Inherit from GA if available
 				)
 
 			elif strategy_name == "PC":
@@ -1545,6 +1547,9 @@ def run_benchmark(config: BenchmarkConfig):
 			log(f"    Iterations: {result.iterations_run}")
 			if result.early_stopped_overfitting:
 				log(f"    Early stopped: overfitting detected")
+
+			# Save final error for next strategy (e.g., GA → TS chaining)
+			prev_optimizer_final_error = result.final_error
 
 		# Retrain on FULL data with optimized connectivity
 		log("")
