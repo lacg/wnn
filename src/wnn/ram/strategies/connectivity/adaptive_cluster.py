@@ -78,8 +78,8 @@ class AdaptiveClusterConfig:
 	min_bits: int = 1
 	"""Minimum bits per neuron (2^1 = 2 addresses)"""
 
-	max_bits: int = 20
-	"""Maximum bits per neuron (2^20 = 1M addresses)"""
+	max_bits: int = 30
+	"""Maximum bits per neuron (2^30 = 1B addresses)"""
 
 	min_neurons: int = 1
 	"""Minimum neurons per cluster (Phase 2)"""
@@ -318,3 +318,273 @@ def genome_stats(genome: ClusterGenome) -> Dict:
 			b: bits.count(b) for b in sorted(set(bits))
 		}
 	}
+
+
+# =============================================================================
+# Phase 1: Adaptive Cluster Optimizer (bits-per-cluster only)
+# =============================================================================
+
+@dataclass
+class AdaptiveOptConfig:
+	"""Configuration for adaptive cluster optimization."""
+
+	# GA parameters
+	population_size: int = 20
+	generations: int = 50
+	mutation_rate: float = 0.1
+	crossover_rate: float = 0.7
+	elitism: int = 2
+	tournament_size: int = 3
+
+	# Early stopping
+	patience: int = 5
+	min_improvement_pct: float = 0.1
+
+	# Architecture constraints
+	cluster_config: AdaptiveClusterConfig = None
+
+	def __post_init__(self):
+		if self.cluster_config is None:
+			self.cluster_config = AdaptiveClusterConfig()
+
+
+@dataclass
+class AdaptiveOptResult:
+	"""Result from adaptive cluster optimization."""
+
+	best_genome: ClusterGenome
+	initial_fitness: float
+	final_fitness: float
+	generations_run: int
+	history: List[tuple]  # [(gen, best_fitness, avg_fitness)]
+	early_stopped: bool
+
+
+class AdaptiveClusterOptimizer:
+	"""
+	Evolves cluster architectures (bits-per-cluster) using GA.
+
+	Phase 1: Each cluster has 1 neuron, GA optimizes bits per cluster.
+	Fitness is evaluated by training a model with the genome's architecture
+	and measuring cross-entropy on held-out data.
+	"""
+
+	def __init__(
+		self,
+		config: AdaptiveOptConfig,
+		evaluate_fn: Callable[[ClusterGenome], float],
+		num_clusters: int,
+		token_frequencies: Optional[List[int]] = None,
+		seed: int = 42,
+		logger: Optional[Callable[[str], None]] = None,
+	):
+		"""
+		Initialize the optimizer.
+
+		Args:
+			config: Optimization configuration
+			evaluate_fn: Function that takes a ClusterGenome and returns fitness
+			            (lower is better, e.g., cross-entropy)
+			num_clusters: Number of clusters (vocabulary size)
+			token_frequencies: Token occurrence counts for FREQUENCY_SCALED init
+			seed: Random seed
+			logger: Optional logging function
+		"""
+		self.config = config
+		self.evaluate_fn = evaluate_fn
+		self.num_clusters = num_clusters
+		self.token_frequencies = token_frequencies
+		self.seed = seed
+		self._log = logger or print
+		self._rng = None
+
+	def _ensure_rng(self):
+		import random
+		if self._rng is None:
+			self._rng = random.Random(self.seed)
+
+	def optimize(
+		self,
+		init_strategy: GenomeInitStrategy = GenomeInitStrategy.FREQUENCY_SCALED,
+	) -> AdaptiveOptResult:
+		"""
+		Run the adaptive architecture optimization.
+
+		Args:
+			init_strategy: How to initialize the population
+
+		Returns:
+			AdaptiveOptResult with best genome and statistics
+		"""
+		self._ensure_rng()
+		cfg = self.config
+		cc = cfg.cluster_config
+
+		self._log(f"[AdaptiveGA] Starting optimization")
+		self._log(f"  Clusters: {self.num_clusters}")
+		self._log(f"  Population: {cfg.population_size}")
+		self._log(f"  Generations: {cfg.generations}")
+		self._log(f"  Init strategy: {init_strategy.name}")
+		self._log(f"  Bits range: [{cc.min_bits}, {cc.max_bits}]")
+
+		# Initialize population
+		population = self._init_population(init_strategy)
+
+		# Evaluate initial population
+		fitness = [self.evaluate_fn(g) for g in population]
+		best_idx = min(range(len(fitness)), key=lambda i: fitness[i])
+		best_genome = population[best_idx].clone()
+		best_fitness = fitness[best_idx]
+		initial_fitness = best_fitness
+
+		history = [(0, best_fitness, sum(fitness) / len(fitness))]
+		self._log(f"[AdaptiveGA] Initial best fitness: {best_fitness:.4f}")
+
+		# Early stopping tracking
+		patience_counter = 0
+		prev_best = best_fitness
+
+		for gen in range(cfg.generations):
+			# Selection + Crossover + Mutation
+			new_population = []
+
+			# Elitism: keep best individuals
+			sorted_indices = sorted(range(len(fitness)), key=lambda i: fitness[i])
+			for i in range(cfg.elitism):
+				new_population.append(population[sorted_indices[i]].clone())
+
+			# Fill rest with offspring
+			while len(new_population) < cfg.population_size:
+				# Tournament selection
+				parent1 = self._tournament_select(population, fitness)
+				parent2 = self._tournament_select(population, fitness)
+
+				# Crossover
+				if self._rng.random() < cfg.crossover_rate:
+					child = crossover_genomes(parent1, parent2, rng=self._rng.randint(0, 2**31))
+				else:
+					child = parent1.clone()
+
+				# Mutation
+				child = mutate_genome(child, cc, rng=self._rng.randint(0, 2**31))
+
+				# Enforce memory budget
+				child = self._enforce_budget(child, cc)
+
+				new_population.append(child)
+
+			population = new_population
+
+			# Evaluate new population
+			fitness = [self.evaluate_fn(g) for g in population]
+			gen_best_idx = min(range(len(fitness)), key=lambda i: fitness[i])
+
+			if fitness[gen_best_idx] < best_fitness:
+				best_genome = population[gen_best_idx].clone()
+				best_fitness = fitness[gen_best_idx]
+
+			avg_fitness = sum(fitness) / len(fitness)
+			history.append((gen + 1, best_fitness, avg_fitness))
+
+			# Log progress
+			if (gen + 1) % 5 == 0 or gen == 0:
+				stats = genome_stats(best_genome)
+				self._log(
+					f"[AdaptiveGA] Gen {gen + 1}/{cfg.generations}: "
+					f"best={best_fitness:.4f}, avg={avg_fitness:.4f}, "
+					f"bits=[{stats['min_bits']}-{stats['max_bits']}]"
+				)
+
+			# Early stopping check
+			improvement_pct = (prev_best - best_fitness) / prev_best * 100 if prev_best > 0 else 0
+			if improvement_pct >= cfg.min_improvement_pct:
+				patience_counter = 0
+				prev_best = best_fitness
+			else:
+				patience_counter += 1
+
+			if patience_counter >= cfg.patience:
+				self._log(f"[AdaptiveGA] Early stop at gen {gen + 1}: no improvement for {cfg.patience} gens")
+				return AdaptiveOptResult(
+					best_genome=best_genome,
+					initial_fitness=initial_fitness,
+					final_fitness=best_fitness,
+					generations_run=gen + 1,
+					history=history,
+					early_stopped=True,
+				)
+
+		self._log(f"[AdaptiveGA] Completed {cfg.generations} generations")
+		self._log(f"  Initial fitness: {initial_fitness:.4f}")
+		self._log(f"  Final fitness: {best_fitness:.4f}")
+		improvement = (initial_fitness - best_fitness) / initial_fitness * 100
+		self._log(f"  Improvement: {improvement:.2f}%")
+
+		return AdaptiveOptResult(
+			best_genome=best_genome,
+			initial_fitness=initial_fitness,
+			final_fitness=best_fitness,
+			generations_run=cfg.generations,
+			history=history,
+			early_stopped=False,
+		)
+
+	def _init_population(self, strategy: GenomeInitStrategy) -> List[ClusterGenome]:
+		"""Initialize the population with some diversity."""
+		population = []
+		cc = self.config.cluster_config
+
+		# First individual uses the specified strategy
+		population.append(initialize_genome(
+			self.num_clusters, strategy, cc,
+			token_frequencies=self.token_frequencies,
+			rng=self.seed,
+		))
+
+		# Rest are mutations of the first, or random
+		for i in range(1, self.config.population_size):
+			if i < self.config.population_size // 2:
+				# Mutate from first
+				genome = mutate_genome(population[0], cc, rng=self.seed + i)
+			else:
+				# Random initialization for diversity
+				genome = initialize_genome(
+					self.num_clusters,
+					GenomeInitStrategy.RANDOM_UNIFORM,
+					cc,
+					rng=self.seed + i,
+				)
+			population.append(genome)
+
+		return population
+
+	def _tournament_select(
+		self,
+		population: List[ClusterGenome],
+		fitness: List[float],
+	) -> ClusterGenome:
+		"""Select individual via tournament selection."""
+		candidates = self._rng.sample(range(len(population)), self.config.tournament_size)
+		winner = min(candidates, key=lambda i: fitness[i])
+		return population[winner]
+
+	def _enforce_budget(
+		self,
+		genome: ClusterGenome,
+		cc: AdaptiveClusterConfig,
+	) -> ClusterGenome:
+		"""Ensure genome stays within memory budget by shrinking if needed."""
+		if genome.total_memory_cells() <= cc.total_memory_budget:
+			return genome
+
+		# Shrink largest clusters until under budget
+		bits = genome.bits_per_cluster.copy()
+		while sum(2 ** b for b in bits) > cc.total_memory_budget:
+			# Find cluster with most bits
+			max_idx = max(range(len(bits)), key=lambda i: bits[i])
+			if bits[max_idx] > cc.min_bits:
+				bits[max_idx] -= 1
+			else:
+				break  # Can't shrink further
+
+		return ClusterGenome(bits_per_cluster=bits)
