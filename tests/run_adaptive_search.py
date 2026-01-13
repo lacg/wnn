@@ -5,7 +5,10 @@ Run adaptive architecture search on WikiText-2 dataset.
 This script uses genetic algorithm to evolve per-cluster (bits, neurons)
 configurations for the AdaptiveClusteredRAM language model.
 
-Expected runtime: 3-6 hours depending on population/generations.
+Uses subsampled data (200K train, 50K eval) for faster fitness evaluation.
+Expected runtime: 1-2 hours.
+
+For full evaluation after finding best genome, use the full dataset.
 """
 
 import sys
@@ -64,11 +67,13 @@ def main():
 	logger(f"Log file: {logger.log_file}")
 	logger()
 
-	# Load data (full dataset for multi-hour run)
+	# Load data with subsampling for faster architecture search
+	# Full data is too slow (~10+ min per genome evaluation)
+	# Subsampled data gives proxy fitness that correlates with full performance
 	train_tokens, val_tokens, vocab_size = load_wikitext2(
 		logger,
-		train_limit=None,  # Full training set (~2.4M tokens)
-		val_limit=None,    # Full validation set (~251K tokens)
+		train_limit=200_000,   # Subsample: 200K tokens (~10x faster)
+		val_limit=50_000,      # Subsample: 50K tokens (~5x faster)
 	)
 
 	# Compute token frequencies for FREQUENCY_SCALED initialization
@@ -88,7 +93,7 @@ def main():
 	# Run architecture search with settings for multi-hour run
 	logger()
 	logger("Starting architecture search...")
-	logger("  Expected runtime: 3-6 hours")
+	logger("  Expected runtime: 1-2 hours (with subsampled data)")
 	logger()
 
 	result = run_architecture_search(
@@ -99,10 +104,10 @@ def main():
 		token_frequencies=token_frequencies,
 		cluster_order=cluster_order,
 
-		# GA parameters (tuned for multi-hour run)
-		population_size=20,      # Diverse population
-		generations=100,         # Many generations for convergence
-		patience=15,             # Wait for improvement
+		# GA parameters (tuned for ~1-2 hour run with subsampled data)
+		population_size=10,      # Smaller population for faster iteration
+		generations=50,          # Enough for convergence
+		patience=10,             # Wait for improvement
 
 		# Architecture bounds
 		min_bits=4,              # Minimum addressable
