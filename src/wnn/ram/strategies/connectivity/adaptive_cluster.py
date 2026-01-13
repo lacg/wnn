@@ -1263,27 +1263,3 @@ def run_architecture_search(
 	log(f"    Total memory: {stats['total_memory_cells']:,} cells")
 
 	return result
-
-
-# =============================================================================
-# Backward Compatibility (deprecated, use ClusterGenome methods instead)
-# =============================================================================
-
-def initialize_genome(*args, **kwargs) -> ClusterGenome:
-	"""Deprecated: Use ClusterGenome.initialize() instead."""
-	return ClusterGenome.initialize(*args, **kwargs)
-
-
-def mutate_genome(genome: ClusterGenome, *args, **kwargs) -> ClusterGenome:
-	"""Deprecated: Use genome.mutate() instead."""
-	return genome.mutate(*args, **kwargs)
-
-
-def crossover_genomes(g1: ClusterGenome, g2: ClusterGenome, *args, **kwargs) -> ClusterGenome:
-	"""Deprecated: Use genome.crossover() instead."""
-	return g1.crossover(g2, *args, **kwargs)
-
-
-def genome_stats(genome: ClusterGenome) -> Dict:
-	"""Deprecated: Use genome.stats() instead."""
-	return genome.stats()

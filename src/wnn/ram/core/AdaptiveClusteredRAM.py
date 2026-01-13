@@ -24,7 +24,7 @@ from torch import zeros, ones, arange, long, Tensor, bool as torch_bool
 from wnn.ram.core.Memory import Memory
 from wnn.ram.core.base import RAMComponent
 from wnn.ram.core import MemoryVal
-from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome, genome_stats
+from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 
 
 @dataclass
@@ -183,7 +183,7 @@ class AdaptiveClusteredRAM(RAMComponent):
 		)
 
 	def __repr__(self) -> str:
-		stats = genome_stats(self.genome)
+		stats = self.genome.stats()
 		return (
 			f"AdaptiveClusteredRAM("
 			f"clusters={self.num_clusters}, "
@@ -194,7 +194,7 @@ class AdaptiveClusteredRAM(RAMComponent):
 		)
 
 	def __str__(self) -> str:
-		stats = genome_stats(self.genome)
+		stats = self.genome.stats()
 		lines = [
 			"=== AdaptiveClusteredRAM ===",
 			f"  Total clusters: {self.num_clusters:,}",
