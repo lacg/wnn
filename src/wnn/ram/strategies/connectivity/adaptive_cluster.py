@@ -93,12 +93,23 @@ class AdaptiveClusterConfig:
 	init_strategy: GenomeInitStrategy = GenomeInitStrategy.FREQUENCY_SCALED
 	"""How to initialize the genome"""
 
-	# Mutation rates
+	# Mutation rates (Phase 1: bits)
 	bits_mutation_rate: float = 0.1
 	"""Probability of mutating bits for a cluster"""
 
 	bits_mutation_step: int = 1
 	"""How much to change bits per mutation (+/- this value)"""
+
+	# Mutation rates (Phase 2: neurons)
+	neurons_mutation_rate: float = 0.05
+	"""Probability of mutating neuron count for a cluster"""
+
+	neurons_mutation_step: int = 1
+	"""How much to change neuron count per mutation (+/- this value)"""
+
+	# Phase control
+	phase: int = 2
+	"""Optimization phase: 1 = bits only, 2 = bits + neurons"""
 
 
 @dataclass
@@ -106,36 +117,59 @@ class ClusterGenome:
 	"""
 	Genome representing adaptive architecture for all clusters.
 
-	Phase 1: Only bits_per_cluster (neurons fixed at 1)
-	Phase 2: Add neurons_per_cluster
+	Phase 1: bits_per_cluster (bits per neuron for each cluster)
+	Phase 2: neurons_per_cluster (number of neurons for each cluster)
+
+	Each cluster can have different (neurons, bits) configuration,
+	allowing the GA to discover optimal architectures per token.
 	"""
 
 	bits_per_cluster: List[int]
 	"""Bits per neuron for each cluster [num_clusters]"""
 
-	# Phase 2 fields (future)
-	# neurons_per_cluster: List[int]
-	# connectivity_per_cluster: List[Tensor]
+	neurons_per_cluster: Optional[List[int]] = None
+	"""Number of neurons for each cluster [num_clusters] (Phase 2)"""
+
+	def __post_init__(self):
+		"""Initialize neurons_per_cluster to 1 if not provided (Phase 1 compat)."""
+		if self.neurons_per_cluster is None:
+			self.neurons_per_cluster = [1] * len(self.bits_per_cluster)
 
 	def total_memory_cells(self) -> int:
 		"""Calculate total memory cells needed for this genome."""
-		# Each cluster: 1 neuron × 2^bits addresses × 1 cell per address
-		return sum(2 ** bits for bits in self.bits_per_cluster)
+		# Each cluster: neurons × 2^bits addresses
+		return sum(
+			n * (2 ** b)
+			for n, b in zip(self.neurons_per_cluster, self.bits_per_cluster)
+		)
+
+	def total_neurons(self) -> int:
+		"""Total neurons across all clusters."""
+		return sum(self.neurons_per_cluster)
 
 	def clone(self) -> 'ClusterGenome':
 		"""Create a deep copy of this genome."""
 		return ClusterGenome(
-			bits_per_cluster=self.bits_per_cluster.copy()
+			bits_per_cluster=self.bits_per_cluster.copy(),
+			neurons_per_cluster=self.neurons_per_cluster.copy(),
 		)
 
 	def to_tensor(self) -> Tensor:
-		"""Convert to tensor for batch operations."""
-		return torch.tensor(self.bits_per_cluster, dtype=torch.int32)
+		"""Convert to tensor [num_clusters, 2] with (bits, neurons) per cluster."""
+		data = list(zip(self.bits_per_cluster, self.neurons_per_cluster))
+		return torch.tensor(data, dtype=torch.int32)
 
 	@staticmethod
 	def from_tensor(t: Tensor) -> 'ClusterGenome':
-		"""Create genome from tensor."""
-		return ClusterGenome(bits_per_cluster=t.tolist())
+		"""Create genome from tensor [num_clusters, 2]."""
+		return ClusterGenome(
+			bits_per_cluster=t[:, 0].tolist(),
+			neurons_per_cluster=t[:, 1].tolist(),
+		)
+
+	def get_cluster_config(self, cluster_id: int) -> tuple:
+		"""Get (neurons, bits) for a specific cluster."""
+		return (self.neurons_per_cluster[cluster_id], self.bits_per_cluster[cluster_id])
 
 
 def initialize_genome(
@@ -156,12 +190,13 @@ def initialize_genome(
 		rng: Random seed for reproducibility
 
 	Returns:
-		Initialized ClusterGenome
+		Initialized ClusterGenome with bits and neurons per cluster
 	"""
 	import random
 	if rng is not None:
 		random.seed(rng)
 
+	# Initialize bits based on strategy
 	if strategy == GenomeInitStrategy.UNIFORM_MINIMAL:
 		bits = [config.min_bits] * num_clusters
 
@@ -176,7 +211,7 @@ def initialize_genome(
 		if token_frequencies is None:
 			raise ValueError("FREQUENCY_SCALED requires token_frequencies")
 		bits = _frequency_scaled_init(
-			num_clusters, token_frequencies, config
+			num_clusters, token_frequencies, config, for_bits=True
 		)
 
 	elif strategy == GenomeInitStrategy.RANDOM_UNIFORM:
@@ -187,21 +222,51 @@ def initialize_genome(
 	else:
 		raise ValueError(f"Unknown strategy: {strategy}")
 
-	return ClusterGenome(bits_per_cluster=bits)
+	# Initialize neurons based on strategy (Phase 2)
+	if config.phase >= 2:
+		if strategy == GenomeInitStrategy.FREQUENCY_SCALED and token_frequencies is not None:
+			neurons = _frequency_scaled_init(
+				num_clusters, token_frequencies, config, for_bits=False
+			)
+		elif strategy in (GenomeInitStrategy.UNIFORM_MINIMAL, GenomeInitStrategy.UNIFORM_MEDIUM):
+			neurons = [config.min_neurons] * num_clusters
+		elif strategy == GenomeInitStrategy.UNIFORM_MAXIMUM:
+			neurons = [config.max_neurons] * num_clusters
+		elif strategy == GenomeInitStrategy.RANDOM_UNIFORM:
+			neurons = [
+				random.randint(config.min_neurons, config.max_neurons)
+				for _ in range(num_clusters)
+			]
+		else:
+			neurons = [1] * num_clusters
+	else:
+		neurons = [1] * num_clusters  # Phase 1: fixed at 1
+
+	return ClusterGenome(bits_per_cluster=bits, neurons_per_cluster=neurons)
 
 
 def _frequency_scaled_init(
 	num_clusters: int,
 	token_frequencies: List[int],
 	config: AdaptiveClusterConfig,
+	for_bits: bool = True,
 ) -> List[int]:
 	"""
-	Initialize bits scaled by token frequency.
+	Initialize bits or neurons scaled by token frequency.
 
-	More frequent tokens get more bits (larger address space).
-	Rare tokens get fewer bits (small address space sufficient).
+	More frequent tokens get more bits/neurons (larger capacity).
+	Rare tokens get fewer bits/neurons (small capacity sufficient).
 
-	Uses log-scale mapping from frequency to bits.
+	Uses log-scale mapping from frequency to value.
+
+	Args:
+		num_clusters: Number of clusters
+		token_frequencies: Occurrence count per token
+		config: Configuration with min/max bounds
+		for_bits: If True, scale bits; if False, scale neurons
+
+	Returns:
+		List of bits or neurons per cluster
 	"""
 	import math
 
@@ -216,25 +281,30 @@ def _frequency_scaled_init(
 	max_freq = max(freqs)
 	min_freq = min(freqs)
 
-	# Log-scale mapping: high freq -> high bits, low freq -> low bits
+	# Log-scale mapping: high freq -> high value, low freq -> low value
 	log_max = math.log(max_freq)
 	log_min = math.log(min_freq)
 	log_range = log_max - log_min if log_max > log_min else 1.0
 
-	bits_range = config.max_bits - config.min_bits
+	if for_bits:
+		min_val, max_val = config.min_bits, config.max_bits
+	else:
+		min_val, max_val = config.min_neurons, config.max_neurons
 
-	bits = []
+	val_range = max_val - min_val
+
+	values = []
 	for freq in freqs:
 		# Normalize log frequency to [0, 1]
 		log_freq = math.log(freq)
 		normalized = (log_freq - log_min) / log_range
 
-		# Map to bits range
-		cluster_bits = config.min_bits + int(normalized * bits_range)
-		cluster_bits = max(config.min_bits, min(config.max_bits, cluster_bits))
-		bits.append(cluster_bits)
+		# Map to value range
+		val = min_val + int(normalized * val_range)
+		val = max(min_val, min(max_val, val))
+		values.append(val)
 
-	return bits
+	return values
 
 
 def mutate_genome(
@@ -243,7 +313,10 @@ def mutate_genome(
 	rng: Optional[int] = None,
 ) -> ClusterGenome:
 	"""
-	Mutate a genome by randomly adjusting bits per cluster.
+	Mutate a genome by randomly adjusting bits and neurons per cluster.
+
+	Phase 1: Only mutates bits
+	Phase 2: Mutates both bits and neurons
 
 	Args:
 		genome: Genome to mutate
@@ -258,17 +331,26 @@ def mutate_genome(
 		random.seed(rng)
 
 	new_bits = genome.bits_per_cluster.copy()
+	new_neurons = genome.neurons_per_cluster.copy()
 
 	for i in range(len(new_bits)):
+		# Mutate bits
 		if random.random() < config.bits_mutation_rate:
-			# Randomly grow or shrink
 			delta = random.choice([-config.bits_mutation_step, config.bits_mutation_step])
 			new_bits[i] = max(
 				config.min_bits,
 				min(config.max_bits, new_bits[i] + delta)
 			)
 
-	return ClusterGenome(bits_per_cluster=new_bits)
+		# Mutate neurons (Phase 2 only)
+		if config.phase >= 2 and random.random() < config.neurons_mutation_rate:
+			delta = random.choice([-config.neurons_mutation_step, config.neurons_mutation_step])
+			new_neurons[i] = max(
+				config.min_neurons,
+				min(config.max_neurons, new_neurons[i] + delta)
+			)
+
+	return ClusterGenome(bits_per_cluster=new_bits, neurons_per_cluster=new_neurons)
 
 
 def crossover_genomes(
@@ -280,7 +362,8 @@ def crossover_genomes(
 	"""
 	Create child genome by crossing over two parents.
 
-	Uses uniform crossover: each cluster's bits come from either parent.
+	Uses uniform crossover: each cluster's (bits, neurons) come from either parent.
+	The entire cluster config is inherited together (not bits from one, neurons from other).
 
 	Args:
 		parent1: First parent genome
@@ -296,27 +379,44 @@ def crossover_genomes(
 		random.seed(rng)
 
 	child_bits = []
-	for b1, b2 in zip(parent1.bits_per_cluster, parent2.bits_per_cluster):
-		if random.random() < crossover_rate:
-			child_bits.append(b2)
-		else:
-			child_bits.append(b1)
+	child_neurons = []
 
-	return ClusterGenome(bits_per_cluster=child_bits)
+	for i in range(len(parent1.bits_per_cluster)):
+		if random.random() < crossover_rate:
+			child_bits.append(parent2.bits_per_cluster[i])
+			child_neurons.append(parent2.neurons_per_cluster[i])
+		else:
+			child_bits.append(parent1.bits_per_cluster[i])
+			child_neurons.append(parent1.neurons_per_cluster[i])
+
+	return ClusterGenome(bits_per_cluster=child_bits, neurons_per_cluster=child_neurons)
 
 
 def genome_stats(genome: ClusterGenome) -> Dict:
 	"""Get statistics about a genome."""
 	bits = genome.bits_per_cluster
+	neurons = genome.neurons_per_cluster
+
 	return {
 		"num_clusters": len(bits),
+		# Bits stats
 		"min_bits": min(bits),
 		"max_bits": max(bits),
 		"mean_bits": sum(bits) / len(bits),
+		# Neurons stats (Phase 2)
+		"min_neurons": min(neurons),
+		"max_neurons": max(neurons),
+		"mean_neurons": sum(neurons) / len(neurons),
+		"total_neurons": sum(neurons),
+		# Memory stats
 		"total_memory_cells": genome.total_memory_cells(),
+		# Distributions
 		"bits_distribution": {
 			b: bits.count(b) for b in sorted(set(bits))
-		}
+		},
+		"neurons_distribution": {
+			n: neurons.count(n) for n in sorted(set(neurons))
+		},
 	}
 
 
