@@ -322,6 +322,7 @@ from wnn.ram.core.SparseMemory import SparseMemory
 from wnn.ram.core.RAMLayer import RAMLayer
 from wnn.ram.core.RAMClusterLayer import RAMClusterLayer, bits_needed, MemoryBackend
 from wnn.ram.core.TieredRAMClusterLayer import TieredRAMClusterLayer, TierConfig
+from wnn.ram.core.AdaptiveClusteredRAM import AdaptiveClusteredRAM, ConfigGroup
 
 # Generalization components
 from wnn.ram.core.RAMGeneralization import (
@@ -472,6 +473,8 @@ __all__ = [
 	'RAMClusterLayer',
 	'TieredRAMClusterLayer',
 	'TierConfig',
+	'AdaptiveClusteredRAM',
+	'ConfigGroup',
 	'bits_needed',
 	# Generalization
 	'BitLevelMapper',
