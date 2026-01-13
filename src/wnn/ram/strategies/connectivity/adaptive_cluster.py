@@ -688,3 +688,503 @@ class AdaptiveClusterOptimizer:
 				break  # Can't shrink further
 
 		return ClusterGenome(bits_per_cluster=bits)
+
+
+# =============================================================================
+# Genome Evaluation Wrapper
+# =============================================================================
+
+@dataclass
+class EvaluatorConfig:
+	"""Configuration for genome evaluation."""
+
+	# Data
+	train_tokens: List[int] = None
+	eval_tokens: List[int] = None
+	vocab_size: int = 50257
+	context_size: int = 4
+
+	# Training
+	batch_size: int = 500
+	global_top_k: int = 100
+	empty_value: float = 0.0
+
+	# Evaluation
+	eval_batch_size: int = 1000
+
+	# Token ordering (for cluster assignment)
+	cluster_order: Optional[List[int]] = None  # sorted by frequency
+
+	# Random seed
+	rng: int = 42
+
+
+class AdaptiveRAMLMWrapper:
+	"""
+	Lightweight RAMLM-like wrapper using AdaptiveClusteredRAM.
+
+	This class provides train/evaluate functionality similar to RAMLM
+	but uses AdaptiveClusteredRAM for per-cluster architecture.
+
+	Used for genome fitness evaluation during architecture search.
+	"""
+
+	def __init__(
+		self,
+		genome: ClusterGenome,
+		config: EvaluatorConfig,
+	):
+		"""
+		Initialize wrapper from genome.
+
+		Args:
+			genome: ClusterGenome defining per-cluster architecture
+			config: Evaluation configuration
+		"""
+		from wnn.ram.core import AdaptiveClusteredRAM, bits_needed
+		from torch import arange, long
+
+		self.genome = genome
+		self.config = config
+		self.vocab_size = config.vocab_size
+		self.context_size = config.context_size
+		self.bits_per_token = bits_needed(config.vocab_size)
+		self.total_input_bits = config.context_size * self.bits_per_token
+
+		# Create the adaptive layer
+		self.layer = AdaptiveClusteredRAM.from_genome(
+			genome=genome,
+			total_input_bits=self.total_input_bits,
+			empty_value=config.empty_value,
+			rng=config.rng,
+		)
+
+		# Cluster order for training (maps token IDs to cluster IDs)
+		self._cluster_order = config.cluster_order
+		if self._cluster_order is not None:
+			# Build reverse mapping: token_id -> logical_cluster_idx
+			self._token_to_cluster = {tid: idx for idx, tid in enumerate(self._cluster_order)}
+		else:
+			self._token_to_cluster = None
+
+		# Bit positions for encoding
+		self._bit_positions = arange(self.bits_per_token - 1, -1, -1, dtype=long)
+
+	def _encode_tokens(self, tokens: List[int]) -> 'Tensor':
+		"""Encode tokens to binary input bits."""
+		from torch import tensor, zeros, bool as torch_bool
+
+		n = len(tokens)
+		bits = zeros(n, self.bits_per_token, dtype=torch_bool)
+		tokens_t = tensor(tokens, dtype=self._bit_positions.dtype)
+
+		for i in range(self.bits_per_token):
+			bits[:, i] = ((tokens_t >> self._bit_positions[i]) & 1).bool()
+
+		return bits
+
+	def _encode_context(self, context_tokens: List[int]) -> 'Tensor':
+		"""Encode context tokens to flat input bits."""
+		bits = self._encode_tokens(context_tokens)
+		return bits.flatten()
+
+	def train_epoch(
+		self,
+		tokens: List[int],
+		global_top_k: int = 100,
+		batch_size: int = 500,
+		verbose: bool = False,
+	) -> Dict:
+		"""
+		Train on token sequence.
+
+		Args:
+			tokens: Training token sequence
+			global_top_k: Number of top tokens to use as negatives
+			batch_size: Batch size for training
+			verbose: Print progress
+
+		Returns:
+			Dict with training statistics
+		"""
+		from torch import tensor, zeros, long, stack, randint, bool as torch_bool
+		from collections import Counter
+		import time
+
+		start = time.time()
+
+		# Compute global top-k tokens
+		counts = Counter(tokens)
+		top_k_tokens = [t for t, _ in counts.most_common(global_top_k)]
+		top_k_set = set(top_k_tokens)
+
+		# Prepare examples
+		n_examples = len(tokens) - self.context_size
+		contexts = []
+		targets = []
+
+		for i in range(n_examples):
+			context = tokens[i:i + self.context_size]
+			target = tokens[i + self.context_size]
+			contexts.append(context)
+			targets.append(target)
+
+		# Encode all contexts
+		all_input_bits = []
+		for ctx in contexts:
+			all_input_bits.append(self._encode_context(ctx))
+		input_bits = stack(all_input_bits)  # [n_examples, total_input_bits]
+
+		# Convert targets to cluster indices
+		if self._token_to_cluster is not None:
+			true_clusters = tensor([self._token_to_cluster.get(t, t) for t in targets], dtype=long)
+		else:
+			true_clusters = tensor(targets, dtype=long)
+
+		# Generate negative samples (global top-k)
+		num_negatives = min(5, global_top_k)
+		false_clusters = zeros(n_examples, num_negatives, dtype=long)
+		top_k_tensor = tensor(top_k_tokens, dtype=long)
+
+		for i in range(n_examples):
+			# Sample from top-k, excluding true target
+			neg_indices = randint(0, global_top_k, (num_negatives,))
+			neg_tokens = top_k_tensor[neg_indices]
+			if self._token_to_cluster is not None:
+				neg_clusters = tensor([self._token_to_cluster.get(int(t), int(t)) for t in neg_tokens], dtype=long)
+			else:
+				neg_clusters = neg_tokens
+			false_clusters[i] = neg_clusters
+
+		# Train in batches
+		modified = 0
+		for start_idx in range(0, n_examples, batch_size):
+			end_idx = min(start_idx + batch_size, n_examples)
+			batch_input = input_bits[start_idx:end_idx]
+			batch_true = true_clusters[start_idx:end_idx]
+			batch_false = false_clusters[start_idx:end_idx]
+
+			modified += self.layer.train_batch(
+				batch_input, batch_true, batch_false, allow_override=False
+			)
+
+			if verbose and (start_idx // batch_size) % 10 == 0:
+				pct = start_idx / n_examples * 100
+				print(f"  Training: {pct:.1f}%")
+
+		elapsed = time.time() - start
+
+		return {
+			'modified': modified,
+			'examples': n_examples,
+			'time': elapsed,
+		}
+
+	def evaluate(
+		self,
+		tokens: List[int],
+		batch_size: int = 1000,
+		verbose: bool = False,
+	) -> Dict:
+		"""
+		Evaluate on token sequence.
+
+		Args:
+			tokens: Evaluation token sequence
+			batch_size: Batch size for evaluation
+			verbose: Print progress
+
+		Returns:
+			Dict with cross_entropy, perplexity, accuracy
+		"""
+		from torch import tensor, zeros, stack, long, float32, log, clamp
+		from torch.nn.functional import softmax
+		import time
+
+		start = time.time()
+
+		# Prepare examples
+		n_examples = len(tokens) - self.context_size
+		contexts = []
+		targets = []
+
+		for i in range(n_examples):
+			context = tokens[i:i + self.context_size]
+			target = tokens[i + self.context_size]
+			contexts.append(context)
+			targets.append(target)
+
+		# Encode all contexts
+		all_input_bits = []
+		for ctx in contexts:
+			all_input_bits.append(self._encode_context(ctx))
+		input_bits = stack(all_input_bits)
+
+		# Convert targets to cluster indices for accuracy
+		if self._token_to_cluster is not None:
+			target_clusters = tensor([self._token_to_cluster.get(t, t) for t in targets], dtype=long)
+		else:
+			target_clusters = tensor(targets, dtype=long)
+
+		# Evaluate in batches
+		total_ce = 0.0
+		total_correct = 0
+
+		for start_idx in range(0, n_examples, batch_size):
+			end_idx = min(start_idx + batch_size, n_examples)
+			batch_input = input_bits[start_idx:end_idx]
+			batch_targets = target_clusters[start_idx:end_idx]
+
+			# Forward pass
+			probs = self.layer.forward(batch_input)  # [batch, vocab_size]
+
+			# Softmax over vocabulary
+			probs_softmax = softmax(probs, dim=-1)
+
+			# Cross-entropy: -log(p[target])
+			target_probs = probs_softmax.gather(1, batch_targets.unsqueeze(1)).squeeze(1)
+			target_probs = clamp(target_probs, min=1e-10)
+			batch_ce = -log(target_probs).sum().item()
+			total_ce += batch_ce
+
+			# Accuracy
+			predictions = probs_softmax.argmax(dim=-1)
+			total_correct += (predictions == batch_targets).sum().item()
+
+			if verbose and (start_idx // batch_size) % 10 == 0:
+				pct = start_idx / n_examples * 100
+				print(f"  Evaluating: {pct:.1f}%")
+
+		elapsed = time.time() - start
+
+		avg_ce = total_ce / n_examples
+		perplexity = 2 ** (avg_ce / 0.693147)  # Convert to base-2 perplexity
+		accuracy = total_correct / n_examples
+
+		return {
+			'cross_entropy': avg_ce,
+			'perplexity': perplexity,
+			'accuracy': accuracy,
+			'examples': n_examples,
+			'time': elapsed,
+		}
+
+
+def create_genome_evaluator(
+	config: EvaluatorConfig,
+	verbose: bool = False,
+) -> Callable[[ClusterGenome], float]:
+	"""
+	Create an evaluation function for genome fitness.
+
+	The returned function:
+	1. Takes a ClusterGenome
+	2. Builds an AdaptiveRAMLMWrapper
+	3. Trains on config.train_tokens
+	4. Evaluates on config.eval_tokens
+	5. Returns cross-entropy (lower is better)
+
+	Args:
+		config: Evaluation configuration with tokens and parameters
+		verbose: Print progress during train/eval
+
+	Returns:
+		Function mapping ClusterGenome -> float (cross-entropy)
+
+	Example:
+		config = EvaluatorConfig(
+			train_tokens=train_tokens[:100000],
+			eval_tokens=val_tokens[:10000],
+			vocab_size=50257,
+			context_size=4,
+		)
+		evaluate_fn = create_genome_evaluator(config)
+
+		# Use with optimizer
+		optimizer = AdaptiveClusterOptimizer(
+			config=opt_config,
+			evaluate_fn=evaluate_fn,
+			num_clusters=50257,
+		)
+		result = optimizer.optimize()
+	"""
+	def evaluate_genome(genome: ClusterGenome) -> float:
+		"""Evaluate a genome and return fitness (cross-entropy)."""
+		# Build wrapper from genome
+		wrapper = AdaptiveRAMLMWrapper(genome, config)
+
+		# Train
+		wrapper.train_epoch(
+			config.train_tokens,
+			global_top_k=config.global_top_k,
+			batch_size=config.batch_size,
+			verbose=verbose,
+		)
+
+		# Evaluate
+		stats = wrapper.evaluate(
+			config.eval_tokens,
+			batch_size=config.eval_batch_size,
+			verbose=verbose,
+		)
+
+		return stats['cross_entropy']
+
+	return evaluate_genome
+
+
+def run_architecture_search(
+	train_tokens: List[int],
+	eval_tokens: List[int],
+	vocab_size: int = 50257,
+	context_size: int = 4,
+	token_frequencies: Optional[List[int]] = None,
+	cluster_order: Optional[List[int]] = None,
+	# GA parameters
+	population_size: int = 10,
+	generations: int = 20,
+	patience: int = 5,
+	# Architecture bounds
+	min_bits: int = 4,
+	max_bits: int = 20,
+	min_neurons: int = 1,
+	max_neurons: int = 15,
+	phase: int = 2,
+	# Other
+	init_strategy: GenomeInitStrategy = GenomeInitStrategy.FREQUENCY_SCALED,
+	empty_value: float = 0.0,
+	seed: int = 42,
+	logger: Optional[Callable[[str], None]] = None,
+) -> AdaptiveOptResult:
+	"""
+	Run complete architecture search for adaptive cluster configuration.
+
+	This is the main entry point for discovering optimal per-cluster
+	architectures using genetic algorithm optimization.
+
+	Args:
+		train_tokens: Training token sequence
+		eval_tokens: Evaluation token sequence
+		vocab_size: Vocabulary size
+		context_size: Context window size
+		token_frequencies: Token occurrence counts (for FREQUENCY_SCALED init)
+		cluster_order: Token IDs sorted by frequency (for tier assignment)
+
+		population_size: GA population size
+		generations: Maximum generations
+		patience: Early stop patience
+
+		min_bits, max_bits: Bits per neuron bounds
+		min_neurons, max_neurons: Neurons per cluster bounds
+		phase: 1 = bits only, 2 = bits + neurons
+
+		init_strategy: How to initialize genomes
+		empty_value: Value for EMPTY cells (0.0 recommended)
+		seed: Random seed
+		logger: Logging function
+
+	Returns:
+		AdaptiveOptResult with best genome and optimization history
+
+	Example:
+		from collections import Counter
+
+		# Compute token frequencies
+		counts = Counter(train_tokens)
+		token_frequencies = [counts.get(i, 0) for i in range(vocab_size)]
+		cluster_order = sorted(range(vocab_size), key=lambda t: -counts.get(t, 0))
+
+		result = run_architecture_search(
+			train_tokens=train_tokens[:500000],
+			eval_tokens=val_tokens[:50000],
+			vocab_size=50257,
+			token_frequencies=token_frequencies,
+			cluster_order=cluster_order,
+			population_size=10,
+			generations=50,
+		)
+
+		print(f"Best cross-entropy: {result.final_fitness:.4f}")
+		print(f"Improvement: {(1 - result.final_fitness/result.initial_fitness)*100:.1f}%")
+	"""
+	log = logger or print
+
+	log("=" * 60)
+	log("  Adaptive Architecture Search")
+	log("=" * 60)
+	log(f"  Train tokens: {len(train_tokens):,}")
+	log(f"  Eval tokens: {len(eval_tokens):,}")
+	log(f"  Vocab size: {vocab_size:,}")
+	log(f"  Context size: {context_size}")
+	log(f"  Population: {population_size}")
+	log(f"  Generations: {generations}")
+	log(f"  Phase: {phase} ({'bits only' if phase == 1 else 'bits + neurons'})")
+	log(f"  Init strategy: {init_strategy.name}")
+	log()
+
+	# Create evaluator config
+	eval_config = EvaluatorConfig(
+		train_tokens=train_tokens,
+		eval_tokens=eval_tokens,
+		vocab_size=vocab_size,
+		context_size=context_size,
+		batch_size=500,
+		global_top_k=100,
+		empty_value=empty_value,
+		eval_batch_size=1000,
+		cluster_order=cluster_order,
+		rng=seed,
+	)
+
+	# Create evaluation function
+	evaluate_fn = create_genome_evaluator(eval_config, verbose=False)
+
+	# Create optimizer config
+	cluster_config = AdaptiveClusterConfig(
+		min_bits=min_bits,
+		max_bits=max_bits,
+		min_neurons=min_neurons,
+		max_neurons=max_neurons,
+		phase=phase,
+	)
+
+	opt_config = AdaptiveOptConfig(
+		population_size=population_size,
+		generations=generations,
+		patience=patience,
+		cluster_config=cluster_config,
+	)
+
+	# Create optimizer
+	optimizer = AdaptiveClusterOptimizer(
+		config=opt_config,
+		evaluate_fn=evaluate_fn,
+		num_clusters=vocab_size,
+		token_frequencies=token_frequencies,
+		seed=seed,
+		logger=log,
+	)
+
+	# Run optimization
+	log()
+	result = optimizer.optimize(init_strategy=init_strategy)
+
+	# Log final results
+	log()
+	log("=" * 60)
+	log("  Architecture Search Complete")
+	log("=" * 60)
+	stats = genome_stats(result.best_genome)
+	log(f"  Initial CE: {result.initial_fitness:.4f}")
+	log(f"  Final CE: {result.final_fitness:.4f}")
+	improvement = (1 - result.final_fitness / result.initial_fitness) * 100
+	log(f"  Improvement: {improvement:.1f}%")
+	log(f"  Generations: {result.generations_run}")
+	log(f"  Early stopped: {result.early_stopped}")
+	log()
+	log("  Best genome:")
+	log(f"    Bits: [{stats['min_bits']}, {stats['max_bits']}], mean: {stats['mean_bits']:.1f}")
+	log(f"    Neurons: [{stats['min_neurons']}, {stats['max_neurons']}], mean: {stats['mean_neurons']:.1f}")
+	log(f"    Total memory: {stats['total_memory_cells']:,} cells")
+
+	return result
