@@ -8,14 +8,36 @@
 //! - memory_words: [num_neurons, words_per_neuron] i64
 //! - 31 cells per word (62 bits, 2 bits per cell)
 //! - Cell values: FALSE=0, TRUE=1, EMPTY=2
+//!
+//! EMPTY_VALUE configuration:
+//! - Set RAMLM_EMPTY_VALUE env var to control EMPTY cell contribution
+//! - Default: 0.0 (EMPTY cells don't add to probability)
+//! - Old default: 0.5 (EMPTY cells add uncertainty)
 
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicI64, Ordering, fence};
+use std::sync::OnceLock;
 
 /// Memory cell values (2 bits each)
 const FALSE: i64 = 0;
 const TRUE: i64 = 1;
 const EMPTY: i64 = 2;
+
+/// Global EMPTY cell value (can be set from Python)
+/// 0.0 = EMPTY cells don't contribute (no artificial competition) - DEFAULT
+/// 0.5 = EMPTY cells add uncertainty (old default, inflates PPL)
+use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+static EMPTY_VALUE_BITS: AtomicU32 = AtomicU32::new(0); // 0.0 as bits
+
+/// Get the EMPTY cell value
+pub fn get_empty_value() -> f32 {
+    f32::from_bits(EMPTY_VALUE_BITS.load(AtomicOrdering::Relaxed))
+}
+
+/// Set the EMPTY cell value (call from Python before evaluation)
+pub fn set_empty_value(value: f32) {
+    EMPTY_VALUE_BITS.store(value.to_bits(), AtomicOrdering::Relaxed);
+}
 
 /// Bit-packing constants
 const BITS_PER_CELL: usize = 2;
@@ -250,8 +272,9 @@ pub fn forward_batch(
                 }
             }
 
-            // Probability = (count_true + 0.5 * count_empty) / neurons_per_cluster
-            ex_probs[cluster_idx] = (count_true as f32 + 0.5 * count_empty as f32) / neurons_per_cluster as f32;
+            // Probability = (count_true + EMPTY_VALUE * count_empty) / neurons_per_cluster
+            let empty_value = get_empty_value();
+            ex_probs[cluster_idx] = (count_true as f32 + empty_value * count_empty as f32) / neurons_per_cluster as f32;
         }
     });
 

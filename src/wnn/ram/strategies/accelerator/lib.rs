@@ -44,6 +44,21 @@ pub use per_cluster::{PerClusterEvaluator, FitnessMode, TierOptConfig, ClusterOp
 pub use metal_evaluator::MetalEvaluator;
 pub use metal_ramlm::MetalRAMLMEvaluator;
 
+/// Set the EMPTY cell value for probability calculation
+/// 0.0 = EMPTY cells don't contribute (no artificial competition) - RECOMMENDED
+/// 0.5 = EMPTY cells add 0.5 probability (old default, inflates PPL with 50K classes)
+#[pyfunction]
+fn set_empty_value(value: f32) {
+    ramlm::set_empty_value(value);
+    sparse_memory::set_empty_value(value);
+}
+
+/// Get the current EMPTY cell value
+#[pyfunction]
+fn get_empty_value() -> f32 {
+    ramlm::get_empty_value()
+}
+
 /// Evaluate a single connectivity pattern (CPU, for comparison)
 #[pyfunction]
 fn evaluate_connectivity_cpu(
@@ -2280,5 +2295,8 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(per_cluster_update_global_baseline, m)?)?;
     // Group-based optimization for iterative refinement
     m.add_function(wrap_pyfunction!(per_cluster_optimize_tier_grouped, m)?)?;
+    // EMPTY cell value configuration (affects PPL calculation)
+    m.add_function(wrap_pyfunction!(set_empty_value, m)?)?;
+    m.add_function(wrap_pyfunction!(get_empty_value, m)?)?;
     Ok(())
 }

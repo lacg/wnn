@@ -18,16 +18,36 @@
 //! - FALSE = 0
 //! - TRUE = 1
 //! - EMPTY = 2 (default for unwritten cells)
+//!
+//! EMPTY_VALUE configuration:
+//! - Set RAMLM_EMPTY_VALUE env var to control EMPTY cell contribution
+//! - Default: 0.0 (EMPTY cells don't add to probability)
+//! - Old default: 0.5 (EMPTY cells add uncertainty)
 
 use dashmap::DashMap;
 use rayon::prelude::*;
 use std::hash::BuildHasherDefault;
+use std::sync::OnceLock;
 use rustc_hash::FxHasher;
 
 /// Memory cell values (matches dense backend)
 pub const FALSE: u8 = 0;
 pub const TRUE: u8 = 1;
 pub const EMPTY: u8 = 2;
+
+/// Global EMPTY cell value (can be set from Python)
+use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+static EMPTY_VALUE_BITS: AtomicU32 = AtomicU32::new(0); // 0.0 as bits
+
+/// Get the EMPTY cell value
+pub fn get_empty_value() -> f32 {
+    f32::from_bits(EMPTY_VALUE_BITS.load(AtomicOrdering::Relaxed))
+}
+
+/// Set the EMPTY cell value
+pub fn set_empty_value(value: f32) {
+    EMPTY_VALUE_BITS.store(value.to_bits(), AtomicOrdering::Relaxed);
+}
 
 /// Fast hasher type for DashMap
 type FxBuildHasher = BuildHasherDefault<FxHasher>;
@@ -434,8 +454,9 @@ pub fn forward_batch_sparse(
                 }
             }
 
-            // Probability = (count_true + 0.5 * count_empty) / neurons_per_cluster
-            ex_probs[cluster_idx] = (count_true as f32 + 0.5 * count_empty as f32) / neurons_per_cluster as f32;
+            // Probability = (count_true + empty_value * count_empty) / neurons_per_cluster
+            let empty_value = get_empty_value();
+            ex_probs[cluster_idx] = (count_true as f32 + empty_value * count_empty as f32) / neurons_per_cluster as f32;
         }
     });
 
@@ -781,7 +802,8 @@ pub fn forward_batch_tiered(
                 }
             }
 
-            ex_probs[cluster_idx] = (count_true as f32 + 0.5 * count_empty as f32)
+            let empty_value = get_empty_value();
+            ex_probs[cluster_idx] = (count_true as f32 + empty_value * count_empty as f32)
                 / config.neurons_per_cluster as f32;
         }
     });
