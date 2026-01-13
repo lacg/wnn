@@ -325,3 +325,103 @@ python tests/ramlm_full_benchmark.py --mode fast --optimize --strategy PC --fitn
 # SIMPLE fitness
 python tests/ramlm_full_benchmark.py --mode fast --optimize --strategy PC --fitness SIMPLE
 ```
+
+---
+
+## 5-Tier Simpler Configuration (2026-01-12)
+
+### Motivation
+
+The previous 5-tier experiment (`five_tier_gradient`) used very high neuron counts (37n, 31n) that may have been overkill. Testing a simpler gradient that better matches data density.
+
+### Configuration
+
+**five_tier_simple**: `50,15,20;50,13,18;400,9,10;20000,7,9;rest,5,8`
+
+| Tier | Clusters | Neurons | Bits | Data % | Rationale |
+|------|----------|---------|------|--------|-----------|
+| 0 | 50 | 15 | 20 | 42.1% | Same as champion tier0_20bit |
+| 1 | 50 | 13 | 18 | 4.6% | Slight step down |
+| 2 | 400 | 9 | 10 | 13.0% | Medium capacity |
+| 3 | 20,000 | 7 | 9 | 36.8% | Low capacity |
+| 4 | 29,757 | 5 | 8 | 3.4% | Minimal (rest) |
+
+### Results
+
+#### Before Optimization (Promising!)
+
+| Metric | Value | vs tier0_20bit |
+|--------|-------|----------------|
+| **Val PPL** | 36,643 | **-0.6%** ✓ |
+| **Val Acc** | 4.86% | -8% |
+| **Test PPL** | (not measured) | - |
+
+**Per-Tier Initial Results:**
+| Tier | PPL | Accuracy |
+|------|-----|----------|
+| 0 | 32,974 | 11.34% |
+| 1 | 34,527 | 0.72% |
+| 2 | 34,903 | 0.27% |
+| 3 | 41,228 | 0.04% |
+| 4 | 49,235 | 0.00% |
+
+The initial PPL (36,643) was **better than the champion** tier0_20bit (36,853) before any optimization!
+
+#### After GA+TS Optimization (Window-based)
+
+| Metric | Before | After | Change |
+|--------|--------|-------|--------|
+| Val PPL | 36,643 | 39,353 | **+7.40%** ❌ |
+| Val Acc | 4.86% | 2.68% | **-45%** ❌ |
+| Test PPL | - | 39,459 | - |
+| Test Acc | - | 2.72% | - |
+
+**GA+TS hurt BOTH metrics!**
+
+### The Optimization-Retraining Mismatch Problem
+
+**Why did optimization make things worse?**
+
+| Step | Data Size | Modified Cells |
+|------|-----------|----------------|
+| Initial training | 2.4M examples | 25,399,131 |
+| Optimization | 10K examples | - |
+| Retrain after opt | 2.4M examples | 18,223,400 ❌ |
+
+The "optimized" connectivity caused **28% fewer memory cells** to be written during retraining - meaning more address collisions and lost information.
+
+**Root cause**: Connectivity optimized on a 10K-token window doesn't transfer to the full 2.4M-token dataset. The optimizer finds patterns that work locally but cause more collisions at scale.
+
+### Overnight Full-Data Optimization Run (In Progress)
+
+Testing the hypothesis that optimizing on **full data** might actually help:
+
+```bash
+python tests/ramlm_full_benchmark.py \
+  --full-data \
+  --tiered "50,15,20;50,13,18;400,9,10;20000,7,9;rest,5,8" \
+  --optimize --strategy GA,TS \
+  --opt-train-windows 12000 \   # ~2.4M tokens (full train)
+  --opt-eval-windows 700 \      # ~140K tokens (half of test)
+  --ga-gens 1000 --ts-iters 1000 --patience 5 \
+  --per-tier
+```
+
+**Key differences from standard run:**
+- Train windows: 12,000 (2.4M tokens) instead of 50 (10K tokens)
+- Eval windows: 700 (140K tokens) instead of 20 (4K tokens)
+- 1000 generations/iterations with patience 5
+
+**Started:** 2026-01-12 21:22
+**Expected duration:** ~12-24 hours
+
+### Key Insight
+
+**The 5-tier simpler config achieved the best pre-optimization PPL (36,643)**, but optimization on small windows hurt it. If full-data optimization works, this architecture could beat the current champion.
+
+### Implications
+
+1. **Architecture design matters more than connectivity optimization** (at least with small-window optimization)
+2. **Initial random connectivity may be surprisingly good** when trained on full data
+3. **Small-window optimization doesn't transfer** to full dataset
+4. **Full-data optimization is the real test** - running overnight
