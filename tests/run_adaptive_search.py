@@ -14,6 +14,7 @@ For full evaluation after finding best genome, use the full dataset.
 import sys
 import time
 import json
+import math
 from datetime import datetime
 from pathlib import Path
 from collections import Counter
@@ -246,8 +247,10 @@ def main():
 		# Phase 2: Connectivity
 		"phase2": {
 			"initial_fitness": conn_result.initial_fitness,
+			"phase2_baseline": conn_result.phase2_baseline,
 			"final_fitness": conn_result.final_fitness,
 			"improvement_pct": conn_result.ga_improvement_pct,
+			"vs_phase1_improvement_pct": conn_result.total_improvement_pct,
 		},
 		# Final genome
 		"genome": {
@@ -289,24 +292,55 @@ def main():
 
 	# Phase 2 results
 	logger("  Phase 2 (Connectivity Optimization):")
-	logger(f"    Input CE: {conn_result.initial_fitness:.4f}")
-	logger(f"    Output CE: {conn_result.final_fitness:.4f}")
-	logger(f"    Improvement: {conn_result.ga_improvement_pct:.2f}%")
+	logger(f"    Phase 1 baseline CE: {conn_result.initial_fitness:.4f} (different seed)")
+	logger(f"    Phase 2 baseline CE: {conn_result.phase2_baseline:.4f} (trial 0)")
+	logger(f"    Best found CE: {conn_result.final_fitness:.4f}")
+	logger(f"    Improvement (fair): {conn_result.ga_improvement_pct:.2f}%")
+	logger(f"    Vs Phase 1: {conn_result.total_improvement_pct:.2f}%")
 	logger()
 
-	# Overall results
-	total_improvement = (1 - conn_result.final_fitness / ga_result.initial_fitness) * 100
-	logger("  Overall:")
-	logger(f"    Start CE: {ga_result.initial_fitness:.4f}")
-	logger(f"    Final CE: {conn_result.final_fitness:.4f}")
-	logger(f"    Total improvement: {total_improvement:.2f}%")
-	logger()
-
+	# Best Architecture stats
 	stats = ts_result.best_genome.stats()
 	logger("  Best Architecture:")
 	logger(f"    Bits: [{stats['min_bits']}, {stats['max_bits']}], mean: {stats['mean_bits']:.1f}")
 	logger(f"    Neurons: [{stats['min_neurons']}, {stats['max_neurons']}], mean: {stats['mean_neurons']:.1f}")
 	logger(f"    Total memory: {stats['total_memory_cells']:,} cells")
+	logger()
+
+	# Comparison table (for easy comparison with previous experiments)
+	logger()
+	logger.header("COMPARISON TABLE (Validation)")
+	logger("=" * 70)
+	logger(f"{'Phase':<30} {'CE':>12} {'PPL':>12} {'Improvement':>12}")
+	logger("-" * 70)
+
+	initial_ce = ga_result.initial_fitness
+	initial_ppl = math.exp(initial_ce)
+	logger(f"{'Initial (FREQUENCY_SCALED)':<30} {initial_ce:>12.4f} {initial_ppl:>12.1f} {'-':>12}")
+
+	phase1a_ce = ga_result.final_fitness
+	phase1a_ppl = math.exp(phase1a_ce)
+	phase1a_imp = (1 - phase1a_ce / initial_ce) * 100
+	logger(f"{'After Phase 1a (GA)':<30} {phase1a_ce:>12.4f} {phase1a_ppl:>12.1f} {phase1a_imp:>11.2f}%")
+
+	phase1b_ce = ts_result.final_fitness
+	phase1b_ppl = math.exp(phase1b_ce)
+	phase1b_imp = (1 - phase1b_ce / initial_ce) * 100
+	logger(f"{'After Phase 1b (TS)':<30} {phase1b_ce:>12.4f} {phase1b_ppl:>12.1f} {phase1b_imp:>11.2f}%")
+
+	# Phase 2 fair baseline (trial 0)
+	phase2_base_ce = conn_result.phase2_baseline
+	phase2_base_ppl = math.exp(phase2_base_ce)
+	logger(f"{'Phase 2 baseline (trial 0)':<30} {phase2_base_ce:>12.4f} {phase2_base_ppl:>12.1f} {'(fair cmp)':>12}")
+
+	final_ce = conn_result.final_fitness
+	final_ppl = math.exp(final_ce)
+	total_imp = (1 - final_ce / initial_ce) * 100
+	logger(f"{'After Phase 2 (best seed)':<30} {final_ce:>12.4f} {final_ppl:>12.1f} {total_imp:>11.2f}%")
+
+	logger("-" * 70)
+	logger(f"{'Total Improvement':<30} {'':>12} {'':>12} {total_imp:>11.2f}%")
+	logger("=" * 70)
 	logger()
 	logger(f"  Results saved to: {genome_path}")
 	logger.separator("=")

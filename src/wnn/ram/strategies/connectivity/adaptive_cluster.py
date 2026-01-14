@@ -1973,11 +1973,12 @@ def run_architecture_search(
 class ConnectivityOptResult:
 	"""Result from connectivity optimization."""
 
-	initial_fitness: float
+	initial_fitness: float  # Phase 1 baseline (different connectivity seed)
+	phase2_baseline: float  # Trial 0 fitness (fair comparison baseline)
 	final_fitness: float
-	ga_improvement_pct: float
+	ga_improvement_pct: float  # Improvement vs phase2_baseline (fair)
 	ts_improvement_pct: float
-	total_improvement_pct: float
+	total_improvement_pct: float  # Improvement vs Phase 1 baseline
 	ga_iterations: int
 	ts_iterations: int
 	early_stopped: bool
@@ -2067,10 +2068,14 @@ def run_connectivity_optimization(
 	)
 
 	log("[Phase2] Connectivity exploration via re-initialization...")
+	log(f"[Phase2] Note: Phase 1 baseline ({genome_fitness:.4f}) used different connectivity seed")
+	log(f"[Phase2] Trial 0 will establish fair baseline for this seed range...")
 
-	best_fitness = genome_fitness
+	# Will be set after trial 0 for fair comparison
+	# (Phase 1 baseline used different connectivity seed)
+	phase2_baseline = None
+	best_fitness = float('inf')
 	best_seed = seed
-	initial_fitness = genome_fitness
 
 	# Progress tracker for consistent logging
 	tracker = ProgressTracker(
@@ -2126,6 +2131,11 @@ def run_connectivity_optimization(
 
 		trial_fitness = stats['cross_entropy']
 
+		# Establish fair baseline from trial 0
+		if trial == 0:
+			phase2_baseline = trial_fitness
+			log(f"[Phase2] Fair baseline: CE={phase2_baseline:.4f} (Phase 1: {genome_fitness:.4f})")
+
 		# Track best seed (tracker handles logging)
 		if trial_fitness < best_fitness:
 			best_fitness = trial_fitness
@@ -2134,26 +2144,28 @@ def run_connectivity_optimization(
 		# Use tracker for consistent logging (global_best, trial_best, trial_avg)
 		tracker.tick([trial_fitness], generation=trial)
 
-	# Calculate improvements
-	ga_improvement = (initial_fitness - best_fitness) / initial_fitness * 100 if initial_fitness > 0 else 0
-	total_improvement = (genome_fitness - best_fitness) / genome_fitness * 100 if genome_fitness > 0 else 0
+	# Calculate improvements using fair baseline (trial 0)
+	phase2_improvement = (phase2_baseline - best_fitness) / phase2_baseline * 100 if phase2_baseline > 0 else 0
+	vs_phase1_improvement = (genome_fitness - best_fitness) / genome_fitness * 100 if genome_fitness > 0 else 0
 
 	log()
 	log("=" * 60)
 	log("  Phase 2 Complete")
 	log("=" * 60)
-	log(f"  Baseline CE (from Phase 1): {genome_fitness:.4f}")
-	log(f"  After connectivity opt: {best_fitness:.4f}")
-	log(f"  Phase 2 improvement: {ga_improvement:.2f}%")
-	log(f"  Total improvement: {total_improvement:.2f}%")
+	log(f"  Phase 1 baseline CE: {genome_fitness:.4f} (different connectivity seed)")
+	log(f"  Phase 2 baseline CE: {phase2_baseline:.4f} (trial 0, fair comparison)")
+	log(f"  Best found CE: {best_fitness:.4f}")
+	log(f"  Phase 2 improvement (vs trial 0): {phase2_improvement:.2f}%")
+	log(f"  Vs Phase 1 baseline: {vs_phase1_improvement:.2f}%")
 	log(f"  Best random seed: {best_seed}")
 
 	return ConnectivityOptResult(
 		initial_fitness=genome_fitness,
+		phase2_baseline=phase2_baseline,
 		final_fitness=best_fitness,
-		ga_improvement_pct=ga_improvement,
+		ga_improvement_pct=phase2_improvement,  # Fair comparison vs trial 0
 		ts_improvement_pct=0.0,  # TS not applied in this simple version
-		total_improvement_pct=total_improvement,
+		total_improvement_pct=vs_phase1_improvement,
 		ga_iterations=ga_population,
 		ts_iterations=0,
 		early_stopped=False,
