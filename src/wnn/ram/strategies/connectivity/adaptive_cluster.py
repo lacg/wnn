@@ -2197,16 +2197,17 @@ class ConnectivityOptResult:
 	"""Result from connectivity optimization (Phase 2 GA→TS)."""
 
 	initial_fitness: float  # Phase 1 baseline
-	phase2_baseline: float  # Fitness after Phase 2 GA
-	final_fitness: float    # Fitness after Phase 2 TS
-	ga_improvement_pct: float  # Improvement from Phase 2 GA
-	ts_improvement_pct: float  # Improvement from Phase 2 TS
+	phase2_baseline: float  # Fitness after Phase 2a GA
+	final_fitness: float    # Fitness after Phase 2b TS
+	ga_improvement_pct: float  # Improvement from Phase 2a GA
+	ts_improvement_pct: float  # Improvement from Phase 2b TS
 	total_improvement_pct: float  # Total improvement vs Phase 1 baseline
 	ga_iterations: int
 	ts_iterations: int
 	early_stopped: bool
-	initial_accuracy: Optional[float] = None
-	final_accuracy: Optional[float] = None
+	initial_accuracy: Optional[float] = None   # Accuracy at Phase 2 start
+	ga_final_accuracy: Optional[float] = None  # Accuracy after Phase 2a GA
+	final_accuracy: Optional[float] = None     # Accuracy after Phase 2b TS
 	# Population seeding for potential future phases
 	final_population: Optional[List[ClusterGenome]] = None  # From Phase 2 TS
 
@@ -2425,6 +2426,7 @@ def run_connectivity_optimization(
 		ts_iterations=ts_result.iterations_run,
 		early_stopped=ga_result.early_stopped or ts_result.early_stopped,
 		initial_accuracy=ga_result.initial_accuracy,
-		final_accuracy=ts_result.final_accuracy,
+		ga_final_accuracy=ga_result.final_accuracy,  # After Phase 2a GA
+		final_accuracy=ts_result.final_accuracy,     # After Phase 2b TS
 		final_population=ts_result.final_neighbors,  # For potential Phase 3
 	)

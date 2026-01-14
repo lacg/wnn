@@ -342,7 +342,7 @@ def main():
 	comparison.add_stage("Initial (FREQUENCY_SCALED)", ce=ga_result.initial_fitness, accuracy=ga_result.initial_accuracy)
 	comparison.add_stage("After Phase 1a (GA)", ce=ga_result.final_fitness, accuracy=ga_result.final_accuracy)
 	comparison.add_stage("After Phase 1b (TS)", ce=ts_result.final_fitness, accuracy=ts_result.final_accuracy)
-	comparison.add_stage("After Phase 2a (GA)", ce=conn_result.phase2_baseline, accuracy=conn_result.initial_accuracy)
+	comparison.add_stage("After Phase 2a (GA)", ce=conn_result.phase2_baseline, accuracy=conn_result.ga_final_accuracy)
 	comparison.add_stage("After Phase 2b (TS)", ce=conn_result.final_fitness, accuracy=conn_result.final_accuracy)
 	comparison.print(logger)
 	logger()
