@@ -1564,6 +1564,14 @@ class ArchitectureTabuSearch:
 		tabu_list = []  # List of recent move descriptors
 		history = [(0, best_fitness)]
 
+		# Progress tracker for consistent logging
+		tracker = ProgressTracker(
+			logger=self._log,
+			minimize=True,
+			prefix="[ArchTS]",
+			total_generations=cfg.iterations,
+		)
+
 		# Early stopping
 		patience_counter = 0
 		prev_best = best_fitness
@@ -1585,13 +1593,16 @@ class ArchitectureTabuSearch:
 			# Evaluate neighbors
 			if self._batch_evaluator is not None:
 				genomes = [n for n, _ in neighbors]
-				self._log(f"[ArchTS] Iter {iteration + 1}/{cfg.iterations}: Evaluating {len(genomes)} neighbors...")
 				fitness_list = self._batch_evaluator.evaluate_batch(
 					genomes, logger=self._log
 				)
 				evaluated = [(n, f, m) for (n, m), f in zip(neighbors, fitness_list)]
 			else:
 				evaluated = [(n, self.evaluate_fn(n), m) for n, m in neighbors]
+
+			# Log progress using tracker (all neighbor fitness values)
+			fitness_values = [f for _, f, _ in evaluated]
+			tracker.tick(fitness_values, generation=iteration)
 
 			# Select best neighbor
 			evaluated.sort(key=lambda x: x[1])
@@ -1612,11 +1623,6 @@ class ArchitectureTabuSearch:
 				best_fitness = current_fitness
 
 			history.append((iteration + 1, best_fitness))
-
-			# Log progress
-			if (iteration + 1) % 5 == 0:
-				self._log(f"[ArchTS] Iter {iteration + 1}/{cfg.iterations}: "
-						  f"current={current_fitness:.4f}, best={best_fitness:.4f}")
 
 			# Early stopping check
 			improvement_pct = (prev_best - best_fitness) / prev_best * 100 if prev_best > 0 else 0
@@ -2066,6 +2072,14 @@ def run_connectivity_optimization(
 	best_seed = seed
 	initial_fitness = genome_fitness
 
+	# Progress tracker for consistent logging
+	tracker = ProgressTracker(
+		logger=log,
+		minimize=True,  # Lower CE is better
+		prefix="[Phase2]",
+		total_generations=ga_population,
+	)
+
 	# Try different random initializations to explore connectivity space
 	# Each seed creates different random connections for neurons
 	for trial in range(ga_population):
@@ -2112,14 +2126,13 @@ def run_connectivity_optimization(
 
 		trial_fitness = stats['cross_entropy']
 
+		# Track best seed (tracker handles logging)
 		if trial_fitness < best_fitness:
 			best_fitness = trial_fitness
 			best_seed = trial_seed
-			log(f"[Phase2] Trial {trial + 1}/{ga_population}: "
-				f"CE={trial_fitness:.4f} (new best!)")
-		else:
-			log(f"[Phase2] Trial {trial + 1}/{ga_population}: "
-				f"CE={trial_fitness:.4f}, best={best_fitness:.4f}")
+
+		# Use tracker for consistent logging (global_best, trial_best, trial_avg)
+		tracker.tick([trial_fitness], generation=trial)
 
 	# Calculate improvements
 	ga_improvement = (initial_fitness - best_fitness) / initial_fitness * 100 if initial_fitness > 0 else 0
