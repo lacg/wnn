@@ -151,13 +151,13 @@ class ProgressTracker(Generic[T]):
 		if self._total:
 			gen_str = f"Gen {stats.generation + 1}/{self._total}"
 
-		improved_str = " *" if stats.improved else ""
+		improved_str = " (new best!)" if stats.improved else ""
 
 		self._log(
 			f"{self._prefix}[{gen_str}] "
-			f"best={stats.best_global:.4f}, "
-			f"current={stats.best_current:.4f}, "
-			f"avg={stats.avg_current:.4f}{improved_str}"
+			f"global_best={stats.best_global:.4f}, "
+			f"gen_best={stats.best_current:.4f}, "
+			f"gen_avg={stats.avg_current:.4f}{improved_str}"
 		)
 
 	def tick_individual(

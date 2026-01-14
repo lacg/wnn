@@ -647,7 +647,7 @@ class AdaptiveClusterOptimizer:
 		initial_fitness = best_fitness
 
 		history = [(0, best_fitness, sum(fitness) / len(fitness))]
-		self._log(f"[AdaptiveGA] Initial: best={best_fitness:.4f}, avg={sum(fitness)/len(fitness):.4f}")
+		self._log(f"[AdaptiveGA] Initial population complete: best={best_fitness:.4f}, avg={sum(fitness)/len(fitness):.4f}")
 
 		# Early stopping tracking
 		patience_counter = 0
