@@ -18,7 +18,7 @@ import math
 import random
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple
 
 import torch
 from torch import Tensor
@@ -555,6 +555,8 @@ class AdaptiveOptResult:
 	generations_run: int
 	history: List[tuple]  # [(gen, best_fitness, avg_fitness)]
 	early_stopped: bool
+	initial_accuracy: Optional[float] = None  # Optional: evaluated at checkpoint
+	final_accuracy: Optional[float] = None  # Optional: evaluated at checkpoint
 
 
 class RustParallelEvaluator:
@@ -727,7 +729,8 @@ class RustParallelEvaluator:
 				genomes_neurons_flat.extend(g.neurons_per_cluster)
 
 			# Call Rust parallel evaluator for this batch
-			batch_fitness = ram_accelerator.evaluate_genomes_parallel(
+			# Returns list of (CE, accuracy) tuples
+			batch_results = ram_accelerator.evaluate_genomes_parallel(
 				genomes_bits_flat,
 				genomes_neurons_flat,
 				len(batch_genomes),
@@ -744,12 +747,15 @@ class RustParallelEvaluator:
 				self.config.empty_value,
 			)
 
+			# Extract fitness (CE) and accuracy from results
+			batch_fitness = [ce for ce, _ in batch_results]
+			batch_accuracy = [acc for _, acc in batch_results]
 			all_fitness.extend(batch_fitness)
 
 			elapsed = time.time() - start_time
 			if batch_size == 1:
-				# Per-genome timing
-				log(f"{gen_prefix} Genome {batch_end}/{total_genomes}: CE={batch_fitness[0]:.4f} in {elapsed:.1f}s")
+				# Per-genome timing with accuracy
+				log(f"{gen_prefix} Genome {batch_end}/{total_genomes}: CE={batch_fitness[0]:.4f}, Acc={batch_accuracy[0]:.2%} in {elapsed:.1f}s")
 			else:
 				log(f"{gen_prefix} Batch {batch_start//batch_size + 1}/{(total_genomes + batch_size - 1)//batch_size}: "
 					f"{batch_end}/{total_genomes} genomes in {elapsed:.1f}s")
@@ -757,8 +763,31 @@ class RustParallelEvaluator:
 		return all_fitness
 
 	def evaluate_single(self, genome: ClusterGenome) -> float:
-		"""Evaluate a single genome."""
+		"""Evaluate a single genome, returning CE only."""
 		return self.evaluate_batch([genome])[0]
+
+	def evaluate_single_with_accuracy(self, genome: ClusterGenome) -> Tuple[float, float]:
+		"""Evaluate a single genome, returning (CE, accuracy)."""
+		genomes_bits_flat = genome.bits_per_cluster
+		genomes_neurons_flat = genome.neurons_per_cluster
+
+		results = ram_accelerator.evaluate_genomes_parallel(
+			genomes_bits_flat,
+			genomes_neurons_flat,
+			1,  # num_genomes
+			self.config.vocab_size,
+			self._train_data['input_bits'],
+			self._train_data['targets'],
+			self._train_data['negatives'],
+			self._train_data['num_examples'],
+			self._train_data['num_negatives'],
+			self._eval_data['input_bits'],
+			self._eval_data['targets'],
+			self._eval_data['num_examples'],
+			self._total_input_bits,
+			self.config.empty_value,
+		)
+		return results[0]  # (CE, accuracy)
 
 
 class AdaptiveClusterOptimizer:
@@ -905,6 +934,12 @@ class AdaptiveClusterOptimizer:
 		best_fitness = fitness[best_idx]
 		initial_fitness = best_fitness
 
+		# Get initial accuracy (if using Rust evaluator)
+		initial_accuracy = None
+		if self._batch_evaluator is not None:
+			_, initial_accuracy = self._batch_evaluator.evaluate_single_with_accuracy(best_genome)
+			self._log(f"[AdaptiveGA] Initial: CE={initial_fitness:.4f}, Acc={initial_accuracy:.2%}")
+
 		history = [(0, best_fitness, sum(fitness) / len(fitness))]
 		self._log(f"[AdaptiveGA] Initial population complete: best={best_fitness:.4f}, avg={sum(fitness)/len(fitness):.4f}")
 
@@ -973,6 +1008,11 @@ class AdaptiveClusterOptimizer:
 
 			if patience_counter >= cfg.patience:
 				self._log(f"[AdaptiveGA] Early stop at gen {gen + 1}: no improvement for {cfg.patience} gens")
+				# Get final accuracy
+				final_accuracy = None
+				if self._batch_evaluator is not None:
+					_, final_accuracy = self._batch_evaluator.evaluate_single_with_accuracy(best_genome)
+					self._log(f"[AdaptiveGA] Final: CE={best_fitness:.4f}, Acc={final_accuracy:.2%}")
 				return AdaptiveOptResult(
 					best_genome=best_genome,
 					initial_fitness=initial_fitness,
@@ -980,10 +1020,18 @@ class AdaptiveClusterOptimizer:
 					generations_run=gen + 1,
 					history=history,
 					early_stopped=True,
+					initial_accuracy=initial_accuracy,
+					final_accuracy=final_accuracy,
 				)
 
 		self._log(f"[AdaptiveGA] Completed {cfg.generations} generations")
 		tracker.log_summary()
+
+		# Get final accuracy
+		final_accuracy = None
+		if self._batch_evaluator is not None:
+			_, final_accuracy = self._batch_evaluator.evaluate_single_with_accuracy(best_genome)
+			self._log(f"[AdaptiveGA] Final: CE={best_fitness:.4f}, Acc={final_accuracy:.2%}")
 
 		return AdaptiveOptResult(
 			best_genome=best_genome,
@@ -992,6 +1040,8 @@ class AdaptiveClusterOptimizer:
 			generations_run=cfg.generations,
 			history=history,
 			early_stopped=False,
+			initial_accuracy=initial_accuracy,
+			final_accuracy=final_accuracy,
 		)
 
 	def _init_population(self, strategy: GenomeInitStrategy) -> List[ClusterGenome]:
@@ -1381,6 +1431,59 @@ def create_genome_evaluator(
 	return evaluate_genome
 
 
+def evaluate_genome_with_accuracy(
+	genome: ClusterGenome,
+	train_tokens: List[int],
+	eval_tokens: List[int],
+	vocab_size: int = 50257,
+	context_size: int = 4,
+	cluster_order: Optional[List[int]] = None,
+	global_top_k: int = 1000,
+	logger: Optional[Callable[[str], None]] = None,
+) -> Tuple[float, float]:
+	"""
+	Evaluate a genome and return (cross_entropy, accuracy).
+
+	This is for checkpoint evaluation where we need accuracy in addition to CE.
+	Slower than Rust evaluation but provides full metrics.
+
+	Args:
+		genome: ClusterGenome to evaluate
+		train_tokens: Training token sequence
+		eval_tokens: Evaluation token sequence
+		vocab_size: Vocabulary size
+		context_size: Context window size
+		cluster_order: Token-to-cluster mapping order
+		global_top_k: Top-k tokens for clustering
+		logger: Optional logging function
+
+	Returns:
+		Tuple of (cross_entropy, accuracy)
+	"""
+	# Build config (EvaluatorConfig is defined in this file)
+	config = EvaluatorConfig(
+		train_tokens=train_tokens,
+		eval_tokens=eval_tokens,
+		vocab_size=vocab_size,
+		context_size=context_size,
+		cluster_order=cluster_order,
+		cluster_config=genome.cluster_config if genome.cluster_config else AdaptiveClusterConfig(),
+		global_top_k=global_top_k,
+	)
+
+	# Create wrapper and train
+	wrapper = AdaptiveRAMLMWrapper(genome, config)
+	wrapper.train_epoch(train_tokens, global_top_k=global_top_k)
+
+	# Evaluate with full metrics
+	stats = wrapper.evaluate(eval_tokens)
+
+	if logger:
+		logger(f"  Checkpoint eval: CE={stats['cross_entropy']:.4f}, Acc={stats['accuracy']:.2%}")
+
+	return stats['cross_entropy'], stats['accuracy']
+
+
 # =============================================================================
 # High-Level API
 # =============================================================================
@@ -1430,6 +1533,8 @@ class ArchitectureTSResult:
 	iterations_run: int
 	history: List[tuple]  # [(iter, best_fitness)]
 	early_stopped: bool
+	initial_accuracy: Optional[float] = None  # Optional: evaluated at checkpoint
+	final_accuracy: Optional[float] = None  # Optional: evaluated at checkpoint
 
 
 class ArchitectureTabuSearch:
@@ -1563,6 +1668,12 @@ class ArchitectureTabuSearch:
 		best_fitness = current_fitness
 		start_fitness = current_fitness
 
+		# Get initial accuracy (if using Rust evaluator)
+		initial_accuracy = None
+		if self._batch_evaluator is not None:
+			_, initial_accuracy = self._batch_evaluator.evaluate_single_with_accuracy(current)
+			self._log(f"[ArchTS] Initial: CE={start_fitness:.4f}, Acc={initial_accuracy:.2%}")
+
 		tabu_list = []  # List of recent move descriptors
 		history = [(0, best_fitness)]
 
@@ -1637,6 +1748,11 @@ class ArchitectureTabuSearch:
 			if patience_counter >= cfg.patience:
 				self._log(f"[ArchTS] Early stop at iter {iteration + 1}: "
 						  f"no improvement for {cfg.patience} iters")
+				# Get final accuracy
+				final_accuracy = None
+				if self._batch_evaluator is not None:
+					_, final_accuracy = self._batch_evaluator.evaluate_single_with_accuracy(best)
+					self._log(f"[ArchTS] Final: CE={best_fitness:.4f}, Acc={final_accuracy:.2%}")
 				return ArchitectureTSResult(
 					best_genome=best,
 					initial_fitness=start_fitness,
@@ -1644,11 +1760,19 @@ class ArchitectureTabuSearch:
 					iterations_run=iteration + 1,
 					history=history,
 					early_stopped=True,
+					initial_accuracy=initial_accuracy,
+					final_accuracy=final_accuracy,
 				)
 
 		self._log(f"[ArchTS] Completed {cfg.iterations} iterations")
 		improvement = (1 - best_fitness / start_fitness) * 100 if start_fitness > 0 else 0
 		self._log(f"[ArchTS] Final: {best_fitness:.4f} ({improvement:.2f}% improvement)")
+
+		# Get final accuracy
+		final_accuracy = None
+		if self._batch_evaluator is not None:
+			_, final_accuracy = self._batch_evaluator.evaluate_single_with_accuracy(best)
+			self._log(f"[ArchTS] Final accuracy: {final_accuracy:.2%}")
 
 		return ArchitectureTSResult(
 			best_genome=best,
@@ -1657,6 +1781,8 @@ class ArchitectureTabuSearch:
 			iterations_run=cfg.iterations,
 			history=history,
 			early_stopped=False,
+			initial_accuracy=initial_accuracy,
+			final_accuracy=final_accuracy,
 		)
 
 	def _evaluate(self, genome: ClusterGenome) -> float:
@@ -1976,14 +2102,16 @@ class ConnectivityOptResult:
 	"""Result from connectivity optimization."""
 
 	initial_fitness: float  # Phase 1 baseline (different connectivity seed)
-	phase2_baseline: float  # Trial 0 fitness (fair comparison baseline)
+	phase2_baseline: float  # Mean fitness across random connectivity trials
 	final_fitness: float
-	ga_improvement_pct: float  # Improvement vs phase2_baseline (fair)
+	ga_improvement_pct: float  # Improvement vs phase2_baseline
 	ts_improvement_pct: float
 	total_improvement_pct: float  # Improvement vs Phase 1 baseline
 	ga_iterations: int
 	ts_iterations: int
 	early_stopped: bool
+	initial_accuracy: Optional[float] = None  # Optional: evaluated at checkpoint
+	final_accuracy: Optional[float] = None  # Optional: evaluated at checkpoint
 
 
 def run_connectivity_optimization(
@@ -2069,73 +2197,61 @@ def run_connectivity_optimization(
 		# rng=None: each trial gets truly random connectivity
 	)
 
-	log("[Phase2] Connectivity variance analysis...")
+	log("[Phase2] Connectivity variance analysis using Rust accelerator...")
 	log(f"[Phase2] Evaluating architecture {ga_population} times with random connectivity")
 	log(f"[Phase2] Phase 1 baseline: {genome_fitness:.4f}")
 
-	# Track fitness across random connectivity trials
-	all_fitness = []
-	best_fitness = float('inf')
+	# Create Rust evaluator to prepare data
+	evaluator = RustParallelEvaluator(eval_config)
 
-	# Progress tracker for consistent logging
+	log(f"[Phase2] Evaluating {ga_population} connectivity patterns in parallel (Rust)...")
+	import time as _time
+	_start = _time.time()
+
+	# Prepare flat data for Rust - same genome repeated N times
+	# Rust uses from_entropy() for connectivity, so each gets different random connectivity
+	genomes_bits_flat = genome.bits_per_cluster * ga_population
+	genomes_neurons_flat = genome.neurons_per_cluster * ga_population
+
+	# Call Rust evaluator directly to get (CE, accuracy) tuples
+	batch_results = ram_accelerator.evaluate_genomes_parallel(
+		genomes_bits_flat,
+		genomes_neurons_flat,
+		ga_population,
+		eval_config.vocab_size,
+		evaluator._train_data['input_bits'],
+		evaluator._train_data['targets'],
+		evaluator._train_data['negatives'],
+		evaluator._train_data['num_examples'],
+		evaluator._train_data['num_negatives'],
+		evaluator._eval_data['input_bits'],
+		evaluator._eval_data['targets'],
+		evaluator._eval_data['num_examples'],
+		evaluator._total_input_bits,
+		eval_config.empty_value,
+	)
+
+	_elapsed = _time.time() - _start
+	log(f"[Phase2] Completed in {_elapsed:.1f}s ({ga_population / _elapsed:.1f} trials/s)")
+
+	# Extract fitness and accuracy from results
+	all_fitness = [ce for ce, _ in batch_results]
+	all_accuracy = [acc for _, acc in batch_results]
+
+	# Find best
+	best_idx = min(range(len(all_fitness)), key=lambda i: all_fitness[i])
+	best_fitness = all_fitness[best_idx]
+	best_accuracy = all_accuracy[best_idx]
+
+	# Log per-trial results
 	tracker = ProgressTracker(
 		logger=log,
-		minimize=True,  # Lower CE is better
+		minimize=True,
 		prefix="[Phase2]",
 		total_generations=ga_population,
 	)
-
-	# Evaluate the same architecture with different random connectivity
-	# This measures how robust the architecture is to connectivity variance
-	for trial in range(ga_population):
-		# Create layer with truly random connections (no seeding)
-		layer_trial = AdaptiveClusteredRAM.from_genome(
-			genome=genome,
-			total_input_bits=total_input_bits,
-			empty_value=empty_value,
-			rng=None,  # Truly random connectivity
-		)
-
-		# Evaluate with trial connections
-		wrapper = AdaptiveRAMLMWrapper.__new__(AdaptiveRAMLMWrapper)
-		wrapper.genome = genome
-		wrapper.config = eval_config
-		wrapper.vocab_size = vocab_size
-		wrapper.context_size = context_size
-		wrapper.bits_per_token = bits_per_token
-		wrapper.total_input_bits = total_input_bits
-		wrapper.layer = layer_trial
-		wrapper._cluster_order = cluster_order
-		if cluster_order is not None:
-			wrapper._token_to_cluster = {tid: idx for idx, tid in enumerate(cluster_order)}
-		else:
-			wrapper._token_to_cluster = None
-
-		from torch import arange, long
-		wrapper._bit_positions = arange(bits_per_token - 1, -1, -1, dtype=long)
-
-		wrapper.train_epoch(
-			train_tokens,
-			global_top_k=eval_config.global_top_k,
-			batch_size=eval_config.batch_size,
-			verbose=False,
-		)
-
-		stats = wrapper.evaluate(
-			eval_tokens,
-			batch_size=eval_config.eval_batch_size,
-			verbose=False,
-		)
-
-		trial_fitness = stats['cross_entropy']
-		all_fitness.append(trial_fitness)
-
-		# Track best
-		if trial_fitness < best_fitness:
-			best_fitness = trial_fitness
-
-		# Use tracker for consistent logging (global_best, trial_best, trial_avg)
-		tracker.tick([trial_fitness], generation=trial)
+	for trial, (ce, acc) in enumerate(batch_results):
+		tracker.tick([ce], generation=trial, accuracy_values=[acc])
 
 	# Calculate statistics across random connectivity trials
 	import statistics
@@ -2168,4 +2284,6 @@ def run_connectivity_optimization(
 		ga_iterations=ga_population,
 		ts_iterations=0,
 		early_stopped=False,
+		initial_accuracy=None,  # Phase 1 accuracy not available here
+		final_accuracy=best_accuracy,  # Best trial accuracy
 	)

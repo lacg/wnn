@@ -550,6 +550,9 @@ impl GroupMemory {
 ///   empty_value: Value for EMPTY cells (0.0 recommended)
 ///
 /// Returns: [num_genomes] cross-entropy values (lower is better)
+/// Evaluate multiple genomes in parallel, returning (CE, accuracy) for each.
+///
+/// Returns Vec of (cross_entropy, accuracy) tuples - one per genome.
 pub fn evaluate_genomes_parallel(
     genomes_bits_flat: &[usize],
     genomes_neurons_flat: &[usize],
@@ -565,7 +568,7 @@ pub fn evaluate_genomes_parallel(
     num_eval: usize,
     total_input_bits: usize,
     empty_value: f32,
-) -> Vec<f64> {
+) -> Vec<(f64, f64)> {
     use rand::prelude::*;
     use rand::SeedableRng;
 
@@ -655,10 +658,10 @@ pub fn evaluate_genomes_parallel(
         });
 
         // Evaluate this genome using hybrid memory (PARALLEL across examples)
-        // Each example computes its own cross-entropy contribution
+        // Each example computes its own cross-entropy contribution AND correctness
         let epsilon = 1e-10f64;
 
-        let total_ce: f64 = (0..num_eval).into_par_iter().map(|ex_idx| {
+        let (total_ce, total_correct): (f64, u64) = (0..num_eval).into_par_iter().map(|ex_idx| {
             let input_start = ex_idx * total_input_bits;
             let input_bits = &eval_input_bits[input_start..input_start + total_input_bits];
             let target_idx = eval_targets[ex_idx] as usize;
@@ -689,16 +692,28 @@ pub fn evaluate_genomes_parallel(
                 }
             }
 
+            // Find prediction (argmax) for accuracy
+            let predicted = scores.iter().enumerate()
+                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+                .map(|(idx, _)| idx)
+                .unwrap_or(0);
+            let correct: u64 = if predicted == target_idx { 1 } else { 0 };
+
             // Softmax and cross-entropy for this example
             let max_score = scores.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
             let exp_scores: Vec<f64> = scores.iter().map(|&s| (s - max_score).exp()).collect();
             let sum_exp: f64 = exp_scores.iter().sum();
 
             let target_prob = exp_scores[target_idx] / sum_exp;
-            -(target_prob + epsilon).ln()
-        }).sum();
+            let ce = -(target_prob + epsilon).ln();
 
-        total_ce / num_eval as f64
+            (ce, correct)
+        }).reduce(|| (0.0, 0), |(ce1, c1), (ce2, c2)| (ce1 + ce2, c1 + c2));
+
+        let avg_ce = total_ce / num_eval as f64;
+        let accuracy = total_correct as f64 / num_eval as f64;
+
+        (avg_ce, accuracy)
     }).collect()
 }
 

@@ -27,6 +27,8 @@ class ProgressStats:
 	avg_current: float
 	worst_current: float
 	improved: bool = False
+	best_global_accuracy: Optional[float] = None  # Accuracy at global best
+	best_current_accuracy: Optional[float] = None  # Accuracy at current best
 
 
 class ProgressTracker(Generic[T]):
@@ -78,6 +80,7 @@ class ProgressTracker(Generic[T]):
 
 		# State
 		self._best_global: Optional[float] = None
+		self._best_global_accuracy: Optional[float] = None
 		self._best_generation: int = 0
 		self._history: List[ProgressStats] = []
 
@@ -86,6 +89,7 @@ class ProgressTracker(Generic[T]):
 		fitness_values: List[float],
 		generation: Optional[int] = None,
 		log: bool = True,
+		accuracy_values: Optional[List[float]] = None,
 	) -> ProgressStats:
 		"""
 		Record a tick (generation) of fitness values.
@@ -94,6 +98,7 @@ class ProgressTracker(Generic[T]):
 			fitness_values: List of fitness values for current population
 			generation: Current generation number (auto-incremented if None)
 			log: Whether to log progress
+			accuracy_values: Optional list of accuracy values (same order as fitness)
 
 		Returns:
 			ProgressStats for this tick
@@ -105,26 +110,36 @@ class ProgressTracker(Generic[T]):
 
 		# Calculate current stats
 		if self._minimize:
-			best_current = min(fitness_values)
+			best_idx = min(range(len(fitness_values)), key=lambda i: fitness_values[i])
+			best_current = fitness_values[best_idx]
 			worst_current = max(fitness_values)
 		else:
-			best_current = max(fitness_values)
+			best_idx = max(range(len(fitness_values)), key=lambda i: fitness_values[i])
+			best_current = fitness_values[best_idx]
 			worst_current = min(fitness_values)
 
 		avg_current = sum(fitness_values) / len(fitness_values)
+
+		# Get accuracy for best current (if available)
+		best_current_accuracy = None
+		if accuracy_values is not None and len(accuracy_values) == len(fitness_values):
+			best_current_accuracy = accuracy_values[best_idx]
 
 		# Update global best
 		improved = False
 		if self._best_global is None:
 			self._best_global = best_current
+			self._best_global_accuracy = best_current_accuracy
 			self._best_generation = gen
 			improved = True
 		elif self._minimize and best_current < self._best_global:
 			self._best_global = best_current
+			self._best_global_accuracy = best_current_accuracy
 			self._best_generation = gen
 			improved = True
 		elif not self._minimize and best_current > self._best_global:
 			self._best_global = best_current
+			self._best_global_accuracy = best_current_accuracy
 			self._best_generation = gen
 			improved = True
 
@@ -136,6 +151,8 @@ class ProgressTracker(Generic[T]):
 			avg_current=avg_current,
 			worst_current=worst_current,
 			improved=improved,
+			best_global_accuracy=self._best_global_accuracy,
+			best_current_accuracy=best_current_accuracy,
 		)
 		self._history.append(stats)
 
@@ -153,9 +170,14 @@ class ProgressTracker(Generic[T]):
 
 		improved_str = " (new best!)" if stats.improved else ""
 
+		# Include accuracy if available
+		acc_str = ""
+		if stats.best_global_accuracy is not None:
+			acc_str = f", acc={stats.best_global_accuracy:.2%}"
+
 		self._log(
 			f"{self._prefix}[{gen_str}] "
-			f"global_best={stats.best_global:.4f}, "
+			f"best={stats.best_global:.4f}{acc_str}, "
 			f"gen_best={stats.best_current:.4f}, "
 			f"gen_avg={stats.avg_current:.4f}{improved_str}"
 		)
@@ -215,6 +237,8 @@ class ProgressTracker(Generic[T]):
 			"generations": len(self._history),
 			"initial_fitness": first.best_current,
 			"final_fitness": last.best_global,
+			"initial_accuracy": first.best_current_accuracy,
+			"final_accuracy": last.best_global_accuracy,
 			"improvement_pct": improvement,
 			"best_generation": self._best_generation,
 			"improvements": sum(1 for s in self._history if s.improved),
@@ -229,8 +253,15 @@ class ProgressTracker(Generic[T]):
 
 		self._log(f"{self._prefix}Summary:")
 		self._log(f"  Generations: {s['generations']}")
-		self._log(f"  Initial: {s['initial_fitness']:.4f}")
-		self._log(f"  Final: {s['final_fitness']:.4f}")
+
+		# Initial with optional accuracy
+		init_acc = f" (acc={s['initial_accuracy']:.2%})" if s.get('initial_accuracy') is not None else ""
+		self._log(f"  Initial: {s['initial_fitness']:.4f}{init_acc}")
+
+		# Final with optional accuracy
+		final_acc = f" (acc={s['final_accuracy']:.2%})" if s.get('final_accuracy') is not None else ""
+		self._log(f"  Final: {s['final_fitness']:.4f}{final_acc}")
+
 		self._log(f"  Improvement: {s['improvement_pct']:.2f}%")
 		self._log(f"  Best at generation: {s['best_generation'] + 1}")
 		self._log(f"  Total improvements: {s['improvements']}")

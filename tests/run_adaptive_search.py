@@ -28,8 +28,10 @@ from wnn.ram.strategies.connectivity.adaptive_cluster import (
 	run_architecture_search,
 	run_architecture_tabu_search,
 	run_connectivity_optimization,
+	evaluate_genome_with_accuracy,
 	GenomeInitStrategy,
 )
+from wnn.ram.core.reporting import OptimizationResultsTable
 
 
 def load_wikitext2(logger: Logger, train_limit: int = None, val_limit: int = None):
@@ -306,40 +308,15 @@ def main():
 	logger(f"    Total memory: {stats['total_memory_cells']:,} cells")
 	logger()
 
-	# Comparison table (for easy comparison with previous experiments)
+	# Comparison table using unified OptimizationResultsTable (with accuracy)
 	logger()
-	logger.header("COMPARISON TABLE (Validation)")
-	logger("=" * 70)
-	logger(f"{'Phase':<30} {'CE':>12} {'PPL':>12} {'Improvement':>12}")
-	logger("-" * 70)
-
-	initial_ce = ga_result.initial_fitness
-	initial_ppl = math.exp(initial_ce)
-	logger(f"{'Initial (FREQUENCY_SCALED)':<30} {initial_ce:>12.4f} {initial_ppl:>12.1f} {'-':>12}")
-
-	phase1a_ce = ga_result.final_fitness
-	phase1a_ppl = math.exp(phase1a_ce)
-	phase1a_imp = (1 - phase1a_ce / initial_ce) * 100
-	logger(f"{'After Phase 1a (GA)':<30} {phase1a_ce:>12.4f} {phase1a_ppl:>12.1f} {phase1a_imp:>11.2f}%")
-
-	phase1b_ce = ts_result.final_fitness
-	phase1b_ppl = math.exp(phase1b_ce)
-	phase1b_imp = (1 - phase1b_ce / initial_ce) * 100
-	logger(f"{'After Phase 1b (TS)':<30} {phase1b_ce:>12.4f} {phase1b_ppl:>12.1f} {phase1b_imp:>11.2f}%")
-
-	# Phase 2 variance analysis (mean across random connectivity)
-	phase2_mean_ce = conn_result.phase2_baseline
-	phase2_mean_ppl = math.exp(phase2_mean_ce)
-	logger(f"{'Phase 2 mean (random conn.)':<30} {phase2_mean_ce:>12.4f} {phase2_mean_ppl:>12.1f} {'(variance)':>12}")
-
-	final_ce = conn_result.final_fitness
-	final_ppl = math.exp(final_ce)
-	total_imp = (1 - final_ce / initial_ce) * 100
-	logger(f"{'Phase 2 best (random conn.)':<30} {final_ce:>12.4f} {final_ppl:>12.1f} {total_imp:>11.2f}%")
-
-	logger("-" * 70)
-	logger(f"{'Total Improvement':<30} {'':>12} {'':>12} {total_imp:>11.2f}%")
-	logger("=" * 70)
+	comparison = OptimizationResultsTable("Validation")
+	comparison.add_stage("Initial (FREQUENCY_SCALED)", ce=ga_result.initial_fitness, accuracy=ga_result.initial_accuracy)
+	comparison.add_stage("After Phase 1a (GA)", ce=ga_result.final_fitness, accuracy=ga_result.final_accuracy)
+	comparison.add_stage("After Phase 1b (TS)", ce=ts_result.final_fitness, accuracy=ts_result.final_accuracy)
+	comparison.add_stage("Phase 2 mean (random conn.)", ce=conn_result.phase2_baseline, note="(variance)")
+	comparison.add_stage("Phase 2 best (random conn.)", ce=conn_result.final_fitness, accuracy=conn_result.final_accuracy)
+	comparison.print(logger)
 	logger()
 	logger(f"  Results saved to: {genome_path}")
 	logger.separator("=")

@@ -2533,7 +2533,8 @@ fn evaluate_genomes_parallel<'py>(
     num_eval: usize,
     total_input_bits: usize,
     empty_value: f32,
-) -> PyResult<Vec<f64>> {
+) -> PyResult<Vec<(f64, f64)>> {
+    // Returns Vec of (cross_entropy, accuracy) tuples - one per genome
     // Extract data before allow_threads
     let train_input_slice = train_input_bits.as_slice().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Train input not contiguous: {}", e))

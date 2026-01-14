@@ -1,11 +1,14 @@
 """
 Reporting utilities for RAM model evaluation results.
 
-Provides reusable table formatting for per-tier results display.
+Provides reusable table formatting for:
+- Per-tier results display (TierResultsTable)
+- Optimization progress comparison (OptimizationResultsTable)
 """
 
-from dataclasses import dataclass
-from typing import Optional, Callable
+from dataclasses import dataclass, field
+from typing import Optional, Callable, List
+import math
 
 
 @dataclass
@@ -201,6 +204,197 @@ class TierResultsTable:
 			f"{'TOTAL':<8} {total_clusters:>10,} {'':>8} {'':>6} "
 			f"{'100.0':>7}% {self.overall_ppl:>12.1f} {self.overall_accuracy:>9.2%}"
 		)
+
+		return lines
+
+	def print(self, log_fn: Optional[Callable[[str], None]] = None) -> None:
+		"""
+		Print the formatted table.
+
+		Args:
+			log_fn: Optional logging function (defaults to print)
+		"""
+		output = log_fn or print
+		for line in self.format():
+			output(line)
+
+	def __str__(self) -> str:
+		"""Return table as a single string with newlines."""
+		return "\n".join(self.format())
+
+
+# =============================================================================
+# Optimization Results Table
+# =============================================================================
+
+@dataclass
+class OptimizationStage:
+	"""A single stage/phase in optimization progress."""
+	name: str
+	ce: float
+	accuracy: Optional[float] = None
+	note: Optional[str] = None  # e.g., "(baseline)", "(variance)"
+
+	@property
+	def ppl(self) -> float:
+		"""Perplexity = exp(cross_entropy)."""
+		return math.exp(self.ce)
+
+
+class OptimizationResultsTable:
+	"""
+	Formats optimization progress results into a comparison table.
+
+	Works for both:
+	- Phase-based optimization (Initial → Phase 1a → 1b → 2)
+	- Tier-based comparison (per-tier metrics before/after)
+
+	Usage:
+		# Phase-based comparison
+		table = OptimizationResultsTable("Validation")
+		table.add_stage("Initial", ce=10.55, accuracy=0.05)
+		table.add_stage("After GA", ce=10.50, accuracy=0.055)
+		table.add_stage("After TS", ce=10.48, accuracy=0.056)
+		table.print(logger)
+
+		# With notes
+		table.add_stage("Phase 2 mean", ce=10.52, note="(variance)")
+	"""
+
+	WIDTH = 78
+
+	def __init__(self, title: str = "Optimization Results"):
+		"""
+		Initialize the table.
+
+		Args:
+			title: Table title (e.g., "Validation", "Test", "Architecture Search")
+		"""
+		self.title = title
+		self.stages: List[OptimizationStage] = []
+
+	def add_stage(
+		self,
+		name: str,
+		ce: float,
+		accuracy: Optional[float] = None,
+		note: Optional[str] = None,
+	) -> "OptimizationResultsTable":
+		"""
+		Add a stage to the table.
+
+		Args:
+			name: Stage name (e.g., "Initial", "After Phase 1a")
+			ce: Cross-entropy at this stage
+			accuracy: Optional accuracy at this stage
+			note: Optional note (e.g., "(baseline)", "(variance)")
+
+		Returns:
+			Self for method chaining
+		"""
+		self.stages.append(OptimizationStage(
+			name=name,
+			ce=ce,
+			accuracy=accuracy,
+			note=note,
+		))
+		return self
+
+	@classmethod
+	def from_phases(
+		cls,
+		title: str,
+		phases: List[dict],
+	) -> "OptimizationResultsTable":
+		"""
+		Create table from a list of phase dicts.
+
+		Each dict should have: name, ce, and optionally accuracy, note.
+
+		Args:
+			title: Table title
+			phases: List of phase dicts
+
+		Returns:
+			OptimizationResultsTable instance
+		"""
+		table = cls(title)
+		for phase in phases:
+			table.add_stage(
+				name=phase['name'],
+				ce=phase['ce'],
+				accuracy=phase.get('accuracy'),
+				note=phase.get('note'),
+			)
+		return table
+
+	def format(self) -> List[str]:
+		"""
+		Format the table as a list of strings.
+
+		Returns:
+			List of formatted lines (without newlines)
+		"""
+		lines = []
+
+		# Check if we have accuracy data
+		has_accuracy = any(s.accuracy is not None for s in self.stages)
+
+		# Title and header
+		lines.append(f"{self.title} Results:")
+		lines.append("=" * self.WIDTH)
+
+		if has_accuracy:
+			lines.append(
+				f"{'Stage':<30} {'CE':>10} {'PPL':>12} {'Accuracy':>10} {'Improvement':>12}"
+			)
+		else:
+			lines.append(
+				f"{'Stage':<30} {'CE':>10} {'PPL':>12} {'Improvement':>12}"
+			)
+		lines.append("-" * self.WIDTH)
+
+		# Data rows
+		initial_ce = self.stages[0].ce if self.stages else None
+
+		for i, stage in enumerate(self.stages):
+			# Calculate improvement vs initial
+			if i == 0 or initial_ce is None:
+				improvement_str = "-"
+			else:
+				improvement_pct = (1 - stage.ce / initial_ce) * 100
+				improvement_str = f"{improvement_pct:>+.2f}%"
+
+			# Stage name with optional note
+			name = stage.name
+			if stage.note:
+				name = f"{name} {stage.note}"
+
+			# Format row
+			if has_accuracy:
+				acc_str = f"{stage.accuracy:>9.2%}" if stage.accuracy is not None else f"{'N/A':>10}"
+				lines.append(
+					f"{name:<30} {stage.ce:>10.4f} {stage.ppl:>12.1f} {acc_str} {improvement_str:>12}"
+				)
+			else:
+				lines.append(
+					f"{name:<30} {stage.ce:>10.4f} {stage.ppl:>12.1f} {improvement_str:>12}"
+				)
+
+		# Total row
+		lines.append("-" * self.WIDTH)
+		if self.stages and initial_ce is not None:
+			final = self.stages[-1]
+			total_improvement = (1 - final.ce / initial_ce) * 100
+			if has_accuracy:
+				lines.append(
+					f"{'Total Improvement':<30} {'':>10} {'':>12} {'':>10} {total_improvement:>+11.2f}%"
+				)
+			else:
+				lines.append(
+					f"{'Total Improvement':<30} {'':>10} {'':>12} {total_improvement:>+11.2f}%"
+				)
+		lines.append("=" * self.WIDTH)
 
 		return lines
 
