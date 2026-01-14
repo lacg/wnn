@@ -1585,7 +1585,10 @@ class ArchitectureTabuSearch:
 			# Evaluate neighbors
 			if self._batch_evaluator is not None:
 				genomes = [n for n, _ in neighbors]
-				fitness_list = self._batch_evaluator.evaluate_batch(genomes)
+				self._log(f"[ArchTS] Iter {iteration + 1}/{cfg.iterations}: Evaluating {len(genomes)} neighbors...")
+				fitness_list = self._batch_evaluator.evaluate_batch(
+					genomes, logger=self._log
+				)
 				evaluated = [(n, f, m) for (n, m), f in zip(neighbors, fitness_list)]
 			else:
 				evaluated = [(n, self.evaluate_fn(n), m) for n, m in neighbors]
