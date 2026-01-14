@@ -201,21 +201,32 @@ def main():
 		vocab_size=vocab_size,
 		context_size=context_size,
 		cluster_order=cluster_order,
+		token_frequencies=token_frequencies,
 
-		# GA parameters for connectivity exploration
-		ga_population=20,        # Random seed trials
+		# GA parameters (Phase 2a)
+		ga_population=20,
 		ga_generations=30,
 		ga_patience=5,
 
-		# TS parameters for connectivity refinement
+		# TS parameters (Phase 2b)
 		ts_iterations=50,
 		ts_neighbors=30,
 		ts_patience=5,
+
+		# Architecture bounds (same as Phase 1)
+		min_bits=min_bits,
+		max_bits=max_bits,
+		min_neurons=min_neurons,
+		max_neurons=max_neurons,
+		phase=2,
 
 		# Other
 		empty_value=empty_value,
 		seed=seed + 2000,
 		logger=logger,
+
+		# Population seeding: use TS's final neighbors as initial population
+		initial_population=ts_result.final_neighbors,
 	)
 
 	# =========================================================================
@@ -249,18 +260,21 @@ def main():
 			"iterations": ts_result.iterations_run,
 			"early_stopped": ts_result.early_stopped,
 		},
-		# Phase 2: Connectivity Variance Analysis
+		# Phase 2: GA→TS Architecture Refinement
 		"phase2": {
-			"phase1_baseline": conn_result.initial_fitness,
-			"mean_fitness": conn_result.phase2_baseline,  # Mean across random connectivity
-			"best_fitness": conn_result.final_fitness,    # Best across random connectivity
-			"variance_reduction_pct": conn_result.ga_improvement_pct,
-			"trials": conn_result.ga_iterations,
+			"phase1b_baseline": conn_result.initial_fitness,
+			"after_ga": conn_result.phase2_baseline,
+			"after_ts": conn_result.final_fitness,
+			"ga_improvement_pct": conn_result.ga_improvement_pct,
+			"ts_improvement_pct": conn_result.ts_improvement_pct,
+			"total_improvement_pct": conn_result.total_improvement_pct,
+			"ga_generations": conn_result.ga_iterations,
+			"ts_iterations": conn_result.ts_iterations,
 		},
-		# Final genome
+		# Final genome (from Phase 2 TS)
 		"genome": {
-			"bits_per_cluster": ts_result.best_genome.bits_per_cluster,
-			"neurons_per_cluster": ts_result.best_genome.neurons_per_cluster,
+			"bits_per_cluster": conn_result.final_population[0].bits_per_cluster if conn_result.final_population else ts_result.best_genome.bits_per_cluster,
+			"neurons_per_cluster": conn_result.final_population[0].neurons_per_cluster if conn_result.final_population else ts_result.best_genome.neurons_per_cluster,
 		},
 		"stats": ts_result.best_genome.stats(),
 		# History from all phases
@@ -295,17 +309,28 @@ def main():
 	logger(f"    Improvement: {ts_improvement:.2f}%")
 	logger()
 
-	# Phase 2 results (connectivity variance analysis)
-	logger("  Phase 2 (Connectivity Variance Analysis):")
-	logger(f"    Trials: {conn_result.ga_iterations} random connectivity patterns")
-	logger(f"    Mean CE: {conn_result.phase2_baseline:.4f}")
-	logger(f"    Best CE: {conn_result.final_fitness:.4f}")
-	logger(f"    Variance reduction: {conn_result.ga_improvement_pct:.2f}%")
+	# Phase 2 results (GA→TS)
+	logger("  Phase 2a (GA Architecture Refinement):")
+	logger(f"    Generations: {conn_result.ga_iterations}")
+	logger(f"    Input CE: {conn_result.initial_fitness:.4f}")
+	logger(f"    Output CE: {conn_result.phase2_baseline:.4f}")
+	logger(f"    Improvement: {conn_result.ga_improvement_pct:.2f}%")
 	logger()
 
-	# Best Architecture stats
-	stats = ts_result.best_genome.stats()
-	logger("  Best Architecture:")
+	logger("  Phase 2b (TS Architecture Refinement):")
+	logger(f"    Iterations: {conn_result.ts_iterations}")
+	logger(f"    Input CE: {conn_result.phase2_baseline:.4f}")
+	logger(f"    Output CE: {conn_result.final_fitness:.4f}")
+	logger(f"    Improvement: {conn_result.ts_improvement_pct:.2f}%")
+	logger()
+
+	logger(f"  Total Phase 2 improvement: {conn_result.total_improvement_pct:.2f}%")
+	logger()
+
+	# Best Architecture stats (from Phase 2 TS best genome)
+	best_genome = conn_result.final_population[0] if conn_result.final_population else ts_result.best_genome
+	stats = best_genome.stats()
+	logger("  Best Architecture (after all phases):")
 	logger(f"    Bits: [{stats['min_bits']}, {stats['max_bits']}], mean: {stats['mean_bits']:.1f}")
 	logger(f"    Neurons: [{stats['min_neurons']}, {stats['max_neurons']}], mean: {stats['mean_neurons']:.1f}")
 	logger(f"    Total memory: {stats['total_memory_cells']:,} cells")
@@ -317,8 +342,8 @@ def main():
 	comparison.add_stage("Initial (FREQUENCY_SCALED)", ce=ga_result.initial_fitness, accuracy=ga_result.initial_accuracy)
 	comparison.add_stage("After Phase 1a (GA)", ce=ga_result.final_fitness, accuracy=ga_result.final_accuracy)
 	comparison.add_stage("After Phase 1b (TS)", ce=ts_result.final_fitness, accuracy=ts_result.final_accuracy)
-	comparison.add_stage("Phase 2 mean (random conn.)", ce=conn_result.phase2_baseline, note="(variance)")
-	comparison.add_stage("Phase 2 best (random conn.)", ce=conn_result.final_fitness, accuracy=conn_result.final_accuracy)
+	comparison.add_stage("After Phase 2a (GA)", ce=conn_result.phase2_baseline, accuracy=conn_result.initial_accuracy)
+	comparison.add_stage("After Phase 2b (TS)", ce=conn_result.final_fitness, accuracy=conn_result.final_accuracy)
 	comparison.print(logger)
 	logger()
 	logger(f"  Results saved to: {genome_path}")

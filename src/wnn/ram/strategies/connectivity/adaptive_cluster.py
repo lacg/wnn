@@ -2194,19 +2194,21 @@ def run_architecture_search(
 
 @dataclass
 class ConnectivityOptResult:
-	"""Result from connectivity optimization."""
+	"""Result from connectivity optimization (Phase 2 GA→TS)."""
 
-	initial_fitness: float  # Phase 1 baseline (different connectivity seed)
-	phase2_baseline: float  # Mean fitness across random connectivity trials
-	final_fitness: float
-	ga_improvement_pct: float  # Improvement vs phase2_baseline
-	ts_improvement_pct: float
-	total_improvement_pct: float  # Improvement vs Phase 1 baseline
+	initial_fitness: float  # Phase 1 baseline
+	phase2_baseline: float  # Fitness after Phase 2 GA
+	final_fitness: float    # Fitness after Phase 2 TS
+	ga_improvement_pct: float  # Improvement from Phase 2 GA
+	ts_improvement_pct: float  # Improvement from Phase 2 TS
+	total_improvement_pct: float  # Total improvement vs Phase 1 baseline
 	ga_iterations: int
 	ts_iterations: int
 	early_stopped: bool
-	initial_accuracy: Optional[float] = None  # Optional: evaluated at checkpoint
-	final_accuracy: Optional[float] = None  # Optional: evaluated at checkpoint
+	initial_accuracy: Optional[float] = None
+	final_accuracy: Optional[float] = None
+	# Population seeding for potential future phases
+	final_population: Optional[List[ClusterGenome]] = None  # From Phase 2 TS
 
 
 def run_connectivity_optimization(
@@ -2217,68 +2219,79 @@ def run_connectivity_optimization(
 	vocab_size: int = 50257,
 	context_size: int = 4,
 	cluster_order: Optional[List[int]] = None,
-	# GA parameters for connectivity
+	token_frequencies: Optional[List[int]] = None,
+	# GA parameters
 	ga_population: int = 20,
 	ga_generations: int = 30,
 	ga_patience: int = 5,
-	# TS parameters for connectivity
+	# TS parameters
 	ts_iterations: int = 50,
 	ts_neighbors: int = 30,
 	ts_patience: int = 5,
+	# Architecture bounds (same as Phase 1)
+	min_bits: int = 8,
+	max_bits: int = 25,
+	min_neurons: int = 3,
+	max_neurons: int = 33,
+	phase: int = 2,
 	# Other
 	empty_value: float = 0.0,
 	seed: int = 42,
 	logger: Optional[Callable[[str], None]] = None,
+	# Population seeding from Phase 1b
+	initial_population: Optional[List[ClusterGenome]] = None,
 ) -> ConnectivityOptResult:
 	"""
-	Run Phase 2: Optimize connectivity patterns for a fixed architecture.
+	Run Phase 2: Continue architecture optimization with GA→TS.
 
-	After architecture (bits, neurons per cluster) is locked from Phase 1a/1b,
-	this phase optimizes which input bits each neuron observes.
+	Continues optimizing architecture from Phase 1b using GA followed by TS.
+	Each evaluation uses random connectivity, so this effectively finds
+	architectures robust to connectivity variations.
 
 	The pipeline:
-	1. Initialize model with genome's architecture
-	2. Run GA to explore connectivity space
-	3. Run TS to refine best GA solution
+	1. Phase 2a (GA): Evolve architecture with initial_population from Phase 1b
+	2. Phase 2b (TS): Refine best GA solution with GA's population as neighbors
 
 	Args:
-		genome: Fixed architecture from Phase 1
-		genome_fitness: Baseline fitness before connectivity optimization
+		genome: Best architecture from Phase 1b (used if no initial_population)
+		genome_fitness: Baseline fitness from Phase 1b
 		train_tokens: Training data
 		eval_tokens: Evaluation data
 		vocab_size: Vocabulary size
 		context_size: Context window
 		cluster_order: Token ordering by frequency
+		token_frequencies: Token occurrence counts (for genome generation)
 		ga_population: GA population size
 		ga_generations: GA generations
 		ga_patience: GA early stop patience
 		ts_iterations: TS iterations
 		ts_neighbors: TS neighbors per iteration
 		ts_patience: TS early stop patience
+		min_bits, max_bits: Bits bounds
+		min_neurons, max_neurons: Neurons bounds
+		phase: Optimization phase (1=bits only, 2=bits+neurons)
 		empty_value: EMPTY cell value
 		seed: Random seed
 		logger: Logging function
+		initial_population: Seed population from Phase 1b's final_neighbors
 
 	Returns:
-		ConnectivityOptResult with optimization statistics
+		ConnectivityOptResult with optimization statistics and final_population
 	"""
-	from wnn.ram.core import AdaptiveClusteredRAM, bits_needed
-
 	log = logger or print
 
 	log()
 	log("=" * 60)
-	log("  Phase 2: Connectivity Optimization")
+	log("  Phase 2: Architecture Refinement (GA→TS)")
 	log("=" * 60)
-	log(f"  Architecture fitness: {genome_fitness:.4f}")
-	log(f"  GA: pop={ga_population}, gens={ga_generations}")
-	log(f"  TS: iters={ts_iterations}, neighbors={ts_neighbors}")
+	log(f"  Phase 1b fitness: {genome_fitness:.4f}")
+	log(f"  Phase 2a (GA): pop={ga_population}, gens={ga_generations}")
+	log(f"  Phase 2b (TS): iters={ts_iterations}, neighbors={ts_neighbors}")
+	if initial_population:
+		log(f"  Seed population: {len(initial_population)} genomes from Phase 1b")
 	log()
 
-	bits_per_token = bits_needed(vocab_size)
-	total_input_bits = context_size * bits_per_token
-
-	# Create evaluator config (no rng = truly random connectivity each time)
+	# Create evaluator config
 	eval_config = EvaluatorConfig(
 		train_tokens=train_tokens,
 		eval_tokens=eval_tokens,
@@ -2289,123 +2302,129 @@ def run_connectivity_optimization(
 		empty_value=empty_value,
 		eval_batch_size=1000,
 		cluster_order=cluster_order,
-		# rng=None: each trial gets truly random connectivity
 	)
 
-	log("[Phase2] Connectivity variance analysis using Rust accelerator...")
-	log(f"[Phase2] Evaluating architecture {ga_population} times with random connectivity")
-	log(f"[Phase2] Phase 1 baseline: {genome_fitness:.4f}")
+	# Create evaluation function
+	evaluate_fn = create_genome_evaluator(eval_config, verbose=False)
 
-	# Create Rust evaluator to prepare data
-	evaluator = RustParallelEvaluator(eval_config)
-
-	log(f"[Phase2] Evaluating {ga_population} connectivity patterns in parallel (Rust)...")
-
-	import sys
-	import time as _time
-	import threading
-
-	# Prepare flat data for Rust - same genome repeated N times
-	# Rust uses from_entropy() for connectivity, so each gets different random connectivity
-	genomes_bits_flat = genome.bits_per_cluster * ga_population
-	genomes_neurons_flat = genome.neurons_per_cluster * ga_population
-
-	# Progress indicator thread
-	_done = threading.Event()
-	_start = _time.time()
-
-	def _progress_indicator():
-		"""Show progress while Rust evaluation runs."""
-		spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
-		idx = 0
-		while not _done.is_set():
-			elapsed = _time.time() - _start
-			sys.stdout.write(f"\r[Phase2] {spinner[idx]} Running Rust evaluation... {elapsed:.1f}s")
-			sys.stdout.flush()
-			idx = (idx + 1) % len(spinner)
-			_done.wait(0.1)  # Update every 100ms
-
-	# Start progress thread
-	progress_thread = threading.Thread(target=_progress_indicator, daemon=True)
-	progress_thread.start()
-
+	# Create Rust parallel evaluator
+	batch_evaluator = None
 	try:
-		# Call Rust evaluator directly to get (CE, accuracy) tuples
-		batch_results = ram_accelerator.evaluate_genomes_parallel(
-			genomes_bits_flat,
-			genomes_neurons_flat,
-			ga_population,
-			eval_config.vocab_size,
-			evaluator._train_data['input_bits'],
-			evaluator._train_data['targets'],
-			evaluator._train_data['negatives'],
-			evaluator._train_data['num_examples'],
-			evaluator._train_data['num_negatives'],
-			evaluator._eval_data['input_bits'],
-			evaluator._eval_data['targets'],
-			evaluator._eval_data['num_examples'],
-			evaluator._total_input_bits,
-			eval_config.empty_value,
-		)
-	finally:
-		_done.set()
-		progress_thread.join(timeout=0.5)
-		sys.stdout.write("\r" + " " * 60 + "\r")  # Clear progress line
-		sys.stdout.flush()
+		batch_evaluator = RustParallelEvaluator(eval_config)
+		log("[Phase2] Using Rust parallel evaluator")
+	except Exception as e:
+		log(f"[Phase2] Using Python evaluator ({e})")
 
-	_elapsed = _time.time() - _start
-	log(f"[Phase2] Completed in {_elapsed:.1f}s ({ga_population / _elapsed:.1f} trials/s)")
-
-	# Extract fitness and accuracy from results
-	all_fitness = [ce for ce, _ in batch_results]
-	all_accuracy = [acc for _, acc in batch_results]
-
-	# Find best
-	best_idx = min(range(len(all_fitness)), key=lambda i: all_fitness[i])
-	best_fitness = all_fitness[best_idx]
-	best_accuracy = all_accuracy[best_idx]
-
-	# Log per-trial results
-	tracker = ProgressTracker(
-		logger=log,
-		minimize=True,
-		prefix="[Phase2]",
-		total_generations=ga_population,
+	# Create configs
+	cluster_config = AdaptiveClusterConfig(
+		min_bits=min_bits,
+		max_bits=max_bits,
+		min_neurons=min_neurons,
+		max_neurons=max_neurons,
+		phase=phase,
 	)
-	for trial, (ce, acc) in enumerate(batch_results):
-		tracker.tick([ce], generation=trial, accuracy_values=[acc])
 
-	# Calculate statistics across random connectivity trials
-	import statistics
-	mean_fitness = statistics.mean(all_fitness)
-	std_fitness = statistics.stdev(all_fitness) if len(all_fitness) > 1 else 0.0
-	min_fitness = min(all_fitness)
-	max_fitness = max(all_fitness)
+	# =========================================================================
+	# Phase 2a: GA
+	# =========================================================================
+	log()
+	log("-" * 40)
+	log("  Phase 2a: GA Architecture Refinement")
+	log("-" * 40)
+
+	ga_config = AdaptiveOptConfig(
+		population_size=ga_population,
+		generations=ga_generations,
+		patience=ga_patience,
+		cluster_config=cluster_config,
+	)
+
+	ga_optimizer = AdaptiveClusterOptimizer(
+		config=ga_config,
+		evaluate_fn=evaluate_fn,
+		num_clusters=vocab_size,
+		token_frequencies=token_frequencies,
+		seed=seed,
+		logger=log,
+		batch_evaluator=batch_evaluator,
+	)
+
+	# Run GA with seeded population from Phase 1b
+	ga_result = ga_optimizer.optimize(
+		init_strategy=GenomeInitStrategy.FREQUENCY_SCALED,
+		initial_population=initial_population,
+	)
+
+	log()
+	log(f"[Phase2a] GA complete: {ga_result.final_fitness:.4f} "
+		f"({(1 - ga_result.final_fitness / genome_fitness) * 100:.2f}% vs Phase 1b)")
+
+	# =========================================================================
+	# Phase 2b: TS
+	# =========================================================================
+	log()
+	log("-" * 40)
+	log("  Phase 2b: TS Architecture Refinement")
+	log("-" * 40)
+
+	ts_config = ArchitectureTSConfig(
+		iterations=ts_iterations,
+		neighbors_per_iter=ts_neighbors,
+		patience=ts_patience,
+	)
+
+	ts_optimizer = ArchitectureTabuSearch(
+		config=ts_config,
+		evaluate_fn=evaluate_fn,
+		cluster_config=cluster_config,
+		batch_evaluator=batch_evaluator,
+		seed=seed + 500,
+		logger=log,
+	)
+
+	# Run TS with GA's population as initial neighbors
+	ts_result = ts_optimizer.optimize(
+		ga_result.best_genome,
+		ga_result.final_fitness,
+		initial_neighbors=ga_result.final_population,
+	)
+
+	log()
+	log(f"[Phase2b] TS complete: {ts_result.final_fitness:.4f} "
+		f"({(1 - ts_result.final_fitness / ga_result.final_fitness) * 100:.2f}% vs Phase 2a)")
+
+	# =========================================================================
+	# Summary
+	# =========================================================================
+	ga_improvement = (genome_fitness - ga_result.final_fitness) / genome_fitness * 100 if genome_fitness > 0 else 0
+	ts_improvement = (ga_result.final_fitness - ts_result.final_fitness) / ga_result.final_fitness * 100 if ga_result.final_fitness > 0 else 0
+	total_improvement = (genome_fitness - ts_result.final_fitness) / genome_fitness * 100 if genome_fitness > 0 else 0
 
 	log()
 	log("=" * 60)
-	log("  Phase 2 Complete: Connectivity Variance Analysis")
+	log("  Phase 2 Complete")
 	log("=" * 60)
-	log(f"  Phase 1 baseline CE: {genome_fitness:.4f}")
-	log(f"  Trials: {ga_population} random connectivity patterns")
+	log(f"  Phase 1b baseline: {genome_fitness:.4f}")
+	log(f"  After Phase 2a (GA): {ga_result.final_fitness:.4f} ({ga_improvement:.2f}% improvement)")
+	log(f"  After Phase 2b (TS): {ts_result.final_fitness:.4f} ({ts_improvement:.2f}% improvement)")
+	log(f"  Total Phase 2 improvement: {total_improvement:.2f}%")
 	log()
-	log(f"  Statistics across {ga_population} trials:")
-	log(f"    Mean CE: {mean_fitness:.4f}")
-	log(f"    Std CE:  {std_fitness:.4f}")
-	log(f"    Min CE:  {min_fitness:.4f}")
-	log(f"    Max CE:  {max_fitness:.4f}")
-	log(f"    Range:   {max_fitness - min_fitness:.4f}")
+	stats = ts_result.best_genome.stats()
+	log("  Best genome:")
+	log(f"    Bits: [{stats['min_bits']}, {stats['max_bits']}], mean: {stats['mean_bits']:.1f}")
+	log(f"    Neurons: [{stats['min_neurons']}, {stats['max_neurons']}], mean: {stats['mean_neurons']:.1f}")
 
 	return ConnectivityOptResult(
 		initial_fitness=genome_fitness,
-		phase2_baseline=mean_fitness,  # Mean is the "fair" baseline
-		final_fitness=min_fitness,  # Best across trials
-		ga_improvement_pct=(mean_fitness - min_fitness) / mean_fitness * 100 if mean_fitness > 0 else 0,
-		ts_improvement_pct=0.0,
-		total_improvement_pct=(genome_fitness - min_fitness) / genome_fitness * 100 if genome_fitness > 0 else 0,
-		ga_iterations=ga_population,
-		ts_iterations=0,
-		early_stopped=False,
-		initial_accuracy=None,  # Phase 1 accuracy not available here
-		final_accuracy=best_accuracy,  # Best trial accuracy
+		phase2_baseline=ga_result.final_fitness,
+		final_fitness=ts_result.final_fitness,
+		ga_improvement_pct=ga_improvement,
+		ts_improvement_pct=ts_improvement,
+		total_improvement_pct=total_improvement,
+		ga_iterations=ga_result.generations_run,
+		ts_iterations=ts_result.iterations_run,
+		early_stopped=ga_result.early_stopped or ts_result.early_stopped,
+		initial_accuracy=ga_result.initial_accuracy,
+		final_accuracy=ts_result.final_accuracy,
+		final_population=ts_result.final_neighbors,  # For potential Phase 3
 	)
