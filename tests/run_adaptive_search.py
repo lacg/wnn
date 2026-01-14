@@ -25,6 +25,8 @@ from wnn import Logger
 from wnn.tokenizers import TokenizerFactory, TokenizerType
 from wnn.ram.strategies.connectivity.adaptive_cluster import (
 	run_architecture_search,
+	run_architecture_tabu_search,
+	run_connectivity_optimization,
 	GenomeInitStrategy,
 )
 
@@ -90,17 +92,28 @@ def main():
 	logger(f"  Tokens with freq > 100: {sum(1 for f in freq_sorted if f > 100):,}")
 	logger(f"  Tokens with freq > 0: {sum(1 for f in freq_sorted if f > 0):,}")
 
-	# Run architecture search with settings for multi-hour run
+	# Common parameters
+	seed = int(time.time())
+	context_size = 4
+	min_bits = 8
+	max_bits = 25
+	min_neurons = 3
+	max_neurons = 33
+	empty_value = 0.0
+
+	# =========================================================================
+	# Phase 1a: GA for Architecture Search
+	# =========================================================================
 	logger()
-	logger("Starting architecture search...")
-	logger("  Expected runtime: 1-2 hours (with subsampled data)")
+	logger.header("Phase 1a: GA Architecture Search")
+	logger("  Expected runtime: 3-5 hours")
 	logger()
 
-	result = run_architecture_search(
+	ga_result = run_architecture_search(
 		train_tokens=train_tokens,
 		eval_tokens=val_tokens,
 		vocab_size=vocab_size,
-		context_size=4,
+		context_size=context_size,
 		token_frequencies=token_frequencies,
 		cluster_order=cluster_order,
 
@@ -110,20 +123,98 @@ def main():
 		patience=10,             # Wait for improvement
 
 		# Architecture bounds
-		min_bits=4,              # Minimum addressable
-		max_bits=20,             # Maximum for frequent tokens
-		min_neurons=1,           # Single neuron minimum
-		max_neurons=15,          # Reasonable upper bound
+		min_bits=min_bits,
+		max_bits=max_bits,
+		min_neurons=min_neurons,
+		max_neurons=max_neurons,
 		phase=2,                 # Optimize both bits and neurons
 
 		# Other settings
 		init_strategy=GenomeInitStrategy.FREQUENCY_SCALED,
-		empty_value=0.0,         # Best performing EMPTY value
-		seed=int(time.time()),   # Time-based seed for different runs
-		logger=logger,           # Pass our Logger (callable)
+		empty_value=empty_value,
+		seed=seed,
+		logger=logger,
 	)
 
-	# Calculate runtime
+	phase1a_elapsed = time.time() - start_time
+	phase1a_ce = ga_result.final_fitness
+	logger(f"[Phase 1a] Complete in {phase1a_elapsed/3600:.1f}h, CE={phase1a_ce:.4f}")
+
+	# =========================================================================
+	# Phase 1b: Tabu Search for Architecture Refinement
+	# =========================================================================
+	logger()
+	logger.header("Phase 1b: TS Architecture Refinement")
+	logger()
+
+	ts_result = run_architecture_tabu_search(
+		initial_genome=ga_result.best_genome,
+		initial_fitness=ga_result.final_fitness,
+		train_tokens=train_tokens,
+		eval_tokens=val_tokens,
+		vocab_size=vocab_size,
+		context_size=context_size,
+		cluster_order=cluster_order,
+
+		# TS parameters
+		iterations=100,          # Local search iterations
+		neighbors_per_iter=20,   # Neighbors to explore
+		patience=15,             # More patience for refinement
+
+		# Architecture bounds (same as GA)
+		min_bits=min_bits,
+		max_bits=max_bits,
+		min_neurons=min_neurons,
+		max_neurons=max_neurons,
+		phase=2,
+
+		# Other
+		empty_value=empty_value,
+		seed=seed + 1000,
+		logger=logger,
+	)
+
+	phase1b_elapsed = time.time() - start_time
+	phase1b_ce = ts_result.final_fitness
+	phase1_improvement = (1 - phase1b_ce / ga_result.initial_fitness) * 100
+	logger(f"[Phase 1b] Complete at {phase1b_elapsed/3600:.1f}h total, CE={phase1b_ce:.4f}")
+	logger(f"[Phase 1] Total architecture improvement: {phase1_improvement:.2f}%")
+
+	# =========================================================================
+	# Phase 2: Connectivity Optimization
+	# =========================================================================
+	logger()
+	logger.header("Phase 2: Connectivity Optimization")
+	logger()
+
+	conn_result = run_connectivity_optimization(
+		genome=ts_result.best_genome,
+		genome_fitness=ts_result.final_fitness,
+		train_tokens=train_tokens,
+		eval_tokens=val_tokens,
+		vocab_size=vocab_size,
+		context_size=context_size,
+		cluster_order=cluster_order,
+
+		# GA parameters for connectivity exploration
+		ga_population=20,        # Random seed trials
+		ga_generations=30,
+		ga_patience=5,
+
+		# TS parameters for connectivity refinement
+		ts_iterations=50,
+		ts_neighbors=30,
+		ts_patience=5,
+
+		# Other
+		empty_value=empty_value,
+		seed=seed + 2000,
+		logger=logger,
+	)
+
+	# =========================================================================
+	# Final Results
+	# =========================================================================
 	elapsed = time.time() - start_time
 	hours = int(elapsed // 3600)
 	minutes = int((elapsed % 3600) // 60)
@@ -138,16 +229,35 @@ def main():
 	genome_data = {
 		"timestamp": timestamp,
 		"runtime_seconds": elapsed,
-		"initial_fitness": result.initial_fitness,
-		"final_fitness": result.final_fitness,
-		"generations_run": result.generations_run,
-		"early_stopped": result.early_stopped,
-		"config": {
-			"bits_per_cluster": result.best_genome.bits_per_cluster,
-			"neurons_per_cluster": result.best_genome.neurons_per_cluster,
+		# Phase 1a: GA
+		"phase1a": {
+			"initial_fitness": ga_result.initial_fitness,
+			"final_fitness": ga_result.final_fitness,
+			"generations": ga_result.generations_run,
+			"early_stopped": ga_result.early_stopped,
 		},
-		"stats": result.best_genome.stats(),
-		"history": [(gen, best, avg) for gen, best, avg in result.history],
+		# Phase 1b: TS
+		"phase1b": {
+			"initial_fitness": ts_result.initial_fitness,
+			"final_fitness": ts_result.final_fitness,
+			"iterations": ts_result.iterations_run,
+			"early_stopped": ts_result.early_stopped,
+		},
+		# Phase 2: Connectivity
+		"phase2": {
+			"initial_fitness": conn_result.initial_fitness,
+			"final_fitness": conn_result.final_fitness,
+			"improvement_pct": conn_result.ga_improvement_pct,
+		},
+		# Final genome
+		"genome": {
+			"bits_per_cluster": ts_result.best_genome.bits_per_cluster,
+			"neurons_per_cluster": ts_result.best_genome.neurons_per_cluster,
+		},
+		"stats": ts_result.best_genome.stats(),
+		# History from all phases
+		"ga_history": [(gen, best, avg) for gen, best, avg in ga_result.history],
+		"ts_history": [(it, best) for it, best in ts_result.history],
 	}
 
 	with open(genome_path, "w") as f:
@@ -155,18 +265,45 @@ def main():
 
 	# Print summary
 	logger()
-	logger.header("FINAL RESULTS")
-	logger(f"  Runtime: {hours}h {minutes}m {seconds}s")
-	logger(f"  Generations: {result.generations_run}")
-	logger(f"  Early stopped: {result.early_stopped}")
+	logger.header("FINAL RESULTS (All Phases)")
+	logger(f"  Total Runtime: {hours}h {minutes}m {seconds}s")
 	logger()
-	logger(f"  Initial CE: {result.initial_fitness:.4f}")
-	logger(f"  Final CE: {result.final_fitness:.4f}")
-	improvement = (1 - result.final_fitness / result.initial_fitness) * 100
-	logger(f"  Improvement: {improvement:.2f}%")
+
+	# Phase 1a results
+	logger("  Phase 1a (GA Architecture):")
+	logger(f"    Generations: {ga_result.generations_run}")
+	logger(f"    Initial CE: {ga_result.initial_fitness:.4f}")
+	logger(f"    Final CE: {ga_result.final_fitness:.4f}")
+	ga_improvement = (1 - ga_result.final_fitness / ga_result.initial_fitness) * 100
+	logger(f"    Improvement: {ga_improvement:.2f}%")
 	logger()
-	stats = result.best_genome.stats()
-	logger(f"  Best genome:")
+
+	# Phase 1b results
+	logger("  Phase 1b (TS Architecture Refinement):")
+	logger(f"    Iterations: {ts_result.iterations_run}")
+	logger(f"    Input CE: {ts_result.initial_fitness:.4f}")
+	logger(f"    Output CE: {ts_result.final_fitness:.4f}")
+	ts_improvement = (1 - ts_result.final_fitness / ts_result.initial_fitness) * 100
+	logger(f"    Improvement: {ts_improvement:.2f}%")
+	logger()
+
+	# Phase 2 results
+	logger("  Phase 2 (Connectivity Optimization):")
+	logger(f"    Input CE: {conn_result.initial_fitness:.4f}")
+	logger(f"    Output CE: {conn_result.final_fitness:.4f}")
+	logger(f"    Improvement: {conn_result.ga_improvement_pct:.2f}%")
+	logger()
+
+	# Overall results
+	total_improvement = (1 - conn_result.final_fitness / ga_result.initial_fitness) * 100
+	logger("  Overall:")
+	logger(f"    Start CE: {ga_result.initial_fitness:.4f}")
+	logger(f"    Final CE: {conn_result.final_fitness:.4f}")
+	logger(f"    Total improvement: {total_improvement:.2f}%")
+	logger()
+
+	stats = ts_result.best_genome.stats()
+	logger("  Best Architecture:")
 	logger(f"    Bits: [{stats['min_bits']}, {stats['max_bits']}], mean: {stats['mean_bits']:.1f}")
 	logger(f"    Neurons: [{stats['min_neurons']}, {stats['max_neurons']}], mean: {stats['mean_neurons']:.1f}")
 	logger(f"    Total memory: {stats['total_memory_cells']:,} cells")

@@ -229,10 +229,21 @@ class ClusterGenome:
 			)
 
 		elif strategy == GenomeInitStrategy.RANDOM_UNIFORM:
-			bits = [
-				random.randint(config.min_bits, config.max_bits)
-				for _ in range(num_clusters)
-			]
+			# Random with frequency-aware caps to avoid slow sparse memory for rare tokens
+			# Rare tokens (low frequency) get capped bits since they can't fill large address spaces
+			bits = []
+			for i in range(num_clusters):
+				freq = token_frequencies[i] if token_frequencies else 1000
+				# Cap max bits based on frequency (sparse threshold is 12)
+				if freq < 10:
+					max_b = min(config.max_bits, 8)   # Very rare: max 8 bits
+				elif freq < 100:
+					max_b = min(config.max_bits, 10)  # Rare: max 10 bits
+				elif freq < 1000:
+					max_b = min(config.max_bits, 12)  # Medium: max 12 bits (dense)
+				else:
+					max_b = config.max_bits           # Frequent: full range
+				bits.append(random.randint(config.min_bits, max_b))
 		else:
 			raise ValueError(f"Unknown strategy: {strategy}")
 
@@ -571,87 +582,91 @@ class RustParallelEvaluator:
 		self._eval_data = None
 
 	def _prepare_data(self):
-		"""Pre-encode training and evaluation data for Rust."""
+		"""Pre-encode training and evaluation data for Rust (vectorized)."""
 		if self._prepared:
 			return
 
 		import numpy as np
+		from collections import Counter
 		from wnn.ram.core import bits_needed
 
 		cfg = self.config
 		bits_per_token = bits_needed(cfg.vocab_size)
 		total_input_bits = cfg.context_size * bits_per_token
 
-		# Encode training examples
-		n_train = len(cfg.train_tokens) - cfg.context_size
-		train_input_bits = np.zeros(n_train * total_input_bits, dtype=np.uint8)
-		train_targets = np.zeros(n_train, dtype=np.int64)
+		# Build cluster map once (if needed)
+		cluster_map = None
+		if cfg.cluster_order is not None:
+			cluster_map = np.zeros(cfg.vocab_size, dtype=np.int64)
+			for idx, tid in enumerate(cfg.cluster_order):
+				if tid < cfg.vocab_size:
+					cluster_map[tid] = idx
 
-		for i in range(n_train):
-			context = cfg.train_tokens[i:i + cfg.context_size]
-			target = cfg.train_tokens[i + cfg.context_size]
+		# Convert tokens to numpy array for vectorized ops
+		train_tokens = np.array(cfg.train_tokens, dtype=np.int64)
+		eval_tokens = np.array(cfg.eval_tokens, dtype=np.int64)
 
-			# Encode context to bits
-			for j, token in enumerate(context):
-				for b in range(bits_per_token):
-					bit_idx = i * total_input_bits + j * bits_per_token + b
-					train_input_bits[bit_idx] = (token >> (bits_per_token - 1 - b)) & 1
+		# === TRAINING DATA (vectorized) ===
+		n_train = len(train_tokens) - cfg.context_size
 
-			# Map target to cluster if needed
-			if cfg.cluster_order is not None:
-				cluster_map = {tid: idx for idx, tid in enumerate(cfg.cluster_order)}
-				train_targets[i] = cluster_map.get(target, target)
-			else:
-				train_targets[i] = target
+		# Build context windows: [n_train, context_size]
+		train_contexts = np.lib.stride_tricks.sliding_window_view(
+			train_tokens[:n_train + cfg.context_size - 1], cfg.context_size
+		)[:n_train]
 
-		# Generate negative samples (top-k tokens)
-		from collections import Counter
+		# Encode contexts to bits using vectorized operations
+		# Shape: [n_train, context_size, bits_per_token]
+		bit_shifts = np.arange(bits_per_token - 1, -1, -1, dtype=np.int64)
+		train_bits_3d = ((train_contexts[:, :, np.newaxis] >> bit_shifts) & 1).astype(np.uint8)
+		train_input_bits = train_bits_3d.reshape(-1)  # Flatten to 1D
+
+		# Targets
+		train_targets_raw = train_tokens[cfg.context_size:cfg.context_size + n_train]
+		if cluster_map is not None:
+			train_targets = cluster_map[train_targets_raw]
+		else:
+			train_targets = train_targets_raw
+
+		# === NEGATIVE SAMPLES (vectorized) ===
 		counts = Counter(cfg.train_tokens)
-		top_k_tokens = [t for t, _ in counts.most_common(cfg.global_top_k)]
+		top_k_tokens = np.array([t for t, _ in counts.most_common(cfg.global_top_k)], dtype=np.int64)
 		num_negatives = min(5, cfg.global_top_k)
 
 		rng = np.random.RandomState(42)
-		train_negatives = np.zeros(n_train * num_negatives, dtype=np.int64)
-		for i in range(n_train):
-			neg_indices = rng.randint(0, cfg.global_top_k, num_negatives)
-			for k, neg_idx in enumerate(neg_indices):
-				neg_token = top_k_tokens[neg_idx]
-				if cfg.cluster_order is not None:
-					cluster_map = {tid: idx for idx, tid in enumerate(cfg.cluster_order)}
-					train_negatives[i * num_negatives + k] = cluster_map.get(neg_token, neg_token)
-				else:
-					train_negatives[i * num_negatives + k] = neg_token
+		neg_indices = rng.randint(0, cfg.global_top_k, (n_train, num_negatives))
+		neg_tokens = top_k_tokens[neg_indices]  # [n_train, num_negatives]
 
-		# Encode evaluation examples
-		n_eval = len(cfg.eval_tokens) - cfg.context_size
-		eval_input_bits = np.zeros(n_eval * total_input_bits, dtype=np.uint8)
-		eval_targets = np.zeros(n_eval, dtype=np.int64)
+		if cluster_map is not None:
+			train_negatives = cluster_map[neg_tokens].reshape(-1)
+		else:
+			train_negatives = neg_tokens.reshape(-1)
 
-		for i in range(n_eval):
-			context = cfg.eval_tokens[i:i + cfg.context_size]
-			target = cfg.eval_tokens[i + cfg.context_size]
+		# === EVALUATION DATA (vectorized) ===
+		n_eval = len(eval_tokens) - cfg.context_size
 
-			for j, token in enumerate(context):
-				for b in range(bits_per_token):
-					bit_idx = i * total_input_bits + j * bits_per_token + b
-					eval_input_bits[bit_idx] = (token >> (bits_per_token - 1 - b)) & 1
+		eval_contexts = np.lib.stride_tricks.sliding_window_view(
+			eval_tokens[:n_eval + cfg.context_size - 1], cfg.context_size
+		)[:n_eval]
 
-			if cfg.cluster_order is not None:
-				cluster_map = {tid: idx for idx, tid in enumerate(cfg.cluster_order)}
-				eval_targets[i] = cluster_map.get(target, target)
-			else:
-				eval_targets[i] = target
+		eval_bits_3d = ((eval_contexts[:, :, np.newaxis] >> bit_shifts) & 1).astype(np.uint8)
+		eval_input_bits = eval_bits_3d.reshape(-1)
+
+		eval_targets_raw = eval_tokens[cfg.context_size:cfg.context_size + n_eval]
+		if cluster_map is not None:
+			eval_targets = cluster_map[eval_targets_raw]
+		else:
+			eval_targets = eval_targets_raw
 
 		self._train_data = {
 			'input_bits': train_input_bits,
-			'targets': train_targets,
-			'negatives': train_negatives,
+			'targets': train_targets.astype(np.int64),
+			'negatives': train_negatives.astype(np.int64),
 			'num_examples': n_train,
 			'num_negatives': num_negatives,
 		}
 		self._eval_data = {
 			'input_bits': eval_input_bits,
-			'targets': eval_targets,
+			'targets': eval_targets.astype(np.int64),
 			'num_examples': n_eval,
 		}
 		self._total_input_bits = total_input_bits
@@ -661,6 +676,8 @@ class RustParallelEvaluator:
 		self,
 		genomes: List[ClusterGenome],
 		logger: Optional[Callable[[str], None]] = None,
+		batch_size: int = 1,  # Sequential genomes with inner parallelism
+		generation: Optional[int] = None,  # Current generation for logging
 	) -> List[float]:
 		"""
 		Evaluate multiple genomes in parallel using Rust/rayon.
@@ -668,46 +685,68 @@ class RustParallelEvaluator:
 		Args:
 			genomes: List of genomes to evaluate
 			logger: Optional logging function
+			batch_size: Number of genomes to evaluate in parallel (all 30 - training data shared)
+			generation: Current generation number for logging (None = initial population)
 
 		Returns:
 			List of cross-entropy values for each genome
 		"""
 		import ram_accelerator
+		import time
 
 		log = logger or (lambda x: None)
 
 		# Prepare data on first call
 		self._prepare_data()
 
-		log(f"[RustParallel] Evaluating {len(genomes)} genomes...")
+		all_fitness = []
+		total_genomes = len(genomes)
+		start_time = time.time()
 
-		# Flatten genome configurations
-		# Format: [genome0_bits..., genome0_neurons..., genome1_bits..., genome1_neurons..., ...]
-		genomes_bits_flat = []
-		genomes_neurons_flat = []
-		for g in genomes:
-			genomes_bits_flat.extend(g.bits_per_cluster)
-			genomes_neurons_flat.extend(g.neurons_per_cluster)
+		# Generation prefix for logs
+		gen_prefix = f"[Gen {generation + 1}]" if generation is not None else "[Init]"
 
-		# Call Rust parallel evaluator
-		fitness = ram_accelerator.evaluate_genomes_parallel(
-			genomes_bits_flat,
-			genomes_neurons_flat,
-			len(genomes),
-			self.config.vocab_size,
-			self._train_data['input_bits'],
-			self._train_data['targets'],
-			self._train_data['negatives'],
-			self._train_data['num_examples'],
-			self._train_data['num_negatives'],
-			self._eval_data['input_bits'],
-			self._eval_data['targets'],
-			self._eval_data['num_examples'],
-			self._total_input_bits,
-			self.config.empty_value,
-		)
+		# Process in batches to limit memory usage
+		for batch_start in range(0, total_genomes, batch_size):
+			batch_end = min(batch_start + batch_size, total_genomes)
+			batch_genomes = genomes[batch_start:batch_end]
 
-		return list(fitness)
+			# Flatten genome configurations for this batch
+			genomes_bits_flat = []
+			genomes_neurons_flat = []
+			for g in batch_genomes:
+				genomes_bits_flat.extend(g.bits_per_cluster)
+				genomes_neurons_flat.extend(g.neurons_per_cluster)
+
+			# Call Rust parallel evaluator for this batch
+			batch_fitness = ram_accelerator.evaluate_genomes_parallel(
+				genomes_bits_flat,
+				genomes_neurons_flat,
+				len(batch_genomes),
+				self.config.vocab_size,
+				self._train_data['input_bits'],
+				self._train_data['targets'],
+				self._train_data['negatives'],
+				self._train_data['num_examples'],
+				self._train_data['num_negatives'],
+				self._eval_data['input_bits'],
+				self._eval_data['targets'],
+				self._eval_data['num_examples'],
+				self._total_input_bits,
+				self.config.empty_value,
+			)
+
+			all_fitness.extend(batch_fitness)
+
+			elapsed = time.time() - start_time
+			if batch_size == 1:
+				# Per-genome timing
+				log(f"{gen_prefix} Genome {batch_end}/{total_genomes}: CE={batch_fitness[0]:.4f} in {elapsed:.1f}s")
+			else:
+				log(f"{gen_prefix} Batch {batch_start//batch_size + 1}/{(total_genomes + batch_size - 1)//batch_size}: "
+					f"{batch_end}/{total_genomes} genomes in {elapsed:.1f}s")
+
+		return all_fitness
 
 	def evaluate_single(self, genome: ClusterGenome) -> float:
 		"""Evaluate a single genome."""
@@ -773,6 +812,7 @@ class AdaptiveClusterOptimizer:
 		self,
 		population: List[ClusterGenome],
 		tracker: Optional[ProgressTracker] = None,
+		generation: Optional[int] = None,
 	) -> List[float]:
 		"""
 		Evaluate fitness of all genomes in the population.
@@ -782,13 +822,16 @@ class AdaptiveClusterOptimizer:
 		Args:
 			population: List of genomes to evaluate
 			tracker: Optional progress tracker for logging
+			generation: Current generation number (None = initial population)
 
 		Returns:
 			List of fitness values (cross-entropy, lower is better)
 		"""
 		if self._batch_evaluator is not None:
 			# Rust parallel evaluation (all genomes at once)
-			fitness = self._batch_evaluator.evaluate_batch(population, logger=self._log)
+			fitness = self._batch_evaluator.evaluate_batch(
+				population, logger=self._log, generation=generation
+			)
 		else:
 			# Sequential Python evaluation with progress tracking
 			fitness = []
@@ -838,7 +881,9 @@ class AdaptiveClusterOptimizer:
 		self._log(f"[AdaptiveGA] Evaluating initial population ({cfg.population_size} genomes)...")
 		import time as _time
 		_start = _time.time()
-		fitness = self._evaluate_population(population, tracker if self._batch_evaluator is None else None)
+		fitness = self._evaluate_population(
+			population, tracker if self._batch_evaluator is None else None, generation=None
+		)
 		_elapsed = _time.time() - _start
 		self._log(f"[AdaptiveGA] Initial population evaluated in {_elapsed:.1f}s")
 
@@ -888,7 +933,7 @@ class AdaptiveClusterOptimizer:
 			population = new_population
 
 			# Evaluate new population
-			fitness = self._evaluate_population(population)
+			fitness = self._evaluate_population(population, generation=gen)
 			gen_best_idx = min(range(len(fitness)), key=lambda i: fitness[i])
 
 			if fitness[gen_best_idx] < best_fitness:
@@ -949,17 +994,18 @@ class AdaptiveClusterOptimizer:
 			rng=self.seed,
 		))
 
-		# Rest are mutations of the first, or random
+		# Rest are mutations of the first, or frequency-aware random
 		for i in range(1, self.config.population_size):
 			if i < self.config.population_size // 2:
 				# Mutate from first
 				genome = population[0].mutate(cc, rng=self.seed + i)
 			else:
-				# Random initialization for diversity
+				# Frequency-aware random (caps bits for rare tokens to avoid sparse memory slowdown)
 				genome = ClusterGenome.initialize(
 					self.num_clusters,
 					GenomeInitStrategy.RANDOM_UNIFORM,
 					cc,
+					token_frequencies=self.token_frequencies,  # Pass frequencies for smart capping
 					rng=self.seed + i,
 				)
 			population.append(genome)
@@ -1325,6 +1371,411 @@ def create_genome_evaluator(
 # High-Level API
 # =============================================================================
 
+# =============================================================================
+# Architecture Tabu Search (Phase 1b)
+# =============================================================================
+
+@dataclass
+class ArchitectureTSConfig:
+	"""Configuration for architecture Tabu Search."""
+
+	iterations: int = 100
+	"""Number of TS iterations"""
+
+	neighbors_per_iter: int = 20
+	"""Number of neighbors to generate per iteration"""
+
+	tabu_size: int = 10
+	"""Size of tabu list (moves to avoid)"""
+
+	# Neighborhood generation
+	bits_change_prob: float = 0.7
+	"""Probability of changing bits (vs neurons) per cluster mutation"""
+
+	clusters_per_neighbor: int = 50
+	"""Number of clusters to mutate per neighbor (sparse mutations)"""
+
+	step_size: int = 1
+	"""How much to change bits/neurons (+/- this value)"""
+
+	# Early stopping
+	patience: int = 10
+	"""Iterations without improvement before stopping"""
+
+	min_improvement_pct: float = 0.01
+	"""Minimum improvement % to reset patience"""
+
+
+@dataclass
+class ArchitectureTSResult:
+	"""Result from architecture Tabu Search."""
+
+	best_genome: ClusterGenome
+	initial_fitness: float
+	final_fitness: float
+	iterations_run: int
+	history: List[tuple]  # [(iter, best_fitness)]
+	early_stopped: bool
+
+
+class ArchitectureTabuSearch:
+	"""
+	Tabu Search optimizer for architecture refinement (bits + neurons).
+
+	Unlike GA which explores globally, TS performs local search from a starting
+	genome. Good for refining a GA-discovered solution.
+
+	Key features:
+	- Sparse mutations: only changes a few clusters per neighbor
+	- Tabu list: avoids cycling back to recent solutions
+	- Always moves to best neighbor (TS characteristic)
+	"""
+
+	def __init__(
+		self,
+		config: ArchitectureTSConfig,
+		evaluate_fn: Callable[[ClusterGenome], float],
+		cluster_config: AdaptiveClusterConfig,
+		batch_evaluator: Optional['RustParallelEvaluator'] = None,
+		seed: int = 42,
+		logger: Optional[Callable[[str], None]] = None,
+	):
+		self.config = config
+		self.evaluate_fn = evaluate_fn
+		self.cluster_config = cluster_config
+		self._batch_evaluator = batch_evaluator
+		self.seed = seed
+		self._log = logger or print
+		self._rng = random.Random(seed)
+
+	def _generate_neighbor(
+		self,
+		genome: ClusterGenome,
+	) -> tuple:
+		"""
+		Generate a neighbor by mutating a few clusters.
+
+		Returns:
+			(neighbor_genome, move_descriptor)
+		"""
+		cc = self.cluster_config
+		cfg = self.config
+
+		new_bits = genome.bits_per_cluster.copy()
+		new_neurons = genome.neurons_per_cluster.copy()
+
+		# Track which clusters were changed (for tabu)
+		changes = []
+
+		# Select random clusters to mutate
+		clusters_to_mutate = self._rng.sample(
+			range(genome.num_clusters),
+			min(cfg.clusters_per_neighbor, genome.num_clusters)
+		)
+
+		for cluster_idx in clusters_to_mutate:
+			# Decide what to change
+			if cc.phase >= 2 and self._rng.random() > cfg.bits_change_prob:
+				# Change neurons
+				old_val = new_neurons[cluster_idx]
+				delta = self._rng.choice([-cfg.step_size, cfg.step_size])
+				new_val = max(cc.min_neurons, min(cc.max_neurons, old_val + delta))
+				if new_val != old_val:
+					new_neurons[cluster_idx] = new_val
+					changes.append(('N', cluster_idx, old_val, new_val))
+			else:
+				# Change bits
+				old_val = new_bits[cluster_idx]
+				delta = self._rng.choice([-cfg.step_size, cfg.step_size])
+				new_val = max(cc.min_bits, min(cc.max_bits, old_val + delta))
+				if new_val != old_val:
+					new_bits[cluster_idx] = new_val
+					changes.append(('B', cluster_idx, old_val, new_val))
+
+		neighbor = ClusterGenome(
+			bits_per_cluster=new_bits,
+			neurons_per_cluster=new_neurons,
+		)
+
+		# Move descriptor is a frozenset of changes for tabu matching
+		move_desc = frozenset(changes)
+		return neighbor, move_desc
+
+	def _is_tabu(self, move_desc: frozenset, tabu_list: list) -> bool:
+		"""Check if a move would reverse a recent move."""
+		for tabu_move in tabu_list:
+			# Check if any change would reverse a tabu change
+			for change in move_desc:
+				change_type, cluster_idx, old_val, new_val = change
+				# Look for reversal: same cluster, same type, going back
+				for tabu_change in tabu_move:
+					if (tabu_change[0] == change_type and
+						tabu_change[1] == cluster_idx and
+						tabu_change[3] == old_val):  # Going back to where we were
+						return True
+		return False
+
+	def optimize(
+		self,
+		initial_genome: ClusterGenome,
+		initial_fitness: Optional[float] = None,
+	) -> ArchitectureTSResult:
+		"""
+		Run Tabu Search from an initial genome.
+
+		Args:
+			initial_genome: Starting genome (e.g., from GA)
+			initial_fitness: Optional pre-computed fitness (avoids re-evaluation)
+
+		Returns:
+			ArchitectureTSResult with refined genome
+		"""
+		cfg = self.config
+
+		self._log(f"[ArchTS] Starting Tabu Search")
+		self._log(f"  Iterations: {cfg.iterations}")
+		self._log(f"  Neighbors/iter: {cfg.neighbors_per_iter}")
+		self._log(f"  Tabu size: {cfg.tabu_size}")
+		self._log(f"  Clusters/neighbor: {cfg.clusters_per_neighbor}")
+
+		# Initialize
+		current = initial_genome.clone()
+		if initial_fitness is not None:
+			current_fitness = initial_fitness
+		else:
+			current_fitness = self._evaluate(current)
+
+		best = current.clone()
+		best_fitness = current_fitness
+		start_fitness = current_fitness
+
+		tabu_list = []  # List of recent move descriptors
+		history = [(0, best_fitness)]
+
+		# Early stopping
+		patience_counter = 0
+		prev_best = best_fitness
+
+		self._log(f"[ArchTS] Initial fitness: {current_fitness:.4f}")
+
+		for iteration in range(cfg.iterations):
+			# Generate neighbors
+			neighbors = []
+			for _ in range(cfg.neighbors_per_iter):
+				neighbor, move_desc = self._generate_neighbor(current)
+				if not self._is_tabu(move_desc, tabu_list) and len(move_desc) > 0:
+					neighbors.append((neighbor, move_desc))
+
+			if not neighbors:
+				self._log(f"[ArchTS] No valid neighbors at iter {iteration + 1}")
+				continue
+
+			# Evaluate neighbors
+			if self._batch_evaluator is not None:
+				genomes = [n for n, _ in neighbors]
+				fitness_list = self._batch_evaluator.evaluate_batch(genomes)
+				evaluated = [(n, f, m) for (n, m), f in zip(neighbors, fitness_list)]
+			else:
+				evaluated = [(n, self.evaluate_fn(n), m) for n, m in neighbors]
+
+			# Select best neighbor
+			evaluated.sort(key=lambda x: x[1])
+			best_neighbor, best_neighbor_fitness, best_move = evaluated[0]
+
+			# Move to best neighbor (always, TS characteristic)
+			current = best_neighbor
+			current_fitness = best_neighbor_fitness
+
+			# Add move to tabu list
+			if len(tabu_list) >= cfg.tabu_size:
+				tabu_list.pop(0)
+			tabu_list.append(best_move)
+
+			# Update global best
+			if current_fitness < best_fitness:
+				best = current.clone()
+				best_fitness = current_fitness
+
+			history.append((iteration + 1, best_fitness))
+
+			# Log progress
+			if (iteration + 1) % 5 == 0:
+				self._log(f"[ArchTS] Iter {iteration + 1}/{cfg.iterations}: "
+						  f"current={current_fitness:.4f}, best={best_fitness:.4f}")
+
+			# Early stopping check
+			improvement_pct = (prev_best - best_fitness) / prev_best * 100 if prev_best > 0 else 0
+			if improvement_pct >= cfg.min_improvement_pct:
+				patience_counter = 0
+				prev_best = best_fitness
+			else:
+				patience_counter += 1
+
+			if patience_counter >= cfg.patience:
+				self._log(f"[ArchTS] Early stop at iter {iteration + 1}: "
+						  f"no improvement for {cfg.patience} iters")
+				return ArchitectureTSResult(
+					best_genome=best,
+					initial_fitness=start_fitness,
+					final_fitness=best_fitness,
+					iterations_run=iteration + 1,
+					history=history,
+					early_stopped=True,
+				)
+
+		self._log(f"[ArchTS] Completed {cfg.iterations} iterations")
+		improvement = (1 - best_fitness / start_fitness) * 100 if start_fitness > 0 else 0
+		self._log(f"[ArchTS] Final: {best_fitness:.4f} ({improvement:.2f}% improvement)")
+
+		return ArchitectureTSResult(
+			best_genome=best,
+			initial_fitness=start_fitness,
+			final_fitness=best_fitness,
+			iterations_run=cfg.iterations,
+			history=history,
+			early_stopped=False,
+		)
+
+	def _evaluate(self, genome: ClusterGenome) -> float:
+		"""Evaluate a single genome."""
+		if self._batch_evaluator is not None:
+			return self._batch_evaluator.evaluate_batch([genome])[0]
+		return self.evaluate_fn(genome)
+
+
+def run_architecture_tabu_search(
+	initial_genome: ClusterGenome,
+	initial_fitness: float,
+	train_tokens: List[int],
+	eval_tokens: List[int],
+	vocab_size: int = 50257,
+	context_size: int = 4,
+	cluster_order: Optional[List[int]] = None,
+	# TS parameters
+	iterations: int = 100,
+	neighbors_per_iter: int = 20,
+	patience: int = 10,
+	# Architecture bounds
+	min_bits: int = 4,
+	max_bits: int = 20,
+	min_neurons: int = 1,
+	max_neurons: int = 15,
+	phase: int = 2,
+	# Other
+	empty_value: float = 0.0,
+	seed: int = 42,
+	logger: Optional[Callable[[str], None]] = None,
+) -> ArchitectureTSResult:
+	"""
+	Run Tabu Search to refine architecture from a GA solution.
+
+	Phase 1b: Takes the best genome from GA and applies local search
+	to potentially find better nearby solutions.
+
+	Args:
+		initial_genome: Best genome from Phase 1a (GA)
+		initial_fitness: Fitness of initial genome
+		train_tokens: Training data
+		eval_tokens: Evaluation data
+		vocab_size: Vocabulary size
+		context_size: Context window
+		cluster_order: Token ordering by frequency
+		iterations: Number of TS iterations
+		neighbors_per_iter: Neighbors to evaluate per iteration
+		patience: Early stop patience
+		min_bits, max_bits: Bits bounds
+		min_neurons, max_neurons: Neurons bounds
+		phase: Optimization phase
+		empty_value: EMPTY cell value
+		seed: Random seed
+		logger: Logging function
+
+	Returns:
+		ArchitectureTSResult with refined genome
+	"""
+	log = logger or print
+
+	log()
+	log("=" * 60)
+	log("  Phase 1b: Architecture Tabu Search (Refinement)")
+	log("=" * 60)
+	log(f"  Initial fitness: {initial_fitness:.4f}")
+	log(f"  Iterations: {iterations}")
+	log(f"  Neighbors/iter: {neighbors_per_iter}")
+	log()
+
+	# Create evaluator config
+	eval_config = EvaluatorConfig(
+		train_tokens=train_tokens,
+		eval_tokens=eval_tokens,
+		vocab_size=vocab_size,
+		context_size=context_size,
+		batch_size=500,
+		global_top_k=100,
+		empty_value=empty_value,
+		eval_batch_size=1000,
+		cluster_order=cluster_order,
+		rng=seed,
+	)
+
+	# Create evaluation function
+	evaluate_fn = create_genome_evaluator(eval_config, verbose=False)
+
+	# Create Rust parallel evaluator
+	batch_evaluator = None
+	try:
+		batch_evaluator = RustParallelEvaluator(eval_config)
+		log("[ArchTS] Using Rust parallel evaluator")
+	except Exception as e:
+		log(f"[ArchTS] Using Python evaluator ({e})")
+
+	# Create configs
+	cluster_config = AdaptiveClusterConfig(
+		min_bits=min_bits,
+		max_bits=max_bits,
+		min_neurons=min_neurons,
+		max_neurons=max_neurons,
+		phase=phase,
+	)
+
+	ts_config = ArchitectureTSConfig(
+		iterations=iterations,
+		neighbors_per_iter=neighbors_per_iter,
+		patience=patience,
+	)
+
+	# Create optimizer
+	optimizer = ArchitectureTabuSearch(
+		config=ts_config,
+		evaluate_fn=evaluate_fn,
+		cluster_config=cluster_config,
+		batch_evaluator=batch_evaluator,
+		seed=seed,
+		logger=log,
+	)
+
+	# Run optimization
+	result = optimizer.optimize(initial_genome, initial_fitness)
+
+	# Log results
+	log()
+	log("=" * 60)
+	log("  Phase 1b Complete")
+	log("=" * 60)
+	stats = result.best_genome.stats()
+	log(f"  Initial CE: {result.initial_fitness:.4f}")
+	log(f"  Final CE: {result.final_fitness:.4f}")
+	improvement = (1 - result.final_fitness / result.initial_fitness) * 100
+	log(f"  Improvement: {improvement:.2f}%")
+	log(f"  Iterations: {result.iterations_run}")
+	log()
+	log("  Refined genome:")
+	log(f"    Bits: [{stats['min_bits']}, {stats['max_bits']}], mean: {stats['mean_bits']:.1f}")
+	log(f"    Neurons: [{stats['min_neurons']}, {stats['max_neurons']}], mean: {stats['mean_neurons']:.1f}")
+
+	return result
+
+
 def run_architecture_search(
 	train_tokens: List[int],
 	eval_tokens: List[int],
@@ -1431,11 +1882,11 @@ def run_architecture_search(
 	# Create evaluation function (fallback for single genome evaluation)
 	evaluate_fn = create_genome_evaluator(eval_config, verbose=False)
 
-	# Create Rust parallel evaluator for batch evaluation
+	# Create Rust parallel evaluator for batch evaluation (hybrid dense/sparse memory)
 	batch_evaluator = None
 	try:
 		batch_evaluator = RustParallelEvaluator(eval_config)
-		log("[AdaptiveGA] Using Rust parallel evaluator (rayon)")
+		log("[AdaptiveGA] Using Rust parallel evaluator (hybrid dense/sparse)")
 	except ImportError:
 		log("[AdaptiveGA] Rust accelerator not available, using Python sequential")
 	except Exception as e:
@@ -1491,3 +1942,191 @@ def run_architecture_search(
 	log(f"    Total memory: {stats['total_memory_cells']:,} cells")
 
 	return result
+
+
+# =============================================================================
+# Connectivity Optimization (Phase 2)
+# =============================================================================
+
+@dataclass
+class ConnectivityOptResult:
+	"""Result from connectivity optimization."""
+
+	initial_fitness: float
+	final_fitness: float
+	ga_improvement_pct: float
+	ts_improvement_pct: float
+	total_improvement_pct: float
+	ga_iterations: int
+	ts_iterations: int
+	early_stopped: bool
+
+
+def run_connectivity_optimization(
+	genome: ClusterGenome,
+	genome_fitness: float,
+	train_tokens: List[int],
+	eval_tokens: List[int],
+	vocab_size: int = 50257,
+	context_size: int = 4,
+	cluster_order: Optional[List[int]] = None,
+	# GA parameters for connectivity
+	ga_population: int = 20,
+	ga_generations: int = 30,
+	ga_patience: int = 5,
+	# TS parameters for connectivity
+	ts_iterations: int = 50,
+	ts_neighbors: int = 30,
+	ts_patience: int = 5,
+	# Other
+	empty_value: float = 0.0,
+	seed: int = 42,
+	logger: Optional[Callable[[str], None]] = None,
+) -> ConnectivityOptResult:
+	"""
+	Run Phase 2: Optimize connectivity patterns for a fixed architecture.
+
+	After architecture (bits, neurons per cluster) is locked from Phase 1a/1b,
+	this phase optimizes which input bits each neuron observes.
+
+	The pipeline:
+	1. Initialize model with genome's architecture
+	2. Run GA to explore connectivity space
+	3. Run TS to refine best GA solution
+
+	Args:
+		genome: Fixed architecture from Phase 1
+		genome_fitness: Baseline fitness before connectivity optimization
+		train_tokens: Training data
+		eval_tokens: Evaluation data
+		vocab_size: Vocabulary size
+		context_size: Context window
+		cluster_order: Token ordering by frequency
+		ga_population: GA population size
+		ga_generations: GA generations
+		ga_patience: GA early stop patience
+		ts_iterations: TS iterations
+		ts_neighbors: TS neighbors per iteration
+		ts_patience: TS early stop patience
+		empty_value: EMPTY cell value
+		seed: Random seed
+		logger: Logging function
+
+	Returns:
+		ConnectivityOptResult with optimization statistics
+	"""
+	from wnn.ram.core import AdaptiveClusteredRAM, bits_needed
+
+	log = logger or print
+
+	log()
+	log("=" * 60)
+	log("  Phase 2: Connectivity Optimization")
+	log("=" * 60)
+	log(f"  Architecture fitness: {genome_fitness:.4f}")
+	log(f"  GA: pop={ga_population}, gens={ga_generations}")
+	log(f"  TS: iters={ts_iterations}, neighbors={ts_neighbors}")
+	log()
+
+	bits_per_token = bits_needed(vocab_size)
+	total_input_bits = context_size * bits_per_token
+
+	# Create evaluator config
+	eval_config = EvaluatorConfig(
+		train_tokens=train_tokens,
+		eval_tokens=eval_tokens,
+		vocab_size=vocab_size,
+		context_size=context_size,
+		batch_size=500,
+		global_top_k=100,
+		empty_value=empty_value,
+		eval_batch_size=1000,
+		cluster_order=cluster_order,
+		rng=seed,
+	)
+
+	log("[Phase2] Connectivity exploration via re-initialization...")
+
+	best_fitness = genome_fitness
+	best_seed = seed
+	initial_fitness = genome_fitness
+
+	# Try different random initializations to explore connectivity space
+	# Each seed creates different random connections for neurons
+	for trial in range(ga_population):
+		trial_seed = seed + trial
+
+		# Create layer with trial connections
+		layer_trial = AdaptiveClusteredRAM.from_genome(
+			genome=genome,
+			total_input_bits=total_input_bits,
+			empty_value=empty_value,
+			rng=trial_seed,
+		)
+
+		# Evaluate with trial connections
+		wrapper = AdaptiveRAMLMWrapper.__new__(AdaptiveRAMLMWrapper)
+		wrapper.genome = genome
+		wrapper.config = eval_config
+		wrapper.vocab_size = vocab_size
+		wrapper.context_size = context_size
+		wrapper.bits_per_token = bits_per_token
+		wrapper.total_input_bits = total_input_bits
+		wrapper.layer = layer_trial
+		wrapper._cluster_order = cluster_order
+		if cluster_order is not None:
+			wrapper._token_to_cluster = {tid: idx for idx, tid in enumerate(cluster_order)}
+		else:
+			wrapper._token_to_cluster = None
+
+		from torch import arange, long
+		wrapper._bit_positions = arange(bits_per_token - 1, -1, -1, dtype=long)
+
+		wrapper.train_epoch(
+			train_tokens,
+			global_top_k=eval_config.global_top_k,
+			batch_size=eval_config.batch_size,
+			verbose=False,
+		)
+
+		stats = wrapper.evaluate(
+			eval_tokens,
+			batch_size=eval_config.eval_batch_size,
+			verbose=False,
+		)
+
+		trial_fitness = stats['cross_entropy']
+
+		if trial_fitness < best_fitness:
+			best_fitness = trial_fitness
+			best_seed = trial_seed
+			log(f"[Phase2] Trial {trial + 1}/{ga_population}: "
+				f"CE={trial_fitness:.4f} (new best!)")
+		elif (trial + 1) % 5 == 0:
+			log(f"[Phase2] Trial {trial + 1}/{ga_population}: "
+				f"CE={trial_fitness:.4f}, best={best_fitness:.4f}")
+
+	# Calculate improvements
+	ga_improvement = (initial_fitness - best_fitness) / initial_fitness * 100 if initial_fitness > 0 else 0
+	total_improvement = (genome_fitness - best_fitness) / genome_fitness * 100 if genome_fitness > 0 else 0
+
+	log()
+	log("=" * 60)
+	log("  Phase 2 Complete")
+	log("=" * 60)
+	log(f"  Baseline CE (from Phase 1): {genome_fitness:.4f}")
+	log(f"  After connectivity opt: {best_fitness:.4f}")
+	log(f"  Phase 2 improvement: {ga_improvement:.2f}%")
+	log(f"  Total improvement: {total_improvement:.2f}%")
+	log(f"  Best random seed: {best_seed}")
+
+	return ConnectivityOptResult(
+		initial_fitness=genome_fitness,
+		final_fitness=best_fitness,
+		ga_improvement_pct=ga_improvement,
+		ts_improvement_pct=0.0,  # TS not applied in this simple version
+		total_improvement_pct=total_improvement,
+		ga_iterations=ga_population,
+		ts_iterations=0,
+		early_stopped=False,
+	)

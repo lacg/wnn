@@ -5,14 +5,29 @@
 //!
 //! Key optimization: Clusters are grouped by their config to enable
 //! efficient batch processing within each group.
+//!
+//! Memory strategy:
+//! - Dense memory (bit-packed Vec) for bits <= SPARSE_THRESHOLD
+//! - Sparse memory (DashMap) for bits > SPARSE_THRESHOLD
+//! This enables up to 30 bits without memory explosion.
 
+use dashmap::DashMap;
 use rayon::prelude::*;
+use rustc_hash::FxHasher;
+use std::collections::HashMap;
+use std::hash::BuildHasherDefault;
 use std::sync::atomic::{AtomicI64, Ordering};
+
+/// Threshold for switching to sparse memory (2^12 = 4K addresses)
+const SPARSE_THRESHOLD: usize = 12;
 
 /// Memory cell values (2 bits each)
 const FALSE: i64 = 0;
 const TRUE: i64 = 1;
 const EMPTY: i64 = 2;
+
+/// Fast hasher for sparse memory
+type FxBuildHasher = BuildHasherDefault<FxHasher>;
 
 /// Bit-packing constants
 const BITS_PER_CELL: usize = 2;
@@ -361,11 +376,162 @@ pub fn train_batch_adaptive(
     true_modified + false_modified
 }
 
-/// Evaluate multiple genomes in parallel using rayon.
+/// Dense memory for a config group (bit-packed, fast for bits <= 12)
+/// Uses atomic operations for thread-safe concurrent writes.
+struct GroupDenseMemory {
+    /// Bit-packed memory words [total_neurons * words_per_neuron]
+    words: Vec<AtomicI64>,
+    words_per_neuron: usize,
+}
+
+impl GroupDenseMemory {
+    fn new(num_neurons: usize, bits: usize) -> Self {
+        let words_per_neuron = (1usize << bits).div_ceil(CELLS_PER_WORD);
+        let total_words = num_neurons * words_per_neuron;
+        // Initialize all cells to EMPTY (pack 31 EMPTY values per word)
+        let empty_word: i64 = (0..31).fold(0i64, |acc, i| acc | (EMPTY << (i * 2)));
+        Self {
+            words: (0..total_words).map(|_| AtomicI64::new(empty_word)).collect(),
+            words_per_neuron,
+        }
+    }
+
+    #[inline]
+    fn read(&self, neuron_idx: usize, address: usize) -> i64 {
+        let word_idx = address / CELLS_PER_WORD;
+        let cell_idx = address % CELLS_PER_WORD;
+        let word_offset = neuron_idx * self.words_per_neuron + word_idx;
+        let word = self.words[word_offset].load(Ordering::Relaxed);
+        (word >> (cell_idx * BITS_PER_CELL)) & CELL_MASK
+    }
+
+    /// Thread-safe atomic write using compare-and-swap
+    #[inline]
+    fn write(&self, neuron_idx: usize, address: usize, value: i64, allow_override: bool) -> bool {
+        let word_idx = address / CELLS_PER_WORD;
+        let cell_idx = address % CELLS_PER_WORD;
+        let word_offset = neuron_idx * self.words_per_neuron + word_idx;
+        let shift = cell_idx * BITS_PER_CELL;
+        let mask = CELL_MASK << shift;
+
+        loop {
+            let old_word = self.words[word_offset].load(Ordering::Relaxed);
+            let old_cell = (old_word >> shift) & CELL_MASK;
+
+            // TRUE (1) wins over FALSE (0) - only write FALSE if cell is EMPTY
+            if value == FALSE && old_cell == TRUE {
+                return false; // Don't overwrite TRUE with FALSE
+            }
+            if !allow_override && old_cell != EMPTY {
+                return false;
+            }
+            if old_cell == value {
+                return false;
+            }
+
+            let new_word = (old_word & !mask) | (value << shift);
+            if self.words[word_offset]
+                .compare_exchange_weak(old_word, new_word, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                return true;
+            }
+            // CAS failed, retry
+        }
+    }
+}
+
+/// Sparse memory for a config group (concurrent hash-based, for bits > 12)
+/// Uses DashMap for thread-safe concurrent access during parallel training.
+struct GroupSparseMemory {
+    /// Per-neuron concurrent hash maps: address -> cell value (0=FALSE, 1=TRUE, 2=EMPTY default)
+    neurons: Vec<DashMap<u64, u8>>,
+}
+
+impl GroupSparseMemory {
+    fn new(num_neurons: usize) -> Self {
+        Self {
+            neurons: (0..num_neurons).map(|_| DashMap::new()).collect(),
+        }
+    }
+
+    #[inline]
+    fn read(&self, neuron_idx: usize, address: u64) -> u8 {
+        *self.neurons[neuron_idx].get(&address).map(|v| *v).as_ref().unwrap_or(&2) // EMPTY
+    }
+
+    /// Thread-safe write using DashMap
+    #[inline]
+    fn write(&self, neuron_idx: usize, address: u64, value: u8, allow_override: bool) -> bool {
+        let map = &self.neurons[neuron_idx];
+        // Try to insert if not present
+        match map.entry(address) {
+            dashmap::mapref::entry::Entry::Occupied(mut e) => {
+                let current = *e.get();
+                if current == value {
+                    return false;
+                }
+                // TRUE (1) wins over FALSE (0) - only write FALSE if cell is EMPTY
+                if value == 0 && current == 1 {
+                    return false; // Don't overwrite TRUE with FALSE
+                }
+                if allow_override || current == 2 {
+                    e.insert(value);
+                    return true;
+                }
+                false
+            }
+            dashmap::mapref::entry::Entry::Vacant(e) => {
+                e.insert(value);
+                true
+            }
+        }
+    }
+}
+
+/// Hybrid memory - Dense for low bits, Sparse for high bits
+/// Both variants support thread-safe concurrent access for parallel training.
+enum GroupMemory {
+    Dense(GroupDenseMemory),
+    Sparse(GroupSparseMemory),
+}
+
+impl GroupMemory {
+    fn new(num_neurons: usize, bits: usize) -> Self {
+        if bits <= SPARSE_THRESHOLD {
+            GroupMemory::Dense(GroupDenseMemory::new(num_neurons, bits))
+        } else {
+            GroupMemory::Sparse(GroupSparseMemory::new(num_neurons))
+        }
+    }
+
+    #[inline]
+    fn read(&self, neuron_idx: usize, address: usize) -> i64 {
+        match self {
+            GroupMemory::Dense(m) => m.read(neuron_idx, address),
+            GroupMemory::Sparse(m) => m.read(neuron_idx, address as u64) as i64,
+        }
+    }
+
+    /// Thread-safe write (both variants support concurrent access)
+    #[inline]
+    fn write(&self, neuron_idx: usize, address: usize, value: i64, allow_override: bool) -> bool {
+        match self {
+            GroupMemory::Dense(m) => m.write(neuron_idx, address, value, allow_override),
+            GroupMemory::Sparse(m) => m.write(neuron_idx, address as u64, value as u8, allow_override),
+        }
+    }
+}
+
+/// Evaluate multiple genomes in parallel using HYBRID MEMORY.
 ///
 /// This is the KEY acceleration function for GA optimization.
 /// Each genome is evaluated independently with its own memory,
 /// all running in parallel across CPU cores.
+///
+/// Uses hybrid memory strategy:
+/// - Dense (bit-packed Vec) for bits <= 12: Fast O(1) access
+/// - Sparse (HashMap) for bits > 12: Memory-efficient O(written cells)
 ///
 /// Args:
 ///   genomes_bits_flat: [num_genomes * num_clusters] bits per cluster for each genome
@@ -413,19 +579,14 @@ pub fn evaluate_genomes_parallel(
         // Build config groups for this genome
         let groups = build_config_groups(&bits_per_cluster, &neurons_per_cluster);
 
-        // Calculate total memory size needed
-        let total_memory_words: usize = groups.iter().map(|g| g.memory_size()).sum();
+        // Create hybrid memory for each config group
+        // Dense for bits <= 12 (fast), Sparse for bits > 12 (memory-efficient)
+        let mut group_memories: Vec<GroupMemory> = groups.iter()
+            .map(|g| GroupMemory::new(g.total_neurons(), g.bits))
+            .collect();
+
+        // Calculate total connection size and generate random connections
         let total_conn_size: usize = groups.iter().map(|g| g.conn_size()).sum();
-
-        // Allocate memory for this genome (initialized to EMPTY = 2)
-        let mut memory_words: Vec<i64> = vec![0; total_memory_words];
-        // Initialize all cells to EMPTY (pack 31 EMPTY values per word)
-        let empty_word: i64 = (0..31).fold(0i64, |acc, i| acc | (EMPTY << (i * 2)));
-        for word in &mut memory_words {
-            *word = empty_word;
-        }
-
-        // Generate random connections for this genome
         let mut rng = rand::rngs::SmallRng::seed_from_u64(genome_idx as u64 + 12345);
         let mut connections_flat: Vec<i64> = Vec::with_capacity(total_conn_size);
 
@@ -438,54 +599,103 @@ pub fn evaluate_genomes_parallel(
             }
         }
 
-        // Train this genome
-        train_batch_adaptive(
-            train_input_bits,
-            train_targets,
-            train_negatives,
-            &connections_flat,
-            &mut memory_words,
-            &groups,
-            num_train,
-            total_input_bits,
-            num_negatives,
-            num_clusters,
-            false, // don't allow override
-        );
+        // Build cluster-to-group mapping
+        let mut cluster_to_group: Vec<(usize, usize)> = vec![(0, 0); num_clusters];
+        for (group_idx, group) in groups.iter().enumerate() {
+            for (local_idx, &cluster_id) in group.cluster_ids.iter().enumerate() {
+                cluster_to_group[cluster_id] = (group_idx, local_idx);
+            }
+        }
 
-        // Evaluate this genome
-        let probs = forward_batch_adaptive(
-            eval_input_bits,
-            &connections_flat,
-            &memory_words,
-            &groups,
-            num_eval,
-            total_input_bits,
-            num_clusters,
-        );
+        // Train this genome using hybrid memory (PARALLEL across examples)
+        (0..num_train).into_par_iter().for_each(|ex_idx| {
+            let input_start = ex_idx * total_input_bits;
+            let input_bits = &train_input_bits[input_start..input_start + total_input_bits];
 
-        // Compute cross-entropy
-        let mut total_ce = 0.0f64;
+            let true_cluster = train_targets[ex_idx] as usize;
+
+            // Train positive example
+            {
+                let (group_idx, local_cluster) = cluster_to_group[true_cluster];
+                let group = &groups[group_idx];
+                let memory = &group_memories[group_idx];
+
+                let neuron_base = local_cluster * group.neurons;
+                let conn_base = group.conn_offset + local_cluster * group.neurons * group.bits;
+
+                for n in 0..group.neurons {
+                    let conn_start = conn_base + n * group.bits;
+                    let address = compute_address(input_bits, &connections_flat[conn_start..], group.bits);
+                    memory.write(neuron_base + n, address, TRUE, false);
+                }
+            }
+
+            // Train negative examples
+            let neg_start = ex_idx * num_negatives;
+            for k in 0..num_negatives {
+                let false_cluster = train_negatives[neg_start + k] as usize;
+                if false_cluster == true_cluster {
+                    continue;
+                }
+
+                let (group_idx, local_cluster) = cluster_to_group[false_cluster];
+                let group = &groups[group_idx];
+                let memory = &group_memories[group_idx];
+
+                let neuron_base = local_cluster * group.neurons;
+                let conn_base = group.conn_offset + local_cluster * group.neurons * group.bits;
+
+                for n in 0..group.neurons {
+                    let conn_start = conn_base + n * group.bits;
+                    let address = compute_address(input_bits, &connections_flat[conn_start..], group.bits);
+                    memory.write(neuron_base + n, address, FALSE, false);
+                }
+            }
+        });
+
+        // Evaluate this genome using hybrid memory (PARALLEL across examples)
+        // Each example computes its own cross-entropy contribution
         let epsilon = 1e-10f64;
 
-        for (ex_idx, &target) in eval_targets.iter().enumerate() {
-            let target_idx = target as usize;
-            let prob_start = ex_idx * num_clusters;
+        let total_ce: f64 = (0..num_eval).into_par_iter().map(|ex_idx| {
+            let input_start = ex_idx * total_input_bits;
+            let input_bits = &eval_input_bits[input_start..input_start + total_input_bits];
+            let target_idx = eval_targets[ex_idx] as usize;
 
-            // Get raw scores and apply softmax
-            let scores: Vec<f64> = probs[prob_start..prob_start + num_clusters]
-                .iter()
-                .map(|&p| p as f64)
-                .collect();
+            // Compute scores for all clusters
+            let mut scores: Vec<f64> = vec![0.0; num_clusters];
 
-            // Softmax
+            for (group_idx, group) in groups.iter().enumerate() {
+                let memory = &group_memories[group_idx];
+
+                for (local_cluster, &cluster_id) in group.cluster_ids.iter().enumerate() {
+                    let neuron_base = local_cluster * group.neurons;
+                    let conn_base = group.conn_offset + local_cluster * group.neurons * group.bits;
+
+                    let mut sum = 0.0f32;
+                    for n in 0..group.neurons {
+                        let conn_start = conn_base + n * group.bits;
+                        let address = compute_address(input_bits, &connections_flat[conn_start..], group.bits);
+                        let cell = memory.read(neuron_base + n, address);
+                        sum += match cell {
+                            FALSE => 0.0,
+                            TRUE => 1.0,
+                            _ => empty_value, // EMPTY
+                        };
+                    }
+
+                    scores[cluster_id] = (sum / group.neurons as f32) as f64;
+                }
+            }
+
+            // Softmax and cross-entropy for this example
             let max_score = scores.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
             let exp_scores: Vec<f64> = scores.iter().map(|&s| (s - max_score).exp()).collect();
             let sum_exp: f64 = exp_scores.iter().sum();
 
             let target_prob = exp_scores[target_idx] / sum_exp;
-            total_ce -= (target_prob + epsilon).ln();
-        }
+            -(target_prob + epsilon).ln()
+        }).sum();
 
         total_ce / num_eval as f64
     }).collect()
