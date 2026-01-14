@@ -119,7 +119,7 @@ def main():
 		# Other settings
 		init_strategy=GenomeInitStrategy.FREQUENCY_SCALED,
 		empty_value=0.0,         # Best performing EMPTY value
-		seed=42,
+		seed=int(time.time()),   # Time-based seed for different runs
 		logger=logger,           # Pass our Logger (callable)
 	)
 

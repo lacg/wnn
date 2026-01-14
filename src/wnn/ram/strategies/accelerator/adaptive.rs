@@ -361,6 +361,136 @@ pub fn train_batch_adaptive(
     true_modified + false_modified
 }
 
+/// Evaluate multiple genomes in parallel using rayon.
+///
+/// This is the KEY acceleration function for GA optimization.
+/// Each genome is evaluated independently with its own memory,
+/// all running in parallel across CPU cores.
+///
+/// Args:
+///   genomes_bits_flat: [num_genomes * num_clusters] bits per cluster for each genome
+///   genomes_neurons_flat: [num_genomes * num_clusters] neurons per cluster for each genome
+///   num_genomes: Number of genomes to evaluate
+///   num_clusters: Number of clusters (vocab size)
+///   train_input_bits: [num_train * total_input_bits] training contexts
+///   train_targets: [num_train] target cluster for each training example
+///   train_negatives: [num_train * num_negatives] negative clusters
+///   num_train: Number of training examples
+///   num_negatives: Number of negative samples per example
+///   eval_input_bits: [num_eval * total_input_bits] evaluation contexts
+///   eval_targets: [num_eval] target cluster for each eval example
+///   num_eval: Number of evaluation examples
+///   total_input_bits: Input bits per example
+///   empty_value: Value for EMPTY cells (0.0 recommended)
+///
+/// Returns: [num_genomes] cross-entropy values (lower is better)
+pub fn evaluate_genomes_parallel(
+    genomes_bits_flat: &[usize],
+    genomes_neurons_flat: &[usize],
+    num_genomes: usize,
+    num_clusters: usize,
+    train_input_bits: &[bool],
+    train_targets: &[i64],
+    train_negatives: &[i64],
+    num_train: usize,
+    num_negatives: usize,
+    eval_input_bits: &[bool],
+    eval_targets: &[i64],
+    num_eval: usize,
+    total_input_bits: usize,
+    empty_value: f32,
+) -> Vec<f64> {
+    use rand::prelude::*;
+    use rand::SeedableRng;
+
+    // Evaluate each genome in parallel
+    (0..num_genomes).into_par_iter().map(|genome_idx| {
+        // Extract this genome's configuration
+        let genome_offset = genome_idx * num_clusters;
+        let bits_per_cluster: Vec<usize> = genomes_bits_flat[genome_offset..genome_offset + num_clusters].to_vec();
+        let neurons_per_cluster: Vec<usize> = genomes_neurons_flat[genome_offset..genome_offset + num_clusters].to_vec();
+
+        // Build config groups for this genome
+        let groups = build_config_groups(&bits_per_cluster, &neurons_per_cluster);
+
+        // Calculate total memory size needed
+        let total_memory_words: usize = groups.iter().map(|g| g.memory_size()).sum();
+        let total_conn_size: usize = groups.iter().map(|g| g.conn_size()).sum();
+
+        // Allocate memory for this genome (initialized to EMPTY = 2)
+        let mut memory_words: Vec<i64> = vec![0; total_memory_words];
+        // Initialize all cells to EMPTY (pack 31 EMPTY values per word)
+        let empty_word: i64 = (0..31).fold(0i64, |acc, i| acc | (EMPTY << (i * 2)));
+        for word in &mut memory_words {
+            *word = empty_word;
+        }
+
+        // Generate random connections for this genome
+        let mut rng = rand::rngs::SmallRng::seed_from_u64(genome_idx as u64 + 12345);
+        let mut connections_flat: Vec<i64> = Vec::with_capacity(total_conn_size);
+
+        for group in &groups {
+            let total_neurons = group.total_neurons();
+            for _ in 0..total_neurons {
+                for _ in 0..group.bits {
+                    connections_flat.push(rng.gen_range(0..total_input_bits as i64));
+                }
+            }
+        }
+
+        // Train this genome
+        train_batch_adaptive(
+            train_input_bits,
+            train_targets,
+            train_negatives,
+            &connections_flat,
+            &mut memory_words,
+            &groups,
+            num_train,
+            total_input_bits,
+            num_negatives,
+            num_clusters,
+            false, // don't allow override
+        );
+
+        // Evaluate this genome
+        let probs = forward_batch_adaptive(
+            eval_input_bits,
+            &connections_flat,
+            &memory_words,
+            &groups,
+            num_eval,
+            total_input_bits,
+            num_clusters,
+        );
+
+        // Compute cross-entropy
+        let mut total_ce = 0.0f64;
+        let epsilon = 1e-10f64;
+
+        for (ex_idx, &target) in eval_targets.iter().enumerate() {
+            let target_idx = target as usize;
+            let prob_start = ex_idx * num_clusters;
+
+            // Get raw scores and apply softmax
+            let scores: Vec<f64> = probs[prob_start..prob_start + num_clusters]
+                .iter()
+                .map(|&p| p as f64)
+                .collect();
+
+            // Softmax
+            let max_score = scores.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let exp_scores: Vec<f64> = scores.iter().map(|&s| (s - max_score).exp()).collect();
+            let sum_exp: f64 = exp_scores.iter().sum();
+
+            let target_prob = exp_scores[target_idx] / sum_exp;
+            total_ce -= (target_prob + epsilon).ln();
+        }
+
+        total_ce / num_eval as f64
+    }).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

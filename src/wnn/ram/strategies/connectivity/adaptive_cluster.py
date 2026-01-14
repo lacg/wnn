@@ -546,6 +546,174 @@ class AdaptiveOptResult:
 	early_stopped: bool
 
 
+class RustParallelEvaluator:
+	"""
+	Rust-accelerated parallel genome evaluation using rayon.
+
+	Evaluates multiple genomes concurrently in Rust threads.
+	Much faster than Python multiprocessing - no process spawn or pickle overhead.
+
+	Usage:
+		evaluator = RustParallelEvaluator(config)
+		fitness_list = evaluator.evaluate_batch(genomes)
+	"""
+
+	def __init__(self, config: 'EvaluatorConfig'):
+		"""
+		Initialize Rust parallel evaluator.
+
+		Args:
+			config: Evaluation configuration with pre-computed training data
+		"""
+		self.config = config
+		self._prepared = False
+		self._train_data = None
+		self._eval_data = None
+
+	def _prepare_data(self):
+		"""Pre-encode training and evaluation data for Rust."""
+		if self._prepared:
+			return
+
+		import numpy as np
+		from wnn.ram.core import bits_needed
+
+		cfg = self.config
+		bits_per_token = bits_needed(cfg.vocab_size)
+		total_input_bits = cfg.context_size * bits_per_token
+
+		# Encode training examples
+		n_train = len(cfg.train_tokens) - cfg.context_size
+		train_input_bits = np.zeros(n_train * total_input_bits, dtype=np.uint8)
+		train_targets = np.zeros(n_train, dtype=np.int64)
+
+		for i in range(n_train):
+			context = cfg.train_tokens[i:i + cfg.context_size]
+			target = cfg.train_tokens[i + cfg.context_size]
+
+			# Encode context to bits
+			for j, token in enumerate(context):
+				for b in range(bits_per_token):
+					bit_idx = i * total_input_bits + j * bits_per_token + b
+					train_input_bits[bit_idx] = (token >> (bits_per_token - 1 - b)) & 1
+
+			# Map target to cluster if needed
+			if cfg.cluster_order is not None:
+				cluster_map = {tid: idx for idx, tid in enumerate(cfg.cluster_order)}
+				train_targets[i] = cluster_map.get(target, target)
+			else:
+				train_targets[i] = target
+
+		# Generate negative samples (top-k tokens)
+		from collections import Counter
+		counts = Counter(cfg.train_tokens)
+		top_k_tokens = [t for t, _ in counts.most_common(cfg.global_top_k)]
+		num_negatives = min(5, cfg.global_top_k)
+
+		rng = np.random.RandomState(42)
+		train_negatives = np.zeros(n_train * num_negatives, dtype=np.int64)
+		for i in range(n_train):
+			neg_indices = rng.randint(0, cfg.global_top_k, num_negatives)
+			for k, neg_idx in enumerate(neg_indices):
+				neg_token = top_k_tokens[neg_idx]
+				if cfg.cluster_order is not None:
+					cluster_map = {tid: idx for idx, tid in enumerate(cfg.cluster_order)}
+					train_negatives[i * num_negatives + k] = cluster_map.get(neg_token, neg_token)
+				else:
+					train_negatives[i * num_negatives + k] = neg_token
+
+		# Encode evaluation examples
+		n_eval = len(cfg.eval_tokens) - cfg.context_size
+		eval_input_bits = np.zeros(n_eval * total_input_bits, dtype=np.uint8)
+		eval_targets = np.zeros(n_eval, dtype=np.int64)
+
+		for i in range(n_eval):
+			context = cfg.eval_tokens[i:i + cfg.context_size]
+			target = cfg.eval_tokens[i + cfg.context_size]
+
+			for j, token in enumerate(context):
+				for b in range(bits_per_token):
+					bit_idx = i * total_input_bits + j * bits_per_token + b
+					eval_input_bits[bit_idx] = (token >> (bits_per_token - 1 - b)) & 1
+
+			if cfg.cluster_order is not None:
+				cluster_map = {tid: idx for idx, tid in enumerate(cfg.cluster_order)}
+				eval_targets[i] = cluster_map.get(target, target)
+			else:
+				eval_targets[i] = target
+
+		self._train_data = {
+			'input_bits': train_input_bits,
+			'targets': train_targets,
+			'negatives': train_negatives,
+			'num_examples': n_train,
+			'num_negatives': num_negatives,
+		}
+		self._eval_data = {
+			'input_bits': eval_input_bits,
+			'targets': eval_targets,
+			'num_examples': n_eval,
+		}
+		self._total_input_bits = total_input_bits
+		self._prepared = True
+
+	def evaluate_batch(
+		self,
+		genomes: List[ClusterGenome],
+		logger: Optional[Callable[[str], None]] = None,
+	) -> List[float]:
+		"""
+		Evaluate multiple genomes in parallel using Rust/rayon.
+
+		Args:
+			genomes: List of genomes to evaluate
+			logger: Optional logging function
+
+		Returns:
+			List of cross-entropy values for each genome
+		"""
+		import ram_accelerator
+
+		log = logger or (lambda x: None)
+
+		# Prepare data on first call
+		self._prepare_data()
+
+		log(f"[RustParallel] Evaluating {len(genomes)} genomes...")
+
+		# Flatten genome configurations
+		# Format: [genome0_bits..., genome0_neurons..., genome1_bits..., genome1_neurons..., ...]
+		genomes_bits_flat = []
+		genomes_neurons_flat = []
+		for g in genomes:
+			genomes_bits_flat.extend(g.bits_per_cluster)
+			genomes_neurons_flat.extend(g.neurons_per_cluster)
+
+		# Call Rust parallel evaluator
+		fitness = ram_accelerator.evaluate_genomes_parallel(
+			genomes_bits_flat,
+			genomes_neurons_flat,
+			len(genomes),
+			self.config.vocab_size,
+			self._train_data['input_bits'],
+			self._train_data['targets'],
+			self._train_data['negatives'],
+			self._train_data['num_examples'],
+			self._train_data['num_negatives'],
+			self._eval_data['input_bits'],
+			self._eval_data['targets'],
+			self._eval_data['num_examples'],
+			self._total_input_bits,
+			self.config.empty_value,
+		)
+
+		return list(fitness)
+
+	def evaluate_single(self, genome: ClusterGenome) -> float:
+		"""Evaluate a single genome."""
+		return self.evaluate_batch([genome])[0]
+
+
 class AdaptiveClusterOptimizer:
 	"""
 	Evolves cluster architectures (bits-per-cluster, neurons-per-cluster) using GA.
@@ -571,6 +739,7 @@ class AdaptiveClusterOptimizer:
 		token_frequencies: Optional[List[int]] = None,
 		seed: int = 42,
 		logger: Optional[Callable[[str], None]] = None,
+		batch_evaluator: Optional['RustParallelEvaluator'] = None,
 	):
 		"""
 		Initialize the optimizer.
@@ -583,6 +752,9 @@ class AdaptiveClusterOptimizer:
 			token_frequencies: Token occurrence counts for FREQUENCY_SCALED init
 			seed: Random seed
 			logger: Optional logging function
+			batch_evaluator: Optional Rust parallel evaluator for batch evaluation.
+			                 If provided, evaluates all genomes in parallel using Rust/rayon.
+			                 Falls back to evaluate_fn if not provided.
 		"""
 		self.config = config
 		self.evaluate_fn = evaluate_fn
@@ -591,10 +763,41 @@ class AdaptiveClusterOptimizer:
 		self.seed = seed
 		self._log = logger or print
 		self._rng = None
+		self._batch_evaluator = batch_evaluator
 
 	def _ensure_rng(self):
 		if self._rng is None:
 			self._rng = random.Random(self.seed)
+
+	def _evaluate_population(
+		self,
+		population: List[ClusterGenome],
+		tracker: Optional[ProgressTracker] = None,
+	) -> List[float]:
+		"""
+		Evaluate fitness of all genomes in the population.
+
+		Uses Rust parallel evaluator if available, otherwise falls back to sequential.
+
+		Args:
+			population: List of genomes to evaluate
+			tracker: Optional progress tracker for logging
+
+		Returns:
+			List of fitness values (cross-entropy, lower is better)
+		"""
+		if self._batch_evaluator is not None:
+			# Rust parallel evaluation (all genomes at once)
+			fitness = self._batch_evaluator.evaluate_batch(population, logger=self._log)
+		else:
+			# Sequential Python evaluation with progress tracking
+			fitness = []
+			for i, genome in enumerate(population):
+				fit = self.evaluate_fn(genome)
+				fitness.append(fit)
+				if tracker:
+					tracker.tick_individual(fit, i, len(population))
+		return fitness
 
 	def optimize(
 		self,
@@ -633,11 +836,11 @@ class AdaptiveClusterOptimizer:
 
 		# Evaluate initial population with progress logging
 		self._log(f"[AdaptiveGA] Evaluating initial population ({cfg.population_size} genomes)...")
-		fitness = []
-		for i, genome in enumerate(population):
-			fit = self.evaluate_fn(genome)
-			fitness.append(fit)
-			tracker.tick_individual(fit, i, cfg.population_size)
+		import time as _time
+		_start = _time.time()
+		fitness = self._evaluate_population(population, tracker if self._batch_evaluator is None else None)
+		_elapsed = _time.time() - _start
+		self._log(f"[AdaptiveGA] Initial population evaluated in {_elapsed:.1f}s")
 
 		# Record initial population stats
 		tracker.tick(fitness, generation=-1, log=False)  # Gen -1 = initial
@@ -685,7 +888,7 @@ class AdaptiveClusterOptimizer:
 			population = new_population
 
 			# Evaluate new population
-			fitness = [self.evaluate_fn(g) for g in population]
+			fitness = self._evaluate_population(population)
 			gen_best_idx = min(range(len(fitness)), key=lambda i: fitness[i])
 
 			if fitness[gen_best_idx] < best_fitness:
@@ -1225,8 +1428,18 @@ def run_architecture_search(
 		rng=seed,
 	)
 
-	# Create evaluation function
+	# Create evaluation function (fallback for single genome evaluation)
 	evaluate_fn = create_genome_evaluator(eval_config, verbose=False)
+
+	# Create Rust parallel evaluator for batch evaluation
+	batch_evaluator = None
+	try:
+		batch_evaluator = RustParallelEvaluator(eval_config)
+		log("[AdaptiveGA] Using Rust parallel evaluator (rayon)")
+	except ImportError:
+		log("[AdaptiveGA] Rust accelerator not available, using Python sequential")
+	except Exception as e:
+		log(f"[AdaptiveGA] Warning: Rust evaluator init failed ({e}), using Python")
 
 	# Create optimizer config
 	cluster_config = AdaptiveClusterConfig(
@@ -1252,6 +1465,7 @@ def run_architecture_search(
 		token_frequencies=token_frequencies,
 		seed=seed,
 		logger=log,
+		batch_evaluator=batch_evaluator,
 	)
 
 	# Run optimization

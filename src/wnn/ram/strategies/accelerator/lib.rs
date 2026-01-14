@@ -2491,6 +2491,97 @@ fn adaptive_train_batch<'py>(
     Ok(modified)
 }
 
+/// Evaluate multiple genomes in parallel using Rust/rayon
+///
+/// This is the KEY acceleration for GA optimization - evaluates all genomes
+/// concurrently using a thread pool (16 threads on M4 Max).
+///
+/// Memory efficient: ~200MB per active genome, not ~2GB like Python multiprocessing.
+///
+/// Args:
+///   genomes_bits_flat: [num_genomes * num_clusters] bits per cluster
+///   genomes_neurons_flat: [num_genomes * num_clusters] neurons per cluster
+///   num_genomes: Number of genomes to evaluate
+///   num_clusters: Vocabulary size
+///   train_input_bits: [num_train * total_input_bits] training contexts
+///   train_targets: [num_train] target clusters
+///   train_negatives: [num_train * num_negatives] negative samples
+///   num_train: Number of training examples
+///   num_negatives: Negatives per example
+///   eval_input_bits: [num_eval * total_input_bits] eval contexts
+///   eval_targets: [num_eval] eval targets
+///   num_eval: Number of eval examples
+///   total_input_bits: Bits per context
+///   empty_value: Value for EMPTY cells (0.0 recommended)
+///
+/// Returns: [num_genomes] cross-entropy values
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn evaluate_genomes_parallel<'py>(
+    py: Python<'py>,
+    genomes_bits_flat: Vec<usize>,
+    genomes_neurons_flat: Vec<usize>,
+    num_genomes: usize,
+    num_clusters: usize,
+    train_input_bits: PyReadonlyArray1<'py, u8>,
+    train_targets: PyReadonlyArray1<'py, i64>,
+    train_negatives: PyReadonlyArray1<'py, i64>,
+    num_train: usize,
+    num_negatives: usize,
+    eval_input_bits: PyReadonlyArray1<'py, u8>,
+    eval_targets: PyReadonlyArray1<'py, i64>,
+    num_eval: usize,
+    total_input_bits: usize,
+    empty_value: f32,
+) -> PyResult<Vec<f64>> {
+    // Extract data before allow_threads
+    let train_input_slice = train_input_bits.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Train input not contiguous: {}", e))
+    })?;
+    let train_targets_slice = train_targets.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Train targets not contiguous: {}", e))
+    })?;
+    let train_negatives_slice = train_negatives.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Train negatives not contiguous: {}", e))
+    })?;
+    let eval_input_slice = eval_input_bits.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Eval input not contiguous: {}", e))
+    })?;
+    let eval_targets_slice = eval_targets.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Eval targets not contiguous: {}", e))
+    })?;
+
+    // Convert to owned data
+    let train_input_bools: Vec<bool> = train_input_slice.iter().map(|&b| b != 0).collect();
+    let train_targets_vec: Vec<i64> = train_targets_slice.to_vec();
+    let train_negatives_vec: Vec<i64> = train_negatives_slice.to_vec();
+    let eval_input_bools: Vec<bool> = eval_input_slice.iter().map(|&b| b != 0).collect();
+    let eval_targets_vec: Vec<i64> = eval_targets_slice.to_vec();
+
+    // Set empty value for this evaluation
+    ramlm::set_empty_value(empty_value);
+
+    py.allow_threads(|| {
+        let fitness = adaptive::evaluate_genomes_parallel(
+            &genomes_bits_flat,
+            &genomes_neurons_flat,
+            num_genomes,
+            num_clusters,
+            &train_input_bools,
+            &train_targets_vec,
+            &train_negatives_vec,
+            num_train,
+            num_negatives,
+            &eval_input_bools,
+            &eval_targets_vec,
+            num_eval,
+            total_input_bits,
+            empty_value,
+        );
+        Ok(fitness)
+    })
+}
+
 /// Python module definition
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -2567,5 +2658,7 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(adaptive_build_config_groups, m)?)?;
     m.add_function(wrap_pyfunction!(adaptive_forward_batch, m)?)?;
     m.add_function(wrap_pyfunction!(adaptive_train_batch, m)?)?;
+    // Parallel genome evaluation (KEY for GA optimization)
+    m.add_function(wrap_pyfunction!(evaluate_genomes_parallel, m)?)?;
     Ok(())
 }

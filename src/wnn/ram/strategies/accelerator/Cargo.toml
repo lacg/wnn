@@ -31,6 +31,9 @@ dashmap = "6.1"
 # For bit manipulation
 bitvec = "1.0"
 
+# Random number generation (for parallel genome initialization)
+rand = { version = "0.8", features = ["small_rng"] }
+
 [profile.release]
 lto = true
 codegen-units = 1
