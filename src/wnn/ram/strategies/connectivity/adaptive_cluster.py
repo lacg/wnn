@@ -678,6 +678,7 @@ class RustParallelEvaluator:
 		logger: Optional[Callable[[str], None]] = None,
 		batch_size: int = 1,  # Sequential genomes with inner parallelism
 		generation: Optional[int] = None,  # Current generation for logging
+		total_generations: Optional[int] = None,  # Total generations for logging
 	) -> List[float]:
 		"""
 		Evaluate multiple genomes in parallel using Rust/rayon.
@@ -687,6 +688,7 @@ class RustParallelEvaluator:
 			logger: Optional logging function
 			batch_size: Number of genomes to evaluate in parallel (all 30 - training data shared)
 			generation: Current generation number for logging (None = initial population)
+			total_generations: Total number of generations for logging context
 
 		Returns:
 			List of cross-entropy values for each genome
@@ -704,7 +706,13 @@ class RustParallelEvaluator:
 		start_time = time.time()
 
 		# Generation prefix for logs
-		gen_prefix = f"[Gen {generation + 1}]" if generation is not None else "[Init]"
+		if generation is not None:
+			if total_generations is not None:
+				gen_prefix = f"[Gen {generation + 1}/{total_generations}]"
+			else:
+				gen_prefix = f"[Gen {generation + 1}]"
+		else:
+			gen_prefix = "[Init]"
 
 		# Process in batches to limit memory usage
 		for batch_start in range(0, total_genomes, batch_size):
@@ -813,6 +821,7 @@ class AdaptiveClusterOptimizer:
 		population: List[ClusterGenome],
 		tracker: Optional[ProgressTracker] = None,
 		generation: Optional[int] = None,
+		total_generations: Optional[int] = None,
 	) -> List[float]:
 		"""
 		Evaluate fitness of all genomes in the population.
@@ -823,6 +832,7 @@ class AdaptiveClusterOptimizer:
 			population: List of genomes to evaluate
 			tracker: Optional progress tracker for logging
 			generation: Current generation number (None = initial population)
+			total_generations: Total number of generations for logging
 
 		Returns:
 			List of fitness values (cross-entropy, lower is better)
@@ -830,7 +840,8 @@ class AdaptiveClusterOptimizer:
 		if self._batch_evaluator is not None:
 			# Rust parallel evaluation (all genomes at once)
 			fitness = self._batch_evaluator.evaluate_batch(
-				population, logger=self._log, generation=generation
+				population, logger=self._log, generation=generation,
+				total_generations=total_generations
 			)
 		else:
 			# Sequential Python evaluation with progress tracking
@@ -878,14 +889,14 @@ class AdaptiveClusterOptimizer:
 		)
 
 		# Evaluate initial population with progress logging
-		self._log(f"[AdaptiveGA] Evaluating initial population ({cfg.population_size} genomes)...")
+		self._log(f"[AdaptiveGA] Generation 0/{cfg.generations}: Evaluating initial population ({cfg.population_size} genomes)...")
 		import time as _time
 		_start = _time.time()
 		fitness = self._evaluate_population(
 			population, tracker if self._batch_evaluator is None else None, generation=None
 		)
 		_elapsed = _time.time() - _start
-		self._log(f"[AdaptiveGA] Initial population evaluated in {_elapsed:.1f}s")
+		self._log(f"[AdaptiveGA] Generation 0/{cfg.generations}: Complete in {_elapsed:.1f}s")
 
 		# Record initial population stats
 		tracker.tick(fitness, generation=-1, log=False)  # Gen -1 = initial
@@ -933,6 +944,7 @@ class AdaptiveClusterOptimizer:
 			population = new_population
 
 			# Evaluate new population
+			self._log(f"[AdaptiveGA] Generation {gen + 1}/{cfg.generations}: Evaluating {cfg.population_size} genomes...")
 			fitness = self._evaluate_population(population, generation=gen)
 			gen_best_idx = min(range(len(fitness)), key=lambda i: fitness[i])
 
