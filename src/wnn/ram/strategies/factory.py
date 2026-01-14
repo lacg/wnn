@@ -1,7 +1,7 @@
 """
 Strategy Factories
 
-Factory classes for creating training and forward strategies.
+Factory classes for creating training, forward, and optimizer strategies.
 Uses match-case for clean type dispatching.
 
 Usage:
@@ -18,6 +18,15 @@ Usage:
 	fwd_strategy = ForwardStrategyFactory.create(
 		ForwardStrategyType.AUTOREGRESSIVE,
 		use_cache=True,
+	)
+
+	# Create optimizer strategy by type
+	from wnn.ram.strategies.factory import OptimizerStrategyFactory, OptimizerStrategyType
+	optimizer = OptimizerStrategyFactory.create(
+		OptimizerStrategyType.ARCHITECTURE_GA,
+		num_clusters=50257,
+		population_size=30,
+		generations=50,
 	)
 """
 
@@ -222,3 +231,98 @@ def _filter_kwargs(config_class: type, kwargs: dict[str, Any]) -> dict[str, Any]
 				valid_fields.update(f.name for f in dataclasses.fields(base))
 		return {k: v for k, v in kwargs.items() if k in valid_fields}
 	return kwargs
+
+
+# =============================================================================
+# Optimizer Strategy Factory (GA/TS for connectivity and architecture)
+# =============================================================================
+
+class OptimizerStrategyType(IntEnum):
+	"""
+	Available optimizer strategy types for connectivity and architecture search.
+
+	Two domains:
+	- CONNECTIVITY_*: Optimize which input bits each neuron observes (tiered)
+	- ARCHITECTURE_*: Optimize bits/neurons per cluster (adaptive)
+
+	Two algorithms:
+	- *_GA: Genetic Algorithm (global search, population-based)
+	- *_TS: Tabu Search (local search from initial solution)
+	"""
+	# Connectivity optimization (tiered clustered RAM)
+	CONNECTIVITY_GA = auto()
+	CONNECTIVITY_TS = auto()
+	# Architecture optimization (adaptive clustered RAM)
+	ARCHITECTURE_GA = auto()
+	ARCHITECTURE_TS = auto()
+
+
+class OptimizerStrategyFactory:
+	"""
+	Factory for creating optimizer strategies (GA/TS).
+
+	Supports both connectivity optimization (tiered) and architecture
+	optimization (adaptive) strategies.
+
+	Usage:
+		# Architecture GA (adaptive cluster)
+		strategy = OptimizerStrategyFactory.create(
+			OptimizerStrategyType.ARCHITECTURE_GA,
+			num_clusters=50257,
+			population_size=30,
+			generations=50,
+		)
+
+		# Connectivity GA (tiered cluster)
+		strategy = OptimizerStrategyFactory.create(
+			OptimizerStrategyType.CONNECTIVITY_GA,
+			num_clusters=100,
+			bits_per_cluster=16,
+		)
+	"""
+
+	@staticmethod
+	def create(
+		strategy_type: OptimizerStrategyType,
+		**kwargs: Any,
+	):
+		"""
+		Create an optimizer strategy.
+
+		Args:
+			strategy_type: Type of optimizer to create
+			**kwargs: Configuration options passed to the strategy
+
+		Returns:
+			Configured optimizer strategy
+
+		Raises:
+			ValueError: If strategy_type is not recognized
+		"""
+		match strategy_type:
+			case OptimizerStrategyType.ARCHITECTURE_GA:
+				from wnn.ram.strategies.connectivity.architecture_strategies import (
+					create_architecture_ga,
+				)
+				return create_architecture_ga(**kwargs)
+
+			case OptimizerStrategyType.ARCHITECTURE_TS:
+				from wnn.ram.strategies.connectivity.architecture_strategies import (
+					create_architecture_ts,
+				)
+				return create_architecture_ts(**kwargs)
+
+			case OptimizerStrategyType.CONNECTIVITY_GA:
+				from wnn.ram.strategies.connectivity.genetic_algorithm import (
+					GeneticAlgorithmStrategy,
+				)
+				return GeneticAlgorithmStrategy(**kwargs)
+
+			case OptimizerStrategyType.CONNECTIVITY_TS:
+				from wnn.ram.strategies.connectivity.tabu_search import (
+					TabuSearchStrategy,
+				)
+				return TabuSearchStrategy(**kwargs)
+
+			case _:
+				raise ValueError(f"Unknown optimizer strategy type: {strategy_type}")

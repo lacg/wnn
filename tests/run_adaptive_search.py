@@ -225,8 +225,8 @@ def main():
 		seed=seed + 2000,
 		logger=logger,
 
-		# Population seeding: use TS's final neighbors as initial population
-		initial_population=ts_result.final_neighbors,
+		# Population seeding: use TS's final population as initial population
+		initial_population=ts_result.final_population,
 	)
 
 	# =========================================================================
@@ -250,7 +250,7 @@ def main():
 		"phase1a": {
 			"initial_fitness": ga_result.initial_fitness,
 			"final_fitness": ga_result.final_fitness,
-			"generations": ga_result.generations_run,
+			"generations": ga_result.iterations_run,
 			"early_stopped": ga_result.early_stopped,
 		},
 		# Phase 1b: TS
@@ -278,8 +278,8 @@ def main():
 		},
 		"stats": ts_result.best_genome.stats(),
 		# History from all phases
-		"ga_history": [(gen, best, avg) for gen, best, avg in ga_result.history],
-		"ts_history": [(it, best) for it, best in ts_result.history],
+		"ga_history": ga_result.history,  # [(iteration, best_fitness)]
+		"ts_history": ts_result.history,  # [(iteration, best_fitness)]
 	}
 
 	with open(genome_path, "w") as f:
@@ -293,7 +293,7 @@ def main():
 
 	# Phase 1a results
 	logger("  Phase 1a (GA Architecture):")
-	logger(f"    Generations: {ga_result.generations_run}")
+	logger(f"    Generations: {ga_result.iterations_run}")
 	logger(f"    Initial CE: {ga_result.initial_fitness:.4f}")
 	logger(f"    Final CE: {ga_result.final_fitness:.4f}")
 	ga_improvement = (1 - ga_result.final_fitness / ga_result.initial_fitness) * 100

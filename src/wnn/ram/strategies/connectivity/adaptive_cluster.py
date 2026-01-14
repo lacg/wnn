@@ -24,6 +24,15 @@ import torch
 from torch import Tensor
 
 from wnn.progress import ProgressTracker
+from wnn.ram.strategies.factory import (
+	OptimizerStrategyFactory,
+	OptimizerStrategyType,
+)
+from wnn.ram.strategies.connectivity.generic_strategies import (
+	GAConfig,
+	TSConfig,
+	GenericOptResult,
+)
 
 if TYPE_CHECKING:
 	pass
@@ -518,47 +527,8 @@ def _frequency_scaled_init(
 
 
 # =============================================================================
-# Adaptive Cluster Optimizer (GA for architecture search)
+# Rust Parallel Evaluator
 # =============================================================================
-
-@dataclass
-class AdaptiveOptConfig:
-	"""Configuration for adaptive cluster optimization."""
-
-	# GA parameters
-	population_size: int = 20
-	generations: int = 50
-	mutation_rate: float = 0.1
-	crossover_rate: float = 0.7
-	elitism: int = 2
-	tournament_size: int = 3
-
-	# Early stopping
-	patience: int = 5
-	min_improvement_pct: float = 0.1
-
-	# Architecture constraints
-	cluster_config: AdaptiveClusterConfig = None
-
-	def __post_init__(self):
-		if self.cluster_config is None:
-			self.cluster_config = AdaptiveClusterConfig()
-
-
-@dataclass
-class AdaptiveOptResult:
-	"""Result from adaptive cluster optimization."""
-
-	best_genome: ClusterGenome
-	initial_fitness: float
-	final_fitness: float
-	generations_run: int
-	history: List[tuple]  # [(gen, best_fitness, avg_fitness)]
-	early_stopped: bool
-	initial_accuracy: Optional[float] = None  # Optional: evaluated at checkpoint
-	final_accuracy: Optional[float] = None  # Optional: evaluated at checkpoint
-	final_population: Optional[List['ClusterGenome']] = None  # Top-K genomes for seeding next phase
-
 
 class RustParallelEvaluator:
 	"""
@@ -789,351 +759,6 @@ class RustParallelEvaluator:
 			self.config.empty_value,
 		)
 		return results[0]  # (CE, accuracy)
-
-
-class AdaptiveClusterOptimizer:
-	"""
-	Evolves cluster architectures (bits-per-cluster, neurons-per-cluster) using GA.
-
-	Fitness is evaluated by training a model with the genome's architecture
-	and measuring cross-entropy on held-out data.
-
-	Example:
-		optimizer = AdaptiveClusterOptimizer(
-			config=opt_config,
-			evaluate_fn=lambda genome: train_and_eval(genome),
-			num_clusters=50257,
-			token_frequencies=frequencies,
-		)
-		result = optimizer.optimize()
-	"""
-
-	def __init__(
-		self,
-		config: AdaptiveOptConfig,
-		evaluate_fn: Callable[[ClusterGenome], float],
-		num_clusters: int,
-		token_frequencies: Optional[List[int]] = None,
-		seed: int = 42,
-		logger: Optional[Callable[[str], None]] = None,
-		batch_evaluator: Optional['RustParallelEvaluator'] = None,
-	):
-		"""
-		Initialize the optimizer.
-
-		Args:
-			config: Optimization configuration
-			evaluate_fn: Function that takes a ClusterGenome and returns fitness
-			            (lower is better, e.g., cross-entropy)
-			num_clusters: Number of clusters (vocabulary size)
-			token_frequencies: Token occurrence counts for FREQUENCY_SCALED init
-			seed: Random seed
-			logger: Optional logging function
-			batch_evaluator: Optional Rust parallel evaluator for batch evaluation.
-			                 If provided, evaluates all genomes in parallel using Rust/rayon.
-			                 Falls back to evaluate_fn if not provided.
-		"""
-		self.config = config
-		self.evaluate_fn = evaluate_fn
-		self.num_clusters = num_clusters
-		self.token_frequencies = token_frequencies
-		self.seed = seed
-		self._log = logger or print
-		self._rng = None
-		self._batch_evaluator = batch_evaluator
-
-	def _ensure_rng(self):
-		if self._rng is None:
-			self._rng = random.Random(self.seed)
-
-	def _evaluate_population(
-		self,
-		population: List[ClusterGenome],
-		tracker: Optional[ProgressTracker] = None,
-		generation: Optional[int] = None,
-		total_generations: Optional[int] = None,
-	) -> List[float]:
-		"""
-		Evaluate fitness of all genomes in the population.
-
-		Uses Rust parallel evaluator if available, otherwise falls back to sequential.
-
-		Args:
-			population: List of genomes to evaluate
-			tracker: Optional progress tracker for logging
-			generation: Current generation number (None = initial population)
-			total_generations: Total number of generations for logging
-
-		Returns:
-			List of fitness values (cross-entropy, lower is better)
-		"""
-		if self._batch_evaluator is not None:
-			# Rust parallel evaluation (all genomes at once)
-			fitness = self._batch_evaluator.evaluate_batch(
-				population, logger=self._log, generation=generation,
-				total_generations=total_generations
-			)
-		else:
-			# Sequential Python evaluation with progress tracking
-			fitness = []
-			for i, genome in enumerate(population):
-				fit = self.evaluate_fn(genome)
-				fitness.append(fit)
-				if tracker:
-					tracker.tick_individual(fit, i, len(population))
-		return fitness
-
-	def optimize(
-		self,
-		init_strategy: GenomeInitStrategy = GenomeInitStrategy.FREQUENCY_SCALED,
-		initial_population: Optional[List[ClusterGenome]] = None,
-	) -> AdaptiveOptResult:
-		"""
-		Run the adaptive architecture optimization.
-
-		Args:
-			init_strategy: How to initialize the population (if no initial_population)
-			initial_population: Optional seed population from previous phase
-
-		Returns:
-			AdaptiveOptResult with best genome and statistics
-		"""
-		self._ensure_rng()
-		cfg = self.config
-		cc = cfg.cluster_config
-
-		self._log(f"[AdaptiveGA] Starting optimization")
-		self._log(f"  Clusters: {self.num_clusters}")
-		self._log(f"  Population: {cfg.population_size}")
-		self._log(f"  Generations: {cfg.generations}")
-		self._log(f"  Init strategy: {init_strategy.name}")
-		self._log(f"  Bits range: [{cc.min_bits}, {cc.max_bits}]")
-
-		# Initialize population - use seed population if provided
-		if initial_population is not None:
-			self._log(f"  Seeded with {len(initial_population)} genomes from previous phase")
-			population = self._seed_population(initial_population, cfg.population_size)
-		else:
-			population = self._init_population(init_strategy)
-
-		# Create progress tracker
-		tracker = ProgressTracker(
-			logger=self._log,
-			minimize=True,  # Lower CE is better
-			prefix="[AdaptiveGA]",
-			total_generations=cfg.generations,
-		)
-
-		# Evaluate initial population with progress logging
-		self._log(f"[AdaptiveGA] Evaluating initial population ({cfg.population_size} genomes)...")
-		import time as _time
-		_start = _time.time()
-		fitness = self._evaluate_population(
-			population, tracker if self._batch_evaluator is None else None, generation=None
-		)
-		_elapsed = _time.time() - _start
-		self._log(f"[AdaptiveGA] Initial population complete in {_elapsed:.1f}s")
-
-		# Record initial population stats
-		tracker.tick(fitness, generation=-1, log=False)  # Gen -1 = initial
-		best_idx = min(range(len(fitness)), key=lambda i: fitness[i])
-		best_genome = population[best_idx].clone()
-		best_fitness = fitness[best_idx]
-		initial_fitness = best_fitness
-
-		# Get initial accuracy (if using Rust evaluator)
-		initial_accuracy = None
-		if self._batch_evaluator is not None:
-			_, initial_accuracy = self._batch_evaluator.evaluate_single_with_accuracy(best_genome)
-			self._log(f"[AdaptiveGA] Initial: CE={initial_fitness:.4f}, Acc={initial_accuracy:.2%}")
-
-		history = [(0, best_fitness, sum(fitness) / len(fitness))]
-		self._log(f"[AdaptiveGA] Initial population complete: best={best_fitness:.4f}, avg={sum(fitness)/len(fitness):.4f}")
-
-		# Early stopping tracking
-		patience_counter = 0
-		prev_best = best_fitness
-
-		for gen in range(cfg.generations):
-			# Selection + Crossover + Mutation
-			new_population = []
-
-			# Elitism: keep best individuals
-			sorted_indices = sorted(range(len(fitness)), key=lambda i: fitness[i])
-			for i in range(cfg.elitism):
-				new_population.append(population[sorted_indices[i]].clone())
-
-			# Fill rest with offspring
-			while len(new_population) < cfg.population_size:
-				# Tournament selection
-				parent1 = self._tournament_select(population, fitness)
-				parent2 = self._tournament_select(population, fitness)
-
-				# Crossover
-				if self._rng.random() < cfg.crossover_rate:
-					child = parent1.crossover(parent2, rng=self._rng.randint(0, 2**31))
-				else:
-					child = parent1.clone()
-
-				# Mutation
-				child = child.mutate(cc, rng=self._rng.randint(0, 2**31))
-
-				# Enforce memory budget
-				child = child.enforce_budget(cc)
-
-				new_population.append(child)
-
-			population = new_population
-
-			# Evaluate new population
-			self._log(f"[AdaptiveGA] Generation {gen + 1}/{cfg.generations}: Evaluating {cfg.population_size} genomes...")
-			fitness = self._evaluate_population(population, generation=gen)
-			gen_best_idx = min(range(len(fitness)), key=lambda i: fitness[i])
-
-			if fitness[gen_best_idx] < best_fitness:
-				best_genome = population[gen_best_idx].clone()
-				best_fitness = fitness[gen_best_idx]
-
-			avg_fitness = sum(fitness) / len(fitness)
-			history.append((gen + 1, best_fitness, avg_fitness))
-
-			# Log progress using tracker
-			progress = tracker.tick(fitness, generation=gen)
-			genome_stats = best_genome.stats()
-			self._log(
-				f"  bits=[{genome_stats['min_bits']}-{genome_stats['max_bits']}], "
-				f"neurons=[{genome_stats['min_neurons']}-{genome_stats['max_neurons']}]"
-			)
-
-			# Early stopping check
-			improvement_pct = (prev_best - best_fitness) / prev_best * 100 if prev_best > 0 else 0
-			if improvement_pct >= cfg.min_improvement_pct:
-				patience_counter = 0
-				prev_best = best_fitness
-			else:
-				patience_counter += 1
-
-			if patience_counter >= cfg.patience:
-				self._log(f"[AdaptiveGA] Early stop at gen {gen + 1}: no improvement for {cfg.patience} gens")
-				# Get final accuracy
-				final_accuracy = None
-				if self._batch_evaluator is not None:
-					_, final_accuracy = self._batch_evaluator.evaluate_single_with_accuracy(best_genome)
-					self._log(f"[AdaptiveGA] Final: CE={best_fitness:.4f}, Acc={final_accuracy:.2%}")
-				# Get final population sorted by fitness for seeding next phase
-				sorted_indices = sorted(range(len(fitness)), key=lambda i: fitness[i])
-				final_population = [population[i].clone() for i in sorted_indices]
-				return AdaptiveOptResult(
-					best_genome=best_genome,
-					initial_fitness=initial_fitness,
-					final_fitness=best_fitness,
-					generations_run=gen + 1,
-					history=history,
-					early_stopped=True,
-					initial_accuracy=initial_accuracy,
-					final_accuracy=final_accuracy,
-					final_population=final_population,
-				)
-
-		self._log(f"[AdaptiveGA] Completed {cfg.generations} generations")
-		tracker.log_summary()
-
-		# Get final accuracy
-		final_accuracy = None
-		if self._batch_evaluator is not None:
-			_, final_accuracy = self._batch_evaluator.evaluate_single_with_accuracy(best_genome)
-			self._log(f"[AdaptiveGA] Final: CE={best_fitness:.4f}, Acc={final_accuracy:.2%}")
-
-		# Get final population sorted by fitness for seeding next phase
-		sorted_indices = sorted(range(len(fitness)), key=lambda i: fitness[i])
-		final_population = [population[i].clone() for i in sorted_indices]
-
-		return AdaptiveOptResult(
-			best_genome=best_genome,
-			initial_fitness=initial_fitness,
-			final_fitness=best_fitness,
-			generations_run=cfg.generations,
-			history=history,
-			early_stopped=False,
-			initial_accuracy=initial_accuracy,
-			final_accuracy=final_accuracy,
-			final_population=final_population,
-		)
-
-	def _init_population(self, strategy: GenomeInitStrategy) -> List[ClusterGenome]:
-		"""Initialize the population with some diversity."""
-		population = []
-		cc = self.config.cluster_config
-
-		# First individual uses the specified strategy
-		population.append(ClusterGenome.initialize(
-			self.num_clusters, strategy, cc,
-			token_frequencies=self.token_frequencies,
-			rng=self.seed,
-		))
-
-		# Rest are mutations of the first, or frequency-aware random
-		for i in range(1, self.config.population_size):
-			if i < self.config.population_size // 2:
-				# Mutate from first
-				genome = population[0].mutate(cc, rng=self.seed + i)
-			else:
-				# Frequency-aware random (caps bits for rare tokens to avoid sparse memory slowdown)
-				genome = ClusterGenome.initialize(
-					self.num_clusters,
-					GenomeInitStrategy.RANDOM_UNIFORM,
-					cc,
-					token_frequencies=self.token_frequencies,  # Pass frequencies for smart capping
-					rng=self.seed + i,
-				)
-			population.append(genome)
-
-		return population
-
-	def _seed_population(
-		self,
-		seed_genomes: List[ClusterGenome],
-		target_size: int,
-	) -> List[ClusterGenome]:
-		"""
-		Create population from seed genomes, filling with mutations if needed.
-
-		Args:
-			seed_genomes: Genomes from previous phase (sorted by fitness, best first)
-			target_size: Desired population size
-
-		Returns:
-			Population of target_size genomes
-		"""
-		cc = self.config.cluster_config
-		population = []
-
-		# Take up to target_size from seeds (best ones)
-		num_seeds = min(len(seed_genomes), target_size)
-		for i in range(num_seeds):
-			population.append(seed_genomes[i].clone())
-
-		# Fill remaining with mutations of the best seeds
-		seed_idx = 0
-		while len(population) < target_size:
-			# Mutate from seeds in round-robin
-			source = seed_genomes[seed_idx % len(seed_genomes)]
-			mutant = source.mutate(cc, rng=self.seed + len(population))
-			population.append(mutant)
-			seed_idx += 1
-
-		self._log(f"  Population: {num_seeds} from seeds, {target_size - num_seeds} mutations")
-		return population
-
-	def _tournament_select(
-		self,
-		population: List[ClusterGenome],
-		fitness: List[float],
-	) -> ClusterGenome:
-		"""Select individual via tournament selection."""
-		candidates = self._rng.sample(range(len(population)), self.config.tournament_size)
-		winner = min(candidates, key=lambda i: fitness[i])
-		return population[winner]
 
 
 # =============================================================================
@@ -1536,344 +1161,8 @@ def evaluate_genome_with_accuracy(
 
 
 # =============================================================================
-# High-Level API
+# High-Level API Functions
 # =============================================================================
-
-# =============================================================================
-# Architecture Tabu Search (Phase 1b)
-# =============================================================================
-
-@dataclass
-class ArchitectureTSConfig:
-	"""Configuration for architecture Tabu Search."""
-
-	iterations: int = 100
-	"""Number of TS iterations"""
-
-	neighbors_per_iter: int = 20
-	"""Number of neighbors to generate per iteration"""
-
-	tabu_size: int = 10
-	"""Size of tabu list (moves to avoid)"""
-
-	# Neighborhood generation
-	bits_change_prob: float = 0.7
-	"""Probability of changing bits (vs neurons) per cluster mutation"""
-
-	clusters_per_neighbor: int = 50
-	"""Number of clusters to mutate per neighbor (sparse mutations)"""
-
-	step_size: int = 1
-	"""How much to change bits/neurons (+/- this value)"""
-
-	# Early stopping
-	patience: int = 10
-	"""Iterations without improvement before stopping"""
-
-	min_improvement_pct: float = 0.01
-	"""Minimum improvement % to reset patience"""
-
-
-@dataclass
-class ArchitectureTSResult:
-	"""Result from architecture Tabu Search."""
-
-	best_genome: ClusterGenome
-	initial_fitness: float
-	final_fitness: float
-	iterations_run: int
-	history: List[tuple]  # [(iter, best_fitness)]
-	early_stopped: bool
-	initial_accuracy: Optional[float] = None  # Optional: evaluated at checkpoint
-	final_accuracy: Optional[float] = None  # Optional: evaluated at checkpoint
-	final_neighbors: Optional[List['ClusterGenome']] = None  # Best neighbors for seeding next phase
-
-
-class ArchitectureTabuSearch:
-	"""
-	Tabu Search optimizer for architecture refinement (bits + neurons).
-
-	Unlike GA which explores globally, TS performs local search from a starting
-	genome. Good for refining a GA-discovered solution.
-
-	Key features:
-	- Sparse mutations: only changes a few clusters per neighbor
-	- Tabu list: avoids cycling back to recent solutions
-	- Always moves to best neighbor (TS characteristic)
-	"""
-
-	def __init__(
-		self,
-		config: ArchitectureTSConfig,
-		evaluate_fn: Callable[[ClusterGenome], float],
-		cluster_config: AdaptiveClusterConfig,
-		batch_evaluator: Optional['RustParallelEvaluator'] = None,
-		seed: int = 42,
-		logger: Optional[Callable[[str], None]] = None,
-	):
-		self.config = config
-		self.evaluate_fn = evaluate_fn
-		self.cluster_config = cluster_config
-		self._batch_evaluator = batch_evaluator
-		self.seed = seed
-		self._log = logger or print
-		self._rng = random.Random(seed)
-
-	def _generate_neighbor(
-		self,
-		genome: ClusterGenome,
-	) -> tuple:
-		"""
-		Generate a neighbor by mutating a few clusters.
-
-		Returns:
-			(neighbor_genome, move_descriptor)
-		"""
-		cc = self.cluster_config
-		cfg = self.config
-
-		new_bits = genome.bits_per_cluster.copy()
-		new_neurons = genome.neurons_per_cluster.copy()
-
-		# Track which clusters were changed (for tabu)
-		changes = []
-
-		# Select random clusters to mutate
-		clusters_to_mutate = self._rng.sample(
-			range(genome.num_clusters),
-			min(cfg.clusters_per_neighbor, genome.num_clusters)
-		)
-
-		for cluster_idx in clusters_to_mutate:
-			# Decide what to change
-			if cc.phase >= 2 and self._rng.random() > cfg.bits_change_prob:
-				# Change neurons
-				old_val = new_neurons[cluster_idx]
-				delta = self._rng.choice([-cfg.step_size, cfg.step_size])
-				new_val = max(cc.min_neurons, min(cc.max_neurons, old_val + delta))
-				if new_val != old_val:
-					new_neurons[cluster_idx] = new_val
-					changes.append(('N', cluster_idx, old_val, new_val))
-			else:
-				# Change bits
-				old_val = new_bits[cluster_idx]
-				delta = self._rng.choice([-cfg.step_size, cfg.step_size])
-				new_val = max(cc.min_bits, min(cc.max_bits, old_val + delta))
-				if new_val != old_val:
-					new_bits[cluster_idx] = new_val
-					changes.append(('B', cluster_idx, old_val, new_val))
-
-		neighbor = ClusterGenome(
-			bits_per_cluster=new_bits,
-			neurons_per_cluster=new_neurons,
-		)
-
-		# Move descriptor is a frozenset of changes for tabu matching
-		move_desc = frozenset(changes)
-		return neighbor, move_desc
-
-	def _is_tabu(self, move_desc: frozenset, tabu_list: list) -> bool:
-		"""Check if a move would reverse a recent move."""
-		for tabu_move in tabu_list:
-			# Check if any change would reverse a tabu change
-			for change in move_desc:
-				change_type, cluster_idx, old_val, new_val = change
-				# Look for reversal: same cluster, same type, going back
-				for tabu_change in tabu_move:
-					if (tabu_change[0] == change_type and
-						tabu_change[1] == cluster_idx and
-						tabu_change[3] == old_val):  # Going back to where we were
-						return True
-		return False
-
-	def optimize(
-		self,
-		initial_genome: ClusterGenome,
-		initial_fitness: Optional[float] = None,
-		initial_neighbors: Optional[List[ClusterGenome]] = None,
-	) -> ArchitectureTSResult:
-		"""
-		Run Tabu Search from an initial genome.
-
-		Args:
-			initial_genome: Starting genome (e.g., from GA)
-			initial_fitness: Optional pre-computed fitness (avoids re-evaluation)
-			initial_neighbors: Optional seed neighbors from previous phase
-
-		Returns:
-			ArchitectureTSResult with refined genome
-		"""
-		cfg = self.config
-
-		self._log(f"[ArchTS] Starting Tabu Search")
-		self._log(f"  Iterations: {cfg.iterations}")
-		self._log(f"  Neighbors/iter: {cfg.neighbors_per_iter}")
-		self._log(f"  Tabu size: {cfg.tabu_size}")
-		self._log(f"  Clusters/neighbor: {cfg.clusters_per_neighbor}")
-		if initial_neighbors:
-			self._log(f"  Seeded with {len(initial_neighbors)} neighbors from previous phase")
-
-		# Initialize
-		current = initial_genome.clone()
-		if initial_fitness is not None:
-			current_fitness = initial_fitness
-		else:
-			current_fitness = self._evaluate(current)
-
-		best = current.clone()
-		best_fitness = current_fitness
-		start_fitness = current_fitness
-
-		# Track best neighbors for seeding next phase (sorted by fitness)
-		best_neighbors: List[Tuple[ClusterGenome, float]] = []
-
-		# Get initial accuracy (if using Rust evaluator)
-		initial_accuracy = None
-		if self._batch_evaluator is not None:
-			_, initial_accuracy = self._batch_evaluator.evaluate_single_with_accuracy(current)
-			self._log(f"[ArchTS] Initial: CE={start_fitness:.4f}, Acc={initial_accuracy:.2%}")
-
-		tabu_list = []  # List of recent move descriptors
-		use_seed_neighbors = initial_neighbors is not None and len(initial_neighbors) > 0
-		history = [(0, best_fitness)]
-
-		# Progress tracker for consistent logging
-		tracker = ProgressTracker(
-			logger=self._log,
-			minimize=True,
-			prefix="[ArchTS]",
-			total_generations=cfg.iterations,
-		)
-
-		# Early stopping
-		patience_counter = 0
-		prev_best = best_fitness
-
-		self._log(f"[ArchTS] Initial fitness: {current_fitness:.4f}")
-
-		for iteration in range(cfg.iterations):
-			# Generate neighbors (or use seeds on first iteration)
-			neighbors = []
-
-			if iteration == 0 and use_seed_neighbors:
-				# Use seed neighbors from previous phase (no move tracking)
-				for seed in initial_neighbors[:cfg.neighbors_per_iter]:
-					neighbors.append((seed.clone(), frozenset()))  # Empty move desc
-				self._log(f"[ArchTS] Iter 1: Using {len(neighbors)} seed neighbors")
-			else:
-				# Generate new neighbors
-				for _ in range(cfg.neighbors_per_iter):
-					neighbor, move_desc = self._generate_neighbor(current)
-					if not self._is_tabu(move_desc, tabu_list) and len(move_desc) > 0:
-						neighbors.append((neighbor, move_desc))
-
-			if not neighbors:
-				self._log(f"[ArchTS] No valid neighbors at iter {iteration + 1}")
-				continue
-
-			# Evaluate neighbors
-			if self._batch_evaluator is not None:
-				genomes = [n for n, _ in neighbors]
-				fitness_list = self._batch_evaluator.evaluate_batch(
-					genomes, logger=self._log
-				)
-				evaluated = [(n, f, m) for (n, m), f in zip(neighbors, fitness_list)]
-			else:
-				evaluated = [(n, self.evaluate_fn(n), m) for n, m in neighbors]
-
-			# Track all evaluated neighbors for seeding next phase
-			for genome, fitness, _ in evaluated:
-				best_neighbors.append((genome.clone(), fitness))
-
-			# Keep only top-K best neighbors (sorted by fitness)
-			best_neighbors.sort(key=lambda x: x[1])
-			best_neighbors = best_neighbors[:cfg.neighbors_per_iter * 2]  # Keep 2x neighbors
-
-			# Log progress using tracker (all neighbor fitness values)
-			fitness_values = [f for _, f, _ in evaluated]
-			tracker.tick(fitness_values, generation=iteration)
-
-			# Select best neighbor
-			evaluated.sort(key=lambda x: x[1])
-			best_neighbor, best_neighbor_fitness, best_move = evaluated[0]
-
-			# Move to best neighbor (always, TS characteristic)
-			current = best_neighbor
-			current_fitness = best_neighbor_fitness
-
-			# Add move to tabu list (skip for seed neighbors)
-			if len(best_move) > 0:
-				if len(tabu_list) >= cfg.tabu_size:
-					tabu_list.pop(0)
-				tabu_list.append(best_move)
-
-			# Update global best
-			if current_fitness < best_fitness:
-				best = current.clone()
-				best_fitness = current_fitness
-
-			history.append((iteration + 1, best_fitness))
-
-			# Early stopping check
-			improvement_pct = (prev_best - best_fitness) / prev_best * 100 if prev_best > 0 else 0
-			if improvement_pct >= cfg.min_improvement_pct:
-				patience_counter = 0
-				prev_best = best_fitness
-			else:
-				patience_counter += 1
-
-			if patience_counter >= cfg.patience:
-				self._log(f"[ArchTS] Early stop at iter {iteration + 1}: "
-						  f"no improvement for {cfg.patience} iters")
-				# Get final accuracy
-				final_accuracy = None
-				if self._batch_evaluator is not None:
-					_, final_accuracy = self._batch_evaluator.evaluate_single_with_accuracy(best)
-					self._log(f"[ArchTS] Final: CE={best_fitness:.4f}, Acc={final_accuracy:.2%}")
-				# Get final neighbors for seeding next phase
-				final_neighbors = [g for g, _ in best_neighbors]
-				return ArchitectureTSResult(
-					best_genome=best,
-					initial_fitness=start_fitness,
-					final_fitness=best_fitness,
-					iterations_run=iteration + 1,
-					history=history,
-					early_stopped=True,
-					initial_accuracy=initial_accuracy,
-					final_accuracy=final_accuracy,
-					final_neighbors=final_neighbors,
-				)
-
-		self._log(f"[ArchTS] Completed {cfg.iterations} iterations")
-		improvement = (1 - best_fitness / start_fitness) * 100 if start_fitness > 0 else 0
-		self._log(f"[ArchTS] Final: {best_fitness:.4f} ({improvement:.2f}% improvement)")
-
-		# Get final accuracy
-		final_accuracy = None
-		if self._batch_evaluator is not None:
-			_, final_accuracy = self._batch_evaluator.evaluate_single_with_accuracy(best)
-			self._log(f"[ArchTS] Final accuracy: {final_accuracy:.2%}")
-
-		# Get final neighbors for seeding next phase
-		final_neighbors = [g for g, _ in best_neighbors]
-		return ArchitectureTSResult(
-			best_genome=best,
-			initial_fitness=start_fitness,
-			final_fitness=best_fitness,
-			iterations_run=cfg.iterations,
-			history=history,
-			early_stopped=False,
-			initial_accuracy=initial_accuracy,
-			final_accuracy=final_accuracy,
-			final_neighbors=final_neighbors,
-		)
-
-	def _evaluate(self, genome: ClusterGenome) -> float:
-		"""Evaluate a single genome."""
-		if self._batch_evaluator is not None:
-			return self._batch_evaluator.evaluate_batch([genome])[0]
-		return self.evaluate_fn(genome)
-
 
 def run_architecture_tabu_search(
 	initial_genome: ClusterGenome,
@@ -1899,7 +1188,7 @@ def run_architecture_tabu_search(
 	logger: Optional[Callable[[str], None]] = None,
 	# Population seeding from previous phase
 	initial_neighbors: Optional[List[ClusterGenome]] = None,
-) -> ArchitectureTSResult:
+) -> GenericOptResult['ClusterGenome']:
 	"""
 	Run Tabu Search to refine architecture from a GA solution.
 
@@ -1926,7 +1215,7 @@ def run_architecture_tabu_search(
 		initial_neighbors: Optional seed neighbors from Phase 1a population
 
 	Returns:
-		ArchitectureTSResult with refined genome
+		GenericOptResult with refined genome
 	"""
 	log = logger or print
 
@@ -1960,40 +1249,46 @@ def run_architecture_tabu_search(
 	batch_evaluator = None
 	try:
 		batch_evaluator = RustParallelEvaluator(eval_config)
-		log("[ArchTS] Using Rust parallel evaluator")
+		log("[ArchitectureTS] Using Rust parallel evaluator")
 	except Exception as e:
-		log(f"[ArchTS] Using Python evaluator ({e})")
+		log(f"[ArchitectureTS] Using Python evaluator ({e})")
 
-	# Create configs
-	cluster_config = AdaptiveClusterConfig(
+	# Create TS strategy using factory
+	strategy = OptimizerStrategyFactory.create(
+		OptimizerStrategyType.ARCHITECTURE_TS,
+		num_clusters=vocab_size,
 		min_bits=min_bits,
 		max_bits=max_bits,
 		min_neurons=min_neurons,
 		max_neurons=max_neurons,
 		phase=phase,
-	)
-
-	ts_config = ArchitectureTSConfig(
+		# TS parameters
 		iterations=iterations,
 		neighbors_per_iter=neighbors_per_iter,
 		patience=patience,
-	)
-
-	# Create optimizer
-	optimizer = ArchitectureTabuSearch(
-		config=ts_config,
-		evaluate_fn=evaluate_fn,
-		cluster_config=cluster_config,
-		batch_evaluator=batch_evaluator,
 		seed=seed,
 		logger=log,
+		batch_evaluator=batch_evaluator,
 	)
 
+	# Create batch evaluation function using Rust evaluator
+	batch_evaluate_fn = None
+	if batch_evaluator is not None:
+		batch_evaluate_fn = lambda genomes: batch_evaluator.evaluate_batch(genomes, logger=log)
+
+	# Create accuracy evaluation function
+	accuracy_fn = None
+	if batch_evaluator is not None:
+		accuracy_fn = lambda genome: batch_evaluator.evaluate_single_with_accuracy(genome)[1]
+
 	# Run optimization
-	result = optimizer.optimize(
-		initial_genome,
-		initial_fitness,
+	result = strategy.optimize(
+		initial_genome=initial_genome,
+		initial_fitness=initial_fitness,
+		evaluate_fn=evaluate_fn,
 		initial_neighbors=initial_neighbors,
+		batch_evaluate_fn=batch_evaluate_fn,
+		accuracy_fn=accuracy_fn,
 	)
 
 	# Log results
@@ -2039,7 +1334,7 @@ def run_architecture_search(
 	logger: Optional[Callable[[str], None]] = None,
 	# Population seeding from previous phase
 	initial_population: Optional[List[ClusterGenome]] = None,
-) -> AdaptiveOptResult:
+) -> GenericOptResult['ClusterGenome']:
 	"""
 	Run complete architecture search for adaptive cluster configuration.
 
@@ -2068,7 +1363,7 @@ def run_architecture_search(
 		logger: Logging function
 
 	Returns:
-		AdaptiveOptResult with best genome and optimization history
+		GenericOptResult with best genome and optimization history
 
 	Example:
 		from collections import Counter
@@ -2127,44 +1422,48 @@ def run_architecture_search(
 	batch_evaluator = None
 	try:
 		batch_evaluator = RustParallelEvaluator(eval_config)
-		log("[AdaptiveGA] Using Rust parallel evaluator (hybrid dense/sparse)")
+		log("[ArchitectureGA] Using Rust parallel evaluator (hybrid dense/sparse)")
 	except ImportError:
-		log("[AdaptiveGA] Rust accelerator not available, using Python sequential")
+		log("[ArchitectureGA] Rust accelerator not available, using Python sequential")
 	except Exception as e:
-		log(f"[AdaptiveGA] Warning: Rust evaluator init failed ({e}), using Python")
+		log(f"[ArchitectureGA] Warning: Rust evaluator init failed ({e}), using Python")
 
-	# Create optimizer config
-	cluster_config = AdaptiveClusterConfig(
+	# Create GA strategy using factory
+	strategy = OptimizerStrategyFactory.create(
+		OptimizerStrategyType.ARCHITECTURE_GA,
+		num_clusters=vocab_size,
 		min_bits=min_bits,
 		max_bits=max_bits,
 		min_neurons=min_neurons,
 		max_neurons=max_neurons,
 		phase=phase,
-	)
-
-	opt_config = AdaptiveOptConfig(
+		token_frequencies=token_frequencies,
+		# GA parameters
 		population_size=population_size,
 		generations=generations,
 		patience=patience,
-		cluster_config=cluster_config,
-	)
-
-	# Create optimizer
-	optimizer = AdaptiveClusterOptimizer(
-		config=opt_config,
-		evaluate_fn=evaluate_fn,
-		num_clusters=vocab_size,
-		token_frequencies=token_frequencies,
 		seed=seed,
 		logger=log,
 		batch_evaluator=batch_evaluator,
 	)
 
+	# Create batch evaluation function using Rust evaluator
+	batch_evaluate_fn = None
+	if batch_evaluator is not None:
+		batch_evaluate_fn = lambda genomes: batch_evaluator.evaluate_batch(genomes, logger=log)
+
+	# Create accuracy evaluation function
+	accuracy_fn = None
+	if batch_evaluator is not None:
+		accuracy_fn = lambda genome: batch_evaluator.evaluate_single_with_accuracy(genome)[1]
+
 	# Run optimization
 	log()
-	result = optimizer.optimize(
-		init_strategy=init_strategy,
+	result = strategy.optimize(
+		evaluate_fn=evaluate_fn,
 		initial_population=initial_population,
+		batch_evaluate_fn=batch_evaluate_fn,
+		accuracy_fn=accuracy_fn,
 	)
 
 	# Log final results
@@ -2177,7 +1476,7 @@ def run_architecture_search(
 	log(f"  Final CE: {result.final_fitness:.4f}")
 	improvement = (1 - result.final_fitness / result.initial_fitness) * 100
 	log(f"  Improvement: {improvement:.1f}%")
-	log(f"  Generations: {result.generations_run}")
+	log(f"  Generations: {result.iterations_run}")
 	log(f"  Early stopped: {result.early_stopped}")
 	log()
 	log("  Best genome:")
@@ -2316,14 +1615,15 @@ def run_connectivity_optimization(
 	except Exception as e:
 		log(f"[Phase2] Using Python evaluator ({e})")
 
-	# Create configs
-	cluster_config = AdaptiveClusterConfig(
-		min_bits=min_bits,
-		max_bits=max_bits,
-		min_neurons=min_neurons,
-		max_neurons=max_neurons,
-		phase=phase,
-	)
+	# Create batch evaluation function using Rust evaluator
+	batch_evaluate_fn = None
+	if batch_evaluator is not None:
+		batch_evaluate_fn = lambda genomes: batch_evaluator.evaluate_batch(genomes, logger=log)
+
+	# Create accuracy evaluation function
+	accuracy_fn = None
+	if batch_evaluator is not None:
+		accuracy_fn = lambda genome: batch_evaluator.evaluate_single_with_accuracy(genome)[1]
 
 	# =========================================================================
 	# Phase 2a: GA
@@ -2333,27 +1633,31 @@ def run_connectivity_optimization(
 	log("  Phase 2a: GA Architecture Refinement")
 	log("-" * 40)
 
-	ga_config = AdaptiveOptConfig(
+	# Create GA strategy using factory
+	ga_strategy = OptimizerStrategyFactory.create(
+		OptimizerStrategyType.ARCHITECTURE_GA,
+		num_clusters=vocab_size,
+		min_bits=min_bits,
+		max_bits=max_bits,
+		min_neurons=min_neurons,
+		max_neurons=max_neurons,
+		phase=phase,
+		token_frequencies=token_frequencies,
+		# GA parameters
 		population_size=ga_population,
 		generations=ga_generations,
 		patience=ga_patience,
-		cluster_config=cluster_config,
-	)
-
-	ga_optimizer = AdaptiveClusterOptimizer(
-		config=ga_config,
-		evaluate_fn=evaluate_fn,
-		num_clusters=vocab_size,
-		token_frequencies=token_frequencies,
 		seed=seed,
 		logger=log,
 		batch_evaluator=batch_evaluator,
 	)
 
 	# Run GA with seeded population from Phase 1b
-	ga_result = ga_optimizer.optimize(
-		init_strategy=GenomeInitStrategy.FREQUENCY_SCALED,
+	ga_result = ga_strategy.optimize(
+		evaluate_fn=evaluate_fn,
 		initial_population=initial_population,
+		batch_evaluate_fn=batch_evaluate_fn,
+		accuracy_fn=accuracy_fn,
 	)
 
 	log()
@@ -2368,26 +1672,32 @@ def run_connectivity_optimization(
 	log("  Phase 2b: TS Architecture Refinement")
 	log("-" * 40)
 
-	ts_config = ArchitectureTSConfig(
+	# Create TS strategy using factory
+	ts_strategy = OptimizerStrategyFactory.create(
+		OptimizerStrategyType.ARCHITECTURE_TS,
+		num_clusters=vocab_size,
+		min_bits=min_bits,
+		max_bits=max_bits,
+		min_neurons=min_neurons,
+		max_neurons=max_neurons,
+		phase=phase,
+		# TS parameters
 		iterations=ts_iterations,
 		neighbors_per_iter=ts_neighbors,
 		patience=ts_patience,
-	)
-
-	ts_optimizer = ArchitectureTabuSearch(
-		config=ts_config,
-		evaluate_fn=evaluate_fn,
-		cluster_config=cluster_config,
-		batch_evaluator=batch_evaluator,
 		seed=seed + 500,
 		logger=log,
+		batch_evaluator=batch_evaluator,
 	)
 
 	# Run TS with GA's population as initial neighbors
-	ts_result = ts_optimizer.optimize(
-		ga_result.best_genome,
-		ga_result.final_fitness,
+	ts_result = ts_strategy.optimize(
+		initial_genome=ga_result.best_genome,
+		initial_fitness=ga_result.final_fitness,
+		evaluate_fn=evaluate_fn,
 		initial_neighbors=ga_result.final_population,
+		batch_evaluate_fn=batch_evaluate_fn,
+		accuracy_fn=accuracy_fn,
 	)
 
 	log()
@@ -2422,11 +1732,11 @@ def run_connectivity_optimization(
 		ga_improvement_pct=ga_improvement,
 		ts_improvement_pct=ts_improvement,
 		total_improvement_pct=total_improvement,
-		ga_iterations=ga_result.generations_run,
+		ga_iterations=ga_result.iterations_run,
 		ts_iterations=ts_result.iterations_run,
 		early_stopped=ga_result.early_stopped or ts_result.early_stopped,
 		initial_accuracy=ga_result.initial_accuracy,
 		ga_final_accuracy=ga_result.final_accuracy,  # After Phase 2a GA
 		final_accuracy=ts_result.final_accuracy,     # After Phase 2b TS
-		final_population=ts_result.final_neighbors,  # For potential Phase 3
+		final_population=ts_result.final_population,  # For potential Phase 3
 	)
