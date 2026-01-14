@@ -586,8 +586,9 @@ pub fn evaluate_genomes_parallel(
             .collect();
 
         // Calculate total connection size and generate random connections
+        // Use entropy-based RNG for truly random connectivity (no bias from hardcoded seeds)
         let total_conn_size: usize = groups.iter().map(|g| g.conn_size()).sum();
-        let mut rng = rand::rngs::SmallRng::seed_from_u64(genome_idx as u64 + 12345);
+        let mut rng = rand::rngs::SmallRng::from_entropy();
         let mut connections_flat: Vec<i64> = Vec::with_capacity(total_conn_size);
 
         for group in &groups {

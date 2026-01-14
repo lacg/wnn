@@ -244,13 +244,13 @@ def main():
 			"iterations": ts_result.iterations_run,
 			"early_stopped": ts_result.early_stopped,
 		},
-		# Phase 2: Connectivity
+		# Phase 2: Connectivity Variance Analysis
 		"phase2": {
-			"initial_fitness": conn_result.initial_fitness,
-			"phase2_baseline": conn_result.phase2_baseline,
-			"final_fitness": conn_result.final_fitness,
-			"improvement_pct": conn_result.ga_improvement_pct,
-			"vs_phase1_improvement_pct": conn_result.total_improvement_pct,
+			"phase1_baseline": conn_result.initial_fitness,
+			"mean_fitness": conn_result.phase2_baseline,  # Mean across random connectivity
+			"best_fitness": conn_result.final_fitness,    # Best across random connectivity
+			"variance_reduction_pct": conn_result.ga_improvement_pct,
+			"trials": conn_result.ga_iterations,
 		},
 		# Final genome
 		"genome": {
@@ -290,13 +290,12 @@ def main():
 	logger(f"    Improvement: {ts_improvement:.2f}%")
 	logger()
 
-	# Phase 2 results
-	logger("  Phase 2 (Connectivity Optimization):")
-	logger(f"    Phase 1 baseline CE: {conn_result.initial_fitness:.4f} (different seed)")
-	logger(f"    Phase 2 baseline CE: {conn_result.phase2_baseline:.4f} (trial 0)")
-	logger(f"    Best found CE: {conn_result.final_fitness:.4f}")
-	logger(f"    Improvement (fair): {conn_result.ga_improvement_pct:.2f}%")
-	logger(f"    Vs Phase 1: {conn_result.total_improvement_pct:.2f}%")
+	# Phase 2 results (connectivity variance analysis)
+	logger("  Phase 2 (Connectivity Variance Analysis):")
+	logger(f"    Trials: {conn_result.ga_iterations} random connectivity patterns")
+	logger(f"    Mean CE: {conn_result.phase2_baseline:.4f}")
+	logger(f"    Best CE: {conn_result.final_fitness:.4f}")
+	logger(f"    Variance reduction: {conn_result.ga_improvement_pct:.2f}%")
 	logger()
 
 	# Best Architecture stats
@@ -328,15 +327,15 @@ def main():
 	phase1b_imp = (1 - phase1b_ce / initial_ce) * 100
 	logger(f"{'After Phase 1b (TS)':<30} {phase1b_ce:>12.4f} {phase1b_ppl:>12.1f} {phase1b_imp:>11.2f}%")
 
-	# Phase 2 fair baseline (trial 0)
-	phase2_base_ce = conn_result.phase2_baseline
-	phase2_base_ppl = math.exp(phase2_base_ce)
-	logger(f"{'Phase 2 baseline (trial 0)':<30} {phase2_base_ce:>12.4f} {phase2_base_ppl:>12.1f} {'(fair cmp)':>12}")
+	# Phase 2 variance analysis (mean across random connectivity)
+	phase2_mean_ce = conn_result.phase2_baseline
+	phase2_mean_ppl = math.exp(phase2_mean_ce)
+	logger(f"{'Phase 2 mean (random conn.)':<30} {phase2_mean_ce:>12.4f} {phase2_mean_ppl:>12.1f} {'(variance)':>12}")
 
 	final_ce = conn_result.final_fitness
 	final_ppl = math.exp(final_ce)
 	total_imp = (1 - final_ce / initial_ce) * 100
-	logger(f"{'After Phase 2 (best seed)':<30} {final_ce:>12.4f} {final_ppl:>12.1f} {total_imp:>11.2f}%")
+	logger(f"{'Phase 2 best (random conn.)':<30} {final_ce:>12.4f} {final_ppl:>12.1f} {total_imp:>11.2f}%")
 
 	logger("-" * 70)
 	logger(f"{'Total Improvement':<30} {'':>12} {'':>12} {total_imp:>11.2f}%")

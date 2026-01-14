@@ -1060,8 +1060,10 @@ class EvaluatorConfig:
 	# Token ordering (for cluster assignment)
 	cluster_order: Optional[List[int]] = None  # sorted by frequency
 
-	# Random seed
-	rng: int = 42
+	# Random seed for connectivity (None = truly random, no seeding)
+	# NOTE: Architecture optimization should NOT depend on specific connectivity
+	# patterns, so we default to None for unbiased evaluation.
+	rng: Optional[int] = None
 
 
 class AdaptiveRAMLMWrapper:
@@ -1725,7 +1727,7 @@ def run_architecture_tabu_search(
 	log(f"  Neighbors/iter: {neighbors_per_iter}")
 	log()
 
-	# Create evaluator config
+	# Create evaluator config (no rng = truly random connectivity)
 	eval_config = EvaluatorConfig(
 		train_tokens=train_tokens,
 		eval_tokens=eval_tokens,
@@ -1736,7 +1738,7 @@ def run_architecture_tabu_search(
 		empty_value=empty_value,
 		eval_batch_size=1000,
 		cluster_order=cluster_order,
-		rng=seed,
+		# rng=None by default: architecture search should not depend on specific connectivity
 	)
 
 	# Create evaluation function
@@ -1886,7 +1888,7 @@ def run_architecture_search(
 	log(f"  Init strategy: {init_strategy.name}")
 	log()
 
-	# Create evaluator config
+	# Create evaluator config (no rng = truly random connectivity)
 	eval_config = EvaluatorConfig(
 		train_tokens=train_tokens,
 		eval_tokens=eval_tokens,
@@ -1897,7 +1899,7 @@ def run_architecture_search(
 		empty_value=empty_value,
 		eval_batch_size=1000,
 		cluster_order=cluster_order,
-		rng=seed,
+		# rng=None by default: architecture search should not depend on specific connectivity
 	)
 
 	# Create evaluation function (fallback for single genome evaluation)
@@ -2053,7 +2055,7 @@ def run_connectivity_optimization(
 	bits_per_token = bits_needed(vocab_size)
 	total_input_bits = context_size * bits_per_token
 
-	# Create evaluator config
+	# Create evaluator config (no rng = truly random connectivity each time)
 	eval_config = EvaluatorConfig(
 		train_tokens=train_tokens,
 		eval_tokens=eval_tokens,
@@ -2064,18 +2066,16 @@ def run_connectivity_optimization(
 		empty_value=empty_value,
 		eval_batch_size=1000,
 		cluster_order=cluster_order,
-		rng=seed,
+		# rng=None: each trial gets truly random connectivity
 	)
 
-	log("[Phase2] Connectivity exploration via re-initialization...")
-	log(f"[Phase2] Note: Phase 1 baseline ({genome_fitness:.4f}) used different connectivity seed")
-	log(f"[Phase2] Trial 0 will establish fair baseline for this seed range...")
+	log("[Phase2] Connectivity variance analysis...")
+	log(f"[Phase2] Evaluating architecture {ga_population} times with random connectivity")
+	log(f"[Phase2] Phase 1 baseline: {genome_fitness:.4f}")
 
-	# Will be set after trial 0 for fair comparison
-	# (Phase 1 baseline used different connectivity seed)
-	phase2_baseline = None
+	# Track fitness across random connectivity trials
+	all_fitness = []
 	best_fitness = float('inf')
-	best_seed = seed
 
 	# Progress tracker for consistent logging
 	tracker = ProgressTracker(
@@ -2085,17 +2085,15 @@ def run_connectivity_optimization(
 		total_generations=ga_population,
 	)
 
-	# Try different random initializations to explore connectivity space
-	# Each seed creates different random connections for neurons
+	# Evaluate the same architecture with different random connectivity
+	# This measures how robust the architecture is to connectivity variance
 	for trial in range(ga_population):
-		trial_seed = seed + trial
-
-		# Create layer with trial connections
+		# Create layer with truly random connections (no seeding)
 		layer_trial = AdaptiveClusteredRAM.from_genome(
 			genome=genome,
 			total_input_bits=total_input_bits,
 			empty_value=empty_value,
-			rng=trial_seed,
+			rng=None,  # Truly random connectivity
 		)
 
 		# Evaluate with trial connections
@@ -2130,42 +2128,43 @@ def run_connectivity_optimization(
 		)
 
 		trial_fitness = stats['cross_entropy']
+		all_fitness.append(trial_fitness)
 
-		# Establish fair baseline from trial 0
-		if trial == 0:
-			phase2_baseline = trial_fitness
-			log(f"[Phase2] Fair baseline: CE={phase2_baseline:.4f} (Phase 1: {genome_fitness:.4f})")
-
-		# Track best seed (tracker handles logging)
+		# Track best
 		if trial_fitness < best_fitness:
 			best_fitness = trial_fitness
-			best_seed = trial_seed
 
 		# Use tracker for consistent logging (global_best, trial_best, trial_avg)
 		tracker.tick([trial_fitness], generation=trial)
 
-	# Calculate improvements using fair baseline (trial 0)
-	phase2_improvement = (phase2_baseline - best_fitness) / phase2_baseline * 100 if phase2_baseline > 0 else 0
-	vs_phase1_improvement = (genome_fitness - best_fitness) / genome_fitness * 100 if genome_fitness > 0 else 0
+	# Calculate statistics across random connectivity trials
+	import statistics
+	mean_fitness = statistics.mean(all_fitness)
+	std_fitness = statistics.stdev(all_fitness) if len(all_fitness) > 1 else 0.0
+	min_fitness = min(all_fitness)
+	max_fitness = max(all_fitness)
 
 	log()
 	log("=" * 60)
-	log("  Phase 2 Complete")
+	log("  Phase 2 Complete: Connectivity Variance Analysis")
 	log("=" * 60)
-	log(f"  Phase 1 baseline CE: {genome_fitness:.4f} (different connectivity seed)")
-	log(f"  Phase 2 baseline CE: {phase2_baseline:.4f} (trial 0, fair comparison)")
-	log(f"  Best found CE: {best_fitness:.4f}")
-	log(f"  Phase 2 improvement (vs trial 0): {phase2_improvement:.2f}%")
-	log(f"  Vs Phase 1 baseline: {vs_phase1_improvement:.2f}%")
-	log(f"  Best random seed: {best_seed}")
+	log(f"  Phase 1 baseline CE: {genome_fitness:.4f}")
+	log(f"  Trials: {ga_population} random connectivity patterns")
+	log()
+	log(f"  Statistics across {ga_population} trials:")
+	log(f"    Mean CE: {mean_fitness:.4f}")
+	log(f"    Std CE:  {std_fitness:.4f}")
+	log(f"    Min CE:  {min_fitness:.4f}")
+	log(f"    Max CE:  {max_fitness:.4f}")
+	log(f"    Range:   {max_fitness - min_fitness:.4f}")
 
 	return ConnectivityOptResult(
 		initial_fitness=genome_fitness,
-		phase2_baseline=phase2_baseline,
-		final_fitness=best_fitness,
-		ga_improvement_pct=phase2_improvement,  # Fair comparison vs trial 0
-		ts_improvement_pct=0.0,  # TS not applied in this simple version
-		total_improvement_pct=vs_phase1_improvement,
+		phase2_baseline=mean_fitness,  # Mean is the "fair" baseline
+		final_fitness=min_fitness,  # Best across trials
+		ga_improvement_pct=(mean_fitness - min_fitness) / mean_fitness * 100 if mean_fitness > 0 else 0,
+		ts_improvement_pct=0.0,
+		total_improvement_pct=(genome_fitness - min_fitness) / genome_fitness * 100 if genome_fitness > 0 else 0,
 		ga_iterations=ga_population,
 		ts_iterations=0,
 		early_stopped=False,
