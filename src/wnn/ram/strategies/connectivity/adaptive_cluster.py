@@ -889,14 +889,14 @@ class AdaptiveClusterOptimizer:
 		)
 
 		# Evaluate initial population with progress logging
-		self._log(f"[AdaptiveGA] Generation 0/{cfg.generations}: Evaluating initial population ({cfg.population_size} genomes)...")
+		self._log(f"[AdaptiveGA] Evaluating initial population ({cfg.population_size} genomes)...")
 		import time as _time
 		_start = _time.time()
 		fitness = self._evaluate_population(
 			population, tracker if self._batch_evaluator is None else None, generation=None
 		)
 		_elapsed = _time.time() - _start
-		self._log(f"[AdaptiveGA] Generation 0/{cfg.generations}: Complete in {_elapsed:.1f}s")
+		self._log(f"[AdaptiveGA] Initial population complete in {_elapsed:.1f}s")
 
 		# Record initial population stats
 		tracker.tick(fitness, generation=-1, log=False)  # Gen -1 = initial
