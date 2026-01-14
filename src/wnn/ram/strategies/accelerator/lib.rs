@@ -39,6 +39,9 @@ mod sparse_memory;
 #[path = "per_cluster.rs"]
 mod per_cluster;
 
+#[path = "adaptive.rs"]
+mod adaptive;
+
 pub use ram::RAMNeuron;
 pub use per_cluster::{PerClusterEvaluator, FitnessMode, TierOptConfig, ClusterOptResult, TierOptResult};
 pub use metal_evaluator::MetalEvaluator;
@@ -2227,6 +2230,267 @@ fn per_cluster_optimize_tier_grouped(
     })
 }
 
+// ============================================================================
+// Adaptive Architecture (per-cluster variable bits/neurons)
+// ============================================================================
+
+/// Python wrapper for ConfigGroup data
+#[pyclass]
+#[derive(Clone)]
+struct AdaptiveConfigGroup {
+    #[pyo3(get)]
+    neurons: usize,
+    #[pyo3(get)]
+    bits: usize,
+    #[pyo3(get)]
+    words_per_neuron: usize,
+    #[pyo3(get)]
+    cluster_ids: Vec<usize>,
+    #[pyo3(get)]
+    memory_offset: usize,
+    #[pyo3(get)]
+    conn_offset: usize,
+}
+
+#[pymethods]
+impl AdaptiveConfigGroup {
+    #[new]
+    fn new(neurons: usize, bits: usize, cluster_ids: Vec<usize>) -> Self {
+        let group = adaptive::ConfigGroup::new(neurons, bits, cluster_ids.clone());
+        Self {
+            neurons: group.neurons,
+            bits: group.bits,
+            words_per_neuron: group.words_per_neuron,
+            cluster_ids,
+            memory_offset: 0,
+            conn_offset: 0,
+        }
+    }
+
+    fn cluster_count(&self) -> usize {
+        self.cluster_ids.len()
+    }
+
+    fn total_neurons(&self) -> usize {
+        self.cluster_ids.len() * self.neurons
+    }
+
+    fn memory_size(&self) -> usize {
+        self.total_neurons() * self.words_per_neuron
+    }
+
+    fn conn_size(&self) -> usize {
+        self.total_neurons() * self.bits
+    }
+}
+
+/// Build config groups from per-cluster configuration
+///
+/// Groups clusters by their (neurons, bits) to enable efficient batch processing.
+///
+/// Args:
+///     bits_per_cluster: Number of bits for each cluster [num_clusters]
+///     neurons_per_cluster: Number of neurons for each cluster [num_clusters]
+///
+/// Returns: List of AdaptiveConfigGroup objects with computed offsets
+#[pyfunction]
+fn adaptive_build_config_groups(
+    bits_per_cluster: Vec<usize>,
+    neurons_per_cluster: Vec<usize>,
+) -> Vec<AdaptiveConfigGroup> {
+    let groups = adaptive::build_config_groups(&bits_per_cluster, &neurons_per_cluster);
+    groups
+        .into_iter()
+        .map(|g| AdaptiveConfigGroup {
+            neurons: g.neurons,
+            bits: g.bits,
+            words_per_neuron: g.words_per_neuron,
+            cluster_ids: g.cluster_ids,
+            memory_offset: g.memory_offset,
+            conn_offset: g.conn_offset,
+        })
+        .collect()
+}
+
+/// Forward pass for adaptive architecture (CPU, parallel with rayon)
+///
+/// Processes each config group efficiently, then scatters results to output.
+///
+/// Args:
+///     input_bits: [num_examples * total_input_bits] u8 numpy array (0/1)
+///     connections_flat: All groups' connections concatenated [total_conns]
+///     memory_words: All groups' memory concatenated [total_memory]
+///     group_neurons: Per-group neurons [num_groups]
+///     group_bits: Per-group bits [num_groups]
+///     group_words_per_neuron: Per-group words_per_neuron [num_groups]
+///     group_cluster_ids_flat: Flattened cluster IDs for all groups
+///     group_cluster_counts: Number of clusters per group [num_groups]
+///     group_memory_offsets: Memory offset per group [num_groups]
+///     group_conn_offsets: Connection offset per group [num_groups]
+///     num_examples: Number of input examples
+///     total_input_bits: Total input bits per example
+///     num_clusters: Total number of clusters (vocab size)
+///
+/// Returns: [num_examples * num_clusters] probabilities
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn adaptive_forward_batch<'py>(
+    py: Python<'py>,
+    input_bits: PyReadonlyArray1<'py, u8>,
+    connections_flat: PyReadonlyArray1<'py, i64>,
+    memory_words: PyReadonlyArray1<'py, i64>,
+    group_neurons: Vec<usize>,
+    group_bits: Vec<usize>,
+    group_words_per_neuron: Vec<usize>,
+    group_cluster_ids_flat: Vec<usize>,
+    group_cluster_counts: Vec<usize>,
+    group_memory_offsets: Vec<usize>,
+    group_conn_offsets: Vec<usize>,
+    num_examples: usize,
+    total_input_bits: usize,
+    num_clusters: usize,
+) -> PyResult<Vec<f32>> {
+    // Extract data before allow_threads
+    let input_slice = input_bits.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Input array not contiguous: {}", e))
+    })?;
+    let conn_slice = connections_flat.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Connections array not contiguous: {}", e))
+    })?;
+    let mem_slice = memory_words.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Memory array not contiguous: {}", e))
+    })?;
+
+    // Convert to owned data
+    let input_bools: Vec<bool> = input_slice.iter().map(|&b| b != 0).collect();
+    let conn_vec: Vec<i64> = conn_slice.to_vec();
+    let mem_vec: Vec<i64> = mem_slice.to_vec();
+
+    // Reconstruct ConfigGroups
+    let num_groups = group_neurons.len();
+    let mut groups = Vec::with_capacity(num_groups);
+    let mut cluster_offset = 0;
+
+    for i in 0..num_groups {
+        let cluster_count = group_cluster_counts[i];
+        let cluster_ids = group_cluster_ids_flat[cluster_offset..cluster_offset + cluster_count].to_vec();
+        cluster_offset += cluster_count;
+
+        let mut group = adaptive::ConfigGroup::new(group_neurons[i], group_bits[i], cluster_ids);
+        group.memory_offset = group_memory_offsets[i];
+        group.conn_offset = group_conn_offsets[i];
+        groups.push(group);
+    }
+
+    py.allow_threads(|| {
+        let probs = adaptive::forward_batch_adaptive(
+            &input_bools,
+            &conn_vec,
+            &mem_vec,
+            &groups,
+            num_examples,
+            total_input_bits,
+            num_clusters,
+        );
+        Ok(probs)
+    })
+}
+
+/// Training for adaptive architecture (CPU, parallel with rayon)
+///
+/// Two-phase training: TRUE first, then FALSE (to ensure TRUE priority).
+///
+/// Args:
+///     input_bits: [num_examples * total_input_bits] u8 numpy array
+///     true_clusters: [num_examples] target cluster indices
+///     false_clusters_flat: [num_examples * num_negatives] negative cluster indices
+///     connections_flat: All groups' connections concatenated
+///     memory_words: All groups' memory (modified in place)
+///     group_neurons, group_bits, etc.: Group configuration (same as forward)
+///     num_examples, total_input_bits, num_negatives, num_clusters: Dimensions
+///     allow_override: Whether to allow overwriting non-EMPTY cells
+///
+/// Returns: Number of cells modified
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn adaptive_train_batch<'py>(
+    py: Python<'py>,
+    input_bits: PyReadonlyArray1<'py, u8>,
+    true_clusters: PyReadonlyArray1<'py, i64>,
+    false_clusters_flat: PyReadonlyArray1<'py, i64>,
+    connections_flat: PyReadonlyArray1<'py, i64>,
+    mut memory_words: numpy::PyReadwriteArray1<'py, i64>,
+    group_neurons: Vec<usize>,
+    group_bits: Vec<usize>,
+    group_words_per_neuron: Vec<usize>,
+    group_cluster_ids_flat: Vec<usize>,
+    group_cluster_counts: Vec<usize>,
+    group_memory_offsets: Vec<usize>,
+    group_conn_offsets: Vec<usize>,
+    num_examples: usize,
+    total_input_bits: usize,
+    num_negatives: usize,
+    num_clusters: usize,
+    allow_override: bool,
+) -> PyResult<usize> {
+    // Extract data before allow_threads
+    let input_slice = input_bits.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Input array not contiguous: {}", e))
+    })?;
+    let true_slice = true_clusters.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("True clusters not contiguous: {}", e))
+    })?;
+    let false_slice = false_clusters_flat.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("False clusters not contiguous: {}", e))
+    })?;
+    let conn_slice = connections_flat.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Connections array not contiguous: {}", e))
+    })?;
+    let mem_slice = memory_words.as_slice_mut().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Memory array not contiguous: {}", e))
+    })?;
+
+    // Convert to owned data (for bools and connections)
+    let input_bools: Vec<bool> = input_slice.iter().map(|&b| b != 0).collect();
+    let true_vec: Vec<i64> = true_slice.to_vec();
+    let false_vec: Vec<i64> = false_slice.to_vec();
+    let conn_vec: Vec<i64> = conn_slice.to_vec();
+
+    // Reconstruct ConfigGroups
+    let num_groups = group_neurons.len();
+    let mut groups = Vec::with_capacity(num_groups);
+    let mut cluster_offset = 0;
+
+    for i in 0..num_groups {
+        let cluster_count = group_cluster_counts[i];
+        let cluster_ids = group_cluster_ids_flat[cluster_offset..cluster_offset + cluster_count].to_vec();
+        cluster_offset += cluster_count;
+
+        let mut group = adaptive::ConfigGroup::new(group_neurons[i], group_bits[i], cluster_ids);
+        group.memory_offset = group_memory_offsets[i];
+        group.conn_offset = group_conn_offsets[i];
+        groups.push(group);
+    }
+
+    // Note: We can't use py.allow_threads here because we need mutable access to mem_slice
+    // The Rust function uses atomics internally, so it's thread-safe
+    let modified = adaptive::train_batch_adaptive(
+        &input_bools,
+        &true_vec,
+        &false_vec,
+        &conn_vec,
+        mem_slice,
+        &groups,
+        num_examples,
+        total_input_bits,
+        num_negatives,
+        num_clusters,
+        allow_override,
+    );
+
+    Ok(modified)
+}
+
 /// Python module definition
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -2298,5 +2562,10 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // EMPTY cell value configuration (affects PPL calculation)
     m.add_function(wrap_pyfunction!(set_empty_value, m)?)?;
     m.add_function(wrap_pyfunction!(get_empty_value, m)?)?;
+    // Adaptive architecture (per-cluster variable bits/neurons)
+    m.add_class::<AdaptiveConfigGroup>()?;
+    m.add_function(wrap_pyfunction!(adaptive_build_config_groups, m)?)?;
+    m.add_function(wrap_pyfunction!(adaptive_forward_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(adaptive_train_batch, m)?)?;
     Ok(())
 }

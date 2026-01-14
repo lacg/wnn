@@ -1,6 +1,6 @@
 """WNN - Weightless Neural Networks."""
 
-from wnn.logging import Logger, create_logger
+from wnn.logger import Logger, create_logger
 from wnn.progress import ProgressTracker, PopulationTracker, ProgressStats
 
 __all__ = [

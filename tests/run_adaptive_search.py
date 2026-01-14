@@ -104,8 +104,8 @@ def main():
 		token_frequencies=token_frequencies,
 		cluster_order=cluster_order,
 
-		# GA parameters (tuned for ~1-2 hour run with subsampled data)
-		population_size=10,      # Smaller population for faster iteration
+		# GA parameters
+		population_size=30,      # Diverse population for better exploration
 		generations=50,          # Enough for convergence
 		patience=10,             # Wait for improvement
 

@@ -19,7 +19,7 @@ Example:
 from typing import Optional, Dict, List, Tuple
 from dataclasses import dataclass
 
-from torch import zeros, ones, arange, long, Tensor, bool as torch_bool
+from torch import zeros, ones, arange, long, Tensor, bool as torch_bool, from_numpy
 
 from wnn.ram.core.Memory import Memory
 from wnn.ram.core.base import RAMComponent
@@ -226,18 +226,26 @@ class AdaptiveClusteredRAM(RAMComponent):
 		"""Check if using sparse memory backend for any group."""
 		return self._use_sparse and len(self._sparse_memories) > 0
 
-	def forward(self, input_bits: Tensor) -> Tensor:
+	def forward(self, input_bits: Tensor, use_rust: bool = True) -> Tensor:
 		"""
 		Forward pass returning probabilities per cluster.
 
 		Args:
 			input_bits: [batch, total_input_bits] boolean or 0/1 tensor
+			use_rust: If True (default), use Rust accelerator when available
 
 		Returns:
 			[batch, num_clusters] float tensor of probabilities in [0, 1]
 		"""
 		if input_bits.ndim == 1:
 			input_bits = input_bits.unsqueeze(0)
+
+		# Try Rust-accelerated forward if requested
+		if use_rust:
+			try:
+				return self.forward_rust(input_bits)
+			except (ImportError, AttributeError):
+				pass  # Fall back to PyTorch
 
 		batch_size = input_bits.shape[0]
 		device = input_bits.device
@@ -258,6 +266,91 @@ class AdaptiveClusteredRAM(RAMComponent):
 				probs[:, cluster_id] = group_probs[:, local_idx]
 
 		return probs
+
+	def forward_rust(self, input_bits: Tensor) -> Tensor:
+		"""
+		Rust-accelerated forward pass for adaptive models.
+
+		Uses rayon for parallel processing across config groups.
+
+		Args:
+			input_bits: [num_examples, total_input_bits] input patterns
+
+		Returns:
+			[num_examples, num_clusters] float tensor of probabilities
+		"""
+		import ram_accelerator
+		import numpy as np
+
+		if input_bits.ndim == 1:
+			input_bits = input_bits.unsqueeze(0)
+
+		num_examples = input_bits.shape[0]
+
+		# Prepare flattened input bits
+		input_bits_np = input_bits.flatten().bool().numpy().astype(np.uint8)
+
+		# Prepare group metadata
+		group_neurons = []
+		group_bits = []
+		group_words_per_neuron = []
+		group_cluster_ids_flat = []
+		group_cluster_counts = []
+		group_memory_offsets = []
+		group_conn_offsets = []
+
+		connections_list = []
+		memory_list = []
+
+		CELLS_PER_WORD = 31
+
+		memory_offset = 0
+		conn_offset = 0
+
+		for group in self.config_groups:
+			words_per_neuron = (1 << group.bits + CELLS_PER_WORD - 1) // CELLS_PER_WORD
+
+			group_neurons.append(group.neurons)
+			group_bits.append(group.bits)
+			group_words_per_neuron.append(words_per_neuron)
+			group_cluster_ids_flat.extend(group.cluster_ids)
+			group_cluster_counts.append(len(group.cluster_ids))
+			group_memory_offsets.append(memory_offset)
+			group_conn_offsets.append(conn_offset)
+
+			# Get connections and memory from this group
+			conns = group.memory.connections.flatten().numpy().astype(np.int64)
+			mem = group.memory.memory.flatten().numpy().astype(np.int64)
+
+			connections_list.append(conns)
+			memory_list.append(mem)
+
+			# Update offsets for next group
+			memory_offset += len(mem)
+			conn_offset += len(conns)
+
+		# Concatenate all connections and memory
+		connections_flat = np.concatenate(connections_list) if connections_list else np.array([], dtype=np.int64)
+		memory_words = np.concatenate(memory_list) if memory_list else np.array([], dtype=np.int64)
+
+		# Call Rust forward
+		probs_flat = ram_accelerator.adaptive_forward_batch(
+			input_bits_np,
+			connections_flat,
+			memory_words,
+			group_neurons,
+			group_bits,
+			group_words_per_neuron,
+			group_cluster_ids_flat,
+			group_cluster_counts,
+			group_memory_offsets,
+			group_conn_offsets,
+			num_examples,
+			self.total_input_bits,
+			self.num_clusters,
+		)
+
+		return from_numpy(np.array(probs_flat, dtype=np.float32)).view(num_examples, self.num_clusters)
 
 	def _forward_dense_group(self, input_bits: Tensor, group_idx: int) -> Tensor:
 		"""Dense forward for a single config group."""
@@ -403,8 +496,7 @@ class AdaptiveClusteredRAM(RAMComponent):
 		"""
 		Rust-accelerated training for adaptive models.
 
-		Currently falls back to PyTorch train_batch. Future optimization:
-		implement a Rust function that handles adaptive architecture.
+		Uses atomic writes with rayon for parallel processing.
 
 		Args:
 			input_bits: [num_examples, total_input_bits] input patterns
@@ -415,9 +507,97 @@ class AdaptiveClusteredRAM(RAMComponent):
 		Returns:
 			Number of memory cells modified
 		"""
-		# TODO: Implement optimized Rust training for adaptive architecture
-		# For now, fall back to PyTorch implementation
-		return self.train_batch(input_bits, true_clusters, false_clusters, allow_override)
+		try:
+			import ram_accelerator
+			import numpy as np
+		except ImportError:
+			# Fall back to PyTorch implementation
+			return self.train_batch(input_bits, true_clusters, false_clusters, allow_override)
+
+		if input_bits.ndim == 1:
+			input_bits = input_bits.unsqueeze(0)
+
+		num_examples = input_bits.shape[0]
+		num_negatives = false_clusters.shape[1] if false_clusters.ndim == 2 else 1
+
+		# Prepare flattened data
+		input_bits_np = input_bits.flatten().bool().numpy().astype(np.uint8)
+		true_clusters_np = true_clusters.flatten().numpy().astype(np.int64)
+		false_clusters_np = false_clusters.flatten().numpy().astype(np.int64)
+
+		# Prepare group metadata (same as forward_rust)
+		group_neurons = []
+		group_bits = []
+		group_words_per_neuron = []
+		group_cluster_ids_flat = []
+		group_cluster_counts = []
+		group_memory_offsets = []
+		group_conn_offsets = []
+
+		connections_list = []
+		memory_list = []
+
+		CELLS_PER_WORD = 31
+
+		memory_offset = 0
+		conn_offset = 0
+
+		for group in self.config_groups:
+			words_per_neuron = (1 << group.bits + CELLS_PER_WORD - 1) // CELLS_PER_WORD
+
+			group_neurons.append(group.neurons)
+			group_bits.append(group.bits)
+			group_words_per_neuron.append(words_per_neuron)
+			group_cluster_ids_flat.extend(group.cluster_ids)
+			group_cluster_counts.append(len(group.cluster_ids))
+			group_memory_offsets.append(memory_offset)
+			group_conn_offsets.append(conn_offset)
+
+			# Get connections and memory from this group
+			conns = group.memory.connections.flatten().numpy().astype(np.int64)
+			mem = group.memory.memory.flatten().numpy().astype(np.int64)
+
+			connections_list.append(conns)
+			memory_list.append(mem)
+
+			memory_offset += len(mem)
+			conn_offset += len(conns)
+
+		# Concatenate all connections and memory
+		connections_flat = np.concatenate(connections_list) if connections_list else np.array([], dtype=np.int64)
+		memory_words = np.concatenate(memory_list) if memory_list else np.array([], dtype=np.int64)
+
+		# Call Rust training
+		modified = ram_accelerator.adaptive_train_batch(
+			input_bits_np,
+			true_clusters_np,
+			false_clusters_np,
+			connections_flat,
+			memory_words,
+			group_neurons,
+			group_bits,
+			group_words_per_neuron,
+			group_cluster_ids_flat,
+			group_cluster_counts,
+			group_memory_offsets,
+			group_conn_offsets,
+			num_examples,
+			self.total_input_bits,
+			num_negatives,
+			self.num_clusters,
+			allow_override,
+		)
+
+		# Copy modified memory back to PyTorch tensors
+		mem_idx = 0
+		for group in self.config_groups:
+			mem_len = group.memory.memory.numel()
+			group.memory.memory.copy_(
+				from_numpy(memory_words[mem_idx:mem_idx + mem_len].reshape(group.memory.memory.shape))
+			)
+			mem_idx += mem_len
+
+		return modified
 
 	def reset_memory(self) -> None:
 		"""Reset all memory cells to EMPTY, preserving connectivity."""
