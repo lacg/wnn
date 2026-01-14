@@ -557,6 +557,7 @@ class AdaptiveOptResult:
 	early_stopped: bool
 	initial_accuracy: Optional[float] = None  # Optional: evaluated at checkpoint
 	final_accuracy: Optional[float] = None  # Optional: evaluated at checkpoint
+	final_population: Optional[List['ClusterGenome']] = None  # Top-K genomes for seeding next phase
 
 
 class RustParallelEvaluator:
@@ -885,12 +886,14 @@ class AdaptiveClusterOptimizer:
 	def optimize(
 		self,
 		init_strategy: GenomeInitStrategy = GenomeInitStrategy.FREQUENCY_SCALED,
+		initial_population: Optional[List[ClusterGenome]] = None,
 	) -> AdaptiveOptResult:
 		"""
 		Run the adaptive architecture optimization.
 
 		Args:
-			init_strategy: How to initialize the population
+			init_strategy: How to initialize the population (if no initial_population)
+			initial_population: Optional seed population from previous phase
 
 		Returns:
 			AdaptiveOptResult with best genome and statistics
@@ -906,8 +909,12 @@ class AdaptiveClusterOptimizer:
 		self._log(f"  Init strategy: {init_strategy.name}")
 		self._log(f"  Bits range: [{cc.min_bits}, {cc.max_bits}]")
 
-		# Initialize population
-		population = self._init_population(init_strategy)
+		# Initialize population - use seed population if provided
+		if initial_population is not None:
+			self._log(f"  Seeded with {len(initial_population)} genomes from previous phase")
+			population = self._seed_population(initial_population, cfg.population_size)
+		else:
+			population = self._init_population(init_strategy)
 
 		# Create progress tracker
 		tracker = ProgressTracker(
@@ -1013,6 +1020,9 @@ class AdaptiveClusterOptimizer:
 				if self._batch_evaluator is not None:
 					_, final_accuracy = self._batch_evaluator.evaluate_single_with_accuracy(best_genome)
 					self._log(f"[AdaptiveGA] Final: CE={best_fitness:.4f}, Acc={final_accuracy:.2%}")
+				# Get final population sorted by fitness for seeding next phase
+				sorted_indices = sorted(range(len(fitness)), key=lambda i: fitness[i])
+				final_population = [population[i].clone() for i in sorted_indices]
 				return AdaptiveOptResult(
 					best_genome=best_genome,
 					initial_fitness=initial_fitness,
@@ -1022,6 +1032,7 @@ class AdaptiveClusterOptimizer:
 					early_stopped=True,
 					initial_accuracy=initial_accuracy,
 					final_accuracy=final_accuracy,
+					final_population=final_population,
 				)
 
 		self._log(f"[AdaptiveGA] Completed {cfg.generations} generations")
@@ -1033,6 +1044,10 @@ class AdaptiveClusterOptimizer:
 			_, final_accuracy = self._batch_evaluator.evaluate_single_with_accuracy(best_genome)
 			self._log(f"[AdaptiveGA] Final: CE={best_fitness:.4f}, Acc={final_accuracy:.2%}")
 
+		# Get final population sorted by fitness for seeding next phase
+		sorted_indices = sorted(range(len(fitness)), key=lambda i: fitness[i])
+		final_population = [population[i].clone() for i in sorted_indices]
+
 		return AdaptiveOptResult(
 			best_genome=best_genome,
 			initial_fitness=initial_fitness,
@@ -1042,6 +1057,7 @@ class AdaptiveClusterOptimizer:
 			early_stopped=False,
 			initial_accuracy=initial_accuracy,
 			final_accuracy=final_accuracy,
+			final_population=final_population,
 		)
 
 	def _init_population(self, strategy: GenomeInitStrategy) -> List[ClusterGenome]:
@@ -1072,6 +1088,41 @@ class AdaptiveClusterOptimizer:
 				)
 			population.append(genome)
 
+		return population
+
+	def _seed_population(
+		self,
+		seed_genomes: List[ClusterGenome],
+		target_size: int,
+	) -> List[ClusterGenome]:
+		"""
+		Create population from seed genomes, filling with mutations if needed.
+
+		Args:
+			seed_genomes: Genomes from previous phase (sorted by fitness, best first)
+			target_size: Desired population size
+
+		Returns:
+			Population of target_size genomes
+		"""
+		cc = self.config.cluster_config
+		population = []
+
+		# Take up to target_size from seeds (best ones)
+		num_seeds = min(len(seed_genomes), target_size)
+		for i in range(num_seeds):
+			population.append(seed_genomes[i].clone())
+
+		# Fill remaining with mutations of the best seeds
+		seed_idx = 0
+		while len(population) < target_size:
+			# Mutate from seeds in round-robin
+			source = seed_genomes[seed_idx % len(seed_genomes)]
+			mutant = source.mutate(cc, rng=self.seed + len(population))
+			population.append(mutant)
+			seed_idx += 1
+
+		self._log(f"  Population: {num_seeds} from seeds, {target_size - num_seeds} mutations")
 		return population
 
 	def _tournament_select(
@@ -1535,6 +1586,7 @@ class ArchitectureTSResult:
 	early_stopped: bool
 	initial_accuracy: Optional[float] = None  # Optional: evaluated at checkpoint
 	final_accuracy: Optional[float] = None  # Optional: evaluated at checkpoint
+	final_neighbors: Optional[List['ClusterGenome']] = None  # Best neighbors for seeding next phase
 
 
 class ArchitectureTabuSearch:
@@ -1638,6 +1690,7 @@ class ArchitectureTabuSearch:
 		self,
 		initial_genome: ClusterGenome,
 		initial_fitness: Optional[float] = None,
+		initial_neighbors: Optional[List[ClusterGenome]] = None,
 	) -> ArchitectureTSResult:
 		"""
 		Run Tabu Search from an initial genome.
@@ -1645,6 +1698,7 @@ class ArchitectureTabuSearch:
 		Args:
 			initial_genome: Starting genome (e.g., from GA)
 			initial_fitness: Optional pre-computed fitness (avoids re-evaluation)
+			initial_neighbors: Optional seed neighbors from previous phase
 
 		Returns:
 			ArchitectureTSResult with refined genome
@@ -1656,6 +1710,8 @@ class ArchitectureTabuSearch:
 		self._log(f"  Neighbors/iter: {cfg.neighbors_per_iter}")
 		self._log(f"  Tabu size: {cfg.tabu_size}")
 		self._log(f"  Clusters/neighbor: {cfg.clusters_per_neighbor}")
+		if initial_neighbors:
+			self._log(f"  Seeded with {len(initial_neighbors)} neighbors from previous phase")
 
 		# Initialize
 		current = initial_genome.clone()
@@ -1668,6 +1724,9 @@ class ArchitectureTabuSearch:
 		best_fitness = current_fitness
 		start_fitness = current_fitness
 
+		# Track best neighbors for seeding next phase (sorted by fitness)
+		best_neighbors: List[Tuple[ClusterGenome, float]] = []
+
 		# Get initial accuracy (if using Rust evaluator)
 		initial_accuracy = None
 		if self._batch_evaluator is not None:
@@ -1675,6 +1734,7 @@ class ArchitectureTabuSearch:
 			self._log(f"[ArchTS] Initial: CE={start_fitness:.4f}, Acc={initial_accuracy:.2%}")
 
 		tabu_list = []  # List of recent move descriptors
+		use_seed_neighbors = initial_neighbors is not None and len(initial_neighbors) > 0
 		history = [(0, best_fitness)]
 
 		# Progress tracker for consistent logging
@@ -1692,12 +1752,20 @@ class ArchitectureTabuSearch:
 		self._log(f"[ArchTS] Initial fitness: {current_fitness:.4f}")
 
 		for iteration in range(cfg.iterations):
-			# Generate neighbors
+			# Generate neighbors (or use seeds on first iteration)
 			neighbors = []
-			for _ in range(cfg.neighbors_per_iter):
-				neighbor, move_desc = self._generate_neighbor(current)
-				if not self._is_tabu(move_desc, tabu_list) and len(move_desc) > 0:
-					neighbors.append((neighbor, move_desc))
+
+			if iteration == 0 and use_seed_neighbors:
+				# Use seed neighbors from previous phase (no move tracking)
+				for seed in initial_neighbors[:cfg.neighbors_per_iter]:
+					neighbors.append((seed.clone(), frozenset()))  # Empty move desc
+				self._log(f"[ArchTS] Iter 1: Using {len(neighbors)} seed neighbors")
+			else:
+				# Generate new neighbors
+				for _ in range(cfg.neighbors_per_iter):
+					neighbor, move_desc = self._generate_neighbor(current)
+					if not self._is_tabu(move_desc, tabu_list) and len(move_desc) > 0:
+						neighbors.append((neighbor, move_desc))
 
 			if not neighbors:
 				self._log(f"[ArchTS] No valid neighbors at iter {iteration + 1}")
@@ -1713,6 +1781,14 @@ class ArchitectureTabuSearch:
 			else:
 				evaluated = [(n, self.evaluate_fn(n), m) for n, m in neighbors]
 
+			# Track all evaluated neighbors for seeding next phase
+			for genome, fitness, _ in evaluated:
+				best_neighbors.append((genome.clone(), fitness))
+
+			# Keep only top-K best neighbors (sorted by fitness)
+			best_neighbors.sort(key=lambda x: x[1])
+			best_neighbors = best_neighbors[:cfg.neighbors_per_iter * 2]  # Keep 2x neighbors
+
 			# Log progress using tracker (all neighbor fitness values)
 			fitness_values = [f for _, f, _ in evaluated]
 			tracker.tick(fitness_values, generation=iteration)
@@ -1725,10 +1801,11 @@ class ArchitectureTabuSearch:
 			current = best_neighbor
 			current_fitness = best_neighbor_fitness
 
-			# Add move to tabu list
-			if len(tabu_list) >= cfg.tabu_size:
-				tabu_list.pop(0)
-			tabu_list.append(best_move)
+			# Add move to tabu list (skip for seed neighbors)
+			if len(best_move) > 0:
+				if len(tabu_list) >= cfg.tabu_size:
+					tabu_list.pop(0)
+				tabu_list.append(best_move)
 
 			# Update global best
 			if current_fitness < best_fitness:
@@ -1753,6 +1830,8 @@ class ArchitectureTabuSearch:
 				if self._batch_evaluator is not None:
 					_, final_accuracy = self._batch_evaluator.evaluate_single_with_accuracy(best)
 					self._log(f"[ArchTS] Final: CE={best_fitness:.4f}, Acc={final_accuracy:.2%}")
+				# Get final neighbors for seeding next phase
+				final_neighbors = [g for g, _ in best_neighbors]
 				return ArchitectureTSResult(
 					best_genome=best,
 					initial_fitness=start_fitness,
@@ -1762,6 +1841,7 @@ class ArchitectureTabuSearch:
 					early_stopped=True,
 					initial_accuracy=initial_accuracy,
 					final_accuracy=final_accuracy,
+					final_neighbors=final_neighbors,
 				)
 
 		self._log(f"[ArchTS] Completed {cfg.iterations} iterations")
@@ -1774,6 +1854,8 @@ class ArchitectureTabuSearch:
 			_, final_accuracy = self._batch_evaluator.evaluate_single_with_accuracy(best)
 			self._log(f"[ArchTS] Final accuracy: {final_accuracy:.2%}")
 
+		# Get final neighbors for seeding next phase
+		final_neighbors = [g for g, _ in best_neighbors]
 		return ArchitectureTSResult(
 			best_genome=best,
 			initial_fitness=start_fitness,
@@ -1783,6 +1865,7 @@ class ArchitectureTabuSearch:
 			early_stopped=False,
 			initial_accuracy=initial_accuracy,
 			final_accuracy=final_accuracy,
+			final_neighbors=final_neighbors,
 		)
 
 	def _evaluate(self, genome: ClusterGenome) -> float:
@@ -1814,6 +1897,8 @@ def run_architecture_tabu_search(
 	empty_value: float = 0.0,
 	seed: int = 42,
 	logger: Optional[Callable[[str], None]] = None,
+	# Population seeding from previous phase
+	initial_neighbors: Optional[List[ClusterGenome]] = None,
 ) -> ArchitectureTSResult:
 	"""
 	Run Tabu Search to refine architecture from a GA solution.
@@ -1838,6 +1923,7 @@ def run_architecture_tabu_search(
 		empty_value: EMPTY cell value
 		seed: Random seed
 		logger: Logging function
+		initial_neighbors: Optional seed neighbors from Phase 1a population
 
 	Returns:
 		ArchitectureTSResult with refined genome
@@ -1904,7 +1990,11 @@ def run_architecture_tabu_search(
 	)
 
 	# Run optimization
-	result = optimizer.optimize(initial_genome, initial_fitness)
+	result = optimizer.optimize(
+		initial_genome,
+		initial_fitness,
+		initial_neighbors=initial_neighbors,
+	)
 
 	# Log results
 	log()
@@ -1947,6 +2037,8 @@ def run_architecture_search(
 	empty_value: float = 0.0,
 	seed: int = 42,
 	logger: Optional[Callable[[str], None]] = None,
+	# Population seeding from previous phase
+	initial_population: Optional[List[ClusterGenome]] = None,
 ) -> AdaptiveOptResult:
 	"""
 	Run complete architecture search for adaptive cluster configuration.
@@ -2070,7 +2162,10 @@ def run_architecture_search(
 
 	# Run optimization
 	log()
-	result = optimizer.optimize(init_strategy=init_strategy)
+	result = optimizer.optimize(
+		init_strategy=init_strategy,
+		initial_population=initial_population,
+	)
 
 	# Log final results
 	log()
@@ -2205,31 +2300,58 @@ def run_connectivity_optimization(
 	evaluator = RustParallelEvaluator(eval_config)
 
 	log(f"[Phase2] Evaluating {ga_population} connectivity patterns in parallel (Rust)...")
+
+	import sys
 	import time as _time
-	_start = _time.time()
+	import threading
 
 	# Prepare flat data for Rust - same genome repeated N times
 	# Rust uses from_entropy() for connectivity, so each gets different random connectivity
 	genomes_bits_flat = genome.bits_per_cluster * ga_population
 	genomes_neurons_flat = genome.neurons_per_cluster * ga_population
 
-	# Call Rust evaluator directly to get (CE, accuracy) tuples
-	batch_results = ram_accelerator.evaluate_genomes_parallel(
-		genomes_bits_flat,
-		genomes_neurons_flat,
-		ga_population,
-		eval_config.vocab_size,
-		evaluator._train_data['input_bits'],
-		evaluator._train_data['targets'],
-		evaluator._train_data['negatives'],
-		evaluator._train_data['num_examples'],
-		evaluator._train_data['num_negatives'],
-		evaluator._eval_data['input_bits'],
-		evaluator._eval_data['targets'],
-		evaluator._eval_data['num_examples'],
-		evaluator._total_input_bits,
-		eval_config.empty_value,
-	)
+	# Progress indicator thread
+	_done = threading.Event()
+	_start = _time.time()
+
+	def _progress_indicator():
+		"""Show progress while Rust evaluation runs."""
+		spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+		idx = 0
+		while not _done.is_set():
+			elapsed = _time.time() - _start
+			sys.stdout.write(f"\r[Phase2] {spinner[idx]} Running Rust evaluation... {elapsed:.1f}s")
+			sys.stdout.flush()
+			idx = (idx + 1) % len(spinner)
+			_done.wait(0.1)  # Update every 100ms
+
+	# Start progress thread
+	progress_thread = threading.Thread(target=_progress_indicator, daemon=True)
+	progress_thread.start()
+
+	try:
+		# Call Rust evaluator directly to get (CE, accuracy) tuples
+		batch_results = ram_accelerator.evaluate_genomes_parallel(
+			genomes_bits_flat,
+			genomes_neurons_flat,
+			ga_population,
+			eval_config.vocab_size,
+			evaluator._train_data['input_bits'],
+			evaluator._train_data['targets'],
+			evaluator._train_data['negatives'],
+			evaluator._train_data['num_examples'],
+			evaluator._train_data['num_negatives'],
+			evaluator._eval_data['input_bits'],
+			evaluator._eval_data['targets'],
+			evaluator._eval_data['num_examples'],
+			evaluator._total_input_bits,
+			eval_config.empty_value,
+		)
+	finally:
+		_done.set()
+		progress_thread.join(timeout=0.5)
+		sys.stdout.write("\r" + " " * 60 + "\r")  # Clear progress line
+		sys.stdout.flush()
 
 	_elapsed = _time.time() - _start
 	log(f"[Phase2] Completed in {_elapsed:.1f}s ({ga_population / _elapsed:.1f} trials/s)")

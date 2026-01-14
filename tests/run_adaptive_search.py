@@ -175,6 +175,9 @@ def main():
 		empty_value=empty_value,
 		seed=seed + 1000,
 		logger=logger,
+
+		# Population seeding: use GA's final population as initial neighbors
+		initial_neighbors=ga_result.final_population,
 	)
 
 	phase1b_elapsed = time.time() - start_time
