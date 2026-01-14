@@ -602,11 +602,13 @@ class RustParallelEvaluator:
 
 		# === NEGATIVE SAMPLES (vectorized) ===
 		counts = Counter(cfg.train_tokens)
-		top_k_tokens = np.array([t for t, _ in counts.most_common(cfg.global_top_k)], dtype=np.int64)
-		num_negatives = min(5, cfg.global_top_k)
+		# Cap to actual unique tokens in case vocab is smaller than global_top_k
+		actual_top_k = min(cfg.global_top_k, len(counts))
+		top_k_tokens = np.array([t for t, _ in counts.most_common(actual_top_k)], dtype=np.int64)
+		num_negatives = min(5, actual_top_k)
 
 		rng = np.random.RandomState(42)
-		neg_indices = rng.randint(0, cfg.global_top_k, (n_train, num_negatives))
+		neg_indices = rng.randint(0, actual_top_k, (n_train, num_negatives))
 		neg_tokens = top_k_tokens[neg_indices]  # [n_train, num_negatives]
 
 		if cluster_map is not None:
@@ -739,6 +741,9 @@ class RustParallelEvaluator:
 
 	def evaluate_single_with_accuracy(self, genome: ClusterGenome) -> Tuple[float, float]:
 		"""Evaluate a single genome, returning (CE, accuracy)."""
+		import ram_accelerator
+
+		self._prepare_data()
 		genomes_bits_flat = genome.bits_per_cluster
 		genomes_neurons_flat = genome.neurons_per_cluster
 
