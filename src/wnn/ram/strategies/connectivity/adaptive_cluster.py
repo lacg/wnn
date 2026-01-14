@@ -2117,7 +2117,7 @@ def run_connectivity_optimization(
 			best_seed = trial_seed
 			log(f"[Phase2] Trial {trial + 1}/{ga_population}: "
 				f"CE={trial_fitness:.4f} (new best!)")
-		elif (trial + 1) % 5 == 0:
+		else:
 			log(f"[Phase2] Trial {trial + 1}/{ga_population}: "
 				f"CE={trial_fitness:.4f}, best={best_fitness:.4f}")
 
