@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING, Callable, Dict, List, Optional
 import torch
 from torch import Tensor
 
+from wnn.progress import ProgressTracker
+
 if TYPE_CHECKING:
 	pass
 
@@ -621,21 +623,31 @@ class AdaptiveClusterOptimizer:
 		# Initialize population
 		population = self._init_population(init_strategy)
 
+		# Create progress tracker
+		tracker = ProgressTracker(
+			logger=self._log,
+			minimize=True,  # Lower CE is better
+			prefix="[AdaptiveGA]",
+			total_generations=cfg.generations,
+		)
+
 		# Evaluate initial population with progress logging
 		self._log(f"[AdaptiveGA] Evaluating initial population ({cfg.population_size} genomes)...")
 		fitness = []
 		for i, genome in enumerate(population):
 			fit = self.evaluate_fn(genome)
 			fitness.append(fit)
-			self._log(f"  [{i+1}/{cfg.population_size}] CE={fit:.4f}")
+			tracker.tick_individual(fit, i, cfg.population_size)
 
+		# Record initial population stats
+		tracker.tick(fitness, generation=-1, log=False)  # Gen -1 = initial
 		best_idx = min(range(len(fitness)), key=lambda i: fitness[i])
 		best_genome = population[best_idx].clone()
 		best_fitness = fitness[best_idx]
 		initial_fitness = best_fitness
 
 		history = [(0, best_fitness, sum(fitness) / len(fitness))]
-		self._log(f"[AdaptiveGA] Initial best fitness: {best_fitness:.4f}")
+		self._log(f"[AdaptiveGA] Initial: best={best_fitness:.4f}, avg={sum(fitness)/len(fitness):.4f}")
 
 		# Early stopping tracking
 		patience_counter = 0
@@ -673,11 +685,7 @@ class AdaptiveClusterOptimizer:
 			population = new_population
 
 			# Evaluate new population
-			self._log(f"[AdaptiveGA] Gen {gen + 1}: evaluating {cfg.population_size} genomes...")
-			fitness = []
-			for i, genome in enumerate(population):
-				fit = self.evaluate_fn(genome)
-				fitness.append(fit)
+			fitness = [self.evaluate_fn(g) for g in population]
 			gen_best_idx = min(range(len(fitness)), key=lambda i: fitness[i])
 
 			if fitness[gen_best_idx] < best_fitness:
@@ -687,13 +695,12 @@ class AdaptiveClusterOptimizer:
 			avg_fitness = sum(fitness) / len(fitness)
 			history.append((gen + 1, best_fitness, avg_fitness))
 
-			# Log progress every generation
-			stats = best_genome.stats()
+			# Log progress using tracker
+			progress = tracker.tick(fitness, generation=gen)
+			genome_stats = best_genome.stats()
 			self._log(
-				f"[AdaptiveGA] Gen {gen + 1}/{cfg.generations}: "
-				f"best={best_fitness:.4f}, avg={avg_fitness:.4f}, "
-				f"bits=[{stats['min_bits']}-{stats['max_bits']}], "
-				f"neurons=[{stats['min_neurons']}-{stats['max_neurons']}]"
+				f"  bits=[{genome_stats['min_bits']}-{genome_stats['max_bits']}], "
+				f"neurons=[{genome_stats['min_neurons']}-{genome_stats['max_neurons']}]"
 			)
 
 			# Early stopping check
@@ -716,10 +723,7 @@ class AdaptiveClusterOptimizer:
 				)
 
 		self._log(f"[AdaptiveGA] Completed {cfg.generations} generations")
-		self._log(f"  Initial fitness: {initial_fitness:.4f}")
-		self._log(f"  Final fitness: {best_fitness:.4f}")
-		improvement = (initial_fitness - best_fitness) / initial_fitness * 100
-		self._log(f"  Improvement: {improvement:.2f}%")
+		tracker.log_summary()
 
 		return AdaptiveOptResult(
 			best_genome=best_genome,
