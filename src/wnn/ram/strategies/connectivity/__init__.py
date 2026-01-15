@@ -40,6 +40,7 @@ from wnn.ram.strategies.connectivity.base import (
 	SEVERE_THRESHOLD,
 	CRITICAL_THRESHOLD,
 )
+from wnn.ram.strategies.connectivity.generic_strategies import StopReason
 # Preferred: use enum instead of constants
 from wnn.core.thresholds import OverfitThreshold, EarlyStopThreshold
 
@@ -55,7 +56,8 @@ from wnn.ram.strategies.connectivity.genetic_algorithm import (
 	GeneticAlgorithmStrategy,
 	GeneticAlgorithmConfig,
 )
-from wnn.ram.strategies.connectivity.factory import OptimizerStrategyFactory
+# Import unified factory from strategies module
+from wnn.ram.strategies.factory import OptimizerStrategyFactory, OptimizerStrategyType
 from wnn.ram.strategies.connectivity.accelerated import (
 	AcceleratedOptimizer,
 	OptimizerConfig,
@@ -64,6 +66,11 @@ from wnn.ram.strategies.connectivity.accelerated import (
 	create_optimizer,
 	RUST_AVAILABLE,
 	RUST_CPU_CORES,
+	METAL_AVAILABLE,
+	METAL_DEVICE,
+	METAL_GPU_CORES,
+	get_effective_cores,
+	resolve_acceleration_mode,
 )
 from wnn.ram.strategies.connectivity.model_optimizer import (
 	ConnectivityOptimizer,
@@ -75,6 +82,7 @@ from wnn.ram.strategies.connectivity.model_optimizer import (
 __all__ = [
 	# Base
 	'OptimizerResult',
+	'StopReason',
 	'OptimizerStrategyBase',
 	'OverfittingControl',
 	'OverfittingCallback',
@@ -98,6 +106,7 @@ __all__ = [
 	'GeneticAlgorithmConfig',
 	# Factory
 	'OptimizerStrategyFactory',
+	'OptimizerStrategyType',
 	# Accelerated (recommended)
 	'AcceleratedOptimizer',
 	'OptimizerConfig',
@@ -106,6 +115,11 @@ __all__ = [
 	'create_optimizer',
 	'RUST_AVAILABLE',
 	'RUST_CPU_CORES',
+	'METAL_AVAILABLE',
+	'METAL_DEVICE',
+	'METAL_GPU_CORES',
+	'get_effective_cores',
+	'resolve_acceleration_mode',
 	# High-level model optimizer
 	'ConnectivityOptimizer',
 	'OptimizationConfig',

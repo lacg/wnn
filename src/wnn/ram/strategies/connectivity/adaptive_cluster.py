@@ -31,7 +31,7 @@ from wnn.ram.strategies.factory import (
 from wnn.ram.strategies.connectivity.generic_strategies import (
 	GAConfig,
 	TSConfig,
-	GenericOptResult,
+	OptimizerResult,
 )
 
 if TYPE_CHECKING:
@@ -1193,7 +1193,7 @@ def run_architecture_tabu_search(
 	logger: Optional[Callable[[str], None]] = None,
 	# Population seeding from previous phase
 	initial_neighbors: Optional[List[ClusterGenome]] = None,
-) -> GenericOptResult['ClusterGenome']:
+) -> OptimizerResult['ClusterGenome']:
 	"""
 	Run Tabu Search to refine architecture from a GA solution.
 
@@ -1220,7 +1220,7 @@ def run_architecture_tabu_search(
 		initial_neighbors: Optional seed neighbors from Phase 1a population
 
 	Returns:
-		GenericOptResult with refined genome
+		OptimizerResult with refined genome
 	"""
 	log = logger or print
 
@@ -1339,7 +1339,7 @@ def run_architecture_search(
 	logger: Optional[Callable[[str], None]] = None,
 	# Population seeding from previous phase
 	initial_population: Optional[List[ClusterGenome]] = None,
-) -> GenericOptResult['ClusterGenome']:
+) -> OptimizerResult['ClusterGenome']:
 	"""
 	Run complete architecture search for adaptive cluster configuration.
 
@@ -1368,7 +1368,7 @@ def run_architecture_search(
 		logger: Logging function
 
 	Returns:
-		GenericOptResult with best genome and optimization history
+		OptimizerResult with best genome and optimization history
 
 	Example:
 		from collections import Counter

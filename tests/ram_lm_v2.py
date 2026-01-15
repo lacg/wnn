@@ -1713,11 +1713,11 @@ class RAMLM_v2:
 					result = ga.optimize(current_connectivity, lambda x: batch_fn([x])[0],
 						total_bits, num_neurons, bits_per_neuron, batch_fn,
 						overfitting_callback=overfitting_monitor)
-					if result.early_stopped_overfitting:
+					if result.early_stopped:
 						any_overfitting_stop = True
-						log(f"  [{step_num}/{len(strategy_sequence)} GA] Done: PPL {result.final_error:.1f} (stopped: overfitting)")
+						log(f"  [{step_num}/{len(strategy_sequence)} GA] Done: PPL {result.final_fitness:.1f} (stopped: overfitting)")
 					else:
-						log(f"  [{step_num}/{len(strategy_sequence)} GA] Done: PPL {result.final_error:.1f}")
+						log(f"  [{step_num}/{len(strategy_sequence)} GA] Done: PPL {result.final_fitness:.1f}")
 				elif strategy_type.upper() == 'TS':
 					log(f"  [{step_num}/{len(strategy_sequence)} TS] Starting...")
 					ts_config = TabuSearchConfig(
@@ -1728,22 +1728,22 @@ class RAMLM_v2:
 					result = ts.optimize(current_connectivity, lambda x: batch_fn([x])[0],
 						total_bits, num_neurons, bits_per_neuron, batch_fn,
 						overfitting_callback=overfitting_monitor)
-					if result.early_stopped_overfitting:
+					if result.early_stopped:
 						any_overfitting_stop = True
-						log(f"  [{step_num}/{len(strategy_sequence)} TS] Done: PPL {result.final_error:.1f} (stopped: overfitting)")
+						log(f"  [{step_num}/{len(strategy_sequence)} TS] Done: PPL {result.final_fitness:.1f} (stopped: overfitting)")
 					else:
-						log(f"  [{step_num}/{len(strategy_sequence)} TS] Done: PPL {result.final_error:.1f}")
+						log(f"  [{step_num}/{len(strategy_sequence)} TS] Done: PPL {result.final_fitness:.1f}")
 				else:
 					log(f"  [WARNING] Unknown strategy: {strategy_type}, skipping")
 					continue
 
 				# Update current for next phase in sequence
-				current_connectivity = result.optimized_connections.clone()
+				current_connectivity = result.best_genome.clone()
 
 				# Track global best
-				if result.final_error < best_ppl:
-					best_ppl = result.final_error
-					best_connectivity = result.optimized_connections.clone()
+				if result.final_fitness < best_ppl:
+					best_ppl = result.final_fitness
+					best_connectivity = result.best_genome.clone()
 					log(f"  [BEST] {strategy_type} improved: PPL {best_ppl:.1f}")
 				else:
 					log(f"  [BEST] Keeping previous: PPL {best_ppl:.1f}")

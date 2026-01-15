@@ -34,10 +34,9 @@ from torch import Tensor
 
 from wnn.ram.core import OptimizationMethod
 from wnn.ram.strategies.connectivity.base import OptimizerResult, OverfittingMonitor
-from wnn.ram.strategies.connectivity.factory import OptimizerStrategyFactory
-from wnn.ram.strategies.connectivity.tabu_search import TabuSearchConfig
-from wnn.ram.strategies.connectivity.genetic_algorithm import GeneticAlgorithmConfig
-from wnn.ram.strategies.connectivity.simulated_annealing import SimulatedAnnealingConfig
+from wnn.ram.strategies.connectivity.tabu_search import TabuSearchStrategy, TabuSearchConfig
+from wnn.ram.strategies.connectivity.genetic_algorithm import GeneticAlgorithmStrategy, GeneticAlgorithmConfig
+from wnn.ram.strategies.connectivity.simulated_annealing import SimulatedAnnealingStrategy, SimulatedAnnealingConfig
 
 
 class RAMModel(Protocol):
@@ -225,7 +224,7 @@ class ConnectivityOptimizer:
 		)
 
 		# Apply optimized connectivity and do final training
-		model.connections = result.optimized_connections
+		model.connections = result.best_genome
 		model.reset_memory()
 		train_fn()
 		final_ce = eval_fn()
@@ -241,7 +240,7 @@ class ConnectivityOptimizer:
 			improvement_percent=result.improvement_percent,
 			iterations_run=result.iterations_run,
 			method=result.method_name,
-			early_stopped=result.early_stopped_overfitting,
+			early_stopped=result.early_stopped,
 			history=result.history,
 		)
 
@@ -296,6 +295,8 @@ class ConnectivityOptimizer:
 				early_stop_patience=config.early_stop_patience,
 				early_stop_threshold_pct=config.early_stop_threshold_pct,
 			)
+			return TabuSearchStrategy(config=strategy_config, seed=config.seed, verbose=config.verbose)
+
 		elif config.method == OptimizationMethod.GENETIC_ALGORITHM:
 			strategy_config = GeneticAlgorithmConfig(
 				population_size=config.ga_population_size,
@@ -306,6 +307,8 @@ class ConnectivityOptimizer:
 				early_stop_patience=config.early_stop_patience,
 				early_stop_threshold_pct=config.early_stop_threshold_pct,
 			)
+			return GeneticAlgorithmStrategy(config=strategy_config, seed=config.seed, verbose=config.verbose)
+
 		elif config.method == OptimizationMethod.SIMULATED_ANNEALING:
 			strategy_config = SimulatedAnnealingConfig(
 				iterations=config.sa_iterations,
@@ -313,12 +316,7 @@ class ConnectivityOptimizer:
 				cooling_rate=config.sa_cooling_rate,
 				mutation_rate=config.sa_mutation_rate,
 			)
+			return SimulatedAnnealingStrategy(config=strategy_config, seed=config.seed, verbose=config.verbose)
+
 		else:
 			raise ValueError(f"Unknown optimization method: {config.method}")
-
-		return OptimizerStrategyFactory.create(
-			config.method,
-			config=strategy_config,
-			seed=config.seed,
-			verbose=config.verbose,
-		)

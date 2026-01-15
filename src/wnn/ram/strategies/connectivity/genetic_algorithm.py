@@ -18,7 +18,7 @@ from wnn.ram.strategies.connectivity.base import (
 	OverfittingControl,
 	OverfittingCallback,
 )
-from wnn.ram.strategies.connectivity.generic_strategies import OptResult
+from wnn.ram.strategies.connectivity.generic_strategies import OptimizerResult, StopReason
 from wnn.ram.strategies.perplexity import PerplexityCalculator
 
 
@@ -87,7 +87,7 @@ class GeneticAlgorithmStrategy(OptimizerStrategyBase):
 		batch_evaluate_fn: Optional[Callable[[list], list[float]]] = None,
 		overfitting_callback: Optional[OverfittingCallback] = None,
 		neuron_offsets: Optional[list[int]] = None,
-	) -> OptResult[Tensor]:
+	) -> OptimizerResult[Tensor]:
 		"""
 		Run Genetic Algorithm optimization with fitness caching.
 
@@ -333,7 +333,7 @@ class GeneticAlgorithmStrategy(OptimizerStrategyBase):
 
 		improvement_pct = ((initial_error - best_error) / initial_error * 100) if best_error < initial_error else 0.0
 
-		return OptResult(
+		return OptimizerResult(
 			initial_genome=connections,
 			best_genome=best,
 			initial_fitness=initial_error,
@@ -343,7 +343,7 @@ class GeneticAlgorithmStrategy(OptimizerStrategyBase):
 			method_name=self.name,
 			history=history,
 			early_stopped=early_stopped_overfitting,
-			stop_reason="overfitting" if early_stopped_overfitting else None,
+			stop_reason=StopReason.OVERFITTING if early_stopped_overfitting else None,
 		)
 
 	def _tournament_select(

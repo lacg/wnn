@@ -20,7 +20,7 @@ from wnn.ram.strategies.connectivity.generic_strategies import (
 	GenericTSStrategy,
 	GAConfig,
 	TSConfig,
-	GenericOptResult,
+	OptimizerResult,
 )
 
 if TYPE_CHECKING:
@@ -156,7 +156,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		initial_population: Optional[List['ClusterGenome']] = None,
 		batch_evaluate_fn: Optional[Callable[[List['ClusterGenome']], List[float]]] = None,
 		accuracy_fn: Optional[Callable[['ClusterGenome'], float]] = None,
-	) -> GenericOptResult['ClusterGenome']:
+	) -> OptimizerResult['ClusterGenome']:
 		"""
 		Run GA with Rust batch evaluation and ProgressTracker logging.
 
@@ -272,7 +272,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		initial_neighbors: Optional[List['ClusterGenome']] = None,
 		batch_evaluate_fn: Optional[Callable[[List['ClusterGenome']], List[float]]] = None,
 		accuracy_fn: Optional[Callable[['ClusterGenome'], float]] = None,
-	) -> GenericOptResult['ClusterGenome']:
+	) -> OptimizerResult['ClusterGenome']:
 		"""
 		Run TS with Rust batch evaluation and ProgressTracker logging.
 

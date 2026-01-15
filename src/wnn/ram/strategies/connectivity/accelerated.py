@@ -17,6 +17,7 @@ from enum import Enum, auto
 import torch
 from torch import Tensor
 
+from wnn.ram.core import AccelerationMode
 from wnn.ram.strategies.connectivity.base import OptimizerResult, OptimizerStrategyBase
 from wnn.ram.strategies.connectivity.genetic_algorithm import (
 	GeneticAlgorithmStrategy,
@@ -35,9 +36,49 @@ try:
 	import ram_accelerator
 	RUST_AVAILABLE = True
 	RUST_CPU_CORES = ram_accelerator.cpu_cores()
+	METAL_AVAILABLE = ram_accelerator.metal_available()
+	METAL_DEVICE = ram_accelerator.metal_device_info() if METAL_AVAILABLE else None
+	# GPU cores estimated from Metal device (M4 Max = 40, M4 Pro = 20, etc.)
+	# Metal doesn't expose core count directly, but we can estimate from device name
+	METAL_GPU_CORES = 40 if METAL_AVAILABLE else 0  # Conservative default for Apple Silicon
 except ImportError:
 	RUST_AVAILABLE = False
 	RUST_CPU_CORES = 0
+	METAL_AVAILABLE = False
+	METAL_DEVICE = None
+	METAL_GPU_CORES = 0
+
+
+def get_effective_cores(mode: 'AccelerationMode') -> int:
+	"""Get effective parallel worker count for the acceleration mode."""
+	from wnn.ram.core import AccelerationMode
+	match mode:
+		case AccelerationMode.CPU:
+			return RUST_CPU_CORES
+		case AccelerationMode.METAL:
+			return METAL_GPU_CORES if METAL_AVAILABLE else RUST_CPU_CORES
+		case AccelerationMode.HYBRID:
+			return (RUST_CPU_CORES + METAL_GPU_CORES) if METAL_AVAILABLE else RUST_CPU_CORES
+		case AccelerationMode.AUTO:
+			# AUTO uses HYBRID if GPU available, else CPU
+			if METAL_AVAILABLE:
+				return RUST_CPU_CORES + METAL_GPU_CORES
+			return RUST_CPU_CORES
+		case _:
+			return RUST_CPU_CORES
+
+
+def resolve_acceleration_mode(mode: 'AccelerationMode') -> 'AccelerationMode':
+	"""Resolve AUTO mode to the actual backend that will be used."""
+	from wnn.ram.core import AccelerationMode
+	if mode == AccelerationMode.AUTO:
+		if METAL_AVAILABLE:
+			return AccelerationMode.HYBRID
+		elif RUST_AVAILABLE:
+			return AccelerationMode.CPU
+		else:
+			return AccelerationMode.PYTORCH
+	return mode
 
 
 class OptimizationStrategy(Enum):
@@ -55,6 +96,7 @@ class OptimizerConfig:
 
 	Attributes:
 		strategy: Which optimization strategy to use
+		acceleration_mode: Hardware acceleration (AUTO, CPU, METAL, HYBRID)
 		ga_population: GA population size
 		ga_generations: GA number of generations
 		ga_mutation_rate: GA per-connection mutation probability
@@ -68,6 +110,9 @@ class OptimizerConfig:
 		verbose: Print progress during optimization
 	"""
 	strategy: OptimizationStrategy = OptimizationStrategy.HYBRID_GA_TS
+
+	# Hardware acceleration (AUTO uses Metal if available, best for unified memory)
+	acceleration_mode: AccelerationMode = AccelerationMode.AUTO
 
 	# Genetic Algorithm parameters (Garcia 2003 defaults)
 	ga_population: int = 30
@@ -202,20 +247,43 @@ class AcceleratedOptimizer:
 		if self.config.verbose:
 			self.log_fn(msg)
 
-	def _create_batch_evaluate_fn(self) -> Callable[[list], list[float]]:
-		"""Create batch evaluation function (uses Rust if available)."""
+	def _create_batch_evaluate_fn(self) -> Callable[[list, int], list[float]]:
+		"""Create batch evaluation function based on acceleration mode."""
 		ctx = self.context
+		resolved_mode = resolve_acceleration_mode(self.config.acceleration_mode)
 
-		if RUST_AVAILABLE:
-			def batch_eval_rust(connectivities: list) -> list[float]:
-				# Convert tensors to lists
-				conn_list = []
-				for conn in connectivities:
-					if hasattr(conn, 'tolist'):
-						conn_list.append(conn.tolist())
-					else:
-						conn_list.append(conn)
+		if not RUST_AVAILABLE:
+			# Fallback to Python (much slower)
+			return self._batch_evaluate_python
 
+		# Select evaluation function based on resolved mode
+		# With Apple Silicon unified memory, Metal has zero copy overhead
+		use_metal = METAL_AVAILABLE and resolved_mode in (
+			AccelerationMode.METAL,
+			AccelerationMode.HYBRID,
+		)
+
+		if use_metal:
+			def batch_eval_metal(connectivities: list, total_pop: int = 0) -> list[float]:
+				conn_list = [
+					conn.tolist() if hasattr(conn, 'tolist') else conn
+					for conn in connectivities
+				]
+				return ram_accelerator.evaluate_batch_metal(
+					conn_list,
+					ctx.word_to_bits,
+					ctx.train_tokens,
+					ctx.test_tokens,
+					ctx.bits_per_neuron,
+					ctx.eval_subset,
+				)
+			return batch_eval_metal
+		else:
+			def batch_eval_cpu(connectivities: list, total_pop: int = 0) -> list[float]:
+				conn_list = [
+					conn.tolist() if hasattr(conn, 'tolist') else conn
+					for conn in connectivities
+				]
 				return ram_accelerator.evaluate_batch_cpu(
 					conn_list,
 					ctx.word_to_bits,
@@ -224,10 +292,7 @@ class AcceleratedOptimizer:
 					ctx.bits_per_neuron,
 					ctx.eval_subset,
 				)
-			return batch_eval_rust
-		else:
-			# Fallback to Python (much slower)
-			return self._batch_evaluate_python
+			return batch_eval_cpu
 
 	def _batch_evaluate_python(self, connectivities: list) -> list[float]:
 		"""Python fallback for batch evaluation using joblib for parallelism."""
@@ -368,8 +433,23 @@ class AcceleratedOptimizer:
 		self._cache_misses = 0
 
 		strategy = self.config.strategy
+		resolved_mode = resolve_acceleration_mode(self.config.acceleration_mode)
+		effective_cores = get_effective_cores(resolved_mode)
 		self._log(f"Starting optimization with {strategy.name}")
-		self._log(f"Accelerator: {'Rust (' + str(RUST_CPU_CORES) + ' cores)' if RUST_AVAILABLE else 'Python (slow)'}")
+
+		# Log acceleration backend with resolved mode and core count
+		if not RUST_AVAILABLE:
+			self._log("Accelerator: Python (slow)")
+		else:
+			match resolved_mode:
+				case AccelerationMode.HYBRID:
+					self._log(f"Accelerator: Hybrid CPU+GPU ({RUST_CPU_CORES}+{METAL_GPU_CORES}={effective_cores} cores)")
+				case AccelerationMode.METAL:
+					self._log(f"Accelerator: Metal GPU ({METAL_GPU_CORES} cores)")
+				case AccelerationMode.CPU:
+					self._log(f"Accelerator: Rust CPU ({RUST_CPU_CORES} cores)")
+				case _:
+					self._log(f"Accelerator: {resolved_mode.name} ({effective_cores} cores)")
 
 		if strategy == OptimizationStrategy.GENETIC_ALGORITHM:
 			return self._run_ga(initial_connectivity, total_input_bits, num_neurons, n_bits_per_neuron)
@@ -467,29 +547,29 @@ class AcceleratedOptimizer:
 			connections, total_input_bits, num_neurons, n_bits_per_neuron
 		)
 
-		self._log(f"  GA: {(1-initial_error)*100:.2f}% → {(1-ga_result.final_error)*100:.2f}% acc×cov")
+		self._log(f"  GA: {(1-initial_error)*100:.2f}% → {(1-ga_result.final_fitness)*100:.2f}% acc×cov")
 		self._log(f"Phase 2: TS ({cfg.ts_neighbors} neighbors × {cfg.ts_iterations} iters)")
 
 		# Phase 2: TS refinement from GA's best
 		ts_result = self._run_ts(
-			ga_result.optimized_connections,
+			ga_result.best_genome,
 			total_input_bits, num_neurons, n_bits_per_neuron
 		)
 
-		self._log(f"  TS: {(1-ga_result.final_error)*100:.2f}% → {(1-ts_result.final_error)*100:.2f}% acc×cov")
+		self._log(f"  TS: {(1-ga_result.final_fitness)*100:.2f}% → {(1-ts_result.final_fitness)*100:.2f}% acc×cov")
 
 		# Combine results
-		final_error = ts_result.final_error
+		final_error = ts_result.final_fitness
 		improvement = ((initial_error - final_error) / initial_error * 100) if final_error < initial_error else 0.0
 
 		self._log(f"Hybrid complete: {(1-initial_error)*100:.2f}% → {(1-final_error)*100:.2f}% ({improvement:.1f}% improvement)")
 		self._log(f"Cache: {self._cache_hits} hits / {self._cache_hits + self._cache_misses} total")
 
 		return OptimizerResult(
-			initial_connections=connections,
-			optimized_connections=ts_result.optimized_connections,
-			initial_error=initial_error,
-			final_error=final_error,
+			initial_genome=connections,
+			best_genome=ts_result.best_genome,
+			initial_fitness=initial_error,
+			final_fitness=final_error,
 			improvement_percent=improvement,
 			iterations_run=cfg.ga_generations + cfg.ts_iterations,
 			method_name="Hybrid_GA_TS",
@@ -514,29 +594,29 @@ class AcceleratedOptimizer:
 			connections, total_input_bits, num_neurons, n_bits_per_neuron
 		)
 
-		self._log(f"  TS: {(1-initial_error)*100:.2f}% → {(1-ts_result.final_error)*100:.2f}% acc×cov")
+		self._log(f"  TS: {(1-initial_error)*100:.2f}% → {(1-ts_result.final_fitness)*100:.2f}% acc×cov")
 		self._log(f"Phase 2: GA ({cfg.ga_population} pop × {cfg.ga_generations} gens)")
 
 		# Phase 2: GA crossover from TS's best
 		ga_result = self._run_ga(
-			ts_result.optimized_connections,
+			ts_result.best_genome,
 			total_input_bits, num_neurons, n_bits_per_neuron
 		)
 
-		self._log(f"  GA: {(1-ts_result.final_error)*100:.2f}% → {(1-ga_result.final_error)*100:.2f}% acc×cov")
+		self._log(f"  GA: {(1-ts_result.final_fitness)*100:.2f}% → {(1-ga_result.final_fitness)*100:.2f}% acc×cov")
 
 		# Combine results
-		final_error = ga_result.final_error
+		final_error = ga_result.final_fitness
 		improvement = ((initial_error - final_error) / initial_error * 100) if final_error < initial_error else 0.0
 
 		self._log(f"Hybrid complete: {(1-initial_error)*100:.2f}% → {(1-final_error)*100:.2f}% ({improvement:.1f}% improvement)")
 		self._log(f"Cache: {self._cache_hits} hits / {self._cache_hits + self._cache_misses} total")
 
 		return OptimizerResult(
-			initial_connections=connections,
-			optimized_connections=ga_result.optimized_connections,
-			initial_error=initial_error,
-			final_error=final_error,
+			initial_genome=connections,
+			best_genome=ga_result.best_genome,
+			initial_fitness=initial_error,
+			final_fitness=final_error,
 			improvement_percent=improvement,
 			iterations_run=cfg.ts_iterations + cfg.ga_generations,
 			method_name="Hybrid_TS_GA",

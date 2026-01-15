@@ -250,13 +250,8 @@ class OverfittingMonitor:
 		"""Number of times this monitor has been called."""
 		return self._check_count
 
-# OptimizerResult is now unified with OptResult for consistency across all strategies.
-# Import from generic_strategies for the new OptResult type.
-# This import provides backward compatibility - code using OptimizerResult will still work.
-from wnn.ram.strategies.connectivity.generic_strategies import OptResult
-
-# Backward-compatible alias
-OptimizerResult = OptResult
+# OptimizerResult is the unified result type for all optimization strategies.
+from wnn.ram.strategies.connectivity.generic_strategies import OptimizerResult
 
 
 class OptimizerStrategyBase(ABC):
