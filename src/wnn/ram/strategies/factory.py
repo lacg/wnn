@@ -317,79 +317,104 @@ class OptimizerStrategyFactory:
 		"""
 		match strategy_type:
 			case OptimizerStrategyType.ARCHITECTURE_GA:
-				from wnn.ram.strategies.connectivity.architecture_strategies import (
-					ArchitectureGAStrategy,
-					ArchitectureConfig,
-				)
-				from wnn.ram.strategies.connectivity.generic_strategies import GAConfig
-
-				arch_config = ArchitectureConfig(
-					num_clusters=kwargs.get('num_clusters'),
-					min_bits=kwargs.get('min_bits', 8),
-					max_bits=kwargs.get('max_bits', 25),
-					min_neurons=kwargs.get('min_neurons', 3),
-					max_neurons=kwargs.get('max_neurons', 33),
-					phase=kwargs.get('phase', 2),
-					token_frequencies=kwargs.get('token_frequencies'),
-				)
-				ga_config = GAConfig(
-					population_size=kwargs.get('population_size', 30),
-					generations=kwargs.get('generations', 50),
-					patience=kwargs.get('patience', 5),
-					check_interval=kwargs.get('check_interval', 5),
-					min_improvement_pct=kwargs.get('min_improvement_pct', 0.05),
-					mutation_rate=kwargs.get('mutation_rate', 0.1),
-				)
-				return ArchitectureGAStrategy(
-					arch_config,
-					ga_config,
-					kwargs.get('seed', 42),
-					kwargs.get('logger'),
-					kwargs.get('batch_evaluator'),
-				)
+				return OptimizerStrategyFactory._create_architecture_ga(**kwargs)
 
 			case OptimizerStrategyType.ARCHITECTURE_TS:
-				from wnn.ram.strategies.connectivity.architecture_strategies import (
-					ArchitectureTSStrategy,
-					ArchitectureConfig,
-				)
-				from wnn.ram.strategies.connectivity.generic_strategies import TSConfig
-
-				arch_config = ArchitectureConfig(
-					num_clusters=kwargs.get('num_clusters'),
-					min_bits=kwargs.get('min_bits', 8),
-					max_bits=kwargs.get('max_bits', 25),
-					min_neurons=kwargs.get('min_neurons', 3),
-					max_neurons=kwargs.get('max_neurons', 33),
-					phase=kwargs.get('phase', 2),
-				)
-				ts_config = TSConfig(
-					iterations=kwargs.get('iterations', 100),
-					neighbors_per_iter=kwargs.get('neighbors_per_iter', 20),
-					patience=kwargs.get('patience', 5),
-					check_interval=kwargs.get('check_interval', 5),
-					min_improvement_pct=kwargs.get('min_improvement_pct', 0.5),
-					tabu_size=kwargs.get('tabu_size', 10),
-				)
-				return ArchitectureTSStrategy(
-					arch_config,
-					ts_config,
-					kwargs.get('seed', 42),
-					kwargs.get('logger'),
-					kwargs.get('batch_evaluator'),
-				)
+				return OptimizerStrategyFactory._create_architecture_ts(**kwargs)
 
 			case OptimizerStrategyType.CONNECTIVITY_GA:
-				from wnn.ram.strategies.connectivity.genetic_algorithm import (
-					GeneticAlgorithmStrategy,
-				)
-				return GeneticAlgorithmStrategy(**kwargs)
+				return OptimizerStrategyFactory._create_connectivity_ga(**kwargs)
 
 			case OptimizerStrategyType.CONNECTIVITY_TS:
-				from wnn.ram.strategies.connectivity.tabu_search import (
-					TabuSearchStrategy,
-				)
-				return TabuSearchStrategy(**kwargs)
+				return OptimizerStrategyFactory._create_connectivity_ts(**kwargs)
 
 			case _:
 				raise ValueError(f"Unknown optimizer strategy type: {strategy_type}")
+
+	# =========================================================================
+	# Internal factory methods
+	# =========================================================================
+
+	@staticmethod
+	def _create_architecture_ga(**kwargs: Any):
+		"""Create an ArchitectureGAStrategy with configuration from kwargs."""
+		from wnn.ram.strategies.connectivity.architecture_strategies import (
+			ArchitectureGAStrategy,
+			ArchitectureConfig,
+		)
+		from wnn.ram.strategies.connectivity.generic_strategies import GAConfig
+
+		arch_config = ArchitectureConfig(
+			num_clusters=kwargs.get('num_clusters'),
+			min_bits=kwargs.get('min_bits', 8),
+			max_bits=kwargs.get('max_bits', 25),
+			min_neurons=kwargs.get('min_neurons', 3),
+			max_neurons=kwargs.get('max_neurons', 33),
+			phase=kwargs.get('phase', 2),
+			token_frequencies=kwargs.get('token_frequencies'),
+		)
+		ga_config = GAConfig(
+			population_size=kwargs.get('population_size', 30),
+			generations=kwargs.get('generations', 50),
+			patience=kwargs.get('patience', 5),
+			check_interval=kwargs.get('check_interval', 5),
+			min_improvement_pct=kwargs.get('min_improvement_pct', 0.05),
+			mutation_rate=kwargs.get('mutation_rate', 0.1),
+		)
+		return ArchitectureGAStrategy(
+			arch_config,
+			ga_config,
+			kwargs.get('seed', 42),
+			kwargs.get('logger'),
+			kwargs.get('batch_evaluator'),
+		)
+
+	@staticmethod
+	def _create_architecture_ts(**kwargs: Any):
+		"""Create an ArchitectureTSStrategy with configuration from kwargs."""
+		from wnn.ram.strategies.connectivity.architecture_strategies import (
+			ArchitectureTSStrategy,
+			ArchitectureConfig,
+		)
+		from wnn.ram.strategies.connectivity.generic_strategies import TSConfig
+
+		arch_config = ArchitectureConfig(
+			num_clusters=kwargs.get('num_clusters'),
+			min_bits=kwargs.get('min_bits', 8),
+			max_bits=kwargs.get('max_bits', 25),
+			min_neurons=kwargs.get('min_neurons', 3),
+			max_neurons=kwargs.get('max_neurons', 33),
+			phase=kwargs.get('phase', 2),
+			token_frequencies=kwargs.get('token_frequencies'),
+		)
+		ts_config = TSConfig(
+			iterations=kwargs.get('iterations', 100),
+			neighbors_per_iter=kwargs.get('neighbors_per_iter', 20),
+			patience=kwargs.get('patience', 5),
+			check_interval=kwargs.get('check_interval', 5),
+			min_improvement_pct=kwargs.get('min_improvement_pct', 0.5),
+			tabu_size=kwargs.get('tabu_size', 10),
+		)
+		return ArchitectureTSStrategy(
+			arch_config,
+			ts_config,
+			kwargs.get('seed', 42),
+			kwargs.get('logger'),
+			kwargs.get('batch_evaluator'),
+		)
+
+	@staticmethod
+	def _create_connectivity_ga(**kwargs: Any):
+		"""Create a GeneticAlgorithmStrategy for connectivity optimization."""
+		from wnn.ram.strategies.connectivity.genetic_algorithm import (
+			GeneticAlgorithmStrategy,
+		)
+		return GeneticAlgorithmStrategy(**kwargs)
+
+	@staticmethod
+	def _create_connectivity_ts(**kwargs: Any):
+		"""Create a TabuSearchStrategy for connectivity optimization."""
+		from wnn.ram.strategies.connectivity.tabu_search import (
+			TabuSearchStrategy,
+		)
+		return TabuSearchStrategy(**kwargs)
