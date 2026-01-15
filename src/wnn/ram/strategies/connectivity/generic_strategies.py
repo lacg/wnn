@@ -151,43 +151,41 @@ class GenericGAStrategy(ABC, Generic[T]):
 		self._ensure_rng()
 		cfg = self._config
 
-		# Initialize population
-		population: List[Tuple[T, Optional[float]]] = []  # (genome, fitness)
+		# Initialize population with fitness and accuracy tracking
+		# Each entry is (genome, fitness, accuracy) where fitness/accuracy can be None (needs evaluation)
+		population: List[Tuple[T, Optional[float], Optional[float]]] = []  # (genome, fitness, accuracy)
 
 		if initial_population:
 			# Seed from previous phase
 			self._log(f"[{self.name}] Seeding population from {len(initial_population)} genomes")
 			for genome in initial_population[:cfg.population_size]:
-				population.append((self.clone_genome(genome), None))
+				population.append((self.clone_genome(genome), None, None))
 			# Fill remaining with mutations of best (first) genome
 			while len(population) < cfg.population_size:
 				mutant = self.mutate_genome(self.clone_genome(initial_population[0]), cfg.mutation_rate * 3)
-				population.append((mutant, None))
+				population.append((mutant, None, None))
 		elif initial_genome is not None:
 			# Seed from single genome
-			population.append((self.clone_genome(initial_genome), None))
+			population.append((self.clone_genome(initial_genome), None, None))
 			for _ in range(cfg.population_size - 1):
 				mutant = self.mutate_genome(self.clone_genome(initial_genome), cfg.mutation_rate * 3)
-				population.append((mutant, None))
+				population.append((mutant, None, None))
 		else:
 			# Random initialization
 			for _ in range(cfg.population_size):
-				population.append((self.create_random_genome(), None))
+				population.append((self.create_random_genome(), None, None))
 
 		# Evaluate initial population
-		population = self._evaluate_population(population, batch_evaluate_fn, evaluate_fn)
-		fitness_values = [f for _, f in population]
+		population = self._evaluate_population(population, batch_evaluate_fn, evaluate_fn, accuracy_fn)
+		fitness_values = [f for _, f, _ in population]
+		accuracy_values = [a for _, _, a in population]
 
 		# Find initial best
 		best_idx = min(range(len(fitness_values)), key=lambda i: fitness_values[i])
 		best = self.clone_genome(population[best_idx][0])
 		best_fitness = fitness_values[best_idx]
 		initial_fitness = fitness_values[0] if initial_genome else best_fitness
-
-		# Get initial accuracy if function provided
-		initial_accuracy = None
-		if accuracy_fn is not None:
-			initial_accuracy = accuracy_fn(best)
+		initial_accuracy = accuracy_values[best_idx]
 
 		history = [(0, best_fitness)]
 		patience_counter = 0
@@ -198,13 +196,19 @@ class GenericGAStrategy(ABC, Generic[T]):
 		generation = 0
 		for generation in range(cfg.generations):
 			# Selection and reproduction
-			new_population: List[Tuple[T, Optional[float]]] = []
+			new_population: List[Tuple[T, Optional[float], Optional[float]]] = []
 
-			# Elitism: keep best individuals with cached fitness
+			# Elitism: keep best individuals with cached fitness and accuracy
 			sorted_indices = sorted(range(len(fitness_values)), key=lambda i: fitness_values[i])
 			for i in range(cfg.elitism):
 				elite_idx = sorted_indices[i]
-				new_population.append((self.clone_genome(population[elite_idx][0]), fitness_values[elite_idx]))
+				elite_genome = self.clone_genome(population[elite_idx][0])
+				elite_fitness = fitness_values[elite_idx]
+				elite_accuracy = accuracy_values[elite_idx]
+				new_population.append((elite_genome, elite_fitness, elite_accuracy))
+				# Log elite genome
+				acc_str = f", Acc={elite_accuracy:.2%}" if elite_accuracy is not None else ""
+				self._log(f"[Elite {i + 1}/{cfg.elitism}] CE={elite_fitness:.4f}{acc_str} (kept from previous gen)")
 
 			# Generate rest of population
 			while len(new_population) < cfg.population_size:
@@ -220,11 +224,12 @@ class GenericGAStrategy(ABC, Generic[T]):
 
 				# Mutation
 				child = self.mutate_genome(child, cfg.mutation_rate)
-				new_population.append((child, None))  # Needs evaluation
+				new_population.append((child, None, None))  # Needs evaluation
 
 			population = new_population[:cfg.population_size]
-			population = self._evaluate_population(population, batch_evaluate_fn, evaluate_fn)
-			fitness_values = [f for _, f in population]
+			population = self._evaluate_population(population, batch_evaluate_fn, evaluate_fn, accuracy_fn, generation, cfg.generations)
+			fitness_values = [f for _, f, _ in population]
+			accuracy_values = [a for _, _, a in population]
 
 			# Update best
 			gen_best_idx = min(range(len(fitness_values)), key=lambda i: fitness_values[i])
@@ -234,10 +239,14 @@ class GenericGAStrategy(ABC, Generic[T]):
 
 			history.append((generation + 1, best_fitness))
 
+			# Compute new_best (best among new candidates, excluding elites)
+			new_candidate_fitness = fitness_values[cfg.elitism:]  # Non-elite fitness values
+			new_best = min(new_candidate_fitness) if new_candidate_fitness else float('inf')
+
 			# Log progress
 			gen_avg = sum(fitness_values) / len(fitness_values)
 			self._log(f"[{self.name}] Gen {generation + 1}/{cfg.generations}: "
-					  f"best={best_fitness:.4f}, gen_best={fitness_values[gen_best_idx]:.4f}, avg={gen_avg:.4f}")
+					  f"best={best_fitness:.4f}, new_best={new_best:.4f}, avg={gen_avg:.4f}")
 
 			# Early stopping check
 			improvement_pct = (prev_best - best_fitness) / prev_best * 100 if prev_best > 0 else 0
@@ -256,8 +265,8 @@ class GenericGAStrategy(ABC, Generic[T]):
 		if accuracy_fn is not None:
 			final_accuracy = accuracy_fn(best)
 
-		# Extract final population for seeding next phase
-		final_population = [self.clone_genome(g) for g, _ in sorted(population, key=lambda x: x[1])]
+		# Extract final population for seeding next phase (sorted by fitness)
+		final_population = [self.clone_genome(g) for g, _, _ in sorted(population, key=lambda x: x[1])]
 
 		improvement_pct = (initial_fitness - best_fitness) / initial_fitness * 100 if initial_fitness > 0 else 0
 
@@ -278,30 +287,46 @@ class GenericGAStrategy(ABC, Generic[T]):
 
 	def _evaluate_population(
 		self,
-		population: List[Tuple[T, Optional[float]]],
+		population: List[Tuple[T, Optional[float], Optional[float]]],
 		batch_fn: Optional[Callable[[List[T]], List[float]]],
 		single_fn: Callable[[T], float],
-	) -> List[Tuple[T, float]]:
-		"""Evaluate individuals with None fitness."""
-		unknown_indices = [i for i, (_, f) in enumerate(population) if f is None]
+		accuracy_fn: Optional[Callable[[T], float]] = None,
+		generation: int = 0,
+		total_generations: int = 0,
+	) -> List[Tuple[T, float, Optional[float]]]:
+		"""Evaluate individuals with None fitness, tracking accuracy."""
+		unknown_indices = [i for i, (_, f, _) in enumerate(population) if f is None]
 
 		if not unknown_indices:
-			return [(g, f) for g, f in population]  # All cached
+			return [(g, f, a) for g, f, a in population]  # All cached
 
 		to_eval = [population[i][0] for i in unknown_indices]
 
+		# Batch evaluate fitness
 		if batch_fn is not None:
 			new_fitness = batch_fn(to_eval)
 		else:
 			new_fitness = [single_fn(g) for g in to_eval]
 
+		# Evaluate accuracy if function provided
+		new_accuracy = [None] * len(to_eval)
+		if accuracy_fn is not None:
+			new_accuracy = [accuracy_fn(g) for g in to_eval]
+
+		# Log new candidates (those that needed evaluation)
+		for eval_idx, (idx, fit, acc) in enumerate(zip(unknown_indices, new_fitness, new_accuracy)):
+			candidate_num = eval_idx + 1
+			total_new = len(unknown_indices)
+			acc_str = f", Acc={acc:.2%}" if acc is not None else ""
+			self._log(f"  [{candidate_num}/{total_new}] Gen {generation + 1}/{total_generations}: CE={fit:.4f}{acc_str}")
+
 		result = list(population)
-		for idx, fit in zip(unknown_indices, new_fitness):
-			result[idx] = (result[idx][0], fit)
+		for idx, fit, acc in zip(unknown_indices, new_fitness, new_accuracy):
+			result[idx] = (result[idx][0], fit, acc)
 
 		return result
 
-	def _tournament_select(self, population: List[Tuple[T, float]], tournament_size: int = 3) -> T:
+	def _tournament_select(self, population: List[Tuple[T, float, Optional[float]]], tournament_size: int = 3) -> T:
 		"""Tournament selection: pick best from random subset."""
 		indices = self._rng.sample(range(len(population)), min(tournament_size, len(population)))
 		best_idx = min(indices, key=lambda i: population[i][1])
@@ -418,7 +443,9 @@ class GenericTSStrategy(ABC, Generic[T]):
 				seed_fitness = batch_evaluate_fn(initial_neighbors)
 			else:
 				seed_fitness = [evaluate_fn(g) for g in initial_neighbors]
-			for g, f in zip(initial_neighbors, seed_fitness):
+			# Log seeded neighbors
+			for i, (g, f) in enumerate(zip(initial_neighbors, seed_fitness)):
+				self._log(f"  [Seed {i + 1}/{len(initial_neighbors)}] CE={f:.4f}")
 				best_neighbors.append((self.clone_genome(g), f))
 			# Sort and keep top k
 			best_neighbors.sort(key=lambda x: x[1])
@@ -429,6 +456,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 				best_fitness = best_neighbors[0][1]
 				current = self.clone_genome(best)
 				current_fitness = best_fitness
+				self._log(f"  Seed improved best: {start_fitness:.4f} -> {best_fitness:.4f}")
 
 		history = [(0, best_fitness)]
 		patience_counter = 0
@@ -455,6 +483,10 @@ class GenericTSStrategy(ABC, Generic[T]):
 				neighbors = [(n, f, m) for (n, m), f in zip(neighbor_candidates, fitness_values)]
 			else:
 				neighbors = [(n, evaluate_fn(n), m) for n, m in neighbor_candidates]
+
+			# Log each neighbor evaluation
+			for i, (_, f, _) in enumerate(neighbors):
+				self._log(f"  [{i + 1}/{len(neighbors)}] Iter {iteration + 1}/{cfg.iterations}: CE={f:.4f}")
 
 			# Select best neighbor
 			neighbors.sort(key=lambda x: x[1])
