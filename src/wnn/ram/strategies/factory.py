@@ -284,49 +284,133 @@ class OptimizerStrategyFactory:
 	@staticmethod
 	def create(
 		strategy_type: OptimizerStrategyType,
-		**kwargs: Any,
+		# Architecture params
+		num_clusters: int | None = None,
+		min_bits: int = 8,
+		max_bits: int = 25,
+		min_neurons: int = 3,
+		max_neurons: int = 33,
+		phase: int = 2,
+		token_frequencies: list[int] | None = None,
+		# GA params
+		population_size: int = 30,
+		generations: int = 50,
+		mutation_rate: float = 0.1,
+		# TS params
+		iterations: int = 100,
+		neighbors_per_iter: int = 20,
+		tabu_size: int = 10,
+		# Early stopping (GA: 0.05%, TS: 0.5%)
+		patience: int = 5,
+		check_interval: int = 5,
+		min_improvement_pct: float | None = None,  # None = use strategy default
+		# Common
+		seed: int = 42,
+		logger: Any = None,
+		batch_evaluator: Any = None,
 	):
 		"""
 		Create an optimizer strategy.
 
 		Args:
 			strategy_type: Type of optimizer to create
-			**kwargs: Configuration options passed to the strategy
+
+			Architecture params:
+				num_clusters: Number of clusters (required for ARCHITECTURE_*)
+				min_bits: Minimum bits per cluster
+				max_bits: Maximum bits per cluster
+				min_neurons: Minimum neurons per cluster
+				max_neurons: Maximum neurons per cluster
+				phase: Optimization phase (1=bits only, 2=bits+neurons)
+				token_frequencies: Token frequency list for initialization
+
+			GA params:
+				population_size: GA population size
+				generations: Number of GA generations
+				mutation_rate: GA mutation rate
+
+			TS params:
+				iterations: Number of TS iterations
+				neighbors_per_iter: Neighbors to evaluate per iteration
+				tabu_size: Size of tabu list
+
+			Early stopping:
+				patience: Checks without improvement before stopping
+				check_interval: Check every N generations/iterations
+				min_improvement_pct: Minimum improvement % (default: GA=0.05%, TS=0.5%)
+
+			Common:
+				seed: Random seed
+				logger: Logger function
+				batch_evaluator: RustParallelEvaluator for batch evaluation
 
 		Returns:
 			Configured optimizer strategy
-
-		Raises:
-			ValueError: If strategy_type is not recognized
-
-		Example:
-			# Architecture GA
-			ga = OptimizerStrategyFactory.create(
-				OptimizerStrategyType.ARCHITECTURE_GA,
-				num_clusters=50257,
-				population_size=30,
-				generations=50,
-			)
-
-			# Architecture TS
-			ts = OptimizerStrategyFactory.create(
-				OptimizerStrategyType.ARCHITECTURE_TS,
-				num_clusters=50257,
-				iterations=100,
-			)
 		"""
 		match strategy_type:
 			case OptimizerStrategyType.ARCHITECTURE_GA:
-				return OptimizerStrategyFactory._create_architecture_ga(**kwargs)
+				return OptimizerStrategyFactory._create_architecture_ga(
+					num_clusters=num_clusters,
+					min_bits=min_bits,
+					max_bits=max_bits,
+					min_neurons=min_neurons,
+					max_neurons=max_neurons,
+					phase=phase,
+					token_frequencies=token_frequencies,
+					population_size=population_size,
+					generations=generations,
+					mutation_rate=mutation_rate,
+					patience=patience,
+					check_interval=check_interval,
+					min_improvement_pct=min_improvement_pct if min_improvement_pct is not None else 0.05,
+					seed=seed,
+					logger=logger,
+					batch_evaluator=batch_evaluator,
+				)
 
 			case OptimizerStrategyType.ARCHITECTURE_TS:
-				return OptimizerStrategyFactory._create_architecture_ts(**kwargs)
+				return OptimizerStrategyFactory._create_architecture_ts(
+					num_clusters=num_clusters,
+					min_bits=min_bits,
+					max_bits=max_bits,
+					min_neurons=min_neurons,
+					max_neurons=max_neurons,
+					phase=phase,
+					token_frequencies=token_frequencies,
+					iterations=iterations,
+					neighbors_per_iter=neighbors_per_iter,
+					tabu_size=tabu_size,
+					patience=patience,
+					check_interval=check_interval,
+					min_improvement_pct=min_improvement_pct if min_improvement_pct is not None else 0.5,
+					seed=seed,
+					logger=logger,
+					batch_evaluator=batch_evaluator,
+				)
 
 			case OptimizerStrategyType.CONNECTIVITY_GA:
-				return OptimizerStrategyFactory._create_connectivity_ga(**kwargs)
+				return OptimizerStrategyFactory._create_connectivity_ga(
+					population_size=population_size,
+					generations=generations,
+					mutation_rate=mutation_rate,
+					patience=patience,
+					check_interval=check_interval,
+					min_improvement_pct=min_improvement_pct if min_improvement_pct is not None else 0.05,
+					seed=seed,
+					logger=logger,
+				)
 
 			case OptimizerStrategyType.CONNECTIVITY_TS:
-				return OptimizerStrategyFactory._create_connectivity_ts(**kwargs)
+				return OptimizerStrategyFactory._create_connectivity_ts(
+					iterations=iterations,
+					neighbors_per_iter=neighbors_per_iter,
+					tabu_size=tabu_size,
+					patience=patience,
+					check_interval=check_interval,
+					min_improvement_pct=min_improvement_pct if min_improvement_pct is not None else 0.5,
+					seed=seed,
+					logger=logger,
+				)
 
 			case _:
 				raise ValueError(f"Unknown optimizer strategy type: {strategy_type}")
@@ -336,8 +420,25 @@ class OptimizerStrategyFactory:
 	# =========================================================================
 
 	@staticmethod
-	def _create_architecture_ga(**kwargs: Any):
-		"""Create an ArchitectureGAStrategy with configuration from kwargs."""
+	def _create_architecture_ga(
+		num_clusters: int,
+		min_bits: int,
+		max_bits: int,
+		min_neurons: int,
+		max_neurons: int,
+		phase: int,
+		token_frequencies: list[int] | None,
+		population_size: int,
+		generations: int,
+		mutation_rate: float,
+		patience: int,
+		check_interval: int,
+		min_improvement_pct: float,
+		seed: int,
+		logger: Any,
+		batch_evaluator: Any,
+	):
+		"""Create an ArchitectureGAStrategy."""
 		from wnn.ram.strategies.connectivity.architecture_strategies import (
 			ArchitectureGAStrategy,
 			ArchitectureConfig,
@@ -345,33 +446,44 @@ class OptimizerStrategyFactory:
 		from wnn.ram.strategies.connectivity.generic_strategies import GAConfig
 
 		arch_config = ArchitectureConfig(
-			num_clusters=kwargs.get('num_clusters'),
-			min_bits=kwargs.get('min_bits', 8),
-			max_bits=kwargs.get('max_bits', 25),
-			min_neurons=kwargs.get('min_neurons', 3),
-			max_neurons=kwargs.get('max_neurons', 33),
-			phase=kwargs.get('phase', 2),
-			token_frequencies=kwargs.get('token_frequencies'),
+			num_clusters=num_clusters,
+			min_bits=min_bits,
+			max_bits=max_bits,
+			min_neurons=min_neurons,
+			max_neurons=max_neurons,
+			phase=phase,
+			token_frequencies=token_frequencies,
 		)
 		ga_config = GAConfig(
-			population_size=kwargs.get('population_size', 30),
-			generations=kwargs.get('generations', 50),
-			patience=kwargs.get('patience', 5),
-			check_interval=kwargs.get('check_interval', 5),
-			min_improvement_pct=kwargs.get('min_improvement_pct', 0.05),
-			mutation_rate=kwargs.get('mutation_rate', 0.1),
+			population_size=population_size,
+			generations=generations,
+			patience=patience,
+			check_interval=check_interval,
+			min_improvement_pct=min_improvement_pct,
+			mutation_rate=mutation_rate,
 		)
-		return ArchitectureGAStrategy(
-			arch_config,
-			ga_config,
-			kwargs.get('seed', 42),
-			kwargs.get('logger'),
-			kwargs.get('batch_evaluator'),
-		)
+		return ArchitectureGAStrategy(arch_config, ga_config, seed, logger, batch_evaluator)
 
 	@staticmethod
-	def _create_architecture_ts(**kwargs: Any):
-		"""Create an ArchitectureTSStrategy with configuration from kwargs."""
+	def _create_architecture_ts(
+		num_clusters: int,
+		min_bits: int,
+		max_bits: int,
+		min_neurons: int,
+		max_neurons: int,
+		phase: int,
+		token_frequencies: list[int] | None,
+		iterations: int,
+		neighbors_per_iter: int,
+		tabu_size: int,
+		patience: int,
+		check_interval: int,
+		min_improvement_pct: float,
+		seed: int,
+		logger: Any,
+		batch_evaluator: Any,
+	):
+		"""Create an ArchitectureTSStrategy."""
 		from wnn.ram.strategies.connectivity.architecture_strategies import (
 			ArchitectureTSStrategy,
 			ArchitectureConfig,
@@ -379,42 +491,56 @@ class OptimizerStrategyFactory:
 		from wnn.ram.strategies.connectivity.generic_strategies import TSConfig
 
 		arch_config = ArchitectureConfig(
-			num_clusters=kwargs.get('num_clusters'),
-			min_bits=kwargs.get('min_bits', 8),
-			max_bits=kwargs.get('max_bits', 25),
-			min_neurons=kwargs.get('min_neurons', 3),
-			max_neurons=kwargs.get('max_neurons', 33),
-			phase=kwargs.get('phase', 2),
-			token_frequencies=kwargs.get('token_frequencies'),
+			num_clusters=num_clusters,
+			min_bits=min_bits,
+			max_bits=max_bits,
+			min_neurons=min_neurons,
+			max_neurons=max_neurons,
+			phase=phase,
+			token_frequencies=token_frequencies,
 		)
 		ts_config = TSConfig(
-			iterations=kwargs.get('iterations', 100),
-			neighbors_per_iter=kwargs.get('neighbors_per_iter', 20),
-			patience=kwargs.get('patience', 5),
-			check_interval=kwargs.get('check_interval', 5),
-			min_improvement_pct=kwargs.get('min_improvement_pct', 0.5),
-			tabu_size=kwargs.get('tabu_size', 10),
+			iterations=iterations,
+			neighbors_per_iter=neighbors_per_iter,
+			patience=patience,
+			check_interval=check_interval,
+			min_improvement_pct=min_improvement_pct,
+			tabu_size=tabu_size,
 		)
-		return ArchitectureTSStrategy(
-			arch_config,
-			ts_config,
-			kwargs.get('seed', 42),
-			kwargs.get('logger'),
-			kwargs.get('batch_evaluator'),
-		)
+		return ArchitectureTSStrategy(arch_config, ts_config, seed, logger, batch_evaluator)
 
 	@staticmethod
-	def _create_connectivity_ga(**kwargs: Any):
+	def _create_connectivity_ga(
+		population_size: int,
+		generations: int,
+		mutation_rate: float,
+		patience: int,
+		check_interval: int,
+		min_improvement_pct: float,
+		seed: int,
+		logger: Any,
+	):
 		"""Create a GeneticAlgorithmStrategy for connectivity optimization."""
 		from wnn.ram.strategies.connectivity.genetic_algorithm import (
 			GeneticAlgorithmStrategy,
 		)
-		return GeneticAlgorithmStrategy(**kwargs)
+		# TODO: Update GeneticAlgorithmStrategy to accept these params
+		return GeneticAlgorithmStrategy(seed=seed, logger=logger)
 
 	@staticmethod
-	def _create_connectivity_ts(**kwargs: Any):
+	def _create_connectivity_ts(
+		iterations: int,
+		neighbors_per_iter: int,
+		tabu_size: int,
+		patience: int,
+		check_interval: int,
+		min_improvement_pct: float,
+		seed: int,
+		logger: Any,
+	):
 		"""Create a TabuSearchStrategy for connectivity optimization."""
 		from wnn.ram.strategies.connectivity.tabu_search import (
 			TabuSearchStrategy,
 		)
-		return TabuSearchStrategy(**kwargs)
+		# TODO: Update TabuSearchStrategy to accept these params
+		return TabuSearchStrategy(seed=seed, logger=logger)
