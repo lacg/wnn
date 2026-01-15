@@ -69,36 +69,25 @@ def run_phase(
 		default_neurons=default_neurons,
 		token_frequencies=token_frequencies,
 		total_input_bits=total_input_bits,
-		batch_evaluator=evaluator,
+		batch_evaluator=evaluator,  # Strategy uses this for hybrid Metal/CPU batch eval
 		logger=log,
 		**kwargs,
 	)
 
-	# Create batch evaluate function
-	def batch_evaluate(genomes: list[ClusterGenome]):
-		return evaluator.evaluate_batch(genomes)
-
-	# Run optimization
+	# Run optimization - strategy internally uses batch_evaluator for hybrid Metal/CPU eval
 	if initial_genome is not None:
-		# For GA, provide as initial population seed
 		if strategy_type == OptimizerStrategyType.ARCHITECTURE_GA:
 			result = strategy.optimize(
-				evaluate_fn=None,  # Not used when batch_evaluate_fn provided
+				evaluate_fn=None,  # Not needed - batch_evaluator is used
 				initial_population=[initial_genome],
-				batch_evaluate_fn=batch_evaluate,
 			)
 		else:
-			# For TS, provide as initial genome
 			result = strategy.optimize(
 				evaluate_fn=None,
 				initial_genome=initial_genome,
-				batch_evaluate_fn=batch_evaluate,
 			)
 	else:
-		result = strategy.optimize(
-			evaluate_fn=None,
-			batch_evaluate_fn=batch_evaluate,
-		)
+		result = strategy.optimize(evaluate_fn=None)
 
 	log(f"\n{phase_name} Result:")
 	log(f"  Best fitness (CE): {result.best_fitness:.4f}")
