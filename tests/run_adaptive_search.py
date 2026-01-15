@@ -161,7 +161,7 @@ def main():
 
 		# TS parameters
 		iterations=100,          # Local search iterations
-		neighbors_per_iter=20,   # Neighbors to explore
+		neighbors_per_iter=30,   # Neighbors to explore (consistent with GA pop)
 		patience=15,             # More patience for refinement
 
 		# Architecture bounds (same as GA)

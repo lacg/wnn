@@ -161,11 +161,24 @@ class EarlyStoppingTracker:
 		else:
 			self._patience_counter += 1
 
-		# Log progress with delta and patience
+		# Determine status using OverfitThreshold values (negate since improvement is opposite sign)
+		# improvement_pct > 0 = improving, OverfitThreshold delta < 0 = healthy
+		from wnn.core.thresholds import OverfitThreshold
+		delta = -improvement_pct  # Convert to OverfitThreshold convention
+		if delta < OverfitThreshold.HEALTHY:  # < -1% (big improvement)
+			status = "🟢 HEALTHY"
+		elif delta < OverfitThreshold.WARNING:  # -1% to 0% (small improvement)
+			status = "⚪ NEUTRAL"
+		elif delta < OverfitThreshold.CRITICAL:  # 0% to 3% (stalled/mild regression)
+			status = "🟡 WARNING"
+		else:  # >= 3% (significant regression)
+			status = "🔴 CRITICAL"
+
+		# Log progress with delta, patience, and status
 		remaining = cfg.patience - self._patience_counter
 		self._log(
 			f"[{self._method_name}] Early stop check: "
-			f"Δ={improvement_pct:+.2f}%, patience={remaining}/{cfg.patience}"
+			f"Δ={improvement_pct:+.2f}%, patience={remaining}/{cfg.patience} {status}"
 		)
 
 		# Check if patience exhausted
@@ -500,13 +513,8 @@ class GenericGAStrategy(ABC, Generic[T]):
 			new_fitness = [single_fn(g) for g in to_eval]
 			new_accuracy = [None] * len(to_eval)
 
-		# Log new candidates with [GA Candidate] prefix
-		for eval_idx, (idx, fit, acc) in enumerate(zip(unknown_indices, new_fitness, new_accuracy)):
-			candidate_num = eval_idx + 1
-			total_new = len(unknown_indices)
-			acc_str = f", Acc={acc:.2%}" if acc is not None else ""
-			gen_str = f"Gen {generation + 1}/{total_generations}" if total_generations > 0 else "Init"
-			self._log(f"  [GA Candidate {candidate_num}/{total_new}] {gen_str}: CE={fit:.4f}{acc_str}")
+		# Note: Real-time per-genome logging happens in evaluate_batch (adaptive_cluster.py)
+		# with timing info. We don't duplicate logging here.
 
 		result = list(population)
 		for idx, fit, acc in zip(unknown_indices, new_fitness, new_accuracy):
@@ -635,10 +643,8 @@ class GenericTSStrategy(ABC, Generic[T]):
 			else:
 				seed_fitness = [evaluate_fn(g) for g in initial_neighbors]
 				seed_accuracy = [None] * len(initial_neighbors)
-			# Log seeded neighbors with accuracy
-			for i, (g, f, a) in enumerate(zip(initial_neighbors, seed_fitness, seed_accuracy)):
-				acc_str = f", Acc={a:.2%}" if a is not None else ""
-				self._log(f"  [TS Seed {i + 1}/{len(initial_neighbors)}] CE={f:.4f}{acc_str}")
+			# Note: Real-time per-genome logging happens in evaluate_batch
+			for g, f in zip(initial_neighbors, seed_fitness):
 				best_neighbors.append((self.clone_genome(g), f))
 			# Seed summary: best, seed_best, avg
 			seed_best = min(seed_fitness)
@@ -695,10 +701,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 			# Build neighbors list with fitness and accuracy
 			neighbors = [(n, f, m, a) for (n, m), f, a in zip(neighbor_candidates, fitness_values, accuracy_values)]
 
-			# Log each neighbor evaluation with accuracy
-			for i, (_, f, _, a) in enumerate(neighbors):
-				acc_str = f", Acc={a:.2%}" if a is not None else ""
-				self._log(f"  [TS Neighbor {i + 1}/{len(neighbors)}] Iter {iteration + 1}/{cfg.iterations}: CE={f:.4f}{acc_str}")
+			# Note: Real-time per-genome logging happens in evaluate_batch (adaptive_cluster.py)
 
 			# Select best neighbor (sort by fitness)
 			neighbors.sort(key=lambda x: x[1])
