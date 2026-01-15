@@ -379,6 +379,9 @@ class OptimizerStrategyFactory:
 				verbose=True,
 			)
 		"""
+		# Extract total_input_bits from kwargs for architecture strategies
+		total_input_bits = kwargs.get('total_input_bits', None)
+
 		match strategy_type:
 			case OptimizerStrategyType.ARCHITECTURE_GA:
 				return OptimizerStrategyFactory._create_architecture_ga(
@@ -389,6 +392,7 @@ class OptimizerStrategyFactory:
 					max_neurons=max_neurons,
 					phase=phase,
 					token_frequencies=token_frequencies,
+					total_input_bits=total_input_bits,  # For connection preservation
 					population_size=population_size,
 					generations=generations,
 					mutation_rate=mutation_rate,
@@ -409,6 +413,7 @@ class OptimizerStrategyFactory:
 					max_neurons=max_neurons,
 					phase=phase,
 					token_frequencies=token_frequencies,
+					total_input_bits=total_input_bits,  # For connection preservation
 					iterations=iterations,
 					neighbors_per_iter=neighbors_per_iter,
 					tabu_size=tabu_size,
@@ -475,6 +480,7 @@ class OptimizerStrategyFactory:
 		max_neurons: int,
 		phase: int,
 		token_frequencies: list[int] | None,
+		total_input_bits: int | None,
 		population_size: int,
 		generations: int,
 		mutation_rate: float,
@@ -500,6 +506,7 @@ class OptimizerStrategyFactory:
 			max_neurons=max_neurons,
 			phase=phase,
 			token_frequencies=token_frequencies,
+			total_input_bits=total_input_bits,  # For connection preservation
 		)
 		ga_config = GAConfig(
 			population_size=population_size,
@@ -520,6 +527,7 @@ class OptimizerStrategyFactory:
 		max_neurons: int,
 		phase: int,
 		token_frequencies: list[int] | None,
+		total_input_bits: int | None,
 		iterations: int,
 		neighbors_per_iter: int,
 		tabu_size: int,
@@ -545,6 +553,7 @@ class OptimizerStrategyFactory:
 			max_neurons=max_neurons,
 			phase=phase,
 			token_frequencies=token_frequencies,
+			total_input_bits=total_input_bits,  # For connection preservation
 		)
 		ts_config = TSConfig(
 			iterations=iterations,

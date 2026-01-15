@@ -607,6 +607,7 @@ fn evaluate_group_metal(
 /// Args:
 ///   genomes_bits_flat: [num_genomes * num_clusters] bits per cluster for each genome
 ///   genomes_neurons_flat: [num_genomes * num_clusters] neurons per cluster for each genome
+///   genomes_connections_flat: [num_genomes * total_connections] flattened connection indices, or empty for random
 ///   num_genomes: Number of genomes to evaluate
 ///   num_clusters: Number of clusters (vocab size)
 ///   train_input_bits: [num_train * total_input_bits] training contexts
@@ -631,10 +632,14 @@ fn evaluate_group_metal(
 /// Each genome's training (200K examples) and evaluation (50K examples)
 /// use full rayon parallelism internally.
 ///
+/// IMPORTANT: Connections must be provided for proper evolutionary search.
+/// If genomes_connections_flat is empty, random connections are generated.
+///
 /// Returns Vec of (cross_entropy, accuracy) tuples - one per genome.
 pub fn evaluate_genomes_parallel(
     genomes_bits_flat: &[usize],
     genomes_neurons_flat: &[usize],
+    genomes_connections_flat: &[i64],
     num_genomes: usize,
     num_clusters: usize,
     train_input_bits: &[bool],
@@ -650,6 +655,14 @@ pub fn evaluate_genomes_parallel(
 ) -> Vec<(f64, f64)> {
     use rand::prelude::*;
     use rand::SeedableRng;
+
+    // Check if connections are provided
+    let use_provided_connections = !genomes_connections_flat.is_empty();
+
+    // Calculate total connections per genome (for indexing into provided connections)
+    let conn_size_per_genome: usize = (0..num_clusters)
+        .map(|i| genomes_bits_flat[i] * genomes_neurons_flat[i])
+        .sum();
 
     // Sequential genome evaluation - each genome gets full 16-core parallelism
     (0..num_genomes).map(|genome_idx| {
@@ -667,20 +680,26 @@ pub fn evaluate_genomes_parallel(
             .map(|g| GroupMemory::new(g.total_neurons(), g.bits))
             .collect();
 
-        // Calculate total connection size and generate random connections
-        // Use entropy-based RNG for truly random connectivity (no bias from hardcoded seeds)
-        let total_conn_size: usize = groups.iter().map(|g| g.conn_size()).sum();
-        let mut rng = rand::rngs::SmallRng::from_entropy();
-        let mut connections_flat: Vec<i64> = Vec::with_capacity(total_conn_size);
-
-        for group in &groups {
-            let total_neurons = group.total_neurons();
-            for _ in 0..total_neurons {
-                for _ in 0..group.bits {
-                    connections_flat.push(rng.gen_range(0..total_input_bits as i64));
+        // Get or generate connections for this genome
+        let connections_flat: Vec<i64> = if use_provided_connections {
+            // Use provided connections from genome state
+            let conn_offset = genome_idx * conn_size_per_genome;
+            genomes_connections_flat[conn_offset..conn_offset + conn_size_per_genome].to_vec()
+        } else {
+            // Generate random connections (legacy fallback)
+            let total_conn_size: usize = groups.iter().map(|g| g.conn_size()).sum();
+            let mut rng = rand::rngs::SmallRng::from_entropy();
+            let mut conns: Vec<i64> = Vec::with_capacity(total_conn_size);
+            for group in &groups {
+                let total_neurons = group.total_neurons();
+                for _ in 0..total_neurons {
+                    for _ in 0..group.bits {
+                        conns.push(rng.gen_range(0..total_input_bits as i64));
+                    }
                 }
             }
-        }
+            conns
+        };
 
         // Build cluster-to-group mapping
         let mut cluster_to_group: Vec<(usize, usize)> = vec![(0, 0); num_clusters];

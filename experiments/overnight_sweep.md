@@ -596,3 +596,106 @@ tests/ram_lm_proper.py       tests/scan_benchmark.py
 | Output | Probability from counts | Boolean or "don't know" |
 | Training | Count increment | EDRA backpropagation |
 
+---
+
+## 🔴 Critical Bug: Random Connection Regeneration (2026-01-15)
+
+### Discovery
+
+While running adaptive architecture search (GA→TS pipeline), Tabu Search showed **zero improvement** after 1200+ genome evaluations despite Metal acceleration achieving ~5s per genome.
+
+### Investigation
+
+Observed symptoms:
+- GA improved from 10.96 → 10.54 CE (initial generations)
+- TS showed 0% improvement after 40+ iterations
+- Neighbors evaluated had similar CE to current best (within noise)
+- No clear optimization signal despite evaluating many neighbors
+
+### Root Cause
+
+In `src/wnn/ram/strategies/accelerator/adaptive.rs:673`:
+
+```rust
+// THE BUG - new random connections for EVERY genome evaluation!
+let mut rng = rand::rngs::SmallRng::from_entropy();
+```
+
+**The Problem:**
+When TS mutates a genome (changing one cluster's bits by +1), the "neighbor" gets:
+1. Architecture: `[8, 8, 8, ..., 9, ..., 8]` (one cluster changed from 8→9 bits)
+2. Connections: **Completely random!** (regenerated from entropy)
+
+The fitness of a genome depends on BOTH architecture AND connectivity. With random connections, what TS thinks are "neighbors" are actually completely different models. There is no gradient to follow.
+
+**Analogy:** Imagine optimizing a neural network's architecture while randomly reinitializing all weights each evaluation. The loss would be pure noise.
+
+### Why GA Still Worked (Partially)
+
+GA showed initial improvement because:
+1. Population diversity explores architecture space broadly
+2. Selection pressure still favors lower CE even with noise
+3. But improvement stalls once easy wins are found
+
+TS failed because it relies on local search - neighbors must be actually similar.
+
+### Solution: Connection-Preserving Genomes
+
+Connections must be part of genome state:
+
+```python
+@dataclass
+class ClusterGenome:
+    bits_per_cluster: List[int]
+    neurons_per_cluster: List[int]
+    connections: List[List[int]]  # NEW: inherited and mutated
+```
+
+Operations:
+1. **Initialize:** Create random connections once when genome is born
+2. **Crossover:** Inherit connections from parents (with crossover point)
+3. **Mutate:** Small perturbations (+/-1, +/-2) to connection indices
+4. **Evaluate:** Use genome's stored connections, not random ones
+
+### Proposed Phased Approach
+
+Instead of optimizing everything at once:
+
+| Phase | What's Optimized | What's Fixed | Rationale |
+|-------|------------------|--------------|-----------|
+| 1a | Neurons per cluster | Bits=8, random conn | Coarse architecture |
+| 1b | Bits per cluster | Neurons from 1a, random conn | Fine architecture |
+| 2 | Connections | Architecture from 1b | Connectivity patterns |
+
+Each phase inherits the best solution from the previous phase.
+
+### Performance Improvements Made
+
+While investigating, several optimizations were implemented:
+
+| Improvement | Before | After | Speedup |
+|-------------|--------|-------|---------|
+| Metal GPU for dense groups | 15s/genome | 5s/genome | ~3x |
+| Sequential genome eval | OOM | Stable | ∞ |
+| Duplicate logging removed | 2x logs | 1x logs | cleaner |
+| Early stop indicators | None | 🟢🟡🔴 | visible |
+
+### Next Steps
+
+1. Implement `connections` field in `ClusterGenome`
+2. Modify `adaptive.rs` to accept connections as input
+3. Implement connection mutation with small deltas
+4. Test phased optimization approach
+
+### Commands Used
+
+```bash
+# Ran overnight - observed no TS improvement
+python tests/run_adaptive_search.py
+
+# Monitoring
+tail -f logs/2026/01/15/adaptive_search_*.log
+```
+
+---
+

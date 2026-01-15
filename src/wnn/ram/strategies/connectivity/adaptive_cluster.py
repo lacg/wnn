@@ -139,48 +139,57 @@ class ClusterGenome:
 	"""
 	Genome representing adaptive architecture for all clusters.
 
-	Phase 1: bits_per_cluster (bits per neuron for each cluster)
-	Phase 2: neurons_per_cluster (number of neurons for each cluster)
+	Contains three components:
+	- bits_per_cluster: Address bits per neuron for each cluster
+	- neurons_per_cluster: Number of neurons per cluster
+	- connections: Input bit indices each neuron observes (flattened)
 
-	Each cluster can have different (neurons, bits) configuration,
-	allowing the GA to discover optimal architectures per token.
+	The connections are stored as a flat list where each neuron's connections
+	are stored contiguously. For cluster i with neurons_per_cluster[i] neurons
+	and bits_per_cluster[i] bits, each neuron has bits_per_cluster[i] connections.
+
+	CRITICAL: Connections must be preserved across mutations and crossovers.
+	Random regeneration (the old approach) breaks evolutionary search because
+	"neighbors" become completely different models.
 
 	Example:
-		# Initialize from token frequencies
+		# Initialize with connections
 		genome = ClusterGenome.initialize(
 			num_clusters=50257,
 			strategy=GenomeInitStrategy.FREQUENCY_SCALED,
 			config=config,
 			token_frequencies=frequencies,
+			total_input_bits=64,  # Required for connection initialization
 		)
 
-		# Mutate
+		# Mutate architecture AND connections
 		child = genome.mutate(config)
 
-		# Crossover
+		# Crossover preserves connection inheritance
 		child = genome.crossover(other_genome)
-
-		# Statistics
-		stats = genome.stats()
 	"""
 
 	def __init__(
 		self,
 		bits_per_cluster: List[int],
 		neurons_per_cluster: Optional[List[int]] = None,
+		connections: Optional[List[int]] = None,
 	):
 		"""
-		Create a genome with specified architecture.
+		Create a genome with specified architecture and connections.
 
 		Args:
 			bits_per_cluster: Bits per neuron for each cluster [num_clusters]
 			neurons_per_cluster: Neurons per cluster [num_clusters] (default: all 1s)
+			connections: Flattened connection indices (default: None = not initialized)
 		"""
 		self.bits_per_cluster = bits_per_cluster
 		self.neurons_per_cluster = (
 			neurons_per_cluster if neurons_per_cluster is not None
 			else [1] * len(bits_per_cluster)
 		)
+		# Connections are optional - initialized later or inherited from parent
+		self.connections = connections
 
 	# =========================================================================
 	# Factory Methods
@@ -193,6 +202,7 @@ class ClusterGenome:
 		strategy: GenomeInitStrategy,
 		config: AdaptiveClusterConfig,
 		token_frequencies: Optional[List[int]] = None,
+		total_input_bits: Optional[int] = None,
 		rng: Optional[int] = None,
 	) -> ClusterGenome:
 		"""
@@ -203,10 +213,11 @@ class ClusterGenome:
 			strategy: Initialization strategy to use
 			config: Configuration with min/max bounds
 			token_frequencies: Token occurrence counts (required for FREQUENCY_SCALED)
+			total_input_bits: Total input bits (required for connection initialization)
 			rng: Random seed for reproducibility
 
 		Returns:
-			Initialized ClusterGenome with bits and neurons per cluster
+			Initialized ClusterGenome with bits, neurons, and connections
 
 		Example:
 			genome = ClusterGenome.initialize(
@@ -214,6 +225,7 @@ class ClusterGenome:
 				strategy=GenomeInitStrategy.FREQUENCY_SCALED,
 				config=config,
 				token_frequencies=token_counts,
+				total_input_bits=64,
 			)
 		"""
 		if rng is not None:
@@ -276,7 +288,19 @@ class ClusterGenome:
 		else:
 			neurons = [1] * num_clusters  # Phase 1: fixed at 1
 
-		return cls(bits_per_cluster=bits, neurons_per_cluster=neurons)
+		# Initialize connections if total_input_bits provided
+		connections = None
+		if total_input_bits is not None:
+			connections = []
+			for i in range(num_clusters):
+				n_neurons = neurons[i]
+				n_bits = bits[i]
+				for _ in range(n_neurons):
+					# Random connections for each neuron
+					for _ in range(n_bits):
+						connections.append(random.randint(0, total_input_bits - 1))
+
+		return cls(bits_per_cluster=bits, neurons_per_cluster=neurons, connections=connections)
 
 	@classmethod
 	def from_tensor(cls, t: Tensor) -> ClusterGenome:
@@ -293,17 +317,26 @@ class ClusterGenome:
 	def mutate(
 		self,
 		config: AdaptiveClusterConfig,
+		total_input_bits: Optional[int] = None,
 		rng: Optional[int] = None,
 	) -> ClusterGenome:
 		"""
 		Create a mutated copy of this genome.
 
-		Randomly adjusts bits and neurons per cluster based on config.
+		Randomly adjusts bits, neurons, and connections per cluster.
 		Phase 1: Only mutates bits
-		Phase 2: Mutates both bits and neurons
+		Phase 2: Mutates bits and neurons
+		Connections are mutated by small index shifts (+/-1, +/-2).
+
+		When architecture changes (bits/neurons increase/decrease):
+		- Bits increase: Add random new connections
+		- Bits decrease: Remove last connections
+		- Neurons increase: Copy and slightly mutate connections from existing neuron
+		- Neurons decrease: Remove last neuron's connections
 
 		Args:
 			config: Configuration with mutation rates and bounds
+			total_input_bits: Total input bits (required if connections need adjustment)
 			rng: Random seed
 
 		Returns:
@@ -315,24 +348,104 @@ class ClusterGenome:
 		new_bits = self.bits_per_cluster.copy()
 		new_neurons = self.neurons_per_cluster.copy()
 
+		# Track architecture changes for connection adjustment
+		bits_delta = [0] * len(new_bits)
+		neurons_delta = [0] * len(new_neurons)
+
 		for i in range(len(new_bits)):
 			# Mutate bits
 			if random.random() < config.bits_mutation_rate:
 				delta = random.choice([-config.bits_mutation_step, config.bits_mutation_step])
+				old_bits = new_bits[i]
 				new_bits[i] = max(
 					config.min_bits,
 					min(config.max_bits, new_bits[i] + delta)
 				)
+				bits_delta[i] = new_bits[i] - old_bits
 
 			# Mutate neurons (Phase 2 only)
 			if config.phase >= 2 and random.random() < config.neurons_mutation_rate:
 				delta = random.choice([-config.neurons_mutation_step, config.neurons_mutation_step])
+				old_neurons = new_neurons[i]
 				new_neurons[i] = max(
 					config.min_neurons,
 					min(config.max_neurons, new_neurons[i] + delta)
 				)
+				neurons_delta[i] = new_neurons[i] - old_neurons
 
-		return ClusterGenome(bits_per_cluster=new_bits, neurons_per_cluster=new_neurons)
+		# Adjust connections based on architecture changes
+		new_connections = None
+		if self.connections is not None:
+			new_connections = self._adjust_connections(
+				new_bits, new_neurons, bits_delta, neurons_delta,
+				total_input_bits or 64  # Default to 64 if not provided
+			)
+
+		return ClusterGenome(
+			bits_per_cluster=new_bits,
+			neurons_per_cluster=new_neurons,
+			connections=new_connections,
+		)
+
+	def _adjust_connections(
+		self,
+		new_bits: List[int],
+		new_neurons: List[int],
+		bits_delta: List[int],
+		neurons_delta: List[int],
+		total_input_bits: int,
+	) -> List[int]:
+		"""Adjust connections when architecture changes."""
+		result = []
+		old_idx = 0
+
+		for cluster_idx in range(len(new_bits)):
+			old_neurons = self.neurons_per_cluster[cluster_idx]
+			old_bits = self.bits_per_cluster[cluster_idx]
+			n_neurons = new_neurons[cluster_idx]
+			n_bits = new_bits[cluster_idx]
+
+			for neuron_idx in range(n_neurons):
+				if neuron_idx < old_neurons:
+					# Existing neuron - copy and adjust connections
+					for bit_idx in range(n_bits):
+						if bit_idx < old_bits:
+							# Copy existing connection, with small random mutation
+							conn_idx = old_idx + neuron_idx * old_bits + bit_idx
+							old_conn = self.connections[conn_idx]
+							# 10% chance of small perturbation
+							if random.random() < 0.1:
+								delta = random.choice([-2, -1, 1, 2])
+								new_conn = max(0, min(total_input_bits - 1, old_conn + delta))
+							else:
+								new_conn = old_conn
+							result.append(new_conn)
+						else:
+							# New bit position - add random connection
+							result.append(random.randint(0, total_input_bits - 1))
+				else:
+					# New neuron - copy connections from random existing neuron with mutations
+					if old_neurons > 0:
+						template_neuron = random.randint(0, old_neurons - 1)
+						for bit_idx in range(n_bits):
+							if bit_idx < old_bits:
+								# Copy from template with mutation
+								conn_idx = old_idx + template_neuron * old_bits + bit_idx
+								old_conn = self.connections[conn_idx]
+								delta = random.choice([-2, -1, 1, 2])
+								new_conn = max(0, min(total_input_bits - 1, old_conn + delta))
+								result.append(new_conn)
+							else:
+								result.append(random.randint(0, total_input_bits - 1))
+					else:
+						# No existing neurons to copy from - fully random
+						for _ in range(n_bits):
+							result.append(random.randint(0, total_input_bits - 1))
+
+			# Update old_idx for next cluster
+			old_idx += old_neurons * old_bits
+
+		return result
 
 	def crossover(
 		self,
@@ -343,8 +456,9 @@ class ClusterGenome:
 		"""
 		Create child genome by crossing over with another parent.
 
-		Uses uniform crossover: each cluster's (bits, neurons) come from either parent.
-		The entire cluster config is inherited together (not bits from one, neurons from other).
+		Uses uniform crossover: each cluster's (bits, neurons, connections)
+		come from either parent. The entire cluster config including connections
+		is inherited together to preserve the architecture-connectivity relationship.
 
 		Args:
 			other: Second parent genome
@@ -352,23 +466,57 @@ class ClusterGenome:
 			rng: Random seed
 
 		Returns:
-			New child genome
+			New child genome with inherited connections
 		"""
 		if rng is not None:
 			random.seed(rng)
 
 		child_bits = []
 		child_neurons = []
+		child_connections = [] if (self.connections is not None and other.connections is not None) else None
+		from_other = []  # Track which parent each cluster came from
 
 		for i in range(len(self.bits_per_cluster)):
 			if random.random() < crossover_rate:
 				child_bits.append(other.bits_per_cluster[i])
 				child_neurons.append(other.neurons_per_cluster[i])
+				from_other.append(True)
 			else:
 				child_bits.append(self.bits_per_cluster[i])
 				child_neurons.append(self.neurons_per_cluster[i])
+				from_other.append(False)
 
-		return ClusterGenome(bits_per_cluster=child_bits, neurons_per_cluster=child_neurons)
+		# Build child connections from the chosen parents
+		if child_connections is not None:
+			self_idx = 0
+			other_idx = 0
+			for i in range(len(child_bits)):
+				n_neurons_self = self.neurons_per_cluster[i]
+				n_bits_self = self.bits_per_cluster[i]
+				n_neurons_other = other.neurons_per_cluster[i]
+				n_bits_other = other.bits_per_cluster[i]
+				conn_size_self = n_neurons_self * n_bits_self
+				conn_size_other = n_neurons_other * n_bits_other
+
+				if from_other[i]:
+					# Take connections from other parent
+					child_connections.extend(
+						other.connections[other_idx:other_idx + conn_size_other]
+					)
+				else:
+					# Take connections from self
+					child_connections.extend(
+						self.connections[self_idx:self_idx + conn_size_self]
+					)
+
+				self_idx += conn_size_self
+				other_idx += conn_size_other
+
+		return ClusterGenome(
+			bits_per_cluster=child_bits,
+			neurons_per_cluster=child_neurons,
+			connections=child_connections,
+		)
 
 	# =========================================================================
 	# Properties and Utilities
@@ -390,11 +538,45 @@ class ClusterGenome:
 		"""Total neurons across all clusters."""
 		return sum(self.neurons_per_cluster)
 
+	def total_connections(self) -> int:
+		"""Total connection count across all neurons."""
+		return sum(
+			n * b
+			for n, b in zip(self.neurons_per_cluster, self.bits_per_cluster)
+		)
+
+	def has_connections(self) -> bool:
+		"""Check if this genome has initialized connections."""
+		return self.connections is not None and len(self.connections) > 0
+
+	def initialize_connections(self, total_input_bits: int, rng: Optional[int] = None) -> None:
+		"""
+		Initialize random connections for this genome.
+
+		This is called when a genome needs connections but doesn't have them
+		(e.g., created via crossover from parents without connections).
+
+		Args:
+			total_input_bits: Total number of input bits to connect from
+			rng: Random seed for reproducibility
+		"""
+		if rng is not None:
+			random.seed(rng)
+
+		self.connections = []
+		for i in range(len(self.bits_per_cluster)):
+			n_neurons = self.neurons_per_cluster[i]
+			n_bits = self.bits_per_cluster[i]
+			for _ in range(n_neurons):
+				for _ in range(n_bits):
+					self.connections.append(random.randint(0, total_input_bits - 1))
+
 	def clone(self) -> ClusterGenome:
-		"""Create a deep copy of this genome."""
+		"""Create a deep copy of this genome including connections."""
 		return ClusterGenome(
 			bits_per_cluster=self.bits_per_cluster.copy(),
 			neurons_per_cluster=self.neurons_per_cluster.copy(),
+			connections=self.connections.copy() if self.connections is not None else None,
 		)
 
 	def to_tensor(self) -> Tensor:
@@ -701,15 +883,20 @@ class RustParallelEvaluator:
 			# Flatten genome configurations for this batch
 			genomes_bits_flat = []
 			genomes_neurons_flat = []
+			genomes_connections_flat = []
 			for g in batch_genomes:
 				genomes_bits_flat.extend(g.bits_per_cluster)
 				genomes_neurons_flat.extend(g.neurons_per_cluster)
+				# Include connections if available (for connection-preserving search)
+				if g.connections is not None:
+					genomes_connections_flat.extend(g.connections)
 
 			# Call Rust parallel evaluator for this batch
 			# Returns list of (CE, accuracy) tuples
 			batch_results = ram_accelerator.evaluate_genomes_parallel(
 				genomes_bits_flat,
 				genomes_neurons_flat,
+				genomes_connections_flat,  # Pass connections (empty = random fallback)
 				len(batch_genomes),
 				self.config.vocab_size,
 				self._train_data['input_bits'],
@@ -1240,6 +1427,12 @@ def run_architecture_tabu_search(
 	except Exception as e:
 		log(f"[ArchitectureTS] Using Python evaluator ({e})")
 
+	# Compute total input bits for connection preservation
+	from wnn.ram.core import bits_needed
+	bits_per_token = bits_needed(vocab_size)
+	total_input_bits = context_size * bits_per_token
+	log(f"[ArchitectureTS] Connection-preserving search enabled ({total_input_bits} input bits)")
+
 	# Create TS strategy using factory
 	strategy = OptimizerStrategyFactory.create(
 		OptimizerStrategyType.ARCHITECTURE_TS,
@@ -1249,6 +1442,7 @@ def run_architecture_tabu_search(
 		min_neurons=min_neurons,
 		max_neurons=max_neurons,
 		phase=phase,
+		total_input_bits=total_input_bits,  # Enable connection preservation
 		# TS parameters
 		iterations=iterations,
 		neighbors_per_iter=neighbors_per_iter,
@@ -1409,6 +1603,12 @@ def run_architecture_search(
 	except Exception as e:
 		log(f"[ArchitectureGA] Warning: Rust evaluator init failed ({e}), using Python")
 
+	# Compute total input bits for connection initialization
+	from wnn.ram.core import bits_needed
+	bits_per_token = bits_needed(vocab_size)
+	total_input_bits = context_size * bits_per_token
+	log(f"[ArchitectureGA] Connection-preserving search enabled ({total_input_bits} input bits)")
+
 	# Create GA strategy using factory
 	strategy = OptimizerStrategyFactory.create(
 		OptimizerStrategyType.ARCHITECTURE_GA,
@@ -1419,6 +1619,7 @@ def run_architecture_search(
 		max_neurons=max_neurons,
 		phase=phase,
 		token_frequencies=token_frequencies,
+		total_input_bits=total_input_bits,  # Enable connection preservation
 		# GA parameters
 		population_size=population_size,
 		generations=generations,
@@ -1595,6 +1796,12 @@ def run_connectivity_optimization(
 	if batch_evaluator is not None:
 		batch_evaluate_fn = lambda genomes: batch_evaluator.evaluate_batch(genomes, logger=log)
 
+	# Compute total input bits for connection preservation
+	from wnn.ram.core import bits_needed
+	bits_per_token = bits_needed(vocab_size)
+	total_input_bits = context_size * bits_per_token
+	log(f"[Phase2] Connection-preserving search enabled ({total_input_bits} input bits)")
+
 	# =========================================================================
 	# Phase 2a: GA
 	# =========================================================================
@@ -1613,6 +1820,7 @@ def run_connectivity_optimization(
 		max_neurons=max_neurons,
 		phase=phase,
 		token_frequencies=token_frequencies,
+		total_input_bits=total_input_bits,  # Enable connection preservation
 		# GA parameters
 		population_size=ga_population,
 		generations=ga_generations,
@@ -1650,6 +1858,7 @@ def run_connectivity_optimization(
 		min_neurons=min_neurons,
 		max_neurons=max_neurons,
 		phase=phase,
+		total_input_bits=total_input_bits,  # Enable connection preservation
 		# TS parameters
 		iterations=ts_iterations,
 		neighbors_per_iter=ts_neighbors,

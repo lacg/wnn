@@ -2521,6 +2521,7 @@ fn evaluate_genomes_parallel<'py>(
     py: Python<'py>,
     genomes_bits_flat: Vec<usize>,
     genomes_neurons_flat: Vec<usize>,
+    genomes_connections_flat: Vec<i64>,  // NEW: flattened connections (empty = random)
     num_genomes: usize,
     num_clusters: usize,
     train_input_bits: PyReadonlyArray1<'py, u8>,
@@ -2566,6 +2567,7 @@ fn evaluate_genomes_parallel<'py>(
         let fitness = adaptive::evaluate_genomes_parallel(
             &genomes_bits_flat,
             &genomes_neurons_flat,
+            &genomes_connections_flat,  // Pass connections to Rust
             num_genomes,
             num_clusters,
             &train_input_bools,

@@ -12,13 +12,34 @@
 ### What Failed
 - ❌ Per-cluster optimization (50K params) - flat fitness landscape, 0% improvement
 - ❌ Connectivity optimization on trained model - degraded PPL by 7-24%
+- ❌ Adaptive architecture search with random connections - TS couldn't improve (see below)
+
+### 🔴 Critical Discovery: Connection Regeneration Bug (2026-01-15)
+
+**Problem:** Tabu Search was not improving after 1000+ evaluations.
+
+**Root Cause:** In `adaptive.rs:673`, connections are regenerated randomly for each genome evaluation:
+```rust
+let mut rng = rand::rngs::SmallRng::from_entropy();  // NEW random connections every time!
+```
+
+This means when TS mutates a genome (changing bits/neurons by +/-1), the resulting "neighbor" has:
+- Slightly different architecture (intended)
+- **Completely different random connections** (unintended!)
+
+The fitness of a genome depends on BOTH architecture AND connectivity. With random connections each time, TS neighbors aren't actually neighbors - they're completely different models.
+
+**Solution:** Make connections part of the genome state:
+1. Initialize connections once when genome is created
+2. Inherit connections during crossover/mutation
+3. Mutate connections with small deltas (+/-1, +/-2) not random regeneration
 
 ### Promising Next Experiments
 
 | Priority | Experiment | Rationale | Command |
 |----------|------------|-----------|---------|
-| **1** | **Connectivity opt on FRESH model** | Optimize connectivity BEFORE training, not after | TBD |
-| **2** | **Coarser bucket optimization** | 10-20 frequency buckets instead of 50K clusters | `--tiered` with bucket config |
+| **1** | **Connection-preserving search** | Fix the root cause - connections as genome state | `run_adaptive_search.py` |
+| **2** | **Phased optimization** | Neurons → Bits → Connectivity in separate phases | TBD |
 | **3** | **Longer context (n=5,6)** | More disambiguation, especially for tier 0 | `--context 5` |
 | **4** | **Scale up best config** | More neurons for tier 0 (20→30), more data | `--tiered "50,30,20;..."` |
 
@@ -28,6 +49,15 @@
 2. **No optimization > optimization**: Random connectivity + full training beats GA/TS-optimized
 3. **Tier 0 dominates**: 42% of data, 11% accuracy - focus optimization here
 4. **Per-token too fine**: Need coarser granularity (tiers/buckets) for optimization signal
+5. **Connections must be stateful**: Random regeneration breaks evolutionary search
+
+### Recently Completed ✅ (2026-01-15)
+- Added Metal GPU acceleration for dense groups (bits ≤ 12) in adaptive evaluation
+- Fixed double evaluation bug (batch evaluator now returns `(CE, accuracy)` tuples)
+- Fixed memory explosion by using sequential genome evaluation with parallel training
+- Added early stopping status indicators (🟢 HEALTHY / ⚪ NEUTRAL / 🟡 WARNING / 🔴 CRITICAL)
+- Removed duplicate logging in GA/TS strategies
+- Centralized `empty_value` in `EvaluatorConfig`
 
 ### Architecture Cleanup ✅
 - Deleted 17 Counter-based test scripts (wrong architecture)
@@ -38,6 +68,8 @@
 - Added `AccelerationMode.AUTO` → HYBRID (56 cores on M4 Max)
 - Added `get_effective_cores()` and `resolve_acceleration_mode()`
 - Renamed `OptResult` → `OptimizerResult` with cleaner field names
+- Added `ProgressTracker` for consistent logging with accuracy
+- Added `OverfitThreshold` enum for centralized threshold values
 
 ---
 
