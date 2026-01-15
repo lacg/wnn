@@ -427,6 +427,11 @@ impl GroupDenseMemory {
     }
 
     /// Thread-safe atomic write using compare-and-swap
+    ///
+    /// TRUE-wins-over-FALSE semantics:
+    /// - TRUE can be written over EMPTY or FALSE
+    /// - FALSE can only be written over EMPTY
+    /// - TRUE cannot be overwritten by FALSE
     #[inline]
     fn write(&self, neuron_idx: usize, address: usize, value: i64, allow_override: bool) -> bool {
         let word_idx = address / CELLS_PER_WORD;
@@ -439,14 +444,20 @@ impl GroupDenseMemory {
             let old_word = self.words[word_offset].load(Ordering::Relaxed);
             let old_cell = (old_word >> shift) & CELL_MASK;
 
-            // TRUE (1) wins over FALSE (0) - only write FALSE if cell is EMPTY
-            if value == FALSE && old_cell == TRUE {
-                return false; // Don't overwrite TRUE with FALSE
-            }
-            if !allow_override && old_cell != EMPTY {
+            // No change needed if same value
+            if old_cell == value {
                 return false;
             }
-            if old_cell == value {
+
+            // TRUE wins over FALSE: don't overwrite TRUE with FALSE
+            if old_cell == TRUE && value == FALSE {
+                return false;
+            }
+
+            // If not allow_override:
+            // - TRUE can overwrite EMPTY or FALSE (TRUE wins)
+            // - FALSE can only overwrite EMPTY
+            if !allow_override && value == FALSE && old_cell != EMPTY {
                 return false;
             }
 
@@ -482,21 +493,37 @@ impl GroupSparseMemory {
     }
 
     /// Thread-safe write using DashMap
+    ///
+    /// TRUE-wins-over-FALSE semantics (values: 0=FALSE, 1=TRUE, 2=EMPTY):
+    /// - TRUE can be written over EMPTY or FALSE
+    /// - FALSE can only be written over EMPTY
+    /// - TRUE cannot be overwritten by FALSE
     #[inline]
     fn write(&self, neuron_idx: usize, address: u64, value: u8, allow_override: bool) -> bool {
         let map = &self.neurons[neuron_idx];
-        // Try to insert if not present
         match map.entry(address) {
             dashmap::mapref::entry::Entry::Occupied(mut e) => {
                 let current = *e.get();
+
+                // No change needed if same value
                 if current == value {
                     return false;
                 }
-                // TRUE (1) wins over FALSE (0) - only write FALSE if cell is EMPTY
-                if value == 0 && current == 1 {
-                    return false; // Don't overwrite TRUE with FALSE
+
+                // TRUE wins over FALSE: don't overwrite TRUE with FALSE
+                if current == 1 && value == 0 {
+                    return false;
                 }
-                if allow_override || current == 2 {
+
+                // If not allow_override:
+                // - TRUE (1) can overwrite EMPTY (2) or FALSE (0) (TRUE wins)
+                // - FALSE (0) can only overwrite EMPTY (2)
+                if !allow_override && value == 0 && current != 2 {
+                    return false;
+                }
+
+                // Allow TRUE to overwrite FALSE (TRUE wins) or write to EMPTY
+                if allow_override || current == 2 || (value == 1 && current == 0) {
                     e.insert(value);
                     return true;
                 }
