@@ -1184,11 +1184,11 @@ def run_benchmark(config: BenchmarkConfig):
 				from dataclasses import dataclass as dc
 				@dc
 				class PCResultAdapter:
-					optimized_connections: torch.Tensor
-					initial_error: float
-					final_error: float
+					best_genome: torch.Tensor
+					initial_fitness: float
+					final_fitness: float
 					iterations_run: int
-					early_stopped_overfitting: bool
+					early_stopped: bool
 
 				total_clusters_optimized = 0
 				all_tier_summaries = {}
@@ -1509,11 +1509,11 @@ def run_benchmark(config: BenchmarkConfig):
 						all_tier_summaries = pc_result.tier_summaries
 
 				result = PCResultAdapter(
-					optimized_connections=current_connections.clone(),
-					initial_error=0.0,  # Will be computed from CE below
-					final_error=0.0,
+					best_genome=current_connections.clone(),
+					initial_fitness=0.0,  # Will be computed from CE below
+					final_fitness=0.0,
 					iterations_run=total_clusters_optimized,
-					early_stopped_overfitting=False,
+					early_stopped=False,
 				)
 
 				log(f"")
@@ -1530,26 +1530,26 @@ def run_benchmark(config: BenchmarkConfig):
 			opt_time = time.perf_counter() - start
 
 			# Update current connections (for next strategy in sequence)
-			current_connections = result.optimized_connections.clone()
+			current_connections = result.best_genome.clone()
 			if is_tiered:
 				set_combined_connections(current_connections)
 			else:
 				model.layer.memory.connections = current_connections
 
 			# Report results for this strategy
-			improvement = ((result.initial_error - result.final_error) / result.initial_error * 100) if result.initial_error > 0 else 0
+			improvement = ((result.initial_fitness - result.final_fitness) / result.initial_fitness * 100) if result.initial_fitness > 0 else 0
 			log("")
 			log(f"[{arch_label}] {strategy_name} Results:")
 			log(f"    Time: {opt_time:.1f}s")
-			log(f"    Initial CE: {result.initial_error:.4f}")
-			log(f"    Final CE: {result.final_error:.4f}")
+			log(f"    Initial CE: {result.initial_fitness:.4f}")
+			log(f"    Final CE: {result.final_fitness:.4f}")
 			log(f"    Improvement: {improvement:.2f}%")
 			log(f"    Iterations: {result.iterations_run}")
-			if result.early_stopped_overfitting:
+			if result.early_stopped:
 				log(f"    Early stopped: overfitting detected")
 
 			# Save final error for next strategy (e.g., GA → TS chaining)
-			prev_optimizer_final_error = result.final_error
+			prev_optimizer_final_error = result.final_fitness
 
 		# Retrain on FULL data with optimized connectivity
 		log("")
