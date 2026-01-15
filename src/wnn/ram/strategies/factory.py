@@ -298,19 +298,86 @@ class OptimizerStrategyFactory:
 
 		Raises:
 			ValueError: If strategy_type is not recognized
+
+		Example:
+			# Architecture GA
+			ga = OptimizerStrategyFactory.create(
+				OptimizerStrategyType.ARCHITECTURE_GA,
+				num_clusters=50257,
+				population_size=30,
+				generations=50,
+			)
+
+			# Architecture TS
+			ts = OptimizerStrategyFactory.create(
+				OptimizerStrategyType.ARCHITECTURE_TS,
+				num_clusters=50257,
+				iterations=100,
+			)
 		"""
 		match strategy_type:
 			case OptimizerStrategyType.ARCHITECTURE_GA:
 				from wnn.ram.strategies.connectivity.architecture_strategies import (
-					create_architecture_ga,
+					ArchitectureGAStrategy,
+					ArchitectureConfig,
 				)
-				return create_architecture_ga(**kwargs)
+				from wnn.ram.strategies.connectivity.generic_strategies import GAConfig
+
+				arch_config = ArchitectureConfig(
+					num_clusters=kwargs.get('num_clusters'),
+					min_bits=kwargs.get('min_bits', 8),
+					max_bits=kwargs.get('max_bits', 25),
+					min_neurons=kwargs.get('min_neurons', 3),
+					max_neurons=kwargs.get('max_neurons', 33),
+					phase=kwargs.get('phase', 2),
+					token_frequencies=kwargs.get('token_frequencies'),
+				)
+				ga_config = GAConfig(
+					population_size=kwargs.get('population_size', 30),
+					generations=kwargs.get('generations', 50),
+					patience=kwargs.get('patience', 5),
+					check_interval=kwargs.get('check_interval', 5),
+					min_improvement_pct=kwargs.get('min_improvement_pct', 0.05),
+					mutation_rate=kwargs.get('mutation_rate', 0.1),
+				)
+				return ArchitectureGAStrategy(
+					arch_config,
+					ga_config,
+					kwargs.get('seed', 42),
+					kwargs.get('logger'),
+					kwargs.get('batch_evaluator'),
+				)
 
 			case OptimizerStrategyType.ARCHITECTURE_TS:
 				from wnn.ram.strategies.connectivity.architecture_strategies import (
-					create_architecture_ts,
+					ArchitectureTSStrategy,
+					ArchitectureConfig,
 				)
-				return create_architecture_ts(**kwargs)
+				from wnn.ram.strategies.connectivity.generic_strategies import TSConfig
+
+				arch_config = ArchitectureConfig(
+					num_clusters=kwargs.get('num_clusters'),
+					min_bits=kwargs.get('min_bits', 8),
+					max_bits=kwargs.get('max_bits', 25),
+					min_neurons=kwargs.get('min_neurons', 3),
+					max_neurons=kwargs.get('max_neurons', 33),
+					phase=kwargs.get('phase', 2),
+				)
+				ts_config = TSConfig(
+					iterations=kwargs.get('iterations', 100),
+					neighbors_per_iter=kwargs.get('neighbors_per_iter', 20),
+					patience=kwargs.get('patience', 5),
+					check_interval=kwargs.get('check_interval', 5),
+					min_improvement_pct=kwargs.get('min_improvement_pct', 0.5),
+					tabu_size=kwargs.get('tabu_size', 10),
+				)
+				return ArchitectureTSStrategy(
+					arch_config,
+					ts_config,
+					kwargs.get('seed', 42),
+					kwargs.get('logger'),
+					kwargs.get('batch_evaluator'),
+				)
 
 			case OptimizerStrategyType.CONNECTIVITY_GA:
 				from wnn.ram.strategies.connectivity.genetic_algorithm import (
