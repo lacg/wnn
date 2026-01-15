@@ -47,6 +47,7 @@ def run_phase(
 	default_bits: int,
 	default_neurons: int,
 	initial_genome: Optional[ClusterGenome],
+	initial_fitness: Optional[float] = None,  # Required for TS
 	**kwargs,
 ):
 	"""Run a single optimization phase."""
@@ -82,17 +83,19 @@ def run_phase(
 				initial_population=[initial_genome],
 			)
 		else:
+			# TS requires initial_fitness
 			result = strategy.optimize(
 				evaluate_fn=None,
 				initial_genome=initial_genome,
+				initial_fitness=initial_fitness,
 			)
 	else:
 		result = strategy.optimize(evaluate_fn=None)
 
 	log(f"\n{phase_name} Result:")
-	log(f"  Best fitness (CE): {result.best_fitness:.4f}")
+	log(f"  Best fitness (CE): {result.final_fitness:.4f}")
 	log(f"  Best genome: {result.best_genome}")
-	log(f"  Generations/Iterations: {result.generations}")
+	log(f"  Generations/Iterations: {result.iterations_run}")
 
 	return result
 
@@ -196,8 +199,8 @@ def main():
 		population_size=args.population,
 	)
 	results["phase1_ga"] = {
-		"fitness": result_p1_ga.best_fitness,
-		"generations": result_p1_ga.generations,
+		"fitness": result_p1_ga.final_fitness,
+		"generations": result_p1_ga.iterations_run,
 	}
 
 	result_p1_ts = run_phase(
@@ -213,11 +216,12 @@ def main():
 		default_bits=args.default_bits,
 		default_neurons=args.default_neurons,
 		initial_genome=result_p1_ga.best_genome,
+		initial_fitness=result_p1_ga.final_fitness,  # From previous GA
 		iterations=args.ts_iters,
 	)
 	results["phase1_ts"] = {
-		"fitness": result_p1_ts.best_fitness,
-		"iterations": result_p1_ts.generations,
+		"fitness": result_p1_ts.final_fitness,
+		"iterations": result_p1_ts.iterations_run,
 	}
 
 	# =========================================================================
@@ -240,8 +244,8 @@ def main():
 		population_size=args.population,
 	)
 	results["phase2_ga"] = {
-		"fitness": result_p2_ga.best_fitness,
-		"generations": result_p2_ga.generations,
+		"fitness": result_p2_ga.final_fitness,
+		"generations": result_p2_ga.iterations_run,
 	}
 
 	result_p2_ts = run_phase(
@@ -257,11 +261,12 @@ def main():
 		default_bits=args.default_bits,
 		default_neurons=args.default_neurons,
 		initial_genome=result_p2_ga.best_genome,
+		initial_fitness=result_p2_ga.final_fitness,  # From previous GA
 		iterations=args.ts_iters,
 	)
 	results["phase2_ts"] = {
-		"fitness": result_p2_ts.best_fitness,
-		"iterations": result_p2_ts.generations,
+		"fitness": result_p2_ts.final_fitness,
+		"iterations": result_p2_ts.iterations_run,
 	}
 
 	# =========================================================================
@@ -284,8 +289,8 @@ def main():
 		population_size=args.population,
 	)
 	results["phase3_ga"] = {
-		"fitness": result_p3_ga.best_fitness,
-		"generations": result_p3_ga.generations,
+		"fitness": result_p3_ga.final_fitness,
+		"generations": result_p3_ga.iterations_run,
 	}
 
 	result_p3_ts = run_phase(
@@ -301,11 +306,12 @@ def main():
 		default_bits=args.default_bits,
 		default_neurons=args.default_neurons,
 		initial_genome=result_p3_ga.best_genome,
+		initial_fitness=result_p3_ga.final_fitness,  # From previous GA
 		iterations=args.ts_iters,
 	)
 	results["phase3_ts"] = {
-		"fitness": result_p3_ts.best_fitness,
-		"iterations": result_p3_ts.generations,
+		"fitness": result_p3_ts.final_fitness,
+		"iterations": result_p3_ts.iterations_run,
 	}
 
 	# =========================================================================
@@ -314,10 +320,10 @@ def main():
 	log("\n" + "=" * 60)
 	log("  PHASED SEARCH SUMMARY")
 	log("=" * 60)
-	log(f"\nPhase 1 (Neurons): {result_p1_ga.best_fitness:.4f} → {result_p1_ts.best_fitness:.4f}")
-	log(f"Phase 2 (Bits):    {result_p2_ga.best_fitness:.4f} → {result_p2_ts.best_fitness:.4f}")
-	log(f"Phase 3 (Conns):   {result_p3_ga.best_fitness:.4f} → {result_p3_ts.best_fitness:.4f}")
-	log(f"\nFinal best fitness (CE): {result_p3_ts.best_fitness:.4f}")
+	log(f"\nPhase 1 (Neurons): {result_p1_ga.final_fitness:.4f} → {result_p1_ts.final_fitness:.4f}")
+	log(f"Phase 2 (Bits):    {result_p2_ga.final_fitness:.4f} → {result_p2_ts.final_fitness:.4f}")
+	log(f"Phase 3 (Conns):   {result_p3_ga.final_fitness:.4f} → {result_p3_ts.final_fitness:.4f}")
+	log(f"\nFinal best fitness (CE): {result_p3_ts.final_fitness:.4f}")
 	log(f"Final best genome: {result_p3_ts.best_genome}")
 
 	# Save results
@@ -326,7 +332,7 @@ def main():
 		output_path.parent.mkdir(parents=True, exist_ok=True)
 
 		results["final"] = {
-			"fitness": result_p3_ts.best_fitness,
+			"fitness": result_p3_ts.final_fitness,
 			"genome_stats": result_p3_ts.best_genome.stats(),
 		}
 		results["args"] = vars(args)
