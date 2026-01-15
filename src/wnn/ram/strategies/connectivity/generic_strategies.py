@@ -443,10 +443,19 @@ class GenericTSStrategy(ABC, Generic[T]):
 				seed_fitness = batch_evaluate_fn(initial_neighbors)
 			else:
 				seed_fitness = [evaluate_fn(g) for g in initial_neighbors]
-			# Log seeded neighbors
-			for i, (g, f) in enumerate(zip(initial_neighbors, seed_fitness)):
-				self._log(f"  [Seed {i + 1}/{len(initial_neighbors)}] CE={f:.4f}")
+			# Evaluate accuracy for seeds if function provided
+			seed_accuracy = [None] * len(initial_neighbors)
+			if accuracy_fn is not None:
+				seed_accuracy = [accuracy_fn(g) for g in initial_neighbors]
+			# Log seeded neighbors with accuracy
+			for i, (g, f, a) in enumerate(zip(initial_neighbors, seed_fitness, seed_accuracy)):
+				acc_str = f", Acc={a:.2%}" if a is not None else ""
+				self._log(f"  [Seed {i + 1}/{len(initial_neighbors)}] CE={f:.4f}{acc_str}")
 				best_neighbors.append((self.clone_genome(g), f))
+			# Seed summary: best, seed_best, avg
+			seed_best = min(seed_fitness)
+			seed_avg = sum(seed_fitness) / len(seed_fitness)
+			self._log(f"[{self.name}] Seed summary: best={best_fitness:.4f}, seed_best={seed_best:.4f}, avg={seed_avg:.4f}")
 			# Sort and keep top k
 			best_neighbors.sort(key=lambda x: x[1])
 			best_neighbors = best_neighbors[:cfg.neighbors_per_iter]
@@ -456,7 +465,6 @@ class GenericTSStrategy(ABC, Generic[T]):
 				best_fitness = best_neighbors[0][1]
 				current = self.clone_genome(best)
 				current_fitness = best_fitness
-				self._log(f"  Seed improved best: {start_fitness:.4f} -> {best_fitness:.4f}")
 
 		history = [(0, best_fitness)]
 		patience_counter = 0
@@ -476,21 +484,29 @@ class GenericTSStrategy(ABC, Generic[T]):
 			if not neighbor_candidates:
 				continue
 
-			# Batch evaluate
+			# Batch evaluate fitness
 			if batch_evaluate_fn is not None:
 				to_eval = [n for n, _ in neighbor_candidates]
 				fitness_values = batch_evaluate_fn(to_eval)
-				neighbors = [(n, f, m) for (n, m), f in zip(neighbor_candidates, fitness_values)]
 			else:
-				neighbors = [(n, evaluate_fn(n), m) for n, m in neighbor_candidates]
+				fitness_values = [evaluate_fn(n) for n, _ in neighbor_candidates]
 
-			# Log each neighbor evaluation
-			for i, (_, f, _) in enumerate(neighbors):
-				self._log(f"  [{i + 1}/{len(neighbors)}] Iter {iteration + 1}/{cfg.iterations}: CE={f:.4f}")
+			# Evaluate accuracy if function provided
+			accuracy_values = [None] * len(neighbor_candidates)
+			if accuracy_fn is not None:
+				accuracy_values = [accuracy_fn(n) for n, _ in neighbor_candidates]
 
-			# Select best neighbor
+			# Build neighbors list with fitness and accuracy
+			neighbors = [(n, f, m, a) for (n, m), f, a in zip(neighbor_candidates, fitness_values, accuracy_values)]
+
+			# Log each neighbor evaluation with accuracy
+			for i, (_, f, _, a) in enumerate(neighbors):
+				acc_str = f", Acc={a:.2%}" if a is not None else ""
+				self._log(f"  [{i + 1}/{len(neighbors)}] Iter {iteration + 1}/{cfg.iterations}: CE={f:.4f}{acc_str}")
+
+			# Select best neighbor (sort by fitness)
 			neighbors.sort(key=lambda x: x[1])
-			best_neighbor, best_neighbor_fitness, best_move = neighbors[0]
+			best_neighbor, best_neighbor_fitness, best_move, best_neighbor_acc = neighbors[0]
 
 			# Move to best neighbor (always - TS characteristic)
 			current = best_neighbor
@@ -506,17 +522,18 @@ class GenericTSStrategy(ABC, Generic[T]):
 				best_fitness = current_fitness
 
 			# Track best neighbors for seeding
-			for n, f, _ in neighbors[:5]:  # Keep top 5 from each iteration
+			for n, f, _, _ in neighbors[:5]:  # Keep top 5 from each iteration
 				best_neighbors.append((self.clone_genome(n), f))
 			best_neighbors.sort(key=lambda x: x[1])
 			best_neighbors = best_neighbors[:cfg.neighbors_per_iter]
 
 			history.append((iteration + 1, best_fitness))
 
-			# Log progress
-			avg_fitness = sum(f for _, f, _ in neighbors) / len(neighbors)
+			# Log progress: best (global), iter_best (this iteration), avg
+			iter_best = best_neighbor_fitness  # Best among neighbors this iteration
+			avg_fitness = sum(f for _, f, _, _ in neighbors) / len(neighbors)
 			self._log(f"[{self.name}] Iter {iteration + 1}/{cfg.iterations}: "
-					  f"best={best_fitness:.4f}, current={current_fitness:.4f}, avg={avg_fitness:.4f}")
+					  f"best={best_fitness:.4f}, iter_best={iter_best:.4f}, avg={avg_fitness:.4f}")
 
 			# Early stopping check
 			improvement_pct = (prev_best - best_fitness) / prev_best * 100 if prev_best > 0 else 0
