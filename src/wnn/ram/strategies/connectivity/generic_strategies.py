@@ -280,8 +280,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 		evaluate_fn: Callable[[T], float],
 		initial_genome: Optional[T] = None,
 		initial_population: Optional[List[T]] = None,
-		batch_evaluate_fn: Optional[Callable[[List[T]], List[float]]] = None,
-		accuracy_fn: Optional[Callable[[T], float]] = None,
+		batch_evaluate_fn: Optional[Callable[[List[T]], List[Tuple[float, float]]]] = None,
 		overfitting_callback: Optional[Callable[[T, float], Any]] = None,
 	) -> OptimizerResult[T]:
 		"""
@@ -291,8 +290,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 			evaluate_fn: Function to evaluate a single genome (lower is better)
 			initial_genome: Optional seed genome (used if no initial_population)
 			initial_population: Optional seed population from previous phase
-			batch_evaluate_fn: Optional batch evaluation function
-			accuracy_fn: Optional function to compute accuracy
+			batch_evaluate_fn: Optional batch evaluation function returning List[(CE, accuracy)]
 			overfitting_callback: Optional callback for overfitting detection.
 				Called every check_interval generations with (best_genome, best_fitness).
 				Returns OverfittingControl (or any object with early_stop attribute).
@@ -329,7 +327,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 				population.append((self.create_random_genome(), None, None))
 
 		# Evaluate initial population
-		population = self._evaluate_population(population, batch_evaluate_fn, evaluate_fn, accuracy_fn)
+		population = self._evaluate_population(population, batch_evaluate_fn, evaluate_fn)
 		fitness_values = [f for _, f, _ in population]
 		accuracy_values = [a for _, _, a in population]
 
@@ -351,6 +349,9 @@ class GenericGAStrategy(ABC, Generic[T]):
 		early_stopper = EarlyStoppingTracker(early_stop_config, self._log, self.name)
 		early_stopper.reset(best_fitness)
 
+		# Log config and initial best
+		self._log(f"[{self.name}] Config: pop={cfg.population_size}, gens={cfg.generations}, "
+				  f"patience={cfg.patience}, check_interval={cfg.check_interval}, min_delta={cfg.min_improvement_pct}%")
 		self._log(f"[{self.name}] Initial best: {best_fitness:.4f}")
 
 		generation = 0
@@ -387,7 +388,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 				new_population.append((child, None, None))  # Needs evaluation
 
 			population = new_population[:cfg.population_size]
-			population = self._evaluate_population(population, batch_evaluate_fn, evaluate_fn, accuracy_fn, generation, cfg.generations)
+			population = self._evaluate_population(population, batch_evaluate_fn, evaluate_fn, generation, cfg.generations)
 			fitness_values = [f for _, f, _ in population]
 			accuracy_values = [a for _, _, a in population]
 
@@ -433,13 +434,12 @@ class GenericGAStrategy(ABC, Generic[T]):
 						stop_reason=StopReason.OVERFITTING,
 						final_population=final_population,
 						initial_accuracy=initial_accuracy,
-						final_accuracy=accuracy_fn(best) if accuracy_fn else None,
+						final_accuracy=accuracy_values[gen_best_idx] if accuracy_values else None,
 					)
 
-		# Get final accuracy
-		final_accuracy = None
-		if accuracy_fn is not None:
-			final_accuracy = accuracy_fn(best)
+		# Get final accuracy from best genome's cached accuracy
+		best_idx_final = min(range(len(fitness_values)), key=lambda i: fitness_values[i])
+		final_accuracy = accuracy_values[best_idx_final] if accuracy_values else None
 
 		# Extract final population for seeding next phase (sorted by fitness)
 		final_population = [self.clone_genome(g) for g, _, _ in sorted(population, key=lambda x: x[1])]
@@ -465,13 +465,24 @@ class GenericGAStrategy(ABC, Generic[T]):
 	def _evaluate_population(
 		self,
 		population: List[Tuple[T, Optional[float], Optional[float]]],
-		batch_fn: Optional[Callable[[List[T]], List[float]]],
+		batch_fn: Optional[Callable[[List[T]], List[Tuple[float, float]]]],
 		single_fn: Callable[[T], float],
-		accuracy_fn: Optional[Callable[[T], float]] = None,
 		generation: int = 0,
 		total_generations: int = 0,
 	) -> List[Tuple[T, float, Optional[float]]]:
-		"""Evaluate individuals with None fitness, tracking accuracy."""
+		"""
+		Evaluate individuals with None fitness, tracking accuracy.
+
+		Args:
+			population: List of (genome, fitness, accuracy) tuples
+			batch_fn: Optional batch evaluation function returning List[(CE, accuracy)]
+			single_fn: Single genome evaluation function (CE only, for fallback)
+			generation: Current generation (0-indexed, for logging)
+			total_generations: Total generations (for logging)
+
+		Returns:
+			Updated population with fitness and accuracy filled in
+		"""
 		unknown_indices = [i for i, (_, f, _) in enumerate(population) if f is None]
 
 		if not unknown_indices:
@@ -479,23 +490,23 @@ class GenericGAStrategy(ABC, Generic[T]):
 
 		to_eval = [population[i][0] for i in unknown_indices]
 
-		# Batch evaluate fitness
+		# Batch evaluate - returns (CE, accuracy) tuples
 		if batch_fn is not None:
-			new_fitness = batch_fn(to_eval)
+			results = batch_fn(to_eval)
+			new_fitness = [ce for ce, _ in results]
+			new_accuracy = [acc for _, acc in results]
 		else:
+			# Fallback to single evaluation (no accuracy)
 			new_fitness = [single_fn(g) for g in to_eval]
+			new_accuracy = [None] * len(to_eval)
 
-		# Evaluate accuracy if function provided
-		new_accuracy = [None] * len(to_eval)
-		if accuracy_fn is not None:
-			new_accuracy = [accuracy_fn(g) for g in to_eval]
-
-		# Log new candidates (those that needed evaluation)
+		# Log new candidates with [GA Candidate] prefix
 		for eval_idx, (idx, fit, acc) in enumerate(zip(unknown_indices, new_fitness, new_accuracy)):
 			candidate_num = eval_idx + 1
 			total_new = len(unknown_indices)
 			acc_str = f", Acc={acc:.2%}" if acc is not None else ""
-			self._log(f"  [{candidate_num}/{total_new}] Gen {generation + 1}/{total_generations}: CE={fit:.4f}{acc_str}")
+			gen_str = f"Gen {generation + 1}/{total_generations}" if total_generations > 0 else "Init"
+			self._log(f"  [GA Candidate {candidate_num}/{total_new}] {gen_str}: CE={fit:.4f}{acc_str}")
 
 		result = list(population)
 		for idx, fit, acc in zip(unknown_indices, new_fitness, new_accuracy):
@@ -574,8 +585,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 		initial_fitness: float,
 		evaluate_fn: Callable[[T], float],
 		initial_neighbors: Optional[List[T]] = None,
-		batch_evaluate_fn: Optional[Callable[[List[T]], List[float]]] = None,
-		accuracy_fn: Optional[Callable[[T], float]] = None,
+		batch_evaluate_fn: Optional[Callable[[List[T]], List[Tuple[float, float]]]] = None,
 		overfitting_callback: Optional[Callable[[T, float], Any]] = None,
 	) -> OptimizerResult[T]:
 		"""
@@ -586,8 +596,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 			initial_fitness: Fitness of initial genome
 			evaluate_fn: Function to evaluate a single genome
 			initial_neighbors: Optional seed neighbors from previous phase
-			batch_evaluate_fn: Optional batch evaluation function
-			accuracy_fn: Optional function to compute accuracy
+			batch_evaluate_fn: Optional batch evaluation function returning List[(CE, accuracy)]
 			overfitting_callback: Optional callback for overfitting detection.
 				Called every check_interval iterations with (best_genome, best_fitness).
 				Returns OverfittingControl (or any object with early_stop attribute).
@@ -606,10 +615,8 @@ class GenericTSStrategy(ABC, Generic[T]):
 		best_fitness = initial_fitness
 		start_fitness = initial_fitness
 
-		# Get initial accuracy
-		initial_accuracy = None
-		if accuracy_fn is not None:
-			initial_accuracy = accuracy_fn(best)
+		# Track accuracy (populated from batch evaluation results)
+		best_accuracy = None  # Accuracy of best genome
 
 		# Tabu list
 		tabu_list: deque = deque(maxlen=cfg.tabu_size)
@@ -620,19 +627,18 @@ class GenericTSStrategy(ABC, Generic[T]):
 		# Seed with initial neighbors if provided
 		if initial_neighbors:
 			self._log(f"[{self.name}] Seeding from {len(initial_neighbors)} neighbors")
-			# Evaluate seed neighbors
+			# Evaluate seed neighbors - batch_evaluate_fn returns (CE, accuracy) tuples
 			if batch_evaluate_fn is not None:
-				seed_fitness = batch_evaluate_fn(initial_neighbors)
+				results = batch_evaluate_fn(initial_neighbors)
+				seed_fitness = [ce for ce, _ in results]
+				seed_accuracy = [acc for _, acc in results]
 			else:
 				seed_fitness = [evaluate_fn(g) for g in initial_neighbors]
-			# Evaluate accuracy for seeds if function provided
-			seed_accuracy = [None] * len(initial_neighbors)
-			if accuracy_fn is not None:
-				seed_accuracy = [accuracy_fn(g) for g in initial_neighbors]
+				seed_accuracy = [None] * len(initial_neighbors)
 			# Log seeded neighbors with accuracy
 			for i, (g, f, a) in enumerate(zip(initial_neighbors, seed_fitness, seed_accuracy)):
 				acc_str = f", Acc={a:.2%}" if a is not None else ""
-				self._log(f"  [Seed {i + 1}/{len(initial_neighbors)}] CE={f:.4f}{acc_str}")
+				self._log(f"  [TS Seed {i + 1}/{len(initial_neighbors)}] CE={f:.4f}{acc_str}")
 				best_neighbors.append((self.clone_genome(g), f))
 			# Seed summary: best, seed_best, avg
 			seed_best = min(seed_fitness)
@@ -659,6 +665,9 @@ class GenericTSStrategy(ABC, Generic[T]):
 		early_stopper = EarlyStoppingTracker(early_stop_config, self._log, self.name)
 		early_stopper.reset(best_fitness)
 
+		# Log config at startup
+		self._log(f"[{self.name}] Config: neighbors={cfg.neighbors_per_iter}, iters={cfg.iterations}, "
+				  f"patience={cfg.patience}, check_interval={cfg.check_interval}, min_delta={cfg.min_improvement_pct}%")
 		self._log(f"[{self.name}] Initial: {start_fitness:.4f}")
 
 		iteration = 0
@@ -673,17 +682,15 @@ class GenericTSStrategy(ABC, Generic[T]):
 			if not neighbor_candidates:
 				continue
 
-			# Batch evaluate fitness
+			# Batch evaluate fitness - batch_evaluate_fn returns (CE, accuracy) tuples
 			if batch_evaluate_fn is not None:
 				to_eval = [n for n, _ in neighbor_candidates]
-				fitness_values = batch_evaluate_fn(to_eval)
+				results = batch_evaluate_fn(to_eval)
+				fitness_values = [ce for ce, _ in results]
+				accuracy_values = [acc for _, acc in results]
 			else:
 				fitness_values = [evaluate_fn(n) for n, _ in neighbor_candidates]
-
-			# Evaluate accuracy if function provided
-			accuracy_values = [None] * len(neighbor_candidates)
-			if accuracy_fn is not None:
-				accuracy_values = [accuracy_fn(n) for n, _ in neighbor_candidates]
+				accuracy_values = [None] * len(neighbor_candidates)
 
 			# Build neighbors list with fitness and accuracy
 			neighbors = [(n, f, m, a) for (n, m), f, a in zip(neighbor_candidates, fitness_values, accuracy_values)]
@@ -691,7 +698,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 			# Log each neighbor evaluation with accuracy
 			for i, (_, f, _, a) in enumerate(neighbors):
 				acc_str = f", Acc={a:.2%}" if a is not None else ""
-				self._log(f"  [{i + 1}/{len(neighbors)}] Iter {iteration + 1}/{cfg.iterations}: CE={f:.4f}{acc_str}")
+				self._log(f"  [TS Neighbor {i + 1}/{len(neighbors)}] Iter {iteration + 1}/{cfg.iterations}: CE={f:.4f}{acc_str}")
 
 			# Select best neighbor (sort by fitness)
 			neighbors.sort(key=lambda x: x[1])
@@ -705,10 +712,11 @@ class GenericTSStrategy(ABC, Generic[T]):
 			if best_move is not None:
 				tabu_list.append(best_move)
 
-			# Update global best
+			# Update global best (and accuracy)
 			if current_fitness < best_fitness:
 				best = self.clone_genome(current)
 				best_fitness = current_fitness
+				best_accuracy = best_neighbor_acc
 
 			# Track best neighbors for seeding
 			for n, f, _, _ in neighbors[:5]:  # Keep top 5 from each iteration
@@ -748,14 +756,9 @@ class GenericTSStrategy(ABC, Generic[T]):
 						early_stopped=True,
 						stop_reason=StopReason.OVERFITTING,
 						final_population=final_neighbors,
-						initial_accuracy=initial_accuracy,
-						final_accuracy=accuracy_fn(best) if accuracy_fn else None,
+						initial_accuracy=None,  # Not available without extra eval
+						final_accuracy=best_accuracy,
 					)
-
-		# Get final accuracy
-		final_accuracy = None
-		if accuracy_fn is not None:
-			final_accuracy = accuracy_fn(best)
 
 		# Extract final neighbors for seeding
 		final_neighbors = [self.clone_genome(g) for g, _ in best_neighbors]
@@ -774,6 +777,6 @@ class GenericTSStrategy(ABC, Generic[T]):
 			early_stopped=early_stopper.patience_exhausted,
 			stop_reason=StopReason.CONVERGENCE if early_stopper.patience_exhausted else None,
 			final_population=final_neighbors,  # For seeding next phase
-			initial_accuracy=initial_accuracy,
-			final_accuracy=final_accuracy,
+			initial_accuracy=None,  # Not available without extra eval
+			final_accuracy=best_accuracy,
 		)

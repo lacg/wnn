@@ -154,13 +154,13 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		evaluate_fn: Callable[['ClusterGenome'], float],
 		initial_genome: Optional['ClusterGenome'] = None,
 		initial_population: Optional[List['ClusterGenome']] = None,
-		batch_evaluate_fn: Optional[Callable[[List['ClusterGenome']], List[float]]] = None,
-		accuracy_fn: Optional[Callable[['ClusterGenome'], float]] = None,
+		batch_evaluate_fn: Optional[Callable[[List['ClusterGenome']], List[Tuple[float, float]]]] = None,
 	) -> OptimizerResult['ClusterGenome']:
 		"""
 		Run GA with Rust batch evaluation and ProgressTracker logging.
 
 		If batch_evaluator was provided at init, uses it for parallel evaluation.
+		batch_evaluate_fn should return List[(CE, accuracy)] tuples.
 		"""
 		# Use Rust batch evaluator if available
 		if self._batch_evaluator is not None and batch_evaluate_fn is None:
@@ -181,7 +181,6 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			initial_genome=initial_genome,
 			initial_population=initial_population,
 			batch_evaluate_fn=batch_evaluate_fn,
-			accuracy_fn=accuracy_fn,
 		)
 
 
@@ -270,13 +269,13 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		initial_fitness: float,
 		evaluate_fn: Callable[['ClusterGenome'], float],
 		initial_neighbors: Optional[List['ClusterGenome']] = None,
-		batch_evaluate_fn: Optional[Callable[[List['ClusterGenome']], List[float]]] = None,
-		accuracy_fn: Optional[Callable[['ClusterGenome'], float]] = None,
+		batch_evaluate_fn: Optional[Callable[[List['ClusterGenome']], List[Tuple[float, float]]]] = None,
 	) -> OptimizerResult['ClusterGenome']:
 		"""
 		Run TS with Rust batch evaluation and ProgressTracker logging.
 
 		If batch_evaluator was provided at init, uses it for parallel evaluation.
+		batch_evaluate_fn should return List[(CE, accuracy)] tuples.
 		"""
 		# Use Rust batch evaluator if available
 		if self._batch_evaluator is not None and batch_evaluate_fn is None:
@@ -298,5 +297,4 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 			evaluate_fn=evaluate_fn,
 			initial_neighbors=initial_neighbors,
 			batch_evaluate_fn=batch_evaluate_fn,
-			accuracy_fn=accuracy_fn,
 		)

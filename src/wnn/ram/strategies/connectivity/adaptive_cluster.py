@@ -654,7 +654,7 @@ class RustParallelEvaluator:
 		batch_size: int = 1,  # Sequential genomes with inner parallelism
 		generation: Optional[int] = None,  # Current generation for logging
 		total_generations: Optional[int] = None,  # Total generations for logging
-	) -> List[float]:
+	) -> List[Tuple[float, float]]:
 		"""
 		Evaluate multiple genomes in parallel using Rust/rayon.
 
@@ -666,7 +666,7 @@ class RustParallelEvaluator:
 			total_generations: Total number of generations for logging context
 
 		Returns:
-			List of cross-entropy values for each genome
+			List of (cross-entropy, accuracy) tuples for each genome
 		"""
 		import ram_accelerator
 		import time
@@ -720,15 +720,14 @@ class RustParallelEvaluator:
 				self.config.empty_value,
 			)
 
-			# Extract fitness (CE) and accuracy from results
-			batch_fitness = [ce for ce, _ in batch_results]
-			batch_accuracy = [acc for _, acc in batch_results]
-			all_fitness.extend(batch_fitness)
+			# batch_results is already List[(CE, accuracy)]
+			all_fitness.extend(batch_results)
 
 			elapsed = time.time() - start_time
 			if batch_size == 1:
 				# Per-genome timing with accuracy
-				log(f"{gen_prefix} Genome {batch_end}/{total_genomes}: CE={batch_fitness[0]:.4f}, Acc={batch_accuracy[0]:.2%} in {elapsed:.1f}s")
+				ce, acc = batch_results[0]
+				log(f"{gen_prefix} Genome {batch_end}/{total_genomes}: CE={ce:.4f}, Acc={acc:.2%} in {elapsed:.1f}s")
 			else:
 				log(f"{gen_prefix} Batch {batch_start//batch_size + 1}/{(total_genomes + batch_size - 1)//batch_size}: "
 					f"{batch_end}/{total_genomes} genomes in {elapsed:.1f}s")
@@ -737,33 +736,12 @@ class RustParallelEvaluator:
 
 	def evaluate_single(self, genome: ClusterGenome) -> float:
 		"""Evaluate a single genome, returning CE only."""
-		return self.evaluate_batch([genome])[0]
+		ce, _ = self.evaluate_batch([genome])[0]
+		return ce
 
 	def evaluate_single_with_accuracy(self, genome: ClusterGenome) -> Tuple[float, float]:
 		"""Evaluate a single genome, returning (CE, accuracy)."""
-		import ram_accelerator
-
-		self._prepare_data()
-		genomes_bits_flat = genome.bits_per_cluster
-		genomes_neurons_flat = genome.neurons_per_cluster
-
-		results = ram_accelerator.evaluate_genomes_parallel(
-			genomes_bits_flat,
-			genomes_neurons_flat,
-			1,  # num_genomes
-			self.config.vocab_size,
-			self._train_data['input_bits'],
-			self._train_data['targets'],
-			self._train_data['negatives'],
-			self._train_data['num_examples'],
-			self._train_data['num_negatives'],
-			self._eval_data['input_bits'],
-			self._eval_data['targets'],
-			self._eval_data['num_examples'],
-			self._total_input_bits,
-			self.config.empty_value,
-		)
-		return results[0]  # (CE, accuracy)
+		return self.evaluate_batch([genome])[0]
 
 
 # =============================================================================
@@ -1276,15 +1254,10 @@ def run_architecture_tabu_search(
 		batch_evaluator=batch_evaluator,
 	)
 
-	# Create batch evaluation function using Rust evaluator
+	# Create batch evaluation function using Rust evaluator (returns List[(CE, accuracy)])
 	batch_evaluate_fn = None
 	if batch_evaluator is not None:
 		batch_evaluate_fn = lambda genomes: batch_evaluator.evaluate_batch(genomes, logger=log)
-
-	# Create accuracy evaluation function
-	accuracy_fn = None
-	if batch_evaluator is not None:
-		accuracy_fn = lambda genome: batch_evaluator.evaluate_single_with_accuracy(genome)[1]
 
 	# Run optimization
 	result = strategy.optimize(
@@ -1293,7 +1266,6 @@ def run_architecture_tabu_search(
 		evaluate_fn=evaluate_fn,
 		initial_neighbors=initial_neighbors,
 		batch_evaluate_fn=batch_evaluate_fn,
-		accuracy_fn=accuracy_fn,
 	)
 
 	# Log results
@@ -1452,15 +1424,10 @@ def run_architecture_search(
 		batch_evaluator=batch_evaluator,
 	)
 
-	# Create batch evaluation function using Rust evaluator
+	# Create batch evaluation function using Rust evaluator (returns List[(CE, accuracy)])
 	batch_evaluate_fn = None
 	if batch_evaluator is not None:
 		batch_evaluate_fn = lambda genomes: batch_evaluator.evaluate_batch(genomes, logger=log)
-
-	# Create accuracy evaluation function
-	accuracy_fn = None
-	if batch_evaluator is not None:
-		accuracy_fn = lambda genome: batch_evaluator.evaluate_single_with_accuracy(genome)[1]
 
 	# Run optimization
 	log()
@@ -1468,7 +1435,6 @@ def run_architecture_search(
 		evaluate_fn=evaluate_fn,
 		initial_population=initial_population,
 		batch_evaluate_fn=batch_evaluate_fn,
-		accuracy_fn=accuracy_fn,
 	)
 
 	# Log final results
@@ -1620,15 +1586,10 @@ def run_connectivity_optimization(
 	except Exception as e:
 		log(f"[Phase2] Using Python evaluator ({e})")
 
-	# Create batch evaluation function using Rust evaluator
+	# Create batch evaluation function using Rust evaluator (returns List[(CE, accuracy)])
 	batch_evaluate_fn = None
 	if batch_evaluator is not None:
 		batch_evaluate_fn = lambda genomes: batch_evaluator.evaluate_batch(genomes, logger=log)
-
-	# Create accuracy evaluation function
-	accuracy_fn = None
-	if batch_evaluator is not None:
-		accuracy_fn = lambda genome: batch_evaluator.evaluate_single_with_accuracy(genome)[1]
 
 	# =========================================================================
 	# Phase 2a: GA
@@ -1662,7 +1623,6 @@ def run_connectivity_optimization(
 		evaluate_fn=evaluate_fn,
 		initial_population=initial_population,
 		batch_evaluate_fn=batch_evaluate_fn,
-		accuracy_fn=accuracy_fn,
 	)
 
 	log()
@@ -1702,7 +1662,6 @@ def run_connectivity_optimization(
 		evaluate_fn=evaluate_fn,
 		initial_neighbors=ga_result.final_population,
 		batch_evaluate_fn=batch_evaluate_fn,
-		accuracy_fn=accuracy_fn,
 	)
 
 	log()
