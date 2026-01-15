@@ -550,7 +550,15 @@ impl GroupMemory {
 ///   empty_value: Value for EMPTY cells (0.0 recommended)
 ///
 /// Returns: [num_genomes] cross-entropy values (lower is better)
-/// Evaluate multiple genomes in parallel, returning (CE, accuracy) for each.
+/// Evaluate multiple genomes SEQUENTIALLY, returning (CE, accuracy) for each.
+///
+/// Genomes are evaluated one at a time to:
+/// 1. Prevent memory explosion (only 1 genome's memory allocated)
+/// 2. Allow full CPU utilization for each genome's training/eval (16 cores)
+/// 3. Avoid thread pool contention from nested parallelism
+///
+/// Each genome's training (200K examples) and evaluation (50K examples)
+/// use full rayon parallelism internally.
 ///
 /// Returns Vec of (cross_entropy, accuracy) tuples - one per genome.
 pub fn evaluate_genomes_parallel(
@@ -572,8 +580,8 @@ pub fn evaluate_genomes_parallel(
     use rand::prelude::*;
     use rand::SeedableRng;
 
-    // Evaluate each genome in parallel
-    (0..num_genomes).into_par_iter().map(|genome_idx| {
+    // Sequential genome evaluation - each genome gets full 16-core parallelism
+    (0..num_genomes).map(|genome_idx| {
         // Extract this genome's configuration
         let genome_offset = genome_idx * num_clusters;
         let bits_per_cluster: Vec<usize> = genomes_bits_flat[genome_offset..genome_offset + num_clusters].to_vec();

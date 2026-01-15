@@ -651,17 +651,21 @@ class RustParallelEvaluator:
 		self,
 		genomes: List[ClusterGenome],
 		logger: Optional[Callable[[str], None]] = None,
-		batch_size: int = 1,  # Sequential genomes with inner parallelism
+		batch_size: int = 1,  # 1 = per-genome progress logging (recommended)
 		generation: Optional[int] = None,  # Current generation for logging
 		total_generations: Optional[int] = None,  # Total generations for logging
 	) -> List[Tuple[float, float]]:
 		"""
-		Evaluate multiple genomes in parallel using Rust/rayon.
+		Evaluate multiple genomes using Rust/rayon.
+
+		Rust evaluates genomes SEQUENTIALLY (memory-safe) while each genome's
+		training/eval uses full CPU parallelism. This avoids the memory explosion
+		that occurred with parallel genome evaluation.
 
 		Args:
 			genomes: List of genomes to evaluate
 			logger: Optional logging function
-			batch_size: Number of genomes to evaluate in parallel (all 30 - training data shared)
+			batch_size: Genomes per Rust call (1 = per-genome logging, >1 = batch logging)
 			generation: Current generation number for logging (None = initial population)
 			total_generations: Total number of generations for logging context
 
