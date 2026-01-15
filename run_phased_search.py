@@ -20,6 +20,7 @@ from typing import Optional
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
+from wnn.logger import Logger
 from wnn.ram.strategies.factory import OptimizerStrategyFactory, OptimizerStrategyType
 from wnn.ram.strategies.connectivity.adaptive_cluster import (
 	ClusterGenome,
@@ -28,10 +29,16 @@ from wnn.ram.strategies.connectivity.adaptive_cluster import (
 )
 
 
+# Global logger instance
+logger: Optional[Logger] = None
+
+
 def log(msg: str):
-	"""Log with timestamp."""
-	timestamp = datetime.now().strftime("%H:%M:%S")
-	print(f"{timestamp} | {msg}")
+	"""Log wrapper that uses the global logger."""
+	if logger:
+		logger(msg)
+	else:
+		print(msg)
 
 
 def run_phase(
@@ -101,6 +108,8 @@ def run_phase(
 
 
 def main():
+	global logger
+
 	parser = argparse.ArgumentParser(description="Phased Architecture Search")
 	parser.add_argument("--train-tokens", type=int, default=200000, help="Training tokens")
 	parser.add_argument("--eval-tokens", type=int, default=50000, help="Eval tokens")
@@ -113,9 +122,11 @@ def main():
 	parser.add_argument("--output", type=str, default=None, help="Output JSON file")
 	args = parser.parse_args()
 
-	log("=" * 60)
-	log("  Phased Architecture Search")
-	log("=" * 60)
+	# Setup logger using the project's Logger class
+	logger = Logger(name="phased_search")
+
+	logger.header("Phased Architecture Search")
+	log(f"  Log file: {logger.log_file}")
 	log(f"  Train tokens: {args.train_tokens:,}")
 	log(f"  Eval tokens: {args.eval_tokens:,}")
 	log(f"  Context: {args.context}")

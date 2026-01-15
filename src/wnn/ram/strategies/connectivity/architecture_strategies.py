@@ -121,11 +121,20 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		The optimizer is phase-agnostic. Callers control what gets optimized
 		by setting optimize_bits, optimize_neurons, optimize_connections.
 
+		Mutation delta ranges are 10% of (min + max):
+		- Neurons: 10% × (min_neurons + max_neurons)
+		- Bits: 10% × (min_bits + max_bits)
+		- Connections: 10% × bits_per_token (stays close to token boundaries)
+
 		Also adjusts connections when architecture changes.
 		"""
 		self._ensure_rng()
 		cfg = self._arch_config
 		mutant = genome.clone()
+
+		# Calculate delta ranges: 10% of (min + max), minimum 1
+		bits_delta_max = max(1, round(0.1 * (cfg.min_bits + cfg.max_bits)))
+		neurons_delta_max = max(1, round(0.1 * (cfg.min_neurons + cfg.max_neurons)))
 
 		# Track old architecture for connection adjustment
 		old_bits = genome.bits_per_cluster.copy()
@@ -143,12 +152,14 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		for i in range(cfg.num_clusters):
 			if self._rng.random() < mutation_rate:
 				if cfg.optimize_bits:
-					delta = self._rng.choice([-2, -1, 1, 2])
+					# Random delta in [-bits_delta_max, +bits_delta_max]
+					delta = self._rng.randint(-bits_delta_max, bits_delta_max)
 					new_bits = mutant.bits_per_cluster[i] + delta
 					mutant.bits_per_cluster[i] = max(cfg.min_bits, min(cfg.max_bits, new_bits))
 
 				if cfg.optimize_neurons:
-					delta = self._rng.choice([-2, -1, 1, 2])
+					# Random delta in [-neurons_delta_max, +neurons_delta_max]
+					delta = self._rng.randint(-neurons_delta_max, neurons_delta_max)
 					new_neurons = mutant.neurons_per_cluster[i] + delta
 					mutant.neurons_per_cluster[i] = max(cfg.min_neurons, min(cfg.max_neurons, new_neurons))
 
@@ -166,11 +177,21 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		total_input_bits: int,
 		mutation_rate: float,
 	) -> List[int]:
-		"""Mutate connections without changing architecture."""
+		"""
+		Mutate connections without changing architecture.
+
+		Delta range is 10% of bits_per_token (stays close to token boundaries).
+		Assumes context × bits_per_token = total_input_bits.
+		"""
+		# Estimate bits_per_token: typically 16 for GPT-2 vocab
+		# Use sqrt heuristic: bits_per_token ≈ log2(vocab) ≈ 16
+		bits_per_token = 16  # Could be passed in, but 16 is reasonable default
+		conn_delta_max = max(1, round(0.1 * bits_per_token))  # 10% of 16 = 2
+
 		result = connections.copy()
 		for i in range(len(result)):
 			if self._rng.random() < mutation_rate:
-				delta = self._rng.choice([-2, -1, 1, 2])
+				delta = self._rng.randint(-conn_delta_max, conn_delta_max)
 				result[i] = max(0, min(total_input_bits - 1, result[i] + delta))
 		return result
 
@@ -432,150 +453,144 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 
 	def mutate_genome(self, genome: 'ClusterGenome', mutation_rate: float) -> Tuple['ClusterGenome', Any]:
 		"""
-		Generate a neighbor by modifying one cluster's configuration.
+		Generate a neighbor by mutating multiple clusters based on mutation_rate.
 
 		The optimizer is phase-agnostic. Callers control what gets optimized
 		by setting optimize_bits, optimize_neurons, optimize_connections.
 
-		Returns (new_genome, move_info) where move_info = (cluster_idx, field, old_val, new_val)
+		Mutation delta ranges are 10% of (min + max):
+		- Neurons: 10% × (min_neurons + max_neurons)
+		- Bits: 10% × (min_bits + max_bits)
+		- Connections: 10% × bits_per_token
+
+		Returns (new_genome, move_info) where move_info is a tuple of mutated cluster indices
+		for tabu tracking.
 		"""
 		self._ensure_rng()
 		cfg = self._arch_config
 		mutant = genome.clone()
 
-		# If only optimizing connections, modify a single connection
+		# Calculate delta ranges: 10% of (min + max), minimum 1
+		bits_delta_max = max(1, round(0.1 * (cfg.min_bits + cfg.max_bits)))
+		neurons_delta_max = max(1, round(0.1 * (cfg.min_neurons + cfg.max_neurons)))
+		bits_per_token = 16  # Reasonable default for GPT-2 vocab
+		conn_delta_max = max(1, round(0.1 * bits_per_token))
+
+		# If only optimizing connections, mutate connections based on mutation_rate
 		if cfg.optimize_connections and not cfg.optimize_bits and not cfg.optimize_neurons:
 			if genome.connections is not None and cfg.total_input_bits is not None:
-				conn_idx = self._rng.randint(0, len(genome.connections) - 1)
-				old_val = genome.connections[conn_idx]
-				delta = self._rng.choice([-2, -1, 1, 2])
-				new_val = max(0, min(cfg.total_input_bits - 1, old_val + delta))
-				mutant.connections[conn_idx] = new_val
-				move = (conn_idx, 'connection', old_val, new_val)
+				mutated_indices = []
+				for i in range(len(genome.connections)):
+					if self._rng.random() < mutation_rate:
+						old_val = mutant.connections[i]
+						delta = self._rng.randint(-conn_delta_max, conn_delta_max)
+						new_val = max(0, min(cfg.total_input_bits - 1, old_val + delta))
+						mutant.connections[i] = new_val
+						mutated_indices.append(i)
+				move = tuple(mutated_indices) if mutated_indices else None
 			else:
 				move = None
 			return mutant, move
 
-		# Pick a random cluster to modify
-		cluster_idx = self._rng.randint(0, cfg.num_clusters - 1)
+		# Track old architecture for connection adjustment
+		old_bits = genome.bits_per_cluster.copy()
+		old_neurons = genome.neurons_per_cluster.copy()
 
-		# Track old values for connection adjustment
-		old_bits = genome.bits_per_cluster[cluster_idx]
-		old_neurons = genome.neurons_per_cluster[cluster_idx]
+		# Mutate multiple clusters based on mutation_rate
+		mutated_clusters = []
+		for i in range(cfg.num_clusters):
+			if self._rng.random() < mutation_rate:
+				mutated_clusters.append(i)
 
-		# Determine which field to modify based on config
-		can_modify_bits = cfg.optimize_bits
-		can_modify_neurons = cfg.optimize_neurons
+				if cfg.optimize_bits:
+					delta = self._rng.randint(-bits_delta_max, bits_delta_max)
+					new_bits = mutant.bits_per_cluster[i] + delta
+					mutant.bits_per_cluster[i] = max(cfg.min_bits, min(cfg.max_bits, new_bits))
 
-		if can_modify_bits and can_modify_neurons:
-			# Both enabled: 50% chance each
-			modify_bits = self._rng.random() < 0.5
-		elif can_modify_bits:
-			modify_bits = True
-		elif can_modify_neurons:
-			modify_bits = False
-		else:
-			# Nothing to modify (shouldn't happen)
-			return mutant, None
+				if cfg.optimize_neurons:
+					delta = self._rng.randint(-neurons_delta_max, neurons_delta_max)
+					new_neurons = mutant.neurons_per_cluster[i] + delta
+					mutant.neurons_per_cluster[i] = max(cfg.min_neurons, min(cfg.max_neurons, new_neurons))
 
-		if modify_bits:
-			old_val = mutant.bits_per_cluster[cluster_idx]
-			delta = self._rng.choice([-2, -1, 1, 2])
-			new_val = max(cfg.min_bits, min(cfg.max_bits, old_val + delta))
-			mutant.bits_per_cluster[cluster_idx] = new_val
-			move = (cluster_idx, 'bits', old_val, new_val)
-		else:
-			old_val = mutant.neurons_per_cluster[cluster_idx]
-			delta = self._rng.choice([-2, -1, 1, 2])
-			new_val = max(cfg.min_neurons, min(cfg.max_neurons, old_val + delta))
-			mutant.neurons_per_cluster[cluster_idx] = new_val
-			move = (cluster_idx, 'neurons', old_val, new_val)
+		# Move is tuple of mutated cluster indices (for tabu tracking)
+		move = tuple(mutated_clusters) if mutated_clusters else None
 
-		# Adjust connections if they exist
+		# Adjust connections if they exist and architecture changed
 		if genome.connections is not None and cfg.total_input_bits is not None:
-			mutant.connections = self._adjust_cluster_connections(
-				genome, mutant, cluster_idx, old_bits, old_neurons, cfg.total_input_bits
+			mutant.connections = self._adjust_connections_for_mutation_ts(
+				genome, mutant, old_bits, old_neurons, cfg.total_input_bits
 			)
 
 		return mutant, move
 
-	def _adjust_cluster_connections(
+	def _adjust_connections_for_mutation_ts(
 		self,
 		old_genome: 'ClusterGenome',
 		new_genome: 'ClusterGenome',
-		cluster_idx: int,
-		old_bits: int,
-		old_neurons: int,
+		old_bits: List[int],
+		old_neurons: List[int],
 		total_input_bits: int,
 	) -> List[int]:
-		"""Adjust connections for a single cluster that changed."""
-		# Copy all connections, then adjust the changed cluster
-		result = old_genome.connections.copy()
+		"""Adjust connections when architecture changes during TS mutation."""
+		result = []
+		old_idx = 0
 
-		n_neurons = new_genome.neurons_per_cluster[cluster_idx]
-		n_bits = new_genome.bits_per_cluster[cluster_idx]
+		for cluster_idx in range(len(new_genome.bits_per_cluster)):
+			o_neurons = old_neurons[cluster_idx]
+			o_bits = old_bits[cluster_idx]
+			n_neurons = new_genome.neurons_per_cluster[cluster_idx]
+			n_bits = new_genome.bits_per_cluster[cluster_idx]
 
-		# Calculate offset into connections for this cluster
-		conn_offset = 0
-		for i in range(cluster_idx):
-			conn_offset += old_genome.neurons_per_cluster[i] * old_genome.bits_per_cluster[i]
-
-		old_conn_size = old_neurons * old_bits
-		new_conn_size = n_neurons * n_bits
-
-		# Build new connections for this cluster
-		new_cluster_conns = []
-		old_cluster_conns = result[conn_offset:conn_offset + old_conn_size]
-
-		for neuron_idx in range(n_neurons):
-			if neuron_idx < old_neurons:
-				# Existing neuron - copy and adjust
-				for bit_idx in range(n_bits):
-					if bit_idx < old_bits:
-						# Copy existing connection with small mutation
-						old_conn = old_cluster_conns[neuron_idx * old_bits + bit_idx]
-						if self._rng.random() < 0.1:
-							delta = self._rng.choice([-2, -1, 1, 2])
-							new_conn = max(0, min(total_input_bits - 1, old_conn + delta))
-						else:
-							new_conn = old_conn
-						new_cluster_conns.append(new_conn)
-					else:
-						# New bit position
-						new_cluster_conns.append(self._rng.randint(0, total_input_bits - 1))
-			else:
-				# New neuron - copy from random existing with mutation
-				if old_neurons > 0:
-					template = self._rng.randint(0, old_neurons - 1)
+			for neuron_idx in range(n_neurons):
+				if neuron_idx < o_neurons:
+					# Existing neuron - copy connections
 					for bit_idx in range(n_bits):
-						if bit_idx < old_bits:
-							old_conn = old_cluster_conns[template * old_bits + bit_idx]
-							delta = self._rng.choice([-2, -1, 1, 2])
-							new_conn = max(0, min(total_input_bits - 1, old_conn + delta))
-							new_cluster_conns.append(new_conn)
+						if bit_idx < o_bits:
+							conn_idx = old_idx + neuron_idx * o_bits + bit_idx
+							result.append(old_genome.connections[conn_idx])
 						else:
-							new_cluster_conns.append(self._rng.randint(0, total_input_bits - 1))
+							# New bit position - add random connection
+							result.append(self._rng.randint(0, total_input_bits - 1))
 				else:
-					for _ in range(n_bits):
-						new_cluster_conns.append(self._rng.randint(0, total_input_bits - 1))
+					# New neuron - copy from random existing with slight mutation
+					if o_neurons > 0:
+						template_neuron = self._rng.randint(0, o_neurons - 1)
+						for bit_idx in range(n_bits):
+							if bit_idx < o_bits:
+								conn_idx = old_idx + template_neuron * o_bits + bit_idx
+								old_conn = old_genome.connections[conn_idx]
+								delta = self._rng.choice([-2, -1, 1, 2])
+								new_conn = max(0, min(total_input_bits - 1, old_conn + delta))
+								result.append(new_conn)
+							else:
+								result.append(self._rng.randint(0, total_input_bits - 1))
+					else:
+						for _ in range(n_bits):
+							result.append(self._rng.randint(0, total_input_bits - 1))
 
-		# Replace the cluster's connections in the result
-		result = result[:conn_offset] + new_cluster_conns + result[conn_offset + old_conn_size:]
+			old_idx += o_neurons * o_bits
+
 		return result
 
 	def is_tabu_move(self, move: Any, tabu_list: List[Any]) -> bool:
-		"""Check if move reverses a recent tabu move."""
-		if move is None:
+		"""
+		Check if move overlaps significantly with recent tabu moves.
+
+		Move is now a tuple of mutated cluster indices. A move is tabu if
+		it shares more than 50% of clusters with a recent tabu move.
+		"""
+		if move is None or not move:
 			return False
 
-		cluster_idx, field, old_val, new_val = move
-
-		# A move is tabu if it reverses a previous move
+		move_set = set(move)
 		for tabu_move in tabu_list:
-			t_cluster, t_field, t_old, t_new = tabu_move
-			if cluster_idx == t_cluster and field == t_field:
-				if new_val == t_old and old_val == t_new:
-					return True
+			if tabu_move is None:
+				continue
+			tabu_set = set(tabu_move)
+			overlap = len(move_set & tabu_set)
+			# Tabu if >50% overlap with any recent move
+			if overlap > len(move_set) * 0.5:
+				return True
 
 		return False
 
