@@ -82,6 +82,7 @@ class TieredRAMClusterLayer(RAMComponent):
 		tiers: list[tuple[Optional[int], int, int]],
 		cluster_order: Optional[list[int]] = None,
 		rng: Optional[int] = None,
+		empty_value: float = 0.0,
 	):
 		"""
 		Initialize TieredRAMClusterLayer.
@@ -103,12 +104,14 @@ class TieredRAMClusterLayer(RAMComponent):
 				num_clusters=50257,
 				tiers=[(100, 11, 8), (400, 7, 8), (None, 5, 8)],
 				cluster_order=sorted_token_ids_by_frequency,
+				empty_value=0.0,  # Untrained cells abstain (recommended)
 			)
 		"""
 		super().__init__()
 
 		self.num_clusters = num_clusters
 		self.total_input_bits = total_input_bits
+		self.empty_value = empty_value
 
 		# Build cluster order mapping (logical → physical)
 		# cluster_order[logical_idx] = physical_cluster_idx
@@ -295,10 +298,10 @@ class TieredRAMClusterLayer(RAMComponent):
 			# Reshape to clusters: [batch, tier_clusters, neurons_per_cluster]
 			clustered = raw.view(batch_size, tc.cluster_count, tc.neurons_per_cluster)
 
-			# Compute probabilities: (TRUE + 0.5 × EMPTY) / neurons_per_cluster
+			# Compute probabilities: (TRUE + empty_value × EMPTY) / neurons_per_cluster
 			count_true = (clustered == MemoryVal.TRUE).sum(dim=-1)
 			count_empty = (clustered == MemoryVal.EMPTY).sum(dim=-1)
-			tier_probs = (count_true.float() + 0.5 * count_empty.float()) / tc.neurons_per_cluster
+			tier_probs = (count_true.float() + self.empty_value * count_empty.float()) / tc.neurons_per_cluster
 
 			# Scatter to output using precomputed indices
 			scatter_idx = self._scatter_indices[tier_idx].to(device)

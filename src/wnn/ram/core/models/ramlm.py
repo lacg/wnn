@@ -93,6 +93,8 @@ class RAMLM(RAMComponent):
 		# Tiered architecture (mutually exclusive with neurons_per_cluster/bits_per_neuron)
 		tiers: Optional[list[tuple[Optional[int], int, int]]] = None,
 		cluster_order: Optional[list[int]] = None,
+		# EMPTY cell value (0.0 = abstain, 0.5 = uncertain)
+		empty_value: float = 0.0,
 	):
 		"""
 		Initialize RAMLM.
@@ -131,6 +133,7 @@ class RAMLM(RAMComponent):
 		self._tiers = tiers
 		self._cluster_order = cluster_order
 		self._is_tiered = tiers is not None
+		self._empty_value = empty_value
 
 		# Create the appropriate layer type
 		if tiers is not None:
@@ -141,6 +144,7 @@ class RAMLM(RAMComponent):
 				tiers=tiers,
 				cluster_order=cluster_order,
 				rng=rng,
+				empty_value=empty_value,
 			)
 		else:
 			# Uniform architecture
