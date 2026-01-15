@@ -40,7 +40,7 @@ class TabuSearchConfig:
 	neighbors_per_iter: int = 30
 	tabu_size: int = 5
 	mutation_rate: float = 0.001
-	early_stop_patience: int = 1  # Stop if no improvement for 1 check (5 iterations)
+	early_stop_patience: int = 5  # Stop if no improvement for 5 checks (25 iterations)
 	early_stop_threshold_pct: float = 0.02  # Minimum PPL % improvement required (0.02 = 0.02%)
 
 

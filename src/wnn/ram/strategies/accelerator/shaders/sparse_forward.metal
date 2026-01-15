@@ -30,6 +30,7 @@ struct SparseParams {
     uint bits_per_neuron;
     uint neurons_per_cluster;
     uint num_clusters;
+    float empty_value;  // Value for EMPTY cells (0.0 = abstain, 0.5 = uncertain)
 };
 
 // Compute memory address for a neuron given input bits
@@ -130,7 +131,7 @@ kernel void sparse_forward_pass(
         }
     }
 
-    float prob = (float(count_true) + 0.5f * float(count_empty)) / float(params.neurons_per_cluster);
+    float prob = (float(count_true) + params.empty_value * float(count_empty)) / float(params.neurons_per_cluster);
     uint output_idx = example_idx * params.num_clusters + cluster_idx;
     probs_out[output_idx] = prob;
 }
@@ -180,7 +181,7 @@ kernel void sparse_forward_pass_per_example(
             }
         }
 
-        example_probs[cluster_idx] = (float(count_true) + 0.5f * float(count_empty)) / float(params.neurons_per_cluster);
+        example_probs[cluster_idx] = (float(count_true) + params.empty_value * float(count_empty)) / float(params.neurons_per_cluster);
     }
 }
 
@@ -203,6 +204,7 @@ struct TieredParams {
     uint total_input_bits;
     uint num_clusters;
     uint num_tiers;
+    float empty_value;  // Value for EMPTY cells (0.0 = abstain, 0.5 = uncertain)
 };
 
 kernel void tiered_sparse_forward_pass(
@@ -261,7 +263,7 @@ kernel void tiered_sparse_forward_pass(
         }
     }
 
-    float prob = (float(count_true) + 0.5f * float(count_empty)) / float(tier.neurons_per_cluster);
+    float prob = (float(count_true) + params.empty_value * float(count_empty)) / float(tier.neurons_per_cluster);
     uint output_idx = example_idx * params.num_clusters + cluster_idx;
     probs_out[output_idx] = prob;
 }

@@ -83,7 +83,7 @@ class OptimizationConfig:
 	sa_mutation_rate: float = 0.01
 
 	# Common parameters
-	early_stop_patience: int = 3
+	early_stop_patience: int = 5  # Stop if no improvement for 5 checks
 	early_stop_threshold_pct: float = 0.02
 	seed: Optional[int] = 42
 	verbose: bool = True

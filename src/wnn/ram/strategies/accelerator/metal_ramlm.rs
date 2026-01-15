@@ -114,6 +114,7 @@ impl MetalRAMLMEvaluator {
             neurons_per_cluster: u32,
             num_clusters: u32,
             words_per_neuron: u32,
+            empty_value: f32,
         }
 
         let params = RAMLMParams {
@@ -124,6 +125,7 @@ impl MetalRAMLMEvaluator {
             neurons_per_cluster: neurons_per_cluster as u32,
             num_clusters: num_clusters as u32,
             words_per_neuron: words_per_neuron as u32,
+            empty_value: crate::ramlm::get_empty_value(),
         };
 
         // Create buffers
@@ -311,6 +313,7 @@ impl MetalSparseEvaluator {
             bits_per_neuron: u32,
             neurons_per_cluster: u32,
             num_clusters: u32,
+            empty_value: f32,
         }
 
         let params = SparseParams {
@@ -320,6 +323,7 @@ impl MetalSparseEvaluator {
             bits_per_neuron: bits_per_neuron as u32,
             neurons_per_cluster: neurons_per_cluster as u32,
             num_clusters: num_clusters as u32,
+            empty_value: crate::ramlm::get_empty_value(),
         };
 
         // Create buffers
@@ -448,6 +452,7 @@ impl MetalSparseEvaluator {
             total_input_bits: u32,
             num_clusters: u32,
             num_tiers: u32,
+            empty_value: f32,
         }
 
         #[repr(C)]
@@ -463,6 +468,7 @@ impl MetalSparseEvaluator {
             total_input_bits: total_input_bits as u32,
             num_clusters: num_clusters as u32,
             num_tiers: tier_configs.len() as u32,
+            empty_value: crate::ramlm::get_empty_value(),
         };
 
         let tiers: Vec<TierInfo> = tier_configs.iter().map(|&(ec, npc, bpn, sn)| TierInfo {

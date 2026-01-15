@@ -29,7 +29,7 @@ Memory savings:
 
 from typing import Optional
 
-from torch import arange, long, zeros, ones, Tensor, bool as torch_bool
+from torch import arange, long, zeros, ones, full as torch_full, Tensor, bool as torch_bool
 
 from wnn.ram.core.Memory import Memory
 from wnn.ram.core.base import RAMComponent
@@ -82,7 +82,6 @@ class TieredRAMClusterLayer(RAMComponent):
 		tiers: list[tuple[Optional[int], int, int]],
 		cluster_order: Optional[list[int]] = None,
 		rng: Optional[int] = None,
-		empty_value: float = 0.0,
 	):
 		"""
 		Initialize TieredRAMClusterLayer.
@@ -104,14 +103,12 @@ class TieredRAMClusterLayer(RAMComponent):
 				num_clusters=50257,
 				tiers=[(100, 11, 8), (400, 7, 8), (None, 5, 8)],
 				cluster_order=sorted_token_ids_by_frequency,
-				empty_value=0.0,  # Untrained cells abstain (recommended)
 			)
 		"""
 		super().__init__()
 
 		self.num_clusters = num_clusters
 		self.total_input_bits = total_input_bits
-		self.empty_value = empty_value
 
 		# Build cluster order mapping (logical → physical)
 		# cluster_order[logical_idx] = physical_cluster_idx
@@ -284,11 +281,40 @@ class TieredRAMClusterLayer(RAMComponent):
 		if input_bits.ndim == 1:
 			input_bits = input_bits.unsqueeze(0)
 
+		# Get raw counts and convert to scores
+		true_counts, empty_counts, neurons = self.forward_counts(input_bits)
+
+		# Use PerplexityCalculator for EMPTY→value conversion (single source of truth)
+		from wnn.ram.strategies.perplexity import PerplexityCalculator
+		calc = PerplexityCalculator(vocab_size=self.num_clusters)
+		return calc.ram_counts_to_scores(true_counts, empty_counts, neurons)
+
+	def forward_counts(self, input_bits: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+		"""
+		Forward pass returning raw TRUE/EMPTY counts per cluster.
+
+		This is the low-level method - use PerplexityCalculator to convert
+		counts to scores/probabilities with proper EMPTY handling.
+
+		Args:
+			input_bits: [batch, total_input_bits] boolean or 0/1 tensor
+
+		Returns:
+			Tuple of:
+			- true_counts: [batch, num_clusters] count of TRUE cells per cluster
+			- empty_counts: [batch, num_clusters] count of EMPTY cells per cluster
+			- neurons_per_cluster: [num_clusters] neurons per cluster (for normalization)
+		"""
+		if input_bits.ndim == 1:
+			input_bits = input_bits.unsqueeze(0)
+
 		batch_size = input_bits.shape[0]
 		device = input_bits.device
 
-		# Output tensor for all clusters
-		probs = zeros(batch_size, self.num_clusters, device=device)
+		# Output tensors
+		true_counts = zeros(batch_size, self.num_clusters, device=device)
+		empty_counts = zeros(batch_size, self.num_clusters, device=device)
+		neurons_per_cluster = zeros(self.num_clusters, device=device)
 
 		# Process each tier and scatter results
 		for tier_idx, (tc, memory) in enumerate(zip(self.tier_configs, self.tier_memories)):
@@ -298,16 +324,17 @@ class TieredRAMClusterLayer(RAMComponent):
 			# Reshape to clusters: [batch, tier_clusters, neurons_per_cluster]
 			clustered = raw.view(batch_size, tc.cluster_count, tc.neurons_per_cluster)
 
-			# Compute probabilities: (TRUE + empty_value × EMPTY) / neurons_per_cluster
-			count_true = (clustered == MemoryVal.TRUE).sum(dim=-1)
-			count_empty = (clustered == MemoryVal.EMPTY).sum(dim=-1)
-			tier_probs = (count_true.float() + self.empty_value * count_empty.float()) / tc.neurons_per_cluster
+			# Count TRUE and EMPTY cells
+			tier_true = (clustered == MemoryVal.TRUE).sum(dim=-1).float()
+			tier_empty = (clustered == MemoryVal.EMPTY).sum(dim=-1).float()
 
 			# Scatter to output using precomputed indices
 			scatter_idx = self._scatter_indices[tier_idx].to(device)
-			probs.scatter_(1, scatter_idx.unsqueeze(0).expand(batch_size, -1), tier_probs)
+			true_counts.scatter_(1, scatter_idx.unsqueeze(0).expand(batch_size, -1), tier_true)
+			empty_counts.scatter_(1, scatter_idx.unsqueeze(0).expand(batch_size, -1), tier_empty)
+			neurons_per_cluster.scatter_(0, scatter_idx, torch_full((tc.cluster_count,), float(tc.neurons_per_cluster), device=device))
 
-		return probs
+		return true_counts, empty_counts, neurons_per_cluster
 
 	def forward_auto(self, input_bits: Tensor) -> Tensor:
 		"""

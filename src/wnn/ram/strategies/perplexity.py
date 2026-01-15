@@ -84,6 +84,25 @@ class PerplexityCalculator:
 
 		self.reset()
 
+		# Sync empty_value to Rust accelerator (if available)
+		self._sync_rust_empty_value(self.empty_value)
+
+	@staticmethod
+	def _sync_rust_empty_value(empty_value: float = 0.0) -> None:
+		"""
+		Sync empty_value to Rust accelerator (if available).
+
+		This ensures Rust-accelerated forward passes use the same EMPTY
+		interpretation as Python. Called automatically in __init__.
+		"""
+		try:
+			import ram_accelerator
+			current = ram_accelerator.get_empty_value()
+			if current != empty_value:
+				ram_accelerator.set_empty_value(empty_value)
+		except ImportError:
+			pass  # Rust accelerator not available
+
 	def reset(self):
 		"""Reset accumulator for new evaluation."""
 		self._log_probs: list[float] = []
@@ -444,7 +463,7 @@ class PerplexityCalculator:
 		self,
 		true_counts: 'Tensor',
 		empty_counts: 'Tensor',
-		neurons_per_cluster: int,
+		neurons_per_cluster: Union[int, 'Tensor'],
 	) -> 'Tensor':
 		"""
 		Convert RAM memory TRUE/EMPTY counts to scores using this calculator's empty_value.
@@ -456,7 +475,8 @@ class PerplexityCalculator:
 		Args:
 			true_counts: [batch, num_clusters] count of TRUE cells per cluster
 			empty_counts: [batch, num_clusters] count of EMPTY cells per cluster
-			neurons_per_cluster: Number of neurons per cluster (for normalization)
+			neurons_per_cluster: Number of neurons per cluster (for normalization).
+			                     Can be int (uniform) or [num_clusters] Tensor (tiered).
 
 		Returns:
 			[batch, num_clusters] scores (not yet softmax-normalized)

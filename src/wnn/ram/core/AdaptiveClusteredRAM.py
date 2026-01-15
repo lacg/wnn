@@ -68,7 +68,6 @@ class AdaptiveClusteredRAM(RAMComponent):
 		self,
 		total_input_bits: int,
 		genome: ClusterGenome,
-		empty_value: float = 0.0,
 		rng: Optional[int] = None,
 	):
 		"""
@@ -77,7 +76,6 @@ class AdaptiveClusteredRAM(RAMComponent):
 		Args:
 			total_input_bits: Number of input bits (e.g., 64 for 4 tokens × 16 bits)
 			genome: ClusterGenome with bits_per_cluster and neurons_per_cluster
-			empty_value: Value for EMPTY cells (0.0, 0.5, etc.)
 			rng: Random seed for reproducible connectivity initialization
 		"""
 		super().__init__()
@@ -85,7 +83,6 @@ class AdaptiveClusteredRAM(RAMComponent):
 		self.num_clusters = len(genome.bits_per_cluster)
 		self.total_input_bits = total_input_bits
 		self.genome = genome
-		self.empty_value = empty_value
 
 		# Group clusters by their (neurons, bits) configuration
 		# config_key -> list of cluster_ids
@@ -160,7 +157,6 @@ class AdaptiveClusteredRAM(RAMComponent):
 		cls,
 		genome: ClusterGenome,
 		total_input_bits: int,
-		empty_value: float = 0.0,
 		rng: Optional[int] = None,
 	) -> "AdaptiveClusteredRAM":
 		"""
@@ -169,7 +165,6 @@ class AdaptiveClusteredRAM(RAMComponent):
 		Args:
 			genome: ClusterGenome with per-cluster architecture
 			total_input_bits: Number of input bits
-			empty_value: Value for EMPTY cells
 			rng: Random seed
 
 		Returns:
@@ -178,7 +173,6 @@ class AdaptiveClusteredRAM(RAMComponent):
 		return cls(
 			total_input_bits=total_input_bits,
 			genome=genome,
-			empty_value=empty_value,
 			rng=rng,
 		)
 
@@ -202,7 +196,6 @@ class AdaptiveClusteredRAM(RAMComponent):
 			f"  Total neurons: {self.total_neurons:,}",
 			f"  Total memory cells: {self.total_memory_cells:,}",
 			f"  Input bits: {self.total_input_bits}",
-			f"  Empty value: {self.empty_value}",
 			"",
 			"  Architecture range:",
 			f"    Bits: [{stats['min_bits']}, {stats['max_bits']}] (mean: {stats['mean_bits']:.1f})",
@@ -365,12 +358,14 @@ class AdaptiveClusteredRAM(RAMComponent):
 		# Reshape to clusters: [batch, group_clusters, neurons_per_cluster]
 		clustered = raw.view(batch_size, group.cluster_count, group.neurons)
 
-		# Compute probabilities with configurable EMPTY value
+		# Compute counts
 		count_true = (clustered == MemoryVal.TRUE).sum(dim=-1).float()
 		count_empty = (clustered == MemoryVal.EMPTY).sum(dim=-1).float()
 
-		# prob = (count_true + empty_value * count_empty) / neurons
-		group_probs = (count_true + self.empty_value * count_empty) / group.neurons
+		# Use PerplexityCalculator for score calculation (single source of truth)
+		from wnn.ram.strategies.perplexity import PerplexityCalculator
+		calc = PerplexityCalculator(vocab_size=group.cluster_count)
+		group_probs = calc.ram_counts_to_scores(count_true, count_empty, group.neurons)
 
 		return group_probs
 
@@ -630,7 +625,6 @@ class AdaptiveClusteredRAM(RAMComponent):
 				'bits_per_cluster': self.genome.bits_per_cluster,
 				'neurons_per_cluster': self.genome.neurons_per_cluster,
 			},
-			'empty_value': self.empty_value,
 		}
 
 	@classmethod
@@ -643,6 +637,5 @@ class AdaptiveClusteredRAM(RAMComponent):
 		return cls(
 			total_input_bits=config['total_input_bits'],
 			genome=genome,
-			empty_value=config.get('empty_value', 0.0),
 			rng=rng,
 		)

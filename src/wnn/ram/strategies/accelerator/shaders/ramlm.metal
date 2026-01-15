@@ -34,6 +34,7 @@ struct RAMLMParams {
     uint neurons_per_cluster;
     uint num_clusters;
     uint words_per_neuron;
+    float empty_value;  // Value for EMPTY cells (0.0 = abstain, 0.5 = uncertain)
 };
 
 // Compute memory address for a neuron given input bits
@@ -117,8 +118,8 @@ kernel void ramlm_forward_pass(
         }
     }
 
-    // Probability = (count_true + 0.5 * count_empty) / neurons_per_cluster
-    float prob = (float(count_true) + 0.5f * float(count_empty)) / float(params.neurons_per_cluster);
+    // Probability = (count_true + empty_value * count_empty) / neurons_per_cluster
+    float prob = (float(count_true) + params.empty_value * float(count_empty)) / float(params.neurons_per_cluster);
 
     // Output index: [example_idx, cluster_idx]
     uint output_idx = example_idx * params.num_clusters + cluster_idx;
@@ -165,7 +166,7 @@ kernel void ramlm_forward_pass_per_example(
             }
         }
 
-        example_probs[cluster_idx] = (float(count_true) + 0.5f * float(count_empty)) / float(params.neurons_per_cluster);
+        example_probs[cluster_idx] = (float(count_true) + params.empty_value * float(count_empty)) / float(params.neurons_per_cluster);
     }
 }
 

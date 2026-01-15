@@ -10,12 +10,14 @@ over large vocabularies (e.g., 50K tokens) using the native RAM architecture
 with partial connectivity for generalization.
 
 Probability formula per cluster:
-    P(class) = (count_TRUE + 0.5 * count_EMPTY) / neurons_per_cluster
+    Score(class) = (count_TRUE + empty_value * count_EMPTY) / neurons_per_cluster
 
 Where:
     - TRUE (1): Strong evidence for this class
     - FALSE (0): Evidence against this class
-    - EMPTY (2): No evidence (treated as 0.5 uncertainty)
+    - EMPTY (2): No evidence (default empty_value=0.0 means abstain)
+
+Note: empty_value is defined in PerplexityCalculator (single source of truth)
 
 Memory Backend Selection:
     - "auto" (default): Uses dense for ≤10 bits, sparse for >10 bits
@@ -275,16 +277,39 @@ class RAMClusterLayer(RAMComponent):
 
 	def forward(self, input_bits: Tensor) -> Tensor:
 		"""
-		Forward pass returning probabilities per cluster (PyTorch implementation).
+		Forward pass returning scores per cluster (PyTorch implementation).
 
 		Args:
 			input_bits: [batch, total_input_bits] boolean or 0/1 tensor
 
 		Returns:
-			[batch, num_clusters] float tensor of probabilities in [0, 1]
+			[batch, num_clusters] float tensor of scores
 
-		Probability formula:
-			P(cluster) = (count_TRUE + 0.5 * count_EMPTY) / neurons_per_cluster
+		Score formula (via PerplexityCalculator):
+			Score(cluster) = (count_TRUE + empty_value * count_EMPTY) / neurons_per_cluster
+		"""
+		# Get raw counts and convert to scores
+		true_counts, empty_counts = self.forward_counts(input_bits)
+
+		# Use PerplexityCalculator for EMPTY→value conversion (single source of truth)
+		from wnn.ram.strategies.perplexity import PerplexityCalculator
+		calc = PerplexityCalculator(vocab_size=self.num_clusters)
+		return calc.ram_counts_to_scores(true_counts, empty_counts, self.neurons_per_cluster)
+
+	def forward_counts(self, input_bits: Tensor) -> tuple[Tensor, Tensor]:
+		"""
+		Forward pass returning raw TRUE/EMPTY counts per cluster.
+
+		This is the low-level method - use PerplexityCalculator to convert
+		counts to scores/probabilities with proper EMPTY handling.
+
+		Args:
+			input_bits: [batch, total_input_bits] boolean or 0/1 tensor
+
+		Returns:
+			Tuple of:
+			- true_counts: [batch, num_clusters] count of TRUE cells per cluster
+			- empty_counts: [batch, num_clusters] count of EMPTY cells per cluster
 		"""
 		# Get raw memory values: [batch, total_neurons]
 		# Values are: FALSE=0, TRUE=1, EMPTY=2
@@ -295,13 +320,10 @@ class RAMClusterLayer(RAMComponent):
 		clustered = raw.view(batch_size, self.num_clusters, self.neurons_per_cluster)
 
 		# Count TRUE (1) and EMPTY (2) per cluster
-		count_true = (clustered == MemoryVal.TRUE).sum(dim=-1)   # [batch, num_clusters]
-		count_empty = (clustered == MemoryVal.EMPTY).sum(dim=-1) # [batch, num_clusters]
+		true_counts = (clustered == MemoryVal.TRUE).sum(dim=-1).float()   # [batch, num_clusters]
+		empty_counts = (clustered == MemoryVal.EMPTY).sum(dim=-1).float() # [batch, num_clusters]
 
-		# Probability: (TRUE + 0.5 × EMPTY) / neurons_per_cluster
-		probs = (count_true.float() + 0.5 * count_empty.float()) / self.neurons_per_cluster
-
-		return probs  # [batch, num_clusters]
+		return true_counts, empty_counts
 
 	def forward_auto(self, input_bits: Tensor) -> Tensor:
 		"""
@@ -1269,19 +1291,23 @@ class RAMClusterLayer(RAMComponent):
 			input_bits: [batch_size, total_input_bits] or [total_input_bits] input patterns
 
 		Returns:
-			Tensor [batch_size, num_clusters] of probabilities
+			Tensor [batch_size, num_clusters] of scores
 		"""
 		if self._backend != MemoryBackend.LSH:
 			raise RuntimeError(f"forward_lsh called but layer is using {self._backend.name} backend")
 
 		from torch import zeros, float32
+		from wnn.ram.strategies.perplexity import PerplexityCalculator
 
 		# Handle single example
 		if input_bits.ndim == 1:
 			input_bits = input_bits.unsqueeze(0)
 
 		batch_size = input_bits.shape[0]
-		probs = zeros(batch_size, self.num_clusters, dtype=float32)
+
+		# Accumulate counts into tensors
+		true_counts = zeros(batch_size, self.num_clusters, dtype=float32)
+		empty_counts = zeros(batch_size, self.num_clusters, dtype=float32)
 
 		for ex_idx in range(batch_size):
 			ex_input = input_bits[ex_idx]
@@ -1311,7 +1337,9 @@ class RAMClusterLayer(RAMComponent):
 					elif cell_value == 2:  # EMPTY
 						count_empty += 1
 
-				# Probability formula
-				probs[ex_idx, cluster_idx] = (count_true + 0.5 * count_empty) / self.neurons_per_cluster
+				true_counts[ex_idx, cluster_idx] = count_true
+				empty_counts[ex_idx, cluster_idx] = count_empty
 
-		return probs
+		# Use PerplexityCalculator for score calculation (single source of truth)
+		calc = PerplexityCalculator(vocab_size=self.num_clusters)
+		return calc.ram_counts_to_scores(true_counts, empty_counts, self.neurons_per_cluster)
