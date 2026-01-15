@@ -146,8 +146,8 @@ class GAConfig:
 	mutation_rate: float = 0.1
 	crossover_rate: float = 0.7
 	elitism: int = 2
-	# Early stopping
-	patience: int = 1              # Checks without improvement before stopping
+	# Early stopping (all configurable via parameters)
+	patience: int = 5              # Checks without improvement before stopping
 	check_interval: int = 5        # Check every N generations
 	min_improvement_pct: float = 0.05  # GA needs diversity, lower threshold (0.05%)
 
@@ -158,8 +158,8 @@ class TSConfig:
 	iterations: int = 100
 	neighbors_per_iter: int = 20
 	tabu_size: int = 10
-	# Early stopping
-	patience: int = 1              # Checks without improvement before stopping
+	# Early stopping (all configurable via parameters)
+	patience: int = 5              # Checks without improvement before stopping
 	check_interval: int = 5        # Check every N iterations
 	min_improvement_pct: float = 0.5  # TS is focused, higher threshold (0.5%)
 
