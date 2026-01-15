@@ -42,6 +42,103 @@ class GenericOptResult(Generic[T]):
 
 
 @dataclass
+class EarlyStoppingConfig:
+	"""Configuration for early stopping with patience."""
+	patience: int = 5              # Number of checks without improvement before stopping
+	check_interval: int = 5        # Check every N iterations/generations
+	min_improvement_pct: float = 0.02  # Minimum % improvement required to reset patience
+
+
+class EarlyStoppingTracker:
+	"""
+	Reusable early stopping tracker with patience and delta logging.
+
+	Checks improvement at regular intervals (default: every 5 iterations).
+	Logs delta improvement and patience counter (e.g., "Δ=0.15%, patience=3/5").
+	Stops when patience is exhausted (no improvement for patience * check_interval iterations).
+
+	Usage:
+		tracker = EarlyStoppingTracker(config, logger)
+		for iteration in range(max_iterations):
+			# ... do work ...
+			if tracker.check(iteration, current_best_fitness):
+				break  # Early stop
+	"""
+
+	def __init__(
+		self,
+		config: EarlyStoppingConfig,
+		logger: Callable[[str], None],
+		method_name: str = "Optimizer",
+	):
+		self._config = config
+		self._log = logger
+		self._method_name = method_name
+		self._patience_counter = 0
+		self._prev_best: Optional[float] = None
+		self._baseline: Optional[float] = None
+
+	def reset(self, initial_fitness: float) -> None:
+		"""Reset tracker with initial fitness value."""
+		self._patience_counter = 0
+		self._prev_best = initial_fitness
+		self._baseline = initial_fitness
+
+	def check(self, iteration: int, current_best: float) -> bool:
+		"""
+		Check if early stopping should occur.
+
+		Args:
+			iteration: Current iteration (0-indexed)
+			current_best: Current best fitness value (lower is better)
+
+		Returns:
+			True if should stop, False otherwise
+		"""
+		cfg = self._config
+
+		# Only check at specified intervals (1-indexed iteration)
+		if (iteration + 1) % cfg.check_interval != 0:
+			return False
+
+		# Compute improvement from last check
+		if self._prev_best is not None and self._prev_best > 0:
+			improvement_pct = (self._prev_best - current_best) / self._prev_best * 100
+		else:
+			improvement_pct = 0.0
+
+		# Check if improvement meets threshold
+		if improvement_pct >= cfg.min_improvement_pct:
+			self._patience_counter = 0
+			self._prev_best = current_best
+		else:
+			self._patience_counter += 1
+
+		# Log progress with delta and patience
+		remaining = cfg.patience - self._patience_counter
+		self._log(
+			f"[{self._method_name}] Early stop check: "
+			f"Δ={improvement_pct:+.2f}%, patience={remaining}/{cfg.patience}"
+		)
+
+		# Check if patience exhausted
+		if self._patience_counter >= cfg.patience:
+			total_iters_without_improvement = self._patience_counter * cfg.check_interval
+			self._log(
+				f"[{self._method_name}] Early stop: no improvement >= {cfg.min_improvement_pct}% "
+				f"for {total_iters_without_improvement} iterations"
+			)
+			return True
+
+		return False
+
+	@property
+	def patience_exhausted(self) -> bool:
+		"""Check if patience is exhausted."""
+		return self._patience_counter >= self._config.patience
+
+
+@dataclass
 class GAConfig:
 	"""Configuration for Genetic Algorithm."""
 	population_size: int = 30
@@ -49,8 +146,10 @@ class GAConfig:
 	mutation_rate: float = 0.1
 	crossover_rate: float = 0.7
 	elitism: int = 2
-	patience: int = 5
-	min_improvement_pct: float = 0.01
+	# Early stopping
+	patience: int = 5              # Checks without improvement before stopping
+	check_interval: int = 5        # Check every N generations
+	min_improvement_pct: float = 0.02  # Minimum % improvement required
 
 
 @dataclass
@@ -59,8 +158,10 @@ class TSConfig:
 	iterations: int = 100
 	neighbors_per_iter: int = 20
 	tabu_size: int = 10
-	patience: int = 10
-	min_improvement_pct: float = 0.01
+	# Early stopping
+	patience: int = 5              # Checks without improvement before stopping
+	check_interval: int = 5        # Check every N iterations
+	min_improvement_pct: float = 0.02  # Minimum % improvement required
 
 
 class GenericGAStrategy(ABC, Generic[T]):
@@ -188,8 +289,15 @@ class GenericGAStrategy(ABC, Generic[T]):
 		initial_accuracy = accuracy_values[best_idx]
 
 		history = [(0, best_fitness)]
-		patience_counter = 0
-		prev_best = best_fitness
+
+		# Initialize early stopping tracker
+		early_stop_config = EarlyStoppingConfig(
+			patience=cfg.patience,
+			check_interval=cfg.check_interval,
+			min_improvement_pct=cfg.min_improvement_pct,
+		)
+		early_stopper = EarlyStoppingTracker(early_stop_config, self._log, self.name)
+		early_stopper.reset(best_fitness)
 
 		self._log(f"[{self.name}] Initial best: {best_fitness:.4f}")
 
@@ -248,16 +356,8 @@ class GenericGAStrategy(ABC, Generic[T]):
 			self._log(f"[{self.name}] Gen {generation + 1}/{cfg.generations}: "
 					  f"best={best_fitness:.4f}, new_best={new_best:.4f}, avg={gen_avg:.4f}")
 
-			# Early stopping check
-			improvement_pct = (prev_best - best_fitness) / prev_best * 100 if prev_best > 0 else 0
-			if improvement_pct >= cfg.min_improvement_pct:
-				patience_counter = 0
-				prev_best = best_fitness
-			else:
-				patience_counter += 1
-
-			if patience_counter >= cfg.patience:
-				self._log(f"[{self.name}] Early stop at gen {generation + 1}: no improvement for {cfg.patience} gens")
+			# Early stopping check (checks at configured intervals)
+			if early_stopper.check(generation, best_fitness):
 				break
 
 		# Get final accuracy
@@ -279,7 +379,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 			iterations_run=generation + 1,
 			method_name=self.name,
 			history=history,
-			early_stopped=patience_counter >= cfg.patience,
+			early_stopped=early_stopper.patience_exhausted,
 			final_population=final_population,
 			initial_accuracy=initial_accuracy,
 			final_accuracy=final_accuracy,
@@ -467,8 +567,15 @@ class GenericTSStrategy(ABC, Generic[T]):
 				current_fitness = best_fitness
 
 		history = [(0, best_fitness)]
-		patience_counter = 0
-		prev_best = best_fitness
+
+		# Initialize early stopping tracker
+		early_stop_config = EarlyStoppingConfig(
+			patience=cfg.patience,
+			check_interval=cfg.check_interval,
+			min_improvement_pct=cfg.min_improvement_pct,
+		)
+		early_stopper = EarlyStoppingTracker(early_stop_config, self._log, self.name)
+		early_stopper.reset(best_fitness)
 
 		self._log(f"[{self.name}] Initial: {start_fitness:.4f}")
 
@@ -535,16 +642,8 @@ class GenericTSStrategy(ABC, Generic[T]):
 			self._log(f"[{self.name}] Iter {iteration + 1}/{cfg.iterations}: "
 					  f"best={best_fitness:.4f}, iter_best={iter_best:.4f}, avg={avg_fitness:.4f}")
 
-			# Early stopping check
-			improvement_pct = (prev_best - best_fitness) / prev_best * 100 if prev_best > 0 else 0
-			if improvement_pct >= cfg.min_improvement_pct:
-				patience_counter = 0
-				prev_best = best_fitness
-			else:
-				patience_counter += 1
-
-			if patience_counter >= cfg.patience:
-				self._log(f"[{self.name}] Early stop at iter {iteration + 1}: no improvement for {cfg.patience} iters")
+			# Early stopping check (checks at configured intervals)
+			if early_stopper.check(iteration, best_fitness):
 				break
 
 		# Get final accuracy
@@ -566,7 +665,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 			iterations_run=iteration + 1,
 			method_name=self.name,
 			history=history,
-			early_stopped=patience_counter >= cfg.patience,
+			early_stopped=early_stopper.patience_exhausted,
 			final_population=final_neighbors,  # For seeding next phase
 			initial_accuracy=initial_accuracy,
 			final_accuracy=final_accuracy,
