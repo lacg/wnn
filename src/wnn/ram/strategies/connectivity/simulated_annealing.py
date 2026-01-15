@@ -15,10 +15,8 @@ from typing import Callable, Optional
 
 from torch import Tensor
 
-from wnn.ram.strategies.connectivity.base import (
-	OptimizerResult,
-	OptimizerStrategyBase,
-)
+from wnn.ram.strategies.connectivity.base import OptimizerStrategyBase
+from wnn.ram.strategies.connectivity.generic_strategies import OptResult
 
 
 @dataclass
@@ -76,7 +74,7 @@ class SimulatedAnnealingStrategy(OptimizerStrategyBase):
 		total_input_bits: int,
 		num_neurons: int,
 		n_bits_per_neuron: int,
-	) -> OptimizerResult:
+	) -> OptResult[Tensor]:
 		"""
 		Run Simulated Annealing optimization.
 
@@ -140,11 +138,11 @@ class SimulatedAnnealingStrategy(OptimizerStrategyBase):
 
 		improvement_pct = ((initial_error - best_error) / initial_error * 100) if best_error < initial_error else 0.0
 
-		return OptimizerResult(
-			initial_connections=connections,
-			optimized_connections=best,
-			initial_error=initial_error,
-			final_error=best_error,
+		return OptResult(
+			initial_genome=connections,
+			best_genome=best,
+			initial_fitness=initial_error,
+			final_fitness=best_error,
 			improvement_percent=improvement_pct,
 			iterations_run=cfg.iterations,
 			method_name=self.name,

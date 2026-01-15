@@ -250,28 +250,13 @@ class OverfittingMonitor:
 		"""Number of times this monitor has been called."""
 		return self._check_count
 
-@dataclass
-class OptimizerResult:
-	"""Result of connectivity optimization."""
+# OptimizerResult is now unified with OptResult for consistency across all strategies.
+# Import from generic_strategies for the new OptResult type.
+# This import provides backward compatibility - code using OptimizerResult will still work.
+from wnn.ram.strategies.connectivity.generic_strategies import OptResult
 
-	initial_connections: Tensor
-	optimized_connections: Tensor
-	initial_error: float
-	final_error: float
-	improvement_percent: float
-	iterations_run: int
-	method_name: str
-	history: list = field(default_factory=list)
-	early_stopped_overfitting: bool = False  # True if stopped due to overfitting
-
-	def __repr__(self) -> str:
-		return (
-			f"OptimizerResult("
-			f"method={self.method_name}, "
-			f"initial_error={self.initial_error:.4f}, "
-			f"final_error={self.final_error:.4f}, "
-			f"improvement={self.improvement_percent:.2f}%)"
-		)
+# Backward-compatible alias
+OptimizerResult = OptResult
 
 
 class OptimizerStrategyBase(ABC):

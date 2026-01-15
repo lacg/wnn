@@ -9,6 +9,11 @@ The core GA/TS loops are implemented here, subclasses provide:
 - clone_genome: Copy a genome
 - mutate_genome: Generate a neighbor by mutation
 - crossover_genomes: Combine two parents (GA only)
+
+Supports:
+- Early stopping with patience and delta logging (EarlyStoppingTracker)
+- Overfitting detection via callbacks (OverfittingCallback)
+- Diversity mode for escaping local optima
 """
 
 import random
@@ -22,9 +27,37 @@ T = TypeVar('T')
 
 
 @dataclass
-class GenericOptResult(Generic[T]):
-	"""Result from generic optimization."""
+class OptResult(Generic[T]):
+	"""
+	Unified result from optimization (GA, TS, SA).
 
+	This is a generic result type that works with any genome type (Tensor, ClusterGenome, etc.)
+	through the type parameter T.
+
+	Naming conventions:
+	- Uses 'genome' terminology (more generic than 'connections')
+	- Uses 'fitness' terminology (minimization by default, lower is better)
+
+	Backward Compatibility:
+	- `initial_connections` / `optimized_connections` → use `initial_genome` / `best_genome`
+	- `initial_error` / `final_error` → use `initial_fitness` / `final_fitness`
+	- `early_stopped_overfitting` → use `early_stopped` (check `stop_reason` for cause)
+
+	Attributes:
+		initial_genome: Starting genome before optimization
+		best_genome: Best genome found during optimization
+		initial_fitness: Fitness of initial genome (lower is better)
+		final_fitness: Fitness of best genome
+		improvement_percent: Percentage improvement ((initial - final) / initial * 100)
+		iterations_run: Number of iterations/generations run
+		method_name: Name of the optimization method (e.g., "ArchitectureGA")
+		history: List of (iteration, best_fitness) tuples for plotting
+		early_stopped: Whether optimization stopped early (due to convergence or overfitting)
+		stop_reason: Why optimization stopped (if early_stopped=True)
+		final_population: Final population for seeding next phase (GA/TS)
+		initial_accuracy: Optional accuracy at start
+		final_accuracy: Optional accuracy at end
+	"""
 	initial_genome: T
 	best_genome: T
 	initial_fitness: float
@@ -34,11 +67,51 @@ class GenericOptResult(Generic[T]):
 	method_name: str
 	history: List[Tuple[int, float]] = field(default_factory=list)
 	early_stopped: bool = False
-	# For population seeding
+	stop_reason: Optional[str] = None  # "convergence", "overfitting", None
+	# For population seeding between phases
 	final_population: Optional[List[T]] = None
 	# Accuracy tracking
 	initial_accuracy: Optional[float] = None
 	final_accuracy: Optional[float] = None
+
+	# === Backward compatibility aliases ===
+	@property
+	def initial_connections(self) -> T:
+		"""Alias for initial_genome (backward compatibility)."""
+		return self.initial_genome
+
+	@property
+	def optimized_connections(self) -> T:
+		"""Alias for best_genome (backward compatibility)."""
+		return self.best_genome
+
+	@property
+	def initial_error(self) -> float:
+		"""Alias for initial_fitness (backward compatibility)."""
+		return self.initial_fitness
+
+	@property
+	def final_error(self) -> float:
+		"""Alias for final_fitness (backward compatibility)."""
+		return self.final_fitness
+
+	@property
+	def early_stopped_overfitting(self) -> bool:
+		"""Alias: True if stopped due to overfitting (backward compatibility)."""
+		return self.early_stopped and self.stop_reason == "overfitting"
+
+	def __repr__(self) -> str:
+		return (
+			f"OptResult("
+			f"method={self.method_name}, "
+			f"initial={self.initial_fitness:.4f}, "
+			f"final={self.final_fitness:.4f}, "
+			f"improvement={self.improvement_percent:.2f}%)"
+		)
+
+
+# Keep GenericOptResult as alias for backward compatibility
+GenericOptResult = OptResult
 
 
 @dataclass
@@ -235,7 +308,8 @@ class GenericGAStrategy(ABC, Generic[T]):
 		initial_population: Optional[List[T]] = None,
 		batch_evaluate_fn: Optional[Callable[[List[T]], List[float]]] = None,
 		accuracy_fn: Optional[Callable[[T], float]] = None,
-	) -> GenericOptResult[T]:
+		overfitting_callback: Optional[Callable[[T, float], Any]] = None,
+	) -> OptResult[T]:
 		"""
 		Run Genetic Algorithm optimization.
 
@@ -245,9 +319,13 @@ class GenericGAStrategy(ABC, Generic[T]):
 			initial_population: Optional seed population from previous phase
 			batch_evaluate_fn: Optional batch evaluation function
 			accuracy_fn: Optional function to compute accuracy
+			overfitting_callback: Optional callback for overfitting detection.
+				Called every check_interval generations with (best_genome, best_fitness).
+				Returns OverfittingControl (or any object with early_stop attribute).
+				If early_stop=True, optimization stops with stop_reason="overfitting".
 
 		Returns:
-			GenericOptResult with best genome and statistics
+			OptResult with best genome and statistics
 		"""
 		self._ensure_rng()
 		cfg = self._config
@@ -360,6 +438,30 @@ class GenericGAStrategy(ABC, Generic[T]):
 			if early_stopper.check(generation, best_fitness):
 				break
 
+			# Overfitting callback check (same interval as early stopping)
+			if overfitting_callback is not None and (generation + 1) % cfg.check_interval == 0:
+				control = overfitting_callback(best, best_fitness)
+				if hasattr(control, 'early_stop') and control.early_stop:
+					self._log(f"[{self.name}] Overfitting early stop at gen {generation + 1}")
+					# Return early with overfitting stop reason
+					final_population = [self.clone_genome(g) for g, _, _ in sorted(population, key=lambda x: x[1])]
+					improvement_pct = (initial_fitness - best_fitness) / initial_fitness * 100 if initial_fitness > 0 else 0
+					return OptResult(
+						initial_genome=initial_genome if initial_genome else population[0][0],
+						best_genome=best,
+						initial_fitness=initial_fitness,
+						final_fitness=best_fitness,
+						improvement_percent=improvement_pct,
+						iterations_run=generation + 1,
+						method_name=self.name,
+						history=history,
+						early_stopped=True,
+						stop_reason="overfitting",
+						final_population=final_population,
+						initial_accuracy=initial_accuracy,
+						final_accuracy=accuracy_fn(best) if accuracy_fn else None,
+					)
+
 		# Get final accuracy
 		final_accuracy = None
 		if accuracy_fn is not None:
@@ -370,7 +472,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 
 		improvement_pct = (initial_fitness - best_fitness) / initial_fitness * 100 if initial_fitness > 0 else 0
 
-		return GenericOptResult(
+		return OptResult(
 			initial_genome=initial_genome if initial_genome else population[0][0],
 			best_genome=best,
 			initial_fitness=initial_fitness,
@@ -380,6 +482,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 			method_name=self.name,
 			history=history,
 			early_stopped=early_stopper.patience_exhausted,
+			stop_reason="convergence" if early_stopper.patience_exhausted else None,
 			final_population=final_population,
 			initial_accuracy=initial_accuracy,
 			final_accuracy=final_accuracy,
@@ -499,7 +602,8 @@ class GenericTSStrategy(ABC, Generic[T]):
 		initial_neighbors: Optional[List[T]] = None,
 		batch_evaluate_fn: Optional[Callable[[List[T]], List[float]]] = None,
 		accuracy_fn: Optional[Callable[[T], float]] = None,
-	) -> GenericOptResult[T]:
+		overfitting_callback: Optional[Callable[[T, float], Any]] = None,
+	) -> OptResult[T]:
 		"""
 		Run Tabu Search optimization.
 
@@ -510,9 +614,13 @@ class GenericTSStrategy(ABC, Generic[T]):
 			initial_neighbors: Optional seed neighbors from previous phase
 			batch_evaluate_fn: Optional batch evaluation function
 			accuracy_fn: Optional function to compute accuracy
+			overfitting_callback: Optional callback for overfitting detection.
+				Called every check_interval iterations with (best_genome, best_fitness).
+				Returns OverfittingControl (or any object with early_stop attribute).
+				If early_stop=True, optimization stops with stop_reason="overfitting".
 
 		Returns:
-			GenericOptResult with best genome and statistics
+			OptResult with best genome and statistics
 		"""
 		self._ensure_rng()
 		cfg = self._config
@@ -646,6 +754,30 @@ class GenericTSStrategy(ABC, Generic[T]):
 			if early_stopper.check(iteration, best_fitness):
 				break
 
+			# Overfitting callback check (same interval as early stopping)
+			if overfitting_callback is not None and (iteration + 1) % cfg.check_interval == 0:
+				control = overfitting_callback(best, best_fitness)
+				if hasattr(control, 'early_stop') and control.early_stop:
+					self._log(f"[{self.name}] Overfitting early stop at iter {iteration + 1}")
+					# Return early with overfitting stop reason
+					final_neighbors = [self.clone_genome(g) for g, _ in best_neighbors]
+					improvement_pct = (start_fitness - best_fitness) / start_fitness * 100 if start_fitness > 0 else 0
+					return OptResult(
+						initial_genome=initial_genome,
+						best_genome=best,
+						initial_fitness=start_fitness,
+						final_fitness=best_fitness,
+						improvement_percent=improvement_pct,
+						iterations_run=iteration + 1,
+						method_name=self.name,
+						history=history,
+						early_stopped=True,
+						stop_reason="overfitting",
+						final_population=final_neighbors,
+						initial_accuracy=initial_accuracy,
+						final_accuracy=accuracy_fn(best) if accuracy_fn else None,
+					)
+
 		# Get final accuracy
 		final_accuracy = None
 		if accuracy_fn is not None:
@@ -656,7 +788,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 
 		improvement_pct = (start_fitness - best_fitness) / start_fitness * 100 if start_fitness > 0 else 0
 
-		return GenericOptResult(
+		return OptResult(
 			initial_genome=initial_genome,
 			best_genome=best,
 			initial_fitness=start_fitness,
@@ -666,6 +798,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 			method_name=self.name,
 			history=history,
 			early_stopped=early_stopper.patience_exhausted,
+			stop_reason="convergence" if early_stopper.patience_exhausted else None,
 			final_population=final_neighbors,  # For seeding next phase
 			initial_accuracy=initial_accuracy,
 			final_accuracy=final_accuracy,

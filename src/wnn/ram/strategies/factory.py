@@ -245,13 +245,15 @@ class OptimizerStrategyType(IntEnum):
 	- CONNECTIVITY_*: Optimize which input bits each neuron observes (tiered)
 	- ARCHITECTURE_*: Optimize bits/neurons per cluster (adaptive)
 
-	Two algorithms:
+	Three algorithms:
 	- *_GA: Genetic Algorithm (global search, population-based)
 	- *_TS: Tabu Search (local search from initial solution)
+	- *_SA: Simulated Annealing (probabilistic acceptance for escaping local minima)
 	"""
 	# Connectivity optimization (tiered clustered RAM)
 	CONNECTIVITY_GA = auto()
 	CONNECTIVITY_TS = auto()
+	CONNECTIVITY_SA = auto()
 	# Architecture optimization (adaptive clustered RAM)
 	ARCHITECTURE_GA = auto()
 	ARCHITECTURE_TS = auto()
@@ -296,16 +298,22 @@ class OptimizerStrategyFactory:
 		population_size: int = 30,
 		generations: int = 50,
 		mutation_rate: float = 0.1,
+		crossover_rate: float = 0.7,
+		elitism: int = 2,
 		# TS params
 		iterations: int = 100,
 		neighbors_per_iter: int = 20,
 		tabu_size: int = 10,
+		# SA params
+		initial_temp: float = 1.0,
+		cooling_rate: float = 0.95,
 		# Early stopping (GA: 0.05%, TS: 0.5%)
 		patience: int = 5,
 		check_interval: int = 5,
 		min_improvement_pct: float | None = None,  # None = use strategy default
 		# Common
 		seed: int = 42,
+		verbose: bool = False,
 		logger: Any = None,
 		batch_evaluator: Any = None,
 	):
@@ -313,9 +321,9 @@ class OptimizerStrategyFactory:
 		Create an optimizer strategy.
 
 		Args:
-			strategy_type: Type of optimizer to create
+			strategy_type: Type of optimizer to create (OptimizerStrategyType enum)
 
-			Architecture params:
+			Architecture params (ARCHITECTURE_* types):
 				num_clusters: Number of clusters (required for ARCHITECTURE_*)
 				min_bits: Minimum bits per cluster
 				max_bits: Maximum bits per cluster
@@ -324,28 +332,52 @@ class OptimizerStrategyFactory:
 				phase: Optimization phase (1=bits only, 2=bits+neurons)
 				token_frequencies: Token frequency list for initialization
 
-			GA params:
-				population_size: GA population size
-				generations: Number of GA generations
-				mutation_rate: GA mutation rate
+			GA params (for *_GA types):
+				population_size: GA population size (default: 30)
+				generations: Number of GA generations (default: 50)
+				mutation_rate: GA mutation rate (default: 0.1 for arch, 0.01 for conn)
+				crossover_rate: Crossover probability (default: 0.7)
+				elitism: Number of elite individuals preserved (default: 2)
 
-			TS params:
-				iterations: Number of TS iterations
-				neighbors_per_iter: Neighbors to evaluate per iteration
-				tabu_size: Size of tabu list
+			TS params (for *_TS types):
+				iterations: Number of TS iterations (default: 100)
+				neighbors_per_iter: Neighbors to evaluate per iteration (default: 20)
+				tabu_size: Size of tabu list (default: 10)
+
+			SA params (for *_SA types):
+				iterations: Number of SA iterations (default: 600)
+				initial_temp: Initial temperature (default: 1.0)
+				cooling_rate: Temperature decay rate (default: 0.95)
 
 			Early stopping:
-				patience: Checks without improvement before stopping
-				check_interval: Check every N generations/iterations
+				patience: Checks without improvement before stopping (default: 5)
+				check_interval: Check every N generations/iterations (default: 5)
 				min_improvement_pct: Minimum improvement % (default: GA=0.05%, TS=0.5%)
 
 			Common:
-				seed: Random seed
-				logger: Logger function
-				batch_evaluator: RustParallelEvaluator for batch evaluation
+				seed: Random seed (default: 42)
+				verbose: Print progress during optimization (default: False)
+				logger: Logger function (default: print)
+				batch_evaluator: RustParallelEvaluator for batch evaluation (ARCHITECTURE_* only)
 
 		Returns:
 			Configured optimizer strategy
+
+		Example:
+			# Architecture GA with Rust batch evaluation
+			strategy = OptimizerStrategyFactory.create(
+				OptimizerStrategyType.ARCHITECTURE_GA,
+				num_clusters=50257,
+				generations=100,
+				batch_evaluator=rust_evaluator,
+			)
+
+			# Connectivity GA for tiered RAM
+			strategy = OptimizerStrategyFactory.create(
+				OptimizerStrategyType.CONNECTIVITY_GA,
+				generations=50,
+				verbose=True,
+			)
 		"""
 		match strategy_type:
 			case OptimizerStrategyType.ARCHITECTURE_GA:
@@ -393,10 +425,13 @@ class OptimizerStrategyFactory:
 					population_size=population_size,
 					generations=generations,
 					mutation_rate=mutation_rate,
+					crossover_rate=crossover_rate,
+					elitism=elitism,
 					patience=patience,
 					check_interval=check_interval,
 					min_improvement_pct=min_improvement_pct if min_improvement_pct is not None else 0.05,
 					seed=seed,
+					verbose=verbose,
 					logger=logger,
 				)
 
@@ -405,11 +440,23 @@ class OptimizerStrategyFactory:
 					iterations=iterations,
 					neighbors_per_iter=neighbors_per_iter,
 					tabu_size=tabu_size,
+					mutation_rate=mutation_rate,
 					patience=patience,
 					check_interval=check_interval,
 					min_improvement_pct=min_improvement_pct if min_improvement_pct is not None else 0.5,
 					seed=seed,
+					verbose=verbose,
 					logger=logger,
+				)
+
+			case OptimizerStrategyType.CONNECTIVITY_SA:
+				return OptimizerStrategyFactory._create_connectivity_sa(
+					iterations=iterations,
+					initial_temp=initial_temp,
+					cooling_rate=cooling_rate,
+					mutation_rate=mutation_rate,
+					seed=seed,
+					verbose=verbose,
 				)
 
 			case _:
@@ -514,33 +561,77 @@ class OptimizerStrategyFactory:
 		population_size: int,
 		generations: int,
 		mutation_rate: float,
+		crossover_rate: float,
+		elitism: int,
 		patience: int,
 		check_interval: int,
 		min_improvement_pct: float,
 		seed: int,
+		verbose: bool,
 		logger: Any,
 	):
 		"""Create a GeneticAlgorithmStrategy for connectivity optimization."""
 		from wnn.ram.strategies.connectivity.genetic_algorithm import (
 			GeneticAlgorithmStrategy,
+			GeneticAlgorithmConfig,
 		)
-		# TODO: Update GeneticAlgorithmStrategy to accept these params
-		return GeneticAlgorithmStrategy(seed=seed, logger=logger)
+		config = GeneticAlgorithmConfig(
+			population_size=population_size,
+			generations=generations,
+			mutation_rate=mutation_rate,
+			crossover_rate=crossover_rate,
+			elitism=elitism,
+			early_stop_patience=patience,
+			early_stop_threshold_pct=min_improvement_pct,
+		)
+		return GeneticAlgorithmStrategy(config=config, seed=seed, verbose=verbose, logger=logger)
 
 	@staticmethod
 	def _create_connectivity_ts(
 		iterations: int,
 		neighbors_per_iter: int,
 		tabu_size: int,
+		mutation_rate: float,
 		patience: int,
 		check_interval: int,
 		min_improvement_pct: float,
 		seed: int,
+		verbose: bool,
 		logger: Any,
 	):
 		"""Create a TabuSearchStrategy for connectivity optimization."""
 		from wnn.ram.strategies.connectivity.tabu_search import (
 			TabuSearchStrategy,
+			TabuSearchConfig,
 		)
-		# TODO: Update TabuSearchStrategy to accept these params
-		return TabuSearchStrategy(seed=seed, logger=logger)
+		config = TabuSearchConfig(
+			iterations=iterations,
+			neighbors_per_iter=neighbors_per_iter,
+			tabu_size=tabu_size,
+			mutation_rate=mutation_rate,
+			early_stop_patience=patience,
+			early_stop_threshold_pct=min_improvement_pct,
+		)
+		return TabuSearchStrategy(config=config, seed=seed, verbose=verbose, logger=logger)
+
+	@staticmethod
+	def _create_connectivity_sa(
+		iterations: int,
+		initial_temp: float,
+		cooling_rate: float,
+		mutation_rate: float,
+		seed: int,
+		verbose: bool,
+	):
+		"""Create a SimulatedAnnealingStrategy for connectivity optimization."""
+		from wnn.ram.strategies.connectivity.simulated_annealing import (
+			SimulatedAnnealingStrategy,
+			SimulatedAnnealingConfig,
+		)
+		config = SimulatedAnnealingConfig(
+			iterations=iterations,
+			initial_temp=initial_temp,
+			cooling_rate=cooling_rate,
+			mutation_rate=mutation_rate,
+		)
+		return SimulatedAnnealingStrategy(config=config, seed=seed, verbose=verbose)

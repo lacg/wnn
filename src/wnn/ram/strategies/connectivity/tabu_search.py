@@ -15,11 +15,11 @@ from typing import Callable, Optional
 from torch import Tensor
 
 from wnn.ram.strategies.connectivity.base import (
-	OptimizerResult,
 	OptimizerStrategyBase,
 	OverfittingControl,
 	OverfittingCallback,
 )
+from wnn.ram.strategies.connectivity.generic_strategies import OptResult
 from wnn.ram.strategies.perplexity import PerplexityCalculator
 
 
@@ -88,7 +88,7 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 		batch_evaluate_fn: Optional[Callable[[list], list[float]]] = None,
 		overfitting_callback: Optional[OverfittingCallback] = None,
 		initial_error_hint: Optional[float] = None,
-	) -> OptimizerResult:
+	) -> OptResult[Tensor]:
 		"""
 		Run Tabu Search optimization.
 
@@ -280,16 +280,17 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 
 		improvement_pct = ((initial_error - best_error) / initial_error * 100) if best_error < initial_error else 0.0
 
-		return OptimizerResult(
-			initial_connections=connections,
-			optimized_connections=best,
-			initial_error=initial_error,
-			final_error=best_error,
+		return OptResult(
+			initial_genome=connections,
+			best_genome=best,
+			initial_fitness=initial_error,
+			final_fitness=best_error,
 			improvement_percent=improvement_pct,
 			iterations_run=iteration + 1,
 			method_name=self.name,
 			history=history,
-			early_stopped_overfitting=early_stopped_overfitting,
+			early_stopped=early_stopped_overfitting,
+			stop_reason="overfitting" if early_stopped_overfitting else None,
 		)
 
 	def __repr__(self) -> str:

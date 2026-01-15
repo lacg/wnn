@@ -1,7 +1,11 @@
 """
 Factory for creating connectivity optimization strategies.
+
+DEPRECATED: Use wnn.ram.strategies.factory.OptimizerStrategyFactory instead.
+This factory is kept for backward compatibility but forwards to the unified factory.
 """
 
+import warnings
 from typing import Optional, Union
 
 from wnn.ram.core import OptimizationMethod
@@ -18,20 +22,17 @@ class OptimizerStrategyFactory:
 	"""
 	Factory for creating connectivity optimization strategies.
 
+	DEPRECATED: Use wnn.ram.strategies.factory.OptimizerStrategyFactory instead.
+	This factory is kept for backward compatibility.
+
 	Usage:
-		# Default Tabu Search (recommended - best results from thesis)
-		strategy = OptimizerStrategyFactory.create(OptimizationMethod.TABU_SEARCH)
+		# Recommended: Use unified factory
+		from wnn.ram.strategies.factory import OptimizerStrategyFactory, OptimizerStrategyType
+		strategy = OptimizerStrategyFactory.create(OptimizerStrategyType.CONNECTIVITY_GA)
 
-		# With custom config
-		config = TabuSearchConfig(iterations=10, neighbors_per_iter=50)
-		strategy = OptimizerStrategyFactory.create(
-			OptimizationMethod.TABU_SEARCH,
-			config=config,
-			verbose=True
-		)
-
-		# Use the strategy
-		result = strategy.optimize(connections, evaluate_fn, ...)
+		# Legacy (deprecated):
+		from wnn.ram.strategies.connectivity.factory import OptimizerStrategyFactory
+		strategy = OptimizerStrategyFactory.create(OptimizationMethod.GENETIC_ALGORITHM)
 	"""
 
 	@staticmethod
@@ -44,6 +45,8 @@ class OptimizerStrategyFactory:
 		"""
 		Create an optimization strategy.
 
+		DEPRECATED: Use wnn.ram.strategies.factory.OptimizerStrategyFactory.create() instead.
+
 		Args:
 			method: Which optimization method to use
 			config: Strategy-specific configuration (optional)
@@ -53,6 +56,13 @@ class OptimizerStrategyFactory:
 		Returns:
 			OptimizerStrategyBase subclass instance
 		"""
+		warnings.warn(
+			"wnn.ram.strategies.connectivity.factory.OptimizerStrategyFactory is deprecated. "
+			"Use wnn.ram.strategies.factory.OptimizerStrategyFactory with OptimizerStrategyType instead.",
+			DeprecationWarning,
+			stacklevel=2,
+		)
+
 		if method == OptimizationMethod.TABU_SEARCH:
 			ts_config = config if isinstance(config, TabuSearchConfig) else None
 			return TabuSearchStrategy(config=ts_config, seed=seed, verbose=verbose)
@@ -73,9 +83,17 @@ class OptimizerStrategyFactory:
 		"""
 		Create the default (recommended) strategy.
 
+		DEPRECATED: Use wnn.ram.strategies.factory.OptimizerStrategyFactory.create() instead.
+
 		Returns TabuSearchStrategy, which achieved best results in Garcia (2003):
 		- 17.27% error reduction
 		- Only 5 iterations needed
 		- Consistent low-variance results
 		"""
+		warnings.warn(
+			"wnn.ram.strategies.connectivity.factory.OptimizerStrategyFactory.create_default() is deprecated. "
+			"Use wnn.ram.strategies.factory.OptimizerStrategyFactory.create(OptimizerStrategyType.CONNECTIVITY_TS).",
+			DeprecationWarning,
+			stacklevel=2,
+		)
 		return TabuSearchStrategy()
