@@ -292,8 +292,15 @@ class OptimizerStrategyFactory:
 		max_bits: int = 25,
 		min_neurons: int = 3,
 		max_neurons: int = 33,
-		phase: int = 2,
+		# Explicit control over what gets optimized (no magic phase numbers)
+		optimize_bits: bool = True,
+		optimize_neurons: bool = True,
+		optimize_connections: bool = False,
+		# Default values for dimensions not being optimized
+		default_bits: int = 8,
+		default_neurons: int = 5,
 		token_frequencies: list[int] | None = None,
+		total_input_bits: int | None = None,  # For connection optimization
 		# GA params
 		population_size: int = 30,
 		generations: int = 50,
@@ -329,7 +336,11 @@ class OptimizerStrategyFactory:
 				max_bits: Maximum bits per cluster
 				min_neurons: Minimum neurons per cluster
 				max_neurons: Maximum neurons per cluster
-				phase: Optimization phase (1=bits only, 2=bits+neurons)
+				optimize_bits: Whether to optimize bits per cluster (default: True)
+				optimize_neurons: Whether to optimize neurons per cluster (default: True)
+				optimize_connections: Whether to optimize connectivity (default: False)
+				default_bits: Default bits when not optimizing (default: 8)
+				default_neurons: Default neurons when not optimizing (default: 5)
 				token_frequencies: Token frequency list for initialization
 
 			GA params (for *_GA types):
@@ -379,9 +390,6 @@ class OptimizerStrategyFactory:
 				verbose=True,
 			)
 		"""
-		# Extract total_input_bits from kwargs for architecture strategies
-		total_input_bits = kwargs.get('total_input_bits', None)
-
 		match strategy_type:
 			case OptimizerStrategyType.ARCHITECTURE_GA:
 				return OptimizerStrategyFactory._create_architecture_ga(
@@ -390,9 +398,13 @@ class OptimizerStrategyFactory:
 					max_bits=max_bits,
 					min_neurons=min_neurons,
 					max_neurons=max_neurons,
-					phase=phase,
+					optimize_bits=optimize_bits,
+					optimize_neurons=optimize_neurons,
+					optimize_connections=optimize_connections,
+					default_bits=default_bits,
+					default_neurons=default_neurons,
 					token_frequencies=token_frequencies,
-					total_input_bits=total_input_bits,  # For connection preservation
+					total_input_bits=total_input_bits,
 					population_size=population_size,
 					generations=generations,
 					mutation_rate=mutation_rate,
@@ -411,9 +423,13 @@ class OptimizerStrategyFactory:
 					max_bits=max_bits,
 					min_neurons=min_neurons,
 					max_neurons=max_neurons,
-					phase=phase,
+					optimize_bits=optimize_bits,
+					optimize_neurons=optimize_neurons,
+					optimize_connections=optimize_connections,
+					default_bits=default_bits,
+					default_neurons=default_neurons,
 					token_frequencies=token_frequencies,
-					total_input_bits=total_input_bits,  # For connection preservation
+					total_input_bits=total_input_bits,
 					iterations=iterations,
 					neighbors_per_iter=neighbors_per_iter,
 					tabu_size=tabu_size,
@@ -478,7 +494,11 @@ class OptimizerStrategyFactory:
 		max_bits: int,
 		min_neurons: int,
 		max_neurons: int,
-		phase: int,
+		optimize_bits: bool,
+		optimize_neurons: bool,
+		optimize_connections: bool,
+		default_bits: int,
+		default_neurons: int,
 		token_frequencies: list[int] | None,
 		total_input_bits: int | None,
 		population_size: int,
@@ -504,9 +524,13 @@ class OptimizerStrategyFactory:
 			max_bits=max_bits,
 			min_neurons=min_neurons,
 			max_neurons=max_neurons,
-			phase=phase,
+			optimize_bits=optimize_bits,
+			optimize_neurons=optimize_neurons,
+			optimize_connections=optimize_connections,
+			default_bits=default_bits,
+			default_neurons=default_neurons,
 			token_frequencies=token_frequencies,
-			total_input_bits=total_input_bits,  # For connection preservation
+			total_input_bits=total_input_bits,
 		)
 		ga_config = GAConfig(
 			population_size=population_size,
@@ -525,7 +549,11 @@ class OptimizerStrategyFactory:
 		max_bits: int,
 		min_neurons: int,
 		max_neurons: int,
-		phase: int,
+		optimize_bits: bool,
+		optimize_neurons: bool,
+		optimize_connections: bool,
+		default_bits: int,
+		default_neurons: int,
 		token_frequencies: list[int] | None,
 		total_input_bits: int | None,
 		iterations: int,
@@ -551,9 +579,13 @@ class OptimizerStrategyFactory:
 			max_bits=max_bits,
 			min_neurons=min_neurons,
 			max_neurons=max_neurons,
-			phase=phase,
+			optimize_bits=optimize_bits,
+			optimize_neurons=optimize_neurons,
+			optimize_connections=optimize_connections,
+			default_bits=default_bits,
+			default_neurons=default_neurons,
 			token_frequencies=token_frequencies,
-			total_input_bits=total_input_bits,  # For connection preservation
+			total_input_bits=total_input_bits,
 		)
 		ts_config = TSConfig(
 			iterations=iterations,

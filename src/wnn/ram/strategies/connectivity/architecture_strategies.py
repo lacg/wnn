@@ -33,14 +33,49 @@ if TYPE_CHECKING:
 
 @dataclass
 class ArchitectureConfig:
-	"""Configuration for architecture space bounds."""
+	"""
+	Configuration for architecture optimization.
+
+	Controls both the search space bounds and what gets optimized.
+	The optimizer is phase-agnostic - callers control what to optimize
+	by setting the optimize_* flags.
+
+	Example usage:
+		# Phase 1: Optimize neurons only (bits fixed at default_bits)
+		config = ArchitectureConfig(
+			num_clusters=50257,
+			optimize_bits=False,
+			optimize_neurons=True,
+			default_bits=8,  # All genomes start with 8 bits
+		)
+
+		# Phase 2: Optimize bits only (pass seed genome from Phase 1)
+		config = ArchitectureConfig(
+			num_clusters=50257,
+			optimize_bits=True,
+			optimize_neurons=False,
+		)
+
+		# Phase 3: Optimize connections only (pass seed genome from Phase 2)
+		config = ArchitectureConfig(
+			num_clusters=50257,
+			optimize_bits=False,
+			optimize_neurons=False,
+			optimize_connections=True,
+		)
+	"""
 	num_clusters: int
 	min_bits: int = 4
 	max_bits: int = 20
 	min_neurons: int = 1
 	max_neurons: int = 15
-	# Phase: 1 = bits only, 2 = bits + neurons
-	phase: int = 2
+	# Explicit control over what gets optimized (no magic phase numbers)
+	optimize_bits: bool = True
+	optimize_neurons: bool = True
+	optimize_connections: bool = False
+	# Default values for dimensions not being optimized (used in random genome init)
+	default_bits: int = 8
+	default_neurons: int = 5
 	# Token frequencies for frequency-scaled initialization
 	token_frequencies: Optional[List[int]] = None
 	# Total input bits for connection initialization/mutation
@@ -81,13 +116,12 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 
 	def mutate_genome(self, genome: 'ClusterGenome', mutation_rate: float) -> 'ClusterGenome':
 		"""
-		Mutate architecture by adjusting bits/neurons for random clusters.
+		Mutate genome based on optimize_* flags in config.
 
-		Also adjusts connections when architecture changes:
-		- Bits increase: Add random new connections
-		- Bits decrease: Remove last connections
-		- Neurons increase: Copy and mutate connections from existing neuron
-		- Neurons decrease: Remove last neuron's connections
+		The optimizer is phase-agnostic. Callers control what gets optimized
+		by setting optimize_bits, optimize_neurons, optimize_connections.
+
+		Also adjusts connections when architecture changes.
 		"""
 		self._ensure_rng()
 		cfg = self._arch_config
@@ -97,26 +131,48 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		old_bits = genome.bits_per_cluster.copy()
 		old_neurons = genome.neurons_per_cluster.copy()
 
+		# If only optimizing connections, skip architecture mutation
+		if cfg.optimize_connections and not cfg.optimize_bits and not cfg.optimize_neurons:
+			if genome.connections is not None and cfg.total_input_bits is not None:
+				mutant.connections = self._mutate_connections_only(
+					genome.connections.copy(), cfg.total_input_bits, mutation_rate
+				)
+			return mutant
+
+		# Mutate architecture (bits and/or neurons)
 		for i in range(cfg.num_clusters):
 			if self._rng.random() < mutation_rate:
-				# Mutate bits
-				delta = self._rng.choice([-2, -1, 1, 2])
-				new_bits = mutant.bits_per_cluster[i] + delta
-				mutant.bits_per_cluster[i] = max(cfg.min_bits, min(cfg.max_bits, new_bits))
+				if cfg.optimize_bits:
+					delta = self._rng.choice([-2, -1, 1, 2])
+					new_bits = mutant.bits_per_cluster[i] + delta
+					mutant.bits_per_cluster[i] = max(cfg.min_bits, min(cfg.max_bits, new_bits))
 
-				# Mutate neurons (if phase 2)
-				if cfg.phase >= 2:
+				if cfg.optimize_neurons:
 					delta = self._rng.choice([-2, -1, 1, 2])
 					new_neurons = mutant.neurons_per_cluster[i] + delta
 					mutant.neurons_per_cluster[i] = max(cfg.min_neurons, min(cfg.max_neurons, new_neurons))
 
-		# Adjust connections if they exist
+		# Adjust connections if they exist and architecture changed
 		if genome.connections is not None and cfg.total_input_bits is not None:
 			mutant.connections = self._adjust_connections_for_mutation(
 				genome, mutant, old_bits, old_neurons, cfg.total_input_bits
 			)
 
 		return mutant
+
+	def _mutate_connections_only(
+		self,
+		connections: List[int],
+		total_input_bits: int,
+		mutation_rate: float,
+	) -> List[int]:
+		"""Mutate connections without changing architecture."""
+		result = connections.copy()
+		for i in range(len(result)):
+			if self._rng.random() < mutation_rate:
+				delta = self._rng.choice([-2, -1, 1, 2])
+				result[i] = max(0, min(total_input_bits - 1, result[i] + delta))
+		return result
 
 	def _adjust_connections_for_mutation(
 		self,
@@ -221,7 +277,15 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		)
 
 	def create_random_genome(self) -> 'ClusterGenome':
-		"""Create a random genome (frequency-scaled if frequencies available)."""
+		"""
+		Create a random genome based on optimize_* flags.
+
+		- If optimize_bits=True: random bits in [min_bits, max_bits]
+		- If optimize_bits=False: use default_bits for all clusters
+		- Same logic for neurons
+
+		When optimizing connections only, both bits and neurons use defaults.
+		"""
 		from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 
 		self._ensure_rng()
@@ -230,9 +294,17 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		if cfg.token_frequencies is not None:
 			return self._create_frequency_scaled_genome()
 
-		# Uniform random
-		bits = [self._rng.randint(cfg.min_bits, cfg.max_bits) for _ in range(cfg.num_clusters)]
-		neurons = [self._rng.randint(cfg.min_neurons, cfg.max_neurons) for _ in range(cfg.num_clusters)]
+		# Initialize bits: random if optimizing, default otherwise
+		if cfg.optimize_bits:
+			bits = [self._rng.randint(cfg.min_bits, cfg.max_bits) for _ in range(cfg.num_clusters)]
+		else:
+			bits = [cfg.default_bits] * cfg.num_clusters
+
+		# Initialize neurons: random if optimizing, default otherwise
+		if cfg.optimize_neurons:
+			neurons = [self._rng.randint(cfg.min_neurons, cfg.max_neurons) for _ in range(cfg.num_clusters)]
+		else:
+			neurons = [cfg.default_neurons] * cfg.num_clusters
 
 		# Initialize connections if total_input_bits available
 		connections = None
@@ -246,7 +318,13 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		return ClusterGenome(bits_per_cluster=bits, neurons_per_cluster=neurons, connections=connections)
 
 	def _create_frequency_scaled_genome(self) -> 'ClusterGenome':
-		"""Create genome with bits/neurons scaled by token frequency."""
+		"""
+		Create genome with bits/neurons scaled by token frequency.
+
+		- If optimize_bits=True: scale bits by frequency
+		- If optimize_bits=False: use default_bits
+		- Same logic for neurons
+		"""
 		from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 
 		cfg = self._arch_config
@@ -259,10 +337,18 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		bits = []
 		neurons = []
 		for nf in norm_freqs:
-			# Higher frequency -> more bits (can fill larger address space)
-			b = int(cfg.min_bits + nf * (cfg.max_bits - cfg.min_bits))
-			# Higher frequency -> more neurons (more capacity)
-			n = int(cfg.min_neurons + nf * (cfg.max_neurons - cfg.min_neurons))
+			# Bits: scaled if optimizing, default otherwise
+			if cfg.optimize_bits:
+				b = int(cfg.min_bits + nf * (cfg.max_bits - cfg.min_bits))
+			else:
+				b = cfg.default_bits
+
+			# Neurons: scaled if optimizing, default otherwise
+			if cfg.optimize_neurons:
+				n = int(cfg.min_neurons + nf * (cfg.max_neurons - cfg.min_neurons))
+			else:
+				n = cfg.default_neurons
+
 			bits.append(max(cfg.min_bits, min(cfg.max_bits, b)))
 			neurons.append(max(cfg.min_neurons, min(cfg.max_neurons, n)))
 
@@ -348,16 +434,27 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		"""
 		Generate a neighbor by modifying one cluster's configuration.
 
-		Also adjusts connections when architecture changes:
-		- Bits change: adjust connection count for that cluster
-		- Neurons change: adjust neuron count for that cluster
+		The optimizer is phase-agnostic. Callers control what gets optimized
+		by setting optimize_bits, optimize_neurons, optimize_connections.
 
 		Returns (new_genome, move_info) where move_info = (cluster_idx, field, old_val, new_val)
-		Note: mutation_rate is ignored for TS (always mutates one cluster)
 		"""
 		self._ensure_rng()
 		cfg = self._arch_config
 		mutant = genome.clone()
+
+		# If only optimizing connections, modify a single connection
+		if cfg.optimize_connections and not cfg.optimize_bits and not cfg.optimize_neurons:
+			if genome.connections is not None and cfg.total_input_bits is not None:
+				conn_idx = self._rng.randint(0, len(genome.connections) - 1)
+				old_val = genome.connections[conn_idx]
+				delta = self._rng.choice([-2, -1, 1, 2])
+				new_val = max(0, min(cfg.total_input_bits - 1, old_val + delta))
+				mutant.connections[conn_idx] = new_val
+				move = (conn_idx, 'connection', old_val, new_val)
+			else:
+				move = None
+			return mutant, move
 
 		# Pick a random cluster to modify
 		cluster_idx = self._rng.randint(0, cfg.num_clusters - 1)
@@ -366,16 +463,28 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		old_bits = genome.bits_per_cluster[cluster_idx]
 		old_neurons = genome.neurons_per_cluster[cluster_idx]
 
-		# Pick what to modify (bits or neurons)
-		if cfg.phase == 1 or self._rng.random() < 0.5:
-			# Modify bits
+		# Determine which field to modify based on config
+		can_modify_bits = cfg.optimize_bits
+		can_modify_neurons = cfg.optimize_neurons
+
+		if can_modify_bits and can_modify_neurons:
+			# Both enabled: 50% chance each
+			modify_bits = self._rng.random() < 0.5
+		elif can_modify_bits:
+			modify_bits = True
+		elif can_modify_neurons:
+			modify_bits = False
+		else:
+			# Nothing to modify (shouldn't happen)
+			return mutant, None
+
+		if modify_bits:
 			old_val = mutant.bits_per_cluster[cluster_idx]
 			delta = self._rng.choice([-2, -1, 1, 2])
 			new_val = max(cfg.min_bits, min(cfg.max_bits, old_val + delta))
 			mutant.bits_per_cluster[cluster_idx] = new_val
 			move = (cluster_idx, 'bits', old_val, new_val)
 		else:
-			# Modify neurons
 			old_val = mutant.neurons_per_cluster[cluster_idx]
 			delta = self._rng.choice([-2, -1, 1, 2])
 			new_val = max(cfg.min_neurons, min(cfg.max_neurons, old_val + delta))
