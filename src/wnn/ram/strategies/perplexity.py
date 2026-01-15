@@ -52,6 +52,7 @@ class PerplexityCalculator:
 		vocab_size: int,
 		num_categories: Optional[int] = None,
 		category_names: Optional[list[str]] = None,
+		empty_value: float = 0.0,
 	):
 		"""
 		Initialize the calculator.
@@ -62,10 +63,13 @@ class PerplexityCalculator:
 			                When set, enables per-category stats (e.g., per-tier metrics).
 			category_names: Optional names for categories (for better reporting).
 			                If None, uses ["cat_0", "cat_1", ...].
+			empty_value: Value for EMPTY cells when computing probabilities from
+			            RAM memory counts. 0.0 = abstain (recommended), 0.5 = uncertain.
 		"""
 		self.vocab_size = vocab_size
 		self.min_prob = 1.0 / vocab_size
 		self._log_min_prob = log(self.min_prob)
+		self.empty_value = empty_value
 
 		# Category tracking setup
 		self.num_categories = num_categories
@@ -435,6 +439,29 @@ class PerplexityCalculator:
 					if is_correct:
 						self._cat_correct[cat] += 1
 					self._cat_total[cat] += 1
+
+	def ram_counts_to_scores(
+		self,
+		true_counts: 'Tensor',
+		empty_counts: 'Tensor',
+		neurons_per_cluster: int,
+	) -> 'Tensor':
+		"""
+		Convert RAM memory TRUE/EMPTY counts to scores using this calculator's empty_value.
+
+		This centralizes the empty_value logic so RAM layers don't need to hardcode it.
+
+		Score = (TRUE + empty_value * EMPTY) / neurons_per_cluster
+
+		Args:
+			true_counts: [batch, num_clusters] count of TRUE cells per cluster
+			empty_counts: [batch, num_clusters] count of EMPTY cells per cluster
+			neurons_per_cluster: Number of neurons per cluster (for normalization)
+
+		Returns:
+			[batch, num_clusters] scores (not yet softmax-normalized)
+		"""
+		return (true_counts.float() + self.empty_value * empty_counts.float()) / neurons_per_cluster
 
 	@staticmethod
 	def normalize_scores(scores: 'Tensor') -> 'Tensor':
