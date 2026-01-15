@@ -1,5 +1,46 @@
 # WNN Research Project - Status & Roadmap
 
+---
+
+## 🎯 NEXT STEPS (2026-01-15)
+
+### Current Best Result
+| Config | Test PPL | Test Acc | Notes |
+|--------|----------|----------|-------|
+| **5-tier + EMPTY=0.0** | **26,986** | 4.86% | No optimization needed |
+
+### What Failed
+- ❌ Per-cluster optimization (50K params) - flat fitness landscape, 0% improvement
+- ❌ Connectivity optimization on trained model - degraded PPL by 7-24%
+
+### Promising Next Experiments
+
+| Priority | Experiment | Rationale | Command |
+|----------|------------|-----------|---------|
+| **1** | **Connectivity opt on FRESH model** | Optimize connectivity BEFORE training, not after | TBD |
+| **2** | **Coarser bucket optimization** | 10-20 frequency buckets instead of 50K clusters | `--tiered` with bucket config |
+| **3** | **Longer context (n=5,6)** | More disambiguation, especially for tier 0 | `--context 5` |
+| **4** | **Scale up best config** | More neurons for tier 0 (20→30), more data | `--tiered "50,30,20;..."` |
+
+### Key Insights
+
+1. **EMPTY=0.0 > EMPTY=0.5**: 26% PPL improvement by having untrained cells abstain
+2. **No optimization > optimization**: Random connectivity + full training beats GA/TS-optimized
+3. **Tier 0 dominates**: 42% of data, 11% accuracy - focus optimization here
+4. **Per-token too fine**: Need coarser granularity (tiers/buckets) for optimization signal
+
+### Architecture Cleanup ✅
+- Deleted 17 Counter-based test scripts (wrong architecture)
+- Kept: `ramlm_benchmark.py`, `ramlm_full_benchmark.py`, `run_adaptive_search.py`
+- All use proper `Memory` with ternary cells (TRUE/FALSE/EMPTY)
+
+### Code Improvements ✅
+- Added `AccelerationMode.AUTO` → HYBRID (56 cores on M4 Max)
+- Added `get_effective_cores()` and `resolve_acceleration_mode()`
+- Renamed `OptResult` → `OptimizerResult` with cleaner field names
+
+---
+
 ## Current Status: ✅ All Core Features Complete
 
 The RAM-based transformer architecture has achieved:

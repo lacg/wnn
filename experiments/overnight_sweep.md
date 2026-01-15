@@ -522,3 +522,77 @@ python tests/ramlm_full_benchmark.py \
   --ga-gens 50 --ts-iters 50 --patience 1 \
   --per-tier
 ```
+
+---
+
+## Failed Experiment: Per-Cluster Architecture Search (2026-01-14)
+
+### Background
+
+Attempted to optimize (bits, neurons) per individual token cluster (50K clusters) using Tabu Search on AdaptiveClusteredRAM architecture.
+
+### Results
+
+| Metric | Value | Notes |
+|--------|-------|-------|
+| Runtime | 3.5+ hours | Killed at iteration 11/100 |
+| CPU Time | 3,391 minutes | ~56 hours CPU time |
+| Best CE | 10.5461 | Stuck since iteration 4 |
+| Test Accuracy | ~0.04% | Essentially random guessing |
+| Improvement | 0% | Flat fitness landscape |
+
+### Why It Failed
+
+1. **Search space too large**: 50K clusters × 2 parameters (bits, neurons) = 100K dimensional space
+2. **Flat fitness landscape**: CE ~10.5 ≈ log(50257) means barely better than random
+3. **No gradient signal**: 0.04% accuracy = ~20 correct predictions out of 50K, statistical noise
+4. **Time per evaluation**: ~17s per genome × 20 neighbors × 100 iterations = would need ~9 more hours
+
+### Key Insight
+
+Per-token granularity is too fine when the model can't predict anything. The tiered approach works because:
+- Groups tokens by frequency (coarser granularity = stronger signal)
+- Tier 0 (100 tokens) has 11% accuracy → real optimization signal
+- Per-cluster has 0.04% accuracy → no signal to optimize
+
+### Conclusion
+
+**Don't optimize at per-token level.** Use tiered approach with 3-5 tiers, not 50K clusters.
+
+---
+
+## Architecture Verification (2026-01-14)
+
+### Confirmed: All Current Benchmarks Use Real RAM WNN
+
+| Script | Architecture | Status |
+|--------|--------------|--------|
+| `ramlm_benchmark.py` | RAMLM → RAMClusterLayer → Memory | ✅ Real RAM |
+| `ramlm_full_benchmark.py` | RAMLM → TieredRAMClusterLayer → Memory | ✅ Real RAM |
+| `run_adaptive_search.py` | AdaptiveRAMLMWrapper → AdaptiveClusteredRAM → Memory | ✅ Real RAM |
+
+### Deleted: 17 Counter-Based Test Scripts
+
+The following scripts used `defaultdict(Counter)` (n-gram counting, NOT real RAM WNN):
+
+```
+tests/ram_lm_v2.py           tests/language_model.py
+tests/ram_lm_combined.py     tests/language_model_word.py
+tests/ram_lm_deep_analysis.py tests/babi_tasks.py
+tests/ram_lm_final.py        tests/code_completion.py
+tests/ram_lm_hybrid_connectivity.py tests/listops_benchmark.py
+tests/ram_lm_improved.py     tests/real_world_benchmark.py
+tests/ram_lm_optimized.py    tests/scaling_benchmark.py
+tests/ram_lm_proper.py       tests/scan_benchmark.py
+                             tests/theorem_proving.py
+```
+
+### Real RAM WNN vs Counter-Based
+
+| Aspect | Counter-based (deleted) | Real RAM WNN (kept) |
+|--------|------------------------|---------------------|
+| Storage | `dict[addr → Counter]` | `Memory` with ternary cells |
+| Cell states | Counts (0, 1, 2...) | TRUE / FALSE / EMPTY |
+| Output | Probability from counts | Boolean or "don't know" |
+| Training | Count increment | EDRA backpropagation |
+
