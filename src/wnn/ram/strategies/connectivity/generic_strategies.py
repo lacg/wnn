@@ -36,7 +36,7 @@ class OptimizationLogger:
 	"""
 	Logger wrapper with TRACE, DEBUG, INFO, ERROR levels.
 
-	TRACE: Filtered candidates, very verbose per-candidate info
+	TRACE: Filtered candidates, very verbose per-candidate info (stdout only)
 	DEBUG: Individual genome info (elites, init genomes)
 	INFO: Progress summaries, phase transitions
 	ERROR: Errors and warnings
@@ -46,9 +46,18 @@ class OptimizationLogger:
 		logger.debug("Elite details...")
 		logger.trace("Filtered candidate...")
 		logger.info("Generation complete")
+
+	With file logging:
+		file_log = lambda msg: print(msg, file=open("log.txt", "a"))
+		logger = OptimizationLogger("GA", file_logger=file_log)
 	"""
 
-	def __init__(self, name: str, level: int = logging.DEBUG):
+	def __init__(
+		self,
+		name: str,
+		level: int = logging.DEBUG,
+		file_logger: Optional[Callable[[str], None]] = None,
+	):
 		self._logger = logging.getLogger(f"wnn.optimizer.{name}")
 		if not self._logger.handlers:
 			handler = logging.StreamHandler()
@@ -56,30 +65,40 @@ class OptimizationLogger:
 			self._logger.addHandler(handler)
 		self._logger.setLevel(level)
 		self._name = name
+		self._file_logger = file_logger  # Also write DEBUG+ to file
 
 	def trace(self, msg: str) -> None:
-		"""Log at TRACE level (filtered candidates, very verbose)."""
+		"""Log at TRACE level (filtered candidates, stdout only)."""
 		self._logger.log(TRACE, msg)
+		# TRACE intentionally NOT written to file
 
 	def debug(self, msg: str) -> None:
 		"""Log at DEBUG level (individual genome info)."""
 		self._logger.debug(msg)
+		if self._file_logger and self._logger.isEnabledFor(logging.DEBUG):
+			self._file_logger(msg)
 
 	def info(self, msg: str) -> None:
 		"""Log at INFO level (progress summaries)."""
 		self._logger.info(msg)
+		if self._file_logger and self._logger.isEnabledFor(logging.INFO):
+			self._file_logger(msg)
 
 	def warning(self, msg: str) -> None:
 		"""Log at WARNING level."""
 		self._logger.warning(msg)
+		if self._file_logger and self._logger.isEnabledFor(logging.WARNING):
+			self._file_logger(msg)
 
 	def error(self, msg: str) -> None:
 		"""Log at ERROR level."""
 		self._logger.error(msg)
+		if self._file_logger and self._logger.isEnabledFor(logging.ERROR):
+			self._file_logger(msg)
 
 	def __call__(self, msg: str) -> None:
 		"""Default: INFO level (backward compatible with print-style logging)."""
-		self._logger.info(msg)
+		self.info(msg)
 
 	def set_level(self, level: int) -> None:
 		"""Change log level dynamically."""
@@ -605,8 +624,8 @@ class GenericGAStrategy(ABC, Generic[T]):
 	):
 		self._config = config or GAConfig()
 		self._seed = seed
-		# Always use OptimizationLogger for consistent leveled logging
-		self._log = OptimizationLogger(self.name, level=log_level)
+		# Use OptimizationLogger with optional file logging (DEBUG+ goes to file)
+		self._log = OptimizationLogger(self.name, level=log_level, file_logger=logger)
 		self._rng: Optional[random.Random] = None
 
 	@property
@@ -1140,8 +1159,8 @@ class GenericTSStrategy(ABC, Generic[T]):
 	):
 		self._config = config or TSConfig()
 		self._seed = seed
-		# Always use OptimizationLogger for consistent leveled logging
-		self._log = OptimizationLogger(self.name, level=log_level)
+		# Use OptimizationLogger with optional file logging (DEBUG+ goes to file)
+		self._log = OptimizationLogger(self.name, level=log_level, file_logger=logger)
 		self._rng: Optional[random.Random] = None
 
 	@property
