@@ -1067,7 +1067,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 		if seed_genomes:
 			to_eval = [self.clone_genome(g) for g in seed_genomes[:target_size]]
 			if batch_fn is not None:
-				results = batch_fn(to_eval)
+				results = batch_fn(to_eval, min_accuracy=min_accuracy)
 				for genome, (ce, acc) in zip(to_eval, results):
 					if acc is None or acc >= min_accuracy:
 						viable.append((genome, ce, acc))
@@ -1089,7 +1089,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 
 			# Evaluate
 			if batch_fn is not None:
-				results = batch_fn(candidates)
+				results = batch_fn(candidates, min_accuracy=min_accuracy)
 				for genome, (ce, acc) in zip(candidates, results):
 					if acc is None or acc >= min_accuracy:
 						viable.append((genome, ce, acc))
@@ -1248,7 +1248,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 			self._log.info(f"[{self.name}] Seeding from {len(initial_neighbors)} neighbors")
 			# Evaluate seed neighbors - batch_evaluate_fn returns (CE, accuracy) tuples
 			if batch_evaluate_fn is not None:
-				results = batch_evaluate_fn(initial_neighbors)
+				results = batch_evaluate_fn(initial_neighbors, min_accuracy=initial_threshold)
 				seed_fitness = [ce for ce, _ in results]
 				seed_accuracy = [acc for _, acc in results]
 			else:
@@ -1323,10 +1323,13 @@ class GenericTSStrategy(ABC, Generic[T]):
 			if not neighbor_candidates:
 				continue
 
+			# Progressive threshold: gets stricter as iterations progress
+			current_threshold = get_threshold(iteration / cfg.iterations)
+
 			# Batch evaluate fitness - batch_evaluate_fn returns (CE, accuracy) tuples
 			if batch_evaluate_fn is not None:
 				to_eval = [n for n, _ in neighbor_candidates]
-				results = batch_evaluate_fn(to_eval)
+				results = batch_evaluate_fn(to_eval, min_accuracy=current_threshold)
 				fitness_values = [ce for ce, _ in results]
 				accuracy_values = [acc for _, acc in results]
 			else:
@@ -1335,9 +1338,6 @@ class GenericTSStrategy(ABC, Generic[T]):
 
 			# Build neighbors list with fitness and accuracy
 			neighbors = [(n, f, m, a) for (n, m), f, a in zip(neighbor_candidates, fitness_values, accuracy_values)]
-
-			# Progressive threshold: gets stricter as iterations progress
-			current_threshold = get_threshold(iteration / cfg.iterations)
 
 			# Filter out neighbors with accuracy below threshold
 			viable_neighbors = [

@@ -837,6 +837,7 @@ class RustParallelEvaluator:
 		batch_size: int = 1,  # 1 = per-genome progress logging (recommended)
 		generation: Optional[int] = None,  # Current generation for logging
 		total_generations: Optional[int] = None,  # Total generations for logging
+		min_accuracy: Optional[float] = None,  # Threshold for log level selection
 	) -> List[Tuple[float, float]]:
 		"""
 		Evaluate multiple genomes using Rust/rayon.
@@ -851,6 +852,7 @@ class RustParallelEvaluator:
 			batch_size: Genomes per Rust call (1 = per-genome logging, >1 = batch logging)
 			generation: Current generation number for logging (None = initial population)
 			total_generations: Total number of generations for logging context
+			min_accuracy: If provided, genomes below this threshold log at TRACE level
 
 		Returns:
 			List of (cross-entropy, accuracy) tuples for each genome
@@ -858,13 +860,16 @@ class RustParallelEvaluator:
 		import ram_accelerator
 		import time
 
-		# Use OptimizationLogger.debug for per-genome logs, or fallback to callable
+		# Use OptimizationLogger for leveled logging, or fallback to callable
 		if isinstance(logger, OptimizationLogger):
 			log_debug = logger.debug
+			log_trace = logger.trace
 		elif logger is not None:
 			log_debug = logger
+			log_trace = logger  # Fallback: no level distinction
 		else:
 			log_debug = lambda x: None
+			log_trace = lambda x: None
 
 		# Prepare data on first call
 		self._prepare_data()
@@ -923,9 +928,14 @@ class RustParallelEvaluator:
 
 			elapsed = time.time() - start_time
 			if batch_size == 1:
-				# Per-genome timing with accuracy (DEBUG level)
+				# Per-genome timing with accuracy
+				# Use TRACE for filtered (below threshold), DEBUG for passed
 				ce, acc = batch_results[0]
-				log_debug(f"{gen_prefix} Genome {batch_end}/{total_genomes}: CE={ce:.4f}, Acc={acc:.2%} in {elapsed:.1f}s")
+				msg = f"{gen_prefix} Genome {batch_end}/{total_genomes}: CE={ce:.4f}, Acc={acc:.2%} in {elapsed:.1f}s"
+				if min_accuracy is not None and acc < min_accuracy:
+					log_trace(msg)  # Filtered candidate
+				else:
+					log_debug(msg)  # Passed candidate
 			else:
 				log_debug(f"{gen_prefix} Batch {batch_start//batch_size + 1}/{(total_genomes + batch_size - 1)//batch_size}: "
 						  f"{batch_end}/{total_genomes} genomes in {elapsed:.1f}s")
@@ -1466,7 +1476,7 @@ def run_architecture_tabu_search(
 	# Create batch evaluation function using Rust evaluator (returns List[(CE, accuracy)])
 	batch_evaluate_fn = None
 	if batch_evaluator is not None:
-		batch_evaluate_fn = lambda genomes: batch_evaluator.evaluate_batch(genomes, logger=log)
+		batch_evaluate_fn = lambda genomes, min_accuracy=None: batch_evaluator.evaluate_batch(genomes, logger=log, min_accuracy=min_accuracy)
 
 	# Run optimization
 	result = strategy.optimize(
@@ -1643,7 +1653,7 @@ def run_architecture_search(
 	# Create batch evaluation function using Rust evaluator (returns List[(CE, accuracy)])
 	batch_evaluate_fn = None
 	if batch_evaluator is not None:
-		batch_evaluate_fn = lambda genomes: batch_evaluator.evaluate_batch(genomes, logger=log)
+		batch_evaluate_fn = lambda genomes, min_accuracy=None: batch_evaluator.evaluate_batch(genomes, logger=log, min_accuracy=min_accuracy)
 
 	# Run optimization
 	log()
@@ -1805,7 +1815,7 @@ def run_connectivity_optimization(
 	# Create batch evaluation function using Rust evaluator (returns List[(CE, accuracy)])
 	batch_evaluate_fn = None
 	if batch_evaluator is not None:
-		batch_evaluate_fn = lambda genomes: batch_evaluator.evaluate_batch(genomes, logger=log)
+		batch_evaluate_fn = lambda genomes, min_accuracy=None: batch_evaluator.evaluate_batch(genomes, logger=log, min_accuracy=min_accuracy)
 
 	# Compute total input bits for connection preservation
 	from wnn.ram.core import bits_needed
