@@ -40,7 +40,12 @@ from wnn.ram.strategies.connectivity.base import (
 	SEVERE_THRESHOLD,
 	CRITICAL_THRESHOLD,
 )
-from wnn.ram.strategies.connectivity.generic_strategies import StopReason
+from wnn.ram.strategies.connectivity.generic_strategies import (
+	StopReason,
+	AdaptiveLevel,
+	AdaptiveScaler,
+	AdaptiveScalerConfig,
+)
 # Preferred: use enum instead of constants
 from wnn.core.thresholds import OverfitThreshold, EarlyStopThreshold
 
@@ -84,6 +89,10 @@ __all__ = [
 	'OptimizerResult',
 	'StopReason',
 	'OptimizerStrategyBase',
+	# Adaptive scaling
+	'AdaptiveLevel',
+	'AdaptiveScaler',
+	'AdaptiveScalerConfig',
 	'OverfittingControl',
 	'OverfittingCallback',
 	'OverfittingMonitor',
