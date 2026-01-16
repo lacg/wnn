@@ -1105,7 +1105,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 						break
 
 		if filtered_count > 0:
-			self._log.debug(f"[{self.name}] Filtered {filtered_count} candidates with accuracy < {min_accuracy:.2%}")
+			self._log.trace(f"[{self.name}] Filtered {filtered_count} candidates with accuracy < {min_accuracy:.2%}")
 
 		if len(viable) < target_size:
 			self._log.warning(f"[{self.name}] Warning: only {len(viable)}/{target_size} viable candidates after {max_attempts} attempts")
@@ -1263,7 +1263,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 				else:
 					filtered_count += 1
 			if filtered_count > 0:
-				self._log.debug(f"[{self.name}] Filtered {filtered_count} seed neighbors with accuracy < {initial_threshold:.2%}")
+				self._log.trace(f"[{self.name}] Filtered {filtered_count} seed neighbors with accuracy < {initial_threshold:.2%}")
 			# Seed summary: best, seed_best, avg
 			viable_fitness = [f for g, f, a in zip(initial_neighbors, seed_fitness, seed_accuracy) if a is None or a >= initial_threshold]
 			seed_best = min(viable_fitness) if viable_fitness else min(seed_fitness)
@@ -1346,7 +1346,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 			]
 			filtered_count = len(neighbors) - len(viable_neighbors)
 			if filtered_count > 0:
-				self._log.debug(f"[{self.name}] Filtered {filtered_count} neighbors with accuracy < {current_threshold:.2%}")
+				self._log.trace(f"[{self.name}] Filtered {filtered_count} neighbors with accuracy < {current_threshold:.2%}")
 
 			# If all neighbors filtered, keep the best one anyway (avoid getting stuck)
 			if not viable_neighbors:
