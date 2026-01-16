@@ -691,8 +691,9 @@ pub fn evaluate_genomes_parallel(
         .map(|i| genomes_bits_flat[i] * genomes_neurons_flat[i])
         .sum();
 
-    // Sequential genome evaluation - each genome gets full 16-core parallelism
-    (0..num_genomes).map(|genome_idx| {
+    // PARALLEL genome evaluation - rayon work-stealing handles nested parallelism
+    // Each genome also parallelizes its training examples, sharing the thread pool
+    (0..num_genomes).into_par_iter().map(|genome_idx| {
         // Extract this genome's configuration
         let genome_offset = genome_idx * num_clusters;
         let bits_per_cluster: Vec<usize> = genomes_bits_flat[genome_offset..genome_offset + num_clusters].to_vec();
