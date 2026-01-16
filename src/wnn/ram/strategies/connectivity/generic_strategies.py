@@ -16,6 +16,7 @@ Supports:
 - Diversity mode for escaping local optima
 """
 
+import logging
 import random
 from abc import ABC, abstractmethod
 from collections import deque
@@ -25,6 +26,64 @@ from typing import Callable, Generic, List, Optional, Tuple, TypeVar, Any
 
 # Generic genome type
 T = TypeVar('T')
+
+# Custom TRACE level (below DEBUG)
+TRACE = 5
+logging.addLevelName(TRACE, "TRACE")
+
+
+class OptimizationLogger:
+	"""
+	Logger wrapper with TRACE, DEBUG, INFO, ERROR levels.
+
+	TRACE: Filtered candidates, very verbose per-candidate info
+	DEBUG: Individual genome info (elites, init genomes)
+	INFO: Progress summaries, phase transitions
+	ERROR: Errors and warnings
+
+	Usage:
+		logger = OptimizationLogger("ArchitectureGA", level=logging.DEBUG)
+		logger.debug("Elite details...")
+		logger.trace("Filtered candidate...")
+		logger.info("Generation complete")
+	"""
+
+	def __init__(self, name: str, level: int = logging.DEBUG):
+		self._logger = logging.getLogger(f"wnn.optimizer.{name}")
+		if not self._logger.handlers:
+			handler = logging.StreamHandler()
+			handler.setFormatter(logging.Formatter("%(message)s"))
+			self._logger.addHandler(handler)
+		self._logger.setLevel(level)
+		self._name = name
+
+	def trace(self, msg: str) -> None:
+		"""Log at TRACE level (filtered candidates, very verbose)."""
+		self._logger.log(TRACE, msg)
+
+	def debug(self, msg: str) -> None:
+		"""Log at DEBUG level (individual genome info)."""
+		self._logger.debug(msg)
+
+	def info(self, msg: str) -> None:
+		"""Log at INFO level (progress summaries)."""
+		self._logger.info(msg)
+
+	def warning(self, msg: str) -> None:
+		"""Log at WARNING level."""
+		self._logger.warning(msg)
+
+	def error(self, msg: str) -> None:
+		"""Log at ERROR level."""
+		self._logger.error(msg)
+
+	def __call__(self, msg: str) -> None:
+		"""Default: INFO level (backward compatible with print-style logging)."""
+		self._logger.info(msg)
+
+	def set_level(self, level: int) -> None:
+		"""Change log level dynamically."""
+		self._logger.setLevel(level)
 
 
 class StopReason(IntEnum):
@@ -542,10 +601,12 @@ class GenericGAStrategy(ABC, Generic[T]):
 		config: Optional[GAConfig] = None,
 		seed: Optional[int] = None,
 		logger: Optional[Callable[[str], None]] = None,
+		log_level: int = logging.DEBUG,
 	):
 		self._config = config or GAConfig()
 		self._seed = seed
-		self._log = logger or print
+		# Always use OptimizationLogger for consistent leveled logging
+		self._log = OptimizationLogger(self.name, level=log_level)
 		self._rng: Optional[random.Random] = None
 
 	@property
@@ -621,7 +682,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 				phase_index=cfg.phase_index,
 				config=ProgressiveThresholdConfig(base=cfg.min_accuracy, delta=cfg.min_accuracy * 2),
 			)
-			self._log(f"[{self.name}] Progressive threshold: {prog_threshold.format_range()} (phase {cfg.phase_index})")
+			self._log.info(f"[{self.name}] Progressive threshold: {prog_threshold.format_range()} (phase {cfg.phase_index})")
 		else:
 			prog_threshold = None
 
@@ -634,7 +695,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 		# Build initial population with viable candidates only (accuracy >= threshold at start)
 		initial_threshold = get_threshold(0.0)
 		if initial_population:
-			self._log(f"[{self.name}] Seeding population from {len(initial_population)} genomes")
+			self._log.info(f"[{self.name}] Seeding population from {len(initial_population)} genomes")
 			# Generator creates mutations of best seed genome
 			def seed_generator() -> T:
 				return self.mutate_genome(self.clone_genome(initial_population[0]), cfg.mutation_rate * 3)
@@ -700,10 +761,10 @@ class GenericGAStrategy(ABC, Generic[T]):
 		initial_ce_spread = max(fitness_values) - min(fitness_values) if fitness_values else 0.0
 
 		# Log config and initial best
-		self._log(f"[{self.name}] Config: pop={cfg.population_size}, gens={cfg.generations}, "
-				  f"elitism={cfg.elitism_pct:.0%} per metric, "
-				  f"patience={cfg.patience}, check_interval={cfg.check_interval}, min_delta={cfg.min_improvement_pct}%")
-		self._log(f"[{self.name}] Initial best: {best_fitness:.4f}, diversity (CE spread): {initial_ce_spread:.4f}")
+		self._log.info(f"[{self.name}] Config: pop={cfg.population_size}, gens={cfg.generations}, "
+					   f"elitism={cfg.elitism_pct:.0%} per metric, "
+					   f"patience={cfg.patience}, check_interval={cfg.check_interval}, min_delta={cfg.min_improvement_pct}%")
+		self._log.info(f"[{self.name}] Initial best: {best_fitness:.4f}, diversity (CE spread): {initial_ce_spread:.4f}")
 
 		# Tracking for analysis
 		elite_wins = 0  # Iterations where elite beat new offspring
@@ -723,22 +784,18 @@ class GenericGAStrategy(ABC, Generic[T]):
 			ce_sorted = sorted(range(len(fitness_values)), key=lambda i: fitness_values[i])
 			ce_elite_indices = set(ce_sorted[:n_per_metric])
 
-			# Top by accuracy (higher is better) - only if we have accuracy values
+			# Top by accuracy (higher is better) - MUTUALLY EXCLUSIVE from CE elites
 			has_accuracy = any(a is not None for a in accuracy_values)
 			if has_accuracy:
-				acc_sorted = sorted(range(len(accuracy_values)),
-									key=lambda i: -(accuracy_values[i] or 0))
+				# Exclude CE-selected indices when selecting by accuracy
+				acc_candidates = [i for i in range(len(accuracy_values)) if i not in ce_elite_indices]
+				acc_sorted = sorted(acc_candidates, key=lambda i: -(accuracy_values[i] or 0))
 				acc_elite_indices = set(acc_sorted[:n_per_metric])
 			else:
 				acc_elite_indices = set()
 
-			# Combine unique elites (preserves CE order for ties)
-			all_elite_indices = list(ce_elite_indices)
-			for idx in acc_elite_indices:
-				if idx not in ce_elite_indices:
-					all_elite_indices.append(idx)
-
-			overlap_count = len(ce_elite_indices & acc_elite_indices)
+			# Combine elites (mutually exclusive, no overlap)
+			all_elite_indices = list(ce_elite_indices) + list(acc_elite_indices)
 			total_elites = len(all_elite_indices)
 
 			# Track initial elites (first generation only) for survival analysis
@@ -747,9 +804,9 @@ class GenericGAStrategy(ABC, Generic[T]):
 					(self.clone_genome(population[idx][0]), fitness_values[idx])
 					for idx in all_elite_indices
 				]
-				# Log elite composition
-				self._log(f"[{self.name}] Elitism: {len(ce_elite_indices)} by CE + "
-						  f"{len(acc_elite_indices)} by Acc ({overlap_count} overlap) = {total_elites} unique elites")
+				# Log elite composition (INFO level)
+				self._log.info(f"[{self.name}] Elitism: {len(ce_elite_indices)} by CE + "
+							   f"{len(acc_elite_indices)} by Acc = {total_elites} unique elites")
 
 			# Add elites to new population
 			for i, elite_idx in enumerate(all_elite_indices):
@@ -758,12 +815,10 @@ class GenericGAStrategy(ABC, Generic[T]):
 				elite_accuracy = accuracy_values[elite_idx]
 				new_population.append((elite_genome, elite_fitness, elite_accuracy))
 
-				# Log elite source
-				in_ce = elite_idx in ce_elite_indices
-				in_acc = elite_idx in acc_elite_indices
-				source = "CE+Acc" if (in_ce and in_acc) else ("CE" if in_ce else "Acc")
+				# Log elite source (DEBUG level)
+				source = "CE" if elite_idx in ce_elite_indices else "Acc"
 				acc_str = f", Acc={elite_accuracy:.2%}" if elite_accuracy is not None else ""
-				self._log(f"[Elite {i + 1}/{total_elites}] CE={elite_fitness:.4f}{acc_str} ({source})")
+				self._log.debug(f"[Elite {i + 1}/{total_elites}] CE={elite_fitness:.4f}{acc_str} ({source})")
 
 			# Generate viable offspring to fill the rest of the population
 			needed_offspring = cfg.population_size - len(new_population)
@@ -818,8 +873,8 @@ class GenericGAStrategy(ABC, Generic[T]):
 
 			# Log progress
 			gen_avg = sum(fitness_values) / len(fitness_values)
-			self._log(f"[{self.name}] Gen {generation + 1}/{cfg.generations}: "
-					  f"best={best_fitness:.4f}, new_best={new_best:.4f}, avg={gen_avg:.4f}")
+			self._log.info(f"[{self.name}] Gen {generation + 1}/{cfg.generations}: "
+						   f"best={best_fitness:.4f}, new_best={new_best:.4f}, avg={gen_avg:.4f}")
 
 			# Early stopping check (checks at configured intervals)
 			if early_stopper.check(generation, best_fitness):
@@ -861,7 +916,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 			if overfitting_callback is not None and (generation + 1) % cfg.check_interval == 0:
 				control = overfitting_callback(best, best_fitness)
 				if hasattr(control, 'early_stop') and control.early_stop:
-					self._log(f"[{self.name}] Overfitting early stop at gen {generation + 1}")
+					self._log.warning(f"[{self.name}] Overfitting early stop at gen {generation + 1}")
 					# Return early with overfitting stop reason
 					final_population = [self.clone_genome(g) for g, _, _ in sorted(population, key=lambda x: x[1])]
 					improvement_pct = (initial_fitness - best_fitness) / initial_fitness * 100 if initial_fitness > 0 else 0
@@ -905,12 +960,12 @@ class GenericGAStrategy(ABC, Generic[T]):
 		improvement_rate = improved_iterations / total_gens * 100 if total_gens > 0 else 0
 		diversity_change = final_ce_spread - initial_ce_spread
 
-		self._log(f"\n[{self.name}] Analysis Summary:")
-		self._log(f"  CE improvement: {initial_fitness:.4f} → {best_fitness:.4f} ({(1 - best_fitness/initial_fitness)*100:+.2f}%)")
-		self._log(f"  CE spread: {initial_ce_spread:.4f} → {final_ce_spread:.4f} ({diversity_change:+.4f})")
-		self._log(f"  Elite survivals: {elite_survivals}/{len(initial_elite_genomes) if initial_elite_genomes else 0}")
-		self._log(f"  Elite win rate: {elite_wins}/{total_gens} ({elite_win_rate:.1f}%)")
-		self._log(f"  Improvement rate: {improved_iterations}/{total_gens} ({improvement_rate:.1f}%)")
+		self._log.info(f"\n[{self.name}] Analysis Summary:")
+		self._log.info(f"  CE improvement: {initial_fitness:.4f} → {best_fitness:.4f} ({(1 - best_fitness/initial_fitness)*100:+.2f}%)")
+		self._log.info(f"  CE spread: {initial_ce_spread:.4f} → {final_ce_spread:.4f} ({diversity_change:+.4f})")
+		self._log.info(f"  Elite survivals: {elite_survivals}/{len(initial_elite_genomes) if initial_elite_genomes else 0}")
+		self._log.info(f"  Elite win rate: {elite_wins}/{total_gens} ({elite_win_rate:.1f}%)")
+		self._log.info(f"  Improvement rate: {improved_iterations}/{total_gens} ({improvement_rate:.1f}%)")
 
 		improvement_pct = (initial_fitness - best_fitness) / initial_fitness * 100 if initial_fitness > 0 else 0
 
@@ -1050,10 +1105,10 @@ class GenericGAStrategy(ABC, Generic[T]):
 						break
 
 		if filtered_count > 0:
-			self._log(f"[{self.name}] Filtered {filtered_count} candidates with accuracy < {min_accuracy:.2%}")
+			self._log.debug(f"[{self.name}] Filtered {filtered_count} candidates with accuracy < {min_accuracy:.2%}")
 
 		if len(viable) < target_size:
-			self._log(f"[{self.name}] Warning: only {len(viable)}/{target_size} viable candidates after {max_attempts} attempts")
+			self._log.warning(f"[{self.name}] Warning: only {len(viable)}/{target_size} viable candidates after {max_attempts} attempts")
 
 		return viable[:target_size]
 
@@ -1081,10 +1136,12 @@ class GenericTSStrategy(ABC, Generic[T]):
 		config: Optional[TSConfig] = None,
 		seed: Optional[int] = None,
 		logger: Optional[Callable[[str], None]] = None,
+		log_level: int = logging.DEBUG,
 	):
 		self._config = config or TSConfig()
 		self._seed = seed
-		self._log = logger or print
+		# Always use OptimizationLogger for consistent leveled logging
+		self._log = OptimizationLogger(self.name, level=log_level)
 		self._rng: Optional[random.Random] = None
 
 	@property
@@ -1157,7 +1214,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 				phase_index=cfg.phase_index,
 				config=ProgressiveThresholdConfig(base=cfg.min_accuracy, delta=cfg.min_accuracy * 2),
 			)
-			self._log(f"[{self.name}] Progressive threshold: {prog_threshold.format_range()} (phase {cfg.phase_index})")
+			self._log.info(f"[{self.name}] Progressive threshold: {prog_threshold.format_range()} (phase {cfg.phase_index})")
 		else:
 			prog_threshold = None
 
@@ -1188,7 +1245,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 
 		# Seed with initial neighbors if provided
 		if initial_neighbors:
-			self._log(f"[{self.name}] Seeding from {len(initial_neighbors)} neighbors")
+			self._log.info(f"[{self.name}] Seeding from {len(initial_neighbors)} neighbors")
 			# Evaluate seed neighbors - batch_evaluate_fn returns (CE, accuracy) tuples
 			if batch_evaluate_fn is not None:
 				results = batch_evaluate_fn(initial_neighbors)
@@ -1206,12 +1263,12 @@ class GenericTSStrategy(ABC, Generic[T]):
 				else:
 					filtered_count += 1
 			if filtered_count > 0:
-				self._log(f"[{self.name}] Filtered {filtered_count} seed neighbors with accuracy < {initial_threshold:.2%}")
+				self._log.debug(f"[{self.name}] Filtered {filtered_count} seed neighbors with accuracy < {initial_threshold:.2%}")
 			# Seed summary: best, seed_best, avg
 			viable_fitness = [f for g, f, a in zip(initial_neighbors, seed_fitness, seed_accuracy) if a is None or a >= initial_threshold]
 			seed_best = min(viable_fitness) if viable_fitness else min(seed_fitness)
 			seed_avg = sum(viable_fitness) / len(viable_fitness) if viable_fitness else sum(seed_fitness) / len(seed_fitness)
-			self._log(f"[{self.name}] Seed summary: best={best_fitness:.4f}, seed_best={seed_best:.4f}, avg={seed_avg:.4f}")
+			self._log.info(f"[{self.name}] Seed summary: best={best_fitness:.4f}, seed_best={seed_best:.4f}, avg={seed_avg:.4f}")
 			# Sort and keep top k
 			best_neighbors.sort(key=lambda x: x[1])
 			best_neighbors = best_neighbors[:cfg.neighbors_per_iter]
@@ -1250,9 +1307,9 @@ class GenericTSStrategy(ABC, Generic[T]):
 		)
 
 		# Log config at startup
-		self._log(f"[{self.name}] Config: neighbors={cfg.neighbors_per_iter}, iters={cfg.iterations}, "
-				  f"mut={cfg.mutation_rate}, patience={cfg.patience}, check_interval={cfg.check_interval}, min_delta={cfg.min_improvement_pct}%")
-		self._log(f"[{self.name}] Initial: {start_fitness:.4f}, diversity (CE spread): {initial_ce_spread:.4f}")
+		self._log.info(f"[{self.name}] Config: neighbors={cfg.neighbors_per_iter}, iters={cfg.iterations}, "
+					   f"mut={cfg.mutation_rate}, patience={cfg.patience}, check_interval={cfg.check_interval}, min_delta={cfg.min_improvement_pct}%")
+		self._log.info(f"[{self.name}] Initial: {start_fitness:.4f}, diversity (CE spread): {initial_ce_spread:.4f}")
 
 		iteration = 0
 		for iteration in range(cfg.iterations):
@@ -1289,11 +1346,11 @@ class GenericTSStrategy(ABC, Generic[T]):
 			]
 			filtered_count = len(neighbors) - len(viable_neighbors)
 			if filtered_count > 0:
-				self._log(f"[{self.name}] Filtered {filtered_count} neighbors with accuracy < {current_threshold:.2%}")
+				self._log.debug(f"[{self.name}] Filtered {filtered_count} neighbors with accuracy < {current_threshold:.2%}")
 
 			# If all neighbors filtered, keep the best one anyway (avoid getting stuck)
 			if not viable_neighbors:
-				self._log(f"[{self.name}] Warning: all neighbors filtered, keeping best anyway")
+				self._log.warning(f"[{self.name}] Warning: all neighbors filtered, keeping best anyway")
 				viable_neighbors = sorted(neighbors, key=lambda x: x[1])[:1]
 
 			neighbors = viable_neighbors
@@ -1337,8 +1394,8 @@ class GenericTSStrategy(ABC, Generic[T]):
 			# Log progress: best (global), iter_best (this iteration), avg
 			iter_best = best_neighbor_fitness  # Best among neighbors this iteration
 			avg_fitness = sum(f for _, f, _, _ in neighbors) / len(neighbors)
-			self._log(f"[{self.name}] Iter {iteration + 1}/{cfg.iterations}: "
-					  f"best={best_fitness:.4f}, iter_best={iter_best:.4f}, avg={avg_fitness:.4f}")
+			self._log.info(f"[{self.name}] Iter {iteration + 1}/{cfg.iterations}: "
+						   f"best={best_fitness:.4f}, iter_best={iter_best:.4f}, avg={avg_fitness:.4f}")
 
 			# Early stopping check (checks at configured intervals)
 			if early_stopper.check(iteration, best_fitness):
@@ -1356,7 +1413,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 			if overfitting_callback is not None and (iteration + 1) % cfg.check_interval == 0:
 				control = overfitting_callback(best, best_fitness)
 				if hasattr(control, 'early_stop') and control.early_stop:
-					self._log(f"[{self.name}] Overfitting early stop at iter {iteration + 1}")
+					self._log.warning(f"[{self.name}] Overfitting early stop at iter {iteration + 1}")
 					# Return early with overfitting stop reason
 					final_neighbors = [self.clone_genome(g) for g, _ in best_neighbors]
 					improvement_pct = (start_fitness - best_fitness) / start_fitness * 100 if start_fitness > 0 else 0
@@ -1389,11 +1446,11 @@ class GenericTSStrategy(ABC, Generic[T]):
 		improvement_rate = improved_iterations / total_iters * 100 if total_iters > 0 else 0
 		diversity_change = final_ce_spread - initial_ce_spread
 
-		self._log(f"\n[{self.name}] Analysis Summary:")
-		self._log(f"  CE improvement: {start_fitness:.4f} → {best_fitness:.4f} ({(1 - best_fitness/start_fitness)*100:+.2f}%)")
-		self._log(f"  CE spread: {initial_ce_spread:.4f} → {final_ce_spread:.4f} ({diversity_change:+.4f})")
-		self._log(f"  Elite win rate: {elite_wins}/{total_iters} ({elite_win_rate:.1f}%)")
-		self._log(f"  Improvement rate: {improved_iterations}/{total_iters} ({improvement_rate:.1f}%)")
+		self._log.info(f"\n[{self.name}] Analysis Summary:")
+		self._log.info(f"  CE improvement: {start_fitness:.4f} → {best_fitness:.4f} ({(1 - best_fitness/start_fitness)*100:+.2f}%)")
+		self._log.info(f"  CE spread: {initial_ce_spread:.4f} → {final_ce_spread:.4f} ({diversity_change:+.4f})")
+		self._log.info(f"  Elite win rate: {elite_wins}/{total_iters} ({elite_win_rate:.1f}%)")
+		self._log.info(f"  Improvement rate: {improved_iterations}/{total_iters} ({improvement_rate:.1f}%)")
 
 		improvement_pct = (start_fitness - best_fitness) / start_fitness * 100 if start_fitness > 0 else 0
 
