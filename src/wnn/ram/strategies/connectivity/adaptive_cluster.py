@@ -24,6 +24,7 @@ import torch
 from torch import Tensor
 
 from wnn.progress import ProgressTracker
+from wnn.ram.strategies.connectivity.generic_strategies import OptimizationLogger
 from wnn.ram.strategies.factory import (
 	OptimizerStrategyFactory,
 	OptimizerStrategyType,
@@ -857,7 +858,13 @@ class RustParallelEvaluator:
 		import ram_accelerator
 		import time
 
-		log = logger or (lambda x: None)
+		# Use OptimizationLogger.debug for per-genome logs, or fallback to callable
+		if isinstance(logger, OptimizationLogger):
+			log_debug = logger.debug
+		elif logger is not None:
+			log_debug = logger
+		else:
+			log_debug = lambda x: None
 
 		# Prepare data on first call
 		self._prepare_data()
@@ -916,12 +923,12 @@ class RustParallelEvaluator:
 
 			elapsed = time.time() - start_time
 			if batch_size == 1:
-				# Per-genome timing with accuracy
+				# Per-genome timing with accuracy (DEBUG level)
 				ce, acc = batch_results[0]
-				log(f"{gen_prefix} Genome {batch_end}/{total_genomes}: CE={ce:.4f}, Acc={acc:.2%} in {elapsed:.1f}s")
+				log_debug(f"{gen_prefix} Genome {batch_end}/{total_genomes}: CE={ce:.4f}, Acc={acc:.2%} in {elapsed:.1f}s")
 			else:
-				log(f"{gen_prefix} Batch {batch_start//batch_size + 1}/{(total_genomes + batch_size - 1)//batch_size}: "
-					f"{batch_end}/{total_genomes} genomes in {elapsed:.1f}s")
+				log_debug(f"{gen_prefix} Batch {batch_start//batch_size + 1}/{(total_genomes + batch_size - 1)//batch_size}: "
+						  f"{batch_end}/{total_genomes} genomes in {elapsed:.1f}s")
 
 		return all_fitness
 
@@ -1329,7 +1336,11 @@ def evaluate_genome_with_accuracy(
 	stats = wrapper.evaluate(eval_tokens)
 
 	if logger:
-		logger(f"  Checkpoint eval: CE={stats['cross_entropy']:.4f}, Acc={stats['accuracy']:.2%}")
+		# Use DEBUG level if OptimizationLogger, otherwise call directly
+		if isinstance(logger, OptimizationLogger):
+			logger.debug(f"  Checkpoint eval: CE={stats['cross_entropy']:.4f}, Acc={stats['accuracy']:.2%}")
+		else:
+			logger(f"  Checkpoint eval: CE={stats['cross_entropy']:.4f}, Acc={stats['accuracy']:.2%}")
 
 	return stats['cross_entropy'], stats['accuracy']
 
