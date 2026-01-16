@@ -686,10 +686,20 @@ pub fn evaluate_genomes_parallel(
     // Check if connections are provided
     let use_provided_connections = !genomes_connections_flat.is_empty();
 
-    // Calculate total connections per genome (for indexing into provided connections)
-    let conn_size_per_genome: usize = (0..num_clusters)
-        .map(|i| genomes_bits_flat[i] * genomes_neurons_flat[i])
-        .sum();
+    // Pre-compute per-genome connection offsets and sizes
+    // Each genome can have different bits/neurons, so we must calculate individually
+    let mut conn_offsets: Vec<usize> = Vec::with_capacity(num_genomes);
+    let mut conn_sizes: Vec<usize> = Vec::with_capacity(num_genomes);
+    let mut running_offset = 0usize;
+    for genome_idx in 0..num_genomes {
+        conn_offsets.push(running_offset);
+        let genome_offset = genome_idx * num_clusters;
+        let conn_size: usize = (0..num_clusters)
+            .map(|i| genomes_bits_flat[genome_offset + i] * genomes_neurons_flat[genome_offset + i])
+            .sum();
+        conn_sizes.push(conn_size);
+        running_offset += conn_size;
+    }
 
     // PARALLEL genome evaluation - rayon work-stealing handles nested parallelism
     // Each genome also parallelizes its training examples, sharing the thread pool
@@ -710,9 +720,10 @@ pub fn evaluate_genomes_parallel(
 
         // Get or generate connections for this genome
         let connections_flat: Vec<i64> = if use_provided_connections {
-            // Use provided connections from genome state
-            let conn_offset = genome_idx * conn_size_per_genome;
-            genomes_connections_flat[conn_offset..conn_offset + conn_size_per_genome].to_vec()
+            // Use pre-computed per-genome offset and size
+            let conn_offset = conn_offsets[genome_idx];
+            let conn_size = conn_sizes[genome_idx];
+            genomes_connections_flat[conn_offset..conn_offset + conn_size].to_vec()
         } else {
             // Generate random connections (legacy fallback)
             let total_conn_size: usize = groups.iter().map(|g| g.conn_size()).sum();
