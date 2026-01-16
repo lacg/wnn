@@ -208,6 +208,8 @@ class GAConfig:
 	# Dual elitism: keep top N% by CE AND top N% by accuracy (unique)
 	# Total elites = 10-20% of population depending on overlap
 	elitism_pct: float = 0.1       # 10% by CE + 10% by accuracy
+	# Candidate filtering: replace candidates with accuracy below threshold
+	min_accuracy: float = 0.0001   # 0.01% minimum accuracy to be viable
 	# Early stopping (all configurable via parameters)
 	patience: int = 5              # Checks without improvement before stopping
 	check_interval: int = 5        # Check every N generations
@@ -220,6 +222,8 @@ class TSConfig:
 	iterations: int = 100
 	neighbors_per_iter: int = 20
 	tabu_size: int = 10
+	# Candidate filtering: filter out neighbors with accuracy below threshold
+	min_accuracy: float = 0.0001   # 0.01% minimum accuracy to be viable
 	# Early stopping (all configurable via parameters)
 	patience: int = 5              # Checks without improvement before stopping
 	check_interval: int = 5        # Check every N iterations
@@ -343,6 +347,31 @@ class GenericGAStrategy(ABC, Generic[T]):
 
 		# Evaluate initial population
 		population = self._evaluate_population(population, batch_evaluate_fn, evaluate_fn)
+
+		# Filter initial candidates: replace those with accuracy below threshold
+		replaced_count = 0
+		max_replacements = 3  # Limit replacement attempts
+		for attempt in range(max_replacements):
+			needs_replacement = []
+			for i, (genome, fitness, accuracy) in enumerate(population):
+				if accuracy is not None and accuracy < cfg.min_accuracy:
+					needs_replacement.append(i)
+
+			if not needs_replacement:
+				break
+
+			# Replace with new random genomes
+			for idx in needs_replacement:
+				new_genome = self.create_random_genome()
+				population[idx] = (new_genome, None, None)
+				replaced_count += 1
+
+			# Re-evaluate only the replaced genomes
+			population = self._evaluate_population(population, batch_evaluate_fn, evaluate_fn)
+
+		if replaced_count > 0:
+			self._log(f"[{self.name}] Initial: replaced {replaced_count} candidates with accuracy < {cfg.min_accuracy:.2%}")
+
 		fitness_values = [f for _, f, _ in population]
 		accuracy_values = [a for _, _, a in population]
 
@@ -451,6 +480,35 @@ class GenericGAStrategy(ABC, Generic[T]):
 
 			population = new_population[:cfg.population_size]
 			population = self._evaluate_population(population, batch_evaluate_fn, evaluate_fn, generation, cfg.generations)
+
+			# Filter candidates: replace those with accuracy below threshold
+			replaced_count = 0
+			max_replacements = 3  # Limit replacement attempts per generation
+			for attempt in range(max_replacements):
+				needs_replacement = []
+				for i, (genome, fitness, accuracy) in enumerate(population):
+					# Skip elites (first total_elites entries)
+					if i < total_elites:
+						continue
+					# Check if below minimum accuracy threshold
+					if accuracy is not None and accuracy < cfg.min_accuracy:
+						needs_replacement.append(i)
+
+				if not needs_replacement:
+					break
+
+				# Replace with new random genomes
+				for idx in needs_replacement:
+					new_genome = self.create_random_genome()
+					population[idx] = (new_genome, None, None)
+					replaced_count += 1
+
+				# Re-evaluate only the replaced genomes
+				population = self._evaluate_population(population, batch_evaluate_fn, evaluate_fn, generation, cfg.generations)
+
+			if replaced_count > 0:
+				self._log(f"[{self.name}] Replaced {replaced_count} candidates with accuracy < {cfg.min_accuracy:.2%}")
+
 			fitness_values = [f for _, f, _ in population]
 			accuracy_values = [a for _, _, a in population]
 
@@ -728,11 +786,19 @@ class GenericTSStrategy(ABC, Generic[T]):
 				seed_fitness = [evaluate_fn(g) for g in initial_neighbors]
 				seed_accuracy = [None] * len(initial_neighbors)
 			# Note: Real-time per-genome logging happens in evaluate_batch
-			for g, f in zip(initial_neighbors, seed_fitness):
-				best_neighbors.append((self.clone_genome(g), f))
+			# Filter seed neighbors by minimum accuracy
+			filtered_count = 0
+			for g, f, a in zip(initial_neighbors, seed_fitness, seed_accuracy):
+				if a is None or a >= cfg.min_accuracy:
+					best_neighbors.append((self.clone_genome(g), f))
+				else:
+					filtered_count += 1
+			if filtered_count > 0:
+				self._log(f"[{self.name}] Filtered {filtered_count} seed neighbors with accuracy < {cfg.min_accuracy:.2%}")
 			# Seed summary: best, seed_best, avg
-			seed_best = min(seed_fitness)
-			seed_avg = sum(seed_fitness) / len(seed_fitness)
+			viable_fitness = [f for g, f, a in zip(initial_neighbors, seed_fitness, seed_accuracy) if a is None or a >= cfg.min_accuracy]
+			seed_best = min(viable_fitness) if viable_fitness else min(seed_fitness)
+			seed_avg = sum(viable_fitness) / len(viable_fitness) if viable_fitness else sum(seed_fitness) / len(seed_fitness)
 			self._log(f"[{self.name}] Seed summary: best={best_fitness:.4f}, seed_best={seed_best:.4f}, avg={seed_avg:.4f}")
 			# Sort and keep top k
 			best_neighbors.sort(key=lambda x: x[1])
@@ -792,6 +858,22 @@ class GenericTSStrategy(ABC, Generic[T]):
 
 			# Build neighbors list with fitness and accuracy
 			neighbors = [(n, f, m, a) for (n, m), f, a in zip(neighbor_candidates, fitness_values, accuracy_values)]
+
+			# Filter out neighbors with accuracy below threshold
+			viable_neighbors = [
+				(n, f, m, a) for n, f, m, a in neighbors
+				if a is None or a >= cfg.min_accuracy
+			]
+			filtered_count = len(neighbors) - len(viable_neighbors)
+			if filtered_count > 0:
+				self._log(f"[{self.name}] Filtered {filtered_count} neighbors with accuracy < {cfg.min_accuracy:.2%}")
+
+			# If all neighbors filtered, keep the best one anyway (avoid getting stuck)
+			if not viable_neighbors:
+				self._log(f"[{self.name}] Warning: all neighbors filtered, keeping best anyway")
+				viable_neighbors = sorted(neighbors, key=lambda x: x[1])[:1]
+
+			neighbors = viable_neighbors
 
 			# Note: Real-time per-genome logging happens in evaluate_batch (adaptive_cluster.py)
 
