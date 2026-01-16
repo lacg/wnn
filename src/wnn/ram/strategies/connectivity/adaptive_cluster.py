@@ -834,7 +834,7 @@ class RustParallelEvaluator:
 		self,
 		genomes: List[ClusterGenome],
 		logger: Optional[Callable[[str], None]] = None,
-		batch_size: int = 1,  # 1 = per-genome progress logging (recommended)
+		batch_size: int = 10,  # Parallel batch size (Rust evaluates genomes in parallel)
 		generation: Optional[int] = None,  # Current generation for logging
 		total_generations: Optional[int] = None,  # Total generations for logging
 		min_accuracy: Optional[float] = None,  # Threshold for log level selection
@@ -927,18 +927,22 @@ class RustParallelEvaluator:
 			all_fitness.extend(batch_results)
 
 			elapsed = time.time() - start_time
-			if batch_size == 1:
-				# Per-genome timing with accuracy
+			# Log each genome in the batch (with batch timing for efficiency)
+			for i, (ce, acc) in enumerate(batch_results):
+				genome_idx = batch_start + i + 1
+				if batch_size == 1:
+					msg = f"{gen_prefix} Genome {genome_idx}/{total_genomes}: CE={ce:.4f}, Acc={acc:.2%} in {elapsed:.1f}s"
+				else:
+					# Parallel batch: show genome results without individual timing
+					msg = f"{gen_prefix} Genome {genome_idx}/{total_genomes}: CE={ce:.4f}, Acc={acc:.2%}"
 				# Use TRACE for filtered (below threshold), DEBUG for passed
-				ce, acc = batch_results[0]
-				msg = f"{gen_prefix} Genome {batch_end}/{total_genomes}: CE={ce:.4f}, Acc={acc:.2%} in {elapsed:.1f}s"
 				if min_accuracy is not None and acc < min_accuracy:
 					log_trace(msg)  # Filtered candidate
 				else:
 					log_debug(msg)  # Passed candidate
-			else:
-				log_debug(f"{gen_prefix} Batch {batch_start//batch_size + 1}/{(total_genomes + batch_size - 1)//batch_size}: "
-						  f"{batch_end}/{total_genomes} genomes in {elapsed:.1f}s")
+			# Log batch timing summary for parallel batches
+			if batch_size > 1:
+				log_debug(f"{gen_prefix} Batch {batch_start//batch_size + 1}: {len(batch_results)} genomes in {elapsed:.1f}s")
 
 		return all_fitness
 
