@@ -59,42 +59,55 @@ class OptimizationLogger:
 		file_logger: Optional[Callable[[str], None]] = None,
 	):
 		self._logger = logging.getLogger(f"wnn.optimizer.{name}")
-		if not self._logger.handlers:
+		# Only add StreamHandler if no file_logger (file_logger handles stdout+file)
+		if not file_logger and not self._logger.handlers:
 			handler = logging.StreamHandler()
 			handler.setFormatter(logging.Formatter("%(message)s"))
 			self._logger.addHandler(handler)
 		self._logger.setLevel(level)
 		self._name = name
-		self._file_logger = file_logger  # Also write DEBUG+ to file
+		self._file_logger = file_logger  # Handles stdout + file when provided
 
 	def trace(self, msg: str) -> None:
 		"""Log at TRACE level (filtered candidates, stdout only)."""
-		self._logger.log(TRACE, msg)
-		# TRACE intentionally NOT written to file
+		if self._logger.isEnabledFor(TRACE):
+			if self._file_logger:
+				# file_logger handles stdout+file, but TRACE goes to stdout only
+				print(msg)
+			else:
+				self._logger.log(TRACE, msg)
 
 	def debug(self, msg: str) -> None:
 		"""Log at DEBUG level (individual genome info)."""
-		self._logger.debug(msg)
-		if self._file_logger and self._logger.isEnabledFor(logging.DEBUG):
-			self._file_logger(msg)
+		if self._logger.isEnabledFor(logging.DEBUG):
+			if self._file_logger:
+				self._file_logger(msg)  # file_logger handles stdout + file
+			else:
+				self._logger.debug(msg)
 
 	def info(self, msg: str) -> None:
 		"""Log at INFO level (progress summaries)."""
-		self._logger.info(msg)
-		if self._file_logger and self._logger.isEnabledFor(logging.INFO):
-			self._file_logger(msg)
+		if self._logger.isEnabledFor(logging.INFO):
+			if self._file_logger:
+				self._file_logger(msg)
+			else:
+				self._logger.info(msg)
 
 	def warning(self, msg: str) -> None:
 		"""Log at WARNING level."""
-		self._logger.warning(msg)
-		if self._file_logger and self._logger.isEnabledFor(logging.WARNING):
-			self._file_logger(msg)
+		if self._logger.isEnabledFor(logging.WARNING):
+			if self._file_logger:
+				self._file_logger(msg)
+			else:
+				self._logger.warning(msg)
 
 	def error(self, msg: str) -> None:
 		"""Log at ERROR level."""
-		self._logger.error(msg)
-		if self._file_logger and self._logger.isEnabledFor(logging.ERROR):
-			self._file_logger(msg)
+		if self._logger.isEnabledFor(logging.ERROR):
+			if self._file_logger:
+				self._file_logger(msg)
+			else:
+				self._logger.error(msg)
 
 	def __call__(self, msg: str) -> None:
 		"""Default: INFO level (backward compatible with print-style logging)."""
