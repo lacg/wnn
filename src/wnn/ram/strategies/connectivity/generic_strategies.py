@@ -880,7 +880,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 			# Generate neighbors
 			neighbor_candidates: List[Tuple[T, Any]] = []
 			for _ in range(cfg.neighbors_per_iter):
-				neighbor, move = self.mutate_genome(self.clone_genome(current), 1.0)
+				neighbor, move = self.mutate_genome(self.clone_genome(current), cfg.mutation_rate)
 				if not self.is_tabu_move(move, list(tabu_list)):
 					neighbor_candidates.append((neighbor, move))
 
