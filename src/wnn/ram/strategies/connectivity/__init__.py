@@ -45,6 +45,8 @@ from wnn.ram.strategies.connectivity.generic_strategies import (
 	AdaptiveLevel,
 	AdaptiveScaler,
 	AdaptiveScalerConfig,
+	ProgressiveThreshold,
+	ProgressiveThresholdConfig,
 )
 # Preferred: use enum instead of constants
 from wnn.core.thresholds import OverfitThreshold, EarlyStopThreshold
@@ -93,6 +95,9 @@ __all__ = [
 	'AdaptiveLevel',
 	'AdaptiveScaler',
 	'AdaptiveScalerConfig',
+	# Progressive threshold
+	'ProgressiveThreshold',
+	'ProgressiveThresholdConfig',
 	'OverfittingControl',
 	'OverfittingCallback',
 	'OverfittingMonitor',

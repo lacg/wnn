@@ -252,6 +252,95 @@ class AdaptiveScalerConfig:
 	critical_mutation_boost: float = 1.00     # +100% at CRITICAL (0.1 → 0.2)
 
 
+# =============================================================================
+# Progressive Accuracy Threshold
+# =============================================================================
+
+@dataclass
+class ProgressiveThresholdConfig:
+	"""Configuration for progressive accuracy threshold.
+
+	The threshold increases both within a phase (as progress goes 0→1) and
+	across phases (each phase starts where the previous ended).
+
+	Formula: threshold = base + (phase_index + progress) * delta
+
+	Example with base=0.0001 (0.01%), delta=0.0002 (0.02%):
+		Phase 1a (idx=0): 0.01% → 0.03%
+		Phase 1b (idx=1): 0.03% → 0.05%
+		Phase 2a (idx=2): 0.05% → 0.07%
+		...
+	"""
+	base: float = 0.0001      # Starting threshold (0.01%)
+	delta: float = 0.0002     # Increase per phase (0.02%)
+
+
+class ProgressiveThreshold:
+	"""
+	Computes accuracy threshold that increases with optimization progress.
+
+	The threshold gets stricter as optimization progresses, both within
+	a single phase and across phases (curriculum learning).
+
+	Usage:
+		threshold = ProgressiveThreshold(phase_index=0)
+
+		# In optimization loop:
+		progress = iteration / total_iterations  # 0.0 to 1.0
+		min_accuracy = threshold.get(progress)
+
+		# For next phase:
+		threshold = ProgressiveThreshold(phase_index=1)
+	"""
+
+	def __init__(
+		self,
+		phase_index: int = 0,
+		config: Optional[ProgressiveThresholdConfig] = None,
+	):
+		"""
+		Initialize progressive threshold.
+
+		Args:
+			phase_index: Current phase (0=1a, 1=1b, 2=2a, 3=2b, 4=3a, 5=3b)
+			config: Optional configuration for base and delta values
+		"""
+		self._config = config or ProgressiveThresholdConfig()
+		self._phase_index = phase_index
+
+	@property
+	def phase_index(self) -> int:
+		"""Current phase index."""
+		return self._phase_index
+
+	@property
+	def start_threshold(self) -> float:
+		"""Threshold at start of this phase (progress=0)."""
+		return self._config.base + self._phase_index * self._config.delta
+
+	@property
+	def end_threshold(self) -> float:
+		"""Threshold at end of this phase (progress=1)."""
+		return self._config.base + (self._phase_index + 1) * self._config.delta
+
+	def get(self, progress: float) -> float:
+		"""
+		Get threshold for current progress within the phase.
+
+		Args:
+			progress: Progress through current phase (0.0 to 1.0)
+
+		Returns:
+			Accuracy threshold for filtering candidates
+		"""
+		progress = max(0.0, min(1.0, progress))  # Clamp to [0, 1]
+		return self._config.base + (self._phase_index + progress) * self._config.delta
+
+	def format_range(self) -> str:
+		"""Format the threshold range for logging."""
+		return f"{self.start_threshold:.2%} → {self.end_threshold:.2%}"
+
+
 class AdaptiveScaler:
 	"""
 	Scales optimization parameters based on health level.
@@ -407,7 +496,10 @@ class GAConfig:
 	# Total elites = 10-20% of population depending on overlap
 	elitism_pct: float = 0.1       # 10% by CE + 10% by accuracy
 	# Candidate filtering: replace candidates with accuracy below threshold
-	min_accuracy: float = 0.0001   # 0.01% minimum accuracy to be viable
+	min_accuracy: float = 0.0001   # 0.01% base threshold (or fixed if progressive=False)
+	# Progressive accuracy threshold (curriculum learning)
+	phase_index: int = 0           # Phase index for progressive threshold (0=1a, 1=1b, ...)
+	progressive_threshold: bool = True  # Enable progressive threshold within phase
 	# Early stopping (all configurable via parameters)
 	patience: int = 5              # Checks without improvement before stopping
 	check_interval: int = 5        # Check every N generations
@@ -422,7 +514,10 @@ class TSConfig:
 	tabu_size: int = 10
 	mutation_rate: float = 0.1     # Fraction of genome elements to mutate per neighbor
 	# Candidate filtering: filter out neighbors with accuracy below threshold
-	min_accuracy: float = 0.0001   # 0.01% minimum accuracy to be viable
+	min_accuracy: float = 0.0001   # 0.01% base threshold (or fixed if progressive=False)
+	# Progressive accuracy threshold (curriculum learning)
+	phase_index: int = 0           # Phase index for progressive threshold (0=1a, 1=1b, ...)
+	progressive_threshold: bool = True  # Enable progressive threshold within phase
 	# Early stopping (all configurable via parameters)
 	patience: int = 5              # Checks without improvement before stopping
 	check_interval: int = 5        # Check every N iterations
@@ -520,7 +615,24 @@ class GenericGAStrategy(ABC, Generic[T]):
 		self._ensure_rng()
 		cfg = self._config
 
-		# Build initial population with viable candidates only (accuracy >= min_accuracy)
+		# Initialize progressive threshold for curriculum-style accuracy filtering
+		if cfg.progressive_threshold:
+			prog_threshold = ProgressiveThreshold(
+				phase_index=cfg.phase_index,
+				config=ProgressiveThresholdConfig(base=cfg.min_accuracy, delta=cfg.min_accuracy * 2),
+			)
+			self._log(f"[{self.name}] Progressive threshold: {prog_threshold.format_range()} (phase {cfg.phase_index})")
+		else:
+			prog_threshold = None
+
+		# Helper to get current threshold
+		def get_threshold(progress: float = 0.0) -> float:
+			if prog_threshold:
+				return prog_threshold.get(progress)
+			return cfg.min_accuracy
+
+		# Build initial population with viable candidates only (accuracy >= threshold at start)
+		initial_threshold = get_threshold(0.0)
 		if initial_population:
 			self._log(f"[{self.name}] Seeding population from {len(initial_population)} genomes")
 			# Generator creates mutations of best seed genome
@@ -531,7 +643,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 				generator_fn=seed_generator,
 				batch_fn=batch_evaluate_fn,
 				single_fn=evaluate_fn,
-				min_accuracy=cfg.min_accuracy,
+				min_accuracy=initial_threshold,
 				seed_genomes=initial_population,
 			)
 		elif initial_genome is not None:
@@ -543,7 +655,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 				generator_fn=single_seed_generator,
 				batch_fn=batch_evaluate_fn,
 				single_fn=evaluate_fn,
-				min_accuracy=cfg.min_accuracy,
+				min_accuracy=initial_threshold,
 				seed_genomes=[initial_genome],
 			)
 		else:
@@ -553,7 +665,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 				generator_fn=self.create_random_genome,
 				batch_fn=batch_evaluate_fn,
 				single_fn=evaluate_fn,
-				min_accuracy=cfg.min_accuracy,
+				min_accuracy=initial_threshold,
 			)
 
 		fitness_values = [f for _, f, _ in population]
@@ -666,12 +778,14 @@ class GenericGAStrategy(ABC, Generic[T]):
 					child = self.clone_genome(p1)
 				return self.mutate_genome(child, cfg.mutation_rate)
 
+			# Progressive threshold: gets stricter as generations progress
+			current_threshold = get_threshold(generation / cfg.generations)
 			offspring = self._build_viable_population(
 				target_size=needed_offspring,
 				generator_fn=offspring_generator,
 				batch_fn=batch_evaluate_fn,
 				single_fn=evaluate_fn,
-				min_accuracy=cfg.min_accuracy,
+				min_accuracy=current_threshold,
 			)
 
 			# Combine elites with viable offspring
@@ -729,7 +843,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 							generator_fn=self.create_random_genome,
 							batch_fn=batch_evaluate_fn,
 							single_fn=evaluate_fn,
-							min_accuracy=cfg.min_accuracy,
+							min_accuracy=current_threshold,
 						)
 						population.extend(new_individuals)
 						fitness_values.extend([f for _, f, _ in new_individuals])
@@ -1037,6 +1151,22 @@ class GenericTSStrategy(ABC, Generic[T]):
 		self._ensure_rng()
 		cfg = self._config
 
+		# Initialize progressive threshold for curriculum-style accuracy filtering
+		if cfg.progressive_threshold:
+			prog_threshold = ProgressiveThreshold(
+				phase_index=cfg.phase_index,
+				config=ProgressiveThresholdConfig(base=cfg.min_accuracy, delta=cfg.min_accuracy * 2),
+			)
+			self._log(f"[{self.name}] Progressive threshold: {prog_threshold.format_range()} (phase {cfg.phase_index})")
+		else:
+			prog_threshold = None
+
+		# Helper to get current threshold
+		def get_threshold(progress: float = 0.0) -> float:
+			if prog_threshold:
+				return prog_threshold.get(progress)
+			return cfg.min_accuracy
+
 		current = self.clone_genome(initial_genome)
 		current_fitness = initial_fitness
 
@@ -1053,6 +1183,9 @@ class GenericTSStrategy(ABC, Generic[T]):
 		# Track best neighbors for seeding next phase
 		best_neighbors: List[Tuple[T, float]] = [(self.clone_genome(initial_genome), initial_fitness)]
 
+		# Initial threshold (progress=0)
+		initial_threshold = get_threshold(0.0)
+
 		# Seed with initial neighbors if provided
 		if initial_neighbors:
 			self._log(f"[{self.name}] Seeding from {len(initial_neighbors)} neighbors")
@@ -1068,14 +1201,14 @@ class GenericTSStrategy(ABC, Generic[T]):
 			# Filter seed neighbors by minimum accuracy
 			filtered_count = 0
 			for g, f, a in zip(initial_neighbors, seed_fitness, seed_accuracy):
-				if a is None or a >= cfg.min_accuracy:
+				if a is None or a >= initial_threshold:
 					best_neighbors.append((self.clone_genome(g), f))
 				else:
 					filtered_count += 1
 			if filtered_count > 0:
-				self._log(f"[{self.name}] Filtered {filtered_count} seed neighbors with accuracy < {cfg.min_accuracy:.2%}")
+				self._log(f"[{self.name}] Filtered {filtered_count} seed neighbors with accuracy < {initial_threshold:.2%}")
 			# Seed summary: best, seed_best, avg
-			viable_fitness = [f for g, f, a in zip(initial_neighbors, seed_fitness, seed_accuracy) if a is None or a >= cfg.min_accuracy]
+			viable_fitness = [f for g, f, a in zip(initial_neighbors, seed_fitness, seed_accuracy) if a is None or a >= initial_threshold]
 			seed_best = min(viable_fitness) if viable_fitness else min(seed_fitness)
 			seed_avg = sum(viable_fitness) / len(viable_fitness) if viable_fitness else sum(seed_fitness) / len(seed_fitness)
 			self._log(f"[{self.name}] Seed summary: best={best_fitness:.4f}, seed_best={seed_best:.4f}, avg={seed_avg:.4f}")
@@ -1146,14 +1279,17 @@ class GenericTSStrategy(ABC, Generic[T]):
 			# Build neighbors list with fitness and accuracy
 			neighbors = [(n, f, m, a) for (n, m), f, a in zip(neighbor_candidates, fitness_values, accuracy_values)]
 
+			# Progressive threshold: gets stricter as iterations progress
+			current_threshold = get_threshold(iteration / cfg.iterations)
+
 			# Filter out neighbors with accuracy below threshold
 			viable_neighbors = [
 				(n, f, m, a) for n, f, m, a in neighbors
-				if a is None or a >= cfg.min_accuracy
+				if a is None or a >= current_threshold
 			]
 			filtered_count = len(neighbors) - len(viable_neighbors)
 			if filtered_count > 0:
-				self._log(f"[{self.name}] Filtered {filtered_count} neighbors with accuracy < {cfg.min_accuracy:.2%}")
+				self._log(f"[{self.name}] Filtered {filtered_count} neighbors with accuracy < {current_threshold:.2%}")
 
 			# If all neighbors filtered, keep the best one anyway (avoid getting stuck)
 			if not viable_neighbors:
