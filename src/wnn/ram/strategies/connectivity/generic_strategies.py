@@ -321,56 +321,41 @@ class GenericGAStrategy(ABC, Generic[T]):
 		self._ensure_rng()
 		cfg = self._config
 
-		# Initialize population with fitness and accuracy tracking
-		# Each entry is (genome, fitness, accuracy) where fitness/accuracy can be None (needs evaluation)
-		population: List[Tuple[T, Optional[float], Optional[float]]] = []  # (genome, fitness, accuracy)
-
+		# Build initial population with viable candidates only (accuracy >= min_accuracy)
 		if initial_population:
-			# Seed from previous phase
 			self._log(f"[{self.name}] Seeding population from {len(initial_population)} genomes")
-			for genome in initial_population[:cfg.population_size]:
-				population.append((self.clone_genome(genome), None, None))
-			# Fill remaining with mutations of best (first) genome
-			while len(population) < cfg.population_size:
-				mutant = self.mutate_genome(self.clone_genome(initial_population[0]), cfg.mutation_rate * 3)
-				population.append((mutant, None, None))
+			# Generator creates mutations of best seed genome
+			def seed_generator() -> T:
+				return self.mutate_genome(self.clone_genome(initial_population[0]), cfg.mutation_rate * 3)
+			population = self._build_viable_population(
+				target_size=cfg.population_size,
+				generator_fn=seed_generator,
+				batch_fn=batch_evaluate_fn,
+				single_fn=evaluate_fn,
+				min_accuracy=cfg.min_accuracy,
+				seed_genomes=initial_population,
+			)
 		elif initial_genome is not None:
-			# Seed from single genome
-			population.append((self.clone_genome(initial_genome), None, None))
-			for _ in range(cfg.population_size - 1):
-				mutant = self.mutate_genome(self.clone_genome(initial_genome), cfg.mutation_rate * 3)
-				population.append((mutant, None, None))
+			# Generator creates mutations of seed genome
+			def single_seed_generator() -> T:
+				return self.mutate_genome(self.clone_genome(initial_genome), cfg.mutation_rate * 3)
+			population = self._build_viable_population(
+				target_size=cfg.population_size,
+				generator_fn=single_seed_generator,
+				batch_fn=batch_evaluate_fn,
+				single_fn=evaluate_fn,
+				min_accuracy=cfg.min_accuracy,
+				seed_genomes=[initial_genome],
+			)
 		else:
 			# Random initialization
-			for _ in range(cfg.population_size):
-				population.append((self.create_random_genome(), None, None))
-
-		# Evaluate initial population
-		population = self._evaluate_population(population, batch_evaluate_fn, evaluate_fn)
-
-		# Filter initial candidates: replace those with accuracy below threshold
-		replaced_count = 0
-		max_replacements = 3  # Limit replacement attempts
-		for attempt in range(max_replacements):
-			needs_replacement = []
-			for i, (genome, fitness, accuracy) in enumerate(population):
-				if accuracy is not None and accuracy < cfg.min_accuracy:
-					needs_replacement.append(i)
-
-			if not needs_replacement:
-				break
-
-			# Replace with new random genomes
-			for idx in needs_replacement:
-				new_genome = self.create_random_genome()
-				population[idx] = (new_genome, None, None)
-				replaced_count += 1
-
-			# Re-evaluate only the replaced genomes
-			population = self._evaluate_population(population, batch_evaluate_fn, evaluate_fn)
-
-		if replaced_count > 0:
-			self._log(f"[{self.name}] Initial: replaced {replaced_count} candidates with accuracy < {cfg.min_accuracy:.2%}")
+			population = self._build_viable_population(
+				target_size=cfg.population_size,
+				generator_fn=self.create_random_genome,
+				batch_fn=batch_evaluate_fn,
+				single_fn=evaluate_fn,
+				min_accuracy=cfg.min_accuracy,
+			)
 
 		fitness_values = [f for _, f, _ in population]
 		accuracy_values = [a for _, _, a in population]
@@ -462,53 +447,29 @@ class GenericGAStrategy(ABC, Generic[T]):
 				acc_str = f", Acc={elite_accuracy:.2%}" if elite_accuracy is not None else ""
 				self._log(f"[Elite {i + 1}/{total_elites}] CE={elite_fitness:.4f}{acc_str} ({source})")
 
-			# Generate rest of population
-			while len(new_population) < cfg.population_size:
-				# Tournament selection
+			# Generate viable offspring to fill the rest of the population
+			needed_offspring = cfg.population_size - len(new_population)
+
+			def offspring_generator() -> T:
+				# Tournament selection and crossover/mutation
 				p1 = self._tournament_select(population)
 				p2 = self._tournament_select(population)
-
-				# Crossover
 				if self._rng.random() < cfg.crossover_rate:
 					child = self.crossover_genomes(p1, p2)
 				else:
 					child = self.clone_genome(p1)
+				return self.mutate_genome(child, cfg.mutation_rate)
 
-				# Mutation
-				child = self.mutate_genome(child, cfg.mutation_rate)
-				new_population.append((child, None, None))  # Needs evaluation
+			offspring = self._build_viable_population(
+				target_size=needed_offspring,
+				generator_fn=offspring_generator,
+				batch_fn=batch_evaluate_fn,
+				single_fn=evaluate_fn,
+				min_accuracy=cfg.min_accuracy,
+			)
 
-			population = new_population[:cfg.population_size]
-			population = self._evaluate_population(population, batch_evaluate_fn, evaluate_fn, generation, cfg.generations)
-
-			# Filter candidates: replace those with accuracy below threshold
-			replaced_count = 0
-			max_replacements = 3  # Limit replacement attempts per generation
-			for attempt in range(max_replacements):
-				needs_replacement = []
-				for i, (genome, fitness, accuracy) in enumerate(population):
-					# Skip elites (first total_elites entries)
-					if i < total_elites:
-						continue
-					# Check if below minimum accuracy threshold
-					if accuracy is not None and accuracy < cfg.min_accuracy:
-						needs_replacement.append(i)
-
-				if not needs_replacement:
-					break
-
-				# Replace with new random genomes
-				for idx in needs_replacement:
-					new_genome = self.create_random_genome()
-					population[idx] = (new_genome, None, None)
-					replaced_count += 1
-
-				# Re-evaluate only the replaced genomes
-				population = self._evaluate_population(population, batch_evaluate_fn, evaluate_fn, generation, cfg.generations)
-
-			if replaced_count > 0:
-				self._log(f"[{self.name}] Replaced {replaced_count} candidates with accuracy < {cfg.min_accuracy:.2%}")
-
+			# Combine elites with viable offspring
+			population = new_population + offspring
 			fitness_values = [f for _, f, _ in population]
 			accuracy_values = [a for _, _, a in population]
 
@@ -663,6 +624,86 @@ class GenericGAStrategy(ABC, Generic[T]):
 			result[idx] = (result[idx][0], fit, acc)
 
 		return result
+
+	def _build_viable_population(
+		self,
+		target_size: int,
+		generator_fn: Callable[[], T],
+		batch_fn: Optional[Callable[[List[T]], List[Tuple[float, float]]]],
+		single_fn: Callable[[T], float],
+		min_accuracy: float,
+		seed_genomes: Optional[List[T]] = None,
+		max_attempts: int = 10,
+	) -> List[Tuple[T, float, Optional[float]]]:
+		"""
+		Build a population of viable candidates (accuracy >= min_accuracy).
+
+		Generates candidates, evaluates them, and keeps only viable ones.
+		Continues until target_size is reached or max_attempts exceeded.
+
+		Args:
+			target_size: Number of viable candidates needed
+			generator_fn: Function to generate a new random genome
+			batch_fn: Batch evaluation function returning List[(CE, accuracy)]
+			single_fn: Single evaluation function (fallback)
+			min_accuracy: Minimum accuracy threshold (0.0001 = 0.01%)
+			seed_genomes: Optional seed genomes to include (evaluated first)
+			max_attempts: Maximum generation attempts before giving up
+
+		Returns:
+			List of (genome, fitness, accuracy) tuples for viable candidates
+		"""
+		viable: List[Tuple[T, float, Optional[float]]] = []
+		filtered_count = 0
+
+		# First, evaluate seed genomes if provided
+		if seed_genomes:
+			to_eval = [self.clone_genome(g) for g in seed_genomes[:target_size]]
+			if batch_fn is not None:
+				results = batch_fn(to_eval)
+				for genome, (ce, acc) in zip(to_eval, results):
+					if acc is None or acc >= min_accuracy:
+						viable.append((genome, ce, acc))
+					else:
+						filtered_count += 1
+			else:
+				for genome in to_eval:
+					ce = single_fn(genome)
+					viable.append((genome, ce, None))
+
+		# Generate new candidates until we have enough
+		attempt = 0
+		while len(viable) < target_size and attempt < max_attempts:
+			attempt += 1
+			needed = target_size - len(viable)
+			# Generate a batch of candidates (extra to account for filtering)
+			batch_size = min(needed * 2, needed + 10)  # Generate extra
+			candidates = [generator_fn() for _ in range(batch_size)]
+
+			# Evaluate
+			if batch_fn is not None:
+				results = batch_fn(candidates)
+				for genome, (ce, acc) in zip(candidates, results):
+					if acc is None or acc >= min_accuracy:
+						viable.append((genome, ce, acc))
+						if len(viable) >= target_size:
+							break
+					else:
+						filtered_count += 1
+			else:
+				for genome in candidates:
+					ce = single_fn(genome)
+					viable.append((genome, ce, None))
+					if len(viable) >= target_size:
+						break
+
+		if filtered_count > 0:
+			self._log(f"[{self.name}] Filtered {filtered_count} candidates with accuracy < {min_accuracy:.2%}")
+
+		if len(viable) < target_size:
+			self._log(f"[{self.name}] Warning: only {len(viable)}/{target_size} viable candidates after {max_attempts} attempts")
+
+		return viable[:target_size]
 
 	def _tournament_select(self, population: List[Tuple[T, float, Optional[float]]], tournament_size: int = 3) -> T:
 		"""Tournament selection: pick best from random subset."""
