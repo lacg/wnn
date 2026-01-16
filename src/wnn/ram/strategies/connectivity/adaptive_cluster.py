@@ -834,7 +834,7 @@ class RustParallelEvaluator:
 		self,
 		genomes: List[ClusterGenome],
 		logger: Optional[Callable[[str], None]] = None,
-		batch_size: int = 10,  # Parallel batch size (Rust evaluates genomes in parallel)
+		batch_size: int = 1,  # Sequential: each genome gets full thread pool for token parallelism
 		generation: Optional[int] = None,  # Current generation for logging
 		total_generations: Optional[int] = None,  # Total generations for logging
 		min_accuracy: Optional[float] = None,  # Threshold for log level selection
