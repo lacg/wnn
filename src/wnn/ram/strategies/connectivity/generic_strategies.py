@@ -112,6 +112,14 @@ class EarlyStoppingTracker:
 				break  # Early stop
 	"""
 
+	# Level display formatting (emoji + name)
+	_LEVEL_DISPLAY = {
+		'HEALTHY': "🟢 HEALTHY",
+		'NEUTRAL': "⚪ NEUTRAL",
+		'WARNING': "🟡 WARNING",
+		'CRITICAL': "🔴 CRITICAL",
+	}
+
 	def __init__(
 		self,
 		config: EarlyStoppingConfig,
@@ -124,14 +132,17 @@ class EarlyStoppingTracker:
 		self._patience_counter = 0
 		self._prev_best: Optional[float] = None
 		self._baseline: Optional[float] = None
-		self._last_status: str = "⚪ NEUTRAL"
+		# Import here to avoid circular import at module level
+		from wnn.ram.strategies.connectivity.generic_strategies import AdaptiveLevel
+		self._last_level: 'AdaptiveLevel' = AdaptiveLevel.NEUTRAL
 
 	def reset(self, initial_fitness: float) -> None:
 		"""Reset tracker with initial fitness value."""
+		from wnn.ram.strategies.connectivity.generic_strategies import AdaptiveLevel
 		self._patience_counter = 0
 		self._prev_best = initial_fitness
 		self._baseline = initial_fitness
-		self._last_status = "⚪ NEUTRAL"
+		self._last_level = AdaptiveLevel.NEUTRAL
 
 	def check(self, iteration: int, current_best: float) -> bool:
 		"""
@@ -144,6 +155,7 @@ class EarlyStoppingTracker:
 		Returns:
 			True if should stop, False otherwise
 		"""
+		from wnn.ram.strategies.connectivity.generic_strategies import AdaptiveLevel
 		cfg = self._config
 
 		# Only check at specified intervals (1-indexed iteration)
@@ -163,27 +175,28 @@ class EarlyStoppingTracker:
 		else:
 			self._patience_counter += 1
 
-		# Determine status using OverfitThreshold values (negate since improvement is opposite sign)
+		# Determine level using OverfitThreshold values (negate since improvement is opposite sign)
 		# improvement_pct > 0 = improving, OverfitThreshold delta < 0 = healthy
 		from wnn.core.thresholds import OverfitThreshold
 		delta = -improvement_pct  # Convert to OverfitThreshold convention
 		if delta < OverfitThreshold.HEALTHY:  # < -1% (big improvement)
-			status = "🟢 HEALTHY"
+			level = AdaptiveLevel.HEALTHY
 		elif delta < OverfitThreshold.WARNING:  # -1% to 0% (small improvement)
-			status = "⚪ NEUTRAL"
+			level = AdaptiveLevel.NEUTRAL
 		elif delta < OverfitThreshold.CRITICAL:  # 0% to 3% (stalled/mild regression)
-			status = "🟡 WARNING"
+			level = AdaptiveLevel.WARNING
 		else:  # >= 3% (significant regression)
-			status = "🔴 CRITICAL"
+			level = AdaptiveLevel.CRITICAL
 
-		# Save status for adaptive scaling
-		self._last_status = status
+		# Save level for adaptive scaling
+		self._last_level = level
 
-		# Log progress with delta, patience, and status
+		# Log progress with delta, patience, and status display
 		remaining = cfg.patience - self._patience_counter
+		display = self._LEVEL_DISPLAY[level.name]
 		self._log(
 			f"[{self._method_name}] Early stop check: "
-			f"Δ={improvement_pct:+.2f}%, patience={remaining}/{cfg.patience} {status}"
+			f"Δ={improvement_pct:+.2f}%, patience={remaining}/{cfg.patience} {display}"
 		)
 
 		# Check if patience exhausted
@@ -203,9 +216,9 @@ class EarlyStoppingTracker:
 		return self._patience_counter >= self._config.patience
 
 	@property
-	def current_status(self) -> str:
-		"""Return the current status string (HEALTHY, NEUTRAL, WARNING, CRITICAL)."""
-		return self._last_status
+	def current_level(self) -> 'AdaptiveLevel':
+		"""Return the current AdaptiveLevel enum."""
+		return self._last_level
 
 
 # =============================================================================
@@ -241,7 +254,7 @@ class AdaptiveScalerConfig:
 
 class AdaptiveScaler:
 	"""
-	Scales optimization parameters based on health status.
+	Scales optimization parameters based on health level.
 
 	Use with EarlyStoppingTracker to detect WARNING/CRITICAL states and
 	automatically adjust population size and mutation rate to escape
@@ -251,7 +264,7 @@ class AdaptiveScaler:
 		scaler = AdaptiveScaler(base_population=50, base_mutation=0.1)
 
 		# In optimization loop, after early_stopper.check():
-		new_level = scaler.update_from_status(early_stopper.current_status)
+		scaler.update(early_stopper.current_level)
 		if scaler.level_changed:
 			# Apply new parameters
 			cfg.population_size = scaler.population
@@ -315,32 +328,7 @@ class AdaptiveScaler:
 		"""Original base mutation rate."""
 		return self._base_mutation
 
-	def _status_to_level(self, status: str) -> AdaptiveLevel:
-		"""Convert status string to AdaptiveLevel."""
-		if "HEALTHY" in status:
-			return AdaptiveLevel.HEALTHY
-		elif "NEUTRAL" in status:
-			return AdaptiveLevel.NEUTRAL
-		elif "CRITICAL" in status:
-			return AdaptiveLevel.CRITICAL
-		elif "WARNING" in status:
-			return AdaptiveLevel.WARNING
-		return AdaptiveLevel.NEUTRAL  # Default
-
-	def update_from_status(self, status: str) -> AdaptiveLevel:
-		"""
-		Update level based on status string from EarlyStoppingTracker.
-
-		Args:
-			status: Status string like "🟢 HEALTHY", "🟡 WARNING", etc.
-
-		Returns:
-			New AdaptiveLevel after update
-		"""
-		new_level = self._status_to_level(status)
-		return self.update_level(new_level)
-
-	def update_level(self, new_level: AdaptiveLevel) -> AdaptiveLevel:
+	def update(self, new_level: AdaptiveLevel) -> AdaptiveLevel:
 		"""
 		Update to new level and recalculate scaled parameters.
 
@@ -724,7 +712,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 				break
 
 			# Adaptive parameter scaling based on health status
-			adaptive_scaler.update_from_status(early_stopper.current_status)
+			adaptive_scaler.update(early_stopper.current_level)
 			if adaptive_scaler.level_changed:
 				adaptive_scaler.log_transition(self._log)
 				old_pop_size = cfg.population_size
@@ -1221,7 +1209,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 				break
 
 			# Adaptive parameter scaling based on health status
-			adaptive_scaler.update_from_status(early_stopper.current_status)
+			adaptive_scaler.update(early_stopper.current_level)
 			if adaptive_scaler.level_changed:
 				adaptive_scaler.log_transition(self._log)
 				# For TS, neighbors_per_iter is the "population" equivalent
