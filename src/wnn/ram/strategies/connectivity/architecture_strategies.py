@@ -399,8 +399,8 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		"""
 		# Use Rust batch evaluator if available
 		if self._batch_evaluator is not None and batch_evaluate_fn is None:
-			batch_evaluate_fn = lambda genomes: self._batch_evaluator.evaluate_batch(
-				genomes, logger=self._log,
+			batch_evaluate_fn = lambda genomes, min_accuracy=None: self._batch_evaluator.evaluate_batch(
+				genomes, logger=self._log, min_accuracy=min_accuracy,
 			)
 
 		# Create progress tracker
@@ -610,8 +610,8 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		"""
 		# Use Rust batch evaluator if available
 		if self._batch_evaluator is not None and batch_evaluate_fn is None:
-			batch_evaluate_fn = lambda genomes: self._batch_evaluator.evaluate_batch(
-				genomes, logger=self._log,
+			batch_evaluate_fn = lambda genomes, min_accuracy=None: self._batch_evaluator.evaluate_batch(
+				genomes, logger=self._log, min_accuracy=min_accuracy,
 			)
 
 		# Create progress tracker
