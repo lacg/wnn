@@ -227,6 +227,7 @@ def main():
 		generations=args.ga_gens,
 		population_size=args.population,
 		patience=args.patience,
+		phase_index=0,  # Progressive threshold: 0.01% → 0.03%
 	)
 	results["phase1_ga"] = {
 		"fitness": result_p1_ga.final_fitness,
@@ -252,6 +253,7 @@ def main():
 		iterations=args.ts_iters,
 		neighbors_per_iter=args.neighbors,
 		patience=args.patience,
+		phase_index=1,  # Progressive threshold: 0.03% → 0.05%
 	)
 	results["phase1_ts"] = {
 		"fitness": result_p1_ts.final_fitness,
@@ -282,6 +284,7 @@ def main():
 		generations=args.ga_gens,
 		population_size=args.population,
 		patience=args.patience,
+		phase_index=2,  # Progressive threshold: 0.05% → 0.07%
 	)
 	results["phase2_ga"] = {
 		"fitness": result_p2_ga.final_fitness,
@@ -311,6 +314,7 @@ def main():
 		iterations=args.ts_iters,
 		neighbors_per_iter=args.neighbors,
 		patience=args.patience,
+		phase_index=3,  # Progressive threshold: 0.07% → 0.09%
 	)
 	results["phase2_ts"] = {
 		"fitness": result_p2_ts.final_fitness,
@@ -343,6 +347,7 @@ def main():
 		generations=args.ga_gens,
 		population_size=args.population,
 		patience=args.patience,
+		phase_index=4,  # Progressive threshold: 0.09% → 0.11%
 	)
 	results["phase3_ga"] = {
 		"fitness": result_p3_ga.final_fitness,
@@ -374,6 +379,7 @@ def main():
 		iterations=args.ts_iters,
 		neighbors_per_iter=args.neighbors,
 		patience=args.patience,
+		phase_index=5,  # Progressive threshold: 0.11% → 0.13%
 	)
 	results["phase3_ts"] = {
 		"fitness": result_p3_ts.final_fitness,
