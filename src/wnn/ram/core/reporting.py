@@ -412,3 +412,129 @@ class OptimizationResultsTable:
 	def __str__(self) -> str:
 		"""Return table as a single string with newlines."""
 		return "\n".join(self.format())
+
+
+# =============================================================================
+# Optimization Analysis Table (GA/TS detailed metrics)
+# =============================================================================
+
+@dataclass
+class OptimizationAnalysis:
+	"""
+	Detailed analysis metrics for GA or TS optimization.
+
+	Tracks:
+	- Elite vs generated performance
+	- Diversity metrics
+	- Improvement patterns
+	"""
+	method: str  # "GA" or "TS"
+
+	# Population/seed metrics
+	initial_best_ce: float
+	final_best_ce: float
+	initial_best_acc: Optional[float] = None
+	final_best_acc: Optional[float] = None
+
+	# Diversity metrics
+	initial_ce_spread: float = 0.0  # max - min CE in initial pool
+	final_ce_spread: float = 0.0    # max - min CE in final pool
+
+	# Elite tracking (GA: elites that survived, TS: seed/elite wins)
+	elite_survivals: int = 0        # How many elites made it to final
+	total_elites: int = 0           # How many elites were selected
+	elite_wins: int = 0             # Iterations where elite beat new offspring/neighbors
+	total_iterations: int = 0
+
+	# Improvement tracking
+	improved_iterations: int = 0    # Iterations with improvement
+	stagnant_iterations: int = 0    # Iterations without improvement
+
+	# CE vs Accuracy elite overlap (GA only)
+	ce_elite_count: int = 0
+	acc_elite_count: int = 0
+	overlap_count: int = 0          # Elites that are top in both CE and accuracy
+
+	@property
+	def improvement_pct(self) -> float:
+		"""Percentage improvement from initial to final."""
+		if self.initial_best_ce == 0:
+			return 0.0
+		return (self.initial_best_ce - self.final_best_ce) / self.initial_best_ce * 100
+
+	@property
+	def elite_win_rate(self) -> float:
+		"""Percentage of iterations where elite beat new candidates."""
+		if self.total_iterations == 0:
+			return 0.0
+		return self.elite_wins / self.total_iterations * 100
+
+	@property
+	def improvement_rate(self) -> float:
+		"""Percentage of iterations with improvement."""
+		if self.total_iterations == 0:
+			return 0.0
+		return self.improved_iterations / self.total_iterations * 100
+
+	@property
+	def diversity_change(self) -> float:
+		"""Change in diversity (negative = diversity collapsed)."""
+		return self.final_ce_spread - self.initial_ce_spread
+
+
+class OptimizationAnalysisTable:
+	"""
+	Formats detailed optimization analysis into a table.
+
+	Usage:
+		analysis = OptimizationAnalysis(
+			method="GA",
+			initial_best_ce=10.50,
+			final_best_ce=10.45,
+			...
+		)
+		table = OptimizationAnalysisTable(analysis)
+		table.print(logger)
+	"""
+
+	WIDTH = 78
+
+	def __init__(self, analysis: OptimizationAnalysis):
+		self.analysis = analysis
+
+	def format(self) -> List[str]:
+		"""Format the analysis as a list of strings."""
+		a = self.analysis
+		lines = []
+
+		lines.append(f"{a.method} Optimization Analysis:")
+		lines.append("-" * self.WIDTH)
+
+		# Performance metrics
+		lines.append(f"  {'Initial best CE:':<25} {a.initial_best_ce:>10.4f}  →  Final: {a.final_best_ce:>10.4f}  ({a.improvement_pct:>+.2f}%)")
+		if a.initial_best_acc is not None and a.final_best_acc is not None:
+			lines.append(f"  {'Initial best Acc:':<25} {a.initial_best_acc:>9.2%}  →  Final: {a.final_best_acc:>9.2%}")
+
+		# Diversity metrics
+		lines.append(f"  {'CE spread (diversity):':<25} {a.initial_ce_spread:>10.4f}  →  Final: {a.final_ce_spread:>10.4f}  ({a.diversity_change:>+.4f})")
+
+		# Elite tracking
+		if a.method == "GA":
+			lines.append(f"  {'Elite survival:':<25} {a.elite_survivals:>3}/{a.total_elites:<3} elites survived to final population")
+			lines.append(f"  {'Elite composition:':<25} {a.ce_elite_count} by CE + {a.acc_elite_count} by Acc ({a.overlap_count} overlap) = {a.total_elites} unique")
+
+		lines.append(f"  {'Elite win rate:':<25} {a.elite_wins:>3}/{a.total_iterations:<3} iterations ({a.elite_win_rate:.1f}%)")
+		lines.append(f"  {'Improvement rate:':<25} {a.improved_iterations:>3}/{a.total_iterations:<3} iterations ({a.improvement_rate:.1f}%)")
+
+		lines.append("-" * self.WIDTH)
+
+		return lines
+
+	def print(self, log_fn: Optional[Callable[[str], None]] = None) -> None:
+		"""Print the formatted table."""
+		output = log_fn or print
+		for line in self.format():
+			output(line)
+
+	def __str__(self) -> str:
+		return "\n".join(self.format())

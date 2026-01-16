@@ -27,6 +27,7 @@ from wnn.ram.strategies.connectivity.adaptive_cluster import (
 	RustParallelEvaluator,
 	EvaluatorConfig,
 )
+from wnn.ram.core.reporting import OptimizationResultsTable
 
 
 # Global logger instance
@@ -55,6 +56,7 @@ def run_phase(
 	default_neurons: int,
 	initial_genome: Optional[ClusterGenome],
 	initial_fitness: Optional[float] = None,  # Required for TS
+	initial_population: Optional[list[ClusterGenome]] = None,  # Seed population for GA/TS
 	**kwargs,
 ):
 	"""Run a single optimization phase."""
@@ -65,6 +67,8 @@ def run_phase(
 	log(f"  optimize_connections={optimize_connections}")
 	if initial_genome:
 		log(f"  Starting from previous best: {initial_genome}")
+	if initial_population:
+		log(f"  Seeding from {len(initial_population)} genomes from previous phase")
 	log("")
 
 	strategy = OptimizerStrategyFactory.create(
@@ -85,16 +89,19 @@ def run_phase(
 	# Run optimization - strategy internally uses batch_evaluator for hybrid Metal/CPU eval
 	if initial_genome is not None:
 		if strategy_type == OptimizerStrategyType.ARCHITECTURE_GA:
+			# GA: seed with population from previous phase (or just best genome)
+			seed_pop = initial_population if initial_population else [initial_genome]
 			result = strategy.optimize(
 				evaluate_fn=None,  # Not needed - batch_evaluator is used
-				initial_population=[initial_genome],
+				initial_population=seed_pop,
 			)
 		else:
-			# TS requires initial_fitness
+			# TS: seed with neighbors from previous phase
 			result = strategy.optimize(
 				evaluate_fn=None,
 				initial_genome=initial_genome,
 				initial_fitness=initial_fitness,
+				initial_neighbors=initial_population,  # Reuse as neighbors
 			)
 	else:
 		result = strategy.optimize(evaluate_fn=None)
@@ -117,6 +124,8 @@ def main():
 	parser.add_argument("--ga-gens", type=int, default=50, help="GA generations per phase")
 	parser.add_argument("--ts-iters", type=int, default=100, help="TS iterations per phase")
 	parser.add_argument("--population", type=int, default=30, help="GA population size")
+	parser.add_argument("--neighbors", type=int, default=20, help="TS neighbors per iteration")
+	parser.add_argument("--patience", type=int, default=5, help="Early stopping patience")
 	parser.add_argument("--default-bits", type=int, default=8, help="Default bits for Phase 1")
 	parser.add_argument("--default-neurons", type=int, default=5, help="Default neurons for Phase 2")
 	parser.add_argument("--output", type=str, default=None, help="Output JSON file")
@@ -130,8 +139,9 @@ def main():
 	log(f"  Train tokens: {args.train_tokens:,}")
 	log(f"  Eval tokens: {args.eval_tokens:,}")
 	log(f"  Context: {args.context}")
-	log(f"  GA generations: {args.ga_gens}")
-	log(f"  TS iterations: {args.ts_iters}")
+	log(f"  GA generations: {args.ga_gens}, population: {args.population}")
+	log(f"  TS iterations: {args.ts_iters}, neighbors: {args.neighbors}")
+	log(f"  Patience: {args.patience}")
 	log(f"  Default bits (Phase 1): {args.default_bits}")
 	log(f"  Default neurons (Phase 2): {args.default_neurons}")
 	log("")
@@ -190,6 +200,14 @@ def main():
 
 	results = {}
 
+	def print_progress(title: str, stages: list):
+		"""Print progress table with current stages."""
+		table = OptimizationResultsTable(title)
+		for name, result in stages:
+			table.add_stage(name, ce=result.final_fitness, accuracy=result.final_accuracy)
+		log("")
+		table.print(log)
+
 	# =========================================================================
 	# Phase 1: Optimize neurons only (bits fixed)
 	# =========================================================================
@@ -208,11 +226,13 @@ def main():
 		initial_genome=None,
 		generations=args.ga_gens,
 		population_size=args.population,
+		patience=args.patience,
 	)
 	results["phase1_ga"] = {
 		"fitness": result_p1_ga.final_fitness,
 		"generations": result_p1_ga.iterations_run,
 	}
+	print_progress("After Phase 1a", [("Phase 1a (GA Neurons)", result_p1_ga)])
 
 	result_p1_ts = run_phase(
 		phase_name="Phase 1b: TS Neurons Only (refine)",
@@ -227,13 +247,20 @@ def main():
 		default_bits=args.default_bits,
 		default_neurons=args.default_neurons,
 		initial_genome=result_p1_ga.best_genome,
-		initial_fitness=result_p1_ga.final_fitness,  # From previous GA
+		initial_fitness=result_p1_ga.final_fitness,
+		initial_population=result_p1_ga.final_population,  # Seed from Phase 1a
 		iterations=args.ts_iters,
+		neighbors_per_iter=args.neighbors,
+		patience=args.patience,
 	)
 	results["phase1_ts"] = {
 		"fitness": result_p1_ts.final_fitness,
 		"iterations": result_p1_ts.iterations_run,
 	}
+	print_progress("After Phase 1b", [
+		("Phase 1a (GA Neurons)", result_p1_ga),
+		("Phase 1b (TS Neurons)", result_p1_ts),
+	])
 
 	# =========================================================================
 	# Phase 2: Optimize bits only (neurons from Phase 1)
@@ -251,13 +278,20 @@ def main():
 		default_bits=args.default_bits,
 		default_neurons=args.default_neurons,
 		initial_genome=result_p1_ts.best_genome,
+		initial_population=result_p1_ts.final_population,  # Seed from Phase 1b
 		generations=args.ga_gens,
 		population_size=args.population,
+		patience=args.patience,
 	)
 	results["phase2_ga"] = {
 		"fitness": result_p2_ga.final_fitness,
 		"generations": result_p2_ga.iterations_run,
 	}
+	print_progress("After Phase 2a", [
+		("Phase 1a (GA Neurons)", result_p1_ga),
+		("Phase 1b (TS Neurons)", result_p1_ts),
+		("Phase 2a (GA Bits)", result_p2_ga),
+	])
 
 	result_p2_ts = run_phase(
 		phase_name="Phase 2b: TS Bits Only (refine)",
@@ -272,13 +306,22 @@ def main():
 		default_bits=args.default_bits,
 		default_neurons=args.default_neurons,
 		initial_genome=result_p2_ga.best_genome,
-		initial_fitness=result_p2_ga.final_fitness,  # From previous GA
+		initial_fitness=result_p2_ga.final_fitness,
+		initial_population=result_p2_ga.final_population,  # Seed from Phase 2a
 		iterations=args.ts_iters,
+		neighbors_per_iter=args.neighbors,
+		patience=args.patience,
 	)
 	results["phase2_ts"] = {
 		"fitness": result_p2_ts.final_fitness,
 		"iterations": result_p2_ts.iterations_run,
 	}
+	print_progress("After Phase 2b", [
+		("Phase 1a (GA Neurons)", result_p1_ga),
+		("Phase 1b (TS Neurons)", result_p1_ts),
+		("Phase 2a (GA Bits)", result_p2_ga),
+		("Phase 2b (TS Bits)", result_p2_ts),
+	])
 
 	# =========================================================================
 	# Phase 3: Optimize connections only (architecture from Phase 2)
@@ -296,13 +339,22 @@ def main():
 		default_bits=args.default_bits,
 		default_neurons=args.default_neurons,
 		initial_genome=result_p2_ts.best_genome,
+		initial_population=result_p2_ts.final_population,  # Seed from Phase 2b
 		generations=args.ga_gens,
 		population_size=args.population,
+		patience=args.patience,
 	)
 	results["phase3_ga"] = {
 		"fitness": result_p3_ga.final_fitness,
 		"generations": result_p3_ga.iterations_run,
 	}
+	print_progress("After Phase 3a", [
+		("Phase 1a (GA Neurons)", result_p1_ga),
+		("Phase 1b (TS Neurons)", result_p1_ts),
+		("Phase 2a (GA Bits)", result_p2_ga),
+		("Phase 2b (TS Bits)", result_p2_ts),
+		("Phase 3a (GA Conns)", result_p3_ga),
+	])
 
 	result_p3_ts = run_phase(
 		phase_name="Phase 3b: TS Connections Only (refine)",
@@ -317,8 +369,11 @@ def main():
 		default_bits=args.default_bits,
 		default_neurons=args.default_neurons,
 		initial_genome=result_p3_ga.best_genome,
-		initial_fitness=result_p3_ga.final_fitness,  # From previous GA
+		initial_fitness=result_p3_ga.final_fitness,
+		initial_population=result_p3_ga.final_population,  # Seed from Phase 3a
 		iterations=args.ts_iters,
+		neighbors_per_iter=args.neighbors,
+		patience=args.patience,
 	)
 	results["phase3_ts"] = {
 		"fitness": result_p3_ts.final_fitness,
@@ -326,15 +381,22 @@ def main():
 	}
 
 	# =========================================================================
-	# Summary
+	# Final Summary using OptimizationResultsTable
 	# =========================================================================
-	log("\n" + "=" * 60)
-	log("  PHASED SEARCH SUMMARY")
-	log("=" * 60)
-	log(f"\nPhase 1 (Neurons): {result_p1_ga.final_fitness:.4f} → {result_p1_ts.final_fitness:.4f}")
-	log(f"Phase 2 (Bits):    {result_p2_ga.final_fitness:.4f} → {result_p2_ts.final_fitness:.4f}")
-	log(f"Phase 3 (Conns):   {result_p3_ga.final_fitness:.4f} → {result_p3_ts.final_fitness:.4f}")
-	log(f"\nFinal best fitness (CE): {result_p3_ts.final_fitness:.4f}")
+	log("")
+	log("=" * 78)
+	log("  FINAL RESULTS")
+	log("=" * 78)
+	comparison = OptimizationResultsTable("Complete Phased Search")
+	comparison.add_stage("Initial", ce=result_p1_ga.initial_fitness, accuracy=result_p1_ga.initial_accuracy)
+	comparison.add_stage("Phase 1a (GA Neurons)", ce=result_p1_ga.final_fitness, accuracy=result_p1_ga.final_accuracy)
+	comparison.add_stage("Phase 1b (TS Neurons)", ce=result_p1_ts.final_fitness, accuracy=result_p1_ts.final_accuracy)
+	comparison.add_stage("Phase 2a (GA Bits)", ce=result_p2_ga.final_fitness, accuracy=result_p2_ga.final_accuracy)
+	comparison.add_stage("Phase 2b (TS Bits)", ce=result_p2_ts.final_fitness, accuracy=result_p2_ts.final_accuracy)
+	comparison.add_stage("Phase 3a (GA Conns)", ce=result_p3_ga.final_fitness, accuracy=result_p3_ga.final_accuracy)
+	comparison.add_stage("Phase 3b (TS Conns)", ce=result_p3_ts.final_fitness, accuracy=result_p3_ts.final_accuracy)
+	comparison.print(log)
+	log("")
 	log(f"Final best genome: {result_p3_ts.best_genome}")
 
 	# Save results

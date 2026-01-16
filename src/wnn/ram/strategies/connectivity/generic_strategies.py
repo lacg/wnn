@@ -205,7 +205,9 @@ class GAConfig:
 	generations: int = 50
 	mutation_rate: float = 0.1
 	crossover_rate: float = 0.7
-	elitism: int = 2
+	# Dual elitism: keep top N% by CE AND top N% by accuracy (unique)
+	# Total elites = 10-20% of population depending on overlap
+	elitism_pct: float = 0.1       # 10% by CE + 10% by accuracy
 	# Early stopping (all configurable via parameters)
 	patience: int = 5              # Checks without improvement before stopping
 	check_interval: int = 5        # Check every N generations
@@ -362,27 +364,74 @@ class GenericGAStrategy(ABC, Generic[T]):
 		early_stopper = EarlyStoppingTracker(early_stop_config, self._log, self.name)
 		early_stopper.reset(best_fitness)
 
+		# Track initial diversity (CE spread)
+		initial_ce_spread = max(fitness_values) - min(fitness_values) if fitness_values else 0.0
+
 		# Log config and initial best
 		self._log(f"[{self.name}] Config: pop={cfg.population_size}, gens={cfg.generations}, "
+				  f"elitism={cfg.elitism_pct:.0%} per metric, "
 				  f"patience={cfg.patience}, check_interval={cfg.check_interval}, min_delta={cfg.min_improvement_pct}%")
-		self._log(f"[{self.name}] Initial best: {best_fitness:.4f}")
+		self._log(f"[{self.name}] Initial best: {best_fitness:.4f}, diversity (CE spread): {initial_ce_spread:.4f}")
+
+		# Tracking for analysis
+		elite_wins = 0  # Iterations where elite beat new offspring
+		improved_iterations = 0
+		# Track elites from first generation for survival analysis
+		initial_elite_genomes = None  # Will be set after first generation
 
 		generation = 0
 		for generation in range(cfg.generations):
 			# Selection and reproduction
 			new_population: List[Tuple[T, Optional[float], Optional[float]]] = []
 
-			# Elitism: keep best individuals with cached fitness and accuracy
-			sorted_indices = sorted(range(len(fitness_values)), key=lambda i: fitness_values[i])
-			for i in range(cfg.elitism):
-				elite_idx = sorted_indices[i]
+			# Dual elitism: keep top N% by CE AND top N% by accuracy (unique)
+			n_per_metric = max(1, int(len(population) * cfg.elitism_pct))
+
+			# Top by CE (lower is better)
+			ce_sorted = sorted(range(len(fitness_values)), key=lambda i: fitness_values[i])
+			ce_elite_indices = set(ce_sorted[:n_per_metric])
+
+			# Top by accuracy (higher is better) - only if we have accuracy values
+			has_accuracy = any(a is not None for a in accuracy_values)
+			if has_accuracy:
+				acc_sorted = sorted(range(len(accuracy_values)),
+									key=lambda i: -(accuracy_values[i] or 0))
+				acc_elite_indices = set(acc_sorted[:n_per_metric])
+			else:
+				acc_elite_indices = set()
+
+			# Combine unique elites (preserves CE order for ties)
+			all_elite_indices = list(ce_elite_indices)
+			for idx in acc_elite_indices:
+				if idx not in ce_elite_indices:
+					all_elite_indices.append(idx)
+
+			overlap_count = len(ce_elite_indices & acc_elite_indices)
+			total_elites = len(all_elite_indices)
+
+			# Track initial elites (first generation only) for survival analysis
+			if generation == 0:
+				initial_elite_genomes = [
+					(self.clone_genome(population[idx][0]), fitness_values[idx])
+					for idx in all_elite_indices
+				]
+				# Log elite composition
+				self._log(f"[{self.name}] Elitism: {len(ce_elite_indices)} by CE + "
+						  f"{len(acc_elite_indices)} by Acc ({overlap_count} overlap) = {total_elites} unique elites")
+
+			# Add elites to new population
+			for i, elite_idx in enumerate(all_elite_indices):
 				elite_genome = self.clone_genome(population[elite_idx][0])
 				elite_fitness = fitness_values[elite_idx]
 				elite_accuracy = accuracy_values[elite_idx]
 				new_population.append((elite_genome, elite_fitness, elite_accuracy))
-				# Log elite genome
+
+				# Log elite source
+				in_ce = elite_idx in ce_elite_indices
+				in_acc = elite_idx in acc_elite_indices
+				source = "CE+Acc" if (in_ce and in_acc) else ("CE" if in_ce else "Acc")
 				acc_str = f", Acc={elite_accuracy:.2%}" if elite_accuracy is not None else ""
-				self._log(f"[Elite {i + 1}/{cfg.elitism}] CE={elite_fitness:.4f}{acc_str} (kept from previous gen)")
+				self._log(f"[Elite {i + 1}/{total_elites}] CE={elite_fitness:.4f}{acc_str} ({source})")
 
 			# Generate rest of population
 			while len(new_population) < cfg.population_size:
@@ -414,8 +463,19 @@ class GenericGAStrategy(ABC, Generic[T]):
 			history.append((generation + 1, best_fitness))
 
 			# Compute new_best (best among new candidates, excluding elites)
-			new_candidate_fitness = fitness_values[cfg.elitism:]  # Non-elite fitness values
+			new_candidate_fitness = fitness_values[total_elites:]  # Non-elite fitness values
 			new_best = min(new_candidate_fitness) if new_candidate_fitness else float('inf')
+
+			# Track elite wins: did any elite beat the best new candidate?
+			elite_fitness = fitness_values[:total_elites]
+			best_elite = min(elite_fitness) if elite_fitness else float('inf')
+			if best_elite <= new_best:
+				elite_wins += 1
+
+			# Track improvement
+			prev_best = history[-2][1] if len(history) >= 2 else history[-1][1]
+			if best_fitness < prev_best:
+				improved_iterations += 1
 
 			# Log progress
 			gen_avg = sum(fitness_values) / len(fitness_values)
@@ -456,6 +516,30 @@ class GenericGAStrategy(ABC, Generic[T]):
 
 		# Extract final population for seeding next phase (sorted by fitness)
 		final_population = [self.clone_genome(g) for g, _, _ in sorted(population, key=lambda x: x[1])]
+
+		# Compute final diversity
+		final_ce_spread = max(fitness_values) - min(fitness_values) if fitness_values else 0.0
+
+		# Count elite survivals (how many initial elites made it to final population)
+		elite_survivals = 0
+		if initial_elite_genomes:
+			final_fitness_set = set(f for _, f, _ in population)
+			for _, elite_fit in initial_elite_genomes:
+				if elite_fit in final_fitness_set:
+					elite_survivals += 1
+
+		# Log analysis summary
+		total_gens = generation + 1
+		elite_win_rate = elite_wins / total_gens * 100 if total_gens > 0 else 0
+		improvement_rate = improved_iterations / total_gens * 100 if total_gens > 0 else 0
+		diversity_change = final_ce_spread - initial_ce_spread
+
+		self._log(f"\n[{self.name}] Analysis Summary:")
+		self._log(f"  CE improvement: {initial_fitness:.4f} → {best_fitness:.4f} ({(1 - best_fitness/initial_fitness)*100:+.2f}%)")
+		self._log(f"  CE spread: {initial_ce_spread:.4f} → {final_ce_spread:.4f} ({diversity_change:+.4f})")
+		self._log(f"  Elite survivals: {elite_survivals}/{len(initial_elite_genomes) if initial_elite_genomes else 0}")
+		self._log(f"  Elite win rate: {elite_wins}/{total_gens} ({elite_win_rate:.1f}%)")
+		self._log(f"  Improvement rate: {improved_iterations}/{total_gens} ({improvement_rate:.1f}%)")
 
 		improvement_pct = (initial_fitness - best_fitness) / initial_fitness * 100 if initial_fitness > 0 else 0
 
@@ -662,6 +746,14 @@ class GenericTSStrategy(ABC, Generic[T]):
 
 		history = [(0, best_fitness)]
 
+		# Track initial diversity (CE spread) from best_neighbors
+		neighbor_fitness = [f for _, f in best_neighbors]
+		initial_ce_spread = max(neighbor_fitness) - min(neighbor_fitness) if len(neighbor_fitness) > 1 else 0.0
+
+		# Analysis tracking
+		elite_wins = 0  # Iterations where current (seed/elite) beat all new neighbors
+		improved_iterations = 0  # Iterations with global best improvement
+
 		# Initialize early stopping tracker
 		early_stop_config = EarlyStoppingConfig(
 			patience=cfg.patience,
@@ -674,7 +766,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 		# Log config at startup
 		self._log(f"[{self.name}] Config: neighbors={cfg.neighbors_per_iter}, iters={cfg.iterations}, "
 				  f"patience={cfg.patience}, check_interval={cfg.check_interval}, min_delta={cfg.min_improvement_pct}%")
-		self._log(f"[{self.name}] Initial: {start_fitness:.4f}")
+		self._log(f"[{self.name}] Initial: {start_fitness:.4f}, diversity (CE spread): {initial_ce_spread:.4f}")
 
 		iteration = 0
 		for iteration in range(cfg.iterations):
@@ -715,11 +807,19 @@ class GenericTSStrategy(ABC, Generic[T]):
 			if best_move is not None:
 				tabu_list.append(best_move)
 
+			# Track elite wins: current solution beat all new neighbors
+			# (Note: we compare *before* the move, so check history)
+			prev_best = history[-1][1] if history else start_fitness
+			if best_neighbor_fitness >= prev_best:
+				elite_wins += 1
+
 			# Update global best (and accuracy)
+			prev_global_best = best_fitness
 			if current_fitness < best_fitness:
 				best = self.clone_genome(current)
 				best_fitness = current_fitness
 				best_accuracy = best_neighbor_acc
+				improved_iterations += 1
 
 			# Track best neighbors for seeding
 			for n, f, _, _ in neighbors[:5]:  # Keep top 5 from each iteration
@@ -765,6 +865,22 @@ class GenericTSStrategy(ABC, Generic[T]):
 
 		# Extract final neighbors for seeding
 		final_neighbors = [self.clone_genome(g) for g, _ in best_neighbors]
+
+		# Compute final diversity
+		final_neighbor_fitness = [f for _, f in best_neighbors]
+		final_ce_spread = max(final_neighbor_fitness) - min(final_neighbor_fitness) if len(final_neighbor_fitness) > 1 else 0.0
+
+		# Log analysis summary
+		total_iters = iteration + 1
+		elite_win_rate = elite_wins / total_iters * 100 if total_iters > 0 else 0
+		improvement_rate = improved_iterations / total_iters * 100 if total_iters > 0 else 0
+		diversity_change = final_ce_spread - initial_ce_spread
+
+		self._log(f"\n[{self.name}] Analysis Summary:")
+		self._log(f"  CE improvement: {start_fitness:.4f} → {best_fitness:.4f} ({(1 - best_fitness/start_fitness)*100:+.2f}%)")
+		self._log(f"  CE spread: {initial_ce_spread:.4f} → {final_ce_spread:.4f} ({diversity_change:+.4f})")
+		self._log(f"  Elite win rate: {elite_wins}/{total_iters} ({elite_win_rate:.1f}%)")
+		self._log(f"  Improvement rate: {improved_iterations}/{total_iters} ({improvement_rate:.1f}%)")
 
 		improvement_pct = (start_fitness - best_fitness) / start_fitness * 100 if start_fitness > 0 else 0
 
