@@ -318,8 +318,10 @@ class OptimizerStrategyFactory:
 		patience: int = 5,
 		check_interval: int = 5,
 		min_improvement_pct: float | None = None,  # None = use strategy default
-		# Progressive threshold
-		phase_index: int = 0,  # Phase index for progressive accuracy threshold (0-5)
+		# Threshold continuity (replaces phase_index)
+		initial_threshold: float | None = None,  # Start threshold from previous phase (None = first phase)
+		# TS-specific: cache size for final population diversity
+		total_neighbors_size: int | None = None,  # None = use neighbors_per_iter
 		# Common
 		seed: int = 42,
 		verbose: bool = False,
@@ -413,7 +415,7 @@ class OptimizerStrategyFactory:
 					patience=patience,
 					check_interval=check_interval,
 					min_improvement_pct=min_improvement_pct if min_improvement_pct is not None else 0.05,
-					phase_index=phase_index,
+					initial_threshold=initial_threshold,
 					seed=seed,
 					logger=logger,
 					batch_evaluator=batch_evaluator,
@@ -435,11 +437,12 @@ class OptimizerStrategyFactory:
 					total_input_bits=total_input_bits,
 					iterations=iterations,
 					neighbors_per_iter=neighbors_per_iter,
+					total_neighbors_size=total_neighbors_size,
 					tabu_size=tabu_size,
 					patience=patience,
 					check_interval=check_interval,
 					min_improvement_pct=min_improvement_pct if min_improvement_pct is not None else 0.5,
-					phase_index=phase_index,
+					initial_threshold=initial_threshold,
 					seed=seed,
 					logger=logger,
 					batch_evaluator=batch_evaluator,
@@ -511,7 +514,7 @@ class OptimizerStrategyFactory:
 		patience: int,
 		check_interval: int,
 		min_improvement_pct: float,
-		phase_index: int,
+		initial_threshold: float | None,
 		seed: int,
 		logger: Any,
 		batch_evaluator: Any,
@@ -544,7 +547,7 @@ class OptimizerStrategyFactory:
 			check_interval=check_interval,
 			min_improvement_pct=min_improvement_pct,
 			mutation_rate=mutation_rate,
-			phase_index=phase_index,
+			initial_threshold=initial_threshold,
 		)
 		return ArchitectureGAStrategy(arch_config, ga_config, seed, logger, batch_evaluator)
 
@@ -564,11 +567,12 @@ class OptimizerStrategyFactory:
 		total_input_bits: int | None,
 		iterations: int,
 		neighbors_per_iter: int,
+		total_neighbors_size: int | None,
 		tabu_size: int,
 		patience: int,
 		check_interval: int,
 		min_improvement_pct: float,
-		phase_index: int,
+		initial_threshold: float | None,
 		seed: int,
 		logger: Any,
 		batch_evaluator: Any,
@@ -597,11 +601,12 @@ class OptimizerStrategyFactory:
 		ts_config = TSConfig(
 			iterations=iterations,
 			neighbors_per_iter=neighbors_per_iter,
+			total_neighbors_size=total_neighbors_size,
 			patience=patience,
 			check_interval=check_interval,
 			min_improvement_pct=min_improvement_pct,
 			tabu_size=tabu_size,
-			phase_index=phase_index,
+			initial_threshold=initial_threshold,
 		)
 		return ArchitectureTSStrategy(arch_config, ts_config, seed, logger, batch_evaluator)
 
