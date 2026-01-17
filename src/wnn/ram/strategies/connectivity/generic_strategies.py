@@ -803,6 +803,8 @@ class GenericGAStrategy(ABC, Generic[T]):
 		improved_iterations = 0
 		# Track elites from first generation for survival analysis
 		initial_elite_genomes = None  # Will be set after first generation
+		# Track progressive threshold changes
+		prev_threshold: Optional[float] = None
 
 		generation = 0
 		for generation in range(cfg.generations):
@@ -867,6 +869,9 @@ class GenericGAStrategy(ABC, Generic[T]):
 
 			# Progressive threshold: gets stricter as generations progress
 			current_threshold = get_threshold(generation / cfg.generations)
+			if prev_threshold is not None and current_threshold != prev_threshold:
+				self._log.debug(f"[{self.name}] Threshold changed: {prev_threshold:.2%} → {current_threshold:.2%}")
+			prev_threshold = current_threshold
 			offspring = self._build_viable_population(
 				target_size=needed_offspring,
 				generator_fn=offspring_generator,
@@ -1343,6 +1348,9 @@ class GenericTSStrategy(ABC, Generic[T]):
 					   f"mut={cfg.mutation_rate}, patience={cfg.patience}, check_interval={cfg.check_interval}, min_delta={cfg.min_improvement_pct}%")
 		self._log.info(f"[{self.name}] Initial: {start_fitness:.4f}, diversity (CE spread): {initial_ce_spread:.4f}")
 
+		# Track progressive threshold changes
+		prev_threshold: Optional[float] = None
+
 		iteration = 0
 		for iteration in range(cfg.iterations):
 			# Generate neighbors
@@ -1357,6 +1365,9 @@ class GenericTSStrategy(ABC, Generic[T]):
 
 			# Progressive threshold: gets stricter as iterations progress
 			current_threshold = get_threshold(iteration / cfg.iterations)
+			if prev_threshold is not None and current_threshold != prev_threshold:
+				self._log.debug(f"[{self.name}] Threshold changed: {prev_threshold:.2%} → {current_threshold:.2%}")
+			prev_threshold = current_threshold
 
 			# Batch evaluate fitness - batch_evaluate_fn returns (CE, accuracy) tuples
 			if batch_evaluate_fn is not None:
