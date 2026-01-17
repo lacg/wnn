@@ -184,10 +184,11 @@ class CachedEvaluator:
         # Subset info for TRACE level logging
         subset_info = f" [train:{train_subset_idx+1}/{self._num_parts}, eval:{eval_subset_idx+1}/1]"
 
+        overall_start = time.time()
+
         if streaming and stream_batch_size < num_genomes:
-            # Streaming mode: evaluate in small batches and log immediately
+            # Streaming mode: evaluate in small batches
             all_results = []
-            overall_start = time.time()
 
             for batch_start in range(0, num_genomes, stream_batch_size):
                 batch_end = min(batch_start + stream_batch_size, num_genomes)
@@ -203,8 +204,6 @@ class CachedEvaluator:
                     if g.connections is not None:
                         batch_conns.extend(g.connections)
 
-                batch_start_time = time.time()
-
                 # Evaluate this batch
                 batch_results = self._cache.evaluate_genomes(
                     batch_bits,
@@ -216,30 +215,11 @@ class CachedEvaluator:
                     self._empty_value,
                 )
 
-                batch_elapsed = time.time() - batch_start_time
-
-                # Log each result immediately
-                for i, (ce, acc) in enumerate(batch_results):
-                    genome_idx = batch_start + i
-                    base_msg = f"{gen_prefix} Genome {genome_idx+1:0{genome_width}d}/{num_genomes}: CE={ce:.4f}, Acc={acc:.2%} in {batch_elapsed:.1f}s"
-                    trace_msg = base_msg + subset_info
-
-                    if min_accuracy is not None and acc < min_accuracy:
-                        log_trace(trace_msg)
-                    else:
-                        log_debug(base_msg)
-                        if isinstance(logger, OptimizationLogger):
-                            log_trace(f"    └─ subset: train={train_subset_idx+1}/{self._num_parts}, eval={eval_subset_idx+1}/1")
-
-                    # Force flush for real-time output
-                    sys.stdout.flush()
-                    sys.stderr.flush()
-
                 all_results.extend(batch_results)
 
-            return all_results
+            results = all_results
         else:
-            # Non-streaming mode: evaluate all at once (original behavior)
+            # Non-streaming mode: evaluate all at once
             genomes_bits_flat = []
             genomes_neurons_flat = []
             genomes_connections_flat = []
@@ -249,8 +229,6 @@ class CachedEvaluator:
                 genomes_neurons_flat.extend(g.neurons_per_cluster)
                 if g.connections is not None:
                     genomes_connections_flat.extend(g.connections)
-
-            start_time = time.time()
 
             results = self._cache.evaluate_genomes(
                 genomes_bits_flat,
@@ -262,21 +240,39 @@ class CachedEvaluator:
                 self._empty_value,
             )
 
-            elapsed = time.time() - start_time
+        elapsed = time.time() - overall_start
 
-            # Log each result
-            for i, (ce, acc) in enumerate(results):
-                base_msg = f"{gen_prefix} Genome {i+1:0{genome_width}d}/{num_genomes}: CE={ce:.4f}, Acc={acc:.2%} in {elapsed:.1f}s"
-                trace_msg = base_msg + subset_info
+        # Count how many pass the threshold for sequential numbering
+        if min_accuracy is not None:
+            shown_count = sum(1 for _, acc in results if acc >= min_accuracy)
+        else:
+            shown_count = num_genomes
 
-                if min_accuracy is not None and acc < min_accuracy:
-                    log_trace(trace_msg)
-                else:
-                    log_debug(base_msg)
-                    if isinstance(logger, OptimizationLogger):
-                        log_trace(f"    └─ subset: train={train_subset_idx+1}/{self._num_parts}, eval={eval_subset_idx+1}/1")
+        shown_width = len(str(shown_count)) if shown_count > 0 else 1
 
-            return results
+        # Log each result with sequential numbering for shown items
+        shown_idx = 0
+        for i, (ce, acc) in enumerate(results):
+            if min_accuracy is not None and acc < min_accuracy:
+                # Log at TRACE level (not shown) - use original indexing
+                trace_msg = f"{gen_prefix} Genome {i+1:0{genome_width}d}/{num_genomes}: CE={ce:.4f}, Acc={acc:.2%}" + subset_info
+                log_trace(trace_msg)
+            else:
+                # Log at DEBUG level (shown) - use sequential numbering
+                shown_idx += 1
+                base_msg = f"{gen_prefix} Genome {shown_idx:0{shown_width}d}/{shown_count}: CE={ce:.4f}, Acc={acc:.2%}"
+                log_debug(base_msg)
+                if isinstance(logger, OptimizationLogger):
+                    log_trace(f"    └─ subset: train={train_subset_idx+1}/{self._num_parts}, eval={eval_subset_idx+1}/1")
+
+        # Log generation/iteration duration summary
+        log_debug(f"{gen_prefix} Completed in {elapsed:.1f}s ({num_genomes} evaluated, {shown_count} shown)")
+
+        # Force flush for real-time output
+        sys.stdout.flush()
+        sys.stderr.flush()
+
+        return results
 
     def evaluate_batch_full(
         self,
