@@ -427,6 +427,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 
 	Features:
 	- Rust/Metal batch evaluation (default when available)
+	- Rust-based neighbor search with threshold (when cached_evaluator provided)
 	- ProgressTracker for consistent logging with accuracy
 	- Population seeding from previous phases
 	"""
@@ -438,10 +439,18 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		seed: Optional[int] = None,
 		logger: Optional[Callable[[str], None]] = None,
 		batch_evaluator: Optional['RustParallelEvaluator'] = None,
+		cached_evaluator: Optional[Any] = None,  # CachedEvaluator for Rust search_neighbors
 	):
 		super().__init__(config=ts_config, seed=seed, logger=logger)
 		self._arch_config = arch_config
 		self._batch_evaluator = batch_evaluator
+		# Use cached_evaluator if provided, or check if batch_evaluator has search_neighbors
+		if cached_evaluator is not None:
+			self._cached_evaluator = cached_evaluator
+		elif batch_evaluator is not None and hasattr(batch_evaluator, 'search_neighbors'):
+			self._cached_evaluator = batch_evaluator
+		else:
+			self._cached_evaluator = None
 		self._tracker: Optional[ProgressTracker] = None
 
 	@property
@@ -605,10 +614,21 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		"""
 		Run TS with Rust batch evaluation and ProgressTracker logging.
 
+		If cached_evaluator was provided at init, uses Rust search_neighbors for
+		neighbor generation (eliminates Python↔Rust round trips).
+
 		If batch_evaluator was provided at init, uses it for parallel evaluation.
 		batch_evaluate_fn should return List[(CE, accuracy)] tuples.
 		"""
-		# Use Rust batch evaluator if available
+		# If we have a cached_evaluator, use Rust-based neighbor search
+		if self._cached_evaluator is not None:
+			return self._optimize_with_rust_search(
+				initial_genome=initial_genome,
+				initial_fitness=initial_fitness,
+				initial_neighbors=initial_neighbors,
+			)
+
+		# Fall back to original behavior
 		if self._batch_evaluator is not None and batch_evaluate_fn is None:
 			batch_evaluate_fn = lambda genomes, min_accuracy=None: self._batch_evaluator.evaluate_batch(
 				genomes, logger=self._log, min_accuracy=min_accuracy,
@@ -628,4 +648,219 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 			evaluate_fn=evaluate_fn,
 			initial_neighbors=initial_neighbors,
 			batch_evaluate_fn=batch_evaluate_fn,
+		)
+
+	def _optimize_with_rust_search(
+		self,
+		initial_genome: 'ClusterGenome',
+		initial_fitness: float,
+		initial_neighbors: Optional[List['ClusterGenome']] = None,
+	) -> OptimizerResult['ClusterGenome']:
+		"""
+		Run TS using Rust search_neighbors for neighbor generation.
+
+		This eliminates Python↔Rust round trips by doing mutation, evaluation,
+		and filtering entirely in Rust. Much faster than the traditional approach.
+		"""
+		import time
+		from collections import deque
+		from wnn.ram.strategies.connectivity.generic_strategies import (
+			OptimizerResult, EarlyStoppingConfig, EarlyStoppingTracker
+		)
+
+		cfg = self._config
+		arch_cfg = self._arch_config
+		evaluator = self._cached_evaluator
+
+		# Threshold continuity
+		start_threshold = cfg.initial_threshold if cfg.initial_threshold is not None else cfg.min_accuracy
+		end_threshold = start_threshold + cfg.threshold_delta
+
+		def get_threshold(progress: float = 0.0) -> float:
+			if not cfg.progressive_threshold:
+				return start_threshold
+			progress = max(0.0, min(1.0, progress))
+			return start_threshold + progress * cfg.threshold_delta
+
+		self._log.info(f"[{self.name}] Progressive threshold: {start_threshold:.2%} → {end_threshold:.2%}")
+		self._log.info(f"[{self.name}] Using Rust search_neighbors (single-call neighbor search)")
+
+		# Dual-path tracking
+		best_ce_genome = initial_genome.clone()
+		best_ce_fitness = initial_fitness
+		best_ce_accuracy: Optional[float] = None
+
+		best_acc_genome = initial_genome.clone()
+		best_acc_fitness = initial_fitness
+		best_acc_accuracy: Optional[float] = None
+
+		# Global best
+		best = initial_genome.clone()
+		best_fitness = initial_fitness
+		best_accuracy: Optional[float] = None
+		start_fitness = initial_fitness
+
+		# All neighbors cache
+		all_neighbors: List[Tuple['ClusterGenome', float, Optional[float]]] = [
+			(initial_genome.clone(), initial_fitness, None)
+		]
+
+		current_threshold = get_threshold(0.0)
+
+		# Seed with initial neighbors
+		if initial_neighbors:
+			self._log.info(f"[{self.name}] Seeding from {len(initial_neighbors)} neighbors")
+			results = evaluator.evaluate_batch(initial_neighbors)
+			for g, (ce, acc) in zip(initial_neighbors, results):
+				all_neighbors.append((g.clone(), ce, acc))
+				if ce < best_ce_fitness:
+					best_ce_genome = g.clone()
+					best_ce_fitness = ce
+					best_ce_accuracy = acc
+				if acc is not None and (best_acc_accuracy is None or acc > best_acc_accuracy):
+					best_acc_genome = g.clone()
+					best_acc_fitness = ce
+					best_acc_accuracy = acc
+
+			if best_ce_fitness < best_fitness:
+				best = best_ce_genome.clone()
+				best_fitness = best_ce_fitness
+				best_accuracy = best_ce_accuracy
+
+		history = [(0, best_fitness)]
+
+		# Early stopping
+		early_stop_config = EarlyStoppingConfig(
+			patience=cfg.patience,
+			check_interval=cfg.check_interval,
+			min_improvement_pct=cfg.min_improvement_pct,
+		)
+		early_stopper = EarlyStoppingTracker(early_stop_config, self._log, self.name)
+		early_stopper.reset(best_fitness)
+
+		neighbors_per_path = cfg.neighbors_per_iter // 2
+		self._log.info(f"[{self.name}] Config: neighbors={cfg.neighbors_per_iter} ({neighbors_per_path} CE + {neighbors_per_path} Acc), "
+					   f"iters={cfg.iterations}")
+
+		prev_threshold: Optional[float] = None
+		iteration = 0
+		seed_offset = int(time.time() * 1000) % (2**16)
+
+		for iteration in range(cfg.iterations):
+			current_threshold = get_threshold(iteration / cfg.iterations)
+			if prev_threshold is not None and abs(current_threshold - prev_threshold) > 0.0001:
+				self._log.debug(f"[{self.name}] Threshold changed: {prev_threshold:.2%} → {current_threshold:.2%}")
+			prev_threshold = current_threshold
+
+			# Get next train subset for this iteration
+			train_idx = evaluator.next_train_idx()
+
+			# === Path A: Search neighbors from best_ce ===
+			ce_neighbors = evaluator.search_neighbors(
+				genome=best_ce_genome,
+				target_count=neighbors_per_path,
+				max_attempts=neighbors_per_path * 2,
+				accuracy_threshold=current_threshold,
+				min_bits=arch_cfg.min_bits,
+				max_bits=arch_cfg.max_bits,
+				min_neurons=arch_cfg.min_neurons,
+				max_neurons=arch_cfg.max_neurons,
+				bits_mutation_rate=cfg.mutation_rate if arch_cfg.optimize_bits else 0.0,
+				neurons_mutation_rate=cfg.mutation_rate if arch_cfg.optimize_neurons else 0.0,
+				train_subset_idx=train_idx,
+				eval_subset_idx=0,
+				seed=seed_offset + iteration * 1000,
+				generation=iteration,
+				total_generations=cfg.iterations,
+			)
+
+			# === Path B: Search neighbors from best_acc ===
+			acc_neighbors = evaluator.search_neighbors(
+				genome=best_acc_genome,
+				target_count=neighbors_per_path,
+				max_attempts=neighbors_per_path * 2,
+				accuracy_threshold=current_threshold,
+				min_bits=arch_cfg.min_bits,
+				max_bits=arch_cfg.max_bits,
+				min_neurons=arch_cfg.min_neurons,
+				max_neurons=arch_cfg.max_neurons,
+				bits_mutation_rate=cfg.mutation_rate if arch_cfg.optimize_bits else 0.0,
+				neurons_mutation_rate=cfg.mutation_rate if arch_cfg.optimize_neurons else 0.0,
+				train_subset_idx=train_idx,
+				eval_subset_idx=0,
+				seed=seed_offset + iteration * 1000 + 500,
+				generation=iteration,
+				total_generations=cfg.iterations,
+			)
+
+			# Process CE path neighbors
+			for g in ce_neighbors:
+				ce, acc = g._cached_fitness
+				all_neighbors.append((g.clone(), ce, acc))
+				if ce < best_ce_fitness:
+					best_ce_genome = g.clone()
+					best_ce_fitness = ce
+					best_ce_accuracy = acc
+				if acc is not None and (best_acc_accuracy is None or acc > best_acc_accuracy):
+					best_acc_genome = g.clone()
+					best_acc_fitness = ce
+					best_acc_accuracy = acc
+
+			# Process Acc path neighbors
+			for g in acc_neighbors:
+				ce, acc = g._cached_fitness
+				all_neighbors.append((g.clone(), ce, acc))
+				if ce < best_ce_fitness:
+					best_ce_genome = g.clone()
+					best_ce_fitness = ce
+					best_ce_accuracy = acc
+				if acc is not None and (best_acc_accuracy is None or acc > best_acc_accuracy):
+					best_acc_genome = g.clone()
+					best_acc_fitness = ce
+					best_acc_accuracy = acc
+
+			# Update global best
+			if best_ce_fitness < best_fitness:
+				best = best_ce_genome.clone()
+				best_fitness = best_ce_fitness
+				best_accuracy = best_ce_accuracy
+
+			history.append((iteration + 1, best_fitness))
+
+			# Log iteration summary
+			self._log.info(f"[{self.name}] Iter {iteration+1:03d}/{cfg.iterations}: "
+						   f"best_ce={best_ce_fitness:.4f}, best_acc={best_acc_accuracy:.2%}" if best_acc_accuracy else
+						   f"[{self.name}] Iter {iteration+1:03d}/{cfg.iterations}: best_ce={best_ce_fitness:.4f}")
+
+			# Early stopping check
+			if early_stopper.check(best_fitness):
+				self._log.info(f"[{self.name}] Early stopping at iteration {iteration + 1}")
+				break
+
+		# Build final population (top by CE + top by Acc)
+		cache_size = cfg.total_neighbors_size or cfg.neighbors_per_iter
+		cache_size_per_metric = cache_size // 2
+
+		by_ce = sorted([n for n in all_neighbors if n[2] is not None], key=lambda x: x[1])[:cache_size_per_metric]
+		by_acc = sorted([n for n in all_neighbors if n[2] is not None], key=lambda x: -x[2])[:cache_size_per_metric]
+
+		seen = set()
+		final_population = []
+		for g, _, _ in by_ce + by_acc:
+			key = (tuple(g.bits_per_cluster[:10]), tuple(g.neurons_per_cluster[:10]))
+			if key not in seen:
+				seen.add(key)
+				final_population.append(g)
+
+		return OptimizerResult(
+			best_genome=best,
+			initial_fitness=start_fitness,
+			final_fitness=best_fitness,
+			iterations_run=iteration + 1,
+			early_stopped=iteration + 1 < cfg.iterations,
+			history=history,
+			final_population=final_population,
+			final_threshold=current_threshold,
+			initial_accuracy=None,
+			final_accuracy=best_accuracy,
 		)
