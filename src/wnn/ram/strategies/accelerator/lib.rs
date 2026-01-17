@@ -45,6 +45,9 @@ mod adaptive;
 #[path = "token_cache.rs"]
 mod token_cache;
 
+#[path = "neighbor_search.rs"]
+mod neighbor_search;
+
 pub use ram::RAMNeuron;
 pub use per_cluster::{PerClusterEvaluator, FitnessMode, TierOptConfig, ClusterOptResult, TierOptResult};
 pub use metal_evaluator::MetalEvaluator;
@@ -2795,6 +2798,130 @@ impl TokenCacheWrapper {
                 num_genomes,
                 empty_value,
             ))
+        })
+    }
+
+    /// Search for neighbors above accuracy threshold, all in Rust.
+    ///
+    /// This eliminates Python↔Rust round trips by doing mutation, evaluation,
+    /// and filtering entirely in Rust. Logs progress to file with flush.
+    ///
+    /// Returns: List of (bits_flat, neurons_flat, connections_flat, CE, accuracy)
+    /// for candidates that passed the threshold.
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (
+        base_bits,
+        base_neurons,
+        base_connections,
+        target_count,
+        max_attempts,
+        accuracy_threshold,
+        min_bits,
+        max_bits,
+        min_neurons,
+        max_neurons,
+        bits_mutation_rate,
+        neurons_mutation_rate,
+        train_subset_idx,
+        eval_subset_idx,
+        empty_value,
+        seed,
+        log_path = None,
+        generation = None,
+        total_generations = None,
+        return_best_n = true
+    ))]
+    fn search_neighbors(
+        &self,
+        py: Python<'_>,
+        base_bits: Vec<usize>,
+        base_neurons: Vec<usize>,
+        base_connections: Vec<i64>,
+        target_count: usize,
+        max_attempts: usize,
+        accuracy_threshold: f64,
+        min_bits: usize,
+        max_bits: usize,
+        min_neurons: usize,
+        max_neurons: usize,
+        bits_mutation_rate: f64,
+        neurons_mutation_rate: f64,
+        train_subset_idx: usize,
+        eval_subset_idx: usize,
+        empty_value: f32,
+        seed: u64,
+        log_path: Option<String>,
+        generation: Option<usize>,
+        total_generations: Option<usize>,
+        return_best_n: bool,
+    ) -> PyResult<Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64)>> {
+        let num_clusters = base_bits.len();
+        let total_input_bits = self.inner.total_input_bits();
+
+        let config = neighbor_search::MutationConfig {
+            num_clusters,
+            min_bits,
+            max_bits,
+            min_neurons,
+            max_neurons,
+            bits_mutation_rate,
+            neurons_mutation_rate,
+            total_input_bits,
+        };
+
+        py.allow_threads(|| {
+            let log_path_ref = log_path.as_deref();
+
+            let candidates = if return_best_n {
+                neighbor_search::search_neighbors_best_n(
+                    &self.inner,
+                    &base_bits,
+                    &base_neurons,
+                    &base_connections,
+                    target_count,
+                    max_attempts,
+                    accuracy_threshold,
+                    &config,
+                    train_subset_idx,
+                    eval_subset_idx,
+                    empty_value,
+                    seed,
+                    log_path_ref,
+                    generation,
+                    total_generations,
+                )
+            } else {
+                let (passed, _) = neighbor_search::search_neighbors_with_threshold(
+                    &self.inner,
+                    &base_bits,
+                    &base_neurons,
+                    &base_connections,
+                    target_count,
+                    max_attempts,
+                    accuracy_threshold,
+                    &config,
+                    train_subset_idx,
+                    eval_subset_idx,
+                    empty_value,
+                    seed,
+                    log_path_ref,
+                    generation,
+                    total_generations,
+                );
+                passed
+            };
+
+            // Convert to Python-friendly format
+            Ok(candidates
+                .into_iter()
+                .map(|c| (
+                    c.bits_per_cluster,
+                    c.neurons_per_cluster,
+                    c.connections,
+                    c.cross_entropy,
+                    c.accuracy,
+                ))
+                .collect())
         })
     }
 }

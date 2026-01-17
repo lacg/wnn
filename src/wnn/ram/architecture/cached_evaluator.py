@@ -125,6 +125,8 @@ class CachedEvaluator:
         generation: Optional[int] = None,
         total_generations: Optional[int] = None,
         min_accuracy: Optional[float] = None,
+        streaming: bool = True,  # Log per-genome as they complete
+        stream_batch_size: int = 1,  # How many genomes per Rust call in streaming mode
     ) -> List[Tuple[float, float]]:
         """
         Evaluate multiple genomes using specified train/eval subsets.
@@ -140,11 +142,14 @@ class CachedEvaluator:
             generation: Current generation number for logging
             total_generations: Total number of generations for logging
             min_accuracy: If provided, genomes below this log at TRACE level
+            streaming: If True, evaluate and log genomes incrementally (default True)
+            stream_batch_size: Number of genomes per Rust call in streaming mode (default 1)
 
         Returns:
             List of (cross-entropy, accuracy) tuples for each genome
         """
         import time
+        import sys
 
         # Auto-advance rotation if no explicit index provided
         if train_subset_idx is None:
@@ -163,17 +168,8 @@ class CachedEvaluator:
             log_debug = lambda x: None
             log_trace = lambda x: None
 
-        # Flatten genome configurations
         num_genomes = len(genomes)
-        genomes_bits_flat = []
-        genomes_neurons_flat = []
-        genomes_connections_flat = []
-
-        for g in genomes:
-            genomes_bits_flat.extend(g.bits_per_cluster)
-            genomes_neurons_flat.extend(g.neurons_per_cluster)
-            if g.connections is not None:
-                genomes_connections_flat.extend(g.connections)
+        genome_width = len(str(num_genomes))
 
         # Generation prefix for logs
         if generation is not None:
@@ -185,45 +181,102 @@ class CachedEvaluator:
         else:
             gen_prefix = "[Init]"
 
-        start_time = time.time()
-
-        # Call Rust evaluator with cached data
-        results = self._cache.evaluate_genomes(
-            genomes_bits_flat,
-            genomes_neurons_flat,
-            genomes_connections_flat,
-            num_genomes,
-            train_subset_idx,
-            eval_subset_idx,
-            self._empty_value,
-        )
-
-        elapsed = time.time() - start_time
-        genome_width = len(str(num_genomes))
-
         # Subset info for TRACE level logging
         subset_info = f" [train:{train_subset_idx+1}/{self._num_parts}, eval:{eval_subset_idx+1}/1]"
 
-        # Log each result
-        for i, (ce, acc) in enumerate(results):
-            # Basic message for DEBUG level
-            base_msg = f"{gen_prefix} Genome {i+1:0{genome_width}d}/{num_genomes}: CE={ce:.4f}, Acc={acc:.2%} in {elapsed:.1f}s"
+        if streaming and stream_batch_size < num_genomes:
+            # Streaming mode: evaluate in small batches and log immediately
+            all_results = []
+            overall_start = time.time()
 
-            # Extended message for TRACE level includes subset info
-            trace_msg = base_msg + subset_info
+            for batch_start in range(0, num_genomes, stream_batch_size):
+                batch_end = min(batch_start + stream_batch_size, num_genomes)
+                batch_genomes = genomes[batch_start:batch_end]
 
-            if min_accuracy is not None and acc < min_accuracy:
-                # Low-accuracy genomes always go to TRACE (with subset info)
-                log_trace(trace_msg)
-            else:
-                # Normal genomes: DEBUG gets basic, TRACE gets extended
-                log_debug(base_msg)
-                # log_trace is a no-op if level > TRACE, so this is safe
-                # This adds subset detail only when TRACE is enabled
-                if isinstance(logger, OptimizationLogger):
-                    log_trace(f"    └─ subset: train={train_subset_idx+1}/{self._num_parts}, eval={eval_subset_idx+1}/1")
+                # Flatten this batch
+                batch_bits = []
+                batch_neurons = []
+                batch_conns = []
+                for g in batch_genomes:
+                    batch_bits.extend(g.bits_per_cluster)
+                    batch_neurons.extend(g.neurons_per_cluster)
+                    if g.connections is not None:
+                        batch_conns.extend(g.connections)
 
-        return results
+                batch_start_time = time.time()
+
+                # Evaluate this batch
+                batch_results = self._cache.evaluate_genomes(
+                    batch_bits,
+                    batch_neurons,
+                    batch_conns,
+                    len(batch_genomes),
+                    train_subset_idx,
+                    eval_subset_idx,
+                    self._empty_value,
+                )
+
+                batch_elapsed = time.time() - batch_start_time
+
+                # Log each result immediately
+                for i, (ce, acc) in enumerate(batch_results):
+                    genome_idx = batch_start + i
+                    base_msg = f"{gen_prefix} Genome {genome_idx+1:0{genome_width}d}/{num_genomes}: CE={ce:.4f}, Acc={acc:.2%} in {batch_elapsed:.1f}s"
+                    trace_msg = base_msg + subset_info
+
+                    if min_accuracy is not None and acc < min_accuracy:
+                        log_trace(trace_msg)
+                    else:
+                        log_debug(base_msg)
+                        if isinstance(logger, OptimizationLogger):
+                            log_trace(f"    └─ subset: train={train_subset_idx+1}/{self._num_parts}, eval={eval_subset_idx+1}/1")
+
+                    # Force flush for real-time output
+                    sys.stdout.flush()
+                    sys.stderr.flush()
+
+                all_results.extend(batch_results)
+
+            return all_results
+        else:
+            # Non-streaming mode: evaluate all at once (original behavior)
+            genomes_bits_flat = []
+            genomes_neurons_flat = []
+            genomes_connections_flat = []
+
+            for g in genomes:
+                genomes_bits_flat.extend(g.bits_per_cluster)
+                genomes_neurons_flat.extend(g.neurons_per_cluster)
+                if g.connections is not None:
+                    genomes_connections_flat.extend(g.connections)
+
+            start_time = time.time()
+
+            results = self._cache.evaluate_genomes(
+                genomes_bits_flat,
+                genomes_neurons_flat,
+                genomes_connections_flat,
+                num_genomes,
+                train_subset_idx,
+                eval_subset_idx,
+                self._empty_value,
+            )
+
+            elapsed = time.time() - start_time
+
+            # Log each result
+            for i, (ce, acc) in enumerate(results):
+                base_msg = f"{gen_prefix} Genome {i+1:0{genome_width}d}/{num_genomes}: CE={ce:.4f}, Acc={acc:.2%} in {elapsed:.1f}s"
+                trace_msg = base_msg + subset_info
+
+                if min_accuracy is not None and acc < min_accuracy:
+                    log_trace(trace_msg)
+                else:
+                    log_debug(base_msg)
+                    if isinstance(logger, OptimizationLogger):
+                        log_trace(f"    └─ subset: train={train_subset_idx+1}/{self._num_parts}, eval={eval_subset_idx+1}/1")
+
+            return results
 
     def evaluate_batch_full(
         self,
@@ -315,6 +368,104 @@ class CachedEvaluator:
     def num_parts(self) -> int:
         """Number of parts tokens are divided into."""
         return self._num_parts
+
+    def search_neighbors(
+        self,
+        genome: ClusterGenome,
+        target_count: int,
+        max_attempts: int,
+        accuracy_threshold: float,
+        min_bits: int,
+        max_bits: int,
+        min_neurons: int,
+        max_neurons: int,
+        bits_mutation_rate: float = 0.1,
+        neurons_mutation_rate: float = 0.05,
+        train_subset_idx: Optional[int] = None,
+        eval_subset_idx: Optional[int] = None,
+        seed: Optional[int] = None,
+        log_path: Optional[str] = None,
+        generation: Optional[int] = None,
+        total_generations: Optional[int] = None,
+        return_best_n: bool = True,
+    ) -> List[ClusterGenome]:
+        """
+        Search for neighbor genomes above accuracy threshold, entirely in Rust.
+
+        This eliminates Python↔Rust round trips by doing mutation, evaluation,
+        and filtering all in a single Rust call. Much faster than the traditional
+        approach of: Python generate → Rust evaluate → Python filter → repeat.
+
+        Args:
+            genome: Base genome to mutate from
+            target_count: How many good candidates we want
+            max_attempts: Maximum candidates to evaluate (cap)
+            accuracy_threshold: Minimum accuracy to pass (e.g., 0.0001 for 0.01%)
+            min_bits, max_bits: Bits bounds for mutation
+            min_neurons, max_neurons: Neurons bounds for mutation
+            bits_mutation_rate: Probability of mutating bits per cluster (default 0.1)
+            neurons_mutation_rate: Probability of mutating neurons per cluster (default 0.05)
+            train_subset_idx: Which train subset to use (auto-advances if None)
+            eval_subset_idx: Which eval subset to use (0 = full if None)
+            seed: Random seed for mutations (time-based if None)
+            log_path: Optional log file path for progress logging
+            generation: Current generation for log prefix
+            total_generations: Total generations for log prefix
+            return_best_n: If True, return best N even if threshold not met
+
+        Returns:
+            List of ClusterGenome objects that passed the threshold
+            (or best N if return_best_n=True and threshold not met)
+        """
+        import time
+
+        # Auto-advance rotation if no explicit index
+        if train_subset_idx is None:
+            train_subset_idx = self.next_train_idx()
+        if eval_subset_idx is None:
+            eval_subset_idx = 0
+
+        # Time-based seed if not provided
+        if seed is None:
+            seed = int(time.time() * 1000) % (2**32)
+
+        # Call Rust search
+        results = self._cache.search_neighbors(
+            base_bits=genome.bits_per_cluster,
+            base_neurons=genome.neurons_per_cluster,
+            base_connections=genome.connections if genome.connections else [],
+            target_count=target_count,
+            max_attempts=max_attempts,
+            accuracy_threshold=accuracy_threshold,
+            min_bits=min_bits,
+            max_bits=max_bits,
+            min_neurons=min_neurons,
+            max_neurons=max_neurons,
+            bits_mutation_rate=bits_mutation_rate,
+            neurons_mutation_rate=neurons_mutation_rate,
+            train_subset_idx=train_subset_idx,
+            eval_subset_idx=eval_subset_idx,
+            empty_value=self._empty_value,
+            seed=seed,
+            log_path=log_path,
+            generation=generation,
+            total_generations=total_generations,
+            return_best_n=return_best_n,
+        )
+
+        # Convert results to ClusterGenome objects
+        genomes = []
+        for bits, neurons, connections, ce, acc in results:
+            g = ClusterGenome(
+                bits_per_cluster=list(bits),
+                neurons_per_cluster=list(neurons),
+                connections=list(connections) if connections else None,
+            )
+            # Store fitness for later use
+            g._cached_fitness = (ce, acc)
+            genomes.append(g)
+
+        return genomes
 
     def __repr__(self) -> str:
         return (
