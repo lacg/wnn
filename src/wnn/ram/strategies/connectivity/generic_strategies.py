@@ -852,7 +852,8 @@ class GenericGAStrategy(ABC, Generic[T]):
 				# Log elite source (DEBUG level)
 				source = "CE" if elite_idx in ce_elite_indices else "Acc"
 				acc_str = f", Acc={elite_accuracy:.2%}" if elite_accuracy is not None else ""
-				self._log.debug(f"[Elite {i + 1}/{total_elites}] CE={elite_fitness:.4f}{acc_str} ({source})")
+				elite_width = len(str(total_elites))
+				self._log.debug(f"[Elite {i + 1:0{elite_width}d}/{total_elites}] CE={elite_fitness:.4f}{acc_str} ({source})")
 
 			# Generate viable offspring to fill the rest of the population
 			needed_offspring = cfg.population_size - len(new_population)
@@ -910,7 +911,8 @@ class GenericGAStrategy(ABC, Generic[T]):
 
 			# Log progress
 			gen_avg = sum(fitness_values) / len(fitness_values)
-			self._log.info(f"[{self.name}] Gen {generation + 1}/{cfg.generations}: "
+			gen_width = len(str(cfg.generations))
+			self._log.info(f"[{self.name}] Gen {generation + 1:0{gen_width}d}/{cfg.generations}: "
 						   f"best={best_fitness:.4f}, new_best={new_best:.4f}, avg={gen_avg:.4f}")
 
 			# Early stopping check (checks at configured intervals)
@@ -1437,7 +1439,8 @@ class GenericTSStrategy(ABC, Generic[T]):
 			# Log progress: best (global), iter_best (this iteration), avg
 			iter_best = best_neighbor_fitness  # Best among neighbors this iteration
 			avg_fitness = sum(f for _, f, _, _ in neighbors) / len(neighbors)
-			self._log.info(f"[{self.name}] Iter {iteration + 1}/{cfg.iterations}: "
+			iter_width = len(str(cfg.iterations))
+			self._log.info(f"[{self.name}] Iter {iteration + 1:0{iter_width}d}/{cfg.iterations}: "
 						   f"best={best_fitness:.4f}, iter_best={iter_best:.4f}, avg={avg_fitness:.4f}")
 
 			# Early stopping check (checks at configured intervals)

@@ -195,7 +195,8 @@ class TabuSearchStrategy(OptimizerStrategyBase):
 			# Log every iteration for progress visibility
 			if self._verbose:
 				avg_neighbor_error = sum(e for _, e, _ in neighbors) / len(neighbors)
-				self._log(f"[TS] Iter {iteration + 1}/{cfg.iterations}: current={current_error:.4f}, best={best_error:.4f}, avg={avg_neighbor_error:.4f}")
+				iter_width = len(str(cfg.iterations))
+				self._log(f"[TS] Iter {iteration + 1:0{iter_width}d}/{cfg.iterations}: current={current_error:.4f}, best={best_error:.4f}, avg={avg_neighbor_error:.4f}")
 
 			# Early stopping check every 5 iterations
 			# Uses PPL-based improvement: since PPL = exp(CE), small CE changes = large PPL changes

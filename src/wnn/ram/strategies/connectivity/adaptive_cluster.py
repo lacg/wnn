@@ -881,7 +881,8 @@ class RustParallelEvaluator:
 		# Generation prefix for logs
 		if generation is not None:
 			if total_generations is not None:
-				gen_prefix = f"[Gen {generation + 1}/{total_generations}]"
+				gen_width = len(str(total_generations))
+				gen_prefix = f"[Gen {generation + 1:0{gen_width}d}/{total_generations}]"
 			else:
 				gen_prefix = f"[Gen {generation + 1}]"
 		else:
@@ -928,13 +929,14 @@ class RustParallelEvaluator:
 
 			elapsed = time.time() - start_time
 			# Log each genome in the batch (with batch timing for efficiency)
+			genome_width = len(str(total_genomes))
 			for i, (ce, acc) in enumerate(batch_results):
 				genome_idx = batch_start + i + 1
 				if batch_size == 1:
-					msg = f"{gen_prefix} Genome {genome_idx}/{total_genomes}: CE={ce:.4f}, Acc={acc:.2%} in {elapsed:.1f}s"
+					msg = f"{gen_prefix} Genome {genome_idx:0{genome_width}d}/{total_genomes}: CE={ce:.4f}, Acc={acc:.2%} in {elapsed:.1f}s"
 				else:
 					# Parallel batch: show genome results without individual timing
-					msg = f"{gen_prefix} Genome {genome_idx}/{total_genomes}: CE={ce:.4f}, Acc={acc:.2%}"
+					msg = f"{gen_prefix} Genome {genome_idx:0{genome_width}d}/{total_genomes}: CE={ce:.4f}, Acc={acc:.2%}"
 				# Use TRACE for filtered (below threshold), DEBUG for passed
 				if min_accuracy is not None and acc < min_accuracy:
 					log_trace(msg)  # Filtered candidate
