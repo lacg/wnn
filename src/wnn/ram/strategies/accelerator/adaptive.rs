@@ -898,6 +898,126 @@ pub fn evaluate_genomes_parallel(
     }).collect()
 }
 
+/// Evaluate genomes with multi-subset rotation support.
+///
+/// All token subsets are pre-encoded and passed at once. The train_subset_idx
+/// and eval_subset_idx select which subset to use for this batch of evaluations.
+///
+/// This enables per-generation/iteration rotation of data subsets, acting as
+/// a regularizer that forces genomes to generalize across all subsets.
+///
+/// Args:
+///   genomes_bits_flat: [num_genomes * num_clusters] bits per cluster
+///   genomes_neurons_flat: [num_genomes * num_clusters] neurons per cluster
+///   genomes_connections_flat: Flattened connections (empty = random)
+///   num_genomes: Number of genomes to evaluate
+///   num_clusters: Vocabulary size
+///   train_subsets_flat: [sum(num_train_per_subset) * total_input_bits] all train input bits concatenated
+///   train_targets_flat: [sum(num_train_per_subset)] all train targets concatenated
+///   train_negatives_flat: [sum(num_train_per_subset) * num_negatives] all train negatives concatenated
+///   train_subset_counts: [num_subsets] number of examples in each train subset
+///   eval_subsets_flat: [sum(num_eval_per_subset) * total_input_bits] all eval input bits concatenated
+///   eval_targets_flat: [sum(num_eval_per_subset)] all eval targets concatenated
+///   eval_subset_counts: [num_subsets] number of examples in each eval subset
+///   train_subset_idx: Which train subset to use (0-indexed)
+///   eval_subset_idx: Which eval subset to use (0-indexed)
+///   num_negatives: Number of negative samples per example
+///   total_input_bits: Input bits per example
+///   empty_value: Value for EMPTY cells (0.0 recommended)
+///
+/// Returns: Vec of (cross_entropy, accuracy) tuples - one per genome
+pub fn evaluate_genomes_parallel_multisubset(
+    genomes_bits_flat: &[usize],
+    genomes_neurons_flat: &[usize],
+    genomes_connections_flat: &[i64],
+    num_genomes: usize,
+    num_clusters: usize,
+    // Train data - all subsets concatenated
+    train_subsets_flat: &[bool],
+    train_targets_flat: &[i64],
+    train_negatives_flat: &[i64],
+    train_subset_counts: &[usize],  // [num_subsets] examples per subset
+    // Eval data - all subsets concatenated
+    eval_subsets_flat: &[bool],
+    eval_targets_flat: &[i64],
+    eval_subset_counts: &[usize],  // [num_subsets] examples per subset
+    // Subset selection
+    train_subset_idx: usize,
+    eval_subset_idx: usize,
+    // Other params
+    num_negatives: usize,
+    total_input_bits: usize,
+    empty_value: f32,
+) -> Vec<(f64, f64)> {
+    // Compute offsets for train subsets
+    let mut train_offsets: Vec<usize> = Vec::with_capacity(train_subset_counts.len() + 1);
+    let mut train_target_offsets: Vec<usize> = Vec::with_capacity(train_subset_counts.len() + 1);
+    train_offsets.push(0);
+    train_target_offsets.push(0);
+    for &count in train_subset_counts {
+        let last_offset = *train_offsets.last().unwrap();
+        train_offsets.push(last_offset + count * total_input_bits);
+        let last_target_offset = *train_target_offsets.last().unwrap();
+        train_target_offsets.push(last_target_offset + count);
+    }
+
+    // Compute offsets for eval subsets
+    let mut eval_offsets: Vec<usize> = Vec::with_capacity(eval_subset_counts.len() + 1);
+    let mut eval_target_offsets: Vec<usize> = Vec::with_capacity(eval_subset_counts.len() + 1);
+    eval_offsets.push(0);
+    eval_target_offsets.push(0);
+    for &count in eval_subset_counts {
+        let last_offset = *eval_offsets.last().unwrap();
+        eval_offsets.push(last_offset + count * total_input_bits);
+        let last_target_offset = *eval_target_offsets.last().unwrap();
+        eval_target_offsets.push(last_target_offset + count);
+    }
+
+    // Extract the selected train subset
+    let train_start = train_offsets[train_subset_idx];
+    let train_end = train_offsets[train_subset_idx + 1];
+    let train_input_bits = &train_subsets_flat[train_start..train_end];
+
+    let train_target_start = train_target_offsets[train_subset_idx];
+    let train_target_end = train_target_offsets[train_subset_idx + 1];
+    let train_targets = &train_targets_flat[train_target_start..train_target_end];
+
+    let num_train = train_subset_counts[train_subset_idx];
+    let train_neg_start = train_target_start * num_negatives;
+    let train_neg_end = train_target_end * num_negatives;
+    let train_negatives = &train_negatives_flat[train_neg_start..train_neg_end];
+
+    // Extract the selected eval subset
+    let eval_start = eval_offsets[eval_subset_idx];
+    let eval_end = eval_offsets[eval_subset_idx + 1];
+    let eval_input_bits = &eval_subsets_flat[eval_start..eval_end];
+
+    let eval_target_start = eval_target_offsets[eval_subset_idx];
+    let eval_target_end = eval_target_offsets[eval_subset_idx + 1];
+    let eval_targets = &eval_targets_flat[eval_target_start..eval_target_end];
+
+    let num_eval = eval_subset_counts[eval_subset_idx];
+
+    // Now delegate to the existing single-subset function
+    evaluate_genomes_parallel(
+        genomes_bits_flat,
+        genomes_neurons_flat,
+        genomes_connections_flat,
+        num_genomes,
+        num_clusters,
+        train_input_bits,
+        train_targets,
+        train_negatives,
+        num_train,
+        num_negatives,
+        eval_input_bits,
+        eval_targets,
+        num_eval,
+        total_input_bits,
+        empty_value,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

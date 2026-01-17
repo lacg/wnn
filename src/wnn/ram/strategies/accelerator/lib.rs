@@ -42,6 +42,9 @@ mod per_cluster;
 #[path = "adaptive.rs"]
 mod adaptive;
 
+#[path = "token_cache.rs"]
+mod token_cache;
+
 pub use ram::RAMNeuron;
 pub use per_cluster::{PerClusterEvaluator, FitnessMode, TierOptConfig, ClusterOptResult, TierOptResult};
 pub use metal_evaluator::MetalEvaluator;
@@ -2585,6 +2588,217 @@ fn evaluate_genomes_parallel<'py>(
     })
 }
 
+/// Evaluate genomes with multi-subset rotation support.
+///
+/// All token subsets are pre-encoded and passed at once. The train_subset_idx
+/// and eval_subset_idx select which subset to use for this batch of evaluations.
+///
+/// This enables per-generation/iteration rotation of data subsets, acting as
+/// a regularizer that forces genomes to generalize across all subsets.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn evaluate_genomes_parallel_multisubset<'py>(
+    py: Python<'py>,
+    genomes_bits_flat: Vec<usize>,
+    genomes_neurons_flat: Vec<usize>,
+    genomes_connections_flat: Vec<i64>,
+    num_genomes: usize,
+    num_clusters: usize,
+    // All train subsets concatenated
+    train_subsets_flat: PyReadonlyArray1<'py, u8>,
+    train_targets_flat: PyReadonlyArray1<'py, i64>,
+    train_negatives_flat: PyReadonlyArray1<'py, i64>,
+    train_subset_counts: Vec<usize>,
+    // All eval subsets concatenated
+    eval_subsets_flat: PyReadonlyArray1<'py, u8>,
+    eval_targets_flat: PyReadonlyArray1<'py, i64>,
+    eval_subset_counts: Vec<usize>,
+    // Subset selection
+    train_subset_idx: usize,
+    eval_subset_idx: usize,
+    // Other params
+    num_negatives: usize,
+    total_input_bits: usize,
+    empty_value: f32,
+) -> PyResult<Vec<(f64, f64)>> {
+    // Extract data before allow_threads
+    let train_subsets_slice = train_subsets_flat.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Train subsets not contiguous: {}", e))
+    })?;
+    let train_targets_slice = train_targets_flat.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Train targets not contiguous: {}", e))
+    })?;
+    let train_negatives_slice = train_negatives_flat.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Train negatives not contiguous: {}", e))
+    })?;
+    let eval_subsets_slice = eval_subsets_flat.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Eval subsets not contiguous: {}", e))
+    })?;
+    let eval_targets_slice = eval_targets_flat.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Eval targets not contiguous: {}", e))
+    })?;
+
+    // Convert to owned data
+    let train_subsets_bools: Vec<bool> = train_subsets_slice.iter().map(|&b| b != 0).collect();
+    let train_targets_vec: Vec<i64> = train_targets_slice.to_vec();
+    let train_negatives_vec: Vec<i64> = train_negatives_slice.to_vec();
+    let eval_subsets_bools: Vec<bool> = eval_subsets_slice.iter().map(|&b| b != 0).collect();
+    let eval_targets_vec: Vec<i64> = eval_targets_slice.to_vec();
+
+    // Set empty value for this evaluation
+    ramlm::set_empty_value(empty_value);
+
+    py.allow_threads(|| {
+        let fitness = adaptive::evaluate_genomes_parallel_multisubset(
+            &genomes_bits_flat,
+            &genomes_neurons_flat,
+            &genomes_connections_flat,
+            num_genomes,
+            num_clusters,
+            &train_subsets_bools,
+            &train_targets_vec,
+            &train_negatives_vec,
+            &train_subset_counts,
+            &eval_subsets_bools,
+            &eval_targets_vec,
+            &eval_subset_counts,
+            train_subset_idx,
+            eval_subset_idx,
+            num_negatives,
+            total_input_bits,
+            empty_value,
+        );
+        Ok(fitness)
+    })
+}
+
+// =============================================================================
+// TOKEN CACHE - Persistent token storage with subset rotation
+// =============================================================================
+
+/// Python-accessible TokenCache for persistent token storage.
+///
+/// Create once at session start, then use for all evaluations without
+/// any data transfer overhead.
+#[pyclass]
+struct TokenCacheWrapper {
+    inner: token_cache::TokenCache,
+}
+
+#[pymethods]
+impl TokenCacheWrapper {
+    /// Create a new token cache with all data pre-encoded and partitioned.
+    #[new]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        train_tokens: Vec<u32>,
+        eval_tokens: Vec<u32>,
+        test_tokens: Vec<u32>,
+        vocab_size: usize,
+        context_size: usize,
+        cluster_order: Vec<usize>,
+        num_parts: usize,
+        num_negatives: usize,
+        seed: u64,
+    ) -> Self {
+        Self {
+            inner: token_cache::TokenCache::new(
+                train_tokens,
+                eval_tokens,
+                test_tokens,
+                vocab_size,
+                context_size,
+                cluster_order,
+                num_parts,
+                num_negatives,
+                seed,
+            ),
+        }
+    }
+
+    /// Get the next train subset index (advances rotator).
+    fn next_train_idx(&mut self) -> usize {
+        self.inner.next_train_idx()
+    }
+
+    /// Get the next eval subset index (advances rotator).
+    fn next_eval_idx(&mut self) -> usize {
+        self.inner.next_eval_idx()
+    }
+
+    /// Reset rotators with optional new seed.
+    fn reset(&mut self, seed: Option<u64>) {
+        self.inner.reset(seed);
+    }
+
+    /// Get number of train subsets.
+    fn num_train_subsets(&self) -> usize {
+        self.inner.num_train_subsets()
+    }
+
+    /// Get vocab size.
+    fn vocab_size(&self) -> usize {
+        self.inner.vocab_size()
+    }
+
+    /// Get total input bits.
+    fn total_input_bits(&self) -> usize {
+        self.inner.total_input_bits()
+    }
+
+    /// Evaluate genomes using a specific train/eval subset combination.
+    ///
+    /// This is the main evaluation function - zero data copy, just uses
+    /// pre-cached data selected by indices.
+    #[allow(clippy::too_many_arguments)]
+    fn evaluate_genomes(
+        &self,
+        py: Python<'_>,
+        genomes_bits_flat: Vec<usize>,
+        genomes_neurons_flat: Vec<usize>,
+        genomes_connections_flat: Vec<i64>,
+        num_genomes: usize,
+        train_subset_idx: usize,
+        eval_subset_idx: usize,
+        empty_value: f32,
+    ) -> PyResult<Vec<(f64, f64)>> {
+        py.allow_threads(|| {
+            Ok(token_cache::evaluate_genomes_cached(
+                &self.inner,
+                &genomes_bits_flat,
+                &genomes_neurons_flat,
+                &genomes_connections_flat,
+                num_genomes,
+                train_subset_idx,
+                eval_subset_idx,
+                empty_value,
+            ))
+        })
+    }
+
+    /// Evaluate genomes using full train/eval data (for final evaluation).
+    fn evaluate_genomes_full(
+        &self,
+        py: Python<'_>,
+        genomes_bits_flat: Vec<usize>,
+        genomes_neurons_flat: Vec<usize>,
+        genomes_connections_flat: Vec<i64>,
+        num_genomes: usize,
+        empty_value: f32,
+    ) -> PyResult<Vec<(f64, f64)>> {
+        py.allow_threads(|| {
+            Ok(token_cache::evaluate_genomes_cached_full(
+                &self.inner,
+                &genomes_bits_flat,
+                &genomes_neurons_flat,
+                &genomes_connections_flat,
+                num_genomes,
+                empty_value,
+            ))
+        })
+    }
+}
+
 /// Python module definition
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -2663,5 +2877,9 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(adaptive_train_batch, m)?)?;
     // Parallel genome evaluation (KEY for GA optimization)
     m.add_function(wrap_pyfunction!(evaluate_genomes_parallel, m)?)?;
+    // Multi-subset parallel genome evaluation (for per-iteration rotation)
+    m.add_function(wrap_pyfunction!(evaluate_genomes_parallel_multisubset, m)?)?;
+    // Token cache for persistent token storage with subset rotation
+    m.add_class::<TokenCacheWrapper>()?;
     Ok(())
 }
