@@ -878,9 +878,9 @@ class GenericGAStrategy(ABC, Generic[T]):
 
 			# Progressive threshold: gets stricter as generations progress
 			current_threshold = get_threshold(generation / cfg.generations)
-			# Only log if formatted values differ (avoid "0.01% → 0.01%" noise)
-			if prev_threshold is not None and f"{prev_threshold:.2%}" != f"{current_threshold:.2%}":
-				self._log.debug(f"[{self.name}] Threshold changed: {prev_threshold:.2%} → {current_threshold:.2%}")
+			# Only log if formatted values differ (avoid noise from tiny internal differences)
+			if prev_threshold is not None and f"{prev_threshold:.4%}" != f"{current_threshold:.4%}":
+				self._log.debug(f"[{self.name}] Threshold changed: {prev_threshold:.4%} → {current_threshold:.4%}")
 			prev_threshold = current_threshold
 			offspring = self._build_viable_population(
 				target_size=needed_offspring,
@@ -1384,9 +1384,9 @@ class GenericTSStrategy(ABC, Generic[T]):
 		for iteration in range(cfg.iterations):
 			# Progressive threshold
 			current_threshold = get_threshold(iteration / cfg.iterations)
-			# Only log if formatted values differ (avoid "0.01% → 0.01%" noise)
-			if prev_threshold is not None and f"{prev_threshold:.2%}" != f"{current_threshold:.2%}":
-				self._log.debug(f"[{self.name}] Threshold changed: {prev_threshold:.2%} → {current_threshold:.2%}")
+			# Only log if formatted values differ (avoid noise from tiny internal differences)
+			if prev_threshold is not None and f"{prev_threshold:.4%}" != f"{current_threshold:.4%}":
+				self._log.debug(f"[{self.name}] Threshold changed: {prev_threshold:.4%} → {current_threshold:.4%}")
 			prev_threshold = current_threshold
 
 			# === Path A: Generate neighbors from best_ce ===
