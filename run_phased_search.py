@@ -133,8 +133,13 @@ def main():
 	parser.add_argument("--default-bits", type=int, default=8, help="Default bits for Phase 1")
 	parser.add_argument("--default-neurons", type=int, default=5, help="Default neurons for Phase 2")
 	parser.add_argument("--token-parts", type=int, default=3, help="Number of token subsets (3=thirds)")
+	parser.add_argument("--seed", type=int, default=None, help="Random seed for rotation (None=time-based)")
 	parser.add_argument("--output", type=str, default=None, help="Output JSON file")
 	args = parser.parse_args()
+
+	# Determine seed: time-based if not specified
+	import time
+	rotation_seed = args.seed if args.seed is not None else int(time.time() * 1000) % (2**32)
 
 	# Setup logger using the project's Logger class
 	logger = Logger(name="phased_search")
@@ -143,6 +148,7 @@ def main():
 	log(f"  Log file: {logger.log_file}")
 	log(f"  Total train tokens: {args.train_tokens:,}")
 	log(f"  Per-iteration rotation: 1/{args.token_parts} (~{args.train_tokens // args.token_parts:,} tokens per iteration)")
+	log(f"  Rotation seed: {rotation_seed}" + (" (time-based)" if args.seed is None else " (explicit)"))
 	log(f"  Eval tokens: {args.eval_tokens:,}")
 	log(f"  Context: {args.context}")
 	log(f"  GA generations: {args.ga_gens}, population: {args.population}")
@@ -198,7 +204,7 @@ def main():
 		num_parts=args.token_parts,
 		num_negatives=5,
 		empty_value=0.0,
-		seed=42,
+		seed=rotation_seed,
 	)
 	log(f"  {evaluator}")
 
