@@ -756,10 +756,11 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 			train_idx = evaluator.next_train_idx()
 
 			# === Path A: Search neighbors from best_ce ===
+			# max_attempts = 4x target gives room for threshold filtering
 			ce_neighbors = evaluator.search_neighbors(
 				genome=best_ce_genome,
 				target_count=neighbors_per_path,
-				max_attempts=neighbors_per_path * 2,
+				max_attempts=neighbors_per_path * 5,
 				accuracy_threshold=current_threshold,
 				min_bits=arch_cfg.min_bits,
 				max_bits=arch_cfg.max_bits,
@@ -778,7 +779,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 			acc_neighbors = evaluator.search_neighbors(
 				genome=best_acc_genome,
 				target_count=neighbors_per_path,
-				max_attempts=neighbors_per_path * 2,
+				max_attempts=neighbors_per_path * 5,
 				accuracy_threshold=current_threshold,
 				min_bits=arch_cfg.min_bits,
 				max_bits=arch_cfg.max_bits,
