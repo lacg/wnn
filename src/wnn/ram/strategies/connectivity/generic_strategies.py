@@ -843,6 +843,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 							   f"{len(acc_elite_indices)} by Acc = {total_elites} unique elites")
 
 			# Add elites to new population
+			elite_width = len(str(total_elites))
 			for i, elite_idx in enumerate(all_elite_indices):
 				elite_genome = self.clone_genome(population[elite_idx][0])
 				elite_fitness = fitness_values[elite_idx]
@@ -852,7 +853,6 @@ class GenericGAStrategy(ABC, Generic[T]):
 				# Log elite source (DEBUG level)
 				source = "CE" if elite_idx in ce_elite_indices else "Acc"
 				acc_str = f", Acc={elite_accuracy:.2%}" if elite_accuracy is not None else ""
-				elite_width = len(str(total_elites))
 				self._log.debug(f"[Elite {i + 1:0{elite_width}d}/{total_elites}] CE={elite_fitness:.4f}{acc_str} ({source})")
 
 			# Generate viable offspring to fill the rest of the population

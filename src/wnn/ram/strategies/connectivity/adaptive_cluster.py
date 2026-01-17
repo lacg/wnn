@@ -876,6 +876,7 @@ class RustParallelEvaluator:
 
 		all_fitness = []
 		total_genomes = len(genomes)
+		genome_width = len(str(total_genomes))  # For zero-padded logging
 		start_time = time.time()
 
 		# Generation prefix for logs
@@ -929,7 +930,6 @@ class RustParallelEvaluator:
 
 			elapsed = time.time() - start_time
 			# Log each genome in the batch (with batch timing for efficiency)
-			genome_width = len(str(total_genomes))
 			for i, (ce, acc) in enumerate(batch_results):
 				genome_idx = batch_start + i + 1
 				if batch_size == 1:
