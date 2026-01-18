@@ -562,8 +562,8 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 					# If no cached accuracy, assume 0
 					pop_with_acc.append((g, ce, 0.0))
 
-			# Sort by accuracy descending to get top by accuracy
-			pop_by_acc = sorted(pop_with_acc, key=lambda x: -x[2])
+			# Sort by accuracy descending, then CE ascending as tie-breaker
+			pop_by_acc = sorted(pop_with_acc, key=lambda x: (-x[2], x[1]))
 
 			# Take top 5 by accuracy that are NOT already in CE elites
 			ce_elite_genomes = set(id(g) for g, _ in elites_by_ce)
