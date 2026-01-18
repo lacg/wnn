@@ -513,7 +513,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 				population.append((g, ce))
 
 		# Sort by fitness (lower CE is better), accuracy as tie-breaker (higher better)
-		population.sort(key=lambda x: (x[1], -(x[0]._cached_fitness[1] if hasattr(x[0], '_cached_fitness') and x[0]._cached_fitness else 0.0)))
+		population.sort(key=lambda x: (x[1], -getattr(x[0], '_cached_fitness', (0, 0))[1]))
 
 		# Track best
 		best_genome, best_fitness = population[0]
@@ -645,7 +645,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			new_population.extend(offspring_with_ce)
 
 			# Sort and truncate - sort by CE ascending, accuracy as tie-breaker (higher better)
-			new_population.sort(key=lambda x: (x[1], -(x[0]._cached_fitness[1] if hasattr(x[0], '_cached_fitness') and x[0]._cached_fitness else 0.0)))
+			new_population.sort(key=lambda x: (x[1], -getattr(x[0], '_cached_fitness', (0, 0))[1]))
 			population = new_population[:cfg.population_size]
 
 			# Update best
