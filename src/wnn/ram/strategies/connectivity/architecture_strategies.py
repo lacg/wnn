@@ -1018,7 +1018,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 			train_idx = evaluator.next_train_idx()
 
 			# === Path A: Search neighbors from best_ce ===
-			# max_attempts = 4x target gives room for threshold filtering
+			# max_attempts = 5x target gives room for threshold filtering
 			ce_neighbors = evaluator.search_neighbors(
 				genome=best_ce_genome,
 				target_count=neighbors_per_path,
@@ -1035,6 +1035,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 				seed=seed_offset + iteration * 1000,
 				generation=iteration,
 				total_generations=cfg.iterations,
+				return_best_n=True,  # Soft threshold: return top N by CE if not enough pass
 			)
 
 			# === Path B: Search neighbors from best_acc ===
@@ -1054,6 +1055,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 				seed=seed_offset + iteration * 1000 + 500,
 				generation=iteration,
 				total_generations=cfg.iterations,
+				return_best_n=True,  # Soft threshold: return top N by CE if not enough pass
 			)
 
 			# Apply CE percentile filter if configured
