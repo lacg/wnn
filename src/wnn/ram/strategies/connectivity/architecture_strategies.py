@@ -90,6 +90,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 
 	Features:
 	- Rust/Metal batch evaluation (default when available)
+	- Rust-based offspring search with threshold (when cached_evaluator provided)
 	- ProgressTracker for consistent logging with accuracy
 	- Population seeding from previous phases
 	"""
@@ -101,10 +102,18 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		seed: Optional[int] = None,
 		logger: Optional[Callable[[str], None]] = None,
 		batch_evaluator: Optional['RustParallelEvaluator'] = None,
+		cached_evaluator: Optional[Any] = None,  # CachedEvaluator for Rust search_offspring
 	):
 		super().__init__(config=ga_config, seed=seed, logger=logger)
 		self._arch_config = arch_config
 		self._batch_evaluator = batch_evaluator
+		# Use cached_evaluator if provided, or check if batch_evaluator has search_offspring
+		if cached_evaluator is not None:
+			self._cached_evaluator = cached_evaluator
+		elif batch_evaluator is not None and hasattr(batch_evaluator, 'search_offspring'):
+			self._cached_evaluator = batch_evaluator
+		else:
+			self._cached_evaluator = None
 		self._tracker: Optional[ProgressTracker] = None
 
 	@property
@@ -394,10 +403,19 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		"""
 		Run GA with Rust batch evaluation and ProgressTracker logging.
 
+		If cached_evaluator was provided at init, uses Rust search_offspring for
+		offspring generation (eliminates Python↔Rust round trips).
+
 		If batch_evaluator was provided at init, uses it for parallel evaluation.
 		batch_evaluate_fn should return List[(CE, accuracy)] tuples.
 		"""
-		# Use Rust batch evaluator if available
+		# If we have a cached_evaluator, use Rust-based offspring search
+		if self._cached_evaluator is not None:
+			return self._optimize_with_rust_search(
+				initial_population=initial_population,
+			)
+
+		# Fall back to original behavior
 		if self._batch_evaluator is not None and batch_evaluate_fn is None:
 			batch_evaluate_fn = lambda genomes, min_accuracy=None: self._batch_evaluator.evaluate_batch(
 				genomes, logger=self._log, min_accuracy=min_accuracy,
@@ -416,6 +434,158 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			initial_genome=initial_genome,
 			initial_population=initial_population,
 			batch_evaluate_fn=batch_evaluate_fn,
+		)
+
+	def _optimize_with_rust_search(
+		self,
+		initial_population: Optional[List['ClusterGenome']] = None,
+	) -> OptimizerResult['ClusterGenome']:
+		"""
+		Run GA using Rust search_offspring for offspring generation.
+
+		This eliminates Python↔Rust round trips by doing tournament selection,
+		crossover, mutation, evaluation, and filtering entirely in Rust.
+		"""
+		import time
+		from wnn.ram.strategies.connectivity.generic_strategies import (
+			OptimizerResult, EarlyStoppingConfig, EarlyStoppingTracker
+		)
+
+		cfg = self._config
+		arch_cfg = self._arch_config
+		evaluator = self._cached_evaluator
+
+		# Threshold continuity
+		start_threshold = cfg.initial_threshold if cfg.initial_threshold is not None else cfg.min_accuracy
+		end_threshold = start_threshold + cfg.threshold_delta
+
+		def get_threshold(progress: float = 0.0) -> float:
+			if not cfg.progressive_threshold:
+				return start_threshold
+			progress = max(0.0, min(1.0, progress))
+			return start_threshold + progress * cfg.threshold_delta
+
+		self._log.info(f"[{self.name}] Progressive threshold: {start_threshold:.4%} → {end_threshold:.4%}")
+		self._log.info(f"[{self.name}] Using Rust search_offspring (single-call offspring search)")
+
+		# Initialize population
+		if initial_population and len(initial_population) > 0:
+			# Evaluate initial population
+			results = evaluator.evaluate_batch(
+				initial_population,
+				train_subset_idx=evaluator.next_train_idx(),
+				eval_subset_idx=0,
+				logger=self._log,
+				generation=0,
+				total_generations=cfg.generations,
+				min_accuracy=start_threshold,
+			)
+			population = [(g, ce) for g, (ce, acc) in zip(initial_population, results)]
+		else:
+			# Generate random initial population
+			random_genomes = [self.create_random_genome() for _ in range(cfg.population_size)]
+			results = evaluator.evaluate_batch(
+				random_genomes,
+				train_subset_idx=evaluator.next_train_idx(),
+				eval_subset_idx=0,
+				logger=self._log,
+				generation=0,
+				total_generations=cfg.generations,
+				min_accuracy=start_threshold,
+			)
+			population = [(g, ce) for g, (ce, acc) in zip(random_genomes, results)]
+
+		# Sort by fitness (lower CE is better)
+		population.sort(key=lambda x: x[1])
+
+		# Track best
+		best_genome, best_fitness = population[0]
+		initial_fitness = best_fitness
+
+		# Early stopping
+		early_stop = EarlyStoppingTracker(cfg.patience, cfg.min_improvement)
+
+		# Track threshold for logging
+		prev_threshold: Optional[float] = None
+		seed_offset = int(time.time() * 1000) % (2**16)
+
+		for generation in range(cfg.generations):
+			current_threshold = get_threshold(generation / cfg.generations)
+			# Only log if formatted values differ
+			if prev_threshold is not None and f"{prev_threshold:.4%}" != f"{current_threshold:.4%}":
+				self._log.debug(f"[{self.name}] Threshold changed: {prev_threshold:.4%} → {current_threshold:.4%}")
+			prev_threshold = current_threshold
+
+			# Get train subset for this generation
+			train_idx = evaluator.next_train_idx()
+
+			# Elite count
+			elite_count = max(1, int(cfg.elitism_rate * len(population)))
+			elites = population[:elite_count]
+
+			# Generate offspring using Rust
+			needed_offspring = cfg.population_size - elite_count
+			offspring = evaluator.search_offspring(
+				population=population,
+				target_count=needed_offspring,
+				max_attempts=needed_offspring * 5,  # 5x cap
+				accuracy_threshold=current_threshold,
+				min_bits=arch_cfg.min_bits,
+				max_bits=arch_cfg.max_bits,
+				min_neurons=arch_cfg.min_neurons,
+				max_neurons=arch_cfg.max_neurons,
+				mutation_rate=cfg.mutation_rate,
+				crossover_rate=cfg.crossover_rate,
+				tournament_size=cfg.tournament_size,
+				train_subset_idx=train_idx,
+				eval_subset_idx=0,
+				seed=seed_offset + generation,
+				generation=generation,
+				total_generations=cfg.generations,
+			)
+
+			# Build new population: elites + offspring
+			new_population = list(elites)
+			for g in offspring:
+				if hasattr(g, '_cached_fitness'):
+					ce, acc = g._cached_fitness
+					new_population.append((g, ce))
+
+			# Sort and truncate
+			new_population.sort(key=lambda x: x[1])
+			population = new_population[:cfg.population_size]
+
+			# Update best
+			if population[0][1] < best_fitness:
+				best_genome, best_fitness = population[0]
+
+			# Log generation summary
+			avg_fitness = sum(ce for _, ce in population) / len(population)
+			self._log.info(f"[{self.name}] Gen {generation+1:03d}/{cfg.generations}: "
+						   f"best={best_fitness:.4f}, avg={avg_fitness:.4f}")
+
+			# Early stopping check
+			if early_stop.should_stop(best_fitness):
+				self._log.info(f"[{self.name}] Early stopping at generation {generation + 1}")
+				break
+
+		# Final evaluation for accuracy
+		final_ce, final_acc = evaluator.evaluate_batch(
+			[best_genome],
+			train_subset_idx=evaluator.next_train_idx(),
+			eval_subset_idx=0,
+			logger=self._log,
+		)[0]
+
+		return OptimizerResult(
+			best_genome=best_genome,
+			final_fitness=final_ce,
+			initial_fitness=initial_fitness,
+			iterations_run=generation + 1,
+			final_population=[g for g, _ in population],
+			final_threshold=current_threshold,
+			final_accuracy=final_acc,
+			initial_accuracy=None,
 		)
 
 

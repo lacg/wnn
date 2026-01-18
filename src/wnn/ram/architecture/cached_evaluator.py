@@ -463,6 +463,113 @@ class CachedEvaluator:
 
         return genomes
 
+    def search_offspring(
+        self,
+        population: List[Tuple[ClusterGenome, float]],  # (genome, fitness) tuples
+        target_count: int,
+        max_attempts: int,
+        accuracy_threshold: float,
+        min_bits: int,
+        max_bits: int,
+        min_neurons: int,
+        max_neurons: int,
+        mutation_rate: float = 0.1,
+        crossover_rate: float = 0.7,
+        tournament_size: int = 3,
+        train_subset_idx: Optional[int] = None,
+        eval_subset_idx: Optional[int] = None,
+        seed: Optional[int] = None,
+        log_path: Optional[str] = None,
+        generation: Optional[int] = None,
+        total_generations: Optional[int] = None,
+    ) -> List[ClusterGenome]:
+        """
+        Search for GA offspring above accuracy threshold, entirely in Rust.
+
+        Performs tournament selection, crossover, mutation, and evaluation
+        all in a single Rust call. Much faster than Python-side GA loops.
+
+        Args:
+            population: List of (genome, fitness) tuples for parent selection
+            target_count: How many viable offspring we want
+            max_attempts: Maximum offspring to generate (cap)
+            accuracy_threshold: Minimum accuracy to pass (e.g., 0.0001 for 0.01%)
+            min_bits, max_bits: Bits bounds for mutation
+            min_neurons, max_neurons: Neurons bounds for mutation
+            mutation_rate: Probability of mutation per cluster (default 0.1)
+            crossover_rate: Probability of crossover vs clone (default 0.7)
+            tournament_size: Tournament selection size (default 3)
+            train_subset_idx: Which train subset to use (auto-advances if None)
+            eval_subset_idx: Which eval subset to use (0 = full if None)
+            seed: Random seed (time-based if None)
+            log_path: Optional log file path
+            generation: Current generation for log prefix
+            total_generations: Total generations for log prefix
+
+        Returns:
+            List of ClusterGenome objects (viable offspring)
+        """
+        import time
+
+        if not population:
+            return []
+
+        # Auto-advance rotation if no explicit index
+        if train_subset_idx is None:
+            train_subset_idx = self.next_train_idx()
+        if eval_subset_idx is None:
+            eval_subset_idx = 0
+
+        # Time-based seed if not provided
+        if seed is None:
+            seed = int(time.time() * 1000) % (2**32)
+
+        # Convert population to Rust format: (bits, neurons, connections, fitness)
+        rust_population = []
+        for genome, fitness in population:
+            rust_population.append((
+                genome.bits_per_cluster,
+                genome.neurons_per_cluster,
+                genome.connections if genome.connections else [],
+                fitness,
+            ))
+
+        # Call Rust search_offspring
+        results = self._cache.search_offspring(
+            population=rust_population,
+            target_count=target_count,
+            max_attempts=max_attempts,
+            accuracy_threshold=accuracy_threshold,
+            min_bits=min_bits,
+            max_bits=max_bits,
+            min_neurons=min_neurons,
+            max_neurons=max_neurons,
+            mutation_rate=mutation_rate,
+            crossover_rate=crossover_rate,
+            tournament_size=tournament_size,
+            train_subset_idx=train_subset_idx,
+            eval_subset_idx=eval_subset_idx,
+            empty_value=self._empty_value,
+            seed=seed,
+            log_path=log_path,
+            generation=generation,
+            total_generations=total_generations,
+        )
+
+        # Convert results to ClusterGenome objects
+        genomes = []
+        for bits, neurons, connections, ce, acc in results:
+            g = ClusterGenome(
+                bits_per_cluster=list(bits),
+                neurons_per_cluster=list(neurons),
+                connections=list(connections) if connections else None,
+            )
+            # Store fitness for later use
+            g._cached_fitness = (ce, acc)
+            genomes.append(g)
+
+        return genomes
+
     def __repr__(self) -> str:
         return (
             f"CachedEvaluator(vocab={self._vocab_size}, "

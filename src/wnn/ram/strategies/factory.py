@@ -549,7 +549,9 @@ class OptimizerStrategyFactory:
 			mutation_rate=mutation_rate,
 			initial_threshold=initial_threshold,
 		)
-		return ArchitectureGAStrategy(arch_config, ga_config, seed, logger, batch_evaluator)
+		# Pass batch_evaluator as cached_evaluator if it supports search_offspring
+		cached_evaluator = batch_evaluator if batch_evaluator and hasattr(batch_evaluator, 'search_offspring') else None
+		return ArchitectureGAStrategy(arch_config, ga_config, seed, logger, batch_evaluator, cached_evaluator)
 
 	@staticmethod
 	def _create_architecture_ts(

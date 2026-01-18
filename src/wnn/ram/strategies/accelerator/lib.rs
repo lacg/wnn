@@ -2924,6 +2924,113 @@ impl TokenCacheWrapper {
                 .collect())
         })
     }
+
+    /// Search for GA offspring above accuracy threshold, all in Rust.
+    ///
+    /// Performs tournament selection, crossover, mutation, and evaluation
+    /// entirely in Rust. Returns viable offspring (accuracy >= threshold).
+    ///
+    /// Args:
+    ///   - population: List of (bits, neurons, connections, fitness) tuples
+    ///   - target_count: Number of viable offspring needed
+    ///   - max_attempts: Maximum offspring to generate
+    ///   - accuracy_threshold: Minimum accuracy for viable offspring
+    ///
+    /// Returns: List of (bits, neurons, connections, CE, accuracy) tuples
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (
+        population,
+        target_count,
+        max_attempts,
+        accuracy_threshold,
+        min_bits,
+        max_bits,
+        min_neurons,
+        max_neurons,
+        mutation_rate,
+        crossover_rate,
+        tournament_size,
+        train_subset_idx,
+        eval_subset_idx,
+        empty_value,
+        seed,
+        log_path = None,
+        generation = None,
+        total_generations = None
+    ))]
+    fn search_offspring(
+        &self,
+        py: Python<'_>,
+        population: Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64)>,
+        target_count: usize,
+        max_attempts: usize,
+        accuracy_threshold: f64,
+        min_bits: usize,
+        max_bits: usize,
+        min_neurons: usize,
+        max_neurons: usize,
+        mutation_rate: f64,
+        crossover_rate: f64,
+        tournament_size: usize,
+        train_subset_idx: usize,
+        eval_subset_idx: usize,
+        empty_value: f32,
+        seed: u64,
+        log_path: Option<String>,
+        generation: Option<usize>,
+        total_generations: Option<usize>,
+    ) -> PyResult<Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64)>> {
+        let num_clusters = if !population.is_empty() {
+            population[0].0.len()
+        } else {
+            return Ok(Vec::new());
+        };
+        let total_input_bits = self.inner.total_input_bits();
+
+        let ga_config = neighbor_search::GAConfig {
+            num_clusters,
+            min_bits,
+            max_bits,
+            min_neurons,
+            max_neurons,
+            mutation_rate,
+            crossover_rate,
+            tournament_size,
+            total_input_bits,
+        };
+
+        py.allow_threads(|| {
+            let log_path_ref = log_path.as_deref();
+
+            let candidates = neighbor_search::search_offspring(
+                &self.inner,
+                &population,
+                target_count,
+                max_attempts,
+                accuracy_threshold,
+                &ga_config,
+                train_subset_idx,
+                eval_subset_idx,
+                empty_value,
+                seed,
+                log_path_ref,
+                generation,
+                total_generations,
+            );
+
+            // Convert to Python-friendly format
+            Ok(candidates
+                .into_iter()
+                .map(|c| (
+                    c.bits_per_cluster,
+                    c.neurons_per_cluster,
+                    c.connections,
+                    c.cross_entropy,
+                    c.accuracy,
+                ))
+                .collect())
+        })
+    }
 }
 
 /// Python module definition

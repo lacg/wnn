@@ -458,6 +458,236 @@ pub fn search_neighbors_best_n(
     passed
 }
 
+/// Configuration for GA offspring generation.
+#[derive(Clone)]
+pub struct GAConfig {
+    pub num_clusters: usize,
+    pub min_bits: usize,
+    pub max_bits: usize,
+    pub min_neurons: usize,
+    pub max_neurons: usize,
+    pub mutation_rate: f64,        // Per-cluster mutation rate
+    pub crossover_rate: f64,       // Probability of crossover vs clone
+    pub tournament_size: usize,    // Tournament selection size
+    pub total_input_bits: usize,
+}
+
+/// Tournament selection: pick best from random subset.
+fn tournament_select<'a>(
+    population: &'a [(Vec<usize>, Vec<usize>, Vec<i64>, f64)], // (bits, neurons, conns, fitness)
+    tournament_size: usize,
+    rng: &mut impl Rng,
+) -> &'a (Vec<usize>, Vec<usize>, Vec<i64>, f64) {
+    let mut best_idx = rng.gen_range(0..population.len());
+    let mut best_fitness = population[best_idx].3;
+
+    for _ in 1..tournament_size {
+        let idx = rng.gen_range(0..population.len());
+        if population[idx].3 < best_fitness {  // Lower CE is better
+            best_idx = idx;
+            best_fitness = population[idx].3;
+        }
+    }
+
+    &population[best_idx]
+}
+
+/// Single-point crossover at cluster boundary.
+fn crossover(
+    parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+    parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+    num_clusters: usize,
+    rng: &mut impl Rng,
+) -> (Vec<usize>, Vec<usize>, Vec<i64>) {
+    let crossover_point = rng.gen_range(1..num_clusters);
+
+    // Build child architecture
+    let child_bits: Vec<usize> = parent1.0[..crossover_point].iter()
+        .chain(parent2.0[crossover_point..].iter())
+        .copied()
+        .collect();
+    let child_neurons: Vec<usize> = parent1.1[..crossover_point].iter()
+        .chain(parent2.1[crossover_point..].iter())
+        .copied()
+        .collect();
+
+    // Build child connections
+    let mut child_connections = Vec::new();
+    let mut p1_idx = 0;
+    let mut p2_idx = 0;
+
+    for i in 0..num_clusters {
+        let p1_conn_size = parent1.1[i] * parent1.0[i];
+        let p2_conn_size = parent2.1[i] * parent2.0[i];
+
+        if i < crossover_point {
+            // Take from parent1
+            child_connections.extend(&parent1.2[p1_idx..p1_idx + p1_conn_size]);
+        } else {
+            // Take from parent2
+            child_connections.extend(&parent2.2[p2_idx..p2_idx + p2_conn_size]);
+        }
+
+        p1_idx += p1_conn_size;
+        p2_idx += p2_conn_size;
+    }
+
+    (child_bits, child_neurons, child_connections)
+}
+
+/// Mutate a genome for GA (reuses MutationConfig logic).
+fn mutate_ga(
+    bits: &[usize],
+    neurons: &[usize],
+    connections: &[i64],
+    config: &GAConfig,
+    rng: &mut impl Rng,
+) -> (Vec<usize>, Vec<usize>, Vec<i64>) {
+    let mutation_config = MutationConfig {
+        num_clusters: config.num_clusters,
+        min_bits: config.min_bits,
+        max_bits: config.max_bits,
+        min_neurons: config.min_neurons,
+        max_neurons: config.max_neurons,
+        bits_mutation_rate: config.mutation_rate,
+        neurons_mutation_rate: config.mutation_rate,
+        total_input_bits: config.total_input_bits,
+    };
+    mutate_genome(bits, neurons, connections, &mutation_config, rng)
+}
+
+/// Search for GA offspring above accuracy threshold.
+///
+/// Performs tournament selection, crossover, and mutation entirely in Rust.
+/// Returns viable offspring (accuracy >= threshold) up to target count.
+///
+/// Args:
+///   - population: Parent population as (bits, neurons, connections, fitness) tuples
+///   - target_count: Number of viable offspring needed
+///   - max_attempts: Maximum offspring to generate before giving up
+///   - accuracy_threshold: Minimum accuracy for viable offspring
+///
+/// Returns: Vec of viable CandidateResult
+pub fn search_offspring(
+    cache: &crate::token_cache::TokenCache,
+    population: &[(Vec<usize>, Vec<usize>, Vec<i64>, f64)],
+    target_count: usize,
+    max_attempts: usize,
+    accuracy_threshold: f64,
+    ga_config: &GAConfig,
+    train_subset_idx: usize,
+    eval_subset_idx: usize,
+    empty_value: f32,
+    seed: u64,
+    log_path: Option<&str>,
+    generation: Option<usize>,
+    total_generations: Option<usize>,
+) -> Vec<CandidateResult> {
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+    let mut logger = FileLogger::new(log_path);
+
+    let mut passed: Vec<CandidateResult> = Vec::new();
+    let mut all_candidates: Vec<CandidateResult> = Vec::new();
+    let mut evaluated = 0;
+    let batch_size = 10;
+
+    let gen_prefix = match (generation, total_generations) {
+        (Some(g), Some(t)) => format!("[Gen {:03}/{:03}]", g + 1, t),
+        (Some(g), None) => format!("[Gen {:03}]", g + 1),
+        _ => "[GA]".to_string(),
+    };
+
+    while passed.len() < target_count && evaluated < max_attempts {
+        let batch_to_generate = batch_size.min(max_attempts - evaluated);
+        let mut batch_bits: Vec<usize> = Vec::new();
+        let mut batch_neurons: Vec<usize> = Vec::new();
+        let mut batch_connections: Vec<i64> = Vec::new();
+        let mut batch_genomes: Vec<(Vec<usize>, Vec<usize>, Vec<i64>)> = Vec::new();
+
+        for _ in 0..batch_to_generate {
+            // Tournament selection
+            let p1 = tournament_select(population, ga_config.tournament_size, &mut rng);
+            let p2 = tournament_select(population, ga_config.tournament_size, &mut rng);
+
+            // Crossover or clone
+            let child = if rng.gen::<f64>() < ga_config.crossover_rate {
+                crossover(p1, p2, ga_config.num_clusters, &mut rng)
+            } else {
+                (p1.0.clone(), p1.1.clone(), p1.2.clone())
+            };
+
+            // Mutation
+            let (new_bits, new_neurons, new_conns) = mutate_ga(
+                &child.0,
+                &child.1,
+                &child.2,
+                ga_config,
+                &mut rng,
+            );
+
+            batch_bits.extend(&new_bits);
+            batch_neurons.extend(&new_neurons);
+            batch_connections.extend(&new_conns);
+            batch_genomes.push((new_bits, new_neurons, new_conns));
+        }
+
+        // Evaluate the batch
+        let results = crate::token_cache::evaluate_genomes_cached(
+            cache,
+            &batch_bits,
+            &batch_neurons,
+            &batch_connections,
+            batch_to_generate,
+            train_subset_idx,
+            eval_subset_idx,
+            empty_value,
+        );
+
+        // Process results
+        for (i, (ce, acc)) in results.iter().enumerate() {
+            evaluated += 1;
+            let (bits, neurons, conns) = &batch_genomes[i];
+
+            let candidate = CandidateResult {
+                bits_per_cluster: bits.clone(),
+                neurons_per_cluster: neurons.clone(),
+                connections: conns.clone(),
+                cross_entropy: *ce,
+                accuracy: *acc,
+            };
+
+            if *acc >= accuracy_threshold {
+                passed.push(candidate);
+                if passed.len() >= target_count {
+                    break;
+                }
+            } else {
+                all_candidates.push(candidate);
+            }
+        }
+    }
+
+    // If we didn't get enough passing candidates, add best from all_candidates
+    if passed.len() < target_count {
+        all_candidates.sort_by(|a, b| {
+            b.accuracy.partial_cmp(&a.accuracy)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.cross_entropy.partial_cmp(&b.cross_entropy)
+                    .unwrap_or(std::cmp::Ordering::Equal))
+        });
+
+        let need = target_count - passed.len();
+        passed.extend(all_candidates.into_iter().take(need));
+    }
+
+    logger.log(&format!(
+        "{} Offspring search: {}/{} viable (evaluated {}, threshold {:.4}%)",
+        gen_prefix, passed.len(), target_count, evaluated, accuracy_threshold * 100.0
+    ));
+
+    passed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
