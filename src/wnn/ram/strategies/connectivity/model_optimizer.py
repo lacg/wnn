@@ -85,7 +85,7 @@ class OptimizationConfig:
 	# Common parameters
 	early_stop_patience: int = 5  # Stop if no improvement for 5 checks
 	early_stop_threshold_pct: float = 0.02
-	seed: Optional[int] = 42
+	seed: Optional[int] = None  # None = time-based
 	verbose: bool = True
 
 

@@ -325,7 +325,7 @@ class OptimizerStrategyFactory:
 		# CE percentile filter (None = disabled, 0.75 = keep top 75% by CE)
 		ce_percentile: float | None = None,
 		# Common
-		seed: int = 42,
+		seed: int | None = None,  # None = time-based
 		verbose: bool = False,
 		logger: Any = None,
 		batch_evaluator: Any = None,
@@ -396,6 +396,11 @@ class OptimizerStrategyFactory:
 				verbose=True,
 			)
 		"""
+		# Time-based seed if not specified
+		if seed is None:
+			import time
+			seed = int(time.time() * 1000) % (2**32)
+
 		match strategy_type:
 			case OptimizerStrategyType.ARCHITECTURE_GA:
 				return OptimizerStrategyFactory._create_architecture_ga(

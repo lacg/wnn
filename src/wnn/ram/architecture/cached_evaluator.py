@@ -45,7 +45,7 @@ class CachedEvaluatorConfig:
     num_parts: int = 3  # Default to thirds
     num_negatives: int = 5
     empty_value: float = 0.0
-    seed: int = 42
+    seed: Optional[int] = None  # None = time-based
 
 
 class CachedEvaluator:
@@ -66,7 +66,7 @@ class CachedEvaluator:
         num_parts: int = 3,
         num_negatives: int = 5,
         empty_value: float = 0.0,
-        seed: int = 42,
+        seed: Optional[int] = None,  # None = time-based
         log_path: Optional[str] = None,
     ):
         """
@@ -96,6 +96,11 @@ class CachedEvaluator:
         self._num_parts = num_parts
         self._empty_value = empty_value
         self._log_path = log_path
+
+        # Time-based seed if not specified
+        if seed is None:
+            import time
+            seed = int(time.time() * 1000) % (2**32)
 
         # Create the Rust TokenCache
         self._cache = ram_accelerator.TokenCacheWrapper(

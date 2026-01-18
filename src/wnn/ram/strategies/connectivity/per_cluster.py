@@ -1271,7 +1271,7 @@ class RustPerClusterOptimizer:
         cluster_ids: list[int],
         current_connectivity: Tensor,
         config: TierOptConfig,
-        seed: int = 42,
+        seed: Optional[int] = None,  # None = time-based
     ) -> list[ClusterOptResult]:
         """
         Optimize all clusters in a tier using Rust acceleration.
@@ -1377,7 +1377,7 @@ class RustPerClusterOptimizer:
         current_connectivity: Tensor,
         config: TierOptConfig,
         group_size: int = 10,
-        seed: int = 42,
+        seed: Optional[int] = None,  # None = time-based
     ) -> list[ClusterOptResult]:
         """
         Optimize all clusters in a tier using joint group optimization.

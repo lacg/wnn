@@ -129,7 +129,7 @@ class OptimizerConfig:
 
 	# General parameters
 	timeout_seconds: Optional[int] = None
-	seed: Optional[int] = 42
+	seed: Optional[int] = None  # None = time-based
 	verbose: bool = True
 
 

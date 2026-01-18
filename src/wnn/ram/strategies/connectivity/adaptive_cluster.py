@@ -1487,7 +1487,7 @@ def run_architecture_tabu_search(
 	phase: int = 2,
 	# Other
 	empty_value: float = 0.0,
-	seed: int = 42,
+	seed: Optional[int] = None,  # None = time-based
 	logger: Optional[Callable[[str], None]] = None,
 	# Population seeding from previous phase
 	initial_neighbors: Optional[list[ClusterGenome]] = None,
@@ -1634,7 +1634,7 @@ def run_architecture_search(
 	# Other
 	init_strategy: GenomeInitStrategy = GenomeInitStrategy.FREQUENCY_SCALED,
 	empty_value: float = 0.0,
-	seed: int = 42,
+	seed: Optional[int] = None,  # None = time-based
 	logger: Optional[Callable[[str], None]] = None,
 	# Population seeding from previous phase
 	initial_population: Optional[list[ClusterGenome]] = None,
@@ -1841,7 +1841,7 @@ def run_connectivity_optimization(
 	phase: int = 2,
 	# Other
 	empty_value: float = 0.0,
-	seed: int = 42,
+	seed: Optional[int] = None,  # None = time-based
 	logger: Optional[Callable[[str], None]] = None,
 	# Population seeding from Phase 1b
 	initial_population: Optional[list[ClusterGenome]] = None,
@@ -1992,7 +1992,7 @@ def run_connectivity_optimization(
 		iterations=ts_iterations,
 		neighbors_per_iter=ts_neighbors,
 		patience=ts_patience,
-		seed=seed + 500,
+		seed=(seed + 500) if seed is not None else None,
 		logger=log,
 		batch_evaluator=batch_evaluator,
 	)
