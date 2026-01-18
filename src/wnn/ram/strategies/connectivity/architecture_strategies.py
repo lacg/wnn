@@ -533,6 +533,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		seed_offset = int(time.time() * 1000) % (2**16)
 
 		for generation in range(cfg.generations):
+			gen_start = time.time()
 			current_threshold = get_threshold(generation / cfg.generations)
 			# Only log if formatted values differ
 			if prev_threshold is not None and f"{prev_threshold:.4%}" != f"{current_threshold:.4%}":
@@ -627,10 +628,11 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			if population[0][1] < best_fitness:
 				best_genome, best_fitness = population[0]
 
-			# Log generation summary
+			# Log generation summary with duration
+			gen_elapsed = time.time() - gen_start
 			avg_fitness = sum(ce for _, ce in population) / len(population)
 			self._log.info(f"[{self.name}] Gen {generation+1:03d}/{cfg.generations}: "
-						   f"best={best_fitness:.4f}, avg={avg_fitness:.4f}")
+						   f"best={best_fitness:.4f}, avg={avg_fitness:.4f} ({gen_elapsed:.1f}s)")
 
 			# Early stopping check
 			if early_stop.check(generation, best_fitness):
