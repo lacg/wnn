@@ -517,6 +517,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 
 		# Track best
 		best_genome, best_fitness = population[0]
+		initial_genome = best_genome.clone()
 		initial_fitness = best_fitness
 
 		# Early stopping
@@ -668,11 +669,15 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			logger=self._log,
 		)[0]
 
+		improvement_pct = (initial_fitness - final_ce) / initial_fitness * 100 if initial_fitness != 0 else 0.0
 		return OptimizerResult(
+			initial_genome=initial_genome,
 			best_genome=best_genome,
-			final_fitness=final_ce,
 			initial_fitness=initial_fitness,
+			final_fitness=final_ce,
+			improvement_percent=improvement_pct,
 			iterations_run=generation + 1,
+			method_name=self.name,
 			final_population=[g for g, _ in population],
 			final_threshold=current_threshold,
 			final_accuracy=final_acc,
@@ -1135,11 +1140,15 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 				seen.add(key)
 				final_population.append(g)
 
+		improvement_pct = (start_fitness - best_fitness) / start_fitness * 100 if start_fitness != 0 else 0.0
 		return OptimizerResult(
+			initial_genome=initial_genome,
 			best_genome=best,
 			initial_fitness=start_fitness,
 			final_fitness=best_fitness,
+			improvement_percent=improvement_pct,
 			iterations_run=iteration + 1,
+			method_name=self.name,
 			early_stopped=iteration + 1 < cfg.iterations,
 			history=history,
 			final_population=final_population,
