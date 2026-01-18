@@ -480,7 +480,11 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 				total_generations=cfg.generations,
 				min_accuracy=None,  # Show all for initial population
 			)
-			population = [(g, ce) for g, (ce, acc) in zip(initial_population, results)]
+			# Store cached fitness on each genome for elite logging
+			population = []
+			for g, (ce, acc) in zip(initial_population, results):
+				g._cached_fitness = (ce, acc)
+				population.append((g, ce))
 		else:
 			# Generate random initial population
 			random_genomes = [self.create_random_genome() for _ in range(cfg.population_size)]
@@ -493,7 +497,11 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 				total_generations=cfg.generations,
 				min_accuracy=None,  # Show all for initial population
 			)
-			population = [(g, ce) for g, (ce, acc) in zip(random_genomes, results)]
+			# Store cached fitness on each genome for elite logging
+			population = []
+			for g, (ce, acc) in zip(random_genomes, results):
+				g._cached_fitness = (ce, acc)
+				population.append((g, ce))
 
 		# Sort by fitness (lower CE is better)
 		population.sort(key=lambda x: x[1])
@@ -526,9 +534,47 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			# Get train subset for this generation
 			train_idx = evaluator.next_train_idx()
 
-			# Elite count
-			elite_count = max(1, int(cfg.elitism_pct * len(population)))
-			elites = population[:elite_count]
+			# Dual elitism: 5 best by CE + 5 best by Acc (all unique, NO overlaps)
+			elite_per_metric = max(1, int(cfg.elitism_pct * len(population)))  # 5 per metric
+
+			# Population is already sorted by CE, so top 5 by CE are first 5
+			elites_by_ce = population[:elite_per_metric]
+
+			# For Acc elites, we need to re-evaluate with accuracy (cached in _cached_fitness)
+			# Extract accuracy from each genome and sort by it (descending)
+			pop_with_acc = []
+			for g, ce in population:
+				if hasattr(g, '_cached_fitness') and g._cached_fitness is not None:
+					_, acc = g._cached_fitness
+					pop_with_acc.append((g, ce, acc))
+				else:
+					# If no cached accuracy, assume 0
+					pop_with_acc.append((g, ce, 0.0))
+
+			# Sort by accuracy descending to get top by accuracy
+			pop_by_acc = sorted(pop_with_acc, key=lambda x: -x[2])
+
+			# Take top 5 by accuracy that are NOT already in CE elites
+			ce_elite_genomes = set(id(g) for g, _ in elites_by_ce)
+			elites_by_acc = []
+			for g, ce, acc in pop_by_acc:
+				if id(g) not in ce_elite_genomes:
+					elites_by_acc.append((g, ce))
+					if len(elites_by_acc) >= elite_per_metric:
+						break
+
+			# Combine: 5 CE + 5 Acc = 10 elites (all unique, no overlaps)
+			elites = elites_by_ce + elites_by_acc
+			elite_count = len(elites)
+
+			# Log elites
+			self._log.info(f"[{self.name}] Gen {generation+1:02d} Elites: {elite_per_metric} CE + {elite_per_metric} Acc = {elite_count} total")
+			for i, (g, ce) in enumerate(elites_by_ce):
+				acc = g._cached_fitness[1] if hasattr(g, '_cached_fitness') and g._cached_fitness else 0.0
+				self._log.info(f"  Elite {i+1:02d}/{elite_count}  (CE): CE={ce:.4f}, Acc={acc:.4%}")
+			for i, (g, ce) in enumerate(elites_by_acc):
+				acc = g._cached_fitness[1] if hasattr(g, '_cached_fitness') and g._cached_fitness else 0.0
+				self._log.info(f"  Elite {elite_per_metric + i+1:02d}/{elite_count} (Acc): CE={ce:.4f}, Acc={acc:.4%}")
 
 			# Generate offspring using Rust
 			needed_offspring = cfg.population_size - elite_count

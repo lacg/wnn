@@ -294,7 +294,7 @@ pub fn search_neighbors_with_threshold(
             if *acc >= accuracy_threshold {
                 shown_count += 1;
                 logger.log(&format!(
-                    "{} Genome {:02}/{:02}: CE={:.4}, Acc={:.2}%",
+                    "{} Genome {:02}/{:02}: CE={:.4}, Acc={:.4}%",
                     gen_prefix,
                     shown_count,
                     target_count,
@@ -411,7 +411,7 @@ pub fn search_neighbors_best_n(
             if *acc >= accuracy_threshold {
                 shown_count += 1;
                 logger.log(&format!(
-                    "{} Genome {:02}/{:02}: CE={:.4}, Acc={:.2}%",
+                    "{} Genome {:02}/{:02}: CE={:.4}, Acc={:.4}%",
                     gen_prefix,
                     shown_count,
                     target_count,
@@ -659,7 +659,7 @@ pub fn search_offspring(
             if *acc >= accuracy_threshold {
                 shown_count += 1;
                 logger.log(&format!(
-                    "{} Genome {:02}/{:02}: CE={:.4}, Acc={:.2}%",
+                    "{} Genome {:02}/{:02}: CE={:.4}, Acc={:.4}%",
                     gen_prefix,
                     shown_count,
                     target_count,

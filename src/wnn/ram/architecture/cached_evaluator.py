@@ -250,7 +250,7 @@ class CachedEvaluator:
         # Log each result with consistent numbering (all genomes, 1/30, 2/30, etc.)
         for i, (ce, acc) in enumerate(results):
             passes = min_accuracy is None or acc >= min_accuracy
-            base_msg = f"{gen_prefix} Genome {i+1:0{genome_width}d}/{num_genomes}: CE={ce:.4f}, Acc={acc:.2%}"
+            base_msg = f"{gen_prefix} Genome {i+1:0{genome_width}d}/{num_genomes}: CE={ce:.4f}, Acc={acc:.4%}"
             if passes:
                 log_debug(base_msg)
             else:
@@ -304,7 +304,7 @@ class CachedEvaluator:
         )
 
         for i, (ce, acc) in enumerate(results):
-            log(f"[Final] Genome {i+1}/{num_genomes}: CE={ce:.4f}, Acc={acc:.2%}")
+            log(f"[Final] Genome {i+1}/{num_genomes}: CE={ce:.4f}, Acc={acc:.4%}")
 
         return results
 
