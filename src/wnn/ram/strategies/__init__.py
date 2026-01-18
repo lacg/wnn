@@ -98,6 +98,14 @@ from wnn.ram.strategies.bit_packing import (
 	unpack_context_bits,
 )
 
+# Population filters
+from wnn.ram.strategies.filters import (
+	FilterMode,
+	FilterResult,
+	PercentileFilter,
+	DualPercentileFilter,
+)
+
 __all__ = [
 	# Training strategies
 	'GreedyTrainStrategy',
@@ -155,4 +163,9 @@ __all__ = [
 	'ContextBitPacker',
 	'pack_context_bits',
 	'unpack_context_bits',
+	# Population filters
+	'FilterMode',
+	'FilterResult',
+	'PercentileFilter',
+	'DualPercentileFilter',
 ]

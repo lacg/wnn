@@ -3,8 +3,9 @@
 Coarse-to-Fine Phased Architecture Search
 
 Implements a multi-pass approach where:
-- Pass 1 (coarse): Low patience for quick exploration
-- Pass 2+ (fine): Higher patience (doubled each pass) for refinement
+- Pass 1 (coarse): Low patience for quick exploration (patience=2)
+- Pass 2 (fine): Higher patience for refinement (patience=4)
+- Pass 3 (final): Return to low patience to escape local minima (patience=2)
 
 Each pass runs through all phases (neurons -> bits -> connections).
 Later passes can be seeded from previous pass results.
@@ -14,10 +15,13 @@ Usage:
   python run_coarse_fine_search.py --pass 1 --base-patience 2
 
   # Second pass (refinement, patience=4)
-  python run_coarse_fine_search.py --pass 2 --base-patience 2 --seed-from results_pass1.json
+  python run_coarse_fine_search.py --pass 2 --patience 4 --seed-from results_pass1.json
 
-  # Third pass if needed (patience=8)
-  python run_coarse_fine_search.py --pass 3 --base-patience 2 --seed-from results_pass2.json
+  # Third pass (patience=2, reset to explore new areas)
+  python run_coarse_fine_search.py --pass 3 --patience 2 --seed-from results_pass2.json
+
+  # Or use --base-patience for automatic calculation (doubles each pass)
+  python run_coarse_fine_search.py --pass 2 --base-patience 2 --seed-from results_pass1.json
 """
 
 import argparse
@@ -88,9 +92,11 @@ def main():
 
 	# Pass configuration
 	parser.add_argument("--pass", dest="pass_num", type=int, default=1,
-						help="Pass number (1=coarse, 2+=fine). Patience doubles each pass.")
+						help="Pass number (1=coarse, 2+=fine). Patience doubles each pass by default.")
 	parser.add_argument("--base-patience", type=int, default=2,
 						help="Base patience for pass 1 (default: 2)")
+	parser.add_argument("--patience", type=int, default=None,
+						help="Override patience directly (ignores base-patience calculation)")
 	parser.add_argument("--seed-from", type=str, default=None,
 						help="JSON file from previous pass to seed from")
 
@@ -116,8 +122,11 @@ def main():
 
 	args = parser.parse_args()
 
-	# Calculate patience based on pass number: base_patience * 2^(pass-1)
-	patience = args.base_patience * (2 ** (args.pass_num - 1))
+	# Calculate patience: use override if provided, otherwise base_patience * 2^(pass-1)
+	if args.patience is not None:
+		patience = args.patience
+	else:
+		patience = args.base_patience * (2 ** (args.pass_num - 1))
 
 	# Auto-generate output filename if not specified
 	if args.output is None:
@@ -132,7 +141,10 @@ def main():
 
 	logger.header(f"Coarse-to-Fine Search - Pass {args.pass_num}")
 	log(f"  Log file: {logger.log_file}")
-	log(f"  Pass: {args.pass_num} (patience: {args.base_patience} * 2^{args.pass_num - 1} = {patience})")
+	if args.patience is not None:
+		log(f"  Pass: {args.pass_num} (patience: {patience} [override])")
+	else:
+		log(f"  Pass: {args.pass_num} (patience: {args.base_patience} * 2^{args.pass_num - 1} = {patience})")
 	if args.seed_from:
 		log(f"  Seeding from: {args.seed_from}")
 	log(f"  Total train tokens: {args.train_tokens:,}")
@@ -230,12 +242,17 @@ def main():
 	log("")
 	log(f"Results saved to: {output_path}")
 
-	# Print next pass command
+	# Print next pass command suggestion
 	if args.pass_num < 3:
-		next_patience = args.base_patience * (2 ** args.pass_num)
+		# Default pattern: 2, 4, 2 (pass 3 resets to base)
+		if args.pass_num == 1:
+			next_patience = args.base_patience * 2  # Pass 2: double
+		else:
+			next_patience = args.base_patience  # Pass 3: reset to base
 		log("")
-		log(f"To run pass {args.pass_num + 1} (patience={next_patience}):")
-		log(f"  python run_coarse_fine_search.py --pass {args.pass_num + 1} --base-patience {args.base_patience} --seed-from {args.output}")
+		log(f"To run pass {args.pass_num + 1} (suggested patience={next_patience}):")
+		log(f"  python run_coarse_fine_search.py --pass {args.pass_num + 1} --patience {next_patience} --seed-from {args.output}")
+		log(f"  (or use --base-patience to calculate automatically)")
 
 	return 0
 
