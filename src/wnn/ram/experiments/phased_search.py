@@ -123,10 +123,11 @@ class PhasedSearchRunner:
 		# Create cluster ordering (sorted by frequency, most frequent first)
 		cluster_order = sorted(range(vocab_size), key=lambda i: -self.token_frequencies[i])
 
-		# Determine rotation seed
+		# Determine rotation seed (store for use in strategies)
 		rotation_seed = self.config.rotation_seed
 		if rotation_seed is None:
 			rotation_seed = int(time.time() * 1000) % (2**32)
+		self._rotation_seed = rotation_seed
 
 		# Create cached evaluator
 		self.log("")
@@ -214,6 +215,7 @@ class PhasedSearchRunner:
 			"patience": cfg.patience,
 			"initial_threshold": initial_threshold,
 			"ce_percentile": cfg.ce_percentile,  # CE percentile filter (None = disabled)
+			"seed": self._rotation_seed,  # Use rotation_seed for strategy RNG
 		}
 
 		if is_ga:
