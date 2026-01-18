@@ -19,6 +19,18 @@ class GenomeLogType(IntEnum):
     FINAL = 5        # Final evaluation
 
 
+# Type labels and their display names (all padded to same width)
+# Format: (label, type_indicator) where label is padded to 6 chars (longest is "Genome")
+_TYPE_FORMATS = {
+    GenomeLogType.INITIAL:   ("Genome", "Init"),
+    GenomeLogType.ELITE_CE:  ("Elite ", " CE "),  # Extra space for alignment
+    GenomeLogType.ELITE_ACC: ("Elite ", "Acc "),
+    GenomeLogType.OFFSPRING: ("Genome", "New "),
+    GenomeLogType.NEIGHBOR:  ("Genome", "Nbr "),
+    GenomeLogType.FINAL:     ("Genome", "Fin "),
+}
+
+
 def format_genome_log(
     generation: int,
     total_generations: int,
@@ -29,7 +41,12 @@ def format_genome_log(
     acc: float,
 ) -> str:
     """
-    Format a genome log line with consistent padding.
+    Format a genome log line with consistent padding and alignment.
+
+    All log types are aligned with:
+    - 6-char label (Elite  or Genome)
+    - Position/total with dynamic padding
+    - 5-char type indicator in parentheses (CE, Acc, New, Init, Nbr)
 
     Args:
         generation: Current generation (1-indexed)
@@ -42,27 +59,23 @@ def format_genome_log(
 
     Returns:
         Formatted log string like:
-        "[Gen 001/100] Elite 01/10  (CE): CE=10.3417, Acc=0.0180%"
-        "[Gen 001/100] Genome 01/40: CE=10.3559, Acc=0.0300%"
+        "[Gen 001/100] Elite  01/10 ( CE): CE=10.3417, Acc=0.0180%"
+        "[Gen 001/100] Genome 01/40 (New): CE=10.3559, Acc=0.0300%"
     """
     # Calculate padding widths based on totals
     gen_width = len(str(total_generations))
     pos_width = len(str(total))
 
-    # Generation prefix
-    gen_prefix = f"[Gen {generation:0{gen_width}d}/{total_generations:0{gen_width}d}]"
+    # Get label and type indicator for this log type
+    label, type_ind = _TYPE_FORMATS.get(log_type, ("Genome", "???"))
 
-    # Type-specific formatting
-    if log_type == GenomeLogType.ELITE_CE:
-        # Extra space before (CE) to align with (Acc)
-        return f"{gen_prefix} Elite {position:0{pos_width}d}/{total}  (CE): CE={ce:.4f}, Acc={acc:.4%}"
-    elif log_type == GenomeLogType.ELITE_ACC:
-        return f"{gen_prefix} Elite {position:0{pos_width}d}/{total} (Acc): CE={ce:.4f}, Acc={acc:.4%}"
-    elif log_type == GenomeLogType.FINAL:
-        return f"[Final] Genome {position}/{total}: CE={ce:.4f}, Acc={acc:.4%}"
+    # Generation prefix
+    if log_type == GenomeLogType.FINAL:
+        gen_prefix = "[Final]"
     else:
-        # INITIAL, OFFSPRING, NEIGHBOR all use "Genome"
-        return f"{gen_prefix} Genome {position:0{pos_width}d}/{total}: CE={ce:.4f}, Acc={acc:.4%}"
+        gen_prefix = f"[Gen {generation:0{gen_width}d}/{total_generations:0{gen_width}d}]"
+
+    return f"{gen_prefix} {label} {position:0{pos_width}d}/{total} ({type_ind}): CE={ce:.4f}, Acc={acc:.4%}"
 
 
 def format_gen_prefix(generation: int, total_generations: int) -> str:

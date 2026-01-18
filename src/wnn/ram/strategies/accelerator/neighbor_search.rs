@@ -93,20 +93,30 @@ pub enum GenomeLogType {
     Neighbor,   // TS neighbor
 }
 
-/// Format a genome log line with consistent padding.
+impl GenomeLogType {
+    /// Get the label and type indicator for this log type.
+    /// Returns (label, type_indicator) where label is 6 chars and indicator is 4 chars.
+    fn format_parts(&self) -> (&'static str, &'static str) {
+        match self {
+            GenomeLogType::Initial => ("Genome", "Init"),
+            GenomeLogType::EliteCE => ("Elite ", " CE "),
+            GenomeLogType::EliteAcc => ("Elite ", "Acc "),
+            GenomeLogType::Offspring => ("Genome", "New "),
+            GenomeLogType::Neighbor => ("Genome", "Nbr "),
+        }
+    }
+}
+
+/// Format a genome log line with consistent padding and alignment.
 ///
-/// Args:
-///   generation: Current generation (1-indexed)
-///   total_generations: Total number of generations
-///   log_type: Type of genome (Elite, Offspring, etc.)
-///   position: Position in the batch (1-indexed)
-///   total: Total items in this batch
-///   ce: Cross-entropy value
-///   acc: Accuracy value (0.0 to 1.0)
+/// All log types are aligned with:
+/// - 6-char label (Elite  or Genome)
+/// - Position/total with dynamic padding
+/// - 4-char type indicator in parentheses (CE, Acc, New, Init, Nbr)
 ///
 /// Returns formatted log string like:
-///   "[Gen 001/100] Elite 01/10  (CE): CE=10.3417, Acc=0.0180%"
-///   "[Gen 001/100] Genome 01/40: CE=10.3559, Acc=0.0300%"
+///   "[Gen 001/100] Elite  01/10 ( CE): CE=10.3417, Acc=0.0180%"
+///   "[Gen 001/100] Genome 01/40 (New): CE=10.3559, Acc=0.0300%"
 pub fn format_genome_log(
     generation: usize,
     total_generations: usize,
@@ -120,35 +130,19 @@ pub fn format_genome_log(
     let gen_width = total_generations.to_string().len();
     let pos_width = total.to_string().len();
 
+    // Get label and type indicator
+    let (label, type_ind) = log_type.format_parts();
+
     // Generation prefix
     let gen_prefix = format!(
         "[Gen {:0width$}/{:0width$}]",
         generation, total_generations, width = gen_width
     );
 
-    // Format based on type
-    match log_type {
-        GenomeLogType::EliteCE => {
-            // Extra space before (CE) to align with (Acc)
-            format!(
-                "{} Elite {:0pos_width$}/{}  (CE): CE={:.4}, Acc={:.4}%",
-                gen_prefix, position, total, ce, acc * 100.0, pos_width = pos_width
-            )
-        }
-        GenomeLogType::EliteAcc => {
-            format!(
-                "{} Elite {:0pos_width$}/{} (Acc): CE={:.4}, Acc={:.4}%",
-                gen_prefix, position, total, ce, acc * 100.0, pos_width = pos_width
-            )
-        }
-        _ => {
-            // Initial, Offspring, Neighbor all use "Genome"
-            format!(
-                "{} Genome {:0pos_width$}/{:0pos_width$}: CE={:.4}, Acc={:.4}%",
-                gen_prefix, position, total, ce, acc * 100.0, pos_width = pos_width
-            )
-        }
-    }
+    format!(
+        "{} {} {:0pos_width$}/{} ({}): CE={:.4}, Acc={:.4}%",
+        gen_prefix, label, position, total, type_ind, ce, acc * 100.0, pos_width = pos_width
+    )
 }
 
 /// Format just the generation prefix with dynamic padding.
