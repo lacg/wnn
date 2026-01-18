@@ -2956,7 +2956,8 @@ impl TokenCacheWrapper {
         seed,
         log_path = None,
         generation = None,
-        total_generations = None
+        total_generations = None,
+        return_best_n = true
     ))]
     fn search_offspring(
         &self,
@@ -2979,6 +2980,7 @@ impl TokenCacheWrapper {
         log_path: Option<String>,
         generation: Option<usize>,
         total_generations: Option<usize>,
+        return_best_n: bool,
     ) -> PyResult<Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64)>> {
         let num_clusters = if !population.is_empty() {
             population[0].0.len()
@@ -3016,6 +3018,7 @@ impl TokenCacheWrapper {
                 log_path_ref,
                 generation,
                 total_generations,
+                return_best_n,
             );
 
             // Convert to Python-friendly format

@@ -639,6 +639,7 @@ pub fn search_offspring(
     log_path: Option<&str>,
     generation: Option<usize>,
     total_generations: Option<usize>,
+    return_best_n: bool,  // If true, return top N by CE when not enough pass threshold
 ) -> Vec<CandidateResult> {
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
     let mut logger = FileLogger::new(log_path);
@@ -732,12 +733,11 @@ pub fn search_offspring(
     }
 
     // If we didn't get enough passing candidates, add best from all_candidates
-    if passed.len() < target_count {
+    if return_best_n && passed.len() < target_count {
+        // Sort by CE (lower is better) - return best N by CE when threshold not met
         all_candidates.sort_by(|a, b| {
-            b.accuracy.partial_cmp(&a.accuracy)
+            a.cross_entropy.partial_cmp(&b.cross_entropy)
                 .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.cross_entropy.partial_cmp(&b.cross_entropy)
-                    .unwrap_or(std::cmp::Ordering::Equal))
         });
 
         let need = target_count - passed.len();
