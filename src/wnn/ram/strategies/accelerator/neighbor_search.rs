@@ -229,7 +229,7 @@ pub fn search_neighbors_with_threshold(
     seed: u64,
     log_path: Option<&str>,
     generation: Option<usize>,
-    total_generations: Option<usize>,
+    _total_generations: Option<usize>,
 ) -> (Vec<CandidateResult>, usize) {
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
     let mut logger = FileLogger::new(log_path);
@@ -239,16 +239,13 @@ pub fn search_neighbors_with_threshold(
     let batch_size = 10; // Evaluate in batches for efficiency
 
     // Generation prefix for logs
-    let gen_prefix = match (generation, total_generations) {
-        (Some(g), Some(t)) => format!("[Gen {:03}/{:03}]", g + 1, t),
-        (Some(g), None) => format!("[Gen {:03}]", g + 1),
-        _ => "[Search]".to_string(),
+    // Use target_count in prefix (not total_generations) - shows "targeting N candidates"
+    let gen_prefix = match generation {
+        Some(g) => format!("[Gen {:02}/{:02}]", g + 1, target_count),
+        None => format!("[Gen ??/{:02}]", target_count),
     };
 
-    logger.log(&format!(
-        "{} Starting neighbor search: target={}, max={}, threshold={:.2}%",
-        gen_prefix, target_count, max_attempts, accuracy_threshold * 100.0
-    ));
+    let mut shown_count = 0;  // Sequential count of shown/passed candidates
 
     while passed.len() < target_count && evaluated < max_attempts {
         // Generate a batch of candidates
@@ -290,18 +287,18 @@ pub fn search_neighbors_with_threshold(
             evaluated += 1;
             let (bits, neurons, conns) = &batch_genomes[i];
 
-            // Log each evaluation
-            logger.log(&format!(
-                "{} Candidate {:04}/{:04}: CE={:.4}, Acc={:.2}% {}",
-                gen_prefix,
-                evaluated,
-                max_attempts,
-                ce,
-                acc * 100.0,
-                if *acc >= accuracy_threshold { "✓" } else { "" }
-            ));
-
+            // Only log and add candidates that pass threshold
             if *acc >= accuracy_threshold {
+                shown_count += 1;
+                logger.log(&format!(
+                    "{} Genome {:02}/{:02}: CE={:.4}, Acc={:.2}%",
+                    gen_prefix,
+                    shown_count,
+                    target_count,
+                    ce,
+                    acc * 100.0
+                ));
+
                 passed.push(CandidateResult {
                     bits_per_cluster: bits.clone(),
                     neurons_per_cluster: neurons.clone(),
@@ -344,7 +341,7 @@ pub fn search_neighbors_best_n(
     seed: u64,
     log_path: Option<&str>,
     generation: Option<usize>,
-    total_generations: Option<usize>,
+    _total_generations: Option<usize>,
 ) -> Vec<CandidateResult> {
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
     let mut logger = FileLogger::new(log_path);
@@ -354,16 +351,13 @@ pub fn search_neighbors_best_n(
     let mut evaluated = 0;
     let batch_size = 10;
 
-    let gen_prefix = match (generation, total_generations) {
-        (Some(g), Some(t)) => format!("[Gen {:03}/{:03}]", g + 1, t),
-        (Some(g), None) => format!("[Gen {:03}]", g + 1),
-        _ => "[Search]".to_string(),
+    // Use target_count in prefix (not total_generations) - shows "targeting N candidates"
+    let gen_prefix = match generation {
+        Some(g) => format!("[Gen {:02}/{:02}]", g + 1, target_count),
+        None => format!("[Gen ??/{:02}]", target_count),
     };
 
-    logger.log(&format!(
-        "{} Starting neighbor search: target={}, max={}, threshold={:.2}%",
-        gen_prefix, target_count, max_attempts, accuracy_threshold * 100.0
-    ));
+    let mut shown_count = 0;  // Sequential count of shown/passed candidates
 
     while passed.len() < target_count && evaluated < max_attempts {
         let batch_to_generate = batch_size.min(max_attempts - evaluated);
@@ -410,17 +404,17 @@ pub fn search_neighbors_best_n(
                 accuracy: *acc,
             };
 
-            logger.log(&format!(
-                "{} Candidate {:04}/{:04}: CE={:.4}, Acc={:.2}% {}",
-                gen_prefix,
-                evaluated,
-                max_attempts,
-                ce,
-                acc * 100.0,
-                if *acc >= accuracy_threshold { "✓" } else { "" }
-            ));
-
+            // Only log candidates that pass threshold
             if *acc >= accuracy_threshold {
+                shown_count += 1;
+                logger.log(&format!(
+                    "{} Genome {:02}/{:02}: CE={:.4}, Acc={:.2}%",
+                    gen_prefix,
+                    shown_count,
+                    target_count,
+                    ce,
+                    acc * 100.0
+                ));
                 passed.push(candidate);
                 if passed.len() >= target_count {
                     break;
@@ -581,7 +575,7 @@ pub fn search_offspring(
     seed: u64,
     log_path: Option<&str>,
     generation: Option<usize>,
-    total_generations: Option<usize>,
+    _total_generations: Option<usize>,
 ) -> Vec<CandidateResult> {
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
     let mut logger = FileLogger::new(log_path);
@@ -591,11 +585,13 @@ pub fn search_offspring(
     let mut evaluated = 0;
     let batch_size = 10;
 
-    let gen_prefix = match (generation, total_generations) {
-        (Some(g), Some(t)) => format!("[Gen {:03}/{:03}]", g + 1, t),
-        (Some(g), None) => format!("[Gen {:03}]", g + 1),
-        _ => "[GA]".to_string(),
+    // Use target_count in prefix (not total_generations) - shows "targeting N candidates"
+    let gen_prefix = match generation {
+        Some(g) => format!("[Gen {:02}/{:02}]", g + 1, target_count),
+        None => format!("[Gen ??/{:02}]", target_count),
     };
+
+    let mut shown_count = 0;  // Sequential count of shown/passed candidates
 
     while passed.len() < target_count && evaluated < max_attempts {
         let batch_to_generate = batch_size.min(max_attempts - evaluated);
@@ -656,7 +652,17 @@ pub fn search_offspring(
                 accuracy: *acc,
             };
 
+            // Only log candidates that pass threshold
             if *acc >= accuracy_threshold {
+                shown_count += 1;
+                logger.log(&format!(
+                    "{} Genome {:02}/{:02}: CE={:.4}, Acc={:.2}%",
+                    gen_prefix,
+                    shown_count,
+                    target_count,
+                    ce,
+                    acc * 100.0
+                ));
                 passed.push(candidate);
                 if passed.len() >= target_count {
                     break;
