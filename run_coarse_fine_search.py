@@ -32,7 +32,7 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from wnn.logger import Logger
-from wnn.ram.architecture import PhasedSearchConfig, PhasedSearchRunner
+from wnn.ram.experiments import PhasedSearchConfig, PhasedSearchRunner
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 
 
