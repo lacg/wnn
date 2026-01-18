@@ -63,7 +63,8 @@ def run_phase(
 	**kwargs,
 ):
 	"""Run a single optimization phase with per-iteration token rotation."""
-	log(f"\n{'='*60}")
+	log("")
+	log(f"{'='*60}")
 	log(f"  {phase_name}")
 	log(f"{'='*60}")
 	log(f"  optimize_bits={optimize_bits}, optimize_neurons={optimize_neurons}")
@@ -110,7 +111,8 @@ def run_phase(
 	else:
 		result = strategy.optimize(evaluate_fn=None)
 
-	log(f"\n{phase_name} Result:")
+	log("")
+	log(f"{phase_name} Result:")
 	log(f"  Best fitness (CE): {result.final_fitness:.4f}")
 	log(f"  Best genome: {result.best_genome}")
 	log(f"  Generations/Iterations: {result.iterations_run}")
@@ -184,7 +186,8 @@ def main():
 		return 1
 
 	# Compute token frequencies from full training data
-	log("\nComputing token frequencies from training data...")
+	log("")
+	log("Computing token frequencies from training data...")
 	from collections import Counter
 	freq_counter = Counter(train_tokens)
 	token_frequencies = [freq_counter.get(i, 0) for i in range(vocab_size)]
@@ -194,7 +197,8 @@ def main():
 	cluster_order = sorted(range(vocab_size), key=lambda i: -token_frequencies[i])
 
 	# Create cached evaluator (holds all tokens in Rust, zero-copy per iteration)
-	log("\nCreating cached evaluator with per-iteration rotation...")
+	log("")
+	log("Creating cached evaluator with per-iteration rotation...")
 	evaluator = CachedEvaluator(
 		train_tokens=train_tokens,
 		eval_tokens=eval_tokens,
@@ -213,7 +217,8 @@ def main():
 	from wnn.ram.core import bits_needed
 	bits_per_token = bits_needed(vocab_size)
 	total_input_bits = args.context * bits_per_token
-	log(f"\nInput encoding: {args.context} tokens × {bits_per_token} bits = {total_input_bits} bits")
+	log("")
+	log(f"Input encoding: {args.context} tokens × {bits_per_token} bits = {total_input_bits} bits")
 
 	results = {}
 
@@ -418,14 +423,16 @@ def main():
 	# =========================================================================
 	# Final Evaluation with FULL training tokens
 	# =========================================================================
-	log(f"\n{'='*60}")
+	log("")
+	log(f"{'='*60}")
 	log("  Final Evaluation with FULL Training Data")
 	log(f"{'='*60}")
 	log(f"  Using all {len(train_tokens):,} training tokens for final evaluation")
 
 	# Evaluate the final best genome with full data
 	final_ce, final_acc = evaluator.evaluate_single_full(result_p3_ts.best_genome)
-	log(f"\n  Final genome: {result_p3_ts.best_genome}")
+	log("")
+	log(f"  Final genome: {result_p3_ts.best_genome}")
 	log(f"  Final CE (full data): {final_ce:.4f}")
 	log(f"  Final Accuracy: {final_acc:.2%}")
 	log(f"  Final PPL: {2.71828 ** final_ce:.1f}")
@@ -469,7 +476,8 @@ def main():
 
 		with open(output_path, "w") as f:
 			json.dump(results, f, indent=2, default=str)
-		log(f"\nResults saved to: {output_path}")
+		log("")
+		log(f"Results saved to: {output_path}")
 
 	return 0
 
