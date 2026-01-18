@@ -99,7 +99,7 @@ impl GenomeLogType {
     fn format_parts(&self) -> (&'static str, &'static str) {
         match self {
             GenomeLogType::Initial => ("Genome", "Init"),
-            GenomeLogType::EliteCE => ("Elite ", "CE "),
+            GenomeLogType::EliteCE => ("Elite ", "CE  "),
             GenomeLogType::EliteAcc => ("Elite ", "Acc "),
             GenomeLogType::Offspring => ("Genome", "New "),
             GenomeLogType::Neighbor => ("Genome", "Nbr "),
@@ -115,8 +115,8 @@ impl GenomeLogType {
 /// - 4-char type indicator in parentheses (CE, Acc, New, Init, Nbr)
 ///
 /// Returns formatted log string like:
-///   "[Gen 001/100] Elite  01/10 (CE ): CE=10.3417, Acc=0.0180%"
-///   "[Gen 001/100] Genome 01/40 (New): CE=10.3559, Acc=0.0300%"
+///   "[Gen 001/100] Elite  01/10 (CE  ): CE=10.3417, Acc=0.0180%"
+///   "[Gen 001/100] Genome 01/40 (New ): CE=10.3559, Acc=0.0300%"
 pub fn format_genome_log(
     generation: usize,
     total_generations: usize,
