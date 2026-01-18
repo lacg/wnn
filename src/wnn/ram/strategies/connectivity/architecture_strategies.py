@@ -520,7 +520,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			train_idx = evaluator.next_train_idx()
 
 			# Elite count
-			elite_count = max(1, int(cfg.elitism_rate * len(population)))
+			elite_count = max(1, int(cfg.elitism_pct * len(population)))
 			elites = population[:elite_count]
 
 			# Generate offspring using Rust
