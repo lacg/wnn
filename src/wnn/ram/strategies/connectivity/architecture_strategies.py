@@ -469,6 +469,9 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		self._log.info(f"[{self.name}] Using Rust search_offspring (single-call offspring search)")
 
 		# Initialize population (show ALL genomes - no threshold filtering for init)
+		init_size = len(initial_population) if initial_population else cfg.population_size
+		self._log.info(f"[{self.name}] Initializing population with {init_size} random genomes (no threshold filter)")
+
 		if initial_population and len(initial_population) > 0:
 			# Evaluate initial population
 			results = evaluator.evaluate_batch(
@@ -567,14 +570,15 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			elites = elites_by_ce + elites_by_acc
 			elite_count = len(elites)
 
-			# Log elites
-			self._log.info(f"[{self.name}] Gen {generation+1:02d} Elites: {elite_per_metric} CE + {elite_per_metric} Acc = {elite_count} total")
+			# Log elites with generation prefix
+			gen_prefix = f"[Gen {generation+1:02d}/{cfg.generations:02d}]"
+			self._log.info(f"{gen_prefix} Elites: {elite_per_metric} CE + {elite_per_metric} Acc = {elite_count} total")
 			for i, (g, ce) in enumerate(elites_by_ce):
 				acc = g._cached_fitness[1] if hasattr(g, '_cached_fitness') and g._cached_fitness else 0.0
-				self._log.info(f"  Elite {i+1:02d}/{elite_count}  (CE): CE={ce:.4f}, Acc={acc:.4%}")
+				self._log.info(f"{gen_prefix} Elite {i+1:02d}/{elite_count}  (CE): CE={ce:.4f}, Acc={acc:.4%}")
 			for i, (g, ce) in enumerate(elites_by_acc):
 				acc = g._cached_fitness[1] if hasattr(g, '_cached_fitness') and g._cached_fitness else 0.0
-				self._log.info(f"  Elite {elite_per_metric + i+1:02d}/{elite_count} (Acc): CE={ce:.4f}, Acc={acc:.4%}")
+				self._log.info(f"{gen_prefix} Elite {elite_per_metric + i+1:02d}/{elite_count} (Acc): CE={ce:.4f}, Acc={acc:.4%}")
 
 			# Generate offspring using Rust
 			needed_offspring = cfg.population_size - elite_count

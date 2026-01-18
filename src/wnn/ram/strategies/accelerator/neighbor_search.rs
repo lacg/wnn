@@ -232,7 +232,7 @@ pub fn search_neighbors_with_threshold(
     seed: u64,
     log_path: Option<&str>,
     generation: Option<usize>,
-    _total_generations: Option<usize>,
+    total_generations: Option<usize>,
 ) -> (Vec<CandidateResult>, usize) {
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
     let mut logger = FileLogger::new(log_path);
@@ -241,11 +241,11 @@ pub fn search_neighbors_with_threshold(
     let mut evaluated = 0;
     let batch_size = 10; // Evaluate in batches for efficiency
 
-    // Generation prefix for logs
-    // Use target_count in prefix (not total_generations) - shows "targeting N candidates"
+    // Generation prefix for logs - shows current generation / total generations
+    let total_gens = total_generations.unwrap_or(100);
     let gen_prefix = match generation {
-        Some(g) => format!("[Gen {:02}/{:02}]", g + 1, target_count),
-        None => format!("[Gen ??/{:02}]", target_count),
+        Some(g) => format!("[Gen {:02}/{:02}]", g + 1, total_gens),
+        None => format!("[Gen ??/{:02}]", total_gens),
     };
 
     let mut shown_count = 0;  // Sequential count of shown/passed candidates
@@ -344,7 +344,7 @@ pub fn search_neighbors_best_n(
     seed: u64,
     log_path: Option<&str>,
     generation: Option<usize>,
-    _total_generations: Option<usize>,
+    total_generations: Option<usize>,
 ) -> Vec<CandidateResult> {
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
     let mut logger = FileLogger::new(log_path);
@@ -354,10 +354,11 @@ pub fn search_neighbors_best_n(
     let mut evaluated = 0;
     let batch_size = 10;
 
-    // Use target_count in prefix (not total_generations) - shows "targeting N candidates"
+    // Generation prefix for logs - shows current generation / total generations
+    let total_gens = total_generations.unwrap_or(100);
     let gen_prefix = match generation {
-        Some(g) => format!("[Gen {:02}/{:02}]", g + 1, target_count),
-        None => format!("[Gen ??/{:02}]", target_count),
+        Some(g) => format!("[Gen {:02}/{:02}]", g + 1, total_gens),
+        None => format!("[Gen ??/{:02}]", total_gens),
     };
 
     let mut shown_count = 0;  // Sequential count of shown/passed candidates
@@ -578,7 +579,7 @@ pub fn search_offspring(
     seed: u64,
     log_path: Option<&str>,
     generation: Option<usize>,
-    _total_generations: Option<usize>,
+    total_generations: Option<usize>,
 ) -> Vec<CandidateResult> {
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
     let mut logger = FileLogger::new(log_path);
@@ -588,10 +589,11 @@ pub fn search_offspring(
     let mut evaluated = 0;
     let batch_size = 10;
 
-    // Use target_count in prefix (not total_generations) - shows "targeting N candidates"
+    // Generation prefix for logs - shows current generation / total generations
+    let total_gens = total_generations.unwrap_or(100);
     let gen_prefix = match generation {
-        Some(g) => format!("[Gen {:02}/{:02}]", g + 1, target_count),
-        None => format!("[Gen ??/{:02}]", target_count),
+        Some(g) => format!("[Gen {:02}/{:02}]", g + 1, total_gens),
+        None => format!("[Gen ??/{:02}]", total_gens),
     };
 
     let mut shown_count = 0;  // Sequential count of shown/passed candidates
