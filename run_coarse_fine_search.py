@@ -115,6 +115,10 @@ def main():
 	parser.add_argument("--default-bits", type=int, default=8, help="Default bits for Phase 1")
 	parser.add_argument("--default-neurons", type=int, default=5, help="Default neurons for Phase 2")
 
+	# CE pressure
+	parser.add_argument("--ce-percentile", type=float, default=None,
+						help="CE percentile filter (e.g., 0.75 = keep top 75%% by CE). None=disabled")
+
 	# Other settings
 	parser.add_argument("--token-parts", type=int, default=3, help="Number of token subsets (3=thirds)")
 	parser.add_argument("--seed", type=int, default=None, help="Random seed for rotation (None=time-based)")
@@ -155,6 +159,10 @@ def main():
 	log(f"  GA generations: {args.ga_gens}, population: {args.population}")
 	log(f"  TS iterations: {args.ts_iters}, neighbors: {args.neighbors}")
 	log(f"  Patience: {patience}")
+	if args.ce_percentile is not None:
+		log(f"  CE percentile filter: {args.ce_percentile:.0%} (keep top {args.ce_percentile:.0%} by CE)")
+	else:
+		log(f"  CE percentile filter: disabled")
 	log(f"  Default bits (Phase 1): {args.default_bits}")
 	log(f"  Default neurons (Phase 2): {args.default_neurons}")
 	log(f"  Output: {args.output}")
@@ -206,6 +214,7 @@ def main():
 		patience=patience,  # Calculated based on pass number
 		default_bits=args.default_bits,
 		default_neurons=args.default_neurons,
+		ce_percentile=args.ce_percentile,
 		rotation_seed=rotation_seed,
 		log_path=logger.log_file,
 	)
