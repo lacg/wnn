@@ -68,12 +68,13 @@ impl FileLogger {
     }
 
     pub fn log(&mut self, msg: &str) {
-        // Always print to stderr for immediate visibility
-        eprintln!("{}", msg);
+        let timestamp = Local::now().format("%H:%M:%S");
+
+        // Always print to stderr with timestamp for immediate visibility
+        eprintln!("{} | {}", timestamp, msg);
 
         // Also write to file if configured
         if let Some(ref mut writer) = self.writer {
-            let timestamp = Local::now().format("%H:%M:%S");
             let _ = writeln!(writer, "{} | {}", timestamp, msg);
             let _ = writer.flush();
         }

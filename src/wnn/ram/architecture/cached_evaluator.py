@@ -171,15 +171,12 @@ class CachedEvaluator:
         num_genomes = len(genomes)
         genome_width = len(str(num_genomes))
 
-        # Generation prefix for logs
+        # Generation prefix for logs - use num_genomes as target (consistent with Rust)
         if generation is not None:
-            if total_generations is not None:
-                gen_width = len(str(total_generations))
-                gen_prefix = f"[Gen {generation + 1:0{gen_width}d}/{total_generations}]"
-            else:
-                gen_prefix = f"[Gen {generation + 1}]"
+            gen_width = len(str(num_genomes))
+            gen_prefix = f"[Gen {generation + 1:0{gen_width}d}/{num_genomes}]"
         else:
-            gen_prefix = "[Init]"
+            gen_prefix = f"[Init/{num_genomes}]"
 
         # Subset info for TRACE level logging
         subset_info = f" [train:{train_subset_idx+1}/{self._num_parts}, eval:{eval_subset_idx+1}/1]"
@@ -242,28 +239,21 @@ class CachedEvaluator:
 
         elapsed = time.time() - overall_start
 
-        # Count how many pass the threshold for sequential numbering
+        # Count how many pass the threshold
         if min_accuracy is not None:
             shown_count = sum(1 for _, acc in results if acc >= min_accuracy)
         else:
             shown_count = num_genomes
 
-        shown_width = len(str(shown_count)) if shown_count > 0 else 1
-
-        # Log each result with sequential numbering for shown items
-        shown_idx = 0
+        # Log each result with consistent numbering (all genomes, 1/30, 2/30, etc.)
         for i, (ce, acc) in enumerate(results):
-            if min_accuracy is not None and acc < min_accuracy:
-                # Log at TRACE level (not shown) - use original indexing
-                trace_msg = f"{gen_prefix} Genome {i+1:0{genome_width}d}/{num_genomes}: CE={ce:.4f}, Acc={acc:.2%}" + subset_info
-                log_trace(trace_msg)
-            else:
-                # Log at DEBUG level (shown) - use sequential numbering
-                shown_idx += 1
-                base_msg = f"{gen_prefix} Genome {shown_idx:0{shown_width}d}/{shown_count}: CE={ce:.4f}, Acc={acc:.2%}"
+            passes = min_accuracy is None or acc >= min_accuracy
+            base_msg = f"{gen_prefix} Genome {i+1:0{genome_width}d}/{num_genomes}: CE={ce:.4f}, Acc={acc:.2%}"
+            if passes:
                 log_debug(base_msg)
-                if isinstance(logger, OptimizationLogger):
-                    log_trace(f"    └─ subset: train={train_subset_idx+1}/{self._num_parts}, eval={eval_subset_idx+1}/1")
+            else:
+                # Log at TRACE level with subset info for filtered genomes
+                log_trace(base_msg + subset_info)
 
         # Log generation/iteration duration summary
         log_debug(f"{gen_prefix} Completed in {elapsed:.1f}s ({num_genomes} evaluated, {shown_count} shown)")
