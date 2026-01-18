@@ -580,7 +580,9 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 
 			# Log elites using shared formatter
 			gen_prefix = format_gen_prefix(generation + 1, cfg.generations)
+			self._log.info("=" * 60)
 			self._log.info(f"{gen_prefix} Elites: {elite_per_metric} CE + {elite_per_metric} Acc = {elite_count} total")
+			self._log.info("=" * 60)
 			for i, (g, ce) in enumerate(elites_by_ce):
 				acc = g._cached_fitness[1] if hasattr(g, '_cached_fitness') and g._cached_fitness else 0.0
 				self._log.info(format_genome_log(
