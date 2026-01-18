@@ -503,7 +503,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		initial_fitness = best_fitness
 
 		# Early stopping
-		early_stop = EarlyStoppingTracker(cfg.patience, cfg.min_improvement)
+		early_stop = EarlyStoppingTracker(cfg.patience, cfg.min_improvement_pct)
 
 		# Track threshold for logging
 		prev_threshold: Optional[float] = None
