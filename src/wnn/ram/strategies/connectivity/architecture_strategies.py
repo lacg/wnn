@@ -512,8 +512,8 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 				g._cached_fitness = (ce, acc)
 				population.append((g, ce))
 
-		# Sort by fitness (lower CE is better)
-		population.sort(key=lambda x: x[1])
+		# Sort by fitness (lower CE is better), accuracy as tie-breaker (higher better)
+		population.sort(key=lambda x: (x[1], -(x[0]._cached_fitness[1] if hasattr(x[0], '_cached_fitness') and x[0]._cached_fitness else 0.0)))
 
 		# Track best
 		best_genome, best_fitness = population[0]
@@ -644,8 +644,8 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			new_population = list(elites)
 			new_population.extend(offspring_with_ce)
 
-			# Sort and truncate
-			new_population.sort(key=lambda x: x[1])
+			# Sort and truncate - sort by CE ascending, accuracy as tie-breaker (higher better)
+			new_population.sort(key=lambda x: (x[1], -(x[0]._cached_fitness[1] if hasattr(x[0], '_cached_fitness') and x[0]._cached_fitness else 0.0)))
 			population = new_population[:cfg.population_size]
 
 			# Update best
@@ -1131,7 +1131,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		cache_size = cfg.total_neighbors_size or cfg.neighbors_per_iter
 		cache_size_per_metric = cache_size // 2
 
-		by_ce = sorted([n for n in all_neighbors if n[2] is not None], key=lambda x: x[1])[:cache_size_per_metric]
+		by_ce = sorted([n for n in all_neighbors if n[2] is not None], key=lambda x: (x[1], -x[2]))[:cache_size_per_metric]  # CE asc, Acc desc as tie-breaker
 		by_acc = sorted([n for n in all_neighbors if n[2] is not None], key=lambda x: -x[2])[:cache_size_per_metric]
 
 		seen = set()
