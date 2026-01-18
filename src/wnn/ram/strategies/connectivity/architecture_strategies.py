@@ -546,7 +546,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			train_idx = evaluator.next_train_idx()
 
 			# Dual elitism: 5 best by CE + 5 best by Acc (all unique, NO overlaps)
-			elite_per_metric = max(1, int(cfg.elitism_pct * len(population)))  # 5 per metric
+			elite_per_metric = max(1, int(cfg.elitism_pct * cfg.population_size))  # 5 per metric (fixed to original pop size)
 
 			# Population is already sorted by CE, so top 5 by CE are first 5
 			elites_by_ce = population[:elite_per_metric]
