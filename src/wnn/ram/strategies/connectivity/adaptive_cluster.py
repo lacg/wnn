@@ -14,11 +14,13 @@ Let the data decide rather than hand-tuning tier boundaries.
 
 from __future__ import annotations
 
+import json
 import math
 import random
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 import torch
 from torch import Tensor
@@ -172,9 +174,9 @@ class ClusterGenome:
 
 	def __init__(
 		self,
-		bits_per_cluster: List[int],
-		neurons_per_cluster: Optional[List[int]] = None,
-		connections: Optional[List[int]] = None,
+		bits_per_cluster: list[int],
+		neurons_per_cluster: Optional[list[int]] = None,
+		connections: Optional[list[int]] = None,
 	):
 		"""
 		Create a genome with specified architecture and connections.
@@ -202,7 +204,7 @@ class ClusterGenome:
 		num_clusters: int,
 		strategy: GenomeInitStrategy,
 		config: AdaptiveClusterConfig,
-		token_frequencies: Optional[List[int]] = None,
+		token_frequencies: Optional[list[int]] = None,
 		total_input_bits: Optional[int] = None,
 		rng: Optional[int] = None,
 	) -> ClusterGenome:
@@ -390,12 +392,12 @@ class ClusterGenome:
 
 	def _adjust_connections(
 		self,
-		new_bits: List[int],
-		new_neurons: List[int],
-		bits_delta: List[int],
-		neurons_delta: List[int],
+		new_bits: list[int],
+		new_neurons: list[int],
+		bits_delta: list[int],
+		neurons_delta: list[int],
 		total_input_bits: int,
-	) -> List[int]:
+	) -> list[int]:
 		"""Adjust connections when architecture changes."""
 		result = []
 		old_idx = 0
@@ -616,6 +618,106 @@ class ClusterGenome:
 			},
 		}
 
+	def serialize(self) -> dict[str, Any]:
+		"""
+		Serialize genome to dictionary.
+
+		Returns:
+			Dictionary with all data needed to reconstruct this genome.
+		"""
+		data: dict[str, Any] = {
+			"bits_per_cluster": self.bits_per_cluster,
+			"neurons_per_cluster": self.neurons_per_cluster,
+		}
+		if self.connections is not None:
+			data["connections"] = self.connections
+		# Include cached fitness if available
+		if hasattr(self, '_cached_fitness') and self._cached_fitness is not None:
+			data["cached_fitness"] = self._cached_fitness
+		return data
+
+	# Keep to_dict as alias for backward compatibility
+	def to_dict(self) -> dict[str, Any]:
+		"""Alias for serialize() - kept for backward compatibility."""
+		return self.serialize()
+
+	@classmethod
+	def deserialize(cls, data: dict[str, Any]) -> 'ClusterGenome':
+		"""
+		Deserialize genome from dictionary.
+
+		Args:
+			data: Dictionary from serialize()
+
+		Returns:
+			Reconstructed ClusterGenome instance.
+		"""
+		genome = cls(
+			bits_per_cluster=data["bits_per_cluster"],
+			neurons_per_cluster=data.get("neurons_per_cluster"),
+			connections=data.get("connections"),
+		)
+		# Restore cached fitness if present
+		if "cached_fitness" in data:
+			genome._cached_fitness = tuple(data["cached_fitness"])
+		return genome
+
+	# Keep from_dict as alias for backward compatibility
+	@classmethod
+	def from_dict(cls, data: dict[str, Any]) -> 'ClusterGenome':
+		"""Alias for deserialize() - kept for backward compatibility."""
+		return cls.deserialize(data)
+
+	def save(
+		self,
+		filepath: str,
+		fitness: Optional[float] = None,
+		accuracy: Optional[float] = None,
+		**metadata: Any,
+	) -> None:
+		"""
+		Save genome to a JSON file.
+
+		Args:
+			filepath: Output file path
+			fitness: Optional fitness (CE) value to include
+			accuracy: Optional accuracy value to include
+			**metadata: Additional metadata to include
+		"""
+		data: dict[str, Any] = {
+			"genome": self.serialize(),
+			"stats": self.stats(),
+		}
+		if fitness is not None:
+			data["fitness"] = fitness
+		if accuracy is not None:
+			data["accuracy"] = accuracy
+		if metadata:
+			data["_metadata"] = metadata
+
+		path = Path(filepath)
+		path.parent.mkdir(parents=True, exist_ok=True)
+
+		with open(path, 'w') as f:
+			json.dump(data, f, indent=2)
+
+	@classmethod
+	def load(cls, filepath: str) -> tuple['ClusterGenome', dict[str, Any]]:
+		"""
+		Load genome from a JSON file.
+
+		Args:
+			filepath: Input file path
+
+		Returns:
+			Tuple of (genome, full_data) where full_data includes fitness, accuracy, metadata
+		"""
+		with open(filepath, 'r') as f:
+			data = json.load(f)
+
+		genome = cls.deserialize(data["genome"])
+		return genome, data
+
 	def enforce_budget(self, config: AdaptiveClusterConfig) -> ClusterGenome:
 		"""
 		Ensure genome stays within memory budget by shrinking if needed.
@@ -660,10 +762,10 @@ class ClusterGenome:
 
 def _frequency_scaled_init(
 	num_clusters: int,
-	token_frequencies: List[int],
+	token_frequencies: list[int],
 	config: AdaptiveClusterConfig,
 	for_bits: bool = True,
-) -> List[int]:
+) -> list[int]:
 	"""
 	Initialize bits or neurons scaled by token frequency.
 
@@ -832,13 +934,13 @@ class RustParallelEvaluator:
 
 	def evaluate_batch(
 		self,
-		genomes: List[ClusterGenome],
+		genomes: list[ClusterGenome],
 		logger: Optional[Callable[[str], None]] = None,
 		batch_size: int = 1,  # Sequential: each genome gets full thread pool for token parallelism
 		generation: Optional[int] = None,  # Current generation for logging
 		total_generations: Optional[int] = None,  # Total generations for logging
 		min_accuracy: Optional[float] = None,  # Threshold for log level selection
-	) -> List[Tuple[float, float]]:
+	) -> list[tuple[float, float]]:
 		"""
 		Evaluate multiple genomes using Rust/rayon.
 
@@ -925,7 +1027,7 @@ class RustParallelEvaluator:
 				self.config.empty_value,
 			)
 
-			# batch_results is already List[(CE, accuracy)]
+			# batch_results is already list[(CE, accuracy)]
 			all_fitness.extend(batch_results)
 
 			elapsed = time.time() - start_time
@@ -953,7 +1055,7 @@ class RustParallelEvaluator:
 		ce, _ = self.evaluate_batch([genome])[0]
 		return ce
 
-	def evaluate_single_with_accuracy(self, genome: ClusterGenome) -> Tuple[float, float]:
+	def evaluate_single_with_accuracy(self, genome: ClusterGenome) -> tuple[float, float]:
 		"""Evaluate a single genome, returning (CE, accuracy)."""
 		return self.evaluate_batch([genome])[0]
 
@@ -967,8 +1069,8 @@ class EvaluatorConfig:
 	"""Configuration for genome evaluation."""
 
 	# Data
-	train_tokens: List[int] = None
-	eval_tokens: List[int] = None
+	train_tokens: list[int] = None
+	eval_tokens: list[int] = None
 	vocab_size: int = 50257
 	context_size: int = 4
 
@@ -981,7 +1083,7 @@ class EvaluatorConfig:
 	eval_batch_size: int = 1000
 
 	# Token ordering (for cluster assignment)
-	cluster_order: Optional[List[int]] = None  # sorted by frequency
+	cluster_order: Optional[list[int]] = None  # sorted by frequency
 
 	# Random seed for connectivity (None = truly random, no seeding)
 	# NOTE: Architecture optimization should NOT depend on specific connectivity
@@ -1040,7 +1142,7 @@ class AdaptiveRAMLMWrapper:
 		# Bit positions for encoding
 		self._bit_positions = arange(self.bits_per_token - 1, -1, -1, dtype=long)
 
-	def _encode_tokens(self, tokens: List[int]) -> Tensor:
+	def _encode_tokens(self, tokens: list[int]) -> Tensor:
 		"""Encode tokens to binary input bits."""
 		from torch import tensor, zeros, bool as torch_bool
 
@@ -1053,14 +1155,14 @@ class AdaptiveRAMLMWrapper:
 
 		return bits
 
-	def _encode_context(self, context_tokens: List[int]) -> Tensor:
+	def _encode_context(self, context_tokens: list[int]) -> Tensor:
 		"""Encode context tokens to flat input bits."""
 		bits = self._encode_tokens(context_tokens)
 		return bits.flatten()
 
 	def train_epoch(
 		self,
-		tokens: List[int],
+		tokens: list[int],
 		global_top_k: int = 100,
 		batch_size: int = 500,
 		verbose: bool = False,
@@ -1152,7 +1254,7 @@ class AdaptiveRAMLMWrapper:
 
 	def evaluate(
 		self,
-		tokens: List[int],
+		tokens: list[int],
 		batch_size: int = 1000,
 		verbose: bool = False,
 	) -> Dict:
@@ -1306,14 +1408,14 @@ def create_genome_evaluator(
 
 def evaluate_genome_with_accuracy(
 	genome: ClusterGenome,
-	train_tokens: List[int],
-	eval_tokens: List[int],
+	train_tokens: list[int],
+	eval_tokens: list[int],
 	vocab_size: int = 50257,
 	context_size: int = 4,
-	cluster_order: Optional[List[int]] = None,
+	cluster_order: Optional[list[int]] = None,
 	global_top_k: int = 1000,
 	logger: Optional[Callable[[str], None]] = None,
-) -> Tuple[float, float]:
+) -> tuple[float, float]:
 	"""
 	Evaluate a genome and return (cross_entropy, accuracy).
 
@@ -1368,11 +1470,11 @@ def evaluate_genome_with_accuracy(
 def run_architecture_tabu_search(
 	initial_genome: ClusterGenome,
 	initial_fitness: float,
-	train_tokens: List[int],
-	eval_tokens: List[int],
+	train_tokens: list[int],
+	eval_tokens: list[int],
 	vocab_size: int = 50257,
 	context_size: int = 4,
-	cluster_order: Optional[List[int]] = None,
+	cluster_order: Optional[list[int]] = None,
 	# TS parameters
 	iterations: int = 100,
 	neighbors_per_iter: int = 20,
@@ -1388,7 +1490,7 @@ def run_architecture_tabu_search(
 	seed: int = 42,
 	logger: Optional[Callable[[str], None]] = None,
 	# Population seeding from previous phase
-	initial_neighbors: Optional[List[ClusterGenome]] = None,
+	initial_neighbors: Optional[list[ClusterGenome]] = None,
 ) -> OptimizerResult['ClusterGenome']:
 	"""
 	Run Tabu Search to refine architecture from a GA solution.
@@ -1479,7 +1581,7 @@ def run_architecture_tabu_search(
 		batch_evaluator=batch_evaluator,
 	)
 
-	# Create batch evaluation function using Rust evaluator (returns List[(CE, accuracy)])
+	# Create batch evaluation function using Rust evaluator (returns list[(CE, accuracy)])
 	batch_evaluate_fn = None
 	if batch_evaluator is not None:
 		batch_evaluate_fn = lambda genomes, min_accuracy=None: batch_evaluator.evaluate_batch(genomes, logger=log, min_accuracy=min_accuracy)
@@ -1513,12 +1615,12 @@ def run_architecture_tabu_search(
 
 
 def run_architecture_search(
-	train_tokens: List[int],
-	eval_tokens: List[int],
+	train_tokens: list[int],
+	eval_tokens: list[int],
 	vocab_size: int = 50257,
 	context_size: int = 4,
-	token_frequencies: Optional[List[int]] = None,
-	cluster_order: Optional[List[int]] = None,
+	token_frequencies: Optional[list[int]] = None,
+	cluster_order: Optional[list[int]] = None,
 	# GA parameters
 	population_size: int = 10,
 	generations: int = 20,
@@ -1535,7 +1637,7 @@ def run_architecture_search(
 	seed: int = 42,
 	logger: Optional[Callable[[str], None]] = None,
 	# Population seeding from previous phase
-	initial_population: Optional[List[ClusterGenome]] = None,
+	initial_population: Optional[list[ClusterGenome]] = None,
 ) -> OptimizerResult['ClusterGenome']:
 	"""
 	Run complete architecture search for adaptive cluster configuration.
@@ -1656,7 +1758,7 @@ def run_architecture_search(
 		batch_evaluator=batch_evaluator,
 	)
 
-	# Create batch evaluation function using Rust evaluator (returns List[(CE, accuracy)])
+	# Create batch evaluation function using Rust evaluator (returns list[(CE, accuracy)])
 	batch_evaluate_fn = None
 	if batch_evaluator is not None:
 		batch_evaluate_fn = lambda genomes, min_accuracy=None: batch_evaluator.evaluate_batch(genomes, logger=log, min_accuracy=min_accuracy)
@@ -1711,18 +1813,18 @@ class ConnectivityOptResult:
 	ga_final_accuracy: Optional[float] = None  # Accuracy after Phase 2a GA
 	final_accuracy: Optional[float] = None     # Accuracy after Phase 2b TS
 	# Population seeding for potential future phases
-	final_population: Optional[List[ClusterGenome]] = None  # From Phase 2 TS
+	final_population: Optional[list[ClusterGenome]] = None  # From Phase 2 TS
 
 
 def run_connectivity_optimization(
 	genome: ClusterGenome,
 	genome_fitness: float,
-	train_tokens: List[int],
-	eval_tokens: List[int],
+	train_tokens: list[int],
+	eval_tokens: list[int],
 	vocab_size: int = 50257,
 	context_size: int = 4,
-	cluster_order: Optional[List[int]] = None,
-	token_frequencies: Optional[List[int]] = None,
+	cluster_order: Optional[list[int]] = None,
+	token_frequencies: Optional[list[int]] = None,
 	# GA parameters
 	ga_population: int = 20,
 	ga_generations: int = 30,
@@ -1742,7 +1844,7 @@ def run_connectivity_optimization(
 	seed: int = 42,
 	logger: Optional[Callable[[str], None]] = None,
 	# Population seeding from Phase 1b
-	initial_population: Optional[List[ClusterGenome]] = None,
+	initial_population: Optional[list[ClusterGenome]] = None,
 ) -> ConnectivityOptResult:
 	"""
 	Run Phase 2: Continue architecture optimization with GA→TS.
@@ -1818,7 +1920,7 @@ def run_connectivity_optimization(
 	except Exception as e:
 		log(f"[Phase2] Using Python evaluator ({e})")
 
-	# Create batch evaluation function using Rust evaluator (returns List[(CE, accuracy)])
+	# Create batch evaluation function using Rust evaluator (returns list[(CE, accuracy)])
 	batch_evaluate_fn = None
 	if batch_evaluator is not None:
 		batch_evaluate_fn = lambda genomes, min_accuracy=None: batch_evaluator.evaluate_batch(genomes, logger=log, min_accuracy=min_accuracy)

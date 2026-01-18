@@ -22,7 +22,7 @@ from abc import ABC, abstractmethod
 from collections import deque
 from dataclasses import dataclass, field
 from enum import IntEnum, auto
-from typing import Callable, Generic, List, Optional, Tuple, TypeVar, Any
+from typing import Callable, Generic, Optional, TypeVar, Any
 
 # Generic genome type
 T = TypeVar('T')
@@ -160,11 +160,11 @@ class OptimizerResult(Generic[T]):
 	improvement_percent: float
 	iterations_run: int
 	method_name: str
-	history: List[Tuple[int, float]] = field(default_factory=list)
+	history: list[tuple[int, float]] = field(default_factory=list)
 	early_stopped: bool = False
 	stop_reason: Optional[StopReason] = None
 	# For population seeding between phases
-	final_population: Optional[List[T]] = None
+	final_population: Optional[list[T]] = None
 	# Accuracy tracking
 	initial_accuracy: Optional[float] = None
 	final_accuracy: Optional[float] = None
@@ -694,8 +694,8 @@ class GenericGAStrategy(ABC, Generic[T]):
 		self,
 		evaluate_fn: Callable[[T], float],
 		initial_genome: Optional[T] = None,
-		initial_population: Optional[List[T]] = None,
-		batch_evaluate_fn: Optional[Callable[[List[T]], List[Tuple[float, float]]]] = None,
+		initial_population: Optional[list[T]] = None,
+		batch_evaluate_fn: Optional[Callable[[list[T]], list[tuple[float, float]]]] = None,
 		overfitting_callback: Optional[Callable[[T, float], Any]] = None,
 	) -> OptimizerResult[T]:
 		"""
@@ -705,7 +705,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 			evaluate_fn: Function to evaluate a single genome (lower is better)
 			initial_genome: Optional seed genome (used if no initial_population)
 			initial_population: Optional seed population from previous phase
-			batch_evaluate_fn: Optional batch evaluation function returning List[(CE, accuracy)]
+			batch_evaluate_fn: Optional batch evaluation function returning list[(CE, accuracy)]
 			overfitting_callback: Optional callback for overfitting detection.
 				Called every check_interval generations with (best_genome, best_fitness).
 				Returns OverfittingControl (or any object with early_stop attribute).
@@ -816,7 +816,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 		generation = 0
 		for generation in range(cfg.generations):
 			# Selection and reproduction
-			new_population: List[Tuple[T, Optional[float], Optional[float]]] = []
+			new_population: list[tuple[T, Optional[float], Optional[float]]] = []
 
 			# Dual elitism: keep top N% by CE AND top N% by accuracy (unique)
 			# Use target population_size (not len(population)) so we don't lose elites
@@ -1044,18 +1044,18 @@ class GenericGAStrategy(ABC, Generic[T]):
 
 	def _evaluate_population(
 		self,
-		population: List[Tuple[T, Optional[float], Optional[float]]],
-		batch_fn: Optional[Callable[[List[T]], List[Tuple[float, float]]]],
+		population: list[tuple[T, Optional[float], Optional[float]]],
+		batch_fn: Optional[Callable[[list[T]], list[tuple[float, float]]]],
 		single_fn: Callable[[T], float],
 		generation: int = 0,
 		total_generations: int = 0,
-	) -> List[Tuple[T, float, Optional[float]]]:
+	) -> list[tuple[T, float, Optional[float]]]:
 		"""
 		Evaluate individuals with None fitness, tracking accuracy.
 
 		Args:
 			population: List of (genome, fitness, accuracy) tuples
-			batch_fn: Optional batch evaluation function returning List[(CE, accuracy)]
+			batch_fn: Optional batch evaluation function returning list[(CE, accuracy)]
 			single_fn: Single genome evaluation function (CE only, for fallback)
 			generation: Current generation (0-indexed, for logging)
 			total_generations: Total generations (for logging)
@@ -1093,12 +1093,12 @@ class GenericGAStrategy(ABC, Generic[T]):
 		self,
 		target_size: int,
 		generator_fn: Callable[[], T],
-		batch_fn: Optional[Callable[[List[T]], List[Tuple[float, float]]]],
+		batch_fn: Optional[Callable[[list[T]], list[tuple[float, float]]]],
 		single_fn: Callable[[T], float],
 		min_accuracy: float,
-		seed_genomes: Optional[List[T]] = None,
+		seed_genomes: Optional[list[T]] = None,
 		max_attempts: int = 10,
-	) -> List[Tuple[T, float, Optional[float]]]:
+	) -> list[tuple[T, float, Optional[float]]]:
 		"""
 		Build a population of viable candidates (accuracy >= min_accuracy).
 
@@ -1108,7 +1108,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 		Args:
 			target_size: Number of viable candidates needed
 			generator_fn: Function to generate a new random genome
-			batch_fn: Batch evaluation function returning List[(CE, accuracy)]
+			batch_fn: Batch evaluation function returning list[(CE, accuracy)]
 			single_fn: Single evaluation function (fallback)
 			min_accuracy: Minimum accuracy threshold (0.0001 = 0.01%)
 			seed_genomes: Optional seed genomes to include (evaluated first)
@@ -1117,7 +1117,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 		Returns:
 			List of (genome, fitness, accuracy) tuples for viable candidates
 		"""
-		viable: List[Tuple[T, float, Optional[float]]] = []
+		viable: list[tuple[T, float, Optional[float]]] = []
 		filtered_count = 0
 
 		# First, evaluate seed genomes if provided
@@ -1169,7 +1169,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 
 		return viable[:target_size]
 
-	def _tournament_select(self, population: List[Tuple[T, float, Optional[float]]], tournament_size: int = 3) -> T:
+	def _tournament_select(self, population: list[tuple[T, float, Optional[float]]], tournament_size: int = 3) -> T:
 		"""Tournament selection: pick best from random subset."""
 		indices = self._rng.sample(range(len(population)), min(tournament_size, len(population)))
 		best_idx = min(indices, key=lambda i: population[i][1])
@@ -1223,12 +1223,12 @@ class GenericTSStrategy(ABC, Generic[T]):
 		...
 
 	@abstractmethod
-	def mutate_genome(self, genome: T, mutation_rate: float) -> Tuple[T, Any]:
+	def mutate_genome(self, genome: T, mutation_rate: float) -> tuple[T, Any]:
 		"""Create a neighbor. Returns (new_genome, move_info)."""
 		...
 
 	@abstractmethod
-	def is_tabu_move(self, move: Any, tabu_list: List[Any]) -> bool:
+	def is_tabu_move(self, move: Any, tabu_list: list[Any]) -> bool:
 		"""Check if a move is tabu (reverses a recent move)."""
 		...
 
@@ -1241,8 +1241,8 @@ class GenericTSStrategy(ABC, Generic[T]):
 		initial_genome: T,
 		initial_fitness: float,
 		evaluate_fn: Callable[[T], float],
-		initial_neighbors: Optional[List[T]] = None,
-		batch_evaluate_fn: Optional[Callable[[List[T]], List[Tuple[float, float]]]] = None,
+		initial_neighbors: Optional[list[T]] = None,
+		batch_evaluate_fn: Optional[Callable[[list[T]], list[tuple[float, float]]]] = None,
 		overfitting_callback: Optional[Callable[[T, float], Any]] = None,
 	) -> OptimizerResult[T]:
 		"""
@@ -1258,7 +1258,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 			initial_fitness: Fitness of initial genome
 			evaluate_fn: Function to evaluate a single genome
 			initial_neighbors: Optional seed neighbors from previous phase
-			batch_evaluate_fn: Optional batch evaluation function returning List[(CE, accuracy)]
+			batch_evaluate_fn: Optional batch evaluation function returning list[(CE, accuracy)]
 			overfitting_callback: Optional callback for overfitting detection.
 
 		Returns:
@@ -1306,7 +1306,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 
 		# Total neighbors cache: all genomes with their CE and Acc
 		# Will be split into top K/2 by CE + top K/2 by Acc at the end
-		all_neighbors: List[Tuple[T, float, Optional[float]]] = [
+		all_neighbors: list[tuple[T, float, Optional[float]]] = [
 			(self.clone_genome(initial_genome), initial_fitness, None)
 		]
 
@@ -1391,14 +1391,14 @@ class GenericTSStrategy(ABC, Generic[T]):
 			prev_threshold = current_threshold
 
 			# === Path A: Generate neighbors from best_ce ===
-			ce_candidates: List[Tuple[T, Any]] = []
+			ce_candidates: list[tuple[T, Any]] = []
 			for _ in range(neighbors_per_path):
 				neighbor, move = self.mutate_genome(self.clone_genome(best_ce_genome), cfg.mutation_rate)
 				if not self.is_tabu_move(move, list(tabu_list_ce)):
 					ce_candidates.append((neighbor, move))
 
 			# === Path B: Generate neighbors from best_acc ===
-			acc_candidates: List[Tuple[T, Any]] = []
+			acc_candidates: list[tuple[T, Any]] = []
 			for _ in range(neighbors_per_path):
 				neighbor, move = self.mutate_genome(self.clone_genome(best_acc_genome), cfg.mutation_rate)
 				if not self.is_tabu_move(move, list(tabu_list_acc)):

@@ -6,7 +6,7 @@ with dynamic padding based on totals.
 """
 
 from enum import IntEnum
-from typing import Optional, Tuple, Union
+from typing import Optional, Union
 
 
 class GenomeLogType(IntEnum):

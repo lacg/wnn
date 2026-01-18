@@ -39,7 +39,7 @@ Tier budgets follow Pareto principle:
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Callable, Optional, List, Dict, Tuple
+from typing import Callable, Optional
 from enum import IntEnum
 import multiprocessing as mp
 import random
@@ -96,12 +96,12 @@ class ClusterOptResult:
 @dataclass
 class PerClusterResult:
     """Result of optimizing all clusters."""
-    cluster_results: List[ClusterOptResult]
+    cluster_results: list[ClusterOptResult]
     initial_ppl: float
     final_ppl: float
     improvement_pct: float
     total_clusters_optimized: int
-    tier_summaries: Dict[int, dict]  # tier -> {clusters, avg_improvement, ...}
+    tier_summaries: dict[int, dict]  # tier -> {clusters, avg_improvement, ...}
 
 
 class IncrementalEvaluator:
@@ -133,8 +133,8 @@ class IncrementalEvaluator:
         eval_contexts: Tensor,       # [M, context_bits] - binary eval contexts
         eval_targets: Tensor,        # [M] - eval target cluster IDs
         context_bits: int,           # Total input bits
-        cluster_to_neurons: Dict[int, Tuple[int, int]],  # cluster_id -> (start_neuron, end_neuron)
-        cluster_to_bits: Dict[int, int],  # cluster_id -> bits_per_neuron
+        cluster_to_neurons: dict[int, tuple[int, int]],  # cluster_id -> (start_neuron, end_neuron)
+        cluster_to_bits: dict[int, int],  # cluster_id -> bits_per_neuron
         num_clusters: int,           # Total number of clusters
         logger: Optional[Callable[[str], None]] = None,
     ):
@@ -149,13 +149,13 @@ class IncrementalEvaluator:
         self._log = logger or (lambda x: None)
 
         # Precompute indices per cluster for O(1) lookup
-        self._train_indices: Dict[int, Tensor] = {}
-        self._eval_indices: Dict[int, Tensor] = {}
+        self._train_indices: dict[int, Tensor] = {}
+        self._eval_indices: dict[int, Tensor] = {}
         self._precompute_indices()
 
         # Baseline state (populated by precompute_baseline)
         self._baseline_votes: Optional[Tensor] = None  # [M, num_clusters]
-        self._baseline_rams: Dict[int, List[Dict[int, int]]] = {}  # cluster -> [neuron_rams]
+        self._baseline_rams: dict[int, list[dict[int, int]]] = {}  # cluster -> [neuron_rams]
 
         # Acceleration
         self._rust_available = self._check_rust()
@@ -238,13 +238,13 @@ class IncrementalEvaluator:
         cluster_id: int,
         connectivity: Tensor,  # [num_neurons, bits_per_neuron]
         bits_per_neuron: int,
-    ) -> Tuple[List[Dict[int, int]], Tensor]:
+    ) -> tuple[list[dict[int, int]], Tensor]:
         """Train one cluster's RAMs and compute votes on eval set."""
         num_neurons = connectivity.shape[0]
         train_idx = self._train_indices.get(cluster_id, torch.tensor([]))
 
         # Initialize RAMs (one dict per neuron: address -> count)
-        rams: List[Dict[int, int]] = [{} for _ in range(num_neurons)]
+        rams: list[dict[int, int]] = [{} for _ in range(num_neurons)]
 
         # Train on positive examples
         if len(train_idx) > 0:
@@ -270,7 +270,7 @@ class IncrementalEvaluator:
     def _compute_votes(
         self,
         connectivity: Tensor,
-        rams: List[Dict[int, int]],
+        rams: list[dict[int, int]],
         contexts: Tensor,
     ) -> Tensor:
         """Compute vote strengths for all contexts."""
@@ -314,9 +314,9 @@ class IncrementalEvaluator:
     def evaluate_cluster_variants_batch(
         self,
         cluster_id: int,
-        connectivity_variants: List[Tensor],
+        connectivity_variants: list[Tensor],
         fitness_mode: FitnessMode = FitnessMode.PENALIZE_HIGH_VOTES,
-    ) -> List[float]:
+    ) -> list[float]:
         """
         Evaluate MULTIPLE connectivity variants in batch.
 
@@ -355,7 +355,7 @@ class IncrementalEvaluator:
     def _train_and_vote_batch(
         self,
         cluster_id: int,
-        variants: List[Tensor],
+        variants: list[Tensor],
         bits_per_neuron: int,
         train_contexts: Optional[Tensor],
     ) -> Tensor:
@@ -372,7 +372,7 @@ class IncrementalEvaluator:
         # Process each variant (can be parallelized with joblib/multiprocessing)
         for v_idx, conn in enumerate(variants):
             num_neurons = conn.shape[0]
-            rams: List[Dict[int, int]] = [{} for _ in range(num_neurons)]
+            rams: list[dict[int, int]] = [{} for _ in range(num_neurons)]
 
             # Train
             if train_contexts is not None:
@@ -392,7 +392,7 @@ class IncrementalEvaluator:
         cluster_id: int,
         all_votes: Tensor,  # [num_variants, num_eval]
         fitness_mode: FitnessMode,
-    ) -> List[float]:
+    ) -> list[float]:
         """
         Compute fitness for multiple variants in batch.
 
@@ -482,7 +482,7 @@ class IncrementalEvaluator:
         self,
         cluster_id: int,
         split: str = "train",
-    ) -> Tuple[Tensor, Tensor]:
+    ) -> tuple[Tensor, Tensor]:
         """Get examples where target = cluster_id."""
         if split == "train":
             idx = self._train_indices.get(cluster_id, torch.tensor([]))
@@ -730,8 +730,8 @@ class ClusterOptimizer:
 
     def _tournament_select(
         self,
-        population: List[Tensor],
-        fitness: List[float],
+        population: list[Tensor],
+        fitness: list[float],
         tournament_size: int = 3,
     ) -> Tensor:
         """Tournament selection: pick best from random subset."""
@@ -772,7 +772,7 @@ class ClusterOptimizer:
         connectivity: Tensor,
         mutation_rate: float,
         total_bits: int,
-    ) -> Tuple[Tensor, Tuple[int, int, int]]:
+    ) -> tuple[Tensor, tuple[int, int, int]]:
         """Generate a neighbor by mutation. Returns (neighbor, move)."""
         neighbor = connectivity.clone()
         num_neurons, bits_per_neuron = neighbor.shape
@@ -794,7 +794,7 @@ class ClusterOptimizer:
 
     def _is_tabu(
         self,
-        move: Tuple[int, int, int],
+        move: tuple[int, int, int],
         tabu_list: deque,
     ) -> bool:
         """Check if move reverses a recent tabu move."""
@@ -844,7 +844,7 @@ class PerClusterOptimizer:
 
     def __init__(
         self,
-        tier_configs: List[TierOptConfig],
+        tier_configs: list[TierOptConfig],
         evaluator: IncrementalEvaluator,
         fitness_mode: FitnessMode = FitnessMode.PENALIZE_HIGH_VOTES,
         cluster_order: str = "random",  # "random", "frequency", "sequential"
@@ -901,11 +901,11 @@ class PerClusterOptimizer:
     def optimize_tier(
         self,
         tier: int,
-        cluster_ids: List[int],
+        cluster_ids: list[int],
         current_connectivity: Tensor,
         parallel: bool = True,
         max_workers: Optional[int] = None,
-    ) -> Tuple[Tensor, List[ClusterOptResult]]:
+    ) -> tuple[Tensor, list[ClusterOptResult]]:
         """
         Optimize all clusters in a tier.
 
@@ -1001,7 +1001,7 @@ class PerClusterOptimizer:
     def optimize_all_tiers(
         self,
         initial_connectivity: Tensor,
-        tier_to_clusters: Dict[int, List[int]],
+        tier_to_clusters: dict[int, list[int]],
     ) -> PerClusterResult:
         """
         Optimize all tiers in order (tier0 first, then tier1, etc.).
@@ -1060,7 +1060,7 @@ class PerClusterOptimizer:
             tier_summaries=tier_summaries,
         )
 
-    def _order_clusters(self, cluster_ids: List[int]) -> List[int]:
+    def _order_clusters(self, cluster_ids: list[int]) -> list[int]:
         """Order clusters based on configured strategy."""
         if self.cluster_order == "sequential":
             return sorted(cluster_ids)
@@ -1152,8 +1152,8 @@ class RustPerClusterOptimizer:
         eval_contexts: Tensor,       # [M, context_bits] bool
         eval_targets: Tensor,        # [M] int
         context_bits: int,
-        cluster_to_neurons: Dict[int, Tuple[int, int]],
-        cluster_to_bits: Dict[int, int],
+        cluster_to_neurons: dict[int, tuple[int, int]],
+        cluster_to_bits: dict[int, int],
         num_clusters: int,
         fitness_mode: FitnessMode = FitnessMode.SIMPLE,
         logger: Optional[Callable[[str], None]] = None,
@@ -1208,7 +1208,7 @@ class RustPerClusterOptimizer:
 
     def precompute_global_baseline(
         self,
-        all_connectivities: Dict[int, List[int]],
+        all_connectivities: dict[int, list[int]],
     ) -> None:
         """
         Precompute baseline votes for ALL clusters (enables true global CE).
@@ -1245,7 +1245,7 @@ class RustPerClusterOptimizer:
     def update_global_baseline(
         self,
         cluster_id: int,
-        new_connectivity: List[int],
+        new_connectivity: list[int],
     ) -> None:
         """
         Update global baseline for a specific cluster after optimization.
@@ -1268,11 +1268,11 @@ class RustPerClusterOptimizer:
     def optimize_tier(
         self,
         tier: int,
-        cluster_ids: List[int],
+        cluster_ids: list[int],
         current_connectivity: Tensor,
         config: TierOptConfig,
         seed: int = 42,
-    ) -> List[ClusterOptResult]:
+    ) -> list[ClusterOptResult]:
         """
         Optimize all clusters in a tier using Rust acceleration.
 
@@ -1300,7 +1300,7 @@ class RustPerClusterOptimizer:
 
         # Extract connectivity for each cluster
         t0 = time.time()
-        initial_connectivities: Dict[int, List[int]] = {}
+        initial_connectivities: dict[int, list[int]] = {}
         for cluster_id in cluster_ids:
             start, end = self.cluster_to_neurons[cluster_id]
             cluster_conn = current_connectivity[start:end]  # [num_neurons, bits]
@@ -1373,12 +1373,12 @@ class RustPerClusterOptimizer:
     def optimize_tier_grouped(
         self,
         tier: int,
-        cluster_ids: List[int],
+        cluster_ids: list[int],
         current_connectivity: Tensor,
         config: TierOptConfig,
         group_size: int = 10,
         seed: int = 42,
-    ) -> List[ClusterOptResult]:
+    ) -> list[ClusterOptResult]:
         """
         Optimize all clusters in a tier using joint group optimization.
 
@@ -1413,7 +1413,7 @@ class RustPerClusterOptimizer:
 
         # Extract connectivity for each cluster
         t0 = time.time()
-        initial_connectivities: Dict[int, List[int]] = {}
+        initial_connectivities: dict[int, list[int]] = {}
         for cluster_id in cluster_ids:
             start, end = self.cluster_to_neurons[cluster_id]
             cluster_conn = current_connectivity[start:end]  # [num_neurons, bits]
@@ -1486,7 +1486,7 @@ class RustPerClusterOptimizer:
     def update_connectivity(
         self,
         full_connectivity: Tensor,
-        results: List[ClusterOptResult],
+        results: list[ClusterOptResult],
     ) -> Tensor:
         """Update full connectivity tensor with optimized cluster connectivities."""
         updated = full_connectivity.clone()
@@ -1508,9 +1508,9 @@ class RustPerClusterOptimizer:
 
 def create_per_cluster_optimizer(
     model,  # TieredRAMLM or similar
-    train_tokens: List[str],
-    eval_tokens: List[str],
-    tier_budgets: Optional[Dict[int, Tuple[int, int]]] = None,  # tier -> (ga_gens, ts_iters)
+    train_tokens: list[str],
+    eval_tokens: list[str],
+    tier_budgets: Optional[dict[int, tuple[int, int]]] = None,  # tier -> (ga_gens, ts_iters)
     fitness_mode: FitnessMode = FitnessMode.PENALIZE_HIGH_VOTES,
     seed: int = 42,
     logger: Optional[Callable[[str], None]] = None,
@@ -1557,8 +1557,8 @@ def create_rust_optimizer(
     eval_contexts: Tensor,
     eval_targets: Tensor,
     context_bits: int,
-    cluster_to_neurons: Dict[int, Tuple[int, int]],
-    cluster_to_bits: Dict[int, int],
+    cluster_to_neurons: dict[int, tuple[int, int]],
+    cluster_to_bits: dict[int, int],
     num_clusters: int,
     fitness_mode: FitnessMode = FitnessMode.SIMPLE,
     logger: Optional[Callable[[str], None]] = None,

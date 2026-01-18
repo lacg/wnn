@@ -11,7 +11,7 @@ Each phase uses GA then TS refinement.
 
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Optional
 
 from wnn.ram.strategies.factory import OptimizerStrategyFactory, OptimizerStrategyType
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
@@ -59,7 +59,7 @@ class PhaseResult:
 	final_accuracy: Optional[float]
 	iterations_run: int
 	best_genome: ClusterGenome
-	final_population: Optional[List[ClusterGenome]]
+	final_population: Optional[list[ClusterGenome]]
 	final_threshold: Optional[float]
 	initial_fitness: Optional[float] = None
 	initial_accuracy: Optional[float] = None
@@ -90,13 +90,13 @@ class PhasedSearchRunner:
 		self.evaluator: Optional[CachedEvaluator] = None
 		self.vocab_size: int = 0
 		self.total_input_bits: int = 0
-		self.token_frequencies: List[int] = []
-		self.results: Dict[str, PhaseResult] = {}
+		self.token_frequencies: list[int] = []
+		self.results: dict[str, PhaseResult] = {}
 
 	def setup(
 		self,
-		train_tokens: List[int],
-		eval_tokens: List[int],
+		train_tokens: list[int],
+		eval_tokens: list[int],
 		vocab_size: int,
 	) -> None:
 		"""
@@ -157,7 +157,7 @@ class PhasedSearchRunner:
 		optimize_connections: bool,
 		initial_genome: Optional[ClusterGenome] = None,
 		initial_fitness: Optional[float] = None,
-		initial_population: Optional[List[ClusterGenome]] = None,
+		initial_population: Optional[list[ClusterGenome]] = None,
 		initial_threshold: Optional[float] = None,
 	) -> PhaseResult:
 		"""
@@ -259,7 +259,7 @@ class PhasedSearchRunner:
 			initial_accuracy=result.initial_accuracy,
 		)
 
-	def print_progress(self, title: str, phase_results: List[PhaseResult]) -> None:
+	def print_progress(self, title: str, phase_results: list[PhaseResult]) -> None:
 		"""Print a progress table with current results."""
 		table = OptimizationResultsTable(title)
 		for pr in phase_results:
@@ -270,7 +270,7 @@ class PhasedSearchRunner:
 	def run_all_phases(
 		self,
 		seed_genome: Optional[ClusterGenome] = None,
-	) -> Dict[str, Any]:
+	) -> dict[str, Any]:
 		"""
 		Run all phases: 1a -> 1b -> 2a -> 2b -> 3a -> 3b -> final evaluation.
 
@@ -280,8 +280,8 @@ class PhasedSearchRunner:
 		Returns:
 			Dictionary with all results
 		"""
-		results: Dict[str, Any] = {}
-		completed_phases: List[PhaseResult] = []
+		results: dict[str, Any] = {}
+		completed_phases: list[PhaseResult] = []
 
 		# =====================================================================
 		# Phase 1a: GA Neurons Only
@@ -427,7 +427,8 @@ class PhasedSearchRunner:
 		results["final"] = {
 			"fitness": final_ce,
 			"accuracy": final_acc,
-			"genome_stats": p3b.best_genome.stats(),
+			"genome": p3b.best_genome.serialize(),  # Full genome for loading
+			"genome_stats": p3b.best_genome.stats(),  # Stats for quick reference
 		}
 
 		# =====================================================================

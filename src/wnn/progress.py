@@ -5,7 +5,7 @@ Provides reusable classes to track, calculate, and log optimization
 progress metrics in a standardized way.
 """
 
-from typing import List, Optional, Callable, Protocol, TypeVar, Generic
+from typing import Optional, Callable, Protocol, TypeVar, Generic
 from dataclasses import dataclass, field
 
 
@@ -82,14 +82,14 @@ class ProgressTracker(Generic[T]):
 		self._best_global: Optional[float] = None
 		self._best_global_accuracy: Optional[float] = None
 		self._best_generation: int = 0
-		self._history: List[ProgressStats] = []
+		self._history: list[ProgressStats] = []
 
 	def tick(
 		self,
-		fitness_values: List[float],
+		fitness_values: list[float],
 		generation: Optional[int] = None,
 		log: bool = True,
-		accuracy_values: Optional[List[float]] = None,
+		accuracy_values: Optional[list[float]] = None,
 	) -> ProgressStats:
 		"""
 		Record a tick (generation) of fitness values.
@@ -211,7 +211,7 @@ class ProgressTracker(Generic[T]):
 		return self._best_generation
 
 	@property
-	def history(self) -> List[ProgressStats]:
+	def history(self) -> list[ProgressStats]:
 		"""Full history of progress stats."""
 		return self._history.copy()
 

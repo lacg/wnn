@@ -25,7 +25,7 @@ Usage:
 """
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple, Callable
+from typing import Optional, Callable
 
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 from wnn.ram.architecture.genome_log import (
@@ -58,11 +58,11 @@ class CachedEvaluator:
 
     def __init__(
         self,
-        train_tokens: List[int],
-        eval_tokens: List[int],
+        train_tokens: list[int],
+        eval_tokens: list[int],
         vocab_size: int,
         context_size: int,
-        cluster_order: List[int],
+        cluster_order: list[int],
         num_parts: int = 3,
         num_negatives: int = 5,
         empty_value: float = 0.0,
@@ -126,7 +126,7 @@ class CachedEvaluator:
 
     def evaluate_batch(
         self,
-        genomes: List[ClusterGenome],
+        genomes: list[ClusterGenome],
         train_subset_idx: Optional[int] = None,  # If None, auto-advances rotation
         eval_subset_idx: Optional[int] = None,   # If None, uses 0 (full eval)
         logger: Optional[Callable[[str], None]] = None,
@@ -135,7 +135,7 @@ class CachedEvaluator:
         min_accuracy: Optional[float] = None,
         streaming: bool = True,  # Log per-genome as they complete
         stream_batch_size: int = 1,  # How many genomes per Rust call in streaming mode
-    ) -> List[Tuple[float, float]]:
+    ) -> list[tuple[float, float]]:
         """
         Evaluate multiple genomes using specified train/eval subsets.
 
@@ -277,9 +277,9 @@ class CachedEvaluator:
 
     def evaluate_batch_full(
         self,
-        genomes: List[ClusterGenome],
+        genomes: list[ClusterGenome],
         logger: Optional[Callable[[str], None]] = None,
-    ) -> List[Tuple[float, float]]:
+    ) -> list[tuple[float, float]]:
         """
         Evaluate genomes using full train/eval data (for final evaluation).
 
@@ -332,11 +332,11 @@ class CachedEvaluator:
         genome: ClusterGenome,
         train_subset_idx: Optional[int] = None,
         eval_subset_idx: Optional[int] = None,
-    ) -> Tuple[float, float]:
+    ) -> tuple[float, float]:
         """Evaluate a single genome, returning (CE, accuracy). Auto-advances rotation if indices not provided."""
         return self.evaluate_batch([genome], train_subset_idx, eval_subset_idx)[0]
 
-    def evaluate_single_full(self, genome: ClusterGenome) -> Tuple[float, float]:
+    def evaluate_single_full(self, genome: ClusterGenome) -> tuple[float, float]:
         """Evaluate a single genome with full data, returning (CE, accuracy)."""
         return self.evaluate_batch_full([genome])[0]
 
@@ -385,7 +385,7 @@ class CachedEvaluator:
         generation: Optional[int] = None,
         total_generations: Optional[int] = None,
         return_best_n: bool = True,
-    ) -> List[ClusterGenome]:
+    ) -> list[ClusterGenome]:
         """
         Search for neighbor genomes above accuracy threshold, entirely in Rust.
 
@@ -466,7 +466,7 @@ class CachedEvaluator:
 
     def search_offspring(
         self,
-        population: List[Tuple[ClusterGenome, float]],  # (genome, fitness) tuples
+        population: list[tuple[ClusterGenome, float]],  # (genome, fitness) tuples
         target_count: int,
         max_attempts: int,
         accuracy_threshold: float,
@@ -483,7 +483,7 @@ class CachedEvaluator:
         log_path: Optional[str] = None,
         generation: Optional[int] = None,
         total_generations: Optional[int] = None,
-    ) -> List[ClusterGenome]:
+    ) -> list[ClusterGenome]:
         """
         Search for GA offspring above accuracy threshold, entirely in Rust.
 

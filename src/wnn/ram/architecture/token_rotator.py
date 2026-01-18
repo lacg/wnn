@@ -27,7 +27,7 @@ Usage:
 
 import random
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, TypeVar
+from typing import Optional, Sequence, TypeVar
 
 T = TypeVar('T')
 
@@ -86,14 +86,14 @@ class TokenRotator:
 		self._parts = self._divide_tokens()
 
 		# Current cycle state
-		self._current_cycle: List[int] = []  # Indices of parts in current cycle order
+		self._current_cycle: list[int] = []  # Indices of parts in current cycle order
 		self._cycle_position: int = 0  # Position within current cycle
 		self._total_calls: int = 0  # Total number of next() calls
 
 		# Start first cycle
 		self._start_new_cycle()
 
-	def _divide_tokens(self) -> List[List[int]]:
+	def _divide_tokens(self) -> list[list[int]]:
 		"""Divide tokens into num_parts equal(ish) parts."""
 		n = len(self._full_tokens)
 		part_size = n // self._num_parts
@@ -116,7 +116,7 @@ class TokenRotator:
 		self._rng.shuffle(self._current_cycle)
 		self._cycle_position = 0
 
-	def next(self) -> List[int]:
+	def next(self) -> list[int]:
 		"""
 		Get the next token subset in the rotation.
 
@@ -136,7 +136,7 @@ class TokenRotator:
 
 		return self._parts[part_idx]
 
-	def peek(self) -> List[int]:
+	def peek(self) -> list[int]:
 		"""
 		Peek at the next token subset without advancing the rotation.
 
@@ -146,7 +146,7 @@ class TokenRotator:
 		part_idx = self._current_cycle[self._cycle_position]
 		return self._parts[part_idx]
 
-	def full(self) -> List[int]:
+	def full(self) -> list[int]:
 		"""
 		Get the full token sequence (for final evaluation).
 
@@ -185,7 +185,7 @@ class TokenRotator:
 		return len(self._full_tokens)
 
 	@property
-	def current_cycle_order(self) -> List[int]:
+	def current_cycle_order(self) -> list[int]:
 		"""Current cycle's part order (for debugging)."""
 		return list(self._current_cycle)
 
@@ -249,23 +249,23 @@ class DatasetRotator:
 		self._test_rotator = TokenRotator(test_tokens, num_parts, seed) if test_tokens else None
 		self._num_parts = num_parts
 
-	def train_next(self) -> List[int]:
+	def train_next(self) -> list[int]:
 		"""Get next training token subset."""
 		return self._train_rotator.next()
 
-	def eval_next(self) -> List[int]:
+	def eval_next(self) -> list[int]:
 		"""Get next eval token subset (or full if no eval rotator)."""
 		if self._eval_rotator:
 			return self._eval_rotator.next()
 		return []
 
-	def test_next(self) -> List[int]:
+	def test_next(self) -> list[int]:
 		"""Get next test token subset (or full if no test rotator)."""
 		if self._test_rotator:
 			return self._test_rotator.next()
 		return []
 
-	def advance_all(self) -> tuple[List[int], List[int], List[int]]:
+	def advance_all(self) -> tuple[list[int], list[int], list[int]]:
 		"""
 		Advance all rotators and return subsets.
 
@@ -277,7 +277,7 @@ class DatasetRotator:
 		test = self._test_rotator.next() if self._test_rotator else []
 		return train, eval_, test
 
-	def full(self) -> tuple[List[int], List[int], List[int]]:
+	def full(self) -> tuple[list[int], list[int], list[int]]:
 		"""
 		Get full datasets (for final evaluation).
 

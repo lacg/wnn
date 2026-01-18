@@ -16,7 +16,7 @@ Example:
     layer = AdaptiveClusteredRAM.from_genome(genome, total_input_bits=64)
 """
 
-from typing import Optional, Dict, List, Tuple
+from typing import Optional
 from dataclasses import dataclass
 
 from torch import zeros, ones, arange, long, Tensor, bool as torch_bool, from_numpy
@@ -33,7 +33,7 @@ class ConfigGroup:
 
 	neurons: int
 	bits: int
-	cluster_ids: List[int]  # Physical cluster IDs in this group
+	cluster_ids: list[int]  # Physical cluster IDs in this group
 	memory: Optional[Memory] = None
 
 	@property
@@ -86,7 +86,7 @@ class AdaptiveClusteredRAM(RAMComponent):
 
 		# Group clusters by their (neurons, bits) configuration
 		# config_key -> list of cluster_ids
-		config_to_clusters: Dict[Tuple[int, int], List[int]] = {}
+		config_to_clusters: dict[tuple[int, int], list[int]] = {}
 
 		for cluster_id in range(self.num_clusters):
 			neurons = genome.neurons_per_cluster[cluster_id]
@@ -98,8 +98,8 @@ class AdaptiveClusteredRAM(RAMComponent):
 			config_to_clusters[key].append(cluster_id)
 
 		# Create ConfigGroups and Memory objects
-		self.config_groups: List[ConfigGroup] = []
-		self._cluster_to_group: List[Tuple[int, int]] = [None] * self.num_clusters
+		self.config_groups: list[ConfigGroup] = []
+		self._cluster_to_group: list[tuple[int, int]] = [None] * self.num_clusters
 
 		group_idx = 0
 		for (neurons, bits), cluster_ids in sorted(config_to_clusters.items()):
@@ -131,7 +131,7 @@ class AdaptiveClusteredRAM(RAMComponent):
 
 		# Check if any group needs sparse backend (>10 bits)
 		self._use_sparse = any(g.bits > 10 for g in self.config_groups)
-		self._sparse_memories: Dict[int, object] = {}  # group_idx -> TieredSparseMemory
+		self._sparse_memories: dict[int, object] = {}  # group_idx -> TieredSparseMemory
 
 		if self._use_sparse:
 			self._init_sparse_backends()
@@ -423,8 +423,8 @@ class AdaptiveClusteredRAM(RAMComponent):
 
 		# Group training data by config group
 		# true_by_group[group_idx] = [(batch_idx, local_cluster), ...]
-		true_by_group: List[List[Tuple[int, int]]] = [[] for _ in self.config_groups]
-		false_by_group: List[List[Tuple[int, int]]] = [[] for _ in self.config_groups]
+		true_by_group: list[list[tuple[int, int]]] = [[] for _ in self.config_groups]
+		false_by_group: list[list[tuple[int, int]]] = [[] for _ in self.config_groups]
 
 		# Route true clusters
 		for b in range(batch_size):
@@ -602,7 +602,7 @@ class AdaptiveClusteredRAM(RAMComponent):
 		for sparse_mem in self._sparse_memories.values():
 			sparse_mem.reset()
 
-	def get_cluster_config(self, cluster_id: int) -> Tuple[int, int]:
+	def get_cluster_config(self, cluster_id: int) -> tuple[int, int]:
 		"""
 		Get (neurons, bits) configuration for a specific cluster.
 

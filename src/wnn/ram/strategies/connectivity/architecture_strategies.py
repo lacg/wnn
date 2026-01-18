@@ -12,7 +12,7 @@ Features:
 
 import random
 from dataclasses import dataclass
-from typing import Any, Callable, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Callable, Optional, TYPE_CHECKING
 
 from wnn.progress import ProgressTracker
 from wnn.ram.strategies.connectivity.generic_strategies import (
@@ -82,7 +82,7 @@ class ArchitectureConfig:
 	default_bits: int = 8
 	default_neurons: int = 5
 	# Token frequencies for frequency-scaled initialization
-	token_frequencies: Optional[List[int]] = None
+	token_frequencies: Optional[list[int]] = None
 	# Total input bits for connection initialization/mutation
 	total_input_bits: Optional[int] = None
 
@@ -187,10 +187,10 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 
 	def _mutate_connections_only(
 		self,
-		connections: List[int],
+		connections: list[int],
 		total_input_bits: int,
 		mutation_rate: float,
-	) -> List[int]:
+	) -> list[int]:
 		"""
 		Mutate connections without changing architecture.
 
@@ -213,10 +213,10 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		self,
 		old_genome: 'ClusterGenome',
 		new_genome: 'ClusterGenome',
-		old_bits: List[int],
-		old_neurons: List[int],
+		old_bits: list[int],
+		old_neurons: list[int],
 		total_input_bits: int,
-	) -> List[int]:
+	) -> list[int]:
 		"""Adjust connections when architecture changes during mutation."""
 		result = []
 		old_idx = 0
@@ -402,8 +402,8 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		self,
 		evaluate_fn: Callable[['ClusterGenome'], float],
 		initial_genome: Optional['ClusterGenome'] = None,
-		initial_population: Optional[List['ClusterGenome']] = None,
-		batch_evaluate_fn: Optional[Callable[[List['ClusterGenome']], List[Tuple[float, float]]]] = None,
+		initial_population: Optional[list['ClusterGenome']] = None,
+		batch_evaluate_fn: Optional[Callable[[list['ClusterGenome']], list[tuple[float, float]]]] = None,
 	) -> OptimizerResult['ClusterGenome']:
 		"""
 		Run GA with Rust batch evaluation and ProgressTracker logging.
@@ -412,7 +412,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		offspring generation (eliminates Python↔Rust round trips).
 
 		If batch_evaluator was provided at init, uses it for parallel evaluation.
-		batch_evaluate_fn should return List[(CE, accuracy)] tuples.
+		batch_evaluate_fn should return list[(CE, accuracy)] tuples.
 		"""
 		# If we have a cached_evaluator, use Rust-based offspring search
 		if self._cached_evaluator is not None:
@@ -443,7 +443,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 
 	def _optimize_with_rust_search(
 		self,
-		initial_population: Optional[List['ClusterGenome']] = None,
+		initial_population: Optional[list['ClusterGenome']] = None,
 	) -> OptimizerResult['ClusterGenome']:
 		"""
 		Run GA using Rust search_offspring for offspring generation.
@@ -700,7 +700,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 	def clone_genome(self, genome: 'ClusterGenome') -> 'ClusterGenome':
 		return genome.clone()
 
-	def mutate_genome(self, genome: 'ClusterGenome', mutation_rate: float) -> Tuple['ClusterGenome', Any]:
+	def mutate_genome(self, genome: 'ClusterGenome', mutation_rate: float) -> tuple['ClusterGenome', Any]:
 		"""
 		Generate a neighbor by mutating multiple clusters based on mutation_rate.
 
@@ -776,10 +776,10 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		self,
 		old_genome: 'ClusterGenome',
 		new_genome: 'ClusterGenome',
-		old_bits: List[int],
-		old_neurons: List[int],
+		old_bits: list[int],
+		old_neurons: list[int],
 		total_input_bits: int,
-	) -> List[int]:
+	) -> list[int]:
 		"""Adjust connections when architecture changes during TS mutation."""
 		result = []
 		old_idx = 0
@@ -821,7 +821,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 
 		return result
 
-	def is_tabu_move(self, move: Any, tabu_list: List[Any]) -> bool:
+	def is_tabu_move(self, move: Any, tabu_list: list[Any]) -> bool:
 		"""
 		Check if move overlaps significantly with recent tabu moves.
 
@@ -848,8 +848,8 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		initial_genome: 'ClusterGenome',
 		initial_fitness: float,
 		evaluate_fn: Callable[['ClusterGenome'], float],
-		initial_neighbors: Optional[List['ClusterGenome']] = None,
-		batch_evaluate_fn: Optional[Callable[[List['ClusterGenome']], List[Tuple[float, float]]]] = None,
+		initial_neighbors: Optional[list['ClusterGenome']] = None,
+		batch_evaluate_fn: Optional[Callable[[list['ClusterGenome']], list[tuple[float, float]]]] = None,
 	) -> OptimizerResult['ClusterGenome']:
 		"""
 		Run TS with Rust batch evaluation and ProgressTracker logging.
@@ -858,7 +858,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		neighbor generation (eliminates Python↔Rust round trips).
 
 		If batch_evaluator was provided at init, uses it for parallel evaluation.
-		batch_evaluate_fn should return List[(CE, accuracy)] tuples.
+		batch_evaluate_fn should return list[(CE, accuracy)] tuples.
 		"""
 		# If we have a cached_evaluator, use Rust-based neighbor search
 		if self._cached_evaluator is not None:
@@ -894,7 +894,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		self,
 		initial_genome: 'ClusterGenome',
 		initial_fitness: float,
-		initial_neighbors: Optional[List['ClusterGenome']] = None,
+		initial_neighbors: Optional[list['ClusterGenome']] = None,
 	) -> OptimizerResult['ClusterGenome']:
 		"""
 		Run TS using Rust search_neighbors for neighbor generation.
@@ -941,7 +941,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		start_fitness = initial_fitness
 
 		# All neighbors cache
-		all_neighbors: List[Tuple['ClusterGenome', float, Optional[float]]] = [
+		all_neighbors: list[tuple['ClusterGenome', float, Optional[float]]] = [
 			(initial_genome.clone(), initial_fitness, None)
 		]
 

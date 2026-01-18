@@ -3,3 +3,4 @@
 # --------------------------------------------------------------------
 
 from .phased_search import PhasedSearchConfig, PhasedSearchRunner, PhaseResult
+from .serialization import Serializable, Population, Checkpoint

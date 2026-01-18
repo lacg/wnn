@@ -7,7 +7,7 @@ Provides reusable table formatting for:
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, Callable, List
+from typing import Optional, Callable
 import math
 
 
@@ -271,7 +271,7 @@ class OptimizationResultsTable:
 			title: Table title (e.g., "Validation", "Test", "Architecture Search")
 		"""
 		self.title = title
-		self.stages: List[OptimizationStage] = []
+		self.stages: list[OptimizationStage] = []
 
 	def add_stage(
 		self,
@@ -304,7 +304,7 @@ class OptimizationResultsTable:
 	def from_phases(
 		cls,
 		title: str,
-		phases: List[dict],
+		phases: list[dict],
 	) -> "OptimizationResultsTable":
 		"""
 		Create table from a list of phase dicts.
@@ -328,7 +328,7 @@ class OptimizationResultsTable:
 			)
 		return table
 
-	def format(self) -> List[str]:
+	def format(self) -> list[str]:
 		"""
 		Format the table as a list of strings.
 
@@ -502,7 +502,7 @@ class OptimizationAnalysisTable:
 	def __init__(self, analysis: OptimizationAnalysis):
 		self.analysis = analysis
 
-	def format(self) -> List[str]:
+	def format(self) -> list[str]:
 		"""Format the analysis as a list of strings."""
 		a = self.analysis
 		lines = []

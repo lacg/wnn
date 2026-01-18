@@ -50,11 +50,23 @@ def log(msg: str):
 
 def load_seed_genome(seed_file: str) -> Optional[ClusterGenome]:
 	"""Load a genome from a previous run's JSON output."""
+	# Try ClusterGenome.load() first (direct genome file)
+	try:
+		genome, _ = ClusterGenome.load(seed_file)
+		return genome
+	except (KeyError, TypeError):
+		pass
+
+	# Fall back to phased search results format
 	try:
 		with open(seed_file, 'r') as f:
 			data = json.load(f)
 
-		# Look for the final genome stats
+		# Try final.genome (phased search results)
+		if 'final' in data and 'genome' in data['final']:
+			return ClusterGenome.deserialize(data['final']['genome'])
+
+		# Fall back to genome_stats (old format - limited)
 		if 'final' in data and 'genome_stats' in data['final']:
 			stats = data['final']['genome_stats']
 			genome = ClusterGenome(
