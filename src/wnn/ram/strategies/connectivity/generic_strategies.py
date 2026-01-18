@@ -586,6 +586,7 @@ class GAConfig:
 	generations: int = 50
 	mutation_rate: float = 0.1
 	crossover_rate: float = 0.7
+	tournament_size: int = 3  # Tournament selection size
 	# Dual elitism: keep top N% by CE AND top N% by accuracy (unique)
 	# Total elites = 10-20% of population depending on overlap
 	elitism_pct: float = 0.1       # 10% by CE + 10% by accuracy
