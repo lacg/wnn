@@ -468,7 +468,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		self._log.info(f"[{self.name}] Progressive threshold: {start_threshold:.4%} → {end_threshold:.4%}")
 		self._log.info(f"[{self.name}] Using Rust search_offspring (single-call offspring search)")
 
-		# Initialize population
+		# Initialize population (show ALL genomes - no threshold filtering for init)
 		if initial_population and len(initial_population) > 0:
 			# Evaluate initial population
 			results = evaluator.evaluate_batch(
@@ -478,7 +478,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 				logger=self._log,
 				generation=0,
 				total_generations=cfg.generations,
-				min_accuracy=start_threshold,
+				min_accuracy=None,  # Show all for initial population
 			)
 			population = [(g, ce) for g, (ce, acc) in zip(initial_population, results)]
 		else:
@@ -491,7 +491,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 				logger=self._log,
 				generation=0,
 				total_generations=cfg.generations,
-				min_accuracy=start_threshold,
+				min_accuracy=None,  # Show all for initial population
 			)
 			population = [(g, ce) for g, (ce, acc) in zip(random_genomes, results)]
 
