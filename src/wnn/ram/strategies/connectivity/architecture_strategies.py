@@ -503,7 +503,14 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		initial_fitness = best_fitness
 
 		# Early stopping
-		early_stop = EarlyStoppingTracker(cfg.patience, cfg.min_improvement_pct)
+		from wnn.ram.strategies.connectivity.generic_strategies import EarlyStoppingConfig
+		early_stop_config = EarlyStoppingConfig(
+			patience=cfg.patience,
+			check_interval=cfg.check_interval,
+			min_improvement_pct=cfg.min_improvement_pct,
+		)
+		early_stop = EarlyStoppingTracker(early_stop_config, self._log.debug, self.name)
+		early_stop.reset(best_fitness)
 
 		# Track threshold for logging
 		prev_threshold: Optional[float] = None
@@ -565,7 +572,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 						   f"best={best_fitness:.4f}, avg={avg_fitness:.4f}")
 
 			# Early stopping check
-			if early_stop.should_stop(best_fitness):
+			if early_stop.check(generation, best_fitness):
 				self._log.info(f"[{self.name}] Early stopping at generation {generation + 1}")
 				break
 
