@@ -596,6 +596,9 @@ class GAConfig:
 	min_accuracy: float = 0.0001   # 0.01% base threshold (used if initial_threshold is None)
 	threshold_delta: float = 0.0002  # 0.02% increase over full phase
 	progressive_threshold: bool = True  # Enable progressive threshold within phase
+	# CE percentile filter: keep only offspring in top X% by CE (None = disabled)
+	# Example: 0.75 keeps top 75% by CE. Applied after accuracy threshold.
+	ce_percentile: Optional[float] = None
 	# Early stopping (all configurable via parameters)
 	patience: int = 5              # Checks without improvement before stopping
 	check_interval: int = 5        # Check every N generations
@@ -618,6 +621,9 @@ class TSConfig:
 	min_accuracy: float = 0.0001   # 0.01% base threshold (used if initial_threshold is None)
 	threshold_delta: float = 0.0002  # 0.02% increase over full phase
 	progressive_threshold: bool = True  # Enable progressive threshold within phase
+	# CE percentile filter: keep only neighbors in top X% by CE (None = disabled)
+	# Example: 0.75 keeps top 75% by CE. Applied after accuracy threshold.
+	ce_percentile: Optional[float] = None
 	# Early stopping (all configurable via parameters)
 	patience: int = 5              # Checks without improvement before stopping
 	check_interval: int = 5        # Check every N iterations

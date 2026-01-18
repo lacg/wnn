@@ -483,6 +483,7 @@ class CachedEvaluator:
         log_path: Optional[str] = None,
         generation: Optional[int] = None,
         total_generations: Optional[int] = None,
+        return_best_n: bool = True,
     ) -> list[ClusterGenome]:
         """
         Search for GA offspring above accuracy threshold, entirely in Rust.
@@ -506,9 +507,10 @@ class CachedEvaluator:
             log_path: Optional log file path
             generation: Current generation for log prefix
             total_generations: Total generations for log prefix
+            return_best_n: If True, return best N by CE even if threshold not met
 
         Returns:
-            List of ClusterGenome objects (viable offspring)
+            List of ClusterGenome objects (viable offspring, or best N if return_best_n=True)
         """
         import time
 
@@ -558,6 +560,7 @@ class CachedEvaluator:
             log_path=effective_log_path,
             generation=generation,
             total_generations=total_generations,
+            return_best_n=return_best_n,
         )
 
         # Convert results to ClusterGenome objects

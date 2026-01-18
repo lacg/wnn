@@ -43,6 +43,9 @@ class PhasedSearchConfig:
 	default_bits: int = 8
 	default_neurons: int = 5
 
+	# CE percentile filter (None = disabled, 0.75 = keep top 75% by CE)
+	ce_percentile: Optional[float] = None
+
 	# Random seed (None = time-based)
 	rotation_seed: Optional[int] = None
 
@@ -210,6 +213,7 @@ class PhasedSearchRunner:
 			"logger": self.log,
 			"patience": cfg.patience,
 			"initial_threshold": initial_threshold,
+			"ce_percentile": cfg.ce_percentile,  # CE percentile filter (None = disabled)
 		}
 
 		if is_ga:

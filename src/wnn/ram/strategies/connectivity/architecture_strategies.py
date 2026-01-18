@@ -27,6 +27,7 @@ from wnn.ram.architecture.genome_log import (
 	format_genome_log,
 	format_gen_prefix,
 )
+from wnn.ram.strategies.filters import PercentileFilter, FilterMode
 
 if TYPE_CHECKING:
 	from wnn.ram.strategies.connectivity.adaptive_cluster import (
@@ -592,7 +593,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 					elite_per_metric + i + 1, elite_count, ce, acc
 				))
 
-			# Generate offspring using Rust
+			# Generate offspring using Rust (return_best_n=True for soft threshold)
 			needed_offspring = cfg.population_size - elite_count
 			offspring = evaluator.search_offspring(
 				population=population,
@@ -611,14 +612,34 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 				seed=seed_offset + generation,
 				generation=generation,
 				total_generations=cfg.generations,
+				return_best_n=True,  # Soft threshold: return top N by CE if not enough pass
 			)
 
-			# Build new population: elites + offspring
-			new_population = list(elites)
+			# Convert offspring to (genome, ce) tuples for filtering
+			offspring_with_ce = []
 			for g in offspring:
 				if hasattr(g, '_cached_fitness'):
 					ce, acc = g._cached_fitness
-					new_population.append((g, ce))
+					offspring_with_ce.append((g, ce))
+
+			# Apply CE percentile filter if configured
+			if cfg.ce_percentile is not None and offspring_with_ce:
+				ce_filter = PercentileFilter(
+					percentile=cfg.ce_percentile,
+					mode=FilterMode.LOWER_IS_BETTER,
+					metric_name="CE",
+				)
+				filter_result = ce_filter.apply(offspring_with_ce, key=lambda g, f: f)
+				offspring_with_ce = filter_result.kept
+				if filter_result.filtered:
+					self._log.debug(
+						f"[{self.name}] CE filter: kept {filter_result.kept_count}/{filter_result.total_count} "
+						f"(threshold={filter_result.threshold_value:.4f})"
+					)
+
+			# Build new population: elites + filtered offspring
+			new_population = list(elites)
+			new_population.extend(offspring_with_ce)
 
 			# Sort and truncate
 			new_population.sort(key=lambda x: x[1])
@@ -1034,6 +1055,24 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 				generation=iteration,
 				total_generations=cfg.iterations,
 			)
+
+			# Apply CE percentile filter if configured
+			if cfg.ce_percentile is not None:
+				ce_filter = PercentileFilter(
+					percentile=cfg.ce_percentile,
+					mode=FilterMode.LOWER_IS_BETTER,
+					metric_name="CE",
+				)
+				# Filter CE path neighbors
+				if ce_neighbors:
+					ce_population = [(g, g._cached_fitness[0]) for g in ce_neighbors]
+					filter_result = ce_filter.apply(ce_population, key=lambda g, f: f)
+					ce_neighbors = [g for g, _ in filter_result.kept]
+				# Filter Acc path neighbors
+				if acc_neighbors:
+					acc_population = [(g, g._cached_fitness[0]) for g in acc_neighbors]
+					filter_result = ce_filter.apply(acc_population, key=lambda g, f: f)
+					acc_neighbors = [g for g, _ in filter_result.kept]
 
 			# Process CE path neighbors
 			for g in ce_neighbors:
