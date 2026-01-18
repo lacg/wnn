@@ -205,6 +205,7 @@ def main():
 		num_negatives=5,
 		empty_value=0.0,
 		seed=rotation_seed,
+		log_path=logger.log_file,  # Pass to Rust for offspring logging
 	)
 	log(f"  {evaluator}")
 

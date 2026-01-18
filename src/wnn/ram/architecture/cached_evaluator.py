@@ -61,6 +61,7 @@ class CachedEvaluator:
         num_negatives: int = 5,
         empty_value: float = 0.0,
         seed: int = 42,
+        log_path: Optional[str] = None,
     ):
         """
         Create a cached evaluator with all tokens pre-encoded in Rust.
@@ -88,6 +89,7 @@ class CachedEvaluator:
         self._context_size = context_size
         self._num_parts = num_parts
         self._empty_value = empty_value
+        self._log_path = log_path
 
         # Create the Rust TokenCache
         self._cache = ram_accelerator.TokenCacheWrapper(
@@ -524,6 +526,9 @@ class CachedEvaluator:
                 fitness,
             ))
 
+        # Use instance log_path if not explicitly provided
+        effective_log_path = log_path if log_path is not None else self._log_path
+
         # Call Rust search_offspring
         results = self._cache.search_offspring(
             population=rust_population,
@@ -541,7 +546,7 @@ class CachedEvaluator:
             eval_subset_idx=eval_subset_idx,
             empty_value=self._empty_value,
             seed=seed,
-            log_path=log_path,
+            log_path=effective_log_path,
             generation=generation,
             total_generations=total_generations,
         )

@@ -68,10 +68,12 @@ impl FileLogger {
     }
 
     pub fn log(&mut self, msg: &str) {
+        use std::io::Write;
         let timestamp = Local::now().format("%H:%M:%S");
 
         // Always print to stderr with timestamp for immediate visibility
         eprintln!("{} | {}", timestamp, msg);
+        let _ = std::io::stderr().flush();  // Force flush for nohup capture
 
         // Also write to file if configured
         if let Some(ref mut writer) = self.writer {
