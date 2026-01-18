@@ -23,7 +23,7 @@ class GenomeLogType(IntEnum):
 # Format: (label, type_indicator) where label is padded to 6 chars (longest is "Genome")
 _TYPE_FORMATS = {
     GenomeLogType.INITIAL:   ("Genome", "Init"),
-    GenomeLogType.ELITE_CE:  ("Elite ", "CE  "),  # Left aligned like others
+    GenomeLogType.ELITE_CE:  ("Elite ", "CE "),   # Left aligned like others
     GenomeLogType.ELITE_ACC: ("Elite ", "Acc "),
     GenomeLogType.OFFSPRING: ("Genome", "New "),
     GenomeLogType.NEIGHBOR:  ("Genome", "Nbr "),
@@ -59,7 +59,7 @@ def format_genome_log(
 
     Returns:
         Formatted log string like:
-        "[Gen 001/100] Elite  01/10 (CE  ): CE=10.3417, Acc=0.0180%"
+        "[Gen 001/100] Elite  01/10 (CE ): CE=10.3417, Acc=0.0180%"
         "[Gen 001/100] Genome 01/40 (New): CE=10.3559, Acc=0.0300%"
     """
     # Calculate padding widths based on totals
