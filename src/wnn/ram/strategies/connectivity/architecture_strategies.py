@@ -22,6 +22,11 @@ from wnn.ram.strategies.connectivity.generic_strategies import (
 	TSConfig,
 	OptimizerResult,
 )
+from wnn.ram.architecture.genome_log import (
+	GenomeLogType,
+	format_genome_log,
+	format_gen_prefix,
+)
 
 if TYPE_CHECKING:
 	from wnn.ram.strategies.connectivity.adaptive_cluster import (
@@ -570,15 +575,21 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			elites = elites_by_ce + elites_by_acc
 			elite_count = len(elites)
 
-			# Log elites with generation prefix
-			gen_prefix = f"[Gen {generation+1:02d}/{cfg.generations:02d}]"
+			# Log elites using shared formatter
+			gen_prefix = format_gen_prefix(generation + 1, cfg.generations)
 			self._log.info(f"{gen_prefix} Elites: {elite_per_metric} CE + {elite_per_metric} Acc = {elite_count} total")
 			for i, (g, ce) in enumerate(elites_by_ce):
 				acc = g._cached_fitness[1] if hasattr(g, '_cached_fitness') and g._cached_fitness else 0.0
-				self._log.info(f"{gen_prefix} Elite {i+1:02d}/{elite_count}  (CE): CE={ce:.4f}, Acc={acc:.4%}")
+				self._log.info(format_genome_log(
+					generation + 1, cfg.generations, GenomeLogType.ELITE_CE,
+					i + 1, elite_count, ce, acc
+				))
 			for i, (g, ce) in enumerate(elites_by_acc):
 				acc = g._cached_fitness[1] if hasattr(g, '_cached_fitness') and g._cached_fitness else 0.0
-				self._log.info(f"{gen_prefix} Elite {elite_per_metric + i+1:02d}/{elite_count} (Acc): CE={ce:.4f}, Acc={acc:.4%}")
+				self._log.info(format_genome_log(
+					generation + 1, cfg.generations, GenomeLogType.ELITE_ACC,
+					elite_per_metric + i + 1, elite_count, ce, acc
+				))
 
 			# Generate offspring using Rust
 			needed_offspring = cfg.population_size - elite_count

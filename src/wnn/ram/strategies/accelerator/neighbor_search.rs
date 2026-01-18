@@ -83,6 +83,83 @@ impl FileLogger {
     }
 }
 
+/// Type of genome being logged.
+#[derive(Clone, Copy)]
+pub enum GenomeLogType {
+    Initial,    // Initial random population
+    EliteCE,    // Elite selected by cross-entropy
+    EliteAcc,   // Elite selected by accuracy
+    Offspring,  // GA offspring
+    Neighbor,   // TS neighbor
+}
+
+/// Format a genome log line with consistent padding.
+///
+/// Args:
+///   generation: Current generation (1-indexed)
+///   total_generations: Total number of generations
+///   log_type: Type of genome (Elite, Offspring, etc.)
+///   position: Position in the batch (1-indexed)
+///   total: Total items in this batch
+///   ce: Cross-entropy value
+///   acc: Accuracy value (0.0 to 1.0)
+///
+/// Returns formatted log string like:
+///   "[Gen 001/100] Elite 01/10  (CE): CE=10.3417, Acc=0.0180%"
+///   "[Gen 001/100] Genome 01/40: CE=10.3559, Acc=0.0300%"
+pub fn format_genome_log(
+    generation: usize,
+    total_generations: usize,
+    log_type: GenomeLogType,
+    position: usize,
+    total: usize,
+    ce: f64,
+    acc: f64,
+) -> String {
+    // Calculate padding widths based on totals
+    let gen_width = total_generations.to_string().len();
+    let pos_width = total.to_string().len();
+
+    // Generation prefix
+    let gen_prefix = format!(
+        "[Gen {:0width$}/{:0width$}]",
+        generation, total_generations, width = gen_width
+    );
+
+    // Format based on type
+    match log_type {
+        GenomeLogType::EliteCE => {
+            // Extra space before (CE) to align with (Acc)
+            format!(
+                "{} Elite {:0pos_width$}/{}  (CE): CE={:.4}, Acc={:.4}%",
+                gen_prefix, position, total, ce, acc * 100.0, pos_width = pos_width
+            )
+        }
+        GenomeLogType::EliteAcc => {
+            format!(
+                "{} Elite {:0pos_width$}/{} (Acc): CE={:.4}, Acc={:.4}%",
+                gen_prefix, position, total, ce, acc * 100.0, pos_width = pos_width
+            )
+        }
+        _ => {
+            // Initial, Offspring, Neighbor all use "Genome"
+            format!(
+                "{} Genome {:0pos_width$}/{:0pos_width$}: CE={:.4}, Acc={:.4}%",
+                gen_prefix, position, total, ce, acc * 100.0, pos_width = pos_width
+            )
+        }
+    }
+}
+
+/// Format just the generation prefix with dynamic padding.
+pub fn format_gen_prefix(generation: usize, total_generations: usize) -> String {
+    let gen_width = total_generations.to_string().len();
+    format!(
+        "[Gen {:0width$}/{:0width$}]",
+        generation, total_generations, width = gen_width
+    )
+}
+
 /// Mutate a genome to create a neighbor.
 ///
 /// Mutations include:
@@ -243,10 +320,8 @@ pub fn search_neighbors_with_threshold(
 
     // Generation prefix for logs - shows current generation / total generations
     let total_gens = total_generations.unwrap_or(100);
-    let gen_prefix = match generation {
-        Some(g) => format!("[Gen {:02}/{:02}]", g + 1, total_gens),
-        None => format!("[Gen ??/{:02}]", total_gens),
-    };
+    let current_gen = generation.map(|g| g + 1).unwrap_or(1);
+    let gen_prefix = format_gen_prefix(current_gen, total_gens);
 
     let mut shown_count = 0;  // Sequential count of shown/passed candidates
 
@@ -293,13 +368,9 @@ pub fn search_neighbors_with_threshold(
             // Only log and add candidates that pass threshold
             if *acc >= accuracy_threshold {
                 shown_count += 1;
-                logger.log(&format!(
-                    "{} Genome {:02}/{:02}: CE={:.4}, Acc={:.4}%",
-                    gen_prefix,
-                    shown_count,
-                    target_count,
-                    ce,
-                    acc * 100.0
+                logger.log(&format_genome_log(
+                    current_gen, total_gens, GenomeLogType::Neighbor,
+                    shown_count, target_count, *ce, *acc
                 ));
 
                 passed.push(CandidateResult {
@@ -356,10 +427,8 @@ pub fn search_neighbors_best_n(
 
     // Generation prefix for logs - shows current generation / total generations
     let total_gens = total_generations.unwrap_or(100);
-    let gen_prefix = match generation {
-        Some(g) => format!("[Gen {:02}/{:02}]", g + 1, total_gens),
-        None => format!("[Gen ??/{:02}]", total_gens),
-    };
+    let current_gen = generation.map(|g| g + 1).unwrap_or(1);
+    let gen_prefix = format_gen_prefix(current_gen, total_gens);
 
     let mut shown_count = 0;  // Sequential count of shown/passed candidates
 
@@ -411,13 +480,9 @@ pub fn search_neighbors_best_n(
             // Only log candidates that pass threshold
             if *acc >= accuracy_threshold {
                 shown_count += 1;
-                logger.log(&format!(
-                    "{} Genome {:02}/{:02}: CE={:.4}, Acc={:.4}%",
-                    gen_prefix,
-                    shown_count,
-                    target_count,
-                    ce,
-                    acc * 100.0
+                logger.log(&format_genome_log(
+                    current_gen, total_gens, GenomeLogType::Neighbor,
+                    shown_count, target_count, *ce, *acc
                 ));
                 passed.push(candidate);
                 if passed.len() >= target_count {
@@ -591,10 +656,8 @@ pub fn search_offspring(
 
     // Generation prefix for logs - shows current generation / total generations
     let total_gens = total_generations.unwrap_or(100);
-    let gen_prefix = match generation {
-        Some(g) => format!("[Gen {:02}/{:02}]", g + 1, total_gens),
-        None => format!("[Gen ??/{:02}]", total_gens),
-    };
+    let current_gen = generation.map(|g| g + 1).unwrap_or(1);
+    let gen_prefix = format_gen_prefix(current_gen, total_gens);
 
     let mut shown_count = 0;  // Sequential count of shown/passed candidates
 
@@ -660,13 +723,9 @@ pub fn search_offspring(
             // Only log candidates that pass threshold
             if *acc >= accuracy_threshold {
                 shown_count += 1;
-                logger.log(&format!(
-                    "{} Genome {:02}/{:02}: CE={:.4}, Acc={:.4}%",
-                    gen_prefix,
-                    shown_count,
-                    target_count,
-                    ce,
-                    acc * 100.0
+                logger.log(&format_genome_log(
+                    current_gen, total_gens, GenomeLogType::Offspring,
+                    shown_count, target_count, *ce, *acc
                 ));
                 passed.push(candidate);
                 if passed.len() >= target_count {

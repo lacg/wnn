@@ -28,6 +28,12 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple, Callable
 
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
+from wnn.ram.architecture.genome_log import (
+    GenomeLogType,
+    format_genome_log,
+    format_gen_prefix,
+    format_completion_log,
+)
 from wnn.ram.strategies.connectivity.generic_strategies import OptimizationLogger
 
 
@@ -171,14 +177,13 @@ class CachedEvaluator:
             log_trace = lambda x: None
 
         num_genomes = len(genomes)
-        genome_width = len(str(num_genomes))
+        total_gens = total_generations if total_generations is not None else num_genomes
 
-        # Generation prefix for logs - use num_genomes as target (consistent with Rust)
+        # Generation prefix for logs using shared formatter
         if generation is not None:
-            gen_width = len(str(num_genomes))
-            gen_prefix = f"[Gen {generation + 1:0{gen_width}d}/{num_genomes}]"
+            gen_prefix = format_gen_prefix(generation + 1, total_gens)
         else:
-            gen_prefix = f"[Init/{num_genomes}]"
+            gen_prefix = f"[Gen 01/{total_gens:0{len(str(total_gens))}d}]"
 
         # Subset info for TRACE level logging
         subset_info = f" [train:{train_subset_idx+1}/{self._num_parts}, eval:{eval_subset_idx+1}/1]"
@@ -247,18 +252,22 @@ class CachedEvaluator:
         else:
             shown_count = num_genomes
 
-        # Log each result with consistent numbering (all genomes, 1/30, 2/30, etc.)
+        # Log each result with consistent numbering using shared formatter
+        current_gen = (generation + 1) if generation is not None else 1
         for i, (ce, acc) in enumerate(results):
             passes = min_accuracy is None or acc >= min_accuracy
-            base_msg = f"{gen_prefix} Genome {i+1:0{genome_width}d}/{num_genomes}: CE={ce:.4f}, Acc={acc:.4%}"
+            base_msg = format_genome_log(
+                current_gen, total_gens, GenomeLogType.INITIAL,
+                i + 1, num_genomes, ce, acc
+            )
             if passes:
                 log_debug(base_msg)
             else:
                 # Log at TRACE level with subset info for filtered genomes
                 log_trace(base_msg + subset_info)
 
-        # Log generation/iteration duration summary
-        log_debug(f"{gen_prefix} Completed in {elapsed:.1f}s ({num_genomes} evaluated, {shown_count} shown)")
+        # Log generation/iteration duration summary using shared formatter
+        log_debug(format_completion_log(current_gen, total_gens, elapsed, num_genomes, shown_count))
 
         # Force flush for real-time output
         sys.stdout.flush()
@@ -304,7 +313,7 @@ class CachedEvaluator:
         )
 
         for i, (ce, acc) in enumerate(results):
-            log(f"[Final] Genome {i+1}/{num_genomes}: CE={ce:.4f}, Acc={acc:.4%}")
+            log(format_genome_log(1, 1, GenomeLogType.FINAL, i + 1, num_genomes, ce, acc))
 
         return results
 
