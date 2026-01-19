@@ -464,21 +464,17 @@ class PhasedSearchRunner:
 		else:
 			result = strategy.optimize(evaluate_fn=None)
 
-		# Evaluate best genome on FULL validation data for apples-to-apples comparison
-		full_ce, full_acc = self.evaluator.evaluate_single_full(result.best_genome)
-
 		self.log("")
 		self.log(f"{phase_name} Result:")
-		self.log(f"  Best fitness (CE): {result.final_fitness:.4f} (subset), {full_ce:.4f} (full)")
-		self.log(f"  Best accuracy: {result.final_accuracy:.4%} (subset), {full_acc:.4%} (full)")
+		self.log(f"  Best fitness (CE): {result.final_fitness:.4f}")
 		self.log(f"  Best genome: {result.best_genome}")
 		self.log(f"  Generations/Iterations: {result.iterations_run}")
 
 		return PhaseResult(
 			phase_name=phase_name,
 			strategy_type="GA" if is_ga else "TS",
-			final_fitness=full_ce,  # Use full validation CE
-			final_accuracy=full_acc,  # Use full validation accuracy
+			final_fitness=result.final_fitness,
+			final_accuracy=result.final_accuracy,
 			iterations_run=result.iterations_run,
 			best_genome=result.best_genome,
 			final_population=result.final_population,
@@ -706,18 +702,36 @@ class PhasedSearchRunner:
 		}
 
 		# =====================================================================
-		# Final Summary
+		# Final Summary - Re-evaluate all phases on FULL validation data
 		# =====================================================================
 		self.log("")
 		self.log("=" * 78)
-		self.log("  FINAL RESULTS")
+		self.log("  FINAL RESULTS (Full Validation)")
 		self.log("=" * 78)
 
-		comparison = OptimizationResultsTable("Complete Phased Search")
-		comparison.add_stage("Initial", ce=p1a.initial_fitness, accuracy=p1a.initial_accuracy)
+		# Re-evaluate each phase's best genome on full validation for apples-to-apples comparison
+		self.log("")
+		self.log("Re-evaluating all phases on full validation data...")
+		full_eval_results: list[tuple[float, float]] = []
 		for pr in completed_phases:
-			comparison.add_stage(pr.phase_name, ce=pr.final_fitness, accuracy=pr.final_accuracy)
-		comparison.add_stage("Final (Full Data)", ce=final_ce, accuracy=final_acc)
+			ce, acc = self.evaluator.evaluate_single_full(pr.best_genome)
+			full_eval_results.append((ce, acc))
+			self.log(f"  {pr.phase_name}: CE={ce:.4f}, Acc={acc:.2%}")
+
+		# Also evaluate initial genome
+		initial_ce, initial_acc = self.evaluator.evaluate_single_full(p1a.best_genome)
+		# Use p1a's initial values if available, otherwise use the evaluated initial
+		if p1a.initial_fitness is not None:
+			initial_ce_display = p1a.initial_fitness
+			initial_acc_display = p1a.initial_accuracy
+		else:
+			initial_ce_display = initial_ce
+			initial_acc_display = initial_acc
+
+		comparison = OptimizationResultsTable("Complete Phased Search (Full Validation)")
+		comparison.add_stage("Initial", ce=initial_ce_display, accuracy=initial_acc_display)
+		for pr, (full_ce_val, full_acc_val) in zip(completed_phases, full_eval_results):
+			comparison.add_stage(pr.phase_name, ce=full_ce_val, accuracy=full_acc_val)
 		comparison.print(self.log)
 
 		self.log("")
