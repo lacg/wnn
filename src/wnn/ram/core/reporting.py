@@ -257,11 +257,14 @@ class OptimizationResultsTable:
 		table.add_stage("After TS", ce=10.48, accuracy=0.056)
 		table.print(logger)
 
+	Column widths: Stage(38) + CE(10) + PPL(12) + Accuracy(10) + Improvement(12) = 82
+
 		# With notes
 		table.add_stage("Phase 2 mean", ce=10.52, note="(variance)")
 	"""
 
-	WIDTH = 78
+	WIDTH = 82
+	STAGE_COL = 38  # Width for stage name column
 
 	def __init__(self, title: str = "Optimization Results"):
 		"""
@@ -346,11 +349,11 @@ class OptimizationResultsTable:
 
 		if has_accuracy:
 			lines.append(
-				f"{'Stage':<30} {'CE':>10} {'PPL':>12} {'Accuracy':>10} {'Improvement':>12}"
+				f"{'Stage':<{self.STAGE_COL}} {'CE':>10} {'PPL':>12} {'Accuracy':>10} {'Improvement':>12}"
 			)
 		else:
 			lines.append(
-				f"{'Stage':<30} {'CE':>10} {'PPL':>12} {'Improvement':>12}"
+				f"{'Stage':<{self.STAGE_COL}} {'CE':>10} {'PPL':>12} {'Improvement':>12}"
 			)
 		lines.append("-" * self.WIDTH)
 
@@ -374,11 +377,11 @@ class OptimizationResultsTable:
 			if has_accuracy:
 				acc_str = f"{stage.accuracy:>9.2%}" if stage.accuracy is not None else f"{'N/A':>10}"
 				lines.append(
-					f"{name:<30} {stage.ce:>10.4f} {stage.ppl:>12.1f} {acc_str} {improvement_str:>12}"
+					f"{name:<{self.STAGE_COL}} {stage.ce:>10.4f} {stage.ppl:>12.1f} {acc_str} {improvement_str:>12}"
 				)
 			else:
 				lines.append(
-					f"{name:<30} {stage.ce:>10.4f} {stage.ppl:>12.1f} {improvement_str:>12}"
+					f"{name:<{self.STAGE_COL}} {stage.ce:>10.4f} {stage.ppl:>12.1f} {improvement_str:>12}"
 				)
 
 		# Total row
@@ -388,11 +391,11 @@ class OptimizationResultsTable:
 			total_improvement = (1 - final.ce / initial_ce) * 100
 			if has_accuracy:
 				lines.append(
-					f"{'Total Improvement':<30} {'':>10} {'':>12} {'':>10} {total_improvement:>+11.2f}%"
+					f"{'Total Improvement':<{self.STAGE_COL}} {'':>10} {'':>12} {'':>10} {total_improvement:>+11.2f}%"
 				)
 			else:
 				lines.append(
-					f"{'Total Improvement':<30} {'':>10} {'':>12} {total_improvement:>+11.2f}%"
+					f"{'Total Improvement':<{self.STAGE_COL}} {'':>10} {'':>12} {total_improvement:>+11.2f}%"
 				)
 		lines.append("=" * self.WIDTH)
 
