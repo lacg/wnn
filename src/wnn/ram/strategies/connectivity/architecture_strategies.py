@@ -1137,8 +1137,8 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		cache_size = cfg.total_neighbors_size or cfg.neighbors_per_iter
 		cache_size_per_metric = cache_size // 2
 
-		by_ce = sorted([n for n in all_neighbors if n[2] is not None], key=lambda x: (x[1], -x[2]))[:cache_size_per_metric]  # CE asc, Acc desc as tie-breaker
-		by_acc = sorted([n for n in all_neighbors if n[2] is not None], key=lambda x: -x[2])[:cache_size_per_metric]
+		by_ce = sorted([n for n in all_neighbors if n[2] is not None], key=lambda x: (x[1], -x[2]))[:cache_size_per_metric]  # CE asc, Acc desc tie-breaker
+		by_acc = sorted([n for n in all_neighbors if n[2] is not None], key=lambda x: (-x[2], x[1]))[:cache_size_per_metric]  # Acc desc, CE asc tie-breaker
 
 		seen = set()
 		final_population = []
