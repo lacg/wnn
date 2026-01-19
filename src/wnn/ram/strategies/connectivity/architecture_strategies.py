@@ -1141,7 +1141,8 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		seen = set()
 		final_population = []
 		for g, _, _ in by_ce + by_acc:
-			key = (tuple(g.bits_per_cluster[:10]), tuple(g.neurons_per_cluster[:10]))
+			# Use hash of full genome for proper deduplication
+			key = hash((tuple(g.bits_per_cluster), tuple(g.neurons_per_cluster)))
 			if key not in seen:
 				seen.add(key)
 				final_population.append(g)
