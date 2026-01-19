@@ -464,17 +464,21 @@ class PhasedSearchRunner:
 		else:
 			result = strategy.optimize(evaluate_fn=None)
 
+		# Evaluate best genome on FULL validation data for apples-to-apples comparison
+		full_ce, full_acc = self.evaluator.evaluate_single_full(result.best_genome)
+
 		self.log("")
 		self.log(f"{phase_name} Result:")
-		self.log(f"  Best fitness (CE): {result.final_fitness:.4f}")
+		self.log(f"  Best fitness (CE): {result.final_fitness:.4f} (subset), {full_ce:.4f} (full)")
+		self.log(f"  Best accuracy: {result.final_accuracy:.4%} (subset), {full_acc:.4%} (full)")
 		self.log(f"  Best genome: {result.best_genome}")
 		self.log(f"  Generations/Iterations: {result.iterations_run}")
 
 		return PhaseResult(
 			phase_name=phase_name,
 			strategy_type="GA" if is_ga else "TS",
-			final_fitness=result.final_fitness,
-			final_accuracy=result.final_accuracy,
+			final_fitness=full_ce,  # Use full validation CE
+			final_accuracy=full_acc,  # Use full validation accuracy
 			iterations_run=result.iterations_run,
 			best_genome=result.best_genome,
 			final_population=result.final_population,

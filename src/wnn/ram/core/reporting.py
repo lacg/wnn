@@ -263,7 +263,7 @@ class OptimizationResultsTable:
 		table.add_stage("Phase 2 mean", ce=10.52, note="(variance)")
 	"""
 
-	WIDTH = 82
+	WIDTH = 86  # Stage(38) + 4 spaces + CE(10) + PPL(12) + Accuracy(10) + Improvement(12)
 	STAGE_COL = 38  # Width for stage name column
 
 	def __init__(self, title: str = "Optimization Results"):
