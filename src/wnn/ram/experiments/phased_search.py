@@ -12,9 +12,11 @@ Each phase uses GA then TS refinement.
 import gzip
 import json
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
+
+import yaml
 
 from wnn.ram.strategies.factory import OptimizerStrategyFactory, OptimizerStrategyType
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
@@ -54,6 +56,29 @@ class PhasedSearchConfig:
 
 	# Logging
 	log_path: Optional[str] = None
+
+	def to_yaml(self) -> str:
+		"""Convert config to YAML string."""
+		return yaml.dump(asdict(self), default_flow_style=False, sort_keys=False)
+
+	def save_yaml(self, filepath: str) -> None:
+		"""Save config to YAML file."""
+		path = Path(filepath)
+		path.parent.mkdir(parents=True, exist_ok=True)
+		with open(path, 'w') as f:
+			f.write(self.to_yaml())
+
+	@classmethod
+	def from_yaml(cls, yaml_str: str) -> 'PhasedSearchConfig':
+		"""Create config from YAML string."""
+		data = yaml.safe_load(yaml_str)
+		return cls(**data)
+
+	@classmethod
+	def load_yaml(cls, filepath: str) -> 'PhasedSearchConfig':
+		"""Load config from YAML file."""
+		with open(filepath, 'r') as f:
+			return cls.from_yaml(f.read())
 
 
 @dataclass

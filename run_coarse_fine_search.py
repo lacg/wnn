@@ -90,6 +90,10 @@ def main():
 
 	parser = argparse.ArgumentParser(description="Coarse-to-Fine Phased Architecture Search")
 
+	# Config file (YAML)
+	parser.add_argument("--config", type=str, default=None,
+						help="YAML config file (CLI args override config file values)")
+
 	# Pass configuration
 	parser.add_argument("--pass", dest="pass_num", type=int, default=1,
 						help="Pass number (1=coarse, 2+=fine). Patience doubles each pass by default.")
@@ -131,6 +135,29 @@ def main():
 	parser.add_argument("--output", type=str, default=None, help="Output JSON file (auto-generated if not specified)")
 
 	args = parser.parse_args()
+
+	# Load config from YAML if specified (CLI args override)
+	if args.config:
+		config_obj = PhasedSearchConfig.load_yaml(args.config)
+		# Map config fields to args (only if arg was not explicitly set)
+		config_to_arg = {
+			'context_size': 'context',
+			'token_parts': 'token_parts',
+			'ga_generations': 'ga_gens',
+			'ts_iterations': 'ts_iters',
+			'population_size': 'population',
+			'neighbors_per_iter': 'neighbors',
+			'patience': 'patience',
+			'default_bits': 'default_bits',
+			'default_neurons': 'default_neurons',
+			'ce_percentile': 'ce_percentile',
+			'rotation_seed': 'seed',
+		}
+		for cfg_field, arg_name in config_to_arg.items():
+			cfg_value = getattr(config_obj, cfg_field)
+			# Only apply if not None and arg wasn't explicitly provided
+			if cfg_value is not None and getattr(args, arg_name) is None:
+				setattr(args, arg_name, cfg_value)
 
 	# Validate checkpoint args
 	if args.resume_from and not args.checkpoint_dir:

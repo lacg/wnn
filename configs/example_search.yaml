@@ -1,0 +1,28 @@
+# Example YAML config for run_coarse_fine_search.py
+# Usage: python run_coarse_fine_search.py --config configs/example_search.yaml
+# CLI args override values from config file
+
+# Data configuration
+context_size: 4
+token_parts: 3  # Number of subsets for rotation (3 = thirds)
+
+# GA configuration
+ga_generations: 100
+population_size: 50
+
+# TS configuration
+ts_iterations: 200
+neighbors_per_iter: 50
+
+# Early stopping
+patience: 4
+
+# Architecture defaults
+default_bits: 8
+default_neurons: 5
+
+# CE percentile filter (null = disabled, 0.75 = keep top 75% by CE)
+ce_percentile: null
+
+# Random seed (null = time-based)
+rotation_seed: null
