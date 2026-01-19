@@ -1,8 +1,129 @@
-# Configuration and Serialization
+# Phased Architecture Search
 
-This document describes the serialization formats used for configuration files and model checkpoints.
+This document describes how to run phased architecture search experiments, including multi-pass optimization, checkpointing, and configuration.
 
-## Format Strategy
+## Running Experiments
+
+### Basic Usage
+
+```bash
+# Activate environment
+source wnn/bin/activate
+export PYTHONPATH="$(pwd)/src:$PYTHONPATH"
+
+# Run a single pass with default settings
+python run_coarse_fine_search.py --pass 1
+```
+
+### Phased Search Overview
+
+Each pass runs through three optimization phases:
+
+| Phase | Optimizes | Fixed | Description |
+|-------|-----------|-------|-------------|
+| **1a/1b** | Neurons per cluster | Bits | GA then TS to find optimal neuron counts |
+| **2a/2b** | Bits per cluster | Neurons | GA then TS to find optimal bit widths |
+| **3a/3b** | Connections | Architecture | GA then TS to optimize connectivity |
+
+Each phase has two stages:
+- **a** = Genetic Algorithm (exploration)
+- **b** = Tabu Search (refinement)
+
+### Multi-Pass Coarse-to-Fine Search
+
+The recommended workflow uses multiple passes with increasing patience:
+
+```bash
+# Pass 1: Coarse exploration (low patience for quick results)
+python run_coarse_fine_search.py --pass 1 --patience 2 \
+    --checkpoint-dir checkpoints/run1 \
+    --output results_pass1.json
+
+# Pass 2: Refinement (higher patience, seed from pass 1)
+python run_coarse_fine_search.py --pass 2 --patience 4 \
+    --seed-from results_pass1.json \
+    --checkpoint-dir checkpoints/run1 \
+    --output results_pass2.json
+
+# Pass 3: Final polish (lower patience to escape local minima)
+python run_coarse_fine_search.py --pass 3 --patience 2 \
+    --seed-from results_pass2.json \
+    --checkpoint-dir checkpoints/run1 \
+    --output results_pass3.json
+```
+
+### Seeding from Previous Results
+
+Use `--seed-from` to start from a previous run's best genome:
+
+```bash
+# Seed from a results JSON file
+python run_coarse_fine_search.py --seed-from results_pass1.json
+
+# Seed from a checkpoint file
+python run_coarse_fine_search.py --seed-from checkpoints/run1/phase_3b_ts_connections.json.gz
+```
+
+The loader automatically detects the file format and extracts the genome.
+
+### Resuming from Checkpoints
+
+If a run is interrupted, resume from any phase:
+
+```bash
+# Resume from phase 2a (bits GA)
+python run_coarse_fine_search.py \
+    --checkpoint-dir checkpoints/run1 \
+    --resume-from 2a
+
+# Valid resume points: 1a, 1b, 2a, 2b, 3a, 3b
+```
+
+Checkpoints are saved automatically after each phase completes.
+
+### Running in Background
+
+For long experiments, use nohup:
+
+```bash
+cd /path/to/wnn
+source wnn/bin/activate
+export PYTHONPATH="$(pwd)/src:$PYTHONPATH"
+
+PYTHONUNBUFFERED=1 nohup python -u run_coarse_fine_search.py \
+    --pass 1 --patience 4 \
+    --ga-gens 100 --ts-iters 200 \
+    --checkpoint-dir checkpoints/overnight \
+    --output results_overnight.json > nohup.out 2>&1 &
+
+# Monitor progress
+tail -f nohup.out
+```
+
+### Key CLI Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--pass N` | Pass number (affects patience calculation) | 1 |
+| `--patience N` | Early stopping patience | 2 × 2^(pass-1) |
+| `--ga-gens N` | GA generations per phase | 100 |
+| `--ts-iters N` | TS iterations per phase | 200 |
+| `--population N` | GA population size | 50 |
+| `--neighbors N` | TS neighbors per iteration | 50 |
+| `--train-tokens N` | Training tokens | 200,000 |
+| `--eval-tokens N` | Evaluation tokens | 50,000 |
+| `--context N` | Context window size | 4 |
+| `--ce-percentile F` | CE filter (0.75 = top 75%) | None |
+| `--checkpoint-dir DIR` | Enable checkpointing | None |
+| `--resume-from PHASE` | Resume from phase | None |
+| `--seed-from FILE` | Seed genome from file | None |
+| `--config FILE` | Load YAML config | None |
+
+---
+
+## Configuration and Serialization
+
+### Format Strategy
 
 We use a hybrid approach optimized for each use case:
 
