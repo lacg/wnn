@@ -119,12 +119,22 @@ def main():
 	parser.add_argument("--ce-percentile", type=float, default=None,
 						help="CE percentile filter (e.g., 0.75 = keep top 75%% by CE). None=disabled")
 
+	# Checkpointing
+	parser.add_argument("--checkpoint-dir", type=str, default=None,
+						help="Directory to save/load phase checkpoints (enables resume)")
+	parser.add_argument("--resume-from", type=str, default=None,
+						help="Resume from phase (1a, 1b, 2a, 2b, 3a, 3b). Requires --checkpoint-dir")
+
 	# Other settings
 	parser.add_argument("--token-parts", type=int, default=3, help="Number of token subsets (3=thirds)")
 	parser.add_argument("--seed", type=int, default=None, help="Random seed for rotation (None=time-based)")
 	parser.add_argument("--output", type=str, default=None, help="Output JSON file (auto-generated if not specified)")
 
 	args = parser.parse_args()
+
+	# Validate checkpoint args
+	if args.resume_from and not args.checkpoint_dir:
+		parser.error("--resume-from requires --checkpoint-dir")
 
 	# Calculate patience: use override if provided, otherwise base_patience * 2^(pass-1)
 	if args.patience is not None:
@@ -166,6 +176,10 @@ def main():
 	log(f"  Default bits (Phase 1): {args.default_bits}")
 	log(f"  Default neurons (Phase 2): {args.default_neurons}")
 	log(f"  Output: {args.output}")
+	if args.checkpoint_dir:
+		log(f"  Checkpoint dir: {args.checkpoint_dir}")
+		if args.resume_from:
+			log(f"  Resume from: phase {args.resume_from}")
 	log("")
 
 	# Load seed genome if specified
@@ -220,7 +234,7 @@ def main():
 	)
 
 	# Create runner and setup
-	runner = PhasedSearchRunner(config=config, logger=log)
+	runner = PhasedSearchRunner(config=config, logger=log, checkpoint_dir=args.checkpoint_dir)
 	log("")
 	runner.setup(
 		train_tokens=train_tokens,
@@ -228,8 +242,8 @@ def main():
 		vocab_size=vocab_size,
 	)
 
-	# Run all phases (optionally seeded from previous pass)
-	results = runner.run_all_phases(seed_genome=seed_genome)
+	# Run all phases (optionally seeded from previous pass, or resume from checkpoint)
+	results = runner.run_all_phases(seed_genome=seed_genome, resume_from=args.resume_from)
 
 	# Add metadata
 	results["pass"] = args.pass_num

@@ -9,8 +9,10 @@ Encapsulates the three-phase optimization approach:
 Each phase uses GA then TS refinement.
 """
 
+import json
 from collections import Counter
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 from wnn.ram.strategies.factory import OptimizerStrategyFactory, OptimizerStrategyType
@@ -67,6 +69,92 @@ class PhaseResult:
 	initial_fitness: Optional[float] = None
 	initial_accuracy: Optional[float] = None
 
+	def serialize(self) -> dict[str, Any]:
+		"""Serialize phase result to dictionary."""
+		data: dict[str, Any] = {
+			"phase_name": self.phase_name,
+			"strategy_type": self.strategy_type,
+			"final_fitness": self.final_fitness,
+			"final_accuracy": self.final_accuracy,
+			"iterations_run": self.iterations_run,
+			"best_genome": self.best_genome.serialize(),
+			"final_threshold": self.final_threshold,
+			"initial_fitness": self.initial_fitness,
+			"initial_accuracy": self.initial_accuracy,
+		}
+		if self.final_population is not None:
+			data["final_population"] = [g.serialize() for g in self.final_population]
+		return data
+
+	@classmethod
+	def deserialize(cls, data: dict[str, Any]) -> 'PhaseResult':
+		"""Deserialize phase result from dictionary."""
+		final_population = None
+		if "final_population" in data and data["final_population"] is not None:
+			final_population = [ClusterGenome.deserialize(g) for g in data["final_population"]]
+
+		return cls(
+			phase_name=data["phase_name"],
+			strategy_type=data["strategy_type"],
+			final_fitness=data["final_fitness"],
+			final_accuracy=data["final_accuracy"],
+			iterations_run=data["iterations_run"],
+			best_genome=ClusterGenome.deserialize(data["best_genome"]),
+			final_population=final_population,
+			final_threshold=data.get("final_threshold"),
+			initial_fitness=data.get("initial_fitness"),
+			initial_accuracy=data.get("initial_accuracy"),
+		)
+
+	def save(self, filepath: str, **metadata: Any) -> None:
+		"""
+		Save phase result to a JSON file.
+
+		Args:
+			filepath: Output file path
+			**metadata: Additional metadata to include
+		"""
+		data: dict[str, Any] = {
+			"phase_result": self.serialize(),
+		}
+		if metadata:
+			data["_metadata"] = metadata
+
+		path = Path(filepath)
+		path.parent.mkdir(parents=True, exist_ok=True)
+
+		with open(path, 'w') as f:
+			json.dump(data, f, indent=2)
+
+	@classmethod
+	def load(cls, filepath: str) -> tuple['PhaseResult', dict[str, Any]]:
+		"""
+		Load phase result from a JSON file.
+
+		Args:
+			filepath: Input file path
+
+		Returns:
+			Tuple of (PhaseResult, metadata dict)
+		"""
+		with open(filepath, 'r') as f:
+			data = json.load(f)
+
+		result = cls.deserialize(data["phase_result"])
+		metadata = data.get("_metadata", {})
+		return result, metadata
+
+
+# Phase name constants for checkpoint files
+PHASE_NAMES = {
+	"1a": "phase_1a_ga_neurons",
+	"1b": "phase_1b_ts_neurons",
+	"2a": "phase_2a_ga_bits",
+	"2b": "phase_2b_ts_bits",
+	"3a": "phase_3a_ga_connections",
+	"3b": "phase_3b_ts_connections",
+}
+
 
 class PhasedSearchRunner:
 	"""
@@ -80,6 +168,7 @@ class PhasedSearchRunner:
 		self,
 		config: PhasedSearchConfig,
 		logger: Callable[[str], None],
+		checkpoint_dir: Optional[str] = None,
 	):
 		"""
 		Initialize the runner.
@@ -87,14 +176,93 @@ class PhasedSearchRunner:
 		Args:
 			config: Search configuration
 			logger: Logging function
+			checkpoint_dir: Directory to save/load checkpoints (None = no checkpoints)
 		"""
 		self.config = config
 		self.log = logger
+		self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
 		self.evaluator: Optional[CachedEvaluator] = None
 		self.vocab_size: int = 0
 		self.total_input_bits: int = 0
 		self.token_frequencies: list[int] = []
 		self.results: dict[str, PhaseResult] = {}
+		self._rotation_seed: Optional[int] = None
+
+	def save_checkpoint(self, phase_key: str, result: PhaseResult) -> Optional[str]:
+		"""
+		Save checkpoint after a phase completes.
+
+		Args:
+			phase_key: Phase identifier (e.g., "1a", "1b", "2a")
+			result: The phase result to save
+
+		Returns:
+			Path to saved checkpoint file, or None if checkpointing disabled
+		"""
+		if self.checkpoint_dir is None:
+			return None
+
+		self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+		filename = f"{PHASE_NAMES.get(phase_key, phase_key)}.json"
+		filepath = self.checkpoint_dir / filename
+
+		result.save(
+			str(filepath),
+			phase_key=phase_key,
+			rotation_seed=self._rotation_seed,
+		)
+		self.log(f"  Checkpoint saved: {filepath}")
+		return str(filepath)
+
+	def load_checkpoint(self, phase_key: str) -> Optional[PhaseResult]:
+		"""
+		Load checkpoint for a specific phase.
+
+		Args:
+			phase_key: Phase identifier (e.g., "1a", "1b", "2a")
+
+		Returns:
+			PhaseResult if checkpoint exists, None otherwise
+		"""
+		if self.checkpoint_dir is None:
+			return None
+
+		filename = f"{PHASE_NAMES.get(phase_key, phase_key)}.json"
+		filepath = self.checkpoint_dir / filename
+
+		if not filepath.exists():
+			return None
+
+		result, metadata = PhaseResult.load(str(filepath))
+		self.log(f"  Loaded checkpoint: {filepath}")
+		return result
+
+	def get_resume_phase(self, resume_from: Optional[str] = None) -> Optional[str]:
+		"""
+		Determine which phase to resume from based on existing checkpoints.
+
+		Args:
+			resume_from: Explicit phase to resume from (e.g., "1b", "2a")
+			            If None, finds the latest completed phase.
+
+		Returns:
+			Phase key to resume from, or None to start fresh
+		"""
+		if self.checkpoint_dir is None:
+			return None
+
+		if resume_from:
+			# Verify the previous phase checkpoint exists
+			return resume_from
+
+		# Find latest completed phase
+		phase_order = ["1a", "1b", "2a", "2b", "3a", "3b"]
+		latest = None
+		for phase_key in phase_order:
+			filename = f"{PHASE_NAMES.get(phase_key, phase_key)}.json"
+			if (self.checkpoint_dir / filename).exists():
+				latest = phase_key
+		return latest
 
 	def setup(
 		self,
@@ -276,12 +444,15 @@ class PhasedSearchRunner:
 	def run_all_phases(
 		self,
 		seed_genome: Optional[ClusterGenome] = None,
+		resume_from: Optional[str] = None,
 	) -> dict[str, Any]:
 		"""
 		Run all phases: 1a -> 1b -> 2a -> 2b -> 3a -> 3b -> final evaluation.
 
 		Args:
 			seed_genome: Optional genome to seed Phase 1a from
+			resume_from: Phase to resume from (e.g., "1b", "2a"). If provided,
+			            loads checkpoint from previous phase and continues.
 
 		Returns:
 			Dictionary with all results
@@ -289,131 +460,174 @@ class PhasedSearchRunner:
 		results: dict[str, Any] = {}
 		completed_phases: list[PhaseResult] = []
 
+		# Phase order for resume logic
+		phase_order = ["1a", "1b", "2a", "2b", "3a", "3b"]
+		start_idx = 0
+
+		# Handle resume
+		if resume_from:
+			if resume_from not in phase_order:
+				raise ValueError(f"Invalid resume_from phase: {resume_from}. Must be one of {phase_order}")
+			start_idx = phase_order.index(resume_from)
+			self.log(f"Resuming from phase {resume_from}")
+
+			# Load all previous phase results from checkpoints
+			for i, phase_key in enumerate(phase_order[:start_idx]):
+				prev_result = self.load_checkpoint(phase_key)
+				if prev_result is None:
+					raise ValueError(f"Cannot resume from {resume_from}: missing checkpoint for {phase_key}")
+				completed_phases.append(prev_result)
+				self.log(f"  Loaded checkpoint for phase {phase_key}: CE={prev_result.final_fitness:.4f}")
+
 		# =====================================================================
 		# Phase 1a: GA Neurons Only
 		# =====================================================================
-		p1a = self.run_phase(
-			phase_name="Phase 1a: GA Neurons Only",
-			strategy_type=OptimizerStrategyType.ARCHITECTURE_GA,
-			optimize_bits=False,
-			optimize_neurons=True,
-			optimize_connections=False,
-			initial_genome=seed_genome,
-		)
-		results["phase1_ga"] = {
-			"fitness": p1a.final_fitness,
-			"accuracy": p1a.final_accuracy,
-			"iterations": p1a.iterations_run,
-		}
-		completed_phases.append(p1a)
-		self.print_progress("After Phase 1a", completed_phases)
+		if start_idx <= 0:
+			p1a = self.run_phase(
+				phase_name="Phase 1a: GA Neurons Only",
+				strategy_type=OptimizerStrategyType.ARCHITECTURE_GA,
+				optimize_bits=False,
+				optimize_neurons=True,
+				optimize_connections=False,
+				initial_genome=seed_genome,
+			)
+			results["phase1_ga"] = {
+				"fitness": p1a.final_fitness,
+				"accuracy": p1a.final_accuracy,
+				"iterations": p1a.iterations_run,
+			}
+			completed_phases.append(p1a)
+			self.print_progress("After Phase 1a", completed_phases)
+			self.save_checkpoint("1a", p1a)
+		else:
+			p1a = completed_phases[0]
 
 		# =====================================================================
 		# Phase 1b: TS Neurons Only
 		# =====================================================================
-		p1b = self.run_phase(
-			phase_name="Phase 1b: TS Neurons Only (refine)",
-			strategy_type=OptimizerStrategyType.ARCHITECTURE_TS,
-			optimize_bits=False,
-			optimize_neurons=True,
-			optimize_connections=False,
-			initial_genome=p1a.best_genome,
-			initial_fitness=p1a.final_fitness,
-			initial_population=p1a.final_population,
-			initial_threshold=p1a.final_threshold,
-		)
-		results["phase1_ts"] = {
-			"fitness": p1b.final_fitness,
-			"accuracy": p1b.final_accuracy,
-			"iterations": p1b.iterations_run,
-		}
-		completed_phases.append(p1b)
-		self.print_progress("After Phase 1b", completed_phases)
+		if start_idx <= 1:
+			p1b = self.run_phase(
+				phase_name="Phase 1b: TS Neurons Only (refine)",
+				strategy_type=OptimizerStrategyType.ARCHITECTURE_TS,
+				optimize_bits=False,
+				optimize_neurons=True,
+				optimize_connections=False,
+				initial_genome=p1a.best_genome,
+				initial_fitness=p1a.final_fitness,
+				initial_population=p1a.final_population,
+				initial_threshold=p1a.final_threshold,
+			)
+			results["phase1_ts"] = {
+				"fitness": p1b.final_fitness,
+				"accuracy": p1b.final_accuracy,
+				"iterations": p1b.iterations_run,
+			}
+			completed_phases.append(p1b)
+			self.print_progress("After Phase 1b", completed_phases)
+			self.save_checkpoint("1b", p1b)
+		else:
+			p1b = completed_phases[1]
 
 		# =====================================================================
 		# Phase 2a: GA Bits Only
 		# =====================================================================
-		p2a = self.run_phase(
-			phase_name="Phase 2a: GA Bits Only",
-			strategy_type=OptimizerStrategyType.ARCHITECTURE_GA,
-			optimize_bits=True,
-			optimize_neurons=False,
-			optimize_connections=False,
-			initial_genome=p1b.best_genome,
-			initial_population=p1b.final_population,
-			initial_threshold=p1b.final_threshold,
-		)
-		results["phase2_ga"] = {
-			"fitness": p2a.final_fitness,
-			"accuracy": p2a.final_accuracy,
-			"iterations": p2a.iterations_run,
-		}
-		completed_phases.append(p2a)
-		self.print_progress("After Phase 2a", completed_phases)
+		if start_idx <= 2:
+			p2a = self.run_phase(
+				phase_name="Phase 2a: GA Bits Only",
+				strategy_type=OptimizerStrategyType.ARCHITECTURE_GA,
+				optimize_bits=True,
+				optimize_neurons=False,
+				optimize_connections=False,
+				initial_genome=p1b.best_genome,
+				initial_population=p1b.final_population,
+				initial_threshold=p1b.final_threshold,
+			)
+			results["phase2_ga"] = {
+				"fitness": p2a.final_fitness,
+				"accuracy": p2a.final_accuracy,
+				"iterations": p2a.iterations_run,
+			}
+			completed_phases.append(p2a)
+			self.print_progress("After Phase 2a", completed_phases)
+			self.save_checkpoint("2a", p2a)
+		else:
+			p2a = completed_phases[2]
 
 		# =====================================================================
 		# Phase 2b: TS Bits Only
 		# =====================================================================
-		p2b = self.run_phase(
-			phase_name="Phase 2b: TS Bits Only (refine)",
-			strategy_type=OptimizerStrategyType.ARCHITECTURE_TS,
-			optimize_bits=True,
-			optimize_neurons=False,
-			optimize_connections=False,
-			initial_genome=p2a.best_genome,
-			initial_fitness=p2a.final_fitness,
-			initial_population=p2a.final_population,
-			initial_threshold=p2a.final_threshold,
-		)
-		results["phase2_ts"] = {
-			"fitness": p2b.final_fitness,
-			"accuracy": p2b.final_accuracy,
-			"iterations": p2b.iterations_run,
-		}
-		completed_phases.append(p2b)
-		self.print_progress("After Phase 2b", completed_phases)
+		if start_idx <= 3:
+			p2b = self.run_phase(
+				phase_name="Phase 2b: TS Bits Only (refine)",
+				strategy_type=OptimizerStrategyType.ARCHITECTURE_TS,
+				optimize_bits=True,
+				optimize_neurons=False,
+				optimize_connections=False,
+				initial_genome=p2a.best_genome,
+				initial_fitness=p2a.final_fitness,
+				initial_population=p2a.final_population,
+				initial_threshold=p2a.final_threshold,
+			)
+			results["phase2_ts"] = {
+				"fitness": p2b.final_fitness,
+				"accuracy": p2b.final_accuracy,
+				"iterations": p2b.iterations_run,
+			}
+			completed_phases.append(p2b)
+			self.print_progress("After Phase 2b", completed_phases)
+			self.save_checkpoint("2b", p2b)
+		else:
+			p2b = completed_phases[3]
 
 		# =====================================================================
 		# Phase 3a: GA Connections Only
 		# =====================================================================
-		p3a = self.run_phase(
-			phase_name="Phase 3a: GA Connections Only",
-			strategy_type=OptimizerStrategyType.ARCHITECTURE_GA,
-			optimize_bits=False,
-			optimize_neurons=False,
-			optimize_connections=True,
-			initial_genome=p2b.best_genome,
-			initial_population=p2b.final_population,
-			initial_threshold=p2b.final_threshold,
-		)
-		results["phase3_ga"] = {
-			"fitness": p3a.final_fitness,
-			"accuracy": p3a.final_accuracy,
-			"iterations": p3a.iterations_run,
-		}
-		completed_phases.append(p3a)
-		self.print_progress("After Phase 3a", completed_phases)
+		if start_idx <= 4:
+			p3a = self.run_phase(
+				phase_name="Phase 3a: GA Connections Only",
+				strategy_type=OptimizerStrategyType.ARCHITECTURE_GA,
+				optimize_bits=False,
+				optimize_neurons=False,
+				optimize_connections=True,
+				initial_genome=p2b.best_genome,
+				initial_population=p2b.final_population,
+				initial_threshold=p2b.final_threshold,
+			)
+			results["phase3_ga"] = {
+				"fitness": p3a.final_fitness,
+				"accuracy": p3a.final_accuracy,
+				"iterations": p3a.iterations_run,
+			}
+			completed_phases.append(p3a)
+			self.print_progress("After Phase 3a", completed_phases)
+			self.save_checkpoint("3a", p3a)
+		else:
+			p3a = completed_phases[4]
 
 		# =====================================================================
 		# Phase 3b: TS Connections Only
 		# =====================================================================
-		p3b = self.run_phase(
-			phase_name="Phase 3b: TS Connections Only (refine)",
-			strategy_type=OptimizerStrategyType.ARCHITECTURE_TS,
-			optimize_bits=False,
-			optimize_neurons=False,
-			optimize_connections=True,
-			initial_genome=p3a.best_genome,
-			initial_fitness=p3a.final_fitness,
-			initial_population=p3a.final_population,
-			initial_threshold=p3a.final_threshold,
-		)
-		results["phase3_ts"] = {
-			"fitness": p3b.final_fitness,
-			"accuracy": p3b.final_accuracy,
-			"iterations": p3b.iterations_run,
-		}
-		completed_phases.append(p3b)
+		if start_idx <= 5:
+			p3b = self.run_phase(
+				phase_name="Phase 3b: TS Connections Only (refine)",
+				strategy_type=OptimizerStrategyType.ARCHITECTURE_TS,
+				optimize_bits=False,
+				optimize_neurons=False,
+				optimize_connections=True,
+				initial_genome=p3a.best_genome,
+				initial_fitness=p3a.final_fitness,
+				initial_population=p3a.final_population,
+				initial_threshold=p3a.final_threshold,
+			)
+			results["phase3_ts"] = {
+				"fitness": p3b.final_fitness,
+				"accuracy": p3b.final_accuracy,
+				"iterations": p3b.iterations_run,
+			}
+			completed_phases.append(p3b)
+			self.save_checkpoint("3b", p3b)
+		else:
+			p3b = completed_phases[5]
 
 		# =====================================================================
 		# Final Evaluation with FULL training tokens
