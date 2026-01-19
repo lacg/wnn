@@ -1133,21 +1133,39 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 				self._log.info(f"[{self.name}] Early stopping at iteration {iteration + 1}")
 				break
 
-		# Build final population (top by CE + top by Acc)
+		# Build final population (top by CE + top by Acc, exactly cache_size unique genomes)
 		cache_size = cfg.total_neighbors_size or cfg.neighbors_per_iter
-		cache_size_per_metric = cache_size // 2
 
-		by_ce = sorted([n for n in all_neighbors if n[2] is not None], key=lambda x: (x[1], -x[2]))[:cache_size_per_metric]  # CE asc, Acc desc tie-breaker
-		by_acc = sorted([n for n in all_neighbors if n[2] is not None], key=lambda x: (-x[2], x[1]))[:cache_size_per_metric]  # Acc desc, CE asc tie-breaker
+		# Sort all neighbors by CE and by Acc (full lists, not truncated)
+		valid_neighbors = [n for n in all_neighbors if n[2] is not None]
+		by_ce = sorted(valid_neighbors, key=lambda x: (x[1], -x[2]))  # CE asc, Acc desc tie-breaker
+		by_acc = sorted(valid_neighbors, key=lambda x: (-x[2], x[1]))  # Acc desc, CE asc tie-breaker
 
+		# Interleave from both lists until we have exactly cache_size unique genomes
 		seen = set()
 		final_population = []
-		for g, _, _ in by_ce + by_acc:
-			# Use hash of full genome for proper deduplication
-			key = hash((tuple(g.bits_per_cluster), tuple(g.neurons_per_cluster)))
-			if key not in seen:
-				seen.add(key)
-				final_population.append(g)
+		ce_idx, acc_idx = 0, 0
+
+		while len(final_population) < cache_size and (ce_idx < len(by_ce) or acc_idx < len(by_acc)):
+			# Take from CE list
+			while ce_idx < len(by_ce) and len(final_population) < cache_size:
+				g, _, _ = by_ce[ce_idx]
+				key = hash((tuple(g.bits_per_cluster), tuple(g.neurons_per_cluster)))
+				ce_idx += 1
+				if key not in seen:
+					seen.add(key)
+					final_population.append(g)
+					break  # Got one, switch to Acc list
+
+			# Take from Acc list
+			while acc_idx < len(by_acc) and len(final_population) < cache_size:
+				g, _, _ = by_acc[acc_idx]
+				key = hash((tuple(g.bits_per_cluster), tuple(g.neurons_per_cluster)))
+				acc_idx += 1
+				if key not in seen:
+					seen.add(key)
+					final_population.append(g)
+					break  # Got one, switch to CE list
 
 		improvement_pct = (start_fitness - best_fitness) / start_fitness * 100 if start_fitness != 0 else 0.0
 		return OptimizerResult(
