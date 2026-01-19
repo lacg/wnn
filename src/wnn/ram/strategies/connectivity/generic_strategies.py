@@ -264,7 +264,8 @@ class EarlyStoppingTracker:
 
 		# Check if improvement meets threshold
 		if improvement_pct >= cfg.min_improvement_pct:
-			self._patience_counter = 0
+			# Recover 1 patience (not full reset) - prevents dragging out with small improvements
+			self._patience_counter = max(0, self._patience_counter - 1)
 			self._prev_best = current_best
 		else:
 			self._patience_counter += 1
