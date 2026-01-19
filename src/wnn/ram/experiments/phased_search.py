@@ -9,6 +9,7 @@ Encapsulates the three-phase optimization approach:
 Each phase uses GA then TS refinement.
 """
 
+import gzip
 import json
 from collections import Counter
 from dataclasses import dataclass, field
@@ -108,10 +109,10 @@ class PhaseResult:
 
 	def save(self, filepath: str, **metadata: Any) -> None:
 		"""
-		Save phase result to a JSON file.
+		Save phase result to a compressed JSON file (.json.gz).
 
 		Args:
-			filepath: Output file path
+			filepath: Output file path (auto-adds .gz if not present)
 			**metadata: Additional metadata to include
 		"""
 		data: dict[str, Any] = {
@@ -121,15 +122,19 @@ class PhaseResult:
 			data["_metadata"] = metadata
 
 		path = Path(filepath)
+		# Auto-add .gz extension for compression
+		if not path.suffix == '.gz':
+			path = path.with_suffix(path.suffix + '.gz')
 		path.parent.mkdir(parents=True, exist_ok=True)
 
-		with open(path, 'w') as f:
-			json.dump(data, f, indent=2)
+		# Write compressed (no indent for better compression)
+		with gzip.open(path, 'wt', encoding='utf-8') as f:
+			json.dump(data, f, separators=(',', ':'))
 
 	@classmethod
 	def load(cls, filepath: str) -> tuple['PhaseResult', dict[str, Any]]:
 		"""
-		Load phase result from a JSON file.
+		Load phase result from a JSON file (compressed or uncompressed).
 
 		Args:
 			filepath: Input file path
@@ -137,15 +142,23 @@ class PhaseResult:
 		Returns:
 			Tuple of (PhaseResult, metadata dict)
 		"""
-		with open(filepath, 'r') as f:
-			data = json.load(f)
+		path = Path(filepath)
+
+		# Try compressed first, then uncompressed
+		if path.suffix == '.gz' or path.with_suffix(path.suffix + '.gz').exists():
+			gz_path = path if path.suffix == '.gz' else path.with_suffix(path.suffix + '.gz')
+			with gzip.open(gz_path, 'rt', encoding='utf-8') as f:
+				data = json.load(f)
+		else:
+			with open(path, 'r') as f:
+				data = json.load(f)
 
 		result = cls.deserialize(data["phase_result"])
 		metadata = data.get("_metadata", {})
 		return result, metadata
 
 
-# Phase name constants for checkpoint files
+# Phase name constants for checkpoint files (without extension - .json.gz added automatically)
 PHASE_NAMES = {
 	"1a": "phase_1a_ga_neurons",
 	"1b": "phase_1b_ts_neurons",
@@ -190,7 +203,7 @@ class PhasedSearchRunner:
 
 	def save_checkpoint(self, phase_key: str, result: PhaseResult) -> Optional[str]:
 		"""
-		Save checkpoint after a phase completes.
+		Save checkpoint after a phase completes (compressed .json.gz).
 
 		Args:
 			phase_key: Phase identifier (e.g., "1a", "1b", "2a")
@@ -203,6 +216,7 @@ class PhasedSearchRunner:
 			return None
 
 		self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+		# Use .json extension - save() will auto-add .gz
 		filename = f"{PHASE_NAMES.get(phase_key, phase_key)}.json"
 		filepath = self.checkpoint_dir / filename
 
@@ -211,12 +225,14 @@ class PhasedSearchRunner:
 			phase_key=phase_key,
 			rotation_seed=self._rotation_seed,
 		)
-		self.log(f"  Checkpoint saved: {filepath}")
-		return str(filepath)
+		# Log actual saved path (with .gz)
+		actual_path = filepath.with_suffix('.json.gz')
+		self.log(f"  Checkpoint saved: {actual_path}")
+		return str(actual_path)
 
 	def load_checkpoint(self, phase_key: str) -> Optional[PhaseResult]:
 		"""
-		Load checkpoint for a specific phase.
+		Load checkpoint for a specific phase (supports .json.gz and .json).
 
 		Args:
 			phase_key: Phase identifier (e.g., "1a", "1b", "2a")
@@ -227,15 +243,22 @@ class PhasedSearchRunner:
 		if self.checkpoint_dir is None:
 			return None
 
-		filename = f"{PHASE_NAMES.get(phase_key, phase_key)}.json"
-		filepath = self.checkpoint_dir / filename
+		base_filename = PHASE_NAMES.get(phase_key, phase_key)
 
-		if not filepath.exists():
-			return None
+		# Try compressed first, then uncompressed
+		gz_path = self.checkpoint_dir / f"{base_filename}.json.gz"
+		json_path = self.checkpoint_dir / f"{base_filename}.json"
 
-		result, metadata = PhaseResult.load(str(filepath))
-		self.log(f"  Loaded checkpoint: {filepath}")
-		return result
+		if gz_path.exists():
+			result, metadata = PhaseResult.load(str(gz_path))
+			self.log(f"  Loaded checkpoint: {gz_path}")
+			return result
+		elif json_path.exists():
+			result, metadata = PhaseResult.load(str(json_path))
+			self.log(f"  Loaded checkpoint: {json_path}")
+			return result
+
+		return None
 
 	def get_resume_phase(self, resume_from: Optional[str] = None) -> Optional[str]:
 		"""
@@ -255,12 +278,14 @@ class PhasedSearchRunner:
 			# Verify the previous phase checkpoint exists
 			return resume_from
 
-		# Find latest completed phase
+		# Find latest completed phase (check both .json.gz and .json)
 		phase_order = ["1a", "1b", "2a", "2b", "3a", "3b"]
 		latest = None
 		for phase_key in phase_order:
-			filename = f"{PHASE_NAMES.get(phase_key, phase_key)}.json"
-			if (self.checkpoint_dir / filename).exists():
+			base = PHASE_NAMES.get(phase_key, phase_key)
+			gz_exists = (self.checkpoint_dir / f"{base}.json.gz").exists()
+			json_exists = (self.checkpoint_dir / f"{base}.json").exists()
+			if gz_exists or json_exists:
 				latest = phase_key
 		return latest
 

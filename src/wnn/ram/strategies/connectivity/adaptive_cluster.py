@@ -14,6 +14,7 @@ Let the data decide rather than hand-tuning tier boundaries.
 
 from __future__ import annotations
 
+import gzip
 import json
 import math
 import random
@@ -676,10 +677,10 @@ class ClusterGenome:
 		**metadata: Any,
 	) -> None:
 		"""
-		Save genome to a JSON file.
+		Save genome to a compressed JSON file (.json.gz).
 
 		Args:
-			filepath: Output file path
+			filepath: Output file path (auto-adds .gz if not present)
 			fitness: Optional fitness (CE) value to include
 			accuracy: Optional accuracy value to include
 			**metadata: Additional metadata to include
@@ -696,15 +697,19 @@ class ClusterGenome:
 			data["_metadata"] = metadata
 
 		path = Path(filepath)
+		# Auto-add .gz extension for compression
+		if not path.suffix == '.gz':
+			path = path.with_suffix(path.suffix + '.gz')
 		path.parent.mkdir(parents=True, exist_ok=True)
 
-		with open(path, 'w') as f:
-			json.dump(data, f, indent=2)
+		# Write compressed (no indent for better compression)
+		with gzip.open(path, 'wt', encoding='utf-8') as f:
+			json.dump(data, f, separators=(',', ':'))
 
 	@classmethod
 	def load(cls, filepath: str) -> tuple['ClusterGenome', dict[str, Any]]:
 		"""
-		Load genome from a JSON file.
+		Load genome from a JSON file (compressed or uncompressed).
 
 		Args:
 			filepath: Input file path
@@ -712,8 +717,16 @@ class ClusterGenome:
 		Returns:
 			Tuple of (genome, full_data) where full_data includes fitness, accuracy, metadata
 		"""
-		with open(filepath, 'r') as f:
-			data = json.load(f)
+		path = Path(filepath)
+
+		# Try compressed first, then uncompressed
+		if path.suffix == '.gz' or path.with_suffix(path.suffix + '.gz').exists():
+			gz_path = path if path.suffix == '.gz' else path.with_suffix(path.suffix + '.gz')
+			with gzip.open(gz_path, 'rt', encoding='utf-8') as f:
+				data = json.load(f)
+		else:
+			with open(path, 'r') as f:
+				data = json.load(f)
 
 		genome = cls.deserialize(data["genome"])
 		return genome, data

@@ -431,6 +431,9 @@ class CachedEvaluator:
         if seed is None:
             seed = int(time.time() * 1000) % (2**32)
 
+        # Use instance log_path if not explicitly provided
+        effective_log_path = log_path if log_path is not None else self._log_path
+
         # Call Rust search
         results = self._cache.search_neighbors(
             base_bits=genome.bits_per_cluster,
@@ -449,7 +452,7 @@ class CachedEvaluator:
             eval_subset_idx=eval_subset_idx,
             empty_value=self._empty_value,
             seed=seed,
-            log_path=log_path,
+            log_path=effective_log_path,
             generation=generation,
             total_generations=total_generations,
             return_best_n=return_best_n,

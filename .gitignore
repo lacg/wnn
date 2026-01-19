@@ -266,3 +266,4 @@ Thumbs.db
 # data/
 # Output files (nohup, monitor, sweep logs, etc.)
 *.out
+checkpoints/

@@ -950,7 +950,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 			progress = max(0.0, min(1.0, progress))
 			return start_threshold + progress * cfg.threshold_delta
 
-		self._log.info(f"[{self.name}] Progressive threshold: {start_threshold:.2%} → {end_threshold:.2%}")
+		self._log.info(f"[{self.name}] Progressive threshold: {start_threshold:.4%} → {end_threshold:.4%}")
 		self._log.info(f"[{self.name}] Using Rust search_neighbors (single-call neighbor search)")
 
 		# Dual-path tracking
@@ -1118,9 +1118,11 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 			history.append((iteration + 1, best_fitness))
 
 			# Log iteration summary
-			self._log.info(f"[{self.name}] Iter {iteration+1:03d}/{cfg.iterations}: "
-						   f"best_ce={best_ce_fitness:.4f}, best_acc={best_acc_accuracy:.2%}" if best_acc_accuracy else
-						   f"[{self.name}] Iter {iteration+1:03d}/{cfg.iterations}: best_ce={best_ce_fitness:.4f}")
+			if best_acc_accuracy:
+				self._log.info(f"[{self.name}] Iter {iteration+1:03d}/{cfg.iterations}: "
+							   f"best_ce={best_ce_fitness:.4f}, best_acc={best_acc_accuracy:.4%}")
+			else:
+				self._log.info(f"[{self.name}] Iter {iteration+1:03d}/{cfg.iterations}: best_ce={best_ce_fitness:.4f}")
 
 			# Early stopping check
 			if early_stopper.check(iteration, best_fitness):
