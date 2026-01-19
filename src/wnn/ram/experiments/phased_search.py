@@ -483,9 +483,17 @@ class PhasedSearchRunner:
 			initial_accuracy=result.initial_accuracy,
 		)
 
-	def print_progress(self, title: str, phase_results: list[PhaseResult]) -> None:
+	def print_progress(
+		self,
+		title: str,
+		phase_results: list[PhaseResult],
+		baseline_ce: Optional[float] = None,
+		baseline_acc: Optional[float] = None,
+	) -> None:
 		"""Print a progress table with current results."""
 		table = OptimizationResultsTable(title)
+		if baseline_ce is not None:
+			table.add_stage("Initial (default genome)", ce=baseline_ce, accuracy=baseline_acc)
 		for pr in phase_results:
 			table.add_stage(pr.phase_name, ce=pr.final_fitness, accuracy=pr.final_accuracy)
 		self.log("")
@@ -530,6 +538,30 @@ class PhasedSearchRunner:
 				self.log(f"  Loaded checkpoint for phase {phase_key}: CE={prev_result.final_fitness:.4f}")
 
 		# =====================================================================
+		# Baseline: Evaluate initial genome on full validation
+		# =====================================================================
+		if start_idx <= 0:
+			# Create default genome if no seed provided
+			if seed_genome:
+				baseline_genome = seed_genome
+				self.log("Evaluating seed genome as baseline...")
+			else:
+				from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
+				baseline_genome = ClusterGenome.create_uniform(
+					num_clusters=self.vocab_size,
+					bits=self.config.default_bits,
+					neurons=self.config.default_neurons,
+				)
+				self.log("Evaluating default genome as baseline...")
+
+			baseline_ce, baseline_acc = self.evaluator.evaluate_single_full(baseline_genome)
+			self.log(f"  Baseline CE: {baseline_ce:.4f}, Acc: {baseline_acc:.2%}")
+			self.log("")
+		else:
+			# When resuming, we don't have the baseline - use None
+			baseline_ce, baseline_acc = None, None
+
+		# =====================================================================
 		# Phase 1a: GA Neurons Only
 		# =====================================================================
 		if start_idx <= 0:
@@ -547,7 +579,7 @@ class PhasedSearchRunner:
 				"iterations": p1a.iterations_run,
 			}
 			completed_phases.append(p1a)
-			self.print_progress("After Phase 1a", completed_phases)
+			self.print_progress("After Phase 1a", completed_phases, baseline_ce, baseline_acc)
 			self.save_checkpoint("1a", p1a)
 		else:
 			p1a = completed_phases[0]
@@ -573,7 +605,7 @@ class PhasedSearchRunner:
 				"iterations": p1b.iterations_run,
 			}
 			completed_phases.append(p1b)
-			self.print_progress("After Phase 1b", completed_phases)
+			self.print_progress("After Phase 1b", completed_phases, baseline_ce, baseline_acc)
 			self.save_checkpoint("1b", p1b)
 		else:
 			p1b = completed_phases[1]
@@ -598,7 +630,7 @@ class PhasedSearchRunner:
 				"iterations": p2a.iterations_run,
 			}
 			completed_phases.append(p2a)
-			self.print_progress("After Phase 2a", completed_phases)
+			self.print_progress("After Phase 2a", completed_phases, baseline_ce, baseline_acc)
 			self.save_checkpoint("2a", p2a)
 		else:
 			p2a = completed_phases[2]
@@ -624,7 +656,7 @@ class PhasedSearchRunner:
 				"iterations": p2b.iterations_run,
 			}
 			completed_phases.append(p2b)
-			self.print_progress("After Phase 2b", completed_phases)
+			self.print_progress("After Phase 2b", completed_phases, baseline_ce, baseline_acc)
 			self.save_checkpoint("2b", p2b)
 		else:
 			p2b = completed_phases[3]
@@ -649,7 +681,7 @@ class PhasedSearchRunner:
 				"iterations": p3a.iterations_run,
 			}
 			completed_phases.append(p3a)
-			self.print_progress("After Phase 3a", completed_phases)
+			self.print_progress("After Phase 3a", completed_phases, baseline_ce, baseline_acc)
 			self.save_checkpoint("3a", p3a)
 		else:
 			p3a = completed_phases[4]
@@ -718,18 +750,9 @@ class PhasedSearchRunner:
 			full_eval_results.append((ce, acc))
 			self.log(f"  {pr.phase_name}: CE={ce:.4f}, Acc={acc:.2%}")
 
-		# Also evaluate initial genome
-		initial_ce, initial_acc = self.evaluator.evaluate_single_full(p1a.best_genome)
-		# Use p1a's initial values if available, otherwise use the evaluated initial
-		if p1a.initial_fitness is not None:
-			initial_ce_display = p1a.initial_fitness
-			initial_acc_display = p1a.initial_accuracy
-		else:
-			initial_ce_display = initial_ce
-			initial_acc_display = initial_acc
-
 		comparison = OptimizationResultsTable("Complete Phased Search (Full Validation)")
-		comparison.add_stage("Initial", ce=initial_ce_display, accuracy=initial_acc_display)
+		if baseline_ce is not None:
+			comparison.add_stage("Initial (default genome)", ce=baseline_ce, accuracy=baseline_acc)
 		for pr, (full_ce_val, full_acc_val) in zip(completed_phases, full_eval_results):
 			comparison.add_stage(pr.phase_name, ce=full_ce_val, accuracy=full_acc_val)
 		comparison.print(self.log)
