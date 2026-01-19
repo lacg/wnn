@@ -1123,7 +1123,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 						   f"[{self.name}] Iter {iteration+1:03d}/{cfg.iterations}: best_ce={best_ce_fitness:.4f}")
 
 			# Early stopping check
-			if early_stopper.check(best_fitness):
+			if early_stopper.check(iteration, best_fitness):
 				self._log.info(f"[{self.name}] Early stopping at iteration {iteration + 1}")
 				break
 
