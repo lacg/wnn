@@ -475,8 +475,10 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		self._log.info(f"[{self.name}] Using Rust search_offspring (single-call offspring search)")
 
 		# Initialize population (show ALL genomes - no threshold filtering for init)
-		init_size = len(initial_population) if initial_population else cfg.population_size
-		self._log.info(f"[{self.name}] Initializing population with {init_size} random genomes (no threshold filter)")
+		if initial_population and len(initial_population) > 0:
+			self._log.info(f"[{self.name}] Seeding from {len(initial_population)} genomes (top CE + top Acc from previous phase)")
+		else:
+			self._log.info(f"[{self.name}] Initializing with {cfg.population_size} random genomes")
 
 		if initial_population and len(initial_population) > 0:
 			# Evaluate initial population
