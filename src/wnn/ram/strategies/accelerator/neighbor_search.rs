@@ -91,6 +91,7 @@ pub enum GenomeLogType {
     EliteAcc,   // Elite selected by accuracy
     Offspring,  // GA offspring
     Neighbor,   // TS neighbor
+    Fallback,   // Best-by-CE fallback (didn't pass accuracy threshold)
 }
 
 impl GenomeLogType {
@@ -103,6 +104,7 @@ impl GenomeLogType {
             GenomeLogType::EliteAcc => ("Elite ", "Acc "),
             GenomeLogType::Offspring => ("Genome", "New "),
             GenomeLogType::Neighbor => ("Genome", "Nbr "),
+            GenomeLogType::Fallback => ("Genome", "Best"),  // Best-by-CE fallback
         }
     }
 }
@@ -741,7 +743,16 @@ pub fn search_offspring(
         });
 
         let need = target_count - passed.len();
-        passed.extend(all_candidates.into_iter().take(need));
+        let fallback_start = shown_count;  // Continue numbering from where we left off
+        for (i, candidate) in all_candidates.into_iter().take(need).enumerate() {
+            // Log fallback candidates with (Best) indicator
+            logger.log(&format_genome_log(
+                current_gen, total_gens, GenomeLogType::Fallback,
+                fallback_start + i + 1, target_count,
+                candidate.cross_entropy, candidate.accuracy
+            ));
+            passed.push(candidate);
+        }
     }
 
     logger.log(&format!(
