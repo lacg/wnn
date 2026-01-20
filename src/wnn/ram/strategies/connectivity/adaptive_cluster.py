@@ -200,6 +200,48 @@ class ClusterGenome:
 	# =========================================================================
 
 	@classmethod
+	def create_uniform(
+		cls,
+		num_clusters: int,
+		bits: int,
+		neurons: int,
+		total_input_bits: Optional[int] = None,
+		rng: Optional[int] = None,
+	) -> 'ClusterGenome':
+		"""
+		Create a genome with uniform bits and neurons across all clusters.
+
+		Args:
+			num_clusters: Total number of clusters
+			bits: Bits per neuron for all clusters
+			neurons: Neurons per cluster for all clusters
+			total_input_bits: Total input bits (for random connection init)
+			rng: Random seed for connection initialization
+
+		Returns:
+			ClusterGenome with uniform architecture
+		"""
+		import random
+		bits_per_cluster = [bits] * num_clusters
+		neurons_per_cluster = [neurons] * num_clusters
+
+		connections = None
+		if total_input_bits is not None:
+			if rng is not None:
+				random.seed(rng)
+			connections = []
+			for cluster_idx in range(num_clusters):
+				for _ in range(neurons):
+					for _ in range(bits):
+						connections.append(random.randint(0, total_input_bits - 1))
+
+		return cls(
+			bits_per_cluster=bits_per_cluster,
+			neurons_per_cluster=neurons_per_cluster,
+			connections=connections,
+		)
+
+	@classmethod
 	def initialize(
 		cls,
 		num_clusters: int,
