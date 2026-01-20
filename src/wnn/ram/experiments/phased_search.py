@@ -502,13 +502,15 @@ class PhasedSearchRunner:
 	def run_all_phases(
 		self,
 		seed_genome: Optional[ClusterGenome] = None,
+		seed_population: Optional[list[ClusterGenome]] = None,
 		resume_from: Optional[str] = None,
 	) -> dict[str, Any]:
 		"""
 		Run all phases: 1a -> 1b -> 2a -> 2b -> 3a -> 3b -> final evaluation.
 
 		Args:
-			seed_genome: Optional genome to seed Phase 1a from
+			seed_genome: Optional genome to seed Phase 1a from (used if no population)
+			seed_population: Optional population to seed Phase 1a from (from previous pass)
 			resume_from: Phase to resume from (e.g., "1b", "2a"). If provided,
 			            loads checkpoint from previous phase and continues.
 
@@ -572,6 +574,7 @@ class PhasedSearchRunner:
 				optimize_neurons=True,
 				optimize_connections=False,
 				initial_genome=seed_genome,
+				initial_population=seed_population,
 			)
 			results["phase1_ga"] = {
 				"fitness": p1a.final_fitness,
@@ -731,6 +734,7 @@ class PhasedSearchRunner:
 			"accuracy": final_acc,
 			"genome": p3b.best_genome.serialize(),  # Full genome for loading
 			"genome_stats": p3b.best_genome.stats(),  # Stats for quick reference
+			"final_population": [g.serialize() for g in p3b.final_population] if p3b.final_population else None,
 		}
 
 		# =====================================================================

@@ -52,12 +52,17 @@ def log(msg: str):
 		print(msg)
 
 
-def load_seed_genome(seed_file: str) -> Optional[ClusterGenome]:
-	"""Load a genome from a previous run's JSON output."""
-	# Try ClusterGenome.load() first (direct genome file)
+def load_seed_data(seed_file: str) -> tuple[Optional[ClusterGenome], Optional[list[ClusterGenome]]]:
+	"""
+	Load seed genome and population from a previous run's JSON output.
+
+	Returns:
+		Tuple of (seed_genome, seed_population). Population may be None if not available.
+	"""
+	# Try ClusterGenome.load() first (direct genome file - no population)
 	try:
 		genome, _ = ClusterGenome.load(seed_file)
-		return genome
+		return genome, None
 	except (KeyError, TypeError):
 		pass
 
@@ -66,23 +71,31 @@ def load_seed_genome(seed_file: str) -> Optional[ClusterGenome]:
 		with open(seed_file, 'r') as f:
 			data = json.load(f)
 
-		# Try final.genome (phased search results)
-		if 'final' in data and 'genome' in data['final']:
-			return ClusterGenome.deserialize(data['final']['genome'])
+		genome = None
+		population = None
 
-		# Fall back to genome_stats (old format - limited)
-		if 'final' in data and 'genome_stats' in data['final']:
+		# Load genome from final.genome
+		if 'final' in data and 'genome' in data['final']:
+			genome = ClusterGenome.deserialize(data['final']['genome'])
+
+		# Load population from final.final_population (new format)
+		if 'final' in data and 'final_population' in data['final'] and data['final']['final_population']:
+			population = [ClusterGenome.deserialize(g) for g in data['final']['final_population']]
+
+		# Fall back to genome_stats (old format - limited, no population)
+		if genome is None and 'final' in data and 'genome_stats' in data['final']:
 			stats = data['final']['genome_stats']
 			genome = ClusterGenome(
 				bits_per_cluster=stats.get('bits_per_cluster', []),
 				neurons_per_cluster=stats.get('neurons_per_cluster', []),
 				connections=stats.get('connections'),
 			)
-			return genome
-	except Exception as e:
-		print(f"Warning: Could not load seed genome from {seed_file}: {e}")
 
-	return None
+		return genome, population
+	except Exception as e:
+		print(f"Warning: Could not load seed data from {seed_file}: {e}")
+
+	return None, None
 
 
 def main():
@@ -209,14 +222,17 @@ def main():
 			log(f"  Resume from: phase {args.resume_from}")
 	log("")
 
-	# Load seed genome if specified
+	# Load seed genome and population if specified
 	seed_genome = None
+	seed_population = None
 	if args.seed_from:
-		seed_genome = load_seed_genome(args.seed_from)
+		seed_genome, seed_population = load_seed_data(args.seed_from)
 		if seed_genome:
 			log(f"Loaded seed genome: {seed_genome}")
-		else:
-			log("No seed genome loaded, starting fresh")
+		if seed_population:
+			log(f"Loaded seed population: {len(seed_population)} genomes")
+		if not seed_genome and not seed_population:
+			log("No seed data loaded, starting fresh")
 		log("")
 
 	# Load data
@@ -270,7 +286,11 @@ def main():
 	)
 
 	# Run all phases (optionally seeded from previous pass, or resume from checkpoint)
-	results = runner.run_all_phases(seed_genome=seed_genome, resume_from=args.resume_from)
+	results = runner.run_all_phases(
+		seed_genome=seed_genome,
+		seed_population=seed_population,
+		resume_from=args.resume_from,
+	)
 
 	# Add metadata
 	results["pass"] = args.pass_num
