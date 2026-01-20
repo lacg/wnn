@@ -196,8 +196,9 @@ class CachedEvaluator:
         overall_start = time.time()
 
         if streaming and stream_batch_size < num_genomes:
-            # Streaming mode: evaluate in small batches
+            # Streaming mode: evaluate in small batches with per-genome logging
             all_results = []
+            current_gen = (generation + 1) if generation is not None else 1
 
             for batch_start in range(0, num_genomes, stream_batch_size):
                 batch_end = min(batch_start + stream_batch_size, num_genomes)
@@ -223,6 +224,20 @@ class CachedEvaluator:
                     eval_subset_idx,
                     self._empty_value,
                 )
+
+                # Log results immediately for streaming visibility
+                for i, (ce, acc) in enumerate(batch_results):
+                    genome_idx = batch_start + i + 1
+                    passes = min_accuracy is None or acc >= min_accuracy
+                    base_msg = format_genome_log(
+                        current_gen, total_gens, GenomeLogType.INITIAL,
+                        genome_idx, num_genomes, ce, acc
+                    )
+                    if passes:
+                        log_debug(base_msg)
+                    else:
+                        log_trace(base_msg + subset_info)
+                    sys.stdout.flush()
 
                 all_results.extend(batch_results)
 
