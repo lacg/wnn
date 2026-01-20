@@ -28,6 +28,7 @@ from wnn.ram.architecture.genome_log import (
 	format_genome_log,
 	format_gen_prefix,
 )
+from wnn.ram.core.reporting import OptimizationResultsTable
 from wnn.ram.strategies.filters import PercentileFilter, FilterMode
 
 if TYPE_CHECKING:
@@ -533,6 +534,13 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		best_genome, best_fitness = population[0]
 		initial_genome = best_genome.clone()
 		initial_fitness = best_fitness
+
+		# Show initialization results table
+		best_acc = best_genome._cached_fitness[1] if hasattr(best_genome, '_cached_fitness') else None
+		init_table = OptimizationResultsTable(f"{self.name} Initialization")
+		init_table.add_stage("Initial", ce=best_fitness, accuracy=best_acc)
+		self._log.info("")
+		init_table.print(self._log.info)
 
 		# Early stopping
 		from wnn.ram.strategies.connectivity.generic_strategies import EarlyStoppingConfig
