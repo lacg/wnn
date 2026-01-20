@@ -272,19 +272,21 @@ class CachedEvaluator:
         else:
             shown_count = num_genomes
 
-        # Log each result with consistent numbering using shared formatter
-        current_gen = (generation + 1) if generation is not None else 1
-        for i, (ce, acc) in enumerate(results):
-            passes = min_accuracy is None or acc >= min_accuracy
-            base_msg = format_genome_log(
-                current_gen, total_gens, GenomeLogType.INITIAL,
-                i + 1, num_genomes, ce, acc
-            )
-            if passes:
-                log_debug(base_msg)
-            else:
-                # Log at TRACE level with subset info for filtered genomes
-                log_trace(base_msg + subset_info)
+        # Log each result (only for non-streaming mode - streaming already logged per-genome)
+        streaming_was_used = streaming and stream_batch_size < num_genomes
+        if not streaming_was_used:
+            current_gen = (generation + 1) if generation is not None else 1
+            for i, (ce, acc) in enumerate(results):
+                passes = min_accuracy is None or acc >= min_accuracy
+                base_msg = format_genome_log(
+                    current_gen, total_gens, GenomeLogType.INITIAL,
+                    i + 1, num_genomes, ce, acc
+                )
+                if passes:
+                    log_debug(base_msg)
+                else:
+                    # Log at TRACE level with subset info for filtered genomes
+                    log_trace(base_msg + subset_info)
 
         # Log generation/iteration duration summary using shared formatter
         log_debug(format_completion_log(current_gen, total_gens, elapsed, num_genomes, shown_count))
