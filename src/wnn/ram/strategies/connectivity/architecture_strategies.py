@@ -481,7 +481,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			self._log.info(f"[{self.name}] Initializing with {cfg.population_size} random genomes")
 
 		if initial_population and len(initial_population) > 0:
-			# Evaluate initial population
+			# Evaluate initial population in single batch (not streaming) for efficiency
 			results = evaluator.evaluate_batch(
 				initial_population,
 				train_subset_idx=evaluator.next_train_idx(),
@@ -490,6 +490,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 				generation=0,
 				total_generations=cfg.generations,
 				min_accuracy=None,  # Show all for initial population
+				streaming=False,  # Single Rust call for all genomes
 			)
 			# Store cached fitness on each genome for elite logging
 			population = []
@@ -507,6 +508,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 				generation=0,
 				total_generations=cfg.generations,
 				min_accuracy=None,  # Show all for initial population
+				streaming=False,  # Single Rust call for all genomes
 			)
 			# Store cached fitness on each genome for elite logging
 			population = []
