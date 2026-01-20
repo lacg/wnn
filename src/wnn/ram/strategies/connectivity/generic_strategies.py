@@ -603,9 +603,9 @@ class GAConfig:
 	# Example: 0.75 keeps top 75% by CE. Applied after accuracy threshold.
 	ce_percentile: Optional[float] = None
 	# Fitness calculator: how to combine CE and accuracy for ranking
-	# CE = pure CE ranking (default, backward compatible)
-	# HARMONIC_RANK = harmonic mean of CE rank and accuracy rank (balances both)
-	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.CE
+	# CE = pure CE ranking, uses dual elites (10% CE + 10% Acc)
+	# HARMONIC_RANK = harmonic mean of ranks (default), uses single elite (20% by rank)
+	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK
 	# Early stopping (all configurable via parameters)
 	patience: int = 5              # Checks without improvement before stopping
 	check_interval: int = 5        # Check every N generations
@@ -632,9 +632,9 @@ class TSConfig:
 	# Example: 0.75 keeps top 75% by CE. Applied after accuracy threshold.
 	ce_percentile: Optional[float] = None
 	# Fitness calculator: how to combine CE and accuracy for ranking
-	# CE = pure CE ranking (default, backward compatible)
-	# HARMONIC_RANK = harmonic mean of CE rank and accuracy rank (balances both)
-	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.CE
+	# CE = pure CE ranking, uses dual paths (25 neighbors from best_ce + 25 from best_acc)
+	# HARMONIC_RANK = harmonic mean of ranks (default), uses single path (50 from best_harmonic)
+	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK
 	# Early stopping (all configurable via parameters)
 	patience: int = 5              # Checks without improvement before stopping
 	check_interval: int = 5        # Check every N iterations
