@@ -52,17 +52,17 @@ def log(msg: str):
 		print(msg)
 
 
-def load_seed_data(seed_file: str) -> tuple[Optional[ClusterGenome], Optional[list[ClusterGenome]]]:
+def load_seed_data(seed_file: str) -> tuple[Optional[ClusterGenome], Optional[list[ClusterGenome]], Optional[float]]:
 	"""
-	Load seed genome and population from a previous run's JSON output.
+	Load seed genome, population, and threshold from a previous run's JSON output.
 
 	Returns:
-		Tuple of (seed_genome, seed_population). Population may be None if not available.
+		Tuple of (seed_genome, seed_population, seed_threshold). Any may be None if not available.
 	"""
-	# Try ClusterGenome.load() first (direct genome file - no population)
+	# Try ClusterGenome.load() first (direct genome file - no population/threshold)
 	try:
 		genome, _ = ClusterGenome.load(seed_file)
-		return genome, None
+		return genome, None, None
 	except (KeyError, TypeError):
 		pass
 
@@ -73,6 +73,7 @@ def load_seed_data(seed_file: str) -> tuple[Optional[ClusterGenome], Optional[li
 
 		genome = None
 		population = None
+		threshold = None
 
 		# Load genome from final.genome
 		if 'final' in data and 'genome' in data['final']:
@@ -81,6 +82,10 @@ def load_seed_data(seed_file: str) -> tuple[Optional[ClusterGenome], Optional[li
 		# Load population from final.final_population (new format)
 		if 'final' in data and 'final_population' in data['final'] and data['final']['final_population']:
 			population = [ClusterGenome.deserialize(g) for g in data['final']['final_population']]
+
+		# Load threshold from final.final_threshold
+		if 'final' in data and 'final_threshold' in data['final']:
+			threshold = data['final']['final_threshold']
 
 		# Fall back to genome_stats (old format - limited, no population)
 		if genome is None and 'final' in data and 'genome_stats' in data['final']:
@@ -91,11 +96,11 @@ def load_seed_data(seed_file: str) -> tuple[Optional[ClusterGenome], Optional[li
 				connections=stats.get('connections'),
 			)
 
-		return genome, population
+		return genome, population, threshold
 	except Exception as e:
 		print(f"Warning: Could not load seed data from {seed_file}: {e}")
 
-	return None, None
+	return None, None, None
 
 
 def main():
@@ -222,15 +227,18 @@ def main():
 			log(f"  Resume from: phase {args.resume_from}")
 	log("")
 
-	# Load seed genome and population if specified
+	# Load seed genome, population, and threshold if specified
 	seed_genome = None
 	seed_population = None
+	seed_threshold = None
 	if args.seed_from:
-		seed_genome, seed_population = load_seed_data(args.seed_from)
+		seed_genome, seed_population, seed_threshold = load_seed_data(args.seed_from)
 		if seed_genome:
 			log(f"Loaded seed genome: {seed_genome}")
 		if seed_population:
 			log(f"Loaded seed population: {len(seed_population)} genomes")
+		if seed_threshold is not None:
+			log(f"Loaded seed threshold: {seed_threshold*100:.4f}%")
 		if not seed_genome and not seed_population:
 			log("No seed data loaded, starting fresh")
 		log("")
@@ -289,6 +297,7 @@ def main():
 	results = runner.run_all_phases(
 		seed_genome=seed_genome,
 		seed_population=seed_population,
+		seed_threshold=seed_threshold,
 		resume_from=args.resume_from,
 	)
 

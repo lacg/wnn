@@ -267,3 +267,4 @@ Thumbs.db
 # Output files (nohup, monitor, sweep logs, etc.)
 *.out
 checkpoints/
+results_*.json

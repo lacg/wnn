@@ -503,6 +503,7 @@ class PhasedSearchRunner:
 		self,
 		seed_genome: Optional[ClusterGenome] = None,
 		seed_population: Optional[list[ClusterGenome]] = None,
+		seed_threshold: Optional[float] = None,
 		resume_from: Optional[str] = None,
 	) -> dict[str, Any]:
 		"""
@@ -511,6 +512,7 @@ class PhasedSearchRunner:
 		Args:
 			seed_genome: Optional genome to seed Phase 1a from (used if no population)
 			seed_population: Optional population to seed Phase 1a from (from previous pass)
+			seed_threshold: Optional progressive threshold to continue from (from previous pass)
 			resume_from: Phase to resume from (e.g., "1b", "2a"). If provided,
 			            loads checkpoint from previous phase and continues.
 
@@ -575,6 +577,7 @@ class PhasedSearchRunner:
 				optimize_connections=False,
 				initial_genome=seed_genome,
 				initial_population=seed_population,
+				initial_threshold=seed_threshold,
 			)
 			results["phase1_ga"] = {
 				"fitness": p1a.final_fitness,
@@ -735,6 +738,7 @@ class PhasedSearchRunner:
 			"genome": p3b.best_genome.serialize(),  # Full genome for loading
 			"genome_stats": p3b.best_genome.stats(),  # Stats for quick reference
 			"final_population": [g.serialize() for g in p3b.final_population] if p3b.final_population else None,
+			"final_threshold": p3b.final_threshold,  # Progressive threshold for next pass
 		}
 
 		# =====================================================================
