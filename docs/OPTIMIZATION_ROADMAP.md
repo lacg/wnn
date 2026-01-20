@@ -2,6 +2,41 @@
 
 Ideas for improving the phased architecture search, based on observations from current runs.
 
+---
+
+## Pass 1 Results (2026-01-19)
+
+**Configuration:** patience=2, CE percentile=75%, default bits=8, neurons=5
+
+| Stage | CE | PPL | Accuracy | vs Baseline |
+|-------|-----|------|----------|-------------|
+| Initial (baseline) | 10.3443 | 31,081 | N/A | - |
+| Phase 1a: GA Neurons | 10.2747 | 28,991 | 0.02% | **+0.67%** |
+| Phase 1b: TS Neurons | 10.2716 | 28,901 | 0.01% | +0.70% |
+| Phase 2a: GA Bits | 10.2725 | 28,925 | 0.01% | +0.70% |
+| Phase 2b: TS Bits | 10.2704 | 28,865 | 0.01% | **+0.72%** |
+| Phase 3a: GA Connections | 10.2725 | 28,925 | 0.01% | +0.70% |
+| Phase 3b: TS Connections | 10.2711 | 28,885 | 0.00% | +0.71% |
+
+**Total improvement: +0.71% CE (PPL: 31,081 → 28,885)**
+
+### Key Findings
+
+1. **Phase 1 (Neurons) did most of the work** - +0.70% of the +0.71% total came from neurons
+2. **Phases 2-3 barely improved** - Bits and connections added only +0.01-0.02%
+3. **Accuracy collapsed from 0.04% → 0.00%** - CE optimization destroyed accuracy
+4. **All phases hit WARNING** then early-stopped - adaptive adjustments never triggered
+5. **Runtime:** ~18.5 hours total
+
+### What This Tells Us
+
+- **Patience too low:** Only 10 iterations before stopping (5 iter × patience 2)
+- **CE elites dominate:** Final genome has 0% accuracy because we pick by CE only
+- **Phase ordering may matter:** Maybe optimize bits first, then neurons?
+- **Need dual tracking:** Report both best-CE and best-Acc genomes
+
+---
+
 ## Observations
 
 1. **Early stop triggers before adaptive mechanisms kick in** (iter 10 with patience 2)
@@ -78,6 +113,6 @@ Ideas:
 
 ## Notes
 
-- Current run: Pass 1, patience 2, CE percentile 75%
-- Phase 3a in progress (GA Connections)
-- Total improvement so far: ~0.03%
+- **Pass 1 complete:** +0.71% improvement, but accuracy collapsed to 0%
+- **Next:** Pass 2 with patience=4, seed from Pass 1 results
+- See `results_pass1_20260119_075732.json` for full results

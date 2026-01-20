@@ -750,7 +750,7 @@ class PhasedSearchRunner:
 			full_eval_results.append((ce, acc))
 			self.log(f"  {pr.phase_name}: CE={ce:.4f}, Acc={acc:.2%}")
 
-		comparison = OptimizationResultsTable("Complete Phased Search (Full Validation)")
+		comparison = OptimizationResultsTable("Complete Phased Search (Full Validation) - Best by CE")
 		if baseline_ce is not None:
 			comparison.add_stage("Initial (default genome)", ce=baseline_ce, accuracy=baseline_acc)
 		for pr, (full_ce_val, full_acc_val) in zip(completed_phases, full_eval_results):
@@ -758,7 +758,38 @@ class PhasedSearchRunner:
 		comparison.print(self.log)
 
 		self.log("")
-		self.log(f"Final best genome: {p3b.best_genome}")
+		self.log(f"Final best genome (by CE): {p3b.best_genome}")
+
+		# Find best genome by accuracy across all phases
+		best_acc_idx = max(range(len(full_eval_results)), key=lambda i: full_eval_results[i][1])
+		best_acc_genome = completed_phases[best_acc_idx].best_genome
+		best_acc_ce, best_acc_acc = full_eval_results[best_acc_idx]
+
+		# Only print second table if best-by-acc is different from best-by-CE
+		if best_acc_genome != p3b.best_genome or best_acc_acc != full_eval_results[-1][1]:
+			self.log("")
+			self.log("-" * 78)
+			self.log("")
+			comparison_acc = OptimizationResultsTable("Best by Accuracy (Full Validation)")
+			if baseline_ce is not None:
+				comparison_acc.add_stage("Initial (default genome)", ce=baseline_ce, accuracy=baseline_acc)
+			comparison_acc.add_stage(
+				f"Best Acc: {completed_phases[best_acc_idx].phase_name}",
+				ce=best_acc_ce,
+				accuracy=best_acc_acc
+			)
+			comparison_acc.print(self.log)
+			self.log("")
+			self.log(f"Best genome (by Accuracy): {best_acc_genome}")
+
+			# Store both in results
+			results["best_by_accuracy"] = {
+				"phase": completed_phases[best_acc_idx].phase_name,
+				"fitness": best_acc_ce,
+				"accuracy": best_acc_acc,
+				"genome": best_acc_genome.serialize(),
+				"genome_stats": best_acc_genome.stats(),
+			}
 
 		# Store for later access
 		self.results = results
