@@ -24,6 +24,8 @@ from dataclasses import dataclass, field
 from enum import IntEnum, auto
 from typing import Callable, Generic, Optional, TypeVar, Any
 
+from wnn.ram.fitness import FitnessCalculatorType
+
 # Generic genome type
 T = TypeVar('T')
 
@@ -600,6 +602,10 @@ class GAConfig:
 	# CE percentile filter: keep only offspring in top X% by CE (None = disabled)
 	# Example: 0.75 keeps top 75% by CE. Applied after accuracy threshold.
 	ce_percentile: Optional[float] = None
+	# Fitness calculator: how to combine CE and accuracy for ranking
+	# CE = pure CE ranking (default, backward compatible)
+	# HARMONIC_RANK = harmonic mean of CE rank and accuracy rank (balances both)
+	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.CE
 	# Early stopping (all configurable via parameters)
 	patience: int = 5              # Checks without improvement before stopping
 	check_interval: int = 5        # Check every N generations
@@ -625,6 +631,10 @@ class TSConfig:
 	# CE percentile filter: keep only neighbors in top X% by CE (None = disabled)
 	# Example: 0.75 keeps top 75% by CE. Applied after accuracy threshold.
 	ce_percentile: Optional[float] = None
+	# Fitness calculator: how to combine CE and accuracy for ranking
+	# CE = pure CE ranking (default, backward compatible)
+	# HARMONIC_RANK = harmonic mean of CE rank and accuracy rank (balances both)
+	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.CE
 	# Early stopping (all configurable via parameters)
 	patience: int = 5              # Checks without improvement before stopping
 	check_interval: int = 5        # Check every N iterations

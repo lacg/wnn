@@ -22,6 +22,7 @@ from wnn.ram.strategies.connectivity.generic_strategies import (
 	TSConfig,
 	OptimizerResult,
 )
+from wnn.ram.fitness import FitnessCalculatorFactory
 from wnn.ram.architecture.genome_log import (
 	GenomeLogType,
 	format_genome_log,
@@ -461,6 +462,10 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		arch_cfg = self._arch_config
 		evaluator = self._cached_evaluator
 
+		# Create fitness calculator for ranking
+		fitness_calculator = FitnessCalculatorFactory.create(cfg.fitness_calculator_type)
+		self._log.info(f"[{self.name}] Fitness calculator: {fitness_calculator.name}")
+
 		# Threshold continuity
 		start_threshold = cfg.initial_threshold if cfg.initial_threshold is not None else cfg.min_accuracy
 		end_threshold = start_threshold + cfg.threshold_delta
@@ -517,8 +522,12 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 				g._cached_fitness = (ce, acc)
 				population.append((g, ce))
 
-		# Sort by fitness (lower CE is better), accuracy as tie-breaker (higher better)
-		population.sort(key=lambda x: (x[1], -getattr(x[0], '_cached_fitness', (0, 0))[1]))
+		# Rank population using fitness calculator
+		# Convert to (genome, ce, acc) format for ranking
+		pop_for_ranking = [(g, ce, g._cached_fitness[1]) for g, ce in population]
+		ranked = fitness_calculator.rank(pop_for_ranking)
+		# Convert back to (genome, ce) format
+		population = [(g, g._cached_fitness[0]) for g, _ in ranked]
 
 		# Track best
 		best_genome, best_fitness = population[0]
@@ -649,13 +658,17 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			new_population = list(elites)
 			new_population.extend(offspring_with_ce)
 
-			# Sort and truncate - sort by CE ascending, accuracy as tie-breaker (higher better)
-			new_population.sort(key=lambda x: (x[1], -getattr(x[0], '_cached_fitness', (0, 0))[1]))
-			population = new_population[:cfg.population_size]
+			# Rank using fitness calculator, then truncate
+			pop_for_ranking = [(g, ce, g._cached_fitness[1]) for g, ce in new_population]
+			ranked = fitness_calculator.rank(pop_for_ranking)
+			population = [(g, g._cached_fitness[0]) for g, _ in ranked[:cfg.population_size]]
 
-			# Update best
-			if population[0][1] < best_fitness:
-				best_genome, best_fitness = population[0]
+			# Update best (best by fitness ranking, get CE from cached fitness)
+			best_genome_candidate = population[0][0]
+			best_ce_candidate = best_genome_candidate._cached_fitness[0]
+			if best_ce_candidate < best_fitness:
+				best_genome = best_genome_candidate
+				best_fitness = best_ce_candidate
 
 			# Log generation summary with duration
 			gen_elapsed = time.time() - gen_start
