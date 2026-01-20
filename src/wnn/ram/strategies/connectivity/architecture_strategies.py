@@ -657,18 +657,34 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 					ce, acc = g._cached_fitness
 					offspring_with_ce.append((g, ce))
 
-			# Apply CE percentile filter if configured
+			# Apply percentile filter if configured (uses fitness calculator for ranking)
 			if cfg.ce_percentile is not None and offspring_with_ce:
-				ce_filter = PercentileFilter(
-					percentile=cfg.ce_percentile,
-					mode=FilterMode.LOWER_IS_BETTER,
-					metric_name="CE",
-				)
-				filter_result = ce_filter.apply(offspring_with_ce, key=lambda g, f: f)
-				offspring_with_ce = filter_result.kept
+				if cfg.fitness_calculator_type == FitnessCalculatorType.HARMONIC_RANK:
+					# HARMONIC_RANK: Filter by harmonic rank fitness
+					pop_for_filter = [(g, ce, g._cached_fitness[1]) for g, ce in offspring_with_ce]
+					fitness_scores = fitness_calculator.fitness(pop_for_filter)
+					offspring_with_fitness = [(g, ce, score) for (g, ce), score in zip(offspring_with_ce, fitness_scores)]
+
+					fitness_filter = PercentileFilter(
+						percentile=cfg.ce_percentile,
+						mode=FilterMode.LOWER_IS_BETTER,
+						metric_name="HarmonicRank",
+					)
+					filter_result = fitness_filter.apply(offspring_with_fitness, key=lambda g, ce, f: f)
+					offspring_with_ce = [(g, ce) for g, ce, _ in filter_result.kept]
+				else:
+					# CE mode: Filter by CE only
+					ce_filter = PercentileFilter(
+						percentile=cfg.ce_percentile,
+						mode=FilterMode.LOWER_IS_BETTER,
+						metric_name="CE",
+					)
+					filter_result = ce_filter.apply(offspring_with_ce, key=lambda g, f: f)
+					offspring_with_ce = filter_result.kept
+
 				if filter_result.filtered:
 					self._log.debug(
-						f"[{self.name}] CE filter: kept {filter_result.kept_count}/{filter_result.total_count} "
+						f"[{self.name}] {filter_result.metric_name} filter: kept {filter_result.kept_count}/{filter_result.total_count} "
 						f"(threshold={filter_result.threshold_value:.4f})"
 					)
 
@@ -1113,15 +1129,18 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 					return_best_n=True,
 				)
 
-				# Apply CE percentile filter if configured
+				# Apply percentile filter by harmonic rank fitness
 				if cfg.ce_percentile is not None and neighbors:
-					ce_filter = PercentileFilter(
+					pop_for_filter = [(g, g._cached_fitness[0], g._cached_fitness[1]) for g in neighbors]
+					fitness_scores = fitness_calculator.fitness(pop_for_filter)
+					neighbor_with_fitness = [(g, score) for g, score in zip(neighbors, fitness_scores)]
+
+					fitness_filter = PercentileFilter(
 						percentile=cfg.ce_percentile,
 						mode=FilterMode.LOWER_IS_BETTER,
-						metric_name="CE",
+						metric_name="HarmonicRank",
 					)
-					neighbor_population = [(g, g._cached_fitness[0]) for g in neighbors]
-					filter_result = ce_filter.apply(neighbor_population, key=lambda g, f: f)
+					filter_result = fitness_filter.apply(neighbor_with_fitness, key=lambda g, f: f)
 					neighbors = [g for g, _ in filter_result.kept]
 
 				# Add to all_neighbors
