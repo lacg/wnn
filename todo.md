@@ -2,14 +2,14 @@
 
 ---
 
-## 🎯 NEXT STEPS (2026-01-15)
+## 🎯 NEXT STEPS (Updated 2026-01-19)
 
 ### Current Best Result
 | Config | Test PPL | Test Acc | Notes |
 |--------|----------|----------|-------|
 | **5-tier + EMPTY=0.0** | **26,986** | 4.86% | No optimization needed |
 
-### What Failed
+### What Failed (2026-01-15)
 - ❌ Per-cluster optimization (50K params) - flat fitness landscape, 0% improvement
 - ❌ Connectivity optimization on trained model - degraded PPL by 7-24%
 - ❌ Adaptive architecture search with random connections - TS couldn't improve (see below)
@@ -34,14 +34,23 @@ The fitness of a genome depends on BOTH architecture AND connectivity. With rand
 2. Inherit connections during crossover/mutation
 3. Mutate connections with small deltas (+/-1, +/-2) not random regeneration
 
-### Promising Next Experiments
+### Experiments Status
 
-| Priority | Experiment | Rationale | Command |
-|----------|------------|-----------|---------|
-| **1** | **Connection-preserving search** | Fix the root cause - connections as genome state | `run_adaptive_search.py` |
-| **2** | **Phased optimization** | Neurons → Bits → Connectivity in separate phases | TBD |
-| **3** | **Longer context (n=5,6)** | More disambiguation, especially for tier 0 | `--context 5` |
-| **4** | **Scale up best config** | More neurons for tier 0 (20→30), more data | `--tiered "50,30,20;..."` |
+| Priority | Experiment | Status | Notes |
+|----------|------------|--------|-------|
+| **1** | **Connection-preserving search** | ✅ Done | Connections now part of genome state |
+| **2** | **Phased optimization** | 🔄 In Progress | Pass 1 running, Phase 3a GA Connections |
+| **3** | **Longer context (n=5,6)** | ⏳ Pending | More disambiguation, especially for tier 0 |
+| **4** | **Scale up best config** | ⏳ Pending | More neurons for tier 0 (20→30), more data |
+
+### 📋 Phased Search Optimization Roadmap
+
+See **[docs/OPTIMIZATION_ROADMAP.md](docs/OPTIMIZATION_ROADMAP.md)** for detailed tuning ideas based on current run observations:
+- CE Percentile Filter (50% vs 75%)
+- Patience & Early Stopping improvements
+- Progressive Threshold tuning
+- Adaptive Level Thresholds
+- Elite CE vs Accuracy Balance
 
 ### Key Insights
 
@@ -50,14 +59,24 @@ The fitness of a genome depends on BOTH architecture AND connectivity. With rand
 3. **Tier 0 dominates**: 42% of data, 11% accuracy - focus optimization here
 4. **Per-token too fine**: Need coarser granularity (tiers/buckets) for optimization signal
 5. **Connections must be stateful**: Random regeneration breaks evolutionary search
+6. **Early stop vs adaptive**: Early stopping triggers before adaptive mechanisms can adjust (see roadmap)
 
-### Recently Completed ✅ (2026-01-15)
+### Recently Completed ✅ (2026-01-15 → 2026-01-19)
 - Added Metal GPU acceleration for dense groups (bits ≤ 12) in adaptive evaluation
 - Fixed double evaluation bug (batch evaluator now returns `(CE, accuracy)` tuples)
 - Fixed memory explosion by using sequential genome evaluation with parallel training
 - Added early stopping status indicators (🟢 HEALTHY / ⚪ NEUTRAL / 🟡 WARNING / 🔴 CRITICAL)
 - Removed duplicate logging in GA/TS strategies
 - Centralized `empty_value` in `EvaluatorConfig`
+- **Phased Search Infrastructure** (2026-01-18 → 2026-01-19):
+  - 6-phase architecture: 1a/1b (neurons), 2a/2b (bits), 3a/3b (connections)
+  - Dual-path TS tracking top 25 by CE + top 25 by Acc
+  - Gzip compression for checkpoints (JSON+gzip)
+  - YAML config file support
+  - Baseline evaluation before Phase 1a
+  - Full validation at phase end for accurate comparison
+  - Fixed TS deduplication (was passing 7 genomes instead of 50)
+  - Patience +1 recovery instead of full reset on improvement
 
 ### Architecture Cleanup ✅
 - Deleted 17 Counter-based test scripts (wrong architecture)
