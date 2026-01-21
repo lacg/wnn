@@ -87,6 +87,8 @@ class ArchitectureConfig:
 	token_frequencies: Optional[list[int]] = None
 	# Total input bits for connection initialization/mutation
 	total_input_bits: Optional[int] = None
+	# Tier0-only: only mutate first N clusters (None = all clusters mutable)
+	mutable_clusters: Optional[int] = None
 
 
 class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
@@ -165,7 +167,9 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			return mutant
 
 		# Mutate architecture (bits and/or neurons)
-		for i in range(cfg.num_clusters):
+		# If mutable_clusters is set, only mutate first N clusters (tier0-only mode)
+		max_mutable = cfg.mutable_clusters if cfg.mutable_clusters is not None else cfg.num_clusters
+		for i in range(max_mutable):
 			if self._rng.random() < mutation_rate:
 				if cfg.optimize_bits:
 					# Random delta in [-bits_delta_max, +bits_delta_max]
@@ -836,8 +840,10 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		old_neurons = genome.neurons_per_cluster.copy()
 
 		# Mutate multiple clusters based on mutation_rate
+		# If mutable_clusters is set, only mutate first N clusters (tier0-only mode)
+		max_mutable = cfg.mutable_clusters if cfg.mutable_clusters is not None else cfg.num_clusters
 		mutated_clusters = []
-		for i in range(cfg.num_clusters):
+		for i in range(max_mutable):
 			if self._rng.random() < mutation_rate:
 				mutated_clusters.append(i)
 

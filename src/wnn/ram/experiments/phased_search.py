@@ -45,9 +45,21 @@ class PhasedSearchConfig:
 	# Early stopping
 	patience: int = 10
 
-	# Architecture defaults
+	# Architecture defaults (used when tiered config not specified)
 	default_bits: int = 8
 	default_neurons: int = 5
+
+	# Tiered architecture configuration
+	# Format: list of (num_clusters, neurons, bits) tuples
+	# e.g., [(100, 15, 20), (400, 10, 12), (None, 5, 8)]
+	# None in num_clusters means "rest of vocabulary"
+	tier_config: Optional[list[tuple[Optional[int], int, int]]] = None
+
+	# Phase order: "neurons_first" (default) or "bits_first"
+	phase_order: str = "neurons_first"
+
+	# Tier0-only optimization: only mutate clusters in tier0
+	optimize_tier0_only: bool = False
 
 	# CE percentile filter (None = disabled, 0.75 = keep top 75% by CE)
 	ce_percentile: Optional[float] = None
@@ -57,6 +69,82 @@ class PhasedSearchConfig:
 
 	# Logging
 	log_path: Optional[str] = None
+
+	def get_tier_boundaries(self, vocab_size: int) -> list[int]:
+		"""
+		Get tier boundaries as cluster indices.
+
+		Returns:
+			List of boundary indices. For tier_config [(100, n, b), (400, n, b), (None, n, b)]:
+			returns [100, 500, vocab_size] meaning tier0=[0:100), tier1=[100:500), tier2=[500:vocab_size)
+		"""
+		if not self.tier_config:
+			return [vocab_size]  # Single tier = all clusters
+
+		boundaries = []
+		cumulative = 0
+		for tier_spec in self.tier_config:
+			num_clusters, _, _ = tier_spec
+			if num_clusters is None:
+				# "rest" tier - goes to end
+				boundaries.append(vocab_size)
+			else:
+				cumulative += num_clusters
+				boundaries.append(min(cumulative, vocab_size))
+		return boundaries
+
+	def get_tier0_clusters(self, vocab_size: int) -> int:
+		"""Get the number of clusters in tier0 (for tier0-only optimization)."""
+		if not self.tier_config:
+			return vocab_size  # No tiers = all clusters
+		num_clusters = self.tier_config[0][0]
+		return num_clusters if num_clusters is not None else vocab_size
+
+	def create_tiered_genome(self, vocab_size: int) -> 'ClusterGenome':
+		"""
+		Create a ClusterGenome with tiered bits/neurons configuration.
+
+		Uses tier_config if specified, otherwise creates uniform genome
+		with default_bits and default_neurons.
+		"""
+		from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
+
+		if not self.tier_config:
+			return ClusterGenome.create_uniform(
+				num_clusters=vocab_size,
+				bits=self.default_bits,
+				neurons=self.default_neurons,
+			)
+
+		# Build per-cluster bits and neurons arrays
+		bits_per_cluster = []
+		neurons_per_cluster = []
+		cluster_idx = 0
+
+		for tier_spec in self.tier_config:
+			num_clusters, neurons, bits = tier_spec
+			if num_clusters is None:
+				# Fill rest of vocabulary
+				count = vocab_size - cluster_idx
+			else:
+				count = min(num_clusters, vocab_size - cluster_idx)
+
+			bits_per_cluster.extend([bits] * count)
+			neurons_per_cluster.extend([neurons] * count)
+			cluster_idx += count
+
+			if cluster_idx >= vocab_size:
+				break
+
+		# Pad if needed (shouldn't happen with proper config)
+		while len(bits_per_cluster) < vocab_size:
+			bits_per_cluster.append(self.default_bits)
+			neurons_per_cluster.append(self.default_neurons)
+
+		return ClusterGenome(
+			bits_per_cluster=bits_per_cluster[:vocab_size],
+			neurons_per_cluster=neurons_per_cluster[:vocab_size],
+		)
 
 	def to_yaml(self) -> str:
 		"""Convert config to YAML string."""
@@ -185,7 +273,8 @@ class PhaseResult:
 
 
 # Phase name constants for checkpoint files (without extension - .json.gz added automatically)
-PHASE_NAMES = {
+# "neurons_first" order (default): neurons -> bits -> connections
+PHASE_NAMES_NEURONS_FIRST = {
 	"1a": "phase_1a_ga_neurons",
 	"1b": "phase_1b_ts_neurons",
 	"2a": "phase_2a_ga_bits",
@@ -193,6 +282,19 @@ PHASE_NAMES = {
 	"3a": "phase_3a_ga_connections",
 	"3b": "phase_3b_ts_connections",
 }
+
+# "bits_first" order: bits -> neurons -> connections
+PHASE_NAMES_BITS_FIRST = {
+	"1a": "phase_1a_ga_bits",
+	"1b": "phase_1b_ts_bits",
+	"2a": "phase_2a_ga_neurons",
+	"2b": "phase_2b_ts_neurons",
+	"3a": "phase_3a_ga_connections",
+	"3b": "phase_3b_ts_connections",
+}
+
+# For backwards compatibility
+PHASE_NAMES = PHASE_NAMES_NEURONS_FIRST
 
 
 class PhasedSearchRunner:
@@ -242,8 +344,9 @@ class PhasedSearchRunner:
 			return None
 
 		self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+		phase_names = self._get_phase_names()
 		# Use .json extension - save() will auto-add .gz
-		filename = f"{PHASE_NAMES.get(phase_key, phase_key)}.json"
+		filename = f"{phase_names.get(phase_key, phase_key)}.json"
 		filepath = self.checkpoint_dir / filename
 
 		result.save(
@@ -269,7 +372,8 @@ class PhasedSearchRunner:
 		if self.checkpoint_dir is None:
 			return None
 
-		base_filename = PHASE_NAMES.get(phase_key, phase_key)
+		phase_names = self._get_phase_names()
+		base_filename = phase_names.get(phase_key, phase_key)
 
 		# Try compressed first, then uncompressed
 		gz_path = self.checkpoint_dir / f"{base_filename}.json.gz"
@@ -306,9 +410,10 @@ class PhasedSearchRunner:
 
 		# Find latest completed phase (check both .json.gz and .json)
 		phase_order = ["1a", "1b", "2a", "2b", "3a", "3b"]
+		phase_names = self._get_phase_names()
 		latest = None
 		for phase_key in phase_order:
-			base = PHASE_NAMES.get(phase_key, phase_key)
+			base = phase_names.get(phase_key, phase_key)
 			gz_exists = (self.checkpoint_dir / f"{base}.json.gz").exists()
 			json_exists = (self.checkpoint_dir / f"{base}.json").exists()
 			if gz_exists or json_exists:
@@ -370,6 +475,12 @@ class PhasedSearchRunner:
 		self.total_input_bits = self.config.context_size * bits_per_token
 		self.log("")
 		self.log(f"Input encoding: {self.config.context_size} tokens × {bits_per_token} bits = {self.total_input_bits} bits")
+
+	def _get_phase_names(self) -> dict[str, str]:
+		"""Get the phase names dict based on configured phase_order."""
+		if self.config.phase_order == "bits_first":
+			return PHASE_NAMES_BITS_FIRST
+		return PHASE_NAMES_NEURONS_FIRST
 
 	def run_phase(
 		self,
@@ -436,6 +547,12 @@ class PhasedSearchRunner:
 			"ce_percentile": cfg.ce_percentile,  # CE percentile filter (None = disabled)
 			"seed": self._rotation_seed,  # Use rotation_seed for strategy RNG
 		}
+
+		# Tier0-only optimization: only mutate top N clusters
+		if cfg.optimize_tier0_only:
+			tier0_clusters = cfg.get_tier0_clusters(self.vocab_size)
+			strategy_kwargs["mutable_clusters"] = tier0_clusters
+			self.log(f"  Tier0-only mode: mutating only first {tier0_clusters} clusters")
 
 		if is_ga:
 			strategy_kwargs["generations"] = cfg.ga_generations
@@ -559,6 +676,10 @@ class PhasedSearchRunner:
 		"""
 		Run all phases: 1a -> 1b -> 2a -> 2b -> 3a -> 3b -> final evaluation.
 
+		Phase order depends on config.phase_order:
+		- "neurons_first" (default): neurons -> bits -> connections
+		- "bits_first": bits -> neurons -> connections
+
 		Args:
 			seed_genome: Optional genome to seed Phase 1a from (used if no population)
 			seed_population: Optional population to seed Phase 1a from (from previous pass)
@@ -571,6 +692,30 @@ class PhasedSearchRunner:
 		"""
 		results: dict[str, Any] = {}
 		completed_phases: list[PhaseResult] = []
+
+		# Determine phase configuration based on phase_order
+		if self.config.phase_order == "bits_first":
+			# bits -> neurons -> connections
+			phase_specs = [
+				("1a", "Phase 1a: GA Bits Only", OptimizerStrategyType.ARCHITECTURE_GA, True, False, False),
+				("1b", "Phase 1b: TS Bits Only (refine)", OptimizerStrategyType.ARCHITECTURE_TS, True, False, False),
+				("2a", "Phase 2a: GA Neurons Only", OptimizerStrategyType.ARCHITECTURE_GA, False, True, False),
+				("2b", "Phase 2b: TS Neurons Only (refine)", OptimizerStrategyType.ARCHITECTURE_TS, False, True, False),
+				("3a", "Phase 3a: GA Connections Only", OptimizerStrategyType.ARCHITECTURE_GA, False, False, True),
+				("3b", "Phase 3b: TS Connections Only (refine)", OptimizerStrategyType.ARCHITECTURE_TS, False, False, True),
+			]
+			self.log(f"Phase order: bits → neurons → connections")
+		else:
+			# neurons -> bits -> connections (default)
+			phase_specs = [
+				("1a", "Phase 1a: GA Neurons Only", OptimizerStrategyType.ARCHITECTURE_GA, False, True, False),
+				("1b", "Phase 1b: TS Neurons Only (refine)", OptimizerStrategyType.ARCHITECTURE_TS, False, True, False),
+				("2a", "Phase 2a: GA Bits Only", OptimizerStrategyType.ARCHITECTURE_GA, True, False, False),
+				("2b", "Phase 2b: TS Bits Only (refine)", OptimizerStrategyType.ARCHITECTURE_TS, True, False, False),
+				("3a", "Phase 3a: GA Connections Only", OptimizerStrategyType.ARCHITECTURE_GA, False, False, True),
+				("3b", "Phase 3b: TS Connections Only (refine)", OptimizerStrategyType.ARCHITECTURE_TS, False, False, True),
+			]
+			self.log(f"Phase order: neurons → bits → connections")
 
 		# Phase order for resume logic
 		phase_order = ["1a", "1b", "2a", "2b", "3a", "3b"]
@@ -595,10 +740,14 @@ class PhasedSearchRunner:
 		# Baseline: Evaluate initial genome on full validation
 		# =====================================================================
 		if start_idx <= 0:
-			# Create default genome if no seed provided
+			# Create tiered genome if config specifies tiers, else uniform
 			if seed_genome:
 				baseline_genome = seed_genome
 				self.log("Evaluating seed genome as baseline...")
+			elif self.config.tier_config:
+				baseline_genome = self.config.create_tiered_genome(self.vocab_size)
+				self.log("Evaluating tiered genome as baseline...")
+				self.log(f"  Tier config: {self.config.tier_config}")
 			else:
 				from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 				baseline_genome = ClusterGenome.create_uniform(
@@ -611,161 +760,64 @@ class PhasedSearchRunner:
 			baseline_ce, baseline_acc = self.evaluator.evaluate_single_full(baseline_genome)
 			self.log(f"  Baseline CE: {baseline_ce:.4f}, Acc: {baseline_acc:.2%}")
 			self.log("")
+
+			# Use tiered genome as seed if no explicit seed provided
+			if seed_genome is None and self.config.tier_config:
+				seed_genome = baseline_genome
 		else:
 			# When resuming, we don't have the baseline - use None
 			baseline_ce, baseline_acc = None, None
 
 		# =====================================================================
-		# Phase 1a: GA Neurons Only
+		# Run all phases dynamically based on phase_specs
 		# =====================================================================
-		if start_idx <= 0:
-			p1a = self.run_phase(
-				phase_name="Phase 1a: GA Neurons Only",
-				strategy_type=OptimizerStrategyType.ARCHITECTURE_GA,
-				optimize_bits=False,
-				optimize_neurons=True,
-				optimize_connections=False,
-				initial_genome=seed_genome,
-				initial_population=seed_population,
-				initial_threshold=seed_threshold,
-			)
-			results["phase1_ga"] = {
-				"fitness": p1a.final_fitness,
-				"accuracy": p1a.final_accuracy,
-				"iterations": p1a.iterations_run,
-			}
-			completed_phases.append(p1a)
-			self.print_progress("After Phase 1a", completed_phases, baseline_ce, baseline_acc)
-			self.save_checkpoint("1a", p1a)
-		else:
-			p1a = completed_phases[0]
+		prev_result: Optional[PhaseResult] = None
 
-		# =====================================================================
-		# Phase 1b: TS Neurons Only
-		# =====================================================================
-		if start_idx <= 1:
-			p1b = self.run_phase(
-				phase_name="Phase 1b: TS Neurons Only (refine)",
-				strategy_type=OptimizerStrategyType.ARCHITECTURE_TS,
-				optimize_bits=False,
-				optimize_neurons=True,
-				optimize_connections=False,
-				initial_genome=p1a.best_genome,
-				initial_fitness=p1a.final_fitness,
-				initial_population=p1a.final_population,
-				initial_threshold=p1a.final_threshold,
-			)
-			results["phase1_ts"] = {
-				"fitness": p1b.final_fitness,
-				"accuracy": p1b.final_accuracy,
-				"iterations": p1b.iterations_run,
-			}
-			completed_phases.append(p1b)
-			self.print_progress("After Phase 1b", completed_phases, baseline_ce, baseline_acc)
-			self.save_checkpoint("1b", p1b)
-		else:
-			p1b = completed_phases[1]
+		for idx, (phase_key, phase_name, strategy_type, opt_bits, opt_neurons, opt_conns) in enumerate(phase_specs):
+			if start_idx > idx:
+				prev_result = completed_phases[idx]
+				continue
 
-		# =====================================================================
-		# Phase 2a: GA Bits Only
-		# =====================================================================
-		if start_idx <= 2:
-			p2a = self.run_phase(
-				phase_name="Phase 2a: GA Bits Only",
-				strategy_type=OptimizerStrategyType.ARCHITECTURE_GA,
-				optimize_bits=True,
-				optimize_neurons=False,
-				optimize_connections=False,
-				initial_genome=p1b.best_genome,
-				initial_population=p1b.final_population,
-				initial_threshold=p1b.final_threshold,
-			)
-			results["phase2_ga"] = {
-				"fitness": p2a.final_fitness,
-				"accuracy": p2a.final_accuracy,
-				"iterations": p2a.iterations_run,
-			}
-			completed_phases.append(p2a)
-			self.print_progress("After Phase 2a", completed_phases, baseline_ce, baseline_acc)
-			self.save_checkpoint("2a", p2a)
-		else:
-			p2a = completed_phases[2]
+			# Determine initial genome/population
+			if idx == 0:
+				init_genome = seed_genome
+				init_population = seed_population
+				init_threshold = seed_threshold
+				init_fitness = None
+			else:
+				init_genome = prev_result.best_genome
+				init_population = prev_result.final_population
+				init_threshold = prev_result.final_threshold
+				init_fitness = prev_result.final_fitness if strategy_type == OptimizerStrategyType.ARCHITECTURE_TS else None
 
-		# =====================================================================
-		# Phase 2b: TS Bits Only
-		# =====================================================================
-		if start_idx <= 3:
-			p2b = self.run_phase(
-				phase_name="Phase 2b: TS Bits Only (refine)",
-				strategy_type=OptimizerStrategyType.ARCHITECTURE_TS,
-				optimize_bits=True,
-				optimize_neurons=False,
-				optimize_connections=False,
-				initial_genome=p2a.best_genome,
-				initial_fitness=p2a.final_fitness,
-				initial_population=p2a.final_population,
-				initial_threshold=p2a.final_threshold,
+			phase_result = self.run_phase(
+				phase_name=phase_name,
+				strategy_type=strategy_type,
+				optimize_bits=opt_bits,
+				optimize_neurons=opt_neurons,
+				optimize_connections=opt_conns,
+				initial_genome=init_genome,
+				initial_fitness=init_fitness,
+				initial_population=init_population,
+				initial_threshold=init_threshold,
 			)
-			results["phase2_ts"] = {
-				"fitness": p2b.final_fitness,
-				"accuracy": p2b.final_accuracy,
-				"iterations": p2b.iterations_run,
-			}
-			completed_phases.append(p2b)
-			self.print_progress("After Phase 2b", completed_phases, baseline_ce, baseline_acc)
-			self.save_checkpoint("2b", p2b)
-		else:
-			p2b = completed_phases[3]
 
-		# =====================================================================
-		# Phase 3a: GA Connections Only
-		# =====================================================================
-		if start_idx <= 4:
-			p3a = self.run_phase(
-				phase_name="Phase 3a: GA Connections Only",
-				strategy_type=OptimizerStrategyType.ARCHITECTURE_GA,
-				optimize_bits=False,
-				optimize_neurons=False,
-				optimize_connections=True,
-				initial_genome=p2b.best_genome,
-				initial_population=p2b.final_population,
-				initial_threshold=p2b.final_threshold,
-			)
-			results["phase3_ga"] = {
-				"fitness": p3a.final_fitness,
-				"accuracy": p3a.final_accuracy,
-				"iterations": p3a.iterations_run,
+			# Store result in dict (use phase1/2/3 naming for backwards compat)
+			phase_num = (idx // 2) + 1
+			phase_type = "ga" if strategy_type == OptimizerStrategyType.ARCHITECTURE_GA else "ts"
+			results[f"phase{phase_num}_{phase_type}"] = {
+				"fitness": phase_result.final_fitness,
+				"accuracy": phase_result.final_accuracy,
+				"iterations": phase_result.iterations_run,
 			}
-			completed_phases.append(p3a)
-			self.print_progress("After Phase 3a", completed_phases, baseline_ce, baseline_acc)
-			self.save_checkpoint("3a", p3a)
-		else:
-			p3a = completed_phases[4]
 
-		# =====================================================================
-		# Phase 3b: TS Connections Only
-		# =====================================================================
-		if start_idx <= 5:
-			p3b = self.run_phase(
-				phase_name="Phase 3b: TS Connections Only (refine)",
-				strategy_type=OptimizerStrategyType.ARCHITECTURE_TS,
-				optimize_bits=False,
-				optimize_neurons=False,
-				optimize_connections=True,
-				initial_genome=p3a.best_genome,
-				initial_fitness=p3a.final_fitness,
-				initial_population=p3a.final_population,
-				initial_threshold=p3a.final_threshold,
-			)
-			results["phase3_ts"] = {
-				"fitness": p3b.final_fitness,
-				"accuracy": p3b.final_accuracy,
-				"iterations": p3b.iterations_run,
-			}
-			completed_phases.append(p3b)
-			self.save_checkpoint("3b", p3b)
-		else:
-			p3b = completed_phases[5]
+			completed_phases.append(phase_result)
+			self.print_progress(f"After Phase {phase_key}", completed_phases, baseline_ce, baseline_acc)
+			self.save_checkpoint(phase_key, phase_result)
+			prev_result = phase_result
+
+		# Get final result (last phase)
+		p3b = completed_phases[-1]
 
 		# =====================================================================
 		# Final Evaluation with FULL training tokens

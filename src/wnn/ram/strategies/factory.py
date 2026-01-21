@@ -324,6 +324,8 @@ class OptimizerStrategyFactory:
 		total_neighbors_size: int | None = None,  # None = use neighbors_per_iter
 		# CE percentile filter (None = disabled, 0.75 = keep top 75% by CE)
 		ce_percentile: float | None = None,
+		# Tier0-only: only mutate first N clusters (None = all clusters)
+		mutable_clusters: int | None = None,
 		# Common
 		seed: int | None = None,  # None = time-based
 		verbose: bool = False,
@@ -416,6 +418,7 @@ class OptimizerStrategyFactory:
 					default_neurons=default_neurons,
 					token_frequencies=token_frequencies,
 					total_input_bits=total_input_bits,
+					mutable_clusters=mutable_clusters,
 					population_size=population_size,
 					generations=generations,
 					mutation_rate=mutation_rate,
@@ -443,6 +446,7 @@ class OptimizerStrategyFactory:
 					default_neurons=default_neurons,
 					token_frequencies=token_frequencies,
 					total_input_bits=total_input_bits,
+					mutable_clusters=mutable_clusters,
 					iterations=iterations,
 					neighbors_per_iter=neighbors_per_iter,
 					total_neighbors_size=total_neighbors_size,
@@ -517,6 +521,7 @@ class OptimizerStrategyFactory:
 		default_neurons: int,
 		token_frequencies: list[int] | None,
 		total_input_bits: int | None,
+		mutable_clusters: int | None,
 		population_size: int,
 		generations: int,
 		mutation_rate: float,
@@ -549,6 +554,7 @@ class OptimizerStrategyFactory:
 			default_neurons=default_neurons,
 			token_frequencies=token_frequencies,
 			total_input_bits=total_input_bits,
+			mutable_clusters=mutable_clusters,
 		)
 		ga_config = GAConfig(
 			population_size=population_size,
@@ -578,6 +584,7 @@ class OptimizerStrategyFactory:
 		default_neurons: int,
 		token_frequencies: list[int] | None,
 		total_input_bits: int | None,
+		mutable_clusters: int | None,
 		iterations: int,
 		neighbors_per_iter: int,
 		total_neighbors_size: int | None,
@@ -611,6 +618,7 @@ class OptimizerStrategyFactory:
 			default_neurons=default_neurons,
 			token_frequencies=token_frequencies,
 			total_input_bits=total_input_bits,
+			mutable_clusters=mutable_clusters,
 		)
 		ts_config = TSConfig(
 			iterations=iterations,
