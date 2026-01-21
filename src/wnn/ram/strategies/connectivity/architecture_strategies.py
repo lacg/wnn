@@ -1019,21 +1019,18 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		self._log.info(f"[{self.name}] Progressive threshold: {start_threshold:.4%} → {end_threshold:.4%}")
 		self._log.info(f"[{self.name}] Using Rust search_neighbors (single-call neighbor search)")
 
-		# Best tracking - depends on mode
-		if use_harmonic:
-			# Single path: track best by harmonic rank
-			best_harmonic_genome = initial_genome.clone()
-			best_harmonic_fitness = initial_fitness  # CE for early stopping
-			best_harmonic_accuracy: Optional[float] = None
-		else:
-			# Dual path: track best_ce and best_acc separately
-			best_ce_genome = initial_genome.clone()
-			best_ce_fitness = initial_fitness
-			best_ce_accuracy: Optional[float] = None
+		# Best tracking - always track all three for logging
+		best_harmonic_genome = initial_genome.clone()
+		best_harmonic_fitness = initial_fitness  # CE of best-by-harmonic
+		best_harmonic_accuracy: Optional[float] = None
 
-			best_acc_genome = initial_genome.clone()
-			best_acc_fitness = initial_fitness
-			best_acc_accuracy: Optional[float] = None
+		best_ce_genome = initial_genome.clone()
+		best_ce_fitness = initial_fitness  # Best CE seen
+		best_ce_accuracy: Optional[float] = None
+
+		best_acc_genome = initial_genome.clone()
+		best_acc_fitness = initial_fitness  # CE of best-by-acc
+		best_acc_accuracy: Optional[float] = None
 
 		# Global best (for early stopping and result)
 		best = initial_genome.clone()
@@ -1056,6 +1053,17 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 				g._cached_fitness = (ce, acc)
 				all_neighbors.append((g.clone(), ce, acc))
 
+			# Always track best_ce and best_acc
+			for g, ce, acc in all_neighbors[1:]:  # Skip initial
+				if ce < best_ce_fitness:
+					best_ce_genome = g.clone()
+					best_ce_fitness = ce
+					best_ce_accuracy = acc
+				if acc is not None and (best_acc_accuracy is None or acc > best_acc_accuracy):
+					best_acc_genome = g.clone()
+					best_acc_fitness = ce
+					best_acc_accuracy = acc
+
 			if use_harmonic:
 				# Find best by harmonic rank
 				pop_for_ranking = [(g, ce, acc or 0.0) for g, ce, acc in all_neighbors if acc is not None]
@@ -1068,16 +1076,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 					best_fitness = best_harmonic_fitness
 					best_accuracy = best_harmonic_accuracy
 			else:
-				# Update best_ce and best_acc
-				for g, ce, acc in all_neighbors[1:]:  # Skip initial
-					if ce < best_ce_fitness:
-						best_ce_genome = g.clone()
-						best_ce_fitness = ce
-						best_ce_accuracy = acc
-					if acc is not None and (best_acc_accuracy is None or acc > best_acc_accuracy):
-						best_acc_genome = g.clone()
-						best_acc_fitness = ce
-						best_acc_accuracy = acc
+				# CE mode: global best is best_ce
 				if best_ce_fitness < best_fitness:
 					best = best_ce_genome.clone()
 					best_fitness = best_ce_fitness
@@ -1151,10 +1150,20 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 					filter_result = fitness_filter.apply(neighbor_with_fitness, key=lambda g, f: f)
 					neighbors = [g for g, _ in filter_result.kept]
 
-				# Add to all_neighbors
+				# Add to all_neighbors and track best_ce/best_acc
 				for g in neighbors:
 					ce, acc = g._cached_fitness
 					all_neighbors.append((g.clone(), ce, acc))
+					# Track best by CE
+					if ce < best_ce_fitness:
+						best_ce_genome = g.clone()
+						best_ce_fitness = ce
+						best_ce_accuracy = acc
+					# Track best by Acc
+					if acc is not None and (best_acc_accuracy is None or acc > best_acc_accuracy):
+						best_acc_genome = g.clone()
+						best_acc_fitness = ce
+						best_acc_accuracy = acc
 
 				# Find new best by harmonic rank (include current best)
 				pop_for_ranking = [(g, ce, acc or 0.0) for g, ce, acc in all_neighbors if acc is not None]
@@ -1175,10 +1184,11 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 						best_fitness = new_ce
 						best_accuracy = new_acc
 
-				# Log iteration summary
+				# Log iteration summary with all three metrics
+				acc_str = f"{best_acc_accuracy:.4%}" if best_acc_accuracy else "N/A"
 				self._log.info(f"[{self.name}] Iter {iteration+1:03d}/{cfg.iterations}: "
-							   f"best_ce={best_harmonic_fitness:.4f}, best_acc={best_harmonic_accuracy:.4%}" if best_harmonic_accuracy else
-							   f"[{self.name}] Iter {iteration+1:03d}/{cfg.iterations}: best_ce={best_harmonic_fitness:.4f}")
+							   f"best_harmonic=(CE={best_harmonic_fitness:.4f}, Acc={best_harmonic_accuracy:.4%}), "
+							   f"best_ce={best_ce_fitness:.4f}, best_acc={acc_str}")
 
 			else:
 				# === CE mode: Dual path ===
