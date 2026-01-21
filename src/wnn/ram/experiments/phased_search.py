@@ -23,6 +23,7 @@ from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 from wnn.ram.core.reporting import OptimizationResultsTable
 from wnn.ram.core import bits_needed
 from wnn.ram.architecture.cached_evaluator import CachedEvaluator
+from wnn.ram.fitness import FitnessCalculatorFactory, FitnessCalculatorType
 
 
 @dataclass
@@ -490,12 +491,61 @@ class PhasedSearchRunner:
 		baseline_ce: Optional[float] = None,
 		baseline_acc: Optional[float] = None,
 	) -> None:
-		"""Print a progress table with current results."""
+		"""Print a progress table with current results.
+
+		Shows best by Harmonic Rank, CE, and Accuracy for the latest phase,
+		each evaluated against full validation for fair comparison with baseline.
+		"""
 		table = OptimizationResultsTable(title)
 		if baseline_ce is not None:
 			table.add_stage("Initial (default genome)", ce=baseline_ce, accuracy=baseline_acc)
-		for pr in phase_results:
+
+		# For previous phases, just show their best result
+		for pr in phase_results[:-1]:
 			table.add_stage(pr.phase_name, ce=pr.final_fitness, accuracy=pr.final_accuracy)
+
+		# For the current (latest) phase, show best by Harmonic/CE/Acc
+		if phase_results:
+			current = phase_results[-1]
+			pop = current.final_population
+
+			if pop and len(pop) > 0:
+				# Evaluate all genomes to get their fitness
+				# (they should have _cached_fitness from the optimization)
+				pop_with_fitness = []
+				for g in pop:
+					if hasattr(g, '_cached_fitness') and g._cached_fitness is not None:
+						ce, acc = g._cached_fitness
+						pop_with_fitness.append((g, ce, acc))
+
+				if pop_with_fitness:
+					# Find best by CE (lowest)
+					best_ce_genome = min(pop_with_fitness, key=lambda x: x[1])[0]
+
+					# Find best by Accuracy (highest)
+					best_acc_genome = max(pop_with_fitness, key=lambda x: x[2])[0]
+
+					# Find best by Harmonic Rank
+					fitness_calc = FitnessCalculatorFactory.create(FitnessCalculatorType.HARMONIC_RANK)
+					ranked = fitness_calc.rank(pop_with_fitness)
+					best_harmonic_genome = ranked[0][0]
+
+					# Evaluate each against full validation
+					hr_ce, hr_acc = self.evaluator.evaluate_single_full(best_harmonic_genome)
+					ce_ce, ce_acc = self.evaluator.evaluate_single_full(best_ce_genome)
+					acc_ce, acc_acc = self.evaluator.evaluate_single_full(best_acc_genome)
+
+					# Add to table
+					table.add_stage(f"{current.phase_name} (Best Harmonic)", ce=hr_ce, accuracy=hr_acc)
+					table.add_stage(f"{current.phase_name} (Best CE)", ce=ce_ce, accuracy=ce_acc)
+					table.add_stage(f"{current.phase_name} (Best Acc)", ce=acc_ce, accuracy=acc_acc)
+				else:
+					# Fallback: just show the best genome
+					table.add_stage(current.phase_name, ce=current.final_fitness, accuracy=current.final_accuracy)
+			else:
+				# No population, just show best genome
+				table.add_stage(current.phase_name, ce=current.final_fitness, accuracy=current.final_accuracy)
+
 		self.log("")
 		table.print(self.log)
 
