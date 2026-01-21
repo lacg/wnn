@@ -618,12 +618,16 @@ class ClusterGenome:
 					self.connections.append(random.randint(0, total_input_bits - 1))
 
 	def clone(self) -> ClusterGenome:
-		"""Create a deep copy of this genome including connections."""
-		return ClusterGenome(
+		"""Create a deep copy of this genome including connections and cached fitness."""
+		genome = ClusterGenome(
 			bits_per_cluster=self.bits_per_cluster.copy(),
 			neurons_per_cluster=self.neurons_per_cluster.copy(),
 			connections=self.connections.copy() if self.connections is not None else None,
 		)
+		# Copy cached fitness if present
+		if hasattr(self, '_cached_fitness') and self._cached_fitness is not None:
+			genome._cached_fitness = self._cached_fitness
+		return genome
 
 	def to_tensor(self) -> Tensor:
 		"""Convert to tensor [num_clusters, 2] with (bits, neurons) per cluster."""

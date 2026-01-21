@@ -535,10 +535,16 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		initial_genome = best_genome.clone()
 		initial_fitness = best_fitness
 
+		# Find best by CE and best by Acc for the table
+		best_by_ce = min(population, key=lambda x: x[1])
+		best_by_acc = max(population, key=lambda x: x[0]._cached_fitness[1] if hasattr(x[0], '_cached_fitness') else 0.0)
+
 		# Show initialization results table
 		best_acc = best_genome._cached_fitness[1] if hasattr(best_genome, '_cached_fitness') else None
 		init_table = OptimizationResultsTable(f"{self.name} Initialization")
-		init_table.add_stage("Initial", ce=best_fitness, accuracy=best_acc)
+		init_table.add_stage("Best by Harmonic Rank", ce=best_fitness, accuracy=best_acc)
+		init_table.add_stage("Best by CE", ce=best_by_ce[1], accuracy=best_by_ce[0]._cached_fitness[1] if hasattr(best_by_ce[0], '_cached_fitness') else None)
+		init_table.add_stage("Best by Accuracy", ce=best_by_acc[1], accuracy=best_by_acc[0]._cached_fitness[1] if hasattr(best_by_acc[0], '_cached_fitness') else None)
 		self._log.info("")
 		init_table.print(self._log.info)
 
