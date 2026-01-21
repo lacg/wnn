@@ -162,6 +162,114 @@ tier0_20bit: 100,15,20;400,10,12;rest,5,8 (context=4)
 
 See `experiments/overnight_sweep.md` for full rankings and per-tier breakdowns.
 
+## 🔄 Phased Search: Configurable Optimization Order
+
+The phased architecture search now supports flexible configuration for tiered architectures and optimization order.
+
+### Configuration Options
+
+| Option | CLI Flag | Description |
+|--------|----------|-------------|
+| **Tiered config** | `--tier-config` | Different bits/neurons per tier |
+| **Phase order** | `--phase-order` | `neurons_first` or `bits_first` |
+| **Tier0-only** | `--tier0-only` | Only mutate frequent tokens |
+
+### Tier Config Format
+
+```bash
+# Format: "clusters,neurons,bits;clusters,neurons,bits;..."
+# Use "rest" for remaining vocabulary
+
+--tier-config "100,15,20;400,10,12;rest,5,8"
+# tier0: 100 tokens with 15 neurons, 20 bits
+# tier1: 400 tokens with 10 neurons, 12 bits
+# tier2: rest (50K+) tokens with 5 neurons, 8 bits
+```
+
+### Phase Order Options
+
+| Order | Sequence | Use Case |
+|-------|----------|----------|
+| `neurons_first` | neurons → bits → connections | Default, good for uniform starts |
+| `bits_first` | bits → neurons → connections | Better for tiered configs |
+
+### Tier0-Only Optimization
+
+When `--tier0-only` is set, only the most frequent tokens (tier0) are mutated during GA/TS optimization. This is useful because:
+
+- **Tier0 has most data**: ~46% of training examples for just 100 tokens
+- **Higher data density**: ~11,000 examples per token can fill 2^20 addresses
+- **Faster convergence**: Fewer parameters to optimize (100 vs 50,000 clusters)
+
+### Example Commands
+
+```bash
+# Run with tiered config, bits-first order, tier0-only optimization
+python run_phased_search.py \
+  --tier-config "100,15,20;400,10,12;rest,5,8" \
+  --phase-order bits_first \
+  --tier0-only \
+  --ga-gens 100 --ts-iters 200 --patience 10 \
+  --output experiments/tier0_bits_first.json
+```
+
+## 🎯 Context Length: Why Transformers Scale, RAM WNNs Don't
+
+### The Fundamental Difference
+
+| Aspect | Transformer | RAM WNN |
+|--------|-------------|---------|
+| **Context handling** | Selective attention | All bits → address |
+| **Context size** | 128K+ tokens | ~4-8 tokens optimal |
+| **Scaling** | O(n²) memory, linear utility | Exponential address space |
+| **Irrelevant tokens** | Ignored via low attention | ALL contribute to address |
+
+### Why Transformers Scale with Context
+
+Transformers use **selective attention** - they can:
+1. Compute relevance scores between all token pairs
+2. Attend strongly to relevant tokens, weakly to irrelevant ones
+3. Dynamically focus on different parts of context for different queries
+
+This means longer context = more opportunities to find relevant information, without penalty for irrelevant tokens.
+
+### Why RAM WNNs Don't Scale with Context
+
+RAM WNNs use **address-based lookup** - they:
+1. Concatenate ALL context bits into an address
+2. Look up that exact address in memory
+3. Cannot ignore any bits - all contribute to the address
+
+**The exponential problem:**
+- 4 tokens × 16 bits = 64 bits = 2^64 possible addresses
+- 8 tokens × 16 bits = 128 bits = 2^128 possible addresses (impossible to fill)
+
+With limited training data, longer context = sparser address space = more EMPTY cells = worse predictions.
+
+### Experimental Evidence
+
+From overnight sweeps:
+```
+context=4:  Best PPL 36,853 ✓
+context=8:  Higher PPL (worse)
+context=16: Even higher PPL (even worse)
+```
+
+### Possible Paths for Longer Context
+
+1. **Hierarchical compression**: Compress old context into summary bits
+2. **Recurrent state**: Carry information forward in hidden state
+3. **Sparse addressing**: Use LSH to select subset of context bits
+4. **Multi-scale neurons**: Different neurons attend to different time scales
+5. **Learned bit masking**: Gate which bits contribute to address
+
+### Connection to Connectivity Optimization
+
+The GA/TS connectivity optimization is actually implementing a form of **static attention**:
+- Each neuron's connectivity defines which bits it "attends to"
+- Optimization finds the most informative bit subsets
+- Unlike transformers, this is fixed per neuron (not dynamic per input)
+
 ## 🎯 Fitness Calculator: Balancing CE and Accuracy
 
 The architecture search optimizes for both **Cross-Entropy (CE)** and **Accuracy**. The fitness calculator determines how these are combined for ranking genomes.
