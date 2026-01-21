@@ -441,6 +441,72 @@ pub fn evaluate_genomes_cached_full(
     )
 }
 
+/// Evaluate genomes using hybrid CPU+GPU parallel evaluation (4-8x speedup).
+///
+/// Uses memory pool for parallel training, GPU batch evaluation, and pipelining.
+pub fn evaluate_genomes_cached_hybrid(
+    cache: &TokenCache,
+    genomes_bits_flat: &[usize],
+    genomes_neurons_flat: &[usize],
+    genomes_connections_flat: &[i64],
+    num_genomes: usize,
+    train_subset_idx: usize,
+    eval_subset_idx: usize,
+    empty_value: f32,
+) -> Vec<(f64, f64)> {
+    let train = cache.train_subset(train_subset_idx);
+    let eval = cache.eval_subset(eval_subset_idx);
+
+    crate::adaptive::evaluate_genomes_parallel_hybrid(
+        genomes_bits_flat,
+        genomes_neurons_flat,
+        genomes_connections_flat,
+        num_genomes,
+        cache.vocab_size(),
+        &train.input_bits,
+        &train.targets,
+        &train.negatives,
+        train.num_examples,
+        cache.num_negatives(),
+        &eval.input_bits,
+        &eval.targets,
+        eval.num_examples,
+        cache.total_input_bits(),
+        empty_value,
+    )
+}
+
+/// Evaluate genomes using full cached data with hybrid CPU+GPU (4-8x speedup).
+pub fn evaluate_genomes_cached_full_hybrid(
+    cache: &TokenCache,
+    genomes_bits_flat: &[usize],
+    genomes_neurons_flat: &[usize],
+    genomes_connections_flat: &[i64],
+    num_genomes: usize,
+    empty_value: f32,
+) -> Vec<(f64, f64)> {
+    let train = cache.full_train();
+    let eval = cache.full_eval();
+
+    crate::adaptive::evaluate_genomes_parallel_hybrid(
+        genomes_bits_flat,
+        genomes_neurons_flat,
+        genomes_connections_flat,
+        num_genomes,
+        cache.vocab_size(),
+        &train.input_bits,
+        &train.targets,
+        &train.negatives,
+        train.num_examples,
+        cache.num_negatives(),
+        &eval.input_bits,
+        &eval.targets,
+        eval.num_examples,
+        cache.total_input_bits(),
+        empty_value,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

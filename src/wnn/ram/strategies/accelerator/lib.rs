@@ -2675,6 +2675,84 @@ fn evaluate_genomes_parallel_multisubset<'py>(
     })
 }
 
+/// Evaluate genomes with parallel hybrid CPU+GPU evaluation.
+///
+/// This is the high-performance variant that uses:
+/// - Memory pool for parallel genome training (8 parallel)
+/// - GPU batch evaluation for multiple genomes
+/// - CPU+GPU hybrid split (dense ≤12 bits on CPU, sparse >12 bits on GPU)
+/// - Pipelining (CPU trains batch N+1 while GPU evaluates batch N)
+///
+/// Expected speedup: 4-8x over sequential `evaluate_genomes_parallel`.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn evaluate_genomes_parallel_hybrid<'py>(
+    py: Python<'py>,
+    genomes_bits_flat: Vec<usize>,
+    genomes_neurons_flat: Vec<usize>,
+    genomes_connections_flat: Vec<i64>,
+    num_genomes: usize,
+    num_clusters: usize,
+    train_input_bits: PyReadonlyArray1<'py, u8>,
+    train_targets: PyReadonlyArray1<'py, i64>,
+    train_negatives: PyReadonlyArray1<'py, i64>,
+    num_train: usize,
+    num_negatives: usize,
+    eval_input_bits: PyReadonlyArray1<'py, u8>,
+    eval_targets: PyReadonlyArray1<'py, i64>,
+    num_eval: usize,
+    total_input_bits: usize,
+    empty_value: f32,
+) -> PyResult<Vec<(f64, f64)>> {
+    // Extract data before allow_threads
+    let train_input_slice = train_input_bits.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Train input not contiguous: {}", e))
+    })?;
+    let train_targets_slice = train_targets.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Train targets not contiguous: {}", e))
+    })?;
+    let train_negatives_slice = train_negatives.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Train negatives not contiguous: {}", e))
+    })?;
+    let eval_input_slice = eval_input_bits.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Eval input not contiguous: {}", e))
+    })?;
+    let eval_targets_slice = eval_targets.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Eval targets not contiguous: {}", e))
+    })?;
+
+    // Convert to owned data
+    let train_input_bools: Vec<bool> = train_input_slice.iter().map(|&b| b != 0).collect();
+    let train_targets_vec: Vec<i64> = train_targets_slice.to_vec();
+    let train_negatives_vec: Vec<i64> = train_negatives_slice.to_vec();
+    let eval_input_bools: Vec<bool> = eval_input_slice.iter().map(|&b| b != 0).collect();
+    let eval_targets_vec: Vec<i64> = eval_targets_slice.to_vec();
+
+    // Set empty value for this evaluation
+    ramlm::set_empty_value(empty_value);
+
+    py.allow_threads(|| {
+        let fitness = adaptive::evaluate_genomes_parallel_hybrid(
+            &genomes_bits_flat,
+            &genomes_neurons_flat,
+            &genomes_connections_flat,
+            num_genomes,
+            num_clusters,
+            &train_input_bools,
+            &train_targets_vec,
+            &train_negatives_vec,
+            num_train,
+            num_negatives,
+            &eval_input_bools,
+            &eval_targets_vec,
+            num_eval,
+            total_input_bits,
+            empty_value,
+        );
+        Ok(fitness)
+    })
+}
+
 // =============================================================================
 // TOKEN CACHE - Persistent token storage with subset rotation
 // =============================================================================
@@ -2791,6 +2869,57 @@ impl TokenCacheWrapper {
     ) -> PyResult<Vec<(f64, f64)>> {
         py.allow_threads(|| {
             Ok(token_cache::evaluate_genomes_cached_full(
+                &self.inner,
+                &genomes_bits_flat,
+                &genomes_neurons_flat,
+                &genomes_connections_flat,
+                num_genomes,
+                empty_value,
+            ))
+        })
+    }
+
+    /// Evaluate genomes using hybrid CPU+GPU parallel evaluation (4-8x speedup).
+    ///
+    /// Uses memory pool for parallel training, GPU batch evaluation, and pipelining.
+    #[allow(clippy::too_many_arguments)]
+    fn evaluate_genomes_hybrid(
+        &self,
+        py: Python<'_>,
+        genomes_bits_flat: Vec<usize>,
+        genomes_neurons_flat: Vec<usize>,
+        genomes_connections_flat: Vec<i64>,
+        num_genomes: usize,
+        train_subset_idx: usize,
+        eval_subset_idx: usize,
+        empty_value: f32,
+    ) -> PyResult<Vec<(f64, f64)>> {
+        py.allow_threads(|| {
+            Ok(token_cache::evaluate_genomes_cached_hybrid(
+                &self.inner,
+                &genomes_bits_flat,
+                &genomes_neurons_flat,
+                &genomes_connections_flat,
+                num_genomes,
+                train_subset_idx,
+                eval_subset_idx,
+                empty_value,
+            ))
+        })
+    }
+
+    /// Evaluate genomes using full data with hybrid CPU+GPU (4-8x speedup).
+    fn evaluate_genomes_full_hybrid(
+        &self,
+        py: Python<'_>,
+        genomes_bits_flat: Vec<usize>,
+        genomes_neurons_flat: Vec<usize>,
+        genomes_connections_flat: Vec<i64>,
+        num_genomes: usize,
+        empty_value: f32,
+    ) -> PyResult<Vec<(f64, f64)>> {
+        py.allow_threads(|| {
+            Ok(token_cache::evaluate_genomes_cached_full_hybrid(
                 &self.inner,
                 &genomes_bits_flat,
                 &genomes_neurons_flat,
@@ -3116,6 +3245,8 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(evaluate_genomes_parallel, m)?)?;
     // Multi-subset parallel genome evaluation (for per-iteration rotation)
     m.add_function(wrap_pyfunction!(evaluate_genomes_parallel_multisubset, m)?)?;
+    // Parallel hybrid CPU+GPU genome evaluation (4-8x speedup)
+    m.add_function(wrap_pyfunction!(evaluate_genomes_parallel_hybrid, m)?)?;
     // Token cache for persistent token storage with subset rotation
     m.add_class::<TokenCacheWrapper>()?;
     Ok(())
