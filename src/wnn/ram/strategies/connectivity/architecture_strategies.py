@@ -540,9 +540,10 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		best_by_acc = max(population, key=lambda x: x[0]._cached_fitness[1] if hasattr(x[0], '_cached_fitness') else 0.0)
 
 		# Show initialization results table
-		best_acc = best_genome._cached_fitness[1] if hasattr(best_genome, '_cached_fitness') else None
 		init_table = OptimizationResultsTable(f"{self.name} Initialization")
-		init_table.add_stage("Best by Harmonic Rank", ce=best_fitness, accuracy=best_acc)
+		if cfg.fitness_calculator_type == FitnessCalculatorType.HARMONIC_RANK:
+			best_acc = best_genome._cached_fitness[1] if hasattr(best_genome, '_cached_fitness') else None
+			init_table.add_stage("Best by Harmonic Rank", ce=best_fitness, accuracy=best_acc)
 		init_table.add_stage("Best by CE", ce=best_by_ce[1], accuracy=best_by_ce[0]._cached_fitness[1] if hasattr(best_by_ce[0], '_cached_fitness') else None)
 		init_table.add_stage("Best by Accuracy", ce=best_by_acc[1], accuracy=best_by_acc[0]._cached_fitness[1] if hasattr(best_by_acc[0], '_cached_fitness') else None)
 		self._log.info("")
@@ -1088,6 +1089,18 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 					best = best_ce_genome.clone()
 					best_fitness = best_ce_fitness
 					best_accuracy = best_ce_accuracy
+
+		# Show initialization results table
+		if all_neighbors:
+			best_by_ce_item = min(all_neighbors, key=lambda x: x[1])
+			best_by_acc_item = max(all_neighbors, key=lambda x: x[2] if x[2] is not None else 0.0)
+			init_table = OptimizationResultsTable(f"{self.name} Initialization")
+			if use_harmonic:
+				init_table.add_stage("Best by Harmonic Rank", ce=best_fitness, accuracy=best_accuracy)
+			init_table.add_stage("Best by CE", ce=best_by_ce_item[1], accuracy=best_by_ce_item[2])
+			init_table.add_stage("Best by Accuracy", ce=best_by_acc_item[1], accuracy=best_by_acc_item[2])
+			self._log.info("")
+			init_table.print(self._log.info)
 
 		history = [(0, best_fitness)]
 
