@@ -46,6 +46,7 @@ class CachedEvaluatorConfig:
     num_negatives: int = 5
     empty_value: float = 0.0
     seed: Optional[int] = None  # None = time-based
+    use_hybrid: bool = True  # Use hybrid CPU+GPU evaluation (4-8x faster)
 
 
 class CachedEvaluator:
@@ -68,6 +69,7 @@ class CachedEvaluator:
         empty_value: float = 0.0,
         seed: Optional[int] = None,  # None = time-based
         log_path: Optional[str] = None,
+        use_hybrid: bool = True,  # Use hybrid CPU+GPU evaluation (4-8x faster)
     ):
         """
         Create a cached evaluator with all tokens pre-encoded in Rust.
@@ -82,6 +84,7 @@ class CachedEvaluator:
             num_negatives: Number of negative samples per example
             empty_value: Value for EMPTY cells (0.0 recommended)
             seed: Random seed for subset rotation
+            use_hybrid: If True, use hybrid CPU+GPU evaluation (4-8x faster, default True)
         """
         try:
             import ram_accelerator
@@ -96,6 +99,7 @@ class CachedEvaluator:
         self._num_parts = num_parts
         self._empty_value = empty_value
         self._log_path = log_path
+        self._use_hybrid = use_hybrid
 
         # Time-based seed if not specified
         if seed is None:
@@ -214,16 +218,27 @@ class CachedEvaluator:
                     if g.connections is not None:
                         batch_conns.extend(g.connections)
 
-                # Evaluate this batch
-                batch_results = self._cache.evaluate_genomes(
-                    batch_bits,
-                    batch_neurons,
-                    batch_conns,
-                    len(batch_genomes),
-                    train_subset_idx,
-                    eval_subset_idx,
-                    self._empty_value,
-                )
+                # Evaluate this batch (use hybrid if enabled)
+                if self._use_hybrid:
+                    batch_results = self._cache.evaluate_genomes_hybrid(
+                        batch_bits,
+                        batch_neurons,
+                        batch_conns,
+                        len(batch_genomes),
+                        train_subset_idx,
+                        eval_subset_idx,
+                        self._empty_value,
+                    )
+                else:
+                    batch_results = self._cache.evaluate_genomes(
+                        batch_bits,
+                        batch_neurons,
+                        batch_conns,
+                        len(batch_genomes),
+                        train_subset_idx,
+                        eval_subset_idx,
+                        self._empty_value,
+                    )
 
                 # Log results immediately for streaming visibility
                 for i, (ce, acc) in enumerate(batch_results):
@@ -254,15 +269,27 @@ class CachedEvaluator:
                 if g.connections is not None:
                     genomes_connections_flat.extend(g.connections)
 
-            results = self._cache.evaluate_genomes(
-                genomes_bits_flat,
-                genomes_neurons_flat,
-                genomes_connections_flat,
-                num_genomes,
-                train_subset_idx,
-                eval_subset_idx,
-                self._empty_value,
-            )
+            # Use hybrid evaluation if enabled (4-8x faster)
+            if self._use_hybrid:
+                results = self._cache.evaluate_genomes_hybrid(
+                    genomes_bits_flat,
+                    genomes_neurons_flat,
+                    genomes_connections_flat,
+                    num_genomes,
+                    train_subset_idx,
+                    eval_subset_idx,
+                    self._empty_value,
+                )
+            else:
+                results = self._cache.evaluate_genomes(
+                    genomes_bits_flat,
+                    genomes_neurons_flat,
+                    genomes_connections_flat,
+                    num_genomes,
+                    train_subset_idx,
+                    eval_subset_idx,
+                    self._empty_value,
+                )
 
         elapsed = time.time() - overall_start
 
@@ -325,14 +352,23 @@ class CachedEvaluator:
             if g.connections is not None:
                 genomes_connections_flat.extend(g.connections)
 
-        # Call Rust evaluator with full cached data
-        results = self._cache.evaluate_genomes_full(
-            genomes_bits_flat,
-            genomes_neurons_flat,
-            genomes_connections_flat,
-            num_genomes,
-            self._empty_value,
-        )
+        # Call Rust evaluator with full cached data (use hybrid if enabled)
+        if self._use_hybrid:
+            results = self._cache.evaluate_genomes_full_hybrid(
+                genomes_bits_flat,
+                genomes_neurons_flat,
+                genomes_connections_flat,
+                num_genomes,
+                self._empty_value,
+            )
+        else:
+            results = self._cache.evaluate_genomes_full(
+                genomes_bits_flat,
+                genomes_neurons_flat,
+                genomes_connections_flat,
+                num_genomes,
+                self._empty_value,
+            )
 
         for i, (ce, acc) in enumerate(results):
             log(format_genome_log(1, 1, GenomeLogType.FINAL, i + 1, num_genomes, ce, acc))
