@@ -162,6 +162,54 @@ tier0_20bit: 100,15,20;400,10,12;rest,5,8 (context=4)
 
 See `experiments/overnight_sweep.md` for full rankings and per-tier breakdowns.
 
+## 🎯 Fitness Calculator: Balancing CE and Accuracy
+
+The architecture search optimizes for both **Cross-Entropy (CE)** and **Accuracy**. The fitness calculator determines how these are combined for ranking genomes.
+
+### Fitness Calculator Types
+
+| Type | Description | Elite Selection |
+|------|-------------|-----------------|
+| `CE` | Pure CE ranking (lower = better) | Dual elites: 10% by CE + 10% by Acc |
+| `HARMONIC_RANK` | Weighted harmonic mean of ranks | Single elite: 20% by harmonic rank |
+
+### Weighted Harmonic Mean Formula
+
+```
+WHM = (w_ce + w_acc) / (w_ce/rank_ce + w_acc/rank_acc)
+```
+
+Where:
+- `rank_ce` = position when sorted by CE (1 = lowest CE = best)
+- `rank_acc` = position when sorted by accuracy (1 = highest acc = best)
+- `w_ce`, `w_acc` = weights (default 1.0 each)
+
+### Example
+
+| Genome | CE | Acc | CE Rank | Acc Rank | HM (w=1,1) | HM (w=1.2,1) |
+|--------|-----|------|---------|----------|------------|--------------|
+| A | 10.34 | 0.01% | 1 | 5 | 1.67 | **1.43** ← wins |
+| B | 10.35 | 0.03% | 2 | 1 | **1.33** ← wins | 1.38 |
+
+With equal weights, B wins (balanced). With `w_ce=1.2`, A wins (best CE matters more).
+
+### Configuration
+
+Weights are set in `GAConfig` and `TSConfig`:
+
+```python
+fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK
+fitness_weight_ce: float = 1.0   # Higher = CE matters more
+fitness_weight_acc: float = 1.0  # Higher = Accuracy matters more
+```
+
+### Key Properties
+
+- **Lower harmonic mean = better** (closer to rank 1 in both metrics)
+- **Penalizes imbalance**: Being bad at either metric hurts the score
+- **Rank-based**: Relative positions matter, not absolute values
+- **Rankings can shift** when new genomes enter the population
+
 ## Development Hardware
 
 **Mac Studio M4 Max (2025)**
