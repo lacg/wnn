@@ -317,6 +317,97 @@ class EarlyStoppingTracker:
 		"""Return the current AdaptiveLevel enum."""
 		return self._last_level
 
+	def reset_trend(self, top_k_fitness: list[float]) -> None:
+		"""
+		Reset tracker for trend-based early stopping.
+
+		Args:
+			top_k_fitness: Fitness values of top-K% genomes (lower is better).
+			               For CE mode, pass CE values. For HARMONIC_RANK mode,
+			               pass harmonic rank values.
+		"""
+		from wnn.ram.strategies.connectivity.generic_strategies import AdaptiveLevel
+		self._patience_counter = 0
+		self._prev_trend_mean = sum(top_k_fitness) / len(top_k_fitness) if top_k_fitness else 0.0
+		self._baseline = self._prev_trend_mean
+		self._last_level = AdaptiveLevel.NEUTRAL
+
+	def check_trend(self, iteration: int, top_k_fitness: list[float]) -> bool:
+		"""
+		Check early stopping using mean of top-K% fitness values.
+
+		More robust than single-best comparison because it tracks the trend
+		of the elite population rather than a single potentially-noisy genome.
+
+		Args:
+			iteration: Current iteration (0-indexed)
+			top_k_fitness: Fitness values of top-K% genomes (lower is better).
+			               For CE mode, pass CE values. For HARMONIC_RANK mode,
+			               pass harmonic rank values.
+
+		Returns:
+			True if should stop, False otherwise
+		"""
+		from wnn.ram.strategies.connectivity.generic_strategies import AdaptiveLevel
+		cfg = self._config
+
+		# Only check at specified intervals (1-indexed iteration)
+		if (iteration + 1) % cfg.check_interval != 0:
+			return False
+
+		# Calculate current mean of top-K%
+		if not top_k_fitness:
+			return False
+		current_mean = sum(top_k_fitness) / len(top_k_fitness)
+
+		# Compute improvement from last check (using _prev_trend_mean if available, else _prev_best)
+		prev_mean = getattr(self, '_prev_trend_mean', self._prev_best)
+		if prev_mean is not None and prev_mean > 0:
+			improvement_pct = (prev_mean - current_mean) / prev_mean * 100
+		else:
+			improvement_pct = 0.0
+
+		# Check if improvement meets threshold
+		if improvement_pct >= cfg.min_improvement_pct:
+			# Recover 1 patience (not full reset)
+			self._patience_counter = max(0, self._patience_counter - 1)
+			self._prev_trend_mean = current_mean
+		else:
+			self._patience_counter += 1
+
+		# Determine level using OverfitThreshold values
+		from wnn.core.thresholds import OverfitThreshold
+		delta = -improvement_pct
+		if delta < OverfitThreshold.HEALTHY:
+			level = AdaptiveLevel.HEALTHY
+		elif delta < OverfitThreshold.WARNING:
+			level = AdaptiveLevel.NEUTRAL
+		elif delta < OverfitThreshold.CRITICAL:
+			level = AdaptiveLevel.WARNING
+		else:
+			level = AdaptiveLevel.CRITICAL
+
+		self._last_level = level
+
+		# Log progress with trend info
+		remaining = cfg.patience - self._patience_counter
+		display = self._LEVEL_DISPLAY[level.name]
+		self._log(
+			f"[{self._method_name}] Early stop check (top-{len(top_k_fitness)} trend): "
+			f"mean={current_mean:.4f}, Δ={improvement_pct:+.2f}%, patience={remaining}/{cfg.patience} {display}"
+		)
+
+		# Check if patience exhausted
+		if self._patience_counter >= cfg.patience:
+			total_iters = self._patience_counter * cfg.check_interval
+			self._log(
+				f"[{self._method_name}] Early stop: no trend improvement >= {cfg.min_improvement_pct}% "
+				f"for {total_iters} iterations"
+			)
+			return True
+
+		return False
+
 
 # =============================================================================
 # Adaptive Parameter Scaling

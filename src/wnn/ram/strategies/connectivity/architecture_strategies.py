@@ -538,7 +538,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		initial_genome = best_genome.clone()
 		initial_fitness = best_fitness
 
-		# Early stopping
+		# Early stopping with trend-based comparison (top-20% elite fitness)
 		from wnn.ram.strategies.connectivity.generic_strategies import EarlyStoppingConfig
 		early_stop_config = EarlyStoppingConfig(
 			patience=cfg.patience,
@@ -546,7 +546,11 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			min_improvement_pct=cfg.min_improvement_pct,
 		)
 		early_stop = EarlyStoppingTracker(early_stop_config, self._log.debug, self.name)
-		early_stop.reset(best_fitness)
+		# Use trend-based early stopping: track top-20% elite fitness values
+		# fitness_score is CE for CE mode, harmonic rank for HARMONIC_RANK mode
+		elite_count_for_trend = max(1, int(cfg.elitism_pct * 2 * cfg.population_size))
+		elite_fitness = [score for _, score in ranked[:elite_count_for_trend]]
+		early_stop.reset_trend(elite_fitness)
 
 		# Track threshold for logging
 		prev_threshold: Optional[float] = None
@@ -714,8 +718,10 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			self._log.info(f"[{self.name}] Gen {generation+1:03d}/{cfg.generations}: "
 						   f"best={best_fitness:.4f}, avg={avg_fitness:.4f} ({gen_elapsed:.1f}s)")
 
-			# Early stopping check
-			if early_stop.check(generation, best_fitness):
+			# Early stopping check using trend (top-20% elite fitness)
+			# fitness_score from ranked is CE for CE mode, harmonic rank for HARMONIC_RANK mode
+			elite_fitness = [score for _, score in ranked[:elite_count_for_trend]]
+			if early_stop.check_trend(generation, elite_fitness):
 				self._log.info(f"[{self.name}] Early stopping at generation {generation + 1}")
 				break
 
@@ -1084,14 +1090,42 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 
 		history = [(0, best_fitness)]
 
-		# Early stopping
+		# Early stopping with trend-based comparison (top-20% neighbors)
 		early_stop_config = EarlyStoppingConfig(
 			patience=cfg.patience,
 			check_interval=cfg.check_interval,
 			min_improvement_pct=cfg.min_improvement_pct,
 		)
 		early_stopper = EarlyStoppingTracker(early_stop_config, self._log, self.name)
-		early_stopper.reset(best_fitness)
+
+		# Helper to compute top-K% fitness values (CE for CE mode, harmonic for HARMONIC_RANK)
+		def get_top_k_fitness(neighbors: list[tuple['ClusterGenome', float, Optional[float]]],
+							   k_pct: float = 0.2) -> list[float]:
+			"""Get fitness values of top-K% neighbors."""
+			if not neighbors:
+				return [best_fitness]
+			# Filter to neighbors with accuracy (needed for harmonic ranking)
+			valid = [(g, ce, acc) for g, ce, acc in neighbors if acc is not None]
+			if not valid:
+				# Fall back to CE values
+				sorted_by_ce = sorted(neighbors, key=lambda x: x[1])
+				k_count = max(1, int(len(sorted_by_ce) * k_pct))
+				return [ce for _, ce, _ in sorted_by_ce[:k_count]]
+
+			if use_harmonic:
+				# Rank by harmonic and return harmonic fitness values
+				ranked = fitness_calculator.rank(valid)
+				k_count = max(1, int(len(ranked) * k_pct))
+				return [score for _, score in ranked[:k_count]]
+			else:
+				# CE mode: sort by CE and return CE values
+				sorted_by_ce = sorted(valid, key=lambda x: x[1])
+				k_count = max(1, int(len(sorted_by_ce) * k_pct))
+				return [ce for _, ce, _ in sorted_by_ce[:k_count]]
+
+		# Initialize with top-K% fitness
+		elite_fitness = get_top_k_fitness(all_neighbors)
+		early_stopper.reset_trend(elite_fitness)
 
 		# Log config based on mode
 		if use_harmonic:
@@ -1280,8 +1314,9 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 
 			history.append((iteration + 1, best_fitness))
 
-			# Early stopping check
-			if early_stopper.check(iteration, best_fitness):
+			# Early stopping check using trend (top-20% neighbors)
+			elite_fitness = get_top_k_fitness(all_neighbors)
+			if early_stopper.check_trend(iteration, elite_fitness):
 				self._log.info(f"[{self.name}] Early stopping at iteration {iteration + 1}")
 				break
 
