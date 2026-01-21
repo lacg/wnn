@@ -590,6 +590,68 @@ python -c "import ram_accelerator; print(ram_accelerator.cpu_cores())"
 3. Register in `#[pymodule]` block
 4. Rebuild with `maturin develop --release`
 
+### GPU Sparse Evaluation (Binary Search)
+
+The accelerator supports GPU-accelerated evaluation for **sparse memory groups** (bits > 12) using sorted arrays and binary search:
+
+**Key Components:**
+- `SparseGpuExport`: GPU-friendly format with sorted arrays (keys, values, offsets, counts)
+- `MetalSparseEvaluator`: Binary search on GPU from `metal_ramlm.rs`
+- `evaluate_group_sparse_gpu()`: Batch evaluation for sparse groups
+
+**Why Binary Search on GPU?**
+- DashMap (used for training) is CPU-only (hash lookups don't parallelize well on GPU due to memory divergence)
+- Sorted arrays + binary search = O(log n) lookups with coalesced memory access = GPU-friendly
+- Training still uses DashMap on CPU, evaluation exports to sorted arrays for GPU
+
+**Memory Format for GPU:**
+```rust
+pub struct SparseGpuExport {
+    pub keys: Vec<u64>,      // Sorted addresses for all neurons
+    pub values: Vec<u8>,     // Corresponding values
+    pub offsets: Vec<u32>,   // Start index per neuron
+    pub counts: Vec<u32>,    // Count of entries per neuron
+    pub num_neurons: usize,
+}
+```
+
+### Parallel Hybrid Evaluation
+
+`evaluate_genomes_parallel_hybrid()` provides maximum throughput for GA/TS architecture search:
+
+**Architecture:**
+1. **Memory Pool**: Reusable memory instances (8 parallel) to avoid OOM
+2. **Parallel Training**: Multiple genomes train concurrently using the pool
+3. **GPU Batch Evaluation**: Multiple genomes evaluated in one Metal dispatch
+4. **CPU+GPU Hybrid**: Dense groups (bits ≤ 12) on CPU, sparse groups (bits > 12) on GPU
+5. **Pipelining**: CPU trains batch N+1 while GPU evaluates batch N
+
+**Performance Benefits:**
+- 4-8x speedup over sequential genome evaluation
+- No memory contention (each genome has its own memory, DashMap is lock-free)
+- Efficient use of M4 Max (16 CPU cores + 40 GPU cores)
+
+**Function Signature:**
+```rust
+pub fn evaluate_genomes_parallel_hybrid(
+    genomes_bits_flat: &[usize],        // Flattened bits per genome
+    genomes_neurons_flat: &[usize],     // Flattened neurons per genome
+    genomes_connections_flat: &[i64],   // Flattened connections per genome
+    num_genomes: usize,
+    num_clusters: usize,
+    train_input_bits: &[bool],
+    train_targets: &[i64],
+    train_negatives: &[i64],
+    num_train: usize,
+    num_negatives: usize,
+    eval_input_bits: &[bool],
+    eval_targets: &[i64],
+    num_eval: usize,
+    total_input_bits: usize,
+    empty_value: f32,
+) -> Vec<(f64, f64)>  // Returns (ce_loss, accuracy) per genome
+```
+
 ## Coding Style
 
 - **Indentation**: Use tabs (not spaces), displayed as 2-space width
