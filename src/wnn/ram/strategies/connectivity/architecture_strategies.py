@@ -464,7 +464,11 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		evaluator = self._cached_evaluator
 
 		# Create fitness calculator for ranking
-		fitness_calculator = FitnessCalculatorFactory.create(cfg.fitness_calculator_type)
+		fitness_calculator = FitnessCalculatorFactory.create(
+			cfg.fitness_calculator_type,
+			weight_ce=cfg.fitness_weight_ce,
+			weight_acc=cfg.fitness_weight_acc,
+		)
 		self._log.info(f"[{self.name}] Fitness calculator: {fitness_calculator.name}")
 
 		# Threshold continuity
@@ -1010,7 +1014,11 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 
 		# Create fitness calculator for HARMONIC_RANK mode
 		if use_harmonic:
-			fitness_calculator = FitnessCalculatorFactory.create(cfg.fitness_calculator_type)
+			fitness_calculator = FitnessCalculatorFactory.create(
+				cfg.fitness_calculator_type,
+				weight_ce=cfg.fitness_weight_ce,
+				weight_acc=cfg.fitness_weight_acc,
+			)
 			self._log.info(f"[{self.name}] Fitness calculator: {fitness_calculator.name}")
 
 		# Threshold continuity

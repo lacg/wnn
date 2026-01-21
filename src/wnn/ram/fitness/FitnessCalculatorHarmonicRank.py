@@ -14,29 +14,38 @@ G = TypeVar('G')
 
 class FitnessCalculatorHarmonicRank(FitnessCalculator[G]):
 	"""
-	Fitness calculator using harmonic mean of ranks.
+	Fitness calculator using weighted harmonic mean of ranks.
 
-	fitness = 2 / (1/rank_ce + 1/rank_acc)
+	fitness = (w_ce + w_acc) / (w_ce/rank_ce + w_acc/rank_acc)
 
 	Where:
 	- rank_ce: Position when sorted by CE ascending (1 = lowest CE = best)
 	- rank_acc: Position when sorted by accuracy descending (1 = highest acc = best)
+	- w_ce, w_acc: Weights for each metric (higher = more important)
 
 	Properties:
 	- Lower harmonic mean = better (closer to rank 1 in both metrics)
 	- Penalizes extreme imbalances (good in one, bad in other)
-	- No weight parameter needed - naturally balances both objectives
-	- A genome must be good at BOTH metrics to rank high
+	- Weights allow tuning the CE vs accuracy trade-off
+	- Default weights (1, 1) = standard harmonic mean
 
-	Example:
-		| Genome | CE    | Acc   | Rank_CE | Rank_Acc | HM   |
+	Example with w_ce=1.2, w_acc=1.0 (CE 20% more important):
+		| Genome | CE    | Acc   | Rank_CE | Rank_Acc | WHM  |
 		|--------|-------|-------|---------|----------|------|
-		| A      | 10.32 | 0.02% | 1       | 4        | 1.60 |
-		| B      | 10.35 | 0.04% | 2       | 1        | 1.33 | <- Winner
-		| C      | 10.38 | 0.03% | 3       | 2        | 2.40 |
-
-		Genome B wins: not best at either metric alone, but best combined.
+		| A      | 10.32 | 0.02% | 1       | 4        | 1.57 | <- Now wins
+		| B      | 10.35 | 0.04% | 2       | 1        | 1.47 |
 	"""
+
+	def __init__(self, weight_ce: float = 1.0, weight_acc: float = 1.0):
+		"""
+		Initialize with optional weights.
+
+		Args:
+			weight_ce: Weight for CE rank (default 1.0)
+			weight_acc: Weight for accuracy rank (default 1.0)
+		"""
+		self.weight_ce = weight_ce
+		self.weight_acc = weight_acc
 
 	def fitness(self, population: list[tuple[G, float, float]]) -> list[float]:
 		"""
@@ -70,17 +79,24 @@ class FitnessCalculatorHarmonicRank(FitnessCalculator[G]):
 		for rank, idx in enumerate(acc_sorted_indices, start=1):
 			rank_acc[idx] = rank
 
-		# Compute harmonic mean of ranks
-		# HM(a, b) = 2 / (1/a + 1/b) = 2ab / (a + b)
+		# Compute weighted harmonic mean of ranks
+		# WHM = (w_ce + w_acc) / (w_ce/r_ce + w_acc/r_acc)
+		#     = (w_ce + w_acc) * r_ce * r_acc / (w_ce * r_acc + w_acc * r_ce)
+		w_ce = self.weight_ce
+		w_acc = self.weight_acc
+		w_sum = w_ce + w_acc
+
 		fitness_scores = []
 		for i in range(n):
 			r_ce = rank_ce[i]
 			r_acc = rank_acc[i]
-			hm = 2.0 * r_ce * r_acc / (r_ce + r_acc)
-			fitness_scores.append(hm)
+			whm = w_sum * r_ce * r_acc / (w_ce * r_acc + w_acc * r_ce)
+			fitness_scores.append(whm)
 
 		return fitness_scores
 
 	@property
 	def name(self) -> str:
-		return "HarmonicRank"
+		if self.weight_ce == 1.0 and self.weight_acc == 1.0:
+			return "HarmonicRank"
+		return f"HarmonicRank(ce={self.weight_ce}, acc={self.weight_acc})"
