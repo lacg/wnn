@@ -687,8 +687,8 @@ class GAConfig:
 	# Threshold continuity: start threshold passed from previous phase
 	# If None, uses min_accuracy as the base (first phase)
 	initial_threshold: Optional[float] = None
-	min_accuracy: float = 0.0001   # 0.01% base threshold (used if initial_threshold is None)
-	threshold_delta: float = 0.0002  # 0.02% increase over full phase
+	min_accuracy: float = 0.002    # 0.2% base threshold (used if initial_threshold is None)
+	threshold_delta: float = 0.002   # 0.2% increase over full phase
 	progressive_threshold: bool = True  # Enable progressive threshold within phase
 	# CE percentile filter: keep only offspring in top X% by CE (None = disabled)
 	# Example: 0.75 keeps top 75% by CE. Applied after accuracy threshold.
@@ -719,8 +719,8 @@ class TSConfig:
 	# Threshold continuity: start threshold passed from previous phase
 	# If None, uses min_accuracy as the base (first phase)
 	initial_threshold: Optional[float] = None
-	min_accuracy: float = 0.0001   # 0.01% base threshold (used if initial_threshold is None)
-	threshold_delta: float = 0.0002  # 0.02% increase over full phase
+	min_accuracy: float = 0.002    # 0.2% base threshold (used if initial_threshold is None)
+	threshold_delta: float = 0.002   # 0.2% increase over full phase
 	progressive_threshold: bool = True  # Enable progressive threshold within phase
 	# CE percentile filter: keep only neighbors in top X% by CE (None = disabled)
 	# Example: 0.75 keeps top 75% by CE. Applied after accuracy threshold.
