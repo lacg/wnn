@@ -349,8 +349,8 @@ pub fn search_neighbors_with_threshold(
             batch_genomes.push((new_bits, new_neurons, new_conns));
         }
 
-        // Evaluate the batch
-        let results = crate::token_cache::evaluate_genomes_cached(
+        // Evaluate the batch using hybrid CPU+GPU parallel evaluation
+        let results = crate::token_cache::evaluate_genomes_cached_hybrid(
             cache,
             &batch_bits,
             &batch_neurons,
@@ -455,7 +455,8 @@ pub fn search_neighbors_best_n(
             batch_genomes.push((new_bits, new_neurons, new_conns));
         }
 
-        let results = crate::token_cache::evaluate_genomes_cached(
+        // Evaluate using hybrid CPU+GPU parallel evaluation
+        let results = crate::token_cache::evaluate_genomes_cached_hybrid(
             cache,
             &batch_bits,
             &batch_neurons,
@@ -699,8 +700,8 @@ pub fn search_offspring(
             batch_genomes.push((new_bits, new_neurons, new_conns));
         }
 
-        // Evaluate the batch
-        let results = crate::token_cache::evaluate_genomes_cached(
+        // Evaluate the batch using hybrid CPU+GPU parallel evaluation
+        let results = crate::token_cache::evaluate_genomes_cached_hybrid(
             cache,
             &batch_bits,
             &batch_neurons,
