@@ -1328,9 +1328,9 @@ fn train_genome_in_slot(
     num_negatives: usize,
     total_input_bits: usize,
 ) {
-    // Train this genome (SEQUENTIAL within genome - each example in order)
-    // This avoids nested parallelism contention
-    for ex_idx in 0..num_train {
+    // Train this genome with PARALLEL example processing
+    // Memory writes are thread-safe (atomic for dense, DashMap for sparse)
+    (0..num_train).into_par_iter().for_each(|ex_idx| {
         let input_start = ex_idx * total_input_bits;
         let input_bits = &train_input_bits[input_start..input_start + total_input_bits];
 
@@ -1373,7 +1373,7 @@ fn train_genome_in_slot(
                 memory.write(neuron_base + n, address, FALSE, false);
             }
         }
-    }
+    });
 }
 
 /// Export trained memory to GPU-compatible format
@@ -1652,21 +1652,27 @@ pub fn evaluate_genomes_parallel_hybrid(
         let metal = get_metal_evaluator();
         let sparse_metal = get_sparse_metal_evaluator();
 
-        while let Ok((batch_idx, exports)) = rx.recv() {
-            for (genome_idx, export) in exports {
-                let (ce, acc) = evaluate_genome_hybrid(
-                    &export,
-                    &eval_input_bits_owned,
-                    &eval_targets_owned,
-                    num_eval,
-                    num_clusters,
-                    total_input_bits,
-                    empty_value,
-                    metal,
-                    sparse_metal,
-                );
-                results.push((genome_idx, ce, acc));
-            }
+        while let Ok((_batch_idx, exports)) = rx.recv() {
+            // Process exports in PARALLEL - GPU can handle concurrent dispatches
+            let batch_results: Vec<(usize, f64, f64)> = exports
+                .into_par_iter()
+                .map(|(genome_idx, export)| {
+                    let (ce, acc) = evaluate_genome_hybrid(
+                        &export,
+                        &eval_input_bits_owned,
+                        &eval_targets_owned,
+                        num_eval,
+                        num_clusters,
+                        total_input_bits,
+                        empty_value,
+                        metal,
+                        sparse_metal,
+                    );
+                    (genome_idx, ce, acc)
+                })
+                .collect();
+
+            results.extend(batch_results);
         }
 
         results
