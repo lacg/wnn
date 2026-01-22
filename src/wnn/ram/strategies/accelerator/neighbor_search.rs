@@ -224,6 +224,21 @@ fn adjust_connections(
     total_input_bits: usize,
     rng: &mut impl Rng,
 ) -> Vec<i64> {
+    // If no existing connections, generate random ones for the new architecture
+    if old_connections.is_empty() {
+        let mut result = Vec::new();
+        for cluster_idx in 0..new_bits.len() {
+            let n_neurons = new_neurons[cluster_idx];
+            let n_bits = new_bits[cluster_idx];
+            for _ in 0..n_neurons {
+                for _ in 0..n_bits {
+                    result.push(rng.gen_range(0..total_input_bits as i64));
+                }
+            }
+        }
+        return result;
+    }
+
     let mut result = Vec::new();
     let mut old_idx = 0;
 
