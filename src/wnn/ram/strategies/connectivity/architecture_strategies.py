@@ -488,8 +488,36 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		self._log.info(f"[{self.name}] Using Rust search_offspring (single-call offspring search)")
 
 		# Initialize population (show ALL genomes - no threshold filtering for init)
+		# If we have seed genomes but fewer than population_size, expand with mutations
 		if initial_population and len(initial_population) > 0:
-			self._log.info(f"[{self.name}] Seeding from {len(initial_population)} genomes (top CE + top Acc from previous phase)")
+			seed_count = len(initial_population)
+			need_count = cfg.population_size - seed_count
+			if need_count > 0:
+				self._log.info(f"[{self.name}] Seeding from {seed_count} genomes, generating {need_count} mutations to fill population of {cfg.population_size}")
+				# Generate mutations of seed genomes to fill population
+				from wnn.ram.strategies.connectivity.adaptive_cluster import AdaptiveClusterConfig
+				arch_cfg = self._arch_config
+				# Create mutation config with high mutation rate for diversity
+				mutation_config = AdaptiveClusterConfig(
+					min_bits=arch_cfg.min_bits,
+					max_bits=arch_cfg.max_bits,
+					min_neurons=arch_cfg.min_neurons,
+					max_neurons=arch_cfg.max_neurons,
+					bits_mutation_rate=0.3,  # Higher rate for diversity
+					neurons_mutation_rate=0.3,
+				)
+				expanded_population = list(initial_population)
+				for i in range(need_count):
+					# Pick a seed genome to mutate (round-robin)
+					seed = initial_population[i % seed_count]
+					mutated = seed.mutate(
+						config=mutation_config,
+						total_input_bits=evaluator.total_input_bits,
+					)
+					expanded_population.append(mutated)
+				initial_population = expanded_population
+			else:
+				self._log.info(f"[{self.name}] Seeding from {seed_count} genomes (top CE + top Acc from previous phase)")
 		else:
 			self._log.info(f"[{self.name}] Initializing with {cfg.population_size} random genomes")
 
