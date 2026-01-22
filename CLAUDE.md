@@ -270,6 +270,14 @@ The GA/TS connectivity optimization is actually implementing a form of **static 
 - Optimization finds the most informative bit subsets
 - Unlike transformers, this is fixed per neuron (not dynamic per input)
 
+## 🚨 Fundamental Limitation & Future Direction
+
+**Key finding (2026-01-21):** Pure RAM WNNs cannot match transformer LM performance due to mathematical barriers (address space explosion, no selective attention). State layers don't solve this—sequential lookups eliminate the speed advantage.
+
+**Future direction:** Hybrid architecture using RAM for fast pattern caching + transformers for long-range dependencies.
+
+📄 **Full analysis:** [`docs/RESEARCH_INSIGHTS.md`](docs/RESEARCH_INSIGHTS.md)
+
 ## 🎯 Fitness Calculator: Balancing CE and Accuracy
 
 The architecture search optimizes for both **Cross-Entropy (CE)** and **Accuracy**. The fitness calculator determines how these are combined for ranking genomes.
