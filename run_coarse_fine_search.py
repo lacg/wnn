@@ -152,6 +152,21 @@ def main():
 	parser.add_argument("--seed", type=int, default=None, help="Random seed for rotation (None=time-based)")
 	parser.add_argument("--output", type=str, default=None, help="Output JSON file (auto-generated if not specified)")
 
+	# Tiered architecture options (same as run_phased_search.py)
+	parser.add_argument(
+		"--tier-config", type=str, default=None,
+		help="Tiered config: 'clusters,neurons,bits;...' e.g., '100,15,20;400,10,12;rest,5,8'"
+	)
+	parser.add_argument(
+		"--phase-order", type=str, default="neurons_first",
+		choices=["neurons_first", "bits_first"],
+		help="Phase order: neurons→bits→connections or bits→neurons→connections"
+	)
+	parser.add_argument(
+		"--tier0-only", action="store_true",
+		help="Only optimize tier0 clusters (requires --tier-config)"
+	)
+
 	args = parser.parse_args()
 
 	# Load config from YAML if specified (CLI args override)
@@ -195,6 +210,22 @@ def main():
 	# Determine seed: time-based if not specified
 	rotation_seed = args.seed if args.seed is not None else int(time.time() * 1000) % (2**32)
 
+	# Parse tier config if provided
+	tier_config = None
+	if args.tier_config:
+		tier_config = []
+		for tier_str in args.tier_config.split(";"):
+			parts = tier_str.strip().split(",")
+			if len(parts) != 3:
+				print(f"ERROR: Invalid tier config format: {tier_str}")
+				print("Expected: 'clusters,neurons,bits' e.g., '100,15,20'")
+				return 1
+			num_clusters_str, neurons_str, bits_str = parts
+			num_clusters = None if num_clusters_str.lower() == "rest" else int(num_clusters_str)
+			neurons = int(neurons_str)
+			bits = int(bits_str)
+			tier_config.append((num_clusters, neurons, bits))
+
 	# Setup logger
 	logger = Logger(name=f"coarse_fine_pass{args.pass_num}")
 
@@ -221,6 +252,14 @@ def main():
 	log(f"  Default bits (Phase 1): {args.default_bits}")
 	log(f"  Default neurons (Phase 2): {args.default_neurons}")
 	log(f"  Output: {args.output}")
+	if tier_config:
+		log(f"  Tier config: {args.tier_config}")
+		for i, (clusters, neurons, bits) in enumerate(tier_config):
+			cluster_str = "rest" if clusters is None else str(clusters)
+			log(f"    Tier {i}: {cluster_str} clusters, {neurons} neurons, {bits} bits")
+	log(f"  Phase order: {args.phase_order}")
+	if args.tier0_only:
+		log(f"  Tier0-only optimization: enabled")
 	if args.checkpoint_dir:
 		log(f"  Checkpoint dir: {args.checkpoint_dir}")
 		if args.resume_from:
@@ -279,6 +318,9 @@ def main():
 		patience=patience,  # Calculated based on pass number
 		default_bits=args.default_bits,
 		default_neurons=args.default_neurons,
+		tier_config=tier_config,
+		phase_order=args.phase_order,
+		optimize_tier0_only=args.tier0_only,
 		ce_percentile=args.ce_percentile,
 		rotation_seed=rotation_seed,
 		log_path=logger.log_file,

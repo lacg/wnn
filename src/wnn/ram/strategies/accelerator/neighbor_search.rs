@@ -224,19 +224,9 @@ fn adjust_connections(
     total_input_bits: usize,
     rng: &mut impl Rng,
 ) -> Vec<i64> {
-    // If no existing connections, generate random ones for the new architecture
+    // If no existing connections, keep them empty (bits-only or neurons-only phase)
     if old_connections.is_empty() {
-        let mut result = Vec::new();
-        for cluster_idx in 0..new_bits.len() {
-            let n_neurons = new_neurons[cluster_idx];
-            let n_bits = new_bits[cluster_idx];
-            for _ in 0..n_neurons {
-                for _ in 0..n_bits {
-                    result.push(rng.gen_range(0..total_input_bits as i64));
-                }
-            }
-        }
-        return result;
+        return Vec::new();
     }
 
     let mut result = Vec::new();
@@ -585,25 +575,27 @@ fn crossover(
         .copied()
         .collect();
 
-    // Build child connections
+    // Build child connections (skip if parents have no connections - bits/neurons only phase)
     let mut child_connections = Vec::new();
-    let mut p1_idx = 0;
-    let mut p2_idx = 0;
+    if !parent1.2.is_empty() && !parent2.2.is_empty() {
+        let mut p1_idx = 0;
+        let mut p2_idx = 0;
 
-    for i in 0..num_clusters {
-        let p1_conn_size = parent1.1[i] * parent1.0[i];
-        let p2_conn_size = parent2.1[i] * parent2.0[i];
+        for i in 0..num_clusters {
+            let p1_conn_size = parent1.1[i] * parent1.0[i];
+            let p2_conn_size = parent2.1[i] * parent2.0[i];
 
-        if i < crossover_point {
-            // Take from parent1
-            child_connections.extend(&parent1.2[p1_idx..p1_idx + p1_conn_size]);
-        } else {
-            // Take from parent2
-            child_connections.extend(&parent2.2[p2_idx..p2_idx + p2_conn_size]);
+            if i < crossover_point {
+                // Take from parent1
+                child_connections.extend(&parent1.2[p1_idx..p1_idx + p1_conn_size]);
+            } else {
+                // Take from parent2
+                child_connections.extend(&parent2.2[p2_idx..p2_idx + p2_conn_size]);
+            }
+
+            p1_idx += p1_conn_size;
+            p2_idx += p2_conn_size;
         }
-
-        p1_idx += p1_conn_size;
-        p2_idx += p2_conn_size;
     }
 
     (child_bits, child_neurons, child_connections)
