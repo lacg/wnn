@@ -178,12 +178,15 @@ class CachedEvaluator:
         if isinstance(logger, OptimizationLogger):
             log_debug = logger.debug
             log_trace = logger.trace
+            log_info = logger.info  # For streaming (always visible)
         elif logger is not None:
             log_debug = logger
             log_trace = logger
+            log_info = logger
         else:
             log_debug = lambda x: None
             log_trace = lambda x: None
+            log_info = lambda x: None
 
         num_genomes = len(genomes)
         total_gens = total_generations if total_generations is not None else num_genomes
@@ -208,7 +211,7 @@ class CachedEvaluator:
                 batch_end = min(batch_start + stream_batch_size, num_genomes)
                 batch_genomes = genomes[batch_start:batch_end]
 
-                # Flatten this batch
+                # Flatten this batch (Rust handles variable configs)
                 batch_bits = []
                 batch_neurons = []
                 batch_conns = []
@@ -240,7 +243,7 @@ class CachedEvaluator:
                         self._empty_value,
                     )
 
-                # Log results immediately for streaming visibility
+                # Log results immediately for streaming visibility (use INFO level)
                 for i, (ce, acc) in enumerate(batch_results):
                     genome_idx = batch_start + i + 1
                     passes = min_accuracy is None or acc >= min_accuracy
@@ -248,10 +251,8 @@ class CachedEvaluator:
                         current_gen, total_gens, GenomeLogType.INITIAL,
                         genome_idx, num_genomes, ce, acc
                     )
-                    if passes:
-                        log_debug(base_msg)
-                    else:
-                        log_trace(base_msg + subset_info)
+                    # Always use INFO for streaming so logs are visible
+                    log_info(base_msg)
                     sys.stdout.flush()
 
                 all_results.extend(batch_results)

@@ -527,7 +527,8 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			self._log.info(f"[{self.name}] Initializing with {cfg.population_size} random genomes")
 
 		if initial_population and len(initial_population) > 0:
-			# Evaluate initial population with streaming (logs per-genome progress)
+			# Evaluate initial population with streaming (shows progress per batch)
+			# Uses batch_size=10 for speed; falls back to 1-at-a-time if configs differ
 			results = evaluator.evaluate_batch(
 				initial_population,
 				train_subset_idx=evaluator.next_train_idx(),
@@ -537,7 +538,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 				total_generations=cfg.generations,
 				min_accuracy=None,  # Show all for initial population
 				streaming=True,
-				stream_batch_size=1,  # One at a time for progress visibility
+				stream_batch_size=10,  # Batch of 10 (falls back to 1 if configs differ)
 			)
 			# Store cached fitness on each genome for elite logging
 			population = []
@@ -1145,22 +1146,22 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		)
 		early_stopper = EarlyStoppingTracker(early_stop_config, self._log, self.name)
 
-		# Helper to compute top-K% fitness values (CE for CE mode, harmonic for HARMONIC_RANK)
+		# Helper to compute top-K% fitness values for early stopping
+		# all_neighbors is capped at 50, so harmonic ranks are always on consistent scale
 		def get_top_k_fitness(neighbors: list[tuple['ClusterGenome', float, Optional[float]]],
 							   k_pct: float = 0.2) -> list[float]:
-			"""Get fitness values of top-K% neighbors."""
+			"""Get fitness values of top-K% neighbors (harmonic scores or CE values)."""
 			if not neighbors:
-				return [best_fitness]
-			# Filter to neighbors with accuracy (needed for harmonic ranking)
+				return []
+			# Filter to neighbors with accuracy
 			valid = [(g, ce, acc) for g, ce, acc in neighbors if acc is not None]
 			if not valid:
-				# Fall back to CE values
 				sorted_by_ce = sorted(neighbors, key=lambda x: x[1])
 				k_count = max(1, int(len(sorted_by_ce) * k_pct))
 				return [ce for _, ce, _ in sorted_by_ce[:k_count]]
 
 			if use_harmonic:
-				# Rank by harmonic and return harmonic fitness values
+				# Rank by harmonic and return harmonic scores
 				ranked = fitness_calculator.rank(valid)
 				k_count = max(1, int(len(ranked) * k_pct))
 				return [score for _, score in ranked[:k_count]]
@@ -1170,7 +1171,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 				k_count = max(1, int(len(sorted_by_ce) * k_pct))
 				return [ce for _, ce, _ in sorted_by_ce[:k_count]]
 
-		# Initialize with top-K% fitness
+		# Initialize early stopper with top-K% CE values
 		elite_fitness = get_top_k_fitness(all_neighbors)
 		early_stopper.reset_trend(elite_fitness)
 
@@ -1245,6 +1246,15 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 						best_acc_genome = g.clone()
 						best_acc_fitness = ce
 						best_acc_accuracy = acc
+
+				# Cap all_neighbors to best N by harmonic rank
+				cache_size = cfg.total_neighbors_size or cfg.neighbors_per_iter
+				if len(all_neighbors) > cache_size:
+					valid_for_cap = [(g, ce, acc) for g, ce, acc in all_neighbors if acc is not None]
+					if valid_for_cap:
+						ranked_for_cap = fitness_calculator.rank(valid_for_cap)
+						best_ids = {id(g) for g, _ in ranked_for_cap[:cache_size]}
+						all_neighbors = [(g, ce, acc) for g, ce, acc in all_neighbors if id(g) in best_ids]
 
 				# Find new best by harmonic rank (include current best)
 				pop_for_ranking = [(g, ce, acc or 0.0) for g, ce, acc in all_neighbors if acc is not None]
@@ -1345,6 +1355,12 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 						best_acc_genome = g.clone()
 						best_acc_fitness = ce
 						best_acc_accuracy = acc
+
+				# Cap all_neighbors to best N by CE
+				cache_size = cfg.total_neighbors_size or cfg.neighbors_per_iter
+				if len(all_neighbors) > cache_size:
+					sorted_by_ce = sorted(all_neighbors, key=lambda x: x[1])
+					all_neighbors = sorted_by_ce[:cache_size]
 
 				# Update global best
 				if best_ce_fitness < best_fitness:

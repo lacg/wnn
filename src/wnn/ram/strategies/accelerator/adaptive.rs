@@ -1618,27 +1618,24 @@ pub fn evaluate_genomes_parallel_hybrid(
     let metal = get_metal_evaluator();
     let sparse_metal = get_sparse_metal_evaluator();
 
-    // Pre-compute connection offsets for each genome
+    // Pre-compute connection offsets and sizes for each genome (handles variable configs)
     let use_provided_connections = !genomes_connections_flat.is_empty();
     let groups_template = build_config_groups(first_bits, first_neurons);
     let total_conn_size: usize = groups_template.iter().map(|g| g.conn_size()).sum();
 
-    // Build cluster-to-group mapping (same for all genomes with same config)
-    let mut cluster_to_group: Vec<(usize, usize)> = vec![(0, 0); num_clusters];
-    for (group_idx, group) in groups_template.iter().enumerate() {
-        for (local_idx, &cluster_id) in group.cluster_ids.iter().enumerate() {
-            cluster_to_group[cluster_id] = (group_idx, local_idx);
-        }
+    // Compute per-genome connection offsets (for variable-sized genomes)
+    let mut conn_offsets: Vec<usize> = Vec::with_capacity(num_genomes);
+    let mut conn_sizes: Vec<usize> = Vec::with_capacity(num_genomes);
+    let mut running_offset = 0usize;
+    for genome_idx in 0..num_genomes {
+        conn_offsets.push(running_offset);
+        let genome_offset = genome_idx * num_clusters;
+        let conn_size: usize = (0..num_clusters)
+            .map(|i| genomes_bits_flat[genome_offset + i] * genomes_neurons_flat[genome_offset + i])
+            .sum();
+        conn_sizes.push(conn_size);
+        running_offset += conn_size;
     }
-
-    // Create memory pool
-    let pool_memories: Vec<Vec<GroupMemory>> = (0..pool_size)
-        .map(|_| {
-            groups_template.iter()
-                .map(|g| GroupMemory::new(g.total_neurons(), g.bits))
-                .collect()
-        })
-        .collect();
 
     // Channel for pipelining: CPU sends exports, eval thread receives and evaluates
     let (tx, rx) = mpsc::channel::<(usize, Vec<(usize, GenomeExport)>)>();
@@ -1683,40 +1680,44 @@ pub fn evaluate_genomes_parallel_hybrid(
         let batch_end = (batch_start + batch_size).min(num_genomes);
         let current_batch_size = batch_end - batch_start;
 
-        // Train batch in parallel and collect exports
+        // Train batch in parallel - each genome builds its own config (handles variable architectures)
         let batch_exports: Vec<(usize, GenomeExport)> = (0..current_batch_size)
             .into_par_iter()
             .map(|local_idx| {
                 let genome_idx = batch_start + local_idx;
-                let pool_slot = local_idx % pool_size;
-                let memories = &pool_memories[pool_slot];
 
-                // Reset memory for this slot
-                for memory in memories {
-                    match memory {
-                        GroupMemory::Dense(m) => {
-                            for word in &m.words {
-                                word.store(0x5555555555555555i64, std::sync::atomic::Ordering::Relaxed);
-                            }
-                        }
-                        GroupMemory::Sparse(m) => {
-                            for neuron_map in &m.neurons {
-                                neuron_map.clear();
-                            }
-                        }
+                // Get this genome's config
+                let genome_offset = genome_idx * num_clusters;
+                let bits_per_cluster = &genomes_bits_flat[genome_offset..genome_offset + num_clusters];
+                let neurons_per_cluster = &genomes_neurons_flat[genome_offset..genome_offset + num_clusters];
+
+                // Build config groups for THIS genome
+                let groups = build_config_groups(bits_per_cluster, neurons_per_cluster);
+
+                // Build cluster-to-group mapping for THIS genome
+                let mut cluster_to_group: Vec<(usize, usize)> = vec![(0, 0); num_clusters];
+                for (group_idx, group) in groups.iter().enumerate() {
+                    for (local_idx, &cluster_id) in group.cluster_ids.iter().enumerate() {
+                        cluster_to_group[cluster_id] = (group_idx, local_idx);
                     }
                 }
 
+                // Create memory for THIS genome
+                let memories: Vec<GroupMemory> = groups.iter()
+                    .map(|g| GroupMemory::new(g.total_neurons(), g.bits))
+                    .collect();
+
                 // Get connections for this genome
                 let connections_flat: Vec<i64> = if use_provided_connections {
-                    let conn_offset = genome_idx * total_conn_size;
-                    genomes_connections_flat[conn_offset..conn_offset + total_conn_size].to_vec()
+                    let conn_offset = conn_offsets[genome_idx];
+                    let conn_size = conn_sizes[genome_idx];
+                    genomes_connections_flat[conn_offset..conn_offset + conn_size].to_vec()
                 } else {
-                    // Generate random connections
+                    // Generate random connections based on THIS genome's config
                     use rand::{Rng, SeedableRng};
                     let mut rng = rand::rngs::SmallRng::seed_from_u64((genome_idx * 12345) as u64);
-                    let mut conns = Vec::with_capacity(total_conn_size);
-                    for group in &groups_template {
+                    let mut conns = Vec::new();
+                    for group in &groups {
                         for _ in 0..group.total_neurons() {
                             for _ in 0..group.bits {
                                 conns.push(rng.gen_range(0..total_input_bits as i64));
@@ -1726,10 +1727,10 @@ pub fn evaluate_genomes_parallel_hybrid(
                     conns
                 };
 
-                // Train
+                // Train this genome
                 train_genome_in_slot(
-                    memories,
-                    &groups_template,
+                    &memories,
+                    &groups,
                     &connections_flat,
                     &cluster_to_group,
                     train_input_bits,
@@ -1740,8 +1741,8 @@ pub fn evaluate_genomes_parallel_hybrid(
                     total_input_bits,
                 );
 
-                // Export for GPU
-                let export = export_genome_for_gpu(memories, &groups_template, &connections_flat);
+                // Export for GPU using THIS genome's groups
+                let export = export_genome_for_gpu(&memories, &groups, &connections_flat);
 
                 (genome_idx, export)
             })
