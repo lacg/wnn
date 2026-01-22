@@ -757,6 +757,11 @@ class PhasedSearchRunner:
 				)
 				self.log("Evaluating default genome as baseline...")
 
+			# Initialize connections if not present (critical for reproducible evaluation)
+			if not baseline_genome.has_connections():
+				baseline_genome.initialize_connections(self.total_input_bits)
+				self.log(f"  Initialized {baseline_genome.total_connections()} connections")
+
 			baseline_ce, baseline_acc = self.evaluator.evaluate_single_full(baseline_genome)
 			self.log(f"  Baseline CE: {baseline_ce:.4f}, Acc: {baseline_acc:.2%}")
 			self.log("")

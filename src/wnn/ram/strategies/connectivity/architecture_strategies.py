@@ -490,6 +490,11 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		# Initialize population (show ALL genomes - no threshold filtering for init)
 		# If we have seed genomes but fewer than population_size, expand with mutations
 		if initial_population and len(initial_population) > 0:
+			# CRITICAL: Ensure all seed genomes have connections (fixes reproducibility bug)
+			# Without connections, Rust generates random ones each evaluation → inconsistent results
+			for g in initial_population:
+				if not g.has_connections():
+					g.initialize_connections(evaluator.total_input_bits)
 			seed_count = len(initial_population)
 			need_count = cfg.population_size - seed_count
 			if need_count > 0:
@@ -1058,6 +1063,14 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 
 		self._log.info(f"[{self.name}] Progressive threshold: {start_threshold:.4%} → {end_threshold:.4%}")
 		self._log.info(f"[{self.name}] Using Rust search_neighbors (single-call neighbor search)")
+
+		# CRITICAL: Ensure initial genome has connections (fixes reproducibility bug)
+		if not initial_genome.has_connections():
+			initial_genome.initialize_connections(evaluator.total_input_bits)
+		if initial_neighbors:
+			for g in initial_neighbors:
+				if not g.has_connections():
+					g.initialize_connections(evaluator.total_input_bits)
 
 		# Best tracking - always track all three for logging
 		best_harmonic_genome = initial_genome.clone()

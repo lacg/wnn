@@ -426,6 +426,13 @@ class ClusterGenome:
 				new_bits, new_neurons, bits_delta, neurons_delta,
 				total_input_bits or 64  # Default to 64 if not provided
 			)
+		elif total_input_bits is not None:
+			# Parent has no connections but total_input_bits provided → generate random
+			new_connections = []
+			for i in range(len(new_bits)):
+				for _ in range(new_neurons[i]):
+					for _ in range(new_bits[i]):
+						new_connections.append(random.randint(0, total_input_bits - 1))
 
 		return ClusterGenome(
 			bits_per_cluster=new_bits,
