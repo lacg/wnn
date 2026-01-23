@@ -545,7 +545,7 @@ class PhasedSearchRunner:
 			empty_value=0.0,
 			seed=rotation_seed,
 			log_path=self.config.log_path,
-			use_hybrid=False,  # Sequential training + GPU eval (testing performance)
+			use_hybrid=True,  # Parallel batch training + GPU eval (fast)
 		)
 		self.log(f"  {self.evaluator}")
 

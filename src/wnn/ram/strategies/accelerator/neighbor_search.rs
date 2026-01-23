@@ -712,6 +712,7 @@ pub fn search_offspring(
         }
 
         // Evaluate the batch - hybrid with persistent worker (no per-call overhead)
+        let batch_start = std::time::Instant::now();
         let results = crate::token_cache::evaluate_genomes_cached_hybrid(
             cache,
             &batch_bits,
@@ -722,8 +723,7 @@ pub fn search_offspring(
             eval_subset_idx,
             empty_value,
         );
-
-        // Process results
+        // Process results - log each viable offspring immediately
         for (i, (ce, acc)) in results.iter().enumerate() {
             evaluated += 1;
             let (bits, neurons, conns) = &batch_genomes[i];
@@ -736,7 +736,7 @@ pub fn search_offspring(
                 accuracy: *acc,
             };
 
-            // Only log candidates that pass threshold
+            // Log and keep candidates that pass threshold
             if *acc >= accuracy_threshold {
                 shown_count += 1;
                 logger.log(&format_genome_log(

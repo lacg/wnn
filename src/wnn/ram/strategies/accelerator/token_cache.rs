@@ -457,6 +457,8 @@ pub fn evaluate_genomes_cached_hybrid(
     let train = cache.train_subset(train_subset_idx);
     let eval = cache.eval_subset(eval_subset_idx);
 
+    // Always use parallel hybrid (fast, ~3.5s/genome)
+    // Progress logging now built into parallel_hybrid when WNN_PROGRESS_LOG=1
     crate::adaptive::evaluate_genomes_parallel_hybrid(
         genomes_bits_flat,
         genomes_neurons_flat,

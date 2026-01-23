@@ -687,8 +687,8 @@ class GAConfig:
 	# Threshold continuity: start threshold passed from previous phase
 	# If None, uses min_accuracy as the base (first phase)
 	initial_threshold: Optional[float] = None
-	min_accuracy: float = 0.002    # 0.2% base threshold (used if initial_threshold is None)
-	threshold_delta: float = 0.002   # 0.2% increase over full phase
+	min_accuracy: float = 0.0001    # 0.01% base threshold (used if initial_threshold is None)
+	threshold_delta: float = 0.008    # 0.8% total increase (0.01% → 0.05% by gen 50, → 0.81% by gen 1000)
 	progressive_threshold: bool = True  # Enable progressive threshold within phase
 	# CE percentile filter: keep only offspring in top X% by CE (None = disabled)
 	# Example: 0.75 keeps top 75% by CE. Applied after accuracy threshold.
@@ -701,7 +701,7 @@ class GAConfig:
 	fitness_weight_ce: float = 1.0
 	fitness_weight_acc: float = 1.0
 	# Early stopping (all configurable via parameters)
-	patience: int = 5              # Checks without improvement before stopping
+	patience: int = 10             # Checks without improvement before stopping (increased for long runs)
 	check_interval: int = 5        # Check every N generations
 	min_improvement_pct: float = 0.05  # GA needs diversity, lower threshold (0.05%)
 	# Fresh population: if True, ignore initial_population and generate fresh random genomes
@@ -722,8 +722,8 @@ class TSConfig:
 	# Threshold continuity: start threshold passed from previous phase
 	# If None, uses min_accuracy as the base (first phase)
 	initial_threshold: Optional[float] = None
-	min_accuracy: float = 0.002    # 0.2% base threshold (used if initial_threshold is None)
-	threshold_delta: float = 0.002   # 0.2% increase over full phase
+	min_accuracy: float = 0.0001    # 0.01% base threshold (used if initial_threshold is None)
+	threshold_delta: float = 0.008    # 0.8% total increase (0.01% → 0.05% by gen 50, → 0.81% by gen 1000)
 	progressive_threshold: bool = True  # Enable progressive threshold within phase
 	# CE percentile filter: keep only neighbors in top X% by CE (None = disabled)
 	# Example: 0.75 keeps top 75% by CE. Applied after accuracy threshold.
@@ -736,7 +736,7 @@ class TSConfig:
 	fitness_weight_ce: float = 1.0
 	fitness_weight_acc: float = 1.0
 	# Early stopping (all configurable via parameters)
-	patience: int = 5              # Checks without improvement before stopping
+	patience: int = 10             # Checks without improvement before stopping (increased for long runs)
 	check_interval: int = 5        # Check every N iterations
 	min_improvement_pct: float = 0.5  # TS is focused, higher threshold (0.5%)
 

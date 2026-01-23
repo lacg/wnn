@@ -203,74 +203,55 @@ class CachedEvaluator:
 
         overall_start = time.time()
 
-        if streaming and stream_batch_size < num_genomes:
-            # Streaming mode: evaluate in small batches with per-genome logging
-            all_results = []
+        if streaming:
+            # Streaming mode: enable Rust per-genome progress logging
+            # Rust will log each genome as it completes (~3.5s/genome)
             current_gen = (generation + 1) if generation is not None else 1
 
-            # Check if Rust is handling progress logging (skip Python duplicate)
-            rust_progress = os.environ.get('WNN_PROGRESS_LOG') == '1'
-
-            # Set generation info for Rust progress logging
+            # Enable Rust progress logging
+            os.environ['WNN_PROGRESS_LOG'] = '1'
             os.environ['WNN_PROGRESS_GEN'] = str(current_gen)
             os.environ['WNN_PROGRESS_TOTAL_GENS'] = str(total_gens)
             os.environ['WNN_PROGRESS_TYPE'] = 'Init'
             os.environ['WNN_PROGRESS_TOTAL'] = str(num_genomes)
+            os.environ['WNN_PROGRESS_OFFSET'] = '0'
+            if self._log_path:
+                os.environ['WNN_LOG_PATH'] = self._log_path
 
-            for batch_start in range(0, num_genomes, stream_batch_size):
-                # Set offset for Rust to show overall position (e.g., 11/50 not 1/15)
-                os.environ['WNN_PROGRESS_OFFSET'] = str(batch_start)
-                batch_end = min(batch_start + stream_batch_size, num_genomes)
-                batch_genomes = genomes[batch_start:batch_end]
+            # Flatten ALL genomes (single Rust call, Rust handles per-genome logging)
+            genomes_bits_flat = []
+            genomes_neurons_flat = []
+            genomes_connections_flat = []
+            for g in genomes:
+                genomes_bits_flat.extend(g.bits_per_cluster)
+                genomes_neurons_flat.extend(g.neurons_per_cluster)
+                if g.connections is not None:
+                    genomes_connections_flat.extend(g.connections)
 
-                # Flatten this batch (Rust handles variable configs)
-                batch_bits = []
-                batch_neurons = []
-                batch_conns = []
-                for g in batch_genomes:
-                    batch_bits.extend(g.bits_per_cluster)
-                    batch_neurons.extend(g.neurons_per_cluster)
-                    if g.connections is not None:
-                        batch_conns.extend(g.connections)
+            # Single Rust call - Rust logs each genome as it completes
+            if self._use_hybrid:
+                results = self._cache.evaluate_genomes_hybrid(
+                    genomes_bits_flat,
+                    genomes_neurons_flat,
+                    genomes_connections_flat,
+                    num_genomes,
+                    train_subset_idx,
+                    eval_subset_idx,
+                    self._empty_value,
+                )
+            else:
+                results = self._cache.evaluate_genomes(
+                    genomes_bits_flat,
+                    genomes_neurons_flat,
+                    genomes_connections_flat,
+                    num_genomes,
+                    train_subset_idx,
+                    eval_subset_idx,
+                    self._empty_value,
+                )
 
-                # Evaluate this batch (use hybrid if enabled)
-                if self._use_hybrid:
-                    batch_results = self._cache.evaluate_genomes_hybrid(
-                        batch_bits,
-                        batch_neurons,
-                        batch_conns,
-                        len(batch_genomes),
-                        train_subset_idx,
-                        eval_subset_idx,
-                        self._empty_value,
-                    )
-                else:
-                    batch_results = self._cache.evaluate_genomes(
-                        batch_bits,
-                        batch_neurons,
-                        batch_conns,
-                        len(batch_genomes),
-                        train_subset_idx,
-                        eval_subset_idx,
-                        self._empty_value,
-                    )
-
-                # Log results (skip if Rust already logged via WNN_PROGRESS_LOG)
-                if not rust_progress:
-                    for i, (ce, acc) in enumerate(batch_results):
-                        genome_idx = batch_start + i + 1
-                        passes = min_accuracy is None or acc >= min_accuracy
-                        base_msg = format_genome_log(
-                            current_gen, total_gens, GenomeLogType.INITIAL,
-                            genome_idx, num_genomes, ce, acc
-                        )
-                        # Always use INFO for streaming so logs are visible
-                        log_info(base_msg)
-                        sys.stdout.flush()
-
-                all_results.extend(batch_results)
-
-            results = all_results
+            # Disable progress logging after evaluation
+            os.environ.pop('WNN_PROGRESS_LOG', None)
         else:
             # Non-streaming mode: evaluate all at once
             current_gen = (generation + 1) if generation is not None else 1

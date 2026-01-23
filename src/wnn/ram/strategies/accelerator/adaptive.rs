@@ -21,7 +21,7 @@ use rayon::prelude::*;
 use rustc_hash::FxHasher;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
 // Re-export from eval_worker module for backward compatibility
@@ -2045,6 +2045,15 @@ pub fn evaluate_genomes_parallel_hybrid(
     let mut total_train_ms = 0u128;
     let mut total_eval_ms = 0u128;
 
+    // Progress logging for parallel batch (logs training completion, not final results)
+    let progress_log = std::env::var("WNN_PROGRESS_LOG").map(|v| v == "1").unwrap_or(false);
+    let log_path = std::env::var("WNN_LOG_PATH").ok();
+    let current_gen: usize = std::env::var("WNN_PROGRESS_GEN").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
+    let total_gens: usize = std::env::var("WNN_PROGRESS_TOTAL_GENS").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
+    let log_type = std::env::var("WNN_PROGRESS_TYPE").unwrap_or_else(|_| "Init".to_string());
+    let batch_offset: usize = std::env::var("WNN_PROGRESS_OFFSET").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let total_count: usize = std::env::var("WNN_PROGRESS_TOTAL").ok().and_then(|v| v.parse().ok()).unwrap_or(num_genomes);
+
     for batch_idx in 0..num_batches {
         let batch_start = batch_idx * batch_size;
         let batch_end = (batch_start + batch_size).min(num_genomes);
@@ -2125,13 +2134,47 @@ pub fn evaluate_genomes_parallel_hybrid(
 
         // Send to persistent eval worker and get results
         let batch_results = eval_worker.evaluate(batch_exports, Arc::clone(&eval_data));
-        all_results.extend(batch_results);
 
-        let eval_elapsed = eval_start.elapsed();
+        let eval_elapsed_secs = eval_start.elapsed().as_secs_f64();
+        let batch_total_secs = train_elapsed.as_secs_f64() + eval_elapsed_secs;
+
+        // Log results with CE/Acc after batch completes
+        if progress_log {
+            use std::io::Write;
+            let now = chrono::Local::now();
+            let gen_width = total_gens.to_string().len();
+            let pos_width = total_count.to_string().len();
+            let type_padded = format!("{:<4}", &log_type[..log_type.len().min(4)]);
+
+            for (genome_idx, ce, acc) in &batch_results {
+                let overall_position = batch_offset + genome_idx + 1;
+                let msg = format!(
+                    "{} | [Gen {:0gen_width$}/{:0gen_width$}] Genome {:0pos_width$}/{} ({}): CE={:.4}, Acc={:.4}% ({:.1}s)\n",
+                    now.format("%H:%M:%S"),
+                    current_gen, total_gens,
+                    overall_position, total_count,
+                    type_padded,
+                    ce, acc * 100.0,
+                    batch_total_secs,
+                    gen_width = gen_width,
+                    pos_width = pos_width,
+                );
+                if let Some(ref path) = log_path {
+                    if let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(path) {
+                        let _ = file.write_all(msg.as_bytes());
+                        let _ = file.flush();
+                    }
+                } else {
+                    eprint!("{}", msg);
+                }
+            }
+        }
+
+        all_results.extend(batch_results);
 
         if timing_enabled {
             total_train_ms += train_elapsed.as_millis();
-            total_eval_ms += eval_elapsed.as_millis();
+            total_eval_ms += (eval_elapsed_secs * 1000.0) as u128;
         }
     }
 
