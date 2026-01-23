@@ -44,7 +44,6 @@
 //! - **GPU warmth**: Metal evaluators stay initialized
 //! - **Pipelining**: Bounded channel allows training batch N+1 while evaluating N
 
-use rayon::prelude::*;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, OnceLock};
 use std::thread::{self, JoinHandle};
@@ -169,14 +168,21 @@ impl EvalWorkerPool {
         let metal = Self::get_metal_evaluator();
         let sparse_metal = Self::get_sparse_metal_evaluator();
 
+        // Detailed timing (enabled via WNN_EVAL_TIMING env var)
+        let timing_enabled = std::env::var("WNN_EVAL_TIMING").is_ok();
+
         // Process requests until channel closes
         while let Ok(request) = request_rx.recv() {
             let eval_data = &request.eval_data;
+            let num_genomes = request.exports.len();
 
-            // Evaluate all exports in parallel on GPU
+            let batch_start = std::time::Instant::now();
+
+            // Evaluate exports sequentially - GPU doesn't benefit from parallel access
+            // (multiple threads competing for GPU causes contention and slowdown)
             let results: Vec<(usize, f64, f64)> = request
                 .exports
-                .into_par_iter()
+                .into_iter()
                 .map(|(genome_idx, export)| {
                     let (ce, acc) = evaluate_genome_hybrid(
                         &export,
@@ -192,6 +198,15 @@ impl EvalWorkerPool {
                     (genome_idx, ce, acc)
                 })
                 .collect();
+
+            if timing_enabled && num_genomes > 0 {
+                let batch_elapsed = batch_start.elapsed();
+                let per_genome_ms = batch_elapsed.as_millis() as f64 / num_genomes as f64;
+                eprintln!(
+                    "[EVAL_WORKER] batch={} genomes, total={:.0}ms, per_genome={:.0}ms",
+                    num_genomes, batch_elapsed.as_millis(), per_genome_ms
+                );
+            }
 
             // Send results back (ignore error if receiver dropped)
             let _ = request.response_tx.send(EvalBatchResponse { results });

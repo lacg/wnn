@@ -1506,6 +1506,15 @@ pub fn evaluate_genome_hybrid(
 ) -> (f64, f64) {
     let epsilon = 1e-10f64;
 
+    // Detailed timing (enabled via WNN_GROUP_TIMING env var)
+    let timing_enabled = std::env::var("WNN_GROUP_TIMING").is_ok();
+    let eval_start = std::time::Instant::now();
+    let mut gpu_time_ms = 0u128;
+    let mut cpu_time_ms = 0u128;
+    let mut scatter_time_ms = 0u128;
+    let mut gpu_calls = 0usize;
+    let mut cpu_calls = 0usize;
+
     // Pre-compute scores for all examples × clusters
     let mut all_scores: Vec<Vec<f64>> = vec![vec![0.0; num_clusters]; num_eval];
 
@@ -1520,6 +1529,7 @@ pub fn evaluate_genome_hybrid(
             let sparse_export = &export.sparse_exports[sparse_idx];
             sparse_idx += 1;
 
+            let call_start = std::time::Instant::now();
             let gpu_success = if let Some(sparse_eval) = sparse_metal {
                 match evaluate_group_sparse_gpu(
                     sparse_eval,
@@ -1531,11 +1541,19 @@ pub fn evaluate_genome_hybrid(
                     total_input_bits,
                 ) {
                     Ok(group_scores) => {
+                        if timing_enabled {
+                            gpu_time_ms += call_start.elapsed().as_millis();
+                            gpu_calls += 1;
+                        }
+                        let scatter_start = std::time::Instant::now();
                         for ex_idx in 0..num_eval {
                             for (local_cluster, &cluster_id) in cluster_ids.iter().enumerate() {
                                 let score_idx = ex_idx * group.cluster_count() + local_cluster;
                                 all_scores[ex_idx][cluster_id] = group_scores[score_idx] as f64;
                             }
+                        }
+                        if timing_enabled {
+                            scatter_time_ms += scatter_start.elapsed().as_millis();
                         }
                         true
                     }
@@ -1547,6 +1565,7 @@ pub fn evaluate_genome_hybrid(
 
             if !gpu_success {
                 // CPU fallback using binary search
+                let cpu_start = std::time::Instant::now();
                 all_scores.par_iter_mut().enumerate().for_each(|(ex_idx, scores)| {
                     let input_start = ex_idx * total_input_bits;
                     let input_bits = &eval_input_bits[input_start..input_start + total_input_bits];
@@ -1570,9 +1589,14 @@ pub fn evaluate_genome_hybrid(
                         scores[cluster_id] = (sum / group.neurons as f32) as f64;
                     }
                 });
+                if timing_enabled {
+                    cpu_time_ms += cpu_start.elapsed().as_millis();
+                    cpu_calls += 1;
+                }
             }
         } else {
             // Try GPU dense evaluation
+            let call_start = std::time::Instant::now();
             let dense_words = &export.dense_exports[dense_idx];
             dense_idx += 1;
 
@@ -1587,11 +1611,19 @@ pub fn evaluate_genome_hybrid(
                     total_input_bits,
                 ) {
                     Ok(group_scores) => {
+                        if timing_enabled {
+                            gpu_time_ms += call_start.elapsed().as_millis();
+                            gpu_calls += 1;
+                        }
+                        let scatter_start = std::time::Instant::now();
                         for ex_idx in 0..num_eval {
                             for (local_cluster, &cluster_id) in cluster_ids.iter().enumerate() {
                                 let score_idx = ex_idx * group.cluster_count() + local_cluster;
                                 all_scores[ex_idx][cluster_id] = group_scores[score_idx] as f64;
                             }
+                        }
+                        if timing_enabled {
+                            scatter_time_ms += scatter_start.elapsed().as_millis();
                         }
                         true
                     }
@@ -1606,6 +1638,15 @@ pub fn evaluate_genome_hybrid(
                 // This shouldn't happen normally as dense Metal usually works
             }
         }
+    }
+
+    // Print timing summary if enabled
+    if timing_enabled {
+        let total_ms = eval_start.elapsed().as_millis();
+        eprintln!(
+            "[EVAL_HYBRID] total={}ms gpu={}ms({}calls) cpu={}ms({}calls) scatter={}ms",
+            total_ms, gpu_time_ms, gpu_calls, cpu_time_ms, cpu_calls, scatter_time_ms
+        );
     }
 
     // Compute CE and accuracy from pre-computed scores
@@ -1729,10 +1770,17 @@ pub fn evaluate_genomes_parallel_hybrid(
     // Process genomes in batches
     let num_batches = (num_genomes + batch_size - 1) / batch_size;
 
+    // Timing instrumentation (enabled via WNN_TIMING env var)
+    let timing_enabled = std::env::var("WNN_TIMING").is_ok();
+    let mut total_train_ms = 0u128;
+    let mut total_eval_ms = 0u128;
+
     for batch_idx in 0..num_batches {
         let batch_start = batch_idx * batch_size;
         let batch_end = (batch_start + batch_size).min(num_genomes);
         let current_batch_size = batch_end - batch_start;
+
+        let train_start = std::time::Instant::now();
 
         // Train batch in parallel - each genome builds its own config (handles variable architectures)
         let batch_exports: Vec<(usize, GenomeExport)> = (0..current_batch_size)
@@ -1802,9 +1850,29 @@ pub fn evaluate_genomes_parallel_hybrid(
             })
             .collect();
 
+        let train_elapsed = train_start.elapsed();
+        let eval_start = std::time::Instant::now();
+
         // Send to persistent eval worker and get results
         let batch_results = eval_worker.evaluate(batch_exports, Arc::clone(&eval_data));
         all_results.extend(batch_results);
+
+        let eval_elapsed = eval_start.elapsed();
+
+        if timing_enabled {
+            total_train_ms += train_elapsed.as_millis();
+            total_eval_ms += eval_elapsed.as_millis();
+        }
+    }
+
+    // Print timing summary if enabled
+    if timing_enabled && num_genomes > 0 {
+        let train_per_genome = total_train_ms as f64 / num_genomes as f64;
+        let eval_per_genome = total_eval_ms as f64 / num_genomes as f64;
+        eprintln!(
+            "[TIMING] batch_size={}, genomes={}: train={:.0}ms/genome, eval={:.0}ms/genome, total={:.0}ms/genome",
+            batch_size, num_genomes, train_per_genome, eval_per_genome, train_per_genome + eval_per_genome
+        );
     }
 
     // Sort results by genome index and return

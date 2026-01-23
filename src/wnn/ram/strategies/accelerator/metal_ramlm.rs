@@ -564,6 +564,465 @@ impl MetalSparseEvaluator {
     }
 }
 
+// ============================================================================
+// Batched Sparse Evaluator - Multiple Genomes in One Dispatch
+// ============================================================================
+
+/// Parameters for batched sparse forward pass (must match Metal struct)
+#[repr(C)]
+struct BatchedSparseParams {
+    num_examples: u32,
+    total_input_bits: u32,
+    num_neurons: u32,
+    bits_per_neuron: u32,
+    neurons_per_cluster: u32,
+    num_clusters: u32,
+    num_genomes: u32,
+    empty_value: f32,
+}
+
+/// Metal evaluator for batched genome evaluation
+///
+/// Evaluates MULTIPLE genomes in a single GPU dispatch, which is more efficient
+/// than launching separate kernels for each genome.
+pub struct MetalBatchedEvaluator {
+    device: Device,
+    command_queue: CommandQueue,
+    batched_forward_pipeline: ComputePipelineState,
+    batched_per_example_pipeline: ComputePipelineState,
+}
+
+impl MetalBatchedEvaluator {
+    /// Create new batched Metal evaluator
+    pub fn new() -> Result<Self, String> {
+        let device = Device::system_default().ok_or("No Metal device found")?;
+        let command_queue = device.new_command_queue();
+
+        // Compile batched sparse forward shader
+        let shader_source = include_str!("shaders/batched_sparse_forward.metal");
+        let library = device
+            .new_library_with_source(shader_source, &CompileOptions::new())
+            .map_err(|e| format!("Failed to compile batched sparse shader: {}", e))?;
+
+        let batched_forward_kernel = library
+            .get_function("batched_sparse_forward_pass", None)
+            .map_err(|e| format!("Failed to get batched_sparse_forward_pass: {}", e))?;
+
+        let batched_per_example_kernel = library
+            .get_function("batched_sparse_forward_per_example", None)
+            .map_err(|e| format!("Failed to get batched_sparse_forward_per_example: {}", e))?;
+
+        let batched_forward_pipeline = device
+            .new_compute_pipeline_state_with_function(&batched_forward_kernel)
+            .map_err(|e| format!("Failed to create batched forward pipeline: {}", e))?;
+
+        let batched_per_example_pipeline = device
+            .new_compute_pipeline_state_with_function(&batched_per_example_kernel)
+            .map_err(|e| format!("Failed to create batched per-example pipeline: {}", e))?;
+
+        Ok(Self {
+            device,
+            command_queue,
+            batched_forward_pipeline,
+            batched_per_example_pipeline,
+        })
+    }
+
+    /// Batched forward pass for multiple genomes
+    ///
+    /// Evaluates N genomes in a single GPU dispatch.
+    /// Input bits are shared across genomes; each genome has its own connections and memory.
+    ///
+    /// Args:
+    ///   input_bits: [num_examples * total_input_bits] - SHARED across genomes
+    ///   connections_flat: [num_genomes * num_neurons * bits_per_neuron]
+    ///   keys_flat: All genomes' sparse keys concatenated
+    ///   values_flat: All genomes' sparse values concatenated
+    ///   offsets_flat: [num_genomes * num_neurons]
+    ///   counts_flat: [num_genomes * num_neurons]
+    ///   genome_key_offsets: [num_genomes] offset into keys/values for each genome
+    ///   params: Evaluation parameters
+    ///
+    /// Returns: [num_genomes * num_examples * num_clusters] probabilities
+    pub fn forward_batch_genomes(
+        &self,
+        input_bits: &[bool],
+        connections_flat: &[i64],
+        keys_flat: &[u64],
+        values_flat: &[u8],
+        offsets_flat: &[u32],
+        counts_flat: &[u32],
+        genome_key_offsets: &[u32],
+        num_examples: usize,
+        total_input_bits: usize,
+        num_neurons: usize,
+        bits_per_neuron: usize,
+        neurons_per_cluster: usize,
+        num_clusters: usize,
+        num_genomes: usize,
+        empty_value: f32,
+    ) -> Result<Vec<f32>, String> {
+        if num_genomes == 0 || num_examples == 0 {
+            return Ok(vec![]);
+        }
+
+        // Convert input bits to u8
+        let input_u8: Vec<u8> = input_bits.iter().map(|&b| b as u8).collect();
+
+        // Convert connections to i32 for Metal
+        let connections_i32: Vec<i32> = connections_flat.iter().map(|&c| c as i32).collect();
+
+        // Create Metal buffers
+        let input_buffer = self.device.new_buffer_with_data(
+            input_u8.as_ptr() as *const _,
+            (input_u8.len() * mem::size_of::<u8>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let connections_buffer = self.device.new_buffer_with_data(
+            connections_i32.as_ptr() as *const _,
+            (connections_i32.len() * mem::size_of::<i32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let keys_buffer = self.device.new_buffer_with_data(
+            keys_flat.as_ptr() as *const _,
+            (keys_flat.len() * mem::size_of::<u64>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let values_buffer = self.device.new_buffer_with_data(
+            values_flat.as_ptr() as *const _,
+            (values_flat.len() * mem::size_of::<u8>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let offsets_buffer = self.device.new_buffer_with_data(
+            offsets_flat.as_ptr() as *const _,
+            (offsets_flat.len() * mem::size_of::<u32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let counts_buffer = self.device.new_buffer_with_data(
+            counts_flat.as_ptr() as *const _,
+            (counts_flat.len() * mem::size_of::<u32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let genome_offsets_buffer = self.device.new_buffer_with_data(
+            genome_key_offsets.as_ptr() as *const _,
+            (genome_key_offsets.len() * mem::size_of::<u32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let params = BatchedSparseParams {
+            num_examples: num_examples as u32,
+            total_input_bits: total_input_bits as u32,
+            num_neurons: num_neurons as u32,
+            bits_per_neuron: bits_per_neuron as u32,
+            neurons_per_cluster: neurons_per_cluster as u32,
+            num_clusters: num_clusters as u32,
+            num_genomes: num_genomes as u32,
+            empty_value,
+        };
+
+        let params_buffer = self.device.new_buffer_with_data(
+            &params as *const _ as *const _,
+            mem::size_of::<BatchedSparseParams>() as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let output_size = num_genomes * num_examples * num_clusters;
+        let output_buffer = self.device.new_buffer(
+            (output_size * mem::size_of::<f32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        // Create command buffer and encoder
+        let command_buffer = self.command_queue.new_command_buffer();
+        let encoder = command_buffer.new_compute_command_encoder();
+
+        // Decide which kernel to use based on problem size
+        let use_per_example = num_clusters <= 256;
+
+        if use_per_example {
+            encoder.set_compute_pipeline_state(&self.batched_per_example_pipeline);
+            encoder.set_buffer(0, Some(&input_buffer), 0);
+            encoder.set_buffer(1, Some(&connections_buffer), 0);
+            encoder.set_buffer(2, Some(&keys_buffer), 0);
+            encoder.set_buffer(3, Some(&values_buffer), 0);
+            encoder.set_buffer(4, Some(&offsets_buffer), 0);
+            encoder.set_buffer(5, Some(&counts_buffer), 0);
+            encoder.set_buffer(6, Some(&genome_offsets_buffer), 0);
+            encoder.set_buffer(7, Some(&params_buffer), 0);
+            encoder.set_buffer(8, Some(&output_buffer), 0);
+
+            // Grid: (num_examples, num_genomes)
+            let grid_size = MTLSize::new(num_examples as u64, num_genomes as u64, 1);
+            let max_threads = self.batched_per_example_pipeline.max_total_threads_per_threadgroup();
+            let thread_group_size = MTLSize::new(
+                max_threads.min(num_examples as u64),
+                1,
+                1,
+            );
+            encoder.dispatch_threads(grid_size, thread_group_size);
+        } else {
+            encoder.set_compute_pipeline_state(&self.batched_forward_pipeline);
+            encoder.set_buffer(0, Some(&input_buffer), 0);
+            encoder.set_buffer(1, Some(&connections_buffer), 0);
+            encoder.set_buffer(2, Some(&keys_buffer), 0);
+            encoder.set_buffer(3, Some(&values_buffer), 0);
+            encoder.set_buffer(4, Some(&offsets_buffer), 0);
+            encoder.set_buffer(5, Some(&counts_buffer), 0);
+            encoder.set_buffer(6, Some(&genome_offsets_buffer), 0);
+            encoder.set_buffer(7, Some(&params_buffer), 0);
+            encoder.set_buffer(8, Some(&output_buffer), 0);
+
+            // Grid: (num_clusters, num_examples, num_genomes)
+            let grid_size = MTLSize::new(
+                num_clusters as u64,
+                num_examples as u64,
+                num_genomes as u64,
+            );
+            let thread_group_size = MTLSize::new(
+                32.min(num_clusters as u64),
+                8.min(num_examples as u64),
+                1.min(num_genomes as u64),
+            );
+            encoder.dispatch_threads(grid_size, thread_group_size);
+        }
+
+        encoder.end_encoding();
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+
+        // Read results
+        let result_ptr = output_buffer.contents() as *const f32;
+        let results: Vec<f32> = unsafe {
+            std::slice::from_raw_parts(result_ptr, output_size).to_vec()
+        };
+
+        Ok(results)
+    }
+}
+
+// ============================================================================
+// Sparse CE Evaluator - Computes CE/Accuracy Directly on GPU
+// ============================================================================
+
+/// Parameters for sparse CE computation (must match Metal struct)
+#[repr(C)]
+struct SparseCEParams {
+    num_examples: u32,
+    total_input_bits: u32,
+    num_neurons: u32,
+    bits_per_neuron: u32,
+    neurons_per_cluster: u32,
+    num_clusters: u32,
+    empty_value: f32,
+}
+
+/// Metal evaluator that computes CE and accuracy directly on GPU
+///
+/// Instead of returning all probabilities (10GB for 50K×50K), this evaluator
+/// computes cross-entropy and accuracy ON THE GPU and returns just the results.
+/// This eliminates the massive GPU→CPU data transfer.
+pub struct MetalSparseCEEvaluator {
+    device: Device,
+    command_queue: CommandQueue,
+    ce_online_pipeline: ComputePipelineState,
+}
+
+impl MetalSparseCEEvaluator {
+    /// Create new sparse CE evaluator
+    pub fn new() -> Result<Self, String> {
+        let device = Device::system_default().ok_or("No Metal device found")?;
+        let command_queue = device.new_command_queue();
+
+        // Compile sparse CE shader
+        let shader_source = include_str!("shaders/sparse_ce.metal");
+        let library = device
+            .new_library_with_source(shader_source, &CompileOptions::new())
+            .map_err(|e| format!("Failed to compile sparse CE shader: {}", e))?;
+
+        let ce_online_kernel = library
+            .get_function("sparse_forward_with_ce_online", None)
+            .map_err(|e| format!("Failed to get sparse_forward_with_ce_online: {}", e))?;
+
+        let ce_online_pipeline = device
+            .new_compute_pipeline_state_with_function(&ce_online_kernel)
+            .map_err(|e| format!("Failed to create CE online pipeline: {}", e))?;
+
+        Ok(Self {
+            device,
+            command_queue,
+            ce_online_pipeline,
+        })
+    }
+
+    /// Compute CE and accuracy directly on GPU
+    ///
+    /// Returns (average_ce, accuracy) instead of all probabilities.
+    /// This eliminates the 10GB data transfer for 50K×50K.
+    ///
+    /// Args:
+    ///   input_bits: [num_examples * total_input_bits]
+    ///   connections: [num_neurons * bits_per_neuron]
+    ///   keys: Sorted addresses for all neurons
+    ///   values: Corresponding cell values
+    ///   offsets: [num_neurons] start index per neuron
+    ///   counts: [num_neurons] count of entries per neuron
+    ///   targets: [num_examples] target cluster for each example
+    ///   params: Evaluation parameters
+    ///
+    /// Returns: (average_ce, accuracy)
+    pub fn compute_ce(
+        &self,
+        input_bits: &[bool],
+        connections: &[i64],
+        keys: &[u64],
+        values: &[u8],
+        offsets: &[u32],
+        counts: &[u32],
+        targets: &[i64],
+        num_examples: usize,
+        total_input_bits: usize,
+        num_neurons: usize,
+        bits_per_neuron: usize,
+        neurons_per_cluster: usize,
+        num_clusters: usize,
+        empty_value: f32,
+    ) -> Result<(f64, f64), String> {
+        if num_examples == 0 {
+            return Ok((0.0, 0.0));
+        }
+
+        // Convert input bits to u8
+        let input_u8: Vec<u8> = input_bits.iter().map(|&b| b as u8).collect();
+
+        // Convert connections to i32 for Metal
+        let connections_i32: Vec<i32> = connections.iter().map(|&c| c as i32).collect();
+
+        // Convert targets to i32
+        let targets_i32: Vec<i32> = targets.iter().map(|&t| t as i32).collect();
+
+        // Create Metal buffers
+        let input_buffer = self.device.new_buffer_with_data(
+            input_u8.as_ptr() as *const _,
+            (input_u8.len() * mem::size_of::<u8>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let connections_buffer = self.device.new_buffer_with_data(
+            connections_i32.as_ptr() as *const _,
+            (connections_i32.len() * mem::size_of::<i32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let keys_buffer = self.device.new_buffer_with_data(
+            keys.as_ptr() as *const _,
+            (keys.len() * mem::size_of::<u64>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let values_buffer = self.device.new_buffer_with_data(
+            values.as_ptr() as *const _,
+            (values.len() * mem::size_of::<u8>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let offsets_buffer = self.device.new_buffer_with_data(
+            offsets.as_ptr() as *const _,
+            (offsets.len() * mem::size_of::<u32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let counts_buffer = self.device.new_buffer_with_data(
+            counts.as_ptr() as *const _,
+            (counts.len() * mem::size_of::<u32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let targets_buffer = self.device.new_buffer_with_data(
+            targets_i32.as_ptr() as *const _,
+            (targets_i32.len() * mem::size_of::<i32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let params = SparseCEParams {
+            num_examples: num_examples as u32,
+            total_input_bits: total_input_bits as u32,
+            num_neurons: num_neurons as u32,
+            bits_per_neuron: bits_per_neuron as u32,
+            neurons_per_cluster: neurons_per_cluster as u32,
+            num_clusters: num_clusters as u32,
+            empty_value,
+        };
+
+        let params_buffer = self.device.new_buffer_with_data(
+            &params as *const _ as *const _,
+            mem::size_of::<SparseCEParams>() as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        // Output buffers: one float CE and one uint correct per example
+        let ce_buffer = self.device.new_buffer(
+            (num_examples * mem::size_of::<f32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let correct_buffer = self.device.new_buffer(
+            (num_examples * mem::size_of::<u32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        // Create command buffer and encoder
+        let command_buffer = self.command_queue.new_command_buffer();
+        let encoder = command_buffer.new_compute_command_encoder();
+
+        encoder.set_compute_pipeline_state(&self.ce_online_pipeline);
+        encoder.set_buffer(0, Some(&input_buffer), 0);
+        encoder.set_buffer(1, Some(&connections_buffer), 0);
+        encoder.set_buffer(2, Some(&keys_buffer), 0);
+        encoder.set_buffer(3, Some(&values_buffer), 0);
+        encoder.set_buffer(4, Some(&offsets_buffer), 0);
+        encoder.set_buffer(5, Some(&counts_buffer), 0);
+        encoder.set_buffer(6, Some(&targets_buffer), 0);
+        encoder.set_buffer(7, Some(&params_buffer), 0);
+        encoder.set_buffer(8, Some(&ce_buffer), 0);
+        encoder.set_buffer(9, Some(&correct_buffer), 0);
+
+        // Grid: one thread per example
+        let grid_size = MTLSize::new(num_examples as u64, 1, 1);
+        let max_threads = self.ce_online_pipeline.max_total_threads_per_threadgroup();
+        let thread_group_size = MTLSize::new(max_threads.min(num_examples as u64), 1, 1);
+        encoder.dispatch_threads(grid_size, thread_group_size);
+
+        encoder.end_encoding();
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+
+        // Read results and reduce on CPU (GPU reduction would be faster but more complex)
+        let ce_ptr = ce_buffer.contents() as *const f32;
+        let correct_ptr = correct_buffer.contents() as *const u32;
+
+        let (total_ce, total_correct): (f64, u64) = unsafe {
+            let ce_slice = std::slice::from_raw_parts(ce_ptr, num_examples);
+            let correct_slice = std::slice::from_raw_parts(correct_ptr, num_examples);
+
+            let total_ce: f64 = ce_slice.iter().map(|&c| c as f64).sum();
+            let total_correct: u64 = correct_slice.iter().map(|&c| c as u64).sum();
+
+            (total_ce, total_correct)
+        };
+
+        let avg_ce = total_ce / num_examples as f64;
+        let accuracy = total_correct as f64 / num_examples as f64;
+
+        Ok((avg_ce, accuracy))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -585,5 +1044,75 @@ mod tests {
             let evaluator = MetalSparseEvaluator::new();
             assert!(evaluator.is_ok(), "Failed to create sparse evaluator: {:?}", evaluator.err());
         }
+    }
+
+    #[test]
+    fn test_sparse_ce_evaluator_creation() {
+        if MetalRAMLMEvaluator::is_available() {
+            let evaluator = MetalSparseCEEvaluator::new();
+            assert!(evaluator.is_ok(), "Failed to create sparse CE evaluator: {:?}", evaluator.err());
+        }
+    }
+
+    #[test]
+    fn test_sparse_ce_small() {
+        if !MetalRAMLMEvaluator::is_available() {
+            return;
+        }
+
+        let evaluator = MetalSparseCEEvaluator::new().unwrap();
+
+        // Small test: 3 examples, 4 clusters, 2 neurons per cluster, 3 bits
+        let num_examples = 3;
+        let num_clusters = 4;
+        let neurons_per_cluster = 2;
+        let bits = 3;
+        let total_neurons = num_clusters * neurons_per_cluster;
+        let total_input_bits = 10;
+
+        // Input bits: all true for simplicity
+        let input_bits: Vec<bool> = vec![true; num_examples * total_input_bits];
+
+        // Connections: point to bits 0, 1, 2 for all neurons
+        let connections: Vec<i64> = (0..total_neurons)
+            .flat_map(|_| vec![0i64, 1, 2])
+            .collect();
+
+        // Sparse memory: address 7 (all bits true) → TRUE for all neurons
+        let keys: Vec<u64> = vec![7; total_neurons]; // address 7 = 111 in binary
+        let values: Vec<u8> = vec![1; total_neurons]; // 1 = TRUE
+        let offsets: Vec<u32> = (0..total_neurons).map(|i| i as u32).collect();
+        let counts: Vec<u32> = vec![1; total_neurons];
+
+        // Targets: [0, 1, 2] (each example targets a different cluster)
+        let targets: Vec<i64> = vec![0, 1, 2];
+
+        let result = evaluator.compute_ce(
+            &input_bits,
+            &connections,
+            &keys,
+            &values,
+            &offsets,
+            &counts,
+            &targets,
+            num_examples,
+            total_input_bits,
+            total_neurons,
+            bits,
+            neurons_per_cluster,
+            num_clusters,
+            0.5, // empty_value
+        );
+
+        assert!(result.is_ok(), "compute_ce failed: {:?}", result.err());
+        let (avg_ce, accuracy) = result.unwrap();
+
+        // With all neurons returning TRUE, all clusters should have score 1.0
+        // Softmax over [1.0, 1.0, 1.0, 1.0] = [0.25, 0.25, 0.25, 0.25]
+        // CE = -log(0.25) ≈ 1.386 for each example
+        // Accuracy: prediction is arbitrary when all scores equal, so 0.25 expected
+
+        println!("Small test: avg_ce={:.4}, accuracy={:.4}", avg_ce, accuracy);
+        assert!(avg_ce > 1.0 && avg_ce < 2.0, "CE should be around 1.386");
     }
 }
