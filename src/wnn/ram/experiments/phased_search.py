@@ -559,8 +559,9 @@ class PhasedSearchRunner:
 			strategy_kwargs["generations"] = cfg.ga_generations
 			strategy_kwargs["population_size"] = cfg.population_size
 			# First GA phase (no population from previous phase): generate fresh random genomes
-			# This ensures maximum diversity instead of mutating from 1 seed genome
-			if not initial_population:
+			# BUT only when no tier_config - tiered genomes need the tier structure preserved
+			# With tier_config, we seed from 1 tiered baseline + mutations to maintain tier structure
+			if not initial_population and not cfg.tier_config:
 				strategy_kwargs["fresh_population"] = True
 		else:
 			strategy_kwargs["iterations"] = cfg.ts_iterations
