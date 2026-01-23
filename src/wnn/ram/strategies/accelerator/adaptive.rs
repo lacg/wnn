@@ -837,6 +837,19 @@ pub fn evaluate_genomes_parallel(
     // Check if progress logging is enabled via env var
     let progress_log = std::env::var("WNN_PROGRESS_LOG").map(|v| v == "1").unwrap_or(false);
     let log_path = std::env::var("WNN_LOG_PATH").ok();
+    // Get generation info from env vars (set by Python before calling)
+    let current_gen: usize = std::env::var("WNN_PROGRESS_GEN")
+        .ok().and_then(|v| v.parse().ok()).unwrap_or(1);
+    let total_gens: usize = std::env::var("WNN_PROGRESS_TOTAL_GENS")
+        .ok().and_then(|v| v.parse().ok()).unwrap_or(1);
+    // Log type: Init, New, Nbr, CE, Acc (default Init)
+    let log_type = std::env::var("WNN_PROGRESS_TYPE").unwrap_or_else(|_| "Init".to_string());
+    // Offset for batch position (e.g., batch starting at genome 11 in a 50-genome set)
+    let batch_offset: usize = std::env::var("WNN_PROGRESS_OFFSET")
+        .ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    // Total count (for showing X/50 instead of X/batch_size)
+    let total_count: usize = std::env::var("WNN_PROGRESS_TOTAL")
+        .ok().and_then(|v| v.parse().ok()).unwrap_or(num_genomes);
     let start_time = std::time::Instant::now();
 
     // SEQUENTIAL genome evaluation - each genome gets full thread pool for token parallelism
@@ -1066,15 +1079,33 @@ pub fn evaluate_genomes_parallel(
         let accuracy = total_correct as f64 / num_eval as f64;
 
         // Progress logging (to log file if WNN_LOG_PATH set, otherwise stderr)
+        // Format matches Python's format_genome_log for consistency
         if progress_log {
             use std::io::Write;
             let genome_elapsed = genome_start.elapsed().as_secs_f64();
-            let total_elapsed = start_time.elapsed().as_secs_f64();
             let now = chrono::Local::now();
+
+            // Calculate overall position using batch offset
+            let overall_position = batch_offset + genome_idx + 1;
+
+            // Calculate padding widths based on totals
+            let gen_width = total_gens.to_string().len();
+            let pos_width = total_count.to_string().len();
+
+            // Pad type indicator to 4 chars (Init, New , Nbr , CE  , Acc )
+            let type_padded = format!("{:<4}", &log_type[..log_type.len().min(4)]);
+
+            // Format: [Gen 001/100] Genome 01/50 (Init): CE=10.6588, Acc=0.0100% (8.7s)
             let msg = format!(
-                "{} | [Rust] Genome {}/{}: CE={:.4}, Acc={:.4}% ({:.1}s, total {:.1}s)\n",
+                "{} | [Gen {:0gen_width$}/{:0gen_width$}] Genome {:0pos_width$}/{} ({}): CE={:.4}, Acc={:.4}% ({:.1}s)\n",
                 now.format("%H:%M:%S"),
-                genome_idx + 1, num_genomes, avg_ce, accuracy * 100.0, genome_elapsed, total_elapsed
+                current_gen, total_gens,
+                overall_position, total_count,
+                type_padded,
+                avg_ce, accuracy * 100.0,
+                genome_elapsed,
+                gen_width = gen_width,
+                pos_width = pos_width,
             );
             if let Some(ref path) = log_path {
                 if let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(path) {

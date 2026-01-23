@@ -24,6 +24,7 @@ Usage:
     final_results = evaluator.evaluate_batch_full(genomes)
 """
 
+import os
 from dataclasses import dataclass
 from typing import Optional, Callable
 
@@ -207,7 +208,18 @@ class CachedEvaluator:
             all_results = []
             current_gen = (generation + 1) if generation is not None else 1
 
+            # Check if Rust is handling progress logging (skip Python duplicate)
+            rust_progress = os.environ.get('WNN_PROGRESS_LOG') == '1'
+
+            # Set generation info for Rust progress logging
+            os.environ['WNN_PROGRESS_GEN'] = str(current_gen)
+            os.environ['WNN_PROGRESS_TOTAL_GENS'] = str(total_gens)
+            os.environ['WNN_PROGRESS_TYPE'] = 'Init'
+            os.environ['WNN_PROGRESS_TOTAL'] = str(num_genomes)
+
             for batch_start in range(0, num_genomes, stream_batch_size):
+                # Set offset for Rust to show overall position (e.g., 11/50 not 1/15)
+                os.environ['WNN_PROGRESS_OFFSET'] = str(batch_start)
                 batch_end = min(batch_start + stream_batch_size, num_genomes)
                 batch_genomes = genomes[batch_start:batch_end]
 
@@ -243,23 +255,36 @@ class CachedEvaluator:
                         self._empty_value,
                     )
 
-                # Log results immediately for streaming visibility (use INFO level)
-                for i, (ce, acc) in enumerate(batch_results):
-                    genome_idx = batch_start + i + 1
-                    passes = min_accuracy is None or acc >= min_accuracy
-                    base_msg = format_genome_log(
-                        current_gen, total_gens, GenomeLogType.INITIAL,
-                        genome_idx, num_genomes, ce, acc
-                    )
-                    # Always use INFO for streaming so logs are visible
-                    log_info(base_msg)
-                    sys.stdout.flush()
+                # Log results (skip if Rust already logged via WNN_PROGRESS_LOG)
+                if not rust_progress:
+                    for i, (ce, acc) in enumerate(batch_results):
+                        genome_idx = batch_start + i + 1
+                        passes = min_accuracy is None or acc >= min_accuracy
+                        base_msg = format_genome_log(
+                            current_gen, total_gens, GenomeLogType.INITIAL,
+                            genome_idx, num_genomes, ce, acc
+                        )
+                        # Always use INFO for streaming so logs are visible
+                        log_info(base_msg)
+                        sys.stdout.flush()
 
                 all_results.extend(batch_results)
 
             results = all_results
         else:
             # Non-streaming mode: evaluate all at once
+            current_gen = (generation + 1) if generation is not None else 1
+
+            # Check if Rust is handling progress logging
+            rust_progress = os.environ.get('WNN_PROGRESS_LOG') == '1'
+
+            # Set generation info for Rust progress logging
+            os.environ['WNN_PROGRESS_GEN'] = str(current_gen)
+            os.environ['WNN_PROGRESS_TOTAL_GENS'] = str(total_gens)
+            os.environ['WNN_PROGRESS_TYPE'] = 'Init'
+            os.environ['WNN_PROGRESS_OFFSET'] = '0'
+            os.environ['WNN_PROGRESS_TOTAL'] = str(num_genomes)
+
             genomes_bits_flat = []
             genomes_neurons_flat = []
             genomes_connections_flat = []
@@ -300,9 +325,13 @@ class CachedEvaluator:
         else:
             shown_count = num_genomes
 
+        # Check if Rust is handling progress logging (skip Python duplicate)
+        rust_progress = os.environ.get('WNN_PROGRESS_LOG') == '1'
+
         # Log each result (only for non-streaming mode - streaming already logged per-genome)
+        # Skip if Rust is handling progress logging
         streaming_was_used = streaming and stream_batch_size < num_genomes
-        if not streaming_was_used:
+        if not streaming_was_used and not rust_progress:
             current_gen = (generation + 1) if generation is not None else 1
             for i, (ce, acc) in enumerate(results):
                 passes = min_accuracy is None or acc >= min_accuracy
@@ -316,7 +345,8 @@ class CachedEvaluator:
                     # Log at TRACE level with subset info for filtered genomes
                     log_trace(base_msg + subset_info)
 
-        # Log generation/iteration duration summary using shared formatter
+        # Log generation/iteration duration summary (always show this)
+        current_gen = (generation + 1) if generation is not None else 1
         log_debug(format_completion_log(current_gen, total_gens, elapsed, num_genomes, shown_count))
 
         # Force flush for real-time output
