@@ -1080,10 +1080,16 @@ impl MetalCEReduceEvaluator {
         })
     }
 
-    /// Create a GPU buffer for accumulating all scores
+    /// Create a GPU buffer for accumulating all scores, initialized to 0
     pub fn create_scores_buffer(&self, num_examples: usize, num_clusters: usize) -> Buffer {
-        let size = num_examples * num_clusters * mem::size_of::<f32>();
-        self.device.new_buffer(size as u64, MTLResourceOptions::StorageModeShared)
+        let size = num_examples * num_clusters;
+        // Initialize to 0.0 (important: unwritten clusters must have score 0, not garbage)
+        let zeros: Vec<f32> = vec![0.0; size];
+        self.device.new_buffer_with_data(
+            zeros.as_ptr() as *const _,
+            (size * mem::size_of::<f32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        )
     }
 
     /// Scatter group scores to the full scores buffer on GPU
