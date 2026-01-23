@@ -341,11 +341,21 @@ This hardware enables:
 
 ## Development Setup
 
+**⚠️ CRITICAL: Use the correct virtual environment!**
+
+The project has TWO venv directories - only use `wnn/`:
+- ✅ **`wnn/`** - The correct venv with all dependencies and ram_accelerator installed
+- ❌ **`.venv/`** - Old/incomplete venv, DO NOT USE
+
 ```bash
-# Activate virtual environment
+# From project root - ALWAYS use wnn/, never .venv/
+cd /Users/lacg/Library/Mobile\ Documents/com~apple~CloudDocs/Studies/research/wnn
 source wnn/bin/activate
 
-# Install the package in editable mode
+# Verify you're in the right venv
+which python  # Should show: .../wnn/bin/python
+
+# Install the package in editable mode (if needed)
 pip install -e src/wnn
 
 # Set PYTHONPATH (required for running tests)
@@ -417,12 +427,12 @@ python ram_lm_v2.py --accel hybrid --full --full-data --tokenizer gpt2
 
 ## Running Overnight Sweeps
 
-**IMPORTANT:** Always use the venv with unbuffered output for background experiments.
+**⚠️ IMPORTANT:** Always use `wnn/` venv (NOT `.venv/`) with unbuffered output for background experiments.
 
 ```bash
-# Activate venv and run overnight sweep in background
-cd /Users/lacg/Library/Mobile\ Documents/com~apple~CloudDocs/Studies/research/wnn
-source wnn/bin/activate
+# Activate the CORRECT venv and run overnight sweep in background
+cd "/Users/lacg/Library/Mobile Documents/com~apple~CloudDocs/Studies/research/wnn"
+source wnn/bin/activate  # ← MUST be wnn/, not .venv/
 export PYTHONPATH="$(pwd)/src/wnn:$PYTHONPATH"
 
 # Quick sweep (4 experiments, ~4-6 hours)
@@ -461,6 +471,27 @@ ps aux | grep ramlm | grep -v grep
 **Experiment Priorities:**
 - Priority 1-3: Quick/Standard/Extended sets (original experiments)
 - Priority 4: Asymmetric experiments (based on key insight above)
+
+### Running Coarse-Fine Search
+
+The current main experiment runner is `run_coarse_fine_search.py` in the project root:
+
+```bash
+# From project root with correct venv
+cd "/Users/lacg/Library/Mobile Documents/com~apple~CloudDocs/Studies/research/wnn"
+source wnn/bin/activate
+
+# Run with tiered config in background
+nohup python -u run_coarse_fine_search.py \
+  --tier-config "100,15,20;400,10,12;rest,5,8" \
+  > run_coarse_fine.out 2>&1 &
+
+# Monitor progress
+tail -f run_coarse_fine.out
+
+# Check log file for detailed genome progress
+tail -f logs/2026/01/*/coarse_fine_pass1_*.log
+```
 
 ## Project Structure
 
@@ -673,12 +704,12 @@ The project includes a Rust/Metal accelerator for high-performance RAM evaluatio
 
 **Location:** `src/wnn/ram/strategies/accelerator/`
 
-**Building the Accelerator:**
-```bash
-# If CONDA_PREFIX is set (conflicts with VIRTUAL_ENV), use this one-liner:
-cd src/wnn/ram/strategies/accelerator && env -u CONDA_PREFIX bash -c 'source ../../../../wnn/bin/activate && maturin develop --release'
+**⚠️ Building the Accelerator - Use Absolute Paths:**
 
-# Or manually (if no conda conflict):
+```bash
+# RECOMMENDED: Use absolute paths to avoid venv confusion
+cd "/Users/lacg/Library/Mobile Documents/com~apple~CloudDocs/Studies/research/wnn"
+unset CONDA_PREFIX  # Required if conda is active
 source wnn/bin/activate
 cd src/wnn/ram/strategies/accelerator
 maturin develop --release
@@ -687,9 +718,16 @@ maturin develop --release
 python -c "import ram_accelerator; print(ram_accelerator.cpu_cores())"
 ```
 
+**One-liner for rebuild (handles CONDA_PREFIX conflict):**
+```bash
+cd "/Users/lacg/Library/Mobile Documents/com~apple~CloudDocs/Studies/research/wnn" && unset CONDA_PREFIX && source wnn/bin/activate && cd src/wnn/ram/strategies/accelerator && maturin develop --release
+```
+
 **Important:**
-- Never use `cargo build` directly - it will fail with Python linking errors. Always use `maturin develop --release` which handles Python bindings correctly.
-- If you see "Both VIRTUAL_ENV and CONDA_PREFIX are set" error, use `env -u CONDA_PREFIX` to unset conda before building.
+- ❌ **Never use `cargo build`** - it will fail with Python linking errors
+- ✅ **Always use `maturin develop --release`** - handles PyO3 bindings correctly
+- ❌ **Never use `.venv/`** - use `wnn/` venv only
+- If you see "Both VIRTUAL_ENV and CONDA_PREFIX are set" error, run `unset CONDA_PREFIX` first
 
 **Key Functions:**
 | Function | Description |
