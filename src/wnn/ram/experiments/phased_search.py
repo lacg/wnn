@@ -549,6 +549,11 @@ class PhasedSearchRunner:
 		)
 		self.log(f"  {self.evaluator}")
 
+		# Set WNN_LOG_PATH for Rust progress logging to same log file
+		import os
+		if self.config.log_path:
+			os.environ["WNN_LOG_PATH"] = self.config.log_path
+
 		# Compute input bits
 		bits_per_token = bits_needed(vocab_size)
 		self.total_input_bits = self.config.context_size * bits_per_token

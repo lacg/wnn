@@ -836,6 +836,7 @@ pub fn evaluate_genomes_parallel(
 
     // Check if progress logging is enabled via env var
     let progress_log = std::env::var("WNN_PROGRESS_LOG").map(|v| v == "1").unwrap_or(false);
+    let log_path = std::env::var("WNN_LOG_PATH").ok();
     let start_time = std::time::Instant::now();
 
     // SEQUENTIAL genome evaluation - each genome gets full thread pool for token parallelism
@@ -1064,14 +1065,25 @@ pub fn evaluate_genomes_parallel(
         let avg_ce = total_ce / num_eval as f64;
         let accuracy = total_correct as f64 / num_eval as f64;
 
-        // Progress logging (to stderr, auto-flushes)
+        // Progress logging (to log file if WNN_LOG_PATH set, otherwise stderr)
         if progress_log {
+            use std::io::Write;
             let genome_elapsed = genome_start.elapsed().as_secs_f64();
             let total_elapsed = start_time.elapsed().as_secs_f64();
-            eprintln!(
-                "[Rust] Genome {}/{}: CE={:.4}, Acc={:.4}% ({:.1}s, total {:.1}s)",
+            let now = chrono::Local::now();
+            let msg = format!(
+                "{} | [Rust] Genome {}/{}: CE={:.4}, Acc={:.4}% ({:.1}s, total {:.1}s)\n",
+                now.format("%H:%M:%S"),
                 genome_idx + 1, num_genomes, avg_ce, accuracy * 100.0, genome_elapsed, total_elapsed
             );
+            if let Some(ref path) = log_path {
+                if let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(path) {
+                    let _ = file.write_all(msg.as_bytes());
+                    let _ = file.flush();
+                }
+            } else {
+                eprint!("{}", msg);
+            }
         }
 
         (avg_ce, accuracy)
