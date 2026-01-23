@@ -1328,9 +1328,14 @@ fn train_genome_in_slot(
     num_negatives: usize,
     total_input_bits: usize,
 ) {
-    // Train this genome with PARALLEL example processing
-    // Memory writes are thread-safe (atomic for dense, DashMap for sparse)
-    (0..num_train).into_par_iter().for_each(|ex_idx| {
+    // Use chunked parallel processing to balance parallelism vs overhead
+    // Large chunks reduce task scheduling overhead while still utilizing multiple cores
+    // With 200K examples, 10K chunks = 20 tasks per genome (reasonable for nested parallelism)
+    let chunk_size = 10_000.max(num_train / 20); // At least 20 chunks, minimum 10K per chunk
+
+    (0..num_train).into_par_iter()
+        .with_min_len(chunk_size)  // Rayon processes at least this many items per task
+        .for_each(|ex_idx| {
         let input_start = ex_idx * total_input_bits;
         let input_bits = &train_input_bits[input_start..input_start + total_input_bits];
 

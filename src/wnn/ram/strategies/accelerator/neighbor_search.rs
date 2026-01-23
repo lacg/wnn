@@ -317,7 +317,9 @@ pub fn search_neighbors_with_threshold(
 
     let mut passed: Vec<CandidateResult> = Vec::new();
     let mut evaluated = 0;
-    let batch_size = 10; // Evaluate in batches for efficiency
+    // Smaller batch = less contention between genome training threads
+    // 4 genomes × full parallel training is better than 10 genomes competing
+    let batch_size = 10;
 
     // Generation prefix for logs - shows current generation / total generations
     let total_gens = total_generations.unwrap_or(100);
@@ -349,8 +351,8 @@ pub fn search_neighbors_with_threshold(
             batch_genomes.push((new_bits, new_neurons, new_conns));
         }
 
-        // Evaluate the batch using hybrid CPU+GPU parallel evaluation
-        let results = crate::token_cache::evaluate_genomes_cached_hybrid(
+        // Evaluate the batch - non-hybrid is faster (less overhead)
+        let results = crate::token_cache::evaluate_genomes_cached(
             cache,
             &batch_bits,
             &batch_neurons,
@@ -455,8 +457,8 @@ pub fn search_neighbors_best_n(
             batch_genomes.push((new_bits, new_neurons, new_conns));
         }
 
-        // Evaluate using hybrid CPU+GPU parallel evaluation
-        let results = crate::token_cache::evaluate_genomes_cached_hybrid(
+        // Evaluate the batch - non-hybrid is faster (less overhead)
+        let results = crate::token_cache::evaluate_genomes_cached(
             cache,
             &batch_bits,
             &batch_neurons,
@@ -700,8 +702,8 @@ pub fn search_offspring(
             batch_genomes.push((new_bits, new_neurons, new_conns));
         }
 
-        // Evaluate the batch using hybrid CPU+GPU parallel evaluation
-        let results = crate::token_cache::evaluate_genomes_cached_hybrid(
+        // Evaluate the batch - non-hybrid is faster (less overhead)
+        let results = crate::token_cache::evaluate_genomes_cached(
             cache,
             &batch_bits,
             &batch_neurons,
