@@ -22,9 +22,10 @@ use rustc_hash::FxHasher;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::mpsc::{self, SyncSender};
 use std::sync::{Arc, OnceLock};
-use std::thread::{self, JoinHandle};
+
+// Re-export from eval_worker module for backward compatibility
+pub use crate::eval_worker::{EvalData, get_eval_worker};
 
 // Global cached Metal evaluator for adaptive evaluation (dense memory)
 static METAL_EVALUATOR: OnceLock<Option<crate::metal_ramlm::MetalRAMLMEvaluator>> = OnceLock::new();
@@ -44,102 +45,6 @@ fn get_sparse_metal_evaluator() -> Option<&'static crate::metal_ramlm::MetalSpar
     SPARSE_METAL_EVALUATOR.get_or_init(|| {
         crate::metal_ramlm::MetalSparseEvaluator::new().ok()
     }).as_ref()
-}
-
-// ============================================================================
-// Persistent Eval Worker Pool
-// ============================================================================
-// Keeps a single eval thread alive across multiple hybrid evaluation calls.
-// This eliminates per-call overhead (thread spawn, channel creation) that
-// caused 14x slowdown when offspring search called hybrid repeatedly.
-
-/// Shared evaluation data (immutable during a session)
-pub struct EvalData {
-    pub eval_input_bits: Vec<bool>,
-    pub eval_targets: Vec<i64>,
-    pub num_eval: usize,
-    pub num_clusters: usize,
-    pub total_input_bits: usize,
-    pub empty_value: f32,
-}
-
-/// Request to evaluate a batch of genome exports
-struct EvalBatchRequest {
-    exports: Vec<(usize, GenomeExport)>,
-    eval_data: Arc<EvalData>,
-    response_tx: mpsc::Sender<Vec<(usize, f64, f64)>>,
-}
-
-/// Persistent worker pool for GPU evaluation
-struct EvalWorkerPool {
-    request_tx: SyncSender<EvalBatchRequest>,
-    _worker_handle: JoinHandle<()>,
-}
-
-impl EvalWorkerPool {
-    fn new() -> Self {
-        // Bounded channel with capacity 2 for pipelining (train batch N+1 while eval batch N)
-        let (request_tx, request_rx) = mpsc::sync_channel::<EvalBatchRequest>(2);
-
-        let worker_handle = thread::spawn(move || {
-            // Get GPU evaluators once (they're already singletons, but access here for thread locality)
-            let metal = get_metal_evaluator();
-            let sparse_metal = get_sparse_metal_evaluator();
-
-            // Process requests until channel closes
-            while let Ok(request) = request_rx.recv() {
-                let eval_data = &request.eval_data;
-
-                // Evaluate all exports in parallel on GPU
-                let results: Vec<(usize, f64, f64)> = request.exports
-                    .into_par_iter()
-                    .map(|(genome_idx, export)| {
-                        let (ce, acc) = evaluate_genome_hybrid(
-                            &export,
-                            &eval_data.eval_input_bits,
-                            &eval_data.eval_targets,
-                            eval_data.num_eval,
-                            eval_data.num_clusters,
-                            eval_data.total_input_bits,
-                            eval_data.empty_value,
-                            metal,
-                            sparse_metal,
-                        );
-                        (genome_idx, ce, acc)
-                    })
-                    .collect();
-
-                // Send results back (ignore error if receiver dropped)
-                let _ = request.response_tx.send(results);
-            }
-        });
-
-        Self {
-            request_tx,
-            _worker_handle: worker_handle,
-        }
-    }
-
-    /// Submit a batch for evaluation and wait for results
-    fn evaluate(&self, exports: Vec<(usize, GenomeExport)>, eval_data: Arc<EvalData>) -> Vec<(usize, f64, f64)> {
-        let (response_tx, response_rx) = mpsc::channel();
-
-        self.request_tx.send(EvalBatchRequest {
-            exports,
-            eval_data,
-            response_tx,
-        }).expect("Eval worker channel closed unexpectedly");
-
-        response_rx.recv().expect("Eval worker response channel closed unexpectedly")
-    }
-}
-
-// Global persistent eval worker
-static EVAL_WORKER: OnceLock<EvalWorkerPool> = OnceLock::new();
-
-/// Get or initialize the persistent eval worker pool
-fn get_eval_worker() -> &'static EvalWorkerPool {
-    EVAL_WORKER.get_or_init(|| EvalWorkerPool::new())
 }
 
 /// Threshold for switching to sparse memory (2^12 = 4K addresses)
@@ -1588,7 +1493,7 @@ fn export_genome_for_gpu(
 
 /// Evaluate a genome export using CPU+GPU hybrid
 /// Returns (cross_entropy, accuracy)
-fn evaluate_genome_hybrid(
+pub fn evaluate_genome_hybrid(
     export: &GenomeExport,
     eval_input_bits: &[bool],
     eval_targets: &[i64],

@@ -48,6 +48,9 @@ mod token_cache;
 #[path = "neighbor_search.rs"]
 mod neighbor_search;
 
+#[path = "eval_worker.rs"]
+pub mod eval_worker;
+
 pub use ram::RAMNeuron;
 pub use per_cluster::{PerClusterEvaluator, FitnessMode, TierOptConfig, ClusterOptResult, TierOptResult};
 pub use metal_evaluator::MetalEvaluator;
