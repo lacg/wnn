@@ -1023,6 +1023,200 @@ impl MetalSparseCEEvaluator {
     }
 }
 
+// ============================================================================
+// CE Reduction Evaluator - For Tiered Configs
+// ============================================================================
+
+/// Parameters for CE reduction (must match Metal struct)
+#[repr(C)]
+struct CEReduceParams {
+    num_examples: u32,
+    num_clusters: u32,
+}
+
+/// Metal evaluator for CE reduction from pre-computed scores
+///
+/// For tiered configs where groups are evaluated separately, this takes
+/// all the scores (accumulated on GPU) and computes CE/accuracy.
+pub struct MetalCEReduceEvaluator {
+    device: Device,
+    command_queue: CommandQueue,
+    ce_reduce_pipeline: ComputePipelineState,
+    scatter_pipeline: ComputePipelineState,
+}
+
+impl MetalCEReduceEvaluator {
+    /// Create new CE reduction evaluator
+    pub fn new() -> Result<Self, String> {
+        let device = Device::system_default().ok_or("No Metal device found")?;
+        let command_queue = device.new_command_queue();
+
+        let shader_source = include_str!("shaders/ce_reduce.metal");
+        let library = device
+            .new_library_with_source(shader_source, &CompileOptions::new())
+            .map_err(|e| format!("Failed to compile CE reduce shader: {}", e))?;
+
+        let ce_reduce_kernel = library
+            .get_function("reduce_scores_to_ce", None)
+            .map_err(|e| format!("Failed to get reduce_scores_to_ce: {}", e))?;
+
+        let scatter_kernel = library
+            .get_function("scatter_group_scores", None)
+            .map_err(|e| format!("Failed to get scatter_group_scores: {}", e))?;
+
+        let ce_reduce_pipeline = device
+            .new_compute_pipeline_state_with_function(&ce_reduce_kernel)
+            .map_err(|e| format!("Failed to create CE reduce pipeline: {}", e))?;
+
+        let scatter_pipeline = device
+            .new_compute_pipeline_state_with_function(&scatter_kernel)
+            .map_err(|e| format!("Failed to create scatter pipeline: {}", e))?;
+
+        Ok(Self {
+            device,
+            command_queue,
+            ce_reduce_pipeline,
+            scatter_pipeline,
+        })
+    }
+
+    /// Create a GPU buffer for accumulating all scores
+    pub fn create_scores_buffer(&self, num_examples: usize, num_clusters: usize) -> Buffer {
+        let size = num_examples * num_clusters * mem::size_of::<f32>();
+        self.device.new_buffer(size as u64, MTLResourceOptions::StorageModeShared)
+    }
+
+    /// Scatter group scores to the full scores buffer on GPU
+    ///
+    /// This copies scores from a group's output buffer to the correct positions
+    /// in the full scores buffer, avoiding CPU round-trip.
+    pub fn scatter_to_buffer(
+        &self,
+        group_scores: &[f32],
+        scores_buffer: &Buffer,
+        cluster_ids: &[usize],
+        num_examples: usize,
+        num_clusters: usize,
+    ) {
+        let num_group_clusters = cluster_ids.len();
+
+        // Create temporary buffers
+        let group_buffer = self.device.new_buffer_with_data(
+            group_scores.as_ptr() as *const _,
+            (group_scores.len() * mem::size_of::<f32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let cluster_ids_u32: Vec<u32> = cluster_ids.iter().map(|&c| c as u32).collect();
+        let cluster_ids_buffer = self.device.new_buffer_with_data(
+            cluster_ids_u32.as_ptr() as *const _,
+            (cluster_ids_u32.len() * mem::size_of::<u32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let num_examples_u32 = num_examples as u32;
+        let num_group_clusters_u32 = num_group_clusters as u32;
+        let num_clusters_u32 = num_clusters as u32;
+
+        let command_buffer = self.command_queue.new_command_buffer();
+        let encoder = command_buffer.new_compute_command_encoder();
+
+        encoder.set_compute_pipeline_state(&self.scatter_pipeline);
+        encoder.set_buffer(0, Some(&group_buffer), 0);
+        encoder.set_buffer(1, Some(scores_buffer), 0);
+        encoder.set_buffer(2, Some(&cluster_ids_buffer), 0);
+        encoder.set_bytes(3, mem::size_of::<u32>() as u64, &num_examples_u32 as *const _ as *const _);
+        encoder.set_bytes(4, mem::size_of::<u32>() as u64, &num_group_clusters_u32 as *const _ as *const _);
+        encoder.set_bytes(5, mem::size_of::<u32>() as u64, &num_clusters_u32 as *const _ as *const _);
+
+        // Grid: (num_group_clusters, num_examples)
+        let grid_size = MTLSize::new(num_group_clusters as u64, num_examples as u64, 1);
+        let thread_group_size = MTLSize::new(
+            32.min(num_group_clusters as u64),
+            8.min(num_examples as u64),
+            1,
+        );
+        encoder.dispatch_threads(grid_size, thread_group_size);
+
+        encoder.end_encoding();
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+    }
+
+    /// Compute CE and accuracy from accumulated scores buffer
+    pub fn compute_ce_from_buffer(
+        &self,
+        scores_buffer: &Buffer,
+        targets: &[i64],
+        num_examples: usize,
+        num_clusters: usize,
+    ) -> Result<(f64, f64), String> {
+        let targets_i32: Vec<i32> = targets.iter().map(|&t| t as i32).collect();
+        let targets_buffer = self.device.new_buffer_with_data(
+            targets_i32.as_ptr() as *const _,
+            (targets_i32.len() * mem::size_of::<i32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let params = CEReduceParams {
+            num_examples: num_examples as u32,
+            num_clusters: num_clusters as u32,
+        };
+        let params_buffer = self.device.new_buffer_with_data(
+            &params as *const _ as *const _,
+            mem::size_of::<CEReduceParams>() as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let ce_buffer = self.device.new_buffer(
+            (num_examples * mem::size_of::<f32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+        let correct_buffer = self.device.new_buffer(
+            (num_examples * mem::size_of::<u32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let command_buffer = self.command_queue.new_command_buffer();
+        let encoder = command_buffer.new_compute_command_encoder();
+
+        encoder.set_compute_pipeline_state(&self.ce_reduce_pipeline);
+        encoder.set_buffer(0, Some(scores_buffer), 0);
+        encoder.set_buffer(1, Some(&targets_buffer), 0);
+        encoder.set_buffer(2, Some(&params_buffer), 0);
+        encoder.set_buffer(3, Some(&ce_buffer), 0);
+        encoder.set_buffer(4, Some(&correct_buffer), 0);
+
+        let grid_size = MTLSize::new(num_examples as u64, 1, 1);
+        let max_threads = self.ce_reduce_pipeline.max_total_threads_per_threadgroup();
+        let thread_group_size = MTLSize::new(max_threads.min(num_examples as u64), 1, 1);
+        encoder.dispatch_threads(grid_size, thread_group_size);
+
+        encoder.end_encoding();
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+
+        // Sum CE and correct on CPU
+        let ce_ptr = ce_buffer.contents() as *const f32;
+        let correct_ptr = correct_buffer.contents() as *const u32;
+
+        let (total_ce, total_correct): (f64, u64) = unsafe {
+            let ce_slice = std::slice::from_raw_parts(ce_ptr, num_examples);
+            let correct_slice = std::slice::from_raw_parts(correct_ptr, num_examples);
+
+            let total_ce: f64 = ce_slice.iter().map(|&c| c as f64).sum();
+            let total_correct: u64 = correct_slice.iter().map(|&c| c as u64).sum();
+
+            (total_ce, total_correct)
+        };
+
+        let avg_ce = total_ce / num_examples as f64;
+        let accuracy = total_correct as f64 / num_examples as f64;
+
+        Ok((avg_ce, accuracy))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

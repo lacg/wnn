@@ -1515,6 +1515,60 @@ pub fn evaluate_genome_hybrid(
     let mut gpu_calls = 0usize;
     let mut cpu_calls = 0usize;
 
+    // FAST PATH: If single sparse group covering all clusters, use direct CE computation
+    // This avoids the 10GB GPU→CPU transfer by computing CE on GPU
+    if export.group_info.len() == 1 && export.sparse_exports.len() == 1 {
+        let (is_sparse, group_idx, cluster_ids) = &export.group_info[0];
+        if *is_sparse && cluster_ids.len() == num_clusters {
+            // Check if clusters are contiguous 0..num_clusters (identity mapping)
+            let is_contiguous = cluster_ids.iter().enumerate().all(|(i, &c)| c == i);
+            if is_contiguous {
+                // Use MetalSparseCEEvaluator for direct CE computation
+                static CE_EVALUATOR: std::sync::OnceLock<Option<crate::metal_ramlm::MetalSparseCEEvaluator>> = std::sync::OnceLock::new();
+                let ce_eval = CE_EVALUATOR.get_or_init(|| {
+                    crate::metal_ramlm::MetalSparseCEEvaluator::new().ok()
+                });
+
+                if let Some(evaluator) = ce_eval {
+                    let group = &export.groups[*group_idx];
+                    let sparse_export = &export.sparse_exports[0];
+
+                    let call_start = std::time::Instant::now();
+                    let result = evaluator.compute_ce(
+                        eval_input_bits,
+                        &export.connections,
+                        &sparse_export.keys,
+                        &sparse_export.values,
+                        &sparse_export.offsets,
+                        &sparse_export.counts,
+                        eval_targets,
+                        num_eval,
+                        total_input_bits,
+                        group.neurons * num_clusters,  // total neurons
+                        group.bits,
+                        group.neurons,
+                        num_clusters,
+                        empty_value,
+                    );
+
+                    if let Ok((ce, acc)) = result {
+                        if timing_enabled {
+                            let elapsed = call_start.elapsed().as_millis();
+                            let total_ms = eval_start.elapsed().as_millis();
+                            eprintln!(
+                                "[EVAL_HYBRID] FAST_PATH total={}ms gpu_ce={}ms (no scatter!)",
+                                total_ms, elapsed
+                            );
+                        }
+                        return (ce, acc);
+                    }
+                    // Fall through to standard path if CE evaluator fails
+                }
+            }
+        }
+    }
+
+    // STANDARD PATH: Process groups separately, accumulate scores, compute CE on CPU
     // Pre-compute scores for all examples × clusters
     let mut all_scores: Vec<Vec<f64>> = vec![vec![0.0; num_clusters]; num_eval];
 
@@ -1545,13 +1599,15 @@ pub fn evaluate_genome_hybrid(
                             gpu_time_ms += call_start.elapsed().as_millis();
                             gpu_calls += 1;
                         }
+                        // Parallel scatter using rayon - each thread handles different examples
                         let scatter_start = std::time::Instant::now();
-                        for ex_idx in 0..num_eval {
+                        let num_group_clusters = group.cluster_count();
+                        all_scores.par_iter_mut().enumerate().for_each(|(ex_idx, scores)| {
                             for (local_cluster, &cluster_id) in cluster_ids.iter().enumerate() {
-                                let score_idx = ex_idx * group.cluster_count() + local_cluster;
-                                all_scores[ex_idx][cluster_id] = group_scores[score_idx] as f64;
+                                let score_idx = ex_idx * num_group_clusters + local_cluster;
+                                scores[cluster_id] = group_scores[score_idx] as f64;
                             }
-                        }
+                        });
                         if timing_enabled {
                             scatter_time_ms += scatter_start.elapsed().as_millis();
                         }
@@ -1615,13 +1671,15 @@ pub fn evaluate_genome_hybrid(
                             gpu_time_ms += call_start.elapsed().as_millis();
                             gpu_calls += 1;
                         }
+                        // Parallel scatter using rayon - each thread handles different examples
                         let scatter_start = std::time::Instant::now();
-                        for ex_idx in 0..num_eval {
+                        let num_group_clusters = group.cluster_count();
+                        all_scores.par_iter_mut().enumerate().for_each(|(ex_idx, scores)| {
                             for (local_cluster, &cluster_id) in cluster_ids.iter().enumerate() {
-                                let score_idx = ex_idx * group.cluster_count() + local_cluster;
-                                all_scores[ex_idx][cluster_id] = group_scores[score_idx] as f64;
+                                let score_idx = ex_idx * num_group_clusters + local_cluster;
+                                scores[cluster_id] = group_scores[score_idx] as f64;
                             }
-                        }
+                        });
                         if timing_enabled {
                             scatter_time_ms += scatter_start.elapsed().as_millis();
                         }
