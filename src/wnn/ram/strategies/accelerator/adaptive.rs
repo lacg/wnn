@@ -1580,8 +1580,8 @@ pub fn evaluate_genome_hybrid(
 
     // FULL GPU PATH: Write scores directly to shared GPU buffer, compute CE on GPU
     // This avoids the GPU→CPU→GPU round-trip that was slowing down tiered evaluation
-    // Enable via WNN_GPU_CE=1 environment variable
-    let use_full_gpu = std::env::var("WNN_GPU_CE").map(|v| v == "1").unwrap_or(false);
+    // Full GPU path enabled by default (3x faster). Disable with WNN_GPU_CE=0
+    let use_full_gpu = std::env::var("WNN_GPU_CE").map(|v| v != "0").unwrap_or(true);
 
     if use_full_gpu {
         if let Some(group_eval) = get_group_evaluator() {
