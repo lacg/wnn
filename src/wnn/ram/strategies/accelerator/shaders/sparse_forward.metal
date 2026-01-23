@@ -207,6 +207,82 @@ struct TieredParams {
     float empty_value;  // Value for EMPTY cells (0.0 = abstain, 0.5 = uncertain)
 };
 
+//
+// Sparse Forward Pass to Shared Buffer Kernel
+//
+// Writes scores directly to a shared buffer at specified cluster offsets.
+// This avoids GPU→CPU→GPU transfer when computing CE across multiple groups.
+//
+// The cluster_ids buffer maps local cluster index → global cluster ID.
+// Output is written to: shared_buffer[example_idx * total_clusters + cluster_ids[local_cluster]]
+//
+struct SparseToBufferParams {
+    uint num_examples;
+    uint total_input_bits;
+    uint num_neurons;           // Neurons in this group
+    uint bits_per_neuron;
+    uint neurons_per_cluster;
+    uint num_group_clusters;    // Clusters in this group
+    uint total_clusters;        // Total clusters across all groups
+    float empty_value;
+};
+
+kernel void sparse_forward_to_buffer(
+    device const uchar* input_bits_flat [[buffer(0)]],
+    device const int* connections_flat [[buffer(1)]],
+    device const ulong* keys_flat [[buffer(2)]],
+    device const uchar* values_flat [[buffer(3)]],
+    device const uint* offsets [[buffer(4)]],
+    device const uint* counts [[buffer(5)]],
+    device const uint* cluster_ids [[buffer(6)]],      // Maps local → global cluster ID
+    constant SparseToBufferParams& params [[buffer(7)]],
+    device float* shared_buffer [[buffer(8)]],         // Shared across all groups
+    uint2 thread_pos [[thread_position_in_grid]]
+) {
+    uint local_cluster = thread_pos.x;
+    uint example_idx = thread_pos.y;
+
+    if (local_cluster >= params.num_group_clusters) return;
+    if (example_idx >= params.num_examples) return;
+
+    device const uchar* input_bits = input_bits_flat + example_idx * params.total_input_bits;
+
+    uint count_true = 0;
+    uint count_empty = 0;
+    uint start_neuron = local_cluster * params.neurons_per_cluster;
+
+    for (uint neuron_offset = 0; neuron_offset < params.neurons_per_cluster; neuron_offset++) {
+        uint neuron_idx = start_neuron + neuron_offset;
+        device const int* connections = connections_flat + neuron_idx * params.bits_per_neuron;
+
+        ulong address = compute_address_sparse(input_bits, connections, params.bits_per_neuron);
+
+        uint start = offsets[neuron_idx];
+        uint cnt = counts[neuron_idx];
+        uint cell_value = binary_search_lookup(keys_flat, values_flat, start, cnt, address);
+
+        if (cell_value == CELL_TRUE) {
+            count_true++;
+        } else if (cell_value == CELL_EMPTY) {
+            count_empty++;
+        }
+    }
+
+    float prob = (float(count_true) + params.empty_value * float(count_empty)) / float(params.neurons_per_cluster);
+
+    // Write to global position in shared buffer
+    uint global_cluster = cluster_ids[local_cluster];
+    uint output_idx = example_idx * params.total_clusters + global_cluster;
+    shared_buffer[output_idx] = prob;
+}
+
+//
+// Tiered Sparse Forward Pass Kernel
+//
+// Supports tiered architecture with different bits/neurons per tier.
+// Each thread handles one (example, cluster).
+// Tier configuration is passed via tier_config buffer.
+//
 kernel void tiered_sparse_forward_pass(
     device const uchar* input_bits_flat [[buffer(0)]],
     device const int* connections_flat [[buffer(1)]],

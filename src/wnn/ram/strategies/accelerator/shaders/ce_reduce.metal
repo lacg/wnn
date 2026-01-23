@@ -21,14 +21,17 @@ struct CEReduceParams {
 // CE Reduction Kernel
 //
 // Each thread processes ONE example:
-// 1. Finds max score (for numerical stability)
-// 2. Computes softmax denominator
-// 3. Computes CE for target
-// 4. Checks if prediction is correct
+// 1. Finds max score (for numerical stability) and predicted cluster
+// 2. Computes softmax: exp(score - max) / sum(exp(score - max))
+// 3. Computes CE: -log(softmax_prob_target)
+// 4. Checks if prediction is correct (argmax of raw scores)
 //
 // Grid: (num_examples)
-// Input: scores[num_examples * num_clusters] - pre-computed scores
+// Input: scores[num_examples * num_clusters] - pre-computed scores (probabilities 0-1)
 // Output: ce_out[num_examples], correct_out[num_examples]
+//
+// NOTE: The CPU path applies exp() to scores before normalizing, even though
+// scores are probabilities (0-1). We match this behavior for consistency.
 //
 kernel void reduce_scores_to_ce(
     device const float* scores [[buffer(0)]],       // [num_examples * num_clusters]
@@ -43,19 +46,17 @@ kernel void reduce_scores_to_ce(
     int target_cluster = targets[example_idx];
     device const float* ex_scores = scores + example_idx * params.num_clusters;
 
-    // Pass 1: Find max score and predicted cluster (online)
-    float max_score = -1e10f;
-    float sum_exp = 0.0f;
+    // Single pass: find max, predicted, and compute sum_exp simultaneously
+    // NOTE: Use >= to match Rust's max_by behavior (returns LAST maximum on ties)
+    float max_score = ex_scores[0];
     uint predicted_cluster = 0;
+    float sum_exp = 1.0f;  // exp(0) for first element
 
-    // Online softmax - single pass
-    for (uint c = 0; c < params.num_clusters; c++) {
+    for (uint c = 1; c < params.num_clusters; c++) {
         float score = ex_scores[c];
-
-        // Track argmax
-        if (score > max_score) {
-            // Rescale previous sum
-            sum_exp = sum_exp * exp(max_score - score);
+        if (score >= max_score) {  // >= to pick LAST max on ties (matches Rust max_by)
+            // Rescale previous sum_exp
+            sum_exp *= exp(max_score - score);
             max_score = score;
             predicted_cluster = c;
         }

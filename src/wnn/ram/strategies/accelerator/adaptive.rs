@@ -47,6 +47,16 @@ fn get_sparse_metal_evaluator() -> Option<&'static crate::metal_ramlm::MetalSpar
     }).as_ref()
 }
 
+// Global cached unified group evaluator for tiered configs (scores stay on GPU)
+static GROUP_EVALUATOR: OnceLock<Option<crate::metal_ramlm::MetalGroupEvaluator>> = OnceLock::new();
+
+/// Get or initialize the unified group evaluator (lazy, thread-safe)
+fn get_group_evaluator() -> Option<&'static crate::metal_ramlm::MetalGroupEvaluator> {
+    GROUP_EVALUATOR.get_or_init(|| {
+        crate::metal_ramlm::MetalGroupEvaluator::new().ok()
+    }).as_ref()
+}
+
 /// Threshold for switching to sparse memory (2^12 = 4K addresses)
 const SPARSE_THRESHOLD: usize = 12;
 
@@ -1568,15 +1578,102 @@ pub fn evaluate_genome_hybrid(
         }
     }
 
-    // GPU CE PATH: Disabled - CPU→GPU transfer overhead makes it slower than parallel CPU scatter
-    // Would need to modify group kernels to keep scores on GPU to be beneficial
-    // Keeping code for future optimization when kernels write directly to GPU buffer
+    // FULL GPU PATH: Write scores directly to shared GPU buffer, compute CE on GPU
+    // This avoids the GPU→CPU→GPU round-trip that was slowing down tiered evaluation
+    // Enable via WNN_GPU_CE=1 environment variable
+    let use_full_gpu = std::env::var("WNN_GPU_CE").map(|v| v == "1").unwrap_or(false);
+
+    if use_full_gpu {
+        if let Some(group_eval) = get_group_evaluator() {
+            let gpu_start = std::time::Instant::now();
+
+            // Create shared GPU buffer for all scores
+            let scores_buffer = group_eval.create_scores_buffer(num_eval, num_clusters);
+
+            // Create input buffer (shared across all group evaluations)
+            let input_buffer = group_eval.create_input_buffer(eval_input_bits);
+
+            let mut dense_idx = 0usize;
+            let mut sparse_idx = 0usize;
+            let mut all_groups_success = true;
+
+            for (is_sparse, group_idx, cluster_ids) in &export.group_info {
+                let group = &export.groups[*group_idx];
+
+                if *is_sparse {
+                    let sparse_export = &export.sparse_exports[sparse_idx];
+                    sparse_idx += 1;
+
+                    // Evaluate sparse group directly to shared buffer
+                    group_eval.eval_sparse_to_buffer(
+                        &input_buffer,
+                        &scores_buffer,
+                        &export.connections[group.conn_offset..group.conn_offset + group.conn_size()],
+                        &sparse_export.keys,
+                        &sparse_export.values,
+                        &sparse_export.offsets,
+                        &sparse_export.counts,
+                        cluster_ids,
+                        num_eval,
+                        total_input_bits,
+                        group.bits,
+                        group.neurons,
+                        num_clusters,
+                        empty_value,
+                    );
+                } else {
+                    let dense_words = &export.dense_exports[dense_idx];
+                    dense_idx += 1;
+
+                    // Evaluate dense group directly to shared buffer
+                    group_eval.eval_dense_to_buffer(
+                        &input_buffer,
+                        &scores_buffer,
+                        &export.connections[group.conn_offset..group.conn_offset + group.conn_size()],
+                        dense_words,
+                        cluster_ids,
+                        num_eval,
+                        total_input_bits,
+                        group.bits,
+                        group.neurons,
+                        num_clusters,
+                        group.words_per_neuron,
+                        empty_value,
+                    );
+                }
+            }
+
+            if all_groups_success {
+                // Compute CE directly from GPU buffer
+                let result = group_eval.compute_ce_from_buffer(
+                    &scores_buffer,
+                    eval_targets,
+                    num_eval,
+                    num_clusters,
+                );
+
+                if let Ok((ce, acc)) = result {
+                    if timing_enabled {
+                        let elapsed = gpu_start.elapsed().as_millis();
+                        eprintln!(
+                            "[EVAL_HYBRID] FULL_GPU_PATH total={}ms (no CPU scatter!)",
+                            elapsed
+                        );
+                    }
+                    return (ce, acc);
+                }
+            }
+            // Fall through to CPU path if full GPU fails
+        }
+    }
+
+    // Legacy GPU CE PATH: Disabled - CPU→GPU transfer overhead makes it slower
     static CE_REDUCE_EVALUATOR: std::sync::OnceLock<Option<crate::metal_ramlm::MetalCEReduceEvaluator>> = std::sync::OnceLock::new();
     let _ce_reduce = CE_REDUCE_EVALUATOR.get_or_init(|| {
         crate::metal_ramlm::MetalCEReduceEvaluator::new().ok()
     });
 
-    // Disabled: GPU CE path is slower due to CPU→GPU transfer overhead
+    // Disabled: Legacy GPU CE path with CPU→GPU scatter is slower
     if false {
         let ce_eval = _ce_reduce.as_ref().unwrap();
         // Create GPU buffer for all scores

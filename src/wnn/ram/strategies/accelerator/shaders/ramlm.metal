@@ -171,6 +171,70 @@ kernel void ramlm_forward_pass_per_example(
 }
 
 //
+// Dense Forward Pass to Shared Buffer Kernel
+//
+// Writes scores directly to a shared buffer at specified cluster offsets.
+// This avoids GPU→CPU→GPU transfer when computing CE across multiple groups.
+//
+// The cluster_ids buffer maps local cluster index → global cluster ID.
+// Output is written to: shared_buffer[example_idx * total_clusters + cluster_ids[local_cluster]]
+//
+struct DenseToBufferParams {
+    uint num_examples;
+    uint total_input_bits;
+    uint num_neurons;           // Neurons in this group
+    uint bits_per_neuron;
+    uint neurons_per_cluster;
+    uint num_group_clusters;    // Clusters in this group
+    uint total_clusters;        // Total clusters across all groups
+    uint words_per_neuron;
+    float empty_value;
+};
+
+kernel void ramlm_forward_to_buffer(
+    device const uchar* input_bits_flat [[buffer(0)]],
+    device const int* connections_flat [[buffer(1)]],
+    device const long* memory_words [[buffer(2)]],
+    device const uint* cluster_ids [[buffer(3)]],      // Maps local → global cluster ID
+    constant DenseToBufferParams& params [[buffer(4)]],
+    device float* shared_buffer [[buffer(5)]],         // Shared across all groups
+    uint2 thread_pos [[thread_position_in_grid]]
+) {
+    uint local_cluster = thread_pos.x;
+    uint example_idx = thread_pos.y;
+
+    if (local_cluster >= params.num_group_clusters) return;
+    if (example_idx >= params.num_examples) return;
+
+    device const uchar* input_bits = input_bits_flat + example_idx * params.total_input_bits;
+
+    uint count_true = 0;
+    uint count_empty = 0;
+    uint start_neuron = local_cluster * params.neurons_per_cluster;
+
+    for (uint neuron_offset = 0; neuron_offset < params.neurons_per_cluster; neuron_offset++) {
+        uint neuron_idx = start_neuron + neuron_offset;
+        device const int* connections = connections_flat + neuron_idx * params.bits_per_neuron;
+
+        uint address = compute_address(input_bits, connections, params.bits_per_neuron);
+        uint cell_value = read_cell(memory_words, neuron_idx, address, params.words_per_neuron);
+
+        if (cell_value == CELL_TRUE) {
+            count_true++;
+        } else if (cell_value == CELL_EMPTY) {
+            count_empty++;
+        }
+    }
+
+    float prob = (float(count_true) + params.empty_value * float(count_empty)) / float(params.neurons_per_cluster);
+
+    // Write to global position in shared buffer
+    uint global_cluster = cluster_ids[local_cluster];
+    uint output_idx = example_idx * params.total_clusters + global_cluster;
+    shared_buffer[output_idx] = prob;
+}
+
+//
 // Top-K Selection Kernel (optional optimization)
 //
 // After computing all probabilities, find top-k clusters.

@@ -1223,6 +1223,393 @@ impl MetalCEReduceEvaluator {
     }
 }
 
+// ============================================================================
+// Unified Group Evaluator - Writes Directly to Shared GPU Buffer
+// ============================================================================
+
+/// Parameters for sparse forward to buffer (must match Metal struct)
+#[repr(C)]
+struct SparseToBufferParams {
+    num_examples: u32,
+    total_input_bits: u32,
+    num_neurons: u32,
+    bits_per_neuron: u32,
+    neurons_per_cluster: u32,
+    num_group_clusters: u32,
+    total_clusters: u32,
+    empty_value: f32,
+}
+
+/// Parameters for dense forward to buffer (must match Metal struct)
+#[repr(C)]
+struct DenseToBufferParams {
+    num_examples: u32,
+    total_input_bits: u32,
+    num_neurons: u32,
+    bits_per_neuron: u32,
+    neurons_per_cluster: u32,
+    num_group_clusters: u32,
+    total_clusters: u32,
+    words_per_neuron: u32,
+    empty_value: f32,
+}
+
+/// Unified Metal evaluator that writes group results directly to shared GPU buffer
+///
+/// This avoids the GPU→CPU→GPU round-trip that was slowing down tiered evaluation.
+/// All groups write to the same shared buffer on GPU, then CE is computed once.
+pub struct MetalGroupEvaluator {
+    device: Device,
+    command_queue: CommandQueue,
+    sparse_to_buffer_pipeline: ComputePipelineState,
+    dense_to_buffer_pipeline: ComputePipelineState,
+    ce_reduce_pipeline: ComputePipelineState,
+}
+
+impl MetalGroupEvaluator {
+    /// Create new unified group evaluator
+    pub fn new() -> Result<Self, String> {
+        let device = Device::system_default().ok_or("No Metal device found")?;
+        let command_queue = device.new_command_queue();
+
+        // Compile sparse forward shader
+        let sparse_shader = include_str!("shaders/sparse_forward.metal");
+        let sparse_library = device
+            .new_library_with_source(sparse_shader, &CompileOptions::new())
+            .map_err(|e| format!("Failed to compile sparse shader: {}", e))?;
+
+        let sparse_to_buffer_kernel = sparse_library
+            .get_function("sparse_forward_to_buffer", None)
+            .map_err(|e| format!("Failed to get sparse_forward_to_buffer: {}", e))?;
+
+        let sparse_to_buffer_pipeline = device
+            .new_compute_pipeline_state_with_function(&sparse_to_buffer_kernel)
+            .map_err(|e| format!("Failed to create sparse to buffer pipeline: {}", e))?;
+
+        // Compile dense forward shader
+        let dense_shader = include_str!("shaders/ramlm.metal");
+        let dense_library = device
+            .new_library_with_source(dense_shader, &CompileOptions::new())
+            .map_err(|e| format!("Failed to compile dense shader: {}", e))?;
+
+        let dense_to_buffer_kernel = dense_library
+            .get_function("ramlm_forward_to_buffer", None)
+            .map_err(|e| format!("Failed to get ramlm_forward_to_buffer: {}", e))?;
+
+        let dense_to_buffer_pipeline = device
+            .new_compute_pipeline_state_with_function(&dense_to_buffer_kernel)
+            .map_err(|e| format!("Failed to create dense to buffer pipeline: {}", e))?;
+
+        // Compile CE reduce shader
+        let ce_shader = include_str!("shaders/ce_reduce.metal");
+        let ce_library = device
+            .new_library_with_source(ce_shader, &CompileOptions::new())
+            .map_err(|e| format!("Failed to compile CE reduce shader: {}", e))?;
+
+        let ce_reduce_kernel = ce_library
+            .get_function("reduce_scores_to_ce", None)
+            .map_err(|e| format!("Failed to get reduce_scores_to_ce: {}", e))?;
+
+        let ce_reduce_pipeline = device
+            .new_compute_pipeline_state_with_function(&ce_reduce_kernel)
+            .map_err(|e| format!("Failed to create CE reduce pipeline: {}", e))?;
+
+        Ok(Self {
+            device,
+            command_queue,
+            sparse_to_buffer_pipeline,
+            dense_to_buffer_pipeline,
+            ce_reduce_pipeline,
+        })
+    }
+
+    /// Create shared scores buffer initialized to 0
+    pub fn create_scores_buffer(&self, num_examples: usize, num_clusters: usize) -> Buffer {
+        let size = num_examples * num_clusters;
+        let zeros: Vec<f32> = vec![0.0; size];
+        self.device.new_buffer_with_data(
+            zeros.as_ptr() as *const _,
+            (size * mem::size_of::<f32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        )
+    }
+
+    /// Create input bits buffer (shared across all group evaluations)
+    pub fn create_input_buffer(&self, input_bits: &[bool]) -> Buffer {
+        let input_u8: Vec<u8> = input_bits.iter().map(|&b| b as u8).collect();
+        self.device.new_buffer_with_data(
+            input_u8.as_ptr() as *const _,
+            (input_u8.len() * mem::size_of::<u8>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        )
+    }
+
+    /// Evaluate sparse group and write directly to shared buffer on GPU
+    pub fn eval_sparse_to_buffer(
+        &self,
+        input_buffer: &Buffer,
+        scores_buffer: &Buffer,
+        connections: &[i64],
+        keys: &[u64],
+        values: &[u8],
+        offsets: &[u32],
+        counts: &[u32],
+        cluster_ids: &[usize],
+        num_examples: usize,
+        total_input_bits: usize,
+        bits_per_neuron: usize,
+        neurons_per_cluster: usize,
+        num_clusters: usize,
+        empty_value: f32,
+    ) {
+        let num_group_clusters = cluster_ids.len();
+        let num_neurons = num_group_clusters * neurons_per_cluster;
+
+        // Convert to GPU-friendly formats
+        let connections_i32: Vec<i32> = connections.iter().map(|&c| c as i32).collect();
+        let cluster_ids_u32: Vec<u32> = cluster_ids.iter().map(|&c| c as u32).collect();
+
+        // Create buffers
+        let conn_buffer = self.device.new_buffer_with_data(
+            connections_i32.as_ptr() as *const _,
+            (connections_i32.len() * mem::size_of::<i32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let keys_buffer = self.device.new_buffer_with_data(
+            keys.as_ptr() as *const _,
+            (keys.len() * mem::size_of::<u64>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let values_buffer = self.device.new_buffer_with_data(
+            values.as_ptr() as *const _,
+            (values.len() * mem::size_of::<u8>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let offsets_buffer = self.device.new_buffer_with_data(
+            offsets.as_ptr() as *const _,
+            (offsets.len() * mem::size_of::<u32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let counts_buffer = self.device.new_buffer_with_data(
+            counts.as_ptr() as *const _,
+            (counts.len() * mem::size_of::<u32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let cluster_ids_buffer = self.device.new_buffer_with_data(
+            cluster_ids_u32.as_ptr() as *const _,
+            (cluster_ids_u32.len() * mem::size_of::<u32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let params = SparseToBufferParams {
+            num_examples: num_examples as u32,
+            total_input_bits: total_input_bits as u32,
+            num_neurons: num_neurons as u32,
+            bits_per_neuron: bits_per_neuron as u32,
+            neurons_per_cluster: neurons_per_cluster as u32,
+            num_group_clusters: num_group_clusters as u32,
+            total_clusters: num_clusters as u32,
+            empty_value,
+        };
+
+        let params_buffer = self.device.new_buffer_with_data(
+            &params as *const _ as *const _,
+            mem::size_of::<SparseToBufferParams>() as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        // Dispatch kernel
+        let command_buffer = self.command_queue.new_command_buffer();
+        let encoder = command_buffer.new_compute_command_encoder();
+
+        encoder.set_compute_pipeline_state(&self.sparse_to_buffer_pipeline);
+        encoder.set_buffer(0, Some(input_buffer), 0);
+        encoder.set_buffer(1, Some(&conn_buffer), 0);
+        encoder.set_buffer(2, Some(&keys_buffer), 0);
+        encoder.set_buffer(3, Some(&values_buffer), 0);
+        encoder.set_buffer(4, Some(&offsets_buffer), 0);
+        encoder.set_buffer(5, Some(&counts_buffer), 0);
+        encoder.set_buffer(6, Some(&cluster_ids_buffer), 0);
+        encoder.set_buffer(7, Some(&params_buffer), 0);
+        encoder.set_buffer(8, Some(scores_buffer), 0);
+
+        let grid_size = MTLSize::new(num_group_clusters as u64, num_examples as u64, 1);
+        let thread_group_size = MTLSize::new(
+            32.min(num_group_clusters as u64),
+            8.min(num_examples as u64),
+            1,
+        );
+        encoder.dispatch_threads(grid_size, thread_group_size);
+
+        encoder.end_encoding();
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+    }
+
+    /// Evaluate dense group and write directly to shared buffer on GPU
+    pub fn eval_dense_to_buffer(
+        &self,
+        input_buffer: &Buffer,
+        scores_buffer: &Buffer,
+        connections: &[i64],
+        memory_words: &[i64],
+        cluster_ids: &[usize],
+        num_examples: usize,
+        total_input_bits: usize,
+        bits_per_neuron: usize,
+        neurons_per_cluster: usize,
+        num_clusters: usize,
+        words_per_neuron: usize,
+        empty_value: f32,
+    ) {
+        let num_group_clusters = cluster_ids.len();
+        let num_neurons = num_group_clusters * neurons_per_cluster;
+
+        // Convert to GPU-friendly formats
+        let connections_i32: Vec<i32> = connections.iter().map(|&c| c as i32).collect();
+        let cluster_ids_u32: Vec<u32> = cluster_ids.iter().map(|&c| c as u32).collect();
+
+        // Create buffers
+        let conn_buffer = self.device.new_buffer_with_data(
+            connections_i32.as_ptr() as *const _,
+            (connections_i32.len() * mem::size_of::<i32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let memory_buffer = self.device.new_buffer_with_data(
+            memory_words.as_ptr() as *const _,
+            (memory_words.len() * mem::size_of::<i64>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let cluster_ids_buffer = self.device.new_buffer_with_data(
+            cluster_ids_u32.as_ptr() as *const _,
+            (cluster_ids_u32.len() * mem::size_of::<u32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let params = DenseToBufferParams {
+            num_examples: num_examples as u32,
+            total_input_bits: total_input_bits as u32,
+            num_neurons: num_neurons as u32,
+            bits_per_neuron: bits_per_neuron as u32,
+            neurons_per_cluster: neurons_per_cluster as u32,
+            num_group_clusters: num_group_clusters as u32,
+            total_clusters: num_clusters as u32,
+            words_per_neuron: words_per_neuron as u32,
+            empty_value,
+        };
+
+        let params_buffer = self.device.new_buffer_with_data(
+            &params as *const _ as *const _,
+            mem::size_of::<DenseToBufferParams>() as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        // Dispatch kernel
+        let command_buffer = self.command_queue.new_command_buffer();
+        let encoder = command_buffer.new_compute_command_encoder();
+
+        encoder.set_compute_pipeline_state(&self.dense_to_buffer_pipeline);
+        encoder.set_buffer(0, Some(input_buffer), 0);
+        encoder.set_buffer(1, Some(&conn_buffer), 0);
+        encoder.set_buffer(2, Some(&memory_buffer), 0);
+        encoder.set_buffer(3, Some(&cluster_ids_buffer), 0);
+        encoder.set_buffer(4, Some(&params_buffer), 0);
+        encoder.set_buffer(5, Some(scores_buffer), 0);
+
+        let grid_size = MTLSize::new(num_group_clusters as u64, num_examples as u64, 1);
+        let thread_group_size = MTLSize::new(
+            32.min(num_group_clusters as u64),
+            8.min(num_examples as u64),
+            1,
+        );
+        encoder.dispatch_threads(grid_size, thread_group_size);
+
+        encoder.end_encoding();
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+    }
+
+    /// Compute CE and accuracy from accumulated scores buffer
+    pub fn compute_ce_from_buffer(
+        &self,
+        scores_buffer: &Buffer,
+        targets: &[i64],
+        num_examples: usize,
+        num_clusters: usize,
+    ) -> Result<(f64, f64), String> {
+        let targets_i32: Vec<i32> = targets.iter().map(|&t| t as i32).collect();
+        let targets_buffer = self.device.new_buffer_with_data(
+            targets_i32.as_ptr() as *const _,
+            (targets_i32.len() * mem::size_of::<i32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let params = CEReduceParams {
+            num_examples: num_examples as u32,
+            num_clusters: num_clusters as u32,
+        };
+        let params_buffer = self.device.new_buffer_with_data(
+            &params as *const _ as *const _,
+            mem::size_of::<CEReduceParams>() as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let ce_buffer = self.device.new_buffer(
+            (num_examples * mem::size_of::<f32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+        let correct_buffer = self.device.new_buffer(
+            (num_examples * mem::size_of::<u32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let command_buffer = self.command_queue.new_command_buffer();
+        let encoder = command_buffer.new_compute_command_encoder();
+
+        encoder.set_compute_pipeline_state(&self.ce_reduce_pipeline);
+        encoder.set_buffer(0, Some(scores_buffer), 0);
+        encoder.set_buffer(1, Some(&targets_buffer), 0);
+        encoder.set_buffer(2, Some(&params_buffer), 0);
+        encoder.set_buffer(3, Some(&ce_buffer), 0);
+        encoder.set_buffer(4, Some(&correct_buffer), 0);
+
+        let grid_size = MTLSize::new(num_examples as u64, 1, 1);
+        let max_threads = self.ce_reduce_pipeline.max_total_threads_per_threadgroup();
+        let thread_group_size = MTLSize::new(max_threads.min(num_examples as u64), 1, 1);
+        encoder.dispatch_threads(grid_size, thread_group_size);
+
+        encoder.end_encoding();
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+
+        // Sum CE and correct on CPU
+        let ce_ptr = ce_buffer.contents() as *const f32;
+        let correct_ptr = correct_buffer.contents() as *const u32;
+
+        let (total_ce, total_correct): (f64, u64) = unsafe {
+            let ce_slice = std::slice::from_raw_parts(ce_ptr, num_examples);
+            let correct_slice = std::slice::from_raw_parts(correct_ptr, num_examples);
+
+            let total_ce: f64 = ce_slice.iter().map(|&c| c as f64).sum();
+            let total_correct: u64 = correct_slice.iter().map(|&c| c as u64).sum();
+
+            (total_ce, total_correct)
+        };
+
+        let avg_ce = total_ce / num_examples as f64;
+        let accuracy = total_correct as f64 / num_examples as f64;
+
+        Ok((avg_ce, accuracy))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
