@@ -146,6 +146,84 @@ class PhasedSearchConfig:
 			neurons_per_cluster=neurons_per_cluster[:vocab_size],
 		)
 
+	def create_tiered_random_genome(
+		self,
+		vocab_size: int,
+		rng: 'random.Random',
+		bits_variation: int = 2,
+		neurons_variation: int = 2,
+		min_bits: int = 4,
+		max_bits: int = 24,
+		min_neurons: int = 1,
+		max_neurons: int = 20,
+	) -> 'ClusterGenome':
+		"""
+		Create a tiered genome with random variations within tier bounds.
+
+		Each cluster gets bits/neurons randomly varied within ±variation of
+		the tier's target value, respecting min/max bounds.
+
+		Args:
+			vocab_size: Number of clusters
+			rng: Random number generator for reproducibility
+			bits_variation: Max deviation from tier's bits (default ±2)
+			neurons_variation: Max deviation from tier's neurons (default ±2)
+			min_bits/max_bits: Hard bounds for bits
+			min_neurons/max_neurons: Hard bounds for neurons
+
+		Returns:
+			ClusterGenome with randomized tiered configuration
+		"""
+		import random
+		from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
+
+		if not self.tier_config:
+			# No tier config - create uniform with random variation
+			bits = max(min_bits, min(max_bits, self.default_bits + rng.randint(-bits_variation, bits_variation)))
+			neurons = max(min_neurons, min(max_neurons, self.default_neurons + rng.randint(-neurons_variation, neurons_variation)))
+			return ClusterGenome.create_uniform(
+				num_clusters=vocab_size,
+				bits=bits,
+				neurons=neurons,
+			)
+
+		# Build per-cluster bits and neurons arrays with random variation
+		bits_per_cluster = []
+		neurons_per_cluster = []
+		cluster_idx = 0
+
+		for tier_spec in self.tier_config:
+			num_clusters, tier_neurons, tier_bits = tier_spec
+			if num_clusters is None:
+				count = vocab_size - cluster_idx
+			else:
+				count = min(num_clusters, vocab_size - cluster_idx)
+
+			for _ in range(count):
+				# Random bits within ±variation of tier target, clamped to bounds
+				b = tier_bits + rng.randint(-bits_variation, bits_variation)
+				b = max(min_bits, min(max_bits, b))
+				bits_per_cluster.append(b)
+
+				# Random neurons within ±variation of tier target, clamped to bounds
+				n = tier_neurons + rng.randint(-neurons_variation, neurons_variation)
+				n = max(min_neurons, min(max_neurons, n))
+				neurons_per_cluster.append(n)
+
+			cluster_idx += count
+			if cluster_idx >= vocab_size:
+				break
+
+		# Pad if needed
+		while len(bits_per_cluster) < vocab_size:
+			bits_per_cluster.append(self.default_bits)
+			neurons_per_cluster.append(self.default_neurons)
+
+		return ClusterGenome(
+			bits_per_cluster=bits_per_cluster[:vocab_size],
+			neurons_per_cluster=neurons_per_cluster[:vocab_size],
+		)
+
 	def to_yaml(self) -> str:
 		"""Convert config to YAML string."""
 		return yaml.dump(asdict(self), default_flow_style=False, sort_keys=False)
@@ -558,11 +636,26 @@ class PhasedSearchRunner:
 		if is_ga:
 			strategy_kwargs["generations"] = cfg.ga_generations
 			strategy_kwargs["population_size"] = cfg.population_size
-			# First GA phase (no population from previous phase): generate fresh random genomes
-			# BUT only when no tier_config - tiered genomes need the tier structure preserved
-			# With tier_config, we seed from 1 tiered baseline + mutations to maintain tier structure
-			if not initial_population and not cfg.tier_config:
-				strategy_kwargs["fresh_population"] = True
+			# First GA phase (no population from previous phase): generate fresh population
+			if not initial_population:
+				if cfg.tier_config:
+					# Generate tiered random genomes that respect tier structure
+					# Each genome has random bits/neurons within ±2 of tier targets
+					import random
+					rng = random.Random(self._rotation_seed)
+					tiered_population = [
+						cfg.create_tiered_random_genome(self.vocab_size, rng)
+						for _ in range(cfg.population_size)
+					]
+					# Initialize connections for all genomes
+					for g in tiered_population:
+						if not g.has_connections():
+							g.initialize_connections(self.total_input_bits)
+					initial_population = tiered_population
+					self.log(f"  Generated {len(tiered_population)} tiered random genomes")
+				else:
+					# No tier config - use uniform random genomes
+					strategy_kwargs["fresh_population"] = True
 		else:
 			strategy_kwargs["iterations"] = cfg.ts_iterations
 			strategy_kwargs["neighbors_per_iter"] = cfg.neighbors_per_iter
@@ -571,22 +664,29 @@ class PhasedSearchRunner:
 		strategy = OptimizerStrategyFactory.create(**strategy_kwargs)
 
 		# Run optimization
-		if initial_genome is not None:
-			if is_ga:
-				seed_pop = initial_population if initial_population else [initial_genome]
-				result = strategy.optimize(
-					evaluate_fn=None,
-					initial_population=seed_pop,
-				)
+		if is_ga:
+			# GA: use initial_population if available, else [initial_genome], else None (fresh)
+			if initial_population:
+				seed_pop = initial_population
+			elif initial_genome is not None:
+				seed_pop = [initial_genome]
 			else:
+				seed_pop = None
+			result = strategy.optimize(
+				evaluate_fn=None,
+				initial_population=seed_pop,
+			)
+		else:
+			# TS: requires initial_genome
+			if initial_genome is not None:
 				result = strategy.optimize(
 					evaluate_fn=None,
 					initial_genome=initial_genome,
 					initial_fitness=initial_fitness,
 					initial_neighbors=initial_population,
 				)
-		else:
-			result = strategy.optimize(evaluate_fn=None)
+			else:
+				result = strategy.optimize(evaluate_fn=None)
 
 		self.log("")
 		self.log(f"{phase_name} Result:")
