@@ -320,9 +320,9 @@ pub fn search_neighbors_with_threshold(
     // Smaller batch = less contention between genome training threads
     // 4 genomes × full parallel training is better than 10 genomes competing
     // Batch size for offspring/neighbor generation - configurable via env var
-    // Default 15 (hybrid causes slowdown, so smaller batches are better for non-hybrid)
+    // Default 50 (persistent worker eliminates per-call overhead, larger batches more efficient)
     let batch_size: usize = std::env::var("WNN_OFFSPRING_BATCH_SIZE")
-        .ok().and_then(|v| v.parse().ok()).unwrap_or(15);
+        .ok().and_then(|v| v.parse().ok()).unwrap_or(50);
 
     // Generation prefix for logs - shows current generation / total generations
     let total_gens = total_generations.unwrap_or(100);
@@ -354,8 +354,8 @@ pub fn search_neighbors_with_threshold(
             batch_genomes.push((new_bits, new_neurons, new_conns));
         }
 
-        // Evaluate the batch - use non-hybrid (hybrid causes 14x slowdown in this context)
-        let results = crate::token_cache::evaluate_genomes_cached(
+        // Evaluate the batch - hybrid with persistent worker (no per-call overhead)
+        let results = crate::token_cache::evaluate_genomes_cached_hybrid(
             cache,
             &batch_bits,
             &batch_neurons,
@@ -430,9 +430,9 @@ pub fn search_neighbors_best_n(
     let mut all_candidates: Vec<CandidateResult> = Vec::new();
     let mut evaluated = 0;
     // Batch size for offspring/neighbor generation - configurable via env var
-    // Default 15 (hybrid causes slowdown, so smaller batches are better for non-hybrid)
+    // Default 50 (persistent worker eliminates per-call overhead, larger batches more efficient)
     let batch_size: usize = std::env::var("WNN_OFFSPRING_BATCH_SIZE")
-        .ok().and_then(|v| v.parse().ok()).unwrap_or(15);
+        .ok().and_then(|v| v.parse().ok()).unwrap_or(50);
 
     // Generation prefix for logs - shows current generation / total generations
     let total_gens = total_generations.unwrap_or(100);
@@ -463,8 +463,8 @@ pub fn search_neighbors_best_n(
             batch_genomes.push((new_bits, new_neurons, new_conns));
         }
 
-        // Evaluate the batch - use non-hybrid (hybrid causes 14x slowdown in this context)
-        let results = crate::token_cache::evaluate_genomes_cached(
+        // Evaluate the batch - hybrid with persistent worker (no per-call overhead)
+        let results = crate::token_cache::evaluate_genomes_cached_hybrid(
             cache,
             &batch_bits,
             &batch_neurons,
@@ -666,9 +666,9 @@ pub fn search_offspring(
     let mut all_candidates: Vec<CandidateResult> = Vec::new();
     let mut evaluated = 0;
     // Batch size for offspring/neighbor generation - configurable via env var
-    // Default 15 (hybrid causes slowdown, so smaller batches are better for non-hybrid)
+    // Default 50 (persistent worker eliminates per-call overhead, larger batches more efficient)
     let batch_size: usize = std::env::var("WNN_OFFSPRING_BATCH_SIZE")
-        .ok().and_then(|v| v.parse().ok()).unwrap_or(15);
+        .ok().and_then(|v| v.parse().ok()).unwrap_or(50);
 
     // Generation prefix for logs - shows current generation / total generations
     let total_gens = total_generations.unwrap_or(100);
@@ -711,8 +711,8 @@ pub fn search_offspring(
             batch_genomes.push((new_bits, new_neurons, new_conns));
         }
 
-        // Evaluate the batch - use non-hybrid (hybrid causes 14x slowdown in this context)
-        let results = crate::token_cache::evaluate_genomes_cached(
+        // Evaluate the batch - hybrid with persistent worker (no per-call overhead)
+        let results = crate::token_cache::evaluate_genomes_cached_hybrid(
             cache,
             &batch_bits,
             &batch_neurons,

@@ -22,7 +22,9 @@ use rustc_hash::FxHasher;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::OnceLock;
+use std::sync::mpsc::{self, SyncSender};
+use std::sync::{Arc, OnceLock};
+use std::thread::{self, JoinHandle};
 
 // Global cached Metal evaluator for adaptive evaluation (dense memory)
 static METAL_EVALUATOR: OnceLock<Option<crate::metal_ramlm::MetalRAMLMEvaluator>> = OnceLock::new();
@@ -42,6 +44,102 @@ fn get_sparse_metal_evaluator() -> Option<&'static crate::metal_ramlm::MetalSpar
     SPARSE_METAL_EVALUATOR.get_or_init(|| {
         crate::metal_ramlm::MetalSparseEvaluator::new().ok()
     }).as_ref()
+}
+
+// ============================================================================
+// Persistent Eval Worker Pool
+// ============================================================================
+// Keeps a single eval thread alive across multiple hybrid evaluation calls.
+// This eliminates per-call overhead (thread spawn, channel creation) that
+// caused 14x slowdown when offspring search called hybrid repeatedly.
+
+/// Shared evaluation data (immutable during a session)
+pub struct EvalData {
+    pub eval_input_bits: Vec<bool>,
+    pub eval_targets: Vec<i64>,
+    pub num_eval: usize,
+    pub num_clusters: usize,
+    pub total_input_bits: usize,
+    pub empty_value: f32,
+}
+
+/// Request to evaluate a batch of genome exports
+struct EvalBatchRequest {
+    exports: Vec<(usize, GenomeExport)>,
+    eval_data: Arc<EvalData>,
+    response_tx: mpsc::Sender<Vec<(usize, f64, f64)>>,
+}
+
+/// Persistent worker pool for GPU evaluation
+struct EvalWorkerPool {
+    request_tx: SyncSender<EvalBatchRequest>,
+    _worker_handle: JoinHandle<()>,
+}
+
+impl EvalWorkerPool {
+    fn new() -> Self {
+        // Bounded channel with capacity 2 for pipelining (train batch N+1 while eval batch N)
+        let (request_tx, request_rx) = mpsc::sync_channel::<EvalBatchRequest>(2);
+
+        let worker_handle = thread::spawn(move || {
+            // Get GPU evaluators once (they're already singletons, but access here for thread locality)
+            let metal = get_metal_evaluator();
+            let sparse_metal = get_sparse_metal_evaluator();
+
+            // Process requests until channel closes
+            while let Ok(request) = request_rx.recv() {
+                let eval_data = &request.eval_data;
+
+                // Evaluate all exports in parallel on GPU
+                let results: Vec<(usize, f64, f64)> = request.exports
+                    .into_par_iter()
+                    .map(|(genome_idx, export)| {
+                        let (ce, acc) = evaluate_genome_hybrid(
+                            &export,
+                            &eval_data.eval_input_bits,
+                            &eval_data.eval_targets,
+                            eval_data.num_eval,
+                            eval_data.num_clusters,
+                            eval_data.total_input_bits,
+                            eval_data.empty_value,
+                            metal,
+                            sparse_metal,
+                        );
+                        (genome_idx, ce, acc)
+                    })
+                    .collect();
+
+                // Send results back (ignore error if receiver dropped)
+                let _ = request.response_tx.send(results);
+            }
+        });
+
+        Self {
+            request_tx,
+            _worker_handle: worker_handle,
+        }
+    }
+
+    /// Submit a batch for evaluation and wait for results
+    fn evaluate(&self, exports: Vec<(usize, GenomeExport)>, eval_data: Arc<EvalData>) -> Vec<(usize, f64, f64)> {
+        let (response_tx, response_rx) = mpsc::channel();
+
+        self.request_tx.send(EvalBatchRequest {
+            exports,
+            eval_data,
+            response_tx,
+        }).expect("Eval worker channel closed unexpectedly");
+
+        response_rx.recv().expect("Eval worker response channel closed unexpectedly")
+    }
+}
+
+// Global persistent eval worker
+static EVAL_WORKER: OnceLock<EvalWorkerPool> = OnceLock::new();
+
+/// Get or initialize the persistent eval worker pool
+fn get_eval_worker() -> &'static EvalWorkerPool {
+    EVAL_WORKER.get_or_init(|| EvalWorkerPool::new())
 }
 
 /// Threshold for switching to sparse memory (2^12 = 4K addresses)
@@ -1247,9 +1345,6 @@ pub fn evaluate_genomes_parallel_multisubset(
 // PARALLEL HYBRID CPU+GPU EVALUATION
 // =============================================================================
 
-use std::sync::mpsc;
-use std::thread;
-
 /// Export data for a single genome (used in batched GPU evaluation)
 #[derive(Clone)]
 pub struct GenomeExport {
@@ -1645,6 +1740,7 @@ fn evaluate_genome_hybrid(
 /// Performance benefits:
 /// - Parallel training: N genomes trained simultaneously (vs sequential)
 /// - GPU acceleration: Both dense and sparse groups on GPU
+/// - Persistent worker: Eval thread stays alive across calls (eliminates spawn overhead)
 /// - Pipelining: CPU trains batch N+1 while GPU evaluates batch N
 ///
 /// Returns: Vec of (cross_entropy, accuracy) tuples - one per genome
@@ -1692,14 +1788,8 @@ pub fn evaluate_genomes_parallel_hybrid(
             computed_batch
         });
 
-    // Get GPU evaluators
-    let metal = get_metal_evaluator();
-    let sparse_metal = get_sparse_metal_evaluator();
-
     // Pre-compute connection offsets and sizes for each genome (handles variable configs)
     let use_provided_connections = !genomes_connections_flat.is_empty();
-    let groups_template = build_config_groups(first_bits, first_neurons);
-    let total_conn_size: usize = groups_template.iter().map(|g| g.conn_size()).sum();
 
     // Compute per-genome connection offsets (for variable-sized genomes)
     let mut conn_offsets: Vec<usize> = Vec::with_capacity(num_genomes);
@@ -1715,47 +1805,21 @@ pub fn evaluate_genomes_parallel_hybrid(
         running_offset += conn_size;
     }
 
-    // BOUNDED channel for pipelining: throttle training when eval falls behind
-    // Bound of 1 means at most 1 batch waiting = bounded memory usage
-    let (tx, rx) = mpsc::sync_channel::<(usize, Vec<(usize, GenomeExport)>)>(1);
-
-    // Clone data for eval thread
-    let eval_input_bits_owned = eval_input_bits.to_vec();
-    let eval_targets_owned = eval_targets.to_vec();
-
-    // Spawn evaluation thread
-    let eval_handle = thread::spawn(move || {
-        let mut results: Vec<(usize, f64, f64)> = Vec::new();
-
-        // Get GPU evaluators in this thread
-        let metal = get_metal_evaluator();
-        let sparse_metal = get_sparse_metal_evaluator();
-
-        while let Ok((_batch_idx, exports)) = rx.recv() {
-            // Process exports in PARALLEL - GPU can handle concurrent dispatches
-            let batch_results: Vec<(usize, f64, f64)> = exports
-                .into_par_iter()
-                .map(|(genome_idx, export)| {
-                    let (ce, acc) = evaluate_genome_hybrid(
-                        &export,
-                        &eval_input_bits_owned,
-                        &eval_targets_owned,
-                        num_eval,
-                        num_clusters,
-                        total_input_bits,
-                        empty_value,
-                        metal,
-                        sparse_metal,
-                    );
-                    (genome_idx, ce, acc)
-                })
-                .collect();
-
-            results.extend(batch_results);
-        }
-
-        results
+    // Create shared eval data (Arc for zero-copy sharing with persistent worker)
+    let eval_data = Arc::new(EvalData {
+        eval_input_bits: eval_input_bits.to_vec(),
+        eval_targets: eval_targets.to_vec(),
+        num_eval,
+        num_clusters,
+        total_input_bits,
+        empty_value,
     });
+
+    // Get persistent eval worker (initialized once, stays alive for session)
+    let eval_worker = get_eval_worker();
+
+    // Collect all results
+    let mut all_results: Vec<(usize, f64, f64)> = Vec::with_capacity(num_genomes);
 
     // Process genomes in batches
     let num_batches = (num_genomes + batch_size - 1) / batch_size;
@@ -1833,17 +1897,14 @@ pub fn evaluate_genomes_parallel_hybrid(
             })
             .collect();
 
-        // Send exports to eval thread
-        tx.send((batch_idx, batch_exports)).unwrap();
+        // Send to persistent eval worker and get results
+        let batch_results = eval_worker.evaluate(batch_exports, Arc::clone(&eval_data));
+        all_results.extend(batch_results);
     }
-
-    // Close channel and wait for eval thread
-    drop(tx);
-    let eval_results = eval_handle.join().unwrap();
 
     // Sort results by genome index and return
     let mut results: Vec<(f64, f64)> = vec![(0.0, 0.0); num_genomes];
-    for (genome_idx, ce, acc) in eval_results {
+    for (genome_idx, ce, acc) in all_results {
         results[genome_idx] = (ce, acc);
     }
 
