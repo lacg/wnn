@@ -834,10 +834,15 @@ pub fn evaluate_genomes_parallel(
         running_offset += conn_size;
     }
 
+    // Check if progress logging is enabled via env var
+    let progress_log = std::env::var("WNN_PROGRESS_LOG").map(|v| v == "1").unwrap_or(false);
+    let start_time = std::time::Instant::now();
+
     // SEQUENTIAL genome evaluation - each genome gets full thread pool for token parallelism
     // Parallel genome eval causes contention: 10 genomes × nested token parallelism = thrashing
     // Sequential is faster: ~6s/genome vs ~10s/genome with parallel outer loop
-    (0..num_genomes).map(|genome_idx| {
+    let results: Vec<(f64, f64)> = (0..num_genomes).map(|genome_idx| {
+        let genome_start = std::time::Instant::now();
         // Extract this genome's configuration
         let genome_offset = genome_idx * num_clusters;
         let bits_per_cluster: Vec<usize> = genomes_bits_flat[genome_offset..genome_offset + num_clusters].to_vec();
@@ -1059,8 +1064,20 @@ pub fn evaluate_genomes_parallel(
         let avg_ce = total_ce / num_eval as f64;
         let accuracy = total_correct as f64 / num_eval as f64;
 
+        // Progress logging (to stderr, auto-flushes)
+        if progress_log {
+            let genome_elapsed = genome_start.elapsed().as_secs_f64();
+            let total_elapsed = start_time.elapsed().as_secs_f64();
+            eprintln!(
+                "[Rust] Genome {}/{}: CE={:.4}, Acc={:.4}% ({:.1}s, total {:.1}s)",
+                genome_idx + 1, num_genomes, avg_ce, accuracy * 100.0, genome_elapsed, total_elapsed
+            );
+        }
+
         (avg_ce, accuracy)
-    }).collect()
+    }).collect();
+
+    results
 }
 
 /// Evaluate genomes with multi-subset rotation support.
