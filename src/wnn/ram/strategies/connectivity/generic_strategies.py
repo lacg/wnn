@@ -704,6 +704,9 @@ class GAConfig:
 	patience: int = 5              # Checks without improvement before stopping
 	check_interval: int = 5        # Check every N generations
 	min_improvement_pct: float = 0.05  # GA needs diversity, lower threshold (0.05%)
+	# Fresh population: if True, ignore initial_population and generate fresh random genomes
+	# Use for first GA phase to maximize diversity instead of mutating from 1 seed
+	fresh_population: bool = False
 
 
 @dataclass

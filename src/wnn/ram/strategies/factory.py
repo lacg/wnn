@@ -331,6 +331,8 @@ class OptimizerStrategyFactory:
 		verbose: bool = False,
 		logger: Any = None,
 		batch_evaluator: Any = None,
+		# GA-specific: generate fresh random population instead of seeding from given genomes
+		fresh_population: bool = False,
 	):
 		"""
 		Create an optimizer strategy.
@@ -430,6 +432,7 @@ class OptimizerStrategyFactory:
 					seed=seed,
 					logger=logger,
 					batch_evaluator=batch_evaluator,
+					fresh_population=fresh_population,
 				)
 
 			case OptimizerStrategyType.ARCHITECTURE_TS:
@@ -533,6 +536,7 @@ class OptimizerStrategyFactory:
 		seed: int,
 		logger: Any,
 		batch_evaluator: Any,
+		fresh_population: bool = False,
 	):
 		"""Create an ArchitectureGAStrategy."""
 		from wnn.ram.strategies.connectivity.architecture_strategies import (
@@ -565,6 +569,7 @@ class OptimizerStrategyFactory:
 			mutation_rate=mutation_rate,
 			initial_threshold=initial_threshold,
 			ce_percentile=ce_percentile,
+			fresh_population=fresh_population,
 		)
 		# Pass batch_evaluator as cached_evaluator if it supports search_offspring
 		cached_evaluator = batch_evaluator if batch_evaluator and hasattr(batch_evaluator, 'search_offspring') else None

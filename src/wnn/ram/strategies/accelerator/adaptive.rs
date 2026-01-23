@@ -1276,8 +1276,12 @@ fn calculate_pool_size(
             let words_per_neuron = (cells_per_neuron + 30) / 31; // 31 cells per word
             bytes_per_genome += group.total_neurons() * words_per_neuron * 8;
         } else {
-            // Sparse: estimate ~1000 entries per neuron average
-            bytes_per_genome += group.total_neurons() * 1000 * 16; // key(8) + value(1) + overhead
+            // Sparse: REALISTIC estimate based on training data size
+            // With 200K training examples, each neuron could have up to ~200K entries
+            // But typically only a fraction are unique addresses due to collisions
+            // Conservative estimate: 50K entries per neuron (for 20-bit address space)
+            // Memory per entry: key(8) + value(1) + DashMap overhead (~24 bytes)
+            bytes_per_genome += group.total_neurons() * 50_000 * 32;
         }
     }
 
@@ -1285,6 +1289,7 @@ fn calculate_pool_size(
     let max_pool_size = (budget_bytes / bytes_per_genome).max(1);
 
     // Pool size = min(max_pool, cpu_cores) to avoid over-allocation
+    // Use WNN_BATCH_SIZE env var to override for testing
     let pool_size = max_pool_size.min(cpu_cores).max(1);
 
     // Batch size = pool size (process one batch at a time)
@@ -1609,15 +1614,23 @@ pub fn evaluate_genomes_parallel_hybrid(
     let first_neurons = &genomes_neurons_flat[0..num_clusters];
 
     // Calculate memory budget and pool size
-    let budget_gb = get_available_memory_gb() * 0.6;
-    let cpu_cores = rayon::current_num_threads();
-    let (pool_size, batch_size) = calculate_pool_size(
-        first_bits,
-        first_neurons,
-        num_clusters,
-        budget_gb,
-        cpu_cores,
-    );
+    // Override with WNN_BATCH_SIZE env var for testing (e.g., WNN_BATCH_SIZE=10)
+    let batch_size = std::env::var("WNN_BATCH_SIZE")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or_else(|| {
+            // Dynamic calculation based on memory budget
+            let budget_gb = get_available_memory_gb() * 0.6;
+            let cpu_cores = rayon::current_num_threads();
+            let (_, computed_batch) = calculate_pool_size(
+                first_bits,
+                first_neurons,
+                num_clusters,
+                budget_gb,
+                cpu_cores,
+            );
+            computed_batch
+        });
 
     // Get GPU evaluators
     let metal = get_metal_evaluator();
@@ -1642,8 +1655,9 @@ pub fn evaluate_genomes_parallel_hybrid(
         running_offset += conn_size;
     }
 
-    // Channel for pipelining: CPU sends exports, eval thread receives and evaluates
-    let (tx, rx) = mpsc::channel::<(usize, Vec<(usize, GenomeExport)>)>();
+    // BOUNDED channel for pipelining: throttle training when eval falls behind
+    // Bound of 1 means at most 1 batch waiting = bounded memory usage
+    let (tx, rx) = mpsc::sync_channel::<(usize, Vec<(usize, GenomeExport)>)>(1);
 
     // Clone data for eval thread
     let eval_input_bits_owned = eval_input_bits.to_vec();

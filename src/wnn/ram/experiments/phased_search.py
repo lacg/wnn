@@ -467,6 +467,7 @@ class PhasedSearchRunner:
 			empty_value=0.0,
 			seed=rotation_seed,
 			log_path=self.config.log_path,
+			use_hybrid=False,  # Sequential training + GPU eval (testing performance)
 		)
 		self.log(f"  {self.evaluator}")
 
@@ -557,6 +558,10 @@ class PhasedSearchRunner:
 		if is_ga:
 			strategy_kwargs["generations"] = cfg.ga_generations
 			strategy_kwargs["population_size"] = cfg.population_size
+			# First GA phase (no population from previous phase): generate fresh random genomes
+			# This ensures maximum diversity instead of mutating from 1 seed genome
+			if not initial_population:
+				strategy_kwargs["fresh_population"] = True
 		else:
 			strategy_kwargs["iterations"] = cfg.ts_iterations
 			strategy_kwargs["neighbors_per_iter"] = cfg.neighbors_per_iter

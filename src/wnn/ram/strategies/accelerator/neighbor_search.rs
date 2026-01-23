@@ -319,7 +319,7 @@ pub fn search_neighbors_with_threshold(
     let mut evaluated = 0;
     // Smaller batch = less contention between genome training threads
     // 4 genomes × full parallel training is better than 10 genomes competing
-    let batch_size = 10;
+    let batch_size = 15;
 
     // Generation prefix for logs - shows current generation / total generations
     let total_gens = total_generations.unwrap_or(100);
@@ -426,7 +426,7 @@ pub fn search_neighbors_best_n(
     let mut passed: Vec<CandidateResult> = Vec::new();
     let mut all_candidates: Vec<CandidateResult> = Vec::new();
     let mut evaluated = 0;
-    let batch_size = 10;
+    let batch_size = 15;
 
     // Generation prefix for logs - shows current generation / total generations
     let total_gens = total_generations.unwrap_or(100);
@@ -659,7 +659,7 @@ pub fn search_offspring(
     let mut passed: Vec<CandidateResult> = Vec::new();
     let mut all_candidates: Vec<CandidateResult> = Vec::new();
     let mut evaluated = 0;
-    let batch_size = 10;
+    let batch_size = 15;
 
     // Generation prefix for logs - shows current generation / total generations
     let total_gens = total_generations.unwrap_or(100);

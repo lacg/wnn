@@ -488,8 +488,12 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		self._log.info(f"[{self.name}] Using Rust search_offspring (single-call offspring search)")
 
 		# Initialize population (show ALL genomes - no threshold filtering for init)
+		# If fresh_population=True, ignore seeds and generate all random genomes
+		if cfg.fresh_population:
+			self._log.info(f"[{self.name}] Generating {cfg.population_size} fresh random genomes (fresh_population=True)")
+			initial_population = None  # Force random generation below
 		# If we have seed genomes but fewer than population_size, expand with mutations
-		if initial_population and len(initial_population) > 0:
+		elif initial_population and len(initial_population) > 0:
 			# CRITICAL: Ensure all seed genomes have connections (fixes reproducibility bug)
 			# Without connections, Rust generates random ones each evaluation → inconsistent results
 			for g in initial_population:
@@ -528,7 +532,9 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 
 		if initial_population and len(initial_population) > 0:
 			# Evaluate initial population with streaming (shows progress per batch)
-			# Uses batch_size=10 for speed; falls back to 1-at-a-time if configs differ
+			# Configurable via WNN_STREAM_BATCH_SIZE env var (default 15)
+			import os
+			stream_batch_size = int(os.environ.get('WNN_STREAM_BATCH_SIZE', '15'))
 			results = evaluator.evaluate_batch(
 				initial_population,
 				train_subset_idx=evaluator.next_train_idx(),
@@ -538,7 +544,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 				total_generations=cfg.generations,
 				min_accuracy=None,  # Show all for initial population
 				streaming=True,
-				stream_batch_size=10,  # Batch of 10 (falls back to 1 if configs differ)
+				stream_batch_size=stream_batch_size,
 			)
 			# Store cached fitness on each genome for elite logging
 			population = []
