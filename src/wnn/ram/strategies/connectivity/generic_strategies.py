@@ -676,7 +676,7 @@ class AdaptiveScaler:
 @dataclass
 class GAConfig:
 	"""Configuration for Genetic Algorithm."""
-	population_size: int = 30
+	population_size: int = 50
 	generations: int = 50
 	mutation_rate: float = 0.1
 	crossover_rate: float = 0.7
@@ -717,8 +717,8 @@ class TSConfig:
 	tabu_size: int = 10
 	mutation_rate: float = 0.1     # Fraction of genome elements to mutate per neighbor
 	# Total neighbors cache for seeding next phase (top K/2 by CE + top K/2 by Acc)
-	# None = use neighbors_per_iter (legacy), set to GA population size to preserve diversity
-	total_neighbors_size: Optional[int] = None
+	# Should match GA population_size to preserve diversity for next phase
+	total_neighbors_size: int = 50
 	# Threshold continuity: start threshold passed from previous phase
 	# If None, uses min_accuracy as the base (first phase)
 	initial_threshold: Optional[float] = None
