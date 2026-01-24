@@ -317,6 +317,96 @@ class EarlyStoppingTracker:
 		"""Return the current AdaptiveLevel enum."""
 		return self._last_level
 
+	def reset_baseline(self, baseline_mean: float) -> None:
+		"""
+		Reset tracker for baseline-based overfitting detection.
+
+		The baseline is the mean fitness of top-K elites evaluated on the FULL
+		validation set at initialization. All subsequent checks compare against
+		this fixed baseline.
+
+		Args:
+			baseline_mean: Mean of top-K elites on full validation at init
+		"""
+		from wnn.ram.strategies.connectivity.generic_strategies import AdaptiveLevel
+		self._patience_counter = 0
+		self._baseline_full = baseline_mean
+		self._last_level = AdaptiveLevel.NEUTRAL
+
+	def check_overfit(self, iteration: int, current_full_mean: float, top_k_count: int = 10) -> bool:
+		"""
+		Check overfitting by comparing current elites on FULL data vs baseline.
+
+		Delta = (current_full_mean - baseline_full_mean) / baseline_full_mean × 100
+		- Positive delta = overfitting (worse on full data than baseline)
+		- Negative delta = generalizing (better on full data than baseline)
+
+		Args:
+			iteration: Current iteration (0-indexed)
+			current_full_mean: Mean of top-K elites on FULL validation NOW
+			top_k_count: Number of elites used for logging
+
+		Returns:
+			True if should stop, False otherwise
+		"""
+		from wnn.ram.strategies.connectivity.generic_strategies import AdaptiveLevel
+		from wnn.core.thresholds import OverfitThreshold
+		cfg = self._config
+
+		# Only check at specified intervals (1-indexed iteration)
+		if (iteration + 1) % cfg.check_interval != 0:
+			return False
+
+		# Compute delta vs fixed baseline
+		baseline = getattr(self, '_baseline_full', None)
+		if baseline is None or baseline == 0:
+			return False
+
+		# Delta: positive = overfitting (current worse than baseline)
+		delta_pct = (current_full_mean - baseline) / baseline * 100
+
+		# Check if within acceptable range (we want delta to stay low/negative)
+		# Use negative of min_improvement_pct as acceptable regression threshold
+		if delta_pct <= cfg.min_improvement_pct:
+			# Within acceptable range, recover patience
+			self._patience_counter = max(0, self._patience_counter - 1)
+		else:
+			# Overfitting detected
+			self._patience_counter += 1
+
+		# Determine level using OverfitThreshold (already in correct convention)
+		# delta_pct > 0 = overfitting, matches OverfitThreshold convention
+		if delta_pct < OverfitThreshold.HEALTHY:  # < -1% (improving a lot)
+			level = AdaptiveLevel.HEALTHY
+		elif delta_pct < OverfitThreshold.WARNING:  # -1% to 0% (stable/slight improve)
+			level = AdaptiveLevel.NEUTRAL
+		elif delta_pct < OverfitThreshold.CRITICAL:  # 0% to 3% (mild overfitting)
+			level = AdaptiveLevel.WARNING
+		else:  # >= 3% (severe overfitting)
+			level = AdaptiveLevel.CRITICAL
+
+		self._last_level = level
+
+		# Log progress with delta vs baseline
+		remaining = cfg.patience - self._patience_counter
+		display = self._LEVEL_DISPLAY[level.name]
+		self._log(
+			f"[{self._method_name}] Overfit check (top-{top_k_count} vs baseline): "
+			f"mean={current_full_mean:.4f}, baseline={baseline:.4f}, Δ={delta_pct:+.2f}%, "
+			f"patience={remaining}/{cfg.patience} {display}"
+		)
+
+		# Check if patience exhausted
+		if self._patience_counter >= cfg.patience:
+			total_iters = self._patience_counter * cfg.check_interval
+			self._log(
+				f"[{self._method_name}] Early stop: overfitting delta > {cfg.min_improvement_pct}% "
+				f"for {total_iters} iterations"
+			)
+			return True
+
+		return False
+
 	def reset_trend(self, top_k_fitness: list[float]) -> None:
 		"""
 		Reset tracker for trend-based early stopping.

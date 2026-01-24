@@ -582,19 +582,30 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		initial_genome = best_genome.clone()
 		initial_fitness = best_fitness
 
-		# Early stopping with trend-based comparison (top-20% elite fitness)
-		from wnn.ram.strategies.connectivity.generic_strategies import EarlyStoppingConfig
+		# Early stopping with baseline-based overfitting detection
+		# Compares top-K elites on FULL data vs baseline (init full evaluation)
+		from wnn.ram.strategies.connectivity.generic_strategies import EarlyStoppingConfig, AdaptiveScaler
 		early_stop_config = EarlyStoppingConfig(
 			patience=cfg.patience,
 			check_interval=cfg.check_interval,
 			min_improvement_pct=cfg.min_improvement_pct,
 		)
 		early_stop = EarlyStoppingTracker(early_stop_config, self._log.debug, self.name)
-		# Use trend-based early stopping: track top-20% elite fitness values
-		# fitness_score is CE for CE mode, harmonic rank for HARMONIC_RANK mode
-		elite_count_for_trend = max(1, int(cfg.elitism_pct * 2 * cfg.population_size))
-		elite_fitness = [score for _, score in ranked[:elite_count_for_trend]]
-		early_stop.reset_trend(elite_fitness)
+
+		# Adaptive scaling for parameter adjustment based on health level
+		adaptive_scaler = AdaptiveScaler(
+			base_population=cfg.population_size,
+			base_mutation=cfg.mutation_rate,
+			name=self.name,
+		)
+
+		# Evaluate top-K elites on FULL data for baseline
+		elite_count_for_overfit = max(1, int(cfg.elitism_pct * 2 * cfg.population_size))
+		elite_genomes_for_baseline = [g for g, _ in ranked[:elite_count_for_overfit]]
+		baseline_results = evaluator.evaluate_batch_full(elite_genomes_for_baseline)
+		baseline_mean = sum(ce for ce, _ in baseline_results) / len(baseline_results)
+		early_stop.reset_baseline(baseline_mean)
+		self._log.info(f"[{self.name}] Baseline mean (top-{elite_count_for_overfit} on full data): {baseline_mean:.4f}")
 
 		# Track threshold for logging
 		prev_threshold: Optional[float] = None
@@ -762,12 +773,23 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			self._log.info(f"[{self.name}] Gen {generation+1:03d}/{cfg.generations}: "
 						   f"best={best_fitness:.4f}, avg={avg_fitness:.4f} ({gen_elapsed:.1f}s)")
 
-			# Early stopping check using trend (top-20% elite fitness)
-			# fitness_score from ranked is CE for CE mode, harmonic rank for HARMONIC_RANK mode
-			elite_fitness = [score for _, score in ranked[:elite_count_for_trend]]
-			if early_stop.check_trend(generation, elite_fitness):
-				self._log.info(f"[{self.name}] Early stopping at generation {generation + 1}")
-				break
+			# Overfitting check: evaluate top-K elites on FULL data vs baseline
+			# Only at check_interval to avoid expensive full evaluations every generation
+			if (generation + 1) % cfg.check_interval == 0:
+				elite_genomes_for_check = [g for g, _ in ranked[:elite_count_for_overfit]]
+				full_results = evaluator.evaluate_batch_full(elite_genomes_for_check)
+				current_full_mean = sum(ce for ce, _ in full_results) / len(full_results)
+
+				if early_stop.check_overfit(generation, current_full_mean, elite_count_for_overfit):
+					self._log.info(f"[{self.name}] Early stopping at generation {generation + 1}")
+					break
+
+				# Adaptive scaling based on health level
+				adaptive_scaler.update(early_stop.current_level)
+				if adaptive_scaler.level_changed:
+					adaptive_scaler.log_transition(self._log.info)
+					cfg.population_size = adaptive_scaler.population
+					cfg.mutation_rate = adaptive_scaler.mutation_rate
 
 		# Final evaluation for accuracy
 		final_ce, final_acc = evaluator.evaluate_batch(
@@ -1144,13 +1166,29 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 
 		history = [(0, best_fitness)]
 
-		# Early stopping with trend-based comparison (top-20% neighbors)
+		# Early stopping with baseline-based overfitting detection
 		early_stop_config = EarlyStoppingConfig(
 			patience=cfg.patience,
 			check_interval=cfg.check_interval,
 			min_improvement_pct=cfg.min_improvement_pct,
 		)
 		early_stopper = EarlyStoppingTracker(early_stop_config, self._log, self.name)
+
+		# Adaptive scaling for parameter adjustment based on health level
+		from wnn.ram.strategies.connectivity.generic_strategies import AdaptiveScaler
+		adaptive_scaler = AdaptiveScaler(
+			base_population=cfg.neighbors_per_iter,  # TS uses neighbors as "population"
+			base_mutation=cfg.mutation_rate,
+			name=self.name,
+		)
+
+		# Evaluate initial genome(s) on FULL data for baseline
+		elite_count_for_overfit = max(1, min(10, len(all_neighbors)))
+		elite_genomes_for_baseline = [g for g, _, _ in all_neighbors[:elite_count_for_overfit]]
+		baseline_results = evaluator.evaluate_batch_full(elite_genomes_for_baseline)
+		baseline_mean = sum(ce for ce, _ in baseline_results) / len(baseline_results)
+		early_stopper.reset_baseline(baseline_mean)
+		self._log.info(f"[{self.name}] Baseline mean (top-{elite_count_for_overfit} on full data): {baseline_mean:.4f}")
 
 		# Helper to compute top-K% fitness values for early stopping
 		# all_neighbors is capped at 50, so harmonic ranks are always on consistent scale
@@ -1383,11 +1421,23 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 
 			history.append((iteration + 1, best_fitness))
 
-			# Early stopping check using trend (top-20% neighbors)
-			elite_fitness = get_top_k_fitness(all_neighbors)
-			if early_stopper.check_trend(iteration, elite_fitness):
-				self._log.info(f"[{self.name}] Early stopping at iteration {iteration + 1}")
-				break
+			# Overfitting check: evaluate top-K neighbors on FULL data vs baseline
+			# Only at check_interval to avoid expensive full evaluations every iteration
+			if (iteration + 1) % cfg.check_interval == 0:
+				top_k_genomes = [g for g, _, _ in all_neighbors[:elite_count_for_overfit]]
+				full_results = evaluator.evaluate_batch_full(top_k_genomes)
+				current_full_mean = sum(ce for ce, _ in full_results) / len(full_results)
+
+				if early_stopper.check_overfit(iteration, current_full_mean, elite_count_for_overfit):
+					self._log.info(f"[{self.name}] Early stopping at iteration {iteration + 1}")
+					break
+
+				# Adaptive scaling based on health level
+				adaptive_scaler.update(early_stopper.current_level)
+				if adaptive_scaler.level_changed:
+					adaptive_scaler.log_transition(self._log.info)
+					cfg.neighbors_per_iter = adaptive_scaler.population
+					cfg.mutation_rate = adaptive_scaler.mutation_rate
 
 		# Build final population
 		cache_size = cfg.total_neighbors_size or cfg.neighbors_per_iter
