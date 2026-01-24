@@ -870,8 +870,8 @@ class GAConfig:
 	fitness_weight_ce: float = 1.0
 	fitness_weight_acc: float = 1.0
 	# Early stopping (all configurable via parameters)
-	patience: int = 10             # Checks without improvement before stopping (increased for long runs)
-	check_interval: int = 5        # Check every N generations
+	patience: int = 5              # Checks without improvement before stopping
+	check_interval: int = 10       # Check every N generations (also controls full eval frequency)
 	min_improvement_pct: float = 0.05  # GA needs diversity, lower threshold (0.05%)
 	# Fresh population: if True, ignore initial_population and generate fresh random genomes
 	# Use for first GA phase to maximize diversity instead of mutating from 1 seed
@@ -905,8 +905,8 @@ class TSConfig:
 	fitness_weight_ce: float = 1.0
 	fitness_weight_acc: float = 1.0
 	# Early stopping (all configurable via parameters)
-	patience: int = 10             # Checks without improvement before stopping (increased for long runs)
-	check_interval: int = 5        # Check every N iterations
+	patience: int = 5              # Checks without improvement before stopping
+	check_interval: int = 10       # Check every N iterations (also controls full eval frequency)
 	min_improvement_pct: float = 0.5  # TS is focused, higher threshold (0.5%)
 
 
