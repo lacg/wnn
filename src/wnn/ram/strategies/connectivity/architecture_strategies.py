@@ -773,14 +773,14 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			self._log.info(f"[{self.name}] Gen {generation+1:03d}/{cfg.generations}: "
 						   f"best={best_fitness:.4f}, avg={avg_fitness:.4f} ({gen_elapsed:.1f}s)")
 
-			# Overfitting check: evaluate top-K elites on FULL data vs baseline
+			# Health check: evaluate top-K elites on FULL data vs baseline + stagnation
 			# Only at check_interval to avoid expensive full evaluations every generation
 			if (generation + 1) % cfg.check_interval == 0:
 				elite_genomes_for_check = [g for g, _ in ranked[:elite_count_for_overfit]]
 				full_results = evaluator.evaluate_batch_full(elite_genomes_for_check)
 				current_fitness = [ce for ce, _ in full_results]
 
-				if early_stop.check_overfit(generation, current_fitness):
+				if early_stop.check_health(generation, current_fitness):
 					self._log.info(f"[{self.name}] Early stopping at generation {generation + 1}")
 					break
 
@@ -1421,14 +1421,14 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 
 			history.append((iteration + 1, best_fitness))
 
-			# Overfitting check: evaluate top-K neighbors on FULL data vs baseline
+			# Health check: evaluate top-K neighbors on FULL data vs baseline + stagnation
 			# Only at check_interval to avoid expensive full evaluations every iteration
 			if (iteration + 1) % cfg.check_interval == 0:
 				top_k_genomes = [g for g, _, _ in all_neighbors[:elite_count_for_overfit]]
 				full_results = evaluator.evaluate_batch_full(top_k_genomes)
 				current_fitness = [ce for ce, _ in full_results]
 
-				if early_stopper.check_overfit(iteration, current_fitness):
+				if early_stopper.check_health(iteration, current_fitness):
 					self._log.info(f"[{self.name}] Early stopping at iteration {iteration + 1}")
 					break
 

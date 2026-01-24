@@ -402,7 +402,7 @@ class EarlyStoppingTracker:
 
 	def reset_baseline(self, initial_fitness: list[float]) -> None:
 		"""
-		Reset tracker for baseline-based overfitting detection.
+		Reset tracker for baseline-based overfitting and stagnation detection.
 
 		Args:
 			initial_fitness: Fitness values of top-K elites on FULL validation at init
@@ -411,6 +411,8 @@ class EarlyStoppingTracker:
 		self._patience_counter = 0
 		self._overfit_detector = OverfitDetector(initial_fitness)
 		self._last_level = AdaptiveLevel.NEUTRAL
+		# Initialize prev_health_mean for stagnation detection in check_health()
+		self._prev_health_mean = self._overfit_detector.baseline_mean
 
 	def check_overfit(self, iteration: int, current_fitness: list[float]) -> bool:
 		"""
@@ -480,6 +482,134 @@ class EarlyStoppingTracker:
 			total_iters = self._patience_counter * cfg.check_interval
 			self._log(
 				f"[{self._method_name}] Early stop: overfitting delta > {cfg.min_improvement_pct}% "
+				f"for {total_iters} iterations"
+			)
+			return True
+
+		return False
+
+	def check_health(self, iteration: int, current_fitness: list[float]) -> bool:
+		"""
+		Unified health check combining overfitting detection AND stagnation detection.
+
+		This method checks TWO conditions:
+		1. Overfitting: delta vs baseline (is the model getting worse on full data?)
+		2. Stagnation: improvement vs previous check (is the model still improving?)
+
+		Both issues consume from the SAME patience counter. The status is determined
+		by the WORST of the two conditions.
+
+		Delta = (current_mean - baseline_mean) / baseline_mean × 100
+		- Positive delta = overfitting (worse on full data than baseline)
+		- Negative delta = generalizing (better on full data than baseline)
+
+		Improvement = (prev_mean - current_mean) / prev_mean × 100
+		- Positive improvement = getting better
+		- Negative improvement = getting worse (stagnating/regressing)
+
+		Args:
+			iteration: Current iteration (0-indexed)
+			current_fitness: Fitness values of top-K elites on FULL validation NOW
+
+		Returns:
+			True if should stop, False otherwise
+		"""
+		from wnn.ram.strategies.connectivity.generic_strategies import AdaptiveLevel
+		from wnn.core.thresholds import OverfitThreshold
+		cfg = self._config
+
+		# Only check at specified intervals (1-indexed iteration)
+		if (iteration + 1) % cfg.check_interval != 0:
+			return False
+
+		# Get detector (for baseline delta)
+		detector = getattr(self, '_overfit_detector', None)
+		if detector is None:
+			return False
+
+		# Compute current mean
+		if not current_fitness:
+			return False
+		current_mean = sum(current_fitness) / len(current_fitness)
+
+		# === 1. Overfitting check: delta vs baseline ===
+		delta_pct, _ = detector.tick_with_mean(current_fitness)
+
+		# === 2. Stagnation check: improvement vs previous check ===
+		prev_mean = getattr(self, '_prev_health_mean', None)
+		if prev_mean is not None and prev_mean > 0:
+			improvement_pct = (prev_mean - current_mean) / prev_mean * 100
+		else:
+			improvement_pct = 0.0
+
+		# Update prev_mean for next check
+		self._prev_health_mean = current_mean
+
+		# === Determine if there's a problem ===
+		# Problem 1: Overfitting (delta too high)
+		overfit_problem = delta_pct > cfg.min_improvement_pct
+
+		# Problem 2: Stagnation (not improving enough)
+		stagnation_problem = improvement_pct < cfg.min_improvement_pct
+
+		# === Update patience ===
+		if overfit_problem or stagnation_problem:
+			# Either problem decreases patience
+			self._patience_counter += 1
+		else:
+			# Both OK, recover patience
+			self._patience_counter = max(0, self._patience_counter - 1)
+
+		# === Determine level: use the WORST of the two ===
+		# Convert improvement to delta convention (negative improvement = positive delta)
+		stagnation_delta = -improvement_pct
+
+		# Use the worst (highest) delta to determine level
+		worst_delta = max(delta_pct, stagnation_delta)
+
+		if worst_delta < OverfitThreshold.HEALTHY:  # < -1% (improving a lot)
+			level = AdaptiveLevel.HEALTHY
+		elif worst_delta < OverfitThreshold.WARNING:  # -1% to 0% (stable/slight improve)
+			level = AdaptiveLevel.NEUTRAL
+		elif worst_delta < OverfitThreshold.CRITICAL:  # 0% to 3% (mild issues)
+			level = AdaptiveLevel.WARNING
+		else:  # >= 3% (severe issues)
+			level = AdaptiveLevel.CRITICAL
+
+		self._last_level = level
+
+		# === Log progress with BOTH metrics transparently ===
+		remaining = cfg.patience - self._patience_counter
+		display = self._LEVEL_DISPLAY[level.name]
+		top_k_count = detector.k
+		baseline = detector.baseline_mean
+
+		# Build problem indicators
+		problems = []
+		if overfit_problem:
+			problems.append("OVERFIT")
+		if stagnation_problem:
+			problems.append("STAGNATE")
+		problem_str = f" [{'+'.join(problems)}]" if problems else ""
+
+		self._log(
+			f"[{self._method_name}] Health check (top-{top_k_count}): "
+			f"mean={current_mean:.4f}, baseline={baseline:.4f}, "
+			f"Δbase={delta_pct:+.2f}%, Δprev={improvement_pct:+.2f}%, "
+			f"patience={remaining}/{cfg.patience} {display}{problem_str}"
+		)
+
+		# Check if patience exhausted
+		if self._patience_counter >= cfg.patience:
+			total_iters = self._patience_counter * cfg.check_interval
+			stop_reasons = []
+			if overfit_problem:
+				stop_reasons.append(f"overfitting (Δbase={delta_pct:+.2f}%)")
+			if stagnation_problem:
+				stop_reasons.append(f"stagnation (Δprev={improvement_pct:+.2f}%)")
+			reason_str = " and ".join(stop_reasons) if stop_reasons else "exhausted patience"
+			self._log(
+				f"[{self._method_name}] Early stop: {reason_str} "
 				f"for {total_iters} iterations"
 			)
 			return True
