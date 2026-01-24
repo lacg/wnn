@@ -128,8 +128,8 @@ def main():
 	parser.add_argument("--context", type=int, default=4, help="Context size")
 
 	# Optimization configuration
-	parser.add_argument("--ga-gens", type=int, default=100, help="GA generations per phase")
-	parser.add_argument("--ts-iters", type=int, default=200, help="TS iterations per phase")
+	parser.add_argument("--ga-gens", type=int, default=250, help="GA generations per phase")
+	parser.add_argument("--ts-iters", type=int, default=250, help="TS iterations per phase")
 	parser.add_argument("--population", type=int, default=50, help="GA population size")
 	parser.add_argument("--neighbors", type=int, default=50, help="TS neighbors per iteration")
 
