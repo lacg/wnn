@@ -45,7 +45,7 @@ static GROUP_EVALUATOR: RwLock<Option<Arc<crate::metal_ramlm::MetalGroupEvaluato
 
 /// Get or initialize the Metal evaluator (resettable, thread-safe)
 /// Returns an Arc that can be held across lock boundaries
-fn get_metal_evaluator() -> Option<Arc<crate::metal_ramlm::MetalRAMLMEvaluator>> {
+pub fn get_metal_evaluator() -> Option<Arc<crate::metal_ramlm::MetalRAMLMEvaluator>> {
     // Fast path: check if initialized
     {
         let guard = METAL_EVALUATOR.read().unwrap();
@@ -65,7 +65,7 @@ fn get_metal_evaluator() -> Option<Arc<crate::metal_ramlm::MetalRAMLMEvaluator>>
 }
 
 /// Get or initialize the sparse Metal evaluator (resettable, thread-safe)
-fn get_sparse_metal_evaluator() -> Option<Arc<crate::metal_ramlm::MetalSparseEvaluator>> {
+pub fn get_sparse_metal_evaluator() -> Option<Arc<crate::metal_ramlm::MetalSparseEvaluator>> {
     // Fast path: check if initialized
     {
         let guard = SPARSE_METAL_EVALUATOR.read().unwrap();

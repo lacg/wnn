@@ -48,8 +48,7 @@ use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, OnceLock};
 use std::thread::{self, JoinHandle};
 
-use crate::adaptive::{evaluate_genome_hybrid, GenomeExport};
-use crate::metal_ramlm::{MetalRAMLMEvaluator, MetalSparseEvaluator};
+use crate::adaptive::{evaluate_genome_hybrid, GenomeExport, get_metal_evaluator, get_sparse_metal_evaluator};
 
 // ============================================================================
 // Configuration
@@ -164,10 +163,6 @@ impl EvalWorkerPool {
 
     /// Main worker loop - processes requests until channel closes
     fn worker_loop(request_rx: Receiver<EvalBatchRequest>) {
-        // Initialize GPU evaluators once (they're singletons, but access here for thread locality)
-        let metal = Self::get_metal_evaluator();
-        let sparse_metal = Self::get_sparse_metal_evaluator();
-
         // Detailed timing (enabled via WNN_EVAL_TIMING env var)
         let timing_enabled = std::env::var("WNN_EVAL_TIMING").is_ok();
 
@@ -175,6 +170,13 @@ impl EvalWorkerPool {
         while let Ok(request) = request_rx.recv() {
             let eval_data = &request.eval_data;
             let num_genomes = request.exports.len();
+
+            // Fetch evaluators each batch (allows reset_metal_evaluators to take effect)
+            // These are Arc references to the shared evaluators in adaptive.rs
+            let metal_arc = get_metal_evaluator();
+            let sparse_metal_arc = get_sparse_metal_evaluator();
+            let metal = metal_arc.as_ref().map(|a| a.as_ref());
+            let sparse_metal = sparse_metal_arc.as_ref().map(|a| a.as_ref());
 
             let batch_start = std::time::Instant::now();
 
@@ -211,22 +213,6 @@ impl EvalWorkerPool {
             // Send results back (ignore error if receiver dropped)
             let _ = request.response_tx.send(EvalBatchResponse { results });
         }
-    }
-
-    /// Get Metal evaluator for dense groups
-    fn get_metal_evaluator() -> Option<&'static MetalRAMLMEvaluator> {
-        static METAL: OnceLock<Option<MetalRAMLMEvaluator>> = OnceLock::new();
-        METAL
-            .get_or_init(|| MetalRAMLMEvaluator::new().ok())
-            .as_ref()
-    }
-
-    /// Get Metal sparse evaluator for sparse groups
-    fn get_sparse_metal_evaluator() -> Option<&'static MetalSparseEvaluator> {
-        static SPARSE_METAL: OnceLock<Option<MetalSparseEvaluator>> = OnceLock::new();
-        SPARSE_METAL
-            .get_or_init(|| MetalSparseEvaluator::new().ok())
-            .as_ref()
     }
 
     /// Submit a batch for evaluation and wait for results
