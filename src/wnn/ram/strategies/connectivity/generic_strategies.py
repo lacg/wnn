@@ -34,6 +34,89 @@ TRACE = 5
 logging.addLevelName(TRACE, "TRACE")
 
 
+# =============================================================================
+# Overfitting Detection
+# =============================================================================
+
+class OverfitDetector:
+	"""
+	Detects overfitting by comparing current performance against a fixed baseline.
+
+	The baseline is the mean fitness of top-K elites evaluated on FULL validation
+	data at initialization. Each tick compares current top-K on FULL validation
+	against this baseline.
+
+	Delta = (current_mean - baseline_mean) / baseline_mean × 100
+	- Positive delta = overfitting (worse on full validation than baseline)
+	- Negative delta = generalizing (better on full validation than baseline)
+
+	Usage:
+		# Initialize with top-K fitness values on FULL data
+		detector = OverfitDetector(initial_fitness_values)
+
+		# Each check interval, pass current top-K fitness on FULL data
+		delta = detector.tick(current_fitness_values)
+		# delta > 0 means overfitting, delta < 0 means improving
+	"""
+
+	def __init__(self, initial_fitness: list[float]):
+		"""
+		Initialize with baseline fitness values.
+
+		Args:
+			initial_fitness: Fitness values of top-K elites on FULL validation at init
+		"""
+		if not initial_fitness:
+			raise ValueError("initial_fitness cannot be empty")
+		self._baseline_mean = sum(initial_fitness) / len(initial_fitness)
+		self._k = len(initial_fitness)
+
+	@property
+	def baseline_mean(self) -> float:
+		"""The fixed baseline mean from initialization."""
+		return self._baseline_mean
+
+	@property
+	def k(self) -> int:
+		"""Number of elites used for baseline."""
+		return self._k
+
+	def tick(self, current_fitness: list[float]) -> float:
+		"""
+		Compute delta against baseline.
+
+		Args:
+			current_fitness: Fitness values of top-K elites on FULL validation NOW
+
+		Returns:
+			Delta percentage: positive = overfitting, negative = improving
+		"""
+		if not current_fitness:
+			return 0.0
+		current_mean = sum(current_fitness) / len(current_fitness)
+		if self._baseline_mean == 0:
+			return 0.0
+		return (current_mean - self._baseline_mean) / self._baseline_mean * 100
+
+	def tick_with_mean(self, current_fitness: list[float]) -> tuple[float, float]:
+		"""
+		Compute delta and return both delta and current mean.
+
+		Args:
+			current_fitness: Fitness values of top-K elites on FULL validation NOW
+
+		Returns:
+			Tuple of (delta_percentage, current_mean)
+		"""
+		if not current_fitness:
+			return 0.0, 0.0
+		current_mean = sum(current_fitness) / len(current_fitness)
+		if self._baseline_mean == 0:
+			return 0.0, current_mean
+		delta = (current_mean - self._baseline_mean) / self._baseline_mean * 100
+		return delta, current_mean
+
+
 class OptimizationLogger:
 	"""
 	Logger wrapper with TRACE, DEBUG, INFO, ERROR levels.
@@ -317,34 +400,30 @@ class EarlyStoppingTracker:
 		"""Return the current AdaptiveLevel enum."""
 		return self._last_level
 
-	def reset_baseline(self, baseline_mean: float) -> None:
+	def reset_baseline(self, initial_fitness: list[float]) -> None:
 		"""
 		Reset tracker for baseline-based overfitting detection.
 
-		The baseline is the mean fitness of top-K elites evaluated on the FULL
-		validation set at initialization. All subsequent checks compare against
-		this fixed baseline.
-
 		Args:
-			baseline_mean: Mean of top-K elites on full validation at init
+			initial_fitness: Fitness values of top-K elites on FULL validation at init
 		"""
 		from wnn.ram.strategies.connectivity.generic_strategies import AdaptiveLevel
 		self._patience_counter = 0
-		self._baseline_full = baseline_mean
+		self._overfit_detector = OverfitDetector(initial_fitness)
 		self._last_level = AdaptiveLevel.NEUTRAL
 
-	def check_overfit(self, iteration: int, current_full_mean: float, top_k_count: int = 10) -> bool:
+	def check_overfit(self, iteration: int, current_fitness: list[float]) -> bool:
 		"""
 		Check overfitting by comparing current elites on FULL data vs baseline.
 
-		Delta = (current_full_mean - baseline_full_mean) / baseline_full_mean × 100
+		Uses OverfitDetector to compute delta:
+		Delta = (current_mean - baseline_mean) / baseline_mean × 100
 		- Positive delta = overfitting (worse on full data than baseline)
 		- Negative delta = generalizing (better on full data than baseline)
 
 		Args:
 			iteration: Current iteration (0-indexed)
-			current_full_mean: Mean of top-K elites on FULL validation NOW
-			top_k_count: Number of elites used for logging
+			current_fitness: Fitness values of top-K elites on FULL validation NOW
 
 		Returns:
 			True if should stop, False otherwise
@@ -357,16 +436,15 @@ class EarlyStoppingTracker:
 		if (iteration + 1) % cfg.check_interval != 0:
 			return False
 
-		# Compute delta vs fixed baseline
-		baseline = getattr(self, '_baseline_full', None)
-		if baseline is None or baseline == 0:
+		# Get detector
+		detector = getattr(self, '_overfit_detector', None)
+		if detector is None:
 			return False
 
-		# Delta: positive = overfitting (current worse than baseline)
-		delta_pct = (current_full_mean - baseline) / baseline * 100
+		# Compute delta using OverfitDetector
+		delta_pct, current_mean = detector.tick_with_mean(current_fitness)
 
 		# Check if within acceptable range (we want delta to stay low/negative)
-		# Use negative of min_improvement_pct as acceptable regression threshold
 		if delta_pct <= cfg.min_improvement_pct:
 			# Within acceptable range, recover patience
 			self._patience_counter = max(0, self._patience_counter - 1)
@@ -374,8 +452,7 @@ class EarlyStoppingTracker:
 			# Overfitting detected
 			self._patience_counter += 1
 
-		# Determine level using OverfitThreshold (already in correct convention)
-		# delta_pct > 0 = overfitting, matches OverfitThreshold convention
+		# Determine level using OverfitThreshold
 		if delta_pct < OverfitThreshold.HEALTHY:  # < -1% (improving a lot)
 			level = AdaptiveLevel.HEALTHY
 		elif delta_pct < OverfitThreshold.WARNING:  # -1% to 0% (stable/slight improve)
@@ -390,9 +467,11 @@ class EarlyStoppingTracker:
 		# Log progress with delta vs baseline
 		remaining = cfg.patience - self._patience_counter
 		display = self._LEVEL_DISPLAY[level.name]
+		top_k_count = detector.k
+		baseline = detector.baseline_mean
 		self._log(
 			f"[{self._method_name}] Overfit check (top-{top_k_count} vs baseline): "
-			f"mean={current_full_mean:.4f}, baseline={baseline:.4f}, Δ={delta_pct:+.2f}%, "
+			f"mean={current_mean:.4f}, baseline={baseline:.4f}, Δ={delta_pct:+.2f}%, "
 			f"patience={remaining}/{cfg.patience} {display}"
 		)
 

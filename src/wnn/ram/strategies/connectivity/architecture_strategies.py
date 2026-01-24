@@ -599,13 +599,13 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			name=self.name,
 		)
 
-		# Evaluate top-K elites on FULL data for baseline
+		# Evaluate top-K elites on FULL data for baseline (used by OverfitDetector)
 		elite_count_for_overfit = max(1, int(cfg.elitism_pct * 2 * cfg.population_size))
 		elite_genomes_for_baseline = [g for g, _ in ranked[:elite_count_for_overfit]]
 		baseline_results = evaluator.evaluate_batch_full(elite_genomes_for_baseline)
-		baseline_mean = sum(ce for ce, _ in baseline_results) / len(baseline_results)
-		early_stop.reset_baseline(baseline_mean)
-		self._log.info(f"[{self.name}] Baseline mean (top-{elite_count_for_overfit} on full data): {baseline_mean:.4f}")
+		baseline_fitness = [ce for ce, _ in baseline_results]
+		early_stop.reset_baseline(baseline_fitness)
+		self._log.info(f"[{self.name}] Baseline mean (top-{elite_count_for_overfit} on full data): {sum(baseline_fitness)/len(baseline_fitness):.4f}")
 
 		# Track threshold for logging
 		prev_threshold: Optional[float] = None
@@ -778,9 +778,9 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			if (generation + 1) % cfg.check_interval == 0:
 				elite_genomes_for_check = [g for g, _ in ranked[:elite_count_for_overfit]]
 				full_results = evaluator.evaluate_batch_full(elite_genomes_for_check)
-				current_full_mean = sum(ce for ce, _ in full_results) / len(full_results)
+				current_fitness = [ce for ce, _ in full_results]
 
-				if early_stop.check_overfit(generation, current_full_mean, elite_count_for_overfit):
+				if early_stop.check_overfit(generation, current_fitness):
 					self._log.info(f"[{self.name}] Early stopping at generation {generation + 1}")
 					break
 
@@ -1182,13 +1182,13 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 			name=self.name,
 		)
 
-		# Evaluate initial genome(s) on FULL data for baseline
+		# Evaluate initial genome(s) on FULL data for baseline (used by OverfitDetector)
 		elite_count_for_overfit = max(1, min(10, len(all_neighbors)))
 		elite_genomes_for_baseline = [g for g, _, _ in all_neighbors[:elite_count_for_overfit]]
 		baseline_results = evaluator.evaluate_batch_full(elite_genomes_for_baseline)
-		baseline_mean = sum(ce for ce, _ in baseline_results) / len(baseline_results)
-		early_stopper.reset_baseline(baseline_mean)
-		self._log.info(f"[{self.name}] Baseline mean (top-{elite_count_for_overfit} on full data): {baseline_mean:.4f}")
+		baseline_fitness = [ce for ce, _ in baseline_results]
+		early_stopper.reset_baseline(baseline_fitness)
+		self._log.info(f"[{self.name}] Baseline mean (top-{elite_count_for_overfit} on full data): {sum(baseline_fitness)/len(baseline_fitness):.4f}")
 
 		# Helper to compute top-K% fitness values for early stopping
 		# all_neighbors is capped at 50, so harmonic ranks are always on consistent scale
@@ -1426,9 +1426,9 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 			if (iteration + 1) % cfg.check_interval == 0:
 				top_k_genomes = [g for g, _, _ in all_neighbors[:elite_count_for_overfit]]
 				full_results = evaluator.evaluate_batch_full(top_k_genomes)
-				current_full_mean = sum(ce for ce, _ in full_results) / len(full_results)
+				current_fitness = [ce for ce, _ in full_results]
 
-				if early_stopper.check_overfit(iteration, current_full_mean, elite_count_for_overfit):
+				if early_stopper.check_overfit(iteration, current_fitness):
 					self._log.info(f"[{self.name}] Early stopping at iteration {iteration + 1}")
 					break
 
