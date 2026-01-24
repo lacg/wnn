@@ -1334,6 +1334,28 @@ impl MetalGroupEvaluator {
         )
     }
 
+    /// Zero an existing scores buffer (much faster than creating a new one)
+    /// Uses direct memory write since StorageModeShared buffers are CPU-accessible
+    pub fn zero_scores_buffer(&self, buffer: &Buffer, num_examples: usize, num_clusters: usize) {
+        let size = num_examples * num_clusters;
+        let ptr = buffer.contents() as *mut f32;
+        // Safety: buffer was created with StorageModeShared, size matches
+        unsafe {
+            std::ptr::write_bytes(ptr, 0, size);
+        }
+    }
+
+    /// Update an existing input buffer with new data (much faster than creating a new one)
+    pub fn update_input_buffer(&self, buffer: &Buffer, input_bits: &[bool]) {
+        let ptr = buffer.contents() as *mut u8;
+        // Safety: buffer was created with StorageModeShared, size matches
+        unsafe {
+            for (i, &bit) in input_bits.iter().enumerate() {
+                *ptr.add(i) = bit as u8;
+            }
+        }
+    }
+
     /// Create input bits buffer (shared across all group evaluations)
     pub fn create_input_buffer(&self, input_bits: &[bool]) -> Buffer {
         let input_u8: Vec<u8> = input_bits.iter().map(|&b| b as u8).collect();

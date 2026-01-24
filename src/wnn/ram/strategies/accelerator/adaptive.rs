@@ -17,6 +17,7 @@
 //! - Hybrid approach: Metal for dense, CPU for sparse
 
 use dashmap::DashMap;
+use metal;
 use rayon::prelude::*;
 use rustc_hash::FxHasher;
 use std::collections::HashMap;
@@ -45,7 +46,13 @@ static GROUP_EVALUATOR: RwLock<Option<Arc<crate::metal_ramlm::MetalGroupEvaluato
 
 /// Get or initialize the Metal evaluator (resettable, thread-safe)
 /// Returns an Arc that can be held across lock boundaries
+/// Set WNN_NO_METAL=1 to disable Metal and use CPU-only evaluation (for diagnostics)
 pub fn get_metal_evaluator() -> Option<Arc<crate::metal_ramlm::MetalRAMLMEvaluator>> {
+    // Check for Metal disable flag (for diagnostics)
+    if std::env::var("WNN_NO_METAL").is_ok() {
+        return None;
+    }
+
     // Fast path: check if initialized
     {
         let guard = METAL_EVALUATOR.read().unwrap();
@@ -65,7 +72,13 @@ pub fn get_metal_evaluator() -> Option<Arc<crate::metal_ramlm::MetalRAMLMEvaluat
 }
 
 /// Get or initialize the sparse Metal evaluator (resettable, thread-safe)
+/// Set WNN_NO_METAL=1 to disable Metal and use CPU-only evaluation (for diagnostics)
 pub fn get_sparse_metal_evaluator() -> Option<Arc<crate::metal_ramlm::MetalSparseEvaluator>> {
+    // Check for Metal disable flag (for diagnostics)
+    if std::env::var("WNN_NO_METAL").is_ok() {
+        return None;
+    }
+
     // Fast path: check if initialized
     {
         let guard = SPARSE_METAL_EVALUATOR.read().unwrap();
@@ -85,7 +98,13 @@ pub fn get_sparse_metal_evaluator() -> Option<Arc<crate::metal_ramlm::MetalSpars
 }
 
 /// Get or initialize the group evaluator (resettable, thread-safe)
+/// Set WNN_NO_METAL=1 to disable Metal and use CPU-only evaluation (for diagnostics)
 fn get_group_evaluator() -> Option<Arc<crate::metal_ramlm::MetalGroupEvaluator>> {
+    // Check for Metal disable flag (for diagnostics)
+    if std::env::var("WNN_NO_METAL").is_ok() {
+        return None;
+    }
+
     // Fast path: check if initialized
     {
         let guard = GROUP_EVALUATOR.read().unwrap();
@@ -1569,6 +1588,13 @@ fn export_genome_for_gpu(
     }
 }
 
+/// Thread-local cache for GPU buffers to avoid expensive 10GB buffer allocation per evaluation
+/// The scores buffer is ~10GB (50K examples × 50K clusters × 4 bytes), so reusing it is critical.
+thread_local! {
+    static CACHED_SCORES_BUFFER: std::cell::RefCell<Option<(usize, usize, metal::Buffer)>> = std::cell::RefCell::new(None);
+    static CACHED_INPUT_BUFFER: std::cell::RefCell<Option<(usize, metal::Buffer)>> = std::cell::RefCell::new(None);
+}
+
 /// Evaluate a genome export using CPU+GPU hybrid
 /// Returns (cross_entropy, accuracy)
 pub fn evaluate_genome_hybrid(
@@ -1655,11 +1681,38 @@ pub fn evaluate_genome_hybrid(
         if let Some(group_eval) = get_group_evaluator() {
             let gpu_start = std::time::Instant::now();
 
-            // Create shared GPU buffer for all scores
-            let scores_buffer = group_eval.create_scores_buffer(num_eval, num_clusters);
+            // Get or create cached scores buffer (avoids expensive 10GB allocation per eval)
+            // The scores buffer is zeroed efficiently using memset instead of creating a new Vec
+            let scores_buffer = CACHED_SCORES_BUFFER.with(|cache| {
+                let mut cache = cache.borrow_mut();
+                if let Some((cached_eval, cached_clusters, ref buffer)) = *cache {
+                    if cached_eval == num_eval && cached_clusters == num_clusters {
+                        // Reuse existing buffer - just zero it
+                        group_eval.zero_scores_buffer(buffer, num_eval, num_clusters);
+                        return buffer.clone();
+                    }
+                }
+                // Create new buffer and cache it
+                let buffer = group_eval.create_scores_buffer(num_eval, num_clusters);
+                *cache = Some((num_eval, num_clusters, buffer.clone()));
+                buffer
+            });
 
-            // Create input buffer (shared across all group evaluations)
-            let input_buffer = group_eval.create_input_buffer(eval_input_bits);
+            // Get or create cached input buffer (update contents efficiently)
+            let input_buffer = CACHED_INPUT_BUFFER.with(|cache| {
+                let mut cache = cache.borrow_mut();
+                if let Some((cached_size, ref buffer)) = *cache {
+                    if cached_size == eval_input_bits.len() {
+                        // Reuse existing buffer - update contents
+                        group_eval.update_input_buffer(buffer, eval_input_bits);
+                        return buffer.clone();
+                    }
+                }
+                // Create new buffer and cache it
+                let buffer = group_eval.create_input_buffer(eval_input_bits);
+                *cache = Some((eval_input_bits.len(), buffer.clone()));
+                buffer
+            });
 
             let mut dense_idx = 0usize;
             let mut sparse_idx = 0usize;
