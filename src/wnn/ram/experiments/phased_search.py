@@ -641,6 +641,18 @@ class PhasedSearchRunner:
 		if is_ga:
 			strategy_kwargs["generations"] = cfg.ga_generations
 			strategy_kwargs["population_size"] = cfg.population_size
+			strategy_kwargs["phase_name"] = phase_name
+			# Add checkpoint config if checkpoint_dir is set
+			if self.checkpoint_dir:
+				from wnn.ram.strategies.connectivity.architecture_strategies import CheckpointConfig
+				# Create per-phase checkpoint directory
+				phase_checkpoint_dir = self.checkpoint_dir / phase_name.replace(" ", "_").replace(":", "")
+				strategy_kwargs["checkpoint_config"] = CheckpointConfig(
+					enabled=True,
+					interval=50,  # Save every 50 generations
+					checkpoint_dir=phase_checkpoint_dir,
+					filename_prefix="ga_checkpoint",
+				)
 			# First GA phase (no population from previous phase): generate fresh population
 			if not initial_population:
 				if cfg.tier_config:

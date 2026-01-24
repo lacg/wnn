@@ -333,6 +333,9 @@ class OptimizerStrategyFactory:
 		batch_evaluator: Any = None,
 		# GA-specific: generate fresh random population instead of seeding from given genomes
 		fresh_population: bool = False,
+		# Checkpoint configuration for resumable optimization
+		checkpoint_config: Any = None,
+		phase_name: str = "Optimization",
 	):
 		"""
 		Create an optimizer strategy.
@@ -433,6 +436,8 @@ class OptimizerStrategyFactory:
 					logger=logger,
 					batch_evaluator=batch_evaluator,
 					fresh_population=fresh_population,
+					checkpoint_config=checkpoint_config,
+					phase_name=phase_name,
 				)
 
 			case OptimizerStrategyType.ARCHITECTURE_TS:
@@ -537,6 +542,8 @@ class OptimizerStrategyFactory:
 		logger: Any,
 		batch_evaluator: Any,
 		fresh_population: bool = False,
+		checkpoint_config: Any = None,
+		phase_name: str = "GA Optimization",
 	):
 		"""Create an ArchitectureGAStrategy."""
 		from wnn.ram.strategies.connectivity.architecture_strategies import (
@@ -573,7 +580,10 @@ class OptimizerStrategyFactory:
 		)
 		# Pass batch_evaluator as cached_evaluator if it supports search_offspring
 		cached_evaluator = batch_evaluator if batch_evaluator and hasattr(batch_evaluator, 'search_offspring') else None
-		return ArchitectureGAStrategy(arch_config, ga_config, seed, logger, batch_evaluator, cached_evaluator)
+		return ArchitectureGAStrategy(
+			arch_config, ga_config, seed, logger, batch_evaluator, cached_evaluator,
+			checkpoint_config=checkpoint_config, phase_name=phase_name
+		)
 
 	@staticmethod
 	def _create_architecture_ts(

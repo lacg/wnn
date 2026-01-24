@@ -8,10 +8,13 @@ Features:
 - Rust/Metal batch evaluation support for parallel genome evaluation
 - ProgressTracker integration for consistent logging
 - Population seeding between phases (GA → TS → GA → ...)
+- Checkpoint/resume support for long optimization runs
 """
 
+import json
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field, asdict
+from pathlib import Path
 from typing import Any, Callable, Optional, TYPE_CHECKING
 
 from wnn.progress import ProgressTracker
@@ -36,6 +39,250 @@ if TYPE_CHECKING:
 		RustParallelEvaluator,
 		AdaptiveClusterConfig,
 	)
+
+
+# =============================================================================
+# Checkpoint System for Resume Support
+# =============================================================================
+
+@dataclass
+class CheckpointConfig:
+	"""Configuration for checkpoint saving."""
+	enabled: bool = True
+	interval: int = 50                       # Save every N iterations
+	checkpoint_dir: Optional[Path] = None    # Directory for checkpoint files
+	filename_prefix: str = "checkpoint"      # Prefix for checkpoint filenames
+
+
+class CheckpointManager:
+	"""
+	Reusable checkpoint manager for optimization runs.
+
+	Usage:
+		# Create manager
+		manager = CheckpointManager(
+			config=CheckpointConfig(checkpoint_dir=Path("checkpoints")),
+			phase_name="Phase 1a: GA Neurons",
+			optimizer_type="GA",
+			total_iterations=1000,
+			logger=print,
+		)
+
+		# In optimization loop:
+		for iteration in range(1000):
+			# ... do optimization ...
+
+			# Save checkpoint every N iterations
+			manager.maybe_save(
+				iteration=iteration,
+				population=population,
+				best_genome=best_genome,
+				best_fitness=(ce, acc),
+				current_threshold=threshold,
+				extra_state={"patience": patience_counter},
+			)
+
+		# To resume:
+		if manager.has_checkpoint():
+			state = manager.load()
+			start_iteration = state['current_iteration'] + 1
+			population = state['population']
+	"""
+
+	def __init__(
+		self,
+		config: CheckpointConfig,
+		phase_name: str,
+		optimizer_type: str,
+		total_iterations: int,
+		logger: Optional[Callable[[str], None]] = None,
+	):
+		self._config = config
+		self._phase_name = phase_name
+		self._optimizer_type = optimizer_type
+		self._total_iterations = total_iterations
+		self._logger = logger or (lambda x: None)
+
+		# Create checkpoint directory if needed
+		if config.enabled and config.checkpoint_dir:
+			config.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+	@property
+	def checkpoint_path(self) -> Optional[Path]:
+		"""Path to the checkpoint file."""
+		if not self._config.enabled or not self._config.checkpoint_dir:
+			return None
+		return self._config.checkpoint_dir / f"{self._config.filename_prefix}_{self._optimizer_type.lower()}.json"
+
+	def has_checkpoint(self) -> bool:
+		"""Check if a checkpoint file exists."""
+		path = self.checkpoint_path
+		return path is not None and path.exists()
+
+	def should_save(self, iteration: int) -> bool:
+		"""Check if we should save at this iteration."""
+		if not self._config.enabled:
+			return False
+		# Save at interval (1-indexed), but also at iteration 0 for safety
+		return iteration > 0 and (iteration + 1) % self._config.interval == 0
+
+	def maybe_save(
+		self,
+		iteration: int,
+		population: list[tuple['ClusterGenome', float]],
+		best_genome: 'ClusterGenome',
+		best_fitness: tuple[float, float],
+		current_threshold: float,
+		config_dict: Optional[dict] = None,
+		extra_state: Optional[dict] = None,
+	) -> bool:
+		"""
+		Save checkpoint if at the right interval.
+
+		Args:
+			iteration: Current iteration (0-indexed)
+			population: List of (genome, ce_fitness) tuples
+			best_genome: Best genome found so far
+			best_fitness: (CE, accuracy) of best genome
+			current_threshold: Current threshold value
+			config_dict: Optional config as dict
+			extra_state: Optional extra state to save (patience, baseline, etc.)
+
+		Returns:
+			True if checkpoint was saved, False otherwise
+		"""
+		if not self.should_save(iteration):
+			return False
+
+		self.save(
+			iteration=iteration,
+			population=population,
+			best_genome=best_genome,
+			best_fitness=best_fitness,
+			current_threshold=current_threshold,
+			config_dict=config_dict,
+			extra_state=extra_state,
+		)
+		return True
+
+	def save(
+		self,
+		iteration: int,
+		population: list[tuple['ClusterGenome', float]],
+		best_genome: 'ClusterGenome',
+		best_fitness: tuple[float, float],
+		current_threshold: float,
+		config_dict: Optional[dict] = None,
+		extra_state: Optional[dict] = None,
+	) -> None:
+		"""Save checkpoint now (regardless of interval)."""
+		import datetime
+
+		path = self.checkpoint_path
+		if path is None:
+			return
+
+		# Serialize population
+		pop_data = []
+		for genome, ce in population:
+			gd = self._genome_to_dict(genome)
+			# Try to get accuracy from cached fitness
+			if hasattr(genome, '_cached_fitness') and genome._cached_fitness:
+				gd['fitness'] = list(genome._cached_fitness)
+			else:
+				gd['fitness'] = [ce, 0.0]
+			pop_data.append(gd)
+
+		# Build checkpoint data
+		data = {
+			'phase_name': self._phase_name,
+			'optimizer_type': self._optimizer_type,
+			'current_iteration': iteration,
+			'total_iterations': self._total_iterations,
+			'population': pop_data,
+			'best_genome': self._genome_to_dict(best_genome),
+			'best_fitness': list(best_fitness),
+			'current_threshold': current_threshold,
+			'config': config_dict or {},
+			'extra_state': extra_state or {},
+			'saved_at': datetime.datetime.now().isoformat(),
+		}
+
+		# Write atomically (temp file + rename)
+		temp_path = path.with_suffix('.tmp')
+		with open(temp_path, 'w') as f:
+			json.dump(data, f, indent=2)
+		temp_path.rename(path)
+
+		self._logger(f"[Checkpoint] Saved at iteration {iteration + 1}/{self._total_iterations}")
+
+	def load(self, genome_class: type) -> dict:
+		"""
+		Load checkpoint from file.
+
+		Args:
+			genome_class: The ClusterGenome class to use for reconstruction
+
+		Returns:
+			Dict with:
+				- current_iteration: int
+				- population: list of (genome, ce) tuples
+				- best_genome: ClusterGenome
+				- best_fitness: (CE, accuracy)
+				- current_threshold: float
+				- config: dict
+				- extra_state: dict
+		"""
+		path = self.checkpoint_path
+		if path is None or not path.exists():
+			raise FileNotFoundError(f"No checkpoint found at {path}")
+
+		with open(path, 'r') as f:
+			data = json.load(f)
+
+		# Reconstruct population
+		population = []
+		for gd in data['population']:
+			genome = self._dict_to_genome(gd, genome_class)
+			ce = gd['fitness'][0] if gd.get('fitness') else 0.0
+			# Restore cached fitness if available
+			if gd.get('fitness'):
+				genome._cached_fitness = tuple(gd['fitness'])
+			population.append((genome, ce))
+
+		# Reconstruct best genome
+		best_genome = self._dict_to_genome(data['best_genome'], genome_class)
+
+		self._logger(f"[Checkpoint] Loaded from iteration {data['current_iteration'] + 1}")
+
+		return {
+			'current_iteration': data['current_iteration'],
+			'population': population,
+			'best_genome': best_genome,
+			'best_fitness': tuple(data['best_fitness']),
+			'current_threshold': data['current_threshold'],
+			'config': data.get('config', {}),
+			'extra_state': data.get('extra_state', {}),
+			'saved_at': data.get('saved_at', ''),
+		}
+
+	@staticmethod
+	def _genome_to_dict(genome: 'ClusterGenome') -> dict:
+		"""Convert a ClusterGenome to a serializable dict."""
+		return {
+			'bits_per_cluster': list(genome.bits_per_cluster),
+			'neurons_per_cluster': list(genome.neurons_per_cluster),
+			'connections': list(genome.connections) if genome.connections else None,
+		}
+
+	@staticmethod
+	def _dict_to_genome(d: dict, genome_class: type) -> 'ClusterGenome':
+		"""Convert a dict back to a ClusterGenome."""
+		return genome_class(
+			bits_per_cluster=d['bits_per_cluster'],
+			neurons_per_cluster=d['neurons_per_cluster'],
+			connections=d.get('connections'),
+		)
 
 
 @dataclass
@@ -102,6 +349,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 	- Rust-based offspring search with threshold (when cached_evaluator provided)
 	- ProgressTracker for consistent logging with accuracy
 	- Population seeding from previous phases
+	- Checkpoint/resume support for long runs
 	"""
 
 	def __init__(
@@ -112,6 +360,8 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		logger: Optional[Callable[[str], None]] = None,
 		batch_evaluator: Optional['RustParallelEvaluator'] = None,
 		cached_evaluator: Optional[Any] = None,  # CachedEvaluator for Rust search_offspring
+		checkpoint_config: Optional[CheckpointConfig] = None,  # Checkpoint configuration
+		phase_name: str = "GA Optimization",  # Phase name for checkpoints
 	):
 		super().__init__(config=ga_config, seed=seed, logger=logger)
 		self._arch_config = arch_config
@@ -124,6 +374,8 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		else:
 			self._cached_evaluator = None
 		self._tracker: Optional[ProgressTracker] = None
+		self._checkpoint_config = checkpoint_config
+		self._phase_name = phase_name
 
 	@property
 	def name(self) -> str:
@@ -461,10 +713,28 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		from wnn.ram.strategies.connectivity.generic_strategies import (
 			OptimizerResult, EarlyStoppingConfig, EarlyStoppingTracker
 		)
+		from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 
 		cfg = self._config
 		arch_cfg = self._arch_config
 		evaluator = self._cached_evaluator
+
+		# Initialize checkpoint manager if configured
+		checkpoint_mgr: Optional[CheckpointManager] = None
+		resume_state: Optional[dict] = None
+		if self._checkpoint_config and self._checkpoint_config.enabled:
+			checkpoint_mgr = CheckpointManager(
+				config=self._checkpoint_config,
+				phase_name=self._phase_name,
+				optimizer_type="GA",
+				total_iterations=cfg.generations,
+				logger=self._log.info,
+			)
+			# Check for existing checkpoint to resume from
+			if checkpoint_mgr.has_checkpoint():
+				from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
+				resume_state = checkpoint_mgr.load(ClusterGenome)
+				self._log.info(f"[{self.name}] Resuming from checkpoint at generation {resume_state['current_iteration'] + 1}")
 
 		# Create fitness calculator for ranking
 		fitness_calculator = FitnessCalculatorFactory.create(
@@ -577,8 +847,9 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		# Convert back to (genome, ce) format
 		population = [(g, g._cached_fitness[0]) for g, _ in ranked]
 
-		# Track best
+		# Track best (CE and accuracy)
 		best_genome, best_fitness = population[0]
+		best_acc = best_genome._cached_fitness[1] if hasattr(best_genome, '_cached_fitness') and best_genome._cached_fitness else 0.0
 		initial_genome = best_genome.clone()
 		initial_fitness = best_fitness
 
@@ -611,7 +882,27 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		prev_threshold: Optional[float] = None
 		seed_offset = int(time.time() * 1000) % (2**16)
 
-		for generation in range(cfg.generations):
+		# Resume from checkpoint if available
+		start_generation = 0
+		if resume_state is not None:
+			# Restore state from checkpoint
+			population = resume_state['population']
+			best_genome = resume_state['best_genome']
+			best_fitness = resume_state['best_fitness'][0]  # CE
+			best_acc = resume_state['best_fitness'][1]  # Accuracy
+			start_generation = resume_state['current_iteration'] + 1
+			prev_threshold = resume_state['current_threshold']
+
+			# Restore early stopping state if available
+			extra = resume_state.get('extra_state', {})
+			if extra.get('baseline_mean') is not None:
+				early_stop._overfit_detector.baseline_mean = extra['baseline_mean']
+			if extra.get('patience_counter') is not None:
+				early_stop._patience_counter = extra['patience_counter']
+
+			self._log.info(f"[{self.name}] Resumed: best CE={best_fitness:.4f}, acc={best_acc:.4%}, population={len(population)}")
+
+		for generation in range(start_generation, cfg.generations):
 			gen_start = time.time()
 
 			# Periodic cleanup to prevent memory fragmentation and Metal driver state buildup
@@ -626,6 +917,20 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 						self._log.debug(f"[{self.name}] Reset Metal evaluators at generation {generation}")
 					except Exception:
 						pass  # Ignore if accelerator not available
+
+					# Save checkpoint every 50 generations
+					if checkpoint_mgr is not None:
+						checkpoint_mgr.maybe_save(
+							iteration=generation,
+							population=population,
+							best_genome=best_genome,
+							best_fitness=(best_fitness, best_acc),
+							current_threshold=current_threshold if prev_threshold else start_threshold,
+							extra_state={
+								'patience_counter': early_stop._patience_counter if hasattr(early_stop, '_patience_counter') else 0,
+								'baseline_mean': early_stop._overfit_detector.baseline_mean if hasattr(early_stop, '_overfit_detector') and early_stop._overfit_detector else None,
+							},
+						)
 
 			current_threshold = get_threshold(generation / cfg.generations)
 			# Only log if formatted values differ
@@ -780,6 +1085,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			if best_ce_candidate < best_fitness:
 				best_genome = best_genome_candidate
 				best_fitness = best_ce_candidate
+				best_acc = best_genome._cached_fitness[1] if hasattr(best_genome, '_cached_fitness') and best_genome._cached_fitness else 0.0
 
 			# Log generation summary with duration
 			gen_elapsed = time.time() - gen_start
