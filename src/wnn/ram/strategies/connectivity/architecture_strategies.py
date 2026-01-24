@@ -614,10 +614,18 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		for generation in range(cfg.generations):
 			gen_start = time.time()
 
-			# Periodic cleanup every 20 generations to prevent memory fragmentation
+			# Periodic cleanup to prevent memory fragmentation and Metal driver state buildup
 			if generation > 0 and generation % 20 == 0:
 				import gc
 				gc.collect()
+				# Reset Metal evaluators every 50 generations to prevent driver slowdown
+				if generation % 50 == 0:
+					try:
+						import ram_accelerator
+						ram_accelerator.reset_metal_evaluators()
+						self._log.debug(f"[{self.name}] Reset Metal evaluators at generation {generation}")
+					except Exception:
+						pass  # Ignore if accelerator not available
 
 			current_threshold = get_threshold(generation / cfg.generations)
 			# Only log if formatted values differ
@@ -1239,10 +1247,18 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		seed_offset = int(time.time() * 1000) % (2**16)
 
 		for iteration in range(cfg.iterations):
-			# Periodic cleanup every 20 iterations to prevent memory fragmentation
+			# Periodic cleanup to prevent memory fragmentation and Metal driver state buildup
 			if iteration > 0 and iteration % 20 == 0:
 				import gc
 				gc.collect()
+				# Reset Metal evaluators every 50 iterations to prevent driver slowdown
+				if iteration % 50 == 0:
+					try:
+						import ram_accelerator
+						ram_accelerator.reset_metal_evaluators()
+						self._log.debug(f"[{self.name}] Reset Metal evaluators at iteration {iteration}")
+					except Exception:
+						pass  # Ignore if accelerator not available
 
 			current_threshold = get_threshold(iteration / cfg.iterations)
 			if prev_threshold is not None and f"{prev_threshold:.4%}" != f"{current_threshold:.4%}":

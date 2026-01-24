@@ -21,40 +21,111 @@ use rayon::prelude::*;
 use rustc_hash::FxHasher;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
-use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
 
 // Re-export from eval_worker module for backward compatibility
 pub use crate::eval_worker::{EvalData, get_eval_worker};
 
-// Global cached Metal evaluator for adaptive evaluation (dense memory)
-static METAL_EVALUATOR: OnceLock<Option<crate::metal_ramlm::MetalRAMLMEvaluator>> = OnceLock::new();
+// =============================================================================
+// Resettable Metal Evaluators
+// =============================================================================
+//
+// Metal evaluators can accumulate driver-level state over long runs, causing
+// slowdowns. These use Arc + RwLock to allow periodic reset.
+// Call reset_metal_evaluators() every N generations to recreate fresh evaluators.
 
-/// Get or initialize the Metal evaluator for dense memory (lazy, thread-safe)
-fn get_metal_evaluator() -> Option<&'static crate::metal_ramlm::MetalRAMLMEvaluator> {
-    METAL_EVALUATOR.get_or_init(|| {
-        crate::metal_ramlm::MetalRAMLMEvaluator::new().ok()
-    }).as_ref()
+// Global counter incremented on each reset
+static RESET_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+// Storage for resettable evaluators - uses Arc so callers can hold references
+static METAL_EVALUATOR: RwLock<Option<Arc<crate::metal_ramlm::MetalRAMLMEvaluator>>> = RwLock::new(None);
+static SPARSE_METAL_EVALUATOR: RwLock<Option<Arc<crate::metal_ramlm::MetalSparseEvaluator>>> = RwLock::new(None);
+static GROUP_EVALUATOR: RwLock<Option<Arc<crate::metal_ramlm::MetalGroupEvaluator>>> = RwLock::new(None);
+
+/// Get or initialize the Metal evaluator (resettable, thread-safe)
+/// Returns an Arc that can be held across lock boundaries
+fn get_metal_evaluator() -> Option<Arc<crate::metal_ramlm::MetalRAMLMEvaluator>> {
+    // Fast path: check if initialized
+    {
+        let guard = METAL_EVALUATOR.read().unwrap();
+        if let Some(ref arc) = *guard {
+            return Some(Arc::clone(arc));
+        }
+    }
+
+    // Slow path: need to initialize
+    let mut guard = METAL_EVALUATOR.write().unwrap();
+    if guard.is_none() {
+        if let Ok(eval) = crate::metal_ramlm::MetalRAMLMEvaluator::new() {
+            *guard = Some(Arc::new(eval));
+        }
+    }
+    guard.as_ref().map(Arc::clone)
 }
 
-// Global cached Metal sparse evaluator for adaptive evaluation (sparse memory with binary search)
-static SPARSE_METAL_EVALUATOR: OnceLock<Option<crate::metal_ramlm::MetalSparseEvaluator>> = OnceLock::new();
+/// Get or initialize the sparse Metal evaluator (resettable, thread-safe)
+fn get_sparse_metal_evaluator() -> Option<Arc<crate::metal_ramlm::MetalSparseEvaluator>> {
+    // Fast path: check if initialized
+    {
+        let guard = SPARSE_METAL_EVALUATOR.read().unwrap();
+        if let Some(ref arc) = *guard {
+            return Some(Arc::clone(arc));
+        }
+    }
 
-/// Get or initialize the Metal sparse evaluator for GPU binary search (lazy, thread-safe)
-fn get_sparse_metal_evaluator() -> Option<&'static crate::metal_ramlm::MetalSparseEvaluator> {
-    SPARSE_METAL_EVALUATOR.get_or_init(|| {
-        crate::metal_ramlm::MetalSparseEvaluator::new().ok()
-    }).as_ref()
+    // Slow path: need to initialize
+    let mut guard = SPARSE_METAL_EVALUATOR.write().unwrap();
+    if guard.is_none() {
+        if let Ok(eval) = crate::metal_ramlm::MetalSparseEvaluator::new() {
+            *guard = Some(Arc::new(eval));
+        }
+    }
+    guard.as_ref().map(Arc::clone)
 }
 
-// Global cached unified group evaluator for tiered configs (scores stay on GPU)
-static GROUP_EVALUATOR: OnceLock<Option<crate::metal_ramlm::MetalGroupEvaluator>> = OnceLock::new();
+/// Get or initialize the group evaluator (resettable, thread-safe)
+fn get_group_evaluator() -> Option<Arc<crate::metal_ramlm::MetalGroupEvaluator>> {
+    // Fast path: check if initialized
+    {
+        let guard = GROUP_EVALUATOR.read().unwrap();
+        if let Some(ref arc) = *guard {
+            return Some(Arc::clone(arc));
+        }
+    }
 
-/// Get or initialize the unified group evaluator (lazy, thread-safe)
-fn get_group_evaluator() -> Option<&'static crate::metal_ramlm::MetalGroupEvaluator> {
-    GROUP_EVALUATOR.get_or_init(|| {
-        crate::metal_ramlm::MetalGroupEvaluator::new().ok()
-    }).as_ref()
+    // Slow path: need to initialize
+    let mut guard = GROUP_EVALUATOR.write().unwrap();
+    if guard.is_none() {
+        if let Ok(eval) = crate::metal_ramlm::MetalGroupEvaluator::new() {
+            *guard = Some(Arc::new(eval));
+        }
+    }
+    guard.as_ref().map(Arc::clone)
+}
+
+/// Reset all Metal evaluators to free accumulated driver state.
+///
+/// Call this periodically (e.g., every 50 generations) to prevent slowdown
+/// from Metal driver state accumulation during long optimization runs.
+///
+/// The evaluators will be lazily re-initialized on next use.
+/// Existing Arc references will continue to work until dropped.
+pub fn reset_metal_evaluators() {
+    // Increment generation counter
+    RESET_GENERATION.fetch_add(1, Ordering::SeqCst);
+
+    // Clear all evaluators - existing Arc holders keep their reference
+    // until dropped, then the evaluator is truly freed
+    if let Ok(mut guard) = METAL_EVALUATOR.write() {
+        *guard = None;
+    }
+    if let Ok(mut guard) = SPARSE_METAL_EVALUATOR.write() {
+        *guard = None;
+    }
+    if let Ok(mut guard) = GROUP_EVALUATOR.write() {
+        *guard = None;
+    }
 }
 
 /// Threshold for switching to sparse memory (2^12 = 4K addresses)
@@ -970,21 +1041,19 @@ pub fn evaluate_genomes_parallel(
         let mut all_scores: Vec<Vec<f64>> = vec![vec![0.0; num_clusters]; num_eval];
 
         // Get Metal evaluators (lazy init, thread-safe)
+        // These are Arc<T> so we can clone and hold references across the loop
         let metal = get_metal_evaluator();
-        let use_metal = metal.is_some();
         let sparse_metal = get_sparse_metal_evaluator();
-        let use_sparse_metal = sparse_metal.is_some();
 
         // Process each group - Metal for dense, GPU sparse for sparse, CPU fallback
         for (group_idx, group) in groups.iter().enumerate() {
             let memory = &group_memories[group_idx];
 
-            if use_metal && memory.is_dense() {
+            if let (Some(ref metal_eval), true) = (&metal, memory.is_dense()) {
                 // Metal path: evaluate all examples at once for this dense group
                 if let Some(memory_words) = memory.export_for_metal() {
-                    let metal_eval = metal.unwrap();
                     match evaluate_group_metal(
-                        metal_eval,
+                        metal_eval.as_ref(),
                         eval_input_bits,
                         &connections_flat,
                         &memory_words,
@@ -1011,11 +1080,10 @@ pub fn evaluate_genomes_parallel(
             }
 
             // GPU sparse path: evaluate sparse groups using binary search on GPU
-            if use_sparse_metal && memory.is_sparse() {
+            if let (Some(ref sparse_eval), true) = (&sparse_metal, memory.is_sparse()) {
                 if let Some(export) = memory.export_for_gpu_sparse() {
-                    let sparse_eval = sparse_metal.unwrap();
                     match evaluate_group_sparse_gpu(
-                        sparse_eval,
+                        sparse_eval.as_ref(),
                         eval_input_bits,
                         &connections_flat,
                         &export,

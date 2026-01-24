@@ -166,6 +166,17 @@ fn metal_device_info() -> PyResult<String> {
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
 }
 
+/// Reset Metal evaluators to free accumulated driver state.
+///
+/// Call this periodically (e.g., every 50 generations) during long optimization
+/// runs to prevent slowdown from Metal driver state accumulation.
+///
+/// The evaluators will be lazily re-initialized on next use.
+#[pyfunction]
+fn reset_metal_evaluators() {
+    adaptive::reset_metal_evaluators();
+}
+
 /// Get number of CPU cores available for rayon
 #[pyfunction]
 fn cpu_cores() -> usize {
@@ -3179,6 +3190,7 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(evaluate_fullnetwork_perplexity_batch_cpu, m)?)?;
     m.add_function(wrap_pyfunction!(metal_available, m)?)?;
     m.add_function(wrap_pyfunction!(metal_device_info, m)?)?;
+    m.add_function(wrap_pyfunction!(reset_metal_evaluators, m)?)?;
     m.add_function(wrap_pyfunction!(cpu_cores, m)?)?;
     // New batch prediction functions
     m.add_function(wrap_pyfunction!(predict_all_batch_cpu, m)?)?;
