@@ -905,32 +905,31 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		for generation in range(start_generation, cfg.generations):
 			gen_start = time.time()
 
-			# Periodic cleanup to prevent memory fragmentation and Metal driver state buildup
-			if generation > 0 and generation % 20 == 0:
+			# Periodic cleanup every 10 generations (aligned with health check interval)
+			# GC + Metal reset to prevent memory fragmentation and driver state buildup
+			if generation > 0 and generation % 10 == 0:
 				import gc
 				gc.collect()
-				# Reset Metal evaluators every 50 generations to prevent driver slowdown
-				if generation % 50 == 0:
-					try:
-						import ram_accelerator
-						ram_accelerator.reset_metal_evaluators()
-						self._log.debug(f"[{self.name}] Reset Metal evaluators at generation {generation}")
-					except Exception:
-						pass  # Ignore if accelerator not available
+				try:
+					import ram_accelerator
+					ram_accelerator.reset_metal_evaluators()
+					self._log.info(f"[{self.name}] GC + Metal reset at generation {generation}")
+				except Exception:
+					pass  # Ignore if accelerator not available
 
-					# Save checkpoint every 50 generations
-					if checkpoint_mgr is not None:
-						checkpoint_mgr.maybe_save(
-							iteration=generation,
-							population=population,
-							best_genome=best_genome,
-							best_fitness=(best_fitness, best_acc),
-							current_threshold=current_threshold if prev_threshold else start_threshold,
-							extra_state={
-								'patience_counter': early_stop._patience_counter if hasattr(early_stop, '_patience_counter') else 0,
-								'baseline_mean': early_stop._overfit_detector.baseline_mean if hasattr(early_stop, '_overfit_detector') and early_stop._overfit_detector else None,
-							},
-						)
+			# Save checkpoint every 50 generations
+			if generation > 0 and generation % 50 == 0 and checkpoint_mgr is not None:
+				checkpoint_mgr.maybe_save(
+					iteration=generation,
+					population=population,
+					best_genome=best_genome,
+					best_fitness=(best_fitness, best_acc),
+					current_threshold=current_threshold if prev_threshold else start_threshold,
+					extra_state={
+						'patience_counter': early_stop._patience_counter if hasattr(early_stop, '_patience_counter') else 0,
+						'baseline_mean': early_stop._overfit_detector.baseline_mean if hasattr(early_stop, '_overfit_detector') and early_stop._overfit_detector else None,
+					},
+				)
 
 			current_threshold = get_threshold(generation / cfg.generations)
 			# Only log if formatted values differ
