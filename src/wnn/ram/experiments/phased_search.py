@@ -659,12 +659,22 @@ class PhasedSearchRunner:
 			# First GA phase (no population from previous phase): generate fresh population
 			if not initial_population:
 				if cfg.tier_config:
-					# Generate tiered random genomes that respect tier structure
-					# Each genome has random bits/neurons within ±2 of tier targets
+					# Generate tiered genomes that respect tier structure
+					# Only add variation to dimensions being optimized
 					import random
 					rng = random.Random(self._rotation_seed)
+
+					# If bits are not being optimized, use exact tier bits (no variation)
+					# This ensures minimal config groups during neurons-only optimization
+					bits_variation = 2 if optimize_bits else 0
+					neurons_variation = 2 if optimize_neurons else 0
+
 					tiered_population = [
-						cfg.create_tiered_random_genome(self.vocab_size, rng)
+						cfg.create_tiered_random_genome(
+							self.vocab_size, rng,
+							bits_variation=bits_variation,
+							neurons_variation=neurons_variation,
+						)
 						for _ in range(cfg.population_size)
 					]
 					# Initialize connections for all genomes
@@ -672,7 +682,11 @@ class PhasedSearchRunner:
 						if not g.has_connections():
 							g.initialize_connections(self.total_input_bits)
 					initial_population = tiered_population
-					self.log(f"  Generated {len(tiered_population)} tiered random genomes")
+					varied_dims = []
+					if bits_variation > 0: varied_dims.append("bits")
+					if neurons_variation > 0: varied_dims.append("neurons")
+					variation_desc = f" (varied: {', '.join(varied_dims)})" if varied_dims else " (exact tier config)"
+					self.log(f"  Generated {len(tiered_population)} tiered genomes{variation_desc}")
 				else:
 					# No tier config - use uniform random genomes
 					strategy_kwargs["fresh_population"] = True
