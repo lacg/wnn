@@ -487,6 +487,7 @@ source wnn/bin/activate
 # - Uses best tier config: 100 tokens @ 20 bits, 400 @ 12 bits, rest @ 8 bits
 # - Only optimizes tier0 (100 most frequent tokens) for faster convergence
 # - Population/neighbors 50 for good diversity
+# - ALWAYS use --checkpoint-dir to save progress and enable recovery from crashes
 PYTHONUNBUFFERED=1 nohup python -u run_coarse_fine_search.py \
   --ga-gens 1000 \
   --ts-iters 1000 \
@@ -495,6 +496,7 @@ PYTHONUNBUFFERED=1 nohup python -u run_coarse_fine_search.py \
   --neighbors 50 \
   --tier-config "100,15,20;400,10,12;rest,5,8" \
   --tier0-only \
+  --checkpoint-dir checkpoints \
   > nohup.out 2>&1 &
 
 # Monitor progress
@@ -502,7 +504,14 @@ tail -f nohup.out
 
 # Check log file for detailed genome progress
 tail -f logs/2026/01/*/coarse_fine_pass1_*.log
+
+# Resume from checkpoint after crash or restart
+PYTHONUNBUFFERED=1 nohup python -u run_coarse_fine_search.py \
+  --resume checkpoints/latest_checkpoint.pkl \
+  > nohup.out 2>&1 &
 ```
+
+**⚠️ ALWAYS include `--checkpoint-dir` for overnight runs!** This saves progress every generation and allows resuming from the last checkpoint if the run crashes or is interrupted. Without checkpointing, hours of optimization can be lost.
 
 ## Project Structure
 

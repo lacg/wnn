@@ -109,6 +109,46 @@ impl CEBufferCache {
     }
 }
 
+/// Thread-local pool for batched sparse evaluation
+/// Maintains multiple buffer sets (one per sparse group in a batch)
+/// Buffers grow as needed but are reused across batches
+struct BatchedSparseBufferPool {
+    conn_buffers: Vec<Option<CachedBuffer>>,
+    keys_buffers: Vec<Option<CachedBuffer>>,
+    values_buffers: Vec<Option<CachedBuffer>>,
+    offsets_buffers: Vec<Option<CachedBuffer>>,
+    counts_buffers: Vec<Option<CachedBuffer>>,
+    cluster_ids_buffers: Vec<Option<CachedBuffer>>,
+    params_buffers: Vec<Option<CachedBuffer>>,
+}
+
+impl BatchedSparseBufferPool {
+    fn new() -> Self {
+        Self {
+            conn_buffers: Vec::new(),
+            keys_buffers: Vec::new(),
+            values_buffers: Vec::new(),
+            offsets_buffers: Vec::new(),
+            counts_buffers: Vec::new(),
+            cluster_ids_buffers: Vec::new(),
+            params_buffers: Vec::new(),
+        }
+    }
+
+    /// Ensure pool has at least `count` slots
+    fn ensure_capacity(&mut self, count: usize) {
+        while self.conn_buffers.len() < count {
+            self.conn_buffers.push(None);
+            self.keys_buffers.push(None);
+            self.values_buffers.push(None);
+            self.offsets_buffers.push(None);
+            self.counts_buffers.push(None);
+            self.cluster_ids_buffers.push(None);
+            self.params_buffers.push(None);
+        }
+    }
+}
+
 thread_local! {
     static SPARSE_BUFFER_CACHE: std::cell::RefCell<SparseBufferCache> =
         std::cell::RefCell::new(SparseBufferCache::new());
@@ -116,6 +156,8 @@ thread_local! {
         std::cell::RefCell::new(DenseBufferCache::new());
     static CE_BUFFER_CACHE: std::cell::RefCell<CEBufferCache> =
         std::cell::RefCell::new(CEBufferCache::new());
+    static BATCHED_SPARSE_BUFFER_POOL: std::cell::RefCell<BatchedSparseBufferPool> =
+        std::cell::RefCell::new(BatchedSparseBufferPool::new());
 }
 
 /// Get or create a cached buffer, writing data directly to it
@@ -1659,6 +1701,9 @@ impl MetalGroupEvaluator {
     ///
     /// This eliminates the ~0.5ms overhead per group from separate commit+wait cycles.
     /// With 34 sparse groups, this reduces sparse time from ~27ms to ~2-3ms.
+    ///
+    /// Uses BATCHED_SPARSE_BUFFER_POOL to cache buffers across batches, preventing
+    /// memory leaks that would occur from allocating new buffers each call.
     pub fn eval_sparse_groups_batched(
         &self,
         input_buffer: &Buffer,
@@ -1679,83 +1724,74 @@ impl MetalGroupEvaluator {
         // Get current cache generation for validation
         let current_gen = get_sparse_cache_generation();
 
-        // Create a single command buffer for all sparse groups
-        let command_buffer = self.command_queue.new_command_buffer();
-
+        // Pre-allocate converted data to keep it alive during GPU execution
+        let mut converted_data: Vec<(Vec<i32>, Vec<u32>, Vec<u8>)> = Vec::with_capacity(sparse_groups.len());
         for group in sparse_groups {
-            let num_group_clusters = group.cluster_ids.len();
-            let num_neurons = num_group_clusters * group.neurons_per_cluster;
-
-            // Convert to GPU-friendly formats
             let connections_i32: Vec<i32> = group.connections.iter().map(|&c| c as i32).collect();
             let cluster_ids_u32: Vec<u32> = group.cluster_ids.iter().map(|&c| c as u32).collect();
-
             let params = SparseToBufferParams {
                 num_examples: num_examples as u32,
                 total_input_bits: total_input_bits as u32,
-                num_neurons: num_neurons as u32,
+                num_neurons: (group.cluster_ids.len() * group.neurons_per_cluster) as u32,
                 bits_per_neuron: group.bits_per_neuron as u32,
                 neurons_per_cluster: group.neurons_per_cluster as u32,
-                num_group_clusters: num_group_clusters as u32,
+                num_group_clusters: group.cluster_ids.len() as u32,
                 total_clusters: num_clusters as u32,
                 empty_value,
             };
-            let params_slice = unsafe {
+            let params_bytes: Vec<u8> = unsafe {
                 std::slice::from_raw_parts(
                     &params as *const SparseToBufferParams as *const u8,
                     mem::size_of::<SparseToBufferParams>(),
-                )
+                ).to_vec()
             };
+            converted_data.push((connections_i32, cluster_ids_u32, params_bytes));
+        }
 
-            // Create buffers for this group (using device.new_buffer for simplicity)
-            // Note: We can't easily use the thread_local cache here since we're batching
-            let conn_buffer = self.device.new_buffer_with_data(
-                connections_i32.as_ptr() as *const _,
-                (connections_i32.len() * mem::size_of::<i32>()) as u64,
-                MTLResourceOptions::StorageModeShared,
-            );
-            let keys_buffer = self.device.new_buffer_with_data(
-                group.keys.as_ptr() as *const _,
-                (group.keys.len() * mem::size_of::<u64>()) as u64,
-                MTLResourceOptions::StorageModeShared,
-            );
-            let values_buffer = self.device.new_buffer_with_data(
-                group.values.as_ptr() as *const _,
-                (group.values.len() * mem::size_of::<u8>()) as u64,
-                MTLResourceOptions::StorageModeShared,
-            );
-            let offsets_buffer = self.device.new_buffer_with_data(
-                group.offsets.as_ptr() as *const _,
-                (group.offsets.len() * mem::size_of::<u32>()) as u64,
-                MTLResourceOptions::StorageModeShared,
-            );
-            let counts_buffer = self.device.new_buffer_with_data(
-                group.counts.as_ptr() as *const _,
-                (group.counts.len() * mem::size_of::<u32>()) as u64,
-                MTLResourceOptions::StorageModeShared,
-            );
-            let cluster_ids_buffer = self.device.new_buffer_with_data(
-                cluster_ids_u32.as_ptr() as *const _,
-                (cluster_ids_u32.len() * mem::size_of::<u32>()) as u64,
-                MTLResourceOptions::StorageModeShared,
-            );
-            let params_buffer = self.device.new_buffer_with_data(
-                params_slice.as_ptr() as *const _,
-                params_slice.len() as u64,
-                MTLResourceOptions::StorageModeShared,
-            );
+        // Get cached buffers from pool (all buffers must stay alive until command completes)
+        let all_buffers = BATCHED_SPARSE_BUFFER_POOL.with(|pool| {
+            let mut pool = pool.borrow_mut();
+            pool.ensure_capacity(sparse_groups.len());
+
+            let mut buffers = Vec::with_capacity(sparse_groups.len());
+
+            for (idx, group) in sparse_groups.iter().enumerate() {
+                let (ref connections_i32, ref cluster_ids_u32, ref params_bytes) = converted_data[idx];
+
+                let conn = get_or_create_buffer(&self.device, &mut pool.conn_buffers[idx], connections_i32, current_gen);
+                let keys = get_or_create_buffer(&self.device, &mut pool.keys_buffers[idx], group.keys, current_gen);
+                let values = get_or_create_buffer(&self.device, &mut pool.values_buffers[idx], group.values, current_gen);
+                let offsets = get_or_create_buffer(&self.device, &mut pool.offsets_buffers[idx], group.offsets, current_gen);
+                let counts = get_or_create_buffer(&self.device, &mut pool.counts_buffers[idx], group.counts, current_gen);
+                let cluster_ids = get_or_create_buffer(&self.device, &mut pool.cluster_ids_buffers[idx], cluster_ids_u32, current_gen);
+                let params = get_or_create_buffer(&self.device, &mut pool.params_buffers[idx], params_bytes, current_gen);
+
+                buffers.push((conn, keys, values, offsets, counts, cluster_ids, params));
+            }
+
+            buffers
+        });
+
+        // Create a single command buffer for all sparse groups
+        let command_buffer = self.command_queue.new_command_buffer();
+
+        for (idx, group) in sparse_groups.iter().enumerate() {
+            let num_group_clusters = group.cluster_ids.len();
+
+            let (ref conn_buffer, ref keys_buffer, ref values_buffer, ref offsets_buffer,
+                 ref counts_buffer, ref cluster_ids_buffer, ref params_buffer) = all_buffers[idx];
 
             // Encode compute pass for this group
             let encoder = command_buffer.new_compute_command_encoder();
             encoder.set_compute_pipeline_state(&self.sparse_to_buffer_pipeline);
             encoder.set_buffer(0, Some(input_buffer), 0);
-            encoder.set_buffer(1, Some(&conn_buffer), 0);
-            encoder.set_buffer(2, Some(&keys_buffer), 0);
-            encoder.set_buffer(3, Some(&values_buffer), 0);
-            encoder.set_buffer(4, Some(&offsets_buffer), 0);
-            encoder.set_buffer(5, Some(&counts_buffer), 0);
-            encoder.set_buffer(6, Some(&cluster_ids_buffer), 0);
-            encoder.set_buffer(7, Some(&params_buffer), 0);
+            encoder.set_buffer(1, Some(conn_buffer), 0);
+            encoder.set_buffer(2, Some(keys_buffer), 0);
+            encoder.set_buffer(3, Some(values_buffer), 0);
+            encoder.set_buffer(4, Some(offsets_buffer), 0);
+            encoder.set_buffer(5, Some(counts_buffer), 0);
+            encoder.set_buffer(6, Some(cluster_ids_buffer), 0);
+            encoder.set_buffer(7, Some(params_buffer), 0);
             encoder.set_buffer(8, Some(scores_buffer), 0);
 
             let grid_size = MTLSize::new(num_group_clusters as u64, num_examples as u64, 1);
