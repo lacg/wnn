@@ -147,6 +147,20 @@ impl BatchedSparseBufferPool {
             self.params_buffers.push(None);
         }
     }
+
+    /// Clear buffers beyond the given count to prevent memory accumulation
+    /// from previous batches with more sparse groups
+    fn clear_beyond(&mut self, count: usize) {
+        for i in count..self.conn_buffers.len() {
+            self.conn_buffers[i] = None;
+            self.keys_buffers[i] = None;
+            self.values_buffers[i] = None;
+            self.offsets_buffers[i] = None;
+            self.counts_buffers[i] = None;
+            self.cluster_ids_buffers[i] = None;
+            self.params_buffers[i] = None;
+        }
+    }
 }
 
 thread_local! {
@@ -1807,6 +1821,13 @@ impl MetalGroupEvaluator {
         // Single commit + wait for all groups
         command_buffer.commit();
         command_buffer.wait_until_completed();
+
+        // Clear unused buffer slots to prevent memory accumulation from batches
+        // with more sparse groups than the current batch
+        let num_groups = sparse_groups.len();
+        BATCHED_SPARSE_BUFFER_POOL.with(|pool| {
+            pool.borrow_mut().clear_beyond(num_groups);
+        });
 
         if batch_timing {
             let elapsed = t0.elapsed();
