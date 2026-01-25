@@ -487,7 +487,7 @@ source wnn/bin/activate
 # - Uses best tier config: 100 tokens @ 20 bits, 400 @ 12 bits, rest @ 8 bits
 # - Only optimizes tier0 (100 most frequent tokens) for faster convergence
 # - Population/neighbors 50 for good diversity
-# - CE percentile 0.75 keeps top 75% offspring by CE (filters noisy low-performers)
+# - Fitness percentile 0.75 keeps top 75% offspring by fitness (filters noisy low-performers)
 # - ALWAYS use --checkpoint-dir to save progress and enable recovery from crashes
 PYTHONUNBUFFERED=1 nohup python -u run_coarse_fine_search.py \
   --ga-gens 1000 \
@@ -497,7 +497,7 @@ PYTHONUNBUFFERED=1 nohup python -u run_coarse_fine_search.py \
   --neighbors 50 \
   --tier-config "100,15,20;400,10,12;rest,5,8" \
   --tier0-only \
-  --ce-percentile 0.75 \
+  --fitness-percentile 0.75 \
   --checkpoint-dir checkpoints \
   > nohup.out 2>&1 &
 

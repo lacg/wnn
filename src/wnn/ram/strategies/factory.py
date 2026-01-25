@@ -322,8 +322,8 @@ class OptimizerStrategyFactory:
 		initial_threshold: float | None = None,  # Start threshold from previous phase (None = first phase)
 		# TS-specific: cache size for final population diversity
 		total_neighbors_size: int | None = None,  # None = use neighbors_per_iter
-		# CE percentile filter (None = disabled, 0.75 = keep top 75% by CE)
-		ce_percentile: float | None = None,
+		# Fitness percentile filter (None = disabled, 0.75 = keep top 75% by fitness)
+		fitness_percentile: float | None = None,
 		# Tier0-only: only mutate first N clusters (None = all clusters)
 		mutable_clusters: int | None = None,
 		# Common
@@ -431,7 +431,7 @@ class OptimizerStrategyFactory:
 					check_interval=check_interval,
 					min_improvement_pct=min_improvement_pct if min_improvement_pct is not None else 0.05,
 					initial_threshold=initial_threshold,
-					ce_percentile=ce_percentile,
+					fitness_percentile=fitness_percentile,
 					seed=seed,
 					logger=logger,
 					batch_evaluator=batch_evaluator,
@@ -463,7 +463,7 @@ class OptimizerStrategyFactory:
 					check_interval=check_interval,
 					min_improvement_pct=min_improvement_pct if min_improvement_pct is not None else 0.5,
 					initial_threshold=initial_threshold,
-					ce_percentile=ce_percentile,
+					fitness_percentile=fitness_percentile,
 					seed=seed,
 					logger=logger,
 					batch_evaluator=batch_evaluator,
@@ -537,7 +537,7 @@ class OptimizerStrategyFactory:
 		check_interval: int,
 		min_improvement_pct: float,
 		initial_threshold: float | None,
-		ce_percentile: float | None,
+		fitness_percentile: float | None,
 		seed: int,
 		logger: Any,
 		batch_evaluator: Any,
@@ -575,7 +575,7 @@ class OptimizerStrategyFactory:
 			min_improvement_pct=min_improvement_pct,
 			mutation_rate=mutation_rate,
 			initial_threshold=initial_threshold,
-			ce_percentile=ce_percentile,
+			fitness_percentile=fitness_percentile,
 			fresh_population=fresh_population,
 		)
 		# Pass batch_evaluator as cached_evaluator if it supports search_offspring
@@ -608,7 +608,7 @@ class OptimizerStrategyFactory:
 		check_interval: int,
 		min_improvement_pct: float,
 		initial_threshold: float | None,
-		ce_percentile: float | None,
+		fitness_percentile: float | None,
 		seed: int,
 		logger: Any,
 		batch_evaluator: Any,
@@ -644,7 +644,7 @@ class OptimizerStrategyFactory:
 			min_improvement_pct=min_improvement_pct,
 			tabu_size=tabu_size,
 			initial_threshold=initial_threshold,
-			ce_percentile=ce_percentile,
+			fitness_percentile=fitness_percentile,
 		)
 		return ArchitectureTSStrategy(arch_config, ts_config, seed, logger, batch_evaluator)
 

@@ -1051,7 +1051,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 					offspring_with_ce.append((g, ce))
 
 			# Apply percentile filter if configured (uses fitness calculator for ranking)
-			if cfg.ce_percentile is not None and offspring_with_ce:
+			if cfg.fitness_percentile is not None and offspring_with_ce:
 				if cfg.fitness_calculator_type == FitnessCalculatorType.HARMONIC_RANK:
 					# HARMONIC_RANK: Filter by harmonic rank fitness
 					pop_for_filter = [(g, ce, g._cached_fitness[1]) for g, ce in offspring_with_ce]
@@ -1059,7 +1059,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 					offspring_with_fitness = [(g, ce, score) for (g, ce), score in zip(offspring_with_ce, fitness_scores)]
 
 					fitness_filter = PercentileFilter(
-						percentile=cfg.ce_percentile,
+						percentile=cfg.fitness_percentile,
 						mode=FilterMode.LOWER_IS_BETTER,
 						metric_name="HarmonicRank",
 					)
@@ -1068,7 +1068,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 				else:
 					# CE mode: Filter by CE only
 					ce_filter = PercentileFilter(
-						percentile=cfg.ce_percentile,
+						percentile=cfg.fitness_percentile,
 						mode=FilterMode.LOWER_IS_BETTER,
 						metric_name="CE",
 					)
@@ -1612,13 +1612,13 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 				)
 
 				# Apply percentile filter by harmonic rank fitness
-				if cfg.ce_percentile is not None and neighbors:
+				if cfg.fitness_percentile is not None and neighbors:
 					pop_for_filter = [(g, g._cached_fitness[0], g._cached_fitness[1]) for g in neighbors]
 					fitness_scores = fitness_calculator.fitness(pop_for_filter)
 					neighbor_with_fitness = [(g, score) for g, score in zip(neighbors, fitness_scores)]
 
 					fitness_filter = PercentileFilter(
-						percentile=cfg.ce_percentile,
+						percentile=cfg.fitness_percentile,
 						mode=FilterMode.LOWER_IS_BETTER,
 						metric_name="HarmonicRank",
 					)
@@ -1722,9 +1722,9 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 				)
 
 				# Apply CE percentile filter if configured
-				if cfg.ce_percentile is not None:
+				if cfg.fitness_percentile is not None:
 					ce_filter = PercentileFilter(
-						percentile=cfg.ce_percentile,
+						percentile=cfg.fitness_percentile,
 						mode=FilterMode.LOWER_IS_BETTER,
 						metric_name="CE",
 					)

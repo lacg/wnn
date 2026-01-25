@@ -63,8 +63,8 @@ class PhasedSearchConfig:
 	# Tier0-only optimization: only mutate clusters in tier0
 	optimize_tier0_only: bool = False
 
-	# CE percentile filter (None = disabled, 0.75 = keep top 75% by CE)
-	ce_percentile: Optional[float] = None
+	# Fitness percentile filter (None = disabled, 0.75 = keep top 75% by fitness)
+	fitness_percentile: Optional[float] = None
 
 	# Random seed (None = time-based)
 	rotation_seed: Optional[int] = None
@@ -631,7 +631,7 @@ class PhasedSearchRunner:
 			"patience": cfg.patience,
 			"check_interval": cfg.check_interval,  # Check every N generations/iterations
 			"initial_threshold": initial_threshold,
-			"ce_percentile": cfg.ce_percentile,  # CE percentile filter (None = disabled)
+			"fitness_percentile": cfg.fitness_percentile,  # Fitness percentile filter (None = disabled)
 			"seed": self._rotation_seed,  # Use rotation_seed for strategy RNG
 		}
 

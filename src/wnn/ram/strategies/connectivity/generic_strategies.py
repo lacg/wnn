@@ -998,9 +998,9 @@ class GAConfig:
 	threshold_delta: float = 0.01     # 1% total increase over threshold_reference generations
 	threshold_reference: int = 1000   # Reference gens for threshold rate (0.001%/gen = 0.25% over 250 gens)
 	progressive_threshold: bool = True  # Enable progressive threshold within phase
-	# CE percentile filter: keep only offspring in top X% by CE (None = disabled)
-	# Example: 0.75 keeps top 75% by CE. Applied after accuracy threshold.
-	ce_percentile: Optional[float] = None
+	# Fitness percentile filter: keep only offspring in top X% by fitness (None = disabled)
+	# Example: 0.75 keeps top 75%. Uses configured fitness_calculator_type (CE or HARMONIC_RANK).
+	fitness_percentile: Optional[float] = None
 	# Fitness calculator: how to combine CE and accuracy for ranking
 	# CE = pure CE ranking, uses dual elites (10% CE + 10% Acc)
 	# HARMONIC_RANK = harmonic mean of ranks (default), uses single elite (20% by rank)
@@ -1034,9 +1034,9 @@ class TSConfig:
 	threshold_delta: float = 0.01     # 1% total increase over threshold_reference iterations
 	threshold_reference: int = 1000   # Reference iters for threshold rate (0.001%/iter = 0.25% over 250 iters)
 	progressive_threshold: bool = True  # Enable progressive threshold within phase
-	# CE percentile filter: keep only neighbors in top X% by CE (None = disabled)
-	# Example: 0.75 keeps top 75% by CE. Applied after accuracy threshold.
-	ce_percentile: Optional[float] = None
+	# Fitness percentile filter: keep only neighbors in top X% by fitness (None = disabled)
+	# Example: 0.75 keeps top 75%. Uses configured fitness_calculator_type (CE or HARMONIC_RANK).
+	fitness_percentile: Optional[float] = None
 	# Fitness calculator: how to combine CE and accuracy for ranking
 	# CE = pure CE ranking, uses dual paths (25 neighbors from best_ce + 25 from best_acc)
 	# HARMONIC_RANK = harmonic mean of ranks (default), uses single path (50 from best_harmonic)
