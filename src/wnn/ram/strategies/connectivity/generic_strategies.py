@@ -995,8 +995,8 @@ class GAConfig:
 	# If None, uses min_accuracy as the base (first phase)
 	initial_threshold: Optional[float] = None
 	min_accuracy: float = 0.0       # 0% base threshold (start accepting everything)
-	threshold_delta: float = 0.001    # 0.1% total increase over threshold_reference generations
-	threshold_reference: int = 1000   # Reference gens for threshold rate (0.001% per gen at delta=1%)
+	threshold_delta: float = 0.01     # 1% total increase over threshold_reference generations
+	threshold_reference: int = 1000   # Reference gens for threshold rate (0.001%/gen = 0.25% over 250 gens)
 	progressive_threshold: bool = True  # Enable progressive threshold within phase
 	# CE percentile filter: keep only offspring in top X% by CE (None = disabled)
 	# Example: 0.75 keeps top 75% by CE. Applied after accuracy threshold.
@@ -1031,8 +1031,8 @@ class TSConfig:
 	# If None, uses min_accuracy as the base (first phase)
 	initial_threshold: Optional[float] = None
 	min_accuracy: float = 0.0       # 0% base threshold (start accepting everything)
-	threshold_delta: float = 0.001    # 0.1% total increase over threshold_reference iterations
-	threshold_reference: int = 1000   # Reference iters for threshold rate (0.001% per iter at delta=1%)
+	threshold_delta: float = 0.01     # 1% total increase over threshold_reference iterations
+	threshold_reference: int = 1000   # Reference iters for threshold rate (0.001%/iter = 0.25% over 250 iters)
 	progressive_threshold: bool = True  # Enable progressive threshold within phase
 	# CE percentile filter: keep only neighbors in top X% by CE (None = disabled)
 	# Example: 0.75 keeps top 75% by CE. Applied after accuracy threshold.
