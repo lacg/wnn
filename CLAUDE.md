@@ -483,10 +483,11 @@ The current main experiment runner is `run_coarse_fine_search.py` in the project
 cd "/Users/lacg/Library/Mobile Documents/com~apple~CloudDocs/Studies/research/wnn"
 source wnn/bin/activate
 
-# OVERNIGHT RUN: Always use --ga-gens 1000 --ts-iters 1000
+# OVERNIGHT RUN: Always use --ga-gens 1000 --ts-iters 1000 --patience 10
 PYTHONUNBUFFERED=1 nohup python -u run_coarse_fine_search.py \
   --ga-gens 1000 \
   --ts-iters 1000 \
+  --patience 10 \
   > nohup.out 2>&1 &
 
 # Monitor progress
