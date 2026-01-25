@@ -603,7 +603,7 @@ class EarlyStoppingTracker:
 		self._log(
 			f"[{self._method_name}] Health check (top-{top_k_count}): "
 			f"mean={current_mean:.4f}, baseline={baseline:.4f}, "
-			f"Δbase={delta_pct:+.2f}%, Δprev={delta_prev:+.2f}%, "
+			f"Δbase={delta_pct:+.4f}%, Δprev={delta_prev:+.4f}%, "
 			f"patience={remaining}/{cfg.patience} {display}{problem_str}"
 		)
 
@@ -612,9 +612,9 @@ class EarlyStoppingTracker:
 			total_iters = self._patience_counter * cfg.check_interval
 			stop_reasons = []
 			if overfit_problem:
-				stop_reasons.append(f"overfitting (Δbase={delta_pct:+.2f}%)")
+				stop_reasons.append(f"overfitting (Δbase={delta_pct:+.4f}%)")
 			if stagnation_problem:
-				stop_reasons.append(f"stagnation (Δprev={delta_prev:+.2f}%)")
+				stop_reasons.append(f"stagnation (Δprev={delta_prev:+.4f}%)")
 			reason_str = " and ".join(stop_reasons) if stop_reasons else "exhausted patience"
 			self._log(
 				f"[{self._method_name}] Early stop: {reason_str} "
