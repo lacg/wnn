@@ -548,7 +548,8 @@ class CachedEvaluator:
         max_bits: int,
         min_neurons: int,
         max_neurons: int,
-        mutation_rate: float = 0.1,
+        bits_mutation_rate: float = 0.1,
+        neurons_mutation_rate: float = 0.1,
         crossover_rate: float = 0.7,
         tournament_size: int = 3,
         train_subset_idx: Optional[int] = None,
@@ -572,7 +573,8 @@ class CachedEvaluator:
             accuracy_threshold: Minimum accuracy to pass (e.g., 0.0001 for 0.01%)
             min_bits, max_bits: Bits bounds for mutation
             min_neurons, max_neurons: Neurons bounds for mutation
-            mutation_rate: Probability of mutation per cluster (default 0.1)
+            bits_mutation_rate: Probability of mutating bits per cluster (0.0 to disable)
+            neurons_mutation_rate: Probability of mutating neurons per cluster (0.0 to disable)
             crossover_rate: Probability of crossover vs clone (default 0.7)
             tournament_size: Tournament selection size (default 3)
             train_subset_idx: Which train subset to use (auto-advances if None)
@@ -624,7 +626,8 @@ class CachedEvaluator:
             max_bits=max_bits,
             min_neurons=min_neurons,
             max_neurons=max_neurons,
-            mutation_rate=mutation_rate,
+            bits_mutation_rate=bits_mutation_rate,
+            neurons_mutation_rate=neurons_mutation_rate,
             crossover_rate=crossover_rate,
             tournament_size=tournament_size,
             train_subset_idx=train_subset_idx,

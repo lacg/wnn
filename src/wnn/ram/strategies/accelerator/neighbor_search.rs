@@ -544,9 +544,10 @@ pub struct GAConfig {
     pub max_bits: usize,
     pub min_neurons: usize,
     pub max_neurons: usize,
-    pub mutation_rate: f64,        // Per-cluster mutation rate
-    pub crossover_rate: f64,       // Probability of crossover vs clone
-    pub tournament_size: usize,    // Tournament selection size
+    pub bits_mutation_rate: f64,    // Per-cluster bits mutation rate (0.0 to disable)
+    pub neurons_mutation_rate: f64, // Per-cluster neurons mutation rate (0.0 to disable)
+    pub crossover_rate: f64,        // Probability of crossover vs clone
+    pub tournament_size: usize,     // Tournament selection size
     pub total_input_bits: usize,
 }
 
@@ -629,8 +630,8 @@ fn mutate_ga(
         max_bits: config.max_bits,
         min_neurons: config.min_neurons,
         max_neurons: config.max_neurons,
-        bits_mutation_rate: config.mutation_rate,
-        neurons_mutation_rate: config.mutation_rate,
+        bits_mutation_rate: config.bits_mutation_rate,
+        neurons_mutation_rate: config.neurons_mutation_rate,
         total_input_bits: config.total_input_bits,
     };
     mutate_genome(bits, neurons, connections, &mutation_config, rng)

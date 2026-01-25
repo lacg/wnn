@@ -1015,6 +1015,12 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 					))
 
 			# Generate offspring using Rust (return_best_n=True for soft threshold)
+			# Phase-aware mutation rates: only mutate the dimension being optimized
+			# During neurons phase: bits_mutation_rate=0.0, neurons_mutation_rate=cfg.mutation_rate
+			# During bits phase: bits_mutation_rate=cfg.mutation_rate, neurons_mutation_rate=0.0
+			bits_mutation_rate = cfg.mutation_rate if arch_cfg.optimize_bits else 0.0
+			neurons_mutation_rate = cfg.mutation_rate if arch_cfg.optimize_neurons else 0.0
+
 			needed_offspring = cfg.population_size - elite_count
 			offspring = evaluator.search_offspring(
 				population=population,
@@ -1025,7 +1031,8 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 				max_bits=arch_cfg.max_bits,
 				min_neurons=arch_cfg.min_neurons,
 				max_neurons=arch_cfg.max_neurons,
-				mutation_rate=cfg.mutation_rate,
+				bits_mutation_rate=bits_mutation_rate,
+				neurons_mutation_rate=neurons_mutation_rate,
 				crossover_rate=cfg.crossover_rate,
 				tournament_size=cfg.tournament_size,
 				train_subset_idx=train_idx,
