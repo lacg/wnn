@@ -332,8 +332,10 @@ pub fn search_neighbors_with_threshold(
     let mut shown_count = 0;  // Sequential count of shown/passed candidates
 
     while passed.len() < target_count && evaluated < max_attempts {
-        // Generate a batch of candidates
-        let batch_to_generate = batch_size.min(max_attempts - evaluated);
+        // Generate batch based on remaining needed (plus small buffer for efficiency)
+        // This avoids generating 50 candidates when we only need 4 more
+        let remaining_needed = target_count - passed.len();
+        let batch_to_generate = (remaining_needed + 5).min(batch_size).min(max_attempts - evaluated);
         let mut batch_bits: Vec<usize> = Vec::new();
         let mut batch_neurons: Vec<usize> = Vec::new();
         let mut batch_connections: Vec<i64> = Vec::new();
@@ -442,7 +444,10 @@ pub fn search_neighbors_best_n(
     let mut shown_count = 0;  // Sequential count of shown/passed candidates
 
     while passed.len() < target_count && evaluated < max_attempts {
-        let batch_to_generate = batch_size.min(max_attempts - evaluated);
+        // Generate batch based on remaining needed (plus small buffer for efficiency)
+        // This avoids generating 50 candidates when we only need 4 more
+        let remaining_needed = target_count - passed.len();
+        let batch_to_generate = (remaining_needed + 5).min(batch_size).min(max_attempts - evaluated);
         let mut batch_bits: Vec<usize> = Vec::new();
         let mut batch_neurons: Vec<usize> = Vec::new();
         let mut batch_connections: Vec<i64> = Vec::new();
@@ -678,7 +683,10 @@ pub fn search_offspring(
     let mut shown_count = 0;  // Sequential count of shown/passed candidates
 
     while passed.len() < target_count && evaluated < max_attempts {
-        let batch_to_generate = batch_size.min(max_attempts - evaluated);
+        // Generate batch based on remaining needed (plus small buffer for efficiency)
+        // This avoids generating 50 candidates when we only need 4 more
+        let remaining_needed = target_count - passed.len();
+        let batch_to_generate = (remaining_needed + 5).min(batch_size).min(max_attempts - evaluated);
         let mut batch_bits: Vec<usize> = Vec::new();
         let mut batch_neurons: Vec<usize> = Vec::new();
         let mut batch_connections: Vec<i64> = Vec::new();
