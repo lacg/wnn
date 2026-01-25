@@ -483,13 +483,14 @@ The current main experiment runner is `run_coarse_fine_search.py` in the project
 cd "/Users/lacg/Library/Mobile Documents/com~apple~CloudDocs/Studies/research/wnn"
 source wnn/bin/activate
 
-# Run with tiered config in background
-nohup python -u run_coarse_fine_search.py \
-  --tier-config "100,15,20;400,10,12;rest,5,8" \
-  > run_coarse_fine.out 2>&1 &
+# OVERNIGHT RUN: Always use --ga-gens 1000 --ts-iters 1000
+PYTHONUNBUFFERED=1 nohup python -u run_coarse_fine_search.py \
+  --ga-gens 1000 \
+  --ts-iters 1000 \
+  > nohup.out 2>&1 &
 
 # Monitor progress
-tail -f run_coarse_fine.out
+tail -f nohup.out
 
 # Check log file for detailed genome progress
 tail -f logs/2026/01/*/coarse_fine_pass1_*.log
