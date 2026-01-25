@@ -1705,12 +1705,12 @@ fn calculate_pool_size(
             let words_per_neuron = (cells_per_neuron + 30) / 31; // 31 cells per word
             bytes_per_genome += group.total_neurons() * words_per_neuron * 8;
         } else {
-            // Sparse: REALISTIC estimate based on training data size
-            // With 200K training examples, each neuron could have up to ~200K entries
-            // But typically only a fraction are unique addresses due to collisions
-            // Conservative estimate: 50K entries per neuron (for 20-bit address space)
+            // Sparse: Based on measured data from actual training
+            // With 100K training examples + 5 negatives = 600K writes, but many collide
+            // Measured: ~1.2K unique entries per neuron on average (8.9M / 7500 neurons)
+            // Use 3K as conservative estimate to leave headroom
             // Memory per entry: key(8) + value(1) + DashMap overhead (~24 bytes)
-            bytes_per_genome += group.total_neurons() * 50_000 * 32;
+            bytes_per_genome += group.total_neurons() * 3_000 * 32;
         }
     }
 
@@ -2510,6 +2510,14 @@ pub fn evaluate_genomes_parallel_hybrid(
 
     // Process genomes in batches
     let num_batches = (num_genomes + batch_size - 1) / batch_size;
+
+    // Log batch configuration if WNN_GROUP_LOG is set
+    if std::env::var("WNN_GROUP_LOG").is_ok() && num_batches > 1 {
+        eprintln!(
+            "[BATCH_CONFIG] genomes={} batch_size={} num_batches={}",
+            num_genomes, batch_size, num_batches
+        );
+    }
 
     // Timing instrumentation (enabled via WNN_TIMING env var)
     let timing_enabled = std::env::var("WNN_TIMING").is_ok();
