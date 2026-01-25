@@ -88,11 +88,34 @@ impl DenseBufferCache {
     }
 }
 
+/// Thread-local cache for CE reduction buffers
+/// Avoids buffer allocations per genome in compute_ce_from_buffer
+struct CEBufferCache {
+    targets_buffer: Option<CachedBuffer>,
+    ce_buffer: Option<CachedBuffer>,
+    correct_buffer: Option<CachedBuffer>,
+    // Track the targets data to know if we need to update
+    cached_targets_hash: u64,
+}
+
+impl CEBufferCache {
+    fn new() -> Self {
+        Self {
+            targets_buffer: None,
+            ce_buffer: None,
+            correct_buffer: None,
+            cached_targets_hash: 0,
+        }
+    }
+}
+
 thread_local! {
     static SPARSE_BUFFER_CACHE: std::cell::RefCell<SparseBufferCache> =
         std::cell::RefCell::new(SparseBufferCache::new());
     static DENSE_BUFFER_CACHE: std::cell::RefCell<DenseBufferCache> =
         std::cell::RefCell::new(DenseBufferCache::new());
+    static CE_BUFFER_CACHE: std::cell::RefCell<CEBufferCache> =
+        std::cell::RefCell::new(CEBufferCache::new());
 }
 
 /// Get or create a cached buffer, writing data directly to it
@@ -1671,6 +1694,7 @@ impl MetalGroupEvaluator {
     }
 
     /// Compute CE and accuracy from accumulated scores buffer
+    /// Uses cached buffers to avoid allocation overhead
     pub fn compute_ce_from_buffer(
         &self,
         scores_buffer: &Buffer,
@@ -1678,13 +1702,114 @@ impl MetalGroupEvaluator {
         num_examples: usize,
         num_clusters: usize,
     ) -> Result<(f64, f64), String> {
-        let targets_i32: Vec<i32> = targets.iter().map(|&t| t as i32).collect();
-        let targets_buffer = self.device.new_buffer_with_data(
-            targets_i32.as_ptr() as *const _,
-            (targets_i32.len() * mem::size_of::<i32>()) as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
+        let current_gen = get_sparse_cache_generation();
 
+        // Simple hash of targets for cache invalidation (first + last + len)
+        let targets_hash = if targets.is_empty() {
+            0u64
+        } else {
+            (targets[0] as u64)
+                .wrapping_add((targets[targets.len() - 1] as u64).wrapping_mul(31))
+                .wrapping_add((targets.len() as u64).wrapping_mul(997))
+        };
+
+        // Get or create cached buffers
+        let (targets_buffer, ce_buffer, correct_buffer) = CE_BUFFER_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            let targets_i32: Vec<i32> = targets.iter().map(|&t| t as i32).collect();
+            let required_targets_bytes = (targets_i32.len() * mem::size_of::<i32>()) as u64;
+            let required_ce_bytes = (num_examples * mem::size_of::<f32>()) as u64;
+            let required_correct_bytes = (num_examples * mem::size_of::<u32>()) as u64;
+
+            // Check targets buffer - simplified logic to avoid borrow issues
+            // First check if we can reuse the existing buffer
+            let can_reuse = cache.targets_buffer.as_ref().map_or(false, |cached| {
+                cached.cache_gen == current_gen
+                    && cached.capacity_bytes >= required_targets_bytes
+                    && cache.cached_targets_hash == targets_hash
+            });
+
+            let tgt_buf = if can_reuse {
+                // Targets unchanged, reuse buffer
+                cache.targets_buffer.as_ref().unwrap().buffer.clone()
+            } else {
+                // Need to update or create buffer
+                let buf = self.device.new_buffer_with_data(
+                    targets_i32.as_ptr() as *const _,
+                    required_targets_bytes,
+                    MTLResourceOptions::StorageModeShared,
+                );
+                cache.targets_buffer = Some(CachedBuffer {
+                    buffer: buf.clone(),
+                    capacity_bytes: required_targets_bytes,
+                    cache_gen: current_gen,
+                });
+                cache.cached_targets_hash = targets_hash;
+                buf
+            };
+
+            // CE buffer - just needs to be large enough
+            let ce_buf = if let Some(ref cached) = cache.ce_buffer {
+                if cached.cache_gen == current_gen && cached.capacity_bytes >= required_ce_bytes {
+                    cached.buffer.clone()
+                } else {
+                    let buf = self.device.new_buffer(
+                        required_ce_bytes,
+                        MTLResourceOptions::StorageModeShared,
+                    );
+                    cache.ce_buffer = Some(CachedBuffer {
+                        buffer: buf.clone(),
+                        capacity_bytes: required_ce_bytes,
+                        cache_gen: current_gen,
+                    });
+                    buf
+                }
+            } else {
+                let buf = self.device.new_buffer(
+                    required_ce_bytes,
+                    MTLResourceOptions::StorageModeShared,
+                );
+                cache.ce_buffer = Some(CachedBuffer {
+                    buffer: buf.clone(),
+                    capacity_bytes: required_ce_bytes,
+                    cache_gen: current_gen,
+                });
+                buf
+            };
+
+            // Correct buffer - just needs to be large enough
+            let correct_buf = if let Some(ref cached) = cache.correct_buffer {
+                if cached.cache_gen == current_gen && cached.capacity_bytes >= required_correct_bytes {
+                    cached.buffer.clone()
+                } else {
+                    let buf = self.device.new_buffer(
+                        required_correct_bytes,
+                        MTLResourceOptions::StorageModeShared,
+                    );
+                    cache.correct_buffer = Some(CachedBuffer {
+                        buffer: buf.clone(),
+                        capacity_bytes: required_correct_bytes,
+                        cache_gen: current_gen,
+                    });
+                    buf
+                }
+            } else {
+                let buf = self.device.new_buffer(
+                    required_correct_bytes,
+                    MTLResourceOptions::StorageModeShared,
+                );
+                cache.correct_buffer = Some(CachedBuffer {
+                    buffer: buf.clone(),
+                    capacity_bytes: required_correct_bytes,
+                    cache_gen: current_gen,
+                });
+                buf
+            };
+
+            (tgt_buf, ce_buf, correct_buf)
+        });
+
+        // Params buffer is small, just create it each time
         let params = CEReduceParams {
             num_examples: num_examples as u32,
             num_clusters: num_clusters as u32,
@@ -1692,15 +1817,6 @@ impl MetalGroupEvaluator {
         let params_buffer = self.device.new_buffer_with_data(
             &params as *const _ as *const _,
             mem::size_of::<CEReduceParams>() as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
-
-        let ce_buffer = self.device.new_buffer(
-            (num_examples * mem::size_of::<f32>()) as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
-        let correct_buffer = self.device.new_buffer(
-            (num_examples * mem::size_of::<u32>()) as u64,
             MTLResourceOptions::StorageModeShared,
         );
 

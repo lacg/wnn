@@ -2176,6 +2176,7 @@ pub fn evaluate_genomes_parallel_hybrid(
     let timing_enabled = std::env::var("WNN_TIMING").is_ok();
     let mut total_train_ms = 0u128;
     let mut total_eval_ms = 0u128;
+    let mut total_sparse_keys = 0usize;
 
     // Progress logging for parallel batch (logs training completion, not final results)
     let progress_log = std::env::var("WNN_PROGRESS_LOG").map(|v| v == "1").unwrap_or(false);
@@ -2262,6 +2263,14 @@ pub fn evaluate_genomes_parallel_hybrid(
             .collect();
 
         let train_elapsed = train_start.elapsed();
+
+        // Track sparse export sizes for timing diagnostics
+        let sparse_keys_total: usize = if timing_enabled {
+            batch_exports.iter()
+                .map(|(_, export)| export.sparse_exports.iter().map(|se| se.keys.len()).sum::<usize>())
+                .sum()
+        } else { 0 };
+
         let eval_start = std::time::Instant::now();
 
         // Send to persistent eval worker and get results
@@ -2307,6 +2316,7 @@ pub fn evaluate_genomes_parallel_hybrid(
         if timing_enabled {
             total_train_ms += train_elapsed.as_millis();
             total_eval_ms += (eval_elapsed_secs * 1000.0) as u128;
+            total_sparse_keys += sparse_keys_total;
         }
     }
 
@@ -2314,9 +2324,10 @@ pub fn evaluate_genomes_parallel_hybrid(
     if timing_enabled && num_genomes > 0 {
         let train_per_genome = total_train_ms as f64 / num_genomes as f64;
         let eval_per_genome = total_eval_ms as f64 / num_genomes as f64;
+        let sparse_per_genome = total_sparse_keys as f64 / num_genomes as f64;
         eprintln!(
-            "[TIMING] batch_size={}, genomes={}: train={:.0}ms/genome, eval={:.0}ms/genome, total={:.0}ms/genome",
-            batch_size, num_genomes, train_per_genome, eval_per_genome, train_per_genome + eval_per_genome
+            "[TIMING] batch_size={}, genomes={}: train={:.0}ms/genome, eval={:.0}ms/genome, total={:.0}ms/genome, sparse_keys={:.0}/genome",
+            batch_size, num_genomes, train_per_genome, eval_per_genome, train_per_genome + eval_per_genome, sparse_per_genome
         );
     }
 
