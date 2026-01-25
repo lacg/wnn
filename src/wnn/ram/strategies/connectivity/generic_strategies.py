@@ -536,7 +536,10 @@ class EarlyStoppingTracker:
 		delta_pct, _ = detector.tick_with_mean(current_fitness)
 
 		# === 2. Stagnation check: improvement vs previous check ===
+		# On first check, use baseline as the reference (not 0%)
 		prev_mean = getattr(self, '_prev_health_mean', None)
+		if prev_mean is None:
+			prev_mean = detector.baseline_mean  # First check compares to baseline
 		if prev_mean is not None and prev_mean > 0:
 			improvement_pct = (prev_mean - current_mean) / prev_mean * 100
 		else:
@@ -561,9 +564,9 @@ class EarlyStoppingTracker:
 
 		if worst_delta < OverfitThreshold.HEALTHY:  # < -1% (improving a lot)
 			level = AdaptiveLevel.HEALTHY
-		elif worst_delta < OverfitThreshold.WARNING:  # -1% to 0% (stable/slight improve)
+		elif worst_delta <= OverfitThreshold.WARNING:  # -1% to 0% inclusive (stable)
 			level = AdaptiveLevel.NEUTRAL
-		elif worst_delta < OverfitThreshold.CRITICAL:  # 0% to 3% (mild issues)
+		elif worst_delta < OverfitThreshold.CRITICAL:  # >0% to 3% (mild issues)
 			level = AdaptiveLevel.WARNING
 		else:  # >= 3% (severe issues)
 			level = AdaptiveLevel.CRITICAL
