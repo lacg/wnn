@@ -39,6 +39,7 @@ def format_genome_log(
     total: int,
     ce: float,
     acc: float,
+    duration: Optional[float] = None,
 ) -> str:
     """
     Format a genome log line with consistent padding and alignment.
@@ -47,6 +48,7 @@ def format_genome_log(
     - 6-char label (Elite  or Genome)
     - Position/total with dynamic padding
     - 5-char type indicator in parentheses (CE, Acc, New, Init, Nbr)
+    - Optional duration at end
 
     Args:
         generation: Current generation (1-indexed)
@@ -56,11 +58,12 @@ def format_genome_log(
         total: Total items in this batch
         ce: Cross-entropy value
         acc: Accuracy value (0.0 to 1.0)
+        duration: Optional duration in seconds
 
     Returns:
         Formatted log string like:
         "[Gen 001/100] Elite  01/10 (CE  ): CE=10.3417, Acc=0.0180%"
-        "[Gen 001/100] Genome 01/40 (New ): CE=10.3559, Acc=0.0300%"
+        "[Gen 001/100] Genome 01/40 (New ): CE=10.3559, Acc=0.0300% (1.2s)"
     """
     # Calculate padding widths based on totals
     gen_width = len(str(total_generations))
@@ -75,7 +78,10 @@ def format_genome_log(
     else:
         gen_prefix = f"[Gen {generation:0{gen_width}d}/{total_generations:0{gen_width}d}]"
 
-    return f"{gen_prefix} {label} {position:0{pos_width}d}/{total} ({type_ind}): CE={ce:.4f}, Acc={acc:.4%}"
+    base = f"{gen_prefix} {label} {position:0{pos_width}d}/{total} ({type_ind}): CE={ce:.4f}, Acc={acc:.4%}"
+    if duration is not None:
+        return f"{base} ({duration:.1f}s)"
+    return base
 
 
 def format_gen_prefix(generation: int, total_generations: int) -> str:

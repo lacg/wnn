@@ -314,11 +314,12 @@ class CachedEvaluator:
         streaming_was_used = streaming and stream_batch_size < num_genomes
         if not streaming_was_used and not rust_progress:
             current_gen = (generation + 1) if generation is not None else 1
+            avg_duration = elapsed / num_genomes if num_genomes > 0 else 0.0
             for i, (ce, acc) in enumerate(results):
                 passes = min_accuracy is None or acc >= min_accuracy
                 base_msg = format_genome_log(
                     current_gen, total_gens, GenomeLogType.INITIAL,
-                    i + 1, num_genomes, ce, acc
+                    i + 1, num_genomes, ce, acc, duration=avg_duration
                 )
                 if passes:
                     log_debug(base_msg)
