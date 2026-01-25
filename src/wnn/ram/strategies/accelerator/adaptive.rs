@@ -1742,55 +1742,43 @@ pub fn evaluate_genome_hybrid(
             let mut dense_time_ms = 0.0f64;
             let mut sparse_call_count = 0usize;
 
-            // Collect all sparse groups for batched evaluation (reduces ~27ms to ~2ms)
-            let sparse_start = std::time::Instant::now();
-            let mut sparse_groups_data: Vec<crate::metal_ramlm::SparseGroupData> = Vec::new();
+            // Evaluate groups sequentially - uses buffer caching to avoid memory leaks
+            // (batched evaluation created new buffers per group causing 100MB+/gen leak)
             for (is_sparse, group_idx, cluster_ids) in &export.group_info {
+                let group = &export.groups[*group_idx];
+                let group_start = std::time::Instant::now();
+
                 if *is_sparse {
-                    let group = &export.groups[*group_idx];
                     let sparse_export = &export.sparse_exports[sparse_idx];
                     sparse_idx += 1;
                     sparse_call_count += 1;
 
-                    sparse_groups_data.push(crate::metal_ramlm::SparseGroupData {
-                        connections: &export.connections[group.conn_offset..group.conn_offset + group.conn_size()],
-                        keys: &sparse_export.keys,
-                        values: &sparse_export.values,
-                        offsets: &sparse_export.offsets,
-                        counts: &sparse_export.counts,
+                    // Evaluate sparse group - uses SPARSE_BUFFER_CACHE for buffer reuse
+                    group_eval.eval_sparse_to_buffer(
+                        &input_buffer,
+                        &scores_buffer,
+                        &export.connections[group.conn_offset..group.conn_offset + group.conn_size()],
+                        &sparse_export.keys,
+                        &sparse_export.values,
+                        &sparse_export.offsets,
+                        &sparse_export.counts,
                         cluster_ids,
-                        bits_per_neuron: group.bits,
-                        neurons_per_cluster: group.neurons,
-                    });
-                }
-            }
+                        num_eval,
+                        total_input_bits,
+                        group.bits,
+                        group.neurons,
+                        num_clusters,
+                        empty_value,
+                    );
 
-            // Evaluate all sparse groups in a single batched GPU dispatch
-            if !sparse_groups_data.is_empty() {
-                group_eval.eval_sparse_groups_batched(
-                    &input_buffer,
-                    &scores_buffer,
-                    &sparse_groups_data,
-                    num_eval,
-                    total_input_bits,
-                    num_clusters,
-                    empty_value,
-                );
-            }
-
-            if phase_timing {
-                sparse_time_ms = sparse_start.elapsed().as_micros() as f64 / 1000.0;
-            }
-
-            // Process dense groups (these are fewer and larger, so batching is less critical)
-            let dense_start = std::time::Instant::now();
-            for (is_sparse, group_idx, cluster_ids) in &export.group_info {
-                if !*is_sparse {
-                    let group = &export.groups[*group_idx];
+                    if phase_timing {
+                        sparse_time_ms += group_start.elapsed().as_micros() as f64 / 1000.0;
+                    }
+                } else {
                     let dense_words = &export.dense_exports[dense_idx];
                     dense_idx += 1;
 
-                    // Evaluate dense group directly to shared buffer
+                    // Evaluate dense group - uses DENSE_BUFFER_CACHE for buffer reuse
                     group_eval.eval_dense_to_buffer(
                         &input_buffer,
                         &scores_buffer,
@@ -1805,11 +1793,11 @@ pub fn evaluate_genome_hybrid(
                         group.words_per_neuron,
                         empty_value,
                     );
-                }
-            }
 
-            if phase_timing {
-                dense_time_ms = dense_start.elapsed().as_micros() as f64 / 1000.0;
+                    if phase_timing {
+                        dense_time_ms += group_start.elapsed().as_micros() as f64 / 1000.0;
+                    }
+                }
             }
 
             let ce_start = std::time::Instant::now();
