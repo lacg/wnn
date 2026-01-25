@@ -535,32 +535,34 @@ class EarlyStoppingTracker:
 		# === 1. Overfitting check: delta vs baseline ===
 		delta_pct, _ = detector.tick_with_mean(current_fitness)
 
-		# === 2. Stagnation check: improvement vs previous check ===
+		# === 2. Stagnation check: delta vs previous check ===
 		# On first check, use baseline as the reference (not 0%)
 		prev_mean = getattr(self, '_prev_health_mean', None)
 		if prev_mean is None:
 			prev_mean = detector.baseline_mean  # First check compares to baseline
 		if prev_mean is not None and prev_mean > 0:
-			improvement_pct = (prev_mean - current_mean) / prev_mean * 100
+			# delta_prev = (current - prev) / prev * 100
+			# Negative = improving (current < prev), Positive = getting worse
+			delta_prev = (current_mean - prev_mean) / prev_mean * 100
 		else:
-			improvement_pct = 0.0
+			delta_prev = 0.0
 
 		# Update prev_mean for next check
 		self._prev_health_mean = current_mean
 
 		# === Determine if there's a problem (for display only) ===
-		# Problem 1: Overfitting (delta too high)
-		overfit_problem = delta_pct > cfg.min_improvement_pct
+		# Simple logic: negative delta = good (improving), positive delta = bad
+		# Problem 1: Overfitting (current worse than baseline on validation)
+		overfit_problem = delta_pct > 0
 
-		# Problem 2: Stagnation (not improving enough)
-		stagnation_problem = improvement_pct < cfg.min_improvement_pct
+		# Problem 2: Stagnation (not improving from previous check)
+		# delta_prev >= 0 means current >= previous (not improving)
+		stagnation_problem = delta_prev >= 0
 
 		# === Determine level FIRST (used for both display AND patience) ===
-		# Convert improvement to delta convention (negative improvement = positive delta)
-		stagnation_delta = -improvement_pct
-
 		# Use the worst (highest) delta to determine level
-		worst_delta = max(delta_pct, stagnation_delta)
+		# Both delta_pct and delta_prev use same convention: negative=good, positive=bad
+		worst_delta = max(delta_pct, delta_prev)
 
 		if worst_delta < OverfitThreshold.HEALTHY:  # < -1% (improving a lot)
 			level = AdaptiveLevel.HEALTHY
@@ -601,7 +603,7 @@ class EarlyStoppingTracker:
 		self._log(
 			f"[{self._method_name}] Health check (top-{top_k_count}): "
 			f"mean={current_mean:.4f}, baseline={baseline:.4f}, "
-			f"Δbase={delta_pct:+.2f}%, Δprev={improvement_pct:+.2f}%, "
+			f"Δbase={delta_pct:+.2f}%, Δprev={delta_prev:+.2f}%, "
 			f"patience={remaining}/{cfg.patience} {display}{problem_str}"
 		)
 
@@ -612,7 +614,7 @@ class EarlyStoppingTracker:
 			if overfit_problem:
 				stop_reasons.append(f"overfitting (Δbase={delta_pct:+.2f}%)")
 			if stagnation_problem:
-				stop_reasons.append(f"stagnation (Δprev={improvement_pct:+.2f}%)")
+				stop_reasons.append(f"stagnation (Δprev={delta_prev:+.2f}%)")
 			reason_str = " and ".join(stop_reasons) if stop_reasons else "exhausted patience"
 			self._log(
 				f"[{self._method_name}] Early stop: {reason_str} "
