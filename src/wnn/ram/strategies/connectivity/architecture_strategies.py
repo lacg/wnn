@@ -746,7 +746,9 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 
 		# Threshold continuity
 		start_threshold = cfg.initial_threshold if cfg.initial_threshold is not None else cfg.min_accuracy
-		end_threshold = start_threshold + cfg.threshold_delta
+		# End threshold depends on actual generations vs reference (constant rate)
+		actual_progress = min(1.0, cfg.generations / cfg.threshold_reference)
+		end_threshold = start_threshold + actual_progress * cfg.threshold_delta
 
 		def get_threshold(progress: float = 0.0) -> float:
 			if not cfg.progressive_threshold:
@@ -754,7 +756,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			progress = max(0.0, min(1.0, progress))
 			return start_threshold + progress * cfg.threshold_delta
 
-		self._log.info(f"[{self.name}] Progressive threshold: {start_threshold:.4%} → {end_threshold:.4%}")
+		self._log.info(f"[{self.name}] Progressive threshold: {start_threshold:.4%} → {end_threshold:.4%} (rate: {cfg.threshold_delta/cfg.threshold_reference:.4%}/gen)")
 		self._log.info(f"[{self.name}] Using Rust search_offspring (single-call offspring search)")
 
 		# Initialize population (show ALL genomes - no threshold filtering for init)
@@ -934,7 +936,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 					},
 				)
 
-			current_threshold = get_threshold(generation / cfg.generations)
+			current_threshold = get_threshold(generation / cfg.threshold_reference)
 			# Only log if formatted values differ
 			if prev_threshold is not None and f"{prev_threshold:.4%}" != f"{current_threshold:.4%}":
 				self._log.debug(f"[{self.name}] Threshold changed: {prev_threshold:.4%} → {current_threshold:.4%}")
@@ -1404,7 +1406,9 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 
 		# Threshold continuity
 		start_threshold = cfg.initial_threshold if cfg.initial_threshold is not None else cfg.min_accuracy
-		end_threshold = start_threshold + cfg.threshold_delta
+		# End threshold depends on actual iterations vs reference (constant rate)
+		actual_progress = min(1.0, cfg.iterations / cfg.threshold_reference)
+		end_threshold = start_threshold + actual_progress * cfg.threshold_delta
 
 		def get_threshold(progress: float = 0.0) -> float:
 			if not cfg.progressive_threshold:
@@ -1412,7 +1416,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 			progress = max(0.0, min(1.0, progress))
 			return start_threshold + progress * cfg.threshold_delta
 
-		self._log.info(f"[{self.name}] Progressive threshold: {start_threshold:.4%} → {end_threshold:.4%}")
+		self._log.info(f"[{self.name}] Progressive threshold: {start_threshold:.4%} → {end_threshold:.4%} (rate: {cfg.threshold_delta/cfg.threshold_reference:.4%}/iter)")
 		self._log.info(f"[{self.name}] Using Rust search_neighbors (single-call neighbor search)")
 
 		# CRITICAL: Ensure initial genome has connections (fixes reproducibility bug)
@@ -1571,7 +1575,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 				except Exception:
 					pass  # Ignore if accelerator not available
 
-			current_threshold = get_threshold(iteration / cfg.iterations)
+			current_threshold = get_threshold(iteration / cfg.threshold_reference)
 			if prev_threshold is not None and f"{prev_threshold:.4%}" != f"{current_threshold:.4%}":
 				self._log.debug(f"[{self.name}] Threshold changed: {prev_threshold:.4%} → {current_threshold:.4%}")
 			prev_threshold = current_threshold

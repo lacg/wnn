@@ -990,7 +990,8 @@ class GAConfig:
 	# If None, uses min_accuracy as the base (first phase)
 	initial_threshold: Optional[float] = None
 	min_accuracy: float = 0.0       # 0% base threshold (start accepting everything)
-	threshold_delta: float = 0.01     # 1% total (0.001% per gen: 0.01%@gen10, 0.1%@gen100, 1%@gen1000)
+	threshold_delta: float = 0.01     # 1% total increase over threshold_reference generations
+	threshold_reference: int = 1000   # Reference gens for threshold rate (0.001% per gen at delta=1%)
 	progressive_threshold: bool = True  # Enable progressive threshold within phase
 	# CE percentile filter: keep only offspring in top X% by CE (None = disabled)
 	# Example: 0.75 keeps top 75% by CE. Applied after accuracy threshold.
@@ -1025,7 +1026,8 @@ class TSConfig:
 	# If None, uses min_accuracy as the base (first phase)
 	initial_threshold: Optional[float] = None
 	min_accuracy: float = 0.0       # 0% base threshold (start accepting everything)
-	threshold_delta: float = 0.01     # 1% total (0.001% per gen: 0.01%@gen10, 0.1%@gen100, 1%@gen1000)
+	threshold_delta: float = 0.01     # 1% total increase over threshold_reference iterations
+	threshold_reference: int = 1000   # Reference iters for threshold rate (0.001% per iter at delta=1%)
 	progressive_threshold: bool = True  # Enable progressive threshold within phase
 	# CE percentile filter: keep only neighbors in top X% by CE (None = disabled)
 	# Example: 0.75 keeps top 75% by CE. Applied after accuracy threshold.
@@ -1139,7 +1141,9 @@ class GenericGAStrategy(ABC, Generic[T]):
 		# Threshold continuity: use initial_threshold from config if set (passed from previous phase)
 		# Otherwise, fall back to min_accuracy (first phase)
 		start_threshold = cfg.initial_threshold if cfg.initial_threshold is not None else cfg.min_accuracy
-		end_threshold = start_threshold + cfg.threshold_delta
+		# End threshold depends on actual generations vs reference (constant rate)
+		actual_progress = min(1.0, cfg.generations / cfg.threshold_reference)
+		end_threshold = start_threshold + actual_progress * cfg.threshold_delta
 
 		# Helper to get current threshold based on progress
 		def get_threshold(progress: float = 0.0) -> float:
@@ -1148,7 +1152,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 			progress = max(0.0, min(1.0, progress))
 			return start_threshold + progress * cfg.threshold_delta
 
-		self._log.info(f"[{self.name}] Progressive threshold: {start_threshold:.2%} → {end_threshold:.2%}")
+		self._log.info(f"[{self.name}] Progressive threshold: {start_threshold:.2%} → {end_threshold:.2%} (rate: {cfg.threshold_delta/cfg.threshold_reference:.4%}/gen)")
 
 		# Build initial population with viable candidates only (accuracy >= threshold at start)
 		initial_threshold = get_threshold(0.0)
@@ -1297,7 +1301,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 				return self.mutate_genome(child, cfg.mutation_rate)
 
 			# Progressive threshold: gets stricter as generations progress
-			current_threshold = get_threshold(generation / cfg.generations)
+			current_threshold = get_threshold(generation / cfg.threshold_reference)
 			# Only log if formatted values differ (avoid noise from tiny internal differences)
 			if prev_threshold is not None and f"{prev_threshold:.4%}" != f"{current_threshold:.4%}":
 				self._log.debug(f"[{self.name}] Threshold changed: {prev_threshold:.4%} → {current_threshold:.4%}")
@@ -1389,7 +1393,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 					final_population = [self.clone_genome(g) for g, _, _ in sorted(population, key=lambda x: x[1])]
 					improvement_pct = (initial_fitness - best_fitness) / initial_fitness * 100 if initial_fitness > 0 else 0
 					# Compute final_threshold at current progress for next phase continuity
-					current_final_threshold = get_threshold(generation / cfg.generations)
+					current_final_threshold = get_threshold(generation / cfg.threshold_reference)
 					return OptimizerResult(
 						initial_genome=initial_genome if initial_genome else population[0][0],
 						best_genome=best,
@@ -1432,7 +1436,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 		diversity_change = final_ce_spread - initial_ce_spread
 
 		# Compute final threshold for next phase continuity
-		final_threshold = get_threshold(generation / cfg.generations) if cfg.generations > 0 else start_threshold
+		final_threshold = get_threshold(generation / cfg.threshold_reference) if cfg.generations > 0 else start_threshold
 
 		self._log.info(f"\n[{self.name}] Analysis Summary:")
 		self._log.info(f"  CE improvement: {initial_fitness:.4f} → {best_fitness:.4f} ({(1 - best_fitness/initial_fitness)*100:+.2f}%)")
@@ -1689,7 +1693,9 @@ class GenericTSStrategy(ABC, Generic[T]):
 		# Threshold continuity: use initial_threshold from config if set (passed from previous phase)
 		# Otherwise, fall back to min_accuracy (first phase)
 		start_threshold = cfg.initial_threshold if cfg.initial_threshold is not None else cfg.min_accuracy
-		end_threshold = start_threshold + cfg.threshold_delta
+		# End threshold depends on actual iterations vs reference (constant rate)
+		actual_progress = min(1.0, cfg.iterations / cfg.threshold_reference)
+		end_threshold = start_threshold + actual_progress * cfg.threshold_delta
 
 		# Helper to get current threshold based on progress
 		def get_threshold(progress: float = 0.0) -> float:
@@ -1698,7 +1704,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 			progress = max(0.0, min(1.0, progress))
 			return start_threshold + progress * cfg.threshold_delta
 
-		self._log.info(f"[{self.name}] Progressive threshold: {start_threshold:.2%} → {end_threshold:.2%}")
+		self._log.info(f"[{self.name}] Progressive threshold: {start_threshold:.2%} → {end_threshold:.2%} (rate: {cfg.threshold_delta/cfg.threshold_reference:.4%}/iter)")
 
 		# Cache size for total_neighbors (top K/2 by CE + top K/2 by Acc)
 		cache_size = cfg.total_neighbors_size or cfg.neighbors_per_iter
@@ -1803,7 +1809,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 		iteration = 0
 		for iteration in range(cfg.iterations):
 			# Progressive threshold
-			current_threshold = get_threshold(iteration / cfg.iterations)
+			current_threshold = get_threshold(iteration / cfg.threshold_reference)
 			# Only log if formatted values differ (avoid noise from tiny internal differences)
 			if prev_threshold is not None and f"{prev_threshold:.4%}" != f"{current_threshold:.4%}":
 				self._log.debug(f"[{self.name}] Threshold changed: {prev_threshold:.4%} → {current_threshold:.4%}")
@@ -1923,7 +1929,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 		final_population = [self.clone_genome(g) for g, _, _ in final_population_with_metrics]
 
 		# Final threshold (for next phase)
-		final_threshold = get_threshold(iteration / cfg.iterations) if cfg.iterations > 0 else start_threshold
+		final_threshold = get_threshold(iteration / cfg.threshold_reference) if cfg.iterations > 0 else start_threshold
 
 		# Log analysis summary
 		total_iters = iteration + 1
