@@ -21,51 +21,46 @@ Usage:
 from enum import IntEnum
 
 
-class OverfitThreshold(IntEnum):
+class OverfitThreshold:
     """
     Thresholds for overfitting detection based on val/train ratio change.
+
+    Float-based (not an enum) for decimal precision.
 
     The val/train ratio is compared to a baseline. The delta (% change from
     baseline) determines the overfitting status:
 
-    HEALTHY: delta < -1% (improving - val/train ratio decreasing)
+    HEALTHY: delta < -0.1% (improving - val/train ratio decreasing)
     WARNING: delta > 0% (mild overfitting - ratio starting to increase)
-    SEVERE: delta > 1% (significant overfitting - needs aggressive action)
-    CRITICAL: delta > 3% (severe overfitting - should stop)
+    SEVERE: delta > 0.1% (significant overfitting - needs aggressive action)
+    CRITICAL: delta > 0.3% (severe overfitting - should stop)
 
-    Example:
-        Baseline ratio: 250x (val=2000, train=8)
-        Current ratio: 262.5x (val=2100, train=8)
-        Delta: +5% -> SEVERE threshold exceeded
+    Values are 10x more sensitive than before to catch smaller regressions.
     """
-    HEALTHY = -1    # < -1%: ratio improving, exit diversity mode
-    WARNING = 0     # > 0%: any ratio increase, enter mild diversity
-    SEVERE = 1      # > 1%: significant increase, enter aggressive diversity
-    CRITICAL = 3    # > 3%: severe overfitting, early stop
-
-    def as_float(self) -> float:
-        """Return threshold as float percentage."""
-        return float(self.value)
+    HEALTHY = -0.1   # < -0.1%: ratio improving, exit diversity mode
+    WARNING = 0.0    # > 0%: any ratio increase, enter mild diversity
+    SEVERE = 0.1     # > 0.1%: significant increase, enter aggressive diversity
+    CRITICAL = 0.3   # > 0.3%: severe overfitting, early stop
 
     @classmethod
-    def get_status(cls, delta: float) -> 'OverfitThreshold':
+    def get_status(cls, delta: float) -> str:
         """
         Get the threshold status for a given delta value.
 
         Args:
-            delta: The percentage change from baseline (e.g., 3.5 for +3.5%)
+            delta: The percentage change from baseline (e.g., 0.35 for +0.35%)
 
         Returns:
-            The most severe threshold that delta exceeds.
+            The status name as string.
         """
         if delta > cls.CRITICAL:
-            return cls.CRITICAL
+            return "CRITICAL"
         elif delta > cls.SEVERE:
-            return cls.SEVERE
+            return "SEVERE"
         elif delta > cls.WARNING:
-            return cls.WARNING
+            return "WARNING"
         else:
-            return cls.HEALTHY
+            return "HEALTHY"
 
 
 class EarlyStopThreshold(IntEnum):
