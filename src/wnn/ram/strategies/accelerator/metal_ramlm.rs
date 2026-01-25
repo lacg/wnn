@@ -120,6 +120,7 @@ struct BatchedSparseBufferPool {
     counts_buffers: Vec<Option<CachedBuffer>>,
     cluster_ids_buffers: Vec<Option<CachedBuffer>>,
     params_buffers: Vec<Option<CachedBuffer>>,
+    actual_neurons_buffers: Vec<Option<CachedBuffer>>,  // For masked groups
 }
 
 impl BatchedSparseBufferPool {
@@ -132,6 +133,7 @@ impl BatchedSparseBufferPool {
             counts_buffers: Vec::new(),
             cluster_ids_buffers: Vec::new(),
             params_buffers: Vec::new(),
+            actual_neurons_buffers: Vec::new(),
         }
     }
 
@@ -145,6 +147,7 @@ impl BatchedSparseBufferPool {
             self.counts_buffers.push(None);
             self.cluster_ids_buffers.push(None);
             self.params_buffers.push(None);
+            self.actual_neurons_buffers.push(None);
         }
     }
 
@@ -159,6 +162,7 @@ impl BatchedSparseBufferPool {
             self.counts_buffers[i] = None;
             self.cluster_ids_buffers[i] = None;
             self.params_buffers[i] = None;
+            self.actual_neurons_buffers[i] = None;
         }
     }
 }
@@ -1451,6 +1455,20 @@ struct SparseToBufferParams {
     empty_value: f32,
 }
 
+/// Parameters for sparse forward to buffer with per-cluster masking (must match Metal struct)
+/// Used when clusters are coalesced by neuron bucket (e.g., 5-7 neurons → max 7)
+#[repr(C)]
+struct SparseToBufferMaskedParams {
+    num_examples: u32,
+    total_input_bits: u32,
+    num_neurons: u32,
+    bits_per_neuron: u32,
+    max_neurons_per_cluster: u32,  // Max neurons for memory layout
+    num_group_clusters: u32,
+    total_clusters: u32,
+    empty_value: f32,
+}
+
 /// Parameters for dense forward to buffer (must match Metal struct)
 #[repr(C)]
 struct DenseToBufferParams {
@@ -1475,6 +1493,8 @@ pub struct SparseGroupData<'a> {
     pub cluster_ids: &'a [usize],
     pub bits_per_neuron: usize,
     pub neurons_per_cluster: usize,
+    /// Actual neurons per cluster (for masked groups), None if uniform
+    pub actual_neurons_per_cluster: Option<&'a [u32]>,
 }
 
 /// Unified Metal evaluator that writes group results directly to shared GPU buffer
@@ -1485,6 +1505,7 @@ pub struct MetalGroupEvaluator {
     device: Device,
     command_queue: CommandQueue,
     sparse_to_buffer_pipeline: ComputePipelineState,
+    sparse_to_buffer_masked_pipeline: ComputePipelineState,  // For coalesced groups with per-cluster masking
     dense_to_buffer_pipeline: ComputePipelineState,
     ce_reduce_pipeline: ComputePipelineState,
 }
@@ -1508,6 +1529,14 @@ impl MetalGroupEvaluator {
         let sparse_to_buffer_pipeline = device
             .new_compute_pipeline_state_with_function(&sparse_to_buffer_kernel)
             .map_err(|e| format!("Failed to create sparse to buffer pipeline: {}", e))?;
+
+        let sparse_to_buffer_masked_kernel = sparse_library
+            .get_function("sparse_forward_to_buffer_masked", None)
+            .map_err(|e| format!("Failed to get sparse_forward_to_buffer_masked: {}", e))?;
+
+        let sparse_to_buffer_masked_pipeline = device
+            .new_compute_pipeline_state_with_function(&sparse_to_buffer_masked_kernel)
+            .map_err(|e| format!("Failed to create sparse masked pipeline: {}", e))?;
 
         // Compile dense forward shader
         let dense_shader = include_str!("shaders/ramlm.metal");
@@ -1541,6 +1570,7 @@ impl MetalGroupEvaluator {
             device,
             command_queue,
             sparse_to_buffer_pipeline,
+            sparse_to_buffer_masked_pipeline,
             dense_to_buffer_pipeline,
             ce_reduce_pipeline,
         })
@@ -1739,25 +1769,52 @@ impl MetalGroupEvaluator {
         let current_gen = get_sparse_cache_generation();
 
         // Pre-allocate converted data to keep it alive during GPU execution
-        let mut converted_data: Vec<(Vec<i32>, Vec<u32>, Vec<u8>)> = Vec::with_capacity(sparse_groups.len());
+        // For masked groups, we use different params struct
+        enum ParamsBytes {
+            Uniform(Vec<u8>),
+            Masked(Vec<u8>),
+        }
+        let mut converted_data: Vec<(Vec<i32>, Vec<u32>, ParamsBytes)> = Vec::with_capacity(sparse_groups.len());
         for group in sparse_groups {
             let connections_i32: Vec<i32> = group.connections.iter().map(|&c| c as i32).collect();
             let cluster_ids_u32: Vec<u32> = group.cluster_ids.iter().map(|&c| c as u32).collect();
-            let params = SparseToBufferParams {
-                num_examples: num_examples as u32,
-                total_input_bits: total_input_bits as u32,
-                num_neurons: (group.cluster_ids.len() * group.neurons_per_cluster) as u32,
-                bits_per_neuron: group.bits_per_neuron as u32,
-                neurons_per_cluster: group.neurons_per_cluster as u32,
-                num_group_clusters: group.cluster_ids.len() as u32,
-                total_clusters: num_clusters as u32,
-                empty_value,
-            };
-            let params_bytes: Vec<u8> = unsafe {
-                std::slice::from_raw_parts(
-                    &params as *const SparseToBufferParams as *const u8,
-                    mem::size_of::<SparseToBufferParams>(),
-                ).to_vec()
+
+            let params_bytes = if group.actual_neurons_per_cluster.is_some() {
+                // Masked mode: use SparseToBufferMaskedParams
+                let params = SparseToBufferMaskedParams {
+                    num_examples: num_examples as u32,
+                    total_input_bits: total_input_bits as u32,
+                    num_neurons: (group.cluster_ids.len() * group.neurons_per_cluster) as u32,
+                    bits_per_neuron: group.bits_per_neuron as u32,
+                    max_neurons_per_cluster: group.neurons_per_cluster as u32,
+                    num_group_clusters: group.cluster_ids.len() as u32,
+                    total_clusters: num_clusters as u32,
+                    empty_value,
+                };
+                ParamsBytes::Masked(unsafe {
+                    std::slice::from_raw_parts(
+                        &params as *const SparseToBufferMaskedParams as *const u8,
+                        mem::size_of::<SparseToBufferMaskedParams>(),
+                    ).to_vec()
+                })
+            } else {
+                // Uniform mode: use SparseToBufferParams
+                let params = SparseToBufferParams {
+                    num_examples: num_examples as u32,
+                    total_input_bits: total_input_bits as u32,
+                    num_neurons: (group.cluster_ids.len() * group.neurons_per_cluster) as u32,
+                    bits_per_neuron: group.bits_per_neuron as u32,
+                    neurons_per_cluster: group.neurons_per_cluster as u32,
+                    num_group_clusters: group.cluster_ids.len() as u32,
+                    total_clusters: num_clusters as u32,
+                    empty_value,
+                };
+                ParamsBytes::Uniform(unsafe {
+                    std::slice::from_raw_parts(
+                        &params as *const SparseToBufferParams as *const u8,
+                        mem::size_of::<SparseToBufferParams>(),
+                    ).to_vec()
+                })
             };
             converted_data.push((connections_i32, cluster_ids_u32, params_bytes));
         }
@@ -1767,10 +1824,14 @@ impl MetalGroupEvaluator {
             let mut pool = pool.borrow_mut();
             pool.ensure_capacity(sparse_groups.len());
 
-            let mut buffers = Vec::with_capacity(sparse_groups.len());
+            let mut buffers: Vec<(Buffer, Buffer, Buffer, Buffer, Buffer, Buffer, Buffer, Option<Buffer>)> = Vec::with_capacity(sparse_groups.len());
 
             for (idx, group) in sparse_groups.iter().enumerate() {
                 let (ref connections_i32, ref cluster_ids_u32, ref params_bytes) = converted_data[idx];
+                let params_slice = match params_bytes {
+                    ParamsBytes::Uniform(v) => v.as_slice(),
+                    ParamsBytes::Masked(v) => v.as_slice(),
+                };
 
                 let conn = get_or_create_buffer(&self.device, &mut pool.conn_buffers[idx], connections_i32, current_gen);
                 let keys = get_or_create_buffer(&self.device, &mut pool.keys_buffers[idx], group.keys, current_gen);
@@ -1778,9 +1839,16 @@ impl MetalGroupEvaluator {
                 let offsets = get_or_create_buffer(&self.device, &mut pool.offsets_buffers[idx], group.offsets, current_gen);
                 let counts = get_or_create_buffer(&self.device, &mut pool.counts_buffers[idx], group.counts, current_gen);
                 let cluster_ids = get_or_create_buffer(&self.device, &mut pool.cluster_ids_buffers[idx], cluster_ids_u32, current_gen);
-                let params = get_or_create_buffer(&self.device, &mut pool.params_buffers[idx], params_bytes, current_gen);
+                let params = get_or_create_buffer(&self.device, &mut pool.params_buffers[idx], params_slice, current_gen);
 
-                buffers.push((conn, keys, values, offsets, counts, cluster_ids, params));
+                // For masked groups, also create the actual_neurons buffer
+                let actual_neurons_buf = if let Some(actual_neurons) = group.actual_neurons_per_cluster {
+                    Some(get_or_create_buffer(&self.device, &mut pool.actual_neurons_buffers[idx], actual_neurons, current_gen))
+                } else {
+                    None
+                };
+
+                buffers.push((conn, keys, values, offsets, counts, cluster_ids, params, actual_neurons_buf));
             }
 
             buffers
@@ -1793,20 +1861,38 @@ impl MetalGroupEvaluator {
             let num_group_clusters = group.cluster_ids.len();
 
             let (ref conn_buffer, ref keys_buffer, ref values_buffer, ref offsets_buffer,
-                 ref counts_buffer, ref cluster_ids_buffer, ref params_buffer) = all_buffers[idx];
+                 ref counts_buffer, ref cluster_ids_buffer, ref params_buffer, ref actual_neurons_buf) = all_buffers[idx];
 
             // Encode compute pass for this group
             let encoder = command_buffer.new_compute_command_encoder();
-            encoder.set_compute_pipeline_state(&self.sparse_to_buffer_pipeline);
-            encoder.set_buffer(0, Some(input_buffer), 0);
-            encoder.set_buffer(1, Some(conn_buffer), 0);
-            encoder.set_buffer(2, Some(keys_buffer), 0);
-            encoder.set_buffer(3, Some(values_buffer), 0);
-            encoder.set_buffer(4, Some(offsets_buffer), 0);
-            encoder.set_buffer(5, Some(counts_buffer), 0);
-            encoder.set_buffer(6, Some(cluster_ids_buffer), 0);
-            encoder.set_buffer(7, Some(params_buffer), 0);
-            encoder.set_buffer(8, Some(scores_buffer), 0);
+
+            // Choose pipeline based on whether this is a masked group
+            if let Some(ref actual_neurons_buffer) = actual_neurons_buf {
+                // Masked pipeline with per-cluster neuron counts
+                encoder.set_compute_pipeline_state(&self.sparse_to_buffer_masked_pipeline);
+                encoder.set_buffer(0, Some(input_buffer), 0);
+                encoder.set_buffer(1, Some(conn_buffer), 0);
+                encoder.set_buffer(2, Some(keys_buffer), 0);
+                encoder.set_buffer(3, Some(values_buffer), 0);
+                encoder.set_buffer(4, Some(offsets_buffer), 0);
+                encoder.set_buffer(5, Some(counts_buffer), 0);
+                encoder.set_buffer(6, Some(cluster_ids_buffer), 0);
+                encoder.set_buffer(7, Some(actual_neurons_buffer), 0);
+                encoder.set_buffer(8, Some(params_buffer), 0);
+                encoder.set_buffer(9, Some(scores_buffer), 0);
+            } else {
+                // Uniform pipeline (all clusters have same neurons)
+                encoder.set_compute_pipeline_state(&self.sparse_to_buffer_pipeline);
+                encoder.set_buffer(0, Some(input_buffer), 0);
+                encoder.set_buffer(1, Some(conn_buffer), 0);
+                encoder.set_buffer(2, Some(keys_buffer), 0);
+                encoder.set_buffer(3, Some(values_buffer), 0);
+                encoder.set_buffer(4, Some(offsets_buffer), 0);
+                encoder.set_buffer(5, Some(counts_buffer), 0);
+                encoder.set_buffer(6, Some(cluster_ids_buffer), 0);
+                encoder.set_buffer(7, Some(params_buffer), 0);
+                encoder.set_buffer(8, Some(scores_buffer), 0);
+            }
 
             let grid_size = MTLSize::new(num_group_clusters as u64, num_examples as u64, 1);
             let thread_group_size = MTLSize::new(

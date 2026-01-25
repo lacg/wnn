@@ -2267,6 +2267,8 @@ struct AdaptiveConfigGroup {
     #[pyo3(get)]
     cluster_ids: Vec<usize>,
     #[pyo3(get)]
+    actual_neurons: Option<Vec<u32>>,  // Per-cluster actual neurons (for coalesced groups)
+    #[pyo3(get)]
     memory_offset: usize,
     #[pyo3(get)]
     conn_offset: usize,
@@ -2282,6 +2284,7 @@ impl AdaptiveConfigGroup {
             bits: group.bits,
             words_per_neuron: group.words_per_neuron,
             cluster_ids,
+            actual_neurons: None,  // Uniform group (not coalesced)
             memory_offset: 0,
             conn_offset: 0,
         }
@@ -2318,7 +2321,8 @@ fn adaptive_build_config_groups(
     bits_per_cluster: Vec<usize>,
     neurons_per_cluster: Vec<usize>,
 ) -> Vec<AdaptiveConfigGroup> {
-    let groups = adaptive::build_config_groups(&bits_per_cluster, &neurons_per_cluster);
+    // Use build_groups which checks WNN_COALESCE_GROUPS env var
+    let groups = adaptive::build_groups(&bits_per_cluster, &neurons_per_cluster);
     groups
         .into_iter()
         .map(|g| AdaptiveConfigGroup {
@@ -2326,6 +2330,7 @@ fn adaptive_build_config_groups(
             bits: g.bits,
             words_per_neuron: g.words_per_neuron,
             cluster_ids: g.cluster_ids,
+            actual_neurons: g.actual_neurons,
             memory_offset: g.memory_offset,
             conn_offset: g.conn_offset,
         })

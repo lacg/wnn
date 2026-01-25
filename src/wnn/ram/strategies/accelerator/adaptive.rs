@@ -171,15 +171,33 @@ fn get_empty_value() -> f32 {
     crate::ramlm::get_empty_value()
 }
 
+/// Check if group coalescing is enabled (set WNN_COALESCE_GROUPS=1)
+fn use_coalesced_groups() -> bool {
+    std::env::var("WNN_COALESCE_GROUPS").is_ok()
+}
+
+/// Build config groups with optional coalescing based on environment variable
+/// When WNN_COALESCE_GROUPS is set, similar neuron counts are bucketed together
+/// to reduce GPU dispatch overhead while preserving accuracy through masking
+pub fn build_groups(bits_per_cluster: &[usize], neurons_per_cluster: &[usize]) -> Vec<ConfigGroup> {
+    if use_coalesced_groups() {
+        build_config_groups_coalesced(bits_per_cluster, neurons_per_cluster)
+    } else {
+        build_config_groups(bits_per_cluster, neurons_per_cluster)
+    }
+}
+
 /// Configuration group - clusters sharing the same (neurons, bits) config
+/// For coalesced groups, neurons is the MAX neurons and actual_neurons stores per-cluster values
 #[derive(Clone, Debug)]
 pub struct ConfigGroup {
-    pub neurons: usize,
+    pub neurons: usize,                   // Max neurons (for memory layout)
     pub bits: usize,
     pub words_per_neuron: usize,
-    pub cluster_ids: Vec<usize>,      // Global cluster IDs in this group
-    pub memory_offset: usize,          // Offset into flattened memory
-    pub conn_offset: usize,            // Offset into flattened connections
+    pub cluster_ids: Vec<usize>,          // Global cluster IDs in this group
+    pub actual_neurons: Option<Vec<u32>>, // Per-cluster actual neurons (None = all same as neurons)
+    pub memory_offset: usize,             // Offset into flattened memory
+    pub conn_offset: usize,               // Offset into flattened connections
 }
 
 impl ConfigGroup {
@@ -190,6 +208,23 @@ impl ConfigGroup {
             bits,
             words_per_neuron,
             cluster_ids,
+            actual_neurons: None,  // Uniform: all clusters have same neurons
+            memory_offset: 0,
+            conn_offset: 0,
+        }
+    }
+
+    /// Create a coalesced group where clusters may have different actual neuron counts
+    /// neurons = max neurons for memory allocation
+    /// actual_neurons[i] = actual neuron count for cluster_ids[i]
+    pub fn new_coalesced(neurons: usize, bits: usize, cluster_ids: Vec<usize>, actual_neurons: Vec<u32>) -> Self {
+        let words_per_neuron = (1usize << bits).div_ceil(CELLS_PER_WORD);
+        Self {
+            neurons,
+            bits,
+            words_per_neuron,
+            cluster_ids,
+            actual_neurons: Some(actual_neurons),
             memory_offset: 0,
             conn_offset: 0,
         }
@@ -203,12 +238,26 @@ impl ConfigGroup {
         self.cluster_count() * self.neurons
     }
 
+    /// True total neurons (sum of actual neurons if coalesced)
+    pub fn true_total_neurons(&self) -> usize {
+        if let Some(ref actual) = self.actual_neurons {
+            actual.iter().map(|&n| n as usize).sum()
+        } else {
+            self.total_neurons()
+        }
+    }
+
     pub fn memory_size(&self) -> usize {
         self.total_neurons() * self.words_per_neuron
     }
 
     pub fn conn_size(&self) -> usize {
         self.total_neurons() * self.bits
+    }
+
+    /// Is this a coalesced group with per-cluster masking?
+    pub fn is_coalesced(&self) -> bool {
+        self.actual_neurons.is_some()
     }
 }
 
@@ -317,6 +366,90 @@ pub fn build_config_groups(
             sparse_count,
             dense_count,
             groups.iter().map(|g| (g.neurons, g.bits, g.cluster_ids.len())).collect::<Vec<_>>()
+        );
+    }
+
+    groups
+}
+
+/// Bucket neurons into ranges to reduce group diversity
+/// Returns the max neurons for the bucket
+fn bucket_neurons(neurons: usize) -> usize {
+    // Buckets: 1-5→5, 6-10→10, 11-15→15, 16-20→20, 21-25→25, etc.
+    // This gives ~5x fewer unique neuron values
+    ((neurons + 4) / 5) * 5
+}
+
+/// Build config groups with coalescing - buckets similar neuron counts together
+/// This reduces the number of GPU dispatches while preserving accuracy through masking.
+///
+/// Example: If clusters have neurons [5, 6, 7, 8], they bucket into:
+///   - 5→5 (bucket 5), 6-10→10 (bucket for 6,7,8)
+///   - Instead of 4 groups, we have 2 groups
+///
+/// For each coalesced group:
+///   - neurons = max in bucket (for memory allocation)
+///   - actual_neurons[i] = true neuron count for cluster i (for scoring)
+pub fn build_config_groups_coalesced(
+    bits_per_cluster: &[usize],
+    neurons_per_cluster: &[usize],
+) -> Vec<ConfigGroup> {
+    use std::collections::HashMap;
+
+    let num_clusters = bits_per_cluster.len();
+
+    // Key: (bucket_max, bits) -> list of (cluster_id, actual_neurons)
+    let mut bucket_to_clusters: HashMap<(usize, usize), Vec<(usize, u32)>> = HashMap::new();
+
+    for cluster_id in 0..num_clusters {
+        let actual = neurons_per_cluster[cluster_id];
+        let bucket_max = bucket_neurons(actual);
+        let bits = bits_per_cluster[cluster_id];
+        let key = (bucket_max, bits);
+        bucket_to_clusters.entry(key).or_default().push((cluster_id, actual as u32));
+    }
+
+    let mut groups: Vec<ConfigGroup> = bucket_to_clusters
+        .into_iter()
+        .map(|((max_neurons, bits), entries)| {
+            let cluster_ids: Vec<usize> = entries.iter().map(|(id, _)| *id).collect();
+            let actual_neurons: Vec<u32> = entries.iter().map(|(_, n)| *n).collect();
+
+            // Check if all actual neurons are the same as max (can use uniform mode)
+            let all_same = actual_neurons.iter().all(|&n| n as usize == max_neurons);
+            if all_same {
+                ConfigGroup::new(max_neurons, bits, cluster_ids)
+            } else {
+                ConfigGroup::new_coalesced(max_neurons, bits, cluster_ids, actual_neurons)
+            }
+        })
+        .collect();
+
+    // Sort by (neurons, bits) for deterministic ordering
+    groups.sort_by_key(|g| (g.neurons, g.bits));
+
+    // Compute offsets
+    let mut memory_offset = 0;
+    let mut conn_offset = 0;
+    for group in &mut groups {
+        group.memory_offset = memory_offset;
+        group.conn_offset = conn_offset;
+        memory_offset += group.memory_size();
+        conn_offset += group.conn_size();
+    }
+
+    // Log group diversity if enabled
+    if std::env::var("WNN_GROUP_LOG").is_ok() {
+        let sparse_count = groups.iter().filter(|g| g.bits > 12).count();
+        let dense_count = groups.len() - sparse_count;
+        let coalesced_count = groups.iter().filter(|g| g.is_coalesced()).count();
+        eprintln!(
+            "[CONFIG_GROUPS_COALESCED] total={} sparse={} dense={} coalesced={} configs={:?}",
+            groups.len(),
+            sparse_count,
+            dense_count,
+            coalesced_count,
+            groups.iter().map(|g| (g.neurons, g.bits, g.cluster_ids.len(), g.is_coalesced())).collect::<Vec<_>>()
         );
     }
 
@@ -982,7 +1115,13 @@ pub fn evaluate_genomes_parallel(
         let neurons_per_cluster: Vec<usize> = genomes_neurons_flat[genome_offset..genome_offset + num_clusters].to_vec();
 
         // Build config groups for this genome
-        let groups = build_config_groups(&bits_per_cluster, &neurons_per_cluster);
+        // NOTE: Coalescing is disabled when using provided connections because
+        // their layout is based on actual neurons, not coalesced MAX neurons.
+        let groups = if use_provided_connections {
+            build_config_groups(&bits_per_cluster, &neurons_per_cluster)
+        } else {
+            build_groups(&bits_per_cluster, &neurons_per_cluster)
+        };
 
         // Create hybrid memory for each config group
         // Dense for bits <= 12 (fast), Sparse for bits > 12 (memory-efficient)
@@ -1393,7 +1532,7 @@ impl GenomeMemoryPool {
         bits_per_cluster: &[usize],
         neurons_per_cluster: &[usize],
     ) -> Self {
-        let groups_template = build_config_groups(bits_per_cluster, neurons_per_cluster);
+        let groups_template = build_groups(bits_per_cluster, neurons_per_cluster);
 
         let memories = (0..pool_size)
             .map(|_| {
@@ -1438,8 +1577,8 @@ fn calculate_pool_size(
     budget_gb: f64,
     cpu_cores: usize,
 ) -> (usize, usize) {
-    // Estimate memory per genome
-    let groups = build_config_groups(bits_per_cluster, neurons_per_cluster);
+    // Estimate memory per genome (use same grouping strategy as actual training)
+    let groups = build_groups(bits_per_cluster, neurons_per_cluster);
     let mut bytes_per_genome = 0usize;
 
     for group in &groups {
@@ -1773,6 +1912,7 @@ pub fn evaluate_genome_hybrid(
                         cluster_ids,
                         bits_per_neuron: group.bits,
                         neurons_per_cluster: group.neurons,
+                        actual_neurons_per_cluster: group.actual_neurons.as_deref(),
                     });
                 }
             }
@@ -2267,7 +2407,14 @@ pub fn evaluate_genomes_parallel_hybrid(
                 let neurons_per_cluster = &genomes_neurons_flat[genome_offset..genome_offset + num_clusters];
 
                 // Build config groups for THIS genome
-                let groups = build_config_groups(bits_per_cluster, neurons_per_cluster);
+                // NOTE: Coalescing is disabled when using provided connections because
+                // their layout is based on actual neurons, not coalesced MAX neurons.
+                // Coalescing only works when connections are generated internally.
+                let groups = if use_provided_connections {
+                    build_config_groups(bits_per_cluster, neurons_per_cluster)
+                } else {
+                    build_groups(bits_per_cluster, neurons_per_cluster)
+                };
 
                 // Build cluster-to-group mapping for THIS genome
                 let mut cluster_to_group: Vec<(usize, usize)> = vec![(0, 0); num_clusters];

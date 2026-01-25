@@ -227,6 +227,20 @@ struct SparseToBufferParams {
     float empty_value;
 };
 
+// Parameters for sparse forward to buffer with per-cluster masking
+// Used when clusters are coalesced by neuron bucket (e.g., 5-7 neurons → max 7)
+// Each cluster has its actual neuron count for correct scoring
+struct SparseToBufferMaskedParams {
+    uint num_examples;
+    uint total_input_bits;
+    uint num_neurons;           // Total neurons in this group (sum of max_neurons * num_clusters)
+    uint bits_per_neuron;
+    uint max_neurons_per_cluster;  // Max neurons (for memory layout)
+    uint num_group_clusters;    // Clusters in this group
+    uint total_clusters;        // Total clusters across all groups
+    float empty_value;
+};
+
 kernel void sparse_forward_to_buffer(
     device const uchar* input_bits_flat [[buffer(0)]],
     device const int* connections_flat [[buffer(1)]],
@@ -269,6 +283,71 @@ kernel void sparse_forward_to_buffer(
     }
 
     float prob = (float(count_true) + params.empty_value * float(count_empty)) / float(params.neurons_per_cluster);
+
+    // Write to global position in shared buffer
+    uint global_cluster = cluster_ids[local_cluster];
+    uint output_idx = example_idx * params.total_clusters + global_cluster;
+    shared_buffer[output_idx] = prob;
+}
+
+//
+// Sparse Forward Pass to Buffer with Per-Cluster Masking Kernel
+//
+// Similar to sparse_forward_to_buffer but supports coalesced groups where
+// clusters have different actual neuron counts. The max_neurons_per_cluster
+// is used for memory layout, but actual_neurons is used for scoring.
+//
+// This enables grouping similar neuron counts (e.g., 5-7 neurons all in one group
+// with max=7) while preserving exact scoring accuracy through per-cluster masking.
+//
+kernel void sparse_forward_to_buffer_masked(
+    device const uchar* input_bits_flat [[buffer(0)]],
+    device const int* connections_flat [[buffer(1)]],
+    device const ulong* keys_flat [[buffer(2)]],
+    device const uchar* values_flat [[buffer(3)]],
+    device const uint* offsets [[buffer(4)]],
+    device const uint* counts [[buffer(5)]],
+    device const uint* cluster_ids [[buffer(6)]],           // Maps local → global cluster ID
+    device const uint* actual_neurons [[buffer(7)]],        // Actual neurons per local cluster
+    constant SparseToBufferMaskedParams& params [[buffer(8)]],
+    device float* shared_buffer [[buffer(9)]],              // Shared across all groups
+    uint2 thread_pos [[thread_position_in_grid]]
+) {
+    uint local_cluster = thread_pos.x;
+    uint example_idx = thread_pos.y;
+
+    if (local_cluster >= params.num_group_clusters) return;
+    if (example_idx >= params.num_examples) return;
+
+    device const uchar* input_bits = input_bits_flat + example_idx * params.total_input_bits;
+
+    // Read actual neuron count for this cluster (may be less than max)
+    uint actual_neuron_count = actual_neurons[local_cluster];
+
+    uint count_true = 0;
+    uint count_empty = 0;
+    uint start_neuron = local_cluster * params.max_neurons_per_cluster;
+
+    // Loop only up to actual neurons (not max), the rest are padding
+    for (uint neuron_offset = 0; neuron_offset < actual_neuron_count; neuron_offset++) {
+        uint neuron_idx = start_neuron + neuron_offset;
+        device const int* connections = connections_flat + neuron_idx * params.bits_per_neuron;
+
+        ulong address = compute_address_sparse(input_bits, connections, params.bits_per_neuron);
+
+        uint start = offsets[neuron_idx];
+        uint cnt = counts[neuron_idx];
+        uint cell_value = binary_search_lookup(keys_flat, values_flat, start, cnt, address);
+
+        if (cell_value == CELL_TRUE) {
+            count_true++;
+        } else if (cell_value == CELL_EMPTY) {
+            count_empty++;
+        }
+    }
+
+    // Divide by ACTUAL neurons for correct probability
+    float prob = (float(count_true) + params.empty_value * float(count_empty)) / float(actual_neuron_count);
 
     // Write to global position in shared buffer
     uint global_cluster = cluster_ids[local_cluster];
