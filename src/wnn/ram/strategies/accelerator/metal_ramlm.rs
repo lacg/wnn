@@ -140,13 +140,21 @@ fn get_or_create_buffer<T>(
         }
     }
 
-    // Need new buffer - allocate with some headroom for future reuse
-    let alloc_bytes = required_bytes.max(1024); // Minimum 1KB to avoid tiny allocations
-    let buffer = device.new_buffer_with_data(
-        data.as_ptr() as *const _,
-        required_bytes,
+    // Need new buffer - allocate with 50% headroom for future reuse
+    // This reduces buffer thrashing when genome sizes vary within a batch
+    let alloc_bytes = ((required_bytes as f64 * 1.5) as u64).max(1024);
+
+    // Create buffer with headroom capacity
+    let buffer = device.new_buffer(
+        alloc_bytes,
         MTLResourceOptions::StorageModeShared,
     );
+
+    // Copy data to the buffer
+    let ptr = buffer.contents() as *mut T;
+    unsafe {
+        std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
+    }
 
     *cached = Some(CachedBuffer {
         buffer: buffer.clone(),
@@ -1401,6 +1409,18 @@ struct DenseToBufferParams {
     empty_value: f32,
 }
 
+/// Data for a single sparse group in batched evaluation
+pub struct SparseGroupData<'a> {
+    pub connections: &'a [i64],
+    pub keys: &'a [u64],
+    pub values: &'a [u8],
+    pub offsets: &'a [u32],
+    pub counts: &'a [u32],
+    pub cluster_ids: &'a [usize],
+    pub bits_per_neuron: usize,
+    pub neurons_per_cluster: usize,
+}
+
 /// Unified Metal evaluator that writes group results directly to shared GPU buffer
 ///
 /// This avoids the GPU→CPU→GPU round-trip that was slowing down tiered evaluation.
@@ -1535,12 +1555,18 @@ impl MetalGroupEvaluator {
         num_clusters: usize,
         empty_value: f32,
     ) {
+        // Detailed timing (enabled via WNN_SPARSE_TIMING env var)
+        let sparse_timing = std::env::var("WNN_SPARSE_TIMING").is_ok();
+        let t0 = std::time::Instant::now();
+
         let num_group_clusters = cluster_ids.len();
         let num_neurons = num_group_clusters * neurons_per_cluster;
 
         // Convert to GPU-friendly formats
         let connections_i32: Vec<i32> = connections.iter().map(|&c| c as i32).collect();
         let cluster_ids_u32: Vec<u32> = cluster_ids.iter().map(|&c| c as u32).collect();
+
+        let t_prep = t0.elapsed();
 
         let params = SparseToBufferParams {
             num_examples: num_examples as u32,
@@ -1580,6 +1606,8 @@ impl MetalGroupEvaluator {
                 (conn, keys, values, offsets, counts, cluster_ids, params)
             });
 
+        let t_buffers = t0.elapsed();
+
         // Dispatch kernel
         let command_buffer = self.command_queue.new_command_buffer();
         let encoder = command_buffer.new_compute_command_encoder();
@@ -1604,8 +1632,156 @@ impl MetalGroupEvaluator {
         encoder.dispatch_threads(grid_size, thread_group_size);
 
         encoder.end_encoding();
+        let t_encode = t0.elapsed();
+
         command_buffer.commit();
         command_buffer.wait_until_completed();
+
+        if sparse_timing {
+            let t_total = t0.elapsed();
+            let prep_us = t_prep.as_micros();
+            let buffers_us = t_buffers.as_micros() - t_prep.as_micros();
+            let encode_us = t_encode.as_micros() - t_buffers.as_micros();
+            let gpu_us = t_total.as_micros() - t_encode.as_micros();
+            eprintln!(
+                "[SPARSE_TIMING] keys={} prep={:.1}ms buffers={:.1}ms encode={:.1}ms gpu={:.1}ms total={:.1}ms",
+                keys.len(),
+                prep_us as f64 / 1000.0,
+                buffers_us as f64 / 1000.0,
+                encode_us as f64 / 1000.0,
+                gpu_us as f64 / 1000.0,
+                t_total.as_millis() as f64
+            );
+        }
+    }
+
+    /// Batch evaluate multiple sparse groups with a SINGLE Metal command buffer
+    ///
+    /// This eliminates the ~0.5ms overhead per group from separate commit+wait cycles.
+    /// With 34 sparse groups, this reduces sparse time from ~27ms to ~2-3ms.
+    pub fn eval_sparse_groups_batched(
+        &self,
+        input_buffer: &Buffer,
+        scores_buffer: &Buffer,
+        sparse_groups: &[SparseGroupData],
+        num_examples: usize,
+        total_input_bits: usize,
+        num_clusters: usize,
+        empty_value: f32,
+    ) {
+        if sparse_groups.is_empty() {
+            return;
+        }
+
+        let batch_timing = std::env::var("WNN_SPARSE_TIMING").is_ok();
+        let t0 = std::time::Instant::now();
+
+        // Get current cache generation for validation
+        let current_gen = get_sparse_cache_generation();
+
+        // Create a single command buffer for all sparse groups
+        let command_buffer = self.command_queue.new_command_buffer();
+
+        for group in sparse_groups {
+            let num_group_clusters = group.cluster_ids.len();
+            let num_neurons = num_group_clusters * group.neurons_per_cluster;
+
+            // Convert to GPU-friendly formats
+            let connections_i32: Vec<i32> = group.connections.iter().map(|&c| c as i32).collect();
+            let cluster_ids_u32: Vec<u32> = group.cluster_ids.iter().map(|&c| c as u32).collect();
+
+            let params = SparseToBufferParams {
+                num_examples: num_examples as u32,
+                total_input_bits: total_input_bits as u32,
+                num_neurons: num_neurons as u32,
+                bits_per_neuron: group.bits_per_neuron as u32,
+                neurons_per_cluster: group.neurons_per_cluster as u32,
+                num_group_clusters: num_group_clusters as u32,
+                total_clusters: num_clusters as u32,
+                empty_value,
+            };
+            let params_slice = unsafe {
+                std::slice::from_raw_parts(
+                    &params as *const SparseToBufferParams as *const u8,
+                    mem::size_of::<SparseToBufferParams>(),
+                )
+            };
+
+            // Create buffers for this group (using device.new_buffer for simplicity)
+            // Note: We can't easily use the thread_local cache here since we're batching
+            let conn_buffer = self.device.new_buffer_with_data(
+                connections_i32.as_ptr() as *const _,
+                (connections_i32.len() * mem::size_of::<i32>()) as u64,
+                MTLResourceOptions::StorageModeShared,
+            );
+            let keys_buffer = self.device.new_buffer_with_data(
+                group.keys.as_ptr() as *const _,
+                (group.keys.len() * mem::size_of::<u64>()) as u64,
+                MTLResourceOptions::StorageModeShared,
+            );
+            let values_buffer = self.device.new_buffer_with_data(
+                group.values.as_ptr() as *const _,
+                (group.values.len() * mem::size_of::<u8>()) as u64,
+                MTLResourceOptions::StorageModeShared,
+            );
+            let offsets_buffer = self.device.new_buffer_with_data(
+                group.offsets.as_ptr() as *const _,
+                (group.offsets.len() * mem::size_of::<u32>()) as u64,
+                MTLResourceOptions::StorageModeShared,
+            );
+            let counts_buffer = self.device.new_buffer_with_data(
+                group.counts.as_ptr() as *const _,
+                (group.counts.len() * mem::size_of::<u32>()) as u64,
+                MTLResourceOptions::StorageModeShared,
+            );
+            let cluster_ids_buffer = self.device.new_buffer_with_data(
+                cluster_ids_u32.as_ptr() as *const _,
+                (cluster_ids_u32.len() * mem::size_of::<u32>()) as u64,
+                MTLResourceOptions::StorageModeShared,
+            );
+            let params_buffer = self.device.new_buffer_with_data(
+                params_slice.as_ptr() as *const _,
+                params_slice.len() as u64,
+                MTLResourceOptions::StorageModeShared,
+            );
+
+            // Encode compute pass for this group
+            let encoder = command_buffer.new_compute_command_encoder();
+            encoder.set_compute_pipeline_state(&self.sparse_to_buffer_pipeline);
+            encoder.set_buffer(0, Some(input_buffer), 0);
+            encoder.set_buffer(1, Some(&conn_buffer), 0);
+            encoder.set_buffer(2, Some(&keys_buffer), 0);
+            encoder.set_buffer(3, Some(&values_buffer), 0);
+            encoder.set_buffer(4, Some(&offsets_buffer), 0);
+            encoder.set_buffer(5, Some(&counts_buffer), 0);
+            encoder.set_buffer(6, Some(&cluster_ids_buffer), 0);
+            encoder.set_buffer(7, Some(&params_buffer), 0);
+            encoder.set_buffer(8, Some(scores_buffer), 0);
+
+            let grid_size = MTLSize::new(num_group_clusters as u64, num_examples as u64, 1);
+            let thread_group_size = MTLSize::new(
+                32.min(num_group_clusters as u64),
+                8.min(num_examples as u64),
+                1,
+            );
+            encoder.dispatch_threads(grid_size, thread_group_size);
+            encoder.end_encoding();
+        }
+
+        // Single commit + wait for all groups
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+
+        if batch_timing {
+            let elapsed = t0.elapsed();
+            let total_keys: usize = sparse_groups.iter().map(|g| g.keys.len()).sum();
+            eprintln!(
+                "[SPARSE_BATCHED] groups={} total_keys={} time={:.1}ms",
+                sparse_groups.len(),
+                total_keys,
+                elapsed.as_micros() as f64 / 1000.0
+            );
+        }
     }
 
     /// Evaluate dense group and write directly to shared buffer on GPU

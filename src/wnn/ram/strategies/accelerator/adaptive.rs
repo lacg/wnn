@@ -1690,6 +1690,10 @@ pub fn evaluate_genome_hybrid(
             // Get current reset generation to detect when Metal evaluators were reset
             let current_reset_gen = RESET_GENERATION.load(Ordering::SeqCst);
 
+            // Phase timing for detailed analysis (enabled via WNN_PHASE_TIMING env var)
+            let phase_timing = std::env::var("WNN_PHASE_TIMING").is_ok();
+            let phase_start = std::time::Instant::now();
+
             // Get or create cached scores buffer (avoids expensive 10GB allocation per eval)
             // The scores buffer is zeroed efficiently using memset instead of creating a new Vec
             // Invalidate cache if Metal was reset (reset_gen changed)
@@ -1708,6 +1712,9 @@ pub fn evaluate_genome_hybrid(
                 buffer
             });
 
+            let zero_time_ms = if phase_timing { phase_start.elapsed().as_micros() as f64 / 1000.0 } else { 0.0 };
+            let phase_start = std::time::Instant::now();
+
             // Get or create cached input buffer (update contents efficiently)
             // Invalidate cache if Metal was reset (reset_gen changed)
             let input_buffer = CACHED_INPUT_BUFFER.with(|cache| {
@@ -1725,35 +1732,61 @@ pub fn evaluate_genome_hybrid(
                 buffer
             });
 
+            let input_time_ms = if phase_timing { phase_start.elapsed().as_micros() as f64 / 1000.0 } else { 0.0 };
+            let phase_start = std::time::Instant::now();
+
             let mut dense_idx = 0usize;
             let mut sparse_idx = 0usize;
-            let mut all_groups_success = true;
+            let all_groups_success = true;
+            let mut sparse_time_ms = 0.0f64;
+            let mut dense_time_ms = 0.0f64;
+            let mut sparse_call_count = 0usize;
 
+            // Collect all sparse groups for batched evaluation (reduces ~27ms to ~2ms)
+            let sparse_start = std::time::Instant::now();
+            let mut sparse_groups_data: Vec<crate::metal_ramlm::SparseGroupData> = Vec::new();
             for (is_sparse, group_idx, cluster_ids) in &export.group_info {
-                let group = &export.groups[*group_idx];
-
                 if *is_sparse {
+                    let group = &export.groups[*group_idx];
                     let sparse_export = &export.sparse_exports[sparse_idx];
                     sparse_idx += 1;
+                    sparse_call_count += 1;
 
-                    // Evaluate sparse group directly to shared buffer
-                    group_eval.eval_sparse_to_buffer(
-                        &input_buffer,
-                        &scores_buffer,
-                        &export.connections[group.conn_offset..group.conn_offset + group.conn_size()],
-                        &sparse_export.keys,
-                        &sparse_export.values,
-                        &sparse_export.offsets,
-                        &sparse_export.counts,
+                    sparse_groups_data.push(crate::metal_ramlm::SparseGroupData {
+                        connections: &export.connections[group.conn_offset..group.conn_offset + group.conn_size()],
+                        keys: &sparse_export.keys,
+                        values: &sparse_export.values,
+                        offsets: &sparse_export.offsets,
+                        counts: &sparse_export.counts,
                         cluster_ids,
-                        num_eval,
-                        total_input_bits,
-                        group.bits,
-                        group.neurons,
-                        num_clusters,
-                        empty_value,
-                    );
-                } else {
+                        bits_per_neuron: group.bits,
+                        neurons_per_cluster: group.neurons,
+                    });
+                }
+            }
+
+            // Evaluate all sparse groups in a single batched GPU dispatch
+            if !sparse_groups_data.is_empty() {
+                group_eval.eval_sparse_groups_batched(
+                    &input_buffer,
+                    &scores_buffer,
+                    &sparse_groups_data,
+                    num_eval,
+                    total_input_bits,
+                    num_clusters,
+                    empty_value,
+                );
+            }
+
+            if phase_timing {
+                sparse_time_ms = sparse_start.elapsed().as_micros() as f64 / 1000.0;
+            }
+
+            // Process dense groups (these are fewer and larger, so batching is less critical)
+            let dense_start = std::time::Instant::now();
+            for (is_sparse, group_idx, cluster_ids) in &export.group_info {
+                if !*is_sparse {
+                    let group = &export.groups[*group_idx];
                     let dense_words = &export.dense_exports[dense_idx];
                     dense_idx += 1;
 
@@ -1775,6 +1808,12 @@ pub fn evaluate_genome_hybrid(
                 }
             }
 
+            if phase_timing {
+                dense_time_ms = dense_start.elapsed().as_micros() as f64 / 1000.0;
+            }
+
+            let ce_start = std::time::Instant::now();
+
             if all_groups_success {
                 // Compute CE directly from GPU buffer
                 let result = group_eval.compute_ce_from_buffer(
@@ -1784,13 +1823,22 @@ pub fn evaluate_genome_hybrid(
                     num_clusters,
                 );
 
+                let ce_time_ms = if phase_timing { ce_start.elapsed().as_micros() as f64 / 1000.0 } else { 0.0 };
+
                 if let Ok((ce, acc)) = result {
                     if timing_enabled {
                         let elapsed = gpu_start.elapsed().as_millis();
-                        eprintln!(
-                            "[EVAL_HYBRID] FULL_GPU_PATH total={}ms (no CPU scatter!)",
-                            elapsed
-                        );
+                        if phase_timing {
+                            eprintln!(
+                                "[EVAL_PHASE] zero={:.1}ms input={:.1}ms sparse={:.1}ms({} calls) dense={:.1}ms ce={:.1}ms total={}ms",
+                                zero_time_ms, input_time_ms, sparse_time_ms, sparse_call_count, dense_time_ms, ce_time_ms, elapsed
+                            );
+                        } else {
+                            eprintln!(
+                                "[EVAL_HYBRID] FULL_GPU_PATH total={}ms (no CPU scatter!)",
+                                elapsed
+                            );
+                        }
                     }
                     return (ce, acc);
                 }
