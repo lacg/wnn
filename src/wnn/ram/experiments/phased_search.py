@@ -11,6 +11,7 @@ Each phase uses GA then TS refinement.
 
 import gzip
 import json
+import random
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -44,6 +45,7 @@ class PhasedSearchConfig:
 
 	# Early stopping
 	patience: int = 10
+	check_interval: int = 10  # Check every N generations/iterations
 
 	# Architecture defaults (used when tiered config not specified)
 	default_bits: int = 8
@@ -627,6 +629,7 @@ class PhasedSearchRunner:
 			"batch_evaluator": self.evaluator,
 			"logger": self.log,
 			"patience": cfg.patience,
+			"check_interval": cfg.check_interval,  # Check every N generations/iterations
 			"initial_threshold": initial_threshold,
 			"ce_percentile": cfg.ce_percentile,  # CE percentile filter (None = disabled)
 			"seed": self._rotation_seed,  # Use rotation_seed for strategy RNG

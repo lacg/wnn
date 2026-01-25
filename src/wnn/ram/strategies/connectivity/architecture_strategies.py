@@ -905,15 +905,18 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		for generation in range(start_generation, cfg.generations):
 			gen_start = time.time()
 
-			# Periodic cleanup every 10 generations (aligned with health check interval)
-			# GC + Metal reset to prevent memory fragmentation and driver state buildup
-			if generation > 0 and generation % 10 == 0:
+			# Aggressive cleanup every generation to prevent Metal buffer accumulation
+			# The per-group buffers (7 per group × 3 groups × 100 genomes = 2100 per batch)
+			# accumulate and cause slowdown if not cleaned up frequently
+			if generation > 0:
 				import gc
 				gc.collect()
 				try:
 					import ram_accelerator
 					ram_accelerator.reset_metal_evaluators()
-					self._log.info(f"[{self.name}] GC + Metal reset at generation {generation}")
+					# Only log every 10 generations to reduce noise
+					if generation % 10 == 0:
+						self._log.info(f"[{self.name}] GC + Metal reset at generation {generation}")
 				except Exception:
 					pass  # Ignore if accelerator not available
 
@@ -1552,18 +1555,21 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		seed_offset = int(time.time() * 1000) % (2**16)
 
 		for iteration in range(cfg.iterations):
-			# Periodic cleanup to prevent memory fragmentation and Metal driver state buildup
-			if iteration > 0 and iteration % 20 == 0:
+			iter_start = time.time()
+
+			# Aggressive cleanup every iteration to prevent Metal buffer accumulation
+			# Per-group buffers accumulate and cause slowdown if not cleaned up frequently
+			if iteration > 0:
 				import gc
 				gc.collect()
-				# Reset Metal evaluators every 50 iterations to prevent driver slowdown
-				if iteration % 50 == 0:
-					try:
-						import ram_accelerator
-						ram_accelerator.reset_metal_evaluators()
+				try:
+					import ram_accelerator
+					ram_accelerator.reset_metal_evaluators()
+					# Only log every 10 iterations to reduce noise
+					if iteration % 10 == 0:
 						self._log.debug(f"[{self.name}] Reset Metal evaluators at iteration {iteration}")
-					except Exception:
-						pass  # Ignore if accelerator not available
+				except Exception:
+					pass  # Ignore if accelerator not available
 
 			current_threshold = get_threshold(iteration / cfg.iterations)
 			if prev_threshold is not None and f"{prev_threshold:.4%}" != f"{current_threshold:.4%}":
@@ -1651,11 +1657,12 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 						best_fitness = new_ce
 						best_accuracy = new_acc
 
-				# Log iteration summary with all three metrics
+				# Log iteration summary with all three metrics and duration
+				iter_elapsed = time.time() - iter_start
 				acc_str = f"{best_acc_accuracy:.4%}" if best_acc_accuracy else "N/A"
 				self._log.info(f"[{self.name}] Iter {iteration+1:03d}/{cfg.iterations}: "
 							   f"best_harmonic=(CE={best_harmonic_fitness:.4f}, Acc={best_harmonic_accuracy:.4%}), "
-							   f"best_ce={best_ce_fitness:.4f}, best_acc={acc_str}")
+							   f"best_ce={best_ce_fitness:.4f}, best_acc={acc_str} ({iter_elapsed:.1f}s)")
 
 			else:
 				# === CE mode: Dual path ===
@@ -1744,12 +1751,13 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 					best_fitness = best_ce_fitness
 					best_accuracy = best_ce_accuracy
 
-				# Log iteration summary
+				# Log iteration summary with duration
+				iter_elapsed = time.time() - iter_start
 				if best_acc_accuracy:
 					self._log.info(f"[{self.name}] Iter {iteration+1:03d}/{cfg.iterations}: "
-								   f"best_ce={best_ce_fitness:.4f}, best_acc={best_acc_accuracy:.4%}")
+								   f"best_ce={best_ce_fitness:.4f}, best_acc={best_acc_accuracy:.4%} ({iter_elapsed:.1f}s)")
 				else:
-					self._log.info(f"[{self.name}] Iter {iteration+1:03d}/{cfg.iterations}: best_ce={best_ce_fitness:.4f}")
+					self._log.info(f"[{self.name}] Iter {iteration+1:03d}/{cfg.iterations}: best_ce={best_ce_fitness:.4f} ({iter_elapsed:.1f}s)")
 
 			history.append((iteration + 1, best_fitness))
 

@@ -545,22 +545,14 @@ class EarlyStoppingTracker:
 		# Update prev_mean for next check
 		self._prev_health_mean = current_mean
 
-		# === Determine if there's a problem ===
+		# === Determine if there's a problem (for display only) ===
 		# Problem 1: Overfitting (delta too high)
 		overfit_problem = delta_pct > cfg.min_improvement_pct
 
 		# Problem 2: Stagnation (not improving enough)
 		stagnation_problem = improvement_pct < cfg.min_improvement_pct
 
-		# === Update patience ===
-		if overfit_problem or stagnation_problem:
-			# Either problem decreases patience
-			self._patience_counter += 1
-		else:
-			# Both OK, recover patience
-			self._patience_counter = max(0, self._patience_counter - 1)
-
-		# === Determine level: use the WORST of the two ===
+		# === Determine level FIRST (used for both display AND patience) ===
 		# Convert improvement to delta convention (negative improvement = positive delta)
 		stagnation_delta = -improvement_pct
 
@@ -577,6 +569,17 @@ class EarlyStoppingTracker:
 			level = AdaptiveLevel.CRITICAL
 
 		self._last_level = level
+
+		# === Update patience based on level ===
+		# HEALTHY: Significant improvement, recover patience
+		# NEUTRAL: Stable, no change to patience
+		# WARNING/CRITICAL: Issues detected, decrease patience
+		if level == AdaptiveLevel.HEALTHY:
+			self._patience_counter = max(0, self._patience_counter - 1)
+		elif level == AdaptiveLevel.NEUTRAL:
+			pass  # No change to patience
+		else:  # WARNING or CRITICAL
+			self._patience_counter += 1
 
 		# === Log progress with BOTH metrics transparently ===
 		remaining = cfg.patience - self._patience_counter

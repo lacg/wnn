@@ -6,9 +6,133 @@
 //!
 //! This is particularly effective for evaluation where we need to compute
 //! probabilities over the full 50K vocabulary for each example.
+//!
+//! Buffer Caching Strategy:
+//! Per-group buffers (connections, keys, values, etc.) are cached in thread_local
+//! storage to avoid expensive Metal buffer allocations. Each cache tracks:
+//! - Buffer capacity (max size that fits)
+//! - The Metal buffer itself
+//! Buffers are reused when current data fits within cached capacity.
 
 use metal::*;
 use std::mem;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+// =============================================================================
+// Buffer Cache for Per-Group Evaluation
+// =============================================================================
+
+/// Global counter for cache invalidation (incremented by reset_sparse_buffer_cache)
+static SPARSE_CACHE_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Reset the sparse buffer cache (call when Metal evaluators are reset)
+pub fn reset_sparse_buffer_cache() {
+    SPARSE_CACHE_GENERATION.fetch_add(1, Ordering::SeqCst);
+}
+
+/// Get current cache generation (for cache validation)
+pub fn get_sparse_cache_generation() -> u64 {
+    SPARSE_CACHE_GENERATION.load(Ordering::SeqCst)
+}
+
+/// Cached buffer with capacity tracking
+struct CachedBuffer {
+    buffer: Buffer,
+    capacity_bytes: u64,
+    cache_gen: u64,
+}
+
+/// Thread-local cache for sparse evaluation buffers
+/// Avoids 7 buffer allocations per group × 3 groups × 100 genomes = 2100 allocations per batch
+struct SparseBufferCache {
+    conn_buffer: Option<CachedBuffer>,      // i32 connections
+    keys_buffer: Option<CachedBuffer>,      // u64 sparse keys
+    values_buffer: Option<CachedBuffer>,    // u8 sparse values
+    offsets_buffer: Option<CachedBuffer>,   // u32 offsets
+    counts_buffer: Option<CachedBuffer>,    // u32 counts
+    cluster_ids_buffer: Option<CachedBuffer>, // u32 cluster IDs
+    params_buffer: Option<CachedBuffer>,    // SparseToBufferParams struct
+}
+
+impl SparseBufferCache {
+    fn new() -> Self {
+        Self {
+            conn_buffer: None,
+            keys_buffer: None,
+            values_buffer: None,
+            offsets_buffer: None,
+            counts_buffer: None,
+            cluster_ids_buffer: None,
+            params_buffer: None,
+        }
+    }
+}
+
+/// Thread-local cache for dense evaluation buffers
+/// Avoids 4 buffer allocations per dense group call
+struct DenseBufferCache {
+    conn_buffer: Option<CachedBuffer>,      // i32 connections
+    memory_buffer: Option<CachedBuffer>,    // i64 memory words
+    cluster_ids_buffer: Option<CachedBuffer>, // u32 cluster IDs
+    params_buffer: Option<CachedBuffer>,    // DenseToBufferParams struct
+}
+
+impl DenseBufferCache {
+    fn new() -> Self {
+        Self {
+            conn_buffer: None,
+            memory_buffer: None,
+            cluster_ids_buffer: None,
+            params_buffer: None,
+        }
+    }
+}
+
+thread_local! {
+    static SPARSE_BUFFER_CACHE: std::cell::RefCell<SparseBufferCache> =
+        std::cell::RefCell::new(SparseBufferCache::new());
+    static DENSE_BUFFER_CACHE: std::cell::RefCell<DenseBufferCache> =
+        std::cell::RefCell::new(DenseBufferCache::new());
+}
+
+/// Get or create a cached buffer, writing data directly to it
+/// Returns the buffer to use for the GPU operation
+fn get_or_create_buffer<T>(
+    device: &Device,
+    cached: &mut Option<CachedBuffer>,
+    data: &[T],
+    current_gen: u64,
+) -> Buffer {
+    let required_bytes = (data.len() * mem::size_of::<T>()) as u64;
+
+    // Check if cached buffer can be reused
+    if let Some(ref cache) = cached {
+        if cache.cache_gen == current_gen && cache.capacity_bytes >= required_bytes {
+            // Reuse buffer - write data directly to contents
+            let ptr = cache.buffer.contents() as *mut T;
+            unsafe {
+                std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
+            }
+            return cache.buffer.clone();
+        }
+    }
+
+    // Need new buffer - allocate with some headroom for future reuse
+    let alloc_bytes = required_bytes.max(1024); // Minimum 1KB to avoid tiny allocations
+    let buffer = device.new_buffer_with_data(
+        data.as_ptr() as *const _,
+        required_bytes,
+        MTLResourceOptions::StorageModeShared,
+    );
+
+    *cached = Some(CachedBuffer {
+        buffer: buffer.clone(),
+        capacity_bytes: alloc_bytes,
+        cache_gen: current_gen,
+    });
+
+    buffer
+}
 
 /// Metal-based RAMLM evaluator
 pub struct MetalRAMLMEvaluator {
@@ -1367,6 +1491,10 @@ impl MetalGroupEvaluator {
     }
 
     /// Evaluate sparse group and write directly to shared buffer on GPU
+    ///
+    /// Uses thread-local buffer caching to avoid 7 buffer allocations per call.
+    /// With 3 groups × 100 genomes = 300 calls per batch, this reduces allocations
+    /// from 2100 to ~7 (one-time allocation per buffer type).
     pub fn eval_sparse_to_buffer(
         &self,
         input_buffer: &Buffer,
@@ -1391,43 +1519,6 @@ impl MetalGroupEvaluator {
         let connections_i32: Vec<i32> = connections.iter().map(|&c| c as i32).collect();
         let cluster_ids_u32: Vec<u32> = cluster_ids.iter().map(|&c| c as u32).collect();
 
-        // Create buffers
-        let conn_buffer = self.device.new_buffer_with_data(
-            connections_i32.as_ptr() as *const _,
-            (connections_i32.len() * mem::size_of::<i32>()) as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
-
-        let keys_buffer = self.device.new_buffer_with_data(
-            keys.as_ptr() as *const _,
-            (keys.len() * mem::size_of::<u64>()) as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
-
-        let values_buffer = self.device.new_buffer_with_data(
-            values.as_ptr() as *const _,
-            (values.len() * mem::size_of::<u8>()) as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
-
-        let offsets_buffer = self.device.new_buffer_with_data(
-            offsets.as_ptr() as *const _,
-            (offsets.len() * mem::size_of::<u32>()) as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
-
-        let counts_buffer = self.device.new_buffer_with_data(
-            counts.as_ptr() as *const _,
-            (counts.len() * mem::size_of::<u32>()) as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
-
-        let cluster_ids_buffer = self.device.new_buffer_with_data(
-            cluster_ids_u32.as_ptr() as *const _,
-            (cluster_ids_u32.len() * mem::size_of::<u32>()) as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
-
         let params = SparseToBufferParams {
             num_examples: num_examples as u32,
             total_input_bits: total_input_bits as u32,
@@ -1438,12 +1529,33 @@ impl MetalGroupEvaluator {
             total_clusters: num_clusters as u32,
             empty_value,
         };
+        // Convert params to slice for get_or_create_buffer
+        let params_slice = unsafe {
+            std::slice::from_raw_parts(
+                &params as *const SparseToBufferParams as *const u8,
+                mem::size_of::<SparseToBufferParams>(),
+            )
+        };
 
-        let params_buffer = self.device.new_buffer_with_data(
-            &params as *const _ as *const _,
-            mem::size_of::<SparseToBufferParams>() as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
+        // Get current cache generation for validation
+        let current_gen = get_sparse_cache_generation();
+
+        // Use cached buffers from thread-local storage
+        let (conn_buffer, keys_buffer, values_buffer, offsets_buffer,
+             counts_buffer, cluster_ids_buffer, params_buffer) =
+            SPARSE_BUFFER_CACHE.with(|cache| {
+                let mut cache = cache.borrow_mut();
+
+                let conn = get_or_create_buffer(&self.device, &mut cache.conn_buffer, &connections_i32, current_gen);
+                let keys = get_or_create_buffer(&self.device, &mut cache.keys_buffer, keys, current_gen);
+                let values = get_or_create_buffer(&self.device, &mut cache.values_buffer, values, current_gen);
+                let offsets = get_or_create_buffer(&self.device, &mut cache.offsets_buffer, offsets, current_gen);
+                let counts = get_or_create_buffer(&self.device, &mut cache.counts_buffer, counts, current_gen);
+                let cluster_ids = get_or_create_buffer(&self.device, &mut cache.cluster_ids_buffer, &cluster_ids_u32, current_gen);
+                let params = get_or_create_buffer(&self.device, &mut cache.params_buffer, params_slice, current_gen);
+
+                (conn, keys, values, offsets, counts, cluster_ids, params)
+            });
 
         // Dispatch kernel
         let command_buffer = self.command_queue.new_command_buffer();
@@ -1474,6 +1586,8 @@ impl MetalGroupEvaluator {
     }
 
     /// Evaluate dense group and write directly to shared buffer on GPU
+    ///
+    /// Uses thread-local buffer caching to avoid 4 buffer allocations per call.
     pub fn eval_dense_to_buffer(
         &self,
         input_buffer: &Buffer,
@@ -1496,25 +1610,6 @@ impl MetalGroupEvaluator {
         let connections_i32: Vec<i32> = connections.iter().map(|&c| c as i32).collect();
         let cluster_ids_u32: Vec<u32> = cluster_ids.iter().map(|&c| c as u32).collect();
 
-        // Create buffers
-        let conn_buffer = self.device.new_buffer_with_data(
-            connections_i32.as_ptr() as *const _,
-            (connections_i32.len() * mem::size_of::<i32>()) as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
-
-        let memory_buffer = self.device.new_buffer_with_data(
-            memory_words.as_ptr() as *const _,
-            (memory_words.len() * mem::size_of::<i64>()) as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
-
-        let cluster_ids_buffer = self.device.new_buffer_with_data(
-            cluster_ids_u32.as_ptr() as *const _,
-            (cluster_ids_u32.len() * mem::size_of::<u32>()) as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
-
         let params = DenseToBufferParams {
             num_examples: num_examples as u32,
             total_input_bits: total_input_bits as u32,
@@ -1526,12 +1621,29 @@ impl MetalGroupEvaluator {
             words_per_neuron: words_per_neuron as u32,
             empty_value,
         };
+        // Convert params to slice for get_or_create_buffer
+        let params_slice = unsafe {
+            std::slice::from_raw_parts(
+                &params as *const DenseToBufferParams as *const u8,
+                mem::size_of::<DenseToBufferParams>(),
+            )
+        };
 
-        let params_buffer = self.device.new_buffer_with_data(
-            &params as *const _ as *const _,
-            mem::size_of::<DenseToBufferParams>() as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
+        // Get current cache generation for validation
+        let current_gen = get_sparse_cache_generation();
+
+        // Use cached buffers from thread-local storage
+        let (conn_buffer, memory_buffer, cluster_ids_buffer, params_buffer) =
+            DENSE_BUFFER_CACHE.with(|cache| {
+                let mut cache = cache.borrow_mut();
+
+                let conn = get_or_create_buffer(&self.device, &mut cache.conn_buffer, &connections_i32, current_gen);
+                let memory = get_or_create_buffer(&self.device, &mut cache.memory_buffer, memory_words, current_gen);
+                let cluster_ids = get_or_create_buffer(&self.device, &mut cache.cluster_ids_buffer, &cluster_ids_u32, current_gen);
+                let params = get_or_create_buffer(&self.device, &mut cache.params_buffer, params_slice, current_gen);
+
+                (conn, memory, cluster_ids, params)
+            });
 
         // Dispatch kernel
         let command_buffer = self.command_queue.new_command_buffer();

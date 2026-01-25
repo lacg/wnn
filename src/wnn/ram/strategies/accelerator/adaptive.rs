@@ -131,8 +131,11 @@ fn get_group_evaluator() -> Option<Arc<crate::metal_ramlm::MetalGroupEvaluator>>
 /// The evaluators will be lazily re-initialized on next use.
 /// Existing Arc references will continue to work until dropped.
 pub fn reset_metal_evaluators() {
-    // Increment generation counter
+    // Increment generation counter (for scores/input buffer cache in evaluate_genome_hybrid)
     RESET_GENERATION.fetch_add(1, Ordering::SeqCst);
+
+    // Also reset the sparse buffer cache (for per-group buffers in eval_sparse_to_buffer)
+    crate::metal_ramlm::reset_sparse_buffer_cache();
 
     // Clear all evaluators - existing Arc holders keep their reference
     // until dropped, then the evaluator is truly freed
@@ -1590,9 +1593,12 @@ fn export_genome_for_gpu(
 
 /// Thread-local cache for GPU buffers to avoid expensive 10GB buffer allocation per evaluation
 /// The scores buffer is ~10GB (50K examples × 50K clusters × 4 bytes), so reusing it is critical.
+/// The cache includes the reset generation to invalidate on Metal reset.
 thread_local! {
-    static CACHED_SCORES_BUFFER: std::cell::RefCell<Option<(usize, usize, metal::Buffer)>> = std::cell::RefCell::new(None);
-    static CACHED_INPUT_BUFFER: std::cell::RefCell<Option<(usize, metal::Buffer)>> = std::cell::RefCell::new(None);
+    // (reset_gen, num_eval, num_clusters, buffer)
+    static CACHED_SCORES_BUFFER: std::cell::RefCell<Option<(u64, usize, usize, metal::Buffer)>> = std::cell::RefCell::new(None);
+    // (reset_gen, size, buffer)
+    static CACHED_INPUT_BUFFER: std::cell::RefCell<Option<(u64, usize, metal::Buffer)>> = std::cell::RefCell::new(None);
 }
 
 /// Evaluate a genome export using CPU+GPU hybrid
@@ -1681,36 +1687,41 @@ pub fn evaluate_genome_hybrid(
         if let Some(group_eval) = get_group_evaluator() {
             let gpu_start = std::time::Instant::now();
 
+            // Get current reset generation to detect when Metal evaluators were reset
+            let current_reset_gen = RESET_GENERATION.load(Ordering::SeqCst);
+
             // Get or create cached scores buffer (avoids expensive 10GB allocation per eval)
             // The scores buffer is zeroed efficiently using memset instead of creating a new Vec
+            // Invalidate cache if Metal was reset (reset_gen changed)
             let scores_buffer = CACHED_SCORES_BUFFER.with(|cache| {
                 let mut cache = cache.borrow_mut();
-                if let Some((cached_eval, cached_clusters, ref buffer)) = *cache {
-                    if cached_eval == num_eval && cached_clusters == num_clusters {
+                if let Some((cached_gen, cached_eval, cached_clusters, ref buffer)) = *cache {
+                    if cached_gen == current_reset_gen && cached_eval == num_eval && cached_clusters == num_clusters {
                         // Reuse existing buffer - just zero it
                         group_eval.zero_scores_buffer(buffer, num_eval, num_clusters);
                         return buffer.clone();
                     }
                 }
-                // Create new buffer and cache it
+                // Create new buffer and cache it (invalidate on reset_gen mismatch)
                 let buffer = group_eval.create_scores_buffer(num_eval, num_clusters);
-                *cache = Some((num_eval, num_clusters, buffer.clone()));
+                *cache = Some((current_reset_gen, num_eval, num_clusters, buffer.clone()));
                 buffer
             });
 
             // Get or create cached input buffer (update contents efficiently)
+            // Invalidate cache if Metal was reset (reset_gen changed)
             let input_buffer = CACHED_INPUT_BUFFER.with(|cache| {
                 let mut cache = cache.borrow_mut();
-                if let Some((cached_size, ref buffer)) = *cache {
-                    if cached_size == eval_input_bits.len() {
+                if let Some((cached_gen, cached_size, ref buffer)) = *cache {
+                    if cached_gen == current_reset_gen && cached_size == eval_input_bits.len() {
                         // Reuse existing buffer - update contents
                         group_eval.update_input_buffer(buffer, eval_input_bits);
                         return buffer.clone();
                     }
                 }
-                // Create new buffer and cache it
+                // Create new buffer and cache it (invalidate on reset_gen mismatch)
                 let buffer = group_eval.create_input_buffer(eval_input_bits);
-                *cache = Some((eval_input_bits.len(), buffer.clone()));
+                *cache = Some((current_reset_gen, eval_input_bits.len(), buffer.clone()));
                 buffer
             });
 

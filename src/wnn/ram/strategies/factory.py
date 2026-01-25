@@ -316,7 +316,7 @@ class OptimizerStrategyFactory:
 		cooling_rate: float = 0.95,
 		# Early stopping (GA: 0.05%, TS: 0.5%)
 		patience: int = 5,
-		check_interval: int = 5,
+		check_interval: int = 10,
 		min_improvement_pct: float | None = None,  # None = use strategy default
 		# Threshold continuity (replaces phase_index)
 		initial_threshold: float | None = None,  # Start threshold from previous phase (None = first phase)
@@ -375,7 +375,7 @@ class OptimizerStrategyFactory:
 
 			Early stopping:
 				patience: Checks without improvement before stopping (default: 5)
-				check_interval: Check every N generations/iterations (default: 5)
+				check_interval: Check every N generations/iterations (default: 10)
 				min_improvement_pct: Minimum improvement % (default: GA=0.05%, TS=0.5%)
 
 			Common:
