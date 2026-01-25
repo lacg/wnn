@@ -187,6 +187,73 @@ pub fn build_groups(bits_per_cluster: &[usize], neurons_per_cluster: &[usize]) -
     }
 }
 
+/// Reorganize connections from Python's cluster-order layout to coalesced group layout
+///
+/// Python generates connections in cluster ID order:
+///   [cluster_0_conns, cluster_1_conns, ..., cluster_N_conns]
+///   where cluster_i has neurons_per_cluster[i] * bits_per_cluster[i] connections
+///
+/// Coalesced groups expect connections organized by group with padding:
+///   [group_0_cluster_conns, group_1_cluster_conns, ...]
+///   where each cluster in group has group.neurons (MAX) * group.bits connections
+///   and actual connections are followed by padding (-1) to reach MAX neurons
+///
+/// Returns: padded connections in group order, ready for coalesced evaluation
+pub fn reorganize_connections_for_coalescing(
+    original_connections: &[i64],
+    bits_per_cluster: &[usize],
+    neurons_per_cluster: &[usize],
+    groups: &[ConfigGroup],
+) -> Vec<i64> {
+    let num_clusters = bits_per_cluster.len();
+
+    // Build mapping: cluster_id -> offset in original_connections
+    let mut cluster_offsets = vec![0usize; num_clusters];
+    let mut offset = 0;
+    for cluster_id in 0..num_clusters {
+        cluster_offsets[cluster_id] = offset;
+        offset += neurons_per_cluster[cluster_id] * bits_per_cluster[cluster_id];
+    }
+
+    // Total size needed for coalesced layout
+    let total_size: usize = groups.iter().map(|g| g.conn_size()).sum();
+    let mut result = vec![-1i64; total_size];  // Initialize with padding value
+
+    // For each group, copy connections for each cluster (with padding)
+    let mut write_offset = 0;
+    for group in groups {
+        let max_neurons = group.neurons;
+        let bits = group.bits;
+
+        for (local_idx, &cluster_id) in group.cluster_ids.iter().enumerate() {
+            let actual_neurons = if let Some(ref an) = group.actual_neurons {
+                an[local_idx] as usize
+            } else {
+                max_neurons  // Uniform case
+            };
+
+            // Source: original connections for this cluster
+            let src_offset = cluster_offsets[cluster_id];
+            let src_size = actual_neurons * bits;
+
+            // Destination: position in coalesced layout
+            // Each cluster in group gets max_neurons * bits slots
+            let dst_offset = write_offset + local_idx * max_neurons * bits;
+
+            // Copy actual connections
+            result[dst_offset..dst_offset + src_size]
+                .copy_from_slice(&original_connections[src_offset..src_offset + src_size]);
+
+            // Remaining slots (dst_offset + src_size .. dst_offset + max_neurons * bits)
+            // are already -1 (padding)
+        }
+
+        write_offset += group.cluster_ids.len() * max_neurons * bits;
+    }
+
+    result
+}
+
 /// Configuration group - clusters sharing the same (neurons, bits) config
 /// For coalesced groups, neurons is the MAX neurons and actual_neurons stores per-cluster values
 #[derive(Clone, Debug)]
@@ -505,11 +572,18 @@ pub fn forward_batch_adaptive(
 
             // For each cluster in this group
             for (local_idx, &global_cluster_id) in group.cluster_ids.iter().enumerate() {
-                let start_neuron = local_idx * neurons;
+                // Use actual neurons if coalesced, otherwise MAX (uniform case)
+                let actual_neurons = if let Some(ref an) = group.actual_neurons {
+                    an[local_idx] as usize
+                } else {
+                    neurons
+                };
+
+                let start_neuron = local_idx * neurons;  // Use MAX for memory layout
                 let mut count_true = 0u32;
                 let mut count_empty = 0u32;
 
-                for neuron_offset in 0..neurons {
+                for neuron_offset in 0..actual_neurons {  // Only iterate actual neurons
                     let local_neuron = start_neuron + neuron_offset;
                     let conn_start = local_neuron * bits;
                     let connections = &group_conns[conn_start..conn_start + bits];
@@ -524,8 +598,9 @@ pub fn forward_batch_adaptive(
                     }
                 }
 
+                // Divide by actual neurons for correct probability
                 ex_probs[global_cluster_id] =
-                    (count_true as f32 + empty_value * count_empty as f32) / neurons as f32;
+                    (count_true as f32 + empty_value * count_empty as f32) / actual_neurons as f32;
             }
         }
     });
@@ -584,14 +659,21 @@ pub fn train_batch_adaptive(
         let (group_idx, local_cluster) = cluster_to_group[true_cluster];
         let group = &groups[group_idx];
 
-        let neurons = group.neurons;
+        let neurons = group.neurons;  // MAX for memory layout
         let bits = group.bits;
         let words_per_neuron = group.words_per_neuron;
         let start_neuron = local_cluster * neurons;
         let group_conns = &connections_flat[group.conn_offset..];
 
+        // Use actual neurons if coalesced, otherwise MAX
+        let actual_neurons = if let Some(ref an) = group.actual_neurons {
+            an[local_cluster] as usize
+        } else {
+            neurons
+        };
+
         let mut modified = 0usize;
-        for neuron_offset in 0..neurons {
+        for neuron_offset in 0..actual_neurons {  // Only iterate actual neurons
             let local_neuron = start_neuron + neuron_offset;
             let conn_start = local_neuron * bits;
             let connections = &group_conns[conn_start..conn_start + bits];
@@ -627,13 +709,20 @@ pub fn train_batch_adaptive(
             let (group_idx, local_cluster) = cluster_to_group[false_cluster];
             let group = &groups[group_idx];
 
-            let neurons = group.neurons;
+            let neurons = group.neurons;  // MAX for memory layout
             let bits = group.bits;
             let words_per_neuron = group.words_per_neuron;
             let start_neuron = local_cluster * neurons;
             let group_conns = &connections_flat[group.conn_offset..];
 
-            for neuron_offset in 0..neurons {
+            // Use actual neurons if coalesced, otherwise MAX
+            let actual_neurons = if let Some(ref an) = group.actual_neurons {
+                an[local_cluster] as usize
+            } else {
+                neurons
+            };
+
+            for neuron_offset in 0..actual_neurons {  // Only iterate actual neurons
                 let local_neuron = start_neuron + neuron_offset;
                 let conn_start = local_neuron * bits;
                 let connections = &group_conns[conn_start..conn_start + bits];
@@ -1115,13 +1204,8 @@ pub fn evaluate_genomes_parallel(
         let neurons_per_cluster: Vec<usize> = genomes_neurons_flat[genome_offset..genome_offset + num_clusters].to_vec();
 
         // Build config groups for this genome
-        // NOTE: Coalescing is disabled when using provided connections because
-        // their layout is based on actual neurons, not coalesced MAX neurons.
-        let groups = if use_provided_connections {
-            build_config_groups(&bits_per_cluster, &neurons_per_cluster)
-        } else {
-            build_groups(&bits_per_cluster, &neurons_per_cluster)
-        };
+        // Coalescing is now supported even with provided connections by reorganizing them
+        let groups = build_groups(&bits_per_cluster, &neurons_per_cluster);
 
         // Create hybrid memory for each config group
         // Dense for bits <= 12 (fast), Sparse for bits > 12 (memory-efficient)
@@ -1134,7 +1218,19 @@ pub fn evaluate_genomes_parallel(
             // Use pre-computed per-genome offset and size
             let conn_offset = conn_offsets[genome_idx];
             let conn_size = conn_sizes[genome_idx];
-            genomes_connections_flat[conn_offset..conn_offset + conn_size].to_vec()
+            let original_connections = &genomes_connections_flat[conn_offset..conn_offset + conn_size];
+
+            // If coalescing is enabled, reorganize connections to match group layout
+            if use_coalesced_groups() {
+                reorganize_connections_for_coalescing(
+                    original_connections,
+                    &bits_per_cluster,
+                    &neurons_per_cluster,
+                    &groups,
+                )
+            } else {
+                original_connections.to_vec()
+            }
         } else {
             // Generate random connections (legacy fallback)
             let total_conn_size: usize = groups.iter().map(|g| g.conn_size()).sum();
@@ -1172,10 +1268,17 @@ pub fn evaluate_genomes_parallel(
                 let group = &groups[group_idx];
                 let memory = &group_memories[group_idx];
 
-                let neuron_base = local_cluster * group.neurons;
+                // Use actual neurons if coalesced, otherwise MAX
+                let actual_neurons = if let Some(ref an) = group.actual_neurons {
+                    an[local_cluster] as usize
+                } else {
+                    group.neurons
+                };
+
+                let neuron_base = local_cluster * group.neurons;  // Keep MAX for memory layout
                 let conn_base = group.conn_offset + local_cluster * group.neurons * group.bits;
 
-                for n in 0..group.neurons {
+                for n in 0..actual_neurons {  // Only iterate actual neurons
                     let conn_start = conn_base + n * group.bits;
                     let address = compute_address(input_bits, &connections_flat[conn_start..], group.bits);
                     memory.write(neuron_base + n, address, TRUE, false);
@@ -1194,10 +1297,17 @@ pub fn evaluate_genomes_parallel(
                 let group = &groups[group_idx];
                 let memory = &group_memories[group_idx];
 
-                let neuron_base = local_cluster * group.neurons;
+                // Use actual neurons if coalesced, otherwise MAX
+                let actual_neurons = if let Some(ref an) = group.actual_neurons {
+                    an[local_cluster] as usize
+                } else {
+                    group.neurons
+                };
+
+                let neuron_base = local_cluster * group.neurons;  // Keep MAX for memory layout
                 let conn_base = group.conn_offset + local_cluster * group.neurons * group.bits;
 
-                for n in 0..group.neurons {
+                for n in 0..actual_neurons {  // Only iterate actual neurons
                     let conn_start = conn_base + n * group.bits;
                     let address = compute_address(input_bits, &connections_flat[conn_start..], group.bits);
                     memory.write(neuron_base + n, address, FALSE, false);
@@ -1288,11 +1398,18 @@ pub fn evaluate_genomes_parallel(
                 let input_bits = &eval_input_bits[input_start..input_start + total_input_bits];
 
                 for (local_cluster, &cluster_id) in group.cluster_ids.iter().enumerate() {
-                    let neuron_base = local_cluster * group.neurons;
+                    // Use actual neurons if coalesced, otherwise MAX
+                    let actual_neurons = if let Some(ref an) = group.actual_neurons {
+                        an[local_cluster] as usize
+                    } else {
+                        group.neurons
+                    };
+
+                    let neuron_base = local_cluster * group.neurons;  // Keep MAX for memory layout
                     let conn_base = group.conn_offset + local_cluster * group.neurons * group.bits;
 
                     let mut sum = 0.0f32;
-                    for n in 0..group.neurons {
+                    for n in 0..actual_neurons {  // Only iterate actual neurons
                         let conn_start = conn_base + n * group.bits;
                         let address = compute_address(input_bits, &connections_flat[conn_start..], group.bits);
                         let cell = memory.read(neuron_base + n, address);
@@ -1303,7 +1420,7 @@ pub fn evaluate_genomes_parallel(
                         };
                     }
 
-                    scores[cluster_id] = (sum / group.neurons as f32) as f64;
+                    scores[cluster_id] = (sum / actual_neurons as f32) as f64;  // Divide by actual
                 }
             });
         }
@@ -1664,10 +1781,17 @@ fn train_genome_in_slot(
             let group = &groups[group_idx];
             let memory = &memories[group_idx];
 
-            let neuron_base = local_cluster * group.neurons;
+            // Use actual neurons if coalesced, otherwise use group.neurons (MAX)
+            let actual_neurons = if let Some(ref an) = group.actual_neurons {
+                an[local_cluster] as usize
+            } else {
+                group.neurons
+            };
+
+            let neuron_base = local_cluster * group.neurons;  // Keep MAX for memory layout
             let conn_base = group.conn_offset + local_cluster * group.neurons * group.bits;
 
-            for n in 0..group.neurons {
+            for n in 0..actual_neurons {  // Only iterate over actual neurons
                 let conn_start = conn_base + n * group.bits;
                 let address = compute_address(input_bits, &connections_flat[conn_start..], group.bits);
                 memory.write(neuron_base + n, address, TRUE, false);
@@ -1686,10 +1810,17 @@ fn train_genome_in_slot(
             let group = &groups[group_idx];
             let memory = &memories[group_idx];
 
-            let neuron_base = local_cluster * group.neurons;
+            // Use actual neurons if coalesced, otherwise use group.neurons (MAX)
+            let actual_neurons = if let Some(ref an) = group.actual_neurons {
+                an[local_cluster] as usize
+            } else {
+                group.neurons
+            };
+
+            let neuron_base = local_cluster * group.neurons;  // Keep MAX for memory layout
             let conn_base = group.conn_offset + local_cluster * group.neurons * group.bits;
 
-            for n in 0..group.neurons {
+            for n in 0..actual_neurons {  // Only iterate over actual neurons
                 let conn_start = conn_base + n * group.bits;
                 let address = compute_address(input_bits, &connections_flat[conn_start..], group.bits);
                 memory.write(neuron_base + n, address, FALSE, false);
@@ -2172,11 +2303,18 @@ pub fn evaluate_genome_hybrid(
                     let input_bits = &eval_input_bits[input_start..input_start + total_input_bits];
 
                     for (local_cluster, &cluster_id) in cluster_ids.iter().enumerate() {
-                        let neuron_base = local_cluster * group.neurons;
+                        // Use actual neurons if coalesced, otherwise MAX
+                        let actual_neurons = if let Some(ref an) = group.actual_neurons {
+                            an[local_cluster] as usize
+                        } else {
+                            group.neurons
+                        };
+
+                        let neuron_base = local_cluster * group.neurons;  // Keep MAX for memory layout
                         let conn_base = group.conn_offset + local_cluster * group.neurons * group.bits;
 
                         let mut sum = 0.0f32;
-                        for n in 0..group.neurons {
+                        for n in 0..actual_neurons {  // Only iterate actual neurons
                             let conn_start = conn_base + n * group.bits;
                             let address = compute_address(input_bits, &export.connections[conn_start..], group.bits);
                             let cell = sparse_export.lookup(neuron_base + n, address as u64);
@@ -2187,7 +2325,7 @@ pub fn evaluate_genome_hybrid(
                             };
                         }
 
-                        scores[cluster_id] = (sum / group.neurons as f32) as f64;
+                        scores[cluster_id] = (sum / actual_neurons as f32) as f64;  // Divide by actual
                     }
                 });
                 if timing_enabled {
@@ -2407,14 +2545,8 @@ pub fn evaluate_genomes_parallel_hybrid(
                 let neurons_per_cluster = &genomes_neurons_flat[genome_offset..genome_offset + num_clusters];
 
                 // Build config groups for THIS genome
-                // NOTE: Coalescing is disabled when using provided connections because
-                // their layout is based on actual neurons, not coalesced MAX neurons.
-                // Coalescing only works when connections are generated internally.
-                let groups = if use_provided_connections {
-                    build_config_groups(bits_per_cluster, neurons_per_cluster)
-                } else {
-                    build_groups(bits_per_cluster, neurons_per_cluster)
-                };
+                // Coalescing is now supported even with provided connections by reorganizing them
+                let groups = build_groups(bits_per_cluster, neurons_per_cluster);
 
                 // Build cluster-to-group mapping for THIS genome
                 let mut cluster_to_group: Vec<(usize, usize)> = vec![(0, 0); num_clusters];
@@ -2433,7 +2565,19 @@ pub fn evaluate_genomes_parallel_hybrid(
                 let connections_flat: Vec<i64> = if use_provided_connections {
                     let conn_offset = conn_offsets[genome_idx];
                     let conn_size = conn_sizes[genome_idx];
-                    genomes_connections_flat[conn_offset..conn_offset + conn_size].to_vec()
+                    let original_connections = &genomes_connections_flat[conn_offset..conn_offset + conn_size];
+
+                    // If coalescing is enabled, reorganize connections to match group layout
+                    if use_coalesced_groups() {
+                        reorganize_connections_for_coalescing(
+                            original_connections,
+                            bits_per_cluster,
+                            neurons_per_cluster,
+                            &groups,
+                        )
+                    } else {
+                        original_connections.to_vec()
+                    }
                 } else {
                     // Generate random connections based on THIS genome's config
                     use rand::{Rng, SeedableRng};

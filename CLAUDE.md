@@ -826,6 +826,44 @@ pub fn evaluate_genomes_parallel_hybrid(
 ) -> Vec<(f64, f64)>  // Returns (ce_loss, accuracy) per genome
 ```
 
+### Group Coalescing (Neuron Bucketing)
+
+When GA/TS optimization creates genomes with diverse (neurons, bits) configurations, the number of unique config groups can explode (100+ groups), causing GPU dispatch overhead. **Coalescing** reduces this by bucketing similar neuron counts together.
+
+**How it works:**
+1. Neurons are bucketed: 1-5→5, 6-10→10, 11-15→15, 16-20→20, etc.
+2. Clusters with same (bucket, bits) are grouped together
+3. Each cluster tracks its `actual_neurons` for correct scoring
+4. GPU kernel uses masking to process only actual neurons, not padded ones
+
+**Enable coalescing:**
+```bash
+# Set environment variable before running experiments
+export WNN_COALESCE_GROUPS=1
+
+# With logging to see group counts
+WNN_COALESCE_GROUPS=1 WNN_GROUP_LOG=1 python run_coarse_fine_search.py ...
+```
+
+**Expected improvement:**
+- Without coalescing: 100-180 unique config groups per genome
+- With coalescing: ~20-40 coalesced groups per genome (5x reduction)
+
+**Log output with `WNN_GROUP_LOG=1`:**
+```
+[CONFIG_GROUPS_COALESCED] total=29 sparse=14 dense=15 coalesced=29 configs=[...]
+```
+- `total`: Number of groups after coalescing
+- `sparse`/`dense`: Groups with bits > 12 (GPU) vs bits ≤ 12 (CPU)
+- `coalesced`: Groups using masking (non-uniform actual neurons)
+- `configs`: List of (max_neurons, bits, num_clusters, is_coalesced)
+
+**Technical details:**
+- Connections from Python are reorganized to match coalesced group layout
+- Training/evaluation loops iterate only over `actual_neurons`, not MAX
+- Probability is divided by `actual_neurons` for correct scoring
+- Padded connections use -1 (never accessed due to actual_neurons limit)
+
 ## Coding Style
 
 - **Indentation**: Use tabs (not spaces), displayed as 2-space width
