@@ -474,6 +474,8 @@ ps aux | grep ramlm | grep -v grep
 
 ### Running Coarse-Fine Search
 
+**⚠️ IMPORTANT: This is the PRIMARY overnight experiment runner. Use `run_coarse_fine_search.py`, NOT `run_phased_search.py`.**
+
 The current main experiment runner is `run_coarse_fine_search.py` in the project root:
 
 ```bash
