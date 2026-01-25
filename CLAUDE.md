@@ -483,11 +483,18 @@ The current main experiment runner is `run_coarse_fine_search.py` in the project
 cd "/Users/lacg/Library/Mobile Documents/com~apple~CloudDocs/Studies/research/wnn"
 source wnn/bin/activate
 
-# OVERNIGHT RUN: Always use --ga-gens 1000 --ts-iters 1000 --patience 10
+# OVERNIGHT RUN: Tier0-only with asymmetric architecture (RECOMMENDED)
+# - Uses best tier config: 100 tokens @ 20 bits, 400 @ 12 bits, rest @ 8 bits
+# - Only optimizes tier0 (100 most frequent tokens) for faster convergence
+# - Population/neighbors 50 for good diversity
 PYTHONUNBUFFERED=1 nohup python -u run_coarse_fine_search.py \
   --ga-gens 1000 \
   --ts-iters 1000 \
   --patience 10 \
+  --population 50 \
+  --neighbors 50 \
+  --tier-config "100,15,20;400,10,12;rest,5,8" \
+  --tier0-only \
   > nohup.out 2>&1 &
 
 # Monitor progress
