@@ -21,10 +21,9 @@ import yaml
 
 from wnn.ram.strategies.factory import OptimizerStrategyFactory, OptimizerStrategyType
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
-from wnn.ram.core.reporting import OptimizationResultsTable
+from wnn.ram.core.reporting import OptimizationResultsTable, PhaseComparisonTable, PhaseMetrics
 from wnn.ram.core import bits_needed
 from wnn.ram.architecture.cached_evaluator import CachedEvaluator
-from wnn.ram.fitness import FitnessCalculatorFactory, FitnessCalculatorType
 
 
 @dataclass
@@ -568,6 +567,95 @@ class PhasedSearchRunner:
 			return PHASE_NAMES_BITS_FIRST
 		return PHASE_NAMES_NEURONS_FIRST
 
+	def evaluate_population_full(
+		self,
+		population: list[ClusterGenome],
+		k: int = 10,
+	) -> PhaseMetrics | None:
+		"""
+		Evaluate a population on FULL validation data and return metrics.
+
+		Returns PhaseMetrics with:
+		- top-k mean CE and Acc
+		- best CE genome's CE and Acc
+		- best Acc genome's CE and Acc
+
+		All evaluated on full validation data for fair comparison.
+
+		Args:
+			population: List of genomes to evaluate
+			k: Number of genomes for top-k mean (default 10)
+
+		Returns:
+			PhaseMetrics or None if population is empty
+		"""
+		if not population:
+			return None
+
+		# Evaluate all genomes on full validation data
+		full_evals: list[tuple[ClusterGenome, float, float]] = []
+		for genome in population:
+			ce, acc = self.evaluator.evaluate_single_full(genome)
+			full_evals.append((genome, ce, acc))
+
+		# Sort by CE (ascending) for best CE and top-k
+		by_ce = sorted(full_evals, key=lambda x: x[1])
+
+		# Sort by Acc (descending) for best Acc
+		by_acc = sorted(full_evals, key=lambda x: -x[2])
+
+		# Top-k mean (by CE)
+		top_k = by_ce[:k]
+		top_k_ce = sum(e[1] for e in top_k) / len(top_k)
+		top_k_acc = sum(e[2] for e in top_k) / len(top_k)
+
+		# Best by CE
+		best_ce_genome, best_ce_ce, best_ce_acc = by_ce[0]
+
+		# Best by Acc
+		best_acc_genome, best_acc_ce, best_acc_acc = by_acc[0]
+
+		return PhaseMetrics(
+			phase_name="",  # Will be set by caller
+			top_k_ce=top_k_ce,
+			top_k_acc=top_k_acc,
+			best_ce_ce=best_ce_ce,
+			best_ce_acc=best_ce_acc,
+			best_acc_ce=best_acc_ce,
+			best_acc_acc=best_acc_acc,
+			k=min(k, len(top_k)),
+		)
+
+	def evaluate_single_genome_as_metrics(
+		self,
+		genome: ClusterGenome,
+		phase_name: str = "",
+	) -> PhaseMetrics:
+		"""
+		Evaluate a single genome on full validation and return as PhaseMetrics.
+
+		For baseline where we only have one genome, all three metrics
+		(top-k, best CE, best Acc) are the same.
+
+		Args:
+			genome: Genome to evaluate
+			phase_name: Name for the phase
+
+		Returns:
+			PhaseMetrics with all metrics set to the same values
+		"""
+		ce, acc = self.evaluator.evaluate_single_full(genome)
+		return PhaseMetrics(
+			phase_name=phase_name,
+			top_k_ce=ce,
+			top_k_acc=acc,
+			best_ce_ce=ce,
+			best_ce_acc=acc,
+			best_acc_ce=ce,
+			best_acc_acc=acc,
+			k=1,
+		)
+
 	def run_phase(
 		self,
 		phase_name: str,
@@ -741,70 +829,88 @@ class PhasedSearchRunner:
 			initial_accuracy=result.initial_accuracy,
 		)
 
-	def print_progress(
+	def print_phase_comparison(
 		self,
-		title: str,
-		phase_results: list[PhaseResult],
-		baseline_ce: Optional[float] = None,
-		baseline_acc: Optional[float] = None,
+		phase_metrics_list: list[PhaseMetrics],
 	) -> None:
-		"""Print a progress table with current results.
-
-		Shows best by Harmonic Rank, CE, and Accuracy for the latest phase,
-		each evaluated against full validation for fair comparison with baseline.
 		"""
-		table = OptimizationResultsTable(title)
-		if baseline_ce is not None:
-			table.add_stage("Initial (default genome)", ce=baseline_ce, accuracy=baseline_acc)
+		Print cumulative phase comparison table.
 
-		# For previous phases, just show their best result
-		for pr in phase_results[:-1]:
-			table.add_stage(pr.phase_name, ce=pr.final_fitness, accuracy=pr.final_accuracy)
+		All metrics are evaluated on FULL validation data for fair comparison.
 
-		# For the current (latest) phase, show best by Harmonic/CE/Acc
-		if phase_results:
-			current = phase_results[-1]
-			pop = current.final_population
-
-			if pop and len(pop) > 0:
-				# Evaluate all genomes to get their fitness
-				# (they should have _cached_fitness from the optimization)
-				pop_with_fitness = []
-				for g in pop:
-					if hasattr(g, '_cached_fitness') and g._cached_fitness is not None:
-						ce, acc = g._cached_fitness
-						pop_with_fitness.append((g, ce, acc))
-
-				if pop_with_fitness:
-					# Find best by CE (lowest)
-					best_ce_genome = min(pop_with_fitness, key=lambda x: x[1])[0]
-
-					# Find best by Accuracy (highest)
-					best_acc_genome = max(pop_with_fitness, key=lambda x: x[2])[0]
-
-					# Find best by Harmonic Rank
-					fitness_calc = FitnessCalculatorFactory.create(FitnessCalculatorType.HARMONIC_RANK)
-					ranked = fitness_calc.rank(pop_with_fitness)
-					best_harmonic_genome = ranked[0][0]
-
-					# Evaluate each against full validation
-					hr_ce, hr_acc = self.evaluator.evaluate_single_full(best_harmonic_genome)
-					ce_ce, ce_acc = self.evaluator.evaluate_single_full(best_ce_genome)
-					acc_ce, acc_acc = self.evaluator.evaluate_single_full(best_acc_genome)
-
-					# Add to table
-					table.add_stage(f"{current.phase_name} (Best Harmonic)", ce=hr_ce, accuracy=hr_acc)
-					table.add_stage(f"{current.phase_name} (Best CE)", ce=ce_ce, accuracy=ce_acc)
-					table.add_stage(f"{current.phase_name} (Best Acc)", ce=acc_ce, accuracy=acc_acc)
-				else:
-					# Fallback: just show the best genome
-					table.add_stage(current.phase_name, ce=current.final_fitness, accuracy=current.final_accuracy)
-			else:
-				# No population, just show best genome
-				table.add_stage(current.phase_name, ce=current.final_fitness, accuracy=current.final_accuracy)
-
+		Args:
+			phase_metrics_list: List of PhaseMetrics (baseline + completed phases)
+		"""
+		table = PhaseComparisonTable("Phase Comparison (Full Validation)")
+		for pm in phase_metrics_list:
+			table.add_phase(pm)
 		self.log("")
 		table.print(self.log)
+
+	def get_phase_metrics(
+		self,
+		phase_result: PhaseResult,
+		k: int = 10,
+	) -> PhaseMetrics:
+		"""
+		Evaluate a phase's population on FULL validation and return PhaseMetrics.
+
+		Args:
+			phase_result: The phase result with final_population
+			k: Number of genomes for top-k mean
+
+		Returns:
+			PhaseMetrics with all metrics evaluated on full validation
+		"""
+		pop = phase_result.final_population
+
+		if pop and len(pop) > 0:
+			# Evaluate all genomes on full validation data
+			full_evals: list[tuple[ClusterGenome, float, float]] = []
+			for genome in pop:
+				ce, acc = self.evaluator.evaluate_single_full(genome)
+				full_evals.append((genome, ce, acc))
+
+			# Sort by CE (ascending) for best CE and top-k
+			by_ce = sorted(full_evals, key=lambda x: x[1])
+
+			# Sort by Acc (descending) for best Acc
+			by_acc = sorted(full_evals, key=lambda x: -x[2])
+
+			# Top-k mean (by CE)
+			top_k = by_ce[:k]
+			top_k_ce = sum(e[1] for e in top_k) / len(top_k)
+			top_k_acc = sum(e[2] for e in top_k) / len(top_k)
+
+			# Best by CE
+			_, best_ce_ce, best_ce_acc = by_ce[0]
+
+			# Best by Acc
+			_, best_acc_ce, best_acc_acc = by_acc[0]
+
+			return PhaseMetrics(
+				phase_name=phase_result.phase_name,
+				top_k_ce=top_k_ce,
+				top_k_acc=top_k_acc,
+				best_ce_ce=best_ce_ce,
+				best_ce_acc=best_ce_acc,
+				best_acc_ce=best_acc_ce,
+				best_acc_acc=best_acc_acc,
+				k=min(k, len(top_k)),
+			)
+		else:
+			# No population - use best genome for all metrics
+			ce, acc = self.evaluator.evaluate_single_full(phase_result.best_genome)
+			return PhaseMetrics(
+				phase_name=phase_result.phase_name,
+				top_k_ce=ce,
+				top_k_acc=acc,
+				best_ce_ce=ce,
+				best_ce_acc=acc,
+				best_acc_ce=ce,
+				best_acc_acc=acc,
+				k=1,
+			)
 
 	def run_all_phases(
 		self,
@@ -879,6 +985,9 @@ class PhasedSearchRunner:
 		# =====================================================================
 		# Baseline: Evaluate initial genome on full validation
 		# =====================================================================
+		# Cumulative list of PhaseMetrics for comparison table
+		phase_metrics_list: list[PhaseMetrics] = []
+
 		if start_idx <= 0:
 			# Create tiered genome if config specifies tiers, else uniform
 			if seed_genome:
@@ -905,6 +1014,19 @@ class PhasedSearchRunner:
 			baseline_ce, baseline_acc = self.evaluator.evaluate_single_full(baseline_genome)
 			self.log(f"  Baseline CE: {baseline_ce:.4f}, Acc: {baseline_acc:.2%}")
 			self.log("")
+
+			# Add baseline to cumulative metrics
+			baseline_metrics = PhaseMetrics(
+				phase_name="Baseline",
+				top_k_ce=baseline_ce,
+				top_k_acc=baseline_acc,
+				best_ce_ce=baseline_ce,
+				best_ce_acc=baseline_acc,
+				best_acc_ce=baseline_ce,
+				best_acc_acc=baseline_acc,
+				k=1,
+			)
+			phase_metrics_list.append(baseline_metrics)
 
 			# Use tiered genome as seed if no explicit seed provided
 			if seed_genome is None and self.config.tier_config:
@@ -957,7 +1079,16 @@ class PhasedSearchRunner:
 			}
 
 			completed_phases.append(phase_result)
-			self.print_progress(f"After Phase {phase_key}", completed_phases, baseline_ce, baseline_acc)
+
+			# Evaluate phase on full validation and add to cumulative table
+			self.log("")
+			self.log(f"Evaluating {phase_name} population on full validation...")
+			phase_metrics = self.get_phase_metrics(phase_result, k=10)
+			phase_metrics_list.append(phase_metrics)
+
+			# Print cumulative comparison table
+			self.print_phase_comparison(phase_metrics_list)
+
 			self.save_checkpoint(phase_key, phase_result)
 			prev_result = phase_result
 
@@ -989,62 +1120,39 @@ class PhasedSearchRunner:
 		}
 
 		# =====================================================================
-		# Final Summary - Re-evaluate all phases on FULL validation data
+		# Final Summary - Print cumulative phase comparison table
 		# =====================================================================
 		self.log("")
-		self.log("=" * 78)
-		self.log("  FINAL RESULTS (Full Validation)")
-		self.log("=" * 78)
+		self.log("=" * 90)
+		self.log("  FINAL RESULTS (All metrics on FULL validation data)")
+		self.log("=" * 90)
 
-		# Re-evaluate each phase's best genome on full validation for apples-to-apples comparison
-		self.log("")
-		self.log("Re-evaluating all phases on full validation data...")
-		full_eval_results: list[tuple[float, float]] = []
-		for pr in completed_phases:
-			ce, acc = self.evaluator.evaluate_single_full(pr.best_genome)
-			full_eval_results.append((ce, acc))
-			self.log(f"  {pr.phase_name}: CE={ce:.4f}, Acc={acc:.2%}")
+		# Print the cumulative phase comparison table (already evaluated on full validation)
+		self.print_phase_comparison(phase_metrics_list)
 
-		comparison = OptimizationResultsTable("Complete Phased Search (Full Validation) - Best by CE")
-		if baseline_ce is not None:
-			comparison.add_stage("Initial (default genome)", ce=baseline_ce, accuracy=baseline_acc)
-		for pr, (full_ce_val, full_acc_val) in zip(completed_phases, full_eval_results):
-			comparison.add_stage(pr.phase_name, ce=full_ce_val, accuracy=full_acc_val)
-		comparison.print(self.log)
-
+		# Log the best genomes
 		self.log("")
 		self.log(f"Final best genome (by CE): {p3b.best_genome}")
 
-		# Find best genome by accuracy across all phases
-		best_acc_idx = max(range(len(full_eval_results)), key=lambda i: full_eval_results[i][1])
-		best_acc_genome = completed_phases[best_acc_idx].best_genome
-		best_acc_ce, best_acc_acc = full_eval_results[best_acc_idx]
+		# Find best accuracy across all phases from phase_metrics_list
+		if len(phase_metrics_list) > 1:  # Skip baseline-only case
+			# Find phase with best accuracy (excluding baseline)
+			best_acc_phase = max(phase_metrics_list[1:], key=lambda pm: pm.best_acc_acc)
+			best_acc_ce = best_acc_phase.best_acc_ce
+			best_acc_acc = best_acc_phase.best_acc_acc
 
-		# Only print second table if best-by-acc is different from best-by-CE
-		if best_acc_genome != p3b.best_genome or best_acc_acc != full_eval_results[-1][1]:
-			self.log("")
-			self.log("-" * 78)
-			self.log("")
-			comparison_acc = OptimizationResultsTable("Best by Accuracy (Full Validation)")
-			if baseline_ce is not None:
-				comparison_acc.add_stage("Initial (default genome)", ce=baseline_ce, accuracy=baseline_acc)
-			comparison_acc.add_stage(
-				f"Best Acc: {completed_phases[best_acc_idx].phase_name}",
-				ce=best_acc_ce,
-				accuracy=best_acc_acc
-			)
-			comparison_acc.print(self.log)
-			self.log("")
-			self.log(f"Best genome (by Accuracy): {best_acc_genome}")
+			# Check if best-by-acc is different from final phase
+			final_metrics = phase_metrics_list[-1]
+			if best_acc_acc != final_metrics.best_acc_acc:
+				self.log(f"Best accuracy found in: {best_acc_phase.phase_name}")
+				self.log(f"  CE={best_acc_ce:.4f}, Acc={best_acc_acc:.2%}")
 
-			# Store both in results
-			results["best_by_accuracy"] = {
-				"phase": completed_phases[best_acc_idx].phase_name,
-				"fitness": best_acc_ce,
-				"accuracy": best_acc_acc,
-				"genome": best_acc_genome.serialize(),
-				"genome_stats": best_acc_genome.stats(),
-			}
+				# Store in results
+				results["best_by_accuracy"] = {
+					"phase": best_acc_phase.phase_name,
+					"fitness": best_acc_ce,
+					"accuracy": best_acc_acc,
+				}
 
 		# Store for later access
 		self.results = results

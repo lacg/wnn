@@ -485,6 +485,131 @@ class OptimizationAnalysis:
 		return self.final_ce_spread - self.initial_ce_spread
 
 
+# =============================================================================
+# Phase Comparison Table (cumulative across phases)
+# =============================================================================
+
+@dataclass
+class PhaseMetrics:
+	"""Metrics for a single phase evaluated on full validation data."""
+	phase_name: str
+	top_k_ce: float
+	top_k_acc: float
+	best_ce_ce: float
+	best_ce_acc: float
+	best_acc_ce: float
+	best_acc_acc: float
+	k: int = 10  # Number of genomes for top-k mean
+
+	@property
+	def top_k_ppl(self) -> float:
+		return math.exp(self.top_k_ce)
+
+	@property
+	def best_ce_ppl(self) -> float:
+		return math.exp(self.best_ce_ce)
+
+	@property
+	def best_acc_ppl(self) -> float:
+		return math.exp(self.best_acc_ce)
+
+
+class PhaseComparisonTable:
+	"""
+	Formats cumulative phase comparison results into a table.
+
+	Shows for each phase (all evaluated on full validation data):
+	- top-k mean: CE, PPL, Acc
+	- best CE: CE, PPL, Acc
+	- best Acc: CE, PPL, Acc
+
+	Usage:
+		table = PhaseComparisonTable("Phase Comparison")
+		table.add_phase(PhaseMetrics(
+			phase_name="Baseline",
+			top_k_ce=10.5801, top_k_acc=0.0005,
+			best_ce_ce=10.5682, best_ce_acc=0.0005,
+			best_acc_ce=10.5682, best_acc_acc=0.0005,
+		))
+		table.add_phase(PhaseMetrics(
+			phase_name="Phase 1a: GA Neurons",
+			top_k_ce=10.5395, top_k_acc=0.0512,
+			best_ce_ce=10.5314, best_ce_acc=0.0456,
+			best_acc_ce=10.5620, best_acc_acc=0.0628,
+		))
+		table.print(logger)
+	"""
+
+	WIDTH = 90
+
+	def __init__(self, title: str = "Phase Comparison (Full Validation)"):
+		self.title = title
+		self.phases: list[PhaseMetrics] = []
+
+	def add_phase(self, metrics: PhaseMetrics) -> "PhaseComparisonTable":
+		"""Add phase metrics to the table."""
+		self.phases.append(metrics)
+		return self
+
+	def format(self) -> list[str]:
+		"""Format the table as a list of strings."""
+		lines = []
+
+		lines.append(f"{self.title}:")
+		lines.append("=" * self.WIDTH)
+		lines.append(
+			f"{'Phase':<30} │ {'Metric':<12} │ {'CE':>10} │ {'PPL':>12} │ {'Accuracy':>10}"
+		)
+		lines.append("-" * self.WIDTH)
+
+		# Get baseline for improvement calculation
+		baseline_ce = self.phases[0].top_k_ce if self.phases else None
+
+		for i, pm in enumerate(self.phases):
+			# First row: top-k mean
+			lines.append(
+				f"{pm.phase_name:<30} │ {'top-' + str(pm.k) + ' mean':<12} │ "
+				f"{pm.top_k_ce:>10.4f} │ {pm.top_k_ppl:>12.1f} │ {pm.top_k_acc:>9.2%}"
+			)
+			# Second row: best CE
+			lines.append(
+				f"{'':<30} │ {'best CE':<12} │ "
+				f"{pm.best_ce_ce:>10.4f} │ {pm.best_ce_ppl:>12.1f} │ {pm.best_ce_acc:>9.2%}"
+			)
+			# Third row: best Acc
+			lines.append(
+				f"{'':<30} │ {'best Acc':<12} │ "
+				f"{pm.best_acc_ce:>10.4f} │ {pm.best_acc_ppl:>12.1f} │ {pm.best_acc_acc:>9.2%}"
+			)
+
+			# Add separator between phases (except after last)
+			if i < len(self.phases) - 1:
+				lines.append("-" * self.WIDTH)
+
+		lines.append("=" * self.WIDTH)
+
+		# Summary: improvement from baseline to final
+		if len(self.phases) >= 2 and baseline_ce is not None:
+			final = self.phases[-1]
+			top_k_improvement = (1 - final.top_k_ce / baseline_ce) * 100
+			best_ce_improvement = (1 - final.best_ce_ce / self.phases[0].best_ce_ce) * 100
+			lines.append(
+				f"Improvement vs baseline: top-{final.k} CE {top_k_improvement:+.2f}%, "
+				f"best CE {best_ce_improvement:+.2f}%"
+			)
+
+		return lines
+
+	def print(self, log_fn: Optional[Callable[[str], None]] = None) -> None:
+		"""Print the formatted table."""
+		output = log_fn or print
+		for line in self.format():
+			output(line)
+
+	def __str__(self) -> str:
+		return "\n".join(self.format())
+
+
 class OptimizationAnalysisTable:
 	"""
 	Formats detailed optimization analysis into a table.
