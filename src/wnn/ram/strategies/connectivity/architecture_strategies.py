@@ -1099,10 +1099,11 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 				best_acc = best_genome._cached_fitness[1] if hasattr(best_genome, '_cached_fitness') and best_genome._cached_fitness else 0.0
 
 			# Log generation summary with duration
+			# Note: best/avg are from subset evaluation, not full validation
 			gen_elapsed = time.time() - gen_start
 			avg_fitness = sum(ce for _, ce in population) / len(population)
 			self._log.info(f"[{self.name}] Gen {generation+1:03d}/{cfg.generations}: "
-						   f"best={best_fitness:.4f}, avg={avg_fitness:.4f} ({gen_elapsed:.1f}s)")
+						   f"best={best_fitness:.4f}, avg={avg_fitness:.4f} (subset) ({gen_elapsed:.1f}s)")
 
 			# Health check: evaluate top-K elites on FULL data vs baseline + stagnation
 			# Only at check_interval to avoid expensive full evaluations every generation
@@ -1669,11 +1670,12 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 						best_accuracy = new_acc
 
 				# Log iteration summary with all three metrics and duration
+				# Note: metrics are from subset evaluation, not full validation
 				iter_elapsed = time.time() - iter_start
 				acc_str = f"{best_acc_accuracy:.4%}" if best_acc_accuracy else "N/A"
 				self._log.info(f"[{self.name}] Iter {iteration+1:03d}/{cfg.iterations}: "
 							   f"best_harmonic=(CE={best_harmonic_fitness:.4f}, Acc={best_harmonic_accuracy:.4%}), "
-							   f"best_ce={best_ce_fitness:.4f}, best_acc={acc_str} ({iter_elapsed:.1f}s)")
+							   f"best_ce={best_ce_fitness:.4f}, best_acc={acc_str} (subset) ({iter_elapsed:.1f}s)")
 
 			else:
 				# === CE mode: Dual path ===
@@ -1763,12 +1765,13 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 					best_accuracy = best_ce_accuracy
 
 				# Log iteration summary with duration
+				# Note: metrics are from subset evaluation, not full validation
 				iter_elapsed = time.time() - iter_start
 				if best_acc_accuracy:
 					self._log.info(f"[{self.name}] Iter {iteration+1:03d}/{cfg.iterations}: "
-								   f"best_ce={best_ce_fitness:.4f}, best_acc={best_acc_accuracy:.4%} ({iter_elapsed:.1f}s)")
+								   f"best_ce={best_ce_fitness:.4f}, best_acc={best_acc_accuracy:.4%} (subset) ({iter_elapsed:.1f}s)")
 				else:
-					self._log.info(f"[{self.name}] Iter {iteration+1:03d}/{cfg.iterations}: best_ce={best_ce_fitness:.4f} ({iter_elapsed:.1f}s)")
+					self._log.info(f"[{self.name}] Iter {iteration+1:03d}/{cfg.iterations}: best_ce={best_ce_fitness:.4f} (subset) ({iter_elapsed:.1f}s)")
 
 			history.append((iteration + 1, best_fitness))
 
