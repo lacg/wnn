@@ -62,6 +62,9 @@ class PhasedSearchConfig:
 	# Tier0-only optimization: only mutate clusters in tier0
 	optimize_tier0_only: bool = False
 
+	# Seed only: use seed genomes as-is without mutation expansion (for pass 2+)
+	seed_only: bool = False
+
 	# Fitness percentile filter (None = disabled, 0.75 = keep top 75% by fitness)
 	fitness_percentile: Optional[float] = None
 
@@ -733,6 +736,7 @@ class PhasedSearchRunner:
 			strategy_kwargs["generations"] = cfg.ga_generations
 			strategy_kwargs["population_size"] = cfg.population_size
 			strategy_kwargs["phase_name"] = phase_name
+			strategy_kwargs["seed_only"] = cfg.seed_only
 			# Add checkpoint config if checkpoint_dir is set
 			if self.checkpoint_dir:
 				from wnn.ram.strategies.connectivity.architecture_strategies import CheckpointConfig

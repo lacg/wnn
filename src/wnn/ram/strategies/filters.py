@@ -28,6 +28,7 @@ class FilterResult(Generic[T]):
 	threshold_value: float  # The computed threshold
 	kept_count: int
 	total_count: int
+	metric_name: str = "metric"  # Name of the metric used for filtering
 
 	@property
 	def kept_ratio(self) -> float:
@@ -147,6 +148,7 @@ class PercentileFilter(Generic[T]):
 				threshold_value=0.0,
 				kept_count=0,
 				total_count=0,
+				metric_name=self.metric_name,
 			)
 
 		# Extract metric values
@@ -172,6 +174,7 @@ class PercentileFilter(Generic[T]):
 			threshold_value=threshold,
 			kept_count=len(kept),
 			total_count=len(population),
+			metric_name=self.metric_name,
 		)
 
 	def _passes_threshold(self, value: float, threshold: float) -> bool:
@@ -251,6 +254,7 @@ class DualPercentileFilter(Generic[T]):
 				threshold_value=0.0,
 				kept_count=0,
 				total_count=0,
+				metric_name=self.metric_name,
 			)
 
 		# Compute thresholds

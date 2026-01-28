@@ -333,6 +333,8 @@ class OptimizerStrategyFactory:
 		batch_evaluator: Any = None,
 		# GA-specific: generate fresh random population instead of seeding from given genomes
 		fresh_population: bool = False,
+		# GA-specific: use seed genomes as-is without mutation expansion (for pass 2+)
+		seed_only: bool = False,
 		# Checkpoint configuration for resumable optimization
 		checkpoint_config: Any = None,
 		phase_name: str = "Optimization",
@@ -436,6 +438,7 @@ class OptimizerStrategyFactory:
 					logger=logger,
 					batch_evaluator=batch_evaluator,
 					fresh_population=fresh_population,
+					seed_only=seed_only,
 					checkpoint_config=checkpoint_config,
 					phase_name=phase_name,
 				)
@@ -542,6 +545,7 @@ class OptimizerStrategyFactory:
 		logger: Any,
 		batch_evaluator: Any,
 		fresh_population: bool = False,
+		seed_only: bool = False,
 		checkpoint_config: Any = None,
 		phase_name: str = "GA Optimization",
 	):
@@ -577,6 +581,7 @@ class OptimizerStrategyFactory:
 			initial_threshold=initial_threshold,
 			fitness_percentile=fitness_percentile,
 			fresh_population=fresh_population,
+			seed_only=seed_only,
 		)
 		# Pass batch_evaluator as cached_evaluator if it supports search_offspring
 		cached_evaluator = batch_evaluator if batch_evaluator and hasattr(batch_evaluator, 'search_offspring') else None

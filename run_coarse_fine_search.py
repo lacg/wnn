@@ -56,9 +56,16 @@ def load_seed_data(seed_file: str) -> tuple[Optional[ClusterGenome], Optional[li
 	"""
 	Load seed genome, population, and threshold from a previous run's JSON output.
 
+	Supports:
+	- Direct genome files (.json)
+	- Phased search results (results_*.json)
+	- Phase checkpoint files (.json.gz with phase_result key)
+
 	Returns:
 		Tuple of (seed_genome, seed_population, seed_threshold). Any may be None if not available.
 	"""
+	import gzip
+
 	# Try ClusterGenome.load() first (direct genome file - no population/threshold)
 	try:
 		genome, _ = ClusterGenome.load(seed_file)
@@ -66,14 +73,29 @@ def load_seed_data(seed_file: str) -> tuple[Optional[ClusterGenome], Optional[li
 	except (KeyError, TypeError):
 		pass
 
-	# Fall back to phased search results format
+	# Load JSON (possibly gzipped)
 	try:
-		with open(seed_file, 'r') as f:
-			data = json.load(f)
+		if seed_file.endswith('.gz'):
+			with gzip.open(seed_file, 'rt') as f:
+				data = json.load(f)
+		else:
+			with open(seed_file, 'r') as f:
+				data = json.load(f)
 
 		genome = None
 		population = None
 		threshold = None
+
+		# Check for checkpoint format (phase_result key)
+		if 'phase_result' in data:
+			pr = data['phase_result']
+			if 'best_genome' in pr:
+				genome = ClusterGenome.deserialize(pr['best_genome'])
+			if 'final_population' in pr and pr['final_population']:
+				population = [ClusterGenome.deserialize(g) for g in pr['final_population']]
+			if 'final_threshold' in pr:
+				threshold = pr['final_threshold']
+			return genome, population, threshold
 
 		# Load genome from final.genome
 		if 'final' in data and 'genome' in data['final']:
@@ -121,6 +143,8 @@ def main():
 						help="Override patience directly (ignores base-patience calculation)")
 	parser.add_argument("--seed-from", type=str, default=None,
 						help="JSON file from previous pass to seed from")
+	parser.add_argument("--seed-only", action="store_true",
+						help="Use seed genomes as-is without mutation expansion (for pass 2+)")
 
 	# Data configuration
 	parser.add_argument("--train-tokens", type=int, default=200000, help="Total training tokens")
@@ -321,6 +345,7 @@ def main():
 		tier_config=tier_config,
 		phase_order=args.phase_order,
 		optimize_tier0_only=args.tier0_only,
+		seed_only=args.seed_only,
 		fitness_percentile=args.fitness_percentile,
 		rotation_seed=rotation_seed,
 		log_path=logger.log_file,

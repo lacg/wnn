@@ -764,7 +764,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		if cfg.fresh_population:
 			self._log.info(f"[{self.name}] Generating {cfg.population_size} fresh random genomes (fresh_population=True)")
 			initial_population = None  # Force random generation below
-		# If we have seed genomes but fewer than population_size, expand with mutations
+		# If we have seed genomes but fewer than population_size, expand with mutations (unless seed_only)
 		elif initial_population and len(initial_population) > 0:
 			# CRITICAL: Ensure all seed genomes have connections (fixes reproducibility bug)
 			# Without connections, Rust generates random ones each evaluation → inconsistent results
@@ -773,7 +773,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 					g.initialize_connections(evaluator.total_input_bits)
 			seed_count = len(initial_population)
 			need_count = cfg.population_size - seed_count
-			if need_count > 0:
+			if need_count > 0 and not cfg.seed_only:
 				self._log.info(f"[{self.name}] Seeding from {seed_count} genomes, generating {need_count} mutations to fill population of {cfg.population_size}")
 				# Generate mutations of seed genomes to fill population
 				from wnn.ram.strategies.connectivity.adaptive_cluster import AdaptiveClusterConfig
@@ -798,7 +798,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 					expanded_population.append(mutated)
 				initial_population = expanded_population
 			else:
-				self._log.info(f"[{self.name}] Seeding from {seed_count} genomes (top CE + top Acc from previous phase)")
+				self._log.info(f"[{self.name}] Seeding from {seed_count} genomes (using as-is, no mutation expansion)")
 		else:
 			self._log.info(f"[{self.name}] Initializing with {cfg.population_size} random genomes")
 
@@ -1063,8 +1063,12 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 						mode=FilterMode.LOWER_IS_BETTER,
 						metric_name="HarmonicRank",
 					)
-					filter_result = fitness_filter.apply(offspring_with_fitness, key=lambda g, ce, f: f)
-					offspring_with_ce = [(g, ce) for g, ce, _ in filter_result.kept]
+					# Filter expects 2-tuples: (genome, metric_value)
+					# We keep a mapping to recover CE after filtering
+					genome_ce_map = {id(g): ce for g, ce, _ in offspring_with_fitness}
+					filter_population = [(g, score) for g, _, score in offspring_with_fitness]
+					filter_result = fitness_filter.apply(filter_population, key=lambda g, f: f)
+					offspring_with_ce = [(g, genome_ce_map[id(g)]) for g, _ in filter_result.kept]
 				else:
 					# CE mode: Filter by CE only
 					ce_filter = PercentileFilter(
@@ -1647,8 +1651,8 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 					valid_for_cap = [(g, ce, acc) for g, ce, acc in all_neighbors if acc is not None]
 					if valid_for_cap:
 						ranked_for_cap = fitness_calculator.rank(valid_for_cap)
-						best_ids = {id(g) for g, _ in ranked_for_cap[:cache_size]}
-						all_neighbors = [(g, ce, acc) for g, ce, acc in all_neighbors if id(g) in best_ids]
+						# Keep top N genomes (directly from ranked list)
+						all_neighbors = [(g, g._cached_fitness[0], g._cached_fitness[1]) for g, _ in ranked_for_cap[:cache_size]]
 
 				# Find new best by harmonic rank (include current best)
 				pop_for_ranking = [(g, ce, acc or 0.0) for g, ce, acc in all_neighbors if acc is not None]
@@ -1797,6 +1801,11 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		cache_size = cfg.total_neighbors_size or cfg.neighbors_per_iter
 		valid_neighbors = [n for n in all_neighbors if n[2] is not None]
 
+		def genome_key(g: ClusterGenome) -> int:
+			"""Unique key including connections (for connections-only phases)."""
+			conn_hash = hash(tuple(g.connections.flatten().tolist()[:1000])) if g.connections is not None else 0
+			return hash((tuple(g.bits_per_cluster), tuple(g.neurons_per_cluster), conn_hash))
+
 		if use_harmonic:
 			# HARMONIC_RANK: Rank by harmonic and take top N
 			pop_for_ranking = [(g, ce, acc) for g, ce, acc in valid_neighbors]
@@ -1805,7 +1814,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 			seen = set()
 			final_population = []
 			for g, _ in ranked:
-				key = hash((tuple(g.bits_per_cluster), tuple(g.neurons_per_cluster)))
+				key = genome_key(g)
 				if key not in seen:
 					seen.add(key)
 					final_population.append(g)
@@ -1823,7 +1832,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 			while len(final_population) < cache_size and (ce_idx < len(by_ce) or acc_idx < len(by_acc)):
 				while ce_idx < len(by_ce) and len(final_population) < cache_size:
 					g, _, _ = by_ce[ce_idx]
-					key = hash((tuple(g.bits_per_cluster), tuple(g.neurons_per_cluster)))
+					key = genome_key(g)
 					ce_idx += 1
 					if key not in seen:
 						seen.add(key)
@@ -1832,7 +1841,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 
 				while acc_idx < len(by_acc) and len(final_population) < cache_size:
 					g, _, _ = by_acc[acc_idx]
-					key = hash((tuple(g.bits_per_cluster), tuple(g.neurons_per_cluster)))
+					key = genome_key(g)
 					acc_idx += 1
 					if key not in seen:
 						seen.add(key)

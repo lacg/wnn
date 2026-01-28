@@ -1015,6 +1015,9 @@ class GAConfig:
 	# Fresh population: if True, ignore initial_population and generate fresh random genomes
 	# Use for first GA phase to maximize diversity instead of mutating from 1 seed
 	fresh_population: bool = False
+	# Seed only: if True, use seed genomes as-is without generating mutations to fill population
+	# Use for pass 2+ where we want to continue from previous best without re-randomizing
+	seed_only: bool = False
 
 
 @dataclass
