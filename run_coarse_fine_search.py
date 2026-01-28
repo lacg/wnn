@@ -191,6 +191,12 @@ def main():
 		help="Only optimize tier0 clusters (requires --tier-config)"
 	)
 
+	# Dashboard integration
+	parser.add_argument(
+		"--dashboard-url", type=str, default=None,
+		help="Dashboard URL for real-time updates (e.g., http://localhost:3000)"
+	)
+
 	args = parser.parse_args()
 
 	# Load config from YAML if specified (CLI args override)
@@ -288,6 +294,8 @@ def main():
 		log(f"  Checkpoint dir: {args.checkpoint_dir}")
 		if args.resume_from:
 			log(f"  Resume from: phase {args.resume_from}")
+	if args.dashboard_url:
+		log(f"  Dashboard URL: {args.dashboard_url}")
 	log("")
 
 	# Load seed genome, population, and threshold if specified
@@ -351,8 +359,30 @@ def main():
 		log_path=logger.log_file,
 	)
 
+	# Create dashboard client if URL provided
+	dashboard_client = None
+	if args.dashboard_url:
+		try:
+			from wnn.ram.experiments.dashboard_client import DashboardClient, DashboardClientConfig
+			dashboard_config = DashboardClientConfig(base_url=args.dashboard_url)
+			dashboard_client = DashboardClient(dashboard_config, logger=log)
+			if dashboard_client.ping():
+				log(f"Dashboard: Connected to {args.dashboard_url}")
+			else:
+				log(f"Warning: Dashboard not reachable at {args.dashboard_url}")
+				dashboard_client = None
+		except ImportError:
+			log("Warning: Dashboard client not available (missing requests library)")
+		except Exception as e:
+			log(f"Warning: Could not connect to dashboard: {e}")
+
 	# Create runner and setup
-	runner = PhasedSearchRunner(config=config, logger=log, checkpoint_dir=args.checkpoint_dir)
+	runner = PhasedSearchRunner(
+		config=config,
+		logger=log,
+		checkpoint_dir=args.checkpoint_dir,
+		dashboard_client=dashboard_client,
+	)
 	log("")
 	runner.setup(
 		train_tokens=train_tokens,

@@ -25,6 +25,14 @@ from wnn.ram.core.reporting import OptimizationResultsTable, PhaseComparisonTabl
 from wnn.ram.core import bits_needed
 from wnn.ram.architecture.cached_evaluator import CachedEvaluator
 
+# Optional dashboard integration
+try:
+	from wnn.ram.experiments.dashboard_client import DashboardClient, FlowConfig as APIFlowConfig
+	HAS_DASHBOARD = True
+except ImportError:
+	HAS_DASHBOARD = False
+	DashboardClient = None
+
 
 @dataclass
 class PhasedSearchConfig:
@@ -392,6 +400,7 @@ class PhasedSearchRunner:
 		config: PhasedSearchConfig,
 		logger: Callable[[str], None],
 		checkpoint_dir: Optional[str] = None,
+		dashboard_client: Optional["DashboardClient"] = None,
 	):
 		"""
 		Initialize the runner.
@@ -400,16 +409,20 @@ class PhasedSearchRunner:
 			config: Search configuration
 			logger: Logging function
 			checkpoint_dir: Directory to save/load checkpoints (None = no checkpoints)
+			dashboard_client: Optional dashboard client for real-time updates
 		"""
 		self.config = config
 		self.log = logger
 		self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
+		self.dashboard_client = dashboard_client
 		self.evaluator: Optional[CachedEvaluator] = None
 		self.vocab_size: int = 0
 		self.total_input_bits: int = 0
 		self.token_frequencies: list[int] = []
 		self.results: dict[str, PhaseResult] = {}
 		self._rotation_seed: Optional[int] = None
+		self._flow_id: Optional[int] = None
+		self._experiment_id: Optional[int] = None
 
 	def save_checkpoint(self, phase_key: str, result: PhaseResult) -> Optional[str]:
 		"""
@@ -439,6 +452,25 @@ class PhasedSearchRunner:
 		# Log actual saved path (with .gz)
 		actual_path = filepath.with_suffix('.json.gz')
 		self.log(f"  Checkpoint saved: {actual_path}")
+
+		# Register with dashboard if client available
+		if self.dashboard_client and self._experiment_id:
+			try:
+				is_final = phase_key == "3b"  # Final phase
+				genome_stats = result.best_genome.stats() if result.best_genome else None
+				self.dashboard_client.checkpoint_created(
+					experiment_id=self._experiment_id,
+					file_path=str(actual_path.absolute()),
+					name=result.phase_name,
+					final_fitness=result.final_fitness,
+					final_accuracy=result.final_accuracy,
+					iterations_run=result.iterations_run,
+					genome_stats=genome_stats,
+					is_final=is_final,
+				)
+			except Exception as e:
+				self.log(f"  Warning: Failed to register checkpoint with dashboard: {e}")
+
 		return str(actual_path)
 
 	def load_checkpoint(self, phase_key: str) -> Optional[PhaseResult]:
@@ -987,6 +1019,51 @@ class PhasedSearchRunner:
 				self.log(f"  Loaded checkpoint for phase {phase_key}: CE={prev_result.final_fitness:.4f}")
 
 		# =====================================================================
+		# Dashboard Integration: Create flow and experiment
+		# =====================================================================
+		if self.dashboard_client:
+			try:
+				# Build flow config for dashboard
+				flow_name = f"Phased Search ({self.config.phase_order})"
+				if self.checkpoint_dir:
+					flow_name = f"{self.checkpoint_dir.name}"
+
+				api_config = APIFlowConfig(
+					name=flow_name,
+					experiments=[{
+						"name": spec[1],
+						"experiment_type": "ga" if "GA" in spec[1] else "ts",
+						"optimize_bits": spec[3],
+						"optimize_neurons": spec[4],
+						"optimize_connections": spec[5],
+					} for spec in phase_specs],
+					description=f"Phase order: {self.config.phase_order}, Patience: {self.config.patience}",
+					params={
+						"phase_order": self.config.phase_order,
+						"patience": self.config.patience,
+						"ga_generations": self.config.ga_generations,
+						"ts_iterations": self.config.ts_iterations,
+						"tier_config": self.config.tier_config,
+					},
+				)
+
+				self._flow_id = self.dashboard_client.create_flow(api_config)
+				self.dashboard_client.flow_started(self._flow_id)
+
+				# Create experiment for this run
+				self._experiment_id = self.dashboard_client.create_experiment(
+					name=flow_name,
+					log_path=str(self.config.log_path) if self.config.log_path else "",
+					config={"phase_order": self.config.phase_order},
+				)
+
+				self.log(f"Dashboard: Created flow {self._flow_id}, experiment {self._experiment_id}")
+			except Exception as e:
+				self.log(f"Warning: Failed to register with dashboard: {e}")
+				self._flow_id = None
+				self._experiment_id = None
+
+		# =====================================================================
 		# Baseline: Evaluate initial genome on full validation
 		# =====================================================================
 		# Cumulative list of PhaseMetrics for comparison table
@@ -1162,6 +1239,14 @@ class PhasedSearchRunner:
 		self.results = results
 		self._final_genome = p3b.best_genome
 		self._completed_phases = completed_phases
+
+		# Mark flow as completed in dashboard
+		if self.dashboard_client and self._flow_id:
+			try:
+				self.dashboard_client.flow_completed(self._flow_id)
+				self.log(f"Dashboard: Flow {self._flow_id} marked completed")
+			except Exception as e:
+				self.log(f"Warning: Failed to mark flow completed: {e}")
 
 		return results
 

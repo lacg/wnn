@@ -1805,7 +1805,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 
 		def genome_key(g: ClusterGenome) -> int:
 			"""Unique key including connections (for connections-only phases)."""
-			conn_hash = hash(tuple(g.connections.flatten().tolist()[:1000])) if g.connections is not None else 0
+			conn_hash = hash(tuple(g.connections[:1000])) if g.connections is not None else 0
 			return hash((tuple(g.bits_per_cluster), tuple(g.neurons_per_cluster), conn_hash))
 
 		if use_harmonic:
