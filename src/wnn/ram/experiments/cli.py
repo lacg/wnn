@@ -265,6 +265,235 @@ def flow_create(
 		raise typer.Exit(1)
 
 
+@flow_app.command("run")
+def flow_run(
+	flow_id: int = typer.Argument(..., help="Flow ID to run"),
+	resume_from: Optional[str] = typer.Option(
+		None, "--resume-from", "-r",
+		help="Resume from phase (1a, 1b, 2a, 2b, 3a, 3b)"
+	),
+	checkpoint_dir: Optional[Path] = typer.Option(
+		None, "--checkpoint-dir", "-c",
+		help="Directory for checkpoints (required for resume)"
+	),
+	context: int = typer.Option(4, "--context", help="Context window size"),
+	url: str = typer.Option("http://localhost:3000", "--url", help="Dashboard URL"),
+):
+	"""
+	Run a flow (execute all experiments in sequence).
+
+	This command fetches the flow configuration from the dashboard and
+	executes all experiments. Use --resume-from to continue from a specific phase.
+
+	Examples:
+		wnn-exp flow run 5                      # Run flow 5 from start
+		wnn-exp flow run 5 --resume-from 3b    # Resume from phase 3b
+	"""
+	import time
+	from wnn.ram.experiments.flow import Flow, FlowConfig, ExperimentConfig
+	from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
+
+	# Phase name to index mapping
+	PHASE_MAP = {
+		"1a": 0, "1b": 1,
+		"2a": 2, "2b": 3,
+		"3a": 4, "3b": 5,
+	}
+
+	try:
+		client = get_client(url)
+
+		# Fetch flow from dashboard
+		rprint(f"[dim]Fetching flow {flow_id}...[/dim]")
+		flow_data = client.get_flow(flow_id)
+
+		if not flow_data:
+			rprint(f"[red]Flow {flow_id} not found[/red]")
+			raise typer.Exit(1)
+
+		flow_name = flow_data.get("name", f"Flow {flow_id}")
+		config = flow_data.get("config", {})
+		experiments = config.get("experiments", [])
+		params = config.get("params", {})
+
+		rprint(f"[bold]{flow_name}[/bold]")
+		rprint(f"[dim]Experiments: {len(experiments)}[/dim]")
+
+		# Validate resume_from
+		resume_idx = None
+		if resume_from:
+			if resume_from.lower() not in PHASE_MAP:
+				rprint(f"[red]Invalid phase: {resume_from}. Valid: 1a, 1b, 2a, 2b, 3a, 3b[/red]")
+				raise typer.Exit(1)
+			resume_idx = PHASE_MAP[resume_from.lower()]
+
+			if not checkpoint_dir:
+				rprint("[red]--checkpoint-dir is required for --resume-from[/red]")
+				raise typer.Exit(1)
+
+			if not checkpoint_dir.exists():
+				rprint(f"[red]Checkpoint directory not found: {checkpoint_dir}[/red]")
+				raise typer.Exit(1)
+
+			rprint(f"[yellow]Resuming from phase {resume_from} (experiment {resume_idx})[/yellow]")
+
+		# Parse tier config from params
+		tier_config = params.get("tier_config")
+		tier0_only = params.get("optimize_tier0_only", False)
+		patience = params.get("patience", 10)
+		fitness_percentile = params.get("fitness_percentile")
+		seed = params.get("seed")
+		phase_order = params.get("phase_order", "neurons_first")
+
+		# Load WikiText-2 dataset
+		rprint("\n[dim]Loading WikiText-2 dataset...[/dim]")
+		from datasets import load_dataset
+
+		try:
+			dataset = load_dataset("wikitext", "wikitext-2-raw-v1")
+		except Exception:
+			dataset = load_dataset("wikitext", "wikitext-2-raw-v1", trust_remote_code=True)
+
+		# Tokenize
+		from transformers import GPT2TokenizerFast
+		tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
+
+		def tokenize_text(text: str) -> list[int]:
+			return tokenizer.encode(text, add_special_tokens=False)
+
+		# Prepare data
+		train_text = "\n".join(dataset["train"]["text"])
+		eval_text = "\n".join(dataset["validation"]["text"])
+
+		train_tokens = tokenize_text(train_text)[:200_000]
+		eval_tokens = tokenize_text(eval_text)[:50_000]
+
+		rprint(f"[dim]  Train: {len(train_tokens):,} tokens, Eval: {len(eval_tokens):,} tokens[/dim]")
+
+		# Create evaluator
+		from wnn.ram.strategies.connectivity.evaluator import CachedEvaluator
+
+		evaluator = CachedEvaluator(
+			train_tokens=train_tokens,
+			eval_tokens=eval_tokens,
+			vocab_size=tokenizer.vocab_size,
+			context_size=context,
+			token_parts=3,
+			rotation_mode="per_iteration",
+			seed=seed or int(time.time() * 1000) % (2**32),
+		)
+
+		rprint(f"[dim]  Vocab: {evaluator.vocab_size:,}, Context: {context}[/dim]")
+
+		# Build experiment configs from dashboard data
+		exp_configs = []
+		for exp_data in experiments:
+			exp_config = ExperimentConfig(
+				name=exp_data.get("name", "Unnamed"),
+				experiment_type=exp_data.get("experiment_type", "ga"),
+				optimize_bits=exp_data.get("optimize_bits", False),
+				optimize_neurons=exp_data.get("optimize_neurons", False),
+				optimize_connections=exp_data.get("optimize_connections", False),
+				generations=exp_data.get("params", {}).get("generations", 250),
+				population_size=exp_data.get("params", {}).get("population_size", 50),
+				iterations=exp_data.get("params", {}).get("iterations", 250),
+				neighbors_per_iter=exp_data.get("params", {}).get("neighbors_per_iter", 50),
+				patience=exp_data.get("params", {}).get("patience", patience),
+				tier_config=tier_config,
+				optimize_tier0_only=tier0_only,
+				fitness_percentile=fitness_percentile,
+				seed=seed,
+			)
+			exp_configs.append(exp_config)
+
+		# Create flow config
+		flow_config = FlowConfig(
+			name=flow_name,
+			experiments=exp_configs,
+			description=flow_data.get("description"),
+			tier_config=tier_config,
+			optimize_tier0_only=tier0_only,
+			patience=patience,
+			fitness_percentile=fitness_percentile,
+			seed=seed,
+		)
+
+		# Load seed from checkpoint if resuming or if flow has seed_checkpoint_id
+		seed_checkpoint_id = flow_data.get("seed_checkpoint_id")
+		seed_genome = None
+		if seed_checkpoint_id:
+			try:
+				ckpt = client.get_checkpoint(seed_checkpoint_id)
+				if ckpt and ckpt.get("file_path"):
+					flow_config.seed_checkpoint_path = ckpt["file_path"]
+					rprint(f"[dim]Seed checkpoint: {ckpt.get('name')}[/dim]")
+			except Exception as e:
+				rprint(f"[yellow]Warning: Could not fetch seed checkpoint: {e}[/yellow]")
+
+		# Create checkpoint directory if needed
+		if checkpoint_dir:
+			checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+		# Logger function
+		def log_fn(msg: str):
+			timestamp = time.strftime("%H:%M:%S")
+			rprint(f"[dim]{timestamp}[/dim] | {msg}")
+
+		# Mark flow as started
+		try:
+			client.flow_started(flow_id)
+		except Exception:
+			pass
+
+		# Create and run flow
+		rprint("\n[bold green]Starting flow execution...[/bold green]\n")
+
+		flow = Flow(
+			config=flow_config,
+			evaluator=evaluator,
+			logger=log_fn,
+			checkpoint_dir=checkpoint_dir,
+			dashboard_client=client,
+		)
+
+		try:
+			result = flow.run(resume_from=resume_idx, seed_genome=seed_genome)
+
+			# Success
+			rprint(f"\n[bold green]Flow completed![/bold green]")
+			rprint(f"  Final CE: {result.final_fitness:.4f}")
+			if result.final_accuracy:
+				rprint(f"  Final Accuracy: {result.final_accuracy:.2%}")
+			rprint(f"  Duration: {result.total_elapsed_seconds:.1f}s")
+
+		except KeyboardInterrupt:
+			rprint("\n[yellow]Flow interrupted by user[/yellow]")
+			try:
+				client.update_flow(flow_id, status="cancelled")
+			except Exception:
+				pass
+			raise typer.Exit(130)
+
+		except Exception as e:
+			rprint(f"\n[red]Flow failed: {e}[/red]")
+			try:
+				client.flow_failed(flow_id, str(e))
+			except Exception:
+				pass
+			raise typer.Exit(1)
+
+	except ConnectionError as e:
+		rprint(f"[red]Error: Could not connect to dashboard at {url}[/red]")
+		raise typer.Exit(1)
+	except typer.Exit:
+		raise
+	except Exception as e:
+		rprint(f"[red]Error: {e}[/red]")
+		import traceback
+		traceback.print_exc()
+		raise typer.Exit(1)
+
+
 @flow_app.command("delete")
 def flow_delete(
 	flow_id: int = typer.Argument(..., help="Flow ID"),
