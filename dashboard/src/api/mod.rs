@@ -268,6 +268,8 @@ pub struct UpdateFlowRequest {
     pub name: Option<String>,
     pub description: Option<String>,
     pub status: Option<FlowStatus>,
+    pub config: Option<serde_json::Value>,
+    pub seed_checkpoint_id: Option<Option<i64>>, // None = don't update, Some(None) = clear, Some(Some(id)) = set
 }
 
 async fn update_flow(
@@ -289,6 +291,8 @@ async fn update_flow(
         req.name.as_deref(),
         req.description.as_deref(),
         status_str,
+        req.config.as_ref(),
+        req.seed_checkpoint_id,
     ).await {
         Ok(true) => {
             // Fetch and return updated flow

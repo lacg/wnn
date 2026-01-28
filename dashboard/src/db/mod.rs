@@ -372,49 +372,58 @@ pub mod queries {
         name: Option<&str>,
         description: Option<&str>,
         status: Option<&str>,
+        config: Option<&serde_json::Value>,
+        seed_checkpoint_id: Option<Option<i64>>,
     ) -> Result<bool> {
-        // Build dynamic update query
-        let mut updates = Vec::new();
-        let mut bindings: Vec<String> = Vec::new();
+        // Build dynamic update query using raw SQL with proper binding
+        let mut set_clauses = Vec::new();
 
-        if let Some(n) = name {
-            updates.push("name = ?");
-            bindings.push(n.to_string());
+        if name.is_some() {
+            set_clauses.push("name = ?1");
         }
-        if let Some(d) = description {
-            updates.push("description = ?");
-            bindings.push(d.to_string());
+        if description.is_some() {
+            set_clauses.push("description = ?2");
         }
-        if let Some(s) = status {
-            updates.push("status = ?");
-            bindings.push(s.to_string());
-
+        if status.is_some() {
+            set_clauses.push("status = ?3");
             // Update timestamps based on status
-            if s == "running" {
-                updates.push("started_at = ?");
-                bindings.push(Utc::now().to_rfc3339());
-            } else if s == "completed" || s == "failed" || s == "cancelled" {
-                updates.push("completed_at = ?");
-                bindings.push(Utc::now().to_rfc3339());
+            if status == Some("running") {
+                set_clauses.push("started_at = ?4");
+            } else if status == Some("completed") || status == Some("failed") || status == Some("cancelled") {
+                set_clauses.push("completed_at = ?4");
             }
         }
+        if config.is_some() {
+            set_clauses.push("config_json = ?5");
+        }
+        if seed_checkpoint_id.is_some() {
+            set_clauses.push("seed_checkpoint_id = ?6");
+        }
 
-        if updates.is_empty() {
+        if set_clauses.is_empty() {
             return Ok(false);
         }
 
         let query = format!(
-            "UPDATE flows SET {} WHERE id = ?",
-            updates.join(", ")
+            "UPDATE flows SET {} WHERE id = ?7",
+            set_clauses.join(", ")
         );
 
-        let mut q = sqlx::query(&query);
-        for b in &bindings {
-            q = q.bind(b);
-        }
-        q = q.bind(id);
+        let now = Utc::now().to_rfc3339();
+        let config_json = config.map(|c| serde_json::to_string(c).unwrap_or_default());
+        let seed_id = seed_checkpoint_id.flatten();
 
-        let result = q.execute(pool).await?;
+        let result = sqlx::query(&query)
+            .bind(name.unwrap_or(""))
+            .bind(description.unwrap_or(""))
+            .bind(status.unwrap_or(""))
+            .bind(&now)
+            .bind(config_json.as_deref().unwrap_or(""))
+            .bind(seed_id)
+            .bind(id)
+            .execute(pool)
+            .await?;
+
         Ok(result.rows_affected() > 0)
     }
 
