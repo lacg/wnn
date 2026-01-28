@@ -130,28 +130,559 @@ CREATE INDEX IF NOT EXISTS idx_flow_experiments_experiment ON flow_experiments(e
 CREATE INDEX IF NOT EXISTS idx_checkpoint_references_checkpoint ON checkpoint_references(checkpoint_id);
 "#;
 
-// Query helpers will go here
+// Query helpers
 pub mod queries {
     use super::*;
     use crate::models::*;
+    use chrono::{DateTime, Utc};
+    use sqlx::Row;
+
+    // =============================================================================
+    // Experiment queries
+    // =============================================================================
+
+    pub async fn list_experiments(pool: &DbPool, limit: i32, offset: i32) -> Result<Vec<Experiment>> {
+        let rows = sqlx::query(
+            r#"SELECT id, name, log_path, started_at, ended_at, status, config_json
+               FROM experiments
+               ORDER BY started_at DESC
+               LIMIT ? OFFSET ?"#,
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(pool)
+        .await?;
+
+        let mut experiments = Vec::with_capacity(rows.len());
+        for row in rows {
+            experiments.push(row_to_experiment(&row)?);
+        }
+        Ok(experiments)
+    }
 
     pub async fn get_experiment(pool: &DbPool, id: i64) -> Result<Option<Experiment>> {
-        // TODO: Implement
-        Ok(None)
+        let row = sqlx::query(
+            r#"SELECT id, name, log_path, started_at, ended_at, status, config_json
+               FROM experiments WHERE id = ?"#,
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+
+        match row {
+            Some(r) => Ok(Some(row_to_experiment(&r)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn create_experiment(pool: &DbPool, name: &str, log_path: &str, config: &ExperimentConfig) -> Result<i64> {
+        let now = Utc::now().to_rfc3339();
+        let config_json = serde_json::to_string(config)?;
+
+        let result = sqlx::query(
+            r#"INSERT INTO experiments (name, log_path, started_at, status, config_json)
+               VALUES (?, ?, ?, 'running', ?)"#,
+        )
+        .bind(name)
+        .bind(log_path)
+        .bind(&now)
+        .bind(&config_json)
+        .execute(pool)
+        .await?;
+
+        Ok(result.last_insert_rowid())
+    }
+
+    fn row_to_experiment(row: &sqlx::sqlite::SqliteRow) -> Result<Experiment> {
+        let status_str: String = row.get("status");
+        let config_json: Option<String> = row.get("config_json");
+
+        Ok(Experiment {
+            id: row.get("id"),
+            name: row.get("name"),
+            log_path: row.get("log_path"),
+            started_at: parse_datetime(row.get("started_at"))?,
+            ended_at: row.get::<Option<String>, _>("ended_at")
+                .map(|s| parse_datetime(s))
+                .transpose()?,
+            status: parse_experiment_status(&status_str),
+            config: config_json
+                .map(|s| serde_json::from_str(&s))
+                .transpose()?
+                .unwrap_or_default(),
+        })
     }
 
     pub async fn get_phases(pool: &DbPool, experiment_id: i64) -> Result<Vec<Phase>> {
-        // TODO: Implement
-        Ok(vec![])
+        let rows = sqlx::query(
+            r#"SELECT id, experiment_id, name, phase_type, started_at, ended_at, status
+               FROM phases WHERE experiment_id = ? ORDER BY id"#,
+        )
+        .bind(experiment_id)
+        .fetch_all(pool)
+        .await?;
+
+        let mut phases = Vec::with_capacity(rows.len());
+        for row in rows {
+            phases.push(row_to_phase(&row)?);
+        }
+        Ok(phases)
+    }
+
+    fn row_to_phase(row: &sqlx::sqlite::SqliteRow) -> Result<Phase> {
+        let phase_type_str: String = row.get("phase_type");
+        let status_str: String = row.get("status");
+
+        Ok(Phase {
+            id: row.get("id"),
+            experiment_id: row.get("experiment_id"),
+            name: row.get("name"),
+            phase_type: parse_phase_type(&phase_type_str),
+            started_at: parse_datetime(row.get("started_at"))?,
+            ended_at: row.get::<Option<String>, _>("ended_at")
+                .map(|s| parse_datetime(s))
+                .transpose()?,
+            status: parse_phase_status(&status_str),
+        })
     }
 
     pub async fn get_iterations(pool: &DbPool, phase_id: i64) -> Result<Vec<Iteration>> {
-        // TODO: Implement
-        Ok(vec![])
+        let rows = sqlx::query(
+            r#"SELECT id, phase_id, iteration_num, best_ce, avg_ce, best_accuracy, elapsed_secs, timestamp
+               FROM iterations WHERE phase_id = ? ORDER BY iteration_num"#,
+        )
+        .bind(phase_id)
+        .fetch_all(pool)
+        .await?;
+
+        let mut iterations = Vec::with_capacity(rows.len());
+        for row in rows {
+            iterations.push(Iteration {
+                id: row.get("id"),
+                phase_id: row.get("phase_id"),
+                iteration_num: row.get("iteration_num"),
+                best_ce: row.get("best_ce"),
+                avg_ce: row.get("avg_ce"),
+                best_accuracy: row.get("best_accuracy"),
+                elapsed_secs: row.get("elapsed_secs"),
+                timestamp: parse_datetime(row.get("timestamp"))?,
+            });
+        }
+        Ok(iterations)
     }
 
     pub async fn insert_iteration(pool: &DbPool, iteration: &Iteration) -> Result<i64> {
-        // TODO: Implement
-        Ok(0)
+        let result = sqlx::query(
+            r#"INSERT INTO iterations (phase_id, iteration_num, best_ce, avg_ce, best_accuracy, elapsed_secs, timestamp)
+               VALUES (?, ?, ?, ?, ?, ?, ?)"#,
+        )
+        .bind(iteration.phase_id)
+        .bind(iteration.iteration_num)
+        .bind(iteration.best_ce)
+        .bind(iteration.avg_ce)
+        .bind(iteration.best_accuracy)
+        .bind(iteration.elapsed_secs)
+        .bind(iteration.timestamp.to_rfc3339())
+        .execute(pool)
+        .await?;
+
+        Ok(result.last_insert_rowid())
+    }
+
+    // =============================================================================
+    // Flow queries
+    // =============================================================================
+
+    pub async fn list_flows(pool: &DbPool, status: Option<&str>, limit: i32, offset: i32) -> Result<Vec<Flow>> {
+        let rows = if let Some(status_filter) = status {
+            sqlx::query(
+                r#"SELECT id, name, description, config_json, created_at, started_at, completed_at, status, seed_checkpoint_id
+                   FROM flows WHERE status = ?
+                   ORDER BY created_at DESC
+                   LIMIT ? OFFSET ?"#,
+            )
+            .bind(status_filter)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query(
+                r#"SELECT id, name, description, config_json, created_at, started_at, completed_at, status, seed_checkpoint_id
+                   FROM flows
+                   ORDER BY created_at DESC
+                   LIMIT ? OFFSET ?"#,
+            )
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(pool)
+            .await?
+        };
+
+        let mut flows = Vec::with_capacity(rows.len());
+        for row in rows {
+            flows.push(row_to_flow(&row)?);
+        }
+        Ok(flows)
+    }
+
+    pub async fn get_flow(pool: &DbPool, id: i64) -> Result<Option<Flow>> {
+        let row = sqlx::query(
+            r#"SELECT id, name, description, config_json, created_at, started_at, completed_at, status, seed_checkpoint_id
+               FROM flows WHERE id = ?"#,
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+
+        match row {
+            Some(r) => Ok(Some(row_to_flow(&r)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn create_flow(
+        pool: &DbPool,
+        name: &str,
+        description: Option<&str>,
+        config: &FlowConfig,
+        seed_checkpoint_id: Option<i64>,
+    ) -> Result<i64> {
+        let now = Utc::now().to_rfc3339();
+        let config_json = serde_json::to_string(config)?;
+
+        let result = sqlx::query(
+            r#"INSERT INTO flows (name, description, config_json, created_at, status, seed_checkpoint_id)
+               VALUES (?, ?, ?, ?, 'pending', ?)"#,
+        )
+        .bind(name)
+        .bind(description)
+        .bind(&config_json)
+        .bind(&now)
+        .bind(seed_checkpoint_id)
+        .execute(pool)
+        .await?;
+
+        Ok(result.last_insert_rowid())
+    }
+
+    pub async fn update_flow(
+        pool: &DbPool,
+        id: i64,
+        name: Option<&str>,
+        description: Option<&str>,
+        status: Option<&str>,
+    ) -> Result<bool> {
+        // Build dynamic update query
+        let mut updates = Vec::new();
+        let mut bindings: Vec<String> = Vec::new();
+
+        if let Some(n) = name {
+            updates.push("name = ?");
+            bindings.push(n.to_string());
+        }
+        if let Some(d) = description {
+            updates.push("description = ?");
+            bindings.push(d.to_string());
+        }
+        if let Some(s) = status {
+            updates.push("status = ?");
+            bindings.push(s.to_string());
+
+            // Update timestamps based on status
+            if s == "running" {
+                updates.push("started_at = ?");
+                bindings.push(Utc::now().to_rfc3339());
+            } else if s == "completed" || s == "failed" || s == "cancelled" {
+                updates.push("completed_at = ?");
+                bindings.push(Utc::now().to_rfc3339());
+            }
+        }
+
+        if updates.is_empty() {
+            return Ok(false);
+        }
+
+        let query = format!(
+            "UPDATE flows SET {} WHERE id = ?",
+            updates.join(", ")
+        );
+
+        let mut q = sqlx::query(&query);
+        for b in &bindings {
+            q = q.bind(b);
+        }
+        q = q.bind(id);
+
+        let result = q.execute(pool).await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn delete_flow(pool: &DbPool, id: i64) -> Result<bool> {
+        // First delete flow_experiments mappings
+        sqlx::query("DELETE FROM flow_experiments WHERE flow_id = ?")
+            .bind(id)
+            .execute(pool)
+            .await?;
+
+        // Then delete the flow
+        let result = sqlx::query("DELETE FROM flows WHERE id = ?")
+            .bind(id)
+            .execute(pool)
+            .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn list_flow_experiments(pool: &DbPool, flow_id: i64) -> Result<Vec<Experiment>> {
+        let rows = sqlx::query(
+            r#"SELECT e.id, e.name, e.log_path, e.started_at, e.ended_at, e.status, e.config_json
+               FROM experiments e
+               JOIN flow_experiments fe ON e.id = fe.experiment_id
+               WHERE fe.flow_id = ?
+               ORDER BY fe.sequence_order"#,
+        )
+        .bind(flow_id)
+        .fetch_all(pool)
+        .await?;
+
+        let mut experiments = Vec::with_capacity(rows.len());
+        for row in rows {
+            experiments.push(row_to_experiment(&row)?);
+        }
+        Ok(experiments)
+    }
+
+    fn row_to_flow(row: &sqlx::sqlite::SqliteRow) -> Result<Flow> {
+        let status_str: String = row.get("status");
+        let config_json: String = row.get("config_json");
+
+        Ok(Flow {
+            id: row.get("id"),
+            name: row.get("name"),
+            description: row.get("description"),
+            config: serde_json::from_str(&config_json)?,
+            created_at: parse_datetime(row.get("created_at"))?,
+            started_at: row.get::<Option<String>, _>("started_at")
+                .map(|s| parse_datetime(s))
+                .transpose()?,
+            completed_at: row.get::<Option<String>, _>("completed_at")
+                .map(|s| parse_datetime(s))
+                .transpose()?,
+            status: parse_flow_status(&status_str),
+            seed_checkpoint_id: row.get("seed_checkpoint_id"),
+        })
+    }
+
+    // =============================================================================
+    // Checkpoint queries
+    // =============================================================================
+
+    pub async fn list_checkpoints(
+        pool: &DbPool,
+        experiment_id: Option<i64>,
+        is_final: Option<bool>,
+        limit: i32,
+        offset: i32,
+    ) -> Result<Vec<Checkpoint>> {
+        let mut query = String::from(
+            r#"SELECT id, experiment_id, name, file_path, file_size_bytes, created_at,
+                      final_fitness, final_accuracy, iterations_run, genome_stats_json, is_final, reference_count
+               FROM checkpoints WHERE 1=1"#,
+        );
+
+        if experiment_id.is_some() {
+            query.push_str(" AND experiment_id = ?");
+        }
+        if is_final.is_some() {
+            query.push_str(" AND is_final = ?");
+        }
+        query.push_str(" ORDER BY created_at DESC LIMIT ? OFFSET ?");
+
+        let mut q = sqlx::query(&query);
+
+        if let Some(exp_id) = experiment_id {
+            q = q.bind(exp_id);
+        }
+        if let Some(final_only) = is_final {
+            q = q.bind(final_only);
+        }
+        q = q.bind(limit).bind(offset);
+
+        let rows = q.fetch_all(pool).await?;
+
+        let mut checkpoints = Vec::with_capacity(rows.len());
+        for row in rows {
+            checkpoints.push(row_to_checkpoint(&row)?);
+        }
+        Ok(checkpoints)
+    }
+
+    pub async fn get_checkpoint(pool: &DbPool, id: i64) -> Result<Option<Checkpoint>> {
+        let row = sqlx::query(
+            r#"SELECT id, experiment_id, name, file_path, file_size_bytes, created_at,
+                      final_fitness, final_accuracy, iterations_run, genome_stats_json, is_final, reference_count
+               FROM checkpoints WHERE id = ?"#,
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+
+        match row {
+            Some(r) => Ok(Some(row_to_checkpoint(&r)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn create_checkpoint(
+        pool: &DbPool,
+        experiment_id: i64,
+        name: &str,
+        file_path: &str,
+        file_size_bytes: Option<i64>,
+        final_fitness: Option<f64>,
+        final_accuracy: Option<f64>,
+        iterations_run: Option<i32>,
+        genome_stats: Option<&GenomeStats>,
+        is_final: bool,
+    ) -> Result<i64> {
+        let now = Utc::now().to_rfc3339();
+        let genome_stats_json = genome_stats.map(|s| serde_json::to_string(s)).transpose()?;
+
+        let result = sqlx::query(
+            r#"INSERT INTO checkpoints
+               (experiment_id, name, file_path, file_size_bytes, created_at, final_fitness, final_accuracy,
+                iterations_run, genome_stats_json, is_final, reference_count)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)"#,
+        )
+        .bind(experiment_id)
+        .bind(name)
+        .bind(file_path)
+        .bind(file_size_bytes)
+        .bind(&now)
+        .bind(final_fitness)
+        .bind(final_accuracy)
+        .bind(iterations_run)
+        .bind(&genome_stats_json)
+        .bind(is_final)
+        .execute(pool)
+        .await?;
+
+        Ok(result.last_insert_rowid())
+    }
+
+    pub async fn delete_checkpoint(pool: &DbPool, id: i64, force: bool) -> Result<(bool, Option<String>)> {
+        // Check reference count
+        let row = sqlx::query("SELECT reference_count, file_path FROM checkpoints WHERE id = ?")
+            .bind(id)
+            .fetch_optional(pool)
+            .await?;
+
+        let Some(row) = row else {
+            return Ok((false, None));
+        };
+
+        let ref_count: i32 = row.get("reference_count");
+        let file_path: String = row.get("file_path");
+
+        if ref_count > 0 && !force {
+            return Err(anyhow::anyhow!(
+                "Checkpoint has {} references. Use force=true to delete anyway.",
+                ref_count
+            ));
+        }
+
+        // Delete references first
+        sqlx::query("DELETE FROM checkpoint_references WHERE checkpoint_id = ?")
+            .bind(id)
+            .execute(pool)
+            .await?;
+
+        // Delete checkpoint
+        let result = sqlx::query("DELETE FROM checkpoints WHERE id = ?")
+            .bind(id)
+            .execute(pool)
+            .await?;
+
+        Ok((result.rows_affected() > 0, Some(file_path)))
+    }
+
+    pub async fn increment_checkpoint_references(pool: &DbPool, checkpoint_id: i64) -> Result<()> {
+        sqlx::query("UPDATE checkpoints SET reference_count = reference_count + 1 WHERE id = ?")
+            .bind(checkpoint_id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
+    fn row_to_checkpoint(row: &sqlx::sqlite::SqliteRow) -> Result<Checkpoint> {
+        let genome_stats_json: Option<String> = row.get("genome_stats_json");
+
+        Ok(Checkpoint {
+            id: row.get("id"),
+            experiment_id: row.get("experiment_id"),
+            name: row.get("name"),
+            file_path: row.get("file_path"),
+            file_size_bytes: row.get("file_size_bytes"),
+            created_at: parse_datetime(row.get("created_at"))?,
+            final_fitness: row.get("final_fitness"),
+            final_accuracy: row.get("final_accuracy"),
+            iterations_run: row.get("iterations_run"),
+            genome_stats: genome_stats_json
+                .map(|s| serde_json::from_str(&s))
+                .transpose()?,
+            is_final: row.get("is_final"),
+            reference_count: row.get("reference_count"),
+        })
+    }
+
+    // =============================================================================
+    // Helper functions
+    // =============================================================================
+
+    fn parse_datetime(s: String) -> Result<DateTime<Utc>> {
+        Ok(DateTime::parse_from_rfc3339(&s)?.with_timezone(&Utc))
+    }
+
+    fn parse_experiment_status(s: &str) -> ExperimentStatus {
+        match s {
+            "running" => ExperimentStatus::Running,
+            "completed" => ExperimentStatus::Completed,
+            "failed" => ExperimentStatus::Failed,
+            "cancelled" => ExperimentStatus::Cancelled,
+            _ => ExperimentStatus::Running,
+        }
+    }
+
+    fn parse_phase_type(s: &str) -> PhaseType {
+        match s {
+            "ga_neurons" => PhaseType::GaNeurons,
+            "ts_neurons" => PhaseType::TsNeurons,
+            "ga_bits" => PhaseType::GaBits,
+            "ts_bits" => PhaseType::TsBits,
+            "ga_connections" => PhaseType::GaConnections,
+            "ts_connections" => PhaseType::TsConnections,
+            _ => PhaseType::GaNeurons,
+        }
+    }
+
+    fn parse_phase_status(s: &str) -> PhaseStatus {
+        match s {
+            "running" => PhaseStatus::Running,
+            "completed" => PhaseStatus::Completed,
+            "skipped" => PhaseStatus::Skipped,
+            _ => PhaseStatus::Running,
+        }
+    }
+
+    fn parse_flow_status(s: &str) -> FlowStatus {
+        match s {
+            "pending" => FlowStatus::Pending,
+            "running" => FlowStatus::Running,
+            "completed" => FlowStatus::Completed,
+            "failed" => FlowStatus::Failed,
+            "cancelled" => FlowStatus::Cancelled,
+            _ => FlowStatus::Pending,
+        }
     }
 }
