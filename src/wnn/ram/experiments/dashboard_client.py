@@ -280,6 +280,51 @@ class DashboardClient:
 			self._logger(f"Flow {flow_id} failed: {error}")
 		return result
 
+	def list_flow_experiments(self, flow_id: int) -> list[dict]:
+		"""List experiments associated with a flow."""
+		return self._request("GET", f"/api/flows/{flow_id}/experiments")
+
+	# =========================================================================
+	# Experiment methods
+	# =========================================================================
+
+	def create_experiment(
+		self,
+		name: str,
+		log_path: str = "",
+		config: Optional[dict] = None,
+	) -> int:
+		"""
+		Create a new experiment.
+
+		Args:
+			name: Experiment name
+			log_path: Path to log file
+			config: Optional experiment configuration
+
+		Returns:
+			Experiment ID
+		"""
+		data = {
+			"name": name,
+			"log_path": log_path,
+			"config": config or {},
+		}
+
+		result = self._request("POST", "/api/experiments", json_data=data)
+		exp_id = result["id"]
+		self._logger(f"Created experiment {exp_id}: {name}")
+		return exp_id
+
+	def get_experiment(self, experiment_id: int) -> dict:
+		"""Get experiment by ID."""
+		return self._request("GET", f"/api/experiments/{experiment_id}")
+
+	def list_experiments(self, limit: int = 50, offset: int = 0) -> list[dict]:
+		"""List experiments."""
+		params = {"limit": limit, "offset": offset}
+		return self._request("GET", "/api/experiments", params=params)
+
 	# =========================================================================
 	# Checkpoint methods
 	# =========================================================================
@@ -363,6 +408,23 @@ class DashboardClient:
 		params = {"force": force} if force else {}
 		self._request("DELETE", f"/api/checkpoints/{checkpoint_id}", params=params)
 		self._logger(f"Deleted checkpoint {checkpoint_id}")
+
+	def find_checkpoint_by_path(self, file_path: str) -> Optional[int]:
+		"""
+		Find checkpoint ID by file path.
+
+		Args:
+			file_path: Path to checkpoint file
+
+		Returns:
+			Checkpoint ID if found, None otherwise
+		"""
+		# List checkpoints and find matching path
+		checkpoints = self.list_checkpoints(limit=100)
+		for ckpt in checkpoints:
+			if ckpt.get("file_path") == file_path:
+				return ckpt.get("id")
+		return None
 
 	# =========================================================================
 	# Health check

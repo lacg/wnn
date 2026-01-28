@@ -229,6 +229,7 @@ class Flow:
 		self.dashboard_client = dashboard_client
 
 		self._flow_id: Optional[int] = None
+		self._experiment_ids: dict[int, int] = {}  # idx -> experiment_id
 		self._results: list[ExperimentResult] = []
 
 	def run(
@@ -269,14 +270,19 @@ class Flow:
 			try:
 				seed_checkpoint_id = None
 				if cfg.seed_checkpoint_path:
-					# TODO: Look up checkpoint ID from path
-					pass
+					# Look up checkpoint ID from path
+					seed_checkpoint_id = self.dashboard_client.find_checkpoint_by_path(
+						cfg.seed_checkpoint_path
+					)
+					if seed_checkpoint_id:
+						self.log(f"Found seed checkpoint ID: {seed_checkpoint_id}")
 
 				self._flow_id = self.dashboard_client.create_flow(
 					cfg.to_api_config(),
 					seed_checkpoint_id=seed_checkpoint_id,
 				)
 				self.dashboard_client.flow_started(self._flow_id)
+				self.log(f"Registered flow {self._flow_id} with dashboard")
 			except Exception as e:
 				self.log(f"Warning: Failed to register flow with dashboard: {e}")
 
@@ -315,6 +321,19 @@ class Flow:
 				if self.checkpoint_dir:
 					exp_checkpoint_dir = self.checkpoint_dir / f"exp_{idx:02d}"
 
+				# Create experiment in dashboard if client available
+				experiment_id = None
+				if self.dashboard_client:
+					try:
+						experiment_id = self.dashboard_client.create_experiment(
+							name=exp_config.name,
+							log_path=str(exp_checkpoint_dir) if exp_checkpoint_dir else "",
+							config=exp_config.to_dict(),
+						)
+						self._experiment_ids[idx] = experiment_id
+					except Exception as e:
+						self.log(f"Warning: Failed to create experiment in dashboard: {e}")
+
 				# Create and run experiment
 				experiment = Experiment(
 					config=exp_config,
@@ -322,7 +341,7 @@ class Flow:
 					logger=self.log,
 					checkpoint_dir=exp_checkpoint_dir,
 					dashboard_client=self.dashboard_client,
-					experiment_id=None,  # TODO: Get from dashboard
+					experiment_id=experiment_id,
 				)
 
 				result = experiment.run(
