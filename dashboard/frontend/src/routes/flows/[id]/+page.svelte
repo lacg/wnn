@@ -55,7 +55,7 @@
         editConfig.phase_order = p.phase_order ?? 'neurons_first';
         if (p.tier_config) {
           editConfig.tier_config = p.tier_config
-            .map((t: any) => `${t[0] ?? 'rest'},${t[1]},${t[2]}`)
+            .map((t: number[]) => `${t[0] ?? 'rest'},${t[1]},${t[2]}`)
             .join(';');
         }
       }
@@ -136,7 +136,15 @@
   function formatDate(dateStr: string | null): string {
     if (!dateStr) return '-';
     const date = new Date(dateStr);
-    return date.toLocaleString();
+    // Use system locale (undefined = browser's default locale)
+    return date.toLocaleString(undefined, {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
   }
 </script>
 
@@ -305,7 +313,7 @@
             <div class="param-item full-width">
               <span class="param-label">Tier Config</span>
               <span class="param-value mono">
-                {flow.config.params.tier_config.map((t: any) => `${t[0] ?? 'rest'},${t[1]},${t[2]}`).join('; ')}
+                {flow.config.params.tier_config.map(t => `${t[0] ?? 'rest'},${t[1]},${t[2]}`).join('; ')}
               </span>
             </div>
           {/if}

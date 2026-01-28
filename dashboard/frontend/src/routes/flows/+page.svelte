@@ -32,7 +32,13 @@
   function formatDate(dateStr: string | null): string {
     if (!dateStr) return '-';
     const date = new Date(dateStr);
-    return date.toLocaleString();
+    return date.toLocaleString(undefined, {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
   }
 </script>
 
