@@ -90,65 +90,108 @@
     </div>
   {/if}
 
-  <!-- CE History Chart -->
+  <!-- CE & Accuracy History Chart -->
   <div class="card">
     <div class="card-header">
-      <span class="card-title">CE Trend ({$ceHistory.length} iterations) — Lower is Better ↓</span>
+      <span class="card-title">Trend ({$ceHistory.length} iterations)</span>
+      <div class="chart-legend">
+        <span class="legend-item"><span class="legend-dot ce"></span> CE (↓ better)</span>
+        <span class="legend-item"><span class="legend-dot acc"></span> Accuracy (↑ better)</span>
+      </div>
     </div>
     {#if $ceHistory.length > 0}
       {@const chartData = $ceHistory}
-      {@const min = Math.min(...chartData.map(p => p.ce))}
-      {@const max = Math.max(...chartData.map(p => p.ce))}
-      {@const range = max - min || 0.001}
-      {@const padding = { top: 20, right: 20, bottom: 30, left: 60 }}
+      {@const ceMin = Math.min(...chartData.map(p => p.ce))}
+      {@const ceMax = Math.max(...chartData.map(p => p.ce))}
+      {@const ceRange = ceMax - ceMin || 0.001}
+      {@const accData = chartData.filter(p => p.acc !== null && p.acc !== undefined).map(p => ({ ...p, acc: p.acc ?? 0 }))}
+      {@const accMin = accData.length > 0 ? Math.min(...accData.map(p => p.acc)) : 0}
+      {@const accMax = accData.length > 0 ? Math.max(...accData.map(p => p.acc)) : 1}
+      {@const accRange = accMax - accMin || 0.001}
+      {@const padding = { top: 20, right: 60, bottom: 30, left: 60 }}
       {@const width = 800}
       {@const height = 220}
       {@const chartWidth = width - padding.left - padding.right}
       {@const chartHeight = height - padding.top - padding.bottom}
       <div class="chart-container">
         <svg viewBox="0 0 {width} {height}" class="line-chart">
-          <!-- Y-axis labels (CE values) -->
-          <text x={padding.left - 5} y={padding.top + 5} text-anchor="end" class="axis-label">{max.toFixed(2)}</text>
-          <text x={padding.left - 5} y={padding.top + chartHeight / 2} text-anchor="end" class="axis-label">{((max + min) / 2).toFixed(2)}</text>
-          <text x={padding.left - 5} y={padding.top + chartHeight - 5} text-anchor="end" class="axis-label">{min.toFixed(2)}</text>
+          <!-- Left Y-axis labels (CE values) -->
+          <text x={padding.left - 5} y={padding.top + 5} text-anchor="end" class="axis-label ce-label">{ceMax.toFixed(2)}</text>
+          <text x={padding.left - 5} y={padding.top + chartHeight / 2} text-anchor="end" class="axis-label ce-label">{((ceMax + ceMin) / 2).toFixed(2)}</text>
+          <text x={padding.left - 5} y={padding.top + chartHeight - 5} text-anchor="end" class="axis-label ce-label">{ceMin.toFixed(2)}</text>
 
-          <!-- Y-axis title -->
-          <text x="12" y={height / 2} text-anchor="middle" transform="rotate(-90, 12, {height / 2})" class="axis-title">CE Loss</text>
+          <!-- Left Y-axis title (CE) -->
+          <text x="12" y={height / 2} text-anchor="middle" transform="rotate(-90, 12, {height / 2})" class="axis-title ce-label">CE Loss</text>
+
+          <!-- Right Y-axis labels (Accuracy values) -->
+          {#if accData.length > 0}
+            <text x={width - padding.right + 5} y={padding.top + 5} text-anchor="start" class="axis-label acc-label">{accMax.toFixed(2)}%</text>
+            <text x={width - padding.right + 5} y={padding.top + chartHeight / 2} text-anchor="start" class="axis-label acc-label">{((accMax + accMin) / 2).toFixed(2)}%</text>
+            <text x={width - padding.right + 5} y={padding.top + chartHeight - 5} text-anchor="start" class="axis-label acc-label">{accMin.toFixed(2)}%</text>
+
+            <!-- Right Y-axis title (Accuracy) -->
+            <text x={width - 8} y={height / 2} text-anchor="middle" transform="rotate(90, {width - 8}, {height / 2})" class="axis-title acc-label">Accuracy %</text>
+          {/if}
 
           <!-- X-axis labels (iterations) -->
           <text x={padding.left} y={height - 5} text-anchor="start" class="axis-label">1</text>
           <text x={padding.left + chartWidth / 2} y={height - 5} text-anchor="middle" class="axis-label">{Math.floor(chartData.length / 2)}</text>
           <text x={padding.left + chartWidth} y={height - 5} text-anchor="end" class="axis-label">{chartData.length}</text>
 
-          <!-- X-axis title -->
-          <text x={padding.left + chartWidth / 2} y={height - 18} text-anchor="middle" class="axis-title">Iteration</text>
-
           <!-- Grid lines -->
           <line x1={padding.left} y1={padding.top} x2={padding.left + chartWidth} y2={padding.top} stroke="var(--border)" stroke-dasharray="4" />
           <line x1={padding.left} y1={padding.top + chartHeight / 2} x2={padding.left + chartWidth} y2={padding.top + chartHeight / 2} stroke="var(--border)" stroke-dasharray="4" />
           <line x1={padding.left} y1={padding.top + chartHeight} x2={padding.left + chartWidth} y2={padding.top + chartHeight} stroke="var(--border)" stroke-dasharray="4" />
 
-          <!-- CE line -->
+          <!-- CE line (blue) -->
           <polyline
             fill="none"
             stroke="var(--accent-blue)"
             stroke-width="2"
             points={chartData.map((p, i) => {
               const x = padding.left + (i / Math.max(chartData.length - 1, 1)) * chartWidth;
-              const y = padding.top + chartHeight - ((p.ce - min) / range) * chartHeight;
+              const y = padding.top + chartHeight - ((p.ce - ceMin) / ceRange) * chartHeight;
               return `${x},${y}`;
             }).join(' ')}
           />
 
-          <!-- Best CE marker (green dot at lowest point) -->
-          {#each [chartData.findIndex(p => p.ce === min)] as bestIdx}
+          <!-- Accuracy line (green) -->
+          {#if accData.length > 0}
+            <polyline
+              fill="none"
+              stroke="var(--accent-green)"
+              stroke-width="2"
+              stroke-opacity="0.8"
+              points={chartData.map((p, i) => {
+                if (p.acc === null || p.acc === undefined) return null;
+                const x = padding.left + (i / Math.max(chartData.length - 1, 1)) * chartWidth;
+                const y = padding.top + chartHeight - ((p.acc - accMin) / accRange) * chartHeight;
+                return `${x},${y}`;
+              }).filter(Boolean).join(' ')}
+            />
+          {/if}
+
+          <!-- Best CE marker (circle at lowest CE point) -->
+          {#each [chartData.findIndex(p => p.ce === ceMin)] as bestIdx}
             {#if bestIdx >= 0}
               {@const bestX = padding.left + (bestIdx / Math.max(chartData.length - 1, 1)) * chartWidth}
-              {@const bestY = padding.top + chartHeight - ((min - min) / range) * chartHeight}
-              <circle cx={bestX} cy={bestY} r="6" fill="var(--accent-green)" />
-              <text x={bestX} y={bestY - 10} text-anchor="middle" class="best-label">Best: {min.toFixed(4)}</text>
+              {@const bestY = padding.top + chartHeight}
+              <circle cx={bestX} cy={bestY} r="5" fill="var(--accent-blue)" />
+              <text x={bestX} y={bestY - 8} text-anchor="middle" class="best-label" fill="var(--accent-blue)">CE: {ceMin.toFixed(4)}</text>
             {/if}
           {/each}
+
+          <!-- Best Accuracy marker (circle at highest acc point) -->
+          {#if accData.length > 0}
+            {#each [chartData.findIndex(p => p.acc === accMax)] as bestAccIdx}
+              {#if bestAccIdx >= 0}
+                {@const bestX = padding.left + (bestAccIdx / Math.max(chartData.length - 1, 1)) * chartWidth}
+                {@const bestY = padding.top}
+                <circle cx={bestX} cy={bestY} r="5" fill="var(--accent-green)" />
+                <text x={bestX} y={bestY + 15} text-anchor="middle" class="best-label" fill="var(--accent-green)">Acc: {accMax.toFixed(2)}%</text>
+              {/if}
+            {/each}
+          {/if}
         </svg>
       </div>
     {:else}
@@ -434,8 +477,41 @@
 
   .best-label {
     font-size: 11px;
-    fill: var(--accent-green);
     font-weight: 600;
+  }
+
+  .chart-legend {
+    display: flex;
+    gap: 1rem;
+    font-size: 0.75rem;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+
+  .legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+  }
+
+  .legend-dot.ce {
+    background: var(--accent-blue);
+  }
+
+  .legend-dot.acc {
+    background: var(--accent-green);
+  }
+
+  .ce-label {
+    fill: var(--accent-blue);
+  }
+
+  .acc-label {
+    fill: var(--accent-green);
   }
 
   .chart-labels {
