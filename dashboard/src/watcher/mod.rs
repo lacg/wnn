@@ -40,6 +40,12 @@ struct ParserState {
     in_final_results: bool,
     summary_rows: Vec<PhaseSummaryRow>,
     last_phase_name: String,
+    /// Track genome progress within a generation
+    current_generation: Option<i32>,
+    gen_best_ce: f64,
+    gen_best_acc: f64,
+    gen_genome_count: i32,
+    gen_start_time: std::time::Instant,
 }
 
 impl ParserState {
@@ -52,6 +58,31 @@ impl ParserState {
             in_final_results: false,
             summary_rows: Vec::new(),
             last_phase_name: String::new(),
+            current_generation: None,
+            gen_best_ce: f64::INFINITY,
+            gen_best_acc: 0.0,
+            gen_genome_count: 0,
+            gen_start_time: std::time::Instant::now(),
+        }
+    }
+
+    /// Reset generation tracking for a new generation
+    fn start_new_generation(&mut self, generation: i32) {
+        self.current_generation = Some(generation);
+        self.gen_best_ce = f64::INFINITY;
+        self.gen_best_acc = 0.0;
+        self.gen_genome_count = 0;
+        self.gen_start_time = std::time::Instant::now();
+    }
+
+    /// Update with a genome's metrics
+    fn update_genome(&mut self, ce: f64, accuracy: f64) {
+        self.gen_genome_count += 1;
+        if ce < self.gen_best_ce {
+            self.gen_best_ce = ce;
+        }
+        if accuracy > self.gen_best_acc {
+            self.gen_best_acc = accuracy;
         }
     }
 }
@@ -293,6 +324,55 @@ fn process_line(line: &str, state: &mut ParserState) -> Vec<WsMessage> {
                 timestamp: chrono::Utc::now(),
             };
             vec![WsMessage::IterationUpdate(iteration)]
+        }
+        LogEvent::GenomeProgress { generation, total_gens: _, genome_idx, total_genomes, is_elite: _, ce, accuracy } => {
+            let mut messages = Vec::new();
+
+            // Check if this is a new generation
+            if state.current_generation != Some(generation) {
+                // Emit iteration update for previous generation if we have data
+                if state.current_generation.is_some() && state.gen_genome_count > 0 {
+                    state.iteration_id += 1;
+                    let elapsed = state.gen_start_time.elapsed().as_secs_f64();
+                    let iteration = Iteration {
+                        id: state.iteration_id,
+                        phase_id: state.current_phase_id,
+                        iteration_num: state.current_generation.unwrap(),
+                        best_ce: state.gen_best_ce,
+                        avg_ce: None, // No average in genome-by-genome format
+                        best_accuracy: Some(state.gen_best_acc),
+                        elapsed_secs: elapsed,
+                        timestamp: chrono::Utc::now(),
+                    };
+                    messages.push(WsMessage::IterationUpdate(iteration));
+                }
+                // Start tracking the new generation
+                state.start_new_generation(generation);
+            }
+
+            // Update generation tracking with this genome's metrics
+            state.update_genome(ce, accuracy);
+
+            // If this is the last genome in the generation, emit the iteration update now
+            if genome_idx == total_genomes {
+                state.iteration_id += 1;
+                let elapsed = state.gen_start_time.elapsed().as_secs_f64();
+                let iteration = Iteration {
+                    id: state.iteration_id,
+                    phase_id: state.current_phase_id,
+                    iteration_num: generation,
+                    best_ce: state.gen_best_ce,
+                    avg_ce: None,
+                    best_accuracy: Some(state.gen_best_acc),
+                    elapsed_secs: elapsed,
+                    timestamp: chrono::Utc::now(),
+                };
+                messages.push(WsMessage::IterationUpdate(iteration));
+                // Reset for next generation
+                state.current_generation = None;
+            }
+
+            messages
         }
         LogEvent::HealthCheck { k, ce, accuracy } => {
             let health = HealthCheck {
