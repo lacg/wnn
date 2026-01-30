@@ -25,6 +25,43 @@ static PHASE_START_RE: LazyLock<Regex> =
 static PHASE_START_NEW_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(\d+)-(GA|TS)-(\w+)$").unwrap());
 
+// Dashboard client format: "Phase started: Phase 1a: GA Bits (id=123)"
+static PHASE_STARTED_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^Phase started: (.+?) \(id=\d+\)$").unwrap());
+
+// Extract phase type from name like "Phase 1a: GA Bits" or "1-GA-Neurons"
+fn extract_phase_type(name: &str) -> Option<PhaseType> {
+    // Try "Phase Xa: GA/TS Target" format
+    if let Some(caps) = Regex::new(r"Phase \d+[ab]: (GA|TS) (\w+)").ok()?.captures(name) {
+        let algo = caps.get(1)?.as_str();
+        let target = caps.get(2)?.as_str().to_lowercase();
+        return match (algo, target.as_str()) {
+            ("GA", "neurons") => Some(PhaseType::GaNeurons),
+            ("TS", "neurons") => Some(PhaseType::TsNeurons),
+            ("GA", "bits") => Some(PhaseType::GaBits),
+            ("TS", "bits") => Some(PhaseType::TsBits),
+            ("GA", "connections") => Some(PhaseType::GaConnections),
+            ("TS", "connections") => Some(PhaseType::TsConnections),
+            _ => None,
+        };
+    }
+    // Try "N-GA-Target" format
+    if let Some(caps) = Regex::new(r"(\d+)-(GA|TS)-(\w+)").ok()?.captures(name) {
+        let algo = caps.get(2)?.as_str();
+        let target = caps.get(3)?.as_str().to_lowercase();
+        return match (algo, target.as_str()) {
+            ("GA", "neurons") => Some(PhaseType::GaNeurons),
+            ("TS", "neurons") => Some(PhaseType::TsNeurons),
+            ("GA", "bits") => Some(PhaseType::GaBits),
+            ("TS", "bits") => Some(PhaseType::TsBits),
+            ("GA", "connections") => Some(PhaseType::GaConnections),
+            ("TS", "connections") => Some(PhaseType::TsConnections),
+            _ => None,
+        };
+    }
+    None
+}
+
 static GA_ITER_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"\[(?:Architecture)?GA\] Gen (\d+)/(\d+): best=([0-9.]+), avg=([0-9.]+)(?: \(subset\))? \(([0-9.]+)s\)",
@@ -125,6 +162,11 @@ pub fn parse_line(line: &str) -> Option<(NaiveTime, LogEvent)> {
             ("TS", "connections") => PhaseType::TsConnections,
             _ => return Some((time, LogEvent::Unknown(content.to_string()))),
         };
+        LogEvent::PhaseStart { name, phase_type }
+    } else if let Some(caps) = PHASE_STARTED_RE.captures(content) {
+        // Dashboard client format: "Phase started: Phase 1a: GA Bits (id=123)"
+        let name = caps.get(1)?.as_str().to_string();
+        let phase_type = extract_phase_type(&name).unwrap_or(PhaseType::GaNeurons);
         LogEvent::PhaseStart { name, phase_type }
     } else if let Some(caps) = GA_ITER_RE.captures(content) {
         LogEvent::GaIteration {
@@ -238,6 +280,30 @@ mod tests {
             LogEvent::PhaseStart { name, phase_type } => {
                 assert_eq!(name, "2-TS-Bits");
                 assert_eq!(phase_type, PhaseType::TsBits);
+            }
+            _ => panic!("Expected PhaseStart"),
+        }
+    }
+
+    #[test]
+    fn test_parse_phase_started_dashboard_format() {
+        let line = "12:34:56 | Phase started: Phase 1a: GA Bits (id=123)";
+        let (_, event) = parse_line(line).unwrap();
+        match event {
+            LogEvent::PhaseStart { name, phase_type } => {
+                assert_eq!(name, "Phase 1a: GA Bits");
+                assert_eq!(phase_type, PhaseType::GaBits);
+            }
+            _ => panic!("Expected PhaseStart"),
+        }
+
+        // Test TS variant
+        let line2 = "12:35:00 | Phase started: Phase 2b: TS Neurons (id=456)";
+        let (_, event2) = parse_line(line2).unwrap();
+        match event2 {
+            LogEvent::PhaseStart { name, phase_type } => {
+                assert_eq!(name, "Phase 2b: TS Neurons");
+                assert_eq!(phase_type, PhaseType::TsNeurons);
             }
             _ => panic!("Expected PhaseStart"),
         }
