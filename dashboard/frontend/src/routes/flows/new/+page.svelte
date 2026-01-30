@@ -10,6 +10,9 @@
   let tsIterations = 250;
   let populationSize = 50;
   let patience = 10;
+  let contextSize = 4;
+  let tierConfig = '100,15,20;400,10,12;rest,5,8';
+  let tier0Only = true;
   let seedCheckpointId: number | null = null;
 
   let checkpoints: Checkpoint[] = [];
@@ -54,7 +57,10 @@
               ga_generations: gaGenerations,
               ts_iterations: tsIterations,
               population_size: populationSize,
-              patience
+              patience,
+              context_size: contextSize,
+              tier_config: tierConfig || null,
+              tier0_only: tier0Only
             }
           },
           seed_checkpoint_id: seedCheckpointId
@@ -153,6 +159,33 @@
           <input type="number" id="patience" bind:value={patience} min="1" />
         </div>
       </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label for="contextSize">Context Size (n-gram)</label>
+          <input type="number" id="contextSize" bind:value={contextSize} min="2" max="16" />
+          <span class="field-hint">Number of tokens in context window (4 = 4-gram)</span>
+        </div>
+
+        <div class="form-group">
+          <label for="tier0Only">
+            <input type="checkbox" id="tier0Only" bind:checked={tier0Only} />
+            Tier-0 Only Optimization
+          </label>
+          <span class="field-hint">Only mutate the most frequent tokens</span>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="tierConfig">Tier Configuration</label>
+        <input
+          type="text"
+          id="tierConfig"
+          bind:value={tierConfig}
+          placeholder="100,15,20;400,10,12;rest,5,8"
+        />
+        <span class="field-hint">Format: clusters,neurons,bits;... (use "rest" for remaining vocab)</span>
+      </div>
     </div>
 
     <div class="form-section">
@@ -243,6 +276,25 @@
 
   .form-group:last-child {
     margin-bottom: 0;
+  }
+
+  .field-hint {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    margin-top: 0.25rem;
+  }
+
+  input[type="checkbox"] {
+    width: auto;
+    margin-right: 0.5rem;
+    vertical-align: middle;
+  }
+
+  label:has(input[type="checkbox"]) {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
   }
 
   .form-row {

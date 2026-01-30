@@ -40,6 +40,7 @@ class FlowConfig:
 	# Shared architecture config
 	tier_config: Optional[list[tuple[Optional[int], int, int]]] = None
 	optimize_tier0_only: bool = False
+	context_size: int = 4
 
 	# Shared optimization params
 	patience: int = 10
@@ -61,6 +62,7 @@ class FlowConfig:
 		phase_order: Literal["neurons_first", "bits_first"] = "neurons_first",
 		tier_config: Optional[list[tuple[Optional[int], int, int]]] = None,
 		optimize_tier0_only: bool = False,
+		context_size: int = 4,
 		fitness_percentile: Optional[float] = None,
 		seed: Optional[int] = None,
 		description: Optional[str] = None,
@@ -138,6 +140,7 @@ class FlowConfig:
 			seed_checkpoint_path=seed_checkpoint_path,
 			tier_config=tier_config,
 			optimize_tier0_only=optimize_tier0_only,
+			context_size=context_size,
 			patience=patience,
 			fitness_percentile=fitness_percentile,
 			seed=seed,
@@ -152,6 +155,7 @@ class FlowConfig:
 			params={
 				"tier_config": self.tier_config,
 				"optimize_tier0_only": self.optimize_tier0_only,
+				"context_size": self.context_size,
 				"patience": self.patience,
 				"fitness_percentile": self.fitness_percentile,
 				"seed": self.seed,
@@ -331,6 +335,14 @@ class Flow:
 							config=exp_config.to_dict(),
 						)
 						self._experiment_ids[idx] = experiment_id
+
+						# Link experiment to flow
+						if self._flow_id:
+							self.dashboard_client.link_experiment_to_flow(
+								flow_id=self._flow_id,
+								experiment_id=experiment_id,
+								sequence_order=idx,
+							)
 					except Exception as e:
 						self.log(f"Warning: Failed to create experiment in dashboard: {e}")
 

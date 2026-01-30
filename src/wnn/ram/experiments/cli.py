@@ -339,11 +339,14 @@ def flow_run(
 
 		# Parse tier config from params
 		tier_config = params.get("tier_config")
-		tier0_only = params.get("optimize_tier0_only", False)
+		tier0_only = params.get("optimize_tier0_only", params.get("tier0_only", False))
 		patience = params.get("patience", 10)
 		fitness_percentile = params.get("fitness_percentile")
 		seed = params.get("seed")
 		phase_order = params.get("phase_order", "neurons_first")
+
+		# Use context_size from params if CLI default was used
+		effective_context = params.get("context_size", context)
 
 		# Load WikiText-2 dataset
 		rprint("\n[dim]Loading WikiText-2 dataset...[/dim]")
@@ -377,13 +380,13 @@ def flow_run(
 			train_tokens=train_tokens,
 			eval_tokens=eval_tokens,
 			vocab_size=tokenizer.vocab_size,
-			context_size=context,
+			context_size=effective_context,
 			token_parts=3,
 			rotation_mode="per_iteration",
 			seed=seed or int(time.time() * 1000) % (2**32),
 		)
 
-		rprint(f"[dim]  Vocab: {evaluator.vocab_size:,}, Context: {context}[/dim]")
+		rprint(f"[dim]  Vocab: {evaluator.vocab_size:,}, Context: {effective_context}[/dim]")
 
 		# Build experiment configs from dashboard data
 		exp_configs = []
@@ -413,6 +416,7 @@ def flow_run(
 			description=flow_data.get("description"),
 			tier_config=tier_config,
 			optimize_tier0_only=tier0_only,
+			context_size=effective_context,
 			patience=patience,
 			fitness_percentile=fitness_percentile,
 			seed=seed,
