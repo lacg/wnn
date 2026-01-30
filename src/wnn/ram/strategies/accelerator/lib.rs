@@ -21,6 +21,15 @@ fn get_cached_metal_evaluator() -> Result<&'static Mutex<Option<metal_ramlm::Met
     }))
 }
 
+// Global cached Metal evaluator for Gating (avoids shader recompilation)
+static METAL_GATING_EVALUATOR: OnceLock<Mutex<Option<metal_gating::MetalGatingEvaluator>>> = OnceLock::new();
+
+fn get_cached_metal_gating_evaluator() -> Result<&'static Mutex<Option<metal_gating::MetalGatingEvaluator>>, String> {
+    Ok(METAL_GATING_EVALUATOR.get_or_init(|| {
+        Mutex::new(metal_gating::MetalGatingEvaluator::new().ok())
+    }))
+}
+
 #[path = "ram.rs"]
 mod ram;
 
@@ -47,6 +56,12 @@ mod token_cache;
 
 #[path = "neighbor_search.rs"]
 mod neighbor_search;
+
+#[path = "gating.rs"]
+mod gating;
+
+#[path = "metal_gating.rs"]
+mod metal_gating;
 
 #[path = "eval_worker.rs"]
 pub mod eval_worker;
@@ -2788,8 +2803,16 @@ struct TokenCacheWrapper {
 #[pymethods]
 impl TokenCacheWrapper {
     /// Create a new token cache with all data pre-encoded and partitioned.
+    ///
+    /// # Arguments
+    /// * `encoding_table` - Optional semantic encoding table (token_id → semantic_bits).
+    ///   If provided, tokens are encoded using learned semantic bits instead of raw binary.
+    ///   Similar tokens will have similar bit patterns, enabling better generalization.
+    ///   Pre-computed in Python using MutualInfoEncoder or similar.
+    /// * `encoding_bits` - Number of bits in semantic encoding (required if encoding_table provided).
     #[new]
     #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (train_tokens, eval_tokens, test_tokens, vocab_size, context_size, cluster_order, num_parts, num_negatives, seed, encoding_table=None, encoding_bits=None))]
     fn new(
         train_tokens: Vec<u32>,
         eval_tokens: Vec<u32>,
@@ -2800,6 +2823,8 @@ impl TokenCacheWrapper {
         num_parts: usize,
         num_negatives: usize,
         seed: u64,
+        encoding_table: Option<Vec<u64>>,
+        encoding_bits: Option<usize>,
     ) -> Self {
         Self {
             inner: token_cache::TokenCache::new(
@@ -2812,6 +2837,8 @@ impl TokenCacheWrapper {
                 num_parts,
                 num_negatives,
                 seed,
+                encoding_table,
+                encoding_bits,
             ),
         }
     }
@@ -3187,6 +3214,233 @@ impl TokenCacheWrapper {
     }
 }
 
+// =============================================================================
+// RAMGating Python Wrapper
+// =============================================================================
+
+/// Python wrapper for RAM-based gating
+///
+/// Uses dedicated RAM neurons to learn which clusters should be active
+/// for each input context. Gate output is binary (0 or 1) via majority voting.
+#[pyclass]
+struct RAMGatingWrapper {
+    inner: gating::RAMGating,
+}
+
+#[pymethods]
+impl RAMGatingWrapper {
+    /// Create a new RAMGating model
+    ///
+    /// # Arguments
+    /// * `num_clusters` - Number of clusters to gate (vocabulary size)
+    /// * `neurons_per_gate` - Number of RAM neurons per cluster (default 8)
+    /// * `bits_per_neuron` - Address bits per neuron (default 12)
+    /// * `total_input_bits` - Total input bits (context_size * bits_per_token)
+    /// * `threshold` - Fraction of neurons that must fire (default 0.5)
+    /// * `seed` - Random seed for connectivity initialization
+    #[new]
+    #[pyo3(signature = (num_clusters, neurons_per_gate, bits_per_neuron, total_input_bits, threshold=0.5, seed=None))]
+    fn new(
+        num_clusters: usize,
+        neurons_per_gate: usize,
+        bits_per_neuron: usize,
+        total_input_bits: usize,
+        threshold: f32,
+        seed: Option<u64>,
+    ) -> Self {
+        Self {
+            inner: gating::RAMGating::new(
+                num_clusters,
+                neurons_per_gate,
+                bits_per_neuron,
+                total_input_bits,
+                threshold,
+                seed,
+            ),
+        }
+    }
+
+    /// Compute binary gates for a batch of inputs
+    ///
+    /// # Arguments
+    /// * `input_bits_flat` - Flattened input bits [batch_size * total_input_bits]
+    /// * `batch_size` - Number of examples in batch
+    ///
+    /// # Returns
+    /// Flattened gate values [batch_size * num_clusters] (0.0 or 1.0)
+    fn forward_batch(&self, py: Python<'_>, input_bits_flat: Vec<bool>, batch_size: usize) -> Vec<f32> {
+        py.allow_threads(|| self.inner.forward_batch(&input_bits_flat, batch_size))
+    }
+
+    /// Train gate neurons for a batch of examples
+    ///
+    /// # Arguments
+    /// * `input_bits_flat` - Flattened input bits [batch_size * total_input_bits]
+    /// * `target_gates_flat` - Flattened target gates [batch_size * num_clusters]
+    /// * `batch_size` - Number of examples
+    /// * `allow_override` - Whether to override non-EMPTY cells
+    ///
+    /// # Returns
+    /// Total cells modified across batch
+    fn train_batch(
+        &self,
+        py: Python<'_>,
+        input_bits_flat: Vec<bool>,
+        target_gates_flat: Vec<bool>,
+        batch_size: usize,
+        allow_override: bool,
+    ) -> usize {
+        py.allow_threads(|| {
+            self.inner.train_batch(&input_bits_flat, &target_gates_flat, batch_size, allow_override)
+        })
+    }
+
+    /// Reset all memory cells to EMPTY
+    fn reset(&self) {
+        self.inner.reset();
+    }
+
+    /// Get statistics about memory usage
+    ///
+    /// # Returns
+    /// (empty_count, false_count, true_count)
+    fn memory_stats(&self) -> (usize, usize, usize) {
+        self.inner.memory_stats()
+    }
+
+    /// Export memory state as bytes (for serialization)
+    fn export_memory(&self) -> Vec<u8> {
+        self.inner.export_memory()
+    }
+
+    /// Import memory state from bytes
+    fn import_memory(&self, data: Vec<u8>) -> PyResult<()> {
+        self.inner.import_memory(&data).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(e.to_string())
+        })
+    }
+
+    /// Get total number of gate neurons
+    fn total_neurons(&self) -> usize {
+        self.inner.total_neurons()
+    }
+
+    /// Get gating configuration
+    fn config(&self) -> (usize, usize, usize, usize, usize) {
+        let cfg = self.inner.config();
+        (cfg.num_clusters, cfg.neurons_per_gate, cfg.bits_per_neuron, cfg.total_input_bits, cfg.vote_threshold)
+    }
+
+    /// Compute binary gates on Metal GPU
+    ///
+    /// # Arguments
+    /// * `input_bits_flat` - Flattened input bits [batch_size * total_input_bits]
+    /// * `batch_size` - Number of examples in batch
+    ///
+    /// # Returns
+    /// Flattened gate values [batch_size * num_clusters] (0.0 or 1.0)
+    fn forward_batch_metal(&self, py: Python<'_>, input_bits_flat: Vec<bool>, batch_size: usize) -> PyResult<Vec<f32>> {
+        py.allow_threads(|| {
+            let evaluator_lock = get_cached_metal_gating_evaluator()
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+            let guard = evaluator_lock.lock().unwrap();
+            let evaluator = guard.as_ref()
+                .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Metal gating evaluator not initialized"))?;
+            evaluator.forward_batch(&self.inner, &input_bits_flat, batch_size)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
+        })
+    }
+
+    /// Compute binary gates with hybrid CPU+GPU
+    ///
+    /// Splits the batch between CPU (rayon) and GPU (Metal) for maximum throughput.
+    ///
+    /// # Arguments
+    /// * `input_bits_flat` - Flattened input bits [batch_size * total_input_bits]
+    /// * `batch_size` - Number of examples
+    /// * `cpu_fraction` - Fraction of batch to process on CPU (0.0-1.0, default 0.3)
+    ///
+    /// # Returns
+    /// Flattened gate values [batch_size * num_clusters] (0.0 or 1.0)
+    #[pyo3(signature = (input_bits_flat, batch_size, cpu_fraction=0.3))]
+    fn forward_batch_hybrid(&self, py: Python<'_>, input_bits_flat: Vec<bool>, batch_size: usize, cpu_fraction: f32) -> PyResult<Vec<f32>> {
+        py.allow_threads(|| {
+            let evaluator_lock = get_cached_metal_gating_evaluator()
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+            let guard = evaluator_lock.lock().unwrap();
+            let evaluator = guard.as_ref()
+                .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Metal gating evaluator not initialized"))?;
+            metal_gating::forward_batch_hybrid(&self.inner, evaluator, &input_bits_flat, batch_size, cpu_fraction)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
+        })
+    }
+}
+
+/// Check if Metal gating is available
+#[pyfunction]
+fn gating_metal_available() -> bool {
+    metal_gating::MetalGatingEvaluator::is_available()
+}
+
+/// Apply gates to cluster scores element-wise
+///
+/// Multiplies each cluster score by its gate value.
+///
+/// # Arguments
+/// * `scores` - [batch_size * num_clusters] cluster scores
+/// * `gates` - [batch_size * num_clusters] gate values (0.0 or 1.0)
+///
+/// # Returns
+/// Gated scores [batch_size * num_clusters]
+#[pyfunction]
+fn apply_gates(scores: Vec<f32>, gates: Vec<f32>) -> Vec<f32> {
+    gating::apply_gates(&scores, &gates)
+}
+
+/// Compute target gates from target cluster indices
+///
+/// Creates a boolean vector where only the target cluster is true for each example.
+/// Used for training gating from supervised targets.
+///
+/// # Arguments
+/// * `targets` - [batch_size] target cluster indices
+/// * `num_clusters` - Number of clusters (vocabulary size)
+///
+/// # Returns
+/// Flattened target gates [batch_size * num_clusters]
+#[pyfunction]
+fn compute_target_gates(targets: Vec<i64>, num_clusters: usize) -> Vec<bool> {
+    gating::compute_target_gates(&targets, num_clusters)
+}
+
+/// Compute target gates with neighbor expansion
+///
+/// Creates target gates where the target cluster and its neighbors are set to true.
+/// This allows gating to learn contextual relevance beyond just the exact target.
+///
+/// # Arguments
+/// * `targets` - [batch_size] target cluster indices
+/// * `num_clusters` - Number of clusters
+/// * `neighbor_clusters` - [batch_size * neighbors_per_example] neighbor indices
+/// * `neighbors_per_example` - Number of neighbors per example
+///
+/// # Returns
+/// Flattened target gates [batch_size * num_clusters]
+#[pyfunction]
+fn compute_target_gates_expanded(
+    targets: Vec<i64>,
+    num_clusters: usize,
+    neighbor_clusters: Vec<i64>,
+    neighbors_per_example: usize,
+) -> Vec<bool> {
+    gating::compute_target_gates_expanded(
+        &targets,
+        num_clusters,
+        Some(&neighbor_clusters),
+        neighbors_per_example,
+    )
+}
+
 /// Python module definition
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -3272,5 +3526,11 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(evaluate_genomes_parallel_hybrid, m)?)?;
     // Token cache for persistent token storage with subset rotation
     m.add_class::<TokenCacheWrapper>()?;
+    // RAM-based gating (weightless per-cluster gating with majority voting)
+    m.add_class::<RAMGatingWrapper>()?;
+    m.add_function(wrap_pyfunction!(apply_gates, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_target_gates, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_target_gates_expanded, m)?)?;
+    m.add_function(wrap_pyfunction!(gating_metal_available, m)?)?;
     Ok(())
 }

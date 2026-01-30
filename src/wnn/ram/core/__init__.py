@@ -324,6 +324,17 @@ from wnn.ram.core.RAMClusterLayer import RAMClusterLayer, bits_needed, MemoryBac
 from wnn.ram.core.TieredRAMClusterLayer import TieredRAMClusterLayer, TierConfig
 from wnn.ram.core.AdaptiveClusteredRAM import AdaptiveClusteredRAM, ConfigGroup
 
+# Gating mechanisms (Engram-inspired content-based filtering)
+from wnn.ram.core.gating import (
+	GatingModel,
+	RAMGating,
+	SoftRAMGating,
+	RustRAMGating,
+	create_gating,
+	compute_beneficial_gates,
+	gating_metal_available,
+)
+
 # Generalization components
 from wnn.ram.core.RAMGeneralization import (
 	BitLevelMapper,
@@ -476,6 +487,13 @@ __all__ = [
 	'AdaptiveClusteredRAM',
 	'ConfigGroup',
 	'bits_needed',
+	# Gating mechanisms (Engram-inspired)
+	'GatingModel',
+	'RAMGating',
+	'SoftRAMGating',
+	'RustRAMGating',
+	'create_gating',
+	'compute_beneficial_gates',
 	# Generalization
 	'BitLevelMapper',
 	'CompositionalMapper',
