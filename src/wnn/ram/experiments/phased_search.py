@@ -691,6 +691,58 @@ class PhasedSearchRunner:
 			k=1,
 		)
 
+	def _get_dashboard_phase_config(self, phase_index: int) -> Optional[dict]:
+		"""
+		Fetch the current config for a phase from the dashboard.
+
+		This enables dynamic modification of pending phases while a flow is running.
+		Users can edit, delete, or add phases via the dashboard UI.
+
+		Args:
+			phase_index: Index of the phase in the flow's experiments array
+
+		Returns:
+			Phase config dict if phase exists, None if deleted or dashboard unavailable
+		"""
+		if not self.dashboard_client or not self._flow_id:
+			return None
+
+		try:
+			flow = self.dashboard_client.get_flow(self._flow_id)
+			experiments = flow.get("config", {}).get("experiments", [])
+
+			if phase_index >= len(experiments):
+				return None  # Phase was deleted or doesn't exist
+
+			return experiments[phase_index]
+		except Exception as e:
+			self.log(f"Warning: Failed to fetch phase config from dashboard: {e}")
+			return None
+
+	def _get_additional_phases_from_dashboard(self, original_count: int) -> list[dict]:
+		"""
+		Check if any new phases were added to the flow via dashboard.
+
+		Args:
+			original_count: Number of phases originally configured
+
+		Returns:
+			List of new phase configs (empty if none added)
+		"""
+		if not self.dashboard_client or not self._flow_id:
+			return []
+
+		try:
+			flow = self.dashboard_client.get_flow(self._flow_id)
+			experiments = flow.get("config", {}).get("experiments", [])
+
+			if len(experiments) > original_count:
+				return experiments[original_count:]
+			return []
+		except Exception as e:
+			self.log(f"Warning: Failed to check for additional phases: {e}")
+			return []
+
 	def run_phase(
 		self,
 		phase_name: str,
@@ -1057,6 +1109,13 @@ class PhasedSearchRunner:
 					config={"phase_order": self.config.phase_order},
 				)
 
+				# Link experiment to flow
+				self.dashboard_client.link_experiment_to_flow(
+					flow_id=self._flow_id,
+					experiment_id=self._experiment_id,
+					sequence_order=0,
+				)
+
 				self.log(f"Dashboard: Created flow {self._flow_id}, experiment {self._experiment_id}")
 			except Exception as e:
 				self.log(f"Warning: Failed to register with dashboard: {e}")
@@ -1126,6 +1185,38 @@ class PhasedSearchRunner:
 				prev_result = completed_phases[idx]
 				continue
 
+			# =====================================================================
+			# Dynamic Config: Check dashboard for phase updates before each phase
+			# =====================================================================
+			dashboard_phase = self._get_dashboard_phase_config(idx)
+			if dashboard_phase is not None:
+				# Phase exists in dashboard - check for modifications
+				db_type = dashboard_phase.get("experiment_type", "ga")
+				db_opt_bits = dashboard_phase.get("optimize_bits", False)
+				db_opt_neurons = dashboard_phase.get("optimize_neurons", False)
+				db_opt_conns = dashboard_phase.get("optimize_connections", False)
+
+				# Check if config changed
+				new_strategy_type = OptimizerStrategyType.ARCHITECTURE_GA if db_type == "ga" else OptimizerStrategyType.ARCHITECTURE_TS
+				if (new_strategy_type != strategy_type or
+					db_opt_bits != opt_bits or
+					db_opt_neurons != opt_neurons or
+					db_opt_conns != opt_conns):
+					self.log(f"Dashboard: Phase {phase_key} config updated!")
+					self.log(f"  Old: {strategy_type.name}, bits={opt_bits}, neurons={opt_neurons}, conns={opt_conns}")
+					self.log(f"  New: {new_strategy_type.name}, bits={db_opt_bits}, neurons={db_opt_neurons}, conns={db_opt_conns}")
+					strategy_type = new_strategy_type
+					opt_bits = db_opt_bits
+					opt_neurons = db_opt_neurons
+					opt_conns = db_opt_conns
+					# Update phase_name to reflect change
+					opt_target = "Bits" if opt_bits else ("Neurons" if opt_neurons else "Connections")
+					phase_name = f"Phase {phase_key}: {'GA' if db_type == 'ga' else 'TS'} {opt_target}"
+			elif self.dashboard_client and self._flow_id:
+				# Dashboard is available but phase was deleted - skip it
+				self.log(f"Dashboard: Phase {phase_key} was deleted - skipping")
+				continue
+
 			# Determine initial genome/population
 			if idx == 0:
 				init_genome = seed_genome
@@ -1138,6 +1229,21 @@ class PhasedSearchRunner:
 				init_threshold = prev_result.final_threshold
 				init_fitness = prev_result.final_fitness if strategy_type == OptimizerStrategyType.ARCHITECTURE_TS else None
 
+			# Notify dashboard that phase is starting
+			dashboard_phase_id = None
+			if self.dashboard_client and self._experiment_id:
+				try:
+					# Build phase_type string (e.g., "ga_neurons", "ts_bits")
+					opt_target = "neurons" if opt_neurons else ("bits" if opt_bits else "connections")
+					phase_type_str = f"{'ga' if strategy_type == OptimizerStrategyType.ARCHITECTURE_GA else 'ts'}_{opt_target}"
+					dashboard_phase_id = self.dashboard_client.phase_started(
+						experiment_id=self._experiment_id,
+						name=phase_name,
+						phase_type=phase_type_str,
+					)
+				except Exception as e:
+					self.log(f"Warning: Failed to notify dashboard of phase start: {e}")
+
 			phase_result = self.run_phase(
 				phase_name=phase_name,
 				strategy_type=strategy_type,
@@ -1149,6 +1255,13 @@ class PhasedSearchRunner:
 				initial_population=init_population,
 				initial_threshold=init_threshold,
 			)
+
+			# Notify dashboard that phase completed
+			if self.dashboard_client and dashboard_phase_id:
+				try:
+					self.dashboard_client.phase_completed(dashboard_phase_id)
+				except Exception as e:
+					self.log(f"Warning: Failed to notify dashboard of phase completion: {e}")
 
 			# Store result in dict (use phase1/2/3 naming for backwards compat)
 			phase_num = (idx // 2) + 1
@@ -1168,6 +1281,83 @@ class PhasedSearchRunner:
 			phase_metrics_list.append(phase_metrics)
 
 			# Print cumulative comparison table
+			self.print_phase_comparison(phase_metrics_list)
+
+			self.save_checkpoint(phase_key, phase_result)
+			prev_result = phase_result
+
+		# =====================================================================
+		# Check for additional phases added via dashboard
+		# =====================================================================
+		original_phase_count = len(phase_specs)
+		additional_phases = self._get_additional_phases_from_dashboard(original_phase_count)
+
+		for add_idx, add_phase in enumerate(additional_phases):
+			phase_idx = original_phase_count + add_idx
+			phase_key = f"extra_{add_idx + 1}"
+
+			db_type = add_phase.get("experiment_type", "ga")
+			opt_bits = add_phase.get("optimize_bits", False)
+			opt_neurons = add_phase.get("optimize_neurons", False)
+			opt_conns = add_phase.get("optimize_connections", False)
+
+			strategy_type = OptimizerStrategyType.ARCHITECTURE_GA if db_type == "ga" else OptimizerStrategyType.ARCHITECTURE_TS
+			opt_target = "Bits" if opt_bits else ("Neurons" if opt_neurons else "Connections")
+			phase_name = add_phase.get("name", f"Extra Phase {add_idx + 1}: {'GA' if db_type == 'ga' else 'TS'} {opt_target}")
+
+			self.log(f"Dashboard: Running additional phase {phase_key}: {phase_name}")
+
+			# Notify dashboard that phase is starting
+			dashboard_phase_id = None
+			if self.dashboard_client and self._experiment_id:
+				try:
+					opt_target_lower = "neurons" if opt_neurons else ("bits" if opt_bits else "connections")
+					phase_type_str = f"{db_type}_{opt_target_lower}"
+					dashboard_phase_id = self.dashboard_client.phase_started(
+						experiment_id=self._experiment_id,
+						name=phase_name,
+						phase_type=phase_type_str,
+					)
+				except Exception as e:
+					self.log(f"Warning: Failed to notify dashboard of phase start: {e}")
+
+			init_genome = prev_result.best_genome if prev_result else seed_genome
+			init_population = prev_result.final_population if prev_result else seed_population
+			init_threshold = prev_result.final_threshold if prev_result else seed_threshold
+			init_fitness = prev_result.final_fitness if prev_result and strategy_type == OptimizerStrategyType.ARCHITECTURE_TS else None
+
+			phase_result = self.run_phase(
+				phase_name=phase_name,
+				strategy_type=strategy_type,
+				optimize_bits=opt_bits,
+				optimize_neurons=opt_neurons,
+				optimize_connections=opt_conns,
+				initial_genome=init_genome,
+				initial_fitness=init_fitness,
+				initial_population=init_population,
+				initial_threshold=init_threshold,
+			)
+
+			# Notify dashboard that phase completed
+			if self.dashboard_client and dashboard_phase_id:
+				try:
+					self.dashboard_client.phase_completed(dashboard_phase_id)
+				except Exception as e:
+					self.log(f"Warning: Failed to notify dashboard of phase completion: {e}")
+
+			results[f"extra_{add_idx + 1}"] = {
+				"fitness": phase_result.final_fitness,
+				"accuracy": phase_result.final_accuracy,
+				"iterations": phase_result.iterations_run,
+			}
+
+			completed_phases.append(phase_result)
+
+			# Evaluate and add to metrics
+			self.log("")
+			self.log(f"Evaluating {phase_name} population on full validation...")
+			phase_metrics = self.get_phase_metrics(phase_result, k=10)
+			phase_metrics_list.append(phase_metrics)
 			self.print_phase_comparison(phase_metrics_list)
 
 			self.save_checkpoint(phase_key, phase_result)

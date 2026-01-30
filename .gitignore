@@ -268,3 +268,7 @@ Thumbs.db
 *.out
 checkpoints/
 results_*.json
+
+# Dashboard runtime files
+dashboard/*.db
+dashboard/frontend/.svelte-kit/

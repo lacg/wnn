@@ -15,8 +15,11 @@ use crate::models::*;
 static TIMESTAMP_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(\d{2}:\d{2}:\d{2}) \| (.*)$").unwrap());
 
+// Phase start lines end with "Only" or "(refine)" - not result/evaluation lines
+// e.g., "Phase 1a: GA Neurons Only" or "Phase 1b: TS Neurons Only (refine)"
+// Excludes: "Phase 1a: GA Neurons Only Result:" or table lines with "│"
 static PHASE_START_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"Phase (\d+[ab]): (GA|TS) (\w+)(?: Only)?").unwrap());
+    LazyLock::new(|| Regex::new(r"^Phase (\d+[ab]): (GA|TS) (\w+) Only(?: \(refine\))?$").unwrap());
 
 static GA_ITER_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
@@ -43,6 +46,17 @@ static HEALTH_CHECK_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"Top-(\d+) mean \(full\): CE=([0-9.]+), Acc=([0-9.]+)%").unwrap()
 });
 
+// Phase summary table row: "Phase 1a: GA Neurons Only │ top-10 mean │ 10.4041 │ 32993.5 │ 0.10%"
+// or continuation:         "                         │ best CE     │ 10.4007 │ 32882.9 │ 0.11%"
+static PHASE_SUMMARY_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(Phase \d+[ab]: .+?|Baseline|\s+)\s*│\s*(top-\d+ mean|best CE|best Acc)\s*│\s*([0-9.]+)\s*│\s*([0-9.]+)\s*│\s*([0-9.]+)%").unwrap()
+});
+
+// Final results marker
+static FINAL_RESULTS_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"FINAL RESULTS").unwrap()
+});
+
 /// Parsed log event
 #[derive(Debug)]
 pub enum LogEvent {
@@ -51,6 +65,10 @@ pub enum LogEvent {
     TsIteration { iter: i32, total: i32, best_harmonic_ce: f64, best_harmonic_acc: f64, best_ce: f64, best_acc: f64, elapsed: f64 },
     PhaseResult { ce: f64, memory: f64, accuracy: f64, improvement: f64 },
     HealthCheck { k: i32, ce: f64, accuracy: f64 },
+    /// Final results marker - indicates summary table follows
+    FinalResults,
+    /// Phase summary row from comparison table
+    PhaseSummaryRow { phase_name: String, metric_type: String, ce: f64, ppl: f64, accuracy: f64 },
     Unknown(String),
 }
 
@@ -106,6 +124,17 @@ pub fn parse_line(line: &str) -> Option<(NaiveTime, LogEvent)> {
             k: caps.get(1)?.as_str().parse().ok()?,
             ce: caps.get(2)?.as_str().parse().ok()?,
             accuracy: caps.get(3)?.as_str().parse().ok()?,
+        }
+    } else if FINAL_RESULTS_RE.is_match(content) {
+        LogEvent::FinalResults
+    } else if let Some(caps) = PHASE_SUMMARY_RE.captures(content) {
+        let phase_name = caps.get(1)?.as_str().trim().to_string();
+        LogEvent::PhaseSummaryRow {
+            phase_name: if phase_name.is_empty() { String::new() } else { phase_name },
+            metric_type: caps.get(2)?.as_str().to_string(),
+            ce: caps.get(3)?.as_str().parse().ok()?,
+            ppl: caps.get(4)?.as_str().parse().ok()?,
+            accuracy: caps.get(5)?.as_str().parse().ok()?,
         }
     } else {
         LogEvent::Unknown(content.to_string())

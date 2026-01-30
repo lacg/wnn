@@ -8,7 +8,8 @@
     improvement,
     currentIteration,
     phaseProgress,
-    latestHealthCheck
+    latestHealthCheck,
+    phaseSummary
   } from '$lib/stores';
 
   function formatCE(ce: number): string {
@@ -243,6 +244,51 @@
       </div>
     </div>
   {/if}
+
+  <!-- Final Phase Summary -->
+  {#if $phaseSummary}
+    {@const groupedRows = $phaseSummary.rows.reduce((acc, row) => {
+      if (!acc[row.phase_name]) acc[row.phase_name] = [];
+      acc[row.phase_name].push(row);
+      return acc;
+    }, {} as Record<string, typeof $phaseSummary.rows>)}
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Final Phase Comparison (Full Validation)</span>
+        <span class="status-badge status-completed">Complete</span>
+      </div>
+      <div class="summary-table-scroll">
+        <table class="summary-table">
+          <thead>
+            <tr>
+              <th>Phase</th>
+              <th>Metric</th>
+              <th class="num">CE</th>
+              <th class="num">PPL</th>
+              <th class="num">Accuracy</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each Object.entries(groupedRows) as [phaseName, rows], phaseIdx}
+              {#each rows as row, rowIdx}
+                <tr class:phase-first={rowIdx === 0} class:baseline={phaseName === 'Baseline'}>
+                  {#if rowIdx === 0}
+                    <td rowspan={rows.length} class="phase-name-cell">
+                      {phaseName === 'Baseline' ? '📊 Baseline' : phaseName}
+                    </td>
+                  {/if}
+                  <td class="metric-type">{row.metric_type}</td>
+                  <td class="num">{row.ce.toFixed(4)}</td>
+                  <td class="num">{row.ppl.toFixed(1)}</td>
+                  <td class="num">{row.accuracy.toFixed(2)}%</td>
+                </tr>
+              {/each}
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -418,5 +464,63 @@
   .status-completed {
     background: var(--accent-green);
     color: white;
+  }
+
+  /* Phase Summary Table */
+  .summary-table-scroll {
+    overflow-x: auto;
+  }
+
+  .summary-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+  }
+
+  .summary-table th {
+    text-align: left;
+    padding: 0.75rem 0.5rem;
+    border-bottom: 2px solid var(--border);
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    font-size: 0.75rem;
+  }
+
+  .summary-table th.num {
+    text-align: right;
+  }
+
+  .summary-table td {
+    padding: 0.5rem 0.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .summary-table td.num {
+    text-align: right;
+    font-family: monospace;
+  }
+
+  .summary-table tr.phase-first td {
+    border-top: 1px solid var(--border);
+  }
+
+  .summary-table tr.baseline {
+    background: rgba(59, 130, 246, 0.05);
+  }
+
+  .summary-table tr.baseline td {
+    font-weight: 500;
+  }
+
+  .phase-name-cell {
+    font-weight: 600;
+    vertical-align: top;
+    background: var(--bg-secondary);
+  }
+
+  .metric-type {
+    color: var(--text-secondary);
+    font-size: 0.8125rem;
   }
 </style>

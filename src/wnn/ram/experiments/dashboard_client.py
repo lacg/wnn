@@ -325,6 +325,77 @@ class DashboardClient:
 		params = {"limit": limit, "offset": offset}
 		return self._request("GET", "/api/experiments", params=params)
 
+	def link_experiment_to_flow(
+		self,
+		flow_id: int,
+		experiment_id: int,
+		sequence_order: int = 0,
+	) -> None:
+		"""
+		Link an experiment to a flow.
+
+		Args:
+			flow_id: Flow ID
+			experiment_id: Experiment ID to link
+			sequence_order: Order of experiment in the flow (default 0)
+		"""
+		data = {
+			"experiment_id": experiment_id,
+			"sequence_order": sequence_order,
+		}
+		self._request("POST", f"/api/flows/{flow_id}/experiments", json_data=data)
+		self._logger(f"Linked experiment {experiment_id} to flow {flow_id}")
+
+	# =========================================================================
+	# Phase methods
+	# =========================================================================
+
+	def phase_started(
+		self,
+		experiment_id: int,
+		name: str,
+		phase_type: str,
+	) -> int:
+		"""
+		Notify dashboard that a phase has started.
+
+		Args:
+			experiment_id: Parent experiment ID
+			name: Phase name (e.g., "Phase 1a: GA Neurons")
+			phase_type: Phase type (e.g., "ga_neurons", "ts_bits")
+
+		Returns:
+			Phase ID
+		"""
+		data = {
+			"name": name,
+			"phase_type": phase_type,
+		}
+		result = self._request("POST", f"/api/experiments/{experiment_id}/phases", json_data=data)
+		phase_id = result["id"]
+		self._logger(f"Phase started: {name} (id={phase_id})")
+		return phase_id
+
+	def phase_completed(
+		self,
+		phase_id: int,
+		status: str = "completed",
+	) -> None:
+		"""
+		Notify dashboard that a phase has completed.
+
+		Args:
+			phase_id: Phase ID
+			status: Final status ("completed" or "skipped")
+		"""
+		from datetime import datetime, timezone
+		data = {
+			"status": status,
+			"ended_at": datetime.now(timezone.utc).isoformat(),
+		}
+		self._request("PATCH", f"/api/phases/{phase_id}", json_data=data)
+		self._logger(f"Phase {phase_id} {status}")
+
 	# =========================================================================
 	# Checkpoint methods
 	# =========================================================================

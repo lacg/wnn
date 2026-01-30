@@ -29,6 +29,11 @@ struct ParserState {
     current_phase_id: i64,
     iteration_id: i64,
     current_phase_name: String,
+    current_phase_type: PhaseType,
+    /// Collecting final summary rows
+    in_final_results: bool,
+    summary_rows: Vec<PhaseSummaryRow>,
+    last_phase_name: String,
 }
 
 impl ParserState {
@@ -37,6 +42,10 @@ impl ParserState {
             current_phase_id: 0,
             iteration_id: 0,
             current_phase_name: String::new(),
+            current_phase_type: PhaseType::GaNeurons,
+            in_final_results: false,
+            summary_rows: Vec::new(),
+            last_phase_name: String::new(),
         }
     }
 }
@@ -116,7 +125,8 @@ impl LogWatcher {
                         Ok(_) => {
                             lines_parsed += 1;
                             let line = line_buf.trim_end();
-                            if let Some(msg) = process_line(line, &mut state) {
+                            let messages = process_line(line, &mut state);
+                            for msg in messages {
                                 events_found += 1;
                                 // Update shared dashboard state
                                 {
@@ -154,7 +164,8 @@ impl LogWatcher {
                         Ok(0) => break,
                         Ok(_) => {
                             let line = line_buf.trim_end();
-                            if let Some(msg) = process_line(line, &mut state) {
+                            let messages = process_line(line, &mut state);
+                            for msg in messages {
                                 // Update shared dashboard state
                                 {
                                     let mut dash = dashboard.write().await;
@@ -178,14 +189,43 @@ impl LogWatcher {
     }
 }
 
-/// Process a single log line and return a WebSocket message if relevant
-fn process_line(line: &str, state: &mut ParserState) -> Option<WsMessage> {
-    let (_time, event) = parse_line(line)?;
+/// Process a single log line and return WebSocket messages if relevant
+fn process_line(line: &str, state: &mut ParserState) -> Vec<WsMessage> {
+    let Some((_time, event)) = parse_line(line) else {
+        return vec![];
+    };
 
     match event {
         LogEvent::PhaseStart { name, phase_type } => {
+            let mut messages = Vec::new();
+
+            // Complete the previous phase if there was one
+            if state.current_phase_id > 0 {
+                let completed_phase = Phase {
+                    id: state.current_phase_id,
+                    experiment_id: 1,
+                    name: state.current_phase_name.clone(),
+                    phase_type: state.current_phase_type.clone(),
+                    started_at: chrono::Utc::now(), // approximate
+                    ended_at: Some(chrono::Utc::now()),
+                    status: PhaseStatus::Completed,
+                };
+                // Create a placeholder result (actual metrics not available from log parsing)
+                let result = PhaseResult {
+                    id: state.current_phase_id,
+                    phase_id: state.current_phase_id,
+                    metric_type: MetricType::TopKMean,
+                    ce: 0.0,
+                    accuracy: 0.0,
+                    memory_bytes: 0,
+                    improvement_pct: 0.0,
+                };
+                messages.push(WsMessage::PhaseCompleted { phase: completed_phase, result });
+            }
+
             state.current_phase_id += 1;
             state.current_phase_name = name.clone();
+            state.current_phase_type = phase_type.clone();
             state.iteration_id = 0;
 
             let phase = Phase {
@@ -197,7 +237,8 @@ fn process_line(line: &str, state: &mut ParserState) -> Option<WsMessage> {
                 ended_at: None,
                 status: PhaseStatus::Running,
             };
-            Some(WsMessage::PhaseStarted(phase))
+            messages.push(WsMessage::PhaseStarted(phase));
+            messages
         }
         LogEvent::GaIteration { generation, best, avg, elapsed, .. } => {
             state.iteration_id += 1;
@@ -211,7 +252,7 @@ fn process_line(line: &str, state: &mut ParserState) -> Option<WsMessage> {
                 elapsed_secs: elapsed,
                 timestamp: chrono::Utc::now(),
             };
-            Some(WsMessage::IterationUpdate(iteration))
+            vec![WsMessage::IterationUpdate(iteration)]
         }
         LogEvent::TsIteration { iter, best_harmonic_ce, best_harmonic_acc, best_ce, elapsed, .. } => {
             state.iteration_id += 1;
@@ -225,7 +266,7 @@ fn process_line(line: &str, state: &mut ParserState) -> Option<WsMessage> {
                 elapsed_secs: elapsed,
                 timestamp: chrono::Utc::now(),
             };
-            Some(WsMessage::IterationUpdate(iteration))
+            vec![WsMessage::IterationUpdate(iteration)]
         }
         LogEvent::HealthCheck { k, ce, accuracy } => {
             let health = HealthCheck {
@@ -240,8 +281,47 @@ fn process_line(line: &str, state: &mut ParserState) -> Option<WsMessage> {
                 k,
                 timestamp: chrono::Utc::now(),
             };
-            Some(WsMessage::HealthCheck(health))
+            vec![WsMessage::HealthCheck(health)]
         }
-        _ => None,
+        LogEvent::FinalResults => {
+            // Start collecting summary rows
+            state.in_final_results = true;
+            state.summary_rows.clear();
+            state.last_phase_name.clear();
+            vec![]
+        }
+        LogEvent::PhaseSummaryRow { phase_name, metric_type, ce, ppl, accuracy } => {
+            if state.in_final_results {
+                // Track the phase name for continuation rows
+                let actual_phase_name = if phase_name.is_empty() {
+                    state.last_phase_name.clone()
+                } else {
+                    state.last_phase_name = phase_name.clone();
+                    phase_name
+                };
+
+                state.summary_rows.push(PhaseSummaryRow {
+                    phase_name: actual_phase_name,
+                    metric_type,
+                    ce,
+                    ppl,
+                    accuracy,
+                });
+
+                // Check if we have all rows (Baseline + 6 phases × 3 metrics = 21 rows)
+                // Send summary when we get enough rows
+                if state.summary_rows.len() >= 21 {
+                    let summary = PhaseSummary {
+                        rows: state.summary_rows.clone(),
+                        timestamp: chrono::Utc::now(),
+                    };
+                    state.in_final_results = false;
+                    state.summary_rows.clear();
+                    return vec![WsMessage::PhaseSummary(summary)];
+                }
+            }
+            vec![]
+        }
+        _ => vec![],
     }
 }

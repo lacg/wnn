@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import type { Experiment } from '$lib/types';
+  import { formatDate } from '$lib/dateFormat';
 
   let experiments: Experiment[] = [];
   let loading = true;
@@ -26,17 +27,6 @@
       case 'cancelled': return 'var(--text-tertiary)';
       default: return 'var(--text-secondary)';
     }
-  }
-
-  function formatDate(dateStr: string): string {
-    const date = new Date(dateStr);
-    return date.toLocaleString(undefined, {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
   }
 
   function formatDuration(start: string, end: string | null): string {

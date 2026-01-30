@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { flows } from '$lib/stores';
   import type { Flow } from '$lib/types';
+  import { formatDate } from '$lib/dateFormat';
 
   let loading = true;
   let error: string | null = null;
@@ -29,17 +30,6 @@
     }
   }
 
-  function formatDate(dateStr: string | null): string {
-    if (!dateStr) return '-';
-    const date = new Date(dateStr);
-    return date.toLocaleString(undefined, {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  }
 </script>
 
 <div class="container">
