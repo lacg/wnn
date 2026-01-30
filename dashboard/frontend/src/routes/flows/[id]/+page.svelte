@@ -89,9 +89,14 @@
         editConfig.optimize_tier0_only = p.optimize_tier0_only ?? false;
         editConfig.phase_order = p.phase_order ?? 'neurons_first';
         if (p.tier_config) {
-          editConfig.tier_config = p.tier_config
-            .map((t: number[]) => `${t[0] ?? 'rest'},${t[1]},${t[2]}`)
-            .join(';');
+          // Handle both string and array formats
+          if (typeof p.tier_config === 'string') {
+            editConfig.tier_config = p.tier_config;
+          } else {
+            editConfig.tier_config = p.tier_config
+              .map((t: number[]) => `${t[0] ?? 'rest'},${t[1]},${t[2]}`)
+              .join(';');
+          }
         }
       }
     } catch (e) {
