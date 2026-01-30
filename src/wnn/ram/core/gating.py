@@ -788,6 +788,32 @@ class RustRAMGating(GatingModel):
         # Convert back to tensor
         return torch.tensor(gates_flat, device=device).view(batch_size, self._num_clusters)
 
+    def forward_auto(self, input_bits: Tensor, crossover_batch: int = 1000) -> Tensor:
+        """
+        Automatically select best compute mode based on batch size.
+
+        Based on benchmarks (5000 clusters, M4 Max):
+            - Batch < 1000: CPU is faster (kernel launch overhead dominates)
+            - Batch >= 1000: Hybrid/Metal is faster (GPU parallelism pays off)
+
+        Args:
+            input_bits: [B, total_input_bits] boolean tensor
+            crossover_batch: Batch size threshold for switching to Hybrid
+                            Default 1000 based on benchmarks
+
+        Returns:
+            [B, num_clusters] float tensor with values in {0.0, 1.0}
+        """
+        if input_bits.ndim == 1:
+            input_bits = input_bits.unsqueeze(0)
+
+        batch_size = input_bits.shape[0]
+
+        if batch_size >= crossover_batch and self.metal_available():
+            return self.forward_hybrid(input_bits)
+        else:
+            return self.forward(input_bits)
+
     def train_step(
         self,
         input_bits: Tensor,

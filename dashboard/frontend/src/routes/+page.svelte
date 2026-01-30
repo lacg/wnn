@@ -108,6 +108,8 @@
       {@const accMin = accData.length > 0 ? Math.min(...accData.map(p => p.acc)) : 0}
       {@const accMax = accData.length > 0 ? Math.max(...accData.map(p => p.acc)) : 1}
       {@const accRange = accMax - accMin || 0.001}
+      <!-- Debug: Log to console when values seem wrong -->
+      {@const _ = (accMax === 0 && accData.length > 0) ? console.warn('[Chart Debug] accMax=0 but accData has', accData.length, 'entries. First 5:', accData.slice(0, 5).map(d => d.acc)) : null}
       {@const padding = { top: 20, right: 60, bottom: 30, left: 60 }}
       {@const width = 800}
       {@const height = 220}
@@ -264,6 +266,32 @@
       </div>
     {/if}
   </div>
+
+  <!-- Debug: Data Inspection (collapse by default) -->
+  <details class="card debug-panel">
+    <summary class="card-header" style="cursor: pointer;">
+      <span class="card-title">🔍 Debug: Data Inspection</span>
+    </summary>
+    <div style="padding: 1rem; font-family: monospace; font-size: 0.75rem;">
+      <p><strong>ceHistory:</strong> {$ceHistory.length} entries</p>
+      <p><strong>iterations:</strong> {$iterations.length} entries</p>
+      {#if $ceHistory.length > 0}
+        {@const accValues = $ceHistory.map(h => h.acc).filter(a => a !== null && a !== undefined)}
+        <p><strong>Accuracy data:</strong> {accValues.length} entries with values, {$ceHistory.length - accValues.length} null</p>
+        {#if accValues.length > 0}
+          <p><strong>Acc range:</strong> [{Math.min(...accValues).toFixed(4)}%, {Math.max(...accValues).toFixed(4)}%]</p>
+        {/if}
+        <p><strong>Last 5 ceHistory entries:</strong></p>
+        <pre style="overflow-x: auto; background: var(--bg-card); padding: 0.5rem; border-radius: 4px;">{JSON.stringify($ceHistory.slice(-5), null, 2)}</pre>
+      {/if}
+      {#if $iterations.length > 0}
+        <p><strong>Last 5 iterations (best_accuracy):</strong></p>
+        <pre style="overflow-x: auto; background: var(--bg-card); padding: 0.5rem; border-radius: 4px;">{JSON.stringify($iterations.slice(-5).map(i => ({ iter: i.iteration_num, acc: i.best_accuracy })), null, 2)}</pre>
+      {/if}
+      <p><strong>bestMetrics:</strong></p>
+      <pre style="overflow-x: auto; background: var(--bg-card); padding: 0.5rem; border-radius: 4px;">{JSON.stringify($bestMetrics, null, 2)}</pre>
+    </div>
+  </details>
 
   <!-- Health Check -->
   {#if $latestHealthCheck}
