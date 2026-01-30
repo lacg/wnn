@@ -15,6 +15,12 @@
   let tier0Only = true;
   let seedCheckpointId: number | null = null;
 
+  // Gating configuration
+  let enableGating = false;
+  let gatingNeurons = 8;
+  let gatingBits = 12;
+  let gatingThreshold = 0.5;
+
   let checkpoints: Checkpoint[] = [];
   let loading = false;
   let error: string | null = null;
@@ -60,7 +66,12 @@
               patience,
               context_size: contextSize,
               tier_config: tierConfig || null,
-              tier0_only: tier0Only
+              tier0_only: tier0Only,
+              // Gating configuration
+              enable_gating: enableGating,
+              gating_neurons: gatingNeurons,
+              gating_bits: gatingBits,
+              gating_threshold: gatingThreshold
             }
           },
           seed_checkpoint_id: seedCheckpointId
@@ -186,6 +197,43 @@
         />
         <span class="field-hint">Format: clusters,neurons,bits;... (use "rest" for remaining vocab)</span>
       </div>
+    </div>
+
+    <div class="form-section">
+      <h2>Gating (Optional)</h2>
+      <p class="section-hint">
+        RAM-based gating learns to filter cluster predictions. Trained after main phases complete.
+      </p>
+
+      <div class="form-group">
+        <label for="enableGating">
+          <input type="checkbox" id="enableGating" bind:checked={enableGating} />
+          Enable Gating Layer
+        </label>
+        <span class="field-hint">Adds a Stage 2 gating training after RAM optimization</span>
+      </div>
+
+      {#if enableGating}
+        <div class="form-row">
+          <div class="form-group">
+            <label for="gatingNeurons">Neurons per Gate</label>
+            <input type="number" id="gatingNeurons" bind:value={gatingNeurons} min="1" max="32" />
+            <span class="field-hint">More neurons = more robust voting (default: 8)</span>
+          </div>
+
+          <div class="form-group">
+            <label for="gatingBits">Bits per Neuron</label>
+            <input type="number" id="gatingBits" bind:value={gatingBits} min="4" max="16" />
+            <span class="field-hint">Address space for gating neurons (default: 12)</span>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="gatingThreshold">Voting Threshold</label>
+          <input type="number" id="gatingThreshold" bind:value={gatingThreshold} min="0.1" max="1.0" step="0.1" />
+          <span class="field-hint">Fraction of neurons that must fire for gate=1 (default: 0.5)</span>
+        </div>
+      {/if}
     </div>
 
     <div class="form-section">

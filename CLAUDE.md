@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Always use context7 when I need code generation, setup or configuration steps, or library/API documentation. This means you should automatically use the Context7 MCP tools to resolve library id and get library docs without me having to explicitly ask.
 
 ### Commit and Push
-After any new features, or test scripts, successfully compiled, verified and quickly tested, commit and push to the repository with a proper message.
+**ALWAYS commit and push after making changes.** After any new features, bug fixes, or test scripts that have been successfully compiled, verified, and quickly tested, immediately commit and push to the repository with a proper message. Do not wait for the user to ask - this should be automatic.
 
 ## Project Overview
 

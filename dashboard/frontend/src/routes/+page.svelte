@@ -93,19 +93,31 @@
   <!-- CE & Accuracy History Chart -->
   <div class="card">
     <div class="card-header">
-      <span class="card-title">Trend ({$ceHistory.length} iterations)</span>
+      <span class="card-title">Best So Far ({$ceHistory.length} iterations)</span>
       <div class="chart-legend">
-        <span class="legend-item"><span class="legend-dot ce"></span> CE (↓ better)</span>
-        <span class="legend-item"><span class="legend-dot acc"></span> Accuracy (↑ better)</span>
+        <span class="legend-item"><span class="legend-dot ce"></span> Min CE (↓)</span>
+        <span class="legend-item"><span class="legend-dot acc"></span> Max Acc (↑)</span>
       </div>
     </div>
     {#if $ceHistory.length > 0}
       {@const chartData = $ceHistory}
-      {@const ceMin = Math.min(...chartData.map(p => p.ce))}
+      <!-- Compute cumulative min(CE) and max(Acc) for smooth monotonic curves -->
+      {@const cumulativeData = (() => {
+        let minCE = Infinity;
+        let maxAcc = 0;
+        return chartData.map(p => {
+          minCE = Math.min(minCE, p.ce);
+          if (p.acc !== null && p.acc !== undefined) {
+            maxAcc = Math.max(maxAcc, p.acc);
+          }
+          return { iter: p.iter, ce: minCE, acc: maxAcc > 0 ? maxAcc : null };
+        });
+      })()}
+      {@const ceMin = Math.min(...cumulativeData.map(p => p.ce))}
       {@const ceMax = Math.max(...chartData.map(p => p.ce))}
       {@const ceRange = ceMax - ceMin || 0.001}
-      {@const accData = chartData.filter(p => p.acc !== null && p.acc !== undefined).map(p => ({ ...p, acc: p.acc ?? 0 }))}
-      {@const accMin = accData.length > 0 ? Math.min(...accData.map(p => p.acc)) : 0}
+      {@const accData = cumulativeData.filter(p => p.acc !== null && p.acc !== undefined).map(p => ({ ...p, acc: p.acc ?? 0 }))}
+      {@const accMin = 0}
       {@const accMax = accData.length > 0 ? Math.max(...accData.map(p => p.acc)) : 1}
       {@const accRange = accMax - accMin || 0.001}
       <!-- Debug: Log to console when values seem wrong -->
@@ -145,49 +157,49 @@
           <line x1={padding.left} y1={padding.top + chartHeight / 2} x2={padding.left + chartWidth} y2={padding.top + chartHeight / 2} stroke="var(--border)" stroke-dasharray="4" />
           <line x1={padding.left} y1={padding.top + chartHeight} x2={padding.left + chartWidth} y2={padding.top + chartHeight} stroke="var(--border)" stroke-dasharray="4" />
 
-          <!-- CE line (blue) -->
+          <!-- CE line (blue) - uses cumulative min for smooth descent -->
           <polyline
             fill="none"
             stroke="var(--accent-blue)"
             stroke-width="2"
-            points={chartData.map((p, i) => {
-              const x = padding.left + (i / Math.max(chartData.length - 1, 1)) * chartWidth;
+            points={cumulativeData.map((p, i) => {
+              const x = padding.left + (i / Math.max(cumulativeData.length - 1, 1)) * chartWidth;
               const y = padding.top + chartHeight - ((p.ce - ceMin) / ceRange) * chartHeight;
               return `${x},${y}`;
             }).join(' ')}
           />
 
-          <!-- Accuracy line (green) -->
+          <!-- Accuracy line (green) - uses cumulative max for smooth ascent -->
           {#if accData.length > 0}
             <polyline
               fill="none"
               stroke="var(--accent-green)"
               stroke-width="2"
               stroke-opacity="0.8"
-              points={chartData.map((p, i) => {
+              points={cumulativeData.map((p, i) => {
                 if (p.acc === null || p.acc === undefined) return null;
-                const x = padding.left + (i / Math.max(chartData.length - 1, 1)) * chartWidth;
+                const x = padding.left + (i / Math.max(cumulativeData.length - 1, 1)) * chartWidth;
                 const y = padding.top + chartHeight - ((p.acc - accMin) / accRange) * chartHeight;
                 return `${x},${y}`;
               }).filter(Boolean).join(' ')}
             />
           {/if}
 
-          <!-- Best CE marker (circle at lowest CE point) -->
-          {#each [chartData.findIndex(p => p.ce === ceMin)] as bestIdx}
+          <!-- Best CE marker (circle where min CE was first achieved) -->
+          {#each [cumulativeData.findIndex(p => p.ce === ceMin)] as bestIdx}
             {#if bestIdx >= 0}
-              {@const bestX = padding.left + (bestIdx / Math.max(chartData.length - 1, 1)) * chartWidth}
+              {@const bestX = padding.left + (bestIdx / Math.max(cumulativeData.length - 1, 1)) * chartWidth}
               {@const bestY = padding.top + chartHeight}
               <circle cx={bestX} cy={bestY} r="5" fill="var(--accent-blue)" />
               <text x={bestX} y={bestY - 8} text-anchor="middle" class="best-label" fill="var(--accent-blue)">CE: {ceMin.toFixed(4)}</text>
             {/if}
           {/each}
 
-          <!-- Best Accuracy marker (circle at highest acc point) -->
+          <!-- Best Accuracy marker (circle where max acc was first achieved) -->
           {#if accData.length > 0}
-            {#each [chartData.findIndex(p => p.acc === accMax)] as bestAccIdx}
+            {#each [cumulativeData.findIndex(p => p.acc === accMax)] as bestAccIdx}
               {#if bestAccIdx >= 0}
-                {@const bestX = padding.left + (bestAccIdx / Math.max(chartData.length - 1, 1)) * chartWidth}
+                {@const bestX = padding.left + (bestAccIdx / Math.max(cumulativeData.length - 1, 1)) * chartWidth}
                 {@const bestY = padding.top}
                 <circle cx={bestX} cy={bestY} r="5" fill="var(--accent-green)" />
                 <text x={bestX} y={bestY + 15} text-anchor="middle" class="best-label" fill="var(--accent-green)">Acc: {accMax.toFixed(2)}%</text>
