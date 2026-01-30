@@ -308,11 +308,30 @@
 
   function getStatusColor(status: string): string {
     switch (status) {
+      case 'queued': return 'var(--accent-yellow, #f59e0b)';
       case 'running': return 'var(--accent-blue)';
       case 'completed': return 'var(--accent-green)';
       case 'failed': return 'var(--accent-red)';
       case 'cancelled': return 'var(--text-tertiary)';
       default: return 'var(--text-secondary)';
+    }
+  }
+
+  async function queueFlow() {
+    if (!flow) return;
+    try {
+      const response = await fetch(`/api/flows/${flow.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'queued' })
+      });
+      if (response.ok) {
+        await loadFlow();
+      } else {
+        error = 'Failed to queue flow';
+      }
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Unknown error';
     }
   }
 
@@ -438,9 +457,15 @@
       </div>
       <div class="header-actions">
         {#if !editMode && flow.status === 'pending'}
+          <button class="btn btn-primary" on:click={queueFlow}>
+            Start
+          </button>
           <button class="btn btn-secondary" on:click={() => editMode = true}>
             Edit Config
           </button>
+        {/if}
+        {#if flow.status === 'queued'}
+          <span class="queued-hint">Waiting for worker to pick up...</span>
         {/if}
       </div>
     </div>
@@ -882,6 +907,13 @@
   .header-actions {
     display: flex;
     gap: 0.5rem;
+    align-items: center;
+  }
+
+  .queued-hint {
+    font-size: 0.875rem;
+    color: var(--accent-yellow, #f59e0b);
+    font-style: italic;
   }
 
   .back-link {

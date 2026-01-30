@@ -97,12 +97,13 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .route("/api/experiments/:id", get(get_experiment))
         .route("/api/experiments", post(create_experiment))
         // Phases
-        .route("/api/experiments/:id/phases", get(list_phases))
+        .route("/api/experiments/:id/phases", get(list_phases).post(create_phase))
+        .route("/api/phases/:id", patch(update_phase))
         .route("/api/phases/:id/iterations", get(list_iterations))
         // Flows
         .route("/api/flows", get(list_flows).post(create_flow))
         .route("/api/flows/:id", get(get_flow).patch(update_flow).delete(delete_flow))
-        .route("/api/flows/:id/experiments", get(list_flow_experiments))
+        .route("/api/flows/:id/experiments", get(list_flow_experiments).post(add_experiment_to_flow))
         // Checkpoints
         .route("/api/checkpoints", get(list_checkpoints).post(create_checkpoint))
         .route("/api/checkpoints/:id", get(get_checkpoint).delete(delete_checkpoint))
@@ -179,6 +180,46 @@ async fn list_iterations(
 ) -> impl IntoResponse {
     match crate::db::queries::get_iterations(&state.db, phase_id).await {
         Ok(iterations) => (StatusCode::OK, Json(iterations)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreatePhaseRequest {
+    pub name: String,
+    pub phase_type: String,
+}
+
+async fn create_phase(
+    State(state): State<Arc<AppState>>,
+    Path(experiment_id): Path<i64>,
+    Json(req): Json<CreatePhaseRequest>,
+) -> impl IntoResponse {
+    match crate::db::queries::create_phase(&state.db, experiment_id, &req.name, &req.phase_type).await {
+        Ok(phase) => (StatusCode::CREATED, Json(phase)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdatePhaseRequest {
+    pub status: Option<String>,
+    pub ended_at: Option<String>,
+}
+
+async fn update_phase(
+    State(state): State<Arc<AppState>>,
+    Path(phase_id): Path<i64>,
+    Json(req): Json<UpdatePhaseRequest>,
+) -> impl IntoResponse {
+    match crate::db::queries::update_phase(&state.db, phase_id, req.status.as_deref(), req.ended_at.as_deref()).await {
+        Ok(phase) => (StatusCode::OK, Json(phase)).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
@@ -279,6 +320,7 @@ async fn update_flow(
 ) -> impl IntoResponse {
     let status_str = req.status.as_ref().map(|s| match s {
         FlowStatus::Pending => "pending",
+        FlowStatus::Queued => "queued",
         FlowStatus::Running => "running",
         FlowStatus::Completed => "completed",
         FlowStatus::Failed => "failed",
@@ -355,6 +397,31 @@ async fn list_flow_experiments(
 ) -> impl IntoResponse {
     match crate::db::queries::list_flow_experiments(&state.db, flow_id).await {
         Ok(experiments) => (StatusCode::OK, Json(experiments)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AddExperimentToFlowRequest {
+    pub experiment_id: i64,
+    pub sequence_order: Option<i32>,
+}
+
+async fn add_experiment_to_flow(
+    State(state): State<Arc<AppState>>,
+    Path(flow_id): Path<i64>,
+    Json(req): Json<AddExperimentToFlowRequest>,
+) -> impl IntoResponse {
+    match crate::db::queries::add_experiment_to_flow(
+        &state.db,
+        flow_id,
+        req.experiment_id,
+        req.sequence_order.unwrap_or(0),
+    ).await {
+        Ok(_) => (StatusCode::OK, Json(serde_json::json!({"success": true}))).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),

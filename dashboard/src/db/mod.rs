@@ -229,6 +229,73 @@ pub mod queries {
         Ok(phases)
     }
 
+    pub async fn create_phase(
+        pool: &DbPool,
+        experiment_id: i64,
+        name: &str,
+        phase_type: &str,
+    ) -> Result<Phase> {
+        let now = chrono::Utc::now().to_rfc3339();
+
+        let result = sqlx::query(
+            r#"INSERT INTO phases (experiment_id, name, phase_type, started_at, status)
+               VALUES (?, ?, ?, ?, 'running')
+               RETURNING id, experiment_id, name, phase_type, started_at, ended_at, status"#,
+        )
+        .bind(experiment_id)
+        .bind(name)
+        .bind(phase_type)
+        .bind(&now)
+        .fetch_one(pool)
+        .await?;
+
+        row_to_phase(&result)
+    }
+
+    pub async fn update_phase(
+        pool: &DbPool,
+        phase_id: i64,
+        status: Option<&str>,
+        ended_at: Option<&str>,
+    ) -> Result<Phase> {
+        // Build dynamic update
+        let mut updates = Vec::new();
+        if status.is_some() {
+            updates.push("status = ?");
+        }
+        if ended_at.is_some() {
+            updates.push("ended_at = ?");
+        }
+
+        if updates.is_empty() {
+            // Nothing to update, just return current phase
+            let row = sqlx::query(
+                "SELECT id, experiment_id, name, phase_type, started_at, ended_at, status FROM phases WHERE id = ?"
+            )
+            .bind(phase_id)
+            .fetch_one(pool)
+            .await?;
+            return row_to_phase(&row);
+        }
+
+        let query = format!(
+            "UPDATE phases SET {} WHERE id = ? RETURNING id, experiment_id, name, phase_type, started_at, ended_at, status",
+            updates.join(", ")
+        );
+
+        let mut q = sqlx::query(&query);
+        if let Some(s) = status {
+            q = q.bind(s);
+        }
+        if let Some(e) = ended_at {
+            q = q.bind(e);
+        }
+        q = q.bind(phase_id);
+
+        let result = q.fetch_one(pool).await?;
+        row_to_phase(&result)
+    }
+
     fn row_to_phase(row: &sqlx::sqlite::SqliteRow) -> Result<Phase> {
         let phase_type_str: String = row.get("phase_type");
         let status_str: String = row.get("status");
@@ -462,6 +529,23 @@ pub mod queries {
         Ok(experiments)
     }
 
+    pub async fn add_experiment_to_flow(
+        pool: &DbPool,
+        flow_id: i64,
+        experiment_id: i64,
+        sequence_order: i32,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO flow_experiments (flow_id, experiment_id, sequence_order) VALUES (?, ?, ?)"
+        )
+        .bind(flow_id)
+        .bind(experiment_id)
+        .bind(sequence_order)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
     fn row_to_flow(row: &sqlx::sqlite::SqliteRow) -> Result<Flow> {
         let status_str: String = row.get("status");
         let config_json: String = row.get("config_json");
@@ -687,6 +771,7 @@ pub mod queries {
     fn parse_flow_status(s: &str) -> FlowStatus {
         match s {
             "pending" => FlowStatus::Pending,
+            "queued" => FlowStatus::Queued,
             "running" => FlowStatus::Running,
             "completed" => FlowStatus::Completed,
             "failed" => FlowStatus::Failed,

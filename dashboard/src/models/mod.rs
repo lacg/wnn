@@ -114,6 +114,23 @@ pub enum MetricType {
     BestAcc,
 }
 
+/// Row from final phase comparison summary table
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PhaseSummaryRow {
+    pub phase_name: String,
+    pub metric_type: String,
+    pub ce: f64,
+    pub ppl: f64,
+    pub accuracy: f64,
+}
+
+/// Complete phase comparison summary
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PhaseSummary {
+    pub rows: Vec<PhaseSummaryRow>,
+    pub timestamp: DateTime<Utc>,
+}
+
 /// Real-time update message for WebSocket
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
@@ -132,6 +149,8 @@ pub enum WsMessage {
     /// Checkpoint events
     CheckpointCreated(Checkpoint),
     CheckpointDeleted { id: i64 },
+    /// Final phase comparison summary
+    PhaseSummary(PhaseSummary),
 }
 
 /// Full dashboard state snapshot for new clients
@@ -211,6 +230,7 @@ pub enum ExperimentType {
 #[serde(rename_all = "snake_case")]
 pub enum FlowStatus {
     Pending,
+    Queued,
     Running,
     Completed,
     Failed,
