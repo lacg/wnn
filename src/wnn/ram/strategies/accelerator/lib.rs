@@ -3382,6 +3382,19 @@ fn gating_metal_available() -> bool {
     metal_gating::MetalGatingEvaluator::is_available()
 }
 
+/// Invalidate gating cache (call after training to force memory re-upload)
+#[pyfunction]
+fn invalidate_gating_cache() {
+    metal_gating::invalidate_gating_cache();
+}
+
+/// Reset and clear all gating buffer caches to free GPU memory
+/// Call this when done with gating operations to prevent memory leaks
+#[pyfunction]
+fn reset_gating_buffer_cache() {
+    metal_gating::reset_gating_buffer_cache();
+}
+
 /// Apply gates to cluster scores element-wise
 ///
 /// Multiplies each cluster score by its gate value.
@@ -3532,5 +3545,7 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compute_target_gates, m)?)?;
     m.add_function(wrap_pyfunction!(compute_target_gates_expanded, m)?)?;
     m.add_function(wrap_pyfunction!(gating_metal_available, m)?)?;
+    m.add_function(wrap_pyfunction!(invalidate_gating_cache, m)?)?;
+    m.add_function(wrap_pyfunction!(reset_gating_buffer_cache, m)?)?;
     Ok(())
 }
