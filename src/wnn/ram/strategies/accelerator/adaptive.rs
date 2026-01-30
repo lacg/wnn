@@ -1480,9 +1480,14 @@ pub fn evaluate_genomes_parallel(
                 pos_width = pos_width,
             );
             if let Some(ref path) = log_path {
+                use fs2::FileExt;
                 if let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(path) {
-                    let _ = file.write_all(msg.as_bytes());
-                    let _ = file.flush();
+                    // Lock file to prevent interleaved writes with Python
+                    if file.lock_exclusive().is_ok() {
+                        let _ = file.write_all(msg.as_bytes());
+                        let _ = file.flush();
+                        let _ = file.unlock();
+                    }
                 }
             } else {
                 eprint!("{}", msg);

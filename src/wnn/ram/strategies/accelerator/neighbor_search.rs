@@ -49,41 +49,36 @@ pub struct CandidateResult {
     pub accuracy: f64,
 }
 
-/// Logger that writes to file with immediate flush and file locking.
-/// Uses flock() to prevent interleaved writes from Python and Rust.
+/// Logger that writes to both stderr and file with proper locking.
+/// Uses open/lock/write/close pattern to coordinate with Python writes.
 pub struct FileLogger {
-    file: Option<File>,
+    log_path: Option<String>,
 }
 
 impl FileLogger {
     pub fn new(log_path: Option<&str>) -> Self {
-        let file = log_path.and_then(|path| {
-            OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-                .ok()
-        });
-        Self { file }
+        Self { log_path: log_path.map(|s| s.to_string()) }
     }
 
     pub fn log(&mut self, msg: &str) {
         use std::io::Write;
         use fs2::FileExt;
         let timestamp = Local::now().format("%H:%M:%S");
+        let line = format!("{} | {}\n", timestamp, msg);
 
-        // Always print to stderr with timestamp for immediate visibility
-        eprintln!("{} | {}", timestamp, msg);
-        let _ = std::io::stderr().flush();  // Force flush for nohup capture
+        // Always write to stderr for immediate visibility
+        eprint!("{}", line);
+        let _ = std::io::stderr().flush();
 
-        // Also write to file if configured (with exclusive lock to prevent interleaving)
-        if let Some(ref mut file) = self.file {
-            // Acquire exclusive lock (blocks until available)
-            if file.lock_exclusive().is_ok() {
-                let line = format!("{} | {}\n", timestamp, msg);
-                let _ = file.write_all(line.as_bytes());
-                let _ = file.flush();
-                let _ = file.unlock();
+        // Write to file with proper locking (open fresh, lock, write, close)
+        if let Some(ref path) = self.log_path {
+            if let Ok(mut file) = OpenOptions::new().append(true).open(path) {
+                if file.lock_exclusive().is_ok() {
+                    let _ = file.write_all(line.as_bytes());
+                    let _ = file.flush();
+                    let _ = file.unlock();
+                }
+                // File closes automatically when dropped
             }
         }
     }

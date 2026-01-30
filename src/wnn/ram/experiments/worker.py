@@ -50,9 +50,8 @@ class FlowWorker:
         self._vocab_size: Optional[int] = None
         self._cluster_order: Optional[list[int]] = None  # Tokens sorted by frequency
 
-        # Log file for current flow
+        # Log file for current flow (path only, not kept open)
         self._log_file: Optional[Path] = None
-        self._log_handle = None
         self._log_dir = Path("logs")
 
         # Setup client
@@ -64,27 +63,34 @@ class FlowWorker:
         signal.signal(signal.SIGTERM, self._handle_signal)
 
     def _log(self, message: str):
-        """Log with timestamp to stdout and log file (if open).
+        """Log with timestamp to stdout and log file.
 
-        Uses file locking to prevent interleaved writes from Rust and Python.
+        Uses file locking with open/close pattern to properly coordinate
+        with Rust writes. Both Python and Rust open fresh, lock, write, close.
         """
         import fcntl
 
         # Use HH:MM:SS | format for dashboard parser compatibility
         timestamp = datetime.now().strftime("%H:%M:%S")
-        line = f"{timestamp} | {message}"
-        print(line, flush=True)
-        if self._log_handle:
-            # Acquire exclusive lock to prevent interleaving with Rust writes
-            fcntl.flock(self._log_handle.fileno(), fcntl.LOCK_EX)
-            try:
-                self._log_handle.write(line + "\n")
-                self._log_handle.flush()
-            finally:
-                fcntl.flock(self._log_handle.fileno(), fcntl.LOCK_UN)
+        line = f"{timestamp} | {message}\n"
+        print(line, end='', flush=True)
+
+        # Write to log file with proper locking (open fresh each time)
+        if self._log_file:
+            with open(self._log_file, 'a') as f:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                try:
+                    f.write(line)
+                    f.flush()
+                finally:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
     def _open_log_file(self, flow_name: str) -> Path:
-        """Create and open a log file for a flow."""
+        """Create a log file for a flow and return its path.
+
+        Note: We don't keep the file handle open. Each write opens fresh
+        with locking to coordinate with Rust writes.
+        """
         now = datetime.now()
         date_dir = self._log_dir / now.strftime("%Y/%m/%d")
         date_dir.mkdir(parents=True, exist_ok=True)
@@ -94,14 +100,12 @@ class FlowWorker:
         log_file = date_dir / f"{safe_name}_{timestamp}.log"
 
         self._log_file = log_file
-        self._log_handle = open(log_file, "w")
+        # Create the file (touch) but don't keep it open
+        log_file.touch()
         return log_file
 
     def _close_log_file(self):
-        """Close the current log file."""
-        if self._log_handle:
-            self._log_handle.close()
-            self._log_handle = None
+        """Mark log file as closed (just clears the path reference)."""
         self._log_file = None
 
     def _handle_signal(self, signum, frame):
