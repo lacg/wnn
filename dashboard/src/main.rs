@@ -10,14 +10,14 @@ mod watcher;
 
 use std::sync::Arc;
 use anyhow::Result;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, Mutex, RwLock};
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use api::{AppState, DashboardState};
 use models::WsMessage;
-use watcher::LogWatcher;
+use watcher::{LogWatcher, WatcherHandle};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -40,14 +40,23 @@ async fn main() -> Result<()> {
     // Shared dashboard state
     let dashboard = Arc::new(RwLock::new(DashboardState::new()));
 
+    // Watcher handle for dynamic log switching
+    let watcher_handle: Arc<Mutex<Option<WatcherHandle>>> = Arc::new(Mutex::new(None));
+
     // Start log watcher if LOG_PATH is set
     if let Ok(log_path) = std::env::var("LOG_PATH") {
         let watcher = LogWatcher::new(log_path.clone(), ws_tx.clone(), dashboard.clone());
-        watcher.start(false).await?;
+        let handle = watcher.start(false).await?;
+        *watcher_handle.lock().await = Some(handle);
         tracing::info!("Watching log file: {}", log_path);
     }
 
-    let state = Arc::new(AppState { db, ws_tx, dashboard });
+    let state = Arc::new(AppState {
+        db,
+        ws_tx,
+        dashboard,
+        watcher_handle,
+    });
 
     // Build router
     let app = api::routes(state)

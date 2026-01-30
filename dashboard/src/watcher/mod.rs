@@ -1,6 +1,7 @@
 //! Log file watcher using notify crate
 //!
-//! Watches nohup.out for changes and broadcasts parsed events via WebSocket.
+//! Watches log files for changes and broadcasts parsed events via WebSocket.
+//! Supports dynamic switching to a new log file.
 
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
@@ -10,12 +11,17 @@ use std::time::Duration;
 
 use anyhow::Result;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher, EventKind};
-use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio::sync::{broadcast, mpsc, oneshot, RwLock};
 use tracing::{info, warn, error};
 
 use crate::api::DashboardState;
 use crate::models::*;
 use crate::parser::{parse_line, LogEvent};
+
+/// Handle to stop a running watcher
+pub struct WatcherHandle {
+    stop_tx: oneshot::Sender<()>,
+}
 
 /// Watches a log file and broadcasts parsed events
 pub struct LogWatcher {
@@ -50,6 +56,13 @@ impl ParserState {
     }
 }
 
+impl WatcherHandle {
+    /// Stop the watcher
+    pub fn stop(self) {
+        let _ = self.stop_tx.send(());
+    }
+}
+
 impl LogWatcher {
     pub fn new(
         log_path: String,
@@ -59,8 +72,9 @@ impl LogWatcher {
         Self { log_path, ws_tx, dashboard }
     }
 
-    /// Start watching the log file
-    pub async fn start(self, start_from_end: bool) -> Result<()> {
+    /// Start watching the log file, returns a handle to stop the watcher
+    pub async fn start(self, start_from_end: bool) -> Result<WatcherHandle> {
+        let (stop_tx, stop_rx) = oneshot::channel::<()>();
         let path = self.log_path.clone();
         let ws_tx = self.ws_tx.clone();
         let dashboard = self.dashboard.clone();
@@ -92,8 +106,10 @@ impl LogWatcher {
 
         info!("Watching log file: {}", path);
 
-        // Spawn the reader task
+        // Spawn the reader task with stop signal support
         tokio::spawn(async move {
+            let mut stop_rx = stop_rx;
+
             let mut file = match File::open(&path) {
                 Ok(f) => f,
                 Err(e) => {
@@ -154,29 +170,39 @@ impl LogWatcher {
             info!("Now watching for new log entries...");
 
             loop {
-                if notify_rx.recv().await.is_none() {
-                    break;
-                }
-
-                loop {
-                    line_buf.clear();
-                    match reader.read_line(&mut line_buf) {
-                        Ok(0) => break,
-                        Ok(_) => {
-                            let line = line_buf.trim_end();
-                            let messages = process_line(line, &mut state);
-                            for msg in messages {
-                                // Update shared dashboard state
-                                {
-                                    let mut dash = dashboard.write().await;
-                                    dash.update_from_message(&msg);
-                                }
-                                let _ = ws_tx.send(msg);
-                            }
-                        }
-                        Err(e) => {
-                            warn!("Error reading line: {}", e);
+                tokio::select! {
+                    // Stop signal received
+                    _ = &mut stop_rx => {
+                        info!("Watcher stopped by request");
+                        break;
+                    }
+                    // File change notification
+                    result = notify_rx.recv() => {
+                        if result.is_none() {
                             break;
+                        }
+
+                        loop {
+                            line_buf.clear();
+                            match reader.read_line(&mut line_buf) {
+                                Ok(0) => break,
+                                Ok(_) => {
+                                    let line = line_buf.trim_end();
+                                    let messages = process_line(line, &mut state);
+                                    for msg in messages {
+                                        // Update shared dashboard state
+                                        {
+                                            let mut dash = dashboard.write().await;
+                                            dash.update_from_message(&msg);
+                                        }
+                                        let _ = ws_tx.send(msg);
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!("Error reading line: {}", e);
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
@@ -185,7 +211,7 @@ impl LogWatcher {
             drop(watcher);
         });
 
-        Ok(())
+        Ok(WatcherHandle { stop_tx })
     }
 }
 

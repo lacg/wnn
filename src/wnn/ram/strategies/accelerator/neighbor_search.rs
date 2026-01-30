@@ -49,36 +49,42 @@ pub struct CandidateResult {
     pub accuracy: f64,
 }
 
-/// Logger that writes to file with immediate flush.
+/// Logger that writes to file with immediate flush and file locking.
+/// Uses flock() to prevent interleaved writes from Python and Rust.
 pub struct FileLogger {
-    writer: Option<BufWriter<File>>,
+    file: Option<File>,
 }
 
 impl FileLogger {
     pub fn new(log_path: Option<&str>) -> Self {
-        let writer = log_path.and_then(|path| {
+        let file = log_path.and_then(|path| {
             OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(path)
                 .ok()
-                .map(|f| BufWriter::new(f))
         });
-        Self { writer }
+        Self { file }
     }
 
     pub fn log(&mut self, msg: &str) {
         use std::io::Write;
+        use fs2::FileExt;
         let timestamp = Local::now().format("%H:%M:%S");
 
         // Always print to stderr with timestamp for immediate visibility
         eprintln!("{} | {}", timestamp, msg);
         let _ = std::io::stderr().flush();  // Force flush for nohup capture
 
-        // Also write to file if configured
-        if let Some(ref mut writer) = self.writer {
-            let _ = writeln!(writer, "{} | {}", timestamp, msg);
-            let _ = writer.flush();
+        // Also write to file if configured (with exclusive lock to prevent interleaving)
+        if let Some(ref mut file) = self.file {
+            // Acquire exclusive lock (blocks until available)
+            if file.lock_exclusive().is_ok() {
+                let line = format!("{} | {}\n", timestamp, msg);
+                let _ = file.write_all(line.as_bytes());
+                let _ = file.flush();
+                let _ = file.unlock();
+            }
         }
     }
 }

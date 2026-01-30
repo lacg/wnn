@@ -9,10 +9,11 @@ use axum::{
 };
 use serde::Deserialize;
 use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, Mutex, RwLock};
 
 use crate::db::DbPool;
 use crate::models::*;
+use crate::watcher::{LogWatcher, WatcherHandle};
 
 /// Shared dashboard state updated by watcher, read by WebSocket clients
 #[derive(Debug, Default)]
@@ -88,6 +89,7 @@ pub struct AppState {
     pub db: DbPool,
     pub ws_tx: broadcast::Sender<WsMessage>,
     pub dashboard: Arc<RwLock<DashboardState>>,
+    pub watcher_handle: Arc<Mutex<Option<WatcherHandle>>>,
 }
 
 pub fn routes(state: Arc<AppState>) -> Router {
@@ -110,6 +112,8 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .route("/api/checkpoints/:id/download", get(download_checkpoint))
         // Real-time
         .route("/ws", get(websocket_handler))
+        // Log watcher control
+        .route("/api/watch", post(watch_log_file))
         .with_state(state)
 }
 
@@ -668,5 +672,55 @@ async fn handle_socket(
         if socket.send(Message::Text(json.into())).await.is_err() {
             break;
         }
+    }
+}
+
+// === Log Watcher Control ===
+
+#[derive(Debug, Deserialize)]
+pub struct WatchLogRequest {
+    pub log_path: String,
+}
+
+/// Switch the log watcher to a new file
+async fn watch_log_file(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<WatchLogRequest>,
+) -> impl IntoResponse {
+    // Stop the current watcher if any
+    {
+        let mut handle_guard = state.watcher_handle.lock().await;
+        if let Some(handle) = handle_guard.take() {
+            handle.stop();
+            tracing::info!("Stopped previous log watcher");
+        }
+    }
+
+    // Clear the dashboard state for the new log file
+    {
+        let mut dash = state.dashboard.write().await;
+        *dash = DashboardState::new();
+    }
+
+    // Start a new watcher
+    let watcher = LogWatcher::new(
+        req.log_path.clone(),
+        state.ws_tx.clone(),
+        state.dashboard.clone(),
+    );
+
+    match watcher.start(false).await {
+        Ok(handle) => {
+            *state.watcher_handle.lock().await = Some(handle);
+            tracing::info!("Now watching log file: {}", req.log_path);
+            (StatusCode::OK, Json(serde_json::json!({
+                "status": "watching",
+                "log_path": req.log_path
+            }))).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
     }
 }

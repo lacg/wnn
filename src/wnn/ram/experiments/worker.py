@@ -64,14 +64,24 @@ class FlowWorker:
         signal.signal(signal.SIGTERM, self._handle_signal)
 
     def _log(self, message: str):
-        """Log with timestamp to stdout and log file (if open)."""
+        """Log with timestamp to stdout and log file (if open).
+
+        Uses file locking to prevent interleaved writes from Rust and Python.
+        """
+        import fcntl
+
         # Use HH:MM:SS | format for dashboard parser compatibility
         timestamp = datetime.now().strftime("%H:%M:%S")
         line = f"{timestamp} | {message}"
         print(line, flush=True)
         if self._log_handle:
-            self._log_handle.write(line + "\n")
-            self._log_handle.flush()
+            # Acquire exclusive lock to prevent interleaving with Rust writes
+            fcntl.flock(self._log_handle.fileno(), fcntl.LOCK_EX)
+            try:
+                self._log_handle.write(line + "\n")
+                self._log_handle.flush()
+            finally:
+                fcntl.flock(self._log_handle.fileno(), fcntl.LOCK_UN)
 
     def _open_log_file(self, flow_name: str) -> Path:
         """Create and open a log file for a flow."""
@@ -188,6 +198,9 @@ class FlowWorker:
         # Open log file for this flow
         log_file = self._open_log_file(flow_name)
         self._log(f"Logging to: {log_file}")
+
+        # Tell dashboard to watch this log file
+        self.client.watch_log(str(log_file.absolute()))
 
         self._log(f"=" * 60)
         self._log(f"Starting flow: {flow_name} (ID: {flow_id})")

@@ -280,6 +280,23 @@ class DashboardClient:
 			self._logger(f"Flow {flow_id} failed: {error}")
 		return result
 
+	def watch_log(self, log_path: str) -> dict:
+		"""Tell the dashboard to watch a log file.
+
+		Args:
+			log_path: Absolute path to the log file
+
+		Returns:
+			Response from the server
+		"""
+		try:
+			result = self._request("POST", "/api/watch", json_data={"log_path": log_path})
+			self._logger(f"Dashboard now watching: {log_path}")
+			return result
+		except Exception as e:
+			self._logger(f"Warning: Failed to set log watch path: {e}")
+			return {}
+
 	def list_flow_experiments(self, flow_id: int) -> list[dict]:
 		"""List experiments associated with a flow."""
 		return self._request("GET", f"/api/flows/{flow_id}/experiments")
