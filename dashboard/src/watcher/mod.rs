@@ -321,7 +321,7 @@ fn process_line(line: &str, state: &mut ParserState) -> Vec<WsMessage> {
             };
             vec![WsMessage::IterationUpdate(iteration)]
         }
-        LogEvent::TsIteration { iter, best_harmonic_ce, best_harmonic_acc, best_ce, elapsed, .. } => {
+        LogEvent::TsIteration { iter, best_harmonic_ce, best_acc, best_ce, elapsed, .. } => {
             state.iteration_id += 1;
             let iteration = Iteration {
                 id: state.iteration_id,
@@ -329,7 +329,7 @@ fn process_line(line: &str, state: &mut ParserState) -> Vec<WsMessage> {
                 iteration_num: iter,
                 best_ce: best_harmonic_ce,
                 avg_ce: Some(best_ce),
-                best_accuracy: Some(best_harmonic_acc),
+                best_accuracy: Some(best_acc),  // Use best_acc, not best_harmonic_acc
                 elapsed_secs: elapsed,
                 timestamp: chrono::Utc::now(),
             };

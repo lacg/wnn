@@ -93,6 +93,11 @@ pub struct TokenCache {
     // Cluster ordering (token_id → cluster_id)
     cluster_map: Vec<i64>,
 
+    // Semantic encoding table (token_id → semantic_bits)
+    // If Some, tokens are encoded using this table instead of raw binary.
+    // Similar tokens have similar bit patterns, enabling better generalization.
+    encoding_table: Option<Vec<u64>>,
+
     // Pre-computed subsets for train
     train_subsets: Vec<TokenSubset>,
     // Pre-computed subset for eval (typically 1 subset = full eval)
@@ -122,6 +127,10 @@ impl TokenCache {
     /// * `num_parts` - Number of subsets to divide train data into (e.g., 3 for thirds)
     /// * `num_negatives` - Number of negative samples per example
     /// * `seed` - Random seed for subset rotation and negative sampling
+    /// * `encoding_table` - Optional semantic encoding table (token_id → semantic_bits).
+    ///   If provided, tokens are encoded using learned semantic bits instead of raw binary.
+    ///   Similar tokens will have similar bit patterns, enabling better generalization.
+    /// * `encoding_bits` - Number of bits in semantic encoding (required if encoding_table provided)
     pub fn new(
         train_tokens: Vec<u32>,
         eval_tokens: Vec<u32>,
@@ -132,9 +141,16 @@ impl TokenCache {
         num_parts: usize,
         num_negatives: usize,
         seed: u64,
+        encoding_table: Option<Vec<u64>>,
+        encoding_bits: Option<usize>,
     ) -> Self {
         // Compute bits per token
-        let bits_per_token = (vocab_size as f64).log2().ceil() as usize;
+        // Use encoding_bits if semantic encoding is provided, otherwise compute from vocab_size
+        let bits_per_token = if encoding_table.is_some() && encoding_bits.is_some() {
+            encoding_bits.unwrap()
+        } else {
+            (vocab_size as f64).log2().ceil() as usize
+        };
         let total_input_bits = context_size * bits_per_token;
 
         // Build cluster map (token_id → cluster_id)
@@ -154,6 +170,9 @@ impl TokenCache {
         freq_sorted.sort_by(|a, b| b.1.cmp(&a.1));
         let top_k: Vec<u32> = freq_sorted.iter().take(1000.min(vocab_size)).map(|(t, _)| *t).collect();
 
+        // Get encoding table reference for encoding functions
+        let enc_table_ref = encoding_table.as_deref();
+
         // Encode full training data
         let full_train = Self::encode_tokens(
             &train_tokens,
@@ -164,6 +183,7 @@ impl TokenCache {
             total_input_bits,
             num_negatives,
             seed,
+            enc_table_ref,
         );
 
         // Encode full eval data
@@ -176,6 +196,7 @@ impl TokenCache {
             total_input_bits,
             num_negatives,
             seed + 1,
+            enc_table_ref,
         );
 
         // Divide train tokens into subsets
@@ -189,6 +210,7 @@ impl TokenCache {
             num_negatives,
             num_parts,
             seed,
+            enc_table_ref,
         );
 
         // Eval typically uses 1 subset (full eval)
@@ -205,6 +227,7 @@ impl TokenCache {
             num_negatives,
             num_parts,
             cluster_map,
+            encoding_table,
             train_subsets,
             eval_subsets,
             test_subsets,
@@ -216,6 +239,9 @@ impl TokenCache {
     }
 
     /// Encode a token sequence into training data.
+    ///
+    /// If encoding_table is provided, uses semantic encoding (similar tokens → similar bits).
+    /// Otherwise falls back to raw binary encoding of token IDs.
     fn encode_tokens(
         tokens: &[u32],
         cluster_map: &[i64],
@@ -225,6 +251,7 @@ impl TokenCache {
         total_input_bits: usize,
         num_negatives: usize,
         seed: u64,
+        encoding_table: Option<&[u64]>,
     ) -> TokenSubset {
         let num_examples = tokens.len().saturating_sub(context_size);
         if num_examples == 0 {
@@ -249,9 +276,22 @@ impl TokenCache {
                 let token = tokens[ex_idx + ctx_pos] as usize;
                 let bit_offset = ex_idx * total_input_bits + ctx_pos * bits_per_token;
 
+                // Get encoded bits: semantic encoding if available, else raw binary
+                let encoded_bits = if let Some(table) = encoding_table {
+                    if token < table.len() {
+                        table[token]
+                    } else {
+                        // Fallback to raw binary for out-of-vocab tokens
+                        token as u64
+                    }
+                } else {
+                    // Raw binary encoding (original behavior)
+                    token as u64
+                };
+
                 for bit_idx in 0..bits_per_token {
                     let bit_pos = bits_per_token - 1 - bit_idx;
-                    input_bits[bit_offset + bit_idx] = ((token >> bit_pos) & 1) == 1;
+                    input_bits[bit_offset + bit_idx] = ((encoded_bits >> bit_pos) & 1) == 1;
                 }
             }
 
@@ -294,6 +334,7 @@ impl TokenCache {
         num_negatives: usize,
         num_parts: usize,
         seed: u64,
+        encoding_table: Option<&[u64]>,
     ) -> Vec<TokenSubset> {
         let n = tokens.len();
         let part_size = n / num_parts;
@@ -312,6 +353,7 @@ impl TokenCache {
                 total_input_bits,
                 num_negatives,
                 seed + i as u64 * 1000,
+                encoding_table,
             )
         }).collect()
     }
@@ -542,6 +584,7 @@ mod tests {
             32, // total_input_bits
             5,  // num_negatives
             42, // seed
+            None, // encoding_table (no semantic encoding for this test)
         );
 
         // 8 tokens - 4 context = 4 examples

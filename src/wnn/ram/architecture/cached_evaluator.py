@@ -36,6 +36,7 @@ from wnn.ram.architecture.genome_log import (
     format_completion_log,
 )
 from wnn.ram.strategies.connectivity.generic_strategies import OptimizationLogger
+from wnn.ram.core import RAMClusterLayer, GatingModel, create_gating
 
 
 @dataclass
@@ -48,6 +49,11 @@ class CachedEvaluatorConfig:
     empty_value: float = 0.0
     seed: Optional[int] = None  # None = time-based
     use_hybrid: bool = True  # Use hybrid CPU+GPU evaluation (4-8x faster)
+    # Gating configuration (optional)
+    gating_enabled: bool = False  # Enable RAM-based gating
+    gating_neurons_per_cluster: int = 8  # Neurons per gate (majority voting)
+    gating_bits_per_neuron: int = 12  # Address space for gate neurons
+    gating_threshold: float = 0.5  # Threshold for majority voting
 
 
 class CachedEvaluator:
@@ -653,6 +659,83 @@ class CachedEvaluator:
             genomes.append(g)
 
         return genomes
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Gating Support
+    # ─────────────────────────────────────────────────────────────────────
+
+    def create_gating_model(
+        self,
+        genome: ClusterGenome,
+        neurons_per_gate: int = 8,
+        bits_per_neuron: int = 12,
+        threshold: float = 0.5,
+        rng: Optional[int] = None,
+        prefer_rust: bool = True,
+    ) -> GatingModel:
+        """
+        Create a gating model for use with this evaluator's genomes.
+
+        The gating model learns to filter cluster scores based on input context.
+        It's designed for staged training:
+        1. Base RAM is trained via Rust accelerator (GA/TS optimization)
+        2. Gating is trained separately (Rust or Python)
+        3. At inference, gating is applied to Rust-computed scores
+
+        Uses Rust-accelerated gating by default (faster), falls back to Python
+        if Rust accelerator is not available.
+
+        Args:
+            genome: ClusterGenome to create gating for (uses num_clusters)
+            neurons_per_gate: Neurons per gate - majority voting (default 8)
+            bits_per_neuron: Address space for gate neurons (default 12)
+            threshold: Majority voting threshold (default 0.5)
+            rng: Random seed for reproducibility
+            prefer_rust: If True, use Rust gating if available (default True)
+
+        Returns:
+            GatingModel instance (RustRAMGating or RAMGating)
+        """
+        return create_gating(
+            total_input_bits=self.total_input_bits,
+            num_clusters=genome.num_clusters,
+            neurons_per_gate=neurons_per_gate,
+            bits_per_neuron=bits_per_neuron,
+            threshold=threshold,
+            rng=rng,
+            prefer_rust=prefer_rust,
+        )
+
+    def create_gating_from_config(
+        self,
+        genome: ClusterGenome,
+        config: 'CachedEvaluatorConfig',
+        rng: Optional[int] = None,
+    ) -> Optional[GatingModel]:
+        """
+        Create a gating model using config parameters.
+
+        Uses Rust-accelerated gating by default for better performance.
+
+        Args:
+            genome: ClusterGenome to create gating for
+            config: CachedEvaluatorConfig with gating parameters
+            rng: Random seed
+
+        Returns:
+            GatingModel if config.gating_enabled, else None
+        """
+        if not config.gating_enabled:
+            return None
+
+        return self.create_gating_model(
+            genome=genome,
+            neurons_per_gate=config.gating_neurons_per_cluster,
+            bits_per_neuron=config.gating_bits_per_neuron,
+            threshold=config.gating_threshold,
+            rng=rng,
+            prefer_rust=True,
+        )
 
     def __repr__(self) -> str:
         return (

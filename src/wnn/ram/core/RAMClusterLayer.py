@@ -33,7 +33,10 @@ from wnn.ram.core.base import RAMComponent
 from wnn.ram.core import MemoryVal
 
 from enum import IntEnum
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+	from wnn.ram.core.gating import GatingModel
 
 
 class MemoryBackend(IntEnum):
@@ -119,6 +122,7 @@ class RAMClusterLayer(RAMComponent):
 		hash_size: int = 1024,
 		rng: Optional[int] = None,
 		backend: MemoryBackend = MemoryBackend.AUTO,
+		gating_model: Optional['GatingModel'] = None,
 	):
 		"""
 		Initialize RAMClusterLayer.
@@ -137,12 +141,19 @@ class RAMClusterLayer(RAMComponent):
 				- DENSE: Force dense bit-packed storage
 				- SPARSE: Force Rust HashMap-based sparse storage
 				- LSH: Force LSH-based approximate storage (for >30 bits)
+			gating_model: Optional GatingModel for content-based filtering.
+				When provided, cluster scores are multiplied by gate values:
+				  gated_scores = ungated_scores * gates
+				See gating.py for RAMGating (binary) and SoftRAMGating (continuous).
 		"""
 		super().__init__()
 
 		self.num_clusters = num_clusters
 		self.neurons_per_cluster = neurons_per_cluster
 		self.total_neurons = num_clusters * neurons_per_cluster
+
+		# Gating support (Engram-inspired content-based filtering)
+		self.gating_model = gating_model
 
 		# Determine effective backend based on selection and bits_per_neuron
 		if backend == MemoryBackend.AUTO:
@@ -279,6 +290,9 @@ class RAMClusterLayer(RAMComponent):
 		"""
 		Forward pass returning scores per cluster (PyTorch implementation).
 
+		If gating is enabled, scores are multiplied by gate values:
+			gated_scores = ungated_scores * gates
+
 		Args:
 			input_bits: [batch, total_input_bits] boolean or 0/1 tensor
 
@@ -287,6 +301,29 @@ class RAMClusterLayer(RAMComponent):
 
 		Score formula (via PerplexityCalculator):
 			Score(cluster) = (count_TRUE + empty_value * count_EMPTY) / neurons_per_cluster
+		"""
+		# Get ungated scores
+		scores = self._forward_ungated(input_bits)
+
+		# Apply gating if enabled
+		if self.gating_model is not None:
+			gates = self.gating_model.forward(input_bits)  # [batch, num_clusters]
+			scores = scores * gates
+
+		return scores
+
+	def _forward_ungated(self, input_bits: Tensor) -> Tensor:
+		"""
+		Forward pass returning ungated scores (original implementation).
+
+		This is the base cluster scoring without any gating applied.
+		Use forward() for gated scores when gating_model is set.
+
+		Args:
+			input_bits: [batch, total_input_bits] boolean or 0/1 tensor
+
+		Returns:
+			[batch, num_clusters] float tensor of ungated scores
 		"""
 		# Get raw counts and convert to scores
 		true_counts, empty_counts = self.forward_counts(input_bits)
@@ -334,6 +371,9 @@ class RAMClusterLayer(RAMComponent):
 		- Metal GPU: Dense, large batches (>1000 examples)
 		- PyTorch: Dense, small batches
 
+		If gating is enabled, scores are multiplied by gate values after
+		the backend-specific forward pass.
+
 		This provides the best performance without manual backend selection.
 
 		Args:
@@ -346,23 +386,30 @@ class RAMClusterLayer(RAMComponent):
 		if input_bits.ndim == 1:
 			input_bits = input_bits.unsqueeze(0)
 
-		# Dispatch based on backend
+		# Dispatch based on backend to get ungated scores
 		match self._backend:
 			case MemoryBackend.SPARSE:
-				return self.forward_sparse(input_bits)
+				scores = self.forward_sparse(input_bits)
 			case MemoryBackend.LSH:
-				return self.forward_lsh(input_bits)
+				scores = self.forward_lsh(input_bits)
 			case MemoryBackend.DENSE:
 				batch_size = input_bits.shape[0]
 				# Threshold determined by benchmarking on M4 Max
 				METAL_THRESHOLD = 1000
 
 				if batch_size < METAL_THRESHOLD:
-					return self.forward(input_bits)
+					scores = self._forward_ungated(input_bits)
 				else:
-					return self._forward_metal_cached(input_bits)
+					scores = self._forward_metal_cached(input_bits)
 			case _:
 				raise ValueError(f"Unknown backend: {self._backend}")
+
+		# Apply gating if enabled
+		if self.gating_model is not None:
+			gates = self.gating_model.forward(input_bits)  # [batch, num_clusters]
+			scores = scores * gates
+
+		return scores
 
 	def _forward_metal_cached(self, input_bits: Tensor) -> Tensor:
 		"""
@@ -700,6 +747,123 @@ class RAMClusterLayer(RAMComponent):
 		Useful for retraining after connectivity optimization.
 		"""
 		self.memory.reset()
+
+	# =========================================================================
+	# Gating Support (Engram-inspired content-based filtering)
+	# =========================================================================
+
+	@property
+	def has_gating(self) -> bool:
+		"""Check if gating is enabled."""
+		return self.gating_model is not None
+
+	def set_gating(self, gating_model: Optional['GatingModel']) -> None:
+		"""
+		Set or remove gating model.
+
+		Args:
+			gating_model: GatingModel instance or None to disable gating
+		"""
+		self.gating_model = gating_model
+
+	def create_gating(
+		self,
+		neurons_per_gate: int = 8,
+		bits_per_neuron: int = 12,
+		threshold: float = 0.5,
+		rng: Optional[int] = None,
+	) -> 'GatingModel':
+		"""
+		Create and attach a RAMGating model to this layer.
+
+		Convenience method to create gating with matching configuration.
+
+		Args:
+			neurons_per_gate: Number of RAM neurons voting on each cluster's gate
+			bits_per_neuron: Address bits per gate neuron
+			threshold: Fraction of neurons that must fire for gate=1
+			rng: Random seed for connectivity initialization
+
+		Returns:
+			The created RAMGating instance (also stored in self.gating_model)
+		"""
+		from wnn.ram.core.gating import RAMGating
+
+		self.gating_model = RAMGating(
+			total_input_bits=self._total_input_bits,
+			num_clusters=self.num_clusters,
+			neurons_per_gate=neurons_per_gate,
+			bits_per_neuron=bits_per_neuron,
+			threshold=threshold,
+			rng=rng,
+		)
+		return self.gating_model
+
+	def train_gating_step(
+		self,
+		input_bits: Tensor,
+		targets: Tensor,
+		top_k: int = 10,
+		allow_override: bool = False,
+	) -> int:
+		"""
+		Train gating model on a batch of examples.
+
+		Computes beneficial gates based on ungated predictions and targets,
+		then trains the gating model to produce those gates.
+
+		Args:
+			input_bits: [B, total_input_bits] input patterns
+			targets: [B] correct cluster indices
+			top_k: Number of top clusters to consider for gating signal
+			allow_override: Whether to override existing gate memories
+
+		Returns:
+			Number of gate memory cells modified
+
+		Raises:
+			RuntimeError: If gating_model is not set
+		"""
+		if self.gating_model is None:
+			raise RuntimeError("Cannot train gating: gating_model is not set")
+
+		from wnn.ram.core.gating import compute_beneficial_gates
+
+		# Get ungated predictions
+		ungated_scores = self._forward_ungated(input_bits)
+
+		# Compute target gates
+		target_gates = compute_beneficial_gates(ungated_scores, targets, top_k)
+
+		# Train gating model
+		return self.gating_model.train_step(input_bits, target_gates, allow_override)
+
+	def reset_gating(self) -> None:
+		"""Reset gating model memories to EMPTY (all gates open)."""
+		if self.gating_model is not None:
+			self.gating_model.reset()
+
+	def freeze_base_memory(self) -> None:
+		"""
+		Mark base cluster memory as frozen (for staged training).
+
+		In staged training:
+		1. Train base RAM → freeze
+		2. Train gating model
+		3. (Optional) Fine-tune both
+
+		This sets a flag; actual freezing is enforced in train methods.
+		"""
+		self._base_frozen = True
+
+	def unfreeze_base_memory(self) -> None:
+		"""Unfreeze base cluster memory for joint training."""
+		self._base_frozen = False
+
+	@property
+	def is_base_frozen(self) -> bool:
+		"""Check if base memory is frozen."""
+		return getattr(self, '_base_frozen', False)
 
 	# =========================================================================
 	# Serialization

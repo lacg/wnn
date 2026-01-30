@@ -148,12 +148,23 @@ class FlowConfig:
 
 	def to_api_config(self) -> APIFlowConfig:
 		"""Convert to API FlowConfig for dashboard registration."""
+		# Convert tier_config to string format for API compatibility
+		tier_config_str = None
+		if self.tier_config is not None:
+			tier_parts = []
+			for tier in self.tier_config:
+				if tier[0] is None:
+					tier_parts.append(f"rest,{tier[1]},{tier[2]}")
+				else:
+					tier_parts.append(f"{tier[0]},{tier[1]},{tier[2]}")
+			tier_config_str = ";".join(tier_parts)
+
 		return APIFlowConfig(
 			name=self.name,
 			experiments=[exp.to_dict() for exp in self.experiments],
 			description=self.description,
 			params={
-				"tier_config": self.tier_config,
+				"tier_config": tier_config_str,
 				"optimize_tier0_only": self.optimize_tier0_only,
 				"context_size": self.context_size,
 				"patience": self.patience,

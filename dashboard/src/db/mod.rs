@@ -456,6 +456,8 @@ pub mod queries {
             // Update timestamps based on status
             if status == Some("running") {
                 set_clauses.push("started_at = ?4");
+                // Clear completed_at when re-running a flow (fixes timestamp corruption)
+                set_clauses.push("completed_at = NULL");
             } else if status == Some("completed") || status == Some("failed") || status == Some("cancelled") {
                 set_clauses.push("completed_at = ?4");
             }

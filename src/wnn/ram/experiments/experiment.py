@@ -64,8 +64,23 @@ class ExperimentConfig:
 	seed: Optional[int] = None
 
 	def to_dict(self) -> dict[str, Any]:
-		"""Convert to dictionary for JSON serialization."""
-		return asdict(self)
+		"""Convert to dictionary for JSON serialization.
+
+		Note: tier_config is converted to a string format for API compatibility
+		(Rust backend expects Option<String>, not a list of tuples).
+		"""
+		result = asdict(self)
+		# Convert tier_config list to string format for API compatibility
+		# Format: "100,15,20;400,10,12;rest,5,8"
+		if result.get("tier_config") is not None:
+			tier_parts = []
+			for tier in result["tier_config"]:
+				if tier[0] is None:
+					tier_parts.append(f"rest,{tier[1]},{tier[2]}")
+				else:
+					tier_parts.append(f"{tier[0]},{tier[1]},{tier[2]}")
+			result["tier_config"] = ";".join(tier_parts)
+		return result
 
 	@classmethod
 	def from_dict(cls, data: dict[str, Any]) -> "ExperimentConfig":
