@@ -805,8 +805,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			self._log.info(f"[{self.name}] Initializing with {cfg.population_size} random genomes")
 
 		if initial_population and len(initial_population) > 0:
-			# Evaluate initial population with streaming (shows progress per batch)
-			# Configurable via WNN_STREAM_BATCH_SIZE env var (default 15)
+			# Evaluate initial population with streaming (Rust logs per-genome to WNN_LOG_PATH)
 			import os
 			stream_batch_size = int(os.environ.get('WNN_STREAM_BATCH_SIZE', '15'))
 			results = evaluator.evaluate_batch(
@@ -836,7 +835,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 				generation=0,
 				total_generations=cfg.generations,
 				min_accuracy=None,  # Show all for initial population
-				streaming=False,  # Single Rust call for all genomes
+				streaming=True,  # Rust logs per-genome to WNN_LOG_PATH
 			)
 			# Store cached fitness on each genome for elite logging
 			population = []

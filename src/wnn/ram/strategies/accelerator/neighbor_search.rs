@@ -520,7 +520,16 @@ pub fn search_neighbors_best_n(
         });
 
         let need = target_count - passed.len();
-        passed.extend(all_candidates.into_iter().take(need));
+        let fallback_start = shown_count;  // Continue numbering from where we left off
+        for (i, candidate) in all_candidates.into_iter().take(need).enumerate() {
+            // Log fallback candidates with (Best) indicator
+            logger.log(&format_genome_log(
+                current_gen, total_gens, GenomeLogType::Fallback,
+                fallback_start + i + 1, target_count,
+                candidate.cross_entropy, candidate.accuracy
+            ));
+            passed.push(candidate);
+        }
 
         logger.log(&format!(
             "{} Threshold not met, returning {} best candidates",
@@ -745,7 +754,7 @@ pub fn search_offspring(
                 accuracy: *acc,
             };
 
-            // Log and keep candidates that pass threshold
+            // Only log and keep candidates that pass threshold
             if *acc >= accuracy_threshold {
                 shown_count += 1;
                 logger.log(&format_genome_log(

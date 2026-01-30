@@ -215,6 +215,7 @@ class Flow:
 		logger: Callable[[str], None],
 		checkpoint_dir: Optional[Path] = None,
 		dashboard_client: Optional[DashboardClient] = None,
+		flow_id: Optional[int] = None,
 	):
 		"""
 		Initialize flow.
@@ -225,6 +226,7 @@ class Flow:
 			logger: Logging function
 			checkpoint_dir: Directory for checkpoints
 			dashboard_client: Optional dashboard client for API integration
+			flow_id: Existing flow ID (skip creating new flow if provided)
 		"""
 		self.config = config
 		self.evaluator = evaluator
@@ -232,7 +234,7 @@ class Flow:
 		self.checkpoint_dir = checkpoint_dir
 		self.dashboard_client = dashboard_client
 
-		self._flow_id: Optional[int] = None
+		self._flow_id: Optional[int] = flow_id
 		self._experiment_ids: dict[int, int] = {}  # idx -> experiment_id
 		self._results: list[ExperimentResult] = []
 
@@ -269,8 +271,8 @@ class Flow:
 			self.log(f"  Resuming from experiment {resume_from}")
 		self.log("")
 
-		# Register with dashboard if client available
-		if self.dashboard_client:
+		# Register with dashboard if client available (skip if flow_id already set)
+		if self.dashboard_client and self._flow_id is None:
 			try:
 				seed_checkpoint_id = None
 				if cfg.seed_checkpoint_path:
@@ -289,6 +291,8 @@ class Flow:
 				self.log(f"Registered flow {self._flow_id} with dashboard")
 			except Exception as e:
 				self.log(f"Warning: Failed to register flow with dashboard: {e}")
+		elif self._flow_id is not None:
+			self.log(f"Using existing flow {self._flow_id}")
 
 		# Load seed from checkpoint if specified
 		if cfg.seed_checkpoint_path and not seed_genome:

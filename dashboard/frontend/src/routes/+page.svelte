@@ -251,7 +251,7 @@
       if (!acc[row.phase_name]) acc[row.phase_name] = [];
       acc[row.phase_name].push(row);
       return acc;
-    }, {} as Record<string, typeof $phaseSummary.rows>)}
+    }, {})}
     <div class="card">
       <div class="card-header">
         <span class="card-title">Final Phase Comparison (Full Validation)</span>

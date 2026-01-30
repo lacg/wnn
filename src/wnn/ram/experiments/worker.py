@@ -43,6 +43,18 @@ class FlowWorker:
         self.running = True
         self.current_flow_id: Optional[int] = None
 
+        # Pre-cached data (loaded once at startup)
+        self._tokenizer = None
+        self._train_tokens: Optional[list[int]] = None
+        self._eval_tokens: Optional[list[int]] = None
+        self._vocab_size: Optional[int] = None
+        self._cluster_order: Optional[list[int]] = None  # Tokens sorted by frequency
+
+        # Log file for current flow
+        self._log_file: Optional[Path] = None
+        self._log_handle = None
+        self._log_dir = Path("logs")
+
         # Setup client
         config = DashboardClientConfig(base_url=dashboard_url)
         self.client = DashboardClient(config, logger=self._log)
@@ -52,9 +64,35 @@ class FlowWorker:
         signal.signal(signal.SIGTERM, self._handle_signal)
 
     def _log(self, message: str):
-        """Log with timestamp."""
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        print(f"[{timestamp}] {message}", flush=True)
+        """Log with timestamp to stdout and log file (if open)."""
+        # Use HH:MM:SS | format for dashboard parser compatibility
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        line = f"{timestamp} | {message}"
+        print(line, flush=True)
+        if self._log_handle:
+            self._log_handle.write(line + "\n")
+            self._log_handle.flush()
+
+    def _open_log_file(self, flow_name: str) -> Path:
+        """Create and open a log file for a flow."""
+        now = datetime.now()
+        date_dir = self._log_dir / now.strftime("%Y/%m/%d")
+        date_dir.mkdir(parents=True, exist_ok=True)
+
+        safe_name = flow_name.lower().replace(" ", "_").replace("/", "_")
+        timestamp = now.strftime("%H%M%S")
+        log_file = date_dir / f"{safe_name}_{timestamp}.log"
+
+        self._log_file = log_file
+        self._log_handle = open(log_file, "w")
+        return log_file
+
+    def _close_log_file(self):
+        """Close the current log file."""
+        if self._log_handle:
+            self._log_handle.close()
+            self._log_handle = None
+        self._log_file = None
 
     def _handle_signal(self, signum, frame):
         """Handle shutdown signals."""
@@ -63,10 +101,54 @@ class FlowWorker:
         if self.current_flow_id:
             self._log(f"Flow {self.current_flow_id} will continue in background")
 
+    def _precache_data(self):
+        """Pre-cache tokenizer and dataset at startup to avoid network issues during flow execution."""
+        from collections import Counter
+
+        from datasets import load_dataset
+        from transformers import GPT2TokenizerFast
+
+        self._log("Pre-caching tokenizer and dataset...")
+
+        # Load tokenizer (will download if not cached)
+        self._log("  Loading GPT2 tokenizer...")
+        self._tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
+        self._vocab_size = self._tokenizer.vocab_size
+        self._log(f"  Tokenizer loaded (vocab size: {self._vocab_size:,})")
+
+        # Load dataset (will download if not cached)
+        self._log("  Loading WikiText-2 dataset...")
+        try:
+            dataset = load_dataset("wikitext", "wikitext-2-raw-v1")
+        except Exception:
+            dataset = load_dataset("wikitext", "wikitext-2-raw-v1", trust_remote_code=True)
+
+        # Tokenize once and cache
+        self._log("  Tokenizing dataset...")
+        train_text = "\n".join(dataset["train"]["text"])
+        eval_text = "\n".join(dataset["validation"]["text"])
+
+        self._train_tokens = self._tokenizer.encode(train_text, add_special_tokens=False)[:200_000]
+        self._eval_tokens = self._tokenizer.encode(eval_text, add_special_tokens=False)[:50_000]
+
+        self._log(f"  Cached {len(self._train_tokens):,} train tokens, {len(self._eval_tokens):,} eval tokens")
+
+        # Compute cluster order (tokens sorted by frequency, most frequent first)
+        self._log("  Computing token frequencies...")
+        freq_counter = Counter(self._train_tokens)
+        self._cluster_order = sorted(range(self._vocab_size), key=lambda i: -freq_counter.get(i, 0))
+        tokens_with_freq = sum(1 for i in range(self._vocab_size) if freq_counter.get(i, 0) > 0)
+        self._log(f"  Tokens with freq > 0: {tokens_with_freq:,}")
+
+        self._log("Pre-caching complete!")
+
     def run(self):
         """Main worker loop."""
         self._log(f"Worker started, polling {self.dashboard_url} every {self.poll_interval}s")
         self._log(f"Checkpoints will be saved to {self.checkpoint_base_dir}")
+
+        # Pre-cache data before entering the polling loop
+        self._precache_data()
 
         while self.running:
             try:
@@ -102,6 +184,10 @@ class FlowWorker:
         flow_id = flow_data["id"]
         flow_name = flow_data.get("name", f"Flow {flow_id}")
         self.current_flow_id = flow_id
+
+        # Open log file for this flow
+        log_file = self._open_log_file(flow_name)
+        self._log(f"Logging to: {log_file}")
 
         self._log(f"=" * 60)
         self._log(f"Starting flow: {flow_name} (ID: {flow_id})")
@@ -156,13 +242,14 @@ class FlowWorker:
                 except Exception as e:
                     self._log(f"Warning: Could not fetch seed checkpoint: {e}")
 
-            # Create and run flow
+            # Create and run flow (pass existing flow_id to avoid duplication)
             flow = Flow(
                 config=flow_config,
                 evaluator=evaluator,
                 logger=self._log,
                 checkpoint_dir=checkpoint_dir,
                 dashboard_client=self.client,
+                flow_id=flow_id,
             )
 
             result = flow.run()
@@ -182,42 +269,26 @@ class FlowWorker:
 
         finally:
             self.current_flow_id = None
+            self._close_log_file()
 
     def _create_evaluator(self, context_size: int, seed: Optional[int] = None):
-        """Create the cached evaluator with data."""
-        self._log(f"Loading WikiText-2 dataset...")
-
-        from datasets import load_dataset
-        from transformers import GPT2TokenizerFast
-
-        try:
-            dataset = load_dataset("wikitext", "wikitext-2-raw-v1")
-        except Exception:
-            dataset = load_dataset("wikitext", "wikitext-2-raw-v1", trust_remote_code=True)
-
-        tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
-
-        def tokenize_text(text: str) -> list[int]:
-            return tokenizer.encode(text, add_special_tokens=False)
-
-        train_text = "\n".join(dataset["train"]["text"])
-        eval_text = "\n".join(dataset["validation"]["text"])
-
-        train_tokens = tokenize_text(train_text)[:200_000]
-        eval_tokens = tokenize_text(eval_text)[:50_000]
-
-        self._log(f"  Train: {len(train_tokens):,} tokens, Eval: {len(eval_tokens):,} tokens")
+        """Create the cached evaluator using pre-cached data."""
+        self._log(f"Creating evaluator (context_size={context_size})...")
 
         from wnn.ram.architecture.cached_evaluator import CachedEvaluator
 
         evaluator = CachedEvaluator(
-            train_tokens=train_tokens,
-            eval_tokens=eval_tokens,
-            vocab_size=tokenizer.vocab_size,
+            train_tokens=self._train_tokens,
+            eval_tokens=self._eval_tokens,
+            vocab_size=self._vocab_size,
             context_size=context_size,
-            token_parts=3,
-            rotation_mode="per_iteration",
+            cluster_order=self._cluster_order,
+            num_parts=3,
+            num_negatives=5,
+            empty_value=0.0,
             seed=seed or int(time.time() * 1000) % (2**32),
+            use_hybrid=True,
+            log_path=str(self._log_file) if self._log_file else None,  # Pass log path for Rust-side logging
         )
 
         self._log(f"  Vocab: {evaluator.vocab_size:,}, Context: {context_size}")

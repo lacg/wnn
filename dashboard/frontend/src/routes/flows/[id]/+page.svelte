@@ -467,6 +467,11 @@
         {#if flow.status === 'queued'}
           <span class="queued-hint">Waiting for worker to pick up...</span>
         {/if}
+        {#if flow.status === 'failed'}
+          <button class="btn btn-primary" on:click={queueFlow}>
+            Restart
+          </button>
+        {/if}
       </div>
     </div>
 
