@@ -191,6 +191,24 @@ def main():
 		help="Only optimize tier0 clusters (requires --tier-config)"
 	)
 
+	# Gating configuration
+	parser.add_argument(
+		"--enable-gating", action="store_true",
+		help="Enable RAM-based gating layer that learns to filter cluster predictions"
+	)
+	parser.add_argument(
+		"--gating-neurons", type=int, default=8,
+		help="Number of neurons per cluster gate (default: 8)"
+	)
+	parser.add_argument(
+		"--gating-bits", type=int, default=12,
+		help="Bits per gating neuron (default: 12)"
+	)
+	parser.add_argument(
+		"--gating-threshold", type=float, default=0.5,
+		help="Gating threshold for majority voting (default: 0.5)"
+	)
+
 	# Dashboard integration
 	parser.add_argument(
 		"--dashboard-url", type=str, default=None,
@@ -296,6 +314,11 @@ def main():
 			log(f"  Resume from: phase {args.resume_from}")
 	if args.dashboard_url:
 		log(f"  Dashboard URL: {args.dashboard_url}")
+	if args.enable_gating:
+		log(f"  Gating: enabled")
+		log(f"    Neurons per gate: {args.gating_neurons}")
+		log(f"    Bits per neuron: {args.gating_bits}")
+		log(f"    Threshold: {args.gating_threshold}")
 	log("")
 
 	# Load seed genome, population, and threshold if specified
@@ -357,6 +380,11 @@ def main():
 		fitness_percentile=args.fitness_percentile,
 		rotation_seed=rotation_seed,
 		log_path=logger.log_file,
+		# Gating configuration
+		enable_gating=args.enable_gating,
+		gating_neurons_per_cluster=args.gating_neurons,
+		gating_bits_per_neuron=args.gating_bits,
+		gating_threshold=args.gating_threshold,
 	)
 
 	# Create dashboard client if URL provided

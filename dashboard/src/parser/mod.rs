@@ -71,9 +71,11 @@ static GA_ITER_RE: LazyLock<Regex> = LazyLock::new(|| {
 
 // New format: "[Gen 017/250] Genome 01/40 (New ): CE=10.6133, Acc=0.0240%"
 // or "[Gen 017/250] Genome 01/10 (Elite): CE=10.5123, Acc=0.5400%"
+// or "[Gen 017/250] Genome 01/50 (Init): CE=10.6318, Acc=1.4161%"
+// or "[Gen 017/250] Genome 01/57 (Best): CE=10.5947, Acc=0.0000%"
 static GENOME_PROGRESS_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"\[Gen (\d+)/(\d+)\] Genome (\d+)/(\d+) \((Elite|New\s*)\): CE=([0-9.]+), Acc=([0-9.]+)%",
+        r"\[Gen (\d+)/(\d+)\] Genome (\d+)/(\d+) \((Elite|New\s*|Init|Best)\): CE=([0-9.]+), Acc=([0-9.]+)%",
     )
     .unwrap()
 });
@@ -178,13 +180,14 @@ pub fn parse_line(line: &str) -> Option<(NaiveTime, LogEvent)> {
         }
     } else if let Some(caps) = GENOME_PROGRESS_RE.captures(content) {
         // New format: "[Gen 017/250] Genome 01/40 (New ): CE=10.6133, Acc=0.0240%"
+        // Handles: Elite, New, Init, Best tags
         let genome_type = caps.get(5)?.as_str().trim();
         LogEvent::GenomeProgress {
             generation: caps.get(1)?.as_str().parse().ok()?,
             total_gens: caps.get(2)?.as_str().parse().ok()?,
             genome_idx: caps.get(3)?.as_str().parse().ok()?,
             total_genomes: caps.get(4)?.as_str().parse().ok()?,
-            is_elite: genome_type == "Elite",
+            is_elite: genome_type == "Elite" || genome_type == "Best",  // Best is also elite-like
             ce: caps.get(6)?.as_str().parse().ok()?,
             accuracy: caps.get(7)?.as_str().parse().ok()?,
         }
@@ -339,6 +342,35 @@ mod tests {
                 assert!((accuracy - 0.5400).abs() < 0.001);
             }
             _ => panic!("Expected GenomeProgress"),
+        }
+
+        // Test Init genome format (initial population)
+        let line3 = "01:11:34 | [Gen 001/250] Genome 01/50 (Init): CE=10.6318, Acc=1.4161%";
+        let (_, event3) = parse_line(line3).unwrap();
+        match event3 {
+            LogEvent::GenomeProgress { generation, genome_idx, is_elite, ce, accuracy, .. } => {
+                assert_eq!(generation, 1);
+                assert_eq!(genome_idx, 1);
+                assert!(!is_elite);  // Init is not elite
+                assert!((ce - 10.6318).abs() < 0.001);
+                assert!((accuracy - 1.4161).abs() < 0.001);
+            }
+            _ => panic!("Expected GenomeProgress for Init"),
+        }
+
+        // Test Best genome format (best candidates in TS)
+        let line4 = "16:30:24 | [Gen 069/250] Genome 57/57 (Best): CE=10.5947, Acc=0.0000%";
+        let (_, event4) = parse_line(line4).unwrap();
+        match event4 {
+            LogEvent::GenomeProgress { generation, genome_idx, total_genomes, is_elite, ce, accuracy, .. } => {
+                assert_eq!(generation, 69);
+                assert_eq!(genome_idx, 57);
+                assert_eq!(total_genomes, 57);
+                assert!(is_elite);  // Best is treated as elite
+                assert!((ce - 10.5947).abs() < 0.001);
+                assert!((accuracy - 0.0000).abs() < 0.001);
+            }
+            _ => panic!("Expected GenomeProgress for Best"),
         }
     }
 }

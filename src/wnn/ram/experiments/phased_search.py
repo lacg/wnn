@@ -23,6 +23,7 @@ from wnn.ram.strategies.factory import OptimizerStrategyFactory, OptimizerStrate
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 from wnn.ram.core.reporting import OptimizationResultsTable, PhaseComparisonTable, PhaseMetrics
 from wnn.ram.core import bits_needed
+from wnn.ram.core.gating import create_gating, GatingModel, compute_beneficial_gates
 from wnn.ram.architecture.cached_evaluator import CachedEvaluator
 
 # Optional dashboard integration
@@ -81,6 +82,12 @@ class PhasedSearchConfig:
 
 	# Logging
 	log_path: Optional[str] = None
+
+	# Gating configuration
+	enable_gating: bool = False
+	gating_neurons_per_cluster: int = 8
+	gating_bits_per_neuron: int = 12
+	gating_threshold: float = 0.5
 
 	def get_tier_boundaries(self, vocab_size: int) -> list[int]:
 		"""
@@ -423,6 +430,10 @@ class PhasedSearchRunner:
 		self._rotation_seed: Optional[int] = None
 		self._flow_id: Optional[int] = None
 		self._experiment_id: Optional[int] = None
+		# Stored for gating training (only if enable_gating=True)
+		self._train_tokens: Optional[list[int]] = None
+		self._cluster_order: Optional[list[int]] = None
+		self._gating_model: Optional[GatingModel] = None
 
 	def save_checkpoint(self, phase_key: str, result: PhaseResult) -> Optional[str]:
 		"""
@@ -561,6 +572,11 @@ class PhasedSearchRunner:
 		# Create cluster ordering (sorted by frequency, most frequent first)
 		cluster_order = sorted(range(vocab_size), key=lambda i: -self.token_frequencies[i])
 
+		# Store for gating training if enabled
+		if self.config.enable_gating:
+			self._train_tokens = train_tokens
+			self._cluster_order = cluster_order
+
 		# Determine rotation seed (store for use in strategies)
 		rotation_seed = self.config.rotation_seed
 		if rotation_seed is None:
@@ -690,6 +706,194 @@ class PhasedSearchRunner:
 			best_acc_acc=acc,
 			k=1,
 		)
+
+	def train_gating_phase(
+		self,
+		genome: ClusterGenome,
+		num_epochs: int = 1,
+		batch_size: int = 256,
+	) -> dict:
+		"""
+		Train gating layer after RAM optimization completes (Stage 2 of staged training).
+
+		The gating model learns to filter cluster predictions based on input context.
+		Training uses the same data that was used for RAM optimization.
+
+		Args:
+			genome: The optimized genome to create gating for
+			num_epochs: Number of passes through training data (default 1)
+			batch_size: Batch size for gating training (default 256)
+
+		Returns:
+			Dict with gating training statistics
+		"""
+		import torch
+
+		if not self.config.enable_gating:
+			return {"enabled": False}
+
+		if self._train_tokens is None or self._cluster_order is None:
+			self.log("Warning: Gating enabled but train_tokens not stored. Skipping gating training.")
+			return {"enabled": True, "error": "train_tokens not available"}
+
+		self.log("")
+		self.log(f"{'='*60}")
+		self.log("  Gating Training Phase (Stage 2)")
+		self.log(f"{'='*60}")
+
+		# Create gating model
+		self.log(f"  Creating gating model: {genome.num_clusters} clusters × "
+				f"{self.config.gating_neurons_per_cluster} neurons/gate × "
+				f"{self.config.gating_bits_per_neuron} bits/neuron")
+
+		self._gating_model = create_gating(
+			total_input_bits=self.total_input_bits,
+			num_clusters=genome.num_clusters,
+			neurons_per_gate=self.config.gating_neurons_per_cluster,
+			bits_per_neuron=self.config.gating_bits_per_neuron,
+			threshold=self.config.gating_threshold,
+			rng=self._rotation_seed,
+			prefer_rust=True,
+		)
+		self.log(f"  Gating model: {self._gating_model}")
+
+		# Encode training data for gating
+		self.log(f"  Encoding training data ({len(self._train_tokens):,} tokens)...")
+		bits_per_token = bits_needed(self.vocab_size)
+		context_size = self.config.context_size
+
+		# Build token_id -> cluster_id mapping
+		token_to_cluster = {token: cluster for cluster, token in enumerate(self._cluster_order)}
+
+		# Prepare training samples
+		samples = []
+		for i in range(context_size, len(self._train_tokens)):
+			# Get context tokens and target
+			context_tokens = self._train_tokens[i - context_size:i]
+			target_token = self._train_tokens[i]
+			target_cluster = token_to_cluster.get(target_token, target_token)
+
+			# Encode context to bits
+			input_bits = []
+			for token in context_tokens:
+				# Map token to cluster (same as evaluator does)
+				cluster = token_to_cluster.get(token, token)
+				# Encode cluster as bits (LSB first)
+				for b in range(bits_per_token):
+					input_bits.append(bool((cluster >> b) & 1))
+
+			samples.append((input_bits, target_cluster))
+
+		self.log(f"  Training samples: {len(samples):,}")
+
+		# Train gating
+		num_samples = len(samples)
+		total_modified = 0
+		start_time = __import__('time').time()
+
+		for epoch in range(num_epochs):
+			epoch_modified = 0
+			num_batches = (num_samples + batch_size - 1) // batch_size
+
+			for batch_idx in range(num_batches):
+				batch_start = batch_idx * batch_size
+				batch_end = min(batch_start + batch_size, num_samples)
+				batch_samples = samples[batch_start:batch_end]
+
+				# Convert to tensors
+				input_bits_batch = torch.tensor(
+					[s[0] for s in batch_samples],
+					dtype=torch.bool,
+				)
+				targets_batch = torch.tensor(
+					[s[1] for s in batch_samples],
+					dtype=torch.long,
+				)
+
+				# Train using target-based approach:
+				# Gate should be 1 for the target cluster, 0 for others
+				# This is a simple heuristic - could use compute_beneficial_gates for more sophisticated training
+				if hasattr(self._gating_model, 'train_from_targets'):
+					# RustRAMGating has optimized train_from_targets
+					modified = self._gating_model.train_from_targets(input_bits_batch, targets_batch)
+				else:
+					# Fallback: compute target gates and train
+					target_gates = compute_beneficial_gates(
+						torch.zeros(len(batch_samples), genome.num_clusters),  # dummy scores
+						targets_batch,
+						top_k=1,
+					)
+					modified = self._gating_model.train_step(input_bits_batch, target_gates)
+
+				epoch_modified += modified
+
+				# Progress logging every 10%
+				if batch_idx > 0 and batch_idx % (num_batches // 10 + 1) == 0:
+					pct = 100 * batch_idx / num_batches
+					self.log(f"    Epoch {epoch+1}: {pct:.0f}% ({batch_idx}/{num_batches} batches)")
+
+			total_modified += epoch_modified
+			self.log(f"  Epoch {epoch+1}/{num_epochs}: {epoch_modified:,} cells modified")
+
+		elapsed = __import__('time').time() - start_time
+
+		# Compute gate activation statistics
+		gate_stats = self._compute_gate_stats(samples[:1000])  # Sample first 1000
+
+		self.log(f"  Gating training complete in {elapsed:.1f}s")
+		self.log(f"  Total cells modified: {total_modified:,}")
+		self.log(f"  [Gate Stats] Active: {gate_stats['avg_active']:.1f}% | "
+				f"Tier0: {gate_stats['tier0_active']:.1f}% | "
+				f"Tier1: {gate_stats['tier1_active']:.1f}% | "
+				f"Tier2: {gate_stats['tier2_active']:.1f}%")
+
+		return {
+			"enabled": True,
+			"total_modified": total_modified,
+			"training_time": elapsed,
+			"num_samples": num_samples,
+			"num_epochs": num_epochs,
+			**gate_stats,
+		}
+
+	def _compute_gate_stats(self, samples: list) -> dict:
+		"""Compute gate activation statistics from samples."""
+		import torch
+
+		if not self._gating_model or not samples:
+			return {"avg_active": 0.0, "tier0_active": 0.0, "tier1_active": 0.0, "tier2_active": 0.0}
+
+		# Get tier boundaries from config
+		tier_boundaries = self.config.get_tier_boundaries(self.vocab_size)
+
+		# Convert samples to tensor
+		input_bits = torch.tensor([s[0] for s in samples], dtype=torch.bool)
+
+		# Get gates
+		gates = self._gating_model.forward(input_bits)  # [B, num_clusters]
+
+		# Compute per-tier activation rates
+		num_clusters = gates.shape[1]
+		active_counts = gates.sum(dim=0)  # [num_clusters]
+		num_samples = len(samples)
+
+		# Overall
+		avg_active = 100.0 * active_counts.sum().item() / (num_clusters * num_samples)
+
+		# Per-tier (assuming 3 tiers: 0-100, 100-500, 500+)
+		tier0_end = min(tier_boundaries[0] if tier_boundaries else 100, num_clusters)
+		tier1_end = min(tier_boundaries[1] if len(tier_boundaries) > 1 else 500, num_clusters)
+
+		tier0_active = 100.0 * active_counts[:tier0_end].sum().item() / (tier0_end * num_samples) if tier0_end > 0 else 0.0
+		tier1_active = 100.0 * active_counts[tier0_end:tier1_end].sum().item() / ((tier1_end - tier0_end) * num_samples) if tier1_end > tier0_end else 0.0
+		tier2_active = 100.0 * active_counts[tier1_end:].sum().item() / ((num_clusters - tier1_end) * num_samples) if num_clusters > tier1_end else 0.0
+
+		return {
+			"avg_active": avg_active,
+			"tier0_active": tier0_active,
+			"tier1_active": tier1_active,
+			"tier2_active": tier2_active,
+		}
 
 	def _get_dashboard_phase_config(self, phase_index: int) -> Optional[dict]:
 		"""
@@ -1080,6 +1284,17 @@ class PhasedSearchRunner:
 				if self.checkpoint_dir:
 					flow_name = f"{self.checkpoint_dir.name}"
 
+				# Convert tier_config to string format for API compatibility
+				tier_config_str = None
+				if self.config.tier_config:
+					tier_parts = []
+					for tier in self.config.tier_config:
+						if tier[0] is None:
+							tier_parts.append(f"rest,{tier[1]},{tier[2]}")
+						else:
+							tier_parts.append(f"{tier[0]},{tier[1]},{tier[2]}")
+					tier_config_str = ";".join(tier_parts)
+
 				api_config = APIFlowConfig(
 					name=flow_name,
 					experiments=[{
@@ -1095,7 +1310,7 @@ class PhasedSearchRunner:
 						"patience": self.config.patience,
 						"ga_generations": self.config.ga_generations,
 						"ts_iterations": self.config.ts_iterations,
-						"tier_config": self.config.tier_config,
+						"tier_config": tier_config_str,
 					},
 				)
 
@@ -1365,6 +1580,17 @@ class PhasedSearchRunner:
 
 		# Get final result (last phase)
 		p3b = completed_phases[-1]
+
+		# =====================================================================
+		# Gating Training Phase (if enabled)
+		# =====================================================================
+		if self.config.enable_gating:
+			gating_stats = self.train_gating_phase(
+				genome=p3b.best_genome,
+				num_epochs=1,
+				batch_size=256,
+			)
+			results["gating"] = gating_stats
 
 		# =====================================================================
 		# Final Evaluation with FULL training tokens
