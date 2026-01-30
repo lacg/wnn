@@ -46,6 +46,8 @@ struct ParserState {
     gen_best_acc: f64,
     gen_genome_count: i32,
     gen_start_time: std::time::Instant,
+    /// Last generation we emitted an iteration for (to avoid duplicates)
+    last_emitted_generation: Option<i32>,
 }
 
 impl ParserState {
@@ -63,6 +65,7 @@ impl ParserState {
             gen_best_acc: 0.0,
             gen_genome_count: 0,
             gen_start_time: std::time::Instant::now(),
+            last_emitted_generation: None,
         }
     }
 
@@ -298,7 +301,14 @@ fn process_line(line: &str, state: &mut ParserState) -> Vec<WsMessage> {
             messages
         }
         LogEvent::GaIteration { generation, best, avg, elapsed, .. } => {
+            // Skip if we already emitted an iteration from GenomeProgress for this generation
+            // (GenomeProgress includes accuracy, GaIteration does not)
+            if state.last_emitted_generation == Some(generation) {
+                // Already handled by GenomeProgress, skip duplicate
+                return vec![];
+            }
             state.iteration_id += 1;
+            state.last_emitted_generation = Some(generation);
             let iteration = Iteration {
                 id: state.iteration_id,
                 phase_id: state.current_phase_id,
@@ -333,6 +343,7 @@ fn process_line(line: &str, state: &mut ParserState) -> Vec<WsMessage> {
                 // Emit iteration update for previous generation if we have data
                 if state.current_generation.is_some() && state.gen_genome_count > 0 {
                     state.iteration_id += 1;
+                    state.last_emitted_generation = state.current_generation;
                     let elapsed = state.gen_start_time.elapsed().as_secs_f64();
                     let iteration = Iteration {
                         id: state.iteration_id,
@@ -356,6 +367,7 @@ fn process_line(line: &str, state: &mut ParserState) -> Vec<WsMessage> {
             // If this is the last genome in the generation, emit the iteration update now
             if genome_idx == total_genomes {
                 state.iteration_id += 1;
+                state.last_emitted_generation = Some(generation);
                 let elapsed = state.gen_start_time.elapsed().as_secs_f64();
                 let iteration = Iteration {
                     id: state.iteration_id,
