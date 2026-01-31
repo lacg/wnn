@@ -565,6 +565,53 @@ function handleWsMessageV2(msg: WsMessageV2) {
       console.log('[V2] Experiment status changed:', exp.status);
       break;
     }
+
+    // Flow status updates (shared with V1)
+    case 'FlowStarted': {
+      const flow = msg.data;
+      flows.update((f) => {
+        const existing = f.find((x) => x.id === flow.id);
+        if (existing) {
+          return f.map((x) => (x.id === flow.id ? flow : x));
+        }
+        return [...f, flow];
+      });
+      currentFlow.set(flow);
+      console.log('[V2] Flow started:', flow.name);
+      break;
+    }
+
+    case 'FlowQueued': {
+      const flow = msg.data;
+      flows.update((f) => {
+        const existing = f.find((x) => x.id === flow.id);
+        if (existing) {
+          return f.map((x) => (x.id === flow.id ? flow : x));
+        }
+        return [...f, flow];
+      });
+      currentFlow.set(flow);
+      console.log('[V2] Flow queued:', flow.name);
+      break;
+    }
+
+    case 'FlowCompleted': {
+      const flow = msg.data;
+      flows.update((f) =>
+        f.map((x) => (x.id === flow.id ? flow : x))
+      );
+      console.log('[V2] Flow completed:', flow.name);
+      break;
+    }
+
+    case 'FlowFailed': {
+      const { flow, error } = msg.data;
+      flows.update((f) =>
+        f.map((x) => (x.id === flow.id ? flow : x))
+      );
+      console.error('[V2] Flow failed:', flow.name, error);
+      break;
+    }
   }
 }
 

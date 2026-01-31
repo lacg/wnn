@@ -1100,26 +1100,61 @@ async fn handle_socket_v2(
         }
     }
 
+    // Subscribe to broadcast channel for flow events
+    let mut rx = state.ws_tx.subscribe();
+
     // Poll for updates every 500ms
     let mut poll_interval = interval(Duration::from_millis(500));
     let mut last_iteration_id: Option<i64> = None;
 
     loop {
-        poll_interval.tick().await;
-
-        // Check for new iterations
-        if let Ok(Some(exp)) = crate::db::queries::get_running_experiment_v2(&state.db).await {
-            if let Ok(iterations) = crate::db::queries::get_recent_iterations_v2(&state.db, exp.id, 10).await {
-                // Send new iterations since last poll
-                for iter in iterations.iter().rev() {
-                    if last_iteration_id.map_or(true, |last_id| iter.id > last_id) {
-                        let msg = WsMessageV2::IterationCompleted(iter.clone());
-                        if let Ok(json) = serde_json::to_string(&msg) {
+        tokio::select! {
+            // Handle broadcast messages (flow status updates)
+            result = rx.recv() => {
+                match result {
+                    Ok(msg) => {
+                        // Forward flow-related messages to client
+                        let json_result = match &msg {
+                            WsMessage::FlowStarted(_) |
+                            WsMessage::FlowQueued(_) |
+                            WsMessage::FlowCompleted(_) |
+                            WsMessage::FlowFailed { .. } |
+                            WsMessage::FlowCancelled(_) => {
+                                serde_json::to_string(&msg)
+                            }
+                            _ => continue, // Skip non-flow messages
+                        };
+                        if let Ok(json) = json_result {
                             if socket.send(Message::Text(json.into())).await.is_err() {
                                 return;
                             }
                         }
-                        last_iteration_id = Some(iter.id);
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        // Missed some messages, continue
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        return;
+                    }
+                }
+            }
+
+            // DB polling for iterations
+            _ = poll_interval.tick() => {
+                if let Ok(Some(exp)) = crate::db::queries::get_running_experiment_v2(&state.db).await {
+                    if let Ok(iterations) = crate::db::queries::get_recent_iterations_v2(&state.db, exp.id, 10).await {
+                        // Send new iterations since last poll
+                        for iter in iterations.iter().rev() {
+                            if last_iteration_id.map_or(true, |last_id| iter.id > last_id) {
+                                let msg = WsMessageV2::IterationCompleted(iter.clone());
+                                if let Ok(json) = serde_json::to_string(&msg) {
+                                    if socket.send(Message::Text(json.into())).await.is_err() {
+                                        return;
+                                    }
+                                }
+                                last_iteration_id = Some(iter.id);
+                            }
+                        }
                     }
                 }
             }
