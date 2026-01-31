@@ -1160,16 +1160,18 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			# V2 tracking: record iteration data (uses base class _tracker set via set_tracker)
 			if self._tracker and self._tracker_phase_id:
 				try:
-					# Compute average accuracy
+					# Compute average and best accuracy from population
 					valid_accs = [g._cached_fitness[1] for g, _ in population
 					              if hasattr(g, '_cached_fitness') and g._cached_fitness]
 					avg_acc = sum(valid_accs) / len(valid_accs) if valid_accs else None
+					# Use actual best accuracy, not accuracy of best CE genome
+					actual_best_acc = max(valid_accs) if valid_accs else best_acc
 
 					iteration_id = self._tracker.record_iteration(
 						phase_id=self._tracker_phase_id,
 						iteration_num=generation + 1,
 						best_ce=best_fitness,
-						best_accuracy=best_acc,
+						best_accuracy=actual_best_acc,
 						avg_ce=avg_fitness,
 						avg_accuracy=avg_acc,
 						elite_count=elite_count,
@@ -1913,12 +1915,14 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 					valid_neighbors = [(g, ce, acc) for g, ce, acc in all_neighbors if acc is not None]
 					avg_ce = sum(ce for _, ce, _ in all_neighbors) / len(all_neighbors) if all_neighbors else None
 					avg_acc = sum(acc for _, _, acc in valid_neighbors) / len(valid_neighbors) if valid_neighbors else None
+					# Use actual best accuracy from this iteration, not accuracy of best CE genome
+					actual_best_acc = best_acc_accuracy if best_acc_accuracy is not None else best_accuracy
 
 					iteration_id = self._tracker.record_iteration(
 						phase_id=self._tracker_phase_id,
 						iteration_num=iteration + 1,
 						best_ce=best_fitness,
-						best_accuracy=best_accuracy,
+						best_accuracy=actual_best_acc,
 						avg_ce=avg_ce,
 						avg_accuracy=avg_acc,
 						elite_count=1,  # TS has one "current" genome
