@@ -3,8 +3,8 @@ import { defineConfig } from 'vite';
 import fs from 'fs';
 import path from 'path';
 
-// Check if TLS is enabled via environment variable
-const tlsEnabled = process.env.DASHBOARD_TLS === '1' || process.env.DASHBOARD_TLS === 'true';
+// TLS enabled by default (set DASHBOARD_TLS=0 to disable)
+const tlsEnabled = process.env.DASHBOARD_TLS !== '0' && process.env.DASHBOARD_TLS !== 'false';
 
 // Load certificates if TLS is enabled
 const httpsConfig = tlsEnabled ? {
