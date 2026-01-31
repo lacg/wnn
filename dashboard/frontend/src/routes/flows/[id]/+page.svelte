@@ -643,7 +643,7 @@
     <section class="section">
       <div class="section-header">
         <h2>Experiments ({(flow.config.experiments || []).length})</h2>
-        {#if flow.status === 'pending' || flow.status === 'running'}
+        {#if flow.status === 'pending' || flow.status === 'running' || flow.status === 'failed'}
           <button class="btn btn-sm btn-secondary" on:click={() => showAddPhase = true}>
             + Add Phase
           </button>
