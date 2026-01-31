@@ -443,6 +443,7 @@ class OptimizerStrategyFactory:
 					seed_only=seed_only,
 					checkpoint_config=checkpoint_config,
 					phase_name=phase_name,
+					shutdown_check=shutdown_check,
 				)
 
 			case OptimizerStrategyType.ARCHITECTURE_TS:
