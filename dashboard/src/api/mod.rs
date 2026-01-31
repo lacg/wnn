@@ -1099,8 +1099,12 @@ async fn handle_socket_v2(
     use axum::extract::ws::Message;
     use tokio::time::{interval, Duration};
 
-    // Send initial snapshot
+    // Send initial snapshot and track current state
     let snapshot = build_snapshot_v2(&state.db).await;
+    let mut last_experiment_id = snapshot.current_experiment.as_ref().map(|e| e.id);
+    let mut last_phase_id = snapshot.current_phase.as_ref().map(|p| p.id);
+    let mut last_phase_status = snapshot.current_phase.as_ref().map(|p| p.status.clone());
+
     if let Ok(json) = serde_json::to_string(&WsMessageV2::Snapshot(snapshot)) {
         if socket.send(Message::Text(json.into())).await.is_err() {
             return;
@@ -1120,6 +1124,14 @@ async fn handle_socket_v2(
             result = rx.recv() => {
                 match result {
                     Ok(msg) => {
+                        // On flow state change, send a fresh snapshot
+                        let should_send_snapshot = matches!(&msg,
+                            WsMessage::FlowStarted(_) |
+                            WsMessage::FlowCompleted(_) |
+                            WsMessage::FlowFailed { .. } |
+                            WsMessage::FlowCancelled(_)
+                        );
+
                         // Forward flow-related messages to client
                         let json_result = match &msg {
                             WsMessage::FlowStarted(_) |
@@ -1136,6 +1148,19 @@ async fn handle_socket_v2(
                                 return;
                             }
                         }
+
+                        // Send fresh snapshot after flow state change
+                        if should_send_snapshot {
+                            let snapshot = build_snapshot_v2(&state.db).await;
+                            last_experiment_id = snapshot.current_experiment.as_ref().map(|e| e.id);
+                            last_phase_id = snapshot.current_phase.as_ref().map(|p| p.id);
+                            last_phase_status = snapshot.current_phase.as_ref().map(|p| p.status.clone());
+                            if let Ok(json) = serde_json::to_string(&WsMessageV2::Snapshot(snapshot)) {
+                                if socket.send(Message::Text(json.into())).await.is_err() {
+                                    return;
+                                }
+                            }
+                        }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                         // Missed some messages, continue
@@ -1146,11 +1171,29 @@ async fn handle_socket_v2(
                 }
             }
 
-            // DB polling for iterations
+            // DB polling for iterations and state changes
             _ = poll_interval.tick() => {
-                if let Ok(Some(exp)) = crate::db::queries::get_running_experiment_v2(&state.db).await {
+                // Check for experiment/phase changes
+                let snapshot = build_snapshot_v2(&state.db).await;
+                let current_exp_id = snapshot.current_experiment.as_ref().map(|e| e.id);
+                let current_phase_id = snapshot.current_phase.as_ref().map(|p| p.id);
+                let current_phase_status = snapshot.current_phase.as_ref().map(|p| p.status.clone());
+
+                // Send fresh snapshot if experiment or phase changed
+                if current_exp_id != last_experiment_id ||
+                   current_phase_id != last_phase_id ||
+                   current_phase_status != last_phase_status {
+                    last_experiment_id = current_exp_id;
+                    last_phase_id = current_phase_id;
+                    last_phase_status = current_phase_status;
+                    if let Ok(json) = serde_json::to_string(&WsMessageV2::Snapshot(snapshot)) {
+                        if socket.send(Message::Text(json.into())).await.is_err() {
+                            return;
+                        }
+                    }
+                } else if let Some(ref exp) = snapshot.current_experiment {
+                    // Just send new iterations
                     if let Ok(iterations) = crate::db::queries::get_recent_iterations_v2(&state.db, exp.id, 10).await {
-                        // Send new iterations since last poll
                         for iter in iterations.iter().rev() {
                             if last_iteration_id.map_or(true, |last_id| iter.id > last_id) {
                                 let msg = WsMessageV2::IterationCompleted(iter.clone());
