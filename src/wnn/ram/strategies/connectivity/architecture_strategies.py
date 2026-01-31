@@ -1158,23 +1158,30 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			# Log generation summary with duration
 			# Note: best/avg are from subset evaluation, not full validation
 			gen_elapsed = time.time() - gen_start
-			avg_fitness = sum(ce for _, ce in population) / len(population)
+
+			# V2 tracking: record iteration data (uses base class _tracker set via set_tracker)
+			# FIX: Compute avg_ce and avg_acc from SAME filtered data source
+			# This ensures both averages use the same denominator (symmetric computation)
+			valid_data = [(g._cached_fitness[0], g._cached_fitness[1])
+			              for g, _ in population
+			              if hasattr(g, '_cached_fitness') and g._cached_fitness]
+			if valid_data:
+				avg_fitness = sum(ce for ce, _ in valid_data) / len(valid_data)
+				avg_acc = sum(acc for _, acc in valid_data) / len(valid_data)
+				actual_best_ce = min(ce for ce, _ in valid_data)
+				actual_best_acc = max(acc for _, acc in valid_data)
+			else:
+				# Fallback: use CE from population tuple if no cached fitness
+				avg_fitness = sum(ce for _, ce in population) / len(population)
+				avg_acc = None
+				actual_best_ce = best_fitness
+				actual_best_acc = best_acc
+
 			self._log.info(f"[{self.name}] Gen {generation+1:03d}/{cfg.generations}: "
 						   f"best={best_fitness:.4f}, avg={avg_fitness:.4f} (subset) ({gen_elapsed:.1f}s)")
 
-			# V2 tracking: record iteration data (uses base class _tracker set via set_tracker)
 			if self._tracker and self._tracker_phase_id:
 				try:
-					# Compute ACTUAL best CE and accuracy from population
-					# (not the "best by fitness ranking" which may differ when using harmonic rank)
-					valid_ces = [g._cached_fitness[0] for g, _ in population
-					             if hasattr(g, '_cached_fitness') and g._cached_fitness]
-					valid_accs = [g._cached_fitness[1] for g, _ in population
-					              if hasattr(g, '_cached_fitness') and g._cached_fitness]
-					avg_acc = sum(valid_accs) / len(valid_accs) if valid_accs else None
-					# Use actual best CE and accuracy from population
-					actual_best_ce = min(valid_ces) if valid_ces else best_fitness
-					actual_best_acc = max(valid_accs) if valid_accs else best_acc
 
 					# Get baseline and patience info for dashboard
 					baseline_ce = None
@@ -1942,16 +1949,23 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 			history.append((iteration + 1, best_fitness))
 
 			# V2 tracking: record iteration data (uses base class _tracker set via set_tracker)
+			# FIX: Compute avg_ce and avg_acc from SAME filtered data source
+			# This ensures both averages use the same denominator (symmetric computation)
+			valid_neighbors = [(g, ce, acc) for g, ce, acc in all_neighbors if acc is not None]
+			if valid_neighbors:
+				avg_ce = sum(ce for _, ce, _ in valid_neighbors) / len(valid_neighbors)
+				avg_acc = sum(acc for _, _, acc in valid_neighbors) / len(valid_neighbors)
+				actual_best_ce = min(ce for _, ce, _ in valid_neighbors)
+				actual_best_acc = max(acc for _, _, acc in valid_neighbors)
+			else:
+				# Fallback: use all_neighbors if no valid neighbors with accuracy
+				avg_ce = sum(ce for _, ce, _ in all_neighbors) / len(all_neighbors) if all_neighbors else None
+				avg_acc = None
+				actual_best_ce = min(ce for _, ce, _ in all_neighbors) if all_neighbors else best_fitness
+				actual_best_acc = best_accuracy
+
 			if self._tracker and self._tracker_phase_id:
 				try:
-					# Compute ACTUAL best CE and accuracy from all_neighbors
-					# (not the "best" which may differ based on fitness ranking)
-					valid_neighbors = [(g, ce, acc) for g, ce, acc in all_neighbors if acc is not None]
-					avg_ce = sum(ce for _, ce, _ in all_neighbors) / len(all_neighbors) if all_neighbors else None
-					avg_acc = sum(acc for _, _, acc in valid_neighbors) / len(valid_neighbors) if valid_neighbors else None
-					# Use actual best CE and accuracy from this iteration
-					actual_best_ce = min(ce for _, ce, _ in all_neighbors) if all_neighbors else best_fitness
-					actual_best_acc = max(acc for _, _, acc in valid_neighbors) if valid_neighbors else best_accuracy
 
 					# Get baseline and patience info for dashboard
 					baseline_ce = None

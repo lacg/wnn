@@ -1014,9 +1014,10 @@ class GAConfig:
 	fitness_percentile: Optional[float] = None
 	# Fitness calculator: how to combine CE and accuracy for ranking
 	# CE = pure CE ranking, uses dual elites (10% CE + 10% Acc)
-	# HARMONIC_RANK = harmonic mean of ranks (default), uses single elite (20% by rank)
-	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK
-	# Weights for HARMONIC_RANK mode (higher weight = more important)
+	# HARMONIC_RANK = harmonic mean of ranks, uses single elite (20% by rank)
+	# NORMALIZED = normalized [0,1] scale weighted sum (default), balanced CE/accuracy
+	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.NORMALIZED
+	# Weights for HARMONIC_RANK/NORMALIZED mode (higher weight = more important)
 	fitness_weight_ce: float = 1.0
 	fitness_weight_acc: float = 1.0
 	# Early stopping (all configurable via parameters)
@@ -1053,9 +1054,10 @@ class TSConfig:
 	fitness_percentile: Optional[float] = None
 	# Fitness calculator: how to combine CE and accuracy for ranking
 	# CE = pure CE ranking, uses dual paths (25 neighbors from best_ce + 25 from best_acc)
-	# HARMONIC_RANK = harmonic mean of ranks (default), uses single path (50 from best_harmonic)
-	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK
-	# Weights for HARMONIC_RANK mode (higher weight = more important)
+	# HARMONIC_RANK = harmonic mean of ranks, uses single path (50 from best_harmonic)
+	# NORMALIZED = normalized [0,1] scale weighted sum (default), balanced CE/accuracy
+	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.NORMALIZED
+	# Weights for HARMONIC_RANK/NORMALIZED mode (higher weight = more important)
 	fitness_weight_ce: float = 1.0
 	fitness_weight_acc: float = 1.0
 	# Early stopping (all configurable via parameters)
