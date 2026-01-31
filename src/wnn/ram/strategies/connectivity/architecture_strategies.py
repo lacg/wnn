@@ -1162,6 +1162,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 					)
 
 					# Record genome evaluations (if genome_to_config is implemented)
+					self._log.info(f"[{self.name}] Genome tracking: iter_id={iteration_id}, exp_id={self._tracker_experiment_id}, HAS={HAS_GENOME_TRACKING}")
 					if iteration_id and self._tracker_experiment_id and HAS_GENOME_TRACKING and GenomeRole is not None:
 						evaluations = []
 						for pos, (genome, ce) in enumerate(population):
@@ -1902,6 +1903,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 					)
 
 					# Record genome evaluations for TS (current best + top neighbors)
+					self._log.info(f"[{self.name}] Genome tracking: iter_id={iteration_id}, exp_id={self._tracker_experiment_id}, HAS={HAS_GENOME_TRACKING}")
 					if iteration_id and self._tracker_experiment_id and HAS_GENOME_TRACKING and GenomeRole is not None:
 						evaluations = []
 						# Record current best genome
