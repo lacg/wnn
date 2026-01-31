@@ -866,57 +866,74 @@ pub mod queries {
     ) -> Result<bool> {
         // If clearing seed (restart from beginning), also delete old experiment data
         if clear_seed.is_some() {
-            // Delete V2 data first (cascade through iterations -> genome_evaluations)
-            // Get experiment IDs linked to this flow
-            let exp_ids: Vec<i64> = sqlx::query_scalar(
+            // Delete V2 data following the chain: experiments_v2 -> phases_v2 -> iterations_v2 -> genome_evaluations_v2
+
+            // Get V2 experiment IDs for this flow
+            let v2_exp_ids: Vec<i64> = sqlx::query_scalar(
+                "SELECT id FROM experiments_v2 WHERE flow_id = ?"
+            )
+            .bind(id)
+            .fetch_all(pool)
+            .await?;
+
+            for exp_id in &v2_exp_ids {
+                // Get phase IDs for this experiment
+                let phase_ids: Vec<i64> = sqlx::query_scalar(
+                    "SELECT id FROM phases_v2 WHERE experiment_id = ?"
+                )
+                .bind(exp_id)
+                .fetch_all(pool)
+                .await?;
+
+                for phase_id in &phase_ids {
+                    // Delete genome evaluations for iterations of this phase
+                    sqlx::query(
+                        "DELETE FROM genome_evaluations_v2 WHERE iteration_id IN (SELECT id FROM iterations_v2 WHERE phase_id = ?)"
+                    )
+                    .bind(phase_id)
+                    .execute(pool)
+                    .await?;
+
+                    // Delete iterations for this phase
+                    sqlx::query("DELETE FROM iterations_v2 WHERE phase_id = ?")
+                        .bind(phase_id)
+                        .execute(pool)
+                        .await?;
+                }
+
+                // Delete phases for this experiment
+                sqlx::query("DELETE FROM phases_v2 WHERE experiment_id = ?")
+                    .bind(exp_id)
+                    .execute(pool)
+                    .await?;
+            }
+
+            // Delete V2 experiments
+            sqlx::query("DELETE FROM experiments_v2 WHERE flow_id = ?")
+                .bind(id)
+                .execute(pool)
+                .await?;
+
+            // Also clean up V1 data (flow_experiments and experiments)
+            let v1_exp_ids: Vec<i64> = sqlx::query_scalar(
                 "SELECT experiment_id FROM flow_experiments WHERE flow_id = ?"
             )
             .bind(id)
             .fetch_all(pool)
             .await?;
 
-            if !exp_ids.is_empty() {
-                // Delete genome evaluations for iterations of these experiments
-                for exp_id in &exp_ids {
-                    sqlx::query(
-                        "DELETE FROM genome_evaluations_v2 WHERE iteration_id IN (SELECT id FROM iterations_v2 WHERE experiment_id = ?)"
-                    )
+            // Delete flow_experiments mappings
+            sqlx::query("DELETE FROM flow_experiments WHERE flow_id = ?")
+                .bind(id)
+                .execute(pool)
+                .await?;
+
+            // Delete V1 experiments
+            for exp_id in &v1_exp_ids {
+                sqlx::query("DELETE FROM experiments WHERE id = ?")
                     .bind(exp_id)
                     .execute(pool)
                     .await?;
-
-                    // Delete iterations
-                    sqlx::query("DELETE FROM iterations_v2 WHERE experiment_id = ?")
-                        .bind(exp_id)
-                        .execute(pool)
-                        .await?;
-
-                    // Delete phases
-                    sqlx::query("DELETE FROM phases_v2 WHERE experiment_id = ?")
-                        .bind(exp_id)
-                        .execute(pool)
-                        .await?;
-                }
-
-                // Delete V2 experiments
-                sqlx::query("DELETE FROM experiments_v2 WHERE flow_id = ?")
-                    .bind(id)
-                    .execute(pool)
-                    .await?;
-
-                // Delete flow_experiments mappings
-                sqlx::query("DELETE FROM flow_experiments WHERE flow_id = ?")
-                    .bind(id)
-                    .execute(pool)
-                    .await?;
-
-                // Delete old experiments (V1)
-                for exp_id in &exp_ids {
-                    sqlx::query("DELETE FROM experiments WHERE id = ?")
-                        .bind(exp_id)
-                        .execute(pool)
-                        .await?;
-                }
             }
         }
 
