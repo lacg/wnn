@@ -15,7 +15,24 @@ pub async fn init_db(database_url: &str) -> Result<DbPool> {
     // Create tables
     sqlx::query(SCHEMA).execute(&pool).await?;
 
+    // Run migrations for existing databases
+    run_migrations(&pool).await?;
+
     Ok(pool)
+}
+
+/// Run migrations for schema changes
+async fn run_migrations(pool: &DbPool) -> Result<()> {
+    // Migration 1: Add pid and checkpoint_phase to experiments
+    // (safe to run multiple times - uses IF NOT EXISTS pattern via error handling)
+    let _ = sqlx::query("ALTER TABLE experiments ADD COLUMN pid INTEGER")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE experiments ADD COLUMN checkpoint_phase TEXT")
+        .execute(pool)
+        .await;
+
+    Ok(())
 }
 
 const SCHEMA: &str = r#"
@@ -26,7 +43,9 @@ CREATE TABLE IF NOT EXISTS experiments (
     started_at TEXT NOT NULL,
     ended_at TEXT,
     status TEXT NOT NULL DEFAULT 'running',
-    config_json TEXT
+    config_json TEXT,
+    pid INTEGER,
+    checkpoint_phase TEXT
 );
 
 CREATE TABLE IF NOT EXISTS phases (
@@ -143,7 +162,7 @@ pub mod queries {
 
     pub async fn list_experiments(pool: &DbPool, limit: i32, offset: i32) -> Result<Vec<Experiment>> {
         let rows = sqlx::query(
-            r#"SELECT id, name, log_path, started_at, ended_at, status, config_json
+            r#"SELECT id, name, log_path, started_at, ended_at, status, config_json, pid, checkpoint_phase
                FROM experiments
                ORDER BY started_at DESC
                LIMIT ? OFFSET ?"#,
@@ -162,7 +181,7 @@ pub mod queries {
 
     pub async fn get_experiment(pool: &DbPool, id: i64) -> Result<Option<Experiment>> {
         let row = sqlx::query(
-            r#"SELECT id, name, log_path, started_at, ended_at, status, config_json
+            r#"SELECT id, name, log_path, started_at, ended_at, status, config_json, pid, checkpoint_phase
                FROM experiments WHERE id = ?"#,
         )
         .bind(id)
@@ -210,6 +229,8 @@ pub mod queries {
                 .map(|s| serde_json::from_str(&s))
                 .transpose()?
                 .unwrap_or_default(),
+            pid: row.get("pid"),
+            checkpoint_phase: row.get("checkpoint_phase"),
         })
     }
 
@@ -514,7 +535,7 @@ pub mod queries {
 
     pub async fn list_flow_experiments(pool: &DbPool, flow_id: i64) -> Result<Vec<Experiment>> {
         let rows = sqlx::query(
-            r#"SELECT e.id, e.name, e.log_path, e.started_at, e.ended_at, e.status, e.config_json
+            r#"SELECT e.id, e.name, e.log_path, e.started_at, e.ended_at, e.status, e.config_json, e.pid, e.checkpoint_phase
                FROM experiments e
                JOIN flow_experiments fe ON e.id = fe.experiment_id
                WHERE fe.flow_id = ?

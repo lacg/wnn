@@ -301,21 +301,28 @@ fn process_line(line: &str, state: &mut ParserState) -> Vec<WsMessage> {
             messages
         }
         LogEvent::GaIteration { generation, best, avg, elapsed, .. } => {
-            // Skip if we already emitted an iteration from GenomeProgress for this generation
-            // (GenomeProgress includes accuracy, GaIteration does not)
-            if state.last_emitted_generation == Some(generation) {
-                // Already handled by GenomeProgress, skip duplicate
+            // This summary line has the accurate elapsed time from the log
+            // Use tracked accuracy from GenomeProgress if available for this generation
+            let accuracy = if state.current_generation == Some(generation) && state.gen_genome_count > 0 {
+                Some(state.gen_best_acc)
+            } else if state.last_emitted_generation == Some(generation) {
+                // Already emitted from GenomeProgress, but we can update with correct timing
+                // For now, skip to avoid duplicate (TODO: could update elapsed time)
                 return vec![];
-            }
+            } else {
+                None
+            };
+
             state.iteration_id += 1;
             state.last_emitted_generation = Some(generation);
+            state.current_generation = None; // Reset tracking
             let iteration = Iteration {
                 id: state.iteration_id,
                 phase_id: state.current_phase_id,
                 iteration_num: generation,
                 best_ce: best,
                 avg_ce: Some(avg),
-                best_accuracy: None,
+                best_accuracy: accuracy,
                 elapsed_secs: elapsed,
                 timestamp: chrono::Utc::now(),
             };
@@ -335,56 +342,18 @@ fn process_line(line: &str, state: &mut ParserState) -> Vec<WsMessage> {
             };
             vec![WsMessage::IterationUpdate(iteration)]
         }
-        LogEvent::GenomeProgress { generation, total_gens: _, genome_idx, total_genomes, is_elite: _, ce, accuracy } => {
-            let mut messages = Vec::new();
-
-            // Check if this is a new generation
+        LogEvent::GenomeProgress { generation, total_gens: _, genome_idx: _, total_genomes: _, is_elite: _, ce, accuracy } => {
+            // Track metrics for this generation - GaIteration will emit with correct elapsed time
             if state.current_generation != Some(generation) {
-                // Emit iteration update for previous generation if we have data
-                if state.current_generation.is_some() && state.gen_genome_count > 0 {
-                    state.iteration_id += 1;
-                    state.last_emitted_generation = state.current_generation;
-                    let elapsed = state.gen_start_time.elapsed().as_secs_f64();
-                    let iteration = Iteration {
-                        id: state.iteration_id,
-                        phase_id: state.current_phase_id,
-                        iteration_num: state.current_generation.unwrap(),
-                        best_ce: state.gen_best_ce,
-                        avg_ce: None, // No average in genome-by-genome format
-                        best_accuracy: Some(state.gen_best_acc),
-                        elapsed_secs: elapsed,
-                        timestamp: chrono::Utc::now(),
-                    };
-                    messages.push(WsMessage::IterationUpdate(iteration));
-                }
-                // Start tracking the new generation
+                // New generation started - reset tracking
                 state.start_new_generation(generation);
             }
 
             // Update generation tracking with this genome's metrics
             state.update_genome(ce, accuracy);
 
-            // If this is the last genome in the generation, emit the iteration update now
-            if genome_idx == total_genomes {
-                state.iteration_id += 1;
-                state.last_emitted_generation = Some(generation);
-                let elapsed = state.gen_start_time.elapsed().as_secs_f64();
-                let iteration = Iteration {
-                    id: state.iteration_id,
-                    phase_id: state.current_phase_id,
-                    iteration_num: generation,
-                    best_ce: state.gen_best_ce,
-                    avg_ce: None,
-                    best_accuracy: Some(state.gen_best_acc),
-                    elapsed_secs: elapsed,
-                    timestamp: chrono::Utc::now(),
-                };
-                messages.push(WsMessage::IterationUpdate(iteration));
-                // Reset for next generation
-                state.current_generation = None;
-            }
-
-            messages
+            // Don't emit here - let GaIteration handle emission with correct elapsed time from log
+            vec![]
         }
         LogEvent::HealthCheck { k, ce, accuracy } => {
             let health = HealthCheck {

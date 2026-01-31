@@ -14,6 +14,12 @@ pub struct Experiment {
     pub ended_at: Option<DateTime<Utc>>,
     pub status: ExperimentStatus,
     pub config: ExperimentConfig,
+    /// Process ID of the running experiment (for signal handling)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i32>,
+    /// Last completed checkpoint phase (e.g., "1a", "2b")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checkpoint_phase: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
