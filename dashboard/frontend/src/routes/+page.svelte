@@ -36,11 +36,10 @@
   let loadingGenomes = false;
   let showIterationModal = false;
 
-  // Phase history modal state
-  let selectedPhase: PhaseV2 | null = null;
+  // Phase history state (inline display, not modal)
+  let selectedHistoryPhase: PhaseV2 | null = null;
   let phaseIterations: IterationV2[] = [];
   let loadingPhaseIterations = false;
-  let showPhaseModal = false;
 
   onMount(() => {
     // Fetch the current running flow
@@ -90,11 +89,17 @@
     genomeEvaluations = [];
   }
 
-  async function openPhaseHistory(phase: PhaseV2) {
+  async function selectPhaseHistory(phase: PhaseV2) {
     if (!$useV2Mode) return; // Only available in V2 mode
 
-    selectedPhase = phase;
-    showPhaseModal = true;
+    // If clicking the same phase or the running phase, go back to live view
+    if (selectedHistoryPhase?.id === phase.id || phase.status === 'running') {
+      selectedHistoryPhase = null;
+      phaseIterations = [];
+      return;
+    }
+
+    selectedHistoryPhase = phase;
     loadingPhaseIterations = true;
     phaseIterations = [];
 
@@ -112,9 +117,8 @@
     }
   }
 
-  function closePhaseModal() {
-    showPhaseModal = false;
-    selectedPhase = null;
+  function clearPhaseHistory() {
+    selectedHistoryPhase = null;
     phaseIterations = [];
   }
 
@@ -182,7 +186,12 @@
     // V2 API returns decimal (0.00018), V1 log parser returns percentage (0.018)
     // V2 mode: multiply by 100 to get percentage
     const pct = $useV2Mode ? acc * 100 : acc;
-    return pct.toFixed(2) + '%';
+    return pct.toFixed(4) + '%';
+  }
+
+  function formatThreshold(threshold: number | null | undefined): string {
+    if (threshold === null || threshold === undefined) return '—';
+    return (threshold * 100).toFixed(4) + '%';
   }
 
   function phaseShortName(name: string): string {
@@ -403,9 +412,11 @@
             class="phase-item"
             class:completed={phase.status === 'completed'}
             class:running={phase.status === 'running'}
+            class:selected={selectedHistoryPhase?.id === phase.id}
             class:clickable={$useV2Mode}
-            on:click={() => $useV2Mode && openPhaseHistory(phase)}
+            on:click={() => $useV2Mode && selectPhaseHistory(phase)}
             disabled={!$useV2Mode}
+            title={phase.status === 'running' ? 'Click to show live iterations' : 'Click to show phase history'}
           >
             <div class="phase-indicator"></div>
             <div class="phase-info">
@@ -426,13 +437,83 @@
     {/if}
   </div>
 
-  <!-- Latest Iterations Table -->
+  <!-- Iterations Table (Live or Historical) -->
   <div class="card">
     <div class="card-header">
-      <span class="card-title">Recent Iterations</span>
-      <span class="count">{displayIterations.length} iterations</span>
+      <span class="card-title">
+        {#if selectedHistoryPhase}
+          {selectedHistoryPhase.name}
+        {:else}
+          Iterations
+        {/if}
+      </span>
+      <div class="header-right">
+        {#if selectedHistoryPhase}
+          <button class="btn-link" on:click={clearPhaseHistory}>← Back to Live</button>
+          <span class="count">{phaseIterations.length} iterations</span>
+        {:else}
+          <span class="count">{displayIterations.length} iterations</span>
+        {/if}
+      </div>
     </div>
-    {#if displayIterations.length > 0}
+    {#if loadingPhaseIterations}
+      <div class="empty-state">
+        <p>Loading iterations...</p>
+      </div>
+    {:else if selectedHistoryPhase}
+      {#if phaseIterations.length > 0}
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Iter</th>
+                <th>Best CE</th>
+                <th>Accuracy</th>
+                {#if $useV2Mode}
+                  <th>Δ Prev</th>
+                  <th>Threshold</th>
+                  <th>Patience</th>
+                {/if}
+                <th>Time</th>
+                {#if $useV2Mode}
+                  <th></th>
+                {/if}
+              </tr>
+            </thead>
+            <tbody>
+              {#each [...phaseIterations].reverse() as iter}
+                <tr
+                  class:clickable={$useV2Mode}
+                  on:click={() => $useV2Mode && openIterationDetails(iter)}
+                  on:keydown={(e) => e.key === 'Enter' && $useV2Mode && openIterationDetails(iter)}
+                  tabindex={$useV2Mode ? 0 : -1}
+                  role={$useV2Mode ? 'button' : undefined}
+                >
+                  <td>{iter.iteration_num}</td>
+                  <td class:best={iter.best_ce === displayBestMetrics.bestCE}>{formatCE(iter.best_ce)}</td>
+                  <td>{formatAcc(iter.best_accuracy)}</td>
+                  {#if $useV2Mode}
+                    <td class:delta-positive={iter.delta_previous && iter.delta_previous < 0} class:delta-negative={iter.delta_previous && iter.delta_previous > 0}>
+                      {iter.delta_previous !== null && iter.delta_previous !== undefined ? (iter.delta_previous < 0 ? '↓' : iter.delta_previous > 0 ? '↑' : '') + Math.abs(iter.delta_previous).toFixed(4) : '—'}
+                    </td>
+                    <td>{formatThreshold(iter.fitness_threshold)}</td>
+                    <td>{iter.patience_counter !== null && iter.patience_max ? `${iter.patience_max - iter.patience_counter}/${iter.patience_max}` : '—'}</td>
+                  {/if}
+                  <td>{iter.elapsed_secs ? iter.elapsed_secs.toFixed(1) + 's' : '—'}</td>
+                  {#if $useV2Mode}
+                    <td class="view-link">View →</td>
+                  {/if}
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      {:else}
+        <div class="empty-state">
+          <p>No iterations recorded for this phase</p>
+        </div>
+      {/if}
+    {:else if displayIterations.length > 0}
       <div class="table-scroll">
         <table>
           <thead>
@@ -467,7 +548,7 @@
                   <td class:delta-positive={iter.delta_previous && iter.delta_previous < 0} class:delta-negative={iter.delta_previous && iter.delta_previous > 0}>
                     {iter.delta_previous !== null && iter.delta_previous !== undefined ? (iter.delta_previous < 0 ? '↓' : iter.delta_previous > 0 ? '↑' : '') + Math.abs(iter.delta_previous).toFixed(4) : '—'}
                   </td>
-                  <td>{iter.fitness_threshold !== null && iter.fitness_threshold !== undefined ? (iter.fitness_threshold * 100).toFixed(2) + '%' : '—'}</td>
+                  <td>{formatThreshold(iter.fitness_threshold)}</td>
                   <td>{iter.patience_counter !== null && iter.patience_max ? `${iter.patience_max - iter.patience_counter}/${iter.patience_max}` : '—'}</td>
                 {/if}
                 <td>{iter.elapsed_secs ? iter.elapsed_secs.toFixed(1) + 's' : '—'}</td>
@@ -673,7 +754,7 @@
           {#if selectedIteration.fitness_threshold !== null && selectedIteration.fitness_threshold !== undefined}
             <div class="summary-item">
               <span class="label">Threshold:</span>
-              <span class="value">{(selectedIteration.fitness_threshold * 100).toFixed(2)}%</span>
+              <span class="value">{formatThreshold(selectedIteration.fitness_threshold)}</span>
             </div>
           {/if}
         </div>
@@ -717,103 +798,6 @@
                     {#if genomeEvaluations.some(g => g.elite_rank !== null)}
                       <td>{genome.elite_rank !== null ? `#${genome.elite_rank + 1}` : '—'}</td>
                     {/if}
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-          </div>
-        {/if}
-      </div>
-    </div>
-  </div>
-{/if}
-
-<!-- Phase History Modal -->
-{#if showPhaseModal && selectedPhase}
-  <div class="modal-overlay" on:click={closePhaseModal} on:keydown={(e) => e.key === 'Escape' && closePhaseModal()} role="dialog" aria-modal="true" tabindex="-1">
-    <div class="modal modal-wide" on:click|stopPropagation on:keydown|stopPropagation role="document">
-      <div class="modal-header">
-        <h2>{selectedPhase.name} - History</h2>
-        <button class="modal-close" on:click={closePhaseModal} aria-label="Close">×</button>
-      </div>
-
-      <div class="modal-body">
-        <!-- Phase Summary -->
-        <div class="iteration-summary">
-          <div class="summary-item">
-            <span class="label">Status:</span>
-            <span class="value status-badge status-{selectedPhase.status}">{selectedPhase.status}</span>
-          </div>
-          <div class="summary-item">
-            <span class="label">Iterations:</span>
-            <span class="value">{phaseIterations.length} / {selectedPhase.max_iterations}</span>
-          </div>
-          {#if selectedPhase.best_ce}
-            <div class="summary-item">
-              <span class="label">Best CE:</span>
-              <span class="value">{formatCE(selectedPhase.best_ce)}</span>
-            </div>
-          {/if}
-          {#if selectedPhase.best_accuracy}
-            <div class="summary-item">
-              <span class="label">Best Accuracy:</span>
-              <span class="value">{formatAcc(selectedPhase.best_accuracy)}</span>
-            </div>
-          {/if}
-          {#if selectedPhase.started_at}
-            <div class="summary-item">
-              <span class="label">Started:</span>
-              <span class="value">{new Date(selectedPhase.started_at).toLocaleString()}</span>
-            </div>
-          {/if}
-          {#if selectedPhase.ended_at}
-            <div class="summary-item">
-              <span class="label">Ended:</span>
-              <span class="value">{new Date(selectedPhase.ended_at).toLocaleString()}</span>
-            </div>
-          {/if}
-        </div>
-
-        <!-- Iterations Table -->
-        <h3>Iterations ({phaseIterations.length})</h3>
-        {#if loadingPhaseIterations}
-          <div class="loading">Loading iterations...</div>
-        {:else if phaseIterations.length === 0}
-          <div class="empty-state">
-            <p>No iterations recorded for this phase.</p>
-          </div>
-        {:else}
-          <div class="genome-table-scroll">
-            <table class="genome-table">
-              <thead>
-                <tr>
-                  <th>Iter</th>
-                  <th>Best CE</th>
-                  <th>Accuracy</th>
-                  <th>Avg CE</th>
-                  <th>Δ Prev</th>
-                  <th>Patience</th>
-                  <th>Time</th>
-                </tr>
-              </thead>
-              <tbody>
-                {#each phaseIterations as iter}
-                  <tr
-                    class:clickable={true}
-                    on:click={() => openIterationDetails(iter)}
-                    on:keydown={(e) => e.key === 'Enter' && openIterationDetails(iter)}
-                    tabindex="0"
-                    role="button"
-                  >
-                    <td>{iter.iteration_num}</td>
-                    <td>{formatCE(iter.best_ce)}</td>
-                    <td>{formatAcc(iter.best_accuracy)}</td>
-                    <td>{iter.avg_ce ? formatCE(iter.avg_ce) : '—'}</td>
-                    <td class:delta-positive={iter.delta_previous && iter.delta_previous < 0} class:delta-negative={iter.delta_previous && iter.delta_previous > 0}>
-                      {iter.delta_previous !== null && iter.delta_previous !== undefined ? (iter.delta_previous < 0 ? '↓' : iter.delta_previous > 0 ? '↑' : '') + Math.abs(iter.delta_previous).toFixed(4) : '—'}
-                    </td>
-                    <td>{iter.patience_counter !== null && iter.patience_max ? `${iter.patience_max - iter.patience_counter}/${iter.patience_max}` : '—'}</td>
-                    <td>{iter.elapsed_secs ? iter.elapsed_secs.toFixed(1) + 's' : '—'}</td>
                   </tr>
                 {/each}
               </tbody>
@@ -891,6 +875,12 @@
 
   .phase-item:disabled {
     cursor: default;
+  }
+
+  .phase-item.selected {
+    border-color: var(--accent-yellow, #eab308);
+    background: rgba(234, 179, 8, 0.15);
+    box-shadow: 0 0 0 2px rgba(234, 179, 8, 0.3);
   }
 
   .phase-item.completed {
@@ -982,6 +972,27 @@
   .count {
     font-size: 0.75rem;
     color: var(--text-secondary);
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .btn-link {
+    background: none;
+    border: none;
+    color: var(--accent-blue);
+    cursor: pointer;
+    font-size: 0.875rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    transition: background-color 0.15s ease;
+  }
+
+  .btn-link:hover {
+    background: rgba(59, 130, 246, 0.1);
   }
 
   .best {
@@ -1201,9 +1212,6 @@
     border: 1px solid var(--border);
   }
 
-  .modal.modal-wide {
-    max-width: 1000px;
-  }
 
   .modal-header {
     display: flex;
