@@ -384,7 +384,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			self._cached_evaluator = batch_evaluator
 		else:
 			self._cached_evaluator = None
-		self._tracker: Optional[ProgressTracker] = None
+		self._progress_tracker: Optional[ProgressTracker] = None
 		self._checkpoint_config = checkpoint_config
 		self._phase_name = phase_name
 
@@ -726,8 +726,8 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 				genomes, logger=self._log, min_accuracy=min_accuracy,
 			)
 
-		# Create progress tracker
-		self._tracker = ProgressTracker(
+		# Create progress tracker (note: _progress_tracker, not _tracker, to avoid shadowing base class's V2 tracker)
+		self._progress_tracker = ProgressTracker(
 			logger=self._log,
 			minimize=True,
 			prefix=f"[{self.name}]",
@@ -1150,6 +1150,30 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			self._log.info(f"[{self.name}] Gen {generation+1:03d}/{cfg.generations}: "
 						   f"best={best_fitness:.4f}, avg={avg_fitness:.4f} (subset) ({gen_elapsed:.1f}s)")
 
+			# V2 tracking: record iteration data (uses base class _tracker set via set_tracker)
+			if self._tracker and self._tracker_phase_id:
+				try:
+					# Compute average accuracy
+					valid_accs = [g._cached_fitness[1] for g, _ in population
+					              if hasattr(g, '_cached_fitness') and g._cached_fitness]
+					avg_acc = sum(valid_accs) / len(valid_accs) if valid_accs else None
+
+					self._tracker.record_iteration(
+						phase_id=self._tracker_phase_id,
+						iteration_num=generation + 1,
+						best_ce=best_fitness,
+						best_accuracy=best_acc,
+						avg_ce=avg_fitness,
+						avg_accuracy=avg_acc,
+						elite_count=elite_count,
+						offspring_count=len(offspring_with_ce),
+						offspring_viable=len(offspring_with_ce),
+						fitness_threshold=current_threshold,
+					)
+				except Exception as e:
+					# Don't fail optimization on tracking errors
+					self._log.debug(f"[{self.name}] V2 tracking error: {e}")
+
 			# Health check: evaluate top-K elites on FULL data vs baseline + stagnation
 			# Only at check_interval to avoid expensive full evaluations every generation
 			if (generation + 1) % cfg.check_interval == 0:
@@ -1224,7 +1248,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 			self._cached_evaluator = batch_evaluator
 		else:
 			self._cached_evaluator = None
-		self._tracker: Optional[ProgressTracker] = None
+		self._progress_tracker: Optional[ProgressTracker] = None
 
 	@property
 	def name(self) -> str:
@@ -1440,8 +1464,8 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 				genomes, logger=self._log, min_accuracy=min_accuracy,
 			)
 
-		# Create progress tracker
-		self._tracker = ProgressTracker(
+		# Create progress tracker (note: _progress_tracker, not _tracker, to avoid shadowing base class's V2 tracker)
+		self._progress_tracker = ProgressTracker(
 			logger=self._log,
 			minimize=True,
 			prefix=f"[{self.name}]",
@@ -1850,6 +1874,30 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 					self._log.info(f"[{self.name}] Iter {iteration+1:03d}/{cfg.iterations}: best_ce={best_ce_fitness:.4f} (subset) ({iter_elapsed:.1f}s)")
 
 			history.append((iteration + 1, best_fitness))
+
+			# V2 tracking: record iteration data (uses base class _tracker set via set_tracker)
+			if self._tracker and self._tracker_phase_id:
+				try:
+					# Compute stats from all_neighbors
+					valid_neighbors = [(g, ce, acc) for g, ce, acc in all_neighbors if acc is not None]
+					avg_ce = sum(ce for _, ce, _ in all_neighbors) / len(all_neighbors) if all_neighbors else None
+					avg_acc = sum(acc for _, _, acc in valid_neighbors) / len(valid_neighbors) if valid_neighbors else None
+
+					self._tracker.record_iteration(
+						phase_id=self._tracker_phase_id,
+						iteration_num=iteration + 1,
+						best_ce=best_fitness,
+						best_accuracy=best_accuracy,
+						avg_ce=avg_ce,
+						avg_accuracy=avg_acc,
+						elite_count=1,  # TS has one "current" genome
+						offspring_count=len(all_neighbors) - 1,  # neighbors generated
+						offspring_viable=len(valid_neighbors),
+						fitness_threshold=current_threshold,
+					)
+				except Exception as e:
+					# Don't fail optimization on tracking errors
+					self._log.debug(f"[{self.name}] V2 tracking error: {e}")
 
 			# Health check: evaluate top-K neighbors on FULL data vs baseline + stagnation
 			# Only at check_interval to avoid expensive full evaluations every iteration
