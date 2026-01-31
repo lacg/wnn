@@ -1,15 +1,41 @@
 <script lang="ts">
   import '../app.css';
   import { onMount, onDestroy } from 'svelte';
-  import { connectWebSocket, disconnectWebSocket, wsConnected } from '$lib/stores';
+  import {
+    connectWebSocket, disconnectWebSocket, wsConnected,
+    connectWebSocketV2, disconnectWebSocketV2, wsConnectedV2,
+    useV2Mode
+  } from '$lib/stores';
+
+  function toggleMode() {
+    const wasV2 = $useV2Mode;
+    useV2Mode.toggle();
+
+    // Disconnect current, connect new
+    if (wasV2) {
+      disconnectWebSocketV2();
+      connectWebSocket();
+    } else {
+      disconnectWebSocket();
+      connectWebSocketV2();
+    }
+  }
 
   onMount(() => {
-    connectWebSocket();
+    if ($useV2Mode) {
+      connectWebSocketV2();
+    } else {
+      connectWebSocket();
+    }
   });
 
   onDestroy(() => {
     disconnectWebSocket();
+    disconnectWebSocketV2();
   });
+
+  // Derived connection status
+  $: connected = $useV2Mode ? $wsConnectedV2 : $wsConnected;
 </script>
 
 <header class="header">
@@ -24,8 +50,15 @@
       </nav>
     </div>
     <div class="header-right">
+      <button class="mode-toggle" on:click={toggleMode} title="Toggle data source">
+        {#if $useV2Mode}
+          <span class="mode-badge v2">V2 DB</span>
+        {:else}
+          <span class="mode-badge v1">V1 Log</span>
+        {/if}
+      </button>
       <div class="connection-status">
-        {#if $wsConnected}
+        {#if connected}
           <span class="status-dot connected"></span> Connected
         {:else}
           <span class="status-dot disconnected"></span> Disconnected
@@ -138,6 +171,35 @@
   .settings-link:hover {
     color: var(--text-primary);
     background: var(--bg-tertiary);
+  }
+
+  .mode-toggle {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  .mode-badge {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    transition: all 0.2s;
+  }
+
+  .mode-badge.v1 {
+    background: rgba(156, 163, 175, 0.2);
+    color: var(--text-secondary);
+  }
+
+  .mode-badge.v2 {
+    background: rgba(59, 130, 246, 0.2);
+    color: var(--accent-blue);
+  }
+
+  .mode-badge:hover {
+    opacity: 0.8;
   }
 
   main {

@@ -34,6 +34,11 @@ async fn run_migrations(pool: &DbPool) -> Result<()> {
     // Migration 2: Create v2 schema (new data model)
     sqlx::query(SCHEMA_V2).execute(pool).await?;
 
+    // Migration 3: Add avg_accuracy to iterations_v2
+    let _ = sqlx::query("ALTER TABLE iterations_v2 ADD COLUMN avg_accuracy REAL")
+        .execute(pool)
+        .await;
+
     Ok(())
 }
 
@@ -255,6 +260,7 @@ CREATE TABLE IF NOT EXISTS iterations_v2 (
     best_ce REAL NOT NULL,
     best_accuracy REAL,
     avg_ce REAL,
+    avg_accuracy REAL,
 
     -- Population info
     elite_count INTEGER,
@@ -995,6 +1001,241 @@ pub mod queries {
             is_final: row.get("is_final"),
             reference_count: row.get("reference_count"),
         })
+    }
+
+    // =============================================================================
+    // V2 Queries (new data model - DB as source of truth)
+    // =============================================================================
+
+    /// Get the currently running experiment from v2 tables
+    pub async fn get_running_experiment_v2(pool: &DbPool) -> Result<Option<ExperimentV2>> {
+        let row = sqlx::query(
+            r#"SELECT id, flow_id, sequence_order, name, status, fitness_calculator,
+                      fitness_weight_ce, fitness_weight_acc, tier_config, context_size,
+                      population_size, pid, last_phase_id, last_iteration, resume_checkpoint_id,
+                      created_at, started_at, ended_at, paused_at
+               FROM experiments_v2 WHERE status = 'running' LIMIT 1"#,
+        )
+        .fetch_optional(pool)
+        .await?;
+
+        match row {
+            Some(r) => Ok(Some(row_to_experiment_v2(&r)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Get an experiment by ID from v2 tables
+    pub async fn get_experiment_v2(pool: &DbPool, id: i64) -> Result<Option<ExperimentV2>> {
+        let row = sqlx::query(
+            r#"SELECT id, flow_id, sequence_order, name, status, fitness_calculator,
+                      fitness_weight_ce, fitness_weight_acc, tier_config, context_size,
+                      population_size, pid, last_phase_id, last_iteration, resume_checkpoint_id,
+                      created_at, started_at, ended_at, paused_at
+               FROM experiments_v2 WHERE id = ?"#,
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+
+        match row {
+            Some(r) => Ok(Some(row_to_experiment_v2(&r)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Get phases for an experiment from v2 tables
+    pub async fn get_phases_v2(pool: &DbPool, experiment_id: i64) -> Result<Vec<PhaseV2>> {
+        let rows = sqlx::query(
+            r#"SELECT id, experiment_id, name, phase_type, sequence_order, status,
+                      max_iterations, population_size, current_iteration, best_ce, best_accuracy,
+                      created_at, started_at, ended_at
+               FROM phases_v2 WHERE experiment_id = ? ORDER BY sequence_order"#,
+        )
+        .bind(experiment_id)
+        .fetch_all(pool)
+        .await?;
+
+        let mut phases = Vec::with_capacity(rows.len());
+        for row in rows {
+            phases.push(row_to_phase_v2(&row)?);
+        }
+        Ok(phases)
+    }
+
+    /// Get iterations for a phase from v2 tables
+    pub async fn get_iterations_v2(pool: &DbPool, phase_id: i64) -> Result<Vec<IterationV2>> {
+        let rows = sqlx::query(
+            r#"SELECT id, phase_id, iteration_num, best_ce, best_accuracy, avg_ce, avg_accuracy,
+                      elite_count, offspring_count, offspring_viable, fitness_threshold,
+                      elapsed_secs, created_at
+               FROM iterations_v2 WHERE phase_id = ? ORDER BY iteration_num"#,
+        )
+        .bind(phase_id)
+        .fetch_all(pool)
+        .await?;
+
+        let mut iterations = Vec::with_capacity(rows.len());
+        for row in rows {
+            iterations.push(row_to_iteration_v2(&row)?);
+        }
+        Ok(iterations)
+    }
+
+    /// Get the current phase (running or most recent) for an experiment
+    pub async fn get_current_phase_v2(pool: &DbPool, experiment_id: i64) -> Result<Option<PhaseV2>> {
+        let row = sqlx::query(
+            r#"SELECT id, experiment_id, name, phase_type, sequence_order, status,
+                      max_iterations, population_size, current_iteration, best_ce, best_accuracy,
+                      created_at, started_at, ended_at
+               FROM phases_v2 WHERE experiment_id = ?
+               ORDER BY CASE WHEN status = 'running' THEN 0 ELSE 1 END, sequence_order DESC
+               LIMIT 1"#,
+        )
+        .bind(experiment_id)
+        .fetch_optional(pool)
+        .await?;
+
+        match row {
+            Some(r) => Ok(Some(row_to_phase_v2(&r)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Get recent iterations for an experiment (across all phases)
+    pub async fn get_recent_iterations_v2(pool: &DbPool, experiment_id: i64, limit: i32) -> Result<Vec<IterationV2>> {
+        let rows = sqlx::query(
+            r#"SELECT i.id, i.phase_id, i.iteration_num, i.best_ce, i.best_accuracy, i.avg_ce,
+                      i.avg_accuracy, i.elite_count, i.offspring_count, i.offspring_viable,
+                      i.fitness_threshold, i.elapsed_secs, i.created_at
+               FROM iterations_v2 i
+               JOIN phases_v2 p ON i.phase_id = p.id
+               WHERE p.experiment_id = ?
+               ORDER BY i.created_at DESC
+               LIMIT ?"#,
+        )
+        .bind(experiment_id)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+
+        let mut iterations = Vec::with_capacity(rows.len());
+        for row in rows {
+            iterations.push(row_to_iteration_v2(&row)?);
+        }
+        // Reverse to get chronological order
+        iterations.reverse();
+        Ok(iterations)
+    }
+
+    fn row_to_experiment_v2(row: &sqlx::sqlite::SqliteRow) -> Result<ExperimentV2> {
+        let status_str: String = row.get("status");
+        let fitness_calc_str: String = row.get("fitness_calculator");
+
+        Ok(ExperimentV2 {
+            id: row.get("id"),
+            flow_id: row.get("flow_id"),
+            sequence_order: row.get("sequence_order"),
+            name: row.get("name"),
+            status: parse_experiment_status_v2(&status_str),
+            fitness_calculator: parse_fitness_calculator(&fitness_calc_str),
+            fitness_weight_ce: row.get("fitness_weight_ce"),
+            fitness_weight_acc: row.get("fitness_weight_acc"),
+            tier_config: row.get("tier_config"),
+            context_size: row.get("context_size"),
+            population_size: row.get("population_size"),
+            pid: row.get("pid"),
+            last_phase_id: row.get("last_phase_id"),
+            last_iteration: row.get("last_iteration"),
+            resume_checkpoint_id: row.get("resume_checkpoint_id"),
+            created_at: parse_datetime(row.get("created_at"))?,
+            started_at: row.get::<Option<String>, _>("started_at")
+                .map(|s| parse_datetime(s))
+                .transpose()?,
+            ended_at: row.get::<Option<String>, _>("ended_at")
+                .map(|s| parse_datetime(s))
+                .transpose()?,
+            paused_at: row.get::<Option<String>, _>("paused_at")
+                .map(|s| parse_datetime(s))
+                .transpose()?,
+        })
+    }
+
+    fn row_to_phase_v2(row: &sqlx::sqlite::SqliteRow) -> Result<PhaseV2> {
+        let status_str: String = row.get("status");
+
+        Ok(PhaseV2 {
+            id: row.get("id"),
+            experiment_id: row.get("experiment_id"),
+            name: row.get("name"),
+            phase_type: row.get("phase_type"),
+            sequence_order: row.get("sequence_order"),
+            status: parse_phase_status_v2(&status_str),
+            max_iterations: row.get("max_iterations"),
+            population_size: row.get("population_size"),
+            current_iteration: row.get("current_iteration"),
+            best_ce: row.get("best_ce"),
+            best_accuracy: row.get("best_accuracy"),
+            created_at: parse_datetime(row.get("created_at"))?,
+            started_at: row.get::<Option<String>, _>("started_at")
+                .map(|s| parse_datetime(s))
+                .transpose()?,
+            ended_at: row.get::<Option<String>, _>("ended_at")
+                .map(|s| parse_datetime(s))
+                .transpose()?,
+        })
+    }
+
+    fn row_to_iteration_v2(row: &sqlx::sqlite::SqliteRow) -> Result<IterationV2> {
+        Ok(IterationV2 {
+            id: row.get("id"),
+            phase_id: row.get("phase_id"),
+            iteration_num: row.get("iteration_num"),
+            best_ce: row.get("best_ce"),
+            best_accuracy: row.get("best_accuracy"),
+            avg_ce: row.get("avg_ce"),
+            avg_accuracy: row.get("avg_accuracy"),
+            elite_count: row.get("elite_count"),
+            offspring_count: row.get("offspring_count"),
+            offspring_viable: row.get("offspring_viable"),
+            fitness_threshold: row.get("fitness_threshold"),
+            elapsed_secs: row.get("elapsed_secs"),
+            created_at: parse_datetime(row.get("created_at"))?,
+        })
+    }
+
+    fn parse_experiment_status_v2(s: &str) -> ExperimentStatusV2 {
+        match s {
+            "pending" => ExperimentStatusV2::Pending,
+            "queued" => ExperimentStatusV2::Queued,
+            "running" => ExperimentStatusV2::Running,
+            "paused" => ExperimentStatusV2::Paused,
+            "completed" => ExperimentStatusV2::Completed,
+            "failed" => ExperimentStatusV2::Failed,
+            "cancelled" => ExperimentStatusV2::Cancelled,
+            _ => ExperimentStatusV2::Pending,
+        }
+    }
+
+    fn parse_phase_status_v2(s: &str) -> PhaseStatusV2 {
+        match s {
+            "pending" => PhaseStatusV2::Pending,
+            "running" => PhaseStatusV2::Running,
+            "paused" => PhaseStatusV2::Paused,
+            "completed" => PhaseStatusV2::Completed,
+            "skipped" => PhaseStatusV2::Skipped,
+            "failed" => PhaseStatusV2::Failed,
+            _ => PhaseStatusV2::Pending,
+        }
+    }
+
+    fn parse_fitness_calculator(s: &str) -> FitnessCalculator {
+        match s {
+            "ce" => FitnessCalculator::Ce,
+            "harmonic_rank" => FitnessCalculator::HarmonicRank,
+            "weighted_harmonic" => FitnessCalculator::WeightedHarmonic,
+            _ => FitnessCalculator::HarmonicRank,
+        }
     }
 
     // =============================================================================

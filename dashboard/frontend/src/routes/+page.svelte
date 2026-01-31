@@ -1,5 +1,6 @@
 <script lang="ts">
   import {
+    // V1 stores
     phases,
     currentPhase,
     iterations,
@@ -9,8 +10,36 @@
     currentIteration,
     phaseProgress,
     latestHealthCheck,
-    phaseSummary
+    phaseSummary,
+    // V2 stores
+    phasesV2,
+    currentPhaseV2,
+    iterationsV2,
+    ceHistoryV2,
+    bestMetricsV2,
+    improvementV2,
+    currentIterationV2,
+    phaseProgressV2,
+    currentExperimentV2,
+    // Mode toggle
+    useV2Mode
   } from '$lib/stores';
+
+  // Unified accessors that switch based on mode
+  $: displayPhases = $useV2Mode ? $phasesV2 : $phases;
+  $: displayCurrentPhase = $useV2Mode ? $currentPhaseV2 : $currentPhase;
+  $: displayIterations = $useV2Mode ? $iterationsV2 : $iterations;
+  $: displayCeHistory = $useV2Mode
+    ? $ceHistoryV2.map(h => ({ iter: h.iter, ce: h.ce, acc: h.acc }))
+    : $ceHistory;
+  $: displayBestMetrics = $useV2Mode ? $bestMetricsV2 : $bestMetrics;
+  $: displayImprovement = $useV2Mode ? $improvementV2 : $improvement;
+  $: displayCurrentIteration = $useV2Mode ? $currentIterationV2 : $currentIteration;
+  $: displayPhaseProgress = $useV2Mode ? $phaseProgressV2 : $phaseProgress;
+  $: displayMaxIterations = $useV2Mode && $currentPhaseV2 ? $currentPhaseV2.max_iterations : 250;
+
+  // V2-specific: avg_ce and avg_accuracy for display
+  $: displayAvgData = $useV2Mode ? $ceHistoryV2 : null;
 
   function formatCE(ce: number): string {
     if (ce === Infinity) return '—';
@@ -38,54 +67,54 @@
   }
 
   // Get latest iteration for display
-  $: latestIter = $iterations[$iterations.length - 1];
-  $: hasData = $iterations.length > 0 || $phases.length > 0;
+  $: latestIter = displayIterations[displayIterations.length - 1];
+  $: hasData = displayIterations.length > 0 || displayPhases.length > 0;
 </script>
 
 <div class="container">
   <!-- Summary Cards -->
   <div class="grid grid-4">
     <div class="card metric">
-      <div class="metric-value">{formatCE($bestMetrics.bestCE)}</div>
+      <div class="metric-value">{formatCE(displayBestMetrics.bestCE)}</div>
       <div class="metric-label">Best CE</div>
-      {#if $improvement > 0}
-        <div class="metric-change positive">↓ {formatPct($improvement)} from baseline</div>
-      {:else if $bestMetrics.bestCE !== Infinity}
-        <div class="metric-change negative">↑ {formatPct(-$improvement)} from baseline</div>
+      {#if displayImprovement > 0}
+        <div class="metric-change positive">↓ {formatPct(displayImprovement)} from baseline</div>
+      {:else if displayBestMetrics.bestCE !== Infinity}
+        <div class="metric-change negative">↑ {formatPct(-displayImprovement)} from baseline</div>
       {/if}
     </div>
     <div class="card metric">
-      <div class="metric-value">{formatPct($bestMetrics.bestAcc)}</div>
+      <div class="metric-value">{formatPct(displayBestMetrics.bestAcc)}</div>
       <div class="metric-label">Best Accuracy</div>
-      {#if $bestMetrics.bestAccCE !== Infinity}
-        <div class="metric-change">@ CE {formatCE($bestMetrics.bestAccCE)}</div>
+      {#if displayBestMetrics.bestAccCE !== Infinity}
+        <div class="metric-change">@ CE {formatCE(displayBestMetrics.bestAccCE)}</div>
       {/if}
     </div>
     <div class="card metric">
-      <div class="metric-value">{$currentPhase ? phaseShortName($currentPhase.name) : '—'}</div>
+      <div class="metric-value">{displayCurrentPhase ? phaseShortName(displayCurrentPhase.name) : '—'}</div>
       <div class="metric-label">Current Phase</div>
-      {#if $currentPhase}
-        <div class="metric-change">{$currentPhase.status}</div>
+      {#if displayCurrentPhase}
+        <div class="metric-change">{displayCurrentPhase.status}</div>
       {/if}
     </div>
     <div class="card metric">
-      <div class="metric-value">{$currentIteration}/250</div>
+      <div class="metric-value">{displayCurrentIteration}/{displayMaxIterations}</div>
       <div class="metric-label">Iteration</div>
-      {#if latestIter}
+      {#if latestIter && latestIter.elapsed_secs}
         <div class="metric-change">{latestIter.elapsed_secs.toFixed(1)}s/iter</div>
       {/if}
     </div>
   </div>
 
   <!-- Progress Bar -->
-  {#if $currentPhase}
+  {#if displayCurrentPhase}
     <div class="card">
       <div class="progress-header">
-        <span>{$currentPhase.name}</span>
-        <span>{$phaseProgress.toFixed(0)}%</span>
+        <span>{displayCurrentPhase.name}</span>
+        <span>{displayPhaseProgress.toFixed(0)}%</span>
       </div>
       <div class="progress-bar">
-        <div class="progress-fill" style="width: {$phaseProgress}%"></div>
+        <div class="progress-fill" style="width: {displayPhaseProgress}%"></div>
       </div>
     </div>
   {/if}
@@ -93,14 +122,14 @@
   <!-- CE & Accuracy History Chart -->
   <div class="card">
     <div class="card-header">
-      <span class="card-title">Best So Far ({$ceHistory.length} iterations)</span>
+      <span class="card-title">Best So Far ({displayCeHistory.length} iterations)</span>
       <div class="chart-legend">
         <span class="legend-item"><span class="legend-dot ce"></span> Min CE (↓)</span>
         <span class="legend-item"><span class="legend-dot acc"></span> Max Acc (↑)</span>
       </div>
     </div>
-    {#if $ceHistory.length > 0}
-      {@const chartData = $ceHistory}
+    {#if displayCeHistory.length > 0}
+      {@const chartData = displayCeHistory}
       <!-- Compute cumulative min(CE) and max(Acc) for smooth monotonic curves -->
       {@const cumulativeData = (() => {
         let minCE = Infinity;
@@ -219,13 +248,13 @@
   <div class="card">
     <div class="card-header">
       <span class="card-title">Phase Progress</span>
-      {#if $currentPhase}
-        <span class="status-badge status-{$currentPhase.status}">{$currentPhase.status}</span>
+      {#if displayCurrentPhase}
+        <span class="status-badge status-{displayCurrentPhase.status}">{displayCurrentPhase.status}</span>
       {/if}
     </div>
-    {#if $phases.length > 0}
+    {#if displayPhases.length > 0}
       <div class="phase-timeline">
-        {#each $phases as phase}
+        {#each displayPhases as phase}
           <div class="phase-item" class:completed={phase.status === 'completed'} class:running={phase.status === 'running'}>
             <div class="phase-indicator"></div>
             <div class="phase-info">
@@ -247,9 +276,9 @@
   <div class="card">
     <div class="card-header">
       <span class="card-title">Recent Iterations</span>
-      <span class="count">{$iterations.length} iterations</span>
+      <span class="count">{displayIterations.length} iterations</span>
     </div>
-    {#if $iterations.length > 0}
+    {#if displayIterations.length > 0}
       <div class="table-scroll">
         <table>
           <thead>
@@ -257,16 +286,24 @@
               <th>Iter</th>
               <th>Best CE</th>
               <th>Accuracy</th>
+              {#if $useV2Mode}
+                <th>Avg CE</th>
+                <th>Avg Acc</th>
+              {/if}
               <th>Time</th>
             </tr>
           </thead>
           <tbody>
-            {#each $iterations.slice(-20).reverse() as iter}
+            {#each displayIterations.slice(-20).reverse() as iter}
               <tr>
                 <td>{iter.iteration_num}</td>
-                <td class:best={iter.best_ce === $bestMetrics.bestCE}>{formatCE(iter.best_ce)}</td>
+                <td class:best={iter.best_ce === displayBestMetrics.bestCE}>{formatCE(iter.best_ce)}</td>
                 <td>{formatAcc(iter.best_accuracy)}</td>
-                <td>{iter.elapsed_secs.toFixed(1)}s</td>
+                {#if $useV2Mode}
+                  <td>{iter.avg_ce ? formatCE(iter.avg_ce) : '—'}</td>
+                  <td>{formatAcc(iter.avg_accuracy)}</td>
+                {/if}
+                <td>{iter.elapsed_secs ? iter.elapsed_secs.toFixed(1) + 's' : '—'}</td>
               </tr>
             {/each}
           </tbody>
@@ -282,26 +319,37 @@
   <!-- Debug: Data Inspection (collapse by default) -->
   <details class="card debug-panel">
     <summary class="card-header" style="cursor: pointer;">
-      <span class="card-title">🔍 Debug: Data Inspection</span>
+      <span class="card-title">🔍 Debug: Data Inspection ({$useV2Mode ? 'V2 DB' : 'V1 Log'})</span>
     </summary>
     <div style="padding: 1rem; font-family: monospace; font-size: 0.75rem;">
-      <p><strong>ceHistory:</strong> {$ceHistory.length} entries</p>
-      <p><strong>iterations:</strong> {$iterations.length} entries</p>
-      {#if $ceHistory.length > 0}
-        {@const accValues = $ceHistory.map(h => h.acc).filter(a => a !== null && a !== undefined)}
-        <p><strong>Accuracy data:</strong> {accValues.length} entries with values, {$ceHistory.length - accValues.length} null</p>
+      <p><strong>Mode:</strong> {$useV2Mode ? 'V2 (Database)' : 'V1 (Log Parsing)'}</p>
+      <p><strong>ceHistory:</strong> {displayCeHistory.length} entries</p>
+      <p><strong>iterations:</strong> {displayIterations.length} entries</p>
+      {#if displayCeHistory.length > 0}
+        {@const accValues = displayCeHistory.map(h => h.acc).filter(a => a !== null && a !== undefined)}
+        <p><strong>Accuracy data:</strong> {accValues.length} entries with values, {displayCeHistory.length - accValues.length} null</p>
         {#if accValues.length > 0}
           <p><strong>Acc range:</strong> [{Math.min(...accValues).toFixed(4)}%, {Math.max(...accValues).toFixed(4)}%]</p>
         {/if}
         <p><strong>Last 5 ceHistory entries:</strong></p>
-        <pre style="overflow-x: auto; background: var(--bg-card); padding: 0.5rem; border-radius: 4px;">{JSON.stringify($ceHistory.slice(-5), null, 2)}</pre>
+        <pre style="overflow-x: auto; background: var(--bg-card); padding: 0.5rem; border-radius: 4px;">{JSON.stringify(displayCeHistory.slice(-5), null, 2)}</pre>
       {/if}
-      {#if $iterations.length > 0}
-        <p><strong>Last 5 iterations (best_accuracy):</strong></p>
-        <pre style="overflow-x: auto; background: var(--bg-card); padding: 0.5rem; border-radius: 4px;">{JSON.stringify($iterations.slice(-5).map(i => ({ iter: i.iteration_num, acc: i.best_accuracy })), null, 2)}</pre>
+      {#if displayIterations.length > 0}
+        <p><strong>Last 5 iterations:</strong></p>
+        <pre style="overflow-x: auto; background: var(--bg-card); padding: 0.5rem; border-radius: 4px;">{JSON.stringify(displayIterations.slice(-5).map(i => ({
+          iter: i.iteration_num,
+          best_ce: i.best_ce,
+          best_acc: i.best_accuracy,
+          avg_ce: i.avg_ce,
+          avg_acc: i.avg_accuracy
+        })), null, 2)}</pre>
       {/if}
       <p><strong>bestMetrics:</strong></p>
-      <pre style="overflow-x: auto; background: var(--bg-card); padding: 0.5rem; border-radius: 4px;">{JSON.stringify($bestMetrics, null, 2)}</pre>
+      <pre style="overflow-x: auto; background: var(--bg-card); padding: 0.5rem; border-radius: 4px;">{JSON.stringify(displayBestMetrics, null, 2)}</pre>
+      {#if $useV2Mode && $currentExperimentV2}
+        <p><strong>Current Experiment (V2):</strong></p>
+        <pre style="overflow-x: auto; background: var(--bg-card); padding: 0.5rem; border-radius: 4px;">{JSON.stringify($currentExperimentV2, null, 2)}</pre>
+      {/if}
     </div>
   </details>
 

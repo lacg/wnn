@@ -180,3 +180,97 @@ export interface FlowExperiment {
   experiment_id: number;
   sequence_order: number;
 }
+
+// =============================================================================
+// V2 Types: Database as source of truth
+// =============================================================================
+
+export type ExperimentStatusV2 =
+  | 'pending'
+  | 'queued'
+  | 'running'
+  | 'paused'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export type PhaseStatusV2 =
+  | 'pending'
+  | 'running'
+  | 'paused'
+  | 'completed'
+  | 'skipped'
+  | 'failed';
+
+export type FitnessCalculator = 'ce' | 'harmonic_rank' | 'weighted_harmonic';
+
+export interface ExperimentV2 {
+  id: number;
+  flow_id: number | null;
+  sequence_order: number | null;
+  name: string;
+  status: ExperimentStatusV2;
+  fitness_calculator: FitnessCalculator;
+  fitness_weight_ce: number;
+  fitness_weight_acc: number;
+  tier_config: string | null;
+  context_size: number;
+  population_size: number;
+  pid: number | null;
+  last_phase_id: number | null;
+  last_iteration: number | null;
+  resume_checkpoint_id: number | null;
+  created_at: string;
+  started_at: string | null;
+  ended_at: string | null;
+  paused_at: string | null;
+}
+
+export interface PhaseV2 {
+  id: number;
+  experiment_id: number;
+  name: string;
+  phase_type: string;
+  sequence_order: number;
+  status: PhaseStatusV2;
+  max_iterations: number;
+  population_size: number | null;
+  current_iteration: number;
+  best_ce: number | null;
+  best_accuracy: number | null;
+  created_at: string;
+  started_at: string | null;
+  ended_at: string | null;
+}
+
+export interface IterationV2 {
+  id: number;
+  phase_id: number;
+  iteration_num: number;
+  best_ce: number;
+  best_accuracy: number | null;
+  avg_ce: number | null;
+  avg_accuracy: number | null;
+  elite_count: number | null;
+  offspring_count: number | null;
+  offspring_viable: number | null;
+  fitness_threshold: number | null;
+  elapsed_secs: number | null;
+  created_at: string;
+}
+
+export interface DashboardSnapshotV2 {
+  current_experiment: ExperimentV2 | null;
+  current_phase: PhaseV2 | null;
+  phases: PhaseV2[];
+  iterations: IterationV2[];
+  best_ce: number;
+  best_accuracy: number;
+}
+
+export type WsMessageV2 =
+  | { type: 'Snapshot'; data: DashboardSnapshotV2 }
+  | { type: 'IterationCompleted'; data: IterationV2 }
+  | { type: 'PhaseStarted'; data: PhaseV2 }
+  | { type: 'PhaseCompleted'; data: PhaseV2 }
+  | { type: 'ExperimentStatusChanged'; data: ExperimentV2 };

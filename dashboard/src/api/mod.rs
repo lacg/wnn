@@ -110,10 +110,21 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .route("/api/checkpoints", get(list_checkpoints).post(create_checkpoint))
         .route("/api/checkpoints/:id", get(get_checkpoint).delete(delete_checkpoint))
         .route("/api/checkpoints/:id/download", get(download_checkpoint))
-        // Real-time
+        // Real-time (v1 - log parsing)
         .route("/ws", get(websocket_handler))
         // Log watcher control
         .route("/api/watch", post(watch_log_file))
+        // =============================================================================
+        // V2 API: Database as source of truth (no log parsing)
+        // =============================================================================
+        .route("/api/v2/experiments/current", get(get_current_experiment_v2))
+        .route("/api/v2/experiments/:id", get(get_experiment_v2_handler))
+        .route("/api/v2/experiments/:id/phases", get(get_phases_v2_handler))
+        .route("/api/v2/experiments/:id/iterations", get(get_recent_iterations_v2_handler))
+        .route("/api/v2/phases/:id/iterations", get(get_iterations_v2_handler))
+        .route("/api/v2/snapshot", get(get_snapshot_v2))
+        // Real-time (v2 - DB polling)
+        .route("/ws/v2", get(websocket_handler_v2))
         .with_state(state)
 }
 
@@ -722,5 +733,264 @@ async fn watch_log_file(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
         ).into_response(),
+    }
+}
+
+// =============================================================================
+// V2 API Handlers (Database as source of truth)
+// =============================================================================
+
+/// Get the currently running experiment from v2 tables
+async fn get_current_experiment_v2(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    match crate::db::queries::get_running_experiment_v2(&state.db).await {
+        Ok(Some(exp)) => (StatusCode::OK, Json(exp)).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "No running experiment"})),
+        ).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+/// Get an experiment by ID from v2 tables
+async fn get_experiment_v2_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    match crate::db::queries::get_experiment_v2(&state.db, id).await {
+        Ok(Some(exp)) => (StatusCode::OK, Json(exp)).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Experiment not found"})),
+        ).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+/// Get phases for an experiment from v2 tables
+async fn get_phases_v2_handler(
+    State(state): State<Arc<AppState>>,
+    Path(experiment_id): Path<i64>,
+) -> impl IntoResponse {
+    match crate::db::queries::get_phases_v2(&state.db, experiment_id).await {
+        Ok(phases) => (StatusCode::OK, Json(phases)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+/// Get iterations for a phase from v2 tables
+async fn get_iterations_v2_handler(
+    State(state): State<Arc<AppState>>,
+    Path(phase_id): Path<i64>,
+) -> impl IntoResponse {
+    match crate::db::queries::get_iterations_v2(&state.db, phase_id).await {
+        Ok(iterations) => (StatusCode::OK, Json(iterations)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RecentIterationsQuery {
+    pub limit: Option<i32>,
+}
+
+/// Get recent iterations for an experiment (across all phases)
+async fn get_recent_iterations_v2_handler(
+    State(state): State<Arc<AppState>>,
+    Path(experiment_id): Path<i64>,
+    Query(query): Query<RecentIterationsQuery>,
+) -> impl IntoResponse {
+    let limit = query.limit.unwrap_or(100);
+    match crate::db::queries::get_recent_iterations_v2(&state.db, experiment_id, limit).await {
+        Ok(iterations) => (StatusCode::OK, Json(iterations)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+/// Get full dashboard snapshot from v2 tables
+async fn get_snapshot_v2(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    // Get running experiment
+    let experiment = match crate::db::queries::get_running_experiment_v2(&state.db).await {
+        Ok(exp) => exp,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            ).into_response();
+        }
+    };
+
+    let Some(exp) = experiment else {
+        // No running experiment - return empty snapshot
+        return (StatusCode::OK, Json(DashboardSnapshotV2::default())).into_response();
+    };
+
+    let exp_id = exp.id;
+
+    // Get phases
+    let phases = match crate::db::queries::get_phases_v2(&state.db, exp_id).await {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            ).into_response();
+        }
+    };
+
+    // Get current phase
+    let current_phase = match crate::db::queries::get_current_phase_v2(&state.db, exp_id).await {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            ).into_response();
+        }
+    };
+
+    // Get recent iterations
+    let iterations = match crate::db::queries::get_recent_iterations_v2(&state.db, exp_id, 500).await {
+        Ok(i) => i,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            ).into_response();
+        }
+    };
+
+    // Calculate best metrics from phases
+    let mut best_ce = f64::INFINITY;
+    let mut best_accuracy = 0.0;
+    for phase in &phases {
+        if let Some(ce) = phase.best_ce {
+            if ce < best_ce {
+                best_ce = ce;
+            }
+        }
+        if let Some(acc) = phase.best_accuracy {
+            if acc > best_accuracy {
+                best_accuracy = acc;
+            }
+        }
+    }
+
+    let snapshot = DashboardSnapshotV2 {
+        current_experiment: Some(exp),
+        current_phase,
+        phases,
+        iterations,
+        best_ce: if best_ce.is_infinite() { 0.0 } else { best_ce },
+        best_accuracy,
+    };
+
+    (StatusCode::OK, Json(snapshot)).into_response()
+}
+
+/// V2 WebSocket handler - polls database for updates
+async fn websocket_handler_v2(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_socket_v2(socket, state))
+}
+
+async fn handle_socket_v2(
+    mut socket: axum::extract::ws::WebSocket,
+    state: Arc<AppState>,
+) {
+    use axum::extract::ws::Message;
+    use tokio::time::{interval, Duration};
+
+    // Send initial snapshot
+    let snapshot = build_snapshot_v2(&state.db).await;
+    if let Ok(json) = serde_json::to_string(&WsMessageV2::Snapshot(snapshot)) {
+        if socket.send(Message::Text(json.into())).await.is_err() {
+            return;
+        }
+    }
+
+    // Poll for updates every 500ms
+    let mut poll_interval = interval(Duration::from_millis(500));
+    let mut last_iteration_id: Option<i64> = None;
+
+    loop {
+        poll_interval.tick().await;
+
+        // Check for new iterations
+        if let Ok(Some(exp)) = crate::db::queries::get_running_experiment_v2(&state.db).await {
+            if let Ok(iterations) = crate::db::queries::get_recent_iterations_v2(&state.db, exp.id, 10).await {
+                // Send new iterations since last poll
+                for iter in iterations.iter().rev() {
+                    if last_iteration_id.map_or(true, |last_id| iter.id > last_id) {
+                        let msg = WsMessageV2::IterationCompleted(iter.clone());
+                        if let Ok(json) = serde_json::to_string(&msg) {
+                            if socket.send(Message::Text(json.into())).await.is_err() {
+                                return;
+                            }
+                        }
+                        last_iteration_id = Some(iter.id);
+                    }
+                }
+            }
+        }
+    }
+}
+
+async fn build_snapshot_v2(db: &DbPool) -> DashboardSnapshotV2 {
+    let experiment = crate::db::queries::get_running_experiment_v2(db).await.ok().flatten();
+
+    let Some(exp) = experiment else {
+        return DashboardSnapshotV2::default();
+    };
+
+    let exp_id = exp.id;
+    let phases = crate::db::queries::get_phases_v2(db, exp_id).await.unwrap_or_default();
+    let current_phase = crate::db::queries::get_current_phase_v2(db, exp_id).await.ok().flatten();
+    let iterations = crate::db::queries::get_recent_iterations_v2(db, exp_id, 500).await.unwrap_or_default();
+
+    // Calculate best metrics
+    let mut best_ce = f64::INFINITY;
+    let mut best_accuracy = 0.0;
+    for phase in &phases {
+        if let Some(ce) = phase.best_ce {
+            if ce < best_ce {
+                best_ce = ce;
+            }
+        }
+        if let Some(acc) = phase.best_accuracy {
+            if acc > best_accuracy {
+                best_accuracy = acc;
+            }
+        }
+    }
+
+    DashboardSnapshotV2 {
+        current_experiment: Some(exp),
+        current_phase,
+        phases,
+        iterations,
+        best_ce: if best_ce.is_infinite() { 0.0 } else { best_ce },
+        best_accuracy,
     }
 }

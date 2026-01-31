@@ -1,5 +1,8 @@
 import { writable, derived } from 'svelte/store';
-import type { Experiment, Phase, Iteration, WsMessage, HealthCheck, Flow, Checkpoint, PhaseSummary } from './types';
+import type {
+  Experiment, Phase, Iteration, WsMessage, HealthCheck, Flow, Checkpoint, PhaseSummary,
+  ExperimentV2, PhaseV2, IterationV2, WsMessageV2, DashboardSnapshotV2
+} from './types';
 
 // Current experiment being viewed
 export const currentExperiment = writable<Experiment | null>(null);
@@ -18,6 +21,32 @@ export const allIterations = writable<Iteration[]>([]);
 
 // WebSocket connection
 export const wsConnected = writable(false);
+
+// V2 mode toggle (persisted in localStorage)
+function createV2ModeStore() {
+  const storedMode = typeof localStorage !== 'undefined' ? localStorage.getItem('wnn-mode') : null;
+  const { subscribe, set, update } = writable(storedMode === 'v2');
+
+  return {
+    subscribe,
+    set: (value: boolean) => {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('wnn-mode', value ? 'v2' : 'v1');
+      }
+      set(value);
+    },
+    toggle: () => {
+      update(v => {
+        const newValue = !v;
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem('wnn-mode', newValue ? 'v2' : 'v1');
+        }
+        return newValue;
+      });
+    }
+  };
+}
+export const useV2Mode = createV2ModeStore();
 
 // Latest CE values for live chart (rolling window)
 export const ceHistory = writable<{ iter: number; ce: number; acc: number | null }[]>([]);
@@ -311,4 +340,223 @@ export function resetStores() {
   currentFlow.set(null);
   checkpoints.set([]);
   phaseSummary.set(null);
+}
+
+// =============================================================================
+// V2 Stores: Database as source of truth (no log parsing)
+// =============================================================================
+
+// V2 stores
+export const currentExperimentV2 = writable<ExperimentV2 | null>(null);
+export const phasesV2 = writable<PhaseV2[]>([]);
+export const currentPhaseV2 = writable<PhaseV2 | null>(null);
+export const iterationsV2 = writable<IterationV2[]>([]);
+export const wsConnectedV2 = writable(false);
+
+// V2 CE history for charts (includes avg_accuracy)
+export const ceHistoryV2 = writable<{
+  iter: number;
+  ce: number;
+  acc: number | null;
+  avgCe: number | null;
+  avgAcc: number | null;
+}[]>([]);
+
+// V2 Best metrics
+export const bestMetricsV2 = writable({
+  bestCE: Infinity,
+  bestCEAcc: 0,
+  bestAcc: 0,
+  bestAccCE: Infinity,
+  baseline: 10.5801,
+});
+
+// V2 Derived: current phase progress
+export const phaseProgressV2 = derived(
+  [currentPhaseV2, iterationsV2],
+  ([$phase, $iters]) => {
+    if (!$phase || $iters.length === 0) return 0;
+    const latest = $iters[$iters.length - 1];
+    return (latest.iteration_num / $phase.max_iterations) * 100;
+  }
+);
+
+// V2 Derived: current iteration number
+export const currentIterationV2 = derived(
+  iterationsV2,
+  ($iters) => $iters.length > 0 ? $iters[$iters.length - 1].iteration_num : 0
+);
+
+// V2 Derived: improvement from baseline
+export const improvementV2 = derived(
+  bestMetricsV2,
+  ($best) => (($best.baseline - $best.bestCE) / $best.baseline) * 100
+);
+
+// V2 WebSocket manager
+let wsV2: WebSocket | null = null;
+let reconnectTimeoutV2: ReturnType<typeof setTimeout> | null = null;
+
+export function connectWebSocketV2() {
+  // Clear any pending reconnect
+  if (reconnectTimeoutV2) {
+    clearTimeout(reconnectTimeoutV2);
+    reconnectTimeoutV2 = null;
+  }
+
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${protocol}//${window.location.host}/ws/v2`;
+
+  console.log('[V2] Connecting to WebSocket:', wsUrl);
+  wsV2 = new WebSocket(wsUrl);
+
+  wsV2.onopen = () => {
+    wsConnectedV2.set(true);
+    console.log('[V2] WebSocket connected');
+  };
+
+  wsV2.onclose = () => {
+    wsConnectedV2.set(false);
+    console.log('[V2] WebSocket disconnected, reconnecting in 3s...');
+    reconnectTimeoutV2 = setTimeout(connectWebSocketV2, 3000);
+  };
+
+  wsV2.onerror = (error) => {
+    console.error('[V2] WebSocket error:', error);
+  };
+
+  wsV2.onmessage = (event) => {
+    try {
+      const msg: WsMessageV2 = JSON.parse(event.data);
+      handleWsMessageV2(msg);
+    } catch (e) {
+      console.error('[V2] Failed to parse WebSocket message:', e);
+    }
+  };
+}
+
+function handleWsMessageV2(msg: WsMessageV2) {
+  console.log('[V2] WS message:', msg.type);
+
+  switch (msg.type) {
+    case 'Snapshot': {
+      const snapshot = msg.data;
+      console.log('[V2] Received snapshot:', snapshot.phases?.length, 'phases', snapshot.iterations?.length, 'iterations');
+
+      currentExperimentV2.set(snapshot.current_experiment);
+      phasesV2.set(snapshot.phases || []);
+      currentPhaseV2.set(snapshot.current_phase || null);
+      iterationsV2.set(snapshot.iterations || []);
+
+      // Build CE history from iterations
+      const history = (snapshot.iterations || []).map((iter: IterationV2) => ({
+        iter: iter.iteration_num,
+        ce: iter.best_ce,
+        acc: iter.best_accuracy,
+        avgCe: iter.avg_ce,
+        avgAcc: iter.avg_accuracy
+      }));
+      ceHistoryV2.set(history);
+
+      // Set best metrics
+      bestMetricsV2.set({
+        bestCE: snapshot.best_ce || Infinity,
+        bestCEAcc: snapshot.best_accuracy || 0,
+        bestAcc: snapshot.best_accuracy || 0,
+        bestAccCE: snapshot.best_ce || Infinity,
+        baseline: 10.5801,
+      });
+      break;
+    }
+
+    case 'IterationCompleted': {
+      const iter = msg.data;
+      console.log(`[V2] [Iter ${iter.iteration_num}] CE=${iter.best_ce?.toFixed(4)}, Acc=${iter.best_accuracy?.toFixed(4) ?? 'null'}%, AvgCE=${iter.avg_ce?.toFixed(4) ?? 'null'}, AvgAcc=${iter.avg_accuracy?.toFixed(4) ?? 'null'}%`);
+
+      // Add to iterations (keep last 500)
+      iterationsV2.update((iters) => {
+        const updated = [...iters, iter];
+        return updated.slice(-500);
+      });
+
+      // Update CE history for chart
+      ceHistoryV2.update((history) => {
+        return [...history, {
+          iter: iter.iteration_num,
+          ce: iter.best_ce,
+          acc: iter.best_accuracy,
+          avgCe: iter.avg_ce,
+          avgAcc: iter.avg_accuracy
+        }];
+      });
+
+      // Update best metrics
+      bestMetricsV2.update((best) => {
+        const newBest = { ...best };
+        if (iter.best_ce < best.bestCE) {
+          newBest.bestCE = iter.best_ce;
+          newBest.bestCEAcc = iter.best_accuracy || 0;
+        }
+        if (iter.best_accuracy && iter.best_accuracy > best.bestAcc) {
+          newBest.bestAcc = iter.best_accuracy;
+          newBest.bestAccCE = iter.best_ce;
+        }
+        return newBest;
+      });
+      break;
+    }
+
+    case 'PhaseStarted': {
+      const phase = msg.data;
+      phasesV2.update((p) => [...p, phase]);
+      currentPhaseV2.set(phase);
+      iterationsV2.set([]); // Clear iterations for new phase
+      ceHistoryV2.set([]); // Clear chart for new phase
+      console.log('[V2] Phase started:', phase.name);
+      break;
+    }
+
+    case 'PhaseCompleted': {
+      const phase = msg.data;
+      phasesV2.update((p) =>
+        p.map((existing) =>
+          existing.id === phase.id ? phase : existing
+        )
+      );
+      console.log('[V2] Phase completed:', phase.name);
+      break;
+    }
+
+    case 'ExperimentStatusChanged': {
+      const exp = msg.data;
+      currentExperimentV2.set(exp);
+      console.log('[V2] Experiment status changed:', exp.status);
+      break;
+    }
+  }
+}
+
+export function disconnectWebSocketV2() {
+  if (reconnectTimeoutV2) {
+    clearTimeout(reconnectTimeoutV2);
+    reconnectTimeoutV2 = null;
+  }
+  wsV2?.close();
+  wsV2 = null;
+}
+
+// Reset V2 stores
+export function resetStoresV2() {
+  currentExperimentV2.set(null);
+  phasesV2.set([]);
+  currentPhaseV2.set(null);
+  iterationsV2.set([]);
+  ceHistoryV2.set([]);
+  bestMetricsV2.set({
+    bestCE: Infinity,
+    bestCEAcc: 0,
+    bestAcc: 0,
+    bestAccCE: Infinity,
+    baseline: 10.5801,
+  });
 }

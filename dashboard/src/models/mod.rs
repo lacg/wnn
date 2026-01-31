@@ -454,6 +454,7 @@ pub struct IterationV2 {
     pub best_ce: f64,
     pub best_accuracy: Option<f64>,
     pub avg_ce: Option<f64>,
+    pub avg_accuracy: Option<f64>,
     pub elite_count: Option<i32>,
     pub offspring_count: Option<i32>,
     pub offspring_viable: Option<i32>,
