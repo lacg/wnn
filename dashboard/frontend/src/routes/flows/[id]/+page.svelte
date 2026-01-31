@@ -169,8 +169,9 @@
 
   function canEditExperiment(index: number): boolean {
     if (!flow) return false;
-    // Can edit if flow is pending OR if this specific phase hasn't started yet
-    if (flow.status === 'pending') return true;
+    // Can always edit if flow is pending or failed
+    if (flow.status === 'pending' || flow.status === 'failed') return true;
+    // Can't edit completed or cancelled flows
     if (flow.status !== 'running') return false;
 
     // For running flows, check if this phase has started
