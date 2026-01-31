@@ -8,7 +8,7 @@ Provides a unified interface for different tokenization strategies:
 - CharacterTokenizer: Character-level tokenization
 
 Usage:
-	from wnn.tokenizers import TokenizerFactory, TokenizerType
+	from wnn.text_tokenizers import TokenizerFactory, TokenizerType
 
 	# Create a tokenizer
 	tokenizer = TokenizerFactory.create(TokenizerType.BPE, vocab_size=32000)
@@ -24,9 +24,9 @@ Usage:
 from enum import IntEnum
 from typing import Optional, Type
 
-from wnn.tokenizers.base import Tokenizer
-from wnn.tokenizers.word import WordTokenizer, SimpleWordTokenizer
-from wnn.tokenizers.bpe import BPETokenizer, GPT2Tokenizer, CharacterTokenizer
+from wnn.text_tokenizers.base import Tokenizer
+from wnn.text_tokenizers.word import WordTokenizer, SimpleWordTokenizer
+from wnn.text_tokenizers.bpe import BPETokenizer, GPT2Tokenizer, CharacterTokenizer
 
 
 class TokenizerType(IntEnum):

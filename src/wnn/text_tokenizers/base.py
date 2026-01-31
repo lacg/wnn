@@ -6,7 +6,7 @@ consistent handling of different tokenization strategies (word-level,
 BPE, character-level, etc.) across the codebase.
 
 Usage:
-	from wnn.tokenizers import TokenizerFactory, TokenizerType
+	from wnn.text_tokenizers import TokenizerFactory, TokenizerType
 
 	# Create a tokenizer
 	tokenizer = TokenizerFactory.create(TokenizerType.BPE)

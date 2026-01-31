@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Optional, Union
 import json
 
-from wnn.tokenizers.base import Tokenizer
+from wnn.text_tokenizers.base import Tokenizer
 
 
 class WordTokenizer(Tokenizer):

@@ -15,7 +15,7 @@ This module provides:
 from pathlib import Path
 from typing import Optional, Union
 
-from wnn.tokenizers.base import Tokenizer
+from wnn.text_tokenizers.base import Tokenizer
 
 
 class BPETokenizer(Tokenizer):

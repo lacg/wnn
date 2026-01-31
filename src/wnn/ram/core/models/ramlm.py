@@ -155,7 +155,7 @@ class RAMLM(RAMComponent):
 		# Optional tokenizer
 		self._tokenizer = None
 		if tokenizer == "gpt2":
-			from wnn.tokenizers import GPT2Tokenizer
+			from wnn.text_tokenizers import GPT2Tokenizer
 			self._tokenizer = GPT2Tokenizer()
 
 		# Global top-k token IDs (set during training)
