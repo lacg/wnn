@@ -328,8 +328,8 @@ class Flow:
 					tier_config_str = ";".join(tier_parts)
 
 				# Note: flow_id is None because V2 experiments_v2.flow_id references flows_v2,
-			# not the V1 flows table. V2 flow support would require creating flows_v2 records.
-			self._tracker_experiment_id = self.tracker.start_experiment(
+				# not the V1 flows table. V2 flow support would require creating flows_v2 records.
+				self._tracker_experiment_id = self.tracker.start_experiment(
 					name=cfg.name,
 					flow_id=None,  # V1 flow_id can't be used with V2 schema
 					tier_config=tier_config_str,
