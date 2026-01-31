@@ -1694,7 +1694,8 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		for iteration in range(cfg.iterations):
 			# Check for shutdown request at start of each iteration
 			if self._shutdown_check and self._shutdown_check():
-				self._log.info(f"[{self.name}] Shutdown requested at iteration {iteration}, stopping...")
+				self._log.info(f"[{self.name}] Shutdown requested at iteration {iteration}/{cfg.iterations}, stopping gracefully...")
+				self._log.info(f"[{self.name}] Progress will be saved (best CE so far: {best_ce_fitness:.4f})")
 				break
 
 			iter_start = time.time()
