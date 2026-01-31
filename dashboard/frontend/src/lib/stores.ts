@@ -473,7 +473,16 @@ function handleWsMessageV2(msg: WsMessageV2) {
 
       currentExperimentV2.set(snapshot.current_experiment);
       phasesV2.set(snapshot.phases || []);
-      currentPhaseV2.set(snapshot.current_phase || null);
+
+      // If current_phase is null but we have phases, use the most recent one
+      let currentPhase = snapshot.current_phase;
+      if (!currentPhase && snapshot.phases && snapshot.phases.length > 0) {
+        // Find running phase, or fall back to most recent by sequence_order
+        currentPhase = snapshot.phases.find((p: PhaseV2) => p.status === 'running')
+          || snapshot.phases.reduce((a: PhaseV2, b: PhaseV2) => a.sequence_order > b.sequence_order ? a : b);
+        console.log('[V2] No current_phase in snapshot, using fallback:', currentPhase?.name);
+      }
+      currentPhaseV2.set(currentPhase || null);
       iterationsV2.set(snapshot.iterations || []);
 
       // Build CE history from iterations
@@ -486,12 +495,41 @@ function handleWsMessageV2(msg: WsMessageV2) {
       }));
       ceHistoryV2.set(history);
 
-      // Set best metrics
+      // Compute best metrics from iterations for accurate tracking
+      // - bestCE: minimum CE seen
+      // - bestCEAcc: accuracy at the iteration with best CE
+      // - bestAcc: maximum accuracy seen
+      // - bestAccCE: CE at the iteration with best accuracy
+      let bestCE = snapshot.best_ce || Infinity;
+      let bestCEAcc = 0;
+      let bestAcc = 0;
+      let bestAccCE = Infinity;
+
+      const iterations = snapshot.iterations || [];
+      for (const iter of iterations) {
+        if (iter.best_ce < bestCE) {
+          bestCE = iter.best_ce;
+          bestCEAcc = iter.best_accuracy || 0;
+        }
+        if (iter.best_accuracy && iter.best_accuracy > bestAcc) {
+          bestAcc = iter.best_accuracy;
+          bestAccCE = iter.best_ce;
+        }
+      }
+
+      // Fall back to snapshot values if no iterations
+      if (iterations.length === 0) {
+        bestCE = snapshot.best_ce || Infinity;
+        bestCEAcc = snapshot.best_accuracy || 0;
+        bestAcc = snapshot.best_accuracy || 0;
+        bestAccCE = snapshot.best_ce || Infinity;
+      }
+
       bestMetricsV2.set({
-        bestCE: snapshot.best_ce || Infinity,
-        bestCEAcc: snapshot.best_accuracy || 0,
-        bestAcc: snapshot.best_accuracy || 0,
-        bestAccCE: snapshot.best_ce || Infinity,
+        bestCE,
+        bestCEAcc,
+        bestAcc,
+        bestAccCE,
         baseline: 10.5801,
       });
       break;

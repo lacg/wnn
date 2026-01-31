@@ -107,7 +107,19 @@
   $: displayImprovement = $useV2Mode ? $improvementV2 : $improvement;
   $: displayCurrentIteration = $useV2Mode ? $currentIterationV2 : $currentIteration;
   $: displayPhaseProgress = $useV2Mode ? $phaseProgressV2 : $phaseProgress;
-  $: displayMaxIterations = $useV2Mode && $currentPhaseV2 ? $currentPhaseV2.max_iterations : 250;
+  // Get max iterations from current phase, or from most recent phase if current is null
+  $: displayMaxIterations = (() => {
+    if ($useV2Mode) {
+      if ($currentPhaseV2) return $currentPhaseV2.max_iterations;
+      // Fallback to most recent phase
+      const phases = $phasesV2;
+      if (phases.length > 0) {
+        const recent = phases.reduce((a, b) => a.sequence_order > b.sequence_order ? a : b);
+        return recent.max_iterations;
+      }
+    }
+    return 250; // Default fallback
+  })();
 
   // V2-specific: avg_ce and avg_accuracy for display
   $: displayAvgData = $useV2Mode ? $ceHistoryV2 : null;
