@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import {
-    // V1 stores
     phases,
     currentPhase,
     iterations,
@@ -10,35 +9,23 @@
     improvement,
     currentIteration,
     phaseProgress,
+    currentExperiment,
     latestHealthCheck,
-    phaseSummary,
-    // V2 stores
-    phasesV2,
-    currentPhaseV2,
-    iterationsV2,
-    ceHistoryV2,
-    bestMetricsV2,
-    improvementV2,
-    currentIterationV2,
-    phaseProgressV2,
-    currentExperimentV2,
-    // Mode toggle
-    useV2Mode
   } from '$lib/stores';
-  import type { Flow, GenomeEvaluationV2, IterationV2, PhaseV2 } from '$lib/types';
+  import type { Flow, GenomeEvaluation, Iteration, Phase } from '$lib/types';
 
   // Current running flow (fetched from API)
   let currentFlow: Flow | null = null;
 
   // Iteration details modal state
-  let selectedIteration: IterationV2 | null = null;
-  let genomeEvaluations: GenomeEvaluationV2[] = [];
+  let selectedIteration: Iteration | null = null;
+  let genomeEvaluations: GenomeEvaluation[] = [];
   let loadingGenomes = false;
   let showIterationModal = false;
 
   // Phase history state (inline display, not modal)
-  let selectedHistoryPhase: PhaseV2 | null = null;
-  let phaseIterations: IterationV2[] = [];
+  let selectedHistoryPhase: Phase | null = null;
+  let phaseIterations: Iteration[] = [];
   let loadingPhaseIterations = false;
 
   onMount(() => {
@@ -61,16 +48,14 @@
     }
   }
 
-  async function openIterationDetails(iter: IterationV2) {
-    if (!$useV2Mode) return; // Only available in V2 mode
-
+  async function openIterationDetails(iter: Iteration) {
     selectedIteration = iter;
     showIterationModal = true;
     loadingGenomes = true;
     genomeEvaluations = [];
 
     try {
-      const res = await fetch(`/api/v2/iterations/${iter.id}/genomes`);
+      const res = await fetch(`/api/iterations/${iter.id}/genomes`);
       if (res.ok) {
         genomeEvaluations = await res.json();
       } else {
@@ -89,9 +74,7 @@
     genomeEvaluations = [];
   }
 
-  async function selectPhaseHistory(phase: PhaseV2) {
-    if (!$useV2Mode) return; // Only available in V2 mode
-
+  async function selectPhaseHistory(phase: Phase) {
     // If clicking the same phase or the running phase, go back to live view
     if (selectedHistoryPhase?.id === phase.id || phase.status === 'running') {
       selectedHistoryPhase = null;
@@ -104,7 +87,7 @@
     phaseIterations = [];
 
     try {
-      const res = await fetch(`/api/v2/phases/${phase.id}/iterations`);
+      const res = await fetch(`/api/phases/${phase.id}/iterations`);
       if (res.ok) {
         phaseIterations = await res.json();
       } else {
@@ -134,40 +117,23 @@
     return roleMap[role] || role;
   }
 
-  // Unified accessors that switch based on mode
-  $: displayPhases = $useV2Mode ? $phasesV2 : $phases;
-  $: displayCurrentPhase = $useV2Mode ? $currentPhaseV2 : $currentPhase;
-  $: displayIterations = $useV2Mode ? $iterationsV2 : $iterations;
+  // Chart data transformation (accuracy is stored as decimal, display as percentage)
+  $: displayCeHistory = $ceHistory.map(h => ({
+    iter: h.iter,
+    ce: h.ce,
+    acc: h.acc !== null && h.acc !== undefined ? h.acc * 100 : null
+  }));
 
-  // Debug: log when stores change
-  $: if (typeof window !== 'undefined') {
-    console.log('[LiveUI] Mode:', $useV2Mode ? 'V2' : 'V1');
-    console.log('[LiveUI] currentPhaseV2:', $currentPhaseV2?.name || 'null', 'phases:', $phasesV2.length);
-    console.log('[LiveUI] displayCurrentPhase:', displayCurrentPhase?.name || 'null');
-  }
-  $: displayCeHistory = $useV2Mode
-    ? $ceHistoryV2.map(h => ({ iter: h.iter, ce: h.ce, acc: h.acc !== null && h.acc !== undefined ? h.acc * 100 : null }))
-    : $ceHistory;
-  $: displayBestMetrics = $useV2Mode ? $bestMetricsV2 : $bestMetrics;
-  $: displayImprovement = $useV2Mode ? $improvementV2 : $improvement;
-  $: displayCurrentIteration = $useV2Mode ? $currentIterationV2 : $currentIteration;
-  $: displayPhaseProgress = $useV2Mode ? $phaseProgressV2 : $phaseProgress;
   // Get max iterations from current phase, or from most recent phase if current is null
   $: displayMaxIterations = (() => {
-    if ($useV2Mode) {
-      if ($currentPhaseV2) return $currentPhaseV2.max_iterations;
-      // Fallback to most recent phase
-      const phases = $phasesV2;
-      if (phases.length > 0) {
-        const recent = phases.reduce((a, b) => a.sequence_order > b.sequence_order ? a : b);
-        return recent.max_iterations;
-      }
+    if ($currentPhase) return $currentPhase.max_iterations;
+    // Fallback to most recent phase
+    if ($phases.length > 0) {
+      const recent = $phases.reduce((a, b) => a.sequence_order > b.sequence_order ? a : b);
+      return recent.max_iterations;
     }
     return 250; // Default fallback
   })();
-
-  // V2-specific: avg_ce and avg_accuracy for display
-  $: displayAvgData = $useV2Mode ? $ceHistoryV2 : null;
 
   function formatCE(ce: number): string {
     if (ce === Infinity) return '—';
@@ -176,16 +142,15 @@
 
   function formatPct(pct: number): string {
     if (!pct && pct !== 0) return '—';
-    // V2 API returns decimal (0.00018), V1 log parser returns percentage (0.018)
-    const val = $useV2Mode ? pct * 100 : pct;
+    // API returns decimal (0.00018), display as percentage
+    const val = pct * 100;
     return val.toFixed(2) + '%';
   }
 
   function formatAcc(acc: number | null | undefined): string {
     if (acc === null || acc === undefined) return '—';
-    // V2 API returns decimal (0.00018), V1 log parser returns percentage (0.018)
-    // V2 mode: multiply by 100 to get percentage
-    const pct = $useV2Mode ? acc * 100 : acc;
+    // API returns decimal (0.00018), display as percentage
+    const pct = acc * 100;
     return pct.toFixed(4) + '%';
   }
 
@@ -205,22 +170,22 @@
   }
 
   // Get latest iteration for display
-  $: latestIter = displayIterations[displayIterations.length - 1];
-  $: hasData = displayIterations.length > 0 || displayPhases.length > 0;
+  $: latestIter = $iterations[$iterations.length - 1];
+  $: hasData = $iterations.length > 0 || $phases.length > 0;
 </script>
 
 <div class="container">
   <!-- Flow/Experiment Header -->
-  {#if currentFlow || ($useV2Mode && $currentExperimentV2)}
+  {#if currentFlow || $currentExperiment}
     <div class="experiment-header">
       {#if currentFlow}
         <span class="flow-name">{currentFlow.name}</span>
         <span class="separator">›</span>
       {/if}
-      {#if $useV2Mode && $currentExperimentV2}
-        <span class="experiment-name">{$currentExperimentV2.name}</span>
-      {:else if displayCurrentPhase}
-        <span class="experiment-name">{displayCurrentPhase.name}</span>
+      {#if $currentExperiment}
+        <span class="experiment-name">{$currentExperiment.name}</span>
+      {:else if $currentPhase}
+        <span class="experiment-name">{$currentPhase.name}</span>
       {/if}
     </div>
   {/if}
@@ -228,30 +193,30 @@
   <!-- Summary Cards -->
   <div class="grid grid-4">
     <div class="card metric">
-      <div class="metric-value">{formatCE(displayBestMetrics.bestCE)}</div>
+      <div class="metric-value">{formatCE($bestMetrics.bestCE)}</div>
       <div class="metric-label">Best CE</div>
-      {#if displayImprovement > 0}
-        <div class="metric-change positive">↓ {formatPct(displayImprovement)} from baseline</div>
-      {:else if displayBestMetrics.bestCE !== Infinity}
-        <div class="metric-change negative">↑ {formatPct(-displayImprovement)} from baseline</div>
+      {#if $improvement > 0}
+        <div class="metric-change positive">↓ {formatPct($improvement)} from baseline</div>
+      {:else if $bestMetrics.bestCE !== Infinity}
+        <div class="metric-change negative">↑ {formatPct(-$improvement)} from baseline</div>
       {/if}
     </div>
     <div class="card metric">
-      <div class="metric-value">{formatPct(displayBestMetrics.bestAcc)}</div>
+      <div class="metric-value">{formatPct($bestMetrics.bestAcc)}</div>
       <div class="metric-label">Best Accuracy</div>
-      {#if displayBestMetrics.bestAccCE !== Infinity}
-        <div class="metric-change">@ CE {formatCE(displayBestMetrics.bestAccCE)}</div>
+      {#if $bestMetrics.bestAccCE !== Infinity}
+        <div class="metric-change">@ CE {formatCE($bestMetrics.bestAccCE)}</div>
       {/if}
     </div>
     <div class="card metric">
-      <div class="metric-value">{displayCurrentPhase ? phaseShortName(displayCurrentPhase.name) : '—'}</div>
+      <div class="metric-value">{$currentPhase ? phaseShortName($currentPhase.name) : '—'}</div>
       <div class="metric-label">Current Phase</div>
-      {#if displayCurrentPhase}
-        <div class="metric-change">{displayCurrentPhase.status}</div>
+      {#if $currentPhase}
+        <div class="metric-change">{$currentPhase.status}</div>
       {/if}
     </div>
     <div class="card metric">
-      <div class="metric-value">{displayCurrentIteration}/{displayMaxIterations}</div>
+      <div class="metric-value">{$currentIteration}/{displayMaxIterations}</div>
       <div class="metric-label">Iteration</div>
       {#if latestIter && latestIter.elapsed_secs}
         <div class="metric-change">{latestIter.elapsed_secs.toFixed(1)}s/iter</div>
@@ -260,14 +225,14 @@
   </div>
 
   <!-- Progress Bar -->
-  {#if displayCurrentPhase}
+  {#if $currentPhase}
     <div class="card">
       <div class="progress-header">
-        <span>{displayCurrentPhase.name}</span>
-        <span>{displayPhaseProgress.toFixed(0)}%</span>
+        <span>{$currentPhase.name}</span>
+        <span>{$phaseProgress.toFixed(0)}%</span>
       </div>
       <div class="progress-bar">
-        <div class="progress-fill" style="width: {displayPhaseProgress}%"></div>
+        <div class="progress-fill" style="width: {$phaseProgress}%"></div>
       </div>
     </div>
   {/if}
@@ -302,8 +267,6 @@
       {@const accMin = 0}
       {@const accMax = accData.length > 0 ? Math.max(...accData.map(p => p.acc)) : 1}
       {@const accRange = accMax - accMin || 0.001}
-      <!-- Debug: Log to console when values seem wrong -->
-      {@const _ = (accMax === 0 && accData.length > 0) ? console.warn('[Chart Debug] accMax=0 but accData has', accData.length, 'entries. First 5:', accData.slice(0, 5).map(d => d.acc)) : null}
       {@const padding = { top: 20, right: 60, bottom: 30, left: 60 }}
       {@const width = 800}
       {@const height = 220}
@@ -401,21 +364,20 @@
   <div class="card">
     <div class="card-header">
       <span class="card-title">Phase Progress</span>
-      {#if displayCurrentPhase}
-        <span class="status-badge status-{displayCurrentPhase.status}">{displayCurrentPhase.status}</span>
+      {#if $currentPhase}
+        <span class="status-badge status-{$currentPhase.status}">{$currentPhase.status}</span>
       {/if}
     </div>
-    {#if displayPhases.length > 0}
+    {#if $phases.length > 0}
       <div class="phase-timeline">
-        {#each displayPhases as phase}
+        {#each $phases as phase}
           <button
             class="phase-item"
             class:completed={phase.status === 'completed'}
             class:running={phase.status === 'running'}
             class:selected={selectedHistoryPhase?.id === phase.id}
-            class:clickable={$useV2Mode}
-            on:click={() => $useV2Mode && selectPhaseHistory(phase)}
-            disabled={!$useV2Mode}
+            class:clickable={true}
+            on:click={() => selectPhaseHistory(phase)}
             title={phase.status === 'running' ? 'Click to show live iterations' : 'Click to show phase history'}
           >
             <div class="phase-indicator"></div>
@@ -432,7 +394,6 @@
     {:else}
       <div class="empty-state">
         <p>Waiting for experiment data...</p>
-        <p class="hint">Make sure the backend is watching a log file with LOG_PATH env var</p>
       </div>
     {/if}
   </div>
@@ -452,7 +413,7 @@
           <button class="btn-link" on:click={clearPhaseHistory}>← Back to Live</button>
           <span class="count">{phaseIterations.length} iterations</span>
         {:else}
-          <span class="count">{displayIterations.length} iterations</span>
+          <span class="count">{$iterations.length} iterations</span>
         {/if}
       </div>
     </div>
@@ -469,40 +430,32 @@
                 <th>Iter</th>
                 <th>Best CE</th>
                 <th>Accuracy</th>
-                {#if $useV2Mode}
-                  <th>Δ Prev</th>
-                  <th>Threshold</th>
-                  <th>Patience</th>
-                {/if}
+                <th>Δ Prev</th>
+                <th>Threshold</th>
+                <th>Patience</th>
                 <th>Time</th>
-                {#if $useV2Mode}
-                  <th></th>
-                {/if}
+                <th></th>
               </tr>
             </thead>
             <tbody>
               {#each [...phaseIterations].reverse() as iter}
                 <tr
-                  class:clickable={$useV2Mode}
-                  on:click={() => $useV2Mode && openIterationDetails(iter)}
-                  on:keydown={(e) => e.key === 'Enter' && $useV2Mode && openIterationDetails(iter)}
-                  tabindex={$useV2Mode ? 0 : -1}
-                  role={$useV2Mode ? 'button' : undefined}
+                  class:clickable={true}
+                  on:click={() => openIterationDetails(iter)}
+                  on:keydown={(e) => e.key === 'Enter' && openIterationDetails(iter)}
+                  tabindex={0}
+                  role="button"
                 >
                   <td>{iter.iteration_num}</td>
-                  <td class:best={iter.best_ce === displayBestMetrics.bestCE}>{formatCE(iter.best_ce)}</td>
+                  <td class:best={iter.best_ce === $bestMetrics.bestCE}>{formatCE(iter.best_ce)}</td>
                   <td>{formatAcc(iter.best_accuracy)}</td>
-                  {#if $useV2Mode}
-                    <td class:delta-positive={iter.delta_previous && iter.delta_previous < 0} class:delta-negative={iter.delta_previous && iter.delta_previous > 0}>
-                      {iter.delta_previous !== null && iter.delta_previous !== undefined ? (iter.delta_previous < 0 ? '↓' : iter.delta_previous > 0 ? '↑' : '') + Math.abs(iter.delta_previous).toFixed(4) : '—'}
-                    </td>
-                    <td>{formatThreshold(iter.fitness_threshold)}</td>
-                    <td>{iter.patience_counter !== null && iter.patience_max ? `${iter.patience_max - iter.patience_counter}/${iter.patience_max}` : '—'}</td>
-                  {/if}
+                  <td class:delta-positive={iter.delta_previous && iter.delta_previous < 0} class:delta-negative={iter.delta_previous && iter.delta_previous > 0}>
+                    {iter.delta_previous !== null && iter.delta_previous !== undefined ? (iter.delta_previous < 0 ? '↓' : iter.delta_previous > 0 ? '↑' : '') + Math.abs(iter.delta_previous).toFixed(4) : '—'}
+                  </td>
+                  <td>{formatThreshold(iter.fitness_threshold)}</td>
+                  <td>{iter.patience_counter !== null && iter.patience_max ? `${iter.patience_max - iter.patience_counter}/${iter.patience_max}` : '—'}</td>
                   <td>{iter.elapsed_secs ? iter.elapsed_secs.toFixed(1) + 's' : '—'}</td>
-                  {#if $useV2Mode}
-                    <td class="view-link">View →</td>
-                  {/if}
+                  <td class="view-link">View →</td>
                 </tr>
               {/each}
             </tbody>
@@ -513,7 +466,7 @@
           <p>No iterations recorded for this phase</p>
         </div>
       {/if}
-    {:else if displayIterations.length > 0}
+    {:else if $iterations.length > 0}
       <div class="table-scroll">
         <table>
           <thead>
@@ -521,40 +474,32 @@
               <th>Iter</th>
               <th>Best CE</th>
               <th>Accuracy</th>
-              {#if $useV2Mode}
-                <th>Δ Prev</th>
-                <th>Threshold</th>
-                <th>Patience</th>
-              {/if}
+              <th>Δ Prev</th>
+              <th>Threshold</th>
+              <th>Patience</th>
               <th>Time</th>
-              {#if $useV2Mode}
-                <th></th>
-              {/if}
+              <th></th>
             </tr>
           </thead>
           <tbody>
-            {#each displayIterations.slice(-20).reverse() as iter}
+            {#each $iterations.slice(-20).reverse() as iter}
               <tr
-                class:clickable={$useV2Mode}
-                on:click={() => $useV2Mode && openIterationDetails(iter)}
-                on:keydown={(e) => e.key === 'Enter' && $useV2Mode && openIterationDetails(iter)}
-                tabindex={$useV2Mode ? 0 : -1}
-                role={$useV2Mode ? 'button' : undefined}
+                class:clickable={true}
+                on:click={() => openIterationDetails(iter)}
+                on:keydown={(e) => e.key === 'Enter' && openIterationDetails(iter)}
+                tabindex={0}
+                role="button"
               >
                 <td>{iter.iteration_num}</td>
-                <td class:best={iter.best_ce === displayBestMetrics.bestCE}>{formatCE(iter.best_ce)}</td>
+                <td class:best={iter.best_ce === $bestMetrics.bestCE}>{formatCE(iter.best_ce)}</td>
                 <td>{formatAcc(iter.best_accuracy)}</td>
-                {#if $useV2Mode}
-                  <td class:delta-positive={iter.delta_previous && iter.delta_previous < 0} class:delta-negative={iter.delta_previous && iter.delta_previous > 0}>
-                    {iter.delta_previous !== null && iter.delta_previous !== undefined ? (iter.delta_previous < 0 ? '↓' : iter.delta_previous > 0 ? '↑' : '') + Math.abs(iter.delta_previous).toFixed(4) : '—'}
-                  </td>
-                  <td>{formatThreshold(iter.fitness_threshold)}</td>
-                  <td>{iter.patience_counter !== null && iter.patience_max ? `${iter.patience_max - iter.patience_counter}/${iter.patience_max}` : '—'}</td>
-                {/if}
+                <td class:delta-positive={iter.delta_previous && iter.delta_previous < 0} class:delta-negative={iter.delta_previous && iter.delta_previous > 0}>
+                  {iter.delta_previous !== null && iter.delta_previous !== undefined ? (iter.delta_previous < 0 ? '↓' : iter.delta_previous > 0 ? '↑' : '') + Math.abs(iter.delta_previous).toFixed(4) : '—'}
+                </td>
+                <td>{formatThreshold(iter.fitness_threshold)}</td>
+                <td>{iter.patience_counter !== null && iter.patience_max ? `${iter.patience_max - iter.patience_counter}/${iter.patience_max}` : '—'}</td>
                 <td>{iter.elapsed_secs ? iter.elapsed_secs.toFixed(1) + 's' : '—'}</td>
-                {#if $useV2Mode}
-                  <td class="view-link">View →</td>
-                {/if}
+                <td class="view-link">View →</td>
               </tr>
             {/each}
           </tbody>
@@ -570,12 +515,11 @@
   <!-- Debug: Data Inspection (collapse by default) -->
   <details class="card debug-panel">
     <summary class="card-header" style="cursor: pointer;">
-      <span class="card-title">🔍 Debug: Data Inspection ({$useV2Mode ? 'V2 DB' : 'V1 Log'})</span>
+      <span class="card-title">🔍 Debug: Data Inspection</span>
     </summary>
     <div style="padding: 1rem; font-family: monospace; font-size: 0.75rem;">
-      <p><strong>Mode:</strong> {$useV2Mode ? 'V2 (Database)' : 'V1 (Log Parsing)'}</p>
       <p><strong>ceHistory:</strong> {displayCeHistory.length} entries</p>
-      <p><strong>iterations:</strong> {displayIterations.length} entries</p>
+      <p><strong>iterations:</strong> {$iterations.length} entries</p>
       {#if displayCeHistory.length > 0}
         {@const accValues = displayCeHistory.map(h => h.acc).filter(a => a !== null && a !== undefined)}
         <p><strong>Accuracy data:</strong> {accValues.length} entries with values, {displayCeHistory.length - accValues.length} null</p>
@@ -585,9 +529,9 @@
         <p><strong>Last 5 ceHistory entries:</strong></p>
         <pre style="overflow-x: auto; background: var(--bg-card); padding: 0.5rem; border-radius: 4px;">{JSON.stringify(displayCeHistory.slice(-5), null, 2)}</pre>
       {/if}
-      {#if displayIterations.length > 0}
+      {#if $iterations.length > 0}
         <p><strong>Last 5 iterations:</strong></p>
-        <pre style="overflow-x: auto; background: var(--bg-card); padding: 0.5rem; border-radius: 4px;">{JSON.stringify(displayIterations.slice(-5).map(i => ({
+        <pre style="overflow-x: auto; background: var(--bg-card); padding: 0.5rem; border-radius: 4px;">{JSON.stringify($iterations.slice(-5).map(i => ({
           iter: i.iteration_num,
           best_ce: i.best_ce,
           best_acc: i.best_accuracy,
@@ -596,10 +540,10 @@
         })), null, 2)}</pre>
       {/if}
       <p><strong>bestMetrics:</strong></p>
-      <pre style="overflow-x: auto; background: var(--bg-card); padding: 0.5rem; border-radius: 4px;">{JSON.stringify(displayBestMetrics, null, 2)}</pre>
-      {#if $useV2Mode && $currentExperimentV2}
-        <p><strong>Current Experiment (V2):</strong></p>
-        <pre style="overflow-x: auto; background: var(--bg-card); padding: 0.5rem; border-radius: 4px;">{JSON.stringify($currentExperimentV2, null, 2)}</pre>
+      <pre style="overflow-x: auto; background: var(--bg-card); padding: 0.5rem; border-radius: 4px;">{JSON.stringify($bestMetrics, null, 2)}</pre>
+      {#if $currentExperiment}
+        <p><strong>Current Experiment:</strong></p>
+        <pre style="overflow-x: auto; background: var(--bg-card); padding: 0.5rem; border-radius: 4px;">{JSON.stringify($currentExperiment, null, 2)}</pre>
       {/if}
     </div>
   </details>
@@ -623,51 +567,6 @@
           <div class="metric-value">{formatCE($latestHealthCheck.best_ce)}</div>
           <div class="metric-label">Best CE</div>
         </div>
-      </div>
-    </div>
-  {/if}
-
-  <!-- Final Phase Summary -->
-  {#if $phaseSummary}
-    {@const groupedRows = $phaseSummary.rows.reduce((acc, row) => {
-      if (!acc[row.phase_name]) acc[row.phase_name] = [];
-      acc[row.phase_name].push(row);
-      return acc;
-    }, {})}
-    <div class="card">
-      <div class="card-header">
-        <span class="card-title">Final Phase Comparison (Full Validation)</span>
-        <span class="status-badge status-completed">Complete</span>
-      </div>
-      <div class="summary-table-scroll">
-        <table class="summary-table">
-          <thead>
-            <tr>
-              <th>Phase</th>
-              <th>Metric</th>
-              <th class="num">CE</th>
-              <th class="num">PPL</th>
-              <th class="num">Accuracy</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each Object.entries(groupedRows) as [phaseName, rows], phaseIdx}
-              {#each rows as row, rowIdx}
-                <tr class:phase-first={rowIdx === 0} class:baseline={phaseName === 'Baseline'}>
-                  {#if rowIdx === 0}
-                    <td rowspan={rows.length} class="phase-name-cell">
-                      {phaseName === 'Baseline' ? '📊 Baseline' : phaseName}
-                    </td>
-                  {/if}
-                  <td class="metric-type">{row.metric_type}</td>
-                  <td class="num">{row.ce.toFixed(4)}</td>
-                  <td class="num">{row.ppl.toFixed(1)}</td>
-                  <td class="num">{row.accuracy.toFixed(2)}%</td>
-                </tr>
-              {/each}
-            {/each}
-          </tbody>
-        </table>
       </div>
     </div>
   {/if}
@@ -1073,24 +972,6 @@
     fill: var(--accent-green);
   }
 
-  .chart-labels {
-    display: flex;
-    justify-content: space-between;
-    font-size: 0.75rem;
-    color: var(--text-secondary);
-    margin-top: 0.5rem;
-  }
-
-  .chart-label-min {
-    color: var(--accent-green);
-  }
-
-  .chart-label-max {
-    color: var(--text-secondary);
-    font-size: 0.625rem;
-    color: var(--text-secondary);
-  }
-
   .status-running {
     background: var(--accent-blue);
     color: white;
@@ -1099,64 +980,6 @@
   .status-completed {
     background: var(--accent-green);
     color: white;
-  }
-
-  /* Phase Summary Table */
-  .summary-table-scroll {
-    overflow-x: auto;
-  }
-
-  .summary-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.875rem;
-  }
-
-  .summary-table th {
-    text-align: left;
-    padding: 0.75rem 0.5rem;
-    border-bottom: 2px solid var(--border);
-    font-weight: 600;
-    color: var(--text-secondary);
-    text-transform: uppercase;
-    font-size: 0.75rem;
-  }
-
-  .summary-table th.num {
-    text-align: right;
-  }
-
-  .summary-table td {
-    padding: 0.5rem 0.5rem;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .summary-table td.num {
-    text-align: right;
-    font-family: monospace;
-  }
-
-  .summary-table tr.phase-first td {
-    border-top: 1px solid var(--border);
-  }
-
-  .summary-table tr.baseline {
-    background: rgba(59, 130, 246, 0.05);
-  }
-
-  .summary-table tr.baseline td {
-    font-weight: 500;
-  }
-
-  .phase-name-cell {
-    font-weight: 600;
-    vertical-align: top;
-    background: var(--bg-secondary);
-  }
-
-  .metric-type {
-    color: var(--text-secondary);
-    font-size: 0.8125rem;
   }
 
   /* Clickable iteration rows */
