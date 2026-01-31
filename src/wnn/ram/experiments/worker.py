@@ -285,7 +285,15 @@ class FlowWorker:
                 shutdown_check=self.should_stop,  # Pass shutdown check for graceful stop
             )
 
-            result = flow.run()
+            # Check for stopped checkpoint to resume from
+            resume_from, seed_genome, seed_population, seed_threshold = self._check_stopped_checkpoint(checkpoint_dir)
+
+            result = flow.run(
+                resume_from=resume_from,
+                seed_genome=seed_genome,
+                seed_population=seed_population,
+                seed_threshold=seed_threshold,
+            )
 
             # Mark as completed
             self.client.flow_completed(flow_id)
@@ -385,6 +393,51 @@ class FlowWorker:
             return [(t[0], t[1], t[2]) for t in tier_config]
 
         return None
+
+    def _check_stopped_checkpoint(self, checkpoint_dir: Path) -> tuple:
+        """Check for a stopped checkpoint and return resume parameters.
+
+        Returns:
+            (resume_from, seed_genome, seed_population, seed_threshold)
+            All None if no stopped checkpoint exists.
+        """
+        import gzip
+        import json
+        from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
+
+        stopped_path = checkpoint_dir / "flow_stopped.json.gz"
+        if not stopped_path.exists():
+            return None, None, None, None
+
+        try:
+            with gzip.open(stopped_path, 'rt', encoding='utf-8') as f:
+                data = json.load(f)
+
+            resume_from = data.get("stopped_at_experiment")
+            current_genome = None
+            current_population = None
+            current_threshold = data.get("current_threshold")
+
+            if data.get("current_genome"):
+                current_genome = ClusterGenome.deserialize(data["current_genome"])
+
+            if data.get("current_population"):
+                current_population = [ClusterGenome.deserialize(g) for g in data["current_population"]]
+
+            self._log(f"Found stopped checkpoint: resuming from experiment {resume_from}")
+            self._log(f"  Completed: {data.get('completed_experiments')}/{data.get('total_experiments')} experiments")
+            if data.get("current_fitness"):
+                self._log(f"  Best CE: {data.get('current_fitness'):.4f}")
+
+            # Delete the stopped checkpoint after loading (so we don't resume again if this run completes)
+            stopped_path.unlink()
+            self._log(f"  Removed stopped checkpoint (will create new one if stopped again)")
+
+            return resume_from, current_genome, current_population, current_threshold
+
+        except Exception as e:
+            self._log(f"Warning: Failed to load stopped checkpoint: {e}")
+            return None, None, None, None
 
 
 def main():
