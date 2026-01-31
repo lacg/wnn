@@ -919,6 +919,15 @@ pub mod queries {
                     .execute(pool)
                     .await?;
 
+                // Delete genome_evaluations that reference genomes from this experiment
+                // (genome_evaluations_v2 has FK to both iterations_v2 AND genomes_v2)
+                sqlx::query(
+                    "DELETE FROM genome_evaluations_v2 WHERE genome_id IN (SELECT id FROM genomes_v2 WHERE experiment_id = ?)"
+                )
+                    .bind(exp_id)
+                    .execute(pool)
+                    .await?;
+
                 // Delete genomes for this experiment
                 sqlx::query("DELETE FROM genomes_v2 WHERE experiment_id = ?")
                     .bind(exp_id)
