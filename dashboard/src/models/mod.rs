@@ -152,6 +152,8 @@ pub enum WsMessage {
     FlowStarted(Flow),
     FlowCompleted(Flow),
     FlowFailed { flow: Flow, error: String },
+    FlowCancelled(Flow),
+    FlowQueued(Flow),
     /// Checkpoint events
     CheckpointCreated(Checkpoint),
     CheckpointDeleted { id: i64 },
@@ -187,6 +189,7 @@ pub struct Flow {
     pub completed_at: Option<DateTime<Utc>>,
     pub status: FlowStatus,
     pub seed_checkpoint_id: Option<i64>,
+    pub pid: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

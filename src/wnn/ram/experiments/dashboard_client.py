@@ -280,6 +280,47 @@ class DashboardClient:
 			self._logger(f"Flow {flow_id} failed: {error}")
 		return result
 
+	def register_flow_pid(self, flow_id: int, pid: int) -> dict:
+		"""Register the worker process PID for a flow.
+
+		This enables stop/restart functionality from the dashboard.
+
+		Args:
+			flow_id: Flow ID
+			pid: Process ID of the worker
+
+		Returns:
+			Response from server
+		"""
+		return self._request("PATCH", f"/api/flows/{flow_id}/pid", json_data={"pid": pid})
+
+	def stop_flow(self, flow_id: int) -> dict:
+		"""Stop a running flow.
+
+		Sends SIGTERM to the worker process and sets status to cancelled.
+
+		Args:
+			flow_id: Flow ID to stop
+
+		Returns:
+			Updated flow data
+		"""
+		return self._request("POST", f"/api/flows/{flow_id}/stop")
+
+	def restart_flow(self, flow_id: int, from_beginning: bool = False) -> dict:
+		"""Restart a flow.
+
+		Re-queues the flow for execution.
+
+		Args:
+			flow_id: Flow ID to restart
+			from_beginning: If True, start fresh without checkpoint
+
+		Returns:
+			Updated flow data
+		"""
+		return self._request("POST", f"/api/flows/{flow_id}/restart", json_data={"from_beginning": from_beginning})
+
 	def watch_log(self, log_path: str) -> dict:
 		"""Tell the dashboard to watch a log file.
 

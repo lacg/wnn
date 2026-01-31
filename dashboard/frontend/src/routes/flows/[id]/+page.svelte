@@ -343,6 +343,49 @@
     }
   }
 
+  async function stopFlow() {
+    if (!flow) return;
+    if (!confirm('Stop this flow? Current progress will be saved as a checkpoint.')) return;
+
+    try {
+      const response = await fetch(`/api/flows/${flow.id}/stop`, {
+        method: 'POST'
+      });
+      if (response.ok) {
+        await loadFlow();
+      } else {
+        const data = await response.json();
+        error = data.error || 'Failed to stop flow';
+      }
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Unknown error';
+    }
+  }
+
+  async function restartFlow(fromBeginning: boolean = false) {
+    if (!flow) return;
+    const msg = fromBeginning
+      ? 'Restart from the beginning? All progress will be lost.'
+      : 'Restart from last checkpoint?';
+    if (!confirm(msg)) return;
+
+    try {
+      const response = await fetch(`/api/flows/${flow.id}/restart`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from_beginning: fromBeginning })
+      });
+      if (response.ok) {
+        await loadFlow();
+      } else {
+        const data = await response.json();
+        error = data.error || 'Failed to restart flow';
+      }
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Unknown error';
+    }
+  }
+
   // Build expected phase_type from expSpec
   function getExpectedPhaseType(expSpec: { experiment_type: string; optimize_neurons?: boolean; optimize_bits?: boolean; optimize_connections?: boolean }): string {
     const type = expSpec.experiment_type; // 'ga' or 'ts'
@@ -475,9 +518,22 @@
         {#if flow.status === 'queued'}
           <span class="queued-hint">Waiting for worker to pick up...</span>
         {/if}
-        {#if flow.status === 'failed'}
-          <button class="btn btn-primary" on:click={queueFlow}>
-            Restart
+        {#if flow.status === 'running'}
+          <button class="btn btn-danger" on:click={stopFlow}>
+            Stop
+          </button>
+        {/if}
+        {#if flow.status === 'failed' || flow.status === 'cancelled'}
+          <button class="btn btn-primary" on:click={() => restartFlow(false)}>
+            Resume
+          </button>
+          <button class="btn btn-secondary" on:click={() => restartFlow(true)}>
+            Restart from Beginning
+          </button>
+        {/if}
+        {#if flow.status === 'completed'}
+          <button class="btn btn-secondary" on:click={() => restartFlow(true)}>
+            Run Again
           </button>
         {/if}
       </div>

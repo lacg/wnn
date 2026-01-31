@@ -29,6 +29,10 @@ notify = "6"  # File watching
 anyhow = "1"
 thiserror = "1"
 
+# Unix signals (for stop functionality)
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

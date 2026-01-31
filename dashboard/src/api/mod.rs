@@ -106,6 +106,9 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .route("/api/flows", get(list_flows).post(create_flow))
         .route("/api/flows/:id", get(get_flow).patch(update_flow).delete(delete_flow))
         .route("/api/flows/:id/experiments", get(list_flow_experiments).post(add_experiment_to_flow))
+        .route("/api/flows/:id/stop", post(stop_flow))
+        .route("/api/flows/:id/restart", post(restart_flow))
+        .route("/api/flows/:id/pid", patch(update_flow_pid))
         // Checkpoints
         .route("/api/checkpoints", get(list_checkpoints).post(create_checkpoint))
         .route("/api/checkpoints/:id", get(get_checkpoint).delete(delete_checkpoint))
@@ -437,6 +440,148 @@ async fn add_experiment_to_flow(
         req.sequence_order.unwrap_or(0),
     ).await {
         Ok(_) => (StatusCode::OK, Json(serde_json::json!({"success": true}))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+/// Stop a running flow by sending SIGTERM to the worker process
+async fn stop_flow(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    // Get the flow to check PID
+    let flow = match crate::db::queries::get_flow(&state.db, id).await {
+        Ok(Some(f)) => f,
+        Ok(None) => return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Flow not found"})),
+        ).into_response(),
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    };
+
+    // Check if flow is running
+    if flow.status != FlowStatus::Running {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Flow is not running"})),
+        ).into_response();
+    }
+
+    // Send SIGTERM if PID exists
+    if let Some(pid) = flow.pid {
+        #[cfg(unix)]
+        unsafe {
+            libc::kill(pid as i32, libc::SIGTERM);
+        }
+        tracing::info!("Sent SIGTERM to flow {} (PID {})", id, pid);
+    }
+
+    // Update status to cancelled
+    match crate::db::queries::update_flow(
+        &state.db,
+        id,
+        None,
+        None,
+        Some("cancelled"),
+        None,
+        None,
+    ).await {
+        Ok(_) => {
+            // Broadcast cancellation
+            if let Ok(Some(updated_flow)) = crate::db::queries::get_flow(&state.db, id).await {
+                let _ = state.ws_tx.send(WsMessage::FlowCancelled(updated_flow.clone()));
+                (StatusCode::OK, Json(updated_flow)).into_response()
+            } else {
+                (StatusCode::OK, Json(serde_json::json!({"stopped": true}))).into_response()
+            }
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RestartFlowRequest {
+    #[serde(default)]
+    pub from_beginning: bool,  // If true, restart from scratch; if false, resume from checkpoint
+}
+
+/// Restart a flow by setting status to queued
+async fn restart_flow(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Json(req): Json<RestartFlowRequest>,
+) -> impl IntoResponse {
+    // Get the flow
+    let flow = match crate::db::queries::get_flow(&state.db, id).await {
+        Ok(Some(f)) => f,
+        Ok(None) => return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Flow not found"})),
+        ).into_response(),
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    };
+
+    // Check if flow can be restarted
+    if flow.status == FlowStatus::Running || flow.status == FlowStatus::Queued {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Flow is already running or queued"})),
+        ).into_response();
+    }
+
+    // If restarting from beginning, clear the seed checkpoint
+    let seed_checkpoint_id = if req.from_beginning {
+        Some(None) // Clear checkpoint
+    } else {
+        None // Keep existing
+    };
+
+    // Set status to queued (and optionally clear PID)
+    match crate::db::queries::update_flow_for_restart(&state.db, id, seed_checkpoint_id).await {
+        Ok(_) => {
+            if let Ok(Some(updated_flow)) = crate::db::queries::get_flow(&state.db, id).await {
+                let _ = state.ws_tx.send(WsMessage::FlowQueued(updated_flow.clone()));
+                (StatusCode::OK, Json(updated_flow)).into_response()
+            } else {
+                (StatusCode::OK, Json(serde_json::json!({"restarted": true}))).into_response()
+            }
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateFlowPidRequest {
+    pub pid: Option<i64>,
+}
+
+/// Update the PID of a flow (called by worker when starting)
+async fn update_flow_pid(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Json(req): Json<UpdateFlowPidRequest>,
+) -> impl IntoResponse {
+    match crate::db::queries::update_flow_pid(&state.db, id, req.pid).await {
+        Ok(true) => (StatusCode::OK, Json(serde_json::json!({"success": true}))).into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Flow not found"})),
+        ).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),

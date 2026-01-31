@@ -39,6 +39,11 @@ async fn run_migrations(pool: &DbPool) -> Result<()> {
         .execute(pool)
         .await;
 
+    // Migration 4: Add pid to flows for stop/restart functionality
+    let _ = sqlx::query("ALTER TABLE flows ADD COLUMN pid INTEGER")
+        .execute(pool)
+        .await;
+
     Ok(())
 }
 
@@ -635,7 +640,7 @@ pub mod queries {
     pub async fn list_flows(pool: &DbPool, status: Option<&str>, limit: i32, offset: i32) -> Result<Vec<Flow>> {
         let rows = if let Some(status_filter) = status {
             sqlx::query(
-                r#"SELECT id, name, description, config_json, created_at, started_at, completed_at, status, seed_checkpoint_id
+                r#"SELECT id, name, description, config_json, created_at, started_at, completed_at, status, seed_checkpoint_id, pid
                    FROM flows WHERE status = ?
                    ORDER BY created_at DESC
                    LIMIT ? OFFSET ?"#,
@@ -647,7 +652,7 @@ pub mod queries {
             .await?
         } else {
             sqlx::query(
-                r#"SELECT id, name, description, config_json, created_at, started_at, completed_at, status, seed_checkpoint_id
+                r#"SELECT id, name, description, config_json, created_at, started_at, completed_at, status, seed_checkpoint_id, pid
                    FROM flows
                    ORDER BY created_at DESC
                    LIMIT ? OFFSET ?"#,
@@ -667,7 +672,7 @@ pub mod queries {
 
     pub async fn get_flow(pool: &DbPool, id: i64) -> Result<Option<Flow>> {
         let row = sqlx::query(
-            r#"SELECT id, name, description, config_json, created_at, started_at, completed_at, status, seed_checkpoint_id
+            r#"SELECT id, name, description, config_json, created_at, started_at, completed_at, status, seed_checkpoint_id, pid
                FROM flows WHERE id = ?"#,
         )
         .bind(id)
@@ -838,7 +843,48 @@ pub mod queries {
                 .transpose()?,
             status: parse_flow_status(&status_str),
             seed_checkpoint_id: row.get("seed_checkpoint_id"),
+            pid: row.get("pid"),
         })
+    }
+
+    /// Update flow PID (called by worker when starting a flow)
+    pub async fn update_flow_pid(pool: &DbPool, id: i64, pid: Option<i64>) -> Result<bool> {
+        let result = sqlx::query("UPDATE flows SET pid = ? WHERE id = ?")
+            .bind(pid)
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Update flow for restart: set status to queued, clear pid, optionally clear seed
+    pub async fn update_flow_for_restart(
+        pool: &DbPool,
+        id: i64,
+        clear_seed: Option<Option<i64>>,
+    ) -> Result<bool> {
+        let now = Utc::now().to_rfc3339();
+
+        if let Some(seed_id) = clear_seed {
+            // Clear both pid and seed checkpoint
+            let result = sqlx::query(
+                "UPDATE flows SET status = 'queued', pid = NULL, seed_checkpoint_id = ?, started_at = NULL, completed_at = NULL WHERE id = ?"
+            )
+            .bind(seed_id)
+            .bind(id)
+            .execute(pool)
+            .await?;
+            Ok(result.rows_affected() > 0)
+        } else {
+            // Just reset status and pid
+            let result = sqlx::query(
+                "UPDATE flows SET status = 'queued', pid = NULL, started_at = NULL, completed_at = NULL WHERE id = ?"
+            )
+            .bind(id)
+            .execute(pool)
+            .await?;
+            Ok(result.rows_affected() > 0)
+        }
     }
 
     // =============================================================================

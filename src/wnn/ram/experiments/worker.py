@@ -219,8 +219,10 @@ class FlowWorker:
         self._log(f"=" * 60)
 
         try:
-            # Mark as running
+            # Mark as running and register PID for stop/restart
             self.client.flow_started(flow_id)
+            import os
+            self.client.register_flow_pid(flow_id, os.getpid())
 
             # Parse flow configuration
             config = flow_data.get("config", {})
