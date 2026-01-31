@@ -674,7 +674,7 @@ class DataLayer:
         """Create a genome evaluation record."""
         with self._transaction() as conn:
             cursor = conn.execute(
-                """INSERT INTO genome_evaluations
+                """INSERT OR REPLACE INTO genome_evaluations
                    (iteration_id, genome_id, position, role, elite_rank, ce, accuracy,
                     fitness_score, eval_time_ms, created_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -698,7 +698,7 @@ class DataLayer:
                 role = eval_data["role"]
                 role_value = role.value if hasattr(role, 'value') else role
                 cursor = conn.execute(
-                    """INSERT INTO genome_evaluations
+                    """INSERT OR REPLACE INTO genome_evaluations
                        (iteration_id, genome_id, position, role, elite_rank, ce, accuracy,
                         fitness_score, eval_time_ms, created_at)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",

@@ -222,7 +222,10 @@ CREATE TABLE IF NOT EXISTS genome_evaluations (
     -- Timing
     eval_time_ms INTEGER,
 
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+
+    -- Prevent duplicate evaluations for same iteration+position
+    UNIQUE(iteration_id, position)
 );
 
 -- ============================================================================
