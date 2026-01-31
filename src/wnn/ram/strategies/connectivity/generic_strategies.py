@@ -28,11 +28,14 @@ from wnn.ram.fitness import FitnessCalculatorType
 
 # Optional tracker integration
 try:
-	from wnn.ram.experiments.tracker import ExperimentTracker
+	from wnn.ram.experiments.tracker import ExperimentTracker, TierConfig, GenomeConfig, GenomeRole
 	HAS_TRACKER = True
 except ImportError:
 	HAS_TRACKER = False
 	ExperimentTracker = None
+	TierConfig = None
+	GenomeConfig = None
+	GenomeRole = None
 
 # Generic genome type
 T = TypeVar('T')
@@ -1089,11 +1092,13 @@ class GenericGAStrategy(ABC, Generic[T]):
 		# Tracker for iteration recording (set via set_tracker)
 		self._tracker: Optional["ExperimentTracker"] = None
 		self._tracker_phase_id: Optional[int] = None
+		self._tracker_experiment_id: Optional[int] = None
 
-	def set_tracker(self, tracker: "ExperimentTracker", phase_id: int) -> None:
+	def set_tracker(self, tracker: "ExperimentTracker", phase_id: int, experiment_id: Optional[int] = None) -> None:
 		"""Set the experiment tracker for iteration recording."""
 		self._tracker = tracker
 		self._tracker_phase_id = phase_id
+		self._tracker_experiment_id = experiment_id
 
 	@property
 	def config(self) -> GAConfig:
@@ -1130,6 +1135,19 @@ class GenericGAStrategy(ABC, Generic[T]):
 	def create_random_genome(self) -> T:
 		"""Create a new random genome (for population initialization)."""
 		...
+
+	# =========================================================================
+	# Optional genome tracking (subclasses can override)
+	# =========================================================================
+
+	def genome_to_config(self, genome: T) -> Optional["GenomeConfig"]:
+		"""
+		Convert a genome to a GenomeConfig for tracking.
+
+		Override in subclasses to enable genome-level tracking.
+		Returns None by default (genome tracking disabled).
+		"""
+		return None
 
 	# =========================================================================
 	# Core GA loop
@@ -1379,7 +1397,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 					# Compute average accuracy of the population
 					valid_accs = [a for a in accuracy_values if a is not None]
 					avg_acc = sum(valid_accs) / len(valid_accs) if valid_accs else None
-					self._tracker.record_iteration(
+					iteration_id = self._tracker.record_iteration(
 						phase_id=self._tracker_phase_id,
 						iteration_num=generation + 1,
 						best_ce=best_fitness,
@@ -1391,6 +1409,29 @@ class GenericGAStrategy(ABC, Generic[T]):
 						offspring_viable=len(offspring),  # All offspring are viable at this point
 						fitness_threshold=current_threshold,
 					)
+
+					# Record genome evaluations (if genome_to_config is implemented)
+					if iteration_id and self._tracker_experiment_id and HAS_TRACKER and GenomeRole is not None:
+						evaluations = []
+						for pos, (genome, ce, acc) in enumerate(population):
+							config = self.genome_to_config(genome)
+							if config is not None:
+								genome_id = self._tracker.get_or_create_genome(
+									self._tracker_experiment_id, config
+								)
+								# Role: first total_elites are elites, rest are offspring
+								role = GenomeRole.ELITE if pos < total_elites else GenomeRole.OFFSPRING
+								evaluations.append({
+									"iteration_id": iteration_id,
+									"genome_id": genome_id,
+									"position": pos,
+									"role": role,
+									"ce": ce,
+									"accuracy": acc if acc is not None else 0.0,
+									"elite_rank": pos if pos < total_elites else None,
+								})
+						if evaluations:
+							self._tracker.record_genome_evaluations_batch(evaluations)
 				except Exception as e:
 					self._log.debug(f"Tracker error: {e}")
 
@@ -1672,11 +1713,13 @@ class GenericTSStrategy(ABC, Generic[T]):
 		# Tracker for iteration recording (set via set_tracker)
 		self._tracker: Optional["ExperimentTracker"] = None
 		self._tracker_phase_id: Optional[int] = None
+		self._tracker_experiment_id: Optional[int] = None
 
-	def set_tracker(self, tracker: "ExperimentTracker", phase_id: int) -> None:
+	def set_tracker(self, tracker: "ExperimentTracker", phase_id: int, experiment_id: Optional[int] = None) -> None:
 		"""Set the experiment tracker for iteration recording."""
 		self._tracker = tracker
 		self._tracker_phase_id = phase_id
+		self._tracker_experiment_id = experiment_id
 
 	@property
 	def config(self) -> TSConfig:
@@ -1708,6 +1751,19 @@ class GenericTSStrategy(ABC, Generic[T]):
 	def is_tabu_move(self, move: Any, tabu_list: list[Any]) -> bool:
 		"""Check if a move is tabu (reverses a recent move)."""
 		...
+
+	# =========================================================================
+	# Optional genome tracking (subclasses can override)
+	# =========================================================================
+
+	def genome_to_config(self, genome: T) -> Optional["GenomeConfig"]:
+		"""
+		Convert a genome to a GenomeConfig for tracking.
+
+		Override in subclasses to enable genome-level tracking.
+		Returns None by default (genome tracking disabled).
+		"""
+		return None
 
 	# =========================================================================
 	# Core TS loop
@@ -1971,7 +2027,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 						top_k_avg_ce = None
 						top_k_avg_acc = None
 
-					self._tracker.record_iteration(
+					iteration_id = self._tracker.record_iteration(
 						phase_id=self._tracker_phase_id,
 						iteration_num=iteration + 1,
 						best_ce=best_fitness,
@@ -1983,6 +2039,67 @@ class GenericTSStrategy(ABC, Generic[T]):
 						offspring_viable=len(viable_neighbors),
 						fitness_threshold=current_threshold,
 					)
+
+					# Record genome evaluations (if genome_to_config is implemented)
+					if iteration_id and self._tracker_experiment_id and HAS_TRACKER and GenomeRole is not None:
+						evaluations = []
+						top_k_ids = set()  # Track which genomes are in top-k
+
+						# Record current best genome
+						best_config = self.genome_to_config(best)
+						if best_config is not None:
+							best_genome_id = self._tracker.get_or_create_genome(
+								self._tracker_experiment_id, best_config
+							)
+							evaluations.append({
+								"iteration_id": iteration_id,
+								"genome_id": best_genome_id,
+								"position": 0,
+								"role": GenomeRole.CURRENT,
+								"ce": best_fitness,
+								"accuracy": best_accuracy if best_accuracy is not None else 0.0,
+								"elite_rank": 0,
+							})
+							top_k_ids.add(best_genome_id)
+
+						# Record top-k neighbors
+						for pos, (genome, ce, acc) in enumerate(top_k):
+							config = self.genome_to_config(genome)
+							if config is not None:
+								genome_id = self._tracker.get_or_create_genome(
+									self._tracker_experiment_id, config
+								)
+								if genome_id not in top_k_ids:  # Avoid duplicates
+									evaluations.append({
+										"iteration_id": iteration_id,
+										"genome_id": genome_id,
+										"position": pos + 1,  # After current best
+										"role": GenomeRole.TOP_K,
+										"ce": ce,
+										"accuracy": acc if acc is not None else 0.0,
+										"elite_rank": pos + 1,
+									})
+									top_k_ids.add(genome_id)
+
+						# Record other viable neighbors (not in top-k)
+						for pos, (genome, ce, acc) in enumerate(viable_neighbors):
+							config = self.genome_to_config(genome)
+							if config is not None:
+								genome_id = self._tracker.get_or_create_genome(
+									self._tracker_experiment_id, config
+								)
+								if genome_id not in top_k_ids:  # Only if not already tracked
+									evaluations.append({
+										"iteration_id": iteration_id,
+										"genome_id": genome_id,
+										"position": len(top_k) + pos + 1,
+										"role": GenomeRole.NEIGHBOR,
+										"ce": ce,
+										"accuracy": acc if acc is not None else 0.0,
+									})
+
+						if evaluations:
+							self._tracker.record_genome_evaluations_batch(evaluations)
 				except Exception as e:
 					self._log.debug(f"Tracker error: {e}")
 

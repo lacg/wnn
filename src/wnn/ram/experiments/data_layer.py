@@ -73,9 +73,14 @@ class FitnessCalculator(str, Enum):
 
 
 class GenomeRole(str, Enum):
+    # GA roles
     ELITE = "elite"
     OFFSPRING = "offspring"
     INIT = "init"
+    # TS roles
+    TOP_K = "top_k"  # Top-k neighbors in TS cache (like GA elites)
+    NEIGHBOR = "neighbor"  # Other evaluated neighbors
+    CURRENT = "current"  # Current best genome being refined
 
 
 class CheckpointType(str, Enum):
@@ -681,6 +686,9 @@ class DataLayer:
         ids = []
         with self._transaction() as conn:
             for eval_data in evaluations:
+                # Extract role value if it's an enum
+                role = eval_data["role"]
+                role_value = role.value if hasattr(role, 'value') else role
                 cursor = conn.execute(
                     """INSERT INTO genome_evaluations_v2
                        (iteration_id, genome_id, position, role, elite_rank, ce, accuracy,
@@ -690,7 +698,7 @@ class DataLayer:
                         eval_data["iteration_id"],
                         eval_data["genome_id"],
                         eval_data["position"],
-                        eval_data["role"],
+                        role_value,
                         eval_data.get("elite_rank"),
                         eval_data["ce"],
                         eval_data["accuracy"],

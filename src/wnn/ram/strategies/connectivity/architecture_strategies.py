@@ -35,6 +35,15 @@ from wnn.ram.architecture.genome_log import (
 )
 from wnn.ram.strategies.filters import PercentileFilter, FilterMode
 
+# Optional tracker integration for genome tracking
+try:
+	from wnn.ram.experiments.tracker import TierConfig, GenomeConfig
+	HAS_GENOME_TRACKING = True
+except ImportError:
+	HAS_GENOME_TRACKING = False
+	TierConfig = None
+	GenomeConfig = None
+
 if TYPE_CHECKING:
 	from wnn.ram.strategies.connectivity.adaptive_cluster import (
 		ClusterGenome,
@@ -382,6 +391,37 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 	@property
 	def name(self) -> str:
 		return "ArchitectureGA"
+
+	def genome_to_config(self, genome: 'ClusterGenome') -> Optional['GenomeConfig']:
+		"""
+		Convert a ClusterGenome to a GenomeConfig for tracking.
+
+		Groups clusters by their (neurons, bits) configuration to create tiers.
+		This enables genome-level tracking in the dashboard.
+		"""
+		if not HAS_GENOME_TRACKING or GenomeConfig is None or TierConfig is None:
+			return None
+
+		# Group clusters by (neurons, bits) to create tier configs
+		from collections import defaultdict
+		tier_groups: dict[tuple[int, int], int] = defaultdict(int)
+
+		for neurons, bits in zip(genome.neurons_per_cluster, genome.bits_per_cluster):
+			tier_groups[(neurons, bits)] += 1
+
+		# Sort by cluster count (descending) to assign tier indices
+		sorted_configs = sorted(tier_groups.items(), key=lambda x: -x[1])
+
+		tiers = []
+		for tier_idx, ((neurons, bits), clusters) in enumerate(sorted_configs):
+			tiers.append(TierConfig(
+				tier=tier_idx,
+				clusters=clusters,
+				neurons=neurons,
+				bits=bits,
+			))
+
+		return GenomeConfig(tiers=tiers)
 
 	def clone_genome(self, genome: 'ClusterGenome') -> 'ClusterGenome':
 		return genome.clone()
@@ -1189,6 +1229,37 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 	@property
 	def name(self) -> str:
 		return "ArchitectureTS"
+
+	def genome_to_config(self, genome: 'ClusterGenome') -> Optional['GenomeConfig']:
+		"""
+		Convert a ClusterGenome to a GenomeConfig for tracking.
+
+		Groups clusters by their (neurons, bits) configuration to create tiers.
+		This enables genome-level tracking in the dashboard.
+		"""
+		if not HAS_GENOME_TRACKING or GenomeConfig is None or TierConfig is None:
+			return None
+
+		# Group clusters by (neurons, bits) to create tier configs
+		from collections import defaultdict
+		tier_groups: dict[tuple[int, int], int] = defaultdict(int)
+
+		for neurons, bits in zip(genome.neurons_per_cluster, genome.bits_per_cluster):
+			tier_groups[(neurons, bits)] += 1
+
+		# Sort by cluster count (descending) to assign tier indices
+		sorted_configs = sorted(tier_groups.items(), key=lambda x: -x[1])
+
+		tiers = []
+		for tier_idx, ((neurons, bits), clusters) in enumerate(sorted_configs):
+			tiers.append(TierConfig(
+				tier=tier_idx,
+				clusters=clusters,
+				neurons=neurons,
+				bits=bits,
+			))
+
+		return GenomeConfig(tiers=tiers)
 
 	def clone_genome(self, genome: 'ClusterGenome') -> 'ClusterGenome':
 		return genome.clone()

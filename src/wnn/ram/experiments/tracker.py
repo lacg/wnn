@@ -44,9 +44,14 @@ class FitnessCalculatorType(str, Enum):
 
 class GenomeRole(str, Enum):
     """Role of a genome in an iteration."""
+    # GA roles
     ELITE = "elite"
     OFFSPRING = "offspring"
     INIT = "init"
+    # TS roles
+    TOP_K = "top_k"  # Top-k neighbors in TS cache (like GA elites)
+    NEIGHBOR = "neighbor"  # Other evaluated neighbors
+    CURRENT = "current"  # Current best genome being refined
 
 
 class CheckpointType(str, Enum):
@@ -82,6 +87,22 @@ class GenomeConfig:
     @property
     def total_memory_bytes(self) -> int:
         return sum(t.clusters * t.neurons * (2 ** t.bits) for t in self.tiers)
+
+    def to_json(self) -> str:
+        """Serialize to JSON for storage."""
+        import json
+        return json.dumps([
+            {"tier": t.tier, "clusters": t.clusters, "neurons": t.neurons, "bits": t.bits}
+            for t in self.tiers
+        ])
+
+    def compute_hash(self) -> str:
+        """Compute deterministic hash for deduplication."""
+        import hashlib
+        # Sort tiers by (neurons, bits, clusters) for consistent hashing
+        sorted_tiers = sorted(self.tiers, key=lambda t: (t.neurons, t.bits, t.clusters))
+        key = "|".join(f"{t.clusters},{t.neurons},{t.bits}" for t in sorted_tiers)
+        return hashlib.sha256(key.encode()).hexdigest()[:16]
 
 
 class ExperimentTracker(ABC):
