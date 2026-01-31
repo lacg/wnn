@@ -285,7 +285,8 @@ class DataLayer:
                 accuracy REAL NOT NULL,
                 fitness_score REAL,
                 eval_time_ms INTEGER,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                UNIQUE(iteration_id, position)
             );
 
             -- Health checks
@@ -594,7 +595,18 @@ class DataLayer:
                     patience_counter, patience_max, candidates_total, _now_iso(),
                 ),
             )
-            return cursor.lastrowid
+            iteration_id = cursor.lastrowid
+
+            # Also update phase with latest progress for live view
+            conn.execute(
+                """UPDATE phases
+                   SET current_iteration = ?,
+                       best_ce = CASE WHEN ? < COALESCE(best_ce, 999999) THEN ? ELSE best_ce END,
+                       best_accuracy = CASE WHEN ? > COALESCE(best_accuracy, 0) THEN ? ELSE best_accuracy END
+                   WHERE id = ?""",
+                (iteration_num, best_ce, best_ce, best_accuracy, best_accuracy, phase_id),
+            )
+            return iteration_id
 
     def get_iteration(self, iteration_id: int) -> Optional[dict]:
         """Get iteration by ID."""

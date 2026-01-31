@@ -8,6 +8,7 @@ from . import FitnessCalculatorType
 from .FitnessCalculator import FitnessCalculator
 from .FitnessCalculatorCE import FitnessCalculatorCE
 from .FitnessCalculatorHarmonicRank import FitnessCalculatorHarmonicRank
+from .FitnessCalculatorNormalized import FitnessCalculatorNormalized
 
 G = TypeVar('G')
 
@@ -26,8 +27,8 @@ class FitnessCalculatorFactory:
 
 		Args:
 			mode: Type of fitness calculator to create
-			weight_ce: Weight for CE rank (only used for HARMONIC_RANK)
-			weight_acc: Weight for accuracy rank (only used for HARMONIC_RANK)
+			weight_ce: Weight for CE (used for HARMONIC_RANK and NORMALIZED)
+			weight_acc: Weight for accuracy (used for HARMONIC_RANK and NORMALIZED)
 
 		Returns:
 			Configured FitnessCalculator instance
@@ -40,5 +41,7 @@ class FitnessCalculatorFactory:
 				return FitnessCalculatorCE()
 			case FitnessCalculatorType.HARMONIC_RANK:
 				return FitnessCalculatorHarmonicRank(weight_ce=weight_ce, weight_acc=weight_acc)
+			case FitnessCalculatorType.NORMALIZED:
+				return FitnessCalculatorNormalized(weight_ce=weight_ce, weight_acc=weight_acc)
 			case _:
 				raise ValueError(f"Unsupported FitnessCalculatorType: {mode}")

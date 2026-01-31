@@ -16,11 +16,13 @@ class FitnessCalculatorType(IntEnum):
 	"""Type of fitness calculator for genome ranking."""
 	CE = 0              # Pure CE ranking (lower CE = better)
 	HARMONIC_RANK = 1   # Harmonic mean of CE and accuracy ranks
+	NORMALIZED = 2      # Normalized [0,1] scale weighted sum
 
 
 from .FitnessCalculator import FitnessCalculator
 from .FitnessCalculatorCE import FitnessCalculatorCE
 from .FitnessCalculatorHarmonicRank import FitnessCalculatorHarmonicRank
+from .FitnessCalculatorNormalized import FitnessCalculatorNormalized
 from .FitnessCalculatorFactory import FitnessCalculatorFactory
 
 
@@ -32,6 +34,7 @@ __all__ = [
 	# Implementations
 	"FitnessCalculatorCE",
 	"FitnessCalculatorHarmonicRank",
+	"FitnessCalculatorNormalized",
 	# Factory
 	"FitnessCalculatorFactory",
 ]
