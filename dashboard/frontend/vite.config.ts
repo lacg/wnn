@@ -20,6 +20,7 @@ const backendPort = process.env.DASHBOARD_PORT || '3000';
 export default defineConfig({
   plugins: [sveltekit()],
   server: {
+    host: '0.0.0.0',  // Listen on all interfaces for macstudio.local access
     allowedHosts: ['macstudio.local', 'localhost'],
     https: httpsConfig,
     proxy: {
