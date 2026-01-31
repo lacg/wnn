@@ -25,7 +25,7 @@
     // Mode toggle
     useV2Mode
   } from '$lib/stores';
-  import type { Flow, GenomeEvaluationV2, IterationV2 } from '$lib/types';
+  import type { Flow, GenomeEvaluationV2, IterationV2, PhaseV2 } from '$lib/types';
 
   // Current running flow (fetched from API)
   let currentFlow: Flow | null = null;
@@ -35,6 +35,12 @@
   let genomeEvaluations: GenomeEvaluationV2[] = [];
   let loadingGenomes = false;
   let showIterationModal = false;
+
+  // Phase history modal state
+  let selectedPhase: PhaseV2 | null = null;
+  let phaseIterations: IterationV2[] = [];
+  let loadingPhaseIterations = false;
+  let showPhaseModal = false;
 
   onMount(() => {
     // Fetch the current running flow
@@ -82,6 +88,34 @@
     showIterationModal = false;
     selectedIteration = null;
     genomeEvaluations = [];
+  }
+
+  async function openPhaseHistory(phase: PhaseV2) {
+    if (!$useV2Mode) return; // Only available in V2 mode
+
+    selectedPhase = phase;
+    showPhaseModal = true;
+    loadingPhaseIterations = true;
+    phaseIterations = [];
+
+    try {
+      const res = await fetch(`/api/v2/phases/${phase.id}/iterations`);
+      if (res.ok) {
+        phaseIterations = await res.json();
+      } else {
+        console.error('Failed to fetch phase iterations:', res.status);
+      }
+    } catch (e) {
+      console.error('Failed to fetch phase iterations:', e);
+    } finally {
+      loadingPhaseIterations = false;
+    }
+  }
+
+  function closePhaseModal() {
+    showPhaseModal = false;
+    selectedPhase = null;
+    phaseIterations = [];
   }
 
   function formatRole(role: string): string {
@@ -365,13 +399,23 @@
     {#if displayPhases.length > 0}
       <div class="phase-timeline">
         {#each displayPhases as phase}
-          <div class="phase-item" class:completed={phase.status === 'completed'} class:running={phase.status === 'running'}>
+          <button
+            class="phase-item"
+            class:completed={phase.status === 'completed'}
+            class:running={phase.status === 'running'}
+            class:clickable={$useV2Mode}
+            on:click={() => $useV2Mode && openPhaseHistory(phase)}
+            disabled={!$useV2Mode}
+          >
             <div class="phase-indicator"></div>
             <div class="phase-info">
               <div class="phase-name">{phaseShortName(phase.name)}</div>
               <div class="phase-status">{phase.status}</div>
+              {#if phase.best_ce}
+                <div class="phase-ce">CE: {phase.best_ce.toFixed(4)}</div>
+              {/if}
             </div>
-          </div>
+          </button>
         {/each}
       </div>
     {:else}
@@ -684,6 +728,103 @@
   </div>
 {/if}
 
+<!-- Phase History Modal -->
+{#if showPhaseModal && selectedPhase}
+  <div class="modal-overlay" on:click={closePhaseModal} on:keydown={(e) => e.key === 'Escape' && closePhaseModal()} role="dialog" aria-modal="true" tabindex="-1">
+    <div class="modal modal-wide" on:click|stopPropagation on:keydown|stopPropagation role="document">
+      <div class="modal-header">
+        <h2>{selectedPhase.name} - History</h2>
+        <button class="modal-close" on:click={closePhaseModal} aria-label="Close">×</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- Phase Summary -->
+        <div class="iteration-summary">
+          <div class="summary-item">
+            <span class="label">Status:</span>
+            <span class="value status-badge status-{selectedPhase.status}">{selectedPhase.status}</span>
+          </div>
+          <div class="summary-item">
+            <span class="label">Iterations:</span>
+            <span class="value">{phaseIterations.length} / {selectedPhase.max_iterations}</span>
+          </div>
+          {#if selectedPhase.best_ce}
+            <div class="summary-item">
+              <span class="label">Best CE:</span>
+              <span class="value">{formatCE(selectedPhase.best_ce)}</span>
+            </div>
+          {/if}
+          {#if selectedPhase.best_accuracy}
+            <div class="summary-item">
+              <span class="label">Best Accuracy:</span>
+              <span class="value">{formatAcc(selectedPhase.best_accuracy)}</span>
+            </div>
+          {/if}
+          {#if selectedPhase.started_at}
+            <div class="summary-item">
+              <span class="label">Started:</span>
+              <span class="value">{new Date(selectedPhase.started_at).toLocaleString()}</span>
+            </div>
+          {/if}
+          {#if selectedPhase.ended_at}
+            <div class="summary-item">
+              <span class="label">Ended:</span>
+              <span class="value">{new Date(selectedPhase.ended_at).toLocaleString()}</span>
+            </div>
+          {/if}
+        </div>
+
+        <!-- Iterations Table -->
+        <h3>Iterations ({phaseIterations.length})</h3>
+        {#if loadingPhaseIterations}
+          <div class="loading">Loading iterations...</div>
+        {:else if phaseIterations.length === 0}
+          <div class="empty-state">
+            <p>No iterations recorded for this phase.</p>
+          </div>
+        {:else}
+          <div class="genome-table-scroll">
+            <table class="genome-table">
+              <thead>
+                <tr>
+                  <th>Iter</th>
+                  <th>Best CE</th>
+                  <th>Accuracy</th>
+                  <th>Avg CE</th>
+                  <th>Δ Prev</th>
+                  <th>Patience</th>
+                  <th>Time</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each phaseIterations as iter}
+                  <tr
+                    class:clickable={true}
+                    on:click={() => openIterationDetails(iter)}
+                    on:keydown={(e) => e.key === 'Enter' && openIterationDetails(iter)}
+                    tabindex="0"
+                    role="button"
+                  >
+                    <td>{iter.iteration_num}</td>
+                    <td>{formatCE(iter.best_ce)}</td>
+                    <td>{formatAcc(iter.best_accuracy)}</td>
+                    <td>{iter.avg_ce ? formatCE(iter.avg_ce) : '—'}</td>
+                    <td class:delta-positive={iter.delta_previous && iter.delta_previous < 0} class:delta-negative={iter.delta_previous && iter.delta_previous > 0}>
+                      {iter.delta_previous !== null && iter.delta_previous !== undefined ? (iter.delta_previous < 0 ? '↓' : iter.delta_previous > 0 ? '↑' : '') + Math.abs(iter.delta_previous).toFixed(4) : '—'}
+                    </td>
+                    <td>{iter.patience_counter !== null && iter.patience_max ? `${iter.patience_max - iter.patience_counter}/${iter.patience_max}` : '—'}</td>
+                    <td>{iter.elapsed_secs ? iter.elapsed_secs.toFixed(1) + 's' : '—'}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
   .experiment-header {
     display: flex;
@@ -727,6 +868,29 @@
     padding: 0.5rem;
     border-radius: 0.25rem;
     background: var(--bg-card);
+    border: 1px solid transparent;
+    font: inherit;
+    color: inherit;
+    text-align: center;
+  }
+
+  .phase-item.clickable {
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .phase-item.clickable:hover {
+    border-color: var(--accent-blue);
+    background: rgba(59, 130, 246, 0.1);
+  }
+
+  .phase-item.clickable:focus {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 2px;
+  }
+
+  .phase-item:disabled {
+    cursor: default;
   }
 
   .phase-item.completed {
@@ -773,6 +937,13 @@
     font-size: 0.625rem;
     color: var(--text-secondary);
     text-transform: uppercase;
+  }
+
+  .phase-ce {
+    font-size: 0.6875rem;
+    color: var(--accent-green);
+    font-family: monospace;
+    margin-top: 0.25rem;
   }
 
   .positive {
@@ -1028,6 +1199,10 @@
     flex-direction: column;
     box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
     border: 1px solid var(--border);
+  }
+
+  .modal.modal-wide {
+    max-width: 1000px;
   }
 
   .modal-header {
