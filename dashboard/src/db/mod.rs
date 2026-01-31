@@ -1250,6 +1250,51 @@ pub mod queries {
         })
     }
 
+    /// Get genome evaluations for an iteration
+    pub async fn get_genome_evaluations_v2(pool: &DbPool, iteration_id: i64) -> Result<Vec<GenomeEvaluationV2>> {
+        let rows = sqlx::query(
+            r#"SELECT ge.id, ge.iteration_id, ge.genome_id, ge.position, ge.role,
+                      ge.elite_rank, ge.ce, ge.accuracy, ge.fitness_score, ge.eval_time_ms,
+                      ge.created_at
+               FROM genome_evaluations_v2 ge
+               WHERE ge.iteration_id = ?
+               ORDER BY ge.position"#,
+        )
+        .bind(iteration_id)
+        .fetch_all(pool)
+        .await?;
+
+        let mut evaluations = Vec::with_capacity(rows.len());
+        for row in rows {
+            evaluations.push(GenomeEvaluationV2 {
+                id: row.get("id"),
+                iteration_id: row.get("iteration_id"),
+                genome_id: row.get("genome_id"),
+                position: row.get("position"),
+                role: parse_genome_role(row.get::<String, _>("role").as_str()),
+                elite_rank: row.get("elite_rank"),
+                ce: row.get("ce"),
+                accuracy: row.get("accuracy"),
+                fitness_score: row.get("fitness_score"),
+                eval_time_ms: row.get("eval_time_ms"),
+                created_at: parse_datetime(row.get("created_at"))?,
+            });
+        }
+        Ok(evaluations)
+    }
+
+    fn parse_genome_role(s: &str) -> GenomeRole {
+        match s {
+            "elite" => GenomeRole::Elite,
+            "offspring" => GenomeRole::Offspring,
+            "init" => GenomeRole::Init,
+            "top_k" => GenomeRole::TopK,
+            "neighbor" => GenomeRole::Neighbor,
+            "current" => GenomeRole::Current,
+            _ => GenomeRole::Offspring,
+        }
+    }
+
     fn parse_experiment_status_v2(s: &str) -> ExperimentStatusV2 {
         match s {
             "pending" => ExperimentStatusV2::Pending,

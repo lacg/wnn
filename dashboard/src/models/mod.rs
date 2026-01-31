@@ -379,6 +379,10 @@ pub enum GenomeRole {
     Elite,
     Offspring,
     Init,
+    // TS-specific roles
+    TopK,
+    Neighbor,
+    Current,
 }
 
 /// Checkpoint type (v2)

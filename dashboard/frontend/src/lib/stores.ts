@@ -476,8 +476,12 @@ function handleWsMessageV2(msg: WsMessageV2) {
       const iter = msg.data;
       console.log(`[V2] [Iter ${iter.iteration_num}] CE=${iter.best_ce?.toFixed(4)}, Acc=${iter.best_accuracy?.toFixed(4) ?? 'null'}%, AvgCE=${iter.avg_ce?.toFixed(4) ?? 'null'}, AvgAcc=${iter.avg_accuracy?.toFixed(4) ?? 'null'}%`);
 
-      // Add to iterations (keep last 500)
+      // Add to iterations (keep last 500, deduplicate by id)
       iterationsV2.update((iters) => {
+        // Check if iteration already exists (by id)
+        if (iters.some(i => i.id === iter.id)) {
+          return iters; // Already exists, don't add duplicate
+        }
         const updated = [...iters, iter];
         return updated.slice(-500);
       });

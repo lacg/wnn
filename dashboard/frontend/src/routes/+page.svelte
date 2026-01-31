@@ -25,10 +25,16 @@
     // Mode toggle
     useV2Mode
   } from '$lib/stores';
-  import type { Flow } from '$lib/types';
+  import type { Flow, GenomeEvaluationV2, IterationV2 } from '$lib/types';
 
   // Current running flow (fetched from API)
   let currentFlow: Flow | null = null;
+
+  // Iteration details modal state
+  let selectedIteration: IterationV2 | null = null;
+  let genomeEvaluations: GenomeEvaluationV2[] = [];
+  let loadingGenomes = false;
+  let showIterationModal = false;
 
   onMount(() => {
     // Fetch the current running flow
@@ -50,12 +56,52 @@
     }
   }
 
+  async function openIterationDetails(iter: IterationV2) {
+    if (!$useV2Mode) return; // Only available in V2 mode
+
+    selectedIteration = iter;
+    showIterationModal = true;
+    loadingGenomes = true;
+    genomeEvaluations = [];
+
+    try {
+      const res = await fetch(`/api/v2/iterations/${iter.id}/genomes`);
+      if (res.ok) {
+        genomeEvaluations = await res.json();
+      } else {
+        console.error('Failed to fetch genome evaluations:', res.status);
+      }
+    } catch (e) {
+      console.error('Failed to fetch genome evaluations:', e);
+    } finally {
+      loadingGenomes = false;
+    }
+  }
+
+  function closeIterationModal() {
+    showIterationModal = false;
+    selectedIteration = null;
+    genomeEvaluations = [];
+  }
+
+  function formatRole(role: string): string {
+    const roleMap: Record<string, string> = {
+      elite: '🏆 Elite',
+      offspring: '🧬 Offspring',
+      init: '🌱 Init',
+      top_k: '🔝 Top-K',
+      neighbor: '🔄 Neighbor',
+      current: '📍 Current',
+    };
+    return roleMap[role] || role;
+  }
+
   // Unified accessors that switch based on mode
   $: displayPhases = $useV2Mode ? $phasesV2 : $phases;
   $: displayCurrentPhase = $useV2Mode ? $currentPhaseV2 : $currentPhase;
   $: displayIterations = $useV2Mode ? $iterationsV2 : $iterations;
   $: displayCeHistory = $useV2Mode
-    ? $ceHistoryV2.map(h => ({ iter: h.iter, ce: h.ce, acc: h.acc }))
+    ? $ceHistoryV2.map(h => ({ iter: h.iter, ce: h.ce, acc: h.acc !== null && h.acc !== undefined ? h.acc * 100 : null }))
     : $ceHistory;
   $: displayBestMetrics = $useV2Mode ? $bestMetricsV2 : $bestMetrics;
   $: displayImprovement = $useV2Mode ? $improvementV2 : $improvement;
@@ -336,11 +382,20 @@
                 <th>Avg Acc</th>
               {/if}
               <th>Time</th>
+              {#if $useV2Mode}
+                <th></th>
+              {/if}
             </tr>
           </thead>
           <tbody>
             {#each displayIterations.slice(-20).reverse() as iter}
-              <tr>
+              <tr
+                class:clickable={$useV2Mode}
+                on:click={() => $useV2Mode && openIterationDetails(iter)}
+                on:keydown={(e) => e.key === 'Enter' && $useV2Mode && openIterationDetails(iter)}
+                tabindex={$useV2Mode ? 0 : -1}
+                role={$useV2Mode ? 'button' : undefined}
+              >
                 <td>{iter.iteration_num}</td>
                 <td class:best={iter.best_ce === displayBestMetrics.bestCE}>{formatCE(iter.best_ce)}</td>
                 <td>{formatAcc(iter.best_accuracy)}</td>
@@ -349,6 +404,9 @@
                   <td>{formatAcc(iter.avg_accuracy)}</td>
                 {/if}
                 <td>{iter.elapsed_secs ? iter.elapsed_secs.toFixed(1) + 's' : '—'}</td>
+                {#if $useV2Mode}
+                  <td class="view-link">View →</td>
+                {/if}
               </tr>
             {/each}
           </tbody>
@@ -466,6 +524,102 @@
     </div>
   {/if}
 </div>
+
+<!-- Iteration Details Modal -->
+{#if showIterationModal && selectedIteration}
+  <div class="modal-overlay" on:click={closeIterationModal} on:keydown={(e) => e.key === 'Escape' && closeIterationModal()} role="dialog" aria-modal="true" tabindex="-1">
+    <div class="modal" on:click|stopPropagation on:keydown|stopPropagation role="document">
+      <div class="modal-header">
+        <h2>Iteration {selectedIteration.iteration_num} Details</h2>
+        <button class="modal-close" on:click={closeIterationModal} aria-label="Close">×</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- Iteration Summary -->
+        <div class="iteration-summary">
+          <div class="summary-item">
+            <span class="label">Best CE:</span>
+            <span class="value">{formatCE(selectedIteration.best_ce)}</span>
+          </div>
+          <div class="summary-item">
+            <span class="label">Best Accuracy:</span>
+            <span class="value">{formatAcc(selectedIteration.best_accuracy)}</span>
+          </div>
+          {#if selectedIteration.avg_ce}
+            <div class="summary-item">
+              <span class="label">Avg CE:</span>
+              <span class="value">{formatCE(selectedIteration.avg_ce)}</span>
+            </div>
+          {/if}
+          {#if selectedIteration.avg_accuracy !== null && selectedIteration.avg_accuracy !== undefined}
+            <div class="summary-item">
+              <span class="label">Avg Accuracy:</span>
+              <span class="value">{formatAcc(selectedIteration.avg_accuracy)}</span>
+            </div>
+          {/if}
+          {#if selectedIteration.elite_count}
+            <div class="summary-item">
+              <span class="label">Elite Count:</span>
+              <span class="value">{selectedIteration.elite_count}</span>
+            </div>
+          {/if}
+          {#if selectedIteration.offspring_count}
+            <div class="summary-item">
+              <span class="label">Offspring:</span>
+              <span class="value">{selectedIteration.offspring_viable ?? selectedIteration.offspring_count} / {selectedIteration.offspring_count}</span>
+            </div>
+          {/if}
+        </div>
+
+        <!-- Genome Evaluations Table -->
+        <h3>Genome Evaluations ({genomeEvaluations.length})</h3>
+        {#if loadingGenomes}
+          <div class="loading">Loading genome evaluations...</div>
+        {:else if genomeEvaluations.length === 0}
+          <div class="empty-state">
+            <p>No genome evaluations recorded for this iteration.</p>
+            <p class="hint">Genome tracking may not be enabled for this experiment.</p>
+          </div>
+        {:else}
+          <div class="genome-table-scroll">
+            <table class="genome-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Role</th>
+                  <th>CE</th>
+                  <th>Accuracy</th>
+                  {#if genomeEvaluations.some(g => g.fitness_score !== null)}
+                    <th>Fitness</th>
+                  {/if}
+                  {#if genomeEvaluations.some(g => g.elite_rank !== null)}
+                    <th>Elite Rank</th>
+                  {/if}
+                </tr>
+              </thead>
+              <tbody>
+                {#each genomeEvaluations as genome}
+                  <tr class:elite={genome.role === 'elite' || genome.role === 'top_k'}>
+                    <td>{genome.position + 1}</td>
+                    <td class="role-cell">{formatRole(genome.role)}</td>
+                    <td class:best={genome.ce === selectedIteration.best_ce}>{formatCE(genome.ce)}</td>
+                    <td>{formatAcc(genome.accuracy)}</td>
+                    {#if genomeEvaluations.some(g => g.fitness_score !== null)}
+                      <td>{genome.fitness_score?.toFixed(4) ?? '—'}</td>
+                    {/if}
+                    {#if genomeEvaluations.some(g => g.elite_rank !== null)}
+                      <td>{genome.elite_rank !== null ? `#${genome.elite_rank + 1}` : '—'}</td>
+                    {/if}
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
+      </div>
+    </div>
+  </div>
+{/if}
 
 <style>
   .experiment-header {
@@ -758,5 +912,190 @@
   .metric-type {
     color: var(--text-secondary);
     font-size: 0.8125rem;
+  }
+
+  /* Clickable iteration rows */
+  tr.clickable {
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+  }
+
+  tr.clickable:hover {
+    background-color: rgba(59, 130, 246, 0.1);
+  }
+
+  tr.clickable:focus {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: -2px;
+  }
+
+  .view-link {
+    color: var(--accent-blue);
+    font-size: 0.75rem;
+    opacity: 0.7;
+    transition: opacity 0.15s ease;
+  }
+
+  tr.clickable:hover .view-link {
+    opacity: 1;
+  }
+
+  /* Modal styles */
+  .modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    backdrop-filter: blur(4px);
+  }
+
+  .modal {
+    background: var(--bg);
+    border-radius: 0.75rem;
+    width: 90%;
+    max-width: 800px;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+    border: 1px solid var(--border);
+  }
+
+  .modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .modal-header h2 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 600;
+  }
+
+  .modal-close {
+    background: none;
+    border: none;
+    font-size: 1.5rem;
+    cursor: pointer;
+    color: var(--text-secondary);
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    transition: background-color 0.15s ease;
+  }
+
+  .modal-close:hover {
+    background-color: var(--bg-card);
+    color: var(--text-primary);
+  }
+
+  .modal-body {
+    padding: 1.5rem;
+    overflow-y: auto;
+    flex: 1;
+  }
+
+  .modal-body h3 {
+    margin: 1.5rem 0 0.75rem 0;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+
+  .modal-body h3:first-of-type {
+    margin-top: 0;
+  }
+
+  .iteration-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 1rem;
+    background: var(--bg-card);
+    padding: 1rem;
+    border-radius: 0.5rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .summary-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .summary-item .label {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+  }
+
+  .summary-item .value {
+    font-size: 1.125rem;
+    font-weight: 600;
+    font-family: monospace;
+  }
+
+  .loading {
+    text-align: center;
+    padding: 2rem;
+    color: var(--text-secondary);
+  }
+
+  /* Genome table */
+  .genome-table-scroll {
+    max-height: 400px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+  }
+
+  .genome-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+  }
+
+  .genome-table th {
+    text-align: left;
+    padding: 0.625rem 0.75rem;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+
+  .genome-table td {
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    font-family: monospace;
+  }
+
+  .genome-table tr:last-child td {
+    border-bottom: none;
+  }
+
+  .genome-table tr.elite {
+    background: rgba(34, 197, 94, 0.08);
+  }
+
+  .genome-table tr:hover {
+    background: rgba(59, 130, 246, 0.05);
+  }
+
+  .role-cell {
+    font-family: inherit;
+    white-space: nowrap;
   }
 </style>

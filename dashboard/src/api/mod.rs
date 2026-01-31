@@ -125,6 +125,7 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .route("/api/v2/experiments/:id/phases", get(get_phases_v2_handler))
         .route("/api/v2/experiments/:id/iterations", get(get_recent_iterations_v2_handler))
         .route("/api/v2/phases/:id/iterations", get(get_iterations_v2_handler))
+        .route("/api/v2/iterations/:id/genomes", get(get_iteration_genomes_v2_handler))
         .route("/api/v2/snapshot", get(get_snapshot_v2))
         // Real-time (v2 - DB polling)
         .route("/ws/v2", get(websocket_handler_v2))
@@ -941,6 +942,20 @@ async fn get_iterations_v2_handler(
 ) -> impl IntoResponse {
     match crate::db::queries::get_iterations_v2(&state.db, phase_id).await {
         Ok(iterations) => (StatusCode::OK, Json(iterations)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+/// Get genome evaluations for an iteration
+async fn get_iteration_genomes_v2_handler(
+    State(state): State<Arc<AppState>>,
+    Path(iteration_id): Path<i64>,
+) -> impl IntoResponse {
+    match crate::db::queries::get_genome_evaluations_v2(&state.db, iteration_id).await {
+        Ok(evaluations) => (StatusCode::OK, Json(evaluations)).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),

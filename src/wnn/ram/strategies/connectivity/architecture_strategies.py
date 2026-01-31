@@ -35,12 +35,13 @@ from wnn.ram.strategies.filters import PercentileFilter, FilterMode
 
 # Optional tracker integration for genome tracking
 try:
-	from wnn.ram.experiments.tracker import TierConfig, GenomeConfig
+	from wnn.ram.experiments.tracker import TierConfig, GenomeConfig, GenomeRole
 	HAS_GENOME_TRACKING = True
 except ImportError:
 	HAS_GENOME_TRACKING = False
 	TierConfig = None
 	GenomeConfig = None
+	GenomeRole = None
 
 if TYPE_CHECKING:
 	from wnn.ram.strategies.connectivity.adaptive_cluster import (
@@ -1146,7 +1147,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 					              if hasattr(g, '_cached_fitness') and g._cached_fitness]
 					avg_acc = sum(valid_accs) / len(valid_accs) if valid_accs else None
 
-					self._tracker.record_iteration(
+					iteration_id = self._tracker.record_iteration(
 						phase_id=self._tracker_phase_id,
 						iteration_num=generation + 1,
 						best_ce=best_fitness,
@@ -1157,7 +1158,32 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 						offspring_count=len(offspring_with_ce),
 						offspring_viable=len(offspring_with_ce),
 						fitness_threshold=current_threshold,
+						elapsed_secs=gen_elapsed,
 					)
+
+					# Record genome evaluations (if genome_to_config is implemented)
+					if iteration_id and self._tracker_experiment_id and HAS_GENOME_TRACKING and GenomeRole is not None:
+						evaluations = []
+						for pos, (genome, ce) in enumerate(population):
+							config = self.genome_to_config(genome)
+							if config is not None:
+								genome_id = self._tracker.get_or_create_genome(
+									self._tracker_experiment_id, config
+								)
+								acc = genome._cached_fitness[1] if hasattr(genome, '_cached_fitness') and genome._cached_fitness else 0.0
+								# Role: first elite_count are elites, rest are offspring
+								role = GenomeRole.ELITE if pos < elite_count else GenomeRole.OFFSPRING
+								evaluations.append({
+									"iteration_id": iteration_id,
+									"genome_id": genome_id,
+									"position": pos,
+									"role": role,
+									"ce": ce,
+									"accuracy": acc,
+									"elite_rank": pos if pos < elite_count else None,
+								})
+						if evaluations:
+							self._tracker.record_genome_evaluations_batch(evaluations)
 				except Exception as e:
 					# Don't fail optimization on tracking errors
 					self._log.debug(f"[{self.name}] V2 tracking error: {e}")
@@ -1861,7 +1887,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 					avg_ce = sum(ce for _, ce, _ in all_neighbors) / len(all_neighbors) if all_neighbors else None
 					avg_acc = sum(acc for _, _, acc in valid_neighbors) / len(valid_neighbors) if valid_neighbors else None
 
-					self._tracker.record_iteration(
+					iteration_id = self._tracker.record_iteration(
 						phase_id=self._tracker_phase_id,
 						iteration_num=iteration + 1,
 						best_ce=best_fitness,
@@ -1872,7 +1898,46 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 						offspring_count=len(all_neighbors) - 1,  # neighbors generated
 						offspring_viable=len(valid_neighbors),
 						fitness_threshold=current_threshold,
+						elapsed_secs=iter_elapsed,
 					)
+
+					# Record genome evaluations for TS (current best + top neighbors)
+					if iteration_id and self._tracker_experiment_id and HAS_GENOME_TRACKING and GenomeRole is not None:
+						evaluations = []
+						# Record current best genome
+						config = self.genome_to_config(best)
+						if config is not None:
+							genome_id = self._tracker.get_or_create_genome(
+								self._tracker_experiment_id, config
+							)
+							evaluations.append({
+								"iteration_id": iteration_id,
+								"genome_id": genome_id,
+								"position": 0,
+								"role": GenomeRole.CURRENT,
+								"ce": best_fitness,
+								"accuracy": best_accuracy or 0.0,
+								"elite_rank": 0,
+							})
+						# Record top neighbors (up to 10)
+						for pos, (g, ce, acc) in enumerate(valid_neighbors[:10]):
+							config = self.genome_to_config(g)
+							if config is not None:
+								genome_id = self._tracker.get_or_create_genome(
+									self._tracker_experiment_id, config
+								)
+								role = GenomeRole.TOP_K if pos < 5 else GenomeRole.NEIGHBOR
+								evaluations.append({
+									"iteration_id": iteration_id,
+									"genome_id": genome_id,
+									"position": pos + 1,
+									"role": role,
+									"ce": ce,
+									"accuracy": acc or 0.0,
+									"elite_rank": pos if pos < 5 else None,
+								})
+						if evaluations:
+							self._tracker.record_genome_evaluations_batch(evaluations)
 				except Exception as e:
 					# Don't fail optimization on tracking errors
 					self._log.debug(f"[{self.name}] V2 tracking error: {e}")

@@ -268,6 +268,29 @@ export interface DashboardSnapshotV2 {
   best_accuracy: number;
 }
 
+export type GenomeRole =
+  | 'elite'
+  | 'offspring'
+  | 'init'
+  // TS-specific roles
+  | 'top_k'
+  | 'neighbor'
+  | 'current';
+
+export interface GenomeEvaluationV2 {
+  id: number;
+  iteration_id: number;
+  genome_id: number;
+  position: number;
+  role: GenomeRole;
+  elite_rank: number | null;
+  ce: number;
+  accuracy: number;
+  fitness_score: number | null;
+  eval_time_ms: number | null;
+  created_at: string;
+}
+
 export type WsMessageV2 =
   | { type: 'Snapshot'; data: DashboardSnapshotV2 }
   | { type: 'IterationCompleted'; data: IterationV2 }
