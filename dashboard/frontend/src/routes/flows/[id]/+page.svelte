@@ -64,6 +64,7 @@
     population_size: 50,
     neighbors_per_iter: 50,
     fitness_percentile: 0.75,
+    fitness_calculator: 'harmonic_rank',
     tier_config: '',
     optimize_tier0_only: false,
     phase_order: 'neurons_first',
@@ -118,6 +119,7 @@
         editConfig.population_size = p.population_size ?? 50;
         editConfig.neighbors_per_iter = p.neighbors_per_iter ?? p.population_size ?? 50;
         editConfig.fitness_percentile = p.fitness_percentile ?? 0.75;
+        editConfig.fitness_calculator = p.fitness_calculator ?? 'harmonic_rank';
         editConfig.optimize_tier0_only = p.optimize_tier0_only ?? false;
         editConfig.phase_order = p.phase_order ?? 'neurons_first';
         editConfig.context_size = p.context_size ?? 4;
@@ -167,6 +169,7 @@
           population_size: editConfig.population_size,
           neighbors_per_iter: editConfig.neighbors_per_iter,
           fitness_percentile: editConfig.fitness_percentile,
+          fitness_calculator: editConfig.fitness_calculator,
           optimize_tier0_only: editConfig.optimize_tier0_only,
           phase_order: editConfig.phase_order,
           context_size: editConfig.context_size,
@@ -629,6 +632,8 @@
           <button class="btn btn-primary" on:click={queueFlow}>
             Start
           </button>
+        {/if}
+        {#if !editMode && flow.status !== 'running' && flow.status !== 'queued'}
           <button class="btn btn-secondary" on:click={() => editMode = true}>
             Edit Config
           </button>
@@ -733,6 +738,18 @@
               <input type="number" id="fitness_percentile" bind:value={editConfig.fitness_percentile} min="0" max="1" step="0.05" />
               <span class="form-hint">Keep top N% by fitness (0.75 = top 75%)</span>
             </div>
+            <div class="form-group">
+              <label for="fitness_calculator">Fitness Calculator</label>
+              <select id="fitness_calculator" bind:value={editConfig.fitness_calculator}>
+                <option value="harmonic_rank">Harmonic Rank</option>
+                <option value="normalized">Normalized</option>
+                <option value="ce">CE Only</option>
+              </select>
+              <span class="form-hint">How to rank genomes by CE and accuracy</span>
+            </div>
+          </div>
+
+          <div class="form-row">
             <div class="form-group">
               <label for="context_size">Context Size (N-gram)</label>
               <input type="number" id="context_size" bind:value={editConfig.context_size} min="1" max="16" />
