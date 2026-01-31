@@ -378,8 +378,9 @@
               <th>Best CE</th>
               <th>Accuracy</th>
               {#if $useV2Mode}
-                <th>Avg CE</th>
-                <th>Avg Acc</th>
+                <th>Δ Prev</th>
+                <th>Threshold</th>
+                <th>Patience</th>
               {/if}
               <th>Time</th>
               {#if $useV2Mode}
@@ -400,8 +401,11 @@
                 <td class:best={iter.best_ce === displayBestMetrics.bestCE}>{formatCE(iter.best_ce)}</td>
                 <td>{formatAcc(iter.best_accuracy)}</td>
                 {#if $useV2Mode}
-                  <td>{iter.avg_ce ? formatCE(iter.avg_ce) : '—'}</td>
-                  <td>{formatAcc(iter.avg_accuracy)}</td>
+                  <td class:delta-positive={iter.delta_previous && iter.delta_previous < 0} class:delta-negative={iter.delta_previous && iter.delta_previous > 0}>
+                    {iter.delta_previous !== null && iter.delta_previous !== undefined ? (iter.delta_previous < 0 ? '↓' : iter.delta_previous > 0 ? '↑' : '') + Math.abs(iter.delta_previous).toFixed(4) : '—'}
+                  </td>
+                  <td>{iter.fitness_threshold !== null && iter.fitness_threshold !== undefined ? (iter.fitness_threshold * 100).toFixed(2) + '%' : '—'}</td>
+                  <td>{iter.patience_counter !== null && iter.patience_max ? `${iter.patience_counter}/${iter.patience_max}` : '—'}</td>
                 {/if}
                 <td>{iter.elapsed_secs ? iter.elapsed_secs.toFixed(1) + 's' : '—'}</td>
                 {#if $useV2Mode}
@@ -567,6 +571,46 @@
             <div class="summary-item">
               <span class="label">Offspring:</span>
               <span class="value">{selectedIteration.offspring_viable ?? selectedIteration.offspring_count} / {selectedIteration.offspring_count}</span>
+            </div>
+          {/if}
+          {#if selectedIteration.candidates_total}
+            <div class="summary-item">
+              <span class="label">Candidates:</span>
+              <span class="value">{selectedIteration.candidates_total}</span>
+            </div>
+          {/if}
+          {#if selectedIteration.baseline_ce !== null && selectedIteration.baseline_ce !== undefined}
+            <div class="summary-item">
+              <span class="label">Baseline CE:</span>
+              <span class="value">{formatCE(selectedIteration.baseline_ce)}</span>
+            </div>
+          {/if}
+          {#if selectedIteration.delta_baseline !== null && selectedIteration.delta_baseline !== undefined}
+            <div class="summary-item">
+              <span class="label">Δ from Baseline:</span>
+              <span class="value" class:delta-positive={selectedIteration.delta_baseline < 0} class:delta-negative={selectedIteration.delta_baseline > 0}>
+                {selectedIteration.delta_baseline < 0 ? '↓' : '↑'}{Math.abs(selectedIteration.delta_baseline).toFixed(4)}
+              </span>
+            </div>
+          {/if}
+          {#if selectedIteration.delta_previous !== null && selectedIteration.delta_previous !== undefined}
+            <div class="summary-item">
+              <span class="label">Δ from Previous:</span>
+              <span class="value" class:delta-positive={selectedIteration.delta_previous < 0} class:delta-negative={selectedIteration.delta_previous > 0}>
+                {selectedIteration.delta_previous < 0 ? '↓' : selectedIteration.delta_previous > 0 ? '↑' : ''}{Math.abs(selectedIteration.delta_previous).toFixed(4)}
+              </span>
+            </div>
+          {/if}
+          {#if selectedIteration.patience_counter !== null && selectedIteration.patience_max}
+            <div class="summary-item">
+              <span class="label">Patience:</span>
+              <span class="value">{selectedIteration.patience_counter} / {selectedIteration.patience_max}</span>
+            </div>
+          {/if}
+          {#if selectedIteration.fitness_threshold !== null && selectedIteration.fitness_threshold !== undefined}
+            <div class="summary-item">
+              <span class="label">Threshold:</span>
+              <span class="value">{(selectedIteration.fitness_threshold * 100).toFixed(2)}%</span>
             </div>
           {/if}
         </div>
@@ -1097,5 +1141,16 @@
   .role-cell {
     font-family: inherit;
     white-space: nowrap;
+  }
+
+  /* Delta value colors */
+  .delta-positive {
+    color: var(--accent-green);
+    font-weight: 500;
+  }
+
+  .delta-negative {
+    color: var(--accent-red);
+    font-weight: 500;
   }
 </style>

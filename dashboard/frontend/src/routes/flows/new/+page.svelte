@@ -9,7 +9,9 @@
   let gaGenerations = 250;
   let tsIterations = 250;
   let populationSize = 50;
+  let neighborsPerIter = 50;
   let patience = 10;
+  let fitnessPercentile = 0.75;
   let contextSize = 4;
   let tierConfig = '100,15,20;400,10,12;rest,5,8';
   let tier0Only = true;
@@ -63,7 +65,9 @@
               ga_generations: gaGenerations,
               ts_iterations: tsIterations,
               population_size: populationSize,
+              neighbors_per_iter: neighborsPerIter,
               patience,
+              fitness_percentile: fitnessPercentile,
               context_size: contextSize,
               tier_config: tierConfig || null,
               tier0_only: tier0Only,
@@ -166,8 +170,21 @@
         </div>
 
         <div class="form-group">
+          <label for="neighborsPerIter">Neighbors/Iter (TS)</label>
+          <input type="number" id="neighborsPerIter" bind:value={neighborsPerIter} min="1" />
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
           <label for="patience">Patience</label>
           <input type="number" id="patience" bind:value={patience} min="1" />
+        </div>
+
+        <div class="form-group">
+          <label for="fitnessPercentile">Fitness Percentile</label>
+          <input type="number" id="fitnessPercentile" bind:value={fitnessPercentile} min="0" max="1" step="0.05" />
+          <span class="field-hint">Keep top N% by fitness (0.75 = 75%)</span>
         </div>
       </div>
 

@@ -571,6 +571,12 @@ class DataLayer:
         offspring_viable: Optional[int] = None,
         fitness_threshold: Optional[float] = None,
         elapsed_secs: Optional[float] = None,
+        baseline_ce: Optional[float] = None,
+        delta_baseline: Optional[float] = None,
+        delta_previous: Optional[float] = None,
+        patience_counter: Optional[int] = None,
+        patience_max: Optional[int] = None,
+        candidates_total: Optional[int] = None,
     ) -> int:
         """Create a new iteration record."""
         with self._transaction() as conn:
@@ -578,12 +584,14 @@ class DataLayer:
                 """INSERT INTO iterations_v2
                    (phase_id, iteration_num, best_ce, best_accuracy, avg_ce, avg_accuracy,
                     elite_count, offspring_count, offspring_viable, fitness_threshold,
-                    elapsed_secs, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    elapsed_secs, baseline_ce, delta_baseline, delta_previous,
+                    patience_counter, patience_max, candidates_total, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     phase_id, iteration_num, best_ce, best_accuracy, avg_ce, avg_accuracy,
                     elite_count, offspring_count, offspring_viable, fitness_threshold,
-                    elapsed_secs, _now_iso(),
+                    elapsed_secs, baseline_ce, delta_baseline, delta_previous,
+                    patience_counter, patience_max, candidates_total, _now_iso(),
                 ),
             )
             return cursor.lastrowid

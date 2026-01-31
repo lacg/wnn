@@ -936,6 +936,9 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 
 			self._log.info(f"[{self.name}] Resumed: best CE={best_fitness:.4f}, acc={best_acc:.4%}, population={len(population)}")
 
+		# Track previous best for delta computation
+		prev_best_fitness = best_fitness
+
 		for generation in range(start_generation, cfg.generations):
 			# Check for shutdown request at start of each generation
 			if self._shutdown_check and self._shutdown_check():
@@ -1167,6 +1170,15 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 					# Use actual best accuracy, not accuracy of best CE genome
 					actual_best_acc = max(valid_accs) if valid_accs else best_acc
 
+					# Get baseline and patience info for dashboard
+					baseline_ce = None
+					if hasattr(early_stop, '_overfit_detector') and early_stop._overfit_detector:
+						baseline_ce = early_stop._overfit_detector.baseline_mean
+					delta_baseline = (best_fitness - baseline_ce) if baseline_ce is not None else None
+					delta_previous = best_fitness - prev_best_fitness
+					patience_counter = early_stop._patience_counter if hasattr(early_stop, '_patience_counter') else 0
+					candidates_total = len(offspring)  # Before filtering
+
 					iteration_id = self._tracker.record_iteration(
 						phase_id=self._tracker_phase_id,
 						iteration_num=generation + 1,
@@ -1179,6 +1191,12 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 						offspring_viable=len(offspring_with_ce),
 						fitness_threshold=current_threshold,
 						elapsed_secs=gen_elapsed,
+						baseline_ce=baseline_ce,
+						delta_baseline=delta_baseline,
+						delta_previous=delta_previous,
+						patience_counter=patience_counter,
+						patience_max=cfg.patience,
+						candidates_total=candidates_total,
 					)
 
 					# Record genome evaluations (if genome_to_config is implemented)
@@ -1226,6 +1244,9 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 					adaptive_scaler.log_transition(self._log.info)
 					cfg.population_size = adaptive_scaler.population
 					cfg.mutation_rate = adaptive_scaler.mutation_rate
+
+			# Update previous best for next iteration's delta computation
+			prev_best_fitness = best_fitness
 
 		# Final evaluation for accuracy
 		final_ce, final_acc = evaluator.evaluate_batch(
@@ -1693,6 +1714,9 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		iteration = 0
 		seed_offset = int(time.time() * 1000) % (2**16)
 
+		# Track previous best for delta computation
+		prev_best_fitness = best_fitness
+
 		for iteration in range(cfg.iterations):
 			# Check for shutdown request at start of each iteration
 			if self._shutdown_check and self._shutdown_check():
@@ -1918,6 +1942,15 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 					# Use actual best accuracy from this iteration, not accuracy of best CE genome
 					actual_best_acc = best_acc_accuracy if best_acc_accuracy is not None else best_accuracy
 
+					# Get baseline and patience info for dashboard
+					baseline_ce = None
+					if hasattr(early_stopper, '_overfit_detector') and early_stopper._overfit_detector:
+						baseline_ce = early_stopper._overfit_detector.baseline_mean
+					delta_baseline = (best_fitness - baseline_ce) if baseline_ce is not None else None
+					delta_previous = best_fitness - prev_best_fitness
+					patience_counter = early_stopper._patience_counter if hasattr(early_stopper, '_patience_counter') else 0
+					candidates_total = len(all_neighbors)  # Total neighbors in pool
+
 					iteration_id = self._tracker.record_iteration(
 						phase_id=self._tracker_phase_id,
 						iteration_num=iteration + 1,
@@ -1930,6 +1963,12 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 						offspring_viable=len(valid_neighbors),
 						fitness_threshold=current_threshold,
 						elapsed_secs=iter_elapsed,
+						baseline_ce=baseline_ce,
+						delta_baseline=delta_baseline,
+						delta_previous=delta_previous,
+						patience_counter=patience_counter,
+						patience_max=cfg.patience,
+						candidates_total=candidates_total,
 					)
 
 					# Record genome evaluations for TS (current best + top neighbors)
@@ -1991,6 +2030,9 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 					adaptive_scaler.log_transition(self._log.info)
 					cfg.neighbors_per_iter = adaptive_scaler.population
 					cfg.mutation_rate = adaptive_scaler.mutation_rate
+
+			# Update previous best for next iteration's delta computation
+			prev_best_fitness = best_fitness
 
 		# Build final population
 		cache_size = cfg.total_neighbors_size or cfg.neighbors_per_iter

@@ -223,6 +223,13 @@ class ExperimentTracker(ABC):
         offspring_viable: Optional[int] = None,
         fitness_threshold: Optional[float] = None,
         elapsed_secs: Optional[float] = None,
+        # New fields for deltas and patience
+        baseline_ce: Optional[float] = None,
+        delta_baseline: Optional[float] = None,
+        delta_previous: Optional[float] = None,
+        patience_counter: Optional[int] = None,
+        patience_max: Optional[int] = None,
+        candidates_total: Optional[int] = None,
     ) -> int:
         """Record an iteration/generation. Returns iteration ID."""
         pass
@@ -438,10 +445,17 @@ class SqliteTracker(ExperimentTracker):
         offspring_viable: Optional[int] = None,
         fitness_threshold: Optional[float] = None,
         elapsed_secs: Optional[float] = None,
+        baseline_ce: Optional[float] = None,
+        delta_baseline: Optional[float] = None,
+        delta_previous: Optional[float] = None,
+        patience_counter: Optional[int] = None,
+        patience_max: Optional[int] = None,
+        candidates_total: Optional[int] = None,
     ) -> int:
         return self._db.create_iteration(
             phase_id, iteration_num, best_ce, best_accuracy, avg_ce, avg_accuracy,
-            elite_count, offspring_count, offspring_viable, fitness_threshold, elapsed_secs
+            elite_count, offspring_count, offspring_viable, fitness_threshold, elapsed_secs,
+            baseline_ce, delta_baseline, delta_previous, patience_counter, patience_max, candidates_total
         )
 
     def get_or_create_genome(

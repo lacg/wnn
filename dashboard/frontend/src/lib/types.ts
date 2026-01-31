@@ -258,6 +258,13 @@ export interface IterationV2 {
   offspring_viable: number | null;
   fitness_threshold: number | null;
   elapsed_secs: number | null;
+  // New metrics for dashboard display
+  baseline_ce: number | null;
+  delta_baseline: number | null;
+  delta_previous: number | null;
+  patience_counter: number | null;
+  patience_max: number | null;
+  candidates_total: number | null;
   created_at: string;
 }
 

@@ -66,8 +66,16 @@
     fitness_percentile: 0.75,
     tier_config: '',
     optimize_tier0_only: false,
-    phase_order: 'neurons_first'
+    phase_order: 'neurons_first',
+    context_size: 4
   };
+
+  // Flow rename state
+  let editingName = false;
+  let editedName = '';
+
+  // Duplicate state
+  let duplicating = false;
 
   $: flowId = $page.params.id;
 
@@ -112,6 +120,7 @@
         editConfig.fitness_percentile = p.fitness_percentile ?? 0.75;
         editConfig.optimize_tier0_only = p.optimize_tier0_only ?? false;
         editConfig.phase_order = p.phase_order ?? 'neurons_first';
+        editConfig.context_size = p.context_size ?? 4;
         if (p.tier_config) {
           // Handle both string and array formats
           if (typeof p.tier_config === 'string') {
@@ -160,6 +169,7 @@
           fitness_percentile: editConfig.fitness_percentile,
           optimize_tier0_only: editConfig.optimize_tier0_only,
           phase_order: editConfig.phase_order,
+          context_size: editConfig.context_size,
           tier_config
         }
       };
@@ -349,6 +359,73 @@
     }
   }
 
+  // Start editing flow name
+  function startEditName() {
+    if (!flow) return;
+    editedName = flow.name;
+    editingName = true;
+  }
+
+  // Cancel editing flow name
+  function cancelEditName() {
+    editingName = false;
+    editedName = '';
+  }
+
+  // Save flow name
+  async function saveFlowName() {
+    if (!flow || !editedName.trim()) return;
+    saving = true;
+
+    try {
+      const response = await fetch(`/api/flows/${flow.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: editedName.trim() })
+      });
+
+      if (!response.ok) throw new Error('Failed to rename flow');
+
+      editingName = false;
+      editedName = '';
+      await loadFlow();
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Failed to rename';
+    } finally {
+      saving = false;
+    }
+  }
+
+  // Duplicate flow
+  async function duplicateFlow() {
+    if (!flow) return;
+    duplicating = true;
+
+    try {
+      // Create a new flow with the same config but different name
+      const newName = `${flow.name} (copy)`;
+      const response = await fetch('/api/flows', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newName,
+          description: flow.description,
+          config: flow.config
+        })
+      });
+
+      if (!response.ok) throw new Error('Failed to duplicate flow');
+
+      const newFlow = await response.json();
+      // Navigate to the new flow
+      window.location.href = `/flows/${newFlow.id}`;
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Failed to duplicate';
+    } finally {
+      duplicating = false;
+    }
+  }
+
   async function queueFlow() {
     if (!flow) return;
     try {
@@ -525,12 +602,29 @@
     <div class="flow-header">
       <div class="header-left">
         <a href="/flows" class="back-link">&larr; Flows</a>
-        <h1>{flow.name}</h1>
+        {#if editingName}
+          <div class="name-edit">
+            <input
+              type="text"
+              bind:value={editedName}
+              class="name-input"
+              on:keydown={(e) => e.key === 'Enter' && saveFlowName()}
+              on:keydown={(e) => e.key === 'Escape' && cancelEditName()}
+            />
+            <button class="btn btn-sm btn-primary" on:click={saveFlowName} disabled={saving}>✓</button>
+            <button class="btn btn-sm btn-secondary" on:click={cancelEditName}>✕</button>
+          </div>
+        {:else}
+          <h1 class="flow-name-editable" on:click={startEditName} title="Click to rename">{flow.name}</h1>
+        {/if}
         <span class="status-badge" style="background: {getStatusColor(flow.status)}">
           {flow.status}
         </span>
       </div>
       <div class="header-actions">
+        <button class="btn btn-sm btn-secondary" on:click={duplicateFlow} disabled={duplicating} title="Duplicate flow">
+          {duplicating ? '...' : '📋 Duplicate'}
+        </button>
         {#if !editMode && flow.status === 'pending'}
           <button class="btn btn-primary" on:click={queueFlow}>
             Start
@@ -639,6 +733,14 @@
               <input type="number" id="fitness_percentile" bind:value={editConfig.fitness_percentile} min="0" max="1" step="0.05" />
               <span class="form-hint">Keep top N% by fitness (0.75 = top 75%)</span>
             </div>
+            <div class="form-group">
+              <label for="context_size">Context Size (N-gram)</label>
+              <input type="number" id="context_size" bind:value={editConfig.context_size} min="1" max="16" />
+              <span class="form-hint">Number of context tokens (e.g., 4 = 4-gram)</span>
+            </div>
+          </div>
+
+          <div class="form-row">
             <div class="form-group checkbox-group">
               <label>
                 <input type="checkbox" bind:checked={editConfig.optimize_tier0_only} />
@@ -1024,6 +1126,41 @@
     font-weight: 600;
     color: var(--text-primary);
     margin: 0;
+  }
+
+  /* Editable flow name */
+  .flow-name-editable {
+    cursor: pointer;
+    padding: 0.25rem 0.5rem;
+    margin: -0.25rem -0.5rem;
+    border-radius: 4px;
+    transition: background-color 0.15s;
+  }
+
+  .flow-name-editable:hover {
+    background-color: var(--bg-tertiary);
+  }
+
+  .name-edit {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .name-input {
+    font-size: 1.25rem;
+    font-weight: 600;
+    padding: 0.25rem 0.5rem;
+    border: 1px solid var(--accent-blue);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    min-width: 200px;
+  }
+
+  .name-input:focus {
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
   }
 
   .status-badge {

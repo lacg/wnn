@@ -467,6 +467,13 @@ pub struct IterationV2 {
     pub offspring_viable: Option<i32>,
     pub fitness_threshold: Option<f64>,
     pub elapsed_secs: Option<f64>,
+    // New fields for deltas and patience
+    pub baseline_ce: Option<f64>,
+    pub delta_baseline: Option<f64>,
+    pub delta_previous: Option<f64>,
+    pub patience_counter: Option<i32>,
+    pub patience_max: Option<i32>,
+    pub candidates_total: Option<i32>,
     pub created_at: DateTime<Utc>,
 }
 

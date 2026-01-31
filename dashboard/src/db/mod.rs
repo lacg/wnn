@@ -1277,7 +1277,8 @@ pub mod queries {
         let rows = sqlx::query(
             r#"SELECT id, phase_id, iteration_num, best_ce, best_accuracy, avg_ce, avg_accuracy,
                       elite_count, offspring_count, offspring_viable, fitness_threshold,
-                      elapsed_secs, created_at
+                      elapsed_secs, baseline_ce, delta_baseline, delta_previous,
+                      patience_counter, patience_max, candidates_total, created_at
                FROM iterations_v2 WHERE phase_id = ? ORDER BY iteration_num"#,
         )
         .bind(phase_id)
@@ -1316,7 +1317,9 @@ pub mod queries {
         let rows = sqlx::query(
             r#"SELECT i.id, i.phase_id, i.iteration_num, i.best_ce, i.best_accuracy, i.avg_ce,
                       i.avg_accuracy, i.elite_count, i.offspring_count, i.offspring_viable,
-                      i.fitness_threshold, i.elapsed_secs, i.created_at
+                      i.fitness_threshold, i.elapsed_secs, i.baseline_ce, i.delta_baseline,
+                      i.delta_previous, i.patience_counter, i.patience_max, i.candidates_total,
+                      i.created_at
                FROM iterations_v2 i
                JOIN phases_v2 p ON i.phase_id = p.id
                WHERE p.experiment_id = ?
@@ -1409,6 +1412,12 @@ pub mod queries {
             offspring_viable: row.get("offspring_viable"),
             fitness_threshold: row.get("fitness_threshold"),
             elapsed_secs: row.get("elapsed_secs"),
+            baseline_ce: row.get("baseline_ce"),
+            delta_baseline: row.get("delta_baseline"),
+            delta_previous: row.get("delta_previous"),
+            patience_counter: row.get("patience_counter"),
+            patience_max: row.get("patience_max"),
+            candidates_total: row.get("candidates_total"),
             created_at: parse_datetime(row.get("created_at"))?,
         })
     }

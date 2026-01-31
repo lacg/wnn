@@ -1278,6 +1278,9 @@ class GenericGAStrategy(ABC, Generic[T]):
 		# Track progressive threshold changes
 		prev_threshold: Optional[float] = None
 
+		# Track previous best for delta computation
+		prev_best_fitness = best_fitness
+
 		generation = 0
 		for generation in range(cfg.generations):
 			# Selection and reproduction
@@ -1397,6 +1400,14 @@ class GenericGAStrategy(ABC, Generic[T]):
 					# Compute average accuracy of the population
 					valid_accs = [a for a in accuracy_values if a is not None]
 					avg_acc = sum(valid_accs) / len(valid_accs) if valid_accs else None
+
+					# Get baseline and patience info for dashboard
+					baseline_ce = early_stopper._best_fitness if hasattr(early_stopper, '_best_fitness') else None
+					delta_baseline = (best_fitness - baseline_ce) if baseline_ce is not None else None
+					delta_previous = best_fitness - prev_best_fitness
+					patience_counter = early_stopper._patience_counter if hasattr(early_stopper, '_patience_counter') else 0
+					candidates_total = len(offspring)  # In generic GA, all offspring are viable
+
 					iteration_id = self._tracker.record_iteration(
 						phase_id=self._tracker_phase_id,
 						iteration_num=generation + 1,
@@ -1408,6 +1419,12 @@ class GenericGAStrategy(ABC, Generic[T]):
 						offspring_count=len(offspring),
 						offspring_viable=len(offspring),  # All offspring are viable at this point
 						fitness_threshold=current_threshold,
+						baseline_ce=baseline_ce,
+						delta_baseline=delta_baseline,
+						delta_previous=delta_previous,
+						patience_counter=patience_counter,
+						patience_max=cfg.patience,
+						candidates_total=candidates_total,
 					)
 
 					# Record genome evaluations (if genome_to_config is implemented)
@@ -1497,6 +1514,9 @@ class GenericGAStrategy(ABC, Generic[T]):
 						final_accuracy=accuracy_values[gen_best_idx] if accuracy_values else None,
 						final_threshold=current_final_threshold,
 					)
+
+			# Update previous best for next iteration's delta computation
+			prev_best_fitness = best_fitness
 
 		# Get final accuracy from best genome's cached accuracy
 		best_idx_final = min(range(len(fitness_values)), key=lambda i: fitness_values[i])
@@ -1916,6 +1936,9 @@ class GenericTSStrategy(ABC, Generic[T]):
 		# Track threshold changes
 		prev_threshold: Optional[float] = None
 
+		# Track previous best for delta computation
+		prev_best_fitness = best_fitness
+
 		iteration = 0
 		for iteration in range(cfg.iterations):
 			# Progressive threshold
@@ -2027,6 +2050,13 @@ class GenericTSStrategy(ABC, Generic[T]):
 						top_k_avg_ce = None
 						top_k_avg_acc = None
 
+					# Get baseline and patience info for dashboard
+					baseline_ce = early_stopper._best_fitness if hasattr(early_stopper, '_best_fitness') else None
+					delta_baseline = (best_fitness - baseline_ce) if baseline_ce is not None else None
+					delta_previous = best_fitness - prev_best_fitness
+					patience_counter = early_stopper._patience_counter if hasattr(early_stopper, '_patience_counter') else 0
+					candidates_total = len(all_candidates) if 'all_candidates' in dir() else len(viable)
+
 					iteration_id = self._tracker.record_iteration(
 						phase_id=self._tracker_phase_id,
 						iteration_num=iteration + 1,
@@ -2035,9 +2065,15 @@ class GenericTSStrategy(ABC, Generic[T]):
 						avg_ce=top_k_avg_ce,  # Average CE of top-k neighbors
 						avg_accuracy=top_k_avg_acc,  # Average accuracy of top-k neighbors
 						elite_count=top_k_count,  # Size of top-k cache
-						offspring_count=len(viable_neighbors),
-						offspring_viable=len(viable_neighbors),
+						offspring_count=len(viable),
+						offspring_viable=len(viable),
 						fitness_threshold=current_threshold,
+						baseline_ce=baseline_ce,
+						delta_baseline=delta_baseline,
+						delta_previous=delta_previous,
+						patience_counter=patience_counter,
+						patience_max=cfg.patience,
+						candidates_total=candidates_total,
 					)
 
 					# Record genome evaluations (if genome_to_config is implemented)
@@ -2082,7 +2118,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 									top_k_ids.add(genome_id)
 
 						# Record other viable neighbors (not in top-k)
-						for pos, (genome, ce, acc) in enumerate(viable_neighbors):
+						for pos, (genome, ce, acc) in enumerate(viable):
 							config = self.genome_to_config(genome)
 							if config is not None:
 								genome_id = self._tracker.get_or_create_genome(
@@ -2113,6 +2149,9 @@ class GenericTSStrategy(ABC, Generic[T]):
 				if hasattr(control, 'early_stop') and control.early_stop:
 					self._log.warning(f"[{self.name}] Overfitting early stop at iter {iteration + 1}")
 					break
+
+			# Update previous best for next iteration's delta computation
+			prev_best_fitness = best_fitness
 
 		# === Build final_population: top K/2 by CE + top K/2 by Acc (mutually exclusive) ===
 		# Sort by CE, take top K/2
