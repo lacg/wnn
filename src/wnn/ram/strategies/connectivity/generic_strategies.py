@@ -26,6 +26,14 @@ from typing import Callable, Generic, Optional, TypeVar, Any
 
 from wnn.ram.fitness import FitnessCalculatorType
 
+# Optional tracker integration
+try:
+	from wnn.ram.experiments.tracker import ExperimentTracker
+	HAS_TRACKER = True
+except ImportError:
+	HAS_TRACKER = False
+	ExperimentTracker = None
+
 # Generic genome type
 T = TypeVar('T')
 
@@ -1078,6 +1086,14 @@ class GenericGAStrategy(ABC, Generic[T]):
 		# Use OptimizationLogger with optional file logging (DEBUG+ goes to file)
 		self._log = OptimizationLogger(self.name, level=log_level, file_logger=logger)
 		self._rng: Optional[random.Random] = None
+		# Tracker for iteration recording (set via set_tracker)
+		self._tracker: Optional["ExperimentTracker"] = None
+		self._tracker_phase_id: Optional[int] = None
+
+	def set_tracker(self, tracker: "ExperimentTracker", phase_id: int) -> None:
+		"""Set the experiment tracker for iteration recording."""
+		self._tracker = tracker
+		self._tracker_phase_id = phase_id
 
 	@property
 	def config(self) -> GAConfig:
@@ -1356,6 +1372,24 @@ class GenericGAStrategy(ABC, Generic[T]):
 			self._log.info(f"[{self.name}] Gen {generation + 1:0{gen_width}d}/{cfg.generations}: "
 						   f"best={best_fitness:.4f}, new_best={new_best:.4f}, avg={gen_avg:.4f}")
 
+			# Record iteration to tracker (if set)
+			if self._tracker and self._tracker_phase_id:
+				try:
+					best_acc = accuracy_values[gen_best_idx] if accuracy_values else None
+					self._tracker.record_iteration(
+						phase_id=self._tracker_phase_id,
+						iteration_num=generation + 1,
+						best_ce=best_fitness,
+						best_accuracy=best_acc,
+						avg_ce=gen_avg,
+						elite_count=total_elites,
+						offspring_count=len(offspring),
+						offspring_viable=len(offspring),  # All offspring are viable at this point
+						fitness_threshold=current_threshold,
+					)
+				except Exception as e:
+					self._log.debug(f"Tracker error: {e}")
+
 			# Early stopping check (checks at configured intervals)
 			if early_stopper.check(generation, best_fitness):
 				break
@@ -1631,6 +1665,14 @@ class GenericTSStrategy(ABC, Generic[T]):
 		# Use OptimizationLogger with optional file logging (DEBUG+ goes to file)
 		self._log = OptimizationLogger(self.name, level=log_level, file_logger=logger)
 		self._rng: Optional[random.Random] = None
+		# Tracker for iteration recording (set via set_tracker)
+		self._tracker: Optional["ExperimentTracker"] = None
+		self._tracker_phase_id: Optional[int] = None
+
+	def set_tracker(self, tracker: "ExperimentTracker", phase_id: int) -> None:
+		"""Set the experiment tracker for iteration recording."""
+		self._tracker = tracker
+		self._tracker_phase_id = phase_id
 
 	@property
 	def config(self) -> TSConfig:
@@ -1907,6 +1949,23 @@ class GenericTSStrategy(ABC, Generic[T]):
 			acc_str = f"{best_acc_accuracy:.2%}" if best_acc_accuracy is not None else "N/A"
 			self._log.info(f"[{self.name}] Iter {iteration + 1:0{iter_width}d}/{cfg.iterations}: "
 						   f"best_ce={best_fitness:.4f}, best_acc={acc_str}")
+
+			# Record iteration to tracker (if set)
+			if self._tracker and self._tracker_phase_id:
+				try:
+					self._tracker.record_iteration(
+						phase_id=self._tracker_phase_id,
+						iteration_num=iteration + 1,
+						best_ce=best_fitness,
+						best_accuracy=best_accuracy,  # Accuracy of best-CE genome
+						avg_ce=None,  # TS doesn't track population average
+						elite_count=None,
+						offspring_count=len(viable_neighbors),
+						offspring_viable=len(viable_neighbors),
+						fitness_threshold=current_threshold,
+					)
+				except Exception as e:
+					self._log.debug(f"Tracker error: {e}")
 
 			# Early stopping check
 			if early_stopper.check(iteration, best_fitness):

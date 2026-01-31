@@ -1090,6 +1090,11 @@ class PhasedSearchRunner:
 
 		strategy = OptimizerStrategyFactory.create(**strategy_kwargs)
 
+		# Set tracker on strategy for iteration recording
+		if self.tracker and self._tracker_phase_id:
+			if hasattr(strategy, 'set_tracker'):
+				strategy.set_tracker(self.tracker, self._tracker_phase_id)
+
 		# Run optimization
 		if is_ga:
 			# GA: use initial_population if available, else [initial_genome], else None (fresh)
