@@ -2,7 +2,7 @@
 SQLite data layer for WNN experiment tracking.
 
 This module provides direct database access for experiment data, replacing
-the HTTP-based dashboard_client. It writes to SQLite using the v2 schema.
+the HTTP-based dashboard_client.
 
 Usage:
     from wnn.ram.experiments.data_layer import DataLayer
@@ -183,13 +183,13 @@ class DataLayer:
             raise
 
     def _init_db(self):
-        """Initialize database schema (v2 tables)."""
+        """Initialize database schema."""
         conn = self._get_conn()
 
-        # Create v2 tables (matches Rust schema)
+        # Create tables (matches Rust schema)
         conn.executescript("""
             -- Flows
-            CREATE TABLE IF NOT EXISTS flows_v2 (
+            CREATE TABLE IF NOT EXISTS flows (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 description TEXT,
@@ -202,9 +202,9 @@ class DataLayer:
             );
 
             -- Experiments
-            CREATE TABLE IF NOT EXISTS experiments_v2 (
+            CREATE TABLE IF NOT EXISTS experiments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                flow_id INTEGER REFERENCES flows_v2(id),
+                flow_id INTEGER REFERENCES flows(id),
                 sequence_order INTEGER,
                 name TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'pending',
@@ -225,9 +225,9 @@ class DataLayer:
             );
 
             -- Phases
-            CREATE TABLE IF NOT EXISTS phases_v2 (
+            CREATE TABLE IF NOT EXISTS phases (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                experiment_id INTEGER NOT NULL REFERENCES experiments_v2(id),
+                experiment_id INTEGER NOT NULL REFERENCES experiments(id),
                 name TEXT NOT NULL,
                 phase_type TEXT NOT NULL,
                 sequence_order INTEGER NOT NULL,
@@ -243,9 +243,9 @@ class DataLayer:
             );
 
             -- Iterations
-            CREATE TABLE IF NOT EXISTS iterations_v2 (
+            CREATE TABLE IF NOT EXISTS iterations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                phase_id INTEGER NOT NULL REFERENCES phases_v2(id),
+                phase_id INTEGER NOT NULL REFERENCES phases(id),
                 iteration_num INTEGER NOT NULL,
                 best_ce REAL NOT NULL,
                 best_accuracy REAL,
@@ -261,9 +261,9 @@ class DataLayer:
             );
 
             -- Genomes
-            CREATE TABLE IF NOT EXISTS genomes_v2 (
+            CREATE TABLE IF NOT EXISTS genomes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                experiment_id INTEGER NOT NULL REFERENCES experiments_v2(id),
+                experiment_id INTEGER NOT NULL REFERENCES experiments(id),
                 config_hash TEXT NOT NULL,
                 tiers_json TEXT NOT NULL,
                 total_clusters INTEGER NOT NULL,
@@ -274,10 +274,10 @@ class DataLayer:
             );
 
             -- Genome evaluations
-            CREATE TABLE IF NOT EXISTS genome_evaluations_v2 (
+            CREATE TABLE IF NOT EXISTS genome_evaluations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                iteration_id INTEGER NOT NULL REFERENCES iterations_v2(id),
-                genome_id INTEGER NOT NULL REFERENCES genomes_v2(id),
+                iteration_id INTEGER NOT NULL REFERENCES iterations(id),
+                genome_id INTEGER NOT NULL REFERENCES genomes(id),
                 position INTEGER NOT NULL,
                 role TEXT NOT NULL,
                 elite_rank INTEGER,
@@ -289,9 +289,9 @@ class DataLayer:
             );
 
             -- Health checks
-            CREATE TABLE IF NOT EXISTS health_checks_v2 (
+            CREATE TABLE IF NOT EXISTS health_checks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                iteration_id INTEGER NOT NULL REFERENCES iterations_v2(id),
+                iteration_id INTEGER NOT NULL REFERENCES iterations(id),
                 k INTEGER NOT NULL,
                 top_k_ce REAL NOT NULL,
                 top_k_accuracy REAL NOT NULL,
@@ -305,9 +305,9 @@ class DataLayer:
             );
 
             -- Checkpoints
-            CREATE TABLE IF NOT EXISTS checkpoints_v2 (
+            CREATE TABLE IF NOT EXISTS checkpoints (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                experiment_id INTEGER NOT NULL REFERENCES experiments_v2(id),
+                experiment_id INTEGER NOT NULL REFERENCES experiments(id),
                 phase_id INTEGER,
                 iteration_id INTEGER,
                 name TEXT NOT NULL,
@@ -320,13 +320,13 @@ class DataLayer:
             );
 
             -- Indexes
-            CREATE INDEX IF NOT EXISTS idx_experiments_v2_flow ON experiments_v2(flow_id);
-            CREATE INDEX IF NOT EXISTS idx_phases_v2_experiment ON phases_v2(experiment_id);
-            CREATE INDEX IF NOT EXISTS idx_iterations_v2_phase ON iterations_v2(phase_id);
-            CREATE INDEX IF NOT EXISTS idx_genome_evals_v2_iteration ON genome_evaluations_v2(iteration_id);
-            CREATE INDEX IF NOT EXISTS idx_genomes_v2_experiment ON genomes_v2(experiment_id);
-            CREATE INDEX IF NOT EXISTS idx_iterations_v2_created ON iterations_v2(created_at);
-            CREATE INDEX IF NOT EXISTS idx_genome_evals_v2_created ON genome_evaluations_v2(created_at);
+            CREATE INDEX IF NOT EXISTS idx_experiments_flow ON experiments(flow_id);
+            CREATE INDEX IF NOT EXISTS idx_phases_experiment ON phases(experiment_id);
+            CREATE INDEX IF NOT EXISTS idx_iterations_phase ON iterations(phase_id);
+            CREATE INDEX IF NOT EXISTS idx_genome_evals_iteration ON genome_evaluations(iteration_id);
+            CREATE INDEX IF NOT EXISTS idx_genomes_experiment ON genomes(experiment_id);
+            CREATE INDEX IF NOT EXISTS idx_iterations_created ON iterations(created_at);
+            CREATE INDEX IF NOT EXISTS idx_genome_evals_created ON genome_evaluations(created_at);
         """)
         conn.commit()
 
@@ -350,7 +350,7 @@ class DataLayer:
         """Create a new flow."""
         with self._transaction() as conn:
             cursor = conn.execute(
-                """INSERT INTO flows_v2 (name, description, config_json, seed_checkpoint_id, created_at)
+                """INSERT INTO flows (name, description, config_json, seed_checkpoint_id, created_at)
                    VALUES (?, ?, ?, ?, ?)""",
                 (name, description, json.dumps(config), seed_checkpoint_id, _now_iso()),
             )
@@ -361,7 +361,7 @@ class DataLayer:
     def get_flow(self, flow_id: int) -> Optional[dict]:
         """Get flow by ID."""
         row = self._get_conn().execute(
-            "SELECT * FROM flows_v2 WHERE id = ?", (flow_id,)
+            "SELECT * FROM flows WHERE id = ?", (flow_id,)
         ).fetchone()
         return dict(row) if row else None
 
@@ -371,17 +371,17 @@ class DataLayer:
         with self._transaction() as conn:
             if status == FlowStatus.RUNNING:
                 conn.execute(
-                    "UPDATE flows_v2 SET status = ?, started_at = ? WHERE id = ?",
+                    "UPDATE flows SET status = ?, started_at = ? WHERE id = ?",
                     (status.value, now, flow_id),
                 )
             elif status in (FlowStatus.COMPLETED, FlowStatus.FAILED, FlowStatus.CANCELLED):
                 conn.execute(
-                    "UPDATE flows_v2 SET status = ?, completed_at = ? WHERE id = ?",
+                    "UPDATE flows SET status = ?, completed_at = ? WHERE id = ?",
                     (status.value, now, flow_id),
                 )
             else:
                 conn.execute(
-                    "UPDATE flows_v2 SET status = ? WHERE id = ?",
+                    "UPDATE flows SET status = ? WHERE id = ?",
                     (status.value, flow_id),
                 )
             self._logger(f"Flow {flow_id} -> {status.value}")
@@ -405,7 +405,7 @@ class DataLayer:
         """Create a new experiment."""
         with self._transaction() as conn:
             cursor = conn.execute(
-                """INSERT INTO experiments_v2
+                """INSERT INTO experiments
                    (flow_id, sequence_order, name, fitness_calculator, fitness_weight_ce,
                     fitness_weight_acc, tier_config, context_size, population_size, created_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -422,7 +422,7 @@ class DataLayer:
     def get_experiment(self, experiment_id: int) -> Optional[dict]:
         """Get experiment by ID."""
         row = self._get_conn().execute(
-            "SELECT * FROM experiments_v2 WHERE id = ?", (experiment_id,)
+            "SELECT * FROM experiments WHERE id = ?", (experiment_id,)
         ).fetchone()
         return dict(row) if row else None
 
@@ -437,22 +437,22 @@ class DataLayer:
         with self._transaction() as conn:
             if status == ExperimentStatus.RUNNING:
                 conn.execute(
-                    "UPDATE experiments_v2 SET status = ?, started_at = ?, pid = ? WHERE id = ?",
+                    "UPDATE experiments SET status = ?, started_at = ?, pid = ? WHERE id = ?",
                     (status.value, now, pid or os.getpid(), experiment_id),
                 )
             elif status == ExperimentStatus.PAUSED:
                 conn.execute(
-                    "UPDATE experiments_v2 SET status = ?, paused_at = ? WHERE id = ?",
+                    "UPDATE experiments SET status = ?, paused_at = ? WHERE id = ?",
                     (status.value, now, experiment_id),
                 )
             elif status in (ExperimentStatus.COMPLETED, ExperimentStatus.FAILED, ExperimentStatus.CANCELLED):
                 conn.execute(
-                    "UPDATE experiments_v2 SET status = ?, ended_at = ?, pid = NULL WHERE id = ?",
+                    "UPDATE experiments SET status = ?, ended_at = ?, pid = NULL WHERE id = ?",
                     (status.value, now, experiment_id),
                 )
             else:
                 conn.execute(
-                    "UPDATE experiments_v2 SET status = ? WHERE id = ?",
+                    "UPDATE experiments SET status = ? WHERE id = ?",
                     (status.value, experiment_id),
                 )
             self._logger(f"Experiment {experiment_id} -> {status.value}")
@@ -480,7 +480,7 @@ class DataLayer:
             if updates:
                 params.append(experiment_id)
                 conn.execute(
-                    f"UPDATE experiments_v2 SET {', '.join(updates)} WHERE id = ?",
+                    f"UPDATE experiments SET {', '.join(updates)} WHERE id = ?",
                     params,
                 )
 
@@ -500,7 +500,7 @@ class DataLayer:
         """Create a new phase."""
         with self._transaction() as conn:
             cursor = conn.execute(
-                """INSERT INTO phases_v2
+                """INSERT INTO phases
                    (experiment_id, name, phase_type, sequence_order, max_iterations, population_size, created_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (experiment_id, name, phase_type, sequence_order, max_iterations, population_size, _now_iso()),
@@ -512,7 +512,7 @@ class DataLayer:
     def get_phase(self, phase_id: int) -> Optional[dict]:
         """Get phase by ID."""
         row = self._get_conn().execute(
-            "SELECT * FROM phases_v2 WHERE id = ?", (phase_id,)
+            "SELECT * FROM phases WHERE id = ?", (phase_id,)
         ).fetchone()
         return dict(row) if row else None
 
@@ -522,17 +522,17 @@ class DataLayer:
         with self._transaction() as conn:
             if status == PhaseStatus.RUNNING:
                 conn.execute(
-                    "UPDATE phases_v2 SET status = ?, started_at = ? WHERE id = ?",
+                    "UPDATE phases SET status = ?, started_at = ? WHERE id = ?",
                     (status.value, now, phase_id),
                 )
             elif status in (PhaseStatus.COMPLETED, PhaseStatus.FAILED, PhaseStatus.SKIPPED):
                 conn.execute(
-                    "UPDATE phases_v2 SET status = ?, ended_at = ? WHERE id = ?",
+                    "UPDATE phases SET status = ?, ended_at = ? WHERE id = ?",
                     (status.value, now, phase_id),
                 )
             else:
                 conn.execute(
-                    "UPDATE phases_v2 SET status = ? WHERE id = ?",
+                    "UPDATE phases SET status = ? WHERE id = ?",
                     (status.value, phase_id),
                 )
             self._logger(f"Phase {phase_id} -> {status.value}")
@@ -547,7 +547,7 @@ class DataLayer:
         """Update phase progress."""
         with self._transaction() as conn:
             conn.execute(
-                """UPDATE phases_v2
+                """UPDATE phases
                    SET current_iteration = ?, best_ce = COALESCE(?, best_ce),
                        best_accuracy = COALESCE(?, best_accuracy)
                    WHERE id = ?""",
@@ -581,7 +581,7 @@ class DataLayer:
         """Create a new iteration record."""
         with self._transaction() as conn:
             cursor = conn.execute(
-                """INSERT INTO iterations_v2
+                """INSERT INTO iterations
                    (phase_id, iteration_num, best_ce, best_accuracy, avg_ce, avg_accuracy,
                     elite_count, offspring_count, offspring_viable, fitness_threshold,
                     elapsed_secs, baseline_ce, delta_baseline, delta_previous,
@@ -599,14 +599,14 @@ class DataLayer:
     def get_iteration(self, iteration_id: int) -> Optional[dict]:
         """Get iteration by ID."""
         row = self._get_conn().execute(
-            "SELECT * FROM iterations_v2 WHERE id = ?", (iteration_id,)
+            "SELECT * FROM iterations WHERE id = ?", (iteration_id,)
         ).fetchone()
         return dict(row) if row else None
 
     def get_iterations(self, phase_id: int, limit: int = 100) -> list[dict]:
         """Get iterations for a phase."""
         rows = self._get_conn().execute(
-            """SELECT * FROM iterations_v2 WHERE phase_id = ?
+            """SELECT * FROM iterations WHERE phase_id = ?
                ORDER BY iteration_num DESC LIMIT ?""",
             (phase_id, limit),
         ).fetchall()
@@ -626,7 +626,7 @@ class DataLayer:
 
         # Try to find existing
         row = self._get_conn().execute(
-            "SELECT id FROM genomes_v2 WHERE experiment_id = ? AND config_hash = ?",
+            "SELECT id FROM genomes WHERE experiment_id = ? AND config_hash = ?",
             (experiment_id, config_hash),
         ).fetchone()
 
@@ -636,7 +636,7 @@ class DataLayer:
         # Create new
         with self._transaction() as conn:
             cursor = conn.execute(
-                """INSERT INTO genomes_v2
+                """INSERT INTO genomes
                    (experiment_id, config_hash, tiers_json, total_clusters,
                     total_neurons, total_memory_bytes, created_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
@@ -651,7 +651,7 @@ class DataLayer:
     def get_genome(self, genome_id: int) -> Optional[dict]:
         """Get genome by ID."""
         row = self._get_conn().execute(
-            "SELECT * FROM genomes_v2 WHERE id = ?", (genome_id,)
+            "SELECT * FROM genomes WHERE id = ?", (genome_id,)
         ).fetchone()
         return dict(row) if row else None
 
@@ -674,7 +674,7 @@ class DataLayer:
         """Create a genome evaluation record."""
         with self._transaction() as conn:
             cursor = conn.execute(
-                """INSERT INTO genome_evaluations_v2
+                """INSERT INTO genome_evaluations
                    (iteration_id, genome_id, position, role, elite_rank, ce, accuracy,
                     fitness_score, eval_time_ms, created_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -698,7 +698,7 @@ class DataLayer:
                 role = eval_data["role"]
                 role_value = role.value if hasattr(role, 'value') else role
                 cursor = conn.execute(
-                    """INSERT INTO genome_evaluations_v2
+                    """INSERT INTO genome_evaluations
                        (iteration_id, genome_id, position, role, elite_rank, ce, accuracy,
                         fitness_score, eval_time_ms, created_at)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -722,8 +722,8 @@ class DataLayer:
         """Get all genome evaluations for an iteration."""
         rows = self._get_conn().execute(
             """SELECT ge.*, g.tiers_json, g.total_clusters, g.total_neurons
-               FROM genome_evaluations_v2 ge
-               JOIN genomes_v2 g ON ge.genome_id = g.id
+               FROM genome_evaluations ge
+               JOIN genomes g ON ge.genome_id = g.id
                WHERE ge.iteration_id = ?
                ORDER BY ge.position""",
             (iteration_id,),
@@ -750,7 +750,7 @@ class DataLayer:
         """Create a health check record."""
         with self._transaction() as conn:
             cursor = conn.execute(
-                """INSERT INTO health_checks_v2
+                """INSERT INTO health_checks
                    (iteration_id, k, top_k_ce, top_k_accuracy, best_ce, best_ce_accuracy,
                     best_acc_ce, best_acc_accuracy, patience_remaining, patience_status, created_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -783,7 +783,7 @@ class DataLayer:
 
         with self._transaction() as conn:
             cursor = conn.execute(
-                """INSERT INTO checkpoints_v2
+                """INSERT INTO checkpoints
                    (experiment_id, phase_id, iteration_id, name, file_path, file_size_bytes,
                     checkpoint_type, best_ce, best_accuracy, created_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -799,14 +799,14 @@ class DataLayer:
     def get_checkpoint(self, checkpoint_id: int) -> Optional[dict]:
         """Get checkpoint by ID."""
         row = self._get_conn().execute(
-            "SELECT * FROM checkpoints_v2 WHERE id = ?", (checkpoint_id,)
+            "SELECT * FROM checkpoints WHERE id = ?", (checkpoint_id,)
         ).fetchone()
         return dict(row) if row else None
 
     def get_latest_checkpoint(self, experiment_id: int) -> Optional[dict]:
         """Get the most recent checkpoint for an experiment."""
         row = self._get_conn().execute(
-            """SELECT * FROM checkpoints_v2
+            """SELECT * FROM checkpoints
                WHERE experiment_id = ?
                ORDER BY created_at DESC LIMIT 1""",
             (experiment_id,),
@@ -820,14 +820,14 @@ class DataLayer:
     def get_running_experiment(self) -> Optional[dict]:
         """Get the currently running experiment."""
         row = self._get_conn().execute(
-            "SELECT * FROM experiments_v2 WHERE status = 'running' ORDER BY started_at DESC LIMIT 1"
+            "SELECT * FROM experiments WHERE status = 'running' ORDER BY started_at DESC LIMIT 1"
         ).fetchone()
         return dict(row) if row else None
 
     def get_experiment_phases(self, experiment_id: int) -> list[dict]:
         """Get all phases for an experiment."""
         rows = self._get_conn().execute(
-            "SELECT * FROM phases_v2 WHERE experiment_id = ? ORDER BY sequence_order",
+            "SELECT * FROM phases WHERE experiment_id = ? ORDER BY sequence_order",
             (experiment_id,),
         ).fetchall()
         return [dict(row) for row in rows]
@@ -835,7 +835,7 @@ class DataLayer:
     def get_current_phase(self, experiment_id: int) -> Optional[dict]:
         """Get the current (running) phase for an experiment."""
         row = self._get_conn().execute(
-            """SELECT * FROM phases_v2
+            """SELECT * FROM phases
                WHERE experiment_id = ? AND status = 'running'
                ORDER BY sequence_order DESC LIMIT 1""",
             (experiment_id,),
@@ -846,8 +846,8 @@ class DataLayer:
         """Get all iterations for an experiment (for trend chart)."""
         rows = self._get_conn().execute(
             """SELECT i.*, p.name as phase_name, p.phase_type
-               FROM iterations_v2 i
-               JOIN phases_v2 p ON i.phase_id = p.id
+               FROM iterations i
+               JOIN phases p ON i.phase_id = p.id
                WHERE p.experiment_id = ?
                ORDER BY p.sequence_order, i.iteration_num""",
             (experiment_id,),
@@ -861,7 +861,7 @@ class DataLayer:
         limit: int = 100,
     ) -> list[dict]:
         """Get records added since a given ID (for change detection)."""
-        if table not in ("iterations_v2", "genome_evaluations_v2", "health_checks_v2"):
+        if table not in ("iterations", "genome_evaluations", "health_checks"):
             raise ValueError(f"Invalid table: {table}")
 
         rows = self._get_conn().execute(

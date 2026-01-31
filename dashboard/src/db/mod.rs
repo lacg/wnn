@@ -1,4 +1,7 @@
 //! Database operations for experiment tracking
+//!
+//! This module uses a unified schema (no V1/V2 distinction).
+//! Tables: flows, experiments, phases, iterations, genomes, genome_evaluations, health_checks, checkpoints
 
 use anyhow::Result;
 use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite};
@@ -24,24 +27,28 @@ pub async fn init_db(database_url: &str) -> Result<DbPool> {
 
 /// Run migrations for schema changes
 async fn run_migrations(pool: &DbPool) -> Result<()> {
-    // Migration 1: Add pid and checkpoint_phase to experiments (legacy)
-    let _ = sqlx::query("ALTER TABLE experiments ADD COLUMN pid INTEGER")
-        .execute(pool)
-        .await;
-    let _ = sqlx::query("ALTER TABLE experiments ADD COLUMN checkpoint_phase TEXT")
-        .execute(pool)
-        .await;
-
-    // Migration 2: Create v2 schema (new data model)
-    sqlx::query(SCHEMA_V2).execute(pool).await?;
-
-    // Migration 3: Add avg_accuracy to iterations_v2
-    let _ = sqlx::query("ALTER TABLE iterations_v2 ADD COLUMN avg_accuracy REAL")
-        .execute(pool)
-        .await;
-
-    // Migration 4: Add pid to flows for stop/restart functionality
+    // Migration: Add pid to flows for stop/restart functionality
     let _ = sqlx::query("ALTER TABLE flows ADD COLUMN pid INTEGER")
+        .execute(pool)
+        .await;
+
+    // Migration: Add additional columns to iterations
+    let _ = sqlx::query("ALTER TABLE iterations ADD COLUMN baseline_ce REAL")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE iterations ADD COLUMN delta_baseline REAL")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE iterations ADD COLUMN delta_previous REAL")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE iterations ADD COLUMN patience_counter INTEGER")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE iterations ADD COLUMN patience_max INTEGER")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE iterations ADD COLUMN candidates_total INTEGER")
         .execute(pool)
         .await;
 
@@ -49,127 +56,10 @@ async fn run_migrations(pool: &DbPool) -> Result<()> {
 }
 
 const SCHEMA: &str = r#"
-CREATE TABLE IF NOT EXISTS experiments (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    log_path TEXT NOT NULL,
-    started_at TEXT NOT NULL,
-    ended_at TEXT,
-    status TEXT NOT NULL DEFAULT 'running',
-    config_json TEXT,
-    pid INTEGER,
-    checkpoint_phase TEXT
-);
-
-CREATE TABLE IF NOT EXISTS phases (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    experiment_id INTEGER NOT NULL REFERENCES experiments(id),
-    name TEXT NOT NULL,
-    phase_type TEXT NOT NULL,
-    started_at TEXT NOT NULL,
-    ended_at TEXT,
-    status TEXT NOT NULL DEFAULT 'running'
-);
-
-CREATE TABLE IF NOT EXISTS iterations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    phase_id INTEGER NOT NULL REFERENCES phases(id),
-    iteration_num INTEGER NOT NULL,
-    best_ce REAL NOT NULL,
-    avg_ce REAL,
-    best_accuracy REAL,
-    elapsed_secs REAL NOT NULL,
-    timestamp TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS health_checks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    phase_id INTEGER NOT NULL REFERENCES phases(id),
-    top_k_ce REAL NOT NULL,
-    top_k_accuracy REAL NOT NULL,
-    best_ce REAL,
-    best_ce_accuracy REAL,
-    best_acc_ce REAL,
-    best_acc_accuracy REAL,
-    k INTEGER NOT NULL DEFAULT 10,
-    timestamp TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS phase_results (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    phase_id INTEGER NOT NULL REFERENCES phases(id),
-    metric_type TEXT NOT NULL,
-    ce REAL NOT NULL,
-    accuracy REAL NOT NULL,
-    memory_bytes INTEGER,
-    improvement_pct REAL NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_phases_experiment ON phases(experiment_id);
-CREATE INDEX IF NOT EXISTS idx_iterations_phase ON iterations(phase_id);
-CREATE INDEX IF NOT EXISTS idx_health_checks_phase ON health_checks(phase_id);
-
--- Flows (sequences of experiments)
+-- ============================================================================
+-- FLOWS: A sequence of experiments (multi-pass search)
+-- ============================================================================
 CREATE TABLE IF NOT EXISTS flows (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    description TEXT,
-    config_json TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    started_at TEXT,
-    completed_at TEXT,
-    status TEXT NOT NULL DEFAULT 'pending',
-    seed_checkpoint_id INTEGER REFERENCES checkpoints(id)
-);
-
--- Checkpoints (first-class, with file paths)
-CREATE TABLE IF NOT EXISTS checkpoints (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    experiment_id INTEGER NOT NULL REFERENCES experiments(id),
-    name TEXT NOT NULL,
-    file_path TEXT NOT NULL,
-    file_size_bytes INTEGER,
-    created_at TEXT NOT NULL,
-    final_fitness REAL,
-    final_accuracy REAL,
-    iterations_run INTEGER,
-    genome_stats_json TEXT,
-    is_final BOOLEAN DEFAULT FALSE,
-    reference_count INTEGER DEFAULT 0
-);
-
--- Flow-Experiment mapping
-CREATE TABLE IF NOT EXISTS flow_experiments (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    flow_id INTEGER NOT NULL REFERENCES flows(id),
-    experiment_id INTEGER NOT NULL REFERENCES experiments(id),
-    sequence_order INTEGER NOT NULL
-);
-
--- Checkpoint references (for safe deletion)
-CREATE TABLE IF NOT EXISTS checkpoint_references (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    checkpoint_id INTEGER NOT NULL REFERENCES checkpoints(id),
-    referencing_experiment_id INTEGER NOT NULL REFERENCES experiments(id),
-    reference_type TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_flows_status ON flows(status);
-CREATE INDEX IF NOT EXISTS idx_checkpoints_experiment ON checkpoints(experiment_id);
-CREATE INDEX IF NOT EXISTS idx_checkpoints_is_final ON checkpoints(is_final);
-CREATE INDEX IF NOT EXISTS idx_flow_experiments_flow ON flow_experiments(flow_id);
-CREATE INDEX IF NOT EXISTS idx_flow_experiments_experiment ON flow_experiments(experiment_id);
-CREATE INDEX IF NOT EXISTS idx_checkpoint_references_checkpoint ON checkpoint_references(checkpoint_id);
-"#;
-
-// =============================================================================
-// V2 SCHEMA: New data model with DB as source of truth
-// =============================================================================
-const SCHEMA_V2: &str = r#"
--- ============================================================================
--- FLOWS_V2: A sequence of experiments (multi-pass search)
--- ============================================================================
-CREATE TABLE IF NOT EXISTS flows_v2 (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     description TEXT,
@@ -180,7 +70,7 @@ CREATE TABLE IF NOT EXISTS flows_v2 (
     config_json TEXT NOT NULL DEFAULT '{}',
 
     -- Seed checkpoint (optional starting point)
-    seed_checkpoint_id INTEGER REFERENCES checkpoints_v2(id),
+    seed_checkpoint_id INTEGER REFERENCES checkpoints(id),
 
     -- Timing
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
@@ -189,11 +79,11 @@ CREATE TABLE IF NOT EXISTS flows_v2 (
 );
 
 -- ============================================================================
--- EXPERIMENTS_V2: A single optimization run (6-phase search)
+-- EXPERIMENTS: A single optimization run (6-phase search)
 -- ============================================================================
-CREATE TABLE IF NOT EXISTS experiments_v2 (
+CREATE TABLE IF NOT EXISTS experiments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    flow_id INTEGER REFERENCES flows_v2(id),
+    flow_id INTEGER REFERENCES flows(id),
     sequence_order INTEGER,
 
     name TEXT NOT NULL,
@@ -212,9 +102,9 @@ CREATE TABLE IF NOT EXISTS experiments_v2 (
     pid INTEGER,
 
     -- Resume state
-    last_phase_id INTEGER REFERENCES phases_v2(id),
+    last_phase_id INTEGER REFERENCES phases(id),
     last_iteration INTEGER,
-    resume_checkpoint_id INTEGER REFERENCES checkpoints_v2(id),
+    resume_checkpoint_id INTEGER REFERENCES checkpoints(id),
 
     -- Timing
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
@@ -224,11 +114,11 @@ CREATE TABLE IF NOT EXISTS experiments_v2 (
 );
 
 -- ============================================================================
--- PHASES_V2: A phase within an experiment (GA-Neurons, TS-Bits, etc.)
+-- PHASES: A phase within an experiment (GA-Neurons, TS-Bits, etc.)
 -- ============================================================================
-CREATE TABLE IF NOT EXISTS phases_v2 (
+CREATE TABLE IF NOT EXISTS phases (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    experiment_id INTEGER NOT NULL REFERENCES experiments_v2(id),
+    experiment_id INTEGER NOT NULL REFERENCES experiments(id),
 
     name TEXT NOT NULL,
     phase_type TEXT NOT NULL,
@@ -255,11 +145,11 @@ CREATE TABLE IF NOT EXISTS phases_v2 (
 );
 
 -- ============================================================================
--- ITERATIONS_V2: A generation/iteration within a phase
+-- ITERATIONS: A generation/iteration within a phase
 -- ============================================================================
-CREATE TABLE IF NOT EXISTS iterations_v2 (
+CREATE TABLE IF NOT EXISTS iterations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    phase_id INTEGER NOT NULL REFERENCES phases_v2(id),
+    phase_id INTEGER NOT NULL REFERENCES phases(id),
     iteration_num INTEGER NOT NULL,
 
     -- Summary metrics (best of this iteration)
@@ -285,11 +175,11 @@ CREATE TABLE IF NOT EXISTS iterations_v2 (
 );
 
 -- ============================================================================
--- GENOMES_V2: Unique genome configurations (deduplicated by config hash)
+-- GENOMES: Unique genome configurations (deduplicated by config hash)
 -- ============================================================================
-CREATE TABLE IF NOT EXISTS genomes_v2 (
+CREATE TABLE IF NOT EXISTS genomes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    experiment_id INTEGER NOT NULL REFERENCES experiments_v2(id),
+    experiment_id INTEGER NOT NULL REFERENCES experiments(id),
 
     -- Configuration identity (for deduplication)
     config_hash TEXT NOT NULL,
@@ -309,12 +199,12 @@ CREATE TABLE IF NOT EXISTS genomes_v2 (
 );
 
 -- ============================================================================
--- GENOME_EVALUATIONS_V2: Per-iteration evaluation results
+-- GENOME_EVALUATIONS: Per-iteration evaluation results
 -- ============================================================================
-CREATE TABLE IF NOT EXISTS genome_evaluations_v2 (
+CREATE TABLE IF NOT EXISTS genome_evaluations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    iteration_id INTEGER NOT NULL REFERENCES iterations_v2(id),
-    genome_id INTEGER NOT NULL REFERENCES genomes_v2(id),
+    iteration_id INTEGER NOT NULL REFERENCES iterations(id),
+    genome_id INTEGER NOT NULL REFERENCES genomes(id),
 
     -- Position in generation
     position INTEGER NOT NULL,
@@ -336,11 +226,11 @@ CREATE TABLE IF NOT EXISTS genome_evaluations_v2 (
 );
 
 -- ============================================================================
--- HEALTH_CHECKS_V2: Periodic full validation
+-- HEALTH_CHECKS: Periodic full validation
 -- ============================================================================
-CREATE TABLE IF NOT EXISTS health_checks_v2 (
+CREATE TABLE IF NOT EXISTS health_checks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    iteration_id INTEGER NOT NULL REFERENCES iterations_v2(id),
+    iteration_id INTEGER NOT NULL REFERENCES iterations(id),
 
     -- Top-K ensemble metrics
     k INTEGER NOT NULL,
@@ -361,13 +251,13 @@ CREATE TABLE IF NOT EXISTS health_checks_v2 (
 );
 
 -- ============================================================================
--- CHECKPOINTS_V2: Saved state for resume
+-- CHECKPOINTS: Saved state for resume
 -- ============================================================================
-CREATE TABLE IF NOT EXISTS checkpoints_v2 (
+CREATE TABLE IF NOT EXISTS checkpoints (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    experiment_id INTEGER NOT NULL REFERENCES experiments_v2(id),
-    phase_id INTEGER REFERENCES phases_v2(id),
-    iteration_id INTEGER REFERENCES iterations_v2(id),
+    experiment_id INTEGER NOT NULL REFERENCES experiments(id),
+    phase_id INTEGER REFERENCES phases(id),
+    iteration_id INTEGER REFERENCES iterations(id),
 
     name TEXT NOT NULL,
     file_path TEXT NOT NULL,
@@ -388,23 +278,24 @@ CREATE TABLE IF NOT EXISTS checkpoints_v2 (
 -- ============================================================================
 
 -- For polling new records (change detection)
-CREATE INDEX IF NOT EXISTS idx_iterations_v2_created ON iterations_v2(created_at);
-CREATE INDEX IF NOT EXISTS idx_genome_evals_v2_created ON genome_evaluations_v2(created_at);
-CREATE INDEX IF NOT EXISTS idx_health_checks_v2_created ON health_checks_v2(created_at);
+CREATE INDEX IF NOT EXISTS idx_iterations_created ON iterations(created_at);
+CREATE INDEX IF NOT EXISTS idx_genome_evals_created ON genome_evaluations(created_at);
+CREATE INDEX IF NOT EXISTS idx_health_checks_created ON health_checks(created_at);
 
 -- For lookups
-CREATE INDEX IF NOT EXISTS idx_experiments_v2_flow ON experiments_v2(flow_id);
-CREATE INDEX IF NOT EXISTS idx_phases_v2_experiment ON phases_v2(experiment_id);
-CREATE INDEX IF NOT EXISTS idx_iterations_v2_phase ON iterations_v2(phase_id);
-CREATE INDEX IF NOT EXISTS idx_genome_evals_v2_iteration ON genome_evaluations_v2(iteration_id);
-CREATE INDEX IF NOT EXISTS idx_genomes_v2_experiment ON genomes_v2(experiment_id);
-CREATE INDEX IF NOT EXISTS idx_checkpoints_v2_experiment ON checkpoints_v2(experiment_id);
+CREATE INDEX IF NOT EXISTS idx_experiments_flow ON experiments(flow_id);
+CREATE INDEX IF NOT EXISTS idx_phases_experiment ON phases(experiment_id);
+CREATE INDEX IF NOT EXISTS idx_iterations_phase ON iterations(phase_id);
+CREATE INDEX IF NOT EXISTS idx_genome_evals_iteration ON genome_evaluations(iteration_id);
+CREATE INDEX IF NOT EXISTS idx_genomes_experiment ON genomes(experiment_id);
+CREATE INDEX IF NOT EXISTS idx_checkpoints_experiment ON checkpoints(experiment_id);
 
 -- For finding latest records per entity
-CREATE INDEX IF NOT EXISTS idx_iterations_v2_phase_num ON iterations_v2(phase_id, iteration_num DESC);
-CREATE INDEX IF NOT EXISTS idx_experiments_v2_status ON experiments_v2(status);
-CREATE INDEX IF NOT EXISTS idx_flows_v2_status ON flows_v2(status);
+CREATE INDEX IF NOT EXISTS idx_iterations_phase_num ON iterations(phase_id, iteration_num DESC);
+CREATE INDEX IF NOT EXISTS idx_experiments_status ON experiments(status);
+CREATE INDEX IF NOT EXISTS idx_flows_status ON flows(status);
 "#;
+
 
 // Query helpers
 pub mod queries {
@@ -412,227 +303,6 @@ pub mod queries {
     use crate::models::*;
     use chrono::{DateTime, Utc};
     use sqlx::Row;
-
-    // =============================================================================
-    // Experiment queries
-    // =============================================================================
-
-    pub async fn list_experiments(pool: &DbPool, limit: i32, offset: i32) -> Result<Vec<Experiment>> {
-        let rows = sqlx::query(
-            r#"SELECT id, name, log_path, started_at, ended_at, status, config_json, pid, checkpoint_phase
-               FROM experiments
-               ORDER BY started_at DESC
-               LIMIT ? OFFSET ?"#,
-        )
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(pool)
-        .await?;
-
-        let mut experiments = Vec::with_capacity(rows.len());
-        for row in rows {
-            experiments.push(row_to_experiment(&row)?);
-        }
-        Ok(experiments)
-    }
-
-    pub async fn get_experiment(pool: &DbPool, id: i64) -> Result<Option<Experiment>> {
-        let row = sqlx::query(
-            r#"SELECT id, name, log_path, started_at, ended_at, status, config_json, pid, checkpoint_phase
-               FROM experiments WHERE id = ?"#,
-        )
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
-
-        match row {
-            Some(r) => Ok(Some(row_to_experiment(&r)?)),
-            None => Ok(None),
-        }
-    }
-
-    pub async fn create_experiment(pool: &DbPool, name: &str, log_path: &str, config: &ExperimentConfig) -> Result<i64> {
-        let now = Utc::now().to_rfc3339();
-        let config_json = serde_json::to_string(config)?;
-
-        let result = sqlx::query(
-            r#"INSERT INTO experiments (name, log_path, started_at, status, config_json)
-               VALUES (?, ?, ?, 'running', ?)"#,
-        )
-        .bind(name)
-        .bind(log_path)
-        .bind(&now)
-        .bind(&config_json)
-        .execute(pool)
-        .await?;
-
-        Ok(result.last_insert_rowid())
-    }
-
-    fn row_to_experiment(row: &sqlx::sqlite::SqliteRow) -> Result<Experiment> {
-        let status_str: String = row.get("status");
-        let config_json: Option<String> = row.get("config_json");
-
-        Ok(Experiment {
-            id: row.get("id"),
-            name: row.get("name"),
-            log_path: row.get("log_path"),
-            started_at: parse_datetime(row.get("started_at"))?,
-            ended_at: row.get::<Option<String>, _>("ended_at")
-                .map(|s| parse_datetime(s))
-                .transpose()?,
-            status: parse_experiment_status(&status_str),
-            config: config_json
-                .map(|s| serde_json::from_str(&s))
-                .transpose()?
-                .unwrap_or_default(),
-            pid: row.get("pid"),
-            checkpoint_phase: row.get("checkpoint_phase"),
-        })
-    }
-
-    pub async fn get_phases(pool: &DbPool, experiment_id: i64) -> Result<Vec<Phase>> {
-        let rows = sqlx::query(
-            r#"SELECT id, experiment_id, name, phase_type, started_at, ended_at, status
-               FROM phases WHERE experiment_id = ? ORDER BY id"#,
-        )
-        .bind(experiment_id)
-        .fetch_all(pool)
-        .await?;
-
-        let mut phases = Vec::with_capacity(rows.len());
-        for row in rows {
-            phases.push(row_to_phase(&row)?);
-        }
-        Ok(phases)
-    }
-
-    pub async fn create_phase(
-        pool: &DbPool,
-        experiment_id: i64,
-        name: &str,
-        phase_type: &str,
-    ) -> Result<Phase> {
-        let now = chrono::Utc::now().to_rfc3339();
-
-        let result = sqlx::query(
-            r#"INSERT INTO phases (experiment_id, name, phase_type, started_at, status)
-               VALUES (?, ?, ?, ?, 'running')
-               RETURNING id, experiment_id, name, phase_type, started_at, ended_at, status"#,
-        )
-        .bind(experiment_id)
-        .bind(name)
-        .bind(phase_type)
-        .bind(&now)
-        .fetch_one(pool)
-        .await?;
-
-        row_to_phase(&result)
-    }
-
-    pub async fn update_phase(
-        pool: &DbPool,
-        phase_id: i64,
-        status: Option<&str>,
-        ended_at: Option<&str>,
-    ) -> Result<Phase> {
-        // Build dynamic update
-        let mut updates = Vec::new();
-        if status.is_some() {
-            updates.push("status = ?");
-        }
-        if ended_at.is_some() {
-            updates.push("ended_at = ?");
-        }
-
-        if updates.is_empty() {
-            // Nothing to update, just return current phase
-            let row = sqlx::query(
-                "SELECT id, experiment_id, name, phase_type, started_at, ended_at, status FROM phases WHERE id = ?"
-            )
-            .bind(phase_id)
-            .fetch_one(pool)
-            .await?;
-            return row_to_phase(&row);
-        }
-
-        let query = format!(
-            "UPDATE phases SET {} WHERE id = ? RETURNING id, experiment_id, name, phase_type, started_at, ended_at, status",
-            updates.join(", ")
-        );
-
-        let mut q = sqlx::query(&query);
-        if let Some(s) = status {
-            q = q.bind(s);
-        }
-        if let Some(e) = ended_at {
-            q = q.bind(e);
-        }
-        q = q.bind(phase_id);
-
-        let result = q.fetch_one(pool).await?;
-        row_to_phase(&result)
-    }
-
-    fn row_to_phase(row: &sqlx::sqlite::SqliteRow) -> Result<Phase> {
-        let phase_type_str: String = row.get("phase_type");
-        let status_str: String = row.get("status");
-
-        Ok(Phase {
-            id: row.get("id"),
-            experiment_id: row.get("experiment_id"),
-            name: row.get("name"),
-            phase_type: parse_phase_type(&phase_type_str),
-            started_at: parse_datetime(row.get("started_at"))?,
-            ended_at: row.get::<Option<String>, _>("ended_at")
-                .map(|s| parse_datetime(s))
-                .transpose()?,
-            status: parse_phase_status(&status_str),
-        })
-    }
-
-    pub async fn get_iterations(pool: &DbPool, phase_id: i64) -> Result<Vec<Iteration>> {
-        let rows = sqlx::query(
-            r#"SELECT id, phase_id, iteration_num, best_ce, avg_ce, best_accuracy, elapsed_secs, timestamp
-               FROM iterations WHERE phase_id = ? ORDER BY iteration_num"#,
-        )
-        .bind(phase_id)
-        .fetch_all(pool)
-        .await?;
-
-        let mut iterations = Vec::with_capacity(rows.len());
-        for row in rows {
-            iterations.push(Iteration {
-                id: row.get("id"),
-                phase_id: row.get("phase_id"),
-                iteration_num: row.get("iteration_num"),
-                best_ce: row.get("best_ce"),
-                avg_ce: row.get("avg_ce"),
-                best_accuracy: row.get("best_accuracy"),
-                elapsed_secs: row.get("elapsed_secs"),
-                timestamp: parse_datetime(row.get("timestamp"))?,
-            });
-        }
-        Ok(iterations)
-    }
-
-    pub async fn insert_iteration(pool: &DbPool, iteration: &Iteration) -> Result<i64> {
-        let result = sqlx::query(
-            r#"INSERT INTO iterations (phase_id, iteration_num, best_ce, avg_ce, best_accuracy, elapsed_secs, timestamp)
-               VALUES (?, ?, ?, ?, ?, ?, ?)"#,
-        )
-        .bind(iteration.phase_id)
-        .bind(iteration.iteration_num)
-        .bind(iteration.best_ce)
-        .bind(iteration.avg_ce)
-        .bind(iteration.best_accuracy)
-        .bind(iteration.elapsed_secs)
-        .bind(iteration.timestamp.to_rfc3339())
-        .execute(pool)
-        .await?;
-
-        Ok(result.last_insert_rowid())
-    }
 
     // =============================================================================
     // Flow queries
@@ -778,14 +448,8 @@ pub mod queries {
         // Stop any running process first
         stop_flow_process(pool, id).await?;
 
-        // Delete all associated data (experiments, phases, iterations, checkpoints)
+        // Delete all associated data (experiments, phases, iterations, checkpoints, junction table)
         delete_flow_data(pool, id).await?;
-
-        // Delete flow_experiments mappings
-        sqlx::query("DELETE FROM flow_experiments WHERE flow_id = ?")
-            .bind(id)
-            .execute(pool)
-            .await?;
 
         // Delete the flow itself
         let result = sqlx::query("DELETE FROM flows WHERE id = ?")
@@ -822,7 +486,7 @@ pub mod queries {
 
             // Clear the PID and set status to cancelled
             sqlx::query(
-                "UPDATE flows SET pid = NULL, status = 'cancelled', updated_at = datetime('now') WHERE id = ?"
+                "UPDATE flows SET pid = NULL, status = 'cancelled' WHERE id = ?"
             )
             .bind(flow_id)
             .execute(pool)
@@ -834,151 +498,40 @@ pub mod queries {
 
     /// Delete all data associated with a flow (experiments, phases, iterations, checkpoints)
     /// This is reused by both delete_flow and update_flow_for_restart
+    ///
+    /// Uses flow_id foreign keys for clean cascade deletion:
+    /// experiments.flow_id -> phases -> iterations -> genome_evaluations
     async fn delete_flow_data(pool: &DbPool, flow_id: i64) -> Result<()> {
-        // Get the flow name (V2 experiments use name matching, not flow_id foreign key)
-        let flow_name: Option<String> = sqlx::query_scalar(
-            "SELECT name FROM flows WHERE id = ?"
-        )
-        .bind(flow_id)
-        .fetch_optional(pool)
-        .await?;
-
-        // === Delete V2 data ===
-        // Get V2 experiment IDs by flow name (since flow_id may be NULL)
-        let v2_exp_ids: Vec<i64> = if let Some(ref name) = flow_name {
-            sqlx::query_scalar(
-                "SELECT id FROM experiments_v2 WHERE name = ?"
-            )
-            .bind(name)
-            .fetch_all(pool)
-            .await?
-        } else {
-            vec![]
-        };
-
-        for exp_id in &v2_exp_ids {
-            delete_experiment_data_v2(pool, *exp_id).await?;
-        }
-
-        // Delete V2 experiments by name
-        if let Some(ref name) = flow_name {
-            sqlx::query("DELETE FROM experiments_v2 WHERE name = ?")
-                .bind(name)
-                .execute(pool)
-                .await?;
-        }
-
-        // === Delete V1 data ===
-        let mut v1_exp_ids: Vec<i64> = sqlx::query_scalar(
-            "SELECT experiment_id FROM flow_experiments WHERE flow_id = ?"
-        )
-        .bind(flow_id)
-        .fetch_all(pool)
-        .await?;
-
-        // Also find orphaned experiments by log_path pattern
-        if let Some(ref name) = flow_name {
-            let safe_name = name.to_lowercase().replace(" ", "_").replace("/", "_");
-            let pattern = format!("checkpoints/{}/%", safe_name);
-            let orphaned_ids: Vec<i64> = sqlx::query_scalar(
-                "SELECT id FROM experiments WHERE log_path LIKE ?"
-            )
-            .bind(&pattern)
-            .fetch_all(pool)
-            .await?;
-
-            for oid in orphaned_ids {
-                if !v1_exp_ids.contains(&oid) {
-                    v1_exp_ids.push(oid);
-                }
-            }
-        }
-
         // Clear seed_checkpoint_id from flow FIRST (to remove FK dependency)
         sqlx::query("UPDATE flows SET seed_checkpoint_id = NULL WHERE id = ?")
             .bind(flow_id)
             .execute(pool)
             .await?;
 
-        for exp_id in &v1_exp_ids {
-            delete_experiment_data_v1(pool, *exp_id).await?;
-        }
-
-        // Delete V1 experiments
-        for exp_id in &v1_exp_ids {
-            sqlx::query("DELETE FROM experiments WHERE id = ?")
-                .bind(exp_id)
-                .execute(pool)
-                .await?;
-        }
-
-        Ok(())
-    }
-
-    /// Delete all data for a V2 experiment (phases, iterations, genome_evaluations, genomes, checkpoints)
-    async fn delete_experiment_data_v2(pool: &DbPool, exp_id: i64) -> Result<()> {
-        // Get phase IDs for this experiment
-        let phase_ids: Vec<i64> = sqlx::query_scalar(
-            "SELECT id FROM phases_v2 WHERE experiment_id = ?"
+        // Get all experiments for this flow
+        let exp_ids: Vec<i64> = sqlx::query_scalar(
+            "SELECT id FROM experiments WHERE flow_id = ?"
         )
-        .bind(exp_id)
+        .bind(flow_id)
         .fetch_all(pool)
         .await?;
 
-        for phase_id in &phase_ids {
-            // Delete genome evaluations for iterations of this phase
-            sqlx::query(
-                "DELETE FROM genome_evaluations_v2 WHERE iteration_id IN (SELECT id FROM iterations_v2 WHERE phase_id = ?)"
-            )
-            .bind(phase_id)
-            .execute(pool)
-            .await?;
-
-            // Delete iterations for this phase
-            sqlx::query("DELETE FROM iterations_v2 WHERE phase_id = ?")
-                .bind(phase_id)
-                .execute(pool)
-                .await?;
+        for exp_id in &exp_ids {
+            delete_experiment_data(pool, *exp_id).await?;
         }
 
-        // Delete phases
-        sqlx::query("DELETE FROM phases_v2 WHERE experiment_id = ?")
-            .bind(exp_id)
-            .execute(pool)
-            .await?;
-
-        // Delete genome_evaluations that reference genomes from this experiment
-        sqlx::query(
-            "DELETE FROM genome_evaluations_v2 WHERE genome_id IN (SELECT id FROM genomes_v2 WHERE experiment_id = ?)"
-        )
-        .bind(exp_id)
-        .execute(pool)
-        .await?;
-
-        // Delete genomes
-        sqlx::query("DELETE FROM genomes_v2 WHERE experiment_id = ?")
-            .bind(exp_id)
-            .execute(pool)
-            .await?;
-
-        // Delete checkpoints
-        sqlx::query("DELETE FROM checkpoints_v2 WHERE experiment_id = ?")
-            .bind(exp_id)
+        // Delete experiments by flow_id
+        sqlx::query("DELETE FROM experiments WHERE flow_id = ?")
+            .bind(flow_id)
             .execute(pool)
             .await?;
 
         Ok(())
     }
 
-    /// Delete all data for a V1 experiment (phases, iterations, checkpoints)
-    async fn delete_experiment_data_v1(pool: &DbPool, exp_id: i64) -> Result<()> {
-        // Delete checkpoints FIRST (before experiments due to FK)
-        sqlx::query("DELETE FROM checkpoints WHERE experiment_id = ?")
-            .bind(exp_id)
-            .execute(pool)
-            .await?;
-
-        // Get phase IDs
+    /// Delete all data for an experiment (phases, iterations, genome_evaluations, genomes, checkpoints)
+    async fn delete_experiment_data(pool: &DbPool, exp_id: i64) -> Result<()> {
+        // Get phase IDs for this experiment
         let phase_ids: Vec<i64> = sqlx::query_scalar(
             "SELECT id FROM phases WHERE experiment_id = ?"
         )
@@ -986,8 +539,24 @@ pub mod queries {
         .fetch_all(pool)
         .await?;
 
-        // Delete iterations for each phase
         for phase_id in &phase_ids {
+            // Delete health checks for iterations of this phase
+            sqlx::query(
+                "DELETE FROM health_checks WHERE iteration_id IN (SELECT id FROM iterations WHERE phase_id = ?)"
+            )
+            .bind(phase_id)
+            .execute(pool)
+            .await?;
+
+            // Delete genome evaluations for iterations of this phase
+            sqlx::query(
+                "DELETE FROM genome_evaluations WHERE iteration_id IN (SELECT id FROM iterations WHERE phase_id = ?)"
+            )
+            .bind(phase_id)
+            .execute(pool)
+            .await?;
+
+            // Delete iterations for this phase
             sqlx::query("DELETE FROM iterations WHERE phase_id = ?")
                 .bind(phase_id)
                 .execute(pool)
@@ -1000,16 +569,37 @@ pub mod queries {
             .execute(pool)
             .await?;
 
+        // Delete genome_evaluations that reference genomes from this experiment
+        sqlx::query(
+            "DELETE FROM genome_evaluations WHERE genome_id IN (SELECT id FROM genomes WHERE experiment_id = ?)"
+        )
+        .bind(exp_id)
+        .execute(pool)
+        .await?;
+
+        // Delete genomes
+        sqlx::query("DELETE FROM genomes WHERE experiment_id = ?")
+            .bind(exp_id)
+            .execute(pool)
+            .await?;
+
+        // Delete checkpoints
+        sqlx::query("DELETE FROM checkpoints WHERE experiment_id = ?")
+            .bind(exp_id)
+            .execute(pool)
+            .await?;
+
         Ok(())
     }
 
     pub async fn list_flow_experiments(pool: &DbPool, flow_id: i64) -> Result<Vec<Experiment>> {
         let rows = sqlx::query(
-            r#"SELECT e.id, e.name, e.log_path, e.started_at, e.ended_at, e.status, e.config_json, e.pid, e.checkpoint_phase
-               FROM experiments e
-               JOIN flow_experiments fe ON e.id = fe.experiment_id
-               WHERE fe.flow_id = ?
-               ORDER BY fe.sequence_order"#,
+            r#"SELECT id, flow_id, sequence_order, name, status, fitness_calculator,
+                      fitness_weight_ce, fitness_weight_acc, tier_config, context_size,
+                      population_size, pid, last_phase_id, last_iteration, resume_checkpoint_id,
+                      created_at, started_at, ended_at, paused_at
+               FROM experiments WHERE flow_id = ?
+               ORDER BY sequence_order"#,
         )
         .bind(flow_id)
         .fetch_all(pool)
@@ -1020,23 +610,6 @@ pub mod queries {
             experiments.push(row_to_experiment(&row)?);
         }
         Ok(experiments)
-    }
-
-    pub async fn add_experiment_to_flow(
-        pool: &DbPool,
-        flow_id: i64,
-        experiment_id: i64,
-        sequence_order: i32,
-    ) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO flow_experiments (flow_id, experiment_id, sequence_order) VALUES (?, ?, ?)"
-        )
-        .bind(flow_id)
-        .bind(experiment_id)
-        .bind(sequence_order)
-        .execute(pool)
-        .await?;
-        Ok(())
     }
 
     fn row_to_flow(row: &sqlx::sqlite::SqliteRow) -> Result<Flow> {
@@ -1081,12 +654,6 @@ pub mod queries {
         // If clearing seed (restart from beginning), also delete old experiment data
         if clear_seed.is_some() {
             delete_flow_data(pool, id).await?;
-
-            // Delete flow_experiments mappings
-            sqlx::query("DELETE FROM flow_experiments WHERE flow_id = ?")
-                .bind(id)
-                .execute(pool)
-                .await?;
         }
 
         if let Some(seed_id) = clear_seed {
@@ -1118,21 +685,21 @@ pub mod queries {
     pub async fn list_checkpoints(
         pool: &DbPool,
         experiment_id: Option<i64>,
-        is_final: Option<bool>,
+        checkpoint_type: Option<&str>,
         limit: i32,
         offset: i32,
     ) -> Result<Vec<Checkpoint>> {
         let mut query = String::from(
-            r#"SELECT id, experiment_id, name, file_path, file_size_bytes, created_at,
-                      final_fitness, final_accuracy, iterations_run, genome_stats_json, is_final, reference_count
+            r#"SELECT id, experiment_id, phase_id, iteration_id, name, file_path, file_size_bytes,
+                      checkpoint_type, best_ce, best_accuracy, created_at
                FROM checkpoints WHERE 1=1"#,
         );
 
         if experiment_id.is_some() {
             query.push_str(" AND experiment_id = ?");
         }
-        if is_final.is_some() {
-            query.push_str(" AND is_final = ?");
+        if checkpoint_type.is_some() {
+            query.push_str(" AND checkpoint_type = ?");
         }
         query.push_str(" ORDER BY created_at DESC LIMIT ? OFFSET ?");
 
@@ -1141,8 +708,8 @@ pub mod queries {
         if let Some(exp_id) = experiment_id {
             q = q.bind(exp_id);
         }
-        if let Some(final_only) = is_final {
-            q = q.bind(final_only);
+        if let Some(cp_type) = checkpoint_type {
+            q = q.bind(cp_type);
         }
         q = q.bind(limit).bind(offset);
 
@@ -1157,8 +724,8 @@ pub mod queries {
 
     pub async fn get_checkpoint(pool: &DbPool, id: i64) -> Result<Option<Checkpoint>> {
         let row = sqlx::query(
-            r#"SELECT id, experiment_id, name, file_path, file_size_bytes, created_at,
-                      final_fitness, final_accuracy, iterations_run, genome_stats_json, is_final, reference_count
+            r#"SELECT id, experiment_id, phase_id, iteration_id, name, file_path, file_size_bytes,
+                      checkpoint_type, best_ce, best_accuracy, created_at
                FROM checkpoints WHERE id = ?"#,
         )
         .bind(id)
@@ -1176,41 +743,39 @@ pub mod queries {
         experiment_id: i64,
         name: &str,
         file_path: &str,
+        checkpoint_type: &str,
         file_size_bytes: Option<i64>,
-        final_fitness: Option<f64>,
-        final_accuracy: Option<f64>,
-        iterations_run: Option<i32>,
-        genome_stats: Option<&GenomeStats>,
-        is_final: bool,
+        phase_id: Option<i64>,
+        iteration_id: Option<i64>,
+        best_ce: Option<f64>,
+        best_accuracy: Option<f64>,
     ) -> Result<i64> {
         let now = Utc::now().to_rfc3339();
-        let genome_stats_json = genome_stats.map(|s| serde_json::to_string(s)).transpose()?;
 
         let result = sqlx::query(
             r#"INSERT INTO checkpoints
-               (experiment_id, name, file_path, file_size_bytes, created_at, final_fitness, final_accuracy,
-                iterations_run, genome_stats_json, is_final, reference_count)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)"#,
+               (experiment_id, phase_id, iteration_id, name, file_path, file_size_bytes,
+                checkpoint_type, best_ce, best_accuracy, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         )
         .bind(experiment_id)
+        .bind(phase_id)
+        .bind(iteration_id)
         .bind(name)
         .bind(file_path)
         .bind(file_size_bytes)
+        .bind(checkpoint_type)
+        .bind(best_ce)
+        .bind(best_accuracy)
         .bind(&now)
-        .bind(final_fitness)
-        .bind(final_accuracy)
-        .bind(iterations_run)
-        .bind(&genome_stats_json)
-        .bind(is_final)
         .execute(pool)
         .await?;
 
         Ok(result.last_insert_rowid())
     }
 
-    pub async fn delete_checkpoint(pool: &DbPool, id: i64, force: bool) -> Result<(bool, Option<String>)> {
-        // Check reference count
-        let row = sqlx::query("SELECT reference_count, file_path FROM checkpoints WHERE id = ?")
+    pub async fn delete_checkpoint(pool: &DbPool, id: i64) -> Result<(bool, Option<String>)> {
+        let row = sqlx::query("SELECT file_path FROM checkpoints WHERE id = ?")
             .bind(id)
             .fetch_optional(pool)
             .await?;
@@ -1219,21 +784,7 @@ pub mod queries {
             return Ok((false, None));
         };
 
-        let ref_count: i32 = row.get("reference_count");
         let file_path: String = row.get("file_path");
-
-        if ref_count > 0 && !force {
-            return Err(anyhow::anyhow!(
-                "Checkpoint has {} references. Use force=true to delete anyway.",
-                ref_count
-            ));
-        }
-
-        // Delete references first
-        sqlx::query("DELETE FROM checkpoint_references WHERE checkpoint_id = ?")
-            .bind(id)
-            .execute(pool)
-            .await?;
 
         // Delete checkpoint
         let result = sqlx::query("DELETE FROM checkpoints WHERE id = ?")
@@ -1244,83 +795,105 @@ pub mod queries {
         Ok((result.rows_affected() > 0, Some(file_path)))
     }
 
-    pub async fn increment_checkpoint_references(pool: &DbPool, checkpoint_id: i64) -> Result<()> {
-        sqlx::query("UPDATE checkpoints SET reference_count = reference_count + 1 WHERE id = ?")
-            .bind(checkpoint_id)
-            .execute(pool)
-            .await?;
-        Ok(())
-    }
-
     fn row_to_checkpoint(row: &sqlx::sqlite::SqliteRow) -> Result<Checkpoint> {
-        let genome_stats_json: Option<String> = row.get("genome_stats_json");
+        let checkpoint_type_str: String = row.get("checkpoint_type");
 
         Ok(Checkpoint {
             id: row.get("id"),
             experiment_id: row.get("experiment_id"),
+            phase_id: row.get("phase_id"),
+            iteration_id: row.get("iteration_id"),
             name: row.get("name"),
             file_path: row.get("file_path"),
             file_size_bytes: row.get("file_size_bytes"),
+            checkpoint_type: parse_checkpoint_type(&checkpoint_type_str),
+            best_ce: row.get("best_ce"),
+            best_accuracy: row.get("best_accuracy"),
             created_at: parse_datetime(row.get("created_at"))?,
-            final_fitness: row.get("final_fitness"),
-            final_accuracy: row.get("final_accuracy"),
-            iterations_run: row.get("iterations_run"),
-            genome_stats: genome_stats_json
-                .map(|s| serde_json::from_str(&s))
-                .transpose()?,
-            is_final: row.get("is_final"),
-            reference_count: row.get("reference_count"),
         })
     }
 
+    fn parse_checkpoint_type(s: &str) -> CheckpointType {
+        match s {
+            "auto" => CheckpointType::Auto,
+            "user" => CheckpointType::User,
+            "phase_end" => CheckpointType::PhaseEnd,
+            "experiment_end" => CheckpointType::ExperimentEnd,
+            _ => CheckpointType::Auto,
+        }
+    }
+
     // =============================================================================
-    // V2 Queries (new data model - DB as source of truth)
+    // Experiment queries (new unified schema)
     // =============================================================================
 
-    /// Get the currently running experiment from v2 tables
-    pub async fn get_running_experiment_v2(pool: &DbPool) -> Result<Option<ExperimentV2>> {
+    /// Get the currently running experiment
+    pub async fn get_running_experiment(pool: &DbPool) -> Result<Option<Experiment>> {
         let row = sqlx::query(
             r#"SELECT id, flow_id, sequence_order, name, status, fitness_calculator,
                       fitness_weight_ce, fitness_weight_acc, tier_config, context_size,
                       population_size, pid, last_phase_id, last_iteration, resume_checkpoint_id,
                       created_at, started_at, ended_at, paused_at
-               FROM experiments_v2 WHERE status = 'running' LIMIT 1"#,
+               FROM experiments WHERE status = 'running' LIMIT 1"#,
         )
         .fetch_optional(pool)
         .await?;
 
         match row {
-            Some(r) => Ok(Some(row_to_experiment_v2(&r)?)),
+            Some(r) => Ok(Some(row_to_experiment(&r)?)),
             None => Ok(None),
         }
     }
 
-    /// Get an experiment by ID from v2 tables
-    pub async fn get_experiment_v2(pool: &DbPool, id: i64) -> Result<Option<ExperimentV2>> {
+    /// Get an experiment by ID
+    pub async fn get_experiment(pool: &DbPool, id: i64) -> Result<Option<Experiment>> {
         let row = sqlx::query(
             r#"SELECT id, flow_id, sequence_order, name, status, fitness_calculator,
                       fitness_weight_ce, fitness_weight_acc, tier_config, context_size,
                       population_size, pid, last_phase_id, last_iteration, resume_checkpoint_id,
                       created_at, started_at, ended_at, paused_at
-               FROM experiments_v2 WHERE id = ?"#,
+               FROM experiments WHERE id = ?"#,
         )
         .bind(id)
         .fetch_optional(pool)
         .await?;
 
         match row {
-            Some(r) => Ok(Some(row_to_experiment_v2(&r)?)),
+            Some(r) => Ok(Some(row_to_experiment(&r)?)),
             None => Ok(None),
         }
     }
 
-    /// Get phases for an experiment from v2 tables
-    pub async fn get_phases_v2(pool: &DbPool, experiment_id: i64) -> Result<Vec<PhaseV2>> {
+    /// List all experiments
+    pub async fn list_experiments(pool: &DbPool, limit: i32, offset: i32) -> Result<Vec<Experiment>> {
+        let rows = sqlx::query(
+            r#"SELECT id, flow_id, sequence_order, name, status, fitness_calculator,
+                      fitness_weight_ce, fitness_weight_acc, tier_config, context_size,
+                      population_size, pid, last_phase_id, last_iteration, resume_checkpoint_id,
+                      created_at, started_at, ended_at, paused_at
+               FROM experiments
+               ORDER BY created_at DESC
+               LIMIT ? OFFSET ?"#,
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(pool)
+        .await?;
+
+        let mut experiments = Vec::with_capacity(rows.len());
+        for row in rows {
+            experiments.push(row_to_experiment(&row)?);
+        }
+        Ok(experiments)
+    }
+
+    /// Get phases for an experiment
+    pub async fn get_experiment_phases(pool: &DbPool, experiment_id: i64) -> Result<Vec<Phase>> {
         let rows = sqlx::query(
             r#"SELECT id, experiment_id, name, phase_type, sequence_order, status,
                       max_iterations, population_size, current_iteration, best_ce, best_accuracy,
                       created_at, started_at, ended_at
-               FROM phases_v2 WHERE experiment_id = ? ORDER BY sequence_order"#,
+               FROM phases WHERE experiment_id = ? ORDER BY sequence_order"#,
         )
         .bind(experiment_id)
         .fetch_all(pool)
@@ -1328,19 +901,19 @@ pub mod queries {
 
         let mut phases = Vec::with_capacity(rows.len());
         for row in rows {
-            phases.push(row_to_phase_v2(&row)?);
+            phases.push(row_to_phase(&row)?);
         }
         Ok(phases)
     }
 
-    /// Get iterations for a phase from v2 tables
-    pub async fn get_iterations_v2(pool: &DbPool, phase_id: i64) -> Result<Vec<IterationV2>> {
+    /// Get iterations for a phase
+    pub async fn get_phase_iterations(pool: &DbPool, phase_id: i64) -> Result<Vec<Iteration>> {
         let rows = sqlx::query(
             r#"SELECT id, phase_id, iteration_num, best_ce, best_accuracy, avg_ce, avg_accuracy,
                       elite_count, offspring_count, offspring_viable, fitness_threshold,
                       elapsed_secs, baseline_ce, delta_baseline, delta_previous,
                       patience_counter, patience_max, candidates_total, created_at
-               FROM iterations_v2 WHERE phase_id = ? ORDER BY iteration_num"#,
+               FROM iterations WHERE phase_id = ? ORDER BY iteration_num"#,
         )
         .bind(phase_id)
         .fetch_all(pool)
@@ -1348,18 +921,18 @@ pub mod queries {
 
         let mut iterations = Vec::with_capacity(rows.len());
         for row in rows {
-            iterations.push(row_to_iteration_v2(&row)?);
+            iterations.push(row_to_iteration(&row)?);
         }
         Ok(iterations)
     }
 
     /// Get the current phase (running or most recent) for an experiment
-    pub async fn get_current_phase_v2(pool: &DbPool, experiment_id: i64) -> Result<Option<PhaseV2>> {
+    pub async fn get_current_phase(pool: &DbPool, experiment_id: i64) -> Result<Option<Phase>> {
         let row = sqlx::query(
             r#"SELECT id, experiment_id, name, phase_type, sequence_order, status,
                       max_iterations, population_size, current_iteration, best_ce, best_accuracy,
                       created_at, started_at, ended_at
-               FROM phases_v2 WHERE experiment_id = ?
+               FROM phases WHERE experiment_id = ?
                ORDER BY CASE WHEN status = 'running' THEN 0 ELSE 1 END, sequence_order DESC
                LIMIT 1"#,
         )
@@ -1368,21 +941,21 @@ pub mod queries {
         .await?;
 
         match row {
-            Some(r) => Ok(Some(row_to_phase_v2(&r)?)),
+            Some(r) => Ok(Some(row_to_phase(&r)?)),
             None => Ok(None),
         }
     }
 
     /// Get recent iterations for an experiment (across all phases)
-    pub async fn get_recent_iterations_v2(pool: &DbPool, experiment_id: i64, limit: i32) -> Result<Vec<IterationV2>> {
+    pub async fn get_recent_iterations(pool: &DbPool, experiment_id: i64, limit: i32) -> Result<Vec<Iteration>> {
         let rows = sqlx::query(
             r#"SELECT i.id, i.phase_id, i.iteration_num, i.best_ce, i.best_accuracy, i.avg_ce,
                       i.avg_accuracy, i.elite_count, i.offspring_count, i.offspring_viable,
                       i.fitness_threshold, i.elapsed_secs, i.baseline_ce, i.delta_baseline,
                       i.delta_previous, i.patience_counter, i.patience_max, i.candidates_total,
                       i.created_at
-               FROM iterations_v2 i
-               JOIN phases_v2 p ON i.phase_id = p.id
+               FROM iterations i
+               JOIN phases p ON i.phase_id = p.id
                WHERE p.experiment_id = ?
                ORDER BY i.created_at DESC
                LIMIT ?"#,
@@ -1394,23 +967,23 @@ pub mod queries {
 
         let mut iterations = Vec::with_capacity(rows.len());
         for row in rows {
-            iterations.push(row_to_iteration_v2(&row)?);
+            iterations.push(row_to_iteration(&row)?);
         }
         // Reverse to get chronological order
         iterations.reverse();
         Ok(iterations)
     }
 
-    fn row_to_experiment_v2(row: &sqlx::sqlite::SqliteRow) -> Result<ExperimentV2> {
+    fn row_to_experiment(row: &sqlx::sqlite::SqliteRow) -> Result<Experiment> {
         let status_str: String = row.get("status");
         let fitness_calc_str: String = row.get("fitness_calculator");
 
-        Ok(ExperimentV2 {
+        Ok(Experiment {
             id: row.get("id"),
             flow_id: row.get("flow_id"),
             sequence_order: row.get("sequence_order"),
             name: row.get("name"),
-            status: parse_experiment_status_v2(&status_str),
+            status: parse_experiment_status(&status_str),
             fitness_calculator: parse_fitness_calculator(&fitness_calc_str),
             fitness_weight_ce: row.get("fitness_weight_ce"),
             fitness_weight_acc: row.get("fitness_weight_acc"),
@@ -1434,16 +1007,16 @@ pub mod queries {
         })
     }
 
-    fn row_to_phase_v2(row: &sqlx::sqlite::SqliteRow) -> Result<PhaseV2> {
+    fn row_to_phase(row: &sqlx::sqlite::SqliteRow) -> Result<Phase> {
         let status_str: String = row.get("status");
 
-        Ok(PhaseV2 {
+        Ok(Phase {
             id: row.get("id"),
             experiment_id: row.get("experiment_id"),
             name: row.get("name"),
             phase_type: row.get("phase_type"),
             sequence_order: row.get("sequence_order"),
-            status: parse_phase_status_v2(&status_str),
+            status: parse_phase_status(&status_str),
             max_iterations: row.get("max_iterations"),
             population_size: row.get("population_size"),
             current_iteration: row.get("current_iteration"),
@@ -1459,8 +1032,8 @@ pub mod queries {
         })
     }
 
-    fn row_to_iteration_v2(row: &sqlx::sqlite::SqliteRow) -> Result<IterationV2> {
-        Ok(IterationV2 {
+    fn row_to_iteration(row: &sqlx::sqlite::SqliteRow) -> Result<Iteration> {
+        Ok(Iteration {
             id: row.get("id"),
             phase_id: row.get("phase_id"),
             iteration_num: row.get("iteration_num"),
@@ -1484,12 +1057,12 @@ pub mod queries {
     }
 
     /// Get genome evaluations for an iteration
-    pub async fn get_genome_evaluations_v2(pool: &DbPool, iteration_id: i64) -> Result<Vec<GenomeEvaluationV2>> {
+    pub async fn get_genome_evaluations(pool: &DbPool, iteration_id: i64) -> Result<Vec<GenomeEvaluation>> {
         let rows = sqlx::query(
             r#"SELECT ge.id, ge.iteration_id, ge.genome_id, ge.position, ge.role,
                       ge.elite_rank, ge.ce, ge.accuracy, ge.fitness_score, ge.eval_time_ms,
                       ge.created_at
-               FROM genome_evaluations_v2 ge
+               FROM genome_evaluations ge
                WHERE ge.iteration_id = ?
                ORDER BY ge.position"#,
         )
@@ -1499,7 +1072,7 @@ pub mod queries {
 
         let mut evaluations = Vec::with_capacity(rows.len());
         for row in rows {
-            evaluations.push(GenomeEvaluationV2 {
+            evaluations.push(GenomeEvaluation {
                 id: row.get("id"),
                 iteration_id: row.get("iteration_id"),
                 genome_id: row.get("genome_id"),
@@ -1528,28 +1101,28 @@ pub mod queries {
         }
     }
 
-    fn parse_experiment_status_v2(s: &str) -> ExperimentStatusV2 {
+    fn parse_experiment_status(s: &str) -> ExperimentStatus {
         match s {
-            "pending" => ExperimentStatusV2::Pending,
-            "queued" => ExperimentStatusV2::Queued,
-            "running" => ExperimentStatusV2::Running,
-            "paused" => ExperimentStatusV2::Paused,
-            "completed" => ExperimentStatusV2::Completed,
-            "failed" => ExperimentStatusV2::Failed,
-            "cancelled" => ExperimentStatusV2::Cancelled,
-            _ => ExperimentStatusV2::Pending,
+            "pending" => ExperimentStatus::Pending,
+            "queued" => ExperimentStatus::Queued,
+            "running" => ExperimentStatus::Running,
+            "paused" => ExperimentStatus::Paused,
+            "completed" => ExperimentStatus::Completed,
+            "failed" => ExperimentStatus::Failed,
+            "cancelled" => ExperimentStatus::Cancelled,
+            _ => ExperimentStatus::Pending,
         }
     }
 
-    fn parse_phase_status_v2(s: &str) -> PhaseStatusV2 {
+    fn parse_phase_status(s: &str) -> PhaseStatus {
         match s {
-            "pending" => PhaseStatusV2::Pending,
-            "running" => PhaseStatusV2::Running,
-            "paused" => PhaseStatusV2::Paused,
-            "completed" => PhaseStatusV2::Completed,
-            "skipped" => PhaseStatusV2::Skipped,
-            "failed" => PhaseStatusV2::Failed,
-            _ => PhaseStatusV2::Pending,
+            "pending" => PhaseStatus::Pending,
+            "running" => PhaseStatus::Running,
+            "paused" => PhaseStatus::Paused,
+            "completed" => PhaseStatus::Completed,
+            "skipped" => PhaseStatus::Skipped,
+            "failed" => PhaseStatus::Failed,
+            _ => PhaseStatus::Pending,
         }
     }
 
@@ -1568,37 +1141,6 @@ pub mod queries {
 
     fn parse_datetime(s: String) -> Result<DateTime<Utc>> {
         Ok(DateTime::parse_from_rfc3339(&s)?.with_timezone(&Utc))
-    }
-
-    fn parse_experiment_status(s: &str) -> ExperimentStatus {
-        match s {
-            "running" => ExperimentStatus::Running,
-            "completed" => ExperimentStatus::Completed,
-            "failed" => ExperimentStatus::Failed,
-            "cancelled" => ExperimentStatus::Cancelled,
-            _ => ExperimentStatus::Running,
-        }
-    }
-
-    fn parse_phase_type(s: &str) -> PhaseType {
-        match s {
-            "ga_neurons" => PhaseType::GaNeurons,
-            "ts_neurons" => PhaseType::TsNeurons,
-            "ga_bits" => PhaseType::GaBits,
-            "ts_bits" => PhaseType::TsBits,
-            "ga_connections" => PhaseType::GaConnections,
-            "ts_connections" => PhaseType::TsConnections,
-            _ => PhaseType::GaNeurons,
-        }
-    }
-
-    fn parse_phase_status(s: &str) -> PhaseStatus {
-        match s {
-            "running" => PhaseStatus::Running,
-            "completed" => PhaseStatus::Completed,
-            "skipped" => PhaseStatus::Skipped,
-            _ => PhaseStatus::Running,
-        }
     }
 
     fn parse_flow_status(s: &str) -> FlowStatus {

@@ -274,6 +274,15 @@ results_*.json
 dashboard/*.db
 dashboard/frontend/.svelte-kit/
 
+# TLS/SSL certificates and private keys (security sensitive)
+*.pem
+*.key
+*.crt
+*.cert
+*.p12
+*.pfx
+dashboard/certs/
+
 # Node
 node_modules/
 *.db-shm
