@@ -942,6 +942,31 @@ pub mod queries {
                 .execute(pool)
                 .await?;
 
+            // Delete V1 phases and iterations before experiments (foreign key constraints)
+            for exp_id in &v1_exp_ids {
+                // Get phase IDs for this experiment
+                let phase_ids: Vec<i64> = sqlx::query_scalar(
+                    "SELECT id FROM phases WHERE experiment_id = ?"
+                )
+                .bind(exp_id)
+                .fetch_all(pool)
+                .await?;
+
+                // Delete iterations for each phase
+                for phase_id in &phase_ids {
+                    sqlx::query("DELETE FROM iterations WHERE phase_id = ?")
+                        .bind(phase_id)
+                        .execute(pool)
+                        .await?;
+                }
+
+                // Delete phases for this experiment
+                sqlx::query("DELETE FROM phases WHERE experiment_id = ?")
+                    .bind(exp_id)
+                    .execute(pool)
+                    .await?;
+            }
+
             // Delete V1 experiments
             for exp_id in &v1_exp_ids {
                 sqlx::query("DELETE FROM experiments WHERE id = ?")
