@@ -249,6 +249,7 @@ class DashboardClient:
 		name: Optional[str] = None,
 		description: Optional[str] = None,
 		status: Optional[str] = None,
+		seed_checkpoint_id: Optional[int] = None,
 	) -> dict:
 		"""Update flow fields."""
 		data = {}
@@ -258,7 +259,17 @@ class DashboardClient:
 			data["description"] = description
 		if status is not None:
 			data["status"] = status
+		if seed_checkpoint_id is not None:
+			data["seed_checkpoint_id"] = seed_checkpoint_id
 		return self._request("PATCH", f"/api/flows/{flow_id}", json_data=data)
+
+	def set_flow_checkpoint(self, flow_id: int, checkpoint_id: int) -> dict:
+		"""Set the seed checkpoint for a flow (for resumption after stop)."""
+		return self._request(
+			"PATCH",
+			f"/api/flows/{flow_id}",
+			json_data={"seed_checkpoint_id": checkpoint_id}
+		)
 
 	def delete_flow(self, flow_id: int) -> None:
 		"""Delete a flow."""

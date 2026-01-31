@@ -545,13 +545,20 @@ async fn restart_flow(
     // If restarting from beginning, clear the seed checkpoint and delete checkpoint files
     let seed_checkpoint_id = if req.from_beginning {
         // Delete checkpoint directory for this flow
+        // Try both relative (from dashboard) and parent (project root) paths
         let safe_name = flow.name.to_lowercase().replace(" ", "_").replace("/", "_");
-        let checkpoint_dir = std::path::Path::new("checkpoints").join(&safe_name);
-        if checkpoint_dir.exists() {
-            if let Err(e) = std::fs::remove_dir_all(&checkpoint_dir) {
-                tracing::warn!("Failed to delete checkpoint directory {:?}: {}", checkpoint_dir, e);
-            } else {
-                tracing::info!("Deleted checkpoint directory: {:?}", checkpoint_dir);
+
+        // Try parent directory first (project root checkpoints)
+        let parent_checkpoint_dir = std::path::Path::new("../checkpoints").join(&safe_name);
+        let local_checkpoint_dir = std::path::Path::new("checkpoints").join(&safe_name);
+
+        for checkpoint_dir in [&parent_checkpoint_dir, &local_checkpoint_dir] {
+            if checkpoint_dir.exists() {
+                if let Err(e) = std::fs::remove_dir_all(checkpoint_dir) {
+                    tracing::warn!("Failed to delete checkpoint directory {:?}: {}", checkpoint_dir, e);
+                } else {
+                    tracing::info!("Deleted checkpoint directory: {:?}", checkpoint_dir);
+                }
             }
         }
         Some(None) // Clear checkpoint reference in DB

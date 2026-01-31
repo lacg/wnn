@@ -950,12 +950,31 @@ pub mod queries {
             }
 
             // Also clean up V1 data (flow_experiments and experiments)
-            let v1_exp_ids: Vec<i64> = sqlx::query_scalar(
+            let mut v1_exp_ids: Vec<i64> = sqlx::query_scalar(
                 "SELECT experiment_id FROM flow_experiments WHERE flow_id = ?"
             )
             .bind(id)
             .fetch_all(pool)
             .await?;
+
+            // Also find orphaned experiments by log_path pattern (in case flow_experiments was already deleted)
+            if let Some(ref name) = flow_name {
+                let safe_name = name.to_lowercase().replace(" ", "_").replace("/", "_");
+                let pattern = format!("checkpoints/{}/%", safe_name);
+                let orphaned_ids: Vec<i64> = sqlx::query_scalar(
+                    "SELECT id FROM experiments WHERE log_path LIKE ?"
+                )
+                .bind(&pattern)
+                .fetch_all(pool)
+                .await?;
+
+                // Add orphaned IDs that aren't already in v1_exp_ids
+                for oid in orphaned_ids {
+                    if !v1_exp_ids.contains(&oid) {
+                        v1_exp_ids.push(oid);
+                    }
+                }
+            }
 
             // Delete flow_experiments mappings
             sqlx::query("DELETE FROM flow_experiments WHERE flow_id = ?")
@@ -963,8 +982,20 @@ pub mod queries {
                 .execute(pool)
                 .await?;
 
+            // Clear seed_checkpoint_id from flows FIRST (to remove FK dependency on checkpoints)
+            sqlx::query("UPDATE flows SET seed_checkpoint_id = NULL WHERE id = ?")
+                .bind(id)
+                .execute(pool)
+                .await?;
+
             // Delete V1 phases and iterations before experiments (foreign key constraints)
             for exp_id in &v1_exp_ids {
+                // Delete checkpoints for this experiment FIRST (before experiments)
+                sqlx::query("DELETE FROM checkpoints WHERE experiment_id = ?")
+                    .bind(exp_id)
+                    .execute(pool)
+                    .await?;
+
                 // Get phase IDs for this experiment
                 let phase_ids: Vec<i64> = sqlx::query_scalar(
                     "SELECT id FROM phases WHERE experiment_id = ?"

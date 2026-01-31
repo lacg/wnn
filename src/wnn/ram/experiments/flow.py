@@ -459,23 +459,26 @@ class Flow:
 			# Flow was stopped gracefully (shutdown requested)
 			self.log("Flow stopped due to shutdown request")
 
-			# Save a "stopped" checkpoint so we can resume later
-			if self.checkpoint_dir and current_genome:
+			# Save checkpoint to database so we can resume later
+			if self.checkpoint_dir and current_genome and self.dashboard_client and self._flow_id:
 				try:
-					self._save_stopped_checkpoint(
+					checkpoint_id = self._save_stop_checkpoint_to_db(
 						stopped_at_idx=stopped_at_idx or len(self._results),
 						current_genome=current_genome,
 						current_fitness=current_fitness,
 						current_population=current_population,
 						current_threshold=current_threshold,
 					)
+					if checkpoint_id:
+						# Update flow's seed_checkpoint_id so it resumes from here
+						self.dashboard_client.set_flow_checkpoint(self._flow_id, checkpoint_id)
+						self.log(f"Checkpoint saved to database (id={checkpoint_id})")
 				except Exception as e:
-					self.log(f"Warning: Failed to save stopped checkpoint: {e}")
+					self.log(f"Warning: Failed to save stop checkpoint: {e}")
 
 			if self.dashboard_client and self._flow_id:
 				try:
-					# Use flow_failed with a clear message, or ideally a flow_cancelled method
-					self.dashboard_client.flow_failed(self._flow_id, "Stopped by user")
+					self.dashboard_client.update_flow(self._flow_id, status="cancelled")
 				except Exception:
 					pass
 
@@ -584,19 +587,27 @@ class Flow:
 			self.log(f"Warning: Failed to load seed checkpoint: {e}")
 			return None, None, None
 
-	def _save_stopped_checkpoint(
+	def _save_stop_checkpoint_to_db(
 		self,
 		stopped_at_idx: int,
 		current_genome: ClusterGenome,
 		current_fitness: Optional[float],
 		current_population: Optional[list[ClusterGenome]],
 		current_threshold: Optional[float],
-	) -> None:
-		"""Save a checkpoint when the flow is stopped, for later resumption."""
+	) -> Optional[int]:
+		"""Save a checkpoint to the database when the flow is stopped.
+
+		Returns:
+			Checkpoint ID if successful, None otherwise.
+		"""
+		if not self.dashboard_client or not self._experiment_id:
+			return None
+
 		self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-		# Save the "stopped" checkpoint
-		stopped_path = self.checkpoint_dir / "flow_stopped.json.gz"
+		# Save checkpoint file
+		checkpoint_name = f"stopped_at_exp_{stopped_at_idx}"
+		checkpoint_path = self.checkpoint_dir / f"{checkpoint_name}.json.gz"
 
 		data = {
 			"stopped_at_experiment": stopped_at_idx,
@@ -609,14 +620,29 @@ class Flow:
 			"flow_name": self.config.name,
 		}
 
-		with gzip.open(stopped_path, 'wt', encoding='utf-8') as f:
+		with gzip.open(checkpoint_path, 'wt', encoding='utf-8') as f:
 			json.dump(data, f, separators=(',', ':'))
 
-		self.log(f"Stopped checkpoint saved: {stopped_path}")
-		self.log(f"  Completed {len(self._results)}/{len(self.config.experiments)} experiments")
-		self.log(f"  Resume from experiment {stopped_at_idx} with --resume-from {stopped_at_idx}")
-		if current_fitness:
-			self.log(f"  Best CE so far: {current_fitness:.4f}")
+		self.log(f"Checkpoint file saved: {checkpoint_path}")
+
+		# Register in database
+		try:
+			checkpoint_id = self.dashboard_client.checkpoint_created(
+				experiment_id=self._experiment_id,
+				file_path=str(checkpoint_path),
+				name=checkpoint_name,
+				final_fitness=current_fitness,
+				final_accuracy=None,
+				iterations_run=stopped_at_idx,
+				genome_stats={"stopped": True, "resume_from": stopped_at_idx},
+				is_final=False,
+			)
+			self.log(f"  Registered checkpoint {checkpoint_id} in database")
+			self.log(f"  Resume from experiment {stopped_at_idx}")
+			return checkpoint_id
+		except Exception as e:
+			self.log(f"Warning: Failed to register checkpoint in database: {e}")
+			return None
 
 	def _load_experiment_checkpoint(self, idx: int) -> Optional[ExperimentResult]:
 		"""Load checkpoint for a specific experiment."""
