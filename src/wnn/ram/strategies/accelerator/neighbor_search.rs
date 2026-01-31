@@ -49,6 +49,20 @@ pub struct CandidateResult {
     pub accuracy: f64,
 }
 
+/// Result of offspring/neighbor search including counts.
+///
+/// Provides visibility into how many candidates were evaluated vs how many
+/// passed the accuracy threshold. This is critical for understanding whether
+/// the threshold is effective or if `return_best_n` fallback is always used.
+pub struct OffspringSearchResult {
+    /// Candidates returned (passed threshold + fallback if return_best_n)
+    pub candidates: Vec<CandidateResult>,
+    /// Total candidates evaluated
+    pub evaluated: usize,
+    /// Candidates that passed accuracy threshold (before fallback)
+    pub viable: usize,
+}
+
 /// Logger that writes to both stderr and file with proper locking.
 /// Uses open/lock/write/close pattern to coordinate with Python writes.
 pub struct FileLogger {
@@ -658,7 +672,7 @@ fn mutate_ga(
 ///   - max_attempts: Maximum offspring to generate before giving up
 ///   - accuracy_threshold: Minimum accuracy for viable offspring
 ///
-/// Returns: Vec of viable CandidateResult
+/// Returns: OffspringSearchResult with candidates, evaluated count, and viable count
 pub fn search_offspring(
     cache: &crate::token_cache::TokenCache,
     population: &[(Vec<usize>, Vec<usize>, Vec<i64>, f64)],
@@ -674,7 +688,7 @@ pub fn search_offspring(
     generation: Option<usize>,
     total_generations: Option<usize>,
     return_best_n: bool,  // If true, return top N by CE when not enough pass threshold
-) -> Vec<CandidateResult> {
+) -> OffspringSearchResult {
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
     let mut logger = FileLogger::new(log_path);
 
@@ -772,6 +786,9 @@ pub fn search_offspring(
         }
     }
 
+    // Capture viable count BEFORE fallback (candidates that passed accuracy threshold)
+    let viable = passed.len();
+
     // If we didn't get enough passing candidates, add best from all_candidates
     if return_best_n && passed.len() < target_count {
         // Sort by CE (lower is better) - return best N by CE when threshold not met
@@ -794,11 +811,15 @@ pub fn search_offspring(
     }
 
     logger.log(&format!(
-        "{} Offspring search: {}/{} viable (evaluated {}, threshold {:.4}%)",
-        gen_prefix, passed.len(), target_count, evaluated, accuracy_threshold * 100.0
+        "{} Offspring search: {}/{} viable, {}/{} returned (evaluated {}, threshold {:.4}%)",
+        gen_prefix, viable, target_count, passed.len(), target_count, evaluated, accuracy_threshold * 100.0
     ));
 
-    passed
+    OffspringSearchResult {
+        candidates: passed,
+        evaluated,
+        viable,
+    }
 }
 
 #[cfg(test)]

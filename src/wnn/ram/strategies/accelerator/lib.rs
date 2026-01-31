@@ -3158,11 +3158,12 @@ impl TokenCacheWrapper {
         generation: Option<usize>,
         total_generations: Option<usize>,
         return_best_n: bool,
-    ) -> PyResult<Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64)>> {
+    ) -> PyResult<(Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64)>, usize, usize)> {
+        // Returns: (candidates, evaluated, viable)
         let num_clusters = if !population.is_empty() {
             population[0].0.len()
         } else {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), 0, 0));
         };
         let total_input_bits = self.inner.total_input_bits();
 
@@ -3182,7 +3183,7 @@ impl TokenCacheWrapper {
         py.allow_threads(|| {
             let log_path_ref = log_path.as_deref();
 
-            let candidates = neighbor_search::search_offspring(
+            let result = neighbor_search::search_offspring(
                 &self.inner,
                 &population,
                 target_count,
@@ -3199,8 +3200,8 @@ impl TokenCacheWrapper {
                 return_best_n,
             );
 
-            // Convert to Python-friendly format
-            Ok(candidates
+            // Convert to Python-friendly format: (candidates, evaluated, viable)
+            let candidates: Vec<_> = result.candidates
                 .into_iter()
                 .map(|c| (
                     c.bits_per_cluster,
@@ -3209,7 +3210,8 @@ impl TokenCacheWrapper {
                     c.cross_entropy,
                     c.accuracy,
                 ))
-                .collect())
+                .collect();
+            Ok((candidates, result.evaluated, result.viable))
         })
     }
 }

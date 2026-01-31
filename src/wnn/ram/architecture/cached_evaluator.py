@@ -26,7 +26,7 @@ Usage:
 
 import os
 from dataclasses import dataclass
-from typing import Optional, Callable
+from typing import Optional, Callable, NamedTuple
 
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 from wnn.ram.architecture.genome_log import (
@@ -37,6 +37,19 @@ from wnn.ram.architecture.genome_log import (
 )
 from wnn.ram.strategies.connectivity.generic_strategies import OptimizationLogger
 from wnn.ram.core import RAMClusterLayer, GatingModel, create_gating
+
+
+class OffspringSearchResult(NamedTuple):
+    """Result of offspring search with counts for tracking.
+
+    Attributes:
+        genomes: List of ClusterGenome objects (viable + fallback if return_best_n)
+        evaluated: Total candidates evaluated
+        viable: Candidates that passed accuracy threshold (before fallback)
+    """
+    genomes: list[ClusterGenome]
+    evaluated: int
+    viable: int
 
 
 @dataclass
@@ -565,7 +578,7 @@ class CachedEvaluator:
         generation: Optional[int] = None,
         total_generations: Optional[int] = None,
         return_best_n: bool = True,
-    ) -> list[ClusterGenome]:
+    ) -> OffspringSearchResult:
         """
         Search for GA offspring above accuracy threshold, entirely in Rust.
 
@@ -592,7 +605,10 @@ class CachedEvaluator:
             return_best_n: If True, return best N by CE even if threshold not met
 
         Returns:
-            List of ClusterGenome objects (viable offspring, or best N if return_best_n=True)
+            OffspringSearchResult with:
+            - genomes: List of ClusterGenome objects (viable + fallback if return_best_n=True)
+            - evaluated: Total candidates evaluated
+            - viable: Candidates that passed accuracy threshold (before fallback)
         """
         import time
 
@@ -622,8 +638,8 @@ class CachedEvaluator:
         # Use instance log_path if not explicitly provided
         effective_log_path = log_path if log_path is not None else self._log_path
 
-        # Call Rust search_offspring
-        results = self._cache.search_offspring(
+        # Call Rust search_offspring - returns (candidates, evaluated, viable)
+        candidates, evaluated, viable = self._cache.search_offspring(
             population=rust_population,
             target_count=target_count,
             max_attempts=max_attempts,
@@ -648,7 +664,7 @@ class CachedEvaluator:
 
         # Convert results to ClusterGenome objects
         genomes = []
-        for bits, neurons, connections, ce, acc in results:
+        for bits, neurons, connections, ce, acc in candidates:
             g = ClusterGenome(
                 bits_per_cluster=list(bits),
                 neurons_per_cluster=list(neurons),
@@ -658,7 +674,7 @@ class CachedEvaluator:
             g._cached_fitness = (ce, acc)
             genomes.append(g)
 
-        return genomes
+        return OffspringSearchResult(genomes=genomes, evaluated=evaluated, viable=viable)
 
     # ─────────────────────────────────────────────────────────────────────
     # Gating Support

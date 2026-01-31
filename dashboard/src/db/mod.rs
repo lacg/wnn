@@ -774,19 +774,193 @@ pub mod queries {
     }
 
     pub async fn delete_flow(pool: &DbPool, id: i64) -> Result<bool> {
-        // First delete flow_experiments mappings
+        // Delete all associated data (experiments, phases, iterations, checkpoints)
+        delete_flow_data(pool, id).await?;
+
+        // Delete flow_experiments mappings
         sqlx::query("DELETE FROM flow_experiments WHERE flow_id = ?")
             .bind(id)
             .execute(pool)
             .await?;
 
-        // Then delete the flow
+        // Delete the flow itself
         let result = sqlx::query("DELETE FROM flows WHERE id = ?")
             .bind(id)
             .execute(pool)
             .await?;
 
         Ok(result.rows_affected() > 0)
+    }
+
+    /// Delete all data associated with a flow (experiments, phases, iterations, checkpoints)
+    /// This is reused by both delete_flow and update_flow_for_restart
+    async fn delete_flow_data(pool: &DbPool, flow_id: i64) -> Result<()> {
+        // Get the flow name (V2 experiments use name matching, not flow_id foreign key)
+        let flow_name: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM flows WHERE id = ?"
+        )
+        .bind(flow_id)
+        .fetch_optional(pool)
+        .await?;
+
+        // === Delete V2 data ===
+        // Get V2 experiment IDs by flow name (since flow_id may be NULL)
+        let v2_exp_ids: Vec<i64> = if let Some(ref name) = flow_name {
+            sqlx::query_scalar(
+                "SELECT id FROM experiments_v2 WHERE name = ?"
+            )
+            .bind(name)
+            .fetch_all(pool)
+            .await?
+        } else {
+            vec![]
+        };
+
+        for exp_id in &v2_exp_ids {
+            delete_experiment_data_v2(pool, *exp_id).await?;
+        }
+
+        // Delete V2 experiments by name
+        if let Some(ref name) = flow_name {
+            sqlx::query("DELETE FROM experiments_v2 WHERE name = ?")
+                .bind(name)
+                .execute(pool)
+                .await?;
+        }
+
+        // === Delete V1 data ===
+        let mut v1_exp_ids: Vec<i64> = sqlx::query_scalar(
+            "SELECT experiment_id FROM flow_experiments WHERE flow_id = ?"
+        )
+        .bind(flow_id)
+        .fetch_all(pool)
+        .await?;
+
+        // Also find orphaned experiments by log_path pattern
+        if let Some(ref name) = flow_name {
+            let safe_name = name.to_lowercase().replace(" ", "_").replace("/", "_");
+            let pattern = format!("checkpoints/{}/%", safe_name);
+            let orphaned_ids: Vec<i64> = sqlx::query_scalar(
+                "SELECT id FROM experiments WHERE log_path LIKE ?"
+            )
+            .bind(&pattern)
+            .fetch_all(pool)
+            .await?;
+
+            for oid in orphaned_ids {
+                if !v1_exp_ids.contains(&oid) {
+                    v1_exp_ids.push(oid);
+                }
+            }
+        }
+
+        // Clear seed_checkpoint_id from flow FIRST (to remove FK dependency)
+        sqlx::query("UPDATE flows SET seed_checkpoint_id = NULL WHERE id = ?")
+            .bind(flow_id)
+            .execute(pool)
+            .await?;
+
+        for exp_id in &v1_exp_ids {
+            delete_experiment_data_v1(pool, *exp_id).await?;
+        }
+
+        // Delete V1 experiments
+        for exp_id in &v1_exp_ids {
+            sqlx::query("DELETE FROM experiments WHERE id = ?")
+                .bind(exp_id)
+                .execute(pool)
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    /// Delete all data for a V2 experiment (phases, iterations, genome_evaluations, genomes, checkpoints)
+    async fn delete_experiment_data_v2(pool: &DbPool, exp_id: i64) -> Result<()> {
+        // Get phase IDs for this experiment
+        let phase_ids: Vec<i64> = sqlx::query_scalar(
+            "SELECT id FROM phases_v2 WHERE experiment_id = ?"
+        )
+        .bind(exp_id)
+        .fetch_all(pool)
+        .await?;
+
+        for phase_id in &phase_ids {
+            // Delete genome evaluations for iterations of this phase
+            sqlx::query(
+                "DELETE FROM genome_evaluations_v2 WHERE iteration_id IN (SELECT id FROM iterations_v2 WHERE phase_id = ?)"
+            )
+            .bind(phase_id)
+            .execute(pool)
+            .await?;
+
+            // Delete iterations for this phase
+            sqlx::query("DELETE FROM iterations_v2 WHERE phase_id = ?")
+                .bind(phase_id)
+                .execute(pool)
+                .await?;
+        }
+
+        // Delete phases
+        sqlx::query("DELETE FROM phases_v2 WHERE experiment_id = ?")
+            .bind(exp_id)
+            .execute(pool)
+            .await?;
+
+        // Delete genome_evaluations that reference genomes from this experiment
+        sqlx::query(
+            "DELETE FROM genome_evaluations_v2 WHERE genome_id IN (SELECT id FROM genomes_v2 WHERE experiment_id = ?)"
+        )
+        .bind(exp_id)
+        .execute(pool)
+        .await?;
+
+        // Delete genomes
+        sqlx::query("DELETE FROM genomes_v2 WHERE experiment_id = ?")
+            .bind(exp_id)
+            .execute(pool)
+            .await?;
+
+        // Delete checkpoints
+        sqlx::query("DELETE FROM checkpoints_v2 WHERE experiment_id = ?")
+            .bind(exp_id)
+            .execute(pool)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Delete all data for a V1 experiment (phases, iterations, checkpoints)
+    async fn delete_experiment_data_v1(pool: &DbPool, exp_id: i64) -> Result<()> {
+        // Delete checkpoints FIRST (before experiments due to FK)
+        sqlx::query("DELETE FROM checkpoints WHERE experiment_id = ?")
+            .bind(exp_id)
+            .execute(pool)
+            .await?;
+
+        // Get phase IDs
+        let phase_ids: Vec<i64> = sqlx::query_scalar(
+            "SELECT id FROM phases WHERE experiment_id = ?"
+        )
+        .bind(exp_id)
+        .fetch_all(pool)
+        .await?;
+
+        // Delete iterations for each phase
+        for phase_id in &phase_ids {
+            sqlx::query("DELETE FROM iterations WHERE phase_id = ?")
+                .bind(phase_id)
+                .execute(pool)
+                .await?;
+        }
+
+        // Delete phases
+        sqlx::query("DELETE FROM phases WHERE experiment_id = ?")
+            .bind(exp_id)
+            .execute(pool)
+            .await?;
+
+        Ok(())
     }
 
     pub async fn list_flow_experiments(pool: &DbPool, flow_id: i64) -> Result<Vec<Experiment>> {
@@ -866,166 +1040,13 @@ pub mod queries {
     ) -> Result<bool> {
         // If clearing seed (restart from beginning), also delete old experiment data
         if clear_seed.is_some() {
-            // Delete V2 data following the chain: experiments_v2 -> phases_v2 -> iterations_v2 -> genome_evaluations_v2
-
-            // First get the flow name (V2 experiments use name matching, not flow_id foreign key)
-            let flow_name: Option<String> = sqlx::query_scalar(
-                "SELECT name FROM flows WHERE id = ?"
-            )
-            .bind(id)
-            .fetch_optional(pool)
-            .await?;
-
-            // Get V2 experiment IDs by flow name (since flow_id may be NULL)
-            let v2_exp_ids: Vec<i64> = if let Some(ref name) = flow_name {
-                sqlx::query_scalar(
-                    "SELECT id FROM experiments_v2 WHERE name = ?"
-                )
-                .bind(name)
-                .fetch_all(pool)
-                .await?
-            } else {
-                vec![]
-            };
-
-            for exp_id in &v2_exp_ids {
-                // Get phase IDs for this experiment
-                let phase_ids: Vec<i64> = sqlx::query_scalar(
-                    "SELECT id FROM phases_v2 WHERE experiment_id = ?"
-                )
-                .bind(exp_id)
-                .fetch_all(pool)
-                .await?;
-
-                for phase_id in &phase_ids {
-                    // Delete genome evaluations for iterations of this phase
-                    sqlx::query(
-                        "DELETE FROM genome_evaluations_v2 WHERE iteration_id IN (SELECT id FROM iterations_v2 WHERE phase_id = ?)"
-                    )
-                    .bind(phase_id)
-                    .execute(pool)
-                    .await?;
-
-                    // Delete iterations for this phase
-                    sqlx::query("DELETE FROM iterations_v2 WHERE phase_id = ?")
-                        .bind(phase_id)
-                        .execute(pool)
-                        .await?;
-                }
-
-                // Delete phases for this experiment
-                sqlx::query("DELETE FROM phases_v2 WHERE experiment_id = ?")
-                    .bind(exp_id)
-                    .execute(pool)
-                    .await?;
-
-                // Delete genome_evaluations that reference genomes from this experiment
-                // (genome_evaluations_v2 has FK to both iterations_v2 AND genomes_v2)
-                sqlx::query(
-                    "DELETE FROM genome_evaluations_v2 WHERE genome_id IN (SELECT id FROM genomes_v2 WHERE experiment_id = ?)"
-                )
-                    .bind(exp_id)
-                    .execute(pool)
-                    .await?;
-
-                // Delete genomes for this experiment
-                sqlx::query("DELETE FROM genomes_v2 WHERE experiment_id = ?")
-                    .bind(exp_id)
-                    .execute(pool)
-                    .await?;
-
-                // Delete checkpoints for this experiment
-                sqlx::query("DELETE FROM checkpoints_v2 WHERE experiment_id = ?")
-                    .bind(exp_id)
-                    .execute(pool)
-                    .await?;
-            }
-
-            // Delete V2 experiments by name
-            if let Some(ref name) = flow_name {
-                sqlx::query("DELETE FROM experiments_v2 WHERE name = ?")
-                    .bind(name)
-                    .execute(pool)
-                    .await?;
-            }
-
-            // Also clean up V1 data (flow_experiments and experiments)
-            let mut v1_exp_ids: Vec<i64> = sqlx::query_scalar(
-                "SELECT experiment_id FROM flow_experiments WHERE flow_id = ?"
-            )
-            .bind(id)
-            .fetch_all(pool)
-            .await?;
-
-            // Also find orphaned experiments by log_path pattern (in case flow_experiments was already deleted)
-            if let Some(ref name) = flow_name {
-                let safe_name = name.to_lowercase().replace(" ", "_").replace("/", "_");
-                let pattern = format!("checkpoints/{}/%", safe_name);
-                let orphaned_ids: Vec<i64> = sqlx::query_scalar(
-                    "SELECT id FROM experiments WHERE log_path LIKE ?"
-                )
-                .bind(&pattern)
-                .fetch_all(pool)
-                .await?;
-
-                // Add orphaned IDs that aren't already in v1_exp_ids
-                for oid in orphaned_ids {
-                    if !v1_exp_ids.contains(&oid) {
-                        v1_exp_ids.push(oid);
-                    }
-                }
-            }
+            delete_flow_data(pool, id).await?;
 
             // Delete flow_experiments mappings
             sqlx::query("DELETE FROM flow_experiments WHERE flow_id = ?")
                 .bind(id)
                 .execute(pool)
                 .await?;
-
-            // Clear seed_checkpoint_id from flows FIRST (to remove FK dependency on checkpoints)
-            sqlx::query("UPDATE flows SET seed_checkpoint_id = NULL WHERE id = ?")
-                .bind(id)
-                .execute(pool)
-                .await?;
-
-            // Delete V1 phases and iterations before experiments (foreign key constraints)
-            for exp_id in &v1_exp_ids {
-                // Delete checkpoints for this experiment FIRST (before experiments)
-                sqlx::query("DELETE FROM checkpoints WHERE experiment_id = ?")
-                    .bind(exp_id)
-                    .execute(pool)
-                    .await?;
-
-                // Get phase IDs for this experiment
-                let phase_ids: Vec<i64> = sqlx::query_scalar(
-                    "SELECT id FROM phases WHERE experiment_id = ?"
-                )
-                .bind(exp_id)
-                .fetch_all(pool)
-                .await?;
-
-                // Delete iterations for each phase
-                for phase_id in &phase_ids {
-                    sqlx::query("DELETE FROM iterations WHERE phase_id = ?")
-                        .bind(phase_id)
-                        .execute(pool)
-                        .await?;
-                }
-
-                // Delete phases for this experiment
-                sqlx::query("DELETE FROM phases WHERE experiment_id = ?")
-                    .bind(exp_id)
-                    .execute(pool)
-                    .await?;
-            }
-
-            // Delete V1 experiments
-            for exp_id in &v1_exp_ids {
-                sqlx::query("DELETE FROM experiments WHERE id = ?")
-                    .bind(exp_id)
-                    .execute(pool)
-                    .await?;
-            }
         }
 
         if let Some(seed_id) = clear_seed {

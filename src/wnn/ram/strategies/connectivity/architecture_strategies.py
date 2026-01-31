@@ -1073,7 +1073,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			neurons_mutation_rate = cfg.mutation_rate if arch_cfg.optimize_neurons else 0.0
 
 			needed_offspring = cfg.population_size - elite_count
-			offspring = evaluator.search_offspring(
+			search_result = evaluator.search_offspring(
 				population=population,
 				target_count=needed_offspring,
 				max_attempts=needed_offspring * 5,  # 5x cap
@@ -1093,16 +1093,18 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 				total_generations=cfg.generations,
 				return_best_n=True,  # Soft threshold: return top N by CE if not enough pass
 			)
+			# search_result contains: genomes, evaluated (total tested), viable (passed threshold)
 
 			# Convert offspring to (genome, ce) tuples for filtering
 			offspring_with_ce = []
-			for g in offspring:
+			for g in search_result.genomes:
 				if hasattr(g, '_cached_fitness'):
 					ce, acc = g._cached_fitness
 					offspring_with_ce.append((g, ce))
 
 			# Apply percentile filter if configured (uses fitness calculator for ranking)
-			if cfg.fitness_percentile is not None and offspring_with_ce:
+			# Note: 0 means disabled, same as None
+			if cfg.fitness_percentile and cfg.fitness_percentile > 0 and offspring_with_ce:
 				if cfg.fitness_calculator_type == FitnessCalculatorType.HARMONIC_RANK:
 					# HARMONIC_RANK: Filter by harmonic rank fitness
 					pop_for_filter = [(g, ce, g._cached_fitness[1]) for g, ce in offspring_with_ce]
@@ -1177,7 +1179,8 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 					delta_baseline = (best_fitness - baseline_ce) if baseline_ce is not None else None
 					delta_previous = best_fitness - prev_best_fitness
 					patience_counter = early_stop._patience_counter if hasattr(early_stop, '_patience_counter') else 0
-					candidates_total = len(offspring)  # Before filtering
+					# Use actual counts from Rust: evaluated = total tested, viable = passed threshold
+					candidates_total = search_result.evaluated
 
 					iteration_id = self._tracker.record_iteration(
 						phase_id=self._tracker_phase_id,
@@ -1187,8 +1190,8 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 						avg_ce=avg_fitness,
 						avg_accuracy=avg_acc,
 						elite_count=elite_count,
-						offspring_count=len(offspring_with_ce),
-						offspring_viable=len(offspring_with_ce),
+						offspring_count=search_result.evaluated,  # Total candidates tested
+						offspring_viable=search_result.viable,    # Passed accuracy threshold
 						fitness_threshold=current_threshold,
 						elapsed_secs=gen_elapsed,
 						baseline_ce=baseline_ce,
@@ -1770,7 +1773,8 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 				)
 
 				# Apply percentile filter by harmonic rank fitness
-				if cfg.fitness_percentile is not None and neighbors:
+				# Note: 0 means disabled, same as None
+				if cfg.fitness_percentile and cfg.fitness_percentile > 0 and neighbors:
 					pop_for_filter = [(g, g._cached_fitness[0], g._cached_fitness[1]) for g in neighbors]
 					fitness_scores = fitness_calculator.fitness(pop_for_filter)
 					neighbor_with_fitness = [(g, score) for g, score in zip(neighbors, fitness_scores)]
@@ -1881,7 +1885,8 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 				)
 
 				# Apply CE percentile filter if configured
-				if cfg.fitness_percentile is not None:
+				# Note: 0 means disabled, same as None
+				if cfg.fitness_percentile and cfg.fitness_percentile > 0:
 					ce_filter = PercentileFilter(
 						percentile=cfg.fitness_percentile,
 						mode=FilterMode.LOWER_IS_BETTER,

@@ -162,8 +162,8 @@ def main():
 	parser.add_argument("--default-neurons", type=int, default=5, help="Default neurons for Phase 2")
 
 	# Fitness pressure
-	parser.add_argument("--fitness-percentile", type=float, default=None,
-						help="Fitness percentile filter (e.g., 0.75 = keep top 75%% by fitness). None=disabled")
+	parser.add_argument("--fitness-percentile", type=float, default=0.75,
+						help="Fitness percentile filter (0.75 = keep top 75%% by fitness). Use 0 to disable")
 
 	# Checkpointing
 	parser.add_argument("--checkpoint-dir", type=str, default=None,
@@ -299,7 +299,7 @@ def main():
 	log(f"  GA generations: {args.ga_gens}, population: {args.population}")
 	log(f"  TS iterations: {args.ts_iters}, neighbors: {args.neighbors}")
 	log(f"  Patience: {patience}")
-	if args.fitness_percentile is not None:
+	if args.fitness_percentile and args.fitness_percentile > 0:
 		log(f"  Fitness percentile filter: {args.fitness_percentile:.0%} (keep top {args.fitness_percentile:.0%} by fitness)")
 	else:
 		log(f"  Fitness percentile filter: disabled")
