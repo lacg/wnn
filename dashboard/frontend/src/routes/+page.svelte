@@ -429,7 +429,9 @@
               <tr>
                 <th>Iter</th>
                 <th>Best CE</th>
-                <th>Accuracy</th>
+                <th>Best Acc</th>
+                <th>Avg CE</th>
+                <th>Avg Acc</th>
                 <th>Δ Prev</th>
                 <th>Threshold</th>
                 <th>Patience</th>
@@ -449,6 +451,8 @@
                   <td>{iter.iteration_num}</td>
                   <td class:best={iter.best_ce === $bestMetrics.bestCE}>{formatCE(iter.best_ce)}</td>
                   <td>{formatAcc(iter.best_accuracy)}</td>
+                  <td class="avg-col">{iter.avg_ce ? formatCE(iter.avg_ce) : '—'}</td>
+                  <td class="avg-col">{formatAcc(iter.avg_accuracy)}</td>
                   <td class:delta-positive={iter.delta_previous && iter.delta_previous < 0} class:delta-negative={iter.delta_previous && iter.delta_previous > 0}>
                     {iter.delta_previous !== null && iter.delta_previous !== undefined ? (iter.delta_previous < 0 ? '↓' : iter.delta_previous > 0 ? '↑' : '') + Math.abs(iter.delta_previous).toFixed(4) : '—'}
                   </td>
@@ -473,7 +477,9 @@
             <tr>
               <th>Iter</th>
               <th>Best CE</th>
-              <th>Accuracy</th>
+              <th>Best Acc</th>
+              <th>Avg CE</th>
+              <th>Avg Acc</th>
               <th>Δ Prev</th>
               <th>Threshold</th>
               <th>Patience</th>
@@ -493,6 +499,8 @@
                 <td>{iter.iteration_num}</td>
                 <td class:best={iter.best_ce === $bestMetrics.bestCE}>{formatCE(iter.best_ce)}</td>
                 <td>{formatAcc(iter.best_accuracy)}</td>
+                <td class="avg-col">{iter.avg_ce ? formatCE(iter.avg_ce) : '—'}</td>
+                <td class="avg-col">{formatAcc(iter.avg_accuracy)}</td>
                 <td class:delta-positive={iter.delta_previous && iter.delta_previous < 0} class:delta-negative={iter.delta_previous && iter.delta_previous > 0}>
                   {iter.delta_previous !== null && iter.delta_previous !== undefined ? (iter.delta_previous < 0 ? '↓' : iter.delta_previous > 0 ? '↑' : '') + Math.abs(iter.delta_previous).toFixed(4) : '—'}
                 </td>
@@ -1177,5 +1185,11 @@
   .delta-negative {
     color: var(--accent-red);
     font-weight: 500;
+  }
+
+  /* Avg columns styling */
+  .avg-col {
+    color: var(--text-secondary);
+    font-size: 0.875em;
   }
 </style>
