@@ -144,7 +144,7 @@
     if (!pct && pct !== 0) return '—';
     // API returns decimal (0.00018), display as percentage
     const val = pct * 100;
-    return val.toFixed(2) + '%';
+    return val.toFixed(4) + '%';
   }
 
   function formatAcc(acc: number | null | undefined): string {
