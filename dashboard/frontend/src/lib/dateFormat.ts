@@ -12,6 +12,8 @@
  * - Time: 24h vs 12h
  */
 
+import { browser } from '$app/environment';
+
 export interface DateFormatPrefs {
   order: 'ymd' | 'dmy' | 'mdy';
   separator: string;
@@ -30,7 +32,7 @@ export function detectDateFormat(): DateFormatPrefs {
   if (cachedPrefs) return cachedPrefs;
 
   // Check for user override in localStorage
-  if (typeof localStorage !== 'undefined') {
+  if (browser) {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) {
       try {
@@ -236,7 +238,7 @@ export function getFormatDescription(): string {
  * Clears cache so new format takes effect immediately.
  */
 export function savePreferences(prefs: DateFormatPrefs): void {
-  if (typeof localStorage !== 'undefined') {
+  if (browser) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
   }
   cachedPrefs = prefs;
@@ -246,7 +248,7 @@ export function savePreferences(prefs: DateFormatPrefs): void {
  * Clear saved preferences and revert to auto-detection.
  */
 export function clearPreferences(): void {
-  if (typeof localStorage !== 'undefined') {
+  if (browser) {
     localStorage.removeItem(STORAGE_KEY);
   }
   cachedPrefs = null;
@@ -256,7 +258,7 @@ export function clearPreferences(): void {
  * Check if user has custom preferences saved.
  */
 export function hasCustomPreferences(): boolean {
-  if (typeof localStorage === 'undefined') return false;
+  if (!browser) return false;
   return localStorage.getItem(STORAGE_KEY) !== null;
 }
 
@@ -271,7 +273,7 @@ export function getAutoDetectedPrefs(): DateFormatPrefs {
 
   // Remove stored prefs temporarily
   let storedValue: string | null = null;
-  if (typeof localStorage !== 'undefined') {
+  if (browser) {
     storedValue = localStorage.getItem(STORAGE_KEY);
     localStorage.removeItem(STORAGE_KEY);
   }
@@ -280,7 +282,7 @@ export function getAutoDetectedPrefs(): DateFormatPrefs {
   const detected = detectDateFormat();
 
   // Restore
-  if (typeof localStorage !== 'undefined' && storedValue) {
+  if (browser && storedValue) {
     localStorage.setItem(STORAGE_KEY, storedValue);
   }
   cachedPrefs = saved;

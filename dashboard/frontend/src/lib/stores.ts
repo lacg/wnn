@@ -1,4 +1,5 @@
 import { writable, derived } from 'svelte/store';
+import { browser } from '$app/environment';
 import type {
   Experiment, Phase, Iteration, WsMessage, HealthCheck, Flow, Checkpoint, PhaseSummary,
   ExperimentV2, PhaseV2, IterationV2, WsMessageV2, DashboardSnapshotV2
@@ -24,7 +25,7 @@ export const wsConnected = writable(false);
 
 // V2 mode toggle (persisted in localStorage, defaults to V2)
 function createV2ModeStore() {
-  const storedMode = typeof localStorage !== 'undefined' ? localStorage.getItem('wnn-mode') : null;
+  const storedMode = browser ? localStorage.getItem('wnn-mode') : null;
   // Default to V2 mode if no preference is stored
   const defaultToV2 = storedMode === null || storedMode === 'v2';
   const { subscribe, set, update } = writable(defaultToV2);
@@ -32,7 +33,7 @@ function createV2ModeStore() {
   return {
     subscribe,
     set: (value: boolean) => {
-      if (typeof localStorage !== 'undefined') {
+      if (browser) {
         localStorage.setItem('wnn-mode', value ? 'v2' : 'v1');
       }
       set(value);
@@ -40,7 +41,7 @@ function createV2ModeStore() {
     toggle: () => {
       update(v => {
         const newValue = !v;
-        if (typeof localStorage !== 'undefined') {
+        if (browser) {
           localStorage.setItem('wnn-mode', newValue ? 'v2' : 'v1');
         }
         return newValue;
