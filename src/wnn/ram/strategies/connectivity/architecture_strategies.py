@@ -6,7 +6,6 @@ GA/TS algorithms from generic_strategies.py.
 
 Features:
 - Rust/Metal batch evaluation support for parallel genome evaluation
-- ProgressTracker integration for consistent logging
 - Population seeding between phases (GA → TS → GA → ...)
 - Checkpoint/resume support for long optimization runs
 """
@@ -19,7 +18,6 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Callable, Optional, TYPE_CHECKING
 
-from wnn.progress import ProgressTracker
 from wnn.ram.strategies.connectivity.generic_strategies import (
 	GenericGAStrategy,
 	GenericTSStrategy,
@@ -358,7 +356,6 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 	Features:
 	- Rust/Metal batch evaluation (default when available)
 	- Rust-based offspring search with threshold (when cached_evaluator provided)
-	- ProgressTracker for consistent logging with accuracy
 	- Population seeding from previous phases
 	- Checkpoint/resume support for long runs
 	"""
@@ -384,7 +381,6 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			self._cached_evaluator = batch_evaluator
 		else:
 			self._cached_evaluator = None
-		self._progress_tracker: Optional[ProgressTracker] = None
 		self._checkpoint_config = checkpoint_config
 		self._phase_name = phase_name
 
@@ -706,7 +702,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		batch_evaluate_fn: Optional[Callable[[list['ClusterGenome']], list[tuple[float, float]]]] = None,
 	) -> OptimizerResult['ClusterGenome']:
 		"""
-		Run GA with Rust batch evaluation and ProgressTracker logging.
+		Run GA with Rust batch evaluation.
 
 		If cached_evaluator was provided at init, uses Rust search_offspring for
 		offspring generation (eliminates Python↔Rust round trips).
@@ -725,14 +721,6 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			batch_evaluate_fn = lambda genomes, min_accuracy=None: self._batch_evaluator.evaluate_batch(
 				genomes, logger=self._log, min_accuracy=min_accuracy,
 			)
-
-		# Create progress tracker (note: _progress_tracker, not _tracker, to avoid shadowing base class's V2 tracker)
-		self._progress_tracker = ProgressTracker(
-			logger=self._log,
-			minimize=True,
-			prefix=f"[{self.name}]",
-			total_generations=self._config.generations,
-		)
 
 		return super().optimize(
 			evaluate_fn=evaluate_fn,
@@ -1225,7 +1213,6 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 	Features:
 	- Rust/Metal batch evaluation (default when available)
 	- Rust-based neighbor search with threshold (when cached_evaluator provided)
-	- ProgressTracker for consistent logging with accuracy
 	- Population seeding from previous phases
 	"""
 
@@ -1248,7 +1235,6 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 			self._cached_evaluator = batch_evaluator
 		else:
 			self._cached_evaluator = None
-		self._progress_tracker: Optional[ProgressTracker] = None
 
 	@property
 	def name(self) -> str:
@@ -1442,7 +1428,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		batch_evaluate_fn: Optional[Callable[[list['ClusterGenome']], list[tuple[float, float]]]] = None,
 	) -> OptimizerResult['ClusterGenome']:
 		"""
-		Run TS with Rust batch evaluation and ProgressTracker logging.
+		Run TS with Rust batch evaluation.
 
 		If cached_evaluator was provided at init, uses Rust search_neighbors for
 		neighbor generation (eliminates Python↔Rust round trips).
@@ -1463,14 +1449,6 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 			batch_evaluate_fn = lambda genomes, min_accuracy=None: self._batch_evaluator.evaluate_batch(
 				genomes, logger=self._log, min_accuracy=min_accuracy,
 			)
-
-		# Create progress tracker (note: _progress_tracker, not _tracker, to avoid shadowing base class's V2 tracker)
-		self._progress_tracker = ProgressTracker(
-			logger=self._log,
-			minimize=True,
-			prefix=f"[{self.name}]",
-			total_generations=self._config.iterations,
-		)
 
 		return super().optimize(
 			initial_genome=initial_genome,
