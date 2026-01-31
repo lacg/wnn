@@ -73,12 +73,17 @@
 
   function formatPct(pct: number): string {
     if (!pct && pct !== 0) return '—';
-    return pct.toFixed(2) + '%';
+    // V2 API returns decimal (0.00018), V1 log parser returns percentage (0.018)
+    const val = $useV2Mode ? pct * 100 : pct;
+    return val.toFixed(2) + '%';
   }
 
   function formatAcc(acc: number | null | undefined): string {
     if (acc === null || acc === undefined) return '—';
-    return acc.toFixed(2) + '%';  // Already a percentage from log parser
+    // V2 API returns decimal (0.00018), V1 log parser returns percentage (0.018)
+    // V2 mode: multiply by 100 to get percentage
+    const pct = $useV2Mode ? acc * 100 : acc;
+    return pct.toFixed(2) + '%';
   }
 
   function phaseShortName(name: string): string {
