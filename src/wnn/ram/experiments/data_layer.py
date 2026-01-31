@@ -245,7 +245,8 @@ class DataLayer:
                 best_ce REAL NOT NULL,
                 best_accuracy REAL,
                 avg_ce REAL,
-                elite_count INTEGER,
+                avg_accuracy REAL,  -- Population/top-k average accuracy
+                elite_count INTEGER,  -- GA: elites kept, TS: top-k cache size
                 offspring_count INTEGER,
                 offspring_viable INTEGER,
                 fitness_threshold REAL,
@@ -559,6 +560,7 @@ class DataLayer:
         best_ce: float,
         best_accuracy: Optional[float] = None,
         avg_ce: Optional[float] = None,
+        avg_accuracy: Optional[float] = None,
         elite_count: Optional[int] = None,
         offspring_count: Optional[int] = None,
         offspring_viable: Optional[int] = None,
@@ -569,12 +571,12 @@ class DataLayer:
         with self._transaction() as conn:
             cursor = conn.execute(
                 """INSERT INTO iterations_v2
-                   (phase_id, iteration_num, best_ce, best_accuracy, avg_ce,
+                   (phase_id, iteration_num, best_ce, best_accuracy, avg_ce, avg_accuracy,
                     elite_count, offspring_count, offspring_viable, fitness_threshold,
                     elapsed_secs, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    phase_id, iteration_num, best_ce, best_accuracy, avg_ce,
+                    phase_id, iteration_num, best_ce, best_accuracy, avg_ce, avg_accuracy,
                     elite_count, offspring_count, offspring_viable, fitness_threshold,
                     elapsed_secs, _now_iso(),
                 ),

@@ -196,6 +196,7 @@ class ExperimentTracker(ABC):
         best_ce: float,
         best_accuracy: Optional[float] = None,
         avg_ce: Optional[float] = None,
+        avg_accuracy: Optional[float] = None,
         elite_count: Optional[int] = None,
         offspring_count: Optional[int] = None,
         offspring_viable: Optional[int] = None,
@@ -410,6 +411,7 @@ class SqliteTracker(ExperimentTracker):
         best_ce: float,
         best_accuracy: Optional[float] = None,
         avg_ce: Optional[float] = None,
+        avg_accuracy: Optional[float] = None,
         elite_count: Optional[int] = None,
         offspring_count: Optional[int] = None,
         offspring_viable: Optional[int] = None,
@@ -417,7 +419,7 @@ class SqliteTracker(ExperimentTracker):
         elapsed_secs: Optional[float] = None,
     ) -> int:
         return self._db.create_iteration(
-            phase_id, iteration_num, best_ce, best_accuracy, avg_ce,
+            phase_id, iteration_num, best_ce, best_accuracy, avg_ce, avg_accuracy,
             elite_count, offspring_count, offspring_viable, fitness_threshold, elapsed_secs
         )
 

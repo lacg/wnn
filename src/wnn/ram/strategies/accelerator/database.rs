@@ -44,6 +44,7 @@ impl Database {
         best_ce: f64,
         best_accuracy: Option<f64>,
         avg_ce: Option<f64>,
+        avg_accuracy: Option<f64>,
         elite_count: Option<i32>,
         offspring_count: Option<i32>,
         offspring_viable: Option<i32>,
@@ -55,16 +56,17 @@ impl Database {
 
         conn.execute(
             "INSERT INTO iterations_v2
-             (phase_id, iteration_num, best_ce, best_accuracy, avg_ce,
+             (phase_id, iteration_num, best_ce, best_accuracy, avg_ce, avg_accuracy,
               elite_count, offspring_count, offspring_viable, fitness_threshold,
               elapsed_secs, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 phase_id,
                 iteration_num,
                 best_ce,
                 best_accuracy,
                 avg_ce,
+                avg_accuracy,
                 elite_count,
                 offspring_count,
                 offspring_viable,

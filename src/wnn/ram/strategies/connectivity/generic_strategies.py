@@ -1376,12 +1376,16 @@ class GenericGAStrategy(ABC, Generic[T]):
 			if self._tracker and self._tracker_phase_id:
 				try:
 					best_acc = accuracy_values[gen_best_idx] if accuracy_values else None
+					# Compute average accuracy of the population
+					valid_accs = [a for a in accuracy_values if a is not None]
+					avg_acc = sum(valid_accs) / len(valid_accs) if valid_accs else None
 					self._tracker.record_iteration(
 						phase_id=self._tracker_phase_id,
 						iteration_num=generation + 1,
 						best_ce=best_fitness,
 						best_accuracy=best_acc,
 						avg_ce=gen_avg,
+						avg_accuracy=avg_acc,
 						elite_count=total_elites,
 						offspring_count=len(offspring),
 						offspring_viable=len(offspring),  # All offspring are viable at this point
@@ -1953,13 +1957,28 @@ class GenericTSStrategy(ABC, Generic[T]):
 			# Record iteration to tracker (if set)
 			if self._tracker and self._tracker_phase_id:
 				try:
+					# Compute top-k stats from all_neighbors (like GA elites)
+					# Sort by CE, take top cache_size
+					sorted_by_ce = sorted(all_neighbors, key=lambda x: x[1])
+					top_k = sorted_by_ce[:cache_size]
+					top_k_count = len(top_k)
+					# Average CE and accuracy of top-k
+					if top_k:
+						top_k_avg_ce = sum(f for _, f, _ in top_k) / len(top_k)
+						valid_accs = [a for _, _, a in top_k if a is not None]
+						top_k_avg_acc = sum(valid_accs) / len(valid_accs) if valid_accs else None
+					else:
+						top_k_avg_ce = None
+						top_k_avg_acc = None
+
 					self._tracker.record_iteration(
 						phase_id=self._tracker_phase_id,
 						iteration_num=iteration + 1,
 						best_ce=best_fitness,
 						best_accuracy=best_accuracy,  # Accuracy of best-CE genome
-						avg_ce=None,  # TS doesn't track population average
-						elite_count=None,
+						avg_ce=top_k_avg_ce,  # Average CE of top-k neighbors
+						avg_accuracy=top_k_avg_acc,  # Average accuracy of top-k neighbors
+						elite_count=top_k_count,  # Size of top-k cache
 						offspring_count=len(viable_neighbors),
 						offspring_viable=len(viable_neighbors),
 						fitness_threshold=current_threshold,
