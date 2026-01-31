@@ -22,6 +22,7 @@ from typing import Optional
 from wnn.ram.experiments.dashboard_client import DashboardClient, DashboardClientConfig
 from wnn.ram.experiments.flow import Flow, FlowConfig
 from wnn.ram.experiments.experiment import ExperimentConfig
+from wnn.ram.experiments.tracker import create_tracker, ExperimentTracker
 
 
 class FlowWorker:
@@ -35,6 +36,7 @@ class FlowWorker:
         poll_interval: int = 10,
         checkpoint_base_dir: Path = Path("checkpoints"),
         context_size: int = 4,
+        db_path: Optional[str] = None,
     ):
         self.dashboard_url = dashboard_url
         self.poll_interval = poll_interval
@@ -57,6 +59,12 @@ class FlowWorker:
         # Setup client
         config = DashboardClientConfig(base_url=dashboard_url)
         self.client = DashboardClient(config, logger=self._log)
+
+        # V2 Tracker for direct database writes (same db as dashboard)
+        # Default to dashboard/dashboard.db relative to working directory
+        if db_path is None:
+            db_path = str(Path("dashboard/dashboard.db").absolute())
+        self.tracker: Optional[ExperimentTracker] = create_tracker(db_path=db_path, logger=self._log)
 
         # Setup signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._handle_signal)
@@ -267,6 +275,7 @@ class FlowWorker:
                 checkpoint_dir=checkpoint_dir,
                 dashboard_client=self.client,
                 flow_id=flow_id,
+                tracker=self.tracker,
             )
 
             result = flow.run()

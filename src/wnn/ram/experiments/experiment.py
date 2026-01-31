@@ -160,6 +160,8 @@ class Experiment:
 		checkpoint_dir: Optional[Path] = None,
 		dashboard_client: Optional[Any] = None,
 		experiment_id: Optional[int] = None,
+		tracker: Optional[Any] = None,  # ExperimentTracker for V2 tracking
+		flow_id: Optional[int] = None,
 	):
 		"""
 		Initialize experiment.
@@ -171,6 +173,8 @@ class Experiment:
 			checkpoint_dir: Directory for saving checkpoints
 			dashboard_client: Optional DashboardClient for API integration
 			experiment_id: Optional experiment ID for dashboard integration
+			tracker: Optional V2 tracker for direct database writes
+			flow_id: Optional flow ID for V2 tracking
 		"""
 		self.config = config
 		self.evaluator = evaluator
@@ -178,6 +182,8 @@ class Experiment:
 		self.checkpoint_dir = checkpoint_dir
 		self.dashboard_client = dashboard_client
 		self.experiment_id = experiment_id
+		self.tracker = tracker
+		self.flow_id = flow_id
 
 		# Derived properties
 		self.vocab_size = evaluator.vocab_size
@@ -189,6 +195,7 @@ class Experiment:
 		initial_fitness: Optional[float] = None,
 		initial_population: Optional[list[ClusterGenome]] = None,
 		initial_threshold: Optional[float] = None,
+		tracker_experiment_id: Optional[int] = None,
 	) -> ExperimentResult:
 		"""
 		Run the experiment.
@@ -198,6 +205,7 @@ class Experiment:
 			initial_fitness: Fitness of initial genome (required for TS)
 			initial_population: Population to seed from
 			initial_threshold: Starting accuracy threshold
+			tracker_experiment_id: V2 experiment ID for tracker (if using V2 tracking)
 
 		Returns:
 			ExperimentResult with optimization results
@@ -268,6 +276,32 @@ class Experiment:
 		# Create strategy
 		strategy = OptimizerStrategyFactory.create(**strategy_kwargs)
 
+		# V2 tracking: create phase and set tracker on strategy
+		tracker_phase_id: Optional[int] = None
+		if self.tracker and tracker_experiment_id:
+			try:
+				# Determine phase type string
+				opt_target = "bits" if cfg.optimize_bits else "neurons" if cfg.optimize_neurons else "connections"
+				phase_type = f"{'ga' if is_ga else 'ts'}_{opt_target}"
+				max_iters = cfg.generations if is_ga else cfg.iterations
+
+				# Create V2 phase
+				tracker_phase_id = self.tracker.start_phase(
+					experiment_id=tracker_experiment_id,
+					name=cfg.name,
+					phase_type=phase_type,
+					sequence_order=0,  # Experiment is a single phase
+					max_iterations=max_iters,
+					population_size=cfg.population_size,
+				)
+				self.log(f"  V2 tracking: phase_id={tracker_phase_id}")
+
+				# Set tracker on strategy for iteration/genome recording
+				if hasattr(strategy, 'set_tracker'):
+					strategy.set_tracker(self.tracker, tracker_phase_id, tracker_experiment_id)
+			except Exception as e:
+				self.log(f"  Warning: Failed to set up V2 tracking: {e}")
+
 		# Run optimization
 		if is_ga:
 			seed_pop = initial_population or ([initial_genome] if initial_genome else None)
@@ -282,6 +316,20 @@ class Experiment:
 				initial_fitness=initial_fitness,
 				initial_neighbors=initial_population,
 			)
+
+		# V2 tracking: update phase status to completed
+		if self.tracker and tracker_phase_id:
+			try:
+				from wnn.ram.experiments.tracker import TrackerStatus
+				self.tracker.update_phase_status(tracker_phase_id, TrackerStatus.COMPLETED)
+				self.tracker.update_phase_progress(
+					tracker_phase_id,
+					current_iteration=result.iterations_run,
+					best_ce=result.final_fitness,
+					best_accuracy=result.final_accuracy,
+				)
+			except Exception as e:
+				self.log(f"  Warning: Failed to update V2 phase status: {e}")
 
 		elapsed = time.time() - start_time
 

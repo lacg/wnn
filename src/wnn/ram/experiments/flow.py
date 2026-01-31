@@ -227,6 +227,7 @@ class Flow:
 		checkpoint_dir: Optional[Path] = None,
 		dashboard_client: Optional[DashboardClient] = None,
 		flow_id: Optional[int] = None,
+		tracker: Optional[Any] = None,  # ExperimentTracker for V2 tracking
 	):
 		"""
 		Initialize flow.
@@ -238,15 +239,18 @@ class Flow:
 			checkpoint_dir: Directory for checkpoints
 			dashboard_client: Optional dashboard client for API integration
 			flow_id: Existing flow ID (skip creating new flow if provided)
+			tracker: Optional V2 tracker for direct database writes
 		"""
 		self.config = config
 		self.evaluator = evaluator
 		self.log = logger
 		self.checkpoint_dir = checkpoint_dir
 		self.dashboard_client = dashboard_client
+		self.tracker = tracker
 
 		self._flow_id: Optional[int] = flow_id
-		self._experiment_ids: dict[int, int] = {}  # idx -> experiment_id
+		self._experiment_ids: dict[int, int] = {}  # idx -> experiment_id (V1/dashboard)
+		self._tracker_experiment_id: Optional[int] = None  # V2 experiment ID
 		self._results: list[ExperimentResult] = []
 
 	def run(
@@ -308,6 +312,31 @@ class Flow:
 				self.log(f"Warning: Failed to register flow with dashboard: {e}")
 		elif self._flow_id is not None:
 			self.log(f"Using existing flow {self._flow_id}")
+
+		# V2 tracking: create experiment for genome-level tracking
+		if self.tracker:
+			try:
+				# Convert tier_config to string format
+				tier_config_str = None
+				if cfg.tier_config is not None:
+					tier_parts = []
+					for tier in cfg.tier_config:
+						if tier[0] is None:
+							tier_parts.append(f"rest,{tier[1]},{tier[2]}")
+						else:
+							tier_parts.append(f"{tier[0]},{tier[1]},{tier[2]}")
+					tier_config_str = ";".join(tier_parts)
+
+				self._tracker_experiment_id = self.tracker.start_experiment(
+					name=cfg.name,
+					flow_id=self._flow_id,
+					tier_config=tier_config_str,
+					context_size=cfg.context_size,
+					population_size=cfg.experiments[0].population_size if cfg.experiments else 50,
+				)
+				self.log(f"V2 tracking: experiment_id={self._tracker_experiment_id}")
+			except Exception as e:
+				self.log(f"Warning: Failed to create V2 experiment: {e}")
 
 		# Load seed from checkpoint if specified
 		if cfg.seed_checkpoint_path and not seed_genome:
@@ -373,6 +402,8 @@ class Flow:
 					checkpoint_dir=exp_checkpoint_dir,
 					dashboard_client=self.dashboard_client,
 					experiment_id=experiment_id,
+					tracker=self.tracker,
+					flow_id=self._flow_id,
 				)
 
 				result = experiment.run(
@@ -380,6 +411,7 @@ class Flow:
 					initial_fitness=current_fitness if exp_config.experiment_type == "ts" else None,
 					initial_population=current_population,
 					initial_threshold=current_threshold,
+					tracker_experiment_id=self._tracker_experiment_id,
 				)
 
 				self._results.append(result)
@@ -397,11 +429,27 @@ class Flow:
 				except Exception as e:
 					self.log(f"Warning: Failed to mark flow completed: {e}")
 
+			# V2 tracking: mark experiment as completed
+			if self.tracker and self._tracker_experiment_id:
+				try:
+					from wnn.ram.experiments.tracker import TrackerStatus
+					self.tracker.update_experiment_status(self._tracker_experiment_id, TrackerStatus.COMPLETED)
+				except Exception as e:
+					self.log(f"Warning: Failed to update V2 experiment status: {e}")
+
 		except Exception as e:
 			# Flow failed
 			if self.dashboard_client and self._flow_id:
 				try:
 					self.dashboard_client.flow_failed(self._flow_id, str(e))
+				except Exception:
+					pass
+
+			# V2 tracking: mark experiment as failed
+			if self.tracker and self._tracker_experiment_id:
+				try:
+					from wnn.ram.experiments.tracker import TrackerStatus
+					self.tracker.update_experiment_status(self._tracker_experiment_id, TrackerStatus.FAILED)
 				except Exception:
 					pass
 			raise
