@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import {
     // V1 stores
     phases,
@@ -24,6 +25,30 @@
     // Mode toggle
     useV2Mode
   } from '$lib/stores';
+  import type { Flow } from '$lib/types';
+
+  // Current running flow (fetched from API)
+  let currentFlow: Flow | null = null;
+
+  onMount(() => {
+    // Fetch the current running flow
+    fetchRunningFlow();
+    // Refresh every 10 seconds
+    const interval = setInterval(fetchRunningFlow, 10000);
+    return () => clearInterval(interval);
+  });
+
+  async function fetchRunningFlow() {
+    try {
+      const res = await fetch('/api/flows?status=running&limit=1');
+      if (res.ok) {
+        const flows = await res.json();
+        currentFlow = flows.length > 0 ? flows[0] : null;
+      }
+    } catch (e) {
+      console.error('Failed to fetch running flow:', e);
+    }
+  }
 
   // Unified accessors that switch based on mode
   $: displayPhases = $useV2Mode ? $phasesV2 : $phases;
@@ -72,6 +97,21 @@
 </script>
 
 <div class="container">
+  <!-- Flow/Experiment Header -->
+  {#if currentFlow || ($useV2Mode && $currentExperimentV2)}
+    <div class="experiment-header">
+      {#if currentFlow}
+        <span class="flow-name">{currentFlow.name}</span>
+        <span class="separator">›</span>
+      {/if}
+      {#if $useV2Mode && $currentExperimentV2}
+        <span class="experiment-name">{$currentExperimentV2.name}</span>
+      {:else if displayCurrentPhase}
+        <span class="experiment-name">{displayCurrentPhase.name}</span>
+      {/if}
+    </div>
+  {/if}
+
   <!-- Summary Cards -->
   <div class="grid grid-4">
     <div class="card metric">
@@ -423,6 +463,33 @@
 </div>
 
 <style>
+  .experiment-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+    background: var(--bg-card);
+    border-radius: 0.5rem;
+    border-left: 4px solid var(--accent-blue);
+  }
+
+  .flow-name {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .separator {
+    color: var(--text-tertiary);
+    font-size: 1.2rem;
+  }
+
+  .experiment-name {
+    font-size: 1rem;
+    color: var(--text-secondary);
+  }
+
   .phase-timeline {
     display: flex;
     gap: 0.5rem;
