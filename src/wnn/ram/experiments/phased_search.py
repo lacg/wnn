@@ -1563,17 +1563,32 @@ class PhasedSearchRunner:
 				initial_threshold=init_threshold,
 			)
 
-			# Notify dashboard that phase completed
+			# Notify dashboard of phase status (only if not stopped by user)
 			if self.dashboard_client and dashboard_phase_id:
 				try:
-					self.dashboard_client.phase_completed(dashboard_phase_id)
+					was_shutdown = self.shutdown_check and self.shutdown_check()
+					if not was_shutdown:
+						self.dashboard_client.phase_completed(dashboard_phase_id)
+					# If shutdown, don't mark as completed - dashboard will show it as interrupted
 				except Exception as e:
-					self.log(f"Warning: Failed to notify dashboard of phase completion: {e}")
+					self.log(f"Warning: Failed to notify dashboard of phase status: {e}")
 
-			# Notify tracker that phase completed (v2)
+			# Notify tracker of phase status (v2)
+			# Use COMPLETED only if phase ran all iterations, otherwise use appropriate status
 			if self.tracker and tracker_phase_id:
 				try:
-					self.tracker.update_phase_status(tracker_phase_id, TrackerStatus.COMPLETED)
+					# Determine correct status based on how the phase ended
+					was_shutdown = self.shutdown_check and self.shutdown_check()
+					if was_shutdown:
+						phase_status = TrackerStatus.CANCELLED
+						self.log(f"Phase was stopped by user - marking as CANCELLED")
+					elif phase_result.early_stopped:
+						# Early stopping is a valid form of completion (convergence/overfitting)
+						phase_status = TrackerStatus.COMPLETED
+					else:
+						phase_status = TrackerStatus.COMPLETED
+
+					self.tracker.update_phase_status(tracker_phase_id, phase_status)
 					self.tracker.update_phase_progress(
 						tracker_phase_id,
 						current_iteration=phase_result.iterations_run,
@@ -1659,12 +1674,15 @@ class PhasedSearchRunner:
 				initial_threshold=init_threshold,
 			)
 
-			# Notify dashboard that phase completed
+			# Notify dashboard of phase status (only if not stopped by user)
 			if self.dashboard_client and dashboard_phase_id:
 				try:
-					self.dashboard_client.phase_completed(dashboard_phase_id)
+					was_shutdown = self.shutdown_check and self.shutdown_check()
+					if not was_shutdown:
+						self.dashboard_client.phase_completed(dashboard_phase_id)
+					# If shutdown, don't mark as completed - dashboard will show it as interrupted
 				except Exception as e:
-					self.log(f"Warning: Failed to notify dashboard of phase completion: {e}")
+					self.log(f"Warning: Failed to notify dashboard of phase status: {e}")
 
 			results[f"extra_{add_idx + 1}"] = {
 				"fitness": phase_result.final_fitness,
