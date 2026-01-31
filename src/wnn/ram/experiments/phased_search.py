@@ -34,6 +34,15 @@ except ImportError:
 	HAS_DASHBOARD = False
 	DashboardClient = None
 
+# Tracker abstraction for experiment recording
+try:
+	from wnn.ram.experiments.tracker import ExperimentTracker, TrackerStatus, FitnessCalculatorType, create_tracker
+	HAS_TRACKER = True
+except ImportError:
+	HAS_TRACKER = False
+	ExperimentTracker = None
+	create_tracker = None
+
 
 @dataclass
 class PhasedSearchConfig:
@@ -408,6 +417,7 @@ class PhasedSearchRunner:
 		logger: Callable[[str], None],
 		checkpoint_dir: Optional[str] = None,
 		dashboard_client: Optional["DashboardClient"] = None,
+		tracker: Optional["ExperimentTracker"] = None,
 	):
 		"""
 		Initialize the runner.
@@ -416,12 +426,14 @@ class PhasedSearchRunner:
 			config: Search configuration
 			logger: Logging function
 			checkpoint_dir: Directory to save/load checkpoints (None = no checkpoints)
-			dashboard_client: Optional dashboard client for real-time updates
+			dashboard_client: Optional dashboard client for real-time updates (legacy)
+			tracker: Optional experiment tracker for direct SQLite recording (v2)
 		"""
 		self.config = config
 		self.log = logger
 		self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
 		self.dashboard_client = dashboard_client
+		self.tracker = tracker
 		self.evaluator: Optional[CachedEvaluator] = None
 		self.vocab_size: int = 0
 		self.total_input_bits: int = 0
@@ -430,6 +442,7 @@ class PhasedSearchRunner:
 		self._rotation_seed: Optional[int] = None
 		self._flow_id: Optional[int] = None
 		self._experiment_id: Optional[int] = None
+		self._tracker_phase_id: Optional[int] = None  # Current phase ID for tracker
 		# Stored for gating training (only if enable_gating=True)
 		self._train_tokens: Optional[list[int]] = None
 		self._cluster_order: Optional[list[int]] = None
@@ -1338,6 +1351,61 @@ class PhasedSearchRunner:
 				self._experiment_id = None
 
 		# =====================================================================
+		# Tracker Integration (v2): Create flow and experiment in SQLite
+		# =====================================================================
+		_tracker_flow_id: Optional[int] = None
+		_tracker_experiment_id: Optional[int] = None
+		if self.tracker:
+			try:
+				# Build flow name
+				flow_name = f"Phased Search ({self.config.phase_order})"
+				if self.checkpoint_dir:
+					flow_name = f"{self.checkpoint_dir.name}"
+
+				# Convert tier_config to string format
+				tier_config_str = None
+				if self.config.tier_config:
+					tier_parts = []
+					for tier in self.config.tier_config:
+						if tier[0] is None:
+							tier_parts.append(f"rest,{tier[1]},{tier[2]}")
+						else:
+							tier_parts.append(f"{tier[0]},{tier[1]},{tier[2]}")
+					tier_config_str = ";".join(tier_parts)
+
+				# Create flow
+				flow_config = {
+					"phase_order": self.config.phase_order,
+					"patience": self.config.patience,
+					"ga_generations": self.config.ga_generations,
+					"ts_iterations": self.config.ts_iterations,
+					"tier_config": tier_config_str,
+					"population_size": self.config.population_size,
+				}
+				_tracker_flow_id = self.tracker.create_flow(
+					name=flow_name,
+					config=flow_config,
+					description=f"Phase order: {self.config.phase_order}, Patience: {self.config.patience}",
+				)
+				self.tracker.update_flow_status(_tracker_flow_id, TrackerStatus.RUNNING)
+
+				# Create experiment
+				_tracker_experiment_id = self.tracker.start_experiment(
+					name=flow_name,
+					flow_id=_tracker_flow_id,
+					fitness_calculator=FitnessCalculatorType.HARMONIC_RANK,
+					tier_config=tier_config_str,
+					context_size=self.config.context_size,
+					population_size=self.config.population_size,
+				)
+
+				self.log(f"Tracker: Created flow {_tracker_flow_id}, experiment {_tracker_experiment_id}")
+			except Exception as e:
+				self.log(f"Warning: Failed to register with tracker: {e}")
+				_tracker_flow_id = None
+				_tracker_experiment_id = None
+
+		# =====================================================================
 		# Baseline: Evaluate initial genome on full validation
 		# =====================================================================
 		# Cumulative list of PhaseMetrics for comparison table
@@ -1459,6 +1527,25 @@ class PhasedSearchRunner:
 				except Exception as e:
 					self.log(f"Warning: Failed to notify dashboard of phase start: {e}")
 
+			# Notify tracker that phase is starting (v2)
+			tracker_phase_id = None
+			if self.tracker and _tracker_experiment_id:
+				try:
+					opt_target = "neurons" if opt_neurons else ("bits" if opt_bits else "connections")
+					phase_type_str = f"{'ga' if strategy_type == OptimizerStrategyType.ARCHITECTURE_GA else 'ts'}_{opt_target}"
+					max_iters = self.config.ga_generations if strategy_type == OptimizerStrategyType.ARCHITECTURE_GA else self.config.ts_iterations
+					tracker_phase_id = self.tracker.start_phase(
+						experiment_id=_tracker_experiment_id,
+						name=phase_name,
+						phase_type=phase_type_str,
+						sequence_order=idx,
+						max_iterations=max_iters,
+						population_size=self.config.population_size,
+					)
+					self._tracker_phase_id = tracker_phase_id
+				except Exception as e:
+					self.log(f"Warning: Failed to notify tracker of phase start: {e}")
+
 			phase_result = self.run_phase(
 				phase_name=phase_name,
 				strategy_type=strategy_type,
@@ -1477,6 +1564,20 @@ class PhasedSearchRunner:
 					self.dashboard_client.phase_completed(dashboard_phase_id)
 				except Exception as e:
 					self.log(f"Warning: Failed to notify dashboard of phase completion: {e}")
+
+			# Notify tracker that phase completed (v2)
+			if self.tracker and tracker_phase_id:
+				try:
+					self.tracker.update_phase_status(tracker_phase_id, TrackerStatus.COMPLETED)
+					self.tracker.update_phase_progress(
+						tracker_phase_id,
+						current_iteration=phase_result.iterations_run,
+						best_ce=phase_result.final_fitness,
+						best_accuracy=phase_result.final_accuracy,
+					)
+					self._tracker_phase_id = None
+				except Exception as e:
+					self.log(f"Warning: Failed to notify tracker of phase completion: {e}")
 
 			# Store result in dict (use phase1/2/3 naming for backwards compat)
 			phase_num = (idx // 2) + 1
@@ -1663,6 +1764,20 @@ class PhasedSearchRunner:
 				self.log(f"Dashboard: Flow {self._flow_id} marked completed")
 			except Exception as e:
 				self.log(f"Warning: Failed to mark flow completed: {e}")
+
+		# Mark flow and experiment as completed in tracker (v2)
+		if self.tracker and _tracker_experiment_id:
+			try:
+				self.tracker.update_experiment_status(_tracker_experiment_id, TrackerStatus.COMPLETED)
+				self.log(f"Tracker: Experiment {_tracker_experiment_id} marked completed")
+			except Exception as e:
+				self.log(f"Warning: Failed to mark experiment completed in tracker: {e}")
+		if self.tracker and _tracker_flow_id:
+			try:
+				self.tracker.update_flow_status(_tracker_flow_id, TrackerStatus.COMPLETED)
+				self.log(f"Tracker: Flow {_tracker_flow_id} marked completed")
+			except Exception as e:
+				self.log(f"Warning: Failed to mark flow completed in tracker: {e}")
 
 		return results
 

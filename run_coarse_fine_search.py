@@ -215,6 +215,12 @@ def main():
 		help="Dashboard URL for real-time updates (e.g., http://localhost:3000)"
 	)
 
+	# Tracker (v2 data layer)
+	parser.add_argument(
+		"--db-path", type=str, default=None,
+		help="SQLite database path for experiment tracking (e.g., dashboard/experiments.db)"
+	)
+
 	args = parser.parse_args()
 
 	# Load config from YAML if specified (CLI args override)
@@ -404,12 +410,25 @@ def main():
 		except Exception as e:
 			log(f"Warning: Could not connect to dashboard: {e}")
 
+	# Create tracker (v2 data layer) if database path provided
+	tracker = None
+	if args.db_path:
+		try:
+			from wnn.ram.experiments.tracker import create_tracker
+			tracker = create_tracker(db_path=args.db_path, logger=log)
+			log(f"Tracker: Using database at {args.db_path}")
+		except ImportError:
+			log("Warning: Tracker not available (missing data_layer module)")
+		except Exception as e:
+			log(f"Warning: Could not create tracker: {e}")
+
 	# Create runner and setup
 	runner = PhasedSearchRunner(
 		config=config,
 		logger=log,
 		checkpoint_dir=args.checkpoint_dir,
 		dashboard_client=dashboard_client,
+		tracker=tracker,
 	)
 	log("")
 	runner.setup(
