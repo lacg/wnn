@@ -918,6 +918,18 @@ pub mod queries {
                     .bind(exp_id)
                     .execute(pool)
                     .await?;
+
+                // Delete genomes for this experiment
+                sqlx::query("DELETE FROM genomes_v2 WHERE experiment_id = ?")
+                    .bind(exp_id)
+                    .execute(pool)
+                    .await?;
+
+                // Delete checkpoints for this experiment
+                sqlx::query("DELETE FROM checkpoints_v2 WHERE experiment_id = ?")
+                    .bind(exp_id)
+                    .execute(pool)
+                    .await?;
             }
 
             // Delete V2 experiments by name
