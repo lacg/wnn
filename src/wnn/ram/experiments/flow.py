@@ -271,6 +271,10 @@ class Flow:
 		cfg = self.config
 		start_time = time.time()
 
+		# Check for empty flow
+		if not cfg.experiments:
+			raise ValueError("Flow has no experiments configured. Add experiments before running.")
+
 		self.log("")
 		self.log("=" * 70)
 		self.log(f"  FLOW: {cfg.name}")
@@ -404,7 +408,9 @@ class Flow:
 
 		elapsed = time.time() - start_time
 
-		# Get final result
+		# Get final result (handle edge case of no results)
+		if not self._results:
+			raise ValueError("Flow completed but no experiment results were recorded.")
 		final_result = self._results[-1]
 
 		self.log("")
