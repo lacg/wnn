@@ -338,6 +338,8 @@ class OptimizerStrategyFactory:
 		# Checkpoint configuration for resumable optimization
 		checkpoint_config: Any = None,
 		phase_name: str = "Optimization",
+		# Shutdown check for graceful stopping
+		shutdown_check: Any = None,
 	):
 		"""
 		Create an optimizer strategy.
