@@ -542,9 +542,19 @@ async fn restart_flow(
         ).into_response();
     }
 
-    // If restarting from beginning, clear the seed checkpoint
+    // If restarting from beginning, clear the seed checkpoint and delete checkpoint files
     let seed_checkpoint_id = if req.from_beginning {
-        Some(None) // Clear checkpoint
+        // Delete checkpoint directory for this flow
+        let safe_name = flow.name.to_lowercase().replace(" ", "_").replace("/", "_");
+        let checkpoint_dir = std::path::Path::new("checkpoints").join(&safe_name);
+        if checkpoint_dir.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&checkpoint_dir) {
+                tracing::warn!("Failed to delete checkpoint directory {:?}: {}", checkpoint_dir, e);
+            } else {
+                tracing::info!("Deleted checkpoint directory: {:?}", checkpoint_dir);
+            }
+        }
+        Some(None) // Clear checkpoint reference in DB
     } else {
         None // Keep existing
     };
