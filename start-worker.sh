@@ -1,7 +1,16 @@
 #!/bin/bash
 # Start a single worker - prevents duplicates
+# Usage: ./start-worker.sh [--tls]
 
 cd "$(dirname "$0")"
+
+# Parse args
+USE_TLS=false
+for arg in "$@"; do
+    case $arg in
+        --tls) USE_TLS=true ;;
+    esac
+done
 
 # Check if worker already running
 EXISTING=$(pgrep -f "wnn.ram.experiments.worker" | head -1)
@@ -13,9 +22,18 @@ fi
 
 # Start worker
 source wnn/bin/activate
-export PYTHONPATH="$(pwd)/src/wnn:$PYTHONPATH"
+# NOTE: Do NOT add src/wnn to PYTHONPATH - it shadows HuggingFace's tokenizers package
 
-echo "Starting worker..."
-nohup python -u -m wnn.ram.experiments.worker --url http://localhost:3000 > worker.out 2>&1 &
+if [ "$USE_TLS" = true ]; then
+    URL="https://localhost:3000"
+    EXTRA_ARGS="--insecure"
+    echo "Starting worker with TLS..."
+else
+    URL="http://localhost:3000"
+    EXTRA_ARGS=""
+    echo "Starting worker..."
+fi
+
+nohup python -u -m wnn.ram.experiments.worker --url "$URL" $EXTRA_ARGS > worker.out 2>&1 &
 echo "Worker started (PID $!)"
 echo "Logs: tail -f worker.out"
