@@ -23,11 +23,23 @@ except ImportError:
 
 @dataclass
 class DashboardClientConfig:
-	"""Configuration for dashboard client."""
+	"""Configuration for dashboard client.
+
+	Args:
+		base_url: Dashboard API URL (http:// or https://)
+		timeout: Request timeout in seconds
+		retry_count: Number of retry attempts on failure
+		retry_delay: Delay between retries in seconds
+		verify_ssl: SSL verification setting:
+			- True: Verify SSL certificates (default, production)
+			- False: Disable SSL verification (development with self-signed certs)
+			- str: Path to CA certificate file for custom CA
+	"""
 	base_url: str = "http://localhost:3000"
 	timeout: float = 30.0
 	retry_count: int = 3
 	retry_delay: float = 1.0
+	verify_ssl: bool | str = True
 
 
 @dataclass
@@ -150,6 +162,8 @@ class DashboardClient:
 			"Content-Type": "application/json",
 			"Accept": "application/json",
 		})
+		# Configure SSL verification
+		self._session.verify = self._config.verify_ssl
 
 	def _url(self, path: str) -> str:
 		"""Build full URL from path."""

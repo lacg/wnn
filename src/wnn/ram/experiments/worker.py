@@ -37,12 +37,14 @@ class FlowWorker:
         checkpoint_base_dir: Path = Path("checkpoints"),
         context_size: int = 4,
         db_path: Optional[str] = None,
+        verify_ssl: bool | str = True,
     ):
         self.dashboard_url = dashboard_url
         self.poll_interval = poll_interval
         self.checkpoint_base_dir = checkpoint_base_dir
         self.context_size = context_size
         self.running = True
+        self._stop_current_flow = False  # Flag to stop current flow but keep worker running
         self.current_flow_id: Optional[int] = None
 
         # Pre-cached data (loaded once at startup)
@@ -56,8 +58,8 @@ class FlowWorker:
         self._log_file: Optional[Path] = None
         self._log_dir = Path("logs")
 
-        # Setup client
-        config = DashboardClientConfig(base_url=dashboard_url)
+        # Setup client with SSL configuration
+        config = DashboardClientConfig(base_url=dashboard_url, verify_ssl=verify_ssl)
         self.client = DashboardClient(config, logger=self._log)
 
         # V2 Tracker for direct database writes (same db as dashboard)
@@ -117,15 +119,31 @@ class FlowWorker:
         self._log_file = None
 
     def _handle_signal(self, signum, frame):
-        """Handle shutdown signals."""
-        self._log(f"Received signal {signum}, requesting graceful shutdown...")
-        self.running = False
-        if self.current_flow_id:
-            self._log(f"Flow {self.current_flow_id} will stop after current generation/iteration")
+        """Handle shutdown signals.
+
+        SIGTERM: If running a flow, stop it gracefully. If idle, stop worker.
+        SIGINT (Ctrl+C): Stop worker entirely
+        """
+        if signum == signal.SIGINT:
+            # Ctrl+C - stop everything
+            self._log(f"Received SIGINT, stopping worker...")
+            self.running = False
+            self._stop_current_flow = True
+        else:
+            # SIGTERM - behavior depends on whether a flow is running
+            if self.current_flow_id:
+                # Flow is running - stop it gracefully, keep worker alive
+                self._log(f"Received SIGTERM, stopping current flow...")
+                self._stop_current_flow = True
+                self._log(f"Flow {self.current_flow_id} will stop after current generation/iteration")
+            else:
+                # Worker is idle - stop entirely
+                self._log(f"Received SIGTERM while idle, stopping worker...")
+                self.running = False
 
     def should_stop(self) -> bool:
         """Check if shutdown has been requested. Used by flow/experiment/strategy."""
-        return not self.running
+        return self._stop_current_flow or not self.running
 
     def _precache_data(self):
         """Pre-cache tokenizer and dataset at startup to avoid network issues during flow execution."""
@@ -303,6 +321,7 @@ class FlowWorker:
 
         finally:
             self.current_flow_id = None
+            self._stop_current_flow = False  # Reset for next flow
             self._close_log_file()
 
     def _create_evaluator(self, context_size: int, seed: Optional[int] = None):
@@ -394,13 +413,35 @@ def main():
     parser.add_argument("--checkpoint-dir", type=Path, default=Path("checkpoints"), help="Base checkpoint directory")
     parser.add_argument("--context", type=int, default=4, help="Default context size")
 
+    # SSL/TLS options
+    ssl_group = parser.add_mutually_exclusive_group()
+    ssl_group.add_argument(
+        "--ssl-cert",
+        type=Path,
+        help="Path to CA certificate for SSL verification (for self-signed certs)"
+    )
+    ssl_group.add_argument(
+        "--no-ssl-verify",
+        action="store_true",
+        help="Disable SSL certificate verification (development only)"
+    )
+
     args = parser.parse_args()
+
+    # Determine SSL verification setting
+    if args.no_ssl_verify:
+        verify_ssl = False
+    elif args.ssl_cert:
+        verify_ssl = str(args.ssl_cert)
+    else:
+        verify_ssl = True  # Default: verify SSL
 
     worker = FlowWorker(
         dashboard_url=args.url,
         poll_interval=args.poll_interval,
         checkpoint_base_dir=args.checkpoint_dir,
         context_size=args.context,
+        verify_ssl=verify_ssl,
     )
 
     worker.run()

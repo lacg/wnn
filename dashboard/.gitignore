@@ -1,0 +1,5 @@
+# TLS certificates (generated locally, contain private keys)
+certs/
+
+# Build artifacts
+target/
