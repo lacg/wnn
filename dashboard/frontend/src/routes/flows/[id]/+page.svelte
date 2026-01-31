@@ -116,7 +116,7 @@
         editConfig.ga_generations = p.ga_generations ?? 250;
         editConfig.ts_iterations = p.ts_iterations ?? 250;
         editConfig.population_size = p.population_size ?? 50;
-        editConfig.neighbors_per_iter = p.neighbors_per_iter ?? 50;
+        editConfig.neighbors_per_iter = p.neighbors_per_iter ?? p.population_size ?? 50;
         editConfig.fitness_percentile = p.fitness_percentile ?? 0.75;
         editConfig.optimize_tier0_only = p.optimize_tier0_only ?? false;
         editConfig.phase_order = p.phase_order ?? 'neurons_first';
@@ -793,11 +793,11 @@
           </div>
           <div class="param-item">
             <span class="param-label">Neighbors/Iter</span>
-            <span class="param-value">{flow.config.params.neighbors_per_iter ?? '-'}</span>
+            <span class="param-value">{flow.config.params.neighbors_per_iter ?? flow.config.params.population_size ?? 50}</span>
           </div>
           <div class="param-item">
             <span class="param-label">Fitness %</span>
-            <span class="param-value">{flow.config.params.fitness_percentile ?? '-'}</span>
+            <span class="param-value">{flow.config.params.fitness_percentile ?? 0.75}</span>
           </div>
           <div class="param-item">
             <span class="param-label">Tier0 Only</span>
