@@ -40,6 +40,9 @@ chrono = "0.4"
 # File locking for concurrent log writes
 fs2 = "0.4"
 
+# SQLite for direct database writes (v2 data model)
+rusqlite = { version = "0.32", features = ["bundled"] }
+
 [profile.release]
 lto = true
 codegen-units = 1

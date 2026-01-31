@@ -293,3 +293,281 @@ pub struct CheckpointReference {
     pub referencing_experiment_id: i64,
     pub reference_type: String,
 }
+
+// =============================================================================
+// V2 Models: New data model with DB as source of truth
+// =============================================================================
+
+/// Flow status (v2)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum FlowStatusV2 {
+    Pending,
+    Queued,
+    Running,
+    Paused,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl Default for FlowStatusV2 {
+    fn default() -> Self {
+        FlowStatusV2::Pending
+    }
+}
+
+/// Experiment status (v2)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExperimentStatusV2 {
+    Pending,
+    Queued,
+    Running,
+    Paused,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl Default for ExperimentStatusV2 {
+    fn default() -> Self {
+        ExperimentStatusV2::Pending
+    }
+}
+
+/// Phase status (v2)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum PhaseStatusV2 {
+    Pending,
+    Running,
+    Paused,
+    Completed,
+    Skipped,
+    Failed,
+}
+
+impl Default for PhaseStatusV2 {
+    fn default() -> Self {
+        PhaseStatusV2::Pending
+    }
+}
+
+/// Fitness calculator type
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum FitnessCalculator {
+    Ce,
+    HarmonicRank,
+    WeightedHarmonic,
+}
+
+impl Default for FitnessCalculator {
+    fn default() -> Self {
+        FitnessCalculator::HarmonicRank
+    }
+}
+
+/// Genome evaluation role
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum GenomeRole {
+    Elite,
+    Offspring,
+    Init,
+}
+
+/// Checkpoint type (v2)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckpointTypeV2 {
+    Auto,
+    User,
+    PhaseEnd,
+    ExperimentEnd,
+}
+
+/// Flow (v2) - A sequence of experiments
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlowV2 {
+    pub id: i64,
+    pub name: String,
+    pub description: Option<String>,
+    pub status: FlowStatusV2,
+    pub config_json: String,
+    pub seed_checkpoint_id: Option<i64>,
+    pub created_at: DateTime<Utc>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+/// Experiment (v2) - A single optimization run
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExperimentV2 {
+    pub id: i64,
+    pub flow_id: Option<i64>,
+    pub sequence_order: Option<i32>,
+    pub name: String,
+    pub status: ExperimentStatusV2,
+    pub fitness_calculator: FitnessCalculator,
+    pub fitness_weight_ce: f64,
+    pub fitness_weight_acc: f64,
+    pub tier_config: Option<String>,
+    pub context_size: i32,
+    pub population_size: i32,
+    pub pid: Option<i32>,
+    pub last_phase_id: Option<i64>,
+    pub last_iteration: Option<i32>,
+    pub resume_checkpoint_id: Option<i64>,
+    pub created_at: DateTime<Utc>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub ended_at: Option<DateTime<Utc>>,
+    pub paused_at: Option<DateTime<Utc>>,
+}
+
+/// Phase (v2) - A phase within an experiment
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PhaseV2 {
+    pub id: i64,
+    pub experiment_id: i64,
+    pub name: String,
+    pub phase_type: String,
+    pub sequence_order: i32,
+    pub status: PhaseStatusV2,
+    pub max_iterations: i32,
+    pub population_size: Option<i32>,
+    pub current_iteration: i32,
+    pub best_ce: Option<f64>,
+    pub best_accuracy: Option<f64>,
+    pub created_at: DateTime<Utc>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub ended_at: Option<DateTime<Utc>>,
+}
+
+/// Iteration (v2) - A generation within a phase
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IterationV2 {
+    pub id: i64,
+    pub phase_id: i64,
+    pub iteration_num: i32,
+    pub best_ce: f64,
+    pub best_accuracy: Option<f64>,
+    pub avg_ce: Option<f64>,
+    pub elite_count: Option<i32>,
+    pub offspring_count: Option<i32>,
+    pub offspring_viable: Option<i32>,
+    pub fitness_threshold: Option<f64>,
+    pub elapsed_secs: Option<f64>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Genome (v2) - Unique genome configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenomeV2 {
+    pub id: i64,
+    pub experiment_id: i64,
+    pub config_hash: String,
+    pub tiers_json: String,
+    pub total_clusters: i32,
+    pub total_neurons: i32,
+    pub total_memory_bytes: i64,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Tier configuration for a genome
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TierConfig {
+    pub tier: i32,
+    pub clusters: i32,
+    pub neurons: i32,
+    pub bits: i32,
+}
+
+/// Genome evaluation (v2) - Per-iteration evaluation results
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenomeEvaluationV2 {
+    pub id: i64,
+    pub iteration_id: i64,
+    pub genome_id: i64,
+    pub position: i32,
+    pub role: GenomeRole,
+    pub elite_rank: Option<i32>,
+    pub ce: f64,
+    pub accuracy: f64,
+    pub fitness_score: Option<f64>,
+    pub eval_time_ms: Option<i32>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Health check (v2) - Periodic full validation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthCheckV2 {
+    pub id: i64,
+    pub iteration_id: i64,
+    pub k: i32,
+    pub top_k_ce: f64,
+    pub top_k_accuracy: f64,
+    pub best_ce: Option<f64>,
+    pub best_ce_accuracy: Option<f64>,
+    pub best_acc_ce: Option<f64>,
+    pub best_acc_accuracy: Option<f64>,
+    pub patience_remaining: Option<i32>,
+    pub patience_status: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Checkpoint (v2) - Saved state for resume
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckpointV2 {
+    pub id: i64,
+    pub experiment_id: i64,
+    pub phase_id: Option<i64>,
+    pub iteration_id: Option<i64>,
+    pub name: String,
+    pub file_path: String,
+    pub file_size_bytes: Option<i64>,
+    pub checkpoint_type: CheckpointTypeV2,
+    pub best_ce: Option<f64>,
+    pub best_accuracy: Option<f64>,
+    pub created_at: DateTime<Utc>,
+}
+
+// =============================================================================
+// V2 WebSocket Messages
+// =============================================================================
+
+/// Real-time update message for WebSocket (v2)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
+pub enum WsMessageV2 {
+    /// Full state snapshot for new clients
+    Snapshot(DashboardSnapshotV2),
+    /// New iteration completed
+    IterationCompleted(IterationV2),
+    /// Genome evaluations for an iteration
+    GenomeEvaluations { iteration_id: i64, evaluations: Vec<GenomeEvaluationV2> },
+    /// Phase started
+    PhaseStarted(PhaseV2),
+    /// Phase completed
+    PhaseCompleted(PhaseV2),
+    /// Health check result
+    HealthCheck(HealthCheckV2),
+    /// Experiment status changed
+    ExperimentStatusChanged(ExperimentV2),
+    /// Flow status changed
+    FlowStatusChanged(FlowV2),
+    /// Checkpoint created
+    CheckpointCreated(CheckpointV2),
+}
+
+/// Full dashboard state snapshot (v2)
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DashboardSnapshotV2 {
+    pub current_experiment: Option<ExperimentV2>,
+    pub current_phase: Option<PhaseV2>,
+    pub phases: Vec<PhaseV2>,
+    pub iterations: Vec<IterationV2>,
+    pub best_ce: f64,
+    pub best_accuracy: f64,
+}

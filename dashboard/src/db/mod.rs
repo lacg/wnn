@@ -23,14 +23,16 @@ pub async fn init_db(database_url: &str) -> Result<DbPool> {
 
 /// Run migrations for schema changes
 async fn run_migrations(pool: &DbPool) -> Result<()> {
-    // Migration 1: Add pid and checkpoint_phase to experiments
-    // (safe to run multiple times - uses IF NOT EXISTS pattern via error handling)
+    // Migration 1: Add pid and checkpoint_phase to experiments (legacy)
     let _ = sqlx::query("ALTER TABLE experiments ADD COLUMN pid INTEGER")
         .execute(pool)
         .await;
     let _ = sqlx::query("ALTER TABLE experiments ADD COLUMN checkpoint_phase TEXT")
         .execute(pool)
         .await;
+
+    // Migration 2: Create v2 schema (new data model)
+    sqlx::query(SCHEMA_V2).execute(pool).await?;
 
     Ok(())
 }
@@ -147,6 +149,249 @@ CREATE INDEX IF NOT EXISTS idx_checkpoints_is_final ON checkpoints(is_final);
 CREATE INDEX IF NOT EXISTS idx_flow_experiments_flow ON flow_experiments(flow_id);
 CREATE INDEX IF NOT EXISTS idx_flow_experiments_experiment ON flow_experiments(experiment_id);
 CREATE INDEX IF NOT EXISTS idx_checkpoint_references_checkpoint ON checkpoint_references(checkpoint_id);
+"#;
+
+// =============================================================================
+// V2 SCHEMA: New data model with DB as source of truth
+// =============================================================================
+const SCHEMA_V2: &str = r#"
+-- ============================================================================
+-- FLOWS_V2: A sequence of experiments (multi-pass search)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS flows_v2 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    description TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    -- pending, queued, running, paused, completed, failed, cancelled
+
+    -- Configuration
+    config_json TEXT NOT NULL DEFAULT '{}',
+
+    -- Seed checkpoint (optional starting point)
+    seed_checkpoint_id INTEGER REFERENCES checkpoints_v2(id),
+
+    -- Timing
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    started_at TEXT,
+    completed_at TEXT
+);
+
+-- ============================================================================
+-- EXPERIMENTS_V2: A single optimization run (6-phase search)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS experiments_v2 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    flow_id INTEGER REFERENCES flows_v2(id),
+    sequence_order INTEGER,
+
+    name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    -- pending, queued, running, paused, completed, failed, cancelled
+
+    -- Configuration
+    fitness_calculator TEXT NOT NULL DEFAULT 'harmonic_rank',
+    fitness_weight_ce REAL DEFAULT 1.0,
+    fitness_weight_acc REAL DEFAULT 1.0,
+    tier_config TEXT,
+    context_size INTEGER DEFAULT 4,
+    population_size INTEGER DEFAULT 50,
+
+    -- Process tracking
+    pid INTEGER,
+
+    -- Resume state
+    last_phase_id INTEGER REFERENCES phases_v2(id),
+    last_iteration INTEGER,
+    resume_checkpoint_id INTEGER REFERENCES checkpoints_v2(id),
+
+    -- Timing
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    started_at TEXT,
+    ended_at TEXT,
+    paused_at TEXT
+);
+
+-- ============================================================================
+-- PHASES_V2: A phase within an experiment (GA-Neurons, TS-Bits, etc.)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS phases_v2 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id INTEGER NOT NULL REFERENCES experiments_v2(id),
+
+    name TEXT NOT NULL,
+    phase_type TEXT NOT NULL,
+    -- ga_neurons, ts_neurons, ga_bits, ts_bits, ga_connections, ts_connections
+    sequence_order INTEGER NOT NULL,
+
+    status TEXT NOT NULL DEFAULT 'pending',
+
+    -- Configuration
+    max_iterations INTEGER NOT NULL DEFAULT 250,
+    population_size INTEGER,
+
+    -- Progress
+    current_iteration INTEGER DEFAULT 0,
+
+    -- Best results in this phase
+    best_ce REAL,
+    best_accuracy REAL,
+
+    -- Timing
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    started_at TEXT,
+    ended_at TEXT
+);
+
+-- ============================================================================
+-- ITERATIONS_V2: A generation/iteration within a phase
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS iterations_v2 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    phase_id INTEGER NOT NULL REFERENCES phases_v2(id),
+    iteration_num INTEGER NOT NULL,
+
+    -- Summary metrics (best of this iteration)
+    best_ce REAL NOT NULL,
+    best_accuracy REAL,
+    avg_ce REAL,
+
+    -- Population info
+    elite_count INTEGER,
+    offspring_count INTEGER,
+    offspring_viable INTEGER,
+
+    -- Fitness threshold (progressive filtering)
+    fitness_threshold REAL,
+
+    -- Timing
+    elapsed_secs REAL,
+
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+
+    UNIQUE(phase_id, iteration_num)
+);
+
+-- ============================================================================
+-- GENOMES_V2: Unique genome configurations (deduplicated by config hash)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS genomes_v2 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id INTEGER NOT NULL REFERENCES experiments_v2(id),
+
+    -- Configuration identity (for deduplication)
+    config_hash TEXT NOT NULL,
+
+    -- Per-tier configuration as JSON
+    tiers_json TEXT NOT NULL,
+    -- Example: [{"tier": 0, "clusters": 100, "neurons": 15, "bits": 20}, ...]
+
+    -- Aggregates (computed from tiers)
+    total_clusters INTEGER NOT NULL,
+    total_neurons INTEGER NOT NULL,
+    total_memory_bytes INTEGER NOT NULL,
+
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+
+    UNIQUE(experiment_id, config_hash)
+);
+
+-- ============================================================================
+-- GENOME_EVALUATIONS_V2: Per-iteration evaluation results
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS genome_evaluations_v2 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    iteration_id INTEGER NOT NULL REFERENCES iterations_v2(id),
+    genome_id INTEGER NOT NULL REFERENCES genomes_v2(id),
+
+    -- Position in generation
+    position INTEGER NOT NULL,
+
+    -- Role in this iteration
+    role TEXT NOT NULL,
+    -- 'elite', 'offspring', 'init'
+    elite_rank INTEGER,
+
+    -- Evaluation results
+    ce REAL NOT NULL,
+    accuracy REAL NOT NULL,
+    fitness_score REAL,
+
+    -- Timing
+    eval_time_ms INTEGER,
+
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+-- ============================================================================
+-- HEALTH_CHECKS_V2: Periodic full validation
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS health_checks_v2 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    iteration_id INTEGER NOT NULL REFERENCES iterations_v2(id),
+
+    -- Top-K ensemble metrics
+    k INTEGER NOT NULL,
+    top_k_ce REAL NOT NULL,
+    top_k_accuracy REAL NOT NULL,
+
+    -- Best individual metrics
+    best_ce REAL,
+    best_ce_accuracy REAL,
+    best_acc_ce REAL,
+    best_acc_accuracy REAL,
+
+    -- Patience tracking
+    patience_remaining INTEGER,
+    patience_status TEXT,
+
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+-- ============================================================================
+-- CHECKPOINTS_V2: Saved state for resume
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS checkpoints_v2 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id INTEGER NOT NULL REFERENCES experiments_v2(id),
+    phase_id INTEGER REFERENCES phases_v2(id),
+    iteration_id INTEGER REFERENCES iterations_v2(id),
+
+    name TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    file_size_bytes INTEGER,
+
+    checkpoint_type TEXT NOT NULL,
+    -- 'auto', 'user', 'phase_end', 'experiment_end'
+
+    -- Metrics snapshot
+    best_ce REAL,
+    best_accuracy REAL,
+
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+-- ============================================================================
+-- INDEXES for efficient queries
+-- ============================================================================
+
+-- For polling new records (change detection)
+CREATE INDEX IF NOT EXISTS idx_iterations_v2_created ON iterations_v2(created_at);
+CREATE INDEX IF NOT EXISTS idx_genome_evals_v2_created ON genome_evaluations_v2(created_at);
+CREATE INDEX IF NOT EXISTS idx_health_checks_v2_created ON health_checks_v2(created_at);
+
+-- For lookups
+CREATE INDEX IF NOT EXISTS idx_experiments_v2_flow ON experiments_v2(flow_id);
+CREATE INDEX IF NOT EXISTS idx_phases_v2_experiment ON phases_v2(experiment_id);
+CREATE INDEX IF NOT EXISTS idx_iterations_v2_phase ON iterations_v2(phase_id);
+CREATE INDEX IF NOT EXISTS idx_genome_evals_v2_iteration ON genome_evaluations_v2(iteration_id);
+CREATE INDEX IF NOT EXISTS idx_genomes_v2_experiment ON genomes_v2(experiment_id);
+CREATE INDEX IF NOT EXISTS idx_checkpoints_v2_experiment ON checkpoints_v2(experiment_id);
+
+-- For finding latest records per entity
+CREATE INDEX IF NOT EXISTS idx_iterations_v2_phase_num ON iterations_v2(phase_id, iteration_num DESC);
+CREATE INDEX IF NOT EXISTS idx_experiments_v2_status ON experiments_v2(status);
+CREATE INDEX IF NOT EXISTS idx_flows_v2_status ON flows_v2(status);
 "#;
 
 // Query helpers
