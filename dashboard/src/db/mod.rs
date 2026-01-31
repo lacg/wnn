@@ -868,13 +868,25 @@ pub mod queries {
         if clear_seed.is_some() {
             // Delete V2 data following the chain: experiments_v2 -> phases_v2 -> iterations_v2 -> genome_evaluations_v2
 
-            // Get V2 experiment IDs for this flow
-            let v2_exp_ids: Vec<i64> = sqlx::query_scalar(
-                "SELECT id FROM experiments_v2 WHERE flow_id = ?"
+            // First get the flow name (V2 experiments use name matching, not flow_id foreign key)
+            let flow_name: Option<String> = sqlx::query_scalar(
+                "SELECT name FROM flows WHERE id = ?"
             )
             .bind(id)
-            .fetch_all(pool)
+            .fetch_optional(pool)
             .await?;
+
+            // Get V2 experiment IDs by flow name (since flow_id may be NULL)
+            let v2_exp_ids: Vec<i64> = if let Some(ref name) = flow_name {
+                sqlx::query_scalar(
+                    "SELECT id FROM experiments_v2 WHERE name = ?"
+                )
+                .bind(name)
+                .fetch_all(pool)
+                .await?
+            } else {
+                vec![]
+            };
 
             for exp_id in &v2_exp_ids {
                 // Get phase IDs for this experiment
@@ -908,11 +920,13 @@ pub mod queries {
                     .await?;
             }
 
-            // Delete V2 experiments
-            sqlx::query("DELETE FROM experiments_v2 WHERE flow_id = ?")
-                .bind(id)
-                .execute(pool)
-                .await?;
+            // Delete V2 experiments by name
+            if let Some(ref name) = flow_name {
+                sqlx::query("DELETE FROM experiments_v2 WHERE name = ?")
+                    .bind(name)
+                    .execute(pool)
+                    .await?;
+            }
 
             // Also clean up V1 data (flow_experiments and experiments)
             let v1_exp_ids: Vec<i64> = sqlx::query_scalar(
