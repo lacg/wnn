@@ -1105,24 +1105,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			# Apply percentile filter if configured (uses fitness calculator for ranking)
 			# Note: 0 means disabled, same as None
 			if cfg.fitness_percentile and cfg.fitness_percentile > 0 and offspring_with_ce:
-				if cfg.fitness_calculator_type == FitnessCalculatorType.HARMONIC_RANK:
-					# HARMONIC_RANK: Filter by harmonic rank fitness
-					pop_for_filter = [(g, ce, g._cached_fitness[1]) for g, ce in offspring_with_ce]
-					fitness_scores = fitness_calculator.fitness(pop_for_filter)
-					offspring_with_fitness = [(g, ce, score) for (g, ce), score in zip(offspring_with_ce, fitness_scores)]
-
-					fitness_filter = PercentileFilter(
-						percentile=cfg.fitness_percentile,
-						mode=FilterMode.LOWER_IS_BETTER,
-						metric_name="HarmonicRank",
-					)
-					# Filter expects 2-tuples: (genome, metric_value)
-					# We keep a mapping to recover CE after filtering
-					genome_ce_map = {id(g): ce for g, ce, _ in offspring_with_fitness}
-					filter_population = [(g, score) for g, _, score in offspring_with_fitness]
-					filter_result = fitness_filter.apply(filter_population, key=lambda g, f: f)
-					offspring_with_ce = [(g, genome_ce_map[id(g)]) for g, _ in filter_result.kept]
-				else:
+				if cfg.fitness_calculator_type == FitnessCalculatorType.CE:
 					# CE mode: Filter by CE only
 					ce_filter = PercentileFilter(
 						percentile=cfg.fitness_percentile,
@@ -1131,6 +1114,24 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 					)
 					filter_result = ce_filter.apply(offspring_with_ce, key=lambda g, f: f)
 					offspring_with_ce = filter_result.kept
+				else:
+					# HARMONIC_RANK or NORMALIZED: Filter by fitness calculator score
+					# This ensures low-accuracy genomes are filtered even if they have good CE
+					pop_for_filter = [(g, ce, g._cached_fitness[1]) for g, ce in offspring_with_ce]
+					fitness_scores = fitness_calculator.fitness(pop_for_filter)
+					offspring_with_fitness = [(g, ce, score) for (g, ce), score in zip(offspring_with_ce, fitness_scores)]
+
+					fitness_filter = PercentileFilter(
+						percentile=cfg.fitness_percentile,
+						mode=FilterMode.LOWER_IS_BETTER,
+						metric_name=fitness_calculator.name,
+					)
+					# Filter expects 2-tuples: (genome, metric_value)
+					# We keep a mapping to recover CE after filtering
+					genome_ce_map = {id(g): ce for g, ce, _ in offspring_with_fitness}
+					filter_population = [(g, score) for g, _, score in offspring_with_fitness]
+					filter_result = fitness_filter.apply(filter_population, key=lambda g, f: f)
+					offspring_with_ce = [(g, genome_ce_map[id(g)]) for g, _ in filter_result.kept]
 
 				if filter_result.filtered:
 					self._log.debug(
@@ -1564,9 +1565,11 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		arch_cfg = self._arch_config
 		evaluator = self._cached_evaluator
 		use_harmonic = cfg.fitness_calculator_type == FitnessCalculatorType.HARMONIC_RANK
+		use_fitness_calculator = cfg.fitness_calculator_type != FitnessCalculatorType.CE
 
-		# Create fitness calculator for HARMONIC_RANK mode
-		if use_harmonic:
+		# Create fitness calculator for HARMONIC_RANK or NORMALIZED mode
+		fitness_calculator = None
+		if use_fitness_calculator:
 			fitness_calculator = FitnessCalculatorFactory.create(
 				cfg.fitness_calculator_type,
 				weight_ce=cfg.fitness_weight_ce,
@@ -1895,22 +1898,41 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 					return_best_n=True,
 				)
 
-				# Apply CE percentile filter if configured
+				# Apply percentile filter if configured
 				# Note: 0 means disabled, same as None
 				if cfg.fitness_percentile and cfg.fitness_percentile > 0:
-					ce_filter = PercentileFilter(
-						percentile=cfg.fitness_percentile,
-						mode=FilterMode.LOWER_IS_BETTER,
-						metric_name="CE",
-					)
-					if ce_neighbors:
-						ce_population = [(g, g._cached_fitness[0]) for g in ce_neighbors]
-						filter_result = ce_filter.apply(ce_population, key=lambda g, f: f)
-						ce_neighbors = [g for g, _ in filter_result.kept]
-					if acc_neighbors:
-						acc_population = [(g, g._cached_fitness[0]) for g in acc_neighbors]
-						filter_result = ce_filter.apply(acc_population, key=lambda g, f: f)
-						acc_neighbors = [g for g, _ in filter_result.kept]
+					if fitness_calculator:
+						# NORMALIZED mode: Filter by fitness calculator score
+						def filter_by_fitness(neighbors):
+							if not neighbors:
+								return neighbors
+							pop_for_filter = [(g, g._cached_fitness[0], g._cached_fitness[1]) for g in neighbors]
+							fitness_scores = fitness_calculator.fitness(pop_for_filter)
+							neighbor_with_fitness = [(g, score) for g, score in zip(neighbors, fitness_scores)]
+							fitness_filter = PercentileFilter(
+								percentile=cfg.fitness_percentile,
+								mode=FilterMode.LOWER_IS_BETTER,
+								metric_name=fitness_calculator.name,
+							)
+							filter_result = fitness_filter.apply(neighbor_with_fitness, key=lambda g, f: f)
+							return [g for g, _ in filter_result.kept]
+						ce_neighbors = filter_by_fitness(ce_neighbors)
+						acc_neighbors = filter_by_fitness(acc_neighbors)
+					else:
+						# CE mode: Filter by CE only
+						ce_filter = PercentileFilter(
+							percentile=cfg.fitness_percentile,
+							mode=FilterMode.LOWER_IS_BETTER,
+							metric_name="CE",
+						)
+						if ce_neighbors:
+							ce_population = [(g, g._cached_fitness[0]) for g in ce_neighbors]
+							filter_result = ce_filter.apply(ce_population, key=lambda g, f: f)
+							ce_neighbors = [g for g, _ in filter_result.kept]
+						if acc_neighbors:
+							acc_population = [(g, g._cached_fitness[0]) for g in acc_neighbors]
+							filter_result = ce_filter.apply(acc_population, key=lambda g, f: f)
+							acc_neighbors = [g for g, _ in filter_result.kept]
 
 				# Process all neighbors
 				for g in ce_neighbors + acc_neighbors:
