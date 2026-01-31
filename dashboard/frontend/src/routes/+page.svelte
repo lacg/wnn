@@ -100,6 +100,13 @@
   $: displayPhases = $useV2Mode ? $phasesV2 : $phases;
   $: displayCurrentPhase = $useV2Mode ? $currentPhaseV2 : $currentPhase;
   $: displayIterations = $useV2Mode ? $iterationsV2 : $iterations;
+
+  // Debug: log when stores change
+  $: if (typeof window !== 'undefined') {
+    console.log('[LiveUI] Mode:', $useV2Mode ? 'V2' : 'V1');
+    console.log('[LiveUI] currentPhaseV2:', $currentPhaseV2?.name || 'null', 'phases:', $phasesV2.length);
+    console.log('[LiveUI] displayCurrentPhase:', displayCurrentPhase?.name || 'null');
+  }
   $: displayCeHistory = $useV2Mode
     ? $ceHistoryV2.map(h => ({ iter: h.iter, ce: h.ce, acc: h.acc !== null && h.acc !== undefined ? h.acc * 100 : null }))
     : $ceHistory;
@@ -417,7 +424,7 @@
                     {iter.delta_previous !== null && iter.delta_previous !== undefined ? (iter.delta_previous < 0 ? '↓' : iter.delta_previous > 0 ? '↑' : '') + Math.abs(iter.delta_previous).toFixed(4) : '—'}
                   </td>
                   <td>{iter.fitness_threshold !== null && iter.fitness_threshold !== undefined ? (iter.fitness_threshold * 100).toFixed(2) + '%' : '—'}</td>
-                  <td>{iter.patience_counter !== null && iter.patience_max ? `${iter.patience_counter}/${iter.patience_max}` : '—'}</td>
+                  <td>{iter.patience_counter !== null && iter.patience_max ? `${iter.patience_max - iter.patience_counter}/${iter.patience_max}` : '—'}</td>
                 {/if}
                 <td>{iter.elapsed_secs ? iter.elapsed_secs.toFixed(1) + 's' : '—'}</td>
                 {#if $useV2Mode}
@@ -616,7 +623,7 @@
           {#if selectedIteration.patience_counter !== null && selectedIteration.patience_max}
             <div class="summary-item">
               <span class="label">Patience:</span>
-              <span class="value">{selectedIteration.patience_counter} / {selectedIteration.patience_max}</span>
+              <span class="value">{selectedIteration.patience_max - selectedIteration.patience_counter} / {selectedIteration.patience_max}</span>
             </div>
           {/if}
           {#if selectedIteration.fitness_threshold !== null && selectedIteration.fitness_threshold !== undefined}

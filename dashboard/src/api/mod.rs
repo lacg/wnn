@@ -1105,6 +1105,9 @@ async fn handle_socket_v2(
     let mut last_phase_id = snapshot.current_phase.as_ref().map(|p| p.id);
     let mut last_phase_status = snapshot.current_phase.as_ref().map(|p| p.status.clone());
 
+    // Track the last iteration we've sent to avoid re-sending iterations from snapshot
+    let mut last_iteration_id: Option<i64> = snapshot.iterations.last().map(|i| i.id);
+
     if let Ok(json) = serde_json::to_string(&WsMessageV2::Snapshot(snapshot)) {
         if socket.send(Message::Text(json.into())).await.is_err() {
             return;
@@ -1116,7 +1119,6 @@ async fn handle_socket_v2(
 
     // Poll for updates every 500ms
     let mut poll_interval = interval(Duration::from_millis(500));
-    let mut last_iteration_id: Option<i64> = None;
 
     loop {
         tokio::select! {
