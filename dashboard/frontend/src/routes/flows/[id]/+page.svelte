@@ -174,14 +174,18 @@
     if (flow.status !== 'running') return false;
 
     // For running flows, check if this phase has started
-    const exp = flow.config.experiments[index];
+    const experiments = flow.config.experiments || [];
+    const exp = experiments[index];
+    if (!exp) return false;
     const status = getExpStatus(exp, index);
     return status === 'pending';
   }
 
   function startEditExperiment(index: number) {
     if (!flow || !canEditExperiment(index)) return;
-    const exp = flow.config.experiments[index];
+    const experiments = flow.config.experiments || [];
+    const exp = experiments[index];
+    if (!exp) return;
     editingExpIndex = index;
     editingExp = {
       name: exp.name,
@@ -203,7 +207,8 @@
 
     try {
       // Update the experiment in the config
-      const updatedExperiments = [...flow.config.experiments];
+      const currentExperiments = flow.config.experiments || [];
+      const updatedExperiments = [...currentExperiments];
       updatedExperiments[editingExpIndex] = {
         ...updatedExperiments[editingExpIndex],
         ...editingExp
@@ -234,11 +239,12 @@
 
   async function deleteExperiment(index: number) {
     if (!flow || !canEditExperiment(index)) return;
-    if (!confirm(`Delete "${flow.config.experiments[index].name}"? This cannot be undone.`)) return;
+    const experiments = flow.config.experiments || [];
+    if (!confirm(`Delete "${experiments[index]?.name || 'Experiment'}"? This cannot be undone.`)) return;
 
     saving = true;
     try {
-      const updatedExperiments = flow.config.experiments.filter((_, i) => i !== index);
+      const updatedExperiments = experiments.filter((_, i) => i !== index);
 
       const updatedConfig = {
         ...flow.config,
@@ -265,10 +271,11 @@
     saving = true;
 
     try {
+      const currentExperiments = flow.config.experiments || [];
       const updatedExperiments = [
-        ...flow.config.experiments,
+        ...currentExperiments,
         {
-          name: newPhase.name || `Extra Phase ${flow.config.experiments.length + 1}`,
+          name: newPhase.name || `Phase ${currentExperiments.length + 1}`,
           experiment_type: newPhase.experiment_type,
           optimize_bits: newPhase.optimize_bits,
           optimize_neurons: newPhase.optimize_neurons,
@@ -635,7 +642,7 @@
 
     <section class="section">
       <div class="section-header">
-        <h2>Experiments ({flow.config.experiments.length})</h2>
+        <h2>Experiments ({(flow.config.experiments || []).length})</h2>
         {#if flow.status === 'pending' || flow.status === 'running'}
           <button class="btn btn-sm btn-secondary" on:click={() => showAddPhase = true}>
             + Add Phase
@@ -693,7 +700,7 @@
       {/if}
 
       <div class="experiments-list">
-        {#each flow.config.experiments as exp, i}
+        {#each (flow.config.experiments || []) as exp, i}
           {@const status = getExpStatus(exp, i)}
           {@const metrics = getExpMetrics(exp, i)}
           {@const isRunning = isRunningExperiment(exp, i)}
