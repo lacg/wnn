@@ -128,13 +128,13 @@ class FlowWorker:
         from collections import Counter
 
         from datasets import load_dataset
-        from transformers import GPT2TokenizerFast
+        from transformers import AutoTokenizer
 
         self._log("Pre-caching tokenizer and dataset...")
 
         # Load tokenizer (will download if not cached)
         self._log("  Loading GPT2 tokenizer...")
-        self._tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
+        self._tokenizer = AutoTokenizer.from_pretrained("gpt2")
         self._vocab_size = self._tokenizer.vocab_size
         self._log(f"  Tokenizer loaded (vocab size: {self._vocab_size:,})")
 

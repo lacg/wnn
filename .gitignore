@@ -273,3 +273,8 @@ results_*.json
 # Dashboard runtime files
 dashboard/*.db
 dashboard/frontend/.svelte-kit/
+
+# Node
+node_modules/
+*.db-shm
+*.db-wal
