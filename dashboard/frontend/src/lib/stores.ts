@@ -1,4 +1,4 @@
-import { writable, derived } from 'svelte/store';
+import { writable, derived, get } from 'svelte/store';
 import { browser } from '$app/environment';
 import type {
   Experiment, Phase, Iteration, WsMessage, HealthCheck, Flow, Checkpoint, PhaseSummary,
@@ -295,6 +295,31 @@ function handleWsMessage(msg: WsMessage) {
         f.map((x) => (x.id === flow.id ? flow : x))
       );
       console.error('Flow failed:', flow.name, error);
+      break;
+    }
+
+    case 'FlowQueued': {
+      const flow = msg.data;
+      flows.update((f) => {
+        const existing = f.find((x) => x.id === flow.id);
+        if (existing) {
+          return f.map((x) => (x.id === flow.id ? flow : x));
+        }
+        return [...f, flow];
+      });
+      console.log('Flow queued:', flow.name);
+      break;
+    }
+
+    case 'FlowCancelled': {
+      const flow = msg.data;
+      flows.update((f) =>
+        f.map((x) => (x.id === flow.id ? flow : x))
+      );
+      if (get(currentFlow)?.id === flow.id) {
+        currentFlow.set(flow);
+      }
+      console.log('Flow cancelled:', flow.name);
       break;
     }
 

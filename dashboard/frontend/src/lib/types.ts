@@ -106,6 +106,8 @@ export type WsMessage =
   | { type: 'FlowStarted'; data: Flow }
   | { type: 'FlowCompleted'; data: Flow }
   | { type: 'FlowFailed'; data: { flow: Flow; error: string } }
+  | { type: 'FlowQueued'; data: Flow }
+  | { type: 'FlowCancelled'; data: Flow }
   | { type: 'CheckpointCreated'; data: Checkpoint }
   | { type: 'CheckpointDeleted'; data: { id: number } }
   | { type: 'PhaseSummary'; data: PhaseSummary };
