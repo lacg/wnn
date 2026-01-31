@@ -453,7 +453,7 @@ async fn stop_flow(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
-    // Get the flow to check PID
+    // Get the flow to check status
     let flow = match crate::db::queries::get_flow(&state.db, id).await {
         Ok(Some(f)) => f,
         Ok(None) => return (
@@ -474,34 +474,21 @@ async fn stop_flow(
         ).into_response();
     }
 
-    // Send SIGTERM if PID exists
-    if let Some(pid) = flow.pid {
-        #[cfg(unix)]
-        unsafe {
-            libc::kill(pid as i32, libc::SIGTERM);
-        }
-        tracing::info!("Sent SIGTERM to flow {} (PID {})", id, pid);
+    // Use shared stop function (sends SIGTERM, updates status to cancelled)
+    if let Err(e) = crate::db::queries::stop_flow_process(&state.db, id).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response();
     }
 
-    // Update status to cancelled
-    match crate::db::queries::update_flow(
-        &state.db,
-        id,
-        None,
-        None,
-        Some("cancelled"),
-        None,
-        None,
-    ).await {
-        Ok(_) => {
-            // Broadcast cancellation
-            if let Ok(Some(updated_flow)) = crate::db::queries::get_flow(&state.db, id).await {
-                let _ = state.ws_tx.send(WsMessage::FlowCancelled(updated_flow.clone()));
-                (StatusCode::OK, Json(updated_flow)).into_response()
-            } else {
-                (StatusCode::OK, Json(serde_json::json!({"stopped": true}))).into_response()
-            }
+    // Broadcast cancellation and return updated flow
+    match crate::db::queries::get_flow(&state.db, id).await {
+        Ok(Some(updated_flow)) => {
+            let _ = state.ws_tx.send(WsMessage::FlowCancelled(updated_flow.clone()));
+            (StatusCode::OK, Json(updated_flow)).into_response()
         }
+        Ok(None) => (StatusCode::OK, Json(serde_json::json!({"stopped": true}))).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),

@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite};
+use tracing;
 
 pub type DbPool = Pool<Sqlite>;
 
@@ -774,6 +775,9 @@ pub mod queries {
     }
 
     pub async fn delete_flow(pool: &DbPool, id: i64) -> Result<bool> {
+        // Stop any running process first
+        stop_flow_process(pool, id).await?;
+
         // Delete all associated data (experiments, phases, iterations, checkpoints)
         delete_flow_data(pool, id).await?;
 
@@ -790,6 +794,42 @@ pub mod queries {
             .await?;
 
         Ok(result.rows_affected() > 0)
+    }
+
+    /// Stop a running flow process by sending SIGTERM.
+    /// This is reusable by delete_flow, update_flow_for_restart, etc.
+    pub async fn stop_flow_process(pool: &DbPool, flow_id: i64) -> Result<()> {
+        // Get the flow's PID
+        let pid: Option<i64> = sqlx::query_scalar(
+            "SELECT pid FROM flows WHERE id = ?"
+        )
+        .bind(flow_id)
+        .fetch_optional(pool)
+        .await?
+        .flatten();
+
+        if let Some(pid) = pid {
+            #[cfg(unix)]
+            {
+                // Send SIGTERM to gracefully stop the process
+                let result = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+                if result == 0 {
+                    tracing::info!("Sent SIGTERM to flow {} (PID {})", flow_id, pid);
+                } else {
+                    tracing::warn!("Failed to send SIGTERM to flow {} (PID {})", flow_id, pid);
+                }
+            }
+
+            // Clear the PID and set status to cancelled
+            sqlx::query(
+                "UPDATE flows SET pid = NULL, status = 'cancelled', updated_at = datetime('now') WHERE id = ?"
+            )
+            .bind(flow_id)
+            .execute(pool)
+            .await?;
+        }
+
+        Ok(())
     }
 
     /// Delete all data associated with a flow (experiments, phases, iterations, checkpoints)
