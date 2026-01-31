@@ -1,10 +1,34 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
   import type { Flow, Experiment, Checkpoint, Phase, PhaseResult } from '$lib/types';
   import { formatDate } from '$lib/dateFormat';
+  import { currentFlow, flows } from '$lib/stores';
 
   let flow: Flow | null = null;
+
+  // Subscribe to flow updates from WebSocket
+  const unsubscribeCurrentFlow = currentFlow.subscribe((wsFlow) => {
+    if (wsFlow && flow && wsFlow.id === flow.id) {
+      // Update local flow with WebSocket data
+      flow = wsFlow;
+    }
+  });
+
+  // Also subscribe to flows list updates (for FlowQueued, FlowStarted, etc.)
+  const unsubscribeFlows = flows.subscribe((flowList) => {
+    if (flow) {
+      const updated = flowList.find((f) => f.id === flow!.id);
+      if (updated && updated.status !== flow.status) {
+        flow = updated;
+      }
+    }
+  });
+
+  onDestroy(() => {
+    unsubscribeCurrentFlow();
+    unsubscribeFlows();
+  });
   let experiments: Experiment[] = [];
   let checkpoints: Checkpoint[] = [];
   let phases: Phase[] = [];
