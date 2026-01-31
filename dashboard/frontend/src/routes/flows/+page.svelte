@@ -6,8 +6,13 @@
 
   let loading = true;
   let error: string | null = null;
+  let deleting: number | null = null;
 
   onMount(async () => {
+    await loadFlows();
+  });
+
+  async function loadFlows() {
     try {
       const response = await fetch('/api/flows');
       if (!response.ok) throw new Error('Failed to fetch flows');
@@ -18,7 +23,25 @@
     } finally {
       loading = false;
     }
-  });
+  }
+
+  async function deleteFlow(event: MouseEvent, flow: Flow) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (!confirm(`Delete flow "${flow.name}"? This cannot be undone.`)) return;
+
+    deleting = flow.id;
+    try {
+      const response = await fetch(`/api/flows/${flow.id}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error('Failed to delete flow');
+      await loadFlows();
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Failed to delete';
+    } finally {
+      deleting = null;
+    }
+  }
 
   function getStatusColor(status: string): string {
     switch (status) {
@@ -50,12 +73,22 @@
   {:else}
     <div class="flows-grid">
       {#each $flows as flow}
-        <a href="/flows/{flow.id}" class="flow-card">
+        <a href="/flows/{flow.id}" class="flow-card" class:deleting={deleting === flow.id}>
           <div class="flow-header">
             <h3 class="flow-name">{flow.name}</h3>
-            <span class="status-badge" style="background: {getStatusColor(flow.status)}">
-              {flow.status}
-            </span>
+            <div class="flow-header-actions">
+              <span class="status-badge" style="background: {getStatusColor(flow.status)}">
+                {flow.status}
+              </span>
+              <button
+                class="btn-delete"
+                title="Delete flow"
+                on:click={(e) => deleteFlow(e, flow)}
+                disabled={deleting === flow.id}
+              >
+                {deleting === flow.id ? '...' : '×'}
+              </button>
+            </div>
           </div>
 
           {#if flow.description}
@@ -65,7 +98,7 @@
           <div class="flow-meta">
             <div class="meta-item">
               <span class="meta-label">Experiments</span>
-              <span class="meta-value">{flow.config.experiments.length}</span>
+              <span class="meta-value">{(flow.config.experiments || []).length}</span>
             </div>
             {#if flow.config.template}
               <div class="meta-item">
@@ -216,5 +249,43 @@
     gap: 0.25rem;
     font-size: 0.75rem;
     color: var(--text-tertiary);
+  }
+
+  .flow-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .btn-delete {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+  }
+
+  .btn-delete:hover {
+    background: var(--accent-red);
+    border-color: var(--accent-red);
+    color: white;
+  }
+
+  .btn-delete:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .flow-card.deleting {
+    opacity: 0.5;
+    pointer-events: none;
   }
 </style>
