@@ -22,10 +22,12 @@ export const allIterations = writable<Iteration[]>([]);
 // WebSocket connection
 export const wsConnected = writable(false);
 
-// V2 mode toggle (persisted in localStorage)
+// V2 mode toggle (persisted in localStorage, defaults to V2)
 function createV2ModeStore() {
   const storedMode = typeof localStorage !== 'undefined' ? localStorage.getItem('wnn-mode') : null;
-  const { subscribe, set, update } = writable(storedMode === 'v2');
+  // Default to V2 mode if no preference is stored
+  const defaultToV2 = storedMode === null || storedMode === 'v2';
+  const { subscribe, set, update } = writable(defaultToV2);
 
   return {
     subscribe,
