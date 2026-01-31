@@ -371,6 +371,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		cached_evaluator: Optional[Any] = None,  # CachedEvaluator for Rust search_offspring
 		checkpoint_config: Optional[CheckpointConfig] = None,  # Checkpoint configuration
 		phase_name: str = "GA Optimization",  # Phase name for checkpoints
+		shutdown_check: Optional[Callable[[], bool]] = None,  # Callable returning True if shutdown requested
 	):
 		super().__init__(config=ga_config, seed=seed, logger=logger)
 		self._arch_config = arch_config
@@ -384,6 +385,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			self._cached_evaluator = None
 		self._checkpoint_config = checkpoint_config
 		self._phase_name = phase_name
+		self._shutdown_check = shutdown_check
 
 	@property
 	def name(self) -> str:
@@ -935,6 +937,22 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			self._log.info(f"[{self.name}] Resumed: best CE={best_fitness:.4f}, acc={best_acc:.4%}, population={len(population)}")
 
 		for generation in range(start_generation, cfg.generations):
+			# Check for shutdown request at start of each generation
+			if self._shutdown_check and self._shutdown_check():
+				self._log.info(f"[{self.name}] Shutdown requested at generation {generation}, stopping...")
+				# Save checkpoint before exiting
+				if checkpoint_mgr and checkpoint_mgr.config.enabled:
+					checkpoint_mgr.maybe_save(
+						iteration=generation,
+						population=population,
+						best_genome=best,
+						best_fitness=(best_fitness, best_acc),
+						current_threshold=current_threshold,
+						extra_state={"patience_counter": early_stop._patience_counter},
+						force=True,
+					)
+				break
+
 			gen_start = time.time()
 
 			# Aggressive cleanup every generation to prevent Metal buffer accumulation
@@ -1251,6 +1269,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		logger: Optional[Callable[[str], None]] = None,
 		batch_evaluator: Optional['RustParallelEvaluator'] = None,
 		cached_evaluator: Optional[Any] = None,  # CachedEvaluator for Rust search_neighbors
+		shutdown_check: Optional[Callable[[], bool]] = None,  # Callable returning True if shutdown requested
 	):
 		super().__init__(config=ts_config, seed=seed, logger=logger)
 		self._arch_config = arch_config
@@ -1262,6 +1281,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 			self._cached_evaluator = batch_evaluator
 		else:
 			self._cached_evaluator = None
+		self._shutdown_check = shutdown_check
 
 	@property
 	def name(self) -> str:
@@ -1672,6 +1692,11 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		seed_offset = int(time.time() * 1000) % (2**16)
 
 		for iteration in range(cfg.iterations):
+			# Check for shutdown request at start of each iteration
+			if self._shutdown_check and self._shutdown_check():
+				self._log.info(f"[{self.name}] Shutdown requested at iteration {iteration}, stopping...")
+				break
+
 			iter_start = time.time()
 
 			# Aggressive cleanup every iteration to prevent Metal buffer accumulation

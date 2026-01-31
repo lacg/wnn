@@ -20,6 +20,11 @@ from wnn.ram.experiments.dashboard_client import DashboardClient, FlowConfig as 
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 
 
+class FlowStoppedError(Exception):
+	"""Raised when a flow is stopped due to shutdown request."""
+	pass
+
+
 @dataclass
 class FlowConfig:
 	"""
@@ -228,6 +233,7 @@ class Flow:
 		dashboard_client: Optional[DashboardClient] = None,
 		flow_id: Optional[int] = None,
 		tracker: Optional[Any] = None,  # ExperimentTracker for V2 tracking
+		shutdown_check: Optional[Callable[[], bool]] = None,  # Callable returning True if shutdown requested
 	):
 		"""
 		Initialize flow.
@@ -240,6 +246,7 @@ class Flow:
 			dashboard_client: Optional dashboard client for API integration
 			flow_id: Existing flow ID (skip creating new flow if provided)
 			tracker: Optional V2 tracker for direct database writes
+			shutdown_check: Optional callable that returns True if shutdown requested
 		"""
 		self.config = config
 		self.evaluator = evaluator
@@ -247,6 +254,7 @@ class Flow:
 		self.checkpoint_dir = checkpoint_dir
 		self.dashboard_client = dashboard_client
 		self.tracker = tracker
+		self.shutdown_check = shutdown_check
 
 		self._flow_id: Optional[int] = flow_id
 		self._experiment_ids: dict[int, int] = {}  # idx -> experiment_id (V1/dashboard)
@@ -396,6 +404,11 @@ class Flow:
 					except Exception as e:
 						self.log(f"Warning: Failed to create experiment in dashboard: {e}")
 
+				# Check for shutdown before starting experiment
+				if self.shutdown_check and self.shutdown_check():
+					self.log(f"Shutdown requested, stopping flow before experiment {idx}")
+					raise FlowStoppedError("Shutdown requested")
+
 				# Create and run experiment
 				experiment = Experiment(
 					config=exp_config,
@@ -406,6 +419,7 @@ class Flow:
 					experiment_id=experiment_id,
 					tracker=self.tracker,
 					flow_id=self._flow_id,
+					shutdown_check=self.shutdown_check,  # Pass shutdown check to experiment
 				)
 
 				result = experiment.run(
@@ -438,6 +452,25 @@ class Flow:
 					self.tracker.update_experiment_status(self._tracker_experiment_id, TrackerStatus.COMPLETED)
 				except Exception as e:
 					self.log(f"Warning: Failed to update V2 experiment status: {e}")
+
+		except FlowStoppedError:
+			# Flow was stopped gracefully (shutdown requested)
+			self.log("Flow stopped due to shutdown request")
+			if self.dashboard_client and self._flow_id:
+				try:
+					# Use flow_failed with a clear message, or ideally a flow_cancelled method
+					self.dashboard_client.flow_failed(self._flow_id, "Stopped by user")
+				except Exception:
+					pass
+
+			# V2 tracking: mark experiment as cancelled
+			if self.tracker and self._tracker_experiment_id:
+				try:
+					from wnn.ram.experiments.tracker import TrackerStatus
+					self.tracker.update_experiment_status(self._tracker_experiment_id, TrackerStatus.CANCELLED)
+				except Exception:
+					pass
+			raise
 
 		except Exception as e:
 			# Flow failed

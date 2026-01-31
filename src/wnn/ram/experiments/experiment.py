@@ -162,6 +162,7 @@ class Experiment:
 		experiment_id: Optional[int] = None,
 		tracker: Optional[Any] = None,  # ExperimentTracker for V2 tracking
 		flow_id: Optional[int] = None,
+		shutdown_check: Optional[Callable[[], bool]] = None,  # Callable returning True if shutdown requested
 	):
 		"""
 		Initialize experiment.
@@ -175,6 +176,7 @@ class Experiment:
 			experiment_id: Optional experiment ID for dashboard integration
 			tracker: Optional V2 tracker for direct database writes
 			flow_id: Optional flow ID for V2 tracking
+			shutdown_check: Optional callable that returns True if shutdown requested
 		"""
 		self.config = config
 		self.evaluator = evaluator
@@ -184,6 +186,7 @@ class Experiment:
 		self.experiment_id = experiment_id
 		self.tracker = tracker
 		self.flow_id = flow_id
+		self.shutdown_check = shutdown_check
 
 		# Derived properties
 		self.vocab_size = evaluator.vocab_size
@@ -272,6 +275,10 @@ class Experiment:
 			strategy_kwargs["iterations"] = cfg.iterations
 			strategy_kwargs["neighbors_per_iter"] = cfg.neighbors_per_iter
 			strategy_kwargs["total_neighbors_size"] = cfg.population_size
+
+		# Pass shutdown check if available
+		if self.shutdown_check:
+			strategy_kwargs["shutdown_check"] = self.shutdown_check
 
 		# Create strategy
 		strategy = OptimizerStrategyFactory.create(**strategy_kwargs)

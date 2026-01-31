@@ -470,6 +470,7 @@ class OptimizerStrategyFactory:
 					seed=seed,
 					logger=logger,
 					batch_evaluator=batch_evaluator,
+					shutdown_check=shutdown_check,
 				)
 
 			case OptimizerStrategyType.CONNECTIVITY_GA:
@@ -548,6 +549,7 @@ class OptimizerStrategyFactory:
 		seed_only: bool = False,
 		checkpoint_config: Any = None,
 		phase_name: str = "GA Optimization",
+		shutdown_check: Any = None,  # Callable[[], bool] for graceful shutdown
 	):
 		"""Create an ArchitectureGAStrategy."""
 		from wnn.ram.strategies.connectivity.architecture_strategies import (
@@ -587,7 +589,8 @@ class OptimizerStrategyFactory:
 		cached_evaluator = batch_evaluator if batch_evaluator and hasattr(batch_evaluator, 'search_offspring') else None
 		return ArchitectureGAStrategy(
 			arch_config, ga_config, seed, logger, batch_evaluator, cached_evaluator,
-			checkpoint_config=checkpoint_config, phase_name=phase_name
+			checkpoint_config=checkpoint_config, phase_name=phase_name,
+			shutdown_check=shutdown_check,
 		)
 
 	@staticmethod
@@ -617,6 +620,7 @@ class OptimizerStrategyFactory:
 		seed: int,
 		logger: Any,
 		batch_evaluator: Any,
+		shutdown_check: Any = None,
 	):
 		"""Create an ArchitectureTSStrategy."""
 		from wnn.ram.strategies.connectivity.architecture_strategies import (
@@ -651,7 +655,7 @@ class OptimizerStrategyFactory:
 			initial_threshold=initial_threshold,
 			fitness_percentile=fitness_percentile,
 		)
-		return ArchitectureTSStrategy(arch_config, ts_config, seed, logger, batch_evaluator)
+		return ArchitectureTSStrategy(arch_config, ts_config, seed, logger, batch_evaluator, shutdown_check=shutdown_check)
 
 	@staticmethod
 	def _create_connectivity_ga(

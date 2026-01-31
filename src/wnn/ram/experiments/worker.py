@@ -118,10 +118,14 @@ class FlowWorker:
 
     def _handle_signal(self, signum, frame):
         """Handle shutdown signals."""
-        self._log(f"Received signal {signum}, shutting down...")
+        self._log(f"Received signal {signum}, requesting graceful shutdown...")
         self.running = False
         if self.current_flow_id:
-            self._log(f"Flow {self.current_flow_id} will continue in background")
+            self._log(f"Flow {self.current_flow_id} will stop after current generation/iteration")
+
+    def should_stop(self) -> bool:
+        """Check if shutdown has been requested. Used by flow/experiment/strategy."""
+        return not self.running
 
     def _precache_data(self):
         """Pre-cache tokenizer and dataset at startup to avoid network issues during flow execution."""
@@ -278,6 +282,7 @@ class FlowWorker:
                 dashboard_client=self.client,
                 flow_id=flow_id,
                 tracker=self.tracker,
+                shutdown_check=self.should_stop,  # Pass shutdown check for graceful stop
             )
 
             result = flow.run()
