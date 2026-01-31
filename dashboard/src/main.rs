@@ -3,10 +3,11 @@
 //! Real-time monitoring for phased architecture search experiments.
 //! Uses database polling for real-time updates (no log parsing).
 //!
-//! TLS Support:
-//! - Set DASHBOARD_TLS=1 to enable HTTPS
+//! TLS Support (enabled by default):
+//! - Set DASHBOARD_TLS=0 to disable HTTPS (not recommended)
 //! - Certificates default to certs/cert.pem and certs/key.pem
 //! - Override with DASHBOARD_CERT and DASHBOARD_KEY env vars
+//! - HTTP requests are automatically redirected to HTTPS
 
 mod api;
 mod db;
@@ -16,6 +17,13 @@ use std::sync::Arc;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use anyhow::Result;
+use axum::{
+    response::Redirect,
+    routing::any,
+    Router,
+    extract::Host,
+    http::Uri,
+};
 use tokio::sync::broadcast;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
@@ -53,16 +61,21 @@ async fn main() -> Result<()> {
         .layer(CorsLayer::permissive());
 
     // Get port from environment or use default
-    let port: u16 = std::env::var("DASHBOARD_PORT")
+    let https_port: u16 = std::env::var("DASHBOARD_PORT")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(3000);
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let http_port: u16 = std::env::var("DASHBOARD_HTTP_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3080);
+    let https_addr = SocketAddr::from(([0, 0, 0, 0], https_port));
+    let http_addr = SocketAddr::from(([0, 0, 0, 0], http_port));
 
-    // Check if TLS is enabled
+    // Check if TLS is enabled (default: true)
     let tls_enabled = std::env::var("DASHBOARD_TLS")
-        .map(|v| v == "1" || v.to_lowercase() == "true")
-        .unwrap_or(false);
+        .map(|v| v != "0" && v.to_lowercase() != "false")
+        .unwrap_or(true);
 
     if tls_enabled {
         // Load TLS certificates
@@ -82,15 +95,39 @@ async fn main() -> Result<()> {
         .await
         .expect("Failed to load TLS certificates");
 
-        tracing::info!("Starting dashboard with TLS at https://{}", addr);
+        // Start HTTP redirect server in background
+        let redirect_https_port = https_port;
+        tokio::spawn(async move {
+            let redirect_app = Router::new()
+                .fallback(any(move |Host(host): Host, uri: Uri| async move {
+                    // Extract hostname without port
+                    let host_without_port = host.split(':').next().unwrap_or(&host);
+                    let https_uri = if redirect_https_port == 443 {
+                        format!("https://{}{}", host_without_port, uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/"))
+                    } else {
+                        format!("https://{}:{}{}", host_without_port, redirect_https_port, uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/"))
+                    };
+                    Redirect::permanent(&https_uri)
+                }));
 
-        axum_server::bind_rustls(addr, tls_config)
+            tracing::info!("Starting HTTP redirect server at http://{} -> https://", http_addr);
+
+            if let Ok(listener) = tokio::net::TcpListener::bind(http_addr).await {
+                let _ = axum::serve(listener, redirect_app).await;
+            } else {
+                tracing::warn!("Failed to bind HTTP redirect server on port {}", http_port);
+            }
+        });
+
+        tracing::info!("Starting dashboard with TLS at https://{}", https_addr);
+
+        axum_server::bind_rustls(https_addr, tls_config)
             .serve(app.into_make_service())
             .await?;
     } else {
-        tracing::info!("Starting dashboard at http://{}", addr);
+        tracing::info!("Starting dashboard at http://{} (TLS disabled)", https_addr);
 
-        let listener = tokio::net::TcpListener::bind(addr).await?;
+        let listener = tokio::net::TcpListener::bind(https_addr).await?;
         axum::serve(listener, app).await?;
     }
 
