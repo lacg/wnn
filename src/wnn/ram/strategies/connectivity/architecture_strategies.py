@@ -1790,6 +1790,9 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 					return_best_n=True,
 				)
 
+				# Track per-iteration stats (before and after filter)
+				iter_neighbors_generated = len(neighbors)
+
 				# Apply percentile filter by harmonic rank fitness
 				# Note: 0 means disabled, same as None
 				if cfg.fitness_percentile and cfg.fitness_percentile > 0 and neighbors:
@@ -1804,6 +1807,9 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 					)
 					filter_result = fitness_filter.apply(neighbor_with_fitness, key=lambda g, f: f)
 					neighbors = [g for g, _ in filter_result.kept]
+
+				# Track neighbors after filter (for per-iteration stats)
+				iter_neighbors_viable = len(neighbors)
 
 				# Add to all_neighbors and track best_ce/best_acc
 				for g in neighbors:
@@ -1860,6 +1866,10 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 				# === CE mode: Dual path ===
 				neighbors_per_path = cfg.neighbors_per_iter // 2
 
+				# Initialize per-iteration tracking for CE mode
+				iter_neighbors_generated = 0
+				iter_neighbors_viable = 0
+
 				# Path A: Search from best_ce
 				self._log.debug(f"[{self.name}] Path CE: searching {neighbors_per_path} neighbors...")
 				ce_neighbors = evaluator.search_neighbors(
@@ -1902,6 +1912,9 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 					return_best_n=True,
 				)
 
+				# Track generated neighbors (before filter)
+				iter_neighbors_generated = len(ce_neighbors) + len(acc_neighbors)
+
 				# Apply percentile filter if configured
 				# Note: 0 means disabled, same as None
 				if cfg.fitness_percentile and cfg.fitness_percentile > 0:
@@ -1937,6 +1950,9 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 							acc_population = [(g, g._cached_fitness[0]) for g in acc_neighbors]
 							filter_result = ce_filter.apply(acc_population, key=lambda g, f: f)
 							acc_neighbors = [g for g, _ in filter_result.kept]
+
+				# Track viable neighbors after filter (for per-iteration stats)
+				iter_neighbors_viable = len(ce_neighbors) + len(acc_neighbors)
 
 				# Process all neighbors
 				for g in ce_neighbors + acc_neighbors:
@@ -1999,7 +2015,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 					delta_baseline = (best_fitness - baseline_ce) if baseline_ce is not None else None
 					delta_previous = best_fitness - prev_best_fitness
 					patience_counter = early_stopper._patience_counter if hasattr(early_stopper, '_patience_counter') else 0
-					candidates_total = len(all_neighbors)  # Total neighbors in pool
+					candidates_total = len(all_neighbors)  # Total neighbors in cache (for reference)
 
 					iteration_id = self._tracker.record_iteration(
 						phase_id=self._tracker_phase_id,
@@ -2009,8 +2025,8 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 						avg_ce=avg_ce,
 						avg_accuracy=avg_acc,
 						elite_count=1,  # TS has one "current" genome
-						offspring_count=len(all_neighbors) - 1,  # neighbors generated
-						offspring_viable=len(valid_neighbors),
+						offspring_count=iter_neighbors_generated,  # Neighbors generated this iteration
+						offspring_viable=iter_neighbors_viable,  # Neighbors after percentile filter
 						fitness_threshold=current_threshold,
 						elapsed_secs=iter_elapsed,
 						baseline_ce=baseline_ce,

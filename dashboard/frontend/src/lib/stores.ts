@@ -139,7 +139,15 @@ function handleWsMessage(msg: WsMessage) {
         console.log('No current_phase in snapshot, using fallback:', snapshotPhase?.name);
       }
       currentPhase.set(snapshotPhase || null);
-      iterations.set(snapshot.iterations || []);
+
+      // Filter iterations to only show those from the current phase
+      // This prevents mixing iterations from different phases
+      const allIterations = snapshot.iterations || [];
+      const currentPhaseId = snapshotPhase?.id;
+      const filteredIterations = currentPhaseId
+        ? allIterations.filter((iter: Iteration) => iter.phase_id === currentPhaseId)
+        : allIterations;
+      iterations.set(filteredIterations);
 
       // Build CE history from iterations
       const history = (snapshot.iterations || []).map((iter: Iteration) => ({
@@ -190,6 +198,13 @@ function handleWsMessage(msg: WsMessage) {
     case 'IterationCompleted': {
       const iter = msg.data;
       console.log(`[Iter ${iter.iteration_num}] CE=${iter.best_ce?.toFixed(4)}, Acc=${iter.best_accuracy?.toFixed(4) ?? 'null'}%, AvgCE=${iter.avg_ce?.toFixed(4) ?? 'null'}, AvgAcc=${iter.avg_accuracy?.toFixed(4) ?? 'null'}%`);
+
+      // Only add iterations from the current phase to prevent mixing
+      const currentPhaseValue = get(currentPhase);
+      if (currentPhaseValue && iter.phase_id !== currentPhaseValue.id) {
+        console.log(`[Iter ${iter.iteration_num}] Skipping - different phase (${iter.phase_id} vs ${currentPhaseValue.id})`);
+        break;
+      }
 
       // Add to iterations (keep last 500, deduplicate by id)
       iterations.update((iters) => {
