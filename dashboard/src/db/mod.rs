@@ -504,6 +504,22 @@ pub mod queries {
         .execute(pool)
         .await?;
 
+        // Also cancel all running experiments linked to this flow
+        sqlx::query(
+            "UPDATE experiments SET status = 'cancelled', ended_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE flow_id = ? AND status = 'running'"
+        )
+        .bind(flow_id)
+        .execute(pool)
+        .await?;
+
+        // And cancel all running phases for those experiments
+        sqlx::query(
+            "UPDATE phases SET status = 'cancelled', ended_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE experiment_id IN (SELECT id FROM experiments WHERE flow_id = ?) AND status = 'running'"
+        )
+        .bind(flow_id)
+        .execute(pool)
+        .await?;
+
         Ok(())
     }
 
@@ -1188,6 +1204,7 @@ pub mod queries {
             "completed" => PhaseStatus::Completed,
             "skipped" => PhaseStatus::Skipped,
             "failed" => PhaseStatus::Failed,
+            "cancelled" => PhaseStatus::Cancelled,
             _ => PhaseStatus::Pending,
         }
     }

@@ -55,6 +55,7 @@ pub enum PhaseStatus {
     Completed,
     Skipped,
     Failed,
+    Cancelled,
 }
 
 impl Default for PhaseStatus {
