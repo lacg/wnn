@@ -429,6 +429,34 @@
     }
   }
 
+  async function updateFitnessCalculator(value: string) {
+    if (!flow) return;
+    saving = true;
+
+    try {
+      const updatedConfig = {
+        ...flow.config,
+        params: {
+          ...flow.config.params,
+          fitness_calculator: value
+        }
+      };
+
+      const response = await fetch(`/api/flows/${flow.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config: updatedConfig })
+      });
+
+      if (!response.ok) throw new Error('Failed to update fitness calculator');
+      await loadFlow();
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Failed to update';
+    } finally {
+      saving = false;
+    }
+  }
+
   async function queueFlow() {
     if (!flow) return;
     try {
@@ -838,6 +866,21 @@
           <div class="param-item">
             <span class="param-label">Fitness %</span>
             <span class="param-value">{flow.config.params.fitness_percentile ?? 0.75}</span>
+          </div>
+          <div class="param-item">
+            <span class="param-label">Fitness Calculator</span>
+            <span class="param-value param-editable">
+              <select
+                class="inline-select"
+                value={flow.config.params.fitness_calculator ?? 'harmonic_rank'}
+                on:change={(e) => updateFitnessCalculator(e.currentTarget.value)}
+                disabled={saving}
+              >
+                <option value="harmonic_rank">Harmonic Rank</option>
+                <option value="normalized">Normalized</option>
+                <option value="ce">CE Only</option>
+              </select>
+            </span>
           </div>
           <div class="param-item">
             <span class="param-label">Tier0 Only</span>
@@ -1828,5 +1871,37 @@
     .results-grid {
       grid-template-columns: 1fr;
     }
+  }
+
+  /* Inline editable select in params */
+  .param-editable {
+    display: flex;
+    align-items: center;
+  }
+
+  .inline-select {
+    padding: 0.25rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+
+  .inline-select:hover:not(:disabled) {
+    border-color: var(--accent-blue);
+  }
+
+  .inline-select:focus {
+    outline: none;
+    border-color: var(--accent-blue);
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+  }
+
+  .inline-select:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
   }
 </style>
