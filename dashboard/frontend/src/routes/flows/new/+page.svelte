@@ -13,6 +13,7 @@
   let patience = 10;
   let fitnessPercentile = 0.75;
   let fitnessCalculator = 'normalized';  // Default to normalized for balanced CE+accuracy
+  let minAccuracyFloor = 0;  // 0 = disabled, 0.003 = 0.3% floor
   let contextSize = 4;
   let tierConfig = '100,15,20;400,10,12;rest,5,8';
   let tier0Only = true;
@@ -110,6 +111,7 @@
               patience,
               fitness_percentile: fitnessPercentile,
               fitness_calculator: fitnessCalculator,
+              min_accuracy_floor: minAccuracyFloor,
               context_size: contextSize,
               tier_config: tierConfig || null,
               tier0_only: tier0Only,
@@ -270,6 +272,12 @@
             <option value="ce">CE Only</option>
           </select>
           <span class="field-hint">How to combine CE and accuracy for ranking</span>
+        </div>
+
+        <div class="form-group">
+          <label for="minAccuracyFloor">Accuracy Floor</label>
+          <input type="number" id="minAccuracyFloor" bind:value={minAccuracyFloor} min="0" max="0.1" step="0.001" />
+          <span class="field-hint">Min accuracy threshold (0.003 = 0.3%). Below = worst fitness</span>
         </div>
       </div>
 

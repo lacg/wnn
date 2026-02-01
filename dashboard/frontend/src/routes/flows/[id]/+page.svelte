@@ -67,6 +67,7 @@
     fitness_calculator: 'normalized',
     fitness_weight_ce: 1.0,
     fitness_weight_acc: 1.0,
+    min_accuracy_floor: 0,
     tier_config: '',
     tier0_only: false,
     phase_order: 'neurons_first',
@@ -124,6 +125,7 @@
         editConfig.fitness_calculator = p.fitness_calculator ?? 'normalized';
         editConfig.fitness_weight_ce = p.fitness_weight_ce ?? 1.0;
         editConfig.fitness_weight_acc = p.fitness_weight_acc ?? 1.0;
+        editConfig.min_accuracy_floor = p.min_accuracy_floor ?? 0;
         editConfig.tier0_only = p.tier0_only ?? p.optimize_tier0_only ?? false;
         editConfig.phase_order = p.phase_order ?? 'neurons_first';
         editConfig.context_size = p.context_size ?? 4;
@@ -176,6 +178,7 @@
           fitness_calculator: editConfig.fitness_calculator,
           fitness_weight_ce: editConfig.fitness_weight_ce,
           fitness_weight_acc: editConfig.fitness_weight_acc,
+          min_accuracy_floor: editConfig.min_accuracy_floor,
           tier0_only: editConfig.tier0_only,
           phase_order: editConfig.phase_order,
           context_size: editConfig.context_size,
@@ -853,6 +856,11 @@
 
           <div class="form-row">
             <div class="form-group">
+              <label for="min_accuracy_floor">Accuracy Floor</label>
+              <input type="number" id="min_accuracy_floor" bind:value={editConfig.min_accuracy_floor} min="0" max="0.1" step="0.001" />
+              <span class="form-hint">Min accuracy threshold (0.003 = 0.3%). Below = worst fitness</span>
+            </div>
+            <div class="form-group">
               <label for="context_size">Context Size (N-gram)</label>
               <input type="number" id="context_size" bind:value={editConfig.context_size} min="1" max="16" />
               <span class="form-hint">Number of context tokens (e.g., 4 = 4-gram)</span>
@@ -962,6 +970,19 @@
                   max="10"
                   step="0.1"
                   on:change={(e) => updateFitnessWeight('fitness_weight_acc', parseFloat(e.currentTarget.value))}
+                  disabled={saving}
+                />
+              </div>
+              <div class="param-group-item">
+                <span class="param-label">Acc Floor</span>
+                <input
+                  type="number"
+                  class="inline-input"
+                  value={flow.config.params.min_accuracy_floor ?? 0}
+                  min="0"
+                  max="0.1"
+                  step="0.001"
+                  on:change={(e) => updateFitnessWeight('min_accuracy_floor', parseFloat(e.currentTarget.value))}
                   disabled={saving}
                 />
               </div>
