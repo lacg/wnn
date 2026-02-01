@@ -919,54 +919,53 @@
             <span class="param-value">{flow.config.params.fitness_percentile ?? 0.75}</span>
           </div>
           <div class="param-item">
-            <span class="param-label">Fitness Calculator</span>
-            <span class="param-value param-editable">
-              <select
-                class="inline-select"
-                value={flow.config.params.fitness_calculator ?? 'normalized'}
-                on:change={(e) => updateFitnessCalculator(e.currentTarget.value)}
-                disabled={saving}
-              >
-                <option value="normalized">Normalized</option>
-                <option value="normalized_harmonic">Normalized Harmonic</option>
-                <option value="harmonic_rank">Harmonic Rank</option>
-                <option value="ce">CE Only</option>
-              </select>
-            </span>
-          </div>
-          <div class="param-item">
-            <span class="param-label">CE Weight</span>
-            <span class="param-value param-editable">
-              <input
-                type="number"
-                class="inline-input"
-                value={flow.config.params.fitness_weight_ce ?? 1.0}
-                min="0"
-                max="10"
-                step="0.1"
-                on:change={(e) => updateFitnessWeight('fitness_weight_ce', parseFloat(e.currentTarget.value))}
-                disabled={saving}
-              />
-            </span>
-          </div>
-          <div class="param-item">
-            <span class="param-label">Acc Weight</span>
-            <span class="param-value param-editable">
-              <input
-                type="number"
-                class="inline-input"
-                value={flow.config.params.fitness_weight_acc ?? 1.0}
-                min="0"
-                max="10"
-                step="0.1"
-                on:change={(e) => updateFitnessWeight('fitness_weight_acc', parseFloat(e.currentTarget.value))}
-                disabled={saving}
-              />
-            </span>
-          </div>
-          <div class="param-item">
             <span class="param-label">Tier0 Only</span>
             <span class="param-value">{(flow.config.params.optimize_tier0_only || flow.config.params.tier0_only) ? 'Yes' : 'No'}</span>
+          </div>
+          <div class="param-group full-width">
+            <span class="param-group-label">Fitness</span>
+            <div class="param-group-items">
+              <div class="param-group-item">
+                <span class="param-label">Calculator</span>
+                <select
+                  class="inline-select"
+                  value={flow.config.params.fitness_calculator ?? 'normalized'}
+                  on:change={(e) => updateFitnessCalculator(e.currentTarget.value)}
+                  disabled={saving}
+                >
+                  <option value="normalized">Normalized</option>
+                  <option value="normalized_harmonic">Normalized Harmonic</option>
+                  <option value="harmonic_rank">Harmonic Rank</option>
+                  <option value="ce">CE Only</option>
+                </select>
+              </div>
+              <div class="param-group-item">
+                <span class="param-label">CE Weight</span>
+                <input
+                  type="number"
+                  class="inline-input"
+                  value={flow.config.params.fitness_weight_ce ?? 1.0}
+                  min="0"
+                  max="10"
+                  step="0.1"
+                  on:change={(e) => updateFitnessWeight('fitness_weight_ce', parseFloat(e.currentTarget.value))}
+                  disabled={saving}
+                />
+              </div>
+              <div class="param-group-item">
+                <span class="param-label">Acc Weight</span>
+                <input
+                  type="number"
+                  class="inline-input"
+                  value={flow.config.params.fitness_weight_acc ?? 1.0}
+                  min="0"
+                  max="10"
+                  step="0.1"
+                  on:change={(e) => updateFitnessWeight('fitness_weight_acc', parseFloat(e.currentTarget.value))}
+                  disabled={saving}
+                />
+              </div>
+            </div>
           </div>
           {#if flow.config.params.tier_config}
             <div class="param-item full-width">
@@ -1516,8 +1515,42 @@
     gap: 0.25rem;
   }
 
-  .param-item.full-width {
+  .param-item.full-width,
+  .param-group.full-width {
     grid-column: 1 / -1;
+  }
+
+  .param-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    background: var(--bg-tertiary);
+    border-radius: 6px;
+    border: 1px solid var(--border);
+  }
+
+  .param-group-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+  }
+
+  .param-group-items {
+    display: flex;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+  }
+
+  .param-group-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .param-group-item .param-label {
+    font-size: 0.7rem;
   }
 
   .param-label {
