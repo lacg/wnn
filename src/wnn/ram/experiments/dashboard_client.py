@@ -305,6 +305,10 @@ class DashboardClient:
 			self._logger(f"Flow {flow_id} failed: {error}")
 		return result
 
+	def requeue_flow(self, flow_id: int) -> dict:
+		"""Re-queue a flow for resumption after graceful shutdown."""
+		return self.update_flow(flow_id, status="queued")
+
 	def register_flow_pid(self, flow_id: int, pid: int) -> dict:
 		"""Register the worker process PID for a flow.
 

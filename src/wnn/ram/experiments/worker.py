@@ -345,13 +345,26 @@ class FlowWorker:
             self._log(f"Flow completed: CE={result.final_fitness:.4f}")
 
         except Exception as e:
-            self._log(f"Flow failed: {e}")
-            import traceback
-            traceback.print_exc()
-            try:
-                self.client.flow_failed(flow_id, str(e))
-            except Exception:
-                pass
+            error_msg = str(e).lower()
+            is_shutdown = self._stop_current_flow or "shutdown" in error_msg or "stopped" in error_msg
+
+            if is_shutdown:
+                # Graceful shutdown - re-queue the flow so it can be resumed
+                self._log(f"Flow stopped due to shutdown, re-queuing for resume")
+                try:
+                    self.client.requeue_flow(flow_id)
+                except Exception:
+                    # Fallback: just log, don't mark as failed
+                    self._log(f"Warning: Could not re-queue flow {flow_id}")
+            else:
+                # Actual error - mark as failed
+                self._log(f"Flow failed: {e}")
+                import traceback
+                traceback.print_exc()
+                try:
+                    self.client.flow_failed(flow_id, str(e))
+                except Exception:
+                    pass
 
         finally:
             self.current_flow_id = None
