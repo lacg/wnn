@@ -395,29 +395,57 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		"""
 		Convert a ClusterGenome to a GenomeConfig for tracking.
 
-		Groups clusters by their (neurons, bits) configuration to create tiers.
-		This enables genome-level tracking in the dashboard.
+		Finds contiguous runs of clusters with the same (neurons, bits) config.
+		This enables proper tracking of which cluster indices belong to which tier.
+
+		The tier index is assigned based on the order of first appearance
+		(earliest cluster index = tier 0), preserving the original tier config order.
 		"""
 		if not HAS_GENOME_TRACKING or GenomeConfig is None or TierConfig is None:
 			return None
 
-		# Group clusters by (neurons, bits) to create tier configs
-		from collections import defaultdict
-		tier_groups: dict[tuple[int, int], int] = defaultdict(int)
+		# Find contiguous runs of clusters with same (neurons, bits)
+		runs: list[tuple[int, int, int, int]] = []  # (start, end, neurons, bits)
+		if len(genome.neurons_per_cluster) == 0:
+			return GenomeConfig(tiers=[])
 
-		for neurons, bits in zip(genome.neurons_per_cluster, genome.bits_per_cluster):
-			tier_groups[(neurons, bits)] += 1
+		current_neurons = genome.neurons_per_cluster[0]
+		current_bits = genome.bits_per_cluster[0]
+		run_start = 0
 
-		# Sort by cluster count (descending) to assign tier indices
-		sorted_configs = sorted(tier_groups.items(), key=lambda x: -x[1])
+		for i in range(1, len(genome.neurons_per_cluster)):
+			neurons = genome.neurons_per_cluster[i]
+			bits = genome.bits_per_cluster[i]
+			if neurons != current_neurons or bits != current_bits:
+				# End current run, start new one
+				runs.append((run_start, i, current_neurons, current_bits))
+				current_neurons = neurons
+				current_bits = bits
+				run_start = i
 
+		# Don't forget the last run
+		runs.append((run_start, len(genome.neurons_per_cluster), current_neurons, current_bits))
+
+		# Assign tier indices based on first appearance of each (neurons, bits) config
+		config_to_tier: dict[tuple[int, int], int] = {}
+		next_tier = 0
+		for _, _, neurons, bits in runs:
+			key = (neurons, bits)
+			if key not in config_to_tier:
+				config_to_tier[key] = next_tier
+				next_tier += 1
+
+		# Create TierConfig for each contiguous run
 		tiers = []
-		for tier_idx, ((neurons, bits), clusters) in enumerate(sorted_configs):
+		for start, end, neurons, bits in runs:
+			tier_idx = config_to_tier[(neurons, bits)]
 			tiers.append(TierConfig(
 				tier=tier_idx,
-				clusters=clusters,
+				clusters=end - start,
 				neurons=neurons,
 				bits=bits,
+				start_cluster=start,
+				end_cluster=end,
 			))
 
 		return GenomeConfig(tiers=tiers)
@@ -1285,29 +1313,57 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		"""
 		Convert a ClusterGenome to a GenomeConfig for tracking.
 
-		Groups clusters by their (neurons, bits) configuration to create tiers.
-		This enables genome-level tracking in the dashboard.
+		Finds contiguous runs of clusters with the same (neurons, bits) config.
+		This enables proper tracking of which cluster indices belong to which tier.
+
+		The tier index is assigned based on the order of first appearance
+		(earliest cluster index = tier 0), preserving the original tier config order.
 		"""
 		if not HAS_GENOME_TRACKING or GenomeConfig is None or TierConfig is None:
 			return None
 
-		# Group clusters by (neurons, bits) to create tier configs
-		from collections import defaultdict
-		tier_groups: dict[tuple[int, int], int] = defaultdict(int)
+		# Find contiguous runs of clusters with same (neurons, bits)
+		runs: list[tuple[int, int, int, int]] = []  # (start, end, neurons, bits)
+		if len(genome.neurons_per_cluster) == 0:
+			return GenomeConfig(tiers=[])
 
-		for neurons, bits in zip(genome.neurons_per_cluster, genome.bits_per_cluster):
-			tier_groups[(neurons, bits)] += 1
+		current_neurons = genome.neurons_per_cluster[0]
+		current_bits = genome.bits_per_cluster[0]
+		run_start = 0
 
-		# Sort by cluster count (descending) to assign tier indices
-		sorted_configs = sorted(tier_groups.items(), key=lambda x: -x[1])
+		for i in range(1, len(genome.neurons_per_cluster)):
+			neurons = genome.neurons_per_cluster[i]
+			bits = genome.bits_per_cluster[i]
+			if neurons != current_neurons or bits != current_bits:
+				# End current run, start new one
+				runs.append((run_start, i, current_neurons, current_bits))
+				current_neurons = neurons
+				current_bits = bits
+				run_start = i
 
+		# Don't forget the last run
+		runs.append((run_start, len(genome.neurons_per_cluster), current_neurons, current_bits))
+
+		# Assign tier indices based on first appearance of each (neurons, bits) config
+		config_to_tier: dict[tuple[int, int], int] = {}
+		next_tier = 0
+		for _, _, neurons, bits in runs:
+			key = (neurons, bits)
+			if key not in config_to_tier:
+				config_to_tier[key] = next_tier
+				next_tier += 1
+
+		# Create TierConfig for each contiguous run
 		tiers = []
-		for tier_idx, ((neurons, bits), clusters) in enumerate(sorted_configs):
+		for start, end, neurons, bits in runs:
+			tier_idx = config_to_tier[(neurons, bits)]
 			tiers.append(TierConfig(
 				tier=tier_idx,
-				clusters=clusters,
+				clusters=end - start,
 				neurons=neurons,
 				bits=bits,
+				start_cluster=start,
+				end_cluster=end,
 			))
 
 		return GenomeConfig(tiers=tiers)

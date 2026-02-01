@@ -66,11 +66,20 @@ class CheckpointType(str, Enum):
 
 @dataclass
 class TierConfig:
-    """Configuration for a single tier."""
+    """Configuration for a single tier.
+
+    Tracks which cluster indices belong to this tier, not just counts.
+    - start_cluster/end_cluster: Cluster index range (inclusive start, exclusive end)
+    - For non-contiguous tiers, multiple TierConfig entries with same tier number
+      will be created, each with different cluster ranges.
+    """
     tier: int
     clusters: int
     neurons: int
     bits: int
+    # Cluster index range (optional for backwards compatibility)
+    start_cluster: int | None = None  # First cluster index in this tier (inclusive)
+    end_cluster: int | None = None    # Last cluster index + 1 (exclusive)
 
 
 @dataclass
@@ -93,10 +102,16 @@ class GenomeConfig:
     def to_json(self) -> str:
         """Serialize to JSON for storage."""
         import json
-        return json.dumps([
-            {"tier": t.tier, "clusters": t.clusters, "neurons": t.neurons, "bits": t.bits}
-            for t in self.tiers
-        ])
+        result = []
+        for t in self.tiers:
+            entry = {"tier": t.tier, "clusters": t.clusters, "neurons": t.neurons, "bits": t.bits}
+            # Include cluster range if available
+            if t.start_cluster is not None:
+                entry["start_cluster"] = t.start_cluster
+            if t.end_cluster is not None:
+                entry["end_cluster"] = t.end_cluster
+            result.append(entry)
+        return json.dumps(result)
 
     def compute_hash(self) -> str:
         """Compute deterministic hash for deduplication."""
