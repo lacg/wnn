@@ -85,17 +85,17 @@ final class ConnectionManager: ObservableObject {
         case .local:
             await tryConnect(mode: .local)
 
-        case .tailscale:
-            await tryConnect(mode: .tailscale)
+        case .remote:
+            await tryConnect(mode: .remote)
 
         case .auto:
-            // Try local first, then tailscale
-            if await testConnection(mode: .local) {
+            // Try local first, then remote
+            if settings.isConfigured(mode: .local) && await testConnection(mode: .local) {
                 activeMode = .local
                 connectionState = .connected
                 lastError = nil
-            } else if !settings.tailscaleHost.isEmpty && await testConnection(mode: .tailscale) {
-                activeMode = .tailscale
+            } else if settings.isConfigured(mode: .remote) && await testConnection(mode: .remote) {
+                activeMode = .remote
                 connectionState = .connected
                 lastError = nil
             } else {
