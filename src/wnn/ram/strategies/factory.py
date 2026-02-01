@@ -340,6 +340,10 @@ class OptimizerStrategyFactory:
 		phase_name: str = "Optimization",
 		# Shutdown check for graceful stopping
 		shutdown_check: Any = None,
+		# Fitness calculator settings
+		fitness_calculator_type: Any = None,  # FitnessCalculatorType enum from wnn.ram.fitness
+		fitness_weight_ce: float = 1.0,
+		fitness_weight_acc: float = 1.0,
 	):
 		"""
 		Create an optimizer strategy.
@@ -444,6 +448,9 @@ class OptimizerStrategyFactory:
 					checkpoint_config=checkpoint_config,
 					phase_name=phase_name,
 					shutdown_check=shutdown_check,
+					fitness_calculator_type=fitness_calculator_type,
+					fitness_weight_ce=fitness_weight_ce,
+					fitness_weight_acc=fitness_weight_acc,
 				)
 
 			case OptimizerStrategyType.ARCHITECTURE_TS:
@@ -474,6 +481,9 @@ class OptimizerStrategyFactory:
 					logger=logger,
 					batch_evaluator=batch_evaluator,
 					shutdown_check=shutdown_check,
+					fitness_calculator_type=fitness_calculator_type,
+					fitness_weight_ce=fitness_weight_ce,
+					fitness_weight_acc=fitness_weight_acc,
 				)
 
 			case OptimizerStrategyType.CONNECTIVITY_GA:
@@ -553,8 +563,12 @@ class OptimizerStrategyFactory:
 		checkpoint_config: Any = None,
 		phase_name: str = "GA Optimization",
 		shutdown_check: Any = None,  # Callable[[], bool] for graceful shutdown
+		fitness_calculator_type: Any = None,
+		fitness_weight_ce: float = 1.0,
+		fitness_weight_acc: float = 1.0,
 	):
 		"""Create an ArchitectureGAStrategy."""
+		from wnn.ram.fitness import FitnessCalculatorType
 		from wnn.ram.strategies.connectivity.architecture_strategies import (
 			ArchitectureGAStrategy,
 			ArchitectureConfig,
@@ -587,6 +601,9 @@ class OptimizerStrategyFactory:
 			fitness_percentile=fitness_percentile,
 			fresh_population=fresh_population,
 			seed_only=seed_only,
+			fitness_calculator_type=fitness_calculator_type or FitnessCalculatorType.NORMALIZED,
+			fitness_weight_ce=fitness_weight_ce,
+			fitness_weight_acc=fitness_weight_acc,
 		)
 		# Pass batch_evaluator as cached_evaluator if it supports search_offspring
 		cached_evaluator = batch_evaluator if batch_evaluator and hasattr(batch_evaluator, 'search_offspring') else None
@@ -624,8 +641,12 @@ class OptimizerStrategyFactory:
 		logger: Any,
 		batch_evaluator: Any,
 		shutdown_check: Any = None,
+		fitness_calculator_type: Any = None,
+		fitness_weight_ce: float = 1.0,
+		fitness_weight_acc: float = 1.0,
 	):
 		"""Create an ArchitectureTSStrategy."""
+		from wnn.ram.fitness import FitnessCalculatorType
 		from wnn.ram.strategies.connectivity.architecture_strategies import (
 			ArchitectureTSStrategy,
 			ArchitectureConfig,
@@ -657,6 +678,9 @@ class OptimizerStrategyFactory:
 			tabu_size=tabu_size,
 			initial_threshold=initial_threshold,
 			fitness_percentile=fitness_percentile,
+			fitness_calculator_type=fitness_calculator_type or FitnessCalculatorType.NORMALIZED,
+			fitness_weight_ce=fitness_weight_ce,
+			fitness_weight_acc=fitness_weight_acc,
 		)
 		return ArchitectureTSStrategy(arch_config, ts_config, seed, logger, batch_evaluator, shutdown_check=shutdown_check)
 

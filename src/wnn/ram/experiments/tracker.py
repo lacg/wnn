@@ -39,7 +39,9 @@ class FitnessCalculatorType(str, Enum):
     """Fitness calculator types."""
     CE = "ce"
     HARMONIC_RANK = "harmonic_rank"
-    WEIGHTED_HARMONIC = "weighted_harmonic"
+    WEIGHTED_HARMONIC = "weighted_harmonic"  # Legacy - same as HARMONIC_RANK
+    NORMALIZED = "normalized"
+    NORMALIZED_HARMONIC = "normalized_harmonic"
 
 
 class GenomeRole(str, Enum):
@@ -142,7 +144,7 @@ class ExperimentTracker(ABC):
         self,
         name: str,
         flow_id: Optional[int] = None,
-        fitness_calculator: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK,
+        fitness_calculator: FitnessCalculatorType = FitnessCalculatorType.NORMALIZED,
         fitness_weight_ce: float = 1.0,
         fitness_weight_acc: float = 1.0,
         tier_config: Optional[str] = None,
@@ -363,7 +365,7 @@ class SqliteTracker(ExperimentTracker):
         self,
         name: str,
         flow_id: Optional[int] = None,
-        fitness_calculator: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK,
+        fitness_calculator: FitnessCalculatorType = FitnessCalculatorType.NORMALIZED,
         fitness_weight_ce: float = 1.0,
         fitness_weight_acc: float = 1.0,
         tier_config: Optional[str] = None,
@@ -374,7 +376,7 @@ class SqliteTracker(ExperimentTracker):
         exp_id = self._db.create_experiment(
             name=name,
             flow_id=flow_id,
-            fitness_calculator=FitnessCalculator(fitness_calculator.value),
+            fitness_calculator=FitnessCalculator(fitness_calculator.name.lower()),
             fitness_weight_ce=fitness_weight_ce,
             fitness_weight_acc=fitness_weight_acc,
             tier_config=tier_config,

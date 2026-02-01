@@ -12,6 +12,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Callable, Literal, Optional
 
+from wnn.ram.fitness import FitnessCalculatorType
 from wnn.ram.strategies.factory import OptimizerStrategyFactory, OptimizerStrategyType
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 from wnn.ram.experiments.phased_search import PhaseResult
@@ -63,6 +64,11 @@ class ExperimentConfig:
 	# Random seed
 	seed: Optional[int] = None
 
+	# Fitness calculator settings
+	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.NORMALIZED
+	fitness_weight_ce: float = 1.0
+	fitness_weight_acc: float = 1.0
+
 	def to_dict(self) -> dict[str, Any]:
 		"""Convert to dictionary for JSON serialization.
 
@@ -80,11 +86,21 @@ class ExperimentConfig:
 				else:
 					tier_parts.append(f"{tier[0]},{tier[1]},{tier[2]}")
 			result["tier_config"] = ";".join(tier_parts)
+		# Convert fitness_calculator_type enum to string for JSON
+		if "fitness_calculator_type" in result:
+			result["fitness_calculator_type"] = result["fitness_calculator_type"].name.lower()
 		return result
 
 	@classmethod
 	def from_dict(cls, data: dict[str, Any]) -> "ExperimentConfig":
 		"""Create from dictionary."""
+		# Convert fitness_calculator_type string back to enum
+		if "fitness_calculator_type" in data and isinstance(data["fitness_calculator_type"], str):
+			data = data.copy()  # Don't modify the original
+			try:
+				data["fitness_calculator_type"] = FitnessCalculatorType[data["fitness_calculator_type"].upper()]
+			except KeyError:
+				data["fitness_calculator_type"] = FitnessCalculatorType.NORMALIZED
 		return cls(**data)
 
 
@@ -256,6 +272,10 @@ class Experiment:
 			"max_bits": cfg.max_bits,
 			"min_neurons": cfg.min_neurons,
 			"max_neurons": cfg.max_neurons,
+			# Fitness calculator settings
+			"fitness_calculator_type": cfg.fitness_calculator_type,
+			"fitness_weight_ce": cfg.fitness_weight_ce,
+			"fitness_weight_acc": cfg.fitness_weight_acc,
 		}
 
 		# Tier0-only optimization

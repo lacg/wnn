@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Literal, Optional
 
+from wnn.ram.fitness import FitnessCalculatorType
 from wnn.ram.experiments.experiment import Experiment, ExperimentConfig, ExperimentResult
 from wnn.ram.experiments.dashboard_client import DashboardClient, FlowConfig as APIFlowConfig
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
@@ -52,6 +53,11 @@ class FlowConfig:
 	check_interval: int = 10
 	fitness_percentile: Optional[float] = None
 
+	# Fitness calculator settings
+	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.NORMALIZED
+	fitness_weight_ce: float = 1.0
+	fitness_weight_acc: float = 1.0
+
 	# Random seed
 	seed: Optional[int] = None
 
@@ -69,6 +75,9 @@ class FlowConfig:
 		optimize_tier0_only: bool = False,
 		context_size: int = 4,
 		fitness_percentile: Optional[float] = None,
+		fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.NORMALIZED,
+		fitness_weight_ce: float = 1.0,
+		fitness_weight_acc: float = 1.0,
 		seed: Optional[int] = None,
 		description: Optional[str] = None,
 		seed_checkpoint_path: Optional[str] = None,
@@ -92,6 +101,9 @@ class FlowConfig:
 			tier_config: Tiered architecture config
 			optimize_tier0_only: Only mutate tier0 clusters
 			fitness_percentile: Fitness percentile filter
+			fitness_calculator_type: Fitness calculator type (NORMALIZED, HARMONIC_RANK, etc.)
+			fitness_weight_ce: Weight for CE in fitness calculation
+			fitness_weight_acc: Weight for accuracy in fitness calculation
 			seed: Random seed
 			description: Optional description
 			seed_checkpoint_path: Optional checkpoint to seed from
@@ -134,6 +146,9 @@ class FlowConfig:
 				tier_config=tier_config,
 				optimize_tier0_only=optimize_tier0_only,
 				fitness_percentile=fitness_percentile,
+				fitness_calculator_type=fitness_calculator_type,
+				fitness_weight_ce=fitness_weight_ce,
+				fitness_weight_acc=fitness_weight_acc,
 				seed=seed,
 			)
 			experiments.append(config)
@@ -148,6 +163,9 @@ class FlowConfig:
 			context_size=context_size,
 			patience=patience,
 			fitness_percentile=fitness_percentile,
+			fitness_calculator_type=fitness_calculator_type,
+			fitness_weight_ce=fitness_weight_ce,
+			fitness_weight_acc=fitness_weight_acc,
 			seed=seed,
 		)
 
@@ -174,6 +192,9 @@ class FlowConfig:
 				"context_size": self.context_size,
 				"patience": self.patience,
 				"fitness_percentile": self.fitness_percentile,
+				"fitness_calculator": self.fitness_calculator_type.name.lower(),
+				"fitness_weight_ce": self.fitness_weight_ce,
+				"fitness_weight_acc": self.fitness_weight_acc,
 				"seed": self.seed,
 			},
 		)

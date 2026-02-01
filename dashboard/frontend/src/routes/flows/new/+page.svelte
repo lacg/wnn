@@ -266,6 +266,7 @@
           <select id="fitnessCalculator" bind:value={fitnessCalculator}>
             <option value="normalized">Normalized (Recommended)</option>
             <option value="harmonic_rank">Harmonic Rank</option>
+            <option value="normalized_harmonic">Normalized Harmonic</option>
             <option value="ce">CE Only</option>
           </select>
           <span class="field-hint">How to combine CE and accuracy for ranking</span>

@@ -19,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from wnn.ram.fitness import FitnessCalculatorType
 from wnn.ram.experiments.dashboard_client import DashboardClient, DashboardClientConfig
 from wnn.ram.experiments.flow import Flow, FlowConfig
 from wnn.ram.experiments.experiment import ExperimentConfig
@@ -287,6 +288,11 @@ class FlowWorker:
             # Parse tier config
             tier_config = self._parse_tier_config(params.get("tier_config"))
 
+            # Parse fitness calculator settings
+            fitness_calculator_type = self._parse_fitness_calculator(params.get("fitness_calculator"))
+            fitness_weight_ce = params.get("fitness_weight_ce", 1.0)
+            fitness_weight_acc = params.get("fitness_weight_acc", 1.0)
+
             # Create flow config
             flow_config = FlowConfig(
                 name=flow_name,
@@ -297,6 +303,9 @@ class FlowWorker:
                 context_size=context_size,
                 patience=params.get("patience", 10),
                 fitness_percentile=params.get("fitness_percentile"),
+                fitness_calculator_type=fitness_calculator_type,
+                fitness_weight_ce=fitness_weight_ce,
+                fitness_weight_acc=fitness_weight_acc,
                 seed=params.get("seed"),
             )
 
@@ -385,6 +394,11 @@ class FlowWorker:
         fitness_percentile = params.get("fitness_percentile")
         seed = params.get("seed")
 
+        # Parse fitness calculator settings
+        fitness_calculator_type = self._parse_fitness_calculator(params.get("fitness_calculator"))
+        fitness_weight_ce = params.get("fitness_weight_ce", 1.0)
+        fitness_weight_acc = params.get("fitness_weight_acc", 1.0)
+
         exp_configs = []
         for exp_data in experiments:
             exp_params = exp_data.get("params", {})
@@ -402,11 +416,24 @@ class FlowWorker:
                 tier_config=tier_config,
                 optimize_tier0_only=tier0_only,
                 fitness_percentile=fitness_percentile,
+                fitness_calculator_type=fitness_calculator_type,
+                fitness_weight_ce=fitness_weight_ce,
+                fitness_weight_acc=fitness_weight_acc,
                 seed=seed,
             )
             exp_configs.append(exp_config)
 
         return exp_configs
+
+    def _parse_fitness_calculator(self, fitness_calculator: Optional[str]) -> FitnessCalculatorType:
+        """Parse fitness calculator string to enum."""
+        if not fitness_calculator:
+            return FitnessCalculatorType.NORMALIZED  # Default
+        try:
+            return FitnessCalculatorType[fitness_calculator.upper()]
+        except KeyError:
+            self._log(f"Warning: Unknown fitness calculator '{fitness_calculator}', using NORMALIZED")
+            return FitnessCalculatorType.NORMALIZED
 
     def _parse_tier_config(self, tier_config) -> Optional[list[tuple]]:
         """Parse tier config from string or array format."""

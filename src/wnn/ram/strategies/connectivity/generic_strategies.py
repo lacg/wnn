@@ -1010,14 +1010,15 @@ class GAConfig:
 	threshold_reference: int = 1000   # Reference gens for threshold rate (0.001%/gen = 0.25% over 250 gens)
 	progressive_threshold: bool = True  # Enable progressive threshold within phase
 	# Fitness percentile filter: keep only offspring in top X% by fitness (None = disabled)
-	# Example: 0.75 keeps top 75%. Uses configured fitness_calculator_type (CE or HARMONIC_RANK).
+	# Example: 0.75 keeps top 75%. Uses configured fitness_calculator_type.
 	fitness_percentile: Optional[float] = None
 	# Fitness calculator: how to combine CE and accuracy for ranking
 	# CE = pure CE ranking, uses dual elites (10% CE + 10% Acc)
-	# HARMONIC_RANK = harmonic mean of ranks (default), uses single elite (20% by rank)
-	# NORMALIZED = normalized [0,1] scale weighted sum, balanced CE/accuracy
-	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK
-	# Weights for HARMONIC_RANK/NORMALIZED mode (higher weight = more important)
+	# HARMONIC_RANK = harmonic mean of ranks, uses single elite (20% by rank)
+	# NORMALIZED = normalized [0,1] scale weighted sum, balanced CE/accuracy (default)
+	# NORMALIZED_HARMONIC = normalized values with harmonic mean (penalizes imbalance more)
+	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.NORMALIZED
+	# Weights for HARMONIC_RANK/NORMALIZED/NORMALIZED_HARMONIC modes (higher weight = more important)
 	fitness_weight_ce: float = 1.0
 	fitness_weight_acc: float = 1.0
 	# Early stopping (all configurable via parameters)
@@ -1050,14 +1051,15 @@ class TSConfig:
 	threshold_reference: int = 1000   # Reference iters for threshold rate (0.001%/iter = 0.25% over 250 iters)
 	progressive_threshold: bool = True  # Enable progressive threshold within phase
 	# Fitness percentile filter: keep only neighbors in top X% by fitness (None = disabled)
-	# Example: 0.75 keeps top 75%. Uses configured fitness_calculator_type (CE or HARMONIC_RANK).
+	# Example: 0.75 keeps top 75%. Uses configured fitness_calculator_type.
 	fitness_percentile: Optional[float] = None
 	# Fitness calculator: how to combine CE and accuracy for ranking
 	# CE = pure CE ranking, uses dual paths (25 neighbors from best_ce + 25 from best_acc)
-	# HARMONIC_RANK = harmonic mean of ranks (default), uses single path (50 from best_harmonic)
-	# NORMALIZED = normalized [0,1] scale weighted sum, balanced CE/accuracy
-	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK
-	# Weights for HARMONIC_RANK/NORMALIZED mode (higher weight = more important)
+	# HARMONIC_RANK = harmonic mean of ranks, uses single path (50 from best_harmonic)
+	# NORMALIZED = normalized [0,1] scale weighted sum, balanced CE/accuracy (default)
+	# NORMALIZED_HARMONIC = normalized values with harmonic mean (penalizes imbalance more)
+	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.NORMALIZED
+	# Weights for HARMONIC_RANK/NORMALIZED/NORMALIZED_HARMONIC modes (higher weight = more important)
 	fitness_weight_ce: float = 1.0
 	fitness_weight_acc: float = 1.0
 	# Early stopping (all configurable via parameters)

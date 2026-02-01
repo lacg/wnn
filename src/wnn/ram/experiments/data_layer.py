@@ -69,7 +69,9 @@ class PhaseStatus(str, Enum):
 class FitnessCalculator(str, Enum):
     CE = "ce"
     HARMONIC_RANK = "harmonic_rank"
-    WEIGHTED_HARMONIC = "weighted_harmonic"
+    WEIGHTED_HARMONIC = "weighted_harmonic"  # Legacy - same as HARMONIC_RANK
+    NORMALIZED = "normalized"
+    NORMALIZED_HARMONIC = "normalized_harmonic"
 
 
 class GenomeRole(str, Enum):
@@ -208,7 +210,7 @@ class DataLayer:
                 sequence_order INTEGER,
                 name TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'pending',
-                fitness_calculator TEXT NOT NULL DEFAULT 'harmonic_rank',
+                fitness_calculator TEXT NOT NULL DEFAULT 'normalized',
                 fitness_weight_ce REAL DEFAULT 1.0,
                 fitness_weight_acc REAL DEFAULT 1.0,
                 tier_config TEXT,
@@ -396,7 +398,7 @@ class DataLayer:
         name: str,
         flow_id: Optional[int] = None,
         sequence_order: Optional[int] = None,
-        fitness_calculator: FitnessCalculator = FitnessCalculator.HARMONIC_RANK,
+        fitness_calculator: FitnessCalculator = FitnessCalculator.NORMALIZED,
         fitness_weight_ce: float = 1.0,
         fitness_weight_acc: float = 1.0,
         tier_config: Optional[str] = None,

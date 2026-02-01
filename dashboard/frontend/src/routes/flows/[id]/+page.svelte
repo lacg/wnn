@@ -797,6 +797,7 @@
               <select id="fitness_calculator" bind:value={editConfig.fitness_calculator}>
                 <option value="harmonic_rank">Harmonic Rank</option>
                 <option value="normalized">Normalized</option>
+                <option value="normalized_harmonic">Normalized Harmonic</option>
                 <option value="ce">CE Only</option>
               </select>
               <span class="form-hint">How to rank genomes by CE and accuracy</span>
@@ -881,6 +882,7 @@
               >
                 <option value="harmonic_rank">Harmonic Rank</option>
                 <option value="normalized">Normalized</option>
+                <option value="normalized_harmonic">Normalized Harmonic</option>
                 <option value="ce">CE Only</option>
               </select>
             </span>
