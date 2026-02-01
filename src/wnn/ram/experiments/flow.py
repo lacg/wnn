@@ -439,7 +439,7 @@ class Flow:
 					dashboard_client=self.dashboard_client,
 					experiment_id=experiment_id,
 					tracker=self.tracker,
-					flow_id=self._flow_id,
+						flow_id=self._flow_id,
 					shutdown_check=self.shutdown_check,  # Pass shutdown check to experiment
 				)
 
@@ -452,6 +452,12 @@ class Flow:
 				)
 
 				self._results.append(result)
+
+				# Check if experiment was stopped due to shutdown
+				if result.was_shutdown:
+					self.log(f"Experiment {idx} stopped due to shutdown, stopping flow")
+					stopped_at_idx = idx
+					raise FlowStoppedError("Shutdown requested during experiment")
 
 				# Update state for next experiment
 				current_genome = result.best_genome

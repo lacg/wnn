@@ -120,6 +120,7 @@ class ExperimentResult:
 	final_threshold: Optional[float]
 	elapsed_seconds: float
 	checkpoint_path: Optional[str] = None
+	was_shutdown: bool = False  # True if stopped due to external shutdown request
 
 	def to_phase_result(self) -> PhaseResult:
 		"""Convert to PhaseResult for compatibility."""
@@ -368,10 +369,14 @@ class Experiment:
 		self.log(f"  Iterations: {result.iterations_run}")
 		self.log(f"  Duration: {elapsed:.1f}s")
 
-		# Calculate improvement
+			# Calculate improvement
 		improvement = 0.0
 		if result.initial_fitness and result.initial_fitness > 0:
 			improvement = (result.initial_fitness - result.final_fitness) / result.initial_fitness * 100
+
+		# Check if shutdown was requested
+		from wnn.ram.strategies.connectivity.generic_strategies import StopReason
+		was_shutdown = result.stop_reason == StopReason.SHUTDOWN if result.stop_reason else False
 
 		# Create result
 		exp_result = ExperimentResult(
@@ -386,6 +391,7 @@ class Experiment:
 			final_population=result.final_population,
 			final_threshold=result.final_threshold,
 			elapsed_seconds=elapsed,
+			was_shutdown=was_shutdown,
 		)
 
 		# Save checkpoint
