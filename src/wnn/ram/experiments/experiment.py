@@ -345,11 +345,16 @@ class Experiment:
 				initial_neighbors=initial_population,
 			)
 
-		# V2 tracking: update phase status to completed
+		# Check if shutdown was requested (needed for phase status update)
+		from wnn.ram.strategies.connectivity.generic_strategies import StopReason
+		was_shutdown = result.stop_reason == StopReason.SHUTDOWN if result.stop_reason else False
+
+		# V2 tracking: update phase status based on whether shutdown was requested
 		if self.tracker and tracker_phase_id:
 			try:
 				from wnn.ram.experiments.tracker import TrackerStatus
-				self.tracker.update_phase_status(tracker_phase_id, TrackerStatus.COMPLETED)
+				phase_status = TrackerStatus.CANCELLED if was_shutdown else TrackerStatus.COMPLETED
+				self.tracker.update_phase_status(tracker_phase_id, phase_status)
 				self.tracker.update_phase_progress(
 					tracker_phase_id,
 					current_iteration=result.iterations_run,
@@ -373,10 +378,6 @@ class Experiment:
 		improvement = 0.0
 		if result.initial_fitness and result.initial_fitness > 0:
 			improvement = (result.initial_fitness - result.final_fitness) / result.initial_fitness * 100
-
-		# Check if shutdown was requested
-		from wnn.ram.strategies.connectivity.generic_strategies import StopReason
-		was_shutdown = result.stop_reason == StopReason.SHUTDOWN if result.stop_reason else False
 
 		# Create result
 		exp_result = ExperimentResult(
