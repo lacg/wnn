@@ -1309,8 +1309,8 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		self._log.info(f"[{self.name}] VALIDATION SUMMARY (Full Dataset)")
 		self._log.info("=" * 60)
 
-		# Get unique top genomes by different criteria
-		top_k = min(10, len(population))
+		# Get unique top genomes by different criteria (20% of population)
+		top_k = max(1, int(len(population) * 0.2))
 		top_genomes_by_ce = [g for g, _ in population[:top_k]]
 
 		# Evaluate on full validation data
@@ -2084,8 +2084,8 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 		self._log.info(f"[{self.name}] VALIDATION SUMMARY (Full Dataset)")
 		self._log.info("=" * 60)
 
-		# Get top genomes for full evaluation
-		top_k = min(10, len(final_population))
+		# Get top genomes for full evaluation (20% of neighbors cache)
+		top_k = max(1, int(len(final_population) * 0.2))
 		top_genomes = final_population[:top_k]
 
 		# Evaluate on full validation data
