@@ -666,8 +666,7 @@
           {/if}
         </div>
 
-        <!-- Genome Evaluations Table -->
-        <h3>Genome Evaluations ({genomeEvaluations.length})</h3>
+        <!-- Genome Evaluations - Grouped by Role -->
         {#if loadingGenomes}
           <div class="loading">Loading genome evaluations...</div>
         {:else if genomeEvaluations.length === 0}
@@ -676,40 +675,120 @@
             <p class="hint">Genome tracking may not be enabled for this experiment.</p>
           </div>
         {:else}
-          <div class="genome-table-scroll">
-            <table class="genome-table">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Role</th>
-                  <th>CE</th>
-                  <th>Accuracy</th>
-                  {#if genomeEvaluations.some(g => g.fitness_score !== null)}
-                    <th>Fitness</th>
-                  {/if}
-                  {#if genomeEvaluations.some(g => g.elite_rank !== null)}
-                    <th>Elite Rank</th>
-                  {/if}
-                </tr>
-              </thead>
-              <tbody>
-                {#each genomeEvaluations as genome}
-                  <tr class:elite={genome.role === 'elite' || genome.role === 'top_k'}>
-                    <td>{genome.position + 1}</td>
-                    <td class="role-cell">{formatRole(genome.role)}</td>
-                    <td class:best={genome.ce === selectedIteration.best_ce}>{formatCE(genome.ce)}</td>
-                    <td>{formatAcc(genome.accuracy)}</td>
-                    {#if genomeEvaluations.some(g => g.fitness_score !== null)}
-                      <td>{genome.fitness_score?.toFixed(4) ?? '—'}</td>
-                    {/if}
-                    {#if genomeEvaluations.some(g => g.elite_rank !== null)}
-                      <td>{genome.elite_rank !== null ? `#${genome.elite_rank + 1}` : '—'}</td>
-                    {/if}
+          {@const currentGenome = genomeEvaluations.find(g => g.role === 'current')}
+          {@const topKGenomes = genomeEvaluations.filter(g => g.role === 'top_k').sort((a, b) => a.position - b.position)}
+          {@const newNeighbors = genomeEvaluations.filter(g => g.role === 'neighbor').sort((a, b) => a.position - b.position)}
+          {@const gaElites = genomeEvaluations.filter(g => g.role === 'elite').sort((a, b) => a.position - b.position)}
+          {@const gaOffspring = genomeEvaluations.filter(g => g.role === 'offspring').sort((a, b) => a.position - b.position)}
+
+          <!-- Current Best (TS) -->
+          {#if currentGenome}
+            <h3>📍 Current Best</h3>
+            <div class="genome-summary">
+              <span class="metric">CE: <strong>{formatCE(currentGenome.ce)}</strong></span>
+              <span class="metric">Acc: <strong>{formatAcc(currentGenome.accuracy)}</strong></span>
+            </div>
+          {/if}
+
+          <!-- Top 50 Cache (TS) -->
+          {#if topKGenomes.length > 0}
+            <h3>🔝 Top {topKGenomes.length} Cache</h3>
+            <div class="genome-table-scroll">
+              <table class="genome-table">
+                <thead>
+                  <tr>
+                    <th>Rank</th>
+                    <th>CE</th>
+                    <th>Accuracy</th>
                   </tr>
-                {/each}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {#each topKGenomes as genome}
+                    <tr class="elite">
+                      <td>#{genome.elite_rank !== null ? genome.elite_rank + 1 : genome.position}</td>
+                      <td class:best={genome.ce === selectedIteration.best_ce}>{formatCE(genome.ce)}</td>
+                      <td>{formatAcc(genome.accuracy)}</td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          {/if}
+
+          <!-- New Viable Neighbors (TS) -->
+          {#if newNeighbors.length > 0}
+            <h3>🔄 New Viable Neighbors ({newNeighbors.length})</h3>
+            <div class="genome-table-scroll">
+              <table class="genome-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>CE</th>
+                    <th>Accuracy</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each newNeighbors as genome, idx}
+                    <tr>
+                      <td>{idx + 1}</td>
+                      <td class:best={genome.ce === selectedIteration.best_ce}>{formatCE(genome.ce)}</td>
+                      <td>{formatAcc(genome.accuracy)}</td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          {/if}
+
+          <!-- GA Elites -->
+          {#if gaElites.length > 0}
+            <h3>🏆 Elites ({gaElites.length})</h3>
+            <div class="genome-table-scroll">
+              <table class="genome-table">
+                <thead>
+                  <tr>
+                    <th>Rank</th>
+                    <th>CE</th>
+                    <th>Accuracy</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each gaElites as genome}
+                    <tr class="elite">
+                      <td>#{genome.elite_rank !== null ? genome.elite_rank + 1 : genome.position + 1}</td>
+                      <td class:best={genome.ce === selectedIteration.best_ce}>{formatCE(genome.ce)}</td>
+                      <td>{formatAcc(genome.accuracy)}</td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          {/if}
+
+          <!-- GA Offspring -->
+          {#if gaOffspring.length > 0}
+            <h3>🧬 Offspring ({gaOffspring.length})</h3>
+            <div class="genome-table-scroll">
+              <table class="genome-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>CE</th>
+                    <th>Accuracy</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each gaOffspring as genome, idx}
+                    <tr>
+                      <td>{idx + 1}</td>
+                      <td class:best={genome.ce === selectedIteration.best_ce}>{formatCE(genome.ce)}</td>
+                      <td>{formatAcc(genome.accuracy)}</td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          {/if}
         {/if}
       </div>
     </div>
@@ -1123,6 +1202,25 @@
     text-align: center;
     padding: 2rem;
     color: var(--text-secondary);
+  }
+
+  /* Genome summary (current best) */
+  .genome-summary {
+    display: flex;
+    gap: 2rem;
+    padding: 0.75rem 1rem;
+    background: var(--bg-card);
+    border-radius: 0.5rem;
+    margin-bottom: 1rem;
+  }
+
+  .genome-summary .metric {
+    font-family: monospace;
+    font-size: 0.9rem;
+  }
+
+  .genome-summary .metric strong {
+    color: var(--accent);
   }
 
   /* Genome table */
