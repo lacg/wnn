@@ -12,6 +12,7 @@
   let neighborsPerIter = 50;
   let patience = 10;
   let fitnessPercentile = 0.75;
+  let fitnessCalculator = 'normalized';  // Default to normalized for balanced CE+accuracy
   let contextSize = 4;
   let tierConfig = '100,15,20;400,10,12;rest,5,8';
   let tier0Only = true;
@@ -108,6 +109,7 @@
               neighbors_per_iter: neighborsPerIter,
               patience,
               fitness_percentile: fitnessPercentile,
+              fitness_calculator: fitnessCalculator,
               context_size: contextSize,
               tier_config: tierConfig || null,
               tier0_only: tier0Only,
@@ -257,6 +259,16 @@
           <label for="fitnessPercentile">Fitness Percentile</label>
           <input type="number" id="fitnessPercentile" bind:value={fitnessPercentile} min="0" max="1" step="0.05" />
           <span class="field-hint">Keep top N% by fitness (0.75 = 75%)</span>
+        </div>
+
+        <div class="form-group">
+          <label for="fitnessCalculator">Fitness Calculator</label>
+          <select id="fitnessCalculator" bind:value={fitnessCalculator}>
+            <option value="normalized">Normalized (Recommended)</option>
+            <option value="harmonic_rank">Harmonic Rank</option>
+            <option value="ce">CE Only</option>
+          </select>
+          <span class="field-hint">How to combine CE and accuracy for ranking</span>
         </div>
       </div>
 

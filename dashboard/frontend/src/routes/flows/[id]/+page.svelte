@@ -64,7 +64,7 @@
     population_size: 50,
     neighbors_per_iter: 50,
     fitness_percentile: 0.75,
-    fitness_calculator: 'harmonic_rank',
+    fitness_calculator: 'normalized',
     tier_config: '',
     optimize_tier0_only: false,
     phase_order: 'neurons_first',
@@ -522,7 +522,10 @@
     if (!flow) return;
     const experiments = flow.config.experiments || [];
     const expName = experiments[index]?.name || `Experiment ${index + 1}`;
-    if (!confirm(`Restart flow from "${expName}"? Earlier experiments will be skipped.`)) return;
+    const msg = flow.status === 'running'
+      ? `Stop current experiment and restart from "${expName}"? The current experiment will be cancelled and earlier experiments will be skipped.`
+      : `Restart flow from "${expName}"? Earlier experiments will be skipped.`;
+    if (!confirm(msg)) return;
 
     try {
       const response = await fetch(`/api/flows/${flow.id}/restart`, {
@@ -1082,7 +1085,7 @@
                       <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
                     </svg>
                   </button>
-                {:else if status === 'completed' && (flow.status === 'failed' || flow.status === 'cancelled' || flow.status === 'completed')}
+                {:else if status === 'completed' && (flow.status === 'running' || flow.status === 'failed' || flow.status === 'cancelled' || flow.status === 'completed')}
                   <button class="btn btn-sm btn-secondary" title="Restart from this experiment" on:click={() => restartFromExperiment(i)}>
                     Restart from here
                   </button>

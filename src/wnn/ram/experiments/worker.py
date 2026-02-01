@@ -142,8 +142,28 @@ class FlowWorker:
                 self.running = False
 
     def should_stop(self) -> bool:
-        """Check if shutdown has been requested. Used by flow/experiment/strategy."""
-        return self._stop_current_flow or not self.running
+        """Check if shutdown has been requested. Used by flow/experiment/strategy.
+
+        Checks both local flags and dashboard flow status for cancellation.
+        This provides a fallback if SIGTERM delivery fails (e.g., missing PID).
+        """
+        # Check local flags first (fast path)
+        if self._stop_current_flow or not self.running:
+            return True
+
+        # Periodically check dashboard flow status as fallback
+        # This catches cancellation requests when PID wasn't registered
+        if self.current_flow_id:
+            try:
+                flow = self.client.get_flow(self.current_flow_id)
+                if flow and flow.get("status") in ("cancelled", "failed"):
+                    self._log(f"Flow {self.current_flow_id} was cancelled via dashboard, stopping...")
+                    self._stop_current_flow = True
+                    return True
+            except Exception:
+                pass  # Network error, continue running
+
+        return False
 
     def _precache_data(self):
         """Pre-cache tokenizer and dataset at startup to avoid network issues during flow execution."""
@@ -303,8 +323,13 @@ class FlowWorker:
                 shutdown_check=self.should_stop,  # Pass shutdown check for graceful stop
             )
 
+            # Check if we should start from a specific experiment (skip earlier ones)
+            start_from_experiment = params.get("start_from_experiment")
+            if start_from_experiment is not None:
+                self._log(f"Starting from experiment {start_from_experiment} (skipping {start_from_experiment} earlier experiments)")
+
             # Run the flow (seed checkpoint is already loaded via flow_config.seed_checkpoint_path)
-            result = flow.run()
+            result = flow.run(resume_from=start_from_experiment)
 
             # Mark as completed
             self.client.flow_completed(flow_id)

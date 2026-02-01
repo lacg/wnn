@@ -477,6 +477,8 @@ async fn stop_flow(
 pub struct RestartFlowRequest {
     #[serde(default)]
     pub from_beginning: bool,  // If true, restart from scratch; if false, resume from checkpoint
+    #[serde(default)]
+    pub start_from_experiment: Option<usize>,  // If set, skip experiments before this index (0-based)
 }
 
 /// Restart a flow by setting status to queued
@@ -498,12 +500,14 @@ async fn restart_flow(
         ).into_response(),
     };
 
-    // Check if flow can be restarted
+    // If flow is running or queued, stop it first
     if flow.status == FlowStatus::Running || flow.status == FlowStatus::Queued {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Flow is already running or queued"})),
-        ).into_response();
+        if let Err(e) = crate::db::queries::stop_flow_process(&state.db, id).await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Failed to stop flow: {}", e)})),
+            ).into_response();
+        }
     }
 
     // If restarting from beginning, clear the seed checkpoint and delete checkpoint files
@@ -529,6 +533,22 @@ async fn restart_flow(
     } else {
         None // Keep existing
     };
+
+    // If start_from_experiment is set, update the flow config
+    if let Some(start_idx) = req.start_from_experiment {
+        // Get current config and add start_from_experiment to params
+        if let Ok(Some(mut current_flow)) = crate::db::queries::get_flow(&state.db, id).await {
+            // FlowConfig has params: HashMap<String, Value>
+            current_flow.config.params.insert(
+                "start_from_experiment".to_string(),
+                serde_json::json!(start_idx)
+            );
+            // Serialize FlowConfig to serde_json::Value for update
+            if let Ok(config_json) = serde_json::to_value(&current_flow.config) {
+                let _ = crate::db::queries::update_flow(&state.db, id, None, None, None, Some(&config_json), None).await;
+            }
+        }
+    }
 
     // Set status to queued (and optionally clear PID)
     match crate::db::queries::update_flow_for_restart(&state.db, id, seed_checkpoint_id).await {

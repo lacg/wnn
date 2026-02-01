@@ -465,6 +465,9 @@ pub mod queries {
 
     /// Stop a running flow process by sending SIGTERM.
     /// This is reusable by delete_flow, update_flow_for_restart, etc.
+    ///
+    /// Always updates status to 'cancelled', even if PID is missing.
+    /// The worker will check flow status and stop gracefully.
     pub async fn stop_flow_process(pool: &DbPool, flow_id: i64) -> Result<()> {
         // Get the flow's PID
         let pid: Option<i64> = sqlx::query_scalar(
@@ -475,6 +478,7 @@ pub mod queries {
         .await?
         .flatten();
 
+        // Try to send SIGTERM if we have a PID
         if let Some(pid) = pid {
             #[cfg(unix)]
             {
@@ -486,15 +490,19 @@ pub mod queries {
                     tracing::warn!("Failed to send SIGTERM to flow {} (PID {})", flow_id, pid);
                 }
             }
-
-            // Clear the PID and set status to cancelled
-            sqlx::query(
-                "UPDATE flows SET pid = NULL, status = 'cancelled' WHERE id = ?"
-            )
-            .bind(flow_id)
-            .execute(pool)
-            .await?;
+        } else {
+            tracing::warn!("No PID registered for flow {}, marking as cancelled (worker will check status)", flow_id);
         }
+
+        // Always update status to cancelled and clear PID
+        // Even without a PID, this allows the worker to detect cancellation
+        // by checking flow status periodically
+        sqlx::query(
+            "UPDATE flows SET pid = NULL, status = 'cancelled' WHERE id = ?"
+        )
+        .bind(flow_id)
+        .execute(pool)
+        .await?;
 
         Ok(())
     }
