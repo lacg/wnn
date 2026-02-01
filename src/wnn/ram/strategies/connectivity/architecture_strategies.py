@@ -939,6 +939,11 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		# Track previous best for delta computation
 		prev_best_fitness = best_fitness
 
+		# Get train subset for this PHASE (fixed for all generations)
+		# This ensures all genomes (elites + offspring) are evaluated on the same data,
+		# making their fitness values directly comparable.
+		phase_train_idx = evaluator.next_train_idx()
+
 		for generation in range(start_generation, cfg.generations):
 			# Check for shutdown request at start of each generation
 			if self._shutdown_check and self._shutdown_check():
@@ -992,9 +997,6 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			if prev_threshold is not None and f"{prev_threshold:.4%}" != f"{current_threshold:.4%}":
 				self._log.debug(f"[{self.name}] Threshold changed: {prev_threshold:.4%} → {current_threshold:.4%}")
 			prev_threshold = current_threshold
-
-			# Get train subset for this generation
-			train_idx = evaluator.next_train_idx()
 
 			# Elite selection depends on fitness calculator type
 			gen_prefix = format_gen_prefix(generation + 1, cfg.generations)
@@ -1086,7 +1088,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 				neurons_mutation_rate=neurons_mutation_rate,
 				crossover_rate=cfg.crossover_rate,
 				tournament_size=cfg.tournament_size,
-				train_subset_idx=train_idx,
+				train_subset_idx=phase_train_idx,
 				eval_subset_idx=0,
 				seed=seed_offset + generation,
 				generation=generation,
@@ -1161,29 +1163,19 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			gen_elapsed = time.time() - gen_start
 
 			# V2 tracking: record iteration data (uses base class _tracker set via set_tracker)
-			# FIX: Compute avg_ce and avg_acc from OFFSPRING ONLY (not mixed population)
-			# Reason: Elites have _cached_fitness from PREVIOUS train subsets, which are
-			# incomparable with current offspring. Only offspring were evaluated on
-			# the current generation's train_idx, so their values are consistent.
-			offspring_data = [(g._cached_fitness[0], g._cached_fitness[1])
-			                  for g, _ in offspring_with_ce
-			                  if hasattr(g, '_cached_fitness') and g._cached_fitness]
-			if offspring_data:
-				avg_fitness = sum(ce for ce, _ in offspring_data) / len(offspring_data)
-				avg_acc = sum(acc for _, acc in offspring_data) / len(offspring_data)
+			# All genomes use the same phase_train_idx, so their _cached_fitness values are comparable
+			valid_data = [(g._cached_fitness[0], g._cached_fitness[1])
+			              for g, _ in population
+			              if hasattr(g, '_cached_fitness') and g._cached_fitness]
+			if valid_data:
+				avg_fitness = sum(ce for ce, _ in valid_data) / len(valid_data)
+				avg_acc = sum(acc for _, acc in valid_data) / len(valid_data)
+				actual_best_ce = min(ce for ce, _ in valid_data)
+				actual_best_acc = max(acc for _, acc in valid_data)
 			else:
-				# Fallback if no offspring (shouldn't happen)
+				# Fallback: use CE from population tuple if no cached fitness
 				avg_fitness = sum(ce for _, ce in population) / len(population)
 				avg_acc = None
-
-			# Best CE/Acc come from entire population (best across all generations is fine)
-			valid_pop_data = [(g._cached_fitness[0], g._cached_fitness[1])
-			                  for g, _ in population
-			                  if hasattr(g, '_cached_fitness') and g._cached_fitness]
-			if valid_pop_data:
-				actual_best_ce = min(ce for ce, _ in valid_pop_data)
-				actual_best_acc = max(acc for _, acc in valid_pop_data)
-			else:
 				actual_best_ce = best_fitness
 				actual_best_acc = best_acc
 
@@ -1743,6 +1735,11 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		# Track previous best for delta computation
 		prev_best_fitness = best_fitness
 
+		# Get train subset for this PHASE (fixed for all iterations)
+		# This ensures all neighbors are evaluated on the same data,
+		# making their fitness values directly comparable.
+		phase_train_idx = evaluator.next_train_idx()
+
 		for iteration in range(cfg.iterations):
 			# Check for shutdown request at start of each iteration
 			if self._shutdown_check and self._shutdown_check():
@@ -1771,12 +1768,6 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 				self._log.debug(f"[{self.name}] Threshold changed: {prev_threshold:.4%} → {current_threshold:.4%}")
 			prev_threshold = current_threshold
 
-			train_idx = evaluator.next_train_idx()
-
-			# Track neighbors evaluated in THIS iteration (all use same train_idx)
-			# Used for computing consistent avg_ce/avg_acc (not mixed with stale data)
-			current_iter_neighbors: list[tuple['ClusterGenome', float, Optional[float]]] = []
-
 			if use_harmonic:
 				# === HARMONIC_RANK mode: Single path, all neighbors from best_harmonic ===
 				self._log.debug(f"[{self.name}] Searching {cfg.neighbors_per_iter} neighbors from best harmonic...")
@@ -1791,7 +1782,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 					max_neurons=arch_cfg.max_neurons,
 					bits_mutation_rate=cfg.mutation_rate if arch_cfg.optimize_bits else 0.0,
 					neurons_mutation_rate=cfg.mutation_rate if arch_cfg.optimize_neurons else 0.0,
-					train_subset_idx=train_idx,
+					train_subset_idx=phase_train_idx,
 					eval_subset_idx=0,
 					seed=seed_offset + iteration * 1000,
 					generation=iteration,
@@ -1814,12 +1805,10 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 					filter_result = fitness_filter.apply(neighbor_with_fitness, key=lambda g, f: f)
 					neighbors = [g for g, _ in filter_result.kept]
 
-				# Add to all_neighbors and current_iter_neighbors, track best_ce/best_acc
+				# Add to all_neighbors and track best_ce/best_acc
 				for g in neighbors:
 					ce, acc = g._cached_fitness
-					neighbor_entry = (g.clone(), ce, acc)
-					all_neighbors.append(neighbor_entry)
-					current_iter_neighbors.append(neighbor_entry)  # Track for avg computation
+					all_neighbors.append((g.clone(), ce, acc))
 					# Track best by CE
 					if ce < best_ce_fitness:
 						best_ce_genome = g.clone()
@@ -1884,7 +1873,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 					max_neurons=arch_cfg.max_neurons,
 					bits_mutation_rate=cfg.mutation_rate if arch_cfg.optimize_bits else 0.0,
 					neurons_mutation_rate=cfg.mutation_rate if arch_cfg.optimize_neurons else 0.0,
-					train_subset_idx=train_idx,
+					train_subset_idx=phase_train_idx,
 					eval_subset_idx=0,
 					seed=seed_offset + iteration * 1000,
 					generation=iteration,
@@ -1905,7 +1894,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 					max_neurons=arch_cfg.max_neurons,
 					bits_mutation_rate=cfg.mutation_rate if arch_cfg.optimize_bits else 0.0,
 					neurons_mutation_rate=cfg.mutation_rate if arch_cfg.optimize_neurons else 0.0,
-					train_subset_idx=train_idx,
+					train_subset_idx=phase_train_idx,
 					eval_subset_idx=0,
 					seed=seed_offset + iteration * 1000 + 500,
 					generation=iteration,
@@ -1952,9 +1941,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 				# Process all neighbors
 				for g in ce_neighbors + acc_neighbors:
 					ce, acc = g._cached_fitness
-					neighbor_entry = (g.clone(), ce, acc)
-					all_neighbors.append(neighbor_entry)
-					current_iter_neighbors.append(neighbor_entry)  # Track for avg computation
+					all_neighbors.append((g.clone(), ce, acc))
 					if ce < best_ce_fitness:
 						best_ce_genome = g.clone()
 						best_ce_fitness = ce
@@ -1988,24 +1975,17 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 			history.append((iteration + 1, best_fitness))
 
 			# V2 tracking: record iteration data (uses base class _tracker set via set_tracker)
-			# FIX: Compute avg_ce and avg_acc from CURRENT ITERATION NEIGHBORS ONLY
-			# Reason: all_neighbors accumulates across iterations with different train_idx values,
-			# making the accuracies incomparable. current_iter_neighbors all use the same train_idx.
-			current_valid = [(g, ce, acc) for g, ce, acc in current_iter_neighbors if acc is not None]
-			if current_valid:
-				avg_ce = sum(ce for _, ce, _ in current_valid) / len(current_valid)
-				avg_acc = sum(acc for _, _, acc in current_valid) / len(current_valid)
-			else:
-				# Fallback if no current iteration neighbors (shouldn't happen)
-				avg_ce = sum(ce for _, ce, _ in current_iter_neighbors) / len(current_iter_neighbors) if current_iter_neighbors else None
-				avg_acc = None
-
-			# Best CE/Acc come from entire cache (best across all iterations is fine)
+			# All neighbors use the same phase_train_idx, so their fitness values are comparable
 			valid_neighbors = [(g, ce, acc) for g, ce, acc in all_neighbors if acc is not None]
 			if valid_neighbors:
+				avg_ce = sum(ce for _, ce, _ in valid_neighbors) / len(valid_neighbors)
+				avg_acc = sum(acc for _, _, acc in valid_neighbors) / len(valid_neighbors)
 				actual_best_ce = min(ce for _, ce, _ in valid_neighbors)
 				actual_best_acc = max(acc for _, _, acc in valid_neighbors)
 			else:
+				# Fallback: use all_neighbors if no valid neighbors with accuracy
+				avg_ce = sum(ce for _, ce, _ in all_neighbors) / len(all_neighbors) if all_neighbors else None
+				avg_acc = None
 				actual_best_ce = min(ce for _, ce, _ in all_neighbors) if all_neighbors else best_fitness
 				actual_best_acc = best_accuracy
 
