@@ -1022,6 +1022,10 @@ class GAConfig:
 	# Weights for HARMONIC_RANK/NORMALIZED/NORMALIZED_HARMONIC modes (higher weight = more important)
 	fitness_weight_ce: float = 1.0
 	fitness_weight_acc: float = 1.0
+	# Accuracy floor: genomes below this accuracy get fitness = infinity
+	# Prevents pathological optimization where CE improves but accuracy degrades
+	# Set to 0.0 to disable, typical value 0.003 (0.3%) based on analysis
+	min_accuracy_floor: float = 0.0
 	# Early stopping (all configurable via parameters)
 	patience: int = 5              # Checks without improvement before stopping
 	check_interval: int = 10       # Check every N generations (also controls full eval frequency)
@@ -1063,6 +1067,10 @@ class TSConfig:
 	# Weights for HARMONIC_RANK/NORMALIZED/NORMALIZED_HARMONIC modes (higher weight = more important)
 	fitness_weight_ce: float = 1.0
 	fitness_weight_acc: float = 1.0
+	# Accuracy floor: genomes below this accuracy get fitness = infinity
+	# Prevents pathological optimization where CE improves but accuracy degrades
+	# Set to 0.0 to disable, typical value 0.003 (0.3%) based on analysis
+	min_accuracy_floor: float = 0.0
 	# Early stopping (all configurable via parameters)
 	patience: int = 5              # Checks without improvement before stopping
 	check_interval: int = 10       # Check every N iterations (also controls full eval frequency)

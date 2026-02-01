@@ -18,6 +18,7 @@ class FitnessCalculatorType(IntEnum):
 	HARMONIC_RANK = 1   # Harmonic mean of CE and accuracy ranks
 	NORMALIZED = 2      # Normalized [0,1] scale weighted sum (arithmetic mean)
 	NORMALIZED_HARMONIC = 3  # Normalized [0,1] scale weighted harmonic mean
+	# Note: Accuracy floor wrapping is handled separately via min_accuracy_floor parameter
 
 
 from .FitnessCalculator import FitnessCalculator
@@ -25,6 +26,7 @@ from .FitnessCalculatorCE import FitnessCalculatorCE
 from .FitnessCalculatorHarmonicRank import FitnessCalculatorHarmonicRank
 from .FitnessCalculatorNormalized import FitnessCalculatorNormalized
 from .FitnessCalculatorNormalizedHarmonic import FitnessCalculatorNormalizedHarmonic
+from .FitnessCalculatorWithAccuracyFloor import FitnessCalculatorWithAccuracyFloor
 from .FitnessCalculatorFactory import FitnessCalculatorFactory
 
 
@@ -38,6 +40,7 @@ __all__ = [
 	"FitnessCalculatorHarmonicRank",
 	"FitnessCalculatorNormalized",
 	"FitnessCalculatorNormalizedHarmonic",
+	"FitnessCalculatorWithAccuracyFloor",
 	# Factory
 	"FitnessCalculatorFactory",
 ]

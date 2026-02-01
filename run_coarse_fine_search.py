@@ -164,6 +164,8 @@ def main():
 	# Fitness pressure
 	parser.add_argument("--fitness-percentile", type=float, default=0.75,
 						help="Fitness percentile filter (0.75 = keep top 75%% by fitness). Use 0 to disable")
+	parser.add_argument("--min-accuracy-floor", type=float, default=0.0,
+						help="Accuracy floor: genomes below this get worst fitness. E.g., 0.003 for 0.3%%. Default 0 (disabled)")
 
 	# Checkpointing
 	parser.add_argument("--checkpoint-dir", type=str, default=None,
@@ -238,6 +240,7 @@ def main():
 			'default_bits': 'default_bits',
 			'default_neurons': 'default_neurons',
 			'fitness_percentile': 'fitness_percentile',
+			'min_accuracy_floor': 'min_accuracy_floor',
 			'rotation_seed': 'seed',
 		}
 		for cfg_field, arg_name in config_to_arg.items():
@@ -303,6 +306,10 @@ def main():
 		log(f"  Fitness percentile filter: {args.fitness_percentile:.0%} (keep top {args.fitness_percentile:.0%} by fitness)")
 	else:
 		log(f"  Fitness percentile filter: disabled")
+	if args.min_accuracy_floor and args.min_accuracy_floor > 0:
+		log(f"  Accuracy floor: {args.min_accuracy_floor:.4%} (genomes below get worst fitness)")
+	else:
+		log(f"  Accuracy floor: disabled")
 	log(f"  Default bits (Phase 1): {args.default_bits}")
 	log(f"  Default neurons (Phase 2): {args.default_neurons}")
 	log(f"  Output: {args.output}")
@@ -384,6 +391,7 @@ def main():
 		optimize_tier0_only=args.tier0_only,
 		seed_only=args.seed_only,
 		fitness_percentile=args.fitness_percentile,
+		min_accuracy_floor=args.min_accuracy_floor if args.min_accuracy_floor > 0 else None,
 		rotation_seed=rotation_seed,
 		log_path=logger.log_file,
 		# Gating configuration

@@ -866,6 +866,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			cfg.fitness_calculator_type,
 			weight_ce=cfg.fitness_weight_ce,
 			weight_acc=cfg.fitness_weight_acc,
+			min_accuracy_floor=cfg.min_accuracy_floor if cfg.min_accuracy_floor > 0 else None,
 		)
 		self._log.info(f"[{self.name}] Fitness calculator: {fitness_calculator.name}")
 
@@ -1586,6 +1587,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 			cfg.fitness_calculator_type,
 			weight_ce=cfg.fitness_weight_ce,
 			weight_acc=cfg.fitness_weight_acc,
+			min_accuracy_floor=cfg.min_accuracy_floor if cfg.min_accuracy_floor > 0 else None,
 		)
 		self._log.info(f"[{self.name}] Fitness calculator: {fitness_calculator.name}")
 

@@ -344,6 +344,8 @@ class OptimizerStrategyFactory:
 		fitness_calculator_type: Any = None,  # FitnessCalculatorType enum from wnn.ram.fitness
 		fitness_weight_ce: float = 1.0,
 		fitness_weight_acc: float = 1.0,
+		# Accuracy floor: genomes below this accuracy get fitness = infinity
+		min_accuracy_floor: float | None = None,
 	):
 		"""
 		Create an optimizer strategy.
@@ -451,6 +453,7 @@ class OptimizerStrategyFactory:
 					fitness_calculator_type=fitness_calculator_type,
 					fitness_weight_ce=fitness_weight_ce,
 					fitness_weight_acc=fitness_weight_acc,
+					min_accuracy_floor=min_accuracy_floor,
 				)
 
 			case OptimizerStrategyType.ARCHITECTURE_TS:
@@ -484,6 +487,7 @@ class OptimizerStrategyFactory:
 					fitness_calculator_type=fitness_calculator_type,
 					fitness_weight_ce=fitness_weight_ce,
 					fitness_weight_acc=fitness_weight_acc,
+					min_accuracy_floor=min_accuracy_floor,
 				)
 
 			case OptimizerStrategyType.CONNECTIVITY_GA:
@@ -566,6 +570,7 @@ class OptimizerStrategyFactory:
 		fitness_calculator_type: Any = None,
 		fitness_weight_ce: float = 1.0,
 		fitness_weight_acc: float = 1.0,
+		min_accuracy_floor: float | None = None,
 	):
 		"""Create an ArchitectureGAStrategy."""
 		from wnn.ram.fitness import FitnessCalculatorType
@@ -604,6 +609,7 @@ class OptimizerStrategyFactory:
 			fitness_calculator_type=fitness_calculator_type or FitnessCalculatorType.NORMALIZED,
 			fitness_weight_ce=fitness_weight_ce,
 			fitness_weight_acc=fitness_weight_acc,
+			min_accuracy_floor=min_accuracy_floor or 0.0,
 		)
 		# Pass batch_evaluator as cached_evaluator if it supports search_offspring
 		cached_evaluator = batch_evaluator if batch_evaluator and hasattr(batch_evaluator, 'search_offspring') else None
@@ -644,6 +650,7 @@ class OptimizerStrategyFactory:
 		fitness_calculator_type: Any = None,
 		fitness_weight_ce: float = 1.0,
 		fitness_weight_acc: float = 1.0,
+		min_accuracy_floor: float | None = None,
 	):
 		"""Create an ArchitectureTSStrategy."""
 		from wnn.ram.fitness import FitnessCalculatorType
@@ -681,6 +688,7 @@ class OptimizerStrategyFactory:
 			fitness_calculator_type=fitness_calculator_type or FitnessCalculatorType.NORMALIZED,
 			fitness_weight_ce=fitness_weight_ce,
 			fitness_weight_acc=fitness_weight_acc,
+			min_accuracy_floor=min_accuracy_floor or 0.0,
 		)
 		return ArchitectureTSStrategy(arch_config, ts_config, seed, logger, batch_evaluator, shutdown_check=shutdown_check)
 

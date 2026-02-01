@@ -86,6 +86,11 @@ class PhasedSearchConfig:
 	# Fitness percentile filter (None = disabled, 0.75 = keep top 75% by fitness)
 	fitness_percentile: Optional[float] = None
 
+	# Accuracy floor: genomes below this accuracy get fitness = infinity
+	# Prevents pathological optimization where CE improves but accuracy degrades
+	# Set to 0.0 or None to disable, typical value 0.003 (0.3%)
+	min_accuracy_floor: Optional[float] = None
+
 	# Random seed (None = time-based)
 	rotation_seed: Optional[int] = None
 
@@ -1024,6 +1029,7 @@ class PhasedSearchRunner:
 			"check_interval": cfg.check_interval,  # Check every N generations/iterations
 			"initial_threshold": initial_threshold,
 			"fitness_percentile": cfg.fitness_percentile,  # Fitness percentile filter (None = disabled)
+			"min_accuracy_floor": cfg.min_accuracy_floor,  # Accuracy floor (None = disabled)
 			"seed": self._rotation_seed,  # Use rotation_seed for strategy RNG
 		}
 
