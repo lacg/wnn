@@ -53,6 +53,123 @@ if TYPE_CHECKING:
 
 
 # =============================================================================
+# Shared Mixin for Architecture Strategies
+# =============================================================================
+
+class ArchitectureStrategyMixin:
+	"""
+	Mixin providing common functionality for GA and TS architecture strategies.
+
+	Reduces code duplication by extracting:
+	- Metal cleanup logic
+	- Shutdown checking
+	- genome_to_config conversion
+	- Result building with stop_reason
+	"""
+
+	_shutdown_check: Optional[Callable[[], bool]]
+	_log: Any  # Logger
+
+	def _cleanup_metal(self, iteration: int, log_interval: int = 10) -> None:
+		"""Run GC and reset Metal evaluators to prevent buffer accumulation."""
+		import gc
+		gc.collect()
+		try:
+			import ram_accelerator
+			ram_accelerator.reset_metal_evaluators()
+			if iteration % log_interval == 0:
+				self._log.info(f"[{self.name}] GC + Metal reset at iteration {iteration}")
+		except Exception:
+			pass  # Ignore if accelerator not available
+
+	def _check_and_set_shutdown(self, shutdown_flag: list[bool]) -> bool:
+		"""
+		Check if shutdown is requested and update the shutdown flag.
+
+		Args:
+			shutdown_flag: List with single bool element (mutable reference)
+
+		Returns:
+			True if shutdown was requested
+		"""
+		if self._shutdown_check and self._shutdown_check():
+			shutdown_flag[0] = True
+			return True
+		return False
+
+	def _genome_to_config_impl(self, genome: 'ClusterGenome') -> Optional['GenomeConfig']:
+		"""
+		Convert a ClusterGenome to a GenomeConfig for tracking.
+
+		Finds contiguous runs of clusters with the same (neurons, bits) config.
+		This enables proper tracking of which cluster indices belong to which tier.
+
+		The tier index is assigned based on the order of first appearance
+		(earliest cluster index = tier 0), preserving the original tier config order.
+		"""
+		if not HAS_GENOME_TRACKING or GenomeConfig is None or TierConfig is None:
+			return None
+
+		# Find contiguous runs of clusters with same (neurons, bits)
+		runs: list[tuple[int, int, int, int]] = []  # (start, end, neurons, bits)
+		if len(genome.neurons_per_cluster) == 0:
+			return GenomeConfig(tiers=[])
+
+		current_neurons = genome.neurons_per_cluster[0]
+		current_bits = genome.bits_per_cluster[0]
+		run_start = 0
+
+		for i in range(1, len(genome.neurons_per_cluster)):
+			neurons = genome.neurons_per_cluster[i]
+			bits = genome.bits_per_cluster[i]
+			if neurons != current_neurons or bits != current_bits:
+				# End current run, start new one
+				runs.append((run_start, i, current_neurons, current_bits))
+				current_neurons = neurons
+				current_bits = bits
+				run_start = i
+
+		# Don't forget the last run
+		runs.append((run_start, len(genome.neurons_per_cluster), current_neurons, current_bits))
+
+		# Assign tier indices based on first appearance of each (neurons, bits) config
+		config_to_tier: dict[tuple[int, int], int] = {}
+		next_tier = 0
+		for _, _, neurons, bits in runs:
+			key = (neurons, bits)
+			if key not in config_to_tier:
+				config_to_tier[key] = next_tier
+				next_tier += 1
+
+		# Create TierConfig for each contiguous run
+		tiers = []
+		for start, end, neurons, bits in runs:
+			tier_idx = config_to_tier[(neurons, bits)]
+			tiers.append(TierConfig(
+				tier=tier_idx,
+				clusters=end - start,
+				neurons=neurons,
+				bits=bits,
+				start_cluster=start,
+				end_cluster=end,
+			))
+
+		return GenomeConfig(tiers=tiers)
+
+	def _determine_stop_reason(
+		self,
+		shutdown_requested: bool,
+		early_stopper: Any,
+	) -> Optional[StopReason]:
+		"""Determine the stop reason based on shutdown flag and early stopper state."""
+		if shutdown_requested:
+			return StopReason.SHUTDOWN
+		elif hasattr(early_stopper, 'patience_exhausted') and early_stopper.patience_exhausted:
+			return StopReason.CONVERGENCE
+		return None
+
+
+# =============================================================================
 # Checkpoint System for Resume Support
 # =============================================================================
 
@@ -349,11 +466,12 @@ class ArchitectureConfig:
 	mutable_clusters: Optional[int] = None
 
 
-class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
+class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['ClusterGenome']):
 	"""
 	Genetic Algorithm for architecture (bits, neurons per cluster) optimization.
 
 	Inherits core GA loop from GenericGAStrategy, implements ClusterGenome operations.
+	Uses ArchitectureStrategyMixin for shared functionality (Metal cleanup, shutdown, etc.)
 
 	Features:
 	- Rust/Metal batch evaluation (default when available)
@@ -393,63 +511,8 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		return "ArchitectureGA"
 
 	def genome_to_config(self, genome: 'ClusterGenome') -> Optional['GenomeConfig']:
-		"""
-		Convert a ClusterGenome to a GenomeConfig for tracking.
-
-		Finds contiguous runs of clusters with the same (neurons, bits) config.
-		This enables proper tracking of which cluster indices belong to which tier.
-
-		The tier index is assigned based on the order of first appearance
-		(earliest cluster index = tier 0), preserving the original tier config order.
-		"""
-		if not HAS_GENOME_TRACKING or GenomeConfig is None or TierConfig is None:
-			return None
-
-		# Find contiguous runs of clusters with same (neurons, bits)
-		runs: list[tuple[int, int, int, int]] = []  # (start, end, neurons, bits)
-		if len(genome.neurons_per_cluster) == 0:
-			return GenomeConfig(tiers=[])
-
-		current_neurons = genome.neurons_per_cluster[0]
-		current_bits = genome.bits_per_cluster[0]
-		run_start = 0
-
-		for i in range(1, len(genome.neurons_per_cluster)):
-			neurons = genome.neurons_per_cluster[i]
-			bits = genome.bits_per_cluster[i]
-			if neurons != current_neurons or bits != current_bits:
-				# End current run, start new one
-				runs.append((run_start, i, current_neurons, current_bits))
-				current_neurons = neurons
-				current_bits = bits
-				run_start = i
-
-		# Don't forget the last run
-		runs.append((run_start, len(genome.neurons_per_cluster), current_neurons, current_bits))
-
-		# Assign tier indices based on first appearance of each (neurons, bits) config
-		config_to_tier: dict[tuple[int, int], int] = {}
-		next_tier = 0
-		for _, _, neurons, bits in runs:
-			key = (neurons, bits)
-			if key not in config_to_tier:
-				config_to_tier[key] = next_tier
-				next_tier += 1
-
-		# Create TierConfig for each contiguous run
-		tiers = []
-		for start, end, neurons, bits in runs:
-			tier_idx = config_to_tier[(neurons, bits)]
-			tiers.append(TierConfig(
-				tier=tier_idx,
-				clusters=end - start,
-				neurons=neurons,
-				bits=bits,
-				start_cluster=start,
-				end_cluster=end,
-			))
-
-		return GenomeConfig(tiers=tiers)
+		"""Convert a ClusterGenome to a GenomeConfig for tracking."""
+		return self._genome_to_config_impl(genome)
 
 	def clone_genome(self, genome: 'ClusterGenome') -> 'ClusterGenome':
 		return genome.clone()
@@ -994,22 +1057,11 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 				shutdown_requested = True
 				break
 
-			gen_start = time.time()
+				gen_start = time.time()
 
-			# Aggressive cleanup every generation to prevent Metal buffer accumulation
-			# The per-group buffers (7 per group × 3 groups × 100 genomes = 2100 per batch)
-			# accumulate and cause slowdown if not cleaned up frequently
+			# Cleanup to prevent Metal buffer accumulation
 			if generation > 0:
-				import gc
-				gc.collect()
-				try:
-					import ram_accelerator
-					ram_accelerator.reset_metal_evaluators()
-					# Only log every 10 generations to reduce noise
-					if generation % 10 == 0:
-						self._log.info(f"[{self.name}] GC + Metal reset at generation {generation}")
-				except Exception:
-					pass  # Ignore if accelerator not available
+				self._cleanup_metal(generation, log_interval=10)
 
 			# Save checkpoint every 50 generations
 			if generation > 0 and generation % 50 == 0 and checkpoint_mgr is not None:
@@ -1259,12 +1311,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		)[0]
 
 		improvement_pct = (initial_fitness - final_ce) / initial_fitness * 100 if initial_fitness != 0 else 0.0
-		# Determine stop reason
-		stop_reason = None
-		if shutdown_requested:
-			stop_reason = StopReason.SHUTDOWN
-		elif early_stop.patience_exhausted:
-			stop_reason = StopReason.CONVERGENCE
+		stop_reason = self._determine_stop_reason(shutdown_requested, early_stop)
 		return OptimizerResult(
 			initial_genome=initial_genome,
 			best_genome=best_genome,
@@ -1281,11 +1328,12 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		)
 
 
-class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
+class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['ClusterGenome']):
 	"""
 	Tabu Search for architecture (bits, neurons per cluster) optimization.
 
 	Inherits core TS loop from GenericTSStrategy, implements ClusterGenome operations.
+	Uses ArchitectureStrategyMixin for shared functionality (Metal cleanup, shutdown, etc.)
 
 	Features:
 	- Rust/Metal batch evaluation (default when available)
@@ -1320,63 +1368,8 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		return "ArchitectureTS"
 
 	def genome_to_config(self, genome: 'ClusterGenome') -> Optional['GenomeConfig']:
-		"""
-		Convert a ClusterGenome to a GenomeConfig for tracking.
-
-		Finds contiguous runs of clusters with the same (neurons, bits) config.
-		This enables proper tracking of which cluster indices belong to which tier.
-
-		The tier index is assigned based on the order of first appearance
-		(earliest cluster index = tier 0), preserving the original tier config order.
-		"""
-		if not HAS_GENOME_TRACKING or GenomeConfig is None or TierConfig is None:
-			return None
-
-		# Find contiguous runs of clusters with same (neurons, bits)
-		runs: list[tuple[int, int, int, int]] = []  # (start, end, neurons, bits)
-		if len(genome.neurons_per_cluster) == 0:
-			return GenomeConfig(tiers=[])
-
-		current_neurons = genome.neurons_per_cluster[0]
-		current_bits = genome.bits_per_cluster[0]
-		run_start = 0
-
-		for i in range(1, len(genome.neurons_per_cluster)):
-			neurons = genome.neurons_per_cluster[i]
-			bits = genome.bits_per_cluster[i]
-			if neurons != current_neurons or bits != current_bits:
-				# End current run, start new one
-				runs.append((run_start, i, current_neurons, current_bits))
-				current_neurons = neurons
-				current_bits = bits
-				run_start = i
-
-		# Don't forget the last run
-		runs.append((run_start, len(genome.neurons_per_cluster), current_neurons, current_bits))
-
-		# Assign tier indices based on first appearance of each (neurons, bits) config
-		config_to_tier: dict[tuple[int, int], int] = {}
-		next_tier = 0
-		for _, _, neurons, bits in runs:
-			key = (neurons, bits)
-			if key not in config_to_tier:
-				config_to_tier[key] = next_tier
-				next_tier += 1
-
-		# Create TierConfig for each contiguous run
-		tiers = []
-		for start, end, neurons, bits in runs:
-			tier_idx = config_to_tier[(neurons, bits)]
-			tiers.append(TierConfig(
-				tier=tier_idx,
-				clusters=end - start,
-				neurons=neurons,
-				bits=bits,
-				start_cluster=start,
-				end_cluster=end,
-			))
-
-		return GenomeConfig(tiers=tiers)
+		"""Convert a ClusterGenome to a GenomeConfig for tracking."""
+		return self._genome_to_config_impl(genome)
 
 	def clone_genome(self, genome: 'ClusterGenome') -> 'ClusterGenome':
 		return genome.clone()
@@ -1753,21 +1746,11 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 				shutdown_requested = True
 				break
 
-			iter_start = time.time()
+				iter_start = time.time()
 
-			# Aggressive cleanup every iteration to prevent Metal buffer accumulation
-			# Per-group buffers accumulate and cause slowdown if not cleaned up frequently
+			# Cleanup to prevent Metal buffer accumulation
 			if iteration > 0:
-				import gc
-				gc.collect()
-				try:
-					import ram_accelerator
-					ram_accelerator.reset_metal_evaluators()
-					# Only log every 10 iterations to reduce noise
-					if iteration % 10 == 0:
-						self._log.debug(f"[{self.name}] Reset Metal evaluators at iteration {iteration}")
-				except Exception:
-					pass  # Ignore if accelerator not available
+				self._cleanup_metal(iteration, log_interval=10)
 
 			current_threshold = get_threshold(iteration / cfg.threshold_reference)
 			if prev_threshold is not None and f"{prev_threshold:.4%}" != f"{current_threshold:.4%}":
@@ -2029,12 +2012,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 					break
 
 			improvement_pct = (start_fitness - best_fitness) / start_fitness * 100 if start_fitness != 0 else 0.0
-		# Determine stop reason
-		stop_reason = None
-		if shutdown_requested:
-			stop_reason = StopReason.SHUTDOWN
-		elif early_stopper.patience_exhausted:
-			stop_reason = StopReason.CONVERGENCE
+		stop_reason = self._determine_stop_reason(shutdown_requested, early_stopper)
 		return OptimizerResult(
 			initial_genome=initial_genome,
 			best_genome=best,
