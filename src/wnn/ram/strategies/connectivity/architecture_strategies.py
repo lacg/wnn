@@ -1057,7 +1057,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 				shutdown_requested = True
 				break
 
-				gen_start = time.time()
+			gen_start = time.time()
 
 			# Cleanup to prevent Metal buffer accumulation
 			if generation > 0:
