@@ -490,6 +490,29 @@
     }
   }
 
+  async function restartFromExperiment(index: number) {
+    if (!flow) return;
+    const experiments = flow.config.experiments || [];
+    const expName = experiments[index]?.name || `Experiment ${index + 1}`;
+    if (!confirm(`Restart flow from "${expName}"? Earlier experiments will be skipped.`)) return;
+
+    try {
+      const response = await fetch(`/api/flows/${flow.id}/restart`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from_beginning: true, start_from_experiment: index })
+      });
+      if (response.ok) {
+        await loadFlow();
+      } else {
+        const data = await response.json();
+        error = data.error || 'Failed to restart flow';
+      }
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Unknown error';
+    }
+  }
+
   // Build expected phase_type from expSpec
   function getExpectedPhaseType(expSpec: { experiment_type: string; optimize_neurons?: boolean; optimize_bits?: boolean; optimize_connections?: boolean }): string {
     const type = expSpec.experiment_type; // 'ga' or 'ts'
@@ -1015,6 +1038,10 @@
                       <polyline points="3 6 5 6 21 6"></polyline>
                       <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
                     </svg>
+                  </button>
+                {:else if status === 'completed' && (flow.status === 'failed' || flow.status === 'cancelled' || flow.status === 'completed')}
+                  <button class="btn btn-sm btn-secondary" title="Restart from this experiment" on:click={() => restartFromExperiment(i)}>
+                    Restart from here
                   </button>
                 {/if}
               </div>
