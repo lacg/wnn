@@ -885,7 +885,9 @@ pub mod queries {
         let now = Utc::now().to_rfc3339();
 
         // Extract config values with defaults
+        // Check both "fitness_calculator" and "fitness_calculator_type" for compatibility
         let fitness_calculator = config.get("fitness_calculator")
+            .or_else(|| config.get("fitness_calculator_type"))
             .and_then(|v| v.as_str())
             .unwrap_or("normalized");
         let fitness_weight_ce = config.get("fitness_weight_ce")
