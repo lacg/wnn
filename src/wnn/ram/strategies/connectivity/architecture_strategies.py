@@ -998,82 +998,27 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 				self._log.debug(f"[{self.name}] Threshold changed: {prev_threshold:.4%} → {current_threshold:.4%}")
 			prev_threshold = current_threshold
 
-			# Elite selection depends on fitness calculator type
+			# Elite selection: Always use top-k by fitness (unified approach)
+			# For CE mode: fitness = CE, so top-k = best CE
+			# For weighted modes: fitness = combined score (lower is better)
 			gen_prefix = format_gen_prefix(generation + 1, cfg.generations)
 
-			# Weighted fitness calculators (HARMONIC_RANK, NORMALIZED, NORMALIZED_HARMONIC)
-			# use single-pool elitism by fitness score
-			uses_weighted_fitness = cfg.fitness_calculator_type in (
-				FitnessCalculatorType.HARMONIC_RANK,
-				FitnessCalculatorType.NORMALIZED,
-				FitnessCalculatorType.NORMALIZED_HARMONIC,
-			)
+			# Single elite pool by fitness score (20% total)
+			elite_count = max(1, int(cfg.elitism_pct * 2 * cfg.population_size))
 
-			if uses_weighted_fitness:
-				# Weighted mode: Single elite pool by fitness score (20% total)
-				elite_count = max(1, int(cfg.elitism_pct * 2 * cfg.population_size))
+			# Population is already ranked by fitness, take top N
+			elites = population[:elite_count]
 
-				# Population is already ranked by harmonic fitness, take top N
-				elites = population[:elite_count]
-
-				# Log elites
-				self._log.info("=" * 60)
-				self._log.info(f"{gen_prefix} Elites: {elite_count} by {fitness_calculator.name}")
-				self._log.info("=" * 60)
-				for i, (g, ce) in enumerate(elites):
-					acc = g._cached_fitness[1] if hasattr(g, '_cached_fitness') and g._cached_fitness else 0.0
-					self._log.info(format_genome_log(
-						generation + 1, cfg.generations, GenomeLogType.ELITE_CE,  # Use CE type for harmonic (best available)
-						i + 1, elite_count, ce, acc
-					))
-			else:
-				# CE mode: Dual elitism - 10% by CE + 10% by Acc (all unique, NO overlaps)
-				elite_per_metric = max(1, int(cfg.elitism_pct * cfg.population_size))
-
-				# Population is sorted by CE, so top N by CE are first N
-				elites_by_ce = population[:elite_per_metric]
-
-				# For Acc elites, extract accuracy from cached fitness and sort
-				pop_with_acc = []
-				for g, ce in population:
-					if hasattr(g, '_cached_fitness') and g._cached_fitness is not None:
-						_, acc = g._cached_fitness
-						pop_with_acc.append((g, ce, acc))
-					else:
-						pop_with_acc.append((g, ce, 0.0))
-
-				# Sort by accuracy descending, then CE ascending as tie-breaker
-				pop_by_acc = sorted(pop_with_acc, key=lambda x: (-x[2], x[1]))
-
-				# Take top N by accuracy that are NOT already in CE elites
-				ce_elite_genomes = set(id(g) for g, _ in elites_by_ce)
-				elites_by_acc = []
-				for g, ce, acc in pop_by_acc:
-					if id(g) not in ce_elite_genomes:
-						elites_by_acc.append((g, ce))
-						if len(elites_by_acc) >= elite_per_metric:
-							break
-
-				# Combine: N CE + N Acc = 2N elites (all unique, no overlaps)
-				elites = elites_by_ce + elites_by_acc
-				elite_count = len(elites)
-
-				# Log elites
-				self._log.info("=" * 60)
-				self._log.info(f"{gen_prefix} Elites: {elite_per_metric} CE + {elite_per_metric} Acc = {elite_count} total")
-				self._log.info("=" * 60)
-				for i, (g, ce) in enumerate(elites_by_ce):
-					acc = g._cached_fitness[1] if hasattr(g, '_cached_fitness') and g._cached_fitness else 0.0
-					self._log.info(format_genome_log(
-						generation + 1, cfg.generations, GenomeLogType.ELITE_CE,
-						i + 1, elite_count, ce, acc
-					))
-				for i, (g, ce) in enumerate(elites_by_acc):
-					acc = g._cached_fitness[1] if hasattr(g, '_cached_fitness') and g._cached_fitness else 0.0
-					self._log.info(format_genome_log(
-						generation + 1, cfg.generations, GenomeLogType.ELITE_ACC,
-						elite_per_metric + i + 1, elite_count, ce, acc
-					))
+			# Log elites
+			self._log.info("=" * 60)
+			self._log.info(f"{gen_prefix} Elites: {elite_count} by {fitness_calculator.name}")
+			self._log.info("=" * 60)
+			for i, (g, ce) in enumerate(elites):
+				acc = g._cached_fitness[1] if hasattr(g, '_cached_fitness') and g._cached_fitness else 0.0
+				self._log.info(format_genome_log(
+					generation + 1, cfg.generations, GenomeLogType.ELITE_CE,
+					i + 1, elite_count, ce, acc
+				))
 
 			# Generate offspring using Rust (return_best_n=True for soft threshold)
 			# Phase-aware mutation rates: only mutate the dimension being optimized
@@ -1573,18 +1518,16 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		cfg = self._config
 		arch_cfg = self._arch_config
 		evaluator = self._cached_evaluator
-		use_harmonic = cfg.fitness_calculator_type == FitnessCalculatorType.HARMONIC_RANK
-		use_fitness_calculator = cfg.fitness_calculator_type != FitnessCalculatorType.CE
 
-		# Create fitness calculator for HARMONIC_RANK or NORMALIZED mode
-		fitness_calculator = None
-		if use_fitness_calculator:
-			fitness_calculator = FitnessCalculatorFactory.create(
-				cfg.fitness_calculator_type,
-				weight_ce=cfg.fitness_weight_ce,
-				weight_acc=cfg.fitness_weight_acc,
-			)
-			self._log.info(f"[{self.name}] Fitness calculator: {fitness_calculator.name}")
+		# Always create fitness calculator for unified ranking approach
+		# For CE mode: fitness = CE, ranking by fitness = ranking by CE
+		# For weighted modes: fitness = combined score
+		fitness_calculator = FitnessCalculatorFactory.create(
+			cfg.fitness_calculator_type,
+			weight_ce=cfg.fitness_weight_ce,
+			weight_acc=cfg.fitness_weight_acc,
+		)
+		self._log.info(f"[{self.name}] Fitness calculator: {fitness_calculator.name}")
 
 		# Threshold continuity
 		start_threshold = cfg.initial_threshold if cfg.initial_threshold is not None else cfg.min_accuracy
@@ -1609,17 +1552,20 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 				if not g.has_connections():
 					g.initialize_connections(evaluator.total_input_bits)
 
-		# Best tracking - always track all three for logging
-		best_harmonic_genome = initial_genome.clone()
-		best_harmonic_fitness = initial_fitness  # CE of best-by-harmonic
-		best_harmonic_accuracy: Optional[float] = None
+		# Best tracking - unified approach using fitness calculator
+		# best_ranked_*: best genome by fitness ranking (used for neighbor search)
+		# best_ce_*: best by pure CE (for tracking/logging)
+		# best_acc_*: best by pure accuracy (for tracking/logging)
+		best_ranked_genome = initial_genome.clone()
+		best_ranked_ce = initial_fitness
+		best_ranked_accuracy: Optional[float] = None
 
 		best_ce_genome = initial_genome.clone()
-		best_ce_fitness = initial_fitness  # Best CE seen
+		best_ce_fitness = initial_fitness
 		best_ce_accuracy: Optional[float] = None
 
 		best_acc_genome = initial_genome.clone()
-		best_acc_fitness = initial_fitness  # CE of best-by-acc
+		best_acc_fitness = initial_fitness
 		best_acc_accuracy: Optional[float] = None
 
 		# Global best (for early stopping and result)
@@ -1643,7 +1589,7 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 				g._cached_fitness = (ce, acc)
 				all_neighbors.append((g.clone(), ce, acc))
 
-			# Always track best_ce and best_acc
+			# Track best by CE and best by Acc for logging
 			for g, ce, acc in all_neighbors[1:]:  # Skip initial
 				if ce < best_ce_fitness:
 					best_ce_genome = g.clone()
@@ -1654,23 +1600,16 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 					best_acc_fitness = ce
 					best_acc_accuracy = acc
 
-			if use_harmonic:
-				# Find best by harmonic rank
-				pop_for_ranking = [(g, ce, acc or 0.0) for g, ce, acc in all_neighbors if acc is not None]
-				if pop_for_ranking:
-					ranked = fitness_calculator.rank(pop_for_ranking)
-					best_harmonic_genome = ranked[0][0].clone()
-					best_harmonic_fitness = best_harmonic_genome._cached_fitness[0]
-					best_harmonic_accuracy = best_harmonic_genome._cached_fitness[1]
-					best = best_harmonic_genome.clone()
-					best_fitness = best_harmonic_fitness
-					best_accuracy = best_harmonic_accuracy
-			else:
-				# CE mode: global best is best_ce
-				if best_ce_fitness < best_fitness:
-					best = best_ce_genome.clone()
-					best_fitness = best_ce_fitness
-					best_accuracy = best_ce_accuracy
+			# Find best by fitness ranking (unified approach for all modes)
+			pop_for_ranking = [(g, ce, acc or 0.0) for g, ce, acc in all_neighbors if acc is not None]
+			if pop_for_ranking:
+				ranked = fitness_calculator.rank(pop_for_ranking)
+				best_ranked_genome = ranked[0][0].clone()
+				best_ranked_ce = best_ranked_genome._cached_fitness[0]
+				best_ranked_accuracy = best_ranked_genome._cached_fitness[1]
+				best = best_ranked_genome.clone()
+				best_fitness = best_fitness_value
+				best_accuracy = best_fitness_accuracy
 
 		history = [(0, best_fitness)]
 
@@ -1699,10 +1638,10 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		self._log.info(f"[{self.name}] Baseline mean (top-{elite_count_for_overfit} on full data): {sum(baseline_fitness)/len(baseline_fitness):.4f}")
 
 		# Helper to compute top-K% fitness values for early stopping
-		# all_neighbors is capped at 50, so harmonic ranks are always on consistent scale
+		# all_neighbors is capped at 50, so fitness ranks are always on consistent scale
 		def get_top_k_fitness(neighbors: list[tuple['ClusterGenome', float, Optional[float]]],
 							   k_pct: float = 0.2) -> list[float]:
-			"""Get fitness values of top-K% neighbors (harmonic scores or CE values)."""
+			"""Get fitness values of top-K% neighbors (unified by fitness calculator)."""
 			if not neighbors:
 				return []
 			# Filter to neighbors with accuracy
@@ -1712,29 +1651,18 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 				k_count = max(1, int(len(sorted_by_ce) * k_pct))
 				return [ce for _, ce, _ in sorted_by_ce[:k_count]]
 
-			if use_harmonic:
-				# Rank by harmonic and return harmonic scores
-				ranked = fitness_calculator.rank(valid)
-				k_count = max(1, int(len(ranked) * k_pct))
-				return [score for _, score in ranked[:k_count]]
-			else:
-				# CE mode: sort by CE and return CE values
-				sorted_by_ce = sorted(valid, key=lambda x: x[1])
-				k_count = max(1, int(len(sorted_by_ce) * k_pct))
-				return [ce for _, ce, _ in sorted_by_ce[:k_count]]
+			# Rank by fitness (unified approach for all modes)
+			ranked = fitness_calculator.rank(valid)
+			k_count = max(1, int(len(ranked) * k_pct))
+			return [score for _, score in ranked[:k_count]]
 
 		# Initialize early stopper with top-K% CE values
 		elite_fitness = get_top_k_fitness(all_neighbors)
 		early_stopper.reset_trend(elite_fitness)
 
-		# Log config based on mode
-		if use_harmonic:
-			self._log.info(f"[{self.name}] Config: neighbors={cfg.neighbors_per_iter} (single path by harmonic rank), "
-						   f"iters={cfg.iterations}")
-		else:
-			neighbors_per_path = cfg.neighbors_per_iter // 2
-			self._log.info(f"[{self.name}] Config: neighbors={cfg.neighbors_per_iter} ({neighbors_per_path} CE + {neighbors_per_path} Acc), "
-						   f"iters={cfg.iterations}")
+		# Log config (unified single-path approach for all modes)
+		self._log.info(f"[{self.name}] Config: neighbors={cfg.neighbors_per_iter} (single path by {fitness_calculator.name}), "
+					   f"iters={cfg.iterations}")
 
 		prev_threshold: Optional[float] = None
 		iteration = 0
@@ -1776,237 +1704,100 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 				self._log.debug(f"[{self.name}] Threshold changed: {prev_threshold:.4%} → {current_threshold:.4%}")
 			prev_threshold = current_threshold
 
-			if use_harmonic:
-				# === HARMONIC_RANK mode: Single path, all neighbors from best_harmonic ===
-				self._log.debug(f"[{self.name}] Searching {cfg.neighbors_per_iter} neighbors from best harmonic...")
-				neighbors = evaluator.search_neighbors(
-					genome=best_harmonic_genome,
-					target_count=cfg.neighbors_per_iter,
-					max_attempts=cfg.neighbors_per_iter * 5,
-					accuracy_threshold=current_threshold,
-					min_bits=arch_cfg.min_bits,
-					max_bits=arch_cfg.max_bits,
-					min_neurons=arch_cfg.min_neurons,
-					max_neurons=arch_cfg.max_neurons,
-					bits_mutation_rate=cfg.mutation_rate if arch_cfg.optimize_bits else 0.0,
-					neurons_mutation_rate=cfg.mutation_rate if arch_cfg.optimize_neurons else 0.0,
-					train_subset_idx=phase_train_idx,
-					eval_subset_idx=0,
-					seed=seed_offset + iteration * 1000,
-					generation=iteration,
-					total_generations=cfg.iterations,
-					return_best_n=True,
+			# === Unified single-path search: neighbors from best by fitness ranking ===
+			self._log.debug(f"[{self.name}] Searching {cfg.neighbors_per_iter} neighbors from best ranked...")
+			neighbors = evaluator.search_neighbors(
+				genome=best_ranked_genome,
+				target_count=cfg.neighbors_per_iter,
+				max_attempts=cfg.neighbors_per_iter * 5,
+				accuracy_threshold=current_threshold,
+				min_bits=arch_cfg.min_bits,
+				max_bits=arch_cfg.max_bits,
+				min_neurons=arch_cfg.min_neurons,
+				max_neurons=arch_cfg.max_neurons,
+				bits_mutation_rate=cfg.mutation_rate if arch_cfg.optimize_bits else 0.0,
+				neurons_mutation_rate=cfg.mutation_rate if arch_cfg.optimize_neurons else 0.0,
+				train_subset_idx=phase_train_idx,
+				eval_subset_idx=0,
+				seed=seed_offset + iteration * 1000,
+				generation=iteration,
+				total_generations=cfg.iterations,
+				return_best_n=True,
+			)
+
+			# Track per-iteration stats (before and after filter)
+			iter_neighbors_generated = len(neighbors)
+
+			# Apply percentile filter by fitness ranking
+			# Note: 0 means disabled, same as None
+			if cfg.fitness_percentile and cfg.fitness_percentile > 0 and neighbors:
+				pop_for_filter = [(g, g._cached_fitness[0], g._cached_fitness[1]) for g in neighbors]
+				fitness_scores = fitness_calculator.fitness(pop_for_filter)
+				neighbor_with_fitness = [(g, score) for g, score in zip(neighbors, fitness_scores)]
+
+				fitness_filter = PercentileFilter(
+					percentile=cfg.fitness_percentile,
+					mode=FilterMode.LOWER_IS_BETTER,
+					metric_name=fitness_calculator.name,
 				)
+				filter_result = fitness_filter.apply(neighbor_with_fitness, key=lambda g, f: f)
+				neighbors = [g for g, _ in filter_result.kept]
 
-				# Track per-iteration stats (before and after filter)
-				iter_neighbors_generated = len(neighbors)
+			# Track neighbors after filter (for per-iteration stats)
+			iter_neighbors_viable = len(neighbors)
 
-				# Apply percentile filter by harmonic rank fitness
-				# Note: 0 means disabled, same as None
-				if cfg.fitness_percentile and cfg.fitness_percentile > 0 and neighbors:
-					pop_for_filter = [(g, g._cached_fitness[0], g._cached_fitness[1]) for g in neighbors]
-					fitness_scores = fitness_calculator.fitness(pop_for_filter)
-					neighbor_with_fitness = [(g, score) for g, score in zip(neighbors, fitness_scores)]
+			# Store new neighbors for tracking (before merging into cache)
+			new_neighbors_this_iter = [(g.clone(), g._cached_fitness[0], g._cached_fitness[1]) for g in neighbors]
 
-					fitness_filter = PercentileFilter(
-						percentile=cfg.fitness_percentile,
-						mode=FilterMode.LOWER_IS_BETTER,
-						metric_name="HarmonicRank",
-					)
-					filter_result = fitness_filter.apply(neighbor_with_fitness, key=lambda g, f: f)
-					neighbors = [g for g, _ in filter_result.kept]
+			# Add to all_neighbors and track best_ce/best_acc for logging
+			for g in neighbors:
+				ce, acc = g._cached_fitness
+				all_neighbors.append((g.clone(), ce, acc))
+				# Track best by CE
+				if ce < best_ce_fitness:
+					best_ce_genome = g.clone()
+					best_ce_fitness = ce
+					best_ce_accuracy = acc
+				# Track best by Acc
+				if acc is not None and (best_acc_accuracy is None or acc > best_acc_accuracy):
+					best_acc_genome = g.clone()
+					best_acc_fitness = ce
+					best_acc_accuracy = acc
 
-				# Track neighbors after filter (for per-iteration stats)
-				iter_neighbors_viable = len(neighbors)
+			# Cap all_neighbors to best N by fitness ranking
+			cache_size = cfg.total_neighbors_size or cfg.neighbors_per_iter
+			if len(all_neighbors) > cache_size:
+				valid_for_cap = [(g, ce, acc) for g, ce, acc in all_neighbors if acc is not None]
+				if valid_for_cap:
+					ranked_for_cap = fitness_calculator.rank(valid_for_cap)
+					all_neighbors = [(g, g._cached_fitness[0], g._cached_fitness[1]) for g, _ in ranked_for_cap[:cache_size]]
 
-				# Store new neighbors for tracking (before merging into cache)
-				new_neighbors_this_iter = [(g.clone(), g._cached_fitness[0], g._cached_fitness[1]) for g in neighbors]
+			# Find new best by fitness ranking (include current best)
+			pop_for_ranking = [(g, ce, acc or 0.0) for g, ce, acc in all_neighbors if acc is not None]
+			if pop_for_ranking:
+				ranked = fitness_calculator.rank(pop_for_ranking)
+				new_best = ranked[0][0]
+				new_ce = new_best._cached_fitness[0]
+				new_acc = new_best._cached_fitness[1]
 
-				# Add to all_neighbors and track best_ce/best_acc
-				for g in neighbors:
-					ce, acc = g._cached_fitness
-					all_neighbors.append((g.clone(), ce, acc))
-					# Track best by CE
-					if ce < best_ce_fitness:
-						best_ce_genome = g.clone()
-						best_ce_fitness = ce
-						best_ce_accuracy = acc
-					# Track best by Acc
-					if acc is not None and (best_acc_accuracy is None or acc > best_acc_accuracy):
-						best_acc_genome = g.clone()
-						best_acc_fitness = ce
-						best_acc_accuracy = acc
+				# Update best_ranked (always, since fitness ranking may change)
+				best_ranked_genome = new_best.clone()
+				best_ranked_ce = new_ce
+				best_ranked_accuracy = new_acc
 
-				# Cap all_neighbors to best N by harmonic rank
-				cache_size = cfg.total_neighbors_size or cfg.neighbors_per_iter
-				if len(all_neighbors) > cache_size:
-					valid_for_cap = [(g, ce, acc) for g, ce, acc in all_neighbors if acc is not None]
-					if valid_for_cap:
-						ranked_for_cap = fitness_calculator.rank(valid_for_cap)
-						# Keep top N genomes (directly from ranked list)
-						all_neighbors = [(g, g._cached_fitness[0], g._cached_fitness[1]) for g, _ in ranked_for_cap[:cache_size]]
+				# Update global best (by CE for early stopping)
+				if new_ce < best_fitness:
+					best = new_best.clone()
+					best_fitness = new_ce
+					best_accuracy = new_acc
 
-				# Find new best by harmonic rank (include current best)
-				pop_for_ranking = [(g, ce, acc or 0.0) for g, ce, acc in all_neighbors if acc is not None]
-				if pop_for_ranking:
-					ranked = fitness_calculator.rank(pop_for_ranking)
-					new_best = ranked[0][0]
-					new_ce = new_best._cached_fitness[0]
-					new_acc = new_best._cached_fitness[1]
-
-					# Update best_harmonic (always, since harmonic rank may change)
-					best_harmonic_genome = new_best.clone()
-					best_harmonic_fitness = new_ce
-					best_harmonic_accuracy = new_acc
-
-					# Update global best (by CE for early stopping)
-					if new_ce < best_fitness:
-						best = new_best.clone()
-						best_fitness = new_ce
-						best_accuracy = new_acc
-
-				# Log iteration summary with all three metrics and duration
-				# Note: metrics are from subset evaluation, not full validation
-				iter_elapsed = time.time() - iter_start
-				acc_str = f"{best_acc_accuracy:.4%}" if best_acc_accuracy else "N/A"
-				self._log.info(f"[{self.name}] Iter {iteration+1:03d}/{cfg.iterations}: "
-							   f"best_harmonic=(CE={best_harmonic_fitness:.4f}, Acc={best_harmonic_accuracy:.4%}), "
-							   f"best_ce={best_ce_fitness:.4f}, best_acc={acc_str} (subset) ({iter_elapsed:.1f}s)")
-
-			else:
-				# === CE mode: Dual path ===
-				neighbors_per_path = cfg.neighbors_per_iter // 2
-
-				# Initialize per-iteration tracking for CE mode
-				iter_neighbors_generated = 0
-				iter_neighbors_viable = 0
-
-				# Path A: Search from best_ce
-				self._log.debug(f"[{self.name}] Path CE: searching {neighbors_per_path} neighbors...")
-				ce_neighbors = evaluator.search_neighbors(
-					genome=best_ce_genome,
-					target_count=neighbors_per_path,
-					max_attempts=neighbors_per_path * 5,
-					accuracy_threshold=current_threshold,
-					min_bits=arch_cfg.min_bits,
-					max_bits=arch_cfg.max_bits,
-					min_neurons=arch_cfg.min_neurons,
-					max_neurons=arch_cfg.max_neurons,
-					bits_mutation_rate=cfg.mutation_rate if arch_cfg.optimize_bits else 0.0,
-					neurons_mutation_rate=cfg.mutation_rate if arch_cfg.optimize_neurons else 0.0,
-					train_subset_idx=phase_train_idx,
-					eval_subset_idx=0,
-					seed=seed_offset + iteration * 1000,
-					generation=iteration,
-					total_generations=cfg.iterations,
-					return_best_n=True,
-				)
-
-				# Path B: Search from best_acc
-				self._log.debug(f"[{self.name}] Path Acc: searching {neighbors_per_path} neighbors...")
-				acc_neighbors = evaluator.search_neighbors(
-					genome=best_acc_genome,
-					target_count=neighbors_per_path,
-					max_attempts=neighbors_per_path * 5,
-					accuracy_threshold=current_threshold,
-					min_bits=arch_cfg.min_bits,
-					max_bits=arch_cfg.max_bits,
-					min_neurons=arch_cfg.min_neurons,
-					max_neurons=arch_cfg.max_neurons,
-					bits_mutation_rate=cfg.mutation_rate if arch_cfg.optimize_bits else 0.0,
-					neurons_mutation_rate=cfg.mutation_rate if arch_cfg.optimize_neurons else 0.0,
-					train_subset_idx=phase_train_idx,
-					eval_subset_idx=0,
-					seed=seed_offset + iteration * 1000 + 500,
-					generation=iteration,
-					total_generations=cfg.iterations,
-					return_best_n=True,
-				)
-
-				# Track generated neighbors (before filter)
-				iter_neighbors_generated = len(ce_neighbors) + len(acc_neighbors)
-
-				# Apply percentile filter if configured
-				# Note: 0 means disabled, same as None
-				if cfg.fitness_percentile and cfg.fitness_percentile > 0:
-					if fitness_calculator:
-						# NORMALIZED mode: Filter by fitness calculator score
-						def filter_by_fitness(neighbors):
-							if not neighbors:
-								return neighbors
-							pop_for_filter = [(g, g._cached_fitness[0], g._cached_fitness[1]) for g in neighbors]
-							fitness_scores = fitness_calculator.fitness(pop_for_filter)
-							neighbor_with_fitness = [(g, score) for g, score in zip(neighbors, fitness_scores)]
-							fitness_filter = PercentileFilter(
-								percentile=cfg.fitness_percentile,
-								mode=FilterMode.LOWER_IS_BETTER,
-								metric_name=fitness_calculator.name,
-							)
-							filter_result = fitness_filter.apply(neighbor_with_fitness, key=lambda g, f: f)
-							return [g for g, _ in filter_result.kept]
-						ce_neighbors = filter_by_fitness(ce_neighbors)
-						acc_neighbors = filter_by_fitness(acc_neighbors)
-					else:
-						# CE mode: Filter by CE only
-						ce_filter = PercentileFilter(
-							percentile=cfg.fitness_percentile,
-							mode=FilterMode.LOWER_IS_BETTER,
-							metric_name="CE",
-						)
-						if ce_neighbors:
-							ce_population = [(g, g._cached_fitness[0]) for g in ce_neighbors]
-							filter_result = ce_filter.apply(ce_population, key=lambda g, f: f)
-							ce_neighbors = [g for g, _ in filter_result.kept]
-						if acc_neighbors:
-							acc_population = [(g, g._cached_fitness[0]) for g in acc_neighbors]
-							filter_result = ce_filter.apply(acc_population, key=lambda g, f: f)
-							acc_neighbors = [g for g, _ in filter_result.kept]
-
-				# Track viable neighbors after filter (for per-iteration stats)
-				iter_neighbors_viable = len(ce_neighbors) + len(acc_neighbors)
-
-				# Store new neighbors for tracking (before merging into cache)
-				all_new = ce_neighbors + acc_neighbors
-				new_neighbors_this_iter = [(g.clone(), g._cached_fitness[0], g._cached_fitness[1]) for g in all_new]
-
-				# Process all neighbors
-				for g in all_new:
-					ce, acc = g._cached_fitness
-					all_neighbors.append((g.clone(), ce, acc))
-					if ce < best_ce_fitness:
-						best_ce_genome = g.clone()
-						best_ce_fitness = ce
-						best_ce_accuracy = acc
-					if acc is not None and (best_acc_accuracy is None or acc > best_acc_accuracy):
-						best_acc_genome = g.clone()
-						best_acc_fitness = ce
-						best_acc_accuracy = acc
-
-				# Cap all_neighbors to best N by fitness (weighted CE + Acc)
-				# Use fitness calculator to preserve high-accuracy genomes
-				cache_size = cfg.total_neighbors_size or cfg.neighbors_per_iter
-				if len(all_neighbors) > cache_size:
-					fitness_scores = fitness_calculator.fitness(all_neighbors)
-					sorted_with_fitness = sorted(
-						zip(all_neighbors, fitness_scores),
-						key=lambda x: x[1]  # Lower fitness = better
-					)
-					all_neighbors = [item for item, _ in sorted_with_fitness[:cache_size]]
-
-				# Update global best
-				if best_ce_fitness < best_fitness:
-					best = best_ce_genome.clone()
-					best_fitness = best_ce_fitness
-					best_accuracy = best_ce_accuracy
-
-				# Log iteration summary with duration
-				# Note: metrics are from subset evaluation, not full validation
-				iter_elapsed = time.time() - iter_start
-				if best_acc_accuracy:
-					self._log.info(f"[{self.name}] Iter {iteration+1:03d}/{cfg.iterations}: "
-								   f"best_ce={best_ce_fitness:.4f}, best_acc={best_acc_accuracy:.4%} (subset) ({iter_elapsed:.1f}s)")
-				else:
-					self._log.info(f"[{self.name}] Iter {iteration+1:03d}/{cfg.iterations}: best_ce={best_ce_fitness:.4f} (subset) ({iter_elapsed:.1f}s)")
+			# Log iteration summary
+			iter_elapsed = time.time() - iter_start
+			acc_str = f"{best_acc_accuracy:.4%}" if best_acc_accuracy else "N/A"
+			ranked_acc_str = f"{best_ranked_accuracy:.4%}" if best_ranked_accuracy else "N/A"
+			self._log.info(f"[{self.name}] Iter {iteration+1:03d}/{cfg.iterations}: "
+						   f"best_ranked=(CE={best_ranked_ce:.4f}, Acc={ranked_acc_str}), "
+						   f"best_ce={best_ce_fitness:.4f}, best_acc={acc_str} (subset) ({iter_elapsed:.1f}s)")
 
 			history.append((iteration + 1, best_fitness))
 
@@ -2142,7 +1933,9 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 			# Update previous best for next iteration's delta computation
 			prev_best_fitness = best_fitness
 
-		# Build final population
+		# Build final population: Always use fitness ranking (unified approach)
+		# For CE mode: fitness = CE, so ranking = best CE
+		# For weighted modes: fitness = combined score
 		cache_size = cfg.total_neighbors_size or cfg.neighbors_per_iter
 		valid_neighbors = [n for n in all_neighbors if n[2] is not None]
 
@@ -2151,47 +1944,19 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 			conn_hash = hash(tuple(g.connections[:1000])) if g.connections is not None else 0
 			return hash((tuple(g.bits_per_cluster), tuple(g.neurons_per_cluster), conn_hash))
 
-		if use_harmonic:
-			# HARMONIC_RANK: Rank by harmonic and take top N
-			pop_for_ranking = [(g, ce, acc) for g, ce, acc in valid_neighbors]
-			ranked = fitness_calculator.rank(pop_for_ranking)
+		# Rank by fitness and take top N unique genomes
+		pop_for_ranking = [(g, ce, acc) for g, ce, acc in valid_neighbors]
+		ranked = fitness_calculator.rank(pop_for_ranking)
 
-			seen = set()
-			final_population = []
-			for g, _ in ranked:
-				key = genome_key(g)
-				if key not in seen:
-					seen.add(key)
-					final_population.append(g)
-					if len(final_population) >= cache_size:
-						break
-		else:
-			# CE mode: Interleave from CE and Acc lists
-			by_ce = sorted(valid_neighbors, key=lambda x: (x[1], -x[2]))
-			by_acc = sorted(valid_neighbors, key=lambda x: (-x[2], x[1]))
-
-			seen = set()
-			final_population = []
-			ce_idx, acc_idx = 0, 0
-
-			while len(final_population) < cache_size and (ce_idx < len(by_ce) or acc_idx < len(by_acc)):
-				while ce_idx < len(by_ce) and len(final_population) < cache_size:
-					g, _, _ = by_ce[ce_idx]
-					key = genome_key(g)
-					ce_idx += 1
-					if key not in seen:
-						seen.add(key)
-						final_population.append(g)
-						break
-
-				while acc_idx < len(by_acc) and len(final_population) < cache_size:
-					g, _, _ = by_acc[acc_idx]
-					key = genome_key(g)
-					acc_idx += 1
-					if key not in seen:
-						seen.add(key)
-						final_population.append(g)
-						break
+		seen = set()
+		final_population = []
+		for g, _ in ranked:
+			key = genome_key(g)
+			if key not in seen:
+				seen.add(key)
+				final_population.append(g)
+				if len(final_population) >= cache_size:
+					break
 
 		improvement_pct = (start_fitness - best_fitness) / start_fitness * 100 if start_fitness != 0 else 0.0
 		return OptimizerResult(

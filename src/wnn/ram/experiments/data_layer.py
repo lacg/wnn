@@ -520,7 +520,13 @@ class DataLayer:
         return dict(row) if row else None
 
     def update_phase_status(self, phase_id: int, status: PhaseStatus) -> None:
-        """Update phase status."""
+        """Update phase status.
+
+        When a phase is marked as COMPLETED, this also checks if all phases of the
+        parent experiment are completed and auto-completes the experiment if so.
+        This provides resilience against crashes between phase completion and
+        explicit experiment completion calls.
+        """
         now = _now_iso()
         with self._transaction() as conn:
             if status == PhaseStatus.RUNNING:
@@ -539,6 +545,49 @@ class DataLayer:
                     (status.value, phase_id),
                 )
             self._logger(f"Phase {phase_id} -> {status.value}")
+
+        # Auto-complete experiment when all phases are done (resilience fix)
+        if status == PhaseStatus.COMPLETED:
+            self._maybe_complete_experiment_for_phase(phase_id)
+
+    def _maybe_complete_experiment_for_phase(self, phase_id: int) -> None:
+        """Check if all phases of an experiment are completed and auto-complete it.
+
+        This is called after marking a phase as completed to ensure experiments
+        don't get stuck in 'running' state if a crash occurs between phase
+        completion and explicit experiment completion.
+        """
+        conn = self._get_conn()
+
+        # Get the experiment_id for this phase
+        row = conn.execute(
+            "SELECT experiment_id FROM phases WHERE id = ?", (phase_id,)
+        ).fetchone()
+        if not row:
+            return
+
+        experiment_id = row[0]
+
+        # Check experiment status - only auto-complete if it's still running
+        exp_row = conn.execute(
+            "SELECT status FROM experiments WHERE id = ?", (experiment_id,)
+        ).fetchone()
+        if not exp_row or exp_row[0] != ExperimentStatus.RUNNING.value:
+            return
+
+        # Check if all phases for this experiment are completed
+        incomplete_row = conn.execute(
+            """SELECT COUNT(*) FROM phases
+               WHERE experiment_id = ? AND status NOT IN (?, ?, ?)""",
+            (experiment_id, PhaseStatus.COMPLETED.value, PhaseStatus.SKIPPED.value, PhaseStatus.FAILED.value)
+        ).fetchone()
+
+        incomplete_count = incomplete_row[0] if incomplete_row else 0
+
+        if incomplete_count == 0:
+            # All phases are done - auto-complete the experiment
+            self._logger(f"All phases completed for experiment {experiment_id}, auto-completing")
+            self.update_experiment_status(experiment_id, ExperimentStatus.COMPLETED)
 
     def update_phase_progress(
         self,
