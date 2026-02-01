@@ -875,6 +875,56 @@ pub mod queries {
         }
     }
 
+    /// Create a new experiment
+    pub async fn create_experiment(
+        pool: &DbPool,
+        name: &str,
+        flow_id: Option<i64>,
+        config: &serde_json::Value,
+    ) -> Result<i64> {
+        let now = Utc::now().to_rfc3339();
+
+        // Extract config values with defaults
+        let fitness_calculator = config.get("fitness_calculator")
+            .and_then(|v| v.as_str())
+            .unwrap_or("normalized");
+        let fitness_weight_ce = config.get("fitness_weight_ce")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(1.0);
+        let fitness_weight_acc = config.get("fitness_weight_acc")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(1.0);
+        let tier_config = config.get("tier_config")
+            .map(|v| v.to_string());
+        let context_size = config.get("context_size")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(4) as i32;
+        let population_size = config.get("population_size")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(50) as i32;
+
+        let result = sqlx::query(
+            r#"INSERT INTO experiments (
+                name, flow_id, status, fitness_calculator, fitness_weight_ce, fitness_weight_acc,
+                tier_config, context_size, population_size, created_at, started_at
+            ) VALUES (?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?)"#,
+        )
+        .bind(name)
+        .bind(flow_id)
+        .bind(fitness_calculator)
+        .bind(fitness_weight_ce)
+        .bind(fitness_weight_acc)
+        .bind(&tier_config)
+        .bind(context_size)
+        .bind(population_size)
+        .bind(&now)
+        .bind(&now)
+        .execute(pool)
+        .await?;
+
+        Ok(result.last_insert_rowid())
+    }
+
     /// List all experiments
     pub async fn list_experiments(pool: &DbPool, limit: i32, offset: i32) -> Result<Vec<Experiment>> {
         let rows = sqlx::query(

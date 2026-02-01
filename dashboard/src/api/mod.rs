@@ -24,7 +24,7 @@ pub struct AppState {
 pub fn routes(state: Arc<AppState>) -> Router {
     Router::new()
         // Experiments
-        .route("/api/experiments", get(list_experiments))
+        .route("/api/experiments", get(list_experiments).post(create_experiment))
         .route("/api/experiments/current", get(get_current_experiment))
         .route("/api/experiments/:id", get(get_experiment))
         .route("/api/experiments/:id/phases", get(get_experiment_phases))
@@ -58,6 +58,38 @@ pub fn routes(state: Arc<AppState>) -> Router {
 async fn list_experiments(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match crate::db::queries::list_experiments(&state.db, 100, 0).await {
         Ok(experiments) => (StatusCode::OK, Json(experiments)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateExperimentRequest {
+    pub name: String,
+    pub flow_id: Option<i64>,
+    #[serde(default)]
+    pub config: serde_json::Value,
+    pub log_path: Option<String>,
+}
+
+async fn create_experiment(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateExperimentRequest>,
+) -> impl IntoResponse {
+    match crate::db::queries::create_experiment(
+        &state.db,
+        &req.name,
+        req.flow_id,
+        &req.config,
+    ).await {
+        Ok(id) => {
+            match crate::db::queries::get_experiment(&state.db, id).await {
+                Ok(Some(exp)) => (StatusCode::CREATED, Json(exp)).into_response(),
+                _ => (StatusCode::CREATED, Json(serde_json::json!({"id": id}))).into_response(),
+            }
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
