@@ -839,13 +839,16 @@ pub mod queries {
     // =============================================================================
 
     /// Get the currently running experiment
+    /// Prioritizes experiments linked to flows, then most recent
     pub async fn get_running_experiment(pool: &DbPool) -> Result<Option<Experiment>> {
         let row = sqlx::query(
             r#"SELECT id, flow_id, sequence_order, name, status, fitness_calculator,
                       fitness_weight_ce, fitness_weight_acc, tier_config, context_size,
                       population_size, pid, last_phase_id, last_iteration, resume_checkpoint_id,
                       created_at, started_at, ended_at, paused_at
-               FROM experiments WHERE status = 'running' LIMIT 1"#,
+               FROM experiments WHERE status = 'running'
+               ORDER BY (CASE WHEN flow_id IS NOT NULL THEN 0 ELSE 1 END), id DESC
+               LIMIT 1"#,
         )
         .fetch_optional(pool)
         .await?;
