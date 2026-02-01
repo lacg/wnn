@@ -288,3 +288,4 @@ node_modules/
 *.db-shm
 *.db-wal
 dashboard.db
+wnn_dashboard.db
