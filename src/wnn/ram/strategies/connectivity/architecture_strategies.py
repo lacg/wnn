@@ -1982,11 +1982,16 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 						best_acc_fitness = ce
 						best_acc_accuracy = acc
 
-				# Cap all_neighbors to best N by CE
+				# Cap all_neighbors to best N by fitness (weighted CE + Acc)
+				# Use fitness calculator to preserve high-accuracy genomes
 				cache_size = cfg.total_neighbors_size or cfg.neighbors_per_iter
 				if len(all_neighbors) > cache_size:
-					sorted_by_ce = sorted(all_neighbors, key=lambda x: x[1])
-					all_neighbors = sorted_by_ce[:cache_size]
+					fitness_scores = fitness_calculator.fitness(all_neighbors)
+					sorted_with_fitness = sorted(
+						zip(all_neighbors, fitness_scores),
+						key=lambda x: x[1]  # Lower fitness = better
+					)
+					all_neighbors = [item for item, _ in sorted_with_fitness[:cache_size]]
 
 				# Update global best
 				if best_ce_fitness < best_fitness:
