@@ -64,6 +64,7 @@ class PhaseStatus(str, Enum):
     COMPLETED = "completed"
     SKIPPED = "skipped"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class FitnessCalculator(str, Enum):
