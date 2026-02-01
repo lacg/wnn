@@ -24,6 +24,7 @@ from wnn.ram.strategies.connectivity.generic_strategies import (
 	GAConfig,
 	TSConfig,
 	OptimizerResult,
+	StopReason,
 )
 from wnn.ram.fitness import FitnessCalculatorFactory, FitnessCalculatorType
 from wnn.ram.architecture.genome_log import (
@@ -970,10 +971,11 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		prev_best_fitness = best_fitness
 
 		# Get train subset for this PHASE (fixed for all generations)
-		# This ensures all genomes (elites + offspring) are evaluated on the same data,
+			# This ensures all genomes (elites + offspring) are evaluated on the same data,
 		# making their fitness values directly comparable.
 		phase_train_idx = evaluator.next_train_idx()
 
+		shutdown_requested = False  # Track shutdown for stop_reason
 		for generation in range(start_generation, cfg.generations):
 			# Check for shutdown request at start of each generation
 			if self._shutdown_check and self._shutdown_check():
@@ -989,6 +991,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 						extra_state={"patience_counter": early_stop._patience_counter},
 						force=True,
 					)
+				shutdown_requested = True
 				break
 
 			gen_start = time.time()
@@ -1256,6 +1259,12 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 		)[0]
 
 		improvement_pct = (initial_fitness - final_ce) / initial_fitness * 100 if initial_fitness != 0 else 0.0
+		# Determine stop reason
+		stop_reason = None
+		if shutdown_requested:
+			stop_reason = StopReason.SHUTDOWN
+		elif early_stop.patience_exhausted:
+			stop_reason = StopReason.CONVERGENCE
 		return OptimizerResult(
 			initial_genome=initial_genome,
 			best_genome=best_genome,
@@ -1268,6 +1277,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			final_threshold=current_threshold,
 			final_accuracy=final_acc,
 			initial_accuracy=None,
+			stop_reason=stop_reason,
 		)
 
 
@@ -1729,16 +1739,18 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 		# Track previous best for delta computation
 		prev_best_fitness = best_fitness
 
-		# Get train subset for this PHASE (fixed for all iterations)
+			# Get train subset for this PHASE (fixed for all iterations)
 		# This ensures all neighbors are evaluated on the same data,
 		# making their fitness values directly comparable.
 		phase_train_idx = evaluator.next_train_idx()
 
+		shutdown_requested = False  # Track shutdown for stop_reason
 		for iteration in range(cfg.iterations):
 			# Check for shutdown request at start of each iteration
 			if self._shutdown_check and self._shutdown_check():
 				self._log.info(f"[{self.name}] Shutdown requested at iteration {iteration}/{cfg.iterations}, stopping gracefully...")
 				self._log.info(f"[{self.name}] Progress will be saved (best CE so far: {best_ce_fitness:.4f})")
+				shutdown_requested = True
 				break
 
 			iter_start = time.time()
@@ -2016,7 +2028,13 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 				if len(final_population) >= cache_size:
 					break
 
-		improvement_pct = (start_fitness - best_fitness) / start_fitness * 100 if start_fitness != 0 else 0.0
+			improvement_pct = (start_fitness - best_fitness) / start_fitness * 100 if start_fitness != 0 else 0.0
+		# Determine stop reason
+		stop_reason = None
+		if shutdown_requested:
+			stop_reason = StopReason.SHUTDOWN
+		elif early_stopper.patience_exhausted:
+			stop_reason = StopReason.CONVERGENCE
 		return OptimizerResult(
 			initial_genome=initial_genome,
 			best_genome=best,
@@ -2031,4 +2049,5 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 			final_threshold=current_threshold,
 			initial_accuracy=None,
 			final_accuracy=best_accuracy,
+			stop_reason=stop_reason,
 		)

@@ -219,6 +219,7 @@ class StopReason(IntEnum):
 	CONVERGENCE = auto()  # No improvement for patience iterations
 	OVERFITTING = auto()  # Overfitting callback triggered early stop
 	MAX_ITERATIONS = auto()  # Reached maximum iterations (not early stopped)
+	SHUTDOWN = auto()  # External shutdown request (e.g., flow cancelled)
 
 
 @dataclass
