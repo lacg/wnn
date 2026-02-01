@@ -3035,6 +3035,7 @@ impl TokenCacheWrapper {
 
         let config = neighbor_search::MutationConfig {
             num_clusters,
+            mutable_clusters: num_clusters,  // Default: all clusters mutable for TS
             min_bits,
             max_bits,
             min_neurons,
@@ -3133,7 +3134,8 @@ impl TokenCacheWrapper {
         log_path = None,
         generation = None,
         total_generations = None,
-        return_best_n = true
+        return_best_n = true,
+        mutable_clusters = None
     ))]
     fn search_offspring(
         &self,
@@ -3158,6 +3160,7 @@ impl TokenCacheWrapper {
         generation: Option<usize>,
         total_generations: Option<usize>,
         return_best_n: bool,
+        mutable_clusters: Option<usize>,
     ) -> PyResult<(Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64)>, usize, usize)> {
         // Returns: (candidates, evaluated, viable)
         let num_clusters = if !population.is_empty() {
@@ -3166,9 +3169,12 @@ impl TokenCacheWrapper {
             return Ok((Vec::new(), 0, 0));
         };
         let total_input_bits = self.inner.total_input_bits();
+        // Use mutable_clusters if provided, otherwise mutate all clusters
+        let effective_mutable = mutable_clusters.unwrap_or(num_clusters);
 
         let ga_config = neighbor_search::GAConfig {
             num_clusters,
+            mutable_clusters: effective_mutable,
             min_bits,
             max_bits,
             min_neurons,

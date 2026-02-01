@@ -19,6 +19,7 @@ use chrono::Local;
 #[derive(Clone)]
 pub struct MutationConfig {
     pub num_clusters: usize,
+    pub mutable_clusters: usize,    // How many clusters to mutate (tier0-only = 100)
     pub min_bits: usize,
     pub max_bits: usize,
     pub min_neurons: usize,
@@ -174,8 +175,8 @@ pub fn format_gen_prefix(generation: usize, total_generations: usize) -> String 
 /// Mutate a genome to create a neighbor.
 ///
 /// Mutations include:
-/// - bits_per_cluster: ±delta with mutation_rate probability
-/// - neurons_per_cluster: ±delta with mutation_rate probability
+/// - bits_per_cluster: ±delta with mutation_rate probability (only first mutable_clusters)
+/// - neurons_per_cluster: ±delta with mutation_rate probability (only first mutable_clusters)
 /// - connections: adjusted when architecture changes, small perturbations
 pub fn mutate_genome(
     bits: &[usize],
@@ -194,8 +195,8 @@ pub fn mutate_genome(
     let old_bits = bits.to_vec();
     let old_neurons = neurons.to_vec();
 
-    // Mutate architecture
-    for i in 0..config.num_clusters {
+    // Mutate architecture - only first mutable_clusters (tier0-only mode)
+    for i in 0..config.mutable_clusters {
         // Mutate bits
         if rng.gen::<f64>() < config.bits_mutation_rate {
             let delta = rng.gen_range(-bits_delta_max..=bits_delta_max);
@@ -564,6 +565,7 @@ pub fn search_neighbors_best_n(
 #[derive(Clone)]
 pub struct GAConfig {
     pub num_clusters: usize,
+    pub mutable_clusters: usize,    // How many clusters to mutate (tier0-only = 100)
     pub min_bits: usize,
     pub max_bits: usize,
     pub min_neurons: usize,
@@ -650,6 +652,7 @@ fn mutate_ga(
 ) -> (Vec<usize>, Vec<usize>, Vec<i64>) {
     let mutation_config = MutationConfig {
         num_clusters: config.num_clusters,
+        mutable_clusters: config.mutable_clusters,
         min_bits: config.min_bits,
         max_bits: config.max_bits,
         min_neurons: config.min_neurons,
@@ -830,6 +833,7 @@ mod tests {
     fn test_mutation_config() {
         let config = MutationConfig {
             num_clusters: 100,
+            mutable_clusters: 100,
             min_bits: 4,
             max_bits: 20,
             min_neurons: 1,
@@ -848,6 +852,7 @@ mod tests {
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
         let config = MutationConfig {
             num_clusters: 3,
+            mutable_clusters: 3,
             min_bits: 4,
             max_bits: 20,
             min_neurons: 1,

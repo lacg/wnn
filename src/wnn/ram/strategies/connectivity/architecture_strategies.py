@@ -448,9 +448,9 @@ class ArchitectureConfig:
 	"""
 	num_clusters: int
 	min_bits: int = 4
-	max_bits: int = 20
-	min_neurons: int = 1
-	max_neurons: int = 15
+	max_bits: int = 24
+	min_neurons: int = 3
+	max_neurons: int = 30
 	# Explicit control over what gets optimized (no magic phase numbers)
 	optimize_bits: bool = True
 	optimize_neurons: bool = True
@@ -1132,6 +1132,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 				generation=generation,
 				total_generations=cfg.generations,
 				return_best_n=True,  # Soft threshold: return top N by CE if not enough pass
+				mutable_clusters=arch_cfg.mutable_clusters,  # Tier0-only: only mutate first N clusters
 			)
 			# search_result contains: genomes, evaluated (total tested), viable (passed threshold)
 
