@@ -1001,8 +1001,16 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 			# Elite selection depends on fitness calculator type
 			gen_prefix = format_gen_prefix(generation + 1, cfg.generations)
 
-			if cfg.fitness_calculator_type == FitnessCalculatorType.HARMONIC_RANK:
-				# HARMONIC_RANK mode: Single elite pool by harmonic rank (20% total)
+			# Weighted fitness calculators (HARMONIC_RANK, NORMALIZED, NORMALIZED_HARMONIC)
+			# use single-pool elitism by fitness score
+			uses_weighted_fitness = cfg.fitness_calculator_type in (
+				FitnessCalculatorType.HARMONIC_RANK,
+				FitnessCalculatorType.NORMALIZED,
+				FitnessCalculatorType.NORMALIZED_HARMONIC,
+			)
+
+			if uses_weighted_fitness:
+				# Weighted mode: Single elite pool by fitness score (20% total)
 				elite_count = max(1, int(cfg.elitism_pct * 2 * cfg.population_size))
 
 				# Population is already ranked by harmonic fitness, take top N
@@ -1010,7 +1018,7 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 
 				# Log elites
 				self._log.info("=" * 60)
-				self._log.info(f"{gen_prefix} Elites: {elite_count} by harmonic rank")
+				self._log.info(f"{gen_prefix} Elites: {elite_count} by {fitness_calculator.name}")
 				self._log.info("=" * 60)
 				for i, (g, ce) in enumerate(elites):
 					acc = g._cached_fitness[1] if hasattr(g, '_cached_fitness') and g._cached_fitness else 0.0
