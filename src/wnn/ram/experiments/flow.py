@@ -459,6 +459,13 @@ class Flow:
 					stopped_at_idx = idx
 					raise FlowStoppedError("Shutdown requested during experiment")
 
+				# Also check shutdown_check after experiment completes
+				# (in case shutdown was requested while experiment was finishing)
+				if self.shutdown_check and self.shutdown_check():
+					self.log(f"Shutdown detected after experiment {idx}, stopping flow")
+					stopped_at_idx = idx
+					raise FlowStoppedError("Shutdown requested after experiment")
+
 				# Update state for next experiment
 				current_genome = result.best_genome
 				current_population = result.final_population
