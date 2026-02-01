@@ -929,13 +929,17 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		else:
 			self._log.info(f"[{self.name}] Initializing with {cfg.population_size} random genomes")
 
+		# Get train subset for this PHASE (fixed for ALL evaluations: initial, generations, and elites)
+		# This ensures all genomes are evaluated on the same data, making fitness values directly comparable.
+		phase_train_idx = evaluator.next_train_idx()
+
 		if initial_population and len(initial_population) > 0:
 			# Evaluate initial population with streaming (Rust logs per-genome to WNN_LOG_PATH)
 			import os
 			stream_batch_size = int(os.environ.get('WNN_STREAM_BATCH_SIZE', '15'))
 			results = evaluator.evaluate_batch(
 				initial_population,
-				train_subset_idx=evaluator.next_train_idx(),
+				train_subset_idx=phase_train_idx,
 				eval_subset_idx=0,
 				logger=self._log,
 				generation=0,
@@ -954,7 +958,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			random_genomes = [self.create_random_genome() for _ in range(cfg.population_size)]
 			results = evaluator.evaluate_batch(
 				random_genomes,
-				train_subset_idx=evaluator.next_train_idx(),
+				train_subset_idx=phase_train_idx,
 				eval_subset_idx=0,
 				logger=self._log,
 				generation=0,
@@ -1032,11 +1036,6 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 
 		# Track previous best for delta computation
 		prev_best_fitness = best_fitness
-
-		# Get train subset for this PHASE (fixed for all generations)
-			# This ensures all genomes (elites + offspring) are evaluated on the same data,
-		# making their fitness values directly comparable.
-		phase_train_idx = evaluator.next_train_idx()
 
 		shutdown_requested = False  # Track shutdown for stop_reason
 		for generation in range(start_generation, cfg.generations):
@@ -1642,10 +1641,14 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 
 		current_threshold = get_threshold(0.0)
 
+		# Get train subset for this PHASE (fixed for ALL evaluations: initial neighbors and all iterations)
+		# This ensures all genomes are evaluated on the same data, making fitness values directly comparable.
+		phase_train_idx = evaluator.next_train_idx()
+
 		# Seed with initial neighbors
 		if initial_neighbors:
 			self._log.info(f"[{self.name}] Seeding from {len(initial_neighbors)} neighbors")
-			results = evaluator.evaluate_batch(initial_neighbors)
+			results = evaluator.evaluate_batch(initial_neighbors, train_subset_idx=phase_train_idx)
 			for g, (ce, acc) in zip(initial_neighbors, results):
 				g._cached_fitness = (ce, acc)
 				all_neighbors.append((g.clone(), ce, acc))
@@ -1732,11 +1735,6 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 		# Track previous best for delta computation
 		prev_best_fitness = best_fitness
 
-			# Get train subset for this PHASE (fixed for all iterations)
-		# This ensures all neighbors are evaluated on the same data,
-		# making their fitness values directly comparable.
-		phase_train_idx = evaluator.next_train_idx()
-
 		shutdown_requested = False  # Track shutdown for stop_reason
 		for iteration in range(cfg.iterations):
 			# Check for shutdown request at start of each iteration
@@ -1746,7 +1744,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				shutdown_requested = True
 				break
 
-				iter_start = time.time()
+			iter_start = time.time()
 
 			# Cleanup to prevent Metal buffer accumulation
 			if iteration > 0:
