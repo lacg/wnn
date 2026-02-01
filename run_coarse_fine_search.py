@@ -165,7 +165,7 @@ def main():
 	parser.add_argument("--fitness-percentile", type=float, default=0.75,
 						help="Fitness percentile filter (0.75 = keep top 75%% by fitness). Use 0 to disable")
 	parser.add_argument("--min-accuracy-floor", type=float, default=0.0,
-						help="Accuracy floor: genomes below this get worst fitness. E.g., 0.003 for 0.3%%. Default 0 (disabled)")
+						help="Accuracy floor: genomes below this are rejected. E.g., 0.003 for 0.3%%. Default 0 (disabled)")
 
 	# Checkpointing
 	parser.add_argument("--checkpoint-dir", type=str, default=None,

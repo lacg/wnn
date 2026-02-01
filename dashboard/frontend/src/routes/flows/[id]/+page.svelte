@@ -858,7 +858,7 @@
             <div class="form-group">
               <label for="min_accuracy_floor">Accuracy Floor</label>
               <input type="number" id="min_accuracy_floor" bind:value={editConfig.min_accuracy_floor} min="0" max="0.1" step="0.001" />
-              <span class="form-hint">Min accuracy threshold (0.003 = 0.3%). Below = worst fitness</span>
+              <span class="form-hint">Min accuracy threshold (0.003 = 0.3%). Below = rejected</span>
             </div>
             <div class="form-group">
               <label for="context_size">Context Size (N-gram)</label>

@@ -277,7 +277,7 @@
         <div class="form-group">
           <label for="minAccuracyFloor">Accuracy Floor</label>
           <input type="number" id="minAccuracyFloor" bind:value={minAccuracyFloor} min="0" max="0.1" step="0.001" />
-          <span class="field-hint">Min accuracy threshold (0.003 = 0.3%). Below = worst fitness</span>
+          <span class="field-hint">Min accuracy threshold (0.003 = 0.3%). Below = rejected</span>
         </div>
       </div>
 
