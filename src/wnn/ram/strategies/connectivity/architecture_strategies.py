@@ -1811,6 +1811,9 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 				# Track neighbors after filter (for per-iteration stats)
 				iter_neighbors_viable = len(neighbors)
 
+				# Store new neighbors for tracking (before merging into cache)
+				new_neighbors_this_iter = [(g.clone(), g._cached_fitness[0], g._cached_fitness[1]) for g in neighbors]
+
 				# Add to all_neighbors and track best_ce/best_acc
 				for g in neighbors:
 					ce, acc = g._cached_fitness
@@ -1954,8 +1957,12 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 				# Track viable neighbors after filter (for per-iteration stats)
 				iter_neighbors_viable = len(ce_neighbors) + len(acc_neighbors)
 
+				# Store new neighbors for tracking (before merging into cache)
+				all_new = ce_neighbors + acc_neighbors
+				new_neighbors_this_iter = [(g.clone(), g._cached_fitness[0], g._cached_fitness[1]) for g in all_new]
+
 				# Process all neighbors
-				for g in ce_neighbors + acc_neighbors:
+				for g in all_new:
 					ce, acc = g._cached_fitness
 					all_neighbors.append((g.clone(), ce, acc))
 					if ce < best_ce_fitness:
@@ -2037,11 +2044,15 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 						candidates_total=candidates_total,
 					)
 
-					# Record genome evaluations for TS (current best + top neighbors)
+					# Record genome evaluations for TS
+					# - Position 0: CURRENT (best genome used to generate)
+					# - Positions 1-N: TOP_K (top 50 cache after merge+cap)
+					# - Positions 100+: NEIGHBOR (new neighbors generated this iteration)
 					self._log.info(f"[{self.name}] Genome tracking: iter_id={iteration_id}, exp_id={self._tracker_experiment_id}, HAS={HAS_GENOME_TRACKING}")
 					if iteration_id and self._tracker_experiment_id and HAS_GENOME_TRACKING and GenomeRole is not None:
 						evaluations = []
-						# Record current best genome
+
+						# 1. Record current best genome (position 0)
 						config = self.genome_to_config(best)
 						if config is not None:
 							genome_id = self._tracker.get_or_create_genome(
@@ -2056,23 +2067,41 @@ class ArchitectureTSStrategy(GenericTSStrategy['ClusterGenome']):
 								"accuracy": best_accuracy or 0.0,
 								"elite_rank": 0,
 							})
-						# Record top neighbors (up to 10)
-						for pos, (g, ce, acc) in enumerate(valid_neighbors[:10]):
+
+						# 2. Record top 50 cache (positions 1-50) - the elite pool
+						for pos, (g, ce, acc) in enumerate(valid_neighbors[:50]):
 							config = self.genome_to_config(g)
 							if config is not None:
 								genome_id = self._tracker.get_or_create_genome(
 									self._tracker_experiment_id, config
 								)
-								role = GenomeRole.TOP_K if pos < 5 else GenomeRole.NEIGHBOR
 								evaluations.append({
 									"iteration_id": iteration_id,
 									"genome_id": genome_id,
 									"position": pos + 1,
-									"role": role,
+									"role": GenomeRole.TOP_K,
 									"ce": ce,
 									"accuracy": acc or 0.0,
-									"elite_rank": pos if pos < 5 else None,
+									"elite_rank": pos,  # Rank in top 50
 								})
+
+						# 3. Record new neighbors generated this iteration (positions 100+)
+						for pos, (g, ce, acc) in enumerate(new_neighbors_this_iter[:50]):
+							config = self.genome_to_config(g)
+							if config is not None:
+								genome_id = self._tracker.get_or_create_genome(
+									self._tracker_experiment_id, config
+								)
+								evaluations.append({
+									"iteration_id": iteration_id,
+									"genome_id": genome_id,
+									"position": 100 + pos,
+									"role": GenomeRole.NEIGHBOR,
+									"ce": ce,
+									"accuracy": acc or 0.0,
+									"elite_rank": None,  # Not ranked yet
+								})
+
 						if evaluations:
 							self._tracker.record_genome_evaluations_batch(evaluations)
 				except Exception as e:
