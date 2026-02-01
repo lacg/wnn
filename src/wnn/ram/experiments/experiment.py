@@ -280,6 +280,7 @@ class Experiment:
 		}
 
 		# Tier0-only optimization
+		self.log(f"  DEBUG: optimize_tier0_only={cfg.optimize_tier0_only}, tier_config={cfg.tier_config}")
 		if cfg.optimize_tier0_only and cfg.tier_config:
 			tier0_clusters = cfg.tier_config[0][0] or self.vocab_size
 			strategy_kwargs["mutable_clusters"] = tier0_clusters

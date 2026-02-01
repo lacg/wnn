@@ -68,7 +68,7 @@
     fitness_weight_ce: 1.0,
     fitness_weight_acc: 1.0,
     tier_config: '',
-    optimize_tier0_only: false,
+    tier0_only: false,
     phase_order: 'neurons_first',
     context_size: 4
   };
@@ -124,7 +124,7 @@
         editConfig.fitness_calculator = p.fitness_calculator ?? 'normalized';
         editConfig.fitness_weight_ce = p.fitness_weight_ce ?? 1.0;
         editConfig.fitness_weight_acc = p.fitness_weight_acc ?? 1.0;
-        editConfig.optimize_tier0_only = p.optimize_tier0_only ?? false;
+        editConfig.tier0_only = p.tier0_only ?? p.optimize_tier0_only ?? false;
         editConfig.phase_order = p.phase_order ?? 'neurons_first';
         editConfig.context_size = p.context_size ?? 4;
         if (p.tier_config) {
@@ -176,7 +176,7 @@
           fitness_calculator: editConfig.fitness_calculator,
           fitness_weight_ce: editConfig.fitness_weight_ce,
           fitness_weight_acc: editConfig.fitness_weight_acc,
-          optimize_tier0_only: editConfig.optimize_tier0_only,
+          tier0_only: editConfig.tier0_only,
           phase_order: editConfig.phase_order,
           context_size: editConfig.context_size,
           tier_config
@@ -862,7 +862,7 @@
           <div class="form-row">
             <div class="form-group checkbox-group">
               <label>
-                <input type="checkbox" bind:checked={editConfig.optimize_tier0_only} />
+                <input type="checkbox" bind:checked={editConfig.tier0_only} />
                 Optimize Tier0 Only
               </label>
               <span class="form-hint">Only mutate most frequent tokens</span>

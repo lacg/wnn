@@ -402,7 +402,8 @@ class FlowWorker:
     ) -> list[ExperimentConfig]:
         """Build experiment configs from flow data."""
         tier_config = self._parse_tier_config(params.get("tier_config"))
-        tier0_only = params.get("optimize_tier0_only", params.get("tier0_only", False))
+        # Check tier0_only first (canonical key), fallback to optimize_tier0_only (legacy)
+        tier0_only = params.get("tier0_only", params.get("optimize_tier0_only", False))
         patience = params.get("patience", 10)
         fitness_percentile = params.get("fitness_percentile")
         seed = params.get("seed")
