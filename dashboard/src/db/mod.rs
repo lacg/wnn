@@ -277,6 +277,28 @@ CREATE TABLE IF NOT EXISTS checkpoints (
 );
 
 -- ============================================================================
+-- PHASE_RESULTS: Validation summary at end of each phase
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS phase_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    phase_id INTEGER NOT NULL REFERENCES phases(id),
+
+    -- Type: 'best_ce', 'best_acc', 'top_k_mean', 'best_fitness'
+    metric_type TEXT NOT NULL,
+
+    -- Full validation metrics
+    ce REAL NOT NULL,
+    accuracy REAL NOT NULL,
+
+    -- Memory footprint (optional)
+    memory_bytes INTEGER,
+
+    -- Improvement from phase start
+    improvement_pct REAL NOT NULL DEFAULT 0.0
+);
+CREATE INDEX IF NOT EXISTS idx_phase_results_phase ON phase_results(phase_id);
+
+-- ============================================================================
 -- INDEXES for efficient queries
 -- ============================================================================
 
@@ -443,6 +465,35 @@ pub mod queries {
             .bind(id)
             .execute(pool)
             .await?;
+
+        // Cascade status changes when flow fails/cancelled
+        // Mark any running experiments and phases as failed/cancelled too
+        if status == Some("failed") || status == Some("cancelled") {
+            let cascade_status = status.unwrap();
+
+            // Update running experiments for this flow
+            sqlx::query(
+                "UPDATE experiments SET status = ?, ended_at = ?
+                 WHERE flow_id = ? AND status = 'running'"
+            )
+            .bind(cascade_status)
+            .bind(&now)
+            .bind(id)
+            .execute(pool)
+            .await?;
+
+            // Update running phases for experiments in this flow
+            sqlx::query(
+                "UPDATE phases SET status = ?, ended_at = ?
+                 WHERE experiment_id IN (SELECT id FROM experiments WHERE flow_id = ?)
+                   AND status = 'running'"
+            )
+            .bind(cascade_status)
+            .bind(&now)
+            .bind(id)
+            .execute(pool)
+            .await?;
+        }
 
         Ok(result.rows_affected() > 0)
     }
@@ -1111,7 +1162,37 @@ pub mod queries {
             ended_at: row.get::<Option<String>, _>("ended_at")
                 .map(|s| parse_datetime(s))
                 .transpose()?,
+            results: Vec::new(),  // Populated separately
         })
+    }
+
+    fn row_to_phase_result(row: &sqlx::sqlite::SqliteRow) -> Result<PhaseResult> {
+        Ok(PhaseResult {
+            id: row.get("id"),
+            phase_id: row.get("phase_id"),
+            metric_type: row.get("metric_type"),
+            ce: row.get("ce"),
+            accuracy: row.get("accuracy"),
+            memory_bytes: row.get("memory_bytes"),
+            improvement_pct: row.get("improvement_pct"),
+        })
+    }
+
+    /// Get validation results for a phase
+    pub async fn get_phase_results(pool: &DbPool, phase_id: i64) -> Result<Vec<PhaseResult>> {
+        let rows = sqlx::query(
+            "SELECT id, phase_id, metric_type, ce, accuracy, memory_bytes, improvement_pct
+             FROM phase_results WHERE phase_id = ?"
+        )
+        .bind(phase_id)
+        .fetch_all(pool)
+        .await?;
+
+        let mut results = Vec::with_capacity(rows.len());
+        for row in rows {
+            results.push(row_to_phase_result(&row)?);
+        }
+        Ok(results)
     }
 
     fn row_to_iteration(row: &sqlx::sqlite::SqliteRow) -> Result<Iteration> {

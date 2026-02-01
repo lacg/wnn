@@ -219,7 +219,7 @@ async fn get_snapshot(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let exp_id = exp.id;
 
     // Get phases
-    let phases = match crate::db::queries::get_experiment_phases(&state.db, exp_id).await {
+    let mut phases = match crate::db::queries::get_experiment_phases(&state.db, exp_id).await {
         Ok(p) => p,
         Err(e) => {
             return (
@@ -228,6 +228,15 @@ async fn get_snapshot(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             ).into_response();
         }
     };
+
+    // Fetch phase results for completed phases
+    for phase in &mut phases {
+        if phase.status == crate::models::PhaseStatus::Completed {
+            if let Ok(results) = crate::db::queries::get_phase_results(&state.db, phase.id).await {
+                phase.results = results;
+            }
+        }
+    }
 
     // Get current phase
     let current_phase = match crate::db::queries::get_current_phase(&state.db, exp_id).await {

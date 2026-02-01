@@ -607,6 +607,25 @@ class DataLayer:
                 (current_iteration, best_ce, best_accuracy, phase_id),
             )
 
+    def create_phase_result(
+        self,
+        phase_id: int,
+        metric_type: str,
+        ce: float,
+        accuracy: float,
+        improvement_pct: float = 0.0,
+        memory_bytes: Optional[int] = None,
+    ) -> int:
+        """Record a phase validation result (best_ce, best_acc, top_k_mean)."""
+        with self._transaction() as conn:
+            cursor = conn.execute(
+                """INSERT INTO phase_results
+                   (phase_id, metric_type, ce, accuracy, improvement_pct, memory_bytes)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (phase_id, metric_type, ce, accuracy, improvement_pct, memory_bytes),
+            )
+            return cursor.lastrowid or 0
+
     # =========================================================================
     # Iteration methods
     # =========================================================================

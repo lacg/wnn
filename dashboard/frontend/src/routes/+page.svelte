@@ -384,7 +384,16 @@
             <div class="phase-info">
               <div class="phase-name">{phaseShortName(phase.name)}</div>
               <div class="phase-status">{phase.status}</div>
-              {#if phase.best_ce}
+              {#if phase.results && phase.results.length > 0}
+                <!-- Show validation summary for completed phases -->
+                {#each phase.results as result}
+                  <div class="phase-result" class:best-ce={result.metric_type === 'best_ce'} class:best-acc={result.metric_type === 'best_acc'}>
+                    <span class="result-label">{result.metric_type === 'best_ce' ? 'Best CE' : result.metric_type === 'best_acc' ? 'Best Acc' : 'Top-K'}</span>
+                    <span class="result-ce">{result.ce.toFixed(4)}</span>
+                    <span class="result-acc">{(result.accuracy * 100).toFixed(2)}%</span>
+                  </div>
+                {/each}
+              {:else if phase.best_ce}
                 <div class="phase-ce">CE: {phase.best_ce.toFixed(4)}</div>
               {/if}
             </div>
@@ -920,6 +929,38 @@
     color: var(--accent-green);
     font-family: monospace;
     margin-top: 0.25rem;
+  }
+
+  .phase-result {
+    display: flex;
+    gap: 0.25rem;
+    font-size: 0.625rem;
+    font-family: monospace;
+    margin-top: 0.125rem;
+    padding: 0.125rem 0.25rem;
+    background: var(--bg-secondary);
+    border-radius: 2px;
+  }
+
+  .phase-result.best-ce {
+    background: rgba(52, 211, 153, 0.1);
+  }
+
+  .phase-result.best-acc {
+    background: rgba(96, 165, 250, 0.1);
+  }
+
+  .phase-result .result-label {
+    color: var(--text-secondary);
+    min-width: 3rem;
+  }
+
+  .phase-result .result-ce {
+    color: var(--accent-green);
+  }
+
+  .phase-result .result-acc {
+    color: var(--accent-blue);
   }
 
   .positive {

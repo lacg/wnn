@@ -331,39 +331,52 @@ class Experiment:
 			except Exception as e:
 				self.log(f"  Warning: Failed to set up V2 tracking: {e}")
 
-		# Run optimization
-		if is_ga:
-			seed_pop = initial_population or ([initial_genome] if initial_genome else None)
-			result = strategy.optimize(
-				evaluate_fn=None,
-				initial_population=seed_pop,
-			)
-		else:
-			result = strategy.optimize(
-				evaluate_fn=None,
-				initial_genome=initial_genome,
-				initial_fitness=initial_fitness,
-				initial_neighbors=initial_population,
-			)
-
-		# Check if shutdown was requested (needed for phase status update)
-		from wnn.ram.strategies.connectivity.generic_strategies import StopReason
-		was_shutdown = result.stop_reason == StopReason.SHUTDOWN if result.stop_reason else False
-
-		# V2 tracking: update phase status based on whether shutdown was requested
-		if self.tracker and tracker_phase_id:
-			try:
-				from wnn.ram.experiments.tracker import TrackerStatus
-				phase_status = TrackerStatus.CANCELLED if was_shutdown else TrackerStatus.COMPLETED
-				self.tracker.update_phase_status(tracker_phase_id, phase_status)
-				self.tracker.update_phase_progress(
-					tracker_phase_id,
-					current_iteration=result.iterations_run,
-					best_ce=result.final_fitness,
-					best_accuracy=result.final_accuracy,
+		# Run optimization with exception handling for phase status
+		result = None
+		was_shutdown = False
+		try:
+			if is_ga:
+				seed_pop = initial_population or ([initial_genome] if initial_genome else None)
+				result = strategy.optimize(
+					evaluate_fn=None,
+					initial_population=seed_pop,
 				)
-			except Exception as e:
-				self.log(f"  Warning: Failed to update V2 phase status: {e}")
+			else:
+				result = strategy.optimize(
+					evaluate_fn=None,
+					initial_genome=initial_genome,
+					initial_fitness=initial_fitness,
+					initial_neighbors=initial_population,
+				)
+
+			# Check if shutdown was requested (needed for phase status update)
+			from wnn.ram.strategies.connectivity.generic_strategies import StopReason
+			was_shutdown = result.stop_reason == StopReason.SHUTDOWN if result.stop_reason else False
+
+			# V2 tracking: update phase status based on whether shutdown was requested
+			if self.tracker and tracker_phase_id:
+				try:
+					from wnn.ram.experiments.tracker import TrackerStatus
+					phase_status = TrackerStatus.CANCELLED if was_shutdown else TrackerStatus.COMPLETED
+					self.tracker.update_phase_status(tracker_phase_id, phase_status)
+					self.tracker.update_phase_progress(
+						tracker_phase_id,
+						current_iteration=result.iterations_run,
+						best_ce=result.final_fitness,
+						best_accuracy=result.final_accuracy,
+					)
+				except Exception as e:
+					self.log(f"  Warning: Failed to update V2 phase status: {e}")
+
+		except Exception as e:
+			# Mark phase as failed on exception
+			if self.tracker and tracker_phase_id:
+				try:
+					from wnn.ram.experiments.tracker import TrackerStatus
+					self.tracker.update_phase_status(tracker_phase_id, TrackerStatus.FAILED)
+				except Exception:
+					pass
+			raise  # Re-raise the original exception
 
 		elapsed = time.time() - start_time
 

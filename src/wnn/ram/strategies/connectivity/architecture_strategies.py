@@ -1303,19 +1303,85 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			# Update previous best for next iteration's delta computation
 			prev_best_fitness = best_fitness
 
-		# Final evaluation for accuracy
-		final_ce, final_acc = evaluator.evaluate_batch(
-			[best_genome],
-			train_subset_idx=evaluator.next_train_idx(),
-			eval_subset_idx=0,
-			logger=self._log,
-		)[0]
+		# === VALIDATION SUMMARY: Evaluate top genomes on FULL validation data ===
+		self._log.info("")
+		self._log.info("=" * 60)
+		self._log.info(f"[{self.name}] VALIDATION SUMMARY (Full Dataset)")
+		self._log.info("=" * 60)
 
+		# Get unique top genomes by different criteria
+		top_k = min(10, len(population))
+		top_genomes_by_ce = [g for g, _ in population[:top_k]]
+
+		# Evaluate on full validation data
+		full_results = evaluator.evaluate_batch_full(top_genomes_by_ce)
+		full_evals = list(zip(top_genomes_by_ce, full_results))
+
+		# Sort by CE and Acc
+		by_ce = sorted(full_evals, key=lambda x: x[1][0])  # (genome, (ce, acc))
+		by_acc = sorted(full_evals, key=lambda x: -x[1][1])  # descending acc
+
+		# Best by CE
+		best_ce_genome, (best_ce_ce, best_ce_acc) = by_ce[0]
+
+		# Best by Acc
+		best_acc_genome, (best_acc_ce, best_acc_acc) = by_acc[0]
+
+		# Best by fitness (use the existing best_genome from optimization)
+		best_fit_ce, best_fit_acc = evaluator.evaluate_batch_full([best_genome])[0]
+
+		# Log summary
+		self._log.info(f"  Best by CE:       CE={best_ce_ce:.4f}, Acc={best_ce_acc:.4%}")
+		self._log.info(f"  Best by Accuracy: CE={best_acc_ce:.4f}, Acc={best_acc_acc:.4%}")
+
+		# Check if best_fit genome is the same as best_ce or best_acc
+		if best_fit_ce == best_ce_ce and best_fit_acc == best_ce_acc:
+			self._log.info(f"  Best by Fitness:  (same as Best by CE)")
+		elif best_fit_ce == best_acc_ce and best_fit_acc == best_acc_acc:
+			self._log.info(f"  Best by Fitness:  (same as Best by Accuracy)")
+		else:
+			self._log.info(f"  Best by Fitness:  CE={best_fit_ce:.4f}, Acc={best_fit_acc:.4%}")
+
+		# Top-K mean
+		top_k_ce = sum(ce for _, (ce, _) in full_evals) / len(full_evals)
+		top_k_acc = sum(acc for _, (_, acc) in full_evals) / len(full_evals)
+		self._log.info(f"  Top-{top_k} Mean:    CE={top_k_ce:.4f}, Acc={top_k_acc:.4%}")
+		self._log.info("=" * 60)
+
+		# Record phase results via tracker if available
+		if self._tracker and self._tracker_phase_id:
+			try:
+				self._tracker.record_phase_result(
+					phase_id=self._tracker_phase_id,
+					metric_type="best_ce",
+					ce=best_ce_ce,
+					accuracy=best_ce_acc,
+					improvement_pct=(initial_fitness - best_ce_ce) / initial_fitness * 100 if initial_fitness else 0.0,
+				)
+				self._tracker.record_phase_result(
+					phase_id=self._tracker_phase_id,
+					metric_type="best_acc",
+					ce=best_acc_ce,
+					accuracy=best_acc_acc,
+					improvement_pct=(initial_fitness - best_acc_ce) / initial_fitness * 100 if initial_fitness else 0.0,
+				)
+				self._tracker.record_phase_result(
+					phase_id=self._tracker_phase_id,
+					metric_type="top_k_mean",
+					ce=top_k_ce,
+					accuracy=top_k_acc,
+					improvement_pct=(initial_fitness - top_k_ce) / initial_fitness * 100 if initial_fitness else 0.0,
+				)
+			except Exception as e:
+				self._log.debug(f"[{self.name}] Failed to record phase results: {e}")
+
+		# Use best_ce for the final result (most important metric)
+		final_ce, final_acc = best_ce_ce, best_ce_acc
 		improvement_pct = (initial_fitness - final_ce) / initial_fitness * 100 if initial_fitness != 0 else 0.0
 		stop_reason = self._determine_stop_reason(shutdown_requested, early_stop)
 		return OptimizerResult(
 			initial_genome=initial_genome,
-			best_genome=best_genome,
+			best_genome=best_ce_genome,  # Return the genome with best CE on full validation
 			initial_fitness=initial_fitness,
 			final_fitness=final_ce,
 			improvement_percent=improvement_pct,
@@ -2012,13 +2078,86 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				if len(final_population) >= cache_size:
 					break
 
-			improvement_pct = (start_fitness - best_fitness) / start_fitness * 100 if start_fitness != 0 else 0.0
+		# === VALIDATION SUMMARY: Evaluate top genomes on FULL validation data ===
+		self._log.info("")
+		self._log.info("=" * 60)
+		self._log.info(f"[{self.name}] VALIDATION SUMMARY (Full Dataset)")
+		self._log.info("=" * 60)
+
+		# Get top genomes for full evaluation
+		top_k = min(10, len(final_population))
+		top_genomes = final_population[:top_k]
+
+		# Evaluate on full validation data
+		full_results = evaluator.evaluate_batch_full(top_genomes)
+		full_evals = list(zip(top_genomes, full_results))
+
+		# Sort by CE and Acc
+		by_ce = sorted(full_evals, key=lambda x: x[1][0])  # (genome, (ce, acc))
+		by_acc = sorted(full_evals, key=lambda x: -x[1][1])  # descending acc
+
+		# Best by CE
+		best_ce_genome, (best_ce_ce, best_ce_acc) = by_ce[0]
+
+		# Best by Acc
+		best_acc_genome, (best_acc_ce, best_acc_acc) = by_acc[0]
+
+		# Best by fitness (use the existing best genome from optimization)
+		best_fit_ce, best_fit_acc = evaluator.evaluate_batch_full([best])[0]
+
+		# Log summary
+		self._log.info(f"  Best by CE:       CE={best_ce_ce:.4f}, Acc={best_ce_acc:.4%}")
+		self._log.info(f"  Best by Accuracy: CE={best_acc_ce:.4f}, Acc={best_acc_acc:.4%}")
+
+		# Check if best_fit genome is the same as best_ce or best_acc
+		if best_fit_ce == best_ce_ce and best_fit_acc == best_ce_acc:
+			self._log.info(f"  Best by Fitness:  (same as Best by CE)")
+		elif best_fit_ce == best_acc_ce and best_fit_acc == best_acc_acc:
+			self._log.info(f"  Best by Fitness:  (same as Best by Accuracy)")
+		else:
+			self._log.info(f"  Best by Fitness:  CE={best_fit_ce:.4f}, Acc={best_fit_acc:.4%}")
+
+		# Top-K mean
+		top_k_ce = sum(ce for _, (ce, _) in full_evals) / len(full_evals)
+		top_k_acc = sum(acc for _, (_, acc) in full_evals) / len(full_evals)
+		self._log.info(f"  Top-{top_k} Mean:    CE={top_k_ce:.4f}, Acc={top_k_acc:.4%}")
+		self._log.info("=" * 60)
+
+		# Record phase results via tracker if available
+		if self._tracker and self._tracker_phase_id:
+			try:
+				self._tracker.record_phase_result(
+					phase_id=self._tracker_phase_id,
+					metric_type="best_ce",
+					ce=best_ce_ce,
+					accuracy=best_ce_acc,
+					improvement_pct=(start_fitness - best_ce_ce) / start_fitness * 100 if start_fitness else 0.0,
+				)
+				self._tracker.record_phase_result(
+					phase_id=self._tracker_phase_id,
+					metric_type="best_acc",
+					ce=best_acc_ce,
+					accuracy=best_acc_acc,
+					improvement_pct=(start_fitness - best_acc_ce) / start_fitness * 100 if start_fitness else 0.0,
+				)
+				self._tracker.record_phase_result(
+					phase_id=self._tracker_phase_id,
+					metric_type="top_k_mean",
+					ce=top_k_ce,
+					accuracy=top_k_acc,
+					improvement_pct=(start_fitness - top_k_ce) / start_fitness * 100 if start_fitness else 0.0,
+				)
+			except Exception as e:
+				self._log.debug(f"[{self.name}] Failed to record phase results: {e}")
+
+		# Use best_ce for the final result (most important metric)
+		improvement_pct = (start_fitness - best_ce_ce) / start_fitness * 100 if start_fitness != 0 else 0.0
 		stop_reason = self._determine_stop_reason(shutdown_requested, early_stopper)
 		return OptimizerResult(
 			initial_genome=initial_genome,
-			best_genome=best,
+			best_genome=best_ce_genome,  # Return the genome with best CE on full validation
 			initial_fitness=start_fitness,
-			final_fitness=best_fitness,
+			final_fitness=best_ce_ce,
 			improvement_percent=improvement_pct,
 			iterations_run=iteration + 1,
 			method_name=self.name,
@@ -2027,6 +2166,6 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 			final_population=final_population,
 			final_threshold=current_threshold,
 			initial_accuracy=None,
-			final_accuracy=best_accuracy,
+			final_accuracy=best_ce_acc,
 			stop_reason=stop_reason,
 		)

@@ -113,6 +113,19 @@ export interface Phase {
   created_at: string;
   started_at: string | null;
   ended_at: string | null;
+  /** Validation results at end of phase (best_ce, best_acc, top_k_mean) */
+  results?: PhaseResult[];
+}
+
+export interface PhaseResult {
+  id: number;
+  phase_id: number;
+  /** Type of metric: 'best_ce', 'best_acc', 'top_k_mean' */
+  metric_type: string;
+  ce: number;
+  accuracy: number;
+  memory_bytes: number | null;
+  improvement_pct: number;
 }
 
 // =============================================================================

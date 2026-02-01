@@ -216,6 +216,21 @@ pub struct Phase {
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
     pub ended_at: Option<DateTime<Utc>>,
+    /// Validation results at end of phase (best_ce, best_acc, top_k_mean)
+    #[serde(default)]
+    pub results: Vec<PhaseResult>,
+}
+
+/// Validation result at end of a phase
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PhaseResult {
+    pub id: i64,
+    pub phase_id: i64,
+    pub metric_type: String,  // "best_ce", "best_acc", "top_k_mean"
+    pub ce: f64,
+    pub accuracy: f64,
+    pub memory_bytes: Option<i64>,
+    pub improvement_pct: f64,
 }
 
 // =============================================================================

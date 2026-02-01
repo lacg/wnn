@@ -222,6 +222,19 @@ class ExperimentTracker(ABC):
         """Update phase progress."""
         pass
 
+    @abstractmethod
+    def record_phase_result(
+        self,
+        phase_id: int,
+        metric_type: str,
+        ce: float,
+        accuracy: float,
+        improvement_pct: float = 0.0,
+        memory_bytes: Optional[int] = None,
+    ) -> None:
+        """Record phase validation result (best_ce, best_acc, top_k_mean)."""
+        pass
+
     # =========================================================================
     # Iteration tracking
     # =========================================================================
@@ -449,6 +462,17 @@ class SqliteTracker(ExperimentTracker):
     ) -> None:
         self._db.update_phase_progress(phase_id, current_iteration, best_ce, best_accuracy)
 
+    def record_phase_result(
+        self,
+        phase_id: int,
+        metric_type: str,
+        ce: float,
+        accuracy: float,
+        improvement_pct: float = 0.0,
+        memory_bytes: Optional[int] = None,
+    ) -> None:
+        self._db.create_phase_result(phase_id, metric_type, ce, accuracy, improvement_pct, memory_bytes)
+
     def record_iteration(
         self,
         phase_id: int,
@@ -592,6 +616,9 @@ class NoOpTracker(ExperimentTracker):
         pass
 
     def update_phase_progress(self, phase_id: int, current_iteration: int, **kwargs) -> None:
+        pass
+
+    def record_phase_result(self, phase_id: int, metric_type: str, ce: float, accuracy: float, **kwargs) -> None:
         pass
 
     def record_iteration(self, phase_id: int, iteration_num: int, best_ce: float, **kwargs) -> int:
