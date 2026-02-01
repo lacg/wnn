@@ -65,6 +65,8 @@
     neighbors_per_iter: 50,
     fitness_percentile: 0.75,
     fitness_calculator: 'normalized',
+    fitness_weight_ce: 1.0,
+    fitness_weight_acc: 1.0,
     tier_config: '',
     optimize_tier0_only: false,
     phase_order: 'neurons_first',
@@ -119,7 +121,9 @@
         editConfig.population_size = p.population_size ?? 50;
         editConfig.neighbors_per_iter = p.neighbors_per_iter ?? p.population_size ?? 50;
         editConfig.fitness_percentile = p.fitness_percentile ?? 0.75;
-        editConfig.fitness_calculator = p.fitness_calculator ?? 'harmonic_rank';
+        editConfig.fitness_calculator = p.fitness_calculator ?? 'normalized';
+        editConfig.fitness_weight_ce = p.fitness_weight_ce ?? 1.0;
+        editConfig.fitness_weight_acc = p.fitness_weight_acc ?? 1.0;
         editConfig.optimize_tier0_only = p.optimize_tier0_only ?? false;
         editConfig.phase_order = p.phase_order ?? 'neurons_first';
         editConfig.context_size = p.context_size ?? 4;
@@ -170,6 +174,8 @@
           neighbors_per_iter: editConfig.neighbors_per_iter,
           fitness_percentile: editConfig.fitness_percentile,
           fitness_calculator: editConfig.fitness_calculator,
+          fitness_weight_ce: editConfig.fitness_weight_ce,
+          fitness_weight_acc: editConfig.fitness_weight_acc,
           optimize_tier0_only: editConfig.optimize_tier0_only,
           phase_order: editConfig.phase_order,
           context_size: editConfig.context_size,
@@ -449,6 +455,34 @@
       });
 
       if (!response.ok) throw new Error('Failed to update fitness calculator');
+      await loadFlow();
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Failed to update';
+    } finally {
+      saving = false;
+    }
+  }
+
+  async function updateFitnessWeight(field: 'fitness_weight_ce' | 'fitness_weight_acc', value: number) {
+    if (!flow) return;
+    saving = true;
+
+    try {
+      const updatedConfig = {
+        ...flow.config,
+        params: {
+          ...flow.config.params,
+          [field]: value
+        }
+      };
+
+      const response = await fetch(`/api/flows/${flow.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config: updatedConfig })
+      });
+
+      if (!response.ok) throw new Error('Failed to update weight');
       await loadFlow();
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to update';
@@ -795,12 +829,25 @@
             <div class="form-group">
               <label for="fitness_calculator">Fitness Calculator</label>
               <select id="fitness_calculator" bind:value={editConfig.fitness_calculator}>
-                <option value="harmonic_rank">Harmonic Rank</option>
                 <option value="normalized">Normalized</option>
                 <option value="normalized_harmonic">Normalized Harmonic</option>
+                <option value="harmonic_rank">Harmonic Rank</option>
                 <option value="ce">CE Only</option>
               </select>
               <span class="form-hint">How to rank genomes by CE and accuracy</span>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="fitness_weight_ce">CE Weight</label>
+              <input type="number" id="fitness_weight_ce" bind:value={editConfig.fitness_weight_ce} min="0" max="10" step="0.1" />
+              <span class="form-hint">Weight for CE in fitness (higher = CE matters more)</span>
+            </div>
+            <div class="form-group">
+              <label for="fitness_weight_acc">Accuracy Weight</label>
+              <input type="number" id="fitness_weight_acc" bind:value={editConfig.fitness_weight_acc} min="0" max="10" step="0.1" />
+              <span class="form-hint">Weight for accuracy (higher = acc matters more)</span>
             </div>
           </div>
 
@@ -876,15 +923,45 @@
             <span class="param-value param-editable">
               <select
                 class="inline-select"
-                value={flow.config.params.fitness_calculator ?? 'harmonic_rank'}
+                value={flow.config.params.fitness_calculator ?? 'normalized'}
                 on:change={(e) => updateFitnessCalculator(e.currentTarget.value)}
                 disabled={saving}
               >
-                <option value="harmonic_rank">Harmonic Rank</option>
                 <option value="normalized">Normalized</option>
                 <option value="normalized_harmonic">Normalized Harmonic</option>
+                <option value="harmonic_rank">Harmonic Rank</option>
                 <option value="ce">CE Only</option>
               </select>
+            </span>
+          </div>
+          <div class="param-item">
+            <span class="param-label">CE Weight</span>
+            <span class="param-value param-editable">
+              <input
+                type="number"
+                class="inline-input"
+                value={flow.config.params.fitness_weight_ce ?? 1.0}
+                min="0"
+                max="10"
+                step="0.1"
+                on:change={(e) => updateFitnessWeight('fitness_weight_ce', parseFloat(e.currentTarget.value))}
+                disabled={saving}
+              />
+            </span>
+          </div>
+          <div class="param-item">
+            <span class="param-label">Acc Weight</span>
+            <span class="param-value param-editable">
+              <input
+                type="number"
+                class="inline-input"
+                value={flow.config.params.fitness_weight_acc ?? 1.0}
+                min="0"
+                max="10"
+                step="0.1"
+                on:change={(e) => updateFitnessWeight('fitness_weight_acc', parseFloat(e.currentTarget.value))}
+                disabled={saving}
+              />
             </span>
           </div>
           <div class="param-item">
@@ -1906,6 +1983,33 @@
   }
 
   .inline-select:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .inline-input {
+    width: 70px;
+    padding: 0.25rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.875rem;
+    text-align: right;
+    transition: border-color 0.15s;
+  }
+
+  .inline-input:hover:not(:disabled) {
+    border-color: var(--accent-blue);
+  }
+
+  .inline-input:focus {
+    outline: none;
+    border-color: var(--accent-blue);
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+  }
+
+  .inline-input:disabled {
     opacity: 0.6;
     cursor: not-allowed;
   }
