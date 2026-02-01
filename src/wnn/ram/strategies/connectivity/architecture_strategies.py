@@ -811,14 +811,16 @@ class ArchitectureGAStrategy(GenericGAStrategy['ClusterGenome']):
 				# Generate mutations of seed genomes to fill population
 				from wnn.ram.strategies.connectivity.adaptive_cluster import AdaptiveClusterConfig
 				arch_cfg = self._arch_config
-				# Create mutation config with high mutation rate for diversity
+				# Create mutation config with phase-aware rates (only mutate what we're optimizing)
+				# BUG FIX: Previously used hardcoded 0.3 for both, which corrupted tiered configs
+				# during neurons-only phase by mutating bits too
 				mutation_config = AdaptiveClusterConfig(
 					min_bits=arch_cfg.min_bits,
 					max_bits=arch_cfg.max_bits,
 					min_neurons=arch_cfg.min_neurons,
 					max_neurons=arch_cfg.max_neurons,
-					bits_mutation_rate=0.3,  # Higher rate for diversity
-					neurons_mutation_rate=0.3,
+					bits_mutation_rate=0.3 if arch_cfg.optimize_bits else 0.0,
+					neurons_mutation_rate=0.3 if arch_cfg.optimize_neurons else 0.0,
 				)
 				expanded_population = list(initial_population)
 				for i in range(need_count):
