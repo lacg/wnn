@@ -497,7 +497,7 @@
             </tr>
           </thead>
           <tbody>
-            {#each $iterations.slice(-20).reverse() as iter}
+            {#each [...$iterations].reverse() as iter}
               <tr
                 class:clickable={true}
                 on:click={() => openIterationDetails(iter)}
