@@ -157,7 +157,7 @@ public struct DualAxisChartView: View {
         }
     }
 
-    @available(iOS 16.0, *)
+    @available(iOS 17.0, *)
     private func handleTouch(at location: CGPoint, in geo: GeometryProxy, proxy: ChartProxy) {
         guard let plotFrame = proxy.plotFrame else { return }
         let frame = geo[plotFrame]

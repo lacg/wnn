@@ -644,7 +644,17 @@
   // Get phase status: completed, running, or pending
   function getExpStatus(expSpec: { name: string; experiment_type: string; optimize_neurons?: boolean; optimize_bits?: boolean; optimize_connections?: boolean }, index: number): 'completed' | 'running' | 'pending' | 'failed' | 'cancelled' {
     // First, check the actual experiment record from the DB (this has the authoritative status)
-    const actualExp = experiments.find(e => e.sequence_order === index);
+    // Try to match by sequence_order, then by name, then by array position
+    let actualExp = experiments.find(e => e.sequence_order === index);
+    if (!actualExp) {
+      // Fallback: match by name
+      actualExp = experiments.find(e => e.name === expSpec.name);
+    }
+    if (!actualExp && index < experiments.length) {
+      // Fallback: match by array position (experiments are returned in order)
+      actualExp = experiments[index];
+    }
+
     if (actualExp) {
       // Map DB status to display status
       if (actualExp.status === 'completed') return 'completed';
@@ -666,6 +676,17 @@
     // Fallback: if flow is running but no phases exist yet, assume first experiment is running
     if (flow?.status === 'running' && phases.length === 0 && index === 0) {
       return 'running';
+    }
+
+    // Fallback: if flow is completed, all experiments should be completed
+    if (flow?.status === 'completed') {
+      return 'completed';
+    }
+
+    // Fallback: if flow failed or cancelled, check if this experiment ran
+    if (flow?.status === 'failed' || flow?.status === 'cancelled') {
+      // If we have no experiment record, it probably never ran (pending)
+      return 'pending';
     }
 
     return 'pending';
@@ -731,15 +752,28 @@
     const expSpec = flowExperiments[index];
     if (!expSpec) return null;
 
+    // Try to match by sequence_order first
+    let exp = experiments.find(e => e.sequence_order === index);
+
+    // Fallback: match by name
+    if (!exp) {
+      exp = experiments.find(e => e.name === expSpec.name);
+    }
+
+    // Fallback: match by array position
+    if (!exp && index < experiments.length) {
+      exp = experiments[index];
+    }
+
+    if (exp) return exp.id;
+
+    // Last fallback: try via phase
     const phase = findPhase(expSpec, index);
     if (phase) {
-      // The phase has experiment_id
       return phase.experiment_id;
     }
 
-    // Fallback: try to match by sequence order
-    const exp = experiments.find(e => e.sequence_order === index);
-    return exp?.id ?? null;
+    return null;
   }
 
   // Get the link URL for an experiment box
