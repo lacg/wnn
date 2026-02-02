@@ -1205,18 +1205,18 @@
   }
 
   .tooltip-title {
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 600;
     fill: var(--text-primary);
   }
 
   .tooltip-label {
-    font-size: 11px;
+    font-size: 12px;
     fill: var(--text-secondary);
   }
 
   .tooltip-value {
-    font-size: 11px;
+    font-size: 12px;
     font-family: monospace;
     font-weight: 500;
   }
