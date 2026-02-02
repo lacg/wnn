@@ -1245,7 +1245,7 @@
                 </div>
                 <div class="exp-content">
                   <div class="exp-header">
-                    <div class="exp-name">{dbExp?.name ?? displaySpec.name}</div>
+                    <div class="exp-name">{displaySpec.name}</div>
                     <span class="status-indicator" class:status-completed={status === 'completed'} class:status-running={isRunning} class:status-pending={status === 'pending'}>
                       {status}
                     </span>
@@ -1301,7 +1301,7 @@
                 </div>
                 <div class="exp-content">
                   <div class="exp-header">
-                    <div class="exp-name">{dbExp?.name ?? displaySpec.name}</div>
+                    <div class="exp-name">{displaySpec.name}</div>
                     <span class="status-indicator" class:status-completed={status === 'completed'} class:status-running={isRunning} class:status-pending={status === 'pending'}>
                       {status}
                     </span>
