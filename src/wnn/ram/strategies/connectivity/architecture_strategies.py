@@ -1724,7 +1724,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 
 			# Track best by CE and best by Acc for logging
 			for g, ce, acc in all_neighbors[1:]:  # Skip initial
-				if ce < best_ce_fitness:
+				if best_ce_fitness is None or ce < best_ce_fitness:
 					best_ce_genome = g.clone()
 					best_ce_fitness = ce
 					best_ce_accuracy = acc
@@ -1874,7 +1874,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				ce, acc = g._cached_fitness
 				all_neighbors.append((g.clone(), ce, acc))
 				# Track best by CE
-				if ce < best_ce_fitness:
+				if best_ce_fitness is None or ce < best_ce_fitness:
 					best_ce_genome = g.clone()
 					best_ce_fitness = ce
 					best_ce_accuracy = acc
