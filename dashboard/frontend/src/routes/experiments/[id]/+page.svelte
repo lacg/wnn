@@ -153,15 +153,16 @@
     <!-- Header -->
     <div class="experiment-header">
       <div class="header-left">
-        <a href="/experiments" class="back-link">&larr; Experiments</a>
+        {#if experiment.flow_id}
+          <a href="/flows/{experiment.flow_id}" class="back-link">&larr; Back to Flow</a>
+        {:else}
+          <a href="/flows" class="back-link">&larr; Flows</a>
+        {/if}
         <h1>{experiment.name}</h1>
         <span class="status-badge" style="background: {getStatusColor(experiment.status)}">
           {experiment.status}
         </span>
       </div>
-      {#if experiment.flow_id}
-        <a href="/flows/{experiment.flow_id}" class="flow-link">View Flow →</a>
-      {/if}
     </div>
 
     <!-- Info Cards -->
