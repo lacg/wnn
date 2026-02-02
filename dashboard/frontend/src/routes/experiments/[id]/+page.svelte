@@ -227,7 +227,7 @@
     <!-- Flow Progress Bar -->
     {#if flowExperiments.length > 0}
       <div class="flow-progress">
-        <div class="flow-progress-label">Flow Progress:</div>
+        <div class="flow-progress-label">Flow Progress</div>
         <div class="flow-progress-bar">
           {#each flowExperiments.sort((a, b) => (a.sequence_order ?? 0) - (b.sequence_order ?? 0)) as exp, idx}
             {@const isCurrent = exp.id === experiment.id}
@@ -265,7 +265,7 @@
         {/if}
       </div>
       <div class="info-card">
-        <span class="info-label">Best Accuracy</span>
+        <span class="info-label">Best Acc</span>
         <span class="info-value">{formatAcc(bestAcc)}</span>
         {#if accImprovement !== null}
           <span class="info-delta" class:improved={accImprovement > 0} class:worsened={accImprovement < 0}>
@@ -674,8 +674,7 @@
 
   .flow-progress-label {
     font-size: 1rem;
-    color: var(--text-secondary);
-    text-transform: uppercase;
+    color: var(--text-primary);
     margin-bottom: 0.5rem;
   }
 
@@ -793,7 +792,6 @@
   .info-label {
     font-size: 1rem;
     color: var(--text-primary);
-    text-transform: uppercase;
   }
 
   .info-value {
@@ -907,7 +905,7 @@
   }
 
   .x-label {
-    fill: var(--text-tertiary);
+    fill: var(--text-primary);
   }
 
   .ce-label {
