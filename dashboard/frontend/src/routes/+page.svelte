@@ -335,8 +335,7 @@
           {/if}
 
           <!-- Average CE line (blue, dashed) - shows per-iteration avg -->
-          {@const avgCeData = chartData.filter(p => p.avgCe !== null && p.avgCe !== undefined)}
-          {#if avgCeData.length > 0}
+          {#if chartData.filter(p => p.avgCe !== null && p.avgCe !== undefined).length > 0}
             <polyline
               fill="none"
               stroke="var(--accent-blue)"
@@ -353,8 +352,7 @@
           {/if}
 
           <!-- Average Accuracy line (green, dashed) - shows per-iteration avg -->
-          {@const avgAccData = chartData.filter(p => p.avgAcc !== null && p.avgAcc !== undefined)}
-          {#if avgAccData.length > 0}
+          {#if chartData.filter(p => p.avgAcc !== null && p.avgAcc !== undefined).length > 0}
             <polyline
               fill="none"
               stroke="var(--accent-green)"
