@@ -17,6 +17,12 @@
   // Current running flow (fetched from API)
   let currentFlow: Flow | null = null;
 
+  // Completed experiments for selection when nothing is running
+  import type { Experiment } from '$lib/types';
+  let recentExperiments: Experiment[] = [];
+  let selectedHistoryExperiment: Experiment | null = null;
+  let loadingHistoryExperiment = false;
+
   // Iteration details modal state
   let selectedIteration: Iteration | null = null;
   let genomeEvaluations: GenomeEvaluation[] = [];
@@ -34,6 +40,8 @@
   onMount(() => {
     // Fetch the current running flow
     fetchRunningFlow();
+    // Fetch recent experiments for historical viewing
+    fetchRecentExperiments();
     // Refresh every 10 seconds
     const interval = setInterval(fetchRunningFlow, 10000);
     return () => clearInterval(interval);
@@ -49,6 +57,71 @@
     } catch (e) {
       console.error('Failed to fetch running flow:', e);
     }
+  }
+
+  async function fetchRecentExperiments() {
+    try {
+      const res = await fetch('/api/experiments?limit=10');
+      if (res.ok) {
+        const exps = await res.json();
+        // Filter to only completed/failed experiments
+        recentExperiments = Array.isArray(exps)
+          ? exps.filter((e: Experiment) => e.status === 'completed' || e.status === 'failed')
+          : [];
+      }
+    } catch (e) {
+      console.error('Failed to fetch recent experiments:', e);
+    }
+  }
+
+  async function selectHistoryExperiment(exp: Experiment) {
+    if (selectedHistoryExperiment?.id === exp.id) {
+      // Toggle off
+      selectedHistoryExperiment = null;
+      return;
+    }
+
+    selectedHistoryExperiment = exp;
+    loadingHistoryExperiment = true;
+
+    try {
+      // Fetch phases and iterations for this experiment
+      const [phasesRes, itersRes] = await Promise.all([
+        fetch(`/api/experiments/${exp.id}/phases`),
+        fetch(`/api/experiments/${exp.id}/iterations?limit=500`)
+      ]);
+
+      if (phasesRes.ok) {
+        const historyPhases = await phasesRes.json();
+        phases.set(Array.isArray(historyPhases) ? historyPhases : []);
+      }
+
+      if (itersRes.ok) {
+        const historyIters = await itersRes.json();
+        iterations.set(Array.isArray(historyIters) ? historyIters : []);
+        // Update CE history for chart
+        const ceData = (Array.isArray(historyIters) ? historyIters : []).map((i: Iteration) => ({
+          iter: i.iteration_num,
+          ce: i.best_ce,
+          acc: i.best_accuracy,
+          avgCe: i.avg_ce,
+          avgAcc: i.avg_accuracy
+        }));
+        ceHistory.set(ceData);
+      }
+    } catch (e) {
+      console.error('Failed to load experiment history:', e);
+    } finally {
+      loadingHistoryExperiment = false;
+    }
+  }
+
+  function clearHistoryExperiment() {
+    selectedHistoryExperiment = null;
+    // Reset stores to empty (will be re-populated if a running experiment exists)
+    phases.set([]);
+    iterations.set([]);
+    ceHistory.set([]);
   }
 
   async function openIterationDetails(iter: Iteration) {
@@ -143,6 +216,8 @@
   // Chart title: indicate if viewing history
   $: chartTitle = selectedHistoryPhase
     ? `${selectedHistoryPhase.name} (${phaseIterations.length} iterations)`
+    : selectedHistoryExperiment
+    ? `${selectedHistoryExperiment.name} (${displayCeHistory.length} iterations)`
     : `Best So Far (${displayCeHistory.length} iterations)`;
 
   // Get max iterations from current phase, or from most recent phase if current is null
@@ -207,6 +282,43 @@
         <span class="experiment-name">{$currentExperiment.name}</span>
       {:else if $currentPhase}
         <span class="experiment-name">{$currentPhase.name}</span>
+      {/if}
+    </div>
+  {:else if selectedHistoryExperiment}
+    <!-- Viewing historical experiment -->
+    <div class="experiment-header history">
+      <span class="history-label">Viewing History</span>
+      <span class="separator">›</span>
+      <span class="experiment-name">{selectedHistoryExperiment.name}</span>
+      <button class="btn-clear" on:click={clearHistoryExperiment} title="Return to live view">×</button>
+    </div>
+  {:else}
+    <!-- No experiment running - show selection UI -->
+    <div class="no-experiment-card">
+      <div class="no-experiment-message">
+        <span class="no-experiment-icon">⏸</span>
+        <span>No experiment currently running</span>
+      </div>
+      {#if recentExperiments.length > 0}
+        <div class="history-experiments">
+          <span class="history-title">View completed experiments:</span>
+          <div class="experiment-chips">
+            {#each recentExperiments as exp}
+              <button
+                class="experiment-chip"
+                class:failed={exp.status === 'failed'}
+                on:click={() => selectHistoryExperiment(exp)}
+              >
+                <span class="chip-name">{exp.name}</span>
+                <span class="chip-status" class:status-completed={exp.status === 'completed'} class:status-failed={exp.status === 'failed'}>
+                  {exp.status === 'completed' ? '✓' : '✗'}
+                </span>
+              </button>
+            {/each}
+          </div>
+        </div>
+      {:else}
+        <div class="no-history">No completed experiments found</div>
       {/if}
     </div>
   {/if}
@@ -931,6 +1043,131 @@
     background: var(--bg-card);
     border-radius: 0.5rem;
     border-left: 4px solid var(--accent-blue);
+  }
+
+  .experiment-header.history {
+    border-left-color: var(--accent-yellow, #eab308);
+    background: rgba(234, 179, 8, 0.1);
+  }
+
+  .history-label {
+    font-size: 1rem;
+    font-weight: 500;
+    color: var(--accent-yellow, #eab308);
+    text-transform: uppercase;
+  }
+
+  .btn-clear {
+    margin-left: auto;
+    background: none;
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    font-size: 1.2rem;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+  }
+
+  .btn-clear:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    border-color: var(--text-secondary);
+  }
+
+  .no-experiment-card {
+    padding: 1rem 1.25rem;
+    margin-bottom: 1rem;
+    background: var(--bg-card);
+    border-radius: 0.5rem;
+    border: 1px dashed var(--border-color);
+  }
+
+  .no-experiment-message {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 1.2rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.75rem;
+  }
+
+  .no-experiment-icon {
+    font-size: 1.4rem;
+  }
+
+  .history-experiments {
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--border-color);
+  }
+
+  .history-title {
+    font-size: 1rem;
+    color: var(--text-tertiary);
+    display: block;
+    margin-bottom: 0.5rem;
+  }
+
+  .experiment-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .experiment-chip {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.75rem;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 1rem;
+    font-size: 1rem;
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .experiment-chip:hover {
+    background: var(--bg-hover);
+    border-color: var(--accent-blue);
+  }
+
+  .experiment-chip.failed {
+    opacity: 0.7;
+  }
+
+  .experiment-chip.failed:hover {
+    border-color: var(--accent-red);
+  }
+
+  .chip-name {
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .chip-status {
+    font-size: 0.9rem;
+  }
+
+  .chip-status.status-completed {
+    color: var(--accent-green);
+  }
+
+  .chip-status.status-failed {
+    color: var(--accent-red);
+  }
+
+  .no-history {
+    color: var(--text-tertiary);
+    font-size: 1rem;
+    font-style: italic;
   }
 
   .flow-name {
