@@ -647,7 +647,9 @@ class EarlyStoppingTracker:
 		"""
 		from wnn.ram.strategies.connectivity.generic_strategies import AdaptiveLevel
 		self._patience_counter = 0
-		self._prev_trend_mean = sum(top_k_fitness) / len(top_k_fitness) if top_k_fitness else 0.0
+		# Filter out None values before computing mean
+		valid_fitness = [f for f in top_k_fitness if f is not None] if top_k_fitness else []
+		self._prev_trend_mean = sum(valid_fitness) / len(valid_fitness) if valid_fitness else 0.0
 		self._baseline = self._prev_trend_mean
 		self._last_level = AdaptiveLevel.NEUTRAL
 
@@ -674,10 +676,11 @@ class EarlyStoppingTracker:
 		if (iteration + 1) % cfg.check_interval != 0:
 			return False
 
-		# Calculate current mean of top-K%
-		if not top_k_fitness:
+		# Calculate current mean of top-K% (filter out None values)
+		valid_fitness = [f for f in top_k_fitness if f is not None] if top_k_fitness else []
+		if not valid_fitness:
 			return False
-		current_mean = sum(top_k_fitness) / len(top_k_fitness)
+		current_mean = sum(valid_fitness) / len(valid_fitness)
 
 		# Compute improvement from last check (using _prev_trend_mean if available, else _prev_best)
 		prev_mean = getattr(self, '_prev_trend_mean', self._prev_best)
