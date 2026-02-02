@@ -1229,7 +1229,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 					if hasattr(early_stop, '_overfit_detector') and early_stop._overfit_detector:
 						baseline_ce = early_stop._overfit_detector.baseline_mean
 					delta_baseline = (best_fitness - baseline_ce) if baseline_ce is not None else None
-					delta_previous = best_fitness - prev_best_fitness
+					delta_previous = (best_fitness - prev_best_fitness) if prev_best_fitness is not None else None
 					patience_counter = early_stop._patience_counter if hasattr(early_stop, '_patience_counter') else 0
 					# Use actual counts from Rust: evaluated = total tested, viable = passed threshold
 					candidates_total = search_result.evaluated
@@ -1741,8 +1741,8 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				best_ranked_ce = best_ranked_genome._cached_fitness[0]
 				best_ranked_accuracy = best_ranked_genome._cached_fitness[1]
 				best = best_ranked_genome.clone()
-				best_fitness = best_fitness_value
-				best_accuracy = best_fitness_accuracy
+				best_fitness = best_ranked_ce
+				best_accuracy = best_ranked_accuracy
 
 		history = [(0, best_fitness)]
 
@@ -1944,7 +1944,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 					if hasattr(early_stopper, '_overfit_detector') and early_stopper._overfit_detector:
 						baseline_ce = early_stopper._overfit_detector.baseline_mean
 					delta_baseline = (best_fitness - baseline_ce) if baseline_ce is not None else None
-					delta_previous = best_fitness - prev_best_fitness
+					delta_previous = (best_fitness - prev_best_fitness) if prev_best_fitness is not None else None
 					patience_counter = early_stopper._patience_counter if hasattr(early_stopper, '_patience_counter') else 0
 					candidates_total = len(all_neighbors)  # Total neighbors in cache (for reference)
 
