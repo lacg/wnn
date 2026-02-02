@@ -2,7 +2,7 @@
 
 import Foundation
 
-public struct Experiment: Codable, Identifiable {
+public struct Experiment: Codable, Identifiable, Hashable {
     public let id: Int64
     public let flow_id: Int64?
     public let sequence_order: Int32?

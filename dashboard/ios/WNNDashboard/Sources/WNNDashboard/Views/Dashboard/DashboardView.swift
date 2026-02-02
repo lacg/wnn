@@ -140,45 +140,50 @@ public struct DashboardView: View {
                 }
                 if let phase = viewModel.currentPhase {
                     HStack {
-                        Text(phase.name).font(.subheadline).foregroundColor(.secondary)
+                        Text(phase.name).font(.subheadline).foregroundStyle(.secondary)
                         Spacer()
-                        Text("Iteration \(phase.current_iteration)/\(phase.max_iterations)").font(.caption).foregroundColor(.secondary)
+                        Text("Iteration \(phase.current_iteration)/\(phase.max_iterations)").font(.caption).foregroundStyle(.secondary)
                     }
                 }
             } else if let histExp = viewModel.selectedHistoryExperiment {
                 // Viewing historical experiment
                 HStack {
-                    Text("History").font(.caption).fontWeight(.medium).foregroundColor(.orange).textCase(.uppercase)
-                    Text("›").foregroundColor(.secondary)
+                    Text("History").font(.caption).fontWeight(.medium).foregroundStyle(.orange).textCase(.uppercase)
+                    Text("›").foregroundStyle(.secondary)
                     Text(histExp.name).font(.headline)
                     Spacer()
                     Button { viewModel.clearHistoryExperiment() } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                     }
                 }
             } else {
                 // No experiment running - show selection
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
-                        Image(systemName: "pause.circle").foregroundColor(.secondary)
-                        Text("No experiment running").font(.headline).foregroundColor(.secondary)
+                        Image(systemName: "pause.circle").foregroundStyle(.secondary)
+                        Text("No experiment running").font(.headline).foregroundStyle(.secondary)
                     }
 
                     if !viewModel.recentExperiments.isEmpty {
-                        Text("View completed experiments:").font(.caption).foregroundColor(.secondary)
+                        Text("View completed experiments:").font(.caption).foregroundStyle(.secondary)
                         experimentChipsView
                     }
                 }
             }
         }
         .padding()
-        .background(viewModel.selectedHistoryExperiment != nil ? Color.orange.opacity(0.1) : Theme.cardBackground)
+        .background(
+            viewModel.selectedHistoryExperiment != nil
+                ? AnyShapeStyle(Color.orange.opacity(0.1))
+                : AnyShapeStyle(.ultraThinMaterial),
+            in: RoundedRectangle(cornerRadius: 16)
+        )
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: 16)
                 .stroke(viewModel.selectedHistoryExperiment != nil ? Color.orange.opacity(0.3) : Color.clear, lineWidth: 1)
         )
-        .cornerRadius(12)
+        .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
     }
 
     private var experimentChipsView: some View {

@@ -142,9 +142,7 @@ public struct DualAxisChartView: View {
                         .gesture(
                             DragGesture(minimumDistance: 0)
                                 .onChanged { value in
-                                    if #available(iOS 17.0, *) {
-                                        handleTouch(at: value.location, in: geo, proxy: proxy)
-                                    }
+                                    handleTouch(at: value.location, in: geo, proxy: proxy)
                                 }
                                 .onEnded { _ in
                                     selectedPoint = nil
@@ -159,7 +157,6 @@ public struct DualAxisChartView: View {
         }
     }
 
-    @available(iOS 17.0, *)
     private func handleTouch(at location: CGPoint, in geo: GeometryProxy, proxy: ChartProxy) {
         guard let plotFrame = proxy.plotFrame else { return }
         let frame = geo[plotFrame]

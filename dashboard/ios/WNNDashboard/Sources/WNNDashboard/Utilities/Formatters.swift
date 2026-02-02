@@ -4,7 +4,9 @@ import Foundation
 
 public enum NumberFormatters {
     public static func formatCE(_ value: Double) -> String { String(format: "%.4f", value) }
+    public static func formatCE(_ value: Double?) -> String { value.map { String(format: "%.4f", $0) } ?? "-" }
     public static func formatAccuracy(_ value: Double) -> String { String(format: "%.2f%%", value * 100) }
+    public static func formatAccuracy(_ value: Double?) -> String { value.map { String(format: "%.2f%%", $0 * 100) } ?? "-" }
     public static func formatPercent(_ value: Double) -> String { String(format: "%.2f%%", value) }
     public static func formatDelta(_ value: Double) -> String { value > 0 ? String(format: "+%.4f", value) : String(format: "%.4f", value) }
     public static func formatCompact(_ value: Int) -> String {

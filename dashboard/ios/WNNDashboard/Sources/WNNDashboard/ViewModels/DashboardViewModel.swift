@@ -26,7 +26,7 @@ public final class DashboardViewModel: ObservableObject {
     public var currentIterationNumber: Int32 { currentPhase?.current_iteration ?? 0 }
     public var maxIterations: Int32 { currentPhase?.max_iterations ?? 0 }
 
-    private let apiClient: APIClient
+    public let apiClient: APIClient
     private let wsManager: WebSocketManager
     private var cancellables = Set<AnyCancellable>()
 

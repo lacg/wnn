@@ -124,6 +124,7 @@ public struct FlowsListView: View {
 struct FlowDetailContentView: View {
     let flow: Flow
     @EnvironmentObject var viewModel: FlowsViewModel
+    @State private var selectedExperiment: Experiment?
 
     var body: some View {
         ScrollView {
@@ -136,15 +137,19 @@ struct FlowDetailContentView: View {
             .padding()
         }
         .navigationTitle(flow.name)
+        .navigationDestination(for: Experiment.self) { experiment in
+            ExperimentIterationsView(experiment: experiment)
+        }
     }
 
     private var statusSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack { Text("Status").font(.headline); Spacer(); StatusBadge(text: flow.status.displayName, color: Theme.statusColor(flow.status)) }
-            if let desc = flow.description { Text(desc).font(.subheadline).foregroundColor(.secondary) }
-            if let pid = flow.pid, flow.status == .running { HStack { Text("Process ID").foregroundColor(.secondary); Spacer(); Text("\(pid)").fontDesign(.monospaced) }.font(.subheadline) }
+            if let desc = flow.description { Text(desc).font(.subheadline).foregroundStyle(.secondary) }
+            if let pid = flow.pid, flow.status == .running { HStack { Text("Process ID").foregroundStyle(.secondary); Spacer(); Text("\(pid)").fontDesign(.monospaced) }.font(.subheadline) }
         }
-        .padding().background(Theme.cardBackground).cornerRadius(12)
+        .padding()
+        .glassCard()
     }
 
     private var configSection: some View {
@@ -154,18 +159,19 @@ struct FlowDetailContentView: View {
             configRow("Experiments", value: "\(flow.config.experiments.count)")
             if let c = flow.seed_checkpoint_id { configRow("Seed Checkpoint", value: "#\(c)") }
         }
-        .padding().background(Theme.cardBackground).cornerRadius(12)
+        .padding()
+        .glassCard()
     }
 
     private var experimentsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack { Text("Experiment Specs").font(.headline); Spacer(); Text("\(flow.config.experiments.count)").font(.caption).foregroundColor(.secondary) }
+            HStack { Text("Experiment Specs").font(.headline); Spacer(); Text("\(flow.config.experiments.count)").font(.caption).foregroundStyle(.secondary) }
             ForEach(Array(flow.config.experiments.enumerated()), id: \.offset) { i, spec in
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Text("\(i + 1). \(spec.name)").font(.subheadline).fontWeight(.medium)
                         Spacer()
-                        Text(spec.experiment_type.displayName).font(.caption).padding(.horizontal, 6).padding(.vertical, 2).background(spec.experiment_type == .ga ? Color.blue.opacity(0.2) : Color.purple.opacity(0.2)).foregroundColor(spec.experiment_type == .ga ? .blue : .purple).cornerRadius(4)
+                        Text(spec.experiment_type.displayName).font(.caption).padding(.horizontal, 6).padding(.vertical, 2).background(spec.experiment_type == .ga ? Color.blue.opacity(0.2) : Color.purple.opacity(0.2)).foregroundStyle(spec.experiment_type == .ga ? .blue : .purple).clipShape(RoundedRectangle(cornerRadius: 4))
                     }
                     HStack(spacing: 8) {
                         if spec.optimize_neurons { badge("Neurons") }
@@ -173,25 +179,27 @@ struct FlowDetailContentView: View {
                         if spec.optimize_connections { badge("Connections") }
                     }
                 }
-                .padding().background(Color.gray.opacity(0.1)).cornerRadius(8)
+                .padding()
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
             }
             if !viewModel.selectedFlowExperiments.isEmpty {
                 Divider().padding(.vertical, 8)
-                Text("Completed Experiments").font(.subheadline).foregroundColor(.secondary)
+                HStack {
+                    Text("Experiments").font(.subheadline).foregroundStyle(.secondary)
+                    Spacer()
+                    Text("Tap to view iterations").font(.caption2).foregroundStyle(.tertiary)
+                }
                 ForEach(viewModel.selectedFlowExperiments) { exp in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(exp.name).font(.subheadline)
-                            if let iter = exp.last_iteration { Text("Iteration \(iter)").font(.caption).foregroundColor(.secondary) }
-                        }
-                        Spacer()
-                        StatusBadge(text: exp.status.displayName, color: Theme.statusColor(exp.status))
+                    NavigationLink(value: exp) {
+                        ExperimentRow(experiment: exp, isNavigable: exp.status == .completed || exp.status == .running)
                     }
-                    .padding(.vertical, 4)
+                    .buttonStyle(.plain)
+                    .disabled(!(exp.status == .completed || exp.status == .running))
                 }
             }
         }
-        .padding().background(Theme.cardBackground).cornerRadius(12)
+        .padding()
+        .glassCard()
     }
 
     private var timingSection: some View {
@@ -202,14 +210,15 @@ struct FlowDetailContentView: View {
             if let d = flow.completedDate { configRow("Completed", value: DateFormatters.shortDateTime(d)) }
             if let dur = flow.duration { configRow("Duration", value: DateFormatters.duration(dur)) }
         }
-        .padding().background(Theme.cardBackground).cornerRadius(12)
+        .padding()
+        .glassCard()
     }
 
     private func configRow(_ label: String, value: String) -> some View {
-        HStack { Text(label).foregroundColor(.secondary); Spacer(); Text(value).fontDesign(.monospaced) }.font(.subheadline)
+        HStack { Text(label).foregroundStyle(.secondary); Spacer(); Text(value).fontDesign(.monospaced) }.font(.subheadline)
     }
 
     private func badge(_ text: String) -> some View {
-        Text(text).font(.caption2).padding(.horizontal, 6).padding(.vertical, 2).background(Color.green.opacity(0.2)).foregroundColor(.green).cornerRadius(4)
+        Text(text).font(.caption2).padding(.horizontal, 6).padding(.vertical, 2).background(Color.green.opacity(0.2)).foregroundStyle(.green).clipShape(RoundedRectangle(cornerRadius: 4))
     }
 }

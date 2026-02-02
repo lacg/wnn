@@ -60,6 +60,40 @@ public enum Theme {
     #endif
 }
 
+// MARK: - iOS 17 Glass Card Modifier
+
+public struct GlassCard: ViewModifier {
+    public func body(content: Content) -> some View {
+        content
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+            .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
+    }
+}
+
+public extension View {
+    func glassCard() -> some View {
+        modifier(GlassCard())
+    }
+}
+
+// MARK: - Tappable Row Modifier
+
+public struct TappableRow: ViewModifier {
+    let isEnabled: Bool
+
+    public func body(content: Content) -> some View {
+        content
+            .contentShape(Rectangle())
+            .opacity(isEnabled ? 1.0 : 0.6)
+    }
+}
+
+public extension View {
+    func tappableRow(isEnabled: Bool = true) -> some View {
+        modifier(TappableRow(isEnabled: isEnabled))
+    }
+}
+
 public struct StatusBadge: View {
     public let text: String
     public let color: Color

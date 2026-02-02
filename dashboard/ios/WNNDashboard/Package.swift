@@ -4,7 +4,7 @@ import PackageDescription
 let package = Package(
     name: "WNNDashboard",
     platforms: [
-        .iOS("16.1")
+        .iOS(.v17)
     ],
     products: [
         .library(
