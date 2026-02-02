@@ -497,6 +497,9 @@ class DashboardClient:
 		iterations_run: Optional[int] = None,
 		genome_stats: Optional[dict] = None,
 		is_final: bool = False,
+		phase_id: Optional[int] = None,
+		iteration_id: Optional[int] = None,
+		checkpoint_type: str = "auto",
 	) -> int:
 		"""
 		Register a checkpoint with the dashboard.
@@ -505,11 +508,14 @@ class DashboardClient:
 			experiment_id: ID of the parent experiment
 			file_path: Path to the checkpoint file
 			name: Human-readable name
-			final_fitness: CE loss value
-			final_accuracy: Accuracy value
-			iterations_run: Number of iterations completed
-			genome_stats: Optional genome statistics
+			final_fitness: CE loss value (best_ce)
+			final_accuracy: Accuracy value (best_accuracy)
+			iterations_run: Number of iterations completed (unused by API)
+			genome_stats: Optional genome statistics (unused by API)
 			is_final: Whether this is the final checkpoint for the experiment
+			phase_id: ID of the phase this checkpoint belongs to (IMPORTANT for phase transitions!)
+			iteration_id: Optional iteration ID
+			checkpoint_type: Type of checkpoint ('auto', 'user', 'phase_end', 'experiment_end')
 
 		Returns:
 			Checkpoint ID
@@ -519,21 +525,22 @@ class DashboardClient:
 		if os.path.exists(file_path):
 			file_size = os.path.getsize(file_path)
 
+		# Build request data matching Rust API's CreateCheckpointRequest
 		data = {
 			"experiment_id": experiment_id,
 			"name": name,
 			"file_path": file_path,
 			"file_size_bytes": file_size,
-			"final_fitness": final_fitness,
-			"final_accuracy": final_accuracy,
-			"iterations_run": iterations_run,
-			"genome_stats": genome_stats,
-			"is_final": is_final,
+			"best_ce": final_fitness,        # API expects best_ce, not final_fitness
+			"best_accuracy": final_accuracy,  # API expects best_accuracy, not final_accuracy
+			"checkpoint_type": checkpoint_type,
+			"phase_id": phase_id,
+			"iteration_id": iteration_id,
 		}
 
 		result = self._request("POST", "/api/checkpoints", json_data=data)
 		ckpt_id = result["id"]
-		self._logger(f"Registered checkpoint {ckpt_id}: {name}")
+		self._logger(f"Registered checkpoint {ckpt_id}: {name} (phase_id={phase_id}, type={checkpoint_type})")
 		return ckpt_id
 
 	def list_checkpoints(

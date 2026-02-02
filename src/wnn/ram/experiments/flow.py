@@ -647,7 +647,12 @@ class Flow:
 		Returns:
 			Checkpoint ID if successful, None otherwise.
 		"""
-		if not self.dashboard_client or not self._experiment_id:
+		# Get the experiment_id for the stopped experiment (or the last completed one)
+		experiment_id = self._experiment_ids.get(stopped_at_idx) or (
+			self._experiment_ids.get(stopped_at_idx - 1) if stopped_at_idx > 0 else None
+		)
+		if not self.dashboard_client or not experiment_id:
+			self.log("Warning: Cannot save stop checkpoint - no dashboard client or experiment_id")
 			return None
 
 		self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -675,7 +680,7 @@ class Flow:
 		# Register in database
 		try:
 			checkpoint_id = self.dashboard_client.checkpoint_created(
-				experiment_id=self._experiment_id,
+				experiment_id=experiment_id,
 				file_path=str(checkpoint_path),
 				name=checkpoint_name,
 				final_fitness=current_fitness,
@@ -683,6 +688,7 @@ class Flow:
 				iterations_run=stopped_at_idx,
 				genome_stats={"stopped": True, "resume_from": stopped_at_idx},
 				is_final=False,
+				checkpoint_type="user",  # Mark as user-initiated stop checkpoint
 			)
 			self.log(f"  Registered checkpoint {checkpoint_id} in database")
 			self.log(f"  Resume from experiment {stopped_at_idx}")
