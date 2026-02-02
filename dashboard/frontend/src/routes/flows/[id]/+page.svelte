@@ -642,7 +642,20 @@
   }
 
   // Get phase status: completed, running, or pending
-  function getExpStatus(expSpec: { name: string; experiment_type: string; optimize_neurons?: boolean; optimize_bits?: boolean; optimize_connections?: boolean }, index: number): 'completed' | 'running' | 'pending' {
+  function getExpStatus(expSpec: { name: string; experiment_type: string; optimize_neurons?: boolean; optimize_bits?: boolean; optimize_connections?: boolean }, index: number): 'completed' | 'running' | 'pending' | 'failed' | 'cancelled' {
+    // First, check the actual experiment record from the DB (this has the authoritative status)
+    const actualExp = experiments.find(e => e.sequence_order === index);
+    if (actualExp) {
+      // Map DB status to display status
+      if (actualExp.status === 'completed') return 'completed';
+      if (actualExp.status === 'running') return 'running';
+      if (actualExp.status === 'failed') return 'failed';
+      if (actualExp.status === 'cancelled') return 'cancelled';
+      // pending, queued, paused all show as pending
+      return 'pending';
+    }
+
+    // Fallback to phase-based inference (only if no DB experiment record found)
     const phase = findPhase(expSpec, index);
     if (phase) {
       if (phase.status === 'completed') return 'completed';

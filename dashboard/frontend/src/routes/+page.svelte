@@ -17,9 +17,11 @@
   // Current running flow (fetched from API)
   let currentFlow: Flow | null = null;
 
-  // Completed experiments for selection when nothing is running
+  // Completed flows and experiments for selection when nothing is running
   import type { Experiment } from '$lib/types';
-  let recentExperiments: Experiment[] = [];
+  let completedFlows: Flow[] = [];
+  let selectedHistoryFlow: Flow | null = null;
+  let flowExperiments: Experiment[] = [];
   let selectedHistoryExperiment: Experiment | null = null;
   let loadingHistoryExperiment = false;
 
@@ -40,8 +42,8 @@
   onMount(() => {
     // Fetch the current running flow
     fetchRunningFlow();
-    // Fetch recent experiments for historical viewing
-    fetchRecentExperiments();
+    // Fetch completed flows for historical viewing
+    fetchCompletedFlows();
     // Refresh every 10 seconds
     const interval = setInterval(fetchRunningFlow, 10000);
     return () => clearInterval(interval);
@@ -59,25 +61,57 @@
     }
   }
 
-  async function fetchRecentExperiments() {
+  async function fetchCompletedFlows() {
     try {
-      const res = await fetch('/api/experiments?limit=10');
+      const res = await fetch('/api/flows?status=completed');
       if (res.ok) {
-        const exps = await res.json();
-        // Filter to only completed/failed experiments
-        recentExperiments = Array.isArray(exps)
-          ? exps.filter((e: Experiment) => e.status === 'completed' || e.status === 'failed')
-          : [];
+        const flows = await res.json();
+        completedFlows = Array.isArray(flows) ? flows : [];
       }
     } catch (e) {
-      console.error('Failed to fetch recent experiments:', e);
+      console.error('Failed to fetch completed flows:', e);
     }
+  }
+
+  async function selectHistoryFlow(flow: Flow) {
+    if (selectedHistoryFlow?.id === flow.id) {
+      // Toggle off
+      clearHistoryFlow();
+      return;
+    }
+
+    selectedHistoryFlow = flow;
+    selectedHistoryExperiment = null;
+    flowExperiments = [];
+
+    try {
+      // Fetch all experiments for this flow
+      const res = await fetch(`/api/flows/${flow.id}/experiments`);
+      if (res.ok) {
+        const exps = await res.json();
+        flowExperiments = Array.isArray(exps) ? exps : [];
+      }
+    } catch (e) {
+      console.error('Failed to load flow experiments:', e);
+    }
+  }
+
+  function clearHistoryFlow() {
+    selectedHistoryFlow = null;
+    flowExperiments = [];
+    selectedHistoryExperiment = null;
+    phases.set([]);
+    iterations.set([]);
+    ceHistory.set([]);
   }
 
   async function selectHistoryExperiment(exp: Experiment) {
     if (selectedHistoryExperiment?.id === exp.id) {
-      // Toggle off
+      // Toggle off - go back to flow view
       selectedHistoryExperiment = null;
+      phases.set([]);
+      iterations.set([]);
+      ceHistory.set([]);
       return;
     }
 
@@ -284,41 +318,67 @@
         <span class="experiment-name">{$currentPhase.name}</span>
       {/if}
     </div>
-  {:else if selectedHistoryExperiment}
-    <!-- Viewing historical experiment -->
+  {:else if selectedHistoryFlow && selectedHistoryExperiment}
+    <!-- Viewing historical experiment from a flow -->
     <div class="experiment-header history">
-      <span class="history-label">Viewing History</span>
+      <span class="history-label">History</span>
+      <span class="separator">›</span>
+      <button class="breadcrumb-btn" on:click={() => { selectedHistoryExperiment = null; phases.set([]); iterations.set([]); ceHistory.set([]); }}>{selectedHistoryFlow.name}</button>
       <span class="separator">›</span>
       <span class="experiment-name">{selectedHistoryExperiment.name}</span>
-      <button class="btn-clear" on:click={clearHistoryExperiment} title="Return to live view">×</button>
+      <button class="btn-clear" on:click={clearHistoryFlow} title="Return to live view">×</button>
+    </div>
+  {:else if selectedHistoryFlow}
+    <!-- Flow selected, show experiments -->
+    <div class="experiment-header history">
+      <span class="history-label">History</span>
+      <span class="separator">›</span>
+      <span class="flow-name">{selectedHistoryFlow.name}</span>
+      <button class="btn-clear" on:click={clearHistoryFlow} title="Return to flow selection">×</button>
+    </div>
+    <div class="no-experiment-card">
+      <div class="history-experiments">
+        <span class="history-title">Select an experiment to view ({flowExperiments.length} experiments):</span>
+        <div class="experiment-chips">
+          {#each flowExperiments as exp}
+            <button
+              class="experiment-chip"
+              class:failed={exp.status === 'failed'}
+              on:click={() => selectHistoryExperiment(exp)}
+            >
+              <span class="chip-name">{exp.name}</span>
+              <span class="chip-status" class:status-completed={exp.status === 'completed'} class:status-failed={exp.status === 'failed'}>
+                {exp.status === 'completed' ? '✓' : '✗'}
+              </span>
+            </button>
+          {/each}
+        </div>
+      </div>
     </div>
   {:else}
-    <!-- No experiment running - show selection UI -->
+    <!-- No experiment running - show flow selection UI -->
     <div class="no-experiment-card">
       <div class="no-experiment-message">
         <span class="no-experiment-icon">⏸</span>
         <span>No experiment currently running</span>
       </div>
-      {#if recentExperiments.length > 0}
+      {#if completedFlows.length > 0}
         <div class="history-experiments">
-          <span class="history-title">View completed experiments:</span>
+          <span class="history-title">View completed flows:</span>
           <div class="experiment-chips">
-            {#each recentExperiments as exp}
+            {#each completedFlows as flow}
               <button
-                class="experiment-chip"
-                class:failed={exp.status === 'failed'}
-                on:click={() => selectHistoryExperiment(exp)}
+                class="experiment-chip flow-chip"
+                on:click={() => selectHistoryFlow(flow)}
               >
-                <span class="chip-name">{exp.name}</span>
-                <span class="chip-status" class:status-completed={exp.status === 'completed'} class:status-failed={exp.status === 'failed'}>
-                  {exp.status === 'completed' ? '✓' : '✗'}
-                </span>
+                <span class="chip-name">{flow.name}</span>
+                <span class="chip-status status-completed">✓</span>
               </button>
             {/each}
           </div>
         </div>
       {:else}
-        <div class="no-history">No completed experiments found</div>
+        <div class="no-history">No completed flows found</div>
       {/if}
     </div>
   {/if}
@@ -1077,6 +1137,28 @@
     background: var(--bg-hover);
     color: var(--text-primary);
     border-color: var(--text-secondary);
+  }
+
+  .breadcrumb-btn {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 1.3rem;
+    cursor: pointer;
+    padding: 0;
+    text-decoration: underline;
+    text-decoration-color: transparent;
+    transition: all 0.15s;
+  }
+
+  .breadcrumb-btn:hover {
+    color: var(--text-primary);
+    text-decoration-color: var(--text-primary);
+  }
+
+  .flow-chip {
+    border-color: var(--accent-blue);
   }
 
   .no-experiment-card {
