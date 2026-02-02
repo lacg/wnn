@@ -1192,7 +1192,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			# Update best (best by fitness ranking, get CE from cached fitness)
 			best_genome_candidate = population[0][0]
 			best_ce_candidate = best_genome_candidate._cached_fitness[0]
-			if best_ce_candidate < best_fitness:
+			if best_fitness is None or best_ce_candidate < best_fitness:
 				best_genome = best_genome_candidate
 				best_fitness = best_ce_candidate
 				best_acc = best_genome._cached_fitness[1] if hasattr(best_genome, '_cached_fitness') and best_genome._cached_fitness else 0.0
@@ -1906,7 +1906,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				best_ranked_accuracy = new_acc
 
 				# Update global best (by CE for early stopping)
-				if new_ce < best_fitness:
+				if best_fitness is None or new_ce < best_fitness:
 					best = new_best.clone()
 					best_fitness = new_ce
 					best_accuracy = new_acc
