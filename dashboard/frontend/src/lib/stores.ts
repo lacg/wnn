@@ -150,11 +150,8 @@ function handleWsMessage(msg: WsMessage) {
       iterations.set(filteredIterations);
 
       // Build CE history from iterations (filter to current phase only)
-      const currentPhaseId = snapshotPhase?.id;
-      const phaseFilteredIterations = currentPhaseId
-        ? (snapshot.iterations || []).filter((iter: Iteration) => iter.phase_id === currentPhaseId)
-        : (snapshot.iterations || []);
-      const history = phaseFilteredIterations.map((iter: Iteration) => ({
+      // Reuse currentPhaseId and filteredIterations from above
+      const history = filteredIterations.map((iter: Iteration) => ({
         iter: iter.iteration_num,
         ce: iter.best_ce,
         acc: iter.best_accuracy,
