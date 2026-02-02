@@ -121,7 +121,9 @@
   $: displayCeHistory = $ceHistory.map(h => ({
     iter: h.iter,
     ce: h.ce,
-    acc: h.acc !== null && h.acc !== undefined ? h.acc * 100 : null
+    acc: h.acc !== null && h.acc !== undefined ? h.acc * 100 : null,
+    avgCe: h.avgCe,
+    avgAcc: h.avgAcc !== null && h.avgAcc !== undefined ? h.avgAcc * 100 : null
   }));
 
   // Get max iterations from current phase, or from most recent phase if current is null
@@ -242,8 +244,10 @@
     <div class="card-header">
       <span class="card-title">Best So Far ({displayCeHistory.length} iterations)</span>
       <div class="chart-legend">
-        <span class="legend-item"><span class="legend-dot ce"></span> Min CE (↓)</span>
-        <span class="legend-item"><span class="legend-dot acc"></span> Max Acc (↑)</span>
+        <span class="legend-item"><span class="legend-line ce"></span> Best CE (↓)</span>
+        <span class="legend-item"><span class="legend-line ce dashed"></span> Avg CE</span>
+        <span class="legend-item"><span class="legend-line acc"></span> Best Acc (↑)</span>
+        <span class="legend-item"><span class="legend-line acc dashed"></span> Avg Acc</span>
       </div>
     </div>
     {#if displayCeHistory.length > 0}
@@ -325,6 +329,42 @@
                 if (p.acc === null || p.acc === undefined) return null;
                 const x = padding.left + (i / Math.max(cumulativeData.length - 1, 1)) * chartWidth;
                 const y = padding.top + chartHeight - ((p.acc - accMin) / accRange) * chartHeight;
+                return `${x},${y}`;
+              }).filter(Boolean).join(' ')}
+            />
+          {/if}
+
+          <!-- Average CE line (blue, dashed) - shows per-iteration avg -->
+          {@const avgCeData = chartData.filter(p => p.avgCe !== null && p.avgCe !== undefined)}
+          {#if avgCeData.length > 0}
+            <polyline
+              fill="none"
+              stroke="var(--accent-blue)"
+              stroke-width="1.5"
+              stroke-opacity="0.6"
+              stroke-dasharray="4,3"
+              points={chartData.map((p, i) => {
+                if (p.avgCe === null || p.avgCe === undefined) return null;
+                const x = padding.left + (i / Math.max(chartData.length - 1, 1)) * chartWidth;
+                const y = padding.top + chartHeight - ((p.avgCe - ceMin) / ceRange) * chartHeight;
+                return `${x},${y}`;
+              }).filter(Boolean).join(' ')}
+            />
+          {/if}
+
+          <!-- Average Accuracy line (green, dashed) - shows per-iteration avg -->
+          {@const avgAccData = chartData.filter(p => p.avgAcc !== null && p.avgAcc !== undefined)}
+          {#if avgAccData.length > 0}
+            <polyline
+              fill="none"
+              stroke="var(--accent-green)"
+              stroke-width="1.5"
+              stroke-opacity="0.6"
+              stroke-dasharray="4,3"
+              points={chartData.map((p, i) => {
+                if (p.avgAcc === null || p.avgAcc === undefined) return null;
+                const x = padding.left + (i / Math.max(chartData.length - 1, 1)) * chartWidth;
+                const y = padding.top + chartHeight - ((p.avgAcc - accMin) / accRange) * chartHeight;
                 return `${x},${y}`;
               }).filter(Boolean).join(' ')}
             />
@@ -1090,6 +1130,51 @@
 
   .legend-dot.acc {
     background: var(--accent-green);
+  }
+
+  .legend-line {
+    width: 20px;
+    height: 2px;
+    display: inline-block;
+  }
+
+  .legend-line.ce {
+    background: var(--accent-blue);
+  }
+
+  .legend-line.acc {
+    background: var(--accent-green);
+  }
+
+  .legend-line.dashed {
+    background: repeating-linear-gradient(
+      90deg,
+      currentColor 0px,
+      currentColor 4px,
+      transparent 4px,
+      transparent 7px
+    );
+    opacity: 0.6;
+  }
+
+  .legend-line.dashed.ce {
+    background: repeating-linear-gradient(
+      90deg,
+      var(--accent-blue) 0px,
+      var(--accent-blue) 4px,
+      transparent 4px,
+      transparent 7px
+    );
+  }
+
+  .legend-line.dashed.acc {
+    background: repeating-linear-gradient(
+      90deg,
+      var(--accent-green) 0px,
+      var(--accent-green) 4px,
+      transparent 4px,
+      transparent 7px
+    );
   }
 
   .ce-label {
