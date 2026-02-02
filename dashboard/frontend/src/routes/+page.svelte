@@ -442,29 +442,29 @@
           {#if tooltipData}
             <g transform="translate({tooltipData.x}, {tooltipData.y})">
               <rect
-                x="-110"
-                y="-85"
-                width="220"
-                height="140"
+                x="-120"
+                y="-95"
+                width="240"
+                height="165"
                 fill="var(--bg-card)"
                 stroke="var(--border)"
                 rx="6"
                 class="tooltip-bg"
               />
-              <text x="0" y="-58" text-anchor="middle" class="tooltip-title">Iter {tooltipData.iter}</text>
-              <text x="-95" y="-32" class="tooltip-label ce-label">Best CE:</text>
-              <text x="95" y="-32" text-anchor="end" class="tooltip-value ce-label">{tooltipData.ce.toFixed(4)}</text>
+              <text x="0" y="-68" text-anchor="middle" class="tooltip-title">Iter {tooltipData.iter}</text>
+              <text x="-105" y="-38" class="tooltip-label ce-label">Best CE:</text>
+              <text x="105" y="-38" text-anchor="end" class="tooltip-value ce-label">{tooltipData.ce.toFixed(4)}</text>
               {#if tooltipData.acc !== null}
-                <text x="-95" y="-8" class="tooltip-label acc-label">Best Acc:</text>
-                <text x="95" y="-8" text-anchor="end" class="tooltip-value acc-label">{tooltipData.acc.toFixed(3)}%</text>
+                <text x="-105" y="-10" class="tooltip-label acc-label">Best Acc:</text>
+                <text x="105" y="-10" text-anchor="end" class="tooltip-value acc-label">{tooltipData.acc.toFixed(3)}%</text>
               {/if}
               {#if tooltipData.avgCe !== null}
-                <text x="-95" y="16" class="tooltip-label ce-label">Avg CE:</text>
-                <text x="95" y="16" text-anchor="end" class="tooltip-value ce-label">{tooltipData.avgCe.toFixed(4)}</text>
+                <text x="-105" y="18" class="tooltip-label ce-label">Avg CE:</text>
+                <text x="105" y="18" text-anchor="end" class="tooltip-value ce-label">{tooltipData.avgCe.toFixed(4)}</text>
               {/if}
               {#if tooltipData.avgAcc !== null}
-                <text x="-95" y="40" class="tooltip-label acc-label">Avg Acc:</text>
-                <text x="95" y="40" text-anchor="end" class="tooltip-value acc-label">{tooltipData.avgAcc.toFixed(3)}%</text>
+                <text x="-105" y="46" class="tooltip-label acc-label">Avg Acc:</text>
+                <text x="105" y="46" text-anchor="end" class="tooltip-value acc-label">{tooltipData.avgAcc.toFixed(3)}%</text>
               {/if}
             </g>
           {/if}
