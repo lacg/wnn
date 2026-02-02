@@ -4,6 +4,13 @@
   import type { Flow } from '$lib/types';
   import { formatDate } from '$lib/dateFormat';
 
+  // Helper: get experiments count safely (handles {} stored instead of [])
+  function getExperimentsCount(flow: Flow): number {
+    const exps = flow?.config?.experiments;
+    if (Array.isArray(exps)) return exps.length;
+    return 0;
+  }
+
   let loading = true;
   let error: string | null = null;
   let deleting: number | null = null;
@@ -98,7 +105,7 @@
           <div class="flow-meta">
             <div class="meta-item">
               <span class="meta-label">Experiments</span>
-              <span class="meta-value">{(flow.config.experiments || []).length}</span>
+              <span class="meta-value">{getExperimentsCount(flow)}</span>
             </div>
             {#if flow.config.template}
               <div class="meta-item">

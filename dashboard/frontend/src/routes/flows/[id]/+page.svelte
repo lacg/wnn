@@ -5,6 +5,18 @@
   import { formatDate } from '$lib/dateFormat';
   import { currentFlow, flows } from '$lib/stores';
 
+  // Helper: ensure value is always an array (handles {} being stored instead of [])
+  function ensureArray<T>(val: unknown): T[] {
+    if (Array.isArray(val)) return val;
+    return [];
+  }
+
+  // Helper: get experiments from flow config safely
+  function getFlowExperiments(f: Flow | null): Array<{ name: string; experiment_type: string; optimize_bits?: boolean; optimize_neurons?: boolean; optimize_connections?: boolean; params?: Record<string, unknown> }> {
+    if (!f?.config?.experiments) return [];
+    return ensureArray(f.config.experiments);
+  }
+
   let flow: Flow | null = null;
 
   // Subscribe to flow updates from WebSocket
@@ -221,7 +233,7 @@
     if (flow.status !== 'running') return false;
 
     // For running flows, check if this phase has started
-    const experiments = flow.config.experiments || [];
+    const experiments = getFlowExperiments(flow);
     const exp = experiments[index];
     if (!exp) return false;
     const status = getExpStatus(exp, index);
@@ -230,7 +242,7 @@
 
   function startEditExperiment(index: number) {
     if (!flow || !canEditExperiment(index)) return;
-    const experiments = flow.config.experiments || [];
+    const experiments = getFlowExperiments(flow);
     const exp = experiments[index];
     if (!exp) return;
     editingExpIndex = index;
@@ -254,7 +266,7 @@
 
     try {
       // Update the experiment in the config
-      const currentExperiments = flow.config.experiments || [];
+      const currentExperiments = getFlowExperiments(flow);
       const updatedExperiments = [...currentExperiments];
       updatedExperiments[editingExpIndex] = {
         ...updatedExperiments[editingExpIndex],
@@ -286,7 +298,7 @@
 
   async function deleteExperiment(index: number) {
     if (!flow || !canEditExperiment(index)) return;
-    const experiments = flow.config.experiments || [];
+    const experiments = getFlowExperiments(flow);
     if (!confirm(`Delete "${experiments[index]?.name || 'Experiment'}"? This cannot be undone.`)) return;
 
     saving = true;
@@ -318,7 +330,7 @@
     saving = true;
 
     try {
-      const currentExperiments = flow.config.experiments || [];
+      const currentExperiments = getFlowExperiments(flow);
       const updatedExperiments = [
         ...currentExperiments,
         {
@@ -557,7 +569,7 @@
 
   async function restartFromExperiment(index: number) {
     if (!flow) return;
-    const experiments = flow.config.experiments || [];
+    const experiments = getFlowExperiments(flow);
     const expName = experiments[index]?.name || `Experiment ${index + 1}`;
     const msg = flow.status === 'running'
       ? `Stop current experiment and restart from "${expName}"? The current experiment will be cancelled and earlier experiments will be skipped.`
@@ -706,7 +718,9 @@
 
   // Get the link URL for an experiment box
   function getExperimentLink(index: number): string | null {
-    const status = getExpStatus(flow!.config.experiments![index], index);
+    const experiments = getFlowExperiments(flow);
+    if (!experiments[index]) return null;
+    const status = getExpStatus(experiments[index], index);
 
     if (status === 'running') {
       // Running experiments link to live dashboard
@@ -1044,7 +1058,7 @@
 
     <section class="section">
       <div class="section-header">
-        <h2>Experiments ({(flow.config.experiments || []).length})</h2>
+        <h2>Experiments ({(getFlowExperiments(flow)).length})</h2>
         {#if flow.status === 'pending' || flow.status === 'running' || flow.status === 'failed'}
           <button class="btn btn-sm btn-secondary" on:click={() => showAddPhase = true}>
             + Add Phase
@@ -1102,7 +1116,7 @@
       {/if}
 
       <div class="experiments-list">
-        {#each (flow.config.experiments || []) as exp, i}
+        {#each (getFlowExperiments(flow)) as exp, i}
           {@const status = getExpStatus(exp, i)}
           {@const metrics = getExpMetrics(exp, i)}
           {@const isRunning = isRunningExperiment(exp, i)}
