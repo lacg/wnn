@@ -685,6 +685,40 @@
     if (acc === null) return '-';
     return `${(acc * 100).toFixed(2)}%`;
   }
+
+  // Get the actual experiment ID from the config spec index
+  // This maps from the flow config experiment spec to the actual Experiment record in DB
+  function getExperimentId(index: number): number | null {
+    // Find the phase for this config spec
+    const expSpec = flow?.config.experiments?.[index];
+    if (!expSpec) return null;
+
+    const phase = findPhase(expSpec, index);
+    if (phase) {
+      // The phase has experiment_id
+      return phase.experiment_id;
+    }
+
+    // Fallback: try to match by sequence order
+    const exp = experiments.find(e => e.sequence_order === index);
+    return exp?.id ?? null;
+  }
+
+  // Get the link URL for an experiment box
+  function getExperimentLink(index: number): string | null {
+    const status = getExpStatus(flow!.config.experiments![index], index);
+
+    if (status === 'running') {
+      // Running experiments link to live dashboard
+      return '/';
+    } else if (status === 'completed') {
+      // Completed experiments link to experiment detail page
+      const expId = getExperimentId(index);
+      return expId ? `/?experiment=${expId}` : null;
+    }
+    // Pending experiments are not clickable
+    return null;
+  }
 </script>
 
 <div class="container">
@@ -1074,6 +1108,7 @@
           {@const isRunning = isRunningExperiment(exp, i)}
           {@const canEdit = canEditExperiment(i)}
           {@const isEditing = editingExpIndex === i}
+          {@const expLink = getExperimentLink(i)}
 
           {#if isEditing && editingExp}
             <div class="experiment-item editing">
@@ -1125,72 +1160,121 @@
               </div>
             </div>
           {:else}
-            <div class="experiment-item" class:running={isRunning} class:completed={status === 'completed'}>
-              <div class="exp-order" class:order-completed={status === 'completed'} class:order-running={isRunning}>
-                {#if status === 'completed'}
-                  <span class="checkmark">✓</span>
-                {:else}
-                  {i + 1}
-                {/if}
-              </div>
-              <div class="exp-content">
-                <div class="exp-header">
-                  <div class="exp-name">{exp.name}</div>
-                  <span class="status-indicator" class:status-completed={status === 'completed'} class:status-running={isRunning} class:status-pending={status === 'pending'}>
-                    {status}
-                  </span>
-                </div>
-                <div class="exp-meta">
-                  <span class="exp-type">{exp.experiment_type.toUpperCase()}</span>
-                  {#if exp.optimize_bits}
-                    <span class="exp-tag">Bits</span>
-                  {/if}
-                  {#if exp.optimize_neurons}
-                    <span class="exp-tag">Neurons</span>
-                  {/if}
-                  {#if exp.optimize_connections}
-                    <span class="exp-tag">Connections</span>
+            {#if expLink}
+              <a href={expLink} class="experiment-item-link" class:running={isRunning} class:completed={status === 'completed'}>
+                <div class="exp-order" class:order-completed={status === 'completed'} class:order-running={isRunning}>
+                  {#if status === 'completed'}
+                    <span class="checkmark">✓</span>
+                  {:else}
+                    {i + 1}
                   {/if}
                 </div>
-                {#if metrics}
-                  <div class="exp-metrics">
-                    <span class="metric">
-                      <span class="metric-label">CE:</span>
-                      <span class="metric-value">{formatCE(metrics.ce)}</span>
+                <div class="exp-content">
+                  <div class="exp-header">
+                    <div class="exp-name">{exp.name}</div>
+                    <span class="status-indicator" class:status-completed={status === 'completed'} class:status-running={isRunning} class:status-pending={status === 'pending'}>
+                      {status}
                     </span>
-                    <span class="metric">
-                      <span class="metric-label">Acc:</span>
-                      <span class="metric-value">{formatAccuracy(metrics.acc)}</span>
+                    {#if isRunning}
+                      <span class="live-indicator">
+                        <span class="pulse"></span>
+                        Live
+                      </span>
+                    {/if}
+                  </div>
+                  <div class="exp-meta">
+                    <span class="exp-type">{exp.experiment_type.toUpperCase()}</span>
+                    {#if exp.optimize_bits}
+                      <span class="exp-tag">Bits</span>
+                    {/if}
+                    {#if exp.optimize_neurons}
+                      <span class="exp-tag">Neurons</span>
+                    {/if}
+                    {#if exp.optimize_connections}
+                      <span class="exp-tag">Connections</span>
+                    {/if}
+                  </div>
+                  {#if metrics}
+                    <div class="exp-metrics">
+                      <span class="metric">
+                        <span class="metric-label">CE:</span>
+                        <span class="metric-value">{formatCE(metrics.ce)}</span>
+                      </span>
+                      <span class="metric">
+                        <span class="metric-label">Acc:</span>
+                        <span class="metric-value">{formatAccuracy(metrics.acc)}</span>
+                      </span>
+                    </div>
+                  {/if}
+                </div>
+                <div class="exp-actions">
+                  {#if status === 'completed' && (flow.status === 'running' || flow.status === 'failed' || flow.status === 'cancelled' || flow.status === 'completed')}
+                    <button class="btn btn-sm btn-secondary" title="Restart from this experiment" on:click|stopPropagation|preventDefault={() => restartFromExperiment(i)}>
+                      Restart from here
+                    </button>
+                  {/if}
+                  <span class="view-arrow">→</span>
+                </div>
+              </a>
+            {:else}
+              <div class="experiment-item" class:running={isRunning} class:completed={status === 'completed'}>
+                <div class="exp-order" class:order-completed={status === 'completed'} class:order-running={isRunning}>
+                  {#if status === 'completed'}
+                    <span class="checkmark">✓</span>
+                  {:else}
+                    {i + 1}
+                  {/if}
+                </div>
+                <div class="exp-content">
+                  <div class="exp-header">
+                    <div class="exp-name">{exp.name}</div>
+                    <span class="status-indicator" class:status-completed={status === 'completed'} class:status-running={isRunning} class:status-pending={status === 'pending'}>
+                      {status}
                     </span>
                   </div>
-                {/if}
+                  <div class="exp-meta">
+                    <span class="exp-type">{exp.experiment_type.toUpperCase()}</span>
+                    {#if exp.optimize_bits}
+                      <span class="exp-tag">Bits</span>
+                    {/if}
+                    {#if exp.optimize_neurons}
+                      <span class="exp-tag">Neurons</span>
+                    {/if}
+                    {#if exp.optimize_connections}
+                      <span class="exp-tag">Connections</span>
+                    {/if}
+                  </div>
+                  {#if metrics}
+                    <div class="exp-metrics">
+                      <span class="metric">
+                        <span class="metric-label">CE:</span>
+                        <span class="metric-value">{formatCE(metrics.ce)}</span>
+                      </span>
+                      <span class="metric">
+                        <span class="metric-label">Acc:</span>
+                        <span class="metric-value">{formatAccuracy(metrics.acc)}</span>
+                      </span>
+                    </div>
+                  {/if}
+                </div>
+                <div class="exp-actions">
+                  {#if canEdit}
+                    <button class="btn-icon" title="Edit" on:click={() => startEditExperiment(i)}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                      </svg>
+                    </button>
+                    <button class="btn-icon btn-danger" title="Delete" on:click={() => deleteExperiment(i)}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="3 6 5 6 21 6"></polyline>
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                      </svg>
+                    </button>
+                  {/if}
+                </div>
               </div>
-              <div class="exp-actions">
-                {#if isRunning}
-                  <a href="/" class="live-btn" title="View live dashboard">
-                    <span class="pulse"></span>
-                    Live
-                  </a>
-                {:else if canEdit}
-                  <button class="btn-icon" title="Edit" on:click={() => startEditExperiment(i)}>
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-                      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-                    </svg>
-                  </button>
-                  <button class="btn-icon btn-danger" title="Delete" on:click={() => deleteExperiment(i)}>
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <polyline points="3 6 5 6 21 6"></polyline>
-                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                    </svg>
-                  </button>
-                {:else if status === 'completed' && (flow.status === 'running' || flow.status === 'failed' || flow.status === 'cancelled' || flow.status === 'completed')}
-                  <button class="btn btn-sm btn-secondary" title="Restart from this experiment" on:click={() => restartFromExperiment(i)}>
-                    Restart from here
-                  </button>
-                {/if}
-              </div>
-            </div>
+            {/if}
           {/if}
         {/each}
       </div>
@@ -1597,7 +1681,8 @@
     gap: 0.5rem;
   }
 
-  .experiment-item {
+  .experiment-item,
+  .experiment-item-link {
     display: flex;
     align-items: center;
     gap: 1rem;
@@ -1605,6 +1690,48 @@
     border: 1px solid var(--border);
     border-radius: 6px;
     padding: 0.75rem 1rem;
+  }
+
+  .experiment-item-link {
+    text-decoration: none;
+    color: inherit;
+    cursor: pointer;
+    transition: border-color 0.15s, background-color 0.15s;
+  }
+
+  .experiment-item-link:hover {
+    border-color: var(--accent-blue);
+    background: rgba(59, 130, 246, 0.05);
+  }
+
+  .experiment-item-link.completed:hover {
+    border-color: var(--accent-green);
+    background: rgba(34, 197, 94, 0.05);
+  }
+
+  .live-indicator {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-size: 0.675rem;
+    font-weight: 600;
+    color: var(--accent-blue);
+    text-transform: uppercase;
+  }
+
+  .view-arrow {
+    font-size: 1.25rem;
+    color: var(--text-tertiary);
+    transition: transform 0.15s, color 0.15s;
+  }
+
+  .experiment-item-link:hover .view-arrow {
+    transform: translateX(3px);
+    color: var(--accent-blue);
+  }
+
+  .experiment-item-link.completed:hover .view-arrow {
+    color: var(--accent-green);
   }
 
   .exp-order {
