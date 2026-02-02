@@ -640,7 +640,7 @@
   .back-link {
     color: var(--text-secondary);
     text-decoration: none;
-    font-size: 0.875rem;
+    font-size: 1rem;
   }
 
   .back-link:hover {
@@ -655,7 +655,7 @@
   }
 
   .status-badge {
-    font-size: 0.75rem;
+    font-size: 1rem;
     padding: 0.25rem 0.5rem;
     border-radius: 0.25rem;
     color: white;
@@ -673,8 +673,8 @@
   }
 
   .flow-progress-label {
-    font-size: 0.75rem;
-    color: var(--text-tertiary);
+    font-size: 1rem;
+    color: var(--text-secondary);
     text-transform: uppercase;
     margin-bottom: 0.5rem;
   }
@@ -696,7 +696,7 @@
     align-items: center;
     padding: 0.375rem 0.75rem;
     border-radius: 0.375rem;
-    font-size: 0.75rem;
+    font-size: 1rem;
     text-decoration: none;
     min-width: 5rem;
     text-align: center;
@@ -713,16 +713,16 @@
 
   .step-number {
     font-weight: 600;
-    font-size: 0.875rem;
+    font-size: 1rem;
   }
 
   .step-name {
-    font-size: 0.625rem;
+    font-size: 1rem;
     color: var(--text-secondary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 6rem;
+    max-width: 8rem;
   }
 
   .step-completed {
@@ -791,8 +791,8 @@
   }
 
   .info-label {
-    font-size: 0.75rem;
-    color: var(--text-tertiary);
+    font-size: 1rem;
+    color: var(--text-primary);
     text-transform: uppercase;
   }
 
@@ -808,7 +808,7 @@
   }
 
   .info-delta {
-    font-size: 0.75rem;
+    font-size: 1rem;
     font-family: monospace;
   }
 
@@ -821,8 +821,8 @@
   }
 
   .info-subvalue {
-    font-size: 0.75rem;
-    color: var(--text-secondary);
+    font-size: 1rem;
+    color: var(--text-primary);
     font-family: monospace;
   }
 
@@ -848,8 +848,8 @@
   }
 
   .count {
-    font-size: 0.875rem;
-    color: var(--text-secondary);
+    font-size: 1rem;
+    color: var(--text-primary);
   }
 
   /* Chart */
@@ -962,9 +962,9 @@
   }
 
   th {
-    font-size: 0.6875rem;
+    font-size: 1rem;
     font-weight: 600;
-    color: var(--text-tertiary);
+    color: var(--text-secondary);
     text-transform: uppercase;
     background: var(--bg-tertiary);
     position: sticky;
@@ -973,7 +973,7 @@
   }
 
   td {
-    font-size: 0.8125rem;
+    font-size: 1rem;
     font-family: monospace;
   }
 
@@ -1009,7 +1009,7 @@
 
   .view-link {
     color: var(--accent-blue);
-    font-size: 0.6875rem;
+    font-size: 1rem;
     opacity: 0.7;
   }
 
@@ -1117,8 +1117,8 @@
   }
 
   .summary-item .label {
-    font-size: 0.75rem;
-    color: var(--text-secondary);
+    font-size: 1rem;
+    color: var(--text-primary);
     text-transform: uppercase;
   }
 
@@ -1138,12 +1138,12 @@
   .genome-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 0.875rem;
+    font-size: 1rem;
   }
 
   .genome-table th {
     background: var(--bg-card);
-    font-size: 0.75rem;
+    font-size: 1rem;
     position: sticky;
     top: 0;
   }
@@ -1159,7 +1159,7 @@
   .more-hint {
     text-align: center;
     padding: 0.5rem;
-    font-size: 0.75rem;
-    color: var(--text-tertiary);
+    font-size: 1rem;
+    color: var(--text-secondary);
   }
 </style>
