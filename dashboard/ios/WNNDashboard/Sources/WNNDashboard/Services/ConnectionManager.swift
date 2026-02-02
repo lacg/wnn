@@ -48,11 +48,18 @@ public final class ConnectionManager: ObservableObject {
         case .local: await tryConnect(mode: .local)
         case .remote: await tryConnect(mode: .remote)
         case .auto:
-            if settings.isConfigured(mode: .local) && await testConnection(mode: .local) {
-                activeMode = .local; connectionState = .connected; lastError = nil
-            } else if settings.isConfigured(mode: .remote) && await testConnection(mode: .remote) {
-                activeMode = .remote; connectionState = .connected; lastError = nil
-            } else {
+            var connected = false
+            if settings.isConfigured(mode: .local) {
+                if await testConnection(mode: .local) {
+                    activeMode = .local; connectionState = .connected; lastError = nil; connected = true
+                }
+            }
+            if !connected && settings.isConfigured(mode: .remote) {
+                if await testConnection(mode: .remote) {
+                    activeMode = .remote; connectionState = .connected; lastError = nil; connected = true
+                }
+            }
+            if !connected {
                 connectionState = .disconnected; lastError = "Could not connect to server"
             }
         }

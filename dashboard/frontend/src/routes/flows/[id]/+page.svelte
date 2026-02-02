@@ -1360,7 +1360,7 @@
               </div>
             </div>
             <div class="results-footer">
-              <a href="/" class="btn btn-secondary">View Live Dashboard</a>
+              <a href="/" class="btn btn-secondary">View Iterations</a>
               <a href="/checkpoints" class="btn btn-secondary">View All Checkpoints</a>
             </div>
           </div>

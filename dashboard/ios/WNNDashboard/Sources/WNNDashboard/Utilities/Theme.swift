@@ -1,6 +1,9 @@
 // Theme - colors and styling
 
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 public enum Theme {
     public static func statusColor(_ status: FlowStatus) -> Color {
@@ -50,7 +53,11 @@ public enum Theme {
     public static let ceLineColor = Color.blue
     public static let accuracyLineColor = Color.green
     public static let bestPointColor = Color.yellow
-    public static let cardBackground = Color(.systemGray6)
+    #if canImport(UIKit)
+    public static let cardBackground = Color(uiColor: UIColor.systemGray6)
+    #else
+    public static let cardBackground = Color.gray.opacity(0.1)
+    #endif
 }
 
 public struct StatusBadge: View {

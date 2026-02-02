@@ -11,10 +11,13 @@ public final class DashboardViewModel: ObservableObject {
     @Published public var selectedIteration: Iteration?
     @Published public var selectedIterationGenomes: [GenomeEvaluation] = []
     @Published public private(set) var historyIterations: [Iteration] = []
+    @Published public private(set) var recentExperiments: [Experiment] = []
+    @Published public var selectedHistoryExperiment: Experiment?
+    @Published public private(set) var historyPhases: [Phase] = []
 
     public var currentExperiment: Experiment? { snapshot.current_experiment }
     public var currentPhase: Phase? { snapshot.current_phase }
-    public var phases: [Phase] { snapshot.phases }
+    public var phases: [Phase] { selectedHistoryExperiment != nil ? historyPhases : snapshot.phases }
     public var iterations: [Iteration] { snapshot.iterations }
     public var bestCE: Double { snapshot.best_ce }
     public var bestAccuracy: Double { snapshot.best_accuracy }
@@ -62,5 +65,46 @@ public final class DashboardViewModel: ObservableObject {
             historyIterations = []
             self.error = error.localizedDescription
         }
+    }
+
+    public func loadRecentExperiments() async {
+        do {
+            let all = try await apiClient.getExperiments()
+            recentExperiments = all
+                .filter { $0.status == .completed || $0.status == .failed }
+                .prefix(10)
+                .map { $0 }
+        } catch {
+            recentExperiments = []
+        }
+    }
+
+    public func selectHistoryExperiment(_ exp: Experiment) async {
+        if selectedHistoryExperiment?.id == exp.id {
+            // Toggle off
+            clearHistoryExperiment()
+            return
+        }
+
+        selectedHistoryExperiment = exp
+
+        do {
+            // Load phases and iterations for this experiment
+            async let phasesTask = apiClient.getPhases(experimentId: exp.id)
+            async let iterationsTask = apiClient.getIterations(experimentId: exp.id)
+
+            historyPhases = try await phasesTask.sorted { $0.sequence_order < $1.sequence_order }
+            historyIterations = try await iterationsTask.sorted { $0.iteration_num < $1.iteration_num }
+        } catch {
+            historyPhases = []
+            historyIterations = []
+            self.error = error.localizedDescription
+        }
+    }
+
+    public func clearHistoryExperiment() {
+        selectedHistoryExperiment = nil
+        historyPhases = []
+        historyIterations = []
     }
 }

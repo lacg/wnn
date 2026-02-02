@@ -37,7 +37,7 @@ public struct NewFlowView: View {
                     Stepper("Population: \(population)", value: $population, in: 10...200, step: 10)
                 }
                 Section("Tier Configuration") {
-                    TextField("Tier Config", text: $tierConfig).fontDesign(.monospaced).autocapitalization(.none)
+                    TextField("Tier Config", text: $tierConfig).fontDesign(.monospaced).textInputAutocapitalization(.never)
                     Toggle("Tier 0 Only", isOn: $tier0Only)
                     Text("Format: clusters,neurons,bits;...").font(.caption).foregroundColor(.secondary)
                 }

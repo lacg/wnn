@@ -1,4 +1,4 @@
-// DashboardView - Main live monitoring screen
+// DashboardView - Main iterations monitoring screen
 
 import SwiftUI
 import Charts
@@ -16,16 +16,17 @@ public struct DashboardView: View {
                 VStack(spacing: 16) {
                     headerSection
                     metricsSection
-                    if viewModel.isRunning && selectedHistoryPhase == nil { progressSection }
+                    if viewModel.isRunning && selectedHistoryPhase == nil && viewModel.selectedHistoryExperiment == nil { progressSection }
                     if !viewModel.iterations.isEmpty || !viewModel.historyIterations.isEmpty { chartSection }
                     if !viewModel.phases.isEmpty { phaseTimelineSection }
-                    if !viewModel.iterations.isEmpty { iterationsSection }
+                    if !viewModel.iterations.isEmpty || !viewModel.historyIterations.isEmpty { iterationsSection }
                 }
                 .padding()
             }
-            .navigationTitle("Dashboard")
+            .navigationTitle("Iterations")
             .toolbar { ToolbarItem(placement: .navigationBarTrailing) { connectionIndicator } }
             .refreshable { await viewModel.refresh() }
+            .task { await viewModel.loadRecentExperiments() }
             .sheet(item: $viewModel.selectedIteration) { iter in
                 IterationDetailSheet(iteration: iter, genomes: viewModel.selectedIterationGenomes)
             }
@@ -35,6 +36,7 @@ public struct DashboardView: View {
     private var headerSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let exp = viewModel.currentExperiment {
+                // Running experiment
                 HStack {
                     Text(exp.name).font(.headline)
                     Spacer()
@@ -47,13 +49,66 @@ public struct DashboardView: View {
                         Text("Iteration \(phase.current_iteration)/\(phase.max_iterations)").font(.caption).foregroundColor(.secondary)
                     }
                 }
+            } else if let histExp = viewModel.selectedHistoryExperiment {
+                // Viewing historical experiment
+                HStack {
+                    Text("History").font(.caption).fontWeight(.medium).foregroundColor(.orange).textCase(.uppercase)
+                    Text("›").foregroundColor(.secondary)
+                    Text(histExp.name).font(.headline)
+                    Spacer()
+                    Button { viewModel.clearHistoryExperiment() } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.secondary)
+                    }
+                }
             } else {
-                Text("No experiment running").font(.headline).foregroundColor(.secondary)
+                // No experiment running - show selection
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Image(systemName: "pause.circle").foregroundColor(.secondary)
+                        Text("No experiment running").font(.headline).foregroundColor(.secondary)
+                    }
+
+                    if !viewModel.recentExperiments.isEmpty {
+                        Text("View completed experiments:").font(.caption).foregroundColor(.secondary)
+                        experimentChipsView
+                    }
+                }
             }
         }
         .padding()
-        .background(Theme.cardBackground)
+        .background(viewModel.selectedHistoryExperiment != nil ? Color.orange.opacity(0.1) : Theme.cardBackground)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(viewModel.selectedHistoryExperiment != nil ? Color.orange.opacity(0.3) : Color.clear, lineWidth: 1)
+        )
         .cornerRadius(12)
+    }
+
+    private var experimentChipsView: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(viewModel.recentExperiments) { exp in
+                    Button {
+                        Task { await viewModel.selectHistoryExperiment(exp) }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(exp.name)
+                                .lineLimit(1)
+                                .font(.caption)
+                            Image(systemName: exp.status == .completed ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                .font(.caption2)
+                                .foregroundColor(exp.status == .completed ? .green : .red)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.secondary.opacity(0.15))
+                        .cornerRadius(16)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
     }
 
     private var metricsSection: some View {
@@ -70,10 +125,19 @@ public struct DashboardView: View {
     }
 
     private var chartSection: some View {
-        let iterations = selectedHistoryPhase != nil ? viewModel.historyIterations : viewModel.iterations
-        let title = selectedHistoryPhase != nil
-            ? "Phase \(selectedHistoryPhase!.shortName) History"
-            : "Best So Far"
+        let iterations: [Iteration]
+        let title: String
+
+        if let histPhase = selectedHistoryPhase {
+            iterations = viewModel.historyIterations
+            title = "Phase \(histPhase.shortName) History"
+        } else if let histExp = viewModel.selectedHistoryExperiment {
+            iterations = viewModel.historyIterations
+            title = histExp.name
+        } else {
+            iterations = viewModel.iterations
+            title = "Best So Far"
+        }
 
         return DualAxisChartView(iterations: iterations, title: title)
             .frame(height: 280)
@@ -94,9 +158,18 @@ public struct DashboardView: View {
     }
 
     private var iterationsSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Recent Iterations").font(.headline).padding(.horizontal)
-            IterationsListView(iterations: Array(viewModel.iterations.prefix(20))) { iter in
+        let iters = (selectedHistoryPhase != nil || viewModel.selectedHistoryExperiment != nil)
+            ? viewModel.historyIterations
+            : viewModel.iterations
+        let title = selectedHistoryPhase != nil
+            ? "Phase Iterations"
+            : viewModel.selectedHistoryExperiment != nil
+            ? "Experiment Iterations"
+            : "Recent Iterations"
+
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.headline).padding(.horizontal)
+            IterationsListView(iterations: Array(iters.prefix(50))) { iter in
                 Task { await viewModel.loadGenomes(for: iter) }
             }
         }

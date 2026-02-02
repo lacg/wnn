@@ -17,7 +17,7 @@
     <div class="header-left">
       <a href="/" class="logo">WNN Dashboard</a>
       <nav class="nav">
-        <a href="/" class="nav-link">Live</a>
+        <a href="/" class="nav-link">Iterations</a>
         <a href="/flows" class="nav-link">Flows</a>
         <a href="/checkpoints" class="nav-link">Checkpoints</a>
         <a href="/experiments" class="nav-link">History</a>

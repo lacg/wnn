@@ -47,7 +47,7 @@
 
 <div class="container">
   <div class="page-header">
-    <a href="/" class="back-link">&larr; Dashboard</a>
+    <a href="/" class="back-link">&larr; Iterations</a>
     <h1>Settings</h1>
   </div>
 

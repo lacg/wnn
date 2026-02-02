@@ -14,7 +14,7 @@ public struct ContentView: View {
         TabView(selection: $selectedTab) {
             DashboardView()
                 .tabItem {
-                    Label("Dashboard", systemImage: "chart.line.uptrend.xyaxis")
+                    Label("Iterations", systemImage: "chart.line.uptrend.xyaxis")
                 }
                 .tag(0)
 
