@@ -1026,6 +1026,105 @@ pub mod queries {
         Ok(experiments)
     }
 
+    /// Link an experiment to a flow
+    pub async fn link_experiment_to_flow(
+        pool: &DbPool,
+        flow_id: i64,
+        experiment_id: i64,
+        sequence_order: i32,
+    ) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE experiments SET flow_id = ?, sequence_order = ? WHERE id = ?",
+        )
+        .bind(flow_id)
+        .bind(sequence_order)
+        .bind(experiment_id)
+        .execute(pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Create a new phase for an experiment
+    pub async fn create_phase(
+        pool: &DbPool,
+        experiment_id: i64,
+        name: &str,
+        phase_type: &str,
+        sequence_order: Option<i32>,
+        max_iterations: Option<i32>,
+        population_size: Option<i32>,
+    ) -> Result<i64> {
+        let now = Utc::now().to_rfc3339();
+
+        // If sequence_order not provided, get next sequence number
+        let seq_order = match sequence_order {
+            Some(s) => s,
+            None => {
+                let row = sqlx::query(
+                    "SELECT COALESCE(MAX(sequence_order), -1) + 1 as next_seq FROM phases WHERE experiment_id = ?",
+                )
+                .bind(experiment_id)
+                .fetch_one(pool)
+                .await?;
+                row.get::<i32, _>("next_seq")
+            }
+        };
+
+        let result = sqlx::query(
+            r#"INSERT INTO phases (
+                experiment_id, name, phase_type, sequence_order, status,
+                max_iterations, population_size, current_iteration, created_at, started_at
+            ) VALUES (?, ?, ?, ?, 'running', ?, ?, 0, ?, ?)"#,
+        )
+        .bind(experiment_id)
+        .bind(name)
+        .bind(phase_type)
+        .bind(seq_order)
+        .bind(max_iterations.unwrap_or(250))
+        .bind(population_size)
+        .bind(&now)
+        .bind(&now)
+        .execute(pool)
+        .await?;
+
+        Ok(result.last_insert_rowid())
+    }
+
+    /// Update phase status
+    pub async fn update_phase(
+        pool: &DbPool,
+        phase_id: i64,
+        status: Option<&str>,
+        ended_at: Option<&str>,
+    ) -> Result<bool> {
+        let mut updates = Vec::new();
+        let mut binds: Vec<String> = Vec::new();
+
+        if let Some(s) = status {
+            updates.push("status = ?");
+            binds.push(s.to_string());
+        }
+        if let Some(e) = ended_at {
+            updates.push("ended_at = ?");
+            binds.push(e.to_string());
+        }
+
+        if updates.is_empty() {
+            return Ok(false);
+        }
+
+        let query = format!("UPDATE phases SET {} WHERE id = ?", updates.join(", "));
+        let mut q = sqlx::query(&query);
+        for b in &binds {
+            q = q.bind(b);
+        }
+        q = q.bind(phase_id);
+
+        let result = q.execute(pool).await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     /// Get phases for an experiment
     pub async fn get_experiment_phases(pool: &DbPool, experiment_id: i64) -> Result<Vec<Phase>> {
         let rows = sqlx::query(
