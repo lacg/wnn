@@ -865,7 +865,7 @@
   .chart-legend {
     display: flex;
     gap: 1rem;
-    font-size: 0.75rem;
+    font-size: 1rem;
   }
 
   .legend-item {
@@ -902,7 +902,7 @@
   }
 
   .axis-label {
-    font-size: 0.75rem;
+    font-size: 1rem;
     fill: var(--text-secondary);
   }
 
@@ -919,7 +919,7 @@
   }
 
   .best-label {
-    font-size: 0.75rem;
+    font-size: 1rem;
     font-weight: 600;
   }
 
@@ -928,18 +928,18 @@
   }
 
   .tooltip-title {
-    font-size: 0.75rem;
+    font-size: 1rem;
     font-weight: 600;
     fill: var(--text-primary);
   }
 
   .tooltip-label {
-    font-size: 0.75rem;
+    font-size: 1rem;
     fill: var(--text-secondary);
   }
 
   .tooltip-value {
-    font-size: 0.75rem;
+    font-size: 1rem;
     font-family: monospace;
     font-weight: 600;
   }
