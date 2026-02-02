@@ -42,9 +42,9 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    // Initialize database
+    // Initialize database (standard location: db/wnn.db relative to project root)
     let db_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "sqlite:dashboard.db?mode=rwc".into());
+        .unwrap_or_else(|_| "sqlite:../db/wnn.db?mode=rwc".into());
     let db = db::init_db(&db_url).await?;
 
     // WebSocket broadcast channel (for flow status changes)

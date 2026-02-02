@@ -64,9 +64,9 @@ class FlowWorker:
         self.client = DashboardClient(config, logger=self._log)
 
         # V2 Tracker for direct database writes (same db as dashboard)
-        # Default to dashboard/dashboard.db relative to working directory
+        # Standard location: db/wnn.db relative to project root
         if db_path is None:
-            db_path = str(Path("dashboard/dashboard.db").absolute())
+            db_path = str(Path("db/wnn.db").absolute())
         self.tracker: Optional[ExperimentTracker] = create_tracker(db_path=db_path, logger=self._log)
 
         # Setup signal handlers for graceful shutdown
