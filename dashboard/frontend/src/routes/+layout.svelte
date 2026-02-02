@@ -15,12 +15,11 @@
 <header class="header">
   <div class="container header-content">
     <div class="header-left">
-      <a href="/" class="logo">WNN Dashboard</a>
+      <a href="/flows" class="logo">WNN Dashboard</a>
       <nav class="nav">
-        <a href="/" class="nav-link">Iterations</a>
         <a href="/flows" class="nav-link">Flows</a>
-        <a href="/checkpoints" class="nav-link">Checkpoints</a>
         <a href="/experiments" class="nav-link">History</a>
+        <a href="/checkpoints" class="nav-link">Checkpoints</a>
       </nav>
     </div>
     <div class="header-right">
