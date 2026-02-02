@@ -125,6 +125,18 @@
     return `${hours}h ${mins}m`;
   }
 
+  function formatRole(role: string): string {
+    switch (role) {
+      case 'elite': return '🏆 Elite';
+      case 'top_k': return '🏆 Top-K';
+      case 'offspring': return '📌 Offspring';
+      case 'init': return '🌱 Init';
+      case 'neighbor': return '🔗 Neighbor';
+      case 'current': return '⭐ Current';
+      default: return role;
+    }
+  }
+
   // Chart data - iterations directly from experiment
   $: displayIterations = iterations;
   $: chartData = displayIterations.map(iter => ({
@@ -283,6 +295,9 @@
       <div class="info-card">
         <span class="info-label">Duration</span>
         <span class="info-value">{formatDuration(experiment.started_at, experiment.ended_at)}</span>
+        {#if flow}
+          <span class="info-subvalue">Flow: {formatDuration(flow.started_at, flow.completed_at)}</span>
+        {/if}
       </div>
     </div>
 
@@ -563,7 +578,7 @@
                       <td>#{genome.elite_rank !== null ? genome.elite_rank + 1 : genome.position + 1}</td>
                       <td class:best={genome.ce === selectedIteration.best_ce}>{formatCE(genome.ce)}</td>
                       <td>{formatAcc(genome.accuracy)}</td>
-                      <td>{genome.role}</td>
+                      <td>{formatRole(genome.role)}</td>
                     </tr>
                   {/each}
                 </tbody>
@@ -589,7 +604,7 @@
                       <td>{idx + 1}</td>
                       <td>{formatCE(genome.ce)}</td>
                       <td>{formatAcc(genome.accuracy)}</td>
-                      <td>{genome.role}</td>
+                      <td>{formatRole(genome.role)}</td>
                     </tr>
                   {/each}
                 </tbody>
@@ -745,8 +760,12 @@
   }
 
   .step-pending {
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border);
+    background: rgba(128, 128, 128, 0.2);
+    border: 1px dashed var(--text-tertiary);
+    color: var(--text-secondary);
+  }
+
+  .step-pending .step-name {
     color: var(--text-tertiary);
   }
 
