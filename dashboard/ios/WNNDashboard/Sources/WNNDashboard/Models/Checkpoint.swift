@@ -5,7 +5,6 @@ import Foundation
 public struct Checkpoint: Codable, Identifiable {
     public let id: Int64
     public let experiment_id: Int64
-    public let phase_id: Int64?
     public let iteration_id: Int64?
     public let name: String
     public let file_path: String

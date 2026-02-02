@@ -4,8 +4,6 @@ import Foundation
 
 public struct DashboardSnapshot: Codable {
     public let current_experiment: Experiment?
-    public let current_phase: AnyCodable?  // Deprecated: always null in simplified model
-    public let phases: [AnyCodable]        // Deprecated: always empty in simplified model
     public let iterations: [Iteration]
     public let best_ce: Double
     public let best_accuracy: Double
@@ -13,13 +11,11 @@ public struct DashboardSnapshot: Codable {
     public var bestAccuracyPercent: Double { best_accuracy * 100 }
 
     public static var empty: DashboardSnapshot {
-        DashboardSnapshot(current_experiment: nil, current_phase: nil, phases: [], iterations: [], best_ce: 0, best_accuracy: 0)
+        DashboardSnapshot(current_experiment: nil, iterations: [], best_ce: 0, best_accuracy: 0)
     }
 
-    public init(current_experiment: Experiment?, current_phase: AnyCodable?, phases: [AnyCodable], iterations: [Iteration], best_ce: Double, best_accuracy: Double) {
+    public init(current_experiment: Experiment?, iterations: [Iteration], best_ce: Double, best_accuracy: Double) {
         self.current_experiment = current_experiment
-        self.current_phase = current_phase
-        self.phases = phases
         self.iterations = iterations
         self.best_ce = best_ce
         self.best_accuracy = best_accuracy

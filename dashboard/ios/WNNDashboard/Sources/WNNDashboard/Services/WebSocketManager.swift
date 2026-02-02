@@ -80,28 +80,15 @@ public final class WebSocketManager: ObservableObject {
         switch msg {
         case .snapshot(let s): snapshot = s
         case .iterationCompleted(let iter):
-            if var s = snapshot {
-                snapshot = DashboardSnapshot(current_experiment: s.current_experiment, current_phase: s.current_phase, phases: s.phases,
-                    iterations: [iter] + s.iterations.prefix(99), best_ce: min(s.best_ce, iter.best_ce),
+            if let s = snapshot {
+                snapshot = DashboardSnapshot(current_experiment: s.current_experiment,
+                    iterations: [iter] + Array(s.iterations.prefix(99)),
+                    best_ce: min(s.best_ce, iter.best_ce),
                     best_accuracy: max(s.best_accuracy, iter.best_accuracy ?? 0))
             }
-        case .phaseStarted(let p):
-            if var s = snapshot {
-                var phases = s.phases
-                if let i = phases.firstIndex(where: { $0.id == p.id }) { phases[i] = p } else { phases.append(p) }
-                snapshot = DashboardSnapshot(current_experiment: s.current_experiment, current_phase: p, phases: phases,
-                    iterations: s.iterations, best_ce: s.best_ce, best_accuracy: s.best_accuracy)
-            }
-        case .phaseCompleted(let p):
-            if var s = snapshot {
-                var phases = s.phases
-                if let i = phases.firstIndex(where: { $0.id == p.id }) { phases[i] = p }
-                snapshot = DashboardSnapshot(current_experiment: s.current_experiment, current_phase: s.current_phase?.id == p.id ? nil : s.current_phase,
-                    phases: phases, iterations: s.iterations, best_ce: s.best_ce, best_accuracy: s.best_accuracy)
-            }
         case .experimentStatusChanged(let e):
-            if var s = snapshot, s.current_experiment?.id == e.id {
-                snapshot = DashboardSnapshot(current_experiment: e, current_phase: s.current_phase, phases: s.phases,
+            if let s = snapshot, s.current_experiment?.id == e.id {
+                snapshot = DashboardSnapshot(current_experiment: e,
                     iterations: s.iterations, best_ce: s.best_ce, best_accuracy: s.best_accuracy)
             }
         default: break

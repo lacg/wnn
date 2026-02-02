@@ -4,8 +4,7 @@ import Foundation
 
 public struct Iteration: Codable, Identifiable {
     public let id: Int64
-    public let experiment_id: Int64?  // Primary reference (simplified model)
-    public let phase_id: Int64?       // Deprecated: kept for backward compatibility
+    public let experiment_id: Int64?
     public let iteration_num: Int32
     public let best_ce: Double
     public let best_accuracy: Double?

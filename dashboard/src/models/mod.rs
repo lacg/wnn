@@ -46,25 +46,6 @@ impl Default for ExperimentStatus {
     }
 }
 
-// PhaseStatus kept for backward compatibility during migration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum PhaseStatus {
-    Pending,
-    Running,
-    Paused,
-    Completed,
-    Skipped,
-    Failed,
-    Cancelled,
-}
-
-impl Default for PhaseStatus {
-    fn default() -> Self {
-        PhaseStatus::Pending
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum FitnessCalculator {
@@ -96,7 +77,6 @@ pub enum GenomeRole {
 pub enum CheckpointType {
     Auto,
     User,
-    PhaseEnd,
     ExperimentEnd,
 }
 
@@ -188,57 +168,18 @@ pub struct Experiment {
     pub context_size: i32,
     pub population_size: i32,
     pub pid: Option<i32>,
-    pub last_phase_id: Option<i64>,  // Deprecated, kept for compatibility
     pub last_iteration: Option<i32>,
     pub resume_checkpoint_id: Option<i64>,
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
     pub ended_at: Option<DateTime<Utc>>,
     pub paused_at: Option<DateTime<Utc>>,
-    // Fields moved from Phase for simplified model
-    pub phase_type: Option<String>,  // e.g., "ga_neurons", "ts_bits"
+    /// Experiment type (e.g., "ga_neurons", "ts_bits")
+    pub phase_type: Option<String>,
     pub max_iterations: Option<i32>,
     pub current_iteration: Option<i32>,
     pub best_ce: Option<f64>,
     pub best_accuracy: Option<f64>,
-}
-
-// =============================================================================
-// Phase Models
-// =============================================================================
-
-/// A phase within an experiment (GA-Neurons, TS-Bits, etc.)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Phase {
-    pub id: i64,
-    pub experiment_id: i64,
-    pub name: String,
-    pub phase_type: String,
-    pub sequence_order: i32,
-    pub status: PhaseStatus,
-    pub max_iterations: i32,
-    pub population_size: Option<i32>,
-    pub current_iteration: i32,
-    pub best_ce: Option<f64>,
-    pub best_accuracy: Option<f64>,
-    pub created_at: DateTime<Utc>,
-    pub started_at: Option<DateTime<Utc>>,
-    pub ended_at: Option<DateTime<Utc>>,
-    /// Validation results at end of phase (best_ce, best_acc, top_k_mean)
-    #[serde(default)]
-    pub results: Vec<PhaseResult>,
-}
-
-/// Validation result at end of a phase
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PhaseResult {
-    pub id: i64,
-    pub phase_id: i64,
-    pub metric_type: String,  // "best_ce", "best_acc", "top_k_mean"
-    pub ce: f64,
-    pub accuracy: f64,
-    pub memory_bytes: Option<i64>,
-    pub improvement_pct: f64,
 }
 
 // =============================================================================
@@ -249,8 +190,7 @@ pub struct PhaseResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Iteration {
     pub id: i64,
-    pub experiment_id: Option<i64>,  // Primary reference (new simplified model)
-    pub phase_id: Option<i64>,  // Kept for backward compatibility
+    pub experiment_id: i64,
     pub iteration_num: i32,
     pub best_ce: f64,
     pub best_accuracy: Option<f64>,
@@ -343,7 +283,6 @@ pub struct HealthCheck {
 pub struct Checkpoint {
     pub id: i64,
     pub experiment_id: i64,
-    pub phase_id: Option<i64>,
     pub iteration_id: Option<i64>,
     pub name: String,
     pub file_path: String,
@@ -368,10 +307,6 @@ pub enum WsMessage {
     IterationCompleted(Iteration),
     /// Genome evaluations for an iteration
     GenomeEvaluations { iteration_id: i64, evaluations: Vec<GenomeEvaluation> },
-    /// Phase started
-    PhaseStarted(Phase),
-    /// Phase completed
-    PhaseCompleted(Phase),
     /// Health check result
     HealthCheck(HealthCheck),
     /// Experiment status changed
@@ -391,8 +326,6 @@ pub enum WsMessage {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DashboardSnapshot {
     pub current_experiment: Option<Experiment>,
-    pub current_phase: Option<Phase>,  // Deprecated, kept for backward compatibility
-    pub phases: Vec<Phase>,  // Deprecated, kept for backward compatibility
     pub iterations: Vec<Iteration>,
     pub best_ce: f64,
     pub best_accuracy: f64,

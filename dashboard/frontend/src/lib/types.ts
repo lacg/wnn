@@ -26,7 +26,7 @@ export type GenomeRole =
   | 'neighbor'
   | 'current';
 
-export type CheckpointType = 'auto' | 'user' | 'phase_end' | 'experiment_end';
+export type CheckpointType = 'auto' | 'user' | 'experiment_end';
 
 // =============================================================================
 // Flow types
@@ -83,7 +83,7 @@ export interface Experiment {
   started_at: string | null;
   ended_at: string | null;
   paused_at: string | null;
-  // Fields moved from Phase (simplified model)
+  // Experiment type (e.g., "ga_neurons", "ts_bits")
   phase_type: string | null;
   max_iterations: number | null;
   current_iteration: number | null;
@@ -97,8 +97,7 @@ export interface Experiment {
 
 export interface Iteration {
   id: number;
-  experiment_id: number | null;  // Primary reference (simplified model)
-  phase_id: number | null;       // Deprecated: kept for backward compatibility
+  experiment_id: number;
   iteration_num: number;
   best_ce: number;
   best_accuracy: number | null;
@@ -181,7 +180,6 @@ export interface HealthCheck {
 export interface Checkpoint {
   id: number;
   experiment_id: number;
-  phase_id: number | null;
   iteration_id: number | null;
   name: string;
   file_path: string;
@@ -198,8 +196,6 @@ export interface Checkpoint {
 
 export interface DashboardSnapshot {
   current_experiment: Experiment | null;
-  current_phase: null;  // Deprecated: always null in simplified model
-  phases: [];           // Deprecated: always empty in simplified model
   iterations: Iteration[];
   best_ce: number;
   best_accuracy: number;

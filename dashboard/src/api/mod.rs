@@ -202,8 +202,6 @@ async fn get_snapshot(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
     let snapshot = DashboardSnapshot {
         current_experiment: Some(exp),
-        current_phase: None,  // Phase layer removed
-        phases: vec![],       // Phase layer removed
         iterations,
         best_ce,
         best_accuracy,
@@ -626,7 +624,6 @@ pub struct CreateCheckpointRequest {
     pub best_ce: Option<f64>,
     pub best_accuracy: Option<f64>,
     pub checkpoint_type: Option<String>,
-    pub phase_id: Option<i64>,
     pub iteration_id: Option<i64>,
 }
 
@@ -642,7 +639,6 @@ async fn create_checkpoint(
         &req.file_path,
         checkpoint_type,
         req.file_size_bytes,
-        req.phase_id,
         req.iteration_id,
         req.best_ce,
         req.best_accuracy,
@@ -927,8 +923,6 @@ async fn build_snapshot(db: &DbPool) -> DashboardSnapshot {
 
     DashboardSnapshot {
         current_experiment: Some(exp),
-        current_phase: None,  // Phase layer removed
-        phases: vec![],       // Phase layer removed
         iterations,
         best_ce,
         best_accuracy,
