@@ -237,44 +237,32 @@
     </div>
 
     <!-- Flow Progress Bar -->
-    {#if flow}
-      {@const configSpecs = flow.config?.experiments ?? []}
-      {@const allSteps = configSpecs.map((spec, idx) => {
-        const createdExp = flowExperiments.find(e => e.sequence_order === idx);
-        return {
-          idx,
-          name: spec.name,
-          status: createdExp?.status ?? 'pending',
-          id: createdExp?.id ?? null,
-          isCurrent: createdExp?.id === experiment.id
-        };
-      })}
-      {#if allSteps.length > 0}
-        <div class="flow-progress">
-          <div class="flow-progress-label">Flow Progress</div>
-          <div class="flow-progress-bar">
-            {#each allSteps as step, idx}
-              {@const isClickable = step.id && (step.status === 'completed' || step.status === 'running')}
-              <div class="flow-step" class:current={step.isCurrent}>
-                {#if isClickable && !step.isCurrent}
-                  <a href="/experiments/{step.id}" class="step-link step-{step.status}">
-                    <span class="step-number">{idx + 1}</span>
-                    <span class="step-name">{step.name.replace(/^Phase \d+[ab]: /, '')}</span>
-                  </a>
-                {:else}
-                  <div class="step-box step-{step.status}" class:step-current={step.isCurrent}>
-                    <span class="step-number">{idx + 1}</span>
-                    <span class="step-name">{step.name.replace(/^Phase \d+[ab]: /, '')}</span>
-                  </div>
-                {/if}
-              </div>
-              {#if idx < allSteps.length - 1}
-                <div class="step-connector" class:connector-done={step.status === 'completed'}></div>
+    {#if flowExperiments.length > 0}
+      <div class="flow-progress">
+        <div class="flow-progress-label">Flow Progress</div>
+        <div class="flow-progress-bar">
+          {#each flowExperiments.sort((a, b) => (a.sequence_order ?? 0) - (b.sequence_order ?? 0)) as exp, idx}
+            {@const isCurrent = exp.id === experiment.id}
+            {@const isClickable = exp.status === 'completed' || exp.status === 'running'}
+            <div class="flow-step" class:current={isCurrent}>
+              {#if isClickable && !isCurrent}
+                <a href="/experiments/{exp.id}" class="step-link step-{exp.status}">
+                  <span class="step-number">{idx + 1}</span>
+                  <span class="step-name">{exp.name.replace(/^Phase \d+[ab]: /, '')}</span>
+                </a>
+              {:else}
+                <div class="step-box step-{exp.status}" class:step-current={isCurrent}>
+                  <span class="step-number">{idx + 1}</span>
+                  <span class="step-name">{exp.name.replace(/^Phase \d+[ab]: /, '')}</span>
+                </div>
               {/if}
-            {/each}
-          </div>
+            </div>
+            {#if idx < flowExperiments.length - 1}
+              <div class="step-connector" class:connector-done={exp.status === 'completed'}></div>
+            {/if}
+          {/each}
         </div>
-      {/if}
+      </div>
     {/if}
 
     <!-- Info Cards -->
