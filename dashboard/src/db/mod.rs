@@ -639,6 +639,12 @@ pub mod queries {
                 .bind(phase_id)
                 .execute(pool)
                 .await?;
+
+            // Delete phase_results for this phase
+            sqlx::query("DELETE FROM phase_results WHERE phase_id = ?")
+                .bind(phase_id)
+                .execute(pool)
+                .await?;
         }
 
         // Delete phases
