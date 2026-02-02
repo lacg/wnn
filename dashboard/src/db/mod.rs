@@ -912,15 +912,21 @@ pub mod queries {
     // =============================================================================
 
     /// Get the currently running experiment
-    /// Prioritizes experiments linked to flows, then most recent
+    /// Only returns experiments that are truly running:
+    /// - Experiment has status='running' AND
+    /// - Either has no flow (standalone) OR its flow is also 'running'
+    /// This prevents orphan experiments (where flow was cancelled but experiment wasn't updated)
     pub async fn get_running_experiment(pool: &DbPool) -> Result<Option<Experiment>> {
         let row = sqlx::query(
-            r#"SELECT id, flow_id, sequence_order, name, status, fitness_calculator,
-                      fitness_weight_ce, fitness_weight_acc, tier_config, context_size,
-                      population_size, pid, last_phase_id, last_iteration, resume_checkpoint_id,
-                      created_at, started_at, ended_at, paused_at
-               FROM experiments WHERE status = 'running'
-               ORDER BY (CASE WHEN flow_id IS NOT NULL THEN 0 ELSE 1 END), id DESC
+            r#"SELECT e.id, e.flow_id, e.sequence_order, e.name, e.status, e.fitness_calculator,
+                      e.fitness_weight_ce, e.fitness_weight_acc, e.tier_config, e.context_size,
+                      e.population_size, e.pid, e.last_phase_id, e.last_iteration, e.resume_checkpoint_id,
+                      e.created_at, e.started_at, e.ended_at, e.paused_at
+               FROM experiments e
+               LEFT JOIN flows f ON e.flow_id = f.id
+               WHERE e.status = 'running'
+                 AND (e.flow_id IS NULL OR f.status = 'running')
+               ORDER BY (CASE WHEN e.flow_id IS NOT NULL THEN 0 ELSE 1 END), e.id DESC
                LIMIT 1"#,
         )
         .fetch_optional(pool)

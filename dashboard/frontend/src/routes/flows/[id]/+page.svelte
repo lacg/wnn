@@ -6,15 +6,23 @@
   import { currentFlow, flows } from '$lib/stores';
 
   // Helper: ensure value is always an array (handles {} being stored instead of [])
+  // This is critical because the database can store config_json as '{}' which
+  // deserializes to an empty object, not an empty array
   function ensureArray<T>(val: unknown): T[] {
-    if (Array.isArray(val)) return val;
+    if (Array.isArray(val)) return val as T[];
+    // Handle null, undefined, objects, and any other non-array values
     return [];
   }
 
   // Helper: get experiments from flow config safely
+  // Always returns an array, never null/undefined/object
   function getFlowExperiments(f: Flow | null): Array<{ name: string; experiment_type: string; optimize_bits?: boolean; optimize_neurons?: boolean; optimize_connections?: boolean; params?: Record<string, unknown> }> {
-    if (!f?.config?.experiments) return [];
-    return ensureArray(f.config.experiments);
+    if (!f) return [];
+    if (!f.config) return [];
+    const experiments = f.config.experiments;
+    // Explicitly check for array - don't trust the type system
+    if (!Array.isArray(experiments)) return [];
+    return experiments;
   }
 
   let flow: Flow | null = null;
@@ -111,8 +119,12 @@
       if (!flowRes.ok) throw new Error('Flow not found');
 
       flow = await flowRes.json();
-      experiments = await expsRes.json();
-      checkpoints = checkpointsRes.ok ? await checkpointsRes.json() : [];
+      // Ensure experiments is always an array (defensive against API returning {})
+      const expsData = await expsRes.json();
+      experiments = Array.isArray(expsData) ? expsData : [];
+      // Ensure checkpoints is always an array
+      const checkpointsData = checkpointsRes.ok ? await checkpointsRes.json() : [];
+      checkpoints = Array.isArray(checkpointsData) ? checkpointsData : [];
 
       // Fetch phases for each experiment
       phases = [];
@@ -701,8 +713,9 @@
   // Get the actual experiment ID from the config spec index
   // This maps from the flow config experiment spec to the actual Experiment record in DB
   function getExperimentId(index: number): number | null {
-    // Find the phase for this config spec
-    const expSpec = flow?.config.experiments?.[index];
+    // Find the phase for this config spec - use helper to ensure array
+    const flowExperiments = getFlowExperiments(flow);
+    const expSpec = flowExperiments[index];
     if (!expSpec) return null;
 
     const phase = findPhase(expSpec, index);
