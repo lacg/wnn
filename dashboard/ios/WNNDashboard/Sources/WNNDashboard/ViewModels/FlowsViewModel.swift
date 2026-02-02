@@ -41,7 +41,7 @@ public final class FlowsViewModel: ObservableObject {
 
     public func loadFlows() async {
         isLoading = true; error = nil
-        do { flows = try await apiClient.getFlows().sorted { $0.created_at > $1.created_at } } catch { self.error = error.localizedDescription }
+        do { flows = try await apiClient.getFlows().sorted { $0.created_at > $1.created_at } } catch let err { self.error = err.localizedDescription }
         isLoading = false
     }
 
@@ -55,8 +55,8 @@ public final class FlowsViewModel: ObservableObject {
         return flow
     }
 
-    public func stopFlow(_ id: Int64) async { do { try await apiClient.stopFlow(id) } catch { error = error.localizedDescription } }
-    public func restartFlow(_ id: Int64) async { do { try await apiClient.restartFlow(id) } catch { error = error.localizedDescription } }
-    public func deleteFlow(_ id: Int64) async { do { try await apiClient.deleteFlow(id); flows.removeAll { $0.id == id } } catch { error = error.localizedDescription } }
+    public func stopFlow(_ id: Int64) async { do { try await apiClient.stopFlow(id) } catch let err { self.error = err.localizedDescription } }
+    public func restartFlow(_ id: Int64) async { do { try await apiClient.restartFlow(id) } catch let err { self.error = err.localizedDescription } }
+    public func deleteFlow(_ id: Int64) async { do { try await apiClient.deleteFlow(id); flows.removeAll { $0.id == id } } catch let err { self.error = err.localizedDescription } }
     public func refresh() async { await loadFlows() }
 }

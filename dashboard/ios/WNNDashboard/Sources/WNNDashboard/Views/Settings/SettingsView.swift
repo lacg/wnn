@@ -3,6 +3,7 @@
 import SwiftUI
 
 public struct SettingsView: View {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @EnvironmentObject var settings: SettingsStore
     @EnvironmentObject var connectionManager: ConnectionManager
     @EnvironmentObject var wsManager: WebSocketManager
@@ -22,6 +23,7 @@ public struct SettingsView: View {
                 Section { Button { reconnect() } label: { Label("Reconnect", systemImage: "arrow.clockwise") }; Button(role: .destructive) { settings.resetToDefaults(); testResults = [:] } label: { Label("Reset to Defaults", systemImage: "arrow.counterclockwise") } }
                 Section("About") { LabeledContent("Version", value: "1.0.0"); LabeledContent("Active Connection") { HStack(spacing: 4) { Image(systemName: connectionManager.activeMode.icon); Text(connectionManager.activeMode.displayName) }.foregroundColor(.secondary) }; if let url = connectionManager.baseURL { LabeledContent("Connected To") { Text(url.absoluteString).font(.caption).fontDesign(.monospaced).foregroundColor(.secondary).lineLimit(1) } } }
             }
+            .frame(maxWidth: LayoutConstants.formMaxWidth(for: horizontalSizeClass))
             .navigationTitle("Settings")
         }
     }

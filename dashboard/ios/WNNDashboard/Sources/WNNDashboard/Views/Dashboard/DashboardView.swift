@@ -4,6 +4,7 @@ import SwiftUI
 import Charts
 
 public struct DashboardView: View {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @EnvironmentObject var viewModel: DashboardViewModel
     @EnvironmentObject var wsManager: WebSocketManager
     @State private var selectedHistoryPhase: Phase?
@@ -12,16 +13,12 @@ public struct DashboardView: View {
 
     public var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 16) {
-                    headerSection
-                    metricsSection
-                    if viewModel.isRunning && selectedHistoryPhase == nil && viewModel.selectedHistoryExperiment == nil { progressSection }
-                    if !viewModel.iterations.isEmpty || !viewModel.historyIterations.isEmpty { chartSection }
-                    if !viewModel.phases.isEmpty { phaseTimelineSection }
-                    if !viewModel.iterations.isEmpty || !viewModel.historyIterations.isEmpty { iterationsSection }
+            Group {
+                if horizontalSizeClass == .regular {
+                    iPadLayout
+                } else {
+                    iPhoneLayout
                 }
-                .padding()
             }
             .navigationTitle("Iterations")
             .toolbar { ToolbarItem(placement: .navigationBarTrailing) { connectionIndicator } }
@@ -29,6 +26,105 @@ public struct DashboardView: View {
             .task { await viewModel.loadRecentExperiments() }
             .sheet(item: $viewModel.selectedIteration) { iter in
                 IterationDetailSheet(iteration: iter, genomes: viewModel.selectedIterationGenomes)
+            }
+        }
+    }
+
+    // MARK: - iPhone Layout (existing vertical scroll)
+
+    private var iPhoneLayout: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                headerSection
+                metricsSection
+                if viewModel.isRunning && selectedHistoryPhase == nil && viewModel.selectedHistoryExperiment == nil { progressSection }
+                if !viewModel.iterations.isEmpty || !viewModel.historyIterations.isEmpty { chartSection }
+                if !viewModel.phases.isEmpty { phaseTimelineSection }
+                if !viewModel.iterations.isEmpty || !viewModel.historyIterations.isEmpty { iterationsSection }
+            }
+            .padding()
+        }
+    }
+
+    // MARK: - iPad Layout (side-by-side)
+
+    private var iPadLayout: some View {
+        HStack(alignment: .top, spacing: 20) {
+            // Left column: Header, Metrics, Phases
+            VStack(spacing: 16) {
+                headerSection
+                metricsSection
+                if viewModel.isRunning && selectedHistoryPhase == nil && viewModel.selectedHistoryExperiment == nil { progressSection }
+                if !viewModel.phases.isEmpty { phaseGridSection }
+                Spacer()
+            }
+            .frame(width: LayoutConstants.iPadSidebarWidth)
+
+            // Right column: Chart + Iterations
+            VStack(spacing: 16) {
+                if !viewModel.iterations.isEmpty || !viewModel.historyIterations.isEmpty {
+                    chartSection
+                        .frame(height: LayoutConstants.chartHeight(for: horizontalSizeClass))
+                }
+                if !viewModel.iterations.isEmpty || !viewModel.historyIterations.isEmpty {
+                    iPadIterationsSection
+                }
+            }
+        }
+        .padding()
+    }
+
+    private var phaseGridSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Phases").font(.headline)
+                Spacer()
+                if selectedHistoryPhase != nil {
+                    Button("Show Live") {
+                        selectedHistoryPhase = nil
+                    }
+                    .font(.caption)
+                    .foregroundColor(.blue)
+                }
+            }
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 140))], spacing: 12) {
+                ForEach(viewModel.phases.sorted { $0.sequence_order < $1.sequence_order }) { phase in
+                    PhaseCard(
+                        phase: phase,
+                        isCurrent: phase.id == viewModel.currentPhase?.id,
+                        isSelected: phase.id == selectedHistoryPhase?.id,
+                        isSelectable: phase.status == .completed
+                    )
+                    .onTapGesture {
+                        if phase.status == .completed {
+                            if selectedHistoryPhase?.id == phase.id {
+                                selectedHistoryPhase = nil
+                            } else {
+                                selectedHistoryPhase = phase
+                                Task { await viewModel.loadHistoryIterations(for: phase) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var iPadIterationsSection: some View {
+        let iters = (selectedHistoryPhase != nil || viewModel.selectedHistoryExperiment != nil)
+            ? viewModel.historyIterations
+            : viewModel.iterations
+        let title = selectedHistoryPhase != nil
+            ? "Phase Iterations"
+            : viewModel.selectedHistoryExperiment != nil
+            ? "Experiment Iterations"
+            : "Recent Iterations"
+
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.headline)
+            IterationsTableView(iterations: Array(iters.prefix(50))) { iter in
+                Task { await viewModel.loadGenomes(for: iter) }
             }
         }
     }

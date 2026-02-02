@@ -6,39 +6,13 @@ public struct ContentView: View {
     @EnvironmentObject var connectionManager: ConnectionManager
     @EnvironmentObject var wsManager: WebSocketManager
 
-    @State private var selectedTab = 0
-
     public init() {}
 
     public var body: some View {
-        TabView(selection: $selectedTab) {
-            DashboardView()
-                .tabItem {
-                    Label("Iterations", systemImage: "chart.line.uptrend.xyaxis")
-                }
-                .tag(0)
-
-            FlowsListView()
-                .tabItem {
-                    Label("Flows", systemImage: "arrow.triangle.branch")
-                }
-                .tag(1)
-
-            CheckpointsListView()
-                .tabItem {
-                    Label("Checkpoints", systemImage: "externaldrive")
-                }
-                .tag(2)
-
-            SettingsView()
-                .tabItem {
-                    Label("Settings", systemImage: "gear")
-                }
-                .tag(3)
-        }
-        .overlay(alignment: .top) {
-            ConnectionStatusBar()
-        }
+        AdaptiveRootView()
+            .overlay(alignment: .top) {
+                ConnectionStatusBar()
+            }
     }
 }
 

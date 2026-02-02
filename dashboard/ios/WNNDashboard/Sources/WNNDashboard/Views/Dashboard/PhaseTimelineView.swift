@@ -3,6 +3,7 @@
 import SwiftUI
 
 public struct PhaseTimelineView: View {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     public let phases: [Phase]
     public let currentPhase: Phase?
     public let selectedPhase: Phase?
@@ -35,28 +36,44 @@ public struct PhaseTimelineView: View {
             }
             .padding(.horizontal)
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
+            if horizontalSizeClass == .regular {
+                // iPad: Grid layout
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 140))], spacing: 12) {
                     ForEach(phases.sorted { $0.sequence_order < $1.sequence_order }) { phase in
-                        PhaseCard(
-                            phase: phase,
-                            isCurrent: phase.id == currentPhase?.id,
-                            isSelected: phase.id == selectedPhase?.id,
-                            isSelectable: phase.status == .completed
-                        )
-                        .onTapGesture {
-                            if phase.status == .completed {
-                                // Toggle selection: tap again to deselect
-                                if selectedPhase?.id == phase.id {
-                                    onPhaseSelected?(nil)
-                                } else {
-                                    onPhaseSelected?(phase)
-                                }
-                            }
-                        }
+                        phaseCardView(phase: phase)
                     }
                 }
                 .padding(.horizontal)
+            } else {
+                // iPhone: Horizontal scroll
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(phases.sorted { $0.sequence_order < $1.sequence_order }) { phase in
+                            phaseCardView(phase: phase)
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func phaseCardView(phase: Phase) -> some View {
+        PhaseCard(
+            phase: phase,
+            isCurrent: phase.id == currentPhase?.id,
+            isSelected: phase.id == selectedPhase?.id,
+            isSelectable: phase.status == .completed
+        )
+        .onTapGesture {
+            if phase.status == .completed {
+                // Toggle selection: tap again to deselect
+                if selectedPhase?.id == phase.id {
+                    onPhaseSelected?(nil)
+                } else {
+                    onPhaseSelected?(phase)
+                }
             }
         }
     }

@@ -2,6 +2,7 @@
 
 import Foundation
 
+@MainActor
 public final class APIClient {
     private let connectionManager: ConnectionManager
     private let decoder = JSONDecoder()

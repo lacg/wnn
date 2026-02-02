@@ -40,11 +40,11 @@ public final class CheckpointsViewModel: ObservableObject {
 
     public func loadCheckpoints() async {
         isLoading = true; error = nil
-        do { checkpoints = try await apiClient.getCheckpoints().sorted { $0.created_at > $1.created_at } } catch { self.error = error.localizedDescription }
+        do { checkpoints = try await apiClient.getCheckpoints().sorted { $0.created_at > $1.created_at } } catch let err { self.error = err.localizedDescription }
         isLoading = false
     }
 
-    public func deleteCheckpoint(_ id: Int64) async { do { try await apiClient.deleteCheckpoint(id); checkpoints.removeAll { $0.id == id } } catch { error = error.localizedDescription } }
+    public func deleteCheckpoint(_ id: Int64) async { do { try await apiClient.deleteCheckpoint(id); checkpoints.removeAll { $0.id == id } } catch let err { self.error = err.localizedDescription } }
     public func downloadURL(for checkpoint: Checkpoint) -> URL? { apiClient.checkpointDownloadURL(checkpoint.id) }
     public func refresh() async { await loadCheckpoints() }
     public func clearError() { error = nil }
