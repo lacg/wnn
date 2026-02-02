@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { page } from '$app/stores';
   import {
     phases,
     currentPhase,
@@ -39,7 +40,13 @@
   // Chart tooltip state
   let tooltipData: { x: number; y: number; iter: number; ce: number; acc: number | null; avgCe: number | null; avgAcc: number | null } | null = null;
 
-  onMount(() => {
+  onMount(async () => {
+    // Check for experiment query parameter (linked from flow page)
+    const experimentId = $page.url.searchParams.get('experiment');
+    if (experimentId) {
+      await loadExperimentById(parseInt(experimentId, 10));
+    }
+
     // Fetch the current running flow
     fetchRunningFlow();
     // Fetch completed flows for historical viewing
@@ -48,6 +55,57 @@
     const interval = setInterval(fetchRunningFlow, 10000);
     return () => clearInterval(interval);
   });
+
+  async function loadExperimentById(expId: number) {
+    loadingHistoryExperiment = true;
+    try {
+      // Fetch the experiment details
+      const expRes = await fetch(`/api/experiments/${expId}`);
+      if (!expRes.ok) {
+        console.error('Failed to fetch experiment:', expRes.status);
+        return;
+      }
+      const exp: Experiment = await expRes.json();
+      selectedHistoryExperiment = exp;
+
+      // If experiment has a flow, set that too
+      if (exp.flow_id) {
+        const flowRes = await fetch(`/api/flows/${exp.flow_id}`);
+        if (flowRes.ok) {
+          selectedHistoryFlow = await flowRes.json();
+        }
+      }
+
+      // Fetch phases and iterations for this experiment
+      const [phasesRes, itersRes] = await Promise.all([
+        fetch(`/api/experiments/${expId}/phases`),
+        fetch(`/api/experiments/${expId}/iterations?limit=500`)
+      ]);
+
+      if (phasesRes.ok) {
+        const historyPhases = await phasesRes.json();
+        phases.set(Array.isArray(historyPhases) ? historyPhases : []);
+      }
+
+      if (itersRes.ok) {
+        const historyIters = await itersRes.json();
+        iterations.set(Array.isArray(historyIters) ? historyIters : []);
+        // Update CE history for chart
+        const ceData = (Array.isArray(historyIters) ? historyIters : []).map((i: Iteration) => ({
+          iter: i.iteration_num,
+          ce: i.best_ce,
+          acc: i.best_accuracy,
+          avgCe: i.avg_ce,
+          avgAcc: i.avg_accuracy
+        }));
+        ceHistory.set(ceData);
+      }
+    } catch (e) {
+      console.error('Failed to load experiment:', e);
+    } finally {
+      loadingHistoryExperiment = false;
+    }
+  }
 
   async function fetchRunningFlow() {
     try {
