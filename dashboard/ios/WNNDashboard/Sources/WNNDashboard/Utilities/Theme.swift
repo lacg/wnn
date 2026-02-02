@@ -28,16 +28,6 @@ public enum Theme {
         }
     }
 
-    public static func statusColor(_ status: PhaseStatus) -> Color {
-        switch status {
-        case .pending, .skipped, .cancelled: return .gray
-        case .running: return .blue
-        case .paused: return .yellow
-        case .completed: return .green
-        case .failed: return .red
-        }
-    }
-
     public static func deltaColor(_ value: Double) -> Color { value < 0 ? .green : value == 0 ? .gray : .red }
     public static func roleColor(_ role: GenomeRole) -> Color {
         switch role {

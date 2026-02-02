@@ -57,16 +57,6 @@ class ExperimentStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
-class PhaseStatus(str, Enum):
-    PENDING = "pending"
-    RUNNING = "running"
-    PAUSED = "paused"
-    COMPLETED = "completed"
-    SKIPPED = "skipped"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
-
-
 class FitnessCalculator(str, Enum):
     CE = "ce"
     HARMONIC_RANK = "harmonic_rank"
@@ -204,7 +194,7 @@ class DataLayer:
                 completed_at TEXT
             );
 
-            -- Experiments
+            -- Experiments (simplified model - no phase layer)
             CREATE TABLE IF NOT EXISTS experiments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 flow_id INTEGER REFERENCES flows(id),
@@ -218,37 +208,26 @@ class DataLayer:
                 context_size INTEGER DEFAULT 4,
                 population_size INTEGER DEFAULT 50,
                 pid INTEGER,
-                last_phase_id INTEGER,
+                last_phase_id INTEGER,  -- Deprecated, kept for compatibility
                 last_iteration INTEGER,
                 resume_checkpoint_id INTEGER,
                 created_at TEXT NOT NULL,
                 started_at TEXT,
                 ended_at TEXT,
-                paused_at TEXT
-            );
-
-            -- Phases
-            CREATE TABLE IF NOT EXISTS phases (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                experiment_id INTEGER NOT NULL REFERENCES experiments(id),
-                name TEXT NOT NULL,
-                phase_type TEXT NOT NULL,
-                sequence_order INTEGER NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending',
-                max_iterations INTEGER NOT NULL DEFAULT 250,
-                population_size INTEGER,
+                paused_at TEXT,
+                -- Fields moved from Phase (simplified model)
+                phase_type TEXT,
+                max_iterations INTEGER DEFAULT 250,
                 current_iteration INTEGER DEFAULT 0,
                 best_ce REAL,
-                best_accuracy REAL,
-                created_at TEXT NOT NULL,
-                started_at TEXT,
-                ended_at TEXT
+                best_accuracy REAL
             );
 
-            -- Iterations
+            -- Iterations (now reference experiment directly)
             CREATE TABLE IF NOT EXISTS iterations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                phase_id INTEGER NOT NULL REFERENCES phases(id),
+                experiment_id INTEGER NOT NULL REFERENCES experiments(id),
+                phase_id INTEGER,  -- Deprecated, kept for backward compatibility
                 iteration_num INTEGER NOT NULL,
                 best_ce REAL NOT NULL,
                 best_accuracy REAL,
@@ -260,7 +239,7 @@ class DataLayer:
                 fitness_threshold REAL,
                 elapsed_secs REAL,
                 created_at TEXT NOT NULL,
-                UNIQUE(phase_id, iteration_num)
+                UNIQUE(experiment_id, iteration_num)
             );
 
             -- Genomes
@@ -325,8 +304,7 @@ class DataLayer:
 
             -- Indexes
             CREATE INDEX IF NOT EXISTS idx_experiments_flow ON experiments(flow_id);
-            CREATE INDEX IF NOT EXISTS idx_phases_experiment ON phases(experiment_id);
-            CREATE INDEX IF NOT EXISTS idx_iterations_phase ON iterations(phase_id);
+            CREATE INDEX IF NOT EXISTS idx_iterations_experiment ON iterations(experiment_id);
             CREATE INDEX IF NOT EXISTS idx_genome_evals_iteration ON genome_evaluations(iteration_id);
             CREATE INDEX IF NOT EXISTS idx_genomes_experiment ON genomes(experiment_id);
             CREATE INDEX IF NOT EXISTS idx_iterations_created ON iterations(created_at);
@@ -405,18 +383,21 @@ class DataLayer:
         tier_config: Optional[str] = None,
         context_size: int = 4,
         population_size: int = 50,
+        phase_type: Optional[str] = None,
+        max_iterations: int = 250,
     ) -> int:
-        """Create a new experiment."""
+        """Create a new experiment (simplified model - each config spec is an experiment)."""
         with self._transaction() as conn:
             cursor = conn.execute(
                 """INSERT INTO experiments
                    (flow_id, sequence_order, name, fitness_calculator, fitness_weight_ce,
-                    fitness_weight_acc, tier_config, context_size, population_size, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    fitness_weight_acc, tier_config, context_size, population_size,
+                    phase_type, max_iterations, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     flow_id, sequence_order, name, fitness_calculator.value,
                     fitness_weight_ce, fitness_weight_acc, tier_config, context_size,
-                    population_size, _now_iso(),
+                    population_size, phase_type, max_iterations, _now_iso(),
                 ),
             )
             exp_id = cursor.lastrowid
@@ -464,20 +445,25 @@ class DataLayer:
     def update_experiment_progress(
         self,
         experiment_id: int,
-        last_phase_id: Optional[int] = None,
-        last_iteration: Optional[int] = None,
+        current_iteration: Optional[int] = None,
+        best_ce: Optional[float] = None,
+        best_accuracy: Optional[float] = None,
         resume_checkpoint_id: Optional[int] = None,
     ) -> None:
-        """Update experiment progress (for resume tracking)."""
+        """Update experiment progress (simplified model - no phase layer)."""
         with self._transaction() as conn:
             updates = []
             params = []
-            if last_phase_id is not None:
-                updates.append("last_phase_id = ?")
-                params.append(last_phase_id)
-            if last_iteration is not None:
-                updates.append("last_iteration = ?")
-                params.append(last_iteration)
+            if current_iteration is not None:
+                updates.append("current_iteration = ?")
+                updates.append("last_iteration = ?")  # Keep for backward compatibility
+                params.extend([current_iteration, current_iteration])
+            if best_ce is not None:
+                updates.append("best_ce = CASE WHEN ? < COALESCE(best_ce, 999999) THEN ? ELSE best_ce END")
+                params.extend([best_ce, best_ce])
+            if best_accuracy is not None:
+                updates.append("best_accuracy = CASE WHEN ? > COALESCE(best_accuracy, 0) THEN ? ELSE best_accuracy END")
+                params.extend([best_accuracy, best_accuracy])
             if resume_checkpoint_id is not None:
                 updates.append("resume_checkpoint_id = ?")
                 params.append(resume_checkpoint_id)
@@ -489,150 +475,12 @@ class DataLayer:
                 )
 
     # =========================================================================
-    # Phase methods
-    # =========================================================================
-
-    def create_phase(
-        self,
-        experiment_id: int,
-        name: str,
-        phase_type: str,
-        sequence_order: int,
-        max_iterations: int = 250,
-        population_size: Optional[int] = None,
-    ) -> int:
-        """Create a new phase."""
-        with self._transaction() as conn:
-            cursor = conn.execute(
-                """INSERT INTO phases
-                   (experiment_id, name, phase_type, sequence_order, max_iterations, population_size, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (experiment_id, name, phase_type, sequence_order, max_iterations, population_size, _now_iso()),
-            )
-            phase_id = cursor.lastrowid
-            self._logger(f"Created phase {phase_id}: {name}")
-            return phase_id
-
-    def get_phase(self, phase_id: int) -> Optional[dict]:
-        """Get phase by ID."""
-        row = self._get_conn().execute(
-            "SELECT * FROM phases WHERE id = ?", (phase_id,)
-        ).fetchone()
-        return dict(row) if row else None
-
-    def update_phase_status(self, phase_id: int, status: PhaseStatus) -> None:
-        """Update phase status.
-
-        When a phase is marked as COMPLETED, this also checks if all phases of the
-        parent experiment are completed and auto-completes the experiment if so.
-        This provides resilience against crashes between phase completion and
-        explicit experiment completion calls.
-        """
-        now = _now_iso()
-        with self._transaction() as conn:
-            if status == PhaseStatus.RUNNING:
-                conn.execute(
-                    "UPDATE phases SET status = ?, started_at = ? WHERE id = ?",
-                    (status.value, now, phase_id),
-                )
-            elif status in (PhaseStatus.COMPLETED, PhaseStatus.FAILED, PhaseStatus.SKIPPED):
-                conn.execute(
-                    "UPDATE phases SET status = ?, ended_at = ? WHERE id = ?",
-                    (status.value, now, phase_id),
-                )
-            else:
-                conn.execute(
-                    "UPDATE phases SET status = ? WHERE id = ?",
-                    (status.value, phase_id),
-                )
-            self._logger(f"Phase {phase_id} -> {status.value}")
-
-        # Auto-complete experiment when all phases are done (resilience fix)
-        if status == PhaseStatus.COMPLETED:
-            self._maybe_complete_experiment_for_phase(phase_id)
-
-    def _maybe_complete_experiment_for_phase(self, phase_id: int) -> None:
-        """Check if all phases of an experiment are completed and auto-complete it.
-
-        This is called after marking a phase as completed to ensure experiments
-        don't get stuck in 'running' state if a crash occurs between phase
-        completion and explicit experiment completion.
-        """
-        conn = self._get_conn()
-
-        # Get the experiment_id for this phase
-        row = conn.execute(
-            "SELECT experiment_id FROM phases WHERE id = ?", (phase_id,)
-        ).fetchone()
-        if not row:
-            return
-
-        experiment_id = row[0]
-
-        # Check experiment status - only auto-complete if it's still running
-        exp_row = conn.execute(
-            "SELECT status FROM experiments WHERE id = ?", (experiment_id,)
-        ).fetchone()
-        if not exp_row or exp_row[0] != ExperimentStatus.RUNNING.value:
-            return
-
-        # Check if all phases for this experiment are completed
-        incomplete_row = conn.execute(
-            """SELECT COUNT(*) FROM phases
-               WHERE experiment_id = ? AND status NOT IN (?, ?, ?)""",
-            (experiment_id, PhaseStatus.COMPLETED.value, PhaseStatus.SKIPPED.value, PhaseStatus.FAILED.value)
-        ).fetchone()
-
-        incomplete_count = incomplete_row[0] if incomplete_row else 0
-
-        if incomplete_count == 0:
-            # All phases are done - auto-complete the experiment
-            self._logger(f"All phases completed for experiment {experiment_id}, auto-completing")
-            self.update_experiment_status(experiment_id, ExperimentStatus.COMPLETED)
-
-    def update_phase_progress(
-        self,
-        phase_id: int,
-        current_iteration: int,
-        best_ce: Optional[float] = None,
-        best_accuracy: Optional[float] = None,
-    ) -> None:
-        """Update phase progress."""
-        with self._transaction() as conn:
-            conn.execute(
-                """UPDATE phases
-                   SET current_iteration = ?, best_ce = COALESCE(?, best_ce),
-                       best_accuracy = COALESCE(?, best_accuracy)
-                   WHERE id = ?""",
-                (current_iteration, best_ce, best_accuracy, phase_id),
-            )
-
-    def create_phase_result(
-        self,
-        phase_id: int,
-        metric_type: str,
-        ce: float,
-        accuracy: float,
-        improvement_pct: float = 0.0,
-        memory_bytes: Optional[int] = None,
-    ) -> int:
-        """Record a phase validation result (best_ce, best_acc, top_k_mean)."""
-        with self._transaction() as conn:
-            cursor = conn.execute(
-                """INSERT INTO phase_results
-                   (phase_id, metric_type, ce, accuracy, improvement_pct, memory_bytes)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (phase_id, metric_type, ce, accuracy, improvement_pct, memory_bytes),
-            )
-            return cursor.lastrowid or 0
-
-    # =========================================================================
     # Iteration methods
     # =========================================================================
 
     def create_iteration(
         self,
-        phase_id: int,
+        experiment_id: int,
         iteration_num: int,
         best_ce: float,
         best_accuracy: Optional[float] = None,
@@ -650,17 +498,17 @@ class DataLayer:
         patience_max: Optional[int] = None,
         candidates_total: Optional[int] = None,
     ) -> int:
-        """Create a new iteration record."""
+        """Create a new iteration record (simplified model - references experiment directly)."""
         with self._transaction() as conn:
             cursor = conn.execute(
                 """INSERT INTO iterations
-                   (phase_id, iteration_num, best_ce, best_accuracy, avg_ce, avg_accuracy,
+                   (experiment_id, iteration_num, best_ce, best_accuracy, avg_ce, avg_accuracy,
                     elite_count, offspring_count, offspring_viable, fitness_threshold,
                     elapsed_secs, baseline_ce, delta_baseline, delta_previous,
                     patience_counter, patience_max, candidates_total, created_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    phase_id, iteration_num, best_ce, best_accuracy, avg_ce, avg_accuracy,
+                    experiment_id, iteration_num, best_ce, best_accuracy, avg_ce, avg_accuracy,
                     elite_count, offspring_count, offspring_viable, fitness_threshold,
                     elapsed_secs, baseline_ce, delta_baseline, delta_previous,
                     patience_counter, patience_max, candidates_total, _now_iso(),
@@ -668,14 +516,15 @@ class DataLayer:
             )
             iteration_id = cursor.lastrowid
 
-            # Also update phase with latest progress for live view
+            # Also update experiment with latest progress for live view
             conn.execute(
-                """UPDATE phases
+                """UPDATE experiments
                    SET current_iteration = ?,
+                       last_iteration = ?,
                        best_ce = CASE WHEN ? < COALESCE(best_ce, 999999) THEN ? ELSE best_ce END,
                        best_accuracy = CASE WHEN ? > COALESCE(best_accuracy, 0) THEN ? ELSE best_accuracy END
                    WHERE id = ?""",
-                (iteration_num, best_ce, best_ce, best_accuracy, best_accuracy, phase_id),
+                (iteration_num, iteration_num, best_ce, best_ce, best_accuracy, best_accuracy, experiment_id),
             )
             return iteration_id
 
@@ -686,12 +535,12 @@ class DataLayer:
         ).fetchone()
         return dict(row) if row else None
 
-    def get_iterations(self, phase_id: int, limit: int = 100) -> list[dict]:
-        """Get iterations for a phase."""
+    def get_iterations(self, experiment_id: int, limit: int = 100) -> list[dict]:
+        """Get iterations for an experiment."""
         rows = self._get_conn().execute(
-            """SELECT * FROM iterations WHERE phase_id = ?
+            """SELECT * FROM iterations WHERE experiment_id = ?
                ORDER BY iteration_num DESC LIMIT ?""",
-            (phase_id, limit),
+            (experiment_id, limit),
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -907,33 +756,21 @@ class DataLayer:
         ).fetchone()
         return dict(row) if row else None
 
-    def get_experiment_phases(self, experiment_id: int) -> list[dict]:
-        """Get all phases for an experiment."""
+    def get_all_iterations(self, experiment_id: int) -> list[dict]:
+        """Get all iterations for an experiment (for trend chart)."""
         rows = self._get_conn().execute(
-            "SELECT * FROM phases WHERE experiment_id = ? ORDER BY sequence_order",
+            """SELECT * FROM iterations
+               WHERE experiment_id = ?
+               ORDER BY iteration_num""",
             (experiment_id,),
         ).fetchall()
         return [dict(row) for row in rows]
 
-    def get_current_phase(self, experiment_id: int) -> Optional[dict]:
-        """Get the current (running) phase for an experiment."""
-        row = self._get_conn().execute(
-            """SELECT * FROM phases
-               WHERE experiment_id = ? AND status = 'running'
-               ORDER BY sequence_order DESC LIMIT 1""",
-            (experiment_id,),
-        ).fetchone()
-        return dict(row) if row else None
-
-    def get_all_iterations(self, experiment_id: int) -> list[dict]:
-        """Get all iterations for an experiment (for trend chart)."""
+    def get_flow_experiments(self, flow_id: int) -> list[dict]:
+        """Get all experiments for a flow."""
         rows = self._get_conn().execute(
-            """SELECT i.*, p.name as phase_name, p.phase_type
-               FROM iterations i
-               JOIN phases p ON i.phase_id = p.id
-               WHERE p.experiment_id = ?
-               ORDER BY p.sequence_order, i.iteration_num""",
-            (experiment_id,),
+            "SELECT * FROM experiments WHERE flow_id = ? ORDER BY sequence_order",
+            (flow_id,),
         ).fetchall()
         return [dict(row) for row in rows]
 

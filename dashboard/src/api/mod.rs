@@ -27,11 +27,7 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .route("/api/experiments", get(list_experiments).post(create_experiment))
         .route("/api/experiments/current", get(get_current_experiment))
         .route("/api/experiments/:id", get(get_experiment))
-        .route("/api/experiments/:id/phases", get(get_experiment_phases).post(create_phase))
         .route("/api/experiments/:id/iterations", get(get_experiment_iterations))
-        // Phases
-        .route("/api/phases/:id", patch(update_phase))
-        .route("/api/phases/:id/iterations", get(get_phase_iterations))
         // Iterations
         .route("/api/iterations/:id/genomes", get(get_iteration_genomes))
         // Snapshot
@@ -129,19 +125,6 @@ async fn get_experiment(
     }
 }
 
-async fn get_experiment_phases(
-    State(state): State<Arc<AppState>>,
-    Path(experiment_id): Path<i64>,
-) -> impl IntoResponse {
-    match crate::db::queries::get_experiment_phases(&state.db, experiment_id).await {
-        Ok(phases) => (StatusCode::OK, Json(phases)).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        ).into_response(),
-    }
-}
-
 #[derive(Debug, Deserialize)]
 pub struct RecentIterationsQuery {
     pub limit: Option<i32>,
@@ -154,80 +137,6 @@ async fn get_experiment_iterations(
 ) -> impl IntoResponse {
     let limit = query.limit.unwrap_or(100);
     match crate::db::queries::get_recent_iterations(&state.db, experiment_id, limit).await {
-        Ok(iterations) => (StatusCode::OK, Json(iterations)).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        ).into_response(),
-    }
-}
-
-// =============================================================================
-// Phase handlers
-// =============================================================================
-
-#[derive(Debug, Deserialize)]
-pub struct CreatePhaseRequest {
-    pub name: String,
-    pub phase_type: String,
-    pub sequence_order: Option<i32>,
-    pub max_iterations: Option<i32>,
-    pub population_size: Option<i32>,
-}
-
-async fn create_phase(
-    State(state): State<Arc<AppState>>,
-    Path(experiment_id): Path<i64>,
-    Json(req): Json<CreatePhaseRequest>,
-) -> impl IntoResponse {
-    match crate::db::queries::create_phase(
-        &state.db,
-        experiment_id,
-        &req.name,
-        &req.phase_type,
-        req.sequence_order,
-        req.max_iterations,
-        req.population_size,
-    ).await {
-        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({"id": id}))).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        ).into_response(),
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct UpdatePhaseRequest {
-    pub status: Option<String>,
-    pub ended_at: Option<String>,
-}
-
-async fn update_phase(
-    State(state): State<Arc<AppState>>,
-    Path(phase_id): Path<i64>,
-    Json(req): Json<UpdatePhaseRequest>,
-) -> impl IntoResponse {
-    match crate::db::queries::update_phase(
-        &state.db,
-        phase_id,
-        req.status.as_deref(),
-        req.ended_at.as_deref(),
-    ).await {
-        Ok(true) => (StatusCode::OK, Json(serde_json::json!({"updated": true}))).into_response(),
-        Ok(false) => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Phase not found"}))).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        ).into_response(),
-    }
-}
-
-async fn get_phase_iterations(
-    State(state): State<Arc<AppState>>,
-    Path(phase_id): Path<i64>,
-) -> impl IntoResponse {
-    match crate::db::queries::get_phase_iterations(&state.db, phase_id).await {
         Ok(iterations) => (StatusCode::OK, Json(iterations)).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -276,38 +185,7 @@ async fn get_snapshot(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
     let exp_id = exp.id;
 
-    // Get phases
-    let mut phases = match crate::db::queries::get_experiment_phases(&state.db, exp_id).await {
-        Ok(p) => p,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            ).into_response();
-        }
-    };
-
-    // Fetch phase results for completed phases
-    for phase in &mut phases {
-        if phase.status == crate::models::PhaseStatus::Completed {
-            if let Ok(results) = crate::db::queries::get_phase_results(&state.db, phase.id).await {
-                phase.results = results;
-            }
-        }
-    }
-
-    // Get current phase
-    let current_phase = match crate::db::queries::get_current_phase(&state.db, exp_id).await {
-        Ok(p) => p,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            ).into_response();
-        }
-    };
-
-    // Get recent iterations
+    // Get recent iterations directly from experiment
     let iterations = match crate::db::queries::get_recent_iterations(&state.db, exp_id, 500).await {
         Ok(i) => i,
         Err(e) => {
@@ -318,28 +196,16 @@ async fn get_snapshot(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         }
     };
 
-    // Calculate best metrics from phases
-    let mut best_ce = f64::INFINITY;
-    let mut best_accuracy = 0.0;
-    for phase in &phases {
-        if let Some(ce) = phase.best_ce {
-            if ce < best_ce {
-                best_ce = ce;
-            }
-        }
-        if let Some(acc) = phase.best_accuracy {
-            if acc > best_accuracy {
-                best_accuracy = acc;
-            }
-        }
-    }
+    // Use experiment-level metrics directly
+    let best_ce = exp.best_ce.unwrap_or(0.0);
+    let best_accuracy = exp.best_accuracy.unwrap_or(0.0);
 
     let snapshot = DashboardSnapshot {
         current_experiment: Some(exp),
-        current_phase,
-        phases,
+        current_phase: None,  // Phase layer removed
+        phases: vec![],       // Phase layer removed
         iterations,
-        best_ce: if best_ce.is_infinite() { 0.0 } else { best_ce },
+        best_ce,
         best_accuracy,
     };
 
@@ -938,8 +804,7 @@ async fn handle_socket(
     // Send initial snapshot and track current state
     let snapshot = build_snapshot(&state.db).await;
     let mut last_experiment_id = snapshot.current_experiment.as_ref().map(|e| e.id);
-    let mut last_phase_id = snapshot.current_phase.as_ref().map(|p| p.id);
-    let mut last_phase_status = snapshot.current_phase.as_ref().map(|p| p.status.clone());
+    let mut last_experiment_status = snapshot.current_experiment.as_ref().map(|e| e.status.clone());
 
     // Track the last iteration we've sent to avoid re-sending iterations from snapshot
     let mut last_iteration_id: Option<i64> = snapshot.iterations.last().map(|i| i.id);
@@ -991,8 +856,7 @@ async fn handle_socket(
                         if should_send_snapshot {
                             let snapshot = build_snapshot(&state.db).await;
                             last_experiment_id = snapshot.current_experiment.as_ref().map(|e| e.id);
-                            last_phase_id = snapshot.current_phase.as_ref().map(|p| p.id);
-                            last_phase_status = snapshot.current_phase.as_ref().map(|p| p.status.clone());
+                            last_experiment_status = snapshot.current_experiment.as_ref().map(|e| e.status.clone());
                             if let Ok(json) = serde_json::to_string(&WsMessage::Snapshot(snapshot)) {
                                 if socket.send(Message::Text(json.into())).await.is_err() {
                                     return;
@@ -1011,19 +875,16 @@ async fn handle_socket(
 
             // DB polling for iterations and state changes
             _ = poll_interval.tick() => {
-                // Check for experiment/phase changes
+                // Check for experiment changes
                 let snapshot = build_snapshot(&state.db).await;
                 let current_exp_id = snapshot.current_experiment.as_ref().map(|e| e.id);
-                let current_phase_id = snapshot.current_phase.as_ref().map(|p| p.id);
-                let current_phase_status = snapshot.current_phase.as_ref().map(|p| p.status.clone());
+                let current_exp_status = snapshot.current_experiment.as_ref().map(|e| e.status.clone());
 
-                // Send fresh snapshot if experiment or phase changed
+                // Send fresh snapshot if experiment changed
                 if current_exp_id != last_experiment_id ||
-                   current_phase_id != last_phase_id ||
-                   current_phase_status != last_phase_status {
+                   current_exp_status != last_experiment_status {
                     last_experiment_id = current_exp_id;
-                    last_phase_id = current_phase_id;
-                    last_phase_status = current_phase_status;
+                    last_experiment_status = current_exp_status;
                     if let Ok(json) = serde_json::to_string(&WsMessage::Snapshot(snapshot)) {
                         if socket.send(Message::Text(json.into())).await.is_err() {
                             return;
@@ -1058,32 +919,18 @@ async fn build_snapshot(db: &DbPool) -> DashboardSnapshot {
     };
 
     let exp_id = exp.id;
-    let phases = crate::db::queries::get_experiment_phases(db, exp_id).await.unwrap_or_default();
-    let current_phase = crate::db::queries::get_current_phase(db, exp_id).await.ok().flatten();
     let iterations = crate::db::queries::get_recent_iterations(db, exp_id, 500).await.unwrap_or_default();
 
-    // Calculate best metrics
-    let mut best_ce = f64::INFINITY;
-    let mut best_accuracy = 0.0;
-    for phase in &phases {
-        if let Some(ce) = phase.best_ce {
-            if ce < best_ce {
-                best_ce = ce;
-            }
-        }
-        if let Some(acc) = phase.best_accuracy {
-            if acc > best_accuracy {
-                best_accuracy = acc;
-            }
-        }
-    }
+    // Use experiment-level metrics directly
+    let best_ce = exp.best_ce.unwrap_or(0.0);
+    let best_accuracy = exp.best_accuracy.unwrap_or(0.0);
 
     DashboardSnapshot {
         current_experiment: Some(exp),
-        current_phase,
-        phases,
+        current_phase: None,  // Phase layer removed
+        phases: vec![],       // Phase layer removed
         iterations,
-        best_ce: if best_ce.is_infinite() { 0.0 } else { best_ce },
+        best_ce,
         best_accuracy,
     }
 }

@@ -46,6 +46,7 @@ impl Default for ExperimentStatus {
     }
 }
 
+// PhaseStatus kept for backward compatibility during migration
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum PhaseStatus {
@@ -171,7 +172,8 @@ pub enum ExperimentType {
 // Experiment Models
 // =============================================================================
 
-/// An experiment is a single optimization run (6-phase search)
+/// An experiment is a single optimization run (e.g., "GA Neurons", "TS Bits")
+/// In the simplified model, each config spec becomes its own experiment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Experiment {
     pub id: i64,
@@ -186,13 +188,19 @@ pub struct Experiment {
     pub context_size: i32,
     pub population_size: i32,
     pub pid: Option<i32>,
-    pub last_phase_id: Option<i64>,
+    pub last_phase_id: Option<i64>,  // Deprecated, kept for compatibility
     pub last_iteration: Option<i32>,
     pub resume_checkpoint_id: Option<i64>,
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
     pub ended_at: Option<DateTime<Utc>>,
     pub paused_at: Option<DateTime<Utc>>,
+    // Fields moved from Phase for simplified model
+    pub phase_type: Option<String>,  // e.g., "ga_neurons", "ts_bits"
+    pub max_iterations: Option<i32>,
+    pub current_iteration: Option<i32>,
+    pub best_ce: Option<f64>,
+    pub best_accuracy: Option<f64>,
 }
 
 // =============================================================================
@@ -237,11 +245,12 @@ pub struct PhaseResult {
 // Iteration Models
 // =============================================================================
 
-/// A generation/iteration within a phase
+/// A generation/iteration within an experiment
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Iteration {
     pub id: i64,
-    pub phase_id: i64,
+    pub experiment_id: Option<i64>,  // Primary reference (new simplified model)
+    pub phase_id: Option<i64>,  // Kept for backward compatibility
     pub iteration_num: i32,
     pub best_ce: f64,
     pub best_accuracy: Option<f64>,
@@ -382,8 +391,8 @@ pub enum WsMessage {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DashboardSnapshot {
     pub current_experiment: Option<Experiment>,
-    pub current_phase: Option<Phase>,
-    pub phases: Vec<Phase>,
+    pub current_phase: Option<Phase>,  // Deprecated, kept for backward compatibility
+    pub phases: Vec<Phase>,  // Deprecated, kept for backward compatibility
     pub iterations: Vec<Iteration>,
     pub best_ce: f64,
     pub best_accuracy: f64,

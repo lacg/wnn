@@ -6,8 +6,6 @@ public enum WsMessage: Codable {
     case snapshot(DashboardSnapshot)
     case iterationCompleted(Iteration)
     case genomeEvaluations(iterationId: Int64, evaluations: [GenomeEvaluation])
-    case phaseStarted(Phase)
-    case phaseCompleted(Phase)
     case healthCheck(HealthCheck)
     case experimentStatusChanged(Experiment)
     case flowStarted(Flow)
@@ -21,7 +19,7 @@ public enum WsMessage: Codable {
     private enum CodingKeys: String, CodingKey { case type, data }
 
     private enum MessageType: String, Codable {
-        case Snapshot, IterationCompleted, GenomeEvaluations, PhaseStarted, PhaseCompleted
+        case Snapshot, IterationCompleted, GenomeEvaluations
         case HealthCheck, ExperimentStatusChanged, FlowStarted, FlowCompleted, FlowFailed
         case FlowCancelled, FlowQueued, CheckpointCreated, CheckpointDeleted
     }
@@ -36,8 +34,6 @@ public enum WsMessage: Codable {
         case .GenomeEvaluations:
             let data = try container.decode(GenomeEvaluationsData.self, forKey: .data)
             self = .genomeEvaluations(iterationId: data.iteration_id, evaluations: data.evaluations)
-        case .PhaseStarted: self = .phaseStarted(try container.decode(Phase.self, forKey: .data))
-        case .PhaseCompleted: self = .phaseCompleted(try container.decode(Phase.self, forKey: .data))
         case .HealthCheck: self = .healthCheck(try container.decode(HealthCheck.self, forKey: .data))
         case .ExperimentStatusChanged: self = .experimentStatusChanged(try container.decode(Experiment.self, forKey: .data))
         case .FlowStarted: self = .flowStarted(try container.decode(Flow.self, forKey: .data))
@@ -60,8 +56,6 @@ public enum WsMessage: Codable {
         case .snapshot(let d): try container.encode(MessageType.Snapshot, forKey: .type); try container.encode(d, forKey: .data)
         case .iterationCompleted(let d): try container.encode(MessageType.IterationCompleted, forKey: .type); try container.encode(d, forKey: .data)
         case .genomeEvaluations(let id, let evals): try container.encode(MessageType.GenomeEvaluations, forKey: .type); try container.encode(GenomeEvaluationsData(iteration_id: id, evaluations: evals), forKey: .data)
-        case .phaseStarted(let d): try container.encode(MessageType.PhaseStarted, forKey: .type); try container.encode(d, forKey: .data)
-        case .phaseCompleted(let d): try container.encode(MessageType.PhaseCompleted, forKey: .type); try container.encode(d, forKey: .data)
         case .healthCheck(let d): try container.encode(MessageType.HealthCheck, forKey: .type); try container.encode(d, forKey: .data)
         case .experimentStatusChanged(let d): try container.encode(MessageType.ExperimentStatusChanged, forKey: .type); try container.encode(d, forKey: .data)
         case .flowStarted(let d): try container.encode(MessageType.FlowStarted, forKey: .type); try container.encode(d, forKey: .data)

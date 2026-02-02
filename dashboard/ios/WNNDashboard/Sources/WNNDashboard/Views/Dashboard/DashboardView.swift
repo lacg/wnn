@@ -7,7 +7,6 @@ public struct DashboardView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @EnvironmentObject var viewModel: DashboardViewModel
     @EnvironmentObject var wsManager: WebSocketManager
-    @State private var selectedHistoryPhase: Phase?
 
     public init() {}
 
@@ -37,9 +36,8 @@ public struct DashboardView: View {
             VStack(spacing: 16) {
                 headerSection
                 metricsSection
-                if viewModel.isRunning && selectedHistoryPhase == nil && viewModel.selectedHistoryExperiment == nil { progressSection }
+                if viewModel.isRunning && viewModel.selectedHistoryExperiment == nil { progressSection }
                 if !viewModel.iterations.isEmpty || !viewModel.historyIterations.isEmpty { chartSection }
-                if !viewModel.phases.isEmpty { phaseTimelineSection }
                 if !viewModel.iterations.isEmpty || !viewModel.historyIterations.isEmpty { iterationsSection }
             }
             .padding()
@@ -50,12 +48,11 @@ public struct DashboardView: View {
 
     private var iPadLayout: some View {
         HStack(alignment: .top, spacing: 20) {
-            // Left column: Header, Metrics, Phases
+            // Left column: Header, Metrics
             VStack(spacing: 16) {
                 headerSection
                 metricsSection
-                if viewModel.isRunning && selectedHistoryPhase == nil && viewModel.selectedHistoryExperiment == nil { progressSection }
-                if !viewModel.phases.isEmpty { phaseGridSection }
+                if viewModel.isRunning && viewModel.selectedHistoryExperiment == nil { progressSection }
                 Spacer()
             }
             .frame(width: LayoutConstants.iPadSidebarWidth)
@@ -74,50 +71,11 @@ public struct DashboardView: View {
         .padding()
     }
 
-    private var phaseGridSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Phases").font(.headline)
-                Spacer()
-                if selectedHistoryPhase != nil {
-                    Button("Show Live") {
-                        selectedHistoryPhase = nil
-                    }
-                    .font(.caption)
-                    .foregroundColor(.blue)
-                }
-            }
-
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 140))], spacing: 12) {
-                ForEach(viewModel.phases.sorted { $0.sequence_order < $1.sequence_order }) { phase in
-                    PhaseCard(
-                        phase: phase,
-                        isCurrent: phase.id == viewModel.currentPhase?.id,
-                        isSelected: phase.id == selectedHistoryPhase?.id,
-                        isSelectable: phase.status == .completed
-                    )
-                    .onTapGesture {
-                        if phase.status == .completed {
-                            if selectedHistoryPhase?.id == phase.id {
-                                selectedHistoryPhase = nil
-                            } else {
-                                selectedHistoryPhase = phase
-                                Task { await viewModel.loadHistoryIterations(for: phase) }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     private var iPadIterationsSection: some View {
-        let iters = (selectedHistoryPhase != nil || viewModel.selectedHistoryExperiment != nil)
+        let iters = viewModel.selectedHistoryExperiment != nil
             ? viewModel.historyIterations
             : viewModel.iterations
-        let title = selectedHistoryPhase != nil
-            ? "Phase Iterations"
-            : viewModel.selectedHistoryExperiment != nil
+        let title = viewModel.selectedHistoryExperiment != nil
             ? "Experiment Iterations"
             : "Recent Iterations"
 
@@ -138,11 +96,13 @@ public struct DashboardView: View {
                     Spacer()
                     StatusBadge(text: exp.status.displayName, color: Theme.statusColor(exp.status))
                 }
-                if let phase = viewModel.currentPhase {
+                if let current = exp.current_iteration, let max = exp.max_iterations {
                     HStack {
-                        Text(phase.name).font(.subheadline).foregroundStyle(.secondary)
+                        if let phaseType = exp.phase_type {
+                            Text(phaseType).font(.subheadline).foregroundStyle(.secondary)
+                        }
                         Spacer()
-                        Text("Iteration \(phase.current_iteration)/\(phase.max_iterations)").font(.caption).foregroundStyle(.secondary)
+                        Text("Iteration \(current)/\(max)").font(.caption).foregroundStyle(.secondary)
                     }
                 }
             } else if let histExp = viewModel.selectedHistoryExperiment {
@@ -216,23 +176,20 @@ public struct DashboardView: View {
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
             MetricsCardView(title: "Best CE", value: NumberFormatters.formatCE(viewModel.bestCE), icon: "arrow.down.circle", color: .blue)
             MetricsCardView(title: "Best Accuracy", value: NumberFormatters.formatAccuracy(viewModel.bestAccuracy), icon: "arrow.up.circle", color: .green)
-            MetricsCardView(title: "Phase", value: "\(viewModel.phases.filter { $0.status == .completed }.count + 1)/\(max(viewModel.phases.count, 1))", icon: "clock.badge.checkmark", color: .purple)
+            MetricsCardView(title: "Type", value: viewModel.currentExperiment?.typePrefix ?? "-", icon: "gearshape.2", color: .purple)
             MetricsCardView(title: "Iteration", value: "\(viewModel.currentIterationNumber)", icon: "number", color: .orange)
         }
     }
 
     private var progressSection: some View {
-        ProgressBarView(progress: viewModel.phaseProgress, current: Int(viewModel.currentIterationNumber), max: Int(viewModel.maxIterations))
+        ProgressBarView(progress: viewModel.experimentProgress, current: Int(viewModel.currentIterationNumber), max: Int(viewModel.maxIterations))
     }
 
     private var chartSection: some View {
         let iterations: [Iteration]
         let title: String
 
-        if let histPhase = selectedHistoryPhase {
-            iterations = viewModel.historyIterations
-            title = "Phase \(histPhase.shortName) History"
-        } else if let histExp = viewModel.selectedHistoryExperiment {
+        if let histExp = viewModel.selectedHistoryExperiment {
             iterations = viewModel.historyIterations
             title = histExp.name
         } else {
@@ -244,27 +201,11 @@ public struct DashboardView: View {
             .frame(height: 280)
     }
 
-    private var phaseTimelineSection: some View {
-        PhaseTimelineView(
-            phases: viewModel.phases,
-            currentPhase: viewModel.currentPhase,
-            selectedPhase: selectedHistoryPhase,
-            onPhaseSelected: { phase in
-                selectedHistoryPhase = phase
-                if let phase = phase {
-                    Task { await viewModel.loadHistoryIterations(for: phase) }
-                }
-            }
-        )
-    }
-
     private var iterationsSection: some View {
-        let iters = (selectedHistoryPhase != nil || viewModel.selectedHistoryExperiment != nil)
+        let iters = viewModel.selectedHistoryExperiment != nil
             ? viewModel.historyIterations
             : viewModel.iterations
-        let title = selectedHistoryPhase != nil
-            ? "Phase Iterations"
-            : viewModel.selectedHistoryExperiment != nil
+        let title = viewModel.selectedHistoryExperiment != nil
             ? "Experiment Iterations"
             : "Recent Iterations"
 

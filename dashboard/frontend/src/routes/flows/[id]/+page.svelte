@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
-  import type { Flow, Experiment, Checkpoint, Phase, PhaseResult } from '$lib/types';
+  import type { Flow, Experiment, Checkpoint } from '$lib/types';
   import { formatDate } from '$lib/dateFormat';
   import { currentFlow, flows } from '$lib/stores';
 
@@ -51,8 +51,6 @@
   });
   let experiments: Experiment[] = [];
   let checkpoints: Checkpoint[] = [];
-  let phases: Phase[] = [];
-  let phaseResults: Map<number, PhaseResult> = new Map();
   let loading = true;
   let error: string | null = null;
   let saving = false;
@@ -125,17 +123,6 @@
       // Ensure checkpoints is always an array
       const checkpointsData = checkpointsRes.ok ? await checkpointsRes.json() : [];
       checkpoints = Array.isArray(checkpointsData) ? checkpointsData : [];
-
-      // Fetch phases for each experiment
-      phases = [];
-      phaseResults = new Map();
-      for (const exp of experiments) {
-        const phasesRes = await fetch(`/api/experiments/${exp.id}/phases`);
-        if (phasesRes.ok) {
-          const expPhases: Phase[] = await phasesRes.json();
-          phases = [...phases, ...expPhases];
-        }
-      }
 
       // Populate edit form from config
       if (flow?.config?.params) {
@@ -605,45 +592,14 @@
     }
   }
 
-  // Build expected phase_type from expSpec
-  function getExpectedPhaseType(expSpec: { experiment_type: string; optimize_neurons?: boolean; optimize_bits?: boolean; optimize_connections?: boolean }): string {
-    const type = expSpec.experiment_type; // 'ga' or 'ts'
-    let target = '';
-    if (expSpec.optimize_neurons) target = 'neurons';
-    else if (expSpec.optimize_bits) target = 'bits';
-    else if (expSpec.optimize_connections) target = 'connections';
-    return `${type}_${target}`;
-  }
-
-  // Find phase by matching phase_type
-  function findPhase(expSpec: { name: string; experiment_type: string; optimize_neurons?: boolean; optimize_bits?: boolean; optimize_connections?: boolean }, index: number): Phase | null {
-    const expectedPhaseType = getExpectedPhaseType(expSpec);
-
-    // Find all phases with matching type
-    const matchingPhases = phases.filter(p => p.phase_type === expectedPhaseType);
-
-    // If we have multiple phases of same type (shouldn't happen normally), return first
-    // If only one, return it
-    if (matchingPhases.length > 0) {
-      return matchingPhases[0];
-    }
-
-    // Fallback: try to match by index if phases are in order
-    if (index < phases.length) {
-      return phases[index];
-    }
-
-    return null;
-  }
-
   // Get final checkpoint for an experiment
   function getFinalCheckpoint(experimentId: number): Checkpoint | null {
     return checkpoints.find(c => c.experiment_id === experimentId && c.is_final) ?? null;
   }
 
-  // Get phase status: completed, running, or pending
+  // Get experiment status: completed, running, or pending
   function getExpStatus(expSpec: { name: string; experiment_type: string; optimize_neurons?: boolean; optimize_bits?: boolean; optimize_connections?: boolean }, index: number): 'completed' | 'running' | 'pending' | 'failed' | 'cancelled' {
-    // First, check the actual experiment record from the DB (this has the authoritative status)
+    // Check the actual experiment record from the DB (this has the authoritative status)
     // Try to match by sequence_order, then by name, then by array position
     let actualExp = experiments.find(e => e.sequence_order === index);
     if (!actualExp) {
@@ -665,16 +621,8 @@
       return 'pending';
     }
 
-    // Fallback to phase-based inference (only if no DB experiment record found)
-    const phase = findPhase(expSpec, index);
-    if (phase) {
-      if (phase.status === 'completed') return 'completed';
-      if (phase.status === 'running') return 'running';
-      return 'pending';
-    }
-
-    // Fallback: if flow is running but no phases exist yet, assume first experiment is running
-    if (flow?.status === 'running' && phases.length === 0 && index === 0) {
+    // Fallback: if flow is running but no experiments yet, assume first is running
+    if (flow?.status === 'running' && experiments.length === 0 && index === 0) {
       return 'running';
     }
 
@@ -692,43 +640,49 @@
     return 'pending';
   }
 
-  // Check if this is the currently running phase
+  // Check if this is the currently running experiment
   function isRunningExperiment(expSpec: { name: string; experiment_type: string; optimize_neurons?: boolean; optimize_bits?: boolean; optimize_connections?: boolean }, index: number): boolean {
-    const phase = findPhase(expSpec, index);
-    if (phase?.status === 'running') return true;
+    // Check if the experiment is running directly
+    const actualExp = experiments.find(e => e.sequence_order === index) ||
+                      experiments.find(e => e.name === expSpec.name) ||
+                      (index < experiments.length ? experiments[index] : null);
 
-    // Fallback: if flow is running but no phases exist yet, assume first experiment is running
-    if (flow?.status === 'running' && phases.length === 0 && index === 0) {
+    if (actualExp?.status === 'running') return true;
+
+    // Fallback: if flow is running but no experiments exist yet, assume first is running
+    if (flow?.status === 'running' && experiments.length === 0 && index === 0) {
       return true;
     }
 
     return false;
   }
 
-  // Get metrics for completed phase
-  // TODO: Add phase_results API endpoint for per-phase metrics
+  // Get metrics for completed experiment
   function getExpMetrics(expSpec: { name: string; experiment_type: string; optimize_neurons?: boolean; optimize_bits?: boolean; optimize_connections?: boolean }, index: number): { ce: number | null; acc: number | null } | null {
-    const phase = findPhase(expSpec, index);
-    if (!phase || phase.status !== 'completed') return null;
+    // Find the actual experiment
+    const actualExp = experiments.find(e => e.sequence_order === index) ||
+                      experiments.find(e => e.name === expSpec.name) ||
+                      (index < experiments.length ? experiments[index] : null);
 
-    // For the last completed phase, we can show checkpoint metrics
-    // This is an approximation until we have per-phase results
-    const completedPhases = phases.filter(p => p.status === 'completed');
-    const isLastCompleted = completedPhases.length > 0 &&
-      completedPhases[completedPhases.length - 1].id === phase.id;
+    if (!actualExp || actualExp.status !== 'completed') return null;
 
-    if (isLastCompleted && experiments.length > 0) {
-      const exp = experiments[0];
-      const checkpoint = checkpoints.find(c => c.experiment_id === exp.id);
-      if (checkpoint) {
-        return {
-          ce: checkpoint.final_fitness,
-          acc: checkpoint.final_accuracy
-        };
-      }
+    // Get metrics directly from the experiment (new simplified model)
+    if (actualExp.best_ce !== null || actualExp.best_accuracy !== null) {
+      return {
+        ce: actualExp.best_ce,
+        acc: actualExp.best_accuracy
+      };
     }
 
-    // For other completed phases, show completion without metrics for now
+    // Fallback: try to get metrics from checkpoint
+    const checkpoint = checkpoints.find(c => c.experiment_id === actualExp.id);
+    if (checkpoint) {
+      return {
+        ce: checkpoint.best_ce,
+        acc: checkpoint.best_accuracy
+      };
+    }
+
     return null;
   }
 
@@ -764,14 +718,6 @@
     // Fallback: match by array position (experiments are typically in order)
     if (index < experiments.length) {
       return experiments[index].id;
-    }
-
-    // Last fallback: try via phase
-    if (expSpec) {
-      const phase = findPhase(expSpec, index);
-      if (phase) {
-        return phase.experiment_id;
-      }
     }
 
     return null;
@@ -1203,17 +1149,16 @@
         </div>
       {/if}
 
-      <!-- DEBUG: experiments array has {experiments.length} items -->
       <div class="experiments-list">
         {#each getDisplayExperiments() as { exp: dbExp, spec, index: i }}
-          {@const displayExp = spec || { name: dbExp?.name || `Experiment ${i + 1}`, experiment_type: 'ga', optimize_bits: false, optimize_neurons: true, optimize_connections: false }}
+          {@const displaySpec = spec ?? { name: dbExp?.name ?? 'Unknown', experiment_type: 'ga', optimize_neurons: true, optimize_bits: false, optimize_connections: false }}
           {@const status = dbExp ? dbExp.status : (spec ? getExpStatus(spec, i) : 'pending')}
           {@const metrics = spec ? getExpMetrics(spec, i) : null}
           {@const isRunning = status === 'running'}
           {@const canEdit = canEditExperiment(i)}
           {@const isEditing = editingExpIndex === i}
-          {@const expLink = dbExp ? getExperimentLinkById(dbExp.id, status) : getExperimentLink(i)}
-          <!-- DEBUG: dbExp={dbExp ? `id=${dbExp.id} status=${dbExp.status}` : 'null'} expLink={expLink} -->
+          {@const expId = dbExp?.id ?? null}
+          {@const expLink = (status === 'completed' || status === 'running') && expId ? (status === 'running' ? '/' : `/experiments/${expId}`) : null}
 
           {#if isEditing && editingExp}
             <div class="experiment-item editing">
@@ -1276,7 +1221,7 @@
                 </div>
                 <div class="exp-content">
                   <div class="exp-header">
-                    <div class="exp-name">{displayExp.name}</div>
+                    <div class="exp-name">{dbExp?.name ?? displaySpec.name}</div>
                     <span class="status-indicator" class:status-completed={status === 'completed'} class:status-running={isRunning} class:status-pending={status === 'pending'}>
                       {status}
                     </span>
@@ -1288,14 +1233,14 @@
                     {/if}
                   </div>
                   <div class="exp-meta">
-                    <span class="exp-type">{displayExp.experiment_type.toUpperCase()}</span>
-                    {#if displayExp.optimize_bits}
+                    <span class="exp-type">{displaySpec.experiment_type.toUpperCase()}</span>
+                    {#if displaySpec.optimize_bits}
                       <span class="exp-tag">Bits</span>
                     {/if}
-                    {#if displayExp.optimize_neurons}
+                    {#if displaySpec.optimize_neurons}
                       <span class="exp-tag">Neurons</span>
                     {/if}
-                    {#if displayExp.optimize_connections}
+                    {#if displaySpec.optimize_connections}
                       <span class="exp-tag">Connections</span>
                     {/if}
                   </div>
@@ -1332,20 +1277,20 @@
                 </div>
                 <div class="exp-content">
                   <div class="exp-header">
-                    <div class="exp-name">{displayExp.name}</div>
+                    <div class="exp-name">{dbExp?.name ?? displaySpec.name}</div>
                     <span class="status-indicator" class:status-completed={status === 'completed'} class:status-running={isRunning} class:status-pending={status === 'pending'}>
                       {status}
                     </span>
                   </div>
                   <div class="exp-meta">
-                    <span class="exp-type">{displayExp.experiment_type.toUpperCase()}</span>
-                    {#if displayExp.optimize_bits}
+                    <span class="exp-type">{displaySpec.experiment_type.toUpperCase()}</span>
+                    {#if displaySpec.optimize_bits}
                       <span class="exp-tag">Bits</span>
                     {/if}
-                    {#if displayExp.optimize_neurons}
+                    {#if displaySpec.optimize_neurons}
                       <span class="exp-tag">Neurons</span>
                     {/if}
-                    {#if displayExp.optimize_connections}
+                    {#if displaySpec.optimize_connections}
                       <span class="exp-tag">Connections</span>
                     {/if}
                   </div>

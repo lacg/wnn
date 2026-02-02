@@ -1,19 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
-  import type { Experiment, Phase, Iteration, GenomeEvaluation } from '$lib/types';
+  import type { Experiment, Iteration, GenomeEvaluation } from '$lib/types';
   import { formatDate } from '$lib/dateFormat';
 
   let experiment: Experiment | null = null;
-  let phases: Phase[] = [];
   let iterations: Iteration[] = [];
   let loading = true;
   let error: string | null = null;
-
-  // Phase selection state
-  let selectedPhase: Phase | null = null;
-  let phaseIterations: Iteration[] = [];
-  let loadingPhaseIterations = false;
 
   // Iteration detail modal state
   let selectedIteration: Iteration | null = null;
@@ -35,49 +29,22 @@
     error = null;
 
     try {
-      const [expRes, phasesRes, itersRes] = await Promise.all([
+      const [expRes, itersRes] = await Promise.all([
         fetch(`/api/experiments/${experimentId}`),
-        fetch(`/api/experiments/${experimentId}/phases`),
         fetch(`/api/experiments/${experimentId}/iterations?limit=500`)
       ]);
 
       if (!expRes.ok) throw new Error('Experiment not found');
 
       experiment = await expRes.json();
-      phases = phasesRes.ok ? await phasesRes.json() : [];
       iterations = itersRes.ok ? await itersRes.json() : [];
 
-      // Ensure arrays
-      if (!Array.isArray(phases)) phases = [];
+      // Ensure array
       if (!Array.isArray(iterations)) iterations = [];
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to load experiment';
     } finally {
       loading = false;
-    }
-  }
-
-  async function selectPhase(phase: Phase) {
-    if (selectedPhase?.id === phase.id) {
-      selectedPhase = null;
-      phaseIterations = [];
-      return;
-    }
-
-    selectedPhase = phase;
-    loadingPhaseIterations = true;
-    phaseIterations = [];
-
-    try {
-      const res = await fetch(`/api/phases/${phase.id}/iterations`);
-      if (res.ok) {
-        phaseIterations = await res.json();
-        if (!Array.isArray(phaseIterations)) phaseIterations = [];
-      }
-    } catch (e) {
-      console.error('Failed to fetch phase iterations:', e);
-    } finally {
-      loadingPhaseIterations = false;
     }
   }
 
@@ -138,17 +105,8 @@
     return `${hours}h ${mins}m`;
   }
 
-  function phaseShortName(name: string): string {
-    const match = name.match(/Phase (\d+[ab]?): (GA|TS) (\w+)/);
-    if (match) {
-      const type = match[3].slice(0, 4);
-      return `${match[1]} ${match[2]} ${type}`;
-    }
-    return name;
-  }
-
-  // Chart data
-  $: displayIterations = selectedPhase ? phaseIterations : iterations;
+  // Chart data - iterations directly from experiment
+  $: displayIterations = iterations;
   $: chartData = displayIterations.map(iter => ({
     iter: iter.iteration_num,
     ce: iter.best_ce,
@@ -226,46 +184,12 @@
       </div>
     </div>
 
-    <!-- Phase Timeline -->
-    {#if phases.length > 0}
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title">Phases</span>
-          {#if selectedPhase}
-            <button class="btn-small" on:click={() => { selectedPhase = null; phaseIterations = []; }}>
-              ← Show All
-            </button>
-          {/if}
-        </div>
-        <div class="phase-timeline">
-          {#each phases as phase}
-            <button
-              class="phase-item"
-              class:completed={phase.status === 'completed'}
-              class:running={phase.status === 'running'}
-              class:selected={selectedPhase?.id === phase.id}
-              on:click={() => selectPhase(phase)}
-            >
-              <div class="phase-indicator"></div>
-              <div class="phase-info">
-                <div class="phase-name">{phaseShortName(phase.name)}</div>
-                <div class="phase-status">{phase.status}</div>
-                {#if phase.best_ce}
-                  <div class="phase-ce">CE: {phase.best_ce.toFixed(4)}</div>
-                {/if}
-              </div>
-            </button>
-          {/each}
-        </div>
-      </div>
-    {/if}
-
     <!-- Chart -->
     {#if chartData.length > 0}
       <div class="card">
         <div class="card-header">
           <span class="card-title">
-            {selectedPhase ? phaseShortName(selectedPhase.name) : 'Progress'} ({chartData.length} iterations)
+            Progress ({chartData.length} iterations)
           </span>
           <div class="chart-legend">
             <span class="legend-item"><span class="legend-line ce"></span> Best CE</span>
@@ -361,14 +285,10 @@
     <!-- Iterations Table -->
     <div class="card">
       <div class="card-header">
-        <span class="card-title">
-          {selectedPhase ? phaseShortName(selectedPhase.name) + ' Iterations' : 'All Iterations'}
-        </span>
+        <span class="card-title">Iterations</span>
         <span class="count">{displayIterations.length} iterations</span>
       </div>
-      {#if loadingPhaseIterations}
-        <div class="loading-inline">Loading...</div>
-      {:else if displayIterations.length === 0}
+      {#if displayIterations.length === 0}
         <div class="empty-state">No iterations recorded</div>
       {:else}
         <div class="table-scroll">
@@ -646,101 +566,6 @@
   .count {
     font-size: 0.875rem;
     color: var(--text-secondary);
-  }
-
-  .btn-small {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    color: var(--text-secondary);
-    cursor: pointer;
-  }
-
-  .btn-small:hover {
-    background: var(--bg-hover);
-    color: var(--text-primary);
-  }
-
-  .phase-timeline {
-    display: flex;
-    gap: 0.5rem;
-    overflow-x: auto;
-    padding: 1rem;
-  }
-
-  .phase-item {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    min-width: 100px;
-    padding: 0.5rem;
-    border-radius: 4px;
-    background: var(--bg-card);
-    border: 1px solid transparent;
-    cursor: pointer;
-    transition: all 0.15s;
-    font: inherit;
-    color: inherit;
-    text-align: center;
-  }
-
-  .phase-item:hover {
-    border-color: var(--accent-blue);
-    background: rgba(59, 130, 246, 0.1);
-  }
-
-  .phase-item.selected {
-    border-color: var(--accent-blue);
-    background: rgba(59, 130, 246, 0.15);
-  }
-
-  .phase-item.completed {
-    border-left: 3px solid var(--accent-green);
-  }
-
-  .phase-item.running {
-    border-left: 3px solid var(--accent-blue);
-  }
-
-  .phase-indicator {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    background: var(--border);
-    margin-bottom: 0.5rem;
-  }
-
-  .phase-item.completed .phase-indicator {
-    background: var(--accent-green);
-  }
-
-  .phase-item.running .phase-indicator {
-    background: var(--accent-blue);
-    animation: pulse 2s infinite;
-  }
-
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
-  }
-
-  .phase-name {
-    font-size: 0.75rem;
-    font-weight: 500;
-  }
-
-  .phase-status {
-    font-size: 0.625rem;
-    color: var(--text-secondary);
-    text-transform: uppercase;
-  }
-
-  .phase-ce {
-    font-size: 0.625rem;
-    color: var(--accent-green);
-    font-family: monospace;
   }
 
   .chart-container {

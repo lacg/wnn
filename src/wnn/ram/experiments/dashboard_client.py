@@ -434,56 +434,6 @@ class DashboardClient:
 		self._logger(f"Linked experiment {experiment_id} to flow {flow_id}")
 
 	# =========================================================================
-	# Phase methods
-	# =========================================================================
-
-	def phase_started(
-		self,
-		experiment_id: int,
-		name: str,
-		phase_type: str,
-	) -> int:
-		"""
-		Notify dashboard that a phase has started.
-
-		Args:
-			experiment_id: Parent experiment ID
-			name: Phase name (e.g., "Phase 1a: GA Neurons")
-			phase_type: Phase type (e.g., "ga_neurons", "ts_bits")
-
-		Returns:
-			Phase ID
-		"""
-		data = {
-			"name": name,
-			"phase_type": phase_type,
-		}
-		result = self._request("POST", f"/api/experiments/{experiment_id}/phases", json_data=data)
-		phase_id = result["id"]
-		self._logger(f"Phase started: {name} (id={phase_id})")
-		return phase_id
-
-	def phase_completed(
-		self,
-		phase_id: int,
-		status: str = "completed",
-	) -> None:
-		"""
-		Notify dashboard that a phase has completed.
-
-		Args:
-			phase_id: Phase ID
-			status: Final status ("completed" or "skipped")
-		"""
-		from datetime import datetime, timezone
-		data = {
-			"status": status,
-			"ended_at": datetime.now(timezone.utc).isoformat(),
-		}
-		self._request("PATCH", f"/api/phases/{phase_id}", json_data=data)
-		self._logger(f"Phase {phase_id} {status}")
-
-	# =========================================================================
 	# Checkpoint methods
 	# =========================================================================
 
@@ -497,7 +447,6 @@ class DashboardClient:
 		iterations_run: Optional[int] = None,
 		genome_stats: Optional[dict] = None,
 		is_final: bool = False,
-		phase_id: Optional[int] = None,
 		iteration_id: Optional[int] = None,
 		checkpoint_type: str = "auto",
 	) -> int:
@@ -513,7 +462,6 @@ class DashboardClient:
 			iterations_run: Number of iterations completed (unused by API)
 			genome_stats: Optional genome statistics (unused by API)
 			is_final: Whether this is the final checkpoint for the experiment
-			phase_id: ID of the phase this checkpoint belongs to (IMPORTANT for phase transitions!)
 			iteration_id: Optional iteration ID
 			checkpoint_type: Type of checkpoint ('auto', 'user', 'phase_end', 'experiment_end')
 
@@ -534,13 +482,12 @@ class DashboardClient:
 			"best_ce": final_fitness,        # API expects best_ce, not final_fitness
 			"best_accuracy": final_accuracy,  # API expects best_accuracy, not final_accuracy
 			"checkpoint_type": checkpoint_type,
-			"phase_id": phase_id,
 			"iteration_id": iteration_id,
 		}
 
 		result = self._request("POST", "/api/checkpoints", json_data=data)
 		ckpt_id = result["id"]
-		self._logger(f"Registered checkpoint {ckpt_id}: {name} (phase_id={phase_id}, type={checkpoint_type})")
+		self._logger(f"Registered checkpoint {ckpt_id}: {name} (type={checkpoint_type})")
 		return ckpt_id
 
 	def list_checkpoints(

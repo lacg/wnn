@@ -208,9 +208,6 @@ class Experiment:
 		self.shutdown_check = shutdown_check
 		self.run_init_validation = run_init_validation
 
-		# Phase tracking (set during run())
-		self._phase_id: Optional[int] = None  # Dashboard API phase ID for checkpoints
-
 		# Derived properties
 		self.vocab_size = evaluator.vocab_size
 		self.total_input_bits = evaluator.total_input_bits
@@ -311,24 +308,9 @@ class Experiment:
 		# Create strategy
 		strategy = OptimizerStrategyFactory.create(**strategy_kwargs)
 
-		# Determine phase type string (used by both dashboard and V2 tracker)
+		# Determine phase type string (used by V2 tracker)
 		opt_target = "bits" if cfg.optimize_bits else "neurons" if cfg.optimize_neurons else "connections"
 		phase_type = f"{'ga' if is_ga else 'ts'}_{opt_target}"
-
-		# Create phase in dashboard API (for checkpoint linking)
-		# NOTE: Skip if V2 tracker is active - it creates phases directly in the database,
-		# while dashboard_client would create duplicate phases via HTTP API
-		if self.dashboard_client and self.experiment_id and not self.tracker:
-			try:
-				self._phase_id = self.dashboard_client.phase_started(
-					experiment_id=self.experiment_id,
-					name=cfg.name,
-					phase_type=phase_type,
-				)
-				self.log(f"  Dashboard phase created: phase_id={self._phase_id}")
-			except Exception as e:
-				self.log(f"  Warning: Failed to create dashboard phase: {e}")
-				self._phase_id = None
 
 		# V2 tracking: create phase and set tracker on strategy
 		tracker_phase_id: Optional[int] = None
@@ -495,14 +477,9 @@ class Experiment:
 					iterations_run=result.iterations_run,
 					genome_stats=genome_stats,
 					is_final=True,
-					phase_id=self._phase_id,  # Link checkpoint to phase!
-					checkpoint_type="phase_end",
+					checkpoint_type="experiment_end",  # Simplified model - no phases
 				)
-				self.log(f"  Registered checkpoint {checkpoint_id} with phase_id={self._phase_id}")
-
-				# Mark phase as completed
-				if self._phase_id:
-					self.dashboard_client.phase_completed(self._phase_id, status="completed")
+				self.log(f"  Registered checkpoint {checkpoint_id} for experiment {self.experiment_id}")
 			except Exception as e:
 				self.log(f"  Warning: Failed to register checkpoint with dashboard: {e}")
 

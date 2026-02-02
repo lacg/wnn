@@ -11,8 +11,8 @@ public struct LayoutConstants {
     // Sidebar width for iPad dashboard layout
     public static let iPadSidebarWidth: CGFloat = 320
 
-    // Phase grid
-    public static func phaseGridColumns(for sizeClass: UserInterfaceSizeClass?) -> [GridItem] {
+    // Grid columns
+    public static func gridColumns(for sizeClass: UserInterfaceSizeClass?) -> [GridItem] {
         if sizeClass == .regular {
             return [GridItem(.adaptive(minimum: 140))]
         } else {

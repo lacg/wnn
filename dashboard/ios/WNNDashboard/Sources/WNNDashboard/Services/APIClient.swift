@@ -55,11 +55,9 @@ public final class APIClient {
         catch APIError.httpError(404), APIError.serverError(404, _) { return nil }
     }
     public func getExperiment(_ id: Int64) async throws -> Experiment { try await request(path: "api/experiments/\(id)") }
-    public func getPhases(experimentId: Int64) async throws -> [Phase] { try await request(path: "api/experiments/\(experimentId)/phases") }
     public func getIterations(experimentId: Int64) async throws -> [Iteration] { try await request(path: "api/experiments/\(experimentId)/iterations") }
 
-    // Phases & Iterations
-    public func getPhaseIterations(phaseId: Int64) async throws -> [Iteration] { try await request(path: "api/phases/\(phaseId)/iterations") }
+    // Iterations
     public func getGenomes(iterationId: Int64) async throws -> [GenomeEvaluation] { try await request(path: "api/iterations/\(iterationId)/genomes") }
 
     // Flows

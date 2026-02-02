@@ -15,13 +15,18 @@ public struct Experiment: Codable, Identifiable, Hashable {
     public let context_size: Int32
     public let population_size: Int32
     public let pid: Int32?
-    public let last_phase_id: Int64?
     public let last_iteration: Int32?
     public let resume_checkpoint_id: Int64?
     public let created_at: String
     public let started_at: String?
     public let ended_at: String?
     public let paused_at: String?
+    // Fields moved from Phase (simplified model)
+    public let phase_type: String?
+    public let max_iterations: Int32?
+    public let current_iteration: Int32?
+    public let best_ce: Double?
+    public let best_accuracy: Double?
 
     public var createdDate: Date? { ISO8601DateFormatter().date(from: created_at) }
     public var startedDate: Date? { started_at.flatMap { ISO8601DateFormatter().date(from: $0) } }
@@ -30,6 +35,18 @@ public struct Experiment: Codable, Identifiable, Hashable {
     public var duration: TimeInterval? {
         guard let start = startedDate else { return nil }
         return (endedDate ?? Date()).timeIntervalSince(start)
+    }
+
+    public var progress: Double {
+        guard let max = max_iterations, max > 0, let current = current_iteration else { return 0 }
+        return Double(current) / Double(max)
+    }
+
+    public var typePrefix: String {
+        guard let pt = phase_type?.lowercased() else { return "" }
+        if pt.contains("ga") { return "GA" }
+        if pt.contains("ts") { return "TS" }
+        return ""
     }
 
     public var parsedTierConfig: [TierConfigEntry]? {

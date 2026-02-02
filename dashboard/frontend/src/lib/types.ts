@@ -15,14 +15,6 @@ export type ExperimentStatus =
   | 'failed'
   | 'cancelled';
 
-export type PhaseStatus =
-  | 'pending'
-  | 'running'
-  | 'paused'
-  | 'completed'
-  | 'skipped'
-  | 'failed';
-
 export type FitnessCalculator = 'ce' | 'harmonic_rank' | 'weighted_harmonic';
 
 export type GenomeRole =
@@ -85,47 +77,18 @@ export interface Experiment {
   context_size: number;
   population_size: number;
   pid: number | null;
-  last_phase_id: number | null;
   last_iteration: number | null;
   resume_checkpoint_id: number | null;
   created_at: string;
   started_at: string | null;
   ended_at: string | null;
   paused_at: string | null;
-}
-
-// =============================================================================
-// Phase types
-// =============================================================================
-
-export interface Phase {
-  id: number;
-  experiment_id: number;
-  name: string;
-  phase_type: string;
-  sequence_order: number;
-  status: PhaseStatus;
-  max_iterations: number;
-  population_size: number | null;
-  current_iteration: number;
+  // Fields moved from Phase (simplified model)
+  phase_type: string | null;
+  max_iterations: number | null;
+  current_iteration: number | null;
   best_ce: number | null;
   best_accuracy: number | null;
-  created_at: string;
-  started_at: string | null;
-  ended_at: string | null;
-  /** Validation results at end of phase (best_ce, best_acc, top_k_mean) */
-  results?: PhaseResult[];
-}
-
-export interface PhaseResult {
-  id: number;
-  phase_id: number;
-  /** Type of metric: 'best_ce', 'best_acc', 'top_k_mean' */
-  metric_type: string;
-  ce: number;
-  accuracy: number;
-  memory_bytes: number | null;
-  improvement_pct: number;
 }
 
 // =============================================================================
@@ -134,7 +97,8 @@ export interface PhaseResult {
 
 export interface Iteration {
   id: number;
-  phase_id: number;
+  experiment_id: number | null;  // Primary reference (simplified model)
+  phase_id: number | null;       // Deprecated: kept for backward compatibility
   iteration_num: number;
   best_ce: number;
   best_accuracy: number | null;
@@ -234,8 +198,8 @@ export interface Checkpoint {
 
 export interface DashboardSnapshot {
   current_experiment: Experiment | null;
-  current_phase: Phase | null;
-  phases: Phase[];
+  current_phase: null;  // Deprecated: always null in simplified model
+  phases: [];           // Deprecated: always empty in simplified model
   iterations: Iteration[];
   best_ce: number;
   best_accuracy: number;
@@ -248,8 +212,6 @@ export interface DashboardSnapshot {
 export type WsMessage =
   | { type: 'Snapshot'; data: DashboardSnapshot }
   | { type: 'IterationCompleted'; data: Iteration }
-  | { type: 'PhaseStarted'; data: Phase }
-  | { type: 'PhaseCompleted'; data: Phase }
   | { type: 'HealthCheck'; data: HealthCheck }
   | { type: 'ExperimentStatusChanged'; data: Experiment }
   | { type: 'FlowStarted'; data: Flow }

@@ -1,4 +1,4 @@
-// ProgressBarView - Phase progress indicator
+// ProgressBarView - Experiment progress indicator
 
 import SwiftUI
 
@@ -14,7 +14,7 @@ public struct ProgressBarView: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Phase Progress").font(.caption).foregroundColor(.secondary)
+                Text("Progress").font(.caption).foregroundColor(.secondary)
                 Spacer()
                 Text("\(current)/\(max)").font(.caption).fontDesign(.monospaced).foregroundColor(.secondary)
             }

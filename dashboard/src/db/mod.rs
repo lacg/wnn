@@ -52,6 +52,41 @@ async fn run_migrations(pool: &DbPool) -> Result<()> {
         .execute(pool)
         .await;
 
+    // Migration: Add experiment_id to iterations (Phase layer removal)
+    // This allows iterations to reference experiments directly
+    let _ = sqlx::query("ALTER TABLE iterations ADD COLUMN experiment_id INTEGER REFERENCES experiments(id)")
+        .execute(pool)
+        .await;
+
+    // Migration: Populate experiment_id from phase's experiment_id for existing data
+    let _ = sqlx::query(
+        "UPDATE iterations SET experiment_id = (SELECT experiment_id FROM phases WHERE phases.id = iterations.phase_id) WHERE experiment_id IS NULL"
+    )
+        .execute(pool)
+        .await;
+
+    // Migration: Add phase_type and max_iterations to experiments (moved from phases)
+    let _ = sqlx::query("ALTER TABLE experiments ADD COLUMN phase_type TEXT")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE experiments ADD COLUMN max_iterations INTEGER DEFAULT 250")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE experiments ADD COLUMN current_iteration INTEGER DEFAULT 0")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE experiments ADD COLUMN best_ce REAL")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE experiments ADD COLUMN best_accuracy REAL")
+        .execute(pool)
+        .await;
+
+    // Create index for experiment_id on iterations
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_iterations_experiment ON iterations(experiment_id)")
+        .execute(pool)
+        .await;
+
     Ok(())
 }
 
@@ -145,11 +180,12 @@ CREATE TABLE IF NOT EXISTS phases (
 );
 
 -- ============================================================================
--- ITERATIONS: A generation/iteration within a phase
+-- ITERATIONS: A generation/iteration within an experiment
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS iterations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    phase_id INTEGER NOT NULL REFERENCES phases(id),
+    experiment_id INTEGER REFERENCES experiments(id),
+    phase_id INTEGER REFERENCES phases(id),  -- Kept for backward compatibility during migration
     iteration_num INTEGER NOT NULL,
 
     -- Summary metrics (best of this iteration)
@@ -171,7 +207,7 @@ CREATE TABLE IF NOT EXISTS iterations (
 
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
 
-    UNIQUE(phase_id, iteration_num)
+    UNIQUE(experiment_id, iteration_num)
 );
 
 -- ============================================================================
@@ -681,7 +717,8 @@ pub mod queries {
             r#"SELECT id, flow_id, sequence_order, name, status, fitness_calculator,
                       fitness_weight_ce, fitness_weight_acc, tier_config, context_size,
                       population_size, pid, last_phase_id, last_iteration, resume_checkpoint_id,
-                      created_at, started_at, ended_at, paused_at
+                      created_at, started_at, ended_at, paused_at,
+                      phase_type, max_iterations, current_iteration, best_ce, best_accuracy
                FROM experiments WHERE flow_id = ?
                ORDER BY sequence_order"#,
         )
@@ -921,7 +958,8 @@ pub mod queries {
             r#"SELECT e.id, e.flow_id, e.sequence_order, e.name, e.status, e.fitness_calculator,
                       e.fitness_weight_ce, e.fitness_weight_acc, e.tier_config, e.context_size,
                       e.population_size, e.pid, e.last_phase_id, e.last_iteration, e.resume_checkpoint_id,
-                      e.created_at, e.started_at, e.ended_at, e.paused_at
+                      e.created_at, e.started_at, e.ended_at, e.paused_at,
+                      e.phase_type, e.max_iterations, e.current_iteration, e.best_ce, e.best_accuracy
                FROM experiments e
                LEFT JOIN flows f ON e.flow_id = f.id
                WHERE e.status = 'running'
@@ -944,7 +982,8 @@ pub mod queries {
             r#"SELECT id, flow_id, sequence_order, name, status, fitness_calculator,
                       fitness_weight_ce, fitness_weight_acc, tier_config, context_size,
                       population_size, pid, last_phase_id, last_iteration, resume_checkpoint_id,
-                      created_at, started_at, ended_at, paused_at
+                      created_at, started_at, ended_at, paused_at,
+                      phase_type, max_iterations, current_iteration, best_ce, best_accuracy
                FROM experiments WHERE id = ?"#,
         )
         .bind(id)
@@ -1015,7 +1054,8 @@ pub mod queries {
             r#"SELECT id, flow_id, sequence_order, name, status, fitness_calculator,
                       fitness_weight_ce, fitness_weight_acc, tier_config, context_size,
                       population_size, pid, last_phase_id, last_iteration, resume_checkpoint_id,
-                      created_at, started_at, ended_at, paused_at
+                      created_at, started_at, ended_at, paused_at,
+                      phase_type, max_iterations, current_iteration, best_ce, best_accuracy
                FROM experiments
                ORDER BY created_at DESC
                LIMIT ? OFFSET ?"#,
@@ -1051,115 +1091,16 @@ pub mod queries {
         Ok(result.rows_affected() > 0)
     }
 
-    /// Create a new phase for an experiment
-    pub async fn create_phase(
-        pool: &DbPool,
-        experiment_id: i64,
-        name: &str,
-        phase_type: &str,
-        sequence_order: Option<i32>,
-        max_iterations: Option<i32>,
-        population_size: Option<i32>,
-    ) -> Result<i64> {
-        let now = Utc::now().to_rfc3339();
-
-        // If sequence_order not provided, get next sequence number
-        let seq_order = match sequence_order {
-            Some(s) => s,
-            None => {
-                let row = sqlx::query(
-                    "SELECT COALESCE(MAX(sequence_order), -1) + 1 as next_seq FROM phases WHERE experiment_id = ?",
-                )
-                .bind(experiment_id)
-                .fetch_one(pool)
-                .await?;
-                row.get::<i32, _>("next_seq")
-            }
-        };
-
-        let result = sqlx::query(
-            r#"INSERT INTO phases (
-                experiment_id, name, phase_type, sequence_order, status,
-                max_iterations, population_size, current_iteration, created_at, started_at
-            ) VALUES (?, ?, ?, ?, 'running', ?, ?, 0, ?, ?)"#,
-        )
-        .bind(experiment_id)
-        .bind(name)
-        .bind(phase_type)
-        .bind(seq_order)
-        .bind(max_iterations.unwrap_or(250))
-        .bind(population_size)
-        .bind(&now)
-        .bind(&now)
-        .execute(pool)
-        .await?;
-
-        Ok(result.last_insert_rowid())
-    }
-
-    /// Update phase status
-    pub async fn update_phase(
-        pool: &DbPool,
-        phase_id: i64,
-        status: Option<&str>,
-        ended_at: Option<&str>,
-    ) -> Result<bool> {
-        let mut updates = Vec::new();
-        let mut binds: Vec<String> = Vec::new();
-
-        if let Some(s) = status {
-            updates.push("status = ?");
-            binds.push(s.to_string());
-        }
-        if let Some(e) = ended_at {
-            updates.push("ended_at = ?");
-            binds.push(e.to_string());
-        }
-
-        if updates.is_empty() {
-            return Ok(false);
-        }
-
-        let query = format!("UPDATE phases SET {} WHERE id = ?", updates.join(", "));
-        let mut q = sqlx::query(&query);
-        for b in &binds {
-            q = q.bind(b);
-        }
-        q = q.bind(phase_id);
-
-        let result = q.execute(pool).await?;
-        Ok(result.rows_affected() > 0)
-    }
-
-    /// Get phases for an experiment
-    pub async fn get_experiment_phases(pool: &DbPool, experiment_id: i64) -> Result<Vec<Phase>> {
+    /// Get iterations for an experiment (new simplified model - no phase layer)
+    pub async fn get_experiment_iterations(pool: &DbPool, experiment_id: i64) -> Result<Vec<Iteration>> {
         let rows = sqlx::query(
-            r#"SELECT id, experiment_id, name, phase_type, sequence_order, status,
-                      max_iterations, population_size, current_iteration, best_ce, best_accuracy,
-                      created_at, started_at, ended_at
-               FROM phases WHERE experiment_id = ? ORDER BY sequence_order"#,
-        )
-        .bind(experiment_id)
-        .fetch_all(pool)
-        .await?;
-
-        let mut phases = Vec::with_capacity(rows.len());
-        for row in rows {
-            phases.push(row_to_phase(&row)?);
-        }
-        Ok(phases)
-    }
-
-    /// Get iterations for a phase
-    pub async fn get_phase_iterations(pool: &DbPool, phase_id: i64) -> Result<Vec<Iteration>> {
-        let rows = sqlx::query(
-            r#"SELECT id, phase_id, iteration_num, best_ce, best_accuracy, avg_ce, avg_accuracy,
+            r#"SELECT id, experiment_id, phase_id, iteration_num, best_ce, best_accuracy, avg_ce, avg_accuracy,
                       elite_count, offspring_count, offspring_viable, fitness_threshold,
                       elapsed_secs, baseline_ce, delta_baseline, delta_previous,
                       patience_counter, patience_max, candidates_total, created_at
-               FROM iterations WHERE phase_id = ? ORDER BY iteration_num"#,
+               FROM iterations WHERE experiment_id = ? ORDER BY iteration_num"#,
         )
-        .bind(phase_id)
+        .bind(experiment_id)
         .fetch_all(pool)
         .await?;
 
@@ -1170,38 +1111,17 @@ pub mod queries {
         Ok(iterations)
     }
 
-    /// Get the current phase (running or most recent) for an experiment
-    pub async fn get_current_phase(pool: &DbPool, experiment_id: i64) -> Result<Option<Phase>> {
-        let row = sqlx::query(
-            r#"SELECT id, experiment_id, name, phase_type, sequence_order, status,
-                      max_iterations, population_size, current_iteration, best_ce, best_accuracy,
-                      created_at, started_at, ended_at
-               FROM phases WHERE experiment_id = ?
-               ORDER BY CASE WHEN status = 'running' THEN 0 ELSE 1 END, sequence_order DESC
-               LIMIT 1"#,
-        )
-        .bind(experiment_id)
-        .fetch_optional(pool)
-        .await?;
-
-        match row {
-            Some(r) => Ok(Some(row_to_phase(&r)?)),
-            None => Ok(None),
-        }
-    }
-
-    /// Get recent iterations for an experiment (across all phases)
+    /// Get recent iterations for an experiment (uses experiment_id directly)
     pub async fn get_recent_iterations(pool: &DbPool, experiment_id: i64, limit: i32) -> Result<Vec<Iteration>> {
         let rows = sqlx::query(
-            r#"SELECT i.id, i.phase_id, i.iteration_num, i.best_ce, i.best_accuracy, i.avg_ce,
-                      i.avg_accuracy, i.elite_count, i.offspring_count, i.offspring_viable,
-                      i.fitness_threshold, i.elapsed_secs, i.baseline_ce, i.delta_baseline,
-                      i.delta_previous, i.patience_counter, i.patience_max, i.candidates_total,
-                      i.created_at
-               FROM iterations i
-               JOIN phases p ON i.phase_id = p.id
-               WHERE p.experiment_id = ?
-               ORDER BY i.created_at DESC
+            r#"SELECT id, experiment_id, phase_id, iteration_num, best_ce, best_accuracy, avg_ce,
+                      avg_accuracy, elite_count, offspring_count, offspring_viable,
+                      fitness_threshold, elapsed_secs, baseline_ce, delta_baseline,
+                      delta_previous, patience_counter, patience_max, candidates_total,
+                      created_at
+               FROM iterations
+               WHERE experiment_id = ?
+               ORDER BY created_at DESC
                LIMIT ?"#,
         )
         .bind(experiment_id)
@@ -1248,68 +1168,20 @@ pub mod queries {
             paused_at: row.get::<Option<String>, _>("paused_at")
                 .map(|s| parse_datetime(s))
                 .transpose()?,
+            // New fields from Phase layer removal
+            phase_type: row.try_get("phase_type").ok(),
+            max_iterations: row.try_get("max_iterations").ok(),
+            current_iteration: row.try_get("current_iteration").ok(),
+            best_ce: row.try_get("best_ce").ok(),
+            best_accuracy: row.try_get("best_accuracy").ok(),
         })
-    }
-
-    fn row_to_phase(row: &sqlx::sqlite::SqliteRow) -> Result<Phase> {
-        let status_str: String = row.get("status");
-
-        Ok(Phase {
-            id: row.get("id"),
-            experiment_id: row.get("experiment_id"),
-            name: row.get("name"),
-            phase_type: row.get("phase_type"),
-            sequence_order: row.get("sequence_order"),
-            status: parse_phase_status(&status_str),
-            max_iterations: row.get("max_iterations"),
-            population_size: row.get("population_size"),
-            current_iteration: row.get("current_iteration"),
-            best_ce: row.get("best_ce"),
-            best_accuracy: row.get("best_accuracy"),
-            created_at: parse_datetime(row.get("created_at"))?,
-            started_at: row.get::<Option<String>, _>("started_at")
-                .map(|s| parse_datetime(s))
-                .transpose()?,
-            ended_at: row.get::<Option<String>, _>("ended_at")
-                .map(|s| parse_datetime(s))
-                .transpose()?,
-            results: Vec::new(),  // Populated separately
-        })
-    }
-
-    fn row_to_phase_result(row: &sqlx::sqlite::SqliteRow) -> Result<PhaseResult> {
-        Ok(PhaseResult {
-            id: row.get("id"),
-            phase_id: row.get("phase_id"),
-            metric_type: row.get("metric_type"),
-            ce: row.get("ce"),
-            accuracy: row.get("accuracy"),
-            memory_bytes: row.get("memory_bytes"),
-            improvement_pct: row.get("improvement_pct"),
-        })
-    }
-
-    /// Get validation results for a phase
-    pub async fn get_phase_results(pool: &DbPool, phase_id: i64) -> Result<Vec<PhaseResult>> {
-        let rows = sqlx::query(
-            "SELECT id, phase_id, metric_type, ce, accuracy, memory_bytes, improvement_pct
-             FROM phase_results WHERE phase_id = ?"
-        )
-        .bind(phase_id)
-        .fetch_all(pool)
-        .await?;
-
-        let mut results = Vec::with_capacity(rows.len());
-        for row in rows {
-            results.push(row_to_phase_result(&row)?);
-        }
-        Ok(results)
     }
 
     fn row_to_iteration(row: &sqlx::sqlite::SqliteRow) -> Result<Iteration> {
         Ok(Iteration {
             id: row.get("id"),
-            phase_id: row.get("phase_id"),
+            experiment_id: row.try_get("experiment_id").ok(),  // New field (Phase layer removal)
+            phase_id: row.get("phase_id"),  // Kept for backward compatibility
             iteration_num: row.get("iteration_num"),
             best_ce: row.get("best_ce"),
             best_accuracy: row.get("best_accuracy"),
@@ -1388,19 +1260,6 @@ pub mod queries {
         }
     }
 
-    fn parse_phase_status(s: &str) -> PhaseStatus {
-        match s {
-            "pending" => PhaseStatus::Pending,
-            "running" => PhaseStatus::Running,
-            "paused" => PhaseStatus::Paused,
-            "completed" => PhaseStatus::Completed,
-            "skipped" => PhaseStatus::Skipped,
-            "failed" => PhaseStatus::Failed,
-            "cancelled" => PhaseStatus::Cancelled,
-            _ => PhaseStatus::Pending,
-        }
-    }
-
     fn parse_fitness_calculator(s: &str) -> FitnessCalculator {
         match s {
             "ce" => FitnessCalculator::Ce,
@@ -1415,7 +1274,29 @@ pub mod queries {
     // =============================================================================
 
     fn parse_datetime(s: String) -> Result<DateTime<Utc>> {
-        Ok(DateTime::parse_from_rfc3339(&s)?.with_timezone(&Utc))
+        // Try RFC 3339 first (standard format: 2026-02-02T05:48:49Z or 2026-02-02T05:48:49+00:00)
+        if let Ok(dt) = DateTime::parse_from_rfc3339(&s) {
+            return Ok(dt.with_timezone(&Utc));
+        }
+
+        // Try ISO 8601 with space instead of T (legacy format: 2026-02-02 05:48:49)
+        // Also handles dates with/without microseconds
+        use chrono::NaiveDateTime;
+        let formats = [
+            "%Y-%m-%d %H:%M:%S%.f",  // With optional fractional seconds
+            "%Y-%m-%d %H:%M:%S",      // Without fractional seconds
+            "%Y-%m-%dT%H:%M:%S%.f",   // T separator with fractional (no timezone)
+            "%Y-%m-%dT%H:%M:%S",      // T separator without fractional (no timezone)
+        ];
+
+        for fmt in formats {
+            if let Ok(naive) = NaiveDateTime::parse_from_str(&s, fmt) {
+                return Ok(naive.and_utc());
+            }
+        }
+
+        // If all parsing fails, return an error with context
+        Err(anyhow::anyhow!("Failed to parse datetime: '{}'", s))
     }
 
     fn parse_flow_status(s: &str) -> FlowStatus {

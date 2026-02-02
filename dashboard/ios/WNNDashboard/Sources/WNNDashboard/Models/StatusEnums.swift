@@ -17,13 +17,6 @@ public enum ExperimentStatus: String, Codable, CaseIterable {
     public var isActive: Bool { self == .running || self == .queued }
 }
 
-public enum PhaseStatus: String, Codable, CaseIterable {
-    case pending, running, paused, completed, skipped, failed, cancelled
-
-    public var displayName: String { rawValue.capitalized }
-    public var isActive: Bool { self == .running }
-}
-
 public enum FitnessCalculator: String, Codable {
     case ce, harmonic_rank, weighted_harmonic
 
