@@ -1203,6 +1203,7 @@
         </div>
       {/if}
 
+      <!-- DEBUG: experiments array has {experiments.length} items -->
       <div class="experiments-list">
         {#each getDisplayExperiments() as { exp: dbExp, spec, index: i }}
           {@const displayExp = spec || { name: dbExp?.name || `Experiment ${i + 1}`, experiment_type: 'ga', optimize_bits: false, optimize_neurons: true, optimize_connections: false }}
@@ -1212,6 +1213,7 @@
           {@const canEdit = canEditExperiment(i)}
           {@const isEditing = editingExpIndex === i}
           {@const expLink = dbExp ? getExperimentLinkById(dbExp.id, status) : getExperimentLink(i)}
+          <!-- DEBUG: dbExp={dbExp ? `id=${dbExp.id} status=${dbExp.status}` : 'null'} expLink={expLink} -->
 
           {#if isEditing && editingExp}
             <div class="experiment-item editing">
