@@ -13,6 +13,8 @@
   let patience = 10;
   let fitnessPercentile = 0.75;
   let fitnessCalculator = 'normalized';  // Default to normalized for balanced CE+accuracy
+  let fitnessWeightCe = 1.0;   // Weight for CE in harmonic calculations
+  let fitnessWeightAcc = 1.0;  // Weight for accuracy in harmonic calculations
   let minAccuracyFloor = 0;  // 0 = disabled, 0.003 = 0.3% floor
   let contextSize = 4;
   let tierConfig = '100,15,20;400,10,12;rest,5,8';
@@ -111,6 +113,8 @@
               patience,
               fitness_percentile: fitnessPercentile,
               fitness_calculator: fitnessCalculator,
+              fitness_weight_ce: fitnessWeightCe,
+              fitness_weight_acc: fitnessWeightAcc,
               min_accuracy_floor: minAccuracyFloor,
               context_size: contextSize,
               tier_config: tierConfig || null,
@@ -280,6 +284,22 @@
           <span class="field-hint">Min accuracy threshold (0.003 = 0.3%). Below = rejected</span>
         </div>
       </div>
+
+      {#if fitnessCalculator === 'harmonic_rank' || fitnessCalculator === 'normalized_harmonic'}
+        <div class="form-row">
+          <div class="form-group">
+            <label for="fitnessWeightCe">CE Weight</label>
+            <input type="number" id="fitnessWeightCe" bind:value={fitnessWeightCe} min="0" max="10" step="0.1" />
+            <span class="field-hint">Higher = prioritize lower CE (default: 1.0)</span>
+          </div>
+
+          <div class="form-group">
+            <label for="fitnessWeightAcc">Accuracy Weight</label>
+            <input type="number" id="fitnessWeightAcc" bind:value={fitnessWeightAcc} min="0" max="10" step="0.1" />
+            <span class="field-hint">Higher = prioritize higher accuracy (default: 1.0)</span>
+          </div>
+        </div>
+      {/if}
 
       <div class="form-row">
         <div class="form-group">
