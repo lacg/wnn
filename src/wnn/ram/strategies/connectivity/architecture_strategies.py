@@ -1603,10 +1603,21 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 		If batch_evaluator was provided at init, uses it for parallel evaluation.
 		batch_evaluate_fn should return list[(CE, accuracy)] tuples.
 
-		Note: If initial_fitness is None, the initial genome will be evaluated
-		to obtain its fitness. This allows TS to seamlessly follow GA without
-		requiring the caller to pre-evaluate.
+		IMPORTANT: initial_fitness is REQUIRED. It represents the CE loss from the
+		previous phase (GA) and must be passed by the caller. If this value is None,
+		it indicates a bug in the phase transition logic (checkpoint loading failed
+		or the Flow created new experiments instead of resuming).
 		"""
+		# initial_fitness is REQUIRED - fail fast if missing
+		if initial_fitness is None:
+			raise ValueError(
+				f"[{self.name}] initial_fitness is REQUIRED but was None. "
+				"This indicates the previous phase's final_fitness was not properly passed. "
+				"Check that: (1) GA saved a checkpoint with final_fitness, "
+				"(2) Flow checkpoint loading works correctly, "
+				"(3) Flow is not creating new experiments instead of resuming."
+			)
+
 		# If we have a cached_evaluator, use Rust-based neighbor search
 		if self._cached_evaluator is not None:
 			return self._optimize_with_rust_search(
@@ -1621,15 +1632,6 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				genomes, logger=self._log, min_accuracy=min_accuracy,
 			)
 
-		# Handle None initial_fitness for fallback path
-		if initial_fitness is None and self._batch_evaluator is not None:
-			self._log.info(f"[{self.name}] initial_fitness not provided, evaluating initial genome...")
-			results = self._batch_evaluator.evaluate_batch([initial_genome], logger=self._log)
-			initial_fitness = results[0][0]  # CE value
-			self._log.info(f"[{self.name}] Initial genome CE: {initial_fitness:.4f}")
-		elif initial_fitness is None:
-			raise ValueError("initial_fitness is required when batch_evaluator is not available")
-
 		return super().optimize(
 			initial_genome=initial_genome,
 			initial_fitness=initial_fitness,
@@ -1641,7 +1643,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 	def _optimize_with_rust_search(
 		self,
 		initial_genome: 'ClusterGenome',
-		initial_fitness: Optional[float],
+		initial_fitness: float,
 		initial_neighbors: Optional[list['ClusterGenome']] = None,
 	) -> OptimizerResult['ClusterGenome']:
 		"""
@@ -1650,6 +1652,10 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 		Supports two modes based on fitness_calculator_type:
 		- HARMONIC_RANK: Single path, 50 neighbors from best by harmonic rank
 		- CE: Dual path, 25 neighbors from best_ce + 25 from best_acc
+
+		IMPORTANT: initial_fitness is REQUIRED. It represents the CE loss from the
+		previous phase and must be provided by the caller. If missing, it indicates
+		a bug in the phase transition/checkpoint logic.
 		"""
 		import time
 		from wnn.ram.strategies.connectivity.generic_strategies import (
@@ -1660,15 +1666,15 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 		arch_cfg = self._arch_config
 		evaluator = self._cached_evaluator
 
-		# If initial_fitness is None, evaluate the initial genome to get it
-		# This happens when TS follows GA and the caller didn't provide the fitness
+		# initial_fitness is REQUIRED - fail fast if missing
 		if initial_fitness is None:
-			self._log.info(f"[{self.name}] initial_fitness not provided, evaluating initial genome...")
-			if not initial_genome.has_connections():
-				initial_genome.initialize_connections(evaluator.total_input_bits)
-			results = evaluator.evaluate_batch_full([initial_genome])
-			initial_fitness = results[0][0]  # CE value
-			self._log.info(f"[{self.name}] Initial genome CE: {initial_fitness:.4f}")
+			raise ValueError(
+				f"[{self.name}] initial_fitness is REQUIRED but was None. "
+				"This indicates the previous phase's final_fitness was not properly passed. "
+				"Check that: (1) GA saved a checkpoint with final_fitness, "
+				"(2) Flow checkpoint loading works correctly, "
+				"(3) Flow is not creating new experiments instead of resuming."
+			)
 
 		# Always create fitness calculator for unified ranking approach
 		# For CE mode: fitness = CE, ranking by fitness = ranking by CE

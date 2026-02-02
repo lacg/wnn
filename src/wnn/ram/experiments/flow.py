@@ -396,6 +396,21 @@ class Flow:
 						current_population = result.final_population
 						current_threshold = result.final_threshold
 						current_fitness = result.final_fitness
+						self.log(f"Loaded checkpoint for experiment {idx}: CE={current_fitness:.4f}")
+					else:
+						# Checkpoint not found - try to query database for completed phase results
+						self.log(f"Warning: No checkpoint found for experiment {idx}, querying database...")
+						db_result = self._load_from_database(idx, exp_config)
+						if db_result:
+							current_genome, current_population, current_threshold, current_fitness = db_result
+							self.log(f"Loaded from database for experiment {idx}: CE={current_fitness:.4f}")
+						else:
+							# Cannot skip this experiment without its results
+							raise ValueError(
+								f"Cannot resume from experiment {start_idx}: "
+								f"No checkpoint or database results found for experiment {idx} ({exp_config.name}). "
+								f"Either run from the beginning or provide a valid checkpoint."
+							)
 					continue
 
 				# Create experiment checkpoint directory
@@ -716,6 +731,68 @@ class Flow:
 
 		except Exception as e:
 			self.log(f"Warning: Failed to load checkpoint for experiment {idx}: {e}")
+			return None
+
+	def _load_from_database(
+		self,
+		idx: int,
+		exp_config: 'ExperimentConfig',
+	) -> Optional[tuple[ClusterGenome, Optional[list[ClusterGenome]], Optional[float], float]]:
+		"""
+		Query database for completed phase results when checkpoint is missing.
+
+		Returns tuple of (genome, population, threshold, fitness) or None if not found.
+		"""
+		if not self.dashboard_client or not self._flow_id:
+			return None
+
+		try:
+			# Get experiments for this flow
+			flow = self.dashboard_client.get_flow(self._flow_id)
+			if not flow:
+				return None
+
+			# Find completed phases for this flow's experiments
+			# We need to match by phase type and sequence
+			experiments = self.dashboard_client.list_experiments(flow_id=self._flow_id)
+			if not experiments:
+				return None
+
+			# Look for a completed phase matching this experiment's type
+			phase_type = "ga" if exp_config.experiment_type == "ga" else "ts"
+			optimize_what = "neurons" if exp_config.optimize_neurons else ("bits" if exp_config.optimize_bits else "connections")
+			expected_phase_type = f"{phase_type}_{optimize_what}"
+
+			for exp in experiments:
+				phases = self.dashboard_client.get_phases(exp['id'])
+				for phase in phases:
+					if phase.get('status') == 'completed' and phase.get('phase_type') == expected_phase_type:
+						best_ce = phase.get('best_ce')
+						best_acc = phase.get('best_accuracy')
+
+						if best_ce is not None:
+							self.log(f"Found completed phase in database: {phase.get('name')} CE={best_ce:.4f}")
+
+							# We have the fitness, but we need the genome too
+							# Try to find a checkpoint registered in the database
+							checkpoints = self.dashboard_client.list_checkpoints(experiment_id=exp['id'])
+							for ckpt in checkpoints:
+								if ckpt.get('file_path'):
+									try:
+										genome, population, threshold = self._load_seed_checkpoint(ckpt['file_path'])
+										if genome:
+											return (genome, population, threshold, best_ce)
+									except Exception:
+										pass
+
+							# If no checkpoint with genome found, we can't proceed
+							self.log(f"Warning: Found completed phase but no checkpoint with genome data")
+							return None
+
+			return None
+
+		except Exception as e:
+			self.log(f"Warning: Failed to query database for experiment {idx}: {e}")
 			return None
 
 	def _create_tiered_genome(self) -> ClusterGenome:
