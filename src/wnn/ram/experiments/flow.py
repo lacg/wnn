@@ -419,8 +419,11 @@ class Flow:
 					exp_checkpoint_dir = self.checkpoint_dir / f"exp_{idx:02d}"
 
 				# Create experiment in dashboard if client available
+				# NOTE: Skip if V2 tracker is active - it uses a single experiment for the
+				# entire flow with phases, while dashboard_client would create separate
+				# experiments for each phase (causing duplicates)
 				experiment_id = None
-				if self.dashboard_client:
+				if self.dashboard_client and not self.tracker:
 					try:
 						experiment_id = self.dashboard_client.create_experiment(
 							name=exp_config.name,
