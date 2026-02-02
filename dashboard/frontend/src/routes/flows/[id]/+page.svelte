@@ -751,21 +751,42 @@
     return null;
   }
 
-  // Helper to get display experiments - prefer DB experiments if available
+  // Helper to get display experiments - always show all config specs, merge DB data when available
   function getDisplayExperiments(): Array<{ exp: Experiment | null; spec: ReturnType<typeof getFlowExperiments>[0] | null; index: number }> {
     const configExps = getFlowExperiments(flow);
 
-    // If we have DB experiments, use them as primary source
-    if (experiments.length > 0) {
-      return experiments.map((exp, i) => {
-        // Find matching config spec
-        const spec = configExps.find(s => s.name === exp.name) || configExps[exp.sequence_order ?? i] || null;
-        return { exp, spec, index: exp.sequence_order ?? i };
-      });
-    }
+    // Track which DB experiments have been matched
+    const matchedExpIds = new Set<number>();
 
-    // Fallback to config specs only
-    return configExps.map((spec, i) => ({ exp: null, spec, index: i }));
+    // Find running experiment (if flow is running, there should be one)
+    const runningExp = experiments.find(e => e.status === 'running');
+
+    // Always start from config specs to show all planned experiments
+    return configExps.map((spec, i) => {
+      // Try to find matching DB experiment by sequence_order first
+      let dbExp = experiments.find(e => e.sequence_order === i && !matchedExpIds.has(e.id));
+
+      // Then try by name
+      if (!dbExp) {
+        dbExp = experiments.find(e => e.name === spec.name && !matchedExpIds.has(e.id));
+      }
+
+      // If still no match and flow is running, use current_iteration to infer position
+      // The running experiment's current_iteration tells us how far we are
+      if (!dbExp && runningExp && !matchedExpIds.has(runningExp.id)) {
+        // If this is the first unmatched spec and we have a running experiment, assign it
+        const matchedCount = matchedExpIds.size;
+        if (i === matchedCount) {
+          dbExp = runningExp;
+        }
+      }
+
+      if (dbExp) {
+        matchedExpIds.add(dbExp.id);
+      }
+
+      return { exp: dbExp ?? null, spec, index: i };
+    });
   }
 </script>
 
@@ -1258,9 +1279,9 @@
                   {/if}
                 </div>
                 <div class="exp-actions">
-                  {#if status === 'completed' && (flow.status === 'running' || flow.status === 'failed' || flow.status === 'cancelled' || flow.status === 'completed')}
+                  {#if (status === 'completed' || status === 'running') && (flow.status === 'running' || flow.status === 'failed' || flow.status === 'cancelled' || flow.status === 'completed')}
                     <button class="btn btn-sm btn-secondary" title="Restart from this experiment" on:click|stopPropagation|preventDefault={() => restartFromExperiment(i)}>
-                      Restart from here
+                      ↻ Restart
                     </button>
                   {/if}
                   <span class="view-arrow">→</span>
