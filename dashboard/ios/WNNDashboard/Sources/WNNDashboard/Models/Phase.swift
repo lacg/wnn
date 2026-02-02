@@ -2,6 +2,17 @@
 
 import Foundation
 
+/// Validation result at end of a phase
+public struct PhaseResult: Codable, Identifiable {
+    public let id: Int64
+    public let phase_id: Int64
+    public let metric_type: String  // "best_ce", "best_acc", "top_k_mean"
+    public let ce: Double
+    public let accuracy: Double
+    public let memory_bytes: Int64?
+    public let improvement_pct: Double
+}
+
 public struct Phase: Codable, Identifiable {
     public let id: Int64
     public let experiment_id: Int64
@@ -17,6 +28,7 @@ public struct Phase: Codable, Identifiable {
     public let created_at: String
     public let started_at: String?
     public let ended_at: String?
+    public let results: [PhaseResult]?
 
     public var createdDate: Date? { ISO8601DateFormatter().date(from: created_at) }
     public var startedDate: Date? { started_at.flatMap { ISO8601DateFormatter().date(from: $0) } }

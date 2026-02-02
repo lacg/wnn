@@ -10,6 +10,7 @@ public final class DashboardViewModel: ObservableObject {
     @Published public private(set) var error: String?
     @Published public var selectedIteration: Iteration?
     @Published public var selectedIterationGenomes: [GenomeEvaluation] = []
+    @Published public private(set) var historyIterations: [Iteration] = []
 
     public var currentExperiment: Experiment? { snapshot.current_experiment }
     public var currentPhase: Phase? { snapshot.current_phase }
@@ -52,4 +53,14 @@ public final class DashboardViewModel: ObservableObject {
     }
 
     public func refresh() async { await loadSnapshot() }
+
+    public func loadHistoryIterations(for phase: Phase) async {
+        do {
+            historyIterations = try await apiClient.getPhaseIterations(phaseId: phase.id)
+                .sorted { $0.iteration_num < $1.iteration_num }
+        } catch {
+            historyIterations = []
+            self.error = error.localizedDescription
+        }
+    }
 }

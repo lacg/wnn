@@ -6,6 +6,7 @@ import Charts
 public struct DashboardView: View {
     @EnvironmentObject var viewModel: DashboardViewModel
     @EnvironmentObject var wsManager: WebSocketManager
+    @State private var selectedHistoryPhase: Phase?
 
     public init() {}
 
@@ -15,8 +16,8 @@ public struct DashboardView: View {
                 VStack(spacing: 16) {
                     headerSection
                     metricsSection
-                    if viewModel.isRunning { progressSection }
-                    if !viewModel.iterations.isEmpty { chartSection }
+                    if viewModel.isRunning && selectedHistoryPhase == nil { progressSection }
+                    if !viewModel.iterations.isEmpty || !viewModel.historyIterations.isEmpty { chartSection }
                     if !viewModel.phases.isEmpty { phaseTimelineSection }
                     if !viewModel.iterations.isEmpty { iterationsSection }
                 }
@@ -69,15 +70,27 @@ public struct DashboardView: View {
     }
 
     private var chartSection: some View {
-        DualAxisChartView(iterations: viewModel.iterations)
-            .frame(height: 200)
-            .padding()
-            .background(Theme.cardBackground)
-            .cornerRadius(12)
+        let iterations = selectedHistoryPhase != nil ? viewModel.historyIterations : viewModel.iterations
+        let title = selectedHistoryPhase != nil
+            ? "Phase \(selectedHistoryPhase!.shortName) History"
+            : "Best So Far"
+
+        return DualAxisChartView(iterations: iterations, title: title)
+            .frame(height: 280)
     }
 
     private var phaseTimelineSection: some View {
-        PhaseTimelineView(phases: viewModel.phases, currentPhase: viewModel.currentPhase)
+        PhaseTimelineView(
+            phases: viewModel.phases,
+            currentPhase: viewModel.currentPhase,
+            selectedPhase: selectedHistoryPhase,
+            onPhaseSelected: { phase in
+                selectedHistoryPhase = phase
+                if let phase = phase {
+                    Task { await viewModel.loadHistoryIterations(for: phase) }
+                }
+            }
+        )
     }
 
     private var iterationsSection: some View {

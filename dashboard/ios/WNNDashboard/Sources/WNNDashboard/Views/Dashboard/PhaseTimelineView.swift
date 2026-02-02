@@ -1,20 +1,59 @@
-// PhaseTimelineView - Horizontal scrolling phase cards
+// PhaseTimelineView - Horizontal scrolling phase cards with tap to view history
 
 import SwiftUI
 
 public struct PhaseTimelineView: View {
     public let phases: [Phase]
     public let currentPhase: Phase?
+    public let selectedPhase: Phase?
+    public let onPhaseSelected: ((Phase?) -> Void)?
 
-    public init(phases: [Phase], currentPhase: Phase?) { self.phases = phases; self.currentPhase = currentPhase }
+    public init(
+        phases: [Phase],
+        currentPhase: Phase?,
+        selectedPhase: Phase? = nil,
+        onPhaseSelected: ((Phase?) -> Void)? = nil
+    ) {
+        self.phases = phases
+        self.currentPhase = currentPhase
+        self.selectedPhase = selectedPhase
+        self.onPhaseSelected = onPhaseSelected
+    }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Phases").font(.headline).padding(.horizontal)
+            HStack {
+                Text("Phases").font(.headline)
+                Spacer()
+                if selectedPhase != nil {
+                    Button("Show Live") {
+                        onPhaseSelected?(nil)
+                    }
+                    .font(.caption)
+                    .foregroundColor(.blue)
+                }
+            }
+            .padding(.horizontal)
+
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
                     ForEach(phases.sorted { $0.sequence_order < $1.sequence_order }) { phase in
-                        PhaseCard(phase: phase, isCurrent: phase.id == currentPhase?.id)
+                        PhaseCard(
+                            phase: phase,
+                            isCurrent: phase.id == currentPhase?.id,
+                            isSelected: phase.id == selectedPhase?.id,
+                            isSelectable: phase.status == .completed
+                        )
+                        .onTapGesture {
+                            if phase.status == .completed {
+                                // Toggle selection: tap again to deselect
+                                if selectedPhase?.id == phase.id {
+                                    onPhaseSelected?(nil)
+                                } else {
+                                    onPhaseSelected?(phase)
+                                }
+                            }
+                        }
                     }
                 }
                 .padding(.horizontal)
@@ -26,6 +65,8 @@ public struct PhaseTimelineView: View {
 struct PhaseCard: View {
     let phase: Phase
     let isCurrent: Bool
+    let isSelected: Bool
+    let isSelectable: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -35,6 +76,13 @@ struct PhaseCard: View {
                 statusIcon
             }
             Text(phase.phase_type).font(.caption2).foregroundColor(.secondary)
+
+            if isSelected {
+                Text("Viewing History")
+                    .font(.caption2)
+                    .foregroundColor(.orange)
+            }
+
             Spacer()
             if let ce = phase.best_ce { HStack { Text("CE:").font(.caption2).foregroundColor(.secondary); Text(NumberFormatters.formatCE(ce)).font(.caption).fontDesign(.monospaced) } }
             if let acc = phase.best_accuracy { HStack { Text("Acc:").font(.caption2).foregroundColor(.secondary); Text(NumberFormatters.formatAccuracy(acc)).font(.caption).fontDesign(.monospaced) } }
@@ -45,9 +93,22 @@ struct PhaseCard: View {
         }
         .frame(width: 120, height: 140)
         .padding()
-        .background(isCurrent ? Color.blue.opacity(0.1) : Theme.cardBackground)
+        .background(cardBackground)
         .cornerRadius(12)
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(isCurrent ? Color.blue : Color.clear, lineWidth: 2))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(borderColor, lineWidth: isSelected ? 3 : (isCurrent ? 2 : 0)))
+        .opacity(isSelectable ? 1.0 : (isCurrent ? 1.0 : 0.6))
+    }
+
+    private var cardBackground: Color {
+        if isSelected { return Color.orange.opacity(0.15) }
+        if isCurrent { return Color.blue.opacity(0.1) }
+        return Theme.cardBackground
+    }
+
+    private var borderColor: Color {
+        if isSelected { return Color.orange }
+        if isCurrent { return Color.blue }
+        return Color.clear
     }
 
     @ViewBuilder
