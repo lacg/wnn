@@ -180,6 +180,7 @@ class Experiment:
 		tracker: Optional[Any] = None,  # ExperimentTracker for V2 tracking
 		flow_id: Optional[int] = None,
 		shutdown_check: Optional[Callable[[], bool]] = None,  # Callable returning True if shutdown requested
+		run_init_validation: bool = False,  # Run full validation on seed population before optimization
 	):
 		"""
 		Initialize experiment.
@@ -194,6 +195,7 @@ class Experiment:
 			tracker: Optional V2 tracker for direct database writes
 			flow_id: Optional flow ID for V2 tracking
 			shutdown_check: Optional callable that returns True if shutdown requested
+			run_init_validation: If True, run full validation on seed population before optimization starts
 		"""
 		self.config = config
 		self.evaluator = evaluator
@@ -204,6 +206,7 @@ class Experiment:
 		self.tracker = tracker
 		self.flow_id = flow_id
 		self.shutdown_check = shutdown_check
+		self.run_init_validation = run_init_validation
 
 		# Phase tracking (set during run())
 		self._phase_id: Optional[int] = None  # Dashboard API phase ID for checkpoints
@@ -349,6 +352,14 @@ class Experiment:
 					strategy.set_tracker(self.tracker, tracker_phase_id, tracker_experiment_id)
 			except Exception as e:
 				self.log(f"  Warning: Failed to set up V2 tracking: {e}")
+
+		# Run init validation on seed population if requested (Phase 1a only)
+		if self.run_init_validation and tracker_phase_id:
+			self._run_init_validation(
+				initial_genome=initial_genome,
+				initial_population=initial_population,
+				phase_id=tracker_phase_id,
+			)
 
 		# Run optimization with exception handling for phase status
 		result = None
@@ -496,3 +507,90 @@ class Experiment:
 				self.log(f"  Warning: Failed to register checkpoint with dashboard: {e}")
 
 		return str(filepath)
+
+	def _run_init_validation(
+		self,
+		initial_genome: Optional[ClusterGenome],
+		initial_population: Optional[list[ClusterGenome]],
+		phase_id: int,
+	) -> None:
+		"""
+		Run full validation on seed population before optimization starts.
+
+		This provides a baseline to compare against phase end results.
+		Records init_best_ce, init_best_acc, init_top_k_mean in phase_results.
+		"""
+		self.log("")
+		self.log("=" * 60)
+		self.log("  INIT BASELINE VALIDATION (Full Dataset)")
+		self.log("=" * 60)
+
+		# Collect genomes to evaluate
+		genomes_to_eval = []
+		if initial_population:
+			genomes_to_eval = list(initial_population)
+		elif initial_genome:
+			genomes_to_eval = [initial_genome]
+
+		if not genomes_to_eval:
+			self.log("  No seed genomes to evaluate, skipping init validation")
+			return
+
+		# Evaluate on full validation data
+		self.log(f"  Evaluating {len(genomes_to_eval)} seed genomes on full validation set...")
+		try:
+			full_results = self.evaluator.evaluate_batch_full(genomes_to_eval)
+			full_evals = list(zip(genomes_to_eval, full_results))
+
+			# Sort by CE and Acc
+			by_ce = sorted(full_evals, key=lambda x: x[1][0])  # ascending CE (lower = better)
+			by_acc = sorted(full_evals, key=lambda x: -x[1][1])  # descending acc (higher = better)
+
+			# Best by CE
+			_, (init_best_ce_ce, init_best_ce_acc) = by_ce[0]
+
+			# Best by Acc
+			_, (init_best_acc_ce, init_best_acc_acc) = by_acc[0]
+
+			# Top-K mean (top 20% or at least 1)
+			top_k = max(1, int(len(full_evals) * 0.2))
+			top_k_ce = sum(ce for _, (ce, _) in full_evals[:top_k]) / top_k
+			top_k_acc = sum(acc for _, (_, acc) in full_evals[:top_k]) / top_k
+
+			# Log results
+			self.log(f"  Init Best CE:       CE={init_best_ce_ce:.4f}, Acc={init_best_ce_acc:.4%}")
+			self.log(f"  Init Best Accuracy: CE={init_best_acc_ce:.4f}, Acc={init_best_acc_acc:.4%}")
+			self.log(f"  Init Top-{top_k} Mean:   CE={top_k_ce:.4f}, Acc={top_k_acc:.4%}")
+			self.log("=" * 60)
+			self.log("")
+
+			# Record via tracker if available
+			if self.tracker and phase_id:
+				try:
+					self.tracker.record_phase_result(
+						phase_id=phase_id,
+						metric_type="init_best_ce",
+						ce=init_best_ce_ce,
+						accuracy=init_best_ce_acc,
+						improvement_pct=0.0,  # No improvement yet, this is the baseline
+					)
+					self.tracker.record_phase_result(
+						phase_id=phase_id,
+						metric_type="init_best_acc",
+						ce=init_best_acc_ce,
+						accuracy=init_best_acc_acc,
+						improvement_pct=0.0,
+					)
+					self.tracker.record_phase_result(
+						phase_id=phase_id,
+						metric_type="init_top_k_mean",
+						ce=top_k_ce,
+						accuracy=top_k_acc,
+						improvement_pct=0.0,
+					)
+					self.log("  Init validation results recorded to database")
+				except Exception as e:
+					self.log(f"  Warning: Failed to record init validation results: {e}")
+
+		except Exception as e:
+			self.log(f"  Warning: Init validation failed: {e}")
