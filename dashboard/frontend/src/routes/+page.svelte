@@ -1185,19 +1185,20 @@
   }
 
   .axis-label {
-    font-size: 11px;
+    font-size: 1.2rem;
+    font-weight: 600;
     fill: var(--text-secondary);
   }
 
   .axis-title {
-    font-size: 12px;
+    font-size: 1.4rem;
     fill: var(--text-secondary);
-    font-weight: 500;
+    font-weight: 700;
   }
 
   .best-label {
-    font-size: 11px;
-    font-weight: 600;
+    font-size: 1.2rem;
+    font-weight: 700;
   }
 
   .tooltip-bg {
