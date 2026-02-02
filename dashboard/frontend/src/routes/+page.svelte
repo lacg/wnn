@@ -126,6 +126,22 @@
     avgAcc: h.avgAcc !== null && h.avgAcc !== undefined ? h.avgAcc * 100 : null
   }));
 
+  // Chart data: use historical phase data when selected, otherwise live data
+  $: displayChartData = selectedHistoryPhase
+    ? phaseIterations.map(iter => ({
+        iter: iter.iteration_num,
+        ce: iter.best_ce,
+        acc: iter.best_accuracy !== null && iter.best_accuracy !== undefined ? iter.best_accuracy * 100 : null,
+        avgCe: iter.avg_ce,
+        avgAcc: iter.avg_accuracy !== null && iter.avg_accuracy !== undefined ? iter.avg_accuracy * 100 : null
+      }))
+    : displayCeHistory;
+
+  // Chart title: indicate if viewing history
+  $: chartTitle = selectedHistoryPhase
+    ? `${selectedHistoryPhase.name} (${phaseIterations.length} iterations)`
+    : `Best So Far (${displayCeHistory.length} iterations)`;
+
   // Get max iterations from current phase, or from most recent phase if current is null
   $: displayMaxIterations = (() => {
     if ($currentPhase) return $currentPhase.max_iterations;
@@ -242,7 +258,10 @@
   <!-- CE & Accuracy History Chart -->
   <div class="card">
     <div class="card-header">
-      <span class="card-title">Best So Far ({displayCeHistory.length} iterations)</span>
+      <span class="card-title">{chartTitle}</span>
+      {#if selectedHistoryPhase}
+        <button class="btn-small" on:click={clearPhaseHistory}>← Back to Live</button>
+      {/if}
       <div class="chart-legend">
         <span class="legend-item"><span class="legend-line ce"></span> Best CE (↓)</span>
         <span class="legend-item"><span class="legend-line ce dashed"></span> Avg CE</span>
@@ -250,8 +269,8 @@
         <span class="legend-item"><span class="legend-line acc dashed"></span> Avg Acc</span>
       </div>
     </div>
-    {#if displayCeHistory.length > 0}
-      {@const chartData = displayCeHistory}
+    {#if displayChartData.length > 0}
+      {@const chartData = displayChartData}
       <!-- Compute cumulative min(CE) and max(Acc) for smooth monotonic curves -->
       {@const cumulativeData = (() => {
         let minCE = Infinity;
@@ -868,6 +887,22 @@
   .experiment-name {
     font-size: 1rem;
     color: var(--text-secondary);
+  }
+
+  .btn-small {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 0.25rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .btn-small:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
   }
 
   .phase-timeline {

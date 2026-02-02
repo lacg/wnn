@@ -313,7 +313,9 @@ class Experiment:
 		phase_type = f"{'ga' if is_ga else 'ts'}_{opt_target}"
 
 		# Create phase in dashboard API (for checkpoint linking)
-		if self.dashboard_client and self.experiment_id:
+		# NOTE: Skip if V2 tracker is active - it creates phases directly in the database,
+		# while dashboard_client would create duplicate phases via HTTP API
+		if self.dashboard_client and self.experiment_id and not self.tracker:
 			try:
 				self._phase_id = self.dashboard_client.phase_started(
 					experiment_id=self.experiment_id,
