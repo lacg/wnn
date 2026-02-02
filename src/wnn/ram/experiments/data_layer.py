@@ -4,23 +4,30 @@ SQLite data layer for WNN experiment tracking.
 This module provides direct database access for experiment data, replacing
 the HTTP-based dashboard_client.
 
+Data model: Flow → Experiments → Iterations
+- Flow: A sequence of experiments (e.g., "4ngram_baseline")
+- Experiment: One config spec (e.g., "Phase 1a: GA Neurons Only"), with sequence_order
+- Iteration: One GA generation or TS step within an experiment
+
 Usage:
     from wnn.ram.experiments.data_layer import DataLayer
 
     db = DataLayer("/path/to/database.db")
 
     # Create a flow
-    flow_id = db.create_flow("My Flow", {"experiments": [...]})
+    flow_id = db.create_flow("4ngram_baseline", {"experiments": [...]})
 
-    # Create an experiment
+    # Create experiments (one per config spec)
     exp_id = db.create_experiment(
         flow_id=flow_id,
-        name="1-GA-Neurons",
-        fitness_calculator="harmonic_rank",
+        sequence_order=0,
+        name="Phase 1a: GA Neurons Only",
+        phase_type="ga_neurons",
+        max_iterations=250,
     )
 
     # Record iterations and genome evaluations
-    iter_id = db.create_iteration(phase_id, iteration_num=1, best_ce=10.5)
+    iter_id = db.create_iteration(exp_id, iteration_num=1, best_ce=10.5)
     db.create_genome_evaluation(iter_id, genome_id, ce=10.5, accuracy=0.01)
 """
 
@@ -79,7 +86,6 @@ class GenomeRole(str, Enum):
 class CheckpointType(str, Enum):
     AUTO = "auto"
     USER = "user"
-    PHASE_END = "phase_end"
     EXPERIMENT_END = "experiment_end"
 
 

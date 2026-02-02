@@ -1221,7 +1221,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			self._log.info(f"[{self.name}] Gen {generation+1:03d}/{cfg.generations}: "
 						   f"best={best_fitness:.4f}, avg={avg_fitness:.4f} (subset) ({gen_elapsed:.1f}s)")
 
-			if self._tracker and self._tracker_phase_id:
+			if self._tracker and self._tracker_experiment_id:
 				try:
 
 					# Get baseline and patience info for dashboard
@@ -1235,7 +1235,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 					candidates_total = search_result.evaluated
 
 					iteration_id = self._tracker.record_iteration(
-						phase_id=self._tracker_phase_id,
+						experiment_id=self._tracker_experiment_id,
 						iteration_num=generation + 1,
 						best_ce=actual_best_ce,  # Use actual min CE, not fitness-ranked best
 						best_accuracy=actual_best_acc,
@@ -1349,24 +1349,24 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		self._log.info("=" * 60)
 
 		# Record phase results via tracker if available
-		if self._tracker and self._tracker_phase_id:
+		if self._tracker and self._tracker_experiment_id:
 			try:
 				self._tracker.record_phase_result(
-					phase_id=self._tracker_phase_id,
+					experiment_id=self._tracker_experiment_id,
 					metric_type="best_ce",
 					ce=best_ce_ce,
 					accuracy=best_ce_acc,
 					improvement_pct=(initial_fitness - best_ce_ce) / initial_fitness * 100 if initial_fitness else 0.0,
 				)
 				self._tracker.record_phase_result(
-					phase_id=self._tracker_phase_id,
+					experiment_id=self._tracker_experiment_id,
 					metric_type="best_acc",
 					ce=best_acc_ce,
 					accuracy=best_acc_acc,
 					improvement_pct=(initial_fitness - best_acc_ce) / initial_fitness * 100 if initial_fitness else 0.0,
 				)
 				self._tracker.record_phase_result(
-					phase_id=self._tracker_phase_id,
+					experiment_id=self._tracker_experiment_id,
 					metric_type="top_k_mean",
 					ce=top_k_ce,
 					accuracy=top_k_acc,
@@ -1965,7 +1965,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				actual_best_ce = min(ce for _, ce, _ in all_neighbors) if all_neighbors else best_fitness
 				actual_best_acc = best_accuracy
 
-			if self._tracker and self._tracker_phase_id:
+			if self._tracker and self._tracker_experiment_id:
 				try:
 
 					# Get baseline and patience info for dashboard
@@ -1978,7 +1978,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 					candidates_total = len(all_neighbors)  # Total neighbors in cache (for reference)
 
 					iteration_id = self._tracker.record_iteration(
-						phase_id=self._tracker_phase_id,
+						experiment_id=self._tracker_experiment_id,
 						iteration_num=iteration + 1,
 						best_ce=actual_best_ce,  # Use actual min CE, not fitness-ranked best
 						best_accuracy=actual_best_acc,
@@ -2153,24 +2153,24 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 		self._log.info("=" * 60)
 
 		# Record phase results via tracker if available
-		if self._tracker and self._tracker_phase_id:
+		if self._tracker and self._tracker_experiment_id:
 			try:
 				self._tracker.record_phase_result(
-					phase_id=self._tracker_phase_id,
+					experiment_id=self._tracker_experiment_id,
 					metric_type="best_ce",
 					ce=best_ce_ce,
 					accuracy=best_ce_acc,
 					improvement_pct=(start_fitness - best_ce_ce) / start_fitness * 100 if start_fitness else 0.0,
 				)
 				self._tracker.record_phase_result(
-					phase_id=self._tracker_phase_id,
+					experiment_id=self._tracker_experiment_id,
 					metric_type="best_acc",
 					ce=best_acc_ce,
 					accuracy=best_acc_acc,
 					improvement_pct=(start_fitness - best_acc_ce) / start_fitness * 100 if start_fitness else 0.0,
 				)
 				self._tracker.record_phase_result(
-					phase_id=self._tracker_phase_id,
+					experiment_id=self._tracker_experiment_id,
 					metric_type="top_k_mean",
 					ce=top_k_ce,
 					accuracy=top_k_acc,

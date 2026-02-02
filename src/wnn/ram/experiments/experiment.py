@@ -308,39 +308,23 @@ class Experiment:
 		# Create strategy
 		strategy = OptimizerStrategyFactory.create(**strategy_kwargs)
 
-		# Determine phase type string (used by V2 tracker)
-		opt_target = "bits" if cfg.optimize_bits else "neurons" if cfg.optimize_neurons else "connections"
-		phase_type = f"{'ga' if is_ga else 'ts'}_{opt_target}"
-
-		# V2 tracking: create phase and set tracker on strategy
-		tracker_phase_id: Optional[int] = None
+		# V2 tracking: set tracker on strategy for iteration/genome recording
+		# (experiment is created by flow.py, not here)
 		if self.tracker and tracker_experiment_id:
 			try:
-				max_iters = cfg.generations if is_ga else cfg.iterations
-
-				# Create V2 phase
-				tracker_phase_id = self.tracker.start_phase(
-					experiment_id=tracker_experiment_id,
-					name=cfg.name,
-					phase_type=phase_type,
-					sequence_order=0,  # Experiment is a single phase
-					max_iterations=max_iters,
-					population_size=cfg.population_size,
-				)
-				self.log(f"  V2 tracking: phase_id={tracker_phase_id}")
-
-				# Set tracker on strategy for iteration/genome recording
+				# Set tracker on strategy - pass experiment_id for iteration recording
 				if hasattr(strategy, 'set_tracker'):
-					strategy.set_tracker(self.tracker, tracker_phase_id, tracker_experiment_id)
+					strategy.set_tracker(self.tracker, tracker_experiment_id, tracker_experiment_id)
+				self.log(f"  V2 tracking: experiment_id={tracker_experiment_id}")
 			except Exception as e:
 				self.log(f"  Warning: Failed to set up V2 tracking: {e}")
 
-		# Run init validation on seed population if requested (Phase 1a only)
-		if self.run_init_validation and tracker_phase_id:
+		# Run init validation on seed population if requested (first experiment only)
+		if self.run_init_validation and tracker_experiment_id:
 			self._run_init_validation(
 				initial_genome=initial_genome,
 				initial_population=initial_population,
-				phase_id=tracker_phase_id,
+				experiment_id=tracker_experiment_id,
 			)
 
 		# Run optimization with exception handling for phase status
@@ -365,27 +349,27 @@ class Experiment:
 			from wnn.ram.strategies.connectivity.generic_strategies import StopReason
 			was_shutdown = result.stop_reason == StopReason.SHUTDOWN if result.stop_reason else False
 
-			# V2 tracking: update phase status based on whether shutdown was requested
-			if self.tracker and tracker_phase_id:
+			# V2 tracking: update experiment status based on whether shutdown was requested
+			if self.tracker and tracker_experiment_id:
 				try:
 					from wnn.ram.experiments.tracker import TrackerStatus
-					phase_status = TrackerStatus.CANCELLED if was_shutdown else TrackerStatus.COMPLETED
-					self.tracker.update_phase_status(tracker_phase_id, phase_status)
-					self.tracker.update_phase_progress(
-						tracker_phase_id,
+					exp_status = TrackerStatus.CANCELLED if was_shutdown else TrackerStatus.COMPLETED
+					self.tracker.update_experiment_status(tracker_experiment_id, exp_status)
+					self.tracker.update_experiment_progress(
+						tracker_experiment_id,
 						current_iteration=result.iterations_run,
 						best_ce=result.final_fitness,
 						best_accuracy=result.final_accuracy,
 					)
 				except Exception as e:
-					self.log(f"  Warning: Failed to update V2 phase status: {e}")
+					self.log(f"  Warning: Failed to update V2 experiment status: {e}")
 
 		except Exception as e:
-			# Mark phase as failed on exception
-			if self.tracker and tracker_phase_id:
+			# Mark experiment as failed on exception
+			if self.tracker and tracker_experiment_id:
 				try:
 					from wnn.ram.experiments.tracker import TrackerStatus
-					self.tracker.update_phase_status(tracker_phase_id, TrackerStatus.FAILED)
+					self.tracker.update_experiment_status(tracker_experiment_id, TrackerStatus.FAILED)
 				except Exception:
 					pass
 			raise  # Re-raise the original exception
@@ -489,13 +473,13 @@ class Experiment:
 		self,
 		initial_genome: Optional[ClusterGenome],
 		initial_population: Optional[list[ClusterGenome]],
-		phase_id: int,
+		experiment_id: int,
 	) -> None:
 		"""
 		Run full validation on seed population before optimization starts.
 
-		This provides a baseline to compare against phase end results.
-		Records init_best_ce, init_best_acc, init_top_k_mean in phase_results.
+		This provides a baseline to compare against experiment end results.
+		Logs init_best_ce, init_best_acc, init_top_k_mean.
 		"""
 		self.log("")
 		self.log("=" * 60)
@@ -541,31 +525,16 @@ class Experiment:
 			self.log("=" * 60)
 			self.log("")
 
-			# Record via tracker if available
-			if self.tracker and phase_id:
+			# Record as initial progress on experiment
+			if self.tracker and experiment_id:
 				try:
-					self.tracker.record_phase_result(
-						phase_id=phase_id,
-						metric_type="init_best_ce",
-						ce=init_best_ce_ce,
-						accuracy=init_best_ce_acc,
-						improvement_pct=0.0,  # No improvement yet, this is the baseline
+					self.tracker.update_experiment_progress(
+						experiment_id,
+						current_iteration=0,
+						best_ce=init_best_ce_ce,
+						best_accuracy=init_best_ce_acc,
 					)
-					self.tracker.record_phase_result(
-						phase_id=phase_id,
-						metric_type="init_best_acc",
-						ce=init_best_acc_ce,
-						accuracy=init_best_acc_acc,
-						improvement_pct=0.0,
-					)
-					self.tracker.record_phase_result(
-						phase_id=phase_id,
-						metric_type="init_top_k_mean",
-						ce=top_k_ce,
-						accuracy=top_k_acc,
-						improvement_pct=0.0,
-					)
-					self.log("  Init validation results recorded to database")
+					self.log("  Init validation results recorded to experiment")
 				except Exception as e:
 					self.log(f"  Warning: Failed to record init validation results: {e}")
 

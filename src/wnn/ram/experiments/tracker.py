@@ -4,6 +4,11 @@ Experiment tracking abstraction layer.
 This module provides an interface for tracking experiment progress that WNN code
 can use without depending on specific storage implementations (SQLite, files, etc.).
 
+Data model: Flow → Experiments → Iterations
+- Flow: A sequence of experiments (e.g., "4ngram_baseline")
+- Experiment: One config spec (e.g., "Phase 1a: GA Neurons Only"), with sequence_order
+- Iteration: One GA generation or TS step within an experiment
+
 Usage:
     from wnn.ram.experiments.tracker import ExperimentTracker, create_tracker
 
@@ -11,9 +16,8 @@ Usage:
     tracker = create_tracker(db_path="/path/to/db.sqlite")
 
     # Use in experiment code
-    exp_id = tracker.start_experiment("my-experiment", ...)
-    phase_id = tracker.start_phase(exp_id, "1-GA-Neurons", ...)
-    iter_id = tracker.record_iteration(phase_id, iteration_num=1, best_ce=10.5, ...)
+    exp_id = tracker.start_experiment("Phase 1a: GA Neurons Only", flow_id=1, sequence_order=0, ...)
+    iter_id = tracker.record_iteration(exp_id, iteration_num=1, best_ce=10.5, ...)
     tracker.record_genome_evaluation(iter_id, genome_id, ce=10.5, accuracy=0.01, ...)
 """
 
@@ -60,7 +64,6 @@ class CheckpointType(str, Enum):
     """Checkpoint types."""
     AUTO = "auto"
     USER = "user"
-    PHASE_END = "phase_end"
     EXPERIMENT_END = "experiment_end"
 
 
@@ -159,12 +162,15 @@ class ExperimentTracker(ABC):
         self,
         name: str,
         flow_id: Optional[int] = None,
+        sequence_order: Optional[int] = None,
         fitness_calculator: FitnessCalculatorType = FitnessCalculatorType.NORMALIZED,
         fitness_weight_ce: float = 1.0,
         fitness_weight_acc: float = 1.0,
         tier_config: Optional[str] = None,
         context_size: int = 4,
         population_size: int = 50,
+        phase_type: Optional[str] = None,
+        max_iterations: int = 250,
     ) -> int:
         """Start a new experiment. Returns experiment ID."""
         pass
@@ -182,57 +188,12 @@ class ExperimentTracker(ABC):
     def update_experiment_progress(
         self,
         experiment_id: int,
-        last_phase_id: Optional[int] = None,
-        last_iteration: Optional[int] = None,
-        checkpoint_id: Optional[int] = None,
-    ) -> None:
-        """Update experiment progress for resume tracking."""
-        pass
-
-    # =========================================================================
-    # Phase lifecycle
-    # =========================================================================
-
-    @abstractmethod
-    def start_phase(
-        self,
-        experiment_id: int,
-        name: str,
-        phase_type: str,
-        sequence_order: int,
-        max_iterations: int = 250,
-        population_size: Optional[int] = None,
-    ) -> int:
-        """Start a new phase. Returns phase ID."""
-        pass
-
-    @abstractmethod
-    def update_phase_status(self, phase_id: int, status: TrackerStatus) -> None:
-        """Update phase status."""
-        pass
-
-    @abstractmethod
-    def update_phase_progress(
-        self,
-        phase_id: int,
-        current_iteration: int,
+        current_iteration: Optional[int] = None,
         best_ce: Optional[float] = None,
         best_accuracy: Optional[float] = None,
+        checkpoint_id: Optional[int] = None,
     ) -> None:
-        """Update phase progress."""
-        pass
-
-    @abstractmethod
-    def record_phase_result(
-        self,
-        phase_id: int,
-        metric_type: str,
-        ce: float,
-        accuracy: float,
-        improvement_pct: float = 0.0,
-        memory_bytes: Optional[int] = None,
-    ) -> None:
-        """Record phase validation result (best_ce, best_acc, top_k_mean)."""
+        """Update experiment progress."""
         pass
 
     # =========================================================================
@@ -242,7 +203,7 @@ class ExperimentTracker(ABC):
     @abstractmethod
     def record_iteration(
         self,
-        phase_id: int,
+        experiment_id: int,
         iteration_num: int,
         best_ce: float,
         best_accuracy: Optional[float] = None,
@@ -253,7 +214,6 @@ class ExperimentTracker(ABC):
         offspring_viable: Optional[int] = None,
         fitness_threshold: Optional[float] = None,
         elapsed_secs: Optional[float] = None,
-        # New fields for deltas and patience
         baseline_ce: Optional[float] = None,
         delta_baseline: Optional[float] = None,
         delta_previous: Optional[float] = None,
@@ -351,11 +311,6 @@ class ExperimentTracker(ABC):
         pass
 
     @abstractmethod
-    def get_experiment_phases(self, experiment_id: int) -> list[dict]:
-        """Get all phases for an experiment."""
-        pass
-
-    @abstractmethod
     def get_all_iterations(self, experiment_id: int) -> list[dict]:
         """Get all iterations for an experiment (for trend chart)."""
         pass
@@ -393,23 +348,29 @@ class SqliteTracker(ExperimentTracker):
         self,
         name: str,
         flow_id: Optional[int] = None,
+        sequence_order: Optional[int] = None,
         fitness_calculator: FitnessCalculatorType = FitnessCalculatorType.NORMALIZED,
         fitness_weight_ce: float = 1.0,
         fitness_weight_acc: float = 1.0,
         tier_config: Optional[str] = None,
         context_size: int = 4,
         population_size: int = 50,
+        phase_type: Optional[str] = None,
+        max_iterations: int = 250,
     ) -> int:
         from wnn.ram.experiments.data_layer import FitnessCalculator, ExperimentStatus
         exp_id = self._db.create_experiment(
             name=name,
             flow_id=flow_id,
+            sequence_order=sequence_order,
             fitness_calculator=FitnessCalculator(fitness_calculator.name.lower()),
             fitness_weight_ce=fitness_weight_ce,
             fitness_weight_acc=fitness_weight_acc,
             tier_config=tier_config,
             context_size=context_size,
             population_size=population_size,
+            phase_type=phase_type,
+            max_iterations=max_iterations,
         )
         self._db.update_experiment_status(exp_id, ExperimentStatus.RUNNING)
         return exp_id
@@ -425,57 +386,18 @@ class SqliteTracker(ExperimentTracker):
     def update_experiment_progress(
         self,
         experiment_id: int,
-        last_phase_id: Optional[int] = None,
-        last_iteration: Optional[int] = None,
+        current_iteration: Optional[int] = None,
+        best_ce: Optional[float] = None,
+        best_accuracy: Optional[float] = None,
         checkpoint_id: Optional[int] = None,
     ) -> None:
         self._db.update_experiment_progress(
-            experiment_id, last_phase_id, last_iteration, checkpoint_id
+            experiment_id, current_iteration, best_ce, best_accuracy, checkpoint_id
         )
-
-    def start_phase(
-        self,
-        experiment_id: int,
-        name: str,
-        phase_type: str,
-        sequence_order: int,
-        max_iterations: int = 250,
-        population_size: Optional[int] = None,
-    ) -> int:
-        from wnn.ram.experiments.data_layer import PhaseStatus
-        phase_id = self._db.create_phase(
-            experiment_id, name, phase_type, sequence_order, max_iterations, population_size
-        )
-        self._db.update_phase_status(phase_id, PhaseStatus.RUNNING)
-        return phase_id
-
-    def update_phase_status(self, phase_id: int, status: TrackerStatus) -> None:
-        from wnn.ram.experiments.data_layer import PhaseStatus
-        self._db.update_phase_status(phase_id, PhaseStatus(status.value))
-
-    def update_phase_progress(
-        self,
-        phase_id: int,
-        current_iteration: int,
-        best_ce: Optional[float] = None,
-        best_accuracy: Optional[float] = None,
-    ) -> None:
-        self._db.update_phase_progress(phase_id, current_iteration, best_ce, best_accuracy)
-
-    def record_phase_result(
-        self,
-        phase_id: int,
-        metric_type: str,
-        ce: float,
-        accuracy: float,
-        improvement_pct: float = 0.0,
-        memory_bytes: Optional[int] = None,
-    ) -> None:
-        self._db.create_phase_result(phase_id, metric_type, ce, accuracy, improvement_pct, memory_bytes)
 
     def record_iteration(
         self,
-        phase_id: int,
+        experiment_id: int,
         iteration_num: int,
         best_ce: float,
         best_accuracy: Optional[float] = None,
@@ -494,7 +416,7 @@ class SqliteTracker(ExperimentTracker):
         candidates_total: Optional[int] = None,
     ) -> int:
         return self._db.create_iteration(
-            phase_id, iteration_num, best_ce, best_accuracy, avg_ce, avg_accuracy,
+            experiment_id, iteration_num, best_ce, best_accuracy, avg_ce, avg_accuracy,
             elite_count, offspring_count, offspring_viable, fitness_threshold, elapsed_secs,
             baseline_ce, delta_baseline, delta_previous, patience_counter, patience_max, candidates_total
         )
@@ -572,9 +494,6 @@ class SqliteTracker(ExperimentTracker):
     def get_running_experiment(self) -> Optional[dict]:
         return self._db.get_running_experiment()
 
-    def get_experiment_phases(self, experiment_id: int) -> list[dict]:
-        return self._db.get_experiment_phases(experiment_id)
-
     def get_all_iterations(self, experiment_id: int) -> list[dict]:
         return self._db.get_all_iterations(experiment_id)
 
@@ -609,19 +528,7 @@ class NoOpTracker(ExperimentTracker):
     def update_experiment_progress(self, experiment_id: int, **kwargs) -> None:
         pass
 
-    def start_phase(self, experiment_id: int, name: str, phase_type: str, sequence_order: int, **kwargs) -> int:
-        return self._get_id()
-
-    def update_phase_status(self, phase_id: int, status: TrackerStatus) -> None:
-        pass
-
-    def update_phase_progress(self, phase_id: int, current_iteration: int, **kwargs) -> None:
-        pass
-
-    def record_phase_result(self, phase_id: int, metric_type: str, ce: float, accuracy: float, **kwargs) -> None:
-        pass
-
-    def record_iteration(self, phase_id: int, iteration_num: int, best_ce: float, **kwargs) -> int:
+    def record_iteration(self, experiment_id: int, iteration_num: int, best_ce: float, **kwargs) -> int:
         return self._get_id()
 
     def get_or_create_genome(self, experiment_id: int, genome_config: GenomeConfig) -> int:
@@ -641,9 +548,6 @@ class NoOpTracker(ExperimentTracker):
 
     def get_running_experiment(self) -> Optional[dict]:
         return None
-
-    def get_experiment_phases(self, experiment_id: int) -> list[dict]:
-        return []
 
     def get_all_iterations(self, experiment_id: int) -> list[dict]:
         return []

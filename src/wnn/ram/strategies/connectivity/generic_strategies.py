@@ -1107,13 +1107,11 @@ class GenericGAStrategy(ABC, Generic[T]):
 		self._rng: Optional[random.Random] = None
 		# Tracker for iteration recording (set via set_tracker)
 		self._tracker: Optional["ExperimentTracker"] = None
-		self._tracker_phase_id: Optional[int] = None
 		self._tracker_experiment_id: Optional[int] = None
 
-	def set_tracker(self, tracker: "ExperimentTracker", phase_id: int, experiment_id: Optional[int] = None) -> None:
+	def set_tracker(self, tracker: "ExperimentTracker", experiment_id: int, _unused: Optional[int] = None) -> None:
 		"""Set the experiment tracker for iteration recording."""
 		self._tracker = tracker
-		self._tracker_phase_id = phase_id
 		self._tracker_experiment_id = experiment_id
 
 	@property
@@ -1425,7 +1423,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 					candidates_total = len(offspring)  # In generic GA, all offspring are viable
 
 					iteration_id = self._tracker.record_iteration(
-						phase_id=self._tracker_phase_id,
+						experiment_id=self._tracker_experiment_id,
 						iteration_num=generation + 1,
 						best_ce=best_fitness,
 						best_accuracy=best_acc,
@@ -1748,13 +1746,11 @@ class GenericTSStrategy(ABC, Generic[T]):
 		self._rng: Optional[random.Random] = None
 		# Tracker for iteration recording (set via set_tracker)
 		self._tracker: Optional["ExperimentTracker"] = None
-		self._tracker_phase_id: Optional[int] = None
 		self._tracker_experiment_id: Optional[int] = None
 
-	def set_tracker(self, tracker: "ExperimentTracker", phase_id: int, experiment_id: Optional[int] = None) -> None:
+	def set_tracker(self, tracker: "ExperimentTracker", experiment_id: int, _unused: Optional[int] = None) -> None:
 		"""Set the experiment tracker for iteration recording."""
 		self._tracker = tracker
-		self._tracker_phase_id = phase_id
 		self._tracker_experiment_id = experiment_id
 
 	@property
@@ -2074,7 +2070,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 					candidates_total = len(all_candidates) if 'all_candidates' in dir() else len(viable)
 
 					iteration_id = self._tracker.record_iteration(
-						phase_id=self._tracker_phase_id,
+						experiment_id=self._tracker_experiment_id,
 						iteration_num=iteration + 1,
 						best_ce=best_fitness,
 						best_accuracy=best_accuracy,  # Accuracy of best-CE genome

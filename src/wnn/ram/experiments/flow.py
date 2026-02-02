@@ -278,8 +278,7 @@ class Flow:
 		self.shutdown_check = shutdown_check
 
 		self._flow_id: Optional[int] = flow_id
-		self._experiment_ids: dict[int, int] = {}  # idx -> experiment_id (V1/dashboard)
-		self._tracker_experiment_id: Optional[int] = None  # V2 experiment ID
+		self._experiment_ids: dict[int, int] = {}  # idx -> experiment_id
 		self._results: list[ExperimentResult] = []
 
 	def run(
@@ -342,31 +341,6 @@ class Flow:
 		elif self._flow_id is not None:
 			self.log(f"Using existing flow {self._flow_id}")
 
-		# V2 tracking: create experiment for genome-level tracking
-		if self.tracker:
-			try:
-				# Convert tier_config to string format
-				tier_config_str = None
-				if cfg.tier_config is not None:
-					tier_parts = []
-					for tier in cfg.tier_config:
-						if tier[0] is None:
-							tier_parts.append(f"rest,{tier[1]},{tier[2]}")
-						else:
-							tier_parts.append(f"{tier[0]},{tier[1]},{tier[2]}")
-					tier_config_str = ";".join(tier_parts)
-
-				self._tracker_experiment_id = self.tracker.start_experiment(
-					name=cfg.name,
-					flow_id=self._flow_id,  # Link experiment to flow
-					tier_config=tier_config_str,
-					context_size=cfg.context_size,
-					population_size=cfg.experiments[0].population_size if cfg.experiments else 50,
-				)
-				self.log(f"V2 tracking: experiment_id={self._tracker_experiment_id}")
-			except Exception as e:
-				self.log(f"Warning: Failed to create V2 experiment: {e}")
-
 		# Load seed from checkpoint if specified
 		if cfg.seed_checkpoint_path and not seed_genome:
 			seed_genome, seed_population, seed_threshold = self._load_seed_checkpoint(
@@ -418,12 +392,47 @@ class Flow:
 				if self.checkpoint_dir:
 					exp_checkpoint_dir = self.checkpoint_dir / f"exp_{idx:02d}"
 
-				# Create experiment in dashboard if client available
-				# NOTE: Skip if V2 tracker is active - it uses a single experiment for the
-				# entire flow with phases, while dashboard_client would create separate
-				# experiments for each phase (causing duplicates)
+				# Create experiment in database for this config spec
+				# Each config spec becomes its own experiment with proper name and sequence_order
 				experiment_id = None
-				if self.dashboard_client and not self.tracker:
+				tracker_experiment_id = None
+
+				# Convert tier_config to string format for DB
+				tier_config_str = None
+				if cfg.tier_config is not None:
+					tier_parts = []
+					for tier in cfg.tier_config:
+						if tier[0] is None:
+							tier_parts.append(f"rest,{tier[1]},{tier[2]}")
+						else:
+							tier_parts.append(f"{tier[0]},{tier[1]},{tier[2]}")
+					tier_config_str = ";".join(tier_parts)
+
+				# Determine phase type string for tracking
+				opt_target = "bits" if exp_config.optimize_bits else "neurons" if exp_config.optimize_neurons else "connections"
+				phase_type = f"{'ga' if exp_config.experiment_type == 'ga' else 'ts'}_{opt_target}"
+
+				if self.tracker:
+					try:
+						# Create experiment with config spec name and sequence_order
+						tracker_experiment_id = self.tracker.start_experiment(
+							name=exp_config.name,  # Use config spec name, NOT flow name
+							flow_id=self._flow_id,
+							sequence_order=idx,
+							tier_config=tier_config_str,
+							context_size=cfg.context_size,
+							population_size=exp_config.population_size,
+							phase_type=phase_type,
+							max_iterations=exp_config.generations if exp_config.experiment_type == "ga" else exp_config.iterations,
+						)
+						experiment_id = tracker_experiment_id
+						self._experiment_ids[idx] = experiment_id
+						self.log(f"Created experiment {experiment_id}: {exp_config.name} (sequence_order={idx})")
+					except Exception as e:
+						self.log(f"Warning: Failed to create experiment via tracker: {e}")
+
+				# Fallback to dashboard_client if tracker not available
+				if not experiment_id and self.dashboard_client:
 					try:
 						experiment_id = self.dashboard_client.create_experiment(
 							name=exp_config.name,
@@ -439,6 +448,7 @@ class Flow:
 								experiment_id=experiment_id,
 								sequence_order=idx,
 							)
+						self.log(f"Created experiment {experiment_id}: {exp_config.name} (via dashboard)")
 					except Exception as e:
 						self.log(f"Warning: Failed to create experiment in dashboard: {e}")
 
@@ -469,7 +479,7 @@ class Flow:
 					initial_fitness=current_fitness if exp_config.experiment_type == "ts" else None,
 					initial_population=current_population,
 					initial_threshold=current_threshold,
-					tracker_experiment_id=self._tracker_experiment_id,
+					tracker_experiment_id=tracker_experiment_id,  # Pass this experiment's ID
 				)
 
 				self._results.append(result)
@@ -500,14 +510,6 @@ class Flow:
 				except Exception as e:
 					self.log(f"Warning: Failed to mark flow completed: {e}")
 
-			# V2 tracking: mark experiment as completed
-			if self.tracker and self._tracker_experiment_id:
-				try:
-					from wnn.ram.experiments.tracker import TrackerStatus
-					self.tracker.update_experiment_status(self._tracker_experiment_id, TrackerStatus.COMPLETED)
-				except Exception as e:
-					self.log(f"Warning: Failed to update V2 experiment status: {e}")
-
 		except FlowStoppedError:
 			# Flow was stopped gracefully (shutdown requested)
 			self.log("Flow stopped due to shutdown request")
@@ -534,14 +536,6 @@ class Flow:
 					self.dashboard_client.update_flow(self._flow_id, status="cancelled")
 				except Exception:
 					pass
-
-			# V2 tracking: mark experiment as cancelled
-			if self.tracker and self._tracker_experiment_id:
-				try:
-					from wnn.ram.experiments.tracker import TrackerStatus
-					self.tracker.update_experiment_status(self._tracker_experiment_id, TrackerStatus.CANCELLED)
-				except Exception:
-					pass
 			raise
 
 		except Exception as e:
@@ -549,14 +543,6 @@ class Flow:
 			if self.dashboard_client and self._flow_id:
 				try:
 					self.dashboard_client.flow_failed(self._flow_id, str(e))
-				except Exception:
-					pass
-
-			# V2 tracking: mark experiment as failed
-			if self.tracker and self._tracker_experiment_id:
-				try:
-					from wnn.ram.experiments.tracker import TrackerStatus
-					self.tracker.update_experiment_status(self._tracker_experiment_id, TrackerStatus.FAILED)
 				except Exception:
 					pass
 			raise
