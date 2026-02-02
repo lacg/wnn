@@ -442,14 +442,14 @@
               <div class="phase-name">{phaseShortName(phase.name)}</div>
               <div class="phase-status">{phase.status}</div>
               {#if phase.results && phase.results.length > 0}
-                <!-- Show validation summary for completed phases -->
-                {#each phase.results as result}
-                  <div class="phase-result" class:best-ce={result.metric_type === 'best_ce'} class:best-acc={result.metric_type === 'best_acc'}>
-                    <span class="result-label">{result.metric_type === 'best_ce' ? 'Best CE' : result.metric_type === 'best_acc' ? 'Best Acc' : 'Top-K'}</span>
-                    <span class="result-ce">{result.ce.toFixed(4)}</span>
-                    <span class="result-acc">{(result.accuracy * 100).toFixed(2)}%</span>
+                <!-- Show best CE result for completed phases -->
+                {@const bestCeResult = phase.results.find(r => r.metric_type === 'best_ce')}
+                {#if bestCeResult}
+                  <div class="phase-result best-ce">
+                    <span class="result-ce">{bestCeResult.ce.toFixed(4)}</span>
+                    <span class="result-acc">{(bestCeResult.accuracy * 100).toFixed(3)}%</span>
                   </div>
-                {/each}
+                {/if}
               {:else if phase.best_ce}
                 <div class="phase-ce">CE: {phase.best_ce.toFixed(4)}</div>
               {/if}
@@ -916,7 +916,7 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    min-width: 100px;
+    min-width: 120px;
     padding: 0.5rem;
     border-radius: 0.25rem;
     background: var(--bg-card);
@@ -1007,12 +1007,13 @@
   .phase-result {
     display: flex;
     gap: 0.25rem;
-    font-size: 0.625rem;
+    font-size: 0.7rem;
     font-family: monospace;
     margin-top: 0.125rem;
-    padding: 0.125rem 0.25rem;
+    padding: 0.2rem 0.25rem;
     background: var(--bg-secondary);
     border-radius: 2px;
+    white-space: nowrap;
   }
 
   .phase-result.best-ce {
