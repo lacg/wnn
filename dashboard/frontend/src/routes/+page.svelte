@@ -28,6 +28,9 @@
   let phaseIterations: Iteration[] = [];
   let loadingPhaseIterations = false;
 
+  // Chart tooltip state
+  let tooltipData: { x: number; y: number; iter: number; ce: number; acc: number | null; avgCe: number | null; avgAcc: number | null } | null = null;
+
   onMount(() => {
     // Fetch the current running flow
     fetchRunningFlow();
@@ -407,6 +410,63 @@
                 <text x={bestX} y={bestY + 15} text-anchor="middle" class="best-label" fill="var(--accent-green)">Acc: {accMax.toFixed(2)}%</text>
               {/if}
             {/each}
+          {/if}
+
+          <!-- Invisible hover zones for tooltip -->
+          {#each chartData as point, i}
+            {@const x = padding.left + (i / Math.max(chartData.length - 1, 1)) * chartWidth}
+            {@const barWidth = chartWidth / Math.max(chartData.length, 1)}
+            <rect
+              x={x - barWidth / 2}
+              y={padding.top}
+              width={barWidth}
+              height={chartHeight}
+              fill="transparent"
+              on:mouseenter={() => {
+                const cumPoint = cumulativeData[i];
+                tooltipData = {
+                  x: x,
+                  y: padding.top + chartHeight / 2,
+                  iter: point.iter,
+                  ce: cumPoint.ce,
+                  acc: cumPoint.acc,
+                  avgCe: point.avgCe,
+                  avgAcc: point.avgAcc
+                };
+              }}
+              on:mouseleave={() => tooltipData = null}
+            />
+          {/each}
+
+          <!-- Tooltip -->
+          {#if tooltipData}
+            <g transform="translate({tooltipData.x}, {tooltipData.y})">
+              <rect
+                x="-70"
+                y="-55"
+                width="140"
+                height="80"
+                fill="var(--bg-card)"
+                stroke="var(--border)"
+                rx="4"
+                class="tooltip-bg"
+              />
+              <text x="0" y="-38" text-anchor="middle" class="tooltip-title">Iter {tooltipData.iter}</text>
+              <text x="-60" y="-20" class="tooltip-label ce-label">Best CE:</text>
+              <text x="60" y="-20" text-anchor="end" class="tooltip-value ce-label">{tooltipData.ce.toFixed(4)}</text>
+              {#if tooltipData.acc !== null}
+                <text x="-60" y="-4" class="tooltip-label acc-label">Best Acc:</text>
+                <text x="60" y="-4" text-anchor="end" class="tooltip-value acc-label">{tooltipData.acc.toFixed(3)}%</text>
+              {/if}
+              {#if tooltipData.avgCe !== null}
+                <text x="-60" y="12" class="tooltip-label ce-label">Avg CE:</text>
+                <text x="60" y="12" text-anchor="end" class="tooltip-value ce-label">{tooltipData.avgCe.toFixed(4)}</text>
+              {/if}
+              {#if tooltipData.avgAcc !== null}
+                <text x="-60" y="28" class="tooltip-label acc-label">Avg Acc:</text>
+                <text x="60" y="28" text-anchor="end" class="tooltip-value acc-label">{tooltipData.avgAcc.toFixed(3)}%</text>
+              {/if}
+            </g>
           {/if}
         </svg>
       </div>
@@ -1138,6 +1198,27 @@
   .best-label {
     font-size: 11px;
     font-weight: 600;
+  }
+
+  .tooltip-bg {
+    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+  }
+
+  .tooltip-title {
+    font-size: 11px;
+    font-weight: 600;
+    fill: var(--text-primary);
+  }
+
+  .tooltip-label {
+    font-size: 10px;
+    fill: var(--text-secondary);
+  }
+
+  .tooltip-value {
+    font-size: 10px;
+    font-family: monospace;
+    font-weight: 500;
   }
 
   .chart-legend {
