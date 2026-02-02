@@ -101,6 +101,9 @@
 
   $: flowId = $page.params.id;
 
+  // Reactive display experiments - re-computed when flow or experiments change
+  $: displayExperiments = getDisplayExperiments(flow, experiments);
+
   onMount(async () => {
     await loadFlow();
   });
@@ -752,29 +755,29 @@
   }
 
   // Helper to get display experiments - always show all config specs, merge DB data when available
-  function getDisplayExperiments(): Array<{ exp: Experiment | null; spec: ReturnType<typeof getFlowExperiments>[0] | null; index: number }> {
-    const configExps = getFlowExperiments(flow);
+  // Takes flow and experiments as params to make Svelte reactivity work correctly
+  function getDisplayExperiments(f: Flow | null, exps: Experiment[]): Array<{ exp: Experiment | null; spec: ReturnType<typeof getFlowExperiments>[0] | null; index: number }> {
+    const configExps = getFlowExperiments(f);
+    if (configExps.length === 0) return [];
 
     // Track which DB experiments have been matched
     const matchedExpIds = new Set<number>();
 
     // Find running experiment (if flow is running, there should be one)
-    const runningExp = experiments.find(e => e.status === 'running');
+    const runningExp = exps.find(e => e.status === 'running');
 
     // Always start from config specs to show all planned experiments
     return configExps.map((spec, i) => {
       // Try to find matching DB experiment by sequence_order first
-      let dbExp = experiments.find(e => e.sequence_order === i && !matchedExpIds.has(e.id));
+      let dbExp = exps.find(e => e.sequence_order === i && !matchedExpIds.has(e.id));
 
       // Then try by name
       if (!dbExp) {
-        dbExp = experiments.find(e => e.name === spec.name && !matchedExpIds.has(e.id));
+        dbExp = exps.find(e => e.name === spec.name && !matchedExpIds.has(e.id));
       }
 
-      // If still no match and flow is running, use current_iteration to infer position
-      // The running experiment's current_iteration tells us how far we are
+      // If still no match and we have a running experiment, assign it to first unmatched spec
       if (!dbExp && runningExp && !matchedExpIds.has(runningExp.id)) {
-        // If this is the first unmatched spec and we have a running experiment, assign it
         const matchedCount = matchedExpIds.size;
         if (i === matchedCount) {
           dbExp = runningExp;
@@ -1171,7 +1174,7 @@
       {/if}
 
       <div class="experiments-list">
-        {#each getDisplayExperiments() as { exp: dbExp, spec, index: i }}
+        {#each displayExperiments as { exp: dbExp, spec, index: i }}
           {@const displaySpec = spec ?? { name: dbExp?.name ?? 'Unknown', experiment_type: 'ga', optimize_neurons: true, optimize_bits: false, optimize_connections: false }}
           {@const status = dbExp ? dbExp.status : (spec ? getExpStatus(spec, i) : 'pending')}
           {@const metrics = spec ? getExpMetrics(spec, i) : null}
