@@ -137,6 +137,32 @@
     }
   }
 
+  // Get all flow steps from config, matching with actual DB experiments
+  function getFlowSteps(f: Flow | null, exps: Experiment[]): Array<{ name: string; status: string; id: number | null; index: number }> {
+    if (!f?.config?.experiments || !Array.isArray(f.config.experiments)) return [];
+
+    const configSpecs = f.config.experiments;
+    const matchedIds = new Set<number>();
+
+    return configSpecs.map((spec, i) => {
+      // Try to match by sequence_order first
+      let dbExp = exps.find(e => e.sequence_order === i && !matchedIds.has(e.id));
+      // Then by name
+      if (!dbExp) {
+        dbExp = exps.find(e => e.name === spec.name && !matchedIds.has(e.id));
+      }
+
+      if (dbExp) {
+        matchedIds.add(dbExp.id);
+        return { name: spec.name, status: dbExp.status, id: dbExp.id, index: i };
+      }
+
+      return { name: spec.name, status: 'pending', id: null, index: i };
+    });
+  }
+
+  $: flowSteps = getFlowSteps(flow, flowExperiments);
+
   // Chart data - iterations directly from experiment
   $: displayIterations = iterations;
   $: chartData = displayIterations.map(iter => ({
@@ -237,28 +263,28 @@
     </div>
 
     <!-- Flow Progress Bar -->
-    {#if flowExperiments.length > 0}
+    {#if flowSteps.length > 0}
       <div class="flow-progress">
         <div class="flow-progress-label">Flow Progress</div>
         <div class="flow-progress-bar">
-          {#each flowExperiments.sort((a, b) => (a.sequence_order ?? 0) - (b.sequence_order ?? 0)) as exp, idx}
-            {@const isCurrent = exp.id === experiment.id}
-            {@const isClickable = exp.status === 'completed' || exp.status === 'running'}
+          {#each flowSteps as step, idx}
+            {@const isCurrent = step.id === experiment.id}
+            {@const isClickable = step.id && (step.status === 'completed' || step.status === 'running')}
             <div class="flow-step" class:current={isCurrent}>
               {#if isClickable && !isCurrent}
-                <a href="/experiments/{exp.id}" class="step-link step-{exp.status}">
+                <a href="/experiments/{step.id}" class="step-link step-{step.status}">
                   <span class="step-number">{idx + 1}</span>
-                  <span class="step-name">{exp.name.replace(/^Phase \d+[ab]: /, '')}</span>
+                  <span class="step-name">{step.name.replace(/^Phase \d+[ab]: /, '')}</span>
                 </a>
               {:else}
-                <div class="step-box step-{exp.status}" class:step-current={isCurrent}>
+                <div class="step-box step-{step.status}" class:step-current={isCurrent}>
                   <span class="step-number">{idx + 1}</span>
-                  <span class="step-name">{exp.name.replace(/^Phase \d+[ab]: /, '')}</span>
+                  <span class="step-name">{step.name.replace(/^Phase \d+[ab]: /, '')}</span>
                 </div>
               {/if}
             </div>
-            {#if idx < flowExperiments.length - 1}
-              <div class="step-connector" class:connector-done={exp.status === 'completed'}></div>
+            {#if idx < flowSteps.length - 1}
+              <div class="step-connector" class:connector-done={step.status === 'completed'}></div>
             {/if}
           {/each}
         </div>
