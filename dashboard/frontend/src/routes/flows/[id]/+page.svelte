@@ -747,36 +747,47 @@
   // Get the actual experiment ID from the config spec index
   // This maps from the flow config experiment spec to the actual Experiment record in DB
   function getExperimentId(index: number): number | null {
-    // Find the phase for this config spec - use helper to ensure array
+    // First, try direct match by sequence_order (most reliable)
+    const bySequence = experiments.find(e => e.sequence_order === index);
+    if (bySequence) return bySequence.id;
+
+    // Get the config spec for name matching
     const flowExperiments = getFlowExperiments(flow);
     const expSpec = flowExperiments[index];
-    if (!expSpec) return null;
 
-    // Try to match by sequence_order first
-    let exp = experiments.find(e => e.sequence_order === index);
-
-    // Fallback: match by name
-    if (!exp) {
-      exp = experiments.find(e => e.name === expSpec.name);
+    // Try to match by name
+    if (expSpec) {
+      const byName = experiments.find(e => e.name === expSpec.name);
+      if (byName) return byName.id;
     }
 
-    // Fallback: match by array position
-    if (!exp && index < experiments.length) {
-      exp = experiments[index];
+    // Fallback: match by array position (experiments are typically in order)
+    if (index < experiments.length) {
+      return experiments[index].id;
     }
-
-    if (exp) return exp.id;
 
     // Last fallback: try via phase
-    const phase = findPhase(expSpec, index);
-    if (phase) {
-      return phase.experiment_id;
+    if (expSpec) {
+      const phase = findPhase(expSpec, index);
+      if (phase) {
+        return phase.experiment_id;
+      }
     }
 
     return null;
   }
 
-  // Get the link URL for an experiment box
+  // Get the link URL for an experiment - can take either config index or DB experiment directly
+  function getExperimentLinkById(expId: number, status: string): string | null {
+    if (status === 'running') {
+      return '/';
+    } else if (status === 'completed') {
+      return `/experiments/${expId}`;
+    }
+    return null;
+  }
+
+  // Get the link URL for an experiment box (by config index)
   function getExperimentLink(index: number): string | null {
     const flowExps = getFlowExperiments(flow);
     if (!flowExps[index]) return null;
@@ -792,6 +803,23 @@
     }
     // Pending experiments are not clickable
     return null;
+  }
+
+  // Helper to get display experiments - prefer DB experiments if available
+  function getDisplayExperiments(): Array<{ exp: Experiment | null; spec: ReturnType<typeof getFlowExperiments>[0] | null; index: number }> {
+    const configExps = getFlowExperiments(flow);
+
+    // If we have DB experiments, use them as primary source
+    if (experiments.length > 0) {
+      return experiments.map((exp, i) => {
+        // Find matching config spec
+        const spec = configExps.find(s => s.name === exp.name) || configExps[exp.sequence_order ?? i] || null;
+        return { exp, spec, index: exp.sequence_order ?? i };
+      });
+    }
+
+    // Fallback to config specs only
+    return configExps.map((spec, i) => ({ exp: null, spec, index: i }));
   }
 </script>
 
@@ -1176,13 +1204,14 @@
       {/if}
 
       <div class="experiments-list">
-        {#each (getFlowExperiments(flow)) as exp, i}
-          {@const status = getExpStatus(exp, i)}
-          {@const metrics = getExpMetrics(exp, i)}
-          {@const isRunning = isRunningExperiment(exp, i)}
+        {#each getDisplayExperiments() as { exp: dbExp, spec, index: i }}
+          {@const displayExp = spec || { name: dbExp?.name || `Experiment ${i + 1}`, experiment_type: 'ga', optimize_bits: false, optimize_neurons: true, optimize_connections: false }}
+          {@const status = dbExp ? dbExp.status : (spec ? getExpStatus(spec, i) : 'pending')}
+          {@const metrics = spec ? getExpMetrics(spec, i) : null}
+          {@const isRunning = status === 'running'}
           {@const canEdit = canEditExperiment(i)}
           {@const isEditing = editingExpIndex === i}
-          {@const expLink = getExperimentLink(i)}
+          {@const expLink = dbExp ? getExperimentLinkById(dbExp.id, status) : getExperimentLink(i)}
 
           {#if isEditing && editingExp}
             <div class="experiment-item editing">
@@ -1245,7 +1274,7 @@
                 </div>
                 <div class="exp-content">
                   <div class="exp-header">
-                    <div class="exp-name">{exp.name}</div>
+                    <div class="exp-name">{displayExp.name}</div>
                     <span class="status-indicator" class:status-completed={status === 'completed'} class:status-running={isRunning} class:status-pending={status === 'pending'}>
                       {status}
                     </span>
@@ -1257,14 +1286,14 @@
                     {/if}
                   </div>
                   <div class="exp-meta">
-                    <span class="exp-type">{exp.experiment_type.toUpperCase()}</span>
-                    {#if exp.optimize_bits}
+                    <span class="exp-type">{displayExp.experiment_type.toUpperCase()}</span>
+                    {#if displayExp.optimize_bits}
                       <span class="exp-tag">Bits</span>
                     {/if}
-                    {#if exp.optimize_neurons}
+                    {#if displayExp.optimize_neurons}
                       <span class="exp-tag">Neurons</span>
                     {/if}
-                    {#if exp.optimize_connections}
+                    {#if displayExp.optimize_connections}
                       <span class="exp-tag">Connections</span>
                     {/if}
                   </div>
@@ -1301,20 +1330,20 @@
                 </div>
                 <div class="exp-content">
                   <div class="exp-header">
-                    <div class="exp-name">{exp.name}</div>
+                    <div class="exp-name">{displayExp.name}</div>
                     <span class="status-indicator" class:status-completed={status === 'completed'} class:status-running={isRunning} class:status-pending={status === 'pending'}>
                       {status}
                     </span>
                   </div>
                   <div class="exp-meta">
-                    <span class="exp-type">{exp.experiment_type.toUpperCase()}</span>
-                    {#if exp.optimize_bits}
+                    <span class="exp-type">{displayExp.experiment_type.toUpperCase()}</span>
+                    {#if displayExp.optimize_bits}
                       <span class="exp-tag">Bits</span>
                     {/if}
-                    {#if exp.optimize_neurons}
+                    {#if displayExp.optimize_neurons}
                       <span class="exp-tag">Neurons</span>
                     {/if}
-                    {#if exp.optimize_connections}
+                    {#if displayExp.optimize_connections}
                       <span class="exp-tag">Connections</span>
                     {/if}
                   </div>
