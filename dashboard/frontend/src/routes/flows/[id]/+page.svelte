@@ -1182,7 +1182,7 @@
           {@const canEdit = canEditExperiment(i)}
           {@const isEditing = editingExpIndex === i}
           {@const expId = dbExp?.id ?? null}
-          {@const expLink = (status === 'completed' || status === 'running') && expId ? (status === 'running' ? '/' : `/experiments/${expId}`) : null}
+          {@const expLink = (status === 'completed' || status === 'running') && expId ? `/experiments/${expId}` : null}
 
           {#if isEditing && editingExp}
             <div class="experiment-item editing">
