@@ -293,9 +293,9 @@
       {@const accMin = 0}
       {@const accMax = accData.length > 0 ? Math.max(...accData.map(p => p.acc)) : 1}
       {@const accRange = accMax - accMin || 0.001}
-      {@const padding = { top: 20, right: 60, bottom: 30, left: 60 }}
+      {@const padding = { top: 40, right: 60, bottom: 30, left: 60 }}
       {@const width = 800}
-      {@const height = 220}
+      {@const height = 300}
       {@const chartWidth = width - padding.left - padding.right}
       {@const chartHeight = height - padding.top - padding.bottom}
       <div class="chart-container">
@@ -651,7 +651,7 @@
     <summary class="card-header" style="cursor: pointer;">
       <span class="card-title">🔍 Debug: Data Inspection</span>
     </summary>
-    <div style="padding: 1rem; font-family: monospace; font-size: 0.75rem;">
+    <div style="padding: 1rem; font-family: monospace; font-size: 1rem;">
       <p><strong>ceHistory:</strong> {displayCeHistory.length} entries</p>
       <p><strong>iterations:</strong> {$iterations.length} entries</p>
       {#if displayCeHistory.length > 0}
@@ -934,24 +934,24 @@
   }
 
   .flow-name {
-    font-size: 1.1rem;
+    font-size: 1.3rem;
     font-weight: 600;
     color: var(--text-primary);
   }
 
   .separator {
     color: var(--text-tertiary);
-    font-size: 1.2rem;
+    font-size: 1.4rem;
   }
 
   .experiment-name {
-    font-size: 1rem;
+    font-size: 1.2rem;
     color: var(--text-secondary);
   }
 
   .btn-small {
     padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
+    font-size: 1rem;
     background: var(--bg-tertiary);
     border: 1px solid var(--border-color);
     border-radius: 0.25rem;
@@ -1047,18 +1047,18 @@
   }
 
   .phase-name {
-    font-size: 0.75rem;
+    font-size: 1rem;
     font-weight: 500;
   }
 
   .phase-status {
-    font-size: 0.625rem;
+    font-size: 0.9rem;
     color: var(--text-secondary);
     text-transform: uppercase;
   }
 
   .phase-ce {
-    font-size: 0.6875rem;
+    font-size: 1rem;
     color: var(--accent-green);
     font-family: monospace;
     margin-top: 0.25rem;
@@ -1067,7 +1067,7 @@
   .phase-result {
     display: flex;
     gap: 0.25rem;
-    font-size: 0.7rem;
+    font-size: 1rem;
     font-family: monospace;
     margin-top: 0.125rem;
     padding: 0.2rem 0.25rem;
@@ -1109,7 +1109,7 @@
     display: flex;
     justify-content: space-between;
     margin-bottom: 0.5rem;
-    font-size: 0.875rem;
+    font-size: 1.1rem;
   }
 
   .progress-bar {
@@ -1131,7 +1131,7 @@
   }
 
   .count {
-    font-size: 0.75rem;
+    font-size: 1rem;
     color: var(--text-secondary);
   }
 
@@ -1146,7 +1146,7 @@
     border: none;
     color: var(--accent-blue);
     cursor: pointer;
-    font-size: 0.875rem;
+    font-size: 1.1rem;
     padding: 0.25rem 0.5rem;
     border-radius: 4px;
     transition: background-color 0.15s ease;
@@ -1168,7 +1168,7 @@
   }
 
   .empty-state .hint {
-    font-size: 0.75rem;
+    font-size: 1rem;
     margin-top: 0.5rem;
     opacity: 0.7;
   }
@@ -1179,7 +1179,7 @@
 
   .line-chart {
     width: 100%;
-    height: 200px;
+    height: 280px;
     background: var(--bg-card);
     border-radius: 4px;
   }
@@ -1226,7 +1226,7 @@
   .chart-legend {
     display: flex;
     gap: 1rem;
-    font-size: 0.75rem;
+    font-size: 1rem;
   }
 
   .legend-item {
@@ -1329,7 +1329,7 @@
 
   .view-link {
     color: var(--accent-blue);
-    font-size: 0.75rem;
+    font-size: 1rem;
     opacity: 0.7;
     transition: opacity 0.15s ease;
   }
@@ -1376,14 +1376,14 @@
 
   .modal-header h2 {
     margin: 0;
-    font-size: 1.25rem;
+    font-size: 1.5rem;
     font-weight: 600;
   }
 
   .modal-close {
     background: none;
     border: none;
-    font-size: 1.5rem;
+    font-size: 1.8rem;
     cursor: pointer;
     color: var(--text-secondary);
     padding: 0.25rem 0.5rem;
@@ -1404,7 +1404,7 @@
 
   .modal-body h3 {
     margin: 1.5rem 0 0.75rem 0;
-    font-size: 1rem;
+    font-size: 1.2rem;
     font-weight: 600;
     color: var(--text-secondary);
   }
@@ -1430,13 +1430,13 @@
   }
 
   .summary-item .label {
-    font-size: 0.75rem;
+    font-size: 1rem;
     color: var(--text-secondary);
     text-transform: uppercase;
   }
 
   .summary-item .value {
-    font-size: 1.125rem;
+    font-size: 1.3rem;
     font-weight: 600;
     font-family: monospace;
   }
@@ -1459,7 +1459,7 @@
 
   .genome-summary .metric {
     font-family: monospace;
-    font-size: 0.9rem;
+    font-size: 1.1rem;
   }
 
   .genome-summary .metric strong {
@@ -1477,7 +1477,7 @@
   .genome-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 0.875rem;
+    font-size: 1.1rem;
   }
 
   .genome-table th {
@@ -1488,7 +1488,7 @@
     font-weight: 600;
     color: var(--text-secondary);
     text-transform: uppercase;
-    font-size: 0.75rem;
+    font-size: 1rem;
     position: sticky;
     top: 0;
     z-index: 1;
@@ -1531,6 +1531,6 @@
   /* Avg columns styling */
   .avg-col {
     color: var(--text-secondary);
-    font-size: 0.875em;
+    font-size: 1em;
   }
 </style>
