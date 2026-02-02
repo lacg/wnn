@@ -1589,7 +1589,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 	def optimize(
 		self,
 		initial_genome: 'ClusterGenome',
-		initial_fitness: float,
+		initial_fitness: Optional[float],
 		evaluate_fn: Callable[['ClusterGenome'], float],
 		initial_neighbors: Optional[list['ClusterGenome']] = None,
 		batch_evaluate_fn: Optional[Callable[[list['ClusterGenome']], list[tuple[float, float]]]] = None,
@@ -1602,6 +1602,10 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 
 		If batch_evaluator was provided at init, uses it for parallel evaluation.
 		batch_evaluate_fn should return list[(CE, accuracy)] tuples.
+
+		Note: If initial_fitness is None, the initial genome will be evaluated
+		to obtain its fitness. This allows TS to seamlessly follow GA without
+		requiring the caller to pre-evaluate.
 		"""
 		# If we have a cached_evaluator, use Rust-based neighbor search
 		if self._cached_evaluator is not None:
@@ -1617,6 +1621,15 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				genomes, logger=self._log, min_accuracy=min_accuracy,
 			)
 
+		# Handle None initial_fitness for fallback path
+		if initial_fitness is None and self._batch_evaluator is not None:
+			self._log.info(f"[{self.name}] initial_fitness not provided, evaluating initial genome...")
+			results = self._batch_evaluator.evaluate_batch([initial_genome], logger=self._log)
+			initial_fitness = results[0][0]  # CE value
+			self._log.info(f"[{self.name}] Initial genome CE: {initial_fitness:.4f}")
+		elif initial_fitness is None:
+			raise ValueError("initial_fitness is required when batch_evaluator is not available")
+
 		return super().optimize(
 			initial_genome=initial_genome,
 			initial_fitness=initial_fitness,
@@ -1628,7 +1641,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 	def _optimize_with_rust_search(
 		self,
 		initial_genome: 'ClusterGenome',
-		initial_fitness: float,
+		initial_fitness: Optional[float],
 		initial_neighbors: Optional[list['ClusterGenome']] = None,
 	) -> OptimizerResult['ClusterGenome']:
 		"""
@@ -1646,6 +1659,16 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 		cfg = self._config
 		arch_cfg = self._arch_config
 		evaluator = self._cached_evaluator
+
+		# If initial_fitness is None, evaluate the initial genome to get it
+		# This happens when TS follows GA and the caller didn't provide the fitness
+		if initial_fitness is None:
+			self._log.info(f"[{self.name}] initial_fitness not provided, evaluating initial genome...")
+			if not initial_genome.has_connections():
+				initial_genome.initialize_connections(evaluator.total_input_bits)
+			results = evaluator.evaluate_batch_full([initial_genome])
+			initial_fitness = results[0][0]  # CE value
+			self._log.info(f"[{self.name}] Initial genome CE: {initial_fitness:.4f}")
 
 		# Always create fitness calculator for unified ranking approach
 		# For CE mode: fitness = CE, ranking by fitness = ranking by CE
