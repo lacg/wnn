@@ -22,9 +22,10 @@
 
   $: experimentId = $page.params.id;
 
-  onMount(async () => {
-    await loadExperiment();
-  });
+  // Reload when experimentId changes (for in-page navigation)
+  $: if (experimentId) {
+    loadExperiment();
+  }
 
   async function loadExperiment() {
     loading = true;

@@ -158,6 +158,18 @@ class ExperimentTracker(ABC):
     # =========================================================================
 
     @abstractmethod
+    def create_pending_experiment(
+        self,
+        name: str,
+        flow_id: int,
+        sequence_order: int,
+        phase_type: Optional[str] = None,
+        max_iterations: int = 250,
+    ) -> int:
+        """Create an experiment with pending status. Returns experiment ID."""
+        pass
+
+    @abstractmethod
     def start_experiment(
         self,
         name: str,
@@ -172,7 +184,7 @@ class ExperimentTracker(ABC):
         phase_type: Optional[str] = None,
         max_iterations: int = 250,
     ) -> int:
-        """Start a new experiment. Returns experiment ID."""
+        """Start an experiment (finds existing or creates, sets to running). Returns experiment ID."""
         pass
 
     @abstractmethod
@@ -344,6 +356,25 @@ class SqliteTracker(ExperimentTracker):
         from wnn.ram.experiments.data_layer import FlowStatus
         self._db.update_flow_status(flow_id, FlowStatus(status.value))
 
+    def create_pending_experiment(
+        self,
+        name: str,
+        flow_id: int,
+        sequence_order: int,
+        phase_type: Optional[str] = None,
+        max_iterations: int = 250,
+    ) -> int:
+        """Create an experiment with pending status."""
+        exp_id = self._db.create_experiment(
+            name=name,
+            flow_id=flow_id,
+            sequence_order=sequence_order,
+            phase_type=phase_type,
+            max_iterations=max_iterations,
+        )
+        # Status defaults to 'pending' in DB
+        return exp_id
+
     def start_experiment(
         self,
         name: str,
@@ -359,19 +390,31 @@ class SqliteTracker(ExperimentTracker):
         max_iterations: int = 250,
     ) -> int:
         from wnn.ram.experiments.data_layer import FitnessCalculator, ExperimentStatus
-        exp_id = self._db.create_experiment(
-            name=name,
-            flow_id=flow_id,
-            sequence_order=sequence_order,
-            fitness_calculator=FitnessCalculator(fitness_calculator.name.lower()),
-            fitness_weight_ce=fitness_weight_ce,
-            fitness_weight_acc=fitness_weight_acc,
-            tier_config=tier_config,
-            context_size=context_size,
-            population_size=population_size,
-            phase_type=phase_type,
-            max_iterations=max_iterations,
-        )
+
+        # Try to find existing experiment by flow_id and sequence_order
+        exp_id = None
+        if flow_id is not None and sequence_order is not None:
+            existing = self._db.get_experiment_by_flow_sequence(flow_id, sequence_order)
+            if existing:
+                exp_id = existing['id']
+
+        # Create if not found
+        if exp_id is None:
+            exp_id = self._db.create_experiment(
+                name=name,
+                flow_id=flow_id,
+                sequence_order=sequence_order,
+                fitness_calculator=FitnessCalculator(fitness_calculator.name.lower()),
+                fitness_weight_ce=fitness_weight_ce,
+                fitness_weight_acc=fitness_weight_acc,
+                tier_config=tier_config,
+                context_size=context_size,
+                population_size=population_size,
+                phase_type=phase_type,
+                max_iterations=max_iterations,
+            )
+
+        # Set to running
         self._db.update_experiment_status(exp_id, ExperimentStatus.RUNNING)
         return exp_id
 
@@ -518,6 +561,9 @@ class NoOpTracker(ExperimentTracker):
 
     def update_flow_status(self, flow_id: int, status: TrackerStatus) -> None:
         pass
+
+    def create_pending_experiment(self, name: str, flow_id: int, sequence_order: int, **kwargs) -> int:
+        return self._get_id()
 
     def start_experiment(self, name: str, **kwargs) -> int:
         return self._get_id()

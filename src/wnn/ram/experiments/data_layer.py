@@ -417,6 +417,14 @@ class DataLayer:
         ).fetchone()
         return dict(row) if row else None
 
+    def get_experiment_by_flow_sequence(self, flow_id: int, sequence_order: int) -> Optional[dict]:
+        """Get experiment by flow_id and sequence_order."""
+        row = self._get_conn().execute(
+            "SELECT * FROM experiments WHERE flow_id = ? AND sequence_order = ?",
+            (flow_id, sequence_order),
+        ).fetchone()
+        return dict(row) if row else None
+
     def update_experiment_status(
         self,
         experiment_id: int,
