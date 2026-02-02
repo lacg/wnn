@@ -41,10 +41,12 @@
   let tooltipData: { x: number; y: number; iter: number; ce: number; acc: number | null; avgCe: number | null; avgAcc: number | null } | null = null;
 
   onMount(async () => {
-    // Check for experiment query parameter (linked from flow page)
+    // Check for experiment query parameter (legacy link support)
+    // Redirect to dedicated experiment page
     const experimentId = $page.url.searchParams.get('experiment');
     if (experimentId) {
-      await loadExperimentById(parseInt(experimentId, 10));
+      window.location.href = `/experiments/${experimentId}`;
+      return;
     }
 
     // Fetch the current running flow

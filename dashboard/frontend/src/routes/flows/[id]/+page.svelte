@@ -778,9 +778,9 @@
 
   // Get the link URL for an experiment box
   function getExperimentLink(index: number): string | null {
-    const experiments = getFlowExperiments(flow);
-    if (!experiments[index]) return null;
-    const status = getExpStatus(experiments[index], index);
+    const flowExps = getFlowExperiments(flow);
+    if (!flowExps[index]) return null;
+    const status = getExpStatus(flowExps[index], index);
 
     if (status === 'running') {
       // Running experiments link to live dashboard
@@ -788,7 +788,7 @@
     } else if (status === 'completed') {
       // Completed experiments link to experiment detail page
       const expId = getExperimentId(index);
-      return expId ? `/?experiment=${expId}` : null;
+      return expId ? `/experiments/${expId}` : null;
     }
     // Pending experiments are not clickable
     return null;
