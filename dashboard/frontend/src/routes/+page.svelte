@@ -1205,20 +1205,21 @@
   }
 
   .tooltip-title {
-    font-size: 14px;
-    font-weight: 600;
+    font-size: 0.9rem;
+    font-weight: 700;
     fill: var(--text-primary);
   }
 
   .tooltip-label {
-    font-size: 12px;
+    font-size: 0.8rem;
+    font-weight: 600;
     fill: var(--text-secondary);
   }
 
   .tooltip-value {
-    font-size: 12px;
+    font-size: 0.8rem;
     font-family: monospace;
-    font-weight: 500;
+    font-weight: 700;
   }
 
   .chart-legend {
