@@ -632,7 +632,7 @@
               <table class="genome-table">
                 <thead>
                   <tr>
-                    <th>Rank</th>
+                    <th>#</th>
                     <th>CE</th>
                     <th>Accuracy</th>
                     <th>Role</th>
@@ -641,7 +641,7 @@
                 <tbody>
                   {#each elites as genome}
                     <tr class="elite">
-                      <td>#{genome.elite_rank !== null ? genome.elite_rank + 1 : genome.position + 1}</td>
+                      <td>{genome.elite_rank !== null ? genome.elite_rank + 1 : genome.position + 1}</td>
                       <td class:best={genome.ce === selectedIteration.best_ce}>{formatCE(genome.ce)}</td>
                       <td>{formatAcc(genome.accuracy)}</td>
                       <td>{formatRole(genome.role)}</td>
@@ -935,12 +935,10 @@
   /* Chart */
   .chart-container {
     padding: 1rem;
-    display: flex;
-    justify-content: center;
   }
 
   .line-chart {
-    width: 80%;
+    width: 100%;
     height: 300px;
   }
 
@@ -1233,6 +1231,7 @@
 
   .genome-table td {
     font-family: monospace;
+    text-align: center;
   }
 
   .genome-table tr.elite {
