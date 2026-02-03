@@ -436,7 +436,25 @@ class Flow:
 				opt_target = "bits" if exp_config.optimize_bits else "neurons" if exp_config.optimize_neurons else "connections"
 				phase_type = f"{'ga' if exp_config.experiment_type == 'ga' else 'ts'}_{opt_target}"
 
-				if self.tracker:
+				# Check if experiment already exists (created when flow was queued from dashboard)
+				existing_experiment_id = self._experiment_ids.get(idx)
+				if existing_experiment_id:
+					experiment_id = existing_experiment_id
+					tracker_experiment_id = existing_experiment_id
+					# Update existing experiment status to running
+					if self.dashboard_client:
+						try:
+							self.dashboard_client.experiment_started(experiment_id)
+							self.log(f"Started experiment {experiment_id}: {exp_config.name} (existing)")
+						except Exception as e:
+							self.log(f"Warning: Failed to update experiment status: {e}")
+					elif self.tracker:
+						try:
+							self.tracker.update_experiment_status(experiment_id, "running")
+							self.log(f"Started experiment {experiment_id}: {exp_config.name} (existing)")
+						except Exception as e:
+							self.log(f"Warning: Failed to update experiment status via tracker: {e}")
+				elif self.tracker:
 					try:
 						# Create experiment with config spec name and sequence_order
 						tracker_experiment_id = self.tracker.start_experiment(

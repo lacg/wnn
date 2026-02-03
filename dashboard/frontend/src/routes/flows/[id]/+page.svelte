@@ -1722,6 +1722,7 @@
     font-size: 0.75rem;
     font-weight: 600;
     color: var(--text-tertiary);
+    text-align: center;
     text-transform: uppercase;
     background: var(--bg-tertiary);
   }
@@ -1736,12 +1737,12 @@
   }
 
   .experiments-table .col-order { width: 40px; text-align: center; }
-  .experiments-table .col-name { min-width: 200px; }
-  .experiments-table .col-type { width: 100px; }
-  .experiments-table .col-status { width: 90px; }
-  .experiments-table .col-ce { width: 80px; text-align: right; }
-  .experiments-table .col-acc { width: 80px; text-align: right; }
-  .experiments-table .col-actions { width: 120px; text-align: right; }
+  .experiments-table .col-name { min-width: 200px; text-align: left; }
+  .experiments-table .col-type { width: 140px; white-space: nowrap; text-align: center; }
+  .experiments-table .col-status { width: 100px; text-align: center; }
+  .experiments-table .col-ce { width: 100px; text-align: right; }
+  .experiments-table .col-acc { width: 100px; text-align: right; }
+  .experiments-table .col-actions { width: 120px; text-align: center; }
 
   .experiments-table .mono {
     font-family: monospace;

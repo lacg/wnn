@@ -1015,6 +1015,84 @@ pub mod queries {
         Ok(result.last_insert_rowid())
     }
 
+    /// Update an experiment
+    pub async fn update_experiment(
+        pool: &DbPool,
+        id: i64,
+        name: Option<&str>,
+        status: Option<&str>,
+        best_ce: Option<f64>,
+        best_accuracy: Option<f64>,
+        current_iteration: Option<i32>,
+    ) -> Result<bool> {
+        let now = Utc::now().to_rfc3339();
+
+        // Build dynamic update query
+        let mut set_clauses = Vec::new();
+        let mut binds: Vec<String> = Vec::new();
+
+        if let Some(n) = name {
+            set_clauses.push("name = ?");
+            binds.push(n.to_string());
+        }
+        if let Some(s) = status {
+            set_clauses.push("status = ?");
+            binds.push(s.to_string());
+            // Update timestamps based on status
+            match s {
+                "running" => {
+                    set_clauses.push("started_at = ?");
+                    binds.push(now.clone());
+                }
+                "completed" | "failed" | "cancelled" => {
+                    set_clauses.push("ended_at = ?");
+                    binds.push(now.clone());
+                }
+                _ => {}
+            }
+        }
+        if best_ce.is_some() {
+            set_clauses.push("best_ce = ?");
+        }
+        if best_accuracy.is_some() {
+            set_clauses.push("best_accuracy = ?");
+        }
+        if current_iteration.is_some() {
+            set_clauses.push("current_iteration = ?");
+        }
+
+        if set_clauses.is_empty() {
+            return Ok(false);
+        }
+
+        let query = format!(
+            "UPDATE experiments SET {} WHERE id = ?",
+            set_clauses.join(", ")
+        );
+
+        let mut q = sqlx::query(&query);
+
+        // Bind string values
+        for b in &binds {
+            q = q.bind(b);
+        }
+        // Bind optional numeric values
+        if let Some(ce) = best_ce {
+            q = q.bind(ce);
+        }
+        if let Some(acc) = best_accuracy {
+            q = q.bind(acc);
+        }
+        if let Some(iter) = current_iteration {
+            q = q.bind(iter);
+        }
+        // Bind ID last
+        q = q.bind(id);
+
+        let result = q.execute(pool).await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     /// List all experiments
     pub async fn list_experiments(pool: &DbPool, limit: i32, offset: i32) -> Result<Vec<Experiment>> {
         let rows = sqlx::query(

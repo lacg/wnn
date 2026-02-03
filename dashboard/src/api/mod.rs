@@ -26,7 +26,7 @@ pub fn routes(state: Arc<AppState>) -> Router {
         // Experiments
         .route("/api/experiments", get(list_experiments).post(create_experiment))
         .route("/api/experiments/current", get(get_current_experiment))
-        .route("/api/experiments/:id", get(get_experiment))
+        .route("/api/experiments/:id", get(get_experiment).patch(update_experiment))
         .route("/api/experiments/:id/iterations", get(get_experiment_iterations))
         // Iterations
         .route("/api/iterations/:id/genomes", get(get_iteration_genomes))
@@ -116,6 +116,51 @@ async fn get_experiment(
     match crate::db::queries::get_experiment(&state.db, id).await {
         Ok(Some(exp)) => (StatusCode::OK, Json(exp)).into_response(),
         Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Experiment not found"})),
+        ).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateExperimentRequest {
+    pub name: Option<String>,
+    pub status: Option<String>,
+    pub best_ce: Option<f64>,
+    pub best_accuracy: Option<f64>,
+    pub current_iteration: Option<i32>,
+}
+
+async fn update_experiment(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Json(req): Json<UpdateExperimentRequest>,
+) -> impl IntoResponse {
+    match crate::db::queries::update_experiment(
+        &state.db,
+        id,
+        req.name.as_deref(),
+        req.status.as_deref(),
+        req.best_ce,
+        req.best_accuracy,
+        req.current_iteration,
+    ).await {
+        Ok(true) => {
+            // Fetch and return updated experiment
+            match crate::db::queries::get_experiment(&state.db, id).await {
+                Ok(Some(exp)) => {
+                    // Broadcast status change
+                    let _ = state.ws_tx.send(WsMessage::ExperimentStatusChanged(exp.clone()));
+                    (StatusCode::OK, Json(exp)).into_response()
+                }
+                _ => (StatusCode::OK, Json(serde_json::json!({"updated": true}))).into_response(),
+            }
+        }
+        Ok(false) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "Experiment not found"})),
         ).into_response(),

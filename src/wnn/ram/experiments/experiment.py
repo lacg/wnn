@@ -327,6 +327,14 @@ class Experiment:
 				experiment_id=tracker_experiment_id,
 			)
 
+		# Mark experiment as running via dashboard API
+		if self.dashboard_client and self.experiment_id:
+			try:
+				self.dashboard_client.experiment_started(self.experiment_id)
+				self.log(f"  Dashboard: experiment {self.experiment_id} marked as running")
+			except Exception as e:
+				self.log(f"  Warning: Failed to mark experiment as running: {e}")
+
 		# Run optimization with exception handling for phase status
 		result = None
 		was_shutdown = False
@@ -364,12 +372,34 @@ class Experiment:
 				except Exception as e:
 					self.log(f"  Warning: Failed to update V2 experiment status: {e}")
 
+			# Dashboard API: update experiment status (for HTTP/WebSocket clients)
+			if self.dashboard_client and self.experiment_id:
+				try:
+					if was_shutdown:
+						self.dashboard_client.update_experiment(self.experiment_id, status="cancelled")
+						self.log(f"  Updated dashboard experiment {self.experiment_id} status to cancelled")
+					else:
+						self.dashboard_client.experiment_completed(
+							self.experiment_id,
+							best_ce=result.final_fitness,
+							best_accuracy=result.final_accuracy,
+						)
+						self.log(f"  Updated dashboard experiment {self.experiment_id} status to completed")
+				except Exception as e:
+					self.log(f"  Warning: Failed to update dashboard experiment status: {e}")
+
 		except Exception as e:
 			# Mark experiment as failed on exception
 			if self.tracker and tracker_experiment_id:
 				try:
 					from wnn.ram.experiments.tracker import TrackerStatus
 					self.tracker.update_experiment_status(tracker_experiment_id, TrackerStatus.FAILED)
+				except Exception:
+					pass
+			# Also update via dashboard API
+			if self.dashboard_client and self.experiment_id:
+				try:
+					self.dashboard_client.update_experiment(self.experiment_id, status="failed")
 				except Exception:
 					pass
 			raise  # Re-raise the original exception

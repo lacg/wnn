@@ -407,6 +407,64 @@ class DashboardClient:
 		"""Get experiment by ID."""
 		return self._request("GET", f"/api/experiments/{experiment_id}")
 
+	def update_experiment(
+		self,
+		experiment_id: int,
+		name: Optional[str] = None,
+		status: Optional[str] = None,
+		best_ce: Optional[float] = None,
+		best_accuracy: Optional[float] = None,
+		current_iteration: Optional[int] = None,
+	) -> dict:
+		"""
+		Update an experiment.
+
+		Args:
+			experiment_id: Experiment ID
+			name: New name
+			status: New status ('pending', 'running', 'completed', 'failed', 'cancelled')
+			best_ce: Best CE achieved
+			best_accuracy: Best accuracy achieved
+			current_iteration: Current iteration number
+
+		Returns:
+			Updated experiment data
+		"""
+		data = {}
+		if name is not None:
+			data["name"] = name
+		if status is not None:
+			data["status"] = status
+		if best_ce is not None:
+			data["best_ce"] = best_ce
+		if best_accuracy is not None:
+			data["best_accuracy"] = best_accuracy
+		if current_iteration is not None:
+			data["current_iteration"] = current_iteration
+		return self._request("PATCH", f"/api/experiments/{experiment_id}", json_data=data)
+
+	def experiment_started(self, experiment_id: int) -> dict:
+		"""Mark experiment as started/running."""
+		return self.update_experiment(experiment_id, status="running")
+
+	def experiment_completed(
+		self,
+		experiment_id: int,
+		best_ce: Optional[float] = None,
+		best_accuracy: Optional[float] = None,
+	) -> dict:
+		"""Mark experiment as completed with final metrics."""
+		return self.update_experiment(
+			experiment_id,
+			status="completed",
+			best_ce=best_ce,
+			best_accuracy=best_accuracy,
+		)
+
+	def experiment_failed(self, experiment_id: int) -> dict:
+		"""Mark experiment as failed."""
+		return self.update_experiment(experiment_id, status="failed")
+
 	def list_experiments(self, limit: int = 50, offset: int = 0) -> list[dict]:
 		"""List experiments."""
 		params = {"limit": limit, "offset": offset}
