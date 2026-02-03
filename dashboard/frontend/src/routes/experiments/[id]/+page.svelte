@@ -935,10 +935,12 @@
   /* Chart */
   .chart-container {
     padding: 1rem;
+    display: flex;
+    justify-content: center;
   }
 
   .line-chart {
-    width: 100%;
+    width: 80%;
     height: 300px;
   }
 
