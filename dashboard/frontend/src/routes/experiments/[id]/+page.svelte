@@ -90,6 +90,17 @@
         experiment.best_ce = newExp.best_ce;
         experiment.best_accuracy = newExp.best_accuracy;
         experiment.ended_at = newExp.ended_at;
+        experiment.gating_status = newExp.gating_status;
+        experiment.gating_results = newExp.gating_results;
+
+        // Also update this experiment's status in flowExperiments for Flow Progress bar
+        if (flowExperiments.length > 0) {
+          const idx = flowExperiments.findIndex(e => e.id === experiment.id);
+          if (idx >= 0) {
+            flowExperiments[idx].status = newExp.status;
+            flowExperiments = flowExperiments; // Trigger Svelte reactivity
+          }
+        }
       }
 
       if (itersRes.ok) {
@@ -114,6 +125,16 @@
       if (pollInterval) {
         clearInterval(pollInterval);
         pollInterval = null;
+        // When experiment finishes, refresh all flow experiments to update Flow Progress
+        if (experiment?.flow_id) {
+          fetch(`/api/flows/${experiment.flow_id}/experiments`)
+            .then(res => res.ok ? res.json() : [])
+            .then(exps => {
+              if (Array.isArray(exps)) {
+                flowExperiments = exps;
+              }
+            });
+        }
       }
     }
   }
