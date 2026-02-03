@@ -270,7 +270,10 @@ class FlowWorker:
             # Parse flow configuration
             config = flow_data.get("config", {})
             params = config.get("params", {})
-            experiments = config.get("experiments", [])
+
+            # Fetch experiments from API (normalized design: experiments stored in DB table)
+            experiments = self.client.list_flow_experiments(flow_id)
+            self._log(f"Fetched {len(experiments)} experiments from API")
 
             # Get context size from params or use default
             context_size = params.get("context_size", self.context_size)
@@ -400,39 +403,62 @@ class FlowWorker:
         params: dict,
         vocab_size: int,
     ) -> list[ExperimentConfig]:
-        """Build experiment configs from flow data."""
+        """Build experiment configs from API experiment data.
+
+        Handles two formats:
+        1. API format: {phase_type: "ga_neurons", ...} - experiments from DB
+        2. Config format: {experiment_type: "ga", optimize_neurons: true, ...} - legacy
+        """
+        # Flow-level defaults from params
         tier_config = self._parse_tier_config(params.get("tier_config"))
-        # Check tier0_only first (canonical key), fallback to optimize_tier0_only (legacy)
         tier0_only = params.get("tier0_only", params.get("optimize_tier0_only", False))
         patience = params.get("patience", 10)
         fitness_percentile = params.get("fitness_percentile")
         seed = params.get("seed")
-
-        # Parse fitness calculator settings
-        fitness_calculator_type = self._parse_fitness_calculator(params.get("fitness_calculator"))
-        fitness_weight_ce = params.get("fitness_weight_ce", 1.0)
-        fitness_weight_acc = params.get("fitness_weight_acc", 1.0)
+        default_fitness_type = self._parse_fitness_calculator(params.get("fitness_calculator"))
+        default_weight_ce = params.get("fitness_weight_ce", 1.0)
+        default_weight_acc = params.get("fitness_weight_acc", 1.0)
 
         exp_configs = []
         for exp_data in experiments:
-            exp_params = exp_data.get("params", {})
+            # Parse phase_type (API format) or use direct fields (config format)
+            phase_type = exp_data.get("phase_type", "")
+            if phase_type:
+                # API format: phase_type like "ga_neurons", "ts_bits", "ga_connections"
+                experiment_type = "ga" if phase_type.startswith("ga") else "ts"
+                optimize_neurons = "neurons" in phase_type
+                optimize_bits = "bits" in phase_type
+                optimize_connections = "connections" in phase_type
+            else:
+                # Legacy config format
+                experiment_type = exp_data.get("experiment_type", "ga")
+                optimize_neurons = exp_data.get("optimize_neurons", False)
+                optimize_bits = exp_data.get("optimize_bits", False)
+                optimize_connections = exp_data.get("optimize_connections", False)
+
+            # Get experiment-specific settings or fall back to flow params
+            exp_tier_config = self._parse_tier_config(exp_data.get("tier_config")) or tier_config
+            exp_fitness_type = self._parse_fitness_calculator(exp_data.get("fitness_calculator")) or default_fitness_type
+            exp_weight_ce = exp_data.get("fitness_weight_ce") or default_weight_ce
+            exp_weight_acc = exp_data.get("fitness_weight_acc") or default_weight_acc
+
             exp_config = ExperimentConfig(
                 name=exp_data.get("name", "Unnamed"),
-                experiment_type=exp_data.get("experiment_type", "ga"),
-                optimize_bits=exp_data.get("optimize_bits", False),
-                optimize_neurons=exp_data.get("optimize_neurons", False),
-                optimize_connections=exp_data.get("optimize_connections", False),
-                generations=exp_params.get("generations", params.get("ga_generations", 250)),
-                population_size=exp_params.get("population_size", params.get("population_size", 50)),
-                iterations=exp_params.get("iterations", params.get("ts_iterations", 250)),
-                neighbors_per_iter=exp_params.get("neighbors_per_iter", params.get("neighbors_per_iter", 50)),
-                patience=exp_params.get("patience", patience),
-                tier_config=tier_config,
+                experiment_type=experiment_type,
+                optimize_bits=optimize_bits,
+                optimize_neurons=optimize_neurons,
+                optimize_connections=optimize_connections,
+                generations=exp_data.get("max_iterations") or params.get("ga_generations", 250),
+                population_size=exp_data.get("population_size") or params.get("population_size", 50),
+                iterations=exp_data.get("max_iterations") or params.get("ts_iterations", 250),
+                neighbors_per_iter=params.get("neighbors_per_iter", 50),
+                patience=patience,
+                tier_config=exp_tier_config,
                 optimize_tier0_only=tier0_only,
                 fitness_percentile=fitness_percentile,
-                fitness_calculator_type=fitness_calculator_type,
-                fitness_weight_ce=fitness_weight_ce,
-                fitness_weight_acc=fitness_weight_acc,
+                fitness_calculator_type=exp_fitness_type,
+                fitness_weight_ce=exp_weight_ce,
+                fitness_weight_acc=exp_weight_acc,
                 seed=seed,
             )
             exp_configs.append(exp_config)
