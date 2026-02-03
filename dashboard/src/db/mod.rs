@@ -698,7 +698,8 @@ pub mod queries {
                       fitness_weight_ce, fitness_weight_acc, tier_config, context_size,
                       population_size, pid, last_iteration, resume_checkpoint_id,
                       created_at, started_at, ended_at, paused_at,
-                      phase_type, max_iterations, current_iteration, best_ce, best_accuracy
+                      phase_type, max_iterations, current_iteration, best_ce, best_accuracy,
+                      gating_status, gating_results
                FROM experiments WHERE flow_id = ?
                ORDER BY sequence_order"#,
         )
@@ -1148,7 +1149,8 @@ pub mod queries {
                       fitness_weight_ce, fitness_weight_acc, tier_config, context_size,
                       population_size, pid, last_iteration, resume_checkpoint_id,
                       created_at, started_at, ended_at, paused_at,
-                      phase_type, max_iterations, current_iteration, best_ce, best_accuracy
+                      phase_type, max_iterations, current_iteration, best_ce, best_accuracy,
+                      gating_status, gating_results
                FROM experiments WHERE id = ?"#,
         )
         .bind(id)
@@ -1326,7 +1328,8 @@ pub mod queries {
                       fitness_weight_ce, fitness_weight_acc, tier_config, context_size,
                       population_size, pid, last_iteration, resume_checkpoint_id,
                       created_at, started_at, ended_at, paused_at,
-                      phase_type, max_iterations, current_iteration, best_ce, best_accuracy
+                      phase_type, max_iterations, current_iteration, best_ce, best_accuracy,
+                      gating_status, gating_results
                FROM experiments
                ORDER BY created_at DESC
                LIMIT ? OFFSET ?"#,
