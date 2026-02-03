@@ -151,7 +151,7 @@
   $: {
     if (experiment?.flow_id && flowHasActiveExperiments) {
       if (!flowPollInterval) {
-        flowPollInterval = setInterval(refreshFlowExperiments, 5000);
+        flowPollInterval = setInterval(refreshFlowExperiments, 10000);
       }
     } else {
       if (flowPollInterval) {
