@@ -12,7 +12,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Callable, Literal, Optional
 
-from wnn.ram.fitness import FitnessCalculatorType
+from wnn.ram.fitness import FitnessCalculatorType, FitnessCalculatorFactory
 from wnn.ram.strategies.factory import OptimizerStrategyFactory, OptimizerStrategyType
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 from wnn.ram.experiments.phased_search import PhaseResult
@@ -316,6 +316,13 @@ class Experiment:
 			except Exception as e:
 				self.log(f"  Warning: Failed to set up V2 tracking: {e}")
 
+		# Create fitness calculator for validation genome selection
+		fitness_calculator = FitnessCalculatorFactory.create(
+			cfg.fitness_calculator_type,
+			weight_ce=cfg.fitness_weight_ce,
+			weight_acc=cfg.fitness_weight_acc,
+		)
+
 		# Run INIT validation on seed population
 		# First evaluate to get baseline metrics, then run full validation on best genomes
 		seed_pop = initial_population or ([initial_genome] if initial_genome else None)
@@ -328,6 +335,7 @@ class Experiment:
 				validation_point='init',
 				experiment_id=tracker_experiment_id or self.experiment_id,
 				flow_id=self.flow_id,
+				fitness_calculator=fitness_calculator,
 			)
 
 		# Mark experiment as running via dashboard API
@@ -370,6 +378,7 @@ class Experiment:
 					validation_point='final',
 					experiment_id=tracker_experiment_id or self.experiment_id,
 					flow_id=self.flow_id,
+					fitness_calculator=fitness_calculator,
 				)
 
 			# V2 tracking: update experiment status based on whether shutdown was requested
