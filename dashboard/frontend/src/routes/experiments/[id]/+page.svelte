@@ -1128,7 +1128,7 @@
     background: var(--bg);
     border-radius: 0.75rem;
     width: 90%;
-    max-width: 700px;
+    max-width: 900px;
     max-height: 80vh;
     display: flex;
     flex-direction: column;
