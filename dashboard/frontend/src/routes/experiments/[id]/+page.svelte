@@ -12,6 +12,7 @@
   let loading = true;
   let error: string | null = null;
   let pollInterval: ReturnType<typeof setInterval> | null = null;
+  let flowPollInterval: ReturnType<typeof setInterval> | null = null;
 
   // Iteration detail modal state
   let selectedIteration: Iteration | null = null;
@@ -125,16 +126,37 @@
       if (pollInterval) {
         clearInterval(pollInterval);
         pollInterval = null;
-        // When experiment finishes, refresh all flow experiments to update Flow Progress
-        if (experiment?.flow_id) {
-          fetch(`/api/flows/${experiment.flow_id}/experiments`)
-            .then(res => res.ok ? res.json() : [])
-            .then(exps => {
-              if (Array.isArray(exps)) {
-                flowExperiments = exps;
-              }
-            });
+      }
+    }
+  }
+
+  // Refresh flow experiments (for Flow Progress bar)
+  async function refreshFlowExperiments() {
+    if (!experiment?.flow_id) return;
+    try {
+      const res = await fetch(`/api/flows/${experiment.flow_id}/experiments`);
+      if (res.ok) {
+        const exps = await res.json();
+        if (Array.isArray(exps)) {
+          flowExperiments = exps;
         }
+      }
+    } catch (e) {
+      // Silently fail
+    }
+  }
+
+  // Poll flow experiments if any experiment in the flow is running/pending
+  $: flowHasActiveExperiments = flowExperiments.some(e => e.status === 'running' || e.status === 'pending' || e.status === 'queued');
+  $: {
+    if (experiment?.flow_id && flowHasActiveExperiments) {
+      if (!flowPollInterval) {
+        flowPollInterval = setInterval(refreshFlowExperiments, 5000);
+      }
+    } else {
+      if (flowPollInterval) {
+        clearInterval(flowPollInterval);
+        flowPollInterval = null;
       }
     }
   }
@@ -144,6 +166,10 @@
     if (pollInterval) {
       clearInterval(pollInterval);
       pollInterval = null;
+    }
+    if (flowPollInterval) {
+      clearInterval(flowPollInterval);
+      flowPollInterval = null;
     }
   });
 
