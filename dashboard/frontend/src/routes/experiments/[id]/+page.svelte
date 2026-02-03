@@ -608,7 +608,7 @@
                   role="button"
                 >
                   <td>{iter.iteration_num}</td>
-                  <td class="timestamp">{new Date(iter.created_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</td>
+                  <td class="timestamp">{new Date(iter.created_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })}</td>
                   <td class:best={iter.best_ce === bestCE}>{formatCE(iter.best_ce)}</td>
                   <td>{formatAccShort(iter.best_accuracy)}</td>
                   <td class="secondary">{iter.avg_ce ? formatCE(iter.avg_ce) : '—'}</td>
