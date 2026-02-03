@@ -65,11 +65,43 @@
     }
   }
 
-  // Polling for running experiments
+  // Light refresh for running experiments - only fetch new iterations and status
+  async function refreshRunningExperiment() {
+    if (!experiment) return;
+
+    try {
+      const [expRes, itersRes] = await Promise.all([
+        fetch(`/api/experiments/${experimentId}`),
+        fetch(`/api/experiments/${experimentId}/iterations?limit=500`)
+      ]);
+
+      if (expRes.ok) {
+        const newExp = await expRes.json();
+        // Only update fields that change during execution
+        experiment.status = newExp.status;
+        experiment.current_iteration = newExp.current_iteration;
+        experiment.best_ce = newExp.best_ce;
+        experiment.best_accuracy = newExp.best_accuracy;
+        experiment.ended_at = newExp.ended_at;
+      }
+
+      if (itersRes.ok) {
+        const newIters = await itersRes.json();
+        if (Array.isArray(newIters)) {
+          iterations = newIters;
+        }
+      }
+    } catch (e) {
+      // Silently fail on refresh - don't disrupt the UI
+      console.error('Refresh failed:', e);
+    }
+  }
+
+  // Polling for running experiments - use light refresh
   $: {
     if (experiment?.status === 'running') {
       if (!pollInterval) {
-        pollInterval = setInterval(loadExperiment, 3000);
+        pollInterval = setInterval(refreshRunningExperiment, 3000);
       }
     } else {
       if (pollInterval) {
