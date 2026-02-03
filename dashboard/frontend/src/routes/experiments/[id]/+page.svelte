@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
   import type { Experiment, Iteration, GenomeEvaluation, Flow } from '$lib/types';
   import { formatDate } from '$lib/dateFormat';
@@ -10,6 +10,7 @@
   let flow: Flow | null = null;
   let loading = true;
   let error: string | null = null;
+  let pollInterval: ReturnType<typeof setInterval> | null = null;
 
   // Iteration detail modal state
   let selectedIteration: Iteration | null = null;
@@ -63,6 +64,28 @@
       loading = false;
     }
   }
+
+  // Polling for running experiments
+  $: {
+    if (experiment?.status === 'running') {
+      if (!pollInterval) {
+        pollInterval = setInterval(loadExperiment, 3000);
+      }
+    } else {
+      if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+      }
+    }
+  }
+
+  // Cleanup on destroy
+  onDestroy(() => {
+    if (pollInterval) {
+      clearInterval(pollInterval);
+      pollInterval = null;
+    }
+  });
 
   async function openIterationDetails(iter: Iteration) {
     selectedIteration = iter;
