@@ -391,7 +391,7 @@ pub mod queries {
             };
             let phase_type = format!("{}_{}", exp_type, opt_target);
 
-            // Get max_iterations from params if available
+            // Get max_iterations from experiment params (generations for GA, iterations for TS)
             let max_iterations = exp_spec.params.get("generations")
                 .or_else(|| exp_spec.params.get("iterations"))
                 .and_then(|v| v.as_i64())

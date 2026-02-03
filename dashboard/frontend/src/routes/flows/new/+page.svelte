@@ -95,6 +95,17 @@
     error = null;
 
     try {
+      // Enrich experiments with their params (generations/iterations based on type)
+      const enrichedExperiments = experiments.map(exp => ({
+        ...exp,
+        params: {
+          generations: exp.experiment_type === 'ga' ? gaGenerations : undefined,
+          iterations: exp.experiment_type === 'ts' ? tsIterations : undefined,
+          population_size: populationSize,
+          neighbors_per_iter: neighborsPerIter,
+        }
+      }));
+
       // Experiments are passed separately (normalized design: Flow 1:N Experiments via FK)
       const response = await fetch('/api/flows', {
         method: 'POST',
@@ -126,7 +137,7 @@
               gating_threshold: gatingThreshold
             }
           },
-          experiments: experiments, // Experiments stored in DB table, not in config
+          experiments: enrichedExperiments,
           seed_checkpoint_id: seedCheckpointId
         })
       });
