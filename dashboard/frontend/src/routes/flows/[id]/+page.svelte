@@ -1055,6 +1055,13 @@
                         </svg>
                       </button>
                     {/if}
+                    {#if isRunning}
+                      <button class="btn-icon btn-danger" title="Stop" on:click={stopFlow}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <rect x="6" y="6" width="12" height="12" rx="2"></rect>
+                        </svg>
+                      </button>
+                    {/if}
                     {#if (isCompleted || isRunning) && (flow.status === 'running' || flow.status === 'failed' || flow.status === 'cancelled' || flow.status === 'completed')}
                       <button class="btn-icon" title="Restart from here" on:click={() => restartFromExperiment(i)}>
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
