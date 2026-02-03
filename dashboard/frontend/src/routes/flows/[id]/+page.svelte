@@ -16,6 +16,8 @@
     if (wsFlow && flow && wsFlow.id === flow.id) {
       // Update local flow with WebSocket data
       flow = wsFlow;
+      // Refetch experiments when flow updates (experiment status may have changed)
+      refreshExperiments();
     }
   });
 
@@ -25,13 +27,48 @@
       const updated = flowList.find((f) => f.id === flow!.id);
       if (updated && updated.status !== flow.status) {
         flow = updated;
+        // Refetch experiments when flow status changes
+        refreshExperiments();
       }
     }
   });
 
+  // Refresh experiments without full page reload
+  async function refreshExperiments() {
+    try {
+      const res = await fetch(`/api/flows/${flowId}/experiments`);
+      if (res.ok) {
+        const expsData = await res.json();
+        experiments = Array.isArray(expsData) ? expsData : [];
+      }
+    } catch (e) {
+      console.error('Failed to refresh experiments:', e);
+    }
+  }
+
+  // Periodic refresh when flow is running
+  let pollInterval: ReturnType<typeof setInterval> | null = null;
+
+  $: {
+    // Start/stop polling based on flow status
+    if (flow?.status === 'running' || flow?.status === 'queued') {
+      if (!pollInterval) {
+        pollInterval = setInterval(refreshExperiments, 3000); // Poll every 3 seconds
+      }
+    } else {
+      if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+      }
+    }
+  }
+
   onDestroy(() => {
     unsubscribeCurrentFlow();
     unsubscribeFlows();
+    if (pollInterval) {
+      clearInterval(pollInterval);
+    }
   });
   let experiments: Experiment[] = [];
   let checkpoints: Checkpoint[] = [];
@@ -962,217 +999,114 @@
         </div>
       {/if}
 
-      <div class="experiments-list">
-        {#each displayExperiments as exp, i}
-          {@const isRunning = exp.status === 'running'}
-          {@const isCompleted = exp.status === 'completed'}
-          {@const isPending = exp.status === 'pending'}
-          {@const canEdit = canEditExperiment(i)}
-          {@const isEditing = editingExpIndex === i}
-          {@const expLink = getExperimentLink(exp)}
-          {@const expType = exp.phase_type?.startsWith('ga') ? 'GA' : exp.phase_type?.startsWith('ts') ? 'TS' : 'GA'}
-          {@const optimizesBits = exp.phase_type?.includes('bits')}
-          {@const optimizesNeurons = exp.phase_type?.includes('neurons')}
-          {@const optimizesConnections = exp.phase_type?.includes('connections')}
-
-          {#if isEditing && editingExp}
-            <div class="experiment-item editing">
-              <div class="exp-order">{i + 1}</div>
-              <div class="exp-content">
-                <div class="edit-exp-form">
-                  <div class="form-row">
-                    <div class="form-group">
-                      <label>Name</label>
-                      <input type="text" bind:value={editingExp.name} />
-                    </div>
-                    <div class="form-group">
-                      <label>Type</label>
-                      <select bind:value={editingExp.experiment_type}>
-                        <option value="ga">GA (Genetic Algorithm)</option>
-                        <option value="ts">TS (Tabu Search)</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div class="form-row">
-                    <div class="form-group">
-                      <label>Optimize</label>
-                      <div class="checkbox-row">
-                        <label class="checkbox-label">
-                          <input type="radio" name="edit-optimize" checked={editingExp.optimize_neurons}
-                                 on:change={() => { if (editingExp) { editingExp.optimize_neurons = true; editingExp.optimize_bits = false; editingExp.optimize_connections = false; } }} />
-                          Neurons
-                        </label>
-                        <label class="checkbox-label">
-                          <input type="radio" name="edit-optimize" checked={editingExp.optimize_bits}
-                                 on:change={() => { if (editingExp) { editingExp.optimize_neurons = false; editingExp.optimize_bits = true; editingExp.optimize_connections = false; } }} />
-                          Bits
-                        </label>
-                        <label class="checkbox-label">
-                          <input type="radio" name="edit-optimize" checked={editingExp.optimize_connections}
-                                 on:change={() => { if (editingExp) { editingExp.optimize_neurons = false; editingExp.optimize_bits = false; editingExp.optimize_connections = true; } }} />
-                          Connections
-                        </label>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="form-actions">
-                    <button class="btn btn-secondary" on:click={cancelEditExperiment}>Cancel</button>
-                    <button class="btn btn-primary" on:click={saveExperiment} disabled={saving}>
-                      {saving ? 'Saving...' : 'Save'}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          {:else if expLink}
-            <a href={expLink} class="experiment-item-link" class:running={isRunning} class:completed={isCompleted} class:pending={isPending}>
-              <div class="exp-order" class:order-completed={isCompleted} class:order-running={isRunning}>
-                {#if isCompleted}
-                  <span class="checkmark">✓</span>
-                {:else}
-                  {i + 1}
-                {/if}
-              </div>
-              <div class="exp-content">
-                <div class="exp-header">
-                  <div class="exp-name">{exp.name}</div>
-                  <span class="status-indicator" class:status-completed={isCompleted} class:status-running={isRunning} class:status-pending={isPending}>
-                    {exp.status}
+      <div class="experiments-table">
+        <table>
+          <thead>
+            <tr>
+              <th class="col-order">#</th>
+              <th class="col-name">Name</th>
+              <th class="col-type">Type</th>
+              <th class="col-status">Status</th>
+              <th class="col-ce">Best CE</th>
+              <th class="col-acc">Best Acc</th>
+              <th class="col-actions">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each displayExperiments as exp, i}
+              {@const isRunning = exp.status === 'running'}
+              {@const isCompleted = exp.status === 'completed'}
+              {@const isPending = exp.status === 'pending'}
+              {@const canEdit = canEditExperiment(i)}
+              {@const isEditingName = editingExpIndex === i}
+              {@const expType = exp.phase_type?.startsWith('ga') ? 'GA' : exp.phase_type?.startsWith('ts') ? 'TS' : '—'}
+              {@const optimizeTarget = exp.phase_type?.includes('bits') ? 'Bits' : exp.phase_type?.includes('neurons') ? 'Neurons' : exp.phase_type?.includes('connections') ? 'Conn' : '—'}
+              {@const expLink = getExperimentLink(exp)}
+              <tr class:row-running={isRunning} class:row-completed={isCompleted} class:row-pending={isPending}>
+                <td class="col-order">
+                  <span class="order-badge" class:order-completed={isCompleted} class:order-running={isRunning}>
+                    {#if isCompleted}✓{:else}{i + 1}{/if}
                   </span>
-                  {#if isRunning}
-                    <span class="live-indicator">
-                      <span class="pulse"></span>
-                      Live
+                </td>
+                <td class="col-name">
+                  {#if isEditingName && editingExp}
+                    <div class="inline-edit">
+                      <input
+                        type="text"
+                        bind:value={editingExp.name}
+                        class="inline-name-input"
+                        on:keydown={(e) => e.key === 'Enter' && saveExperiment()}
+                        on:keydown={(e) => e.key === 'Escape' && cancelEditExperiment()}
+                      />
+                      <button class="btn-icon btn-save" title="Save" on:click={saveExperiment}>✓</button>
+                      <button class="btn-icon" title="Cancel" on:click={cancelEditExperiment}>✕</button>
+                    </div>
+                  {:else}
+                    <span
+                      class="exp-name-cell"
+                      class:editable={canEdit}
+                      on:click={() => canEdit && startEditExperiment(i)}
+                      on:keydown={(e) => e.key === 'Enter' && canEdit && startEditExperiment(i)}
+                      role={canEdit ? 'button' : 'cell'}
+                      tabindex={canEdit ? 0 : -1}
+                      title={canEdit ? 'Click to rename' : ''}
+                    >
+                      {exp.name}
+                      {#if isRunning}
+                        <span class="live-badge"><span class="pulse"></span>Live</span>
+                      {/if}
                     </span>
                   {/if}
-                </div>
-                <div class="exp-meta">
-                  <span class="exp-type">{expType}</span>
-                  {#if optimizesBits}
-                    <span class="exp-tag">Bits</span>
-                  {/if}
-                  {#if optimizesNeurons}
-                    <span class="exp-tag">Neurons</span>
-                  {/if}
-                  {#if optimizesConnections}
-                    <span class="exp-tag">Connections</span>
-                  {/if}
-                </div>
-                {#if isCompleted && (exp.best_ce !== null || exp.best_accuracy !== null)}
-                  <div class="exp-metrics">
-                    <span class="metric">
-                      <span class="metric-label">CE:</span>
-                      <span class="metric-value">{formatCE(exp.best_ce)}</span>
-                    </span>
-                    <span class="metric">
-                      <span class="metric-label">Acc:</span>
-                      <span class="metric-value">{formatAccuracy(exp.best_accuracy)}</span>
-                    </span>
+                </td>
+                <td class="col-type">
+                  <span class="type-badge" class:type-ga={expType === 'GA'} class:type-ts={expType === 'TS'}>{expType}</span>
+                  <span class="target-badge">{optimizeTarget}</span>
+                </td>
+                <td class="col-status">
+                  <span class="status-pill" style="background: {getStatusColor(exp.status)}">{exp.status}</span>
+                </td>
+                <td class="col-ce mono">{formatCE(exp.best_ce)}</td>
+                <td class="col-acc mono">{formatAccuracy(exp.best_accuracy)}</td>
+                <td class="col-actions">
+                  <div class="action-buttons">
+                    {#if expLink}
+                      <a href={expLink} class="btn-icon" title="View details">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                          <circle cx="12" cy="12" r="3"></circle>
+                        </svg>
+                      </a>
+                    {/if}
+                    {#if canEdit}
+                      <button class="btn-icon" title="Edit" on:click={() => startEditExperiment(i)}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                        </svg>
+                      </button>
+                      <button class="btn-icon btn-danger" title="Delete" on:click={() => deleteExperiment(i)}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <polyline points="3 6 5 6 21 6"></polyline>
+                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                        </svg>
+                      </button>
+                    {/if}
+                    {#if (isCompleted || isRunning) && (flow.status === 'running' || flow.status === 'failed' || flow.status === 'cancelled' || flow.status === 'completed')}
+                      <button class="btn-icon" title="Restart from here" on:click={() => restartFromExperiment(i)}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <polyline points="1 4 1 10 7 10"></polyline>
+                          <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+                        </svg>
+                      </button>
+                    {/if}
                   </div>
-                {/if}
-              </div>
-              <div class="exp-actions">
-                {#if (isCompleted || isRunning) && (flow.status === 'running' || flow.status === 'failed' || flow.status === 'cancelled' || flow.status === 'completed')}
-                  <button class="btn btn-sm btn-secondary" title="Restart from this experiment" on:click|stopPropagation|preventDefault={() => restartFromExperiment(i)}>
-                    ↻ Restart
-                  </button>
-                {/if}
-                <span class="view-arrow">→</span>
-              </div>
-            </a>
-          {:else}
-            <div class="experiment-item" class:running={isRunning} class:completed={isCompleted}>
-              <div class="exp-order" class:order-completed={isCompleted} class:order-running={isRunning}>
-                {#if isCompleted}
-                  <span class="checkmark">✓</span>
-                {:else}
-                  {i + 1}
-                {/if}
-              </div>
-              <div class="exp-content">
-                <div class="exp-header">
-                  <div class="exp-name">{exp.name}</div>
-                  <span class="status-indicator" class:status-completed={isCompleted} class:status-running={isRunning} class:status-pending={isPending}>
-                    {exp.status}
-                  </span>
-                </div>
-                <div class="exp-meta">
-                  <span class="exp-type">{expType}</span>
-                  {#if optimizesBits}
-                    <span class="exp-tag">Bits</span>
-                  {/if}
-                  {#if optimizesNeurons}
-                    <span class="exp-tag">Neurons</span>
-                  {/if}
-                  {#if optimizesConnections}
-                    <span class="exp-tag">Connections</span>
-                  {/if}
-                </div>
-                {#if isCompleted && (exp.best_ce !== null || exp.best_accuracy !== null)}
-                  <div class="exp-metrics">
-                    <span class="metric">
-                      <span class="metric-label">CE:</span>
-                      <span class="metric-value">{formatCE(exp.best_ce)}</span>
-                    </span>
-                    <span class="metric">
-                      <span class="metric-label">Acc:</span>
-                      <span class="metric-value">{formatAccuracy(exp.best_accuracy)}</span>
-                    </span>
-                  </div>
-                {/if}
-              </div>
-              <div class="exp-actions">
-                {#if canEdit}
-                  <button class="btn-icon" title="Edit" on:click={() => startEditExperiment(i)}>
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-                      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-                    </svg>
-                  </button>
-                  <button class="btn-icon btn-danger" title="Delete" on:click={() => deleteExperiment(i)}>
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <polyline points="3 6 5 6 21 6"></polyline>
-                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                    </svg>
-                  </button>
-                {/if}
-              </div>
-            </div>
-          {/if}
-        {/each}
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
       </div>
     </section>
-
-    {#if experiments.length > 0}
-      <section class="section">
-        <h2>Completed Runs</h2>
-        <div class="runs-table">
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Status</th>
-                <th>Started</th>
-                <th>Ended</th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each experiments as exp}
-                <tr>
-                  <td>{exp.name}</td>
-                  <td>
-                    <span class="status-dot" style="background: {getStatusColor(exp.status)}"></span>
-                    {exp.status}
-                  </td>
-                  <td>{formatDate(exp.started_at)}</td>
-                  <td>{formatDate(exp.ended_at)}</td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
-      </section>
-    {/if}
 
     <!-- Final Results (for completed flows) -->
     {#if flow.status === 'completed'}
@@ -1764,40 +1698,188 @@
     50% { opacity: 0.5; transform: scale(1.2); }
   }
 
-  /* Runs Table */
-  .runs-table {
+  /* Experiments Table */
+  .experiments-table {
     background: var(--bg-secondary);
     border: 1px solid var(--border);
     border-radius: 8px;
     overflow: hidden;
   }
 
-  table {
+  .experiments-table table {
     width: 100%;
     border-collapse: collapse;
   }
 
-  th, td {
+  .experiments-table th,
+  .experiments-table td {
     padding: 0.75rem 1rem;
     text-align: left;
     border-bottom: 1px solid var(--border);
   }
 
-  th {
-    font-size: 1rem;
+  .experiments-table th {
+    font-size: 0.75rem;
     font-weight: 600;
     color: var(--text-tertiary);
     text-transform: uppercase;
     background: var(--bg-tertiary);
   }
 
-  td {
-    font-size: 1rem;
+  .experiments-table td {
+    font-size: 0.875rem;
     color: var(--text-primary);
   }
 
-  tr:last-child td {
+  .experiments-table tr:last-child td {
     border-bottom: none;
+  }
+
+  .experiments-table .col-order { width: 40px; text-align: center; }
+  .experiments-table .col-name { min-width: 200px; }
+  .experiments-table .col-type { width: 100px; }
+  .experiments-table .col-status { width: 90px; }
+  .experiments-table .col-ce { width: 80px; text-align: right; }
+  .experiments-table .col-acc { width: 80px; text-align: right; }
+  .experiments-table .col-actions { width: 120px; text-align: right; }
+
+  .experiments-table .mono {
+    font-family: monospace;
+  }
+
+  .order-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--bg-tertiary);
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+
+  .order-badge.order-completed {
+    background: var(--accent-green);
+    color: white;
+  }
+
+  .order-badge.order-running {
+    background: var(--accent-blue);
+    color: white;
+  }
+
+  .exp-name-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .exp-name-cell.editable {
+    cursor: pointer;
+    padding: 0.25rem 0.5rem;
+    margin: -0.25rem -0.5rem;
+    border-radius: 4px;
+    transition: background-color 0.15s;
+  }
+
+  .exp-name-cell.editable:hover {
+    background: var(--bg-tertiary);
+  }
+
+  .inline-edit {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+
+  .inline-name-input {
+    padding: 0.25rem 0.5rem;
+    border: 1px solid var(--accent-blue);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.875rem;
+    min-width: 180px;
+  }
+
+  .inline-name-input:focus {
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+  }
+
+  .btn-save {
+    background: var(--accent-green) !important;
+    color: white !important;
+  }
+
+  .live-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.625rem;
+    font-weight: 600;
+    color: var(--accent-blue);
+    text-transform: uppercase;
+    background: rgba(59, 130, 246, 0.1);
+    padding: 0.125rem 0.375rem;
+    border-radius: 3px;
+  }
+
+  .type-badge {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.125rem 0.375rem;
+    border-radius: 3px;
+  }
+
+  .type-badge.type-ga {
+    background: rgba(59, 130, 246, 0.15);
+    color: var(--accent-blue);
+  }
+
+  .type-badge.type-ts {
+    background: rgba(16, 185, 129, 0.15);
+    color: var(--accent-green);
+  }
+
+  .target-badge {
+    font-size: 0.75rem;
+    color: var(--text-tertiary);
+    margin-left: 0.25rem;
+  }
+
+  .status-pill {
+    display: inline-block;
+    font-size: 0.625rem;
+    font-weight: 600;
+    padding: 0.25rem 0.5rem;
+    border-radius: 9999px;
+    color: white;
+    text-transform: uppercase;
+  }
+
+  .action-buttons {
+    display: flex;
+    gap: 0.25rem;
+    justify-content: flex-end;
+  }
+
+  .action-buttons a.btn-icon {
+    text-decoration: none;
+  }
+
+  .row-running {
+    background: rgba(59, 130, 246, 0.05);
+  }
+
+  .row-completed {
+    /* subtle green tint */
+  }
+
+  .row-pending {
+    opacity: 0.7;
   }
 
   .status-dot {
