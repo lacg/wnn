@@ -1181,8 +1181,9 @@
           {@const isRunning = status === 'running'}
           {@const canEdit = canEditExperiment(i)}
           {@const isEditing = editingExpIndex === i}
-          {@const expId = dbExp?.id ?? null}
-          {@const expLink = (status === 'completed' || status === 'running') && expId ? `/experiments/${expId}` : null}
+          {@const expId = dbExp?.id ?? getExperimentId(i)}
+          {@const expLink = expId ? `/experiments/${expId}` : null}
+          {@const isClickable = expId !== null}
 
           {#if isEditing && editingExp}
             <div class="experiment-item editing">
@@ -1235,7 +1236,7 @@
             </div>
           {:else}
             {#if expLink}
-              <a href={expLink} class="experiment-item-link" class:running={isRunning} class:completed={status === 'completed'}>
+              <a href={expLink} class="experiment-item-link" class:running={isRunning} class:completed={status === 'completed'} class:pending={status === 'pending'}>
                 <div class="exp-order" class:order-completed={status === 'completed'} class:order-running={isRunning}>
                   {#if status === 'completed'}
                     <span class="checkmark">✓</span>
@@ -1781,6 +1782,20 @@
   .experiment-item-link.completed:hover {
     border-color: var(--accent-green);
     background: rgba(34, 197, 94, 0.05);
+  }
+
+  .experiment-item-link.pending {
+    opacity: 0.6;
+    cursor: default;
+  }
+
+  .experiment-item-link.pending:hover {
+    border-color: var(--border);
+    background: var(--bg-secondary);
+  }
+
+  .experiment-item-link.pending .view-arrow {
+    opacity: 0.3;
   }
 
   .live-indicator {
