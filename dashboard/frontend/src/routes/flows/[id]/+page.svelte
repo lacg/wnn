@@ -33,13 +33,20 @@
     }
   });
 
-  // Refresh experiments without full page reload
+  // Refresh experiments and validations without full page reload
   async function refreshExperiments() {
     try {
-      const res = await fetch(`/api/flows/${flowId}/experiments`);
-      if (res.ok) {
-        const expsData = await res.json();
+      const [expsRes, validationsRes] = await Promise.all([
+        fetch(`/api/flows/${flowId}/experiments`),
+        fetch(`/api/flows/${flowId}/validations`)
+      ]);
+      if (expsRes.ok) {
+        const expsData = await expsRes.json();
         experiments = Array.isArray(expsData) ? expsData : [];
+      }
+      if (validationsRes.ok) {
+        const validationsData = await validationsRes.json();
+        validationSummaries = Array.isArray(validationsData) ? validationsData : [];
       }
     } catch (e) {
       console.error('Failed to refresh experiments:', e);
@@ -927,10 +934,14 @@
                 {/if}
               {/each}
 
-              <!-- Data points -->
+              <!-- Data points (offset horizontally when multiple markers at same point) -->
               {#each validationChartData as point, i}
-                {@const x = valChartPadding.left + (i / Math.max(validationChartData.length - 1, 1)) * valChartWidth}
-                {#each point.validations as v}
+                {@const baseX = valChartPadding.left + (i / Math.max(validationChartData.length - 1, 1)) * valChartWidth}
+                {@const numValidations = point.validations.length}
+                {@const offsetStep = numValidations > 1 ? 12 : 0}
+                {#each point.validations as v, vi}
+                  {@const xOffset = numValidations > 1 ? (vi - (numValidations - 1) / 2) * offsetStep : 0}
+                  {@const x = baseX + xOffset}
                   {@const y = valChartPadding.top + valChartHeight - ((v.ce - valCeMinPadded) / valCeRangePadded) * valChartHeight}
                   <!-- Marker based on genome type -->
                   {#if v.genomeType === 'best_ce'}
