@@ -657,7 +657,7 @@ class Experiment:
 
 				if cached is not None:
 					ce, acc = cached
-					self.log(f"  {genome_type}: CE={ce:.4f}, Acc={acc:.4%} (cached)")
+					self.log(f"  {genome_type}: CE={ce:.4f}, Acc={acc:.4%} (cached, skipping storage)")
 				else:
 					# Run full validation
 					self.log(f"  {genome_type}: Running full validation...")
@@ -665,20 +665,20 @@ class Experiment:
 					ce, acc = full_results[0]
 					self.log(f"  {genome_type}: CE={ce:.4f}, Acc={acc:.4%} (validated)")
 
-				# Store summary via dashboard API
-				if self.dashboard_client and self.experiment_id:
-					try:
-						self.dashboard_client.create_validation_summary(
-							experiment_id=self.experiment_id,
-							validation_point=validation_point,
-							genome_type=genome_type,
-							genome_hash=genome_hash,
-							ce=ce,
-							accuracy=acc,
-							flow_id=flow_id,
-						)
-					except Exception as e:
-						self.log(f"  Warning: Failed to save {genome_type} summary: {e}")
+					# Store summary via dashboard API only when validation was performed
+					if self.dashboard_client and self.experiment_id:
+						try:
+							self.dashboard_client.create_validation_summary(
+								experiment_id=self.experiment_id,
+								validation_point=validation_point,
+								genome_type=genome_type,
+								genome_hash=genome_hash,
+								ce=ce,
+								accuracy=acc,
+								flow_id=flow_id,
+							)
+						except Exception as e:
+							self.log(f"  Warning: Failed to save {genome_type} summary: {e}")
 
 			self.log("=" * 60)
 			self.log("")
