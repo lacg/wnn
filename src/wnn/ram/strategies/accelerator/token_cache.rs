@@ -551,6 +551,53 @@ pub fn evaluate_genomes_cached_full_hybrid(
     )
 }
 
+/// Evaluate a single genome WITH gating, returning both gated and non-gated metrics.
+///
+/// This function:
+/// 1. Trains base RAM on full training data
+/// 2. Trains gating model on training data (target gate = true only for target cluster)
+/// 3. Evaluates WITHOUT gating → (ce, acc)
+/// 4. Evaluates WITH gating → (gated_ce, gated_acc)
+///
+/// # Returns
+/// (ce, accuracy, gated_ce, gated_accuracy)
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_genome_with_gating(
+    cache: &TokenCache,
+    bits_flat: &[usize],
+    neurons_flat: &[usize],
+    connections_flat: &[i64],
+    neurons_per_gate: usize,
+    bits_per_gate_neuron: usize,
+    vote_threshold_frac: f32,
+    empty_value: f32,
+    gating_seed: u64,
+) -> (f64, f64, f64, f64) {
+    let train = cache.full_train();
+    let eval = cache.full_eval();
+
+    crate::adaptive::evaluate_genome_with_gating(
+        bits_flat,
+        neurons_flat,
+        connections_flat,
+        cache.vocab_size(),
+        &train.input_bits,
+        &train.targets,
+        &train.negatives,
+        train.num_examples,
+        cache.num_negatives(),
+        &eval.input_bits,
+        &eval.targets,
+        eval.num_examples,
+        cache.total_input_bits(),
+        empty_value,
+        neurons_per_gate,
+        bits_per_gate_neuron,
+        vote_threshold_frac,
+        gating_seed,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

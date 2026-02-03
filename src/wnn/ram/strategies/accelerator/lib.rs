@@ -2976,6 +2976,64 @@ impl TokenCacheWrapper {
         })
     }
 
+    /// Evaluate a single genome WITH gating, returning both gated and non-gated metrics.
+    ///
+    /// This function:
+    /// 1. Trains base RAM on full training data
+    /// 2. Trains gating model on training data (target gate = true only for target cluster)
+    /// 3. Evaluates WITHOUT gating → (ce, acc)
+    /// 4. Evaluates WITH gating → (gated_ce, gated_acc)
+    ///
+    /// # Arguments
+    /// * `bits_flat` - Bits per cluster [num_clusters]
+    /// * `neurons_flat` - Neurons per cluster [num_clusters]
+    /// * `connections_flat` - Connections [total_connections]
+    /// * `neurons_per_gate` - Number of RAM neurons per gate (default 8)
+    /// * `bits_per_gate_neuron` - Address bits per gate neuron (default 12)
+    /// * `vote_threshold_frac` - Fraction of neurons that must fire for gate=1 (default 0.5)
+    /// * `empty_value` - Value for EMPTY cells (default 0.5)
+    /// * `gating_seed` - Random seed for gating connectivity
+    ///
+    /// # Returns
+    /// (ce, accuracy, gated_ce, gated_accuracy)
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (
+        bits_flat,
+        neurons_flat,
+        connections_flat,
+        neurons_per_gate = 8,
+        bits_per_gate_neuron = 12,
+        vote_threshold_frac = 0.5,
+        empty_value = 0.5,
+        gating_seed = 42
+    ))]
+    fn evaluate_genome_with_gating(
+        &self,
+        py: Python<'_>,
+        bits_flat: Vec<usize>,
+        neurons_flat: Vec<usize>,
+        connections_flat: Vec<i64>,
+        neurons_per_gate: usize,
+        bits_per_gate_neuron: usize,
+        vote_threshold_frac: f32,
+        empty_value: f32,
+        gating_seed: u64,
+    ) -> PyResult<(f64, f64, f64, f64)> {
+        py.allow_threads(|| {
+            Ok(token_cache::evaluate_genome_with_gating(
+                &self.inner,
+                &bits_flat,
+                &neurons_flat,
+                &connections_flat,
+                neurons_per_gate,
+                bits_per_gate_neuron,
+                vote_threshold_frac,
+                empty_value,
+                gating_seed,
+            ))
+        })
+    }
+
     /// Search for neighbors above accuracy threshold, all in Rust.
     ///
     /// This eliminates Python↔Rust round trips by doing mutation, evaluation,

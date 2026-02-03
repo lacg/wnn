@@ -764,165 +764,69 @@ class CachedEvaluator:
         threshold: float = 0.5,
         batch_size: int = 256,
         logger: Optional[Callable[[str], None]] = None,
+        gating_seed: int = 42,
     ) -> dict:
         """
         Evaluate a genome with and without gating for comparison.
 
-        This method:
-        1. Evaluates without gating to get baseline (ce, acc)
-        2. Trains a gating model on training data
-        3. Computes gating coverage metrics (what % of eval has target gate open)
+        This method uses the Rust accelerator to:
+        1. Train base RAM on full training data
+        2. Train gating model on training data (target gate = true only for target cluster)
+        3. Evaluate WITHOUT gating → (ce, acc)
+        4. Evaluate WITH gating → (gated_ce, gated_acc)
 
-        The "gated" metrics use gating coverage as a proxy:
-        - gated_acc = baseline_acc × coverage (only correct if gate is open)
-        - gated_ce is adjusted proportionally
+        The gated evaluation properly applies gates to cluster scores during
+        prediction, giving accurate gated metrics (not just coverage-based estimates).
 
         Used by the UI-driven gating analysis feature to compare
         gated vs non-gated performance on completed experiments.
 
         Args:
             genome: ClusterGenome to evaluate
-            train_tokens: Training tokens for gating training
+            train_tokens: Training tokens (unused - cache already has train data)
             neurons_per_gate: Neurons per gate for majority voting (default 8)
             bits_per_neuron: Address space per gate neuron (default 12)
             threshold: Majority voting threshold (default 0.5)
-            batch_size: Batch size for gating training (default 256)
+            batch_size: Unused (kept for API compatibility)
             logger: Optional logging function
+            gating_seed: Random seed for gating connectivity initialization
 
         Returns:
             Dict with:
                 ce: Cross-entropy without gating
                 acc: Accuracy without gating
-                gated_ce: Cross-entropy with gating (approximated)
-                gated_acc: Accuracy with gating (approximated)
+                gated_ce: Cross-entropy with gating
+                gated_acc: Accuracy with gating
                 gating_config: Dict with neurons_per_gate, bits_per_neuron, threshold
-                gating_coverage: Fraction of eval examples with target gate open
-                gating_cells_modified: Number of gate cells trained
         """
         import time
-        import torch
 
         log = logger or (lambda x: None)
 
-        # Step 1: Evaluate without gating
-        log("  Evaluating without gating...")
-        start = time.time()
-        ce, acc = self.evaluate_single_full(genome)
-        log(f"    Non-gated: CE={ce:.4f}, Acc={acc*100:.2f}% ({time.time()-start:.1f}s)")
-
-        # Step 2: Train gating model
-        log("  Training gating model...")
+        log("  Evaluating with Rust gated evaluation...")
         start = time.time()
 
-        # Create gating model
-        gating = self.create_gating_model(
-            genome=genome,
+        # Flatten genome configuration
+        bits_flat = genome.get_bits_per_cluster()
+        neurons_flat = genome.get_neurons_per_cluster()
+        connections_flat = genome.get_connections_flat()
+
+        # Call Rust implementation via TokenCacheWrapper
+        ce, acc, gated_ce, gated_acc = self._cache.evaluate_genome_with_gating(
+            bits_flat=bits_flat,
+            neurons_flat=neurons_flat,
+            connections_flat=connections_flat,
             neurons_per_gate=neurons_per_gate,
-            bits_per_neuron=bits_per_neuron,
-            threshold=threshold,
-            prefer_rust=True,
+            bits_per_gate_neuron=bits_per_neuron,
+            vote_threshold_frac=threshold,
+            empty_value=self._empty_value,
+            gating_seed=gating_seed,
         )
 
-        # Encode training data for gating
-        bits_per_token = self._cache.bits_per_token()
-        context_size = self._context_size
-        total_input_bits = self.total_input_bits
-        cluster_map = self._cache.get_cluster_map()
-
-        # Training loop (same pattern as phased_search.train_gating_phase)
-        num_examples = len(train_tokens) - context_size
-        total_modified = 0
-
-        for start_idx in range(0, num_examples, batch_size):
-            end_idx = min(start_idx + batch_size, num_examples)
-            batch_indices = range(start_idx, end_idx)
-
-            # Encode batch
-            input_bits_list = []
-            targets_list = []
-
-            for i in batch_indices:
-                # Context tokens
-                context = train_tokens[i:i + context_size]
-                # Target token
-                target = train_tokens[i + context_size]
-
-                # Encode context to bits
-                bits = []
-                for tok in context:
-                    for b in range(bits_per_token):
-                        bits.append(bool((tok >> b) & 1))
-                input_bits_list.append(bits)
-                targets_list.append(cluster_map[target])
-
-            # Convert to tensors
-            input_bits_batch = torch.tensor(input_bits_list, dtype=torch.bool)
-            targets_batch = torch.tensor(targets_list, dtype=torch.long)
-
-            # Train gating
-            if hasattr(gating, 'train_from_targets'):
-                modified = gating.train_from_targets(input_bits_batch, targets_batch)
-            else:
-                # Compute target gates manually
-                target_gates = torch.zeros(len(targets_list), genome.num_clusters, dtype=torch.float32)
-                for b, t in enumerate(targets_list):
-                    target_gates[b, t] = 1.0
-                modified = gating.train_step(input_bits_batch, target_gates)
-
-            total_modified += modified
-
-        log(f"    Gating trained: {total_modified:,} cells modified ({time.time()-start:.1f}s)")
-
-        # Step 3: Compute gating coverage on eval data
-        log("  Computing gating coverage...")
-        start = time.time()
-
-        # Get full eval data from cache
-        eval_data = self._cache.full_eval()
-        num_eval = eval_data.num_examples
-        input_bits_flat = eval_data.input_bits
-        targets = eval_data.targets
-
-        # Process in batches for efficiency
-        gates_open_count = 0
-
-        for batch_start in range(0, num_eval, batch_size):
-            batch_end = min(batch_start + batch_size, num_eval)
-            batch_size_actual = batch_end - batch_start
-
-            # Extract input bits for batch
-            input_bits_batch = []
-            for i in range(batch_start, batch_end):
-                start_bit = i * total_input_bits
-                end_bit = start_bit + total_input_bits
-                input_bits_batch.append(input_bits_flat[start_bit:end_bit])
-
-            input_tensor = torch.tensor(input_bits_batch, dtype=torch.bool)
-
-            # Get gates for batch
-            gates = gating.forward(input_tensor)  # [batch, num_clusters]
-
-            # Check if target gate is open for each example
-            for i in range(batch_size_actual):
-                target = targets[batch_start + i]
-                if gates[i, target].item() > 0.5:
-                    gates_open_count += 1
-
-        coverage = gates_open_count / num_eval if num_eval > 0 else 0.0
-        log(f"    Gating coverage: {coverage*100:.2f}% ({gates_open_count}/{num_eval})")
-
-        # Gated metrics: approximate using coverage
-        # If gate is closed for target, that prediction is effectively wrong
-        # gated_acc ≈ baseline_acc × coverage (conservative estimate)
-        gated_acc = acc * coverage
-
-        # For CE, when gate is closed we get maximum penalty
-        # gated_ce ≈ ce × coverage + MAX_CE × (1 - coverage)
-        import math
-        max_ce = -math.log(1e-10)  # ~23 when target gate is closed
-        gated_ce = ce * coverage + max_ce * (1 - coverage)
-
-        log(f"    Gated (estimated): CE={gated_ce:.4f}, Acc={gated_acc*100:.2f}% ({time.time()-start:.1f}s)")
+        elapsed = time.time() - start
+        log(f"    Non-gated: CE={ce:.4f}, Acc={acc*100:.4f}%")
+        log(f"    Gated:     CE={gated_ce:.4f}, Acc={gated_acc*100:.4f}%")
+        log(f"    Evaluation completed in {elapsed:.1f}s")
 
         return {
             'ce': ce,
@@ -934,8 +838,6 @@ class CachedEvaluator:
                 'bits_per_neuron': bits_per_neuron,
                 'threshold': threshold,
             },
-            'gating_coverage': coverage,
-            'gating_cells_modified': total_modified,
         }
 
     def __repr__(self) -> str:
