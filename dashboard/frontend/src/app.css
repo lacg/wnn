@@ -55,7 +55,7 @@ body {
 .status-badge {
   padding: 0.25rem 0.75rem;
   border-radius: 9999px;
-  font-size: 0.75rem;
+  font-size: 1rem;
   font-weight: 500;
   text-transform: uppercase;
 }
@@ -82,13 +82,13 @@ body {
 }
 
 .metric-label {
-  font-size: 0.75rem;
+  font-size: 1rem;
   color: var(--text-secondary);
   text-transform: uppercase;
 }
 
 .metric-change {
-  font-size: 0.875rem;
+  font-size: 1rem;
   margin-top: 0.25rem;
 }
 
@@ -114,13 +114,13 @@ th, td {
 th {
   color: var(--text-secondary);
   font-weight: 500;
-  font-size: 0.75rem;
+  font-size: 1rem;
   text-transform: uppercase;
 }
 
 td {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 0.875rem;
+  font-size: 1rem;
 }
 
 .grid {

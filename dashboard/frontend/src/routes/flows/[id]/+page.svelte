@@ -1454,7 +1454,7 @@
   }
 
   .queued-hint {
-    font-size: 0.875rem;
+    font-size: 1rem;
     color: var(--accent-yellow, #f59e0b);
     font-style: italic;
   }
@@ -1462,7 +1462,7 @@
   .back-link {
     color: var(--text-secondary);
     text-decoration: none;
-    font-size: 0.875rem;
+    font-size: 1rem;
   }
 
   .back-link:hover {
@@ -1512,7 +1512,7 @@
   }
 
   .status-badge {
-    font-size: 0.75rem;
+    font-size: 1rem;
     padding: 0.25rem 0.5rem;
     border-radius: 4px;
     color: white;
@@ -1542,13 +1542,13 @@
   }
 
   .info-label {
-    font-size: 0.75rem;
+    font-size: 1rem;
     color: var(--text-tertiary);
     text-transform: uppercase;
   }
 
   .info-value {
-    font-size: 0.875rem;
+    font-size: 1rem;
     color: var(--text-primary);
   }
 
@@ -1607,7 +1607,7 @@
   }
 
   label {
-    font-size: 0.875rem;
+    font-size: 1rem;
     font-weight: 500;
     color: var(--text-primary);
   }
@@ -1620,7 +1620,7 @@
     border-radius: 4px;
     background: var(--bg-primary);
     color: var(--text-primary);
-    font-size: 0.875rem;
+    font-size: 1rem;
   }
 
   input[type="number"]:focus,
@@ -1631,7 +1631,7 @@
   }
 
   .form-hint {
-    font-size: 0.75rem;
+    font-size: 1rem;
     color: var(--text-tertiary);
   }
 
@@ -1647,7 +1647,7 @@
   .btn {
     padding: 0.5rem 1rem;
     border-radius: 4px;
-    font-size: 0.875rem;
+    font-size: 1rem;
     font-weight: 500;
     cursor: pointer;
     border: none;
@@ -1711,7 +1711,7 @@
   }
 
   .param-group-label {
-    font-size: 0.75rem;
+    font-size: 1rem;
     font-weight: 600;
     color: var(--text-secondary);
     text-transform: uppercase;
@@ -1730,23 +1730,23 @@
   }
 
   .param-group-item .param-label {
-    font-size: 0.7rem;
+    font-size: 1rem;
   }
 
   .param-label {
-    font-size: 0.75rem;
+    font-size: 1rem;
     color: var(--text-tertiary);
     text-transform: uppercase;
   }
 
   .param-value {
-    font-size: 0.875rem;
+    font-size: 1rem;
     color: var(--text-primary);
   }
 
   .param-value.mono {
     font-family: monospace;
-    font-size: 0.8125rem;
+    font-size: 1rem;
   }
 
   /* Experiments List */
@@ -1802,7 +1802,7 @@
     display: flex;
     align-items: center;
     gap: 0.375rem;
-    font-size: 0.675rem;
+    font-size: 1rem;
     font-weight: 600;
     color: var(--accent-blue);
     text-transform: uppercase;
@@ -1831,7 +1831,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 0.75rem;
+    font-size: 1rem;
     font-weight: 600;
     color: var(--text-secondary);
   }
@@ -1852,7 +1852,7 @@
   }
 
   .status-indicator {
-    font-size: 0.675rem;
+    font-size: 1rem;
     padding: 0.125rem 0.375rem;
     border-radius: 3px;
     text-transform: uppercase;
@@ -1881,13 +1881,13 @@
   }
 
   .exp-type {
-    font-size: 0.75rem;
+    font-size: 1rem;
     color: var(--accent-blue);
     font-weight: 600;
   }
 
   .exp-tag {
-    font-size: 0.75rem;
+    font-size: 1rem;
     color: var(--text-tertiary);
     background: var(--bg-tertiary);
     padding: 0.125rem 0.375rem;
@@ -1909,13 +1909,13 @@
   }
 
   .metric-label {
-    font-size: 0.75rem;
+    font-size: 1rem;
     color: var(--text-tertiary);
     text-transform: uppercase;
   }
 
   .metric-value {
-    font-size: 0.875rem;
+    font-size: 1rem;
     font-weight: 600;
     color: var(--text-primary);
     font-family: monospace;
@@ -1941,7 +1941,7 @@
   }
 
   .checkmark {
-    font-size: 0.875rem;
+    font-size: 1rem;
   }
 
   .live-btn {
@@ -1951,7 +1951,7 @@
     padding: 0.375rem 0.75rem;
     background: var(--accent-blue);
     color: white;
-    font-size: 0.75rem;
+    font-size: 1rem;
     font-weight: 600;
     text-transform: uppercase;
     text-decoration: none;
@@ -1996,7 +1996,7 @@
   }
 
   th {
-    font-size: 0.75rem;
+    font-size: 1rem;
     font-weight: 600;
     color: var(--text-tertiary);
     text-transform: uppercase;
@@ -2004,7 +2004,7 @@
   }
 
   td {
-    font-size: 0.875rem;
+    font-size: 1rem;
     color: var(--text-primary);
   }
 
@@ -2044,7 +2044,7 @@
 
   .btn-sm {
     padding: 0.375rem 0.75rem;
-    font-size: 0.75rem;
+    font-size: 1rem;
   }
 
   /* Add phase form */
@@ -2057,7 +2057,7 @@
   }
 
   .add-phase-form h3 {
-    font-size: 0.875rem;
+    font-size: 1rem;
     font-weight: 600;
     margin-bottom: 1rem;
     color: var(--text-primary);
@@ -2083,7 +2083,7 @@
   }
 
   .edit-exp-form label {
-    font-size: 0.75rem;
+    font-size: 1rem;
     font-weight: 500;
     color: var(--text-secondary);
   }
@@ -2095,7 +2095,7 @@
     border-radius: 4px;
     background: var(--bg-primary);
     color: var(--text-primary);
-    font-size: 0.875rem;
+    font-size: 1rem;
   }
 
   .edit-exp-form input:focus,
@@ -2113,7 +2113,7 @@
     display: flex;
     align-items: center;
     gap: 0.375rem;
-    font-size: 0.875rem;
+    font-size: 1rem;
     color: var(--text-primary);
     cursor: pointer;
   }
@@ -2187,7 +2187,7 @@
   }
 
   .result-label {
-    font-size: 0.75rem;
+    font-size: 1rem;
     color: var(--text-tertiary);
     text-transform: uppercase;
     margin-bottom: 0.5rem;
@@ -2201,7 +2201,7 @@
   }
 
   .result-path {
-    font-size: 0.875rem;
+    font-size: 1rem;
     word-break: break-all;
   }
 
@@ -2237,7 +2237,7 @@
     border-radius: 4px;
     background: var(--bg-primary);
     color: var(--text-primary);
-    font-size: 0.875rem;
+    font-size: 1rem;
     cursor: pointer;
     transition: border-color 0.15s;
   }
@@ -2264,7 +2264,7 @@
     border-radius: 4px;
     background: var(--bg-primary);
     color: var(--text-primary);
-    font-size: 0.875rem;
+    font-size: 1rem;
     text-align: right;
     transition: border-color 0.15s;
   }

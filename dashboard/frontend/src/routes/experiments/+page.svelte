@@ -129,7 +129,7 @@
   }
 
   .hint {
-    font-size: 0.875rem;
+    font-size: 1rem;
     margin-top: 0.5rem;
     opacity: 0.7;
   }
@@ -153,7 +153,7 @@
   }
 
   th {
-    font-size: 0.75rem;
+    font-size: 1rem;
     font-weight: 600;
     color: var(--text-tertiary);
     text-transform: uppercase;
@@ -161,7 +161,7 @@
   }
 
   td {
-    font-size: 0.875rem;
+    font-size: 1rem;
     color: var(--text-primary);
   }
 
@@ -181,7 +181,7 @@
 
   .status-badge {
     display: inline-block;
-    font-size: 0.75rem;
+    font-size: 1rem;
     padding: 0.25rem 0.5rem;
     border-radius: 4px;
     color: white;
@@ -195,10 +195,10 @@
   }
 
   .config-tag {
-    font-size: 0.75rem;
+    font-size: 1rem;
     color: var(--text-tertiary);
     background: var(--bg-tertiary);
-    padding: 0.125rem 0.375rem;
+    padding: 0.25rem 0.5rem;
     border-radius: 3px;
   }
 </style>

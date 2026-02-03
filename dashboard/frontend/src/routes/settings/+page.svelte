@@ -135,7 +135,7 @@
   .back-link {
     color: var(--text-secondary);
     text-decoration: none;
-    font-size: 0.875rem;
+    font-size: 1rem;
   }
 
   .back-link:hover {
@@ -168,7 +168,7 @@
     background: var(--bg-tertiary);
     border-radius: 6px;
     margin-bottom: 1rem;
-    font-size: 0.875rem;
+    font-size: 1rem;
   }
 
   .auto-detected .label {
@@ -181,8 +181,8 @@
   }
 
   .badge {
-    font-size: 0.675rem;
-    padding: 0.125rem 0.375rem;
+    font-size: 1rem;
+    padding: 0.25rem 0.5rem;
     border-radius: 3px;
     background: var(--accent-blue);
     color: white;
@@ -213,7 +213,7 @@
   }
 
   .preview-label {
-    font-size: 0.875rem;
+    font-size: 1rem;
     color: var(--text-tertiary);
   }
 
@@ -238,7 +238,7 @@
   }
 
   label {
-    font-size: 0.875rem;
+    font-size: 1rem;
     font-weight: 500;
     color: var(--text-primary);
   }
@@ -249,7 +249,7 @@
     border-radius: 4px;
     background: var(--bg-primary);
     color: var(--text-primary);
-    font-size: 0.875rem;
+    font-size: 1rem;
     cursor: pointer;
   }
 
@@ -269,7 +269,7 @@
   .btn {
     padding: 0.5rem 1rem;
     border-radius: 4px;
-    font-size: 0.875rem;
+    font-size: 1rem;
     font-weight: 500;
     cursor: pointer;
     border: none;

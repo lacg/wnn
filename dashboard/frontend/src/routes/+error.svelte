@@ -73,6 +73,6 @@
 
   .error-hint {
     color: var(--text-tertiary);
-    font-size: 0.875rem;
+    font-size: 1rem;
   }
 </style>

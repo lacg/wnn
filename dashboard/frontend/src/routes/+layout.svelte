@@ -85,7 +85,7 @@
   .nav-link {
     color: var(--text-secondary);
     text-decoration: none;
-    font-size: 0.875rem;
+    font-size: 1rem;
     padding: 0.25rem 0.5rem;
     border-radius: 4px;
     transition: all 0.2s;
@@ -106,7 +106,7 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    font-size: 0.875rem;
+    font-size: 1rem;
     color: var(--text-secondary);
   }
 

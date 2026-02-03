@@ -147,7 +147,7 @@
   .btn {
     padding: 0.5rem 1rem;
     border-radius: 6px;
-    font-size: 0.875rem;
+    font-size: 1rem;
     font-weight: 500;
     text-decoration: none;
     transition: all 0.2s;
@@ -173,7 +173,7 @@
   }
 
   .hint {
-    font-size: 0.875rem;
+    font-size: 1rem;
     margin-top: 0.5rem;
     opacity: 0.7;
   }
@@ -213,7 +213,7 @@
   }
 
   .status-badge {
-    font-size: 0.75rem;
+    font-size: 1rem;
     padding: 0.25rem 0.5rem;
     border-radius: 4px;
     color: white;
@@ -221,7 +221,7 @@
   }
 
   .flow-description {
-    font-size: 0.875rem;
+    font-size: 1rem;
     color: var(--text-secondary);
     margin: 0 0 1rem 0;
     line-height: 1.4;
@@ -240,13 +240,13 @@
   }
 
   .meta-label {
-    font-size: 0.75rem;
+    font-size: 1rem;
     color: var(--text-tertiary);
     text-transform: uppercase;
   }
 
   .meta-value {
-    font-size: 0.875rem;
+    font-size: 1rem;
     color: var(--text-primary);
   }
 
@@ -254,7 +254,7 @@
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
-    font-size: 0.75rem;
+    font-size: 1rem;
     color: var(--text-tertiary);
   }
 
