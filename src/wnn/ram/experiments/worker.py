@@ -14,6 +14,7 @@ The worker:
 import argparse
 import signal
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +25,12 @@ from wnn.ram.experiments.dashboard_client import DashboardClient, DashboardClien
 from wnn.ram.experiments.flow import Flow, FlowConfig
 from wnn.ram.experiments.experiment import ExperimentConfig
 from wnn.ram.experiments.tracker import create_tracker, ExperimentTracker
+
+# How often to send heartbeats (seconds)
+HEARTBEAT_INTERVAL = 30
+
+# Consider a flow stale if no heartbeat for this many seconds
+STALE_THRESHOLD = 90
 
 
 class FlowWorker:
@@ -47,6 +54,10 @@ class FlowWorker:
         self.running = True
         self._stop_current_flow = False  # Flag to stop current flow but keep worker running
         self.current_flow_id: Optional[int] = None
+
+        # Heartbeat thread for detecting stale flows
+        self._heartbeat_thread: Optional[threading.Thread] = None
+        self._heartbeat_stop_event = threading.Event()
 
         # Pre-cached data (loaded once at startup)
         self._tokenizer = None
@@ -171,6 +182,75 @@ class FlowWorker:
 
         return False
 
+    def _start_heartbeat(self, flow_id: int):
+        """Start the heartbeat thread for a flow."""
+        self._heartbeat_stop_event.clear()
+
+        def heartbeat_loop():
+            while not self._heartbeat_stop_event.wait(HEARTBEAT_INTERVAL):
+                try:
+                    self.client.send_heartbeat(flow_id)
+                except Exception:
+                    pass  # Ignore errors, keep trying
+
+        self._heartbeat_thread = threading.Thread(target=heartbeat_loop, daemon=True)
+        self._heartbeat_thread.start()
+
+    def _stop_heartbeat(self):
+        """Stop the heartbeat thread."""
+        if self._heartbeat_thread:
+            self._heartbeat_stop_event.set()
+            self._heartbeat_thread.join(timeout=2)
+            self._heartbeat_thread = None
+
+    def _recover_stale_flows(self):
+        """Check for and recover stale running flows.
+
+        A flow is stale if it's marked as 'running' but hasn't received
+        a heartbeat recently. This happens when a worker crashes or is killed.
+        """
+        try:
+            flows = self.client.list_flows(status="running", limit=10)
+            now = datetime.utcnow()
+
+            for flow in flows:
+                last_heartbeat = flow.get("last_heartbeat")
+                if last_heartbeat is None:
+                    # No heartbeat ever recorded - might be from old worker
+                    # Check if started_at is old enough
+                    started_at = flow.get("started_at")
+                    if started_at:
+                        try:
+                            started = datetime.fromisoformat(started_at.replace("Z", "+00:00")).replace(tzinfo=None)
+                            age = (now - started).total_seconds()
+                            if age > STALE_THRESHOLD:
+                                self._requeue_stale_flow(flow)
+                        except Exception:
+                            pass
+                else:
+                    # Check heartbeat age
+                    try:
+                        hb_time = datetime.fromisoformat(last_heartbeat.replace("Z", "+00:00")).replace(tzinfo=None)
+                        age = (now - hb_time).total_seconds()
+                        if age > STALE_THRESHOLD:
+                            self._requeue_stale_flow(flow)
+                    except Exception:
+                        pass
+        except Exception as e:
+            # Don't fail the main loop if recovery fails
+            pass
+
+    def _requeue_stale_flow(self, flow: dict):
+        """Re-queue a stale flow so it can be picked up again."""
+        flow_id = flow["id"]
+        flow_name = flow.get("name", f"Flow {flow_id}")
+        self._log(f"Recovering stale flow: {flow_name} (ID: {flow_id})")
+        try:
+            self.client.requeue_flow(flow_id)
+            self._log(f"  Re-queued flow {flow_id}")
+        except Exception as e:
+            self._log(f"  Failed to re-queue flow {flow_id}: {e}")
+
     def _precache_data(self):
         """Pre-cache tokenizer and dataset at startup to avoid network issues during flow execution."""
         from collections import Counter
@@ -222,6 +302,9 @@ class FlowWorker:
 
         while self.running:
             try:
+                # First, recover any stale flows (from crashed workers)
+                self._recover_stale_flows()
+
                 # Check for queued flows
                 flow_data = self._get_next_queued_flow()
 
@@ -271,6 +354,9 @@ class FlowWorker:
             self.client.flow_started(flow_id)
             import os
             self.client.register_flow_pid(flow_id, os.getpid())
+
+            # Start heartbeat thread (allows detection of stale flows if worker crashes)
+            self._start_heartbeat(flow_id)
 
             # Parse flow configuration
             config = flow_data.get("config", {})
@@ -381,6 +467,8 @@ class FlowWorker:
                     pass
 
         finally:
+            # Stop heartbeat thread
+            self._stop_heartbeat()
             self.current_flow_id = None
             self._stop_current_flow = False  # Reset for next flow
             self._close_log_file()

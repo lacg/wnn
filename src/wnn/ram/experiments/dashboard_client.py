@@ -331,6 +331,22 @@ class DashboardClient:
 		"""
 		return self._request("PATCH", f"/api/flows/{flow_id}/pid", json_data={"pid": pid})
 
+	def send_heartbeat(self, flow_id: int) -> bool:
+		"""Send a heartbeat for a running flow.
+
+		Called periodically by the worker to indicate the flow is still being processed.
+		If the worker crashes or is killed, the missing heartbeat allows the dashboard
+		to detect the stale flow and re-queue it.
+
+		Args:
+			flow_id: Flow ID
+
+		Returns:
+			True if heartbeat was recorded, False if flow not found
+		"""
+		result = self._request("POST", f"/api/flows/{flow_id}/heartbeat")
+		return result is not None and result.get("success", False)
+
 	def stop_flow(self, flow_id: int) -> dict:
 		"""Stop a running flow.
 

@@ -103,6 +103,8 @@ pub struct Flow {
     pub status: FlowStatus,
     pub seed_checkpoint_id: Option<i64>,
     pub pid: Option<i64>,
+    /// Last heartbeat from worker (for detecting stale running flows)
+    pub last_heartbeat: Option<DateTime<Utc>>,
 }
 
 /// Flow configuration - flow-level settings only

@@ -324,7 +324,7 @@ pub mod queries {
     pub async fn list_flows(pool: &DbPool, status: Option<&str>, limit: i32, offset: i32) -> Result<Vec<Flow>> {
         let rows = if let Some(status_filter) = status {
             sqlx::query(
-                r#"SELECT id, name, description, config_json, created_at, started_at, completed_at, status, seed_checkpoint_id, pid
+                r#"SELECT id, name, description, config_json, created_at, started_at, completed_at, status, seed_checkpoint_id, pid, last_heartbeat
                    FROM flows WHERE status = ?
                    ORDER BY created_at DESC
                    LIMIT ? OFFSET ?"#,
@@ -336,7 +336,7 @@ pub mod queries {
             .await?
         } else {
             sqlx::query(
-                r#"SELECT id, name, description, config_json, created_at, started_at, completed_at, status, seed_checkpoint_id, pid
+                r#"SELECT id, name, description, config_json, created_at, started_at, completed_at, status, seed_checkpoint_id, pid, last_heartbeat
                    FROM flows
                    ORDER BY created_at DESC
                    LIMIT ? OFFSET ?"#,
@@ -356,7 +356,7 @@ pub mod queries {
 
     pub async fn get_flow(pool: &DbPool, id: i64) -> Result<Option<Flow>> {
         let row = sqlx::query(
-            r#"SELECT id, name, description, config_json, created_at, started_at, completed_at, status, seed_checkpoint_id, pid
+            r#"SELECT id, name, description, config_json, created_at, started_at, completed_at, status, seed_checkpoint_id, pid, last_heartbeat
                FROM flows WHERE id = ?"#,
         )
         .bind(id)
@@ -724,6 +724,9 @@ pub mod queries {
             status: parse_flow_status(&status_str),
             seed_checkpoint_id: row.get("seed_checkpoint_id"),
             pid: row.get("pid"),
+            last_heartbeat: row.get::<Option<String>, _>("last_heartbeat")
+                .map(|s| parse_datetime(s))
+                .transpose()?,
         })
     }
 
@@ -734,6 +737,50 @@ pub mod queries {
             .bind(id)
             .execute(pool)
             .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Update flow heartbeat (called periodically by worker)
+    pub async fn update_flow_heartbeat(pool: &DbPool, id: i64) -> Result<bool> {
+        let now = Utc::now().to_rfc3339();
+        let result = sqlx::query("UPDATE flows SET last_heartbeat = ? WHERE id = ?")
+            .bind(&now)
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Find stale running flows (no heartbeat in the last N seconds)
+    /// Returns flows that should be re-queued
+    pub async fn find_stale_running_flows(pool: &DbPool, stale_seconds: i64) -> Result<Vec<Flow>> {
+        let cutoff = (Utc::now() - chrono::Duration::seconds(stale_seconds)).to_rfc3339();
+        let rows = sqlx::query(
+            r#"SELECT id, name, description, config_json, created_at, started_at, completed_at, status, seed_checkpoint_id, pid, last_heartbeat
+               FROM flows
+               WHERE status = 'running'
+               AND (last_heartbeat IS NULL OR last_heartbeat < ?)
+               ORDER BY created_at ASC"#,
+        )
+        .bind(&cutoff)
+        .fetch_all(pool)
+        .await?;
+
+        let mut flows = Vec::with_capacity(rows.len());
+        for row in rows {
+            flows.push(row_to_flow(&row)?);
+        }
+        Ok(flows)
+    }
+
+    /// Re-queue a stale flow (reset status and clear pid/heartbeat)
+    pub async fn requeue_stale_flow(pool: &DbPool, id: i64) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE flows SET status = 'queued', pid = NULL, last_heartbeat = NULL WHERE id = ? AND status = 'running'"
+        )
+        .bind(id)
+        .execute(pool)
+        .await?;
         Ok(result.rows_affected() > 0)
     }
 

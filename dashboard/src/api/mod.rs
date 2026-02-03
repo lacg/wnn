@@ -41,6 +41,7 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .route("/api/flows/:id/stop", post(stop_flow))
         .route("/api/flows/:id/restart", post(restart_flow))
         .route("/api/flows/:id/pid", patch(update_flow_pid))
+        .route("/api/flows/:id/heartbeat", post(update_flow_heartbeat))
         .route("/api/flows/:id/validations", get(get_flow_validations))
         // Validations
         .route("/api/validations/check", get(check_cached_validation))
@@ -801,6 +802,24 @@ async fn update_flow_pid(
     Json(req): Json<UpdateFlowPidRequest>,
 ) -> impl IntoResponse {
     match crate::db::queries::update_flow_pid(&state.db, id, req.pid).await {
+        Ok(true) => (StatusCode::OK, Json(serde_json::json!({"success": true}))).into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Flow not found"})),
+        ).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+/// Update the heartbeat of a flow (called periodically by worker)
+async fn update_flow_heartbeat(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    match crate::db::queries::update_flow_heartbeat(&state.db, id).await {
         Ok(true) => (StatusCode::OK, Json(serde_json::json!({"success": true}))).into_response(),
         Ok(false) => (
             StatusCode::NOT_FOUND,
