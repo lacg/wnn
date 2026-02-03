@@ -600,15 +600,9 @@
     return `${(acc * 100).toFixed(2)}%`;
   }
 
-  // Get the link URL for an experiment based on its status
-  function getExperimentLink(exp: Experiment): string | null {
-    if (exp.status === 'running') {
-      return '/';  // Running experiments link to live dashboard
-    } else if (exp.status === 'completed') {
-      return `/experiments/${exp.id}`;  // Completed experiments link to detail page
-    }
-    // Pending experiments are not clickable
-    return null;
+  // Get the link URL for an experiment - all experiments are viewable
+  function getExperimentLink(exp: Experiment): string {
+    return `/experiments/${exp.id}`;
   }
 
   // Helper to get display experiments - experiments from DB are the source of truth
@@ -1042,20 +1036,12 @@
                       <button class="btn-icon" title="Cancel" on:click={cancelEditExperiment}>✕</button>
                     </div>
                   {:else}
-                    <span
-                      class="exp-name-cell"
-                      class:editable={canEdit}
-                      on:click={() => canEdit && startEditExperiment(i)}
-                      on:keydown={(e) => e.key === 'Enter' && canEdit && startEditExperiment(i)}
-                      role={canEdit ? 'button' : 'cell'}
-                      tabindex={canEdit ? 0 : -1}
-                      title={canEdit ? 'Click to rename' : ''}
-                    >
+                    <a href={expLink} class="exp-name-link">
                       {exp.name}
                       {#if isRunning}
                         <span class="live-badge"><span class="pulse"></span>Live</span>
                       {/if}
-                    </span>
+                    </a>
                   {/if}
                 </td>
                 <td class="col-type">
@@ -1069,14 +1055,6 @@
                 <td class="col-acc mono">{formatAccuracy(exp.best_accuracy)}</td>
                 <td class="col-actions">
                   <div class="action-buttons">
-                    {#if expLink}
-                      <a href={expLink} class="btn-icon" title="View details">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                          <circle cx="12" cy="12" r="3"></circle>
-                        </svg>
-                      </a>
-                    {/if}
                     {#if canEdit}
                       <button class="btn-icon" title="Edit" on:click={() => startEditExperiment(i)}>
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1771,22 +1749,21 @@
     color: white;
   }
 
-  .exp-name-cell {
+  .exp-name-link {
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
-  }
-
-  .exp-name-cell.editable {
-    cursor: pointer;
+    color: var(--text-primary);
+    text-decoration: none;
     padding: 0.25rem 0.5rem;
     margin: -0.25rem -0.5rem;
     border-radius: 4px;
-    transition: background-color 0.15s;
+    transition: background-color 0.15s, color 0.15s;
   }
 
-  .exp-name-cell.editable:hover {
+  .exp-name-link:hover {
     background: var(--bg-tertiary);
+    color: var(--accent-blue);
   }
 
   .inline-edit {
