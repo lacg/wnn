@@ -145,7 +145,7 @@ class FlowWorker:
     def should_stop(self) -> bool:
         """Check if shutdown has been requested. Used by flow/experiment/strategy.
 
-        Checks both local flags and dashboard flow status for cancellation.
+        Checks both local flags and dashboard flow status for cancellation/deletion.
         This provides a fallback if SIGTERM delivery fails (e.g., missing PID).
         """
         # Check local flags first (fast path)
@@ -157,7 +157,12 @@ class FlowWorker:
         if self.current_flow_id:
             try:
                 flow = self.client.get_flow(self.current_flow_id)
-                if flow and flow.get("status") in ("cancelled", "failed"):
+                if flow is None:
+                    # Flow was deleted - stop working on it
+                    self._log(f"Flow {self.current_flow_id} was deleted, stopping...")
+                    self._stop_current_flow = True
+                    return True
+                if flow.get("status") in ("cancelled", "failed"):
                     self._log(f"Flow {self.current_flow_id} was cancelled via dashboard, stopping...")
                     self._stop_current_flow = True
                     return True
@@ -351,7 +356,13 @@ class FlowWorker:
             error_msg = str(e).lower()
             is_shutdown = self._stop_current_flow or "shutdown" in error_msg or "stopped" in error_msg
 
-            if is_shutdown:
+            # Check if flow still exists (might have been deleted)
+            flow_exists = self.client.get_flow(flow_id) is not None
+
+            if not flow_exists:
+                # Flow was deleted - just clean up and move on
+                self._log(f"Flow {flow_id} was deleted, cleaning up")
+            elif is_shutdown:
                 # Graceful shutdown - re-queue the flow so it can be resumed
                 self._log(f"Flow stopped due to shutdown, re-queuing for resume")
                 try:

@@ -176,7 +176,11 @@ class DashboardClient:
 		json_data: Optional[dict] = None,
 		params: Optional[dict] = None,
 	) -> Optional[dict]:
-		"""Make HTTP request with retries."""
+		"""Make HTTP request with retries.
+
+		Returns None for 204 No Content or 404 Not Found.
+		Raises ConnectionError for other failures.
+		"""
 		import time
 
 		url = self._url(path)
@@ -193,6 +197,10 @@ class DashboardClient:
 				)
 
 				if response.status_code == 204:
+					return None
+
+				# 404 means resource doesn't exist - return None (not an error)
+				if response.status_code == 404:
 					return None
 
 				response.raise_for_status()
