@@ -409,7 +409,7 @@
   .back-link {
     color: var(--text-secondary);
     text-decoration: none;
-    font-size: 0.875rem;
+    font-size: 1rem;
   }
 
   .back-link:hover {
@@ -443,7 +443,7 @@
   }
 
   .section-hint {
-    font-size: 0.875rem;
+    font-size: 1rem;
     color: var(--text-secondary);
     margin: -0.5rem 0 1rem 0;
   }
@@ -458,7 +458,7 @@
 
   .field-hint {
     display: block;
-    font-size: 0.75rem;
+    font-size: 1rem;
     color: var(--text-secondary);
     margin-top: 0.25rem;
   }
@@ -483,7 +483,7 @@
 
   label {
     display: block;
-    font-size: 0.875rem;
+    font-size: 1rem;
     font-weight: 500;
     color: var(--text-primary);
     margin-bottom: 0.375rem;
@@ -496,7 +496,7 @@
     border-radius: 6px;
     background: var(--bg-primary);
     color: var(--text-primary);
-    font-size: 0.875rem;
+    font-size: 1rem;
     font-family: inherit;
   }
 
@@ -518,7 +518,7 @@
   .btn {
     padding: 0.5rem 1rem;
     border-radius: 6px;
-    font-size: 0.875rem;
+    font-size: 1rem;
     font-weight: 500;
     text-decoration: none;
     border: none;
@@ -555,7 +555,7 @@
     color: var(--accent-red);
     padding: 0.75rem 1rem;
     border-radius: 6px;
-    font-size: 0.875rem;
+    font-size: 1rem;
     margin-bottom: 1rem;
   }
 
@@ -569,7 +569,7 @@
   }
 
   .phases-preview h3 {
-    font-size: 0.875rem;
+    font-size: 1rem;
     font-weight: 500;
     color: var(--text-secondary);
     margin: 0 0 0.75rem 0;
@@ -585,18 +585,18 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    font-size: 0.8125rem;
+    font-size: 1rem;
   }
 
   .phase-num {
-    width: 1.25rem;
-    height: 1.25rem;
+    width: 1.5rem;
+    height: 1.5rem;
     display: flex;
     align-items: center;
     justify-content: center;
     background: var(--bg-secondary);
     border-radius: 4px;
-    font-size: 0.75rem;
+    font-size: 1rem;
     color: var(--text-secondary);
     font-weight: 500;
   }
@@ -607,9 +607,9 @@
   }
 
   .phase-type {
-    padding: 0.125rem 0.375rem;
+    padding: 0.25rem 0.5rem;
     border-radius: 4px;
-    font-size: 0.6875rem;
+    font-size: 1rem;
     font-weight: 600;
     text-transform: uppercase;
   }
