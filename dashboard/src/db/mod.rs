@@ -614,8 +614,14 @@ pub mod queries {
         Ok(())
     }
 
-    /// Delete all data for an experiment (iterations, genome_evaluations, genomes, checkpoints)
+    /// Delete all data for an experiment (iterations, genome_evaluations, genomes, checkpoints, validation_summaries)
     async fn delete_experiment_data(pool: &DbPool, exp_id: i64) -> Result<()> {
+        // Delete validation summaries for this experiment
+        sqlx::query("DELETE FROM validation_summaries WHERE experiment_id = ?")
+            .bind(exp_id)
+            .execute(pool)
+            .await?;
+
         // Delete health checks for iterations of this experiment
         sqlx::query(
             "DELETE FROM health_checks WHERE iteration_id IN (SELECT id FROM iterations WHERE experiment_id = ?)"

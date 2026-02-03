@@ -456,6 +456,33 @@
     }
   }
 
+  // Delete flow state
+  let deleting = false;
+
+  async function deleteFlow() {
+    if (!flow) return;
+    if (!confirm(`Delete flow "${flow.name}"? This will delete all experiments, iterations, and checkpoints. This cannot be undone.`)) return;
+
+    deleting = true;
+    try {
+      const response = await fetch(`/api/flows/${flow.id}`, {
+        method: 'DELETE'
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to delete flow');
+      }
+
+      // Navigate back to flows list
+      window.location.href = '/flows';
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Failed to delete';
+    } finally {
+      deleting = false;
+    }
+  }
+
   async function updateFitnessCalculator(value: string) {
     if (!flow) return;
     saving = true;
@@ -811,6 +838,11 @@
         {#if flow.status === 'completed'}
           <button class="btn btn-secondary" on:click={() => restartFlow(true)}>
             Run Again
+          </button>
+        {/if}
+        {#if flow.status !== 'running' && flow.status !== 'queued'}
+          <button class="btn btn-danger" on:click={deleteFlow} disabled={deleting} title="Delete flow">
+            {deleting ? 'Deleting...' : 'Delete'}
           </button>
         {/if}
       </div>
