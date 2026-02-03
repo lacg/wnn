@@ -1,13 +1,14 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
-  import type { Experiment, Iteration, GenomeEvaluation, Flow } from '$lib/types';
+  import type { Experiment, Iteration, GenomeEvaluation, Flow, ValidationSummary } from '$lib/types';
   import { formatDate } from '$lib/dateFormat';
 
   let experiment: Experiment | null = null;
   let iterations: Iteration[] = [];
   let flowExperiments: Experiment[] = [];
   let flow: Flow | null = null;
+  let validationSummaries: ValidationSummary[] = [];
   let loading = true;
   let error: string | null = null;
   let pollInterval: ReturnType<typeof setInterval> | null = null;
@@ -33,18 +34,21 @@
     error = null;
 
     try {
-      const [expRes, itersRes] = await Promise.all([
+      const [expRes, itersRes, summariesRes] = await Promise.all([
         fetch(`/api/experiments/${experimentId}`),
-        fetch(`/api/experiments/${experimentId}/iterations?limit=500`)
+        fetch(`/api/experiments/${experimentId}/iterations?limit=500`),
+        fetch(`/api/experiments/${experimentId}/summaries`)
       ]);
 
       if (!expRes.ok) throw new Error('Experiment not found');
 
       experiment = await expRes.json();
       iterations = itersRes.ok ? await itersRes.json() : [];
+      validationSummaries = summariesRes.ok ? await summariesRes.json() : [];
 
-      // Ensure array
+      // Ensure arrays
       if (!Array.isArray(iterations)) iterations = [];
+      if (!Array.isArray(validationSummaries)) validationSummaries = [];
 
       // Fetch flow and its experiments if this experiment belongs to a flow
       if (experiment?.flow_id) {
@@ -366,6 +370,41 @@
         {/if}
       </div>
     </div>
+
+    <!-- Validation Summaries -->
+    {#if validationSummaries.length > 0}
+      <div class="validation-summaries">
+        {#each validationSummaries as summary}
+          <div class="summary-card" class:init={summary.summary_type === 'init'} class:final={summary.summary_type === 'final'}>
+            <div class="summary-header">
+              <span class="summary-type">{summary.summary_type === 'init' ? 'Init Baseline' : 'Final Results'}</span>
+              <span class="summary-date">{formatDate(summary.created_at)}</span>
+            </div>
+            <div class="summary-metrics">
+              <div class="metric-row">
+                <span class="metric-label">Best CE</span>
+                <span class="metric-value">CE: {summary.best_ce_val.toFixed(4)}</span>
+                <span class="metric-value">Acc: {(summary.best_ce_acc * 100).toFixed(2)}%</span>
+              </div>
+              {#if summary.best_acc_ce !== null && summary.best_acc_acc !== null}
+                <div class="metric-row">
+                  <span class="metric-label">Best Acc</span>
+                  <span class="metric-value">CE: {summary.best_acc_ce.toFixed(4)}</span>
+                  <span class="metric-value">Acc: {(summary.best_acc_acc * 100).toFixed(2)}%</span>
+                </div>
+              {/if}
+              {#if summary.best_fitness_ce !== null && summary.best_fitness_acc !== null}
+                <div class="metric-row">
+                  <span class="metric-label">Best Fitness</span>
+                  <span class="metric-value">CE: {summary.best_fitness_ce.toFixed(4)}</span>
+                  <span class="metric-value">Acc: {(summary.best_fitness_acc * 100).toFixed(2)}%</span>
+                </div>
+              {/if}
+            </div>
+          </div>
+        {/each}
+      </div>
+    {/if}
 
     <!-- Chart -->
     {#if chartData.length > 0}
@@ -904,6 +943,82 @@
     font-size: 1rem;
     color: var(--text-primary);
     font-family: monospace;
+  }
+
+  /* Validation Summaries */
+  .validation-summaries {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .summary-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    padding: 1rem;
+  }
+
+  .summary-card.init {
+    border-left: 3px solid var(--accent-blue);
+  }
+
+  .summary-card.final {
+    border-left: 3px solid var(--accent-green);
+  }
+
+  .summary-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .summary-type {
+    font-weight: 600;
+    color: var(--text-primary);
+    font-size: 0.9rem;
+  }
+
+  .summary-card.init .summary-type {
+    color: var(--accent-blue);
+  }
+
+  .summary-card.final .summary-type {
+    color: var(--accent-green);
+  }
+
+  .summary-date {
+    font-size: 0.75rem;
+    color: var(--text-tertiary);
+  }
+
+  .summary-metrics {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .metric-row {
+    display: grid;
+    grid-template-columns: 85px 1fr 1fr;
+    gap: 0.5rem;
+    align-items: center;
+  }
+
+  .metric-label {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+  }
+
+  .metric-value {
+    font-size: 0.85rem;
+    font-family: monospace;
+    color: var(--text-primary);
   }
 
   /* Card styles */

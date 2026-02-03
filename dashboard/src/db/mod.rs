@@ -243,6 +243,32 @@ CREATE TABLE IF NOT EXISTS health_checks (
 );
 
 -- ============================================================================
+-- VALIDATION_SUMMARIES: Init and final validation results
+-- Stores full-dataset validation for selected genomes (best CE, best Acc, best Fitness)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS validation_summaries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id INTEGER NOT NULL REFERENCES experiments(id),
+    summary_type TEXT NOT NULL,  -- 'init' or 'final'
+
+    -- Best by CE genome (always present)
+    best_ce_val REAL NOT NULL,
+    best_ce_acc REAL NOT NULL,
+
+    -- Best by Accuracy genome (NULL if same as best_ce)
+    best_acc_ce REAL,
+    best_acc_acc REAL,
+
+    -- Best by Fitness genome (NULL if same as best_ce or best_acc)
+    best_fitness_ce REAL,
+    best_fitness_acc REAL,
+
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+
+    UNIQUE(experiment_id, summary_type)
+);
+
+-- ============================================================================
 -- CHECKPOINTS: Saved state for resume
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS checkpoints (
@@ -279,6 +305,7 @@ CREATE INDEX IF NOT EXISTS idx_iterations_experiment ON iterations(experiment_id
 CREATE INDEX IF NOT EXISTS idx_genome_evals_iteration ON genome_evaluations(iteration_id);
 CREATE INDEX IF NOT EXISTS idx_genomes_experiment ON genomes(experiment_id);
 CREATE INDEX IF NOT EXISTS idx_checkpoints_experiment ON checkpoints(experiment_id);
+CREATE INDEX IF NOT EXISTS idx_validation_summaries_experiment ON validation_summaries(experiment_id);
 
 -- For finding latest records per entity
 CREATE INDEX IF NOT EXISTS idx_iterations_exp_num ON iterations(experiment_id, iteration_num DESC);
@@ -880,6 +907,124 @@ pub mod queries {
             "user" => CheckpointType::User,
             "experiment_end" => CheckpointType::ExperimentEnd,
             _ => CheckpointType::Auto,
+        }
+    }
+
+    // =============================================================================
+    // Validation Summary queries
+    // =============================================================================
+
+    /// Get validation summaries for an experiment
+    pub async fn get_validation_summaries(
+        pool: &DbPool,
+        experiment_id: i64,
+    ) -> Result<Vec<ValidationSummary>> {
+        let rows = sqlx::query(
+            r#"SELECT id, experiment_id, summary_type, best_ce_val, best_ce_acc,
+                      best_acc_ce, best_acc_acc, best_fitness_ce, best_fitness_acc, created_at
+               FROM validation_summaries
+               WHERE experiment_id = ?
+               ORDER BY summary_type"#,
+        )
+        .bind(experiment_id)
+        .fetch_all(pool)
+        .await?;
+
+        let mut summaries = Vec::with_capacity(rows.len());
+        for row in rows {
+            summaries.push(row_to_validation_summary(&row)?);
+        }
+        Ok(summaries)
+    }
+
+    /// Get a specific validation summary by type
+    pub async fn get_validation_summary(
+        pool: &DbPool,
+        experiment_id: i64,
+        summary_type: &str,
+    ) -> Result<Option<ValidationSummary>> {
+        let row = sqlx::query(
+            r#"SELECT id, experiment_id, summary_type, best_ce_val, best_ce_acc,
+                      best_acc_ce, best_acc_acc, best_fitness_ce, best_fitness_acc, created_at
+               FROM validation_summaries
+               WHERE experiment_id = ? AND summary_type = ?"#,
+        )
+        .bind(experiment_id)
+        .bind(summary_type)
+        .fetch_optional(pool)
+        .await?;
+
+        match row {
+            Some(r) => Ok(Some(row_to_validation_summary(&r)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Create or update a validation summary (upsert)
+    pub async fn upsert_validation_summary(
+        pool: &DbPool,
+        experiment_id: i64,
+        summary_type: &str,
+        best_ce_val: f64,
+        best_ce_acc: f64,
+        best_acc_ce: Option<f64>,
+        best_acc_acc: Option<f64>,
+        best_fitness_ce: Option<f64>,
+        best_fitness_acc: Option<f64>,
+    ) -> Result<i64> {
+        let now = Utc::now().to_rfc3339();
+
+        let result = sqlx::query(
+            r#"INSERT INTO validation_summaries
+               (experiment_id, summary_type, best_ce_val, best_ce_acc,
+                best_acc_ce, best_acc_acc, best_fitness_ce, best_fitness_acc, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(experiment_id, summary_type) DO UPDATE SET
+                 best_ce_val = excluded.best_ce_val,
+                 best_ce_acc = excluded.best_ce_acc,
+                 best_acc_ce = excluded.best_acc_ce,
+                 best_acc_acc = excluded.best_acc_acc,
+                 best_fitness_ce = excluded.best_fitness_ce,
+                 best_fitness_acc = excluded.best_fitness_acc,
+                 created_at = excluded.created_at"#,
+        )
+        .bind(experiment_id)
+        .bind(summary_type)
+        .bind(best_ce_val)
+        .bind(best_ce_acc)
+        .bind(best_acc_ce)
+        .bind(best_acc_acc)
+        .bind(best_fitness_ce)
+        .bind(best_fitness_acc)
+        .bind(&now)
+        .execute(pool)
+        .await?;
+
+        Ok(result.last_insert_rowid())
+    }
+
+    fn row_to_validation_summary(row: &sqlx::sqlite::SqliteRow) -> Result<ValidationSummary> {
+        let summary_type_str: String = row.get("summary_type");
+
+        Ok(ValidationSummary {
+            id: row.get("id"),
+            experiment_id: row.get("experiment_id"),
+            summary_type: parse_summary_type(&summary_type_str),
+            best_ce_val: row.get("best_ce_val"),
+            best_ce_acc: row.get("best_ce_acc"),
+            best_acc_ce: row.get("best_acc_ce"),
+            best_acc_acc: row.get("best_acc_acc"),
+            best_fitness_ce: row.get("best_fitness_ce"),
+            best_fitness_acc: row.get("best_fitness_acc"),
+            created_at: parse_datetime(row.get("created_at"))?,
+        })
+    }
+
+    fn parse_summary_type(s: &str) -> SummaryType {
+        match s {
+            "init" => SummaryType::Init,
+            "final" => SummaryType::Final,
+            _ => SummaryType::Final, // Default to final
         }
     }
 

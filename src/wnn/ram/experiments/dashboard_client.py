@@ -492,6 +492,50 @@ class DashboardClient:
 		self._logger(f"Linked experiment {experiment_id} to flow {flow_id}")
 
 	# =========================================================================
+	# Validation Summary methods
+	# =========================================================================
+
+	def create_validation_summary(
+		self,
+		experiment_id: int,
+		summary_type: str,  # 'init' or 'final'
+		best_ce_val: float,
+		best_ce_acc: float,
+		best_acc_ce: Optional[float] = None,
+		best_acc_acc: Optional[float] = None,
+		best_fitness_ce: Optional[float] = None,
+		best_fitness_acc: Optional[float] = None,
+	) -> dict:
+		"""
+		Create or update a validation summary for an experiment.
+
+		Args:
+			experiment_id: Experiment ID
+			summary_type: 'init' (before optimization) or 'final' (after optimization)
+			best_ce_val: CE of the genome with best CE
+			best_ce_acc: Accuracy of the genome with best CE
+			best_acc_ce: CE of the genome with best accuracy (if different from best_ce)
+			best_acc_acc: Accuracy of the genome with best accuracy (if different)
+			best_fitness_ce: CE of the genome with best fitness (if different from both)
+			best_fitness_acc: Accuracy of the genome with best fitness (if different)
+
+		Returns:
+			Dict with 'id' of the created/updated summary
+		"""
+		data = {
+			"summary_type": summary_type,
+			"best_ce_val": best_ce_val,
+			"best_ce_acc": best_ce_acc,
+			"best_acc_ce": best_acc_ce,
+			"best_acc_acc": best_acc_acc,
+			"best_fitness_ce": best_fitness_ce,
+			"best_fitness_acc": best_fitness_acc,
+		}
+		result = self._request("POST", f"/api/experiments/{experiment_id}/summaries", json_data=data)
+		self._logger(f"Created {summary_type} validation summary for experiment {experiment_id}")
+		return result
+
+	# =========================================================================
 	# Checkpoint methods
 	# =========================================================================
 

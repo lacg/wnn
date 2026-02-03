@@ -174,6 +174,28 @@ export interface HealthCheck {
 }
 
 // =============================================================================
+// Validation Summary types
+// =============================================================================
+
+export type SummaryType = 'init' | 'final';
+
+export interface ValidationSummary {
+  id: number;
+  experiment_id: number;
+  summary_type: SummaryType;
+  // Best by CE genome (always present)
+  best_ce_val: number;
+  best_ce_acc: number;
+  // Best by Accuracy genome (null if same as best_ce)
+  best_acc_ce: number | null;
+  best_acc_acc: number | null;
+  // Best by Fitness genome (null if same as best_ce or best_acc)
+  best_fitness_ce: number | null;
+  best_fitness_acc: number | null;
+  created_at: string;
+}
+
+// =============================================================================
 // Checkpoint types
 // =============================================================================
 

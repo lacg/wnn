@@ -28,6 +28,7 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .route("/api/experiments/current", get(get_current_experiment))
         .route("/api/experiments/:id", get(get_experiment).patch(update_experiment))
         .route("/api/experiments/:id/iterations", get(get_experiment_iterations))
+        .route("/api/experiments/:id/summaries", get(get_validation_summaries).post(create_validation_summary))
         // Iterations
         .route("/api/iterations/:id/genomes", get(get_iteration_genomes))
         // Snapshot
@@ -184,6 +185,54 @@ async fn get_experiment_iterations(
     let limit = query.limit.unwrap_or(100);
     match crate::db::queries::get_recent_iterations(&state.db, experiment_id, limit).await {
         Ok(iterations) => (StatusCode::OK, Json(iterations)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+async fn get_validation_summaries(
+    State(state): State<Arc<AppState>>,
+    Path(experiment_id): Path<i64>,
+) -> impl IntoResponse {
+    match crate::db::queries::get_validation_summaries(&state.db, experiment_id).await {
+        Ok(summaries) => (StatusCode::OK, Json(summaries)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateValidationSummaryRequest {
+    pub summary_type: String,
+    pub best_ce_val: f64,
+    pub best_ce_acc: f64,
+    pub best_acc_ce: Option<f64>,
+    pub best_acc_acc: Option<f64>,
+    pub best_fitness_ce: Option<f64>,
+    pub best_fitness_acc: Option<f64>,
+}
+
+async fn create_validation_summary(
+    State(state): State<Arc<AppState>>,
+    Path(experiment_id): Path<i64>,
+    Json(req): Json<CreateValidationSummaryRequest>,
+) -> impl IntoResponse {
+    match crate::db::queries::upsert_validation_summary(
+        &state.db,
+        experiment_id,
+        &req.summary_type,
+        req.best_ce_val,
+        req.best_ce_acc,
+        req.best_acc_ce,
+        req.best_acc_acc,
+        req.best_fitness_ce,
+        req.best_fitness_acc,
+    ).await {
+        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({"id": id}))).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
