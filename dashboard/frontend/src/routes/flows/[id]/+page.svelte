@@ -865,7 +865,7 @@
               <text x={valChartPadding.left - 8} y={valChartPadding.top + valChartHeight / 2} text-anchor="end" class="axis-label">{((valCeMaxPadded + valCeMinPadded) / 2).toFixed(2)}</text>
 
               <!-- Y-axis title -->
-              <text x={8} y={valChartPadding.top + valChartHeight / 2} text-anchor="middle" class="axis-title" transform="rotate(-90, 8, {valChartPadding.top + valChartHeight / 2})">CE (Loss)</text>
+              <text x={30} y={valChartPadding.top + valChartHeight / 2} text-anchor="middle" class="axis-title" transform="rotate(-90, 30, {valChartPadding.top + valChartHeight / 2})">CE (Loss)</text>
 
               <!-- Grid lines -->
               <line x1={valChartPadding.left} y1={valChartPadding.top} x2={valChartPadding.left + valChartWidth} y2={valChartPadding.top} stroke="var(--border)" stroke-dasharray="4" />
