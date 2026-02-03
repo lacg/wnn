@@ -371,38 +371,49 @@
       </div>
     </div>
 
-    <!-- Validation Summaries -->
+    <!-- Validation Summaries (Init vs Final) -->
     {#if validationSummaries.length > 0}
-      <div class="validation-summaries">
-        {#each validationSummaries as summary}
-          <div class="summary-card" class:init={summary.summary_type === 'init'} class:final={summary.summary_type === 'final'}>
-            <div class="summary-header">
-              <span class="summary-type">{summary.summary_type === 'init' ? 'Init Baseline' : 'Final Results'}</span>
-              <span class="summary-date">{formatDate(summary.created_at)}</span>
-            </div>
-            <div class="summary-metrics">
-              <div class="metric-row">
-                <span class="metric-label">Best CE</span>
-                <span class="metric-value">CE: {summary.best_ce_val.toFixed(4)}</span>
-                <span class="metric-value">Acc: {(summary.best_ce_acc * 100).toFixed(2)}%</span>
-              </div>
-              {#if summary.best_acc_ce !== null && summary.best_acc_acc !== null}
-                <div class="metric-row">
-                  <span class="metric-label">Best Acc</span>
-                  <span class="metric-value">CE: {summary.best_acc_ce.toFixed(4)}</span>
-                  <span class="metric-value">Acc: {(summary.best_acc_acc * 100).toFixed(2)}%</span>
-                </div>
-              {/if}
-              {#if summary.best_fitness_ce !== null && summary.best_fitness_acc !== null}
-                <div class="metric-row">
-                  <span class="metric-label">Best Fitness</span>
-                  <span class="metric-value">CE: {summary.best_fitness_ce.toFixed(4)}</span>
-                  <span class="metric-value">Acc: {(summary.best_fitness_acc * 100).toFixed(2)}%</span>
-                </div>
-              {/if}
-            </div>
+      {@const initSummaries = validationSummaries.filter(s => s.validation_point === 'init')}
+      {@const finalSummaries = validationSummaries.filter(s => s.validation_point === 'final')}
+      <div class="validation-section">
+        <div class="validation-header">
+          <span class="validation-title">Full Validation Results</span>
+          <div class="validation-legend">
+            <span class="legend-item"><span class="legend-marker best-ce"></span> Best CE</span>
+            <span class="legend-item"><span class="legend-marker best-acc"></span> Best Acc</span>
+            <span class="legend-item"><span class="legend-marker best-fitness"></span> Best Fitness</span>
           </div>
-        {/each}
+        </div>
+        <div class="validation-cards">
+          {#if initSummaries.length > 0}
+            <div class="validation-card init">
+              <div class="card-label">Init Baseline</div>
+              <div class="validation-metrics">
+                {#each initSummaries as summary}
+                  <div class="metric-item {summary.genome_type}">
+                    <span class="metric-marker"></span>
+                    <span class="metric-ce">{summary.ce.toFixed(4)}</span>
+                    <span class="metric-acc">{(summary.accuracy * 100).toFixed(2)}%</span>
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {/if}
+          {#if finalSummaries.length > 0}
+            <div class="validation-card final">
+              <div class="card-label">Final Results</div>
+              <div class="validation-metrics">
+                {#each finalSummaries as summary}
+                  <div class="metric-item {summary.genome_type}">
+                    <span class="metric-marker"></span>
+                    <span class="metric-ce">{summary.ce.toFixed(4)}</span>
+                    <span class="metric-acc">{(summary.accuracy * 100).toFixed(2)}%</span>
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {/if}
+        </div>
       </div>
     {/if}
 
@@ -945,80 +956,112 @@
     font-family: monospace;
   }
 
-  /* Validation Summaries */
-  .validation-summaries {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    gap: 1rem;
-    margin-bottom: 1.5rem;
-  }
-
-  .summary-card {
+  /* Validation Section */
+  .validation-section {
     background: var(--bg-secondary);
     border: 1px solid var(--border);
     border-radius: 0.5rem;
     padding: 1rem;
+    margin-bottom: 1.5rem;
   }
 
-  .summary-card.init {
-    border-left: 3px solid var(--accent-blue);
-  }
-
-  .summary-card.final {
-    border-left: 3px solid var(--accent-green);
-  }
-
-  .summary-header {
+  .validation-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 0.75rem;
+    margin-bottom: 1rem;
     padding-bottom: 0.5rem;
     border-bottom: 1px solid var(--border);
   }
 
-  .summary-type {
+  .validation-title {
     font-weight: 600;
     color: var(--text-primary);
-    font-size: 0.9rem;
   }
 
-  .summary-card.init .summary-type {
-    color: var(--accent-blue);
+  .validation-legend {
+    display: flex;
+    gap: 1rem;
+    font-size: 0.8rem;
   }
 
-  .summary-card.final .summary-type {
-    color: var(--accent-green);
+  .legend-marker {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-right: 4px;
   }
 
-  .summary-date {
-    font-size: 0.75rem;
-    color: var(--text-tertiary);
+  .legend-marker.best-ce { background: var(--accent-blue); }
+  .legend-marker.best-acc { background: var(--accent-green); }
+  .legend-marker.best-fitness { background: var(--accent-purple, #9b59b6); }
+
+  .validation-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
   }
 
-  .summary-metrics {
+  .validation-card {
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    padding: 0.75rem;
+  }
+
+  .validation-card.init {
+    border-top: 3px solid var(--accent-blue);
+  }
+
+  .validation-card.final {
+    border-top: 3px solid var(--accent-green);
+  }
+
+  .card-label {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 0.5rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .validation-card.init .card-label { color: var(--accent-blue); }
+  .validation-card.final .card-label { color: var(--accent-green); }
+
+  .validation-metrics {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    gap: 0.4rem;
   }
 
-  .metric-row {
-    display: grid;
-    grid-template-columns: 85px 1fr 1fr;
-    gap: 0.5rem;
+  .metric-item {
+    display: flex;
     align-items: center;
-  }
-
-  .metric-label {
-    font-size: 0.8rem;
-    color: var(--text-secondary);
-    font-weight: 500;
-  }
-
-  .metric-value {
-    font-size: 0.85rem;
+    gap: 0.5rem;
     font-family: monospace;
+    font-size: 0.85rem;
+  }
+
+  .metric-item .metric-marker {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .metric-item.best_ce .metric-marker { background: var(--accent-blue); }
+  .metric-item.best_acc .metric-marker { background: var(--accent-green); }
+  .metric-item.best_fitness .metric-marker { background: var(--accent-purple, #9b59b6); }
+
+  .metric-ce {
     color: var(--text-primary);
+    min-width: 70px;
+  }
+
+  .metric-acc {
+    color: var(--text-secondary);
   }
 
   /* Card styles */

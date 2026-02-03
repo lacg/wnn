@@ -243,29 +243,23 @@ CREATE TABLE IF NOT EXISTS health_checks (
 );
 
 -- ============================================================================
--- VALIDATION_SUMMARIES: Init and final validation results
--- Stores full-dataset validation for selected genomes (best CE, best Acc, best Fitness)
+-- VALIDATION_SUMMARIES: Full-dataset validation results per genome
+-- Each record = one genome validated at a checkpoint (init/final of an experiment)
+-- Deduplication: if genome_hash already exists, skip expensive validation and reuse cached values
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS validation_summaries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    flow_id INTEGER REFERENCES flows(id),
     experiment_id INTEGER NOT NULL REFERENCES experiments(id),
-    summary_type TEXT NOT NULL,  -- 'init' or 'final'
-
-    -- Best by CE genome (always present)
-    best_ce_val REAL NOT NULL,
-    best_ce_acc REAL NOT NULL,
-
-    -- Best by Accuracy genome (NULL if same as best_ce)
-    best_acc_ce REAL,
-    best_acc_acc REAL,
-
-    -- Best by Fitness genome (NULL if same as best_ce or best_acc)
-    best_fitness_ce REAL,
-    best_fitness_acc REAL,
-
+    validation_point TEXT NOT NULL,   -- 'init' or 'final'
+    genome_type TEXT NOT NULL,        -- 'best_ce', 'best_acc', 'best_fitness'
+    genome_hash TEXT NOT NULL,        -- Config hash for deduplication
+    ce REAL NOT NULL,
+    accuracy REAL NOT NULL,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
 
-    UNIQUE(experiment_id, summary_type)
+    -- One record per genome type per checkpoint
+    UNIQUE(experiment_id, validation_point, genome_type)
 );
 
 -- ============================================================================
@@ -306,6 +300,8 @@ CREATE INDEX IF NOT EXISTS idx_genome_evals_iteration ON genome_evaluations(iter
 CREATE INDEX IF NOT EXISTS idx_genomes_experiment ON genomes(experiment_id);
 CREATE INDEX IF NOT EXISTS idx_checkpoints_experiment ON checkpoints(experiment_id);
 CREATE INDEX IF NOT EXISTS idx_validation_summaries_experiment ON validation_summaries(experiment_id);
+CREATE INDEX IF NOT EXISTS idx_validation_summaries_genome ON validation_summaries(genome_hash);
+CREATE INDEX IF NOT EXISTS idx_validation_summaries_flow ON validation_summaries(flow_id);
 
 -- For finding latest records per entity
 CREATE INDEX IF NOT EXISTS idx_iterations_exp_num ON iterations(experiment_id, iteration_num DESC);
@@ -920,11 +916,11 @@ pub mod queries {
         experiment_id: i64,
     ) -> Result<Vec<ValidationSummary>> {
         let rows = sqlx::query(
-            r#"SELECT id, experiment_id, summary_type, best_ce_val, best_ce_acc,
-                      best_acc_ce, best_acc_acc, best_fitness_ce, best_fitness_acc, created_at
+            r#"SELECT id, flow_id, experiment_id, validation_point, genome_type,
+                      genome_hash, ce, accuracy, created_at
                FROM validation_summaries
                WHERE experiment_id = ?
-               ORDER BY summary_type"#,
+               ORDER BY validation_point, genome_type"#,
         )
         .bind(experiment_id)
         .fetch_all(pool)
@@ -937,65 +933,80 @@ pub mod queries {
         Ok(summaries)
     }
 
-    /// Get a specific validation summary by type
-    pub async fn get_validation_summary(
+    /// Get validation summaries for a flow (all experiments)
+    pub async fn get_flow_validation_summaries(
         pool: &DbPool,
-        experiment_id: i64,
-        summary_type: &str,
-    ) -> Result<Option<ValidationSummary>> {
-        let row = sqlx::query(
-            r#"SELECT id, experiment_id, summary_type, best_ce_val, best_ce_acc,
-                      best_acc_ce, best_acc_acc, best_fitness_ce, best_fitness_acc, created_at
-               FROM validation_summaries
-               WHERE experiment_id = ? AND summary_type = ?"#,
+        flow_id: i64,
+    ) -> Result<Vec<ValidationSummary>> {
+        let rows = sqlx::query(
+            r#"SELECT vs.id, vs.flow_id, vs.experiment_id, vs.validation_point, vs.genome_type,
+                      vs.genome_hash, vs.ce, vs.accuracy, vs.created_at
+               FROM validation_summaries vs
+               JOIN experiments e ON vs.experiment_id = e.id
+               WHERE e.flow_id = ?
+               ORDER BY e.sequence_order, vs.validation_point, vs.genome_type"#,
         )
-        .bind(experiment_id)
-        .bind(summary_type)
+        .bind(flow_id)
+        .fetch_all(pool)
+        .await?;
+
+        let mut summaries = Vec::with_capacity(rows.len());
+        for row in rows {
+            summaries.push(row_to_validation_summary(&row)?);
+        }
+        Ok(summaries)
+    }
+
+    /// Check if a genome has already been validated (by genome_hash)
+    /// Returns the cached CE and accuracy if found
+    pub async fn get_cached_validation(
+        pool: &DbPool,
+        genome_hash: &str,
+    ) -> Result<Option<(f64, f64)>> {
+        let row = sqlx::query(
+            r#"SELECT ce, accuracy FROM validation_summaries WHERE genome_hash = ? LIMIT 1"#,
+        )
+        .bind(genome_hash)
         .fetch_optional(pool)
         .await?;
 
         match row {
-            Some(r) => Ok(Some(row_to_validation_summary(&r)?)),
+            Some(r) => Ok(Some((r.get("ce"), r.get("accuracy")))),
             None => Ok(None),
         }
     }
 
-    /// Create or update a validation summary (upsert)
+    /// Create a validation summary (upsert by experiment_id + validation_point + genome_type)
     pub async fn upsert_validation_summary(
         pool: &DbPool,
+        flow_id: Option<i64>,
         experiment_id: i64,
-        summary_type: &str,
-        best_ce_val: f64,
-        best_ce_acc: f64,
-        best_acc_ce: Option<f64>,
-        best_acc_acc: Option<f64>,
-        best_fitness_ce: Option<f64>,
-        best_fitness_acc: Option<f64>,
+        validation_point: &str,
+        genome_type: &str,
+        genome_hash: &str,
+        ce: f64,
+        accuracy: f64,
     ) -> Result<i64> {
         let now = Utc::now().to_rfc3339();
 
         let result = sqlx::query(
             r#"INSERT INTO validation_summaries
-               (experiment_id, summary_type, best_ce_val, best_ce_acc,
-                best_acc_ce, best_acc_acc, best_fitness_ce, best_fitness_acc, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(experiment_id, summary_type) DO UPDATE SET
-                 best_ce_val = excluded.best_ce_val,
-                 best_ce_acc = excluded.best_ce_acc,
-                 best_acc_ce = excluded.best_acc_ce,
-                 best_acc_acc = excluded.best_acc_acc,
-                 best_fitness_ce = excluded.best_fitness_ce,
-                 best_fitness_acc = excluded.best_fitness_acc,
+               (flow_id, experiment_id, validation_point, genome_type, genome_hash, ce, accuracy, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(experiment_id, validation_point, genome_type) DO UPDATE SET
+                 flow_id = excluded.flow_id,
+                 genome_hash = excluded.genome_hash,
+                 ce = excluded.ce,
+                 accuracy = excluded.accuracy,
                  created_at = excluded.created_at"#,
         )
+        .bind(flow_id)
         .bind(experiment_id)
-        .bind(summary_type)
-        .bind(best_ce_val)
-        .bind(best_ce_acc)
-        .bind(best_acc_ce)
-        .bind(best_acc_acc)
-        .bind(best_fitness_ce)
-        .bind(best_fitness_acc)
+        .bind(validation_point)
+        .bind(genome_type)
+        .bind(genome_hash)
+        .bind(ce)
+        .bind(accuracy)
         .bind(&now)
         .execute(pool)
         .await?;
@@ -1004,27 +1015,36 @@ pub mod queries {
     }
 
     fn row_to_validation_summary(row: &sqlx::sqlite::SqliteRow) -> Result<ValidationSummary> {
-        let summary_type_str: String = row.get("summary_type");
+        let validation_point_str: String = row.get("validation_point");
+        let genome_type_str: String = row.get("genome_type");
 
         Ok(ValidationSummary {
             id: row.get("id"),
+            flow_id: row.get("flow_id"),
             experiment_id: row.get("experiment_id"),
-            summary_type: parse_summary_type(&summary_type_str),
-            best_ce_val: row.get("best_ce_val"),
-            best_ce_acc: row.get("best_ce_acc"),
-            best_acc_ce: row.get("best_acc_ce"),
-            best_acc_acc: row.get("best_acc_acc"),
-            best_fitness_ce: row.get("best_fitness_ce"),
-            best_fitness_acc: row.get("best_fitness_acc"),
+            validation_point: parse_validation_point(&validation_point_str),
+            genome_type: parse_genome_validation_type(&genome_type_str),
+            genome_hash: row.get("genome_hash"),
+            ce: row.get("ce"),
+            accuracy: row.get("accuracy"),
             created_at: parse_datetime(row.get("created_at"))?,
         })
     }
 
-    fn parse_summary_type(s: &str) -> SummaryType {
+    fn parse_validation_point(s: &str) -> ValidationPoint {
         match s {
-            "init" => SummaryType::Init,
-            "final" => SummaryType::Final,
-            _ => SummaryType::Final, // Default to final
+            "init" => ValidationPoint::Init,
+            "final" => ValidationPoint::Final,
+            _ => ValidationPoint::Final,
+        }
+    }
+
+    fn parse_genome_validation_type(s: &str) -> GenomeValidationType {
+        match s {
+            "best_ce" => GenomeValidationType::BestCe,
+            "best_acc" => GenomeValidationType::BestAcc,
+            "best_fitness" => GenomeValidationType::BestFitness,
+            _ => GenomeValidationType::BestCe,
         }
     }
 

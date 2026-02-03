@@ -177,21 +177,18 @@ export interface HealthCheck {
 // Validation Summary types
 // =============================================================================
 
-export type SummaryType = 'init' | 'final';
+export type ValidationPoint = 'init' | 'final';
+export type GenomeValidationType = 'best_ce' | 'best_acc' | 'best_fitness';
 
 export interface ValidationSummary {
   id: number;
+  flow_id: number | null;
   experiment_id: number;
-  summary_type: SummaryType;
-  // Best by CE genome (always present)
-  best_ce_val: number;
-  best_ce_acc: number;
-  // Best by Accuracy genome (null if same as best_ce)
-  best_acc_ce: number | null;
-  best_acc_acc: number | null;
-  // Best by Fitness genome (null if same as best_ce or best_acc)
-  best_fitness_ce: number | null;
-  best_fitness_acc: number | null;
+  validation_point: ValidationPoint;
+  genome_type: GenomeValidationType;
+  genome_hash: string;
+  ce: number;
+  accuracy: number;
   created_at: string;
 }
 

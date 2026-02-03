@@ -495,44 +495,59 @@ class DashboardClient:
 	# Validation Summary methods
 	# =========================================================================
 
+	def check_cached_validation(self, genome_hash: str) -> Optional[tuple[float, float]]:
+		"""
+		Check if a genome has already been validated.
+
+		Args:
+			genome_hash: The genome's config hash
+
+		Returns:
+			Tuple of (ce, accuracy) if found, None if not validated yet
+		"""
+		try:
+			result = self._request("GET", "/api/validations/check", params={"genome_hash": genome_hash})
+			if result.get("found"):
+				return (result["ce"], result["accuracy"])
+			return None
+		except Exception:
+			return None
+
 	def create_validation_summary(
 		self,
 		experiment_id: int,
-		summary_type: str,  # 'init' or 'final'
-		best_ce_val: float,
-		best_ce_acc: float,
-		best_acc_ce: Optional[float] = None,
-		best_acc_acc: Optional[float] = None,
-		best_fitness_ce: Optional[float] = None,
-		best_fitness_acc: Optional[float] = None,
+		validation_point: str,  # 'init' or 'final'
+		genome_type: str,       # 'best_ce', 'best_acc', 'best_fitness'
+		genome_hash: str,
+		ce: float,
+		accuracy: float,
+		flow_id: Optional[int] = None,
 	) -> dict:
 		"""
-		Create or update a validation summary for an experiment.
+		Create a validation summary record for a genome at a checkpoint.
 
 		Args:
 			experiment_id: Experiment ID
-			summary_type: 'init' (before optimization) or 'final' (after optimization)
-			best_ce_val: CE of the genome with best CE
-			best_ce_acc: Accuracy of the genome with best CE
-			best_acc_ce: CE of the genome with best accuracy (if different from best_ce)
-			best_acc_acc: Accuracy of the genome with best accuracy (if different)
-			best_fitness_ce: CE of the genome with best fitness (if different from both)
-			best_fitness_acc: Accuracy of the genome with best fitness (if different)
+			validation_point: 'init' (start of experiment) or 'final' (end of experiment)
+			genome_type: 'best_ce', 'best_acc', or 'best_fitness'
+			genome_hash: The genome's config hash (for deduplication)
+			ce: Cross-entropy value
+			accuracy: Accuracy value
+			flow_id: Optional flow ID
 
 		Returns:
 			Dict with 'id' of the created/updated summary
 		"""
 		data = {
-			"summary_type": summary_type,
-			"best_ce_val": best_ce_val,
-			"best_ce_acc": best_ce_acc,
-			"best_acc_ce": best_acc_ce,
-			"best_acc_acc": best_acc_acc,
-			"best_fitness_ce": best_fitness_ce,
-			"best_fitness_acc": best_fitness_acc,
+			"flow_id": flow_id,
+			"validation_point": validation_point,
+			"genome_type": genome_type,
+			"genome_hash": genome_hash,
+			"ce": ce,
+			"accuracy": accuracy,
 		}
 		result = self._request("POST", f"/api/experiments/{experiment_id}/summaries", json_data=data)
-		self._logger(f"Created {summary_type} validation summary for experiment {experiment_id}")
+		self._logger(f"Created {validation_point}/{genome_type} validation for experiment {experiment_id}")
 		return result
 
 	# =========================================================================

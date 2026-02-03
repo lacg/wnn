@@ -277,33 +277,35 @@ pub struct HealthCheck {
 // Validation Summary Models
 // =============================================================================
 
-/// Summary type for validation
+/// Validation point in the experiment flow
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub enum SummaryType {
+pub enum ValidationPoint {
     Init,
     Final,
 }
 
-/// Init or final validation summary for an experiment
-/// Stores full-dataset validation results for selected genomes:
-/// - best_ce: always present (best genome by cross-entropy)
-/// - best_acc: present if different from best_ce
-/// - best_fitness: present if different from both (when using combined fitness)
+/// Type of genome being validated
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum GenomeValidationType {
+    BestCe,
+    BestAcc,
+    BestFitness,
+}
+
+/// Full-dataset validation result for a single genome at a checkpoint
+/// Deduplication: genome_hash is used to skip re-validation of already-validated genomes
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationSummary {
     pub id: i64,
+    pub flow_id: Option<i64>,
     pub experiment_id: i64,
-    pub summary_type: SummaryType,
-    /// Best by CE genome (always present)
-    pub best_ce_val: f64,
-    pub best_ce_acc: f64,
-    /// Best by Accuracy genome (None if same as best_ce)
-    pub best_acc_ce: Option<f64>,
-    pub best_acc_acc: Option<f64>,
-    /// Best by Fitness genome (None if same as best_ce or best_acc)
-    pub best_fitness_ce: Option<f64>,
-    pub best_fitness_acc: Option<f64>,
+    pub validation_point: ValidationPoint,
+    pub genome_type: GenomeValidationType,
+    pub genome_hash: String,
+    pub ce: f64,
+    pub accuracy: f64,
     pub created_at: DateTime<Utc>,
 }
 

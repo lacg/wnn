@@ -41,6 +41,9 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .route("/api/flows/:id/stop", post(stop_flow))
         .route("/api/flows/:id/restart", post(restart_flow))
         .route("/api/flows/:id/pid", patch(update_flow_pid))
+        .route("/api/flows/:id/validations", get(get_flow_validations))
+        // Validations
+        .route("/api/validations/check", get(check_cached_validation))
         // Checkpoints
         .route("/api/checkpoints", get(list_checkpoints).post(create_checkpoint))
         .route("/api/checkpoints/:id", get(get_checkpoint).delete(delete_checkpoint))
@@ -207,13 +210,12 @@ async fn get_validation_summaries(
 
 #[derive(Debug, Deserialize)]
 pub struct CreateValidationSummaryRequest {
-    pub summary_type: String,
-    pub best_ce_val: f64,
-    pub best_ce_acc: f64,
-    pub best_acc_ce: Option<f64>,
-    pub best_acc_acc: Option<f64>,
-    pub best_fitness_ce: Option<f64>,
-    pub best_fitness_acc: Option<f64>,
+    pub flow_id: Option<i64>,
+    pub validation_point: String,  // 'init' or 'final'
+    pub genome_type: String,       // 'best_ce', 'best_acc', 'best_fitness'
+    pub genome_hash: String,
+    pub ce: f64,
+    pub accuracy: f64,
 }
 
 async fn create_validation_summary(
@@ -223,16 +225,53 @@ async fn create_validation_summary(
 ) -> impl IntoResponse {
     match crate::db::queries::upsert_validation_summary(
         &state.db,
+        req.flow_id,
         experiment_id,
-        &req.summary_type,
-        req.best_ce_val,
-        req.best_ce_acc,
-        req.best_acc_ce,
-        req.best_acc_acc,
-        req.best_fitness_ce,
-        req.best_fitness_acc,
+        &req.validation_point,
+        &req.genome_type,
+        &req.genome_hash,
+        req.ce,
+        req.accuracy,
     ).await {
         Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({"id": id}))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CheckCachedValidationQuery {
+    pub genome_hash: String,
+}
+
+async fn check_cached_validation(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<CheckCachedValidationQuery>,
+) -> impl IntoResponse {
+    match crate::db::queries::get_cached_validation(&state.db, &query.genome_hash).await {
+        Ok(Some((ce, accuracy))) => (StatusCode::OK, Json(serde_json::json!({
+            "found": true,
+            "ce": ce,
+            "accuracy": accuracy
+        }))).into_response(),
+        Ok(None) => (StatusCode::OK, Json(serde_json::json!({
+            "found": false
+        }))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+async fn get_flow_validations(
+    State(state): State<Arc<AppState>>,
+    Path(flow_id): Path<i64>,
+) -> impl IntoResponse {
+    match crate::db::queries::get_flow_validation_summaries(&state.db, flow_id).await {
+        Ok(summaries) => (StatusCode::OK, Json(summaries)).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),

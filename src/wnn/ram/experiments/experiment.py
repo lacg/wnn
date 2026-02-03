@@ -180,7 +180,6 @@ class Experiment:
 		tracker: Optional[Any] = None,  # ExperimentTracker for V2 tracking
 		flow_id: Optional[int] = None,
 		shutdown_check: Optional[Callable[[], bool]] = None,  # Callable returning True if shutdown requested
-		run_init_validation: bool = False,  # Run full validation on seed population before optimization
 	):
 		"""
 		Initialize experiment.
@@ -195,7 +194,6 @@ class Experiment:
 			tracker: Optional V2 tracker for direct database writes
 			flow_id: Optional flow ID for V2 tracking
 			shutdown_check: Optional callable that returns True if shutdown requested
-			run_init_validation: If True, run full validation on seed population before optimization starts
 		"""
 		self.config = config
 		self.evaluator = evaluator
@@ -206,7 +204,6 @@ class Experiment:
 		self.tracker = tracker
 		self.flow_id = flow_id
 		self.shutdown_check = shutdown_check
-		self.run_init_validation = run_init_validation
 
 		# Derived properties
 		self.vocab_size = evaluator.vocab_size
@@ -319,12 +316,18 @@ class Experiment:
 			except Exception as e:
 				self.log(f"  Warning: Failed to set up V2 tracking: {e}")
 
-		# Run init validation on seed population if requested (first experiment only)
-		if self.run_init_validation and tracker_experiment_id:
-			self._run_init_validation(
-				initial_genome=initial_genome,
-				initial_population=initial_population,
-				experiment_id=tracker_experiment_id,
+		# Run INIT validation on seed population
+		# First evaluate to get baseline metrics, then run full validation on best genomes
+		seed_pop = initial_population or ([initial_genome] if initial_genome else None)
+		if seed_pop:
+			self.log("  Evaluating initial population for validation selection...")
+			init_evals = self.evaluator.evaluate_batch(seed_pop)
+			self._run_validation(
+				population=seed_pop,
+				evals=init_evals,
+				validation_point='init',
+				experiment_id=tracker_experiment_id or self.experiment_id,
+				flow_id=self.flow_id,
 			)
 
 		# Mark experiment as running via dashboard API
@@ -357,11 +360,16 @@ class Experiment:
 			from wnn.ram.strategies.connectivity.generic_strategies import StopReason
 			was_shutdown = result.stop_reason == StopReason.SHUTDOWN if result.stop_reason else False
 
-			# Run final validation (skip if shutdown was requested)
+			# Run FINAL validation (skip if shutdown was requested)
 			if not was_shutdown and result.final_population:
-				self._run_final_validation(
-					final_population=result.final_population,
+				# Get final evals from the last iteration
+				final_evals = self.evaluator.evaluate_batch(result.final_population)
+				self._run_validation(
+					population=result.final_population,
+					evals=final_evals,
+					validation_point='final',
 					experiment_id=tracker_experiment_id or self.experiment_id,
+					flow_id=self.flow_id,
 				)
 
 			# V2 tracking: update experiment status based on whether shutdown was requested
@@ -506,225 +514,164 @@ class Experiment:
 
 		return str(filepath)
 
+	def _compute_genome_hash(self, genome: ClusterGenome) -> str:
+		"""
+		Compute a unique hash for a genome based on its configuration.
+
+		The hash is based on bits_per_cluster, neurons_per_cluster, and connections.
+		Two genomes with the same hash will produce identical results.
+		"""
+		import hashlib
+
+		# Create a string representation of the genome's defining characteristics
+		parts = [
+			",".join(str(b) for b in genome.bits_per_cluster),
+			",".join(str(n) for n in genome.neurons_per_cluster),
+		]
+		if genome.connections is not None:
+			parts.append(",".join(str(c) for c in genome.connections))
+
+		config_str = "|".join(parts)
+		return hashlib.sha256(config_str.encode()).hexdigest()[:16]
+
 	def _select_validation_genomes(
 		self,
 		genomes: list[ClusterGenome],
+		evals: list[tuple[float, float]],
 		fitness_calculator: Optional[Any] = None,
-	) -> list[tuple[ClusterGenome, str]]:
+	) -> list[tuple[ClusterGenome, str, float, float]]:
 		"""
-		Select 1-3 genomes for full validation: best CE, best Acc, best Fitness (if different).
-
-		Uses fast sampled evaluation to identify candidates.
+		Select 1-3 genomes for validation: best CE, best Acc, best Fitness (if different).
 
 		Args:
-			genomes: Population of genomes to select from
+			genomes: Population of genomes
+			evals: List of (ce, acc) tuples from training evaluation
 			fitness_calculator: Optional fitness calculator for combined fitness ranking
 
 		Returns:
-			List of (genome, label) tuples where label is 'best_ce', 'best_acc', or 'best_fitness'
+			List of (genome, label, ce, acc) tuples
 		"""
-		if not genomes:
+		if not genomes or not evals:
 			return []
 
-		# Fast evaluation on sampled data to identify candidates
-		results = self.evaluator.evaluate_batch(genomes)
-		evals = list(zip(genomes, results))
+		genome_evals = list(zip(genomes, evals))
 
 		# Sort by CE (lower = better) and Acc (higher = better)
-		by_ce = sorted(evals, key=lambda x: x[1][0])
-		by_acc = sorted(evals, key=lambda x: -x[1][1])
+		by_ce = sorted(genome_evals, key=lambda x: x[1][0])
+		by_acc = sorted(genome_evals, key=lambda x: -x[1][1])
 
 		# Best by CE (always included)
-		best_ce_genome = by_ce[0][0]
-		selected = [(best_ce_genome, 'best_ce')]
+		best_ce_genome, (best_ce_ce, best_ce_acc) = by_ce[0]
+		selected = [(best_ce_genome, 'best_ce', best_ce_ce, best_ce_acc)]
 
 		# Best by Acc (if different from best_ce)
-		best_acc_genome = by_acc[0][0]
+		best_acc_genome, (best_acc_ce, best_acc_acc) = by_acc[0]
 		if best_acc_genome is not best_ce_genome:
-			selected.append((best_acc_genome, 'best_acc'))
+			selected.append((best_acc_genome, 'best_acc', best_acc_ce, best_acc_acc))
 
 		# Best by Fitness (if using combined fitness and different from both)
 		if fitness_calculator is not None:
 			try:
-				# Calculate fitness scores for ranking
-				scored = [(g, fitness_calculator.calculate_fitness(ce, acc)) for g, (ce, acc) in evals]
-				by_fitness = sorted(scored, key=lambda x: -x[1])  # higher fitness = better
-				best_fitness_genome = by_fitness[0][0]
+				scored = [(g, fitness_calculator.calculate_fitness(ce, acc), ce, acc)
+						  for g, (ce, acc) in genome_evals]
+				by_fitness = sorted(scored, key=lambda x: -x[1])
+				best_fitness_genome, _, bf_ce, bf_acc = by_fitness[0]
 
 				if best_fitness_genome is not best_ce_genome and best_fitness_genome is not best_acc_genome:
-					selected.append((best_fitness_genome, 'best_fitness'))
+					selected.append((best_fitness_genome, 'best_fitness', bf_ce, bf_acc))
 			except Exception:
-				pass  # Skip fitness selection if calculator fails
+				pass
 
 		return selected
 
-	def _run_init_validation(
+	def _run_validation(
 		self,
-		initial_genome: Optional[ClusterGenome],
-		initial_population: Optional[list[ClusterGenome]],
+		population: list[ClusterGenome],
+		evals: list[tuple[float, float]],
+		validation_point: str,  # 'init' or 'final'
 		experiment_id: int,
-	) -> None:
-		"""
-		Run full validation on selected seed genomes before optimization starts.
-
-		Selects 1-3 genomes (best CE, best Acc, best Fitness if different) using
-		fast sampled evaluation, then trains on FULL training data and evaluates
-		on FULL validation data for accurate baseline metrics.
-		"""
-		self.log("")
-		self.log("=" * 60)
-		self.log("  INIT BASELINE VALIDATION (Full Dataset)")
-		self.log("=" * 60)
-
-		# Collect seed genomes
-		seed_genomes = []
-		if initial_population:
-			seed_genomes = list(initial_population)
-		elif initial_genome:
-			seed_genomes = [initial_genome]
-
-		if not seed_genomes:
-			self.log("  No seed genomes to evaluate, skipping init validation")
-			return
-
-		try:
-			# Select 1-3 candidates using fast sampled evaluation
-			self.log(f"  Selecting best genomes from {len(seed_genomes)} candidates...")
-			selected = self._select_validation_genomes(seed_genomes)
-
-			if not selected:
-				self.log("  No genomes selected for validation")
-				return
-
-			self.log(f"  Selected {len(selected)} genome(s) for full validation: {[label for _, label in selected]}")
-
-			# Run full validation on selected genomes (train full + eval full)
-			genomes_to_validate = [g for g, _ in selected]
-			full_results = self.evaluator.evaluate_batch_full(genomes_to_validate)
-
-			# Build validation summary
-			best_ce_val, best_ce_acc = None, None
-			best_acc_ce, best_acc_acc = None, None
-			best_fitness_ce, best_fitness_acc = None, None
-
-			for (genome, label), (ce, acc) in zip(selected, full_results):
-				if label == 'best_ce':
-					best_ce_val, best_ce_acc = ce, acc
-					self.log(f"  Best CE genome:      CE={ce:.4f}, Acc={acc:.4%}")
-				elif label == 'best_acc':
-					best_acc_ce, best_acc_acc = ce, acc
-					self.log(f"  Best Acc genome:     CE={ce:.4f}, Acc={acc:.4%}")
-				elif label == 'best_fitness':
-					best_fitness_ce, best_fitness_acc = ce, acc
-					self.log(f"  Best Fitness genome: CE={ce:.4f}, Acc={acc:.4%}")
-
-			self.log("=" * 60)
-			self.log("")
-
-			# Record as initial progress on experiment
-			if self.tracker and experiment_id and best_ce_val is not None:
-				try:
-					self.tracker.update_experiment_progress(
-						experiment_id,
-						current_iteration=0,
-						best_ce=best_ce_val,
-						best_accuracy=best_ce_acc,
-					)
-				except Exception as e:
-					self.log(f"  Warning: Failed to update experiment progress: {e}")
-
-			# Store validation summary via dashboard client
-			if self.dashboard_client and self.experiment_id and best_ce_val is not None:
-				try:
-					self.dashboard_client.create_validation_summary(
-						self.experiment_id,
-						summary_type='init',
-						best_ce_val=best_ce_val,
-						best_ce_acc=best_ce_acc,
-						best_acc_ce=best_acc_ce,
-						best_acc_acc=best_acc_acc,
-						best_fitness_ce=best_fitness_ce,
-						best_fitness_acc=best_fitness_acc,
-					)
-					self.log("  Init validation summary saved to dashboard")
-				except Exception as e:
-					self.log(f"  Warning: Failed to save init validation summary: {e}")
-
-		except Exception as e:
-			self.log(f"  Warning: Init validation failed: {e}")
-
-	def _run_final_validation(
-		self,
-		final_population: list[ClusterGenome],
-		experiment_id: int,
+		flow_id: Optional[int] = None,
 		fitness_calculator: Optional[Any] = None,
 	) -> None:
 		"""
-		Run full validation on selected genomes at end of optimization.
+		Run full validation on selected genomes from population.
 
-		Selects 1-3 genomes (best CE, best Acc, best Fitness if different) using
-		fast sampled evaluation, then trains on FULL training data and evaluates
-		on FULL validation data for accurate final metrics.
+		For each selected genome (best_ce, best_acc, best_fitness):
+		1. Check if genome_hash already exists in summaries (via dashboard API)
+		2. If found: skip validation, use cached values
+		3. If not found: run full validation (train full + eval full)
+		4. Store result via dashboard API
+
+		This deduplication means:
+		- Init of experiment N reuses final validation from experiment N-1
+		- Only genuinely new genomes trigger expensive full validation
+
+		Args:
+			population: List of genomes to select from
+			evals: Training evaluation results (ce, acc) for each genome
+			validation_point: 'init' or 'final'
+			experiment_id: Experiment ID for storing summaries
+			flow_id: Optional flow ID for organizing summaries
+			fitness_calculator: Optional fitness calculator for ranking
 		"""
 		self.log("")
 		self.log("=" * 60)
-		self.log("  FINAL VALIDATION (Full Dataset)")
+		self.log(f"  {validation_point.upper()} VALIDATION (Full Dataset)")
 		self.log("=" * 60)
 
-		if not final_population:
-			self.log("  No final population to evaluate")
+		if not population or not evals:
+			self.log("  No population to validate")
 			return
 
 		try:
-			# Select 1-3 candidates using fast sampled evaluation
-			self.log(f"  Selecting best genomes from {len(final_population)} candidates...")
-			selected = self._select_validation_genomes(final_population, fitness_calculator)
+			# Select 1-3 best genomes
+			selected = self._select_validation_genomes(population, evals, fitness_calculator)
 
 			if not selected:
 				self.log("  No genomes selected for validation")
 				return
 
-			self.log(f"  Selected {len(selected)} genome(s) for full validation: {[label for _, label in selected]}")
+			self.log(f"  Selected {len(selected)} genome(s): {[label for _, label, _, _ in selected]}")
 
-			# Run full validation on selected genomes (train full + eval full)
-			genomes_to_validate = [g for g, _ in selected]
-			full_results = self.evaluator.evaluate_batch_full(genomes_to_validate)
+			# Process each selected genome
+			for genome, genome_type, train_ce, train_acc in selected:
+				genome_hash = self._compute_genome_hash(genome)
 
-			# Build validation summary
-			best_ce_val, best_ce_acc = None, None
-			best_acc_ce, best_acc_acc = None, None
-			best_fitness_ce, best_fitness_acc = None, None
+				# Check if already validated
+				cached = None
+				if self.dashboard_client:
+					try:
+						cached = self.dashboard_client.check_cached_validation(genome_hash)
+					except Exception:
+						pass
 
-			for (genome, label), (ce, acc) in zip(selected, full_results):
-				if label == 'best_ce':
-					best_ce_val, best_ce_acc = ce, acc
-					self.log(f"  Best CE genome:      CE={ce:.4f}, Acc={acc:.4%}")
-				elif label == 'best_acc':
-					best_acc_ce, best_acc_acc = ce, acc
-					self.log(f"  Best Acc genome:     CE={ce:.4f}, Acc={acc:.4%}")
-				elif label == 'best_fitness':
-					best_fitness_ce, best_fitness_acc = ce, acc
-					self.log(f"  Best Fitness genome: CE={ce:.4f}, Acc={acc:.4%}")
+				if cached is not None:
+					ce, acc = cached
+					self.log(f"  {genome_type}: CE={ce:.4f}, Acc={acc:.4%} (cached)")
+				else:
+					# Run full validation
+					self.log(f"  {genome_type}: Running full validation...")
+					full_results = self.evaluator.evaluate_batch_full([genome])
+					ce, acc = full_results[0]
+					self.log(f"  {genome_type}: CE={ce:.4f}, Acc={acc:.4%} (validated)")
+
+				# Store summary via dashboard API
+				if self.dashboard_client and self.experiment_id:
+					try:
+						self.dashboard_client.create_validation_summary(
+							experiment_id=self.experiment_id,
+							validation_point=validation_point,
+							genome_type=genome_type,
+							genome_hash=genome_hash,
+							ce=ce,
+							accuracy=acc,
+							flow_id=flow_id,
+						)
+					except Exception as e:
+						self.log(f"  Warning: Failed to save {genome_type} summary: {e}")
 
 			self.log("=" * 60)
 			self.log("")
 
-			# Store validation summary via dashboard client
-			if self.dashboard_client and self.experiment_id and best_ce_val is not None:
-				try:
-					self.dashboard_client.create_validation_summary(
-						self.experiment_id,
-						summary_type='final',
-						best_ce_val=best_ce_val,
-						best_ce_acc=best_ce_acc,
-						best_acc_ce=best_acc_ce,
-						best_acc_acc=best_acc_acc,
-						best_fitness_ce=best_fitness_ce,
-						best_fitness_acc=best_fitness_acc,
-					)
-					self.log("  Final validation summary saved to dashboard")
-				except Exception as e:
-					self.log(f"  Warning: Failed to save final validation summary: {e}")
-
 		except Exception as e:
-			self.log(f"  Warning: Final validation failed: {e}")
+			self.log(f"  Warning: {validation_point} validation failed: {e}")

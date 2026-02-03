@@ -502,7 +502,6 @@ class Flow:
 
 				# Create and run experiment
 				# Run init validation on first experiment only (Phase 1a)
-				is_first_experiment = (idx == 0 and start_idx == 0)
 				experiment = Experiment(
 					config=exp_config,
 					evaluator=self.evaluator,
@@ -513,7 +512,6 @@ class Flow:
 					tracker=self.tracker,
 					flow_id=self._flow_id,
 					shutdown_check=self.shutdown_check,
-					run_init_validation=is_first_experiment,  # Only validate seed on first experiment
 				)
 
 				result = experiment.run(
