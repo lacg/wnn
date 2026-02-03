@@ -858,14 +858,14 @@
             </div>
           </div>
           <div class="val-chart-container">
-            <svg viewBox="0 0 {valChartSvgWidth} {valChartSvgHeight}" class="val-chart">
+            <svg viewBox="-20 0 {valChartSvgWidth + 20} {valChartSvgHeight}" class="val-chart">
               <!-- Y-axis labels (CE) -->
               <text x={valChartPadding.left - 8} y={valChartPadding.top + 4} text-anchor="end" class="axis-label">{valCeMaxPadded.toFixed(2)}</text>
               <text x={valChartPadding.left - 8} y={valChartPadding.top + valChartHeight} text-anchor="end" class="axis-label">{valCeMinPadded.toFixed(2)}</text>
               <text x={valChartPadding.left - 8} y={valChartPadding.top + valChartHeight / 2} text-anchor="end" class="axis-label">{((valCeMaxPadded + valCeMinPadded) / 2).toFixed(2)}</text>
 
               <!-- Y-axis title -->
-              <text x={30} y={valChartPadding.top + valChartHeight / 2} text-anchor="middle" class="axis-title" transform="rotate(-90, 30, {valChartPadding.top + valChartHeight / 2})">CE (Loss)</text>
+              <text x={-16} y={valChartPadding.top + valChartHeight / 2} text-anchor="middle" class="axis-title" transform="rotate(-90, -16, {valChartPadding.top + valChartHeight / 2})">CE (Loss)</text>
 
               <!-- Grid lines -->
               <line x1={valChartPadding.left} y1={valChartPadding.top} x2={valChartPadding.left + valChartWidth} y2={valChartPadding.top} stroke="var(--border)" stroke-dasharray="4" />
