@@ -1181,7 +1181,7 @@
           {@const isRunning = status === 'running'}
           {@const canEdit = canEditExperiment(i)}
           {@const isEditing = editingExpIndex === i}
-          {@const expId = dbExp?.id ?? getExperimentId(i)}
+          {@const expId = dbExp?.id ?? null}
           {@const expLink = expId ? `/experiments/${expId}` : null}
           {@const isClickable = expId !== null}
 

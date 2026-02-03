@@ -170,6 +170,15 @@ class ExperimentTracker(ABC):
         pass
 
     @abstractmethod
+    def get_experiment_by_flow_sequence(
+        self,
+        flow_id: int,
+        sequence_order: int,
+    ) -> Optional[dict]:
+        """Get experiment by flow_id and sequence_order. Returns experiment dict or None."""
+        pass
+
+    @abstractmethod
     def start_experiment(
         self,
         name: str,
@@ -375,6 +384,14 @@ class SqliteTracker(ExperimentTracker):
         # Status defaults to 'pending' in DB
         return exp_id
 
+    def get_experiment_by_flow_sequence(
+        self,
+        flow_id: int,
+        sequence_order: int,
+    ) -> Optional[dict]:
+        """Get experiment by flow_id and sequence_order."""
+        return self._db.get_experiment_by_flow_sequence(flow_id, sequence_order)
+
     def start_experiment(
         self,
         name: str,
@@ -564,6 +581,9 @@ class NoOpTracker(ExperimentTracker):
 
     def create_pending_experiment(self, name: str, flow_id: int, sequence_order: int, **kwargs) -> int:
         return self._get_id()
+
+    def get_experiment_by_flow_sequence(self, flow_id: int, sequence_order: int) -> Optional[dict]:
+        return None
 
     def start_experiment(self, name: str, **kwargs) -> int:
         return self._get_id()

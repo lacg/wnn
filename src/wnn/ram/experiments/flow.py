@@ -336,27 +336,34 @@ class Flow:
 				)
 				self.dashboard_client.flow_started(self._flow_id)
 				self.log(f"Registered flow {self._flow_id} with dashboard")
-
-				# Create all experiments upfront with pending status
-				if self.tracker and self._flow_id:
-					for idx, exp_config in enumerate(cfg.experiments):
-						opt_target = "bits" if exp_config.optimize_bits else "neurons" if exp_config.optimize_neurons else "connections"
-						phase_type = f"{'ga' if exp_config.experiment_type == 'ga' else 'ts'}_{opt_target}"
-						max_iters = exp_config.generations if exp_config.experiment_type == "ga" else exp_config.iterations
-
-						exp_id = self.tracker.create_pending_experiment(
-							name=exp_config.name,
-							flow_id=self._flow_id,
-							sequence_order=idx,
-							phase_type=phase_type,
-							max_iterations=max_iters,
-						)
-						self._experiment_ids[idx] = exp_id
-						self.log(f"Created pending experiment {exp_id}: {exp_config.name} (sequence_order={idx})")
 			except Exception as e:
 				self.log(f"Warning: Failed to register flow with dashboard: {e}")
 		elif self._flow_id is not None:
 			self.log(f"Using existing flow {self._flow_id}")
+
+		# Create all experiments upfront with pending status (for both new and existing flows)
+		# This ensures experiments exist in DB before we start running them
+		if self.tracker and self._flow_id:
+			for idx, exp_config in enumerate(cfg.experiments):
+				# Check if experiment already exists for this flow/sequence
+				existing_exp = self.tracker.get_experiment_by_flow_sequence(self._flow_id, idx)
+				if existing_exp:
+					self._experiment_ids[idx] = existing_exp["id"]
+					self.log(f"Found existing experiment {existing_exp['id']}: {exp_config.name} (sequence_order={idx})")
+				else:
+					opt_target = "bits" if exp_config.optimize_bits else "neurons" if exp_config.optimize_neurons else "connections"
+					phase_type = f"{'ga' if exp_config.experiment_type == 'ga' else 'ts'}_{opt_target}"
+					max_iters = exp_config.generations if exp_config.experiment_type == "ga" else exp_config.iterations
+
+					exp_id = self.tracker.create_pending_experiment(
+						name=exp_config.name,
+						flow_id=self._flow_id,
+						sequence_order=idx,
+						phase_type=phase_type,
+						max_iterations=max_iters,
+					)
+					self._experiment_ids[idx] = exp_id
+					self.log(f"Created pending experiment {exp_id}: {exp_config.name} (sequence_order={idx})")
 
 		# Load seed from checkpoint if specified
 		if cfg.seed_checkpoint_path and not seed_genome:
