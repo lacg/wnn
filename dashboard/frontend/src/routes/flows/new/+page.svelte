@@ -132,7 +132,8 @@
       });
 
       if (!response.ok) {
-        throw new Error('Failed to create flow');
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Failed to create flow (${response.status})`);
       }
 
       const flow = await response.json();
@@ -380,8 +381,8 @@
           {#each checkpoints as ckpt}
             <option value={ckpt.id}>
               {ckpt.name}
-              {#if ckpt.final_fitness}
-                (CE: {ckpt.final_fitness.toFixed(4)})
+              {#if ckpt.best_ce}
+                (CE: {ckpt.best_ce.toFixed(4)})
               {/if}
             </option>
           {/each}

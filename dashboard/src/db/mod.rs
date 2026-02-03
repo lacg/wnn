@@ -629,11 +629,28 @@ pub mod queries {
             .execute(pool)
             .await?;
 
-        // Delete checkpoints
+        // Get checkpoint file paths before deleting records
+        let checkpoint_paths: Vec<String> = sqlx::query_scalar(
+            "SELECT file_path FROM checkpoints WHERE experiment_id = ?"
+        )
+        .bind(exp_id)
+        .fetch_all(pool)
+        .await?;
+
+        // Delete checkpoint records
         sqlx::query("DELETE FROM checkpoints WHERE experiment_id = ?")
             .bind(exp_id)
             .execute(pool)
             .await?;
+
+        // Delete checkpoint files from disk (best-effort)
+        for path in checkpoint_paths {
+            if let Err(e) = std::fs::remove_file(&path) {
+                tracing::warn!("Failed to delete checkpoint file {}: {}", path, e);
+            } else {
+                tracing::info!("Deleted checkpoint file: {}", path);
+            }
+        }
 
         Ok(())
     }
