@@ -45,8 +45,8 @@ export interface Flow {
   pid: number | null;
 }
 
+// Flow-level configuration (normalized: experiments stored in experiments table, not here)
 export interface FlowConfig {
-  experiments: ExperimentSpec[];
   template: string | null;
   params: Record<string, unknown>;
 }

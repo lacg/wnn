@@ -346,11 +346,16 @@ pub mod queries {
         }
     }
 
+    /// Create a new flow
+    ///
+    /// Experiments are passed separately (not in FlowConfig) - they get stored in the experiments table.
+    /// This follows normalized design: Flow 1:N Experiments via FK, not embedded JSON.
     pub async fn create_flow(
         pool: &DbPool,
         name: &str,
         description: Option<&str>,
         config: &FlowConfig,
+        experiments: &[ExperimentSpec],
         seed_checkpoint_id: Option<i64>,
     ) -> Result<i64> {
         let now = Utc::now().to_rfc3339();
@@ -368,7 +373,41 @@ pub mod queries {
         .execute(pool)
         .await?;
 
-        Ok(result.last_insert_rowid())
+        let flow_id = result.last_insert_rowid();
+
+        // Create pending experiments for each experiment spec
+        for (idx, exp_spec) in experiments.iter().enumerate() {
+            // Derive phase_type from experiment spec
+            let opt_target = if exp_spec.optimize_bits {
+                "bits"
+            } else if exp_spec.optimize_neurons {
+                "neurons"
+            } else {
+                "connections"
+            };
+            let exp_type = match exp_spec.experiment_type {
+                crate::models::ExperimentType::Ga => "ga",
+                crate::models::ExperimentType::Ts => "ts",
+            };
+            let phase_type = format!("{}_{}", exp_type, opt_target);
+
+            // Get max_iterations from params if available
+            let max_iterations = exp_spec.params.get("generations")
+                .or_else(|| exp_spec.params.get("iterations"))
+                .and_then(|v| v.as_i64())
+                .map(|v| v as i32);
+
+            create_pending_experiment(
+                pool,
+                &exp_spec.name,
+                flow_id,
+                idx as i32,
+                Some(&phase_type),
+                max_iterations,
+            ).await?;
+        }
+
+        Ok(flow_id)
     }
 
     pub async fn update_flow(
@@ -924,6 +963,34 @@ pub mod queries {
         .bind(context_size)
         .bind(population_size)
         .bind(&now)
+        .bind(&now)
+        .execute(pool)
+        .await?;
+
+        Ok(result.last_insert_rowid())
+    }
+
+    /// Create a new experiment with pending status (for flow creation)
+    pub async fn create_pending_experiment(
+        pool: &DbPool,
+        name: &str,
+        flow_id: i64,
+        sequence_order: i32,
+        phase_type: Option<&str>,
+        max_iterations: Option<i32>,
+    ) -> Result<i64> {
+        let now = Utc::now().to_rfc3339();
+
+        let result = sqlx::query(
+            r#"INSERT INTO experiments (
+                name, flow_id, sequence_order, status, phase_type, max_iterations, created_at
+            ) VALUES (?, ?, ?, 'pending', ?, ?, ?)"#,
+        )
+        .bind(name)
+        .bind(flow_id)
+        .bind(sequence_order)
+        .bind(phase_type)
+        .bind(max_iterations.unwrap_or(250))
         .bind(&now)
         .execute(pool)
         .await?;

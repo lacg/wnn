@@ -105,13 +105,13 @@ pub struct Flow {
     pub pid: Option<i64>,
 }
 
+/// Flow configuration - flow-level settings only
+/// Experiments are stored in the experiments table, not here (normalized design)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlowConfig {
-    /// List of experiment configurations in sequence order
-    pub experiments: Vec<ExperimentSpec>,
     /// Template name (e.g., "standard-6-phase")
     pub template: Option<String>,
-    /// Additional parameters
+    /// Additional parameters (tier_config, generations, patience, etc)
     #[serde(default)]
     pub params: HashMap<String, serde_json::Value>,
 }
@@ -119,7 +119,6 @@ pub struct FlowConfig {
 impl Default for FlowConfig {
     fn default() -> Self {
         Self {
-            experiments: vec![],
             template: None,
             params: HashMap::new(),
         }

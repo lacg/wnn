@@ -35,7 +35,8 @@ pub fn routes(state: Arc<AppState>) -> Router {
         // Flows
         .route("/api/flows", get(list_flows).post(create_flow))
         .route("/api/flows/:id", get(get_flow).patch(update_flow).delete(delete_flow))
-        .route("/api/flows/:id/experiments", get(list_flow_experiments).post(link_experiment_to_flow))
+        .route("/api/flows/:id/experiments", get(list_flow_experiments).post(add_experiment_to_flow))
+        .route("/api/flows/:id/experiments/link", post(link_experiment_to_flow))
         .route("/api/flows/:id/stop", post(stop_flow))
         .route("/api/flows/:id/restart", post(restart_flow))
         .route("/api/flows/:id/pid", patch(update_flow_pid))
@@ -237,11 +238,18 @@ async fn list_flows(
     }
 }
 
+/// Request to create a new flow
+/// Experiments are passed separately (normalized design: Flow 1:N Experiments via FK)
 #[derive(Debug, Deserialize)]
 pub struct CreateFlowRequest {
     pub name: String,
     pub description: Option<String>,
+    /// Flow-level configuration (template name, shared params)
+    #[serde(default)]
     pub config: FlowConfig,
+    /// Experiments to create with the flow (stored in experiments table, not config)
+    #[serde(default)]
+    pub experiments: Vec<ExperimentSpec>,
     pub seed_checkpoint_id: Option<i64>,
 }
 
@@ -254,6 +262,7 @@ async fn create_flow(
         &req.name,
         req.description.as_deref(),
         &req.config,
+        &req.experiments,
         req.seed_checkpoint_id,
     ).await {
         Ok(id) => {
@@ -408,6 +417,96 @@ async fn link_experiment_to_flow(
     ).await {
         Ok(true) => (StatusCode::OK, Json(serde_json::json!({"linked": true}))).into_response(),
         Ok(false) => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Experiment not found"}))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+/// Add a new experiment to a flow
+/// This creates the experiment in the experiments table with pending status
+#[derive(Debug, Deserialize)]
+pub struct AddExperimentRequest {
+    pub experiment: ExperimentSpec,
+    /// If not specified, will be appended as the last experiment
+    pub sequence_order: Option<i32>,
+}
+
+async fn add_experiment_to_flow(
+    State(state): State<Arc<AppState>>,
+    Path(flow_id): Path<i64>,
+    Json(req): Json<AddExperimentRequest>,
+) -> impl IntoResponse {
+    // Verify flow exists
+    let flow = match crate::db::queries::get_flow(&state.db, flow_id).await {
+        Ok(Some(f)) => f,
+        Ok(None) => return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Flow not found"})),
+        ).into_response(),
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    };
+
+    // Check flow is not already running
+    if flow.status == FlowStatus::Running {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Cannot add experiments to a running flow"})),
+        ).into_response();
+    }
+
+    // Get current experiments to determine sequence_order if not specified
+    let existing = match crate::db::queries::list_flow_experiments(&state.db, flow_id).await {
+        Ok(e) => e,
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    };
+
+    let sequence_order = req.sequence_order.unwrap_or(existing.len() as i32);
+
+    // Derive phase_type from experiment spec
+    let exp_spec = &req.experiment;
+    let opt_target = if exp_spec.optimize_bits {
+        "bits"
+    } else if exp_spec.optimize_neurons {
+        "neurons"
+    } else {
+        "connections"
+    };
+    let exp_type = match exp_spec.experiment_type {
+        ExperimentType::Ga => "ga",
+        ExperimentType::Ts => "ts",
+    };
+    let phase_type = format!("{}_{}", exp_type, opt_target);
+
+    // Get max_iterations from params if available
+    let max_iterations = exp_spec.params.get("generations")
+        .or_else(|| exp_spec.params.get("iterations"))
+        .and_then(|v| v.as_i64())
+        .map(|v| v as i32);
+
+    // Create the experiment
+    match crate::db::queries::create_pending_experiment(
+        &state.db,
+        &exp_spec.name,
+        flow_id,
+        sequence_order,
+        Some(&phase_type),
+        max_iterations,
+    ).await {
+        Ok(id) => {
+            // Fetch the created experiment
+            match crate::db::queries::get_experiment(&state.db, id).await {
+                Ok(Some(exp)) => (StatusCode::CREATED, Json(exp)).into_response(),
+                _ => (StatusCode::CREATED, Json(serde_json::json!({"id": id}))).into_response(),
+            }
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),

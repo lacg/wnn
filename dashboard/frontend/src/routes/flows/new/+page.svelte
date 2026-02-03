@@ -95,6 +95,7 @@
     error = null;
 
     try {
+      // Experiments are passed separately (normalized design: Flow 1:N Experiments via FK)
       const response = await fetch('/api/flows', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -102,7 +103,6 @@
           name,
           description: description || null,
           config: {
-            experiments: experiments, // Generated from template
             template,
             params: {
               phase_order: phaseOrder,
@@ -126,6 +126,7 @@
               gating_threshold: gatingThreshold
             }
           },
+          experiments: experiments, // Experiments stored in DB table, not in config
           seed_checkpoint_id: seedCheckpointId
         })
       });

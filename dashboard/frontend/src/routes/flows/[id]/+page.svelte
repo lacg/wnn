@@ -5,25 +5,9 @@
   import { formatDate } from '$lib/dateFormat';
   import { currentFlow, flows } from '$lib/stores';
 
-  // Helper: ensure value is always an array (handles {} being stored instead of [])
-  // This is critical because the database can store config_json as '{}' which
-  // deserializes to an empty object, not an empty array
-  function ensureArray<T>(val: unknown): T[] {
-    if (Array.isArray(val)) return val as T[];
-    // Handle null, undefined, objects, and any other non-array values
-    return [];
-  }
-
-  // Helper: get experiments from flow config safely
-  // Always returns an array, never null/undefined/object
-  function getFlowExperiments(f: Flow | null): Array<{ name: string; experiment_type: string; optimize_bits?: boolean; optimize_neurons?: boolean; optimize_connections?: boolean; params?: Record<string, unknown> }> {
-    if (!f) return [];
-    if (!f.config) return [];
-    const experiments = f.config.experiments;
-    // Explicitly check for array - don't trust the type system
-    if (!Array.isArray(experiments)) return [];
-    return experiments;
-  }
+  // Note: With normalized design, experiments come from the experiments table (via DB),
+  // NOT from flow.config.experiments. The `experiments` array is fetched separately
+  // via /api/flows/${flowId}/experiments and used directly.
 
   let flow: Flow | null = null;
 
@@ -224,7 +208,8 @@
   }
 
   // =========================================================================
-  // Experiment Editing (for pending phases in running flows)
+  // Experiment Editing (for pending experiments)
+  // Note: Experiments are now stored in the DB, not in flow.config
   // =========================================================================
 
   function canEditExperiment(index: number): boolean {
@@ -234,26 +219,25 @@
     // Can't edit completed or cancelled flows
     if (flow.status !== 'running') return false;
 
-    // For running flows, check if this phase has started
-    const experiments = getFlowExperiments(flow);
+    // For running flows, check if this experiment has started
     const exp = experiments[index];
     if (!exp) return false;
-    const status = getExpStatus(exp, index);
-    return status === 'pending';
+    return exp.status === 'pending';
   }
 
   function startEditExperiment(index: number) {
     if (!flow || !canEditExperiment(index)) return;
-    const experiments = getFlowExperiments(flow);
     const exp = experiments[index];
     if (!exp) return;
     editingExpIndex = index;
+    // Derive experiment_type and optimize_* from phase_type
+    const isGa = exp.phase_type?.startsWith('ga') ?? true;
     editingExp = {
       name: exp.name,
-      experiment_type: exp.experiment_type,
-      optimize_bits: exp.optimize_bits,
-      optimize_neurons: exp.optimize_neurons,
-      optimize_connections: exp.optimize_connections
+      experiment_type: isGa ? 'ga' : 'ts',
+      optimize_bits: exp.phase_type?.includes('bits') ?? false,
+      optimize_neurons: exp.phase_type?.includes('neurons') ?? true,
+      optimize_connections: exp.phase_type?.includes('connections') ?? false
     };
   }
 
@@ -263,62 +247,24 @@
   }
 
   async function saveExperiment() {
-    if (!flow || editingExpIndex === null || !editingExp) return;
-    saving = true;
-
-    try {
-      // Update the experiment in the config
-      const currentExperiments = getFlowExperiments(flow);
-      const updatedExperiments = [...currentExperiments];
-      updatedExperiments[editingExpIndex] = {
-        ...updatedExperiments[editingExpIndex],
-        ...editingExp
-      };
-
-      const updatedConfig = {
-        ...flow.config,
-        experiments: updatedExperiments
-      };
-
-      const res = await fetch(`/api/flows/${flowId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ config: updatedConfig })
-      });
-
-      if (!res.ok) throw new Error('Failed to save experiment');
-
-      editingExpIndex = null;
-      editingExp = null;
-      await loadFlow();
-    } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to save';
-    } finally {
-      saving = false;
-    }
+    // TODO: Implement experiment update via PATCH /api/experiments/:id
+    // For now, experiment editing is not supported after creation
+    error = 'Experiment editing not yet implemented - delete and re-add instead';
+    editingExpIndex = null;
+    editingExp = null;
   }
 
   async function deleteExperiment(index: number) {
     if (!flow || !canEditExperiment(index)) return;
-    const experiments = getFlowExperiments(flow);
-    if (!confirm(`Delete "${experiments[index]?.name || 'Experiment'}"? This cannot be undone.`)) return;
+    const exp = experiments[index];
+    if (!exp) return;
+    if (!confirm(`Delete "${exp.name}"? This cannot be undone.`)) return;
 
     saving = true;
     try {
-      const updatedExperiments = experiments.filter((_, i) => i !== index);
-
-      const updatedConfig = {
-        ...flow.config,
-        experiments: updatedExperiments
-      };
-
-      const res = await fetch(`/api/flows/${flowId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ config: updatedConfig })
-      });
-
-      if (!res.ok) throw new Error('Failed to delete experiment');
+      // TODO: Add DELETE /api/experiments/:id endpoint
+      // For now, just show a message
+      error = 'Experiment deletion not yet implemented';
       await loadFlow();
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to delete';
@@ -332,31 +278,26 @@
     saving = true;
 
     try {
-      const currentExperiments = getFlowExperiments(flow);
-      const updatedExperiments = [
-        ...currentExperiments,
-        {
-          name: newPhase.name || `Phase ${currentExperiments.length + 1}`,
-          experiment_type: newPhase.experiment_type,
-          optimize_bits: newPhase.optimize_bits,
-          optimize_neurons: newPhase.optimize_neurons,
-          optimize_connections: newPhase.optimize_connections,
-          params: {}
-        }
-      ];
-
-      const updatedConfig = {
-        ...flow.config,
-        experiments: updatedExperiments
-      };
-
-      const res = await fetch(`/api/flows/${flowId}`, {
-        method: 'PATCH',
+      // Call the new dedicated endpoint to add experiment to the experiments table
+      const res = await fetch(`/api/flows/${flowId}/experiments`, {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ config: updatedConfig })
+        body: JSON.stringify({
+          experiment: {
+            name: newPhase.name || `Experiment ${experiments.length + 1}`,
+            experiment_type: newPhase.experiment_type,
+            optimize_bits: newPhase.optimize_bits,
+            optimize_neurons: newPhase.optimize_neurons,
+            optimize_connections: newPhase.optimize_connections,
+            params: {}
+          }
+        })
       });
 
-      if (!res.ok) throw new Error('Failed to add experiment');
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Failed to add experiment');
+      }
 
       showAddPhase = false;
       newPhase = {
@@ -428,7 +369,17 @@
     duplicating = true;
 
     try {
-      // Create a new flow with the same config but different name
+      // Convert experiments to ExperimentSpec format for the new API
+      // Experiments are now passed separately, not in config
+      const experimentSpecs = experiments.map(exp => ({
+        name: exp.name,
+        experiment_type: exp.phase_type?.startsWith('ga') ? 'ga' : 'ts',
+        optimize_bits: exp.phase_type?.includes('bits') ?? false,
+        optimize_neurons: exp.phase_type?.includes('neurons') ?? false,
+        optimize_connections: exp.phase_type?.includes('connections') ?? false,
+        params: {}
+      }));
+
       const newName = `${flow.name} (copy)`;
       const response = await fetch('/api/flows', {
         method: 'POST',
@@ -436,7 +387,8 @@
         body: JSON.stringify({
           name: newName,
           description: flow.description,
-          config: flow.config
+          config: flow.config,  // Just params, no experiments
+          experiments: experimentSpecs  // Experiments passed separately
         })
       });
 
@@ -571,7 +523,6 @@
 
   async function restartFromExperiment(index: number) {
     if (!flow) return;
-    const experiments = getFlowExperiments(flow);
     const expName = experiments[index]?.name || `Experiment ${index + 1}`;
     const msg = flow.status === 'running'
       ? `Stop current experiment and restart from "${expName}"? The current experiment will be cancelled and earlier experiments will be skipped.`
@@ -600,95 +551,6 @@
     return checkpoints.find(c => c.experiment_id === experimentId && c.is_final) ?? null;
   }
 
-  // Get experiment status: completed, running, or pending
-  function getExpStatus(expSpec: { name: string; experiment_type: string; optimize_neurons?: boolean; optimize_bits?: boolean; optimize_connections?: boolean }, index: number): 'completed' | 'running' | 'pending' | 'failed' | 'cancelled' {
-    // Check the actual experiment record from the DB (this has the authoritative status)
-    // Try to match by sequence_order, then by name, then by array position
-    let actualExp = experiments.find(e => e.sequence_order === index);
-    if (!actualExp) {
-      // Fallback: match by name
-      actualExp = experiments.find(e => e.name === expSpec.name);
-    }
-    if (!actualExp && index < experiments.length) {
-      // Fallback: match by array position (experiments are returned in order)
-      actualExp = experiments[index];
-    }
-
-    if (actualExp) {
-      // Map DB status to display status
-      if (actualExp.status === 'completed') return 'completed';
-      if (actualExp.status === 'running') return 'running';
-      if (actualExp.status === 'failed') return 'failed';
-      if (actualExp.status === 'cancelled') return 'cancelled';
-      // pending, queued, paused all show as pending
-      return 'pending';
-    }
-
-    // Fallback: if flow is running but no experiments yet, assume first is running
-    if (flow?.status === 'running' && experiments.length === 0 && index === 0) {
-      return 'running';
-    }
-
-    // Fallback: if flow is completed, all experiments should be completed
-    if (flow?.status === 'completed') {
-      return 'completed';
-    }
-
-    // Fallback: if flow failed or cancelled, check if this experiment ran
-    if (flow?.status === 'failed' || flow?.status === 'cancelled') {
-      // If we have no experiment record, it probably never ran (pending)
-      return 'pending';
-    }
-
-    return 'pending';
-  }
-
-  // Check if this is the currently running experiment
-  function isRunningExperiment(expSpec: { name: string; experiment_type: string; optimize_neurons?: boolean; optimize_bits?: boolean; optimize_connections?: boolean }, index: number): boolean {
-    // Check if the experiment is running directly
-    const actualExp = experiments.find(e => e.sequence_order === index) ||
-                      experiments.find(e => e.name === expSpec.name) ||
-                      (index < experiments.length ? experiments[index] : null);
-
-    if (actualExp?.status === 'running') return true;
-
-    // Fallback: if flow is running but no experiments exist yet, assume first is running
-    if (flow?.status === 'running' && experiments.length === 0 && index === 0) {
-      return true;
-    }
-
-    return false;
-  }
-
-  // Get metrics for completed experiment
-  function getExpMetrics(expSpec: { name: string; experiment_type: string; optimize_neurons?: boolean; optimize_bits?: boolean; optimize_connections?: boolean }, index: number): { ce: number | null; acc: number | null } | null {
-    // Find the actual experiment
-    const actualExp = experiments.find(e => e.sequence_order === index) ||
-                      experiments.find(e => e.name === expSpec.name) ||
-                      (index < experiments.length ? experiments[index] : null);
-
-    if (!actualExp || actualExp.status !== 'completed') return null;
-
-    // Get metrics directly from the experiment (new simplified model)
-    if (actualExp.best_ce !== null || actualExp.best_accuracy !== null) {
-      return {
-        ce: actualExp.best_ce,
-        acc: actualExp.best_accuracy
-      };
-    }
-
-    // Fallback: try to get metrics from checkpoint
-    const checkpoint = checkpoints.find(c => c.experiment_id === actualExp.id);
-    if (checkpoint) {
-      return {
-        ce: checkpoint.best_ce,
-        acc: checkpoint.best_accuracy
-      };
-    }
-
-    return null;
-  }
-
   // Format CE value
   function formatCE(ce: number | null): string {
     if (ce === null) return '-';
@@ -701,95 +563,22 @@
     return `${(acc * 100).toFixed(2)}%`;
   }
 
-  // Get the actual experiment ID from the config spec index
-  // This maps from the flow config experiment spec to the actual Experiment record in DB
-  function getExperimentId(index: number): number | null {
-    // First, try direct match by sequence_order (most reliable)
-    const bySequence = experiments.find(e => e.sequence_order === index);
-    if (bySequence) return bySequence.id;
-
-    // Get the config spec for name matching
-    const flowExperiments = getFlowExperiments(flow);
-    const expSpec = flowExperiments[index];
-
-    // Try to match by name
-    if (expSpec) {
-      const byName = experiments.find(e => e.name === expSpec.name);
-      if (byName) return byName.id;
-    }
-
-    // Fallback: match by array position (experiments are typically in order)
-    if (index < experiments.length) {
-      return experiments[index].id;
-    }
-
-    return null;
-  }
-
-  // Get the link URL for an experiment - can take either config index or DB experiment directly
-  function getExperimentLinkById(expId: number, status: string): string | null {
-    if (status === 'running') {
-      return '/';
-    } else if (status === 'completed') {
-      return `/experiments/${expId}`;
-    }
-    return null;
-  }
-
-  // Get the link URL for an experiment box (by config index)
-  function getExperimentLink(index: number): string | null {
-    const flowExps = getFlowExperiments(flow);
-    if (!flowExps[index]) return null;
-    const status = getExpStatus(flowExps[index], index);
-
-    if (status === 'running') {
-      // Running experiments link to live dashboard
-      return '/';
-    } else if (status === 'completed') {
-      // Completed experiments link to experiment detail page
-      const expId = getExperimentId(index);
-      return expId ? `/experiments/${expId}` : null;
+  // Get the link URL for an experiment based on its status
+  function getExperimentLink(exp: Experiment): string | null {
+    if (exp.status === 'running') {
+      return '/';  // Running experiments link to live dashboard
+    } else if (exp.status === 'completed') {
+      return `/experiments/${exp.id}`;  // Completed experiments link to detail page
     }
     // Pending experiments are not clickable
     return null;
   }
 
-  // Helper to get display experiments - always show all config specs, merge DB data when available
-  // Takes flow and experiments as params to make Svelte reactivity work correctly
-  function getDisplayExperiments(f: Flow | null, exps: Experiment[]): Array<{ exp: Experiment | null; spec: ReturnType<typeof getFlowExperiments>[0] | null; index: number }> {
-    const configExps = getFlowExperiments(f);
-    if (configExps.length === 0) return [];
-
-    // Track which DB experiments have been matched
-    const matchedExpIds = new Set<number>();
-
-    // Find running experiment (if flow is running, there should be one)
-    const runningExp = exps.find(e => e.status === 'running');
-
-    // Always start from config specs to show all planned experiments
-    return configExps.map((spec, i) => {
-      // Try to find matching DB experiment by sequence_order first
-      let dbExp = exps.find(e => e.sequence_order === i && !matchedExpIds.has(e.id));
-
-      // Then try by name
-      if (!dbExp) {
-        dbExp = exps.find(e => e.name === spec.name && !matchedExpIds.has(e.id));
-      }
-
-      // If still no match and we have a running experiment, assign it to first unmatched spec
-      if (!dbExp && runningExp && !matchedExpIds.has(runningExp.id)) {
-        const matchedCount = matchedExpIds.size;
-        if (i === matchedCount) {
-          dbExp = runningExp;
-        }
-      }
-
-      if (dbExp) {
-        matchedExpIds.add(dbExp.id);
-      }
-
-      return { exp: dbExp ?? null, spec, index: i };
-    });
+  // Helper to get display experiments - experiments from DB are the source of truth
+  // Sorted by sequence_order
+  function getDisplayExperiments(_f: Flow | null, exps: Experiment[]): Experiment[] {
+    // Sort by sequence_order
+    return [...exps].sort((a, b) => (a.sequence_order ?? 0) - (b.sequence_order ?? 0));
   }
 </script>
 
@@ -1116,22 +905,22 @@
 
     <section class="section">
       <div class="section-header">
-        <h2>Experiments ({(getFlowExperiments(flow)).length})</h2>
+        <h2>Experiments ({experiments.length})</h2>
         {#if flow.status === 'pending' || flow.status === 'running' || flow.status === 'failed'}
           <button class="btn btn-sm btn-secondary" on:click={() => showAddPhase = true}>
-            + Add Phase
+            + Add Experiment
           </button>
         {/if}
       </div>
 
       {#if showAddPhase}
         <div class="add-phase-form">
-          <h3>Add New Phase</h3>
+          <h3>Add New Experiment</h3>
           <div class="edit-exp-form">
             <div class="form-row">
               <div class="form-group">
                 <label>Name</label>
-                <input type="text" bind:value={newPhase.name} placeholder="Extra Phase 1: GA Neurons" />
+                <input type="text" bind:value={newPhase.name} placeholder="Extra Experiment: GA Neurons" />
               </div>
               <div class="form-group">
                 <label>Type</label>
@@ -1166,7 +955,7 @@
             <div class="form-actions">
               <button class="btn btn-secondary" on:click={() => showAddPhase = false}>Cancel</button>
               <button class="btn btn-primary" on:click={addExperiment} disabled={saving}>
-                {saving ? 'Adding...' : 'Add Phase'}
+                {saving ? 'Adding...' : 'Add Experiment'}
               </button>
             </div>
           </div>
@@ -1174,16 +963,17 @@
       {/if}
 
       <div class="experiments-list">
-        {#each displayExperiments as { exp: dbExp, spec, index: i }}
-          {@const displaySpec = spec ?? { name: dbExp?.name ?? 'Unknown', experiment_type: 'ga', optimize_neurons: true, optimize_bits: false, optimize_connections: false }}
-          {@const status = dbExp ? dbExp.status : (spec ? getExpStatus(spec, i) : 'pending')}
-          {@const metrics = spec ? getExpMetrics(spec, i) : null}
-          {@const isRunning = status === 'running'}
+        {#each displayExperiments as exp, i}
+          {@const isRunning = exp.status === 'running'}
+          {@const isCompleted = exp.status === 'completed'}
+          {@const isPending = exp.status === 'pending'}
           {@const canEdit = canEditExperiment(i)}
           {@const isEditing = editingExpIndex === i}
-          {@const expId = dbExp?.id ?? null}
-          {@const expLink = expId ? `/experiments/${expId}` : null}
-          {@const isClickable = expId !== null}
+          {@const expLink = getExperimentLink(exp)}
+          {@const expType = exp.phase_type?.startsWith('ga') ? 'GA' : exp.phase_type?.startsWith('ts') ? 'TS' : 'GA'}
+          {@const optimizesBits = exp.phase_type?.includes('bits')}
+          {@const optimizesNeurons = exp.phase_type?.includes('neurons')}
+          {@const optimizesConnections = exp.phase_type?.includes('connections')}
 
           {#if isEditing && editingExp}
             <div class="experiment-item editing">
@@ -1234,122 +1024,120 @@
                 </div>
               </div>
             </div>
-          {:else}
-            {#if expLink}
-              <a href={expLink} class="experiment-item-link" class:running={isRunning} class:completed={status === 'completed'} class:pending={status === 'pending'}>
-                <div class="exp-order" class:order-completed={status === 'completed'} class:order-running={isRunning}>
-                  {#if status === 'completed'}
-                    <span class="checkmark">✓</span>
-                  {:else}
-                    {i + 1}
-                  {/if}
-                </div>
-                <div class="exp-content">
-                  <div class="exp-header">
-                    <div class="exp-name">{displaySpec.name}</div>
-                    <span class="status-indicator" class:status-completed={status === 'completed'} class:status-running={isRunning} class:status-pending={status === 'pending'}>
-                      {status}
-                    </span>
-                    {#if isRunning}
-                      <span class="live-indicator">
-                        <span class="pulse"></span>
-                        Live
-                      </span>
-                    {/if}
-                  </div>
-                  <div class="exp-meta">
-                    <span class="exp-type">{displaySpec.experiment_type.toUpperCase()}</span>
-                    {#if displaySpec.optimize_bits}
-                      <span class="exp-tag">Bits</span>
-                    {/if}
-                    {#if displaySpec.optimize_neurons}
-                      <span class="exp-tag">Neurons</span>
-                    {/if}
-                    {#if displaySpec.optimize_connections}
-                      <span class="exp-tag">Connections</span>
-                    {/if}
-                  </div>
-                  {#if metrics}
-                    <div class="exp-metrics">
-                      <span class="metric">
-                        <span class="metric-label">CE:</span>
-                        <span class="metric-value">{formatCE(metrics.ce)}</span>
-                      </span>
-                      <span class="metric">
-                        <span class="metric-label">Acc:</span>
-                        <span class="metric-value">{formatAccuracy(metrics.acc)}</span>
-                      </span>
-                    </div>
-                  {/if}
-                </div>
-                <div class="exp-actions">
-                  {#if (status === 'completed' || status === 'running') && (flow.status === 'running' || flow.status === 'failed' || flow.status === 'cancelled' || flow.status === 'completed')}
-                    <button class="btn btn-sm btn-secondary" title="Restart from this experiment" on:click|stopPropagation|preventDefault={() => restartFromExperiment(i)}>
-                      ↻ Restart
-                    </button>
-                  {/if}
-                  <span class="view-arrow">→</span>
-                </div>
-              </a>
-            {:else}
-              <div class="experiment-item" class:running={isRunning} class:completed={status === 'completed'}>
-                <div class="exp-order" class:order-completed={status === 'completed'} class:order-running={isRunning}>
-                  {#if status === 'completed'}
-                    <span class="checkmark">✓</span>
-                  {:else}
-                    {i + 1}
-                  {/if}
-                </div>
-                <div class="exp-content">
-                  <div class="exp-header">
-                    <div class="exp-name">{displaySpec.name}</div>
-                    <span class="status-indicator" class:status-completed={status === 'completed'} class:status-running={isRunning} class:status-pending={status === 'pending'}>
-                      {status}
-                    </span>
-                  </div>
-                  <div class="exp-meta">
-                    <span class="exp-type">{displaySpec.experiment_type.toUpperCase()}</span>
-                    {#if displaySpec.optimize_bits}
-                      <span class="exp-tag">Bits</span>
-                    {/if}
-                    {#if displaySpec.optimize_neurons}
-                      <span class="exp-tag">Neurons</span>
-                    {/if}
-                    {#if displaySpec.optimize_connections}
-                      <span class="exp-tag">Connections</span>
-                    {/if}
-                  </div>
-                  {#if metrics}
-                    <div class="exp-metrics">
-                      <span class="metric">
-                        <span class="metric-label">CE:</span>
-                        <span class="metric-value">{formatCE(metrics.ce)}</span>
-                      </span>
-                      <span class="metric">
-                        <span class="metric-label">Acc:</span>
-                        <span class="metric-value">{formatAccuracy(metrics.acc)}</span>
-                      </span>
-                    </div>
-                  {/if}
-                </div>
-                <div class="exp-actions">
-                  {#if canEdit}
-                    <button class="btn-icon" title="Edit" on:click={() => startEditExperiment(i)}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-                      </svg>
-                    </button>
-                    <button class="btn-icon btn-danger" title="Delete" on:click={() => deleteExperiment(i)}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <polyline points="3 6 5 6 21 6"></polyline>
-                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                      </svg>
-                    </button>
-                  {/if}
-                </div>
+          {:else if expLink}
+            <a href={expLink} class="experiment-item-link" class:running={isRunning} class:completed={isCompleted} class:pending={isPending}>
+              <div class="exp-order" class:order-completed={isCompleted} class:order-running={isRunning}>
+                {#if isCompleted}
+                  <span class="checkmark">✓</span>
+                {:else}
+                  {i + 1}
+                {/if}
               </div>
-            {/if}
+              <div class="exp-content">
+                <div class="exp-header">
+                  <div class="exp-name">{exp.name}</div>
+                  <span class="status-indicator" class:status-completed={isCompleted} class:status-running={isRunning} class:status-pending={isPending}>
+                    {exp.status}
+                  </span>
+                  {#if isRunning}
+                    <span class="live-indicator">
+                      <span class="pulse"></span>
+                      Live
+                    </span>
+                  {/if}
+                </div>
+                <div class="exp-meta">
+                  <span class="exp-type">{expType}</span>
+                  {#if optimizesBits}
+                    <span class="exp-tag">Bits</span>
+                  {/if}
+                  {#if optimizesNeurons}
+                    <span class="exp-tag">Neurons</span>
+                  {/if}
+                  {#if optimizesConnections}
+                    <span class="exp-tag">Connections</span>
+                  {/if}
+                </div>
+                {#if isCompleted && (exp.best_ce !== null || exp.best_accuracy !== null)}
+                  <div class="exp-metrics">
+                    <span class="metric">
+                      <span class="metric-label">CE:</span>
+                      <span class="metric-value">{formatCE(exp.best_ce)}</span>
+                    </span>
+                    <span class="metric">
+                      <span class="metric-label">Acc:</span>
+                      <span class="metric-value">{formatAccuracy(exp.best_accuracy)}</span>
+                    </span>
+                  </div>
+                {/if}
+              </div>
+              <div class="exp-actions">
+                {#if (isCompleted || isRunning) && (flow.status === 'running' || flow.status === 'failed' || flow.status === 'cancelled' || flow.status === 'completed')}
+                  <button class="btn btn-sm btn-secondary" title="Restart from this experiment" on:click|stopPropagation|preventDefault={() => restartFromExperiment(i)}>
+                    ↻ Restart
+                  </button>
+                {/if}
+                <span class="view-arrow">→</span>
+              </div>
+            </a>
+          {:else}
+            <div class="experiment-item" class:running={isRunning} class:completed={isCompleted}>
+              <div class="exp-order" class:order-completed={isCompleted} class:order-running={isRunning}>
+                {#if isCompleted}
+                  <span class="checkmark">✓</span>
+                {:else}
+                  {i + 1}
+                {/if}
+              </div>
+              <div class="exp-content">
+                <div class="exp-header">
+                  <div class="exp-name">{exp.name}</div>
+                  <span class="status-indicator" class:status-completed={isCompleted} class:status-running={isRunning} class:status-pending={isPending}>
+                    {exp.status}
+                  </span>
+                </div>
+                <div class="exp-meta">
+                  <span class="exp-type">{expType}</span>
+                  {#if optimizesBits}
+                    <span class="exp-tag">Bits</span>
+                  {/if}
+                  {#if optimizesNeurons}
+                    <span class="exp-tag">Neurons</span>
+                  {/if}
+                  {#if optimizesConnections}
+                    <span class="exp-tag">Connections</span>
+                  {/if}
+                </div>
+                {#if isCompleted && (exp.best_ce !== null || exp.best_accuracy !== null)}
+                  <div class="exp-metrics">
+                    <span class="metric">
+                      <span class="metric-label">CE:</span>
+                      <span class="metric-value">{formatCE(exp.best_ce)}</span>
+                    </span>
+                    <span class="metric">
+                      <span class="metric-label">Acc:</span>
+                      <span class="metric-value">{formatAccuracy(exp.best_accuracy)}</span>
+                    </span>
+                  </div>
+                {/if}
+              </div>
+              <div class="exp-actions">
+                {#if canEdit}
+                  <button class="btn-icon" title="Edit" on:click={() => startEditExperiment(i)}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                    </svg>
+                  </button>
+                  <button class="btn-icon btn-danger" title="Delete" on:click={() => deleteExperiment(i)}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <polyline points="3 6 5 6 21 6"></polyline>
+                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                    </svg>
+                  </button>
+                {/if}
+              </div>
+            </div>
           {/if}
         {/each}
       </div>
