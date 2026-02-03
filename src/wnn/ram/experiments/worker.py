@@ -305,14 +305,19 @@ class FlowWorker:
                 # First, recover any stale flows (from crashed workers)
                 self._recover_stale_flows()
 
-                # Check for queued flows
+                # Check for queued flows (higher priority)
                 flow_data = self._get_next_queued_flow()
 
                 if flow_data:
                     self._execute_flow(flow_data)
                 else:
-                    # No work, wait before polling again
-                    time.sleep(self.poll_interval)
+                    # No flows, check for pending gating jobs
+                    gating_experiment = self._get_next_gating_experiment()
+                    if gating_experiment:
+                        self._execute_gating_job(gating_experiment)
+                    else:
+                        # No work, wait before polling again
+                        time.sleep(self.poll_interval)
 
             except KeyboardInterrupt:
                 break
@@ -563,6 +568,178 @@ class FlowWorker:
             exp_configs.append(exp_config)
 
         return exp_configs
+
+    # =========================================================================
+    # Gating Job Methods
+    # =========================================================================
+
+    def _get_next_gating_experiment(self) -> Optional[dict]:
+        """Get the next experiment with pending gating analysis."""
+        try:
+            experiments = self.client.get_pending_gating_experiments()
+            if experiments:
+                return experiments[0]
+        except Exception as e:
+            self._log(f"Failed to fetch pending gating experiments: {e}")
+        return None
+
+    def _execute_gating_job(self, experiment: dict):
+        """Execute gating analysis for an experiment."""
+        from datetime import datetime
+        import gzip
+        import json
+
+        experiment_id = experiment["id"]
+        experiment_name = experiment.get("name", f"Experiment {experiment_id}")
+
+        self._log(f"=" * 60)
+        self._log(f"Starting gating analysis: {experiment_name} (ID: {experiment_id})")
+        self._log(f"=" * 60)
+
+        try:
+            # Update status to running
+            # Note: We'd need an endpoint for this, for now we proceed
+            self._log("  Loading checkpoint...")
+
+            # Find the latest checkpoint for this experiment
+            checkpoints = self.client.list_checkpoints(experiment_id=experiment_id, limit=10)
+            if not checkpoints:
+                raise ValueError(f"No checkpoints found for experiment {experiment_id}")
+
+            # Sort by created_at and get the latest
+            checkpoints = sorted(checkpoints, key=lambda c: c.get("created_at", ""), reverse=True)
+            checkpoint = checkpoints[0]
+            checkpoint_path = checkpoint.get("file_path")
+
+            if not checkpoint_path:
+                raise ValueError(f"Checkpoint has no file_path")
+
+            self._log(f"  Using checkpoint: {checkpoint.get('name')} ({checkpoint_path})")
+
+            # Load checkpoint
+            if checkpoint_path.endswith(".gz"):
+                with gzip.open(checkpoint_path, "rt") as f:
+                    ckpt_data = json.load(f)
+            else:
+                with open(checkpoint_path, "r") as f:
+                    ckpt_data = json.load(f)
+
+            # Extract best genomes from checkpoint
+            best_genomes = self._extract_best_genomes(ckpt_data)
+            self._log(f"  Found {len(best_genomes)} unique genomes to test")
+
+            if not best_genomes:
+                raise ValueError("No genomes found in checkpoint")
+
+            # Create evaluator
+            context_size = experiment.get("context_size", self.context_size)
+            evaluator = self._create_evaluator(context_size)
+
+            # Run gating analysis for each genome
+            from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
+
+            gating_results = []
+
+            for genome_type, genome_data in best_genomes.items():
+                self._log(f"  Analyzing {genome_type}...")
+
+                # Convert to ClusterGenome
+                genome = ClusterGenome(
+                    bits_per_cluster=genome_data["bits_per_cluster"],
+                    neurons_per_cluster=genome_data["neurons_per_cluster"],
+                    connections=genome_data.get("connections"),
+                )
+
+                # Run gated evaluation
+                result = evaluator.evaluate_single_full_gated(
+                    genome=genome,
+                    train_tokens=self._train_tokens,
+                    neurons_per_gate=8,
+                    bits_per_neuron=12,
+                    threshold=0.5,
+                    batch_size=256,
+                    logger=self._log,
+                )
+
+                gating_results.append({
+                    "genome_type": genome_type,
+                    "ce": result["ce"],
+                    "acc": result["acc"],
+                    "gated_ce": result["gated_ce"],
+                    "gated_acc": result["gated_acc"],
+                    "gating_config": result["gating_config"],
+                })
+
+            # Build results object
+            results = {
+                "completed_at": datetime.utcnow().isoformat() + "Z",
+                "genomes_tested": len(gating_results),
+                "results": gating_results,
+                "error": None,
+            }
+
+            # Update experiment with results
+            self.client.update_gating_results(experiment_id, results)
+            self._log(f"Gating analysis completed for experiment {experiment_id}")
+
+        except Exception as e:
+            self._log(f"Gating analysis failed: {e}")
+            import traceback
+            traceback.print_exc()
+
+            # Update with failure
+            results = {
+                "completed_at": datetime.utcnow().isoformat() + "Z",
+                "genomes_tested": 0,
+                "results": [],
+                "error": str(e),
+            }
+            try:
+                self.client.update_gating_results(experiment_id, results)
+            except Exception:
+                pass
+
+    def _extract_best_genomes(self, ckpt_data: dict) -> dict:
+        """Extract unique best genomes from checkpoint data.
+
+        Returns dict mapping genome_type to genome data, deduplicated.
+        """
+        genomes = {}
+
+        # Try different checkpoint formats
+        if "best_genome" in ckpt_data:
+            genomes["best_fitness"] = ckpt_data["best_genome"]
+
+        if "best_ce_genome" in ckpt_data:
+            genomes["best_ce"] = ckpt_data["best_ce_genome"]
+
+        if "best_acc_genome" in ckpt_data:
+            genomes["best_acc"] = ckpt_data["best_acc_genome"]
+
+        # If only one genome type found, use it for all
+        if len(genomes) == 1:
+            only_genome = list(genomes.values())[0]
+            if "best_fitness" not in genomes:
+                genomes["best_fitness"] = only_genome
+            if "best_ce" not in genomes:
+                genomes["best_ce"] = only_genome
+            if "best_acc" not in genomes:
+                genomes["best_acc"] = only_genome
+
+        # Deduplicate by config hash
+        seen_hashes = {}
+        deduped = {}
+
+        for genome_type, genome_data in genomes.items():
+            # Compute simple hash from bits/neurons
+            config_hash = str(genome_data.get("bits_per_cluster", [])) + str(genome_data.get("neurons_per_cluster", []))
+            if config_hash not in seen_hashes:
+                seen_hashes[config_hash] = genome_type
+                deduped[genome_type] = genome_data
+            else:
+                self._log(f"    {genome_type} same as {seen_hashes[config_hash]}, skipping")
+
+        return deduped
 
     def _parse_fitness_calculator(self, fitness_calculator: Optional[str]) -> FitnessCalculatorType:
         """Parse fitness calculator string to enum."""

@@ -181,6 +181,48 @@ pub struct Experiment {
     pub current_iteration: Option<i32>,
     pub best_ce: Option<f64>,
     pub best_accuracy: Option<f64>,
+    /// Gating analysis status: NULL (not run), 'pending', 'running', 'completed', 'failed'
+    pub gating_status: Option<GatingStatus>,
+    /// Gating analysis results (JSON blob)
+    pub gating_results: Option<GatingResults>,
+}
+
+/// Status of gating analysis for an experiment
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum GatingStatus {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+}
+
+/// Results of gating analysis
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatingResults {
+    pub completed_at: Option<DateTime<Utc>>,
+    pub genomes_tested: usize,
+    pub results: Vec<GatingResult>,
+    pub error: Option<String>,
+}
+
+/// Result for a single genome in gating analysis
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatingResult {
+    pub genome_type: String,  // "best_ce", "best_acc", "best_fitness"
+    pub ce: f64,
+    pub acc: f64,
+    pub gated_ce: f64,
+    pub gated_acc: f64,
+    pub gating_config: GatingConfig,
+}
+
+/// Configuration used for gating
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatingConfig {
+    pub neurons_per_gate: usize,
+    pub bits_per_neuron: usize,
+    pub threshold: f64,
 }
 
 // =============================================================================

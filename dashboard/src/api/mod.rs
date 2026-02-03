@@ -29,6 +29,9 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .route("/api/experiments/:id", get(get_experiment).patch(update_experiment))
         .route("/api/experiments/:id/iterations", get(get_experiment_iterations))
         .route("/api/experiments/:id/summaries", get(get_validation_summaries).post(create_validation_summary))
+        // Gating
+        .route("/api/experiments/:id/run-gating", post(run_gating))
+        .route("/api/experiments/:id/gating", get(get_gating_status).put(update_gating_results))
         // Iterations
         .route("/api/iterations/:id/genomes", get(get_iteration_genomes))
         // Snapshot
@@ -43,6 +46,7 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .route("/api/flows/:id/pid", patch(update_flow_pid))
         .route("/api/flows/:id/heartbeat", post(update_flow_heartbeat))
         .route("/api/flows/:id/validations", get(get_flow_validations))
+        .route("/api/flows/:id/run-gating", post(run_flow_gating))
         // Validations
         .route("/api/validations/check", get(check_cached_validation))
         // Checkpoints
@@ -278,6 +282,208 @@ async fn get_flow_validations(
             Json(serde_json::json!({"error": e.to_string()})),
         ).into_response(),
     }
+}
+
+// =============================================================================
+// Gating handlers
+// =============================================================================
+
+/// Trigger gating analysis for an experiment
+/// Sets gating_status to 'pending' so worker can pick it up
+async fn run_gating(
+    State(state): State<Arc<AppState>>,
+    Path(experiment_id): Path<i64>,
+) -> impl IntoResponse {
+    // Verify experiment exists and is completed
+    let experiment = match crate::db::queries::get_experiment(&state.db, experiment_id).await {
+        Ok(Some(exp)) => exp,
+        Ok(None) => return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Experiment not found"})),
+        ).into_response(),
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    };
+
+    // Check experiment is completed
+    if experiment.status != ExperimentStatus::Completed {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Experiment must be completed to run gating analysis"})),
+        ).into_response();
+    }
+
+    // Check if gating is already running or completed
+    if let Some(ref status) = experiment.gating_status {
+        match status {
+            GatingStatus::Pending | GatingStatus::Running => {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({"error": "Gating analysis already in progress"})),
+                ).into_response();
+            }
+            GatingStatus::Completed => {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({"error": "Gating analysis already completed. Delete results to re-run."})),
+                ).into_response();
+            }
+            GatingStatus::Failed => {
+                // Allow re-running after failure
+            }
+        }
+    }
+
+    // Set status to pending
+    match crate::db::queries::update_gating_status(&state.db, experiment_id, &GatingStatus::Pending).await {
+        Ok(true) => (StatusCode::OK, Json(serde_json::json!({
+            "experiment_id": experiment_id,
+            "gating_status": "pending",
+            "message": "Gating analysis queued"
+        }))).into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Experiment not found"})),
+        ).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+/// Get gating status and results for an experiment
+async fn get_gating_status(
+    State(state): State<Arc<AppState>>,
+    Path(experiment_id): Path<i64>,
+) -> impl IntoResponse {
+    match crate::db::queries::get_experiment(&state.db, experiment_id).await {
+        Ok(Some(exp)) => (StatusCode::OK, Json(serde_json::json!({
+            "experiment_id": experiment_id,
+            "gating_status": exp.gating_status,
+            "gating_results": exp.gating_results
+        }))).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Experiment not found"})),
+        ).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+/// Request to update gating results
+#[derive(Debug, Deserialize)]
+pub struct UpdateGatingResultsRequest {
+    pub results: GatingResults,
+}
+
+/// Update gating results for an experiment (called by worker when complete)
+async fn update_gating_results(
+    State(state): State<Arc<AppState>>,
+    Path(experiment_id): Path<i64>,
+    Json(req): Json<UpdateGatingResultsRequest>,
+) -> impl IntoResponse {
+    // First set status to completed, then update results
+    match crate::db::queries::update_gating_results(&state.db, experiment_id, &req.results).await {
+        Ok(true) => (StatusCode::OK, Json(serde_json::json!({
+            "experiment_id": experiment_id,
+            "gating_status": "completed",
+            "genomes_tested": req.results.genomes_tested
+        }))).into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Experiment not found"})),
+        ).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+/// Trigger gating analysis for all completed experiments in a flow
+async fn run_flow_gating(
+    State(state): State<Arc<AppState>>,
+    Path(flow_id): Path<i64>,
+) -> impl IntoResponse {
+    // Get all experiments for this flow
+    let experiments = match crate::db::queries::list_flow_experiments(&state.db, flow_id).await {
+        Ok(exps) => exps,
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    };
+
+    if experiments.is_empty() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "No experiments found for this flow"})),
+        ).into_response();
+    }
+
+    // Queue gating for each completed experiment that hasn't been analyzed
+    let mut queued = Vec::new();
+    let mut skipped = Vec::new();
+    let mut errors = Vec::new();
+
+    for exp in experiments {
+        // Skip non-completed experiments
+        if exp.status != ExperimentStatus::Completed {
+            skipped.push(serde_json::json!({
+                "experiment_id": exp.id,
+                "reason": "not_completed"
+            }));
+            continue;
+        }
+
+        // Skip if gating is already pending, running, or completed
+        if let Some(ref status) = exp.gating_status {
+            match status {
+                GatingStatus::Pending | GatingStatus::Running | GatingStatus::Completed => {
+                    skipped.push(serde_json::json!({
+                        "experiment_id": exp.id,
+                        "reason": format!("gating_{}", match status {
+                            GatingStatus::Pending => "pending",
+                            GatingStatus::Running => "running",
+                            GatingStatus::Completed => "completed",
+                            GatingStatus::Failed => "failed",
+                        })
+                    }));
+                    continue;
+                }
+                GatingStatus::Failed => {
+                    // Allow re-running after failure
+                }
+            }
+        }
+
+        // Queue gating
+        match crate::db::queries::update_gating_status(&state.db, exp.id, &GatingStatus::Pending).await {
+            Ok(true) => queued.push(exp.id),
+            Ok(false) => errors.push(serde_json::json!({
+                "experiment_id": exp.id,
+                "error": "not_found"
+            })),
+            Err(e) => errors.push(serde_json::json!({
+                "experiment_id": exp.id,
+                "error": e.to_string()
+            })),
+        }
+    }
+
+    (StatusCode::OK, Json(serde_json::json!({
+        "flow_id": flow_id,
+        "queued": queued,
+        "skipped": skipped,
+        "errors": errors,
+        "message": format!("{} experiments queued for gating analysis", queued.len())
+    }))).into_response()
 }
 
 // =============================================================================

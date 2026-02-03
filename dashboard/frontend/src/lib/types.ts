@@ -64,6 +64,30 @@ export interface ExperimentSpec {
 // Experiment types
 // =============================================================================
 
+export type GatingStatus = 'pending' | 'running' | 'completed' | 'failed';
+
+export interface GatingConfig {
+  neurons_per_gate: number;
+  bits_per_neuron: number;
+  threshold: number;
+}
+
+export interface GatingResult {
+  genome_type: string;  // 'best_ce', 'best_acc', 'best_fitness'
+  ce: number;
+  acc: number;
+  gated_ce: number;
+  gated_acc: number;
+  gating_config: GatingConfig;
+}
+
+export interface GatingResults {
+  completed_at: string | null;
+  genomes_tested: number;
+  results: GatingResult[];
+  error: string | null;
+}
+
 export interface Experiment {
   id: number;
   flow_id: number | null;
@@ -89,6 +113,9 @@ export interface Experiment {
   current_iteration: number | null;
   best_ce: number | null;
   best_accuracy: number | null;
+  // Gating analysis
+  gating_status: GatingStatus | null;
+  gating_results: GatingResults | null;
 }
 
 // =============================================================================

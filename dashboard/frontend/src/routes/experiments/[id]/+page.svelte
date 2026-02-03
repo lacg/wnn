@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
-  import type { Experiment, Iteration, GenomeEvaluation, Flow, ValidationSummary } from '$lib/types';
+  import type { Experiment, Iteration, GenomeEvaluation, Flow, ValidationSummary, GatingResults } from '$lib/types';
   import { formatDate } from '$lib/dateFormat';
 
   let experiment: Experiment | null = null;
@@ -18,6 +18,9 @@
   let genomeEvaluations: GenomeEvaluation[] = [];
   let loadingGenomes = false;
   let showIterationModal = false;
+
+  // Gating state
+  let gatingLoading = false;
 
   // Chart tooltip state
   let tooltipData: { x: number; y: number; iter: number; ce: number; acc: number | null; avgCe: number | null; avgAcc: number | null } | null = null;
@@ -145,6 +148,30 @@
     showIterationModal = false;
     selectedIteration = null;
     genomeEvaluations = [];
+  }
+
+  async function runGating() {
+    if (!experiment || gatingLoading) return;
+
+    gatingLoading = true;
+    try {
+      const res = await fetch(`/api/experiments/${experimentId}/run-gating`, {
+        method: 'POST'
+      });
+
+      if (res.ok) {
+        // Reload experiment to get updated gating_status
+        await loadExperiment();
+      } else {
+        const data = await res.json();
+        alert(data.error || 'Failed to start gating analysis');
+      }
+    } catch (e) {
+      console.error('Failed to start gating:', e);
+      alert('Failed to start gating analysis');
+    } finally {
+      gatingLoading = false;
+    }
   }
 
   function getStatusColor(status: string): string {
@@ -304,6 +331,19 @@
           {experiment.status}
         </span>
       </div>
+      <div class="header-right">
+        {#if experiment.status === 'completed' && !experiment.gating_status}
+          <button class="btn-secondary" on:click={runGating} disabled={gatingLoading}>
+            {gatingLoading ? '⏳ Starting...' : '🎯 Run Gating Analysis'}
+          </button>
+        {:else if experiment.gating_status === 'pending' || experiment.gating_status === 'running'}
+          <span class="gating-status running">⏳ Gating {experiment.gating_status}...</span>
+        {:else if experiment.gating_status === 'failed'}
+          <button class="btn-secondary" on:click={runGating} disabled={gatingLoading}>
+            🔄 Retry Gating
+          </button>
+        {/if}
+      </div>
     </div>
 
     <!-- Flow Progress Bar -->
@@ -414,6 +454,57 @@
             </div>
           {/if}
         </div>
+      </div>
+    {/if}
+
+    <!-- Gating Results -->
+    {#if experiment.gating_status === 'completed' && experiment.gating_results}
+      <div class="gating-section">
+        <div class="gating-header">
+          <span class="gating-title">🎯 Gating Analysis Results</span>
+          <span class="gating-meta">
+            {experiment.gating_results.genomes_tested} genomes tested
+          </span>
+        </div>
+        <div class="gating-table-container">
+          <table class="gating-table">
+            <thead>
+              <tr>
+                <th>Genome</th>
+                <th>CE (no gate)</th>
+                <th>CE (gated)</th>
+                <th>Δ CE</th>
+                <th>Acc (no gate)</th>
+                <th>Acc (gated)</th>
+                <th>Δ Acc</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each experiment.gating_results.results as result}
+                {@const ceDelta = result.gated_ce - result.ce}
+                {@const accDelta = result.gated_acc - result.acc}
+                <tr>
+                  <td class="genome-type">{result.genome_type.replace('_', ' ')}</td>
+                  <td class="mono">{result.ce.toFixed(4)}</td>
+                  <td class="mono">{result.gated_ce.toFixed(4)}</td>
+                  <td class="mono" class:delta-positive={ceDelta < 0} class:delta-negative={ceDelta > 0}>
+                    {ceDelta < 0 ? '↓' : ceDelta > 0 ? '↑' : ''}{Math.abs(ceDelta).toFixed(4)}
+                  </td>
+                  <td class="mono">{(result.acc * 100).toFixed(2)}%</td>
+                  <td class="mono">{(result.gated_acc * 100).toFixed(2)}%</td>
+                  <td class="mono" class:delta-positive={accDelta > 0} class:delta-negative={accDelta < 0}>
+                    {accDelta > 0 ? '↑' : accDelta < 0 ? '↓' : ''}{Math.abs(accDelta * 100).toFixed(2)}%
+                  </td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+        {#if experiment.gating_results.error}
+          <div class="gating-error">
+            Error: {experiment.gating_results.error}
+          </div>
+        {/if}
       </div>
     {/if}
 
@@ -1409,5 +1500,126 @@
     padding: 0.5rem;
     font-size: 1rem;
     color: var(--text-secondary);
+  }
+
+  /* Header actions */
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .btn-secondary {
+    padding: 0.5rem 1rem;
+    font-size: 0.9rem;
+    border: 1px solid var(--accent-blue);
+    border-radius: 0.375rem;
+    background: transparent;
+    color: var(--accent-blue);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .btn-secondary:hover:not(:disabled) {
+    background: var(--accent-blue);
+    color: white;
+  }
+
+  .btn-secondary:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .gating-status {
+    font-size: 0.9rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+  }
+
+  .gating-status.running {
+    background: rgba(59, 130, 246, 0.15);
+    color: var(--accent-blue);
+  }
+
+  /* Gating Results Section */
+  .gating-section {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    padding: 1rem;
+    margin-bottom: 1.5rem;
+    border-left: 4px solid var(--accent-purple, #9b59b6);
+  }
+
+  .gating-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .gating-title {
+    font-weight: 600;
+    color: var(--text-primary);
+    font-size: 1.1rem;
+  }
+
+  .gating-meta {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+  }
+
+  .gating-table-container {
+    overflow-x: auto;
+  }
+
+  .gating-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+  }
+
+  .gating-table th {
+    background: var(--bg-tertiary);
+    padding: 0.5rem 0.75rem;
+    text-align: center;
+    font-weight: 600;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .gating-table td {
+    padding: 0.5rem 0.75rem;
+    text-align: center;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .gating-table tr:last-child td {
+    border-bottom: none;
+  }
+
+  .gating-table .genome-type {
+    text-transform: capitalize;
+    font-weight: 500;
+    color: var(--text-primary);
+    text-align: left;
+  }
+
+  .gating-table .mono {
+    font-family: monospace;
+  }
+
+  .gating-error {
+    margin-top: 1rem;
+    padding: 0.75rem;
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid var(--accent-red);
+    border-radius: 0.25rem;
+    color: var(--accent-red);
+    font-size: 0.9rem;
   }
 </style>
