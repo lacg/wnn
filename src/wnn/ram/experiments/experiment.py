@@ -541,7 +541,11 @@ class Experiment:
 		fitness_calculator: Optional[Any] = None,
 	) -> list[tuple[ClusterGenome, str, float, float]]:
 		"""
-		Select 1-3 genomes for validation: best CE, best Acc, best Fitness (if different).
+		Select genomes for validation: best CE, best Acc, best Fitness.
+
+		Always returns all three types, even if they refer to the same genome.
+		This allows the frontend to display all markers. Duplicate computation
+		is avoided via genome_hash caching in _run_validation.
 
 		Args:
 			genomes: Population of genomes
@@ -564,21 +568,18 @@ class Experiment:
 		best_ce_genome, (best_ce_ce, best_ce_acc) = by_ce[0]
 		selected = [(best_ce_genome, 'best_ce', best_ce_ce, best_ce_acc)]
 
-		# Best by Acc (if different from best_ce)
+		# Best by Acc (always included, even if same genome as best_ce)
 		best_acc_genome, (best_acc_ce, best_acc_acc) = by_acc[0]
-		if best_acc_genome is not best_ce_genome:
-			selected.append((best_acc_genome, 'best_acc', best_acc_ce, best_acc_acc))
+		selected.append((best_acc_genome, 'best_acc', best_acc_ce, best_acc_acc))
 
-		# Best by Fitness (if using combined fitness and different from both)
+		# Best by Fitness (if using combined fitness)
 		if fitness_calculator is not None:
 			try:
 				scored = [(g, fitness_calculator.calculate_fitness(ce, acc), ce, acc)
 						  for g, (ce, acc) in genome_evals]
 				by_fitness = sorted(scored, key=lambda x: -x[1])
 				best_fitness_genome, _, bf_ce, bf_acc = by_fitness[0]
-
-				if best_fitness_genome is not best_ce_genome and best_fitness_genome is not best_acc_genome:
-					selected.append((best_fitness_genome, 'best_fitness', bf_ce, bf_acc))
+				selected.append((best_fitness_genome, 'best_fitness', bf_ce, bf_acc))
 			except Exception:
 				pass
 

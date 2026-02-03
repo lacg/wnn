@@ -940,11 +940,11 @@
 
               <!-- Tooltip -->
               {#if validationTooltip}
-                <g class="tooltip-group" transform="translate({validationTooltip.x}, {validationTooltip.y - 50})">
-                  <rect x="-60" y="-8" width="120" height="52" rx="4" fill="var(--bg-secondary)" stroke="var(--border)" />
-                  <text x="0" y="8" text-anchor="middle" class="tooltip-label">{validationTooltip.label}</text>
-                  <text x="0" y="24" text-anchor="middle" class="tooltip-type" fill={getGenomeTypeColor(validationTooltip.genomeType)}>{getGenomeTypeLabel(validationTooltip.genomeType)}</text>
-                  <text x="0" y="38" text-anchor="middle" class="tooltip-value">CE: {validationTooltip.ce.toFixed(4)} | Acc: {(validationTooltip.accuracy * 100).toFixed(2)}%</text>
+                <g class="tooltip-group" transform="translate({validationTooltip.x}, {validationTooltip.y - 70})">
+                  <rect x="-100" y="-10" width="200" height="70" rx="4" fill="var(--bg-secondary)" stroke="var(--border)" />
+                  <text x="0" y="10" text-anchor="middle" class="tooltip-label">{validationTooltip.label}</text>
+                  <text x="0" y="30" text-anchor="middle" class="tooltip-type" fill={getGenomeTypeColor(validationTooltip.genomeType)}>{getGenomeTypeLabel(validationTooltip.genomeType)}</text>
+                  <text x="0" y="50" text-anchor="middle" class="tooltip-value">CE: {validationTooltip.ce.toFixed(4)} | Acc: {(validationTooltip.accuracy * 100).toFixed(2)}%</text>
                 </g>
               {/if}
             </svg>
@@ -2440,42 +2440,41 @@
   }
 
   .val-chart .axis-label {
-    font-size: 10px;
+    font-size: 1rem;
     fill: var(--text-tertiary);
   }
 
   .val-chart .axis-label.x-label {
-    font-size: 9px;
+    font-size: 1rem;
   }
 
   .val-chart .axis-title {
-    font-size: 11px;
+    font-size: 1rem;
     fill: var(--text-secondary);
     font-weight: 500;
   }
 
   .val-chart .data-point {
     cursor: pointer;
-    transition: transform 0.15s;
   }
 
-  .val-chart .data-point:hover {
-    transform: scale(1.2);
+  .val-chart .tooltip-group {
+    pointer-events: none;
   }
 
   .val-chart .tooltip-label {
-    font-size: 10px;
+    font-size: 1rem;
     font-weight: 600;
     fill: var(--text-primary);
   }
 
   .val-chart .tooltip-type {
-    font-size: 9px;
+    font-size: 1rem;
     font-weight: 500;
   }
 
   .val-chart .tooltip-value {
-    font-size: 9px;
+    font-size: 1rem;
     fill: var(--text-secondary);
   }
 
