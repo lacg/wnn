@@ -1022,27 +1022,13 @@
                     {#if isCompleted}✓{:else}{i + 1}{/if}
                   </span>
                 </td>
-                <td class="col-name">
-                  {#if isEditingName && editingExp}
-                    <div class="inline-edit">
-                      <input
-                        type="text"
-                        bind:value={editingExp.name}
-                        class="inline-name-input"
-                        on:keydown={(e) => e.key === 'Enter' && saveExperiment()}
-                        on:keydown={(e) => e.key === 'Escape' && cancelEditExperiment()}
-                      />
-                      <button class="btn-icon btn-save" title="Save" on:click={saveExperiment}>✓</button>
-                      <button class="btn-icon" title="Cancel" on:click={cancelEditExperiment}>✕</button>
-                    </div>
-                  {:else}
-                    <a href={expLink} class="exp-name-link">
-                      {exp.name}
-                      {#if isRunning}
-                        <span class="live-badge"><span class="pulse"></span>Live</span>
-                      {/if}
-                    </a>
-                  {/if}
+                <td class="col-name clickable-cell">
+                  <a href={expLink} class="cell-link">
+                    {exp.name}
+                    {#if isRunning}
+                      <span class="live-badge"><span class="pulse"></span>Live</span>
+                    {/if}
+                  </a>
                 </td>
                 <td class="col-type">
                   <span class="type-badge" class:type-ga={expType === 'GA'} class:type-ts={expType === 'TS'}>{expType}</span>
@@ -1749,19 +1735,23 @@
     color: white;
   }
 
-  .exp-name-link {
-    display: inline-flex;
+  .clickable-cell {
+    padding: 0 !important;
+  }
+
+  .cell-link {
+    display: flex;
     align-items: center;
     gap: 0.5rem;
+    width: 100%;
+    height: 100%;
+    padding: 0.75rem 1rem;
     color: var(--text-primary);
     text-decoration: none;
-    padding: 0.25rem 0.5rem;
-    margin: -0.25rem -0.5rem;
-    border-radius: 4px;
     transition: background-color 0.15s, color 0.15s;
   }
 
-  .exp-name-link:hover {
+  .cell-link:hover {
     background: var(--bg-tertiary);
     color: var(--accent-blue);
   }
