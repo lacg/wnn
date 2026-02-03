@@ -685,7 +685,7 @@
 
 <style>
   .container {
-    max-width: 1200px;
+    max-width: 1400px;
     margin: 0 auto;
     padding: 1rem;
   }
@@ -1050,6 +1050,7 @@
     position: sticky;
     top: 0;
     z-index: 1;
+    text-align: center;
   }
 
   td {
@@ -1226,6 +1227,7 @@
     font-size: 1rem;
     position: sticky;
     top: 0;
+    text-align: center;
   }
 
   .genome-table td {
