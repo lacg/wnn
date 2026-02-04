@@ -126,8 +126,6 @@
     fitness_weight_acc: 1.0,
     min_accuracy_floor: 0,
     tier_config: '',
-    tier0_only: false,
-    enable_gating: false,
     phase_order: 'neurons_first',
     context_size: 4
   };
@@ -184,8 +182,6 @@
         editConfig.fitness_weight_ce = p.fitness_weight_ce ?? 1.0;
         editConfig.fitness_weight_acc = p.fitness_weight_acc ?? 1.0;
         editConfig.min_accuracy_floor = p.min_accuracy_floor ?? 0;
-        editConfig.tier0_only = p.tier0_only ?? p.optimize_tier0_only ?? false;
-        editConfig.enable_gating = p.enable_gating ?? false;
         editConfig.phase_order = p.phase_order ?? 'neurons_first';
         editConfig.context_size = p.context_size ?? 4;
         if (p.tier_config) {
@@ -238,8 +234,6 @@
           fitness_weight_ce: editConfig.fitness_weight_ce,
           fitness_weight_acc: editConfig.fitness_weight_acc,
           min_accuracy_floor: editConfig.min_accuracy_floor,
-          tier0_only: editConfig.tier0_only,
-          enable_gating: editConfig.enable_gating,
           phase_order: editConfig.phase_order,
           context_size: editConfig.context_size,
           tier_config
@@ -1084,23 +1078,6 @@
             </div>
           </div>
 
-          <div class="form-row">
-            <div class="form-group checkbox-group">
-              <label>
-                <input type="checkbox" bind:checked={editConfig.tier0_only} />
-                Optimize Tier0 Only
-              </label>
-              <span class="form-hint">Only mutate most frequent tokens</span>
-            </div>
-            <div class="form-group checkbox-group">
-              <label>
-                <input type="checkbox" bind:checked={editConfig.enable_gating} />
-                Enable Gating
-              </label>
-              <span class="form-hint">Train gating layer after RAM optimization</span>
-            </div>
-          </div>
-
           <div class="form-group full-width">
             <label for="tier_config">Tier Config</label>
             <input type="text" id="tier_config" bind:value={editConfig.tier_config}
@@ -1149,14 +1126,6 @@
           <div class="param-item">
             <span class="param-label">Fitness %</span>
             <span class="param-value">{flow.config.params.fitness_percentile ?? 0.75}</span>
-          </div>
-          <div class="param-item">
-            <span class="param-label">Tier0 Only</span>
-            <span class="param-value">{(flow.config.params.optimize_tier0_only || flow.config.params.tier0_only) ? 'Yes' : 'No'}</span>
-          </div>
-          <div class="param-item">
-            <span class="param-label">Gating</span>
-            <span class="param-value">{flow.config.params.enable_gating ? 'Yes' : 'No'}</span>
           </div>
           <div class="param-group full-width">
             <span class="param-group-label">Fitness</span>
