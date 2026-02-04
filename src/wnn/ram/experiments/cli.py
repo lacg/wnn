@@ -41,7 +41,7 @@ app.add_typer(checkpoint_app, name="checkpoint")
 console = Console()
 
 
-def get_client(base_url: str = "http://localhost:3000") -> DashboardClient:
+def get_client(base_url: str = "https://localhost:3000") -> DashboardClient:
 	"""Create dashboard client."""
 	config = DashboardClientConfig(base_url=base_url)
 	return DashboardClient(config, logger=lambda x: None)
@@ -100,7 +100,7 @@ def status_color(status: str) -> str:
 def flow_list(
 	status: Optional[str] = typer.Option(None, "--status", "-s", help="Filter by status"),
 	limit: int = typer.Option(20, "--limit", "-n", help="Max results"),
-	url: str = typer.Option("http://localhost:3000", "--url", help="Dashboard URL"),
+	url: str = typer.Option("https://localhost:3000", "--url", help="Dashboard URL"),
 ):
 	"""List all flows."""
 	try:
@@ -147,7 +147,7 @@ def flow_list(
 @flow_app.command("show")
 def flow_show(
 	flow_id: int = typer.Argument(..., help="Flow ID"),
-	url: str = typer.Option("http://localhost:3000", "--url", help="Dashboard URL"),
+	url: str = typer.Option("https://localhost:3000", "--url", help="Dashboard URL"),
 ):
 	"""Show flow details."""
 	try:
@@ -227,7 +227,7 @@ def flow_create(
 	ts_iterations: int = typer.Option(250, "--ts-iters", help="TS iterations"),
 	population_size: int = typer.Option(50, "--population", help="Population size"),
 	patience: int = typer.Option(10, "--patience", help="Early stopping patience"),
-	url: str = typer.Option("http://localhost:3000", "--url", help="Dashboard URL"),
+	url: str = typer.Option("https://localhost:3000", "--url", help="Dashboard URL"),
 ):
 	"""Create a new flow."""
 	from wnn.ram.experiments.dashboard_client import FlowConfig
@@ -277,7 +277,7 @@ def flow_run(
 		help="Directory for checkpoints (required for resume)"
 	),
 	context: int = typer.Option(4, "--context", help="Context window size"),
-	url: str = typer.Option("http://localhost:3000", "--url", help="Dashboard URL"),
+	url: str = typer.Option("https://localhost:3000", "--url", help="Dashboard URL"),
 ):
 	"""
 	Run a flow (execute all experiments in sequence).
@@ -502,7 +502,7 @@ def flow_run(
 def flow_delete(
 	flow_id: int = typer.Argument(..., help="Flow ID"),
 	force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
-	url: str = typer.Option("http://localhost:3000", "--url", help="Dashboard URL"),
+	url: str = typer.Option("https://localhost:3000", "--url", help="Dashboard URL"),
 ):
 	"""Delete a flow."""
 	try:
@@ -539,7 +539,7 @@ def checkpoint_list(
 	final_only: bool = typer.Option(False, "--final-only", "-f", help="Show only final checkpoints"),
 	experiment_id: Optional[int] = typer.Option(None, "--experiment-id", "-e", help="Filter by experiment"),
 	limit: int = typer.Option(50, "--limit", "-n", help="Max results"),
-	url: str = typer.Option("http://localhost:3000", "--url", help="Dashboard URL"),
+	url: str = typer.Option("https://localhost:3000", "--url", help="Dashboard URL"),
 ):
 	"""List checkpoints."""
 	try:
@@ -604,7 +604,7 @@ def format_bytes(size: int) -> str:
 @checkpoint_app.command("show")
 def checkpoint_show(
 	checkpoint_id: int = typer.Argument(..., help="Checkpoint ID"),
-	url: str = typer.Option("http://localhost:3000", "--url", help="Dashboard URL"),
+	url: str = typer.Option("https://localhost:3000", "--url", help="Dashboard URL"),
 ):
 	"""Show checkpoint details."""
 	try:
@@ -664,7 +664,7 @@ def checkpoint_show(
 def checkpoint_delete(
 	checkpoint_id: int = typer.Argument(..., help="Checkpoint ID"),
 	force: bool = typer.Option(False, "--force", "-f", help="Force delete even if referenced"),
-	url: str = typer.Option("http://localhost:3000", "--url", help="Dashboard URL"),
+	url: str = typer.Option("https://localhost:3000", "--url", help="Dashboard URL"),
 ):
 	"""Delete a checkpoint."""
 	try:
@@ -703,7 +703,7 @@ def checkpoint_seed(
 	checkpoint_id: int = typer.Argument(..., help="Checkpoint ID to seed from"),
 	flow_name: str = typer.Option(..., "--flow-name", "-n", help="Name for new flow"),
 	template: str = typer.Option("standard-6-phase", "--template", "-t", help="Template name"),
-	url: str = typer.Option("http://localhost:3000", "--url", help="Dashboard URL"),
+	url: str = typer.Option("https://localhost:3000", "--url", help="Dashboard URL"),
 ):
 	"""Create a new flow seeded from a checkpoint."""
 	from wnn.ram.experiments.dashboard_client import FlowConfig
@@ -744,7 +744,7 @@ def checkpoint_seed(
 
 @app.command("status")
 def status(
-	url: str = typer.Option("http://localhost:3000", "--url", help="Dashboard URL"),
+	url: str = typer.Option("https://localhost:3000", "--url", help="Dashboard URL"),
 ):
 	"""Check dashboard connection status."""
 	try:

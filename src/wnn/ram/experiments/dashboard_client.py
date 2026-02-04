@@ -35,11 +35,11 @@ class DashboardClientConfig:
 			- False: Disable SSL verification (development with self-signed certs)
 			- str: Path to CA certificate file for custom CA
 	"""
-	base_url: str = "http://localhost:3000"
+	base_url: str = "https://localhost:3000"
 	timeout: float = 30.0
 	retry_count: int = 3
 	retry_delay: float = 1.0
-	verify_ssl: bool | str = True
+	verify_ssl: bool | str = False  # Default: skip verify (self-signed cert)
 
 
 @dataclass

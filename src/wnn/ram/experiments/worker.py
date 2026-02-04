@@ -40,12 +40,12 @@ class FlowWorker:
 
     def __init__(
         self,
-        dashboard_url: str = "http://localhost:3000",
+        dashboard_url: str = "https://localhost:3000",
         poll_interval: int = 10,
         checkpoint_base_dir: Path = Path("checkpoints"),
         context_size: int = 4,
         db_path: Optional[str] = None,
-        verify_ssl: bool | str = True,
+        verify_ssl: bool | str = False,
     ):
         self.dashboard_url = dashboard_url
         self.poll_interval = poll_interval
@@ -790,7 +790,7 @@ class FlowWorker:
 
 def main():
     parser = argparse.ArgumentParser(description="Flow worker - polls and executes queued flows")
-    parser.add_argument("--url", default="http://localhost:3000", help="Dashboard URL")
+    parser.add_argument("--url", default="https://localhost:3000", help="Dashboard URL")
     parser.add_argument("--poll-interval", type=int, default=10, help="Seconds between polls")
     parser.add_argument("--checkpoint-dir", type=Path, default=Path("checkpoints"), help="Base checkpoint directory")
     parser.add_argument("--context", type=int, default=4, help="Default context size")
@@ -816,7 +816,7 @@ def main():
     elif args.ssl_cert:
         verify_ssl = str(args.ssl_cert)
     else:
-        verify_ssl = True  # Default: verify SSL
+        verify_ssl = False  # Default: skip SSL verify (self-signed cert)
 
     worker = FlowWorker(
         dashboard_url=args.url,
