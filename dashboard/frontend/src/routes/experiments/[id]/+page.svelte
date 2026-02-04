@@ -390,7 +390,7 @@
     bits: number;
     optimize: boolean;
   }
-  $: parsedTiers: ParsedTier[] = (() => {
+  $: parsedTiers = (() => {
     if (!experiment?.tier_config) return [];
     try {
       return experiment.tier_config.split(';').map(tierStr => {
