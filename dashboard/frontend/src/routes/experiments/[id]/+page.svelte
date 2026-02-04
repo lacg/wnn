@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
-  import type { Experiment, Iteration, GenomeEvaluation, Flow, ValidationSummary, GatingResults } from '$lib/types';
+  import type { Experiment, Iteration, GenomeEvaluation, Flow, ValidationSummary, GatingResults, Checkpoint, TierStats } from '$lib/types';
   import { formatDate } from '$lib/dateFormat';
 
   let experiment: Experiment | null = null;
@@ -9,6 +9,7 @@
   let flowExperiments: Experiment[] = [];
   let flow: Flow | null = null;
   let validationSummaries: ValidationSummary[] = [];
+  let checkpoints: Checkpoint[] = [];
   let loading = true;
   let error: string | null = null;
   let pollInterval: ReturnType<typeof setInterval> | null = null;
@@ -38,10 +39,11 @@
     error = null;
 
     try {
-      const [expRes, itersRes, summariesRes] = await Promise.all([
+      const [expRes, itersRes, summariesRes, checkpointsRes] = await Promise.all([
         fetch(`/api/experiments/${experimentId}`),
         fetch(`/api/experiments/${experimentId}/iterations?limit=500`),
-        fetch(`/api/experiments/${experimentId}/summaries`)
+        fetch(`/api/experiments/${experimentId}/summaries`),
+        fetch(`/api/checkpoints?experiment_id=${experimentId}`)
       ]);
 
       if (!expRes.ok) throw new Error('Experiment not found');
@@ -49,10 +51,12 @@
       experiment = await expRes.json();
       iterations = itersRes.ok ? await itersRes.json() : [];
       validationSummaries = summariesRes.ok ? await summariesRes.json() : [];
+      checkpoints = checkpointsRes.ok ? await checkpointsRes.json() : [];
 
       // Ensure arrays
       if (!Array.isArray(iterations)) iterations = [];
       if (!Array.isArray(validationSummaries)) validationSummaries = [];
+      if (!Array.isArray(checkpoints)) checkpoints = [];
 
       // Fetch flow and its experiments if this experiment belongs to a flow
       if (experiment?.flow_id) {
@@ -358,8 +362,28 @@
     return chartData.map((_, i) => i).filter(i => i % step === 0 || i === n - 1);
   })();
 
-  // Parse tier_config string into structured data
+  // Get tier_stats from the final checkpoint's genome_stats
+  // If no checkpoint with tier_stats exists, fall back to parsing tier_config string
+  $: finalCheckpoint = checkpoints.find(c => c.checkpoint_type === 'experiment_end' && c.genome_stats?.tier_stats);
+
+  $: tierStats: TierStats[] | null = finalCheckpoint?.genome_stats?.tier_stats ?? null;
+
+  // Parse tier_config string for the optimize flag (not in computed tier_stats)
   // Format: "100,15,20;400,10,12;rest,5,8" or "100,15,20,true;400,10,12,false;rest,5,8,false"
+  $: tierConfigOptimize: boolean[] = (() => {
+    if (!experiment?.tier_config) return [];
+    try {
+      return experiment.tier_config.split(';').map(tierStr => {
+        const parts = tierStr.trim().split(',');
+        // 4th part is optional optimize flag (defaults to true for backward compat)
+        return parts.length >= 4 ? parts[3].trim().toLowerCase() === 'true' : true;
+      });
+    } catch {
+      return [];
+    }
+  })();
+
+  // Fallback: parse tier_config when no computed tier_stats available
   interface ParsedTier {
     clusters: string;  // number or "rest"
     neurons: number;
@@ -375,7 +399,6 @@
         const clusters = parts[0].trim();
         const neurons = parseInt(parts[1].trim());
         const bits = parseInt(parts[2].trim());
-        // 4th part is optional optimize flag (defaults to true for backward compat)
         const optimize = parts.length >= 4 ? parts[3].trim().toLowerCase() === 'true' : true;
         return { clusters, neurons, bits, optimize };
       }).filter((t): t is ParsedTier => t !== null);
@@ -581,13 +604,54 @@
       </div>
     {/if}
 
-    <!-- Tier Configuration -->
-    {#if parsedTiers.length > 0}
+    <!-- Tier Stats (Best Genome) - shows computed averages when available -->
+    {#if tierStats && tierStats.length > 0}
+      <div class="gating-section">
+        <div class="gating-header">
+          <span class="gating-title">📊 Tier Stats (Best Genome)</span>
+          <span class="gating-meta">
+            {tierStats.length} tiers
+          </span>
+        </div>
+        <div class="gating-table-container">
+          <table class="gating-table">
+            <thead>
+              <tr>
+                <th>Tier</th>
+                <th>Clusters</th>
+                <th>Avg Bits</th>
+                <th>Avg Neurons</th>
+                <th>Bit Range</th>
+                <th>Neuron Range</th>
+                <th>Optimize</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each tierStats as tier, i}
+                {@const optimize = tierConfigOptimize[i] ?? true}
+                <tr>
+                  <td class="genome-type">Tier {tier.tier_index}</td>
+                  <td class="mono">{tier.cluster_count}</td>
+                  <td class="mono">{tier.avg_bits.toFixed(1)}</td>
+                  <td class="mono">{tier.avg_neurons.toFixed(1)}</td>
+                  <td class="mono">{tier.min_bits}-{tier.max_bits}</td>
+                  <td class="mono">{tier.min_neurons}-{tier.max_neurons}</td>
+                  <td class="mono" class:delta-positive={optimize} class:delta-negative={!optimize}>
+                    {optimize ? '✓' : '✗'}
+                  </td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    {:else if parsedTiers.length > 0}
+      <!-- Fallback: show configured tier values when computed stats not available -->
       <div class="gating-section">
         <div class="gating-header">
           <span class="gating-title">📊 Tier Configuration</span>
           <span class="gating-meta">
-            {parsedTiers.length} tiers
+            {parsedTiers.length} tiers (configured)
           </span>
         </div>
         <div class="gating-table-container">

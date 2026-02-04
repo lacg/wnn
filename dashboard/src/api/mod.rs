@@ -1082,6 +1082,7 @@ pub struct CreateCheckpointRequest {
     pub best_accuracy: Option<f64>,
     pub checkpoint_type: Option<String>,
     pub iteration_id: Option<i64>,
+    pub genome_stats: Option<serde_json::Value>,
 }
 
 async fn create_checkpoint(
@@ -1099,6 +1100,7 @@ async fn create_checkpoint(
         req.iteration_id,
         req.best_ce,
         req.best_accuracy,
+        req.genome_stats.as_ref(),
     ).await {
         Ok(id) => {
             // Fetch the created checkpoint to return and broadcast

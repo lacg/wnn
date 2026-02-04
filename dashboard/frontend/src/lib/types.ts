@@ -237,6 +237,15 @@ export interface ValidationSummary {
 // Checkpoint types
 // =============================================================================
 
+export interface GenomeStats {
+  num_clusters: number;
+  total_neurons: number;
+  total_connections: number;
+  bits_range: [number, number];
+  neurons_range: [number, number];
+  tier_stats?: TierStats[];
+}
+
 export interface Checkpoint {
   id: number;
   experiment_id: number;
@@ -247,6 +256,7 @@ export interface Checkpoint {
   checkpoint_type: CheckpointType;
   best_ce: number | null;
   best_accuracy: number | null;
+  genome_stats: GenomeStats | null;
   created_at: string;
 }
 

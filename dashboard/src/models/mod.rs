@@ -369,6 +369,8 @@ pub struct Checkpoint {
     pub checkpoint_type: CheckpointType,
     pub best_ce: Option<f64>,
     pub best_accuracy: Option<f64>,
+    /// Genome statistics including per-tier stats
+    pub genome_stats: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
 }
 

@@ -601,7 +601,7 @@ class DashboardClient:
 			final_fitness: CE loss value (best_ce)
 			final_accuracy: Accuracy value (best_accuracy)
 			iterations_run: Number of iterations completed (unused by API)
-			genome_stats: Optional genome statistics (unused by API)
+			genome_stats: Genome statistics including tier_stats for per-tier averages
 			is_final: Whether this is the final checkpoint for the experiment
 			iteration_id: Optional iteration ID
 			checkpoint_type: Type of checkpoint ('auto', 'user', 'phase_end', 'experiment_end')
@@ -624,6 +624,7 @@ class DashboardClient:
 			"best_accuracy": final_accuracy,  # API expects best_accuracy, not final_accuracy
 			"checkpoint_type": checkpoint_type,
 			"iteration_id": iteration_id,
+			"genome_stats": genome_stats,    # Per-tier stats and genome info
 		}
 
 		result = self._request("POST", "/api/checkpoints", json_data=data)

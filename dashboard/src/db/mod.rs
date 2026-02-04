@@ -60,6 +60,11 @@ async fn run_migrations(pool: &DbPool) -> Result<()> {
         .execute(pool)
         .await;
 
+    // Migration: Add genome_stats_json to checkpoints for per-tier statistics
+    let _ = sqlx::query("ALTER TABLE checkpoints ADD COLUMN genome_stats_json TEXT")
+        .execute(pool)
+        .await;
+
     Ok(())
 }
 
@@ -288,6 +293,9 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     -- Metrics snapshot
     best_ce REAL,
     best_accuracy REAL,
+
+    -- Genome statistics (includes per-tier stats)
+    genome_stats_json TEXT,
 
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
@@ -840,7 +848,7 @@ pub mod queries {
     ) -> Result<Vec<Checkpoint>> {
         let mut query = String::from(
             r#"SELECT id, experiment_id, iteration_id, name, file_path, file_size_bytes,
-                      checkpoint_type, best_ce, best_accuracy, created_at
+                      checkpoint_type, best_ce, best_accuracy, genome_stats_json, created_at
                FROM checkpoints WHERE 1=1"#,
         );
 
@@ -874,7 +882,7 @@ pub mod queries {
     pub async fn get_checkpoint(pool: &DbPool, id: i64) -> Result<Option<Checkpoint>> {
         let row = sqlx::query(
             r#"SELECT id, experiment_id, iteration_id, name, file_path, file_size_bytes,
-                      checkpoint_type, best_ce, best_accuracy, created_at
+                      checkpoint_type, best_ce, best_accuracy, genome_stats_json, created_at
                FROM checkpoints WHERE id = ?"#,
         )
         .bind(id)
@@ -897,14 +905,16 @@ pub mod queries {
         iteration_id: Option<i64>,
         best_ce: Option<f64>,
         best_accuracy: Option<f64>,
+        genome_stats: Option<&serde_json::Value>,
     ) -> Result<i64> {
         let now = Utc::now().to_rfc3339();
+        let genome_stats_json = genome_stats.map(|v| serde_json::to_string(v).unwrap_or_default());
 
         let result = sqlx::query(
             r#"INSERT INTO checkpoints
                (experiment_id, iteration_id, name, file_path, file_size_bytes,
-                checkpoint_type, best_ce, best_accuracy, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+                checkpoint_type, best_ce, best_accuracy, genome_stats_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         )
         .bind(experiment_id)
         .bind(iteration_id)
@@ -914,6 +924,7 @@ pub mod queries {
         .bind(checkpoint_type)
         .bind(best_ce)
         .bind(best_accuracy)
+        .bind(&genome_stats_json)
         .bind(&now)
         .execute(pool)
         .await?;
@@ -944,6 +955,9 @@ pub mod queries {
 
     fn row_to_checkpoint(row: &sqlx::sqlite::SqliteRow) -> Result<Checkpoint> {
         let checkpoint_type_str: String = row.get("checkpoint_type");
+        let genome_stats_json: Option<String> = row.get("genome_stats_json");
+        let genome_stats = genome_stats_json
+            .and_then(|s| serde_json::from_str(&s).ok());
 
         Ok(Checkpoint {
             id: row.get("id"),
@@ -955,6 +969,7 @@ pub mod queries {
             checkpoint_type: parse_checkpoint_type(&checkpoint_type_str),
             best_ce: row.get("best_ce"),
             best_accuracy: row.get("best_accuracy"),
+            genome_stats,
             created_at: parse_datetime(row.get("created_at"))?,
         })
     }
