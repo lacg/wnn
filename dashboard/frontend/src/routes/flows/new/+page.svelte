@@ -18,7 +18,6 @@
   let minAccuracyFloor = 0;  // 0 = disabled, 0.003 = 0.3% floor
   let contextSize = 4;
   let tierConfig = '100,15,20,true;400,10,12,false;rest,5,8,false';
-  let tier0Only = true;
   let seedCheckpointId: number | null = null;
 
   let checkpoints: Checkpoint[] = [];
@@ -122,8 +121,7 @@
               fitness_weight_acc: fitnessWeightAcc,
               min_accuracy_floor: minAccuracyFloor,
               context_size: contextSize,
-              tier_config: tierConfig || null,
-              tier0_only: tier0Only
+              tier_config: tierConfig || null
             }
           },
           experiments: enrichedExperiments,
@@ -303,20 +301,10 @@
         </div>
       {/if}
 
-      <div class="form-row">
-        <div class="form-group">
-          <label for="contextSize">Context Size (n-gram)</label>
-          <input type="number" id="contextSize" bind:value={contextSize} min="2" max="16" />
-          <span class="field-hint">Number of tokens in context window (4 = 4-gram)</span>
-        </div>
-
-        <div class="form-group">
-          <label for="tier0Only">
-            <input type="checkbox" id="tier0Only" bind:checked={tier0Only} />
-            Tier-0 Only Optimization
-          </label>
-          <span class="field-hint">Only mutate the most frequent tokens</span>
-        </div>
+      <div class="form-group">
+        <label for="contextSize">Context Size (n-gram)</label>
+        <input type="number" id="contextSize" bind:value={contextSize} min="2" max="16" />
+        <span class="field-hint">Number of tokens in context window (4 = 4-gram)</span>
       </div>
 
       <div class="form-group">
