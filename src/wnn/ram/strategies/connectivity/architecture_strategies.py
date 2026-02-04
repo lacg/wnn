@@ -1138,7 +1138,8 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 				generation=generation,
 				total_generations=cfg.generations,
 				return_best_n=True,  # Soft threshold: return top N by CE if not enough pass
-				mutable_clusters=arch_cfg.mutable_clusters,  # Tier0-only: only mutate first N clusters
+				# Rust expects count (usize), not list - convert list to length for tier0-only
+				mutable_clusters=len(arch_cfg.mutable_clusters) if arch_cfg.mutable_clusters else None,
 			)
 			# search_result contains: genomes, evaluated (total tested), viable (passed threshold)
 
