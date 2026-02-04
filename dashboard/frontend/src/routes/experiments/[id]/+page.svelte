@@ -366,11 +366,11 @@
   // If no checkpoint with tier_stats exists, fall back to parsing tier_config string
   $: finalCheckpoint = checkpoints.find(c => c.checkpoint_type === 'experiment_end' && c.genome_stats?.tier_stats);
 
-  $: tierStats: TierStats[] | null = finalCheckpoint?.genome_stats?.tier_stats ?? null;
+  $: tierStats = finalCheckpoint?.genome_stats?.tier_stats ?? null;
 
   // Parse tier_config string for the optimize flag (not in computed tier_stats)
   // Format: "100,15,20;400,10,12;rest,5,8" or "100,15,20,true;400,10,12,false;rest,5,8,false"
-  $: tierConfigOptimize: boolean[] = (() => {
+  $: tierConfigOptimize = (() => {
     if (!experiment?.tier_config) return [];
     try {
       return experiment.tier_config.split(';').map(tierStr => {
