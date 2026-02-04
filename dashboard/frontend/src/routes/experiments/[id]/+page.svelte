@@ -357,6 +357,32 @@
     const step = Math.ceil(n / 10);
     return chartData.map((_, i) => i).filter(i => i % step === 0 || i === n - 1);
   })();
+
+  // Parse tier_config string into structured data
+  // Format: "100,15,20;400,10,12;rest,5,8" or "100,15,20,true;400,10,12,false;rest,5,8,false"
+  interface ParsedTier {
+    clusters: string;  // number or "rest"
+    neurons: number;
+    bits: number;
+    optimize: boolean;
+  }
+  $: parsedTiers: ParsedTier[] = (() => {
+    if (!experiment?.tier_config) return [];
+    try {
+      return experiment.tier_config.split(';').map(tierStr => {
+        const parts = tierStr.trim().split(',');
+        if (parts.length < 3) return null;
+        const clusters = parts[0].trim();
+        const neurons = parseInt(parts[1].trim());
+        const bits = parseInt(parts[2].trim());
+        // 4th part is optional optimize flag (defaults to true for backward compat)
+        const optimize = parts.length >= 4 ? parts[3].trim().toLowerCase() === 'true' : true;
+        return { clusters, neurons, bits, optimize };
+      }).filter((t): t is ParsedTier => t !== null);
+    } catch {
+      return [];
+    }
+  })();
 </script>
 
 <div class="container">
@@ -552,6 +578,44 @@
             Error: {experiment.gating_results.error}
           </div>
         {/if}
+      </div>
+    {/if}
+
+    <!-- Tier Configuration -->
+    {#if parsedTiers.length > 0}
+      <div class="gating-section">
+        <div class="gating-header">
+          <span class="gating-title">📊 Tier Configuration</span>
+          <span class="gating-meta">
+            {parsedTiers.length} tiers
+          </span>
+        </div>
+        <div class="gating-table-container">
+          <table class="gating-table">
+            <thead>
+              <tr>
+                <th>Tier</th>
+                <th>Clusters</th>
+                <th>Neurons</th>
+                <th>Bits</th>
+                <th>Optimize</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each parsedTiers as tier, i}
+                <tr>
+                  <td class="genome-type">Tier {i}</td>
+                  <td class="mono">{tier.clusters}</td>
+                  <td class="mono">{tier.neurons}</td>
+                  <td class="mono">{tier.bits}</td>
+                  <td class="mono" class:delta-positive={tier.optimize} class:delta-negative={!tier.optimize}>
+                    {tier.optimize ? '✓' : '✗'}
+                  </td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
       </div>
     {/if}
 

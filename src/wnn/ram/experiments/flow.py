@@ -846,7 +846,9 @@ class Flow:
 		neurons_per_cluster = []
 		cluster_idx = 0
 
-		for num_clusters, neurons, bits in self.config.tier_config:
+		for tier_spec in self.config.tier_config:
+			# tier_spec can be (count, neurons, bits) or (count, neurons, bits, optimize)
+			num_clusters, neurons, bits = tier_spec[0], tier_spec[1], tier_spec[2]
 			if num_clusters is None:
 				count = self.evaluator.vocab_size - cluster_idx
 			else:

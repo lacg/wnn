@@ -50,8 +50,8 @@ class ExperimentConfig:
 	default_bits: int = 8
 	default_neurons: int = 5
 
-	# Tier configuration
-	tier_config: Optional[list[tuple[Optional[int], int, int]]] = None
+	# Tier configuration: (count, neurons, bits) or (count, neurons, bits, optimize)
+	tier_config: Optional[list[tuple]] = None
 	optimize_tier0_only: bool = False
 
 	# Population handling
@@ -77,14 +77,19 @@ class ExperimentConfig:
 		"""
 		result = asdict(self)
 		# Convert tier_config list to string format for API compatibility
-		# Format: "100,15,20;400,10,12;rest,5,8"
+		# Format: "100,15,20;400,10,12;rest,5,8" (3-part) or
+		#         "100,15,20,true;400,10,12,false;rest,5,8,false" (4-part)
 		if result.get("tier_config") is not None:
 			tier_parts = []
 			for tier in result["tier_config"]:
-				if tier[0] is None:
-					tier_parts.append(f"rest,{tier[1]},{tier[2]}")
+				count_str = "rest" if tier[0] is None else str(tier[0])
+				if len(tier) >= 4:
+					# 4-part format with optimize flag
+					optimize_str = "true" if tier[3] else "false"
+					tier_parts.append(f"{count_str},{tier[1]},{tier[2]},{optimize_str}")
 				else:
-					tier_parts.append(f"{tier[0]},{tier[1]},{tier[2]}")
+					# Legacy 3-part format
+					tier_parts.append(f"{count_str},{tier[1]},{tier[2]}")
 			result["tier_config"] = ";".join(tier_parts)
 		# Convert fitness_calculator_type enum to string for JSON
 		if "fitness_calculator_type" in result:
@@ -209,6 +214,45 @@ class Experiment:
 		self.vocab_size = evaluator.vocab_size
 		self.total_input_bits = evaluator.total_input_bits
 
+	def _get_optimizable_clusters(self, tier_config: Optional[list[tuple]]) -> Optional[list[int]]:
+		"""Get list of cluster indices that can be mutated based on tier optimize flags.
+
+		Args:
+			tier_config: List of tier tuples, optionally with optimize flag as 4th element.
+
+		Returns:
+			List of optimizable cluster indices, or None if no tier_config or all tiers optimizable.
+		"""
+		if not tier_config:
+			return None
+
+		# Check if any tier has optimize=False
+		has_optimize_flags = any(len(t) >= 4 for t in tier_config)
+		if not has_optimize_flags:
+			return None  # All tiers optimizable by default
+
+		optimizable = []
+		cluster_idx = 0
+
+		for tier in tier_config:
+			count = tier[0]
+			optimize = tier[3] if len(tier) > 3 else True
+
+			if count is None:
+				count = self.vocab_size - cluster_idx
+
+			actual_count = min(count, self.vocab_size - cluster_idx)
+
+			if optimize:
+				optimizable.extend(range(cluster_idx, cluster_idx + actual_count))
+
+			cluster_idx += actual_count
+
+			if cluster_idx >= self.vocab_size:
+				break
+
+		return optimizable if optimizable else None
+
 	def run(
 		self,
 		initial_genome: Optional[ClusterGenome] = None,
@@ -279,11 +323,16 @@ class Experiment:
 			"fitness_weight_acc": cfg.fitness_weight_acc,
 		}
 
-		# Tier0-only optimization
-		self.log(f"  DEBUG: optimize_tier0_only={cfg.optimize_tier0_only}, tier_config={cfg.tier_config}")
-		if cfg.optimize_tier0_only and cfg.tier_config:
+		# Per-tier optimization: determine which clusters are optimizable
+		# Check for per-tier optimize flags in tier_config first
+		optimizable = self._get_optimizable_clusters(cfg.tier_config)
+		if optimizable is not None and len(optimizable) < self.vocab_size:
+			strategy_kwargs["mutable_clusters"] = optimizable
+			self.log(f"  Per-tier optimization: mutating {len(optimizable)} of {self.vocab_size} clusters")
+		elif cfg.optimize_tier0_only and cfg.tier_config:
+			# Legacy fallback: tier0-only mode
 			tier0_clusters = cfg.tier_config[0][0] or self.vocab_size
-			strategy_kwargs["mutable_clusters"] = tier0_clusters
+			strategy_kwargs["mutable_clusters"] = list(range(tier0_clusters))
 			self.log(f"  Tier0-only mode: mutating first {tier0_clusters} clusters")
 
 		# Type-specific kwargs
@@ -505,6 +554,10 @@ class Experiment:
 						"bits_range": (stats.get("min_bits", 0), stats.get("max_bits", 0)),
 						"neurons_range": (stats.get("min_neurons", 0), stats.get("max_neurons", 0)),
 					}
+					# Add per-tier stats if tier_config is available
+					if self.config.tier_config:
+						tier_stats = result.best_genome.compute_tier_stats(self.config.tier_config)
+						genome_stats["tier_stats"] = tier_stats
 
 				checkpoint_id = self.dashboard_client.checkpoint_created(
 					experiment_id=self.experiment_id,

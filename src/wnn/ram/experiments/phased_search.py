@@ -69,10 +69,11 @@ class PhasedSearchConfig:
 	default_neurons: int = 5
 
 	# Tiered architecture configuration
-	# Format: list of (num_clusters, neurons, bits) tuples
-	# e.g., [(100, 15, 20), (400, 10, 12), (None, 5, 8)]
+	# Format: list of (num_clusters, neurons, bits) or (num_clusters, neurons, bits, optimize) tuples
+	# e.g., [(100, 15, 20), (400, 10, 12), (None, 5, 8)] - all optimizable
+	# e.g., [(100, 15, 20, True), (400, 10, 12, False), (None, 5, 8, False)] - only tier0 optimizable
 	# None in num_clusters means "rest of vocabulary"
-	tier_config: Optional[list[tuple[Optional[int], int, int]]] = None
+	tier_config: Optional[list[tuple]] = None
 
 	# Phase order: "neurons_first" (default) or "bits_first"
 	phase_order: str = "neurons_first"
@@ -117,7 +118,8 @@ class PhasedSearchConfig:
 		boundaries = []
 		cumulative = 0
 		for tier_spec in self.tier_config:
-			num_clusters, _, _ = tier_spec
+			# tier_spec can be (count, neurons, bits) or (count, neurons, bits, optimize)
+			num_clusters = tier_spec[0]
 			if num_clusters is None:
 				# "rest" tier - goes to end
 				boundaries.append(vocab_size)
@@ -132,6 +134,43 @@ class PhasedSearchConfig:
 			return vocab_size  # No tiers = all clusters
 		num_clusters = self.tier_config[0][0]
 		return num_clusters if num_clusters is not None else vocab_size
+
+	def get_optimizable_clusters(self, vocab_size: int) -> list[int]:
+		"""Get list of cluster indices that can be mutated based on tier optimize flags.
+
+		Args:
+			vocab_size: Total number of clusters (vocabulary size).
+
+		Returns:
+			List of cluster indices that have optimize=True in their tier config.
+			If no tier_config or no optimize flags, returns all clusters.
+		"""
+		if not self.tier_config:
+			return list(range(vocab_size))  # All clusters optimizable
+
+		optimizable = []
+		cluster_idx = 0
+
+		for tier in self.tier_config:
+			# tier format: (count, neurons, bits) or (count, neurons, bits, optimize)
+			count = tier[0]
+			optimize = tier[3] if len(tier) > 3 else True  # Default True for backward compat
+
+			if count is None:
+				count = vocab_size - cluster_idx
+
+			actual_count = min(count, vocab_size - cluster_idx)
+
+			if optimize:
+				optimizable.extend(range(cluster_idx, cluster_idx + actual_count))
+
+			cluster_idx += actual_count
+
+			if cluster_idx >= vocab_size:
+				break
+
+		# If nothing is optimizable (all tiers have optimize=False), return all to avoid empty set
+		return optimizable if optimizable else list(range(vocab_size))
 
 	def create_tiered_genome(self, vocab_size: int) -> 'ClusterGenome':
 		"""
@@ -155,7 +194,8 @@ class PhasedSearchConfig:
 		cluster_idx = 0
 
 		for tier_spec in self.tier_config:
-			num_clusters, neurons, bits = tier_spec
+			# tier_spec can be (count, neurons, bits) or (count, neurons, bits, optimize)
+			num_clusters, neurons, bits = tier_spec[0], tier_spec[1], tier_spec[2]
 			if num_clusters is None:
 				# Fill rest of vocabulary
 				count = vocab_size - cluster_idx
@@ -226,7 +266,8 @@ class PhasedSearchConfig:
 		cluster_idx = 0
 
 		for tier_spec in self.tier_config:
-			num_clusters, tier_neurons, tier_bits = tier_spec
+			# tier_spec can be (count, neurons, bits) or (count, neurons, bits, optimize)
+			num_clusters, tier_neurons, tier_bits = tier_spec[0], tier_spec[1], tier_spec[2]
 			if num_clusters is None:
 				count = vocab_size - cluster_idx
 			else:
@@ -1033,10 +1074,16 @@ class PhasedSearchRunner:
 			"seed": self._rotation_seed,  # Use rotation_seed for strategy RNG
 		}
 
-		# Tier0-only optimization: only mutate top N clusters
-		if cfg.optimize_tier0_only:
+		# Per-tier optimization: determine which clusters are optimizable
+		# First check for per-tier optimize flags in tier_config, then fall back to tier0-only flag
+		optimizable = cfg.get_optimizable_clusters(self.vocab_size)
+		if len(optimizable) < self.vocab_size:
+			strategy_kwargs["mutable_clusters"] = optimizable
+			self.log(f"  Per-tier optimization: mutating {len(optimizable)} of {self.vocab_size} clusters")
+		elif cfg.optimize_tier0_only:
+			# Legacy fallback: tier0-only mode
 			tier0_clusters = cfg.get_tier0_clusters(self.vocab_size)
-			strategy_kwargs["mutable_clusters"] = tier0_clusters
+			strategy_kwargs["mutable_clusters"] = list(range(tier0_clusters))
 			self.log(f"  Tier0-only mode: mutating only first {tier0_clusters} clusters")
 
 		if is_ga:

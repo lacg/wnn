@@ -462,8 +462,8 @@ class ArchitectureConfig:
 	token_frequencies: Optional[list[int]] = None
 	# Total input bits for connection initialization/mutation
 	total_input_bits: Optional[int] = None
-	# Tier0-only: only mutate first N clusters (None = all clusters mutable)
-	mutable_clusters: Optional[int] = None
+	# Per-tier optimization: list of cluster indices that can be mutated (None = all clusters mutable)
+	mutable_clusters: Optional[list[int]] = None
 
 
 class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['ClusterGenome']):
@@ -552,9 +552,15 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			return mutant
 
 		# Mutate architecture (bits and/or neurons)
-		# If mutable_clusters is set, only mutate first N clusters (tier0-only mode)
-		max_mutable = cfg.mutable_clusters if cfg.mutable_clusters is not None else cfg.num_clusters
-		for i in range(max_mutable):
+		# If mutable_clusters is set, only mutate clusters in that set (per-tier optimization)
+		if cfg.mutable_clusters is not None:
+			mutable_set = set(cfg.mutable_clusters)
+		else:
+			mutable_set = set(range(cfg.num_clusters))
+
+		for i in range(cfg.num_clusters):
+			if i not in mutable_set:
+				continue
 			if self._rng.random() < mutation_rate:
 				if cfg.optimize_bits:
 					# Random delta in [-bits_delta_max, +bits_delta_max]
@@ -1487,10 +1493,16 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 		old_neurons = genome.neurons_per_cluster.copy()
 
 		# Mutate multiple clusters based on mutation_rate
-		# If mutable_clusters is set, only mutate first N clusters (tier0-only mode)
-		max_mutable = cfg.mutable_clusters if cfg.mutable_clusters is not None else cfg.num_clusters
+		# If mutable_clusters is set, only mutate clusters in that set (per-tier optimization)
+		if cfg.mutable_clusters is not None:
+			mutable_set = set(cfg.mutable_clusters)
+		else:
+			mutable_set = set(range(cfg.num_clusters))
+
 		mutated_clusters = []
-		for i in range(max_mutable):
+		for i in range(cfg.num_clusters):
+			if i not in mutable_set:
+				continue
 			if self._rng.random() < mutation_rate:
 				mutated_clusters.append(i)
 

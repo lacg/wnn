@@ -672,6 +672,52 @@ class ClusterGenome:
 			},
 		}
 
+	def compute_tier_stats(self, tier_config: list[tuple]) -> list[dict]:
+		"""
+		Compute per-tier statistics from genome configuration.
+
+		Args:
+			tier_config: List of (cluster_count, neurons, bits) tuples.
+			             cluster_count=None means "rest".
+
+		Returns:
+			List of dicts with tier stats: tier_index, cluster_count,
+			avg_bits, avg_neurons, min/max ranges, total_neurons.
+		"""
+		if not tier_config:
+			return []
+
+		tier_stats = []
+		cluster_idx = 0
+
+		for tier_num, tier in enumerate(tier_config):
+			count = tier[0]
+			if count is None:
+				count = len(self.bits_per_cluster) - cluster_idx
+
+			end_idx = min(cluster_idx + count, len(self.bits_per_cluster))
+			tier_bits = self.bits_per_cluster[cluster_idx:end_idx]
+			tier_neurons = self.neurons_per_cluster[cluster_idx:end_idx]
+
+			if tier_bits:
+				tier_stats.append({
+					"tier_index": tier_num,
+					"cluster_count": len(tier_bits),
+					"start_cluster": cluster_idx,
+					"end_cluster": end_idx,
+					"avg_bits": sum(tier_bits) / len(tier_bits),
+					"avg_neurons": sum(tier_neurons) / len(tier_neurons),
+					"min_bits": min(tier_bits),
+					"max_bits": max(tier_bits),
+					"min_neurons": min(tier_neurons),
+					"max_neurons": max(tier_neurons),
+					"total_neurons": sum(tier_neurons),
+				})
+
+			cluster_idx = end_idx
+
+		return tier_stats
+
 	def serialize(self) -> dict[str, Any]:
 		"""
 		Serialize genome to dictionary.

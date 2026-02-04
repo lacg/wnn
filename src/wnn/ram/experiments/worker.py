@@ -752,25 +752,39 @@ class FlowWorker:
             return FitnessCalculatorType.NORMALIZED
 
     def _parse_tier_config(self, tier_config) -> Optional[list[tuple]]:
-        """Parse tier config from string or array format."""
+        """Parse tier config from string or array format.
+
+        Formats supported:
+        - "100,15,20;400,10,12;rest,5,8"  (3 parts, optimize=True default)
+        - "100,15,20,true;400,10,12,false;rest,5,8,false"  (4 parts)
+
+        Returns list of (count, neurons, bits, optimize) tuples.
+        """
         if not tier_config:
             return None
 
         if isinstance(tier_config, str):
-            # Parse string format: "100,15,20;400,10,12;rest,5,8"
             tiers = []
             for tier_str in tier_config.split(";"):
                 parts = tier_str.strip().split(",")
-                if len(parts) == 3:
+                if len(parts) >= 3:
                     count = None if parts[0].strip().lower() == "rest" else int(parts[0])
                     neurons = int(parts[1])
                     bits = int(parts[2])
-                    tiers.append((count, neurons, bits))
+                    # 4th part: optimize flag (default True for backward compat)
+                    optimize = parts[3].strip().lower() == "true" if len(parts) >= 4 else True
+                    tiers.append((count, neurons, bits, optimize))
             return tiers if tiers else None
 
         elif isinstance(tier_config, list):
-            # Already in array format
-            return [(t[0], t[1], t[2]) for t in tier_config]
+            # Already in array format - ensure 4 elements per tuple
+            result = []
+            for t in tier_config:
+                if len(t) >= 4:
+                    result.append((t[0], t[1], t[2], t[3]))
+                else:
+                    result.append((t[0], t[1], t[2], True))  # Default optimize=True
+            return result
 
         return None
 

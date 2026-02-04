@@ -167,6 +167,20 @@ export interface TierConfig {
   bits: number;
 }
 
+export interface TierStats {
+  tier_index: number;
+  cluster_count: number;
+  start_cluster: number;
+  end_cluster: number;
+  avg_bits: number;
+  avg_neurons: number;
+  min_bits: number;
+  max_bits: number;
+  min_neurons: number;
+  max_neurons: number;
+  total_neurons: number;
+}
+
 export interface GenomeEvaluation {
   id: number;
   iteration_id: number;
