@@ -377,7 +377,7 @@
 
   .stats-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    grid-template-columns: repeat(3, 1fr);
     gap: 1rem;
   }
 
@@ -429,19 +429,30 @@
 
   .tier-table {
     width: 100%;
-    border-collapse: collapse;
+    border-collapse: separate;
+    border-spacing: 0;
     font-size: 0.7rem;
     table-layout: fixed;
-    margin-bottom: 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
   }
 
   .tier-table th, .tier-table td {
     padding: 0.2rem 0.25rem;
     text-align: center;
-    border: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    border-right: 1px solid var(--border);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .tier-table th:last-child, .tier-table td:last-child {
+    border-right: none;
+  }
+
+  .tier-table tbody tr:last-child td {
+    border-bottom: none;
   }
 
   .tier-table th {
