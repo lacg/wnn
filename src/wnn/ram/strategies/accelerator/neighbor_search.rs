@@ -19,7 +19,9 @@ use chrono::Local;
 #[derive(Clone)]
 pub struct MutationConfig {
     pub num_clusters: usize,
-    pub mutable_clusters: usize,    // How many clusters to mutate (tier0-only = 100)
+    /// Which cluster indices can be mutated. None means all clusters.
+    /// Supports arbitrary tier optimization (e.g., tier1 = indices 100-499).
+    pub mutable_clusters: Option<Vec<usize>>,
     pub min_bits: usize,
     pub max_bits: usize,
     pub min_neurons: usize,
@@ -175,9 +177,11 @@ pub fn format_gen_prefix(generation: usize, total_generations: usize) -> String 
 /// Mutate a genome to create a neighbor.
 ///
 /// Mutations include:
-/// - bits_per_cluster: ±delta with mutation_rate probability (only first mutable_clusters)
-/// - neurons_per_cluster: ±delta with mutation_rate probability (only first mutable_clusters)
+/// - bits_per_cluster: ±delta with mutation_rate probability (only mutable clusters)
+/// - neurons_per_cluster: ±delta with mutation_rate probability (only mutable clusters)
 /// - connections: adjusted when architecture changes, small perturbations
+///
+/// mutable_clusters can be any set of indices (e.g., tier1 = 100-499), not just first N.
 pub fn mutate_genome(
     bits: &[usize],
     neurons: &[usize],
@@ -195,8 +199,17 @@ pub fn mutate_genome(
     let old_bits = bits.to_vec();
     let old_neurons = neurons.to_vec();
 
-    // Mutate architecture - only first mutable_clusters (tier0-only mode)
-    for i in 0..config.mutable_clusters {
+    // Mutate architecture - only clusters in mutable_clusters (or all if None)
+    let indices: Vec<usize> = match &config.mutable_clusters {
+        Some(indices) => indices.clone(),
+        None => (0..config.num_clusters).collect(),
+    };
+
+    for &i in &indices {
+        if i >= config.num_clusters {
+            continue; // Safety check
+        }
+
         // Mutate bits
         if rng.gen::<f64>() < config.bits_mutation_rate {
             let delta = rng.gen_range(-bits_delta_max..=bits_delta_max);
@@ -565,7 +578,9 @@ pub fn search_neighbors_best_n(
 #[derive(Clone)]
 pub struct GAConfig {
     pub num_clusters: usize,
-    pub mutable_clusters: usize,    // How many clusters to mutate (tier0-only = 100)
+    /// Which cluster indices can be mutated. None means all clusters.
+    /// Supports arbitrary tier optimization (e.g., tier1 = indices 100-499).
+    pub mutable_clusters: Option<Vec<usize>>,
     pub min_bits: usize,
     pub max_bits: usize,
     pub min_neurons: usize,
@@ -652,7 +667,7 @@ fn mutate_ga(
 ) -> (Vec<usize>, Vec<usize>, Vec<i64>) {
     let mutation_config = MutationConfig {
         num_clusters: config.num_clusters,
-        mutable_clusters: config.mutable_clusters,
+        mutable_clusters: config.mutable_clusters.clone(),
         min_bits: config.min_bits,
         max_bits: config.max_bits,
         min_neurons: config.min_neurons,

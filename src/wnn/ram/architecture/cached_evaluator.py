@@ -475,7 +475,7 @@ class CachedEvaluator:
         generation: Optional[int] = None,
         total_generations: Optional[int] = None,
         return_best_n: bool = True,
-        mutable_clusters: Optional[int] = None,
+        mutable_clusters: Optional[list[int]] = None,
     ) -> list[ClusterGenome]:
         """
         Search for neighbor genomes above accuracy threshold, entirely in Rust.
@@ -580,7 +580,7 @@ class CachedEvaluator:
         generation: Optional[int] = None,
         total_generations: Optional[int] = None,
         return_best_n: bool = True,
-        mutable_clusters: Optional[int] = None,  # Tier0-only: only mutate first N clusters
+        mutable_clusters: Optional[list[int]] = None,  # List of cluster indices to mutate (None = all)
     ) -> OffspringSearchResult:
         """
         Search for GA offspring above accuracy threshold, entirely in Rust.
