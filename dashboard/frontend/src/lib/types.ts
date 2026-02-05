@@ -287,4 +287,5 @@ export type WsMessage =
   | { type: 'FlowCancelled'; data: Flow }
   | { type: 'FlowQueued'; data: Flow }
   | { type: 'CheckpointCreated'; data: Checkpoint }
-  | { type: 'CheckpointDeleted'; data: { id: number } };
+  | { type: 'CheckpointDeleted'; data: { id: number } }
+  | { type: 'GatingStatusChanged'; data: { experiment_id: number; status: GatingStatus } };

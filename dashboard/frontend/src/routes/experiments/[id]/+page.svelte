@@ -3,6 +3,7 @@
   import { page } from '$app/stores';
   import type { Experiment, Iteration, GenomeEvaluation, Flow, ValidationSummary, GatingResults, Checkpoint, TierStats } from '$lib/types';
   import { formatDate } from '$lib/dateFormat';
+  import { gatingStatusUpdates } from '$lib/stores';
 
   let experiment: Experiment | null = null;
   let iterations: Iteration[] = [];
@@ -32,6 +33,18 @@
   // Reload when experimentId changes (for in-page navigation)
   $: if (experimentId) {
     loadExperiment();
+  }
+
+  // React to gating status updates from WebSocket
+  $: if ($gatingStatusUpdates && experiment && $gatingStatusUpdates.experiment_id === experiment.id) {
+    // Update the local experiment state with new gating status
+    experiment.gating_status = $gatingStatusUpdates.status;
+    experiment = experiment; // Trigger reactivity
+
+    // If completed or failed, reload to get results
+    if ($gatingStatusUpdates.status === 'completed' || $gatingStatusUpdates.status === 'failed') {
+      loadExperiment();
+    }
   }
 
   async function loadExperiment() {

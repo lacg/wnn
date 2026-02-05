@@ -401,6 +401,8 @@ pub enum WsMessage {
     /// Checkpoint events
     CheckpointCreated(Checkpoint),
     CheckpointDeleted { id: i64 },
+    /// Gating status changed
+    GatingStatusChanged { experiment_id: i64, status: GatingStatus },
 }
 
 /// Full dashboard state snapshot for new clients

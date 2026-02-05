@@ -32,6 +32,7 @@ pub fn routes(state: Arc<AppState>) -> Router {
         // Gating
         .route("/api/experiments/:id/run-gating", post(run_gating))
         .route("/api/experiments/:id/gating", get(get_gating_status).put(update_gating_results))
+        .route("/api/experiments/:id/gating-status", patch(update_gating_status))
         // Iterations
         .route("/api/iterations/:id/genomes", get(get_iteration_genomes))
         // Snapshot
@@ -348,11 +349,18 @@ async fn run_gating(
 
     // Set status to pending
     match crate::db::queries::update_gating_status(&state.db, experiment_id, &GatingStatus::Pending).await {
-        Ok(true) => (StatusCode::OK, Json(serde_json::json!({
-            "experiment_id": experiment_id,
-            "gating_status": "pending",
-            "message": "Gating analysis queued"
-        }))).into_response(),
+        Ok(true) => {
+            // Broadcast gating status change
+            let _ = state.ws_tx.send(WsMessage::GatingStatusChanged {
+                experiment_id,
+                status: GatingStatus::Pending,
+            });
+            (StatusCode::OK, Json(serde_json::json!({
+                "experiment_id": experiment_id,
+                "gating_status": "pending",
+                "message": "Gating analysis queued"
+            }))).into_response()
+        }
         Ok(false) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "Experiment not found"})),
@@ -400,11 +408,58 @@ async fn update_gating_results(
 ) -> impl IntoResponse {
     // First set status to completed, then update results
     match crate::db::queries::update_gating_results(&state.db, experiment_id, &req.results).await {
-        Ok(true) => (StatusCode::OK, Json(serde_json::json!({
-            "experiment_id": experiment_id,
-            "gating_status": "completed",
-            "genomes_tested": req.results.genomes_tested
-        }))).into_response(),
+        Ok(true) => {
+            // Broadcast gating completed
+            let status = if req.results.error.is_some() {
+                GatingStatus::Failed
+            } else {
+                GatingStatus::Completed
+            };
+            let _ = state.ws_tx.send(WsMessage::GatingStatusChanged {
+                experiment_id,
+                status,
+            });
+            (StatusCode::OK, Json(serde_json::json!({
+                "experiment_id": experiment_id,
+                "gating_status": "completed",
+                "genomes_tested": req.results.genomes_tested
+            }))).into_response()
+        }
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Experiment not found"})),
+        ).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+/// Request to update gating status
+#[derive(Debug, Deserialize)]
+pub struct UpdateGatingStatusRequest {
+    pub status: GatingStatus,
+}
+
+/// Update gating status for an experiment (called by worker to set 'running')
+async fn update_gating_status(
+    State(state): State<Arc<AppState>>,
+    Path(experiment_id): Path<i64>,
+    Json(req): Json<UpdateGatingStatusRequest>,
+) -> impl IntoResponse {
+    match crate::db::queries::update_gating_status(&state.db, experiment_id, &req.status).await {
+        Ok(true) => {
+            // Broadcast gating status change
+            let _ = state.ws_tx.send(WsMessage::GatingStatusChanged {
+                experiment_id,
+                status: req.status.clone(),
+            });
+            (StatusCode::OK, Json(serde_json::json!({
+                "experiment_id": experiment_id,
+                "gating_status": req.status
+            }))).into_response()
+        }
         Ok(false) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "Experiment not found"})),
@@ -1301,16 +1356,17 @@ async fn handle_socket(
                             WsMessage::FlowCancelled(_)
                         );
 
-                        // Forward flow-related messages to client
+                        // Forward flow-related and gating messages to client
                         let json_result = match &msg {
                             WsMessage::FlowStarted(_) |
                             WsMessage::FlowQueued(_) |
                             WsMessage::FlowCompleted(_) |
                             WsMessage::FlowFailed { .. } |
-                            WsMessage::FlowCancelled(_) => {
+                            WsMessage::FlowCancelled(_) |
+                            WsMessage::GatingStatusChanged { .. } => {
                                 serde_json::to_string(&msg)
                             }
-                            _ => continue, // Skip non-flow messages
+                            _ => continue, // Skip other messages
                         };
                         if let Ok(json) = json_result {
                             if socket.send(Message::Text(json.into())).await.is_err() {
