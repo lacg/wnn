@@ -681,80 +681,121 @@ class DashboardClient:
 		return None
 
 	# =========================================================================
-	# Gating methods
+	# Gating Run methods (resource-based API)
 	# =========================================================================
 
-	def get_pending_gating_experiments(self) -> list[dict]:
+	def get_pending_gating_runs(self) -> list[dict]:
 		"""
-		Get experiments with pending gating analysis.
+		Get all pending gating runs across all experiments.
 
 		Returns:
-			List of experiments with gating_status='pending'
+			List of GatingRun objects with status='pending'
 		"""
-		# List experiments and filter by gating_status
-		experiments = self.list_experiments(limit=100)
-		return [e for e in experiments if e.get("gating_status") == "pending"]
+		result = self._request("GET", "/api/gating/pending")
+		return result if result else []
 
-	def update_gating_status(self, experiment_id: int, status: str) -> dict:
+	def list_gating_runs(self, experiment_id: int) -> list[dict]:
 		"""
-		Update the gating status of an experiment.
+		List all gating runs for an experiment.
 
 		Args:
 			experiment_id: Experiment ID
+
+		Returns:
+			List of GatingRun objects
+		"""
+		result = self._request("GET", f"/api/experiments/{experiment_id}/gating")
+		return result if result else []
+
+	def get_gating_run(self, experiment_id: int, gating_run_id: int) -> Optional[dict]:
+		"""
+		Get a specific gating run.
+
+		Args:
+			experiment_id: Experiment ID
+			gating_run_id: Gating run ID
+
+		Returns:
+			GatingRun object or None if not found
+		"""
+		return self._request("GET", f"/api/experiments/{experiment_id}/gating/{gating_run_id}")
+
+	def create_gating_run(self, experiment_id: int) -> dict:
+		"""
+		Create a new gating run for an experiment.
+
+		Args:
+			experiment_id: Experiment ID (must be completed)
+
+		Returns:
+			Created GatingRun object with id
+		"""
+		result = self._request("POST", f"/api/experiments/{experiment_id}/gating")
+		if result:
+			self._logger(f"Created gating run {result.get('id')} for experiment {experiment_id}")
+		return result or {}
+
+	def update_gating_run_status(
+		self,
+		experiment_id: int,
+		gating_run_id: int,
+		status: str,
+	) -> dict:
+		"""
+		Update the status of a gating run.
+
+		Args:
+			experiment_id: Experiment ID
+			gating_run_id: Gating run ID
 			status: 'pending', 'running', 'completed', 'failed'
 
 		Returns:
-			Response from server
-		"""
-		# The API endpoint expects a POST to run-gating to set pending,
-		# but for running/completed/failed we need a direct update.
-		# Since the Rust API doesn't have a separate gating status update endpoint,
-		# we'll call the db directly through the experiment endpoint.
-		# For now, we rely on the fact that gating status is handled server-side.
-		# This method is a stub for when the API supports direct status updates.
-		return self._request("GET", f"/api/experiments/{experiment_id}/gating")
-
-	def update_gating_results(
-		self,
-		experiment_id: int,
-		results: dict,
-	) -> dict:
-		"""
-		Update gating results for an experiment.
-
-		This is called by the worker after gating analysis completes.
-		The results dict should contain:
-		- completed_at: ISO timestamp
-		- genomes_tested: number of genomes tested
-		- results: list of per-genome results
-		- error: optional error message if failed
-
-		Args:
-			experiment_id: Experiment ID
-			results: Gating results dict
-
-		Returns:
-			Response from server
+			Updated GatingRun object
 		"""
 		result = self._request(
-			"PUT",
-			f"/api/experiments/{experiment_id}/gating",
-			json_data={"results": results}
+			"PATCH",
+			f"/api/experiments/{experiment_id}/gating/{gating_run_id}",
+			json_data={"status": status}
 		)
-		self._logger(f"Gating results for experiment {experiment_id}: {len(results.get('results', []))} genomes tested")
+		self._logger(f"Updated gating run {gating_run_id} status to {status}")
 		return result or {}
 
-	def get_gating_status(self, experiment_id: int) -> Optional[dict]:
+	def update_gating_run_results(
+		self,
+		experiment_id: int,
+		gating_run_id: int,
+		results: list[dict],
+		genomes_tested: Optional[int] = None,
+		error: Optional[str] = None,
+	) -> dict:
 		"""
-		Get gating status and results for an experiment.
+		Update a gating run with results (completes the run).
 
 		Args:
 			experiment_id: Experiment ID
+			gating_run_id: Gating run ID
+			results: List of per-genome result dicts with keys:
+				genome_type, ce, acc, gated_ce, gated_acc, gating_config
+			genomes_tested: Number of genomes tested (defaults to len(results))
+			error: Optional error message if failed
 
 		Returns:
-			Dict with gating_status and gating_results, or None if not found
+			Updated GatingRun object
 		"""
-		return self._request("GET", f"/api/experiments/{experiment_id}/gating")
+		data = {
+			"results": results,
+			"genomes_tested": genomes_tested or len(results),
+		}
+		if error:
+			data["error"] = error
+
+		result = self._request(
+			"PATCH",
+			f"/api/experiments/{experiment_id}/gating/{gating_run_id}",
+			json_data=data
+		)
+		self._logger(f"Updated gating run {gating_run_id} with {len(results)} genome results")
+		return result or {}
 
 	# =========================================================================
 	# Health check

@@ -32,6 +32,7 @@ pub fn routes(state: Arc<AppState>) -> Router {
         // Gating runs
         .route("/api/experiments/:id/gating", get(list_gating_runs).post(create_gating_run))
         .route("/api/experiments/:id/gating/:gating_id", get(get_gating_run).patch(update_gating_run))
+        .route("/api/gating/pending", get(list_pending_gating_runs))
         // Iterations
         .route("/api/iterations/:id/genomes", get(get_iteration_genomes))
         // Snapshot
@@ -476,6 +477,19 @@ async fn update_gating_run(
 
     // Nothing to update
     (StatusCode::OK, Json(run)).into_response()
+}
+
+/// List all pending gating runs (for worker polling)
+async fn list_pending_gating_runs(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    match crate::db::queries::get_pending_gating_runs(&state.db).await {
+        Ok(runs) => (StatusCode::OK, Json(runs)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
 }
 
 /// Trigger gating analysis for all completed experiments in a flow

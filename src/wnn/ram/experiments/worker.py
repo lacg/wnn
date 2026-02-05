@@ -311,10 +311,10 @@ class FlowWorker:
                 if flow_data:
                     self._execute_flow(flow_data)
                 else:
-                    # No flows, check for pending gating jobs
-                    gating_experiment = self._get_next_gating_experiment()
-                    if gating_experiment:
-                        self._execute_gating_job(gating_experiment)
+                    # No flows, check for pending gating runs
+                    gating_run = self._get_next_gating_run()
+                    if gating_run:
+                        self._execute_gating_job(gating_run)
                     else:
                         # No work, wait before polling again
                         time.sleep(self.poll_interval)
@@ -573,32 +573,40 @@ class FlowWorker:
     # Gating Job Methods
     # =========================================================================
 
-    def _get_next_gating_experiment(self) -> Optional[dict]:
-        """Get the next experiment with pending gating analysis."""
+    def _get_next_gating_run(self) -> Optional[dict]:
+        """Get the next pending gating run."""
         try:
-            experiments = self.client.get_pending_gating_experiments()
-            if experiments:
-                return experiments[0]
+            runs = self.client.get_pending_gating_runs()
+            if runs:
+                return runs[0]
         except Exception as e:
-            self._log(f"Failed to fetch pending gating experiments: {e}")
+            self._log(f"Failed to fetch pending gating runs: {e}")
         return None
 
-    def _execute_gating_job(self, experiment: dict):
-        """Execute gating analysis for an experiment."""
+    def _execute_gating_job(self, gating_run: dict):
+        """Execute gating analysis for a gating run."""
         from datetime import datetime
         import gzip
         import json
 
-        experiment_id = experiment["id"]
+        gating_run_id = gating_run["id"]
+        experiment_id = gating_run["experiment_id"]
+
+        # Get experiment details
+        experiment = self.client.get_experiment(experiment_id)
+        if not experiment:
+            self._log(f"Experiment {experiment_id} not found for gating run {gating_run_id}")
+            return
+
         experiment_name = experiment.get("name", f"Experiment {experiment_id}")
 
         self._log(f"=" * 60)
-        self._log(f"Starting gating analysis: {experiment_name} (ID: {experiment_id})")
+        self._log(f"Starting gating analysis: {experiment_name} (Run ID: {gating_run_id})")
         self._log(f"=" * 60)
 
         try:
             # Update status to running
-            # Note: We'd need an endpoint for this, for now we proceed
+            self.client.update_gating_run_status(experiment_id, gating_run_id, "running")
             self._log("  Loading checkpoint...")
 
             # Find the latest checkpoint for this experiment
@@ -670,17 +678,14 @@ class FlowWorker:
                     "gating_config": result["gating_config"],
                 })
 
-            # Build results object
-            results = {
-                "completed_at": datetime.utcnow().isoformat() + "Z",
-                "genomes_tested": len(gating_results),
-                "results": gating_results,
-                "error": None,
-            }
-
-            # Update experiment with results
-            self.client.update_gating_results(experiment_id, results)
-            self._log(f"Gating analysis completed for experiment {experiment_id}")
+            # Update gating run with results (automatically sets status to completed)
+            self.client.update_gating_run_results(
+                experiment_id,
+                gating_run_id,
+                results=gating_results,
+                genomes_tested=len(gating_results),
+            )
+            self._log(f"Gating analysis completed for experiment {experiment_id} (run {gating_run_id})")
 
         except Exception as e:
             self._log(f"Gating analysis failed: {e}")
@@ -688,14 +693,14 @@ class FlowWorker:
             traceback.print_exc()
 
             # Update with failure
-            results = {
-                "completed_at": datetime.utcnow().isoformat() + "Z",
-                "genomes_tested": 0,
-                "results": [],
-                "error": str(e),
-            }
             try:
-                self.client.update_gating_results(experiment_id, results)
+                self.client.update_gating_run_results(
+                    experiment_id,
+                    gating_run_id,
+                    results=[],
+                    genomes_tested=0,
+                    error=str(e),
+                )
             except Exception:
                 pass
 
