@@ -82,6 +82,17 @@ public final class APIClient {
     }
     public func deleteCheckpoint(_ id: Int64) async throws { try await requestVoid(path: "api/checkpoints/\(id)", method: "DELETE") }
     public func checkpointDownloadURL(_ id: Int64) -> URL? { baseURL?.appendingPathComponent("api/checkpoints/\(id)/download") }
+
+    // Gating Runs
+    public func getGatingRuns(experimentId: Int64) async throws -> [GatingRun] {
+        try await request(path: "api/experiments/\(experimentId)/gating")
+    }
+    public func createGatingRun(experimentId: Int64) async throws -> GatingRun {
+        try await request(path: "api/experiments/\(experimentId)/gating", method: "POST")
+    }
+    public func getGatingRun(experimentId: Int64, gatingId: Int64) async throws -> GatingRun {
+        try await request(path: "api/experiments/\(experimentId)/gating/\(gatingId)")
+    }
 }
 
 public enum APIError: LocalizedError {

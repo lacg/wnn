@@ -18,8 +18,8 @@ public struct SettingsView: View {
             Form {
                 Section("Connection Status") { connectionStatusRow }
                 Section { Picker("Mode", selection: $settings.connectionMode) { ForEach(ConnectionMode.allCases) { m in Label(m.displayName, systemImage: m.icon).tag(m) } }.pickerStyle(.inline) } header: { Text("Connection Mode") } footer: { Text(settings.connectionMode.description) }
-                Section { VStack(alignment: .leading, spacing: 8) { TextField("http://192.168.1.100:3000", text: $settings.localServerURL).textInputAutocapitalization(.never).autocorrectionDisabled().fontDesign(.monospaced); testConnectionButton(mode: .local) } } header: { Label("Local Server", systemImage: "wifi") } footer: { Text("URL for when you're on the same network as your server") }
-                Section { VStack(alignment: .leading, spacing: 8) { TextField("http://hostname:3000", text: $settings.remoteServerURL).textInputAutocapitalization(.never).autocorrectionDisabled().fontDesign(.monospaced); testConnectionButton(mode: .remote) } } header: { Label("Remote Server", systemImage: "globe") } footer: { Text("URL for when you're away from home (Tailscale, VPN, etc.)") }
+                Section { VStack(alignment: .leading, spacing: 8) { urlTextField(placeholder: "http://192.168.1.100:3000", text: $settings.localServerURL); testConnectionButton(mode: .local) } } header: { Label("Local Server", systemImage: "wifi") } footer: { Text("URL for when you're on the same network as your server") }
+                Section { VStack(alignment: .leading, spacing: 8) { urlTextField(placeholder: "http://hostname:3000", text: $settings.remoteServerURL); testConnectionButton(mode: .remote) } } header: { Label("Remote Server", systemImage: "globe") } footer: { Text("URL for when you're away from home (Tailscale, VPN, etc.)") }
                 Section { Button { reconnect() } label: { Label("Reconnect", systemImage: "arrow.clockwise") }; Button(role: .destructive) { settings.resetToDefaults(); testResults = [:] } label: { Label("Reset to Defaults", systemImage: "arrow.counterclockwise") } }
                 Section("About") { LabeledContent("Version", value: "1.0.0"); LabeledContent("Active Connection") { HStack(spacing: 4) { Image(systemName: connectionManager.activeMode.icon); Text(connectionManager.activeMode.displayName) }.foregroundColor(.secondary) }; if let url = connectionManager.baseURL { LabeledContent("Connected To") { Text(url.absoluteString).font(.caption).fontDesign(.monospaced).foregroundColor(.secondary).lineLimit(1) } } }
             }
@@ -50,4 +50,18 @@ public struct SettingsView: View {
 
     private func testConnection(mode: ConnectionMode) { isTesting = true; testResults[mode] = nil; Task { let success = await connectionManager.testConnection(mode: mode); await MainActor.run { testResults[mode] = success; isTesting = false } } }
     private func reconnect() { Task { wsManager.disconnect(); await connectionManager.connect(); if connectionManager.connectionState.isConnected { wsManager.connect() } } }
+
+    @ViewBuilder
+    private func urlTextField(placeholder: String, text: Binding<String>) -> some View {
+        #if os(iOS)
+        TextField(placeholder, text: text)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .fontDesign(.monospaced)
+        #else
+        TextField(placeholder, text: text)
+            .disableAutocorrection(true)
+            .font(.system(.body, design: .monospaced))
+        #endif
+    }
 }

@@ -27,8 +27,13 @@ public struct FlowsListView: View {
             flowsContent
                 .navigationTitle("Flows")
                 .toolbar {
+                    #if os(iOS)
                     ToolbarItem(placement: .navigationBarTrailing) { Button { viewModel.showingNewFlowSheet = true } label: { Image(systemName: "plus") } }
                     ToolbarItem(placement: .navigationBarLeading) { filterMenu }
+                    #else
+                    ToolbarItem(placement: .automatic) { Button { viewModel.showingNewFlowSheet = true } label: { Image(systemName: "plus") } }
+                    ToolbarItem(placement: .automatic) { filterMenu }
+                    #endif
                 }
                 .refreshable { await viewModel.refresh() }
                 .sheet(item: $viewModel.selectedFlow) { flow in FlowDetailView(flow: flow) }
@@ -42,8 +47,13 @@ public struct FlowsListView: View {
             flowsContent
                 .navigationTitle("Flows")
                 .toolbar {
+                    #if os(iOS)
                     ToolbarItem(placement: .navigationBarTrailing) { Button { viewModel.showingNewFlowSheet = true } label: { Image(systemName: "plus") } }
                     ToolbarItem(placement: .navigationBarLeading) { filterMenu }
+                    #else
+                    ToolbarItem(placement: .automatic) { Button { viewModel.showingNewFlowSheet = true } label: { Image(systemName: "plus") } }
+                    ToolbarItem(placement: .automatic) { filterMenu }
+                    #endif
                 }
                 .refreshable { await viewModel.refresh() }
         } detail: {

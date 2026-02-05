@@ -15,6 +15,8 @@ public enum WsMessage: Codable {
     case flowQueued(Flow)
     case checkpointCreated(Checkpoint)
     case checkpointDeleted(id: Int64)
+    case gatingRunCreated(GatingRun)
+    case gatingRunUpdated(GatingRun)
 
     private enum CodingKeys: String, CodingKey { case type, data }
 
@@ -22,6 +24,7 @@ public enum WsMessage: Codable {
         case Snapshot, IterationCompleted, GenomeEvaluations
         case HealthCheck, ExperimentStatusChanged, FlowStarted, FlowCompleted, FlowFailed
         case FlowCancelled, FlowQueued, CheckpointCreated, CheckpointDeleted
+        case GatingRunCreated, GatingRunUpdated
     }
 
     public init(from decoder: Decoder) throws {
@@ -47,6 +50,8 @@ public enum WsMessage: Codable {
         case .CheckpointDeleted:
             let data = try container.decode(CheckpointDeletedData.self, forKey: .data)
             self = .checkpointDeleted(id: data.id)
+        case .GatingRunCreated: self = .gatingRunCreated(try container.decode(GatingRun.self, forKey: .data))
+        case .GatingRunUpdated: self = .gatingRunUpdated(try container.decode(GatingRun.self, forKey: .data))
         }
     }
 
@@ -65,6 +70,8 @@ public enum WsMessage: Codable {
         case .flowQueued(let d): try container.encode(MessageType.FlowQueued, forKey: .type); try container.encode(d, forKey: .data)
         case .checkpointCreated(let d): try container.encode(MessageType.CheckpointCreated, forKey: .type); try container.encode(d, forKey: .data)
         case .checkpointDeleted(let id): try container.encode(MessageType.CheckpointDeleted, forKey: .type); try container.encode(CheckpointDeletedData(id: id), forKey: .data)
+        case .gatingRunCreated(let d): try container.encode(MessageType.GatingRunCreated, forKey: .type); try container.encode(d, forKey: .data)
+        case .gatingRunUpdated(let d): try container.encode(MessageType.GatingRunUpdated, forKey: .type); try container.encode(d, forKey: .data)
         }
     }
 }
