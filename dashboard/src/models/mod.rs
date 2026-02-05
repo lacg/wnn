@@ -206,6 +206,21 @@ pub struct GatingResults {
     pub error: Option<String>,
 }
 
+/// A single gating analysis run
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatingRun {
+    pub id: i64,
+    pub experiment_id: i64,
+    pub status: GatingStatus,
+    pub config: Option<GatingConfig>,
+    pub genomes_tested: Option<i32>,
+    pub results: Option<Vec<GatingResult>>,
+    pub error: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
 /// Result for a single genome in gating analysis
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GatingResult {
@@ -401,8 +416,9 @@ pub enum WsMessage {
     /// Checkpoint events
     CheckpointCreated(Checkpoint),
     CheckpointDeleted { id: i64 },
-    /// Gating status changed
-    GatingStatusChanged { experiment_id: i64, status: GatingStatus },
+    /// Gating run events
+    GatingRunCreated(GatingRun),
+    GatingRunUpdated(GatingRun),
 }
 
 /// Full dashboard state snapshot for new clients

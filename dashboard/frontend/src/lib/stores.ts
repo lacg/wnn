@@ -39,8 +39,9 @@ export const flows = writable<Flow[]>([]);
 export const currentFlow = writable<Flow | null>(null);
 export const checkpoints = writable<Checkpoint[]>([]);
 
-// Gating status updates (for real-time notifications)
-export const gatingStatusUpdates = writable<{ experiment_id: number; status: string } | null>(null);
+// Gating run updates (for real-time notifications)
+import type { GatingRun } from './types';
+export const gatingRunUpdates = writable<GatingRun | null>(null);
 
 // Best metrics seen so far
 export const bestMetrics = writable({
@@ -356,10 +357,11 @@ function handleWsMessage(msg: WsMessage) {
       break;
     }
 
-    case 'GatingStatusChanged': {
-      const { experiment_id, status } = msg.data;
-      gatingStatusUpdates.set({ experiment_id, status });
-      console.log(`Gating status changed for experiment ${experiment_id}:`, status);
+    case 'GatingRunCreated':
+    case 'GatingRunUpdated': {
+      const run = msg.data;
+      gatingRunUpdates.set(run);
+      console.log(`Gating run ${msg.type === 'GatingRunCreated' ? 'created' : 'updated'} for experiment ${run.experiment_id}:`, run.status);
       break;
     }
   }

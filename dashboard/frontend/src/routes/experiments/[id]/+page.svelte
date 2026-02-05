@@ -3,7 +3,8 @@
   import { page } from '$app/stores';
   import type { Experiment, Iteration, GenomeEvaluation, Flow, ValidationSummary, GatingResults, Checkpoint, TierStats } from '$lib/types';
   import { formatDate } from '$lib/dateFormat';
-  import { gatingStatusUpdates } from '$lib/stores';
+  import { gatingRunUpdates } from '$lib/stores';
+  import type { GatingRun } from '$lib/types';
 
   let experiment: Experiment | null = null;
   let iterations: Iteration[] = [];
@@ -24,6 +25,7 @@
 
   // Gating state
   let gatingLoading = false;
+  let gatingRuns: GatingRun[] = [];
 
   // Chart tooltip state
   let tooltipData: { x: number; y: number; iter: number; ce: number; acc: number | null; avgCe: number | null; avgAcc: number | null } | null = null;
@@ -35,16 +37,20 @@
     loadExperiment();
   }
 
-  // React to gating status updates from WebSocket
-  $: if ($gatingStatusUpdates && experiment && $gatingStatusUpdates.experiment_id === experiment.id) {
-    // Update the local experiment state with new gating status
-    experiment.gating_status = $gatingStatusUpdates.status;
-    experiment = experiment; // Trigger reactivity
-
-    // If completed or failed, reload to get results
-    if ($gatingStatusUpdates.status === 'completed' || $gatingStatusUpdates.status === 'failed') {
-      loadExperiment();
+  // React to gating run updates from WebSocket
+  $: if ($gatingRunUpdates && experiment && $gatingRunUpdates.experiment_id === experiment.id) {
+    // Update the gating runs list
+    const existingIdx = gatingRuns.findIndex(r => r.id === $gatingRunUpdates!.id);
+    if (existingIdx >= 0) {
+      gatingRuns[existingIdx] = $gatingRunUpdates;
+    } else {
+      gatingRuns = [$gatingRunUpdates, ...gatingRuns];
     }
+    gatingRuns = gatingRuns; // Trigger reactivity
+
+    // Also update experiment's gating_status for backward compat display
+    experiment.gating_status = $gatingRunUpdates.status;
+    experiment = experiment;
   }
 
   async function loadExperiment() {
@@ -52,11 +58,12 @@
     error = null;
 
     try {
-      const [expRes, itersRes, summariesRes, checkpointsRes] = await Promise.all([
+      const [expRes, itersRes, summariesRes, checkpointsRes, gatingRes] = await Promise.all([
         fetch(`/api/experiments/${experimentId}`),
         fetch(`/api/experiments/${experimentId}/iterations?limit=500`),
         fetch(`/api/experiments/${experimentId}/summaries`),
-        fetch(`/api/checkpoints?experiment_id=${experimentId}`)
+        fetch(`/api/checkpoints?experiment_id=${experimentId}`),
+        fetch(`/api/experiments/${experimentId}/gating`)
       ]);
 
       if (!expRes.ok) throw new Error('Experiment not found');
@@ -65,11 +72,13 @@
       iterations = itersRes.ok ? await itersRes.json() : [];
       validationSummaries = summariesRes.ok ? await summariesRes.json() : [];
       checkpoints = checkpointsRes.ok ? await checkpointsRes.json() : [];
+      gatingRuns = gatingRes.ok ? await gatingRes.json() : [];
 
       // Ensure arrays
       if (!Array.isArray(iterations)) iterations = [];
       if (!Array.isArray(validationSummaries)) validationSummaries = [];
       if (!Array.isArray(checkpoints)) checkpoints = [];
+      if (!Array.isArray(gatingRuns)) gatingRuns = [];
 
       // Fetch flow and its experiments if this experiment belongs to a flow
       if (experiment?.flow_id) {
@@ -219,13 +228,17 @@
 
     gatingLoading = true;
     try {
-      const res = await fetch(`/api/experiments/${experimentId}/run-gating`, {
+      const res = await fetch(`/api/experiments/${experimentId}/gating`, {
         method: 'POST'
       });
 
       if (res.ok) {
-        // Reload experiment to get updated gating_status
-        await loadExperiment();
+        const newRun: GatingRun = await res.json();
+        // Add the new run to the list
+        gatingRuns = [newRun, ...gatingRuns];
+        // Update experiment status for display
+        experiment.gating_status = newRun.status;
+        experiment = experiment;
       } else {
         const data = await res.json();
         alert(data.error || 'Failed to start gating analysis');
@@ -403,6 +416,11 @@
     bits: number;
     optimize: boolean;
   }
+  // Latest gating run (most recent by created_at, which is already sorted DESC from API)
+  $: latestGatingRun = gatingRuns.length > 0 ? gatingRuns[0] : null;
+  $: hasActiveGating = latestGatingRun && (latestGatingRun.status === 'pending' || latestGatingRun.status === 'running');
+  $: hasCompletedGating = latestGatingRun && latestGatingRun.status === 'completed' && latestGatingRun.results;
+
   $: parsedTiers = (() => {
     if (!experiment?.tier_config) return [];
     try {
@@ -441,16 +459,12 @@
         </span>
       </div>
       <div class="header-right">
-        {#if experiment.status === 'completed' && !experiment.gating_status}
+        {#if experiment.status === 'completed' && !hasActiveGating}
           <button class="btn-secondary" on:click={runGating} disabled={gatingLoading}>
-            {gatingLoading ? '⏳ Starting...' : '🎯 Run Gating Analysis'}
+            {gatingLoading ? '⏳ Starting...' : hasCompletedGating ? '🔄 Re-run Gating' : '🎯 Run Gating Analysis'}
           </button>
-        {:else if experiment.gating_status === 'pending' || experiment.gating_status === 'running'}
-          <span class="gating-status running">⏳ Gating {experiment.gating_status}...</span>
-        {:else if experiment.gating_status === 'failed' || (experiment.gating_status === 'completed' && experiment.gating_results?.error)}
-          <button class="btn-secondary" on:click={runGating} disabled={gatingLoading}>
-            🔄 Retry Gating
-          </button>
+        {:else if hasActiveGating}
+          <span class="gating-status running">⏳ Gating {latestGatingRun?.status}...</span>
         {/if}
       </div>
     </div>
@@ -567,12 +581,15 @@
     {/if}
 
     <!-- Gating Results -->
-    {#if experiment.gating_status === 'completed' && experiment.gating_results}
+    {#if hasCompletedGating && latestGatingRun?.results}
       <div class="gating-section">
         <div class="gating-header">
           <span class="gating-title">🎯 Gating Analysis Results</span>
           <span class="gating-meta">
-            {experiment.gating_results.genomes_tested} genomes tested
+            {latestGatingRun.genomes_tested ?? latestGatingRun.results.length} genomes tested
+            {#if gatingRuns.length > 1}
+              · Run #{latestGatingRun.id}
+            {/if}
           </span>
         </div>
         <div class="gating-table-container">
@@ -589,7 +606,7 @@
               </tr>
             </thead>
             <tbody>
-              {#each experiment.gating_results.results as result}
+              {#each latestGatingRun.results as result}
                 {@const ceDelta = result.gated_ce - result.ce}
                 {@const accDelta = result.gated_acc - result.acc}
                 <tr>
@@ -609,11 +626,21 @@
             </tbody>
           </table>
         </div>
-        {#if experiment.gating_results.error}
+        {#if latestGatingRun.error}
           <div class="gating-error">
-            Error: {experiment.gating_results.error}
+            Error: {latestGatingRun.error}
           </div>
         {/if}
+      </div>
+    {:else if latestGatingRun?.status === 'failed'}
+      <div class="gating-section">
+        <div class="gating-header">
+          <span class="gating-title">🎯 Gating Analysis</span>
+          <span class="gating-meta">Run #{latestGatingRun.id}</span>
+        </div>
+        <div class="gating-error">
+          Error: {latestGatingRun.error ?? 'Gating analysis failed'}
+        </div>
       </div>
     {/if}
 

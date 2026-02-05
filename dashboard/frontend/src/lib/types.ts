@@ -88,6 +88,19 @@ export interface GatingResults {
   error: string | null;
 }
 
+export interface GatingRun {
+  id: number;
+  experiment_id: number;
+  status: GatingStatus;
+  config: GatingConfig | null;
+  genomes_tested: number | null;
+  results: GatingResult[] | null;
+  error: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
 export interface Experiment {
   id: number;
   flow_id: number | null;
@@ -288,4 +301,5 @@ export type WsMessage =
   | { type: 'FlowQueued'; data: Flow }
   | { type: 'CheckpointCreated'; data: Checkpoint }
   | { type: 'CheckpointDeleted'; data: { id: number } }
-  | { type: 'GatingStatusChanged'; data: { experiment_id: number; status: GatingStatus } };
+  | { type: 'GatingRunCreated'; data: GatingRun }
+  | { type: 'GatingRunUpdated'; data: GatingRun };

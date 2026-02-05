@@ -29,10 +29,9 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .route("/api/experiments/:id", get(get_experiment).patch(update_experiment))
         .route("/api/experiments/:id/iterations", get(get_experiment_iterations))
         .route("/api/experiments/:id/summaries", get(get_validation_summaries).post(create_validation_summary))
-        // Gating
-        .route("/api/experiments/:id/run-gating", post(run_gating))
-        .route("/api/experiments/:id/gating", get(get_gating_status).put(update_gating_results))
-        .route("/api/experiments/:id/gating-status", patch(update_gating_status))
+        // Gating runs
+        .route("/api/experiments/:id/gating", get(list_gating_runs).post(create_gating_run))
+        .route("/api/experiments/:id/gating/:gating_id", get(get_gating_run).patch(update_gating_run))
         // Iterations
         .route("/api/iterations/:id/genomes", get(get_iteration_genomes))
         // Snapshot
@@ -288,12 +287,11 @@ async fn get_flow_validations(
 }
 
 // =============================================================================
-// Gating handlers
+// Gating Run handlers
 // =============================================================================
 
-/// Trigger gating analysis for an experiment
-/// Sets gating_status to 'pending' so worker can pick it up
-async fn run_gating(
+/// Create a new gating run for an experiment
+async fn create_gating_run(
     State(state): State<Arc<AppState>>,
     Path(experiment_id): Path<i64>,
 ) -> impl IntoResponse {
@@ -318,53 +316,38 @@ async fn run_gating(
         ).into_response();
     }
 
-    // Check if gating is already running or completed
-    if let Some(ref status) = experiment.gating_status {
-        match status {
-            GatingStatus::Pending | GatingStatus::Running => {
+    // Check if there's already a pending or running gating run
+    if let Ok(runs) = crate::db::queries::list_gating_runs(&state.db, experiment_id).await {
+        for run in &runs {
+            if run.status == GatingStatus::Pending || run.status == GatingStatus::Running {
                 return (
                     StatusCode::CONFLICT,
-                    Json(serde_json::json!({"error": "Gating analysis already in progress"})),
+                    Json(serde_json::json!({
+                        "error": "Gating analysis already in progress",
+                        "gating_run_id": run.id
+                    })),
                 ).into_response();
             }
-            GatingStatus::Completed => {
-                // Allow re-running if completed with an error
-                let has_error = experiment.gating_results
-                    .as_ref()
-                    .map(|r| r.error.is_some())
-                    .unwrap_or(false);
-                if !has_error {
-                    return (
-                        StatusCode::CONFLICT,
-                        Json(serde_json::json!({"error": "Gating analysis already completed. Delete results to re-run."})),
-                    ).into_response();
-                }
-                // Fall through to allow retry
-            }
-            GatingStatus::Failed => {
-                // Allow re-running after failure
-            }
         }
     }
 
-    // Set status to pending
-    match crate::db::queries::update_gating_status(&state.db, experiment_id, &GatingStatus::Pending).await {
-        Ok(true) => {
-            // Broadcast gating status change
-            let _ = state.ws_tx.send(WsMessage::GatingStatusChanged {
-                experiment_id,
-                status: GatingStatus::Pending,
-            });
-            (StatusCode::OK, Json(serde_json::json!({
-                "experiment_id": experiment_id,
-                "gating_status": "pending",
-                "message": "Gating analysis queued"
-            }))).into_response()
+    // Create new gating run
+    match crate::db::queries::create_gating_run(&state.db, experiment_id, None).await {
+        Ok(id) => {
+            // Fetch and return the created run
+            match crate::db::queries::get_gating_run(&state.db, id).await {
+                Ok(Some(run)) => {
+                    // Broadcast gating run created
+                    let _ = state.ws_tx.send(WsMessage::GatingRunCreated(run.clone()));
+                    (StatusCode::CREATED, Json(run)).into_response()
+                }
+                _ => (StatusCode::CREATED, Json(serde_json::json!({
+                    "id": id,
+                    "experiment_id": experiment_id,
+                    "status": "pending"
+                }))).into_response(),
+            }
         }
-        Ok(false) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Experiment not found"})),
-        ).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
@@ -372,20 +355,39 @@ async fn run_gating(
     }
 }
 
-/// Get gating status and results for an experiment
-async fn get_gating_status(
+/// List all gating runs for an experiment
+async fn list_gating_runs(
     State(state): State<Arc<AppState>>,
     Path(experiment_id): Path<i64>,
 ) -> impl IntoResponse {
-    match crate::db::queries::get_experiment(&state.db, experiment_id).await {
-        Ok(Some(exp)) => (StatusCode::OK, Json(serde_json::json!({
-            "experiment_id": experiment_id,
-            "gating_status": exp.gating_status,
-            "gating_results": exp.gating_results
-        }))).into_response(),
+    match crate::db::queries::list_gating_runs(&state.db, experiment_id).await {
+        Ok(runs) => (StatusCode::OK, Json(runs)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+/// Get a specific gating run
+async fn get_gating_run(
+    State(state): State<Arc<AppState>>,
+    Path((experiment_id, gating_id)): Path<(i64, i64)>,
+) -> impl IntoResponse {
+    match crate::db::queries::get_gating_run(&state.db, gating_id).await {
+        Ok(Some(run)) => {
+            // Verify it belongs to the experiment
+            if run.experiment_id != experiment_id {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({"error": "Gating run not found for this experiment"})),
+                ).into_response();
+            }
+            (StatusCode::OK, Json(run)).into_response()
+        }
         Ok(None) => (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Experiment not found"})),
+            Json(serde_json::json!({"error": "Gating run not found"})),
         ).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -394,81 +396,86 @@ async fn get_gating_status(
     }
 }
 
-/// Request to update gating results
+/// Request to update a gating run
 #[derive(Debug, Deserialize)]
-pub struct UpdateGatingResultsRequest {
-    pub results: GatingResults,
+pub struct UpdateGatingRunRequest {
+    pub status: Option<GatingStatus>,
+    pub genomes_tested: Option<i32>,
+    pub results: Option<Vec<GatingResult>>,
+    pub error: Option<String>,
 }
 
-/// Update gating results for an experiment (called by worker when complete)
-async fn update_gating_results(
+/// Update a gating run (status or results)
+async fn update_gating_run(
     State(state): State<Arc<AppState>>,
-    Path(experiment_id): Path<i64>,
-    Json(req): Json<UpdateGatingResultsRequest>,
+    Path((experiment_id, gating_id)): Path<(i64, i64)>,
+    Json(req): Json<UpdateGatingRunRequest>,
 ) -> impl IntoResponse {
-    // First set status to completed, then update results
-    match crate::db::queries::update_gating_results(&state.db, experiment_id, &req.results).await {
-        Ok(true) => {
-            // Broadcast gating completed
-            let status = if req.results.error.is_some() {
-                GatingStatus::Failed
-            } else {
-                GatingStatus::Completed
-            };
-            let _ = state.ws_tx.send(WsMessage::GatingStatusChanged {
-                experiment_id,
-                status,
-            });
-            (StatusCode::OK, Json(serde_json::json!({
-                "experiment_id": experiment_id,
-                "gating_status": "completed",
-                "genomes_tested": req.results.genomes_tested
-            }))).into_response()
-        }
-        Ok(false) => (
+    // First verify the gating run exists and belongs to this experiment
+    let run = match crate::db::queries::get_gating_run(&state.db, gating_id).await {
+        Ok(Some(r)) => r,
+        Ok(None) => return (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Experiment not found"})),
+            Json(serde_json::json!({"error": "Gating run not found"})),
         ).into_response(),
-        Err(e) => (
+        Err(e) => return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
         ).into_response(),
-    }
-}
+    };
 
-/// Request to update gating status
-#[derive(Debug, Deserialize)]
-pub struct UpdateGatingStatusRequest {
-    pub status: GatingStatus,
-}
-
-/// Update gating status for an experiment (called by worker to set 'running')
-async fn update_gating_status(
-    State(state): State<Arc<AppState>>,
-    Path(experiment_id): Path<i64>,
-    Json(req): Json<UpdateGatingStatusRequest>,
-) -> impl IntoResponse {
-    match crate::db::queries::update_gating_status(&state.db, experiment_id, &req.status).await {
-        Ok(true) => {
-            // Broadcast gating status change
-            let _ = state.ws_tx.send(WsMessage::GatingStatusChanged {
-                experiment_id,
-                status: req.status.clone(),
-            });
-            (StatusCode::OK, Json(serde_json::json!({
-                "experiment_id": experiment_id,
-                "gating_status": req.status
-            }))).into_response()
-        }
-        Ok(false) => (
+    if run.experiment_id != experiment_id {
+        return (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Experiment not found"})),
-        ).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        ).into_response(),
+            Json(serde_json::json!({"error": "Gating run not found for this experiment"})),
+        ).into_response();
     }
+
+    // If results are provided, update with results (completes the run)
+    if let Some(ref results) = req.results {
+        let genomes_tested = req.genomes_tested.unwrap_or(results.len() as i32);
+        match crate::db::queries::update_gating_run_results(
+            &state.db,
+            gating_id,
+            genomes_tested,
+            results,
+            req.error.as_deref(),
+        ).await {
+            Ok(Some(updated_run)) => {
+                let _ = state.ws_tx.send(WsMessage::GatingRunUpdated(updated_run.clone()));
+                return (StatusCode::OK, Json(updated_run)).into_response();
+            }
+            Ok(None) => return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Gating run not found"})),
+            ).into_response(),
+            Err(e) => return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            ).into_response(),
+        }
+    }
+
+    // If only status is provided, update status
+    if let Some(ref status) = req.status {
+        match crate::db::queries::update_gating_run_status(&state.db, gating_id, status).await {
+            Ok(Some(updated_run)) => {
+                let _ = state.ws_tx.send(WsMessage::GatingRunUpdated(updated_run.clone()));
+                return (StatusCode::OK, Json(updated_run)).into_response();
+            }
+            Ok(None) => return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Gating run not found"})),
+            ).into_response(),
+            Err(e) => return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            ).into_response(),
+        }
+    }
+
+    // Nothing to update
+    (StatusCode::OK, Json(run)).into_response()
 }
 
 /// Trigger gating analysis for all completed experiments in a flow
@@ -492,7 +499,7 @@ async fn run_flow_gating(
         ).into_response();
     }
 
-    // Queue gating for each completed experiment that hasn't been analyzed
+    // Queue gating for each completed experiment
     let mut queued = Vec::new();
     let mut skipped = Vec::new();
     let mut errors = Vec::new();
@@ -507,34 +514,30 @@ async fn run_flow_gating(
             continue;
         }
 
-        // Skip if gating is already pending, running, or completed
-        if let Some(ref status) = exp.gating_status {
-            match status {
-                GatingStatus::Pending | GatingStatus::Running | GatingStatus::Completed => {
-                    skipped.push(serde_json::json!({
-                        "experiment_id": exp.id,
-                        "reason": format!("gating_{}", match status {
-                            GatingStatus::Pending => "pending",
-                            GatingStatus::Running => "running",
-                            GatingStatus::Completed => "completed",
-                            GatingStatus::Failed => "failed",
-                        })
-                    }));
-                    continue;
-                }
-                GatingStatus::Failed => {
-                    // Allow re-running after failure
-                }
+        // Check if there's already a pending or running gating run
+        if let Ok(runs) = crate::db::queries::list_gating_runs(&state.db, exp.id).await {
+            let has_active = runs.iter().any(|r| r.status == GatingStatus::Pending || r.status == GatingStatus::Running);
+            if has_active {
+                skipped.push(serde_json::json!({
+                    "experiment_id": exp.id,
+                    "reason": "gating_in_progress"
+                }));
+                continue;
             }
         }
 
-        // Queue gating
-        match crate::db::queries::update_gating_status(&state.db, exp.id, &GatingStatus::Pending).await {
-            Ok(true) => queued.push(exp.id),
-            Ok(false) => errors.push(serde_json::json!({
-                "experiment_id": exp.id,
-                "error": "not_found"
-            })),
+        // Create new gating run
+        match crate::db::queries::create_gating_run(&state.db, exp.id, None).await {
+            Ok(id) => {
+                // Broadcast
+                if let Ok(Some(run)) = crate::db::queries::get_gating_run(&state.db, id).await {
+                    let _ = state.ws_tx.send(WsMessage::GatingRunCreated(run));
+                }
+                queued.push(serde_json::json!({
+                    "experiment_id": exp.id,
+                    "gating_run_id": id
+                }));
+            }
             Err(e) => errors.push(serde_json::json!({
                 "experiment_id": exp.id,
                 "error": e.to_string()
@@ -1363,7 +1366,8 @@ async fn handle_socket(
                             WsMessage::FlowCompleted(_) |
                             WsMessage::FlowFailed { .. } |
                             WsMessage::FlowCancelled(_) |
-                            WsMessage::GatingStatusChanged { .. } => {
+                            WsMessage::GatingRunCreated(_) |
+                            WsMessage::GatingRunUpdated(_) => {
                                 serde_json::to_string(&msg)
                             }
                             _ => continue, // Skip other messages

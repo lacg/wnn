@@ -301,6 +301,35 @@ CREATE TABLE IF NOT EXISTS checkpoints (
 );
 
 -- ============================================================================
+-- GATING_RUNS: Gating analysis runs per experiment
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS gating_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_id INTEGER NOT NULL REFERENCES experiments(id),
+
+    status TEXT NOT NULL DEFAULT 'pending',
+    -- pending, running, completed, failed
+
+    -- Configuration used for this run
+    config_json TEXT,
+    -- { neurons_per_gate, bits_per_neuron, threshold, ... }
+
+    -- Results
+    genomes_tested INTEGER,
+    results_json TEXT,
+    -- Array of { genome_type, ce, acc, gated_ce, gated_acc, gating_config }
+    error TEXT,
+
+    -- Timing
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    started_at TEXT,
+    completed_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_gating_runs_experiment ON gating_runs(experiment_id);
+CREATE INDEX IF NOT EXISTS idx_gating_runs_status ON gating_runs(status);
+
+-- ============================================================================
 -- INDEXES for efficient queries
 -- ============================================================================
 
@@ -1658,21 +1687,249 @@ pub mod queries {
     }
 
     // =============================================================================
-    // Gating queries
+    // Gating Run queries
     // =============================================================================
 
-    /// Update gating status for an experiment
+    fn gating_status_to_str(status: &GatingStatus) -> &'static str {
+        match status {
+            GatingStatus::Pending => "pending",
+            GatingStatus::Running => "running",
+            GatingStatus::Completed => "completed",
+            GatingStatus::Failed => "failed",
+        }
+    }
+
+    fn str_to_gating_status(s: &str) -> GatingStatus {
+        match s {
+            "pending" => GatingStatus::Pending,
+            "running" => GatingStatus::Running,
+            "completed" => GatingStatus::Completed,
+            "failed" => GatingStatus::Failed,
+            _ => GatingStatus::Pending,
+        }
+    }
+
+    fn row_to_gating_run(row: &sqlx::sqlite::SqliteRow) -> Result<GatingRun> {
+        let status_str: String = row.try_get("status")?;
+        let config_json: Option<String> = row.try_get("config_json")?;
+        let results_json: Option<String> = row.try_get("results_json")?;
+        let created_at_str: String = row.try_get("created_at")?;
+        let started_at_str: Option<String> = row.try_get("started_at")?;
+        let completed_at_str: Option<String> = row.try_get("completed_at")?;
+
+        Ok(GatingRun {
+            id: row.try_get("id")?,
+            experiment_id: row.try_get("experiment_id")?,
+            status: str_to_gating_status(&status_str),
+            config: config_json.and_then(|s| serde_json::from_str(&s).ok()),
+            genomes_tested: row.try_get("genomes_tested")?,
+            results: results_json.and_then(|s| serde_json::from_str(&s).ok()),
+            error: row.try_get("error")?,
+            created_at: DateTime::parse_from_rfc3339(&created_at_str)
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now()),
+            started_at: started_at_str.and_then(|s| DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&Utc))),
+            completed_at: completed_at_str.and_then(|s| DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&Utc))),
+        })
+    }
+
+    /// Create a new gating run for an experiment
+    pub async fn create_gating_run(
+        pool: &DbPool,
+        experiment_id: i64,
+        config: Option<&GatingConfig>,
+    ) -> Result<i64> {
+        let now = Utc::now().to_rfc3339();
+        let config_json = config.map(|c| serde_json::to_string(c).unwrap_or_default());
+
+        let result = sqlx::query(
+            r#"INSERT INTO gating_runs (experiment_id, status, config_json, created_at)
+               VALUES (?, 'pending', ?, ?)"#
+        )
+        .bind(experiment_id)
+        .bind(&config_json)
+        .bind(&now)
+        .execute(pool)
+        .await?;
+
+        // Also update the experiment's gating_status for backward compat
+        let _ = sqlx::query("UPDATE experiments SET gating_status = 'pending' WHERE id = ?")
+            .bind(experiment_id)
+            .execute(pool)
+            .await;
+
+        Ok(result.last_insert_rowid())
+    }
+
+    /// Get a specific gating run
+    pub async fn get_gating_run(pool: &DbPool, id: i64) -> Result<Option<GatingRun>> {
+        let row = sqlx::query(
+            r#"SELECT id, experiment_id, status, config_json, genomes_tested,
+                      results_json, error, created_at, started_at, completed_at
+               FROM gating_runs WHERE id = ?"#
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+
+        match row {
+            Some(r) => Ok(Some(row_to_gating_run(&r)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// List gating runs for an experiment
+    pub async fn list_gating_runs(pool: &DbPool, experiment_id: i64) -> Result<Vec<GatingRun>> {
+        let rows = sqlx::query(
+            r#"SELECT id, experiment_id, status, config_json, genomes_tested,
+                      results_json, error, created_at, started_at, completed_at
+               FROM gating_runs WHERE experiment_id = ?
+               ORDER BY created_at DESC"#
+        )
+        .bind(experiment_id)
+        .fetch_all(pool)
+        .await?;
+
+        let mut runs = Vec::with_capacity(rows.len());
+        for row in rows {
+            runs.push(row_to_gating_run(&row)?);
+        }
+        Ok(runs)
+    }
+
+    /// Update gating run status
+    pub async fn update_gating_run_status(
+        pool: &DbPool,
+        id: i64,
+        status: &GatingStatus,
+    ) -> Result<Option<GatingRun>> {
+        let status_str = gating_status_to_str(status);
+        let now = Utc::now().to_rfc3339();
+
+        // Set started_at when transitioning to running
+        let started_clause = if *status == GatingStatus::Running {
+            ", started_at = ?"
+        } else {
+            ""
+        };
+
+        // Set completed_at when transitioning to completed or failed
+        let completed_clause = if *status == GatingStatus::Completed || *status == GatingStatus::Failed {
+            ", completed_at = ?"
+        } else {
+            ""
+        };
+
+        let query = format!(
+            "UPDATE gating_runs SET status = ?{}{} WHERE id = ?",
+            started_clause, completed_clause
+        );
+
+        let mut q = sqlx::query(&query).bind(status_str);
+        if *status == GatingStatus::Running {
+            q = q.bind(&now);
+        }
+        if *status == GatingStatus::Completed || *status == GatingStatus::Failed {
+            q = q.bind(&now);
+        }
+        q = q.bind(id);
+
+        let result = q.execute(pool).await?;
+
+        if result.rows_affected() == 0 {
+            return Ok(None);
+        }
+
+        // Also update experiment's gating_status for backward compat
+        let _ = sqlx::query(
+            "UPDATE experiments SET gating_status = ? WHERE id = (SELECT experiment_id FROM gating_runs WHERE id = ?)"
+        )
+        .bind(status_str)
+        .bind(id)
+        .execute(pool)
+        .await;
+
+        get_gating_run(pool, id).await
+    }
+
+    /// Update gating run with results
+    pub async fn update_gating_run_results(
+        pool: &DbPool,
+        id: i64,
+        genomes_tested: i32,
+        results: &[GatingResult],
+        error: Option<&str>,
+    ) -> Result<Option<GatingRun>> {
+        let now = Utc::now().to_rfc3339();
+        let results_json = serde_json::to_string(results)?;
+        let status = if error.is_some() { "failed" } else { "completed" };
+
+        let result = sqlx::query(
+            r#"UPDATE gating_runs
+               SET status = ?, genomes_tested = ?, results_json = ?, error = ?, completed_at = ?
+               WHERE id = ?"#
+        )
+        .bind(status)
+        .bind(genomes_tested)
+        .bind(&results_json)
+        .bind(error)
+        .bind(&now)
+        .bind(id)
+        .execute(pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Ok(None);
+        }
+
+        // Also update experiment's gating_status and results for backward compat
+        let gating_results = GatingResults {
+            completed_at: Some(Utc::now()),
+            genomes_tested: genomes_tested as usize,
+            results: results.to_vec(),
+            error: error.map(|s| s.to_string()),
+        };
+        let exp_results_json = serde_json::to_string(&gating_results)?;
+
+        let _ = sqlx::query(
+            "UPDATE experiments SET gating_status = ?, gating_results = ? WHERE id = (SELECT experiment_id FROM gating_runs WHERE id = ?)"
+        )
+        .bind(status)
+        .bind(&exp_results_json)
+        .bind(id)
+        .execute(pool)
+        .await;
+
+        get_gating_run(pool, id).await
+    }
+
+    /// Get pending gating runs (for worker polling)
+    pub async fn get_pending_gating_runs(pool: &DbPool) -> Result<Vec<GatingRun>> {
+        let rows = sqlx::query(
+            r#"SELECT id, experiment_id, status, config_json, genomes_tested,
+                      results_json, error, created_at, started_at, completed_at
+               FROM gating_runs WHERE status = 'pending'
+               ORDER BY created_at ASC"#
+        )
+        .fetch_all(pool)
+        .await?;
+
+        let mut runs = Vec::with_capacity(rows.len());
+        for row in rows {
+            runs.push(row_to_gating_run(&row)?);
+        }
+        Ok(runs)
+    }
+
+    // Legacy functions for backward compatibility (used by old experiments.gating_status)
+
+    /// Update gating status for an experiment (legacy)
     pub async fn update_gating_status(
         pool: &DbPool,
         experiment_id: i64,
         status: &GatingStatus,
     ) -> Result<bool> {
-        let status_str = match status {
-            GatingStatus::Pending => "pending",
-            GatingStatus::Running => "running",
-            GatingStatus::Completed => "completed",
-            GatingStatus::Failed => "failed",
-        };
+        let status_str = gating_status_to_str(status);
 
         let result = sqlx::query(
             "UPDATE experiments SET gating_status = ? WHERE id = ?"
@@ -1685,7 +1942,7 @@ pub mod queries {
         Ok(result.rows_affected() > 0)
     }
 
-    /// Update gating results for an experiment
+    /// Update gating results for an experiment (legacy)
     pub async fn update_gating_results(
         pool: &DbPool,
         experiment_id: i64,
@@ -1702,53 +1959,5 @@ pub mod queries {
         .await?;
 
         Ok(result.rows_affected() > 0)
-    }
-
-    /// Mark gating as failed with error message
-    pub async fn update_gating_failed(
-        pool: &DbPool,
-        experiment_id: i64,
-        error: &str,
-    ) -> Result<bool> {
-        let results = GatingResults {
-            completed_at: Some(Utc::now()),
-            genomes_tested: 0,
-            results: vec![],
-            error: Some(error.to_string()),
-        };
-        let results_json = serde_json::to_string(&results)?;
-
-        let result = sqlx::query(
-            "UPDATE experiments SET gating_status = 'failed', gating_results = ? WHERE id = ?"
-        )
-        .bind(&results_json)
-        .bind(experiment_id)
-        .execute(pool)
-        .await?;
-
-        Ok(result.rows_affected() > 0)
-    }
-
-    /// Get experiments pending gating analysis
-    pub async fn get_pending_gating_experiments(pool: &DbPool) -> Result<Vec<Experiment>> {
-        let rows = sqlx::query(
-            r#"SELECT id, flow_id, sequence_order, name, status, fitness_calculator,
-                      fitness_weight_ce, fitness_weight_acc, tier_config, context_size,
-                      population_size, pid, last_iteration, resume_checkpoint_id,
-                      created_at, started_at, ended_at, paused_at,
-                      phase_type, max_iterations, current_iteration, best_ce, best_accuracy,
-                      gating_status, gating_results
-               FROM experiments
-               WHERE gating_status = 'pending'
-               ORDER BY created_at ASC"#,
-        )
-        .fetch_all(pool)
-        .await?;
-
-        let mut experiments = Vec::with_capacity(rows.len());
-        for row in rows {
-            experiments.push(row_to_experiment(&row)?);
-        }
-        Ok(experiments)
     }
 }
