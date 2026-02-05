@@ -11,6 +11,13 @@ Always use context7 when I need code generation, setup or configuration steps, o
 ### Commit and Push
 **ALWAYS commit and push after making changes.** After any new features, bug fixes, or test scripts that have been successfully compiled, verified, and quickly tested, immediately commit and push to the repository with a proper message. Do not wait for the user to ask - this should be automatic.
 
+### iOS/iPadOS/macOS Development
+All Apple platform code (Swift/SwiftUI) should:
+- **Target version 26** (iOS 26, iPadOS 26, macOS 26)
+- **Use Liquid Glass style** - the new translucent, depth-aware design language introduced in 2025
+- Use `.glassCard()` modifiers and glass-like materials for cards and containers
+- Leverage the new fluid animations and depth effects where appropriate
+
 ## Project Overview
 
 This is a Weightless Neural Network (WNN) research project implementing RAM-based neurons in PyTorch. The goal is to create Transformer architectures using RAM neurons instead of traditional weighted neural networks.
