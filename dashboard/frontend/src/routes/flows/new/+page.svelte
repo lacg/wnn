@@ -246,13 +246,13 @@
 
         <div class="form-group">
           <label for="phaseOrder">Phase Order</label>
-          <select id="phaseOrder" bind:value={phaseOrder} disabled={template === 'empty' || template === 'quick-4-phase'}>
+          <select id="phaseOrder" bind:value={phaseOrder} disabled={template === 'empty'}>
             <option value="neurons_first">Neurons First</option>
             <option value="bits_first">Bits First</option>
           </select>
           <span class="field-hint">
             {#if template === 'quick-4-phase'}
-              Fixed: neurons → bits (no connections)
+              {phaseOrder === 'neurons_first' ? 'neurons → bits' : 'bits → neurons'} (no connections)
             {:else if phaseOrder === 'neurons_first'}
               neurons → bits → connections
             {:else}
