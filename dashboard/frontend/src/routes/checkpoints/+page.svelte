@@ -386,7 +386,6 @@
     border: 1px solid var(--border);
     border-radius: 8px;
     padding: 1rem;
-    overflow: hidden;
     min-width: 0;
   }
 
