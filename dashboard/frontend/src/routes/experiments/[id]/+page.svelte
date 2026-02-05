@@ -434,7 +434,7 @@
           </button>
         {:else if experiment.gating_status === 'pending' || experiment.gating_status === 'running'}
           <span class="gating-status running">⏳ Gating {experiment.gating_status}...</span>
-        {:else if experiment.gating_status === 'failed'}
+        {:else if experiment.gating_status === 'failed' || (experiment.gating_status === 'completed' && experiment.gating_results?.error)}
           <button class="btn-secondary" on:click={runGating} disabled={gatingLoading}>
             🔄 Retry Gating
           </button>
