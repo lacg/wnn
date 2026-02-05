@@ -11,6 +11,7 @@
   let flowExperiments: Experiment[] = [];
   let flow: Flow | null = null;
   let validationSummaries: ValidationSummary[] = [];
+  let flowValidationSummaries: ValidationSummary[] = []; // All validation summaries for the flow
   let checkpoints: Checkpoint[] = [];
   let loading = true;
   let error: string | null = null;
@@ -82,14 +83,19 @@
 
       // Fetch flow and its experiments if this experiment belongs to a flow
       if (experiment?.flow_id) {
-        const [flowRes, flowExpsRes] = await Promise.all([
+        const [flowRes, flowExpsRes, flowValidationsRes] = await Promise.all([
           fetch(`/api/flows/${experiment.flow_id}`),
-          fetch(`/api/flows/${experiment.flow_id}/experiments`)
+          fetch(`/api/flows/${experiment.flow_id}/experiments`),
+          fetch(`/api/flows/${experiment.flow_id}/validations`)
         ]);
         if (flowRes.ok) flow = await flowRes.json();
         if (flowExpsRes.ok) {
           const exps = await flowExpsRes.json();
           flowExperiments = Array.isArray(exps) ? exps : [];
+        }
+        if (flowValidationsRes.ok) {
+          const validations = await flowValidationsRes.json();
+          flowValidationSummaries = Array.isArray(validations) ? validations : [];
         }
       }
     } catch (e) {
@@ -437,6 +443,103 @@
       return [];
     }
   })();
+
+  // Cumulative validation progression: all experiments up to and including current
+  interface ValidationProgressionPoint {
+    label: string;
+    expId: number;
+    sequenceOrder: number;
+    validationPoint: 'init' | 'final';
+    summaries: { genomeType: string; ce: number; accuracy: number }[];
+  }
+
+  $: cumulativeValidationProgression = (() => {
+    if (!experiment || flowValidationSummaries.length === 0 || flowExperiments.length === 0) {
+      // Fall back to current experiment's validations if no flow context
+      if (validationSummaries.length === 0) return [];
+
+      const points: ValidationProgressionPoint[] = [];
+      const initSummaries = validationSummaries.filter(s => s.validation_point === 'init');
+      const finalSummaries = validationSummaries.filter(s => s.validation_point === 'final');
+
+      if (initSummaries.length > 0) {
+        points.push({
+          label: 'Init',
+          expId: experiment.id,
+          sequenceOrder: experiment.sequence_order ?? 0,
+          validationPoint: 'init',
+          summaries: initSummaries.map(s => ({ genomeType: s.genome_type, ce: s.ce, accuracy: s.accuracy }))
+        });
+      }
+      if (finalSummaries.length > 0) {
+        points.push({
+          label: experiment.name.replace(/^Phase \d+[ab]: /, ''),
+          expId: experiment.id,
+          sequenceOrder: experiment.sequence_order ?? 0,
+          validationPoint: 'final',
+          summaries: finalSummaries.map(s => ({ genomeType: s.genome_type, ce: s.ce, accuracy: s.accuracy }))
+        });
+      }
+      return points;
+    }
+
+    // Build cumulative progression from flow validations
+    const currentSeqOrder = experiment.sequence_order ?? 0;
+
+    // Create a map of experiment_id -> experiment info
+    const expMap = new Map(flowExperiments.map(e => [e.id, e]));
+
+    // Filter validations to only include experiments up to and including current
+    const relevantValidations = flowValidationSummaries.filter(v => {
+      const exp = expMap.get(v.experiment_id);
+      if (!exp) return false;
+      return (exp.sequence_order ?? 0) <= currentSeqOrder;
+    });
+
+    // Group by (experiment_id, validation_point)
+    const grouped = new Map<string, ValidationSummary[]>();
+    for (const v of relevantValidations) {
+      const key = `${v.experiment_id}-${v.validation_point}`;
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key)!.push(v);
+    }
+
+    // Convert to progression points
+    const points: ValidationProgressionPoint[] = [];
+    for (const [key, validations] of grouped) {
+      const [expIdStr, point] = key.split('-');
+      const expId = parseInt(expIdStr);
+      const exp = expMap.get(expId);
+      if (!exp) continue;
+
+      const seqOrder = exp.sequence_order ?? 0;
+
+      // Label: "Init" for first init, otherwise "Phase 1a", "Phase 1b", etc.
+      let label: string;
+      if (point === 'init' && seqOrder === 0) {
+        label = 'Init';
+      } else if (point === 'init') {
+        // Skip non-first init points (they're the same as previous final)
+        continue;
+      } else {
+        label = exp.name.replace(/^Phase \d+[ab]: /, '');
+      }
+
+      points.push({
+        label,
+        expId,
+        sequenceOrder: seqOrder,
+        validationPoint: point as 'init' | 'final',
+        summaries: validations.map(v => ({ genomeType: v.genome_type, ce: v.ce, accuracy: v.accuracy }))
+      });
+    }
+
+    // Sort by sequence order, then init before final
+    return points.sort((a, b) => {
+      if (a.sequenceOrder !== b.sequenceOrder) return a.sequenceOrder - b.sequenceOrder;
+      return a.validationPoint === 'init' ? -1 : 1;
+    });
+  })();
 </script>
 
 <div class="container">
@@ -534,48 +637,79 @@
       </div>
     </div>
 
-    <!-- Validation Summaries (Init vs Final) -->
-    {#if validationSummaries.length > 0}
-      {@const initSummaries = validationSummaries.filter(s => s.validation_point === 'init')}
-      {@const finalSummaries = validationSummaries.filter(s => s.validation_point === 'final')}
+    <!-- Cumulative Validation Progression -->
+    {#if cumulativeValidationProgression.length > 0}
       <div class="validation-section">
         <div class="validation-header">
-          <span class="validation-title">Full Validation Results</span>
+          <span class="validation-title">📈 Validation Progression</span>
           <div class="validation-legend">
             <span class="legend-item"><span class="legend-marker best-ce"></span> Best CE</span>
             <span class="legend-item"><span class="legend-marker best-acc"></span> Best Acc</span>
             <span class="legend-item"><span class="legend-marker best-fitness"></span> Best Fitness</span>
           </div>
         </div>
-        <div class="validation-cards">
-          {#if initSummaries.length > 0}
-            <div class="validation-card init">
-              <div class="card-label">Init Baseline</div>
-              <div class="validation-metrics">
-                {#each initSummaries as summary}
-                  <div class="metric-item {summary.genome_type}">
-                    <span class="metric-marker"></span>
-                    <span class="metric-ce">{summary.ce.toFixed(4)}</span>
-                    <span class="metric-acc">{(summary.accuracy * 100).toFixed(2)}%</span>
-                  </div>
-                {/each}
-              </div>
-            </div>
-          {/if}
-          {#if finalSummaries.length > 0}
-            <div class="validation-card final">
-              <div class="card-label">Final Results</div>
-              <div class="validation-metrics">
-                {#each finalSummaries as summary}
-                  <div class="metric-item {summary.genome_type}">
-                    <span class="metric-marker"></span>
-                    <span class="metric-ce">{summary.ce.toFixed(4)}</span>
-                    <span class="metric-acc">{(summary.accuracy * 100).toFixed(2)}%</span>
-                  </div>
-                {/each}
-              </div>
-            </div>
-          {/if}
+        <div class="validation-table-container">
+          <table class="validation-table">
+            <thead>
+              <tr>
+                <th>Phase</th>
+                <th>Best CE</th>
+                <th>Δ CE</th>
+                <th>Best Acc</th>
+                <th>Δ Acc</th>
+                <th>Best Fitness</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each cumulativeValidationProgression as point, idx}
+                {@const bestCeSummary = point.summaries.find(s => s.genomeType === 'best_ce')}
+                {@const bestAccSummary = point.summaries.find(s => s.genomeType === 'best_acc')}
+                {@const bestFitSummary = point.summaries.find(s => s.genomeType === 'best_fitness')}
+                {@const prevPoint = idx > 0 ? cumulativeValidationProgression[idx - 1] : null}
+                {@const prevBestCe = prevPoint?.summaries.find(s => s.genomeType === 'best_ce')}
+                {@const prevBestAcc = prevPoint?.summaries.find(s => s.genomeType === 'best_acc')}
+                {@const ceDelta = bestCeSummary && prevBestCe ? bestCeSummary.ce - prevBestCe.ce : null}
+                {@const accDelta = bestAccSummary && prevBestAcc ? bestAccSummary.accuracy - prevBestAcc.accuracy : null}
+                {@const isCurrentExp = point.expId === experiment?.id}
+                <tr class:current-phase={isCurrentExp && point.validationPoint === 'final'}>
+                  <td class="phase-name" class:init-phase={point.validationPoint === 'init'}>
+                    {point.label}
+                    {#if isCurrentExp && point.validationPoint === 'final'}
+                      <span class="current-marker">◀</span>
+                    {/if}
+                  </td>
+                  <td class="mono">
+                    {#if bestCeSummary}
+                      {bestCeSummary.ce.toFixed(4)}
+                      <span class="metric-acc-inline">({(bestCeSummary.accuracy * 100).toFixed(2)}%)</span>
+                    {:else}—{/if}
+                  </td>
+                  <td class="mono delta" class:delta-positive={ceDelta !== null && ceDelta < 0} class:delta-negative={ceDelta !== null && ceDelta > 0}>
+                    {#if ceDelta !== null}
+                      {ceDelta < 0 ? '↓' : ceDelta > 0 ? '↑' : ''}{Math.abs(ceDelta).toFixed(4)}
+                    {:else}—{/if}
+                  </td>
+                  <td class="mono">
+                    {#if bestAccSummary}
+                      {bestAccSummary.ce.toFixed(4)}
+                      <span class="metric-acc-inline">({(bestAccSummary.accuracy * 100).toFixed(2)}%)</span>
+                    {:else}—{/if}
+                  </td>
+                  <td class="mono delta" class:delta-positive={accDelta !== null && accDelta > 0} class:delta-negative={accDelta !== null && accDelta < 0}>
+                    {#if accDelta !== null}
+                      {accDelta > 0 ? '↑' : accDelta < 0 ? '↓' : ''}{Math.abs(accDelta * 100).toFixed(2)}%
+                    {:else}—{/if}
+                  </td>
+                  <td class="mono">
+                    {#if bestFitSummary}
+                      {bestFitSummary.ce.toFixed(4)}
+                      <span class="metric-acc-inline">({(bestFitSummary.accuracy * 100).toFixed(2)}%)</span>
+                    {:else}—{/if}
+                  </td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
         </div>
       </div>
     {/if}
@@ -1838,5 +1972,72 @@
     border-radius: 0.25rem;
     color: var(--accent-red);
     font-size: 0.9rem;
+  }
+
+  /* Validation Progression Table */
+  .validation-table-container {
+    overflow-x: auto;
+  }
+
+  .validation-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+  }
+
+  .validation-table th {
+    background: var(--bg-tertiary);
+    padding: 0.5rem 0.75rem;
+    text-align: center;
+    font-weight: 600;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .validation-table td {
+    padding: 0.5rem 0.75rem;
+    text-align: center;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .validation-table tr:last-child td {
+    border-bottom: none;
+  }
+
+  .validation-table .phase-name {
+    text-align: left;
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+
+  .validation-table .phase-name.init-phase {
+    color: var(--accent-blue);
+    font-style: italic;
+  }
+
+  .validation-table tr.current-phase {
+    background: rgba(59, 130, 246, 0.1);
+  }
+
+  .validation-table tr.current-phase td {
+    font-weight: 600;
+  }
+
+  .current-marker {
+    color: var(--accent-blue);
+    margin-left: 0.5rem;
+    font-size: 0.8rem;
+  }
+
+  .metric-acc-inline {
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    margin-left: 0.25rem;
+  }
+
+  .validation-table .delta {
+    font-size: 0.85rem;
   }
 </style>

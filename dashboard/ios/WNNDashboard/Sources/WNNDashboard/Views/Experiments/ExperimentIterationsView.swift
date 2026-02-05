@@ -12,6 +12,8 @@ public struct ExperimentIterationsView: View {
 
     @State private var iterations: [Iteration] = []
     @State private var gatingRuns: [GatingRun] = []
+    @State private var flowExperiments: [Experiment] = []
+    @State private var flowValidations: [ValidationSummary] = []
     @State private var isLoading = true
     @State private var isCreatingGatingRun = false
 
@@ -71,6 +73,9 @@ public struct ExperimentIterationsView: View {
             VStack(spacing: 16) {
                 experimentHeader
                 metricsSection
+                if !validationProgression.isEmpty {
+                    validationProgressionSection
+                }
                 if experiment.status == .completed {
                     gatingSection
                 }
@@ -85,10 +90,13 @@ public struct ExperimentIterationsView: View {
 
     private var iPadLayout: some View {
         HStack(alignment: .top, spacing: 20) {
-            // Left: Header, Metrics, Gating
+            // Left: Header, Metrics, Validation, Gating
             VStack(spacing: 16) {
                 experimentHeader
                 metricsSection
+                if !validationProgression.isEmpty {
+                    validationProgressionSection
+                }
                 if experiment.status == .completed {
                     gatingSection
                 }
@@ -216,6 +224,171 @@ public struct ExperimentIterationsView: View {
         gatingRuns.contains { $0.status.isActive }
     }
 
+    // MARK: - Validation Progression
+
+    private struct ValidationProgressionPoint: Identifiable {
+        let id = UUID()
+        let label: String
+        let expId: Int64
+        let sequenceOrder: Int32
+        let validationPoint: ValidationPoint
+        let summaries: [ValidationSummary]
+
+        var bestCE: ValidationSummary? { summaries.first { $0.genome_type == .best_ce } }
+        var bestAcc: ValidationSummary? { summaries.first { $0.genome_type == .best_acc } }
+        var bestFitness: ValidationSummary? { summaries.first { $0.genome_type == .best_fitness } }
+    }
+
+    private var validationProgression: [ValidationProgressionPoint] {
+        guard !flowValidations.isEmpty, !flowExperiments.isEmpty else { return [] }
+
+        let currentSeqOrder = experiment.sequence_order ?? 0
+        let expMap = Dictionary(uniqueKeysWithValues: flowExperiments.map { ($0.id, $0) })
+
+        // Filter to only include experiments up to current
+        let relevantValidations = flowValidations.filter { v in
+            guard let exp = expMap[v.experiment_id] else { return false }
+            return (exp.sequence_order ?? 0) <= currentSeqOrder
+        }
+
+        // Group by (experiment_id, validation_point)
+        var grouped: [String: [ValidationSummary]] = [:]
+        for v in relevantValidations {
+            let key = "\(v.experiment_id)-\(v.validation_point.rawValue)"
+            grouped[key, default: []].append(v)
+        }
+
+        // Convert to progression points
+        var points: [ValidationProgressionPoint] = []
+        for (key, validations) in grouped {
+            let parts = key.split(separator: "-")
+            guard parts.count == 2,
+                  let expId = Int64(parts[0]),
+                  let exp = expMap[expId] else { continue }
+
+            let point = parts[1] == "init" ? ValidationPoint.`init` : ValidationPoint.final
+            let seqOrder = exp.sequence_order ?? 0
+
+            // Label: "Init" for first init, otherwise phase name
+            let label: String
+            if point == .`init` && seqOrder == 0 {
+                label = "Init"
+            } else if point == .`init` {
+                continue // Skip non-first init points
+            } else {
+                label = exp.name.replacingOccurrences(of: #"^Phase \d+[ab]: "#, with: "", options: .regularExpression)
+            }
+
+            points.append(ValidationProgressionPoint(
+                label: label,
+                expId: expId,
+                sequenceOrder: seqOrder,
+                validationPoint: point,
+                summaries: validations
+            ))
+        }
+
+        // Sort by sequence order, then init before final
+        return points.sorted { a, b in
+            if a.sequenceOrder != b.sequenceOrder { return a.sequenceOrder < b.sequenceOrder }
+            return a.validationPoint == .`init`
+        }
+    }
+
+    private var validationProgressionSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("📈 Validation Progression")
+                    .font(.headline)
+                Spacer()
+                Text("\(validationProgression.count) checkpoints")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(spacing: 0) {
+                // Header
+                HStack {
+                    Text("Phase")
+                        .frame(width: 80, alignment: .leading)
+                    Text("Best CE")
+                        .frame(minWidth: 60, alignment: .trailing)
+                    Text("Δ")
+                        .frame(width: 50, alignment: .trailing)
+                    Text("Acc")
+                        .frame(width: 50, alignment: .trailing)
+                }
+                .font(.caption2.bold())
+                .foregroundStyle(.secondary)
+                .padding(.vertical, 6)
+
+                Divider()
+
+                // Rows
+                ForEach(Array(validationProgression.enumerated()), id: \.element.id) { idx, point in
+                    let prevPoint = idx > 0 ? validationProgression[idx - 1] : nil
+                    let ceDelta = calculateCEDelta(current: point, previous: prevPoint)
+                    let isCurrentPhase = point.expId == experiment.id && point.validationPoint == .final
+
+                    HStack {
+                        HStack(spacing: 4) {
+                            Text(point.label)
+                                .lineLimit(1)
+                            if isCurrentPhase {
+                                Text("◀")
+                                    .foregroundStyle(.blue)
+                            }
+                        }
+                        .frame(width: 80, alignment: .leading)
+                        .font(point.validationPoint == .`init` ? .caption.italic() : .caption)
+                        .foregroundStyle(point.validationPoint == .`init` ? .blue : .primary)
+
+                        Text(NumberFormatters.formatCE(point.bestCE?.ce))
+                            .frame(minWidth: 60, alignment: .trailing)
+
+                        Group {
+                            if let delta = ceDelta {
+                                Text(String(format: "%@%.4f", delta < 0 ? "↓" : "↑", abs(delta)))
+                                    .foregroundStyle(delta < 0 ? .green : .red)
+                            } else {
+                                Text("—")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .frame(width: 50, alignment: .trailing)
+
+                        Text(NumberFormatters.formatAccuracy(point.bestCE?.accuracy))
+                            .frame(width: 50, alignment: .trailing)
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.caption)
+                    .fontDesign(.monospaced)
+                    .padding(.vertical, 6)
+                    .background(isCurrentPhase ? Color.blue.opacity(0.1) : Color.clear)
+
+                    if idx < validationProgression.count - 1 {
+                        Divider()
+                    }
+                }
+            }
+            .padding(8)
+            #if os(iOS)
+            .background(Color(.secondarySystemBackground).opacity(0.5))
+            #else
+            .background(Color.secondary.opacity(0.1))
+            #endif
+            .cornerRadius(8)
+        }
+        .padding()
+        .glassCard()
+    }
+
+    private func calculateCEDelta(current: ValidationProgressionPoint, previous: ValidationProgressionPoint?) -> Double? {
+        guard let currentCE = current.bestCE?.ce,
+              let prevCE = previous?.bestCE?.ce else { return nil }
+        return currentCE - prevCE
+    }
+
     // MARK: - Helpers
 
     private func loadData() async {
@@ -226,6 +399,15 @@ public struct ExperimentIterationsView: View {
 
             iterations = try await iterationsTask.sorted { $0.iteration_num > $1.iteration_num }
             gatingRuns = try await gatingTask.sorted { $0.id > $1.id }
+
+            // Load flow validations if experiment belongs to a flow
+            if let flowId = experiment.flow_id {
+                async let flowExpsTask = dashboardViewModel.apiClient.getFlowExperiments(flowId)
+                async let flowValsTask = dashboardViewModel.apiClient.getFlowValidations(flowId: flowId)
+
+                flowExperiments = try await flowExpsTask
+                flowValidations = try await flowValsTask
+            }
         } catch {
             print("Failed to load experiment data: \(error)")
         }

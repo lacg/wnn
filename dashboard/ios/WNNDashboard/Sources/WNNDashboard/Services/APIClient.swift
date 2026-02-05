@@ -93,6 +93,14 @@ public final class APIClient {
     public func getGatingRun(experimentId: Int64, gatingId: Int64) async throws -> GatingRun {
         try await request(path: "api/experiments/\(experimentId)/gating/\(gatingId)")
     }
+
+    // Validation Summaries
+    public func getExperimentValidations(experimentId: Int64) async throws -> [ValidationSummary] {
+        try await request(path: "api/experiments/\(experimentId)/summaries")
+    }
+    public func getFlowValidations(flowId: Int64) async throws -> [ValidationSummary] {
+        try await request(path: "api/flows/\(flowId)/validations")
+    }
 }
 
 public enum APIError: LocalizedError {
