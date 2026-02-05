@@ -382,6 +382,33 @@
     }
   }
 
+  // Get default iterations based on experiment type (GA vs TS)
+  function getDefaultIterations(expType: string): number {
+    return expType === 'GA'
+      ? (flow?.config.params.ga_generations ?? 250)
+      : (flow?.config.params.ts_iterations ?? 250);
+  }
+
+  // Update experiment's max_iterations
+  async function updateExperimentIterations(expId: number, iterations: number) {
+    if (iterations < 10 || iterations > 10000) return;
+
+    try {
+      const response = await fetch(`/api/experiments/${expId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ max_iterations: iterations })
+      });
+
+      if (!response.ok) throw new Error('Failed to update iterations');
+
+      // Refresh experiments to show updated value
+      await refreshExperiments();
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Failed to update iterations';
+    }
+  }
+
   // Start editing flow name
   function startEditName() {
     if (!flow) return;
@@ -1271,6 +1298,7 @@
               <th class="col-order">#</th>
               <th class="col-name">Name</th>
               <th class="col-type">Type</th>
+              <th class="col-iters">Iterations</th>
               <th class="col-status">Status</th>
               <th class="col-ce">Best CE</th>
               <th class="col-acc">Best Acc</th>
@@ -1304,6 +1332,22 @@
                 <td class="col-type">
                   <span class="type-badge" class:type-ga={expType === 'GA'} class:type-ts={expType === 'TS'}>{expType}</span>
                   <span class="target-badge">{optimizeTarget}</span>
+                </td>
+                <td class="col-iters">
+                  {#if isPending && canEdit}
+                    <input
+                      type="number"
+                      class="iters-input"
+                      value={exp.max_iterations ?? getDefaultIterations(expType)}
+                      min="10"
+                      max="10000"
+                      on:change={(e) => updateExperimentIterations(exp.id, parseInt(e.currentTarget.value))}
+                    />
+                  {:else if isRunning}
+                    <span class="iters-progress">{exp.current_iteration ?? 0}/{exp.max_iterations ?? '?'}</span>
+                  {:else}
+                    <span class="mono">{exp.current_iteration ?? exp.max_iterations ?? '—'}</span>
+                  {/if}
                 </td>
                 <td class="col-status">
                   <span class="status-pill" style="background: {getStatusColor(exp.status)}">{exp.status}</span>
@@ -1981,10 +2025,38 @@
   .experiments-table .col-order { width: 40px; text-align: center; }
   .experiments-table .col-name { min-width: 200px; text-align: left; }
   .experiments-table .col-type { width: 140px; white-space: nowrap; text-align: center; }
+  .experiments-table .col-iters { width: 100px; text-align: center; }
   .experiments-table .col-status { width: 100px; text-align: center; }
   .experiments-table .col-ce { width: 100px; text-align: right; }
   .experiments-table .col-acc { width: 100px; text-align: right; }
   .experiments-table .col-actions { width: 120px; text-align: center; }
+
+  .iters-input {
+    width: 70px;
+    padding: 0.25rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.875rem;
+    text-align: center;
+  }
+
+  .iters-input:hover {
+    border-color: var(--accent-blue);
+  }
+
+  .iters-input:focus {
+    outline: none;
+    border-color: var(--accent-blue);
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+  }
+
+  .iters-progress {
+    font-size: 0.875rem;
+    font-family: monospace;
+    color: var(--accent-blue);
+  }
 
   .experiments-table .mono {
     font-family: monospace;

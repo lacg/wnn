@@ -1267,6 +1267,7 @@ pub mod queries {
         best_ce: Option<f64>,
         best_accuracy: Option<f64>,
         current_iteration: Option<i32>,
+        max_iterations: Option<i32>,
     ) -> Result<bool> {
         let now = Utc::now().to_rfc3339();
 
@@ -1303,6 +1304,9 @@ pub mod queries {
         if current_iteration.is_some() {
             set_clauses.push("current_iteration = ?");
         }
+        if max_iterations.is_some() {
+            set_clauses.push("max_iterations = ?");
+        }
 
         if set_clauses.is_empty() {
             return Ok(false);
@@ -1328,6 +1332,9 @@ pub mod queries {
         }
         if let Some(iter) = current_iteration {
             q = q.bind(iter);
+        }
+        if let Some(max) = max_iterations {
+            q = q.bind(max);
         }
         // Bind ID last
         q = q.bind(id);

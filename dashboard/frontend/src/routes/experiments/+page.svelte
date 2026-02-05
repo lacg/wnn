@@ -64,6 +64,8 @@
           <tr>
             <th>Name</th>
             <th>Status</th>
+            <th class="col-ce">Best CE</th>
+            <th class="col-acc">Best Acc</th>
             <th>Started</th>
             <th>Duration</th>
             <th>Config</th>
@@ -80,18 +82,20 @@
                   {exp.status}
                 </span>
               </td>
-              <td>{formatDate(exp.started_at)}</td>
-              <td>{formatDuration(exp.started_at, exp.ended_at)}</td>
+              <td class="col-ce mono">{exp.best_ce !== null ? exp.best_ce.toFixed(4) : '—'}</td>
+              <td class="col-acc mono">{exp.best_accuracy !== null ? (exp.best_accuracy * 100).toFixed(2) + '%' : '—'}</td>
+              <td>{exp.started_at ? formatDate(exp.started_at) : '—'}</td>
+              <td>{exp.started_at ? formatDuration(exp.started_at, exp.ended_at) : '—'}</td>
               <td>
                 <div class="config-preview">
-                  {#if exp.config.tier_config}
+                  {#if exp.tier_config}
                     <span class="config-tag">Tiered</span>
                   {/if}
-                  {#if exp.config.ga_generations}
-                    <span class="config-tag">GA: {exp.config.ga_generations}</span>
+                  {#if exp.phase_type}
+                    <span class="config-tag">{exp.phase_type}</span>
                   {/if}
-                  {#if exp.config.ts_iterations}
-                    <span class="config-tag">TS: {exp.config.ts_iterations}</span>
+                  {#if exp.max_iterations}
+                    <span class="config-tag">{exp.max_iterations} iters</span>
                   {/if}
                 </div>
               </td>
@@ -200,5 +204,14 @@
     background: var(--bg-tertiary);
     padding: 0.25rem 0.5rem;
     border-radius: 3px;
+  }
+
+  .col-ce, .col-acc {
+    text-align: right;
+    width: 100px;
+  }
+
+  .mono {
+    font-family: monospace;
   }
 </style>

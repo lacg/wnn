@@ -142,6 +142,7 @@ pub struct UpdateExperimentRequest {
     pub best_ce: Option<f64>,
     pub best_accuracy: Option<f64>,
     pub current_iteration: Option<i32>,
+    pub max_iterations: Option<i32>,
 }
 
 async fn update_experiment(
@@ -157,6 +158,7 @@ async fn update_experiment(
         req.best_ce,
         req.best_accuracy,
         req.current_iteration,
+        req.max_iterations,
     ).await {
         Ok(true) => {
             // Fetch and return updated experiment
