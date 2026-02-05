@@ -432,6 +432,7 @@
     border-collapse: collapse;
     font-size: 0.7rem;
     table-layout: fixed;
+    margin-bottom: 0.5rem;
   }
 
   .tier-table th, .tier-table td {
