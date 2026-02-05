@@ -841,7 +841,7 @@ async fn add_experiment_to_flow(
         .and_then(|v| v.as_i64())
         .map(|v| v as i32);
 
-    // Create the experiment
+    // Create the experiment (use flow's config for tier_config etc.)
     match crate::db::queries::create_pending_experiment(
         &state.db,
         &exp_spec.name,
@@ -849,6 +849,7 @@ async fn add_experiment_to_flow(
         sequence_order,
         Some(&phase_type),
         max_iterations,
+        &flow.config,
     ).await {
         Ok(id) => {
             // Fetch the created experiment

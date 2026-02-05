@@ -443,6 +443,7 @@ pub mod queries {
                 idx as i32,
                 Some(&phase_type),
                 max_iterations,
+                config,
             ).await?;
         }
 
@@ -1231,6 +1232,7 @@ pub mod queries {
     }
 
     /// Create a new experiment with pending status (for flow creation)
+    /// Now includes flow config fields (tier_config, fitness settings, etc.)
     pub async fn create_pending_experiment(
         pool: &DbPool,
         name: &str,
@@ -1238,19 +1240,48 @@ pub mod queries {
         sequence_order: i32,
         phase_type: Option<&str>,
         max_iterations: Option<i32>,
+        flow_config: &crate::models::FlowConfig,
     ) -> Result<i64> {
         let now = Utc::now().to_rfc3339();
 
+        // Extract config values from flow params
+        let tier_config = flow_config.params.get("tier_config")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let fitness_calculator = flow_config.params.get("fitness_calculator")
+            .and_then(|v| v.as_str())
+            .unwrap_or("harmonic_rank");
+        let fitness_weight_ce = flow_config.params.get("fitness_weight_ce")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(1.0);
+        let fitness_weight_acc = flow_config.params.get("fitness_weight_acc")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(1.0);
+        let context_size = flow_config.params.get("context_size")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(4) as i32;
+        let population_size = flow_config.params.get("population_size")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(50) as i32;
+
         let result = sqlx::query(
             r#"INSERT INTO experiments (
-                name, flow_id, sequence_order, status, phase_type, max_iterations, created_at
-            ) VALUES (?, ?, ?, 'pending', ?, ?, ?)"#,
+                name, flow_id, sequence_order, status, phase_type, max_iterations,
+                tier_config, fitness_calculator, fitness_weight_ce, fitness_weight_acc,
+                context_size, population_size, created_at
+            ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         )
         .bind(name)
         .bind(flow_id)
         .bind(sequence_order)
         .bind(phase_type)
         .bind(max_iterations.unwrap_or(250))
+        .bind(&tier_config)
+        .bind(fitness_calculator)
+        .bind(fitness_weight_ce)
+        .bind(fitness_weight_acc)
+        .bind(context_size)
+        .bind(population_size)
         .bind(&now)
         .execute(pool)
         .await?;
