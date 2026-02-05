@@ -12,12 +12,45 @@
   let neighborsPerIter = 50;
   let patience = 10;
   let fitnessPercentile = 0.75;
-  let fitnessCalculator = 'normalized';  // Default to normalized for balanced CE+accuracy
+  let fitnessCalculator = 'normalized_harmonic';  // Default to normalized harmonic with equal weights
   let fitnessWeightCe = 1.0;   // Weight for CE in harmonic calculations
   let fitnessWeightAcc = 1.0;  // Weight for accuracy in harmonic calculations
   let minAccuracyFloor = 0;  // 0 = disabled, 0.003 = 0.3% floor
   let contextSize = 4;
   let tierConfig = '100,15,20,true;400,10,12,false;rest,5,8,false';
+
+  // Apply template defaults when template changes
+  function applyTemplateDefaults(templateName: string) {
+    if (templateName === 'quick-4-phase') {
+      gaGenerations = 50;
+      tsIterations = 50;
+      populationSize = 50;
+      neighborsPerIter = 50;
+      patience = 2;
+      fitnessPercentile = 0.75;
+      fitnessCalculator = 'normalized_harmonic';
+      fitnessWeightCe = 1.0;
+      fitnessWeightAcc = 1.0;
+      contextSize = 4;
+      tierConfig = '100,15,16,true;400,10,12,false;rest,5,8,false';
+      phaseOrder = 'neurons_first';
+    } else if (templateName === 'standard-6-phase') {
+      gaGenerations = 250;
+      tsIterations = 250;
+      populationSize = 50;
+      neighborsPerIter = 50;
+      patience = 10;
+      fitnessPercentile = 0.75;
+      fitnessCalculator = 'normalized_harmonic';
+      fitnessWeightCe = 1.0;
+      fitnessWeightAcc = 1.0;
+      contextSize = 4;
+      tierConfig = '100,15,20,true;400,10,12,false;rest,5,8,false';
+    }
+  }
+
+  // Watch for template changes
+  $: applyTemplateDefaults(template);
   let seedCheckpointId: number | null = null;
 
   let checkpoints: Checkpoint[] = [];
@@ -36,6 +69,16 @@
   function generatePhases(templateName: string, order: string): PhaseSpec[] {
     if (templateName === 'empty') {
       return [];
+    }
+
+    // Quick 4-phase template (neurons first, no connections phase)
+    if (templateName === 'quick-4-phase') {
+      return [
+        { name: 'Phase 1a: GA Neurons Only', experiment_type: 'ga', optimize_bits: false, optimize_neurons: true, optimize_connections: false },
+        { name: 'Phase 1b: TS Neurons Only (refine)', experiment_type: 'ts', optimize_bits: false, optimize_neurons: true, optimize_connections: false },
+        { name: 'Phase 2a: GA Bits Only', experiment_type: 'ga', optimize_bits: true, optimize_neurons: false, optimize_connections: false },
+        { name: 'Phase 2b: TS Bits Only (refine)', experiment_type: 'ts', optimize_bits: true, optimize_neurons: false, optimize_connections: false },
+      ];
     }
 
     // Standard 6-phase template
@@ -186,12 +229,15 @@
         <div class="form-group">
           <label for="template">Template</label>
           <select id="template" bind:value={template}>
+            <option value="quick-4-phase">Quick 4-Phase</option>
             <option value="standard-6-phase">Standard 6-Phase</option>
             <option value="empty">Empty (no phases)</option>
           </select>
           <span class="field-hint">
-            {#if template === 'standard-6-phase'}
-              3 dimensions × 2 optimizers = 6 phases
+            {#if template === 'quick-4-phase'}
+              Fast iteration: neurons → bits only (50 gens, patience 2)
+            {:else if template === 'standard-6-phase'}
+              Full search: neurons → bits → connections (250 gens)
             {:else}
               Add phases manually after creation
             {/if}
@@ -200,12 +246,14 @@
 
         <div class="form-group">
           <label for="phaseOrder">Phase Order</label>
-          <select id="phaseOrder" bind:value={phaseOrder} disabled={template === 'empty'}>
+          <select id="phaseOrder" bind:value={phaseOrder} disabled={template === 'empty' || template === 'quick-4-phase'}>
             <option value="neurons_first">Neurons First</option>
             <option value="bits_first">Bits First</option>
           </select>
           <span class="field-hint">
-            {#if phaseOrder === 'neurons_first'}
+            {#if template === 'quick-4-phase'}
+              Fixed: neurons → bits (no connections)
+            {:else if phaseOrder === 'neurons_first'}
               neurons → bits → connections
             {:else}
               bits → neurons → connections
