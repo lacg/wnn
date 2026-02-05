@@ -272,6 +272,9 @@ export interface Checkpoint {
   best_accuracy: number | null;
   genome_stats: GenomeStats | null;
   created_at: string;
+  // Flow info (from joined experiment)
+  flow_id?: number | null;
+  flow_name?: string | null;
 }
 
 // =============================================================================

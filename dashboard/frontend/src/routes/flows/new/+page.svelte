@@ -110,7 +110,7 @@
   // Fetch available checkpoints for seeding
   async function loadCheckpoints() {
     try {
-      const response = await fetch('/api/checkpoints?is_final=true&limit=50');
+      const response = await fetch('/api/checkpoints?is_final=true&limit=100');
       if (response.ok) {
         checkpoints = await response.json();
       }
@@ -120,6 +120,37 @@
   }
 
   loadCheckpoints();
+
+  // Group checkpoints by flow
+  interface CheckpointGroup {
+    flowId: number | null;
+    flowName: string;
+    checkpoints: Checkpoint[];
+  }
+
+  $: groupedCheckpoints = (() => {
+    const groups: Map<number | null, CheckpointGroup> = new Map();
+
+    for (const ckpt of checkpoints) {
+      const flowId = ckpt.flow_id ?? null;
+      if (!groups.has(flowId)) {
+        groups.set(flowId, {
+          flowId,
+          flowName: ckpt.flow_name ?? 'Standalone Experiments',
+          checkpoints: []
+        });
+      }
+      groups.get(flowId)!.checkpoints.push(ckpt);
+    }
+
+    // Sort: flows with IDs first (by ID desc), then standalone
+    return Array.from(groups.values()).sort((a, b) => {
+      if (a.flowId === null && b.flowId !== null) return 1;
+      if (a.flowId !== null && b.flowId === null) return -1;
+      if (a.flowId !== null && b.flowId !== null) return b.flowId - a.flowId;
+      return 0;
+    });
+  })();
 
   async function handleSubmit() {
     if (!name.trim()) {
@@ -377,13 +408,17 @@
         <label for="seedCheckpoint">Seed From</label>
         <select id="seedCheckpoint" bind:value={seedCheckpointId}>
           <option value={null}>No seed (start fresh)</option>
-          {#each checkpoints as ckpt}
-            <option value={ckpt.id}>
-              {ckpt.name}
-              {#if ckpt.best_ce}
-                (CE: {ckpt.best_ce.toFixed(4)})
-              {/if}
-            </option>
+          {#each groupedCheckpoints as group}
+            <optgroup label={group.flowId ? `Flow: ${group.flowName}` : group.flowName}>
+              {#each group.checkpoints as ckpt}
+                <option value={ckpt.id}>
+                  {ckpt.name}
+                  {#if ckpt.best_ce}
+                    (CE: {ckpt.best_ce.toFixed(4)})
+                  {/if}
+                </option>
+              {/each}
+            </optgroup>
           {/each}
         </select>
       </div>

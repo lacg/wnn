@@ -387,6 +387,11 @@ pub struct Checkpoint {
     /// Genome statistics including per-tier stats
     pub genome_stats: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
+    /// Flow info (from joined experiment)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flow_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flow_name: Option<String>,
 }
 
 // =============================================================================
