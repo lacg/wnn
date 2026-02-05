@@ -700,6 +700,14 @@
           <span class="gating-title">🎯 Gating Analysis Results</span>
           <span class="gating-meta">
             {latestGatingRun.genomes_tested ?? latestGatingRun.results.length} genomes tested
+            {#if latestGatingRun.started_at && latestGatingRun.completed_at}
+              {@const startMs = new Date(latestGatingRun.started_at).getTime()}
+              {@const endMs = new Date(latestGatingRun.completed_at).getTime()}
+              {@const durationSec = Math.round((endMs - startMs) / 1000)}
+              {@const durationMin = Math.floor(durationSec / 60)}
+              {@const durationRemSec = durationSec % 60}
+              · Duration: {durationMin}m {durationRemSec}s
+            {/if}
             {#if gatingRuns.length > 1}
               · Run #{latestGatingRun.id}
             {/if}
@@ -727,7 +735,7 @@
                   <td class="mono">{result.ce.toFixed(4)}</td>
                   <td class="mono">{result.gated_ce.toFixed(4)}</td>
                   <td class="mono" class:delta-positive={ceDelta < 0} class:delta-negative={ceDelta > 0}>
-                    {ceDelta < 0 ? '↓' : ceDelta > 0 ? '↑' : ''}{Math.abs(ceDelta).toFixed(4)}
+                    {ceDelta < 0 ? '↑' : ceDelta > 0 ? '↓' : ''}{Math.abs(ceDelta).toFixed(4)}
                   </td>
                   <td class="mono">{(result.acc * 100).toFixed(2)}%</td>
                   <td class="mono">{(result.gated_acc * 100).toFixed(2)}%</td>
