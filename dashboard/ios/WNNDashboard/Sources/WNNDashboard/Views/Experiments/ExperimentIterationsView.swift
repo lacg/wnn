@@ -306,72 +306,126 @@ public struct ExperimentIterationsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            VStack(spacing: 0) {
-                // Header
-                HStack {
-                    Text("Phase")
-                        .frame(width: 80, alignment: .leading)
-                    Text("Best CE")
-                        .frame(minWidth: 60, alignment: .trailing)
-                    Text("Δ")
-                        .frame(width: 50, alignment: .trailing)
-                    Text("Acc")
-                        .frame(width: 50, alignment: .trailing)
-                }
-                .font(.caption2.bold())
-                .foregroundStyle(.secondary)
-                .padding(.vertical, 6)
+            ScrollView(.horizontal, showsIndicators: false) {
+                VStack(spacing: 0) {
+                    // Header row 1: Genome type groups
+                    HStack(spacing: 0) {
+                        Text("Phase")
+                            .frame(width: 70, alignment: .leading)
+                        Spacer().frame(width: 8)
+                        Text("Best CE")
+                            .frame(width: 90, alignment: .center)
+                            .foregroundStyle(.blue)
+                        Spacer().frame(width: 8)
+                        Text("Best Acc")
+                            .frame(width: 90, alignment: .center)
+                            .foregroundStyle(.green)
+                        Spacer().frame(width: 8)
+                        Text("Best Fit")
+                            .frame(width: 90, alignment: .center)
+                            .foregroundStyle(.purple)
+                    }
+                    .font(.caption2.bold())
+                    .padding(.vertical, 4)
 
-                Divider()
-
-                // Rows
-                ForEach(Array(validationProgression.enumerated()), id: \.element.id) { idx, point in
-                    let prevPoint = idx > 0 ? validationProgression[idx - 1] : nil
-                    let ceDelta = calculateCEDelta(current: point, previous: prevPoint)
-                    let isCurrentPhase = point.expId == experiment.id && point.validationPoint == .final
-
-                    HStack {
+                    // Header row 2: CE/Acc sub-columns
+                    HStack(spacing: 0) {
+                        Text("")
+                            .frame(width: 70)
+                        Spacer().frame(width: 8)
                         HStack(spacing: 4) {
-                            Text(point.label)
-                                .lineLimit(1)
-                            if isCurrentPhase {
-                                Text("◀")
-                                    .foregroundStyle(.blue)
-                            }
+                            Text("CE").frame(width: 43, alignment: .trailing)
+                            Text("Acc").frame(width: 43, alignment: .trailing)
                         }
-                        .frame(width: 80, alignment: .leading)
-                        .font(point.validationPoint == .`init` ? .caption.italic() : .caption)
-                        .foregroundStyle(point.validationPoint == .`init` ? .blue : .primary)
+                        .frame(width: 90)
+                        Spacer().frame(width: 8)
+                        HStack(spacing: 4) {
+                            Text("CE").frame(width: 43, alignment: .trailing)
+                            Text("Acc").frame(width: 43, alignment: .trailing)
+                        }
+                        .frame(width: 90)
+                        Spacer().frame(width: 8)
+                        HStack(spacing: 4) {
+                            Text("CE").frame(width: 43, alignment: .trailing)
+                            Text("Acc").frame(width: 43, alignment: .trailing)
+                        }
+                        .frame(width: 90)
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 2)
 
-                        Text(NumberFormatters.formatCE(point.bestCE?.ce))
-                            .frame(minWidth: 60, alignment: .trailing)
+                    Divider()
 
-                        Group {
-                            if let delta = ceDelta {
-                                Text(String(format: "%@%.4f", delta < 0 ? "↓" : "↑", abs(delta)))
-                                    .foregroundStyle(delta < 0 ? .green : .red)
-                            } else {
-                                Text("—")
+                    // Data rows
+                    ForEach(Array(validationProgression.enumerated()), id: \.element.id) { idx, point in
+                        let isCurrentPhase = point.expId == experiment.id && point.validationPoint == .final
+
+                        HStack(spacing: 0) {
+                            HStack(spacing: 2) {
+                                Text(point.label)
+                                    .lineLimit(1)
+                                if isCurrentPhase {
+                                    Text("◀")
+                                        .foregroundStyle(.blue)
+                                        .font(.caption2)
+                                }
+                            }
+                            .frame(width: 70, alignment: .leading)
+                            .font(point.validationPoint == .`init` ? .caption.italic() : .caption)
+                            .foregroundStyle(point.validationPoint == .`init` ? .blue : .primary)
+
+                            Spacer().frame(width: 8)
+
+                            // Best CE genome
+                            HStack(spacing: 4) {
+                                Text(formatCEShort(point.bestCE?.ce))
+                                    .frame(width: 43, alignment: .trailing)
+                                Text(formatAccShort(point.bestCE?.accuracy))
+                                    .frame(width: 43, alignment: .trailing)
                                     .foregroundStyle(.secondary)
                             }
+                            .frame(width: 90)
+                            .background(Color.blue.opacity(0.05))
+
+                            Spacer().frame(width: 8)
+
+                            // Best Acc genome
+                            HStack(spacing: 4) {
+                                Text(formatCEShort(point.bestAcc?.ce))
+                                    .frame(width: 43, alignment: .trailing)
+                                Text(formatAccShort(point.bestAcc?.accuracy))
+                                    .frame(width: 43, alignment: .trailing)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(width: 90)
+                            .background(Color.green.opacity(0.05))
+
+                            Spacer().frame(width: 8)
+
+                            // Best Fitness genome
+                            HStack(spacing: 4) {
+                                Text(formatCEShort(point.bestFitness?.ce))
+                                    .frame(width: 43, alignment: .trailing)
+                                Text(formatAccShort(point.bestFitness?.accuracy))
+                                    .frame(width: 43, alignment: .trailing)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(width: 90)
+                            .background(Color.purple.opacity(0.05))
                         }
-                        .frame(width: 50, alignment: .trailing)
+                        .font(.caption)
+                        .fontDesign(.monospaced)
+                        .padding(.vertical, 6)
+                        .background(isCurrentPhase ? Color.blue.opacity(0.1) : Color.clear)
 
-                        Text(NumberFormatters.formatAccuracy(point.bestCE?.accuracy))
-                            .frame(width: 50, alignment: .trailing)
-                            .foregroundStyle(.secondary)
-                    }
-                    .font(.caption)
-                    .fontDesign(.monospaced)
-                    .padding(.vertical, 6)
-                    .background(isCurrentPhase ? Color.blue.opacity(0.1) : Color.clear)
-
-                    if idx < validationProgression.count - 1 {
-                        Divider()
+                        if idx < validationProgression.count - 1 {
+                            Divider()
+                        }
                     }
                 }
+                .padding(8)
             }
-            .padding(8)
             #if os(iOS)
             .background(Color(.secondarySystemBackground).opacity(0.5))
             #else
@@ -383,10 +437,14 @@ public struct ExperimentIterationsView: View {
         .glassCard()
     }
 
-    private func calculateCEDelta(current: ValidationProgressionPoint, previous: ValidationProgressionPoint?) -> Double? {
-        guard let currentCE = current.bestCE?.ce,
-              let prevCE = previous?.bestCE?.ce else { return nil }
-        return currentCE - prevCE
+    private func formatCEShort(_ ce: Double?) -> String {
+        guard let ce = ce else { return "—" }
+        return String(format: "%.2f", ce)
+    }
+
+    private func formatAccShort(_ acc: Double?) -> String {
+        guard let acc = acc else { return "—" }
+        return String(format: "%.2f%%", acc * 100)
     }
 
     // MARK: - Helpers

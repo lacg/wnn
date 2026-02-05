@@ -652,12 +652,18 @@
           <table class="validation-table">
             <thead>
               <tr>
-                <th>Phase</th>
-                <th>Best CE</th>
-                <th>Δ CE</th>
-                <th>Best Acc</th>
-                <th>Δ Acc</th>
-                <th>Best Fitness</th>
+                <th rowspan="2">Phase</th>
+                <th colspan="2">Best CE Genome</th>
+                <th colspan="2">Best Acc Genome</th>
+                <th colspan="2">Best Fitness Genome</th>
+              </tr>
+              <tr>
+                <th>CE</th>
+                <th>Acc</th>
+                <th>CE</th>
+                <th>Acc</th>
+                <th>CE</th>
+                <th>Acc</th>
               </tr>
             </thead>
             <tbody>
@@ -665,11 +671,6 @@
                 {@const bestCeSummary = point.summaries.find(s => s.genomeType === 'best_ce')}
                 {@const bestAccSummary = point.summaries.find(s => s.genomeType === 'best_acc')}
                 {@const bestFitSummary = point.summaries.find(s => s.genomeType === 'best_fitness')}
-                {@const prevPoint = idx > 0 ? cumulativeValidationProgression[idx - 1] : null}
-                {@const prevBestCe = prevPoint?.summaries.find(s => s.genomeType === 'best_ce')}
-                {@const prevBestAcc = prevPoint?.summaries.find(s => s.genomeType === 'best_acc')}
-                {@const ceDelta = bestCeSummary && prevBestCe ? bestCeSummary.ce - prevBestCe.ce : null}
-                {@const accDelta = bestAccSummary && prevBestAcc ? bestAccSummary.accuracy - prevBestAcc.accuracy : null}
                 {@const isCurrentExp = point.expId === experiment?.id}
                 <tr class:current-phase={isCurrentExp && point.validationPoint === 'final'}>
                   <td class="phase-name" class:init-phase={point.validationPoint === 'init'}>
@@ -678,34 +679,12 @@
                       <span class="current-marker">◀</span>
                     {/if}
                   </td>
-                  <td class="mono">
-                    {#if bestCeSummary}
-                      {bestCeSummary.ce.toFixed(4)}
-                      <span class="metric-acc-inline">({(bestCeSummary.accuracy * 100).toFixed(2)}%)</span>
-                    {:else}—{/if}
-                  </td>
-                  <td class="mono delta" class:delta-positive={ceDelta !== null && ceDelta < 0} class:delta-negative={ceDelta !== null && ceDelta > 0}>
-                    {#if ceDelta !== null}
-                      {ceDelta < 0 ? '↓' : ceDelta > 0 ? '↑' : ''}{Math.abs(ceDelta).toFixed(4)}
-                    {:else}—{/if}
-                  </td>
-                  <td class="mono">
-                    {#if bestAccSummary}
-                      {bestAccSummary.ce.toFixed(4)}
-                      <span class="metric-acc-inline">({(bestAccSummary.accuracy * 100).toFixed(2)}%)</span>
-                    {:else}—{/if}
-                  </td>
-                  <td class="mono delta" class:delta-positive={accDelta !== null && accDelta > 0} class:delta-negative={accDelta !== null && accDelta < 0}>
-                    {#if accDelta !== null}
-                      {accDelta > 0 ? '↑' : accDelta < 0 ? '↓' : ''}{Math.abs(accDelta * 100).toFixed(2)}%
-                    {:else}—{/if}
-                  </td>
-                  <td class="mono">
-                    {#if bestFitSummary}
-                      {bestFitSummary.ce.toFixed(4)}
-                      <span class="metric-acc-inline">({(bestFitSummary.accuracy * 100).toFixed(2)}%)</span>
-                    {:else}—{/if}
-                  </td>
+                  <td class="mono best-ce-col">{bestCeSummary ? bestCeSummary.ce.toFixed(4) : '—'}</td>
+                  <td class="mono best-ce-col">{bestCeSummary ? (bestCeSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+                  <td class="mono best-acc-col">{bestAccSummary ? bestAccSummary.ce.toFixed(4) : '—'}</td>
+                  <td class="mono best-acc-col">{bestAccSummary ? (bestAccSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+                  <td class="mono best-fit-col">{bestFitSummary ? bestFitSummary.ce.toFixed(4) : '—'}</td>
+                  <td class="mono best-fit-col">{bestFitSummary ? (bestFitSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
                 </tr>
               {/each}
             </tbody>
@@ -1423,6 +1402,12 @@
     color: var(--text-primary);
   }
 
+  .validation-subtitle {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    margin-left: 0.5rem;
+  }
+
   .validation-legend {
     display: flex;
     gap: 1rem;
@@ -2039,5 +2024,21 @@
 
   .validation-table .delta {
     font-size: 0.85rem;
+  }
+
+  .validation-table th[colspan] {
+    border-bottom: 1px solid var(--border);
+  }
+
+  .validation-table .best-ce-col {
+    background: rgba(59, 130, 246, 0.05);
+  }
+
+  .validation-table .best-acc-col {
+    background: rgba(34, 197, 94, 0.05);
+  }
+
+  .validation-table .best-fit-col {
+    background: rgba(155, 89, 182, 0.05);
   }
 </style>
