@@ -706,25 +706,16 @@ class FlowWorker:
         """
         genomes = {}
 
-        # Try different checkpoint formats:
-        # 1. Direct keys at root level (legacy format)
-        # 2. Nested under phase_result (current format)
+        # Checkpoint format: genome data is nested under phase_result
         phase_result = ckpt_data.get("phase_result", {})
 
-        # Check root level first (legacy), then phase_result (current)
-        if "best_genome" in ckpt_data:
-            genomes["best_fitness"] = ckpt_data["best_genome"]
-        elif "best_genome" in phase_result:
+        if "best_genome" in phase_result:
             genomes["best_fitness"] = phase_result["best_genome"]
 
-        if "best_ce_genome" in ckpt_data:
-            genomes["best_ce"] = ckpt_data["best_ce_genome"]
-        elif "best_ce_genome" in phase_result:
+        if "best_ce_genome" in phase_result:
             genomes["best_ce"] = phase_result["best_ce_genome"]
 
-        if "best_acc_genome" in ckpt_data:
-            genomes["best_acc"] = ckpt_data["best_acc_genome"]
-        elif "best_acc_genome" in phase_result:
+        if "best_acc_genome" in phase_result:
             genomes["best_acc"] = phase_result["best_acc_genome"]
 
         # If only one genome type found, use it for all
