@@ -179,6 +179,7 @@ export interface TierStats {
   min_neurons: number;
   max_neurons: number;
   total_neurons: number;
+  total_connections: number;
 }
 
 export interface GenomeEvaluation {

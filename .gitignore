@@ -267,7 +267,7 @@ Thumbs.db
 # data/
 # Output files (nohup, monitor, sweep logs, etc.)
 *.out
-checkpoints/
+/checkpoints/
 results_*.json
 
 # Dashboard runtime files

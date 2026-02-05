@@ -661,6 +661,8 @@ class ClusterGenome:
 			"max_neurons": max(neurons),
 			"mean_neurons": sum(neurons) / len(neurons),
 			"total_neurons": sum(neurons),
+			# Connections stats
+			"total_connections": self.total_connections(),
 			# Memory stats
 			"total_memory_cells": self.total_memory_cells(),
 			# Distributions
@@ -700,6 +702,8 @@ class ClusterGenome:
 			tier_neurons = self.neurons_per_cluster[cluster_idx:end_idx]
 
 			if tier_bits:
+				# Connections = sum(neurons * bits) for each cluster in tier
+				tier_connections = sum(n * b for n, b in zip(tier_neurons, tier_bits))
 				tier_stats.append({
 					"tier_index": tier_num,
 					"cluster_count": len(tier_bits),
@@ -712,6 +716,7 @@ class ClusterGenome:
 					"min_neurons": min(tier_neurons),
 					"max_neurons": max(tier_neurons),
 					"total_neurons": sum(tier_neurons),
+					"total_connections": tier_connections,
 				})
 
 			cluster_idx = end_idx

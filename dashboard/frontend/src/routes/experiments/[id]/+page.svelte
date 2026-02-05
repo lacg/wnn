@@ -623,6 +623,7 @@
                 <th>Avg Neurons</th>
                 <th>Bit Range</th>
                 <th>Neuron Range</th>
+                <th>Connections</th>
                 <th>Optimize</th>
               </tr>
             </thead>
@@ -636,6 +637,7 @@
                   <td class="mono">{tier.avg_neurons.toFixed(1)}</td>
                   <td class="mono">{tier.min_bits}-{tier.max_bits}</td>
                   <td class="mono">{tier.min_neurons}-{tier.max_neurons}</td>
+                  <td class="mono">{tier.total_connections?.toLocaleString() ?? '—'}</td>
                   <td class="mono" class:delta-positive={optimize} class:delta-negative={!optimize}>
                     {optimize ? '✓' : '✗'}
                   </td>
