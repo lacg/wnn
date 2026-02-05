@@ -21,8 +21,12 @@ public struct IterationDetailSheet: View {
                 .padding()
             }
             .navigationTitle("Iteration #\(iteration.iteration_num)")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("Done") { dismiss() } } }
+            #else
+            .toolbar { ToolbarItem(placement: .automatic) { Button("Done") { dismiss() } } }
+            #endif
         }
     }
 

@@ -133,6 +133,7 @@ struct PhaseCard: View {
         switch phase.status {
         case .completed: Image(systemName: "checkmark.circle.fill").foregroundColor(.green).font(.caption)
         case .running: ProgressView().scaleEffect(0.7)
+        case .queued: Image(systemName: "clock").foregroundColor(.orange).font(.caption)
         case .failed: Image(systemName: "xmark.circle.fill").foregroundColor(.red).font(.caption)
         case .skipped: Image(systemName: "forward.fill").foregroundColor(.gray).font(.caption)
         case .pending: Image(systemName: "circle").foregroundColor(.gray).font(.caption)

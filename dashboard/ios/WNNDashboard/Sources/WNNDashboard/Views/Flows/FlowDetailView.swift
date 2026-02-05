@@ -23,8 +23,12 @@ public struct FlowDetailView: View {
                 .padding()
             }
             .navigationTitle(flow.name)
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("Done") { dismiss() } } }
+            #else
+            .toolbar { ToolbarItem(placement: .automatic) { Button("Done") { dismiss() } } }
+            #endif
             .navigationDestination(for: Experiment.self) { experiment in
                 ExperimentIterationsView(experiment: experiment)
             }

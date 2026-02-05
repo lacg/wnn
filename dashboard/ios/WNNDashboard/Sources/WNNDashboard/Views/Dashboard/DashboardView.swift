@@ -20,7 +20,11 @@ public struct DashboardView: View {
                 }
             }
             .navigationTitle("Iterations")
+            #if os(iOS)
             .toolbar { ToolbarItem(placement: .navigationBarTrailing) { connectionIndicator } }
+            #else
+            .toolbar { ToolbarItem(placement: .automatic) { connectionIndicator } }
+            #endif
             .refreshable { await viewModel.refresh() }
             .task { await viewModel.loadRecentExperiments() }
             .sheet(item: $viewModel.selectedIteration) { iter in

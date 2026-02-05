@@ -17,7 +17,11 @@ public struct CheckpointsListView: View {
             }
             .frame(maxWidth: LayoutConstants.formMaxWidth(for: horizontalSizeClass))
             .navigationTitle("Checkpoints")
+            #if os(iOS)
             .toolbar { ToolbarItem(placement: .navigationBarTrailing) { filterMenu } }
+            #else
+            .toolbar { ToolbarItem(placement: .automatic) { filterMenu } }
+            #endif
             .refreshable { await viewModel.refresh() }
             .alert("Error", isPresented: .constant(viewModel.error != nil)) { Button("OK") { viewModel.clearError() } } message: { Text(viewModel.error ?? "") }
         }

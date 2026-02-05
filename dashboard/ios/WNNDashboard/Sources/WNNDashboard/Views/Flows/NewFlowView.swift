@@ -37,18 +37,29 @@ public struct NewFlowView: View {
                     Stepper("Population: \(population)", value: $population, in: 10...200, step: 10)
                 }
                 Section("Tier Configuration") {
+                    #if os(iOS)
                     TextField("Tier Config", text: $tierConfig).fontDesign(.monospaced).textInputAutocapitalization(.never)
+                    #else
+                    TextField("Tier Config", text: $tierConfig).fontDesign(.monospaced)
+                    #endif
                     Toggle("Tier 0 Only", isOn: $tier0Only)
                     Text("Format: clusters,neurons,bits;...").font(.caption).foregroundColor(.secondary)
                 }
                 if let error = error { Section { Text(error).foregroundColor(.red) } }
             }
             .navigationTitle("New Flow")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .navigationBarTrailing) { Button("Create") { createFlow() }.disabled(name.isEmpty || isSubmitting) }
             }
+            #else
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button("Create") { createFlow() }.disabled(name.isEmpty || isSubmitting) }
+            }
+            #endif
             .disabled(isSubmitting)
             .overlay { if isSubmitting { ProgressView("Creating flow...").padding().background(.ultraThinMaterial).cornerRadius(12) } }
         }

@@ -18,7 +18,7 @@ public enum ExperimentStatus: String, Codable, CaseIterable {
 }
 
 public enum PhaseStatus: String, Codable, CaseIterable {
-    case pending, queued, running, paused, completed, failed, cancelled
+    case pending, queued, running, paused, completed, failed, cancelled, skipped
 
     public var displayName: String { rawValue.capitalized }
     public var isActive: Bool { self == .running || self == .queued }

@@ -20,9 +20,15 @@ public struct SidebarView: View {
         }
         .navigationTitle("WNN Dashboard")
         .toolbar {
+            #if os(iOS)
             ToolbarItem(placement: .navigationBarTrailing) {
                 connectionIndicator
             }
+            #else
+            ToolbarItem(placement: .automatic) {
+                connectionIndicator
+            }
+            #endif
         }
     }
 
