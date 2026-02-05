@@ -377,7 +377,7 @@
 
   .stats-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
     gap: 1rem;
   }
 
@@ -386,6 +386,8 @@
     border: 1px solid var(--border);
     border-radius: 8px;
     padding: 1rem;
+    overflow: hidden;
+    min-width: 0;
   }
 
   .stats-card h3 {
@@ -415,6 +417,7 @@
     margin-top: 1rem;
     padding-top: 1rem;
     border-top: 1px solid var(--border);
+    overflow-x: auto;
   }
 
   .tier-stats h4 {
@@ -427,13 +430,17 @@
   .tier-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 0.75rem;
+    font-size: 0.7rem;
+    table-layout: fixed;
   }
 
   .tier-table th, .tier-table td {
-    padding: 0.25rem 0.5rem;
+    padding: 0.2rem 0.25rem;
     text-align: center;
     border: 1px solid var(--border);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .tier-table th {
