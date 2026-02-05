@@ -327,10 +327,18 @@ async fn run_gating(
                 ).into_response();
             }
             GatingStatus::Completed => {
-                return (
-                    StatusCode::CONFLICT,
-                    Json(serde_json::json!({"error": "Gating analysis already completed. Delete results to re-run."})),
-                ).into_response();
+                // Allow re-running if completed with an error
+                let has_error = experiment.gating_results
+                    .as_ref()
+                    .map(|r| r.error.is_some())
+                    .unwrap_or(false);
+                if !has_error {
+                    return (
+                        StatusCode::CONFLICT,
+                        Json(serde_json::json!({"error": "Gating analysis already completed. Delete results to re-run."})),
+                    ).into_response();
+                }
+                // Fall through to allow retry
             }
             GatingStatus::Failed => {
                 // Allow re-running after failure
