@@ -1885,6 +1885,8 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				generation=iteration,
 				total_generations=cfg.iterations,
 				return_best_n=True,
+				# Rust expects count (usize), not list - convert list to length for tier0-only
+				mutable_clusters=len(arch_cfg.mutable_clusters) if arch_cfg.mutable_clusters else None,
 			)
 
 			# Track per-iteration stats (before and after filter)

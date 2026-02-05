@@ -475,6 +475,7 @@ class CachedEvaluator:
         generation: Optional[int] = None,
         total_generations: Optional[int] = None,
         return_best_n: bool = True,
+        mutable_clusters: Optional[int] = None,
     ) -> list[ClusterGenome]:
         """
         Search for neighbor genomes above accuracy threshold, entirely in Rust.
@@ -541,6 +542,7 @@ class CachedEvaluator:
             generation=generation,
             total_generations=total_generations,
             return_best_n=return_best_n,
+            mutable_clusters=mutable_clusters,
         )
 
         # Convert results to ClusterGenome objects
