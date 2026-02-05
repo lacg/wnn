@@ -1039,7 +1039,7 @@
                   <td>{iter.iteration_num}</td>
                   <td class="timestamp">{formatDate(iter.created_at)}</td>
                   <td class:best={iter.best_ce === bestCE}>{formatCE(iter.best_ce)}</td>
-                  <td>{formatAccShort(iter.best_accuracy)}</td>
+                  <td class:best={iter.best_accuracy !== null && iter.best_accuracy === bestAcc}>{formatAccShort(iter.best_accuracy)}</td>
                   <td class="secondary">{iter.avg_ce ? formatCE(iter.avg_ce) : '—'}</td>
                   <td class="secondary">{formatAccShort(iter.avg_accuracy)}</td>
                   <td class="secondary">{iter.fitness_threshold !== null ? formatAccShort(iter.fitness_threshold) : '—'}</td>
