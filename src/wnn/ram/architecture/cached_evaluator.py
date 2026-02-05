@@ -808,10 +808,10 @@ class CachedEvaluator:
         log("  Evaluating with Rust gated evaluation...")
         start = time.time()
 
-        # Flatten genome configuration
-        bits_flat = genome.get_bits_per_cluster()
-        neurons_flat = genome.get_neurons_per_cluster()
-        connections_flat = genome.get_connections_flat()
+        # Get genome configuration (direct attributes, not methods)
+        bits_flat = genome.bits_per_cluster
+        neurons_flat = genome.neurons_per_cluster
+        connections_flat = genome.connections if genome.connections else []
 
         # Call Rust implementation via TokenCacheWrapper
         ce, acc, gated_ce, gated_acc = self._cache.evaluate_genome_with_gating(
