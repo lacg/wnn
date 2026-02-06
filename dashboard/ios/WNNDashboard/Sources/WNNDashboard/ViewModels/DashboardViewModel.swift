@@ -27,8 +27,21 @@ public final class DashboardViewModel: ObservableObject {
 	}
 	public var maxIterations: Int32 { currentExperiment?.max_iterations ?? 0 }
 
-	/// All experiments to display: running first, then recent completed/failed
+	/// Flow name for the current flow (if running experiment belongs to one)
+	public var currentFlowName: String? {
+		guard let flowId = currentExperiment?.flow_id else { return nil }
+		return currentFlowExperiments.isEmpty ? nil : "Flow #\(flowId)"
+	}
+
+	/// Experiments for the current flow, or recent experiments if no flow
+	@Published public private(set) var currentFlowExperiments: [Experiment] = []
+
+	/// All experiments to display: flow experiments (ordered newest first) or running + recent
 	public var displayExperiments: [Experiment] {
+		if !currentFlowExperiments.isEmpty {
+			return currentFlowExperiments
+				.sorted { ($0.endedDate ?? $0.startedDate ?? $0.createdDate ?? .distantPast) > ($1.endedDate ?? $1.startedDate ?? $1.createdDate ?? .distantPast) }
+		}
 		var result: [Experiment] = []
 		if let running = currentExperiment { result.append(running) }
 		let runningId = currentExperiment?.id
@@ -92,6 +105,18 @@ public final class DashboardViewModel: ObservableObject {
 	public func refresh() async { await loadSnapshot() }
 
 	public func loadRecentExperiments() async {
+		// If running experiment belongs to a flow, load that flow's experiments
+		if let flowId = currentExperiment?.flow_id {
+			do {
+				currentFlowExperiments = try await apiClient.getFlowExperiments(flowId)
+			} catch {
+				currentFlowExperiments = []
+			}
+		} else {
+			currentFlowExperiments = []
+		}
+
+		// Also load recent experiments as fallback (for when no flow is running)
 		do {
 			let all = try await apiClient.getExperiments()
 			recentExperiments = all

@@ -111,7 +111,15 @@ public struct DashboardView: View {
 
 	private var experimentsSection: some View {
 		VStack(alignment: .leading, spacing: 12) {
-			Text("Experiments").font(.headline)
+			if !viewModel.currentFlowExperiments.isEmpty, let exp = viewModel.currentExperiment {
+				HStack {
+					Text(exp.flow_id.map { _ in "Flow Experiments" } ?? "Experiments").font(.headline)
+					Spacer()
+					Text("\(viewModel.displayExperiments.count)").font(.caption).foregroundStyle(.secondary)
+				}
+			} else {
+				Text("Experiments").font(.headline)
+			}
 
 			if viewModel.displayExperiments.isEmpty && !viewModel.isLoading {
 				VStack(spacing: 12) {
