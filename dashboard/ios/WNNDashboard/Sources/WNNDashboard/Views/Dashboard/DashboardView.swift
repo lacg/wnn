@@ -54,32 +54,27 @@ public struct DashboardView: View {
 		}
 	}
 
-	// MARK: - iPad Layout (side-by-side)
+	// MARK: - iPad Layout (full-width, no split)
 
 	private var iPadLayout: some View {
-		HStack(alignment: .top, spacing: 20) {
-			// Left column: Metrics + Experiments list
-			ScrollView {
-				VStack(spacing: 16) {
-					metricsSection
-					if viewModel.isRunning { progressSection }
-					experimentsSection
+		ScrollView {
+			VStack(spacing: 20) {
+				// 4-column metrics on iPad
+				LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 12) {
+					MetricsCardView(title: "Best CE", value: NumberFormatters.formatCE(viewModel.bestCE), icon: "arrow.down.circle", color: .blue)
+					MetricsCardView(title: "Best Accuracy", value: NumberFormatters.formatAccuracy(viewModel.bestAccuracy), icon: "arrow.up.circle", color: .green)
+					MetricsCardView(title: "Type", value: viewModel.currentExperiment?.typePrefix ?? "-", icon: "gearshape.2", color: .purple)
+					MetricsCardView(title: "Iteration", value: "\(viewModel.currentIterationNumber)", icon: "number", color: .orange)
 				}
-			}
-			.frame(width: LayoutConstants.iPadSidebarWidth)
-
-			// Right column: Chart + selected experiment iterations table
-			VStack(spacing: 16) {
+				if viewModel.isRunning { progressSection }
 				if hasIterations {
 					chartSection
 						.frame(height: LayoutConstants.chartHeight(for: horizontalSizeClass))
 				}
-				if let chartId = viewModel.chartExperimentId ?? viewModel.currentExperiment?.id {
-					iPadIterationsTable(for: chartId)
-				}
+				experimentsSection
 			}
+			.padding()
 		}
-		.padding()
 	}
 
 	// MARK: - Metrics

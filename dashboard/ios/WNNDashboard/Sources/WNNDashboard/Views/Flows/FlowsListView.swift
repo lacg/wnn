@@ -3,26 +3,11 @@
 import SwiftUI
 
 public struct FlowsListView: View {
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @EnvironmentObject var viewModel: FlowsViewModel
-    @State private var selectedFlowForDetail: Flow?
 
     public init() {}
 
     public var body: some View {
-        Group {
-            if horizontalSizeClass == .regular {
-                iPadLayout
-            } else {
-                iPhoneLayout
-            }
-        }
-        .sheet(isPresented: $viewModel.showingNewFlowSheet) { NewFlowView() }
-    }
-
-    // MARK: - iPhone Layout
-
-    private var iPhoneLayout: some View {
         NavigationStack {
             flowsContent
                 .navigationTitle("Flows")
@@ -39,41 +24,8 @@ public struct FlowsListView: View {
                 .sheet(item: $viewModel.selectedFlow) { flow in FlowDetailView(flow: flow) }
                 .alert("Error", isPresented: Binding(get: { viewModel.error != nil }, set: { if !$0 { viewModel.clearError() } })) { Button("OK") { viewModel.clearError() } } message: { Text(viewModel.error ?? "") }
         }
+        .sheet(isPresented: $viewModel.showingNewFlowSheet) { NewFlowView() }
         .task { if viewModel.flows.isEmpty { await viewModel.loadFlows() } }
-    }
-
-    // MARK: - iPad Layout (Master-Detail)
-
-    private var iPadLayout: some View {
-        NavigationSplitView {
-            flowsContent
-                .navigationTitle("Flows")
-                .toolbar {
-                    #if os(iOS)
-                    ToolbarItem(placement: .navigationBarTrailing) { Button { viewModel.showingNewFlowSheet = true } label: { Image(systemName: "plus") } }
-                    ToolbarItem(placement: .navigationBarLeading) { filterMenu }
-                    #else
-                    ToolbarItem(placement: .automatic) { Button { viewModel.showingNewFlowSheet = true } label: { Image(systemName: "plus") } }
-                    ToolbarItem(placement: .automatic) { filterMenu }
-                    #endif
-                }
-                .refreshable { await viewModel.refresh() }
-        } detail: {
-            if let flow = selectedFlowForDetail {
-                FlowDetailContentView(flow: flow)
-            } else {
-                VStack(spacing: 16) {
-                    Image(systemName: "arrow.triangle.branch")
-                        .font(.system(size: 48))
-                        .foregroundColor(.secondary)
-                    Text("Select a Flow")
-                        .font(.headline)
-                    Text("Choose a flow from the list to see its details")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                }
-            }
-        }
     }
 
     @ViewBuilder
@@ -127,11 +79,7 @@ public struct FlowsListView: View {
     }
 
     private func selectFlow(_ flow: Flow) {
-        if horizontalSizeClass == .regular {
-            selectedFlowForDetail = flow
-        } else {
-            viewModel.selectedFlow = flow
-        }
+        viewModel.selectedFlow = flow
         Task { await viewModel.loadFlowExperiments(flow.id) }
     }
 }
