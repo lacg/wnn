@@ -848,7 +848,7 @@ mod tests {
     fn test_mutation_config() {
         let config = MutationConfig {
             num_clusters: 100,
-            mutable_clusters: 100,
+            mutable_clusters: None, // None means all clusters mutable
             min_bits: 4,
             max_bits: 20,
             min_neurons: 1,
@@ -867,7 +867,7 @@ mod tests {
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
         let config = MutationConfig {
             num_clusters: 3,
-            mutable_clusters: 3,
+            mutable_clusters: None, // None means all clusters mutable
             min_bits: 4,
             max_bits: 20,
             min_neurons: 1,

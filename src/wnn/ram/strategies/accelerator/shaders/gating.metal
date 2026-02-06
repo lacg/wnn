@@ -179,3 +179,83 @@ kernel void apply_gates_gpu(
     if (idx >= total_elements) return;
     output[idx] = scores[idx] * gates[idx];
 }
+
+//
+// Kernel: Train gating neurons
+// One thread per (batch_example, cluster) pair
+// Writes to memory using atomic operations to handle conflicts
+//
+// For each cluster:
+//   - If target_gate[cluster] == 1 (true), write CELL_TRUE to all neurons
+//   - If target_gate[cluster] == 0 (false), write CELL_FALSE to all neurons
+//
+// Note: We use atomic operations because multiple examples may map to the same
+// memory address. The final value will be determined by whichever example
+// maps there last, which is acceptable for RAM semantics.
+//
+kernel void gating_train(
+    device const int* connections [[buffer(0)]],       // [total_neurons * bits_per_neuron]
+    device atomic_uint* memory [[buffer(1)]],          // [total_neurons * address_space_size / 4] (packed u8s as u32)
+    device const uint8_t* input_bits [[buffer(2)]],    // [batch_size * total_input_bits]
+    device const uint8_t* target_gates [[buffer(3)]],  // [batch_size * num_clusters] (0 or 1)
+    constant GatingParams& params [[buffer(4)]],
+    uint2 thread_pos [[thread_position_in_grid]]       // (cluster_idx, batch_idx)
+) {
+    uint cluster_idx = thread_pos.x;
+    uint batch_idx = thread_pos.y;
+
+    // Bounds check
+    if (cluster_idx >= params.num_clusters) return;
+    if (batch_idx >= params.batch_size) return;
+
+    // Get input bits for this example
+    device const uint8_t* example_input = input_bits + batch_idx * params.total_input_bits;
+
+    // Get target gate for this cluster
+    uint target_idx = batch_idx * params.num_clusters + cluster_idx;
+    uint8_t target = target_gates[target_idx];
+    uint8_t target_cell = (target != 0) ? CELL_TRUE : CELL_FALSE;
+
+    // First neuron index for this cluster
+    uint neuron_start = cluster_idx * params.neurons_per_gate;
+
+    // Train all neurons for this cluster
+    for (uint n = 0; n < params.neurons_per_gate; n++) {
+        uint neuron_idx = neuron_start + n;
+
+        // Get connectivity for this neuron
+        device const int* neuron_conn = connections + neuron_idx * params.bits_per_neuron;
+
+        // Compute address
+        uint address = compute_address(
+            neuron_conn,
+            params.bits_per_neuron,
+            example_input,
+            params.total_input_bits
+        );
+
+        // Memory index (byte offset)
+        uint mem_byte_idx = neuron_idx * params.address_space_size + address;
+
+        // For atomic access, we work with 4-byte (u32) chunks
+        // Each u32 contains 4 u8 cells
+        uint mem_word_idx = mem_byte_idx / 4;
+        uint byte_offset = mem_byte_idx % 4;
+        uint shift = byte_offset * 8;
+        uint mask = 0xFFu << shift;
+        uint new_value = uint(target_cell) << shift;
+
+        // Atomic read-modify-write to update just our byte
+        uint old_val = atomic_load_explicit(&memory[mem_word_idx], memory_order_relaxed);
+        uint updated;
+        do {
+            updated = (old_val & ~mask) | new_value;
+        } while (!atomic_compare_exchange_weak_explicit(
+            &memory[mem_word_idx],
+            &old_val,
+            updated,
+            memory_order_relaxed,
+            memory_order_relaxed
+        ));
+    }
+}

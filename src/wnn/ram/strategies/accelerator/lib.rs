@@ -3440,6 +3440,47 @@ impl RAMGatingWrapper {
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
         })
     }
+
+    /// Train gate neurons on Metal GPU
+    ///
+    /// Uses Metal compute shaders with atomic memory writes for parallel training.
+    /// After training, memory is synced back from GPU.
+    ///
+    /// # Arguments
+    /// * `input_bits_flat` - Flattened input bits [batch_size * total_input_bits]
+    /// * `target_gates_flat` - Flattened target gates [batch_size * num_clusters]
+    /// * `batch_size` - Number of training examples
+    ///
+    /// # Returns
+    /// Number of training examples processed (batch_size)
+    fn train_batch_metal(
+        &self,
+        py: Python<'_>,
+        input_bits_flat: Vec<bool>,
+        target_gates_flat: Vec<bool>,
+        batch_size: usize,
+    ) -> PyResult<usize> {
+        py.allow_threads(|| {
+            let evaluator_lock = get_cached_metal_gating_evaluator()
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+            let guard = evaluator_lock.lock().unwrap();
+            let evaluator = guard.as_ref()
+                .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Metal gating evaluator not initialized"))?;
+
+            // Train on GPU and get updated memory
+            let updated_memory = evaluator.train_batch(&self.inner, &input_bits_flat, &target_gates_flat, batch_size)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+
+            // Import the updated memory back into the gating model
+            self.inner.import_memory(&updated_memory)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+
+            // Invalidate forward cache since memory changed
+            metal_gating::invalidate_gating_cache();
+
+            Ok(batch_size)
+        })
+    }
 }
 
 /// Check if Metal gating is available

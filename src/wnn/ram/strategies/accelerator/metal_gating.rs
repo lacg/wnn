@@ -218,6 +218,7 @@ pub struct MetalGatingEvaluator {
     command_queue: CommandQueue,
     forward_pipeline: ComputePipelineState,
     forward_per_example_pipeline: ComputePipelineState,
+    train_pipeline: ComputePipelineState,
 }
 
 impl MetalGatingEvaluator {
@@ -246,6 +247,10 @@ impl MetalGatingEvaluator {
             .get_function("gating_forward_per_example", None)
             .map_err(|e| format!("Failed to get gating_forward_per_example kernel: {}", e))?;
 
+        let train_kernel = library
+            .get_function("gating_train", None)
+            .map_err(|e| format!("Failed to get gating_train kernel: {}", e))?;
+
         // Create pipelines
         let forward_pipeline = device
             .new_compute_pipeline_state_with_function(&forward_kernel)
@@ -255,12 +260,22 @@ impl MetalGatingEvaluator {
             .new_compute_pipeline_state_with_function(&forward_per_example_kernel)
             .map_err(|e| format!("Failed to create forward_per_example pipeline: {}", e))?;
 
+        let train_pipeline = device
+            .new_compute_pipeline_state_with_function(&train_kernel)
+            .map_err(|e| format!("Failed to create train pipeline: {}", e))?;
+
         Ok(Self {
             device,
             command_queue,
             forward_pipeline,
             forward_per_example_pipeline,
+            train_pipeline,
         })
+    }
+
+    /// Get device reference for external use
+    pub fn device(&self) -> &Device {
+        &self.device
     }
 
     /// Forward pass on GPU with buffer caching
@@ -413,6 +428,152 @@ impl MetalGatingEvaluator {
             Ok(results.to_vec())
         })
     }
+
+    /// Train gating neurons on GPU
+    ///
+    /// Uses the gating_train Metal kernel with atomic memory writes.
+    /// The kernel processes (cluster, batch) pairs in parallel.
+    ///
+    /// # Arguments
+    /// * `gating` - The RAMGating model to train into
+    /// * `input_bits_flat` - Flattened input bits [batch_size * total_input_bits]
+    /// * `target_gates_flat` - Flattened target gate values [batch_size * num_clusters]
+    /// * `batch_size` - Number of training examples
+    ///
+    /// # Returns
+    /// Updated memory (caller must import into gating model)
+    pub fn train_batch(
+        &self,
+        gating: &RAMGating,
+        input_bits_flat: &[bool],
+        target_gates_flat: &[bool],
+        batch_size: usize,
+    ) -> Result<Vec<u8>, String> {
+        if batch_size == 0 {
+            return Ok(gating.export_memory());
+        }
+
+        let config = gating.config();
+
+        // Convert bools to u8 for GPU
+        let input_bits_u8: Vec<u8> = input_bits_flat.iter().map(|&b| b as u8).collect();
+        let target_gates_u8: Vec<u8> = target_gates_flat.iter().map(|&b| b as u8).collect();
+
+        // Get connections as i32
+        let connections: Vec<i32> = gating.get_connections().to_vec();
+
+        // Export current memory state and pack into u32s for atomic access
+        let memory_bytes = gating.export_memory();
+        let memory_words: Vec<u32> = pack_u8_to_u32(&memory_bytes);
+
+        // Prepare params
+        let params = GatingParams {
+            num_clusters: config.num_clusters as u32,
+            neurons_per_gate: config.neurons_per_gate as u32,
+            bits_per_neuron: config.bits_per_neuron as u32,
+            total_input_bits: config.total_input_bits as u32,
+            vote_threshold: config.vote_threshold as u32,
+            address_space_size: (1 << config.bits_per_neuron) as u32,
+            batch_size: batch_size as u32,
+            _padding: 0,
+        };
+
+        // Create buffers (using StorageModeShared for unified memory)
+        let conn_buffer = self.device.new_buffer_with_data(
+            connections.as_ptr() as *const _,
+            (connections.len() * mem::size_of::<i32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let memory_buffer = self.device.new_buffer_with_data(
+            memory_words.as_ptr() as *const _,
+            (memory_words.len() * mem::size_of::<u32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let input_buffer = self.device.new_buffer_with_data(
+            input_bits_u8.as_ptr() as *const _,
+            input_bits_u8.len() as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let target_buffer = self.device.new_buffer_with_data(
+            target_gates_u8.as_ptr() as *const _,
+            target_gates_u8.len() as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let params_buffer = self.device.new_buffer_with_data(
+            &params as *const GatingParams as *const _,
+            mem::size_of::<GatingParams>() as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        // Create command buffer and encoder
+        let command_buffer = self.command_queue.new_command_buffer();
+        let encoder = command_buffer.new_compute_command_encoder();
+
+        encoder.set_compute_pipeline_state(&self.train_pipeline);
+        encoder.set_buffer(0, Some(&conn_buffer), 0);
+        encoder.set_buffer(1, Some(&memory_buffer), 0);
+        encoder.set_buffer(2, Some(&input_buffer), 0);
+        encoder.set_buffer(3, Some(&target_buffer), 0);
+        encoder.set_buffer(4, Some(&params_buffer), 0);
+
+        // Dispatch: one thread per (cluster, batch) pair
+        let grid_size = MTLSize::new(config.num_clusters as u64, batch_size as u64, 1);
+        let max_threads = self.train_pipeline.max_total_threads_per_threadgroup();
+        let threads_x = (max_threads as f64).sqrt() as u64;
+        let threads_y = max_threads / threads_x;
+        let thread_group_size = MTLSize::new(
+            threads_x.min(config.num_clusters as u64),
+            threads_y.min(batch_size as u64),
+            1,
+        );
+        encoder.dispatch_threads(grid_size, thread_group_size);
+
+        encoder.end_encoding();
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+
+        // Read back updated memory and unpack from u32 to u8
+        let ptr = memory_buffer.contents() as *const u32;
+        let result_words = unsafe { std::slice::from_raw_parts(ptr, memory_words.len()) };
+        let result_bytes = unpack_u32_to_u8(result_words, memory_bytes.len());
+
+        Ok(result_bytes)
+    }
+}
+
+/// Pack u8 slice into u32 slice (4 bytes per u32)
+fn pack_u8_to_u32(bytes: &[u8]) -> Vec<u32> {
+    let word_count = (bytes.len() + 3) / 4;
+    let mut words = vec![0u32; word_count];
+
+    for (i, &b) in bytes.iter().enumerate() {
+        let word_idx = i / 4;
+        let byte_offset = i % 4;
+        words[word_idx] |= (b as u32) << (byte_offset * 8);
+    }
+
+    words
+}
+
+/// Unpack u32 slice back to u8 slice
+fn unpack_u32_to_u8(words: &[u32], target_len: usize) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(target_len);
+
+    for &word in words {
+        for byte_offset in 0..4 {
+            if bytes.len() >= target_len {
+                break;
+            }
+            bytes.push(((word >> (byte_offset * 8)) & 0xFF) as u8);
+        }
+    }
+
+    bytes.truncate(target_len);
+    bytes
 }
 
 /// Hybrid CPU+GPU forward pass
@@ -582,5 +743,56 @@ mod tests {
         for (i, (&cpu, &gpu)) in cpu_gates.iter().zip(gpu_gates.iter()).enumerate() {
             assert_eq!(cpu, gpu, "Mismatch at index {}", i);
         }
+    }
+
+    #[test]
+    fn test_metal_gpu_training() {
+        if !MetalGatingEvaluator::is_available() {
+            println!("Metal not available, skipping test");
+            return;
+        }
+
+        let gating_gpu = RAMGating::new(10, 4, 6, 32, 0.5, Some(42));
+        let gating_cpu = RAMGating::new(10, 4, 6, 32, 0.5, Some(42));
+
+        let metal_eval = MetalGatingEvaluator::new().unwrap();
+
+        // Create training batch
+        let batch_size = 5;
+        let input_flat: Vec<bool> = (0..batch_size * 32)
+            .map(|i| ((i * 3) % 2) == 0)
+            .collect();
+
+        // Target gates: each example has one target cluster open
+        let mut target_gates: Vec<bool> = vec![false; batch_size * 10];
+        for b in 0..batch_size {
+            target_gates[b * 10 + (b * 2) % 10] = true;
+        }
+
+        // Train on CPU
+        gating_cpu.train_batch(&input_flat, &target_gates, batch_size, false);
+
+        // Train on GPU
+        let gpu_memory = metal_eval.train_batch(&gating_gpu, &input_flat, &target_gates, batch_size).unwrap();
+        gating_gpu.import_memory(&gpu_memory).unwrap();
+
+        invalidate_gating_cache();
+
+        // Test input
+        let test_input: Vec<bool> = (0..32).map(|i| ((i * 3) % 2) == 0).collect();
+
+        // Forward on both should give same results
+        let cpu_gates = gating_cpu.forward_single(&test_input);
+        let gpu_gates = gating_gpu.forward_single(&test_input);
+
+        assert_eq!(cpu_gates, gpu_gates, "CPU and GPU trained models should produce same output");
+    }
+
+    #[test]
+    fn test_pack_unpack_roundtrip() {
+        let original: Vec<u8> = (0..100).map(|i| (i * 7 % 256) as u8).collect();
+        let packed = super::pack_u8_to_u32(&original);
+        let unpacked = super::unpack_u32_to_u8(&packed, original.len());
+        assert_eq!(original, unpacked);
     }
 }
