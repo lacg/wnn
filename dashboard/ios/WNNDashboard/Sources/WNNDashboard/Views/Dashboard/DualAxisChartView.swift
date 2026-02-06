@@ -273,27 +273,18 @@ public struct DualAxisChartView: View {
             cumulativeBest.append(runningBest)
         }
 
-        // Get ranges for normalization
-        let ces = cumulativeBest
-        let accs = sorted.compactMap { $0.best_accuracy }
-        let avgCes = sorted.compactMap { $0.avg_ce }
-        let avgAccs = sorted.compactMap { $0.avg_accuracy }
+        // Shared ranges so related metrics are visually comparable
+        // Best CE + Avg CE share one scale; Best Acc + Avg Acc share another
+        let allCEs = cumulativeBest + sorted.compactMap(\.avg_ce)
+        let allAccs = sorted.compactMap(\.best_accuracy) + sorted.compactMap(\.avg_accuracy)
 
-        let minCE = ces.min() ?? 0
-        let maxCE = ces.max() ?? 1
+        let minCE = allCEs.min() ?? 0
+        let maxCE = allCEs.max() ?? 1
         let ceRange = Swift.max(maxCE - minCE, 0.001)
 
-        let minAcc = accs.min() ?? 0
-        let maxAcc = accs.max() ?? 1
+        let minAcc = allAccs.min() ?? 0
+        let maxAcc = allAccs.max() ?? 1
         let accRange = Swift.max(maxAcc - minAcc, 0.001)
-
-        let minAvgCE = avgCes.min() ?? minCE
-        let maxAvgCE = avgCes.max() ?? maxCE
-        let avgCeRange = Swift.max(maxAvgCE - minAvgCE, 0.001)
-
-        let minAvgAcc = avgAccs.min() ?? minAcc
-        let maxAvgAcc = avgAccs.max() ?? maxAcc
-        let avgAccRange = Swift.max(maxAvgAcc - minAvgAcc, 0.001)
 
         return sorted.enumerated().map { index, iter in
             var point = ChartPoint(
@@ -306,10 +297,11 @@ public struct DualAxisChartView: View {
             )
 
             // Normalize: CE inverted (lower is better), Acc normal (higher is better)
+            // Both best and avg use the SAME shared range so they're visually comparable
             point.ceNorm = 1.0 - (cumulativeBest[index] - minCE) / ceRange
             point.accNorm = iter.best_accuracy.map { ($0 - minAcc) / accRange } ?? 0
-            point.avgCeNorm = iter.avg_ce.map { 1.0 - ($0 - minAvgCE) / avgCeRange } ?? 0
-            point.avgAccNorm = iter.avg_accuracy.map { ($0 - minAvgAcc) / avgAccRange } ?? 0
+            point.avgCeNorm = iter.avg_ce.map { 1.0 - ($0 - minCE) / ceRange } ?? 0
+            point.avgAccNorm = iter.avg_accuracy.map { ($0 - minAcc) / accRange } ?? 0
 
             return point
         }
