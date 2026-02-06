@@ -2833,7 +2833,7 @@ pub fn evaluate_genome_with_gating(
     });
 
     // ========================================================================
-    // Step 2: Train gating model
+    // Step 2: Train gating model (parallel)
     // ========================================================================
 
     let gating = RAMGating::new(
@@ -2845,20 +2845,21 @@ pub fn evaluate_genome_with_gating(
         Some(gating_seed),
     );
 
-    // Train gating: for each training example, target_gate[target] = true, others = false
-    for ex_idx in 0..num_train {
-        let input_start = ex_idx * total_input_bits;
-        let input_bits = &train_input_bits[input_start..input_start + total_input_bits];
-        let target = train_targets[ex_idx] as usize;
+    // Build target gates in parallel: for each example, target_gate[target] = true
+    let target_gates_flat: Vec<bool> = (0..num_train)
+        .into_par_iter()
+        .flat_map(|ex_idx| {
+            let target = train_targets[ex_idx] as usize;
+            let mut gates = vec![false; num_clusters];
+            if target < num_clusters {
+                gates[target] = true;
+            }
+            gates
+        })
+        .collect();
 
-        // Create target gates: only target cluster is open
-        let mut target_gates = vec![false; num_clusters];
-        if target < num_clusters {
-            target_gates[target] = true;
-        }
-
-        gating.train_single(input_bits, &target_gates, false);
-    }
+    // Train gating using parallel batch training
+    gating.train_batch(train_input_bits, &target_gates_flat, num_train, false);
 
     // ========================================================================
     // Step 3: Evaluate WITHOUT gating - pre-compute all scores

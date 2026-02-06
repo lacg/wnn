@@ -240,7 +240,7 @@ impl RAMGating {
         modified
     }
 
-    /// Train gate neurons for a batch of examples
+    /// Train gate neurons for a batch of examples (parallel)
     ///
     /// # Arguments
     /// * `input_bits_flat` - Flattened input bits [batch_size * total_input_bits]
@@ -257,21 +257,22 @@ impl RAMGating {
         batch_size: usize,
         allow_override: bool,
     ) -> usize {
-        let mut total_modified = 0;
+        use rayon::prelude::*;
 
-        for b in 0..batch_size {
-            let input_start = b * self.total_input_bits;
-            let input_end = input_start + self.total_input_bits;
-            let input = &input_bits_flat[input_start..input_end];
+        (0..batch_size)
+            .into_par_iter()
+            .map(|b| {
+                let input_start = b * self.total_input_bits;
+                let input_end = input_start + self.total_input_bits;
+                let input = &input_bits_flat[input_start..input_end];
 
-            let gate_start = b * self.num_clusters;
-            let gate_end = gate_start + self.num_clusters;
-            let targets = &target_gates_flat[gate_start..gate_end];
+                let gate_start = b * self.num_clusters;
+                let gate_end = gate_start + self.num_clusters;
+                let targets = &target_gates_flat[gate_start..gate_end];
 
-            total_modified += self.train_single(input, targets, allow_override);
-        }
-
-        total_modified
+                self.train_single(input, targets, allow_override)
+            })
+            .sum()
     }
 
     /// Reset all memory cells to EMPTY
