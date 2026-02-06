@@ -21,7 +21,10 @@ public final class DashboardViewModel: ObservableObject {
     public var isRunning: Bool { currentExperiment?.status == .running }
     // Progress now comes from Experiment directly (simplified model)
     public var experimentProgress: Double { currentExperiment?.progress ?? 0 }
-    public var currentIterationNumber: Int32 { currentExperiment?.current_iteration ?? 0 }
+    /// Use the latest completed iteration from the list so it matches the #N in Recent Iterations
+    public var currentIterationNumber: Int32 {
+        iterations.map(\.iteration_num).max() ?? currentExperiment?.current_iteration ?? 0
+    }
     public var maxIterations: Int32 { currentExperiment?.max_iterations ?? 0 }
 
     public let apiClient: APIClient
