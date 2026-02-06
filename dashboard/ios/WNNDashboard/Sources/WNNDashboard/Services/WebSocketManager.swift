@@ -107,8 +107,12 @@ public final class WebSocketManager: ObservableObject {
 
     private func startPingTimer() {
         pingTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            self?.webSocket?.sendPing { error in
-                if let error = error { Task { @MainActor in self?.lastError = error.localizedDescription } }
+            Task { @MainActor [weak self] in
+                self?.webSocket?.sendPing { [weak self] error in
+                    if let error = error {
+                        Task { @MainActor [weak self] in self?.lastError = error.localizedDescription }
+                    }
+                }
             }
         }
     }
