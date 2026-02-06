@@ -1229,6 +1229,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 						   f"best={best_fitness:.4f}, avg={avg_fitness:.4f} (subset) ({gen_elapsed:.1f}s)")
 
 			if self._tracker and self._tracker_experiment_id:
+				tracking_start = time.time()
 				try:
 
 					# Get baseline and patience info for dashboard
@@ -1288,6 +1289,9 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 				except Exception as e:
 					# Don't fail optimization on tracking errors
 					self._log.debug(f"[{self.name}] V2 tracking error: {e}")
+				tracking_elapsed = time.time() - tracking_start
+				if tracking_elapsed > 5.0:  # Only log if > 5 seconds
+					self._log.info(f"[{self.name}] Tracking overhead: {tracking_elapsed:.1f}s")
 
 			# Health check: evaluate top-K elites on FULL data vs baseline + stagnation
 			# Only at check_interval to avoid expensive full evaluations every generation
@@ -1981,6 +1985,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				actual_best_acc = best_accuracy
 
 			if self._tracker and self._tracker_experiment_id:
+				tracking_start = time.time()
 				try:
 
 					# Get baseline and patience info for dashboard
@@ -2075,6 +2080,9 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				except Exception as e:
 					# Don't fail optimization on tracking errors
 					self._log.debug(f"[{self.name}] V2 tracking error: {e}")
+				tracking_elapsed = time.time() - tracking_start
+				if tracking_elapsed > 5.0:  # Only log if > 5 seconds
+					self._log.info(f"[{self.name}] Tracking overhead: {tracking_elapsed:.1f}s")
 
 			# Health check: evaluate top-K neighbors on FULL data vs baseline + stagnation
 			# Only at check_interval to avoid expensive full evaluations every iteration
