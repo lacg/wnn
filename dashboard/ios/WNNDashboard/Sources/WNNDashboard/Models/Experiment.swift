@@ -28,9 +28,9 @@ public struct Experiment: Codable, Identifiable, Hashable {
     public let best_ce: Double?
     public let best_accuracy: Double?
 
-    public var createdDate: Date? { ISO8601DateFormatter().date(from: created_at) }
-    public var startedDate: Date? { started_at.flatMap { ISO8601DateFormatter().date(from: $0) } }
-    public var endedDate: Date? { ended_at.flatMap { ISO8601DateFormatter().date(from: $0) } }
+    public var createdDate: Date? { DateFormatters.parse( created_at) }
+    public var startedDate: Date? { started_at.flatMap { DateFormatters.parse( $0) } }
+    public var endedDate: Date? { ended_at.flatMap { DateFormatters.parse( $0) } }
 
     public var duration: TimeInterval? {
         guard let start = startedDate else { return nil }
@@ -47,6 +47,17 @@ public struct Experiment: Codable, Identifiable, Hashable {
         if pt.contains("ga") { return "GA" }
         if pt.contains("ts") { return "TS" }
         return ""
+    }
+
+    /// Format "ts_bits" → "TS Bits", "ga_neurons" → "GA Neurons"
+    public var formattedPhaseType: String? {
+        guard let pt = phase_type else { return nil }
+        let parts = pt.split(separator: "_")
+        return parts.enumerated().map { i, part in
+            let s = String(part)
+            if i == 0 && (s == "ga" || s == "ts") { return s.uppercased() }
+            return s.capitalized
+        }.joined(separator: " ")
     }
 
     public var parsedTierConfig: [TierConfigEntry]? {

@@ -37,7 +37,9 @@ public struct FlowsListView: View {
                 }
                 .refreshable { await viewModel.refresh() }
                 .sheet(item: $viewModel.selectedFlow) { flow in FlowDetailView(flow: flow) }
+                .alert("Error", isPresented: .constant(viewModel.error != nil)) { Button("OK") { viewModel.clearError() } } message: { Text(viewModel.error ?? "") }
         }
+        .task { if viewModel.flows.isEmpty { await viewModel.loadFlows() } }
     }
 
     // MARK: - iPad Layout (Master-Detail)

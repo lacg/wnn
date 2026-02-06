@@ -7,7 +7,7 @@ public final class WebSocketManager: ObservableObject {
     @Published public private(set) var connectionState: WebSocketState = .disconnected
     @Published public private(set) var lastMessage: WsMessage?
     @Published public private(set) var lastError: String?
-    @Published public private(set) var snapshot: DashboardSnapshot?
+    @Published public var snapshot: DashboardSnapshot?
 
     private let connectionManager: ConnectionManager
     private var webSocket: URLSessionWebSocketTask?
@@ -20,7 +20,11 @@ public final class WebSocketManager: ObservableObject {
     private let maxReconnectDelay: TimeInterval = 30.0
     private let jitterFactor: Double = 0.3
 
-    public var onMessage: ((WsMessage) -> Void)?
+    private var messageHandlers: [String: (WsMessage) -> Void] = [:]
+
+    public func addMessageHandler(id: String, handler: @escaping (WsMessage) -> Void) {
+        messageHandlers[id] = handler
+    }
 
     public init(connectionManager: ConnectionManager) {
         self.connectionManager = connectionManager
@@ -73,7 +77,7 @@ public final class WebSocketManager: ObservableObject {
         guard let data = text.data(using: .utf8), let msg = try? decoder.decode(WsMessage.self, from: data) else { return }
         lastMessage = msg
         processMessage(msg)
-        onMessage?(msg)
+        for handler in messageHandlers.values { handler(msg) }
     }
 
     private func processMessage(_ msg: WsMessage) {

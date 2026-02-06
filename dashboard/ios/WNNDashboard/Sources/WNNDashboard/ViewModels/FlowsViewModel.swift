@@ -23,7 +23,7 @@ public final class FlowsViewModel: ObservableObject {
     public init(apiClient: APIClient, wsManager: WebSocketManager) {
         self.apiClient = apiClient
         self.wsManager = wsManager
-        wsManager.onMessage = { [weak self] msg in Task { @MainActor in self?.handleMessage(msg) } }
+        wsManager.addMessageHandler(id: "flows") { [weak self] msg in Task { @MainActor in self?.handleMessage(msg) } }
     }
 
     private func handleMessage(_ msg: WsMessage) {
@@ -59,4 +59,5 @@ public final class FlowsViewModel: ObservableObject {
     public func restartFlow(_ id: Int64) async { do { try await apiClient.restartFlow(id) } catch let err { self.error = err.localizedDescription } }
     public func deleteFlow(_ id: Int64) async { do { try await apiClient.deleteFlow(id); flows.removeAll { $0.id == id } } catch let err { self.error = err.localizedDescription } }
     public func refresh() async { await loadFlows() }
+    public func clearError() { error = nil }
 }

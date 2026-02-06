@@ -32,7 +32,7 @@ public final class DashboardViewModel: ObservableObject {
         self.apiClient = apiClient
         self.wsManager = wsManager
         wsManager.$snapshot.compactMap { $0 }.receive(on: DispatchQueue.main).sink { [weak self] in self?.snapshot = $0 }.store(in: &cancellables)
-        wsManager.onMessage = { [weak self] msg in Task { @MainActor in self?.handleMessage(msg) } }
+        wsManager.addMessageHandler(id: "dashboard") { [weak self] msg in Task { @MainActor in self?.handleMessage(msg) } }
     }
 
     private func handleMessage(_ msg: WsMessage) {

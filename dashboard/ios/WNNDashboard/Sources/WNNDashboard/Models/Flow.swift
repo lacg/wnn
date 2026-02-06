@@ -14,9 +14,9 @@ public struct Flow: Codable, Identifiable {
     public let seed_checkpoint_id: Int64?
     public let pid: Int64?
 
-    public var createdDate: Date? { ISO8601DateFormatter().date(from: created_at) }
-    public var startedDate: Date? { started_at.flatMap { ISO8601DateFormatter().date(from: $0) } }
-    public var completedDate: Date? { completed_at.flatMap { ISO8601DateFormatter().date(from: $0) } }
+    public var createdDate: Date? { DateFormatters.parse( created_at) }
+    public var startedDate: Date? { started_at.flatMap { DateFormatters.parse( $0) } }
+    public var completedDate: Date? { completed_at.flatMap { DateFormatters.parse( $0) } }
 
     public var duration: TimeInterval? {
         guard let start = startedDate else { return nil }
@@ -28,6 +28,19 @@ public struct FlowConfig: Codable {
     public let experiments: [ExperimentSpec]
     public let template: String?
     public let params: [String: AnyCodable]
+
+    private enum CodingKeys: String, CodingKey {
+        case experiments, template, params
+    }
+
+    // Backend FlowConfig only has template + params; experiments are stored separately.
+    // Default experiments to [] when missing from JSON.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        experiments = (try? container.decode([ExperimentSpec].self, forKey: .experiments)) ?? []
+        template = try? container.decodeIfPresent(String.self, forKey: .template)
+        params = (try? container.decode([String: AnyCodable].self, forKey: .params)) ?? [:]
+    }
 
     public init(experiments: [ExperimentSpec], template: String? = nil, params: [String: AnyCodable] = [:]) {
         self.experiments = experiments

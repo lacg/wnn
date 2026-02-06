@@ -27,7 +27,7 @@ public final class CheckpointsViewModel: ObservableObject {
     public init(apiClient: APIClient, wsManager: WebSocketManager) {
         self.apiClient = apiClient
         self.wsManager = wsManager
-        wsManager.onMessage = { [weak self] msg in Task { @MainActor in self?.handleMessage(msg) } }
+        wsManager.addMessageHandler(id: "checkpoints") { [weak self] msg in Task { @MainActor in self?.handleMessage(msg) } }
     }
 
     private func handleMessage(_ msg: WsMessage) {

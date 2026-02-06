@@ -55,6 +55,9 @@ public final class AppState: ObservableObject {
         if connectionManager.connectionState.isConnected {
             wsManager.connect()
             await dashboardVM.loadSnapshot()
+            // Seed wsManager snapshot so WebSocket incremental updates
+            // (iterationCompleted, experimentStatusChanged) work immediately
+            wsManager.snapshot = dashboardVM.snapshot
             await flowsVM.loadFlows()
         }
     }

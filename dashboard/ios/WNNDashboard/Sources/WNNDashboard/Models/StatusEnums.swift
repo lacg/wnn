@@ -25,13 +25,19 @@ public enum PhaseStatus: String, Codable, CaseIterable {
 }
 
 public enum FitnessCalculator: String, Codable {
-    case ce, harmonic_rank, weighted_harmonic
+    case ce, harmonic_rank, weighted_harmonic, unknown
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = FitnessCalculator(rawValue: raw) ?? .unknown
+    }
 
     public var displayName: String {
         switch self {
         case .ce: return "CE"
         case .harmonic_rank: return "Harmonic Rank"
         case .weighted_harmonic: return "Weighted Harmonic"
+        case .unknown: return "Unknown"
         }
     }
 }
@@ -65,10 +71,19 @@ public enum CheckpointType: String, Codable, CaseIterable {
 }
 
 public enum ExperimentType: String, Codable {
-    case ga, ts
+    case ga, ts, unknown
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = ExperimentType(rawValue: raw) ?? .unknown
+    }
 
     public var displayName: String {
-        self == .ga ? "GA" : "TS"
+        switch self {
+        case .ga: return "GA"
+        case .ts: return "TS"
+        case .unknown: return "?"
+        }
     }
 }
 

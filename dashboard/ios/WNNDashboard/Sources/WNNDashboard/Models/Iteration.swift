@@ -23,7 +23,7 @@ public struct Iteration: Codable, Identifiable {
     public let candidates_total: Int32?
     public let created_at: String
 
-    public var createdDate: Date? { ISO8601DateFormatter().date(from: created_at) }
+    public var createdDate: Date? { DateFormatters.parse(created_at) }
     public var ceDelta: Double? { delta_previous }
     public var accuracyPercent: Double? { best_accuracy.map { $0 * 100 } }
 

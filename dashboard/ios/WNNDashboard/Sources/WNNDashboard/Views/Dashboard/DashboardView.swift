@@ -82,10 +82,11 @@ public struct DashboardView: View {
         let title = viewModel.selectedHistoryExperiment != nil
             ? "Experiment Iterations"
             : "Recent Iterations"
+        let sorted = iters.sorted { $0.iteration_num > $1.iteration_num }
 
         return VStack(alignment: .leading, spacing: 8) {
             Text(title).font(.headline)
-            IterationsTableView(iterations: Array(iters.prefix(50))) { iter in
+            IterationsTableView(iterations: Array(sorted.prefix(50))) { iter in
                 Task { await viewModel.loadGenomes(for: iter) }
             }
         }
@@ -102,7 +103,7 @@ public struct DashboardView: View {
                 }
                 if let current = exp.current_iteration, let max = exp.max_iterations {
                     HStack {
-                        if let phaseType = exp.phase_type {
+                        if let phaseType = exp.formattedPhaseType {
                             Text(phaseType).font(.subheadline).foregroundStyle(.secondary)
                         }
                         Spacer()
@@ -202,7 +203,6 @@ public struct DashboardView: View {
         }
 
         return DualAxisChartView(iterations: iterations, title: title)
-            .frame(height: 280)
     }
 
     private var iterationsSection: some View {
@@ -212,10 +212,11 @@ public struct DashboardView: View {
         let title = viewModel.selectedHistoryExperiment != nil
             ? "Experiment Iterations"
             : "Recent Iterations"
+        let sorted = iters.sorted { $0.iteration_num > $1.iteration_num }
 
         return VStack(alignment: .leading, spacing: 8) {
             Text(title).font(.headline).padding(.horizontal)
-            IterationsListView(iterations: Array(iters.prefix(50))) { iter in
+            IterationsListView(iterations: Array(sorted.prefix(50))) { iter in
                 Task { await viewModel.loadGenomes(for: iter) }
             }
         }

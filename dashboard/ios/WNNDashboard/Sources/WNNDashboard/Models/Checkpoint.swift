@@ -19,11 +19,11 @@ public struct TierStats: Codable, Identifiable, Hashable {
 }
 
 public struct GenomeStats: Codable, Hashable {
-    public let num_clusters: Int
-    public let total_neurons: Int
-    public let total_connections: Int
-    public let bits_range: [Int]
-    public let neurons_range: [Int]
+    public let num_clusters: Int?
+    public let total_neurons: Int?
+    public let total_connections: Int?
+    public let bits_range: [Int]?
+    public let neurons_range: [Int]?
     public let tier_stats: [TierStats]?
 }
 
@@ -39,8 +39,35 @@ public struct Checkpoint: Codable, Identifiable {
     public let best_accuracy: Double?
     public let genome_stats: GenomeStats?
     public let created_at: String
+    // Flow info (from joined experiment, may be absent)
+    public let flow_id: Int64?
+    public let flow_name: String?
 
-    public var createdDate: Date? { ISO8601DateFormatter().date(from: created_at) }
+    private enum CodingKeys: String, CodingKey {
+        case id, experiment_id, iteration_id, name, file_path, file_size_bytes
+        case checkpoint_type, best_ce, best_accuracy, genome_stats, created_at
+        case flow_id, flow_name
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(Int64.self, forKey: .id)
+        experiment_id = try container.decode(Int64.self, forKey: .experiment_id)
+        iteration_id = try container.decodeIfPresent(Int64.self, forKey: .iteration_id)
+        name = try container.decode(String.self, forKey: .name)
+        file_path = try container.decode(String.self, forKey: .file_path)
+        file_size_bytes = try container.decodeIfPresent(Int64.self, forKey: .file_size_bytes)
+        checkpoint_type = (try? container.decode(CheckpointType.self, forKey: .checkpoint_type)) ?? .auto
+        best_ce = try container.decodeIfPresent(Double.self, forKey: .best_ce)
+        best_accuracy = try container.decodeIfPresent(Double.self, forKey: .best_accuracy)
+        // genome_stats is arbitrary JSON from backend — decode defensively
+        genome_stats = try? container.decodeIfPresent(GenomeStats.self, forKey: .genome_stats)
+        created_at = try container.decode(String.self, forKey: .created_at)
+        flow_id = try? container.decodeIfPresent(Int64.self, forKey: .flow_id)
+        flow_name = try? container.decodeIfPresent(String.self, forKey: .flow_name)
+    }
+
+    public var createdDate: Date? { DateFormatters.parse(created_at) }
 
     public var formattedFileSize: String? {
         guard let bytes = file_size_bytes else { return nil }
@@ -64,6 +91,6 @@ public struct HealthCheck: Codable, Identifiable {
     public let patience_status: String?
     public let created_at: String
 
-    public var createdDate: Date? { ISO8601DateFormatter().date(from: created_at) }
+    public var createdDate: Date? { DateFormatters.parse(created_at) }
     public var topKAccuracyPercent: Double { top_k_accuracy * 100 }
 }
