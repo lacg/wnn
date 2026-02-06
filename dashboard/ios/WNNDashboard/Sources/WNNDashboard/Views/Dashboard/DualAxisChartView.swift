@@ -297,12 +297,12 @@ public struct DualAxisChartView: View {
                 avgAcc: iter.avg_accuracy
             )
 
-            // Normalize: CE inverted (lower is better), Acc normal (higher is better)
+            // CE: lower = better = lower on chart (going down is improving)
+            // Acc: higher = better = higher on chart (going up is improving)
             // Both best and avg use the SAME shared range so they're visually comparable
-            // Acc is anchored at 0 (floor), CE uses dynamic data range
-            point.ceNorm = 1.0 - (cumulativeBest[index] - minCE) / ceRange
+            point.ceNorm = (cumulativeBest[index] - minCE) / ceRange
             point.accNorm = iter.best_accuracy.map { $0 / accRange } ?? 0
-            point.avgCeNorm = iter.avg_ce.map { 1.0 - ($0 - minCE) / ceRange } ?? 0
+            point.avgCeNorm = iter.avg_ce.map { ($0 - minCE) / ceRange } ?? 0
             point.avgAccNorm = iter.avg_accuracy.map { $0 / accRange } ?? 0
 
             return point
