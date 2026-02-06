@@ -20,10 +20,12 @@ public enum DateFormatters {
     private static let iso8601: ISO8601DateFormatter = { let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f }()
     private static let relativeFormatter: RelativeDateTimeFormatter = { let f = RelativeDateTimeFormatter(); f.unitsStyle = .abbreviated; return f }()
     private static let shortDateTime: DateFormatter = { let f = DateFormatter(); f.timeStyle = .short; f.dateStyle = .short; return f }()
+    private static let timeOnly: DateFormatter = { let f = DateFormatter(); f.timeStyle = .medium; f.dateStyle = .none; return f }()
 
     public static func parse(_ string: String) -> Date? { iso8601.date(from: string) }
     public static func relative(_ date: Date) -> String { relativeFormatter.localizedString(for: date, relativeTo: Date()) }
     public static func shortDateTime(_ date: Date) -> String { shortDateTime.string(from: date) }
+    public static func timeOnly(_ date: Date) -> String { timeOnly.string(from: date) }
 
     public static func duration(_ seconds: TimeInterval) -> String {
         if seconds < 60 { return String(format: "%.0fs", seconds) }

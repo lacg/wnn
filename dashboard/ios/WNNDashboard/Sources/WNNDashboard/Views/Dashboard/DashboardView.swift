@@ -156,19 +156,10 @@ public struct DashboardView: View {
 						ProgressView().padding(.vertical, 8)
 						Spacer()
 					}
+				} else if horizontalSizeClass == .regular {
+					iPadIterationsContent(iters)
 				} else {
-					VStack(spacing: 6) {
-						ForEach(Array(iters.prefix(20))) { iter in
-							compactIterationRow(iter)
-								.onTapGesture { Task { await viewModel.loadGenomes(for: iter) } }
-						}
-						if iters.count > 20 {
-							Text("\(iters.count - 20) more iterations...")
-								.font(.caption2).foregroundStyle(.secondary)
-								.padding(.top, 4)
-						}
-					}
-					.padding(.top, 8)
+					iPhoneIterationsContent(iters)
 				}
 			} label: {
 				experimentHeader(exp, isRunning: isRunning)
@@ -226,7 +217,22 @@ public struct DashboardView: View {
 		.contentShape(Rectangle())
 	}
 
-	// MARK: - Compact Iteration Row (inside DisclosureGroup)
+	// MARK: - iPhone Iterations (compact rows)
+
+	private func iPhoneIterationsContent(_ iters: [Iteration]) -> some View {
+		VStack(spacing: 6) {
+			ForEach(Array(iters.prefix(20))) { iter in
+				compactIterationRow(iter)
+					.onTapGesture { Task { await viewModel.loadGenomes(for: iter) } }
+			}
+			if iters.count > 20 {
+				Text("\(iters.count - 20) more iterations...")
+					.font(.caption2).foregroundStyle(.secondary)
+					.padding(.top, 4)
+			}
+		}
+		.padding(.top, 8)
+	}
 
 	private func compactIterationRow(_ iter: Iteration) -> some View {
 		HStack(spacing: 8) {
@@ -258,20 +264,115 @@ public struct DashboardView: View {
 		.cornerRadius(6)
 	}
 
-	// MARK: - iPad Iterations Table (right column)
+	// MARK: - iPad Iterations Table (10-column)
 
-	private func iPadIterationsTable(for experimentId: Int64) -> some View {
-		let iters = viewModel.iterations(for: experimentId)
-		let expName = viewModel.displayExperiments.first { $0.id == experimentId }?.name ?? "Experiment"
-
-		return VStack(alignment: .leading, spacing: 8) {
-			Text(expName).font(.headline)
-			if !iters.isEmpty {
-				IterationsTableView(iterations: Array(iters.prefix(50))) { iter in
-					Task { await viewModel.loadGenomes(for: iter) }
+	private func iPadIterationsContent(_ iters: [Iteration]) -> some View {
+		VStack(spacing: 0) {
+			iPadIterationTableHeader
+			Divider().padding(.vertical, 4)
+			VStack(spacing: 2) {
+				ForEach(Array(iters.prefix(50))) { iter in
+					iPadIterationRow(iter)
+						.onTapGesture { Task { await viewModel.loadGenomes(for: iter) } }
+				}
+				if iters.count > 50 {
+					Text("\(iters.count - 50) more iterations...")
+						.font(.caption2).foregroundStyle(.secondary)
+						.padding(.top, 4)
 				}
 			}
 		}
+		.padding(.top, 8)
+	}
+
+	private var iPadIterationTableHeader: some View {
+		HStack(spacing: 0) {
+			Text("ITER").frame(width: 44, alignment: .leading)
+			Text("TIMESTAMP").frame(width: 82, alignment: .leading)
+			Text("BEST CE").frame(width: 74, alignment: .trailing)
+			Text("BEST ACC").frame(width: 64, alignment: .trailing)
+			Text("AVG CE").frame(width: 74, alignment: .trailing)
+			Text("AVG ACC").frame(width: 64, alignment: .trailing)
+			Text("THRESHOLD").frame(width: 74, alignment: .trailing)
+			Text("Δ PREV").frame(width: 72, alignment: .trailing)
+			Text("PATIENCE").frame(width: 56, alignment: .center)
+			Text("TIME").frame(width: 52, alignment: .trailing)
+		}
+		.font(.caption2)
+		.fontWeight(.medium)
+		.foregroundStyle(.secondary)
+		.padding(.horizontal, 6)
+	}
+
+	private func iPadIterationRow(_ iter: Iteration) -> some View {
+		HStack(spacing: 0) {
+			Text("#\(iter.iteration_num)")
+				.fontWeight(.medium)
+				.frame(width: 44, alignment: .leading)
+
+			Group {
+				if let date = iter.createdDate {
+					Text(DateFormatters.timeOnly(date))
+				} else {
+					Text("-")
+				}
+			}
+			.frame(width: 82, alignment: .leading)
+
+			Text(NumberFormatters.formatCE(iter.best_ce))
+				.frame(width: 74, alignment: .trailing)
+
+			Text(NumberFormatters.formatAccuracy(iter.best_accuracy))
+				.frame(width: 64, alignment: .trailing)
+
+			Text(NumberFormatters.formatCE(iter.avg_ce))
+				.frame(width: 74, alignment: .trailing)
+
+			Text(NumberFormatters.formatAccuracy(iter.avg_accuracy))
+				.frame(width: 64, alignment: .trailing)
+
+			Group {
+				if let threshold = iter.fitness_threshold {
+					Text(String(format: "%.2f", threshold))
+				} else {
+					Text("-")
+				}
+			}
+			.frame(width: 74, alignment: .trailing)
+
+			Group {
+				if let delta = iter.delta_previous {
+					HStack(spacing: 1) {
+						Image(systemName: delta < 0 ? "arrow.down" : delta > 0 ? "arrow.up" : "minus")
+							.font(.system(size: 7))
+						Text(String(format: "%.4f", abs(delta)))
+					}
+					.foregroundColor(Theme.deltaColor(delta))
+				} else {
+					Text("-")
+				}
+			}
+			.frame(width: 72, alignment: .trailing)
+
+			Text(iter.patienceStatus ?? "-")
+				.frame(width: 56, alignment: .center)
+
+			Group {
+				if let secs = iter.elapsed_secs {
+					Text(DateFormatters.durationCompact(secs))
+				} else {
+					Text("-")
+				}
+			}
+			.frame(width: 52, alignment: .trailing)
+		}
+		.font(.caption)
+		.fontDesign(.monospaced)
+		.padding(.vertical, 3)
+		.padding(.horizontal, 6)
+		.background(Color.secondary.opacity(0.04))
+		.cornerRadius(4)
+		.contentShape(Rectangle())
 	}
 
 	// MARK: - Connection Indicator
