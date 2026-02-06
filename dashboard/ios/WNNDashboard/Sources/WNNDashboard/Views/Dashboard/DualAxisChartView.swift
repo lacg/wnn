@@ -300,16 +300,16 @@ public struct DualAxisChartView: View {
                 id: index,
                 iterationNum: Int(iter.iteration_num),
                 ce: cumulativeBest[index],
-                acc: iter.best_accuracy.map { $0 * 100 },
+                acc: iter.best_accuracy,
                 avgCe: iter.avg_ce,
-                avgAcc: iter.avg_accuracy.map { $0 * 100 }
+                avgAcc: iter.avg_accuracy
             )
 
             // Normalize: CE inverted (lower is better), Acc normal (higher is better)
             point.ceNorm = 1.0 - (cumulativeBest[index] - minCE) / ceRange
-            point.accNorm = iter.best_accuracy.map { (($0 * 100) - minAcc * 100) / (accRange * 100) } ?? 0
+            point.accNorm = iter.best_accuracy.map { ($0 - minAcc) / accRange } ?? 0
             point.avgCeNorm = iter.avg_ce.map { 1.0 - ($0 - minAvgCE) / avgCeRange } ?? 0
-            point.avgAccNorm = iter.avg_accuracy.map { (($0 * 100) - minAvgAcc * 100) / (avgAccRange * 100) } ?? 0
+            point.avgAccNorm = iter.avg_accuracy.map { ($0 - minAvgAcc) / avgAccRange } ?? 0
 
             return point
         }
