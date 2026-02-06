@@ -278,13 +278,14 @@ public struct DualAxisChartView: View {
         let allCEs = cumulativeBest + sorted.compactMap(\.avg_ce)
         let allAccs = sorted.compactMap(\.best_accuracy) + sorted.compactMap(\.avg_accuracy)
 
+        // CE: dynamic range from data (values are near theoretical max ~10.8, so 0-based would flatten)
         let minCE = allCEs.min() ?? 0
         let maxCE = allCEs.max() ?? 1
         let ceRange = Swift.max(maxCE - minCE, 0.001)
 
-        let minAcc = allAccs.min() ?? 0
+        // Acc: floor at 0 so the chart gives honest perspective (3.34% shows as 3.34% up, not full height)
         let maxAcc = allAccs.max() ?? 1
-        let accRange = Swift.max(maxAcc - minAcc, 0.001)
+        let accRange = Swift.max(maxAcc, 0.001)
 
         return sorted.enumerated().map { index, iter in
             var point = ChartPoint(
@@ -298,10 +299,11 @@ public struct DualAxisChartView: View {
 
             // Normalize: CE inverted (lower is better), Acc normal (higher is better)
             // Both best and avg use the SAME shared range so they're visually comparable
+            // Acc is anchored at 0 (floor), CE uses dynamic data range
             point.ceNorm = 1.0 - (cumulativeBest[index] - minCE) / ceRange
-            point.accNorm = iter.best_accuracy.map { ($0 - minAcc) / accRange } ?? 0
+            point.accNorm = iter.best_accuracy.map { $0 / accRange } ?? 0
             point.avgCeNorm = iter.avg_ce.map { 1.0 - ($0 - minCE) / ceRange } ?? 0
-            point.avgAccNorm = iter.avg_accuracy.map { ($0 - minAcc) / accRange } ?? 0
+            point.avgAccNorm = iter.avg_accuracy.map { $0 / accRange } ?? 0
 
             return point
         }
