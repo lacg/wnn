@@ -28,6 +28,24 @@ export type GenomeRole =
 
 export type CheckpointType = 'auto' | 'user' | 'experiment_end';
 
+export type PhaseStatus = 'pending' | 'running' | 'completed' | 'failed';
+
+// =============================================================================
+// Phase types (used by watcher for multi-phase experiment tracking)
+// =============================================================================
+
+export interface Phase {
+  id: number;
+  experiment_id: number;
+  name: string;
+  phase_type: string;
+  sequence_order: number;
+  max_iterations: number;
+  status: PhaseStatus;
+  started_at: string | null;
+  ended_at: string | null;
+}
+
 // =============================================================================
 // Flow types
 // =============================================================================
@@ -48,7 +66,10 @@ export interface Flow {
 // Flow-level configuration (normalized: experiments stored in experiments table, not here)
 export interface FlowConfig {
   template: string | null;
-  params: Record<string, unknown>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  params: Record<string, any>;
+  // Legacy: some older flows stored experiments inline in config
+  experiments?: ExperimentSpec[];
 }
 
 export interface ExperimentSpec {
@@ -138,6 +159,7 @@ export interface Experiment {
 export interface Iteration {
   id: number;
   experiment_id: number;
+  phase_id?: number;
   iteration_num: number;
   best_ce: number;
   best_accuracy: number | null;
@@ -275,6 +297,12 @@ export interface Checkpoint {
   // Flow info (from joined experiment)
   flow_id?: number | null;
   flow_name?: string | null;
+  // Optional fields used by checkpoints page
+  is_final?: boolean;
+  final_fitness?: number | null;
+  final_accuracy?: number | null;
+  iterations_run?: number | null;
+  reference_count?: number;
 }
 
 // =============================================================================
@@ -286,6 +314,9 @@ export interface DashboardSnapshot {
   iterations: Iteration[];
   best_ce: number;
   best_accuracy: number;
+  // Phase tracking (sent by watcher when multi-phase experiments are active)
+  phases?: Phase[];
+  current_phase?: Phase | null;
 }
 
 // =============================================================================
@@ -297,6 +328,8 @@ export type WsMessage =
   | { type: 'IterationCompleted'; data: Iteration }
   | { type: 'HealthCheck'; data: HealthCheck }
   | { type: 'ExperimentStatusChanged'; data: Experiment }
+  | { type: 'PhaseStarted'; data: Phase }
+  | { type: 'PhaseCompleted'; data: Phase }
   | { type: 'FlowStarted'; data: Flow }
   | { type: 'FlowCompleted'; data: Flow }
   | { type: 'FlowFailed'; data: { flow: Flow; error: string } }

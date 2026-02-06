@@ -9,6 +9,15 @@
   // NOT from flow.config.experiments. The `experiments` array is fetched separately
   // via /api/flows/${flowId}/experiments and used directly.
 
+  /** Format tier_config which may be a string or array of tuples */
+  function formatTierConfig(tierConfig: unknown): string {
+    if (typeof tierConfig === 'string') return tierConfig;
+    if (Array.isArray(tierConfig)) {
+      return tierConfig.map((t: (number|string)[]) => `${t[0] ?? 'rest'},${t[1]},${t[2]}`).join('; ');
+    }
+    return String(tierConfig);
+  }
+
   let flow: Flow | null = null;
 
   // Subscribe to flow updates from WebSocket
@@ -542,7 +551,7 @@
     }
   }
 
-  async function updateFitnessWeight(field: 'fitness_weight_ce' | 'fitness_weight_acc', value: number) {
+  async function updateFitnessWeight(field: 'fitness_weight_ce' | 'fitness_weight_acc' | 'min_accuracy_floor', value: number) {
     if (!flow) return;
     saving = true;
 
@@ -1216,9 +1225,7 @@
             <div class="param-item full-width">
               <span class="param-label">Tier Config</span>
               <span class="param-value mono">
-                {typeof flow.config.params.tier_config === 'string'
-                  ? flow.config.params.tier_config
-                  : flow.config.params.tier_config.map(t => `${t[0] ?? 'rest'},${t[1]},${t[2]}`).join('; ')}
+                {formatTierConfig(flow.config.params.tier_config)}
               </span>
             </div>
           {/if}

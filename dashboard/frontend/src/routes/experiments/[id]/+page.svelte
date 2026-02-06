@@ -128,7 +128,7 @@
 
         // Also update this experiment's status in flowExperiments for Flow Progress bar
         if (flowExperiments.length > 0) {
-          const idx = flowExperiments.findIndex(e => e.id === experiment.id);
+          const idx = flowExperiments.findIndex(e => e.id === experiment!.id);
           if (idx >= 0) {
             flowExperiments[idx].status = newExp.status;
             flowExperiments = flowExperiments; // Trigger Svelte reactivity
@@ -456,7 +456,7 @@
   $: cumulativeValidationProgression = (() => {
     if (!experiment || flowValidationSummaries.length === 0 || flowExperiments.length === 0) {
       // Fall back to current experiment's validations if no flow context
-      if (validationSummaries.length === 0) return [];
+      if (!experiment || validationSummaries.length === 0) return [];
 
       const points: ValidationProgressionPoint[] = [];
       const initSummaries = validationSummaries.filter(s => s.validation_point === 'init');

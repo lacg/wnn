@@ -115,7 +115,7 @@
               <td>{formatBytes(ckpt.file_size_bytes)}</td>
               <td>{formatDate(ckpt.created_at)}</td>
               <td>
-                {#if ckpt.reference_count > 0}
+                {#if (ckpt.reference_count ?? 0) > 0}
                   <span class="ref-count">{ckpt.reference_count}</span>
                 {:else}
                   -
@@ -132,7 +132,7 @@
                   </a>
 
                   {#if confirmDelete === ckpt.id}
-                    <button class="action-btn danger" on:click={() => deleteCheckpoint(ckpt.id, ckpt.reference_count > 0)}>
+                    <button class="action-btn danger" on:click={() => deleteCheckpoint(ckpt.id, (ckpt.reference_count ?? 0) > 0)}>
                       Confirm
                     </button>
                     <button class="action-btn" on:click={() => confirmDelete = null}>
@@ -141,7 +141,7 @@
                   {:else}
                     <button
                       class="action-btn"
-                      title={ckpt.reference_count > 0 ? 'Has references' : 'Delete'}
+                      title={(ckpt.reference_count ?? 0) > 0 ? 'Has references' : 'Delete'}
                       on:click={() => confirmDelete = ckpt.id}
                     >
                       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
