@@ -23,7 +23,7 @@ public struct CheckpointsListView: View {
             .toolbar { ToolbarItem(placement: .automatic) { filterMenu } }
             #endif
             .refreshable { await viewModel.refresh() }
-            .alert("Error", isPresented: .constant(viewModel.error != nil)) { Button("OK") { viewModel.clearError() } } message: { Text(viewModel.error ?? "") }
+            .alert("Error", isPresented: Binding(get: { viewModel.error != nil }, set: { if !$0 { viewModel.clearError() } })) { Button("OK") { viewModel.clearError() } } message: { Text(viewModel.error ?? "") }
         }
         .task { if viewModel.checkpoints.isEmpty { await viewModel.loadCheckpoints() } }
     }

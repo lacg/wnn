@@ -37,7 +37,7 @@ public struct FlowsListView: View {
                 }
                 .refreshable { await viewModel.refresh() }
                 .sheet(item: $viewModel.selectedFlow) { flow in FlowDetailView(flow: flow) }
-                .alert("Error", isPresented: .constant(viewModel.error != nil)) { Button("OK") { viewModel.clearError() } } message: { Text(viewModel.error ?? "") }
+                .alert("Error", isPresented: Binding(get: { viewModel.error != nil }, set: { if !$0 { viewModel.clearError() } })) { Button("OK") { viewModel.clearError() } } message: { Text(viewModel.error ?? "") }
         }
         .task { if viewModel.flows.isEmpty { await viewModel.loadFlows() } }
     }
@@ -88,12 +88,17 @@ public struct FlowsListView: View {
     }
 
     private var flowsList: some View {
-        ScrollView {
+        let runningIDs = Set(viewModel.runningFlows.map(\.id))
+        let nonRunning = viewModel.filteredFlows.filter { !runningIDs.contains($0.id) }
+
+        return ScrollView {
             LazyVStack(spacing: 12) {
                 if !viewModel.runningFlows.isEmpty {
                     Section { ForEach(viewModel.runningFlows) { f in FlowCardView(flow: f) { selectFlow(f) } } } header: { sectionHeader("Running", count: viewModel.runningFlows.count) }
                 }
-                Section { ForEach(viewModel.filteredFlows) { f in FlowCardView(flow: f) { selectFlow(f) } } } header: { sectionHeader("All Flows", count: viewModel.filteredFlows.count) }
+                if !nonRunning.isEmpty {
+                    Section { ForEach(nonRunning) { f in FlowCardView(flow: f) { selectFlow(f) } } } header: { sectionHeader("All Flows", count: nonRunning.count) }
+                }
             }
             .padding()
         }
