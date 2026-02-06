@@ -12,6 +12,7 @@ public struct ExperimentIterationsView: View {
 
     @State private var iterations: [Iteration] = []
     @State private var gatingRuns: [GatingRun] = []
+    @State private var checkpoints: [Checkpoint] = []
     @State private var flowExperiments: [Experiment] = []
     @State private var flowValidations: [ValidationSummary] = []
     @State private var isLoading = true
@@ -79,6 +80,9 @@ public struct ExperimentIterationsView: View {
                 if experiment.status == .completed {
                     gatingSection
                 }
+                if let stats = tierStats, !stats.isEmpty {
+                    tierStatsSection(stats)
+                }
                 chartSection
                 iterationsSection
             }
@@ -99,6 +103,9 @@ public struct ExperimentIterationsView: View {
                 }
                 if experiment.status == .completed {
                     gatingSection
+                }
+                if let stats = tierStats, !stats.isEmpty {
+                    tierStatsSection(stats)
                 }
                 Spacer()
             }
@@ -222,6 +229,85 @@ public struct ExperimentIterationsView: View {
 
     private var hasActiveGatingRun: Bool {
         gatingRuns.contains { $0.status.isActive }
+    }
+
+    // MARK: - Tier Stats
+
+    /// Extract tier_stats from the experiment_end checkpoint's genome_stats
+    private var tierStats: [TierStats]? {
+        checkpoints
+            .first { $0.checkpoint_type == .experiment_end }?
+            .genome_stats?
+            .tier_stats
+    }
+
+    @ViewBuilder
+    private func tierStatsSection(_ stats: [TierStats]) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("📊 Tier Stats")
+                    .font(.headline)
+                Spacer()
+                Text("\(stats.count) tiers")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 0) {
+                    // Header
+                    HStack(spacing: 0) {
+                        Text("Tier")
+                            .frame(width: 45, alignment: .leading)
+                        Text("Clusters")
+                            .frame(width: 60, alignment: .trailing)
+                        Text("Avg Bits")
+                            .frame(width: 60, alignment: .trailing)
+                        Text("Avg Neurons")
+                            .frame(width: 70, alignment: .trailing)
+                        Text("Bit Range")
+                            .frame(width: 60, alignment: .trailing)
+                        Text("Neuron Range")
+                            .frame(width: 80, alignment: .trailing)
+                    }
+                    .font(.caption2.bold())
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 4)
+
+                    Divider()
+
+                    // Data rows
+                    ForEach(stats) { tier in
+                        HStack(spacing: 0) {
+                            Text("Tier \(tier.tier_index)")
+                                .frame(width: 45, alignment: .leading)
+                            Text("\(tier.cluster_count)")
+                                .frame(width: 60, alignment: .trailing)
+                            Text(String(format: "%.1f", tier.avg_bits))
+                                .frame(width: 60, alignment: .trailing)
+                            Text(String(format: "%.1f", tier.avg_neurons))
+                                .frame(width: 70, alignment: .trailing)
+                            Text("\(tier.min_bits)-\(tier.max_bits)")
+                                .frame(width: 60, alignment: .trailing)
+                            Text("\(tier.min_neurons)-\(tier.max_neurons)")
+                                .frame(width: 80, alignment: .trailing)
+                        }
+                        .font(.caption)
+                        .fontDesign(.monospaced)
+                        .padding(.vertical, 4)
+                    }
+                }
+                .padding(8)
+            }
+            #if os(iOS)
+            .background(Color(.secondarySystemBackground).opacity(0.5))
+            #else
+            .background(Color.secondary.opacity(0.1))
+            #endif
+            .cornerRadius(8)
+        }
+        .padding()
+        .glassCard()
     }
 
     // MARK: - Validation Progression
@@ -454,9 +540,11 @@ public struct ExperimentIterationsView: View {
         do {
             async let iterationsTask = dashboardViewModel.apiClient.getIterations(experimentId: experiment.id)
             async let gatingTask = dashboardViewModel.apiClient.getGatingRuns(experimentId: experiment.id)
+            async let checkpointsTask = dashboardViewModel.apiClient.getCheckpoints(experimentId: experiment.id)
 
             iterations = try await iterationsTask.sorted { $0.iteration_num > $1.iteration_num }
             gatingRuns = try await gatingTask.sorted { $0.id > $1.id }
+            checkpoints = try await checkpointsTask
 
             // Load flow validations if experiment belongs to a flow
             if let flowId = experiment.flow_id {
@@ -494,7 +582,14 @@ private struct GatingRunRow: View {
             HStack {
                 StatusBadge(text: run.status.displayName, color: statusColor)
                 Spacer()
-                if let date = run.createdDate {
+                // Show duration if completed, otherwise show relative creation time
+                if run.status == .completed, let duration = run.duration {
+                    let minutes = Int(duration) / 60
+                    let seconds = Int(duration) % 60
+                    Text("\(minutes)m \(seconds)s")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } else if let date = run.createdDate {
                     Text(date, style: .relative)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
