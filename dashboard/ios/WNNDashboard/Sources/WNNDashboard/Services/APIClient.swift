@@ -21,7 +21,7 @@ public final class APIClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let body = body { request.httpBody = try encoder.encode(body) }
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await TrustingURLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
         guard (200...299).contains(http.statusCode) else {
             if let err = try? decoder.decode(ErrorResponse.self, from: data) { throw APIError.serverError(http.statusCode, err.error) }
@@ -37,7 +37,7 @@ public final class APIClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let body = body { request.httpBody = try encoder.encode(body) }
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await TrustingURLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
         guard (200...299).contains(http.statusCode) else {
             if let err = try? decoder.decode(ErrorResponse.self, from: data) { throw APIError.serverError(http.statusCode, err.error) }

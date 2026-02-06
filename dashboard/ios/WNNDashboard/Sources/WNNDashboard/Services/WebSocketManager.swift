@@ -34,7 +34,7 @@ public final class WebSocketManager: ObservableObject {
         }
         disconnect()
         connectionState = .connecting
-        webSocket = URLSession(configuration: .default).webSocketTask(with: wsURL)
+        webSocket = TrustingURLSession.shared.webSocketTask(with: wsURL)
         webSocket?.resume()
         connectionState = .connected
         reconnectAttempts = 0

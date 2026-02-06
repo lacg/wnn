@@ -37,7 +37,7 @@ public final class ConnectionManager: ObservableObject {
         var request = URLRequest(url: url)
         request.timeoutInterval = 5
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (_, response) = try await TrustingURLSession.shared.data(for: request)
             return (response as? HTTPURLResponse).map { (200...299).contains($0.statusCode) } ?? false
         } catch { return false }
     }
