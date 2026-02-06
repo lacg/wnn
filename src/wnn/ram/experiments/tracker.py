@@ -259,6 +259,24 @@ class ExperimentTracker(ABC):
         pass
 
     @abstractmethod
+    def get_or_create_genomes_batch(
+        self,
+        experiment_id: int,
+        genome_configs: list[GenomeConfig],
+    ) -> dict[str, int]:
+        """
+        Batch version of get_or_create_genome.
+
+        Args:
+            experiment_id: Experiment ID
+            genome_configs: List of genome configurations
+
+        Returns:
+            Dict mapping config_hash -> genome_id
+        """
+        pass
+
+    @abstractmethod
     def record_genome_evaluation(
         self,
         iteration_id: int,
@@ -492,6 +510,35 @@ class SqliteTracker(ExperimentTracker):
         )
         return self._db.get_or_create_genome(experiment_id, dl_config)
 
+    def get_or_create_genomes_batch(
+        self,
+        experiment_id: int,
+        genome_configs: list[GenomeConfig],
+    ) -> dict[str, int]:
+        from wnn.ram.experiments.data_layer import GenomeConfig as DLGenomeConfig, TierConfig as DLTierConfig
+        # Convert to data layer format
+        dl_configs = []
+        hash_map = {}  # Map DL hash back to original tracker hash
+        for config in genome_configs:
+            dl_config = DLGenomeConfig(
+                tiers=[DLTierConfig(t.tier, t.clusters, t.neurons, t.bits) for t in config.tiers]
+            )
+            dl_configs.append(dl_config)
+            # Store mapping from DL hash to tracker config hash
+            dl_hash = dl_config.compute_hash()
+            tracker_hash = config.compute_hash()
+            hash_map[dl_hash] = tracker_hash
+
+        # Get batch results from DB
+        db_result = self._db.get_or_create_genomes_batch(experiment_id, dl_configs)
+
+        # Map back to tracker hashes
+        result = {}
+        for dl_hash, genome_id in db_result.items():
+            tracker_hash = hash_map.get(dl_hash, dl_hash)
+            result[tracker_hash] = genome_id
+        return result
+
     def record_genome_evaluation(
         self,
         iteration_id: int,
@@ -599,6 +646,9 @@ class NoOpTracker(ExperimentTracker):
 
     def get_or_create_genome(self, experiment_id: int, genome_config: GenomeConfig) -> int:
         return self._get_id()
+
+    def get_or_create_genomes_batch(self, experiment_id: int, genome_configs: list[GenomeConfig]) -> dict[str, int]:
+        return {config.compute_hash(): self._get_id() for config in genome_configs}
 
     def record_genome_evaluation(self, iteration_id: int, genome_id: int, position: int, role: GenomeRole, ce: float, accuracy: float, **kwargs) -> int:
         return self._get_id()

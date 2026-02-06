@@ -1263,29 +1263,42 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 					)
 
 					# Record genome evaluations (if genome_to_config is implemented)
-					self._log.info(f"[{self.name}] Genome tracking: iter_id={iteration_id}, exp_id={self._tracker_experiment_id}, HAS={HAS_GENOME_TRACKING}")
+					# Use batch genome lookup for efficiency (1 query instead of N)
+					self._log.debug(f"[{self.name}] Genome tracking: iter_id={iteration_id}, exp_id={self._tracker_experiment_id}, HAS={HAS_GENOME_TRACKING}")
 					if iteration_id and self._tracker_experiment_id and HAS_GENOME_TRACKING and GenomeRole is not None:
-						evaluations = []
+						# Step 1: Collect all genome configs
+						genome_data = []  # (pos, genome, ce, config)
 						for pos, (genome, ce) in enumerate(population):
 							config = self.genome_to_config(genome)
 							if config is not None:
-								genome_id = self._tracker.get_or_create_genome(
-									self._tracker_experiment_id, config
-								)
-								acc = genome._cached_fitness[1] if hasattr(genome, '_cached_fitness') and genome._cached_fitness else 0.0
-								# Role: first elite_count are elites, rest are offspring
-								role = GenomeRole.ELITE if pos < elite_count else GenomeRole.OFFSPRING
-								evaluations.append({
-									"iteration_id": iteration_id,
-									"genome_id": genome_id,
-									"position": pos,
-									"role": role,
-									"ce": ce,
-									"accuracy": acc,
-									"elite_rank": pos if pos < elite_count else None,
-								})
-						if evaluations:
-							self._tracker.record_genome_evaluations_batch(evaluations)
+								genome_data.append((pos, genome, ce, config))
+
+						if genome_data:
+							# Step 2: Batch lookup/create genomes (ONE query + ONE transaction)
+							configs = [config for _, _, _, config in genome_data]
+							hash_to_id = self._tracker.get_or_create_genomes_batch(
+								self._tracker_experiment_id, configs
+							)
+
+							# Step 3: Build evaluations using the hash->id mapping
+							evaluations = []
+							for pos, genome, ce, config in genome_data:
+								genome_id = hash_to_id.get(config.compute_hash())
+								if genome_id is not None:
+									acc = genome._cached_fitness[1] if hasattr(genome, '_cached_fitness') and genome._cached_fitness else 0.0
+									role = GenomeRole.ELITE if pos < elite_count else GenomeRole.OFFSPRING
+									evaluations.append({
+										"iteration_id": iteration_id,
+										"genome_id": genome_id,
+										"position": pos,
+										"role": role,
+										"ce": ce,
+										"accuracy": acc,
+										"elite_rank": pos if pos < elite_count else None,
+									})
+
+							if evaluations:
+								self._tracker.record_genome_evaluations_batch(evaluations)
 				except Exception as e:
 					# Don't fail optimization on tracking errors
 					self._log.debug(f"[{self.name}] V2 tracking error: {e}")
@@ -2021,62 +2034,53 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 					# - Position 0: CURRENT (best genome used to generate)
 					# - Positions 1-N: TOP_K (top 50 cache after merge+cap)
 					# - Positions 100+: NEIGHBOR (new neighbors generated this iteration)
-					self._log.info(f"[{self.name}] Genome tracking: iter_id={iteration_id}, exp_id={self._tracker_experiment_id}, HAS={HAS_GENOME_TRACKING}")
+					# Use batch genome lookup for efficiency (1 query instead of N)
+					self._log.debug(f"[{self.name}] Genome tracking: iter_id={iteration_id}, exp_id={self._tracker_experiment_id}, HAS={HAS_GENOME_TRACKING}")
 					if iteration_id and self._tracker_experiment_id and HAS_GENOME_TRACKING and GenomeRole is not None:
-						evaluations = []
+						# Step 1: Collect all genome configs with their metadata
+						genome_data = []  # (position, role, ce, acc, elite_rank, config)
 
-						# 1. Record current best genome (position 0)
+						# Current best genome (position 0)
 						config = self.genome_to_config(best)
 						if config is not None:
-							genome_id = self._tracker.get_or_create_genome(
-								self._tracker_experiment_id, config
-							)
-							evaluations.append({
-								"iteration_id": iteration_id,
-								"genome_id": genome_id,
-								"position": 0,
-								"role": GenomeRole.CURRENT,
-								"ce": best_fitness,
-								"accuracy": best_accuracy or 0.0,
-								"elite_rank": 0,
-							})
+							genome_data.append((0, GenomeRole.CURRENT, best_fitness, best_accuracy or 0.0, 0, config))
 
-						# 2. Record top 50 cache (positions 1-50) - the elite pool
+						# Top 50 cache (positions 1-50)
 						for pos, (g, ce, acc) in enumerate(valid_neighbors[:50]):
 							config = self.genome_to_config(g)
 							if config is not None:
-								genome_id = self._tracker.get_or_create_genome(
-									self._tracker_experiment_id, config
-								)
-								evaluations.append({
-									"iteration_id": iteration_id,
-									"genome_id": genome_id,
-									"position": pos + 1,
-									"role": GenomeRole.TOP_K,
-									"ce": ce,
-									"accuracy": acc or 0.0,
-									"elite_rank": pos,  # Rank in top 50
-								})
+								genome_data.append((pos + 1, GenomeRole.TOP_K, ce, acc or 0.0, pos, config))
 
-						# 3. Record new neighbors generated this iteration (positions 100+)
+						# New neighbors (positions 100+)
 						for pos, (g, ce, acc) in enumerate(new_neighbors_this_iter[:50]):
 							config = self.genome_to_config(g)
 							if config is not None:
-								genome_id = self._tracker.get_or_create_genome(
-									self._tracker_experiment_id, config
-								)
-								evaluations.append({
-									"iteration_id": iteration_id,
-									"genome_id": genome_id,
-									"position": 100 + pos,
-									"role": GenomeRole.NEIGHBOR,
-									"ce": ce,
-									"accuracy": acc or 0.0,
-									"elite_rank": None,  # Not ranked yet
-								})
+								genome_data.append((100 + pos, GenomeRole.NEIGHBOR, ce, acc or 0.0, None, config))
 
-						if evaluations:
-							self._tracker.record_genome_evaluations_batch(evaluations)
+						if genome_data:
+							# Step 2: Batch lookup/create genomes (ONE query + ONE transaction)
+							configs = [config for _, _, _, _, _, config in genome_data]
+							hash_to_id = self._tracker.get_or_create_genomes_batch(
+								self._tracker_experiment_id, configs
+							)
+
+							# Step 3: Build evaluations using the hash->id mapping
+							evaluations = []
+							for position, role, ce, acc, elite_rank, config in genome_data:
+								genome_id = hash_to_id.get(config.compute_hash())
+								if genome_id is not None:
+									evaluations.append({
+										"iteration_id": iteration_id,
+										"genome_id": genome_id,
+										"position": position,
+										"role": role,
+										"ce": ce,
+										"accuracy": acc,
+										"elite_rank": elite_rank,
+									})
+
+							if evaluations:
+								self._tracker.record_genome_evaluations_batch(evaluations)
 				except Exception as e:
 					# Don't fail optimization on tracking errors
 					self._log.debug(f"[{self.name}] V2 tracking error: {e}")

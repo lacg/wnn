@@ -594,6 +594,72 @@ class DataLayer:
             )
             return cursor.lastrowid
 
+    def get_or_create_genomes_batch(
+        self,
+        experiment_id: int,
+        genome_configs: list[GenomeConfig],
+    ) -> dict[str, int]:
+        """
+        Batch version of get_or_create_genome.
+
+        Much faster for bulk operations - does ONE select and ONE bulk insert
+        instead of N individual queries.
+
+        Args:
+            experiment_id: Experiment ID
+            genome_configs: List of genome configurations
+
+        Returns:
+            Dict mapping config_hash -> genome_id for all provided configs
+        """
+        if not genome_configs:
+            return {}
+
+        # Compute hashes and build lookup
+        hash_to_config = {}
+        for config in genome_configs:
+            config_hash = config.compute_hash()
+            if config_hash not in hash_to_config:
+                hash_to_config[config_hash] = config
+
+        all_hashes = list(hash_to_config.keys())
+        result = {}
+
+        # Step 1: Find existing genomes with one query
+        # SQLite supports up to 999 parameters, chunk if needed
+        chunk_size = 900
+        for i in range(0, len(all_hashes), chunk_size):
+            chunk_hashes = all_hashes[i:i + chunk_size]
+            placeholders = ",".join("?" * len(chunk_hashes))
+            rows = self._get_conn().execute(
+                f"SELECT id, config_hash FROM genomes WHERE experiment_id = ? AND config_hash IN ({placeholders})",
+                [experiment_id] + chunk_hashes,
+            ).fetchall()
+            for row in rows:
+                result[row["config_hash"]] = row["id"]
+
+        # Step 2: Insert missing genomes in one transaction
+        missing_hashes = [h for h in all_hashes if h not in result]
+        if missing_hashes:
+            now = _now_iso()
+            with self._transaction() as conn:
+                for config_hash in missing_hashes:
+                    config = hash_to_config[config_hash]
+                    cursor = conn.execute(
+                        """INSERT INTO genomes
+                           (experiment_id, config_hash, tiers_json, total_clusters,
+                            total_neurons, total_memory_bytes, created_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            experiment_id, config_hash, config.to_json(),
+                            config.total_clusters, config.total_neurons,
+                            config.total_memory_bytes, now,
+                        ),
+                    )
+                    result[config_hash] = cursor.lastrowid
+
+        return result
+
     def get_genome(self, genome_id: int) -> Optional[dict]:
         """Get genome by ID."""
         row = self._get_conn().execute(
