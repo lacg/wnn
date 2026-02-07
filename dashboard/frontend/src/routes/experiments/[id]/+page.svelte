@@ -556,6 +556,9 @@
         {:else}
           <a href="/flows" class="back-link">&larr; Flows</a>
         {/if}
+        {#if flow}
+          <span class="flow-name-label"><a href="/flows/{flow.id}">{flow.name}</a> /</span>
+        {/if}
         <h1>{experiment.name}</h1>
         <span class="status-badge" style="background: {getStatusColor(experiment.status)}">
           {experiment.status}
@@ -1203,6 +1206,21 @@
   }
 
   .back-link:hover {
+    color: var(--text-primary);
+  }
+
+  .flow-name-label {
+    font-size: 1.125rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+  }
+
+  .flow-name-label a {
+    color: var(--text-secondary);
+    text-decoration: none;
+  }
+
+  .flow-name-label a:hover {
     color: var(--text-primary);
   }
 
