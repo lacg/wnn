@@ -139,7 +139,7 @@
 		border: 1px solid var(--border);
 		border-radius: 6px;
 		overflow: hidden;
-		font-size: 0.875rem;
+		font-size: 1rem;
 	}
 
 	.tier-header {
@@ -149,7 +149,7 @@
 		background: var(--bg-tertiary);
 		border-bottom: 1px solid var(--border);
 		font-weight: 500;
-		font-size: 0.75rem;
+		font-size: 1rem;
 		text-transform: uppercase;
 		letter-spacing: 0.05em;
 		color: var(--text-secondary);
@@ -200,7 +200,7 @@
 		border-radius: 4px;
 		background: var(--bg-primary);
 		color: var(--text-primary);
-		font-size: 0.875rem;
+		font-size: 1rem;
 		font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
 	}
 
@@ -251,7 +251,7 @@
 		cursor: pointer;
 		padding: 0.25rem 0.75rem;
 		border-radius: 4px;
-		font-size: 0.8125rem;
+		font-size: 1rem;
 		width: 100%;
 	}
 

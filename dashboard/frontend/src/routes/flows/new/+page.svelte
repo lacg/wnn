@@ -400,7 +400,7 @@
   }
 
   .form {
-    max-width: 1100px;
+    max-width: 95%;
   }
 
   .form-columns {
@@ -429,7 +429,7 @@
   }
 
   h2 {
-    font-size: 0.875rem;
+    font-size: 1rem;
     font-weight: 600;
     color: var(--text-primary);
     margin: 0 0 0.75rem 0;
@@ -438,7 +438,7 @@
   }
 
   .section-hint {
-    font-size: 0.875rem;
+    font-size: 1rem;
     color: var(--text-secondary);
     margin: -0.5rem 0 0.75rem 0;
   }
@@ -453,9 +453,9 @@
 
   .field-hint {
     display: block;
-    font-size: 0.8125rem;
+    font-size: 1rem;
     color: var(--text-secondary);
-    margin-top: 0.2rem;
+    margin-top: 0.25rem;
   }
 
   input[type="checkbox"] {
@@ -478,20 +478,20 @@
 
   label {
     display: block;
-    font-size: 0.875rem;
+    font-size: 1rem;
     font-weight: 500;
     color: var(--text-primary);
-    margin-bottom: 0.25rem;
+    margin-bottom: 0.375rem;
   }
 
   input, select, textarea {
     width: 100%;
-    padding: 0.375rem 0.625rem;
+    padding: 0.5rem 0.75rem;
     border: 1px solid var(--border);
     border-radius: 6px;
     background: var(--bg-primary);
     color: var(--text-primary);
-    font-size: 0.875rem;
+    font-size: 1rem;
     font-family: inherit;
   }
 
@@ -513,7 +513,7 @@
   .btn {
     padding: 0.5rem 1rem;
     border-radius: 6px;
-    font-size: 0.875rem;
+    font-size: 1rem;
     font-weight: 500;
     text-decoration: none;
     border: none;
@@ -550,7 +550,7 @@
     color: var(--accent-red);
     padding: 0.75rem 1rem;
     border-radius: 6px;
-    font-size: 0.875rem;
+    font-size: 1rem;
     margin-bottom: 1rem;
   }
 
@@ -558,25 +558,25 @@
   .phase-list {
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
+    gap: 0.375rem;
   }
 
   .phase-item {
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    font-size: 0.875rem;
+    font-size: 1rem;
   }
 
   .phase-num {
-    width: 1.25rem;
-    height: 1.25rem;
+    width: 1.5rem;
+    height: 1.5rem;
     display: flex;
     align-items: center;
     justify-content: center;
     background: var(--bg-tertiary);
     border-radius: 4px;
-    font-size: 0.75rem;
+    font-size: 1rem;
     color: var(--text-secondary);
     font-weight: 500;
     flex-shrink: 0;
@@ -588,9 +588,9 @@
   }
 
   .phase-type {
-    padding: 0.125rem 0.375rem;
+    padding: 0.25rem 0.5rem;
     border-radius: 4px;
-    font-size: 0.75rem;
+    font-size: 1rem;
     font-weight: 600;
     text-transform: uppercase;
     flex-shrink: 0;

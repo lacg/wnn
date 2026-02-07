@@ -878,3 +878,7 @@ WNN_COALESCE_GROUPS=1 WNN_GROUP_LOG=1 python run_coarse_fine_search.py ...
 - **Indentation**: Use tabs (not spaces), displayed as 2-space width
 - **Line length**: Keep reasonable (no hard limit but prefer readable lines)
 - **Naming**: snake_case for functions/variables, PascalCase for classes
+
+### Dashboard Frontend (Svelte)
+
+- **Font size**: Always use `1rem` as the base font-size for text, labels, inputs, badges, hints, etc. This is an accessibility requirement — never use smaller sizes like `0.875rem` or `0.75rem` for body content

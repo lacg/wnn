@@ -198,7 +198,7 @@
 	}
 
 	.selector-field label {
-		font-size: 0.75rem;
+		font-size: 1rem;
 		font-weight: 500;
 		text-transform: uppercase;
 		letter-spacing: 0.05em;
@@ -212,7 +212,7 @@
 		border-radius: 6px;
 		background: var(--bg-primary);
 		color: var(--text-primary);
-		font-size: 0.875rem;
+		font-size: 1rem;
 		font-family: inherit;
 	}
 
@@ -227,7 +227,7 @@
 	}
 
 	.loading-hint {
-		font-size: 0.75rem;
+		font-size: 1rem;
 		color: var(--text-secondary);
 		font-style: italic;
 	}
@@ -240,7 +240,7 @@
 		background: rgba(16, 185, 129, 0.08);
 		border: 1px solid rgba(16, 185, 129, 0.2);
 		border-radius: 6px;
-		font-size: 0.875rem;
+		font-size: 1rem;
 	}
 
 	.resolved-checkpoint.muted {
@@ -265,7 +265,7 @@
 
 	.checkpoint-metric {
 		font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
-		font-size: 0.8125rem;
+		font-size: 1rem;
 		color: var(--text-secondary);
 	}
 
@@ -276,7 +276,7 @@
 		cursor: pointer;
 		padding: 0.25rem 0.5rem;
 		border-radius: 4px;
-		font-size: 0.75rem;
+		font-size: 1rem;
 		flex-shrink: 0;
 	}
 

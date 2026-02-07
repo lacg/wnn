@@ -219,8 +219,8 @@
   }
 
   .status-badge {
-    font-size: 0.75rem;
-    padding: 0.2rem 0.5rem;
+    font-size: 1rem;
+    padding: 0.25rem 0.5rem;
     border-radius: 4px;
     color: white;
     text-transform: capitalize;
