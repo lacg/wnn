@@ -13,7 +13,10 @@
   function formatTierConfig(tierConfig: unknown): string {
     if (typeof tierConfig === 'string') return tierConfig;
     if (Array.isArray(tierConfig)) {
-      return tierConfig.map((t: (number|string)[]) => `${t[0] ?? 'rest'},${t[1]},${t[2]}`).join('; ');
+      return tierConfig.map((t: (number|string|boolean)[]) => {
+        const base = `${t[0] ?? 'rest'},${t[1]},${t[2]}`;
+        return t.length > 3 ? `${base},${t[3]}` : base;
+      }).join('; ');
     }
     return String(tierConfig);
   }
@@ -199,7 +202,10 @@
             editConfig.tier_config = p.tier_config;
           } else {
             editConfig.tier_config = p.tier_config
-              .map((t: number[]) => `${t[0] ?? 'rest'},${t[1]},${t[2]}`)
+              .map((t: (number|string|boolean)[]) => {
+                const base = `${t[0] ?? 'rest'},${t[1]},${t[2]}`;
+                return t.length > 3 ? `${base},${t[3]}` : base;
+              })
               .join(';');
           }
         }
@@ -216,16 +222,20 @@
     saving = true;
 
     try {
-      // Parse tier_config string
+      // Parse tier_config string (supports 3 or 4 fields: clusters,neurons,bits[,optimize])
       let tier_config = null;
       if (editConfig.tier_config.trim()) {
         tier_config = editConfig.tier_config.split(';').map(tier => {
-          const parts = tier.trim().split(',');
-          return [
+          const parts = tier.trim().split(',').map(p => p.trim());
+          const entry: (number | null | boolean)[] = [
             parts[0] === 'rest' ? null : parseInt(parts[0]),
             parseInt(parts[1]),
             parseInt(parts[2])
           ];
+          if (parts.length > 3) {
+            entry.push(parts[3] === 'true');
+          }
+          return entry;
         });
       }
 
@@ -1117,8 +1127,8 @@
           <div class="form-group full-width">
             <label for="tier_config">Tier Config</label>
             <input type="text" id="tier_config" bind:value={editConfig.tier_config}
-                   placeholder="100,15,20;400,10,12;rest,5,8" />
-            <span class="form-hint">Format: clusters,neurons,bits per tier (semicolon separated)</span>
+                   placeholder="100,15,20,true;400,10,12,false;rest,5,8,false" />
+            <span class="form-hint">Format: clusters,neurons,bits,optimize per tier (semicolon separated, optimize=true/false)</span>
           </div>
 
           <div class="form-actions">
