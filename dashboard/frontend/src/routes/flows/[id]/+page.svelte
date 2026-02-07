@@ -474,14 +474,22 @@
     try {
       // Convert experiments to ExperimentSpec format for the new API
       // Experiments are now passed separately, not in config
-      const experimentSpecs = experiments.map(exp => ({
-        name: exp.name,
-        experiment_type: exp.phase_type?.startsWith('ga') ? 'ga' : 'ts',
-        optimize_bits: exp.phase_type?.includes('bits') ?? false,
-        optimize_neurons: exp.phase_type?.includes('neurons') ?? false,
-        optimize_connections: exp.phase_type?.includes('connections') ?? false,
-        params: {}
-      }));
+      const experimentSpecs = experiments.map(exp => {
+        const isGa = exp.phase_type?.startsWith('ga');
+        return {
+          name: exp.name,
+          experiment_type: isGa ? 'ga' : 'ts',
+          optimize_bits: exp.phase_type?.includes('bits') ?? false,
+          optimize_neurons: exp.phase_type?.includes('neurons') ?? false,
+          optimize_connections: exp.phase_type?.includes('connections') ?? false,
+          params: {
+            generations: isGa ? (flow.config.params.ga_generations ?? 250) : undefined,
+            iterations: !isGa ? (flow.config.params.ts_iterations ?? 250) : undefined,
+            population_size: flow.config.params.population_size ?? 50,
+            neighbors_per_iter: flow.config.params.neighbors_per_iter ?? 50,
+          }
+        };
+      });
 
       const newName = `${flow.name} (copy)`;
       const response = await fetch('/api/flows', {

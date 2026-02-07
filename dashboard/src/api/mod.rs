@@ -907,11 +907,20 @@ async fn add_experiment_to_flow(
     };
     let phase_type = format!("{}_{}", exp_type, opt_target);
 
-    // Get max_iterations from params if available
+    // Get max_iterations: first from experiment params, then from flow config
     let max_iterations = exp_spec.params.get("generations")
         .or_else(|| exp_spec.params.get("iterations"))
         .and_then(|v| v.as_i64())
-        .map(|v| v as i32);
+        .map(|v| v as i32)
+        .or_else(|| {
+            let key = match exp_spec.experiment_type {
+                ExperimentType::Ga => "ga_generations",
+                ExperimentType::Ts => "ts_iterations",
+            };
+            flow.config.params.get(key)
+                .and_then(|v| v.as_i64())
+                .map(|v| v as i32)
+        });
 
     // Create the experiment (use flow's config for tier_config etc.)
     match crate::db::queries::create_pending_experiment(

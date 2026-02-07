@@ -459,11 +459,21 @@ pub mod queries {
             };
             let phase_type = format!("{}_{}", exp_type, opt_target);
 
-            // Get max_iterations from experiment params (generations for GA, iterations for TS)
+            // Get max_iterations: first from experiment params, then from flow config
             let max_iterations = exp_spec.params.get("generations")
                 .or_else(|| exp_spec.params.get("iterations"))
                 .and_then(|v| v.as_i64())
-                .map(|v| v as i32);
+                .map(|v| v as i32)
+                .or_else(|| {
+                    // Fall back to flow-level ga_generations/ts_iterations
+                    let key = match exp_spec.experiment_type {
+                        crate::models::ExperimentType::Ga => "ga_generations",
+                        crate::models::ExperimentType::Ts => "ts_iterations",
+                    };
+                    config.params.get(key)
+                        .and_then(|v| v.as_i64())
+                        .map(|v| v as i32)
+                });
 
             create_pending_experiment(
                 pool,
