@@ -1,6 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import type { Checkpoint } from '$lib/types';
+  import TierConfigEditor from '$lib/components/TierConfigEditor.svelte';
+  import SeedCheckpointSelector from '$lib/components/SeedCheckpointSelector.svelte';
 
   let name = '';
   let description = '';
@@ -53,7 +54,6 @@
   $: applyTemplateDefaults(template);
   let seedCheckpointId: number | null = null;
 
-  let checkpoints: Checkpoint[] = [];
   let loading = false;
   let error: string | null = null;
 
@@ -106,51 +106,6 @@
 
   // Reactive: regenerate phases when template or phaseOrder changes
   $: experiments = generatePhases(template, phaseOrder);
-
-  // Fetch available checkpoints for seeding
-  async function loadCheckpoints() {
-    try {
-      const response = await fetch('/api/checkpoints?is_final=true&limit=100');
-      if (response.ok) {
-        checkpoints = await response.json();
-      }
-    } catch (e) {
-      console.error('Failed to load checkpoints:', e);
-    }
-  }
-
-  loadCheckpoints();
-
-  // Group checkpoints by flow
-  interface CheckpointGroup {
-    flowId: number | null;
-    flowName: string;
-    checkpoints: Checkpoint[];
-  }
-
-  $: groupedCheckpoints = (() => {
-    const groups: Map<number | null, CheckpointGroup> = new Map();
-
-    for (const ckpt of checkpoints) {
-      const flowId = ckpt.flow_id ?? null;
-      if (!groups.has(flowId)) {
-        groups.set(flowId, {
-          flowId,
-          flowName: ckpt.flow_name ?? 'Standalone Experiments',
-          checkpoints: []
-        });
-      }
-      groups.get(flowId)!.checkpoints.push(ckpt);
-    }
-
-    // Sort: flows with IDs first (by ID desc), then standalone
-    return Array.from(groups.values()).sort((a, b) => {
-      if (a.flowId === null && b.flowId !== null) return 1;
-      if (a.flowId !== null && b.flowId === null) return -1;
-      if (a.flowId !== null && b.flowId !== null) return b.flowId - a.flowId;
-      return 0;
-    });
-  })();
 
   async function handleSubmit() {
     if (!name.trim()) {
@@ -387,14 +342,8 @@
       </div>
 
       <div class="form-group">
-        <label for="tierConfig">Tier Configuration</label>
-        <input
-          type="text"
-          id="tierConfig"
-          bind:value={tierConfig}
-          placeholder="100,15,20,true;400,10,12,false;rest,5,8,false"
-        />
-        <span class="field-hint">Format: clusters,neurons,bits,optimize;... (use "rest" for remaining vocab, optimize=true/false per tier)</span>
+        <label>Tier Configuration</label>
+        <TierConfigEditor bind:value={tierConfig} />
       </div>
     </div>
 
@@ -404,24 +353,7 @@
         Select a checkpoint to seed the first experiment from a previous run.
       </p>
 
-      <div class="form-group">
-        <label for="seedCheckpoint">Seed From</label>
-        <select id="seedCheckpoint" bind:value={seedCheckpointId}>
-          <option value={null}>No seed (start fresh)</option>
-          {#each groupedCheckpoints as group}
-            <optgroup label={group.flowId ? `Flow: ${group.flowName}` : group.flowName}>
-              {#each group.checkpoints as ckpt}
-                <option value={ckpt.id}>
-                  {ckpt.name}
-                  {#if ckpt.best_ce}
-                    (CE: {ckpt.best_ce.toFixed(4)})
-                  {/if}
-                </option>
-              {/each}
-            </optgroup>
-          {/each}
-        </select>
-      </div>
+      <SeedCheckpointSelector bind:value={seedCheckpointId} />
     </div>
 
     <div class="form-actions">

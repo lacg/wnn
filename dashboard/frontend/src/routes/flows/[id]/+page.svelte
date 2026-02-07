@@ -4,6 +4,7 @@
   import type { Flow, Experiment, Checkpoint, ValidationSummary } from '$lib/types';
   import { formatDate } from '$lib/dateFormat';
   import { currentFlow, flows } from '$lib/stores';
+  import TierConfigEditor from '$lib/components/TierConfigEditor.svelte';
 
   // Note: With normalized design, experiments come from the experiments table (via DB),
   // NOT from flow.config.experiments. The `experiments` array is fetched separately
@@ -1125,10 +1126,8 @@
           </div>
 
           <div class="form-group full-width">
-            <label for="tier_config">Tier Config</label>
-            <input type="text" id="tier_config" bind:value={editConfig.tier_config}
-                   placeholder="100,15,20,true;400,10,12,false;rest,5,8,false" />
-            <span class="form-hint">Format: clusters,neurons,bits,optimize per tier (semicolon separated, optimize=true/false)</span>
+            <label>Tier Config</label>
+            <TierConfigEditor bind:value={editConfig.tier_config} />
           </div>
 
           <div class="form-actions">
@@ -1234,9 +1233,7 @@
           {#if flow.config.params.tier_config}
             <div class="param-item full-width">
               <span class="param-label">Tier Config</span>
-              <span class="param-value mono">
-                {formatTierConfig(flow.config.params.tier_config)}
-              </span>
+              <TierConfigEditor value={formatTierConfig(flow.config.params.tier_config)} readonly={true} />
             </div>
           {/if}
           {#if flow.config.params.context_size}
