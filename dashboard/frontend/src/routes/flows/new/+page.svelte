@@ -184,176 +184,184 @@
       <div class="error-message">{error}</div>
     {/if}
 
+    <!-- Top row: Name + Description side by side -->
     <div class="form-section">
-      <h2>Basic Info</h2>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="name">Name *</label>
+          <input
+            type="text"
+            id="name"
+            bind:value={name}
+            placeholder="e.g., Pass 1 - Initial Search"
+          />
+        </div>
 
-      <div class="form-group">
-        <label for="name">Name *</label>
-        <input
-          type="text"
-          id="name"
-          bind:value={name}
-          placeholder="e.g., Pass 1 - Initial Search"
-        />
-      </div>
-
-      <div class="form-group">
-        <label for="description">Description</label>
-        <textarea
-          id="description"
-          bind:value={description}
-          placeholder="Optional description..."
-          rows="3"
-        ></textarea>
+        <div class="form-group">
+          <label for="description">Description</label>
+          <input
+            type="text"
+            id="description"
+            bind:value={description}
+            placeholder="Optional description..."
+          />
+        </div>
       </div>
     </div>
 
-    <div class="form-section">
-      <h2>Configuration</h2>
+    <!-- Main two-column layout -->
+    <div class="form-columns">
+      <!-- Left column: Search parameters -->
+      <div class="form-section">
+        <h2>Search Parameters</h2>
 
-      <div class="form-row">
-        <div class="form-group">
-          <label for="template">Template</label>
-          <select id="template" bind:value={template}>
-            <option value="quick-4-phase">Quick 4-Phase</option>
-            <option value="standard-6-phase">Standard 6-Phase</option>
-            <option value="empty">Empty (no phases)</option>
-          </select>
-          <span class="field-hint">
-            {#if template === 'quick-4-phase'}
-              Fast iteration: neurons → bits only (50 gens, patience 2)
-            {:else if template === 'standard-6-phase'}
-              Full search: neurons → bits → connections (250 gens)
-            {:else}
-              Add phases manually after creation
-            {/if}
-          </span>
-        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="template">Template</label>
+            <select id="template" bind:value={template}>
+              <option value="quick-4-phase">Quick 4-Phase</option>
+              <option value="standard-6-phase">Standard 6-Phase</option>
+              <option value="empty">Empty (no phases)</option>
+            </select>
+            <span class="field-hint">
+              {#if template === 'quick-4-phase'}
+                Fast iteration: neurons &rarr; bits (50 gens, patience 2)
+              {:else if template === 'standard-6-phase'}
+                Full search: neurons &rarr; bits &rarr; connections (250 gens)
+              {:else}
+                Add phases manually after creation
+              {/if}
+            </span>
+          </div>
 
-        <div class="form-group">
-          <label for="phaseOrder">Phase Order</label>
-          <select id="phaseOrder" bind:value={phaseOrder} disabled={template === 'empty'}>
-            <option value="neurons_first">Neurons First</option>
-            <option value="bits_first">Bits First</option>
-          </select>
-          <span class="field-hint">
-            {#if template === 'quick-4-phase'}
-              {phaseOrder === 'neurons_first' ? 'neurons → bits' : 'bits → neurons'} (no connections)
-            {:else if phaseOrder === 'neurons_first'}
-              neurons → bits → connections
-            {:else}
-              bits → neurons → connections
-            {/if}
-          </span>
-        </div>
-      </div>
-
-      {#if experiments.length > 0}
-        <div class="phases-preview">
-          <h3>Phases Preview ({experiments.length})</h3>
-          <div class="phase-list">
-            {#each experiments as phase, i}
-              <div class="phase-item">
-                <span class="phase-num">{i + 1}</span>
-                <span class="phase-name">{phase.name}</span>
-                <span class="phase-type" class:ga={phase.experiment_type === 'ga'} class:ts={phase.experiment_type === 'ts'}>
-                  {phase.experiment_type.toUpperCase()}
-                </span>
-              </div>
-            {/each}
+          <div class="form-group">
+            <label for="phaseOrder">Phase Order</label>
+            <select id="phaseOrder" bind:value={phaseOrder} disabled={template === 'empty'}>
+              <option value="neurons_first">Neurons First</option>
+              <option value="bits_first">Bits First</option>
+            </select>
+            <span class="field-hint">
+              {#if template === 'quick-4-phase'}
+                {phaseOrder === 'neurons_first' ? 'neurons → bits' : 'bits → neurons'} (no connections)
+              {:else if phaseOrder === 'neurons_first'}
+                neurons &rarr; bits &rarr; connections
+              {:else}
+                bits &rarr; neurons &rarr; connections
+              {/if}
+            </span>
           </div>
         </div>
-      {/if}
 
-      <div class="form-row">
-        <div class="form-group">
-          <label for="gaGens">GA Generations</label>
-          <input type="number" id="gaGens" bind:value={gaGenerations} min="1" />
+        <div class="form-row">
+          <div class="form-group">
+            <label for="gaGens">GA Generations</label>
+            <input type="number" id="gaGens" bind:value={gaGenerations} min="1" />
+          </div>
+
+          <div class="form-group">
+            <label for="tsIters">TS Iterations</label>
+            <input type="number" id="tsIters" bind:value={tsIterations} min="1" />
+          </div>
         </div>
 
-        <div class="form-group">
-          <label for="tsIters">TS Iterations</label>
-          <input type="number" id="tsIters" bind:value={tsIterations} min="1" />
-        </div>
-      </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="popSize">Population Size</label>
+            <input type="number" id="popSize" bind:value={populationSize} min="1" />
+          </div>
 
-      <div class="form-row">
-        <div class="form-group">
-          <label for="popSize">Population Size</label>
-          <input type="number" id="popSize" bind:value={populationSize} min="1" />
-        </div>
-
-        <div class="form-group">
-          <label for="neighborsPerIter">Neighbors/Iter (TS)</label>
-          <input type="number" id="neighborsPerIter" bind:value={neighborsPerIter} min="1" />
-        </div>
-      </div>
-
-      <div class="form-row">
-        <div class="form-group">
-          <label for="patience">Patience</label>
-          <input type="number" id="patience" bind:value={patience} min="1" />
+          <div class="form-group">
+            <label for="neighborsPerIter">Neighbors/Iter (TS)</label>
+            <input type="number" id="neighborsPerIter" bind:value={neighborsPerIter} min="1" />
+          </div>
         </div>
 
-        <div class="form-group">
-          <label for="fitnessPercentile">Fitness Percentile</label>
-          <input type="number" id="fitnessPercentile" bind:value={fitnessPercentile} min="0" max="1" step="0.05" />
-          <span class="field-hint">Keep top N% by fitness (0.75 = 75%)</span>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="patience">Patience</label>
+            <input type="number" id="patience" bind:value={patience} min="1" />
+          </div>
+
+          <div class="form-group">
+            <label for="contextSize">Context Size</label>
+            <input type="number" id="contextSize" bind:value={contextSize} min="2" max="16" />
+            <span class="field-hint">N-gram context window (4 = 4-gram)</span>
+          </div>
         </div>
 
-        <div class="form-group">
-          <label for="fitnessCalculator">Fitness Calculator</label>
-          <select id="fitnessCalculator" bind:value={fitnessCalculator}>
-            <option value="normalized">Normalized (Recommended)</option>
-            <option value="harmonic_rank">Harmonic Rank</option>
-            <option value="normalized_harmonic">Normalized Harmonic</option>
-            <option value="ce">CE Only</option>
-          </select>
-          <span class="field-hint">How to combine CE and accuracy for ranking</span>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="fitnessCalculator">Fitness Calculator</label>
+            <select id="fitnessCalculator" bind:value={fitnessCalculator}>
+              <option value="normalized">Normalized (Recommended)</option>
+              <option value="harmonic_rank">Harmonic Rank</option>
+              <option value="normalized_harmonic">Normalized Harmonic</option>
+              <option value="ce">CE Only</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="fitnessPercentile">Fitness Percentile</label>
+            <input type="number" id="fitnessPercentile" bind:value={fitnessPercentile} min="0" max="1" step="0.05" />
+            <span class="field-hint">Keep top N% by fitness</span>
+          </div>
         </div>
+
+        {#if fitnessCalculator === 'harmonic_rank' || fitnessCalculator === 'normalized_harmonic'}
+          <div class="form-row">
+            <div class="form-group">
+              <label for="fitnessWeightCe">CE Weight</label>
+              <input type="number" id="fitnessWeightCe" bind:value={fitnessWeightCe} min="0" max="10" step="0.1" />
+              <span class="field-hint">Higher = prioritize lower CE</span>
+            </div>
+
+            <div class="form-group">
+              <label for="fitnessWeightAcc">Accuracy Weight</label>
+              <input type="number" id="fitnessWeightAcc" bind:value={fitnessWeightAcc} min="0" max="10" step="0.1" />
+              <span class="field-hint">Higher = prioritize accuracy</span>
+            </div>
+          </div>
+        {/if}
 
         <div class="form-group">
           <label for="minAccuracyFloor">Accuracy Floor</label>
           <input type="number" id="minAccuracyFloor" bind:value={minAccuracyFloor} min="0" max="0.1" step="0.001" />
-          <span class="field-hint">Min accuracy threshold (0.003 = 0.3%). Below = rejected</span>
+          <span class="field-hint">Min accuracy threshold (0.003 = 0.3%). 0 = disabled</span>
         </div>
       </div>
 
-      {#if fitnessCalculator === 'harmonic_rank' || fitnessCalculator === 'normalized_harmonic'}
-        <div class="form-row">
-          <div class="form-group">
-            <label for="fitnessWeightCe">CE Weight</label>
-            <input type="number" id="fitnessWeightCe" bind:value={fitnessWeightCe} min="0" max="10" step="0.1" />
-            <span class="field-hint">Higher = prioritize lower CE (default: 1.0)</span>
+      <!-- Right column: Phases + Tiers + Seed -->
+      <div class="right-column">
+        {#if experiments.length > 0}
+          <div class="form-section">
+            <h2>Phases Preview ({experiments.length})</h2>
+            <div class="phase-list">
+              {#each experiments as phase, i}
+                <div class="phase-item">
+                  <span class="phase-num">{i + 1}</span>
+                  <span class="phase-name">{phase.name}</span>
+                  <span class="phase-type" class:ga={phase.experiment_type === 'ga'} class:ts={phase.experiment_type === 'ts'}>
+                    {phase.experiment_type.toUpperCase()}
+                  </span>
+                </div>
+              {/each}
+            </div>
           </div>
+        {/if}
 
-          <div class="form-group">
-            <label for="fitnessWeightAcc">Accuracy Weight</label>
-            <input type="number" id="fitnessWeightAcc" bind:value={fitnessWeightAcc} min="0" max="10" step="0.1" />
-            <span class="field-hint">Higher = prioritize higher accuracy (default: 1.0)</span>
-          </div>
+        <div class="form-section">
+          <h2>Tier Configuration</h2>
+          <TierConfigEditor bind:value={tierConfig} />
         </div>
-      {/if}
 
-      <div class="form-group">
-        <label for="contextSize">Context Size (n-gram)</label>
-        <input type="number" id="contextSize" bind:value={contextSize} min="2" max="16" />
-        <span class="field-hint">Number of tokens in context window (4 = 4-gram)</span>
+        <div class="form-section">
+          <h2>Seed Checkpoint</h2>
+          <p class="section-hint">
+            Optionally seed from a previous run's checkpoint.
+          </p>
+          <SeedCheckpointSelector bind:value={seedCheckpointId} />
+        </div>
       </div>
-
-      <div class="form-group">
-        <label>Tier Configuration</label>
-        <TierConfigEditor bind:value={tierConfig} />
-      </div>
-    </div>
-
-    <div class="form-section">
-      <h2>Seed Checkpoint (Optional)</h2>
-      <p class="section-hint">
-        Select a checkpoint to seed the first experiment from a previous run.
-      </p>
-
-      <SeedCheckpointSelector bind:value={seedCheckpointId} />
     </div>
 
     <div class="form-actions">
@@ -370,7 +378,7 @@
     display: flex;
     align-items: center;
     gap: 1rem;
-    margin-bottom: 2rem;
+    margin-bottom: 1.5rem;
     padding-top: 2rem;
   }
 
@@ -392,32 +400,51 @@
   }
 
   .form {
-    max-width: 600px;
+    max-width: 1100px;
+  }
+
+  .form-columns {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+    align-items: start;
+  }
+
+  .right-column {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
   }
 
   .form-section {
     background: var(--bg-secondary);
     border: 1px solid var(--border);
     border-radius: 8px;
-    padding: 1.5rem;
+    padding: 1.25rem;
     margin-bottom: 1.5rem;
   }
 
+  .form-columns .form-section {
+    margin-bottom: 0;
+  }
+
   h2 {
-    font-size: 1rem;
+    font-size: 0.875rem;
     font-weight: 600;
     color: var(--text-primary);
-    margin: 0 0 1rem 0;
+    margin: 0 0 0.75rem 0;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
   }
 
   .section-hint {
-    font-size: 1rem;
+    font-size: 0.875rem;
     color: var(--text-secondary);
-    margin: -0.5rem 0 1rem 0;
+    margin: -0.5rem 0 0.75rem 0;
   }
 
   .form-group {
-    margin-bottom: 1rem;
+    margin-bottom: 0.75rem;
   }
 
   .form-group:last-child {
@@ -426,9 +453,9 @@
 
   .field-hint {
     display: block;
-    font-size: 1rem;
+    font-size: 0.8125rem;
     color: var(--text-secondary);
-    margin-top: 0.25rem;
+    margin-top: 0.2rem;
   }
 
   input[type="checkbox"] {
@@ -446,25 +473,25 @@
   .form-row {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 1rem;
+    gap: 0.75rem;
   }
 
   label {
     display: block;
-    font-size: 1rem;
+    font-size: 0.875rem;
     font-weight: 500;
     color: var(--text-primary);
-    margin-bottom: 0.375rem;
+    margin-bottom: 0.25rem;
   }
 
   input, select, textarea {
     width: 100%;
-    padding: 0.5rem 0.75rem;
+    padding: 0.375rem 0.625rem;
     border: 1px solid var(--border);
     border-radius: 6px;
     background: var(--bg-primary);
     color: var(--text-primary);
-    font-size: 1rem;
+    font-size: 0.875rem;
     font-family: inherit;
   }
 
@@ -486,7 +513,7 @@
   .btn {
     padding: 0.5rem 1rem;
     border-radius: 6px;
-    font-size: 1rem;
+    font-size: 0.875rem;
     font-weight: 500;
     text-decoration: none;
     border: none;
@@ -523,50 +550,36 @@
     color: var(--accent-red);
     padding: 0.75rem 1rem;
     border-radius: 6px;
-    font-size: 1rem;
+    font-size: 0.875rem;
     margin-bottom: 1rem;
   }
 
   /* Phases Preview */
-  .phases-preview {
-    margin-top: 1rem;
-    padding: 1rem;
-    background: var(--bg-tertiary);
-    border-radius: 6px;
-    border: 1px solid var(--border);
-  }
-
-  .phases-preview h3 {
-    font-size: 1rem;
-    font-weight: 500;
-    color: var(--text-secondary);
-    margin: 0 0 0.75rem 0;
-  }
-
   .phase-list {
     display: flex;
     flex-direction: column;
-    gap: 0.375rem;
+    gap: 0.25rem;
   }
 
   .phase-item {
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    font-size: 1rem;
+    font-size: 0.875rem;
   }
 
   .phase-num {
-    width: 1.5rem;
-    height: 1.5rem;
+    width: 1.25rem;
+    height: 1.25rem;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: var(--bg-secondary);
+    background: var(--bg-tertiary);
     border-radius: 4px;
-    font-size: 1rem;
+    font-size: 0.75rem;
     color: var(--text-secondary);
     font-weight: 500;
+    flex-shrink: 0;
   }
 
   .phase-name {
@@ -575,11 +588,12 @@
   }
 
   .phase-type {
-    padding: 0.25rem 0.5rem;
+    padding: 0.125rem 0.375rem;
     border-radius: 4px;
-    font-size: 1rem;
+    font-size: 0.75rem;
     font-weight: 600;
     text-transform: uppercase;
+    flex-shrink: 0;
   }
 
   .phase-type.ga {
