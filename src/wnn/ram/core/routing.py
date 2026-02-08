@@ -95,7 +95,7 @@ class RouterRAM(RAMComponent):
 		Returns:
 			[batch, num_routes] route scores.
 		"""
-		return self.router_layer(input_bits)
+		return self.router_layer.forward_auto(input_bits)
 
 	def route(self, input_bits: Tensor) -> Tensor:
 		"""Get route indices (argmax of router scores).
@@ -270,8 +270,9 @@ class RoutedRAMClusterLayer(RAMComponent):
 
 		# Compute all expert outputs (we only use the selected ones)
 		# For efficiency with small num_routes, compute all and index
+		# Use forward_auto() for Metal/Rust acceleration instead of default PyTorch path
 		all_expert_scores = stack([
-			expert(input_bits) for expert in self.experts
+			expert.forward_auto(input_bits) for expert in self.experts
 		], dim=1)  # [batch, num_routes, num_clusters]
 
 		# Gather selected expert outputs
