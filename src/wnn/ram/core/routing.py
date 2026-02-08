@@ -374,7 +374,9 @@ class RoutedRAMClusterLayer(RAMComponent):
 		Args:
 			input_bits: [N, total_input_bits] training input bits.
 			targets: [N] target cluster indices.
-			false_clusters: [N, k] false cluster indices for negative training.
+			false_clusters: Negative training clusters. Can be:
+				- [k] shared negatives (memory-efficient, expanded per-subset)
+				- [N, k] per-example negatives (backward-compatible)
 			allow_override: Whether to override existing memory cells.
 			extra_training: Train all experts on all data for robustness.
 
@@ -382,6 +384,12 @@ class RoutedRAMClusterLayer(RAMComponent):
 			Training stats dict with per-expert breakdown.
 		"""
 		n = input_bits.shape[0]
+
+		# Normalize false_clusters: if 1D, keep as base for efficient expansion
+		shared_negatives = None
+		if false_clusters is not None and false_clusters.ndim == 1:
+			shared_negatives = false_clusters  # [k] base negatives
+			false_clusters = None  # Don't use the 2D path
 
 		# Phase 1: Train router
 		router_stats = self.router.train_routing(input_bits, targets)
@@ -401,7 +409,14 @@ class RoutedRAMClusterLayer(RAMComponent):
 			expert_bits = input_bits[mask]
 			expert_targets = targets[mask]
 
-			if false_clusters is not None:
+			if shared_negatives is not None:
+				# Expand shared negatives only for this subset
+				expert_false = shared_negatives.unsqueeze(0).expand(count, -1).contiguous()
+				modified = self.experts[route_idx].train_multi_examples(
+					expert_bits, expert_targets, expert_false,
+					allow_override=allow_override,
+				)
+			elif false_clusters is not None:
 				expert_false = false_clusters[mask]
 				modified = self.experts[route_idx].train_multi_examples(
 					expert_bits, expert_targets, expert_false,
@@ -426,16 +441,26 @@ class RoutedRAMClusterLayer(RAMComponent):
 			})
 
 		# Optionally train ALL experts on all data for robustness.
-		# Useful early when router isn't accurate. Disable after convergence
-		# to preserve per-route specialization.
+		# Process in batches to avoid materializing [N, k] all at once.
 		total_extra = 0
-		if extra_training and false_clusters is not None:
-			for route_idx in range(self.num_routes):
-				modified = self.experts[route_idx].train_multi_examples(
-					input_bits, targets, false_clusters,
-					allow_override=allow_override,
-				)
-				total_extra += modified
+		if extra_training:
+			neg = shared_negatives if shared_negatives is not None else false_clusters
+			if neg is not None:
+				extra_batch_size = 50000
+				for route_idx in range(self.num_routes):
+					for start in range(0, n, extra_batch_size):
+						end = min(start + extra_batch_size, n)
+						batch_bits = input_bits[start:end]
+						batch_targets = targets[start:end]
+						if neg.ndim == 1:
+							batch_false = neg.unsqueeze(0).expand(end - start, -1).contiguous()
+						else:
+							batch_false = neg[start:end]
+						modified = self.experts[route_idx].train_multi_examples(
+							batch_bits, batch_targets, batch_false,
+							allow_override=allow_override,
+						)
+						total_extra += modified
 
 		# Invalidate merged cache (memory changed)
 		self._merged_dirty = True

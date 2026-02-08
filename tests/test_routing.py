@@ -157,10 +157,10 @@ def main():
 	all_bits = baseline.encode_sequence(train_tokens)
 	targets = tensor(train_tokens[context_size:], dtype=long)
 
-	# Prepare false clusters (50 negatives to keep memory manageable with 8 experts)
+	# Shared 1D negatives (train_experts expands per-subset internally)
 	counts = Counter(train_tokens)
 	top_k_tokens = [t for t, _ in counts.most_common(50)]
-	false_clusters_base = tensor(top_k_tokens, dtype=long)
+	false_clusters_base = tensor(top_k_tokens, dtype=long)  # [50]
 
 	train_batch_size = 50000
 	total_examples = all_bits.shape[0]
@@ -171,12 +171,9 @@ def main():
 		for batch_idx in range(num_batches):
 			start = batch_idx * train_batch_size
 			end = min(start + train_batch_size, total_examples)
-			batch_bits = all_bits[start:end]
-			batch_targets = targets[start:end]
-			batch_false = false_clusters_base.unsqueeze(0).expand(end - start, -1).contiguous()
 
 			routed_layer.train_experts(
-				batch_bits, batch_targets, batch_false,
+				all_bits[start:end], targets[start:end], false_clusters_base,
 				extra_training=extra_training,
 			)
 			if (batch_idx + 1) % 10 == 0:
