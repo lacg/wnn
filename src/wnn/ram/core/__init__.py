@@ -457,6 +457,9 @@ from wnn.ram.core.models import (
 # Reporting utilities
 from wnn.ram.core.reporting import TierResultsTable, TierResultRow
 
+# Content-dependent routing
+from wnn.ram.core.routing import RouterRAM, RoutedRAMClusterLayer
+
 
 __all__ = [
 	# ==== Core Enums (self-contained) ====
@@ -581,4 +584,7 @@ __all__ = [
 	# Reporting utilities
 	'TierResultsTable',
 	'TierResultRow',
+	# Content-dependent routing
+	'RouterRAM',
+	'RoutedRAMClusterLayer',
 ]

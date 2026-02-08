@@ -366,6 +366,20 @@ def __getattr__(name: str):
 		from wnn.ram.core.models.ramlm import RAMLM
 		return RAMLM
 
+	# Hybrid / Transformer LMs (WS2-WS3)
+	if name == 'TinyTransformerLM':
+		from wnn.ram.core.models.tiny_transformer import TinyTransformerLM
+		return TinyTransformerLM
+	if name == 'HybridRAMTransformerLM':
+		from wnn.ram.core.models.hybrid_lm import HybridRAMTransformerLM
+		return HybridRAMTransformerLM
+	if name == 'RAMFeatureExtractor':
+		from wnn.ram.core.models.ram_embedding import RAMFeatureExtractor
+		return RAMFeatureExtractor
+	if name == 'RAMTransformerLM':
+		from wnn.ram.core.models.ram_transformer_lm import RAMTransformerLM
+		return RAMTransformerLM
+
 	raise AttributeError(f"module 'wnn.ram.core.models' has no attribute '{name}'")
 
 
@@ -443,4 +457,9 @@ __all__ = [
 	'ModelsFactory',
 	# Language Models
 	'RAMLM',
+	# Hybrid / Transformer LMs
+	'TinyTransformerLM',
+	'HybridRAMTransformerLM',
+	'RAMFeatureExtractor',
+	'RAMTransformerLM',
 ]

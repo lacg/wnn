@@ -16,5 +16,8 @@ package-dir = {"" = "src"}
 where = ["src"]
 include = ["wnn*"]
 
+[project.optional-dependencies]
+hybrid = ["transformers>=4.30"]
+
 [project.scripts]
 wnn-exp = "wnn.ram.experiments.cli:main"

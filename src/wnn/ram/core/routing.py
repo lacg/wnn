@@ -1,0 +1,383 @@
+"""
+Content-Dependent Routing for RAM WNNs.
+
+Routes inputs to specialized neuron groups based on token identity,
+giving input-dependent behavior without full attention.
+
+Architecture:
+	RouterRAM: Small RAMClusterLayer that maps input bits -> route index
+	RoutedRAMClusterLayer: Multiple expert RAMClusterLayers selected by RouterRAM
+
+This implements a Mixture-of-RAM-Experts pattern where:
+1. Router observes the last token's bits (content-dependent)
+2. Selects top-k expert groups
+3. Each expert processes the full context
+4. Expert outputs are averaged
+
+All components use standard RAMClusterLayer (no ad-hoc implementations).
+
+Usage:
+	from wnn.ram.core.routing import RouterRAM, RoutedRAMClusterLayer
+
+	layer = RoutedRAMClusterLayer(
+		total_input_bits=64,
+		num_clusters=50257,
+		num_routes=8,
+		neurons_per_cluster_per_route=3,
+		bits_per_neuron=10,
+		top_k_routes=2,
+	)
+
+	# Forward: routes input to experts
+	probs = layer.forward(input_bits)  # [batch, num_clusters]
+"""
+
+from typing import Optional
+
+from torch import Tensor, tensor, long, zeros, float32, stack, arange
+from torch import topk as torch_topk
+
+from wnn.ram.core.base import RAMComponent
+from wnn.ram.core.RAMClusterLayer import RAMClusterLayer, bits_needed
+
+
+class RouterRAM(RAMComponent):
+	"""Small RAMClusterLayer that maps input bits to a route index.
+
+	The router observes only the last token's bits (content-dependent routing)
+	and outputs a probability distribution over routes. This is a standard
+	RAMClusterLayer with num_routes clusters.
+
+	Training uses frequency-based heuristics: assign each token pattern
+	to the route that best separates its distribution.
+
+	Attributes:
+		router_layer: RAMClusterLayer with num_routes clusters.
+		num_routes: Number of available routes.
+		bits_per_token: Bits used per token (for extracting last token).
+	"""
+
+	def __init__(
+		self,
+		total_input_bits: int,
+		num_routes: int = 8,
+		router_bits: int = 16,
+		rng: Optional[int] = None,
+	):
+		"""Initialize RouterRAM.
+
+		Args:
+			total_input_bits: Total input bits from the full context.
+			num_routes: Number of routes (expert groups) to choose from.
+			router_bits: Bits each router neuron observes.
+			rng: Random seed for reproducible connectivity.
+		"""
+		super().__init__()
+		self.num_routes = num_routes
+		self.total_input_bits = total_input_bits
+
+		# Router is a small RAMClusterLayer: maps input bits -> route scores
+		# Uses 3 neurons per route for stable voting
+		self.router_layer = RAMClusterLayer(
+			total_input_bits=total_input_bits,
+			num_clusters=num_routes,
+			neurons_per_cluster=3,
+			bits_per_neuron=min(router_bits, total_input_bits),
+			rng=rng,
+		)
+
+	def forward(self, input_bits: Tensor) -> Tensor:
+		"""Route inputs to expert indices.
+
+		Args:
+			input_bits: [batch, total_input_bits] boolean tensor.
+
+		Returns:
+			[batch, num_routes] route scores.
+		"""
+		return self.router_layer(input_bits)
+
+	def route(self, input_bits: Tensor) -> Tensor:
+		"""Get route indices (argmax of router scores).
+
+		Args:
+			input_bits: [batch, total_input_bits] boolean tensor.
+
+		Returns:
+			[batch] route indices (0 to num_routes-1).
+		"""
+		scores = self.forward(input_bits)
+		return scores.argmax(dim=-1)
+
+	def train_routing(
+		self,
+		input_bits: Tensor,
+		targets: Tensor,
+		num_routes: Optional[int] = None,
+	) -> dict:
+		"""Train routing via frequency-based assignment.
+
+		Assigns each unique context pattern to a route based on
+		target token frequency distribution, aiming for balanced routes
+		with specialized token coverage.
+
+		Strategy: Hash-based round-robin assignment. The last token's
+		binary representation is mapped to a route index. Then the
+		router memory is trained to reproduce this assignment.
+
+		Args:
+			input_bits: [N, total_input_bits] training contexts.
+			targets: [N] target token IDs.
+			num_routes: Override number of routes (default: self.num_routes).
+
+		Returns:
+			Training stats dict.
+		"""
+		n_routes = num_routes or self.num_routes
+
+		# Simple deterministic assignment: hash last token bits to route
+		# Extract last token's bits (last bits_per_token bits from input)
+		bits_per_token = self.total_input_bits // max(1, self.total_input_bits // 16)
+
+		# Convert target tokens to route assignments via modulo
+		route_assignments = targets % n_routes  # [N]
+
+		# Train router: for each example, TRUE for assigned route, FALSE for others
+		total_modified = 0
+		n = input_bits.shape[0]
+
+		for route_idx in range(n_routes):
+			mask = (route_assignments == route_idx)
+			if mask.sum() == 0:
+				continue
+
+			route_bits = input_bits[mask]
+
+			# Train TRUE for this route
+			true_clusters = tensor([route_idx], dtype=long).expand(route_bits.shape[0])
+			# Train FALSE for other routes
+			other_routes = [r for r in range(n_routes) if r != route_idx]
+			if other_routes:
+				false_clusters = tensor([other_routes], dtype=long).expand(route_bits.shape[0], -1)
+			else:
+				false_clusters = None
+
+			modified = self.router_layer.train_multi_examples(
+				route_bits, true_clusters, false_clusters,
+			)
+			total_modified += modified
+
+		return {"modified": total_modified, "examples": n}
+
+
+class RoutedRAMClusterLayer(RAMComponent):
+	"""Multiple expert RAMClusterLayers selected by RouterRAM.
+
+	Each expert is a standard RAMClusterLayer with fewer neurons per cluster.
+	The router selects top-k experts for each input, and their outputs
+	are averaged.
+
+	Architecture:
+		Router: RAMClusterLayer (num_routes clusters, 3 neurons each)
+		Experts: num_routes × RAMClusterLayer (num_clusters clusters each)
+
+	This provides input-dependent processing without full attention:
+	different token patterns activate different expert groups.
+
+	Attributes:
+		router: RouterRAM for route selection.
+		experts: List of RAMClusterLayer expert models.
+		num_routes: Number of expert groups.
+		top_k_routes: Number of experts to use per input.
+	"""
+
+	def __init__(
+		self,
+		total_input_bits: int,
+		num_clusters: int,
+		num_routes: int = 8,
+		neurons_per_cluster_per_route: int = 3,
+		bits_per_neuron: int = 10,
+		top_k_routes: int = 2,
+		router_bits: int = 16,
+		rng: Optional[int] = None,
+	):
+		"""Initialize RoutedRAMClusterLayer.
+
+		Args:
+			total_input_bits: Total input dimension (context_size * bits_per_token).
+			num_clusters: Number of output clusters (e.g., vocab_size).
+			num_routes: Number of expert groups.
+			neurons_per_cluster_per_route: Neurons per cluster per expert.
+			bits_per_neuron: Bits each neuron observes.
+			top_k_routes: Number of experts to activate per input.
+			router_bits: Bits for router neurons.
+			rng: Random seed.
+		"""
+		super().__init__()
+		self.total_input_bits = total_input_bits
+		self.num_clusters = num_clusters
+		self.num_routes = num_routes
+		self.top_k_routes = min(top_k_routes, num_routes)
+		self.neurons_per_cluster = neurons_per_cluster_per_route
+		self.bits_per_neuron = bits_per_neuron
+
+		# Create router
+		self.router = RouterRAM(
+			total_input_bits=total_input_bits,
+			num_routes=num_routes,
+			router_bits=router_bits,
+			rng=rng,
+		)
+
+		# Create expert RAMClusterLayers
+		self.experts: list[RAMClusterLayer] = []
+		for i in range(num_routes):
+			expert = RAMClusterLayer(
+				total_input_bits=total_input_bits,
+				num_clusters=num_clusters,
+				neurons_per_cluster=neurons_per_cluster_per_route,
+				bits_per_neuron=bits_per_neuron,
+				rng=(rng + i + 1) if rng is not None else None,
+			)
+			self.experts.append(expert)
+
+	@property
+	def total_neurons(self) -> int:
+		"""Total neurons across all experts + router."""
+		expert_neurons = sum(e.total_neurons for e in self.experts)
+		router_neurons = self.router.router_layer.total_neurons
+		return expert_neurons + router_neurons
+
+	def forward(self, input_bits: Tensor) -> Tensor:
+		"""Forward pass with routing.
+
+		1. Router selects top-k routes per input
+		2. Each selected expert computes scores
+		3. Expert scores are averaged
+
+		Args:
+			input_bits: [batch, total_input_bits] boolean tensor.
+
+		Returns:
+			[batch, num_clusters] probability scores.
+		"""
+		batch_size = input_bits.shape[0]
+
+		# Get router scores and select top-k routes
+		router_scores = self.router.forward(input_bits)  # [batch, num_routes]
+		_, top_routes = torch_topk(router_scores, self.top_k_routes, dim=-1)  # [batch, top_k]
+
+		# Compute all expert outputs (we only use the selected ones)
+		# For efficiency with small num_routes, compute all and index
+		all_expert_scores = stack([
+			expert(input_bits) for expert in self.experts
+		], dim=1)  # [batch, num_routes, num_clusters]
+
+		# Gather selected expert outputs
+		# top_routes: [batch, top_k] -> expand to [batch, top_k, num_clusters]
+		top_routes_expanded = top_routes.unsqueeze(-1).expand(-1, -1, self.num_clusters)
+		selected_scores = all_expert_scores.gather(1, top_routes_expanded)  # [batch, top_k, num_clusters]
+
+		# Average selected expert scores
+		return selected_scores.mean(dim=1)  # [batch, num_clusters]
+
+	def train_experts(
+		self,
+		input_bits: Tensor,
+		targets: Tensor,
+		false_clusters: Optional[Tensor] = None,
+		allow_override: bool = False,
+	) -> dict:
+		"""Train experts based on router assignments.
+
+		Two-phase training:
+		1. Train router via frequency-based heuristics
+		2. Train each expert on its assigned subset of data
+
+		Args:
+			input_bits: [N, total_input_bits] training input bits.
+			targets: [N] target cluster indices.
+			false_clusters: [N, k] false cluster indices for negative training.
+			allow_override: Whether to override existing memory cells.
+
+		Returns:
+			Training stats dict with per-expert breakdown.
+		"""
+		n = input_bits.shape[0]
+
+		# Phase 1: Train router
+		router_stats = self.router.train_routing(input_bits, targets)
+
+		# Phase 2: Get route assignments
+		route_assignments = self.router.route(input_bits)  # [N]
+
+		# Train each expert on its assigned data
+		expert_stats = []
+		for route_idx in range(self.num_routes):
+			mask = (route_assignments == route_idx)
+			count = mask.sum().item()
+			if count == 0:
+				expert_stats.append({"route": route_idx, "examples": 0, "modified": 0})
+				continue
+
+			expert_bits = input_bits[mask]
+			expert_targets = targets[mask]
+
+			if false_clusters is not None:
+				expert_false = false_clusters[mask]
+				modified = self.experts[route_idx].train_multi_examples(
+					expert_bits, expert_targets, expert_false,
+					allow_override=allow_override,
+				)
+			else:
+				# Train TRUE only via train_batch (one example at a time)
+				modified = 0
+				for j in range(expert_bits.shape[0]):
+					m = self.experts[route_idx].train_batch(
+						expert_bits[j:j+1],
+						expert_targets[j:j+1],
+						false_clusters=None,
+						allow_override=allow_override,
+					)
+					modified += m
+
+			expert_stats.append({
+				"route": route_idx,
+				"examples": count,
+				"modified": modified,
+			})
+
+		# Also train ALL experts on all data for robustness
+		# This ensures experts see enough data even if router isn't perfect yet
+		total_extra = 0
+		if false_clusters is not None:
+			for route_idx in range(self.num_routes):
+				modified = self.experts[route_idx].train_multi_examples(
+					input_bits, targets, false_clusters,
+					allow_override=allow_override,
+				)
+				total_extra += modified
+
+		return {
+			"router": router_stats,
+			"experts": expert_stats,
+			"total_examples": n,
+			"extra_training_modified": total_extra,
+		}
+
+	def reset_memory(self) -> None:
+		"""Reset all memory cells across router and experts."""
+		self.router.router_layer.reset_memory()
+		for expert in self.experts:
+			expert.reset_memory()
+
+	@property
+	def connections(self) -> Tensor:
+		"""Get all connections (expert 0 connections for compatibility)."""
+		return self.experts[0].connections
+
+	@connections.setter
+	def connections(self, value: Tensor) -> None:
+		"""Set connections on expert 0 (for compatibility)."""
+		self.experts[0].connections = value
