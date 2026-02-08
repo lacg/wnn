@@ -153,75 +153,108 @@ def main():
 	)
 	print(f"  Total neurons: {routed_layer.total_neurons:,}")
 
-	# Train routed model
-	print("  Training routed model...")
-	t0 = time.time()
-
-	# Prepare training data
+	# Prepare training data (shared across routed model variants)
 	all_bits = baseline.encode_sequence(train_tokens)
 	targets = tensor(train_tokens[context_size:], dtype=long)
 
-	# Prepare false clusters (reduced to 50 negatives to avoid OOM with 8 experts)
+	# Prepare false clusters (50 negatives to keep memory manageable with 8 experts)
 	counts = Counter(train_tokens)
 	top_k_tokens = [t for t, _ in counts.most_common(50)]
 	false_clusters_base = tensor(top_k_tokens, dtype=long)
 
-	# Train in batches to control peak memory (8 experts × full dataset = too much)
 	train_batch_size = 50000
 	total_examples = all_bits.shape[0]
 	num_batches = (total_examples + train_batch_size - 1) // train_batch_size
 
-	for batch_idx in range(num_batches):
-		start = batch_idx * train_batch_size
-		end = min(start + train_batch_size, total_examples)
-		batch_bits = all_bits[start:end]
-		batch_targets = targets[start:end]
-		batch_false = false_clusters_base.unsqueeze(0).expand(end - start, -1).contiguous()
+	def train_routed_batched(routed_layer, extra_training):
+		"""Train routed model in batches to control peak memory."""
+		for batch_idx in range(num_batches):
+			start = batch_idx * train_batch_size
+			end = min(start + train_batch_size, total_examples)
+			batch_bits = all_bits[start:end]
+			batch_targets = targets[start:end]
+			batch_false = false_clusters_base.unsqueeze(0).expand(end - start, -1).contiguous()
 
-		routed_layer.train_experts(
-			batch_bits, batch_targets, batch_false,
-			extra_training=False,  # Specialized experts, not generalists
-		)
-		if (batch_idx + 1) % 10 == 0:
-			print(f"    Batch {batch_idx + 1}/{num_batches}")
+			routed_layer.train_experts(
+				batch_bits, batch_targets, batch_false,
+				extra_training=extra_training,
+			)
+			if (batch_idx + 1) % 10 == 0:
+				print(f"    Batch {batch_idx + 1}/{num_batches}")
 
+	# --- Routed Model A: Specialized (no extra training) ---
+	print("  Training specialized routed model (extra_training=False)...")
+	t0 = time.time()
+	train_routed_batched(routed_layer, extra_training=False)
 	routed_train_time = time.time() - t0
 	print(f"  Training: {routed_train_time:.1f}s")
 
-	# Evaluate routed model
-	print("  Evaluating routed model...")
+	print("  Evaluating specialized routed model...")
 	t0 = time.time()
 	routed_stats = evaluate_routed_model(baseline, routed_layer, val_tokens)
 	routed_eval_time = time.time() - t0
 	print(f"  Evaluation: {routed_eval_time:.1f}s")
 
+	# --- Routed Model B: Generalist (with extra training) ---
+	print(f"\n--- Routed Model B: Generalist ({args.num_routes} routes, top-{args.top_k}, extra_training=True) ---")
+	routed_gen = RoutedRAMClusterLayer(
+		total_input_bits=total_input_bits,
+		num_clusters=vocab_size,
+		num_routes=args.num_routes,
+		neurons_per_cluster_per_route=args.neurons_per_route,
+		bits_per_neuron=args.bits_per_neuron,
+		top_k_routes=args.top_k,
+	)
+	print("  Training generalist routed model (extra_training=True)...")
+	t0 = time.time()
+	train_routed_batched(routed_gen, extra_training=True)
+	routed_gen_train_time = time.time() - t0
+	print(f"  Training: {routed_gen_train_time:.1f}s")
+
+	print("  Evaluating generalist routed model...")
+	t0 = time.time()
+	routed_gen_stats = evaluate_routed_model(baseline, routed_gen, val_tokens)
+	routed_gen_eval_time = time.time() - t0
+	print(f"  Evaluation: {routed_gen_eval_time:.1f}s")
+
 	# --- Comparison ---
 	print("\n" + "=" * 60)
 	print("COMPARISON")
 	print("=" * 60)
-	print(f"{'Metric':<20} {'Baseline':>15} {'Routed':>15} {'Delta':>15}")
+	print(f"{'Metric':<20} {'Baseline':>15} {'Specialized':>15} {'Generalist':>15}")
 	print("-" * 65)
 
 	b_ce = baseline_stats['cross_entropy']
 	r_ce = routed_stats['cross_entropy']
-	print(f"{'Cross-Entropy':<20} {b_ce:>15.4f} {r_ce:>15.4f} {r_ce - b_ce:>+15.4f}")
+	g_ce = routed_gen_stats['cross_entropy']
+	print(f"{'Cross-Entropy':<20} {b_ce:>15.4f} {r_ce:>15.4f} {g_ce:>15.4f}")
 
 	b_ppl = baseline_stats['perplexity']
 	r_ppl = routed_stats['perplexity']
-	print(f"{'Perplexity':<20} {b_ppl:>15.2f} {r_ppl:>15.2f} {r_ppl - b_ppl:>+15.2f}")
+	g_ppl = routed_gen_stats['perplexity']
+	print(f"{'Perplexity':<20} {b_ppl:>15.2f} {r_ppl:>15.2f} {g_ppl:>15.2f}")
 
 	b_acc = baseline_stats['accuracy']
 	r_acc = routed_stats['accuracy']
-	print(f"{'Accuracy':<20} {b_acc:>15.2%} {r_acc:>15.2%} {r_acc - b_acc:>+15.2%}")
+	g_acc = routed_gen_stats['accuracy']
+	print(f"{'Accuracy':<20} {b_acc:>15.2%} {r_acc:>15.2%} {g_acc:>15.2%}")
 
 	b_neurons = baseline.layer.total_neurons
 	r_neurons = routed_layer.total_neurons
-	print(f"{'Total Neurons':<20} {b_neurons:>15,} {r_neurons:>15,}")
+	print(f"{'Total Neurons':<20} {b_neurons:>15,} {r_neurons:>15,} {routed_gen.total_neurons:>15,}")
 
-	# Per-route distribution
+	# Per-route distribution (specialized)
 	if "route_distribution" in routed_stats:
-		print(f"\nRoute Distribution:")
+		print(f"\nRoute Distribution (Specialized):")
 		rd = routed_stats["route_distribution"]
+		total = sum(rd.values())
+		for route, count in sorted(rd.items()):
+			print(f"  Route {route}: {count:,} ({count/total:.1%})")
+
+	# Per-route distribution (generalist)
+	if "route_distribution" in routed_gen_stats:
+		print(f"\nRoute Distribution (Generalist):")
+		rd = routed_gen_stats["route_distribution"]
 		total = sum(rd.values())
 		for route, count in sorted(rd.items()):
 			print(f"  Route {route}: {count:,} ({count/total:.1%})")
@@ -246,18 +279,33 @@ def main():
 			"total_neurons": b_neurons,
 			"train_time_s": round(baseline_train_time, 1),
 		},
-		"routed": {
+		"routed_specialized": {
 			"cross_entropy": round(r_ce, 4),
 			"perplexity": round(r_ppl, 2),
 			"accuracy": round(r_acc, 4),
 			"total_neurons": r_neurons,
 			"train_time_s": round(routed_train_time, 1),
 			"route_distribution": routed_stats.get("route_distribution", {}),
+			"extra_training": False,
 		},
-		"delta": {
+		"routed_generalist": {
+			"cross_entropy": round(g_ce, 4),
+			"perplexity": round(g_ppl, 2),
+			"accuracy": round(g_acc, 4),
+			"total_neurons": routed_gen.total_neurons,
+			"train_time_s": round(routed_gen_train_time, 1),
+			"route_distribution": routed_gen_stats.get("route_distribution", {}),
+			"extra_training": True,
+		},
+		"delta_specialized": {
 			"cross_entropy": round(r_ce - b_ce, 4),
 			"perplexity": round(r_ppl - b_ppl, 2),
 			"accuracy": round(r_acc - b_acc, 4),
+		},
+		"delta_generalist": {
+			"cross_entropy": round(g_ce - b_ce, 4),
+			"perplexity": round(g_ppl - b_ppl, 2),
+			"accuracy": round(g_acc - b_acc, 4),
 		},
 	}
 
