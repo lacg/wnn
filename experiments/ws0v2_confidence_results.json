@@ -1,0 +1,424 @@
+{
+  "experiment": "WS0_confidence_analysis_v2",
+  "model_config": {
+    "vocab_size": 50257,
+    "context_size": 4,
+    "pad_token_id": 50256,
+    "tiers": [
+      [
+        100,
+        15,
+        20
+      ],
+      [
+        400,
+        10,
+        12
+      ],
+      [
+        null,
+        5,
+        8
+      ]
+    ],
+    "cluster_order": "<list of 50257 items>"
+  },
+  "dataset": "wikitext-2-raw-v1",
+  "split": "validation",
+  "total_examples": 251044,
+  "analysis_time_s": 390.5,
+  "summary": {
+    "overall_accuracy": 0.048306273003935564,
+    "avg_full_entropy": 10.789560109300457,
+    "avg_sparse_entropy": 9.812030236653154,
+    "avg_score_margin": 0.0,
+    "avg_true_count_ratio": 1.0,
+    "avg_num_nonzero_clusters": 19035.307583531176
+  },
+  "distributions": {
+    "full_entropy": {
+      "min": 10.760612487792969,
+      "p25": 10.78254508972168,
+      "median": 10.789592742919922,
+      "p75": 10.796616554260254,
+      "max": 10.820613861083984,
+      "mean": 10.789560109300457
+    },
+    "sparse_entropy": {
+      "min": 8.536735534667969,
+      "p25": 9.728494644165039,
+      "median": 9.838321685791016,
+      "p75": 9.925324440002441,
+      "max": 10.124427795410156,
+      "mean": 9.812030236653154
+    },
+    "score_margin": {
+      "min": 0.0,
+      "p25": 0.0,
+      "median": 0.0,
+      "p75": 0.0,
+      "max": 0.0,
+      "mean": 0.0
+    },
+    "true_count_ratio": {
+      "min": 1.0,
+      "p25": 1.0,
+      "median": 1.0,
+      "p75": 1.0,
+      "max": 1.0,
+      "mean": 1.0
+    },
+    "num_nonzero_clusters": {
+      "min": 5140,
+      "p25": 17240,
+      "median": 19318,
+      "p75": 21151,
+      "max": 26053,
+      "mean": 19035.307583531176
+    }
+  },
+  "metric_sweeps": {
+    "full_entropy": [
+      {
+        "threshold": 10.760612487792969,
+        "coverage": 0.0,
+        "accuracy_confident": 0.0,
+        "ce_confident": Infinity,
+        "accuracy_fallback": 0.0483,
+        "ce_fallback": 10.2173
+      },
+      {
+        "threshold": 10.763770454808286,
+        "coverage": 0.0005,
+        "accuracy_confident": 0.0,
+        "ce_confident": 10.2484,
+        "accuracy_fallback": 0.0483,
+        "ce_fallback": 10.2173
+      },
+      {
+        "threshold": 10.766928421823602,
+        "coverage": 0.0043,
+        "accuracy_confident": 0.0,
+        "ce_confident": 10.2548,
+        "accuracy_fallback": 0.0485,
+        "ce_fallback": 10.2172
+      },
+      {
+        "threshold": 10.77008638883892,
+        "coverage": 0.021,
+        "accuracy_confident": 0.008,
+        "ce_confident": 10.2329,
+        "accuracy_fallback": 0.0492,
+        "ce_fallback": 10.217
+      },
+      {
+        "threshold": 10.773244355854235,
+        "coverage": 0.0498,
+        "accuracy_confident": 0.0115,
+        "ce_confident": 10.2265,
+        "accuracy_fallback": 0.0502,
+        "ce_fallback": 10.2169
+      },
+      {
+        "threshold": 10.776402322869552,
+        "coverage": 0.0937,
+        "accuracy_confident": 0.0153,
+        "ce_confident": 10.226,
+        "accuracy_fallback": 0.0517,
+        "ce_fallback": 10.2164
+      },
+      {
+        "threshold": 10.779560289884868,
+        "coverage": 0.168,
+        "accuracy_confident": 0.0559,
+        "ce_confident": 10.2162,
+        "accuracy_fallback": 0.0468,
+        "ce_fallback": 10.2176
+      },
+      {
+        "threshold": 10.782718256900186,
+        "coverage": 0.2552,
+        "accuracy_confident": 0.0572,
+        "ce_confident": 10.2165,
+        "accuracy_fallback": 0.0452,
+        "ce_fallback": 10.2176
+      },
+      {
+        "threshold": 10.785876223915501,
+        "coverage": 0.3621,
+        "accuracy_confident": 0.06,
+        "ce_confident": 10.2147,
+        "accuracy_fallback": 0.0417,
+        "ce_fallback": 10.2188
+      },
+      {
+        "threshold": 10.789034190930819,
+        "coverage": 0.4789,
+        "accuracy_confident": 0.0588,
+        "ce_confident": 10.2125,
+        "accuracy_fallback": 0.0387,
+        "ce_fallback": 10.2218
+      },
+      {
+        "threshold": 10.792192157946134,
+        "coverage": 0.5971,
+        "accuracy_confident": 0.0565,
+        "ce_confident": 10.2122,
+        "accuracy_fallback": 0.0361,
+        "ce_fallback": 10.225
+      },
+      {
+        "threshold": 10.795350124961452,
+        "coverage": 0.7083,
+        "accuracy_confident": 0.0537,
+        "ce_confident": 10.2121,
+        "accuracy_fallback": 0.0352,
+        "ce_fallback": 10.2302
+      },
+      {
+        "threshold": 10.798508091976768,
+        "coverage": 0.8064,
+        "accuracy_confident": 0.0513,
+        "ce_confident": 10.213,
+        "accuracy_fallback": 0.0359,
+        "ce_fallback": 10.2356
+      },
+      {
+        "threshold": 10.801666058992085,
+        "coverage": 0.8837,
+        "accuracy_confident": 0.0499,
+        "ce_confident": 10.214,
+        "accuracy_fallback": 0.0359,
+        "ce_fallback": 10.243
+      },
+      {
+        "threshold": 10.8048240260074,
+        "coverage": 0.9396,
+        "accuracy_confident": 0.049,
+        "ce_confident": 10.2149,
+        "accuracy_fallback": 0.0374,
+        "ce_fallback": 10.2548
+      },
+      {
+        "threshold": 10.807981993022718,
+        "coverage": 0.9736,
+        "accuracy_confident": 0.0485,
+        "ce_confident": 10.2161,
+        "accuracy_fallback": 0.0424,
+        "ce_fallback": 10.2625
+      },
+      {
+        "threshold": 10.811139960038034,
+        "coverage": 0.9914,
+        "accuracy_confident": 0.0484,
+        "ce_confident": 10.2168,
+        "accuracy_fallback": 0.0346,
+        "ce_fallback": 10.2801
+      },
+      {
+        "threshold": 10.814297927053351,
+        "coverage": 0.9983,
+        "accuracy_confident": 0.0484,
+        "ce_confident": 10.2172,
+        "accuracy_fallback": 0.0205,
+        "ce_fallback": 10.3053
+      },
+      {
+        "threshold": 10.817455894068667,
+        "coverage": 0.9998,
+        "accuracy_confident": 0.0483,
+        "ce_confident": 10.2173,
+        "accuracy_fallback": 0.0,
+        "ce_fallback": 10.3413
+      },
+      {
+        "threshold": 10.820613861083984,
+        "coverage": 1.0,
+        "accuracy_confident": 0.0483,
+        "ce_confident": 10.2173,
+        "accuracy_fallback": 0.0,
+        "ce_fallback": 10.1543
+      }
+    ],
+    "sparse_entropy": [
+      {
+        "threshold": 8.536735534667969,
+        "coverage": 0.0,
+        "accuracy_confident": 0.0,
+        "ce_confident": Infinity,
+        "accuracy_fallback": 0.0483,
+        "ce_fallback": 10.2173
+      },
+      {
+        "threshold": 8.620298285233346,
+        "coverage": 0.0,
+        "accuracy_confident": 0.0,
+        "ce_confident": 10.1543,
+        "accuracy_fallback": 0.0483,
+        "ce_fallback": 10.2173
+      },
+      {
+        "threshold": 8.703861035798726,
+        "coverage": 0.0,
+        "accuracy_confident": 0.0,
+        "ce_confident": 10.1543,
+        "accuracy_fallback": 0.0483,
+        "ce_fallback": 10.2173
+      },
+      {
+        "threshold": 8.787423786364103,
+        "coverage": 0.0,
+        "accuracy_confident": 0.0,
+        "ce_confident": 10.2953,
+        "accuracy_fallback": 0.0483,
+        "ce_fallback": 10.2173
+      },
+      {
+        "threshold": 8.870986536929482,
+        "coverage": 0.0001,
+        "accuracy_confident": 0.0,
+        "ce_confident": 10.3336,
+        "accuracy_fallback": 0.0483,
+        "ce_fallback": 10.2173
+      },
+      {
+        "threshold": 8.95454928749486,
+        "coverage": 0.0002,
+        "accuracy_confident": 0.0,
+        "ce_confident": 10.3762,
+        "accuracy_fallback": 0.0483,
+        "ce_fallback": 10.2173
+      },
+      {
+        "threshold": 9.038112038060238,
+        "coverage": 0.0005,
+        "accuracy_confident": 0.0175,
+        "ce_confident": 10.3476,
+        "accuracy_fallback": 0.0483,
+        "ce_fallback": 10.2173
+      },
+      {
+        "threshold": 9.121674788625617,
+        "coverage": 0.0011,
+        "accuracy_confident": 0.0109,
+        "ce_confident": 10.3275,
+        "accuracy_fallback": 0.0483,
+        "ce_fallback": 10.2172
+      },
+      {
+        "threshold": 9.205237539190994,
+        "coverage": 0.0025,
+        "accuracy_confident": 0.0252,
+        "ce_confident": 10.2962,
+        "accuracy_fallback": 0.0484,
+        "ce_fallback": 10.2171
+      },
+      {
+        "threshold": 9.288800289756374,
+        "coverage": 0.0057,
+        "accuracy_confident": 0.0264,
+        "ce_confident": 10.2828,
+        "accuracy_fallback": 0.0484,
+        "ce_fallback": 10.217
+      },
+      {
+        "threshold": 9.372363040321751,
+        "coverage": 0.0128,
+        "accuracy_confident": 0.0374,
+        "ce_confident": 10.2734,
+        "accuracy_fallback": 0.0484,
+        "ce_fallback": 10.2166
+      },
+      {
+        "threshold": 9.45592579088713,
+        "coverage": 0.028,
+        "accuracy_confident": 0.0418,
+        "ce_confident": 10.2618,
+        "accuracy_fallback": 0.0485,
+        "ce_fallback": 10.2161
+      },
+      {
+        "threshold": 9.539488541452508,
+        "coverage": 0.0576,
+        "accuracy_confident": 0.0392,
+        "ce_confident": 10.2552,
+        "accuracy_fallback": 0.0489,
+        "ce_fallback": 10.215
+      },
+      {
+        "threshold": 9.623051292017887,
+        "coverage": 0.1142,
+        "accuracy_confident": 0.0374,
+        "ce_confident": 10.2409,
+        "accuracy_fallback": 0.0497,
+        "ce_fallback": 10.2143
+      },
+      {
+        "threshold": 9.706614042583265,
+        "coverage": 0.2137,
+        "accuracy_confident": 0.0369,
+        "ce_confident": 10.2331,
+        "accuracy_fallback": 0.0514,
+        "ce_fallback": 10.2131
+      },
+      {
+        "threshold": 9.790176793148643,
+        "coverage": 0.3757,
+        "accuracy_confident": 0.0371,
+        "ce_confident": 10.2247,
+        "accuracy_fallback": 0.055,
+        "ce_fallback": 10.2129
+      },
+      {
+        "threshold": 9.873739543714022,
+        "coverage": 0.6007,
+        "accuracy_confident": 0.0415,
+        "ce_confident": 10.2187,
+        "accuracy_fallback": 0.0585,
+        "ce_fallback": 10.2153
+      },
+      {
+        "threshold": 9.9573022942794,
+        "coverage": 0.8395,
+        "accuracy_confident": 0.0477,
+        "ce_confident": 10.2168,
+        "accuracy_fallback": 0.0515,
+        "ce_fallback": 10.2201
+      },
+      {
+        "threshold": 10.040865044844779,
+        "coverage": 0.9848,
+        "accuracy_confident": 0.0486,
+        "ce_confident": 10.2167,
+        "accuracy_fallback": 0.0264,
+        "ce_fallback": 10.256
+      },
+      {
+        "threshold": 10.124427795410156,
+        "coverage": 1.0,
+        "accuracy_confident": 0.0483,
+        "ce_confident": 10.2173,
+        "accuracy_fallback": 0.0,
+        "ce_fallback": 10.152
+      }
+    ],
+    "score_margin": [],
+    "true_count_ratio": []
+  },
+  "metric_comparison": {
+    "full_entropy": {
+      "best_threshold": 10.820613861083984,
+      "coverage": 1.0,
+      "accuracy": 0.0483,
+      "ce": 10.2173,
+      "accuracy_lift": 1.0
+    },
+    "sparse_entropy": {
+      "best_threshold": 10.124427795410156,
+      "coverage": 1.0,
+      "accuracy": 0.0483,
+      "ce": 10.2173,
+      "accuracy_lift": 1.0
+    }
+  }
+}

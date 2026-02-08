@@ -283,6 +283,11 @@ dashboard/frontend/.svelte-kit/
 *.pfx
 dashboard/certs/
 
+# Xcode user-specific files
+xcuserdata/
+*.xcuserstate
+.swiftpm/
+
 # Node
 node_modules/
 *.db-shm
