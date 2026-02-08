@@ -95,7 +95,7 @@ class RouterRAM(RAMComponent):
 		Returns:
 			[batch, num_routes] route scores.
 		"""
-		return self.router_layer.forward_auto(input_bits)
+		return self.router_layer.forward(input_bits)
 
 	def route(self, input_bits: Tensor) -> Tensor:
 		"""Get route indices (argmax of router scores).
@@ -242,6 +242,11 @@ class RoutedRAMClusterLayer(RAMComponent):
 			)
 			self.experts.append(expert)
 
+		# Cached merged arrays for single-dispatch Metal evaluation
+		self._merged_connections = None
+		self._merged_memory = None
+		self._merged_dirty = True
+
 	@property
 	def total_neurons(self) -> int:
 		"""Total neurons across all experts + router."""
@@ -253,8 +258,8 @@ class RoutedRAMClusterLayer(RAMComponent):
 		"""Forward pass with routing.
 
 		1. Router selects top-k routes per input
-		2. Each selected expert computes scores
-		3. Expert scores are averaged
+		2. All experts evaluated in a single Metal GPU dispatch
+		3. Selected expert scores are averaged
 
 		Args:
 			input_bits: [batch, total_input_bits] boolean tensor.
@@ -268,12 +273,14 @@ class RoutedRAMClusterLayer(RAMComponent):
 		router_scores = self.router.forward(input_bits)  # [batch, num_routes]
 		_, top_routes = torch_topk(router_scores, self.top_k_routes, dim=-1)  # [batch, top_k]
 
-		# Compute all expert outputs (we only use the selected ones)
-		# For efficiency with small num_routes, compute all and index
-		# Use forward_auto() for Metal/Rust acceleration instead of default PyTorch path
-		all_expert_scores = stack([
-			expert.forward_auto(input_bits) for expert in self.experts
-		], dim=1)  # [batch, num_routes, num_clusters]
+		# Try merged single-dispatch evaluation (all experts at once)
+		all_expert_scores = self._forward_merged(input_bits)
+
+		if all_expert_scores is None:
+			# Fallback: sequential expert evaluation
+			all_expert_scores = stack([
+				expert.forward(input_bits) for expert in self.experts
+			], dim=1)  # [batch, num_routes, num_clusters]
 
 		# Gather selected expert outputs
 		# top_routes: [batch, top_k] -> expand to [batch, top_k, num_clusters]
@@ -282,6 +289,69 @@ class RoutedRAMClusterLayer(RAMComponent):
 
 		# Average selected expert scores
 		return selected_scores.mean(dim=1)  # [batch, num_clusters]
+
+	def _rebuild_merged_cache(self):
+		"""Rebuild cached merged arrays from all experts' data."""
+		import numpy as np
+		connections_list = [e.memory.connections.flatten().numpy() for e in self.experts]
+		memory_list = [e.memory.memory_words.flatten().numpy() for e in self.experts]
+		self._merged_connections = np.concatenate(connections_list)
+		self._merged_memory = np.concatenate(memory_list)
+		self._merged_dirty = False
+
+	def _forward_merged(self, input_bits: Tensor) -> Optional[Tensor]:
+		"""Evaluate all experts in a single Metal GPU dispatch.
+
+		Concatenates all experts' connections and memory into one virtual
+		layer with num_routes * num_clusters clusters, dispatches once,
+		then reshapes to [batch, num_routes, num_clusters].
+
+		Uses cached arrays (rebuilt only after training).
+		Returns None if Metal is not available (caller falls back to sequential).
+		"""
+		try:
+			import ram_accelerator
+		except ImportError:
+			return None
+
+		if not ram_accelerator.ramlm_metal_available():
+			return None
+
+		from torch import from_numpy, long as torch_long
+		import numpy as np
+
+		if input_bits.ndim == 1:
+			input_bits = input_bits.unsqueeze(0)
+
+		batch_size = input_bits.shape[0]
+		expert0 = self.experts[0]
+
+		# Use cached merged arrays (only rebuild after training)
+		if self._merged_dirty:
+			self._rebuild_merged_cache()
+
+		merged_num_clusters = self.num_clusters * self.num_routes
+		merged_total_neurons = merged_num_clusters * self.neurons_per_cluster
+
+		input_bits_np = input_bits.flatten().to(dtype=torch_long).numpy().astype(np.uint8)
+
+		# Single Metal dispatch for all experts
+		scores_flat = ram_accelerator.ramlm_forward_batch_metal_cached(
+			input_bits_np,
+			self._merged_connections,
+			self._merged_memory,
+			batch_size,
+			expert0.memory.total_input_bits,
+			merged_total_neurons,
+			expert0.memory.n_bits_per_neuron,
+			self.neurons_per_cluster,
+			merged_num_clusters,
+			expert0.memory.words_per_neuron,
+		)
+
+		# Reshape: [batch, routes * clusters] -> [batch, routes, clusters]
+		scores = from_numpy(np.array(scores_flat, dtype=np.float32))
+		return scores.view(batch_size, self.num_routes, self.num_clusters)
 
 	def train_experts(
 		self,
@@ -367,6 +437,9 @@ class RoutedRAMClusterLayer(RAMComponent):
 				)
 				total_extra += modified
 
+		# Invalidate merged cache (memory changed)
+		self._merged_dirty = True
+
 		return {
 			"router": router_stats,
 			"experts": expert_stats,
@@ -379,6 +452,7 @@ class RoutedRAMClusterLayer(RAMComponent):
 		self.router.router_layer.reset_memory()
 		for expert in self.experts:
 			expert.reset_memory()
+		self._merged_dirty = True
 
 	@property
 	def connections(self) -> Tensor:

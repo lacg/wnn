@@ -288,22 +288,40 @@ class RAMClusterLayer(RAMComponent):
 
 	def forward(self, input_bits: Tensor) -> Tensor:
 		"""
-		Forward pass returning scores per cluster (PyTorch implementation).
+		Forward pass with automatic backend selection.
 
-		If gating is enabled, scores are multiplied by gate values:
-			gated_scores = ungated_scores * gates
+		Picks the best backend based on memory type and batch size:
+		- Sparse memory (>10 bits): sparse forward path
+		- Dense + large batch (>1000): Metal GPU
+		- Dense + small batch: PyTorch
+
+		If gating is enabled, scores are multiplied by gate values.
 
 		Args:
 			input_bits: [batch, total_input_bits] boolean or 0/1 tensor
 
 		Returns:
 			[batch, num_clusters] float tensor of scores
-
-		Score formula (via PerplexityCalculator):
-			Score(cluster) = (count_TRUE + empty_value * count_EMPTY) / neurons_per_cluster
 		"""
-		# Get ungated scores
-		scores = self._forward_ungated(input_bits)
+		# Ensure 2D input
+		if input_bits.ndim == 1:
+			input_bits = input_bits.unsqueeze(0)
+
+		# Dispatch based on backend to get ungated scores
+		match self._backend:
+			case MemoryBackend.SPARSE:
+				scores = self.forward_sparse(input_bits)
+			case MemoryBackend.LSH:
+				scores = self.forward_lsh(input_bits)
+			case MemoryBackend.DENSE:
+				batch_size = input_bits.shape[0]
+				METAL_THRESHOLD = 1000
+				if batch_size < METAL_THRESHOLD:
+					scores = self._forward_ungated(input_bits)
+				else:
+					scores = self._forward_metal_cached(input_bits)
+			case _:
+				raise ValueError(f"Unknown backend: {self._backend}")
 
 		# Apply gating if enabled
 		if self.gating_model is not None:
@@ -362,70 +380,23 @@ class RAMClusterLayer(RAMComponent):
 
 		return true_counts, empty_counts
 
-	def forward_auto(self, input_bits: Tensor) -> Tensor:
-		"""
-		Auto-optimized forward pass that picks the best backend.
-
-		Automatically selects between:
-		- Sparse (forward_sparse): When using sparse memory backend (>10 bits)
-		- Metal GPU: Dense, large batches (>1000 examples)
-		- PyTorch: Dense, small batches
-
-		If gating is enabled, scores are multiplied by gate values after
-		the backend-specific forward pass.
-
-		This provides the best performance without manual backend selection.
-
-		Args:
-			input_bits: [batch, total_input_bits] boolean or 0/1 tensor
-
-		Returns:
-			[batch, num_clusters] float tensor of probabilities
-		"""
-		# Ensure 2D input
-		if input_bits.ndim == 1:
-			input_bits = input_bits.unsqueeze(0)
-
-		# Dispatch based on backend to get ungated scores
-		match self._backend:
-			case MemoryBackend.SPARSE:
-				scores = self.forward_sparse(input_bits)
-			case MemoryBackend.LSH:
-				scores = self.forward_lsh(input_bits)
-			case MemoryBackend.DENSE:
-				batch_size = input_bits.shape[0]
-				# Threshold determined by benchmarking on M4 Max
-				METAL_THRESHOLD = 1000
-
-				if batch_size < METAL_THRESHOLD:
-					scores = self._forward_ungated(input_bits)
-				else:
-					scores = self._forward_metal_cached(input_bits)
-			case _:
-				raise ValueError(f"Unknown backend: {self._backend}")
-
-		# Apply gating if enabled
-		if self.gating_model is not None:
-			gates = self.gating_model.forward(input_bits)  # [batch, num_clusters]
-			scores = scores * gates
-
-		return scores
 
 	def _forward_metal_cached(self, input_bits: Tensor) -> Tensor:
 		"""
 		Metal GPU forward with cached evaluator (internal use).
 
+		Returns ungated scores (gating applied by caller in forward()).
 		Uses a globally cached Metal evaluator to avoid shader recompilation.
 		"""
 		try:
 			import ram_accelerator
 		except ImportError:
-			# Fall back to PyTorch if Rust not available
-			return self.forward(input_bits)
+			# Fall back to PyTorch ungated (forward() applies gating)
+			return self._forward_ungated(input_bits)
 
 		if not ram_accelerator.ramlm_metal_available():
-			# Fall back to PyTorch if Metal not available
-			return self.forward(input_bits)
+			# Fall back to PyTorch ungated (forward() applies gating)
+			return self._forward_ungated(input_bits)
 
 		from torch import from_numpy
 		import numpy as np

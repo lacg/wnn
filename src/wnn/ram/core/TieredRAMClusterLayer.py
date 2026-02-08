@@ -336,20 +336,6 @@ class TieredRAMClusterLayer(RAMComponent):
 
 		return true_counts, empty_counts, neurons_per_cluster
 
-	def forward_auto(self, input_bits: Tensor) -> Tensor:
-		"""
-		Auto-optimized forward pass.
-
-		Uses sparse backend for >10 bits per neuron, otherwise standard forward.
-
-		Args:
-			input_bits: [batch, total_input_bits] boolean or 0/1 tensor
-
-		Returns:
-			[batch, num_clusters] float tensor of probabilities
-		"""
-		# forward() already handles sparse dispatch
-		return self.forward(input_bits)
 
 	def train_batch(
 		self,

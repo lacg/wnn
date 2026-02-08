@@ -396,9 +396,9 @@ class RAMLM(RAMComponent):
 		"""
 		match backend:
 			case AccelerationMode.AUTO:
-				return self.layer.forward_auto(input_bits)
+				return self.layer.forward(input_bits)
 			case AccelerationMode.PYTORCH:
-				return self.layer(input_bits)
+				return self.layer._forward_ungated(input_bits)
 			case AccelerationMode.CPU:
 				return self.layer.forward_rust(input_bits)
 			case AccelerationMode.METAL:
@@ -406,7 +406,7 @@ class RAMLM(RAMComponent):
 			case AccelerationMode.HYBRID:
 				return self.layer.forward_hybrid(input_bits)
 			case _:
-				return self.layer.forward_auto(input_bits)
+				return self.layer.forward(input_bits)
 
 	def predict_tokens(self, token_ids: list[int]) -> tuple[int, float]:
 		"""
