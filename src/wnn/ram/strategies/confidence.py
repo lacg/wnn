@@ -4,22 +4,24 @@ Confidence Analysis for RAM Language Models.
 Measures prediction confidence and cache hit rate to determine
 how useful RAM is as a "fast path" in a hybrid architecture.
 
-Key metrics:
-- Entropy: H = -sum(p*log(p)) measures uncertainty in predictions
-- Confidence: max(p) measures how dominant the top prediction is
-- Threshold sweep: finds optimal confidence cutoff for RAM vs fallback
+Three complementary confidence metrics:
+
+1. Sparse Entropy: Softmax only over non-zero clusters (those with at least
+   one TRUE neuron). Avoids dilution from 50K zero-score clusters.
+2. Score Margin: Gap between top-1 and top-2 raw scores. Bigger = more confident.
+3. TRUE Count Ratio: Fraction of neurons that voted TRUE for the winner vs
+   total non-empty neurons. Direct measure of evidence strength.
+
+The original full-softmax entropy is also computed for comparison, but it
+suffers from dilution: with 50K clusters where most score 0.0 (EMPTY=0.0),
+softmax maps them all to exp(0)/Z, producing near-maximum entropy regardless
+of actual RAM confidence.
 
 Usage:
 	from wnn.ram.strategies.confidence import ConfidenceAnalyzer
 
-	analyzer = ConfidenceAnalyzer()
 	report = analyzer.analyze_sequence(model, token_ids)
-	results = analyzer.sweep_thresholds(report)
-
-	# Find threshold where RAM covers >= 30% with good accuracy
-	for r in results:
-		if r.coverage >= 0.3 and r.accuracy > 0.10:
-			print(f"Threshold {r.threshold:.2f}: {r.coverage:.1%} coverage, {r.accuracy:.1%} acc")
+	results = analyzer.sweep_thresholds(report, metric='sparse_entropy')
 """
 
 from dataclasses import dataclass, field
@@ -34,20 +36,27 @@ from torch.nn.functional import softmax
 class ConfidenceReport:
 	"""Results from confidence analysis on a dataset.
 
-	Contains per-example entropy, confidence, correctness, and target probability
-	for analyzing RAM prediction quality.
+	Contains per-example metrics from multiple confidence measures.
 
 	Attributes:
-		entropies: H = -sum(p*log(p)) per example (nats). Lower = more confident.
-		confidences: max(p) per example. Higher = more confident.
+		entropies: Full-softmax entropy H = -sum(p*log(p)) per example (nats).
+		sparse_entropies: Entropy over non-zero clusters only (avoids dilution).
+		score_margins: top1_score - top2_score per example (raw score gap).
+		true_count_ratios: TRUE neurons for winner / total non-EMPTY neurons.
+		confidences: max(p) per example from full softmax.
 		is_correct: Whether argmax == target per example.
 		target_probs: P(target) per example (after softmax normalization).
+		num_nonzero_clusters: Count of clusters with score > 0 per example.
 		total: Number of examples analyzed.
 	"""
 	entropies: list[float] = field(default_factory=list)
+	sparse_entropies: list[float] = field(default_factory=list)
+	score_margins: list[float] = field(default_factory=list)
+	true_count_ratios: list[float] = field(default_factory=list)
 	confidences: list[float] = field(default_factory=list)
 	is_correct: list[bool] = field(default_factory=list)
 	target_probs: list[float] = field(default_factory=list)
+	num_nonzero_clusters: list[int] = field(default_factory=list)
 	total: int = 0
 
 
@@ -97,6 +106,69 @@ class ConfidenceAnalyzer:
 		eps = 1e-10
 		log_probs = (probs + eps).log()
 		return -(probs * log_probs).sum(dim=-1)
+
+	@staticmethod
+	def compute_sparse_entropy(scores: Tensor) -> Tensor:
+		"""Compute entropy over non-zero clusters only.
+
+		Applies softmax only to clusters with score > 0, avoiding the
+		dilution from thousands of zero-score (all-EMPTY) clusters.
+
+		Args:
+			scores: [batch, num_clusters] raw scores (before softmax).
+
+		Returns:
+			[batch] sparse entropy tensor (in nats).
+		"""
+		eps = 1e-10
+		batch_size = scores.shape[0]
+		result = zeros(batch_size, device=scores.device)
+
+		for i in range(batch_size):
+			nonzero_mask = scores[i] > 0
+			nz_count = nonzero_mask.sum().item()
+			if nz_count <= 1:
+				result[i] = 0.0  # 0 or 1 non-zero = no uncertainty
+				continue
+			nz_scores = scores[i][nonzero_mask]
+			nz_probs = softmax(nz_scores, dim=-1)
+			result[i] = -(nz_probs * (nz_probs + eps).log()).sum()
+
+		return result
+
+	@staticmethod
+	def compute_score_margin(scores: Tensor) -> Tensor:
+		"""Compute gap between top-1 and top-2 raw scores.
+
+		Larger margin = more confident prediction.
+
+		Args:
+			scores: [batch, num_clusters] raw scores.
+
+		Returns:
+			[batch] score margin tensor.
+		"""
+		if scores.shape[1] < 2:
+			return zeros(scores.shape[0], device=scores.device)
+		top2 = scores.topk(2, dim=-1).values  # [batch, 2]
+		return top2[:, 0] - top2[:, 1]
+
+	@staticmethod
+	def compute_true_count_ratio(scores: Tensor, neurons_per_cluster: int) -> Tensor:
+		"""Compute TRUE neuron ratio for the winning cluster.
+
+		Score = count_TRUE / neurons_per_cluster (with empty_value=0.0).
+		This directly measures evidence strength.
+
+		Args:
+			scores: [batch, num_clusters] raw scores.
+			neurons_per_cluster: Neurons per cluster (for interpreting scores).
+
+		Returns:
+			[batch] ratio of TRUE neurons for the winner.
+		"""
+		top_scores = scores.max(dim=-1).values
+		return top_scores
 
 	@staticmethod
 	def analyze_sequence(
@@ -153,28 +225,40 @@ class ConfidenceAnalyzer:
 			# Forward pass -> raw scores
 			scores = model.forward(batch_bits, backend=backend)
 
-			# Softmax normalize to get proper probabilities
+			# --- Metric 1: Full-softmax entropy (original) ---
 			probs = softmax(scores, dim=-1)
-
-			# Compute entropy per example
 			batch_entropies = ConfidenceAnalyzer.compute_entropy(probs)
 
-			# Get max probability (confidence) per example
-			batch_confidences = probs.max(dim=-1).values
+			# --- Metric 2: Sparse entropy (non-zero clusters only) ---
+			batch_sparse_entropies = ConfidenceAnalyzer.compute_sparse_entropy(scores)
 
-			# Get target probabilities
+			# --- Metric 3: Score margin (top1 - top2 raw scores) ---
+			batch_margins = ConfidenceAnalyzer.compute_score_margin(scores)
+
+			# --- Metric 4: TRUE count ratio (winner's score) ---
+			batch_true_ratios = ConfidenceAnalyzer.compute_true_count_ratio(scores, 0)
+
+			# Count non-zero clusters per example
+			batch_nonzero = (scores > 0).sum(dim=-1)
+
+			# Full-softmax confidence and target probs
+			batch_confidences = probs.max(dim=-1).values
 			batch_indices = arange(end - start, device=scores.device)
 			batch_target_probs = probs[batch_indices, batch_targets]
 
-			# Check correctness
-			predicted = probs.argmax(dim=-1)
+			# Correctness (argmax of raw scores = same as argmax of softmax)
+			predicted = scores.argmax(dim=-1)
 			batch_correct = (predicted == batch_targets)
 
-			# Accumulate results
+			# Accumulate all metrics
 			report.entropies.extend(batch_entropies.tolist())
+			report.sparse_entropies.extend(batch_sparse_entropies.tolist())
+			report.score_margins.extend(batch_margins.tolist())
+			report.true_count_ratios.extend(batch_true_ratios.tolist())
 			report.confidences.extend(batch_confidences.tolist())
 			report.is_correct.extend(batch_correct.tolist())
 			report.target_probs.extend(batch_target_probs.tolist())
+			report.num_nonzero_clusters.extend(batch_nonzero.tolist())
 
 			if verbose and (batch_idx + 1) % max(1, num_batches // 5) == 0:
 				pct = (end / total_examples) * 100
@@ -184,11 +268,17 @@ class ConfidenceAnalyzer:
 
 		if verbose:
 			avg_entropy = sum(report.entropies) / len(report.entropies)
-			avg_confidence = sum(report.confidences) / len(report.confidences)
+			avg_sparse = sum(report.sparse_entropies) / len(report.sparse_entropies)
+			avg_margin = sum(report.score_margins) / len(report.score_margins)
+			avg_true_ratio = sum(report.true_count_ratios) / len(report.true_count_ratios)
+			avg_nonzero = sum(report.num_nonzero_clusters) / len(report.num_nonzero_clusters)
 			overall_acc = sum(report.is_correct) / len(report.is_correct)
-			print(f"  Average entropy: {avg_entropy:.4f}")
-			print(f"  Average confidence: {avg_confidence:.6f}")
-			print(f"  Overall accuracy: {overall_acc:.2%}")
+			print(f"  Full-softmax entropy: {avg_entropy:.4f} (max={max(report.entropies):.4f})")
+			print(f"  Sparse entropy:       {avg_sparse:.4f} (max={max(report.sparse_entropies):.4f})")
+			print(f"  Score margin:         {avg_margin:.4f} (max={max(report.score_margins):.4f})")
+			print(f"  TRUE count ratio:     {avg_true_ratio:.4f} (max={max(report.true_count_ratios):.4f})")
+			print(f"  Avg non-zero clusters: {avg_nonzero:.0f}")
+			print(f"  Overall accuracy:     {overall_acc:.2%}")
 
 		return report
 
@@ -196,33 +286,60 @@ class ConfidenceAnalyzer:
 	def sweep_thresholds(
 		report: ConfidenceReport,
 		thresholds: Optional[list[float]] = None,
+		metric: str = 'sparse_entropy',
 	) -> list[ThresholdResult]:
-		"""Sweep entropy thresholds to find optimal RAM/transformer partition.
+		"""Sweep thresholds to find optimal RAM/transformer partition.
 
 		For each threshold, partitions examples into:
-		- Confident (entropy < threshold): RAM handles these
-		- Uncertain (entropy >= threshold): Transformer handles these
+		- Confident (metric_value < threshold for entropy metrics,
+		  metric_value > threshold for margin/ratio metrics): RAM handles
+		- Uncertain: Transformer handles
 
 		Args:
 			report: ConfidenceReport from analyze_sequence.
-			thresholds: List of entropy thresholds to try.
-				Default covers a wide range from very selective to very permissive.
+			thresholds: List of threshold values to try. If None, auto-generates
+				appropriate range for the selected metric.
+			metric: Which confidence metric to use:
+				'full_entropy' - original full-softmax entropy (lower = more confident)
+				'sparse_entropy' - entropy over non-zero clusters (lower = more confident)
+				'score_margin' - top1-top2 score gap (higher = more confident)
+				'true_count_ratio' - winner's raw score (higher = more confident)
 
 		Returns:
 			List of ThresholdResult for each threshold, sorted by threshold.
 		"""
+		# Select metric values and direction
+		if metric == 'full_entropy':
+			values = report.entropies
+			lower_is_confident = True
+		elif metric == 'sparse_entropy':
+			values = report.sparse_entropies
+			lower_is_confident = True
+		elif metric == 'score_margin':
+			values = report.score_margins
+			lower_is_confident = False  # higher margin = more confident
+		elif metric == 'true_count_ratio':
+			values = report.true_count_ratios
+			lower_is_confident = False  # higher ratio = more confident
+		else:
+			raise ValueError(f"Unknown metric: {metric}")
+
+		# Auto-generate thresholds if not provided
 		if thresholds is None:
-			# Default sweep: from very selective (low entropy only) to permissive
-			thresholds = [
-				0.01, 0.05, 0.1, 0.2, 0.5, 1.0, 1.5, 2.0, 2.5,
-				3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 10.5, 10.8,
-			]
+			if not values:
+				return []
+			v_min = min(values)
+			v_max = max(values)
+			v_range = v_max - v_min
+			if v_range < 1e-8:
+				return []
+			# 20 evenly spaced thresholds across the data range
+			thresholds = [v_min + v_range * i / 19 for i in range(20)]
 
 		results = []
 		min_prob = 1e-10
 
 		for threshold in sorted(thresholds):
-			# Partition examples by entropy threshold
 			confident_correct = 0
 			confident_total = 0
 			confident_log_probs = []
@@ -232,12 +349,18 @@ class ConfidenceAnalyzer:
 			uncertain_log_probs = []
 
 			for i in range(report.total):
-				entropy = report.entropies[i]
+				value = values[i]
 				correct = report.is_correct[i]
 				target_prob = max(report.target_probs[i], min_prob)
 				lp = log(target_prob)
 
-				if entropy < threshold:
+				# Determine if this example is "confident"
+				if lower_is_confident:
+					is_confident = value < threshold
+				else:
+					is_confident = value > threshold
+
+				if is_confident:
 					confident_total += 1
 					confident_log_probs.append(lp)
 					if correct:
@@ -248,7 +371,6 @@ class ConfidenceAnalyzer:
 					if correct:
 						uncertain_correct += 1
 
-			# Compute metrics for each partition
 			coverage = confident_total / report.total if report.total > 0 else 0.0
 			accuracy = confident_correct / confident_total if confident_total > 0 else 0.0
 			avg_ce = -sum(confident_log_probs) / len(confident_log_probs) if confident_log_probs else float('inf')
