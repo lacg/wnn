@@ -52,8 +52,8 @@ class RAMTransformerLM(nn.Module):
 
 	@property
 	def ram_model(self):
-		"""Access the frozen RAM model (stored outside nn.Module hierarchy)."""
-		return self._ram_model[0]
+		"""Access the frozen RAM model via feature_extractor."""
+		return self.feature_extractor.ram_model
 
 	def __init__(
 		self,
@@ -82,18 +82,13 @@ class RAMTransformerLM(nn.Module):
 
 		from wnn.ram.core.models.ram_embedding import RAMFeatureExtractor
 
-		# Store RAM outside nn.Module hierarchy to keep it on CPU
-		self._ram_model = [ram_model]
 		self.vocab_size = ram_model.vocab_size
 		self.context_size = ram_model.context_size
 		self.feature_dim = feature_dim
 		self.max_seq_len = max_seq_len
 
-		if freeze_ram:
-			# RAM is not a nn.Module, but ensure we don't accidentally modify it
-			self._freeze_ram = True
-
-		# RAM feature extractor (projection is trainable)
+		# RAM feature extractor (projection is trainable, RAM stays on CPU
+		# via _apply() override in RAMFeatureExtractor)
 		self.feature_extractor = RAMFeatureExtractor(
 			ram_model, feature_dim=feature_dim, trainable_projection=True,
 		)
@@ -116,8 +111,9 @@ class RAMTransformerLM(nn.Module):
 		# Output head
 		self.output_head = nn.Linear(feature_dim, self.vocab_size)
 
-		# Move to device
-		self.device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+		# Move trainable components to best device
+		# RAMFeatureExtractor._apply() protects RAM from moving off CPU
+		self.device = self.feature_extractor.device
 		self.to(self.device)
 
 	def _causal_mask(self, seq_len: int) -> Tensor:

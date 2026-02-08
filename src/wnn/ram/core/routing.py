@@ -288,6 +288,7 @@ class RoutedRAMClusterLayer(RAMComponent):
 		targets: Tensor,
 		false_clusters: Optional[Tensor] = None,
 		allow_override: bool = False,
+		extra_training: bool = True,
 	) -> dict:
 		"""Train experts based on router assignments.
 
@@ -295,11 +296,16 @@ class RoutedRAMClusterLayer(RAMComponent):
 		1. Train router via frequency-based heuristics
 		2. Train each expert on its assigned subset of data
 
+		If extra_training is True, also trains ALL experts on ALL data
+		for robustness (useful early when router isn't accurate yet).
+		Disable after router converges to preserve specialization.
+
 		Args:
 			input_bits: [N, total_input_bits] training input bits.
 			targets: [N] target cluster indices.
 			false_clusters: [N, k] false cluster indices for negative training.
 			allow_override: Whether to override existing memory cells.
+			extra_training: Train all experts on all data for robustness.
 
 		Returns:
 			Training stats dict with per-expert breakdown.
@@ -348,10 +354,11 @@ class RoutedRAMClusterLayer(RAMComponent):
 				"modified": modified,
 			})
 
-		# Also train ALL experts on all data for robustness
-		# This ensures experts see enough data even if router isn't perfect yet
+		# Optionally train ALL experts on all data for robustness.
+		# Useful early when router isn't accurate. Disable after convergence
+		# to preserve per-route specialization.
 		total_extra = 0
-		if false_clusters is not None:
+		if extra_training and false_clusters is not None:
 			for route_idx in range(self.num_routes):
 				modified = self.experts[route_idx].train_multi_examples(
 					input_bits, targets, false_clusters,
