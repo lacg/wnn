@@ -170,6 +170,15 @@ class TieredRAMClusterLayer(RAMComponent):
 			tc.total_neurons * tc.memory_size for tc in self.tier_configs
 		)
 
+		# Build fast lookup arrays for sparse path cluster remapping
+		# _phys_to_logical_np[token_id] = logical_index (frequency-ordered position)
+		import numpy as np
+		self._phys_to_logical_np = np.array([
+			self._physical_to_logical[i] for i in range(num_clusters)
+		], dtype=np.int64)
+		# _phys_to_logical_idx[token_id] = logical_index (as torch tensor for scatter)
+		self._phys_to_logical_idx = Tensor(self._phys_to_logical_np).long()
+
 		# Check if any tier needs sparse backend (>10 bits)
 		self._use_sparse = any(tc.bits_per_neuron > 10 for tc in self.tier_configs)
 		self._sparse_memory = None
@@ -761,10 +770,16 @@ class TieredRAMClusterLayer(RAMComponent):
 		num_examples = input_bits.shape[0]
 		num_negatives = false_clusters.shape[1]
 
+		# Remap physical cluster IDs (token IDs) to logical (frequency-ordered) indices.
+		# The Rust sparse memory assigns tiers by cluster index, so we must pass
+		# logical indices so tier 0 = most frequent tokens, tier 1 = next, etc.
+		true_logical = self._phys_to_logical_np[true_clusters.numpy()]
+		false_logical = self._phys_to_logical_np[false_clusters.numpy().flatten()]
+
 		# Flatten inputs for Rust
 		input_bits_flat = input_bits.flatten().bool().tolist()
-		true_clusters_list = true_clusters.tolist()
-		false_clusters_flat = false_clusters.flatten().tolist()
+		true_clusters_list = true_logical.tolist()
+		false_clusters_flat = false_logical.tolist()
 
 		# Build flattened connections for ALL neurons across tiers
 		connections_list = []
@@ -830,8 +845,10 @@ class TieredRAMClusterLayer(RAMComponent):
 			self.total_input_bits,
 		)
 
-		# Convert numpy result to torch tensor (zero-copy when possible)
-		return from_numpy(probs_np).view(batch_size, self.num_clusters)
+		# Rust returns scores in logical (frequency-ordered) cluster order.
+		# Remap to physical (token ID) order: scores_phys[b, token_id] = scores_logical[b, logical_idx]
+		scores_logical = from_numpy(probs_np).view(batch_size, self.num_clusters)
+		return scores_logical[:, self._phys_to_logical_idx]
 
 	def reset_memory(self) -> None:
 		"""Reset all memory cells to EMPTY, preserving connectivity."""
