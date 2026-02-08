@@ -130,7 +130,7 @@ def main():
 	print(f"  Total neurons: {baseline.layer.total_neurons:,}")
 
 	t0 = time.time()
-	baseline.train_epoch_fast_auto(train_tokens, global_top_k=1000, batch_size=5000)
+	baseline.train_epoch_fast_auto(train_tokens, global_top_k=50, batch_size=5000)
 	baseline_train_time = time.time() - t0
 	print(f"  Training: {baseline_train_time:.1f}s")
 
@@ -161,12 +161,30 @@ def main():
 	all_bits = baseline.encode_sequence(train_tokens)
 	targets = tensor(train_tokens[context_size:], dtype=long)
 
-	# Prepare false clusters (global top-k)
+	# Prepare false clusters (reduced to 50 negatives to avoid OOM with 8 experts)
 	counts = Counter(train_tokens)
-	top_k_tokens = [t for t, _ in counts.most_common(1000)]
-	false_clusters = tensor([top_k_tokens], dtype=long).expand(all_bits.shape[0], -1)
+	top_k_tokens = [t for t, _ in counts.most_common(50)]
+	false_clusters_base = tensor(top_k_tokens, dtype=long)
 
-	routed_layer.train_experts(all_bits, targets, false_clusters)
+	# Train in batches to control peak memory (8 experts × full dataset = too much)
+	train_batch_size = 50000
+	total_examples = all_bits.shape[0]
+	num_batches = (total_examples + train_batch_size - 1) // train_batch_size
+
+	for batch_idx in range(num_batches):
+		start = batch_idx * train_batch_size
+		end = min(start + train_batch_size, total_examples)
+		batch_bits = all_bits[start:end]
+		batch_targets = targets[start:end]
+		batch_false = false_clusters_base.unsqueeze(0).expand(end - start, -1).contiguous()
+
+		routed_layer.train_experts(
+			batch_bits, batch_targets, batch_false,
+			extra_training=False,  # Specialized experts, not generalists
+		)
+		if (batch_idx + 1) % 10 == 0:
+			print(f"    Batch {batch_idx + 1}/{num_batches}")
+
 	routed_train_time = time.time() - t0
 	print(f"  Training: {routed_train_time:.1f}s")
 
