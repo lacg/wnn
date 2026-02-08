@@ -44,13 +44,16 @@ def load_wikitext2_tokens(split: str = "validation") -> list[int]:
 def create_ram_model(train_tokens: list[int]) -> RAMLM:
 	"""Create and train default RAMLM."""
 	counts = Counter(train_tokens)
-	sorted_tokens = [tok for tok, _ in counts.most_common()]
+	vocab_size = 50257
+	seen_tokens = set(t for t, _ in counts.most_common())
+	unseen_tokens = [t for t in range(vocab_size) if t not in seen_tokens]
+	cluster_order = [t for t, _ in counts.most_common()] + unseen_tokens
 
 	model = RAMLM(
-		vocab_size=50257,
+		vocab_size=vocab_size,
 		context_size=4,
 		tiers=[(100, 15, 20), (400, 10, 12), (None, 5, 8)],
-		cluster_order=sorted_tokens,
+		cluster_order=cluster_order,
 	)
 	print(f"\n{model}\n")
 	print("Training RAM model...")
