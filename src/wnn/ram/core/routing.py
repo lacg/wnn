@@ -1,7 +1,7 @@
 """
 Content-Dependent Routing for RAM WNNs.
 
-Routes inputs to specialized neuron groups based on token identity,
+Routes inputs to specialized neuron groups based on input context,
 giving input-dependent behavior without full attention.
 
 Architecture:
@@ -9,15 +9,20 @@ Architecture:
 	RoutedRAMClusterLayer: Multiple expert RAMClusterLayers selected by RouterRAM
 
 This implements a Mixture-of-RAM-Experts pattern where:
-1. Router observes the last token's bits (content-dependent)
+1. Router observes the input context bits (content-dependent)
 2. Selects top-k expert groups
 3. Each expert processes the full context
 4. Expert outputs are averaged
 
+Routing strategies (RoutingStrategy enum):
+	CONTEXT_HASH: Hash full context bits → route (balanced, context-agnostic)
+	LAST_TOKEN: Last token identity → route (content-dependent)
+	DISTRIBUTIONAL: K-means on last-token→target co-occurrence → route (semantic)
+
 All components use standard RAMClusterLayer (no ad-hoc implementations).
 
 Usage:
-	from wnn.ram.core.routing import RouterRAM, RoutedRAMClusterLayer
+	from wnn.ram.core.routing import RoutedRAMClusterLayer, RoutingStrategy
 
 	layer = RoutedRAMClusterLayer(
 		total_input_bits=64,
@@ -26,13 +31,17 @@ Usage:
 		neurons_per_cluster_per_route=3,
 		bits_per_neuron=10,
 		top_k_routes=2,
+		bits_per_token=16,
+		routing_strategy=RoutingStrategy.LAST_TOKEN,
 	)
 
 	# Forward: routes input to experts
 	probs = layer.forward(input_bits)  # [batch, num_clusters]
 """
 
+from enum import Enum, auto
 from typing import Optional
+from collections import defaultdict, Counter as PyCounter
 
 from torch import Tensor, tensor, long, zeros, float32, stack, arange
 from torch import topk as torch_topk
@@ -41,20 +50,32 @@ from wnn.ram.core.base import RAMComponent
 from wnn.ram.core.RAMClusterLayer import RAMClusterLayer, bits_needed
 
 
+class RoutingStrategy(Enum):
+	"""Strategy for assigning training examples to routes.
+
+	Routes must be a function of OBSERVABLE input features (not targets),
+	so the router can learn to reproduce the assignment at inference time.
+	"""
+	CONTEXT_HASH = auto()    # Hash full context bits → route (balanced)
+	LAST_TOKEN = auto()      # Last token identity → route (content-dependent)
+	DISTRIBUTIONAL = auto()  # K-means on co-occurrence → route (semantic)
+
+
 class RouterRAM(RAMComponent):
 	"""Small RAMClusterLayer that maps input bits to a route index.
 
-	The router observes only the last token's bits (content-dependent routing)
-	and outputs a probability distribution over routes. This is a standard
-	RAMClusterLayer with num_routes clusters.
+	The router observes the input context bits and outputs a probability
+	distribution over routes. This is a standard RAMClusterLayer with
+	num_routes clusters.
 
-	Training uses frequency-based heuristics: assign each token pattern
-	to the route that best separates its distribution.
+	Training assigns routes using the selected RoutingStrategy, then
+	trains the router to reproduce that assignment from input bits.
 
 	Attributes:
 		router_layer: RAMClusterLayer with num_routes clusters.
 		num_routes: Number of available routes.
 		bits_per_token: Bits used per token (for extracting last token).
+		strategy: Routing strategy for assignment.
 	"""
 
 	def __init__(
@@ -62,6 +83,8 @@ class RouterRAM(RAMComponent):
 		total_input_bits: int,
 		num_routes: int = 8,
 		router_bits: int = 16,
+		bits_per_token: int = 16,
+		routing_strategy: RoutingStrategy = RoutingStrategy.LAST_TOKEN,
 		rng: Optional[int] = None,
 	):
 		"""Initialize RouterRAM.
@@ -70,11 +93,17 @@ class RouterRAM(RAMComponent):
 			total_input_bits: Total input bits from the full context.
 			num_routes: Number of routes (expert groups) to choose from.
 			router_bits: Bits each router neuron observes.
+			bits_per_token: Bits per token (for extracting last token).
+			routing_strategy: How to assign examples to routes.
 			rng: Random seed for reproducible connectivity.
 		"""
 		super().__init__()
 		self.num_routes = num_routes
 		self.total_input_bits = total_input_bits
+		self.bits_per_token = bits_per_token
+		self.strategy = routing_strategy
+		# Token-to-route mapping, populated by DISTRIBUTIONAL strategy
+		self._token_route_map: Optional[dict[int, int]] = None
 
 		# Router is a small RAMClusterLayer: maps input bits -> route scores
 		# Uses 3 neurons per route for stable voting
@@ -109,21 +138,134 @@ class RouterRAM(RAMComponent):
 		scores = self.forward(input_bits)
 		return scores.argmax(dim=-1)
 
+	def _extract_last_token_ids(self, input_bits: Tensor) -> Tensor:
+		"""Extract last token IDs from input bits (LSB-first encoding).
+
+		Args:
+			input_bits: [N, total_input_bits] boolean tensor.
+
+		Returns:
+			[N] tensor of last token IDs.
+		"""
+		last_bits = input_bits[:, -self.bits_per_token:]  # [N, bits_per_token]
+		powers = (2 ** arange(self.bits_per_token)).to(last_bits.device)
+		return (last_bits.long() * powers).sum(dim=1)
+
+	def _assign_context_hash(self, input_bits: Tensor, n_routes: int) -> Tensor:
+		"""Assign routes by hashing full context bits."""
+		return input_bits.sum(dim=1).long() % n_routes
+
+	def _assign_last_token(self, input_bits: Tensor, n_routes: int) -> Tensor:
+		"""Assign routes by last token identity (balanced by frequency)."""
+		last_ids = self._extract_last_token_ids(input_bits)
+
+		# Count frequency per unique last-token
+		unique_ids, inverse, counts = last_ids.unique(
+			return_inverse=True, return_counts=True,
+		)
+
+		# Sort tokens by frequency (descending) and round-robin to routes
+		sorted_idx = counts.argsort(descending=True)
+		token_to_route = zeros(unique_ids.max().item() + 1, dtype=long)
+		for rank, idx in enumerate(sorted_idx):
+			token_to_route[unique_ids[idx]] = rank % n_routes
+
+		return token_to_route[last_ids]
+
+	def _assign_distributional(
+		self, input_bits: Tensor, targets: Tensor, n_routes: int,
+	) -> Tensor:
+		"""Assign routes by clustering tokens on co-occurrence distributions.
+
+		Builds a target distribution per last-token, then uses k-means
+		to group similar tokens into routes. Caches the mapping after
+		the first computation for subsequent batches.
+		"""
+		import numpy as np
+
+		last_ids = self._extract_last_token_ids(input_bits)
+		last_np = last_ids.numpy()
+
+		# Use cached map if available (computed on first batch)
+		if self._token_route_map is not None:
+			route_arr = np.array(
+				[self._token_route_map.get(int(t), 0) for t in last_np],
+				dtype=np.int64,
+			)
+			return tensor(route_arr, dtype=long)
+
+		tgt_np = targets.numpy()
+
+		# Build co-occurrence: last_token → target frequency distribution
+		cooccurrence: dict[int, PyCounter] = defaultdict(PyCounter)
+		for i in range(len(tgt_np)):
+			cooccurrence[int(last_np[i])][int(tgt_np[i])] += 1
+
+		unique_tokens = sorted(cooccurrence.keys())
+		if len(unique_tokens) <= n_routes:
+			# Fewer unique tokens than routes → assign 1:1
+			token_to_route = {t: i % n_routes for i, t in enumerate(unique_tokens)}
+		else:
+			# Build sparse distribution vectors using top-100 global targets
+			global_counts: PyCounter = PyCounter()
+			for c in cooccurrence.values():
+				global_counts.update(c)
+			top_targets = [t for t, _ in global_counts.most_common(100)]
+			target_to_idx = {t: i for i, t in enumerate(top_targets)}
+			n_features = len(top_targets)
+
+			# Build feature matrix [n_tokens, n_features]
+			vectors = np.zeros((len(unique_tokens), n_features), dtype=np.float32)
+			for i, tok in enumerate(unique_tokens):
+				for tgt, cnt in cooccurrence[tok].items():
+					if tgt in target_to_idx:
+						vectors[i, target_to_idx[tgt]] = cnt
+			# L1-normalize rows
+			row_sums = vectors.sum(axis=1, keepdims=True)
+			row_sums[row_sums == 0] = 1
+			vectors /= row_sums
+
+			# Simple k-means (10 iterations)
+			rng = np.random.default_rng(42)
+			centroid_idx = rng.choice(len(unique_tokens), size=n_routes, replace=False)
+			centroids = vectors[centroid_idx].copy()
+
+			for _ in range(10):
+				# Assign to nearest centroid (L2 distance)
+				dists = np.linalg.norm(
+					vectors[:, None, :] - centroids[None, :, :], axis=2,
+				)  # [n_tokens, n_routes]
+				labels = dists.argmin(axis=1)
+
+				# Update centroids
+				for r in range(n_routes):
+					mask = labels == r
+					if mask.any():
+						centroids[r] = vectors[mask].mean(axis=0)
+
+			token_to_route = {
+				tok: int(labels[i]) for i, tok in enumerate(unique_tokens)
+			}
+
+		# Cache for future batches
+		self._token_route_map = token_to_route
+
+		# Map each example to its route
+		route_arr = np.array(
+			[token_to_route.get(int(t), 0) for t in last_np], dtype=np.int64,
+		)
+		return tensor(route_arr, dtype=long)
+
 	def train_routing(
 		self,
 		input_bits: Tensor,
 		targets: Tensor,
 		num_routes: Optional[int] = None,
 	) -> dict:
-		"""Train routing via frequency-based assignment.
+		"""Train routing via the selected strategy.
 
-		Assigns each unique context pattern to a route based on
-		target token frequency distribution, aiming for balanced routes
-		with specialized token coverage.
-
-		Strategy: Hash-based round-robin assignment. The last token's
-		binary representation is mapped to a route index. Then the
-		router memory is trained to reproduce this assignment.
+		Assigns routes based on observable input features (not targets),
+		then trains the router RAM to reproduce the assignment.
 
 		Args:
 			input_bits: [N, total_input_bits] training contexts.
@@ -135,12 +277,17 @@ class RouterRAM(RAMComponent):
 		"""
 		n_routes = num_routes or self.num_routes
 
-		# Simple deterministic assignment: hash last token bits to route
-		# Extract last token's bits (last bits_per_token bits from input)
-		bits_per_token = self.total_input_bits // max(1, self.total_input_bits // 16)
-
-		# Convert target tokens to route assignments via modulo
-		route_assignments = targets % n_routes  # [N]
+		# Compute route assignments using the selected strategy
+		if self.strategy == RoutingStrategy.CONTEXT_HASH:
+			route_assignments = self._assign_context_hash(input_bits, n_routes)
+		elif self.strategy == RoutingStrategy.LAST_TOKEN:
+			route_assignments = self._assign_last_token(input_bits, n_routes)
+		elif self.strategy == RoutingStrategy.DISTRIBUTIONAL:
+			route_assignments = self._assign_distributional(
+				input_bits, targets, n_routes,
+			)
+		else:
+			raise ValueError(f"Unknown strategy: {self.strategy}")
 
 		# Train router: for each example, TRUE for assigned route, FALSE for others
 		total_modified = 0
@@ -167,7 +314,19 @@ class RouterRAM(RAMComponent):
 			)
 			total_modified += modified
 
-		return {"modified": total_modified, "examples": n}
+		# Report route distribution
+		route_dist = {}
+		for r in range(n_routes):
+			count = (route_assignments == r).sum().item()
+			if count > 0:
+				route_dist[r] = count
+
+		return {
+			"modified": total_modified,
+			"examples": n,
+			"strategy": self.strategy.name,
+			"route_distribution": route_dist,
+		}
 
 
 class RoutedRAMClusterLayer(RAMComponent):
@@ -200,6 +359,8 @@ class RoutedRAMClusterLayer(RAMComponent):
 		bits_per_neuron: int = 10,
 		top_k_routes: int = 2,
 		router_bits: int = 16,
+		bits_per_token: int = 16,
+		routing_strategy: RoutingStrategy = RoutingStrategy.LAST_TOKEN,
 		rng: Optional[int] = None,
 	):
 		"""Initialize RoutedRAMClusterLayer.
@@ -212,6 +373,8 @@ class RoutedRAMClusterLayer(RAMComponent):
 			bits_per_neuron: Bits each neuron observes.
 			top_k_routes: Number of experts to activate per input.
 			router_bits: Bits for router neurons.
+			bits_per_token: Bits per token (for extracting last token).
+			routing_strategy: How to assign examples to routes.
 			rng: Random seed.
 		"""
 		super().__init__()
@@ -221,12 +384,15 @@ class RoutedRAMClusterLayer(RAMComponent):
 		self.top_k_routes = min(top_k_routes, num_routes)
 		self.neurons_per_cluster = neurons_per_cluster_per_route
 		self.bits_per_neuron = bits_per_neuron
+		self.routing_strategy = routing_strategy
 
 		# Create router
 		self.router = RouterRAM(
 			total_input_bits=total_input_bits,
 			num_routes=num_routes,
 			router_bits=router_bits,
+			bits_per_token=bits_per_token,
+			routing_strategy=routing_strategy,
 			rng=rng,
 		)
 

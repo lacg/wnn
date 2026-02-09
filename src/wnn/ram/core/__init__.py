@@ -458,7 +458,7 @@ from wnn.ram.core.models import (
 from wnn.ram.core.reporting import TierResultsTable, TierResultRow
 
 # Content-dependent routing
-from wnn.ram.core.routing import RouterRAM, RoutedRAMClusterLayer
+from wnn.ram.core.routing import RouterRAM, RoutedRAMClusterLayer, RoutingStrategy
 
 
 __all__ = [
@@ -588,4 +588,5 @@ __all__ = [
 	# Content-dependent routing
 	'RouterRAM',
 	'RoutedRAMClusterLayer',
+	'RoutingStrategy',
 ]

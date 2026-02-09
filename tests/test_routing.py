@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
-WS1: Content-Dependent Routing Experiment.
+WS1: Content-Dependent Routing Experiment (v2).
 
-Compares RoutedRAMClusterLayer vs baseline RAMLM with same total neurons
-on WikiText-2 to measure whether routing improves performance.
+Compares three routing strategies for RoutedRAMClusterLayer vs baseline RAMLM:
+  CONTEXT_HASH: Hash full context bits → route (balanced, context-agnostic)
+  LAST_TOKEN: Last token identity → route (content-dependent, frequency-balanced)
+  DISTRIBUTIONAL: K-means on last-token→target co-occurrence → route (semantic)
 
-Outputs:
-- CE/PPL/accuracy comparison: routed vs baseline
-- Per-route specialization analysis
-- JSON results
+Each strategy is tested with extra_training=True (all experts see all data).
+Routes are assigned based on OBSERVABLE input features, not targets.
 
 Usage:
 	python tests/test_routing.py
-	python tests/test_routing.py --output experiments/routing_results.json
+	python tests/test_routing.py --strategies LAST_TOKEN DISTRIBUTIONAL
+	python tests/test_routing.py --output experiments/ws1_routing_v2.json
 """
 
 import argparse
@@ -26,9 +27,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "wnn"))
 
 from torch import tensor, long
 
-from wnn.ram.core import AccelerationMode
 from wnn.ram.core.models import RAMLM
-from wnn.ram.core.routing import RoutedRAMClusterLayer
+from wnn.ram.core.routing import RoutedRAMClusterLayer, RoutingStrategy
+from wnn.ram.core.RAMClusterLayer import bits_needed
 from wnn.ram.strategies.perplexity import PerplexityCalculator
 
 
@@ -50,14 +51,7 @@ def evaluate_routed_model(
 	token_ids: list[int],
 	batch_size: int = 5000,
 ) -> dict:
-	"""Evaluate using the routed layer instead of model's own layer.
-
-	Encodes sequences using the RAMLM's encoder, but forwards through
-	the RoutedRAMClusterLayer instead.
-	"""
-	from torch.nn.functional import softmax
-	from torch import arange
-
+	"""Evaluate using the routed layer instead of model's own layer."""
 	calc = PerplexityCalculator(vocab_size=model.vocab_size)
 	total_examples = len(token_ids) - model.context_size
 
@@ -65,7 +59,6 @@ def evaluate_routed_model(
 	targets = tensor(token_ids[model.context_size:], dtype=long)
 	num_batches = (total_examples + batch_size - 1) // batch_size
 
-	# Track per-route usage
 	route_counts = Counter()
 
 	for batch_idx in range(num_batches):
@@ -75,33 +68,140 @@ def evaluate_routed_model(
 		batch_bits = all_bits[start:end]
 		batch_targets = targets[start:end]
 
-		# Forward through routed layer
 		scores = routed_layer.forward(batch_bits)
 
-		# Track routing decisions
 		router_scores = routed_layer.router.forward(batch_bits)
 		routes = router_scores.argmax(dim=-1).tolist()
 		route_counts.update(routes)
 
 		calc.add_from_scores_batch(scores, batch_targets, normalize=True)
 
+		if (batch_idx + 1) % 10 == 0 or batch_idx == num_batches - 1:
+			stats = calc.get_stats()
+			pct = (batch_idx + 1) / num_batches * 100
+			print(f"     {pct:5.1f}% - CE: {stats['cross_entropy']:.4f}, "
+				  f"Acc: {stats['accuracy']:.2%}")
+
 	stats = calc.get_stats()
 	stats["route_distribution"] = dict(route_counts.most_common())
 	return stats
 
 
+def run_strategy(
+	strategy: RoutingStrategy,
+	all_bits,
+	targets,
+	false_clusters_base,
+	baseline: RAMLM,
+	val_tokens: list[int],
+	args,
+) -> dict:
+	"""Train and evaluate a single routing strategy."""
+	vocab_size = baseline.vocab_size
+	context_size = baseline.context_size
+	bpt = bits_needed(vocab_size)
+	total_input_bits = context_size * bpt
+
+	print(f"\n{'=' * 60}")
+	print(f"Strategy: {strategy.name}")
+	print(f"  {args.num_routes} routes, top-{args.top_k}, "
+		  f"{args.neurons_per_route} neurons/route, {args.bits_per_neuron} bits")
+	print(f"{'=' * 60}")
+
+	routed = RoutedRAMClusterLayer(
+		total_input_bits=total_input_bits,
+		num_clusters=vocab_size,
+		num_routes=args.num_routes,
+		neurons_per_cluster_per_route=args.neurons_per_route,
+		bits_per_neuron=args.bits_per_neuron,
+		top_k_routes=args.top_k,
+		bits_per_token=bpt,
+		routing_strategy=strategy,
+	)
+	print(f"  Total neurons: {routed.total_neurons:,}")
+
+	# Train in batches
+	train_batch_size = 50000
+	total_examples = all_bits.shape[0]
+	num_batches = (total_examples + train_batch_size - 1) // train_batch_size
+
+	print(f"  Training (extra_training=True)...")
+	t0 = time.time()
+	for batch_idx in range(num_batches):
+		start = batch_idx * train_batch_size
+		end = min(start + train_batch_size, total_examples)
+
+		stats = routed.train_experts(
+			all_bits[start:end], targets[start:end], false_clusters_base,
+			extra_training=True,
+		)
+
+		if batch_idx == 0:
+			# Print route distribution from first batch
+			rd = stats["router"]["route_distribution"]
+			total = sum(rd.values())
+			print(f"  Training route distribution (batch 0):")
+			for r in sorted(rd.keys()):
+				pct = rd[r] / total * 100
+				print(f"    Route {r}: {rd[r]:,} ({pct:.1f}%)")
+
+		if (batch_idx + 1) % 10 == 0:
+			print(f"    Batch {batch_idx + 1}/{num_batches}")
+	train_time = time.time() - t0
+	print(f"  Training: {train_time:.1f}s")
+
+	# Evaluate
+	print(f"  Evaluating...")
+	t0 = time.time()
+	eval_stats = evaluate_routed_model(baseline, routed, val_tokens)
+	eval_time = time.time() - t0
+	print(f"  Evaluation: {eval_time:.1f}s")
+
+	# Print eval route distribution
+	rd = eval_stats["route_distribution"]
+	total_eval = sum(rd.values())
+	print(f"  Eval route distribution:")
+	for r in sorted(rd.keys()):
+		pct = rd[r] / total_eval * 100
+		print(f"    Route {r}: {rd[r]:,} ({pct:.1f}%)")
+
+	return {
+		"strategy": strategy.name,
+		"cross_entropy": round(eval_stats["cross_entropy"], 4),
+		"perplexity": round(eval_stats["perplexity"], 2),
+		"accuracy": round(eval_stats["accuracy"], 4),
+		"total_neurons": routed.total_neurons,
+		"train_time_s": round(train_time, 1),
+		"eval_time_s": round(eval_time, 1),
+		"route_distribution": {str(k): v for k, v in rd.items()},
+	}
+
+
 def main():
-	parser = argparse.ArgumentParser(description="WS1: Routing experiment")
-	parser.add_argument("--output", type=str, default="experiments/routing_results.json")
+	parser = argparse.ArgumentParser(description="WS1: Routing experiment v2")
+	parser.add_argument("--output", type=str, default="experiments/ws1_routing_v2.json")
 	parser.add_argument("--num-routes", type=int, default=8)
 	parser.add_argument("--top-k", type=int, default=2)
 	parser.add_argument("--neurons-per-route", type=int, default=3)
 	parser.add_argument("--bits-per-neuron", type=int, default=10)
 	parser.add_argument("--context-size", type=int, default=4)
+	parser.add_argument(
+		"--strategies", nargs="+",
+		choices=["CONTEXT_HASH", "LAST_TOKEN", "DISTRIBUTIONAL"],
+		default=["CONTEXT_HASH", "LAST_TOKEN", "DISTRIBUTIONAL"],
+	)
 	args = parser.parse_args()
 
+	strategy_map = {
+		"CONTEXT_HASH": RoutingStrategy.CONTEXT_HASH,
+		"LAST_TOKEN": RoutingStrategy.LAST_TOKEN,
+		"DISTRIBUTIONAL": RoutingStrategy.DISTRIBUTIONAL,
+	}
+	strategies = [strategy_map[s] for s in args.strategies]
+
 	print("=" * 60)
-	print("WS1: Content-Dependent Routing Experiment")
+	print("WS1: Content-Dependent Routing Experiment (v2)")
+	print(f"Strategies: {', '.join(s.name for s in strategies)}")
 	print("=" * 60)
 
 	# Load data
@@ -110,16 +210,13 @@ def main():
 
 	vocab_size = 50257
 	context_size = args.context_size
-	from wnn.ram.core.RAMClusterLayer import bits_needed
-	total_input_bits = context_size * bits_needed(vocab_size)
+	bpt = bits_needed(vocab_size)
+	total_input_bits = context_size * bpt
 
 	# --- Baseline: Standard RAMLM ---
 	print("\n--- Baseline RAMLM ---")
-	# Match total neurons: routed model has num_routes * neurons_per_route per cluster
-	# So baseline should have num_routes * neurons_per_route / top_k neurons per cluster
-	# to be comparable (since routed only uses top_k experts per input)
 	baseline_neurons = args.num_routes * args.neurons_per_route
-	print(f"Baseline: {baseline_neurons} neurons/cluster, {args.bits_per_neuron} bits/neuron")
+	print(f"  {baseline_neurons} neurons/cluster, {args.bits_per_neuron} bits/neuron")
 
 	baseline = RAMLM(
 		vocab_size=vocab_size,
@@ -137,137 +234,93 @@ def main():
 	t0 = time.time()
 	baseline_stats = baseline.evaluate_fast(val_tokens, batch_size=5000)
 	baseline_eval_time = time.time() - t0
+	print(f"  CE: {baseline_stats['cross_entropy']:.4f}, "
+		  f"PPL: {baseline_stats['perplexity']:.2f}, "
+		  f"Acc: {baseline_stats['accuracy']:.2%}")
 	print(f"  Evaluation: {baseline_eval_time:.1f}s")
 
-	# --- Routed Model ---
-	print(f"\n--- Routed Model ({args.num_routes} routes, top-{args.top_k}) ---")
-	print(f"  {args.neurons_per_route} neurons/cluster/route, {args.bits_per_neuron} bits/neuron")
-
-	routed_layer = RoutedRAMClusterLayer(
-		total_input_bits=total_input_bits,
-		num_clusters=vocab_size,
-		num_routes=args.num_routes,
-		neurons_per_cluster_per_route=args.neurons_per_route,
-		bits_per_neuron=args.bits_per_neuron,
-		top_k_routes=args.top_k,
-	)
-	print(f"  Total neurons: {routed_layer.total_neurons:,}")
-
-	# Prepare training data (shared across routed model variants)
+	# Prepare shared training data
 	all_bits = baseline.encode_sequence(train_tokens)
 	targets = tensor(train_tokens[context_size:], dtype=long)
-
-	# Shared 1D negatives (train_experts expands per-subset internally)
 	counts = Counter(train_tokens)
 	top_k_tokens = [t for t, _ in counts.most_common(50)]
-	false_clusters_base = tensor(top_k_tokens, dtype=long)  # [50]
+	false_clusters_base = tensor(top_k_tokens, dtype=long)
 
-	train_batch_size = 50000
-	total_examples = all_bits.shape[0]
-	num_batches = (total_examples + train_batch_size - 1) // train_batch_size
+	# --- Run each strategy ---
+	strategy_results = {}
+	for strategy in strategies:
+		result = run_strategy(
+			strategy, all_bits, targets, false_clusters_base,
+			baseline, val_tokens, args,
+		)
+		strategy_results[strategy.name] = result
 
-	def train_routed_batched(routed_layer, extra_training):
-		"""Train routed model in batches to control peak memory."""
-		for batch_idx in range(num_batches):
-			start = batch_idx * train_batch_size
-			end = min(start + train_batch_size, total_examples)
-
-			routed_layer.train_experts(
-				all_bits[start:end], targets[start:end], false_clusters_base,
-				extra_training=extra_training,
-			)
-			if (batch_idx + 1) % 10 == 0:
-				print(f"    Batch {batch_idx + 1}/{num_batches}")
-
-	# --- Routed Model A: Specialized (no extra training) ---
-	print("  Training specialized routed model (extra_training=False)...")
-	t0 = time.time()
-	train_routed_batched(routed_layer, extra_training=False)
-	routed_train_time = time.time() - t0
-	print(f"  Training: {routed_train_time:.1f}s")
-
-	print("  Evaluating specialized routed model...")
-	t0 = time.time()
-	routed_stats = evaluate_routed_model(baseline, routed_layer, val_tokens)
-	routed_eval_time = time.time() - t0
-	print(f"  Evaluation: {routed_eval_time:.1f}s")
-
-	# --- Routed Model B: Generalist (with extra training) ---
-	print(f"\n--- Routed Model B: Generalist ({args.num_routes} routes, top-{args.top_k}, extra_training=True) ---")
-	routed_gen = RoutedRAMClusterLayer(
-		total_input_bits=total_input_bits,
-		num_clusters=vocab_size,
-		num_routes=args.num_routes,
-		neurons_per_cluster_per_route=args.neurons_per_route,
-		bits_per_neuron=args.bits_per_neuron,
-		top_k_routes=args.top_k,
-	)
-	print("  Training generalist routed model (extra_training=True)...")
-	t0 = time.time()
-	train_routed_batched(routed_gen, extra_training=True)
-	routed_gen_train_time = time.time() - t0
-	print(f"  Training: {routed_gen_train_time:.1f}s")
-
-	print("  Evaluating generalist routed model...")
-	t0 = time.time()
-	routed_gen_stats = evaluate_routed_model(baseline, routed_gen, val_tokens)
-	routed_gen_eval_time = time.time() - t0
-	print(f"  Evaluation: {routed_gen_eval_time:.1f}s")
-
-	# --- Comparison ---
-	print("\n" + "=" * 60)
+	# --- Comparison Table ---
+	print("\n" + "=" * 80)
 	print("COMPARISON")
-	print("=" * 60)
-	print(f"{'Metric':<20} {'Baseline':>15} {'Specialized':>15} {'Generalist':>15}")
-	print("-" * 65)
+	print("=" * 80)
+
+	header = f"{'Metric':<20} {'Baseline':>12}"
+	for s in strategies:
+		header += f" {s.name:>16}"
+	print(header)
+	print("-" * (34 + 17 * len(strategies)))
 
 	b_ce = baseline_stats['cross_entropy']
-	r_ce = routed_stats['cross_entropy']
-	g_ce = routed_gen_stats['cross_entropy']
-	print(f"{'Cross-Entropy':<20} {b_ce:>15.4f} {r_ce:>15.4f} {g_ce:>15.4f}")
-
 	b_ppl = baseline_stats['perplexity']
-	r_ppl = routed_stats['perplexity']
-	g_ppl = routed_gen_stats['perplexity']
-	print(f"{'Perplexity':<20} {b_ppl:>15.2f} {r_ppl:>15.2f} {g_ppl:>15.2f}")
-
 	b_acc = baseline_stats['accuracy']
-	r_acc = routed_stats['accuracy']
-	g_acc = routed_gen_stats['accuracy']
-	print(f"{'Accuracy':<20} {b_acc:>15.2%} {r_acc:>15.2%} {g_acc:>15.2%}")
-
 	b_neurons = baseline.layer.total_neurons
-	r_neurons = routed_layer.total_neurons
-	print(f"{'Total Neurons':<20} {b_neurons:>15,} {r_neurons:>15,} {routed_gen.total_neurons:>15,}")
 
-	# Per-route distribution (specialized)
-	if "route_distribution" in routed_stats:
-		print(f"\nRoute Distribution (Specialized):")
-		rd = routed_stats["route_distribution"]
-		total = sum(rd.values())
-		for route, count in sorted(rd.items()):
-			print(f"  Route {route}: {count:,} ({count/total:.1%})")
+	row = f"{'Cross-Entropy':<20} {b_ce:>12.4f}"
+	for s in strategies:
+		r = strategy_results[s.name]
+		delta = r['cross_entropy'] - b_ce
+		row += f" {r['cross_entropy']:>10.4f} ({delta:+.3f})"
+	print(row)
 
-	# Per-route distribution (generalist)
-	if "route_distribution" in routed_gen_stats:
-		print(f"\nRoute Distribution (Generalist):")
-		rd = routed_gen_stats["route_distribution"]
-		total = sum(rd.values())
-		for route, count in sorted(rd.items()):
-			print(f"  Route {route}: {count:,} ({count/total:.1%})")
+	row = f"{'Perplexity':<20} {b_ppl:>12.2f}"
+	for s in strategies:
+		r = strategy_results[s.name]
+		row += f" {r['perplexity']:>16.2f}"
+	print(row)
+
+	row = f"{'Accuracy':<20} {b_acc:>12.2%}"
+	for s in strategies:
+		r = strategy_results[s.name]
+		row += f" {r['accuracy']:>16.2%}"
+	print(row)
+
+	row = f"{'Neurons':<20} {b_neurons:>12,}"
+	for s in strategies:
+		r = strategy_results[s.name]
+		row += f" {r['total_neurons']:>16,}"
+	print(row)
+
+	# Route balance analysis
+	print("\nRoute Balance (eval):")
+	for s in strategies:
+		rd = strategy_results[s.name]["route_distribution"]
+		vals = list(rd.values())
+		if vals:
+			min_pct = min(vals) / sum(vals) * 100
+			max_pct = max(vals) / sum(vals) * 100
+			n_active = len(vals)
+			print(f"  {s.name}: {n_active} active routes, "
+				  f"range {min_pct:.1f}%-{max_pct:.1f}%")
 
 	# Save results
 	output_path = Path(args.output)
 	output_path.parent.mkdir(parents=True, exist_ok=True)
 
 	output = {
-		"experiment": "WS1_routing",
+		"experiment": "WS1_routing_v2",
 		"config": {
 			"num_routes": args.num_routes,
 			"top_k": args.top_k,
 			"neurons_per_route": args.neurons_per_route,
 			"bits_per_neuron": args.bits_per_neuron,
 			"context_size": context_size,
+			"strategies": args.strategies,
 		},
 		"baseline": {
 			"cross_entropy": round(b_ce, 4),
@@ -276,34 +329,7 @@ def main():
 			"total_neurons": b_neurons,
 			"train_time_s": round(baseline_train_time, 1),
 		},
-		"routed_specialized": {
-			"cross_entropy": round(r_ce, 4),
-			"perplexity": round(r_ppl, 2),
-			"accuracy": round(r_acc, 4),
-			"total_neurons": r_neurons,
-			"train_time_s": round(routed_train_time, 1),
-			"route_distribution": routed_stats.get("route_distribution", {}),
-			"extra_training": False,
-		},
-		"routed_generalist": {
-			"cross_entropy": round(g_ce, 4),
-			"perplexity": round(g_ppl, 2),
-			"accuracy": round(g_acc, 4),
-			"total_neurons": routed_gen.total_neurons,
-			"train_time_s": round(routed_gen_train_time, 1),
-			"route_distribution": routed_gen_stats.get("route_distribution", {}),
-			"extra_training": True,
-		},
-		"delta_specialized": {
-			"cross_entropy": round(r_ce - b_ce, 4),
-			"perplexity": round(r_ppl - b_ppl, 2),
-			"accuracy": round(r_acc - b_acc, 4),
-		},
-		"delta_generalist": {
-			"cross_entropy": round(g_ce - b_ce, 4),
-			"perplexity": round(g_ppl - b_ppl, 2),
-			"accuracy": round(g_acc - b_acc, 4),
-		},
+		"strategies": strategy_results,
 	}
 
 	with open(output_path, "w") as f:
