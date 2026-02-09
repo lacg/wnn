@@ -398,6 +398,8 @@ class RoutedRAMClusterLayer(RAMComponent):
 		route_assignments = self.router.route(input_bits)  # [N]
 
 		# Train each expert on its assigned data
+		# Use Rust numpy path to avoid OOM from Python vectorized addresses tensor
+		# (Python path materializes [batch, unique_clusters * neurons] = tens of GB)
 		expert_stats = []
 		for route_idx in range(self.num_routes):
 			mask = (route_assignments == route_idx)
@@ -410,20 +412,18 @@ class RoutedRAMClusterLayer(RAMComponent):
 			expert_targets = targets[mask]
 
 			if shared_negatives is not None:
-				# Expand shared negatives only for this subset
 				expert_false = shared_negatives.unsqueeze(0).expand(count, -1).contiguous()
-				modified = self.experts[route_idx].train_multi_examples(
+				modified = self.experts[route_idx].train_multi_examples_rust_numpy(
 					expert_bits, expert_targets, expert_false,
 					allow_override=allow_override,
 				)
 			elif false_clusters is not None:
 				expert_false = false_clusters[mask]
-				modified = self.experts[route_idx].train_multi_examples(
+				modified = self.experts[route_idx].train_multi_examples_rust_numpy(
 					expert_bits, expert_targets, expert_false,
 					allow_override=allow_override,
 				)
 			else:
-				# Train TRUE only via train_batch (one example at a time)
 				modified = 0
 				for j in range(expert_bits.shape[0]):
 					m = self.experts[route_idx].train_batch(
@@ -441,7 +441,6 @@ class RoutedRAMClusterLayer(RAMComponent):
 			})
 
 		# Optionally train ALL experts on all data for robustness.
-		# Process in batches to avoid materializing [N, k] all at once.
 		total_extra = 0
 		if extra_training:
 			neg = shared_negatives if shared_negatives is not None else false_clusters
@@ -456,7 +455,7 @@ class RoutedRAMClusterLayer(RAMComponent):
 							batch_false = neg.unsqueeze(0).expand(end - start, -1).contiguous()
 						else:
 							batch_false = neg[start:end]
-						modified = self.experts[route_idx].train_multi_examples(
+						modified = self.experts[route_idx].train_multi_examples_rust_numpy(
 							batch_bits, batch_targets, batch_false,
 							allow_override=allow_override,
 						)
