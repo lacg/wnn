@@ -825,11 +825,11 @@ class TieredRAMClusterLayer(RAMClusterBase):
 
 	def forward_hybrid(self, input_bits: Tensor) -> Tensor:
 		"""
-		Hybrid CPU+GPU forward pass (56 cores: 16 CPU + 40 GPU on M4 Max).
+		Hybrid CPU+GPU forward pass.
 
-		Splits the batch between CPU (rayon sparse forward) and GPU (Metal
-		sparse forward) running in parallel threads. Both Rust functions
-		release the GIL, so they genuinely run concurrently.
+		For sparse memory, Metal alone is faster than a CPU+GPU batch split
+		(GPU finishes 26x faster, so CPU becomes the bottleneck). Delegates
+		to forward_metal.
 
 		Args:
 			input_bits: [batch_size, total_input_bits] boolean tensor
@@ -837,37 +837,7 @@ class TieredRAMClusterLayer(RAMClusterBase):
 		Returns:
 			[batch_size, num_clusters] float tensor of probabilities
 		"""
-		if not self._use_sparse or self._sparse_memory is None:
-			raise RuntimeError("forward_hybrid requires sparse memory backend")
-
-		import torch
-
-		if input_bits.ndim == 1:
-			input_bits = input_bits.unsqueeze(0)
-
-		batch_size = input_bits.shape[0]
-
-		# For small batches, Metal alone is faster (avoids thread overhead)
-		if batch_size < 500:
-			return self.forward_metal(input_bits)
-
-		# GPU gets larger share (40 GPU cores vs 16 CPU cores)
-		gpu_count = int(batch_size * 0.7)
-		cpu_count = batch_size - gpu_count
-
-		cpu_bits = input_bits[:cpu_count]
-		gpu_bits = input_bits[cpu_count:]
-
-		# Run CPU and GPU in parallel (both release the GIL)
-		from concurrent.futures import ThreadPoolExecutor
-
-		with ThreadPoolExecutor(max_workers=2) as executor:
-			cpu_future = executor.submit(self.forward_sparse, cpu_bits)
-			gpu_future = executor.submit(self.forward_metal, gpu_bits)
-			cpu_out = cpu_future.result()
-			gpu_out = gpu_future.result()
-
-		return torch.cat([cpu_out, gpu_out], dim=0)
+		return self.forward_metal(input_bits)
 
 	def forward_metal(self, input_bits: Tensor) -> Tensor:
 		"""
