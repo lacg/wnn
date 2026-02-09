@@ -614,11 +614,15 @@ class RoutedRAMClusterLayer(RAMComponent):
 			shared_negatives = false_clusters  # [k] base negatives
 			false_clusters = None  # Don't use the 2D path
 
-		# Phase 1: Train router
+		# Phase 1: Train router (also populates strategy caches)
 		router_stats = self.router.train_routing(input_bits, targets)
 
 		# Phase 2: Get route assignments
-		route_assignments = self.router.route(input_bits)  # [N]
+		# Use deterministic assignment when enabled (matches eval routing exactly)
+		if self.use_deterministic_routing:
+			route_assignments = self.router.deterministic_route(input_bits)  # [N]
+		else:
+			route_assignments = self.router.route(input_bits)  # [N]
 
 		# Train each expert on its assigned data
 		# Use Rust numpy path to avoid OOM from Python vectorized addresses tensor

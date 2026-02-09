@@ -100,6 +100,7 @@ def run_strategy(
 	val_tokens: list[int],
 	args,
 	deterministic: bool = False,
+	extra_training: bool = True,
 ) -> dict:
 	"""Train and evaluate a single routing strategy."""
 	vocab_size = baseline.vocab_size
@@ -108,8 +109,9 @@ def run_strategy(
 	total_input_bits = context_size * bpt
 
 	mode_str = "deterministic" if deterministic else "learned"
+	et_str = "extra" if extra_training else "specialized"
 	print(f"\n{'=' * 60}")
-	print(f"Strategy: {strategy.name} ({mode_str})")
+	print(f"Strategy: {strategy.name} ({mode_str}, {et_str})")
 	print(f"  {args.num_routes} routes, top-{args.top_k}, "
 		  f"{args.neurons_per_route} neurons/route, {args.bits_per_neuron} bits")
 	print(f"{'=' * 60}")
@@ -132,7 +134,7 @@ def run_strategy(
 	total_examples = all_bits.shape[0]
 	num_batches = (total_examples + train_batch_size - 1) // train_batch_size
 
-	print(f"  Training (extra_training=True)...")
+	print(f"  Training (extra_training={extra_training})...")
 	t0 = time.time()
 	for batch_idx in range(num_batches):
 		start = batch_idx * train_batch_size
@@ -140,7 +142,7 @@ def run_strategy(
 
 		stats = routed.train_experts(
 			all_bits[start:end], targets[start:end], false_clusters_base,
-			extra_training=True,
+			extra_training=extra_training,
 		)
 
 		if batch_idx == 0:
@@ -175,6 +177,7 @@ def run_strategy(
 	return {
 		"strategy": strategy.name,
 		"deterministic": deterministic,
+		"extra_training": extra_training,
 		"cross_entropy": round(eval_stats["cross_entropy"], 4),
 		"perplexity": round(eval_stats["perplexity"], 2),
 		"accuracy": round(eval_stats["accuracy"], 4),
@@ -201,6 +204,10 @@ def main():
 	parser.add_argument(
 		"--deterministic", action="store_true",
 		help="Also test deterministic routing (skip learned router)",
+	)
+	parser.add_argument(
+		"--no-extra-training", action="store_true",
+		help="Disable extra_training: experts only see routed data (pure specialization)",
 	)
 	args = parser.parse_args()
 
@@ -258,6 +265,8 @@ def main():
 	top_k_tokens = [t for t, _ in counts.most_common(50)]
 	false_clusters_base = tensor(top_k_tokens, dtype=long)
 
+	extra_training = not args.no_extra_training
+
 	# --- Run each strategy ---
 	strategy_results = {}
 	for strategy in strategies:
@@ -265,6 +274,7 @@ def main():
 		result = run_strategy(
 			strategy, all_bits, targets, false_clusters_base,
 			baseline, val_tokens, args, deterministic=False,
+			extra_training=extra_training,
 		)
 		strategy_results[strategy.name] = result
 
@@ -273,6 +283,7 @@ def main():
 			det_result = run_strategy(
 				strategy, all_bits, targets, false_clusters_base,
 				baseline, val_tokens, args, deterministic=True,
+				extra_training=extra_training,
 			)
 			strategy_results[f"{strategy.name}_DET"] = det_result
 
