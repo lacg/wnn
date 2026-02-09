@@ -119,7 +119,7 @@ def main():
 	parser.add_argument("--runs", type=int, default=5, help="Runs per config for averaging")
 	args = parser.parse_args()
 
-	bit_values = [8, 10, 12, 14, 16]
+	bit_values = list(range(8, 17))  # 8, 9, 10, 11, 12, 13, 14, 15, 16
 	total_configs = len(bit_values) ** 3
 
 	print("=" * 70)
