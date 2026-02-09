@@ -1,0 +1,57 @@
+{
+  "experiment": "WS1_routing_v2",
+  "config": {
+    "num_routes": 8,
+    "top_k": 2,
+    "neurons_per_route": 3,
+    "bits_per_neuron": 10,
+    "context_size": 4,
+    "strategies": [
+      "LAST_TOKEN"
+    ]
+  },
+  "baseline": {
+    "cross_entropy": 10.2506,
+    "perplexity": 28298.78,
+    "accuracy": 0.0215,
+    "total_neurons": 1206168,
+    "train_time_s": 1293.1
+  },
+  "strategies": {
+    "LAST_TOKEN": {
+      "strategy": "LAST_TOKEN",
+      "deterministic": false,
+      "extra_training": false,
+      "cross_entropy": 10.5326,
+      "perplexity": 37517.8,
+      "accuracy": 0.0044,
+      "total_neurons": 1206192,
+      "train_time_s": 29.0,
+      "eval_time_s": 1189.0,
+      "route_distribution": {
+        "0": 251044
+      }
+    },
+    "LAST_TOKEN_DET": {
+      "strategy": "LAST_TOKEN",
+      "deterministic": true,
+      "extra_training": false,
+      "cross_entropy": 10.3336,
+      "perplexity": 30748.18,
+      "accuracy": 0.0231,
+      "total_neurons": 1206192,
+      "train_time_s": 147.5,
+      "eval_time_s": 617.0,
+      "route_distribution": {
+        "0": 77269,
+        "1": 30359,
+        "2": 26959,
+        "3": 24798,
+        "4": 24209,
+        "6": 23040,
+        "7": 22287,
+        "5": 22123
+      }
+    }
+  }
+}
