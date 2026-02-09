@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from torch import zeros, ones, arange, long, Tensor, bool as torch_bool, from_numpy
 
 from wnn.ram.core.Memory import Memory
-from wnn.ram.core.base import RAMComponent
+from wnn.ram.core.base import RAMClusterBase
 from wnn.ram.core import MemoryVal
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 
@@ -49,7 +49,7 @@ class ConfigGroup:
 		return 2 ** self.bits
 
 
-class AdaptiveClusteredRAM(RAMComponent):
+class AdaptiveClusteredRAM(RAMClusterBase):
 	"""
 	RAM Layer with per-cluster (neurons, bits) architecture.
 
@@ -419,6 +419,49 @@ class AdaptiveClusteredRAM(RAMComponent):
 					probs[:, cluster_id] = group_probs[:, local_idx]
 
 		return probs
+
+	def forward_hybrid(self, input_bits: Tensor) -> Tensor:
+		"""
+		Hybrid CPU+GPU forward pass (56 cores: 16 CPU + 40 GPU on M4 Max).
+
+		Splits the batch between CPU (forward_rust) and GPU (forward_metal)
+		running in parallel threads. Both Rust functions release the GIL,
+		so they genuinely run concurrently.
+
+		Args:
+			input_bits: [batch_size, total_input_bits] boolean tensor
+
+		Returns:
+			[batch_size, num_clusters] float tensor of probabilities
+		"""
+		import torch
+
+		if input_bits.ndim == 1:
+			input_bits = input_bits.unsqueeze(0)
+
+		batch_size = input_bits.shape[0]
+
+		# For small batches, Metal alone is faster (avoids thread overhead)
+		if batch_size < 500:
+			return self.forward_metal(input_bits)
+
+		# GPU gets larger share (40 GPU cores vs 16 CPU cores)
+		gpu_count = int(batch_size * 0.7)
+		cpu_count = batch_size - gpu_count
+
+		cpu_bits = input_bits[:cpu_count]
+		gpu_bits = input_bits[cpu_count:]
+
+		# Run CPU and GPU in parallel (both release the GIL)
+		from concurrent.futures import ThreadPoolExecutor
+
+		with ThreadPoolExecutor(max_workers=2) as executor:
+			cpu_future = executor.submit(self.forward_rust, cpu_bits)
+			gpu_future = executor.submit(self.forward_metal, gpu_bits)
+			cpu_out = cpu_future.result()
+			gpu_out = gpu_future.result()
+
+		return torch.cat([cpu_out, gpu_out], dim=0)
 
 	def _forward_dense_group(self, input_bits: Tensor, group_idx: int) -> Tensor:
 		"""Dense forward for a single config group."""

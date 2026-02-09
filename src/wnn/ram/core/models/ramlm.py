@@ -56,7 +56,7 @@ from torch import tensor
 from torch import Tensor
 from torch import zeros
 
-from wnn.ram.core.base import RAMComponent
+from wnn.ram.core.base import RAMComponent, RAMClusterBase
 from wnn.ram.core.RAMClusterLayer import RAMClusterLayer, bits_needed
 from wnn.ram.core.TieredRAMClusterLayer import TieredRAMClusterLayer
 from wnn.ram.core import AccelerationMode
@@ -133,6 +133,7 @@ class RAMLM(RAMComponent):
 		self._is_tiered = tiers is not None
 
 		# Create the appropriate layer type
+		self.layer: RAMClusterBase
 		if tiers is not None:
 			# Tiered architecture
 			self.layer = TieredRAMClusterLayer(

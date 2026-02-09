@@ -3,14 +3,21 @@ RAM Base Classes
 
 Provides common interfaces for RAM neural network components.
 
-Two main families:
+Three main families:
 1. RAMComponent - Low-level Tensor→Tensor operations (Memory, Layer, Mappers)
-2. RAMSequenceModel - Sequence-to-sequence models (Transformers, Attention)
+2. RAMClusterBase - Cluster layers with acceleration backends (used by RAMLM)
+3. RAMSequenceModel - Sequence-to-sequence models (Transformers, Attention)
 
 Usage:
 	class MyMapper(RAMComponent):
 		def forward(self, bits: Tensor) -> Tensor:
 			...
+
+	class MyClusterLayer(RAMClusterBase):
+		def forward(self, input_bits: Tensor) -> Tensor: ...
+		def forward_rust(self, input_bits: Tensor) -> Tensor: ...
+		def forward_metal(self, input_bits: Tensor) -> Tensor: ...
+		def forward_hybrid(self, input_bits: Tensor) -> Tensor: ...
 
 	class MyTransformer(RAMSequenceModel):
 		def forward(self, tokens: list[Tensor]) -> list[Tensor]:
@@ -46,6 +53,69 @@ class RAMComponent(Module, ABC):
 
 		Returns:
 		    Output tensor of same shape as input (or defined output size)
+		"""
+		...
+
+
+class RAMClusterBase(RAMComponent):
+	"""
+	Base class for cluster layers used by RAMLM.
+
+	Cluster layers organize neurons into output clusters (one per vocabulary
+	token) and provide multiple acceleration backends for forward evaluation.
+
+	RAMLM dispatches AccelerationMode to these methods:
+	- AUTO    -> forward()       (layer picks best backend)
+	- CPU     -> forward_rust()  (Rust rayon, 16 CPU cores)
+	- METAL   -> forward_metal() (Metal GPU, 40 cores on M4 Max)
+	- HYBRID  -> forward_hybrid()(CPU + GPU in parallel)
+
+	Concrete subclasses:
+	- RAMClusterLayer: Uniform neurons/bits for all clusters
+	- TieredRAMClusterLayer: Variable neurons/bits per frequency tier
+	- AdaptiveClusteredRAM: Per-cluster architecture from GA/TS optimization
+
+	Subclasses must implement all four forward methods.
+	"""
+
+	num_clusters: int
+
+	@abstractmethod
+	def forward_rust(self, input_bits: Tensor) -> Tensor:
+		"""
+		Rust CPU forward pass (rayon parallel).
+
+		Args:
+			input_bits: [batch, total_input_bits] boolean tensor
+
+		Returns:
+			[batch, num_clusters] float tensor of probabilities
+		"""
+		...
+
+	@abstractmethod
+	def forward_metal(self, input_bits: Tensor) -> Tensor:
+		"""
+		Metal GPU forward pass.
+
+		Args:
+			input_bits: [batch, total_input_bits] boolean tensor
+
+		Returns:
+			[batch, num_clusters] float tensor of probabilities
+		"""
+		...
+
+	@abstractmethod
+	def forward_hybrid(self, input_bits: Tensor) -> Tensor:
+		"""
+		Hybrid CPU+GPU forward pass.
+
+		Args:
+			input_bits: [batch, total_input_bits] boolean tensor
+
+		Returns:
+			[batch, num_clusters] float tensor of probabilities
 		"""
 		...
 
@@ -126,6 +196,7 @@ class RAMTrainable(ABC):
 
 __all__ = [
 	'RAMComponent',
+	'RAMClusterBase',
 	'RAMSequenceModel',
 	'RAMTrainable',
 ]

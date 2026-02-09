@@ -29,7 +29,7 @@ Memory Backend Selection:
 """
 
 from wnn.ram.core.Memory import Memory
-from wnn.ram.core.base import RAMComponent
+from wnn.ram.core.base import RAMClusterBase
 from wnn.ram.core import MemoryVal
 
 from enum import IntEnum
@@ -83,7 +83,7 @@ def bits_needed(n: int) -> int:
 	return (n - 1).bit_length()
 
 
-class RAMClusterLayer(RAMComponent):
+class RAMClusterLayer(RAMClusterBase):
 	"""
 	RAM Layer organized into clusters for probabilistic output.
 

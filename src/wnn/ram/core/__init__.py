@@ -314,7 +314,7 @@ def get_batch_size_for_mode(
 # =============================================================================
 
 # Base classes for RAM components
-from wnn.ram.core.base import RAMComponent, RAMSequenceModel, RAMTrainable
+from wnn.ram.core.base import RAMComponent, RAMClusterBase, RAMSequenceModel, RAMTrainable
 
 # Fundamental storage and layer
 from wnn.ram.core.Memory import Memory
@@ -478,6 +478,7 @@ __all__ = [
 	# ==== Components ====
 	# Base classes
 	'RAMComponent',
+	'RAMClusterBase',
 	'RAMSequenceModel',
 	'RAMTrainable',
 	# Fundamental
