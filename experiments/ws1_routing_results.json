@@ -1,0 +1,49 @@
+{
+  "experiment": "WS1_routing",
+  "config": {
+    "num_routes": 8,
+    "top_k": 2,
+    "neurons_per_route": 3,
+    "bits_per_neuron": 10,
+    "context_size": 4
+  },
+  "baseline": {
+    "cross_entropy": 10.2517,
+    "perplexity": 28330.45,
+    "accuracy": 0.0309,
+    "total_neurons": 1206168,
+    "train_time_s": 1289.1
+  },
+  "routed_specialized": {
+    "cross_entropy": 10.5353,
+    "perplexity": 37618.9,
+    "accuracy": 0.0049,
+    "total_neurons": 1206192,
+    "train_time_s": 34.4,
+    "route_distribution": {
+      "0": 251044
+    },
+    "extra_training": false
+  },
+  "routed_generalist": {
+    "cross_entropy": 10.2489,
+    "perplexity": 28252.19,
+    "accuracy": 0.0072,
+    "total_neurons": 1206192,
+    "train_time_s": 174.0,
+    "route_distribution": {
+      "0": 251044
+    },
+    "extra_training": true
+  },
+  "delta_specialized": {
+    "cross_entropy": 0.2836,
+    "perplexity": 9288.45,
+    "accuracy": -0.026
+  },
+  "delta_generalist": {
+    "cross_entropy": -0.0028,
+    "perplexity": -78.26,
+    "accuracy": -0.0237
+  }
+}
