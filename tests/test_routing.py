@@ -70,8 +70,12 @@ def evaluate_routed_model(
 
 		scores = routed_layer.forward(batch_bits)
 
-		router_scores = routed_layer.router.forward(batch_bits)
-		routes = router_scores.argmax(dim=-1).tolist()
+		# Track actual routing decisions (deterministic or learned)
+		if routed_layer.use_deterministic_routing:
+			routes = routed_layer.router.deterministic_route(batch_bits).tolist()
+		else:
+			router_scores = routed_layer.router.forward(batch_bits)
+			routes = router_scores.argmax(dim=-1).tolist()
 		route_counts.update(routes)
 
 		calc.add_from_scores_batch(scores, batch_targets, normalize=True)
