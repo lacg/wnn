@@ -95,6 +95,7 @@ def run_strategy(
 	baseline: RAMLM,
 	val_tokens: list[int],
 	args,
+	deterministic: bool = False,
 ) -> dict:
 	"""Train and evaluate a single routing strategy."""
 	vocab_size = baseline.vocab_size
@@ -102,8 +103,9 @@ def run_strategy(
 	bpt = bits_needed(vocab_size)
 	total_input_bits = context_size * bpt
 
+	mode_str = "deterministic" if deterministic else "learned"
 	print(f"\n{'=' * 60}")
-	print(f"Strategy: {strategy.name}")
+	print(f"Strategy: {strategy.name} ({mode_str})")
 	print(f"  {args.num_routes} routes, top-{args.top_k}, "
 		  f"{args.neurons_per_route} neurons/route, {args.bits_per_neuron} bits")
 	print(f"{'=' * 60}")
@@ -117,6 +119,7 @@ def run_strategy(
 		top_k_routes=args.top_k,
 		bits_per_token=bpt,
 		routing_strategy=strategy,
+		use_deterministic_routing=deterministic,
 	)
 	print(f"  Total neurons: {routed.total_neurons:,}")
 
@@ -167,6 +170,7 @@ def run_strategy(
 
 	return {
 		"strategy": strategy.name,
+		"deterministic": deterministic,
 		"cross_entropy": round(eval_stats["cross_entropy"], 4),
 		"perplexity": round(eval_stats["perplexity"], 2),
 		"accuracy": round(eval_stats["accuracy"], 4),
@@ -189,6 +193,10 @@ def main():
 		"--strategies", nargs="+",
 		choices=["CONTEXT_HASH", "LAST_TOKEN", "DISTRIBUTIONAL"],
 		default=["CONTEXT_HASH", "LAST_TOKEN", "DISTRIBUTIONAL"],
+	)
+	parser.add_argument(
+		"--deterministic", action="store_true",
+		help="Also test deterministic routing (skip learned router)",
 	)
 	args = parser.parse_args()
 
@@ -249,22 +257,33 @@ def main():
 	# --- Run each strategy ---
 	strategy_results = {}
 	for strategy in strategies:
+		# Learned router
 		result = run_strategy(
 			strategy, all_bits, targets, false_clusters_base,
-			baseline, val_tokens, args,
+			baseline, val_tokens, args, deterministic=False,
 		)
 		strategy_results[strategy.name] = result
+
+		# Deterministic routing (no learned router)
+		if args.deterministic:
+			det_result = run_strategy(
+				strategy, all_bits, targets, false_clusters_base,
+				baseline, val_tokens, args, deterministic=True,
+			)
+			strategy_results[f"{strategy.name}_DET"] = det_result
 
 	# --- Comparison Table ---
 	print("\n" + "=" * 80)
 	print("COMPARISON")
 	print("=" * 80)
 
+	all_keys = list(strategy_results.keys())
+
 	header = f"{'Metric':<20} {'Baseline':>12}"
-	for s in strategies:
-		header += f" {s.name:>16}"
+	for key in all_keys:
+		header += f" {key:>18}"
 	print(header)
-	print("-" * (34 + 17 * len(strategies)))
+	print("-" * (34 + 19 * len(all_keys)))
 
 	b_ce = baseline_stats['cross_entropy']
 	b_ppl = baseline_stats['perplexity']
@@ -272,40 +291,40 @@ def main():
 	b_neurons = baseline.layer.total_neurons
 
 	row = f"{'Cross-Entropy':<20} {b_ce:>12.4f}"
-	for s in strategies:
-		r = strategy_results[s.name]
+	for key in all_keys:
+		r = strategy_results[key]
 		delta = r['cross_entropy'] - b_ce
-		row += f" {r['cross_entropy']:>10.4f} ({delta:+.3f})"
+		row += f" {r['cross_entropy']:>12.4f}({delta:+.3f})"
 	print(row)
 
 	row = f"{'Perplexity':<20} {b_ppl:>12.2f}"
-	for s in strategies:
-		r = strategy_results[s.name]
-		row += f" {r['perplexity']:>16.2f}"
+	for key in all_keys:
+		r = strategy_results[key]
+		row += f" {r['perplexity']:>18.2f}"
 	print(row)
 
 	row = f"{'Accuracy':<20} {b_acc:>12.2%}"
-	for s in strategies:
-		r = strategy_results[s.name]
-		row += f" {r['accuracy']:>16.2%}"
+	for key in all_keys:
+		r = strategy_results[key]
+		row += f" {r['accuracy']:>18.2%}"
 	print(row)
 
 	row = f"{'Neurons':<20} {b_neurons:>12,}"
-	for s in strategies:
-		r = strategy_results[s.name]
-		row += f" {r['total_neurons']:>16,}"
+	for key in all_keys:
+		r = strategy_results[key]
+		row += f" {r['total_neurons']:>18,}"
 	print(row)
 
 	# Route balance analysis
 	print("\nRoute Balance (eval):")
-	for s in strategies:
-		rd = strategy_results[s.name]["route_distribution"]
+	for key in all_keys:
+		rd = strategy_results[key]["route_distribution"]
 		vals = list(rd.values())
 		if vals:
 			min_pct = min(vals) / sum(vals) * 100
 			max_pct = max(vals) / sum(vals) * 100
 			n_active = len(vals)
-			print(f"  {s.name}: {n_active} active routes, "
+			print(f"  {key}: {n_active} active routes, "
 				  f"range {min_pct:.1f}%-{max_pct:.1f}%")
 
 	# Save results

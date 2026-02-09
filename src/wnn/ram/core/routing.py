@@ -102,8 +102,9 @@ class RouterRAM(RAMComponent):
 		self.total_input_bits = total_input_bits
 		self.bits_per_token = bits_per_token
 		self.strategy = routing_strategy
-		# Token-to-route mapping, populated by DISTRIBUTIONAL strategy
+		# Token-to-route mapping, populated during training
 		self._token_route_map: Optional[dict[int, int]] = None
+		self._token_route_table: Optional[Tensor] = None
 
 		# Router is a small RAMClusterLayer: maps input bits -> route scores
 		# Uses 3 neurons per route for stable voting
@@ -138,6 +139,38 @@ class RouterRAM(RAMComponent):
 		scores = self.forward(input_bits)
 		return scores.argmax(dim=-1)
 
+	def deterministic_route(self, input_bits: Tensor) -> Tensor:
+		"""Compute route deterministically (no learned router).
+
+		Uses the same assignment function used during training, computed
+		directly from input bits. Always correct — no degeneracy.
+
+		Args:
+			input_bits: [batch, total_input_bits] boolean tensor.
+
+		Returns:
+			[batch] route indices (0 to num_routes-1).
+		"""
+		if self.strategy == RoutingStrategy.CONTEXT_HASH:
+			return input_bits.sum(dim=1).long() % self.num_routes
+
+		# LAST_TOKEN and DISTRIBUTIONAL both use the cached table
+		last_ids = self._extract_last_token_ids(input_bits)
+		if self._token_route_map is not None:
+			if self._token_route_table is not None:
+				return self._token_route_table[
+					last_ids.clamp(max=len(self._token_route_table) - 1)
+				]
+			import numpy as np
+			route_arr = np.array(
+				[self._token_route_map.get(int(t), 0) for t in last_ids.numpy()],
+				dtype=np.int64,
+			)
+			return tensor(route_arr, dtype=long)
+
+		# Fallback: modulo assignment (before training)
+		return last_ids % self.num_routes
+
 	def _extract_last_token_ids(self, input_bits: Tensor) -> Tensor:
 		"""Extract last token IDs from input bits (LSB-first encoding).
 
@@ -159,18 +192,28 @@ class RouterRAM(RAMComponent):
 		"""Assign routes by last token identity (balanced by frequency)."""
 		last_ids = self._extract_last_token_ids(input_bits)
 
-		# Count frequency per unique last-token
-		unique_ids, inverse, counts = last_ids.unique(
-			return_inverse=True, return_counts=True,
-		)
+		if self._token_route_map is None:
+			# Count frequency per unique last-token
+			unique_ids, inverse, counts = last_ids.unique(
+				return_inverse=True, return_counts=True,
+			)
 
-		# Sort tokens by frequency (descending) and round-robin to routes
-		sorted_idx = counts.argsort(descending=True)
-		token_to_route = zeros(unique_ids.max().item() + 1, dtype=long)
-		for rank, idx in enumerate(sorted_idx):
-			token_to_route[unique_ids[idx]] = rank % n_routes
+			# Sort tokens by frequency (descending) and round-robin to routes
+			sorted_idx = counts.argsort(descending=True)
+			table = zeros(unique_ids.max().item() + 1, dtype=long)
+			for rank, idx in enumerate(sorted_idx):
+				table[unique_ids[idx]] = rank % n_routes
 
-		return token_to_route[last_ids]
+			# Cache for deterministic routing at inference
+			self._token_route_map = {
+				int(unique_ids[idx]): int(table[unique_ids[idx]])
+				for idx in range(len(unique_ids))
+			}
+			self._token_route_table = table
+		else:
+			table = self._token_route_table
+
+		return table[last_ids.clamp(max=len(table) - 1)]
 
 	def _assign_distributional(
 		self, input_bits: Tensor, targets: Tensor, n_routes: int,
@@ -361,6 +404,7 @@ class RoutedRAMClusterLayer(RAMComponent):
 		router_bits: int = 16,
 		bits_per_token: int = 16,
 		routing_strategy: RoutingStrategy = RoutingStrategy.LAST_TOKEN,
+		use_deterministic_routing: bool = False,
 		rng: Optional[int] = None,
 	):
 		"""Initialize RoutedRAMClusterLayer.
@@ -375,6 +419,8 @@ class RoutedRAMClusterLayer(RAMComponent):
 			router_bits: Bits for router neurons.
 			bits_per_token: Bits per token (for extracting last token).
 			routing_strategy: How to assign examples to routes.
+			use_deterministic_routing: If True, compute route directly at
+				inference instead of using the learned router RAM.
 			rng: Random seed.
 		"""
 		super().__init__()
@@ -385,6 +431,7 @@ class RoutedRAMClusterLayer(RAMComponent):
 		self.neurons_per_cluster = neurons_per_cluster_per_route
 		self.bits_per_neuron = bits_per_neuron
 		self.routing_strategy = routing_strategy
+		self.use_deterministic_routing = use_deterministic_routing
 
 		# Create router
 		self.router = RouterRAM(
@@ -423,6 +470,10 @@ class RoutedRAMClusterLayer(RAMComponent):
 	def forward(self, input_bits: Tensor) -> Tensor:
 		"""Forward pass with selective routing.
 
+		If use_deterministic_routing is True, computes routes directly
+		from input bits (always correct, no degeneracy). Otherwise uses
+		the learned router RAM.
+
 		Only evaluates the top-k selected experts for each input (not all).
 		With top_k=2 out of 8 routes, this evaluates ~25% of expert work.
 
@@ -437,9 +488,16 @@ class RoutedRAMClusterLayer(RAMComponent):
 
 		batch_size = input_bits.shape[0]
 
-		# Get router scores and select top-k routes
-		router_scores = self.router.forward(input_bits)  # [batch, num_routes]
-		_, top_routes = torch_topk(router_scores, self.top_k_routes, dim=-1)  # [batch, top_k]
+		if self.use_deterministic_routing:
+			# Deterministic: compute route directly (top-1 only)
+			routes = self.router.deterministic_route(input_bits)  # [batch]
+			top_routes = routes.unsqueeze(1)  # [batch, 1]
+		else:
+			# Learned: use router RAM scores (top-k)
+			router_scores = self.router.forward(input_bits)  # [batch, num_routes]
+			_, top_routes = torch_topk(
+				router_scores, self.top_k_routes, dim=-1,
+			)  # [batch, top_k]
 
 		# Selective evaluation: only run experts that are actually needed
 		output = zeros(batch_size, self.num_clusters, dtype=float32)
