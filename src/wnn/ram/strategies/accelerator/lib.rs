@@ -1480,6 +1480,208 @@ fn sparse_forward_batch_tiered_numpy<'py>(
     Ok(numpy::PyArray1::from_vec(py, probs).into())
 }
 
+// =============================================================================
+// SPARSE GPU CACHE - Cached GPU export for Metal forward pass
+// =============================================================================
+
+/// Cached GPU export data for sparse forward pass via Metal.
+///
+/// Holds the exported sparse memory (keys, values, offsets, counts, cluster_infos)
+/// and a Metal evaluator. This avoids re-exporting on every forward call.
+///
+/// Usage:
+///   cache = sparse_export_for_gpu(memory)           # For TieredRAMClusterLayer
+///   cache = sparse_export_groups_for_gpu(...)        # For AdaptiveClusteredRAM
+///   probs = sparse_forward_metal_numpy(cache, ...)   # Shared forward
+#[pyclass]
+struct SparseGpuCache {
+    keys: Vec<u64>,
+    values: Vec<u8>,
+    offsets: Vec<u32>,
+    counts: Vec<u32>,
+    cluster_infos: Vec<(u32, u32, u32, u32)>,
+    num_clusters: usize,
+    evaluator: metal_ramlm::MetalSparseEvaluator,
+}
+
+#[pymethods]
+impl SparseGpuCache {
+    /// Get number of clusters
+    #[getter]
+    fn num_clusters(&self) -> usize {
+        self.num_clusters
+    }
+
+    /// Get total entries in sparse memory
+    #[getter]
+    fn total_entries(&self) -> usize {
+        self.keys.len()
+    }
+
+    /// Get memory size in bytes (approximate)
+    #[getter]
+    fn memory_bytes(&self) -> usize {
+        self.keys.len() * 8 + self.values.len() + self.offsets.len() * 4
+            + self.counts.len() * 4 + self.cluster_infos.len() * 16
+    }
+}
+
+/// Export a TieredSparseMemory to GPU cache for Metal forward pass.
+///
+/// For TieredRAMClusterLayer: exports single memory with all tiers.
+#[pyfunction]
+fn sparse_export_for_gpu(
+    py: Python<'_>,
+    memory: &TieredSparseMemory,
+) -> PyResult<SparseGpuCache> {
+    py.allow_threads(|| {
+        let export = memory.inner.export_for_gpu_general();
+        let evaluator = metal_ramlm::MetalSparseEvaluator::new()
+            .map_err(|e| format!("Failed to create Metal evaluator: {}", e))?;
+
+        Ok(SparseGpuCache {
+            keys: export.keys,
+            values: export.values,
+            offsets: export.offsets,
+            counts: export.counts,
+            cluster_infos: export.cluster_infos,
+            num_clusters: export.num_clusters,
+            evaluator,
+        })
+    }).map_err(|e: String| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
+}
+
+/// Export multiple TieredSparseMemory groups to a single GPU cache.
+///
+/// For AdaptiveClusteredRAM: combines multiple group exports, mapping each
+/// group's clusters to their correct global cluster positions.
+///
+/// Args:
+///   memories: List of TieredSparseMemory objects (one per config group)
+///   cluster_ids_per_group: List of cluster ID lists (mapping local → global)
+///   num_clusters: Total number of clusters across all groups
+#[pyfunction]
+fn sparse_export_groups_for_gpu(
+    py: Python<'_>,
+    memories: Vec<pyo3::PyRef<'_, TieredSparseMemory>>,
+    cluster_ids_per_group: Vec<Vec<usize>>,
+    num_clusters: usize,
+) -> PyResult<SparseGpuCache> {
+    // Extract Arc references before releasing GIL (PyRef can't cross thread boundary)
+    let inner_refs: Vec<Arc<sparse_memory::TieredSparseMemory>> = memories.iter()
+        .map(|m| Arc::clone(&m.inner))
+        .collect();
+
+    py.allow_threads(|| {
+        let mut all_keys: Vec<u64> = Vec::new();
+        let mut all_values: Vec<u8> = Vec::new();
+        let mut all_offsets: Vec<u32> = Vec::new();
+        let mut all_counts: Vec<u32> = Vec::new();
+        let mut all_cluster_infos: Vec<(u32, u32, u32, u32)> = vec![(0, 0, 0, 0); num_clusters];
+
+        let mut global_neuron_base: u32 = 0;
+        let mut global_conn_offset: u32 = 0;
+
+        for (group_idx, inner) in inner_refs.iter().enumerate() {
+            let export = inner.export_for_gpu_general();
+            let cluster_ids = &cluster_ids_per_group[group_idx];
+
+            // Adjust offsets for global arrays
+            let key_base = all_keys.len() as u32;
+            for &off in &export.offsets {
+                all_offsets.push(key_base + off);
+            }
+            all_counts.extend(&export.counts);
+            all_keys.extend(&export.keys);
+            all_values.extend(&export.values);
+
+            // Map cluster_infos from local to global positions
+            for (local_idx, &(neurons, bits, start_neuron, conn_offset)) in export.cluster_infos.iter().enumerate() {
+                if local_idx < cluster_ids.len() {
+                    let global_cluster = cluster_ids[local_idx];
+                    all_cluster_infos[global_cluster] = (
+                        neurons,
+                        bits,
+                        global_neuron_base + start_neuron,
+                        global_conn_offset + conn_offset,
+                    );
+                }
+            }
+
+            // Update bases for next group
+            let total_neurons: u32 = export.offsets.len() as u32;
+            global_neuron_base += total_neurons;
+
+            // Connection offset: sum of all neurons * bits across this group's tiers
+            let group_conn_size: u32 = export.cluster_infos.iter()
+                .map(|&(n, b, _, _)| n * b)
+                .sum();
+            global_conn_offset += group_conn_size;
+        }
+
+        let evaluator = metal_ramlm::MetalSparseEvaluator::new()
+            .map_err(|e| format!("Failed to create Metal evaluator: {}", e))?;
+
+        Ok(SparseGpuCache {
+            keys: all_keys,
+            values: all_values,
+            offsets: all_offsets,
+            counts: all_counts,
+            cluster_infos: all_cluster_infos,
+            num_clusters,
+            evaluator,
+        })
+    }).map_err(|e: String| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
+}
+
+/// Run Metal GPU forward pass using cached export data.
+///
+/// Args:
+///   cache: SparseGpuCache from sparse_export_for_gpu or sparse_export_groups_for_gpu
+///   input_bits: [num_examples * total_input_bits] u8 numpy array
+///   connections_flat: [total_connections] i64 numpy array
+///   num_examples: batch size
+///   total_input_bits: bits per example
+///
+/// Returns: [num_examples * num_clusters] f32 numpy array
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn sparse_forward_metal_numpy<'py>(
+    py: Python<'py>,
+    cache: &SparseGpuCache,
+    input_bits: PyReadonlyArray1<'py, u8>,
+    connections_flat: PyReadonlyArray1<'py, i64>,
+    num_examples: usize,
+    total_input_bits: usize,
+) -> PyResult<Py<numpy::PyArray1<f32>>> {
+    let input_slice = input_bits.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Input array not contiguous: {}", e))
+    })?;
+    let conn_slice = connections_flat.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Connections array not contiguous: {}", e))
+    })?;
+
+    let input_bools: Vec<bool> = input_slice.iter().map(|&b| b != 0).collect();
+    let conn_vec: Vec<i64> = conn_slice.to_vec();
+
+    let probs = py.allow_threads(|| {
+        cache.evaluator.forward_batch_general(
+            &input_bools,
+            &conn_vec,
+            &cache.keys,
+            &cache.values,
+            &cache.offsets,
+            &cache.counts,
+            &cache.cluster_infos,
+            num_examples,
+            total_input_bits,
+            cache.num_clusters,
+        ).map_err(|e| format!("Metal forward failed: {}", e))
+    }).map_err(|e: String| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
+
+    Ok(numpy::PyArray1::from_vec(py, probs).into())
+}
+
 /// Evaluate multiple connectivity patterns in parallel (for GA/TS optimization)
 ///
 /// This is the KEY function for accelerating GA/TS optimization.
@@ -3607,6 +3809,11 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sparse_train_batch_tiered, m)?)?;
     m.add_function(wrap_pyfunction!(sparse_forward_batch_tiered, m)?)?;
     m.add_function(wrap_pyfunction!(sparse_forward_batch_tiered_numpy, m)?)?;
+    // Metal GPU sparse forward (cached export for fast repeated forward)
+    m.add_class::<SparseGpuCache>()?;
+    m.add_function(wrap_pyfunction!(sparse_export_for_gpu, m)?)?;
+    m.add_function(wrap_pyfunction!(sparse_export_groups_for_gpu, m)?)?;
+    m.add_function(wrap_pyfunction!(sparse_forward_metal_numpy, m)?)?;
     // Parallel GA/TS candidate evaluation (KEY optimization)
     m.add_function(wrap_pyfunction!(evaluate_candidates_parallel, m)?)?;
     // Parallel GA/TS for TIERED architectures (16 cores parallel)

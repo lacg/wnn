@@ -660,6 +660,70 @@ impl TieredSparseMemory {
     pub fn total_cells(&self) -> usize {
         self.tiers.iter().map(|t| t.total_cells()).sum()
     }
+
+    /// Export to GPU-compatible format with per-cluster ClusterInfo metadata.
+    ///
+    /// Returns (keys, values, offsets, counts, cluster_infos) where:
+    /// - keys/values/offsets/counts: global arrays across all tiers
+    /// - cluster_infos: [(neurons_per_cluster, bits_per_neuron, start_neuron, connection_offset)]
+    ///   one entry per cluster
+    pub fn export_for_gpu_general(&self) -> GeneralGpuExport {
+        let mut all_keys: Vec<u64> = Vec::new();
+        let mut all_values: Vec<u8> = Vec::new();
+        let mut all_offsets: Vec<u32> = Vec::new();
+        let mut all_counts: Vec<u32> = Vec::new();
+        let mut cluster_infos: Vec<(u32, u32, u32, u32)> = Vec::with_capacity(self.num_clusters);
+
+        // Global neuron index across all tiers (for offsets/counts arrays)
+        let mut global_neuron_base: u32 = 0;
+
+        for config in &self.tier_configs {
+            let tier = &self.tiers[self.tier_configs.iter().position(|c| std::ptr::eq(c, config)).unwrap()];
+            let tier_export = tier.export_for_gpu();
+
+            // Adjust offsets for global keys array
+            let key_base = all_keys.len() as u32;
+            for &off in &tier_export.offsets {
+                all_offsets.push(key_base + off);
+            }
+            all_counts.extend(&tier_export.counts);
+            all_keys.extend(&tier_export.keys);
+            all_values.extend(&tier_export.values);
+
+            // Build ClusterInfo for each cluster in this tier
+            let num_tier_clusters = config.end_cluster - config.start_cluster;
+            for local_cluster in 0..num_tier_clusters {
+                cluster_infos.push((
+                    config.neurons_per_cluster as u32,
+                    config.bits_per_neuron as u32,
+                    global_neuron_base + (local_cluster * config.neurons_per_cluster) as u32,
+                    config.connection_offset as u32 + (local_cluster * config.neurons_per_cluster * config.bits_per_neuron) as u32,
+                ));
+            }
+
+            global_neuron_base += (num_tier_clusters * config.neurons_per_cluster) as u32;
+        }
+
+        GeneralGpuExport {
+            keys: all_keys,
+            values: all_values,
+            offsets: all_offsets,
+            counts: all_counts,
+            cluster_infos,
+            num_clusters: self.num_clusters,
+        }
+    }
+}
+
+/// GPU-compatible general export with per-cluster metadata
+pub struct GeneralGpuExport {
+    pub keys: Vec<u64>,
+    pub values: Vec<u8>,
+    pub offsets: Vec<u32>,
+    pub counts: Vec<u32>,
+    /// (neurons_per_cluster, bits_per_neuron, start_neuron, connection_offset) per cluster
+    pub cluster_infos: Vec<(u32, u32, u32, u32)>,
+    pub num_clusters: usize,
 }
 
 /// Train batch on tiered sparse memory (PARALLEL version)
@@ -1015,6 +1079,7 @@ struct CandidateExport {
     values: Vec<u8>,
     offsets: Vec<u32>,
     counts: Vec<u32>,
+    cluster_infos: Vec<(u32, u32, u32, u32)>,
 }
 
 /// Evaluate candidates with memory-adaptive batching and CPU/GPU pipelining
@@ -1091,27 +1156,12 @@ pub fn evaluate_gpu_batch_adaptive(
         .map(|_| TieredSparseMemory::new(tier_configs, num_clusters))
         .collect();
 
-    // Build tier config for GPU (done once, reused for all batches)
-    let gpu_tier_configs: Vec<(usize, usize, usize, usize)> = {
-        let mut configs = Vec::new();
-        let mut start_neuron = 0usize;
-        let mut start_cluster = 0usize;
-        for &(end_cluster, neurons_per_cluster, bits_per_neuron) in tier_configs {
-            let num_tier_clusters = end_cluster - start_cluster;
-            configs.push((end_cluster, neurons_per_cluster, bits_per_neuron, start_neuron));
-            start_neuron += num_tier_clusters * neurons_per_cluster;
-            start_cluster = end_cluster;
-        }
-        configs
-    };
-
     // Channel for pipelining: CPU sends exports, GPU thread receives and evaluates
     let (tx, rx) = mpsc::channel::<(usize, Vec<CandidateExport>)>();
 
     // Clone data needed by GPU thread
     let eval_input_bits_owned = eval_input_bits.to_vec();
     let eval_targets_owned = eval_targets.to_vec();
-    let gpu_tier_configs_clone = gpu_tier_configs.clone();
 
     // Spawn GPU evaluation thread
     let gpu_handle = thread::spawn(move || {
@@ -1122,14 +1172,14 @@ pub fn evaluate_gpu_batch_adaptive(
 
             // Evaluate each candidate in this batch on GPU
             for export in exports {
-                let probs = gpu_evaluator.forward_batch_tiered(
+                let probs = gpu_evaluator.forward_batch_general(
                     &eval_input_bits_owned,
                     &export.connections,
                     &export.keys,
                     &export.values,
                     &export.offsets,
                     &export.counts,
-                    &gpu_tier_configs_clone,
+                    &export.cluster_infos,
                     num_eval_examples,
                     total_input_bits,
                     num_clusters,
@@ -1187,29 +1237,16 @@ pub fn evaluate_gpu_batch_adaptive(
                     num_negatives,
                 );
 
-                // Export for GPU
-                let mut keys: Vec<u64> = Vec::new();
-                let mut values: Vec<u8> = Vec::new();
-                let mut offsets: Vec<u32> = Vec::new();
-                let mut counts: Vec<u32> = Vec::new();
-
-                for tier in &memory.tiers {
-                    let export = tier.export_for_gpu();
-                    let base = keys.len() as u32;
-                    for &off in &export.offsets {
-                        offsets.push(base + off);
-                    }
-                    counts.extend(&export.counts);
-                    keys.extend(&export.keys);
-                    values.extend(&export.values);
-                }
+                // Export for GPU using general format
+                let export = memory.export_for_gpu_general();
 
                 CandidateExport {
                     connections: connections.to_vec(),
-                    keys,
-                    values,
-                    offsets,
-                    counts,
+                    keys: export.keys,
+                    values: export.values,
+                    offsets: export.offsets,
+                    counts: export.counts,
+                    cluster_infos: export.cluster_infos,
                 }
             })
             .collect();
@@ -1274,51 +1311,18 @@ fn evaluate_single_tiered_hybrid(
         num_negatives,
     );
 
-    // PHASE 2: Export sparse memory to GPU-compatible format
-    let mut all_keys: Vec<u64> = Vec::new();
-    let mut all_values: Vec<u8> = Vec::new();
-    let mut all_offsets: Vec<u32> = Vec::new();
-    let mut all_counts: Vec<u32> = Vec::new();
-
-    // Build tier info for GPU
-    let mut gpu_tier_configs: Vec<(usize, usize, usize, usize)> = Vec::new();
-    let mut start_cluster = 0;
-
-    for (tier_idx, &(end_cluster, neurons_per_cluster, bits_per_neuron)) in tier_configs.iter().enumerate() {
-        let tier_export = memory.tiers[tier_idx].export_for_gpu();
-
-        // Adjust offsets for global array
-        let base_offset = all_keys.len() as u32;
-        for &offset in &tier_export.offsets {
-            all_offsets.push(base_offset + offset);
-        }
-        all_counts.extend(&tier_export.counts);
-        all_keys.extend(&tier_export.keys);
-        all_values.extend(&tier_export.values);
-
-        // Record tier config with start_neuron
-        let start_neuron = if tier_idx == 0 {
-            0
-        } else {
-            gpu_tier_configs.iter().map(|&(_, npc, _, _)| {
-                let prev_end = gpu_tier_configs.last().map(|&(ec, _, _, _)| ec).unwrap_or(0);
-                (prev_end - start_cluster) * npc
-            }).sum::<usize>()
-        };
-
-        gpu_tier_configs.push((end_cluster, neurons_per_cluster, bits_per_neuron, memory.tier_configs[tier_idx].start_neuron));
-        start_cluster = end_cluster;
-    }
+    // PHASE 2: Export sparse memory to GPU-compatible format using general export
+    let export = memory.export_for_gpu_general();
 
     // PHASE 3: Evaluate on GPU (massive parallelism with binary search)
-    let probs = gpu_evaluator.forward_batch_tiered(
+    let probs = gpu_evaluator.forward_batch_general(
         eval_input_bits,
         connections_flat,
-        &all_keys,
-        &all_values,
-        &all_offsets,
-        &all_counts,
-        &gpu_tier_configs,
+        &export.keys,
+        &export.values,
+        &export.offsets,
+        &export.counts,
+        &export.cluster_infos,
         num_eval_examples,
         total_input_bits,
         num_clusters,

@@ -422,3 +422,76 @@ kernel void tiered_sparse_forward_pass(
     uint output_idx = example_idx * params.num_clusters + cluster_idx;
     probs_out[output_idx] = prob;
 }
+
+//
+// General Sparse Forward Pass Kernel (Per-Cluster Metadata)
+//
+// Unified kernel for both tiered and adaptive architectures.
+// Each cluster has its own ClusterInfo with (neurons, bits, start_neuron, connection_offset).
+// No tier lookup needed — each thread reads its cluster's metadata directly.
+//
+// This fixes the connection indexing bug in tiered_sparse_forward_pass where
+// connections_flat was indexed by global_neuron_idx * tier.bits_per_neuron,
+// which is wrong when tiers have different bits_per_neuron.
+//
+
+struct ClusterInfo {
+    uint neurons_per_cluster;  // How many neurons this cluster has
+    uint bits_per_neuron;      // Address bits per neuron
+    uint start_neuron;         // Index into offsets/counts arrays
+    uint connection_offset;    // Offset into connections_flat
+};
+
+struct GeneralParams {
+    uint num_examples;
+    uint total_input_bits;
+    uint num_clusters;
+    float empty_value;
+};
+
+kernel void general_sparse_forward_pass(
+    device const uchar* input_bits_flat [[buffer(0)]],      // [num_examples * total_input_bits]
+    device const int* connections_flat [[buffer(1)]],        // Variable-stride, indexed by ClusterInfo
+    device const ulong* keys_flat [[buffer(2)]],            // Sorted keys for all neurons
+    device const uchar* values_flat [[buffer(3)]],          // Cell values for all neurons
+    device const uint* offsets [[buffer(4)]],               // [total_neurons] start in keys per neuron
+    device const uint* counts [[buffer(5)]],                // [total_neurons] entries per neuron
+    device const ClusterInfo* cluster_infos [[buffer(6)]],  // [num_clusters] per-cluster metadata
+    constant GeneralParams& params [[buffer(7)]],
+    device float* probs_out [[buffer(8)]],                  // [num_examples * num_clusters]
+    uint2 thread_pos [[thread_position_in_grid]]
+) {
+    uint cluster_idx = thread_pos.x;
+    uint example_idx = thread_pos.y;
+
+    if (cluster_idx >= params.num_clusters) return;
+    if (example_idx >= params.num_examples) return;
+
+    ClusterInfo info = cluster_infos[cluster_idx];
+    device const uchar* input_bits = input_bits_flat + example_idx * params.total_input_bits;
+
+    uint count_true = 0;
+    uint count_empty = 0;
+
+    for (uint neuron_offset = 0; neuron_offset < info.neurons_per_cluster; neuron_offset++) {
+        uint neuron_idx = info.start_neuron + neuron_offset;
+        // Each neuron's connections start at connection_offset + neuron_offset * bits_per_neuron
+        device const int* connections = connections_flat + info.connection_offset + neuron_offset * info.bits_per_neuron;
+
+        ulong address = compute_address_sparse(input_bits, connections, info.bits_per_neuron);
+
+        uint start = offsets[neuron_idx];
+        uint cnt = counts[neuron_idx];
+        uint cell_value = binary_search_lookup(keys_flat, values_flat, start, cnt, address);
+
+        if (cell_value == CELL_TRUE) {
+            count_true++;
+        } else if (cell_value == CELL_EMPTY) {
+            count_empty++;
+        }
+    }
+
+    float prob = (float(count_true) + params.empty_value * float(count_empty)) / float(info.neurons_per_cluster);
+    uint output_idx = example_idx * params.num_clusters + cluster_idx;
+    probs_out[output_idx] = prob;
+}

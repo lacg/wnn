@@ -276,6 +276,7 @@ class TieredRAMClusterLayer(RAMComponent):
 		Forward pass returning probabilities per cluster.
 
 		For architectures with >10 bits per neuron, uses sparse memory backend.
+		Tries Metal GPU first, falls back to CPU.
 
 		Args:
 			input_bits: [batch, total_input_bits] boolean or 0/1 tensor
@@ -283,9 +284,12 @@ class TieredRAMClusterLayer(RAMComponent):
 		Returns:
 			[batch, num_clusters] float tensor of probabilities in [0, 1]
 		"""
-		# Use sparse forward if available (for >10 bits per neuron)
+		# Use Metal GPU forward if sparse and Metal available
 		if self._use_sparse and self._sparse_memory is not None:
-			return self.forward_sparse(input_bits)
+			try:
+				return self.forward_metal(input_bits)
+			except Exception:
+				return self.forward_sparse(input_bits)
 
 		if input_bits.ndim == 1:
 			input_bits = input_bits.unsqueeze(0)
@@ -799,7 +803,62 @@ class TieredRAMClusterLayer(RAMComponent):
 			num_negatives,
 		)
 
+		# Invalidate GPU cache (memory contents changed)
+		self._gpu_cache = None
+
 		return modified
+
+	def forward_metal(self, input_bits: Tensor) -> Tensor:
+		"""
+		Metal GPU forward pass using cached sparse export.
+
+		Exports sparse memory once, then reuses the GPU cache for subsequent
+		forward calls. Much faster than CPU sparse forward for large batches.
+
+		Args:
+			input_bits: [batch_size, total_input_bits] boolean tensor
+
+		Returns:
+			[batch_size, num_clusters] float tensor of probabilities
+		"""
+		if not self._use_sparse or self._sparse_memory is None:
+			raise RuntimeError("forward_metal requires sparse memory backend")
+
+		import ram_accelerator
+		import numpy as np
+		from torch import from_numpy
+
+		if input_bits.ndim == 1:
+			input_bits = input_bits.unsqueeze(0)
+
+		batch_size = input_bits.shape[0]
+
+		# Build GPU cache on first call (or after invalidation)
+		if not hasattr(self, '_gpu_cache') or self._gpu_cache is None:
+			self._gpu_cache = ram_accelerator.sparse_export_for_gpu(self._sparse_memory)
+
+		# Flatten inputs to numpy
+		input_bits_np = input_bits.flatten().bool().numpy().astype(np.uint8)
+
+		# Build flattened connections cache
+		if not hasattr(self, '_connections_flat_cache'):
+			connections_list = []
+			for memory in self.tier_memories:
+				connections_list.append(memory.connections.flatten().numpy().astype(np.int64))
+			self._connections_flat_cache = np.concatenate(connections_list)
+
+		# Run Metal forward
+		probs_np = ram_accelerator.sparse_forward_metal_numpy(
+			self._gpu_cache,
+			input_bits_np,
+			self._connections_flat_cache,
+			batch_size,
+			self.total_input_bits,
+		)
+
+		# Remap from logical (frequency-ordered) to physical (token ID) order
+		scores_logical = from_numpy(probs_np).view(batch_size, self.num_clusters)
+		return scores_logical[:, self._phys_to_logical_idx]
 
 	def forward_sparse(self, input_bits: Tensor) -> Tensor:
 		"""
@@ -857,6 +916,8 @@ class TieredRAMClusterLayer(RAMComponent):
 		# Also reset sparse memory if using it
 		if self._sparse_memory is not None:
 			self._sparse_memory.reset()
+		# Invalidate GPU cache (memory contents changed)
+		self._gpu_cache = None
 
 	def get_config(self) -> dict:
 		"""Get configuration dict for model recreation."""

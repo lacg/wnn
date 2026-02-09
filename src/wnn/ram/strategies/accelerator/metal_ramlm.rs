@@ -439,6 +439,7 @@ pub struct MetalSparseEvaluator {
     sparse_forward_pipeline: ComputePipelineState,
     sparse_forward_per_example_pipeline: ComputePipelineState,
     tiered_forward_pipeline: ComputePipelineState,
+    general_forward_pipeline: ComputePipelineState,
 }
 
 impl MetalSparseEvaluator {
@@ -465,6 +466,10 @@ impl MetalSparseEvaluator {
             .get_function("tiered_sparse_forward_pass", None)
             .map_err(|e| format!("Failed to get tiered_sparse_forward_pass: {}", e))?;
 
+        let general_forward_kernel = library
+            .get_function("general_sparse_forward_pass", None)
+            .map_err(|e| format!("Failed to get general_sparse_forward_pass: {}", e))?;
+
         let sparse_forward_pipeline = device
             .new_compute_pipeline_state_with_function(&sparse_forward_kernel)
             .map_err(|e| format!("Failed to create sparse forward pipeline: {}", e))?;
@@ -477,12 +482,17 @@ impl MetalSparseEvaluator {
             .new_compute_pipeline_state_with_function(&tiered_forward_kernel)
             .map_err(|e| format!("Failed to create tiered forward pipeline: {}", e))?;
 
+        let general_forward_pipeline = device
+            .new_compute_pipeline_state_with_function(&general_forward_kernel)
+            .map_err(|e| format!("Failed to create general forward pipeline: {}", e))?;
+
         Ok(Self {
             device,
             command_queue,
             sparse_forward_pipeline,
             sparse_forward_per_example_pipeline,
             tiered_forward_pipeline,
+            general_forward_pipeline,
         })
     }
 
@@ -760,6 +770,148 @@ impl MetalSparseEvaluator {
         encoder.set_buffer(5, Some(&counts_buffer), 0);
         encoder.set_buffer(6, Some(&params_buffer), 0);
         encoder.set_buffer(7, Some(&tiers_buffer), 0);
+        encoder.set_buffer(8, Some(&output_buffer), 0);
+
+        let grid_size = MTLSize::new(num_clusters as u64, num_examples as u64, 1);
+        let thread_group_size = MTLSize::new(32.min(num_clusters as u64), 8.min(num_examples as u64), 1);
+        encoder.dispatch_threads(grid_size, thread_group_size);
+
+        encoder.end_encoding();
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+
+        let result_ptr = output_buffer.contents() as *const f32;
+        let results: Vec<f32> = unsafe {
+            std::slice::from_raw_parts(result_ptr, output_size).to_vec()
+        };
+
+        Ok(results)
+    }
+
+    /// General forward pass using per-cluster metadata
+    ///
+    /// Unified kernel for both tiered and adaptive architectures.
+    /// Each cluster has its own ClusterInfo (neurons, bits, start_neuron, connection_offset).
+    ///
+    /// Args:
+    ///   cluster_infos: [(neurons_per_cluster, bits_per_neuron, start_neuron, connection_offset)]
+    pub fn forward_batch_general(
+        &self,
+        input_bits_flat: &[bool],
+        connections_flat: &[i64],
+        keys_flat: &[u64],
+        values_flat: &[u8],
+        offsets: &[u32],
+        counts: &[u32],
+        cluster_infos: &[(u32, u32, u32, u32)],
+        num_examples: usize,
+        total_input_bits: usize,
+        num_clusters: usize,
+    ) -> Result<Vec<f32>, String> {
+        if num_examples == 0 || num_clusters == 0 {
+            return Ok(vec![]);
+        }
+
+        let input_bits_u8: Vec<u8> = input_bits_flat.iter().map(|&b| b as u8).collect();
+        let connections_i32: Vec<i32> = connections_flat.iter().map(|&c| c as i32).collect();
+
+        #[repr(C)]
+        struct GeneralParams {
+            num_examples: u32,
+            total_input_bits: u32,
+            num_clusters: u32,
+            empty_value: f32,
+        }
+
+        #[repr(C)]
+        struct ClusterInfo {
+            neurons_per_cluster: u32,
+            bits_per_neuron: u32,
+            start_neuron: u32,
+            connection_offset: u32,
+        }
+
+        let params = GeneralParams {
+            num_examples: num_examples as u32,
+            total_input_bits: total_input_bits as u32,
+            num_clusters: num_clusters as u32,
+            empty_value: crate::ramlm::get_empty_value(),
+        };
+
+        let cluster_info_structs: Vec<ClusterInfo> = cluster_infos.iter().map(|&(n, b, s, c)| ClusterInfo {
+            neurons_per_cluster: n,
+            bits_per_neuron: b,
+            start_neuron: s,
+            connection_offset: c,
+        }).collect();
+
+        // Create buffers
+        let input_buffer = self.device.new_buffer_with_data(
+            input_bits_u8.as_ptr() as *const _,
+            (input_bits_u8.len() * mem::size_of::<u8>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let conn_buffer = self.device.new_buffer_with_data(
+            connections_i32.as_ptr() as *const _,
+            (connections_i32.len() * mem::size_of::<i32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let keys_buffer = self.device.new_buffer_with_data(
+            keys_flat.as_ptr() as *const _,
+            (keys_flat.len() * mem::size_of::<u64>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let values_buffer = self.device.new_buffer_with_data(
+            values_flat.as_ptr() as *const _,
+            (values_flat.len() * mem::size_of::<u8>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let offsets_buffer = self.device.new_buffer_with_data(
+            offsets.as_ptr() as *const _,
+            (offsets.len() * mem::size_of::<u32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let counts_buffer = self.device.new_buffer_with_data(
+            counts.as_ptr() as *const _,
+            (counts.len() * mem::size_of::<u32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let cluster_info_buffer = self.device.new_buffer_with_data(
+            cluster_info_structs.as_ptr() as *const _,
+            (cluster_info_structs.len() * mem::size_of::<ClusterInfo>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let params_buffer = self.device.new_buffer_with_data(
+            &params as *const _ as *const _,
+            mem::size_of::<GeneralParams>() as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let output_size = num_examples * num_clusters;
+        let output_buffer = self.device.new_buffer(
+            (output_size * mem::size_of::<f32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let command_buffer = self.command_queue.new_command_buffer();
+        let encoder = command_buffer.new_compute_command_encoder();
+
+        encoder.set_compute_pipeline_state(&self.general_forward_pipeline);
+        encoder.set_buffer(0, Some(&input_buffer), 0);
+        encoder.set_buffer(1, Some(&conn_buffer), 0);
+        encoder.set_buffer(2, Some(&keys_buffer), 0);
+        encoder.set_buffer(3, Some(&values_buffer), 0);
+        encoder.set_buffer(4, Some(&offsets_buffer), 0);
+        encoder.set_buffer(5, Some(&counts_buffer), 0);
+        encoder.set_buffer(6, Some(&cluster_info_buffer), 0);
+        encoder.set_buffer(7, Some(&params_buffer), 0);
         encoder.set_buffer(8, Some(&output_buffer), 0);
 
         let grid_size = MTLSize::new(num_clusters as u64, num_examples as u64, 1);

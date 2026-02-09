@@ -233,6 +233,13 @@ class AdaptiveClusteredRAM(RAMComponent):
 		if input_bits.ndim == 1:
 			input_bits = input_bits.unsqueeze(0)
 
+		# Try Metal GPU forward for sparse groups
+		if use_rust and self._use_sparse:
+			try:
+				return self.forward_metal(input_bits)
+			except Exception:
+				pass  # Fall back to Rust/PyTorch
+
 		# Try Rust-accelerated forward if requested
 		if use_rust:
 			try:
@@ -344,6 +351,74 @@ class AdaptiveClusteredRAM(RAMComponent):
 		)
 
 		return from_numpy(np.array(probs_flat, dtype=np.float32)).view(num_examples, self.num_clusters)
+
+	def forward_metal(self, input_bits: Tensor) -> Tensor:
+		"""
+		Metal GPU forward pass for all sparse groups in a single dispatch.
+
+		Exports all sparse group memories to a single GPU cache, then runs
+		the general Metal kernel. Dense groups (<= 10 bits) still use CPU.
+
+		Args:
+			input_bits: [batch_size, total_input_bits] boolean tensor
+
+		Returns:
+			[batch_size, num_clusters] float tensor of probabilities
+		"""
+		import ram_accelerator
+		import numpy as np
+		from torch import from_numpy
+
+		if input_bits.ndim == 1:
+			input_bits = input_bits.unsqueeze(0)
+
+		batch_size = input_bits.shape[0]
+
+		# Build GPU cache on first call (or after invalidation)
+		if not hasattr(self, '_gpu_cache') or self._gpu_cache is None:
+			# Collect sparse group memories and cluster IDs
+			sparse_group_indices = sorted(self._sparse_memories.keys())
+			memories = [self._sparse_memories[i] for i in sparse_group_indices]
+			cluster_ids = [self.config_groups[i].cluster_ids for i in sparse_group_indices]
+
+			self._gpu_cache = ram_accelerator.sparse_export_groups_for_gpu(
+				memories, cluster_ids, self.num_clusters
+			)
+			# Track which groups are sparse vs dense
+			self._sparse_group_indices = set(sparse_group_indices)
+
+		# Flatten inputs to numpy
+		input_bits_np = input_bits.flatten().bool().numpy().astype(np.uint8)
+
+		# Build flattened connections cache for sparse groups
+		if not hasattr(self, '_sparse_connections_cache') or self._sparse_connections_cache is None:
+			connections_list = []
+			for group_idx in sorted(self._sparse_memories.keys()):
+				group = self.config_groups[group_idx]
+				connections_list.append(
+					group.memory.connections.flatten().numpy().astype(np.int64)
+				)
+			self._sparse_connections_cache = np.concatenate(connections_list) if connections_list else np.array([], dtype=np.int64)
+
+		# Run Metal forward for all sparse groups
+		probs_np = ram_accelerator.sparse_forward_metal_numpy(
+			self._gpu_cache,
+			input_bits_np,
+			self._sparse_connections_cache,
+			batch_size,
+			self.total_input_bits,
+		)
+
+		probs = from_numpy(probs_np).view(batch_size, self.num_clusters)
+
+		# Fill in dense groups (CPU)
+		for group_idx, group in enumerate(self.config_groups):
+			if group_idx not in self._sparse_group_indices:
+				group_probs = self._forward_dense_group(input_bits, group_idx)
+				for local_idx, cluster_id in enumerate(group.cluster_ids):
+					probs[:, cluster_id] = group_probs[:, local_idx]
+
+		return probs
 
 	def _forward_dense_group(self, input_bits: Tensor, group_idx: int) -> Tensor:
 		"""Dense forward for a single config group."""
@@ -479,6 +554,10 @@ class AdaptiveClusteredRAM(RAMComponent):
 				if memory.explore_batch(neuron_indices, cluster_addresses, target_bits, allow_override):
 					modified += npc
 
+		# Invalidate GPU cache (memory contents changed)
+		self._gpu_cache = None
+		self._sparse_connections_cache = None
+
 		return modified
 
 	def train_rust(
@@ -601,6 +680,9 @@ class AdaptiveClusteredRAM(RAMComponent):
 		# Also reset sparse memories
 		for sparse_mem in self._sparse_memories.values():
 			sparse_mem.reset()
+		# Invalidate GPU cache (memory contents changed)
+		self._gpu_cache = None
+		self._sparse_connections_cache = None
 
 	def get_cluster_config(self, cluster_id: int) -> tuple[int, int]:
 		"""
