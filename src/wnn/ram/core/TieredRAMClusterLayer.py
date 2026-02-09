@@ -270,6 +270,9 @@ class TieredRAMClusterLayer(RAMClusterBase):
 		expected_shape = (tc.total_neurons, tc.bits_per_neuron)
 		assert connections.shape == expected_shape, f"Expected {expected_shape}, got {connections.shape}"
 		self.tier_memories[tier_idx].connections = connections
+		# Invalidate caches that depend on connections
+		self._connections_flat_cache = None
+		self._gpu_cache = None
 
 	def forward(self, input_bits: Tensor) -> Tensor:
 		"""
@@ -754,7 +757,7 @@ class TieredRAMClusterLayer(RAMClusterBase):
 		Training using Rust sparse tiered memory backend.
 
 		Memory stays in Rust - only returns count of modified cells.
-		This avoids the massive data transfer overhead of dense training.
+		Uses numpy arrays for fast data transfer (avoids .tolist() overhead).
 
 		Args:
 			input_bits: [num_examples, total_input_bits] input patterns
@@ -777,27 +780,26 @@ class TieredRAMClusterLayer(RAMClusterBase):
 		# Remap physical cluster IDs (token IDs) to logical (frequency-ordered) indices.
 		# The Rust sparse memory assigns tiers by cluster index, so we must pass
 		# logical indices so tier 0 = most frequent tokens, tier 1 = next, etc.
-		true_logical = self._phys_to_logical_np[true_clusters.numpy()]
-		false_logical = self._phys_to_logical_np[false_clusters.numpy().flatten()]
+		true_logical = self._phys_to_logical_np[true_clusters.numpy()].astype(np.int64)
+		false_logical = self._phys_to_logical_np[false_clusters.numpy().flatten()].astype(np.int64)
 
-		# Flatten inputs for Rust
-		input_bits_flat = input_bits.flatten().bool().tolist()
-		true_clusters_list = true_logical.tolist()
-		false_clusters_flat = false_logical.tolist()
+		# Flatten inputs as numpy u8 (avoids .tolist() overhead)
+		input_bits_np = input_bits.flatten().bool().numpy().astype(np.uint8)
 
-		# Build flattened connections for ALL neurons across tiers
-		connections_list = []
-		for memory in self.tier_memories:
-			connections_list.append(memory.connections.flatten().numpy().astype(np.int64))
-		connections_flat = np.concatenate(connections_list).tolist()
+		# Cache flattened connections (same across all training calls)
+		if not hasattr(self, '_connections_flat_cache') or self._connections_flat_cache is None:
+			connections_list = []
+			for memory in self.tier_memories:
+				connections_list.append(memory.connections.flatten().numpy().astype(np.int64))
+			self._connections_flat_cache = np.concatenate(connections_list)
 
-		# Call Rust sparse tiered training
-		modified = ram_accelerator.sparse_train_batch_tiered(
+		# Call Rust sparse tiered training with numpy arrays
+		modified = ram_accelerator.sparse_train_batch_tiered_numpy(
 			self._sparse_memory,
-			input_bits_flat,
-			true_clusters_list,
-			false_clusters_flat,
-			connections_flat,
+			input_bits_np,
+			true_logical,
+			false_logical,
+			self._connections_flat_cache,
 			num_examples,
 			self.total_input_bits,
 			num_negatives,

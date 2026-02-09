@@ -1409,6 +1409,67 @@ fn sparse_train_batch_tiered(
     })
 }
 
+/// Batch training for tiered sparse memory using NumPy arrays (FAST)
+///
+/// Uses numpy arrays to avoid Python list conversion overhead.
+/// Typically 3-5x faster than sparse_train_batch_tiered for large batches.
+///
+/// Args:
+///   input_bits: [num_examples * total_input_bits] u8 numpy array (0/1 values)
+///   true_clusters: [num_examples] i64 numpy array of logical cluster indices
+///   false_clusters_flat: [num_examples * num_negatives] i64 numpy array
+///   connections_flat: [total_neurons * max_bits_per_neuron] i64 numpy array
+///
+/// Returns: number of memory cells modified
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn sparse_train_batch_tiered_numpy<'py>(
+    py: Python<'py>,
+    memory: &TieredSparseMemory,
+    input_bits: PyReadonlyArray1<'py, u8>,
+    true_clusters: PyReadonlyArray1<'py, i64>,
+    false_clusters_flat: PyReadonlyArray1<'py, i64>,
+    connections_flat: PyReadonlyArray1<'py, i64>,
+    num_examples: usize,
+    total_input_bits: usize,
+    num_negatives: usize,
+) -> PyResult<usize> {
+    // Extract slices before allow_threads
+    let input_slice = input_bits.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Input array not contiguous: {}", e))
+    })?;
+    let true_slice = true_clusters.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("True clusters array not contiguous: {}", e))
+    })?;
+    let false_slice = false_clusters_flat.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("False clusters array not contiguous: {}", e))
+    })?;
+    let conn_slice = connections_flat.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Connections array not contiguous: {}", e))
+    })?;
+
+    // Convert to owned vecs (needed for Send across allow_threads)
+    let input_bools: Vec<bool> = input_slice.iter().map(|&b| b != 0).collect();
+    let true_vec: Vec<i64> = true_slice.to_vec();
+    let false_vec: Vec<i64> = false_slice.to_vec();
+    let conn_vec: Vec<i64> = conn_slice.to_vec();
+
+    // Run training in parallel (releases GIL)
+    py.allow_threads(|| {
+        let modified = sparse_memory::train_batch_tiered(
+            &memory.inner,
+            &input_bools,
+            &true_vec,
+            &false_vec,
+            &conn_vec,
+            num_examples,
+            total_input_bits,
+            num_negatives,
+        );
+        Ok(modified)
+    })
+}
+
 /// Batch forward pass for tiered sparse memory backend (parallel)
 /// Legacy version using Vec - prefer sparse_forward_batch_tiered_numpy for speed
 #[pyfunction]
@@ -3807,6 +3868,7 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Tiered sparse memory backend (for variable bits per tier)
     m.add_class::<TieredSparseMemory>()?;
     m.add_function(wrap_pyfunction!(sparse_train_batch_tiered, m)?)?;
+    m.add_function(wrap_pyfunction!(sparse_train_batch_tiered_numpy, m)?)?;
     m.add_function(wrap_pyfunction!(sparse_forward_batch_tiered, m)?)?;
     m.add_function(wrap_pyfunction!(sparse_forward_batch_tiered_numpy, m)?)?;
     // Metal GPU sparse forward (cached export for fast repeated forward)

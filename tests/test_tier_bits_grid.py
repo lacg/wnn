@@ -79,6 +79,7 @@ def run_single(
 	cluster_order: list[int],
 	rng_seed: int,
 	vocab_size: int = 50257,
+	global_top_k: int = 1000,
 ) -> dict:
 	"""Train and evaluate a single config with a given seed."""
 	model = RAMLM(
@@ -91,7 +92,7 @@ def run_single(
 	force_sparse_mode(model)
 
 	model.train_epoch_fast_auto(
-		train_tokens, global_top_k=1000, batch_size=5000, verbose=False,
+		train_tokens, global_top_k=global_top_k, batch_size=5000, verbose=False,
 	)
 	stats = model.evaluate_fast(val_tokens, batch_size=5000, verbose=False)
 
@@ -117,7 +118,23 @@ def main():
 	parser = argparse.ArgumentParser(description="Full tier bits grid sweep")
 	parser.add_argument("--output", type=str, default="experiments/tier_bits_grid.json")
 	parser.add_argument("--runs", type=int, default=5, help="Runs per config for averaging")
+	parser.add_argument("--fast", action="store_true",
+		help="Fast mode: 25%% train data, 200 negatives, 50K val tokens (~5x faster)")
+	parser.add_argument("--train-fraction", type=float, default=1.0,
+		help="Fraction of training data to use (default 1.0 = all)")
+	parser.add_argument("--top-k", type=int, default=1000,
+		help="Number of negative samples per example (default 1000)")
+	parser.add_argument("--val-tokens", type=int, default=0,
+		help="Max validation tokens (0 = all)")
 	args = parser.parse_args()
+
+	# Fast mode overrides
+	if args.fast:
+		args.train_fraction = 0.25
+		args.top_k = 200
+		args.val_tokens = 50000
+		if args.runs == 5:  # only override if still at default
+			args.runs = 1
 
 	bit_values = list(range(8, 17))  # 8, 9, 10, 11, 12, 13, 14, 15, 16
 	total_configs = len(bit_values) ** 3
@@ -126,12 +143,23 @@ def main():
 	print("Full Tier Bits Grid Sweep")
 	print(f"Grid: {bit_values} ^ 3 = {total_configs} configs x {args.runs} runs = {total_configs * args.runs} total")
 	print(f"Neurons: 15/10/5 (fixed)")
+	if args.fast:
+		print(f"FAST MODE: {args.train_fraction:.0%} train, top-{args.top_k} negatives, {args.val_tokens} val tokens")
 	print(f"Saving to: {args.output}")
 	print("=" * 70)
 
 	train_tokens = load_wikitext2_tokens("train")
 	val_tokens = load_wikitext2_tokens("validation")
 	cluster_order = build_cluster_order(train_tokens)
+
+	# Apply data reduction
+	if args.train_fraction < 1.0:
+		n = int(len(train_tokens) * args.train_fraction)
+		train_tokens = train_tokens[:n]
+		print(f"Using {len(train_tokens):,} training tokens ({args.train_fraction:.0%})")
+	if args.val_tokens > 0:
+		val_tokens = val_tokens[:args.val_tokens]
+		print(f"Using {len(val_tokens):,} validation tokens")
 
 	# Generate all configs
 	configs = [
@@ -178,7 +206,7 @@ def main():
 		for r in range(args.runs):
 			t_start = time.time()
 			try:
-				result = run_single(tiers, train_tokens, val_tokens, cluster_order, rng_seed=r)
+				result = run_single(tiers, train_tokens, val_tokens, cluster_order, rng_seed=r, global_top_k=args.top_k)
 				run_time = time.time() - t_start
 				run_results.append(result)
 				print(f"  Run {r+1}/{args.runs}: CE={result['cross_entropy']:.4f} "
