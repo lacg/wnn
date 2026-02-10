@@ -66,6 +66,9 @@ mod metal_gating;
 #[path = "eval_worker.rs"]
 pub mod eval_worker;
 
+#[path = "bitwise_ramlm.rs"]
+mod bitwise_ramlm;
+
 pub use ram::RAMNeuron;
 pub use per_cluster::{PerClusterEvaluator, FitnessMode, TierOptConfig, ClusterOptResult, TierOptResult};
 pub use metal_evaluator::MetalEvaluator;
@@ -3924,6 +3927,92 @@ fn compute_target_gates_expanded(
     )
 }
 
+// =============================================================================
+// Bitwise RAMLM Cache Wrapper (PyO3)
+// =============================================================================
+
+/// Persistent cache for bitwise genome evaluation.
+///
+/// Holds pre-encoded tokens in Rust memory. Evaluates genomes
+/// entirely in Rust+Metal (no Python overhead per genome).
+#[pyclass]
+struct BitwiseCacheWrapper {
+    inner: bitwise_ramlm::BitwiseTokenCache,
+}
+
+#[pymethods]
+impl BitwiseCacheWrapper {
+    #[new]
+    fn new(
+        train_tokens: Vec<u32>,
+        eval_tokens: Vec<u32>,
+        vocab_size: usize,
+        context_size: usize,
+        num_parts: usize,
+        pad_token_id: u32,
+    ) -> Self {
+        Self {
+            inner: bitwise_ramlm::BitwiseTokenCache::new(
+                train_tokens, eval_tokens, vocab_size, context_size, num_parts, pad_token_id,
+            ),
+        }
+    }
+
+    /// Evaluate genomes using subset training data.
+    ///
+    /// Returns list of (cross_entropy, accuracy) per genome.
+    #[allow(clippy::too_many_arguments)]
+    fn evaluate_genomes(
+        &self,
+        py: Python<'_>,
+        connections_flat: Vec<i64>,
+        num_genomes: usize,
+        neurons_per_cluster: usize,
+        bits_per_neuron: usize,
+        train_subset_idx: usize,
+    ) -> PyResult<Vec<(f64, f64)>> {
+        py.allow_threads(|| {
+            Ok(bitwise_ramlm::evaluate_genomes(
+                &self.inner, &connections_flat, num_genomes,
+                neurons_per_cluster, bits_per_neuron, train_subset_idx,
+            ))
+        })
+    }
+
+    /// Evaluate genomes using full training data.
+    fn evaluate_genomes_full(
+        &self,
+        py: Python<'_>,
+        connections_flat: Vec<i64>,
+        num_genomes: usize,
+        neurons_per_cluster: usize,
+        bits_per_neuron: usize,
+    ) -> PyResult<Vec<(f64, f64)>> {
+        py.allow_threads(|| {
+            Ok(bitwise_ramlm::evaluate_genomes_full(
+                &self.inner, &connections_flat, num_genomes,
+                neurons_per_cluster, bits_per_neuron,
+            ))
+        })
+    }
+
+    /// Get next train subset index (advances rotator).
+    fn next_train_idx(&self) -> usize {
+        self.inner.next_train_idx()
+    }
+
+    /// Reset subset rotation.
+    fn reset(&self) {
+        self.inner.reset();
+    }
+
+    fn vocab_size(&self) -> usize { self.inner.vocab_size }
+    fn total_input_bits(&self) -> usize { self.inner.total_input_bits }
+    fn num_parts(&self) -> usize { self.inner.num_parts }
+    fn num_eval(&self) -> usize { self.inner.num_eval }
+    fn num_bits(&self) -> usize { self.inner.num_bits }
+}
+
 /// Python module definition
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -4025,5 +4114,7 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gating_metal_available, m)?)?;
     m.add_function(wrap_pyfunction!(invalidate_gating_cache, m)?)?;
     m.add_function(wrap_pyfunction!(reset_gating_buffer_cache, m)?)?;
+    // Bitwise RAMLM evaluation (full Rust+Metal pipeline)
+    m.add_class::<BitwiseCacheWrapper>()?;
     Ok(())
 }

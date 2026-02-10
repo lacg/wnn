@@ -305,7 +305,7 @@ class BitwiseRAMLM(RAMComponent):
 			Dict with cross_entropy, perplexity, accuracy, etc.
 		"""
 		from math import exp as math_exp
-		from torch import softmax
+		from torch import logsumexp
 
 		total_examples = len(token_ids) - self.context_size
 
@@ -335,15 +335,14 @@ class BitwiseRAMLM(RAMComponent):
 			batch_bits = all_bits[start:end]
 			batch_targets = targets[start:end]
 
-			# Get log-probs
+			# Get log-probs (unnormalized)
 			log_probs = self.forward(batch_bits)  # [batch, vocab_size]
 
-			# Softmax for proper probabilities
-			probs = softmax(log_probs, dim=-1)
-
-			# CE = -log(P(target))
-			target_probs = probs[arange(batch_len), batch_targets]
-			batch_ce = -log(clamp(target_probs, min=1e-10)).sum().item()
+			# CE = logsumexp(log_probs) - log_prob[target]
+			# This is numerically stable (avoids softmax float32 precision loss)
+			lse = logsumexp(log_probs, dim=-1)  # [batch]
+			target_lp = log_probs[arange(batch_len), batch_targets]  # [batch]
+			batch_ce = (lse - target_lp).sum().item()
 			total_ce += batch_ce
 
 			# Accuracy
