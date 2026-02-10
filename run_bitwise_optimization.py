@@ -1,30 +1,31 @@
 #!/usr/bin/env python3
 """
-Bitwise Architecture + Connectivity Optimization Pilot for BitwiseRAMLM.
+Bitwise Architecture + Connectivity Optimization for BitwiseRAMLM.
 
-Four phases:
-  Phase 1: Grid search over neurons × bits (quick landscape scan)
-  Phase 2: GA architecture optimization — refine (bits, neurons) around Phase 1 best
-  Phase 3: GA connectivity optimization — optimize which input bits each neuron observes
-  Phase 4: TS connectivity refinement — local search from Phase 3's best
+7-phase pipeline optimizing one dimension at a time using ArchitectureGA/TSStrategy
+with BitwiseEvaluator (16 clusters, Rust+Metal).
 
-BitwiseRAMLM has 16 uniform clusters (one per output bit for 50K vocab).
-All clusters share the same (bits, neurons) config, so Phase 2 uses a custom
-2D GA over two integers rather than ArchitectureGAStrategy (which mutates
-per-cluster independently and would break the uniformity constraint).
+Phases:
+  Phase 1: Grid search over neurons × bits (quick landscape scan → top-K uniform configs)
+  Phase 2: GA neurons per cluster (bits fixed from Phase 1)
+  Phase 3: TS neurons refinement (from Phase 2 best)
+  Phase 4: GA bits per cluster (neurons fixed from Phase 3)
+  Phase 5: TS bits refinement (from Phase 4 best)
+  Phase 6: GA connections (bits+neurons fixed from Phase 5)
+  Phase 7: TS connections refinement (from Phase 6 best)
 
-Phases 3-4 use the existing ArchitectureGA/TSStrategy + BitwiseEvaluator
-for Rust+Metal batch evaluation of connection genomes.
+Each phase seeds from the previous phase's best genome. The ArchitectureConfig
+flags control what gets mutated. BitwiseEvaluator handles heterogeneous
+per-cluster configs via Rust+Metal batch evaluation.
 
 Usage:
 	python run_bitwise_optimization.py --context 4 --rate 0.25
-	python run_bitwise_optimization.py --arch-gens 30 --conn-ga-gens 50 --conn-ts-iters 50
-	python run_bitwise_optimization.py --phase 3 --phase2-input experiments/bitwise_optimization_results.json
+	python run_bitwise_optimization.py --ga-gens 50 --population 30 --ts-iters 50
+	python run_bitwise_optimization.py --phase 3 --input experiments/bitwise_optimization_results.json
 """
 
 import argparse
 import json
-import random
 import sys
 import time
 from pathlib import Path
@@ -128,222 +129,55 @@ def phase1_grid_search(train_tokens, test_tokens, vocab_size, context_size, rate
 		print(f"  {i+1:2d}. n={r['neurons']:3d}, b={r['bits']:2d}: "
 			  f"CE={r['cross_entropy']:.4f}  Acc={r['accuracy']:.2%}{marker}")
 
-	top_configs = [(r["neurons"], r["bits"]) for r in results[:top_k]]
-	print(f"\nTop-{top_k} for Phase 2: {top_configs}")
+	best = results[0]
+	print(f"\nBest config: n={best['neurons']}, b={best['bits']}, CE={best['cross_entropy']:.4f}")
 
-	return results, top_configs
-
-
-# ---------------------------------------------------------------------------
-# Phase 2: GA architecture optimization (bits + neurons)
-# ---------------------------------------------------------------------------
-
-def _evaluate_arch_genome(bits, neurons, train_tokens, test_tokens, vocab_size, context_size, rate):
-	"""Evaluate a single (bits, neurons) config with random connections."""
-	from wnn.ram.core.models import BitwiseRAMLM
-
-	model = BitwiseRAMLM(
-		vocab_size=vocab_size,
-		context_size=context_size,
-		neurons_per_cluster=neurons,
-		bits_per_neuron=bits,
-		memory_mode=2,
-		neuron_sample_rate=rate,
-	)
-	_, eval_stats = model.train_and_eval_metal_split(
-		train_tokens, test_tokens,
-		verbose=False,
-		per_bit=False,
-	)
-	return eval_stats["cross_entropy"], eval_stats["accuracy"]
-
-
-def phase2_architecture_ga(
-	train_tokens, test_tokens, vocab_size, context_size, rate,
-	top_configs, arch_gens, arch_pop, patience,
-	min_bits=10, max_bits=24, min_neurons=20, max_neurons=300,
-):
-	"""
-	GA optimization over the 2D (bits, neurons) space.
-
-	BitwiseRAMLM has 16 uniform clusters so bits and neurons are scalars,
-	not per-cluster vectors. A simple custom GA is cleaner than forcing
-	ArchitectureGAStrategy to keep all clusters identical.
-	"""
-	print(f"\n{'='*70}")
-	print(f"Phase 2: GA Architecture Optimization (bits + neurons)")
-	print(f"  population={arch_pop}, generations={arch_gens}, patience={patience}")
-	print(f"  bits=[{min_bits},{max_bits}], neurons=[{min_neurons},{max_neurons}]")
-	print(f"{'='*70}")
-
-	# Initialize population around Phase 1 top configs
-	population = []
-	# Seed with top configs
-	for n, b in top_configs:
-		population.append((b, n))
-	# Fill rest with random mutations of top configs + random
-	while len(population) < arch_pop:
-		if random.random() < 0.7 and top_configs:
-			# Mutate a top config
-			base_n, base_b = random.choice(top_configs)
-			b = max(min_bits, min(max_bits, base_b + random.randint(-3, 3)))
-			n = max(min_neurons, min(max_neurons, base_n + random.choice([-30, -20, -10, 0, 10, 20, 30])))
-		else:
-			# Random
-			b = random.randint(min_bits, max_bits)
-			n = random.randint(min_neurons, max_neurons)
-		population.append((b, n))
-
-	# Evaluate initial population
-	def eval_pop(pop):
-		results = []
-		for b, n in pop:
-			ce, acc = _evaluate_arch_genome(b, n, train_tokens, test_tokens, vocab_size, context_size, rate)
-			results.append((ce, acc))
-		return results
-
-	fitness = eval_pop(population)
-	best_ce = min(f[0] for f in fitness)
-	best_idx = [f[0] for f in fitness].index(best_ce)
-	best_genome = population[best_idx]
-	best_acc = fitness[best_idx][1]
-
-	print(f"  Initial best: b={best_genome[0]}, n={best_genome[1]}, CE={best_ce:.4f}, Acc={best_acc:.2%}")
-
-	history = [(0, best_ce)]
-	no_improve = 0
-	elitism_count = max(2, arch_pop // 5)
-
-	for gen in range(1, arch_gens + 1):
-		t0 = time.time()
-
-		# Sort by CE (lower = better)
-		ranked = sorted(zip(population, fitness), key=lambda x: x[1][0])
-
-		# Elitism: keep top genomes
-		new_pop = [g for g, _ in ranked[:elitism_count]]
-
-		# Generate offspring
-		while len(new_pop) < arch_pop:
-			# Tournament selection (size 3)
-			candidates = random.sample(list(range(len(ranked))), min(3, len(ranked)))
-			parent1_idx = min(candidates)  # lower index = better fitness
-			candidates = random.sample(list(range(len(ranked))), min(3, len(ranked)))
-			parent2_idx = min(candidates)
-
-			p1_b, p1_n = ranked[parent1_idx][0]
-			p2_b, p2_n = ranked[parent2_idx][0]
-
-			# Crossover
-			if random.random() < 0.7:
-				child_b = random.choice([p1_b, p2_b])
-				child_n = random.choice([p1_n, p2_n])
-			else:
-				child_b, child_n = p1_b, p1_n
-
-			# Mutation
-			if random.random() < 0.3:
-				child_b += random.randint(-2, 2)
-				child_b = max(min_bits, min(max_bits, child_b))
-			if random.random() < 0.3:
-				child_n += random.choice([-20, -10, -5, 0, 5, 10, 20])
-				child_n = max(min_neurons, min(max_neurons, child_n))
-
-			new_pop.append((child_b, child_n))
-
-		population = new_pop
-		fitness = eval_pop(population)
-		elapsed = time.time() - t0
-
-		gen_best_ce = min(f[0] for f in fitness)
-		gen_best_idx = [f[0] for f in fitness].index(gen_best_ce)
-		gen_best = population[gen_best_idx]
-		gen_best_acc = fitness[gen_best_idx][1]
-
-		if gen_best_ce < best_ce:
-			best_ce = gen_best_ce
-			best_genome = gen_best
-			best_acc = gen_best_acc
-			no_improve = 0
-		else:
-			no_improve += 1
-
-		history.append((gen, best_ce))
-		print(f"  [Gen {gen:02d}/{arch_gens}] best: b={best_genome[0]}, n={best_genome[1]}, "
-			  f"CE={best_ce:.4f}, Acc={best_acc:.2%} "
-			  f"(gen_best: b={gen_best[0]}, n={gen_best[1]}, CE={gen_best_ce:.4f}) "
-			  f"[{elapsed:.1f}s]")
-
-		if no_improve >= patience:
-			print(f"  Early stop: {patience} generations without improvement")
-			break
-
-	best_bits, best_neurons = best_genome
-	print(f"\n  Phase 2 Result: bits={best_bits}, neurons={best_neurons}, "
-		  f"CE={best_ce:.4f}, Acc={best_acc:.2%}")
-
-	return {
-		"best_bits": best_bits,
-		"best_neurons": best_neurons,
-		"best_ce": best_ce,
-		"best_accuracy": best_acc,
-		"generations_run": gen if 'gen' in dir() else 0,
-		"history": history,
-		"final_population": [(b, n, ce, acc) for (b, n), (ce, acc) in zip(population, fitness)],
-	}
+	return results
 
 
 # ---------------------------------------------------------------------------
-# Phase 3: GA connectivity optimization
+# Helper: Create evaluator and configs
 # ---------------------------------------------------------------------------
 
-def phase3_ga_connections(
-	train_tokens, test_tokens, vocab_size, context_size, rate,
-	best_bits, best_neurons, conn_ga_gens, population, patience,
-):
-	"""GA connectivity optimization with fixed (bits, neurons) from Phase 2."""
-	from wnn.ram.core.RAMClusterLayer import bits_needed
+def create_evaluator(train_tokens, test_tokens, vocab_size, context_size, rate,
+					 default_neurons, default_bits):
+	"""Create a BitwiseEvaluator with default config."""
 	from wnn.ram.architecture.bitwise_evaluator import BitwiseEvaluator
-	from wnn.ram.strategies.connectivity.architecture_strategies import (
-		ArchitectureConfig, ArchitectureGAStrategy,
-	)
-	from wnn.ram.strategies.connectivity.generic_strategies import GAConfig
-	from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
-
-	num_clusters = bits_needed(vocab_size)  # 16 for GPT-2
-	total_input_bits = context_size * bits_needed(vocab_size)
-
-	print(f"\n{'='*70}")
-	print(f"Phase 3: GA Connectivity Optimization")
-	print(f"  Fixed architecture: bits={best_bits}, neurons={best_neurons}")
-	print(f"  population={population}, generations={conn_ga_gens}, patience={patience}")
-	print(f"{'='*70}")
-
-	evaluator = BitwiseEvaluator(
+	return BitwiseEvaluator(
 		train_tokens=train_tokens,
 		eval_tokens=test_tokens,
 		vocab_size=vocab_size,
 		context_size=context_size,
-		neurons_per_cluster=best_neurons,
-		bits_per_neuron=best_bits,
+		neurons_per_cluster=default_neurons,
+		bits_per_neuron=default_bits,
 		num_parts=3,
-		memory_mode=2,
+		memory_mode=2,  # QUAD_WEIGHTED
 		neuron_sample_rate=rate,
 	)
 
-	arch_config = ArchitectureConfig(
+
+def create_seed_genome(num_clusters, bits, neurons, total_input_bits):
+	"""Create a uniform seed genome with random connections."""
+	from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
+	return ClusterGenome.create_uniform(
 		num_clusters=num_clusters,
-		optimize_bits=False,
-		optimize_neurons=False,
-		optimize_connections=True,
-		default_bits=best_bits,
-		default_neurons=best_neurons,
+		bits=bits,
+		neurons=neurons,
 		total_input_bits=total_input_bits,
 	)
 
+
+def run_ga_phase(
+	evaluator, arch_config, ga_gens, population, patience,
+	seed_genome=None, phase_name="GA", logger=print,
+):
+	"""Run a GA optimization phase."""
+	from wnn.ram.strategies.connectivity.architecture_strategies import ArchitectureGAStrategy
+	from wnn.ram.strategies.connectivity.generic_strategies import GAConfig
+
 	ga_config = GAConfig(
 		population_size=population,
-		generations=conn_ga_gens,
+		generations=ga_gens,
 		mutation_rate=0.1,
 		crossover_rate=0.7,
 		tournament_size=3,
@@ -352,19 +186,10 @@ def phase3_ga_connections(
 		check_interval=1,
 	)
 
-	seed_genome = ClusterGenome(
-		bits_per_cluster=[best_bits] * num_clusters,
-		neurons_per_cluster=[best_neurons] * num_clusters,
-	)
-	seed_genome.initialize_connections(total_input_bits)
-
-	def log(msg):
-		print(f"  {msg}")
-
 	strategy = ArchitectureGAStrategy(
 		arch_config=arch_config,
 		ga_config=ga_config,
-		logger=log,
+		logger=logger,
 		batch_evaluator=evaluator,
 	)
 
@@ -376,81 +201,23 @@ def phase3_ga_connections(
 	)
 	elapsed = time.time() - t0
 
-	print(f"\n  GA Connections Result: CE={result.final_fitness:.4f}")
+	logger(f"\n  {phase_name} Result: CE={result.final_fitness:.4f}")
 	if result.final_accuracy is not None:
-		print(f"  Accuracy: {result.final_accuracy:.2%}")
-	print(f"  Improvement: {result.improvement_percent:.1f}%")
-	print(f"  Generations: {result.iterations_run}, Elapsed: {elapsed:.0f}s")
-	print(f"  Stop reason: {result.stop_reason}")
+		logger(f"  Accuracy: {result.final_accuracy:.2%}")
+	logger(f"  Improvement: {result.improvement_percent:.1f}%")
+	logger(f"  Generations: {result.iterations_run}, Elapsed: {elapsed:.0f}s")
+	logger(f"  Stop reason: {result.stop_reason}")
 
-	return {
-		"bits": best_bits,
-		"neurons": best_neurons,
-		"initial_ce": result.initial_fitness,
-		"final_ce": result.final_fitness,
-		"initial_accuracy": result.initial_accuracy,
-		"final_accuracy": result.final_accuracy,
-		"improvement_pct": result.improvement_percent,
-		"generations_run": result.iterations_run,
-		"stop_reason": str(result.stop_reason),
-		"elapsed_s": round(elapsed, 1),
-		"history": result.history,
-		"best_genome_connections": result.best_genome.connections,
-	}
+	return result, elapsed
 
 
-# ---------------------------------------------------------------------------
-# Phase 4: TS connectivity refinement
-# ---------------------------------------------------------------------------
-
-def phase4_ts_connections(
-	train_tokens, test_tokens, vocab_size, context_size, rate,
-	ga_result, ts_iters, neighbors, patience,
+def run_ts_phase(
+	evaluator, arch_config, ts_iters, neighbors, patience,
+	seed_genome, seed_fitness, phase_name="TS", logger=print,
 ):
-	"""TS connectivity refinement starting from Phase 3 GA's best."""
-	from wnn.ram.core.RAMClusterLayer import bits_needed
-	from wnn.ram.architecture.bitwise_evaluator import BitwiseEvaluator
-	from wnn.ram.strategies.connectivity.architecture_strategies import (
-		ArchitectureConfig, ArchitectureTSStrategy,
-	)
+	"""Run a TS refinement phase."""
+	from wnn.ram.strategies.connectivity.architecture_strategies import ArchitectureTSStrategy
 	from wnn.ram.strategies.connectivity.generic_strategies import TSConfig
-	from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
-
-	num_clusters = bits_needed(vocab_size)
-	total_input_bits = context_size * bits_needed(vocab_size)
-
-	best_bits = ga_result["bits"]
-	best_neurons = ga_result["neurons"]
-	ga_ce = ga_result["final_ce"]
-
-	print(f"\n{'='*70}")
-	print(f"Phase 4: TS Connectivity Refinement")
-	print(f"  Fixed architecture: bits={best_bits}, neurons={best_neurons}")
-	print(f"  GA baseline CE={ga_ce:.4f}")
-	print(f"  neighbors={neighbors}, iterations={ts_iters}, patience={patience}")
-	print(f"{'='*70}")
-
-	evaluator = BitwiseEvaluator(
-		train_tokens=train_tokens,
-		eval_tokens=test_tokens,
-		vocab_size=vocab_size,
-		context_size=context_size,
-		neurons_per_cluster=best_neurons,
-		bits_per_neuron=best_bits,
-		num_parts=3,
-		memory_mode=2,
-		neuron_sample_rate=rate,
-	)
-
-	arch_config = ArchitectureConfig(
-		num_clusters=num_clusters,
-		optimize_bits=False,
-		optimize_neurons=False,
-		optimize_connections=True,
-		default_bits=best_bits,
-		default_neurons=best_neurons,
-		total_input_bits=total_input_bits,
-	)
 
 	ts_config = TSConfig(
 		iterations=ts_iters,
@@ -461,91 +228,61 @@ def phase4_ts_connections(
 		check_interval=1,
 	)
 
-	seed_genome = ClusterGenome(
-		bits_per_cluster=[best_bits] * num_clusters,
-		neurons_per_cluster=[best_neurons] * num_clusters,
-		connections=ga_result["best_genome_connections"],
-	)
-
-	def log(msg):
-		print(f"  {msg}")
-
 	strategy = ArchitectureTSStrategy(
 		arch_config=arch_config,
 		ts_config=ts_config,
-		logger=log,
+		logger=logger,
 		batch_evaluator=evaluator,
 	)
 
 	t0 = time.time()
 	result = strategy.optimize(
 		initial_genome=seed_genome,
-		initial_fitness=ga_ce,
+		initial_fitness=seed_fitness,
 		evaluate_fn=lambda g: 999.0,
 		batch_evaluate_fn=lambda genomes: evaluator.evaluate_batch(genomes),
 	)
 	elapsed = time.time() - t0
 
-	print(f"\n  TS Connections Result: CE={result.final_fitness:.4f}")
+	improvement_over_seed = (seed_fitness - result.final_fitness) / seed_fitness * 100 if seed_fitness > 0 else 0
+	logger(f"\n  {phase_name} Result: CE={result.final_fitness:.4f}")
 	if result.final_accuracy is not None:
-		print(f"  Accuracy: {result.final_accuracy:.2%}")
-	improvement_over_ga = (ga_ce - result.final_fitness) / ga_ce * 100
-	print(f"  Improvement over GA: {improvement_over_ga:.1f}%")
-	print(f"  Iterations: {result.iterations_run}, Elapsed: {elapsed:.0f}s")
-	print(f"  Stop reason: {result.stop_reason}")
+		logger(f"  Accuracy: {result.final_accuracy:.2%}")
+	logger(f"  Improvement over seed: {improvement_over_seed:.1f}%")
+	logger(f"  Iterations: {result.iterations_run}, Elapsed: {elapsed:.0f}s")
+	logger(f"  Stop reason: {result.stop_reason}")
 
-	return {
-		"bits": best_bits,
-		"neurons": best_neurons,
-		"ga_ce": ga_ce,
-		"final_ce": result.final_fitness,
-		"final_accuracy": result.final_accuracy,
-		"improvement_over_ga_pct": round(improvement_over_ga, 2),
-		"iterations_run": result.iterations_run,
-		"stop_reason": str(result.stop_reason),
-		"elapsed_s": round(elapsed, 1),
-		"history": result.history,
-		"best_genome_connections": result.best_genome.connections,
-	}
+	return result, elapsed
 
 
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 
-def print_summary(phase1_results, arch_result, ga_conn_result, ts_conn_result):
+def print_summary(phase_results):
 	"""Print end-to-end optimization summary."""
 	print(f"\n{'='*70}")
 	print(f"Optimization Summary")
 	print(f"{'='*70}")
 
-	# Phase 1 baseline: best grid search CE
-	if phase1_results:
-		grid_best = min(phase1_results, key=lambda r: r["cross_entropy"])
-		print(f"Phase 1 (grid):   n={grid_best['neurons']:3d}, b={grid_best['bits']:2d}, "
-			  f"CE={grid_best['cross_entropy']:.4f}  (random connections)")
-
-	# Phase 2: architecture optimization
-	if arch_result:
-		print(f"Phase 2 (arch GA): n={arch_result['best_neurons']:3d}, b={arch_result['best_bits']:2d}, "
-			  f"CE={arch_result['best_ce']:.4f}  (random connections)")
-
-	# Phase 3: GA connections
-	if ga_conn_result:
-		print(f"Phase 3 (conn GA): n={ga_conn_result['neurons']:3d}, b={ga_conn_result['bits']:2d}, "
-			  f"CE={ga_conn_result['final_ce']:.4f}  (optimized connections)")
-
-	# Phase 4: TS connections
-	if ts_conn_result:
-		print(f"Phase 4 (conn TS): n={ts_conn_result['neurons']:3d}, b={ts_conn_result['bits']:2d}, "
-			  f"CE={ts_conn_result['final_ce']:.4f}  (refined connections)")
+	for name, data in phase_results.items():
+		if data is None:
+			continue
+		ce = data.get("final_ce") or data.get("best_ce", "?")
+		acc = data.get("final_accuracy")
+		acc_str = f"  Acc={acc:.2%}" if acc is not None else ""
+		print(f"  {name}: CE={ce:.4f}{acc_str}")
 
 	# Overall improvement
-	if phase1_results and ts_conn_result:
-		baseline = grid_best["cross_entropy"]
-		final = ts_conn_result["final_ce"]
-		improvement = (baseline - final) / baseline * 100
-		print(f"\nOverall: CE {baseline:.4f} → {final:.4f}  ({improvement:+.1f}%)")
+	phase_names = list(phase_results.keys())
+	first = next((phase_results[n] for n in phase_names if phase_results[n] is not None), None)
+	last = next((phase_results[n] for n in reversed(phase_names) if phase_results[n] is not None), None)
+	if first and last:
+		baseline = first.get("best_ce") or first.get("final_ce", 0)
+		final = last.get("final_ce", 0)
+		if baseline > 0 and final > 0:
+			improvement = (baseline - final) / baseline * 100
+			print(f"\n  Overall: CE {baseline:.4f} → {final:.4f}  ({improvement:+.1f}%)")
 
 
 # ---------------------------------------------------------------------------
@@ -553,45 +290,45 @@ def print_summary(phase1_results, arch_result, ga_conn_result, ts_conn_result):
 # ---------------------------------------------------------------------------
 
 def main():
-	parser = argparse.ArgumentParser(description="BitwiseRAMLM Architecture + Connectivity Optimization")
+	parser = argparse.ArgumentParser(
+		description="BitwiseRAMLM 7-Phase Architecture + Connectivity Optimization"
+	)
 	# General
 	parser.add_argument("--context", type=int, default=4, help="Context window size (default: 4)")
 	parser.add_argument("--rate", type=float, default=0.25, help="Neuron sample rate (default: 0.25)")
 	parser.add_argument("--phase", type=str, default="all",
-						help="Phase to run: 1, 2, 3, 4, all (default: all)")
+						help="Phase to run: 1-7 or 'all' (default: all)")
 	parser.add_argument("--output", type=str, default="experiments/bitwise_optimization_results.json",
 						help="Output JSON file")
+	parser.add_argument("--input", type=str, default=None,
+						help="Load previous results from JSON (for resuming)")
 	# Phase 1
 	parser.add_argument("--top-k", type=int, default=3,
 						help="Top configs from Phase 1 grid search (default: 3)")
-	# Phase 2: architecture GA
-	parser.add_argument("--arch-gens", type=int, default=20,
-						help="Architecture GA generations (default: 20)")
-	parser.add_argument("--arch-pop", type=int, default=20,
-						help="Architecture GA population (default: 20)")
-	parser.add_argument("--arch-patience", type=int, default=5,
-						help="Architecture GA patience (default: 5)")
-	# Phase 3: connectivity GA
-	parser.add_argument("--conn-ga-gens", type=int, default=50,
-						help="Connectivity GA generations (default: 50)")
-	parser.add_argument("--conn-population", type=int, default=30,
-						help="Connectivity GA population (default: 30)")
-	parser.add_argument("--conn-patience", type=int, default=2,
-						help="Connectivity GA/TS patience (default: 2)")
-	# Phase 4: connectivity TS
-	parser.add_argument("--conn-ts-iters", type=int, default=50,
-						help="Connectivity TS iterations (default: 50)")
-	parser.add_argument("--conn-neighbors", type=int, default=30,
-						help="Connectivity TS neighbors per iteration (default: 30)")
-	# Resume from previous run
-	parser.add_argument("--phase2-input", type=str, default=None,
-						help="Load Phase 2 result from previous JSON output")
+	# GA/TS parameters (shared across phases 2-7)
+	parser.add_argument("--ga-gens", type=int, default=50,
+						help="GA generations per phase (default: 50)")
+	parser.add_argument("--population", type=int, default=30,
+						help="GA population size (default: 30)")
+	parser.add_argument("--ts-iters", type=int, default=50,
+						help="TS iterations per phase (default: 50)")
+	parser.add_argument("--neighbors", type=int, default=30,
+						help="TS neighbors per iteration (default: 30)")
+	parser.add_argument("--patience", type=int, default=2,
+						help="Early stop patience (default: 2)")
 	args = parser.parse_args()
 
 	output_path = Path(args.output)
 	output_path.parent.mkdir(parents=True, exist_ok=True)
 
+	# Import dependencies
+	from wnn.ram.core.RAMClusterLayer import bits_needed
+	from wnn.ram.strategies.connectivity.architecture_strategies import ArchitectureConfig
+	from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
+
 	train_tokens, test_tokens, vocab_size = load_wikitext2_tokens()
+	num_clusters = bits_needed(vocab_size)  # 16 for GPT-2
+	total_input_bits = args.context * bits_needed(vocab_size)
 
 	all_results = {
 		"config": {
@@ -599,145 +336,355 @@ def main():
 			"neuron_sample_rate": args.rate,
 			"memory_mode": "QUAD_WEIGHTED",
 			"vocab_size": vocab_size,
-			"arch_gens": args.arch_gens,
-			"arch_pop": args.arch_pop,
-			"conn_ga_gens": args.conn_ga_gens,
-			"conn_population": args.conn_population,
-			"conn_ts_iters": args.conn_ts_iters,
-			"conn_neighbors": args.conn_neighbors,
+			"num_clusters": num_clusters,
+			"total_input_bits": total_input_bits,
+			"ga_gens": args.ga_gens,
+			"population": args.population,
+			"ts_iters": args.ts_iters,
+			"neighbors": args.neighbors,
+			"patience": args.patience,
 		},
 		"phase1_grid": None,
-		"phase2_arch_ga": None,
-		"phase3_conn_ga": None,
-		"phase4_conn_ts": None,
+		"phase2_ga_neurons": None,
+		"phase3_ts_neurons": None,
+		"phase4_ga_bits": None,
+		"phase5_ts_bits": None,
+		"phase6_ga_connections": None,
+		"phase7_ts_connections": None,
 	}
 
-	run_phase = lambda p: args.phase in ("all", str(p))
-	phase1_results = []
-	arch_result = None
-	ga_conn_result = None
-	ts_conn_result = None
+	# Load previous results if available
+	input_path = args.input or (str(output_path) if output_path.exists() else None)
+	if input_path:
+		try:
+			with open(input_path) as f:
+				prev = json.load(f)
+			for key in all_results:
+				if key != "config" and key in prev and prev[key] is not None:
+					all_results[key] = prev[key]
+			print(f"Loaded previous results from {input_path}")
+		except Exception as e:
+			print(f"Warning: Could not load {input_path}: {e}")
 
 	def save():
 		with open(args.output, "w") as f:
 			json.dump(all_results, f, indent=2)
 
+	def should_run(phase_num):
+		return args.phase in ("all", str(phase_num))
+
+	def log(msg):
+		print(f"  {msg}")
+
+	# Track best genome flowing through phases
+	best_genome = None
+	best_ce = None
+	best_bits = 20   # defaults, overwritten by Phase 1
+	best_neurons = 150
+
 	# ── Phase 1: Grid search ─────────────────────────────────────────────
-	if run_phase(1):
+	if should_run(1):
 		t0 = time.time()
-		phase1_results, top_configs = phase1_grid_search(
+		phase1_results = phase1_grid_search(
 			train_tokens, test_tokens, vocab_size,
 			context_size=args.context, rate=args.rate, top_k=args.top_k,
 		)
+		best_p1 = phase1_results[0]  # sorted by CE
+		best_bits = best_p1["bits"]
+		best_neurons = best_p1["neurons"]
+		best_ce = best_p1["cross_entropy"]
+
+		# Create seed genome from Phase 1 best
+		best_genome = create_seed_genome(num_clusters, best_bits, best_neurons, total_input_bits)
+
 		all_results["phase1_grid"] = {
 			"results": phase1_results,
-			"top_configs": [{"neurons": n, "bits": b} for n, b in top_configs],
+			"best_bits": best_bits,
+			"best_neurons": best_neurons,
+			"best_ce": best_ce,
 			"elapsed_s": round(time.time() - t0, 1),
 		}
 		save()
 		print(f"\nPhase 1 saved to {args.output}")
+	elif all_results.get("phase1_grid"):
+		p1 = all_results["phase1_grid"]
+		best_bits = p1["best_bits"]
+		best_neurons = p1["best_neurons"]
+		best_ce = p1["best_ce"]
+		best_genome = create_seed_genome(num_clusters, best_bits, best_neurons, total_input_bits)
+		print(f"Loaded Phase 1: bits={best_bits}, neurons={best_neurons}, CE={best_ce:.4f}")
 	else:
-		# Try loading from previous output
-		if output_path.exists():
-			with open(output_path) as f:
-				prev = json.load(f)
-			if prev.get("phase1_grid"):
-				phase1_results = prev["phase1_grid"]["results"]
-				top_configs = [(c["neurons"], c["bits"]) for c in prev["phase1_grid"]["top_configs"]]
-				all_results["phase1_grid"] = prev["phase1_grid"]
-				print(f"Loaded Phase 1 from {args.output}: top={top_configs}")
-			else:
-				top_configs = [(150, 20), (100, 20), (150, 18)]
-				print(f"Using default top configs: {top_configs}")
-		else:
-			top_configs = [(150, 20), (100, 20), (150, 18)]
-			print(f"Using default top configs: {top_configs}")
+		best_genome = create_seed_genome(num_clusters, best_bits, best_neurons, total_input_bits)
+		print(f"Using default config: bits={best_bits}, neurons={best_neurons}")
 
-	# ── Phase 2: Architecture GA (bits + neurons) ────────────────────────
-	if run_phase(2):
-		t0 = time.time()
-		arch_result = phase2_architecture_ga(
-			train_tokens, test_tokens, vocab_size,
-			context_size=args.context, rate=args.rate,
-			top_configs=top_configs,
-			arch_gens=args.arch_gens, arch_pop=args.arch_pop,
-			patience=args.arch_patience,
+	# Create evaluator (reused across phases 2-7)
+	evaluator = create_evaluator(
+		train_tokens, test_tokens, vocab_size,
+		context_size=args.context, rate=args.rate,
+		default_neurons=best_neurons, default_bits=best_bits,
+	)
+
+	# If no best_ce from Phase 1, evaluate the seed genome
+	if best_ce is None and best_genome is not None:
+		print("Evaluating seed genome...")
+		results = evaluator.evaluate_batch([best_genome])
+		best_ce = results[0][0]
+		print(f"  Seed CE={best_ce:.4f}")
+
+	# ── Phase 2: GA neurons (bits fixed) ─────────────────────────────────
+	if should_run(2):
+		print(f"\n{'='*70}")
+		print(f"Phase 2: GA Neurons per Cluster (bits fixed at {best_bits})")
+		print(f"{'='*70}")
+
+		arch_config = ArchitectureConfig(
+			num_clusters=num_clusters,
+			optimize_neurons=True,
+			optimize_bits=False,
+			optimize_connections=False,
+			default_bits=best_bits,
+			default_neurons=best_neurons,
+			min_neurons=10,
+			max_neurons=300,
+			min_bits=best_bits,
+			max_bits=best_bits,
+			total_input_bits=total_input_bits,
 		)
-		all_results["phase2_arch_ga"] = arch_result
-		all_results["phase2_arch_ga"]["elapsed_s"] = round(time.time() - t0, 1)
-		save()
-		print(f"\nPhase 2 saved to {args.output}")
-	else:
-		# Try loading from previous output or --phase2-input
-		source = args.phase2_input or (str(output_path) if output_path.exists() else None)
-		if source:
-			with open(source) as f:
-				prev = json.load(f)
-			if prev.get("phase2_arch_ga"):
-				arch_result = prev["phase2_arch_ga"]
-				all_results["phase2_arch_ga"] = arch_result
-				print(f"Loaded Phase 2: bits={arch_result['best_bits']}, neurons={arch_result['best_neurons']}, "
-					  f"CE={arch_result['best_ce']:.4f}")
 
-	# ── Phase 3: Connectivity GA ─────────────────────────────────────────
-	if run_phase(3):
-		if arch_result is None:
-			# Fall back to Phase 1 best
-			if phase1_results:
-				best_p1 = min(phase1_results, key=lambda r: r["cross_entropy"])
-				best_bits, best_neurons = best_p1["bits"], best_p1["neurons"]
-			else:
-				best_bits, best_neurons = 20, 150
-			print(f"No Phase 2 result, using: bits={best_bits}, neurons={best_neurons}")
-		else:
-			best_bits = arch_result["best_bits"]
-			best_neurons = arch_result["best_neurons"]
-
-		t0 = time.time()
-		ga_conn_result = phase3_ga_connections(
-			train_tokens, test_tokens, vocab_size,
-			context_size=args.context, rate=args.rate,
-			best_bits=best_bits, best_neurons=best_neurons,
-			conn_ga_gens=args.conn_ga_gens,
-			population=args.conn_population,
-			patience=args.conn_patience,
+		result, elapsed = run_ga_phase(
+			evaluator, arch_config,
+			ga_gens=args.ga_gens, population=args.population,
+			patience=args.patience, seed_genome=best_genome,
+			phase_name="Phase 2: GA Neurons", logger=log,
 		)
-		# Don't serialize huge connection lists in the main JSON
-		all_results["phase3_conn_ga"] = {
-			k: v for k, v in ga_conn_result.items() if k != "best_genome_connections"
+
+		best_genome = result.best_genome
+		best_ce = result.final_fitness
+
+		all_results["phase2_ga_neurons"] = {
+			"initial_ce": result.initial_fitness,
+			"final_ce": result.final_fitness,
+			"final_accuracy": result.final_accuracy,
+			"improvement_pct": result.improvement_percent,
+			"generations_run": result.iterations_run,
+			"stop_reason": str(result.stop_reason),
+			"elapsed_s": round(elapsed, 1),
+			"genome_stats": best_genome.stats(),
 		}
 		save()
-		print(f"\nPhase 3 saved to {args.output}")
+	elif all_results.get("phase2_ga_neurons"):
+		p2 = all_results["phase2_ga_neurons"]
+		best_ce = p2["final_ce"]
+		# Reconstruct genome from stats (uniform bits, varied neurons)
+		stats = p2["genome_stats"]
+		print(f"Loaded Phase 2: CE={best_ce:.4f}")
 
-	# ── Phase 4: Connectivity TS ─────────────────────────────────────────
-	if run_phase(4) and ga_conn_result is not None:
-		t0 = time.time()
-		ts_conn_result = phase4_ts_connections(
-			train_tokens, test_tokens, vocab_size,
-			context_size=args.context, rate=args.rate,
-			ga_result=ga_conn_result,
-			ts_iters=args.conn_ts_iters,
-			neighbors=args.conn_neighbors,
-			patience=args.conn_patience,
+	# ── Phase 3: TS neurons refinement ───────────────────────────────────
+	if should_run(3) and best_genome is not None:
+		print(f"\n{'='*70}")
+		print(f"Phase 3: TS Neurons Refinement")
+		print(f"{'='*70}")
+
+		arch_config = ArchitectureConfig(
+			num_clusters=num_clusters,
+			optimize_neurons=True,
+			optimize_bits=False,
+			optimize_connections=False,
+			default_bits=best_bits,
+			min_neurons=10,
+			max_neurons=300,
+			min_bits=best_bits,
+			max_bits=best_bits,
+			total_input_bits=total_input_bits,
 		)
-		all_results["phase4_conn_ts"] = {
-			k: v for k, v in ts_conn_result.items() if k != "best_genome_connections"
+
+		result, elapsed = run_ts_phase(
+			evaluator, arch_config,
+			ts_iters=args.ts_iters, neighbors=args.neighbors,
+			patience=args.patience,
+			seed_genome=best_genome, seed_fitness=best_ce,
+			phase_name="Phase 3: TS Neurons", logger=log,
+		)
+
+		best_genome = result.best_genome
+		best_ce = result.final_fitness
+
+		all_results["phase3_ts_neurons"] = {
+			"initial_ce": result.initial_fitness,
+			"final_ce": result.final_fitness,
+			"final_accuracy": result.final_accuracy,
+			"improvement_pct": (result.initial_fitness - result.final_fitness) / result.initial_fitness * 100 if result.initial_fitness > 0 else 0,
+			"iterations_run": result.iterations_run,
+			"stop_reason": str(result.stop_reason),
+			"elapsed_s": round(elapsed, 1),
+			"genome_stats": best_genome.stats(),
+		}
+		save()
+
+	# ── Phase 4: GA bits (neurons fixed) ─────────────────────────────────
+	if should_run(4) and best_genome is not None:
+		print(f"\n{'='*70}")
+		print(f"Phase 4: GA Bits per Cluster (neurons fixed)")
+		print(f"{'='*70}")
+
+		arch_config = ArchitectureConfig(
+			num_clusters=num_clusters,
+			optimize_bits=True,
+			optimize_neurons=False,
+			optimize_connections=False,
+			min_bits=10,
+			max_bits=24,
+			total_input_bits=total_input_bits,
+		)
+
+		result, elapsed = run_ga_phase(
+			evaluator, arch_config,
+			ga_gens=args.ga_gens, population=args.population,
+			patience=args.patience, seed_genome=best_genome,
+			phase_name="Phase 4: GA Bits", logger=log,
+		)
+
+		best_genome = result.best_genome
+		best_ce = result.final_fitness
+
+		all_results["phase4_ga_bits"] = {
+			"initial_ce": result.initial_fitness,
+			"final_ce": result.final_fitness,
+			"final_accuracy": result.final_accuracy,
+			"improvement_pct": result.improvement_percent,
+			"generations_run": result.iterations_run,
+			"stop_reason": str(result.stop_reason),
+			"elapsed_s": round(elapsed, 1),
+			"genome_stats": best_genome.stats(),
+		}
+		save()
+
+	# ── Phase 5: TS bits refinement ──────────────────────────────────────
+	if should_run(5) and best_genome is not None:
+		print(f"\n{'='*70}")
+		print(f"Phase 5: TS Bits Refinement")
+		print(f"{'='*70}")
+
+		arch_config = ArchitectureConfig(
+			num_clusters=num_clusters,
+			optimize_bits=True,
+			optimize_neurons=False,
+			optimize_connections=False,
+			min_bits=10,
+			max_bits=24,
+			total_input_bits=total_input_bits,
+		)
+
+		result, elapsed = run_ts_phase(
+			evaluator, arch_config,
+			ts_iters=args.ts_iters, neighbors=args.neighbors,
+			patience=args.patience,
+			seed_genome=best_genome, seed_fitness=best_ce,
+			phase_name="Phase 5: TS Bits", logger=log,
+		)
+
+		best_genome = result.best_genome
+		best_ce = result.final_fitness
+
+		all_results["phase5_ts_bits"] = {
+			"initial_ce": result.initial_fitness,
+			"final_ce": result.final_fitness,
+			"final_accuracy": result.final_accuracy,
+			"improvement_pct": (result.initial_fitness - result.final_fitness) / result.initial_fitness * 100 if result.initial_fitness > 0 else 0,
+			"iterations_run": result.iterations_run,
+			"stop_reason": str(result.stop_reason),
+			"elapsed_s": round(elapsed, 1),
+			"genome_stats": best_genome.stats(),
+		}
+		save()
+
+	# ── Phase 6: GA connections (architecture fixed) ─────────────────────
+	if should_run(6) and best_genome is not None:
+		print(f"\n{'='*70}")
+		print(f"Phase 6: GA Connections (architecture fixed)")
+		print(f"{'='*70}")
+
+		arch_config = ArchitectureConfig(
+			num_clusters=num_clusters,
+			optimize_bits=False,
+			optimize_neurons=False,
+			optimize_connections=True,
+			total_input_bits=total_input_bits,
+		)
+
+		result, elapsed = run_ga_phase(
+			evaluator, arch_config,
+			ga_gens=args.ga_gens, population=args.population,
+			patience=args.patience, seed_genome=best_genome,
+			phase_name="Phase 6: GA Connections", logger=log,
+		)
+
+		best_genome = result.best_genome
+		best_ce = result.final_fitness
+
+		all_results["phase6_ga_connections"] = {
+			"initial_ce": result.initial_fitness,
+			"final_ce": result.final_fitness,
+			"final_accuracy": result.final_accuracy,
+			"improvement_pct": result.improvement_percent,
+			"generations_run": result.iterations_run,
+			"stop_reason": str(result.stop_reason),
+			"elapsed_s": round(elapsed, 1),
+		}
+		save()
+
+	# ── Phase 7: TS connections refinement ───────────────────────────────
+	if should_run(7) and best_genome is not None:
+		print(f"\n{'='*70}")
+		print(f"Phase 7: TS Connections Refinement")
+		print(f"{'='*70}")
+
+		arch_config = ArchitectureConfig(
+			num_clusters=num_clusters,
+			optimize_bits=False,
+			optimize_neurons=False,
+			optimize_connections=True,
+			total_input_bits=total_input_bits,
+		)
+
+		result, elapsed = run_ts_phase(
+			evaluator, arch_config,
+			ts_iters=args.ts_iters, neighbors=args.neighbors,
+			patience=args.patience,
+			seed_genome=best_genome, seed_fitness=best_ce,
+			phase_name="Phase 7: TS Connections", logger=log,
+		)
+
+		best_genome = result.best_genome
+		best_ce = result.final_fitness
+
+		all_results["phase7_ts_connections"] = {
+			"initial_ce": result.initial_fitness,
+			"final_ce": result.final_fitness,
+			"final_accuracy": result.final_accuracy,
+			"improvement_pct": (result.initial_fitness - result.final_fitness) / result.initial_fitness * 100 if result.initial_fitness > 0 else 0,
+			"iterations_run": result.iterations_run,
+			"stop_reason": str(result.stop_reason),
+			"elapsed_s": round(elapsed, 1),
 		}
 
 		# Save best genome separately
-		genome_path = output_path.with_suffix(".best_genome.json")
-		with open(genome_path, "w") as f:
-			json.dump({
-				"neurons": ts_conn_result["neurons"],
-				"bits": ts_conn_result["bits"],
-				"final_ce": ts_conn_result["final_ce"],
-				"final_accuracy": ts_conn_result["final_accuracy"],
-				"connections": ts_conn_result["best_genome_connections"],
-			}, f)
-		print(f"\nBest genome saved to {genome_path}")
+		if best_genome is not None:
+			genome_path = output_path.with_suffix(".best_genome.json")
+			best_genome.save(str(genome_path), fitness=best_ce, accuracy=result.final_accuracy)
+			print(f"\nBest genome saved to {genome_path}")
 
 	# ── Summary ──────────────────────────────────────────────────────────
-	print_summary(phase1_results, arch_result, ga_conn_result, ts_conn_result)
+	phase_results = {
+		"Phase 1 (grid)": all_results.get("phase1_grid"),
+		"Phase 2 (GA neurons)": all_results.get("phase2_ga_neurons"),
+		"Phase 3 (TS neurons)": all_results.get("phase3_ts_neurons"),
+		"Phase 4 (GA bits)": all_results.get("phase4_ga_bits"),
+		"Phase 5 (TS bits)": all_results.get("phase5_ts_bits"),
+		"Phase 6 (GA connections)": all_results.get("phase6_ga_connections"),
+		"Phase 7 (TS connections)": all_results.get("phase7_ts_connections"),
+	}
+	print_summary(phase_results)
 
 	save()
 	print(f"\nAll results saved to {args.output}")

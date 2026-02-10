@@ -4227,82 +4227,50 @@ impl BitwiseCacheWrapper {
         }
     }
 
-    /// Evaluate genomes using subset training data (default: ternary mode).
+    /// Evaluate genomes with per-cluster heterogeneous configs (subset training).
+    ///
+    /// bits_per_cluster_flat: [num_genomes * num_clusters]
+    /// neurons_per_cluster_flat: [num_genomes * num_clusters]
+    /// connections_flat: variable total (sum of all genomes' connections)
     #[allow(clippy::too_many_arguments)]
     fn evaluate_genomes(
         &self,
         py: Python<'_>,
+        bits_per_cluster_flat: Vec<usize>,
+        neurons_per_cluster_flat: Vec<usize>,
         connections_flat: Vec<i64>,
         num_genomes: usize,
-        neurons_per_cluster: usize,
-        bits_per_neuron: usize,
-        train_subset_idx: usize,
-    ) -> PyResult<Vec<(f64, f64)>> {
-        py.allow_threads(|| {
-            Ok(bitwise_ramlm::evaluate_genomes(
-                &self.inner, &connections_flat, num_genomes,
-                neurons_per_cluster, bits_per_neuron, train_subset_idx,
-            ))
-        })
-    }
-
-    /// Evaluate genomes with mode and sample rate (subset).
-    #[allow(clippy::too_many_arguments)]
-    fn evaluate_genomes_with_mode(
-        &self,
-        py: Python<'_>,
-        connections_flat: Vec<i64>,
-        num_genomes: usize,
-        neurons_per_cluster: usize,
-        bits_per_neuron: usize,
         train_subset_idx: usize,
         memory_mode: u8,
         neuron_sample_rate: f32,
         rng_seed: u64,
     ) -> PyResult<Vec<(f64, f64)>> {
         py.allow_threads(|| {
-            Ok(bitwise_ramlm::evaluate_genomes_with_mode(
-                &self.inner, &connections_flat, num_genomes,
-                neurons_per_cluster, bits_per_neuron, train_subset_idx,
+            Ok(bitwise_ramlm::evaluate_genomes(
+                &self.inner, &bits_per_cluster_flat, &neurons_per_cluster_flat,
+                &connections_flat, num_genomes, train_subset_idx,
                 memory_mode, neuron_sample_rate, rng_seed,
             ))
         })
     }
 
-    /// Evaluate genomes using full training data (default: ternary mode).
+    /// Evaluate genomes with per-cluster heterogeneous configs (full training).
+    #[allow(clippy::too_many_arguments)]
     fn evaluate_genomes_full(
         &self,
         py: Python<'_>,
+        bits_per_cluster_flat: Vec<usize>,
+        neurons_per_cluster_flat: Vec<usize>,
         connections_flat: Vec<i64>,
         num_genomes: usize,
-        neurons_per_cluster: usize,
-        bits_per_neuron: usize,
-    ) -> PyResult<Vec<(f64, f64)>> {
-        py.allow_threads(|| {
-            Ok(bitwise_ramlm::evaluate_genomes_full(
-                &self.inner, &connections_flat, num_genomes,
-                neurons_per_cluster, bits_per_neuron,
-            ))
-        })
-    }
-
-    /// Evaluate full with mode and sample rate.
-    #[allow(clippy::too_many_arguments)]
-    fn evaluate_genomes_full_with_mode(
-        &self,
-        py: Python<'_>,
-        connections_flat: Vec<i64>,
-        num_genomes: usize,
-        neurons_per_cluster: usize,
-        bits_per_neuron: usize,
         memory_mode: u8,
         neuron_sample_rate: f32,
         rng_seed: u64,
     ) -> PyResult<Vec<(f64, f64)>> {
         py.allow_threads(|| {
-            Ok(bitwise_ramlm::evaluate_genomes_full_with_mode(
-                &self.inner, &connections_flat, num_genomes,
-                neurons_per_cluster, bits_per_neuron,
+            Ok(bitwise_ramlm::evaluate_genomes_full(
+                &self.inner, &bits_per_cluster_flat, &neurons_per_cluster_flat,
+                &connections_flat, num_genomes,
                 memory_mode, neuron_sample_rate, rng_seed,
             ))
         })

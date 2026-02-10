@@ -131,45 +131,53 @@ class BitwiseEvaluator:
 	# Rust+Metal evaluation (primary path)
 	# =========================================================================
 
-	def _flatten_genomes(self, genomes: list[ClusterGenome]) -> list[int]:
-		"""Flatten all genomes' connections into a single list."""
-		conns = []
+	def _flatten_genomes_heterogeneous(
+		self,
+		genomes: list[ClusterGenome],
+	) -> tuple[list[int], list[int], list[int]]:
+		"""
+		Flatten per-cluster arrays from genomes for Rust.
+
+		Returns:
+			(bits_flat, neurons_flat, connections_flat) where:
+			- bits_flat: [num_genomes * num_clusters]
+			- neurons_flat: [num_genomes * num_clusters]
+			- connections_flat: variable total
+		"""
+		import random
+		num_clusters = bits_needed(self._vocab_size)
+
+		bits_flat = []
+		neurons_flat = []
+		connections_flat = []
+
 		for g in genomes:
+			bits_flat.extend(g.bits_per_cluster)
+			neurons_flat.extend(g.neurons_per_cluster)
 			if g.connections is not None:
-				conns.extend(g.connections)
+				connections_flat.extend(g.connections)
 			else:
-				# Generate random connections if genome has none
-				num_bits = bits_needed(self._vocab_size)
-				total_neurons = num_bits * self._neurons_per_cluster
-				import random
-				conns.extend([
-					random.randint(0, self._total_input_bits - 1)
-					for _ in range(total_neurons * self._bits_per_neuron)
-				])
-		return conns
+				# Generate random connections based on per-cluster config
+				for c in range(num_clusters):
+					n_neurons = g.neurons_per_cluster[c]
+					n_bits = g.bits_per_cluster[c]
+					for _ in range(n_neurons * n_bits):
+						connections_flat.append(random.randint(0, self._total_input_bits - 1))
+
+		return bits_flat, neurons_flat, connections_flat
 
 	def _evaluate_batch_rust(
 		self,
 		genomes: list[ClusterGenome],
 		train_subset_idx: int,
 	) -> list[tuple[float, float]]:
-		"""Evaluate using Rust+Metal backend."""
-		connections_flat = self._flatten_genomes(genomes)
-		if self._memory_mode == 0 and self._neuron_sample_rate >= 1.0:
-			# Fast path: default ternary mode
-			return self._rust_cache.evaluate_genomes(
-				connections_flat=connections_flat,
-				num_genomes=len(genomes),
-				neurons_per_cluster=self._neurons_per_cluster,
-				bits_per_neuron=self._bits_per_neuron,
-				train_subset_idx=train_subset_idx,
-			)
-		# Mode-aware path
-		return self._rust_cache.evaluate_genomes_with_mode(
+		"""Evaluate using Rust+Metal backend with per-cluster heterogeneous configs."""
+		bits_flat, neurons_flat, connections_flat = self._flatten_genomes_heterogeneous(genomes)
+		return self._rust_cache.evaluate_genomes(
+			bits_per_cluster_flat=bits_flat,
+			neurons_per_cluster_flat=neurons_flat,
 			connections_flat=connections_flat,
 			num_genomes=len(genomes),
-			neurons_per_cluster=self._neurons_per_cluster,
-			bits_per_neuron=self._bits_per_neuron,
 			train_subset_idx=train_subset_idx,
 			memory_mode=self._memory_mode,
 			neuron_sample_rate=self._neuron_sample_rate,
@@ -181,19 +189,12 @@ class BitwiseEvaluator:
 		genomes: list[ClusterGenome],
 	) -> list[tuple[float, float]]:
 		"""Evaluate with full data using Rust+Metal backend."""
-		connections_flat = self._flatten_genomes(genomes)
-		if self._memory_mode == 0 and self._neuron_sample_rate >= 1.0:
-			return self._rust_cache.evaluate_genomes_full(
-				connections_flat=connections_flat,
-				num_genomes=len(genomes),
-				neurons_per_cluster=self._neurons_per_cluster,
-				bits_per_neuron=self._bits_per_neuron,
-			)
-		return self._rust_cache.evaluate_genomes_full_with_mode(
+		bits_flat, neurons_flat, connections_flat = self._flatten_genomes_heterogeneous(genomes)
+		return self._rust_cache.evaluate_genomes_full(
+			bits_per_cluster_flat=bits_flat,
+			neurons_per_cluster_flat=neurons_flat,
 			connections_flat=connections_flat,
 			num_genomes=len(genomes),
-			neurons_per_cluster=self._neurons_per_cluster,
-			bits_per_neuron=self._bits_per_neuron,
 			memory_mode=self._memory_mode,
 			neuron_sample_rate=self._neuron_sample_rate,
 			rng_seed=self._seed,
