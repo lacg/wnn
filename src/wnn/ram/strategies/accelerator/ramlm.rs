@@ -224,6 +224,107 @@ pub fn train_batch(
     true_modified + false_modified
 }
 
+/// Bitwise batch training for BitwiseRAMLM
+///
+/// Multi-label training: each example trains ALL clusters (one per output bit).
+/// For each example, target_bits[ex, cluster] = 1 means TRUE, 0 means FALSE.
+///
+/// Uses two-phase training (same as train_batch):
+/// 1. Phase 1: Write TRUE where target_bit=1 (with override priority)
+/// 2. Phase 2: Write FALSE where target_bit=0 (EMPTY cells only)
+///
+/// Args:
+///   input_bits_flat: [num_examples * total_input_bits] flattened bool array
+///   target_bits_flat: [num_examples * num_clusters] flattened u8 array (0 or 1)
+///   connections_flat: [num_neurons * bits_per_neuron] flattened connection indices
+///   memory_words: [num_neurons * words_per_neuron] flattened memory (mutable)
+///
+/// Returns: number of cells modified
+pub fn bitwise_train_batch(
+    input_bits_flat: &[bool],
+    target_bits_flat: &[u8],
+    connections_flat: &[i64],
+    memory_words: &mut [i64],
+    num_examples: usize,
+    total_input_bits: usize,
+    _num_neurons: usize,
+    bits_per_neuron: usize,
+    neurons_per_cluster: usize,
+    num_clusters: usize,
+    words_per_neuron: usize,
+    allow_override: bool,
+) -> usize {
+    // Convert memory to atomic for thread-safe writes
+    let atomic_memory: &[AtomicI64] = unsafe {
+        std::slice::from_raw_parts(
+            memory_words.as_ptr() as *const AtomicI64,
+            memory_words.len(),
+        )
+    };
+
+    // ========== PHASE 1: Write TRUEs (target_bit=1) ==========
+    let true_modified: usize = (0..num_examples).into_par_iter().map(|ex_idx| {
+        let input_start = ex_idx * total_input_bits;
+        let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
+        let target_start = ex_idx * num_clusters;
+
+        let mut ex_modified = 0usize;
+
+        for cluster in 0..num_clusters {
+            if target_bits_flat[target_start + cluster] == 1 {
+                let start_neuron = cluster * neurons_per_cluster;
+
+                for neuron_offset in 0..neurons_per_cluster {
+                    let neuron_idx = start_neuron + neuron_offset;
+                    let conn_start = neuron_idx * bits_per_neuron;
+                    let connections = &connections_flat[conn_start..conn_start + bits_per_neuron];
+
+                    let address = compute_address(input_bits, connections, bits_per_neuron);
+
+                    if write_cell(atomic_memory, neuron_idx, address, TRUE, words_per_neuron, true) {
+                        ex_modified += 1;
+                    }
+                }
+            }
+        }
+
+        ex_modified
+    }).sum();
+
+    fence(Ordering::SeqCst);
+
+    // ========== PHASE 2: Write FALSEs (target_bit=0) ==========
+    let false_modified: usize = (0..num_examples).into_par_iter().map(|ex_idx| {
+        let input_start = ex_idx * total_input_bits;
+        let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
+        let target_start = ex_idx * num_clusters;
+
+        let mut ex_modified = 0usize;
+
+        for cluster in 0..num_clusters {
+            if target_bits_flat[target_start + cluster] == 0 {
+                let start_neuron = cluster * neurons_per_cluster;
+
+                for neuron_offset in 0..neurons_per_cluster {
+                    let neuron_idx = start_neuron + neuron_offset;
+                    let conn_start = neuron_idx * bits_per_neuron;
+                    let connections = &connections_flat[conn_start..conn_start + bits_per_neuron];
+
+                    let address = compute_address(input_bits, connections, bits_per_neuron);
+
+                    if write_cell(atomic_memory, neuron_idx, address, FALSE, words_per_neuron, allow_override) {
+                        ex_modified += 1;
+                    }
+                }
+            }
+        }
+
+        ex_modified
+    }).sum();
+
+    true_modified + false_modified
+}
+
 /// Batch forward pass for RAMLM
 ///
 /// Args:

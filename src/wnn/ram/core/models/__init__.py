@@ -365,6 +365,9 @@ def __getattr__(name: str):
 	if name == 'RAMLM':
 		from wnn.ram.core.models.ramlm import RAMLM
 		return RAMLM
+	if name == 'BitwiseRAMLM':
+		from wnn.ram.core.models.bitwise_ramlm import BitwiseRAMLM
+		return BitwiseRAMLM
 
 	# Hybrid / Transformer LMs (WS2-WS3)
 	if name == 'TinyTransformerLM':
@@ -457,6 +460,7 @@ __all__ = [
 	'ModelsFactory',
 	# Language Models
 	'RAMLM',
+	'BitwiseRAMLM',
 	# Hybrid / Transformer LMs
 	'TinyTransformerLM',
 	'HybridRAMTransformerLM',

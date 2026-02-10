@@ -592,6 +592,72 @@ fn ramlm_train_batch_numpy<'py>(
     })
 }
 
+/// Bitwise batch training for BitwiseRAMLM (dense memory)
+///
+/// Multi-label training: each example trains ALL clusters (one per output bit).
+/// target_bits[ex, cluster] = 1 means TRUE, 0 means FALSE.
+///
+/// Args:
+///   input_bits: [num_examples * total_input_bits] u8 numpy array
+///   target_bits: [num_examples * num_clusters] u8 numpy array (0/1 per cluster)
+///   connections: [num_neurons * bits_per_neuron] i64 numpy array
+///   memory_words: [num_neurons * words_per_neuron] i64 numpy array
+///
+/// Returns: (num_modified, new_memory_words)
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn ramlm_bitwise_train_batch_numpy<'py>(
+    py: Python<'py>,
+    input_bits: PyReadonlyArray1<'py, u8>,
+    target_bits: PyReadonlyArray1<'py, u8>,
+    connections: PyReadonlyArray1<'py, i64>,
+    memory_words: PyReadonlyArray1<'py, i64>,
+    num_examples: usize,
+    total_input_bits: usize,
+    num_neurons: usize,
+    bits_per_neuron: usize,
+    neurons_per_cluster: usize,
+    num_clusters: usize,
+    words_per_neuron: usize,
+    allow_override: bool,
+) -> PyResult<(usize, Vec<i64>)> {
+    let input_slice = input_bits.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Input array not contiguous: {}", e))
+    })?;
+    let target_slice = target_bits.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Target bits array not contiguous: {}", e))
+    })?;
+    let conn_slice = connections.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Connections array not contiguous: {}", e))
+    })?;
+    let mem_slice = memory_words.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Memory array not contiguous: {}", e))
+    })?;
+
+    let input_bools: Vec<bool> = input_slice.iter().map(|&b| b != 0).collect();
+    let target_vec: Vec<u8> = target_slice.to_vec();
+    let conn_vec: Vec<i64> = conn_slice.to_vec();
+    let mut mem_vec: Vec<i64> = mem_slice.to_vec();
+
+    py.allow_threads(|| {
+        let modified = ramlm::bitwise_train_batch(
+            &input_bools,
+            &target_vec,
+            &conn_vec,
+            &mut mem_vec,
+            num_examples,
+            total_input_bits,
+            num_neurons,
+            bits_per_neuron,
+            neurons_per_cluster,
+            num_clusters,
+            words_per_neuron,
+            allow_override,
+        );
+        Ok((modified, mem_vec))
+    })
+}
+
 /// Tiered batch training - ALL tiers in a single Rust call (eliminates Python loop overhead)
 ///
 /// This is the optimized training function for tiered architectures. Instead of calling
@@ -1295,6 +1361,40 @@ fn sparse_train_batch(
             memory.bits_per_neuron,
             neurons_per_cluster,
             num_negatives,
+            allow_override,
+        );
+        Ok(modified)
+    })
+}
+
+/// Bitwise batch training for sparse memory backend
+///
+/// Multi-label training: each example trains ALL clusters (one per output bit).
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn sparse_bitwise_train_batch(
+    py: Python<'_>,
+    memory: &SparseMemory,
+    input_bits_flat: Vec<bool>,
+    target_bits_flat: Vec<u8>,
+    connections_flat: Vec<i64>,
+    num_examples: usize,
+    total_input_bits: usize,
+    neurons_per_cluster: usize,
+    num_clusters: usize,
+    allow_override: bool,
+) -> PyResult<usize> {
+    py.allow_threads(|| {
+        let modified = sparse_memory::bitwise_train_batch_sparse(
+            &memory.inner,
+            &input_bits_flat,
+            &target_bits_flat,
+            &connections_flat,
+            num_examples,
+            total_input_bits,
+            memory.bits_per_neuron,
+            neurons_per_cluster,
+            num_clusters,
             allow_override,
         );
         Ok(modified)
@@ -3848,6 +3948,7 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // RAMLM acceleration (proper RAM WNN architecture)
     m.add_function(wrap_pyfunction!(ramlm_train_batch, m)?)?;
     m.add_function(wrap_pyfunction!(ramlm_train_batch_numpy, m)?)?;  // FAST numpy-based training
+    m.add_function(wrap_pyfunction!(ramlm_bitwise_train_batch_numpy, m)?)?;  // Bitwise multi-label training (dense)
     m.add_function(wrap_pyfunction!(ramlm_train_batch_tiered_numpy, m)?)?;  // FAST tiered training (all tiers in one call)
     m.add_function(wrap_pyfunction!(ramlm_forward_batch, m)?)?;
     // RAMLM Metal GPU acceleration
@@ -3864,6 +3965,7 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Sparse memory backend (for >10 bits per neuron)
     m.add_class::<SparseMemory>()?;
     m.add_function(wrap_pyfunction!(sparse_train_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(sparse_bitwise_train_batch, m)?)?;  // Bitwise multi-label training (sparse)
     m.add_function(wrap_pyfunction!(sparse_forward_batch, m)?)?;
     // Tiered sparse memory backend (for variable bits per tier)
     m.add_class::<TieredSparseMemory>()?;

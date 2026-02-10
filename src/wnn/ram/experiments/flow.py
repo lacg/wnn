@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal, Optional
 
 from wnn.ram.fitness import FitnessCalculatorType
-from wnn.ram.experiments.experiment import Experiment, ExperimentConfig, ExperimentResult
+from wnn.ram.experiments.experiment import Experiment, ExperimentConfig, ExperimentResult, ExperimentType
 from wnn.ram.experiments.dashboard_client import DashboardClient, FlowConfig as APIFlowConfig
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 
@@ -122,12 +122,12 @@ class FlowConfig:
 			]
 		else:
 			phases = [
-				("Phase 1a: GA Neurons", "ga", False, True, False),
-				("Phase 1b: TS Neurons", "ts", False, True, False),
-				("Phase 2a: GA Bits", "ga", True, False, False),
-				("Phase 2b: TS Bits", "ts", True, False, False),
-				("Phase 3a: GA Connections", "ga", False, False, True),
-				("Phase 3b: TS Connections", "ts", False, False, True),
+				("Phase 1a: GA Neurons", ExperimentType.GA, False, True, False),
+				("Phase 1b: TS Neurons", ExperimentType.TS, False, True, False),
+				("Phase 2a: GA Bits", ExperimentType.GA, True, False, False),
+				("Phase 2b: TS Bits", ExperimentType.TS, True, False, False),
+				("Phase 3a: GA Connections", ExperimentType.GA, False, False, True),
+				("Phase 3b: TS Connections", ExperimentType.TS, False, False, True),
 			]
 
 		experiments = []
@@ -352,8 +352,8 @@ class Flow:
 					self.log(f"Found existing experiment {existing_exp['id']}: {exp_config.name} (sequence_order={idx})")
 				else:
 					opt_target = "bits" if exp_config.optimize_bits else "neurons" if exp_config.optimize_neurons else "connections"
-					phase_type = f"{'ga' if exp_config.experiment_type == 'ga' else 'ts'}_{opt_target}"
-					max_iters = exp_config.generations if exp_config.experiment_type == "ga" else exp_config.iterations
+					phase_type = f"{'ga' if exp_config.experiment_type == ExperimentType.GA else 'ts'}_{opt_target}"
+					max_iters = exp_config.generations if exp_config.experiment_type == ExperimentType.GA else exp_config.iterations
 
 					exp_id = self.tracker.create_pending_experiment(
 						name=exp_config.name,
@@ -434,7 +434,7 @@ class Flow:
 
 				# Determine phase type string for tracking
 				opt_target = "bits" if exp_config.optimize_bits else "neurons" if exp_config.optimize_neurons else "connections"
-				phase_type = f"{'ga' if exp_config.experiment_type == 'ga' else 'ts'}_{opt_target}"
+				phase_type = f"{'ga' if exp_config.experiment_type == ExperimentType.GA else 'ts'}_{opt_target}"
 
 				# Check if experiment already exists (created when flow was queued from dashboard)
 				existing_experiment_id = self._experiment_ids.get(idx)
@@ -465,7 +465,7 @@ class Flow:
 							context_size=cfg.context_size,
 							population_size=exp_config.population_size,
 							phase_type=phase_type,
-							max_iterations=exp_config.generations if exp_config.experiment_type == "ga" else exp_config.iterations,
+							max_iterations=exp_config.generations if exp_config.experiment_type == ExperimentType.GA else exp_config.iterations,
 						)
 						experiment_id = tracker_experiment_id
 						self._experiment_ids[idx] = experiment_id
@@ -516,7 +516,7 @@ class Flow:
 
 				result = experiment.run(
 					initial_genome=current_genome,
-					initial_fitness=current_fitness if exp_config.experiment_type == "ts" else None,
+					initial_fitness=current_fitness if exp_config.experiment_type == ExperimentType.TS else None,
 					initial_population=current_population,
 					initial_threshold=current_threshold,
 					tracker_experiment_id=tracker_experiment_id,  # Pass this experiment's ID
@@ -797,7 +797,7 @@ class Flow:
 				return None
 
 			# Look for a completed phase matching this experiment's type
-			phase_type = "ga" if exp_config.experiment_type == "ga" else "ts"
+			phase_type = "ga" if exp_config.experiment_type == ExperimentType.GA else "ts"
 			optimize_what = "neurons" if exp_config.optimize_neurons else ("bits" if exp_config.optimize_bits else "connections")
 			expected_phase_type = f"{phase_type}_{optimize_what}"
 

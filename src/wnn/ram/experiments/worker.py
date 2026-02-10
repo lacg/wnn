@@ -23,7 +23,7 @@ from typing import Optional
 from wnn.ram.fitness import FitnessCalculatorType
 from wnn.ram.experiments.dashboard_client import DashboardClient, DashboardClientConfig
 from wnn.ram.experiments.flow import Flow, FlowConfig
-from wnn.ram.experiments.experiment import ExperimentConfig
+from wnn.ram.experiments.experiment import ExperimentConfig, ExperimentType
 from wnn.ram.experiments.tracker import create_tracker, ExperimentTracker
 
 # How often to send heartbeats (seconds)
@@ -529,13 +529,14 @@ class FlowWorker:
             phase_type = exp_data.get("phase_type", "")
             if phase_type:
                 # API format: phase_type like "ga_neurons", "ts_bits", "ga_connections"
-                experiment_type = "ga" if phase_type.startswith("ga") else "ts"
+                experiment_type = ExperimentType.GA if phase_type.startswith("ga") else ExperimentType.TS
                 optimize_neurons = "neurons" in phase_type
                 optimize_bits = "bits" in phase_type
                 optimize_connections = "connections" in phase_type
             else:
                 # Legacy config format
-                experiment_type = exp_data.get("experiment_type", "ga")
+                raw_type = exp_data.get("experiment_type", "ga")
+                experiment_type = ExperimentType.GA if raw_type == "ga" else ExperimentType.TS
                 optimize_neurons = exp_data.get("optimize_neurons", False)
                 optimize_bits = exp_data.get("optimize_bits", False)
                 optimize_connections = exp_data.get("optimize_connections", False)

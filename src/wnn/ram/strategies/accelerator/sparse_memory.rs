@@ -413,6 +413,83 @@ pub fn train_batch_sparse(
     true_modified + false_modified
 }
 
+/// Bitwise batch training for sparse memory backend
+///
+/// Multi-label training: each example trains ALL clusters (one per output bit).
+/// Same two-phase logic as train_batch_sparse but with multi-label targets.
+pub fn bitwise_train_batch_sparse(
+    memory: &SparseLayerMemory,
+    input_bits_flat: &[bool],
+    target_bits_flat: &[u8],
+    connections_flat: &[i64],
+    num_examples: usize,
+    total_input_bits: usize,
+    bits_per_neuron: usize,
+    neurons_per_cluster: usize,
+    num_clusters: usize,
+    _allow_override: bool,
+) -> usize {
+    // Phase 1: Write TRUEs where target_bit=1 (with override for priority)
+    let true_modified: usize = (0..num_examples).into_par_iter().map(|ex_idx| {
+        let input_start = ex_idx * total_input_bits;
+        let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
+        let target_start = ex_idx * num_clusters;
+
+        let mut ex_modified = 0usize;
+
+        for cluster in 0..num_clusters {
+            if target_bits_flat[target_start + cluster] == 1 {
+                let start_neuron = cluster * neurons_per_cluster;
+
+                for neuron_offset in 0..neurons_per_cluster {
+                    let neuron_idx = start_neuron + neuron_offset;
+                    let conn_start = neuron_idx * bits_per_neuron;
+                    let connections = &connections_flat[conn_start..conn_start + bits_per_neuron];
+
+                    let address = compute_address(input_bits, connections, bits_per_neuron);
+
+                    if memory.write_cell(neuron_idx, address, TRUE, true) {
+                        ex_modified += 1;
+                    }
+                }
+            }
+        }
+
+        ex_modified
+    }).sum();
+
+    // Phase 2: Write FALSEs where target_bit=0 (only to EMPTY cells)
+    let false_modified: usize = (0..num_examples).into_par_iter().map(|ex_idx| {
+        let input_start = ex_idx * total_input_bits;
+        let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
+        let target_start = ex_idx * num_clusters;
+
+        let mut ex_modified = 0usize;
+
+        for cluster in 0..num_clusters {
+            if target_bits_flat[target_start + cluster] == 0 {
+                let start_neuron = cluster * neurons_per_cluster;
+
+                for neuron_offset in 0..neurons_per_cluster {
+                    let neuron_idx = start_neuron + neuron_offset;
+                    let conn_start = neuron_idx * bits_per_neuron;
+                    let connections = &connections_flat[conn_start..conn_start + bits_per_neuron];
+
+                    let address = compute_address(input_bits, connections, bits_per_neuron);
+
+                    if memory.write_cell(neuron_idx, address, FALSE, false) {
+                        ex_modified += 1;
+                    }
+                }
+            }
+        }
+
+        ex_modified
+    }).sum();
+
+    true_modified + false_modified
+}
+
 /// Batch forward pass for sparse memory backend
 ///
 /// Same interface as ramlm::forward_batch but uses sparse storage.

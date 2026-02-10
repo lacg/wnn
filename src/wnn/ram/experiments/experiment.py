@@ -10,7 +10,9 @@ import json
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Any, Callable, Literal, Optional
+from typing import Any, Callable, Optional
+
+from enum import IntEnum
 
 from wnn.ram.fitness import FitnessCalculatorType, FitnessCalculatorFactory
 from wnn.ram.strategies.factory import OptimizerStrategyFactory, OptimizerStrategyType
@@ -18,12 +20,24 @@ from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 from wnn.ram.experiments.phased_search import PhaseResult
 
 
+class ExperimentType(IntEnum):
+	"""How we optimize."""
+	GA = 0    # Genetic Algorithm
+	TS = 1    # Tabu Search
+
+
+class ClusterType(IntEnum):
+	"""What cluster architecture to use."""
+	TIERED = 0    # Existing RAMLM with tiered clusters (50K)
+	BITWISE = 1   # BitwiseRAMLM with per-bit clusters (16)
+
+
 @dataclass
 class ExperimentConfig:
 	"""Configuration for a single experiment (GA or TS optimization)."""
 
 	name: str
-	experiment_type: Literal["ga", "ts"]
+	experiment_type: ExperimentType
 
 	# What to optimize
 	optimize_bits: bool = False
@@ -64,6 +78,13 @@ class ExperimentConfig:
 	# Random seed
 	seed: Optional[int] = None
 
+	# Cluster architecture
+	cluster_type: ClusterType = ClusterType.TIERED
+
+	# BitwiseRAMLM-specific (only used when cluster_type=BITWISE)
+	bitwise_neurons_per_cluster: int = 1000
+	bitwise_bits_per_neuron: int = 10
+
 	# Fitness calculator settings
 	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.NORMALIZED
 	fitness_weight_ce: float = 1.0
@@ -91,7 +112,11 @@ class ExperimentConfig:
 					# Legacy 3-part format
 					tier_parts.append(f"{count_str},{tier[1]},{tier[2]}")
 			result["tier_config"] = ";".join(tier_parts)
-		# Convert fitness_calculator_type enum to string for JSON
+		# Convert enums to string/int for JSON
+		if "experiment_type" in result:
+			result["experiment_type"] = result["experiment_type"].name.lower()
+		if "cluster_type" in result:
+			result["cluster_type"] = result["cluster_type"].name.lower()
 		if "fitness_calculator_type" in result:
 			result["fitness_calculator_type"] = result["fitness_calculator_type"].name.lower()
 		return result
@@ -99,9 +124,21 @@ class ExperimentConfig:
 	@classmethod
 	def from_dict(cls, data: dict[str, Any]) -> "ExperimentConfig":
 		"""Create from dictionary."""
+		data = data.copy()  # Don't modify the original
+		# Convert experiment_type string back to enum
+		if "experiment_type" in data and isinstance(data["experiment_type"], str):
+			try:
+				data["experiment_type"] = ExperimentType[data["experiment_type"].upper()]
+			except KeyError:
+				data["experiment_type"] = ExperimentType.GA
+		# Convert cluster_type string back to enum
+		if "cluster_type" in data and isinstance(data["cluster_type"], str):
+			try:
+				data["cluster_type"] = ClusterType[data["cluster_type"].upper()]
+			except KeyError:
+				data["cluster_type"] = ClusterType.TIERED
 		# Convert fitness_calculator_type string back to enum
 		if "fitness_calculator_type" in data and isinstance(data["fitness_calculator_type"], str):
-			data = data.copy()  # Don't modify the original
 			try:
 				data["fitness_calculator_type"] = FitnessCalculatorType[data["fitness_calculator_type"].upper()]
 			except KeyError:
@@ -154,7 +191,7 @@ class Experiment:
 	Example usage:
 		config = ExperimentConfig(
 			name="Phase 1a: GA Neurons",
-			experiment_type="ga",
+			experiment_type=ExperimentType.GA,
 			optimize_neurons=True,
 			generations=250,
 		)
@@ -281,7 +318,8 @@ class Experiment:
 		self.log(f"{'='*60}")
 		self.log(f"  {cfg.name}")
 		self.log(f"{'='*60}")
-		self.log(f"  Type: {cfg.experiment_type.upper()}")
+		self.log(f"  Type: {cfg.experiment_type.name}")
+		self.log(f"  Cluster: {cfg.cluster_type.name}")
 		self.log(f"  Optimize: bits={cfg.optimize_bits}, neurons={cfg.optimize_neurons}, connections={cfg.optimize_connections}")
 		if initial_genome:
 			self.log(f"  Starting from: {initial_genome}")
@@ -290,16 +328,24 @@ class Experiment:
 		self.log("")
 
 		# Determine strategy type
-		is_ga = cfg.experiment_type == "ga"
+		is_ga = cfg.experiment_type == ExperimentType.GA
 		strategy_type = (
 			OptimizerStrategyType.ARCHITECTURE_GA if is_ga
 			else OptimizerStrategyType.ARCHITECTURE_TS
 		)
 
+		# Determine num_clusters based on cluster type
+		if cfg.cluster_type == ClusterType.BITWISE:
+			from wnn.ram.core.RAMClusterLayer import bits_needed
+			num_clusters = bits_needed(self.vocab_size)
+			self.log(f"  Bitwise: {num_clusters} clusters ({cfg.bitwise_neurons_per_cluster} neurons, {cfg.bitwise_bits_per_neuron} bits)")
+		else:
+			num_clusters = self.vocab_size
+
 		# Build strategy kwargs
 		strategy_kwargs = {
 			"strategy_type": strategy_type,
-			"num_clusters": self.vocab_size,
+			"num_clusters": num_clusters,
 			"optimize_bits": cfg.optimize_bits,
 			"optimize_neurons": cfg.optimize_neurons,
 			"optimize_connections": cfg.optimize_connections,

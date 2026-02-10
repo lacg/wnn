@@ -277,6 +277,9 @@ def flow_run(
 		help="Directory for checkpoints (required for resume)"
 	),
 	context: int = typer.Option(4, "--context", help="Context window size"),
+	cluster_type: str = typer.Option("tiered", "--cluster-type", help="Cluster type: tiered or bitwise"),
+	bitwise_neurons: int = typer.Option(1000, "--bitwise-neurons", help="Neurons per cluster (bitwise mode)"),
+	bitwise_bits: int = typer.Option(10, "--bitwise-bits", help="Bits per neuron (bitwise mode)"),
 	url: str = typer.Option("https://localhost:3000", "--url", help="Dashboard URL"),
 ):
 	"""
@@ -291,6 +294,7 @@ def flow_run(
 	"""
 	import time
 	from wnn.ram.experiments.flow import Flow, FlowConfig, ExperimentConfig
+	from wnn.ram.experiments.experiment import ExperimentType, ClusterType
 	from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 
 	# Phase name to index mapping
@@ -373,27 +377,50 @@ def flow_run(
 
 		rprint(f"[dim]  Train: {len(train_tokens):,} tokens, Eval: {len(eval_tokens):,} tokens[/dim]")
 
-		# Create evaluator
-		from wnn.ram.strategies.connectivity.evaluator import CachedEvaluator
+		# Parse cluster type
+		effective_cluster_type = ClusterType.BITWISE if cluster_type.lower() == "bitwise" else ClusterType.TIERED
 
-		evaluator = CachedEvaluator(
-			train_tokens=train_tokens,
-			eval_tokens=eval_tokens,
-			vocab_size=tokenizer.vocab_size,
-			context_size=effective_context,
-			token_parts=3,
-			rotation_mode="per_iteration",
-			seed=seed or int(time.time() * 1000) % (2**32),
-		)
+		# Create evaluator based on cluster type
+		effective_seed = seed or int(time.time() * 1000) % (2**32)
+
+		if effective_cluster_type == ClusterType.BITWISE:
+			from wnn.ram.architecture.bitwise_evaluator import BitwiseEvaluator
+
+			evaluator = BitwiseEvaluator(
+				train_tokens=train_tokens,
+				eval_tokens=eval_tokens,
+				vocab_size=tokenizer.vocab_size,
+				context_size=effective_context,
+				neurons_per_cluster=bitwise_neurons,
+				bits_per_neuron=bitwise_bits,
+				num_parts=3,
+				seed=effective_seed,
+			)
+			rprint(f"[dim]  Bitwise mode: {evaluator}[/dim]")
+		else:
+			from wnn.ram.strategies.connectivity.evaluator import CachedEvaluator
+
+			evaluator = CachedEvaluator(
+				train_tokens=train_tokens,
+				eval_tokens=eval_tokens,
+				vocab_size=tokenizer.vocab_size,
+				context_size=effective_context,
+				token_parts=3,
+				rotation_mode="per_iteration",
+				seed=effective_seed,
+			)
 
 		rprint(f"[dim]  Vocab: {evaluator.vocab_size:,}, Context: {effective_context}[/dim]")
 
 		# Build experiment configs from dashboard data
 		exp_configs = []
 		for exp_data in experiments:
+			raw_type = exp_data.get("experiment_type", "ga")
+			exp_type = ExperimentType.GA if raw_type == "ga" else ExperimentType.TS
+
 			exp_config = ExperimentConfig(
 				name=exp_data.get("name", "Unnamed"),
-				experiment_type=exp_data.get("experiment_type", "ga"),
+				experiment_type=exp_type,
 				optimize_bits=exp_data.get("optimize_bits", False),
 				optimize_neurons=exp_data.get("optimize_neurons", False),
 				optimize_connections=exp_data.get("optimize_connections", False),
@@ -406,6 +433,9 @@ def flow_run(
 				optimize_tier0_only=tier0_only,
 				fitness_percentile=fitness_percentile,
 				seed=seed,
+				cluster_type=effective_cluster_type,
+				bitwise_neurons_per_cluster=bitwise_neurons,
+				bitwise_bits_per_neuron=bitwise_bits,
 			)
 			exp_configs.append(exp_config)
 
