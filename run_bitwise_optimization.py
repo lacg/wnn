@@ -35,8 +35,13 @@ from pathlib import Path
 # Data loading
 # ---------------------------------------------------------------------------
 
-def load_wikitext2_tokens(tokenizer_name="gpt2"):
-	"""Load WikiText-2 train/test tokens using GPT-2 tokenizer."""
+def load_wikitext2_tokens(tokenizer_name="gpt2", train_tokens_limit=200_000, eval_tokens_limit=50_000):
+	"""Load WikiText-2 tokens using GPT-2 tokenizer, with configurable limits.
+
+	Default limits match run_coarse_fine_search.py for comparable speed:
+	- train: 200K tokens (split into 3 subsets of ~67K for rotation)
+	- eval: 50K tokens
+	"""
 	try:
 		from datasets import load_dataset
 		from transformers import AutoTokenizer
@@ -49,15 +54,21 @@ def load_wikitext2_tokens(tokenizer_name="gpt2"):
 	dataset = load_dataset("wikitext", "wikitext-2-raw-v1")
 
 	train_text = "\n".join(dataset["train"]["text"])
-	test_text = "\n".join(dataset["test"]["text"])
+	all_train_tokens = tokenizer.encode(train_text)
 
-	train_tokens = tokenizer.encode(train_text)
-	test_tokens = tokenizer.encode(test_text)
+	# Use eval split (not test) for optimization; test is held out for final eval
+	eval_text = "\n".join(dataset["validation"]["text"])
+	all_eval_tokens = tokenizer.encode(eval_text)
+
+	# Apply limits
+	train_tokens = all_train_tokens[:train_tokens_limit]
+	eval_tokens = all_eval_tokens[:eval_tokens_limit]
 
 	vocab_size = tokenizer.vocab_size
-	print(f"Loaded WikiText-2: {len(train_tokens):,} train, {len(test_tokens):,} test tokens, vocab={vocab_size}")
+	print(f"Loaded WikiText-2: {len(train_tokens):,}/{len(all_train_tokens):,} train, "
+		  f"{len(eval_tokens):,}/{len(all_eval_tokens):,} eval tokens, vocab={vocab_size}")
 
-	return train_tokens, test_tokens, vocab_size
+	return train_tokens, eval_tokens, vocab_size
 
 
 # ---------------------------------------------------------------------------
@@ -197,7 +208,7 @@ def run_ga_phase(
 	result = strategy.optimize(
 		evaluate_fn=lambda g: 999.0,
 		initial_genome=seed_genome,
-		batch_evaluate_fn=lambda genomes: evaluator.evaluate_batch(genomes),
+		batch_evaluate_fn=lambda genomes, **kw: evaluator.evaluate_batch(genomes, **kw),
 	)
 	elapsed = time.time() - t0
 
@@ -240,7 +251,7 @@ def run_ts_phase(
 		initial_genome=seed_genome,
 		initial_fitness=seed_fitness,
 		evaluate_fn=lambda g: 999.0,
-		batch_evaluate_fn=lambda genomes: evaluator.evaluate_batch(genomes),
+		batch_evaluate_fn=lambda genomes, **kw: evaluator.evaluate_batch(genomes, **kw),
 	)
 	elapsed = time.time() - t0
 
@@ -296,6 +307,10 @@ def main():
 	# General
 	parser.add_argument("--context", type=int, default=4, help="Context window size (default: 4)")
 	parser.add_argument("--rate", type=float, default=0.25, help="Neuron sample rate (default: 0.25)")
+	parser.add_argument("--train-tokens", type=int, default=200_000,
+						help="Total training tokens from WikiText-2 (default: 200000)")
+	parser.add_argument("--eval-tokens", type=int, default=50_000,
+						help="Eval tokens from WikiText-2 validation split (default: 50000)")
 	parser.add_argument("--phase", type=str, default="all",
 						help="Phase to run: 1-7 or 'all' (default: all)")
 	parser.add_argument("--output", type=str, default="experiments/bitwise_optimization_results.json",
@@ -326,7 +341,10 @@ def main():
 	from wnn.ram.strategies.connectivity.architecture_strategies import ArchitectureConfig
 	from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 
-	train_tokens, test_tokens, vocab_size = load_wikitext2_tokens()
+	train_tokens, test_tokens, vocab_size = load_wikitext2_tokens(
+		train_tokens_limit=args.train_tokens,
+		eval_tokens_limit=args.eval_tokens,
+	)
 	num_clusters = bits_needed(vocab_size)  # 16 for GPT-2
 	total_input_bits = args.context * bits_needed(vocab_size)
 
@@ -338,6 +356,8 @@ def main():
 			"vocab_size": vocab_size,
 			"num_clusters": num_clusters,
 			"total_input_bits": total_input_bits,
+			"train_tokens": len(train_tokens),
+			"eval_tokens": len(test_tokens),
 			"ga_gens": args.ga_gens,
 			"population": args.population,
 			"ts_iters": args.ts_iters,
