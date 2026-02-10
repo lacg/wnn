@@ -27,7 +27,7 @@
 use dashmap::DashMap;
 use rayon::prelude::*;
 use std::hash::BuildHasherDefault;
-use std::sync::OnceLock;
+
 use rustc_hash::FxHasher;
 
 /// Memory cell values (matches dense backend)

@@ -19,10 +19,7 @@
 use dashmap::DashMap;
 use metal;
 use rayon::prelude::*;
-use rustc_hash::FxHasher;
-use std::collections::HashMap;
-use std::hash::BuildHasherDefault;
-use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 // Re-export from eval_worker module for backward compatibility
@@ -157,9 +154,6 @@ const SPARSE_THRESHOLD: usize = 12;
 const FALSE: i64 = 0;
 const TRUE: i64 = 1;
 const EMPTY: i64 = 2;
-
-/// Fast hasher for sparse memory
-type FxBuildHasher = BuildHasherDefault<FxHasher>;
 
 /// Bit-packing constants
 const BITS_PER_CELL: usize = 2;
@@ -679,7 +673,7 @@ pub fn train_batch_adaptive(
             let connections = &group_conns[conn_start..conn_start + bits];
 
             let address = compute_address(input_bits, connections, bits);
-            let global_neuron_offset = group.memory_offset / words_per_neuron + local_neuron;
+            let _global_neuron_offset = group.memory_offset / words_per_neuron + local_neuron;
 
             if write_cell_atomic(
                 &atomic_memory[group.memory_offset..],
@@ -1191,7 +1185,7 @@ pub fn evaluate_genomes_parallel(
     // Total count (for showing X/50 instead of X/batch_size)
     let total_count: usize = std::env::var("WNN_PROGRESS_TOTAL")
         .ok().and_then(|v| v.parse().ok()).unwrap_or(num_genomes);
-    let start_time = std::time::Instant::now();
+    let _start_time = std::time::Instant::now();
 
     // SEQUENTIAL genome evaluation - each genome gets full thread pool for token parallelism
     // Parallel genome eval causes contention: 10 genomes × nested token parallelism = thrashing
@@ -1209,7 +1203,7 @@ pub fn evaluate_genomes_parallel(
 
         // Create hybrid memory for each config group
         // Dense for bits <= 12 (fast), Sparse for bits > 12 (memory-efficient)
-        let mut group_memories: Vec<GroupMemory> = groups.iter()
+        let group_memories: Vec<GroupMemory> = groups.iter()
             .map(|g| GroupMemory::new(g.total_neurons(), g.bits))
             .collect();
 
@@ -1695,7 +1689,7 @@ impl GenomeMemoryPool {
 fn calculate_pool_size(
     bits_per_cluster: &[usize],
     neurons_per_cluster: &[usize],
-    num_clusters: usize,
+    _num_clusters: usize,
     budget_gb: f64,
     cpu_cores: usize,
 ) -> (usize, usize) {
@@ -1879,9 +1873,9 @@ fn export_genome_for_gpu(
     }
 }
 
-/// Thread-local cache for GPU buffers to avoid expensive 10GB buffer allocation per evaluation
-/// The scores buffer is ~10GB (50K examples × 50K clusters × 4 bytes), so reusing it is critical.
-/// The cache includes the reset generation to invalidate on Metal reset.
+// Thread-local cache for GPU buffers to avoid expensive 10GB buffer allocation per evaluation
+// The scores buffer is ~10GB (50K examples × 50K clusters × 4 bytes), so reusing it is critical.
+// The cache includes the reset generation to invalidate on Metal reset.
 thread_local! {
     // (reset_gen, num_eval, num_clusters, buffer)
     static CACHED_SCORES_BUFFER: std::cell::RefCell<Option<(u64, usize, usize, metal::Buffer)>> = std::cell::RefCell::new(None);
@@ -2021,9 +2015,9 @@ pub fn evaluate_genome_hybrid(
             });
 
             let input_time_ms = if phase_timing { phase_start.elapsed().as_micros() as f64 / 1000.0 } else { 0.0 };
-            let phase_start = std::time::Instant::now();
+            let _phase_start = std::time::Instant::now();
 
-            let mut dense_idx = 0usize;
+            let mut dense_idx: usize;
             let mut sparse_idx = 0usize;
             let all_groups_success = true;
             let mut sparse_time_ms = 0.0f64;

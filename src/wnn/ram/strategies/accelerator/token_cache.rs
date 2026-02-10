@@ -9,7 +9,6 @@
 
 use rand::prelude::*;
 use rand::SeedableRng;
-use rayon::prelude::*;
 use std::collections::HashMap;
 
 /// Pre-computed token subset with all data needed for evaluation.

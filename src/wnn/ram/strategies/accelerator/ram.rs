@@ -975,7 +975,7 @@ pub fn compute_exact_probs_batch(
     (0..n_positions)
         .into_par_iter()
         .map(|pos| {
-            let context_start = pos;
+            let _context_start = pos;
             let context_end = pos + MAX_NGRAM;
             let target = &tokens[context_end];
 

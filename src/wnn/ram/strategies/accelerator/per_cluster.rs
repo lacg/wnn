@@ -13,7 +13,7 @@
 
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
-use std::collections::HashMap;
+
 
 // ============================================================================
 // Configuration Types
@@ -1208,7 +1208,7 @@ impl PerClusterEvaluator {
             .map(|&cid| *self.cluster_to_bits.get(&cid).unwrap_or(&8))
             .collect();
 
-        let neurons_per_cluster: Vec<usize> = cluster_ids
+        let _neurons_per_cluster: Vec<usize> = cluster_ids
             .iter()
             .map(|&cid| initial_connectivities[cluster_ids.iter().position(|&x| x == cid).unwrap()].len() / bits_per_cluster[cluster_ids.iter().position(|&x| x == cid).unwrap()])
             .collect();

@@ -2,6 +2,7 @@
 //!
 //! Provides GPU-accelerated evaluation of RAM neuron connectivity patterns
 //! using Metal compute shaders on M-series Macs.
+#![allow(dead_code)]
 
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
@@ -9,7 +10,7 @@ use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
-use numpy::{PyReadonlyArray1, PyReadonlyArrayDyn};
+use numpy::PyReadonlyArray1;
 
 // Global cached Metal evaluator for RAMLM (avoids shader recompilation)
 // Using OnceLock + Option to handle initialization errors gracefully
@@ -2065,6 +2066,7 @@ fn evaluate_candidates_parallel_hybrid(
 ///                     If None, auto-detects and uses 60% of available RAM.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (candidates_flat, num_candidates, conn_size_per_candidate, train_input_bits, train_true_clusters, train_false_clusters, eval_input_bits, eval_targets, tier_configs_flat, num_tiers, num_train_examples, num_eval_examples, total_input_bits, num_clusters, num_negatives, memory_budget_gb=None))]
 fn evaluate_candidates_parallel_hybrid_with_budget(
     py: Python<'_>,
     candidates_flat: Vec<i64>,
@@ -2208,7 +2210,7 @@ fn get_per_cluster_evaluators() -> &'static Mutex<Vec<per_cluster::PerClusterEva
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn per_cluster_create_evaluator(
-    py: Python<'_>,
+    _py: Python<'_>,
     train_contexts_flat: Vec<bool>,
     train_targets: Vec<usize>,
     eval_contexts_flat: Vec<bool>,
@@ -2747,7 +2749,7 @@ fn adaptive_forward_batch<'py>(
     memory_words: PyReadonlyArray1<'py, i64>,
     group_neurons: Vec<usize>,
     group_bits: Vec<usize>,
-    group_words_per_neuron: Vec<usize>,
+    _group_words_per_neuron: Vec<usize>,
     group_cluster_ids_flat: Vec<usize>,
     group_cluster_counts: Vec<usize>,
     group_memory_offsets: Vec<usize>,
@@ -2820,7 +2822,7 @@ fn adaptive_forward_batch<'py>(
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn adaptive_train_batch<'py>(
-    py: Python<'py>,
+    _py: Python<'py>,
     input_bits: PyReadonlyArray1<'py, u8>,
     true_clusters: PyReadonlyArray1<'py, i64>,
     false_clusters_flat: PyReadonlyArray1<'py, i64>,
@@ -2828,7 +2830,7 @@ fn adaptive_train_batch<'py>(
     mut memory_words: numpy::PyReadwriteArray1<'py, i64>,
     group_neurons: Vec<usize>,
     group_bits: Vec<usize>,
-    group_words_per_neuron: Vec<usize>,
+    _group_words_per_neuron: Vec<usize>,
     group_cluster_ids_flat: Vec<usize>,
     group_cluster_counts: Vec<usize>,
     group_memory_offsets: Vec<usize>,
@@ -3220,6 +3222,7 @@ impl TokenCacheWrapper {
     }
 
     /// Reset rotators with optional new seed.
+    #[pyo3(signature = (seed=None))]
     fn reset(&mut self, seed: Option<u64>) {
         self.inner.reset(seed);
     }

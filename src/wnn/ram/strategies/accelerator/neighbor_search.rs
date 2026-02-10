@@ -11,8 +11,7 @@
 
 use rand::prelude::*;
 use rand::SeedableRng;
-use std::fs::{File, OpenOptions};
-use std::io::{BufWriter, Write};
+use std::fs::OpenOptions;
 use chrono::Local;
 
 /// Configuration for genome mutation.
@@ -763,7 +762,7 @@ pub fn search_offspring(
         }
 
         // Evaluate the batch - hybrid with persistent worker (no per-call overhead)
-        let batch_start = std::time::Instant::now();
+        let _batch_start = std::time::Instant::now();
         let results = crate::token_cache::evaluate_genomes_cached_hybrid(
             cache,
             &batch_bits,

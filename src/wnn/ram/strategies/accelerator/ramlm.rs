@@ -16,7 +16,7 @@
 
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicI32, AtomicI64, Ordering, fence};
-use std::sync::OnceLock;
+
 
 /// Memory cell values (2 bits each) — Ternary mode
 const FALSE: i64 = 0;
@@ -25,7 +25,7 @@ const EMPTY: i64 = 2;
 
 /// Memory cell values — Quad mode (4-state nudging)
 const QUAD_FALSE: i64 = 0;
-const QUAD_WEAK_FALSE: i64 = 1;  // initial state for quad modes
+const _QUAD_WEAK_FALSE: i64 = 1;  // initial state for quad modes (used in bitwise_ramlm.rs)
 const QUAD_WEAK_TRUE: i64 = 2;
 const QUAD_TRUE: i64 = 3;
 
@@ -553,7 +553,7 @@ pub fn forward_batch(
     memory_words: &[i64],
     num_examples: usize,
     total_input_bits: usize,
-    num_neurons: usize,
+    _num_neurons: usize,
     bits_per_neuron: usize,
     neurons_per_cluster: usize,
     num_clusters: usize,
@@ -647,7 +647,7 @@ pub fn train_batch_tiered(
     tier_configs: &[TierConfig],
     allow_override: bool,
 ) -> usize {
-    let num_tiers = tier_configs.len();
+    let _num_tiers = tier_configs.len();
 
     // Build lookup table: global_cluster -> (tier_idx, local_cluster)
     let max_cluster = tier_configs.iter().map(|t| t.cluster_end).max().unwrap_or(0);
@@ -751,7 +751,7 @@ fn write_cell_offset(
     mem_neuron_offset: usize,
     address: usize,
     value: i64,
-    words_per_neuron: usize,
+    _words_per_neuron: usize,
     allow_override: bool,
 ) -> bool {
     let word_idx = address / CELLS_PER_WORD;
