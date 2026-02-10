@@ -77,12 +77,17 @@ class BitwiseRAMLM(RAMComponent):
 		self.total_input_bits = context_size * self.bits_per_token
 
 		# The layer: 16 clusters (one per output bit), shared connections
+		# Force DENSE backend — our Rust+Metal train_and_eval path uses dense
+		# bit-packed memory directly, so the Python Memory must have the full
+		# address space allocated (not SPARSE/LSH which use hash tables).
+		from wnn.ram.core.RAMClusterLayer import MemoryBackend
 		self.layer = BitwiseRAMClusterLayer(
 			total_input_bits=self.total_input_bits,
 			num_clusters=self.num_bits,
 			neurons_per_cluster=neurons_per_cluster,
 			bits_per_neuron=bits_per_neuron,
 			rng=rng,
+			backend=MemoryBackend.DENSE,
 		)
 
 		# Pre-compute bit positions for encoding [bits_per_token-1, ..., 0]

@@ -211,9 +211,39 @@ def phase3_neuron_sweep(train_tokens, test_tokens, vocab_size, top3_configs, con
 	return results
 
 
+def phase4_fine_sweep(train_tokens, test_tokens, vocab_size, context_size=4):
+	"""Phase 4: Fine-grained sweep — low rates × high bits × small neuron counts."""
+	print("\n" + "#" * 70)
+	print("# PHASE 4: Fine-Grained Sweep (QUAD_WEIGHTED)")
+	print("#" * 70)
+
+	rates = [0.05, 0.1, 0.15, 0.2, 0.25]
+	bits_values = [18, 20, 22]
+	neuron_values = [50, 100, 150]
+
+	results = []
+	total = len(rates) * len(bits_values) * len(neuron_values)
+	count = 0
+	for rate in rates:
+		for bits in bits_values:
+			for neurons in neuron_values:
+				count += 1
+				label = f"QW_rate{rate}_bits{bits}_n{neurons}"
+				print(f"\n[{count}/{total}]")
+				r = run_single_config(
+					train_tokens, test_tokens, vocab_size,
+					neurons, bits, context_size,
+					2, rate, label,  # mode=2 = QUAD_WEIGHTED
+				)
+				results.append(r)
+
+	print_summary_table(results, "Phase 4: Fine-Grained Sweep")
+	return results
+
+
 def main():
 	parser = argparse.ArgumentParser(description="Bitwise Memory Modes Experiment")
-	parser.add_argument("--phase", type=str, default="all", choices=["1", "2", "3", "all"],
+	parser.add_argument("--phase", type=str, default="all", choices=["1", "2", "3", "4", "all"],
 						help="Which phase(s) to run")
 	parser.add_argument("--output", type=str, default="experiments/bitwise_modes_results.json",
 						help="Output JSON file")
@@ -292,6 +322,11 @@ def main():
 		p3 = phase3_neuron_sweep(train_tokens, test_tokens, vocab_size, top3, args.context)
 		all_results["phase3"] = p3
 
+	# Phase 4
+	if args.phase == "4":
+		p4 = phase4_fine_sweep(train_tokens, test_tokens, vocab_size, args.context)
+		all_results["phase4"] = p4
+
 	# Save results
 	output_path = Path(args.output)
 	output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -306,6 +341,8 @@ def main():
 		print_summary_table(all_results["phase2"], "FINAL — Phase 2")
 	if "phase3" in all_results:
 		print_summary_table(all_results["phase3"], "FINAL — Phase 3")
+	if "phase4" in all_results:
+		print_summary_table(all_results["phase4"], "FINAL — Phase 4")
 
 
 if __name__ == "__main__":
