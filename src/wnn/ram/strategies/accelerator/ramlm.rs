@@ -15,6 +15,7 @@
 //! - Old default: 0.5 (EMPTY cells add uncertainty)
 
 use rayon::prelude::*;
+use rayon::slice::ParallelSliceMut;
 use std::sync::atomic::{AtomicI32, AtomicI64, Ordering, fence};
 
 
@@ -499,31 +500,18 @@ pub fn bitwise_train_neuron_parallel(
     neuron_sample_rate: f32,
     rng_seed: u64,
 ) -> usize {
-    let total_neurons = num_clusters * neurons_per_cluster;
     let address_space = 1usize << bits_per_neuron;
 
-    // Store pointer as usize (Send+Sync) for rayon parallel access.
-    // Safety: each neuron thread only accesses its own [neuron_idx * words_per_neuron .. +words_per_neuron]
-    // which are non-overlapping memory regions.
-    let mem_base = memory_words.as_mut_ptr() as usize;
-    let mem_len = memory_words.len();
-
-    let total_modified: usize = (0..total_neurons).into_par_iter().map(|neuron_idx| {
+    let total_modified: usize = memory_words
+        .par_chunks_mut(words_per_neuron)
+        .enumerate()
+        .map(|(neuron_idx, neuron_mem)| {
         let cluster = neuron_idx / neurons_per_cluster;
 
         // Per-neuron PRNG for sampling
         let mut rng_state = (rng_seed as u32)
             .wrapping_add(neuron_idx as u32 * 1000003);
         if rng_state == 0 { rng_state = 1; }
-
-        // Get this neuron's memory region (non-overlapping, safe)
-        let neuron_mem_start = neuron_idx * words_per_neuron;
-        let neuron_mem = unsafe {
-            std::slice::from_raw_parts_mut(
-                (mem_base as *mut i64).add(neuron_mem_start),
-                words_per_neuron.min(mem_len - neuron_mem_start),
-            )
-        };
 
         let conn_start = neuron_idx * bits_per_neuron;
         let connections = &connections_flat[conn_start..conn_start + bits_per_neuron];
