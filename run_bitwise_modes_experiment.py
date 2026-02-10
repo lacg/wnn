@@ -50,9 +50,8 @@ def run_single_config(
 	memory_mode, neuron_sample_rate,
 	label,
 ):
-	"""Run a single config and return results dict."""
+	"""Run a single config using Rust+Metal acceleration."""
 	from wnn.ram.core.models import BitwiseRAMLM
-	from wnn.ram.core import MemoryMode
 
 	mode_names = {0: "TERNARY", 1: "QUAD_BINARY", 2: "QUAD_WEIGHTED"}
 
@@ -72,27 +71,15 @@ def run_single_config(
 	)
 	print(f"Model: {model}")
 
-	# Train
+	# Train + eval in one Rust+Metal call (neuron-parallel training + Metal CE)
 	t0 = time.time()
-	model.reset_memory()
-	train_stats = model.train_epoch_fast(
-		token_ids=train_tokens,
-		batch_size=2000,
-		verbose=True,
-	)
-	train_time = time.time() - t0
-	print(f"Training time: {train_time:.1f}s")
-
-	# Evaluate
-	t0 = time.time()
-	eval_stats = model.evaluate_fast(
-		token_ids=test_tokens,
-		batch_size=5000,
+	train_stats, eval_stats = model.train_and_eval_metal_split(
+		train_tokens, test_tokens,
 		verbose=True,
 		per_bit=True,
 	)
-	eval_time = time.time() - t0
-	print(f"Eval time: {eval_time:.1f}s")
+	total_time = time.time() - t0
+	print(f"Total time: {total_time:.1f}s")
 
 	result = {
 		"label": label,
@@ -107,10 +94,10 @@ def run_single_config(
 		"accuracy": eval_stats["accuracy"],
 		"mean_bit_accuracy": eval_stats.get("mean_bit_accuracy", None),
 		"per_bit_accuracy": eval_stats.get("per_bit_accuracy", None),
-		"train_modified": train_stats["modified"],
-		"train_examples": train_stats["examples"],
-		"train_time": train_time,
-		"eval_time": eval_time,
+		"train_modified": train_stats.get("modified", 0),
+		"train_examples": train_stats.get("examples", 0),
+		"train_time": total_time,
+		"eval_time": 0,  # included in total
 	}
 
 	return result
@@ -261,10 +248,25 @@ def main():
 				print("ERROR: Phase 1 results not found. Run phase 1 first.")
 				sys.exit(1)
 
+		# Expanded Phase 2: top-3 from Phase 1 + extra configs to explore
 		p1 = all_results["phase1"]
 		top3 = sorted(p1, key=lambda x: x["cross_entropy"])[:3]
 
-		p2 = phase2_bits_sweep(train_tokens, test_tokens, vocab_size, top3, args.context)
+		# Add extra configs: QUAD_WEIGHTED at lower rates + TERNARY_rate0.3
+		extra_configs = [
+			{"mode": "QUAD_WEIGHTED", "memory_mode": 2, "neuron_sample_rate": 0.1, "bits_per_neuron": 10},
+			{"mode": "QUAD_WEIGHTED", "memory_mode": 2, "neuron_sample_rate": 0.2, "bits_per_neuron": 10},
+			{"mode": "QUAD_WEIGHTED", "memory_mode": 2, "neuron_sample_rate": 0.4, "bits_per_neuron": 10},
+			{"mode": "TERNARY", "memory_mode": 0, "neuron_sample_rate": 0.3, "bits_per_neuron": 10},
+		]
+		# Deduplicate: skip extras already in top3
+		top3_keys = {(c["memory_mode"], c["neuron_sample_rate"]) for c in top3}
+		sweep_configs = list(top3)
+		for ec in extra_configs:
+			if (ec["memory_mode"], ec["neuron_sample_rate"]) not in top3_keys:
+				sweep_configs.append(ec)
+
+		p2 = phase2_bits_sweep(train_tokens, test_tokens, vocab_size, sweep_configs, args.context)
 		all_results["phase2"] = p2
 
 		# Select top-3 by CE across Phase 2

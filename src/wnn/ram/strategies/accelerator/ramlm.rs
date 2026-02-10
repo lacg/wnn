@@ -457,6 +457,285 @@ pub fn bitwise_train_batch_nudge(
     total_modified
 }
 
+/// Non-atomic cell read (for neuron-parallel where each thread owns its memory region)
+#[inline]
+fn read_cell_direct(memory_words: &[i64], word_offset: usize, cell_idx: usize) -> i64 {
+    let shift = cell_idx * BITS_PER_CELL;
+    (memory_words[word_offset] >> shift) & CELL_MASK
+}
+
+/// Non-atomic cell write (for neuron-parallel)
+#[inline]
+fn write_cell_direct(memory_words: &mut [i64], word_offset: usize, cell_idx: usize, value: i64) {
+    let shift = cell_idx * BITS_PER_CELL;
+    let mask = CELL_MASK << shift;
+    memory_words[word_offset] = (memory_words[word_offset] & !mask) | (value << shift);
+}
+
+/// Neuron-parallel training — parallelizes over neurons, no atomics needed.
+///
+/// Much faster than example-parallel (bitwise_train_batch_nudge) because:
+/// - No CAS atomic overhead
+/// - No contention between threads
+/// - Better cache locality (each thread works on one neuron's memory)
+///
+/// Supports all three memory modes:
+/// - mode 0 (TERNARY): majority vote per (neuron, address)
+/// - mode 1/2 (QUAD): sequential nudging per (neuron, address)
+///
+/// Returns: number of cells modified
+pub fn bitwise_train_neuron_parallel(
+    input_bits_flat: &[bool],
+    target_bits_flat: &[u8],
+    connections_flat: &[i64],
+    memory_words: &mut [i64],
+    num_examples: usize,
+    total_input_bits: usize,
+    bits_per_neuron: usize,
+    neurons_per_cluster: usize,
+    num_clusters: usize,
+    words_per_neuron: usize,
+    memory_mode: u8,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+) -> usize {
+    let total_neurons = num_clusters * neurons_per_cluster;
+    let address_space = 1usize << bits_per_neuron;
+
+    // Store pointer as usize (Send+Sync) for rayon parallel access.
+    // Safety: each neuron thread only accesses its own [neuron_idx * words_per_neuron .. +words_per_neuron]
+    // which are non-overlapping memory regions.
+    let mem_base = memory_words.as_mut_ptr() as usize;
+    let mem_len = memory_words.len();
+
+    let total_modified: usize = (0..total_neurons).into_par_iter().map(|neuron_idx| {
+        let cluster = neuron_idx / neurons_per_cluster;
+
+        // Per-neuron PRNG for sampling
+        let mut rng_state = (rng_seed as u32)
+            .wrapping_add(neuron_idx as u32 * 1000003);
+        if rng_state == 0 { rng_state = 1; }
+
+        // Get this neuron's memory region (non-overlapping, safe)
+        let neuron_mem_start = neuron_idx * words_per_neuron;
+        let neuron_mem = unsafe {
+            std::slice::from_raw_parts_mut(
+                (mem_base as *mut i64).add(neuron_mem_start),
+                words_per_neuron.min(mem_len - neuron_mem_start),
+            )
+        };
+
+        let conn_start = neuron_idx * bits_per_neuron;
+        let connections = &connections_flat[conn_start..conn_start + bits_per_neuron];
+
+        let mut modified = 0usize;
+
+        match memory_mode {
+            0 => {
+                // TERNARY: accumulate votes, then write winners
+                let mut votes = vec![0i32; address_space];
+
+                for ex_idx in 0..num_examples {
+                    if neuron_sample_rate < 1.0 {
+                        if xorshift32(&mut rng_state) >= neuron_sample_rate {
+                            continue;
+                        }
+                    }
+                    let input_start = ex_idx * total_input_bits;
+                    let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
+                    let target_bit = target_bits_flat[ex_idx * num_clusters + cluster];
+
+                    let addr = compute_address(input_bits, connections, bits_per_neuron);
+                    votes[addr] += if target_bit == 1 { 1 } else { -1 };
+                }
+
+                // Write winners to memory
+                for addr in 0..address_space {
+                    let v = votes[addr];
+                    if v != 0 {
+                        let word_idx = addr / CELLS_PER_WORD;
+                        let cell_idx = addr % CELLS_PER_WORD;
+                        let value = if v > 0 { TRUE } else { FALSE };
+                        write_cell_direct(neuron_mem, word_idx, cell_idx, value);
+                        modified += 1;
+                    }
+                }
+            }
+            1 | 2 => {
+                // QUAD modes: sequential nudging
+                for ex_idx in 0..num_examples {
+                    if neuron_sample_rate < 1.0 {
+                        if xorshift32(&mut rng_state) >= neuron_sample_rate {
+                            continue;
+                        }
+                    }
+                    let input_start = ex_idx * total_input_bits;
+                    let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
+                    let target_bit = target_bits_flat[ex_idx * num_clusters + cluster];
+                    let target_true = target_bit == 1;
+
+                    let addr = compute_address(input_bits, connections, bits_per_neuron);
+                    let word_idx = addr / CELLS_PER_WORD;
+                    let cell_idx = addr % CELLS_PER_WORD;
+                    let old_cell = read_cell_direct(neuron_mem, word_idx, cell_idx);
+
+                    let new_cell = if target_true {
+                        (old_cell + 1).min(QUAD_TRUE)
+                    } else {
+                        (old_cell - 1).max(QUAD_FALSE)
+                    };
+
+                    if new_cell != old_cell {
+                        write_cell_direct(neuron_mem, word_idx, cell_idx, new_cell);
+                        modified += 1;
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        modified
+    }).sum();
+
+    total_modified
+}
+
+/// Complete bitwise train + forward + Metal CE evaluation in one Rust call.
+///
+/// Eliminates all PyTorch overhead:
+/// 1. Training: neuron-parallel CPU (rayon, no atomics)
+/// 2. Forward: example-parallel CPU (rayon)
+/// 3. Reconstruction + CE: Metal GPU
+///
+/// Returns: (ce, accuracy, per_bit_accuracy_flat)
+pub fn bitwise_train_and_eval_full(
+    train_input_bits: &[bool],
+    train_target_bits: &[u8],
+    eval_input_bits: &[bool],
+    eval_targets: &[u32],
+    token_bits: &[u8],
+    connections_flat: &[i64],
+    memory_words: &mut [i64],
+    num_train: usize,
+    num_eval: usize,
+    total_input_bits: usize,
+    bits_per_neuron: usize,
+    neurons_per_cluster: usize,
+    num_clusters: usize,
+    words_per_neuron: usize,
+    vocab_size: usize,
+    memory_mode: u8,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+) -> (f64, f64, Vec<f32>) {
+    use crate::bitwise_ramlm;
+
+    // 1. Train (neuron-parallel CPU)
+    let _modified = bitwise_train_neuron_parallel(
+        train_input_bits, train_target_bits, connections_flat, memory_words,
+        num_train, total_input_bits, bits_per_neuron, neurons_per_cluster,
+        num_clusters, words_per_neuron, memory_mode, neuron_sample_rate, rng_seed,
+    );
+
+    // 2. Forward pass (example-parallel CPU)
+    let bit_scores = match memory_mode {
+        0 => forward_batch(
+            eval_input_bits, connections_flat, memory_words,
+            num_eval, total_input_bits, 0, bits_per_neuron,
+            neurons_per_cluster, num_clusters, words_per_neuron,
+        ),
+        1 => forward_batch_quad_binary(
+            eval_input_bits, connections_flat, memory_words,
+            num_eval, total_input_bits, 0, bits_per_neuron,
+            neurons_per_cluster, num_clusters, words_per_neuron,
+        ),
+        _ => forward_batch_quad_weighted(
+            eval_input_bits, connections_flat, memory_words,
+            num_eval, total_input_bits, 0, bits_per_neuron,
+            neurons_per_cluster, num_clusters, words_per_neuron,
+        ),
+    };
+
+    // 3. Per-bit accuracy (CPU, cheap)
+    let mut per_bit_correct = vec![0u64; num_clusters];
+    for ex in 0..num_eval {
+        let target_id = eval_targets[ex] as usize;
+        for b in 0..num_clusters {
+            let predicted = bit_scores[ex * num_clusters + b] > 0.5;
+            let actual = token_bits[target_id * num_clusters + b] == 1;
+            if predicted == actual {
+                per_bit_correct[b] += 1;
+            }
+        }
+    }
+    let per_bit_accuracy: Vec<f32> = per_bit_correct.iter()
+        .map(|&c| c as f32 / num_eval as f32)
+        .collect();
+
+    // 4. Reconstruction + CE (Metal GPU)
+    if let Some(metal_ce) = bitwise_ramlm::get_metal_bitwise_ce() {
+        match metal_ce.compute_ce_batch(
+            &bit_scores, token_bits, eval_targets,
+            1, num_eval, num_clusters, vocab_size,
+        ) {
+            Ok(results) => {
+                let (ce, acc) = results[0];
+                return (ce, acc, per_bit_accuracy);
+            }
+            Err(e) => {
+                eprintln!("[bitwise_train_and_eval_full] Metal CE failed: {e}, falling back to CPU");
+            }
+        }
+    }
+
+    // CPU fallback for reconstruction + CE
+    let mut total_ce = 0.0f64;
+    let mut total_correct = 0u64;
+    let eps: f64 = 1e-7;
+
+    for ex in 0..num_eval {
+        let scores = &bit_scores[ex * num_clusters..(ex + 1) * num_clusters];
+        let target_id = eval_targets[ex] as usize;
+
+        // Reconstruct log-probs for all vocab tokens
+        let mut max_lp = f64::NEG_INFINITY;
+        let mut target_lp = f64::NEG_INFINITY;
+        let mut best_token = 0usize;
+        let mut log_sum = 0.0f64;
+
+        // Two-pass: find max log-prob, then compute log-sum-exp
+        let mut log_probs_buf = vec![0.0f64; vocab_size];
+        for t in 0..vocab_size {
+            let mut lp = 0.0f64;
+            for b in 0..num_clusters {
+                let p = (scores[b] as f64).clamp(eps, 1.0 - eps);
+                let bit = token_bits[t * num_clusters + b];
+                lp += if bit == 1 { p.ln() } else { (1.0 - p).ln() };
+            }
+            log_probs_buf[t] = lp;
+            if lp > max_lp {
+                max_lp = lp;
+                best_token = t;
+            }
+            if t == target_id {
+                target_lp = lp;
+            }
+        }
+
+        // Log-sum-exp for CE
+        for t in 0..vocab_size {
+            log_sum += (log_probs_buf[t] - max_lp).exp();
+        }
+        let ce = (max_lp + log_sum.ln()) - target_lp;
+        total_ce += ce;
+        if best_token == target_id {
+            total_correct += 1;
+        }
+    }
+
+    (total_ce / num_eval as f64, total_correct as f64 / num_eval as f64, per_bit_accuracy)
+}
+
 /// Forward pass for QUAD_BINARY mode: P = count(cell >= 2) / neurons_per_cluster
 pub fn forward_batch_quad_binary(
     input_bits_flat: &[bool],

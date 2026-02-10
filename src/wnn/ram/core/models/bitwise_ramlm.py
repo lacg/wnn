@@ -442,6 +442,145 @@ class BitwiseRAMLM(RAMComponent):
 
 		return stats
 
+	def train_and_eval_metal(
+		self,
+		token_ids: list[int],
+		verbose: bool = True,
+		per_bit: bool = True,
+	) -> dict:
+		"""Complete train + eval in one Rust+Metal call.
+
+		Much faster than train_epoch_fast() + evaluate_fast() because:
+		1. Training uses neuron-parallel (no CAS atomics)
+		2. Forward uses rayon-parallel
+		3. Reconstruction + CE uses Metal GPU
+		4. Zero PyTorch overhead for the hot path
+
+		Args:
+			token_ids: Full token sequence (train portion, or use separate train/eval)
+			verbose: Print progress
+			per_bit: Include per-bit accuracy
+
+		Returns:
+			Dict with cross_entropy, perplexity, accuracy, per_bit_accuracy, etc.
+		"""
+		import ram_accelerator
+		import numpy as np
+		from math import exp as math_exp
+		from time import time as _time
+
+		# Split into train/eval (same tokens for now — caller handles the split)
+		# Actually this method takes separate train/test sequences
+		raise NotImplementedError("Use train_and_eval_metal_split() instead")
+
+	def train_and_eval_metal_split(
+		self,
+		train_tokens: list[int],
+		test_tokens: list[int],
+		verbose: bool = True,
+		per_bit: bool = True,
+	) -> tuple[dict, dict]:
+		"""Complete train + eval in one Rust+Metal call.
+
+		Returns: (train_stats, eval_stats)
+		"""
+		import ram_accelerator
+		import numpy as np
+		from math import exp as math_exp
+		from time import time as _time
+
+		t0 = _time()
+
+		# Encode train
+		if verbose:
+			print("  Encoding train contexts...")
+		train_all_bits = self.encode_sequence(train_tokens)
+		train_targets = tensor(train_tokens[self.context_size:], dtype=long)
+		train_target_bits = self._target_to_bits(train_targets)
+
+		num_train = len(train_tokens) - self.context_size
+
+		# Encode eval
+		if verbose:
+			print("  Encoding eval contexts...")
+		eval_all_bits = self.encode_sequence(test_tokens)
+		eval_targets = tensor(test_tokens[self.context_size:], dtype=long)
+		num_eval = len(test_tokens) - self.context_size
+
+		# Prepare numpy arrays
+		train_input_np = train_all_bits.flatten().bool().numpy().astype(np.uint8)
+		train_target_np = train_target_bits.flatten().numpy().astype(np.uint8)
+		eval_input_np = eval_all_bits.flatten().bool().numpy().astype(np.uint8)
+		eval_targets_np = eval_targets.numpy().astype(np.uint32)
+
+		# Token bits table
+		token_bits_np = self.token_bits.numpy().astype(np.uint8).flatten()
+
+		connections_np = self.layer.memory.connections.flatten().numpy().astype(np.int64)
+
+		# Reset memory before training
+		self.reset_memory()
+		memory_np = self.layer.memory.memory_words.flatten().numpy().astype(np.int64)
+
+		encode_time = _time() - t0
+		if verbose:
+			print(f"  Encoding done ({encode_time:.1f}s). Training + eval in Rust+Metal...")
+
+		t1 = _time()
+		ce, acc, per_bit_acc, updated_memory = ram_accelerator.ramlm_bitwise_train_and_eval_metal_numpy(
+			train_input_np, train_target_np,
+			eval_input_np, eval_targets_np,
+			token_bits_np, connections_np, memory_np,
+			num_train, num_eval,
+			self.total_input_bits,
+			self.layer.bits_per_neuron,
+			self.layer.neurons_per_cluster,
+			self.num_bits,
+			self.layer.memory.words_per_neuron,
+			self.vocab_size,
+			self.memory_mode,
+			self.neuron_sample_rate,
+			42,  # rng_seed
+		)
+		rust_time = _time() - t1
+
+		# Update memory in model
+		import torch
+		self.layer.memory.memory_words = torch.tensor(
+			updated_memory, dtype=torch.int64
+		).view(self.layer.memory.memory_words.shape)
+
+		ppl = math_exp(min(ce, 100))
+
+		train_stats = {
+			"examples": num_train,
+			"modified": 0,  # not tracked in full path
+		}
+
+		eval_stats = {
+			"cross_entropy": ce,
+			"perplexity": ppl,
+			"accuracy": acc,
+			"total": num_eval,
+		}
+
+		if per_bit:
+			eval_stats["per_bit_accuracy"] = per_bit_acc
+			eval_stats["mean_bit_accuracy"] = sum(per_bit_acc) / len(per_bit_acc)
+
+		if verbose:
+			print(f"  Rust+Metal time: {rust_time:.1f}s (encode: {encode_time:.1f}s)")
+			print(f"  Cross-entropy: {ce:.4f}")
+			print(f"  Perplexity: {ppl:.2f}")
+			print(f"  Accuracy: {acc:.2%}")
+			if per_bit:
+				print(f"  Mean bit accuracy: {eval_stats['mean_bit_accuracy']:.2%}")
+				for i, ba in enumerate(per_bit_acc):
+					label = "easy" if ba > 0.9 else "hard" if ba < 0.6 else ""
+					print(f"    bit {i:2d}: {ba:.2%} {label}")
+
+		return train_stats, eval_stats
+
 	# =========================================================================
 	# Connectivity (for GA/TS optimization)
 	# =========================================================================
