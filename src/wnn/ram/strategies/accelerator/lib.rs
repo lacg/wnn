@@ -3928,6 +3928,145 @@ fn compute_target_gates_expanded(
 }
 
 // =============================================================================
+// Bitwise RAMLM — Nudge Training + Quad Forward (PyO3 wrappers)
+// =============================================================================
+
+/// Bitwise batch training with 4-state nudging (QUAD modes).
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn ramlm_bitwise_train_batch_nudge_numpy<'py>(
+    py: Python<'py>,
+    input_bits: PyReadonlyArray1<'py, u8>,
+    target_bits: PyReadonlyArray1<'py, u8>,
+    connections: PyReadonlyArray1<'py, i64>,
+    memory_words: PyReadonlyArray1<'py, i64>,
+    num_examples: usize,
+    total_input_bits: usize,
+    num_neurons: usize,
+    bits_per_neuron: usize,
+    neurons_per_cluster: usize,
+    num_clusters: usize,
+    words_per_neuron: usize,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+) -> PyResult<(usize, Vec<i64>)> {
+    let input_slice = input_bits.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Input array not contiguous: {}", e))
+    })?;
+    let target_slice = target_bits.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Target bits array not contiguous: {}", e))
+    })?;
+    let conn_slice = connections.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Connections array not contiguous: {}", e))
+    })?;
+    let mem_slice = memory_words.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Memory array not contiguous: {}", e))
+    })?;
+
+    let input_bools: Vec<bool> = input_slice.iter().map(|&b| b != 0).collect();
+    let target_vec: Vec<u8> = target_slice.to_vec();
+    let conn_vec: Vec<i64> = conn_slice.to_vec();
+    let mut mem_vec: Vec<i64> = mem_slice.to_vec();
+
+    py.allow_threads(|| {
+        let modified = ramlm::bitwise_train_batch_nudge(
+            &input_bools,
+            &target_vec,
+            &conn_vec,
+            &mut mem_vec,
+            num_examples,
+            total_input_bits,
+            num_neurons,
+            bits_per_neuron,
+            neurons_per_cluster,
+            num_clusters,
+            words_per_neuron,
+            neuron_sample_rate,
+            rng_seed,
+        );
+        Ok((modified, mem_vec))
+    })
+}
+
+/// Forward pass for QUAD_BINARY mode: P = count(cell >= 2) / neurons_per_cluster
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn ramlm_forward_batch_quad_binary_numpy<'py>(
+    py: Python<'py>,
+    input_bits: PyReadonlyArray1<'py, u8>,
+    connections: PyReadonlyArray1<'py, i64>,
+    memory_words: PyReadonlyArray1<'py, i64>,
+    num_examples: usize,
+    total_input_bits: usize,
+    num_neurons: usize,
+    bits_per_neuron: usize,
+    neurons_per_cluster: usize,
+    num_clusters: usize,
+    words_per_neuron: usize,
+) -> PyResult<Vec<f32>> {
+    let input_slice = input_bits.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Input array not contiguous: {}", e))
+    })?;
+    let conn_slice = connections.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Connections array not contiguous: {}", e))
+    })?;
+    let mem_slice = memory_words.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Memory array not contiguous: {}", e))
+    })?;
+
+    let input_bools: Vec<bool> = input_slice.iter().map(|&b| b != 0).collect();
+    let conn_vec: Vec<i64> = conn_slice.to_vec();
+    let mem_vec: Vec<i64> = mem_slice.to_vec();
+
+    py.allow_threads(|| {
+        Ok(ramlm::forward_batch_quad_binary(
+            &input_bools, &conn_vec, &mem_vec,
+            num_examples, total_input_bits, num_neurons,
+            bits_per_neuron, neurons_per_cluster, num_clusters, words_per_neuron,
+        ))
+    })
+}
+
+/// Forward pass for QUAD_WEIGHTED mode: P = sum(weight[cell]) / neurons_per_cluster
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn ramlm_forward_batch_quad_weighted_numpy<'py>(
+    py: Python<'py>,
+    input_bits: PyReadonlyArray1<'py, u8>,
+    connections: PyReadonlyArray1<'py, i64>,
+    memory_words: PyReadonlyArray1<'py, i64>,
+    num_examples: usize,
+    total_input_bits: usize,
+    num_neurons: usize,
+    bits_per_neuron: usize,
+    neurons_per_cluster: usize,
+    num_clusters: usize,
+    words_per_neuron: usize,
+) -> PyResult<Vec<f32>> {
+    let input_slice = input_bits.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Input array not contiguous: {}", e))
+    })?;
+    let conn_slice = connections.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Connections array not contiguous: {}", e))
+    })?;
+    let mem_slice = memory_words.as_slice().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Memory array not contiguous: {}", e))
+    })?;
+
+    let input_bools: Vec<bool> = input_slice.iter().map(|&b| b != 0).collect();
+    let conn_vec: Vec<i64> = conn_slice.to_vec();
+    let mem_vec: Vec<i64> = mem_slice.to_vec();
+
+    py.allow_threads(|| {
+        Ok(ramlm::forward_batch_quad_weighted(
+            &input_bools, &conn_vec, &mem_vec,
+            num_examples, total_input_bits, num_neurons,
+            bits_per_neuron, neurons_per_cluster, num_clusters, words_per_neuron,
+        ))
+    })
+}
+
+// =============================================================================
 // Bitwise RAMLM Cache Wrapper (PyO3)
 // =============================================================================
 
@@ -3958,9 +4097,7 @@ impl BitwiseCacheWrapper {
         }
     }
 
-    /// Evaluate genomes using subset training data.
-    ///
-    /// Returns list of (cross_entropy, accuracy) per genome.
+    /// Evaluate genomes using subset training data (default: ternary mode).
     #[allow(clippy::too_many_arguments)]
     fn evaluate_genomes(
         &self,
@@ -3979,7 +4116,30 @@ impl BitwiseCacheWrapper {
         })
     }
 
-    /// Evaluate genomes using full training data.
+    /// Evaluate genomes with mode and sample rate (subset).
+    #[allow(clippy::too_many_arguments)]
+    fn evaluate_genomes_with_mode(
+        &self,
+        py: Python<'_>,
+        connections_flat: Vec<i64>,
+        num_genomes: usize,
+        neurons_per_cluster: usize,
+        bits_per_neuron: usize,
+        train_subset_idx: usize,
+        memory_mode: u8,
+        neuron_sample_rate: f32,
+        rng_seed: u64,
+    ) -> PyResult<Vec<(f64, f64)>> {
+        py.allow_threads(|| {
+            Ok(bitwise_ramlm::evaluate_genomes_with_mode(
+                &self.inner, &connections_flat, num_genomes,
+                neurons_per_cluster, bits_per_neuron, train_subset_idx,
+                memory_mode, neuron_sample_rate, rng_seed,
+            ))
+        })
+    }
+
+    /// Evaluate genomes using full training data (default: ternary mode).
     fn evaluate_genomes_full(
         &self,
         py: Python<'_>,
@@ -3992,6 +4152,28 @@ impl BitwiseCacheWrapper {
             Ok(bitwise_ramlm::evaluate_genomes_full(
                 &self.inner, &connections_flat, num_genomes,
                 neurons_per_cluster, bits_per_neuron,
+            ))
+        })
+    }
+
+    /// Evaluate full with mode and sample rate.
+    #[allow(clippy::too_many_arguments)]
+    fn evaluate_genomes_full_with_mode(
+        &self,
+        py: Python<'_>,
+        connections_flat: Vec<i64>,
+        num_genomes: usize,
+        neurons_per_cluster: usize,
+        bits_per_neuron: usize,
+        memory_mode: u8,
+        neuron_sample_rate: f32,
+        rng_seed: u64,
+    ) -> PyResult<Vec<(f64, f64)>> {
+        py.allow_threads(|| {
+            Ok(bitwise_ramlm::evaluate_genomes_full_with_mode(
+                &self.inner, &connections_flat, num_genomes,
+                neurons_per_cluster, bits_per_neuron,
+                memory_mode, neuron_sample_rate, rng_seed,
             ))
         })
     }
@@ -4116,5 +4298,9 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(reset_gating_buffer_cache, m)?)?;
     // Bitwise RAMLM evaluation (full Rust+Metal pipeline)
     m.add_class::<BitwiseCacheWrapper>()?;
+    // Bitwise RAMLM — nudge training + quad forward
+    m.add_function(wrap_pyfunction!(ramlm_bitwise_train_batch_nudge_numpy, m)?)?;
+    m.add_function(wrap_pyfunction!(ramlm_forward_batch_quad_binary_numpy, m)?)?;
+    m.add_function(wrap_pyfunction!(ramlm_forward_batch_quad_weighted_numpy, m)?)?;
     Ok(())
 }

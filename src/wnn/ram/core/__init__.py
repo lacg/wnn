@@ -163,6 +163,19 @@ class BenchmarkMode(IntEnum):
 	OVERNIGHT = 2 # Extended: thorough overnight optimization
 
 
+class MemoryMode(IntEnum):
+	"""Memory mode for BitwiseRAMLM.
+
+	Controls training semantics and forward pass interpretation:
+	- TERNARY: 3-state (FALSE/TRUE/EMPTY), majority vote training
+	- QUAD_BINARY: 4-state nudging, binary threshold forward (cell >= 2 → true)
+	- QUAD_WEIGHTED: 4-state nudging, weighted confidence forward
+	"""
+	TERNARY = 0       # 3-state, majority vote (default)
+	QUAD_BINARY = 1   # 4-state, nudging, binary threshold
+	QUAD_WEIGHTED = 2  # 4-state, nudging, weighted confidence
+
+
 class AccelerationMode(IntEnum):
 	"""Hardware acceleration modes for RAM evaluation.
 
@@ -474,6 +487,7 @@ __all__ = [
 	'StateMode',
 	'OptimizationMethod',
 	'BenchmarkMode',
+	'MemoryMode',
 	'AccelerationMode',
 	# ==== Components ====
 	# Base classes

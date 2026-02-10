@@ -60,6 +60,8 @@ class BitwiseRAMLM(RAMComponent):
 		bits_per_neuron: int = 10,
 		pad_token_id: int = 50256,
 		rng: Optional[int] = None,
+		memory_mode: int = 0,
+		neuron_sample_rate: float = 1.0,
 	):
 		super().__init__()
 
@@ -68,6 +70,8 @@ class BitwiseRAMLM(RAMComponent):
 		self.bits_per_token = bits_needed(vocab_size)
 		self.num_bits = self.bits_per_token  # 16 for GPT-2
 		self.pad_token_id = pad_token_id
+		self.memory_mode = memory_mode  # 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED
+		self.neuron_sample_rate = neuron_sample_rate
 
 		# Total input bits
 		self.total_input_bits = context_size * self.bits_per_token
@@ -94,7 +98,12 @@ class BitwiseRAMLM(RAMComponent):
 			((token_ids.unsqueeze(-1) >> self._bit_positions) & 1).float()
 		)
 
+		# Memory mode names for display
+		self._mode_names = {0: "TERNARY", 1: "QUAD_BINARY", 2: "QUAD_WEIGHTED"}
+
 	def __repr__(self) -> str:
+		mode_name = self._mode_names.get(self.memory_mode, f"UNKNOWN({self.memory_mode})")
+		rate_str = f", sample_rate={self.neuron_sample_rate}" if self.neuron_sample_rate < 1.0 else ""
 		return (
 			f"BitwiseRAMLM("
 			f"vocab={self.vocab_size}, "
@@ -102,7 +111,8 @@ class BitwiseRAMLM(RAMComponent):
 			f"num_bits={self.num_bits}, "
 			f"neurons_per_cluster={self.layer.neurons_per_cluster}, "
 			f"bits_per_neuron={self.layer.bits_per_neuron}, "
-			f"total_neurons={self.layer.total_neurons})"
+			f"total_neurons={self.layer.total_neurons}, "
+			f"mode={mode_name}{rate_str})"
 		)
 
 	# =========================================================================
@@ -164,13 +174,48 @@ class BitwiseRAMLM(RAMComponent):
 	def forward_bits(self, input_bits: Tensor) -> Tensor:
 		"""Forward pass returning per-bit P(bit=1) scores.
 
+		Dispatches based on memory_mode:
+		  TERNARY (0): inherited RAMClusterLayer forward
+		  QUAD_BINARY (1): count(cell >= 2) / neurons
+		  QUAD_WEIGHTED (2): sum(weight[cell]) / neurons
+
 		Args:
 			input_bits: [batch, total_input_bits] boolean tensor
 
 		Returns:
 			[batch, num_bits] float tensor of per-bit probabilities
 		"""
-		return self.layer(input_bits)
+		if self.memory_mode == 0:
+			return self.layer(input_bits)
+
+		# Quad modes: use Rust forward functions
+		import ram_accelerator
+		import numpy as np
+
+		if input_bits.ndim == 1:
+			input_bits = input_bits.unsqueeze(0)
+
+		num_examples = input_bits.shape[0]
+		input_bits_np = input_bits.flatten().bool().numpy().astype(np.uint8)
+		connections_np = self.layer.memory.connections.flatten().numpy().astype(np.int64)
+		memory_words_np = self.layer.memory.memory_words.flatten().numpy().astype(np.int64)
+
+		if self.memory_mode == 1:
+			probs_flat = ram_accelerator.ramlm_forward_batch_quad_binary_numpy(
+				input_bits_np, connections_np, memory_words_np,
+				num_examples, self.total_input_bits, self.layer.total_neurons,
+				self.layer.bits_per_neuron, self.layer.neurons_per_cluster,
+				self.num_bits, self.layer.memory.words_per_neuron,
+			)
+		else:
+			probs_flat = ram_accelerator.ramlm_forward_batch_quad_weighted_numpy(
+				input_bits_np, connections_np, memory_words_np,
+				num_examples, self.total_input_bits, self.layer.total_neurons,
+				self.layer.bits_per_neuron, self.layer.neurons_per_cluster,
+				self.num_bits, self.layer.memory.words_per_neuron,
+			)
+
+		return tensor(probs_flat, dtype=float32).view(num_examples, self.num_bits)
 
 	def forward(self, input_bits: Tensor) -> Tensor:
 		"""Forward pass returning token log-probabilities.
@@ -260,10 +305,15 @@ class BitwiseRAMLM(RAMComponent):
 			batch_bits = all_bits[start:end]
 			batch_targets = all_target_bits[start:end]
 
+			# Pass memory mode and sampling config
+			rng_seed = 42 + batch_idx * 997
 			modified = self.layer.train(
 				batch_bits,
 				batch_targets,
 				allow_override=allow_override,
+				memory_mode=self.memory_mode,
+				neuron_sample_rate=self.neuron_sample_rate,
+				rng_seed=rng_seed,
 			)
 			total_modified += modified
 
@@ -405,7 +455,17 @@ class BitwiseRAMLM(RAMComponent):
 		self.layer.connections = value
 
 	def reset_memory(self) -> None:
-		self.layer.reset_memory()
+		"""Reset memory to initial state based on memory mode."""
+		if self.memory_mode == 0:
+			# TERNARY: all cells = EMPTY (2)
+			self.layer.reset_memory()
+		else:
+			# QUAD modes: all cells = WEAK_FALSE (1)
+			from torch import int64 as torch_int64
+			empty_word = 0
+			for i in range(31):
+				empty_word |= (1 << (i * 2))  # QUAD_WEAK_FALSE = 1
+			self.layer.memory.memory_words.fill_(empty_word)
 
 	# =========================================================================
 	# Serialization
@@ -418,6 +478,8 @@ class BitwiseRAMLM(RAMComponent):
 			"neurons_per_cluster": self.layer.neurons_per_cluster,
 			"bits_per_neuron": self.layer.bits_per_neuron,
 			"pad_token_id": self.pad_token_id,
+			"memory_mode": self.memory_mode,
+			"neuron_sample_rate": self.neuron_sample_rate,
 		}
 
 	@classmethod

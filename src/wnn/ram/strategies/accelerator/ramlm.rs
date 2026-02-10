@@ -15,13 +15,31 @@
 //! - Old default: 0.5 (EMPTY cells add uncertainty)
 
 use rayon::prelude::*;
-use std::sync::atomic::{AtomicI64, Ordering, fence};
+use std::sync::atomic::{AtomicI32, AtomicI64, Ordering, fence};
 use std::sync::OnceLock;
 
-/// Memory cell values (2 bits each)
+/// Memory cell values (2 bits each) — Ternary mode
 const FALSE: i64 = 0;
 const TRUE: i64 = 1;
 const EMPTY: i64 = 2;
+
+/// Memory cell values — Quad mode (4-state nudging)
+const QUAD_FALSE: i64 = 0;
+const QUAD_WEAK_FALSE: i64 = 1;  // initial state for quad modes
+const QUAD_WEAK_TRUE: i64 = 2;
+const QUAD_TRUE: i64 = 3;
+
+/// Quad mode weights for QUAD_WEIGHTED forward pass
+const QUAD_WEIGHTS: [f32; 4] = [0.0, 0.25, 0.75, 1.0];
+
+/// Inline xorshift32 PRNG — returns a float in [0, 1)
+#[inline]
+fn xorshift32(state: &mut u32) -> f32 {
+    *state ^= *state << 13;
+    *state ^= *state >> 17;
+    *state ^= *state << 5;
+    (*state >> 8) as f32 / 16777216.0
+}
 
 /// Global EMPTY cell value (can be set from Python)
 /// 0.0 = EMPTY cells don't contribute (no artificial competition) - DEFAULT
@@ -252,7 +270,7 @@ pub fn bitwise_train_batch(
     neurons_per_cluster: usize,
     num_clusters: usize,
     words_per_neuron: usize,
-    allow_override: bool,
+    _allow_override: bool,
 ) -> usize {
     // Convert memory to atomic for thread-safe writes
     let atomic_memory: &[AtomicI64] = unsafe {
@@ -262,67 +280,263 @@ pub fn bitwise_train_batch(
         )
     };
 
-    // ========== PHASE 1: Write TRUEs (target_bit=1) ==========
-    let true_modified: usize = (0..num_examples).into_par_iter().map(|ex_idx| {
-        let input_start = ex_idx * total_input_bits;
-        let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
-        let target_start = ex_idx * num_clusters;
+    let address_space = 1usize << bits_per_neuron;
+    let mut total_modified = 0usize;
 
-        let mut ex_modified = 0usize;
+    // ========== MAJORITY VOTE TRAINING ==========
+    // For each (neuron, address), count +1 for TRUE, -1 for FALSE.
+    // Write the majority winner to memory. This produces the optimal
+    // Bayes classifier per cell, instead of the old two-phase protocol
+    // which biased all cells toward TRUE.
+    //
+    // Process one cluster at a time to keep vote buffer small (~4MB).
+    for cluster in 0..num_clusters {
+        // Vote array: [neurons_per_cluster × address_space]
+        let votes: Vec<AtomicI32> = (0..neurons_per_cluster * address_space)
+            .map(|_| AtomicI32::new(0))
+            .collect();
 
-        for cluster in 0..num_clusters {
-            if target_bits_flat[target_start + cluster] == 1 {
-                let start_neuron = cluster * neurons_per_cluster;
+        // Accumulate votes in parallel over examples
+        (0..num_examples).into_par_iter().for_each(|ex_idx| {
+            let input_start = ex_idx * total_input_bits;
+            let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
+            let target_bit = target_bits_flat[ex_idx * num_clusters + cluster];
+            let vote: i32 = if target_bit == 1 { 1 } else { -1 };
 
-                for neuron_offset in 0..neurons_per_cluster {
-                    let neuron_idx = start_neuron + neuron_offset;
-                    let conn_start = neuron_idx * bits_per_neuron;
-                    let connections = &connections_flat[conn_start..conn_start + bits_per_neuron];
+            let start_neuron = cluster * neurons_per_cluster;
+            for neuron_offset in 0..neurons_per_cluster {
+                let neuron_idx = start_neuron + neuron_offset;
+                let conn_start = neuron_idx * bits_per_neuron;
+                let connections = &connections_flat[conn_start..conn_start + bits_per_neuron];
+                let address = compute_address(input_bits, connections, bits_per_neuron);
+                votes[neuron_offset * address_space + address].fetch_add(vote, Ordering::Relaxed);
+            }
+        });
 
-                    let address = compute_address(input_bits, connections, bits_per_neuron);
-
-                    if write_cell(atomic_memory, neuron_idx, address, TRUE, words_per_neuron, true) {
-                        ex_modified += 1;
+        // Convert votes to memory cells
+        let start_neuron = cluster * neurons_per_cluster;
+        for neuron_offset in 0..neurons_per_cluster {
+            let neuron_idx = start_neuron + neuron_offset;
+            for addr in 0..address_space {
+                let v = votes[neuron_offset * address_space + addr].load(Ordering::Relaxed);
+                if v > 0 {
+                    if write_cell(atomic_memory, neuron_idx, addr, TRUE, words_per_neuron, true) {
+                        total_modified += 1;
+                    }
+                } else if v < 0 {
+                    if write_cell(atomic_memory, neuron_idx, addr, FALSE, words_per_neuron, true) {
+                        total_modified += 1;
                     }
                 }
+                // v == 0: leave EMPTY (tied or unvisited)
             }
         }
+    }
 
-        ex_modified
-    }).sum();
+    total_modified
+}
 
-    fence(Ordering::SeqCst);
+/// Nudge a memory cell via CAS (atomic). Moves cell one step toward target.
+///
+/// target_true: cell = min(cell + 1, 3)
+/// target_false: cell = max(cell - 1, 0)
+#[inline]
+fn nudge_cell(
+    memory_words: &[AtomicI64],
+    neuron_idx: usize,
+    address: usize,
+    target_true: bool,
+    words_per_neuron: usize,
+) -> bool {
+    let word_idx = address / CELLS_PER_WORD;
+    let cell_idx = address % CELLS_PER_WORD;
+    let word_offset = neuron_idx * words_per_neuron + word_idx;
+    let shift = cell_idx * BITS_PER_CELL;
+    let mask = CELL_MASK << shift;
 
-    // ========== PHASE 2: Write FALSEs (target_bit=0) ==========
-    let false_modified: usize = (0..num_examples).into_par_iter().map(|ex_idx| {
-        let input_start = ex_idx * total_input_bits;
-        let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
-        let target_start = ex_idx * num_clusters;
+    loop {
+        let old_word = memory_words[word_offset].load(Ordering::Acquire);
+        let old_cell = (old_word >> shift) & CELL_MASK;
 
-        let mut ex_modified = 0usize;
+        let new_cell = if target_true {
+            (old_cell + 1).min(QUAD_TRUE)
+        } else {
+            (old_cell - 1).max(QUAD_FALSE)
+        };
 
-        for cluster in 0..num_clusters {
-            if target_bits_flat[target_start + cluster] == 0 {
-                let start_neuron = cluster * neurons_per_cluster;
+        if new_cell == old_cell {
+            return false;
+        }
 
-                for neuron_offset in 0..neurons_per_cluster {
-                    let neuron_idx = start_neuron + neuron_offset;
-                    let conn_start = neuron_idx * bits_per_neuron;
-                    let connections = &connections_flat[conn_start..conn_start + bits_per_neuron];
+        let new_word = (old_word & !mask) | (new_cell << shift);
+        match memory_words[word_offset].compare_exchange(
+            old_word, new_word, Ordering::AcqRel, Ordering::Acquire,
+        ) {
+            Ok(_) => return true,
+            Err(_) => continue,
+        }
+    }
+}
 
-                    let address = compute_address(input_bits, connections, bits_per_neuron);
+/// Bitwise batch training with 4-state nudging (QUAD modes).
+///
+/// Each training example nudges cells one step toward the target:
+///   bit=1 → cell = min(cell + 1, 3)
+///   bit=0 → cell = max(cell - 1, 0)
+///
+/// Processes one cluster at a time. Uses CAS for thread-safe nudging.
+///
+/// Args:
+///   neuron_sample_rate: 0.0-1.0, probability of training each neuron per example
+///   rng_seed: seed for deterministic PRNG
+pub fn bitwise_train_batch_nudge(
+    input_bits_flat: &[bool],
+    target_bits_flat: &[u8],
+    connections_flat: &[i64],
+    memory_words: &mut [i64],
+    num_examples: usize,
+    total_input_bits: usize,
+    _num_neurons: usize,
+    bits_per_neuron: usize,
+    neurons_per_cluster: usize,
+    num_clusters: usize,
+    words_per_neuron: usize,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+) -> usize {
+    let atomic_memory: &[AtomicI64] = unsafe {
+        std::slice::from_raw_parts(
+            memory_words.as_ptr() as *const AtomicI64,
+            memory_words.len(),
+        )
+    };
 
-                    if write_cell(atomic_memory, neuron_idx, address, FALSE, words_per_neuron, allow_override) {
-                        ex_modified += 1;
+    let mut total_modified = 0usize;
+
+    for cluster in 0..num_clusters {
+        // Process examples in parallel, each nudging cells
+        let cluster_modified: usize = (0..num_examples).into_par_iter().map(|ex_idx| {
+            let input_start = ex_idx * total_input_bits;
+            let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
+            let target_bit = target_bits_flat[ex_idx * num_clusters + cluster];
+            let target_true = target_bit == 1;
+
+            // Per-thread PRNG seeded from (rng_seed, cluster, ex_idx)
+            let mut rng_state = (rng_seed as u32)
+                .wrapping_add(cluster as u32 * 1000003)
+                .wrapping_add(ex_idx as u32 * 999983);
+            if rng_state == 0 { rng_state = 1; }
+
+            let start_neuron = cluster * neurons_per_cluster;
+            let mut ex_modified = 0usize;
+
+            for neuron_offset in 0..neurons_per_cluster {
+                // Probabilistic sampling
+                if neuron_sample_rate < 1.0 {
+                    if xorshift32(&mut rng_state) >= neuron_sample_rate {
+                        continue;
                     }
                 }
+
+                let neuron_idx = start_neuron + neuron_offset;
+                let conn_start = neuron_idx * bits_per_neuron;
+                let connections = &connections_flat[conn_start..conn_start + bits_per_neuron];
+                let address = compute_address(input_bits, connections, bits_per_neuron);
+
+                if nudge_cell(atomic_memory, neuron_idx, address, target_true, words_per_neuron) {
+                    ex_modified += 1;
+                }
             }
+
+            ex_modified
+        }).sum();
+
+        total_modified += cluster_modified;
+    }
+
+    total_modified
+}
+
+/// Forward pass for QUAD_BINARY mode: P = count(cell >= 2) / neurons_per_cluster
+pub fn forward_batch_quad_binary(
+    input_bits_flat: &[bool],
+    connections_flat: &[i64],
+    memory_words: &[i64],
+    num_examples: usize,
+    total_input_bits: usize,
+    _num_neurons: usize,
+    bits_per_neuron: usize,
+    neurons_per_cluster: usize,
+    num_clusters: usize,
+    words_per_neuron: usize,
+) -> Vec<f32> {
+    let mut probs = vec![0.0f32; num_examples * num_clusters];
+
+    probs.par_chunks_mut(num_clusters).enumerate().for_each(|(ex_idx, ex_probs)| {
+        let input_start = ex_idx * total_input_bits;
+        let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
+
+        for cluster_idx in 0..num_clusters {
+            let start_neuron = cluster_idx * neurons_per_cluster;
+            let mut count_true = 0u32;
+
+            for neuron_offset in 0..neurons_per_cluster {
+                let neuron_idx = start_neuron + neuron_offset;
+                let conn_start = neuron_idx * bits_per_neuron;
+                let connections = &connections_flat[conn_start..conn_start + bits_per_neuron];
+                let address = compute_address(input_bits, connections, bits_per_neuron);
+                let cell_value = read_cell(memory_words, neuron_idx, address, words_per_neuron);
+
+                if cell_value >= QUAD_WEAK_TRUE {
+                    count_true += 1;
+                }
+            }
+
+            ex_probs[cluster_idx] = count_true as f32 / neurons_per_cluster as f32;
         }
+    });
 
-        ex_modified
-    }).sum();
+    probs
+}
 
-    true_modified + false_modified
+/// Forward pass for QUAD_WEIGHTED mode: P = sum(weight[cell]) / neurons_per_cluster
+pub fn forward_batch_quad_weighted(
+    input_bits_flat: &[bool],
+    connections_flat: &[i64],
+    memory_words: &[i64],
+    num_examples: usize,
+    total_input_bits: usize,
+    _num_neurons: usize,
+    bits_per_neuron: usize,
+    neurons_per_cluster: usize,
+    num_clusters: usize,
+    words_per_neuron: usize,
+) -> Vec<f32> {
+    let mut probs = vec![0.0f32; num_examples * num_clusters];
+
+    probs.par_chunks_mut(num_clusters).enumerate().for_each(|(ex_idx, ex_probs)| {
+        let input_start = ex_idx * total_input_bits;
+        let input_bits = &input_bits_flat[input_start..input_start + total_input_bits];
+
+        for cluster_idx in 0..num_clusters {
+            let start_neuron = cluster_idx * neurons_per_cluster;
+            let mut weighted_sum = 0.0f32;
+
+            for neuron_offset in 0..neurons_per_cluster {
+                let neuron_idx = start_neuron + neuron_offset;
+                let conn_start = neuron_idx * bits_per_neuron;
+                let connections = &connections_flat[conn_start..conn_start + bits_per_neuron];
+                let address = compute_address(input_bits, connections, bits_per_neuron);
+                let cell_value = read_cell(memory_words, neuron_idx, address, words_per_neuron);
+
+                weighted_sum += QUAD_WEIGHTS[cell_value as usize];
+            }
+
+            ex_probs[cluster_idx] = weighted_sum / neurons_per_cluster as f32;
+        }
+    });
+
+    probs
 }
 
 /// Batch forward pass for RAMLM

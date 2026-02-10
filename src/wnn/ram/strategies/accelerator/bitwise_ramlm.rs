@@ -441,6 +441,27 @@ const FALSE: i64 = 0;
 const TRUE: i64 = 1;
 const EMPTY: i64 = 2;
 
+// Quad mode constants
+const QUAD_FALSE: i64 = 0;
+const QUAD_WEAK_FALSE: i64 = 1;
+const QUAD_WEAK_TRUE: i64 = 2;
+const QUAD_TRUE: i64 = 3;
+const QUAD_WEIGHTS: [f32; 4] = [0.0, 0.25, 0.75, 1.0];
+
+// Memory modes
+const MODE_TERNARY: u8 = 0;
+const MODE_QUAD_BINARY: u8 = 1;
+const MODE_QUAD_WEIGHTED: u8 = 2;
+
+/// Inline xorshift32 PRNG
+#[inline]
+fn xorshift32_seq(state: &mut u32) -> f32 {
+    *state ^= *state << 13;
+    *state ^= *state >> 17;
+    *state ^= *state << 5;
+    (*state >> 8) as f32 / 16777216.0
+}
+
 /// Compute memory address for a single neuron given input bits (same as ramlm::compute_address).
 #[inline]
 fn compute_address_seq(input_bits: &[bool], connections: &[i64], bits_per_neuron: usize) -> usize {
@@ -491,11 +512,47 @@ fn write_cell_seq(
     true
 }
 
+/// Nudge a memory cell one step toward target (non-atomic, sequential).
+/// target_true: cell = min(cell + 1, 3)
+/// target_false: cell = max(cell - 1, 0)
+#[inline]
+fn nudge_cell_seq(
+    memory: &mut [i64],
+    neuron_idx: usize,
+    address: usize,
+    target_true: bool,
+    words_per_neuron: usize,
+) -> bool {
+    let word_idx = address / CELLS_PER_WORD;
+    let cell_idx = address % CELLS_PER_WORD;
+    let word_offset = neuron_idx * words_per_neuron + word_idx;
+    let shift = cell_idx * BITS_PER_CELL;
+    let old_cell = (memory[word_offset] >> shift) & CELL_MASK;
+
+    let new_cell = if target_true {
+        (old_cell + 1).min(QUAD_TRUE)
+    } else {
+        (old_cell - 1).max(QUAD_FALSE)
+    };
+
+    if new_cell == old_cell {
+        return false;
+    }
+
+    let mask = CELL_MASK << shift;
+    memory[word_offset] = (memory[word_offset] & !mask) | (new_cell << shift);
+    true
+}
+
 /// Train a single genome into pre-allocated memory, then forward pass into output slice.
 ///
+/// Supports three memory modes:
+///   MODE_TERNARY (0): Majority vote (existing, default)
+///   MODE_QUAD_BINARY (1): 4-state nudging, binary threshold forward
+///   MODE_QUAD_WEIGHTED (2): 4-state nudging, weighted confidence forward
+///
 /// Fully sequential (no rayon, no atomics) — designed to be called from
-/// an outer par_iter over genomes. Each genome has its own memory so
-/// there's no contention.
+/// an outer par_iter over genomes.
 fn train_and_forward_into(
     cache: &BitwiseTokenCache,
     connections: &[i64],
@@ -506,49 +563,91 @@ fn train_and_forward_into(
     empty_word: i64,
     words_per_neuron: usize,
     out_probs: &mut [f32],
+    memory_mode: u8,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
 ) {
     let num_clusters = cache.num_bits;
     let num_examples = train_subset.num_examples;
     let total_input_bits = cache.total_input_bits;
+    let address_space = 1usize << bits_per_neuron;
 
-    // Reset memory to EMPTY
+    // Reset memory
     memory.fill(empty_word);
 
-    // ===== PHASE 1: Write TRUEs (target_bit=1) =====
-    for ex in 0..num_examples {
-        let input_bits = &train_subset.input_bits[ex * total_input_bits..(ex + 1) * total_input_bits];
-        let target_start = ex * num_clusters;
+    // Per-genome PRNG state
+    let mut rng_state = (rng_seed as u32).wrapping_add(17);
+    if rng_state == 0 { rng_state = 1; }
 
-        for cluster in 0..num_clusters {
-            if train_subset.target_bits[target_start + cluster] == 1 {
+    match memory_mode {
+        MODE_TERNARY => {
+            // ===== TRAINING: Majority vote, one cluster at a time =====
+            let mut votes = vec![0i32; neurons_per_cluster * address_space];
+
+            for cluster in 0..num_clusters {
+                votes.fill(0);
                 let start_neuron = cluster * neurons_per_cluster;
+
+                for ex in 0..num_examples {
+                    let input_bits = &train_subset.input_bits[ex * total_input_bits..(ex + 1) * total_input_bits];
+                    let target_bit = train_subset.target_bits[ex * num_clusters + cluster];
+                    let vote: i32 = if target_bit == 1 { 1 } else { -1 };
+
+                    for n in 0..neurons_per_cluster {
+                        if neuron_sample_rate < 1.0 {
+                            if xorshift32_seq(&mut rng_state) >= neuron_sample_rate {
+                                continue;
+                            }
+                        }
+                        let neuron_idx = start_neuron + n;
+                        let conn_start = neuron_idx * bits_per_neuron;
+                        let conns = &connections[conn_start..conn_start + bits_per_neuron];
+                        let addr = compute_address_seq(input_bits, conns, bits_per_neuron);
+                        votes[n * address_space + addr] += vote;
+                    }
+                }
+
                 for n in 0..neurons_per_cluster {
                     let neuron_idx = start_neuron + n;
-                    let conn_start = neuron_idx * bits_per_neuron;
-                    let conns = &connections[conn_start..conn_start + bits_per_neuron];
-                    let addr = compute_address_seq(input_bits, conns, bits_per_neuron);
-                    write_cell_seq(memory, neuron_idx, addr, TRUE, words_per_neuron, true);
+                    for addr in 0..address_space {
+                        let v = votes[n * address_space + addr];
+                        if v > 0 {
+                            write_cell_seq(memory, neuron_idx, addr, TRUE, words_per_neuron, true);
+                        } else if v < 0 {
+                            write_cell_seq(memory, neuron_idx, addr, FALSE, words_per_neuron, true);
+                        }
+                    }
                 }
             }
         }
-    }
-
-    // ===== PHASE 2: Write FALSEs (target_bit=0) =====
-    for ex in 0..num_examples {
-        let input_bits = &train_subset.input_bits[ex * total_input_bits..(ex + 1) * total_input_bits];
-        let target_start = ex * num_clusters;
-
-        for cluster in 0..num_clusters {
-            if train_subset.target_bits[target_start + cluster] == 0 {
+        MODE_QUAD_BINARY | MODE_QUAD_WEIGHTED => {
+            // ===== TRAINING: Sequential nudging =====
+            for cluster in 0..num_clusters {
                 let start_neuron = cluster * neurons_per_cluster;
-                for n in 0..neurons_per_cluster {
-                    let neuron_idx = start_neuron + n;
-                    let conn_start = neuron_idx * bits_per_neuron;
-                    let conns = &connections[conn_start..conn_start + bits_per_neuron];
-                    let addr = compute_address_seq(input_bits, conns, bits_per_neuron);
-                    write_cell_seq(memory, neuron_idx, addr, FALSE, words_per_neuron, false);
+
+                for ex in 0..num_examples {
+                    let input_bits = &train_subset.input_bits[ex * total_input_bits..(ex + 1) * total_input_bits];
+                    let target_bit = train_subset.target_bits[ex * num_clusters + cluster];
+                    let target_true = target_bit == 1;
+
+                    for n in 0..neurons_per_cluster {
+                        if neuron_sample_rate < 1.0 {
+                            if xorshift32_seq(&mut rng_state) >= neuron_sample_rate {
+                                continue;
+                            }
+                        }
+                        let neuron_idx = start_neuron + n;
+                        let conn_start = neuron_idx * bits_per_neuron;
+                        let conns = &connections[conn_start..conn_start + bits_per_neuron];
+                        let addr = compute_address_seq(input_bits, conns, bits_per_neuron);
+                        nudge_cell_seq(memory, neuron_idx, addr, target_true, words_per_neuron);
+                    }
                 }
             }
+        }
+        _ => {
+            // Unknown mode — treat as ternary
+            eprintln!("[BitwiseRAMLM] Unknown memory_mode={memory_mode}, falling back to TERNARY");
         }
     }
 
@@ -562,33 +661,61 @@ fn train_and_forward_into(
 
         for cluster in 0..num_clusters {
             let start_neuron = cluster * neurons_per_cluster;
-            let mut count_true = 0u32;
-            let mut count_empty = 0u32;
 
-            for n in 0..neurons_per_cluster {
-                let neuron_idx = start_neuron + n;
-                let conn_start = neuron_idx * bits_per_neuron;
-                let conns = &connections[conn_start..conn_start + bits_per_neuron];
-                let addr = compute_address_seq(input_bits, conns, bits_per_neuron);
-                let cell = read_cell_seq(memory, neuron_idx, addr, words_per_neuron);
-
-                if cell == TRUE {
-                    count_true += 1;
-                } else if cell == EMPTY {
-                    count_empty += 1;
+            match memory_mode {
+                MODE_TERNARY => {
+                    let mut count_true = 0u32;
+                    let mut count_empty = 0u32;
+                    for n in 0..neurons_per_cluster {
+                        let neuron_idx = start_neuron + n;
+                        let conn_start = neuron_idx * bits_per_neuron;
+                        let conns = &connections[conn_start..conn_start + bits_per_neuron];
+                        let addr = compute_address_seq(input_bits, conns, bits_per_neuron);
+                        let cell = read_cell_seq(memory, neuron_idx, addr, words_per_neuron);
+                        if cell == TRUE {
+                            count_true += 1;
+                        } else if cell == EMPTY {
+                            count_empty += 1;
+                        }
+                    }
+                    ex_probs[cluster] = (count_true as f32 + empty_value * count_empty as f32)
+                        / neurons_per_cluster as f32;
+                }
+                MODE_QUAD_BINARY => {
+                    let mut count_true = 0u32;
+                    for n in 0..neurons_per_cluster {
+                        let neuron_idx = start_neuron + n;
+                        let conn_start = neuron_idx * bits_per_neuron;
+                        let conns = &connections[conn_start..conn_start + bits_per_neuron];
+                        let addr = compute_address_seq(input_bits, conns, bits_per_neuron);
+                        let cell = read_cell_seq(memory, neuron_idx, addr, words_per_neuron);
+                        if cell >= QUAD_WEAK_TRUE {
+                            count_true += 1;
+                        }
+                    }
+                    ex_probs[cluster] = count_true as f32 / neurons_per_cluster as f32;
+                }
+                MODE_QUAD_WEIGHTED => {
+                    let mut weighted_sum = 0.0f32;
+                    for n in 0..neurons_per_cluster {
+                        let neuron_idx = start_neuron + n;
+                        let conn_start = neuron_idx * bits_per_neuron;
+                        let conns = &connections[conn_start..conn_start + bits_per_neuron];
+                        let addr = compute_address_seq(input_bits, conns, bits_per_neuron);
+                        let cell = read_cell_seq(memory, neuron_idx, addr, words_per_neuron);
+                        weighted_sum += QUAD_WEIGHTS[cell as usize];
+                    }
+                    ex_probs[cluster] = weighted_sum / neurons_per_cluster as f32;
+                }
+                _ => {
+                    ex_probs[cluster] = 0.5; // fallback
                 }
             }
-
-            ex_probs[cluster] = (count_true as f32 + empty_value * count_empty as f32)
-                / neurons_per_cluster as f32;
         }
     }
 }
 
 /// Evaluate multiple genomes using subset training data.
-///
-/// Phase 1 (CPU, rayon): Train + forward for all genomes in parallel.
-/// Phase 2 (Metal GPU or CPU): Reconstruction + CE for all genomes.
 pub fn evaluate_genomes(
     cache: &BitwiseTokenCache,
     all_connections_flat: &[i64],
@@ -601,6 +728,27 @@ pub fn evaluate_genomes(
     evaluate_genomes_with_subset(
         cache, all_connections_flat, num_genomes,
         neurons_per_cluster, bits_per_neuron, train_subset,
+        MODE_TERNARY, 1.0, 42,
+    )
+}
+
+/// Evaluate with mode and sample rate (subset).
+pub fn evaluate_genomes_with_mode(
+    cache: &BitwiseTokenCache,
+    all_connections_flat: &[i64],
+    num_genomes: usize,
+    neurons_per_cluster: usize,
+    bits_per_neuron: usize,
+    train_subset_idx: usize,
+    memory_mode: u8,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+) -> Vec<(f64, f64)> {
+    let train_subset = &cache.train_subsets[train_subset_idx % cache.num_parts];
+    evaluate_genomes_with_subset(
+        cache, all_connections_flat, num_genomes,
+        neurons_per_cluster, bits_per_neuron, train_subset,
+        memory_mode, neuron_sample_rate, rng_seed,
     )
 }
 
@@ -615,6 +763,25 @@ pub fn evaluate_genomes_full(
     evaluate_genomes_with_subset(
         cache, all_connections_flat, num_genomes,
         neurons_per_cluster, bits_per_neuron, &cache.full_train,
+        MODE_TERNARY, 1.0, 42,
+    )
+}
+
+/// Evaluate full with mode and sample rate.
+pub fn evaluate_genomes_full_with_mode(
+    cache: &BitwiseTokenCache,
+    all_connections_flat: &[i64],
+    num_genomes: usize,
+    neurons_per_cluster: usize,
+    bits_per_neuron: usize,
+    memory_mode: u8,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+) -> Vec<(f64, f64)> {
+    evaluate_genomes_with_subset(
+        cache, all_connections_flat, num_genomes,
+        neurons_per_cluster, bits_per_neuron, &cache.full_train,
+        memory_mode, neuron_sample_rate, rng_seed,
     )
 }
 
@@ -626,6 +793,9 @@ fn evaluate_genomes_with_subset(
     neurons_per_cluster: usize,
     bits_per_neuron: usize,
     train_subset: &BitwiseSubset,
+    memory_mode: u8,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
 ) -> Vec<(f64, f64)> {
     let num_clusters = cache.num_bits;
     let conns_per_genome = num_clusters * neurons_per_cluster * bits_per_neuron;
@@ -635,15 +805,23 @@ fn evaluate_genomes_with_subset(
     let memory_size = total_neurons * words_per_neuron;
     let scores_per_genome = cache.num_eval * num_clusters;
 
-    let empty_word: i64 = (0..31i64).fold(0i64, |acc, i| acc | (2i64 << (i * 2)));
+    // Compute empty_word based on memory mode
+    let empty_word: i64 = match memory_mode {
+        MODE_QUAD_BINARY | MODE_QUAD_WEIGHTED => {
+            // All cells = QUAD_WEAK_FALSE (1)
+            (0..31i64).fold(0i64, |acc, i| acc | (QUAD_WEAK_FALSE << (i * 2)))
+        }
+        _ => {
+            // All cells = EMPTY (2) — ternary mode
+            (0..31i64).fold(0i64, |acc, i| acc | (EMPTY << (i * 2)))
+        }
+    };
 
     // Pre-allocate ALL memory and output buffers before parallel execution.
-    // This eliminates allocator contention during the parallel phase.
     let mut all_memory: Vec<i64> = vec![empty_word; num_genomes * memory_size];
     let mut all_scores: Vec<f32> = vec![0.0f32; num_genomes * scores_per_genome];
 
     // Phase 1: Train + Forward (CPU, parallel over genomes)
-    // Each genome gets a pre-allocated slice — no allocations inside par_iter.
     all_memory
         .par_chunks_mut(memory_size)
         .zip(all_scores.par_chunks_mut(scores_per_genome))
@@ -651,9 +829,12 @@ fn evaluate_genomes_with_subset(
         .for_each(|(g, (mem_slice, score_slice))| {
             let conn_start = g * conns_per_genome;
             let connections = &all_connections_flat[conn_start..conn_start + conns_per_genome];
+            // Per-genome RNG seed
+            let genome_rng_seed = rng_seed.wrapping_add(g as u64 * 1000007);
             train_and_forward_into(
                 cache, connections, neurons_per_cluster, bits_per_neuron,
                 train_subset, mem_slice, empty_word, words_per_neuron, score_slice,
+                memory_mode, neuron_sample_rate, genome_rng_seed,
             );
         });
 

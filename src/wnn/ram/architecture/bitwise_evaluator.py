@@ -53,6 +53,8 @@ class BitwiseEvaluator:
 		num_parts: int = 3,
 		seed: Optional[int] = None,
 		pad_token_id: int = 50256,
+		memory_mode: int = 0,
+		neuron_sample_rate: float = 1.0,
 	):
 		self._vocab_size = vocab_size
 		self._context_size = context_size
@@ -60,6 +62,8 @@ class BitwiseEvaluator:
 		self._bits_per_neuron = bits_per_neuron
 		self._num_parts = num_parts
 		self._pad_token_id = pad_token_id
+		self._memory_mode = memory_mode
+		self._neuron_sample_rate = neuron_sample_rate
 
 		self._train_tokens = train_tokens
 		self._eval_tokens = eval_tokens
@@ -151,12 +155,25 @@ class BitwiseEvaluator:
 	) -> list[tuple[float, float]]:
 		"""Evaluate using Rust+Metal backend."""
 		connections_flat = self._flatten_genomes(genomes)
-		return self._rust_cache.evaluate_genomes(
+		if self._memory_mode == 0 and self._neuron_sample_rate >= 1.0:
+			# Fast path: default ternary mode
+			return self._rust_cache.evaluate_genomes(
+				connections_flat=connections_flat,
+				num_genomes=len(genomes),
+				neurons_per_cluster=self._neurons_per_cluster,
+				bits_per_neuron=self._bits_per_neuron,
+				train_subset_idx=train_subset_idx,
+			)
+		# Mode-aware path
+		return self._rust_cache.evaluate_genomes_with_mode(
 			connections_flat=connections_flat,
 			num_genomes=len(genomes),
 			neurons_per_cluster=self._neurons_per_cluster,
 			bits_per_neuron=self._bits_per_neuron,
 			train_subset_idx=train_subset_idx,
+			memory_mode=self._memory_mode,
+			neuron_sample_rate=self._neuron_sample_rate,
+			rng_seed=self._seed,
 		)
 
 	def _evaluate_batch_full_rust(
@@ -165,11 +182,21 @@ class BitwiseEvaluator:
 	) -> list[tuple[float, float]]:
 		"""Evaluate with full data using Rust+Metal backend."""
 		connections_flat = self._flatten_genomes(genomes)
-		return self._rust_cache.evaluate_genomes_full(
+		if self._memory_mode == 0 and self._neuron_sample_rate >= 1.0:
+			return self._rust_cache.evaluate_genomes_full(
+				connections_flat=connections_flat,
+				num_genomes=len(genomes),
+				neurons_per_cluster=self._neurons_per_cluster,
+				bits_per_neuron=self._bits_per_neuron,
+			)
+		return self._rust_cache.evaluate_genomes_full_with_mode(
 			connections_flat=connections_flat,
 			num_genomes=len(genomes),
 			neurons_per_cluster=self._neurons_per_cluster,
 			bits_per_neuron=self._bits_per_neuron,
+			memory_mode=self._memory_mode,
+			neuron_sample_rate=self._neuron_sample_rate,
+			rng_seed=self._seed,
 		)
 
 	# =========================================================================
@@ -201,6 +228,8 @@ class BitwiseEvaluator:
 				neurons_per_cluster=self._neurons_per_cluster,
 				bits_per_neuron=self._bits_per_neuron,
 				pad_token_id=self._pad_token_id,
+				memory_mode=self._memory_mode,
+				neuron_sample_rate=self._neuron_sample_rate,
 			)
 
 			if genome.connections is not None:
@@ -318,11 +347,15 @@ class BitwiseEvaluator:
 
 	def __repr__(self) -> str:
 		backend = "Rust+Metal" if self._rust_cache is not None else "Python"
+		mode_names = {0: "TERNARY", 1: "QUAD_BINARY", 2: "QUAD_WEIGHTED"}
+		mode = mode_names.get(self._memory_mode, f"UNKNOWN({self._memory_mode})")
+		rate_str = f", rate={self._neuron_sample_rate}" if self._neuron_sample_rate < 1.0 else ""
 		return (
 			f"BitwiseEvaluator(vocab={self._vocab_size}, "
 			f"context={self._context_size}, "
 			f"neurons={self._neurons_per_cluster}, "
 			f"bits={self._bits_per_neuron}, "
 			f"parts={self._num_parts}, "
+			f"mode={mode}{rate_str}, "
 			f"backend={backend})"
 		)
