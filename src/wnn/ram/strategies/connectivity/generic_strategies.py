@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from enum import IntEnum, auto
 from typing import Callable, Generic, Optional, TypeVar, Any
 
-from wnn.ram.fitness import FitnessCalculatorType
+from wnn.ram.fitness import FitnessCalculatorType, FitnessCalculatorFactory
 
 # Optional tracker integration
 try:
@@ -1018,10 +1018,10 @@ class GAConfig:
 	fitness_percentile: Optional[float] = None
 	# Fitness calculator: how to combine CE and accuracy for ranking
 	# CE = pure CE ranking, uses dual elites (10% CE + 10% Acc)
-	# HARMONIC_RANK = harmonic mean of ranks, uses single elite (20% by rank)
-	# NORMALIZED = normalized [0,1] scale weighted sum, balanced CE/accuracy (default)
+	# HARMONIC_RANK = harmonic mean of ranks, uses single elite (20% by rank) (default)
+	# NORMALIZED = normalized [0,1] scale weighted sum, balanced CE/accuracy
 	# NORMALIZED_HARMONIC = normalized values with harmonic mean (penalizes imbalance more)
-	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.NORMALIZED
+	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK
 	# Weights for HARMONIC_RANK/NORMALIZED/NORMALIZED_HARMONIC modes (higher weight = more important)
 	fitness_weight_ce: float = 1.0
 	fitness_weight_acc: float = 1.0
@@ -1063,10 +1063,10 @@ class TSConfig:
 	fitness_percentile: Optional[float] = None
 	# Fitness calculator: how to combine CE and accuracy for ranking
 	# CE = pure CE ranking, uses dual paths (25 neighbors from best_ce + 25 from best_acc)
-	# HARMONIC_RANK = harmonic mean of ranks, uses single path (50 from best_harmonic)
-	# NORMALIZED = normalized [0,1] scale weighted sum, balanced CE/accuracy (default)
+	# HARMONIC_RANK = harmonic mean of ranks, uses single path (50 from best_harmonic) (default)
+	# NORMALIZED = normalized [0,1] scale weighted sum, balanced CE/accuracy
 	# NORMALIZED_HARMONIC = normalized values with harmonic mean (penalizes imbalance more)
-	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.NORMALIZED
+	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK
 	# Weights for HARMONIC_RANK/NORMALIZED/NORMALIZED_HARMONIC modes (higher weight = more important)
 	fitness_weight_ce: float = 1.0
 	fitness_weight_acc: float = 1.0
@@ -1194,6 +1194,15 @@ class GenericGAStrategy(ABC, Generic[T]):
 		self._ensure_rng()
 		cfg = self._config
 
+		# Create fitness calculator for unified ranking
+		fitness_calculator = FitnessCalculatorFactory.create(
+			cfg.fitness_calculator_type,
+			weight_ce=cfg.fitness_weight_ce,
+			weight_acc=cfg.fitness_weight_acc,
+			min_accuracy_floor=cfg.min_accuracy_floor if cfg.min_accuracy_floor > 0 else None,
+		)
+		self._log.info(f"[{self.name}] Fitness calculator: {fitness_calculator.name}")
+
 		# Threshold continuity: use initial_threshold from config if set (passed from previous phase)
 		# Otherwise, fall back to min_accuracy (first phase)
 		start_threshold = cfg.initial_threshold if cfg.initial_threshold is not None else cfg.min_accuracy
@@ -1250,10 +1259,15 @@ class GenericGAStrategy(ABC, Generic[T]):
 		fitness_values = [f for _, f, _ in population]
 		accuracy_values = [a for _, _, a in population]
 
-		# Find initial best
-		best_idx = min(range(len(fitness_values)), key=lambda i: fitness_values[i])
+		# Find initial best using fitness calculator (unified ranking)
+		init_tuples = [
+			(i, fitness_values[i], accuracy_values[i] or 0.0)
+			for i in range(len(population))
+		]
+		init_scores = fitness_calculator.fitness(init_tuples)
+		best_idx = min(range(len(init_scores)), key=lambda i: init_scores[i])
 		best = self.clone_genome(population[best_idx][0])
-		best_fitness = fitness_values[best_idx]
+		best_fitness = fitness_values[best_idx]  # Report CE as fitness for compatibility
 		initial_fitness = fitness_values[0] if initial_genome else best_fitness
 		initial_accuracy = accuracy_values[best_idx]
 
@@ -1300,27 +1314,17 @@ class GenericGAStrategy(ABC, Generic[T]):
 			# Selection and reproduction
 			new_population: list[tuple[T, Optional[float], Optional[float]]] = []
 
-			# Dual elitism: keep top N% by CE AND top N% by accuracy (unique)
-			# Use target population_size (not len(population)) so we don't lose elites
-			# when we couldn't generate enough viable candidates
-			n_per_metric = max(1, int(cfg.population_size * cfg.elitism_pct))
+			# Unified elitism: use fitness calculator to rank, keep top 20%
+			n_elites = max(1, int(cfg.population_size * cfg.elitism_pct * 2))
 
-			# Top by CE (lower is better)
-			ce_sorted = sorted(range(len(fitness_values)), key=lambda i: fitness_values[i])
-			ce_elite_indices = set(ce_sorted[:n_per_metric])
-
-			# Top by accuracy (higher is better) - MUTUALLY EXCLUSIVE from CE elites
-			has_accuracy = any(a is not None for a in accuracy_values)
-			if has_accuracy:
-				# Exclude CE-selected indices when selecting by accuracy
-				acc_candidates = [i for i in range(len(accuracy_values)) if i not in ce_elite_indices]
-				acc_sorted = sorted(acc_candidates, key=lambda i: -(accuracy_values[i] or 0))
-				acc_elite_indices = set(acc_sorted[:n_per_metric])
-			else:
-				acc_elite_indices = set()
-
-			# Combine elites (mutually exclusive, no overlap)
-			all_elite_indices = list(ce_elite_indices) + list(acc_elite_indices)
+			# Build (genome, ce, acc) tuples for fitness ranking
+			pop_tuples = [
+				(i, fitness_values[i], accuracy_values[i] or 0.0)
+				for i in range(len(population))
+			]
+			combined_scores = fitness_calculator.fitness(pop_tuples)
+			elite_sorted = sorted(range(len(combined_scores)), key=lambda i: combined_scores[i])
+			all_elite_indices = elite_sorted[:n_elites]
 			total_elites = len(all_elite_indices)
 
 			# Track initial elites (first generation only) for survival analysis
@@ -1329,9 +1333,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 					(self.clone_genome(population[idx][0]), fitness_values[idx])
 					for idx in all_elite_indices
 				]
-				# Log elite composition (INFO level)
-				self._log.info(f"[{self.name}] Elitism: {len(ce_elite_indices)} by CE + "
-							   f"{len(acc_elite_indices)} by Acc = {total_elites} unique elites")
+				self._log.info(f"[{self.name}] Elitism: {total_elites} by {fitness_calculator.name}")
 
 			# Add elites to new population
 			elite_width = len(str(total_elites))
@@ -1341,10 +1343,8 @@ class GenericGAStrategy(ABC, Generic[T]):
 				elite_accuracy = accuracy_values[elite_idx]
 				new_population.append((elite_genome, elite_fitness, elite_accuracy))
 
-				# Log elite source (DEBUG level)
-				source = "CE" if elite_idx in ce_elite_indices else "Acc"
 				acc_str = f", Acc={elite_accuracy:.2%}" if elite_accuracy is not None else ""
-				self._log.debug(f"[Elite {i + 1:0{elite_width}d}/{total_elites}] CE={elite_fitness:.4f}{acc_str} ({source})")
+				self._log.debug(f"[Elite {i + 1:0{elite_width}d}/{total_elites}] CE={elite_fitness:.4f}{acc_str} (score={combined_scores[elite_idx]:.4f})")
 
 			# Generate viable offspring to fill the rest of the population
 			needed_offspring = cfg.population_size - len(new_population)
@@ -1378,8 +1378,13 @@ class GenericGAStrategy(ABC, Generic[T]):
 			fitness_values = [f for _, f, _ in population]
 			accuracy_values = [a for _, _, a in population]
 
-			# Update best
-			gen_best_idx = min(range(len(fitness_values)), key=lambda i: fitness_values[i])
+			# Update best using fitness calculator (unified ranking)
+			gen_tuples = [
+				(i, fitness_values[i], accuracy_values[i] or 0.0)
+				for i in range(len(population))
+			]
+			gen_scores = fitness_calculator.fitness(gen_tuples)
+			gen_best_idx = min(range(len(gen_scores)), key=lambda i: gen_scores[i])
 			if fitness_values[gen_best_idx] < best_fitness:
 				best = self.clone_genome(population[gen_best_idx][0])
 				best_fitness = fitness_values[gen_best_idx]
@@ -1494,13 +1499,17 @@ class GenericGAStrategy(ABC, Generic[T]):
 						fitness_values.extend([f for _, f, _ in new_individuals])
 						accuracy_values.extend([a for _, _, a in new_individuals])
 				elif cfg.population_size < old_pop_size:
-					# Shrink population - keep best
-					combined = list(zip(population, fitness_values, accuracy_values))
-					combined.sort(key=lambda x: x[1])  # Sort by fitness
-					combined = combined[:cfg.population_size]
-					population = [p for p, _, _ in combined]
-					fitness_values = [f for _, f, _ in combined]
-					accuracy_values = [a for _, _, a in combined]
+					# Shrink population - keep best by fitness score
+					shrink_tuples = [
+						(i, fitness_values[i], accuracy_values[i] or 0.0)
+						for i in range(len(population))
+					]
+					shrink_scores = fitness_calculator.fitness(shrink_tuples)
+					shrink_order = sorted(range(len(shrink_scores)), key=lambda i: shrink_scores[i])
+					keep_indices = shrink_order[:cfg.population_size]
+					population = [population[i] for i in keep_indices]
+					fitness_values = [fitness_values[i] for i in keep_indices]
+					accuracy_values = [accuracy_values[i] for i in keep_indices]
 
 			# Overfitting callback check (same interval as early stopping)
 			if overfitting_callback is not None and (generation + 1) % cfg.check_interval == 0:
@@ -1532,12 +1541,19 @@ class GenericGAStrategy(ABC, Generic[T]):
 			# Update previous best for next iteration's delta computation
 			prev_best_fitness = best_fitness
 
-		# Get final accuracy from best genome's cached accuracy
-		best_idx_final = min(range(len(fitness_values)), key=lambda i: fitness_values[i])
+		# Get final best using fitness calculator (unified ranking)
+		final_tuples = [
+			(i, fitness_values[i], accuracy_values[i] or 0.0)
+			for i in range(len(population))
+		]
+		final_scores = fitness_calculator.fitness(final_tuples)
+		best_idx_final = min(range(len(final_scores)), key=lambda i: final_scores[i])
 		final_accuracy = accuracy_values[best_idx_final] if accuracy_values else None
 
-		# Extract final population for seeding next phase (sorted by fitness)
-		final_population = [self.clone_genome(g) for g, _, _ in sorted(population, key=lambda x: x[1])]
+		# Extract final population for seeding next phase (sorted by fitness score)
+		scored_pop = list(zip(population, final_scores))
+		scored_pop.sort(key=lambda x: x[1])
+		final_population = [self.clone_genome(g) for (g, _, _), _ in scored_pop]
 
 		# Compute final diversity
 		final_ce_spread = max(fitness_values) - min(fitness_values) if fitness_values else 0.0
@@ -1832,6 +1848,15 @@ class GenericTSStrategy(ABC, Generic[T]):
 		self._ensure_rng()
 		cfg = self._config
 
+		# Create fitness calculator for unified ranking
+		fitness_calculator = FitnessCalculatorFactory.create(
+			cfg.fitness_calculator_type,
+			weight_ce=cfg.fitness_weight_ce,
+			weight_acc=cfg.fitness_weight_acc,
+			min_accuracy_floor=cfg.min_accuracy_floor if cfg.min_accuracy_floor > 0 else None,
+		)
+		self._log.info(f"[{self.name}] Fitness calculator: {fitness_calculator.name}")
+
 		# Threshold continuity: use initial_threshold from config if set (passed from previous phase)
 		# Otherwise, fall back to min_accuracy (first phase)
 		start_threshold = cfg.initial_threshold if cfg.initial_threshold is not None else cfg.min_accuracy
@@ -1848,7 +1873,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 
 		self._log.info(f"[{self.name}] Progressive threshold: {start_threshold:.2%} → {end_threshold:.2%} (rate: {cfg.threshold_delta/cfg.threshold_reference:.4%}/iter)")
 
-		# Cache size for total_neighbors (top K/2 by CE + top K/2 by Acc)
+		# Cache size for total_neighbors
 		cache_size = cfg.total_neighbors_size or cfg.neighbors_per_iter
 		cache_size_per_metric = cache_size // 2
 
@@ -2165,22 +2190,14 @@ class GenericTSStrategy(ABC, Generic[T]):
 			# Update previous best for next iteration's delta computation
 			prev_best_fitness = best_fitness
 
-		# === Build final_population: top K/2 by CE + top K/2 by Acc (mutually exclusive) ===
-		# Sort by CE, take top K/2
-		by_ce = sorted(all_neighbors, key=lambda x: x[1])
-		top_by_ce = by_ce[:cache_size_per_metric]
-		top_ce_set = set(id(g) for g, _, _ in top_by_ce)
-
-		# Sort by Acc (descending), take top K/2 excluding those already in CE set
-		by_acc = sorted(
-			[(g, f, a) for g, f, a in all_neighbors if a is not None and id(g) not in top_ce_set],
-			key=lambda x: -x[2]  # type: ignore
-		)
-		top_by_acc = by_acc[:cache_size_per_metric]
-
-		# Combine: top K/2 by CE + top K/2 by Acc
-		final_population_with_metrics = top_by_ce + top_by_acc
-		final_population = [self.clone_genome(g) for g, _, _ in final_population_with_metrics]
+		# === Build final_population: top K by fitness (unified ranking) ===
+		neighbor_tuples = [
+			(i, f, a or 0.0) for i, (g, f, a) in enumerate(all_neighbors)
+		]
+		neighbor_scores = fitness_calculator.fitness(neighbor_tuples)
+		scored = sorted(range(len(neighbor_scores)), key=lambda i: neighbor_scores[i])
+		top_indices = scored[:cache_size]
+		final_population = [self.clone_genome(all_neighbors[i][0]) for i in top_indices]
 
 		# Final threshold (for next phase)
 		final_threshold = get_threshold(iteration / cfg.threshold_reference) if cfg.iterations > 0 else start_threshold
@@ -2191,7 +2208,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 		self._log.info(f"  CE improvement: {start_fitness:.4f} → {best_fitness:.4f} ({(1 - best_fitness/start_fitness)*100:+.2f}%)")
 		self._log.info(f"  CE path improvements: {ce_improved}/{total_iters}")
 		self._log.info(f"  Acc path improvements: {acc_improved}/{total_iters}")
-		self._log.info(f"  Final population: {len(top_by_ce)} by CE + {len(top_by_acc)} by Acc = {len(final_population)}")
+		self._log.info(f"  Final population: {len(final_population)} by {fitness_calculator.name}")
 		self._log.info(f"  Final threshold: {final_threshold:.2%} (for next phase)")
 
 		improvement_pct = (start_fitness - best_fitness) / start_fitness * 100 if start_fitness > 0 else 0
