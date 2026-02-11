@@ -47,6 +47,7 @@ from wnn.ram.strategies.connectivity.generic_strategies import (
 	AdaptiveScalerConfig,
 	ProgressiveThreshold,
 	ProgressiveThresholdConfig,
+	OptimizationConfig,
 	# Logging
 	OptimizationLogger,
 	TRACE,

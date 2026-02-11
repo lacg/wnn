@@ -996,29 +996,24 @@ class AdaptiveScaler:
 
 
 @dataclass
-class GAConfig:
-	"""Configuration for Genetic Algorithm."""
-	population_size: int = 50
-	generations: int = 50
+class OptimizationConfig:
+	"""Shared configuration for all optimization strategies (GA, TS, etc.).
+
+	Single source of truth for fitness ranking, threshold progression,
+	early stopping, and percentile filtering.
+	"""
 	mutation_rate: float = 0.1
-	crossover_rate: float = 0.7
-	tournament_size: int = 3  # Tournament selection size
-	# Elitism: keep top N% by fitness score (unified ranking)
-	# With elitism_pct=0.1 and the 2x multiplier in optimize(), keeps ~20% of population
-	elitism_pct: float = 0.1       # 10% base → 20% effective (multiplied by 2)
 	# Threshold continuity: start threshold passed from previous phase
-	# If None, uses min_accuracy as the base (first phase)
 	initial_threshold: Optional[float] = None
-	min_accuracy: float = 0.0       # 0% base threshold (start accepting everything)
-	threshold_delta: float = 0.01     # 1% total increase over threshold_reference generations
-	threshold_reference: int = 1000   # Reference gens for threshold rate (0.001%/gen = 0.25% over 250 gens)
-	progressive_threshold: bool = True  # Enable progressive threshold within phase
-	# Fitness percentile filter: keep only offspring in top X% by fitness (None = disabled)
-	# Example: 0.75 keeps top 75%. Uses configured fitness_calculator_type.
+	min_accuracy: float = 0.0
+	threshold_delta: float = 0.01
+	threshold_reference: int = 1000
+	progressive_threshold: bool = True
+	# Fitness percentile filter (None = disabled)
 	fitness_percentile: Optional[float] = None
-	# Fitness calculator: how to combine CE and accuracy for unified ranking
-	# CE = pure CE ranking
+	# Fitness calculator: unified ranking for all selection/sorting
 	# HARMONIC_RANK = harmonic mean of CE+Acc ranks (default)
+	# CE = pure CE ranking
 	# NORMALIZED = normalized [0,1] weighted sum
 	# NORMALIZED_HARMONIC = normalized values with harmonic mean
 	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK
@@ -1029,6 +1024,29 @@ class GAConfig:
 	# Early stopping
 	patience: int = 5
 	check_interval: int = 10
+	min_improvement_pct: float = 0.1
+
+	def create_fitness_calculator(self) -> 'FitnessCalculator':
+		"""Create a FitnessCalculator from this config."""
+		return FitnessCalculatorFactory.create(
+			self.fitness_calculator_type,
+			weight_ce=self.fitness_weight_ce,
+			weight_acc=self.fitness_weight_acc,
+			min_accuracy_floor=self.min_accuracy_floor if self.min_accuracy_floor > 0 else None,
+		)
+
+
+@dataclass
+class GAConfig(OptimizationConfig):
+	"""Configuration for Genetic Algorithm."""
+	population_size: int = 50
+	generations: int = 50
+	crossover_rate: float = 0.7
+	tournament_size: int = 3
+	# Elitism: keep top N% by fitness score (unified ranking)
+	# With elitism_pct=0.1 and the 2x multiplier in optimize(), keeps ~20% of population
+	elitism_pct: float = 0.1
+	# GA-specific early stopping threshold (lower than TS because GA needs diversity)
 	min_improvement_pct: float = 0.05
 	# Fresh population: ignore initial_population and generate random genomes
 	fresh_population: bool = False
@@ -1037,31 +1055,14 @@ class GAConfig:
 
 
 @dataclass
-class TSConfig:
+class TSConfig(OptimizationConfig):
 	"""Configuration for Tabu Search optimization."""
 	iterations: int = 100
 	neighbors_per_iter: int = 20
 	tabu_size: int = 10
-	mutation_rate: float = 0.1
 	# Total neighbors cache for seeding next phase (top K by fitness)
 	total_neighbors_size: int = 50
-	# Threshold continuity
-	initial_threshold: Optional[float] = None
-	min_accuracy: float = 0.0
-	threshold_delta: float = 0.01
-	threshold_reference: int = 1000
-	progressive_threshold: bool = True
-	# Fitness percentile filter (None = disabled)
-	fitness_percentile: Optional[float] = None
-	# Fitness calculator: unified ranking for all selection/sorting
-	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK
-	fitness_weight_ce: float = 1.0
-	fitness_weight_acc: float = 1.0
-	# Accuracy floor: genomes below this get fitness = infinity (0.0 = disabled)
-	min_accuracy_floor: float = 0.0
-	# Early stopping
-	patience: int = 5
-	check_interval: int = 10
+	# TS-specific early stopping threshold (higher than GA because TS is more focused)
 	min_improvement_pct: float = 0.5
 
 
@@ -1179,13 +1180,8 @@ class GenericGAStrategy(ABC, Generic[T]):
 		self._ensure_rng()
 		cfg = self._config
 
-		# Create fitness calculator for unified ranking
-		fitness_calculator = FitnessCalculatorFactory.create(
-			cfg.fitness_calculator_type,
-			weight_ce=cfg.fitness_weight_ce,
-			weight_acc=cfg.fitness_weight_acc,
-			min_accuracy_floor=cfg.min_accuracy_floor if cfg.min_accuracy_floor > 0 else None,
-		)
+		# Create fitness calculator for unified ranking (from OptimizationConfig)
+		fitness_calculator = cfg.create_fitness_calculator()
 		self._log.info(f"[{self.name}] Fitness calculator: {fitness_calculator.name}")
 
 		# Threshold continuity: use initial_threshold from config if set (passed from previous phase)
@@ -1833,13 +1829,8 @@ class GenericTSStrategy(ABC, Generic[T]):
 		self._ensure_rng()
 		cfg = self._config
 
-		# Create fitness calculator for unified ranking
-		fitness_calculator = FitnessCalculatorFactory.create(
-			cfg.fitness_calculator_type,
-			weight_ce=cfg.fitness_weight_ce,
-			weight_acc=cfg.fitness_weight_acc,
-			min_accuracy_floor=cfg.min_accuracy_floor if cfg.min_accuracy_floor > 0 else None,
-		)
+		# Create fitness calculator for unified ranking (from OptimizationConfig)
+		fitness_calculator = cfg.create_fitness_calculator()
 		self._log.info(f"[{self.name}] Fitness calculator: {fitness_calculator.name}")
 
 		# Threshold continuity: use initial_threshold from config if set (passed from previous phase)

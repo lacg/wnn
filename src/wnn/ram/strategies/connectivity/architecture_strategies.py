@@ -26,7 +26,7 @@ from wnn.ram.strategies.connectivity.generic_strategies import (
 	OptimizerResult,
 	StopReason,
 )
-from wnn.ram.fitness import FitnessCalculatorFactory, FitnessCalculatorType
+from wnn.ram.fitness import FitnessCalculatorType
 from wnn.ram.architecture.genome_log import (
 	GenomeLogType,
 	format_genome_log,
@@ -867,13 +867,8 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 				resume_state = checkpoint_mgr.load(ClusterGenome)
 				self._log.info(f"[{self.name}] Resuming from checkpoint at generation {resume_state['current_iteration'] + 1}")
 
-		# Create fitness calculator for ranking
-		fitness_calculator = FitnessCalculatorFactory.create(
-			cfg.fitness_calculator_type,
-			weight_ce=cfg.fitness_weight_ce,
-			weight_acc=cfg.fitness_weight_acc,
-			min_accuracy_floor=cfg.min_accuracy_floor if cfg.min_accuracy_floor > 0 else None,
-		)
+		# Create fitness calculator for ranking (from OptimizationConfig)
+		fitness_calculator = cfg.create_fitness_calculator()
 		self._log.info(f"[{self.name}] Fitness calculator: {fitness_calculator.name}")
 
 		# Threshold continuity
@@ -1706,15 +1701,8 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				"(3) Flow is not creating new experiments instead of resuming."
 			)
 
-		# Always create fitness calculator for unified ranking approach
-		# For CE mode: fitness = CE, ranking by fitness = ranking by CE
-		# For weighted modes: fitness = combined score
-		fitness_calculator = FitnessCalculatorFactory.create(
-			cfg.fitness_calculator_type,
-			weight_ce=cfg.fitness_weight_ce,
-			weight_acc=cfg.fitness_weight_acc,
-			min_accuracy_floor=cfg.min_accuracy_floor if cfg.min_accuracy_floor > 0 else None,
-		)
+		# Create fitness calculator for ranking (from OptimizationConfig)
+		fitness_calculator = cfg.create_fitness_calculator()
 		self._log.info(f"[{self.name}] Fitness calculator: {fitness_calculator.name}")
 
 		# Threshold continuity
