@@ -220,9 +220,10 @@ def run_ga_phase(
 		elitism_pct=0.1,
 		patience=patience,
 		check_interval=check_interval,
-		# Threshold: 0.01%/gen → 1% every 100 gens
-		threshold_delta=0.01,
-		threshold_reference=100,
+		# Start at 3% accuracy, +0.01%/gen continuously
+		min_accuracy=0.03,
+		threshold_delta=ga_gens * 0.0001,
+		threshold_reference=ga_gens,
 		fitness_calculator_type=FitnessCalculatorType.HARMONIC_RANK,
 		fitness_weight_ce=1.0,
 		fitness_weight_acc=1.0,
@@ -272,9 +273,10 @@ def run_ts_phase(
 		mutation_rate=0.1,
 		patience=patience,
 		check_interval=check_interval,
-		# Threshold: 0.01%/iter → 1% every 100 iters
-		threshold_delta=0.01,
-		threshold_reference=100,
+		# Start at 3% accuracy, +0.01%/iter continuously
+		min_accuracy=0.03,
+		threshold_delta=ts_iters * 0.0001,
+		threshold_reference=ts_iters,
 		fitness_calculator_type=FitnessCalculatorType.HARMONIC_RANK,
 		fitness_weight_ce=1.0,
 		fitness_weight_acc=1.0,
