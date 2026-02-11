@@ -1150,6 +1150,51 @@ class GenericGAStrategy(ABC, Generic[T]):
 		return None
 
 	# =========================================================================
+	# Hooks for subclass customization
+	# =========================================================================
+
+	def _generate_offspring(
+		self,
+		population: list[tuple[T, Optional[float], Optional[float]]],
+		n_needed: int,
+		threshold: float,
+		generation: int,
+	) -> list[tuple[T, float, Optional[float]]]:
+		"""Generate and evaluate offspring for one generation.
+
+		Override in subclasses for Rust-accelerated offspring generation.
+		Default: Python tournament selection + crossover/mutation via _build_viable_population.
+		"""
+		cfg = self._config
+
+		def offspring_generator() -> T:
+			p1 = self._tournament_select(population)
+			p2 = self._tournament_select(population)
+			if self._rng.random() < cfg.crossover_rate:
+				child = self.crossover_genomes(p1, p2)
+			else:
+				child = self.clone_genome(p1)
+			return self.mutate_genome(child, cfg.mutation_rate)
+
+		return self._build_viable_population(
+			target_size=n_needed,
+			generator_fn=offspring_generator,
+			batch_fn=self._batch_evaluate_fn,
+			single_fn=self._evaluate_fn,
+			min_accuracy=threshold,
+		)
+
+	def _on_generation_start(self, generation: int, **ctx) -> None:
+		"""Hook called at start of each generation.
+
+		Override for Metal cleanup, checkpoint save, shutdown check, etc.
+		Raise StopIteration to stop the optimization loop gracefully.
+
+		ctx keys: population, best_genome, best_fitness, best_accuracy, threshold, early_stopper
+		"""
+		pass
+
+	# =========================================================================
 	# Core GA loop
 	# =========================================================================
 
@@ -1180,8 +1225,13 @@ class GenericGAStrategy(ABC, Generic[T]):
 		self._ensure_rng()
 		cfg = self._config
 
+		# Store for use by _generate_offspring() hook
+		self._batch_evaluate_fn = batch_evaluate_fn
+		self._evaluate_fn = evaluate_fn
+
 		# Create fitness calculator for unified ranking (from OptimizationConfig)
 		fitness_calculator = cfg.create_fitness_calculator()
+		self._fitness_calculator = fitness_calculator
 		self._log.info(f"[{self.name}] Fitness calculator: {fitness_calculator.name}")
 
 		# Threshold continuity: use initial_threshold from config if set (passed from previous phase)
@@ -1251,6 +1301,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 		best_fitness = fitness_values[best_idx]  # Report CE as fitness for compatibility
 		initial_fitness = fitness_values[0] if initial_genome else best_fitness
 		initial_accuracy = accuracy_values[best_idx]
+		best_accuracy_val = initial_accuracy
 
 		history = [(0, best_fitness)]
 
@@ -1290,8 +1341,31 @@ class GenericGAStrategy(ABC, Generic[T]):
 		# Track previous best for delta computation
 		prev_best_fitness = best_fitness
 
+		shutdown_requested = False
 		generation = 0
 		for generation in range(cfg.generations):
+			# Progressive threshold: gets stricter as generations progress
+			current_threshold = get_threshold(generation / cfg.threshold_reference)
+			# Only log if formatted values differ (avoid noise from tiny internal differences)
+			if prev_threshold is not None and f"{prev_threshold:.4%}" != f"{current_threshold:.4%}":
+				self._log.debug(f"[{self.name}] Threshold changed: {prev_threshold:.4%} → {current_threshold:.4%}")
+			prev_threshold = current_threshold
+
+			# Hook for subclass (Metal cleanup, checkpoint, shutdown check)
+			try:
+				self._on_generation_start(
+					generation,
+					population=population,
+					best_genome=best,
+					best_fitness=best_fitness,
+					best_accuracy=best_accuracy_val,
+					threshold=current_threshold,
+					early_stopper=early_stopper,
+				)
+			except StopIteration:
+				shutdown_requested = True
+				break
+
 			# Selection and reproduction
 			new_population: list[tuple[T, Optional[float], Optional[float]]] = []
 
@@ -1327,32 +1401,9 @@ class GenericGAStrategy(ABC, Generic[T]):
 				acc_str = f", Acc={elite_accuracy:.2%}" if elite_accuracy is not None else ""
 				self._log.debug(f"[Elite {i + 1:0{elite_width}d}/{total_elites}] CE={elite_fitness:.4f}{acc_str} (score={combined_scores[elite_idx]:.4f})")
 
-			# Generate viable offspring to fill the rest of the population
+			# Generate offspring via hook (overridable for Rust acceleration)
 			needed_offspring = cfg.population_size - len(new_population)
-
-			def offspring_generator() -> T:
-				# Tournament selection and crossover/mutation
-				p1 = self._tournament_select(population)
-				p2 = self._tournament_select(population)
-				if self._rng.random() < cfg.crossover_rate:
-					child = self.crossover_genomes(p1, p2)
-				else:
-					child = self.clone_genome(p1)
-				return self.mutate_genome(child, cfg.mutation_rate)
-
-			# Progressive threshold: gets stricter as generations progress
-			current_threshold = get_threshold(generation / cfg.threshold_reference)
-			# Only log if formatted values differ (avoid noise from tiny internal differences)
-			if prev_threshold is not None and f"{prev_threshold:.4%}" != f"{current_threshold:.4%}":
-				self._log.debug(f"[{self.name}] Threshold changed: {prev_threshold:.4%} → {current_threshold:.4%}")
-			prev_threshold = current_threshold
-			offspring = self._build_viable_population(
-				target_size=needed_offspring,
-				generator_fn=offspring_generator,
-				batch_fn=batch_evaluate_fn,
-				single_fn=evaluate_fn,
-				min_accuracy=current_threshold,
-			)
+			offspring = self._generate_offspring(population, needed_offspring, current_threshold, generation)
 
 			# Combine elites with viable offspring
 			population = new_population + offspring
@@ -1369,6 +1420,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 			if fitness_values[gen_best_idx] < best_fitness:
 				best = self.clone_genome(population[gen_best_idx][0])
 				best_fitness = fitness_values[gen_best_idx]
+				best_accuracy_val = accuracy_values[gen_best_idx]
 
 			history.append((generation + 1, best_fitness))
 
@@ -1566,6 +1618,14 @@ class GenericGAStrategy(ABC, Generic[T]):
 
 		improvement_pct = (initial_fitness - best_fitness) / initial_fitness * 100 if initial_fitness > 0 else 0
 
+		# Determine stop reason
+		if shutdown_requested:
+			stop_reason = StopReason.SHUTDOWN
+		elif early_stopper.patience_exhausted:
+			stop_reason = StopReason.CONVERGENCE
+		else:
+			stop_reason = None
+
 		return OptimizerResult(
 			initial_genome=initial_genome if initial_genome else population[0][0],
 			best_genome=best,
@@ -1575,8 +1635,8 @@ class GenericGAStrategy(ABC, Generic[T]):
 			iterations_run=generation + 1,
 			method_name=self.name,
 			history=history,
-			early_stopped=early_stopper.patience_exhausted,
-			stop_reason=StopReason.CONVERGENCE if early_stopper.patience_exhausted else None,
+			early_stopped=early_stopper.patience_exhausted or shutdown_requested,
+			stop_reason=stop_reason,
 			final_population=final_population,
 			initial_accuracy=initial_accuracy,
 			final_accuracy=final_accuracy,
@@ -1795,6 +1855,98 @@ class GenericTSStrategy(ABC, Generic[T]):
 		return None
 
 	# =========================================================================
+	# Hooks for subclass customization
+	# =========================================================================
+
+	def _generate_neighbors(
+		self,
+		best_ce_genome: T,
+		best_acc_genome: T,
+		n_neighbors: int,
+		threshold: float,
+		iteration: int,
+		tabu_ce: list,
+		tabu_acc: list,
+	) -> list[tuple[T, float, Optional[float]]]:
+		"""Generate and evaluate neighbors for one iteration.
+
+		Override in subclasses for Rust-accelerated neighbor generation.
+		Default: Python dual-path (N/2 from CE best + N/2 from Acc best).
+
+		Returns list of (genome, ce, accuracy) tuples for ALL evaluated neighbors.
+		"""
+		cfg = self._config
+		neighbors_per_path = n_neighbors // 2
+
+		# Path A: neighbors from best_ce
+		ce_candidates: list[tuple[T, Any]] = []
+		for _ in range(neighbors_per_path):
+			neighbor, move = self.mutate_genome(self.clone_genome(best_ce_genome), cfg.mutation_rate)
+			if not self.is_tabu_move(move, tabu_ce):
+				ce_candidates.append((neighbor, move))
+
+		# Path B: neighbors from best_acc
+		acc_candidates: list[tuple[T, Any]] = []
+		for _ in range(neighbors_per_path):
+			neighbor, move = self.mutate_genome(self.clone_genome(best_acc_genome), cfg.mutation_rate)
+			if not self.is_tabu_move(move, tabu_acc):
+				acc_candidates.append((neighbor, move))
+
+		# Combine and evaluate all candidates
+		all_candidates = ce_candidates + acc_candidates
+		if not all_candidates:
+			return []
+
+		if self._batch_evaluate_fn is not None:
+			to_eval = [n for n, _ in all_candidates]
+			results = self._batch_evaluate_fn(to_eval, min_accuracy=threshold)
+			fitness_values = [ce for ce, _ in results]
+			accuracy_values = [acc for _, acc in results]
+		else:
+			fitness_values = [self._evaluate_fn(n) for n, _ in all_candidates]
+			accuracy_values = [None] * len(all_candidates)
+
+		# Build evaluated list: (genome, move, ce, acc)
+		evaluated = [(n, m, f, a) for (n, m), f, a in zip(all_candidates, fitness_values, accuracy_values)]
+
+		# Filter by threshold
+		viable = [(n, m, f, a) for n, m, f, a in evaluated if a is None or a >= threshold]
+		if not viable:
+			viable = sorted(evaluated, key=lambda x: x[2])[:1]
+
+		# Update tabu lists and best trackers
+		# CE path: find best by CE among CE-path neighbors
+		ce_evaluated = evaluated[:len(ce_candidates)]
+		if ce_evaluated:
+			ce_best_idx = min(range(len(ce_evaluated)), key=lambda i: ce_evaluated[i][2])
+			_, m, _, _ = ce_evaluated[ce_best_idx]
+			if m is not None:
+				tabu_ce.append(m)
+
+		# Acc path: find best by Acc among Acc-path neighbors
+		acc_evaluated = evaluated[len(ce_candidates):]
+		if acc_evaluated:
+			acc_with_values = [(i, x[3]) for i, x in enumerate(acc_evaluated) if x[3] is not None]
+			if acc_with_values:
+				acc_best_idx = max(acc_with_values, key=lambda x: x[1])[0]
+				_, m, _, _ = acc_evaluated[acc_best_idx]
+				if m is not None:
+					tabu_acc.append(m)
+
+		# Return viable neighbors as 3-tuples (genome, ce, accuracy)
+		return [(n, f, a) for n, _, f, a in viable]
+
+	def _on_iteration_start(self, iteration: int, **ctx) -> None:
+		"""Hook called at start of each iteration.
+
+		Override for Metal cleanup, shutdown check, etc.
+		Raise StopIteration to stop the optimization loop gracefully.
+
+		ctx keys: best_ce_genome, best_acc_genome, best_fitness, best_accuracy, threshold
+		"""
+		pass
+
+	# =========================================================================
 	# Core TS loop
 	# =========================================================================
 
@@ -1829,8 +1981,13 @@ class GenericTSStrategy(ABC, Generic[T]):
 		self._ensure_rng()
 		cfg = self._config
 
+		# Store for use by _generate_neighbors() hook
+		self._batch_evaluate_fn = batch_evaluate_fn
+		self._evaluate_fn = evaluate_fn
+
 		# Create fitness calculator for unified ranking (from OptimizationConfig)
 		fitness_calculator = cfg.create_fitness_calculator()
+		self._fitness_calculator = fitness_calculator
 		self._log.info(f"[{self.name}] Fitness calculator: {fitness_calculator.name}")
 
 		# Threshold continuity: use initial_threshold from config if set (passed from previous phase)
@@ -1952,6 +2109,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 		# Track previous best for delta computation
 		prev_best_fitness = best_fitness
 
+		shutdown_requested = False
 		iteration = 0
 		for iteration in range(cfg.iterations):
 			# Progressive threshold
@@ -1961,74 +2119,51 @@ class GenericTSStrategy(ABC, Generic[T]):
 				self._log.debug(f"[{self.name}] Threshold changed: {prev_threshold:.4%} → {current_threshold:.4%}")
 			prev_threshold = current_threshold
 
-			# === Path A: Generate neighbors from best_ce ===
-			ce_candidates: list[tuple[T, Any]] = []
-			for _ in range(neighbors_per_path):
-				neighbor, move = self.mutate_genome(self.clone_genome(best_ce_genome), cfg.mutation_rate)
-				if not self.is_tabu_move(move, list(tabu_list_ce)):
-					ce_candidates.append((neighbor, move))
+			# Hook for subclass (Metal cleanup, shutdown check)
+			try:
+				self._on_iteration_start(
+					iteration,
+					best_ce_genome=best_ce_genome,
+					best_acc_genome=best_acc_genome,
+					best_fitness=best_fitness,
+					best_accuracy=best_accuracy,
+					threshold=current_threshold,
+				)
+			except StopIteration:
+				shutdown_requested = True
+				break
 
-			# === Path B: Generate neighbors from best_acc ===
-			acc_candidates: list[tuple[T, Any]] = []
-			for _ in range(neighbors_per_path):
-				neighbor, move = self.mutate_genome(self.clone_genome(best_acc_genome), cfg.mutation_rate)
-				if not self.is_tabu_move(move, list(tabu_list_acc)):
-					acc_candidates.append((neighbor, move))
+			# Generate neighbors via hook (overridable for Rust acceleration)
+			# Pass actual deques so _generate_neighbors can update tabu lists
+			viable = self._generate_neighbors(
+				best_ce_genome=best_ce_genome,
+				best_acc_genome=best_acc_genome,
+				n_neighbors=cfg.neighbors_per_iter,
+				threshold=current_threshold,
+				iteration=iteration,
+				tabu_ce=tabu_list_ce,
+				tabu_acc=tabu_list_acc,
+			)
 
-			# Combine and evaluate all candidates
-			all_candidates = ce_candidates + acc_candidates
-			if not all_candidates:
+			if not viable:
 				continue
 
-			if batch_evaluate_fn is not None:
-				to_eval = [n for n, _ in all_candidates]
-				results = batch_evaluate_fn(to_eval, min_accuracy=current_threshold)
-				fitness_values = [ce for ce, _ in results]
-				accuracy_values = [acc for _, acc in results]
-			else:
-				fitness_values = [evaluate_fn(n) for n, _ in all_candidates]
-				accuracy_values = [None] * len(all_candidates)
-
-			# Build evaluated neighbors list
-			evaluated = [(n, m, f, a) for (n, m), f, a in zip(all_candidates, fitness_values, accuracy_values)]
-
-			# Filter by threshold
-			viable = [(n, m, f, a) for n, m, f, a in evaluated if a is None or a >= current_threshold]
-			if not viable:
-				self._log.warning(f"[{self.name}] All neighbors filtered, keeping best by CE")
-				viable = sorted(evaluated, key=lambda x: x[2])[:1]
-
 			# Add all viable to the total neighbors cache
-			for n, _, f, a in viable:
+			for n, f, a in viable:
 				all_neighbors.append((self.clone_genome(n), f, a))
 
-			# === Update best_ce: find best by CE among CE-path neighbors ===
-			ce_evaluated = evaluated[:len(ce_candidates)]
-			if ce_evaluated:
-				ce_best_idx = min(range(len(ce_evaluated)), key=lambda i: ce_evaluated[i][2])
-				n, m, f, a = ce_evaluated[ce_best_idx]
+			# Update best_ce and best_acc from viable neighbors
+			for n, f, a in viable:
 				if f < best_ce_fitness:
 					best_ce_genome = self.clone_genome(n)
 					best_ce_fitness = f
 					best_ce_accuracy = a
 					ce_improved += 1
-				if m is not None:
-					tabu_list_ce.append(m)
-
-			# === Update best_acc: find best by Acc among Acc-path neighbors ===
-			acc_evaluated = evaluated[len(ce_candidates):]
-			if acc_evaluated:
-				acc_with_values = [(i, x[3]) for i, x in enumerate(acc_evaluated) if x[3] is not None]
-				if acc_with_values:
-					acc_best_idx = max(acc_with_values, key=lambda x: x[1])[0]
-					n, m, f, a = acc_evaluated[acc_best_idx]
-					if best_acc_accuracy is None or (a is not None and a > best_acc_accuracy):
-						best_acc_genome = self.clone_genome(n)
-						best_acc_fitness = f
-						best_acc_accuracy = a
-						acc_improved += 1
-					if m is not None:
-						tabu_list_acc.append(m)
+				if a is not None and (best_acc_accuracy is None or a > best_acc_accuracy):
+					best_acc_genome = self.clone_genome(n)
+					best_acc_fitness = f
+					best_acc_accuracy = a
+					acc_improved += 1
 
 			# Update global best (by CE)
 			prev_best = best_fitness
@@ -2189,6 +2324,14 @@ class GenericTSStrategy(ABC, Generic[T]):
 
 		improvement_pct = (start_fitness - best_fitness) / start_fitness * 100 if start_fitness > 0 else 0
 
+		# Determine stop reason
+		if shutdown_requested:
+			stop_reason = StopReason.SHUTDOWN
+		elif early_stopper.patience_exhausted:
+			stop_reason = StopReason.CONVERGENCE
+		else:
+			stop_reason = None
+
 		return OptimizerResult(
 			initial_genome=initial_genome,
 			best_genome=best,
@@ -2198,8 +2341,8 @@ class GenericTSStrategy(ABC, Generic[T]):
 			iterations_run=iteration + 1,
 			method_name=self.name,
 			history=history,
-			early_stopped=early_stopper.patience_exhausted,
-			stop_reason=StopReason.CONVERGENCE if early_stopper.patience_exhausted else None,
+			early_stopped=early_stopper.patience_exhausted or shutdown_requested,
+			stop_reason=stop_reason,
 			final_population=final_population,
 			initial_accuracy=None,
 			final_accuracy=best_accuracy,
