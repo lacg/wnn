@@ -30,6 +30,7 @@ def load_wikitext2_tokens(tokenizer_name="gpt2"):
 		sys.exit(1)
 
 	tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+	tokenizer.model_max_length = int(1e12)  # We only use BPE encoding, not the model
 	dataset = load_dataset("wikitext", "wikitext-2-raw-v1")
 
 	train_text = "\n".join(dataset["train"]["text"])
