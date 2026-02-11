@@ -51,6 +51,8 @@ class FlowConfig:
 	# Shared optimization params
 	patience: int = 10
 	check_interval: int = 10
+	threshold_delta: float = 0.01
+	threshold_reference: int = 1000
 	fitness_percentile: Optional[float] = None
 
 	# Fitness calculator settings

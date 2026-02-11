@@ -142,6 +142,7 @@ impl TokenCache {
         seed: u64,
         encoding_table: Option<Vec<u64>>,
         encoding_bits: Option<usize>,
+        num_eval_parts: usize,
     ) -> Self {
         // Compute bits per token
         // Use encoding_bits if semantic encoding is provided, otherwise compute from vocab_size
@@ -212,8 +213,24 @@ impl TokenCache {
             enc_table_ref,
         );
 
-        // Eval typically uses 1 subset (full eval)
-        let eval_subsets = vec![full_eval.clone()];
+        // Split eval data into subsets (or use full eval if num_eval_parts == 1)
+        let eval_subsets = if num_eval_parts <= 1 {
+            vec![full_eval.clone()]
+        } else {
+            Self::create_subsets(
+                &eval_tokens,
+                &cluster_map,
+                &top_k,
+                context_size,
+                bits_per_token,
+                total_input_bits,
+                num_negatives,
+                num_eval_parts,
+                seed + 50,
+                enc_table_ref,
+            )
+        };
+        let actual_eval_parts = eval_subsets.len();
 
         // Test typically uses 1 subset (for now, empty)
         let test_subsets = vec![];
@@ -231,7 +248,7 @@ impl TokenCache {
             eval_subsets,
             test_subsets,
             train_rotator: SubsetRotator::new(num_parts, seed + 100),
-            eval_rotator: SubsetRotator::new(1, seed + 200), // Eval uses full
+            eval_rotator: SubsetRotator::new(actual_eval_parts, seed + 200),
             full_train,
             full_eval,
         }

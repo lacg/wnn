@@ -278,8 +278,11 @@ def flow_run(
 	),
 	context: int = typer.Option(4, "--context", help="Context window size"),
 	cluster_type: str = typer.Option("tiered", "--cluster-type", help="Cluster type: tiered or bitwise"),
-	bitwise_neurons: int = typer.Option(1000, "--bitwise-neurons", help="Neurons per cluster (bitwise mode)"),
-	bitwise_bits: int = typer.Option(10, "--bitwise-bits", help="Bits per neuron (bitwise mode)"),
+	bitwise_neurons: int = typer.Option(200, "--bitwise-neurons", help="Neurons per cluster (bitwise mode)"),
+	bitwise_bits: int = typer.Option(16, "--bitwise-bits", help="Bits per neuron (bitwise mode)"),
+	check_interval: int = typer.Option(10, "--check-interval", help="Patience check every N gens/iters"),
+	threshold_delta: float = typer.Option(0.01, "--threshold-delta", help="Progressive threshold delta"),
+	threshold_reference: int = typer.Option(100, "--threshold-reference", help="Threshold reference window"),
 	url: str = typer.Option("https://localhost:3000", "--url", help="Dashboard URL"),
 ):
 	"""
@@ -436,6 +439,9 @@ def flow_run(
 				cluster_type=effective_cluster_type,
 				bitwise_neurons_per_cluster=bitwise_neurons,
 				bitwise_bits_per_neuron=bitwise_bits,
+				check_interval=check_interval,
+				threshold_delta=threshold_delta,
+				threshold_reference=threshold_reference,
 			)
 			exp_configs.append(exp_config)
 

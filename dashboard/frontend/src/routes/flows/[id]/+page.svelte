@@ -469,6 +469,7 @@
   // Duplicate flow
   async function duplicateFlow() {
     if (!flow) return;
+    const currentFlow = flow;
     duplicating = true;
 
     try {
@@ -483,22 +484,22 @@
           optimize_neurons: exp.phase_type?.includes('neurons') ?? false,
           optimize_connections: exp.phase_type?.includes('connections') ?? false,
           params: {
-            generations: isGa ? (flow.config.params.ga_generations ?? 250) : undefined,
-            iterations: !isGa ? (flow.config.params.ts_iterations ?? 250) : undefined,
-            population_size: flow.config.params.population_size ?? 50,
-            neighbors_per_iter: flow.config.params.neighbors_per_iter ?? 50,
+            generations: isGa ? (currentFlow.config.params.ga_generations ?? 250) : undefined,
+            iterations: !isGa ? (currentFlow.config.params.ts_iterations ?? 250) : undefined,
+            population_size: currentFlow.config.params.population_size ?? 50,
+            neighbors_per_iter: currentFlow.config.params.neighbors_per_iter ?? 50,
           }
         };
       });
 
-      const newName = `${flow.name} (copy)`;
+      const newName = `${currentFlow.name} (copy)`;
       const response = await fetch('/api/flows', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: newName,
-          description: flow.description,
-          config: flow.config,  // Just params, no experiments
+          description: currentFlow.description,
+          config: currentFlow.config,  // Just params, no experiments
           experiments: experimentSpecs  // Experiments passed separately
         })
       });

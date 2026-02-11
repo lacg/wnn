@@ -194,6 +194,14 @@ pub struct BitwiseSubset {
     pub num_examples: usize,
 }
 
+/// Pre-encoded eval subset for bitwise CE computation.
+/// Unlike BitwiseSubset, stores u32 token IDs (needed for CE) instead of target_bits.
+pub struct BitwiseEvalSubset {
+    pub input_bits: Vec<bool>,  // [N * total_input_bits]
+    pub targets: Vec<u32>,      // [N] token IDs
+    pub num_examples: usize,
+}
+
 /// Persistent token cache for bitwise genome evaluation.
 ///
 /// Created once with all tokens, pre-encodes into binary contexts + target bits.
@@ -213,13 +221,15 @@ pub struct BitwiseTokenCache {
     /// Full training data (for evaluate_genomes_full)
     pub full_train: BitwiseSubset,
 
-    /// Eval data
-    pub eval_input_bits: Vec<bool>, // [num_eval * total_input_bits]
-    pub eval_targets: Vec<u32>,     // [num_eval] token IDs
-    pub num_eval: usize,
+    /// Eval data subsets (for rotation during GA/TS)
+    pub eval_subsets: Vec<BitwiseEvalSubset>,
+    /// Full eval data (for evaluate_genomes_full — typically validation split)
+    pub full_eval: BitwiseEvalSubset,
 
     pub num_parts: usize,
+    pub num_eval_parts: usize,
     current_train_idx: AtomicUsize,
+    current_eval_idx: AtomicUsize,
 }
 
 fn bits_needed(n: usize) -> usize {
@@ -234,6 +244,7 @@ impl BitwiseTokenCache {
         vocab_size: usize,
         context_size: usize,
         num_parts: usize,
+        num_eval_parts: usize,
         _pad_token_id: u32,
     ) -> Self {
         let bits_per_token = bits_needed(vocab_size);
@@ -262,21 +273,33 @@ impl BitwiseTokenCache {
             &train_tokens, context_size, bits_per_token, total_input_bits, num_bits, num_parts,
         );
 
-        // Encode eval data
-        let (eval_input, eval_targets, _, num_eval) =
+        // Encode full eval data
+        let (full_eval_input, full_eval_targets, _, full_eval_n) =
             Self::encode_sequence(&eval_tokens, context_size, bits_per_token, total_input_bits, num_bits);
+        let full_eval = BitwiseEvalSubset {
+            input_bits: full_eval_input,
+            targets: full_eval_targets,
+            num_examples: full_eval_n,
+        };
 
+        // Split eval data into subsets
+        let eval_subsets = Self::split_and_encode_eval(
+            &eval_tokens, context_size, bits_per_token, total_input_bits, num_bits, num_eval_parts,
+        );
+
+        let eval_subset_n: usize = eval_subsets.iter().map(|s| s.num_examples).sum();
         eprintln!(
             "[BitwiseCache] vocab={vocab_size}, context={context_size}, bits={num_bits}, \
-             train={full_n} examples ({num_parts} subsets), eval={num_eval} examples"
+             train={full_n} examples ({num_parts} subsets), eval={full_eval_n} examples ({num_eval_parts} subsets, {eval_subset_n} total)"
         );
 
         Self {
             vocab_size, context_size, bits_per_token, total_input_bits, num_bits,
             token_bits, train_subsets, full_train,
-            eval_input_bits: eval_input, eval_targets, num_eval,
-            num_parts,
+            eval_subsets, full_eval,
+            num_parts, num_eval_parts,
             current_train_idx: AtomicUsize::new(0),
+            current_eval_idx: AtomicUsize::new(0),
         }
     }
 
@@ -347,14 +370,44 @@ impl BitwiseTokenCache {
             .collect()
     }
 
+    /// Split eval token sequence into num_parts subsets and encode each.
+    /// Returns BitwiseEvalSubset (with u32 targets for CE computation).
+    fn split_and_encode_eval(
+        tokens: &[u32],
+        context_size: usize,
+        bits_per_token: usize,
+        total_input_bits: usize,
+        num_bits: usize,
+        num_parts: usize,
+    ) -> Vec<BitwiseEvalSubset> {
+        let n = tokens.len();
+        let part_size = n / num_parts;
+        (0..num_parts)
+            .map(|i| {
+                let start = i * part_size;
+                let end = if i < num_parts - 1 { start + part_size } else { n };
+                let part = &tokens[start..end];
+                let (input_bits, targets, _, num_ex) =
+                    Self::encode_sequence(part, context_size, bits_per_token, total_input_bits, num_bits);
+                BitwiseEvalSubset { input_bits, targets, num_examples: num_ex }
+            })
+            .collect()
+    }
+
     /// Get next training subset index (advances rotator).
     pub fn next_train_idx(&self) -> usize {
         self.current_train_idx.fetch_add(1, Ordering::Relaxed) % self.num_parts
     }
 
-    /// Reset subset rotation.
+    /// Get next eval subset index (advances rotator).
+    pub fn next_eval_idx(&self) -> usize {
+        self.current_eval_idx.fetch_add(1, Ordering::Relaxed) % self.num_eval_parts
+    }
+
+    /// Reset subset rotation (both train and eval).
     pub fn reset(&self) {
         self.current_train_idx.store(0, Ordering::Relaxed);
+        self.current_eval_idx.store(0, Ordering::Relaxed);
     }
 }
 
@@ -673,6 +726,7 @@ fn train_and_forward_into(
     neurons_per_cluster: &[usize],
     layout: &GenomeLayout,
     train_subset: &BitwiseSubset,
+    eval_subset: &BitwiseEvalSubset,
     memory: &mut [i64],
     empty_word: i64,
     out_probs: &mut [f32],
@@ -778,11 +832,11 @@ fn train_and_forward_into(
     }
 
     // ===== FORWARD PASS on eval data =====
-    let num_eval = cache.num_eval;
+    let num_eval = eval_subset.num_examples;
     let empty_value = ramlm::get_empty_value();
 
     for ex in 0..num_eval {
-        let input_bits = &cache.eval_input_bits[ex * total_input_bits..(ex + 1) * total_input_bits];
+        let input_bits = &eval_subset.input_bits[ex * total_input_bits..(ex + 1) * total_input_bits];
         let ex_probs = &mut out_probs[ex * num_clusters..(ex + 1) * num_clusters];
 
         for cluster in 0..num_clusters {
@@ -845,7 +899,7 @@ fn train_and_forward_into(
     }
 }
 
-/// Evaluate multiple genomes with per-cluster heterogeneous configs (subset training).
+/// Evaluate multiple genomes with per-cluster heterogeneous configs (subset training + eval).
 ///
 /// bits_per_cluster_flat and neurons_per_cluster_flat are [num_genomes * num_clusters].
 /// connections_flat is variable-length: total connections across all genomes.
@@ -856,19 +910,21 @@ pub fn evaluate_genomes(
     connections_flat: &[i64],
     num_genomes: usize,
     train_subset_idx: usize,
+    eval_subset_idx: usize,
     memory_mode: u8,
     neuron_sample_rate: f32,
     rng_seed: u64,
 ) -> Vec<(f64, f64)> {
     let train_subset = &cache.train_subsets[train_subset_idx % cache.num_parts];
+    let eval_subset = &cache.eval_subsets[eval_subset_idx % cache.num_eval_parts];
     evaluate_genomes_with_subset(
         cache, bits_per_cluster_flat, neurons_per_cluster_flat,
-        connections_flat, num_genomes, train_subset,
+        connections_flat, num_genomes, train_subset, eval_subset,
         memory_mode, neuron_sample_rate, rng_seed,
     )
 }
 
-/// Evaluate multiple genomes with per-cluster heterogeneous configs (full training).
+/// Evaluate multiple genomes with per-cluster heterogeneous configs (full training + full eval).
 pub fn evaluate_genomes_full(
     cache: &BitwiseTokenCache,
     bits_per_cluster_flat: &[usize],
@@ -881,7 +937,7 @@ pub fn evaluate_genomes_full(
 ) -> Vec<(f64, f64)> {
     evaluate_genomes_with_subset(
         cache, bits_per_cluster_flat, neurons_per_cluster_flat,
-        connections_flat, num_genomes, &cache.full_train,
+        connections_flat, num_genomes, &cache.full_train, &cache.full_eval,
         memory_mode, neuron_sample_rate, rng_seed,
     )
 }
@@ -897,12 +953,14 @@ fn evaluate_genomes_with_subset(
     connections_flat: &[i64],
     num_genomes: usize,
     train_subset: &BitwiseSubset,
+    eval_subset: &BitwiseEvalSubset,
     memory_mode: u8,
     neuron_sample_rate: f32,
     rng_seed: u64,
 ) -> Vec<(f64, f64)> {
     let num_clusters = cache.num_bits;
-    let scores_per_genome = cache.num_eval * num_clusters;
+    let num_eval = eval_subset.num_examples;
+    let scores_per_genome = num_eval * num_clusters;
 
     // Compute empty_word based on memory mode
     let empty_word: i64 = match memory_mode {
@@ -952,7 +1010,7 @@ fn evaluate_genomes_with_subset(
             let genome_rng_seed = rng_seed.wrapping_add(g as u64 * 1000007);
             train_and_forward_into(
                 cache, connections, bits_slice, neurons_slice, layout,
-                train_subset, &mut memory, empty_word, score_slice,
+                train_subset, eval_subset, &mut memory, empty_word, score_slice,
                 memory_mode, neuron_sample_rate, genome_rng_seed,
             );
         });
@@ -962,9 +1020,9 @@ fn evaluate_genomes_with_subset(
         match metal.compute_ce_batch(
             &all_scores,
             &cache.token_bits,
-            &cache.eval_targets,
+            &eval_subset.targets,
             num_genomes,
-            cache.num_eval,
+            num_eval,
             cache.num_bits,
             cache.vocab_size,
         ) {
@@ -982,8 +1040,8 @@ fn evaluate_genomes_with_subset(
             compute_ce_cpu(
                 scores,
                 &cache.token_bits,
-                &cache.eval_targets,
-                cache.num_eval,
+                &eval_subset.targets,
+                num_eval,
                 cache.num_bits,
                 cache.vocab_size,
             )

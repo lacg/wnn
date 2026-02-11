@@ -36,12 +36,13 @@ from pathlib import Path
 # Data loading
 # ---------------------------------------------------------------------------
 
-def load_wikitext2_tokens(tokenizer_name="gpt2", train_tokens_limit=200_000, eval_tokens_limit=50_000):
-	"""Load WikiText-2 tokens using GPT-2 tokenizer, with configurable limits.
+def load_wikitext2_tokens(tokenizer_name="gpt2"):
+	"""Load all 3 WikiText-2 splits using GPT-2 tokenizer.
 
-	Default limits match run_coarse_fine_search.py for comparable speed:
-	- train: 200K tokens (split into 3 subsets of ~67K for rotation)
-	- eval: 50K tokens
+	Returns: (train_tokens, test_tokens, validation_tokens, vocab_size)
+	- train: dataset["train"] → ~2.4M tokens (used for training during GA/TS)
+	- test: dataset["test"] → ~288K tokens (used for fitness scoring during GA/TS)
+	- validation: dataset["validation"] → ~251K tokens (held out for full eval only)
 	"""
 	try:
 		from datasets import load_dataset
@@ -55,21 +56,19 @@ def load_wikitext2_tokens(tokenizer_name="gpt2", train_tokens_limit=200_000, eva
 	dataset = load_dataset("wikitext", "wikitext-2-raw-v1")
 
 	train_text = "\n".join(dataset["train"]["text"])
-	all_train_tokens = tokenizer.encode(train_text)
+	train_tokens = tokenizer.encode(train_text)
 
-	# Use eval split (not test) for optimization; test is held out for final eval
-	eval_text = "\n".join(dataset["validation"]["text"])
-	all_eval_tokens = tokenizer.encode(eval_text)
+	test_text = "\n".join(dataset["test"]["text"])
+	test_tokens = tokenizer.encode(test_text)
 
-	# Apply limits
-	train_tokens = all_train_tokens[:train_tokens_limit]
-	eval_tokens = all_eval_tokens[:eval_tokens_limit]
+	validation_text = "\n".join(dataset["validation"]["text"])
+	validation_tokens = tokenizer.encode(validation_text)
 
 	vocab_size = tokenizer.vocab_size
-	print(f"Loaded WikiText-2: {len(train_tokens):,}/{len(all_train_tokens):,} train, "
-		  f"{len(eval_tokens):,}/{len(all_eval_tokens):,} eval tokens, vocab={vocab_size}")
+	print(f"Loaded WikiText-2: {len(train_tokens):,} train, "
+		  f"{len(test_tokens):,} test, {len(validation_tokens):,} validation, vocab={vocab_size}")
 
-	return train_tokens, eval_tokens, vocab_size
+	return train_tokens, test_tokens, validation_tokens, vocab_size
 
 
 # ---------------------------------------------------------------------------
@@ -151,21 +150,43 @@ def phase1_grid_search(train_tokens, test_tokens, vocab_size, context_size, rate
 # Helper: Create evaluator and configs
 # ---------------------------------------------------------------------------
 
-def create_evaluator(train_tokens, test_tokens, vocab_size, context_size, rate,
-					 default_neurons, default_bits):
-	"""Create a BitwiseEvaluator with default config."""
+def create_evaluators(train_tokens, test_tokens, validation_tokens, vocab_size,
+					  context_size, rate, default_neurons, default_bits,
+					  num_train_parts=36, num_eval_parts=6):
+	"""Create two BitwiseEvaluators: one for optimization, one for full validation.
+
+	opt_evaluator: trains on train_tokens (rotated ~67K), scores on test_tokens (rotated ~50K)
+	full_evaluator: trains on full train_tokens, evaluates on full validation_tokens
+	"""
 	from wnn.ram.architecture.bitwise_evaluator import BitwiseEvaluator
-	return BitwiseEvaluator(
+
+	opt_evaluator = BitwiseEvaluator(
 		train_tokens=train_tokens,
 		eval_tokens=test_tokens,
 		vocab_size=vocab_size,
 		context_size=context_size,
 		neurons_per_cluster=default_neurons,
 		bits_per_neuron=default_bits,
-		num_parts=3,
+		num_parts=num_train_parts,
+		num_eval_parts=num_eval_parts,
 		memory_mode=2,  # QUAD_WEIGHTED
 		neuron_sample_rate=rate,
 	)
+
+	full_evaluator = BitwiseEvaluator(
+		train_tokens=train_tokens,
+		eval_tokens=validation_tokens,
+		vocab_size=vocab_size,
+		context_size=context_size,
+		neurons_per_cluster=default_neurons,
+		bits_per_neuron=default_bits,
+		num_parts=1,
+		num_eval_parts=1,
+		memory_mode=2,  # QUAD_WEIGHTED
+		neuron_sample_rate=rate,
+	)
+
+	return opt_evaluator, full_evaluator
 
 
 def create_seed_genome(num_clusters, bits, neurons, total_input_bits):
@@ -182,10 +203,12 @@ def create_seed_genome(num_clusters, bits, neurons, total_input_bits):
 def run_ga_phase(
 	evaluator, arch_config, ga_gens, population, patience,
 	seed_genome=None, phase_name="GA", logger=print, check_interval=10,
+	initial_population=None,
 ):
 	"""Run a GA optimization phase."""
 	from wnn.ram.strategies.connectivity.architecture_strategies import ArchitectureGAStrategy
 	from wnn.ram.strategies.connectivity.generic_strategies import GAConfig
+	from wnn.ram.fitness import FitnessCalculatorType
 
 	ga_config = GAConfig(
 		population_size=population,
@@ -199,6 +222,9 @@ def run_ga_phase(
 		# Threshold: 0.01%/gen → 1% every 100 gens
 		threshold_delta=0.01,
 		threshold_reference=100,
+		fitness_calculator_type=FitnessCalculatorType.HARMONIC_RANK,
+		fitness_weight_ce=1.0,
+		fitness_weight_acc=1.0,
 	)
 
 	strategy = ArchitectureGAStrategy(
@@ -209,11 +235,14 @@ def run_ga_phase(
 	)
 
 	t0 = time.time()
-	result = strategy.optimize(
+	optimize_kwargs = dict(
 		evaluate_fn=lambda g: 999.0,
 		initial_genome=seed_genome,
 		batch_evaluate_fn=lambda genomes, **kw: evaluator.evaluate_batch(genomes, **kw),
 	)
+	if initial_population is not None:
+		optimize_kwargs["initial_population"] = initial_population
+	result = strategy.optimize(**optimize_kwargs)
 	elapsed = time.time() - t0
 
 	logger(f"\n  {phase_name} Result: CE={result.final_fitness:.4f}")
@@ -233,6 +262,7 @@ def run_ts_phase(
 	"""Run a TS refinement phase."""
 	from wnn.ram.strategies.connectivity.architecture_strategies import ArchitectureTSStrategy
 	from wnn.ram.strategies.connectivity.generic_strategies import TSConfig
+	from wnn.ram.fitness import FitnessCalculatorType
 
 	ts_config = TSConfig(
 		iterations=ts_iters,
@@ -244,6 +274,9 @@ def run_ts_phase(
 		# Threshold: 0.01%/iter → 1% every 100 iters
 		threshold_delta=0.01,
 		threshold_reference=100,
+		fitness_calculator_type=FitnessCalculatorType.HARMONIC_RANK,
+		fitness_weight_ce=1.0,
+		fitness_weight_acc=1.0,
 	)
 
 	strategy = ArchitectureTSStrategy(
@@ -284,55 +317,86 @@ def harmonic_weighted(ce_rank, acc_rank, w_ce=1.0, w_acc=1.0):
 	return (w_ce + w_acc) / (w_ce / ce_rank + w_acc / acc_rank)
 
 
-def evaluate_phase_top_k(evaluator, result, phase_name, k=10):
-	"""Evaluate a phase's population on full validation, return top-K metrics.
+def evaluate_phase_top_k(full_evaluator, result, phase_name):
+	"""Full-eval 1-3 representative genomes from a phase on validation data.
 
-	Returns dict with keys: best_ce, best_acc, best_fitness, top_k_mean.
-	Each has (ce, acc, ppl).
+	Pre-filters the population by fitness rank (using optimization metrics from result),
+	then full-evals only best CE, best Acc (if different), best Fitness (if different).
+	This avoids expensive full evaluation on the entire population.
+
+	Args:
+		full_evaluator: BitwiseEvaluator configured with validation data
+		result: OptimizationResult with final_population and metrics
+		phase_name: Display name for the phase
+
+	Returns dict with keys: best_ce, best_acc, best_fitness.
 	"""
 	pop = result.final_population if result.final_population else []
 	if not pop:
-		# Single genome fallback
 		pop = [result.best_genome]
 
-	# Evaluate all on full train+eval
-	full_evals = []
-	for genome in pop:
-		ce, acc = evaluator.evaluate_single_full(genome)
-		full_evals.append((genome, ce, acc))
+	# Use optimization-time metrics (from the result) to rank population
+	# result.population_metrics is list of (genome, ce, acc) if available
+	pop_metrics = getattr(result, "population_metrics", None)
+	if pop_metrics and len(pop_metrics) == len(pop):
+		# Pre-rank by optimization metrics to select candidates
+		by_ce = sorted(range(len(pop)), key=lambda i: pop_metrics[i][0])
+		by_acc = sorted(range(len(pop)), key=lambda i: -pop_metrics[i][1])
 
-	# Sort by CE (ascending), Acc (descending)
-	by_ce = sorted(full_evals, key=lambda x: x[1])
-	by_acc = sorted(full_evals, key=lambda x: -x[2])
+		# Compute fitness ranks
+		n = len(pop)
+		ce_ranks = {i: rank + 1 for rank, i in enumerate(by_ce)}
+		acc_ranks = {i: rank + 1 for rank, i in enumerate(by_acc)}
+		by_fitness = sorted(
+			range(n),
+			key=lambda i: harmonic_weighted(ce_ranks[i], acc_ranks[i]),
+		)
 
-	# Harmonic weighted fitness ranking
-	n = len(full_evals)
-	ce_ranks = {id(g): i + 1 for i, (g, _, _) in enumerate(by_ce)}
-	acc_ranks = {id(g): i + 1 for i, (g, _, _) in enumerate(by_acc)}
-	by_fitness = sorted(
-		full_evals,
-		key=lambda x: harmonic_weighted(ce_ranks[id(x[0])], acc_ranks[id(x[0])]),
-	)
+		best_ce_idx = by_ce[0]
+		best_acc_idx = by_acc[0]
+		best_fit_idx = by_fitness[0]
+	else:
+		# No optimization metrics — just use best_genome for all three
+		best_ce_idx = 0
+		best_acc_idx = 0
+		best_fit_idx = 0
 
-	# Top-K mean (by CE)
-	top_k = by_ce[:k]
-	top_k_ce = sum(e[1] for e in top_k) / len(top_k)
-	top_k_acc = sum(e[2] for e in top_k) / len(top_k)
+	# Collect unique genomes to full-eval (1-3 max)
+	candidates = {}  # idx → genome
+	candidates[best_ce_idx] = pop[best_ce_idx]
+	if best_acc_idx != best_ce_idx:
+		candidates[best_acc_idx] = pop[best_acc_idx]
+	if best_fit_idx not in candidates:
+		candidates[best_fit_idx] = pop[best_fit_idx]
+
+	# Full evaluation on validation data (1-3 genomes)
+	genome_list = list(candidates.values())
+	idx_list = list(candidates.keys())
+	print(f"  Full-eval {len(genome_list)} genome(s) on validation...")
+	full_results = full_evaluator.evaluate_batch_full(genome_list)
+
+	# Map results back
+	eval_map = {}
+	for i, idx in enumerate(idx_list):
+		eval_map[idx] = full_results[i]
+
+	def make_entry(idx):
+		ce, acc = eval_map[idx]
+		return {"ce": ce, "acc": acc, "ppl": math.exp(ce)}
 
 	return {
 		"phase_name": phase_name,
-		"n_evaluated": len(full_evals),
-		"k": min(k, len(top_k)),
-		"top_k_mean": {"ce": top_k_ce, "acc": top_k_acc, "ppl": math.exp(top_k_ce)},
-		"best_ce": {"ce": by_ce[0][1], "acc": by_ce[0][2], "ppl": math.exp(by_ce[0][1])},
-		"best_acc": {"ce": by_acc[0][1], "acc": by_acc[0][2], "ppl": math.exp(by_acc[0][1])},
-		"best_fitness": {"ce": by_fitness[0][1], "acc": by_fitness[0][2], "ppl": math.exp(by_fitness[0][1])},
+		"n_full_evaluated": len(genome_list),
+		"n_population": len(pop),
+		"best_ce": make_entry(best_ce_idx),
+		"best_acc": make_entry(best_acc_idx),
+		"best_fitness": make_entry(best_fit_idx),
 	}
 
 
 def print_phase_comparison(phase_metrics_list):
 	"""Print cumulative phase comparison table (all on full validation)."""
-	W = 92
+	W = 82
 	print(f"\n{'='*W}")
 	print(f"  Phase Comparison (Full Validation)")
 	print(f"{'='*W}")
@@ -343,23 +407,20 @@ def print_phase_comparison(phase_metrics_list):
 
 	for i, pm in enumerate(phase_metrics_list):
 		name = pm["phase_name"]
-		k = pm["k"]
 
-		# Row 1: top-K mean
-		m = pm["top_k_mean"]
-		print(f"  {name:<28} {'top-'+str(k)+' mean':<14} {m['ce']:>10.4f} {m['ppl']:>12.0f} {m['acc']:>9.2%}")
-
-		# Row 2: best CE
+		# Row 1: best CE
 		m = pm["best_ce"]
-		print(f"  {'':<28} {'best CE':<14} {m['ce']:>10.4f} {m['ppl']:>12.0f} {m['acc']:>9.2%}")
+		print(f"  {name:<28} {'best CE':<14} {m['ce']:>10.4f} {m['ppl']:>12.0f} {m['acc']:>9.2%}")
 
-		# Row 3: best Acc
+		# Row 2: best Acc (only if different from best CE)
 		m = pm["best_acc"]
-		print(f"  {'':<28} {'best Acc':<14} {m['ce']:>10.4f} {m['ppl']:>12.0f} {m['acc']:>9.2%}")
+		if m != pm["best_ce"]:
+			print(f"  {'':<28} {'best Acc':<14} {m['ce']:>10.4f} {m['ppl']:>12.0f} {m['acc']:>9.2%}")
 
-		# Row 4: best Fitness (harmonic weighted)
+		# Row 3: best Fitness (only if different from both)
 		m = pm["best_fitness"]
-		print(f"  {'':<28} {'best Fitness':<14} {m['ce']:>10.4f} {m['ppl']:>12.0f} {m['acc']:>9.2%}")
+		if m != pm["best_ce"] and m != pm["best_acc"]:
+			print(f"  {'':<28} {'best Fitness':<14} {m['ce']:>10.4f} {m['ppl']:>12.0f} {m['acc']:>9.2%}")
 
 		if i < len(phase_metrics_list) - 1:
 			print(f"  {'-'*(W-2)}")
@@ -369,9 +430,8 @@ def print_phase_comparison(phase_metrics_list):
 	# Overall improvement
 	if len(phase_metrics_list) >= 2 and baseline_ce:
 		final = phase_metrics_list[-1]
-		top_k_impr = (1 - final["top_k_mean"]["ce"] / baseline_ce) * 100
 		best_ce_impr = (1 - final["best_ce"]["ce"] / baseline_ce) * 100
-		print(f"  Improvement vs baseline: top-{final['k']} CE {top_k_impr:+.2f}%, best CE {best_ce_impr:+.2f}%")
+		print(f"  Improvement vs baseline: best CE {best_ce_impr:+.2f}%")
 
 
 # ---------------------------------------------------------------------------
@@ -385,10 +445,6 @@ def main():
 	# General
 	parser.add_argument("--context", type=int, default=4, help="Context window size (default: 4)")
 	parser.add_argument("--rate", type=float, default=0.25, help="Neuron sample rate (default: 0.25)")
-	parser.add_argument("--train-tokens", type=int, default=200_000,
-						help="Total training tokens from WikiText-2 (default: 200000)")
-	parser.add_argument("--eval-tokens", type=int, default=50_000,
-						help="Eval tokens from WikiText-2 validation split (default: 50000)")
 	parser.add_argument("--phase", type=str, default="all",
 						help="Phase to run: 1-7 or 'all' (default: all)")
 	parser.add_argument("--output", type=str, default="experiments/bitwise_optimization_results.json",
@@ -401,8 +457,8 @@ def main():
 	# GA/TS parameters (shared across phases 2-7)
 	parser.add_argument("--ga-gens", type=int, default=50,
 						help="GA generations per phase (default: 50)")
-	parser.add_argument("--population", type=int, default=30,
-						help="GA population size (default: 30)")
+	parser.add_argument("--population", type=int, default=50,
+						help="GA population size (default: 50)")
 	parser.add_argument("--ts-iters", type=int, default=50,
 						help="TS iterations per phase (default: 50)")
 	parser.add_argument("--neighbors", type=int, default=30,
@@ -411,6 +467,11 @@ def main():
 						help="Early stop patience (default: 2)")
 	parser.add_argument("--check-interval", type=int, default=10,
 						help="Patience check every N generations/iterations (default: 10)")
+	# Data rotation
+	parser.add_argument("--train-parts", type=int, default=36,
+						help="Number of train subsets for rotation (default: 36)")
+	parser.add_argument("--eval-parts", type=int, default=6,
+						help="Number of test subsets for rotation (default: 6)")
 	args = parser.parse_args()
 
 	output_path = Path(args.output)
@@ -421,10 +482,8 @@ def main():
 	from wnn.ram.strategies.connectivity.architecture_strategies import ArchitectureConfig
 	from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 
-	train_tokens, test_tokens, vocab_size = load_wikitext2_tokens(
-		train_tokens_limit=args.train_tokens,
-		eval_tokens_limit=args.eval_tokens,
-	)
+	# Load all 3 WikiText-2 splits
+	train_tokens, test_tokens, validation_tokens, vocab_size = load_wikitext2_tokens()
 	num_clusters = bits_needed(vocab_size)  # 16 for GPT-2
 	total_input_bits = args.context * bits_needed(vocab_size)
 
@@ -433,11 +492,15 @@ def main():
 			"context_size": args.context,
 			"neuron_sample_rate": args.rate,
 			"memory_mode": "QUAD_WEIGHTED",
+			"fitness": "HARMONIC_RANK",
 			"vocab_size": vocab_size,
 			"num_clusters": num_clusters,
 			"total_input_bits": total_input_bits,
 			"train_tokens": len(train_tokens),
-			"eval_tokens": len(test_tokens),
+			"test_tokens": len(test_tokens),
+			"validation_tokens": len(validation_tokens),
+			"train_parts": args.train_parts,
+			"eval_parts": args.eval_parts,
 			"ga_gens": args.ga_gens,
 			"population": args.population,
 			"ts_iters": args.ts_iters,
@@ -446,6 +509,7 @@ def main():
 			"check_interval": args.check_interval,
 		},
 		"phase1_grid": None,
+		"init_population": None,
 		"phase2_ga_neurons": None,
 		"phase3_ts_neurons": None,
 		"phase4_ga_bits": None,
@@ -482,6 +546,7 @@ def main():
 	best_ce = None
 	best_bits = 20   # defaults, overwritten by Phase 1
 	best_neurons = 150
+	initial_population = None  # 50 genomes seeded from Phase 1
 
 	# ── Phase 1: Grid search ─────────────────────────────────────────────
 	if should_run(1):
@@ -495,14 +560,36 @@ def main():
 		best_neurons = best_p1["neurons"]
 		best_ce = best_p1["cross_entropy"]
 
-		# Create seed genome from Phase 1 best
-		best_genome = create_seed_genome(num_clusters, best_bits, best_neurons, total_input_bits)
+		# ── Create 50-genome initial population ──
+		# 3 genomes per grid config (different random connections) = 48
+		# 2 extra from best 2 configs = 50 total
+		print(f"\nSeeding population from {len(phase1_results)} grid configs...")
+		pop_genomes = []
+		for config in phase1_results:
+			for _ in range(3):
+				g = create_seed_genome(
+					num_clusters, config["bits"], config["neurons"], total_input_bits
+				)
+				pop_genomes.append(g)
+
+		# Add 2 extra from top-2 configs
+		for config in phase1_results[:2]:
+			g = create_seed_genome(
+				num_clusters, config["bits"], config["neurons"], total_input_bits
+			)
+			pop_genomes.append(g)
+
+		initial_population = pop_genomes[:args.population]
+		best_genome = initial_population[0]  # Best config, first random seed
+
+		print(f"  Created {len(initial_population)} genomes for initial population")
 
 		all_results["phase1_grid"] = {
 			"results": phase1_results,
 			"best_bits": best_bits,
 			"best_neurons": best_neurons,
 			"best_ce": best_ce,
+			"init_population_size": len(initial_population),
 			"elapsed_s": round(time.time() - t0, 1),
 		}
 		save()
@@ -518,39 +605,35 @@ def main():
 		best_genome = create_seed_genome(num_clusters, best_bits, best_neurons, total_input_bits)
 		print(f"Using default config: bits={best_bits}, neurons={best_neurons}")
 
-	# Create evaluator (reused across phases 2-7)
-	evaluator = create_evaluator(
-		train_tokens, test_tokens, vocab_size,
+	# Create two evaluators:
+	# opt_evaluator: rotated train+test for GA/TS fitness
+	# full_evaluator: full train + full validation for phase comparison
+	opt_evaluator, full_evaluator = create_evaluators(
+		train_tokens, test_tokens, validation_tokens, vocab_size,
 		context_size=args.context, rate=args.rate,
 		default_neurons=best_neurons, default_bits=best_bits,
+		num_train_parts=args.train_parts, num_eval_parts=args.eval_parts,
 	)
 
-	# Evaluate baseline on full validation
-	if best_ce is None and best_genome is not None:
-		print("Evaluating seed genome...")
-		results = evaluator.evaluate_batch([best_genome])
-		best_ce = results[0][0]
-		print(f"  Seed CE={best_ce:.4f}")
-
-	# Baseline full-eval
+	# Full-eval initial population baseline on validation
 	phase_metrics_list = []
 	print(f"\nEvaluating baseline on full validation...")
-	baseline_ce, baseline_acc = evaluator.evaluate_single_full(best_genome)
+	baseline_ce, baseline_acc = full_evaluator.evaluate_single_full(best_genome)
 	print(f"  Baseline CE={baseline_ce:.4f}, Acc={baseline_acc:.2%}, PPL={math.exp(baseline_ce):.0f}")
+	baseline_entry = {"ce": baseline_ce, "acc": baseline_acc, "ppl": math.exp(baseline_ce)}
 	phase_metrics_list.append({
-		"phase_name": "Baseline",
-		"n_evaluated": 1,
-		"k": 1,
-		"top_k_mean": {"ce": baseline_ce, "acc": baseline_acc, "ppl": math.exp(baseline_ce)},
-		"best_ce": {"ce": baseline_ce, "acc": baseline_acc, "ppl": math.exp(baseline_ce)},
-		"best_acc": {"ce": baseline_ce, "acc": baseline_acc, "ppl": math.exp(baseline_ce)},
-		"best_fitness": {"ce": baseline_ce, "acc": baseline_acc, "ppl": math.exp(baseline_ce)},
+		"phase_name": "Init Population",
+		"n_full_evaluated": 1,
+		"n_population": len(initial_population) if initial_population else 1,
+		"best_ce": baseline_entry,
+		"best_acc": baseline_entry,
+		"best_fitness": baseline_entry,
 	})
 
 	ci = args.check_interval
 
-	# Helper to run a phase and collect top-K metrics
-	def run_and_eval_ga(phase_num, phase_name, result_key, arch_config):
+	# Helper to run a phase and collect metrics
+	def run_and_eval_ga(phase_num, phase_name, result_key, arch_config, init_pop=None):
 		nonlocal best_genome, best_ce
 		if not should_run(phase_num) or best_genome is None:
 			return
@@ -559,11 +642,11 @@ def main():
 		print(f"{'='*70}")
 
 		result, elapsed = run_ga_phase(
-			evaluator, arch_config,
+			opt_evaluator, arch_config,
 			ga_gens=args.ga_gens, population=args.population,
 			patience=args.patience, seed_genome=best_genome,
 			phase_name=f"Phase {phase_num}: {phase_name}", logger=log,
-			check_interval=ci,
+			check_interval=ci, initial_population=init_pop,
 		)
 
 		best_genome = result.best_genome
@@ -580,9 +663,8 @@ def main():
 			"genome_stats": best_genome.stats(),
 		}
 
-		# Full-eval top-K
-		print(f"\n  Evaluating Phase {phase_num} population on full validation...")
-		metrics = evaluate_phase_top_k(evaluator, result, f"P{phase_num} {phase_name}", k=args.top_k)
+		# Full-eval 1-3 genomes on validation
+		metrics = evaluate_phase_top_k(full_evaluator, result, f"P{phase_num} {phase_name}")
 		phase_metrics_list.append(metrics)
 		all_results[result_key]["full_eval"] = metrics
 		print_phase_comparison(phase_metrics_list)
@@ -597,7 +679,7 @@ def main():
 		print(f"{'='*70}")
 
 		result, elapsed = run_ts_phase(
-			evaluator, arch_config,
+			opt_evaluator, arch_config,
 			ts_iters=args.ts_iters, neighbors=args.neighbors,
 			patience=args.patience,
 			seed_genome=best_genome, seed_fitness=best_ce,
@@ -619,9 +701,8 @@ def main():
 			"genome_stats": best_genome.stats() if hasattr(best_genome, "stats") else {},
 		}
 
-		# Full-eval top-K
-		print(f"\n  Evaluating Phase {phase_num} population on full validation...")
-		metrics = evaluate_phase_top_k(evaluator, result, f"P{phase_num} {phase_name}", k=args.top_k)
+		# Full-eval 1-3 genomes on validation
+		metrics = evaluate_phase_top_k(full_evaluator, result, f"P{phase_num} {phase_name}")
 		phase_metrics_list.append(metrics)
 		all_results[result_key]["full_eval"] = metrics
 		print_phase_comparison(phase_metrics_list)
@@ -635,7 +716,7 @@ def main():
 		min_neurons=10, max_neurons=300,
 		min_bits=best_bits, max_bits=best_bits,
 		total_input_bits=total_input_bits,
-	))
+	), init_pop=initial_population)
 
 	# ── Phase 3: TS neurons refinement ───────────────────────────────────
 	run_and_eval_ts(3, "TS Neurons", "phase3_ts_neurons", ArchitectureConfig(
@@ -684,9 +765,9 @@ def main():
 		print(f"\nBest genome saved to {genome_path}")
 
 	# ── Final Summary ────────────────────────────────────────────────────
-	print(f"\n{'='*92}")
+	print(f"\n{'='*82}")
 	print(f"  FINAL RESULTS (All metrics on FULL validation data)")
-	print(f"{'='*92}")
+	print(f"{'='*82}")
 	print_phase_comparison(phase_metrics_list)
 
 	all_results["phase_metrics"] = phase_metrics_list

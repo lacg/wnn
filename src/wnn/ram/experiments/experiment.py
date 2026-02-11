@@ -55,6 +55,8 @@ class ExperimentConfig:
 	# Shared
 	patience: int = 10
 	check_interval: int = 10
+	threshold_delta: float = 0.01
+	threshold_reference: int = 1000
 
 	# Architecture bounds
 	min_bits: int = 4
@@ -82,8 +84,8 @@ class ExperimentConfig:
 	cluster_type: ClusterType = ClusterType.TIERED
 
 	# BitwiseRAMLM-specific (only used when cluster_type=BITWISE)
-	bitwise_neurons_per_cluster: int = 1000
-	bitwise_bits_per_neuron: int = 10
+	bitwise_neurons_per_cluster: int = 200
+	bitwise_bits_per_neuron: int = 16
 
 	# Fitness calculator settings
 	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.NORMALIZED
@@ -356,6 +358,8 @@ class Experiment:
 			"logger": self.log,
 			"patience": cfg.patience,
 			"check_interval": cfg.check_interval,
+			"threshold_delta": cfg.threshold_delta,
+			"threshold_reference": cfg.threshold_reference,
 			"initial_threshold": initial_threshold,
 			"fitness_percentile": cfg.fitness_percentile,
 			"seed": cfg.seed,

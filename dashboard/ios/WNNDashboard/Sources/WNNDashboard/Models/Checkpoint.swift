@@ -25,6 +25,7 @@ public struct GenomeStats: Codable, Hashable {
     public let bits_range: [Int]?
     public let neurons_range: [Int]?
     public let tier_stats: [TierStats]?
+    public let cluster_stats: [BitwiseClusterStat]?
 }
 
 public struct Checkpoint: Codable, Identifiable {

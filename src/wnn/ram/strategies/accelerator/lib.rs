@@ -3180,7 +3180,7 @@ impl TokenCacheWrapper {
     /// * `encoding_bits` - Number of bits in semantic encoding (required if encoding_table provided).
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (train_tokens, eval_tokens, test_tokens, vocab_size, context_size, cluster_order, num_parts, num_negatives, seed, encoding_table=None, encoding_bits=None))]
+    #[pyo3(signature = (train_tokens, eval_tokens, test_tokens, vocab_size, context_size, cluster_order, num_parts, num_negatives, seed, encoding_table=None, encoding_bits=None, num_eval_parts=None))]
     fn new(
         train_tokens: Vec<u32>,
         eval_tokens: Vec<u32>,
@@ -3193,6 +3193,7 @@ impl TokenCacheWrapper {
         seed: u64,
         encoding_table: Option<Vec<u64>>,
         encoding_bits: Option<usize>,
+        num_eval_parts: Option<usize>,
     ) -> Self {
         Self {
             inner: token_cache::TokenCache::new(
@@ -3207,6 +3208,7 @@ impl TokenCacheWrapper {
                 seed,
                 encoding_table,
                 encoding_bits,
+                num_eval_parts.unwrap_or(1),
             ),
         }
     }
@@ -4218,16 +4220,18 @@ impl BitwiseCacheWrapper {
         vocab_size: usize,
         context_size: usize,
         num_parts: usize,
+        num_eval_parts: usize,
         pad_token_id: u32,
     ) -> Self {
         Self {
             inner: bitwise_ramlm::BitwiseTokenCache::new(
-                train_tokens, eval_tokens, vocab_size, context_size, num_parts, pad_token_id,
+                train_tokens, eval_tokens, vocab_size, context_size,
+                num_parts, num_eval_parts, pad_token_id,
             ),
         }
     }
 
-    /// Evaluate genomes with per-cluster heterogeneous configs (subset training).
+    /// Evaluate genomes with per-cluster heterogeneous configs (subset training + eval).
     ///
     /// bits_per_cluster_flat: [num_genomes * num_clusters]
     /// neurons_per_cluster_flat: [num_genomes * num_clusters]
@@ -4241,6 +4245,7 @@ impl BitwiseCacheWrapper {
         connections_flat: Vec<i64>,
         num_genomes: usize,
         train_subset_idx: usize,
+        eval_subset_idx: usize,
         memory_mode: u8,
         neuron_sample_rate: f32,
         rng_seed: u64,
@@ -4248,13 +4253,13 @@ impl BitwiseCacheWrapper {
         py.allow_threads(|| {
             Ok(bitwise_ramlm::evaluate_genomes(
                 &self.inner, &bits_per_cluster_flat, &neurons_per_cluster_flat,
-                &connections_flat, num_genomes, train_subset_idx,
+                &connections_flat, num_genomes, train_subset_idx, eval_subset_idx,
                 memory_mode, neuron_sample_rate, rng_seed,
             ))
         })
     }
 
-    /// Evaluate genomes with per-cluster heterogeneous configs (full training).
+    /// Evaluate genomes with per-cluster heterogeneous configs (full training + full eval).
     #[allow(clippy::too_many_arguments)]
     fn evaluate_genomes_full(
         &self,
@@ -4281,7 +4286,12 @@ impl BitwiseCacheWrapper {
         self.inner.next_train_idx()
     }
 
-    /// Reset subset rotation.
+    /// Get next eval subset index (advances rotator).
+    fn next_eval_idx(&self) -> usize {
+        self.inner.next_eval_idx()
+    }
+
+    /// Reset subset rotation (both train and eval).
     fn reset(&self) {
         self.inner.reset();
     }
@@ -4289,7 +4299,7 @@ impl BitwiseCacheWrapper {
     fn vocab_size(&self) -> usize { self.inner.vocab_size }
     fn total_input_bits(&self) -> usize { self.inner.total_input_bits }
     fn num_parts(&self) -> usize { self.inner.num_parts }
-    fn num_eval(&self) -> usize { self.inner.num_eval }
+    fn num_eval_parts(&self) -> usize { self.inner.num_eval_parts }
     fn num_bits(&self) -> usize { self.inner.num_bits }
 }
 

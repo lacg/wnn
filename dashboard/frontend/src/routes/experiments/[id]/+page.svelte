@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
-  import type { Experiment, Iteration, GenomeEvaluation, Flow, ValidationSummary, GatingResults, Checkpoint, TierStats } from '$lib/types';
+  import type { Experiment, Iteration, GenomeEvaluation, Flow, ValidationSummary, GatingResults, Checkpoint, TierStats, BitwiseClusterStat } from '$lib/types';
   import { formatDate } from '$lib/dateFormat';
   import { gatingRunUpdates } from '$lib/stores';
+  import BitwiseClusterStats from '$lib/components/BitwiseClusterStats.svelte';
   import type { GatingRun } from '$lib/types';
 
   let experiment: Experiment | null = null;
@@ -399,6 +400,12 @@
   $: finalCheckpoint = checkpoints.find(c => c.checkpoint_type === 'experiment_end' && c.genome_stats?.tier_stats);
 
   $: tierStats = finalCheckpoint?.genome_stats?.tier_stats ?? null;
+
+  // Bitwise cluster stats from checkpoint genome_stats (when cluster_type is 'bitwise')
+  $: bitwiseClusterStats = (() => {
+    const cp = checkpoints.find(c => c.genome_stats?.cluster_stats);
+    return cp?.genome_stats?.cluster_stats ?? null;
+  })();
 
   // Parse tier_config string for the optimize flag (not in computed tier_stats)
   // Format: "100,15,20;400,10,12;rest,5,8" or "100,15,20,true;400,10,12,false;rest,5,8,false"
@@ -847,6 +854,11 @@
           </table>
         </div>
       </div>
+    {/if}
+
+    <!-- Bitwise Cluster Stats (per-cluster view for bitwise experiments) -->
+    {#if experiment.cluster_type === 'bitwise' || bitwiseClusterStats}
+      <BitwiseClusterStats clusterStats={bitwiseClusterStats} />
     {/if}
 
     <!-- Chart -->

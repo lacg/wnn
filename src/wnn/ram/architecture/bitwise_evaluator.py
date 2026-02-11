@@ -51,6 +51,7 @@ class BitwiseEvaluator:
 		neurons_per_cluster: int = 1000,
 		bits_per_neuron: int = 10,
 		num_parts: int = 3,
+		num_eval_parts: int = 1,
 		seed: Optional[int] = None,
 		pad_token_id: int = 50256,
 		memory_mode: int = 0,
@@ -61,6 +62,7 @@ class BitwiseEvaluator:
 		self._neurons_per_cluster = neurons_per_cluster
 		self._bits_per_neuron = bits_per_neuron
 		self._num_parts = num_parts
+		self._num_eval_parts = num_eval_parts
 		self._pad_token_id = pad_token_id
 		self._memory_mode = memory_mode
 		self._neuron_sample_rate = neuron_sample_rate
@@ -77,6 +79,7 @@ class BitwiseEvaluator:
 			seed = int(time.time() * 1000) % (2**32)
 		self._seed = seed
 		self._train_rotation_idx = 0
+		self._eval_rotation_idx = 0
 
 		# Try Rust+Metal backend
 		self._rust_cache = None
@@ -88,10 +91,11 @@ class BitwiseEvaluator:
 				vocab_size=vocab_size,
 				context_size=context_size,
 				num_parts=num_parts,
+				num_eval_parts=num_eval_parts,
 				pad_token_id=pad_token_id,
 			)
 			print(f"[BitwiseEvaluator] Rust+Metal backend active "
-				  f"(eval={self._rust_cache.num_eval()} examples)")
+				  f"(train: {num_parts} subsets, eval: {num_eval_parts} subsets)")
 		except (ImportError, Exception) as e:
 			print(f"[BitwiseEvaluator] Rust backend unavailable ({e}), using Python fallback")
 			# Pre-split training data for Python fallback
@@ -112,8 +116,12 @@ class BitwiseEvaluator:
 		return idx
 
 	def next_eval_idx(self) -> int:
-		"""Eval always uses full data."""
-		return 0
+		"""Advance and return next eval subset index."""
+		if self._rust_cache is not None:
+			return self._rust_cache.next_eval_idx()
+		idx = self._eval_rotation_idx % self._num_eval_parts
+		self._eval_rotation_idx += 1
+		return idx
 
 	@property
 	def vocab_size(self) -> int:
@@ -126,6 +134,10 @@ class BitwiseEvaluator:
 	@property
 	def num_parts(self) -> int:
 		return self._num_parts
+
+	@property
+	def num_eval_parts(self) -> int:
+		return self._num_eval_parts
 
 	# =========================================================================
 	# Rust+Metal evaluation (primary path)
@@ -170,6 +182,7 @@ class BitwiseEvaluator:
 		self,
 		genomes: list[ClusterGenome],
 		train_subset_idx: int,
+		eval_subset_idx: int,
 	) -> list[tuple[float, float]]:
 		"""Evaluate using Rust+Metal backend with per-cluster heterogeneous configs."""
 		bits_flat, neurons_flat, connections_flat = self._flatten_genomes_heterogeneous(genomes)
@@ -179,6 +192,7 @@ class BitwiseEvaluator:
 			connections_flat=connections_flat,
 			num_genomes=len(genomes),
 			train_subset_idx=train_subset_idx,
+			eval_subset_idx=eval_subset_idx,
 			memory_mode=self._memory_mode,
 			neuron_sample_rate=self._neuron_sample_rate,
 			rng_seed=self._seed,
@@ -271,13 +285,15 @@ class BitwiseEvaluator:
 		streaming: bool = True,
 		stream_batch_size: int = 1,
 	) -> list[tuple[float, float]]:
-		"""Evaluate multiple genomes using subset rotation."""
+		"""Evaluate multiple genomes using subset rotation (both train and eval)."""
 		if train_subset_idx is None:
 			train_subset_idx = self.next_train_idx()
+		if eval_subset_idx is None:
+			eval_subset_idx = self.next_eval_idx()
 
 		if self._rust_cache is not None:
 			start = time.time()
-			results = self._evaluate_batch_rust(genomes, train_subset_idx)
+			results = self._evaluate_batch_rust(genomes, train_subset_idx, eval_subset_idx)
 			elapsed = time.time() - start
 			log = logger if logger is not None else lambda x: None
 			if generation is not None:
@@ -339,12 +355,13 @@ class BitwiseEvaluator:
 		return self.evaluate_batch_full([genome])[0]
 
 	def reset(self, seed: Optional[int] = None) -> None:
-		"""Reset subset rotation."""
+		"""Reset subset rotation (both train and eval)."""
 		if self._rust_cache is not None:
 			self._rust_cache.reset()
 		if seed is not None:
 			self._seed = seed
 		self._train_rotation_idx = 0
+		self._eval_rotation_idx = 0
 
 	def __repr__(self) -> str:
 		backend = "Rust+Metal" if self._rust_cache is not None else "Python"
@@ -356,7 +373,8 @@ class BitwiseEvaluator:
 			f"context={self._context_size}, "
 			f"neurons={self._neurons_per_cluster}, "
 			f"bits={self._bits_per_neuron}, "
-			f"parts={self._num_parts}, "
+			f"train_parts={self._num_parts}, "
+			f"eval_parts={self._num_eval_parts}, "
 			f"mode={mode}{rate_str}, "
 			f"backend={backend})"
 		)

@@ -83,6 +83,9 @@ public struct ExperimentIterationsView: View {
                 if let stats = tierStats, !stats.isEmpty {
                     tierStatsSection(stats)
                 }
+                if let clusterStats = bitwiseClusterStats, !clusterStats.isEmpty {
+                    BitwiseClusterStatsView(clusterStats: clusterStats)
+                }
                 chartSection
                 iterationsSection
             }
@@ -106,6 +109,9 @@ public struct ExperimentIterationsView: View {
                 }
                 if let stats = tierStats, !stats.isEmpty {
                     tierStatsSection(stats)
+                }
+                if let clusterStats = bitwiseClusterStats, !clusterStats.isEmpty {
+                    BitwiseClusterStatsView(clusterStats: clusterStats)
                 }
                 Spacer()
             }
@@ -308,6 +314,16 @@ public struct ExperimentIterationsView: View {
         }
         .padding()
         .glassCard()
+    }
+
+    // MARK: - Bitwise Cluster Stats
+
+    /// Extract cluster_stats from the checkpoint's genome_stats (bitwise experiments)
+    private var bitwiseClusterStats: [BitwiseClusterStat]? {
+        checkpoints
+            .first { $0.genome_stats?.cluster_stats != nil }?
+            .genome_stats?
+            .cluster_stats
     }
 
     // MARK: - Validation Progression

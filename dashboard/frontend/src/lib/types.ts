@@ -150,6 +150,8 @@ export interface Experiment {
   // Gating analysis
   gating_status: GatingStatus | null;
   gating_results: GatingResults | null;
+  // Cluster architecture type
+  cluster_type?: 'tiered' | 'bitwise';
 }
 
 // =============================================================================
@@ -273,6 +275,14 @@ export interface ValidationSummary {
 // Checkpoint types
 // =============================================================================
 
+export interface BitwiseClusterStat {
+  cluster: number;
+  bits: number;
+  neurons: number;
+  connections: number;
+  memory_words: number;
+}
+
 export interface GenomeStats {
   num_clusters: number;
   total_neurons: number;
@@ -280,6 +290,7 @@ export interface GenomeStats {
   bits_range: [number, number];
   neurons_range: [number, number];
   tier_stats?: TierStats[];
+  cluster_stats?: BitwiseClusterStat[];
 }
 
 export interface Checkpoint {
