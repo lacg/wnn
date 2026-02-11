@@ -148,12 +148,18 @@ Script is written and committed. After v3 finishes:
 
 **Hypothesis**: Shorter context (2-3) may work better due to higher training density per address. This aligns with DeepSeek Engram findings (2-3 n-grams optimal).
 
-### Gating Integration
+### Gating Integration (Retest with Bitwise)
 
-After context sweep, integrate RAM-based gating:
-- Gate neurons decide per-cluster whether to trust the prediction
-- Allows selective abstention on low-confidence clusters
-- Already implemented in `src/wnn/ram/core/gating.py`
+Gating was previously tested with the **tiered architecture** and underperformed — results were disappointing, which motivated the shift to the bitwise architecture. The hypothesis is that bitwise (16 independent clusters) provides a better substrate for gating because:
+
+- **Fewer clusters to gate** (16 vs 50,257) — cleaner signal, less noise
+- **Each cluster is a bit** — binary decision per bit is more natural for RAM gating
+- **Independent optimization** — each bit-cluster can be gated independently
+
+**Next steps:**
+1. Update `RAMGating` to be plug-and-play between tiered and bitwise evaluators
+2. Re-run gated vs ungated comparison with the bitwise architecture
+3. Compare improvement delta with DeepSeek Engram's reported 5-10%
 
 ### DeepSeek Engram Comparison
 
