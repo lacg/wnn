@@ -348,6 +348,14 @@ from wnn.ram.core.gating import (
 	gating_metal_available,
 )
 
+# Gating trainer (architecture-agnostic, works with tiered + bitwise)
+from wnn.ram.core.gating_trainer import (
+	GatingTrainer,
+	GatingConfig,
+	GatingMode,
+	GatingResult,
+)
+
 # Generalization components
 from wnn.ram.core.RAMGeneralization import (
 	BitLevelMapper,
@@ -512,6 +520,11 @@ __all__ = [
 	'RustRAMGating',
 	'create_gating',
 	'compute_beneficial_gates',
+	# Gating trainer (architecture-agnostic)
+	'GatingTrainer',
+	'GatingConfig',
+	'GatingMode',
+	'GatingResult',
 	# Generalization
 	'BitLevelMapper',
 	'CompositionalMapper',

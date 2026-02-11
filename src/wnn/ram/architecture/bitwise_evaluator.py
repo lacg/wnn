@@ -354,6 +354,144 @@ class BitwiseEvaluator:
 		"""Evaluate a single genome with full data."""
 		return self.evaluate_batch_full([genome])[0]
 
+	# =========================================================================
+	# Gated evaluation (all 3 modes: TOKEN_LEVEL, BIT_LEVEL, DUAL_STAGE)
+	# =========================================================================
+
+	def evaluate_with_gating(
+		self,
+		genome: ClusterGenome,
+		train_tokens: list[int],
+		gating_result,  # GatingResult from gating_trainer
+		logger: Optional[Callable[[str], None]] = None,
+	) -> dict:
+		"""Evaluate genome with and without gating for comparison.
+
+		Uses Python BitwiseRAMLM for final evaluation (not Rust batch path)
+		since gating requires per-example gate computation.
+
+		Args:
+			genome: Optimized genome to evaluate
+			train_tokens: Token sequence for model training
+			gating_result: GatingResult from GatingTrainer.train()
+			logger: Optional logging function
+
+		Returns:
+			Dict with: ce, acc, gated_ce, gated_acc, gating_mode, gating_stats
+		"""
+		import torch
+		from math import exp as math_exp
+		from torch import tensor, long as torch_long, arange as torch_arange, logsumexp, float32 as torch_float32
+		from wnn.ram.core.models import BitwiseRAMLM, reconstruct_logprobs
+		from wnn.ram.core.gating_trainer import GatingMode
+
+		log = logger or (lambda x: None)
+		mode = gating_result.mode
+
+		log(f"  Evaluating with gating (mode={mode.name})...")
+
+		# Build and train model
+		model = BitwiseRAMLM(
+			vocab_size=self._vocab_size,
+			context_size=self._context_size,
+			neurons_per_cluster=self._neurons_per_cluster,
+			bits_per_neuron=self._bits_per_neuron,
+			pad_token_id=self._pad_token_id,
+			memory_mode=self._memory_mode,
+			neuron_sample_rate=self._neuron_sample_rate,
+		)
+
+		if genome.connections is not None:
+			total_neurons = model.layer.total_neurons
+			bpn = model.layer.bits_per_neuron
+			conn_tensor = tensor(genome.connections, dtype=torch_long).view(total_neurons, bpn)
+			model.connections = conn_tensor
+
+		model.reset_memory()
+		model.train_epoch_fast(token_ids=train_tokens, batch_size=2000, verbose=False)
+
+		# Evaluate on eval tokens
+		eval_tokens = self._eval_tokens
+		total_examples = len(eval_tokens) - self._context_size
+		all_bits = model.encode_sequence(eval_tokens)
+		targets = tensor(eval_tokens[self._context_size:], dtype=torch_long)
+
+		batch_size = 5000
+		num_batches = (total_examples + batch_size - 1) // batch_size
+
+		# Accumulators for ungated and gated
+		total_ce = 0.0
+		total_correct = 0
+		gated_ce = 0.0
+		gated_correct = 0
+
+		for batch_idx in range(num_batches):
+			start = batch_idx * batch_size
+			end = min(start + batch_size, total_examples)
+			batch_len = end - start
+
+			batch_bits = all_bits[start:end]
+			batch_targets = targets[start:end]
+
+			# Ungated scores
+			log_probs = model.forward(batch_bits)  # [B, vocab_size]
+			lse = logsumexp(log_probs, dim=-1)
+			target_lp = log_probs[torch_arange(batch_len), batch_targets]
+			total_ce += (lse - target_lp).sum().item()
+			total_correct += (log_probs.argmax(dim=-1) == batch_targets).sum().item()
+
+			# Gated scores
+			eps = 1e-7
+			if mode == GatingMode.TOKEN_LEVEL:
+				gates = gating_result.token_gating.forward(batch_bits)  # [B, vocab_size]
+				gated_lp = log_probs + torch.log(gates + eps)
+
+			elif mode == GatingMode.BIT_LEVEL:
+				bit_scores = model.forward_bits(batch_bits)  # [B, num_bits]
+				bit_gates = gating_result.bit_gating.forward(batch_bits)  # [B, num_bits]
+				gated_bits = bit_gates * bit_scores + (1 - bit_gates) * 0.5
+				gated_lp = reconstruct_logprobs(gated_bits, model.token_bits)
+
+			elif mode == GatingMode.DUAL_STAGE:
+				# Stage 1: bit-level confidence
+				bit_scores = model.forward_bits(batch_bits)
+				bit_gates = gating_result.bit_gating.forward(batch_bits)
+				gated_bits = bit_gates * bit_scores + (1 - bit_gates) * 0.5
+				# Stage 2: token-level pruning
+				token_lp = reconstruct_logprobs(gated_bits, model.token_bits)
+				token_gates = gating_result.token_gating.forward(batch_bits)
+				gated_lp = token_lp + torch.log(token_gates + eps)
+
+			gated_lse = logsumexp(gated_lp, dim=-1)
+			gated_target_lp = gated_lp[torch_arange(batch_len), batch_targets]
+			gated_ce += (gated_lse - gated_target_lp).sum().item()
+			gated_correct += (gated_lp.argmax(dim=-1) == batch_targets).sum().item()
+
+		# Compute metrics
+		ce = total_ce / total_examples
+		acc = total_correct / total_examples
+		g_ce = gated_ce / total_examples
+		g_acc = gated_correct / total_examples
+
+		results = {
+			"ce": ce,
+			"acc": acc,
+			"perplexity": math_exp(min(ce, 100)),
+			"gated_ce": g_ce,
+			"gated_acc": g_acc,
+			"gated_perplexity": math_exp(min(g_ce, 100)),
+			"gating_mode": mode.name,
+			"ce_improvement": ce - g_ce,
+			"acc_improvement": g_acc - acc,
+			**gating_result.stats,
+		}
+
+		log(f"  Ungated: CE={ce:.4f}, Acc={acc:.2%}, PPL={results['perplexity']:.0f}")
+		log(f"  Gated:   CE={g_ce:.4f}, Acc={g_acc:.2%}, PPL={results['gated_perplexity']:.0f}")
+		log(f"  Delta:   CE={results['ce_improvement']:+.4f}, Acc={results['acc_improvement']:+.2%}")
+
+		return results
+
 	def reset(self, seed: Optional[int] = None) -> None:
 		"""Reset subset rotation (both train and eval)."""
 		if self._rust_cache is not None:

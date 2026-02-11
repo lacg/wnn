@@ -45,6 +45,26 @@ from wnn.ram.core.BitwiseRAMClusterLayer import BitwiseRAMClusterLayer
 from wnn.ram.core.RAMClusterLayer import bits_needed
 
 
+def reconstruct_logprobs(bit_scores: Tensor, token_bits: Tensor) -> Tensor:
+	"""Reconstruct token log-probabilities from per-bit scores.
+
+	Computes log P(token=t) = Σ_i [b_i(t)·log(P_i) + (1-b_i(t))·log(1-P_i)]
+	as a matmul for efficiency.
+
+	Args:
+		bit_scores: [batch, num_bits] float tensor of P(bit=1) probabilities
+		token_bits: [vocab_size, num_bits] binary matrix of token bit patterns
+
+	Returns:
+		[batch, vocab_size] float tensor of unnormalized log-probabilities
+	"""
+	eps = 1e-7
+	p1 = clamp(bit_scores, eps, 1.0 - eps)
+	log_p1 = log(p1)
+	log_p0 = log(1.0 - p1)
+	return log_p1 @ token_bits.T + log_p0 @ (1.0 - token_bits).T
+
+
 class BitwiseRAMLM(RAMComponent):
 	"""Per-bit output language model.
 
@@ -237,20 +257,8 @@ class BitwiseRAMLM(RAMComponent):
 		if input_bits.ndim == 1:
 			input_bits = input_bits.unsqueeze(0)
 
-		eps = 1e-7
 		bit_scores = self.forward_bits(input_bits)  # [batch, num_bits]
-
-		# Clamp to avoid log(0)
-		p1 = clamp(bit_scores, eps, 1.0 - eps)
-		log_p1 = log(p1)      # [batch, num_bits]
-		log_p0 = log(1.0 - p1)  # [batch, num_bits]
-
-		# Reconstruct token log-probs via matmul
-		# token_bits: [vocab_size, num_bits] → transpose to [num_bits, vocab_size]
-		log_probs = log_p1 @ self.token_bits.T + log_p0 @ (1.0 - self.token_bits).T
-		# [batch, vocab_size]
-
-		return log_probs
+		return reconstruct_logprobs(bit_scores, self.token_bits)
 
 	def forward_tokens(self, token_ids: list[int]) -> Tensor:
 		"""Forward pass from token IDs → [vocab_size] log-probabilities."""

@@ -441,6 +441,18 @@ def main():
 						help="Number of train subsets for rotation (default: 36)")
 	parser.add_argument("--eval-parts", type=int, default=6,
 						help="Number of test subsets for rotation (default: 6)")
+	# Gating
+	parser.add_argument("--enable-gating", action="store_true",
+						help="Enable gating phase after optimization")
+	parser.add_argument("--gating-neurons", type=int, default=8,
+						help="Neurons per gate (default: 8)")
+	parser.add_argument("--gating-bits", type=int, default=12,
+						help="Bits per gating neuron (default: 12)")
+	parser.add_argument("--gating-threshold", type=float, default=0.5,
+						help="Gating threshold (default: 0.5)")
+	parser.add_argument("--gating-mode", type=int, default=0,
+						choices=[0, 1, 2],
+						help="0=TOKEN_LEVEL, 1=BIT_LEVEL, 2=DUAL_STAGE (default: 0)")
 	args = parser.parse_args()
 
 	output_path = Path(args.output)
@@ -727,6 +739,40 @@ def main():
 		optimize_bits=False, optimize_neurons=False, optimize_connections=True,
 		total_input_bits=total_input_bits,
 	))
+
+	# ── Phase 8 (optional): Gating ──────────────────────────────────────
+	if args.enable_gating and best_genome is not None:
+		from wnn.ram.core.gating_trainer import GatingTrainer, GatingConfig, GatingMode
+
+		print(f"\n{'='*70}")
+		print(f"Phase 8: Gating ({GatingMode(args.gating_mode).name})")
+		print(f"{'='*70}")
+
+		gating_config = GatingConfig(
+			enabled=True,
+			neurons_per_gate=args.gating_neurons,
+			bits_per_neuron=args.gating_bits,
+			threshold=args.gating_threshold,
+			mode=GatingMode(args.gating_mode),
+		)
+		trainer = GatingTrainer(gating_config, logger=log)
+		gating_result = trainer.train(
+			total_input_bits=total_input_bits,
+			train_tokens=train_tokens,
+			vocab_size=vocab_size,
+			context_size=args.context,
+			# No cluster_order → bitwise encoding
+		)
+
+		# Use full_evaluator's eval tokens for gated evaluation
+		gated_eval = opt_evaluator.evaluate_with_gating(
+			genome=best_genome,
+			train_tokens=train_tokens,
+			gating_result=gating_result,
+			logger=log,
+		)
+		all_results["gating"] = gated_eval
+		save()
 
 	# Save best genome separately
 	if best_genome is not None:

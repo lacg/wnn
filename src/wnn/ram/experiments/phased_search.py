@@ -23,7 +23,7 @@ from wnn.ram.strategies.factory import OptimizerStrategyFactory, OptimizerStrate
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 from wnn.ram.core.reporting import OptimizationResultsTable, PhaseComparisonTable, PhaseMetrics
 from wnn.ram.core import bits_needed
-from wnn.ram.core.gating import create_gating, GatingModel, compute_beneficial_gates
+from wnn.ram.core.gating import GatingModel
 from wnn.ram.architecture.cached_evaluator import CachedEvaluator
 
 # Optional dashboard integration
@@ -775,8 +775,8 @@ class PhasedSearchRunner:
 		"""
 		Train gating layer after RAM optimization completes (Stage 2 of staged training).
 
-		The gating model learns to filter cluster predictions based on input context.
-		Training uses the same data that was used for RAM optimization.
+		Delegates to GatingTrainer for architecture-agnostic training.
+		Tiered architecture always uses TOKEN_LEVEL mode.
 
 		Args:
 			genome: The optimized genome to create gating for
@@ -786,7 +786,7 @@ class PhasedSearchRunner:
 		Returns:
 			Dict with gating training statistics
 		"""
-		import torch
+		from wnn.ram.core.gating_trainer import GatingTrainer, GatingConfig, GatingMode
 
 		if not self.config.enable_gating:
 			return {"enabled": False}
@@ -795,164 +795,26 @@ class PhasedSearchRunner:
 			self.log("Warning: Gating enabled but train_tokens not stored. Skipping gating training.")
 			return {"enabled": True, "error": "train_tokens not available"}
 
-		self.log("")
-		self.log(f"{'='*60}")
-		self.log("  Gating Training Phase (Stage 2)")
-		self.log(f"{'='*60}")
-
-		# Create gating model
-		self.log(f"  Creating gating model: {genome.num_clusters} clusters × "
-				f"{self.config.gating_neurons_per_cluster} neurons/gate × "
-				f"{self.config.gating_bits_per_neuron} bits/neuron")
-
-		self._gating_model = create_gating(
-			total_input_bits=self.total_input_bits,
-			num_clusters=genome.num_clusters,
+		gating_config = GatingConfig(
+			enabled=True,
 			neurons_per_gate=self.config.gating_neurons_per_cluster,
 			bits_per_neuron=self.config.gating_bits_per_neuron,
 			threshold=self.config.gating_threshold,
-			rng=self._rotation_seed,
-			prefer_rust=True,
+			mode=GatingMode.TOKEN_LEVEL,  # Tiered always uses token-level
+			num_epochs=num_epochs,
+			batch_size=batch_size,
 		)
-		self.log(f"  Gating model: {self._gating_model}")
-
-		# Encode training data for gating
-		self.log(f"  Encoding training data ({len(self._train_tokens):,} tokens)...")
-		bits_per_token = bits_needed(self.vocab_size)
-		context_size = self.config.context_size
-
-		# Build token_id -> cluster_id mapping
-		token_to_cluster = {token: cluster for cluster, token in enumerate(self._cluster_order)}
-
-		# Prepare training samples
-		samples = []
-		for i in range(context_size, len(self._train_tokens)):
-			# Get context tokens and target
-			context_tokens = self._train_tokens[i - context_size:i]
-			target_token = self._train_tokens[i]
-			target_cluster = token_to_cluster.get(target_token, target_token)
-
-			# Encode context to bits
-			input_bits = []
-			for token in context_tokens:
-				# Map token to cluster (same as evaluator does)
-				cluster = token_to_cluster.get(token, token)
-				# Encode cluster as bits (LSB first)
-				for b in range(bits_per_token):
-					input_bits.append(bool((cluster >> b) & 1))
-
-			samples.append((input_bits, target_cluster))
-
-		self.log(f"  Training samples: {len(samples):,}")
-
-		# Train gating
-		num_samples = len(samples)
-		total_modified = 0
-		start_time = __import__('time').time()
-
-		for epoch in range(num_epochs):
-			epoch_modified = 0
-			num_batches = (num_samples + batch_size - 1) // batch_size
-
-			for batch_idx in range(num_batches):
-				batch_start = batch_idx * batch_size
-				batch_end = min(batch_start + batch_size, num_samples)
-				batch_samples = samples[batch_start:batch_end]
-
-				# Convert to tensors
-				input_bits_batch = torch.tensor(
-					[s[0] for s in batch_samples],
-					dtype=torch.bool,
-				)
-				targets_batch = torch.tensor(
-					[s[1] for s in batch_samples],
-					dtype=torch.long,
-				)
-
-				# Train using target-based approach:
-				# Gate should be 1 for the target cluster, 0 for others
-				# This is a simple heuristic - could use compute_beneficial_gates for more sophisticated training
-				if hasattr(self._gating_model, 'train_from_targets'):
-					# RustRAMGating has optimized train_from_targets
-					modified = self._gating_model.train_from_targets(input_bits_batch, targets_batch)
-				else:
-					# Fallback: compute target gates and train
-					target_gates = compute_beneficial_gates(
-						torch.zeros(len(batch_samples), genome.num_clusters),  # dummy scores
-						targets_batch,
-						top_k=1,
-					)
-					modified = self._gating_model.train_step(input_bits_batch, target_gates)
-
-				epoch_modified += modified
-
-				# Progress logging every 10%
-				if batch_idx > 0 and batch_idx % (num_batches // 10 + 1) == 0:
-					pct = 100 * batch_idx / num_batches
-					self.log(f"    Epoch {epoch+1}: {pct:.0f}% ({batch_idx}/{num_batches} batches)")
-
-			total_modified += epoch_modified
-			self.log(f"  Epoch {epoch+1}/{num_epochs}: {epoch_modified:,} cells modified")
-
-		elapsed = __import__('time').time() - start_time
-
-		# Compute gate activation statistics
-		gate_stats = self._compute_gate_stats(samples[:1000])  # Sample first 1000
-
-		self.log(f"  Gating training complete in {elapsed:.1f}s")
-		self.log(f"  Total cells modified: {total_modified:,}")
-		self.log(f"  [Gate Stats] Active: {gate_stats['avg_active']:.1f}% | "
-				f"Tier0: {gate_stats['tier0_active']:.1f}% | "
-				f"Tier1: {gate_stats['tier1_active']:.1f}% | "
-				f"Tier2: {gate_stats['tier2_active']:.1f}%")
-
-		return {
-			"enabled": True,
-			"total_modified": total_modified,
-			"training_time": elapsed,
-			"num_samples": num_samples,
-			"num_epochs": num_epochs,
-			**gate_stats,
-		}
-
-	def _compute_gate_stats(self, samples: list) -> dict:
-		"""Compute gate activation statistics from samples."""
-		import torch
-
-		if not self._gating_model or not samples:
-			return {"avg_active": 0.0, "tier0_active": 0.0, "tier1_active": 0.0, "tier2_active": 0.0}
-
-		# Get tier boundaries from config
-		tier_boundaries = self.config.get_tier_boundaries(self.vocab_size)
-
-		# Convert samples to tensor
-		input_bits = torch.tensor([s[0] for s in samples], dtype=torch.bool)
-
-		# Get gates
-		gates = self._gating_model.forward(input_bits)  # [B, num_clusters]
-
-		# Compute per-tier activation rates
-		num_clusters = gates.shape[1]
-		active_counts = gates.sum(dim=0)  # [num_clusters]
-		num_samples = len(samples)
-
-		# Overall
-		avg_active = 100.0 * active_counts.sum().item() / (num_clusters * num_samples)
-
-		# Per-tier (assuming 3 tiers: 0-100, 100-500, 500+)
-		tier0_end = min(tier_boundaries[0] if tier_boundaries else 100, num_clusters)
-		tier1_end = min(tier_boundaries[1] if len(tier_boundaries) > 1 else 500, num_clusters)
-
-		tier0_active = 100.0 * active_counts[:tier0_end].sum().item() / (tier0_end * num_samples) if tier0_end > 0 else 0.0
-		tier1_active = 100.0 * active_counts[tier0_end:tier1_end].sum().item() / ((tier1_end - tier0_end) * num_samples) if tier1_end > tier0_end else 0.0
-		tier2_active = 100.0 * active_counts[tier1_end:].sum().item() / ((num_clusters - tier1_end) * num_samples) if num_clusters > tier1_end else 0.0
-
-		return {
-			"avg_active": avg_active,
-			"tier0_active": tier0_active,
-			"tier1_active": tier1_active,
-			"tier2_active": tier2_active,
-		}
+		trainer = GatingTrainer(gating_config, logger=self.log)
+		result = trainer.train(
+			total_input_bits=self.total_input_bits,
+			train_tokens=self._train_tokens,
+			vocab_size=self.vocab_size,
+			context_size=self.config.context_size,
+			cluster_order=self._cluster_order,
+			rng_seed=self._rotation_seed,
+		)
+		self._gating_model = result.token_gating
+		return {"enabled": True, **result.stats}
 
 	def _get_dashboard_phase_config(self, phase_index: int) -> Optional[dict]:
 		"""

@@ -368,6 +368,9 @@ def __getattr__(name: str):
 	if name == 'BitwiseRAMLM':
 		from wnn.ram.core.models.bitwise_ramlm import BitwiseRAMLM
 		return BitwiseRAMLM
+	if name == 'reconstruct_logprobs':
+		from wnn.ram.core.models.bitwise_ramlm import reconstruct_logprobs
+		return reconstruct_logprobs
 
 	# Hybrid / Transformer LMs (WS2-WS3)
 	if name == 'TinyTransformerLM':
