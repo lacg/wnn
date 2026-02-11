@@ -270,6 +270,12 @@ Thumbs.db
 /checkpoints/
 results_*.json
 
+# Experiment results (transient, regenerated per run)
+experiments/
+
+# Ad-hoc experiment runners (tracked runners are in project root with proper names)
+run_bitwise_experiment.py
+
 # Dashboard runtime files
 dashboard/*.db
 dashboard/frontend/.svelte-kit/
