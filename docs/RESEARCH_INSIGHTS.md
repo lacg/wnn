@@ -224,7 +224,35 @@ The GA/TS connectivity optimization is a form of **static attention**:
 
 ---
 
+---
+
+## Bitwise Architecture Optimization {#bitwise-optimization}
+
+**Date:** 2026-02-10 — ongoing
+**Status:** Active experiments
+
+See **[docs/BITWISE_OPTIMIZATION.md](BITWISE_OPTIMIZATION.md)** for full details.
+
+### Key Findings
+
+1. **Grid search rankings are stable**: n=200/b=20 consistently wins across runs (CE~9.14)
+2. **Progressive threshold is critical**: Must start at 3% with gentle ramp (0.001%/gen)
+3. **HARMONIC_RANK prevents accuracy collapse**: Previous CE-only fitness destroyed accuracy
+4. **BitwiseRAMLM approach**: 16 independent clusters, each with configurable neurons/bits/connections
+5. **Context sweep planned**: Test [2,3,4,5,6,7,8,16] n-grams with best architecture
+
+### Connection to Hybrid Vision
+
+The bitwise optimization work feeds directly into the **hybrid architecture vision**:
+- Optimized RAM WNN serves as the fast pattern cache layer
+- Context sweep determines optimal n-gram size for the cache
+- Gating (Engram-inspired) enables selective use of RAM predictions
+- Hard cases fall through to transformer backbone
+
+---
+
 ## Changelog
 
+- **2026-02-11**: Added bitwise optimization section, linked to detailed doc
 - **2026-01-21**: Added fundamental limitation analysis, hybrid architecture vision
 - **2026-01-11**: Added asymmetric tiered architecture finding
