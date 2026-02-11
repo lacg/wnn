@@ -650,6 +650,22 @@ class ClusterGenome:
 		bits = self.bits_per_cluster
 		neurons = self.neurons_per_cluster
 
+		# Per-cluster breakdown for dashboard
+		cluster_stats = []
+		for i in range(len(bits)):
+			b, n = bits[i], neurons[i]
+			connections = n * b
+			memory_cells = n * (2 ** b)
+			# 31 cells per 64-bit word, 8 bytes per word
+			memory_words = (memory_cells + 30) // 31
+			cluster_stats.append({
+				"cluster": i,
+				"bits": b,
+				"neurons": n,
+				"connections": connections,
+				"memory_words": memory_words,
+			})
+
 		return {
 			"num_clusters": len(bits),
 			# Bits stats
@@ -672,6 +688,8 @@ class ClusterGenome:
 			"neurons_distribution": {
 				n: neurons.count(n) for n in sorted(set(neurons))
 			},
+			# Per-cluster breakdown (for dashboard)
+			"cluster_stats": cluster_stats,
 		}
 
 	def compute_tier_stats(self, tier_config: list[tuple]) -> list[dict]:

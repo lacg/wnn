@@ -439,6 +439,7 @@ class DashboardClient:
 		best_ce: Optional[float] = None,
 		best_accuracy: Optional[float] = None,
 		current_iteration: Optional[int] = None,
+		cluster_type: Optional[str] = None,
 	) -> dict:
 		"""
 		Update an experiment.
@@ -450,6 +451,7 @@ class DashboardClient:
 			best_ce: Best CE achieved
 			best_accuracy: Best accuracy achieved
 			current_iteration: Current iteration number
+			cluster_type: Architecture type ('tiered' or 'bitwise')
 
 		Returns:
 			Updated experiment data
@@ -465,11 +467,13 @@ class DashboardClient:
 			data["best_accuracy"] = best_accuracy
 		if current_iteration is not None:
 			data["current_iteration"] = current_iteration
+		if cluster_type is not None:
+			data["cluster_type"] = cluster_type
 		return self._request("PATCH", f"/api/experiments/{experiment_id}", json_data=data)
 
-	def experiment_started(self, experiment_id: int) -> dict:
+	def experiment_started(self, experiment_id: int, cluster_type: Optional[str] = None) -> dict:
 		"""Mark experiment as started/running."""
-		return self.update_experiment(experiment_id, status="running")
+		return self.update_experiment(experiment_id, status="running", cluster_type=cluster_type)
 
 	def experiment_completed(
 		self,
