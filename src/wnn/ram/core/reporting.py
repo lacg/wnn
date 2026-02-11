@@ -500,6 +500,7 @@ class PhaseMetrics:
 	best_acc_ce: float
 	best_acc_acc: float
 	k: int = 10  # Number of genomes for top-k mean
+	first_metric_label: Optional[str] = None  # Custom label for first row (default: "top-K mean")
 
 	@property
 	def top_k_ppl(self) -> float:
@@ -566,9 +567,10 @@ class PhaseComparisonTable:
 		baseline_ce = self.phases[0].top_k_ce if self.phases else None
 
 		for i, pm in enumerate(self.phases):
-			# First row: top-k mean
+			# First row: top-k mean (or custom label)
+			first_label = pm.first_metric_label or f"top-{pm.k} mean"
 			lines.append(
-				f"{pm.phase_name:<30} │ {'top-' + str(pm.k) + ' mean':<12} │ "
+				f"{pm.phase_name:<30} │ {first_label:<12} │ "
 				f"{pm.top_k_ce:>10.4f} │ {pm.top_k_ppl:>12.1f} │ {pm.top_k_acc:>9.2%}"
 			)
 			# Second row: best CE
@@ -593,8 +595,9 @@ class PhaseComparisonTable:
 			final = self.phases[-1]
 			top_k_improvement = (1 - final.top_k_ce / baseline_ce) * 100
 			best_ce_improvement = (1 - final.best_ce_ce / self.phases[0].best_ce_ce) * 100
+			first_label = final.first_metric_label or f"top-{final.k}"
 			lines.append(
-				f"Improvement vs baseline: top-{final.k} CE {top_k_improvement:+.2f}%, "
+				f"Improvement vs baseline: {first_label} CE {top_k_improvement:+.2f}%, "
 				f"best CE {best_ce_improvement:+.2f}%"
 			)
 

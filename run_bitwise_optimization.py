@@ -29,6 +29,7 @@ import json
 import math
 import sys
 import time
+from dataclasses import asdict
 from pathlib import Path
 
 
@@ -240,7 +241,7 @@ def run_ga_phase(
 	optimize_kwargs = dict(
 		evaluate_fn=lambda g: 999.0,
 		initial_genome=seed_genome,
-		batch_evaluate_fn=lambda genomes, **kw: evaluator.evaluate_batch(genomes, **kw),
+		batch_evaluate_fn=lambda genomes, **kw: evaluator.evaluate_batch(genomes, logger=logger, **kw),
 	)
 	if initial_population is not None:
 		optimize_kwargs["initial_population"] = initial_population
@@ -294,7 +295,7 @@ def run_ts_phase(
 		initial_genome=seed_genome,
 		initial_fitness=seed_fitness,
 		evaluate_fn=lambda g: 999.0,
-		batch_evaluate_fn=lambda genomes, **kw: evaluator.evaluate_batch(genomes, **kw),
+		batch_evaluate_fn=lambda genomes, **kw: evaluator.evaluate_batch(genomes, logger=logger, **kw),
 	)
 	elapsed = time.time() - t0
 
@@ -310,8 +311,11 @@ def run_ts_phase(
 
 
 # ---------------------------------------------------------------------------
-# Top-K full-eval summary (mirrors wnn-exp PhaseComparisonTable)
+# Top-K full-eval summary (reuses PhaseComparisonTable from reporting.py)
 # ---------------------------------------------------------------------------
+
+from wnn.ram.core.reporting import PhaseMetrics, PhaseComparisonTable
+
 
 def harmonic_weighted(ce_rank, acc_rank, w_ce=1.0, w_acc=1.0):
 	"""Weighted harmonic mean of ranks (lower = better)."""
@@ -325,28 +329,19 @@ def evaluate_phase_top_k(full_evaluator, result, phase_name):
 
 	Pre-filters the population by fitness rank (using optimization metrics from result),
 	then full-evals only best CE, best Acc (if different), best Fitness (if different).
-	This avoids expensive full evaluation on the entire population.
 
-	Args:
-		full_evaluator: BitwiseEvaluator configured with validation data
-		result: OptimizationResult with final_population and metrics
-		phase_name: Display name for the phase
-
-	Returns dict with keys: best_ce, best_acc, best_fitness.
+	Returns PhaseMetrics for use with PhaseComparisonTable.
 	"""
 	pop = result.final_population if result.final_population else []
 	if not pop:
 		pop = [result.best_genome]
 
 	# Use optimization-time metrics (from the result) to rank population
-	# result.population_metrics is list of (genome, ce, acc) if available
 	pop_metrics = getattr(result, "population_metrics", None)
 	if pop_metrics and len(pop_metrics) == len(pop):
-		# Pre-rank by optimization metrics to select candidates
 		by_ce = sorted(range(len(pop)), key=lambda i: pop_metrics[i][0])
 		by_acc = sorted(range(len(pop)), key=lambda i: -pop_metrics[i][1])
 
-		# Compute fitness ranks
 		n = len(pop)
 		ce_ranks = {i: rank + 1 for rank, i in enumerate(by_ce)}
 		acc_ranks = {i: rank + 1 for rank, i in enumerate(by_acc)}
@@ -359,82 +354,53 @@ def evaluate_phase_top_k(full_evaluator, result, phase_name):
 		best_acc_idx = by_acc[0]
 		best_fit_idx = by_fitness[0]
 	else:
-		# No optimization metrics — just use best_genome for all three
 		best_ce_idx = 0
 		best_acc_idx = 0
 		best_fit_idx = 0
 
 	# Collect unique genomes to full-eval (1-3 max)
-	candidates = {}  # idx → genome
+	candidates = {}
 	candidates[best_ce_idx] = pop[best_ce_idx]
 	if best_acc_idx != best_ce_idx:
 		candidates[best_acc_idx] = pop[best_acc_idx]
 	if best_fit_idx not in candidates:
 		candidates[best_fit_idx] = pop[best_fit_idx]
 
-	# Full evaluation on validation data (1-3 genomes)
 	genome_list = list(candidates.values())
 	idx_list = list(candidates.keys())
 	print(f"  Full-eval {len(genome_list)} genome(s) on validation...")
 	full_results = full_evaluator.evaluate_batch_full(genome_list)
 
-	# Map results back
 	eval_map = {}
 	for i, idx in enumerate(idx_list):
 		eval_map[idx] = full_results[i]
 
-	def make_entry(idx):
+	def get_ce_acc(idx):
 		ce, acc = eval_map[idx]
-		return {"ce": ce, "acc": acc, "ppl": math.exp(ce)}
+		return ce, acc
 
-	return {
-		"phase_name": phase_name,
-		"n_full_evaluated": len(genome_list),
-		"n_population": len(pop),
-		"best_ce": make_entry(best_ce_idx),
-		"best_acc": make_entry(best_acc_idx),
-		"best_fitness": make_entry(best_fit_idx),
-	}
+	fit_ce, fit_acc = get_ce_acc(best_fit_idx)
+	ce_ce, ce_acc = get_ce_acc(best_ce_idx)
+	acc_ce, acc_acc = get_ce_acc(best_acc_idx)
+
+	return PhaseMetrics(
+		phase_name=phase_name,
+		top_k_ce=fit_ce,
+		top_k_acc=fit_acc,
+		best_ce_ce=ce_ce,
+		best_ce_acc=ce_acc,
+		best_acc_ce=acc_ce,
+		best_acc_acc=acc_acc,
+		first_metric_label="best fitness",
+	)
 
 
 def print_phase_comparison(phase_metrics_list):
-	"""Print cumulative phase comparison table (all on full validation)."""
-	W = 82
-	print(f"\n{'='*W}")
-	print(f"  Phase Comparison (Full Validation)")
-	print(f"{'='*W}")
-	print(f"  {'Phase':<28} {'Metric':<14} {'CE':>10} {'PPL':>12} {'Accuracy':>10}")
-	print(f"  {'-'*(W-2)}")
-
-	baseline_ce = phase_metrics_list[0]["best_ce"]["ce"] if phase_metrics_list else None
-
-	for i, pm in enumerate(phase_metrics_list):
-		name = pm["phase_name"]
-
-		# Row 1: best CE
-		m = pm["best_ce"]
-		print(f"  {name:<28} {'best CE':<14} {m['ce']:>10.4f} {m['ppl']:>12.0f} {m['acc']:>9.2%}")
-
-		# Row 2: best Acc (only if different from best CE)
-		m = pm["best_acc"]
-		if m != pm["best_ce"]:
-			print(f"  {'':<28} {'best Acc':<14} {m['ce']:>10.4f} {m['ppl']:>12.0f} {m['acc']:>9.2%}")
-
-		# Row 3: best Fitness (only if different from both)
-		m = pm["best_fitness"]
-		if m != pm["best_ce"] and m != pm["best_acc"]:
-			print(f"  {'':<28} {'best Fitness':<14} {m['ce']:>10.4f} {m['ppl']:>12.0f} {m['acc']:>9.2%}")
-
-		if i < len(phase_metrics_list) - 1:
-			print(f"  {'-'*(W-2)}")
-
-	print(f"  {'='*(W-2)}")
-
-	# Overall improvement
-	if len(phase_metrics_list) >= 2 and baseline_ce:
-		final = phase_metrics_list[-1]
-		best_ce_impr = (1 - final["best_ce"]["ce"] / baseline_ce) * 100
-		print(f"  Improvement vs baseline: best CE {best_ce_impr:+.2f}%")
+	"""Print cumulative phase comparison table using PhaseComparisonTable."""
+	table = PhaseComparisonTable("Phase Comparison (Full Validation)")
+	for pm in phase_metrics_list:
+		table.add_phase(pm)
+	table.print()
 
 
 # ---------------------------------------------------------------------------
@@ -623,15 +589,16 @@ def main():
 	print(f"\nEvaluating baseline on full validation...")
 	baseline_ce, baseline_acc = full_evaluator.evaluate_single_full(best_genome)
 	print(f"  Baseline CE={baseline_ce:.4f}, Acc={baseline_acc:.2%}, PPL={math.exp(baseline_ce):.0f}")
-	baseline_entry = {"ce": baseline_ce, "acc": baseline_acc, "ppl": math.exp(baseline_ce)}
-	phase_metrics_list.append({
-		"phase_name": "Init Population",
-		"n_full_evaluated": 1,
-		"n_population": len(initial_population) if initial_population else 1,
-		"best_ce": baseline_entry,
-		"best_acc": baseline_entry,
-		"best_fitness": baseline_entry,
-	})
+	phase_metrics_list.append(PhaseMetrics(
+		phase_name="Init Population",
+		top_k_ce=baseline_ce,
+		top_k_acc=baseline_acc,
+		best_ce_ce=baseline_ce,
+		best_ce_acc=baseline_acc,
+		best_acc_ce=baseline_ce,
+		best_acc_acc=baseline_acc,
+		first_metric_label="best fitness",
+	))
 
 	ci = args.check_interval
 
@@ -669,7 +636,7 @@ def main():
 		# Full-eval 1-3 genomes on validation
 		metrics = evaluate_phase_top_k(full_evaluator, result, f"P{phase_num} {phase_name}")
 		phase_metrics_list.append(metrics)
-		all_results[result_key]["full_eval"] = metrics
+		all_results[result_key]["full_eval"] = asdict(metrics)
 		print_phase_comparison(phase_metrics_list)
 		save()
 
@@ -707,7 +674,7 @@ def main():
 		# Full-eval 1-3 genomes on validation
 		metrics = evaluate_phase_top_k(full_evaluator, result, f"P{phase_num} {phase_name}")
 		phase_metrics_list.append(metrics)
-		all_results[result_key]["full_eval"] = metrics
+		all_results[result_key]["full_eval"] = asdict(metrics)
 		print_phase_comparison(phase_metrics_list)
 		save()
 
@@ -773,7 +740,7 @@ def main():
 	print(f"{'='*82}")
 	print_phase_comparison(phase_metrics_list)
 
-	all_results["phase_metrics"] = phase_metrics_list
+	all_results["phase_metrics"] = [asdict(pm) for pm in phase_metrics_list]
 	save()
 	print(f"\nAll results saved to {args.output}")
 

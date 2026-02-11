@@ -1182,6 +1182,8 @@ class GenericGAStrategy(ABC, Generic[T]):
 			batch_fn=self._batch_evaluate_fn,
 			single_fn=self._evaluate_fn,
 			min_accuracy=threshold,
+			generation=generation,
+			total_generations=cfg.generations,
 		)
 
 	def _on_generation_start(self, generation: int, **ctx) -> None:
@@ -1699,6 +1701,8 @@ class GenericGAStrategy(ABC, Generic[T]):
 		min_accuracy: float,
 		seed_genomes: Optional[list[T]] = None,
 		max_attempts: int = 10,
+		generation: Optional[int] = None,
+		total_generations: Optional[int] = None,
 	) -> list[tuple[T, float, Optional[float]]]:
 		"""
 		Build a population of viable candidates (accuracy >= min_accuracy).
@@ -1714,6 +1718,8 @@ class GenericGAStrategy(ABC, Generic[T]):
 			min_accuracy: Minimum accuracy threshold (0.0001 = 0.01%)
 			seed_genomes: Optional seed genomes to include (evaluated first)
 			max_attempts: Maximum generation attempts before giving up
+			generation: Current generation/iteration number (passed to batch_fn for logging)
+			total_generations: Total generations/iterations (passed to batch_fn for logging)
 
 		Returns:
 			List of (genome, fitness, accuracy) tuples for viable candidates
@@ -1721,11 +1727,18 @@ class GenericGAStrategy(ABC, Generic[T]):
 		viable: list[tuple[T, float, Optional[float]]] = []
 		filtered_count = 0
 
+		# Extra kwargs for batch evaluation (generation/total for per-batch logging)
+		batch_kwargs: dict = {"min_accuracy": min_accuracy}
+		if generation is not None:
+			batch_kwargs["generation"] = generation
+		if total_generations is not None:
+			batch_kwargs["total_generations"] = total_generations
+
 		# First, evaluate seed genomes if provided
 		if seed_genomes:
 			to_eval = [self.clone_genome(g) for g in seed_genomes[:target_size]]
 			if batch_fn is not None:
-				results = batch_fn(to_eval, min_accuracy=min_accuracy)
+				results = batch_fn(to_eval, **batch_kwargs)
 				for genome, (ce, acc) in zip(to_eval, results):
 					if acc is None or acc >= min_accuracy:
 						viable.append((genome, ce, acc))
@@ -1747,7 +1760,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 
 			# Evaluate
 			if batch_fn is not None:
-				results = batch_fn(candidates, min_accuracy=min_accuracy)
+				results = batch_fn(candidates, **batch_kwargs)
 				for genome, (ce, acc) in zip(candidates, results):
 					if acc is None or acc >= min_accuracy:
 						viable.append((genome, ce, acc))
@@ -1892,10 +1905,13 @@ class GenericTSStrategy(ABC, Generic[T]):
 		if not candidates:
 			return []
 
-		# Evaluate all candidates
+		# Evaluate all candidates (pass iteration info for per-batch logging)
 		if self._batch_evaluate_fn is not None:
 			to_eval = [n for n, _ in candidates]
-			results = self._batch_evaluate_fn(to_eval, min_accuracy=threshold)
+			results = self._batch_evaluate_fn(
+				to_eval, min_accuracy=threshold,
+				generation=iteration, total_generations=self._config.iterations,
+			)
 			fitness_values = [ce for ce, _ in results]
 			accuracy_values = [acc for _, acc in results]
 		else:
