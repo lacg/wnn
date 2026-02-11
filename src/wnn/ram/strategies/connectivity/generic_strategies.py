@@ -1003,9 +1003,9 @@ class GAConfig:
 	mutation_rate: float = 0.1
 	crossover_rate: float = 0.7
 	tournament_size: int = 3  # Tournament selection size
-	# Dual elitism: keep top N% by CE AND top N% by accuracy (unique)
-	# Total elites = 10-20% of population depending on overlap
-	elitism_pct: float = 0.1       # 10% by CE + 10% by accuracy
+	# Elitism: keep top N% by fitness score (unified ranking)
+	# With elitism_pct=0.1 and the 2x multiplier in optimize(), keeps ~20% of population
+	elitism_pct: float = 0.1       # 10% base → 20% effective (multiplied by 2)
 	# Threshold continuity: start threshold passed from previous phase
 	# If None, uses min_accuracy as the base (first phase)
 	initial_threshold: Optional[float] = None
@@ -1016,68 +1016,53 @@ class GAConfig:
 	# Fitness percentile filter: keep only offspring in top X% by fitness (None = disabled)
 	# Example: 0.75 keeps top 75%. Uses configured fitness_calculator_type.
 	fitness_percentile: Optional[float] = None
-	# Fitness calculator: how to combine CE and accuracy for ranking
-	# CE = pure CE ranking, uses dual elites (10% CE + 10% Acc)
-	# HARMONIC_RANK = harmonic mean of ranks, uses single elite (20% by rank) (default)
-	# NORMALIZED = normalized [0,1] scale weighted sum, balanced CE/accuracy
-	# NORMALIZED_HARMONIC = normalized values with harmonic mean (penalizes imbalance more)
+	# Fitness calculator: how to combine CE and accuracy for unified ranking
+	# CE = pure CE ranking
+	# HARMONIC_RANK = harmonic mean of CE+Acc ranks (default)
+	# NORMALIZED = normalized [0,1] weighted sum
+	# NORMALIZED_HARMONIC = normalized values with harmonic mean
 	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK
-	# Weights for HARMONIC_RANK/NORMALIZED/NORMALIZED_HARMONIC modes (higher weight = more important)
 	fitness_weight_ce: float = 1.0
 	fitness_weight_acc: float = 1.0
-	# Accuracy floor: genomes below this accuracy get fitness = infinity
-	# Prevents pathological optimization where CE improves but accuracy degrades
-	# Set to 0.0 to disable, typical value 0.003 (0.3%) based on analysis
+	# Accuracy floor: genomes below this get fitness = infinity (0.0 = disabled)
 	min_accuracy_floor: float = 0.0
-	# Early stopping (all configurable via parameters)
-	patience: int = 5              # Checks without improvement before stopping
-	check_interval: int = 10       # Check every N generations (also controls full eval frequency)
-	min_improvement_pct: float = 0.05  # GA needs diversity, lower threshold (0.05%)
-	# Fresh population: if True, ignore initial_population and generate fresh random genomes
-	# Use for first GA phase to maximize diversity instead of mutating from 1 seed
+	# Early stopping
+	patience: int = 5
+	check_interval: int = 10
+	min_improvement_pct: float = 0.05
+	# Fresh population: ignore initial_population and generate random genomes
 	fresh_population: bool = False
-	# Seed only: if True, use seed genomes as-is without generating mutations to fill population
-	# Use for pass 2+ where we want to continue from previous best without re-randomizing
+	# Seed only: use seed genomes as-is without generating mutations to fill population
 	seed_only: bool = False
 
 
 @dataclass
 class TSConfig:
-	"""Configuration for Tabu Search with dual-path CE/Acc optimization."""
+	"""Configuration for Tabu Search optimization."""
 	iterations: int = 100
-	neighbors_per_iter: int = 20   # Total neighbors per iteration (split: N/2 from CE, N/2 from Acc)
+	neighbors_per_iter: int = 20
 	tabu_size: int = 10
-	mutation_rate: float = 0.1     # Fraction of genome elements to mutate per neighbor
-	# Total neighbors cache for seeding next phase (top K/2 by CE + top K/2 by Acc)
-	# Should match GA population_size to preserve diversity for next phase
+	mutation_rate: float = 0.1
+	# Total neighbors cache for seeding next phase (top K by fitness)
 	total_neighbors_size: int = 50
-	# Threshold continuity: start threshold passed from previous phase
-	# If None, uses min_accuracy as the base (first phase)
+	# Threshold continuity
 	initial_threshold: Optional[float] = None
-	min_accuracy: float = 0.0       # 0% base threshold (start accepting everything)
-	threshold_delta: float = 0.01     # 1% total increase over threshold_reference iterations
-	threshold_reference: int = 1000   # Reference iters for threshold rate (0.001%/iter = 0.25% over 250 iters)
-	progressive_threshold: bool = True  # Enable progressive threshold within phase
-	# Fitness percentile filter: keep only neighbors in top X% by fitness (None = disabled)
-	# Example: 0.75 keeps top 75%. Uses configured fitness_calculator_type.
+	min_accuracy: float = 0.0
+	threshold_delta: float = 0.01
+	threshold_reference: int = 1000
+	progressive_threshold: bool = True
+	# Fitness percentile filter (None = disabled)
 	fitness_percentile: Optional[float] = None
-	# Fitness calculator: how to combine CE and accuracy for ranking
-	# CE = pure CE ranking, uses dual paths (25 neighbors from best_ce + 25 from best_acc)
-	# HARMONIC_RANK = harmonic mean of ranks, uses single path (50 from best_harmonic) (default)
-	# NORMALIZED = normalized [0,1] scale weighted sum, balanced CE/accuracy
-	# NORMALIZED_HARMONIC = normalized values with harmonic mean (penalizes imbalance more)
+	# Fitness calculator: unified ranking for all selection/sorting
 	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK
-	# Weights for HARMONIC_RANK/NORMALIZED/NORMALIZED_HARMONIC modes (higher weight = more important)
 	fitness_weight_ce: float = 1.0
 	fitness_weight_acc: float = 1.0
-	# Accuracy floor: genomes below this accuracy get fitness = infinity
-	# Prevents pathological optimization where CE improves but accuracy degrades
-	# Set to 0.0 to disable, typical value 0.003 (0.3%) based on analysis
+	# Accuracy floor: genomes below this get fitness = infinity (0.0 = disabled)
 	min_accuracy_floor: float = 0.0
-	# Early stopping (all configurable via parameters)
-	patience: int = 5              # Checks without improvement before stopping
-	check_interval: int = 10       # Check every N iterations (also controls full eval frequency)
-	min_improvement_pct: float = 0.5  # TS is focused, higher threshold (0.5%)
+	# Early stopping
+	patience: int = 5
+	check_interval: int = 10
+	min_improvement_pct: float = 0.5
 
 
 class GenericGAStrategy(ABC, Generic[T]):
