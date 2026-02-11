@@ -26,6 +26,7 @@ Usage:
 
 import argparse
 import json
+import math
 import sys
 import time
 from pathlib import Path
@@ -180,7 +181,7 @@ def create_seed_genome(num_clusters, bits, neurons, total_input_bits):
 
 def run_ga_phase(
 	evaluator, arch_config, ga_gens, population, patience,
-	seed_genome=None, phase_name="GA", logger=print,
+	seed_genome=None, phase_name="GA", logger=print, check_interval=10,
 ):
 	"""Run a GA optimization phase."""
 	from wnn.ram.strategies.connectivity.architecture_strategies import ArchitectureGAStrategy
@@ -194,7 +195,10 @@ def run_ga_phase(
 		tournament_size=3,
 		elitism_pct=0.1,
 		patience=patience,
-		check_interval=1,
+		check_interval=check_interval,
+		# Threshold: 0.01%/gen → 1% every 100 gens
+		threshold_delta=0.01,
+		threshold_reference=100,
 	)
 
 	strategy = ArchitectureGAStrategy(
@@ -224,7 +228,7 @@ def run_ga_phase(
 
 def run_ts_phase(
 	evaluator, arch_config, ts_iters, neighbors, patience,
-	seed_genome, seed_fitness, phase_name="TS", logger=print,
+	seed_genome, seed_fitness, phase_name="TS", logger=print, check_interval=10,
 ):
 	"""Run a TS refinement phase."""
 	from wnn.ram.strategies.connectivity.architecture_strategies import ArchitectureTSStrategy
@@ -236,7 +240,10 @@ def run_ts_phase(
 		tabu_size=10,
 		mutation_rate=0.1,
 		patience=patience,
-		check_interval=1,
+		check_interval=check_interval,
+		# Threshold: 0.01%/iter → 1% every 100 iters
+		threshold_delta=0.01,
+		threshold_reference=100,
 	)
 
 	strategy = ArchitectureTSStrategy(
@@ -267,33 +274,104 @@ def run_ts_phase(
 
 
 # ---------------------------------------------------------------------------
-# Summary
+# Top-K full-eval summary (mirrors wnn-exp PhaseComparisonTable)
 # ---------------------------------------------------------------------------
 
-def print_summary(phase_results):
-	"""Print end-to-end optimization summary."""
-	print(f"\n{'='*70}")
-	print(f"Optimization Summary")
-	print(f"{'='*70}")
+def harmonic_weighted(ce_rank, acc_rank, w_ce=1.0, w_acc=1.0):
+	"""Weighted harmonic mean of ranks (lower = better)."""
+	if ce_rank == 0 or acc_rank == 0:
+		return float("inf")
+	return (w_ce + w_acc) / (w_ce / ce_rank + w_acc / acc_rank)
 
-	for name, data in phase_results.items():
-		if data is None:
-			continue
-		ce = data.get("final_ce") or data.get("best_ce", "?")
-		acc = data.get("final_accuracy")
-		acc_str = f"  Acc={acc:.2%}" if acc is not None else ""
-		print(f"  {name}: CE={ce:.4f}{acc_str}")
+
+def evaluate_phase_top_k(evaluator, result, phase_name, k=10):
+	"""Evaluate a phase's population on full validation, return top-K metrics.
+
+	Returns dict with keys: best_ce, best_acc, best_fitness, top_k_mean.
+	Each has (ce, acc, ppl).
+	"""
+	pop = result.final_population if result.final_population else []
+	if not pop:
+		# Single genome fallback
+		pop = [result.best_genome]
+
+	# Evaluate all on full train+eval
+	full_evals = []
+	for genome in pop:
+		ce, acc = evaluator.evaluate_single_full(genome)
+		full_evals.append((genome, ce, acc))
+
+	# Sort by CE (ascending), Acc (descending)
+	by_ce = sorted(full_evals, key=lambda x: x[1])
+	by_acc = sorted(full_evals, key=lambda x: -x[2])
+
+	# Harmonic weighted fitness ranking
+	n = len(full_evals)
+	ce_ranks = {id(g): i + 1 for i, (g, _, _) in enumerate(by_ce)}
+	acc_ranks = {id(g): i + 1 for i, (g, _, _) in enumerate(by_acc)}
+	by_fitness = sorted(
+		full_evals,
+		key=lambda x: harmonic_weighted(ce_ranks[id(x[0])], acc_ranks[id(x[0])]),
+	)
+
+	# Top-K mean (by CE)
+	top_k = by_ce[:k]
+	top_k_ce = sum(e[1] for e in top_k) / len(top_k)
+	top_k_acc = sum(e[2] for e in top_k) / len(top_k)
+
+	return {
+		"phase_name": phase_name,
+		"n_evaluated": len(full_evals),
+		"k": min(k, len(top_k)),
+		"top_k_mean": {"ce": top_k_ce, "acc": top_k_acc, "ppl": math.exp(top_k_ce)},
+		"best_ce": {"ce": by_ce[0][1], "acc": by_ce[0][2], "ppl": math.exp(by_ce[0][1])},
+		"best_acc": {"ce": by_acc[0][1], "acc": by_acc[0][2], "ppl": math.exp(by_acc[0][1])},
+		"best_fitness": {"ce": by_fitness[0][1], "acc": by_fitness[0][2], "ppl": math.exp(by_fitness[0][1])},
+	}
+
+
+def print_phase_comparison(phase_metrics_list):
+	"""Print cumulative phase comparison table (all on full validation)."""
+	W = 92
+	print(f"\n{'='*W}")
+	print(f"  Phase Comparison (Full Validation)")
+	print(f"{'='*W}")
+	print(f"  {'Phase':<28} {'Metric':<14} {'CE':>10} {'PPL':>12} {'Accuracy':>10}")
+	print(f"  {'-'*(W-2)}")
+
+	baseline_ce = phase_metrics_list[0]["best_ce"]["ce"] if phase_metrics_list else None
+
+	for i, pm in enumerate(phase_metrics_list):
+		name = pm["phase_name"]
+		k = pm["k"]
+
+		# Row 1: top-K mean
+		m = pm["top_k_mean"]
+		print(f"  {name:<28} {'top-'+str(k)+' mean':<14} {m['ce']:>10.4f} {m['ppl']:>12.0f} {m['acc']:>9.2%}")
+
+		# Row 2: best CE
+		m = pm["best_ce"]
+		print(f"  {'':<28} {'best CE':<14} {m['ce']:>10.4f} {m['ppl']:>12.0f} {m['acc']:>9.2%}")
+
+		# Row 3: best Acc
+		m = pm["best_acc"]
+		print(f"  {'':<28} {'best Acc':<14} {m['ce']:>10.4f} {m['ppl']:>12.0f} {m['acc']:>9.2%}")
+
+		# Row 4: best Fitness (harmonic weighted)
+		m = pm["best_fitness"]
+		print(f"  {'':<28} {'best Fitness':<14} {m['ce']:>10.4f} {m['ppl']:>12.0f} {m['acc']:>9.2%}")
+
+		if i < len(phase_metrics_list) - 1:
+			print(f"  {'-'*(W-2)}")
+
+	print(f"  {'='*(W-2)}")
 
 	# Overall improvement
-	phase_names = list(phase_results.keys())
-	first = next((phase_results[n] for n in phase_names if phase_results[n] is not None), None)
-	last = next((phase_results[n] for n in reversed(phase_names) if phase_results[n] is not None), None)
-	if first and last:
-		baseline = first.get("best_ce") or first.get("final_ce", 0)
-		final = last.get("final_ce", 0)
-		if baseline > 0 and final > 0:
-			improvement = (baseline - final) / baseline * 100
-			print(f"\n  Overall: CE {baseline:.4f} → {final:.4f}  ({improvement:+.1f}%)")
+	if len(phase_metrics_list) >= 2 and baseline_ce:
+		final = phase_metrics_list[-1]
+		top_k_impr = (1 - final["top_k_mean"]["ce"] / baseline_ce) * 100
+		best_ce_impr = (1 - final["best_ce"]["ce"] / baseline_ce) * 100
+		print(f"  Improvement vs baseline: top-{final['k']} CE {top_k_impr:+.2f}%, best CE {best_ce_impr:+.2f}%")
 
 
 # ---------------------------------------------------------------------------
@@ -331,6 +409,8 @@ def main():
 						help="TS neighbors per iteration (default: 30)")
 	parser.add_argument("--patience", type=int, default=2,
 						help="Early stop patience (default: 2)")
+	parser.add_argument("--check-interval", type=int, default=10,
+						help="Patience check every N generations/iterations (default: 10)")
 	args = parser.parse_args()
 
 	output_path = Path(args.output)
@@ -363,6 +443,7 @@ def main():
 			"ts_iters": args.ts_iters,
 			"neighbors": args.neighbors,
 			"patience": args.patience,
+			"check_interval": args.check_interval,
 		},
 		"phase1_grid": None,
 		"phase2_ga_neurons": None,
@@ -444,44 +525,51 @@ def main():
 		default_neurons=best_neurons, default_bits=best_bits,
 	)
 
-	# If no best_ce from Phase 1, evaluate the seed genome
+	# Evaluate baseline on full validation
 	if best_ce is None and best_genome is not None:
 		print("Evaluating seed genome...")
 		results = evaluator.evaluate_batch([best_genome])
 		best_ce = results[0][0]
 		print(f"  Seed CE={best_ce:.4f}")
 
-	# ── Phase 2: GA neurons (bits fixed) ─────────────────────────────────
-	if should_run(2):
-		print(f"\n{'='*70}")
-		print(f"Phase 2: GA Neurons per Cluster (bits fixed at {best_bits})")
-		print(f"{'='*70}")
+	# Baseline full-eval
+	phase_metrics_list = []
+	print(f"\nEvaluating baseline on full validation...")
+	baseline_ce, baseline_acc = evaluator.evaluate_single_full(best_genome)
+	print(f"  Baseline CE={baseline_ce:.4f}, Acc={baseline_acc:.2%}, PPL={math.exp(baseline_ce):.0f}")
+	phase_metrics_list.append({
+		"phase_name": "Baseline",
+		"n_evaluated": 1,
+		"k": 1,
+		"top_k_mean": {"ce": baseline_ce, "acc": baseline_acc, "ppl": math.exp(baseline_ce)},
+		"best_ce": {"ce": baseline_ce, "acc": baseline_acc, "ppl": math.exp(baseline_ce)},
+		"best_acc": {"ce": baseline_ce, "acc": baseline_acc, "ppl": math.exp(baseline_ce)},
+		"best_fitness": {"ce": baseline_ce, "acc": baseline_acc, "ppl": math.exp(baseline_ce)},
+	})
 
-		arch_config = ArchitectureConfig(
-			num_clusters=num_clusters,
-			optimize_neurons=True,
-			optimize_bits=False,
-			optimize_connections=False,
-			default_bits=best_bits,
-			default_neurons=best_neurons,
-			min_neurons=10,
-			max_neurons=300,
-			min_bits=best_bits,
-			max_bits=best_bits,
-			total_input_bits=total_input_bits,
-		)
+	ci = args.check_interval
+
+	# Helper to run a phase and collect top-K metrics
+	def run_and_eval_ga(phase_num, phase_name, result_key, arch_config):
+		nonlocal best_genome, best_ce
+		if not should_run(phase_num) or best_genome is None:
+			return
+		print(f"\n{'='*70}")
+		print(f"Phase {phase_num}: {phase_name}")
+		print(f"{'='*70}")
 
 		result, elapsed = run_ga_phase(
 			evaluator, arch_config,
 			ga_gens=args.ga_gens, population=args.population,
 			patience=args.patience, seed_genome=best_genome,
-			phase_name="Phase 2: GA Neurons", logger=log,
+			phase_name=f"Phase {phase_num}: {phase_name}", logger=log,
+			check_interval=ci,
 		)
 
 		best_genome = result.best_genome
 		best_ce = result.final_fitness
 
-		all_results["phase2_ga_neurons"] = {
+		all_results[result_key] = {
 			"initial_ce": result.initial_fitness,
 			"final_ce": result.final_fitness,
 			"final_accuracy": result.final_accuracy,
@@ -491,221 +579,117 @@ def main():
 			"elapsed_s": round(elapsed, 1),
 			"genome_stats": best_genome.stats(),
 		}
+
+		# Full-eval top-K
+		print(f"\n  Evaluating Phase {phase_num} population on full validation...")
+		metrics = evaluate_phase_top_k(evaluator, result, f"P{phase_num} {phase_name}", k=args.top_k)
+		phase_metrics_list.append(metrics)
+		all_results[result_key]["full_eval"] = metrics
+		print_phase_comparison(phase_metrics_list)
 		save()
-	elif all_results.get("phase2_ga_neurons"):
-		p2 = all_results["phase2_ga_neurons"]
-		best_ce = p2["final_ce"]
-		# Reconstruct genome from stats (uniform bits, varied neurons)
-		stats = p2["genome_stats"]
-		print(f"Loaded Phase 2: CE={best_ce:.4f}")
+
+	def run_and_eval_ts(phase_num, phase_name, result_key, arch_config):
+		nonlocal best_genome, best_ce
+		if not should_run(phase_num) or best_genome is None:
+			return
+		print(f"\n{'='*70}")
+		print(f"Phase {phase_num}: {phase_name}")
+		print(f"{'='*70}")
+
+		result, elapsed = run_ts_phase(
+			evaluator, arch_config,
+			ts_iters=args.ts_iters, neighbors=args.neighbors,
+			patience=args.patience,
+			seed_genome=best_genome, seed_fitness=best_ce,
+			phase_name=f"Phase {phase_num}: {phase_name}", logger=log,
+			check_interval=ci,
+		)
+
+		best_genome = result.best_genome
+		best_ce = result.final_fitness
+
+		all_results[result_key] = {
+			"initial_ce": result.initial_fitness,
+			"final_ce": result.final_fitness,
+			"final_accuracy": result.final_accuracy,
+			"improvement_pct": (result.initial_fitness - result.final_fitness) / result.initial_fitness * 100 if result.initial_fitness > 0 else 0,
+			"iterations_run": result.iterations_run,
+			"stop_reason": str(result.stop_reason),
+			"elapsed_s": round(elapsed, 1),
+			"genome_stats": best_genome.stats() if hasattr(best_genome, "stats") else {},
+		}
+
+		# Full-eval top-K
+		print(f"\n  Evaluating Phase {phase_num} population on full validation...")
+		metrics = evaluate_phase_top_k(evaluator, result, f"P{phase_num} {phase_name}", k=args.top_k)
+		phase_metrics_list.append(metrics)
+		all_results[result_key]["full_eval"] = metrics
+		print_phase_comparison(phase_metrics_list)
+		save()
+
+	# ── Phase 2: GA neurons (bits fixed) ─────────────────────────────────
+	run_and_eval_ga(2, f"GA Neurons (bits={best_bits})", "phase2_ga_neurons", ArchitectureConfig(
+		num_clusters=num_clusters,
+		optimize_neurons=True, optimize_bits=False, optimize_connections=False,
+		default_bits=best_bits, default_neurons=best_neurons,
+		min_neurons=10, max_neurons=300,
+		min_bits=best_bits, max_bits=best_bits,
+		total_input_bits=total_input_bits,
+	))
 
 	# ── Phase 3: TS neurons refinement ───────────────────────────────────
-	if should_run(3) and best_genome is not None:
-		print(f"\n{'='*70}")
-		print(f"Phase 3: TS Neurons Refinement")
-		print(f"{'='*70}")
-
-		arch_config = ArchitectureConfig(
-			num_clusters=num_clusters,
-			optimize_neurons=True,
-			optimize_bits=False,
-			optimize_connections=False,
-			default_bits=best_bits,
-			min_neurons=10,
-			max_neurons=300,
-			min_bits=best_bits,
-			max_bits=best_bits,
-			total_input_bits=total_input_bits,
-		)
-
-		result, elapsed = run_ts_phase(
-			evaluator, arch_config,
-			ts_iters=args.ts_iters, neighbors=args.neighbors,
-			patience=args.patience,
-			seed_genome=best_genome, seed_fitness=best_ce,
-			phase_name="Phase 3: TS Neurons", logger=log,
-		)
-
-		best_genome = result.best_genome
-		best_ce = result.final_fitness
-
-		all_results["phase3_ts_neurons"] = {
-			"initial_ce": result.initial_fitness,
-			"final_ce": result.final_fitness,
-			"final_accuracy": result.final_accuracy,
-			"improvement_pct": (result.initial_fitness - result.final_fitness) / result.initial_fitness * 100 if result.initial_fitness > 0 else 0,
-			"iterations_run": result.iterations_run,
-			"stop_reason": str(result.stop_reason),
-			"elapsed_s": round(elapsed, 1),
-			"genome_stats": best_genome.stats(),
-		}
-		save()
+	run_and_eval_ts(3, "TS Neurons", "phase3_ts_neurons", ArchitectureConfig(
+		num_clusters=num_clusters,
+		optimize_neurons=True, optimize_bits=False, optimize_connections=False,
+		default_bits=best_bits,
+		min_neurons=10, max_neurons=300,
+		min_bits=best_bits, max_bits=best_bits,
+		total_input_bits=total_input_bits,
+	))
 
 	# ── Phase 4: GA bits (neurons fixed) ─────────────────────────────────
-	if should_run(4) and best_genome is not None:
-		print(f"\n{'='*70}")
-		print(f"Phase 4: GA Bits per Cluster (neurons fixed)")
-		print(f"{'='*70}")
-
-		arch_config = ArchitectureConfig(
-			num_clusters=num_clusters,
-			optimize_bits=True,
-			optimize_neurons=False,
-			optimize_connections=False,
-			min_bits=10,
-			max_bits=24,
-			total_input_bits=total_input_bits,
-		)
-
-		result, elapsed = run_ga_phase(
-			evaluator, arch_config,
-			ga_gens=args.ga_gens, population=args.population,
-			patience=args.patience, seed_genome=best_genome,
-			phase_name="Phase 4: GA Bits", logger=log,
-		)
-
-		best_genome = result.best_genome
-		best_ce = result.final_fitness
-
-		all_results["phase4_ga_bits"] = {
-			"initial_ce": result.initial_fitness,
-			"final_ce": result.final_fitness,
-			"final_accuracy": result.final_accuracy,
-			"improvement_pct": result.improvement_percent,
-			"generations_run": result.iterations_run,
-			"stop_reason": str(result.stop_reason),
-			"elapsed_s": round(elapsed, 1),
-			"genome_stats": best_genome.stats(),
-		}
-		save()
+	run_and_eval_ga(4, "GA Bits", "phase4_ga_bits", ArchitectureConfig(
+		num_clusters=num_clusters,
+		optimize_bits=True, optimize_neurons=False, optimize_connections=False,
+		min_bits=10, max_bits=24,
+		total_input_bits=total_input_bits,
+	))
 
 	# ── Phase 5: TS bits refinement ──────────────────────────────────────
-	if should_run(5) and best_genome is not None:
-		print(f"\n{'='*70}")
-		print(f"Phase 5: TS Bits Refinement")
-		print(f"{'='*70}")
-
-		arch_config = ArchitectureConfig(
-			num_clusters=num_clusters,
-			optimize_bits=True,
-			optimize_neurons=False,
-			optimize_connections=False,
-			min_bits=10,
-			max_bits=24,
-			total_input_bits=total_input_bits,
-		)
-
-		result, elapsed = run_ts_phase(
-			evaluator, arch_config,
-			ts_iters=args.ts_iters, neighbors=args.neighbors,
-			patience=args.patience,
-			seed_genome=best_genome, seed_fitness=best_ce,
-			phase_name="Phase 5: TS Bits", logger=log,
-		)
-
-		best_genome = result.best_genome
-		best_ce = result.final_fitness
-
-		all_results["phase5_ts_bits"] = {
-			"initial_ce": result.initial_fitness,
-			"final_ce": result.final_fitness,
-			"final_accuracy": result.final_accuracy,
-			"improvement_pct": (result.initial_fitness - result.final_fitness) / result.initial_fitness * 100 if result.initial_fitness > 0 else 0,
-			"iterations_run": result.iterations_run,
-			"stop_reason": str(result.stop_reason),
-			"elapsed_s": round(elapsed, 1),
-			"genome_stats": best_genome.stats(),
-		}
-		save()
+	run_and_eval_ts(5, "TS Bits", "phase5_ts_bits", ArchitectureConfig(
+		num_clusters=num_clusters,
+		optimize_bits=True, optimize_neurons=False, optimize_connections=False,
+		min_bits=10, max_bits=24,
+		total_input_bits=total_input_bits,
+	))
 
 	# ── Phase 6: GA connections (architecture fixed) ─────────────────────
-	if should_run(6) and best_genome is not None:
-		print(f"\n{'='*70}")
-		print(f"Phase 6: GA Connections (architecture fixed)")
-		print(f"{'='*70}")
-
-		arch_config = ArchitectureConfig(
-			num_clusters=num_clusters,
-			optimize_bits=False,
-			optimize_neurons=False,
-			optimize_connections=True,
-			total_input_bits=total_input_bits,
-		)
-
-		result, elapsed = run_ga_phase(
-			evaluator, arch_config,
-			ga_gens=args.ga_gens, population=args.population,
-			patience=args.patience, seed_genome=best_genome,
-			phase_name="Phase 6: GA Connections", logger=log,
-		)
-
-		best_genome = result.best_genome
-		best_ce = result.final_fitness
-
-		all_results["phase6_ga_connections"] = {
-			"initial_ce": result.initial_fitness,
-			"final_ce": result.final_fitness,
-			"final_accuracy": result.final_accuracy,
-			"improvement_pct": result.improvement_percent,
-			"generations_run": result.iterations_run,
-			"stop_reason": str(result.stop_reason),
-			"elapsed_s": round(elapsed, 1),
-		}
-		save()
+	run_and_eval_ga(6, "GA Connections", "phase6_ga_connections", ArchitectureConfig(
+		num_clusters=num_clusters,
+		optimize_bits=False, optimize_neurons=False, optimize_connections=True,
+		total_input_bits=total_input_bits,
+	))
 
 	# ── Phase 7: TS connections refinement ───────────────────────────────
-	if should_run(7) and best_genome is not None:
-		print(f"\n{'='*70}")
-		print(f"Phase 7: TS Connections Refinement")
-		print(f"{'='*70}")
+	run_and_eval_ts(7, "TS Connections", "phase7_ts_connections", ArchitectureConfig(
+		num_clusters=num_clusters,
+		optimize_bits=False, optimize_neurons=False, optimize_connections=True,
+		total_input_bits=total_input_bits,
+	))
 
-		arch_config = ArchitectureConfig(
-			num_clusters=num_clusters,
-			optimize_bits=False,
-			optimize_neurons=False,
-			optimize_connections=True,
-			total_input_bits=total_input_bits,
-		)
+	# Save best genome separately
+	if best_genome is not None:
+		genome_path = output_path.with_suffix(".best_genome.json")
+		best_genome.save(str(genome_path), fitness=best_ce)
+		print(f"\nBest genome saved to {genome_path}")
 
-		result, elapsed = run_ts_phase(
-			evaluator, arch_config,
-			ts_iters=args.ts_iters, neighbors=args.neighbors,
-			patience=args.patience,
-			seed_genome=best_genome, seed_fitness=best_ce,
-			phase_name="Phase 7: TS Connections", logger=log,
-		)
+	# ── Final Summary ────────────────────────────────────────────────────
+	print(f"\n{'='*92}")
+	print(f"  FINAL RESULTS (All metrics on FULL validation data)")
+	print(f"{'='*92}")
+	print_phase_comparison(phase_metrics_list)
 
-		best_genome = result.best_genome
-		best_ce = result.final_fitness
-
-		all_results["phase7_ts_connections"] = {
-			"initial_ce": result.initial_fitness,
-			"final_ce": result.final_fitness,
-			"final_accuracy": result.final_accuracy,
-			"improvement_pct": (result.initial_fitness - result.final_fitness) / result.initial_fitness * 100 if result.initial_fitness > 0 else 0,
-			"iterations_run": result.iterations_run,
-			"stop_reason": str(result.stop_reason),
-			"elapsed_s": round(elapsed, 1),
-		}
-
-		# Save best genome separately
-		if best_genome is not None:
-			genome_path = output_path.with_suffix(".best_genome.json")
-			best_genome.save(str(genome_path), fitness=best_ce, accuracy=result.final_accuracy)
-			print(f"\nBest genome saved to {genome_path}")
-
-	# ── Summary ──────────────────────────────────────────────────────────
-	phase_results = {
-		"Phase 1 (grid)": all_results.get("phase1_grid"),
-		"Phase 2 (GA neurons)": all_results.get("phase2_ga_neurons"),
-		"Phase 3 (TS neurons)": all_results.get("phase3_ts_neurons"),
-		"Phase 4 (GA bits)": all_results.get("phase4_ga_bits"),
-		"Phase 5 (TS bits)": all_results.get("phase5_ts_bits"),
-		"Phase 6 (GA connections)": all_results.get("phase6_ga_connections"),
-		"Phase 7 (TS connections)": all_results.get("phase7_ts_connections"),
-	}
-	print_summary(phase_results)
-
+	all_results["phase_metrics"] = phase_metrics_list
 	save()
 	print(f"\nAll results saved to {args.output}")
 
