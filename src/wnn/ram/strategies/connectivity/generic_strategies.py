@@ -1860,78 +1860,68 @@ class GenericTSStrategy(ABC, Generic[T]):
 
 	def _generate_neighbors(
 		self,
-		best_ce_genome: T,
-		best_acc_genome: T,
+		best_genome: T,
 		n_neighbors: int,
 		threshold: float,
 		iteration: int,
-		tabu_ce: list,
-		tabu_acc: list,
+		tabu_list: list,
 	) -> list[tuple[T, float, Optional[float]]]:
 		"""Generate and evaluate neighbors for one iteration.
 
 		Override in subclasses for Rust-accelerated neighbor generation.
-		Default: Python dual-path (N/2 from CE best + N/2 from Acc best).
+		Default: Python single-path — all N neighbors from best-ranked genome.
 
-		Returns list of (genome, ce, accuracy) tuples for ALL evaluated neighbors.
+		Args:
+			best_genome: Best genome by fitness ranking (used as mutation source)
+			n_neighbors: Number of neighbors to generate
+			threshold: Minimum accuracy threshold
+			iteration: Current iteration number
+			tabu_list: Tabu list (deque) for move tracking
+
+		Returns list of (genome, ce, accuracy) tuples for viable neighbors.
 		"""
 		cfg = self._config
-		neighbors_per_path = n_neighbors // 2
 
-		# Path A: neighbors from best_ce
-		ce_candidates: list[tuple[T, Any]] = []
-		for _ in range(neighbors_per_path):
-			neighbor, move = self.mutate_genome(self.clone_genome(best_ce_genome), cfg.mutation_rate)
-			if not self.is_tabu_move(move, tabu_ce):
-				ce_candidates.append((neighbor, move))
+		# Generate N candidates from best genome
+		candidates: list[tuple[T, Any]] = []
+		for _ in range(n_neighbors):
+			neighbor, move = self.mutate_genome(self.clone_genome(best_genome), cfg.mutation_rate)
+			if not self.is_tabu_move(move, tabu_list):
+				candidates.append((neighbor, move))
 
-		# Path B: neighbors from best_acc
-		acc_candidates: list[tuple[T, Any]] = []
-		for _ in range(neighbors_per_path):
-			neighbor, move = self.mutate_genome(self.clone_genome(best_acc_genome), cfg.mutation_rate)
-			if not self.is_tabu_move(move, tabu_acc):
-				acc_candidates.append((neighbor, move))
-
-		# Combine and evaluate all candidates
-		all_candidates = ce_candidates + acc_candidates
-		if not all_candidates:
+		if not candidates:
 			return []
 
+		# Evaluate all candidates
 		if self._batch_evaluate_fn is not None:
-			to_eval = [n for n, _ in all_candidates]
+			to_eval = [n for n, _ in candidates]
 			results = self._batch_evaluate_fn(to_eval, min_accuracy=threshold)
 			fitness_values = [ce for ce, _ in results]
 			accuracy_values = [acc for _, acc in results]
 		else:
-			fitness_values = [self._evaluate_fn(n) for n, _ in all_candidates]
-			accuracy_values = [None] * len(all_candidates)
+			fitness_values = [self._evaluate_fn(n) for n, _ in candidates]
+			accuracy_values = [None] * len(candidates)
 
 		# Build evaluated list: (genome, move, ce, acc)
-		evaluated = [(n, m, f, a) for (n, m), f, a in zip(all_candidates, fitness_values, accuracy_values)]
+		evaluated = [(n, m, f, a) for (n, m), f, a in zip(candidates, fitness_values, accuracy_values)]
 
 		# Filter by threshold
 		viable = [(n, m, f, a) for n, m, f, a in evaluated if a is None or a >= threshold]
 		if not viable:
 			viable = sorted(evaluated, key=lambda x: x[2])[:1]
 
-		# Update tabu lists and best trackers
-		# CE path: find best by CE among CE-path neighbors
-		ce_evaluated = evaluated[:len(ce_candidates)]
-		if ce_evaluated:
-			ce_best_idx = min(range(len(ce_evaluated)), key=lambda i: ce_evaluated[i][2])
-			_, m, _, _ = ce_evaluated[ce_best_idx]
+		# Update tabu list with best neighbor's move
+		if viable:
+			# Use fitness calculator to find best neighbor for tabu tracking
+			viable_3t = [(n, f, a or 0.0) for n, m, f, a in viable]
+			ranked = self._fitness_calculator.rank(viable_3t)
+			best_idx = next(
+				i for i, (n, m, f, a) in enumerate(viable)
+				if n is ranked[0][0]
+			)
+			_, m, _, _ = viable[best_idx]
 			if m is not None:
-				tabu_ce.append(m)
-
-		# Acc path: find best by Acc among Acc-path neighbors
-		acc_evaluated = evaluated[len(ce_candidates):]
-		if acc_evaluated:
-			acc_with_values = [(i, x[3]) for i, x in enumerate(acc_evaluated) if x[3] is not None]
-			if acc_with_values:
-				acc_best_idx = max(acc_with_values, key=lambda x: x[1])[0]
-				_, m, _, _ = acc_evaluated[acc_best_idx]
-				if m is not None:
-					tabu_acc.append(m)
+				tabu_list.append(m)
 
 		# Return viable neighbors as 3-tuples (genome, ce, accuracy)
 		return [(n, f, a) for n, _, f, a in viable]
@@ -1942,7 +1932,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 		Override for Metal cleanup, shutdown check, etc.
 		Raise StopIteration to stop the optimization loop gracefully.
 
-		ctx keys: best_ce_genome, best_acc_genome, best_fitness, best_accuracy, threshold
+		ctx keys: best_genome, best_fitness, best_accuracy, threshold
 		"""
 		pass
 
@@ -1960,12 +1950,10 @@ class GenericTSStrategy(ABC, Generic[T]):
 		overfitting_callback: Optional[Callable[[T, float], Any]] = None,
 	) -> OptimizerResult[T]:
 		"""
-		Run Tabu Search optimization with dual-path CE/Acc optimization.
+		Run Tabu Search optimization with fitness-ranked single-path search.
 
-		Each iteration:
-		- Generate N/2 neighbors from best_ce, pick best by CE
-		- Generate N/2 neighbors from best_acc, pick best by Acc
-		- Maintain total_neighbors cache: top K/2 by CE + top K/2 by Acc
+		Each iteration generates N neighbors from the best-ranked genome
+		(ranked by the configured fitness calculator: CE, HarmonicRank, etc.).
 
 		Args:
 			initial_genome: Starting genome
@@ -2008,29 +1996,22 @@ class GenericTSStrategy(ABC, Generic[T]):
 
 		# Cache size for total_neighbors
 		cache_size = cfg.total_neighbors_size or cfg.neighbors_per_iter
-		cache_size_per_metric = cache_size // 2
 
-		# Dual-path tracking: best by CE and best by Acc
-		best_ce_genome = self.clone_genome(initial_genome)
-		best_ce_fitness = initial_fitness
-		best_ce_accuracy: Optional[float] = None
+		# Best genome tracking (single path by fitness ranking)
+		best_ranked_genome = self.clone_genome(initial_genome)
+		best_ranked_ce = initial_fitness
+		best_ranked_accuracy: Optional[float] = None
 
-		best_acc_genome = self.clone_genome(initial_genome)
-		best_acc_fitness = initial_fitness
-		best_acc_accuracy: Optional[float] = None
-
-		# Global best (by CE, for return value)
+		# Global best (by CE for return value / early stopping)
 		best = self.clone_genome(initial_genome)
 		best_fitness = initial_fitness
 		best_accuracy: Optional[float] = None
 		start_fitness = initial_fitness
 
-		# Tabu lists (separate for CE and Acc paths to allow independent exploration)
-		tabu_list_ce: deque = deque(maxlen=cfg.tabu_size)
-		tabu_list_acc: deque = deque(maxlen=cfg.tabu_size)
+		# Single tabu list
+		tabu_list: deque = deque(maxlen=cfg.tabu_size)
 
-		# Total neighbors cache: all genomes with their CE and Acc
-		# Will be split into top K/2 by CE + top K/2 by Acc at the end
+		# All neighbors cache: genomes with their CE and Acc
 		all_neighbors: list[tuple[T, float, Optional[float]]] = [
 			(self.clone_genome(initial_genome), initial_fitness, None)
 		]
@@ -2053,40 +2034,40 @@ class GenericTSStrategy(ABC, Generic[T]):
 			for g, f, a in zip(initial_neighbors, seed_fitness, seed_accuracy):
 				all_neighbors.append((self.clone_genome(g), f, a))
 
-			# Find best CE and best Acc from seeds
-			best_ce_idx = min(range(len(seed_fitness)), key=lambda i: seed_fitness[i])
-			if seed_fitness[best_ce_idx] < best_ce_fitness:
-				best_ce_genome = self.clone_genome(initial_neighbors[best_ce_idx])
-				best_ce_fitness = seed_fitness[best_ce_idx]
-				best_ce_accuracy = seed_accuracy[best_ce_idx]
+			# Find best by fitness ranking
+			valid_for_rank = [(g, ce, acc or 0.0) for g, ce, acc in all_neighbors if acc is not None]
+			if valid_for_rank:
+				ranked = fitness_calculator.rank(valid_for_rank)
+				best_ranked_obj = ranked[0][0]
+				best_ranked_genome = self.clone_genome(best_ranked_obj)
+				# Look up CE/acc from the original tuples
+				for g, ce, acc in valid_for_rank:
+					if g is best_ranked_obj:
+						best_ranked_ce = ce
+						best_ranked_accuracy = acc
+						break
+			else:
+				# Fallback: best by CE
+				best_ce_idx = min(range(len(seed_fitness)), key=lambda i: seed_fitness[i])
+				best_ranked_genome = self.clone_genome(initial_neighbors[best_ce_idx])
+				best_ranked_ce = seed_fitness[best_ce_idx]
+				best_ranked_accuracy = seed_accuracy[best_ce_idx]
 
-			# Find best by Acc (only consider those with accuracy)
-			acc_with_values = [(i, a) for i, a in enumerate(seed_accuracy) if a is not None]
-			if acc_with_values:
-				best_acc_idx = max(acc_with_values, key=lambda x: x[1])[0]
-				if seed_accuracy[best_acc_idx] is not None and (best_acc_accuracy is None or seed_accuracy[best_acc_idx] > best_acc_accuracy):
-					best_acc_genome = self.clone_genome(initial_neighbors[best_acc_idx])
-					best_acc_fitness = seed_fitness[best_acc_idx]
-					best_acc_accuracy = seed_accuracy[best_acc_idx]
-
-			# Update global best
-			if best_ce_fitness < best_fitness:
-				best = self.clone_genome(best_ce_genome)
-				best_fitness = best_ce_fitness
-				best_accuracy = best_ce_accuracy
+			# Update global best (by CE)
+			best_ce_idx = min(range(len(all_neighbors)), key=lambda i: all_neighbors[i][1])
+			if all_neighbors[best_ce_idx][1] < best_fitness:
+				best = self.clone_genome(all_neighbors[best_ce_idx][0])
+				best_fitness = all_neighbors[best_ce_idx][1]
+				best_accuracy = all_neighbors[best_ce_idx][2]
 
 			# Log seed summary
-			viable = [(f, a) for f, a in zip(seed_fitness, seed_accuracy) if a is None or a >= current_threshold]
-			seed_best = min(f for f, _ in viable) if viable else min(seed_fitness)
-			seed_avg = sum(f for f, _ in viable) / len(viable) if viable else sum(seed_fitness) / len(seed_fitness)
-			self._log.info(f"[{self.name}] Seed: best_ce={best_ce_fitness:.4f}, best_acc={best_acc_accuracy:.2%}" if best_acc_accuracy else
-						   f"[{self.name}] Seed: best_ce={best_ce_fitness:.4f}, best_acc=N/A")
+			best_acc_val = max((a for _, _, a in all_neighbors if a is not None), default=None)
+			self._log.info(f"[{self.name}] Seed: best_ce={best_fitness:.4f}, best_acc={best_acc_val:.2%}" if best_acc_val else
+						   f"[{self.name}] Seed: best_ce={best_fitness:.4f}, best_acc=N/A")
 
 		history = [(0, best_fitness)]
 
 		# Analysis tracking
-		ce_improved = 0
-		acc_improved = 0
 		improved_iterations = 0
 
 		# Initialize early stopping tracker
@@ -2099,9 +2080,8 @@ class GenericTSStrategy(ABC, Generic[T]):
 		early_stopper.reset(best_fitness)
 
 		# Log config
-		neighbors_per_path = cfg.neighbors_per_iter // 2
-		self._log.info(f"[{self.name}] Config: neighbors={cfg.neighbors_per_iter} ({neighbors_per_path} CE + {neighbors_per_path} Acc), "
-					   f"iters={cfg.iterations}, cache={cache_size} ({cache_size_per_metric} CE + {cache_size_per_metric} Acc)")
+		self._log.info(f"[{self.name}] Config: neighbors={cfg.neighbors_per_iter} (single path by {fitness_calculator.name}), "
+					   f"iters={cfg.iterations}, cache={cache_size}")
 
 		# Track threshold changes
 		prev_threshold: Optional[float] = None
@@ -2114,7 +2094,6 @@ class GenericTSStrategy(ABC, Generic[T]):
 		for iteration in range(cfg.iterations):
 			# Progressive threshold
 			current_threshold = get_threshold(iteration / cfg.threshold_reference)
-			# Only log if formatted values differ (avoid noise from tiny internal differences)
 			if prev_threshold is not None and f"{prev_threshold:.4%}" != f"{current_threshold:.4%}":
 				self._log.debug(f"[{self.name}] Threshold changed: {prev_threshold:.4%} → {current_threshold:.4%}")
 			prev_threshold = current_threshold
@@ -2123,8 +2102,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 			try:
 				self._on_iteration_start(
 					iteration,
-					best_ce_genome=best_ce_genome,
-					best_acc_genome=best_acc_genome,
+					best_genome=best_ranked_genome,
 					best_fitness=best_fitness,
 					best_accuracy=best_accuracy,
 					threshold=current_threshold,
@@ -2134,15 +2112,12 @@ class GenericTSStrategy(ABC, Generic[T]):
 				break
 
 			# Generate neighbors via hook (overridable for Rust acceleration)
-			# Pass actual deques so _generate_neighbors can update tabu lists
 			viable = self._generate_neighbors(
-				best_ce_genome=best_ce_genome,
-				best_acc_genome=best_acc_genome,
+				best_genome=best_ranked_genome,
 				n_neighbors=cfg.neighbors_per_iter,
 				threshold=current_threshold,
 				iteration=iteration,
-				tabu_ce=tabu_list_ce,
-				tabu_acc=tabu_list_acc,
+				tabu_list=tabu_list,
 			)
 
 			if not viable:
@@ -2152,50 +2127,65 @@ class GenericTSStrategy(ABC, Generic[T]):
 			for n, f, a in viable:
 				all_neighbors.append((self.clone_genome(n), f, a))
 
-			# Update best_ce and best_acc from viable neighbors
-			for n, f, a in viable:
-				if f < best_ce_fitness:
-					best_ce_genome = self.clone_genome(n)
-					best_ce_fitness = f
-					best_ce_accuracy = a
-					ce_improved += 1
-				if a is not None and (best_acc_accuracy is None or a > best_acc_accuracy):
-					best_acc_genome = self.clone_genome(n)
-					best_acc_fitness = f
-					best_acc_accuracy = a
-					acc_improved += 1
+			# Cap cache by fitness ranking
+			if len(all_neighbors) > cache_size * 2:
+				valid_for_cap = [(g, ce, acc or 0.0) for g, ce, acc in all_neighbors if acc is not None]
+				if valid_for_cap:
+					ranked_for_cap = fitness_calculator.rank(valid_for_cap)
+					# Build a lookup: genome identity -> (ce, acc) from original tuples
+					genome_data = {id(g): (ce, acc) for g, ce, acc in valid_for_cap}
+					all_neighbors = [
+						(g, genome_data[id(g)][0], genome_data[id(g)][1])
+						for g, _ in ranked_for_cap[:cache_size]
+					]
+				else:
+					all_neighbors = sorted(all_neighbors, key=lambda x: x[1])[:cache_size]
+
+			# Update best_ranked by fitness ranking (includes all neighbors)
+			valid_for_rank = [(g, ce, acc or 0.0) for g, ce, acc in all_neighbors if acc is not None]
+			if valid_for_rank:
+				ranked = fitness_calculator.rank(valid_for_rank)
+				best_ranked_obj = ranked[0][0]
+				best_ranked_genome = self.clone_genome(best_ranked_obj)
+				# Look up CE/acc from original tuples
+				for g, ce, acc in valid_for_rank:
+					if g is best_ranked_obj:
+						best_ranked_ce = ce
+						best_ranked_accuracy = acc
+						break
 
 			# Update global best (by CE)
-			prev_best = best_fitness
-			if best_ce_fitness < best_fitness:
-				best = self.clone_genome(best_ce_genome)
-				best_fitness = best_ce_fitness
-				best_accuracy = best_ce_accuracy
-				improved_iterations += 1
+			for n, f, a in viable:
+				if f < best_fitness:
+					best = self.clone_genome(n)
+					best_fitness = f
+					best_accuracy = a
+					improved_iterations += 1
 
 			history.append((iteration + 1, best_fitness))
 
 			# Log progress
 			iter_width = len(str(cfg.iterations))
-			acc_str = f"{best_acc_accuracy:.2%}" if best_acc_accuracy is not None else "N/A"
+			ranked_acc_str = f"{best_ranked_accuracy:.2%}" if best_ranked_accuracy is not None else "N/A"
 			self._log.info(f"[{self.name}] Iter {iteration + 1:0{iter_width}d}/{cfg.iterations}: "
-						   f"best_ce={best_fitness:.4f}, best_acc={acc_str}")
+						   f"best_ranked=(CE={best_ranked_ce:.4f}, Acc={ranked_acc_str}), "
+						   f"best_ce={best_fitness:.4f}")
 
 			# Record iteration to tracker (if set)
 			if self._tracker and self._tracker_phase_id:
 				try:
-					# Compute top-k stats from all_neighbors (like GA elites)
-					# Sort by CE, take top cache_size
-					sorted_by_ce = sorted(all_neighbors, key=lambda x: x[1])
-					top_k = sorted_by_ce[:cache_size]
-					top_k_count = len(top_k)
-					# Average CE and accuracy of top-k
-					if top_k:
-						top_k_avg_ce = sum(f for _, f, _ in top_k) / len(top_k)
-						valid_accs = [a for _, _, a in top_k if a is not None]
+					# Compute top-k stats from all_neighbors by fitness ranking
+					valid_neighbors = [(g, ce, acc) for g, ce, acc in all_neighbors if acc is not None]
+					if valid_neighbors:
+						ranked_for_stats = fitness_calculator.rank(valid_neighbors)
+						top_k = ranked_for_stats[:cache_size]
+						top_k_count = len(top_k)
+						top_k_avg_ce = sum(ce for (_, ce, _) in valid_neighbors[:top_k_count]) / top_k_count
+						valid_accs = [acc for _, _, acc in valid_neighbors[:top_k_count] if acc is not None]
 						top_k_avg_acc = sum(valid_accs) / len(valid_accs) if valid_accs else None
 					else:
-						top_k_avg_ce = None
+						top_k_count = len(all_neighbors)
+						top_k_avg_ce = sum(f for _, f, _ in all_neighbors) / len(all_neighbors) if all_neighbors else None
 						top_k_avg_acc = None
 
 					# Get baseline and patience info for dashboard
@@ -2203,16 +2193,15 @@ class GenericTSStrategy(ABC, Generic[T]):
 					delta_baseline = (best_fitness - baseline_ce) if baseline_ce is not None else None
 					delta_previous = best_fitness - prev_best_fitness
 					patience_counter = early_stopper._patience_counter if hasattr(early_stopper, '_patience_counter') else 0
-					candidates_total = len(all_candidates) if 'all_candidates' in dir() else len(viable)
 
 					iteration_id = self._tracker.record_iteration(
 						experiment_id=self._tracker_experiment_id,
 						iteration_num=iteration + 1,
 						best_ce=best_fitness,
-						best_accuracy=best_accuracy,  # Accuracy of best-CE genome
-						avg_ce=top_k_avg_ce,  # Average CE of top-k neighbors
-						avg_accuracy=top_k_avg_acc,  # Average accuracy of top-k neighbors
-						elite_count=top_k_count,  # Size of top-k cache
+						best_accuracy=best_accuracy,
+						avg_ce=top_k_avg_ce,
+						avg_accuracy=top_k_avg_acc,
+						elite_count=top_k_count,
 						offspring_count=len(viable),
 						offspring_viable=len(viable),
 						fitness_threshold=current_threshold,
@@ -2221,13 +2210,13 @@ class GenericTSStrategy(ABC, Generic[T]):
 						delta_previous=delta_previous,
 						patience_counter=patience_counter,
 						patience_max=cfg.patience,
-						candidates_total=candidates_total,
+						candidates_total=len(all_neighbors),
 					)
 
 					# Record genome evaluations (if genome_to_config is implemented)
 					if iteration_id and self._tracker_experiment_id and HAS_TRACKER and GenomeRole is not None:
 						evaluations = []
-						top_k_ids = set()  # Track which genomes are in top-k
+						top_k_ids = set()
 
 						# Record current best genome
 						best_config = self.genome_to_config(best)
@@ -2247,17 +2236,17 @@ class GenericTSStrategy(ABC, Generic[T]):
 							top_k_ids.add(best_genome_id)
 
 						# Record top-k neighbors
-						for pos, (genome, ce, acc) in enumerate(top_k):
+						for pos, (genome, ce, acc) in enumerate(all_neighbors[:cache_size]):
 							config = self.genome_to_config(genome)
 							if config is not None:
 								genome_id = self._tracker.get_or_create_genome(
 									self._tracker_experiment_id, config
 								)
-								if genome_id not in top_k_ids:  # Avoid duplicates
+								if genome_id not in top_k_ids:
 									evaluations.append({
 										"iteration_id": iteration_id,
 										"genome_id": genome_id,
-										"position": pos + 1,  # After current best
+										"position": pos + 1,
 										"role": GenomeRole.TOP_K,
 										"ce": ce,
 										"accuracy": acc if acc is not None else 0.0,
@@ -2265,18 +2254,18 @@ class GenericTSStrategy(ABC, Generic[T]):
 									})
 									top_k_ids.add(genome_id)
 
-						# Record other viable neighbors (not in top-k)
+						# Record new viable neighbors
 						for pos, (genome, ce, acc) in enumerate(viable):
 							config = self.genome_to_config(genome)
 							if config is not None:
 								genome_id = self._tracker.get_or_create_genome(
 									self._tracker_experiment_id, config
 								)
-								if genome_id not in top_k_ids:  # Only if not already tracked
+								if genome_id not in top_k_ids:
 									evaluations.append({
 										"iteration_id": iteration_id,
 										"genome_id": genome_id,
-										"position": len(top_k) + pos + 1,
+										"position": cache_size + pos + 1,
 										"role": GenomeRole.NEIGHBOR,
 										"ce": ce,
 										"accuracy": acc if acc is not None else 0.0,
@@ -2317,8 +2306,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 		total_iters = iteration + 1
 		self._log.info(f"\n[{self.name}] Analysis Summary:")
 		self._log.info(f"  CE improvement: {start_fitness:.4f} → {best_fitness:.4f} ({(1 - best_fitness/start_fitness)*100:+.2f}%)")
-		self._log.info(f"  CE path improvements: {ce_improved}/{total_iters}")
-		self._log.info(f"  Acc path improvements: {acc_improved}/{total_iters}")
+		self._log.info(f"  Improved iterations: {improved_iterations}/{total_iters}")
 		self._log.info(f"  Final population: {len(final_population)} by {fitness_calculator.name}")
 		self._log.info(f"  Final threshold: {final_threshold:.2%} (for next phase)")
 

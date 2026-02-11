@@ -1335,31 +1335,12 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 	# Hooks: Rust-accelerated neighbor generation + lifecycle
 	# =========================================================================
 
-	def _generate_neighbors(self, best_ce_genome, best_acc_genome, n_neighbors, threshold, iteration, tabu_ce, tabu_acc):
-		"""Generate neighbors via Rust search_neighbors or Python fallback.
-
-		Rust path: single-path search from best genome by fitness ranking.
-		Python fallback: dual-path (N/2 from CE best + N/2 from Acc best).
-		"""
+	def _generate_neighbors(self, best_genome, n_neighbors, threshold, iteration, tabu_list):
+		"""Generate neighbors via Rust search_neighbors or Python fallback."""
 		if self._cached_evaluator is not None:
 			cfg = self._config
 			arch_cfg = self._arch_config
 			evaluator = self._cached_evaluator
-
-			# Single-path: find best genome by fitness ranking
-			candidates = []
-			for g in [best_ce_genome, best_acc_genome]:
-				if hasattr(g, '_cached_fitness') and g._cached_fitness is not None:
-					candidates.append((g, g._cached_fitness[0], g._cached_fitness[1]))
-				else:
-					# Use the CE of the genome from the base loop tracking
-					candidates.append((g, float('inf'), 0.0))
-
-			if len(candidates) >= 2 and candidates[0][2] is not None and candidates[1][2] is not None:
-				ranked = self._fitness_calculator.rank(candidates)
-				best_ranked = ranked[0][0]
-			else:
-				best_ranked = best_ce_genome  # fallback to best CE
 
 			# Phase-aware mutation rates
 			bits_mutation_rate = cfg.mutation_rate if arch_cfg.optimize_bits else 0.0
@@ -1367,7 +1348,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 
 			self._log.debug(f"[{self.name}] Searching {n_neighbors} neighbors from best ranked...")
 			neighbors_raw = evaluator.search_neighbors(
-				genome=best_ranked,
+				genome=best_genome,
 				target_count=n_neighbors,
 				max_attempts=n_neighbors * 5,
 				accuracy_threshold=threshold,
@@ -1399,8 +1380,8 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 
 			return neighbors
 
-		# Fallback to Python dual-path generation
-		return super()._generate_neighbors(best_ce_genome, best_acc_genome, n_neighbors, threshold, iteration, tabu_ce, tabu_acc)
+		# Fallback to Python single-path generation
+		return super()._generate_neighbors(best_genome, n_neighbors, threshold, iteration, tabu_list)
 
 	def _on_iteration_start(self, iteration, **ctx):
 		"""Metal cleanup and shutdown check."""
