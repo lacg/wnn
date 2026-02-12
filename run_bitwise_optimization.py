@@ -538,6 +538,7 @@ def main():
 			json.dump(all_results, f, indent=2)
 
 	phase_result_keys = {
+		1: "phase1_grid",
 		2: "phase2_ga_neurons", 3: "phase3_ts_neurons",
 		4: "phase4_ga_bits", 5: "phase5_ts_bits",
 		6: "phase6_ga_connections", 7: "phase7_ts_connections",
@@ -547,7 +548,16 @@ def main():
 		if args.phase not in ("all", str(phase_num)):
 			return False
 		key = phase_result_keys.get(phase_num)
-		if key and all_results.get(key) and "best_genome_data" in all_results[key]:
+		if not key:
+			return True
+		data = all_results.get(key)
+		if not data:
+			return True
+		# Phase 1 uses a different format (no best_genome_data)
+		if phase_num == 1 and data:
+			logger(f"  Phase 1 already completed, skipping")
+			return False
+		if "best_genome_data" in data:
 			logger(f"  Phase {phase_num} already completed, skipping")
 			return False
 		return True
