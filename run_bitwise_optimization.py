@@ -207,7 +207,7 @@ def create_seed_genome(num_clusters, bits, neurons, total_input_bits):
 def run_ga_phase(
 	evaluator, arch_config, ga_gens, population, patience,
 	seed_genome=None, phase_name="GA", logger=print, check_interval=10,
-	initial_population=None,
+	initial_population=None, checkpoint_config=None,
 ):
 	"""Run a GA optimization phase."""
 	from wnn.ram.strategies.connectivity.architecture_strategies import ArchitectureGAStrategy
@@ -237,6 +237,8 @@ def run_ga_phase(
 		ga_config=ga_config,
 		logger=logger,
 		batch_evaluator=evaluator,
+		checkpoint_config=checkpoint_config,
+		phase_name=phase_name,
 	)
 
 	t0 = time.time()
@@ -263,6 +265,7 @@ def run_ga_phase(
 def run_ts_phase(
 	evaluator, arch_config, ts_iters, neighbors, patience,
 	seed_genome, seed_fitness, phase_name="TS", logger=print, check_interval=10,
+	initial_neighbors=None,
 ):
 	"""Run a TS refinement phase."""
 	from wnn.ram.strategies.connectivity.architecture_strategies import ArchitectureTSStrategy
@@ -298,6 +301,7 @@ def run_ts_phase(
 		initial_fitness=seed_fitness,
 		evaluate_fn=lambda g: 999.0,
 		batch_evaluate_fn=lambda genomes, **kw: evaluator.evaluate_batch(genomes, logger=logger, **kw),
+		initial_neighbors=initial_neighbors,
 	)
 	elapsed = time.time() - t0
 
@@ -443,6 +447,9 @@ def main():
 						help="Number of train subsets for rotation (default: 36)")
 	parser.add_argument("--eval-parts", type=int, default=6,
 						help="Number of test subsets for rotation (default: 6)")
+	# Checkpointing
+	parser.add_argument("--checkpoint-dir", type=str, default=None,
+						help="Directory for intra-phase checkpoints (enables resume on crash)")
 	# Gating
 	parser.add_argument("--enable-gating", action="store_true",
 						help="Enable gating phase after optimization")
@@ -456,6 +463,14 @@ def main():
 						choices=[0, 1, 2],
 						help="0=TOKEN_LEVEL, 1=BIT_LEVEL, 2=DUAL_STAGE (default: 0)")
 	args = parser.parse_args()
+
+	# Checkpoint config for intra-phase resume
+	checkpoint_config = None
+	if args.checkpoint_dir:
+		from wnn.ram.strategies.connectivity.architecture_strategies import CheckpointConfig
+		cp_dir = Path(args.checkpoint_dir)
+		cp_dir.mkdir(parents=True, exist_ok=True)
+		checkpoint_config = CheckpointConfig(enabled=True, interval=5, checkpoint_dir=cp_dir)
 
 	output_path = Path(args.output)
 	output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -522,8 +537,20 @@ def main():
 		with open(args.output, "w") as f:
 			json.dump(all_results, f, indent=2)
 
+	phase_result_keys = {
+		2: "phase2_ga_neurons", 3: "phase3_ts_neurons",
+		4: "phase4_ga_bits", 5: "phase5_ts_bits",
+		6: "phase6_ga_connections", 7: "phase7_ts_connections",
+	}
+
 	def should_run(phase_num):
-		return args.phase in ("all", str(phase_num))
+		if args.phase not in ("all", str(phase_num)):
+			return False
+		key = phase_result_keys.get(phase_num)
+		if key and all_results.get(key) and "best_genome_data" in all_results[key]:
+			logger(f"  Phase {phase_num} already completed, skipping")
+			return False
+		return True
 
 	def log(msg):
 		logger(f"  {msg}")
@@ -534,6 +561,22 @@ def main():
 	best_bits = 20   # defaults, overwritten by Phase 1
 	best_neurons = 150
 	initial_population = None  # 50 genomes seeded from Phase 1
+
+	# Restore genome + population from last completed phase (inter-phase resume)
+	phase_order = [
+		("phase7_ts_connections", 7), ("phase6_ga_connections", 6),
+		("phase5_ts_bits", 5), ("phase4_ga_bits", 4),
+		("phase3_ts_neurons", 3), ("phase2_ga_neurons", 2),
+	]
+	for key, pnum in phase_order:
+		data = all_results.get(key)
+		if data and "best_genome_data" in data:
+			best_genome = ClusterGenome.deserialize(data["best_genome_data"])
+			best_ce = data["final_ce"]
+			if data.get("final_population"):
+				initial_population = [ClusterGenome.deserialize(g) for g in data["final_population"]]
+			logger(f"Resumed from {key}: CE={best_ce:.4f}, population={len(initial_population) if initial_population else 0}")
+			break
 
 	# ── Phase 1: Grid search ─────────────────────────────────────────────
 	if should_run(1):
@@ -586,11 +629,13 @@ def main():
 		p1 = all_results["phase1_grid"]
 		best_bits = p1["best_bits"]
 		best_neurons = p1["best_neurons"]
-		best_ce = p1["best_ce"]
-		best_genome = create_seed_genome(num_clusters, best_bits, best_neurons, total_input_bits)
+		if best_genome is None:
+			best_ce = p1["best_ce"]
+			best_genome = create_seed_genome(num_clusters, best_bits, best_neurons, total_input_bits)
 		logger(f"Loaded Phase 1: bits={best_bits}, neurons={best_neurons}, CE={best_ce:.4f}")
 	else:
-		best_genome = create_seed_genome(num_clusters, best_bits, best_neurons, total_input_bits)
+		if best_genome is None:
+			best_genome = create_seed_genome(num_clusters, best_bits, best_neurons, total_input_bits)
 		logger(f"Using default config: bits={best_bits}, neurons={best_neurons}")
 
 	# Create two evaluators:
@@ -623,7 +668,7 @@ def main():
 
 	# Helper to run a phase and collect metrics
 	def run_and_eval_ga(phase_num, phase_name, result_key, arch_config, init_pop=None):
-		nonlocal best_genome, best_ce
+		nonlocal best_genome, best_ce, initial_population
 		if not should_run(phase_num) or best_genome is None:
 			return
 		logger(f"\n{'='*70}")
@@ -635,11 +680,13 @@ def main():
 			ga_gens=args.ga_gens, population=args.population,
 			patience=args.patience, seed_genome=best_genome,
 			phase_name=f"Phase {phase_num}: {phase_name}", logger=log,
-			check_interval=ci, initial_population=init_pop,
+			check_interval=ci, initial_population=init_pop or initial_population,
+			checkpoint_config=checkpoint_config,
 		)
 
 		best_genome = result.best_genome
 		best_ce = result.final_fitness
+		initial_population = result.final_population
 
 		all_results[result_key] = {
 			"initial_ce": result.initial_fitness,
@@ -650,6 +697,8 @@ def main():
 			"stop_reason": str(result.stop_reason),
 			"elapsed_s": round(elapsed, 1),
 			"genome_stats": best_genome.stats(),
+			"best_genome_data": best_genome.serialize(),
+			"final_population": [g.serialize() for g in result.final_population] if result.final_population else None,
 		}
 
 		# Full-eval 1-3 genomes on validation
@@ -660,7 +709,7 @@ def main():
 		save()
 
 	def run_and_eval_ts(phase_num, phase_name, result_key, arch_config):
-		nonlocal best_genome, best_ce
+		nonlocal best_genome, best_ce, initial_population
 		if not should_run(phase_num) or best_genome is None:
 			return
 		logger(f"\n{'='*70}")
@@ -674,10 +723,12 @@ def main():
 			seed_genome=best_genome, seed_fitness=best_ce,
 			phase_name=f"Phase {phase_num}: {phase_name}", logger=log,
 			check_interval=ci,
+			initial_neighbors=initial_population,
 		)
 
 		best_genome = result.best_genome
 		best_ce = result.final_fitness
+		initial_population = result.final_population
 
 		all_results[result_key] = {
 			"initial_ce": result.initial_fitness,
@@ -688,6 +739,8 @@ def main():
 			"stop_reason": str(result.stop_reason),
 			"elapsed_s": round(elapsed, 1),
 			"genome_stats": best_genome.stats() if hasattr(best_genome, "stats") else {},
+			"best_genome_data": best_genome.serialize(),
+			"final_population": [g.serialize() for g in result.final_population] if result.final_population else None,
 		}
 
 		# Full-eval 1-3 genomes on validation
