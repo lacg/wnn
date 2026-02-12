@@ -795,10 +795,6 @@ fn train_and_forward_into(
     // Reset memory
     memory.fill(empty_word);
 
-    // Per-genome PRNG state
-    let mut rng_state = (rng_seed as u32).wrapping_add(17);
-    if rng_state == 0 { rng_state = 1; }
-
     match memory_mode {
         MODE_TERNARY => {
             // ===== TRAINING: Majority vote (neuron-major for L1 cache locality) =====
@@ -808,6 +804,7 @@ fn train_and_forward_into(
                 .unwrap_or(0);
             let mut votes = vec![0i32; max_votes];
             let wpe = train_subset.words_per_example;
+            let mut global_neuron_idx: usize = 0;
 
             for cluster in 0..num_clusters {
                 let c_neurons = neurons_per_cluster[cluster];
@@ -821,17 +818,22 @@ fn train_and_forward_into(
                 votes[..vote_size].fill(0);
 
                 for n in 0..c_neurons {
-                    // Neuron-level sampling: skip entire neuron (statistically equivalent)
-                    if neuron_sample_rate < 1.0 {
-                        if xorshift32_seq(&mut rng_state) >= neuron_sample_rate {
-                            continue;
-                        }
-                    }
                     let conn_start = c_conn_off + n * c_bits;
                     let conns = &connections[conn_start..conn_start + c_bits];
                     let vote_base = n * c_addresses;
 
+                    // Per-neuron PRNG for example-level sampling (matches ramlm.rs)
+                    let mut neuron_rng = (rng_seed as u32)
+                        .wrapping_add(global_neuron_idx as u32 * 1000003);
+                    if neuron_rng == 0 { neuron_rng = 1; }
+                    global_neuron_idx += 1;
+
                     for ex in 0..num_examples {
+                        if neuron_sample_rate < 1.0 {
+                            if xorshift32_seq(&mut neuron_rng) >= neuron_sample_rate {
+                                continue;
+                            }
+                        }
                         let packed = &train_subset.packed_input[ex * wpe..(ex + 1) * wpe];
                         let target_bit = train_subset.target_bits[ex * num_clusters + cluster];
                         let vote: i32 = if target_bit == 1 { 1 } else { -1 };
@@ -857,6 +859,8 @@ fn train_and_forward_into(
             // ===== TRAINING: Sequential nudging (neuron-major for L1 cache locality) =====
             // Each neuron's memory (~17KB for 16-bit) stays hot in L1 for all examples
             let wpe = train_subset.words_per_example;
+            let mut global_neuron_idx: usize = 0;
+
             for cluster in 0..num_clusters {
                 let c_neurons = neurons_per_cluster[cluster];
                 let c_bits = bits_per_cluster[cluster];
@@ -865,17 +869,22 @@ fn train_and_forward_into(
                 let c_wpn = layout.words_per_neuron[cluster];
 
                 for n in 0..c_neurons {
-                    // Neuron-level sampling: skip entire neuron (statistically equivalent)
-                    if neuron_sample_rate < 1.0 {
-                        if xorshift32_seq(&mut rng_state) >= neuron_sample_rate {
-                            continue;
-                        }
-                    }
                     let neuron_mem_start = c_mem_off + n * c_wpn;
                     let conn_start = c_conn_off + n * c_bits;
                     let conns = &connections[conn_start..conn_start + c_bits];
 
+                    // Per-neuron PRNG for example-level sampling (matches ramlm.rs)
+                    let mut neuron_rng = (rng_seed as u32)
+                        .wrapping_add(global_neuron_idx as u32 * 1000003);
+                    if neuron_rng == 0 { neuron_rng = 1; }
+                    global_neuron_idx += 1;
+
                     for ex in 0..num_examples {
+                        if neuron_sample_rate < 1.0 {
+                            if xorshift32_seq(&mut neuron_rng) >= neuron_sample_rate {
+                                continue;
+                            }
+                        }
                         let packed = &train_subset.packed_input[ex * wpe..(ex + 1) * wpe];
                         let target_true = train_subset.target_bits[ex * num_clusters + cluster] == 1;
                         let addr = compute_address_packed(packed, conns, c_bits);

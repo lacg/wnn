@@ -632,6 +632,7 @@ def main():
 			"best_ce": best_ce,
 			"init_population_size": len(initial_population),
 			"elapsed_s": round(time.time() - t0, 1),
+			"initial_population": [g.serialize() for g in initial_population],
 		}
 		save()
 		logger(f"\nPhase 1 saved to {args.output}")
@@ -641,7 +642,40 @@ def main():
 		best_neurons = p1["best_neurons"]
 		if best_genome is None:
 			best_ce = p1["best_ce"]
-			best_genome = create_seed_genome(num_clusters, best_bits, best_neurons, total_input_bits)
+		# Restore population: prefer serialized, fallback to recreation
+		if initial_population is None:
+			if p1.get("initial_population"):
+				# Load serialized population from checkpoint
+				loaded = [ClusterGenome.deserialize(g) for g in p1["initial_population"]]
+				if len(loaded) >= args.population:
+					initial_population = loaded[:args.population]
+				else:
+					# Fill gap with mutations of existing genomes
+					initial_population = list(loaded)
+					while len(initial_population) < args.population:
+						src = loaded[len(initial_population) % len(loaded)]
+						initial_population.append(create_seed_genome(
+							num_clusters, src.clusters[0].bits, src.clusters[0].neurons, total_input_bits
+						))
+				logger(f"Loaded {len(loaded)} genomes from checkpoint (using {len(initial_population)})")
+			elif "results" in p1:
+				# Recreate from grid configs (old checkpoint without serialized pop)
+				pop_genomes = []
+				for config in p1["results"]:
+					for _ in range(3):
+						pop_genomes.append(create_seed_genome(
+							num_clusters, config["bits"], config["neurons"], total_input_bits
+						))
+				for config in p1["results"][:2]:
+					pop_genomes.append(create_seed_genome(
+						num_clusters, config["bits"], config["neurons"], total_input_bits
+					))
+				initial_population = pop_genomes[:args.population]
+				logger(f"Recreated {len(initial_population)} genomes from grid configs")
+		if best_genome is None:
+			best_genome = initial_population[0] if initial_population else create_seed_genome(
+				num_clusters, best_bits, best_neurons, total_input_bits
+			)
 		logger(f"Loaded Phase 1: bits={best_bits}, neurons={best_neurons}, CE={best_ce:.4f}")
 	else:
 		if best_genome is None:

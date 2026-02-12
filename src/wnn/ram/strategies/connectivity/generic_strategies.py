@@ -173,6 +173,11 @@ class OptimizationLogger:
 			else:
 				self._logger.log(TRACE, msg)
 
+	def _flush(self) -> None:
+		"""Flush all handlers to ensure output is visible immediately."""
+		for handler in self._logger.handlers:
+			handler.flush()
+
 	def debug(self, msg: str) -> None:
 		"""Log at DEBUG level (individual genome info)."""
 		if self._logger.isEnabledFor(logging.DEBUG):
@@ -180,6 +185,7 @@ class OptimizationLogger:
 				self._file_logger(msg)  # file_logger handles stdout + file
 			else:
 				self._logger.debug(msg)
+				self._flush()
 
 	def info(self, msg: str) -> None:
 		"""Log at INFO level (progress summaries)."""
@@ -188,6 +194,7 @@ class OptimizationLogger:
 				self._file_logger(msg)
 			else:
 				self._logger.info(msg)
+				self._flush()
 
 	def warning(self, msg: str) -> None:
 		"""Log at WARNING level."""
@@ -196,6 +203,7 @@ class OptimizationLogger:
 				self._file_logger(msg)
 			else:
 				self._logger.warning(msg)
+				self._flush()
 
 	def error(self, msg: str) -> None:
 		"""Log at ERROR level."""
@@ -204,6 +212,7 @@ class OptimizationLogger:
 				self._file_logger(msg)
 			else:
 				self._logger.error(msg)
+				self._flush()
 
 	def __call__(self, msg: str) -> None:
 		"""Default: INFO level (backward compatible with print-style logging)."""
@@ -1734,20 +1743,26 @@ class GenericGAStrategy(ABC, Generic[T]):
 		if total_generations is not None:
 			batch_kwargs["total_generations"] = total_generations
 
-		# First, evaluate seed genomes if provided
+		import time as _time
+
+		# First, evaluate seed genomes if provided (always accepted — they're explicit seeds)
 		if seed_genomes:
 			to_eval = [self.clone_genome(g) for g in seed_genomes[:target_size]]
+			self._log.info(f"[{self.name}] Evaluating {len(to_eval)} seed genomes...")
+			t0 = _time.time()
 			if batch_fn is not None:
 				results = batch_fn(to_eval, **batch_kwargs)
+				elapsed = _time.time() - t0
+				best_ce = min(r[0] for r in results) if results else 0.0
+				best_acc = max(r[1] for r in results if r[1] is not None) if results else 0.0
+				self._log.info(f"[{self.name}] Seed eval: {len(to_eval)} genomes in {elapsed:.1f}s (best CE={best_ce:.4f}, Acc={best_acc:.2%})")
 				for genome, (ce, acc) in zip(to_eval, results):
-					if acc is None or acc >= min_accuracy:
-						viable.append((genome, ce, acc))
-					else:
-						filtered_count += 1
+					viable.append((genome, ce, acc))
 			else:
 				for genome in to_eval:
 					ce = single_fn(genome)
 					viable.append((genome, ce, None))
+			self._log.info(f"[{self.name}] {len(viable)}/{target_size} viable after seed eval")
 
 		# Generate new candidates until we have enough
 		attempt = 0
@@ -1758,9 +1773,13 @@ class GenericGAStrategy(ABC, Generic[T]):
 			batch_size = min(needed * 2, needed + 10)  # Generate extra
 			candidates = [generator_fn() for _ in range(batch_size)]
 
+			self._log.info(f"[{self.name}] Building population: attempt {attempt}, evaluating {batch_size} candidates ({len(viable)}/{target_size} viable)")
+			t0 = _time.time()
 			# Evaluate
 			if batch_fn is not None:
 				results = batch_fn(candidates, **batch_kwargs)
+				elapsed = _time.time() - t0
+				self._log.info(f"[{self.name}] Batch eval: {len(candidates)} candidates in {elapsed:.1f}s")
 				for genome, (ce, acc) in zip(candidates, results):
 					if acc is None or acc >= min_accuracy:
 						viable.append((genome, ce, acc))
