@@ -1,6 +1,6 @@
 [package]
 name = "ram_accelerator"
-version = "0.2.1"
+version = "2026.212.37"
 edition = "2021"
 
 [lib]
