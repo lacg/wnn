@@ -43,6 +43,10 @@ from torch import (
 from wnn.ram.core.base import RAMComponent
 from wnn.ram.core.BitwiseRAMClusterLayer import BitwiseRAMClusterLayer
 from wnn.ram.core.RAMClusterLayer import bits_needed
+from wnn.representations.token_bit_encoder import (
+	TokenBitEncoder,
+	BinaryTokenEncoder,
+)
 
 
 def reconstruct_logprobs(bit_scores: Tensor, token_bits: Tensor) -> Tensor:
@@ -82,16 +86,20 @@ class BitwiseRAMLM(RAMComponent):
 		rng: Optional[int] = None,
 		memory_mode: int = 0,
 		neuron_sample_rate: float = 1.0,
+		encoder: Optional[TokenBitEncoder] = None,
 	):
 		super().__init__()
 
 		self.vocab_size = vocab_size
 		self.context_size = context_size
-		self.bits_per_token = bits_needed(vocab_size)
-		self.num_bits = self.bits_per_token  # 16 for GPT-2
 		self.pad_token_id = pad_token_id
 		self.memory_mode = memory_mode  # 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED
 		self.neuron_sample_rate = neuron_sample_rate
+
+		# Token bit encoder (defaults to standard binary)
+		self.encoder = encoder if encoder is not None else BinaryTokenEncoder(vocab_size=vocab_size)
+		self.bits_per_token = self.encoder.bits_per_token
+		self.num_bits = self.bits_per_token  # 16 for GPT-2
 
 		# Total input bits
 		self.total_input_bits = context_size * self.bits_per_token
@@ -110,17 +118,12 @@ class BitwiseRAMLM(RAMComponent):
 			backend=MemoryBackend.DENSE,
 		)
 
-		# Pre-compute bit positions for encoding [bits_per_token-1, ..., 0]
-		self.register_buffer(
-			"_bit_positions",
-			arange(self.bits_per_token - 1, -1, -1, dtype=long)
-		)
-
-		# Pre-compute token binary patterns: [vocab_size, num_bits]
-		token_ids = arange(vocab_size, dtype=long)
+		# Pre-compute token bit patterns via encoder: [vocab_size, num_bits]
+		# This matrix is used by reconstruct_logprobs for the log-product
+		token_ids_all = arange(vocab_size, dtype=long)
 		self.register_buffer(
 			"token_bits",
-			((token_ids.unsqueeze(-1) >> self._bit_positions) & 1).float()
+			self.encoder.encode_tokens_batch(token_ids_all).float()
 		)
 
 		# Memory mode names for display
@@ -137,23 +140,24 @@ class BitwiseRAMLM(RAMComponent):
 			f"neurons_per_cluster={self.layer.neurons_per_cluster}, "
 			f"bits_per_neuron={self.layer.bits_per_neuron}, "
 			f"total_neurons={self.layer.total_neurons}, "
+			f"encoder={self.encoder!r}, "
 			f"mode={mode_name}{rate_str})"
 		)
 
 	# =========================================================================
-	# Encoding (identical to RAMLM)
+	# Encoding (delegated to self.encoder)
 	# =========================================================================
 
 	def encode_token(self, token_id: int) -> Tensor:
-		"""Encode a single token ID to binary."""
-		return ((token_id >> self._bit_positions) & 1).bool()
+		"""Encode a single token ID to bits via the encoder."""
+		return self.encoder.encode_token(token_id)
 
 	def encode_tokens_batch(self, token_ids: Tensor) -> Tensor:
 		"""Vectorized encoding of multiple token IDs → [N, bits_per_token]."""
-		return ((token_ids.unsqueeze(-1) >> self._bit_positions) & 1).bool()
+		return self.encoder.encode_tokens_batch(token_ids)
 
 	def encode_context(self, token_ids: list[int]) -> Tensor:
-		"""Encode a context of token IDs to binary, with padding."""
+		"""Encode a context of token IDs to bits, with padding."""
 		if len(token_ids) < self.context_size:
 			padded = [self.pad_token_id] * (self.context_size - len(token_ids)) + list(token_ids)
 		else:
@@ -174,15 +178,18 @@ class BitwiseRAMLM(RAMComponent):
 		tokens = tensor(token_ids, dtype=long)
 		indices = arange(num_examples).unsqueeze(1) + arange(self.context_size)
 		contexts = tokens[indices]
-		bits_3d = ((contexts.unsqueeze(-1) >> self._bit_positions) & 1).bool()
-		return bits_3d.view(num_examples, -1)
+
+		# Encode via encoder: flatten → encode → reshape
+		flat_ids = contexts.flatten()
+		flat_bits = self.encode_tokens_batch(flat_ids)
+		return flat_bits.view(num_examples, self.context_size, -1).reshape(num_examples, -1)
 
 	# =========================================================================
 	# Token-to-bits conversion
 	# =========================================================================
 
 	def _target_to_bits(self, target_ids: Tensor) -> Tensor:
-		"""Convert token IDs to per-bit binary labels.
+		"""Convert token IDs to per-bit labels via the encoder.
 
 		Args:
 			target_ids: [N] int64 tensor of token IDs
@@ -190,7 +197,7 @@ class BitwiseRAMLM(RAMComponent):
 		Returns:
 			[N, num_bits] int tensor (0/1 per bit)
 		"""
-		return ((target_ids.unsqueeze(-1) >> self._bit_positions) & 1).to(dtype=long)
+		return self.encoder.encode_tokens_batch(target_ids).to(dtype=long)
 
 	# =========================================================================
 	# Forward pass

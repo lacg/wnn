@@ -40,6 +40,13 @@ from wnn.representations.base import BinaryEncoder
 from wnn.representations.mutual_info import MutualInfoEncoder
 from wnn.representations.ram_encoder import RAMBinaryEncoder
 from wnn.representations.cooccurrence import CooccurrenceCodes
+from wnn.representations.token_bit_encoder import (
+    TokenBitEncoder,
+    BinaryTokenEncoder,
+    GrayCodeTokenEncoder,
+    TokenBitEncoderType,
+    create_token_bit_encoder,
+)
 
 
 class RepresentationType(IntEnum):
@@ -102,4 +109,10 @@ __all__ = [
     "RepresentationFactory",
     "RepresentationType",
     "create_encoder",
+    # Token Bit Encoders (Layer 2: token ID → bit vector)
+    "TokenBitEncoder",
+    "BinaryTokenEncoder",
+    "GrayCodeTokenEncoder",
+    "TokenBitEncoderType",
+    "create_token_bit_encoder",
 ]

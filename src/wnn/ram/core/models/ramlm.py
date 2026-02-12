@@ -60,6 +60,10 @@ from wnn.ram.core.base import RAMComponent, RAMClusterBase
 from wnn.ram.core.RAMClusterLayer import RAMClusterLayer, bits_needed
 from wnn.ram.core.TieredRAMClusterLayer import TieredRAMClusterLayer
 from wnn.ram.core import AccelerationMode
+from wnn.representations.token_bit_encoder import (
+	TokenBitEncoder,
+	BinaryTokenEncoder,
+)
 
 
 class RAMLM(RAMComponent):
@@ -93,6 +97,8 @@ class RAMLM(RAMComponent):
 		# Tiered architecture (mutually exclusive with neurons_per_cluster/bits_per_neuron)
 		tiers: Optional[list[tuple[Optional[int], int, int]]] = None,
 		cluster_order: Optional[list[int]] = None,
+		# Token bit encoder (how token IDs are converted to bits)
+		encoder: Optional[TokenBitEncoder] = None,
 	):
 		"""
 		Initialize RAMLM.
@@ -116,13 +122,21 @@ class RAMLM(RAMComponent):
 			cluster_order: Optional list mapping logical tier index to physical cluster.
 			               Pass sorted token IDs by frequency to assign frequent tokens to tier 0.
 			               If None, clusters 0..N are assigned in order.
+
+			# Encoding:
+			encoder: Optional TokenBitEncoder for converting token IDs to bit vectors.
+			         Defaults to BinaryTokenEncoder (standard binary encoding).
+			         Use GrayCodeTokenEncoder for adjacent-ID-preserving encoding.
 		"""
 		super().__init__()
 
 		self.vocab_size = vocab_size
 		self.context_size = context_size
-		self.bits_per_token = bits_needed(vocab_size)
 		self.pad_token_id = pad_token_id
+
+		# Token bit encoder (defaults to standard binary)
+		self.encoder = encoder if encoder is not None else BinaryTokenEncoder(vocab_size=vocab_size)
+		self.bits_per_token = self.encoder.bits_per_token
 
 		# Total input bits
 		self.total_input_bits = context_size * self.bits_per_token
@@ -162,11 +176,7 @@ class RAMLM(RAMComponent):
 		# Global top-k token IDs (set during training)
 		self._global_top_k: Optional[list[int]] = None
 
-		# Pre-compute bit positions for vectorized encoding [bits_per_token-1, ..., 0]
-		self.register_buffer(
-			"_bit_positions",
-			arange(self.bits_per_token - 1, -1, -1, dtype=long)
-		)
+		# Bit positions are owned by self.encoder (a Module submodule)
 
 	def __repr__(self) -> str:
 		if self._is_tiered:
@@ -218,6 +228,7 @@ class RAMLM(RAMComponent):
 			lines.append(f"  Total neurons: {self.layer.total_neurons:,}")
 
 		lines.extend([
+			f"  Encoder: {self.encoder!r}",
 			f"  PAD token ID: {self.pad_token_id}",
 			f"  Tokenizer: {'GPT-2' if self._tokenizer else 'None (token IDs only)'}",
 			f"  Global top-k: {len(self._global_top_k) if self._global_top_k else 'Not set'}",
@@ -230,7 +241,7 @@ class RAMLM(RAMComponent):
 
 	def encode_token(self, token_id: int) -> Tensor:
 		"""
-		Encode a single token ID to binary.
+		Encode a single token ID to bits via the encoder.
 
 		Args:
 			token_id: Token ID (0 to vocab_size-1)
@@ -238,12 +249,11 @@ class RAMLM(RAMComponent):
 		Returns:
 			[bits_per_token] boolean tensor
 		"""
-		# Vectorized: (token_id >> bit_positions) & 1
-		return ((token_id >> self._bit_positions) & 1).bool()
+		return self.encoder.encode_token(token_id)
 
 	def encode_tokens_batch(self, token_ids: Tensor) -> Tensor:
 		"""
-		Vectorized encoding of multiple token IDs.
+		Vectorized encoding of multiple token IDs via the encoder.
 
 		Args:
 			token_ids: [N] int64 tensor of token IDs
@@ -251,13 +261,11 @@ class RAMLM(RAMComponent):
 		Returns:
 			[N, bits_per_token] boolean tensor
 		"""
-		# token_ids: [N], _bit_positions: [bits_per_token]
-		# Broadcast: [N, 1] >> [bits_per_token] -> [N, bits_per_token]
-		return ((token_ids.unsqueeze(-1) >> self._bit_positions) & 1).bool()
+		return self.encoder.encode_tokens_batch(token_ids)
 
 	def encode_context(self, token_ids: list[int]) -> Tensor:
 		"""
-		Encode a context of token IDs to binary, with padding.
+		Encode a context of token IDs to bits, with padding.
 
 		Right-aligns tokens (most recent at the end), pads with pad_token_id.
 
@@ -273,7 +281,7 @@ class RAMLM(RAMComponent):
 		else:
 			padded = list(token_ids[-self.context_size:])
 
-		# Vectorized encoding of all tokens at once
+		# Encode via encoder
 		tokens_tensor = tensor(padded, dtype=long)
 		bits_2d = self.encode_tokens_batch(tokens_tensor)  # [context_size, bits_per_token]
 		return bits_2d.flatten()  # [total_input_bits]
@@ -302,11 +310,12 @@ class RAMLM(RAMComponent):
 		# [batch, context_size]
 		tokens_tensor = tensor(padded, dtype=long)
 
-		# Vectorized encoding: [batch, context_size, bits_per_token]
-		bits_3d = ((tokens_tensor.unsqueeze(-1) >> self._bit_positions) & 1).bool()
+		# Encode via encoder: [batch * context_size, bits_per_token]
+		flat_ids = tokens_tensor.flatten()
+		flat_bits = self.encode_tokens_batch(flat_ids)
 
-		# Flatten last two dims: [batch, total_input_bits]
-		return bits_3d.view(batch_size, -1)
+		# Reshape: [batch, context_size, bits_per_token] → [batch, total_input_bits]
+		return flat_bits.view(batch_size, self.context_size, -1).reshape(batch_size, -1)
 
 	def encode_sequence(self, token_ids: list[int]) -> Tensor:
 		"""
@@ -332,17 +341,17 @@ class RAMLM(RAMComponent):
 		tokens = tensor(token_ids, dtype=long)
 
 		# Create sliding window indices: [num_examples, context_size]
-		# Row i contains indices [i, i+1, ..., i+context_size-1]
 		indices = arange(num_examples).unsqueeze(1) + arange(self.context_size)
 
 		# Gather contexts: [num_examples, context_size]
 		contexts = tokens[indices]
 
-		# Vectorized encoding: [num_examples, context_size, bits_per_token]
-		bits_3d = ((contexts.unsqueeze(-1) >> self._bit_positions) & 1).bool()
+		# Encode via encoder: flatten → encode → reshape
+		flat_ids = contexts.flatten()
+		flat_bits = self.encode_tokens_batch(flat_ids)
 
-		# Flatten: [num_examples, total_input_bits]
-		return bits_3d.view(num_examples, -1)
+		# [num_examples, context_size, bits_per_token] → [num_examples, total_input_bits]
+		return flat_bits.view(num_examples, self.context_size, -1).reshape(num_examples, -1)
 
 	# =========================================================================
 	# Forward / Predict
