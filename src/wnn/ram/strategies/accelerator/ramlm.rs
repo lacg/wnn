@@ -661,6 +661,7 @@ pub fn bitwise_train_and_eval_full(
         .collect();
 
     // 4. Reconstruction + CE (Metal GPU)
+    #[cfg(target_os = "macos")]
     if let Some(metal_ce) = bitwise_ramlm::get_metal_bitwise_ce() {
         match metal_ce.compute_ce_batch(
             &bit_scores, token_bits, eval_targets,

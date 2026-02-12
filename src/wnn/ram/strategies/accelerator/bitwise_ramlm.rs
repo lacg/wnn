@@ -18,6 +18,7 @@ use rayon::prelude::*;
 #[cfg(target_os = "macos")]
 use std::mem;
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(target_os = "macos")]
 use std::sync::{Arc, RwLock};
 
 use crate::ramlm;
@@ -1029,6 +1030,7 @@ fn evaluate_genomes_with_subset(
         });
 
     // Phase 2: Reconstruction + CE
+    #[cfg(target_os = "macos")]
     if let Some(metal) = get_metal_bitwise_ce() {
         match metal.compute_ce_batch(
             &all_scores,
