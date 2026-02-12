@@ -12,8 +12,10 @@
 //!
 //! BitwiseTokenCache holds pre-encoded tokens (created once).
 
+#[cfg(target_os = "macos")]
 use metal::*;
 use rayon::prelude::*;
+#[cfg(target_os = "macos")]
 use std::mem;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
@@ -24,164 +26,175 @@ use crate::ramlm;
 // Metal Bitwise CE Evaluator
 // =============================================================================
 
-/// Metal-accelerated reconstruction + cross-entropy for bitwise evaluation.
-/// Computes log-product reconstruction over 50K vocab and CE in a single dispatch.
-pub struct MetalBitwiseCE {
-    device: Device,
-    command_queue: CommandQueue,
-    pipeline: ComputePipelineState,
+#[cfg(target_os = "macos")]
+mod metal_bitwise_ce_impl {
+    use super::*;
+
+    /// Metal-accelerated reconstruction + cross-entropy for bitwise evaluation.
+    /// Computes log-product reconstruction over 50K vocab and CE in a single dispatch.
+    pub struct MetalBitwiseCE {
+        device: Device,
+        command_queue: CommandQueue,
+        pipeline: ComputePipelineState,
+    }
+
+    static METAL_BITWISE_CE: RwLock<Option<Arc<MetalBitwiseCE>>> = RwLock::new(None);
+
+    /// Get or initialize the Metal bitwise CE evaluator (lazy, thread-safe).
+    /// Returns None if WNN_NO_METAL is set or Metal is unavailable.
+    pub fn get_metal_bitwise_ce() -> Option<Arc<MetalBitwiseCE>> {
+        if std::env::var("WNN_NO_METAL").is_ok() {
+            return None;
+        }
+
+        // Fast path
+        {
+            let guard = METAL_BITWISE_CE.read().unwrap();
+            if let Some(ref arc) = *guard {
+                return Some(Arc::clone(arc));
+            }
+        }
+
+        // Slow path
+        let mut guard = METAL_BITWISE_CE.write().unwrap();
+        if guard.is_none() {
+            match MetalBitwiseCE::new() {
+                Ok(ce) => { *guard = Some(Arc::new(ce)); }
+                Err(e) => { eprintln!("[BitwiseCE] Metal init failed: {e}"); }
+            }
+        }
+        guard.as_ref().map(Arc::clone)
+    }
+
+    impl MetalBitwiseCE {
+        pub fn new() -> Result<Self, String> {
+            let device = Device::system_default().ok_or("No Metal device")?;
+            let queue = device.new_command_queue();
+            let src = include_str!("shaders/bitwise_ce.metal");
+            let lib = device
+                .new_library_with_source(src, &CompileOptions::new())
+                .map_err(|e| format!("Shader compile: {e}"))?;
+            let func = lib
+                .get_function("bitwise_reconstruct_ce", None)
+                .map_err(|e| format!("Kernel: {e}"))?;
+            let pipeline = device
+                .new_compute_pipeline_state_with_function(&func)
+                .map_err(|e| format!("Pipeline: {e}"))?;
+            Ok(Self { device, command_queue: queue, pipeline })
+        }
+
+        /// Compute CE for multiple genomes in one GPU dispatch.
+        ///
+        /// All genomes share the same eval data (targets, token_bits).
+        /// bit_scores differ per genome (from forward pass).
+        pub fn compute_ce_batch(
+            &self,
+            all_bit_scores: &[f32], // [num_genomes * num_eval * num_bits]
+            token_bits: &[u8],      // [vocab_size * num_bits]
+            targets: &[u32],        // [num_eval]
+            num_genomes: usize,
+            num_eval: usize,
+            num_bits: usize,
+            vocab_size: usize,
+        ) -> Result<Vec<(f64, f64)>, String> {
+            let total_work = num_genomes * num_eval;
+            if total_work == 0 {
+                return Ok(vec![(0.0, 0.0); num_genomes]);
+            }
+
+            #[repr(C)]
+            struct BitwiseCEParams {
+                num_examples: u32,
+                num_bits: u32,
+                vocab_size: u32,
+                num_genomes: u32,
+            }
+
+            let params = BitwiseCEParams {
+                num_examples: num_eval as u32,
+                num_bits: num_bits as u32,
+                vocab_size: vocab_size as u32,
+                num_genomes: num_genomes as u32,
+            };
+
+            // Create GPU buffers
+            let scores_buf = self.device.new_buffer_with_data(
+                all_bit_scores.as_ptr() as *const _,
+                (all_bit_scores.len() * mem::size_of::<f32>()) as u64,
+                MTLResourceOptions::StorageModeShared,
+            );
+            let token_bits_buf = self.device.new_buffer_with_data(
+                token_bits.as_ptr() as *const _,
+                (token_bits.len() * mem::size_of::<u8>()) as u64,
+                MTLResourceOptions::StorageModeShared,
+            );
+            let targets_buf = self.device.new_buffer_with_data(
+                targets.as_ptr() as *const _,
+                (targets.len() * mem::size_of::<u32>()) as u64,
+                MTLResourceOptions::StorageModeShared,
+            );
+            let params_buf = self.device.new_buffer_with_data(
+                &params as *const _ as *const _,
+                mem::size_of::<BitwiseCEParams>() as u64,
+                MTLResourceOptions::StorageModeShared,
+            );
+            let ce_buf = self.device.new_buffer(
+                (total_work * mem::size_of::<f32>()) as u64,
+                MTLResourceOptions::StorageModeShared,
+            );
+            let correct_buf = self.device.new_buffer(
+                (total_work * mem::size_of::<u32>()) as u64,
+                MTLResourceOptions::StorageModeShared,
+            );
+
+            // Dispatch
+            let cmd = self.command_queue.new_command_buffer();
+            let enc = cmd.new_compute_command_encoder();
+            enc.set_compute_pipeline_state(&self.pipeline);
+            enc.set_buffer(0, Some(&scores_buf), 0);
+            enc.set_buffer(1, Some(&token_bits_buf), 0);
+            enc.set_buffer(2, Some(&targets_buf), 0);
+            enc.set_buffer(3, Some(&params_buf), 0);
+            enc.set_buffer(4, Some(&ce_buf), 0);
+            enc.set_buffer(5, Some(&correct_buf), 0);
+
+            let grid = MTLSize::new(total_work as u64, 1, 1);
+            let max_threads = self.pipeline.max_total_threads_per_threadgroup();
+            let group = MTLSize::new(max_threads.min(total_work as u64), 1, 1);
+            enc.dispatch_threads(grid, group);
+            enc.end_encoding();
+            cmd.commit();
+            cmd.wait_until_completed();
+
+            // Read results
+            let ce_ptr = ce_buf.contents() as *const f32;
+            let correct_ptr = correct_buf.contents() as *const u32;
+            let ce_values = unsafe { std::slice::from_raw_parts(ce_ptr, total_work) };
+            let correct_values = unsafe { std::slice::from_raw_parts(correct_ptr, total_work) };
+
+            // Reduce per genome
+            let mut results = Vec::with_capacity(num_genomes);
+            for g in 0..num_genomes {
+                let start = g * num_eval;
+                let end = start + num_eval;
+                let total_ce: f64 = ce_values[start..end].iter().map(|&c| c as f64).sum();
+                let total_correct: u32 = correct_values[start..end].iter().sum();
+                results.push((
+                    total_ce / num_eval as f64,
+                    total_correct as f64 / num_eval as f64,
+                ));
+            }
+
+            Ok(results)
+        }
+    }
 }
 
-static METAL_BITWISE_CE: RwLock<Option<Arc<MetalBitwiseCE>>> = RwLock::new(None);
+#[cfg(target_os = "macos")]
+pub use metal_bitwise_ce_impl::get_metal_bitwise_ce;
 
-/// Get or initialize the Metal bitwise CE evaluator (lazy, thread-safe).
-/// Returns None if WNN_NO_METAL is set or Metal is unavailable.
-pub fn get_metal_bitwise_ce() -> Option<Arc<MetalBitwiseCE>> {
-    if std::env::var("WNN_NO_METAL").is_ok() {
-        return None;
-    }
-
-    // Fast path
-    {
-        let guard = METAL_BITWISE_CE.read().unwrap();
-        if let Some(ref arc) = *guard {
-            return Some(Arc::clone(arc));
-        }
-    }
-
-    // Slow path
-    let mut guard = METAL_BITWISE_CE.write().unwrap();
-    if guard.is_none() {
-        match MetalBitwiseCE::new() {
-            Ok(ce) => { *guard = Some(Arc::new(ce)); }
-            Err(e) => { eprintln!("[BitwiseCE] Metal init failed: {e}"); }
-        }
-    }
-    guard.as_ref().map(Arc::clone)
-}
-
-impl MetalBitwiseCE {
-    pub fn new() -> Result<Self, String> {
-        let device = Device::system_default().ok_or("No Metal device")?;
-        let queue = device.new_command_queue();
-        let src = include_str!("shaders/bitwise_ce.metal");
-        let lib = device
-            .new_library_with_source(src, &CompileOptions::new())
-            .map_err(|e| format!("Shader compile: {e}"))?;
-        let func = lib
-            .get_function("bitwise_reconstruct_ce", None)
-            .map_err(|e| format!("Kernel: {e}"))?;
-        let pipeline = device
-            .new_compute_pipeline_state_with_function(&func)
-            .map_err(|e| format!("Pipeline: {e}"))?;
-        Ok(Self { device, command_queue: queue, pipeline })
-    }
-
-    /// Compute CE for multiple genomes in one GPU dispatch.
-    ///
-    /// All genomes share the same eval data (targets, token_bits).
-    /// bit_scores differ per genome (from forward pass).
-    pub fn compute_ce_batch(
-        &self,
-        all_bit_scores: &[f32], // [num_genomes * num_eval * num_bits]
-        token_bits: &[u8],      // [vocab_size * num_bits]
-        targets: &[u32],        // [num_eval]
-        num_genomes: usize,
-        num_eval: usize,
-        num_bits: usize,
-        vocab_size: usize,
-    ) -> Result<Vec<(f64, f64)>, String> {
-        let total_work = num_genomes * num_eval;
-        if total_work == 0 {
-            return Ok(vec![(0.0, 0.0); num_genomes]);
-        }
-
-        #[repr(C)]
-        struct BitwiseCEParams {
-            num_examples: u32,
-            num_bits: u32,
-            vocab_size: u32,
-            num_genomes: u32,
-        }
-
-        let params = BitwiseCEParams {
-            num_examples: num_eval as u32,
-            num_bits: num_bits as u32,
-            vocab_size: vocab_size as u32,
-            num_genomes: num_genomes as u32,
-        };
-
-        // Create GPU buffers
-        let scores_buf = self.device.new_buffer_with_data(
-            all_bit_scores.as_ptr() as *const _,
-            (all_bit_scores.len() * mem::size_of::<f32>()) as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
-        let token_bits_buf = self.device.new_buffer_with_data(
-            token_bits.as_ptr() as *const _,
-            (token_bits.len() * mem::size_of::<u8>()) as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
-        let targets_buf = self.device.new_buffer_with_data(
-            targets.as_ptr() as *const _,
-            (targets.len() * mem::size_of::<u32>()) as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
-        let params_buf = self.device.new_buffer_with_data(
-            &params as *const _ as *const _,
-            mem::size_of::<BitwiseCEParams>() as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
-        let ce_buf = self.device.new_buffer(
-            (total_work * mem::size_of::<f32>()) as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
-        let correct_buf = self.device.new_buffer(
-            (total_work * mem::size_of::<u32>()) as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
-
-        // Dispatch
-        let cmd = self.command_queue.new_command_buffer();
-        let enc = cmd.new_compute_command_encoder();
-        enc.set_compute_pipeline_state(&self.pipeline);
-        enc.set_buffer(0, Some(&scores_buf), 0);
-        enc.set_buffer(1, Some(&token_bits_buf), 0);
-        enc.set_buffer(2, Some(&targets_buf), 0);
-        enc.set_buffer(3, Some(&params_buf), 0);
-        enc.set_buffer(4, Some(&ce_buf), 0);
-        enc.set_buffer(5, Some(&correct_buf), 0);
-
-        let grid = MTLSize::new(total_work as u64, 1, 1);
-        let max_threads = self.pipeline.max_total_threads_per_threadgroup();
-        let group = MTLSize::new(max_threads.min(total_work as u64), 1, 1);
-        enc.dispatch_threads(grid, group);
-        enc.end_encoding();
-        cmd.commit();
-        cmd.wait_until_completed();
-
-        // Read results
-        let ce_ptr = ce_buf.contents() as *const f32;
-        let correct_ptr = correct_buf.contents() as *const u32;
-        let ce_values = unsafe { std::slice::from_raw_parts(ce_ptr, total_work) };
-        let correct_values = unsafe { std::slice::from_raw_parts(correct_ptr, total_work) };
-
-        // Reduce per genome
-        let mut results = Vec::with_capacity(num_genomes);
-        for g in 0..num_genomes {
-            let start = g * num_eval;
-            let end = start + num_eval;
-            let total_ce: f64 = ce_values[start..end].iter().map(|&c| c as f64).sum();
-            let total_correct: u32 = correct_values[start..end].iter().sum();
-            results.push((
-                total_ce / num_eval as f64,
-                total_correct as f64 / num_eval as f64,
-            ));
-        }
-
-        Ok(results)
-    }
-}
+#[cfg(not(target_os = "macos"))]
+pub fn get_metal_bitwise_ce() -> Option<std::sync::Arc<()>> { None }
 
 // =============================================================================
 // Token Cache

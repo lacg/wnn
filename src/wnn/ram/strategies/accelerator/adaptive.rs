@@ -17,6 +17,7 @@
 //! - Hybrid approach: Metal for dense, CPU for sparse
 
 use dashmap::DashMap;
+#[cfg(target_os = "macos")]
 use metal;
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
@@ -1876,6 +1877,7 @@ fn export_genome_for_gpu(
 // Thread-local cache for GPU buffers to avoid expensive 10GB buffer allocation per evaluation
 // The scores buffer is ~10GB (50K examples × 50K clusters × 4 bytes), so reusing it is critical.
 // The cache includes the reset generation to invalidate on Metal reset.
+#[cfg(target_os = "macos")]
 thread_local! {
     // (reset_gen, num_eval, num_clusters, buffer)
     static CACHED_SCORES_BUFFER: std::cell::RefCell<Option<(u64, usize, usize, metal::Buffer)>> = std::cell::RefCell::new(None);
@@ -1909,6 +1911,7 @@ pub fn evaluate_genome_hybrid(
 
     // FAST PATH: If single sparse group covering all clusters, use direct CE computation
     // This avoids the 10GB GPU→CPU transfer by computing CE on GPU
+    #[cfg(target_os = "macos")]
     if export.group_info.len() == 1 && export.sparse_exports.len() == 1 {
         let (is_sparse, group_idx, cluster_ids) = &export.group_info[0];
         if *is_sparse && cluster_ids.len() == num_clusters {
@@ -1963,6 +1966,8 @@ pub fn evaluate_genome_hybrid(
     // FULL GPU PATH: Write scores directly to shared GPU buffer, compute CE on GPU
     // This avoids the GPU→CPU→GPU round-trip that was slowing down tiered evaluation
     // Full GPU path enabled by default (3x faster). Disable with WNN_GPU_CE=0
+    #[cfg(target_os = "macos")]
+    {
     let use_full_gpu = std::env::var("WNN_GPU_CE").map(|v| v != "0").unwrap_or(true);
 
     if use_full_gpu {
@@ -2129,119 +2134,119 @@ pub fn evaluate_genome_hybrid(
             // Fall through to CPU path if full GPU fails
         }
     }
+    } // cfg(target_os = "macos")
 
-    // Legacy GPU CE PATH: Disabled - CPU→GPU transfer overhead makes it slower
-    static CE_REDUCE_EVALUATOR: std::sync::OnceLock<Option<crate::metal_ramlm::MetalCEReduceEvaluator>> = std::sync::OnceLock::new();
-    let _ce_reduce = CE_REDUCE_EVALUATOR.get_or_init(|| {
-        crate::metal_ramlm::MetalCEReduceEvaluator::new().ok()
-    });
+    // Legacy GPU CE PATH: Disabled - kept for reference, macOS only
+    #[cfg(target_os = "macos")]
+    {
+        static CE_REDUCE_EVALUATOR: std::sync::OnceLock<Option<crate::metal_ramlm::MetalCEReduceEvaluator>> = std::sync::OnceLock::new();
+        let _ce_reduce = CE_REDUCE_EVALUATOR.get_or_init(|| {
+            crate::metal_ramlm::MetalCEReduceEvaluator::new().ok()
+        });
 
-    // Disabled: Legacy GPU CE path with CPU→GPU scatter is slower
-    if false {
-        let ce_eval = _ce_reduce.as_ref().unwrap();
-        // Create GPU buffer for all scores
-        let scores_buffer = ce_eval.create_scores_buffer(num_eval, num_clusters);
+        // Disabled: Legacy GPU CE path with CPU→GPU scatter is slower
+        if false {
+            let ce_eval = _ce_reduce.as_ref().unwrap();
+            let scores_buffer = ce_eval.create_scores_buffer(num_eval, num_clusters);
 
-        let mut dense_idx = 0usize;
-        let mut sparse_idx = 0usize;
-        let mut all_gpu_success = true;
+            let mut dense_idx = 0usize;
+            let mut sparse_idx = 0usize;
+            let mut all_gpu_success = true;
 
-        for (is_sparse, group_idx, cluster_ids) in &export.group_info {
-            let group = &export.groups[*group_idx];
+            for (is_sparse, group_idx, cluster_ids) in &export.group_info {
+                let group = &export.groups[*group_idx];
 
-            let group_scores_result = if *is_sparse {
-                let sparse_export = &export.sparse_exports[sparse_idx];
-                sparse_idx += 1;
+                let group_scores_result = if *is_sparse {
+                    let sparse_export = &export.sparse_exports[sparse_idx];
+                    sparse_idx += 1;
 
-                let call_start = std::time::Instant::now();
-                let result = if let Some(sparse_eval) = sparse_metal {
-                    evaluate_group_sparse_gpu(
-                        sparse_eval,
-                        eval_input_bits,
-                        &export.connections,
-                        sparse_export,
-                        group,
-                        num_eval,
-                        total_input_bits,
-                    )
+                    let call_start = std::time::Instant::now();
+                    let result = if let Some(sparse_eval) = sparse_metal {
+                        evaluate_group_sparse_gpu(
+                            sparse_eval,
+                            eval_input_bits,
+                            &export.connections,
+                            sparse_export,
+                            group,
+                            num_eval,
+                            total_input_bits,
+                        )
+                    } else {
+                        Err("No sparse evaluator".to_string())
+                    };
+                    if timing_enabled && result.is_ok() {
+                        gpu_time_ms += call_start.elapsed().as_millis();
+                        gpu_calls += 1;
+                    }
+                    result
                 } else {
-                    Err("No sparse evaluator".to_string())
-                };
-                if timing_enabled && result.is_ok() {
-                    gpu_time_ms += call_start.elapsed().as_millis();
-                    gpu_calls += 1;
-                }
-                result
-            } else {
-                let dense_words = &export.dense_exports[dense_idx];
-                dense_idx += 1;
+                    let dense_words = &export.dense_exports[dense_idx];
+                    dense_idx += 1;
 
-                let call_start = std::time::Instant::now();
-                let result = if let Some(metal_eval) = metal {
-                    evaluate_group_metal(
-                        metal_eval,
-                        eval_input_bits,
-                        &export.connections,
-                        dense_words,
-                        group,
-                        num_eval,
-                        total_input_bits,
-                    )
-                } else {
-                    Err("No metal evaluator".to_string())
+                    let call_start = std::time::Instant::now();
+                    let result = if let Some(metal_eval) = metal {
+                        evaluate_group_metal(
+                            metal_eval,
+                            eval_input_bits,
+                            &export.connections,
+                            dense_words,
+                            group,
+                            num_eval,
+                            total_input_bits,
+                        )
+                    } else {
+                        Err("No metal evaluator".to_string())
+                    };
+                    if timing_enabled && result.is_ok() {
+                        gpu_time_ms += call_start.elapsed().as_millis();
+                        gpu_calls += 1;
+                    }
+                    result
                 };
-                if timing_enabled && result.is_ok() {
-                    gpu_time_ms += call_start.elapsed().as_millis();
-                    gpu_calls += 1;
-                }
-                result
-            };
 
-            match group_scores_result {
-                Ok(group_scores) => {
-                    // GPU scatter to buffer
-                    let scatter_start = std::time::Instant::now();
-                    ce_eval.scatter_to_buffer(
-                        &group_scores,
-                        &scores_buffer,
-                        cluster_ids,
-                        num_eval,
-                        num_clusters,
-                    );
-                    if timing_enabled {
-                        scatter_time_ms += scatter_start.elapsed().as_millis();
+                match group_scores_result {
+                    Ok(group_scores) => {
+                        let scatter_start = std::time::Instant::now();
+                        ce_eval.scatter_to_buffer(
+                            &group_scores,
+                            &scores_buffer,
+                            cluster_ids,
+                            num_eval,
+                            num_clusters,
+                        );
+                        if timing_enabled {
+                            scatter_time_ms += scatter_start.elapsed().as_millis();
+                        }
+                    }
+                    Err(_) => {
+                        all_gpu_success = false;
+                        break;
                     }
                 }
-                Err(_) => {
-                    all_gpu_success = false;
-                    break;
+            }
+
+            if all_gpu_success {
+                let ce_start = std::time::Instant::now();
+                let result = ce_eval.compute_ce_from_buffer(
+                    &scores_buffer,
+                    eval_targets,
+                    num_eval,
+                    num_clusters,
+                );
+                if timing_enabled {
+                    let ce_time = ce_start.elapsed().as_millis();
+                    let total_ms = eval_start.elapsed().as_millis();
+                    eprintln!(
+                        "[EVAL_HYBRID] GPU_CE_PATH total={}ms gpu={}ms({}calls) scatter={}ms ce={}ms",
+                        total_ms, gpu_time_ms, gpu_calls, scatter_time_ms, ce_time
+                    );
+                }
+                if let Ok((ce, acc)) = result {
+                    return (ce, acc);
                 }
             }
         }
-
-        if all_gpu_success {
-            // GPU CE computation
-            let ce_start = std::time::Instant::now();
-            let result = ce_eval.compute_ce_from_buffer(
-                &scores_buffer,
-                eval_targets,
-                num_eval,
-                num_clusters,
-            );
-            if timing_enabled {
-                let ce_time = ce_start.elapsed().as_millis();
-                let total_ms = eval_start.elapsed().as_millis();
-                eprintln!(
-                    "[EVAL_HYBRID] GPU_CE_PATH total={}ms gpu={}ms({}calls) scatter={}ms ce={}ms",
-                    total_ms, gpu_time_ms, gpu_calls, scatter_time_ms, ce_time
-                );
-            }
-            if let Ok((ce, acc)) = result {
-                return (ce, acc);
-            }
-        }
-        // Fall through to CPU path if GPU CE fails
-    }
+    } // cfg(target_os = "macos") Legacy GPU CE PATH
 
     // CPU FALLBACK PATH: Process groups separately, accumulate scores, compute CE on CPU
     // Pre-compute scores for all examples × clusters

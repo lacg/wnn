@@ -18,10 +18,6 @@ numpy = "0.23"
 # CPU parallelism (like joblib but faster)
 rayon = "1.8"
 
-# Metal GPU (Apple Silicon)
-metal = "0.27"
-objc = "0.2"
-
 # Fast hash maps
 rustc-hash = "1.1"
 
@@ -42,6 +38,11 @@ fs2 = "0.4"
 
 # SQLite for direct database writes (v2 data model)
 rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Metal GPU (Apple Silicon) — macOS only
+[target.'cfg(target_os = "macos")'.dependencies]
+metal = "0.27"
+objc = "0.2"
 
 [profile.release]
 lto = true

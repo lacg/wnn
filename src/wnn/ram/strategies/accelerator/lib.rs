@@ -37,11 +37,85 @@ mod ram;
 #[path = "ramlm.rs"]
 mod ramlm;
 
+// Metal evaluator modules: real on macOS, stubs on other platforms
+#[cfg(target_os = "macos")]
 #[path = "metal_evaluator.rs"]
 mod metal_evaluator;
 
+#[cfg(not(target_os = "macos"))]
+mod metal_evaluator {
+    pub struct MetalEvaluator;
+    impl MetalEvaluator {
+        pub fn new() -> Result<Self, String> { Err("Metal not available on this platform".into()) }
+        pub fn is_available() -> bool { false }
+        pub fn device_info() -> Result<String, String> { Err("Metal not available on this platform".into()) }
+        pub fn evaluate_batch(
+            &self, _: &[Vec<Vec<i64>>], _: &std::collections::HashMap<String, u64>,
+            _: &[String], _: &[String], _: usize, _: usize,
+        ) -> Result<Vec<f64>, String> { Err("Metal not available on this platform".into()) }
+    }
+}
+
+#[cfg(target_os = "macos")]
 #[path = "metal_ramlm.rs"]
 mod metal_ramlm;
+
+#[cfg(not(target_os = "macos"))]
+mod metal_ramlm {
+    pub struct MetalRAMLMEvaluator;
+    impl MetalRAMLMEvaluator {
+        pub fn new() -> Result<Self, String> { Err("Metal not available on this platform".into()) }
+        pub fn is_available() -> bool { false }
+        pub fn device_info() -> Result<String, String> { Err("Metal not available on this platform".into()) }
+        pub fn forward_batch(
+            &self, _: &[bool], _: &[i64], _: &[i64],
+            _: usize, _: usize, _: usize, _: usize, _: usize, _: usize, _: usize,
+        ) -> Result<Vec<f32>, String> { Err("Metal not available on this platform".into()) }
+    }
+
+    pub struct MetalSparseEvaluator;
+    impl MetalSparseEvaluator {
+        pub fn new() -> Result<Self, String> { Err("Metal not available on this platform".into()) }
+        pub fn forward_batch_sparse(
+            &self, _: &[bool], _: &[i64], _: &[u64], _: &[u8], _: &[u32], _: &[u32],
+            _: usize, _: usize, _: usize, _: usize, _: usize, _: usize,
+        ) -> Result<Vec<f32>, String> { Err("Metal not available on this platform".into()) }
+        pub fn forward_batch_general(
+            &self, _: &[bool], _: &[i64], _: &[u64], _: &[u8], _: &[u32], _: &[u32],
+            _: &[(u32, u32, u32, u32)], _: usize, _: usize, _: usize,
+        ) -> Result<Vec<f32>, String> { Err("Metal not available on this platform".into()) }
+    }
+
+    pub struct MetalGroupEvaluator;
+    impl MetalGroupEvaluator {
+        pub fn new() -> Result<Self, String> { Err("Metal not available on this platform".into()) }
+    }
+
+    pub struct MetalSparseCEEvaluator;
+    impl MetalSparseCEEvaluator {
+        pub fn new() -> Result<Self, String> { Err("Metal not available on this platform".into()) }
+    }
+
+    pub struct MetalCEReduceEvaluator;
+    impl MetalCEReduceEvaluator {
+        pub fn new() -> Result<Self, String> { Err("Metal not available on this platform".into()) }
+    }
+
+    pub struct SparseGroupData<'a> {
+        pub connections: &'a [i64],
+        pub keys: &'a [u64],
+        pub values: &'a [u8],
+        pub offsets: &'a [u32],
+        pub counts: &'a [u32],
+        pub cluster_ids: &'a [usize],
+        pub bits_per_neuron: usize,
+        pub neurons_per_cluster: usize,
+        pub actual_neurons_per_cluster: Option<&'a [u32]>,
+    }
+
+    pub fn reset_sparse_buffer_cache() {}
+    pub fn get_sparse_cache_generation() -> u64 { 0 }
+}
 
 #[path = "sparse_memory.rs"]
 mod sparse_memory;
@@ -61,8 +135,20 @@ mod neighbor_search;
 #[path = "gating.rs"]
 mod gating;
 
+#[cfg(target_os = "macos")]
 #[path = "metal_gating.rs"]
 mod metal_gating;
+
+#[cfg(not(target_os = "macos"))]
+mod metal_gating {
+    pub struct MetalGatingEvaluator;
+    impl MetalGatingEvaluator {
+        pub fn new() -> Result<Self, String> { Err("Metal not available on this platform".into()) }
+        pub fn is_available() -> bool { false }
+    }
+    pub fn invalidate_gating_cache() {}
+    pub fn reset_gating_buffer_cache() {}
+}
 
 #[path = "eval_worker.rs"]
 pub mod eval_worker;
@@ -72,7 +158,9 @@ mod bitwise_ramlm;
 
 pub use ram::RAMNeuron;
 pub use per_cluster::{PerClusterEvaluator, FitnessMode, TierOptConfig, ClusterOptResult, TierOptResult};
+#[cfg(target_os = "macos")]
 pub use metal_evaluator::MetalEvaluator;
+#[cfg(target_os = "macos")]
 pub use metal_ramlm::MetalRAMLMEvaluator;
 
 /// Set the EMPTY cell value for probability calculation
@@ -3776,6 +3864,7 @@ impl RAMGatingWrapper {
     ///
     /// # Returns
     /// Flattened gate values [batch_size * num_clusters] (0.0 or 1.0)
+    #[cfg(target_os = "macos")]
     fn forward_batch_metal(&self, py: Python<'_>, input_bits_flat: Vec<bool>, batch_size: usize) -> PyResult<Vec<f32>> {
         py.allow_threads(|| {
             let evaluator_lock = get_cached_metal_gating_evaluator()
@@ -3799,6 +3888,7 @@ impl RAMGatingWrapper {
     ///
     /// # Returns
     /// Flattened gate values [batch_size * num_clusters] (0.0 or 1.0)
+    #[cfg(target_os = "macos")]
     #[pyo3(signature = (input_bits_flat, batch_size, cpu_fraction=0.3))]
     fn forward_batch_hybrid(&self, py: Python<'_>, input_bits_flat: Vec<bool>, batch_size: usize, cpu_fraction: f32) -> PyResult<Vec<f32>> {
         py.allow_threads(|| {
@@ -3824,6 +3914,7 @@ impl RAMGatingWrapper {
     ///
     /// # Returns
     /// Number of training examples processed (batch_size)
+    #[cfg(target_os = "macos")]
     fn train_batch_metal(
         &self,
         py: Python<'_>,
