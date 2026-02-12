@@ -23,6 +23,8 @@ import sys
 import time
 from pathlib import Path
 
+from wnn.logger import Logger
+
 # Import shared helpers from the single-context optimization script
 from run_bitwise_optimization import (
 	load_wikitext2_tokens,
@@ -41,7 +43,7 @@ from run_bitwise_optimization import (
 
 def run_full_pipeline(
 	neurons, bits, context_size, train_tokens, test_tokens, validation_tokens,
-	vocab_size, num_clusters, args,
+	vocab_size, num_clusters, args, logger=print,
 ):
 	"""Run full 7-phase optimization for one (neurons, bits, context) config.
 
@@ -52,10 +54,10 @@ def run_full_pipeline(
 	total_input_bits = context_size * num_clusters
 	ci = args.check_interval
 
-	print(f"\n{'#'*80}")
-	print(f"  Config: n={neurons}, b={bits}, context={context_size}")
-	print(f"  Total input bits: {total_input_bits}")
-	print(f"{'#'*80}")
+	logger(f"\n{'#'*80}")
+	logger(f"  Config: n={neurons}, b={bits}, context={context_size}")
+	logger(f"  Total input bits: {total_input_bits}")
+	logger(f"{'#'*80}")
 
 	# Create evaluators for this context size
 	opt_evaluator, full_evaluator = create_evaluators(
@@ -76,7 +78,7 @@ def run_full_pipeline(
 	# Baseline on full validation
 	phase_metrics_list = []
 	baseline_ce, baseline_acc = full_evaluator.evaluate_single_full(best_genome)
-	print(f"  Baseline CE={baseline_ce:.4f}, Acc={baseline_acc:.2%}, PPL={math.exp(baseline_ce):.0f}")
+	logger(f"  Baseline CE={baseline_ce:.4f}, Acc={baseline_acc:.2%}, PPL={math.exp(baseline_ce):.0f}")
 	baseline_entry = {"ce": baseline_ce, "acc": baseline_acc, "ppl": math.exp(baseline_ce)}
 	phase_metrics_list.append({
 		"phase_name": "Init Population",
@@ -96,12 +98,12 @@ def run_full_pipeline(
 	}
 
 	def log(msg):
-		print(f"  {msg}")
+		logger(f"  {msg}")
 
 	# ── Phase 2: GA Neurons (bits fixed) ─────────────────────────────────
-	print(f"\n{'='*70}")
-	print(f"Phase 2: GA Neurons (bits={bits})")
-	print(f"{'='*70}")
+	logger(f"\n{'='*70}")
+	logger(f"Phase 2: GA Neurons (bits={bits})")
+	logger(f"{'='*70}")
 
 	result, elapsed = run_ga_phase(
 		opt_evaluator,
@@ -128,9 +130,9 @@ def run_full_pipeline(
 	}
 
 	# ── Phase 3: TS Neurons ──────────────────────────────────────────────
-	print(f"\n{'='*70}")
-	print(f"Phase 3: TS Neurons")
-	print(f"{'='*70}")
+	logger(f"\n{'='*70}")
+	logger(f"Phase 3: TS Neurons")
+	logger(f"{'='*70}")
 
 	result, elapsed = run_ts_phase(
 		opt_evaluator,
@@ -157,9 +159,9 @@ def run_full_pipeline(
 	}
 
 	# ── Phase 4: GA Bits ─────────────────────────────────────────────────
-	print(f"\n{'='*70}")
-	print(f"Phase 4: GA Bits")
-	print(f"{'='*70}")
+	logger(f"\n{'='*70}")
+	logger(f"Phase 4: GA Bits")
+	logger(f"{'='*70}")
 
 	result, elapsed = run_ga_phase(
 		opt_evaluator,
@@ -184,9 +186,9 @@ def run_full_pipeline(
 	}
 
 	# ── Phase 5: TS Bits ─────────────────────────────────────────────────
-	print(f"\n{'='*70}")
-	print(f"Phase 5: TS Bits")
-	print(f"{'='*70}")
+	logger(f"\n{'='*70}")
+	logger(f"Phase 5: TS Bits")
+	logger(f"{'='*70}")
 
 	result, elapsed = run_ts_phase(
 		opt_evaluator,
@@ -211,9 +213,9 @@ def run_full_pipeline(
 	}
 
 	# ── Phase 6: GA Connections ──────────────────────────────────────────
-	print(f"\n{'='*70}")
-	print(f"Phase 6: GA Connections")
-	print(f"{'='*70}")
+	logger(f"\n{'='*70}")
+	logger(f"Phase 6: GA Connections")
+	logger(f"{'='*70}")
 
 	result, elapsed = run_ga_phase(
 		opt_evaluator,
@@ -237,9 +239,9 @@ def run_full_pipeline(
 	}
 
 	# ── Phase 7: TS Connections ──────────────────────────────────────────
-	print(f"\n{'='*70}")
-	print(f"Phase 7: TS Connections")
-	print(f"{'='*70}")
+	logger(f"\n{'='*70}")
+	logger(f"Phase 7: TS Connections")
+	logger(f"{'='*70}")
 
 	result, elapsed = run_ts_phase(
 		opt_evaluator,
@@ -278,7 +280,7 @@ def run_full_pipeline(
 # Final comparison table across all context sizes
 # ---------------------------------------------------------------------------
 
-def print_context_comparison(all_runs, baseline_input):
+def print_context_comparison(all_runs, baseline_input, logger=print):
 	"""Print a comparison table across all context sizes for each config."""
 
 	# Group runs by config
@@ -293,17 +295,17 @@ def print_context_comparison(all_runs, baseline_input):
 
 	# Header
 	W = 14 + 30 * len(all_contexts)
-	print(f"\n{'='*W}")
-	print(f"  Context Size Comparison (Final CE / PPL / Accuracy on Full Validation)")
-	print(f"{'='*W}")
+	logger(f"\n{'='*W}")
+	logger(f"  Context Size Comparison (Final CE / PPL / Accuracy on Full Validation)")
+	logger(f"{'='*W}")
 
 	# Column headers
 	header = f"  {'Config':<14}"
 	for ctx in all_contexts:
 		src = " [v3]" if ctx == 4 else ""
 		header += f" | {'ctx=' + str(ctx) + src:^27}"
-	print(header)
-	print(f"  {'-'*(W-2)}")
+	logger(header)
+	logger(f"  {'-'*(W-2)}")
 
 	for (neurons, bits), ctx_results in sorted(configs.items()):
 		label = f"n={neurons},b={bits}"
@@ -316,7 +318,7 @@ def print_context_comparison(all_runs, baseline_input):
 				row_ce += f" | {'CE=' + f'{ce:.4f}':^27}"
 			else:
 				row_ce += f" | {'—':^27}"
-		print(row_ce)
+		logger(row_ce)
 
 		# PPL row
 		row_ppl = f"  {'':<14}"
@@ -326,7 +328,7 @@ def print_context_comparison(all_runs, baseline_input):
 				row_ppl += f" | {'PPL=' + f'{ppl:.0f}':^27}"
 			else:
 				row_ppl += f" | {'':^27}"
-		print(row_ppl)
+		logger(row_ppl)
 
 		# Accuracy row
 		row_acc = f"  {'':<14}"
@@ -336,14 +338,14 @@ def print_context_comparison(all_runs, baseline_input):
 				row_acc += f" | {'Acc=' + f'{acc:.2%}':^27}"
 			else:
 				row_acc += f" | {'':^27}"
-		print(row_acc)
+		logger(row_acc)
 
-		print(f"  {'-'*(W-2)}")
+		logger(f"  {'-'*(W-2)}")
 
-	print(f"{'='*W}")
+	logger(f"{'='*W}")
 
 	# Best config per context
-	print(f"\n  Best config per context size:")
+	logger(f"\n  Best config per context size:")
 	for ctx in all_contexts:
 		best_key = None
 		best_ce = float("inf")
@@ -355,8 +357,8 @@ def print_context_comparison(all_runs, baseline_input):
 			n, b = best_key
 			r = configs[best_key][ctx]
 			src = " [v3]" if ctx == 4 else ""
-			print(f"    ctx={ctx:>2}{src}: n={n}, b={b} → "
-				  f"CE={r['ce']:.4f}, PPL={r['ppl']:.0f}, Acc={r['acc']:.2%}")
+			logger(f"    ctx={ctx:>2}{src}: n={n}, b={b} → "
+				   f"CE={r['ce']:.4f}, PPL={r['ppl']:.0f}, Acc={r['acc']:.2%}")
 
 
 # ---------------------------------------------------------------------------
@@ -393,6 +395,9 @@ def main():
 	output_path = Path(args.output)
 	output_path.parent.mkdir(parents=True, exist_ok=True)
 
+	# Create logger with timestamps
+	logger = Logger("context_sweep")
+
 	# ── Load baseline results and extract top-K configs ──────────────────
 	with open(args.input) as f:
 		baseline = json.load(f)
@@ -400,25 +405,25 @@ def main():
 	grid_results = baseline["phase1_grid"]["results"]  # already sorted by CE
 	top_configs = grid_results[:args.top_k]
 
-	print(f"Top {args.top_k} configs from {args.input}:")
+	logger(f"Top {args.top_k} configs from {args.input}:")
 	for i, cfg in enumerate(top_configs):
-		print(f"  {i+1}. n={cfg['neurons']}, b={cfg['bits']}, CE={cfg['cross_entropy']:.4f}")
+		logger(f"  {i+1}. n={cfg['neurons']}, b={cfg['bits']}, CE={cfg['cross_entropy']:.4f}")
 
-	print(f"\nContext sizes to run: {contexts_to_run}")
-	print(f"Baseline context (from input): {args.baseline_context}")
-	print(f"Total runs: {len(top_configs)} configs × {len(contexts_to_run)} contexts "
-		  f"= {len(top_configs) * len(contexts_to_run)}")
+	logger(f"\nContext sizes to run: {contexts_to_run}")
+	logger(f"Baseline context (from input): {args.baseline_context}")
+	logger(f"Total runs: {len(top_configs)} configs × {len(contexts_to_run)} contexts "
+		   f"= {len(top_configs) * len(contexts_to_run)}")
 
 	# ── Load dataset once ────────────────────────────────────────────────
 	from wnn.ram.core.RAMClusterLayer import bits_needed
-	train_tokens, test_tokens, validation_tokens, vocab_size = load_wikitext2_tokens()
+	train_tokens, test_tokens, validation_tokens, vocab_size = load_wikitext2_tokens(logger=logger)
 	num_clusters = bits_needed(vocab_size)
 
 	# ── Load or initialize sweep results ─────────────────────────────────
 	if output_path.exists():
 		with open(output_path) as f:
 			sweep_results = json.load(f)
-		print(f"Resuming from {output_path} ({len(sweep_results.get('runs', []))} runs completed)")
+		logger(f"Resuming from {output_path} ({len(sweep_results.get('runs', []))} runs completed)")
 	else:
 		sweep_results = {
 			"config": {
@@ -470,9 +475,9 @@ def main():
 			sweep_results["runs"].append(baseline_run)
 			completed.add(key)
 			save()
-			print(f"\nIncluded baseline ctx={baseline_ctx} result: "
-				  f"n={best_cfg['neurons']}, b={best_cfg['bits']}, "
-				  f"CE={final_pm['best_ce']['ce']:.4f}")
+			logger(f"\nIncluded baseline ctx={baseline_ctx} result: "
+				   f"n={best_cfg['neurons']}, b={best_cfg['bits']}, "
+				   f"CE={final_pm['best_ce']['ce']:.4f}")
 
 	# ── Run the sweep ────────────────────────────────────────────────────
 	total = len(top_configs) * len(contexts_to_run)
@@ -488,12 +493,12 @@ def main():
 			key = (neurons, bits, context_size)
 
 			if key in completed:
-				print(f"\n[{run_idx}/{total}] Skipping n={neurons}, b={bits}, ctx={context_size} (already done)")
+				logger(f"\n[{run_idx}/{total}] Skipping n={neurons}, b={bits}, ctx={context_size} (already done)")
 				continue
 
-			print(f"\n{'#'*80}")
-			print(f"  [{run_idx}/{total}] n={neurons}, b={bits}, ctx={context_size}")
-			print(f"{'#'*80}")
+			logger(f"\n{'#'*80}")
+			logger(f"  [{run_idx}/{total}] n={neurons}, b={bits}, ctx={context_size}")
+			logger(f"{'#'*80}")
 
 			t0 = time.time()
 			try:
@@ -502,19 +507,19 @@ def main():
 					train_tokens=train_tokens, test_tokens=test_tokens,
 					validation_tokens=validation_tokens,
 					vocab_size=vocab_size, num_clusters=num_clusters,
-					args=args,
+					args=args, logger=logger,
 				)
 				run_result["elapsed_total_s"] = round(time.time() - t0, 1)
 				sweep_results["runs"].append(run_result)
 				completed.add(key)
 				save()
 
-				print(f"\n  Run complete: CE={run_result['final']['ce']:.4f}, "
-					  f"Acc={run_result['final']['acc']:.2%} "
-					  f"({run_result['elapsed_total_s']:.0f}s)")
+				logger(f"\n  Run complete: CE={run_result['final']['ce']:.4f}, "
+					   f"Acc={run_result['final']['acc']:.2%} "
+					   f"({run_result['elapsed_total_s']:.0f}s)")
 
 			except Exception as e:
-				print(f"\n  ERROR in run n={neurons}, b={bits}, ctx={context_size}: {e}")
+				logger(f"\n  ERROR in run n={neurons}, b={bits}, ctx={context_size}: {e}")
 				import traceback
 				traceback.print_exc()
 				# Save partial results and continue
@@ -523,14 +528,14 @@ def main():
 
 	# ── Final comparison table ───────────────────────────────────────────
 	sweep_elapsed = time.time() - t_sweep_start
-	print(f"\n{'#'*80}")
-	print(f"  SWEEP COMPLETE — {len(sweep_results['runs'])} runs in {sweep_elapsed:.0f}s")
-	print(f"{'#'*80}")
+	logger(f"\n{'#'*80}")
+	logger(f"  SWEEP COMPLETE — {len(sweep_results['runs'])} runs in {sweep_elapsed:.0f}s")
+	logger(f"{'#'*80}")
 
-	print_context_comparison(sweep_results["runs"], args.input)
+	print_context_comparison(sweep_results["runs"], args.input, logger=logger)
 
 	save()
-	print(f"\nAll results saved to {output_path}")
+	logger(f"\nAll results saved to {output_path}")
 
 
 if __name__ == "__main__":

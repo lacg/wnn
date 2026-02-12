@@ -32,12 +32,14 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 
+from wnn.logger import Logger
+
 
 # ---------------------------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------------------------
 
-def load_wikitext2_tokens(tokenizer_name="gpt2"):
+def load_wikitext2_tokens(tokenizer_name="gpt2", logger=print):
 	"""Load all 3 WikiText-2 splits using GPT-2 tokenizer.
 
 	Returns: (train_tokens, test_tokens, validation_tokens, vocab_size)
@@ -49,8 +51,8 @@ def load_wikitext2_tokens(tokenizer_name="gpt2"):
 		from datasets import load_dataset
 		from transformers import AutoTokenizer
 	except ImportError:
-		print("ERROR: datasets and transformers required. Install with:")
-		print("  pip install datasets transformers")
+		logger("ERROR: datasets and transformers required. Install with:")
+		logger("  pip install datasets transformers")
 		sys.exit(1)
 
 	tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
@@ -67,8 +69,8 @@ def load_wikitext2_tokens(tokenizer_name="gpt2"):
 	validation_tokens = tokenizer.encode(validation_text)
 
 	vocab_size = tokenizer.vocab_size
-	print(f"Loaded WikiText-2: {len(train_tokens):,} train, "
-		  f"{len(test_tokens):,} test, {len(validation_tokens):,} validation, vocab={vocab_size}")
+	logger(f"Loaded WikiText-2: {len(train_tokens):,} train, "
+		   f"{len(test_tokens):,} test, {len(validation_tokens):,} validation, vocab={vocab_size}")
 
 	return train_tokens, test_tokens, validation_tokens, vocab_size
 
@@ -77,7 +79,7 @@ def load_wikitext2_tokens(tokenizer_name="gpt2"):
 # Phase 1: Grid search (quick landscape scan)
 # ---------------------------------------------------------------------------
 
-def phase1_grid_search(train_tokens, test_tokens, vocab_size, context_size, rate, top_k=3):
+def phase1_grid_search(train_tokens, test_tokens, vocab_size, context_size, rate, top_k=3, logger=print):
 	"""Grid search over neurons × bits with random connections."""
 	from wnn.ram.core.models import BitwiseRAMLM
 
@@ -88,15 +90,15 @@ def phase1_grid_search(train_tokens, test_tokens, vocab_size, context_size, rate
 	total = len(neurons_grid) * len(bits_grid)
 	idx = 0
 
-	print(f"\n{'='*70}")
-	print(f"Phase 1: Grid Search ({total} configs)")
-	print(f"  mode=QUAD_WEIGHTED, rate={rate}, context={context_size}")
-	print(f"{'='*70}")
+	logger(f"\n{'='*70}")
+	logger(f"Phase 1: Grid Search ({total} configs)")
+	logger(f"  mode=QUAD_WEIGHTED, rate={rate}, context={context_size}")
+	logger(f"{'='*70}")
 
 	for neurons in neurons_grid:
 		for bits in bits_grid:
 			idx += 1
-			print(f"\n[{idx}/{total}] n={neurons}, b={bits}")
+			logger(f"\n[{idx}/{total}] n={neurons}, b={bits}")
 
 			model = BitwiseRAMLM(
 				vocab_size=vocab_size,
@@ -120,7 +122,7 @@ def phase1_grid_search(train_tokens, test_tokens, vocab_size, context_size, rate
 			ppl = eval_stats["perplexity"]
 			mean_bit_acc = eval_stats.get("mean_bit_accuracy", 0.0)
 
-			print(f"  CE={ce:.4f}  PPL={ppl:.0f}  Acc={acc:.2%}  BitAcc={mean_bit_acc:.2%}  ({elapsed:.1f}s)")
+			logger(f"  CE={ce:.4f}  PPL={ppl:.0f}  Acc={acc:.2%}  BitAcc={mean_bit_acc:.2%}  ({elapsed:.1f}s)")
 
 			results.append({
 				"neurons": neurons,
@@ -135,15 +137,15 @@ def phase1_grid_search(train_tokens, test_tokens, vocab_size, context_size, rate
 
 	results.sort(key=lambda r: r["cross_entropy"])
 
-	print(f"\n{'─'*70}")
-	print(f"Phase 1 Rankings (by CE):")
+	logger(f"\n{'─'*70}")
+	logger(f"Phase 1 Rankings (by CE):")
 	for i, r in enumerate(results):
 		marker = " ★" if i < top_k else ""
-		print(f"  {i+1:2d}. n={r['neurons']:3d}, b={r['bits']:2d}: "
-			  f"CE={r['cross_entropy']:.4f}  Acc={r['accuracy']:.2%}{marker}")
+		logger(f"  {i+1:2d}. n={r['neurons']:3d}, b={r['bits']:2d}: "
+			   f"CE={r['cross_entropy']:.4f}  Acc={r['accuracy']:.2%}{marker}")
 
 	best = results[0]
-	print(f"\nBest config: n={best['neurons']}, b={best['bits']}, CE={best['cross_entropy']:.4f}")
+	logger(f"\nBest config: n={best['neurons']}, b={best['bits']}, CE={best['cross_entropy']:.4f}")
 
 	return results
 
@@ -324,7 +326,7 @@ def harmonic_weighted(ce_rank, acc_rank, w_ce=1.0, w_acc=1.0):
 	return (w_ce + w_acc) / (w_ce / ce_rank + w_acc / acc_rank)
 
 
-def evaluate_phase_top_k(full_evaluator, result, phase_name):
+def evaluate_phase_top_k(full_evaluator, result, phase_name, logger=print):
 	"""Full-eval 1-3 representative genomes from a phase on validation data.
 
 	Pre-filters the population by fitness rank (using optimization metrics from result),
@@ -368,7 +370,7 @@ def evaluate_phase_top_k(full_evaluator, result, phase_name):
 
 	genome_list = list(candidates.values())
 	idx_list = list(candidates.keys())
-	print(f"  Full-eval {len(genome_list)} genome(s) on validation...")
+	logger(f"  Full-eval {len(genome_list)} genome(s) on validation...")
 	full_results = full_evaluator.evaluate_batch_full(genome_list)
 
 	eval_map = {}
@@ -458,13 +460,17 @@ def main():
 	output_path = Path(args.output)
 	output_path.parent.mkdir(parents=True, exist_ok=True)
 
+	# Create logger with timestamps
+	logger = Logger(f"bitwise_opt_ctx{args.context}")
+	logger(f"Output: {args.output}")
+
 	# Import dependencies
 	from wnn.ram.core.RAMClusterLayer import bits_needed
 	from wnn.ram.strategies.connectivity.architecture_strategies import ArchitectureConfig
 	from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 
 	# Load all 3 WikiText-2 splits
-	train_tokens, test_tokens, validation_tokens, vocab_size = load_wikitext2_tokens()
+	train_tokens, test_tokens, validation_tokens, vocab_size = load_wikitext2_tokens(logger=logger)
 	num_clusters = bits_needed(vocab_size)  # 16 for GPT-2
 	total_input_bits = args.context * bits_needed(vocab_size)
 
@@ -508,9 +514,9 @@ def main():
 			for key in all_results:
 				if key != "config" and key in prev and prev[key] is not None:
 					all_results[key] = prev[key]
-			print(f"Loaded previous results from {input_path}")
+			logger(f"Loaded previous results from {input_path}")
 		except Exception as e:
-			print(f"Warning: Could not load {input_path}: {e}")
+			logger(f"Warning: Could not load {input_path}: {e}")
 
 	def save():
 		with open(args.output, "w") as f:
@@ -520,7 +526,7 @@ def main():
 		return args.phase in ("all", str(phase_num))
 
 	def log(msg):
-		print(f"  {msg}")
+		logger(f"  {msg}")
 
 	# Track best genome flowing through phases
 	best_genome = None
@@ -535,6 +541,7 @@ def main():
 		phase1_results = phase1_grid_search(
 			train_tokens, test_tokens, vocab_size,
 			context_size=args.context, rate=args.rate, top_k=args.top_k,
+			logger=logger,
 		)
 		best_p1 = phase1_results[0]  # sorted by CE
 		best_bits = best_p1["bits"]
@@ -544,7 +551,7 @@ def main():
 		# ── Create 50-genome initial population ──
 		# 3 genomes per grid config (different random connections) = 48
 		# 2 extra from best 2 configs = 50 total
-		print(f"\nSeeding population from {len(phase1_results)} grid configs...")
+		logger(f"\nSeeding population from {len(phase1_results)} grid configs...")
 		pop_genomes = []
 		for config in phase1_results:
 			for _ in range(3):
@@ -563,7 +570,7 @@ def main():
 		initial_population = pop_genomes[:args.population]
 		best_genome = initial_population[0]  # Best config, first random seed
 
-		print(f"  Created {len(initial_population)} genomes for initial population")
+		logger(f"  Created {len(initial_population)} genomes for initial population")
 
 		all_results["phase1_grid"] = {
 			"results": phase1_results,
@@ -574,17 +581,17 @@ def main():
 			"elapsed_s": round(time.time() - t0, 1),
 		}
 		save()
-		print(f"\nPhase 1 saved to {args.output}")
+		logger(f"\nPhase 1 saved to {args.output}")
 	elif all_results.get("phase1_grid"):
 		p1 = all_results["phase1_grid"]
 		best_bits = p1["best_bits"]
 		best_neurons = p1["best_neurons"]
 		best_ce = p1["best_ce"]
 		best_genome = create_seed_genome(num_clusters, best_bits, best_neurons, total_input_bits)
-		print(f"Loaded Phase 1: bits={best_bits}, neurons={best_neurons}, CE={best_ce:.4f}")
+		logger(f"Loaded Phase 1: bits={best_bits}, neurons={best_neurons}, CE={best_ce:.4f}")
 	else:
 		best_genome = create_seed_genome(num_clusters, best_bits, best_neurons, total_input_bits)
-		print(f"Using default config: bits={best_bits}, neurons={best_neurons}")
+		logger(f"Using default config: bits={best_bits}, neurons={best_neurons}")
 
 	# Create two evaluators:
 	# opt_evaluator: rotated train+test for GA/TS fitness
@@ -598,9 +605,9 @@ def main():
 
 	# Full-eval initial population baseline on validation
 	phase_metrics_list = []
-	print(f"\nEvaluating baseline on full validation...")
+	logger(f"\nEvaluating baseline on full validation...")
 	baseline_ce, baseline_acc = full_evaluator.evaluate_single_full(best_genome)
-	print(f"  Baseline CE={baseline_ce:.4f}, Acc={baseline_acc:.2%}, PPL={math.exp(baseline_ce):.0f}")
+	logger(f"  Baseline CE={baseline_ce:.4f}, Acc={baseline_acc:.2%}, PPL={math.exp(baseline_ce):.0f}")
 	phase_metrics_list.append(PhaseMetrics(
 		phase_name="Init Population",
 		top_k_ce=baseline_ce,
@@ -619,9 +626,9 @@ def main():
 		nonlocal best_genome, best_ce
 		if not should_run(phase_num) or best_genome is None:
 			return
-		print(f"\n{'='*70}")
-		print(f"Phase {phase_num}: {phase_name}")
-		print(f"{'='*70}")
+		logger(f"\n{'='*70}")
+		logger(f"Phase {phase_num}: {phase_name}")
+		logger(f"{'='*70}")
 
 		result, elapsed = run_ga_phase(
 			opt_evaluator, arch_config,
@@ -646,7 +653,7 @@ def main():
 		}
 
 		# Full-eval 1-3 genomes on validation
-		metrics = evaluate_phase_top_k(full_evaluator, result, f"P{phase_num} {phase_name}")
+		metrics = evaluate_phase_top_k(full_evaluator, result, f"P{phase_num} {phase_name}", logger=log)
 		phase_metrics_list.append(metrics)
 		all_results[result_key]["full_eval"] = asdict(metrics)
 		print_phase_comparison(phase_metrics_list)
@@ -656,9 +663,9 @@ def main():
 		nonlocal best_genome, best_ce
 		if not should_run(phase_num) or best_genome is None:
 			return
-		print(f"\n{'='*70}")
-		print(f"Phase {phase_num}: {phase_name}")
-		print(f"{'='*70}")
+		logger(f"\n{'='*70}")
+		logger(f"Phase {phase_num}: {phase_name}")
+		logger(f"{'='*70}")
 
 		result, elapsed = run_ts_phase(
 			opt_evaluator, arch_config,
@@ -684,7 +691,7 @@ def main():
 		}
 
 		# Full-eval 1-3 genomes on validation
-		metrics = evaluate_phase_top_k(full_evaluator, result, f"P{phase_num} {phase_name}")
+		metrics = evaluate_phase_top_k(full_evaluator, result, f"P{phase_num} {phase_name}", logger=log)
 		phase_metrics_list.append(metrics)
 		all_results[result_key]["full_eval"] = asdict(metrics)
 		print_phase_comparison(phase_metrics_list)
@@ -744,9 +751,9 @@ def main():
 	if args.enable_gating and best_genome is not None:
 		from wnn.ram.core.gating_trainer import GatingTrainer, GatingConfig, GatingMode
 
-		print(f"\n{'='*70}")
-		print(f"Phase 8: Gating ({GatingMode(args.gating_mode).name})")
-		print(f"{'='*70}")
+		logger(f"\n{'='*70}")
+		logger(f"Phase 8: Gating ({GatingMode(args.gating_mode).name})")
+		logger(f"{'='*70}")
 
 		gating_config = GatingConfig(
 			enabled=True,
@@ -778,17 +785,17 @@ def main():
 	if best_genome is not None:
 		genome_path = output_path.with_suffix(".best_genome.json")
 		best_genome.save(str(genome_path), fitness=best_ce)
-		print(f"\nBest genome saved to {genome_path}")
+		logger(f"\nBest genome saved to {genome_path}")
 
 	# ── Final Summary ────────────────────────────────────────────────────
-	print(f"\n{'='*82}")
-	print(f"  FINAL RESULTS (All metrics on FULL validation data)")
-	print(f"{'='*82}")
+	logger(f"\n{'='*82}")
+	logger(f"  FINAL RESULTS (All metrics on FULL validation data)")
+	logger(f"{'='*82}")
 	print_phase_comparison(phase_metrics_list)
 
 	all_results["phase_metrics"] = [asdict(pm) for pm in phase_metrics_list]
 	save()
-	print(f"\nAll results saved to {args.output}")
+	logger(f"\nAll results saved to {args.output}")
 
 
 if __name__ == "__main__":
