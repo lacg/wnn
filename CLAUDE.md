@@ -764,7 +764,7 @@ cd "/Users/lacg/Library/Mobile Documents/com~apple~CloudDocs/Studies/research/wn
 | `evaluate_batch_cpu()` | Evaluate connectivity patterns (rayon parallel) |
 | `evaluate_batch_metal()` | Evaluate on Metal GPU |
 | `predict_all_batch_cpu()` | Batch prediction with pre-trained RAMs |
-| `predict_all_batch_metal()` | Batch prediction on GPU |
+| `predict_all_batch()` | Batch prediction (rayon parallel) |
 | `predict_all_batch_hybrid()` | Batch prediction CPU+GPU |
 
 **Adding New Functions:**

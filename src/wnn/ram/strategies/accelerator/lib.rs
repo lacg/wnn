@@ -435,10 +435,9 @@ fn predict_all_batch_cpu(
     })
 }
 
-/// Batch predict using pre-trained RAMs on Metal GPU
-/// Same interface as predict_all_batch_cpu but uses GPU parallelism
+/// Batch predict using pre-trained RAMs (CPU rayon parallel)
 #[pyfunction]
-fn predict_all_batch_metal(
+fn predict_all_batch(
     py: Python<'_>,
     generalized_rams: Vec<(
         usize,
@@ -4142,11 +4141,11 @@ fn ramlm_bitwise_train_neuron_parallel_numpy<'py>(
     })
 }
 
-/// Complete train + forward + Metal CE in one Rust call.
+/// Complete train + forward + CE in one Rust call (CPU with optional Metal CE acceleration).
 /// Returns (ce, accuracy, per_bit_accuracy_list, modified_count, updated_memory).
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-fn ramlm_bitwise_train_and_eval_metal_numpy<'py>(
+fn ramlm_bitwise_train_and_eval_numpy<'py>(
     py: Python<'py>,
     train_input_bits: PyReadonlyArray1<'py, u8>,
     train_target_bits: PyReadonlyArray1<'py, u8>,
@@ -4409,7 +4408,7 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cpu_cores, m)?)?;
     // New batch prediction functions
     m.add_function(wrap_pyfunction!(predict_all_batch_cpu, m)?)?;
-    m.add_function(wrap_pyfunction!(predict_all_batch_metal, m)?)?;
+    m.add_function(wrap_pyfunction!(predict_all_batch, m)?)?;
     m.add_function(wrap_pyfunction!(predict_all_batch_hybrid, m)?)?;
     // Exact probs acceleration (bit-encoded - deprecated, slow due to export)
     m.add_function(wrap_pyfunction!(compute_exact_probs_batch, m)?)?;
@@ -4500,7 +4499,7 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Bitwise RAMLM — nudge training + quad forward
     m.add_function(wrap_pyfunction!(ramlm_bitwise_train_batch_nudge_numpy, m)?)?;
     m.add_function(wrap_pyfunction!(ramlm_bitwise_train_neuron_parallel_numpy, m)?)?;
-    m.add_function(wrap_pyfunction!(ramlm_bitwise_train_and_eval_metal_numpy, m)?)?;
+    m.add_function(wrap_pyfunction!(ramlm_bitwise_train_and_eval_numpy, m)?)?;
     m.add_function(wrap_pyfunction!(ramlm_forward_batch_quad_binary_numpy, m)?)?;
     m.add_function(wrap_pyfunction!(ramlm_forward_batch_quad_weighted_numpy, m)?)?;
     Ok(())

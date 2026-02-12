@@ -547,7 +547,7 @@ class BitwiseRAMLM(RAMComponent):
 			print(f"  Encoding done ({encode_time:.1f}s). Training + eval in Rust+Metal...")
 
 		t1 = _time()
-		ce, acc, per_bit_acc, updated_memory = ram_accelerator.ramlm_bitwise_train_and_eval_metal_numpy(
+		ce, acc, per_bit_acc, updated_memory = ram_accelerator.ramlm_bitwise_train_and_eval_numpy(
 			train_input_np, train_target_np,
 			eval_input_np, eval_targets_np,
 			token_bits_np, connections_np, memory_np,
