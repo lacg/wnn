@@ -271,6 +271,8 @@ class OptimizerResult(Generic[T]):
 	stop_reason: Optional[StopReason] = None
 	# For population seeding between phases
 	final_population: Optional[list[T]] = None
+	# Per-genome (CE, accuracy) matching final_population order
+	population_metrics: Optional[list[tuple[float, float]]] = None
 	# Accuracy tracking
 	initial_accuracy: Optional[float] = None
 	final_accuracy: Optional[float] = None
@@ -1561,7 +1563,9 @@ class GenericGAStrategy(ABC, Generic[T]):
 				if hasattr(control, 'early_stop') and control.early_stop:
 					self._log.warning(f"[{self.name}] Overfitting early stop at gen {generation + 1}")
 					# Return early with overfitting stop reason
-					final_population = [self.clone_genome(g) for g, _, _ in sorted(population, key=lambda x: x[1])]
+					sorted_pop = sorted(population, key=lambda x: x[1])
+					final_population = [self.clone_genome(g) for g, _, _ in sorted_pop]
+					early_pop_metrics = [(ce, acc) for _, ce, acc in sorted_pop]
 					improvement_pct = (initial_fitness - best_fitness) / initial_fitness * 100 if initial_fitness > 0 else 0
 					# Compute final_threshold at current progress for next phase continuity
 					current_final_threshold = get_threshold(generation / cfg.threshold_reference)
@@ -1577,6 +1581,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 						early_stopped=True,
 						stop_reason=StopReason.OVERFITTING,
 						final_population=final_population,
+						population_metrics=early_pop_metrics,
 						initial_accuracy=initial_accuracy,
 						final_accuracy=accuracy_values[gen_best_idx] if accuracy_values else None,
 						final_threshold=current_final_threshold,
@@ -1598,6 +1603,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 		scored_pop = list(zip(population, final_scores))
 		scored_pop.sort(key=lambda x: x[1])
 		final_population = [self.clone_genome(g) for (g, _, _), _ in scored_pop]
+		population_metrics = [(ce, acc) for (_, ce, acc), _ in scored_pop]
 
 		# Compute final diversity
 		final_ce_spread = max(fitness_values) - min(fitness_values) if fitness_values else 0.0
@@ -1649,6 +1655,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 			early_stopped=early_stopper.patience_exhausted or shutdown_requested,
 			stop_reason=stop_reason,
 			final_population=final_population,
+			population_metrics=population_metrics,
 			initial_accuracy=initial_accuracy,
 			final_accuracy=final_accuracy,
 			final_threshold=final_threshold,
@@ -2333,6 +2340,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 		scored = sorted(range(len(neighbor_scores)), key=lambda i: neighbor_scores[i])
 		top_indices = scored[:cache_size]
 		final_population = [self.clone_genome(all_neighbors[i][0]) for i in top_indices]
+		population_metrics = [(all_neighbors[i][1], all_neighbors[i][2] or 0.0) for i in top_indices]
 
 		# Final threshold (for next phase)
 		final_threshold = get_threshold(iteration / cfg.threshold_reference) if cfg.iterations > 0 else start_threshold
@@ -2367,6 +2375,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 			early_stopped=early_stopper.patience_exhausted or shutdown_requested,
 			stop_reason=stop_reason,
 			final_population=final_population,
+			population_metrics=population_metrics,
 			initial_accuracy=None,
 			final_accuracy=best_accuracy,
 			final_threshold=final_threshold,

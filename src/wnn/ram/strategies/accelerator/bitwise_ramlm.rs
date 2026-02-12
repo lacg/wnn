@@ -549,13 +549,22 @@ const MODE_TERNARY: u8 = 0;
 const MODE_QUAD_BINARY: u8 = 1;
 const MODE_QUAD_WEIGHTED: u8 = 2;
 
-/// Inline xorshift32 PRNG
+/// Inline xorshift32 PRNG — returns uniform float in (0, 1)
 #[inline]
 fn xorshift32_seq(state: &mut u32) -> f32 {
     *state ^= *state << 13;
     *state ^= *state >> 17;
     *state ^= *state << 5;
     (*state >> 8) as f32 / 16777216.0
+}
+
+/// Geometric skip: sample gap to next selected example.
+/// Returns floor(ln(rng) / ln(1 - rate)) using precomputed inv_log_complement = 1/ln(1-rate).
+/// One RNG call gives the number of examples to skip, replacing per-example branching.
+#[inline]
+fn geometric_skip(rng: &mut u32, inv_log_complement: f32) -> usize {
+    let u = xorshift32_seq(rng).max(f32::MIN_POSITIVE); // avoid ln(0)
+    (u.ln() * inv_log_complement) as usize
 }
 
 /// Compute memory address for a single neuron given input bits (same as ramlm::compute_address).
@@ -795,6 +804,15 @@ fn train_and_forward_into(
     // Reset memory
     memory.fill(empty_word);
 
+    // Precompute geometric skip divisor: 1 / ln(1 - rate)
+    // gap = floor(ln(rng) / ln(1 - rate)), gives next example to train on
+    let use_sampling = neuron_sample_rate < 1.0;
+    let inv_log_complement = if use_sampling {
+        1.0 / (1.0f32 - neuron_sample_rate).ln()
+    } else {
+        0.0
+    };
+
     match memory_mode {
         MODE_TERNARY => {
             // ===== TRAINING: Majority vote (neuron-major for L1 cache locality) =====
@@ -822,23 +840,31 @@ fn train_and_forward_into(
                     let conns = &connections[conn_start..conn_start + c_bits];
                     let vote_base = n * c_addresses;
 
-                    // Per-neuron PRNG for example-level sampling (matches ramlm.rs)
+                    // Per-neuron PRNG for example-level sampling
                     let mut neuron_rng = (rng_seed as u32)
                         .wrapping_add(global_neuron_idx as u32 * 1000003);
                     if neuron_rng == 0 { neuron_rng = 1; }
                     global_neuron_idx += 1;
 
-                    for ex in 0..num_examples {
-                        if neuron_sample_rate < 1.0 {
-                            if xorshift32_seq(&mut neuron_rng) >= neuron_sample_rate {
-                                continue;
-                            }
+                    if use_sampling {
+                        // Geometric skip: jump directly to selected examples
+                        let mut ex = geometric_skip(&mut neuron_rng, inv_log_complement);
+                        while ex < num_examples {
+                            let packed = &train_subset.packed_input[ex * wpe..(ex + 1) * wpe];
+                            let target_bit = train_subset.target_bits[ex * num_clusters + cluster];
+                            let vote: i32 = if target_bit == 1 { 1 } else { -1 };
+                            let addr = compute_address_packed(packed, conns, c_bits);
+                            votes[vote_base + addr] += vote;
+                            ex += geometric_skip(&mut neuron_rng, inv_log_complement) + 1;
                         }
-                        let packed = &train_subset.packed_input[ex * wpe..(ex + 1) * wpe];
-                        let target_bit = train_subset.target_bits[ex * num_clusters + cluster];
-                        let vote: i32 = if target_bit == 1 { 1 } else { -1 };
-                        let addr = compute_address_packed(packed, conns, c_bits);
-                        votes[vote_base + addr] += vote;
+                    } else {
+                        for ex in 0..num_examples {
+                            let packed = &train_subset.packed_input[ex * wpe..(ex + 1) * wpe];
+                            let target_bit = train_subset.target_bits[ex * num_clusters + cluster];
+                            let vote: i32 = if target_bit == 1 { 1 } else { -1 };
+                            let addr = compute_address_packed(packed, conns, c_bits);
+                            votes[vote_base + addr] += vote;
+                        }
                     }
                 }
 
@@ -873,22 +899,29 @@ fn train_and_forward_into(
                     let conn_start = c_conn_off + n * c_bits;
                     let conns = &connections[conn_start..conn_start + c_bits];
 
-                    // Per-neuron PRNG for example-level sampling (matches ramlm.rs)
+                    // Per-neuron PRNG for example-level sampling
                     let mut neuron_rng = (rng_seed as u32)
                         .wrapping_add(global_neuron_idx as u32 * 1000003);
                     if neuron_rng == 0 { neuron_rng = 1; }
                     global_neuron_idx += 1;
 
-                    for ex in 0..num_examples {
-                        if neuron_sample_rate < 1.0 {
-                            if xorshift32_seq(&mut neuron_rng) >= neuron_sample_rate {
-                                continue;
-                            }
+                    if use_sampling {
+                        // Geometric skip: jump directly to selected examples
+                        let mut ex = geometric_skip(&mut neuron_rng, inv_log_complement);
+                        while ex < num_examples {
+                            let packed = &train_subset.packed_input[ex * wpe..(ex + 1) * wpe];
+                            let target_true = train_subset.target_bits[ex * num_clusters + cluster] == 1;
+                            let addr = compute_address_packed(packed, conns, c_bits);
+                            nudge_cell_seq_offset(memory, neuron_mem_start, addr, target_true, c_wpn);
+                            ex += geometric_skip(&mut neuron_rng, inv_log_complement) + 1;
                         }
-                        let packed = &train_subset.packed_input[ex * wpe..(ex + 1) * wpe];
-                        let target_true = train_subset.target_bits[ex * num_clusters + cluster] == 1;
-                        let addr = compute_address_packed(packed, conns, c_bits);
-                        nudge_cell_seq_offset(memory, neuron_mem_start, addr, target_true, c_wpn);
+                    } else {
+                        for ex in 0..num_examples {
+                            let packed = &train_subset.packed_input[ex * wpe..(ex + 1) * wpe];
+                            let target_true = train_subset.target_bits[ex * num_clusters + cluster] == 1;
+                            let addr = compute_address_packed(packed, conns, c_bits);
+                            nudge_cell_seq_offset(memory, neuron_mem_start, addr, target_true, c_wpn);
+                        }
                     }
                 }
             }
