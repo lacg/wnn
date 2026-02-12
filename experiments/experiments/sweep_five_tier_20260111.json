@@ -1,0 +1,69 @@
+[
+  {
+    "name": "five_tier_gradient",
+    "config": "50,37,22;50,31,20;400,11,12;20000,7,10;rest,3,11",
+    "context": 8,
+    "overall_ppl": 41000.86,
+    "overall_accuracy": 0.0083,
+    "tier_results": [
+      {
+        "tier": 0,
+        "name": "tier_0",
+        "clusters": 50,
+        "neurons": 37,
+        "bits": 22,
+        "data_pct": 42.0,
+        "ppl": 37398.4,
+        "accuracy": 0.0191
+      },
+      {
+        "tier": 1,
+        "name": "tier_1",
+        "clusters": 50,
+        "neurons": 31,
+        "bits": 20,
+        "data_pct": 4.6,
+        "ppl": 40523.9,
+        "accuracy": 0.0062
+      },
+      {
+        "tier": 2,
+        "name": "tier_2",
+        "clusters": 400,
+        "neurons": 11,
+        "bits": 12,
+        "data_pct": 13.0,
+        "ppl": 39051.4,
+        "accuracy": 0.0002
+      },
+      {
+        "tier": 3,
+        "name": "tier_3",
+        "clusters": 20000,
+        "neurons": 7,
+        "bits": 10,
+        "data_pct": 36.9,
+        "ppl": 45495.3,
+        "accuracy": 0.0
+      },
+      {
+        "tier": 4,
+        "name": "tier_4",
+        "clusters": 29757,
+        "neurons": 3,
+        "bits": 11,
+        "data_pct": 3.6,
+        "ppl": 50026.2,
+        "accuracy": 0.0
+      }
+    ],
+    "train_time": 2397.6840750407428,
+    "eval_time": 0.0,
+    "timestamp": "2026-01-11T16:57:18.119107",
+    "initial_val_ppl": 37464.69,
+    "final_val_ppl": 40899.41,
+    "val_ppl_improvement_pct": -9.16788581461638,
+    "optimization_results": null,
+    "total_ce_improvement_pct": null
+  }
+]

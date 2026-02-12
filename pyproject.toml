@@ -1,0 +1,49 @@
+[project]
+name = "ram-wnn"
+version = "0.1.0"
+description = "Weightless Neural Networks for Language Modeling — RAM-based neurons in PyTorch"
+authors = [{name="Luiz Alberto Crispiniano Garcia"}]
+requires-python = ">=3.11"
+license = {text = "MIT"}
+readme = "README.md"
+keywords = ["weightless", "neural-network", "ram", "language-model", "wnn"]
+classifiers = [
+	"Development Status :: 3 - Alpha",
+	"Intended Audience :: Science/Research",
+	"License :: OSI Approved :: MIT License",
+	"Programming Language :: Python :: 3",
+	"Programming Language :: Python :: 3.11",
+	"Programming Language :: Python :: 3.12",
+	"Programming Language :: Python :: 3.13",
+	"Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+	"torch>=2.0",
+	"tiktoken>=0.5",
+	"datasets>=2.14",
+]
+
+[project.urls]
+Homepage = "https://github.com/lacg/wnn"
+Documentation = "https://lacg.github.io/llm-optimizer/"
+Repository = "https://github.com/lacg/wnn"
+Issues = "https://github.com/lacg/wnn/issues"
+
+[project.optional-dependencies]
+hybrid = ["transformers>=4.30"]
+dev = ["pytest", "ruff"]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["wnn*"]
+
+[project.scripts]
+wnn-exp = "wnn.ram.experiments.cli:main"

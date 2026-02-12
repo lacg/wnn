@@ -1,0 +1,76 @@
+{
+  "phase1_ga": {
+    "fitness": 10.447641060116906,
+    "generations": 5
+  },
+  "phase1_ts": {
+    "fitness": 10.444951969341904,
+    "iterations": 10
+  },
+  "phase2_ga": {
+    "fitness": 10.444951969341904,
+    "generations": 5
+  },
+  "phase2_ts": {
+    "fitness": 10.444951969341904,
+    "iterations": 10
+  },
+  "phase3_ga": {
+    "fitness": 10.438600329029043,
+    "generations": 5
+  },
+  "phase3_ts": {
+    "fitness": 10.436101639702258,
+    "iterations": 10
+  },
+  "final": {
+    "fitness": 10.436101639702258,
+    "genome_stats": {
+      "num_clusters": 50257,
+      "min_bits": 8,
+      "max_bits": 8,
+      "mean_bits": 8.0,
+      "min_neurons": 3,
+      "max_neurons": 33,
+      "mean_neurons": 3.4299301589828284,
+      "total_neurons": 172378,
+      "total_memory_cells": 44128768,
+      "bits_distribution": {
+        "8": 50257
+      },
+      "neurons_distribution": {
+        "3": 42173,
+        "4": 1925,
+        "5": 1931,
+        "6": 1903,
+        "7": 1962,
+        "8": 141,
+        "9": 111,
+        "10": 61,
+        "11": 41,
+        "12": 2,
+        "13": 1,
+        "14": 1,
+        "15": 1,
+        "17": 1,
+        "20": 1,
+        "28": 1,
+        "33": 1
+      }
+    }
+  },
+  "args": {
+    "train_tokens": 10000,
+    "eval_tokens": 2000,
+    "context": 4,
+    "ga_gens": 5,
+    "ts_iters": 10,
+    "population": 10,
+    "neighbors": 10,
+    "patience": 2,
+    "default_bits": 8,
+    "default_neurons": 5,
+    "output": "experiments/quick_test.json"
+  },
+  "timestamp": "2026-01-17T02:21:35.542744"
+}

@@ -1,0 +1,60 @@
+{
+  "experiment": "WS1_routing_v2",
+  "config": {
+    "num_routes": 8,
+    "top_k": 2,
+    "neurons_per_route": 3,
+    "bits_per_neuron": 10,
+    "context_size": 4,
+    "strategies": [
+      "CONTEXT_HASH",
+      "LAST_TOKEN",
+      "DISTRIBUTIONAL"
+    ]
+  },
+  "baseline": {
+    "cross_entropy": 10.2493,
+    "perplexity": 28262.04,
+    "accuracy": 0.0301,
+    "total_neurons": 1206168,
+    "train_time_s": 1315.5
+  },
+  "strategies": {
+    "CONTEXT_HASH": {
+      "strategy": "CONTEXT_HASH",
+      "cross_entropy": 10.2504,
+      "perplexity": 28293.19,
+      "accuracy": 0.0093,
+      "total_neurons": 1206192,
+      "train_time_s": 179.5,
+      "eval_time_s": 1150.5,
+      "route_distribution": {
+        "0": 251044
+      }
+    },
+    "LAST_TOKEN": {
+      "strategy": "LAST_TOKEN",
+      "cross_entropy": 10.2461,
+      "perplexity": 28172.38,
+      "accuracy": 0.008,
+      "total_neurons": 1206192,
+      "train_time_s": 177.4,
+      "eval_time_s": 1202.3,
+      "route_distribution": {
+        "0": 251044
+      }
+    },
+    "DISTRIBUTIONAL": {
+      "strategy": "DISTRIBUTIONAL",
+      "cross_entropy": 10.2517,
+      "perplexity": 28329.92,
+      "accuracy": 0.0081,
+      "total_neurons": 1206192,
+      "train_time_s": 184.8,
+      "eval_time_s": 1340.5,
+      "route_distribution": {
+        "0": 251044
+      }
+    }
+  }
+}

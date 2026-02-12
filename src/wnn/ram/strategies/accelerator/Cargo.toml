@@ -1,0 +1,49 @@
+[package]
+name = "ram_accelerator"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "ram_accelerator"
+crate-type = ["cdylib"]
+path = "lib.rs"  # Source file in same directory
+
+[dependencies]
+# Python bindings (0.23+ supports Python 3.13)
+pyo3 = { version = "0.23", features = ["extension-module"] }
+
+# NumPy support for zero-copy array access
+numpy = "0.23"
+
+# CPU parallelism (like joblib but faster)
+rayon = "1.8"
+
+# Metal GPU (Apple Silicon)
+metal = "0.27"
+objc = "0.2"
+
+# Fast hash maps
+rustc-hash = "1.1"
+
+# Lock-free concurrent HashMap (faster than RwLock<FxHashMap>)
+dashmap = "6.1"
+
+# For bit manipulation
+bitvec = "1.0"
+
+# Random number generation (for parallel genome initialization)
+rand = { version = "0.8", features = ["small_rng"] }
+
+# Timestamp formatting for logging
+chrono = "0.4"
+
+# File locking for concurrent log writes
+fs2 = "0.4"
+
+# SQLite for direct database writes (v2 data model)
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3

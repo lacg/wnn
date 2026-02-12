@@ -1,0 +1,135 @@
+{
+  "experiment": "tier_bits_sweep",
+  "results": [
+    {
+      "name": "22_12_8",
+      "tiers": [
+        [
+          100,
+          15,
+          22
+        ],
+        [
+          400,
+          10,
+          12
+        ],
+        [
+          null,
+          5,
+          8
+        ]
+      ],
+      "cross_entropy": 10.4573,
+      "accuracy": 0.0058,
+      "perplexity": 34795.98,
+      "total_neurons": 254285,
+      "total_memory_cells": 6371528960,
+      "train_time_s": 226.8
+    },
+    {
+      "name": "20_12_8",
+      "tiers": [
+        [
+          100,
+          15,
+          20
+        ],
+        [
+          400,
+          10,
+          12
+        ],
+        [
+          null,
+          5,
+          8
+        ]
+      ],
+      "cross_entropy": 10.4091,
+      "accuracy": 0.0071,
+      "perplexity": 33160.25,
+      "total_neurons": 254285,
+      "total_memory_cells": 1652936960,
+      "train_time_s": 223.4
+    },
+    {
+      "name": "16_12_8",
+      "tiers": [
+        [
+          100,
+          15,
+          16
+        ],
+        [
+          400,
+          10,
+          12
+        ],
+        [
+          null,
+          5,
+          8
+        ]
+      ],
+      "cross_entropy": 10.2986,
+      "accuracy": 0.01,
+      "perplexity": 29691.56,
+      "total_neurons": 254285,
+      "total_memory_cells": 178376960,
+      "train_time_s": 199.1
+    },
+    {
+      "name": "12_10_8",
+      "tiers": [
+        [
+          100,
+          15,
+          12
+        ],
+        [
+          400,
+          10,
+          10
+        ],
+        [
+          null,
+          5,
+          8
+        ]
+      ],
+      "cross_entropy": 10.2108,
+      "accuracy": 0.0126,
+      "perplexity": 27196.5,
+      "total_neurons": 254285,
+      "total_memory_cells": 73928960,
+      "train_time_s": 170.0
+    },
+    {
+      "name": "8_8_8",
+      "tiers": [
+        [
+          100,
+          15,
+          8
+        ],
+        [
+          400,
+          10,
+          8
+        ],
+        [
+          null,
+          5,
+          8
+        ]
+      ],
+      "cross_entropy": 10.6103,
+      "accuracy": 0.0012,
+      "perplexity": 40551.86,
+      "total_neurons": 254285,
+      "total_memory_cells": 65096960,
+      "train_time_s": 84.3
+    }
+  ]
+}

@@ -1,0 +1,388 @@
+[
+  {
+    "name": "tier0_16bit",
+    "config": "100,15,16;400,10,10;rest,5,8",
+    "context": 4,
+    "overall_ppl": 40099.43,
+    "overall_accuracy": 0.021400000000000002,
+    "tier_results": [
+      {
+        "tier": 0,
+        "name": "tier_0",
+        "clusters": 100,
+        "neurons": 15,
+        "bits": 16,
+        "data_pct": 46.5,
+        "ppl": 37091.6,
+        "accuracy": 0.046
+      },
+      {
+        "tier": 1,
+        "name": "tier_1",
+        "clusters": 400,
+        "neurons": 10,
+        "bits": 10,
+        "data_pct": 13.0,
+        "ppl": 38276.6,
+        "accuracy": 0.0
+      },
+      {
+        "tier": 2,
+        "name": "tier_2",
+        "clusters": 49757,
+        "neurons": 5,
+        "bits": 8,
+        "data_pct": 40.4,
+        "ppl": 44525.2,
+        "accuracy": 0.0
+      }
+    ],
+    "train_time": 1475.111166874878,
+    "eval_time": 0.0,
+    "timestamp": "2026-01-11T21:57:35.732602",
+    "initial_val_ppl": 36435.07,
+    "final_val_ppl": 39979.77,
+    "val_ppl_improvement_pct": -9.72881347558821,
+    "optimization_results": null,
+    "total_ce_improvement_pct": null
+  },
+  {
+    "name": "balanced_14bit",
+    "config": "100,12,14;400,8,12;rest,5,10",
+    "context": 4,
+    "overall_ppl": 42953.33,
+    "overall_accuracy": 0.0174,
+    "tier_results": [
+      {
+        "tier": 0,
+        "name": "tier_0",
+        "clusters": 100,
+        "neurons": 12,
+        "bits": 14,
+        "data_pct": 46.5,
+        "ppl": 39944.7,
+        "accuracy": 0.0373
+      },
+      {
+        "tier": 1,
+        "name": "tier_1",
+        "clusters": 400,
+        "neurons": 8,
+        "bits": 12,
+        "data_pct": 13.0,
+        "ppl": 42133.8,
+        "accuracy": 0.0002
+      },
+      {
+        "tier": 2,
+        "name": "tier_2",
+        "clusters": 49757,
+        "neurons": 5,
+        "bits": 10,
+        "data_pct": 40.4,
+        "ppl": 46987.0,
+        "accuracy": 0.0
+      }
+    ],
+    "train_time": 1683.13290795777,
+    "eval_time": 0.0,
+    "timestamp": "2026-01-11T22:25:38.838560",
+    "initial_val_ppl": 36811.62,
+    "final_val_ppl": 42838.39,
+    "val_ppl_improvement_pct": -16.37192277873127,
+    "optimization_results": null,
+    "total_ce_improvement_pct": null
+  },
+  {
+    "name": "neurons_20_tier0",
+    "config": "100,20,12;400,12,10;rest,7,8",
+    "context": 4,
+    "overall_ppl": 40115.07,
+    "overall_accuracy": 0.0246,
+    "tier_results": [
+      {
+        "tier": 0,
+        "name": "tier_0",
+        "clusters": 100,
+        "neurons": 20,
+        "bits": 12,
+        "data_pct": 46.5,
+        "ppl": 37129.7,
+        "accuracy": 0.0529
+      },
+      {
+        "tier": 1,
+        "name": "tier_1",
+        "clusters": 400,
+        "neurons": 12,
+        "bits": 10,
+        "data_pct": 13.0,
+        "ppl": 38127.0,
+        "accuracy": 0.0001
+      },
+      {
+        "tier": 2,
+        "name": "tier_2",
+        "clusters": 49757,
+        "neurons": 7,
+        "bits": 8,
+        "data_pct": 40.4,
+        "ppl": 44571.7,
+        "accuracy": 0.0
+      }
+    ],
+    "train_time": 2038.5689350408502,
+    "eval_time": 0.0,
+    "timestamp": "2026-01-11T22:59:37.455255",
+    "initial_val_ppl": 36350.07,
+    "final_val_ppl": 39997.18,
+    "val_ppl_improvement_pct": -10.033295671782753,
+    "optimization_results": null,
+    "total_ce_improvement_pct": null
+  },
+  {
+    "name": "context_6_sparse",
+    "config": "100,12,14;400,8,10;rest,5,8",
+    "context": 6,
+    "overall_ppl": 40092.16,
+    "overall_accuracy": 0.0256,
+    "tier_results": [
+      {
+        "tier": 0,
+        "name": "tier_0",
+        "clusters": 100,
+        "neurons": 12,
+        "bits": 14,
+        "data_pct": 46.5,
+        "ppl": 37180.2,
+        "accuracy": 0.055099999999999996
+      },
+      {
+        "tier": 1,
+        "name": "tier_1",
+        "clusters": 400,
+        "neurons": 8,
+        "bits": 10,
+        "data_pct": 13.0,
+        "ppl": 38076.9,
+        "accuracy": 0.0001
+      },
+      {
+        "tier": 2,
+        "name": "tier_2",
+        "clusters": 49757,
+        "neurons": 5,
+        "bits": 8,
+        "data_pct": 40.4,
+        "ppl": 44458.3,
+        "accuracy": 0.0
+      }
+    ],
+    "train_time": 1483.7417041249573,
+    "eval_time": 0.0,
+    "timestamp": "2026-01-11T23:24:21.217514",
+    "initial_val_ppl": 36578.57,
+    "final_val_ppl": 39975.76,
+    "val_ppl_improvement_pct": -9.28737782805616,
+    "optimization_results": null,
+    "total_ce_improvement_pct": null
+  },
+  {
+    "name": "asymmetric_extreme_t0",
+    "config": "100,25,24;400,8,10;rest,5,8",
+    "context": 8,
+    "overall_ppl": 39961.51,
+    "overall_accuracy": 0.0215,
+    "tier_results": [
+      {
+        "tier": 0,
+        "name": "tier_0",
+        "clusters": 100,
+        "neurons": 25,
+        "bits": 24,
+        "data_pct": 46.5,
+        "ppl": 37111.8,
+        "accuracy": 0.0461
+      },
+      {
+        "tier": 1,
+        "name": "tier_1",
+        "clusters": 400,
+        "neurons": 8,
+        "bits": 10,
+        "data_pct": 13.0,
+        "ppl": 37664.1,
+        "accuracy": 0.0002
+      },
+      {
+        "tier": 2,
+        "name": "tier_2",
+        "clusters": 49757,
+        "neurons": 5,
+        "bits": 8,
+        "data_pct": 40.4,
+        "ppl": 44349.7,
+        "accuracy": 0.0
+      }
+    ],
+    "train_time": 1559.2420473331586,
+    "eval_time": 0.0,
+    "timestamp": "2026-01-11T23:50:20.478604",
+    "initial_val_ppl": 37003.3,
+    "final_val_ppl": 39834.55,
+    "val_ppl_improvement_pct": -7.65134460980507,
+    "optimization_results": null,
+    "total_ce_improvement_pct": null
+  },
+  {
+    "name": "asymmetric_expanded_t0",
+    "config": "200,25,20;300,8,10;rest,4,8",
+    "context": 8,
+    "overall_ppl": 39835.7,
+    "overall_accuracy": 0.0254,
+    "tier_results": [
+      {
+        "tier": 0,
+        "name": "tier_0",
+        "clusters": 200,
+        "neurons": 25,
+        "bits": 20,
+        "data_pct": 51.6,
+        "ppl": 37055.3,
+        "accuracy": 0.0493
+      },
+      {
+        "tier": 1,
+        "name": "tier_1",
+        "clusters": 300,
+        "neurons": 8,
+        "bits": 10,
+        "data_pct": 8.0,
+        "ppl": 38148.3,
+        "accuracy": 0.0
+      },
+      {
+        "tier": 2,
+        "name": "tier_2",
+        "clusters": 49757,
+        "neurons": 4,
+        "bits": 8,
+        "data_pct": 40.4,
+        "ppl": 44060.6,
+        "accuracy": 0.0
+      }
+    ],
+    "train_time": 1336.3455935828388,
+    "eval_time": 0.0,
+    "timestamp": "2026-01-12T00:12:36.830767",
+    "initial_val_ppl": 36974.11,
+    "final_val_ppl": 39716.87,
+    "val_ppl_improvement_pct": -7.418055498834189,
+    "optimization_results": null,
+    "total_ce_improvement_pct": null
+  },
+  {
+    "name": "two_tier_simple",
+    "config": "500,15,16;rest,4,6",
+    "context": 8,
+    "overall_ppl": 42299.34,
+    "overall_accuracy": 0.0002,
+    "tier_results": [
+      {
+        "tier": 0,
+        "name": "tier_0",
+        "clusters": 500,
+        "neurons": 15,
+        "bits": 16,
+        "data_pct": 59.6,
+        "ppl": 42829.8,
+        "accuracy": 0.0002
+      },
+      {
+        "tier": 1,
+        "name": "tier_1",
+        "clusters": 49757,
+        "neurons": 4,
+        "bits": 6,
+        "data_pct": 40.4,
+        "ppl": 41530.0,
+        "accuracy": 0.0
+      }
+    ],
+    "train_time": 1421.404058500193,
+    "eval_time": 0.0,
+    "timestamp": "2026-01-12T00:36:18.241260",
+    "initial_val_ppl": 39451.59,
+    "final_val_ppl": 42229.9,
+    "val_ppl_improvement_pct": -7.042327064637965,
+    "optimization_results": null,
+    "total_ce_improvement_pct": null
+  },
+  {
+    "name": "five_tier_gradient",
+    "config": "50,37,22;50,31,20;400,11,12;20000,7,10;rest,3,11",
+    "context": 8,
+    "overall_ppl": 42892.03,
+    "overall_accuracy": 0.0152,
+    "tier_results": [
+      {
+        "tier": 0,
+        "name": "tier_0",
+        "clusters": 50,
+        "neurons": 37,
+        "bits": 22,
+        "data_pct": 42.0,
+        "ppl": 39470.7,
+        "accuracy": 0.0356
+      },
+      {
+        "tier": 1,
+        "name": "tier_1",
+        "clusters": 50,
+        "neurons": 31,
+        "bits": 20,
+        "data_pct": 4.6,
+        "ppl": 45145.3,
+        "accuracy": 0.0059
+      },
+      {
+        "tier": 2,
+        "name": "tier_2",
+        "clusters": 400,
+        "neurons": 11,
+        "bits": 12,
+        "data_pct": 13.0,
+        "ppl": 41403.9,
+        "accuracy": 0.0002
+      },
+      {
+        "tier": 3,
+        "name": "tier_3",
+        "clusters": 20000,
+        "neurons": 7,
+        "bits": 10,
+        "data_pct": 36.9,
+        "ppl": 46729.2,
+        "accuracy": 0.0
+      },
+      {
+        "tier": 4,
+        "name": "tier_4",
+        "clusters": 29757,
+        "neurons": 3,
+        "bits": 11,
+        "data_pct": 3.6,
+        "ppl": 50078.6,
+        "accuracy": 0.0
+      }
+    ],
+    "train_time": 1800.099776291754,
+    "eval_time": 0.0,
+    "timestamp": "2026-01-12T01:06:18.331119",
+    "initial_val_ppl": 37468.24,
+    "final_val_ppl": 42785.35,
+    "val_ppl_improvement_pct": -14.19097881298935,
+    "optimization_results": null,
+    "total_ce_improvement_pct": null
+  }
+]

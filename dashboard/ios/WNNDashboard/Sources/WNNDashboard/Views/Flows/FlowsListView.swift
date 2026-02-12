@@ -1,0 +1,189 @@
+// FlowsListView - List of all flows
+
+import SwiftUI
+
+public struct FlowsListView: View {
+    @EnvironmentObject var viewModel: FlowsViewModel
+
+    public init() {}
+
+    public var body: some View {
+        NavigationStack {
+            flowsContent
+                .navigationTitle("Flows")
+                .toolbar {
+                    #if os(iOS)
+                    ToolbarItem(placement: .navigationBarTrailing) { Button { viewModel.showingNewFlowSheet = true } label: { Image(systemName: "plus") } }
+                    ToolbarItem(placement: .navigationBarLeading) { filterMenu }
+                    #else
+                    ToolbarItem(placement: .automatic) { Button { viewModel.showingNewFlowSheet = true } label: { Image(systemName: "plus") } }
+                    ToolbarItem(placement: .automatic) { filterMenu }
+                    #endif
+                }
+                .refreshable { await viewModel.refresh() }
+                .sheet(item: $viewModel.selectedFlow) { flow in FlowDetailView(flow: flow) }
+                .alert("Error", isPresented: Binding(get: { viewModel.error != nil }, set: { if !$0 { viewModel.clearError() } })) { Button("OK") { viewModel.clearError() } } message: { Text(viewModel.error ?? "") }
+        }
+        .sheet(isPresented: $viewModel.showingNewFlowSheet) { NewFlowView() }
+        .task { if viewModel.flows.isEmpty { await viewModel.loadFlows() } }
+    }
+
+    @ViewBuilder
+    private var flowsContent: some View {
+        if viewModel.isLoading && viewModel.flows.isEmpty {
+            ProgressView("Loading flows...")
+        } else if viewModel.flows.isEmpty {
+            emptyState
+        } else {
+            flowsList
+        }
+    }
+
+    private var flowsList: some View {
+        let runningIDs = Set(viewModel.runningFlows.map(\.id))
+        let nonRunning = viewModel.filteredFlows.filter { !runningIDs.contains($0.id) }
+
+        return ScrollView {
+            LazyVStack(spacing: 12) {
+                if !viewModel.runningFlows.isEmpty {
+                    Section { ForEach(viewModel.runningFlows) { f in FlowCardView(flow: f) { selectFlow(f) } } } header: { sectionHeader("Running", count: viewModel.runningFlows.count) }
+                }
+                if !nonRunning.isEmpty {
+                    Section { ForEach(nonRunning) { f in FlowCardView(flow: f) { selectFlow(f) } } } header: { sectionHeader("All Flows", count: nonRunning.count) }
+                }
+            }
+            .padding()
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "arrow.triangle.branch").font(.system(size: 48)).foregroundColor(.secondary)
+            Text("No Flows").font(.headline)
+            Text("Create a flow to start running experiments").font(.subheadline).foregroundColor(.secondary)
+            Button("Create Flow") { viewModel.showingNewFlowSheet = true }.buttonStyle(.borderedProminent)
+        }
+        .padding()
+    }
+
+    private var filterMenu: some View {
+        Menu {
+            Button { viewModel.statusFilter = nil } label: { Label("All", systemImage: viewModel.statusFilter == nil ? "checkmark" : "") }
+            Divider()
+            ForEach(FlowStatus.allCases, id: \.self) { s in Button { viewModel.statusFilter = s } label: { Label(s.displayName, systemImage: viewModel.statusFilter == s ? "checkmark" : "") } }
+        } label: { Image(systemName: "line.3.horizontal.decrease.circle") }
+    }
+
+    private func sectionHeader(_ title: String, count: Int) -> some View {
+        HStack { Text(title).font(.subheadline).fontWeight(.semibold).foregroundColor(.secondary); Text("(\(count))").font(.caption).foregroundColor(.secondary); Spacer() }.padding(.top, 8)
+    }
+
+    private func selectFlow(_ flow: Flow) {
+        viewModel.selectedFlow = flow
+        Task { await viewModel.loadFlowExperiments(flow.id) }
+    }
+}
+
+// MARK: - Flow Detail Content (without NavigationStack wrapper for iPad)
+
+struct FlowDetailContentView: View {
+    let flow: Flow
+    @EnvironmentObject var viewModel: FlowsViewModel
+    @State private var selectedExperiment: Experiment?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                statusSection
+                configSection
+                experimentsSection
+                timingSection
+            }
+            .padding()
+        }
+        .navigationTitle(flow.name)
+        .navigationDestination(for: Experiment.self) { experiment in
+            ExperimentIterationsView(experiment: experiment)
+        }
+    }
+
+    private var statusSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack { Text("Status").font(.headline); Spacer(); StatusBadge(text: flow.status.displayName, color: Theme.statusColor(flow.status)) }
+            if let desc = flow.description { Text(desc).font(.subheadline).foregroundStyle(.secondary) }
+            if let pid = flow.pid, flow.status == .running { HStack { Text("Process ID").foregroundStyle(.secondary); Spacer(); Text("\(pid)").fontDesign(.monospaced) }.font(.subheadline) }
+        }
+        .padding()
+        .glassCard()
+    }
+
+    private var configSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Configuration").font(.headline)
+            if let t = flow.config.template { configRow("Template", value: t) }
+            configRow("Experiments", value: "\(flow.config.experiments.count)")
+            if let c = flow.seed_checkpoint_id { configRow("Seed Checkpoint", value: "#\(c)") }
+        }
+        .padding()
+        .glassCard()
+    }
+
+    private var experimentsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack { Text("Experiment Specs").font(.headline); Spacer(); Text("\(flow.config.experiments.count)").font(.caption).foregroundStyle(.secondary) }
+            ForEach(Array(flow.config.experiments.enumerated()), id: \.offset) { i, spec in
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("\(i + 1). \(spec.name)").font(.subheadline).fontWeight(.medium)
+                        Spacer()
+                        Text(spec.experiment_type.displayName).font(.caption).padding(.horizontal, 6).padding(.vertical, 2).background(spec.experiment_type == .ga ? Color.blue.opacity(0.2) : Color.purple.opacity(0.2)).foregroundStyle(spec.experiment_type == .ga ? .blue : .purple).clipShape(RoundedRectangle(cornerRadius: 4))
+                    }
+                    HStack(spacing: 8) {
+                        if spec.optimize_neurons { badge("Neurons") }
+                        if spec.optimize_bits { badge("Bits") }
+                        if spec.optimize_connections { badge("Connections") }
+                    }
+                }
+                .padding()
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+            }
+            if !viewModel.selectedFlowExperiments.isEmpty {
+                Divider().padding(.vertical, 8)
+                HStack {
+                    Text("Experiments").font(.subheadline).foregroundStyle(.secondary)
+                    Spacer()
+                    Text("Tap to view iterations").font(.caption2).foregroundStyle(.tertiary)
+                }
+                ForEach(viewModel.selectedFlowExperiments) { exp in
+                    NavigationLink(value: exp) {
+                        ExperimentRow(experiment: exp, isNavigable: exp.status == .completed || exp.status == .running)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!(exp.status == .completed || exp.status == .running))
+                }
+            }
+        }
+        .padding()
+        .glassCard()
+    }
+
+    private var timingSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Timing").font(.headline)
+            if let d = flow.createdDate { configRow("Created", value: DateFormatters.shortDateTime(d)) }
+            if let d = flow.startedDate { configRow("Started", value: DateFormatters.shortDateTime(d)) }
+            if let d = flow.completedDate { configRow("Completed", value: DateFormatters.shortDateTime(d)) }
+            if let dur = flow.duration { configRow("Duration", value: DateFormatters.duration(dur)) }
+        }
+        .padding()
+        .glassCard()
+    }
+
+    private func configRow(_ label: String, value: String) -> some View {
+        HStack { Text(label).foregroundStyle(.secondary); Spacer(); Text(value).fontDesign(.monospaced) }.font(.subheadline)
+    }
+
+    private func badge(_ text: String) -> some View {
+        Text(text).font(.caption2).padding(.horizontal, 6).padding(.vertical, 2).background(Color.green.opacity(0.2)).foregroundStyle(.green).clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+}

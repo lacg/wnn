@@ -1,0 +1,5662 @@
+{
+  "experiment": "tier_bits_grid",
+  "bit_values": [
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16
+  ],
+  "num_runs_per_config": 1,
+  "configs_completed": 297,
+  "configs_total": 729,
+  "results": [
+    {
+      "name": "12_10_8",
+      "t0_bits": 12,
+      "t1_bits": 10,
+      "t2_bits": 8,
+      "avg_ce": 10.2108,
+      "avg_accuracy": 0.0124,
+      "avg_ppl": 27196.56,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.210845692998314,
+          "accuracy": 0.012428100253342044,
+          "perplexity": 27196.55780525237
+        }
+      ]
+    },
+    {
+      "name": "11_10_8",
+      "t0_bits": 11,
+      "t1_bits": 10,
+      "t2_bits": 8,
+      "avg_ce": 10.2031,
+      "avg_accuracy": 0.0109,
+      "avg_ppl": 26985.43,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.203052407721467,
+          "accuracy": 0.01085865425981103,
+          "perplexity": 26985.431025907816
+        }
+      ]
+    },
+    {
+      "name": "12_9_8",
+      "t0_bits": 12,
+      "t1_bits": 9,
+      "t2_bits": 8,
+      "avg_ce": 10.204,
+      "avg_accuracy": 0.0115,
+      "avg_ppl": 27011.93,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.204033862241275,
+          "accuracy": 0.011507942830738834,
+          "perplexity": 27011.929000308508
+        }
+      ]
+    },
+    {
+      "name": "12_10_9",
+      "t0_bits": 12,
+      "t1_bits": 10,
+      "t2_bits": 9,
+      "avg_ce": 10.1984,
+      "avg_accuracy": 0.0196,
+      "avg_ppl": 26861.24,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.198439476239715,
+          "accuracy": 0.019606124822740236,
+          "perplexity": 26861.23575395031
+        }
+      ]
+    },
+    {
+      "name": "12_11_8",
+      "t0_bits": 12,
+      "t1_bits": 11,
+      "t2_bits": 8,
+      "avg_ce": 10.22,
+      "avg_accuracy": 0.0126,
+      "avg_ppl": 27445.76,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.219967008903934,
+          "accuracy": 0.01258345150650882,
+          "perplexity": 27445.761003313346
+        }
+      ]
+    },
+    {
+      "name": "13_10_8",
+      "t0_bits": 13,
+      "t1_bits": 10,
+      "t2_bits": 8,
+      "avg_ce": 10.2221,
+      "avg_accuracy": 0.0142,
+      "avg_ppl": 27503.55,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.222070295525294,
+          "accuracy": 0.0142245980784245,
+          "perplexity": 27503.548055308056
+        }
+      ]
+    },
+    {
+      "name": "10_10_8",
+      "t0_bits": 10,
+      "t1_bits": 10,
+      "t2_bits": 8,
+      "avg_ce": 10.1983,
+      "avg_accuracy": 0.0093,
+      "avg_ppl": 26856.47,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.198262124559916,
+          "accuracy": 0.009273274804416755,
+          "perplexity": 26856.47229108443
+        }
+      ]
+    },
+    {
+      "name": "11_9_8",
+      "t0_bits": 11,
+      "t1_bits": 9,
+      "t2_bits": 8,
+      "avg_ce": 10.1962,
+      "avg_accuracy": 0.01,
+      "avg_ppl": 26802.23,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.19624022848225,
+          "accuracy": 0.009966380395468523,
+          "perplexity": 26802.226153605567
+        }
+      ]
+    },
+    {
+      "name": "11_10_9",
+      "t0_bits": 11,
+      "t1_bits": 10,
+      "t2_bits": 9,
+      "avg_ce": 10.1907,
+      "avg_accuracy": 0.0164,
+      "avg_ppl": 26652.87,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.19065221871988,
+          "accuracy": 0.01640349898822517,
+          "perplexity": 26652.87273502696
+        }
+      ]
+    },
+    {
+      "name": "11_11_8",
+      "t0_bits": 11,
+      "t1_bits": 11,
+      "t2_bits": 8,
+      "avg_ce": 10.2122,
+      "avg_accuracy": 0.011,
+      "avg_ppl": 27232.71,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.212174034052552,
+          "accuracy": 0.01101798887844362,
+          "perplexity": 27232.708114173212
+        }
+      ]
+    },
+    {
+      "name": "12_8_8",
+      "t0_bits": 12,
+      "t1_bits": 8,
+      "t2_bits": 8,
+      "avg_ce": 10.1989,
+      "avg_accuracy": 0.0102,
+      "avg_ppl": 26874.54,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.198934734465011,
+          "accuracy": 0.010185465496088335,
+          "perplexity": 26874.542296714466
+        }
+      ]
+    },
+    {
+      "name": "12_9_9",
+      "t0_bits": 12,
+      "t1_bits": 9,
+      "t2_bits": 9,
+      "avg_ce": 10.1917,
+      "avg_accuracy": 0.0152,
+      "avg_ppl": 26679.94,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.191667273373527,
+          "accuracy": 0.015208489348480745,
+          "perplexity": 26679.940592883184
+        }
+      ]
+    },
+    {
+      "name": "12_10_10",
+      "t0_bits": 12,
+      "t1_bits": 10,
+      "t2_bits": 10,
+      "avg_ce": 10.1959,
+      "avg_accuracy": 0.0299,
+      "avg_ppl": 26792.3,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.195869636920087,
+          "accuracy": 0.029927024744666273,
+          "perplexity": 26792.295315002008
+        }
+      ]
+    },
+    {
+      "name": "12_11_9",
+      "t0_bits": 12,
+      "t1_bits": 11,
+      "t2_bits": 9,
+      "avg_ce": 10.2075,
+      "avg_accuracy": 0.0212,
+      "avg_ppl": 27106.27,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.20752020335099,
+          "accuracy": 0.02115167062347636,
+          "perplexity": 27106.266149022555
+        }
+      ]
+    },
+    {
+      "name": "12_12_8",
+      "t0_bits": 12,
+      "t1_bits": 12,
+      "t2_bits": 8,
+      "avg_ce": 10.2298,
+      "avg_accuracy": 0.0126,
+      "avg_ppl": 27717.61,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.22982306645353,
+          "accuracy": 0.012607351699303708,
+          "perplexity": 27717.605459939306
+        }
+      ]
+    },
+    {
+      "name": "13_9_8",
+      "t0_bits": 13,
+      "t1_bits": 9,
+      "t2_bits": 8,
+      "avg_ce": 10.2153,
+      "avg_accuracy": 0.0132,
+      "avg_ppl": 27316.85,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.21525884337518,
+          "accuracy": 0.013212823250107551,
+          "perplexity": 27316.84553327032
+        }
+      ]
+    },
+    {
+      "name": "13_10_9",
+      "t0_bits": 13,
+      "t1_bits": 10,
+      "t2_bits": 9,
+      "avg_ce": 10.2097,
+      "avg_accuracy": 0.0219,
+      "avg_ppl": 27164.23,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.20965646312774,
+          "accuracy": 0.021884609869186278,
+          "perplexity": 27164.234070318656
+        }
+      ]
+    },
+    {
+      "name": "13_11_8",
+      "t0_bits": 13,
+      "t1_bits": 11,
+      "t2_bits": 8,
+      "avg_ce": 10.2312,
+      "avg_accuracy": 0.0144,
+      "avg_ppl": 27755.55,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.231191247795191,
+          "accuracy": 0.014427749717181053,
+          "perplexity": 27755.5541249731
+        }
+      ]
+    },
+    {
+      "name": "14_10_8",
+      "t0_bits": 14,
+      "t1_bits": 10,
+      "t2_bits": 8,
+      "avg_ce": 10.2376,
+      "avg_accuracy": 0.0119,
+      "avg_ppl": 27935.36,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.237648445148146,
+          "accuracy": 0.011934162935581014,
+          "perplexity": 27935.357102508005
+        }
+      ]
+    },
+    {
+      "name": "9_10_8",
+      "t0_bits": 9,
+      "t1_bits": 10,
+      "t2_bits": 8,
+      "avg_ce": 10.1954,
+      "avg_accuracy": 0.0078,
+      "avg_ppl": 26780.59,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.195432794806177,
+          "accuracy": 0.007811379678462739,
+          "perplexity": 26780.59386810859
+        }
+      ]
+    },
+    {
+      "name": "10_9_8",
+      "t0_bits": 10,
+      "t1_bits": 9,
+      "t2_bits": 8,
+      "avg_ce": 10.1914,
+      "avg_accuracy": 0.0086,
+      "avg_ppl": 26674.13,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.191449642857588,
+          "accuracy": 0.008612036137091507,
+          "perplexity": 26674.134855422464
+        }
+      ]
+    },
+    {
+      "name": "10_10_9",
+      "t0_bits": 10,
+      "t1_bits": 10,
+      "t2_bits": 9,
+      "avg_ce": 10.1859,
+      "avg_accuracy": 0.0133,
+      "avg_ppl": 26525.63,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.185866794418121,
+          "accuracy": 0.013276557097560588,
+          "perplexity": 26525.632123107756
+        }
+      ]
+    },
+    {
+      "name": "10_11_8",
+      "t0_bits": 10,
+      "t1_bits": 11,
+      "t2_bits": 8,
+      "avg_ce": 10.2074,
+      "avg_accuracy": 0.0094,
+      "avg_ppl": 27102.57,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.207384011403596,
+          "accuracy": 0.009400742499322828,
+          "perplexity": 27102.57474522457
+        }
+      ]
+    },
+    {
+      "name": "11_8_8",
+      "t0_bits": 11,
+      "t1_bits": 8,
+      "t2_bits": 8,
+      "avg_ce": 10.1911,
+      "avg_accuracy": 0.0089,
+      "avg_ppl": 26665.9,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.19114080790331,
+          "accuracy": 0.008859004795972021,
+          "perplexity": 26665.898222149564
+        }
+      ]
+    },
+    {
+      "name": "11_9_9",
+      "t0_bits": 11,
+      "t1_bits": 9,
+      "t2_bits": 9,
+      "avg_ce": 10.1839,
+      "avg_accuracy": 0.013,
+      "avg_ppl": 26472.98,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.183879693784801,
+          "accuracy": 0.012957887860295406,
+          "perplexity": 26472.975357189734
+        }
+      ]
+    },
+    {
+      "name": "11_10_10",
+      "t0_bits": 11,
+      "t1_bits": 10,
+      "t2_bits": 10,
+      "avg_ce": 10.1881,
+      "avg_accuracy": 0.0228,
+      "avg_ppl": 26584.5,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.188083573749653,
+          "accuracy": 0.022792817195392043,
+          "perplexity": 26584.498819285316
+        }
+      ]
+    },
+    {
+      "name": "11_11_9",
+      "t0_bits": 11,
+      "t1_bits": 11,
+      "t2_bits": 9,
+      "avg_ce": 10.1997,
+      "avg_accuracy": 0.0175,
+      "avg_ppl": 26896.01,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.199733261833307,
+          "accuracy": 0.017479007663995155,
+          "perplexity": 26896.01092475157
+        }
+      ]
+    },
+    {
+      "name": "11_12_8",
+      "t0_bits": 11,
+      "t1_bits": 12,
+      "t2_bits": 8,
+      "avg_ce": 10.222,
+      "avg_accuracy": 0.011,
+      "avg_ppl": 27502.44,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.222030040940908,
+          "accuracy": 0.011041889071238507,
+          "perplexity": 27502.440933695463
+        }
+      ]
+    },
+    {
+      "name": "12_8_9",
+      "t0_bits": 12,
+      "t1_bits": 8,
+      "t2_bits": 9,
+      "avg_ce": 10.1866,
+      "avg_accuracy": 0.0114,
+      "avg_ppl": 26545.02,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.186597286835278,
+          "accuracy": 0.011392425232230207,
+          "perplexity": 26545.01597525051
+        }
+      ]
+    },
+    {
+      "name": "12_9_10",
+      "t0_bits": 12,
+      "t1_bits": 9,
+      "t2_bits": 10,
+      "avg_ce": 10.1891,
+      "avg_accuracy": 0.0217,
+      "avg_ppl": 26611.69,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.189106015500643,
+          "accuracy": 0.021745192077882763,
+          "perplexity": 26611.69382109083
+        }
+      ]
+    },
+    {
+      "name": "12_10_11",
+      "t0_bits": 12,
+      "t1_bits": 10,
+      "t2_bits": 11,
+      "avg_ce": 10.1996,
+      "avg_accuracy": 0.032,
+      "avg_ppl": 26891.62,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.199570009398078,
+          "accuracy": 0.03196252449769761,
+          "perplexity": 26891.62044385826
+        }
+      ]
+    },
+    {
+      "name": "12_11_10",
+      "t0_bits": 12,
+      "t1_bits": 11,
+      "t2_bits": 10,
+      "avg_ce": 10.2049,
+      "avg_accuracy": 0.0351,
+      "avg_ppl": 27036.39,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.204938840354005,
+          "accuracy": 0.03506556619556731,
+          "perplexity": 27036.385269361414
+        }
+      ]
+    },
+    {
+      "name": "12_12_9",
+      "t0_bits": 12,
+      "t1_bits": 12,
+      "t2_bits": 9,
+      "avg_ce": 10.2174,
+      "avg_accuracy": 0.0217,
+      "avg_ppl": 27374.44,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.217365157245037,
+          "accuracy": 0.021721291885087875,
+          "perplexity": 27374.44402285163
+        }
+      ]
+    },
+    {
+      "name": "12_13_8",
+      "t0_bits": 12,
+      "t1_bits": 13,
+      "t2_bits": 8,
+      "avg_ce": 10.2403,
+      "avg_accuracy": 0.0126,
+      "avg_ppl": 28010.61,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.240338511362209,
+          "accuracy": 0.012603368333837893,
+          "perplexity": 28010.60623001694
+        }
+      ]
+    },
+    {
+      "name": "13_8_8",
+      "t0_bits": 13,
+      "t1_bits": 8,
+      "t2_bits": 8,
+      "avg_ce": 10.2102,
+      "avg_accuracy": 0.0122,
+      "avg_ppl": 27177.92,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.210160019657538,
+          "accuracy": 0.01215723140166664,
+          "perplexity": 27177.916242346157
+        }
+      ]
+    },
+    {
+      "name": "13_9_9",
+      "t0_bits": 13,
+      "t1_bits": 9,
+      "t2_bits": 9,
+      "avg_ce": 10.2029,
+      "avg_accuracy": 0.0169,
+      "avg_ppl": 26980.9,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.20288460740274,
+          "accuracy": 0.016857602651328053,
+          "perplexity": 26980.90324187313
+        }
+      ]
+    },
+    {
+      "name": "13_10_10",
+      "t0_bits": 13,
+      "t1_bits": 10,
+      "t2_bits": 10,
+      "avg_ce": 10.2071,
+      "avg_accuracy": 0.0339,
+      "avg_ppl": 27094.48,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.207085230889891,
+          "accuracy": 0.033882506652220326,
+          "perplexity": 27094.478233619666
+        }
+      ]
+    },
+    {
+      "name": "13_11_9",
+      "t0_bits": 13,
+      "t1_bits": 11,
+      "t2_bits": 9,
+      "avg_ce": 10.2187,
+      "avg_accuracy": 0.0236,
+      "avg_ppl": 27412.02,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.218736855922687,
+          "accuracy": 0.023641274039610586,
+          "perplexity": 27412.01927659044
+        }
+      ]
+    },
+    {
+      "name": "13_12_8",
+      "t0_bits": 13,
+      "t1_bits": 12,
+      "t2_bits": 8,
+      "avg_ce": 10.241,
+      "avg_accuracy": 0.0145,
+      "avg_ppl": 28030.47,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.241047289195947,
+          "accuracy": 0.01445164990997594,
+          "perplexity": 28030.46656427326
+        }
+      ]
+    },
+    {
+      "name": "14_9_8",
+      "t0_bits": 14,
+      "t1_bits": 9,
+      "t2_bits": 8,
+      "avg_ce": 10.2308,
+      "avg_accuracy": 0.0111,
+      "avg_ppl": 27745.72,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.230836914647094,
+          "accuracy": 0.011089689456828285,
+          "perplexity": 27745.72115427942
+        }
+      ]
+    },
+    {
+      "name": "14_10_9",
+      "t0_bits": 14,
+      "t1_bits": 10,
+      "t2_bits": 9,
+      "avg_ce": 10.2252,
+      "avg_accuracy": 0.0185,
+      "avg_ppl": 27590.69,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.225233700700093,
+          "accuracy": 0.01851069931964118,
+          "perplexity": 27590.69068259998
+        }
+      ]
+    },
+    {
+      "name": "14_11_8",
+      "t0_bits": 14,
+      "t1_bits": 11,
+      "t2_bits": 8,
+      "avg_ce": 10.2468,
+      "avg_accuracy": 0.0121,
+      "avg_ppl": 28191.32,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.246769421305107,
+          "accuracy": 0.012105447650611048,
+          "perplexity": 28191.32037150299
+        }
+      ]
+    },
+    {
+      "name": "15_10_8",
+      "t0_bits": 15,
+      "t1_bits": 10,
+      "t2_bits": 8,
+      "avg_ce": 10.2574,
+      "avg_accuracy": 0.0106,
+      "avg_ppl": 28493.77,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.25744061872632,
+          "accuracy": 0.010555918484409108,
+          "perplexity": 28493.76637720265
+        }
+      ]
+    },
+    {
+      "name": "8_10_8",
+      "t0_bits": 8,
+      "t1_bits": 10,
+      "t2_bits": 8,
+      "avg_ce": 10.1941,
+      "avg_accuracy": 0.006,
+      "avg_ppl": 26744.55,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.194086032965958,
+          "accuracy": 0.005967081467790507,
+          "perplexity": 26744.55106221418
+        }
+      ]
+    },
+    {
+      "name": "9_9_8",
+      "t0_bits": 9,
+      "t1_bits": 9,
+      "t2_bits": 8,
+      "avg_ce": 10.1886,
+      "avg_accuracy": 0.0074,
+      "avg_ppl": 26598.77,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.188620094724117,
+          "accuracy": 0.0074409266901419675,
+          "perplexity": 26598.765787419063
+        }
+      ]
+    },
+    {
+      "name": "9_10_9",
+      "t0_bits": 9,
+      "t1_bits": 10,
+      "t2_bits": 9,
+      "avg_ce": 10.183,
+      "avg_accuracy": 0.0096,
+      "avg_ppl": 26450.77,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.183040571570618,
+          "accuracy": 0.00962779433087427,
+          "perplexity": 26450.770613041954
+        }
+      ]
+    },
+    {
+      "name": "9_11_8",
+      "t0_bits": 9,
+      "t1_bits": 11,
+      "t2_bits": 8,
+      "avg_ce": 10.2046,
+      "avg_accuracy": 0.0078,
+      "avg_ppl": 27026.01,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.204554858531136,
+          "accuracy": 0.007831296505791813,
+          "perplexity": 27026.0057817567
+        }
+      ]
+    },
+    {
+      "name": "10_8_8",
+      "t0_bits": 10,
+      "t1_bits": 8,
+      "t2_bits": 8,
+      "avg_ce": 10.1863,
+      "avg_accuracy": 0.0074,
+      "avg_ppl": 26538.45,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.186349949298284,
+          "accuracy": 0.007436943324676152,
+          "perplexity": 26538.451208269846
+        }
+      ]
+    },
+    {
+      "name": "10_9_9",
+      "t0_bits": 10,
+      "t1_bits": 9,
+      "t2_bits": 9,
+      "avg_ce": 10.1791,
+      "avg_accuracy": 0.011,
+      "avg_ppl": 26346.59,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.17909399689396,
+          "accuracy": 0.010958238396456398,
+          "perplexity": 26346.58639219258
+        }
+      ]
+    },
+    {
+      "name": "10_10_10",
+      "t0_bits": 10,
+      "t1_bits": 10,
+      "t2_bits": 10,
+      "avg_ce": 10.1833,
+      "avg_accuracy": 0.0165,
+      "avg_ppl": 26457.6,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.18329869486919,
+          "accuracy": 0.016515033221267985,
+          "perplexity": 26457.599054454357
+        }
+      ]
+    },
+    {
+      "name": "10_11_9",
+      "t0_bits": 10,
+      "t1_bits": 11,
+      "t2_bits": 9,
+      "avg_ce": 10.1949,
+      "avg_accuracy": 0.0141,
+      "avg_ppl": 26767.62,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.194948089158672,
+          "accuracy": 0.014061280094326094,
+          "perplexity": 26767.616308419492
+        }
+      ]
+    },
+    {
+      "name": "10_12_8",
+      "t0_bits": 10,
+      "t1_bits": 12,
+      "t2_bits": 8,
+      "avg_ce": 10.2172,
+      "avg_accuracy": 0.0094,
+      "avg_ppl": 27371.02,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.217239937240041,
+          "accuracy": 0.009420659326651901,
+          "perplexity": 27371.016409441683
+        }
+      ]
+    },
+    {
+      "name": "11_8_9",
+      "t0_bits": 11,
+      "t1_bits": 8,
+      "t2_bits": 9,
+      "avg_ce": 10.1788,
+      "avg_accuracy": 0.01,
+      "avg_ppl": 26339.09,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.178809434114235,
+          "accuracy": 0.009990280588263413,
+          "perplexity": 26339.090200951676
+        }
+      ]
+    },
+    {
+      "name": "11_9_10",
+      "t0_bits": 11,
+      "t1_bits": 9,
+      "t2_bits": 10,
+      "avg_ce": 10.1813,
+      "avg_accuracy": 0.0169,
+      "avg_ppl": 26405.29,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.181319634907295,
+          "accuracy": 0.016873536113191312,
+          "perplexity": 26405.289658266873
+        }
+      ]
+    },
+    {
+      "name": "11_10_11",
+      "t0_bits": 11,
+      "t1_bits": 10,
+      "t2_bits": 11,
+      "avg_ce": 10.1918,
+      "avg_accuracy": 0.0241,
+      "avg_ppl": 26682.97,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.191780639533166,
+          "accuracy": 0.024119277895508356,
+          "perplexity": 26682.965366737837
+        }
+      ]
+    },
+    {
+      "name": "11_11_10",
+      "t0_bits": 11,
+      "t1_bits": 11,
+      "t2_bits": 10,
+      "avg_ce": 10.1972,
+      "avg_accuracy": 0.0259,
+      "avg_ppl": 26826.7,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.197153097968457,
+          "accuracy": 0.02590382562419337,
+          "perplexity": 26826.70425898149
+        }
+      ]
+    },
+    {
+      "name": "11_12_9",
+      "t0_bits": 11,
+      "t1_bits": 12,
+      "t2_bits": 9,
+      "avg_ce": 10.2096,
+      "avg_accuracy": 0.0179,
+      "avg_ppl": 27162.11,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.209578323014005,
+          "accuracy": 0.017921161230700595,
+          "perplexity": 27162.11153690748
+        }
+      ]
+    },
+    {
+      "name": "11_13_8",
+      "t0_bits": 11,
+      "t1_bits": 13,
+      "t2_bits": 8,
+      "avg_ce": 10.2325,
+      "avg_accuracy": 0.011,
+      "avg_ppl": 27793.14,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.232544534640711,
+          "accuracy": 0.011033922340306878,
+          "perplexity": 27793.14077828598
+        }
+      ]
+    },
+    {
+      "name": "12_8_10",
+      "t0_bits": 12,
+      "t1_bits": 8,
+      "t2_bits": 10,
+      "avg_ce": 10.184,
+      "avg_accuracy": 0.0168,
+      "avg_ppl": 26477.23,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.184040522062915,
+          "accuracy": 0.016765985245614314,
+          "perplexity": 26477.23330262282
+        }
+      ]
+    },
+    {
+      "name": "12_9_11",
+      "t0_bits": 12,
+      "t1_bits": 9,
+      "t2_bits": 11,
+      "avg_ce": 10.1928,
+      "avg_accuracy": 0.0224,
+      "avg_ppl": 26709.9,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.192789707373628,
+          "accuracy": 0.022390497283344753,
+          "perplexity": 26709.903878084537
+        }
+      ]
+    },
+    {
+      "name": "12_10_12",
+      "t0_bits": 12,
+      "t1_bits": 10,
+      "t2_bits": 12,
+      "avg_ce": 10.2057,
+      "avg_accuracy": 0.0324,
+      "avg_ppl": 27057.29,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.205711584504803,
+          "accuracy": 0.03242459489173213,
+          "perplexity": 27057.28555218265
+        }
+      ]
+    },
+    {
+      "name": "12_11_11",
+      "t0_bits": 12,
+      "t1_bits": 11,
+      "t2_bits": 11,
+      "avg_ce": 10.2087,
+      "avg_accuracy": 0.0395,
+      "avg_ppl": 27137.01,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.20865364407181,
+          "accuracy": 0.039514985420882394,
+          "perplexity": 27137.006912991033
+        }
+      ]
+    },
+    {
+      "name": "12_12_10",
+      "t0_bits": 12,
+      "t1_bits": 12,
+      "t2_bits": 10,
+      "avg_ce": 10.2148,
+      "avg_accuracy": 0.0391,
+      "avg_ppl": 27303.8,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.214781115428547,
+          "accuracy": 0.03913258233616418,
+          "perplexity": 27303.79862942865
+        }
+      ]
+    },
+    {
+      "name": "12_13_9",
+      "t0_bits": 12,
+      "t1_bits": 13,
+      "t2_bits": 9,
+      "avg_ce": 10.228,
+      "avg_accuracy": 0.0217,
+      "avg_ppl": 27666.39,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.227973485383881,
+          "accuracy": 0.021749175443348576,
+          "perplexity": 27666.386882641436
+        }
+      ]
+    },
+    {
+      "name": "12_14_8",
+      "t0_bits": 12,
+      "t1_bits": 14,
+      "t2_bits": 8,
+      "avg_ce": 10.2499,
+      "avg_accuracy": 0.0126,
+      "avg_ppl": 28280.21,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.249917533205036,
+          "accuracy": 0.012607351699303708,
+          "perplexity": 28280.209645918283
+        }
+      ]
+    },
+    {
+      "name": "13_8_9",
+      "t0_bits": 13,
+      "t1_bits": 8,
+      "t2_bits": 9,
+      "avg_ce": 10.1978,
+      "avg_accuracy": 0.0133,
+      "avg_ppl": 26844.46,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.197814878220255,
+          "accuracy": 0.013296473924889661,
+          "perplexity": 26844.463517796157
+        }
+      ]
+    },
+    {
+      "name": "13_9_10",
+      "t0_bits": 13,
+      "t1_bits": 9,
+      "t2_bits": 10,
+      "avg_ce": 10.2003,
+      "avg_accuracy": 0.0235,
+      "avg_ppl": 26911.85,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.20032192478881,
+          "accuracy": 0.023549656633896847,
+          "perplexity": 26911.84827100595
+        }
+      ]
+    },
+    {
+      "name": "13_10_11",
+      "t0_bits": 13,
+      "t1_bits": 10,
+      "t2_bits": 11,
+      "avg_ce": 10.2108,
+      "avg_accuracy": 0.0371,
+      "avg_ppl": 27195.02,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.210789003042606,
+          "accuracy": 0.03707716575580376,
+          "perplexity": 27195.01607729565
+        }
+      ]
+    },
+    {
+      "name": "13_11_10",
+      "t0_bits": 13,
+      "t1_bits": 11,
+      "t2_bits": 10,
+      "avg_ce": 10.2162,
+      "avg_accuracy": 0.0402,
+      "avg_ppl": 27341.31,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.216154111103874,
+          "accuracy": 0.040220041108331606,
+          "perplexity": 27341.31237407829
+        }
+      ]
+    },
+    {
+      "name": "13_12_9",
+      "t0_bits": 13,
+      "t1_bits": 12,
+      "t2_bits": 9,
+      "avg_ce": 10.2286,
+      "avg_accuracy": 0.0243,
+      "avg_ppl": 27683.22,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.228581649198262,
+          "accuracy": 0.024302512706935835,
+          "perplexity": 27683.217695445008
+        }
+      ]
+    },
+    {
+      "name": "13_13_8",
+      "t0_bits": 13,
+      "t1_bits": 13,
+      "t2_bits": 8,
+      "avg_ce": 10.2516,
+      "avg_accuracy": 0.0145,
+      "avg_ppl": 28326.8,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.251563664993538,
+          "accuracy": 0.014455633275441755,
+          "perplexity": 28326.800935182222
+        }
+      ]
+    },
+    {
+      "name": "14_8_8",
+      "t0_bits": 14,
+      "t1_bits": 8,
+      "t2_bits": 8,
+      "avg_ce": 10.2257,
+      "avg_accuracy": 0.0103,
+      "avg_ppl": 27604.6,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.225737876944969,
+          "accuracy": 0.010261149439938815,
+          "perplexity": 27604.60476070095
+        }
+      ]
+    },
+    {
+      "name": "14_9_9",
+      "t0_bits": 14,
+      "t1_bits": 9,
+      "t2_bits": 9,
+      "avg_ce": 10.2185,
+      "avg_accuracy": 0.0139,
+      "avg_ppl": 27404.49,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.21846203908408,
+          "accuracy": 0.013933812399420022,
+          "perplexity": 27404.487027154915
+        }
+      ]
+    },
+    {
+      "name": "14_10_10",
+      "t0_bits": 14,
+      "t1_bits": 10,
+      "t2_bits": 10,
+      "avg_ce": 10.2227,
+      "avg_accuracy": 0.032,
+      "avg_ppl": 27519.84,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.222662360123316,
+          "accuracy": 0.03203024171061646,
+          "perplexity": 27519.83675393669
+        }
+      ]
+    },
+    {
+      "name": "14_11_9",
+      "t0_bits": 14,
+      "t1_bits": 11,
+      "t2_bits": 9,
+      "avg_ce": 10.2343,
+      "avg_accuracy": 0.0205,
+      "avg_ppl": 27842.36,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.234313889125405,
+          "accuracy": 0.020474498494287854,
+          "perplexity": 27842.360227051366
+        }
+      ]
+    },
+    {
+      "name": "14_12_8",
+      "t0_bits": 14,
+      "t1_bits": 12,
+      "t2_bits": 8,
+      "avg_ce": 10.2566,
+      "avg_accuracy": 0.0121,
+      "avg_ppl": 28470.56,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.25662569204523,
+          "accuracy": 0.012121381112474306,
+          "perplexity": 28470.55550560091
+        }
+      ]
+    },
+    {
+      "name": "15_9_8",
+      "t0_bits": 15,
+      "t1_bits": 9,
+      "t2_bits": 8,
+      "avg_ce": 10.2506,
+      "avg_accuracy": 0.0099,
+      "avg_ppl": 28300.29,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.250627170532415,
+          "accuracy": 0.009926546740810376,
+          "perplexity": 28300.285460740426
+        }
+      ]
+    },
+    {
+      "name": "15_10_9",
+      "t0_bits": 15,
+      "t1_bits": 10,
+      "t2_bits": 9,
+      "avg_ce": 10.2451,
+      "avg_accuracy": 0.016,
+      "avg_ppl": 28143.22,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.245061645859433,
+          "accuracy": 0.015953378690588105,
+          "perplexity": 28143.21701334948
+        }
+      ]
+    },
+    {
+      "name": "15_11_8",
+      "t0_bits": 15,
+      "t1_bits": 11,
+      "t2_bits": 8,
+      "avg_ce": 10.2666,
+      "avg_accuracy": 0.0107,
+      "avg_ppl": 28754.89,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.266563242771598,
+          "accuracy": 0.010671436082917736,
+          "perplexity": 28754.89356712272
+        }
+      ]
+    },
+    {
+      "name": "16_10_8",
+      "t0_bits": 16,
+      "t1_bits": 10,
+      "t2_bits": 8,
+      "avg_ce": 10.2811,
+      "avg_accuracy": 0.0114,
+      "avg_ppl": 29176.05,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.28110354004542,
+          "accuracy": 0.011416325425025095,
+          "perplexity": 29176.052737327886
+        }
+      ]
+    },
+    {
+      "name": "8_9_8",
+      "t0_bits": 8,
+      "t1_bits": 9,
+      "t2_bits": 8,
+      "avg_ce": 10.1873,
+      "avg_accuracy": 0.0059,
+      "avg_ppl": 26562.96,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.187273190013576,
+          "accuracy": 0.005927247813132359,
+          "perplexity": 26562.96390076281
+        }
+      ]
+    },
+    {
+      "name": "8_10_9",
+      "t0_bits": 8,
+      "t1_bits": 10,
+      "t2_bits": 9,
+      "avg_ce": 10.1817,
+      "avg_accuracy": 0.0068,
+      "avg_ppl": 26415.22,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.181695647150109,
+          "accuracy": 0.006755787830021829,
+          "perplexity": 26415.220237346082
+        }
+      ]
+    },
+    {
+      "name": "8_11_8",
+      "t0_bits": 8,
+      "t1_bits": 11,
+      "t2_bits": 8,
+      "avg_ce": 10.2032,
+      "avg_accuracy": 0.006,
+      "avg_ppl": 26989.64,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.203208202780935,
+          "accuracy": 0.005967081467790507,
+          "perplexity": 26989.63555025283
+        }
+      ]
+    },
+    {
+      "name": "9_8_8",
+      "t0_bits": 9,
+      "t1_bits": 8,
+      "t2_bits": 8,
+      "avg_ce": 10.1835,
+      "avg_accuracy": 0.0068,
+      "avg_ppl": 26463.46,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.183520198945317,
+          "accuracy": 0.006807571581077421,
+          "perplexity": 26463.46016959592
+        }
+      ]
+    },
+    {
+      "name": "9_9_9",
+      "t0_bits": 9,
+      "t1_bits": 9,
+      "t2_bits": 9,
+      "avg_ce": 10.1763,
+      "avg_accuracy": 0.0088,
+      "avg_ppl": 26272.22,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.176267574087266,
+          "accuracy": 0.008787304217587355,
+          "perplexity": 26272.22493749498
+        }
+      ]
+    },
+    {
+      "name": "9_10_10",
+      "t0_bits": 9,
+      "t1_bits": 10,
+      "t2_bits": 10,
+      "avg_ce": 10.1805,
+      "avg_accuracy": 0.0103,
+      "avg_ppl": 26382.93,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.18047251342897,
+          "accuracy": 0.010332850018323481,
+          "perplexity": 26382.930641994528
+        }
+      ]
+    },
+    {
+      "name": "9_11_9",
+      "t0_bits": 9,
+      "t1_bits": 11,
+      "t2_bits": 9,
+      "avg_ce": 10.1921,
+      "avg_accuracy": 0.0098,
+      "avg_ppl": 26692.08,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.192122056780873,
+          "accuracy": 0.009815012507767562,
+          "perplexity": 26692.07694667078
+        }
+      ]
+    },
+    {
+      "name": "9_12_8",
+      "t0_bits": 9,
+      "t1_bits": 12,
+      "t2_bits": 8,
+      "avg_ce": 10.2144,
+      "avg_accuracy": 0.0078,
+      "avg_ppl": 27293.69,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.214410658352682,
+          "accuracy": 0.007839263236723444,
+          "perplexity": 27293.685617362473
+        }
+      ]
+    },
+    {
+      "name": "10_8_9",
+      "t0_bits": 10,
+      "t1_bits": 8,
+      "t2_bits": 9,
+      "avg_ce": 10.174,
+      "avg_accuracy": 0.0085,
+      "avg_ppl": 26213.33,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.174023505741483,
+          "accuracy": 0.008452701518458916,
+          "perplexity": 26213.334371081055
+        }
+      ]
+    },
+    {
+      "name": "10_9_10",
+      "t0_bits": 10,
+      "t1_bits": 9,
+      "t2_bits": 10,
+      "avg_ce": 10.1765,
+      "avg_accuracy": 0.0124,
+      "avg_ppl": 26279.24,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.176534475312042,
+          "accuracy": 0.012416150156944599,
+          "perplexity": 26279.237962359228
+        }
+      ]
+    },
+    {
+      "name": "10_10_11",
+      "t0_bits": 10,
+      "t1_bits": 10,
+      "t2_bits": 11,
+      "avg_ce": 10.187,
+      "avg_accuracy": 0.0172,
+      "avg_ppl": 26555.52,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.186992748774284,
+          "accuracy": 0.017236022370580455,
+          "perplexity": 26555.51559470211
+        }
+      ]
+    },
+    {
+      "name": "10_11_10",
+      "t0_bits": 10,
+      "t1_bits": 11,
+      "t2_bits": 10,
+      "avg_ce": 10.1924,
+      "avg_accuracy": 0.0184,
+      "avg_ppl": 26698.66,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.192368468732125,
+          "accuracy": 0.018419081913927438,
+          "perplexity": 26698.655003856857
+        }
+      ]
+    },
+    {
+      "name": "10_12_9",
+      "t0_bits": 10,
+      "t1_bits": 12,
+      "t2_bits": 9,
+      "avg_ce": 10.2048,
+      "avg_accuracy": 0.0144,
+      "avg_ppl": 27032.45,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.204793203203934,
+          "accuracy": 0.014352065773330572,
+          "perplexity": 27032.44805397193
+        }
+      ]
+    },
+    {
+      "name": "10_13_8",
+      "t0_bits": 10,
+      "t1_bits": 13,
+      "t2_bits": 8,
+      "avg_ce": 10.2278,
+      "avg_accuracy": 0.0094,
+      "avg_ppl": 27660.3,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.2277535333667,
+          "accuracy": 0.009412692595720272,
+          "perplexity": 27660.302274223966
+        }
+      ]
+    },
+    {
+      "name": "11_8_10",
+      "t0_bits": 11,
+      "t1_bits": 8,
+      "t2_bits": 10,
+      "avg_ce": 10.1763,
+      "avg_accuracy": 0.0131,
+      "avg_ppl": 26271.86,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.176253842296246,
+          "accuracy": 0.013081372189735664,
+          "perplexity": 26271.86417526947
+        }
+      ]
+    },
+    {
+      "name": "11_9_11",
+      "t0_bits": 11,
+      "t1_bits": 9,
+      "t2_bits": 11,
+      "avg_ce": 10.185,
+      "avg_accuracy": 0.0174,
+      "avg_ppl": 26502.65,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.184999994040998,
+          "accuracy": 0.017351539969089082,
+          "perplexity": 26502.64965722404
+        }
+      ]
+    },
+    {
+      "name": "11_10_12",
+      "t0_bits": 11,
+      "t1_bits": 10,
+      "t2_bits": 12,
+      "avg_ce": 10.1979,
+      "avg_accuracy": 0.0245,
+      "avg_ppl": 26847.21,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.197917115769808,
+          "accuracy": 0.024493714249294946,
+          "perplexity": 26847.208170266174
+        }
+      ]
+    },
+    {
+      "name": "11_11_11",
+      "t0_bits": 11,
+      "t1_bits": 11,
+      "t2_bits": 11,
+      "avg_ce": 10.2009,
+      "avg_accuracy": 0.0282,
+      "avg_ppl": 26926.46,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.200864588757895,
+          "accuracy": 0.028226127690763374,
+          "perplexity": 26926.456324677823
+        }
+      ]
+    },
+    {
+      "name": "11_12_10",
+      "t0_bits": 11,
+      "t1_bits": 12,
+      "t2_bits": 10,
+      "avg_ce": 10.207,
+      "avg_accuracy": 0.0274,
+      "avg_ppl": 27092.05,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.206995534953073,
+          "accuracy": 0.02736173738468157,
+          "perplexity": 27092.048078001066
+        }
+      ]
+    },
+    {
+      "name": "11_13_9",
+      "t0_bits": 11,
+      "t1_bits": 13,
+      "t2_bits": 9,
+      "avg_ce": 10.2202,
+      "avg_accuracy": 0.0179,
+      "avg_ppl": 27451.78,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.220186212816866,
+          "accuracy": 0.017941078058029667,
+          "perplexity": 27451.777880956146
+        }
+      ]
+    },
+    {
+      "name": "11_14_8",
+      "t0_bits": 11,
+      "t1_bits": 14,
+      "t2_bits": 8,
+      "avg_ce": 10.2421,
+      "avg_accuracy": 0.011,
+      "avg_ppl": 28060.59,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.242121536241177,
+          "accuracy": 0.011041889071238507,
+          "perplexity": 28060.59438962271
+        }
+      ]
+    },
+    {
+      "name": "12_8_11",
+      "t0_bits": 12,
+      "t1_bits": 8,
+      "t2_bits": 11,
+      "avg_ce": 10.1877,
+      "avg_accuracy": 0.017,
+      "avg_ppl": 26574.53,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.187708503925212,
+          "accuracy": 0.016997020442631572,
+          "perplexity": 26574.529645665276
+        }
+      ]
+    },
+    {
+      "name": "12_9_12",
+      "t0_bits": 12,
+      "t1_bits": 9,
+      "t2_bits": 12,
+      "avg_ce": 10.1989,
+      "avg_accuracy": 0.0225,
+      "avg_ppl": 26873.72,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.198904047413334,
+          "accuracy": 0.022482114689058492,
+          "perplexity": 26873.717608899904
+        }
+      ]
+    },
+    {
+      "name": "12_10_13",
+      "t0_bits": 12,
+      "t1_bits": 10,
+      "t2_bits": 13,
+      "avg_ce": 10.2138,
+      "avg_accuracy": 0.0325,
+      "avg_ppl": 27275.85,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.21375690762653,
+          "accuracy": 0.032500278835582604,
+          "perplexity": 27275.84818182429
+        }
+      ]
+    },
+    {
+      "name": "12_11_12",
+      "t0_bits": 12,
+      "t1_bits": 11,
+      "t2_bits": 12,
+      "avg_ce": 10.2148,
+      "avg_accuracy": 0.0406,
+      "avg_ppl": 27304.91,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.214821731251593,
+          "accuracy": 0.040566593903857494,
+          "perplexity": 27304.907618203364
+        }
+      ]
+    },
+    {
+      "name": "12_12_11",
+      "t0_bits": 12,
+      "t1_bits": 12,
+      "t2_bits": 11,
+      "avg_ce": 10.2185,
+      "avg_accuracy": 0.0467,
+      "avg_ppl": 27405.87,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.218512594550756,
+          "accuracy": 0.04672089354854129,
+          "perplexity": 27405.87250880711
+        }
+      ]
+    },
+    {
+      "name": "12_13_10",
+      "t0_bits": 12,
+      "t1_bits": 13,
+      "t2_bits": 10,
+      "avg_ce": 10.2254,
+      "avg_accuracy": 0.0393,
+      "avg_ppl": 27595.98,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.225425319115026,
+          "accuracy": 0.03925606666560444,
+          "perplexity": 27595.978073580038
+        }
+      ]
+    },
+    {
+      "name": "12_14_9",
+      "t0_bits": 12,
+      "t1_bits": 14,
+      "t2_bits": 9,
+      "avg_ce": 10.2378,
+      "avg_accuracy": 0.0218,
+      "avg_ppl": 27939.52,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.237797331189649,
+          "accuracy": 0.02177705900160928,
+          "perplexity": 27939.5165968826
+        }
+      ]
+    },
+    {
+      "name": "12_15_8",
+      "t0_bits": 12,
+      "t1_bits": 15,
+      "t2_bits": 8,
+      "avg_ce": 10.2584,
+      "avg_accuracy": 0.0126,
+      "avg_ppl": 28521.1,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.258399530520842,
+          "accuracy": 0.012611335064769523,
+          "perplexity": 28521.102490218025
+        }
+      ]
+    },
+    {
+      "name": "13_8_10",
+      "t0_bits": 13,
+      "t1_bits": 8,
+      "t2_bits": 10,
+      "avg_ce": 10.1953,
+      "avg_accuracy": 0.0184,
+      "avg_ppl": 26775.88,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.195256673834413,
+          "accuracy": 0.018363314797406032,
+          "perplexity": 26775.87765921596
+        }
+      ]
+    },
+    {
+      "name": "13_9_11",
+      "t0_bits": 13,
+      "t1_bits": 9,
+      "t2_bits": 11,
+      "avg_ce": 10.204,
+      "avg_accuracy": 0.0243,
+      "avg_ppl": 27011.26,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.20400905227348,
+          "accuracy": 0.024302512706935835,
+          "perplexity": 27011.258843533276
+        }
+      ]
+    },
+    {
+      "name": "13_10_12",
+      "t0_bits": 13,
+      "t1_bits": 10,
+      "t2_bits": 12,
+      "avg_ce": 10.2169,
+      "avg_accuracy": 0.0378,
+      "avg_ppl": 27362.7,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.21693604539988,
+          "accuracy": 0.03775433788499227,
+          "perplexity": 27362.699844630024
+        }
+      ]
+    },
+    {
+      "name": "13_11_11",
+      "t0_bits": 13,
+      "t1_bits": 11,
+      "t2_bits": 11,
+      "avg_ce": 10.2199,
+      "avg_accuracy": 0.0469,
+      "avg_ppl": 27443.16,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.219872317136591,
+          "accuracy": 0.046876244801708065,
+          "perplexity": 27443.162238740624
+        }
+      ]
+    },
+    {
+      "name": "13_12_10",
+      "t0_bits": 13,
+      "t1_bits": 12,
+      "t2_bits": 10,
+      "avg_ce": 10.226,
+      "avg_accuracy": 0.045,
+      "avg_ppl": 27611.74,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.225996169675307,
+          "accuracy": 0.04495626264718535,
+          "perplexity": 27611.735750336247
+        }
+      ]
+    },
+    {
+      "name": "13_13_9",
+      "t0_bits": 13,
+      "t1_bits": 13,
+      "t2_bits": 9,
+      "avg_ce": 10.2392,
+      "avg_accuracy": 0.0243,
+      "avg_ppl": 27978.47,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.239190414704385,
+          "accuracy": 0.02433039626519654,
+          "perplexity": 27978.465800311034
+        }
+      ]
+    },
+    {
+      "name": "13_14_8",
+      "t0_bits": 13,
+      "t1_bits": 14,
+      "t2_bits": 8,
+      "avg_ce": 10.2611,
+      "avg_accuracy": 0.0145,
+      "avg_ppl": 28599.51,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.26114477939332,
+          "accuracy": 0.014455633275441755,
+          "perplexity": 28599.5075861808
+        }
+      ]
+    },
+    {
+      "name": "14_8_9",
+      "t0_bits": 14,
+      "t1_bits": 8,
+      "t2_bits": 9,
+      "avg_ce": 10.2134,
+      "avg_accuracy": 0.0113,
+      "avg_ppl": 27265.91,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.213392344235452,
+          "accuracy": 0.011280890999187394,
+          "perplexity": 27265.90621846462
+        }
+      ]
+    },
+    {
+      "name": "14_9_10",
+      "t0_bits": 14,
+      "t1_bits": 9,
+      "t2_bits": 10,
+      "avg_ce": 10.2159,
+      "avg_accuracy": 0.0211,
+      "avg_ppl": 27334.35,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.215899492798883,
+          "accuracy": 0.02108395341055751,
+          "perplexity": 27334.351661665372
+        }
+      ]
+    },
+    {
+      "name": "14_10_11",
+      "t0_bits": 14,
+      "t1_bits": 10,
+      "t2_bits": 11,
+      "avg_ce": 10.2264,
+      "avg_accuracy": 0.0363,
+      "avg_ppl": 27622.05,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.226369694958693,
+          "accuracy": 0.03628845939357244,
+          "perplexity": 27622.051358207416
+        }
+      ]
+    },
+    {
+      "name": "14_11_10",
+      "t0_bits": 14,
+      "t1_bits": 11,
+      "t2_bits": 10,
+      "avg_ce": 10.2317,
+      "avg_accuracy": 0.0399,
+      "avg_ppl": 27770.54,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.231730893340465,
+          "accuracy": 0.03990535523653224,
+          "perplexity": 27770.536328289298
+        }
+      ]
+    },
+    {
+      "name": "14_12_9",
+      "t0_bits": 14,
+      "t1_bits": 12,
+      "t2_bits": 9,
+      "avg_ce": 10.2442,
+      "avg_accuracy": 0.0212,
+      "avg_ppl": 28117.82,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.244158645404141,
+          "accuracy": 0.02116760408533962,
+          "perplexity": 28117.815146247904
+        }
+      ]
+    },
+    {
+      "name": "14_13_8",
+      "t0_bits": 14,
+      "t1_bits": 13,
+      "t2_bits": 8,
+      "avg_ce": 10.2671,
+      "avg_accuracy": 0.0121,
+      "avg_ppl": 28771.57,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.267143126615661,
+          "accuracy": 0.012125364477940123,
+          "perplexity": 28771.57290091075
+        }
+      ]
+    },
+    {
+      "name": "15_8_8",
+      "t0_bits": 15,
+      "t1_bits": 8,
+      "t2_bits": 8,
+      "avg_ce": 10.2455,
+      "avg_accuracy": 0.0094,
+      "avg_ppl": 28156.29,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.245526091147312,
+          "accuracy": 0.009392775768391199,
+          "perplexity": 28156.29103372564
+        }
+      ]
+    },
+    {
+      "name": "15_9_9",
+      "t0_bits": 15,
+      "t1_bits": 9,
+      "t2_bits": 9,
+      "avg_ce": 10.2383,
+      "avg_accuracy": 0.0122,
+      "avg_ppl": 27953.26,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.238289067258236,
+          "accuracy": 0.012216981883653862,
+          "perplexity": 27953.25884343443
+        }
+      ]
+    },
+    {
+      "name": "15_10_10",
+      "t0_bits": 15,
+      "t1_bits": 10,
+      "t2_bits": 10,
+      "avg_ce": 10.2425,
+      "avg_accuracy": 0.0289,
+      "avg_ppl": 28071.32,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.242503727225634,
+          "accuracy": 0.028859482799827918,
+          "perplexity": 28071.32094548283
+        }
+      ]
+    },
+    {
+      "name": "15_11_9",
+      "t0_bits": 15,
+      "t1_bits": 11,
+      "t2_bits": 9,
+      "avg_ce": 10.2541,
+      "avg_accuracy": 0.0178,
+      "avg_ppl": 28399.95,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.254142642923401,
+          "accuracy": 0.017789710170328706,
+          "perplexity": 28399.94941322961
+        }
+      ]
+    },
+    {
+      "name": "15_12_8",
+      "t0_bits": 15,
+      "t1_bits": 12,
+      "t2_bits": 8,
+      "avg_ce": 10.2764,
+      "avg_accuracy": 0.0107,
+      "avg_ppl": 29039.76,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.276421064510792,
+          "accuracy": 0.01068338617931518,
+          "perplexity": 29039.75593643823
+        }
+      ]
+    },
+    {
+      "name": "16_9_8",
+      "t0_bits": 16,
+      "t1_bits": 9,
+      "t2_bits": 8,
+      "avg_ce": 10.2743,
+      "avg_accuracy": 0.0109,
+      "avg_ppl": 28977.79,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.274284986656374,
+          "accuracy": 0.010902471279934992,
+          "perplexity": 28977.7909614514
+        }
+      ]
+    },
+    {
+      "name": "16_10_9",
+      "t0_bits": 16,
+      "t1_bits": 10,
+      "t2_bits": 9,
+      "avg_ce": 10.2688,
+      "avg_accuracy": 0.0159,
+      "avg_ppl": 28819.95,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.268823136320092,
+          "accuracy": 0.01585777791940855,
+          "perplexity": 28819.950048256105
+        }
+      ]
+    },
+    {
+      "name": "16_11_8",
+      "t0_bits": 16,
+      "t1_bits": 11,
+      "t2_bits": 8,
+      "avg_ce": 10.2902,
+      "avg_accuracy": 0.0115,
+      "avg_ppl": 29443.57,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.290230733027329,
+          "accuracy": 0.011515909561670465,
+          "perplexity": 29443.5671719274
+        }
+      ]
+    },
+    {
+      "name": "8_8_8",
+      "t0_bits": 8,
+      "t1_bits": 8,
+      "t2_bits": 8,
+      "avg_ce": 10.1822,
+      "avg_accuracy": 0.0057,
+      "avg_ppl": 26427.84,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.182173157621131,
+          "accuracy": 0.005688245885183474,
+          "perplexity": 26427.836793632905
+        }
+      ]
+    },
+    {
+      "name": "8_9_9",
+      "t0_bits": 8,
+      "t1_bits": 9,
+      "t2_bits": 9,
+      "avg_ce": 10.1749,
+      "avg_accuracy": 0.0065,
+      "avg_ppl": 26236.91,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.17492251683675,
+          "accuracy": 0.006536702729402017,
+          "perplexity": 26236.911045782752
+        }
+      ]
+    },
+    {
+      "name": "8_10_10",
+      "t0_bits": 8,
+      "t1_bits": 10,
+      "t2_bits": 10,
+      "avg_ce": 10.1791,
+      "avg_accuracy": 0.0076,
+      "avg_ppl": 26347.47,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.179127517115539,
+          "accuracy": 0.007584327846911298,
+          "perplexity": 26347.469550408063
+        }
+      ]
+    },
+    {
+      "name": "8_11_9",
+      "t0_bits": 8,
+      "t1_bits": 11,
+      "t2_bits": 9,
+      "avg_ce": 10.1908,
+      "avg_accuracy": 0.0068,
+      "avg_ppl": 26656.21,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.190777247104124,
+          "accuracy": 0.006783671388282532,
+          "perplexity": 26656.20530896933
+        }
+      ]
+    },
+    {
+      "name": "8_12_8",
+      "t0_bits": 8,
+      "t1_bits": 12,
+      "t2_bits": 8,
+      "avg_ce": 10.2131,
+      "avg_accuracy": 0.006,
+      "avg_ppl": 27256.95,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.213063896159172,
+          "accuracy": 0.0059710648332563215,
+          "perplexity": 27256.95225455575
+        }
+      ]
+    },
+    {
+      "name": "9_8_9",
+      "t0_bits": 9,
+      "t1_bits": 8,
+      "t2_bits": 9,
+      "avg_ce": 10.1712,
+      "avg_accuracy": 0.0075,
+      "avg_ppl": 26139.34,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.17119691093881,
+          "accuracy": 0.0074528767865394115,
+          "perplexity": 26139.344515320605
+        }
+      ]
+    },
+    {
+      "name": "9_9_10",
+      "t0_bits": 9,
+      "t1_bits": 9,
+      "t2_bits": 10,
+      "avg_ce": 10.1737,
+      "avg_accuracy": 0.0091,
+      "avg_ppl": 26205.07,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.173708098680168,
+          "accuracy": 0.009149790474976499,
+          "perplexity": 26205.067804055143
+        }
+      ]
+    },
+    {
+      "name": "9_10_11",
+      "t0_bits": 9,
+      "t1_bits": 10,
+      "t2_bits": 11,
+      "avg_ce": 10.1842,
+      "avg_accuracy": 0.0106,
+      "avg_ppl": 26480.5,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.184164074129352,
+          "accuracy": 0.010563885215340737,
+          "perplexity": 26480.504821608207
+        }
+      ]
+    },
+    {
+      "name": "9_11_10",
+      "t0_bits": 9,
+      "t1_bits": 11,
+      "t2_bits": 10,
+      "avg_ce": 10.1895,
+      "avg_accuracy": 0.0107,
+      "avg_ppl": 26623.31,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.189542483444665,
+          "accuracy": 0.010679402813849366,
+          "perplexity": 26623.31150756929
+        }
+      ]
+    },
+    {
+      "name": "9_12_9",
+      "t0_bits": 9,
+      "t1_bits": 12,
+      "t2_bits": 9,
+      "avg_ce": 10.202,
+      "avg_accuracy": 0.0099,
+      "avg_ppl": 26956.16,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.201967180596736,
+          "accuracy": 0.00987077962428897,
+          "perplexity": 26956.16158905193
+        }
+      ]
+    },
+    {
+      "name": "9_13_8",
+      "t0_bits": 9,
+      "t1_bits": 13,
+      "t2_bits": 8,
+      "avg_ce": 10.2249,
+      "avg_accuracy": 0.0078,
+      "avg_ppl": 27582.13,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.224923496357567,
+          "accuracy": 0.007835279871257627,
+          "perplexity": 27582.133257880727
+        }
+      ]
+    },
+    {
+      "name": "10_8_10",
+      "t0_bits": 10,
+      "t1_bits": 8,
+      "t2_bits": 10,
+      "avg_ce": 10.1715,
+      "avg_accuracy": 0.0093,
+      "avg_ppl": 26146.44,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.171468449042353,
+          "accuracy": 0.009325058555472348,
+          "perplexity": 26146.443307110734
+        }
+      ]
+    },
+    {
+      "name": "10_9_11",
+      "t0_bits": 10,
+      "t1_bits": 9,
+      "t2_bits": 11,
+      "avg_ce": 10.1802,
+      "avg_accuracy": 0.0127,
+      "avg_ppl": 26376.05,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.180211836231729,
+          "accuracy": 0.012663118815825115,
+          "perplexity": 26376.05410989626
+        }
+      ]
+    },
+    {
+      "name": "10_10_12",
+      "t0_bits": 10,
+      "t1_bits": 10,
+      "t2_bits": 12,
+      "avg_ce": 10.1931,
+      "avg_accuracy": 0.0174,
+      "avg_ppl": 26718.85,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.193124770506552,
+          "accuracy": 0.017399340354678862,
+          "perplexity": 26718.854881649942
+        }
+      ]
+    },
+    {
+      "name": "10_11_11",
+      "t0_bits": 10,
+      "t1_bits": 11,
+      "t2_bits": 11,
+      "avg_ce": 10.1961,
+      "avg_accuracy": 0.0199,
+      "avg_ppl": 26797.85,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.196076963678019,
+          "accuracy": 0.019940727521868675,
+          "perplexity": 26797.850650592194
+        }
+      ]
+    },
+    {
+      "name": "10_12_10",
+      "t0_bits": 10,
+      "t1_bits": 12,
+      "t2_bits": 10,
+      "avg_ce": 10.2022,
+      "avg_accuracy": 0.0191,
+      "avg_ppl": 26962.74,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.202211021341832,
+          "accuracy": 0.019104220774047578,
+          "perplexity": 26962.735401027767
+        }
+      ]
+    },
+    {
+      "name": "10_13_9",
+      "t0_bits": 10,
+      "t1_bits": 13,
+      "t2_bits": 9,
+      "avg_ce": 10.2154,
+      "avg_accuracy": 0.0144,
+      "avg_ppl": 27320.72,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.215400640204855,
+          "accuracy": 0.014356049138796387,
+          "perplexity": 27320.719249997554
+        }
+      ]
+    },
+    {
+      "name": "10_14_8",
+      "t0_bits": 10,
+      "t1_bits": 14,
+      "t2_bits": 8,
+      "avg_ce": 10.2373,
+      "avg_accuracy": 0.0094,
+      "avg_ppl": 27926.43,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.237328724245659,
+          "accuracy": 0.009420659326651901,
+          "perplexity": 27926.427012568165
+        }
+      ]
+    },
+    {
+      "name": "11_8_11",
+      "t0_bits": 11,
+      "t1_bits": 8,
+      "t2_bits": 11,
+      "avg_ce": 10.1799,
+      "avg_accuracy": 0.0133,
+      "avg_ppl": 26368.32,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.179918494078445,
+          "accuracy": 0.013284523828492217,
+          "perplexity": 26368.31803610226
+        }
+      ]
+    },
+    {
+      "name": "11_9_12",
+      "t0_bits": 11,
+      "t1_bits": 9,
+      "t2_bits": 12,
+      "avg_ce": 10.1911,
+      "avg_accuracy": 0.0175,
+      "avg_ppl": 26665.06,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.191109251553202,
+          "accuracy": 0.017510874587721673,
+          "perplexity": 26665.056757006198
+        }
+      ]
+    },
+    {
+      "name": "11_10_13",
+      "t0_bits": 11,
+      "t1_bits": 10,
+      "t2_bits": 13,
+      "avg_ce": 10.206,
+      "avg_accuracy": 0.0246,
+      "avg_ppl": 27063.89,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.205955811671025,
+          "accuracy": 0.024617198578735202,
+          "perplexity": 27063.89448336614
+        }
+      ]
+    },
+    {
+      "name": "11_11_12",
+      "t0_bits": 11,
+      "t1_bits": 11,
+      "t2_bits": 12,
+      "avg_ce": 10.207,
+      "avg_accuracy": 0.0289,
+      "avg_ppl": 27092.92,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.207027590720603,
+          "accuracy": 0.028883382992622806,
+          "perplexity": 27092.91654831584
+        }
+      ]
+    },
+    {
+      "name": "11_12_11",
+      "t0_bits": 11,
+      "t1_bits": 12,
+      "t2_bits": 11,
+      "avg_ce": 10.2107,
+      "avg_accuracy": 0.0306,
+      "avg_ppl": 27193.24,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.210723715278577,
+          "accuracy": 0.030628097066649672,
+          "perplexity": 27193.24063346125
+        }
+      ]
+    },
+    {
+      "name": "11_13_10",
+      "t0_bits": 11,
+      "t1_bits": 13,
+      "t2_bits": 10,
+      "avg_ce": 10.2176,
+      "avg_accuracy": 0.0274,
+      "avg_ppl": 27381.96,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.217639537514119,
+          "accuracy": 0.027425471232134607,
+          "perplexity": 27381.95606069892
+        }
+      ]
+    },
+    {
+      "name": "11_14_9",
+      "t0_bits": 11,
+      "t1_bits": 14,
+      "t2_bits": 9,
+      "avg_ce": 10.23,
+      "avg_accuracy": 0.018,
+      "avg_ppl": 27722.76,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.230008882811537,
+          "accuracy": 0.017957011519892926,
+          "perplexity": 27722.756322981033
+        }
+      ]
+    },
+    {
+      "name": "11_15_8",
+      "t0_bits": 11,
+      "t1_bits": 15,
+      "t2_bits": 8,
+      "avg_ce": 10.2506,
+      "avg_accuracy": 0.011,
+      "avg_ppl": 28299.53,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.250600352755841,
+          "accuracy": 0.011041889071238507,
+          "perplexity": 28299.526520184565
+        }
+      ]
+    },
+    {
+      "name": "12_8_12",
+      "t0_bits": 12,
+      "t1_bits": 8,
+      "t2_bits": 12,
+      "avg_ce": 10.1938,
+      "avg_accuracy": 0.017,
+      "avg_ppl": 26736.87,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.193798973516989,
+          "accuracy": 0.016993037077165755,
+          "perplexity": 26736.87488793524
+        }
+      ]
+    },
+    {
+      "name": "12_9_13",
+      "t0_bits": 12,
+      "t1_bits": 9,
+      "t2_bits": 13,
+      "avg_ce": 10.2069,
+      "avg_accuracy": 0.0225,
+      "avg_ppl": 27089.81,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.206912788370236,
+          "accuracy": 0.022533898440114084,
+          "perplexity": 27089.806396347576
+        }
+      ]
+    },
+    {
+      "name": "12_10_14",
+      "t0_bits": 12,
+      "t1_bits": 10,
+      "t2_bits": 14,
+      "avg_ce": 10.2216,
+      "avg_accuracy": 0.0325,
+      "avg_ppl": 27489.81,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.221570843353803,
+          "accuracy": 0.032540112490240754,
+          "perplexity": 27489.81477835111
+        }
+      ]
+    },
+    {
+      "name": "12_11_13",
+      "t0_bits": 12,
+      "t1_bits": 11,
+      "t2_bits": 13,
+      "avg_ce": 10.2229,
+      "avg_accuracy": 0.0408,
+      "avg_ppl": 27526.48,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.222903888241245,
+          "accuracy": 0.04084144612099871,
+          "perplexity": 27526.484371074486
+        }
+      ]
+    },
+    {
+      "name": "12_12_12",
+      "t0_bits": 12,
+      "t1_bits": 12,
+      "t2_bits": 12,
+      "avg_ce": 10.2247,
+      "avg_accuracy": 0.0506,
+      "avg_ppl": 27576.18,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.22470780615274,
+          "accuracy": 0.05058077468491579,
+          "perplexity": 27576.18470345428
+        }
+      ]
+    },
+    {
+      "name": "12_13_11",
+      "t0_bits": 12,
+      "t1_bits": 13,
+      "t2_bits": 11,
+      "avg_ce": 10.2292,
+      "avg_accuracy": 0.047,
+      "avg_ppl": 27699.98,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.229186881487145,
+          "accuracy": 0.04696387884195599,
+          "perplexity": 27699.97754394361
+        }
+      ]
+    },
+    {
+      "name": "12_14_10",
+      "t0_bits": 12,
+      "t1_bits": 14,
+      "t2_bits": 10,
+      "avg_ce": 10.2354,
+      "avg_accuracy": 0.0395,
+      "avg_ppl": 27871.27,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.235351782828534,
+          "accuracy": 0.039471168400758434,
+          "perplexity": 27871.272638820916
+        }
+      ]
+    },
+    {
+      "name": "12_15_9",
+      "t0_bits": 12,
+      "t1_bits": 15,
+      "t2_bits": 9,
+      "avg_ce": 10.2467,
+      "avg_accuracy": 0.0218,
+      "avg_ppl": 28190.62,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.246744585148157,
+          "accuracy": 0.02177705900160928,
+          "perplexity": 28190.620216140243
+        }
+      ]
+    },
+    {
+      "name": "12_16_8",
+      "t0_bits": 12,
+      "t1_bits": 16,
+      "t2_bits": 8,
+      "avg_ce": 10.2648,
+      "avg_accuracy": 0.0126,
+      "avg_ppl": 28703.85,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.264786632473443,
+          "accuracy": 0.012611335064769523,
+          "perplexity": 28703.852680396736
+        }
+      ]
+    },
+    {
+      "name": "13_8_11",
+      "t0_bits": 13,
+      "t1_bits": 8,
+      "t2_bits": 11,
+      "avg_ce": 10.1989,
+      "avg_accuracy": 0.0186,
+      "avg_ppl": 26874.36,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.19892812607532,
+          "accuracy": 0.01859434999442329,
+          "perplexity": 26874.364699853002
+        }
+      ]
+    },
+    {
+      "name": "13_9_12",
+      "t0_bits": 13,
+      "t1_bits": 9,
+      "t2_bits": 12,
+      "avg_ce": 10.2101,
+      "avg_accuracy": 0.0244,
+      "avg_ppl": 27177.07,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.210128910073024,
+          "accuracy": 0.024386163381717944,
+          "perplexity": 27177.07076181525
+        }
+      ]
+    },
+    {
+      "name": "13_10_13",
+      "t0_bits": 13,
+      "t1_bits": 10,
+      "t2_bits": 13,
+      "avg_ce": 10.225,
+      "avg_accuracy": 0.0379,
+      "avg_ppl": 27583.94,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.22498884070142,
+          "accuracy": 0.037905705772693234,
+          "perplexity": 27583.935653168035
+        }
+      ]
+    },
+    {
+      "name": "13_11_12",
+      "t0_bits": 13,
+      "t1_bits": 11,
+      "t2_bits": 12,
+      "avg_ce": 10.226,
+      "avg_accuracy": 0.0485,
+      "avg_ppl": 27613.11,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.226045865082314,
+          "accuracy": 0.04846162425710234,
+          "perplexity": 27613.107960878533
+        }
+      ]
+    },
+    {
+      "name": "13_12_11",
+      "t0_bits": 13,
+      "t1_bits": 12,
+      "t2_bits": 11,
+      "avg_ce": 10.2297,
+      "avg_accuracy": 0.0554,
+      "avg_ppl": 27715.06,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.229731055515275,
+          "accuracy": 0.05543649718774398,
+          "perplexity": 27715.055254379953
+        }
+      ]
+    },
+    {
+      "name": "13_13_10",
+      "t0_bits": 13,
+      "t1_bits": 13,
+      "t2_bits": 10,
+      "avg_ce": 10.2366,
+      "avg_accuracy": 0.0452,
+      "avg_ppl": 27907.22,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.236640570004594,
+          "accuracy": 0.04517933111327098,
+          "perplexity": 27907.21593423233
+        }
+      ]
+    },
+    {
+      "name": "13_14_9",
+      "t0_bits": 13,
+      "t1_bits": 14,
+      "t2_bits": 9,
+      "avg_ce": 10.249,
+      "avg_accuracy": 0.0244,
+      "avg_ppl": 28254.71,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.249015497258334,
+          "accuracy": 0.024366246554388873,
+          "perplexity": 28254.711382141588
+        }
+      ]
+    },
+    {
+      "name": "13_15_8",
+      "t0_bits": 13,
+      "t1_bits": 15,
+      "t2_bits": 8,
+      "avg_ce": 10.2696,
+      "avg_accuracy": 0.0145,
+      "avg_ppl": 28843.22,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.269630195864266,
+          "accuracy": 0.014455633275441755,
+          "perplexity": 28843.218852397396
+        }
+      ]
+    },
+    {
+      "name": "14_8_10",
+      "t0_bits": 14,
+      "t1_bits": 8,
+      "t2_bits": 10,
+      "avg_ce": 10.2108,
+      "avg_accuracy": 0.0169,
+      "avg_ppl": 27196.25,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.21083432522128,
+          "accuracy": 0.016873536113191312,
+          "perplexity": 27196.24864260439
+        }
+      ]
+    },
+    {
+      "name": "14_9_11",
+      "t0_bits": 14,
+      "t1_bits": 9,
+      "t2_bits": 11,
+      "avg_ce": 10.2196,
+      "avg_accuracy": 0.0218,
+      "avg_ppl": 27435.42,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.219590190962759,
+          "accuracy": 0.021840792849062315,
+          "perplexity": 27435.420896449326
+        }
+      ]
+    },
+    {
+      "name": "14_10_12",
+      "t0_bits": 14,
+      "t1_bits": 10,
+      "t2_bits": 12,
+      "avg_ce": 10.2325,
+      "avg_accuracy": 0.0375,
+      "avg_ppl": 27792.52,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.232522371567029,
+          "accuracy": 0.03748346903331687,
+          "perplexity": 27792.524803685024
+        }
+      ]
+    },
+    {
+      "name": "14_11_11",
+      "t0_bits": 14,
+      "t1_bits": 11,
+      "t2_bits": 11,
+      "avg_ce": 10.2355,
+      "avg_accuracy": 0.0492,
+      "avg_ppl": 27874.09,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.23545274763976,
+          "accuracy": 0.04921448033014133,
+          "perplexity": 27874.086798664695
+        }
+      ]
+    },
+    {
+      "name": "14_12_10",
+      "t0_bits": 14,
+      "t1_bits": 12,
+      "t2_bits": 10,
+      "avg_ce": 10.2416,
+      "avg_accuracy": 0.045,
+      "avg_ppl": 28045.2,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.2415727614232,
+          "accuracy": 0.045031946591035835,
+          "perplexity": 28045.199666548742
+        }
+      ]
+    },
+    {
+      "name": "14_13_9",
+      "t0_bits": 14,
+      "t1_bits": 13,
+      "t2_bits": 9,
+      "avg_ce": 10.2548,
+      "avg_accuracy": 0.0212,
+      "avg_ppl": 28417.71,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.254767861128997,
+          "accuracy": 0.02120743773999777,
+          "perplexity": 28417.71113053667
+        }
+      ]
+    },
+    {
+      "name": "14_14_8",
+      "t0_bits": 14,
+      "t1_bits": 14,
+      "t2_bits": 8,
+      "avg_ce": 10.2767,
+      "avg_accuracy": 0.0121,
+      "avg_ppl": 29048.62,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.27672630552181,
+          "accuracy": 0.012117397747008492,
+          "perplexity": 29048.621413884804
+        }
+      ]
+    },
+    {
+      "name": "15_8_9",
+      "t0_bits": 15,
+      "t1_bits": 8,
+      "t2_bits": 9,
+      "avg_ce": 10.2332,
+      "avg_accuracy": 0.0103,
+      "avg_ppl": 27811.87,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.233218351685881,
+          "accuracy": 0.010344800114720925,
+          "perplexity": 27811.874581150238
+        }
+      ]
+    },
+    {
+      "name": "15_9_10",
+      "t0_bits": 15,
+      "t1_bits": 9,
+      "t2_bits": 10,
+      "avg_ce": 10.2357,
+      "avg_accuracy": 0.0191,
+      "avg_ppl": 27882.12,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.235740755258536,
+          "accuracy": 0.019084303946718503,
+          "perplexity": 27882.11590419542
+        }
+      ]
+    },
+    {
+      "name": "15_10_11",
+      "t0_bits": 15,
+      "t1_bits": 10,
+      "t2_bits": 11,
+      "avg_ce": 10.2462,
+      "avg_accuracy": 0.0333,
+      "avg_ppl": 28175.82,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.246219414221573,
+          "accuracy": 0.033300935294211374,
+          "perplexity": 28175.819208869874
+        }
+      ]
+    },
+    {
+      "name": "15_11_10",
+      "t0_bits": 15,
+      "t1_bits": 11,
+      "t2_bits": 10,
+      "avg_ce": 10.2516,
+      "avg_accuracy": 0.0373,
+      "avg_ppl": 28327.04,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.251572083280392,
+          "accuracy": 0.03730023422188939,
+          "perplexity": 28327.03939932186
+        }
+      ]
+    },
+    {
+      "name": "15_12_9",
+      "t0_bits": 15,
+      "t1_bits": 12,
+      "t2_bits": 9,
+      "avg_ce": 10.264,
+      "avg_accuracy": 0.0184,
+      "avg_ppl": 28680.94,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.263988111817687,
+          "accuracy": 0.018438998741256513,
+          "perplexity": 28680.941209990266
+        }
+      ]
+    },
+    {
+      "name": "15_13_8",
+      "t0_bits": 15,
+      "t1_bits": 13,
+      "t2_bits": 8,
+      "avg_ce": 10.2869,
+      "avg_accuracy": 0.0107,
+      "avg_ppl": 29346.85,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.286940445778173,
+          "accuracy": 0.01068338617931518,
+          "perplexity": 29346.848581520524
+        }
+      ]
+    },
+    {
+      "name": "16_8_8",
+      "t0_bits": 16,
+      "t1_bits": 8,
+      "t2_bits": 8,
+      "avg_ce": 10.2692,
+      "avg_accuracy": 0.0105,
+      "avg_ppl": 28830.2,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.269178857493511,
+          "accuracy": 0.010543968388011664,
+          "perplexity": 28830.203738324344
+        }
+      ]
+    },
+    {
+      "name": "16_9_9",
+      "t0_bits": 16,
+      "t1_bits": 9,
+      "t2_bits": 9,
+      "avg_ce": 10.262,
+      "avg_accuracy": 0.0127,
+      "avg_ppl": 28625.35,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.262047855745502,
+          "accuracy": 0.012746769490607225,
+          "perplexity": 28625.346790797175
+        }
+      ]
+    },
+    {
+      "name": "16_10_10",
+      "t0_bits": 16,
+      "t1_bits": 10,
+      "t2_bits": 10,
+      "avg_ce": 10.2663,
+      "avg_accuracy": 0.0274,
+      "avg_ppl": 28747.31,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.266299382945977,
+          "accuracy": 0.027389620942942273,
+          "perplexity": 28747.307306819028
+        }
+      ]
+    },
+    {
+      "name": "16_11_9",
+      "t0_bits": 16,
+      "t1_bits": 11,
+      "t2_bits": 9,
+      "avg_ce": 10.2779,
+      "avg_accuracy": 0.0174,
+      "avg_ppl": 29082.92,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.27790636519105,
+          "accuracy": 0.017367473430952345,
+          "perplexity": 29082.920754116127
+        }
+      ]
+    },
+    {
+      "name": "16_12_8",
+      "t0_bits": 16,
+      "t1_bits": 12,
+      "t2_bits": 8,
+      "avg_ce": 10.3001,
+      "avg_accuracy": 0.0115,
+      "avg_ppl": 29735.37,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.300092533824111,
+          "accuracy": 0.01151989292713628,
+          "perplexity": 29735.37025311155
+        }
+      ]
+    },
+    {
+      "name": "8_8_9",
+      "t0_bits": 8,
+      "t1_bits": 8,
+      "t2_bits": 9,
+      "avg_ce": 10.1699,
+      "avg_accuracy": 0.0061,
+      "avg_ppl": 26104.21,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.16985172909036,
+          "accuracy": 0.006110482624559838,
+          "perplexity": 26104.20598270494
+        }
+      ]
+    },
+    {
+      "name": "8_9_10",
+      "t0_bits": 8,
+      "t1_bits": 9,
+      "t2_bits": 10,
+      "avg_ce": 10.1724,
+      "avg_accuracy": 0.0073,
+      "avg_ppl": 26169.84,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.172362968826349,
+          "accuracy": 0.007313458995235895,
+          "perplexity": 26169.84228179271
+        }
+      ]
+    },
+    {
+      "name": "8_10_11",
+      "t0_bits": 8,
+      "t1_bits": 10,
+      "t2_bits": 11,
+      "avg_ce": 10.1828,
+      "avg_accuracy": 0.0076,
+      "avg_ppl": 26444.86,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.182817248586499,
+          "accuracy": 0.007624161501569446,
+          "perplexity": 26444.86420755898
+        }
+      ]
+    },
+    {
+      "name": "8_11_10",
+      "t0_bits": 8,
+      "t1_bits": 11,
+      "t2_bits": 10,
+      "avg_ce": 10.1882,
+      "avg_accuracy": 0.0076,
+      "avg_ppl": 26587.53,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.188197608963618,
+          "accuracy": 0.007624161501569446,
+          "perplexity": 26587.53056115571
+        }
+      ]
+    },
+    {
+      "name": "8_12_9",
+      "t0_bits": 8,
+      "t1_bits": 12,
+      "t2_bits": 9,
+      "avg_ce": 10.2006,
+      "avg_accuracy": 0.0068,
+      "avg_ppl": 26919.93,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.20062236299182,
+          "accuracy": 0.006779688022816717,
+          "perplexity": 26919.93483303545
+        }
+      ]
+    },
+    {
+      "name": "8_13_8",
+      "t0_bits": 8,
+      "t1_bits": 13,
+      "t2_bits": 8,
+      "avg_ce": 10.2236,
+      "avg_accuracy": 0.006,
+      "avg_ppl": 27545.0,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.223576166360036,
+          "accuracy": 0.005967081467790507,
+          "perplexity": 27544.996046004217
+        }
+      ]
+    },
+    {
+      "name": "9_8_10",
+      "t0_bits": 9,
+      "t1_bits": 8,
+      "t2_bits": 10,
+      "avg_ce": 10.1686,
+      "avg_accuracy": 0.0077,
+      "avg_ppl": 26072.64,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.168641896885385,
+          "accuracy": 0.007715778907283186,
+          "perplexity": 26072.64337020415
+        }
+      ]
+    },
+    {
+      "name": "9_9_11",
+      "t0_bits": 9,
+      "t1_bits": 9,
+      "t2_bits": 11,
+      "avg_ce": 10.1774,
+      "avg_accuracy": 0.0093,
+      "avg_ppl": 26301.55,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.177382965699959,
+          "accuracy": 0.009261324708019311,
+          "perplexity": 26301.54510553203
+        }
+      ]
+    },
+    {
+      "name": "9_10_12",
+      "t0_bits": 9,
+      "t1_bits": 10,
+      "t2_bits": 12,
+      "avg_ce": 10.1903,
+      "avg_accuracy": 0.0106,
+      "avg_ppl": 26643.29,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.190292700160478,
+          "accuracy": 0.010595752139067256,
+          "perplexity": 26643.292254900756
+        }
+      ]
+    },
+    {
+      "name": "9_11_11",
+      "t0_bits": 9,
+      "t1_bits": 11,
+      "t2_bits": 11,
+      "avg_ce": 10.1932,
+      "avg_accuracy": 0.011,
+      "avg_ppl": 26722.16,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.1932484778617,
+          "accuracy": 0.010974171858319656,
+          "perplexity": 26722.16040497447
+        }
+      ]
+    },
+    {
+      "name": "9_12_10",
+      "t0_bits": 9,
+      "t1_bits": 12,
+      "t2_bits": 10,
+      "avg_ce": 10.1994,
+      "avg_accuracy": 0.0108,
+      "avg_ppl": 26886.65,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.199385083562582,
+          "accuracy": 0.010794920412357993,
+          "perplexity": 26886.647948265454
+        }
+      ]
+    },
+    {
+      "name": "9_13_9",
+      "t0_bits": 9,
+      "t1_bits": 13,
+      "t2_bits": 9,
+      "avg_ce": 10.2126,
+      "avg_accuracy": 0.0099,
+      "avg_ppl": 27243.61,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.212574218701162,
+          "accuracy": 0.00987077962428897,
+          "perplexity": 27243.608406820003
+        }
+      ]
+    },
+    {
+      "name": "9_14_8",
+      "t0_bits": 9,
+      "t1_bits": 14,
+      "t2_bits": 8,
+      "avg_ce": 10.2345,
+      "avg_accuracy": 0.0078,
+      "avg_ppl": 27847.47,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.23449722364101,
+          "accuracy": 0.007839263236723444,
+          "perplexity": 27847.465160617885
+        }
+      ]
+    },
+    {
+      "name": "10_8_11",
+      "t0_bits": 10,
+      "t1_bits": 8,
+      "t2_bits": 11,
+      "avg_ce": 10.1751,
+      "avg_accuracy": 0.0094,
+      "avg_ppl": 26242.36,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.1751300900288,
+          "accuracy": 0.009420659326651901,
+          "perplexity": 26242.357690427205
+        }
+      ]
+    },
+    {
+      "name": "10_9_12",
+      "t0_bits": 10,
+      "t1_bits": 9,
+      "t2_bits": 12,
+      "avg_ce": 10.1863,
+      "avg_accuracy": 0.0127,
+      "avg_ppl": 26537.57,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.186316637890974,
+          "accuracy": 0.012687019008620003,
+          "perplexity": 26537.56718983628
+        }
+      ]
+    },
+    {
+      "name": "10_10_13",
+      "t0_bits": 10,
+      "t1_bits": 10,
+      "t2_bits": 13,
+      "avg_ce": 10.2012,
+      "avg_accuracy": 0.0174,
+      "avg_ppl": 26934.36,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.20115793070984,
+          "accuracy": 0.017435190643871192,
+          "perplexity": 26934.356142552417
+        }
+      ]
+    },
+    {
+      "name": "10_11_12",
+      "t0_bits": 10,
+      "t1_bits": 11,
+      "t2_bits": 12,
+      "avg_ce": 10.2022,
+      "avg_accuracy": 0.0202,
+      "avg_ppl": 26963.4,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.202235503884381,
+          "accuracy": 0.020159812622488487,
+          "perplexity": 26963.395525425207
+        }
+      ]
+    },
+    {
+      "name": "10_12_11",
+      "t0_bits": 10,
+      "t1_bits": 12,
+      "t2_bits": 11,
+      "avg_ce": 10.2059,
+      "avg_accuracy": 0.0212,
+      "avg_ppl": 27063.36,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.205936198769358,
+          "accuracy": 0.021239304663724288,
+          "perplexity": 27063.363687070152
+        }
+      ]
+    },
+    {
+      "name": "10_13_10",
+      "t0_bits": 10,
+      "t1_bits": 13,
+      "t2_bits": 10,
+      "avg_ce": 10.2129,
+      "avg_accuracy": 0.0191,
+      "avg_ppl": 27251.25,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.21285475738053,
+          "accuracy": 0.019128120966842466,
+          "perplexity": 27251.252364906486
+        }
+      ]
+    },
+    {
+      "name": "10_14_9",
+      "t0_bits": 10,
+      "t1_bits": 14,
+      "t2_bits": 9,
+      "avg_ce": 10.2252,
+      "avg_accuracy": 0.0144,
+      "avg_ppl": 27590.38,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.22522226730961,
+          "accuracy": 0.01436799923519383,
+          "perplexity": 27590.375229263056
+        }
+      ]
+    },
+    {
+      "name": "10_15_8",
+      "t0_bits": 10,
+      "t1_bits": 15,
+      "t2_bits": 8,
+      "avg_ce": 10.2458,
+      "avg_accuracy": 0.0094,
+      "avg_ppl": 28164.14,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.24580480800878,
+          "accuracy": 0.009420659326651901,
+          "perplexity": 28164.13976052857
+        }
+      ]
+    },
+    {
+      "name": "11_8_12",
+      "t0_bits": 11,
+      "t1_bits": 8,
+      "t2_bits": 12,
+      "avg_ce": 10.186,
+      "avg_accuracy": 0.0134,
+      "avg_ppl": 26529.27,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.186003864564611,
+          "accuracy": 0.013384107965137585,
+          "perplexity": 26529.268244584768
+        }
+      ]
+    },
+    {
+      "name": "11_9_13",
+      "t0_bits": 11,
+      "t1_bits": 9,
+      "t2_bits": 13,
+      "avg_ce": 10.1991,
+      "avg_accuracy": 0.0176,
+      "avg_ppl": 26879.29,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.199111359367214,
+          "accuracy": 0.017626392186230303,
+          "perplexity": 26879.28942933794
+        }
+      ]
+    },
+    {
+      "name": "11_10_14",
+      "t0_bits": 11,
+      "t1_bits": 10,
+      "t2_bits": 14,
+      "avg_ce": 10.2138,
+      "avg_accuracy": 0.0246,
+      "avg_ppl": 27276.01,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.213762735348373,
+          "accuracy": 0.02457338155861124,
+          "perplexity": 27276.0071383437
+        }
+      ]
+    },
+    {
+      "name": "11_11_13",
+      "t0_bits": 11,
+      "t1_bits": 11,
+      "t2_bits": 13,
+      "avg_ce": 10.2151,
+      "avg_accuracy": 0.0291,
+      "avg_ppl": 27312.59,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.215103100781398,
+          "accuracy": 0.02908653463137936,
+          "perplexity": 27312.591468171206
+        }
+      ]
+    },
+    {
+      "name": "11_12_12",
+      "t0_bits": 11,
+      "t1_bits": 12,
+      "t2_bits": 12,
+      "avg_ce": 10.2169,
+      "avg_accuracy": 0.0315,
+      "avg_ppl": 27362.09,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.216913836067803,
+          "accuracy": 0.03145663708353914,
+          "perplexity": 27362.092144091002
+        }
+      ]
+    },
+    {
+      "name": "11_13_11",
+      "t0_bits": 11,
+      "t1_bits": 13,
+      "t2_bits": 11,
+      "avg_ce": 10.2214,
+      "avg_accuracy": 0.0308,
+      "avg_ppl": 27485.06,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.2213978184578,
+          "accuracy": 0.030815315243542963,
+          "perplexity": 27485.05876747398
+        }
+      ]
+    },
+    {
+      "name": "11_14_10",
+      "t0_bits": 11,
+      "t1_bits": 14,
+      "t2_bits": 10,
+      "avg_ce": 10.2276,
+      "avg_accuracy": 0.0275,
+      "avg_ppl": 27655.1,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.227565304722932,
+          "accuracy": 0.02754497219610905,
+          "perplexity": 27655.096303012484
+        }
+      ]
+    },
+    {
+      "name": "11_15_9",
+      "t0_bits": 11,
+      "t1_bits": 15,
+      "t2_bits": 9,
+      "avg_ce": 10.239,
+      "avg_accuracy": 0.018,
+      "avg_ppl": 27971.84,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.238953710557762,
+          "accuracy": 0.017957011519892926,
+          "perplexity": 27971.84396517879
+        }
+      ]
+    },
+    {
+      "name": "11_16_8",
+      "t0_bits": 11,
+      "t1_bits": 16,
+      "t2_bits": 8,
+      "avg_ce": 10.257,
+      "avg_accuracy": 0.011,
+      "avg_ppl": 28480.75,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.256983852346966,
+          "accuracy": 0.011041889071238507,
+          "perplexity": 28480.754354653807
+        }
+      ]
+    },
+    {
+      "name": "12_8_13",
+      "t0_bits": 12,
+      "t1_bits": 8,
+      "t2_bits": 13,
+      "avg_ce": 10.2018,
+      "avg_accuracy": 0.017,
+      "avg_ppl": 26951.03,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.201776963784155,
+          "accuracy": 0.01702092063542646,
+          "perplexity": 26951.034561553937
+        }
+      ]
+    },
+    {
+      "name": "12_9_14",
+      "t0_bits": 12,
+      "t1_bits": 9,
+      "t2_bits": 14,
+      "avg_ce": 10.2147,
+      "avg_accuracy": 0.0226,
+      "avg_ppl": 27301.25,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.214687841910044,
+          "accuracy": 0.022553815267443156,
+          "perplexity": 27301.252026829112
+        }
+      ]
+    },
+    {
+      "name": "12_10_15",
+      "t0_bits": 12,
+      "t1_bits": 10,
+      "t2_bits": 15,
+      "avg_ce": 10.2286,
+      "avg_accuracy": 0.0325,
+      "avg_ppl": 27684.67,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.22863416326743,
+          "accuracy": 0.03252816239384331,
+          "perplexity": 27684.671492025907
+        }
+      ]
+    },
+    {
+      "name": "12_11_14",
+      "t0_bits": 12,
+      "t1_bits": 11,
+      "t2_bits": 14,
+      "avg_ce": 10.2308,
+      "avg_accuracy": 0.0409,
+      "avg_ppl": 27743.51,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.230757370032498,
+          "accuracy": 0.0408932298720543,
+          "perplexity": 27743.51421935956
+        }
+      ]
+    },
+    {
+      "name": "12_12_13",
+      "t0_bits": 12,
+      "t1_bits": 12,
+      "t2_bits": 13,
+      "avg_ce": 10.2328,
+      "avg_accuracy": 0.0511,
+      "avg_ppl": 27800.98,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.232826484810795,
+          "accuracy": 0.05111454565733497,
+          "perplexity": 27800.97816387977
+        }
+      ]
+    },
+    {
+      "name": "12_13_12",
+      "t0_bits": 12,
+      "t1_bits": 13,
+      "t2_bits": 12,
+      "avg_ce": 10.2354,
+      "avg_accuracy": 0.0509,
+      "avg_ppl": 27873.02,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.235414506357268,
+          "accuracy": 0.05087156036392027,
+          "perplexity": 27873.020878218416
+        }
+      ]
+    },
+    {
+      "name": "12_14_11",
+      "t0_bits": 12,
+      "t1_bits": 14,
+      "t2_bits": 11,
+      "avg_ce": 10.2392,
+      "avg_accuracy": 0.0481,
+      "avg_ppl": 27977.93,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.239171109766538,
+          "accuracy": 0.04813498828890553,
+          "perplexity": 27977.925682981175
+        }
+      ]
+    },
+    {
+      "name": "12_15_10",
+      "t0_bits": 12,
+      "t1_bits": 15,
+      "t2_bits": 10,
+      "avg_ce": 10.2445,
+      "avg_accuracy": 0.0395,
+      "avg_ppl": 28128.23,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.24452884926877,
+          "accuracy": 0.03947515176622425,
+          "perplexity": 28128.2263971037
+        }
+      ]
+    },
+    {
+      "name": "12_16_9",
+      "t0_bits": 12,
+      "t1_bits": 16,
+      "t2_bits": 9,
+      "avg_ce": 10.2538,
+      "avg_accuracy": 0.0218,
+      "avg_ppl": 28389.28,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.253766808579954,
+          "accuracy": 0.02177705900160928,
+          "perplexity": 28389.277742403756
+        }
+      ]
+    },
+    {
+      "name": "13_8_12",
+      "t0_bits": 13,
+      "t1_bits": 8,
+      "t2_bits": 12,
+      "avg_ce": 10.205,
+      "avg_accuracy": 0.0186,
+      "avg_ppl": 27038.69,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.205024115349142,
+          "accuracy": 0.01858638326349166,
+          "perplexity": 27038.690895288488
+        }
+      ]
+    },
+    {
+      "name": "13_9_13",
+      "t0_bits": 13,
+      "t1_bits": 9,
+      "t2_bits": 13,
+      "avg_ce": 10.2181,
+      "avg_accuracy": 0.0245,
+      "avg_ppl": 27395.8,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.218145120637928,
+          "accuracy": 0.02446583069103424,
+          "perplexity": 27395.80341577965
+        }
+      ]
+    },
+    {
+      "name": "13_10_14",
+      "t0_bits": 13,
+      "t1_bits": 10,
+      "t2_bits": 14,
+      "avg_ce": 10.2328,
+      "avg_accuracy": 0.0379,
+      "avg_ppl": 27800.54,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.23281069673788,
+          "accuracy": 0.03792960596548812,
+          "perplexity": 27800.53924347428
+        }
+      ]
+    },
+    {
+      "name": "13_11_13",
+      "t0_bits": 13,
+      "t1_bits": 11,
+      "t2_bits": 13,
+      "avg_ce": 10.2341,
+      "avg_accuracy": 0.0489,
+      "avg_ppl": 27837.39,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.234135482163891,
+          "accuracy": 0.048859960803683815,
+          "perplexity": 27837.3933992334
+        }
+      ]
+    },
+    {
+      "name": "13_12_12",
+      "t0_bits": 13,
+      "t1_bits": 12,
+      "t2_bits": 12,
+      "avg_ce": 10.2359,
+      "avg_accuracy": 0.0605,
+      "avg_ppl": 27887.44,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.235931722067185,
+          "accuracy": 0.06045553767467057,
+          "perplexity": 27887.440971327385
+        }
+      ]
+    },
+    {
+      "name": "13_13_11",
+      "t0_bits": 13,
+      "t1_bits": 13,
+      "t2_bits": 11,
+      "avg_ce": 10.2404,
+      "avg_accuracy": 0.0561,
+      "avg_ppl": 28012.48,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.24040549208771,
+          "accuracy": 0.056081802393205975,
+          "perplexity": 28012.482463578996
+        }
+      ]
+    },
+    {
+      "name": "13_14_10",
+      "t0_bits": 13,
+      "t1_bits": 14,
+      "t2_bits": 10,
+      "avg_ce": 10.2466,
+      "avg_accuracy": 0.0454,
+      "avg_ppl": 28185.63,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.246567710833553,
+          "accuracy": 0.04541434967575405,
+          "perplexity": 28185.6344604503
+        }
+      ]
+    },
+    {
+      "name": "13_15_9",
+      "t0_bits": 13,
+      "t1_bits": 15,
+      "t2_bits": 9,
+      "avg_ce": 10.258,
+      "avg_accuracy": 0.0244,
+      "avg_ppl": 28508.72,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.257965304549487,
+          "accuracy": 0.024366246554388873,
+          "perplexity": 28508.720575254156
+        }
+      ]
+    },
+    {
+      "name": "13_16_8",
+      "t0_bits": 13,
+      "t1_bits": 16,
+      "t2_bits": 8,
+      "avg_ce": 10.276,
+      "avg_accuracy": 0.0145,
+      "avg_ppl": 29028.15,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.276021309407666,
+          "accuracy": 0.014455633275441755,
+          "perplexity": 29028.149465836577
+        }
+      ]
+    },
+    {
+      "name": "14_8_11",
+      "t0_bits": 14,
+      "t1_bits": 8,
+      "t2_bits": 11,
+      "avg_ce": 10.2145,
+      "avg_accuracy": 0.0171,
+      "avg_ppl": 27296.38,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.21450932521923,
+          "accuracy": 0.01712448813753764,
+          "perplexity": 27296.37873265735
+        }
+      ]
+    },
+    {
+      "name": "14_9_12",
+      "t0_bits": 14,
+      "t1_bits": 9,
+      "t2_bits": 12,
+      "avg_ce": 10.2257,
+      "avg_accuracy": 0.022,
+      "avg_ppl": 27603.99,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.225715739965473,
+          "accuracy": 0.022000127467694905,
+          "perplexity": 27603.993684895086
+        }
+      ]
+    },
+    {
+      "name": "14_10_13",
+      "t0_bits": 14,
+      "t1_bits": 10,
+      "t2_bits": 13,
+      "avg_ce": 10.2406,
+      "avg_accuracy": 0.0377,
+      "avg_ppl": 28017.45,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.24058268467237,
+          "accuracy": 0.037698570768470864,
+          "perplexity": 28017.446507532364
+        }
+      ]
+    },
+    {
+      "name": "14_11_12",
+      "t0_bits": 14,
+      "t1_bits": 11,
+      "t2_bits": 12,
+      "avg_ce": 10.2416,
+      "avg_accuracy": 0.0525,
+      "avg_ppl": 28046.86,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.241631894081927,
+          "accuracy": 0.0524728732811778,
+          "perplexity": 28046.858102802944
+        }
+      ]
+    },
+    {
+      "name": "14_12_11",
+      "t0_bits": 14,
+      "t1_bits": 12,
+      "t2_bits": 11,
+      "avg_ce": 10.2453,
+      "avg_accuracy": 0.0592,
+      "avg_ppl": 28150.24,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.245311316848799,
+          "accuracy": 0.05924061120759708,
+          "perplexity": 28150.24443542034
+        }
+      ]
+    },
+    {
+      "name": "14_13_10",
+      "t0_bits": 14,
+      "t1_bits": 13,
+      "t2_bits": 10,
+      "avg_ce": 10.2522,
+      "avg_accuracy": 0.0453,
+      "avg_ppl": 28345.32,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.252217289290718,
+          "accuracy": 0.04534264909736938,
+          "perplexity": 28345.3220728082
+        }
+      ]
+    },
+    {
+      "name": "14_14_9",
+      "t0_bits": 14,
+      "t1_bits": 14,
+      "t2_bits": 9,
+      "avg_ce": 10.2646,
+      "avg_accuracy": 0.0212,
+      "avg_ppl": 28698.33,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.264594135346572,
+          "accuracy": 0.021239304663724288,
+          "perplexity": 28698.32780300419
+        }
+      ]
+    },
+    {
+      "name": "14_15_8",
+      "t0_bits": 14,
+      "t1_bits": 15,
+      "t2_bits": 8,
+      "avg_ce": 10.2852,
+      "avg_accuracy": 0.0121,
+      "avg_ppl": 29296.26,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.28521514768189,
+          "accuracy": 0.012117397747008492,
+          "perplexity": 29296.260172122835
+        }
+      ]
+    },
+    {
+      "name": "15_8_10",
+      "t0_bits": 15,
+      "t1_bits": 8,
+      "t2_bits": 10,
+      "avg_ce": 10.2307,
+      "avg_accuracy": 0.0162,
+      "avg_ppl": 27741.23,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.230675053006538,
+          "accuracy": 0.01615254696387884,
+          "perplexity": 27741.230549773074
+        }
+      ]
+    },
+    {
+      "name": "15_9_11",
+      "t0_bits": 15,
+      "t1_bits": 9,
+      "t2_bits": 11,
+      "avg_ce": 10.2394,
+      "avg_accuracy": 0.0197,
+      "avg_ppl": 27985.44,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.239439792617558,
+          "accuracy": 0.019673842035659087,
+          "perplexity": 27985.44388177963
+        }
+      ]
+    },
+    {
+      "name": "15_10_12",
+      "t0_bits": 15,
+      "t1_bits": 10,
+      "t2_bits": 12,
+      "avg_ce": 10.2524,
+      "avg_accuracy": 0.0348,
+      "avg_ppl": 28349.93,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.252379842668436,
+          "accuracy": 0.03480266407482354,
+          "perplexity": 28349.930075166678
+        }
+      ]
+    },
+    {
+      "name": "15_11_11",
+      "t0_bits": 15,
+      "t1_bits": 11,
+      "t2_bits": 11,
+      "avg_ce": 10.2553,
+      "avg_accuracy": 0.05,
+      "avg_ppl": 28432.89,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.25530182429959,
+          "accuracy": 0.04998725323050939,
+          "perplexity": 28432.889193575633
+        }
+      ]
+    },
+    {
+      "name": "15_12_10",
+      "t0_bits": 15,
+      "t1_bits": 12,
+      "t2_bits": 10,
+      "avg_ce": 10.2614,
+      "avg_accuracy": 0.043,
+      "avg_ppl": 28607.21,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.26141413795802,
+          "accuracy": 0.04301238029986775,
+          "perplexity": 28607.21214609338
+        }
+      ]
+    },
+    {
+      "name": "15_13_9",
+      "t0_bits": 15,
+      "t1_bits": 13,
+      "t2_bits": 9,
+      "avg_ce": 10.2746,
+      "avg_accuracy": 0.0185,
+      "avg_ppl": 28986.87,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.274598247205905,
+          "accuracy": 0.018490782492312105,
+          "perplexity": 28986.869982147426
+        }
+      ]
+    },
+    {
+      "name": "15_14_8",
+      "t0_bits": 15,
+      "t1_bits": 14,
+      "t2_bits": 8,
+      "avg_ce": 10.2965,
+      "avg_accuracy": 0.0107,
+      "avg_ppl": 29629.52,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.296526275502627,
+          "accuracy": 0.010679402813849366,
+          "perplexity": 29629.51510709219
+        }
+      ]
+    },
+    {
+      "name": "16_8_9",
+      "t0_bits": 16,
+      "t1_bits": 8,
+      "t2_bits": 9,
+      "avg_ce": 10.257,
+      "avg_accuracy": 0.0114,
+      "avg_ppl": 28480.48,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.256974362724531,
+          "accuracy": 0.011356574943037873,
+          "perplexity": 28480.484084330692
+        }
+      ]
+    },
+    {
+      "name": "16_9_10",
+      "t0_bits": 16,
+      "t1_bits": 9,
+      "t2_bits": 10,
+      "avg_ce": 10.2595,
+      "avg_accuracy": 0.0194,
+      "avg_ppl": 28553.51,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.25953529359764,
+          "accuracy": 0.01939102308758624,
+          "perplexity": 28553.51410781111
+        }
+      ]
+    },
+    {
+      "name": "16_10_11",
+      "t0_bits": 16,
+      "t1_bits": 10,
+      "t2_bits": 11,
+      "avg_ce": 10.27,
+      "avg_accuracy": 0.0308,
+      "avg_ppl": 28854.8,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.270031771934354,
+          "accuracy": 0.030815315243542963,
+          "perplexity": 28854.803924861073
+        }
+      ]
+    },
+    {
+      "name": "16_11_10",
+      "t0_bits": 16,
+      "t1_bits": 11,
+      "t2_bits": 10,
+      "avg_ce": 10.2754,
+      "avg_accuracy": 0.0348,
+      "avg_ppl": 29009.2,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.275368231037026,
+          "accuracy": 0.03483851436401587,
+          "perplexity": 29009.197998351086
+        }
+      ]
+    },
+    {
+      "name": "16_12_9",
+      "t0_bits": 16,
+      "t1_bits": 12,
+      "t2_bits": 9,
+      "avg_ce": 10.2878,
+      "avg_accuracy": 0.018,
+      "avg_ppl": 29370.72,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.287753670372993,
+          "accuracy": 0.017953028154427113,
+          "perplexity": 29370.72386723646
+        }
+      ]
+    },
+    {
+      "name": "16_13_8",
+      "t0_bits": 16,
+      "t1_bits": 13,
+      "t2_bits": 8,
+      "avg_ce": 10.3106,
+      "avg_accuracy": 0.0115,
+      "avg_ppl": 30049.93,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.310615661185626,
+          "accuracy": 0.01151989292713628,
+          "perplexity": 30049.931522807296
+        }
+      ]
+    },
+    {
+      "name": "8_8_10",
+      "t0_bits": 8,
+      "t1_bits": 8,
+      "t2_bits": 10,
+      "avg_ce": 10.1673,
+      "avg_accuracy": 0.0069,
+      "avg_ppl": 26037.59,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.167296647964731,
+          "accuracy": 0.006859355332133012,
+          "perplexity": 26037.592756038142
+        }
+      ]
+    },
+    {
+      "name": "8_9_11",
+      "t0_bits": 8,
+      "t1_bits": 9,
+      "t2_bits": 11,
+      "avg_ce": 10.176,
+      "avg_accuracy": 0.0073,
+      "avg_ppl": 26266.14,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.17603600324715,
+          "accuracy": 0.0073373591880307835,
+          "perplexity": 26266.141760664854
+        }
+      ]
+    },
+    {
+      "name": "8_10_12",
+      "t0_bits": 8,
+      "t1_bits": 10,
+      "t2_bits": 12,
+      "avg_ce": 10.1889,
+      "avg_accuracy": 0.0076,
+      "avg_ppl": 26607.37,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.18894351967905,
+          "accuracy": 0.007624161501569446,
+          "perplexity": 26607.36988335981
+        }
+      ]
+    },
+    {
+      "name": "8_11_11",
+      "t0_bits": 8,
+      "t1_bits": 11,
+      "t2_bits": 11,
+      "avg_ce": 10.1919,
+      "avg_accuracy": 0.0077,
+      "avg_ppl": 26686.2,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.191901776593877,
+          "accuracy": 0.007687895349022482,
+          "perplexity": 26686.19785851675
+        }
+      ]
+    },
+    {
+      "name": "8_12_10",
+      "t0_bits": 8,
+      "t1_bits": 12,
+      "t2_bits": 10,
+      "avg_ce": 10.198,
+      "avg_accuracy": 0.0076,
+      "avg_ppl": 26850.51,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.19804022434145,
+          "accuracy": 0.00762814486703526,
+          "perplexity": 26850.5134951693
+        }
+      ]
+    },
+    {
+      "name": "8_13_9",
+      "t0_bits": 8,
+      "t1_bits": 13,
+      "t2_bits": 9,
+      "avg_ce": 10.2112,
+      "avg_accuracy": 0.0068,
+      "avg_ppl": 27206.99,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.211229100688307,
+          "accuracy": 0.006783671388282532,
+          "perplexity": 27206.987173878555
+        }
+      ]
+    },
+    {
+      "name": "8_14_8",
+      "t0_bits": 8,
+      "t1_bits": 14,
+      "t2_bits": 8,
+      "avg_ce": 10.2331,
+      "avg_accuracy": 0.006,
+      "avg_ppl": 27809.94,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.233148833202952,
+          "accuracy": 0.0059710648332563215,
+          "perplexity": 27809.941209025263
+        }
+      ]
+    },
+    {
+      "name": "9_8_11",
+      "t0_bits": 9,
+      "t1_bits": 8,
+      "t2_bits": 11,
+      "avg_ce": 10.1723,
+      "avg_accuracy": 0.0078,
+      "avg_ppl": 26168.22,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.172301038672561,
+          "accuracy": 0.0077755293892704065,
+          "perplexity": 26168.221629619744
+        }
+      ]
+    },
+    {
+      "name": "9_9_12",
+      "t0_bits": 9,
+      "t1_bits": 9,
+      "t2_bits": 12,
+      "avg_ce": 10.1835,
+      "avg_accuracy": 0.0093,
+      "avg_ppl": 26462.51,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.183484368277098,
+          "accuracy": 0.009253357977087682,
+          "perplexity": 26462.511983121833
+        }
+      ]
+    },
+    {
+      "name": "9_10_13",
+      "t0_bits": 9,
+      "t1_bits": 10,
+      "t2_bits": 13,
+      "avg_ce": 10.1983,
+      "avg_accuracy": 0.0106,
+      "avg_ppl": 26858.07,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.19832162673496,
+          "accuracy": 0.01059973550453307,
+          "perplexity": 26858.070357143515
+        }
+      ]
+    },
+    {
+      "name": "9_11_12",
+      "t0_bits": 9,
+      "t1_bits": 11,
+      "t2_bits": 12,
+      "avg_ce": 10.1994,
+      "avg_accuracy": 0.011,
+      "avg_ppl": 26887.15,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.199403621204473,
+          "accuracy": 0.011014005512977805,
+          "perplexity": 26887.14636793651
+        }
+      ]
+    },
+    {
+      "name": "9_12_11",
+      "t0_bits": 9,
+      "t1_bits": 12,
+      "t2_bits": 11,
+      "avg_ce": 10.2031,
+      "avg_accuracy": 0.0111,
+      "avg_ppl": 26986.92,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.203107762394852,
+          "accuracy": 0.011133506476952248,
+          "perplexity": 26986.92483697275
+        }
+      ]
+    },
+    {
+      "name": "9_13_10",
+      "t0_bits": 9,
+      "t1_bits": 13,
+      "t2_bits": 10,
+      "avg_ce": 10.21,
+      "avg_accuracy": 0.0108,
+      "avg_ppl": 27174.34,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.21002856177826,
+          "accuracy": 0.010798903777823807,
+          "perplexity": 27174.343725936622
+        }
+      ]
+    },
+    {
+      "name": "9_14_9",
+      "t0_bits": 9,
+      "t1_bits": 14,
+      "t2_bits": 9,
+      "avg_ce": 10.2224,
+      "avg_accuracy": 0.0099,
+      "avg_ppl": 27512.48,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.222394971880508,
+          "accuracy": 0.00987077962428897,
+          "perplexity": 27512.479256842642
+        }
+      ]
+    },
+    {
+      "name": "9_15_8",
+      "t0_bits": 9,
+      "t1_bits": 15,
+      "t2_bits": 8,
+      "avg_ce": 10.243,
+      "avg_accuracy": 0.0078,
+      "avg_ppl": 28084.45,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.242971209198314,
+          "accuracy": 0.007839263236723444,
+          "perplexity": 28084.446849796957
+        }
+      ]
+    },
+    {
+      "name": "10_8_12",
+      "t0_bits": 10,
+      "t1_bits": 8,
+      "t2_bits": 12,
+      "avg_ce": 10.1812,
+      "avg_accuracy": 0.0094,
+      "avg_ppl": 26402.42,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.181211010614778,
+          "accuracy": 0.009416675961186087,
+          "perplexity": 26402.421558134523
+        }
+      ]
+    },
+    {
+      "name": "10_9_13",
+      "t0_bits": 10,
+      "t1_bits": 9,
+      "t2_bits": 13,
+      "avg_ce": 10.1943,
+      "avg_accuracy": 0.0127,
+      "avg_ppl": 26750.63,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.194313217718689,
+          "accuracy": 0.012714902566880706,
+          "perplexity": 26750.6277066685
+        }
+      ]
+    },
+    {
+      "name": "10_10_14",
+      "t0_bits": 10,
+      "t1_bits": 10,
+      "t2_bits": 14,
+      "avg_ce": 10.209,
+      "avg_accuracy": 0.0174,
+      "avg_ppl": 27145.3,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.208959071951238,
+          "accuracy": 0.01743120727840538,
+          "perplexity": 27145.29657734937
+        }
+      ]
+    },
+    {
+      "name": "10_11_13",
+      "t0_bits": 10,
+      "t1_bits": 11,
+      "t2_bits": 13,
+      "avg_ce": 10.2103,
+      "avg_accuracy": 0.0203,
+      "avg_ppl": 27181.87,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.210305475527283,
+          "accuracy": 0.020263380124599672,
+          "perplexity": 27181.86971731215
+        }
+      ]
+    },
+    {
+      "name": "10_12_12",
+      "t0_bits": 10,
+      "t1_bits": 12,
+      "t2_bits": 12,
+      "avg_ce": 10.2121,
+      "avg_accuracy": 0.0215,
+      "avg_ppl": 27231.29,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.212121853638717,
+          "accuracy": 0.02147830659167317,
+          "perplexity": 27231.287137267864
+        }
+      ]
+    },
+    {
+      "name": "10_13_11",
+      "t0_bits": 10,
+      "t1_bits": 13,
+      "t2_bits": 11,
+      "avg_ce": 10.2166,
+      "avg_accuracy": 0.0214,
+      "avg_ppl": 27353.78,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.21661005481548,
+          "accuracy": 0.02135880562769873,
+          "perplexity": 27353.781315874083
+        }
+      ]
+    },
+    {
+      "name": "10_14_10",
+      "t0_bits": 10,
+      "t1_bits": 14,
+      "t2_bits": 10,
+      "avg_ce": 10.2228,
+      "avg_accuracy": 0.0192,
+      "avg_ppl": 27523.07,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.222779875478892,
+          "accuracy": 0.0191639712560348,
+          "perplexity": 27523.070947368204
+        }
+      ]
+    },
+    {
+      "name": "10_15_9",
+      "t0_bits": 10,
+      "t1_bits": 15,
+      "t2_bits": 9,
+      "avg_ce": 10.2342,
+      "avg_accuracy": 0.0144,
+      "avg_ppl": 27838.22,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.234164996253599,
+          "accuracy": 0.01436799923519383,
+          "perplexity": 27838.21500668384
+        }
+      ]
+    },
+    {
+      "name": "10_16_8",
+      "t0_bits": 10,
+      "t1_bits": 16,
+      "t2_bits": 8,
+      "avg_ce": 10.2522,
+      "avg_accuracy": 0.0094,
+      "avg_ppl": 28344.42,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.252185352491251,
+          "accuracy": 0.009420659326651901,
+          "perplexity": 28344.416828396737
+        }
+      ]
+    },
+    {
+      "name": "11_8_13",
+      "t0_bits": 11,
+      "t1_bits": 8,
+      "t2_bits": 13,
+      "avg_ce": 10.194,
+      "avg_accuracy": 0.0135,
+      "avg_ppl": 26741.59,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.19397522919918,
+          "accuracy": 0.013487675467248769,
+          "perplexity": 26741.587829387438
+        }
+      ]
+    },
+    {
+      "name": "11_9_14",
+      "t0_bits": 11,
+      "t1_bits": 9,
+      "t2_bits": 14,
+      "avg_ce": 10.2069,
+      "avg_accuracy": 0.0176,
+      "avg_ppl": 27088.9,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.206879414783621,
+          "accuracy": 0.017562658338777265,
+          "perplexity": 27088.90232743354
+        }
+      ]
+    },
+    {
+      "name": "11_10_15",
+      "t0_bits": 11,
+      "t1_bits": 10,
+      "t2_bits": 15,
+      "avg_ce": 10.2208,
+      "avg_accuracy": 0.0247,
+      "avg_ppl": 27469.16,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.22081933059002,
+          "accuracy": 0.024684915791654053,
+          "perplexity": 27469.163592457982
+        }
+      ]
+    },
+    {
+      "name": "11_11_14",
+      "t0_bits": 11,
+      "t1_bits": 11,
+      "t2_bits": 14,
+      "avg_ce": 10.2229,
+      "avg_accuracy": 0.029,
+      "avg_ppl": 27527.74,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.222949569542628,
+          "accuracy": 0.029042717611255396,
+          "perplexity": 27527.74184542438
+        }
+      ]
+    },
+    {
+      "name": "11_12_13",
+      "t0_bits": 11,
+      "t1_bits": 12,
+      "t2_bits": 13,
+      "avg_ce": 10.225,
+      "avg_accuracy": 0.0318,
+      "avg_ppl": 27584.96,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.225025866611766,
+          "accuracy": 0.031803189879065025,
+          "perplexity": 27584.956992404426
+        }
+      ]
+    },
+    {
+      "name": "11_13_12",
+      "t0_bits": 11,
+      "t1_bits": 13,
+      "t2_bits": 12,
+      "avg_ce": 10.2276,
+      "avg_accuracy": 0.0316,
+      "avg_ppl": 27656.62,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.227620346247091,
+          "accuracy": 0.03164783862589825,
+          "perplexity": 27656.618523556073
+        }
+      ]
+    },
+    {
+      "name": "11_14_11",
+      "t0_bits": 11,
+      "t1_bits": 14,
+      "t2_bits": 11,
+      "avg_ce": 10.2314,
+      "avg_accuracy": 0.031,
+      "avg_ppl": 27760.83,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.23138140564608,
+          "accuracy": 0.031026433613231146,
+          "perplexity": 27760.832563348045
+        }
+      ]
+    },
+    {
+      "name": "11_15_10",
+      "t0_bits": 11,
+      "t1_bits": 15,
+      "t2_bits": 10,
+      "avg_ce": 10.2367,
+      "avg_accuracy": 0.0275,
+      "avg_ppl": 27910.01,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.236740770110668,
+          "accuracy": 0.02754497219610905,
+          "perplexity": 27910.012380328917
+        }
+      ]
+    },
+    {
+      "name": "11_16_9",
+      "t0_bits": 11,
+      "t1_bits": 16,
+      "t2_bits": 9,
+      "avg_ce": 10.246,
+      "avg_accuracy": 0.018,
+      "avg_ppl": 28168.87,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.245972638288903,
+          "accuracy": 0.017957011519892926,
+          "perplexity": 28168.866952665903
+        }
+      ]
+    },
+    {
+      "name": "12_8_14",
+      "t0_bits": 12,
+      "t1_bits": 8,
+      "t2_bits": 14,
+      "avg_ce": 10.2095,
+      "avg_accuracy": 0.017,
+      "avg_ppl": 27160.53,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.209520070282842,
+          "accuracy": 0.01704083746275553,
+          "perplexity": 27160.529315811094
+        }
+      ]
+    },
+    {
+      "name": "12_9_15",
+      "t0_bits": 12,
+      "t1_bits": 9,
+      "t2_bits": 15,
+      "avg_ce": 10.2217,
+      "avg_accuracy": 0.0225,
+      "avg_ppl": 27493.73,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.221713405937107,
+          "accuracy": 0.022545848536511526,
+          "perplexity": 27493.73407672649
+        }
+      ]
+    },
+    {
+      "name": "12_10_16",
+      "t0_bits": 12,
+      "t1_bits": 10,
+      "t2_bits": 16,
+      "avg_ce": 10.2348,
+      "avg_accuracy": 0.0325,
+      "avg_ppl": 27856.61,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.23482557578915,
+          "accuracy": 0.032500278835582604,
+          "perplexity": 27856.610436977022
+        }
+      ]
+    },
+    {
+      "name": "12_11_15",
+      "t0_bits": 12,
+      "t1_bits": 11,
+      "t2_bits": 15,
+      "avg_ce": 10.2379,
+      "avg_accuracy": 0.0409,
+      "avg_ppl": 27941.27,
+      "std_ce": 0.0,
+      "std_accuracy": 0.0,
+      "num_runs": 1,
+      "runs": [
+        {
+          "cross_entropy": 10.23786025669855,
+          "accuracy": 0.0408932298720543,
+          "perplexity": 27941.274760499007
+        }
+      ]
+    }
+  ]
+}
