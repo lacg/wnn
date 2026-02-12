@@ -31,7 +31,7 @@ python -u run_bitwise_optimization.py \
 	--population 50 \
 	--ts-iters 50 \
 	--neighbors 30 \
-	--patience 5 \
+	--patience 3 \
 	--check-interval 5 \
 	--output experiments/bitwise_fulldata_v4.json \
 	2>&1
