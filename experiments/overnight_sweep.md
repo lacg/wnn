@@ -110,6 +110,8 @@ The SPARSE backend experiments (16-20 bits) may show different patterns because:
 ### Complete Sweep Results
 
 Full WikiText-2 dataset (2.4M train, 251K val, 288K test tokens) with GA+TS optimization.
+Quick answer on your question: GPT-2 small (124M params) scores ~29.4 PPL / ~3.38 CE on WikiText-2 test. The larger variants: medium (355M) ~22.8 PPL, large (774M) ~19.9 PPL,  
+  XL (1.5B) ~18.3 PPL.
 
 #### Overall Rankings (by Test PPL)
 
@@ -228,6 +230,76 @@ python tests/ramlm_full_benchmark.py --sweep --set extended
 python tests/ramlm_full_benchmark.py --sweep --experiments five_tier_gradient \
     --ga-gens 1000 --ts-iters 1000 --patience 5
 ```
+
+---
+
+## Bitwise Context Sweep (2026-02-11)
+
+### Background
+
+Systematic evaluation of context sizes 2-16 using the bitwise RAMLM architecture with full WikiText-2 data (2.4M train tokens). Each context size was tested with a 16-config grid search (neurons: 50, 100, 150, 200 x bits: 14, 16, 18, 20) followed by full 7-phase optimization (GA+TS for neurons, bits, and connections).
+
+### Results Summary
+
+| Context | Best CE | Best PPL | Best Acc | Winner Config | Total Input Bits |
+|---------|---------|----------|----------|---------------|-----------------|
+| **2** | **9.0844** | **8,816** | **10.04%** | n=200, b=18 | 32 |
+| **3** | **9.0862** | **8,833** | **7.84%** | n=200, b=20 | 48 |
+| 4 | 9.1430 | 9,349 | 6.46% | n=200, b=20 | 64 |
+| 5 | 9.2042 | 9,938 | 5.08% | n=200, b=20 | 80 |
+| 6 | 9.2477 | 10,381 | 4.05% | n=200, b=20 | 96 |
+| 7 | 9.2741 | 10,659 | 3.21% | n=200, b=20 | 112 |
+| 8 | 9.2926 | 10,857 | 2.64% | n=200, b=20 | 128 |
+| 16 | 9.3685 | 11,713 | 0.34% | n=200, b=20 | 256 |
+
+### Winners
+
+| Metric | Context | Value | Config |
+|--------|---------|-------|--------|
+| Best CE/PPL | 2 | CE=9.0844, PPL=8,816 | n=200, b=18 |
+| Best Accuracy | 2 | 10.04% | n=200, b=18 |
+| Runner-up CE | 3 | CE=9.0862, PPL=8,833 | n=200, b=20 |
+| Runner-up Acc | 3 | 7.84% | n=200, b=20 |
+
+**Context=2 wins on both CE and accuracy.** Context=3 is a close second on CE (only +0.002 nats) but loses ~22% accuracy.
+
+### Context Degradation Analysis
+
+| Context | PPL vs ctx=2 | Acc vs ctx=2 | CE Penalty |
+|---------|-------------|-------------|------------|
+| 2 | baseline | baseline | — |
+| 3 | +0.2% | -21.9% | +0.002 |
+| 4 | +6.0% | -35.7% | +0.059 |
+| 5 | +12.7% | -49.4% | +0.120 |
+| 6 | +17.7% | -59.7% | +0.163 |
+| 7 | +20.9% | -68.0% | +0.190 |
+| 8 | +23.2% | -73.7% | +0.208 |
+| 16 | +32.9% | -96.6% | +0.284 |
+
+### Key Insights
+
+1. **Context=2 is the sweet spot**: Both best CE and best accuracy. The 32-bit address space (2 tokens x 16 clusters) is small enough to be well-covered by 2.4M training examples.
+
+2. **Monotonic degradation**: Every additional context token makes things worse — both CE and accuracy degrade consistently. There are no "jumps" where more context suddenly helps.
+
+3. **Address space explosion**: Context=2 has 2^32 possible addresses. Context=8 has 2^128. With only 2.4M training examples, larger context = sparser memory = more EMPTY cells = worse predictions.
+
+4. **Accuracy collapses faster than CE**: Going from ctx=2 to ctx=8 loses 74% of accuracy but only 23% of PPL. This is because accuracy requires the correct token to be the argmax winner — harder with sparser predictions.
+
+5. **All configs converge on n=200, b=20**: Except ctx=2 which favors b=18. More neurons and bits help because they compensate for context-induced sparsity.
+
+6. **Contrast with transformers**: GPT-2 small uses context=1024 and achieves PPL ~29.4. RAM WNNs cannot use selective attention — all context bits contribute to the address, making longer context a liability rather than an asset.
+
+### Comparison with Tiered Architecture
+
+These results use uniform (non-tiered) bitwise RAMLM. The best tiered result (EMPTY=0.0, 5-tier, context=4) achieved PPL=26,986 — significantly better than the uniform ctx=2 result (PPL=8,816... wait, that's actually better!).
+
+**Important note**: The bitwise RAMLM PPL numbers are NOT directly comparable to the tiered RAMLM numbers because:
+- Bitwise RAMLM uses per-bit output encoding (16 binary predictions per token)
+- Tiered RAMLM uses per-cluster output (50K-way softmax)
+- CE is computed differently (binary CE vs categorical CE)
+
+The bitwise CE ~9.08 corresponds to the per-bit cross-entropy across 16 output bits, not the categorical CE across 50K tokens.
 
 ---
 
