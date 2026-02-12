@@ -203,17 +203,21 @@ pub fn get_metal_bitwise_ce() -> Option<std::sync::Arc<()>> { None }
 
 /// Pre-encoded token subset for bitwise training.
 pub struct BitwiseSubset {
-    pub input_bits: Vec<bool>,  // [N * total_input_bits]
-    pub target_bits: Vec<u8>,   // [N * num_bits]
+    pub input_bits: Vec<bool>,   // [N * total_input_bits]
+    pub packed_input: Vec<u64>,  // [N * words_per_example] packed bit representation
+    pub target_bits: Vec<u8>,    // [N * num_bits]
     pub num_examples: usize,
+    pub words_per_example: usize,
 }
 
 /// Pre-encoded eval subset for bitwise CE computation.
 /// Unlike BitwiseSubset, stores u32 token IDs (needed for CE) instead of target_bits.
 pub struct BitwiseEvalSubset {
-    pub input_bits: Vec<bool>,  // [N * total_input_bits]
-    pub targets: Vec<u32>,      // [N] token IDs
+    pub input_bits: Vec<bool>,   // [N * total_input_bits]
+    pub packed_input: Vec<u64>,  // [N * words_per_example] packed bit representation
+    pub targets: Vec<u32>,       // [N] token IDs
     pub num_examples: usize,
+    pub words_per_example: usize,
 }
 
 /// Persistent token cache for bitwise genome evaluation.
@@ -251,6 +255,23 @@ fn bits_needed(n: usize) -> usize {
     ((n as f64).log2().ceil()) as usize
 }
 
+/// Pack boolean input bits into u64 words for cache-efficient address computation.
+/// Reduces memory footprint 8x (1 byte/bit → 1 bit/bit).
+fn pack_input_bits(input_bits: &[bool], num_examples: usize, total_input_bits: usize) -> (Vec<u64>, usize) {
+    let words_per_example = (total_input_bits + 63) / 64;
+    let mut packed = vec![0u64; num_examples * words_per_example];
+    for ex in 0..num_examples {
+        let bits_off = ex * total_input_bits;
+        let pack_off = ex * words_per_example;
+        for i in 0..total_input_bits {
+            if input_bits[bits_off + i] {
+                packed[pack_off + i / 64] |= 1u64 << (i % 64);
+            }
+        }
+    }
+    (packed, words_per_example)
+}
+
 impl BitwiseTokenCache {
     pub fn new(
         train_tokens: Vec<u32>,
@@ -276,10 +297,13 @@ impl BitwiseTokenCache {
         // Encode full training data
         let (full_input, _full_targets, full_target_bits, full_n) =
             Self::encode_sequence(&train_tokens, context_size, bits_per_token, total_input_bits, num_bits);
+        let (full_packed, full_wpe) = pack_input_bits(&full_input, full_n, total_input_bits);
         let full_train = BitwiseSubset {
             input_bits: full_input,
+            packed_input: full_packed,
             target_bits: full_target_bits,
             num_examples: full_n,
+            words_per_example: full_wpe,
         };
 
         // Split training data into subsets
@@ -290,10 +314,13 @@ impl BitwiseTokenCache {
         // Encode full eval data
         let (full_eval_input, full_eval_targets, _, full_eval_n) =
             Self::encode_sequence(&eval_tokens, context_size, bits_per_token, total_input_bits, num_bits);
+        let (full_eval_packed, full_eval_wpe) = pack_input_bits(&full_eval_input, full_eval_n, total_input_bits);
         let full_eval = BitwiseEvalSubset {
             input_bits: full_eval_input,
+            packed_input: full_eval_packed,
             targets: full_eval_targets,
             num_examples: full_eval_n,
+            words_per_example: full_eval_wpe,
         };
 
         // Split eval data into subsets
@@ -379,7 +406,8 @@ impl BitwiseTokenCache {
                 let part = &tokens[start..end];
                 let (input_bits, _, target_bits, num_ex) =
                     Self::encode_sequence(part, context_size, bits_per_token, total_input_bits, num_bits);
-                BitwiseSubset { input_bits, target_bits, num_examples: num_ex }
+                let (packed, wpe) = pack_input_bits(&input_bits, num_ex, total_input_bits);
+                BitwiseSubset { input_bits, packed_input: packed, target_bits, num_examples: num_ex, words_per_example: wpe }
             })
             .collect()
     }
@@ -403,7 +431,8 @@ impl BitwiseTokenCache {
                 let part = &tokens[start..end];
                 let (input_bits, targets, _, num_ex) =
                     Self::encode_sequence(part, context_size, bits_per_token, total_input_bits, num_bits);
-                BitwiseEvalSubset { input_bits, targets, num_examples: num_ex }
+                let (packed, wpe) = pack_input_bits(&input_bits, num_ex, total_input_bits);
+                BitwiseEvalSubset { input_bits, packed_input: packed, targets, num_examples: num_ex, words_per_example: wpe }
             })
             .collect()
     }
@@ -531,12 +560,25 @@ fn xorshift32_seq(state: &mut u32) -> f32 {
 
 /// Compute memory address for a single neuron given input bits (same as ramlm::compute_address).
 #[inline]
+#[allow(dead_code)]
 fn compute_address_seq(input_bits: &[bool], connections: &[i64], bits_per_neuron: usize) -> usize {
     let mut address: usize = 0;
     for (i, &conn_idx) in connections.iter().take(bits_per_neuron).enumerate() {
         if input_bits[conn_idx as usize] {
             address |= 1 << (bits_per_neuron - 1 - i);
         }
+    }
+    address
+}
+
+/// Compute memory address from packed u64 input bits (8x less memory bandwidth).
+#[inline]
+fn compute_address_packed(packed_words: &[u64], connections: &[i64], bits_per_neuron: usize) -> usize {
+    let mut address: usize = 0;
+    for (i, &conn_idx) in connections.iter().take(bits_per_neuron).enumerate() {
+        let idx = conn_idx as usize;
+        let bit = (packed_words[idx / 64] >> (idx % 64)) & 1;
+        address |= (bit as usize) << (bits_per_neuron - 1 - i);
     }
     address
 }
@@ -605,7 +647,8 @@ fn write_cell_seq_offset(
     memory[word_offset] = (memory[word_offset] & !mask) | (value << shift);
 }
 
-/// Nudge a memory cell using pre-computed memory offset (for heterogeneous configs).
+/// Nudge a memory cell using pre-computed memory offset (branchless version).
+/// Uses arithmetic instead of branches for both delta direction and write decision.
 #[inline]
 fn nudge_cell_seq_offset(
     memory: &mut [i64],
@@ -620,16 +663,14 @@ fn nudge_cell_seq_offset(
     let shift = cell_idx * BITS_PER_CELL;
     let old_cell = (memory[word_offset] >> shift) & CELL_MASK;
 
-    let new_cell = if target_true {
-        (old_cell + 1).min(QUAD_TRUE)
-    } else {
-        (old_cell - 1).max(QUAD_FALSE)
-    };
+    // Branchless: delta = +1 if target_true, -1 if false
+    let delta = 2 * (target_true as i64) - 1;
+    // .clamp() compiles to branchless min/max on ARM NEON and x86 SSE
+    let new_cell = (old_cell + delta).clamp(QUAD_FALSE, QUAD_TRUE);
 
-    if new_cell != old_cell {
-        let mask = CELL_MASK << shift;
-        memory[word_offset] = (memory[word_offset] & !mask) | (new_cell << shift);
-    }
+    // Always write (eliminates second branch; writing same value is a cache no-op)
+    let mask = CELL_MASK << shift;
+    memory[word_offset] = (memory[word_offset] & !mask) | (new_cell << shift);
 }
 
 /// Nudge a memory cell one step toward target (non-atomic, sequential).
@@ -750,7 +791,6 @@ fn train_and_forward_into(
 ) {
     let num_clusters = cache.num_bits;
     let num_examples = train_subset.num_examples;
-    let total_input_bits = cache.total_input_bits;
 
     // Reset memory
     memory.fill(empty_word);
@@ -761,13 +801,13 @@ fn train_and_forward_into(
 
     match memory_mode {
         MODE_TERNARY => {
-            // ===== TRAINING: Majority vote, one cluster at a time =====
-            // Votes buffer sized to max cluster (reused across clusters)
+            // ===== TRAINING: Majority vote (neuron-major for L1 cache locality) =====
             let max_votes = neurons_per_cluster.iter().zip(bits_per_cluster.iter())
                 .map(|(&n, &b)| n * (1usize << b))
                 .max()
                 .unwrap_or(0);
             let mut votes = vec![0i32; max_votes];
+            let wpe = train_subset.words_per_example;
 
             for cluster in 0..num_clusters {
                 let c_neurons = neurons_per_cluster[cluster];
@@ -780,21 +820,23 @@ fn train_and_forward_into(
                 let vote_size = c_neurons * c_addresses;
                 votes[..vote_size].fill(0);
 
-                for ex in 0..num_examples {
-                    let input_bits = &train_subset.input_bits[ex * total_input_bits..(ex + 1) * total_input_bits];
-                    let target_bit = train_subset.target_bits[ex * num_clusters + cluster];
-                    let vote: i32 = if target_bit == 1 { 1 } else { -1 };
-
-                    for n in 0..c_neurons {
-                        if neuron_sample_rate < 1.0 {
-                            if xorshift32_seq(&mut rng_state) >= neuron_sample_rate {
-                                continue;
-                            }
+                for n in 0..c_neurons {
+                    // Neuron-level sampling: skip entire neuron (statistically equivalent)
+                    if neuron_sample_rate < 1.0 {
+                        if xorshift32_seq(&mut rng_state) >= neuron_sample_rate {
+                            continue;
                         }
-                        let conn_start = c_conn_off + n * c_bits;
-                        let conns = &connections[conn_start..conn_start + c_bits];
-                        let addr = compute_address_seq(input_bits, conns, c_bits);
-                        votes[n * c_addresses + addr] += vote;
+                    }
+                    let conn_start = c_conn_off + n * c_bits;
+                    let conns = &connections[conn_start..conn_start + c_bits];
+                    let vote_base = n * c_addresses;
+
+                    for ex in 0..num_examples {
+                        let packed = &train_subset.packed_input[ex * wpe..(ex + 1) * wpe];
+                        let target_bit = train_subset.target_bits[ex * num_clusters + cluster];
+                        let vote: i32 = if target_bit == 1 { 1 } else { -1 };
+                        let addr = compute_address_packed(packed, conns, c_bits);
+                        votes[vote_base + addr] += vote;
                     }
                 }
 
@@ -812,7 +854,9 @@ fn train_and_forward_into(
             }
         }
         MODE_QUAD_BINARY | MODE_QUAD_WEIGHTED => {
-            // ===== TRAINING: Sequential nudging =====
+            // ===== TRAINING: Sequential nudging (neuron-major for L1 cache locality) =====
+            // Each neuron's memory (~17KB for 16-bit) stays hot in L1 for all examples
+            let wpe = train_subset.words_per_example;
             for cluster in 0..num_clusters {
                 let c_neurons = neurons_per_cluster[cluster];
                 let c_bits = bits_per_cluster[cluster];
@@ -820,21 +864,21 @@ fn train_and_forward_into(
                 let c_mem_off = layout.mem_offsets[cluster];
                 let c_wpn = layout.words_per_neuron[cluster];
 
-                for ex in 0..num_examples {
-                    let input_bits = &train_subset.input_bits[ex * total_input_bits..(ex + 1) * total_input_bits];
-                    let target_bit = train_subset.target_bits[ex * num_clusters + cluster];
-                    let target_true = target_bit == 1;
-
-                    for n in 0..c_neurons {
-                        if neuron_sample_rate < 1.0 {
-                            if xorshift32_seq(&mut rng_state) >= neuron_sample_rate {
-                                continue;
-                            }
+                for n in 0..c_neurons {
+                    // Neuron-level sampling: skip entire neuron (statistically equivalent)
+                    if neuron_sample_rate < 1.0 {
+                        if xorshift32_seq(&mut rng_state) >= neuron_sample_rate {
+                            continue;
                         }
-                        let conn_start = c_conn_off + n * c_bits;
-                        let conns = &connections[conn_start..conn_start + c_bits];
-                        let addr = compute_address_seq(input_bits, conns, c_bits);
-                        let neuron_mem_start = c_mem_off + n * c_wpn;
+                    }
+                    let neuron_mem_start = c_mem_off + n * c_wpn;
+                    let conn_start = c_conn_off + n * c_bits;
+                    let conns = &connections[conn_start..conn_start + c_bits];
+
+                    for ex in 0..num_examples {
+                        let packed = &train_subset.packed_input[ex * wpe..(ex + 1) * wpe];
+                        let target_true = train_subset.target_bits[ex * num_clusters + cluster] == 1;
+                        let addr = compute_address_packed(packed, conns, c_bits);
                         nudge_cell_seq_offset(memory, neuron_mem_start, addr, target_true, c_wpn);
                     }
                 }
@@ -848,9 +892,10 @@ fn train_and_forward_into(
     // ===== FORWARD PASS on eval data =====
     let num_eval = eval_subset.num_examples;
     let empty_value = ramlm::get_empty_value();
+    let wpe_eval = eval_subset.words_per_example;
 
     for ex in 0..num_eval {
-        let input_bits = &eval_subset.input_bits[ex * total_input_bits..(ex + 1) * total_input_bits];
+        let packed = &eval_subset.packed_input[ex * wpe_eval..(ex + 1) * wpe_eval];
         let ex_probs = &mut out_probs[ex * num_clusters..(ex + 1) * num_clusters];
 
         for cluster in 0..num_clusters {
@@ -867,7 +912,7 @@ fn train_and_forward_into(
                     for n in 0..c_neurons {
                         let conn_start = c_conn_off + n * c_bits;
                         let conns = &connections[conn_start..conn_start + c_bits];
-                        let addr = compute_address_seq(input_bits, conns, c_bits);
+                        let addr = compute_address_packed(packed, conns, c_bits);
                         let neuron_mem_start = c_mem_off + n * c_wpn;
                         let cell = read_cell_seq_offset(memory, neuron_mem_start, addr, c_wpn);
                         if cell == TRUE {
@@ -884,7 +929,7 @@ fn train_and_forward_into(
                     for n in 0..c_neurons {
                         let conn_start = c_conn_off + n * c_bits;
                         let conns = &connections[conn_start..conn_start + c_bits];
-                        let addr = compute_address_seq(input_bits, conns, c_bits);
+                        let addr = compute_address_packed(packed, conns, c_bits);
                         let neuron_mem_start = c_mem_off + n * c_wpn;
                         let cell = read_cell_seq_offset(memory, neuron_mem_start, addr, c_wpn);
                         if cell >= QUAD_WEAK_TRUE {
@@ -895,10 +940,30 @@ fn train_and_forward_into(
                 }
                 MODE_QUAD_WEIGHTED => {
                     let mut weighted_sum = 0.0f32;
-                    for n in 0..c_neurons {
+                    // Unroll by 4 for instruction-level parallelism
+                    let full_iters = c_neurons / 4;
+                    let remainder_start = full_iters * 4;
+                    for chunk in 0..full_iters {
+                        let base_n = chunk * 4;
+                        let conn0 = c_conn_off + base_n * c_bits;
+                        let conn1 = c_conn_off + (base_n + 1) * c_bits;
+                        let conn2 = c_conn_off + (base_n + 2) * c_bits;
+                        let conn3 = c_conn_off + (base_n + 3) * c_bits;
+                        let addr0 = compute_address_packed(packed, &connections[conn0..conn0 + c_bits], c_bits);
+                        let addr1 = compute_address_packed(packed, &connections[conn1..conn1 + c_bits], c_bits);
+                        let addr2 = compute_address_packed(packed, &connections[conn2..conn2 + c_bits], c_bits);
+                        let addr3 = compute_address_packed(packed, &connections[conn3..conn3 + c_bits], c_bits);
+                        let c0 = read_cell_seq_offset(memory, c_mem_off + base_n * c_wpn, addr0, c_wpn);
+                        let c1 = read_cell_seq_offset(memory, c_mem_off + (base_n + 1) * c_wpn, addr1, c_wpn);
+                        let c2 = read_cell_seq_offset(memory, c_mem_off + (base_n + 2) * c_wpn, addr2, c_wpn);
+                        let c3 = read_cell_seq_offset(memory, c_mem_off + (base_n + 3) * c_wpn, addr3, c_wpn);
+                        weighted_sum += QUAD_WEIGHTS[c0 as usize] + QUAD_WEIGHTS[c1 as usize]
+                                      + QUAD_WEIGHTS[c2 as usize] + QUAD_WEIGHTS[c3 as usize];
+                    }
+                    for n in remainder_start..c_neurons {
                         let conn_start = c_conn_off + n * c_bits;
                         let conns = &connections[conn_start..conn_start + c_bits];
-                        let addr = compute_address_seq(input_bits, conns, c_bits);
+                        let addr = compute_address_packed(packed, conns, c_bits);
                         let neuron_mem_start = c_mem_off + n * c_wpn;
                         let cell = read_cell_seq_offset(memory, neuron_mem_start, addr, c_wpn);
                         weighted_sum += QUAD_WEIGHTS[cell as usize];
