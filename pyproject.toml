@@ -1,5 +1,5 @@
 [project]
-name = "wnn"
+name = "ram-wnn"
 version = "0.1.0"
 description = "Weightless Neural Networks for Language Modeling — RAM-based neurons in PyTorch"
 authors = [{name="Luiz Alberto Crispiniano Garcia"}]
