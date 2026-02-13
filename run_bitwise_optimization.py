@@ -36,6 +36,130 @@ from wnn.logger import Logger
 
 
 # ---------------------------------------------------------------------------
+# Correlation analysis (Pearson + Spearman, pure Python — no scipy needed)
+# ---------------------------------------------------------------------------
+
+def _pearson(x: list[float], y: list[float]) -> float:
+	"""Pearson correlation coefficient between x and y."""
+	n = len(x)
+	if n < 3:
+		return 0.0
+	mx = sum(x) / n
+	my = sum(y) / n
+	cov = sum((xi - mx) * (yi - my) for xi, yi in zip(x, y))
+	sx = sum((xi - mx) ** 2 for xi in x) ** 0.5
+	sy = sum((yi - my) ** 2 for yi in y) ** 0.5
+	if sx == 0 or sy == 0:
+		return 0.0
+	return cov / (sx * sy)
+
+
+def _rank(values: list[float]) -> list[float]:
+	"""Assign ranks (1-based, average ties) to values."""
+	n = len(values)
+	indexed = sorted(range(n), key=lambda i: values[i])
+	ranks = [0.0] * n
+	i = 0
+	while i < n:
+		j = i
+		while j < n - 1 and values[indexed[j + 1]] == values[indexed[j]]:
+			j += 1
+		avg_rank = (i + j) / 2.0 + 1.0  # 1-based average rank for ties
+		for k in range(i, j + 1):
+			ranks[indexed[k]] = avg_rank
+		i = j + 1
+	return ranks
+
+
+def _spearman(x: list[float], y: list[float]) -> float:
+	"""Spearman rank correlation coefficient between x and y."""
+	if len(x) < 3:
+		return 0.0
+	return _pearson(_rank(x), _rank(y))
+
+
+def compute_phase_correlations(
+	generation_log: list[tuple[int, float, float, float, float, float, float]],
+	logger=print,
+) -> dict:
+	"""Compute Pearson and Spearman correlations between CE, Acc, and BitAcc.
+
+	Uses per-generation data from BitwiseEvaluator.generation_log.
+	Each entry: (gen, best_ce, best_acc, best_bit_acc, mean_ce, mean_acc, mean_bit_acc)
+
+	Returns dict with correlation values for JSON serialization.
+	"""
+	if len(generation_log) < 5:
+		logger(f"  Correlations: insufficient data ({len(generation_log)} generations, need >= 5)")
+		return {"insufficient_data": True, "n_generations": len(generation_log)}
+
+	# Extract series
+	best_ce = [e[1] for e in generation_log]
+	best_acc = [e[2] for e in generation_log]
+	best_bit_acc = [e[3] for e in generation_log]
+	mean_ce = [e[4] for e in generation_log]
+	mean_acc = [e[5] for e in generation_log]
+	mean_bit_acc = [e[6] for e in generation_log]
+
+	# Compute correlations (best genome metrics)
+	corr = {
+		"n_generations": len(generation_log),
+		"best": {
+			"ce_vs_bit_acc": {
+				"pearson": round(_pearson(best_ce, best_bit_acc), 4),
+				"spearman": round(_spearman(best_ce, best_bit_acc), 4),
+			},
+			"acc_vs_bit_acc": {
+				"pearson": round(_pearson(best_acc, best_bit_acc), 4),
+				"spearman": round(_spearman(best_acc, best_bit_acc), 4),
+			},
+			"ce_vs_acc": {
+				"pearson": round(_pearson(best_ce, best_acc), 4),
+				"spearman": round(_spearman(best_ce, best_acc), 4),
+			},
+		},
+		"mean": {
+			"ce_vs_bit_acc": {
+				"pearson": round(_pearson(mean_ce, mean_bit_acc), 4),
+				"spearman": round(_spearman(mean_ce, mean_bit_acc), 4),
+			},
+			"acc_vs_bit_acc": {
+				"pearson": round(_pearson(mean_acc, mean_bit_acc), 4),
+				"spearman": round(_spearman(mean_acc, mean_bit_acc), 4),
+			},
+			"ce_vs_acc": {
+				"pearson": round(_pearson(mean_ce, mean_acc), 4),
+				"spearman": round(_spearman(mean_ce, mean_acc), 4),
+			},
+		},
+	}
+
+	# Log summary
+	logger(f"\n  Correlation Analysis ({len(generation_log)} generations):")
+	logger(f"  ┌─────────────────────┬──────────┬──────────┐")
+	logger(f"  │ Metric Pair (best)  │ Pearson  │ Spearman │")
+	logger(f"  ├─────────────────────┼──────────┼──────────┤")
+	for pair_name, label in [("ce_vs_bit_acc", "CE ↔ BitAcc"), ("acc_vs_bit_acc", "Acc ↔ BitAcc"), ("ce_vs_acc", "CE ↔ Acc")]:
+		p = corr["best"][pair_name]["pearson"]
+		s = corr["best"][pair_name]["spearman"]
+		logger(f"  │ {label:<19s} │ {p:+7.4f}  │ {s:+7.4f}  │")
+	logger(f"  └─────────────────────┴──────────┴──────────┘")
+
+	# Interpret
+	ce_ba_p = corr["best"]["ce_vs_bit_acc"]["pearson"]
+	if ce_ba_p < -0.5:
+		logger(f"  → CE and BitAcc are negatively correlated (r={ce_ba_p:+.3f}): BitAcc improves as CE improves")
+		logger(f"    BitAcc is a good proxy for CE — consider using it in fitness ranking")
+	elif abs(ce_ba_p) < 0.3:
+		logger(f"  → CE and BitAcc are weakly correlated (r={ce_ba_p:+.3f}): CE improvements come from elsewhere")
+		logger(f"    BitAcc alone may not capture what drives CE — reconstruction matters more")
+	else:
+		logger(f"  → CE and BitAcc correlation: r={ce_ba_p:+.3f}")
+
+	return corr
+
+
+# ---------------------------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------------------------
 
@@ -760,6 +884,11 @@ def main():
 		if best_bit_acc is not None:
 			logger(f"  Best genome BitAcc={best_bit_acc:.2%}")
 
+		# Correlation analysis from per-generation metrics
+		correlations = compute_phase_correlations(opt_evaluator.generation_log, logger=log)
+		all_results[result_key]["correlations"] = correlations
+		opt_evaluator.clear_generation_log()
+
 		# Full-eval 1-3 genomes on validation
 		metrics = evaluate_phase_top_k(full_evaluator, result, f"P{phase_num} {phase_name}", logger=log)
 		phase_metrics_list.append(metrics)
@@ -809,6 +938,11 @@ def main():
 
 		if best_bit_acc is not None:
 			logger(f"  Best genome BitAcc={best_bit_acc:.2%}")
+
+		# Correlation analysis from per-generation metrics
+		correlations = compute_phase_correlations(opt_evaluator.generation_log, logger=log)
+		all_results[result_key]["correlations"] = correlations
+		opt_evaluator.clear_generation_log()
 
 		# Full-eval 1-3 genomes on validation
 		metrics = evaluate_phase_top_k(full_evaluator, result, f"P{phase_num} {phase_name}", logger=log)

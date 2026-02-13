@@ -82,6 +82,10 @@ class BitwiseEvaluator:
 		self._train_rotation_idx = 0
 		self._eval_rotation_idx = 0
 
+		# Per-generation metrics history for correlation tracking
+		# Each entry: (generation, best_ce, best_acc, best_bit_acc, mean_ce, mean_acc, mean_bit_acc)
+		self._generation_log: list[tuple[int, float, float, float, float, float, float]] = []
+
 		# Try Rust+Metal backend
 		self._rust_cache = None
 		try:
@@ -320,8 +324,17 @@ class BitwiseEvaluator:
 				best_ce = min(r[0] for r in results) if results else 0.0
 				best_acc = max(r[1] for r in results) if results else 0.0
 				best_bit_acc = max(r[2] for r in results) if results else 0.0
+				n = len(results)
+				mean_ce = sum(r[0] for r in results) / n if n else 0.0
+				mean_acc = sum(r[1] for r in results) / n if n else 0.0
+				mean_bit_acc = sum(r[2] for r in results) / n if n else 0.0
 				log(f"[Gen {gen:02d}/{total}] {len(genomes)} genomes in {elapsed:.1f}s "
 					f"(best CE={best_ce:.4f}, Acc={best_acc:.2%}, BitAcc={best_bit_acc:.2%})")
+				# Record for correlation tracking
+				self._generation_log.append((
+					generation, best_ce, best_acc, best_bit_acc,
+					mean_ce, mean_acc, mean_bit_acc,
+				))
 			return results
 
 		# Python fallback (no bit_acc available)
@@ -518,6 +531,18 @@ class BitwiseEvaluator:
 		log(f"  Delta:   CE={results['ce_improvement']:+.4f}, Acc={results['acc_improvement']:+.2%}")
 
 		return results
+
+	@property
+	def generation_log(self) -> list[tuple[int, float, float, float, float, float, float]]:
+		"""Per-generation metrics from evaluate_batch calls.
+
+		Each entry: (generation, best_ce, best_acc, best_bit_acc, mean_ce, mean_acc, mean_bit_acc)
+		"""
+		return self._generation_log
+
+	def clear_generation_log(self) -> None:
+		"""Clear per-generation metrics (call between phases)."""
+		self._generation_log.clear()
 
 	def reset(self, seed: Optional[int] = None) -> None:
 		"""Reset subset rotation (both train and eval)."""
