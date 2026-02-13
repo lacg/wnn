@@ -69,7 +69,7 @@ mod metal_ramlm {
         pub fn device_info() -> Result<String, String> { Err("Metal not available on this platform".into()) }
         pub fn forward_batch(
             &self, _: &[bool], _: &[i64], _: &[i64],
-            _: usize, _: usize, _: usize, _: usize, _: usize, _: usize, _: usize,
+            _: usize, _: usize, _: usize, _: usize, _: usize, _: usize, _: usize, _: u8,
         ) -> Result<Vec<f32>, String> { Err("Metal not available on this platform".into()) }
     }
 
@@ -78,11 +78,11 @@ mod metal_ramlm {
         pub fn new() -> Result<Self, String> { Err("Metal not available on this platform".into()) }
         pub fn forward_batch_sparse(
             &self, _: &[bool], _: &[i64], _: &[u64], _: &[u8], _: &[u32], _: &[u32],
-            _: usize, _: usize, _: usize, _: usize, _: usize, _: usize,
+            _: usize, _: usize, _: usize, _: usize, _: usize, _: usize, _: u8,
         ) -> Result<Vec<f32>, String> { Err("Metal not available on this platform".into()) }
         pub fn forward_batch_general(
             &self, _: &[bool], _: &[i64], _: &[u64], _: &[u8], _: &[u32], _: &[u32],
-            _: &[(u32, u32, u32, u32)], _: usize, _: usize, _: usize,
+            _: &[(u32, u32, u32, u32)], _: usize, _: usize, _: usize, _: u8,
         ) -> Result<Vec<f32>, String> { Err("Metal not available on this platform".into()) }
     }
 
@@ -116,6 +116,9 @@ mod metal_ramlm {
     pub fn reset_sparse_buffer_cache() {}
     pub fn get_sparse_cache_generation() -> u64 { 0 }
 }
+
+#[path = "neuron_memory.rs"]
+mod neuron_memory;
 
 #[path = "sparse_memory.rs"]
 mod sparse_memory;
@@ -168,6 +171,7 @@ pub use metal_ramlm::MetalRAMLMEvaluator;
 /// 0.5 = EMPTY cells add 0.5 probability (old default, inflates PPL with 50K classes)
 #[pyfunction]
 fn set_empty_value(value: f32) {
+    neuron_memory::set_empty_value(value);
     ramlm::set_empty_value(value);
     sparse_memory::set_empty_value(value);
 }
@@ -175,7 +179,7 @@ fn set_empty_value(value: f32) {
 /// Get the current EMPTY cell value
 #[pyfunction]
 fn get_empty_value() -> f32 {
-    ramlm::get_empty_value()
+    neuron_memory::get_empty_value()
 }
 
 /// Evaluate a single connectivity pattern (CPU, for comparison)
@@ -915,6 +919,7 @@ fn ramlm_forward_batch_metal(
                 neurons_per_cluster,
                 num_clusters,
                 words_per_neuron,
+                crate::neuron_memory::MODE_TERNARY
             )
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
     })
@@ -1031,6 +1036,7 @@ fn ramlm_forward_batch_metal_numpy<'py>(
                 neurons_per_cluster,
                 num_clusters,
                 words_per_neuron,
+                crate::neuron_memory::MODE_TERNARY
             )
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
     })
@@ -1101,6 +1107,7 @@ fn ramlm_forward_batch_metal_cached<'py>(
                 neurons_per_cluster,
                 num_clusters,
                 words_per_neuron,
+                crate::neuron_memory::MODE_TERNARY
             )
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
     })
@@ -1202,6 +1209,7 @@ fn ramlm_forward_batch_hybrid_cached<'py>(
                 neurons_per_cluster,
                 num_clusters,
                 words_per_neuron,
+                crate::neuron_memory::MODE_TERNARY
             )
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
 
@@ -1290,6 +1298,7 @@ fn ramlm_forward_batch_hybrid_numpy<'py>(
                         neurons_per_cluster,
                         num_clusters,
                         words_per_neuron,
+                        crate::neuron_memory::MODE_TERNARY
                     )
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e));
             }
@@ -1314,6 +1323,7 @@ fn ramlm_forward_batch_hybrid_numpy<'py>(
                 neurons_per_cluster,
                 num_clusters,
                 words_per_neuron,
+                crate::neuron_memory::MODE_TERNARY
             )
         });
 
@@ -1928,6 +1938,7 @@ fn sparse_forward_metal_numpy<'py>(
             num_examples,
             total_input_bits,
             cache.num_clusters,
+            crate::neuron_memory::MODE_TERNARY
         ).map_err(|e| format!("Metal forward failed: {}", e))
     }).map_err(|e: String| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
 

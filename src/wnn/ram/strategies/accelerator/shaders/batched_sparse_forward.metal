@@ -26,6 +26,14 @@ constant uint CELL_FALSE = 0;
 constant uint CELL_TRUE = 1;
 constant uint CELL_EMPTY = 2;
 
+// Memory mode constants
+constant uint MEM_MODE_TERNARY = 0;
+constant uint MEM_MODE_QUAD_BINARY = 1;
+constant uint MEM_MODE_QUAD_WEIGHTED = 2;
+
+// Quad weights
+constant float QUAD_WEIGHTS[4] = {0.0f, 0.25f, 0.75f, 1.0f};
+
 struct BatchedSparseParams {
     uint num_examples;
     uint total_input_bits;
@@ -35,6 +43,8 @@ struct BatchedSparseParams {
     uint num_clusters;
     uint num_genomes;
     float empty_value;
+    uint memory_mode;          // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED
+    uint default_cell_value;   // Default for missing cells
 };
 
 // Compute memory address (same as before)
@@ -53,15 +63,16 @@ inline ulong compute_address_batched(
     return address;
 }
 
-// Binary search (same as before)
+// Binary search (same as before, with configurable default)
 inline uint binary_search_batched(
     device const ulong* keys_flat,
     device const uchar* values_flat,
     uint start,
     uint count,
-    ulong address
+    ulong address,
+    uint default_value = CELL_EMPTY
 ) {
-    if (count == 0) return CELL_EMPTY;
+    if (count == 0) return default_value;
 
     uint left = 0;
     uint right = count;
@@ -78,7 +89,24 @@ inline uint binary_search_batched(
             right = mid;
         }
     }
-    return CELL_EMPTY;
+    return default_value;
+}
+
+// Mode-switched probability computation from cell value
+inline float compute_prob_batched(
+    uint count_true, uint count_empty,
+    float weighted_sum,
+    uint neurons_per_cluster,
+    uint memory_mode,
+    float empty_value
+) {
+    if (memory_mode == MEM_MODE_QUAD_WEIGHTED) {
+        return weighted_sum / float(neurons_per_cluster);
+    } else if (memory_mode == MEM_MODE_QUAD_BINARY) {
+        return float(count_true) / float(neurons_per_cluster);
+    } else {
+        return (float(count_true) + empty_value * float(count_empty)) / float(neurons_per_cluster);
+    }
 }
 
 //
@@ -117,6 +145,7 @@ kernel void batched_sparse_forward_pass(
 
     uint count_true = 0;
     uint count_empty = 0;
+    float weighted_sum = 0.0f;
     uint start_neuron = cluster_idx * params.neurons_per_cluster;
 
     for (uint neuron_offset = 0; neuron_offset < params.neurons_per_cluster; neuron_offset++) {
@@ -127,22 +156,24 @@ kernel void batched_sparse_forward_pass(
 
         ulong address = compute_address_batched(input_bits, connections, params.bits_per_neuron);
 
-        // Offsets/counts are per-genome, per-neuron
         uint mem_start = offsets_flat[global_neuron_idx] + genome_key_offset;
         uint mem_count = counts_flat[global_neuron_idx];
 
-        uint cell_value = binary_search_batched(keys_flat, values_flat, mem_start, mem_count, address);
+        uint cell_value = binary_search_batched(keys_flat, values_flat, mem_start, mem_count, address, params.default_cell_value);
 
-        if (cell_value == CELL_TRUE) {
-            count_true++;
-        } else if (cell_value == CELL_EMPTY) {
-            count_empty++;
+        if (params.memory_mode == MEM_MODE_QUAD_WEIGHTED) {
+            weighted_sum += QUAD_WEIGHTS[cell_value];
+        } else if (params.memory_mode == MEM_MODE_QUAD_BINARY) {
+            if (cell_value >= 2) count_true++;
+        } else {
+            if (cell_value == CELL_TRUE) count_true++;
+            else if (cell_value == CELL_EMPTY) count_empty++;
         }
     }
 
-    float prob = (float(count_true) + params.empty_value * float(count_empty)) / float(params.neurons_per_cluster);
+    float prob = compute_prob_batched(count_true, count_empty, weighted_sum,
+        params.neurons_per_cluster, params.memory_mode, params.empty_value);
 
-    // Output: [num_genomes][num_examples][num_clusters]
     uint output_idx = genome_idx * params.num_examples * params.num_clusters
                     + example_idx * params.num_clusters
                     + cluster_idx;
@@ -186,6 +217,7 @@ kernel void batched_sparse_forward_per_example(
     for (uint cluster_idx = 0; cluster_idx < params.num_clusters; cluster_idx++) {
         uint count_true = 0;
         uint count_empty = 0;
+        float weighted_sum = 0.0f;
         uint start_neuron = cluster_idx * params.neurons_per_cluster;
 
         for (uint neuron_offset = 0; neuron_offset < params.neurons_per_cluster; neuron_offset++) {
@@ -199,15 +231,19 @@ kernel void batched_sparse_forward_per_example(
             uint mem_start = offsets_flat[global_neuron_idx] + genome_key_offset;
             uint mem_count = counts_flat[global_neuron_idx];
 
-            uint cell_value = binary_search_batched(keys_flat, values_flat, mem_start, mem_count, address);
+            uint cell_value = binary_search_batched(keys_flat, values_flat, mem_start, mem_count, address, params.default_cell_value);
 
-            if (cell_value == CELL_TRUE) {
-                count_true++;
-            } else if (cell_value == CELL_EMPTY) {
-                count_empty++;
+            if (params.memory_mode == MEM_MODE_QUAD_WEIGHTED) {
+                weighted_sum += QUAD_WEIGHTS[cell_value];
+            } else if (params.memory_mode == MEM_MODE_QUAD_BINARY) {
+                if (cell_value >= 2) count_true++;
+            } else {
+                if (cell_value == CELL_TRUE) count_true++;
+                else if (cell_value == CELL_EMPTY) count_empty++;
             }
         }
 
-        probs_out[output_base + cluster_idx] = (float(count_true) + params.empty_value * float(count_empty)) / float(params.neurons_per_cluster);
+        probs_out[output_base + cluster_idx] = compute_prob_batched(count_true, count_empty, weighted_sum,
+            params.neurons_per_cluster, params.memory_mode, params.empty_value);
     }
 }

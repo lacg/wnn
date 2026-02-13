@@ -2,13 +2,12 @@
 //!
 //! Evaluates BitwiseRAMLM genomes entirely in Rust, avoiding Python overhead.
 //! Pipeline per genome:
-//!   1. Train (CPU, sequential per genome) — two-phase TRUE/FALSE writes
-//!   2. Forward pass (CPU, sequential per genome) — memory reads + probability
+//!   1. Train (CPU, sequential per genome) — majority vote / QUAD nudging
+//!   2. Forward pass (Metal GPU, with CPU fallback) — dense memory reads + probability
 //!   3. Reconstruction + CE (Metal GPU) — 50K vocab × 16 bits matmul
 //!
 //! Parallelism is at the GENOME level only (outer rayon par_iter).
 //! Each genome runs train+forward sequentially with non-atomic memory ops.
-//! This avoids nested rayon which serialized genome processing.
 //!
 //! BitwiseTokenCache holds pre-encoded tokens (created once).
 
@@ -198,6 +197,40 @@ pub use metal_bitwise_ce_impl::get_metal_bitwise_ce;
 pub fn get_metal_bitwise_ce() -> Option<std::sync::Arc<()>> { None }
 
 // =============================================================================
+// Metal Forward Pass Evaluator (dense memory, reuses ramlm.metal kernels)
+// =============================================================================
+
+#[cfg(target_os = "macos")]
+mod metal_forward_impl {
+	use super::*;
+
+	static METAL_FORWARD_EVAL: RwLock<Option<Arc<crate::metal_ramlm::MetalRAMLMEvaluator>>> = RwLock::new(None);
+
+	pub fn get_metal_forward_evaluator() -> Option<Arc<crate::metal_ramlm::MetalRAMLMEvaluator>> {
+		if std::env::var("WNN_NO_METAL").is_ok() {
+			return None;
+		}
+		{
+			let guard = METAL_FORWARD_EVAL.read().unwrap();
+			if let Some(ref arc) = *guard {
+				return Some(Arc::clone(arc));
+			}
+		}
+		let mut guard = METAL_FORWARD_EVAL.write().unwrap();
+		if guard.is_none() {
+			match crate::metal_ramlm::MetalRAMLMEvaluator::new() {
+				Ok(eval) => { *guard = Some(Arc::new(eval)); }
+				Err(e) => { eprintln!("[BitwiseForward] MetalRAMLMEvaluator init failed: {e}"); }
+			}
+		}
+		guard.as_ref().map(Arc::clone)
+	}
+}
+
+#[cfg(target_os = "macos")]
+pub use metal_forward_impl::get_metal_forward_evaluator;
+
+// =============================================================================
 // Token Cache
 // =============================================================================
 
@@ -316,9 +349,8 @@ impl BitwiseTokenCache {
         let (full_eval_input_bits, full_eval_targets, _, full_eval_n) =
             Self::encode_sequence(&eval_tokens, context_size, bits_per_token, total_input_bits, num_bits);
         let (full_eval_packed, full_eval_wpe) = pack_input_bits(&full_eval_input_bits, full_eval_n, total_input_bits);
-        drop(full_eval_input_bits);  // free unpacked bits
         let full_eval = BitwiseEvalSubset {
-            input_bits: Vec::new(),  // dropped after packing — only packed_input is used
+            input_bits: full_eval_input_bits,
             packed_input: full_eval_packed,
             targets: full_eval_targets,
             num_examples: full_eval_n,
@@ -434,7 +466,7 @@ impl BitwiseTokenCache {
                 let (input_bits, targets, _, num_ex) =
                     Self::encode_sequence(part, context_size, bits_per_token, total_input_bits, num_bits);
                 let (packed, wpe) = pack_input_bits(&input_bits, num_ex, total_input_bits);
-                BitwiseEvalSubset { input_bits: Vec::new(), packed_input: packed, targets, num_examples: num_ex, words_per_example: wpe }
+                BitwiseEvalSubset { input_bits, packed_input: packed, targets, num_examples: num_ex, words_per_example: wpe }
             })
             .collect()
     }
@@ -773,6 +805,82 @@ fn compute_genome_layout(
     }
 }
 
+/// GPU forward pass for heterogeneous per-cluster configs.
+///
+/// Groups clusters by (bits, neurons, words_per_neuron), dispatches one
+/// `forward_batch()` call per group, and scatters results to `out_probs`.
+#[cfg(target_os = "macos")]
+fn gpu_forward_heterogeneous(
+	evaluator: &crate::metal_ramlm::MetalRAMLMEvaluator,
+	input_bits: &[bool],
+	connections: &[i64],
+	memory: &[i64],
+	bits_per_cluster: &[usize],
+	neurons_per_cluster: &[usize],
+	layout: &GenomeLayout,
+	num_eval: usize,
+	total_input_bits: usize,
+	num_clusters: usize,
+	memory_mode: u8,
+	out_probs: &mut [f32],
+) -> bool {
+	// Group clusters by (bits, neurons, words_per_neuron) for uniform GPU dispatch
+	let mut groups: Vec<(usize, usize, usize, Vec<usize>)> = Vec::new();
+	for c in 0..num_clusters {
+		let key = (bits_per_cluster[c], neurons_per_cluster[c], layout.words_per_neuron[c]);
+		if let Some(g) = groups.iter_mut().find(|(b, n, w, _)| *b == key.0 && *n == key.1 && *w == key.2) {
+			g.3.push(c);
+		} else {
+			groups.push((key.0, key.1, key.2, vec![c]));
+		}
+	}
+
+	for (bits, neurons, wpn, cluster_indices) in &groups {
+		let group_size = cluster_indices.len();
+
+		// Extract contiguous memory and connections for this group
+		let mut group_memory: Vec<i64> = Vec::with_capacity(neurons * group_size * wpn);
+		let mut group_connections: Vec<i64> = Vec::with_capacity(neurons * group_size * bits);
+
+		for &c in cluster_indices {
+			let mem_start = layout.mem_offsets[c];
+			let mem_end = mem_start + neurons_per_cluster[c] * layout.words_per_neuron[c];
+			group_memory.extend_from_slice(&memory[mem_start..mem_end]);
+
+			let conn_start = layout.conn_offsets[c];
+			let conn_end = conn_start + neurons_per_cluster[c] * bits_per_cluster[c];
+			group_connections.extend_from_slice(&connections[conn_start..conn_end]);
+		}
+
+		match evaluator.forward_batch(
+			input_bits,
+			&group_connections,
+			&group_memory,
+			num_eval,
+			total_input_bits,
+			neurons * group_size,
+			*bits,
+			*neurons,
+			group_size,
+			*wpn,
+			memory_mode,
+		) {
+			Ok(probs) => {
+				for ex in 0..num_eval {
+					for (i, &c) in cluster_indices.iter().enumerate() {
+						out_probs[ex * num_clusters + c] = probs[ex * group_size + i];
+					}
+				}
+			}
+			Err(e) => {
+				eprintln!("[BitwiseForward] GPU heterogeneous group failed: {e}");
+				return false;
+			}
+		}
+	}
+	true
+}
+
 /// Train a single genome into pre-allocated memory, then forward pass into output slice.
 ///
 /// Per-cluster heterogeneous version: each cluster can have different
@@ -933,7 +1041,57 @@ fn train_and_forward_into(
         }
     }
 
-    // ===== FORWARD PASS on eval data =====
+    // ===== GPU FORWARD PASS on eval data (try GPU, fall through to CPU if unavailable) =====
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(evaluator) = get_metal_forward_evaluator() {
+            let num_eval = eval_subset.num_examples;
+            let total_input_bits = cache.total_input_bits;
+
+            let uniform = bits_per_cluster.iter().all(|&b| b == bits_per_cluster[0])
+                && neurons_per_cluster.iter().all(|&n| n == neurons_per_cluster[0]);
+
+            let gpu_ok = if uniform {
+                let bits = bits_per_cluster[0];
+                let neurons = neurons_per_cluster[0];
+                let wpn = layout.words_per_neuron[0];
+                match evaluator.forward_batch(
+                    &eval_subset.input_bits,
+                    connections,
+                    memory,
+                    num_eval,
+                    total_input_bits,
+                    neurons * num_clusters,
+                    bits,
+                    neurons,
+                    num_clusters,
+                    wpn,
+                    memory_mode,
+                ) {
+                    Ok(probs) => {
+                        out_probs[..probs.len()].copy_from_slice(&probs);
+                        true
+                    }
+                    Err(e) => {
+                        eprintln!("[BitwiseForward] GPU uniform failed: {e}");
+                        false
+                    }
+                }
+            } else {
+                gpu_forward_heterogeneous(
+                    &evaluator, &eval_subset.input_bits, connections, memory,
+                    bits_per_cluster, neurons_per_cluster, layout,
+                    num_eval, total_input_bits, num_clusters, memory_mode, out_probs,
+                )
+            };
+
+            if gpu_ok {
+                return;
+            }
+        }
+    }
+
+    // ===== CPU FORWARD PASS on eval data (fallback) =====
     let num_eval = eval_subset.num_examples;
     let empty_value = ramlm::get_empty_value();
     let wpe_eval = eval_subset.words_per_example;
@@ -1120,22 +1278,27 @@ fn evaluate_genomes_with_subset(
     // Phase 1: Train + Forward (CPU, parallel over genomes with memory budgeting)
     // Each genome allocates its own Vec<i64> memory (variable size).
     // With high-bit genomes (20+ bits), concurrent allocations can exceed physical RAM.
-    // Budget limits concurrent genomes to prevent OOM/swap thrashing.
-    let max_mem_per_genome = genome_layouts.iter()
-        .map(|l| l.total_memory_words as u64 * 8)  // bytes (i64 = 8 bytes)
-        .max()
-        .unwrap_or(0);
-
+    // Adaptive batching: pack as many genomes as fit within budget per batch,
+    // so small genomes run in large parallel batches while large ones run in smaller batches.
     let mem_budget: u64 = 6 * 1024 * 1024 * 1024; // 6 GB for training memory
-    let max_concurrent = if max_mem_per_genome > 0 {
-        (mem_budget / max_mem_per_genome).max(1).min(num_genomes as u64) as usize
-    } else {
-        num_genomes
-    };
+    let genome_mem_bytes: Vec<u64> = genome_layouts.iter()
+        .map(|l| l.total_memory_words as u64 * 8)
+        .collect();
 
-    // Process genomes in batches of max_concurrent
-    for batch_start in (0..num_genomes).step_by(max_concurrent) {
-        let batch_end = (batch_start + max_concurrent).min(num_genomes);
+    let mut batch_start = 0;
+    while batch_start < num_genomes {
+        // Pack genomes into this batch until budget is reached
+        let mut batch_mem: u64 = 0;
+        let mut batch_end = batch_start;
+        while batch_end < num_genomes {
+            let gm = genome_mem_bytes[batch_end];
+            if batch_mem + gm > mem_budget && batch_end > batch_start {
+                break;
+            }
+            batch_mem += gm;
+            batch_end += 1;
+        }
+
         let batch_scores = &mut all_scores[batch_start * scores_per_genome..batch_end * scores_per_genome];
 
         batch_scores
@@ -1161,6 +1324,8 @@ fn evaluate_genomes_with_subset(
                     memory_mode, neuron_sample_rate, genome_rng_seed,
                 );
             });
+
+        batch_start = batch_end;
     }
 
     // Phase 1.5: Compute weighted BitAcc per genome

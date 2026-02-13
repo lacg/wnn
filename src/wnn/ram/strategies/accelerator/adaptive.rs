@@ -1030,6 +1030,7 @@ fn evaluate_group_metal(
     group: &ConfigGroup,
     num_eval: usize,
     total_input_bits: usize,
+    memory_mode: u8,
 ) -> Result<Vec<f32>, String> {
     let num_clusters = group.cluster_count();
     let num_neurons = group.total_neurons();
@@ -1049,6 +1050,7 @@ fn evaluate_group_metal(
         group.neurons,
         num_clusters,
         group.words_per_neuron,
+        memory_mode,
     )
 }
 
@@ -1064,6 +1066,7 @@ fn evaluate_group_sparse_gpu(
     group: &ConfigGroup,
     num_eval: usize,
     total_input_bits: usize,
+    memory_mode: u8,
 ) -> Result<Vec<f32>, String> {
     let num_clusters = group.cluster_count();
 
@@ -1084,6 +1087,7 @@ fn evaluate_group_sparse_gpu(
         group.bits,
         group.neurons,
         num_clusters,
+        memory_mode,
     )
 }
 
@@ -1339,6 +1343,7 @@ pub fn evaluate_genomes_parallel(
                         group,
                         num_eval,
                         total_input_bits,
+                        crate::neuron_memory::MODE_TERNARY,
                     ) {
                         Ok(group_scores) => {
                             // Scatter Metal results to correct cluster positions
@@ -1369,6 +1374,7 @@ pub fn evaluate_genomes_parallel(
                         group,
                         num_eval,
                         total_input_bits,
+                        crate::neuron_memory::MODE_TERNARY,
                     ) {
                         Ok(group_scores) => {
                             // Scatter GPU sparse results to correct cluster positions
@@ -2064,6 +2070,7 @@ pub fn evaluate_genome_hybrid(
                     total_input_bits,
                     num_clusters,
                     empty_value,
+                    crate::neuron_memory::MODE_TERNARY
                 );
                 if phase_timing {
                     sparse_time_ms = sparse_start.elapsed().as_micros() as f64 / 1000.0;
@@ -2092,6 +2099,7 @@ pub fn evaluate_genome_hybrid(
                         num_clusters,
                         group.words_per_neuron,
                         empty_value,
+                        crate::neuron_memory::MODE_TERNARY
                     );
 
                     if phase_timing {
@@ -2170,6 +2178,7 @@ pub fn evaluate_genome_hybrid(
                             group,
                             num_eval,
                             total_input_bits,
+                            crate::neuron_memory::MODE_TERNARY,
                         )
                     } else {
                         Err("No sparse evaluator".to_string())
@@ -2193,6 +2202,7 @@ pub fn evaluate_genome_hybrid(
                             group,
                             num_eval,
                             total_input_bits,
+                            crate::neuron_memory::MODE_TERNARY,
                         )
                     } else {
                         Err("No metal evaluator".to_string())
@@ -2273,6 +2283,7 @@ pub fn evaluate_genome_hybrid(
                     group,
                     num_eval,
                     total_input_bits,
+                    crate::neuron_memory::MODE_TERNARY,
                 ) {
                     Ok(group_scores) => {
                         if timing_enabled {
@@ -2352,6 +2363,7 @@ pub fn evaluate_genome_hybrid(
                     group,
                     num_eval,
                     total_input_bits,
+                    crate::neuron_memory::MODE_TERNARY,
                 ) {
                     Ok(group_scores) => {
                         if timing_enabled {

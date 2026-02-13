@@ -1260,6 +1260,7 @@ pub fn evaluate_gpu_batch_adaptive(
                     num_eval_examples,
                     total_input_bits,
                     num_clusters,
+                    crate::neuron_memory::MODE_TERNARY
                 ).unwrap_or_else(|_| {
                     // Fallback: return uniform distribution (error case)
                     vec![1.0 / num_clusters as f32; num_eval_examples * num_clusters]
@@ -1403,6 +1404,7 @@ fn evaluate_single_tiered_hybrid(
         num_eval_examples,
         total_input_bits,
         num_clusters,
+        crate::neuron_memory::MODE_TERNARY
     ).unwrap_or_else(|_| {
         // Fallback to CPU if GPU fails
         forward_batch_tiered(

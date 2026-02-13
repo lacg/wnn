@@ -25,6 +25,14 @@ constant uint BITS_PER_CELL = 2;
 constant uint CELLS_PER_WORD = 31;  // 62 bits / 2 = 31 cells
 constant uint CELL_MASK = 0x3;      // 2-bit mask
 
+// Memory mode constants
+constant uint MEM_MODE_TERNARY = 0;
+constant uint MEM_MODE_QUAD_BINARY = 1;
+constant uint MEM_MODE_QUAD_WEIGHTED = 2;
+
+// Quad weights for QUAD_WEIGHTED mode (lookup table avoids branching)
+constant float QUAD_WEIGHTS[4] = {0.0f, 0.25f, 0.75f, 1.0f};
+
 // Parameters passed from CPU
 struct RAMLMParams {
     uint num_examples;
@@ -35,6 +43,7 @@ struct RAMLMParams {
     uint num_clusters;
     uint words_per_neuron;
     float empty_value;  // Value for EMPTY cells (0.0 = abstain, 0.5 = uncertain)
+    uint memory_mode;   // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED
 };
 
 // Compute memory address for a neuron given input bits
@@ -66,7 +75,62 @@ inline uint read_cell(
     uint cell_idx = address % CELLS_PER_WORD;
     uint word_offset = neuron_idx * words_per_neuron + word_idx;
     long word = memory_words[word_offset];
-    return (uint(word) >> (cell_idx * BITS_PER_CELL)) & CELL_MASK;
+    // Shift in 64-bit first, then truncate (uint(word) would drop upper 32 bits)
+    return uint(word >> (cell_idx * BITS_PER_CELL)) & CELL_MASK;
+}
+
+//
+// Mode-switched accumulation over neurons in a cluster.
+// Returns probability based on memory_mode:
+//   TERNARY: P = (count_TRUE + empty_value * count_EMPTY) / neurons
+//   QUAD_BINARY: P = count(cell >= 2) / neurons
+//   QUAD_WEIGHTED: P = sum(QUAD_WEIGHTS[cell]) / neurons
+//
+inline float accumulate_dense(
+    device const uchar* input_bits,
+    device const int* connections_flat,
+    device const long* memory_words,
+    uint start_neuron,
+    uint neurons_per_cluster,
+    uint bits_per_neuron,
+    uint words_per_neuron,
+    uint memory_mode,
+    float empty_value
+) {
+    if (memory_mode == MEM_MODE_QUAD_WEIGHTED) {
+        float weighted_sum = 0.0f;
+        for (uint n = 0; n < neurons_per_cluster; n++) {
+            uint neuron_idx = start_neuron + n;
+            device const int* connections = connections_flat + neuron_idx * bits_per_neuron;
+            uint address = compute_address(input_bits, connections, bits_per_neuron);
+            uint cell = read_cell(memory_words, neuron_idx, address, words_per_neuron);
+            weighted_sum += QUAD_WEIGHTS[cell];
+        }
+        return weighted_sum / float(neurons_per_cluster);
+    } else if (memory_mode == MEM_MODE_QUAD_BINARY) {
+        uint count = 0;
+        for (uint n = 0; n < neurons_per_cluster; n++) {
+            uint neuron_idx = start_neuron + n;
+            device const int* connections = connections_flat + neuron_idx * bits_per_neuron;
+            uint address = compute_address(input_bits, connections, bits_per_neuron);
+            uint cell = read_cell(memory_words, neuron_idx, address, words_per_neuron);
+            if (cell >= 2) count++;  // QUAD_WEAK_TRUE or QUAD_TRUE
+        }
+        return float(count) / float(neurons_per_cluster);
+    } else {
+        // TERNARY (default)
+        uint count_true = 0;
+        uint count_empty = 0;
+        for (uint n = 0; n < neurons_per_cluster; n++) {
+            uint neuron_idx = start_neuron + n;
+            device const int* connections = connections_flat + neuron_idx * bits_per_neuron;
+            uint address = compute_address(input_bits, connections, bits_per_neuron);
+            uint cell = read_cell(memory_words, neuron_idx, address, words_per_neuron);
+            if (cell == CELL_TRUE) count_true++;
+            else if (cell == CELL_EMPTY) count_empty++;
+        }
+        return (float(count_true) + empty_value * float(count_empty)) / float(neurons_per_cluster);
+    }
 }
 
 //
@@ -86,42 +150,19 @@ kernel void ramlm_forward_pass(
     uint cluster_idx = thread_pos.x;
     uint example_idx = thread_pos.y;
 
-    // Bounds check
     if (cluster_idx >= params.num_clusters) return;
     if (example_idx >= params.num_examples) return;
 
-    // Get input bits for this example
     device const uchar* input_bits = input_bits_flat + example_idx * params.total_input_bits;
-
-    // Count TRUE and EMPTY cells for this cluster
-    uint count_true = 0;
-    uint count_empty = 0;
-
     uint start_neuron = cluster_idx * params.neurons_per_cluster;
 
-    for (uint neuron_offset = 0; neuron_offset < params.neurons_per_cluster; neuron_offset++) {
-        uint neuron_idx = start_neuron + neuron_offset;
+    float prob = accumulate_dense(
+        input_bits, connections_flat, memory_words,
+        start_neuron, params.neurons_per_cluster,
+        params.bits_per_neuron, params.words_per_neuron,
+        params.memory_mode, params.empty_value
+    );
 
-        // Get connections for this neuron
-        device const int* connections = connections_flat + neuron_idx * params.bits_per_neuron;
-
-        // Compute address
-        uint address = compute_address(input_bits, connections, params.bits_per_neuron);
-
-        // Read cell value
-        uint cell_value = read_cell(memory_words, neuron_idx, address, params.words_per_neuron);
-
-        if (cell_value == CELL_TRUE) {
-            count_true++;
-        } else if (cell_value == CELL_EMPTY) {
-            count_empty++;
-        }
-    }
-
-    // Probability = (count_true + empty_value * count_empty) / neurons_per_cluster
-    float prob = (float(count_true) + params.empty_value * float(count_empty)) / float(params.neurons_per_cluster);
-
-    // Output index: [example_idx, cluster_idx]
     uint output_idx = example_idx * params.num_clusters + cluster_idx;
     probs_out[output_idx] = prob;
 }
@@ -147,26 +188,14 @@ kernel void ramlm_forward_pass_per_example(
     device float* example_probs = probs_out + example_idx * params.num_clusters;
 
     for (uint cluster_idx = 0; cluster_idx < params.num_clusters; cluster_idx++) {
-        uint count_true = 0;
-        uint count_empty = 0;
-
         uint start_neuron = cluster_idx * params.neurons_per_cluster;
 
-        for (uint neuron_offset = 0; neuron_offset < params.neurons_per_cluster; neuron_offset++) {
-            uint neuron_idx = start_neuron + neuron_offset;
-            device const int* connections = connections_flat + neuron_idx * params.bits_per_neuron;
-
-            uint address = compute_address(input_bits, connections, params.bits_per_neuron);
-            uint cell_value = read_cell(memory_words, neuron_idx, address, params.words_per_neuron);
-
-            if (cell_value == CELL_TRUE) {
-                count_true++;
-            } else if (cell_value == CELL_EMPTY) {
-                count_empty++;
-            }
-        }
-
-        example_probs[cluster_idx] = (float(count_true) + params.empty_value * float(count_empty)) / float(params.neurons_per_cluster);
+        example_probs[cluster_idx] = accumulate_dense(
+            input_bits, connections_flat, memory_words,
+            start_neuron, params.neurons_per_cluster,
+            params.bits_per_neuron, params.words_per_neuron,
+            params.memory_mode, params.empty_value
+        );
     }
 }
 
@@ -189,6 +218,7 @@ struct DenseToBufferParams {
     uint total_clusters;        // Total clusters across all groups
     uint words_per_neuron;
     float empty_value;
+    uint memory_mode;           // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED
 };
 
 kernel void ramlm_forward_to_buffer(
@@ -208,25 +238,14 @@ kernel void ramlm_forward_to_buffer(
 
     device const uchar* input_bits = input_bits_flat + example_idx * params.total_input_bits;
 
-    uint count_true = 0;
-    uint count_empty = 0;
     uint start_neuron = local_cluster * params.neurons_per_cluster;
 
-    for (uint neuron_offset = 0; neuron_offset < params.neurons_per_cluster; neuron_offset++) {
-        uint neuron_idx = start_neuron + neuron_offset;
-        device const int* connections = connections_flat + neuron_idx * params.bits_per_neuron;
-
-        uint address = compute_address(input_bits, connections, params.bits_per_neuron);
-        uint cell_value = read_cell(memory_words, neuron_idx, address, params.words_per_neuron);
-
-        if (cell_value == CELL_TRUE) {
-            count_true++;
-        } else if (cell_value == CELL_EMPTY) {
-            count_empty++;
-        }
-    }
-
-    float prob = (float(count_true) + params.empty_value * float(count_empty)) / float(params.neurons_per_cluster);
+    float prob = accumulate_dense(
+        input_bits, connections_flat, memory_words,
+        start_neuron, params.neurons_per_cluster,
+        params.bits_per_neuron, params.words_per_neuron,
+        params.memory_mode, params.empty_value
+    );
 
     // Write to global position in shared buffer
     uint global_cluster = cluster_ids[local_cluster];

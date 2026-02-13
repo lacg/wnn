@@ -308,6 +308,7 @@ impl MetalRAMLMEvaluator {
         neurons_per_cluster: usize,
         num_clusters: usize,
         words_per_neuron: usize,
+        memory_mode: u8,
     ) -> Result<Vec<f32>, String> {
         if num_examples == 0 {
             return Ok(vec![]);
@@ -330,6 +331,7 @@ impl MetalRAMLMEvaluator {
             num_clusters: u32,
             words_per_neuron: u32,
             empty_value: f32,
+            memory_mode: u32,
         }
 
         let params = RAMLMParams {
@@ -340,7 +342,8 @@ impl MetalRAMLMEvaluator {
             neurons_per_cluster: neurons_per_cluster as u32,
             num_clusters: num_clusters as u32,
             words_per_neuron: words_per_neuron as u32,
-            empty_value: crate::ramlm::get_empty_value(),
+            empty_value: crate::neuron_memory::get_empty_value(),
+            memory_mode: memory_mode as u32,
         };
 
         // Create buffers
@@ -521,6 +524,7 @@ impl MetalSparseEvaluator {
         bits_per_neuron: usize,
         neurons_per_cluster: usize,
         num_clusters: usize,
+        memory_mode: u8,
     ) -> Result<Vec<f32>, String> {
         if num_examples == 0 {
             return Ok(vec![]);
@@ -529,6 +533,9 @@ impl MetalSparseEvaluator {
         // Convert bools to u8
         let input_bits_u8: Vec<u8> = input_bits_flat.iter().map(|&b| b as u8).collect();
         let connections_i32: Vec<i32> = connections_flat.iter().map(|&c| c as i32).collect();
+
+        // Default cell value: EMPTY(2) for ternary, WEAK_FALSE(1) for quad
+        let default_cell: u32 = if memory_mode == 0 { 2 } else { 1 };
 
         #[repr(C)]
         struct SparseParams {
@@ -539,6 +546,8 @@ impl MetalSparseEvaluator {
             neurons_per_cluster: u32,
             num_clusters: u32,
             empty_value: f32,
+            memory_mode: u32,
+            default_cell_value: u32,
         }
 
         let params = SparseParams {
@@ -548,7 +557,9 @@ impl MetalSparseEvaluator {
             bits_per_neuron: bits_per_neuron as u32,
             neurons_per_cluster: neurons_per_cluster as u32,
             num_clusters: num_clusters as u32,
-            empty_value: crate::ramlm::get_empty_value(),
+            empty_value: crate::neuron_memory::get_empty_value(),
+            memory_mode: memory_mode as u32,
+            default_cell_value: default_cell,
         };
 
         // Create buffers
@@ -663,6 +674,7 @@ impl MetalSparseEvaluator {
         num_examples: usize,
         total_input_bits: usize,
         num_clusters: usize,
+        memory_mode: u8,
     ) -> Result<Vec<f32>, String> {
         if num_examples == 0 {
             return Ok(vec![]);
@@ -678,6 +690,8 @@ impl MetalSparseEvaluator {
             num_clusters: u32,
             num_tiers: u32,
             empty_value: f32,
+            memory_mode: u32,
+            default_cell_value: u32,
         }
 
         #[repr(C)]
@@ -688,12 +702,15 @@ impl MetalSparseEvaluator {
             start_neuron: u32,
         }
 
+        let default_cell: u32 = if memory_mode == 0 { 2 } else { 1 };
         let params = TieredParams {
             num_examples: num_examples as u32,
             total_input_bits: total_input_bits as u32,
             num_clusters: num_clusters as u32,
             num_tiers: tier_configs.len() as u32,
-            empty_value: crate::ramlm::get_empty_value(),
+            empty_value: crate::neuron_memory::get_empty_value(),
+            memory_mode: memory_mode as u32,
+            default_cell_value: default_cell,
         };
 
         let tiers: Vec<TierInfo> = tier_configs.iter().map(|&(ec, npc, bpn, sn)| TierInfo {
@@ -807,6 +824,7 @@ impl MetalSparseEvaluator {
         num_examples: usize,
         total_input_bits: usize,
         num_clusters: usize,
+        memory_mode: u8,
     ) -> Result<Vec<f32>, String> {
         if num_examples == 0 || num_clusters == 0 {
             return Ok(vec![]);
@@ -821,6 +839,8 @@ impl MetalSparseEvaluator {
             total_input_bits: u32,
             num_clusters: u32,
             empty_value: f32,
+            memory_mode: u32,
+            default_cell_value: u32,
         }
 
         #[repr(C)]
@@ -831,11 +851,14 @@ impl MetalSparseEvaluator {
             connection_offset: u32,
         }
 
+        let default_cell: u32 = if memory_mode == 0 { 2 } else { 1 };
         let params = GeneralParams {
             num_examples: num_examples as u32,
             total_input_bits: total_input_bits as u32,
             num_clusters: num_clusters as u32,
-            empty_value: crate::ramlm::get_empty_value(),
+            empty_value: crate::neuron_memory::get_empty_value(),
+            memory_mode: memory_mode as u32,
+            default_cell_value: default_cell,
         };
 
         let cluster_info_structs: Vec<ClusterInfo> = cluster_infos.iter().map(|&(n, b, s, c)| ClusterInfo {
@@ -946,6 +969,8 @@ struct BatchedSparseParams {
     num_clusters: u32,
     num_genomes: u32,
     empty_value: f32,
+    memory_mode: u32,
+    default_cell_value: u32,
 }
 
 /// Metal evaluator for batched genome evaluation
@@ -1028,6 +1053,7 @@ impl MetalBatchedEvaluator {
         num_clusters: usize,
         num_genomes: usize,
         empty_value: f32,
+        memory_mode: u8,
     ) -> Result<Vec<f32>, String> {
         if num_genomes == 0 || num_examples == 0 {
             return Ok(vec![]);
@@ -1082,6 +1108,7 @@ impl MetalBatchedEvaluator {
             MTLResourceOptions::StorageModeShared,
         );
 
+        let default_cell: u32 = if memory_mode == 0 { 2 } else { 1 };
         let params = BatchedSparseParams {
             num_examples: num_examples as u32,
             total_input_bits: total_input_bits as u32,
@@ -1091,6 +1118,8 @@ impl MetalBatchedEvaluator {
             num_clusters: num_clusters as u32,
             num_genomes: num_genomes as u32,
             empty_value,
+            memory_mode: memory_mode as u32,
+            default_cell_value: default_cell,
         };
 
         let params_buffer = self.device.new_buffer_with_data(
@@ -1605,6 +1634,8 @@ struct SparseToBufferParams {
     num_group_clusters: u32,
     total_clusters: u32,
     empty_value: f32,
+    memory_mode: u32,
+    default_cell_value: u32,
 }
 
 /// Parameters for sparse forward to buffer with per-cluster masking (must match Metal struct)
@@ -1619,6 +1650,8 @@ struct SparseToBufferMaskedParams {
     num_group_clusters: u32,
     total_clusters: u32,
     empty_value: f32,
+    memory_mode: u32,
+    default_cell_value: u32,
 }
 
 /// Parameters for dense forward to buffer (must match Metal struct)
@@ -1633,6 +1666,7 @@ struct DenseToBufferParams {
     total_clusters: u32,
     words_per_neuron: u32,
     empty_value: f32,
+    memory_mode: u32,
 }
 
 /// Data for a single sparse group in batched evaluation
@@ -1792,6 +1826,7 @@ impl MetalGroupEvaluator {
         neurons_per_cluster: usize,
         num_clusters: usize,
         empty_value: f32,
+        memory_mode: u8,
     ) {
         // Detailed timing (enabled via WNN_SPARSE_TIMING env var)
         let sparse_timing = std::env::var("WNN_SPARSE_TIMING").is_ok();
@@ -1806,6 +1841,7 @@ impl MetalGroupEvaluator {
 
         let t_prep = t0.elapsed();
 
+        let default_cell: u32 = if memory_mode == 0 { 2 } else { 1 };
         let params = SparseToBufferParams {
             num_examples: num_examples as u32,
             total_input_bits: total_input_bits as u32,
@@ -1815,6 +1851,8 @@ impl MetalGroupEvaluator {
             num_group_clusters: num_group_clusters as u32,
             total_clusters: num_clusters as u32,
             empty_value,
+            memory_mode: memory_mode as u32,
+            default_cell_value: default_cell,
         };
         // Convert params to slice for get_or_create_buffer
         let params_slice = unsafe {
@@ -1909,6 +1947,7 @@ impl MetalGroupEvaluator {
         total_input_bits: usize,
         num_clusters: usize,
         empty_value: f32,
+        memory_mode: u8,
     ) {
         if sparse_groups.is_empty() {
             return;
@@ -1926,6 +1965,7 @@ impl MetalGroupEvaluator {
             Uniform(Vec<u8>),
             Masked(Vec<u8>),
         }
+        let default_cell: u32 = if memory_mode == 0 { 2 } else { 1 };
         let mut converted_data: Vec<(Vec<i32>, Vec<u32>, ParamsBytes)> = Vec::with_capacity(sparse_groups.len());
         for group in sparse_groups {
             let connections_i32: Vec<i32> = group.connections.iter().map(|&c| c as i32).collect();
@@ -1942,6 +1982,8 @@ impl MetalGroupEvaluator {
                     num_group_clusters: group.cluster_ids.len() as u32,
                     total_clusters: num_clusters as u32,
                     empty_value,
+                    memory_mode: memory_mode as u32,
+                    default_cell_value: default_cell,
                 };
                 ParamsBytes::Masked(unsafe {
                     std::slice::from_raw_parts(
@@ -1960,6 +2002,8 @@ impl MetalGroupEvaluator {
                     num_group_clusters: group.cluster_ids.len() as u32,
                     total_clusters: num_clusters as u32,
                     empty_value,
+                    memory_mode: memory_mode as u32,
+                    default_cell_value: default_cell,
                 };
                 ParamsBytes::Uniform(unsafe {
                     std::slice::from_raw_parts(
@@ -2096,6 +2140,7 @@ impl MetalGroupEvaluator {
         num_clusters: usize,
         words_per_neuron: usize,
         empty_value: f32,
+        memory_mode: u8,
     ) {
         let num_group_clusters = cluster_ids.len();
         let num_neurons = num_group_clusters * neurons_per_cluster;
@@ -2114,6 +2159,7 @@ impl MetalGroupEvaluator {
             total_clusters: num_clusters as u32,
             words_per_neuron: words_per_neuron as u32,
             empty_value,
+            memory_mode: memory_mode as u32,
         };
         // Convert params to slice for get_or_create_buffer
         let params_slice = unsafe {
