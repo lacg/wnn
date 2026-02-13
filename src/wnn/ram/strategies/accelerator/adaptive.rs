@@ -151,19 +151,13 @@ pub fn reset_metal_evaluators() {
 /// Threshold for switching to sparse memory (2^12 = 4K addresses)
 const SPARSE_THRESHOLD: usize = 12;
 
-/// Memory cell values (2 bits each)
-const FALSE: i64 = 0;
-const TRUE: i64 = 1;
-const EMPTY: i64 = 2;
+use crate::neuron_memory::{
+    FALSE, TRUE, EMPTY, BITS_PER_CELL, CELLS_PER_WORD, CELL_MASK,
+};
 
-/// Bit-packing constants
-const BITS_PER_CELL: usize = 2;
-const CELLS_PER_WORD: usize = 31;
-const CELL_MASK: i64 = 0b11;
-
-/// Get the EMPTY cell value from the global setting
+/// Get the EMPTY cell value from the unified global setting
 fn get_empty_value() -> f32 {
-    crate::ramlm::get_empty_value()
+    crate::neuron_memory::get_empty_value()
 }
 
 /// Check if group coalescing is enabled (set WNN_COALESCE_GROUPS=1)

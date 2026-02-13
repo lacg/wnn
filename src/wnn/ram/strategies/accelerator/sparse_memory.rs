@@ -30,23 +30,18 @@ use std::hash::BuildHasherDefault;
 
 use rustc_hash::FxHasher;
 
-/// Memory cell values (matches dense backend)
-pub const FALSE: u8 = 0;
-pub const TRUE: u8 = 1;
-pub const EMPTY: u8 = 2;
+use crate::neuron_memory::{
+    FALSE_U8 as FALSE, TRUE_U8 as TRUE, EMPTY_U8 as EMPTY,
+};
 
-/// Global EMPTY cell value (can be set from Python)
-use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
-static EMPTY_VALUE_BITS: AtomicU32 = AtomicU32::new(0); // 0.0 as bits
-
-/// Get the EMPTY cell value
+/// Forward to neuron_memory's unified empty value.
 pub fn get_empty_value() -> f32 {
-    f32::from_bits(EMPTY_VALUE_BITS.load(AtomicOrdering::Relaxed))
+    crate::neuron_memory::get_empty_value()
 }
 
-/// Set the EMPTY cell value
+/// Forward to neuron_memory's unified empty value.
 pub fn set_empty_value(value: f32) {
-    EMPTY_VALUE_BITS.store(value.to_bits(), AtomicOrdering::Relaxed);
+    crate::neuron_memory::set_empty_value(value);
 }
 
 /// Fast hasher type for DashMap

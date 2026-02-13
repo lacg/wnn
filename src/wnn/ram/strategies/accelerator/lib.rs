@@ -3067,7 +3067,7 @@ fn evaluate_genomes_parallel<'py>(
     let eval_targets_vec: Vec<i64> = eval_targets_slice.to_vec();
 
     // Set empty value for this evaluation
-    ramlm::set_empty_value(empty_value);
+    neuron_memory::set_empty_value(empty_value);
 
     py.allow_threads(|| {
         let fitness = adaptive::evaluate_genomes_parallel(
@@ -3149,7 +3149,7 @@ fn evaluate_genomes_parallel_multisubset<'py>(
     let eval_targets_vec: Vec<i64> = eval_targets_slice.to_vec();
 
     // Set empty value for this evaluation
-    ramlm::set_empty_value(empty_value);
+    neuron_memory::set_empty_value(empty_value);
 
     py.allow_threads(|| {
         let fitness = adaptive::evaluate_genomes_parallel_multisubset(
@@ -3229,7 +3229,7 @@ fn evaluate_genomes_parallel_hybrid<'py>(
     let eval_targets_vec: Vec<i64> = eval_targets_slice.to_vec();
 
     // Set empty value for this evaluation
-    ramlm::set_empty_value(empty_value);
+    neuron_memory::set_empty_value(empty_value);
 
     py.allow_threads(|| {
         let fitness = adaptive::evaluate_genomes_parallel_hybrid(

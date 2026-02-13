@@ -18,20 +18,10 @@ use rayon::prelude::*;
 use rayon::slice::ParallelSliceMut;
 use std::sync::atomic::{AtomicI32, AtomicI64, Ordering, fence};
 
-
-/// Memory cell values (2 bits each) — Ternary mode
-const FALSE: i64 = 0;
-const TRUE: i64 = 1;
-const EMPTY: i64 = 2;
-
-/// Memory cell values — Quad mode (4-state nudging)
-const QUAD_FALSE: i64 = 0;
-const _QUAD_WEAK_FALSE: i64 = 1;  // initial state for quad modes (used in bitwise_ramlm.rs)
-const QUAD_WEAK_TRUE: i64 = 2;
-const QUAD_TRUE: i64 = 3;
-
-/// Quad mode weights for QUAD_WEIGHTED forward pass
-const QUAD_WEIGHTS: [f32; 4] = [0.0, 0.25, 0.75, 1.0];
+use crate::neuron_memory::{
+    FALSE, TRUE, EMPTY, QUAD_FALSE, QUAD_WEAK_TRUE, QUAD_TRUE, QUAD_WEIGHTS,
+    BITS_PER_CELL, CELLS_PER_WORD, CELL_MASK,
+};
 
 /// Inline xorshift32 PRNG — returns a float in [0, 1)
 #[inline]
@@ -42,26 +32,15 @@ fn xorshift32(state: &mut u32) -> f32 {
     (*state >> 8) as f32 / 16777216.0
 }
 
-/// Global EMPTY cell value (can be set from Python)
-/// 0.0 = EMPTY cells don't contribute (no artificial competition) - DEFAULT
-/// 0.5 = EMPTY cells add uncertainty (old default, inflates PPL)
-use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
-static EMPTY_VALUE_BITS: AtomicU32 = AtomicU32::new(0); // 0.0 as bits
-
-/// Get the EMPTY cell value
+/// Forward to neuron_memory's unified empty value.
 pub fn get_empty_value() -> f32 {
-    f32::from_bits(EMPTY_VALUE_BITS.load(AtomicOrdering::Relaxed))
+    crate::neuron_memory::get_empty_value()
 }
 
-/// Set the EMPTY cell value (call from Python before evaluation)
+/// Forward to neuron_memory's unified empty value.
 pub fn set_empty_value(value: f32) {
-    EMPTY_VALUE_BITS.store(value.to_bits(), AtomicOrdering::Relaxed);
+    crate::neuron_memory::set_empty_value(value);
 }
-
-/// Bit-packing constants
-const BITS_PER_CELL: usize = 2;
-const CELLS_PER_WORD: usize = 31;  // 62 bits / 2 = 31 cells
-const CELL_MASK: i64 = 0b11;  // 2-bit mask
 
 /// Compute memory address for a single neuron given input bits
 #[inline]

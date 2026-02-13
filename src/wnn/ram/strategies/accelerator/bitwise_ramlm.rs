@@ -20,7 +20,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(target_os = "macos")]
 use std::sync::{Arc, RwLock};
 
-use crate::ramlm;
+use crate::neuron_memory::{
+    FALSE, TRUE, EMPTY, QUAD_FALSE, QUAD_WEAK_FALSE, QUAD_WEAK_TRUE, QUAD_TRUE, QUAD_WEIGHTS,
+    BITS_PER_CELL, CELLS_PER_WORD, CELL_MASK,
+    MODE_TERNARY, MODE_QUAD_BINARY, MODE_QUAD_WEIGHTED,
+};
 
 // =============================================================================
 // Metal Bitwise CE Evaluator
@@ -564,24 +568,6 @@ fn compute_ce_cpu(
 // processing on the outer par_iter.
 // =============================================================================
 
-const BITS_PER_CELL: usize = 2;
-const CELLS_PER_WORD: usize = 31;
-const CELL_MASK: i64 = 0b11;
-const FALSE: i64 = 0;
-const TRUE: i64 = 1;
-const EMPTY: i64 = 2;
-
-// Quad mode constants
-const QUAD_FALSE: i64 = 0;
-const QUAD_WEAK_FALSE: i64 = 1;
-const QUAD_WEAK_TRUE: i64 = 2;
-const QUAD_TRUE: i64 = 3;
-const QUAD_WEIGHTS: [f32; 4] = [0.0, 0.25, 0.75, 1.0];
-
-// Memory modes
-const MODE_TERNARY: u8 = 0;
-const MODE_QUAD_BINARY: u8 = 1;
-const MODE_QUAD_WEIGHTED: u8 = 2;
 
 /// Inline xorshift32 PRNG — returns uniform float in (0, 1)
 #[inline]
@@ -1093,7 +1079,7 @@ fn train_and_forward_into(
 
     // ===== CPU FORWARD PASS on eval data (fallback) =====
     let num_eval = eval_subset.num_examples;
-    let empty_value = ramlm::get_empty_value();
+    let empty_value = crate::neuron_memory::get_empty_value();
     let wpe_eval = eval_subset.words_per_example;
 
     for ex in 0..num_eval {
