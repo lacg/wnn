@@ -78,7 +78,10 @@ class ArchitectureStrategyMixin:
 			import ram_accelerator
 			ram_accelerator.reset_metal_evaluators()
 			if iteration % log_interval == 0:
-				self._log.info(f"[{self.name}] GC + Metal reset at iteration {iteration}")
+				import resource
+				# macOS: ru_maxrss is in bytes
+				rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024 * 1024)
+				self._log.info(f"[{self.name}] GC + Metal reset at iteration {iteration}, RSS: {rss_mb:.0f} MB")
 		except Exception:
 			pass  # Ignore if accelerator not available
 

@@ -1075,6 +1075,10 @@ class TSConfig(OptimizationConfig):
 	total_neighbors_size: int = 50
 	# TS-specific early stopping threshold (higher than GA because TS is more focused)
 	min_improvement_pct: float = 0.5
+	# Cooperative multi-start: fraction of top genomes used as neighbor sources.
+	# 0.0 = single best (classic TS), 0.2 = top 20% of cache as reference set.
+	# Based on Crainic, Toulouse & Gendreau (1997) cooperative TS taxonomy.
+	diversity_sources_pct: float = 0.0
 
 
 class GenericGAStrategy(ABC, Generic[T]):
@@ -2122,8 +2126,9 @@ class GenericTSStrategy(ABC, Generic[T]):
 		early_stopper.reset(best_fitness)
 
 		# Log config
+		diversity_str = f", diversity={cfg.diversity_sources_pct:.0%}" if cfg.diversity_sources_pct > 0 else ""
 		self._log.info(f"[{self.name}] Config: neighbors={cfg.neighbors_per_iter} (single path by {fitness_calculator.name}), "
-					   f"iters={cfg.iterations}, cache={cache_size}")
+					   f"iters={cfg.iterations}, cache={cache_size}{diversity_str}")
 
 		# Track threshold changes
 		prev_threshold: Optional[float] = None
@@ -2153,14 +2158,43 @@ class GenericTSStrategy(ABC, Generic[T]):
 				shutdown_requested = True
 				break
 
-			# Generate neighbors via hook (overridable for Rust acceleration)
-			viable = self._generate_neighbors(
-				best_genome=best_ranked_genome,
-				n_neighbors=cfg.neighbors_per_iter,
-				threshold=current_threshold,
-				iteration=iteration,
-				tabu_list=tabu_list,
-			)
+			# Generate neighbors — cooperative multi-start or single-source
+			if cfg.diversity_sources_pct > 0 and len(all_neighbors) > 1:
+				# Cooperative multi-start: top N% of cache as equal reference set
+				n_sources = max(1, int(len(all_neighbors) * cfg.diversity_sources_pct))
+				# Rank by fitness to pick the reference set
+				valid_for_div = [(g, ce, acc or 0.0) for g, ce, acc in all_neighbors if acc is not None]
+				if valid_for_div:
+					ranked_div = fitness_calculator.rank(valid_for_div)
+					sources = [self.clone_genome(g) for g, _ in ranked_div[:n_sources]]
+				else:
+					sources = [self.clone_genome(all_neighbors[0][0])]
+					n_sources = 1
+
+				# Equal share per source, total capped at neighbors_per_iter
+				total_nbrs = cfg.neighbors_per_iter
+				per_source = max(1, total_nbrs // n_sources)
+				remainder = total_nbrs - (per_source * n_sources)
+
+				all_generated: list[tuple] = []
+				for si, source in enumerate(sources):
+					n = per_source + (1 if si < remainder else 0)
+					batch = self._generate_neighbors(
+						best_genome=source, n_neighbors=n,
+						threshold=current_threshold, iteration=iteration,
+						tabu_list=tabu_list,
+					)
+					all_generated.extend(batch)
+				viable = all_generated
+			else:
+				# Classic TS: all neighbors from single best-ranked genome
+				viable = self._generate_neighbors(
+					best_genome=best_ranked_genome,
+					n_neighbors=cfg.neighbors_per_iter,
+					threshold=current_threshold,
+					iteration=iteration,
+					tabu_list=tabu_list,
+				)
 
 			if not viable:
 				continue

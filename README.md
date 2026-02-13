@@ -100,6 +100,16 @@ model = ckpt.create_model()
 print(ckpt.summary())
 ```
 
+## Foundations
+
+For a deeper understanding of the theory and algorithms behind this project, see the [Foundations documentation](docs/foundations/README.md):
+
+- [RAM Neurons](docs/foundations/ram.md) — How lookup-table neurons work and why partial connectivity enables generalization
+- [Connectivity Optimization](docs/foundations/optimization.md) — Why connectivity is the key learning mechanism and how metaheuristics optimize it
+- [Genetic Algorithm](docs/foundations/ga.md) — Population-based exploration of the connectivity search space
+- [Tabu Search](docs/foundations/ts.md) — Memory-guided local refinement with cooperative multi-start variant
+- [Simulated Annealing](docs/foundations/sa.md) — Temperature-based probabilistic search
+
 ## Rust+Metal Accelerator (Optional)
 
 For Apple Silicon Macs, a Rust accelerator provides 3-8x speedup using Metal GPU compute:

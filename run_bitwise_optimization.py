@@ -265,7 +265,7 @@ def run_ga_phase(
 def run_ts_phase(
 	evaluator, arch_config, ts_iters, neighbors, patience,
 	seed_genome, seed_fitness, phase_name="TS", logger=print, check_interval=10,
-	initial_neighbors=None,
+	initial_neighbors=None, diversity_sources_pct=0.0,
 ):
 	"""Run a TS refinement phase."""
 	from wnn.ram.strategies.connectivity.architecture_strategies import ArchitectureTSStrategy
@@ -286,6 +286,7 @@ def run_ts_phase(
 		fitness_calculator_type=FitnessCalculatorType.HARMONIC_RANK,
 		fitness_weight_ce=1.0,
 		fitness_weight_acc=1.0,
+		diversity_sources_pct=diversity_sources_pct,
 	)
 
 	strategy = ArchitectureTSStrategy(
@@ -438,6 +439,8 @@ def main():
 						help="TS iterations per phase (default: 50)")
 	parser.add_argument("--neighbors", type=int, default=30,
 						help="TS neighbors per iteration (default: 30)")
+	parser.add_argument("--ts-diversity", type=float, default=0.0,
+						help="TS diversity: fraction of top genomes as neighbor sources (0=top-1, 0.2=top 20%%)")
 	parser.add_argument("--patience", type=int, default=2,
 						help="Early stop patience (default: 2)")
 	parser.add_argument("--check-interval", type=int, default=10,
@@ -768,6 +771,7 @@ def main():
 			phase_name=f"Phase {phase_num}: {phase_name}", logger=log,
 			check_interval=ci,
 			initial_neighbors=initial_population,
+			diversity_sources_pct=args.ts_diversity,
 		)
 
 		best_genome = result.best_genome

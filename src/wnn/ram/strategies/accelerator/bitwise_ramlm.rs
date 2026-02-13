@@ -295,11 +295,12 @@ impl BitwiseTokenCache {
         }
 
         // Encode full training data
-        let (full_input, _full_targets, full_target_bits, full_n) =
+        let (full_input_bits, _full_targets, full_target_bits, full_n) =
             Self::encode_sequence(&train_tokens, context_size, bits_per_token, total_input_bits, num_bits);
-        let (full_packed, full_wpe) = pack_input_bits(&full_input, full_n, total_input_bits);
+        let (full_packed, full_wpe) = pack_input_bits(&full_input_bits, full_n, total_input_bits);
+        drop(full_input_bits);  // free unpacked bits (~77 MB for ctx=2)
         let full_train = BitwiseSubset {
-            input_bits: full_input,
+            input_bits: Vec::new(),  // dropped after packing — only packed_input is used
             packed_input: full_packed,
             target_bits: full_target_bits,
             num_examples: full_n,
@@ -312,11 +313,12 @@ impl BitwiseTokenCache {
         );
 
         // Encode full eval data
-        let (full_eval_input, full_eval_targets, _, full_eval_n) =
+        let (full_eval_input_bits, full_eval_targets, _, full_eval_n) =
             Self::encode_sequence(&eval_tokens, context_size, bits_per_token, total_input_bits, num_bits);
-        let (full_eval_packed, full_eval_wpe) = pack_input_bits(&full_eval_input, full_eval_n, total_input_bits);
+        let (full_eval_packed, full_eval_wpe) = pack_input_bits(&full_eval_input_bits, full_eval_n, total_input_bits);
+        drop(full_eval_input_bits);  // free unpacked bits
         let full_eval = BitwiseEvalSubset {
-            input_bits: full_eval_input,
+            input_bits: Vec::new(),  // dropped after packing — only packed_input is used
             packed_input: full_eval_packed,
             targets: full_eval_targets,
             num_examples: full_eval_n,
@@ -407,7 +409,7 @@ impl BitwiseTokenCache {
                 let (input_bits, _, target_bits, num_ex) =
                     Self::encode_sequence(part, context_size, bits_per_token, total_input_bits, num_bits);
                 let (packed, wpe) = pack_input_bits(&input_bits, num_ex, total_input_bits);
-                BitwiseSubset { input_bits, packed_input: packed, target_bits, num_examples: num_ex, words_per_example: wpe }
+                BitwiseSubset { input_bits: Vec::new(), packed_input: packed, target_bits, num_examples: num_ex, words_per_example: wpe }
             })
             .collect()
     }
@@ -432,7 +434,7 @@ impl BitwiseTokenCache {
                 let (input_bits, targets, _, num_ex) =
                     Self::encode_sequence(part, context_size, bits_per_token, total_input_bits, num_bits);
                 let (packed, wpe) = pack_input_bits(&input_bits, num_ex, total_input_bits);
-                BitwiseEvalSubset { input_bits, packed_input: packed, targets, num_examples: num_ex, words_per_example: wpe }
+                BitwiseEvalSubset { input_bits: Vec::new(), packed_input: packed, targets, num_examples: num_ex, words_per_example: wpe }
             })
             .collect()
     }
@@ -1111,30 +1113,51 @@ fn evaluate_genomes_with_subset(
     // Allocate output scores (uniform across genomes — always num_eval * num_clusters)
     let mut all_scores: Vec<f32> = vec![0.0f32; num_genomes * scores_per_genome];
 
-    // Phase 1: Train + Forward (CPU, parallel over genomes)
-    // Each genome gets its own Vec<i64> memory (variable size) allocated inside the closure.
-    all_scores
-        .par_chunks_mut(scores_per_genome)
-        .enumerate()
-        .for_each(|(g, score_slice)| {
-            let layout = &genome_layouts[g];
-            let base = g * num_clusters;
-            let bits_slice = &bits_per_cluster_flat[base..base + num_clusters];
-            let neurons_slice = &neurons_per_cluster_flat[base..base + num_clusters];
-            let conn_start = genome_conn_offsets[g];
-            let conn_end = conn_start + layout.total_connections;
-            let connections = &connections_flat[conn_start..conn_end];
+    // Phase 1: Train + Forward (CPU, parallel over genomes with memory budgeting)
+    // Each genome allocates its own Vec<i64> memory (variable size).
+    // With high-bit genomes (20+ bits), concurrent allocations can exceed physical RAM.
+    // Budget limits concurrent genomes to prevent OOM/swap thrashing.
+    let max_mem_per_genome = genome_layouts.iter()
+        .map(|l| l.total_memory_words as u64 * 8)  // bytes (i64 = 8 bytes)
+        .max()
+        .unwrap_or(0);
 
-            // Allocate per-genome memory
-            let mut memory = vec![empty_word; layout.total_memory_words];
+    let mem_budget: u64 = 6 * 1024 * 1024 * 1024; // 6 GB for training memory
+    let max_concurrent = if max_mem_per_genome > 0 {
+        (mem_budget / max_mem_per_genome).max(1).min(num_genomes as u64) as usize
+    } else {
+        num_genomes
+    };
 
-            let genome_rng_seed = rng_seed.wrapping_add(g as u64 * 1000007);
-            train_and_forward_into(
-                cache, connections, bits_slice, neurons_slice, layout,
-                train_subset, eval_subset, &mut memory, empty_word, score_slice,
-                memory_mode, neuron_sample_rate, genome_rng_seed,
-            );
-        });
+    // Process genomes in batches of max_concurrent
+    for batch_start in (0..num_genomes).step_by(max_concurrent) {
+        let batch_end = (batch_start + max_concurrent).min(num_genomes);
+        let batch_scores = &mut all_scores[batch_start * scores_per_genome..batch_end * scores_per_genome];
+
+        batch_scores
+            .par_chunks_mut(scores_per_genome)
+            .enumerate()
+            .for_each(|(i, score_slice)| {
+                let g = batch_start + i;
+                let layout = &genome_layouts[g];
+                let base = g * num_clusters;
+                let bits_slice = &bits_per_cluster_flat[base..base + num_clusters];
+                let neurons_slice = &neurons_per_cluster_flat[base..base + num_clusters];
+                let conn_start = genome_conn_offsets[g];
+                let conn_end = conn_start + layout.total_connections;
+                let connections = &connections_flat[conn_start..conn_end];
+
+                // Allocate per-genome memory
+                let mut memory = vec![empty_word; layout.total_memory_words];
+
+                let genome_rng_seed = rng_seed.wrapping_add(g as u64 * 1000007);
+                train_and_forward_into(
+                    cache, connections, bits_slice, neurons_slice, layout,
+                    train_subset, eval_subset, &mut memory, empty_word, score_slice,
+                    memory_mode, neuron_sample_rate, genome_rng_seed,
+                );
+            });
+    }
 
     // Phase 2: Reconstruction + CE
     #[cfg(target_os = "macos")]
