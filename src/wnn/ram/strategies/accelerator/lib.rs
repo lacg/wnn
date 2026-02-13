@@ -4339,7 +4339,7 @@ impl BitwiseCacheWrapper {
         memory_mode: u8,
         neuron_sample_rate: f32,
         rng_seed: u64,
-    ) -> PyResult<Vec<(f64, f64)>> {
+    ) -> PyResult<Vec<(f64, f64, f64)>> {
         py.allow_threads(|| {
             Ok(bitwise_ramlm::evaluate_genomes(
                 &self.inner, &bits_per_cluster_flat, &neurons_per_cluster_flat,
@@ -4361,7 +4361,7 @@ impl BitwiseCacheWrapper {
         memory_mode: u8,
         neuron_sample_rate: f32,
         rng_seed: u64,
-    ) -> PyResult<Vec<(f64, f64)>> {
+    ) -> PyResult<Vec<(f64, f64, f64)>> {
         py.allow_threads(|| {
             Ok(bitwise_ramlm::evaluate_genomes_full(
                 &self.inner, &bits_per_cluster_flat, &neurons_per_cluster_flat,

@@ -1037,7 +1037,7 @@ pub fn evaluate_genomes(
     memory_mode: u8,
     neuron_sample_rate: f32,
     rng_seed: u64,
-) -> Vec<(f64, f64)> {
+) -> Vec<(f64, f64, f64)> {
     let train_subset = &cache.train_subsets[train_subset_idx % cache.num_parts];
     let eval_subset = &cache.eval_subsets[eval_subset_idx % cache.num_eval_parts];
     evaluate_genomes_with_subset(
@@ -1057,7 +1057,7 @@ pub fn evaluate_genomes_full(
     memory_mode: u8,
     neuron_sample_rate: f32,
     rng_seed: u64,
-) -> Vec<(f64, f64)> {
+) -> Vec<(f64, f64, f64)> {
     evaluate_genomes_with_subset(
         cache, bits_per_cluster_flat, neurons_per_cluster_flat,
         connections_flat, num_genomes, &cache.full_train, &cache.full_eval,
@@ -1069,6 +1069,10 @@ pub fn evaluate_genomes_full(
 ///
 /// Each genome can have different bits/neurons per cluster. Layouts are pre-computed
 /// per genome, and memory is allocated per genome based on its actual layout.
+///
+/// Returns: Vec<(ce, accuracy, weighted_bit_accuracy)> per genome.
+/// weighted_bit_accuracy uses entropy-based weights: bits with balanced 0/1 distribution
+/// in targets (high entropy) are weighted more than degenerate bits.
 fn evaluate_genomes_with_subset(
     cache: &BitwiseTokenCache,
     bits_per_cluster_flat: &[usize],
@@ -1080,7 +1084,7 @@ fn evaluate_genomes_with_subset(
     memory_mode: u8,
     neuron_sample_rate: f32,
     rng_seed: u64,
-) -> Vec<(f64, f64)> {
+) -> Vec<(f64, f64, f64)> {
     let num_clusters = cache.num_bits;
     let num_eval = eval_subset.num_examples;
     let scores_per_genome = num_eval * num_clusters;
@@ -1159,6 +1163,57 @@ fn evaluate_genomes_with_subset(
             });
     }
 
+    // Phase 1.5: Compute weighted BitAcc per genome
+    // Weight each bit by its entropy in the eval targets: balanced bits (50/50) matter
+    // more than degenerate bits (always 0 or always 1).
+    let num_bits = cache.num_bits;
+    let mut bit_weights = vec![0.0f64; num_bits];
+    {
+        let mut bit_ones = vec![0u64; num_bits];
+        for ex in 0..num_eval {
+            let target = eval_subset.targets[ex] as usize;
+            let tb_off = target * num_bits;
+            for b in 0..num_bits {
+                bit_ones[b] += cache.token_bits[tb_off + b] as u64;
+            }
+        }
+        for b in 0..num_bits {
+            let p = bit_ones[b] as f64 / num_eval as f64;
+            if p > 0.0 && p < 1.0 {
+                bit_weights[b] = (-p * p.ln() - (1.0 - p) * (1.0 - p).ln())
+                    / std::f64::consts::LN_2;
+            }
+            // else: degenerate bit → weight 0 (always same value, no information)
+        }
+    }
+    let total_weight: f64 = bit_weights.iter().sum();
+
+    // Compute weighted BitAcc per genome (parallel over genomes)
+    let weighted_bit_accs: Vec<f64> = (0..num_genomes)
+        .into_par_iter()
+        .map(|g| {
+            let score_base = g * scores_per_genome;
+            let mut weighted_correct = 0.0f64;
+            for ex in 0..num_eval {
+                let target = eval_subset.targets[ex] as usize;
+                let tb_off = target * num_bits;
+                let sc_off = score_base + ex * num_bits;
+                for b in 0..num_bits {
+                    let predicted = all_scores[sc_off + b] > 0.5;
+                    let actual = cache.token_bits[tb_off + b] > 0;
+                    if predicted == actual {
+                        weighted_correct += bit_weights[b];
+                    }
+                }
+            }
+            if total_weight > 0.0 {
+                weighted_correct / (num_eval as f64 * total_weight)
+            } else {
+                0.0
+            }
+        })
+        .collect();
+
     // Phase 2: Reconstruction + CE
     #[cfg(target_os = "macos")]
     if let Some(metal) = get_metal_bitwise_ce() {
@@ -1171,7 +1226,12 @@ fn evaluate_genomes_with_subset(
             cache.num_bits,
             cache.vocab_size,
         ) {
-            Ok(results) => return results,
+            Ok(ce_results) => {
+                return ce_results.into_iter()
+                    .zip(weighted_bit_accs)
+                    .map(|((ce, acc), bit_acc)| (ce, acc, bit_acc))
+                    .collect();
+            }
             Err(e) => {
                 eprintln!("[BitwiseCE] Metal failed, CPU fallback: {e}");
             }
@@ -1179,7 +1239,7 @@ fn evaluate_genomes_with_subset(
     }
 
     // CPU fallback (parallel over genomes)
-    all_scores
+    let ce_results: Vec<(f64, f64)> = all_scores
         .par_chunks(scores_per_genome)
         .map(|scores| {
             compute_ce_cpu(
@@ -1191,5 +1251,10 @@ fn evaluate_genomes_with_subset(
                 cache.vocab_size,
             )
         })
+        .collect();
+
+    ce_results.into_iter()
+        .zip(weighted_bit_accs)
+        .map(|((ce, acc), bit_acc)| (ce, acc, bit_acc))
         .collect()
 }

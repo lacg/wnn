@@ -200,11 +200,14 @@ class ArchitectureStrategyMixin:
 		by_ce = sorted(full_evals, key=lambda x: x[1][0])
 		by_acc = sorted(full_evals, key=lambda x: -x[1][1])
 
-		best_ce_genome, (best_ce_ce, best_ce_acc) = by_ce[0]
-		best_acc_genome, (best_acc_ce, best_acc_acc) = by_acc[0]
+		best_ce_genome, best_ce_result = by_ce[0]
+		best_ce_ce, best_ce_acc = best_ce_result[0], best_ce_result[1]
+		best_acc_genome, best_acc_result = by_acc[0]
+		best_acc_ce, best_acc_acc = best_acc_result[0], best_acc_result[1]
 
 		# Best by fitness (the result's best_genome)
-		best_fit_ce, best_fit_acc = evaluator.evaluate_batch_full([result.best_genome])[0]
+		best_fit_result = evaluator.evaluate_batch_full([result.best_genome])[0]
+		best_fit_ce, best_fit_acc = best_fit_result[0], best_fit_result[1]
 
 		self._log.info(f"  Best by CE:       CE={best_ce_ce:.4f}, Acc={best_ce_acc:.4%}")
 		self._log.info(f"  Best by Accuracy: CE={best_acc_ce:.4f}, Acc={best_acc_acc:.4%}")

@@ -382,13 +382,16 @@ def evaluate_phase_top_k(full_evaluator, result, phase_name, logger=print):
 	for i, idx in enumerate(idx_list):
 		eval_map[idx] = full_results[i]
 
-	def get_ce_acc(idx):
-		ce, acc = eval_map[idx]
-		return ce, acc
+	def get_metrics(idx):
+		r = eval_map[idx]
+		return r[0], r[1], r[2] if len(r) > 2 else 0.0
 
-	fit_ce, fit_acc = get_ce_acc(best_fit_idx)
-	ce_ce, ce_acc = get_ce_acc(best_ce_idx)
-	acc_ce, acc_acc = get_ce_acc(best_acc_idx)
+	fit_ce, fit_acc, fit_bit_acc = get_metrics(best_fit_idx)
+	ce_ce, ce_acc, ce_bit_acc = get_metrics(best_ce_idx)
+	acc_ce, acc_acc, acc_bit_acc = get_metrics(best_acc_idx)
+
+	# Log BitAcc for correlation tracking
+	logger(f"  Full-eval BitAcc: fitness={fit_bit_acc:.2%}, best_ce={ce_bit_acc:.2%}, best_acc={acc_bit_acc:.2%}")
 
 	return PhaseMetrics(
 		phase_name=phase_name,
@@ -698,8 +701,10 @@ def main():
 	# Full-eval initial population baseline on validation
 	phase_metrics_list = []
 	logger(f"\nEvaluating baseline on full validation...")
-	baseline_ce, baseline_acc = full_evaluator.evaluate_single_full(best_genome)
-	logger(f"  Baseline CE={baseline_ce:.4f}, Acc={baseline_acc:.2%}, PPL={math.exp(baseline_ce):.0f}")
+	baseline_result = full_evaluator.evaluate_batch_full([best_genome])[0]
+	baseline_ce, baseline_acc = baseline_result[0], baseline_result[1]
+	baseline_bit_acc = baseline_result[2] if len(baseline_result) > 2 else 0.0
+	logger(f"  Baseline CE={baseline_ce:.4f}, Acc={baseline_acc:.2%}, PPL={math.exp(baseline_ce):.0f}, BitAcc={baseline_bit_acc:.2%}")
 	phase_metrics_list.append(PhaseMetrics(
 		phase_name="Init Population",
 		top_k_ce=baseline_ce,
@@ -735,10 +740,14 @@ def main():
 		best_ce = result.final_fitness
 		initial_population = result.final_population
 
+		# Track BitAcc from cached evaluation on best genome
+		best_bit_acc = getattr(best_genome, '_cached_bit_acc', None)
+
 		all_results[result_key] = {
 			"initial_ce": result.initial_fitness,
 			"final_ce": result.final_fitness,
 			"final_accuracy": result.final_accuracy,
+			"final_bit_accuracy": best_bit_acc,
 			"improvement_pct": result.improvement_percent,
 			"generations_run": result.iterations_run,
 			"stop_reason": str(result.stop_reason),
@@ -747,6 +756,9 @@ def main():
 			"best_genome_data": best_genome.serialize(),
 			"final_population": [g.serialize() for g in result.final_population] if result.final_population else None,
 		}
+
+		if best_bit_acc is not None:
+			logger(f"  Best genome BitAcc={best_bit_acc:.2%}")
 
 		# Full-eval 1-3 genomes on validation
 		metrics = evaluate_phase_top_k(full_evaluator, result, f"P{phase_num} {phase_name}", logger=log)
@@ -778,10 +790,14 @@ def main():
 		best_ce = result.final_fitness
 		initial_population = result.final_population
 
+		# Track BitAcc from cached evaluation on best genome
+		best_bit_acc = getattr(best_genome, '_cached_bit_acc', None)
+
 		all_results[result_key] = {
 			"initial_ce": result.initial_fitness,
 			"final_ce": result.final_fitness,
 			"final_accuracy": result.final_accuracy,
+			"final_bit_accuracy": best_bit_acc,
 			"improvement_pct": (result.initial_fitness - result.final_fitness) / result.initial_fitness * 100 if result.initial_fitness > 0 else 0,
 			"iterations_run": result.iterations_run,
 			"stop_reason": str(result.stop_reason),
@@ -790,6 +806,9 @@ def main():
 			"best_genome_data": best_genome.serialize(),
 			"final_population": [g.serialize() for g in result.final_population] if result.final_population else None,
 		}
+
+		if best_bit_acc is not None:
+			logger(f"  Best genome BitAcc={best_bit_acc:.2%}")
 
 		# Full-eval 1-3 genomes on validation
 		metrics = evaluate_phase_top_k(full_evaluator, result, f"P{phase_num} {phase_name}", logger=log)

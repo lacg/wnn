@@ -1693,11 +1693,11 @@ class GenericGAStrategy(ABC, Generic[T]):
 
 		to_eval = [population[i][0] for i in unknown_indices]
 
-		# Batch evaluate - returns (CE, accuracy) tuples
+		# Batch evaluate - returns (CE, accuracy[, bit_acc]) tuples
 		if batch_fn is not None:
 			results = batch_fn(to_eval)
-			new_fitness = [ce for ce, _ in results]
-			new_accuracy = [acc for _, acc in results]
+			new_fitness = [r[0] for r in results]
+			new_accuracy = [r[1] for r in results]
 		else:
 			# Fallback to single evaluation (no accuracy)
 			new_fitness = [single_fn(g) for g in to_eval]
@@ -1767,8 +1767,8 @@ class GenericGAStrategy(ABC, Generic[T]):
 				best_ce = min(r[0] for r in results) if results else 0.0
 				best_acc = max(r[1] for r in results if r[1] is not None) if results else 0.0
 				self._log.info(f"[{self.name}] Seed eval: {len(to_eval)} genomes in {elapsed:.1f}s (best CE={best_ce:.4f}, Acc={best_acc:.2%})")
-				for genome, (ce, acc) in zip(to_eval, results):
-					viable.append((genome, ce, acc))
+				for genome, r in zip(to_eval, results):
+					viable.append((genome, r[0], r[1]))
 			else:
 				for genome in to_eval:
 					ce = single_fn(genome)
@@ -1791,7 +1791,9 @@ class GenericGAStrategy(ABC, Generic[T]):
 				results = batch_fn(candidates, **batch_kwargs)
 				elapsed = _time.time() - t0
 				self._log.info(f"[{self.name}] Batch eval: {len(candidates)} candidates in {elapsed:.1f}s")
-				for genome, (ce, acc) in zip(candidates, results):
+				for genome, r in zip(candidates, results):
+					acc = r[1]
+					ce = r[0]
 					if acc is None or acc >= min_accuracy:
 						viable.append((genome, ce, acc))
 						if len(viable) >= target_size:
@@ -1942,8 +1944,8 @@ class GenericTSStrategy(ABC, Generic[T]):
 				to_eval, min_accuracy=threshold,
 				generation=iteration, total_generations=self._config.iterations,
 			)
-			fitness_values = [ce for ce, _ in results]
-			accuracy_values = [acc for _, acc in results]
+			fitness_values = [r[0] for r in results]
+			accuracy_values = [r[1] for r in results]
 		else:
 			fitness_values = [self._evaluate_fn(n) for n, _ in candidates]
 			accuracy_values = [None] * len(candidates)
@@ -2070,8 +2072,8 @@ class GenericTSStrategy(ABC, Generic[T]):
 			self._log.info(f"[{self.name}] Seeding from {len(initial_neighbors)} neighbors")
 			if batch_evaluate_fn is not None:
 				results = batch_evaluate_fn(initial_neighbors, min_accuracy=current_threshold)
-				seed_fitness = [ce for ce, _ in results]
-				seed_accuracy = [acc for _, acc in results]
+				seed_fitness = [r[0] for r in results]
+				seed_accuracy = [r[1] for r in results]
 			else:
 				seed_fitness = [evaluate_fn(g) for g in initial_neighbors]
 				seed_accuracy = [None] * len(initial_neighbors)

@@ -21,7 +21,8 @@ Usage:
 
 	# Evaluate genomes (same interface as CachedEvaluator)
 	results = evaluator.evaluate_batch(genomes)
-	# → [(ce, acc), (ce, acc), ...]
+	# → [(ce, acc, weighted_bit_acc), (ce, acc, weighted_bit_acc), ...]
+	# weighted_bit_acc uses entropy-based weights (balanced bits matter more)
 """
 
 import time
@@ -183,10 +184,13 @@ class BitwiseEvaluator:
 		genomes: list[ClusterGenome],
 		train_subset_idx: int,
 		eval_subset_idx: int,
-	) -> list[tuple[float, float]]:
-		"""Evaluate using Rust+Metal backend with per-cluster heterogeneous configs."""
+	) -> list[tuple[float, float, float]]:
+		"""Evaluate using Rust+Metal backend with per-cluster heterogeneous configs.
+
+		Returns list of (ce, accuracy, weighted_bit_accuracy) tuples.
+		"""
 		bits_flat, neurons_flat, connections_flat = self._flatten_genomes_heterogeneous(genomes)
-		return self._rust_cache.evaluate_genomes(
+		results = self._rust_cache.evaluate_genomes(
 			bits_per_cluster_flat=bits_flat,
 			neurons_per_cluster_flat=neurons_flat,
 			connections_flat=connections_flat,
@@ -197,14 +201,21 @@ class BitwiseEvaluator:
 			neuron_sample_rate=self._neuron_sample_rate,
 			rng_seed=self._seed,
 		)
+		# Cache weighted bit accuracy on each genome for downstream logging
+		for genome, (_, _, bit_acc) in zip(genomes, results):
+			genome._cached_bit_acc = bit_acc
+		return results
 
 	def _evaluate_batch_full_rust(
 		self,
 		genomes: list[ClusterGenome],
-	) -> list[tuple[float, float]]:
-		"""Evaluate with full data using Rust+Metal backend."""
+	) -> list[tuple[float, float, float]]:
+		"""Evaluate with full data using Rust+Metal backend.
+
+		Returns list of (ce, accuracy, weighted_bit_accuracy) tuples.
+		"""
 		bits_flat, neurons_flat, connections_flat = self._flatten_genomes_heterogeneous(genomes)
-		return self._rust_cache.evaluate_genomes_full(
+		results = self._rust_cache.evaluate_genomes_full(
 			bits_per_cluster_flat=bits_flat,
 			neurons_per_cluster_flat=neurons_flat,
 			connections_flat=connections_flat,
@@ -213,6 +224,10 @@ class BitwiseEvaluator:
 			neuron_sample_rate=self._neuron_sample_rate,
 			rng_seed=self._seed,
 		)
+		# Cache weighted bit accuracy on each genome for downstream logging
+		for genome, (_, _, bit_acc) in zip(genomes, results):
+			genome._cached_bit_acc = bit_acc
+		return results
 
 	# =========================================================================
 	# Python fallback evaluation
@@ -284,8 +299,11 @@ class BitwiseEvaluator:
 		min_accuracy: Optional[float] = None,
 		streaming: bool = True,
 		stream_batch_size: int = 1,
-	) -> list[tuple[float, float]]:
-		"""Evaluate multiple genomes using subset rotation (both train and eval)."""
+	) -> list[tuple[float, float, float]]:
+		"""Evaluate multiple genomes using subset rotation (both train and eval).
+
+		Returns list of (ce, accuracy, weighted_bit_accuracy) tuples.
+		"""
 		if train_subset_idx is None:
 			train_subset_idx = self.next_train_idx()
 		if eval_subset_idx is None:
@@ -301,23 +319,29 @@ class BitwiseEvaluator:
 				total = total_generations or "?"
 				best_ce = min(r[0] for r in results) if results else 0.0
 				best_acc = max(r[1] for r in results) if results else 0.0
+				best_bit_acc = max(r[2] for r in results) if results else 0.0
 				log(f"[Gen {gen:02d}/{total}] {len(genomes)} genomes in {elapsed:.1f}s "
-					f"(best CE={best_ce:.4f}, Acc={best_acc:.2%})")
+					f"(best CE={best_ce:.4f}, Acc={best_acc:.2%}, BitAcc={best_bit_acc:.2%})")
 			return results
 
-		# Python fallback
+		# Python fallback (no bit_acc available)
 		train_data = self._train_parts[train_subset_idx % self._num_parts]
-		return self._evaluate_batch_python(
+		py_results = self._evaluate_batch_python(
 			genomes, train_data, self._eval_tokens,
 			logger, generation, total_generations,
 		)
+		# Pad with 0.0 for bit_acc
+		return [(ce, acc, 0.0) for ce, acc in py_results]
 
 	def evaluate_batch_full(
 		self,
 		genomes: list[ClusterGenome],
 		logger: Optional[Callable[[str], None]] = None,
-	) -> list[tuple[float, float]]:
-		"""Evaluate genomes using full train + eval data."""
+	) -> list[tuple[float, float, float]]:
+		"""Evaluate genomes using full train + eval data.
+
+		Returns list of (ce, accuracy, weighted_bit_accuracy) tuples.
+		"""
 		if self._rust_cache is not None:
 			start = time.time()
 			results = self._evaluate_batch_full_rust(genomes)
@@ -327,9 +351,10 @@ class BitwiseEvaluator:
 			return results
 
 		# Python fallback
-		return self._evaluate_batch_python(
+		py_results = self._evaluate_batch_python(
 			genomes, self._train_tokens, self._eval_tokens, logger,
 		)
+		return [(ce, acc, 0.0) for ce, acc in py_results]
 
 	def evaluate_single(
 		self,
@@ -338,8 +363,8 @@ class BitwiseEvaluator:
 		eval_subset_idx: Optional[int] = None,
 	) -> float:
 		"""Evaluate a single genome, returning CE only."""
-		ce, _ = self.evaluate_batch([genome], train_subset_idx, eval_subset_idx)[0]
-		return ce
+		result = self.evaluate_batch([genome], train_subset_idx, eval_subset_idx)[0]
+		return result[0]
 
 	def evaluate_single_with_accuracy(
 		self,
@@ -348,11 +373,13 @@ class BitwiseEvaluator:
 		eval_subset_idx: Optional[int] = None,
 	) -> tuple[float, float]:
 		"""Evaluate a single genome, returning (CE, accuracy)."""
-		return self.evaluate_batch([genome], train_subset_idx, eval_subset_idx)[0]
+		result = self.evaluate_batch([genome], train_subset_idx, eval_subset_idx)[0]
+		return (result[0], result[1])
 
 	def evaluate_single_full(self, genome: ClusterGenome) -> tuple[float, float]:
 		"""Evaluate a single genome with full data."""
-		return self.evaluate_batch_full([genome])[0]
+		result = self.evaluate_batch_full([genome])[0]
+		return (result[0], result[1])
 
 	# =========================================================================
 	# Gated evaluation (all 3 modes: TOKEN_LEVEL, BIT_LEVEL, DUAL_STAGE)
