@@ -250,7 +250,6 @@ pub struct BitwiseSubset {
 /// Pre-encoded eval subset for bitwise CE computation.
 /// Unlike BitwiseSubset, stores u32 token IDs (needed for CE) instead of target_bits.
 pub struct BitwiseEvalSubset {
-    pub input_bits: Vec<bool>,   // [N * total_input_bits]
     pub packed_input: Vec<u64>,  // [N * words_per_example] packed bit representation
     pub targets: Vec<u32>,       // [N] token IDs
     pub num_examples: usize,
@@ -353,8 +352,8 @@ impl BitwiseTokenCache {
         let (full_eval_input_bits, full_eval_targets, _, full_eval_n) =
             Self::encode_sequence(&eval_tokens, context_size, bits_per_token, total_input_bits, num_bits);
         let (full_eval_packed, full_eval_wpe) = pack_input_bits(&full_eval_input_bits, full_eval_n, total_input_bits);
+        drop(full_eval_input_bits);  // free unpacked bits — only packed_input is used
         let full_eval = BitwiseEvalSubset {
-            input_bits: full_eval_input_bits,
             packed_input: full_eval_packed,
             targets: full_eval_targets,
             num_examples: full_eval_n,
@@ -470,7 +469,7 @@ impl BitwiseTokenCache {
                 let (input_bits, targets, _, num_ex) =
                     Self::encode_sequence(part, context_size, bits_per_token, total_input_bits, num_bits);
                 let (packed, wpe) = pack_input_bits(&input_bits, num_ex, total_input_bits);
-                BitwiseEvalSubset { input_bits, packed_input: packed, targets, num_examples: num_ex, words_per_example: wpe }
+                BitwiseEvalSubset { packed_input: packed, targets, num_examples: num_ex, words_per_example: wpe }
             })
             .collect()
     }
@@ -798,14 +797,14 @@ fn compute_genome_layout(
 #[cfg(target_os = "macos")]
 fn gpu_forward_heterogeneous(
 	evaluator: &crate::metal_ramlm::MetalRAMLMEvaluator,
-	input_bits: &[bool],
+	packed_input: &[u64],
 	connections: &[i64],
 	memory: &[i64],
 	bits_per_cluster: &[usize],
 	neurons_per_cluster: &[usize],
 	layout: &GenomeLayout,
 	num_eval: usize,
-	total_input_bits: usize,
+	words_per_example: usize,
 	num_clusters: usize,
 	memory_mode: u8,
 	out_probs: &mut [f32],
@@ -839,11 +838,11 @@ fn gpu_forward_heterogeneous(
 		}
 
 		match evaluator.forward_batch(
-			input_bits,
+			packed_input,
 			&group_connections,
 			&group_memory,
 			num_eval,
-			total_input_bits,
+			words_per_example,
 			neurons * group_size,
 			*bits,
 			*neurons,
@@ -1032,7 +1031,7 @@ fn train_and_forward_into(
     {
         if let Some(evaluator) = get_metal_forward_evaluator() {
             let num_eval = eval_subset.num_examples;
-            let total_input_bits = cache.total_input_bits;
+            let wpe = eval_subset.words_per_example;
 
             let uniform = bits_per_cluster.iter().all(|&b| b == bits_per_cluster[0])
                 && neurons_per_cluster.iter().all(|&n| n == neurons_per_cluster[0]);
@@ -1042,11 +1041,11 @@ fn train_and_forward_into(
                 let neurons = neurons_per_cluster[0];
                 let wpn = layout.words_per_neuron[0];
                 match evaluator.forward_batch(
-                    &eval_subset.input_bits,
+                    &eval_subset.packed_input,
                     connections,
                     memory,
                     num_eval,
-                    total_input_bits,
+                    wpe,
                     neurons * num_clusters,
                     bits,
                     neurons,
@@ -1065,9 +1064,9 @@ fn train_and_forward_into(
                 }
             } else {
                 gpu_forward_heterogeneous(
-                    &evaluator, &eval_subset.input_bits, connections, memory,
+                    &evaluator, &eval_subset.packed_input, connections, memory,
                     bits_per_cluster, neurons_per_cluster, layout,
-                    num_eval, total_input_bits, num_clusters, memory_mode, out_probs,
+                    num_eval, wpe, num_clusters, memory_mode, out_probs,
                 )
             };
 

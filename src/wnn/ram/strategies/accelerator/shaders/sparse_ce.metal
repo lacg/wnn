@@ -7,7 +7,7 @@
 // Key optimization: Avoids massive CPU←GPU data transfer by reducing on GPU.
 //
 // Memory layout:
-// - input_bits: [num_examples * total_input_bits]
+// - packed_input: [num_examples * words_per_example] (packed u64)
 // - connections: [num_neurons * bits_per_neuron]
 // - keys: Sorted addresses for all neurons
 // - values: Corresponding cell values
@@ -27,7 +27,7 @@ constant uint CELL_EMPTY = 2;
 
 struct SparseCEParams {
     uint num_examples;
-    uint total_input_bits;
+    uint words_per_example;     // ceil(total_input_bits / 64) — stride for packed u64 input
     uint num_neurons;           // Total neurons (all clusters)
     uint bits_per_neuron;
     uint neurons_per_cluster;
@@ -37,15 +37,19 @@ struct SparseCEParams {
 
 // Compute memory address (same as sparse_forward.metal)
 inline ulong compute_address_ce(
-    device const uchar* input_bits,
+    device const ulong* packed_input,
     device const int* connections,
     uint bits_per_neuron
 ) {
     ulong address = 0;
     for (uint i = 0; i < bits_per_neuron; i++) {
         int conn_idx = connections[i];
-        if (conn_idx >= 0 && input_bits[conn_idx]) {
-            address |= (1uL << (bits_per_neuron - 1 - i));
+        if (conn_idx >= 0) {
+            uint word_idx = uint(conn_idx) / 64;
+            uint bit_idx = uint(conn_idx) % 64;
+            if ((packed_input[word_idx] >> bit_idx) & 1uL) {
+                address |= (1uL << (bits_per_neuron - 1 - i));
+            }
         }
     }
     return address;
@@ -92,7 +96,7 @@ inline uint binary_search_ce(
 // Output: ce_out[example], correct_out[example]
 //
 kernel void sparse_forward_with_ce(
-    device const uchar* input_bits [[buffer(0)]],
+    device const ulong* packed_input_flat [[buffer(0)]],
     device const int* connections [[buffer(1)]],
     device const ulong* keys [[buffer(2)]],
     device const uchar* values [[buffer(3)]],
@@ -106,7 +110,7 @@ kernel void sparse_forward_with_ce(
 ) {
     if (example_idx >= params.num_examples) return;
 
-    device const uchar* ex_input = input_bits + example_idx * params.total_input_bits;
+    device const ulong* packed_input = packed_input_flat + example_idx * params.words_per_example;
     int target_cluster = targets[example_idx];
 
     // Compute raw scores for all clusters
@@ -126,7 +130,7 @@ kernel void sparse_forward_with_ce(
             uint neuron_idx = start_neuron + n;
             device const int* conn = connections + neuron_idx * params.bits_per_neuron;
 
-            ulong address = compute_address_ce(ex_input, conn, params.bits_per_neuron);
+            ulong address = compute_address_ce(packed_input, conn, params.bits_per_neuron);
 
             uint mem_start = offsets[neuron_idx];
             uint mem_count = counts[neuron_idx];
@@ -168,7 +172,7 @@ kernel void sparse_forward_with_ce(
             uint neuron_idx = start_neuron + n;
             device const int* conn = connections + neuron_idx * params.bits_per_neuron;
 
-            ulong address = compute_address_ce(ex_input, conn, params.bits_per_neuron);
+            ulong address = compute_address_ce(packed_input, conn, params.bits_per_neuron);
 
             uint mem_start = offsets[neuron_idx];
             uint mem_count = counts[neuron_idx];
@@ -210,7 +214,7 @@ kernel void sparse_forward_with_ce(
 // This computes the same result as two-pass softmax but in ONE pass!
 //
 kernel void sparse_forward_with_ce_online(
-    device const uchar* input_bits [[buffer(0)]],
+    device const ulong* packed_input_flat [[buffer(0)]],
     device const int* connections [[buffer(1)]],
     device const ulong* keys [[buffer(2)]],
     device const uchar* values [[buffer(3)]],
@@ -224,7 +228,7 @@ kernel void sparse_forward_with_ce_online(
 ) {
     if (example_idx >= params.num_examples) return;
 
-    device const uchar* ex_input = input_bits + example_idx * params.total_input_bits;
+    device const ulong* packed_input = packed_input_flat + example_idx * params.words_per_example;
     int target_cluster = targets[example_idx];
 
     // Online softmax state
@@ -247,7 +251,7 @@ kernel void sparse_forward_with_ce_online(
             uint neuron_idx = start_neuron + n;
             device const int* conn = connections + neuron_idx * params.bits_per_neuron;
 
-            ulong address = compute_address_ce(ex_input, conn, params.bits_per_neuron);
+            ulong address = compute_address_ce(packed_input, conn, params.bits_per_neuron);
 
             uint mem_start = offsets[neuron_idx];
             uint mem_count = counts[neuron_idx];

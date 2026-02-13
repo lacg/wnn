@@ -272,3 +272,24 @@ pub fn words_per_neuron(bits: usize) -> usize {
 	let addresses = 1usize << bits;
 	(addresses + CELLS_PER_WORD - 1) / CELLS_PER_WORD
 }
+
+// =============================================================================
+// Packing: Bool → u64 (for GPU input)
+// =============================================================================
+
+/// Pack flat bool slice into u64 words (LSB-first, matching Metal shader bit extraction).
+/// Returns (packed_data, words_per_example).
+pub fn pack_bools_to_u64(bools: &[bool], num_examples: usize, total_bits: usize) -> (Vec<u64>, usize) {
+	let words_per_example = (total_bits + 63) / 64;
+	let mut packed = vec![0u64; num_examples * words_per_example];
+	for ex in 0..num_examples {
+		let bits_off = ex * total_bits;
+		let pack_off = ex * words_per_example;
+		for i in 0..total_bits {
+			if bools[bits_off + i] {
+				packed[pack_off + i / 64] |= 1u64 << (i % 64);
+			}
+		}
+	}
+	(packed, words_per_example)
+}

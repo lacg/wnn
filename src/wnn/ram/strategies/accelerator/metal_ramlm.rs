@@ -290,7 +290,7 @@ impl MetalRAMLMEvaluator {
     /// Batch forward pass on GPU
     ///
     /// Args:
-    ///   input_bits_flat: [num_examples * total_input_bits] bool array
+    ///   packed_input: [num_examples * words_per_example] packed u64
     ///   connections_flat: [num_neurons * bits_per_neuron] connection indices
     ///   memory_words: [num_neurons * words_per_neuron] packed memory
     ///   ... dimension parameters ...
@@ -298,11 +298,11 @@ impl MetalRAMLMEvaluator {
     /// Returns: [num_examples * num_clusters] probabilities
     pub fn forward_batch(
         &self,
-        input_bits_flat: &[bool],
+        packed_input: &[u64],
         connections_flat: &[i64],
         memory_words: &[i64],
         num_examples: usize,
-        total_input_bits: usize,
+        words_per_example: usize,
         num_neurons: usize,
         bits_per_neuron: usize,
         neurons_per_cluster: usize,
@@ -314,9 +314,6 @@ impl MetalRAMLMEvaluator {
             return Ok(vec![]);
         }
 
-        // Convert bools to u8 for GPU
-        let input_bits_u8: Vec<u8> = input_bits_flat.iter().map(|&b| b as u8).collect();
-
         // Convert i64 connections to i32 for GPU
         let connections_i32: Vec<i32> = connections_flat.iter().map(|&c| c as i32).collect();
 
@@ -324,7 +321,7 @@ impl MetalRAMLMEvaluator {
         #[repr(C)]
         struct RAMLMParams {
             num_examples: u32,
-            total_input_bits: u32,
+            words_per_example: u32,
             num_neurons: u32,
             bits_per_neuron: u32,
             neurons_per_cluster: u32,
@@ -336,7 +333,7 @@ impl MetalRAMLMEvaluator {
 
         let params = RAMLMParams {
             num_examples: num_examples as u32,
-            total_input_bits: total_input_bits as u32,
+            words_per_example: words_per_example as u32,
             num_neurons: num_neurons as u32,
             bits_per_neuron: bits_per_neuron as u32,
             neurons_per_cluster: neurons_per_cluster as u32,
@@ -348,8 +345,8 @@ impl MetalRAMLMEvaluator {
 
         // Create buffers
         let input_buffer = self.device.new_buffer_with_data(
-            input_bits_u8.as_ptr() as *const _,
-            (input_bits_u8.len() * mem::size_of::<u8>()) as u64,
+            packed_input.as_ptr() as *const _,
+            (packed_input.len() * mem::size_of::<u64>()) as u64,
             MTLResourceOptions::StorageModeShared,
         );
 
@@ -502,7 +499,7 @@ impl MetalSparseEvaluator {
     /// Forward pass using sparse memory with binary search on GPU
     ///
     /// Args:
-    ///   input_bits_flat: [num_examples * total_input_bits]
+    ///   packed_input: [num_examples * words_per_example] packed u64
     ///   connections_flat: [num_neurons * bits_per_neuron]
     ///   keys_flat: Sorted keys for all neurons, concatenated
     ///   values_flat: Values corresponding to keys
@@ -512,14 +509,14 @@ impl MetalSparseEvaluator {
     /// Returns: [num_examples * num_clusters] probabilities
     pub fn forward_batch_sparse(
         &self,
-        input_bits_flat: &[bool],
+        packed_input: &[u64],
         connections_flat: &[i64],
         keys_flat: &[u64],
         values_flat: &[u8],
         offsets: &[u32],
         counts: &[u32],
         num_examples: usize,
-        total_input_bits: usize,
+        words_per_example: usize,
         num_neurons: usize,
         bits_per_neuron: usize,
         neurons_per_cluster: usize,
@@ -530,8 +527,6 @@ impl MetalSparseEvaluator {
             return Ok(vec![]);
         }
 
-        // Convert bools to u8
-        let input_bits_u8: Vec<u8> = input_bits_flat.iter().map(|&b| b as u8).collect();
         let connections_i32: Vec<i32> = connections_flat.iter().map(|&c| c as i32).collect();
 
         // Default cell value: EMPTY(2) for ternary, WEAK_FALSE(1) for quad
@@ -540,7 +535,7 @@ impl MetalSparseEvaluator {
         #[repr(C)]
         struct SparseParams {
             num_examples: u32,
-            total_input_bits: u32,
+            words_per_example: u32,
             num_neurons: u32,
             bits_per_neuron: u32,
             neurons_per_cluster: u32,
@@ -552,7 +547,7 @@ impl MetalSparseEvaluator {
 
         let params = SparseParams {
             num_examples: num_examples as u32,
-            total_input_bits: total_input_bits as u32,
+            words_per_example: words_per_example as u32,
             num_neurons: num_neurons as u32,
             bits_per_neuron: bits_per_neuron as u32,
             neurons_per_cluster: neurons_per_cluster as u32,
@@ -564,8 +559,8 @@ impl MetalSparseEvaluator {
 
         // Create buffers
         let input_buffer = self.device.new_buffer_with_data(
-            input_bits_u8.as_ptr() as *const _,
-            (input_bits_u8.len() * mem::size_of::<u8>()) as u64,
+            packed_input.as_ptr() as *const _,
+            (packed_input.len() * mem::size_of::<u64>()) as u64,
             MTLResourceOptions::StorageModeShared,
         );
 
@@ -664,7 +659,7 @@ impl MetalSparseEvaluator {
     /// Supports architectures with different bits/neurons per tier.
     pub fn forward_batch_tiered(
         &self,
-        input_bits_flat: &[bool],
+        packed_input: &[u64],
         connections_flat: &[i64],
         keys_flat: &[u64],
         values_flat: &[u8],
@@ -672,7 +667,7 @@ impl MetalSparseEvaluator {
         counts: &[u32],
         tier_configs: &[(usize, usize, usize, usize)], // (end_cluster, neurons_per_cluster, bits_per_neuron, start_neuron)
         num_examples: usize,
-        total_input_bits: usize,
+        words_per_example: usize,
         num_clusters: usize,
         memory_mode: u8,
     ) -> Result<Vec<f32>, String> {
@@ -680,13 +675,12 @@ impl MetalSparseEvaluator {
             return Ok(vec![]);
         }
 
-        let input_bits_u8: Vec<u8> = input_bits_flat.iter().map(|&b| b as u8).collect();
         let connections_i32: Vec<i32> = connections_flat.iter().map(|&c| c as i32).collect();
 
         #[repr(C)]
         struct TieredParams {
             num_examples: u32,
-            total_input_bits: u32,
+            words_per_example: u32,
             num_clusters: u32,
             num_tiers: u32,
             empty_value: f32,
@@ -705,7 +699,7 @@ impl MetalSparseEvaluator {
         let default_cell: u32 = if memory_mode == 0 { 2 } else { 1 };
         let params = TieredParams {
             num_examples: num_examples as u32,
-            total_input_bits: total_input_bits as u32,
+            words_per_example: words_per_example as u32,
             num_clusters: num_clusters as u32,
             num_tiers: tier_configs.len() as u32,
             empty_value: crate::neuron_memory::get_empty_value(),
@@ -722,8 +716,8 @@ impl MetalSparseEvaluator {
 
         // Create buffers
         let input_buffer = self.device.new_buffer_with_data(
-            input_bits_u8.as_ptr() as *const _,
-            (input_bits_u8.len() * mem::size_of::<u8>()) as u64,
+            packed_input.as_ptr() as *const _,
+            (packed_input.len() * mem::size_of::<u64>()) as u64,
             MTLResourceOptions::StorageModeShared,
         );
 
@@ -814,7 +808,7 @@ impl MetalSparseEvaluator {
     ///   cluster_infos: [(neurons_per_cluster, bits_per_neuron, start_neuron, connection_offset)]
     pub fn forward_batch_general(
         &self,
-        input_bits_flat: &[bool],
+        packed_input: &[u64],
         connections_flat: &[i64],
         keys_flat: &[u64],
         values_flat: &[u8],
@@ -822,7 +816,7 @@ impl MetalSparseEvaluator {
         counts: &[u32],
         cluster_infos: &[(u32, u32, u32, u32)],
         num_examples: usize,
-        total_input_bits: usize,
+        words_per_example: usize,
         num_clusters: usize,
         memory_mode: u8,
     ) -> Result<Vec<f32>, String> {
@@ -830,13 +824,12 @@ impl MetalSparseEvaluator {
             return Ok(vec![]);
         }
 
-        let input_bits_u8: Vec<u8> = input_bits_flat.iter().map(|&b| b as u8).collect();
         let connections_i32: Vec<i32> = connections_flat.iter().map(|&c| c as i32).collect();
 
         #[repr(C)]
         struct GeneralParams {
             num_examples: u32,
-            total_input_bits: u32,
+            words_per_example: u32,
             num_clusters: u32,
             empty_value: f32,
             memory_mode: u32,
@@ -854,7 +847,7 @@ impl MetalSparseEvaluator {
         let default_cell: u32 = if memory_mode == 0 { 2 } else { 1 };
         let params = GeneralParams {
             num_examples: num_examples as u32,
-            total_input_bits: total_input_bits as u32,
+            words_per_example: words_per_example as u32,
             num_clusters: num_clusters as u32,
             empty_value: crate::neuron_memory::get_empty_value(),
             memory_mode: memory_mode as u32,
@@ -870,8 +863,8 @@ impl MetalSparseEvaluator {
 
         // Create buffers
         let input_buffer = self.device.new_buffer_with_data(
-            input_bits_u8.as_ptr() as *const _,
-            (input_bits_u8.len() * mem::size_of::<u8>()) as u64,
+            packed_input.as_ptr() as *const _,
+            (packed_input.len() * mem::size_of::<u64>()) as u64,
             MTLResourceOptions::StorageModeShared,
         );
 
@@ -962,7 +955,7 @@ impl MetalSparseEvaluator {
 #[repr(C)]
 struct BatchedSparseParams {
     num_examples: u32,
-    total_input_bits: u32,
+    words_per_example: u32,
     num_neurons: u32,
     bits_per_neuron: u32,
     neurons_per_cluster: u32,
@@ -1023,10 +1016,10 @@ impl MetalBatchedEvaluator {
     /// Batched forward pass for multiple genomes
     ///
     /// Evaluates N genomes in a single GPU dispatch.
-    /// Input bits are shared across genomes; each genome has its own connections and memory.
+    /// Input is shared across genomes; each genome has its own connections and memory.
     ///
     /// Args:
-    ///   input_bits: [num_examples * total_input_bits] - SHARED across genomes
+    ///   packed_input: [num_examples * words_per_example] packed u64 - SHARED across genomes
     ///   connections_flat: [num_genomes * num_neurons * bits_per_neuron]
     ///   keys_flat: All genomes' sparse keys concatenated
     ///   values_flat: All genomes' sparse values concatenated
@@ -1038,7 +1031,7 @@ impl MetalBatchedEvaluator {
     /// Returns: [num_genomes * num_examples * num_clusters] probabilities
     pub fn forward_batch_genomes(
         &self,
-        input_bits: &[bool],
+        packed_input: &[u64],
         connections_flat: &[i64],
         keys_flat: &[u64],
         values_flat: &[u8],
@@ -1046,7 +1039,7 @@ impl MetalBatchedEvaluator {
         counts_flat: &[u32],
         genome_key_offsets: &[u32],
         num_examples: usize,
-        total_input_bits: usize,
+        words_per_example: usize,
         num_neurons: usize,
         bits_per_neuron: usize,
         neurons_per_cluster: usize,
@@ -1059,16 +1052,13 @@ impl MetalBatchedEvaluator {
             return Ok(vec![]);
         }
 
-        // Convert input bits to u8
-        let input_u8: Vec<u8> = input_bits.iter().map(|&b| b as u8).collect();
-
         // Convert connections to i32 for Metal
         let connections_i32: Vec<i32> = connections_flat.iter().map(|&c| c as i32).collect();
 
         // Create Metal buffers
         let input_buffer = self.device.new_buffer_with_data(
-            input_u8.as_ptr() as *const _,
-            (input_u8.len() * mem::size_of::<u8>()) as u64,
+            packed_input.as_ptr() as *const _,
+            (packed_input.len() * mem::size_of::<u64>()) as u64,
             MTLResourceOptions::StorageModeShared,
         );
 
@@ -1111,7 +1101,7 @@ impl MetalBatchedEvaluator {
         let default_cell: u32 = if memory_mode == 0 { 2 } else { 1 };
         let params = BatchedSparseParams {
             num_examples: num_examples as u32,
-            total_input_bits: total_input_bits as u32,
+            words_per_example: words_per_example as u32,
             num_neurons: num_neurons as u32,
             bits_per_neuron: bits_per_neuron as u32,
             neurons_per_cluster: neurons_per_cluster as u32,
@@ -1210,7 +1200,7 @@ impl MetalBatchedEvaluator {
 #[repr(C)]
 struct SparseCEParams {
     num_examples: u32,
-    total_input_bits: u32,
+    words_per_example: u32,
     num_neurons: u32,
     bits_per_neuron: u32,
     neurons_per_cluster: u32,
@@ -1262,7 +1252,7 @@ impl MetalSparseCEEvaluator {
     /// This eliminates the 10GB data transfer for 50K×50K.
     ///
     /// Args:
-    ///   input_bits: [num_examples * total_input_bits]
+    ///   packed_input: [num_examples * words_per_example] packed u64
     ///   connections: [num_neurons * bits_per_neuron]
     ///   keys: Sorted addresses for all neurons
     ///   values: Corresponding cell values
@@ -1274,7 +1264,7 @@ impl MetalSparseCEEvaluator {
     /// Returns: (average_ce, accuracy)
     pub fn compute_ce(
         &self,
-        input_bits: &[bool],
+        packed_input: &[u64],
         connections: &[i64],
         keys: &[u64],
         values: &[u8],
@@ -1282,7 +1272,7 @@ impl MetalSparseCEEvaluator {
         counts: &[u32],
         targets: &[i64],
         num_examples: usize,
-        total_input_bits: usize,
+        words_per_example: usize,
         num_neurons: usize,
         bits_per_neuron: usize,
         neurons_per_cluster: usize,
@@ -1293,9 +1283,6 @@ impl MetalSparseCEEvaluator {
             return Ok((0.0, 0.0));
         }
 
-        // Convert input bits to u8
-        let input_u8: Vec<u8> = input_bits.iter().map(|&b| b as u8).collect();
-
         // Convert connections to i32 for Metal
         let connections_i32: Vec<i32> = connections.iter().map(|&c| c as i32).collect();
 
@@ -1304,8 +1291,8 @@ impl MetalSparseCEEvaluator {
 
         // Create Metal buffers
         let input_buffer = self.device.new_buffer_with_data(
-            input_u8.as_ptr() as *const _,
-            (input_u8.len() * mem::size_of::<u8>()) as u64,
+            packed_input.as_ptr() as *const _,
+            (packed_input.len() * mem::size_of::<u64>()) as u64,
             MTLResourceOptions::StorageModeShared,
         );
 
@@ -1347,7 +1334,7 @@ impl MetalSparseCEEvaluator {
 
         let params = SparseCEParams {
             num_examples: num_examples as u32,
-            total_input_bits: total_input_bits as u32,
+            words_per_example: words_per_example as u32,
             num_neurons: num_neurons as u32,
             bits_per_neuron: bits_per_neuron as u32,
             neurons_per_cluster: neurons_per_cluster as u32,
@@ -1627,7 +1614,7 @@ impl MetalCEReduceEvaluator {
 #[repr(C)]
 struct SparseToBufferParams {
     num_examples: u32,
-    total_input_bits: u32,
+    words_per_example: u32,
     num_neurons: u32,
     bits_per_neuron: u32,
     neurons_per_cluster: u32,
@@ -1643,7 +1630,7 @@ struct SparseToBufferParams {
 #[repr(C)]
 struct SparseToBufferMaskedParams {
     num_examples: u32,
-    total_input_bits: u32,
+    words_per_example: u32,
     num_neurons: u32,
     bits_per_neuron: u32,
     max_neurons_per_cluster: u32,  // Max neurons for memory layout
@@ -1658,7 +1645,7 @@ struct SparseToBufferMaskedParams {
 #[repr(C)]
 struct DenseToBufferParams {
     num_examples: u32,
-    total_input_bits: u32,
+    words_per_example: u32,
     num_neurons: u32,
     bits_per_neuron: u32,
     neurons_per_cluster: u32,
@@ -1784,23 +1771,20 @@ impl MetalGroupEvaluator {
         }
     }
 
-    /// Update an existing input buffer with new data (much faster than creating a new one)
-    pub fn update_input_buffer(&self, buffer: &Buffer, input_bits: &[bool]) {
-        let ptr = buffer.contents() as *mut u8;
+    /// Update an existing input buffer with new packed u64 data (much faster than creating a new one)
+    pub fn update_input_buffer(&self, buffer: &Buffer, packed_input: &[u64]) {
+        let ptr = buffer.contents() as *mut u64;
         // Safety: buffer was created with StorageModeShared, size matches
         unsafe {
-            for (i, &bit) in input_bits.iter().enumerate() {
-                *ptr.add(i) = bit as u8;
-            }
+            std::ptr::copy_nonoverlapping(packed_input.as_ptr(), ptr, packed_input.len());
         }
     }
 
-    /// Create input bits buffer (shared across all group evaluations)
-    pub fn create_input_buffer(&self, input_bits: &[bool]) -> Buffer {
-        let input_u8: Vec<u8> = input_bits.iter().map(|&b| b as u8).collect();
+    /// Create packed u64 input buffer (shared across all group evaluations)
+    pub fn create_input_buffer(&self, packed_input: &[u64]) -> Buffer {
         self.device.new_buffer_with_data(
-            input_u8.as_ptr() as *const _,
-            (input_u8.len() * mem::size_of::<u8>()) as u64,
+            packed_input.as_ptr() as *const _,
+            (packed_input.len() * mem::size_of::<u64>()) as u64,
             MTLResourceOptions::StorageModeShared,
         )
     }
@@ -1821,7 +1805,7 @@ impl MetalGroupEvaluator {
         counts: &[u32],
         cluster_ids: &[usize],
         num_examples: usize,
-        total_input_bits: usize,
+        words_per_example: usize,
         bits_per_neuron: usize,
         neurons_per_cluster: usize,
         num_clusters: usize,
@@ -1844,7 +1828,7 @@ impl MetalGroupEvaluator {
         let default_cell: u32 = if memory_mode == 0 { 2 } else { 1 };
         let params = SparseToBufferParams {
             num_examples: num_examples as u32,
-            total_input_bits: total_input_bits as u32,
+            words_per_example: words_per_example as u32,
             num_neurons: num_neurons as u32,
             bits_per_neuron: bits_per_neuron as u32,
             neurons_per_cluster: neurons_per_cluster as u32,
@@ -1944,7 +1928,7 @@ impl MetalGroupEvaluator {
         scores_buffer: &Buffer,
         sparse_groups: &[SparseGroupData],
         num_examples: usize,
-        total_input_bits: usize,
+        words_per_example: usize,
         num_clusters: usize,
         empty_value: f32,
         memory_mode: u8,
@@ -1975,7 +1959,7 @@ impl MetalGroupEvaluator {
                 // Masked mode: use SparseToBufferMaskedParams
                 let params = SparseToBufferMaskedParams {
                     num_examples: num_examples as u32,
-                    total_input_bits: total_input_bits as u32,
+                    words_per_example: words_per_example as u32,
                     num_neurons: (group.cluster_ids.len() * group.neurons_per_cluster) as u32,
                     bits_per_neuron: group.bits_per_neuron as u32,
                     max_neurons_per_cluster: group.neurons_per_cluster as u32,
@@ -1995,7 +1979,7 @@ impl MetalGroupEvaluator {
                 // Uniform mode: use SparseToBufferParams
                 let params = SparseToBufferParams {
                     num_examples: num_examples as u32,
-                    total_input_bits: total_input_bits as u32,
+                    words_per_example: words_per_example as u32,
                     num_neurons: (group.cluster_ids.len() * group.neurons_per_cluster) as u32,
                     bits_per_neuron: group.bits_per_neuron as u32,
                     neurons_per_cluster: group.neurons_per_cluster as u32,
@@ -2134,7 +2118,7 @@ impl MetalGroupEvaluator {
         memory_words: &[i64],
         cluster_ids: &[usize],
         num_examples: usize,
-        total_input_bits: usize,
+        words_per_example: usize,
         bits_per_neuron: usize,
         neurons_per_cluster: usize,
         num_clusters: usize,
@@ -2151,7 +2135,7 @@ impl MetalGroupEvaluator {
 
         let params = DenseToBufferParams {
             num_examples: num_examples as u32,
-            total_input_bits: total_input_bits as u32,
+            words_per_example: words_per_example as u32,
             num_neurons: num_neurons as u32,
             bits_per_neuron: bits_per_neuron as u32,
             neurons_per_cluster: neurons_per_cluster as u32,
@@ -2422,17 +2406,19 @@ mod tests {
         let neurons_per_cluster = 2;
         let bits = 3;
         let total_neurons = num_clusters * neurons_per_cluster;
-        let total_input_bits = 10;
+        // 10 input bits -> ceil(10/64) = 1 word per example
+        let words_per_example = 1;
 
-        // Input bits: all true for simplicity
-        let input_bits: Vec<bool> = vec![true; num_examples * total_input_bits];
+        // Packed input: all bits true for simplicity
+        // 10 bits all true = 0x3FF (lower 10 bits set)
+        let packed_input: Vec<u64> = vec![0x3FF; num_examples * words_per_example];
 
         // Connections: point to bits 0, 1, 2 for all neurons
         let connections: Vec<i64> = (0..total_neurons)
             .flat_map(|_| vec![0i64, 1, 2])
             .collect();
 
-        // Sparse memory: address 7 (all bits true) → TRUE for all neurons
+        // Sparse memory: address 7 (all bits true) -> TRUE for all neurons
         let keys: Vec<u64> = vec![7; total_neurons]; // address 7 = 111 in binary
         let values: Vec<u8> = vec![1; total_neurons]; // 1 = TRUE
         let offsets: Vec<u32> = (0..total_neurons).map(|i| i as u32).collect();
@@ -2442,7 +2428,7 @@ mod tests {
         let targets: Vec<i64> = vec![0, 1, 2];
 
         let result = evaluator.compute_ce(
-            &input_bits,
+            &packed_input,
             &connections,
             &keys,
             &values,
@@ -2450,7 +2436,7 @@ mod tests {
             &counts,
             &targets,
             num_examples,
-            total_input_bits,
+            words_per_example,
             total_neurons,
             bits,
             neurons_per_cluster,
@@ -2463,7 +2449,7 @@ mod tests {
 
         // With all neurons returning TRUE, all clusters should have score 1.0
         // Softmax over [1.0, 1.0, 1.0, 1.0] = [0.25, 0.25, 0.25, 0.25]
-        // CE = -log(0.25) ≈ 1.386 for each example
+        // CE = -log(0.25) ~ 1.386 for each example
         // Accuracy: prediction is arbitrary when all scores equal, so 0.25 expected
 
         println!("Small test: avg_ce={:.4}, accuracy={:.4}", avg_ce, accuracy);

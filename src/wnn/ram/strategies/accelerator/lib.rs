@@ -68,7 +68,7 @@ mod metal_ramlm {
         pub fn is_available() -> bool { false }
         pub fn device_info() -> Result<String, String> { Err("Metal not available on this platform".into()) }
         pub fn forward_batch(
-            &self, _: &[bool], _: &[i64], _: &[i64],
+            &self, _: &[u64], _: &[i64], _: &[i64],
             _: usize, _: usize, _: usize, _: usize, _: usize, _: usize, _: usize, _: u8,
         ) -> Result<Vec<f32>, String> { Err("Metal not available on this platform".into()) }
     }
@@ -77,11 +77,11 @@ mod metal_ramlm {
     impl MetalSparseEvaluator {
         pub fn new() -> Result<Self, String> { Err("Metal not available on this platform".into()) }
         pub fn forward_batch_sparse(
-            &self, _: &[bool], _: &[i64], _: &[u64], _: &[u8], _: &[u32], _: &[u32],
+            &self, _: &[u64], _: &[i64], _: &[u64], _: &[u8], _: &[u32], _: &[u32],
             _: usize, _: usize, _: usize, _: usize, _: usize, _: usize, _: u8,
         ) -> Result<Vec<f32>, String> { Err("Metal not available on this platform".into()) }
         pub fn forward_batch_general(
-            &self, _: &[bool], _: &[i64], _: &[u64], _: &[u8], _: &[u32], _: &[u32],
+            &self, _: &[u64], _: &[i64], _: &[u64], _: &[u8], _: &[u32], _: &[u32],
             _: &[(u32, u32, u32, u32)], _: usize, _: usize, _: usize, _: u8,
         ) -> Result<Vec<f32>, String> { Err("Metal not available on this platform".into()) }
     }
@@ -907,13 +907,17 @@ fn ramlm_forward_batch_metal(
         let evaluator = metal_ramlm::MetalRAMLMEvaluator::new()
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
 
+        let (packed_input, wpe) = crate::neuron_memory::pack_bools_to_u64(
+            &input_bits_flat, num_examples, total_input_bits
+        );
+
         evaluator
             .forward_batch(
-                &input_bits_flat,
+                &packed_input,
                 &connections_flat,
                 &memory_words,
                 num_examples,
-                total_input_bits,
+                wpe,
                 num_neurons,
                 bits_per_neuron,
                 neurons_per_cluster,
@@ -1024,13 +1028,17 @@ fn ramlm_forward_batch_metal_numpy<'py>(
         let evaluator = metal_ramlm::MetalRAMLMEvaluator::new()
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
 
+        let (packed_input, wpe) = crate::neuron_memory::pack_bools_to_u64(
+            &input_bools, num_examples, total_input_bits
+        );
+
         evaluator
             .forward_batch(
-                &input_bools,
+                &packed_input,
                 &conn_vec,
                 &mem_vec,
                 num_examples,
-                total_input_bits,
+                wpe,
                 num_neurons,
                 bits_per_neuron,
                 neurons_per_cluster,
@@ -1095,13 +1103,17 @@ fn ramlm_forward_batch_metal_cached<'py>(
         let evaluator = guard.as_ref()
             .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Metal not available"))?;
 
+        let (packed_input, wpe) = crate::neuron_memory::pack_bools_to_u64(
+            &input_bools, num_examples, total_input_bits
+        );
+
         evaluator
             .forward_batch(
-                &input_bools,
+                &packed_input,
                 &conn_vec,
                 &mem_vec,
                 num_examples,
-                total_input_bits,
+                wpe,
                 num_neurons,
                 bits_per_neuron,
                 neurons_per_cluster,
@@ -1197,13 +1209,17 @@ fn ramlm_forward_batch_hybrid_cached<'py>(
         let evaluator = guard.as_ref()
             .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Metal not available"))?;
 
+        let (packed_gpu_input, gpu_wpe) = crate::neuron_memory::pack_bools_to_u64(
+            &gpu_input, gpu_examples, total_input_bits
+        );
+
         let gpu_probs = evaluator
             .forward_batch(
-                &gpu_input,
+                &packed_gpu_input,
                 &conn_vec,
                 &mem_vec,
                 gpu_examples,
-                total_input_bits,
+                gpu_wpe,
                 num_neurons,
                 bits_per_neuron,
                 neurons_per_cluster,
@@ -1286,13 +1302,16 @@ fn ramlm_forward_batch_hybrid_numpy<'py>(
             } else {
                 let evaluator = metal_ramlm::MetalRAMLMEvaluator::new()
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
+                let (packed_input, wpe) = crate::neuron_memory::pack_bools_to_u64(
+                    &input_bools, num_examples, total_input_bits
+                );
                 return evaluator
                     .forward_batch(
-                        &input_bools,
+                        &packed_input,
                         &conn_vec,
                         &mem_vec,
                         num_examples,
-                        total_input_bits,
+                        wpe,
                         num_neurons,
                         bits_per_neuron,
                         neurons_per_cluster,
@@ -1312,12 +1331,15 @@ fn ramlm_forward_batch_hybrid_numpy<'py>(
 
         let gpu_handle = std::thread::spawn(move || {
             let evaluator = metal_ramlm::MetalRAMLMEvaluator::new()?;
+            let (packed_gpu_input, gpu_wpe) = crate::neuron_memory::pack_bools_to_u64(
+                &gpu_input, gpu_examples, total_input_bits
+            );
             evaluator.forward_batch(
-                &gpu_input,
+                &packed_gpu_input,
                 &conn_vec_gpu,
                 &mem_vec_gpu,
                 gpu_examples,
-                total_input_bits,
+                gpu_wpe,
                 num_neurons,
                 bits_per_neuron,
                 neurons_per_cluster,
@@ -1927,8 +1949,11 @@ fn sparse_forward_metal_numpy<'py>(
     let conn_vec: Vec<i64> = conn_slice.to_vec();
 
     let probs = py.allow_threads(|| {
+        let (packed_input, wpe) = crate::neuron_memory::pack_bools_to_u64(
+            &input_bools, num_examples, total_input_bits
+        );
         cache.evaluator.forward_batch_general(
-            &input_bools,
+            &packed_input,
             &conn_vec,
             &cache.keys,
             &cache.values,
@@ -1936,7 +1961,7 @@ fn sparse_forward_metal_numpy<'py>(
             &cache.counts,
             &cache.cluster_infos,
             num_examples,
-            total_input_bits,
+            wpe,
             cache.num_clusters,
             crate::neuron_memory::MODE_TERNARY
         ).map_err(|e| format!("Metal forward failed: {}", e))

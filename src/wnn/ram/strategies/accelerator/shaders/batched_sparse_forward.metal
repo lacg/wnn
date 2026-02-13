@@ -36,7 +36,7 @@ constant float QUAD_WEIGHTS[4] = {0.0f, 0.25f, 0.75f, 1.0f};
 
 struct BatchedSparseParams {
     uint num_examples;
-    uint total_input_bits;
+    uint words_per_example;    // ceil(total_input_bits / 64) — stride for packed u64 input
     uint num_neurons;          // Per genome
     uint bits_per_neuron;
     uint neurons_per_cluster;
@@ -47,17 +47,21 @@ struct BatchedSparseParams {
     uint default_cell_value;   // Default for missing cells
 };
 
-// Compute memory address (same as before)
+// Compute memory address from packed u64 input
 inline ulong compute_address_batched(
-    device const uchar* input_bits,
+    device const ulong* packed_input,
     device const int* connections,
     uint bits_per_neuron
 ) {
     ulong address = 0;
     for (uint i = 0; i < bits_per_neuron; i++) {
         int conn_idx = connections[i];
-        if (conn_idx >= 0 && input_bits[conn_idx]) {
-            address |= (1uL << (bits_per_neuron - 1 - i));
+        if (conn_idx >= 0) {
+            uint word_idx = uint(conn_idx) / 64;
+            uint bit_idx = uint(conn_idx) % 64;
+            if ((packed_input[word_idx] >> bit_idx) & 1uL) {
+                address |= (1uL << (bits_per_neuron - 1 - i));
+            }
         }
     }
     return address;
@@ -116,7 +120,7 @@ inline float compute_prob_batched(
 // Each thread computes probability for one (genome, example, cluster) triple.
 //
 kernel void batched_sparse_forward_pass(
-    device const uchar* input_bits_flat [[buffer(0)]],      // SHARED: [num_examples * total_input_bits]
+    device const ulong* packed_input_flat [[buffer(0)]],    // SHARED: [num_examples * words_per_example]
     device const int* connections_flat [[buffer(1)]],        // [num_genomes * num_neurons * bits_per_neuron]
     device const ulong* keys_flat [[buffer(2)]],             // All genomes concatenated
     device const uchar* values_flat [[buffer(3)]],           // All genomes concatenated
@@ -135,8 +139,8 @@ kernel void batched_sparse_forward_pass(
     if (example_idx >= params.num_examples) return;
     if (genome_idx >= params.num_genomes) return;
 
-    // Input bits are SHARED across all genomes
-    device const uchar* input_bits = input_bits_flat + example_idx * params.total_input_bits;
+    // Input bits are SHARED across all genomes (packed u64)
+    device const ulong* packed_input = packed_input_flat + example_idx * params.words_per_example;
 
     // Per-genome offsets
     uint genome_neuron_offset = genome_idx * params.num_neurons;
@@ -154,7 +158,7 @@ kernel void batched_sparse_forward_pass(
 
         device const int* connections = connections_flat + genome_conn_offset + local_neuron_idx * params.bits_per_neuron;
 
-        ulong address = compute_address_batched(input_bits, connections, params.bits_per_neuron);
+        ulong address = compute_address_batched(packed_input, connections, params.bits_per_neuron);
 
         uint mem_start = offsets_flat[global_neuron_idx] + genome_key_offset;
         uint mem_count = counts_flat[global_neuron_idx];
@@ -188,7 +192,7 @@ kernel void batched_sparse_forward_pass(
 // Better for small num_clusters or high memory latency.
 //
 kernel void batched_sparse_forward_per_example(
-    device const uchar* input_bits_flat [[buffer(0)]],
+    device const ulong* packed_input_flat [[buffer(0)]],
     device const int* connections_flat [[buffer(1)]],
     device const ulong* keys_flat [[buffer(2)]],
     device const uchar* values_flat [[buffer(3)]],
@@ -205,7 +209,7 @@ kernel void batched_sparse_forward_per_example(
     if (example_idx >= params.num_examples) return;
     if (genome_idx >= params.num_genomes) return;
 
-    device const uchar* input_bits = input_bits_flat + example_idx * params.total_input_bits;
+    device const ulong* packed_input = packed_input_flat + example_idx * params.words_per_example;
 
     uint genome_neuron_offset = genome_idx * params.num_neurons;
     uint genome_conn_offset = genome_idx * params.num_neurons * params.bits_per_neuron;
@@ -226,7 +230,7 @@ kernel void batched_sparse_forward_per_example(
 
             device const int* connections = connections_flat + genome_conn_offset + local_neuron_idx * params.bits_per_neuron;
 
-            ulong address = compute_address_batched(input_bits, connections, params.bits_per_neuron);
+            ulong address = compute_address_batched(packed_input, connections, params.bits_per_neuron);
 
             uint mem_start = offsets_flat[global_neuron_idx] + genome_key_offset;
             uint mem_count = counts_flat[global_neuron_idx];

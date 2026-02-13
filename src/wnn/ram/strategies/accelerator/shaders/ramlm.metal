@@ -36,7 +36,7 @@ constant float QUAD_WEIGHTS[4] = {0.0f, 0.25f, 0.75f, 1.0f};
 // Parameters passed from CPU
 struct RAMLMParams {
     uint num_examples;
-    uint total_input_bits;
+    uint words_per_example;  // ceil(total_input_bits / 64) — stride for packed u64 input
     uint num_neurons;
     uint bits_per_neuron;
     uint neurons_per_cluster;
@@ -46,19 +46,23 @@ struct RAMLMParams {
     uint memory_mode;   // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED
 };
 
-// Compute memory address for a neuron given input bits
+// Compute memory address for a neuron given packed u64 input bits
 // Uses MSB-first addressing (matches Python)
 inline uint compute_address(
-    device const uchar* input_bits,    // [total_input_bits] for this example
+    device const ulong* packed_input,  // [words_per_example] packed u64 words for this example
     device const int* connections,     // [bits_per_neuron] for this neuron
     uint bits_per_neuron
 ) {
     uint address = 0;
     for (uint i = 0; i < bits_per_neuron; i++) {
         int conn_idx = connections[i];
-        if (conn_idx >= 0 && input_bits[conn_idx]) {
-            // MSB-first: bit 0 is most significant
-            address |= (1u << (bits_per_neuron - 1 - i));
+        if (conn_idx >= 0) {
+            uint word_idx = uint(conn_idx) / 64;
+            uint bit_idx = uint(conn_idx) % 64;
+            if ((packed_input[word_idx] >> bit_idx) & 1uL) {
+                // MSB-first: bit 0 is most significant
+                address |= (1u << (bits_per_neuron - 1 - i));
+            }
         }
     }
     return address;
@@ -87,7 +91,7 @@ inline uint read_cell(
 //   QUAD_WEIGHTED: P = sum(QUAD_WEIGHTS[cell]) / neurons
 //
 inline float accumulate_dense(
-    device const uchar* input_bits,
+    device const ulong* packed_input,
     device const int* connections_flat,
     device const long* memory_words,
     uint start_neuron,
@@ -102,7 +106,7 @@ inline float accumulate_dense(
         for (uint n = 0; n < neurons_per_cluster; n++) {
             uint neuron_idx = start_neuron + n;
             device const int* connections = connections_flat + neuron_idx * bits_per_neuron;
-            uint address = compute_address(input_bits, connections, bits_per_neuron);
+            uint address = compute_address(packed_input, connections, bits_per_neuron);
             uint cell = read_cell(memory_words, neuron_idx, address, words_per_neuron);
             weighted_sum += QUAD_WEIGHTS[cell];
         }
@@ -112,7 +116,7 @@ inline float accumulate_dense(
         for (uint n = 0; n < neurons_per_cluster; n++) {
             uint neuron_idx = start_neuron + n;
             device const int* connections = connections_flat + neuron_idx * bits_per_neuron;
-            uint address = compute_address(input_bits, connections, bits_per_neuron);
+            uint address = compute_address(packed_input, connections, bits_per_neuron);
             uint cell = read_cell(memory_words, neuron_idx, address, words_per_neuron);
             if (cell >= 2) count++;  // QUAD_WEAK_TRUE or QUAD_TRUE
         }
@@ -124,7 +128,7 @@ inline float accumulate_dense(
         for (uint n = 0; n < neurons_per_cluster; n++) {
             uint neuron_idx = start_neuron + n;
             device const int* connections = connections_flat + neuron_idx * bits_per_neuron;
-            uint address = compute_address(input_bits, connections, bits_per_neuron);
+            uint address = compute_address(packed_input, connections, bits_per_neuron);
             uint cell = read_cell(memory_words, neuron_idx, address, words_per_neuron);
             if (cell == CELL_TRUE) count_true++;
             else if (cell == CELL_EMPTY) count_empty++;
@@ -140,12 +144,12 @@ inline float accumulate_dense(
 // Grid: (num_clusters, num_examples)
 //
 kernel void ramlm_forward_pass(
-    device const uchar* input_bits_flat [[buffer(0)]],   // [num_examples * total_input_bits]
-    device const int* connections_flat [[buffer(1)]],     // [num_neurons * bits_per_neuron]
-    device const long* memory_words [[buffer(2)]],        // [num_neurons * words_per_neuron]
+    device const ulong* packed_input_flat [[buffer(0)]],  // [num_examples * words_per_example]
+    device const int* connections_flat [[buffer(1)]],      // [num_neurons * bits_per_neuron]
+    device const long* memory_words [[buffer(2)]],         // [num_neurons * words_per_neuron]
     constant RAMLMParams& params [[buffer(3)]],
-    device float* probs_out [[buffer(4)]],                // [num_examples * num_clusters]
-    uint2 thread_pos [[thread_position_in_grid]]          // (cluster_idx, example_idx)
+    device float* probs_out [[buffer(4)]],                 // [num_examples * num_clusters]
+    uint2 thread_pos [[thread_position_in_grid]]           // (cluster_idx, example_idx)
 ) {
     uint cluster_idx = thread_pos.x;
     uint example_idx = thread_pos.y;
@@ -153,11 +157,11 @@ kernel void ramlm_forward_pass(
     if (cluster_idx >= params.num_clusters) return;
     if (example_idx >= params.num_examples) return;
 
-    device const uchar* input_bits = input_bits_flat + example_idx * params.total_input_bits;
+    device const ulong* packed_input = packed_input_flat + example_idx * params.words_per_example;
     uint start_neuron = cluster_idx * params.neurons_per_cluster;
 
     float prob = accumulate_dense(
-        input_bits, connections_flat, memory_words,
+        packed_input, connections_flat, memory_words,
         start_neuron, params.neurons_per_cluster,
         params.bits_per_neuron, params.words_per_neuron,
         params.memory_mode, params.empty_value
@@ -175,7 +179,7 @@ kernel void ramlm_forward_pass(
 // Grid: (num_examples)
 //
 kernel void ramlm_forward_pass_per_example(
-    device const uchar* input_bits_flat [[buffer(0)]],
+    device const ulong* packed_input_flat [[buffer(0)]],
     device const int* connections_flat [[buffer(1)]],
     device const long* memory_words [[buffer(2)]],
     constant RAMLMParams& params [[buffer(3)]],
@@ -184,14 +188,14 @@ kernel void ramlm_forward_pass_per_example(
 ) {
     if (example_idx >= params.num_examples) return;
 
-    device const uchar* input_bits = input_bits_flat + example_idx * params.total_input_bits;
+    device const ulong* packed_input = packed_input_flat + example_idx * params.words_per_example;
     device float* example_probs = probs_out + example_idx * params.num_clusters;
 
     for (uint cluster_idx = 0; cluster_idx < params.num_clusters; cluster_idx++) {
         uint start_neuron = cluster_idx * params.neurons_per_cluster;
 
         example_probs[cluster_idx] = accumulate_dense(
-            input_bits, connections_flat, memory_words,
+            packed_input, connections_flat, memory_words,
             start_neuron, params.neurons_per_cluster,
             params.bits_per_neuron, params.words_per_neuron,
             params.memory_mode, params.empty_value
@@ -210,7 +214,7 @@ kernel void ramlm_forward_pass_per_example(
 //
 struct DenseToBufferParams {
     uint num_examples;
-    uint total_input_bits;
+    uint words_per_example;     // ceil(total_input_bits / 64) — stride for packed u64 input
     uint num_neurons;           // Neurons in this group
     uint bits_per_neuron;
     uint neurons_per_cluster;
@@ -222,7 +226,7 @@ struct DenseToBufferParams {
 };
 
 kernel void ramlm_forward_to_buffer(
-    device const uchar* input_bits_flat [[buffer(0)]],
+    device const ulong* packed_input_flat [[buffer(0)]],
     device const int* connections_flat [[buffer(1)]],
     device const long* memory_words [[buffer(2)]],
     device const uint* cluster_ids [[buffer(3)]],      // Maps local → global cluster ID
@@ -236,12 +240,12 @@ kernel void ramlm_forward_to_buffer(
     if (local_cluster >= params.num_group_clusters) return;
     if (example_idx >= params.num_examples) return;
 
-    device const uchar* input_bits = input_bits_flat + example_idx * params.total_input_bits;
+    device const ulong* packed_input = packed_input_flat + example_idx * params.words_per_example;
 
     uint start_neuron = local_cluster * params.neurons_per_cluster;
 
     float prob = accumulate_dense(
-        input_bits, connections_flat, memory_words,
+        packed_input, connections_flat, memory_words,
         start_neuron, params.neurons_per_cluster,
         params.bits_per_neuron, params.words_per_neuron,
         params.memory_mode, params.empty_value

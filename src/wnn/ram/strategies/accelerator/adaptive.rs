@@ -1018,12 +1018,12 @@ impl GroupMemory {
 /// The scores are in group-local cluster order (need scattering to global order).
 fn evaluate_group_metal(
     metal: &crate::metal_ramlm::MetalRAMLMEvaluator,
-    eval_input_bits: &[bool],
+    packed_eval: &[u64],
     connections_flat: &[i64],
     memory_words: &[i64],
     group: &ConfigGroup,
     num_eval: usize,
-    total_input_bits: usize,
+    words_per_example: usize,
     memory_mode: u8,
 ) -> Result<Vec<f32>, String> {
     let num_clusters = group.cluster_count();
@@ -1034,11 +1034,11 @@ fn evaluate_group_metal(
     let group_connections = &connections_flat[group.conn_offset..group.conn_offset + conn_size];
 
     metal.forward_batch(
-        eval_input_bits,
+        packed_eval,
         group_connections,
         memory_words,
         num_eval,
-        total_input_bits,
+        words_per_example,
         num_neurons,
         group.bits,
         group.neurons,
@@ -1054,12 +1054,12 @@ fn evaluate_group_metal(
 /// The scores are in group-local cluster order (need scattering to global order).
 fn evaluate_group_sparse_gpu(
     sparse_evaluator: &crate::metal_ramlm::MetalSparseEvaluator,
-    eval_input_bits: &[bool],
+    packed_eval: &[u64],
     connections_flat: &[i64],
     export: &SparseGpuExport,
     group: &ConfigGroup,
     num_eval: usize,
-    total_input_bits: usize,
+    words_per_example: usize,
     memory_mode: u8,
 ) -> Result<Vec<f32>, String> {
     let num_clusters = group.cluster_count();
@@ -1069,14 +1069,14 @@ fn evaluate_group_sparse_gpu(
     let group_connections = &connections_flat[group.conn_offset..group.conn_offset + conn_size];
 
     sparse_evaluator.forward_batch_sparse(
-        eval_input_bits,
+        packed_eval,
         group_connections,
         &export.keys,
         &export.values,
         &export.offsets,
         &export.counts,
         num_eval,
-        total_input_bits,
+        words_per_example,
         export.num_neurons,
         group.bits,
         group.neurons,
@@ -1322,6 +1322,11 @@ pub fn evaluate_genomes_parallel(
         let metal = get_metal_evaluator();
         let sparse_metal = get_sparse_metal_evaluator();
 
+        // Pack eval input bits to u64 for GPU (pack once, reuse for all groups)
+        let (packed_eval, words_per_example) = crate::neuron_memory::pack_bools_to_u64(
+            eval_input_bits, num_eval, total_input_bits
+        );
+
         // Process each group - Metal for dense, GPU sparse for sparse, CPU fallback
         for (group_idx, group) in groups.iter().enumerate() {
             let memory = &group_memories[group_idx];
@@ -1331,12 +1336,12 @@ pub fn evaluate_genomes_parallel(
                 if let Some(memory_words) = memory.export_for_metal() {
                     match evaluate_group_metal(
                         metal_eval.as_ref(),
-                        eval_input_bits,
+                        &packed_eval,
                         &connections_flat,
                         &memory_words,
                         group,
                         num_eval,
-                        total_input_bits,
+                        words_per_example,
                         crate::neuron_memory::MODE_TERNARY,
                     ) {
                         Ok(group_scores) => {
@@ -1362,12 +1367,12 @@ pub fn evaluate_genomes_parallel(
                 if let Some(export) = memory.export_for_gpu_sparse() {
                     match evaluate_group_sparse_gpu(
                         sparse_eval.as_ref(),
-                        eval_input_bits,
+                        &packed_eval,
                         &connections_flat,
                         &export,
                         group,
                         num_eval,
-                        total_input_bits,
+                        words_per_example,
                         crate::neuron_memory::MODE_TERNARY,
                     ) {
                         Ok(group_scores) => {
@@ -1909,6 +1914,11 @@ pub fn evaluate_genome_hybrid(
     let mut gpu_calls = 0usize;
     let mut cpu_calls = 0usize;
 
+    // Pack eval input bits to u64 for GPU (pack once, reuse for all GPU paths)
+    let (packed_eval, words_per_example) = crate::neuron_memory::pack_bools_to_u64(
+        eval_input_bits, num_eval, total_input_bits
+    );
+
     // FAST PATH: If single sparse group covering all clusters, use direct CE computation
     // This avoids the 10GB GPU→CPU transfer by computing CE on GPU
     #[cfg(target_os = "macos")]
@@ -1930,7 +1940,7 @@ pub fn evaluate_genome_hybrid(
 
                     let call_start = std::time::Instant::now();
                     let result = evaluator.compute_ce(
-                        eval_input_bits,
+                        &packed_eval,
                         &export.connections,
                         &sparse_export.keys,
                         &sparse_export.values,
@@ -1938,7 +1948,7 @@ pub fn evaluate_genome_hybrid(
                         &sparse_export.counts,
                         eval_targets,
                         num_eval,
-                        total_input_bits,
+                        words_per_example,
                         group.neurons * num_clusters,  // total neurons
                         group.bits,
                         group.neurons,
@@ -2004,18 +2014,19 @@ pub fn evaluate_genome_hybrid(
 
             // Get or create cached input buffer (update contents efficiently)
             // Invalidate cache if Metal was reset (reset_gen changed)
+            // Uses packed u64 input for GPU
             let input_buffer = CACHED_INPUT_BUFFER.with(|cache| {
                 let mut cache = cache.borrow_mut();
                 if let Some((cached_gen, cached_size, ref buffer)) = *cache {
-                    if cached_gen == current_reset_gen && cached_size == eval_input_bits.len() {
+                    if cached_gen == current_reset_gen && cached_size == packed_eval.len() {
                         // Reuse existing buffer - update contents
-                        group_eval.update_input_buffer(buffer, eval_input_bits);
+                        group_eval.update_input_buffer(buffer, &packed_eval);
                         return buffer.clone();
                     }
                 }
                 // Create new buffer and cache it (invalidate on reset_gen mismatch)
-                let buffer = group_eval.create_input_buffer(eval_input_bits);
-                *cache = Some((current_reset_gen, eval_input_bits.len(), buffer.clone()));
+                let buffer = group_eval.create_input_buffer(&packed_eval);
+                *cache = Some((current_reset_gen, packed_eval.len(), buffer.clone()));
                 buffer
             });
 
@@ -2061,7 +2072,7 @@ pub fn evaluate_genome_hybrid(
                     &scores_buffer,
                     &sparse_groups,
                     num_eval,
-                    total_input_bits,
+                    words_per_example,
                     num_clusters,
                     empty_value,
                     crate::neuron_memory::MODE_TERNARY
@@ -2087,7 +2098,7 @@ pub fn evaluate_genome_hybrid(
                         dense_words,
                         cluster_ids,
                         num_eval,
-                        total_input_bits,
+                        words_per_example,
                         group.bits,
                         group.neurons,
                         num_clusters,
@@ -2166,12 +2177,12 @@ pub fn evaluate_genome_hybrid(
                     let result = if let Some(sparse_eval) = sparse_metal {
                         evaluate_group_sparse_gpu(
                             sparse_eval,
-                            eval_input_bits,
+                            &packed_eval,
                             &export.connections,
                             sparse_export,
                             group,
                             num_eval,
-                            total_input_bits,
+                            words_per_example,
                             crate::neuron_memory::MODE_TERNARY,
                         )
                     } else {
@@ -2190,12 +2201,12 @@ pub fn evaluate_genome_hybrid(
                     let result = if let Some(metal_eval) = metal {
                         evaluate_group_metal(
                             metal_eval,
-                            eval_input_bits,
+                            &packed_eval,
                             &export.connections,
                             dense_words,
                             group,
                             num_eval,
-                            total_input_bits,
+                            words_per_example,
                             crate::neuron_memory::MODE_TERNARY,
                         )
                     } else {
@@ -2271,12 +2282,12 @@ pub fn evaluate_genome_hybrid(
             let gpu_success = if let Some(sparse_eval) = sparse_metal {
                 match evaluate_group_sparse_gpu(
                     sparse_eval,
-                    eval_input_bits,
+                    &packed_eval,
                     &export.connections,
                     sparse_export,
                     group,
                     num_eval,
-                    total_input_bits,
+                    words_per_example,
                     crate::neuron_memory::MODE_TERNARY,
                 ) {
                     Ok(group_scores) => {
@@ -2351,12 +2362,12 @@ pub fn evaluate_genome_hybrid(
             let gpu_success = if let Some(metal_eval) = metal {
                 match evaluate_group_metal(
                     metal_eval,
-                    eval_input_bits,
+                    &packed_eval,
                     &export.connections,
                     dense_words,
                     group,
                     num_eval,
-                    total_input_bits,
+                    words_per_example,
                     crate::neuron_memory::MODE_TERNARY,
                 ) {
                     Ok(group_scores) => {

@@ -1231,8 +1231,10 @@ pub fn evaluate_gpu_batch_adaptive(
     // Channel for pipelining: CPU sends exports, GPU thread receives and evaluates
     let (tx, rx) = mpsc::channel::<(usize, Vec<CandidateExport>)>();
 
-    // Clone data needed by GPU thread
-    let eval_input_bits_owned = eval_input_bits.to_vec();
+    // Pack eval input for GPU (u64 packed instead of per-byte bools)
+    let (packed_eval, words_per_example) = crate::neuron_memory::pack_bools_to_u64(
+        eval_input_bits, num_eval_examples, total_input_bits
+    );
     let eval_targets_owned = eval_targets.to_vec();
 
     // Spawn GPU evaluation thread
@@ -1245,7 +1247,7 @@ pub fn evaluate_gpu_batch_adaptive(
             // Evaluate each candidate in this batch on GPU
             for export in exports {
                 let probs = gpu_evaluator.forward_batch_general(
-                    &eval_input_bits_owned,
+                    &packed_eval,
                     &export.connections,
                     &export.keys,
                     &export.values,
@@ -1253,7 +1255,7 @@ pub fn evaluate_gpu_batch_adaptive(
                     &export.counts,
                     &export.cluster_infos,
                     num_eval_examples,
-                    total_input_bits,
+                    words_per_example,
                     num_clusters,
                     crate::neuron_memory::MODE_TERNARY
                 ).unwrap_or_else(|_| {
@@ -1388,8 +1390,11 @@ fn evaluate_single_tiered_hybrid(
     let export = memory.export_for_gpu_general();
 
     // PHASE 3: Evaluate on GPU (massive parallelism with binary search)
+    let (packed_eval, wpe) = crate::neuron_memory::pack_bools_to_u64(
+        eval_input_bits, num_eval_examples, total_input_bits
+    );
     let probs = gpu_evaluator.forward_batch_general(
-        eval_input_bits,
+        &packed_eval,
         connections_flat,
         &export.keys,
         &export.values,
@@ -1397,7 +1402,7 @@ fn evaluate_single_tiered_hybrid(
         &export.counts,
         &export.cluster_infos,
         num_eval_examples,
-        total_input_bits,
+        wpe,
         num_clusters,
         crate::neuron_memory::MODE_TERNARY
     ).unwrap_or_else(|_| {
