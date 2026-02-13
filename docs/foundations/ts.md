@@ -98,6 +98,17 @@ TSConfig(
 )
 ```
 
+## Fitness Evaluation
+
+Like GA, TS ranks genomes using a configurable [fitness calculator](fitness.md). The default **Harmonic Rank** balances CE and accuracy via the harmonic mean of ranks.
+
+The fitness calculator is used for:
+- **Best tracking**: Determining the current best genome and global best
+- **Aspiration criteria**: A tabu move is allowed if its fitness beats the global best
+- **Cooperative multi-start**: The reference set is selected by fitness ranking (see [above](#cooperative-multi-start-variant))
+
+See the [Fitness Calculators](fitness.md) page for all available types, formulas, and trade-offs.
+
 ## In This Project
 
 TS serves as the **refinement phase** following each GA exploration:

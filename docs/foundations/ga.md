@@ -68,12 +68,14 @@ GAConfig(
 
 ## Fitness Evaluation
 
-Genomes are ranked using a configurable fitness calculator:
+Genomes are ranked using a configurable [fitness calculator](fitness.md). The default is **Harmonic Rank** — the weighted harmonic mean of each genome's CE rank and accuracy rank within the population. This naturally balances both objectives and penalizes genomes that are good at one metric but poor at the other.
 
-- **CE**: Pure cross-entropy ranking (lower = better)
-- **HARMONIC_RANK**: Weighted harmonic mean of CE rank and accuracy rank, balancing both objectives
+The fitness calculator is used for:
+- **Elitism**: Selecting which genomes are preserved unchanged
+- **Tournament selection**: Comparing two candidates during parent selection
+- **Best tracking**: Determining the overall best genome across all generations
 
-See the [Fitness Calculator](../BITWISE_OPTIMIZATION.md) documentation for details.
+See the [Fitness Calculators](fitness.md) page for all available types, formulas, and trade-offs.
 
 ## In This Project
 

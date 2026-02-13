@@ -11,6 +11,7 @@ This directory contains foundational documentation for the Weightless Neural Net
 | [Genetic Algorithm](ga.md) | GA-based population search for connectivity patterns |
 | [Tabu Search](ts.md) | TS-based local search with memory, including cooperative multi-start variant |
 | [Simulated Annealing](sa.md) | SA-based probabilistic search with temperature scheduling |
+| [Fitness Calculators](fitness.md) | How CE and accuracy are combined to rank genomes (Harmonic Rank, Normalized, etc.) |
 
 ## Reading Order
 
