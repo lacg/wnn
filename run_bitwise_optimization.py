@@ -228,7 +228,7 @@ def phase1_grid_search(train_tokens, test_tokens, vocab_size, context_size, rate
 	for neurons in neurons_grid:
 		for bits in bits_grid:
 			idx += 1
-			logger(f"\n[{idx}/{total}] n={neurons}, b={bits}")
+			logger(f"[{idx}/{total}] n={neurons}, b={bits}")
 
 			model = BitwiseRAMLM(
 				vocab_size=vocab_size,
