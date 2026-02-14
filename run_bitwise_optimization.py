@@ -573,10 +573,10 @@ def main():
 	parser.add_argument("--check-interval", type=int, default=10,
 						help="Patience check every N generations/iterations (default: 10)")
 	# Data rotation
-	parser.add_argument("--train-parts", type=int, default=36,
-						help="Number of train subsets for rotation (default: 36)")
-	parser.add_argument("--eval-parts", type=int, default=6,
-						help="Number of test subsets for rotation (default: 6)")
+	parser.add_argument("--train-parts", type=int, default=4,
+						help="Number of train subsets for rotation (default: 4)")
+	parser.add_argument("--eval-parts", type=int, default=1,
+						help="Number of test subsets for rotation (default: 1)")
 	# Checkpointing
 	parser.add_argument("--checkpoint-dir", type=str, default=None,
 						help="Directory for intra-phase checkpoints (enables resume on crash)")
