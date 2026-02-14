@@ -203,9 +203,15 @@ def load_wikitext2_tokens(tokenizer_name="gpt2", logger=print):
 # Phase 1: Grid search (quick landscape scan)
 # ---------------------------------------------------------------------------
 
-def phase1_grid_search(train_tokens, test_tokens, vocab_size, context_size, rate, top_k=3, logger=print):
+def phase1_grid_search(train_tokens, test_tokens, vocab_size, context_size, rate, top_k=3, logger=print,
+					   fitness_type=None):
 	"""Grid search over neurons × bits with random connections."""
 	from wnn.ram.core.models import BitwiseRAMLM
+	from wnn.ram.fitness import FitnessCalculatorType, FitnessCalculatorFactory
+
+	if fitness_type is None:
+		fitness_type = FitnessCalculatorType.HARMONIC_RANK
+	calculator = FitnessCalculatorFactory.create(fitness_type)
 
 	neurons_grid = [50, 100, 150, 200]
 	bits_grid = [14, 16, 18, 20]
@@ -259,17 +265,24 @@ def phase1_grid_search(train_tokens, test_tokens, vocab_size, context_size, rate
 				"elapsed_s": round(elapsed, 1),
 			})
 
-	results.sort(key=lambda r: r["cross_entropy"])
+	# Rank by fitness calculator (same as GA/TS phases)
+	population = [(r, r["cross_entropy"], r["accuracy"]) for r in results]
+	fitness_scores = calculator.fitness(population)
+	for r, score in zip(results, fitness_scores):
+		r["fitness"] = score
+	results.sort(key=lambda r: r["fitness"])
 
 	logger(f"\n{'─'*70}")
-	logger(f"Phase 1 Rankings (by CE):")
+	logger(f"Phase 1 Rankings (by {calculator.name}):")
 	for i, r in enumerate(results):
 		marker = " ★" if i < top_k else ""
 		logger(f"  {i+1:2d}. n={r['neurons']:3d}, b={r['bits']:2d}: "
-			   f"CE={r['cross_entropy']:.4f}  Acc={r['accuracy']:.2%}{marker}")
+			   f"CE={r['cross_entropy']:.4f}  Acc={r['accuracy']:.2%}  "
+			   f"Fit={r['fitness']:.4f}{marker}")
 
 	best = results[0]
-	logger(f"\nBest config: n={best['neurons']}, b={best['bits']}, CE={best['cross_entropy']:.4f}")
+	logger(f"\nBest config: n={best['neurons']}, b={best['bits']}, "
+		   f"CE={best['cross_entropy']:.4f}, Fit={best['fitness']:.4f}")
 
 	return results
 
@@ -726,7 +739,7 @@ def main():
 			context_size=args.context, rate=args.rate, top_k=args.top_k,
 			logger=logger,
 		)
-		best_p1 = phase1_results[0]  # sorted by CE
+		best_p1 = phase1_results[0]  # sorted by fitness (HARMONIC_RANK)
 		best_bits = best_p1["bits"]
 		best_neurons = best_p1["neurons"]
 		best_ce = best_p1["cross_entropy"]
