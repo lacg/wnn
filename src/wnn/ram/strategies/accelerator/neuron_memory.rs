@@ -300,7 +300,10 @@ pub fn pack_bools_to_u64(bools: &[bool], num_examples: usize, total_bits: usize)
 // =============================================================================
 
 /// Default threshold: clusters with bits > this use sparse storage.
-pub const DEFAULT_SPARSE_THRESHOLD: usize = 24;
+/// Crossover where sparse becomes cheaper than dense is ~19 bits (with 10K training examples).
+/// 20 keeps ≤20-bit clusters dense (fast bit extraction + GPU) while making >20 sparse
+/// so 50 genomes fit in the 20 GiB memory budget.
+pub const DEFAULT_SPARSE_THRESHOLD: usize = 20;
 
 /// Per-cluster neuron memory — either dense (bit-packed) or sparse (HashMap).
 ///
