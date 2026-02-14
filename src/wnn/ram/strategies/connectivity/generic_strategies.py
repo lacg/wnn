@@ -1629,7 +1629,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 		# Compute final threshold for next phase continuity
 		final_threshold = get_threshold(generation / cfg.threshold_reference) if cfg.generations > 0 else start_threshold
 
-		self._log.info(f"\n[{self.name}] Analysis Summary:")
+		self._log.info(f"[{self.name}] Analysis Summary:")
 		self._log.info(f"  CE improvement: {initial_fitness:.4f} → {best_fitness:.4f} ({(1 - best_fitness/initial_fitness)*100:+.2f}%)")
 		self._log.info(f"  CE spread: {initial_ce_spread:.4f} → {final_ce_spread:.4f} ({diversity_change:+.4f})")
 		self._log.info(f"  Elite survivals: {elite_survivals}/{len(initial_elite_genomes) if initial_elite_genomes else 0}")
@@ -2383,7 +2383,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 
 		# Log analysis summary
 		total_iters = iteration + 1
-		self._log.info(f"\n[{self.name}] Analysis Summary:")
+		self._log.info(f"[{self.name}] Analysis Summary:")
 		self._log.info(f"  CE improvement: {start_fitness:.4f} → {best_fitness:.4f} ({(1 - best_fitness/start_fitness)*100:+.2f}%)")
 		self._log.info(f"  Improved iterations: {improved_iterations}/{total_iters}")
 		self._log.info(f"  Final population: {len(final_population)} by {fitness_calculator.name}")

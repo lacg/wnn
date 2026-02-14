@@ -393,7 +393,7 @@ def run_ga_phase(
 	result = strategy.optimize(**optimize_kwargs)
 	elapsed = time.time() - t0
 
-	logger(f"\n  {phase_name} Result: CE={result.final_fitness:.4f}")
+	logger(f"  {phase_name} Result: CE={result.final_fitness:.4f}")
 	if result.final_accuracy is not None:
 		logger(f"  Accuracy: {result.final_accuracy:.2%}")
 	logger(f"  Improvement: {result.improvement_percent:.1f}%")
@@ -452,7 +452,7 @@ def run_ts_phase(
 	elapsed = time.time() - t0
 
 	improvement_over_seed = (seed_fitness - result.final_fitness) / seed_fitness * 100 if seed_fitness > 0 else 0
-	logger(f"\n  {phase_name} Result: CE={result.final_fitness:.4f}")
+	logger(f"  {phase_name} Result: CE={result.final_fitness:.4f}")
 	if result.final_accuracy is not None:
 		logger(f"  Accuracy: {result.final_accuracy:.2%}")
 	logger(f"  Improvement over seed: {improvement_over_seed:.1f}%")
