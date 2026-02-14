@@ -345,11 +345,15 @@ def run_ga_phase(
 	evaluator, arch_config, ga_gens, population, patience,
 	seed_genome=None, phase_name="GA", logger=print, check_interval=10,
 	initial_population=None, checkpoint_config=None,
+	fitness_type=None,
 ):
 	"""Run a GA optimization phase."""
 	from wnn.ram.strategies.connectivity.architecture_strategies import ArchitectureGAStrategy
 	from wnn.ram.strategies.connectivity.generic_strategies import GAConfig
 	from wnn.ram.fitness import FitnessCalculatorType
+
+	if fitness_type is None:
+		fitness_type = FitnessCalculatorType.HARMONIC_RANK
 
 	ga_config = GAConfig(
 		population_size=population,
@@ -364,7 +368,7 @@ def run_ga_phase(
 		min_accuracy=0.03,
 		threshold_delta=ga_gens * 0.00001,
 		threshold_reference=ga_gens,
-		fitness_calculator_type=FitnessCalculatorType.HARMONIC_RANK,
+		fitness_calculator_type=fitness_type,
 		fitness_weight_ce=1.0,
 		fitness_weight_acc=1.0,
 	)
@@ -403,11 +407,15 @@ def run_ts_phase(
 	evaluator, arch_config, ts_iters, neighbors, patience,
 	seed_genome, seed_fitness, phase_name="TS", logger=print, check_interval=10,
 	initial_neighbors=None, diversity_sources_pct=0.0,
+	fitness_type=None,
 ):
 	"""Run a TS refinement phase."""
 	from wnn.ram.strategies.connectivity.architecture_strategies import ArchitectureTSStrategy
 	from wnn.ram.strategies.connectivity.generic_strategies import TSConfig
 	from wnn.ram.fitness import FitnessCalculatorType
+
+	if fitness_type is None:
+		fitness_type = FitnessCalculatorType.HARMONIC_RANK
 
 	ts_config = TSConfig(
 		iterations=ts_iters,
@@ -420,7 +428,7 @@ def run_ts_phase(
 		min_accuracy=0.03,
 		threshold_delta=ts_iters * 0.00001,
 		threshold_reference=ts_iters,
-		fitness_calculator_type=FitnessCalculatorType.HARMONIC_RANK,
+		fitness_calculator_type=fitness_type,
 		fitness_weight_ce=1.0,
 		fitness_weight_acc=1.0,
 		diversity_sources_pct=diversity_sources_pct,
@@ -593,6 +601,10 @@ def main():
 	# Checkpointing
 	parser.add_argument("--checkpoint-dir", type=str, default=None,
 						help="Directory for intra-phase checkpoints (enables resume on crash)")
+	# Fitness
+	parser.add_argument("--fitness", type=str, default="HARMONIC_RANK",
+						choices=["CE", "HARMONIC_RANK", "NORMALIZED", "NORMALIZED_HARMONIC"],
+						help="Fitness calculator type (default: HARMONIC_RANK)")
 	# Gating
 	parser.add_argument("--enable-gating", action="store_true",
 						help="Enable gating phase after optimization")
@@ -606,6 +618,10 @@ def main():
 						choices=[0, 1, 2],
 						help="0=TOKEN_LEVEL, 1=BIT_LEVEL, 2=DUAL_STAGE (default: 0)")
 	args = parser.parse_args()
+
+	# Resolve fitness calculator type
+	from wnn.ram.fitness import FitnessCalculatorType
+	fitness_type = FitnessCalculatorType[args.fitness]
 
 	# Checkpoint config for intra-phase resume
 	checkpoint_config = None
@@ -637,7 +653,7 @@ def main():
 			"context_size": args.context,
 			"neuron_sample_rate": args.rate,
 			"memory_mode": "QUAD_WEIGHTED",
-			"fitness": "HARMONIC_RANK",
+			"fitness": args.fitness,
 			"vocab_size": vocab_size,
 			"num_clusters": num_clusters,
 			"total_input_bits": total_input_bits,
@@ -737,7 +753,7 @@ def main():
 		phase1_results = phase1_grid_search(
 			train_tokens, test_tokens, vocab_size,
 			context_size=args.context, rate=args.rate, top_k=args.top_k,
-			logger=logger,
+			logger=logger, fitness_type=fitness_type,
 		)
 		best_p1 = phase1_results[0]  # sorted by fitness (HARMONIC_RANK)
 		best_bits = best_p1["bits"]
@@ -896,6 +912,7 @@ def main():
 			phase_name=f"Phase {phase_num}: {phase_name}", logger=log,
 			check_interval=ci, initial_population=init_pop or initial_population,
 			checkpoint_config=checkpoint_config,
+			fitness_type=fitness_type,
 		)
 
 		best_genome = result.best_genome
@@ -951,6 +968,7 @@ def main():
 			check_interval=ci,
 			initial_neighbors=initial_population,
 			diversity_sources_pct=args.ts_diversity,
+			fitness_type=fitness_type,
 		)
 
 		best_genome = result.best_genome
