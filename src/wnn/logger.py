@@ -126,6 +126,11 @@ class Logger:
 			message: Message to log
 			flush: Whether to flush handlers immediately
 		"""
+		# Strip leading newlines — they break timestamp alignment.
+		# Log them as separate empty lines instead.
+		while message.startswith("\n"):
+			self._logger.info("")
+			message = message[1:]
 		self._logger.info(message)
 		if flush:
 			for handler in self._logger.handlers:
