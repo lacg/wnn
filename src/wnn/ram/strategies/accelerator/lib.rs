@@ -3902,12 +3902,14 @@ impl RAMGatingWrapper {
     #[cfg(target_os = "macos")]
     fn forward_batch_metal(&self, py: Python<'_>, input_bits_flat: Vec<bool>, batch_size: usize) -> PyResult<Vec<f32>> {
         py.allow_threads(|| {
+            let config = self.inner.config();
+            let (packed, wpe) = neuron_memory::pack_bools_to_u64(&input_bits_flat, batch_size, config.total_input_bits);
             let evaluator_lock = get_cached_metal_gating_evaluator()
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
             let guard = evaluator_lock.lock().unwrap();
             let evaluator = guard.as_ref()
                 .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Metal gating evaluator not initialized"))?;
-            evaluator.forward_batch(&self.inner, &input_bits_flat, batch_size)
+            evaluator.forward_batch(&self.inner, &packed, batch_size, wpe)
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
         })
     }
@@ -3958,6 +3960,8 @@ impl RAMGatingWrapper {
         batch_size: usize,
     ) -> PyResult<usize> {
         py.allow_threads(|| {
+            let config = self.inner.config();
+            let (packed, wpe) = neuron_memory::pack_bools_to_u64(&input_bits_flat, batch_size, config.total_input_bits);
             let evaluator_lock = get_cached_metal_gating_evaluator()
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
             let guard = evaluator_lock.lock().unwrap();
@@ -3965,7 +3969,7 @@ impl RAMGatingWrapper {
                 .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Metal gating evaluator not initialized"))?;
 
             // Train on GPU and get updated memory
-            let updated_memory = evaluator.train_batch(&self.inner, &input_bits_flat, &target_gates_flat, batch_size)
+            let updated_memory = evaluator.train_batch(&self.inner, &packed, &target_gates_flat, batch_size, wpe)
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
 
             // Import the updated memory back into the gating model

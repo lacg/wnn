@@ -205,7 +205,7 @@ struct GatingParams {
     num_clusters: u32,
     neurons_per_gate: u32,
     bits_per_neuron: u32,
-    total_input_bits: u32,
+    words_per_example: u32,
     vote_threshold: u32,
     address_space_size: u32,
     batch_size: u32,
@@ -282,16 +282,18 @@ impl MetalGatingEvaluator {
     ///
     /// # Arguments
     /// * `gating` - The RAMGating model (provides memory and connections)
-    /// * `input_bits_flat` - Flattened input bits [batch_size * total_input_bits]
+    /// * `packed_input` - Packed u64 input [batch_size * words_per_example]
     /// * `batch_size` - Number of examples in batch
+    /// * `words_per_example` - Number of u64 words per example
     ///
     /// # Returns
     /// Flattened gate values [batch_size * num_clusters]
     pub fn forward_batch(
         &self,
         gating: &RAMGating,
-        input_bits_flat: &[bool],
+        packed_input: &[u64],
         batch_size: usize,
+        words_per_example: usize,
     ) -> Result<Vec<f32>, String> {
         if batch_size == 0 {
             return Ok(vec![]);
@@ -299,9 +301,6 @@ impl MetalGatingEvaluator {
 
         let config = gating.config();
         let current_gen = get_cache_generation();
-
-        // Convert bools to u8 for GPU
-        let input_bits_u8: Vec<u8> = input_bits_flat.iter().map(|&b| b as u8).collect();
 
         // Get connections as i32
         let connections: Vec<i32> = gating.get_connections().to_vec();
@@ -315,7 +314,7 @@ impl MetalGatingEvaluator {
             num_clusters: config.num_clusters as u32,
             neurons_per_gate: config.neurons_per_gate as u32,
             bits_per_neuron: config.bits_per_neuron as u32,
-            total_input_bits: config.total_input_bits as u32,
+            words_per_example: words_per_example as u32,
             vote_threshold: config.vote_threshold as u32,
             address_space_size: (1 << config.bits_per_neuron) as u32,
             batch_size: batch_size as u32,
@@ -367,8 +366,8 @@ impl MetalGatingEvaluator {
                 buf
             };
 
-            // Input buffer: always update contents
-            let input_buffer = get_or_create_buffer(&self.device, &mut cache.input_buffer, &input_bits_u8, current_gen);
+            // Input buffer: always update contents (packed u64)
+            let input_buffer = get_or_create_buffer(&self.device, &mut cache.input_buffer, packed_input, current_gen);
 
             // Params buffer: always update
             let params_slice = unsafe {
@@ -436,18 +435,20 @@ impl MetalGatingEvaluator {
     ///
     /// # Arguments
     /// * `gating` - The RAMGating model to train into
-    /// * `input_bits_flat` - Flattened input bits [batch_size * total_input_bits]
+    /// * `packed_input` - Packed u64 input [batch_size * words_per_example]
     /// * `target_gates_flat` - Flattened target gate values [batch_size * num_clusters]
     /// * `batch_size` - Number of training examples
+    /// * `words_per_example` - Number of u64 words per example
     ///
     /// # Returns
     /// Updated memory (caller must import into gating model)
     pub fn train_batch(
         &self,
         gating: &RAMGating,
-        input_bits_flat: &[bool],
+        packed_input: &[u64],
         target_gates_flat: &[bool],
         batch_size: usize,
+        words_per_example: usize,
     ) -> Result<Vec<u8>, String> {
         if batch_size == 0 {
             return Ok(gating.export_memory());
@@ -455,8 +456,7 @@ impl MetalGatingEvaluator {
 
         let config = gating.config();
 
-        // Convert bools to u8 for GPU
-        let input_bits_u8: Vec<u8> = input_bits_flat.iter().map(|&b| b as u8).collect();
+        // Convert target gates to u8 for GPU
         let target_gates_u8: Vec<u8> = target_gates_flat.iter().map(|&b| b as u8).collect();
 
         // Get connections as i32
@@ -471,7 +471,7 @@ impl MetalGatingEvaluator {
             num_clusters: config.num_clusters as u32,
             neurons_per_gate: config.neurons_per_gate as u32,
             bits_per_neuron: config.bits_per_neuron as u32,
-            total_input_bits: config.total_input_bits as u32,
+            words_per_example: words_per_example as u32,
             vote_threshold: config.vote_threshold as u32,
             address_space_size: (1 << config.bits_per_neuron) as u32,
             batch_size: batch_size as u32,
@@ -492,8 +492,8 @@ impl MetalGatingEvaluator {
         );
 
         let input_buffer = self.device.new_buffer_with_data(
-            input_bits_u8.as_ptr() as *const _,
-            input_bits_u8.len() as u64,
+            packed_input.as_ptr() as *const _,
+            (packed_input.len() * mem::size_of::<u64>()) as u64,
             MTLResourceOptions::StorageModeShared,
         );
 
@@ -596,6 +596,8 @@ pub fn forward_batch_hybrid(
     batch_size: usize,
     cpu_fraction: f32,
 ) -> Result<Vec<f32>, String> {
+    use super::neuron_memory;
+
     if batch_size == 0 {
         return Ok(vec![]);
     }
@@ -618,13 +620,18 @@ pub fn forward_batch_hybrid(
     let cpu_input = &input_bits_flat[..cpu_input_end];
     let gpu_input = &input_bits_flat[cpu_input_end..];
 
+    // Pack GPU portion to u64
+    let (packed_gpu, words_per_example) = neuron_memory::pack_bools_to_u64(
+        gpu_input, gpu_batch_size, total_input_bits
+    );
+
     // Allocate output
     let mut results = vec![0.0f32; batch_size * num_clusters];
 
     // Run CPU and GPU in parallel using rayon's join
     let (cpu_results, gpu_results) = rayon::join(
         || gating.forward_batch(cpu_input, cpu_batch_size),
-        || metal_eval.forward_batch(gating, gpu_input, gpu_batch_size),
+        || metal_eval.forward_batch(gating, &packed_gpu, gpu_batch_size, words_per_example),
     );
 
     // Check GPU result
@@ -641,6 +648,7 @@ pub fn forward_batch_hybrid(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::neuron_memory;
 
     #[test]
     fn test_metal_gating_available() {
@@ -655,8 +663,9 @@ mod tests {
             return;
         }
 
-        let gating = RAMGating::new(10, 4, 6, 32, 0.5, Some(42));
-        let input = vec![true; 32];
+        let total_input_bits = 32;
+        let gating = RAMGating::new(10, 4, 6, total_input_bits, 0.5, Some(42));
+        let input = vec![true; total_input_bits];
 
         // Train some gates
         let mut targets = vec![false; 10];
@@ -667,9 +676,10 @@ mod tests {
         // Invalidate cache after training
         invalidate_gating_cache();
 
-        // Test Metal forward
+        // Pack input and test Metal forward
+        let (packed, wpe) = neuron_memory::pack_bools_to_u64(&input, 1, total_input_bits);
         let metal_eval = MetalGatingEvaluator::new().unwrap();
-        let gates = metal_eval.forward_batch(&gating, &input, 1).unwrap();
+        let gates = metal_eval.forward_batch(&gating, &packed, 1, wpe).unwrap();
 
         assert_eq!(gates.len(), 10);
         assert_eq!(gates[3], 1.0);
@@ -683,25 +693,28 @@ mod tests {
             return;
         }
 
-        let gating = RAMGating::new(100, 8, 10, 64, 0.5, Some(42));
+        let total_input_bits = 64;
+        let gating = RAMGating::new(100, 8, 10, total_input_bits, 0.5, Some(42));
         let metal_eval = MetalGatingEvaluator::new().unwrap();
 
         // Multiple forward calls should reuse buffers
         for i in 0..5 {
-            let input: Vec<bool> = (0..64).map(|j| ((i + j) % 2) == 0).collect();
-            let gates = metal_eval.forward_batch(&gating, &input, 1).unwrap();
+            let input: Vec<bool> = (0..total_input_bits).map(|j| ((i + j) % 2) == 0).collect();
+            let (packed, wpe) = neuron_memory::pack_bools_to_u64(&input, 1, total_input_bits);
+            let gates = metal_eval.forward_batch(&gating, &packed, 1, wpe).unwrap();
             assert_eq!(gates.len(), 100);
         }
 
         // After training, invalidate cache
-        let input = vec![true; 64];
+        let input = vec![true; total_input_bits];
         let mut targets = vec![false; 100];
         targets[50] = true;
         gating.train_single(&input, &targets, false);
         invalidate_gating_cache();
 
         // Forward should still work
-        let gates = metal_eval.forward_batch(&gating, &input, 1).unwrap();
+        let (packed, wpe) = neuron_memory::pack_bools_to_u64(&input, 1, total_input_bits);
+        let gates = metal_eval.forward_batch(&gating, &packed, 1, wpe).unwrap();
         assert_eq!(gates[50], 1.0);
     }
 
@@ -712,11 +725,12 @@ mod tests {
             return;
         }
 
-        let gating = RAMGating::new(100, 8, 10, 64, 0.5, Some(42));
+        let total_input_bits = 64;
+        let gating = RAMGating::new(100, 8, 10, total_input_bits, 0.5, Some(42));
 
         // Train with random patterns
         for i in 0..50 {
-            let input: Vec<bool> = (0..64).map(|j| ((i * 7 + j) % 3) == 0).collect();
+            let input: Vec<bool> = (0..total_input_bits).map(|j| ((i * 7 + j) % 3) == 0).collect();
             let mut targets = vec![false; 100];
             targets[(i * 3) % 100] = true;
             targets[(i * 7) % 100] = true;
@@ -727,16 +741,17 @@ mod tests {
 
         // Test batch
         let batch_size = 20;
-        let input_flat: Vec<bool> = (0..batch_size * 64)
+        let input_flat: Vec<bool> = (0..batch_size * total_input_bits)
             .map(|i| ((i * 11) % 5) == 0)
             .collect();
 
         // CPU forward
         let cpu_gates = gating.forward_batch(&input_flat, batch_size);
 
-        // GPU forward
+        // GPU forward (pack first)
+        let (packed, wpe) = neuron_memory::pack_bools_to_u64(&input_flat, batch_size, total_input_bits);
         let metal_eval = MetalGatingEvaluator::new().unwrap();
-        let gpu_gates = metal_eval.forward_batch(&gating, &input_flat, batch_size).unwrap();
+        let gpu_gates = metal_eval.forward_batch(&gating, &packed, batch_size, wpe).unwrap();
 
         // Should be identical
         assert_eq!(cpu_gates.len(), gpu_gates.len());
@@ -752,14 +767,15 @@ mod tests {
             return;
         }
 
-        let gating_gpu = RAMGating::new(10, 4, 6, 32, 0.5, Some(42));
-        let gating_cpu = RAMGating::new(10, 4, 6, 32, 0.5, Some(42));
+        let total_input_bits = 32;
+        let gating_gpu = RAMGating::new(10, 4, 6, total_input_bits, 0.5, Some(42));
+        let gating_cpu = RAMGating::new(10, 4, 6, total_input_bits, 0.5, Some(42));
 
         let metal_eval = MetalGatingEvaluator::new().unwrap();
 
         // Create training batch
         let batch_size = 5;
-        let input_flat: Vec<bool> = (0..batch_size * 32)
+        let input_flat: Vec<bool> = (0..batch_size * total_input_bits)
             .map(|i| ((i * 3) % 2) == 0)
             .collect();
 
@@ -772,14 +788,15 @@ mod tests {
         // Train on CPU
         gating_cpu.train_batch(&input_flat, &target_gates, batch_size, false);
 
-        // Train on GPU
-        let gpu_memory = metal_eval.train_batch(&gating_gpu, &input_flat, &target_gates, batch_size).unwrap();
+        // Train on GPU (pack first)
+        let (packed, wpe) = neuron_memory::pack_bools_to_u64(&input_flat, batch_size, total_input_bits);
+        let gpu_memory = metal_eval.train_batch(&gating_gpu, &packed, &target_gates, batch_size, wpe).unwrap();
         gating_gpu.import_memory(&gpu_memory).unwrap();
 
         invalidate_gating_cache();
 
         // Test input
-        let test_input: Vec<bool> = (0..32).map(|i| ((i * 3) % 2) == 0).collect();
+        let test_input: Vec<bool> = (0..total_input_bits).map(|i| ((i * 3) % 2) == 0).collect();
 
         // Forward on both should give same results
         let cpu_gates = gating_cpu.forward_single(&test_input);
