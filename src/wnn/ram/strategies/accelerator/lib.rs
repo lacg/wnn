@@ -4339,7 +4339,8 @@ fn ramlm_forward_batch_quad_weighted_numpy<'py>(
 #[pyclass]
 struct BitwiseCacheWrapper {
     inner: bitwise_ramlm::BitwiseTokenCache,
-    sparse_threshold: usize,
+    /// Optional override: None = auto-compute per genome based on budget.
+    sparse_threshold_override: Option<usize>,
 }
 
 #[pymethods]
@@ -4356,13 +4357,12 @@ impl BitwiseCacheWrapper {
         pad_token_id: u32,
         sparse_threshold: Option<usize>,
     ) -> Self {
-        let threshold = sparse_threshold.unwrap_or(crate::neuron_memory::DEFAULT_SPARSE_THRESHOLD);
         Self {
             inner: bitwise_ramlm::BitwiseTokenCache::new(
                 train_tokens, eval_tokens, vocab_size, context_size,
                 num_parts, num_eval_parts, pad_token_id,
             ),
-            sparse_threshold: threshold,
+            sparse_threshold_override: sparse_threshold,
         }
     }
 
@@ -4385,12 +4385,12 @@ impl BitwiseCacheWrapper {
         neuron_sample_rate: f32,
         rng_seed: u64,
     ) -> PyResult<Vec<(f64, f64, f64)>> {
-        let threshold = self.sparse_threshold;
+        let override_val = self.sparse_threshold_override;
         py.allow_threads(|| {
             Ok(bitwise_ramlm::evaluate_genomes(
                 &self.inner, &bits_per_cluster_flat, &neurons_per_cluster_flat,
                 &connections_flat, num_genomes, train_subset_idx, eval_subset_idx,
-                memory_mode, neuron_sample_rate, rng_seed, threshold,
+                memory_mode, neuron_sample_rate, rng_seed, override_val,
             ))
         })
     }
@@ -4408,12 +4408,12 @@ impl BitwiseCacheWrapper {
         neuron_sample_rate: f32,
         rng_seed: u64,
     ) -> PyResult<Vec<(f64, f64, f64)>> {
-        let threshold = self.sparse_threshold;
+        let override_val = self.sparse_threshold_override;
         py.allow_threads(|| {
             Ok(bitwise_ramlm::evaluate_genomes_full(
                 &self.inner, &bits_per_cluster_flat, &neurons_per_cluster_flat,
                 &connections_flat, num_genomes,
-                memory_mode, neuron_sample_rate, rng_seed, threshold,
+                memory_mode, neuron_sample_rate, rng_seed, override_val,
             ))
         })
     }
@@ -4438,7 +4438,6 @@ impl BitwiseCacheWrapper {
     fn num_parts(&self) -> usize { self.inner.num_parts }
     fn num_eval_parts(&self) -> usize { self.inner.num_eval_parts }
     fn num_bits(&self) -> usize { self.inner.num_bits }
-    fn sparse_threshold(&self) -> usize { self.sparse_threshold }
 }
 
 /// Python module definition

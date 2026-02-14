@@ -24,7 +24,7 @@ use crate::neuron_memory::{
     FALSE, TRUE, EMPTY, QUAD_WEAK_TRUE, QUAD_WEIGHTS,
     CELLS_PER_WORD,
     MODE_TERNARY, MODE_QUAD_BINARY, MODE_QUAD_WEIGHTED,
-    ClusterStorage,
+    ClusterStorage, auto_sparse_threshold,
 };
 
 // =============================================================================
@@ -1186,14 +1186,14 @@ pub fn evaluate_genomes(
     memory_mode: u8,
     neuron_sample_rate: f32,
     rng_seed: u64,
-    sparse_threshold: usize,
+    sparse_threshold_override: Option<usize>,
 ) -> Vec<(f64, f64, f64)> {
     let train_subset = &cache.train_subsets[train_subset_idx % cache.num_parts];
     let eval_subset = &cache.eval_subsets[eval_subset_idx % cache.num_eval_parts];
     evaluate_genomes_with_subset(
         cache, bits_per_cluster_flat, neurons_per_cluster_flat,
         connections_flat, num_genomes, train_subset, eval_subset,
-        memory_mode, neuron_sample_rate, rng_seed, sparse_threshold,
+        memory_mode, neuron_sample_rate, rng_seed, sparse_threshold_override,
     )
 }
 
@@ -1207,12 +1207,12 @@ pub fn evaluate_genomes_full(
     memory_mode: u8,
     neuron_sample_rate: f32,
     rng_seed: u64,
-    sparse_threshold: usize,
+    sparse_threshold_override: Option<usize>,
 ) -> Vec<(f64, f64, f64)> {
     evaluate_genomes_with_subset(
         cache, bits_per_cluster_flat, neurons_per_cluster_flat,
         connections_flat, num_genomes, &cache.full_train, &cache.full_eval,
-        memory_mode, neuron_sample_rate, rng_seed, sparse_threshold,
+        memory_mode, neuron_sample_rate, rng_seed, sparse_threshold_override,
     )
 }
 
@@ -1220,11 +1220,12 @@ pub fn evaluate_genomes_full(
 ///
 /// Each genome can have different bits/neurons per cluster. Layouts are pre-computed
 /// per genome, and memory is allocated per genome based on its actual layout.
-/// Clusters independently use dense or sparse storage based on sparse_threshold.
+///
+/// Sparse threshold is auto-computed per genome to fit all genomes in the memory budget
+/// simultaneously (maximizing parallelism). If sparse_threshold_override is Some(t),
+/// uses that fixed threshold for all genomes instead.
 ///
 /// Returns: Vec<(ce, accuracy, weighted_bit_accuracy)> per genome.
-/// weighted_bit_accuracy uses entropy-based weights: bits with balanced 0/1 distribution
-/// in targets (high entropy) are weighted more than degenerate bits.
 fn evaluate_genomes_with_subset(
     cache: &BitwiseTokenCache,
     bits_per_cluster_flat: &[usize],
@@ -1236,7 +1237,7 @@ fn evaluate_genomes_with_subset(
     memory_mode: u8,
     neuron_sample_rate: f32,
     rng_seed: u64,
-    sparse_threshold: usize,
+    sparse_threshold_override: Option<usize>,
 ) -> Vec<(f64, f64, f64)> {
     let num_clusters = cache.num_bits;
     let num_eval = eval_subset.num_examples;
@@ -1246,19 +1247,31 @@ fn evaluate_genomes_with_subset(
     // Compute empty_word based on memory mode (needed for dense ClusterStorage)
     let empty_word: i64 = crate::neuron_memory::empty_word_for_mode(memory_mode);
 
-    // Pre-compute per-genome layouts and connection offsets
+    // Memory budget for concurrent genome training
+    let mem_budget: u64 = 20 * 1024 * 1024 * 1024; // 20 GiB
+    let target_per_genome = if num_genomes > 0 { mem_budget / num_genomes as u64 } else { mem_budget };
+
+    // Pre-compute per-genome layouts, thresholds, and connection offsets
     let mut genome_layouts: Vec<GenomeLayout> = Vec::with_capacity(num_genomes);
     let mut genome_conn_offsets: Vec<usize> = Vec::with_capacity(num_genomes);
+    let mut genome_thresholds: Vec<usize> = Vec::with_capacity(num_genomes);
     let mut cumul_conn: usize = 0;
 
     for g in 0..num_genomes {
         let base = g * num_clusters;
         let bits_slice = &bits_per_cluster_flat[base..base + num_clusters];
         let neurons_slice = &neurons_per_cluster_flat[base..base + num_clusters];
-        let layout = compute_genome_layout(bits_slice, neurons_slice, sparse_threshold, expected_train);
+
+        let threshold = match sparse_threshold_override {
+            Some(t) => t,
+            None => auto_sparse_threshold(bits_slice, neurons_slice, target_per_genome, expected_train),
+        };
+
+        let layout = compute_genome_layout(bits_slice, neurons_slice, threshold, expected_train);
         genome_conn_offsets.push(cumul_conn);
         cumul_conn += layout.total_connections;
         genome_layouts.push(layout);
+        genome_thresholds.push(threshold);
     }
 
     // Allocate output scores (uniform across genomes — always num_eval * num_clusters)
@@ -1267,7 +1280,6 @@ fn evaluate_genomes_with_subset(
     // Phase 1: Train + Forward (CPU, parallel over genomes with memory budgeting)
     // Each genome allocates ClusterStorage per cluster (dense or sparse).
     // Adaptive batching: pack as many genomes as fit within budget per batch.
-    let mem_budget: u64 = 20 * 1024 * 1024 * 1024; // 20 GiB for training memory
     let genome_mem_bytes: Vec<u64> = genome_layouts.iter()
         .map(|l| l.estimated_bytes)
         .collect();
@@ -1301,11 +1313,12 @@ fn evaluate_genomes_with_subset(
                 let conn_end = conn_start + layout.total_connections;
                 let connections = &connections_flat[conn_start..conn_end];
 
-                // Allocate per-genome ClusterStorage (dense/sparse mix)
+                // Allocate per-genome ClusterStorage (dense/sparse per auto-threshold)
+                let threshold = genome_thresholds[g];
                 let mut cluster_storage: Vec<ClusterStorage> = (0..num_clusters)
                     .map(|c| ClusterStorage::new(
                         neurons_slice[c], bits_slice[c],
-                        sparse_threshold, empty_word, memory_mode,
+                        threshold, empty_word, memory_mode,
                     ))
                     .collect();
 

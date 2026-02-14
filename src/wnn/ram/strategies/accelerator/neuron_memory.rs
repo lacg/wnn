@@ -300,10 +300,48 @@ pub fn pack_bools_to_u64(bools: &[bool], num_examples: usize, total_bits: usize)
 // =============================================================================
 
 /// Default threshold: clusters with bits > this use sparse storage.
-/// Crossover where sparse becomes cheaper than dense is ~19 bits (with 10K training examples).
-/// 20 keeps ≤20-bit clusters dense (fast bit extraction + GPU) while making >20 sparse
-/// so 50 genomes fit in the 20 GiB memory budget.
+/// Only used when auto-compute is disabled. Normally auto_sparse_threshold() picks
+/// the optimal value per genome based on the memory budget.
 pub const DEFAULT_SPARSE_THRESHOLD: usize = 20;
+
+/// Auto-compute the optimal sparse threshold for a genome to fit within target_bytes.
+///
+/// Tries thresholds from max_bits down to 0, returns the highest (= most dense = fastest)
+/// threshold where the total estimated memory fits the budget.
+/// Returns usize::MAX if all-dense fits.
+pub fn auto_sparse_threshold(
+	bits_per_cluster: &[usize],
+	neurons_per_cluster: &[usize],
+	target_bytes: u64,
+	expected_train: usize,
+) -> usize {
+	// Try all-dense first (fastest path)
+	let all_dense: u64 = bits_per_cluster.iter().zip(neurons_per_cluster.iter())
+		.map(|(&b, &n)| {
+			let wpn = words_per_neuron(b);
+			(n * wpn * 8) as u64
+		})
+		.sum();
+	if all_dense <= target_bytes {
+		return usize::MAX;
+	}
+
+	// Find max bits in this genome
+	let max_bits = *bits_per_cluster.iter().max().unwrap_or(&0);
+
+	// Try thresholds from max_bits-1 down to 0
+	// Each step makes one more bit-width level sparse
+	for threshold in (0..max_bits).rev() {
+		let est: u64 = bits_per_cluster.iter().zip(neurons_per_cluster.iter())
+			.map(|(&b, &n)| ClusterStorage::estimated_bytes(n, b, threshold, expected_train))
+			.sum();
+		if est <= target_bytes {
+			return threshold;
+		}
+	}
+
+	0 // all sparse as last resort
+}
 
 /// Per-cluster neuron memory — either dense (bit-packed) or sparse (HashMap).
 ///
@@ -470,13 +508,16 @@ impl ClusterStorage {
 	}
 
 	/// Estimated memory bytes for budget planning (static, before allocation).
+	/// Caps sparse entries at min(expected, 2^bits) since a neuron can't have
+	/// more unique addresses than its address space.
 	pub fn estimated_bytes(num_neurons: usize, bits: usize, threshold: usize, expected_entries_per_neuron: usize) -> u64 {
 		if bits <= threshold {
 			let wpn = words_per_neuron(bits);
 			(num_neurons * wpn * 8) as u64
 		} else {
-			// Sparse: base + entries * 12
-			(num_neurons as u64) * (56 + expected_entries_per_neuron as u64 * 12)
+			let max_entries = 1usize << bits;
+			let actual_entries = expected_entries_per_neuron.min(max_entries);
+			(num_neurons as u64) * (56 + actual_entries as u64 * 12)
 		}
 	}
 
