@@ -341,6 +341,66 @@ def create_seed_genome(num_clusters, bits, neurons, total_input_bits):
 	)
 
 
+def create_difficulty_tiered_seed(
+	num_clusters, total_input_bits, per_bit_accuracy,
+	easy_threshold=0.80, medium_threshold=0.65,
+	easy_neurons=100, easy_bits=14,
+	medium_neurons=150, medium_bits=16,
+	hard_neurons=150, hard_bits=20,
+	jitter_neurons=0.15, jitter_bits=2,
+):
+	"""Create a seed genome with neurons/bits allocated by per-bit difficulty.
+
+	Clusters predicting easy bits (high baseline accuracy) get fewer resources,
+	while clusters predicting hard bits get more bits-per-neuron (where scaling
+	actually helps).
+
+	Args:
+		per_bit_accuracy: List of baseline accuracy per bit from Phase 1.
+		easy/medium_threshold: Accuracy thresholds for tier assignment.
+		*_neurons, *_bits: Center values for each tier.
+		jitter_neurons: Fractional jitter on neuron count (0.15 = ±15%).
+		jitter_bits: Max random delta on bits (±2).
+	"""
+	import random
+	from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
+
+	bits_per_cluster = []
+	neurons_per_cluster = []
+
+	for i in range(num_clusters):
+		acc = per_bit_accuracy[i] if i < len(per_bit_accuracy) else 0.5
+
+		if acc > easy_threshold:
+			base_n, base_b = easy_neurons, easy_bits
+		elif acc > medium_threshold:
+			base_n, base_b = medium_neurons, medium_bits
+		else:
+			base_n, base_b = hard_neurons, hard_bits
+
+		# Add jitter for population diversity
+		n = max(10, int(base_n * (1 + random.uniform(-jitter_neurons, jitter_neurons))))
+		b = max(8, min(24, base_b + random.randint(-jitter_bits, jitter_bits)))
+
+		neurons_per_cluster.append(n)
+		bits_per_cluster.append(b)
+
+	# Build connections
+	connections = []
+	for cluster_idx in range(num_clusters):
+		n = neurons_per_cluster[cluster_idx]
+		b = bits_per_cluster[cluster_idx]
+		for _ in range(n):
+			for _ in range(b):
+				connections.append(random.randint(0, total_input_bits - 1))
+
+	return ClusterGenome(
+		bits_per_cluster=bits_per_cluster,
+		neurons_per_cluster=neurons_per_cluster,
+		connections=connections,
+	)
+
+
 def run_ga_phase(
 	evaluator, arch_config, ga_gens, population, patience,
 	seed_genome=None, phase_name="GA", logger=print, check_interval=10,
@@ -760,52 +820,57 @@ def main():
 		best_neurons = best_p1["neurons"]
 		best_ce = best_p1["cross_entropy"]
 
-		# ── Create initial population with tiered seeding ──
-		# Top 1-5: 5 variants each (best configs get most diversity)
-		# 6-10: 3 variants each
-		# 11-16: fill remaining slots
+		# ── Create initial population ──
+		# Mix of uniform seeds (from top Phase 1 configs) and
+		# difficulty-tiered seeds (neurons/bits based on per-bit difficulty).
+		target = args.population
+		per_bit_acc = best_p1.get("per_bit_accuracy", [])
+
 		logger(f"\nSeeding population from {len(phase1_results)} grid configs...")
 		pop_genomes = []
-		target = args.population
 
-		# Tier 1: top 5 configs × 5 variants = 25
+		# 50% uniform seeds from top Phase 1 configs (proven good configs)
+		n_uniform = target // 2
+		# Top 5: 3 variants each = 15, next 5: 2 each = 10
 		for config in phase1_results[:5]:
-			for _ in range(5):
-				g = create_seed_genome(
-					num_clusters, config["bits"], config["neurons"], total_input_bits
-				)
-				pop_genomes.append(g)
-
-		# Tier 2: configs 6-10 × 3 variants = 15
-		for config in phase1_results[5:10]:
 			for _ in range(3):
 				g = create_seed_genome(
 					num_clusters, config["bits"], config["neurons"], total_input_bits
 				)
 				pop_genomes.append(g)
+		for config in phase1_results[5:10]:
+			for _ in range(2):
+				g = create_seed_genome(
+					num_clusters, config["bits"], config["neurons"], total_input_bits
+				)
+				pop_genomes.append(g)
 
-		# Tier 3: configs 11-16, fill remaining slots
-		remaining = phase1_results[10:]
-		for config in remaining:
-			if len(pop_genomes) >= target:
-				break
-			g = create_seed_genome(
-				num_clusters, config["bits"], config["neurons"], total_input_bits
-			)
-			pop_genomes.append(g)
-
-		# Top up any remaining slots from top configs (round-robin)
-		i = 0
-		while len(pop_genomes) < target:
-			config = phase1_results[i % len(phase1_results)]
-			g = create_seed_genome(
-				num_clusters, config["bits"], config["neurons"], total_input_bits
-			)
-			pop_genomes.append(g)
-			i += 1
+		# 50% difficulty-tiered seeds (heterogeneous per-cluster)
+		if per_bit_acc:
+			n_tiered = target - len(pop_genomes)
+			# Log per-bit difficulty tiers
+			easy = [i for i, a in enumerate(per_bit_acc) if a > 0.80]
+			medium = [i for i, a in enumerate(per_bit_acc) if 0.65 < a <= 0.80]
+			hard = [i for i, a in enumerate(per_bit_acc) if a <= 0.65]
+			logger(f"  Difficulty tiers: easy={easy} medium={medium} hard={hard}")
+			logger(f"  Tier config: easy=100n/14b, medium=150n/16b, hard=150n/20b (±jitter)")
+			logger(f"  Adding {n_tiered} difficulty-tiered seeds")
+			for _ in range(n_tiered):
+				g = create_difficulty_tiered_seed(
+					num_clusters, total_input_bits, per_bit_acc,
+				)
+				pop_genomes.append(g)
+		else:
+			# Fallback: fill with uniform from remaining configs
+			while len(pop_genomes) < target:
+				config = phase1_results[len(pop_genomes) % len(phase1_results)]
+				g = create_seed_genome(
+					num_clusters, config["bits"], config["neurons"], total_input_bits
+				)
+				pop_genomes.append(g)
 
 		initial_population = pop_genomes[:target]
-		best_genome = initial_population[0]  # Best config, first random seed
+		best_genome = initial_population[0]  # Best uniform config, first random seed
 
 		logger(f"  Created {len(initial_population)} genomes for initial population")
 
