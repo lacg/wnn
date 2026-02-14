@@ -731,26 +731,51 @@ def main():
 		best_neurons = best_p1["neurons"]
 		best_ce = best_p1["cross_entropy"]
 
-		# ── Create 50-genome initial population ──
-		# 3 genomes per grid config (different random connections) = 48
-		# 2 extra from best 2 configs = 50 total
+		# ── Create initial population with tiered seeding ──
+		# Top 1-5: 5 variants each (best configs get most diversity)
+		# 6-10: 3 variants each
+		# 11-16: fill remaining slots
 		logger(f"\nSeeding population from {len(phase1_results)} grid configs...")
 		pop_genomes = []
-		for config in phase1_results:
+		target = args.population
+
+		# Tier 1: top 5 configs × 5 variants = 25
+		for config in phase1_results[:5]:
+			for _ in range(5):
+				g = create_seed_genome(
+					num_clusters, config["bits"], config["neurons"], total_input_bits
+				)
+				pop_genomes.append(g)
+
+		# Tier 2: configs 6-10 × 3 variants = 15
+		for config in phase1_results[5:10]:
 			for _ in range(3):
 				g = create_seed_genome(
 					num_clusters, config["bits"], config["neurons"], total_input_bits
 				)
 				pop_genomes.append(g)
 
-		# Add 2 extra from top-2 configs
-		for config in phase1_results[:2]:
+		# Tier 3: configs 11-16, fill remaining slots
+		remaining = phase1_results[10:]
+		for config in remaining:
+			if len(pop_genomes) >= target:
+				break
 			g = create_seed_genome(
 				num_clusters, config["bits"], config["neurons"], total_input_bits
 			)
 			pop_genomes.append(g)
 
-		initial_population = pop_genomes[:args.population]
+		# Top up any remaining slots from top configs (round-robin)
+		i = 0
+		while len(pop_genomes) < target:
+			config = phase1_results[i % len(phase1_results)]
+			g = create_seed_genome(
+				num_clusters, config["bits"], config["neurons"], total_input_bits
+			)
+			pop_genomes.append(g)
+			i += 1
+
+		initial_population = pop_genomes[:target]
 		best_genome = initial_population[0]  # Best config, first random seed
 
 		logger(f"  Created {len(initial_population)} genomes for initial population")
