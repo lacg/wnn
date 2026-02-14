@@ -564,8 +564,8 @@ def main():
 						help="GA population size (default: 50)")
 	parser.add_argument("--ts-iters", type=int, default=50,
 						help="TS iterations per phase (default: 50)")
-	parser.add_argument("--neighbors", type=int, default=30,
-						help="TS neighbors per iteration (default: 30)")
+	parser.add_argument("--neighbors", type=int, default=50,
+						help="TS neighbors per iteration (default: 50)")
 	parser.add_argument("--ts-diversity", type=float, default=0.0,
 						help="TS diversity: fraction of top genomes as neighbor sources (0=top-1, 0.2=top 20%%)")
 	parser.add_argument("--patience", type=int, default=2,
