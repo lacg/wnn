@@ -1265,7 +1265,7 @@ fn evaluate_genomes_with_subset(
     // With high-bit genomes (20+ bits), concurrent allocations can exceed physical RAM.
     // Adaptive batching: pack as many genomes as fit within budget per batch,
     // so small genomes run in large parallel batches while large ones run in smaller batches.
-    let mem_budget: u64 = 6 * 1024 * 1024 * 1024; // 6 GB for training memory
+    let mem_budget: u64 = 20 * 1024 * 1024 * 1024; // 20 GiB for training memory
     let genome_mem_bytes: Vec<u64> = genome_layouts.iter()
         .map(|l| l.total_memory_words as u64 * 8)
         .collect();
