@@ -12,6 +12,7 @@
 //!   Quad:    QUAD_FALSE=0, QUAD_WEAK_FALSE=1, QUAD_WEAK_TRUE=2, QUAD_TRUE=3
 
 use std::sync::atomic::{AtomicU32, Ordering};
+use rustc_hash::FxHashMap;
 
 // =============================================================================
 // Cell Value Constants — Ternary Mode
@@ -292,4 +293,222 @@ pub fn pack_bools_to_u64(bools: &[bool], num_examples: usize, total_bits: usize)
 		}
 	}
 	(packed, words_per_example)
+}
+
+// =============================================================================
+// ClusterStorage — Per-Cluster Dense/Sparse Memory
+// =============================================================================
+
+/// Default threshold: clusters with bits > this use sparse storage.
+pub const DEFAULT_SPARSE_THRESHOLD: usize = 24;
+
+/// Per-cluster neuron memory — either dense (bit-packed) or sparse (HashMap).
+///
+/// Dense: bit-packed `Vec<i64>`, 31 cells per word. Fast for small address spaces.
+/// Sparse: `Vec<FxHashMap<u32, u8>>`, one map per neuron. Compact for large address spaces.
+///
+/// Uses `FxHashMap` (non-concurrent) since `bitwise_ramlm.rs` trains sequentially per genome.
+pub enum ClusterStorage {
+	Dense {
+		words: Vec<i64>,
+		words_per_neuron: usize,
+		num_neurons: usize,
+		empty_word: i64,
+	},
+	Sparse {
+		neurons: Vec<FxHashMap<u32, u8>>,
+		num_neurons: usize,
+		/// Default cell value for unvisited addresses (EMPTY_U8 for ternary, 1 for quad).
+		empty_cell: u8,
+	},
+}
+
+impl ClusterStorage {
+	/// Create storage for a cluster. Uses dense if `bits <= threshold`, sparse otherwise.
+	pub fn new(num_neurons: usize, bits: usize, threshold: usize, empty_word: i64, memory_mode: u8) -> Self {
+		if bits <= threshold {
+			let wpn = words_per_neuron(bits);
+			ClusterStorage::Dense {
+				words: vec![empty_word; num_neurons * wpn],
+				words_per_neuron: wpn,
+				num_neurons,
+				empty_word,
+			}
+		} else {
+			let empty_cell = match memory_mode {
+				MODE_QUAD_BINARY | MODE_QUAD_WEIGHTED => 1, // QUAD_WEAK_FALSE
+				_ => EMPTY_U8,
+			};
+			ClusterStorage::Sparse {
+				neurons: (0..num_neurons).map(|_| FxHashMap::default()).collect(),
+				num_neurons,
+				empty_cell,
+			}
+		}
+	}
+
+	/// Reset storage: refill dense with empty_word, clear all sparse maps.
+	pub fn reset(&mut self) {
+		match self {
+			ClusterStorage::Dense { words, empty_word, .. } => {
+				words.fill(*empty_word);
+			}
+			ClusterStorage::Sparse { neurons, .. } => {
+				for map in neurons.iter_mut() {
+					map.clear();
+				}
+			}
+		}
+	}
+
+	/// Read a 2-bit cell value for a given neuron and address.
+	#[inline]
+	pub fn read_cell(&self, neuron_idx: usize, address: usize) -> i64 {
+		match self {
+			ClusterStorage::Dense { words, words_per_neuron, .. } => {
+				let word_idx = address / CELLS_PER_WORD;
+				let cell_idx = address % CELLS_PER_WORD;
+				let word_offset = neuron_idx * words_per_neuron + word_idx;
+				(words[word_offset] >> (cell_idx * BITS_PER_CELL)) & CELL_MASK
+			}
+			ClusterStorage::Sparse { neurons, empty_cell, .. } => {
+				*neurons[neuron_idx].get(&(address as u32)).unwrap_or(empty_cell) as i64
+			}
+		}
+	}
+
+	/// Write a cell value unconditionally.
+	#[inline]
+	pub fn write_cell(&mut self, neuron_idx: usize, address: usize, value: i64) {
+		match self {
+			ClusterStorage::Dense { words, words_per_neuron, .. } => {
+				let word_idx = address / CELLS_PER_WORD;
+				let cell_idx = address % CELLS_PER_WORD;
+				let word_offset = neuron_idx * *words_per_neuron + word_idx;
+				let shift = cell_idx * BITS_PER_CELL;
+				let mask = CELL_MASK << shift;
+				words[word_offset] = (words[word_offset] & !mask) | (value << shift);
+			}
+			ClusterStorage::Sparse { neurons, empty_cell, .. } => {
+				if value == *empty_cell as i64 {
+					neurons[neuron_idx].remove(&(address as u32));
+				} else {
+					neurons[neuron_idx].insert(address as u32, value as u8);
+				}
+			}
+		}
+	}
+
+	/// Nudge a cell one step toward target (quad mode 4-state nudging).
+	/// target_true: cell = min(cell + 1, 3)
+	/// target_false: cell = max(cell - 1, 0)
+	#[inline]
+	pub fn nudge_cell(&mut self, neuron_idx: usize, address: usize, target_true: bool) {
+		match self {
+			ClusterStorage::Dense { words, words_per_neuron, .. } => {
+				let word_idx = address / CELLS_PER_WORD;
+				let cell_idx = address % CELLS_PER_WORD;
+				let word_offset = neuron_idx * *words_per_neuron + word_idx;
+				let shift = cell_idx * BITS_PER_CELL;
+				let old_cell = (words[word_offset] >> shift) & CELL_MASK;
+				let delta = 2 * (target_true as i64) - 1;
+				let new_cell = (old_cell + delta).clamp(QUAD_FALSE, QUAD_TRUE);
+				let mask = CELL_MASK << shift;
+				words[word_offset] = (words[word_offset] & !mask) | (new_cell << shift);
+			}
+			ClusterStorage::Sparse { neurons, empty_cell, .. } => {
+				let old_cell = *neurons[neuron_idx].get(&(address as u32)).unwrap_or(empty_cell) as i64;
+				let delta = 2 * (target_true as i64) - 1;
+				let new_cell = (old_cell + delta).clamp(QUAD_FALSE, QUAD_TRUE);
+				if new_cell == *empty_cell as i64 {
+					neurons[neuron_idx].remove(&(address as u32));
+				} else {
+					neurons[neuron_idx].insert(address as u32, new_cell as u8);
+				}
+			}
+		}
+	}
+
+	#[inline]
+	pub fn is_dense(&self) -> bool {
+		matches!(self, ClusterStorage::Dense { .. })
+	}
+
+	#[inline]
+	pub fn is_sparse(&self) -> bool {
+		matches!(self, ClusterStorage::Sparse { .. })
+	}
+
+	pub fn num_neurons(&self) -> usize {
+		match self {
+			ClusterStorage::Dense { num_neurons, .. } => *num_neurons,
+			ClusterStorage::Sparse { num_neurons, .. } => *num_neurons,
+		}
+	}
+
+	pub fn wpn(&self) -> usize {
+		match self {
+			ClusterStorage::Dense { words_per_neuron, .. } => *words_per_neuron,
+			ClusterStorage::Sparse { .. } => 0,
+		}
+	}
+
+	/// Actual memory usage in bytes.
+	pub fn memory_bytes(&self) -> usize {
+		match self {
+			ClusterStorage::Dense { words, .. } => words.len() * 8,
+			ClusterStorage::Sparse { neurons, .. } => {
+				// FxHashMap overhead: ~56 bytes base + 12 bytes per entry (key: 4, value: 1, hash+padding: 7)
+				let base = neurons.len() * 56;
+				let entries: usize = neurons.iter().map(|m| m.len()).sum();
+				base + entries * 12
+			}
+		}
+	}
+
+	/// Estimated memory bytes for budget planning (static, before allocation).
+	pub fn estimated_bytes(num_neurons: usize, bits: usize, threshold: usize, expected_entries_per_neuron: usize) -> u64 {
+		if bits <= threshold {
+			let wpn = words_per_neuron(bits);
+			(num_neurons * wpn * 8) as u64
+		} else {
+			// Sparse: base + entries * 12
+			(num_neurons as u64) * (56 + expected_entries_per_neuron as u64 * 12)
+		}
+	}
+
+	/// Extract the dense memory slice for GPU (dense only).
+	/// Returns the raw words slice for this cluster's neurons.
+	pub fn dense_words(&self) -> &[i64] {
+		match self {
+			ClusterStorage::Dense { words, .. } => words,
+			ClusterStorage::Sparse { .. } => panic!("dense_words() called on sparse storage"),
+		}
+	}
+
+	/// Build GPU export from sparse storage (sorted arrays for binary search).
+	pub fn export_sparse_gpu(&self) -> SparseGpuExport {
+		match self {
+			ClusterStorage::Sparse { neurons, num_neurons, .. } => {
+				let mut keys = Vec::new();
+				let mut values = Vec::new();
+				let mut offsets = Vec::with_capacity(*num_neurons);
+				let mut counts = Vec::with_capacity(*num_neurons);
+
+				for map in neurons.iter() {
+					offsets.push(keys.len() as u32);
+					let mut entries: Vec<(u32, u8)> = map.iter().map(|(&k, &v)| (k, v)).collect();
+					entries.sort_unstable_by_key(|(k, _)| *k);
+					counts.push(entries.len() as u32);
+					for (k, v) in entries {
+						keys.push(k as u64);
+						values.push(v);
+					}
+				}
+
+				SparseGpuExport { keys, values, offsets, counts, num_neurons: *num_neurons }
+			}
+			ClusterStorage::Dense { .. } => panic!("export_sparse_gpu() called on dense storage"),
+		}
+	}
 }
