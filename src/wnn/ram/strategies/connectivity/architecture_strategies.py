@@ -104,27 +104,39 @@ class ArchitectureStrategyMixin:
 		"""
 		Convert a ClusterGenome to a GenomeConfig for tracking.
 
-		Finds contiguous runs of clusters with the same (neurons, bits) config.
+		Finds contiguous runs of clusters with the same (neurons, mean_bits) config.
 		This enables proper tracking of which cluster indices belong to which tier.
 
 		The tier index is assigned based on the order of first appearance
 		(earliest cluster index = tier 0), preserving the original tier config order.
+
+		Per-neuron bits are averaged per cluster to produce a representative bits value.
 		"""
 		if not HAS_GENOME_TRACKING or GenomeConfig is None or TierConfig is None:
 			return None
 
-		# Find contiguous runs of clusters with same (neurons, bits)
-		runs: list[tuple[int, int, int, int]] = []  # (start, end, neurons, bits)
+		# Find contiguous runs of clusters with same (neurons, mean_bits)
+		runs: list[tuple[int, int, int, int]] = []  # (start, end, neurons, mean_bits)
 		if len(genome.neurons_per_cluster) == 0:
 			return GenomeConfig(tiers=[])
 
+		neuron_offsets = genome.cluster_neuron_offsets
+
+		def _cluster_mean_bits(c: int) -> int:
+			"""Compute rounded mean bits for cluster c."""
+			start_n = neuron_offsets[c]
+			end_n = neuron_offsets[c + 1]
+			if end_n == start_n:
+				return 0
+			return round(sum(genome.bits_per_neuron[start_n:end_n]) / (end_n - start_n))
+
 		current_neurons = genome.neurons_per_cluster[0]
-		current_bits = genome.bits_per_cluster[0]
+		current_bits = _cluster_mean_bits(0)
 		run_start = 0
 
 		for i in range(1, len(genome.neurons_per_cluster)):
 			neurons = genome.neurons_per_cluster[i]
-			bits = genome.bits_per_cluster[i]
+			bits = _cluster_mean_bits(i)
 			if neurons != current_neurons or bits != current_bits:
 				# End current run, start new one
 				runs.append((run_start, i, current_neurons, current_bits))
@@ -544,19 +556,35 @@ class CheckpointManager:
 	def _genome_to_dict(genome: 'ClusterGenome') -> dict:
 		"""Convert a ClusterGenome to a serializable dict."""
 		return {
-			'bits_per_cluster': list(genome.bits_per_cluster),
+			'bits_per_neuron': list(genome.bits_per_neuron),
 			'neurons_per_cluster': list(genome.neurons_per_cluster),
 			'connections': list(genome.connections) if genome.connections else None,
 		}
 
 	@staticmethod
 	def _dict_to_genome(d: dict, genome_class: type) -> 'ClusterGenome':
-		"""Convert a dict back to a ClusterGenome."""
-		return genome_class(
-			bits_per_cluster=d['bits_per_cluster'],
-			neurons_per_cluster=d['neurons_per_cluster'],
-			connections=d.get('connections'),
-		)
+		"""Convert a dict back to a ClusterGenome.
+
+		Supports both new format (bits_per_neuron) and legacy format (bits_per_cluster).
+		"""
+		if 'bits_per_neuron' in d:
+			return genome_class(
+				bits_per_neuron=d['bits_per_neuron'],
+				neurons_per_cluster=d['neurons_per_cluster'],
+				connections=d.get('connections'),
+			)
+		else:
+			# Legacy format: expand bits_per_cluster to bits_per_neuron
+			bits_per_cluster = d['bits_per_cluster']
+			neurons_per_cluster = d['neurons_per_cluster']
+			bits_per_neuron = []
+			for bits, neurons in zip(bits_per_cluster, neurons_per_cluster):
+				bits_per_neuron.extend([bits] * neurons)
+			return genome_class(
+				bits_per_neuron=bits_per_neuron,
+				neurons_per_cluster=neurons_per_cluster,
+				connections=d.get('connections'),
+			)
 
 
 @dataclass
@@ -675,6 +703,13 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		- Bits: 10% × (min_bits + max_bits)
 		- Connections: 10% × bits_per_token (stays close to token boundaries)
 
+		Bits are mutated per-neuron: for each mutable cluster, each neuron's
+		bits_per_neuron is independently mutated.
+
+		When neurons_per_cluster changes, bits_per_neuron is rebuilt to match:
+		- Kept neurons retain their (possibly mutated) bits
+		- New neurons get bits copied from a random existing neuron in that cluster
+
 		Also adjusts connections when architecture changes.
 		"""
 		self._ensure_rng()
@@ -686,7 +721,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		neurons_delta_max = max(1, round(0.1 * (cfg.min_neurons + cfg.max_neurons)))
 
 		# Track old architecture for connection adjustment
-		old_bits = genome.bits_per_cluster.copy()
+		old_bits_per_neuron = genome.bits_per_neuron.copy()
 		old_neurons = genome.neurons_per_cluster.copy()
 
 		# If only optimizing connections, skip architecture mutation
@@ -704,26 +739,57 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		else:
 			mutable_set = set(range(cfg.num_clusters))
 
+		neuron_offsets = genome.cluster_neuron_offsets
+
+		# Phase 1: Mutate bits per neuron in-place (using original offsets)
 		for i in range(cfg.num_clusters):
 			if i not in mutable_set:
 				continue
 			if self._rng.random() < mutation_rate:
 				if cfg.optimize_bits:
-					# Random delta in [-bits_delta_max, +bits_delta_max]
-					delta = self._rng.randint(-bits_delta_max, bits_delta_max)
-					new_bits = mutant.bits_per_cluster[i] + delta
-					mutant.bits_per_cluster[i] = max(cfg.min_bits, min(cfg.max_bits, new_bits))
+					n_start = neuron_offsets[i]
+					n_end = neuron_offsets[i + 1]
+					for n_idx in range(n_start, n_end):
+						delta = self._rng.randint(-bits_delta_max, bits_delta_max)
+						new_bits = mutant.bits_per_neuron[n_idx] + delta
+						mutant.bits_per_neuron[n_idx] = max(cfg.min_bits, min(cfg.max_bits, new_bits))
 
 				if cfg.optimize_neurons:
-					# Random delta in [-neurons_delta_max, +neurons_delta_max]
 					delta = self._rng.randint(-neurons_delta_max, neurons_delta_max)
 					new_neurons = mutant.neurons_per_cluster[i] + delta
 					mutant.neurons_per_cluster[i] = max(cfg.min_neurons, min(cfg.max_neurons, new_neurons))
 
+		# Phase 2: Rebuild bits_per_neuron to match new neurons_per_cluster
+		# (handles neurons being added or removed from clusters)
+		if cfg.optimize_neurons:
+			new_bits_per_neuron = []
+			for i in range(cfg.num_clusters):
+				n_start = neuron_offsets[i]
+				n_end = neuron_offsets[i + 1]
+				old_n = n_end - n_start  # original neuron count
+				new_n = mutant.neurons_per_cluster[i]
+				# Bits that were (possibly mutated) for existing neurons
+				cluster_bits = mutant.bits_per_neuron[n_start:n_end]
+
+				if new_n <= old_n:
+					# Fewer or same neurons: keep first new_n
+					new_bits_per_neuron.extend(cluster_bits[:new_n])
+				else:
+					# More neurons: keep all existing, add new ones
+					new_bits_per_neuron.extend(cluster_bits)
+					for _ in range(new_n - old_n):
+						# New neuron gets bits from random existing neuron in cluster
+						if old_n > 0:
+							template = self._rng.randint(0, old_n - 1)
+							new_bits_per_neuron.append(cluster_bits[template])
+						else:
+							new_bits_per_neuron.append(cfg.default_bits)
+			mutant.bits_per_neuron = new_bits_per_neuron
+
 		# Adjust connections if they exist and architecture changed
 		if genome.connections is not None and cfg.total_input_bits is not None:
 			mutant.connections = self._adjust_connections_for_mutation(
-				genome, mutant, old_bits, old_neurons, cfg.total_input_bits
+				genome, mutant, old_bits_per_neuron, old_neurons, cfg.total_input_bits
 			)
 
 		return mutant
@@ -756,28 +822,40 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		self,
 		old_genome: 'ClusterGenome',
 		new_genome: 'ClusterGenome',
-		old_bits: list[int],
+		old_bits_per_neuron: list[int],
 		old_neurons: list[int],
 		total_input_bits: int,
 	) -> list[int]:
-		"""Adjust connections when architecture changes during mutation."""
+		"""Adjust connections when architecture changes during mutation.
+
+		Uses per-neuron bits from old and new genomes with connection_offsets
+		for precise indexing into the flat connections array.
+		"""
 		result = []
-		old_idx = 0
+		old_neuron_offsets = old_genome.cluster_neuron_offsets
+		old_conn_offsets = old_genome.connection_offsets
+		new_neuron_offsets = new_genome.cluster_neuron_offsets
 
-		for cluster_idx in range(len(new_genome.bits_per_cluster)):
+		for cluster_idx in range(len(new_genome.neurons_per_cluster)):
 			o_neurons = old_neurons[cluster_idx]
-			o_bits = old_bits[cluster_idx]
 			n_neurons = new_genome.neurons_per_cluster[cluster_idx]
-			n_bits = new_genome.bits_per_cluster[cluster_idx]
+			old_n_start = old_neuron_offsets[cluster_idx]
+			new_n_start = new_neuron_offsets[cluster_idx]
 
-			for neuron_idx in range(n_neurons):
-				if neuron_idx < o_neurons:
+			for local_neuron in range(n_neurons):
+				new_global = new_n_start + local_neuron
+				n_bits = new_genome.bits_per_neuron[new_global]
+
+				if local_neuron < o_neurons:
 					# Existing neuron - copy and adjust connections
+					old_global = old_n_start + local_neuron
+					o_bits = old_bits_per_neuron[old_global]
+					old_conn_start = old_conn_offsets[old_global]
+
 					for bit_idx in range(n_bits):
 						if bit_idx < o_bits:
 							# Copy existing connection, with small random mutation
-							conn_idx = old_idx + neuron_idx * o_bits + bit_idx
-							old_conn = old_genome.connections[conn_idx]
+							old_conn = old_genome.connections[old_conn_start + bit_idx]
 							# 10% chance of small perturbation
 							if self._rng.random() < 0.1:
 								delta = self._rng.choice([-2, -1, 1, 2])
@@ -791,12 +869,15 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 				else:
 					# New neuron - copy connections from random existing neuron with mutations
 					if o_neurons > 0:
-						template_neuron = self._rng.randint(0, o_neurons - 1)
+						template_local = self._rng.randint(0, o_neurons - 1)
+						template_global = old_n_start + template_local
+						template_bits = old_bits_per_neuron[template_global]
+						template_conn_start = old_conn_offsets[template_global]
+
 						for bit_idx in range(n_bits):
-							if bit_idx < o_bits:
+							if bit_idx < template_bits:
 								# Copy from template with mutation
-								conn_idx = old_idx + template_neuron * o_bits + bit_idx
-								old_conn = old_genome.connections[conn_idx]
+								old_conn = old_genome.connections[template_conn_start + bit_idx]
 								delta = self._rng.choice([-2, -1, 1, 2])
 								new_conn = max(0, min(total_input_bits - 1, old_conn + delta))
 								result.append(new_conn)
@@ -807,49 +888,52 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 						for _ in range(n_bits):
 							result.append(self._rng.randint(0, total_input_bits - 1))
 
-			# Update old_idx for next cluster
-			old_idx += o_neurons * o_bits
-
 		return result
 
 	def crossover_genomes(self, parent1: 'ClusterGenome', parent2: 'ClusterGenome') -> 'ClusterGenome':
 		"""
 		Single-point crossover at cluster boundary.
 
+		Child inherits per-neuron bits for entire clusters from the chosen parent.
 		Connections are inherited from the parent whose cluster config is taken.
 		"""
 		from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 
 		self._ensure_rng()
-		n = len(parent1.bits_per_cluster)
+		n = len(parent1.neurons_per_cluster)
 		crossover_point = self._rng.randint(1, n - 1)
 
-		# Build child architecture
-		child_bits = parent1.bits_per_cluster[:crossover_point] + parent2.bits_per_cluster[crossover_point:]
+		# Build child neurons_per_cluster
 		child_neurons = parent1.neurons_per_cluster[:crossover_point] + parent2.neurons_per_cluster[crossover_point:]
+
+		# Build child bits_per_neuron using cluster_neuron_offsets
+		p1_offsets = parent1.cluster_neuron_offsets
+		p2_offsets = parent2.cluster_neuron_offsets
+
+		# Take per-neuron bits from parent1 for clusters [0, crossover_point)
+		p1_neuron_end = p1_offsets[crossover_point]
+		child_bits = list(parent1.bits_per_neuron[:p1_neuron_end])
+
+		# Take per-neuron bits from parent2 for clusters [crossover_point, n)
+		p2_neuron_start = p2_offsets[crossover_point]
+		child_bits.extend(parent2.bits_per_neuron[p2_neuron_start:])
 
 		# Build child connections if parents have them
 		child_connections = None
 		if parent1.connections is not None and parent2.connections is not None:
-			child_connections = []
-			p1_idx = 0
-			p2_idx = 0
-			for i in range(n):
-				p1_conn_size = parent1.neurons_per_cluster[i] * parent1.bits_per_cluster[i]
-				p2_conn_size = parent2.neurons_per_cluster[i] * parent2.bits_per_cluster[i]
+			p1_conn_offsets = parent1.connection_offsets
+			p2_conn_offsets = parent2.connection_offsets
 
-				if i < crossover_point:
-					# Take from parent1
-					child_connections.extend(parent1.connections[p1_idx:p1_idx + p1_conn_size])
-				else:
-					# Take from parent2
-					child_connections.extend(parent2.connections[p2_idx:p2_idx + p2_conn_size])
+			# Parent1 connections for clusters [0, crossover_point)
+			p1_conn_end = p1_conn_offsets[p1_neuron_end]
+			child_connections = list(parent1.connections[:p1_conn_end])
 
-				p1_idx += p1_conn_size
-				p2_idx += p2_conn_size
+			# Parent2 connections for clusters [crossover_point, n)
+			p2_conn_start = p2_conn_offsets[p2_neuron_start]
+			child_connections.extend(parent2.connections[p2_conn_start:])
 
 		return ClusterGenome(
-			bits_per_cluster=child_bits,
+			bits_per_neuron=child_bits,
 			neurons_per_cluster=child_neurons,
 			connections=child_connections,
 		)
@@ -858,10 +942,11 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		"""
 		Create a random genome based on optimize_* flags.
 
-		- If optimize_bits=True: random bits in [min_bits, max_bits]
-		- If optimize_bits=False: use default_bits for all clusters
+		- If optimize_bits=True: random bits per neuron in [min_bits, max_bits]
+		- If optimize_bits=False: use default_bits for all neurons
 		- Same logic for neurons
 
+		Bits are generated per-neuron (flat list), not per-cluster.
 		When optimizing connections only, both bits and neurons use defaults.
 		"""
 		from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
@@ -872,36 +957,38 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		if cfg.token_frequencies is not None:
 			return self._create_frequency_scaled_genome()
 
-		# Initialize bits: random if optimizing, default otherwise
-		if cfg.optimize_bits:
-			bits = [self._rng.randint(cfg.min_bits, cfg.max_bits) for _ in range(cfg.num_clusters)]
-		else:
-			bits = [cfg.default_bits] * cfg.num_clusters
-
 		# Initialize neurons: random if optimizing, default otherwise
 		if cfg.optimize_neurons:
 			neurons = [self._rng.randint(cfg.min_neurons, cfg.max_neurons) for _ in range(cfg.num_clusters)]
 		else:
 			neurons = [cfg.default_neurons] * cfg.num_clusters
 
+		# Initialize per-neuron bits: random if optimizing, default otherwise
+		total_neurons = sum(neurons)
+		if cfg.optimize_bits:
+			bits_per_neuron = [self._rng.randint(cfg.min_bits, cfg.max_bits) for _ in range(total_neurons)]
+		else:
+			bits_per_neuron = [cfg.default_bits] * total_neurons
+
 		# Initialize connections if total_input_bits available
 		connections = None
 		if cfg.total_input_bits is not None:
 			connections = []
-			for i in range(cfg.num_clusters):
-				for _ in range(neurons[i]):
-					for _ in range(bits[i]):
-						connections.append(self._rng.randint(0, cfg.total_input_bits - 1))
+			for b in bits_per_neuron:
+				for _ in range(b):
+					connections.append(self._rng.randint(0, cfg.total_input_bits - 1))
 
-		return ClusterGenome(bits_per_cluster=bits, neurons_per_cluster=neurons, connections=connections)
+		return ClusterGenome(bits_per_neuron=bits_per_neuron, neurons_per_cluster=neurons, connections=connections)
 
 	def _create_frequency_scaled_genome(self) -> 'ClusterGenome':
 		"""
 		Create genome with bits/neurons scaled by token frequency.
 
-		- If optimize_bits=True: scale bits by frequency
+		- If optimize_bits=True: scale bits by frequency (per-neuron)
 		- If optimize_bits=False: use default_bits
 		- Same logic for neurons
+
+		Bits are expanded to per-neuron (flat list) after computing per-cluster values.
 		"""
 		from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 
@@ -912,7 +999,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		max_freq = max(freqs) if freqs else 1
 		norm_freqs = [f / max_freq if max_freq > 0 else 0 for f in freqs]
 
-		bits = []
+		cluster_bits = []
 		neurons = []
 		for nf in norm_freqs:
 			# Bits: scaled if optimizing, default otherwise
@@ -927,19 +1014,23 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			else:
 				n = cfg.default_neurons
 
-			bits.append(max(cfg.min_bits, min(cfg.max_bits, b)))
+			cluster_bits.append(max(cfg.min_bits, min(cfg.max_bits, b)))
 			neurons.append(max(cfg.min_neurons, min(cfg.max_neurons, n)))
+
+		# Expand per-cluster bits to per-neuron (flat list)
+		bits_per_neuron = []
+		for i in range(cfg.num_clusters):
+			bits_per_neuron.extend([cluster_bits[i]] * neurons[i])
 
 		# Initialize connections if total_input_bits available
 		connections = None
 		if cfg.total_input_bits is not None:
 			connections = []
-			for i in range(cfg.num_clusters):
-				for _ in range(neurons[i]):
-					for _ in range(bits[i]):
-						connections.append(self._rng.randint(0, cfg.total_input_bits - 1))
+			for b in bits_per_neuron:
+				for _ in range(b):
+					connections.append(self._rng.randint(0, cfg.total_input_bits - 1))
 
-		return ClusterGenome(bits_per_cluster=bits, neurons_per_cluster=neurons, connections=connections)
+		return ClusterGenome(bits_per_neuron=bits_per_neuron, neurons_per_cluster=neurons, connections=connections)
 
 	# =========================================================================
 	# Hooks: Rust-accelerated offspring generation + lifecycle
@@ -1198,6 +1289,9 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 		- Bits: 10% × (min_bits + max_bits)
 		- Connections: 10% × bits_per_token
 
+		Bits are mutated per-neuron: for each mutable cluster, each neuron's
+		bits_per_neuron is independently mutated.
+
 		Returns (new_genome, move_info) where move_info is a tuple of mutated cluster indices
 		for tabu tracking.
 		"""
@@ -1228,7 +1322,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 			return mutant, move
 
 		# Track old architecture for connection adjustment
-		old_bits = genome.bits_per_cluster.copy()
+		old_bits_per_neuron = genome.bits_per_neuron.copy()
 		old_neurons = genome.neurons_per_cluster.copy()
 
 		# Mutate multiple clusters based on mutation_rate
@@ -1238,6 +1332,9 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 		else:
 			mutable_set = set(range(cfg.num_clusters))
 
+		neuron_offsets = genome.cluster_neuron_offsets
+
+		# Phase 1: Mutate bits per neuron and neurons_per_cluster
 		mutated_clusters = []
 		for i in range(cfg.num_clusters):
 			if i not in mutable_set:
@@ -1246,14 +1343,40 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				mutated_clusters.append(i)
 
 				if cfg.optimize_bits:
-					delta = self._rng.randint(-bits_delta_max, bits_delta_max)
-					new_bits = mutant.bits_per_cluster[i] + delta
-					mutant.bits_per_cluster[i] = max(cfg.min_bits, min(cfg.max_bits, new_bits))
+					# Mutate each neuron's bits independently
+					n_start = neuron_offsets[i]
+					n_end = neuron_offsets[i + 1]
+					for n_idx in range(n_start, n_end):
+						delta = self._rng.randint(-bits_delta_max, bits_delta_max)
+						new_bits = mutant.bits_per_neuron[n_idx] + delta
+						mutant.bits_per_neuron[n_idx] = max(cfg.min_bits, min(cfg.max_bits, new_bits))
 
 				if cfg.optimize_neurons:
 					delta = self._rng.randint(-neurons_delta_max, neurons_delta_max)
 					new_neurons = mutant.neurons_per_cluster[i] + delta
 					mutant.neurons_per_cluster[i] = max(cfg.min_neurons, min(cfg.max_neurons, new_neurons))
+
+		# Phase 2: Rebuild bits_per_neuron to match new neurons_per_cluster
+		if cfg.optimize_neurons:
+			new_bits_per_neuron = []
+			for i in range(cfg.num_clusters):
+				n_start = neuron_offsets[i]
+				n_end = neuron_offsets[i + 1]
+				old_n = n_end - n_start
+				new_n = mutant.neurons_per_cluster[i]
+				cluster_bits = mutant.bits_per_neuron[n_start:n_end]
+
+				if new_n <= old_n:
+					new_bits_per_neuron.extend(cluster_bits[:new_n])
+				else:
+					new_bits_per_neuron.extend(cluster_bits)
+					for _ in range(new_n - old_n):
+						if old_n > 0:
+							template = self._rng.randint(0, old_n - 1)
+							new_bits_per_neuron.append(cluster_bits[template])
+						else:
+							new_bits_per_neuron.append(cfg.default_bits)
+			mutant.bits_per_neuron = new_bits_per_neuron
 
 		# Move is tuple of mutated cluster indices (for tabu tracking)
 		move = tuple(mutated_clusters) if mutated_clusters else None
@@ -1261,7 +1384,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 		# Adjust connections if they exist and architecture changed
 		if genome.connections is not None and cfg.total_input_bits is not None:
 			mutant.connections = self._adjust_connections_for_mutation_ts(
-				genome, mutant, old_bits, old_neurons, cfg.total_input_bits
+				genome, mutant, old_bits_per_neuron, old_neurons, cfg.total_input_bits
 			)
 
 		return mutant, move
@@ -1270,38 +1393,53 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 		self,
 		old_genome: 'ClusterGenome',
 		new_genome: 'ClusterGenome',
-		old_bits: list[int],
+		old_bits_per_neuron: list[int],
 		old_neurons: list[int],
 		total_input_bits: int,
 	) -> list[int]:
-		"""Adjust connections when architecture changes during TS mutation."""
+		"""Adjust connections when architecture changes during TS mutation.
+
+		Uses per-neuron bits from old and new genomes with connection_offsets
+		for precise indexing into the flat connections array.
+		"""
 		result = []
-		old_idx = 0
+		old_neuron_offsets = old_genome.cluster_neuron_offsets
+		old_conn_offsets = old_genome.connection_offsets
+		new_neuron_offsets = new_genome.cluster_neuron_offsets
 
-		for cluster_idx in range(len(new_genome.bits_per_cluster)):
+		for cluster_idx in range(len(new_genome.neurons_per_cluster)):
 			o_neurons = old_neurons[cluster_idx]
-			o_bits = old_bits[cluster_idx]
 			n_neurons = new_genome.neurons_per_cluster[cluster_idx]
-			n_bits = new_genome.bits_per_cluster[cluster_idx]
+			old_n_start = old_neuron_offsets[cluster_idx]
+			new_n_start = new_neuron_offsets[cluster_idx]
 
-			for neuron_idx in range(n_neurons):
-				if neuron_idx < o_neurons:
+			for local_neuron in range(n_neurons):
+				new_global = new_n_start + local_neuron
+				n_bits = new_genome.bits_per_neuron[new_global]
+
+				if local_neuron < o_neurons:
 					# Existing neuron - copy connections
+					old_global = old_n_start + local_neuron
+					o_bits = old_bits_per_neuron[old_global]
+					old_conn_start = old_conn_offsets[old_global]
+
 					for bit_idx in range(n_bits):
 						if bit_idx < o_bits:
-							conn_idx = old_idx + neuron_idx * o_bits + bit_idx
-							result.append(old_genome.connections[conn_idx])
+							result.append(old_genome.connections[old_conn_start + bit_idx])
 						else:
 							# New bit position - add random connection
 							result.append(self._rng.randint(0, total_input_bits - 1))
 				else:
 					# New neuron - copy from random existing with slight mutation
 					if o_neurons > 0:
-						template_neuron = self._rng.randint(0, o_neurons - 1)
+						template_local = self._rng.randint(0, o_neurons - 1)
+						template_global = old_n_start + template_local
+						template_bits = old_bits_per_neuron[template_global]
+						template_conn_start = old_conn_offsets[template_global]
+
 						for bit_idx in range(n_bits):
-							if bit_idx < o_bits:
-								conn_idx = old_idx + template_neuron * o_bits + bit_idx
-								old_conn = old_genome.connections[conn_idx]
+							if bit_idx < template_bits:
+								old_conn = old_genome.connections[template_conn_start + bit_idx]
 								delta = self._rng.choice([-2, -1, 1, 2])
 								new_conn = max(0, min(total_input_bits - 1, old_conn + delta))
 								result.append(new_conn)
@@ -1310,8 +1448,6 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 					else:
 						for _ in range(n_bits):
 							result.append(self._rng.randint(0, total_input_bits - 1))
-
-			old_idx += o_neurons * o_bits
 
 		return result
 
