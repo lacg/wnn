@@ -5,7 +5,7 @@
 
   let name = '';
   let description = '';
-  let template = 'standard-6-phase';
+  let template = 'bitwise-7-phase';
   let phaseOrder = 'neurons_first';
 
   // Bitwise-specific config
@@ -18,8 +18,8 @@
   let bitwiseNeuronSampleRate = 0.25;
 
   // Adaptation (Baldwin/Lamarckian)
-  let synaptogenesis = false;
-  let neurogenesis = false;
+  let synaptogenesis = true;
+  let neurogenesis = true;
   let adaptWarmup = 10;
   let adaptCooldown = 5;
 
@@ -30,7 +30,7 @@
   let neighborsPerIter = 50;
   let patience = 10;
   let fitnessPercentile = 0.75;
-  let fitnessCalculator = 'normalized_harmonic';  // Default to normalized harmonic with equal weights
+  let fitnessCalculator = 'harmonic_rank';  // Default matches bitwise-7-phase template
   let fitnessWeightCe = 1.0;   // Weight for CE in harmonic calculations
   let fitnessWeightAcc = 1.0;  // Weight for accuracy in harmonic calculations
   let minAccuracyFloor = 0;  // 0 = disabled, 0.003 = 0.3% floor
@@ -82,8 +82,8 @@
       bitwiseMaxNeurons = 300;
       bitwiseMemoryMode = 'QUAD_WEIGHTED';
       bitwiseNeuronSampleRate = 0.25;
-      synaptogenesis = false;
-      neurogenesis = false;
+      synaptogenesis = true;
+      neurogenesis = true;
       adaptWarmup = 10;
       adaptCooldown = 5;
     }
