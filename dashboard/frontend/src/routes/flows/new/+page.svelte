@@ -93,70 +93,92 @@
     optimize_bits: boolean;
     optimize_neurons: boolean;
     optimize_connections: boolean;
+    phase_type?: 'grid_search';
   }
 
+  // Add-phase form state
+  let newPhaseType: 'ga' | 'ts' = 'ga';
+  let newPhaseGrid = false;
+  let newPhaseNeurons = true;
+  let newPhaseBits = false;
+  let newPhaseConnections = false;
+
   function generatePhases(templateName: string, order: string): PhaseSpec[] {
-    if (templateName === 'empty') {
-      return [];
-    }
+    if (templateName === 'empty') return [];
 
-    // Bitwise 7-phase template (grid search first, then neurons/bits order is configurable)
+    const neuronsPhases: PhaseSpec[] = [
+      { name: 'GA Neurons', experiment_type: 'ga', optimize_bits: false, optimize_neurons: true, optimize_connections: false },
+      { name: 'TS Neurons (refine)', experiment_type: 'ts', optimize_bits: false, optimize_neurons: true, optimize_connections: false },
+    ];
+    const bitsPhases: PhaseSpec[] = [
+      { name: 'GA Bits', experiment_type: 'ga', optimize_bits: true, optimize_neurons: false, optimize_connections: false },
+      { name: 'TS Bits (refine)', experiment_type: 'ts', optimize_bits: true, optimize_neurons: false, optimize_connections: false },
+    ];
+    const connectionsPhases: PhaseSpec[] = [
+      { name: 'GA Connections', experiment_type: 'ga', optimize_bits: false, optimize_neurons: false, optimize_connections: true },
+      { name: 'TS Connections (refine)', experiment_type: 'ts', optimize_bits: false, optimize_neurons: false, optimize_connections: true },
+    ];
+
     if (templateName === 'bitwise-7-phase') {
-      const grid: PhaseSpec = { name: 'Phase 1: Grid Search (neurons × bits)', experiment_type: 'ga', optimize_bits: true, optimize_neurons: true, optimize_connections: false };
-      const neuronsPhases: PhaseSpec[] = [
-        { name: `Phase ${order === 'neurons_first' ? 2 : 4}: GA Neurons`, experiment_type: 'ga', optimize_bits: false, optimize_neurons: true, optimize_connections: false },
-        { name: `Phase ${order === 'neurons_first' ? 3 : 5}: TS Neurons (refine)`, experiment_type: 'ts', optimize_bits: false, optimize_neurons: true, optimize_connections: false },
-      ];
-      const bitsPhases: PhaseSpec[] = [
-        { name: `Phase ${order === 'bits_first' ? 2 : 4}: GA Bits`, experiment_type: 'ga', optimize_bits: true, optimize_neurons: false, optimize_connections: false },
-        { name: `Phase ${order === 'bits_first' ? 3 : 5}: TS Bits (refine)`, experiment_type: 'ts', optimize_bits: true, optimize_neurons: false, optimize_connections: false },
-      ];
-      const connectionsPhases: PhaseSpec[] = [
-        { name: 'Phase 6: GA Connections', experiment_type: 'ga', optimize_bits: false, optimize_neurons: false, optimize_connections: true },
-        { name: 'Phase 7: TS Connections (refine)', experiment_type: 'ts', optimize_bits: false, optimize_neurons: false, optimize_connections: true },
-      ];
-      if (order === 'bits_first') {
-        return [grid, ...bitsPhases, ...neuronsPhases, ...connectionsPhases];
-      } else {
-        return [grid, ...neuronsPhases, ...bitsPhases, ...connectionsPhases];
-      }
+      const grid: PhaseSpec = { name: 'Grid Search (neurons × bits)', experiment_type: 'ga', optimize_bits: true, optimize_neurons: true, optimize_connections: false, phase_type: 'grid_search' };
+      if (order === 'bits_first') return [grid, ...bitsPhases, ...neuronsPhases, ...connectionsPhases];
+      return [grid, ...neuronsPhases, ...bitsPhases, ...connectionsPhases];
     }
 
-    // Quick 4-phase template (neurons first, no connections phase)
     if (templateName === 'quick-4-phase') {
-      return [
-        { name: 'Phase 1a: GA Neurons Only', experiment_type: 'ga', optimize_bits: false, optimize_neurons: true, optimize_connections: false },
-        { name: 'Phase 1b: TS Neurons Only (refine)', experiment_type: 'ts', optimize_bits: false, optimize_neurons: true, optimize_connections: false },
-        { name: 'Phase 2a: GA Bits Only', experiment_type: 'ga', optimize_bits: true, optimize_neurons: false, optimize_connections: false },
-        { name: 'Phase 2b: TS Bits Only (refine)', experiment_type: 'ts', optimize_bits: true, optimize_neurons: false, optimize_connections: false },
-      ];
+      if (order === 'bits_first') return [...bitsPhases, ...neuronsPhases];
+      return [...neuronsPhases, ...bitsPhases];
     }
 
-    // Standard 6-phase template
-    if (order === 'bits_first') {
-      return [
-        { name: 'Phase 1a: GA Bits Only', experiment_type: 'ga', optimize_bits: true, optimize_neurons: false, optimize_connections: false },
-        { name: 'Phase 1b: TS Bits Only (refine)', experiment_type: 'ts', optimize_bits: true, optimize_neurons: false, optimize_connections: false },
-        { name: 'Phase 2a: GA Neurons Only', experiment_type: 'ga', optimize_bits: false, optimize_neurons: true, optimize_connections: false },
-        { name: 'Phase 2b: TS Neurons Only (refine)', experiment_type: 'ts', optimize_bits: false, optimize_neurons: true, optimize_connections: false },
-        { name: 'Phase 3a: GA Connections Only', experiment_type: 'ga', optimize_bits: false, optimize_neurons: false, optimize_connections: true },
-        { name: 'Phase 3b: TS Connections Only (refine)', experiment_type: 'ts', optimize_bits: false, optimize_neurons: false, optimize_connections: true },
-      ];
-    } else {
-      // neurons_first (default)
-      return [
-        { name: 'Phase 1a: GA Neurons Only', experiment_type: 'ga', optimize_bits: false, optimize_neurons: true, optimize_connections: false },
-        { name: 'Phase 1b: TS Neurons Only (refine)', experiment_type: 'ts', optimize_bits: false, optimize_neurons: true, optimize_connections: false },
-        { name: 'Phase 2a: GA Bits Only', experiment_type: 'ga', optimize_bits: true, optimize_neurons: false, optimize_connections: false },
-        { name: 'Phase 2b: TS Bits Only (refine)', experiment_type: 'ts', optimize_bits: true, optimize_neurons: false, optimize_connections: false },
-        { name: 'Phase 3a: GA Connections Only', experiment_type: 'ga', optimize_bits: false, optimize_neurons: false, optimize_connections: true },
-        { name: 'Phase 3b: TS Connections Only (refine)', experiment_type: 'ts', optimize_bits: false, optimize_neurons: false, optimize_connections: true },
-      ];
-    }
+    // standard-6-phase (default)
+    if (order === 'bits_first') return [...bitsPhases, ...neuronsPhases, ...connectionsPhases];
+    return [...neuronsPhases, ...bitsPhases, ...connectionsPhases];
   }
 
   // Reactive: regenerate phases when template or phaseOrder changes
   $: experiments = generatePhases(template, phaseOrder);
+
+  function generatePhaseName(type: string, neurons: boolean, bits: boolean, connections: boolean): string {
+    const targets: string[] = [];
+    if (neurons) targets.push('Neurons');
+    if (bits) targets.push('Bits');
+    if (connections) targets.push('Connections');
+    return `${type.toUpperCase()} ${targets.join(' + ')}`;
+  }
+
+  function addPhase() {
+    if (newPhaseGrid) {
+      experiments = [...experiments, {
+        name: 'Grid Search (neurons × bits)',
+        experiment_type: 'ga' as const,
+        optimize_bits: true,
+        optimize_neurons: true,
+        optimize_connections: false,
+        phase_type: 'grid_search' as const,
+      }];
+      return;
+    }
+    if (!newPhaseNeurons && !newPhaseBits && !newPhaseConnections) return;
+    experiments = [...experiments, {
+      name: generatePhaseName(newPhaseType, newPhaseNeurons, newPhaseBits, newPhaseConnections),
+      experiment_type: newPhaseType,
+      optimize_bits: newPhaseBits,
+      optimize_neurons: newPhaseNeurons,
+      optimize_connections: newPhaseConnections,
+    }];
+  }
+
+  function removePhase(index: number) {
+    experiments = experiments.filter((_, i) => i !== index);
+  }
+
+  function movePhase(index: number, direction: -1 | 1) {
+    const newIndex = index + direction;
+    if (newIndex < 0 || newIndex >= experiments.length) return;
+    const copy = [...experiments];
+    [copy[index], copy[newIndex]] = [copy[newIndex], copy[index]];
+    experiments = copy;
+  }
 
   async function handleSubmit() {
     if (!name.trim()) {
@@ -169,15 +191,14 @@
 
     try {
       // Enrich experiments with their params (generations/iterations based on type)
-      const enrichedExperiments = experiments.map((exp, i) => ({
+      const enrichedExperiments = experiments.map((exp) => ({
         ...exp,
         params: {
           generations: exp.experiment_type === 'ga' ? gaGenerations : undefined,
           iterations: exp.experiment_type === 'ts' ? tsIterations : undefined,
           population_size: populationSize,
           neighbors_per_iter: neighborsPerIter,
-          // First bitwise phase is a grid search (special handling in worker)
-          ...(isBitwise && i === 0 ? { phase_type: 'grid_search' } : {}),
+          ...(exp.phase_type ? { phase_type: exp.phase_type } : {}),
         }
       }));
 
@@ -301,7 +322,7 @@
               {:else if template === 'bitwise-7-phase'}
                 Grid search + 6 optimization phases (per-cluster, 250 gens)
               {:else}
-                Add phases manually after creation
+                Start empty, add phases manually below
               {/if}
             </span>
           </div>
@@ -406,22 +427,49 @@
 
       <!-- Right column: Phases + Tiers + Seed -->
       <div class="right-column">
-        {#if experiments.length > 0}
-          <div class="form-section">
-            <h2>Phases Preview ({experiments.length})</h2>
+        <div class="form-section">
+          <h2>Phases ({experiments.length})</h2>
+          {#if experiments.length > 0}
             <div class="phase-list">
               {#each experiments as phase, i}
                 <div class="phase-item">
+                  <div class="phase-move">
+                    <button type="button" class="move-btn" on:click={() => movePhase(i, -1)} disabled={i === 0} title="Move up">&uarr;</button>
+                    <button type="button" class="move-btn" on:click={() => movePhase(i, 1)} disabled={i === experiments.length - 1} title="Move down">&darr;</button>
+                  </div>
                   <span class="phase-num">{i + 1}</span>
                   <span class="phase-name">{phase.name}</span>
                   <span class="phase-type" class:ga={phase.experiment_type === 'ga'} class:ts={phase.experiment_type === 'ts'}>
                     {phase.experiment_type.toUpperCase()}
                   </span>
+                  <button type="button" class="remove-btn" on:click={() => removePhase(i)} title="Remove">&times;</button>
                 </div>
               {/each}
             </div>
+          {:else}
+            <p class="empty-phases">No phases. Use a template or add phases manually.</p>
+          {/if}
+          <div class="add-phase-row">
+            {#if isBitwise}
+              <label class="inline-check">
+                <input type="checkbox" bind:checked={newPhaseGrid} /> Grid Search
+              </label>
+            {/if}
+            {#if !newPhaseGrid}
+              <select bind:value={newPhaseType} class="phase-type-select">
+                <option value="ga">GA</option>
+                <option value="ts">TS</option>
+              </select>
+              <label class="inline-check"><input type="checkbox" bind:checked={newPhaseNeurons} /> Neurons</label>
+              <label class="inline-check"><input type="checkbox" bind:checked={newPhaseBits} /> Bits</label>
+              <label class="inline-check"><input type="checkbox" bind:checked={newPhaseConnections} /> Connections</label>
+            {/if}
+            <button type="button" class="btn btn-add" on:click={addPhase}
+              disabled={!newPhaseGrid && !newPhaseNeurons && !newPhaseBits && !newPhaseConnections}>
+              + Add Phase
+            </button>
           </div>
-        {/if}
+        </div>
 
         {#if isBitwise}
           <div class="form-section">
@@ -724,6 +772,110 @@
   .phase-type.ts {
     background: rgba(16, 185, 129, 0.15);
     color: var(--accent-green);
+  }
+
+  .phase-move {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+
+  .move-btn {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    padding: 0 0.25rem;
+    transition: all 0.15s;
+  }
+
+  .move-btn:hover:not(:disabled) {
+    background: var(--border);
+    color: var(--text-primary);
+  }
+
+  .move-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+
+  .remove-btn {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 1.25rem;
+    line-height: 1;
+    padding: 0 0.25rem;
+    transition: color 0.15s;
+    flex-shrink: 0;
+  }
+
+  .remove-btn:hover {
+    color: var(--accent-red);
+  }
+
+  .empty-phases {
+    color: var(--text-secondary);
+    font-size: 1rem;
+    font-style: italic;
+    margin: 0.5rem 0;
+  }
+
+  .add-phase-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+
+  .phase-type-select {
+    width: auto;
+    padding: 0.25rem 0.5rem;
+    font-size: 1rem;
+  }
+
+  .inline-check {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 1rem;
+    color: var(--text-primary);
+    cursor: pointer;
+    margin-bottom: 0;
+    font-weight: 400;
+  }
+
+  .inline-check input[type="checkbox"] {
+    width: auto;
+    margin: 0;
+  }
+
+  .btn-add {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    padding: 0.25rem 0.75rem;
+    border-radius: 6px;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: all 0.15s;
+    margin-left: auto;
+  }
+
+  .btn-add:hover:not(:disabled) {
+    background: var(--border);
+  }
+
+  .btn-add:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
 
   select:disabled {
