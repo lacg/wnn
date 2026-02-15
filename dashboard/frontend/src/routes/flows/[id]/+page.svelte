@@ -151,6 +151,7 @@
   let duplicating = false;
 
   $: flowId = $page.params.id;
+  $: isBitwise = flow?.config?.params?.architecture_type === 'bitwise';
 
   // Reactive display experiments - re-computed when flow or experiments change
   $: displayExperiments = getDisplayExperiments(flow, experiments);
@@ -240,24 +241,28 @@
         });
       }
 
+      const updatedParams: Record<string, unknown> = {
+        ...flow.config.params,
+        patience: editConfig.patience,
+        ga_generations: editConfig.ga_generations,
+        ts_iterations: editConfig.ts_iterations,
+        population_size: editConfig.population_size,
+        neighbors_per_iter: editConfig.neighbors_per_iter,
+        fitness_percentile: editConfig.fitness_percentile,
+        fitness_calculator: editConfig.fitness_calculator,
+        fitness_weight_ce: editConfig.fitness_weight_ce,
+        fitness_weight_acc: editConfig.fitness_weight_acc,
+        min_accuracy_floor: editConfig.min_accuracy_floor,
+        phase_order: editConfig.phase_order,
+        context_size: editConfig.context_size,
+      };
+      // Only include tier_config for tiered architectures
+      if (!isBitwise) {
+        updatedParams.tier_config = tier_config;
+      }
       const updatedConfig = {
         ...flow.config,
-        params: {
-          ...flow.config.params,
-          patience: editConfig.patience,
-          ga_generations: editConfig.ga_generations,
-          ts_iterations: editConfig.ts_iterations,
-          population_size: editConfig.population_size,
-          neighbors_per_iter: editConfig.neighbors_per_iter,
-          fitness_percentile: editConfig.fitness_percentile,
-          fitness_calculator: editConfig.fitness_calculator,
-          fitness_weight_ce: editConfig.fitness_weight_ce,
-          fitness_weight_acc: editConfig.fitness_weight_acc,
-          min_accuracy_floor: editConfig.min_accuracy_floor,
-          phase_order: editConfig.phase_order,
-          context_size: editConfig.context_size,
-          tier_config
-        }
+        params: updatedParams
       };
 
       const res = await fetch(`/api/flows/${flowId}`, {
@@ -1134,10 +1139,12 @@
             </div>
           </div>
 
-          <div class="form-group full-width">
-            <label>Tier Config</label>
-            <TierConfigEditor bind:value={editConfig.tier_config} />
-          </div>
+          {#if !isBitwise}
+            <div class="form-group full-width">
+              <label>Tier Config</label>
+              <TierConfigEditor bind:value={editConfig.tier_config} />
+            </div>
+          {/if}
 
           <div class="form-actions">
             <button class="btn btn-secondary" on:click={cancelEdit} disabled={saving}>
@@ -1239,17 +1246,51 @@
               </div>
             </div>
           </div>
-          {#if flow.config.params.tier_config}
-            <div class="param-item full-width">
-              <span class="param-label">Tier Config</span>
-              <TierConfigEditor value={formatTierConfig(flow.config.params.tier_config)} readonly={true} />
+          {#if isBitwise}
+            <div class="param-group full-width">
+              <span class="param-group-label">Bitwise Architecture</span>
+              <div class="param-group-items">
+                <div class="param-group-item">
+                  <span class="param-label">Clusters</span>
+                  <span class="param-value mono">{flow.config.params.num_clusters ?? 16}</span>
+                </div>
+                <div class="param-group-item">
+                  <span class="param-label">Bits</span>
+                  <span class="param-value mono">{flow.config.params.min_bits ?? 10}–{flow.config.params.max_bits ?? 24}</span>
+                </div>
+                <div class="param-group-item">
+                  <span class="param-label">Neurons</span>
+                  <span class="param-value mono">{flow.config.params.min_neurons ?? 10}–{flow.config.params.max_neurons ?? 300}</span>
+                </div>
+                <div class="param-group-item">
+                  <span class="param-label">Memory</span>
+                  <span class="param-value mono">{flow.config.params.memory_mode ?? 'QUAD_WEIGHTED'}</span>
+                </div>
+                <div class="param-group-item">
+                  <span class="param-label">Sample Rate</span>
+                  <span class="param-value mono">{Math.round((flow.config.params.neuron_sample_rate ?? 0.25) * 100)}%</span>
+                </div>
+                {#if flow.config.params.context_size}
+                  <div class="param-group-item">
+                    <span class="param-label">Context</span>
+                    <span class="param-value mono">{flow.config.params.context_size}-gram</span>
+                  </div>
+                {/if}
+              </div>
             </div>
-          {/if}
-          {#if flow.config.params.context_size}
-            <div class="param-item">
-              <span class="param-label">Context Size</span>
-              <span class="param-value">{flow.config.params.context_size}-gram</span>
-            </div>
+          {:else}
+            {#if flow.config.params.tier_config}
+              <div class="param-item full-width">
+                <span class="param-label">Tier Config</span>
+                <TierConfigEditor value={formatTierConfig(flow.config.params.tier_config)} readonly={true} />
+              </div>
+            {/if}
+            {#if flow.config.params.context_size}
+              <div class="param-item">
+                <span class="param-label">Context Size</span>
+                <span class="param-value">{flow.config.params.context_size}-gram</span>
+              </div>
+            {/if}
           {/if}
           {#if flow.config.params.synaptogenesis || flow.config.params.neurogenesis}
             <div class="param-item full-width" style="margin-top:0.5rem; padding-top:0.5rem; border-top:1px solid var(--border);">
