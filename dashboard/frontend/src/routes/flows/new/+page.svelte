@@ -337,7 +337,7 @@
               {:else if template === 'standard-6-phase'}
                 Full search: neurons &rarr; bits &rarr; connections (250 gens)
               {:else if template === 'bitwise-7-phase'}
-                Grid search + 6 optimization phases (per-cluster, 250 gens)
+                Exhaustive neurons &times; bits grid, then 6 GA/TS optimization phases
               {:else}
                 Start empty, add phases manually below
               {/if}
@@ -536,27 +536,33 @@
           <div class="form-section">
             <h2>Adaptation (Baldwin Effect)</h2>
             <span class="field-hint" style="display:block; margin-top:-0.5rem; margin-bottom:0.75rem;">
-              Developmental plasticity during evaluation. Neurons adapt their synapses (synaptogenesis) and clusters grow/shrink (neurogenesis) — evolution selects architectures that respond well to adaptation.
+              Each genome is adapted during evaluation, then scored. Evolution selects architectures that respond well to adaptation (Baldwin effect).
             </span>
             <div class="form-row">
-              <label class="inline-check">
-                <input type="checkbox" bind:checked={synaptogenesis} /> Synaptogenesis
-              </label>
-              <label class="inline-check">
-                <input type="checkbox" bind:checked={neurogenesis} /> Neurogenesis
-              </label>
+              <div class="form-group">
+                <label class="inline-check">
+                  <input type="checkbox" bind:checked={synaptogenesis} /> Synaptogenesis
+                </label>
+                <span class="field-hint">Prune unused synapses, grow new ones on active neurons</span>
+              </div>
+              <div class="form-group">
+                <label class="inline-check">
+                  <input type="checkbox" bind:checked={neurogenesis} /> Neurogenesis
+                </label>
+                <span class="field-hint">Add neurons to struggling clusters, remove redundant ones</span>
+              </div>
             </div>
             {#if synaptogenesis || neurogenesis}
               <div class="form-row" style="margin-top:0.75rem;">
                 <div class="form-group">
                   <label for="adaptWarmup">Warmup Generations</label>
                   <input type="number" id="adaptWarmup" bind:value={adaptWarmup} min="0" max="100" />
-                  <span class="field-hint">Skip adaptation for first N generations</span>
+                  <span class="field-hint">Let evolution stabilize before adaptation kicks in (0 = adapt from start)</span>
                 </div>
                 <div class="form-group">
                   <label for="adaptCooldown">Cooldown Iterations</label>
                   <input type="number" id="adaptCooldown" bind:value={adaptCooldown} min="0" max="50" />
-                  <span class="field-hint">Min iterations between adaptations per neuron</span>
+                  <span class="field-hint">Freeze a neuron after adapting it, preventing prune/grow oscillation</span>
                 </div>
               </div>
             {/if}

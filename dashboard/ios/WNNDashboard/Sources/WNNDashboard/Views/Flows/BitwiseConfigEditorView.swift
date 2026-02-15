@@ -80,16 +80,32 @@ public struct BitwiseConfigEditorView: View {
 		}
 
 		Section {
-			Toggle("Synaptogenesis", isOn: $synaptogenesis)
-			Toggle("Neurogenesis", isOn: $neurogenesis)
+			Toggle(isOn: $synaptogenesis) {
+				VStack(alignment: .leading) {
+					Text("Synaptogenesis")
+					Text("Prune unused synapses, grow new ones on active neurons")
+						.font(.caption).foregroundStyle(.secondary)
+				}
+			}
+			Toggle(isOn: $neurogenesis) {
+				VStack(alignment: .leading) {
+					Text("Neurogenesis")
+					Text("Add neurons to struggling clusters, remove redundant ones")
+						.font(.caption).foregroundStyle(.secondary)
+				}
+			}
 			if synaptogenesis || neurogenesis {
 				Stepper("Warmup: \(adaptWarmup) gen", value: $adaptWarmup, in: 0...100)
+				Text("Let evolution stabilize before adaptation kicks in")
+					.font(.caption).foregroundStyle(.secondary)
 				Stepper("Cooldown: \(adaptCooldown) iter", value: $adaptCooldown, in: 0...50)
+				Text("Freeze a neuron after adapting it, preventing prune/grow oscillation")
+					.font(.caption).foregroundStyle(.secondary)
 			}
 		} header: {
 			Text("Adaptation (Baldwin Effect)")
 		} footer: {
-			Text("Developmental plasticity during evaluation. Neurons adapt synapses and clusters grow/shrink — evolution selects architectures that respond well to adaptation.")
+			Text("Each genome is adapted during evaluation, then scored. Evolution selects architectures that respond well to adaptation.")
 		}
 	}
 }
