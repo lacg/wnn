@@ -138,8 +138,8 @@
     fitness_weight_ce: 1.0,
     fitness_weight_acc: 1.0,
     min_accuracy_floor: 0,
-    threshold_delta: 0.01,
-    threshold_reference: 1000,
+    threshold_start: 0,
+    threshold_max: 0.01,
     tier_config: '',
     phase_order: 'neurons_first',
     context_size: 4
@@ -198,8 +198,8 @@
         editConfig.fitness_weight_ce = p.fitness_weight_ce ?? 1.0;
         editConfig.fitness_weight_acc = p.fitness_weight_acc ?? 1.0;
         editConfig.min_accuracy_floor = p.min_accuracy_floor ?? 0;
-        editConfig.threshold_delta = p.threshold_delta ?? 0.01;
-        editConfig.threshold_reference = p.threshold_reference ?? 1000;
+        editConfig.threshold_start = p.threshold_start ?? 0;
+        editConfig.threshold_max = p.threshold_max ?? 0.01;
         editConfig.phase_order = p.phase_order ?? 'neurons_first';
         editConfig.context_size = p.context_size ?? 4;
         if (p.tier_config) {
@@ -257,8 +257,8 @@
         fitness_weight_ce: editConfig.fitness_weight_ce,
         fitness_weight_acc: editConfig.fitness_weight_acc,
         min_accuracy_floor: editConfig.min_accuracy_floor,
-        threshold_delta: editConfig.threshold_delta,
-        threshold_reference: editConfig.threshold_reference,
+        threshold_start: editConfig.threshold_start,
+        threshold_max: editConfig.threshold_max,
         phase_order: editConfig.phase_order,
         context_size: editConfig.context_size,
       };
@@ -582,7 +582,7 @@
     }
   }
 
-  async function updateFitnessWeight(field: 'fitness_weight_ce' | 'fitness_weight_acc' | 'min_accuracy_floor' | 'threshold_delta' | 'threshold_reference', value: number) {
+  async function updateFitnessWeight(field: 'fitness_weight_ce' | 'fitness_weight_acc' | 'min_accuracy_floor' | 'threshold_start' | 'threshold_max', value: number) {
     if (!flow) return;
     saving = true;
 
@@ -1136,25 +1136,25 @@
             <div class="form-group">
               <label for="min_accuracy_floor">Accuracy Floor</label>
               <input type="number" id="min_accuracy_floor" bind:value={editConfig.min_accuracy_floor} min="0" max="0.1" step="0.001" />
-              <span class="form-hint">Min accuracy (0.003 = 0.3%). Below = rejected</span>
-            </div>
-            <div class="form-group">
-              <label for="threshold_delta">Threshold Delta</label>
-              <input type="number" id="threshold_delta" bind:value={editConfig.threshold_delta} min="0" max="0.1" step="0.001" />
-              <span class="form-hint">Progressive accuracy increase per phase (0.01 = 1%)</span>
-            </div>
-          </div>
-
-          <div class="form-row">
-            <div class="form-group">
-              <label for="threshold_reference">Threshold Reference</label>
-              <input type="number" id="threshold_reference" bind:value={editConfig.threshold_reference} min="1" max="10000" step="1" />
-              <span class="form-hint">Generations for full threshold progress (default 1000)</span>
+              <span class="form-hint">Hard floor (0.003 = 0.3%). Below = fitness infinity</span>
             </div>
             <div class="form-group">
               <label for="context_size">Context Size (N-gram)</label>
               <input type="number" id="context_size" bind:value={editConfig.context_size} min="1" max="16" />
               <span class="form-hint">Number of context tokens (e.g., 4 = 4-gram)</span>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="threshold_start">Threshold Start</label>
+              <input type="number" id="threshold_start" bind:value={editConfig.threshold_start} min="0" max="0.5" step="0.001" />
+              <span class="form-hint">Accuracy filter at phase 1 (0 = 0%)</span>
+            </div>
+            <div class="form-group">
+              <label for="threshold_max">Threshold Max</label>
+              <input type="number" id="threshold_max" bind:value={editConfig.threshold_max} min="0" max="0.5" step="0.001" />
+              <span class="form-hint">Accuracy filter at final phase (0.01 = 1%)</span>
             </div>
           </div>
 

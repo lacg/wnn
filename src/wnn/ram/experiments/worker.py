@@ -568,12 +568,24 @@ class FlowWorker:
         patience = params.get("patience", 10)
         fitness_percentile = params.get("fitness_percentile")
         seed = params.get("seed")
-        threshold_delta = params.get("threshold_delta", 0.01)
-        threshold_reference = params.get("threshold_reference", 1000)
+        threshold_start = params.get("threshold_start", 0.0)
+        threshold_max = params.get("threshold_max", 0.01)
         min_accuracy_floor = params.get("min_accuracy_floor", 0.0)
         default_fitness_type = self._parse_fitness_calculator(params.get("fitness_calculator"))
         default_weight_ce = params.get("fitness_weight_ce", 1.0)
         default_weight_acc = params.get("fitness_weight_acc", 1.0)
+
+        # Compute per-phase threshold_delta from start/max
+        # Count optimization phases (grid search doesn't use thresholds)
+        num_opt_phases = sum(
+            1 for e in experiments
+            if e.get("phase_type", "") != "grid_search"
+            and e.get("experiment_type", "") != "grid_search"
+        )
+        if num_opt_phases > 0 and threshold_max > threshold_start:
+            per_phase_delta = (threshold_max - threshold_start) / num_opt_phases
+        else:
+            per_phase_delta = 0.0
 
         exp_configs = []
         for exp_data in experiments:
@@ -634,8 +646,8 @@ class FlowWorker:
                 fitness_weight_ce=exp_weight_ce,
                 fitness_weight_acc=exp_weight_acc,
                 min_accuracy_floor=min_accuracy_floor,
-                threshold_delta=threshold_delta,
-                threshold_reference=threshold_reference,
+                threshold_delta=per_phase_delta,
+                threshold_reference=max_iters,  # Full ramp within each phase
                 seed=seed,
                 # Bitwise-specific bounds from flow params
                 bitwise_min_bits=params.get("min_bits"),
