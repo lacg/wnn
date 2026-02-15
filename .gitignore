@@ -275,10 +275,13 @@ experiments/
 
 # Ad-hoc experiment runners (tracked runners are in project root with proper names)
 run_bitwise_experiment.py
+run_ctx2_longrun.sh
+run_overnight_context_sweep.sh
 
 # Dashboard runtime files
 dashboard/*.db
 dashboard/frontend/.svelte-kit/
+dashboard/frontend/.vite/
 
 # TLS/SSL certificates and private keys (security sensitive)
 *.pem
