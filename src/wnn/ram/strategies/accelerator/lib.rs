@@ -3584,11 +3584,12 @@ impl TokenCacheWrapper {
         return_best_n: bool,
         mutable_clusters: Option<Vec<usize>>,
     ) -> PyResult<Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64)>> {
-        let num_clusters = base_bits.len();
+        let num_clusters = base_neurons.len();
         let total_input_bits = self.inner.total_input_bits();
 
         let config = neighbor_search::MutationConfig {
             num_clusters,
+            neurons_per_cluster: base_neurons.clone(),
             mutable_clusters,  // None = all clusters, Some(indices) = only those
             min_bits,
             max_bits,
@@ -3601,51 +3602,37 @@ impl TokenCacheWrapper {
 
         py.allow_threads(|| {
             let log_path_ref = log_path.as_deref();
+            let cache = &self.inner;
+
+            // Closure captures the token cache and eval params
+            let eval_fn = |bits: &[usize], neurons: &[usize], conns: &[i64], count: usize| -> Vec<(f64, f64)> {
+                crate::token_cache::evaluate_genomes_cached_hybrid(
+                    cache, bits, neurons, conns, count,
+                    train_subset_idx, eval_subset_idx, empty_value,
+                )
+            };
 
             let candidates = if return_best_n {
                 neighbor_search::search_neighbors_best_n(
-                    &self.inner,
-                    &base_bits,
-                    &base_neurons,
-                    &base_connections,
-                    target_count,
-                    max_attempts,
-                    accuracy_threshold,
-                    &config,
-                    train_subset_idx,
-                    eval_subset_idx,
-                    empty_value,
-                    seed,
-                    log_path_ref,
-                    generation,
-                    total_generations,
+                    &base_bits, &base_neurons, &base_connections,
+                    target_count, max_attempts, accuracy_threshold,
+                    &config, &eval_fn, seed, log_path_ref,
+                    generation, total_generations,
                 )
             } else {
                 let (passed, _) = neighbor_search::search_neighbors_with_threshold(
-                    &self.inner,
-                    &base_bits,
-                    &base_neurons,
-                    &base_connections,
-                    target_count,
-                    max_attempts,
-                    accuracy_threshold,
-                    &config,
-                    train_subset_idx,
-                    eval_subset_idx,
-                    empty_value,
-                    seed,
-                    log_path_ref,
-                    generation,
-                    total_generations,
+                    &base_bits, &base_neurons, &base_connections,
+                    target_count, max_attempts, accuracy_threshold,
+                    &config, &eval_fn, seed, log_path_ref,
+                    generation, total_generations,
                 );
                 passed
             };
 
-            // Convert to Python-friendly format
             Ok(candidates
                 .into_iter()
                 .map(|c| (
-                    c.bits_per_cluster,
+                    c.bits_per_neuron,
                     c.neurons_per_cluster,
                     c.connections,
                     c.cross_entropy,
@@ -3718,7 +3705,7 @@ impl TokenCacheWrapper {
     ) -> PyResult<(Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64)>, usize, usize)> {
         // Returns: (candidates, evaluated, viable)
         let num_clusters = if !population.is_empty() {
-            population[0].0.len()
+            population[0].1.len()  // neurons_per_cluster length = num_clusters
         } else {
             return Ok((Vec::new(), 0, 0));
         };
@@ -3740,29 +3727,25 @@ impl TokenCacheWrapper {
 
         py.allow_threads(|| {
             let log_path_ref = log_path.as_deref();
+            let cache = &self.inner;
+
+            let eval_fn = |bits: &[usize], neurons: &[usize], conns: &[i64], count: usize| -> Vec<(f64, f64)> {
+                crate::token_cache::evaluate_genomes_cached_hybrid(
+                    cache, bits, neurons, conns, count,
+                    train_subset_idx, eval_subset_idx, empty_value,
+                )
+            };
 
             let result = neighbor_search::search_offspring(
-                &self.inner,
-                &population,
-                target_count,
-                max_attempts,
-                accuracy_threshold,
-                &ga_config,
-                train_subset_idx,
-                eval_subset_idx,
-                empty_value,
-                seed,
-                log_path_ref,
-                generation,
-                total_generations,
-                return_best_n,
+                &population, target_count, max_attempts, accuracy_threshold,
+                &ga_config, &eval_fn, seed, log_path_ref,
+                generation, total_generations, return_best_n,
             );
 
-            // Convert to Python-friendly format: (candidates, evaluated, viable)
             let candidates: Vec<_> = result.candidates
                 .into_iter()
                 .map(|c| (
-                    c.bits_per_cluster,
+                    c.bits_per_neuron,
                     c.neurons_per_cluster,
                     c.connections,
                     c.cross_entropy,
@@ -4366,16 +4349,16 @@ impl BitwiseCacheWrapper {
         }
     }
 
-    /// Evaluate genomes with per-cluster heterogeneous configs (subset training + eval).
+    /// Evaluate genomes with per-neuron heterogeneous configs (subset training + eval).
     ///
-    /// bits_per_cluster_flat: [num_genomes * num_clusters]
+    /// bits_per_neuron_flat: variable total (sum of total_neurons per genome)
     /// neurons_per_cluster_flat: [num_genomes * num_clusters]
     /// connections_flat: variable total (sum of all genomes' connections)
     #[allow(clippy::too_many_arguments)]
     fn evaluate_genomes(
         &self,
         py: Python<'_>,
-        bits_per_cluster_flat: Vec<usize>,
+        bits_per_neuron_flat: Vec<usize>,
         neurons_per_cluster_flat: Vec<usize>,
         connections_flat: Vec<i64>,
         num_genomes: usize,
@@ -4388,19 +4371,19 @@ impl BitwiseCacheWrapper {
         let override_val = self.sparse_threshold_override;
         py.allow_threads(|| {
             Ok(bitwise_ramlm::evaluate_genomes(
-                &self.inner, &bits_per_cluster_flat, &neurons_per_cluster_flat,
+                &self.inner, &bits_per_neuron_flat, &neurons_per_cluster_flat,
                 &connections_flat, num_genomes, train_subset_idx, eval_subset_idx,
                 memory_mode, neuron_sample_rate, rng_seed, override_val,
             ))
         })
     }
 
-    /// Evaluate genomes with per-cluster heterogeneous configs (full training + full eval).
+    /// Evaluate genomes with per-neuron heterogeneous configs (full training + full eval).
     #[allow(clippy::too_many_arguments)]
     fn evaluate_genomes_full(
         &self,
         py: Python<'_>,
-        bits_per_cluster_flat: Vec<usize>,
+        bits_per_neuron_flat: Vec<usize>,
         neurons_per_cluster_flat: Vec<usize>,
         connections_flat: Vec<i64>,
         num_genomes: usize,
@@ -4411,7 +4394,7 @@ impl BitwiseCacheWrapper {
         let override_val = self.sparse_threshold_override;
         py.allow_threads(|| {
             Ok(bitwise_ramlm::evaluate_genomes_full(
-                &self.inner, &bits_per_cluster_flat, &neurons_per_cluster_flat,
+                &self.inner, &bits_per_neuron_flat, &neurons_per_cluster_flat,
                 &connections_flat, num_genomes,
                 memory_mode, neuron_sample_rate, rng_seed, override_val,
             ))
@@ -4438,6 +4421,232 @@ impl BitwiseCacheWrapper {
     fn num_parts(&self) -> usize { self.inner.num_parts }
     fn num_eval_parts(&self) -> usize { self.inner.num_eval_parts }
     fn num_bits(&self) -> usize { self.inner.num_bits }
+
+    /// Search for neighbors above accuracy threshold (bitwise eval backend).
+    ///
+    /// Same interface as TokenCacheWrapper::search_neighbors but uses the
+    /// bitwise evaluation path (heterogeneous per-neuron configs).
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (
+        base_bits,
+        base_neurons,
+        base_connections,
+        target_count,
+        max_attempts,
+        accuracy_threshold,
+        min_bits,
+        max_bits,
+        min_neurons,
+        max_neurons,
+        bits_mutation_rate,
+        neurons_mutation_rate,
+        train_subset_idx,
+        eval_subset_idx,
+        memory_mode,
+        neuron_sample_rate,
+        rng_seed,
+        seed,
+        log_path = None,
+        generation = None,
+        total_generations = None,
+        return_best_n = true,
+        mutable_clusters = None
+    ))]
+    fn search_neighbors(
+        &self,
+        py: Python<'_>,
+        base_bits: Vec<usize>,
+        base_neurons: Vec<usize>,
+        base_connections: Vec<i64>,
+        target_count: usize,
+        max_attempts: usize,
+        accuracy_threshold: f64,
+        min_bits: usize,
+        max_bits: usize,
+        min_neurons: usize,
+        max_neurons: usize,
+        bits_mutation_rate: f64,
+        neurons_mutation_rate: f64,
+        train_subset_idx: usize,
+        eval_subset_idx: usize,
+        memory_mode: u8,
+        neuron_sample_rate: f32,
+        rng_seed: u64,
+        seed: u64,
+        log_path: Option<String>,
+        generation: Option<usize>,
+        total_generations: Option<usize>,
+        return_best_n: bool,
+        mutable_clusters: Option<Vec<usize>>,
+    ) -> PyResult<Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64)>> {
+        let num_clusters = base_neurons.len();
+        let total_input_bits = self.inner.total_input_bits;
+
+        let config = neighbor_search::MutationConfig {
+            num_clusters,
+            neurons_per_cluster: base_neurons.clone(),
+            mutable_clusters,
+            min_bits,
+            max_bits,
+            min_neurons,
+            max_neurons,
+            bits_mutation_rate,
+            neurons_mutation_rate,
+            total_input_bits,
+        };
+
+        let override_val = self.sparse_threshold_override;
+
+        py.allow_threads(|| {
+            let log_path_ref = log_path.as_deref();
+            let cache = &self.inner;
+
+            let eval_fn = |bits: &[usize], neurons: &[usize], conns: &[i64], count: usize| -> Vec<(f64, f64)> {
+                bitwise_ramlm::evaluate_genomes(
+                    cache, bits, neurons, conns, count,
+                    train_subset_idx, eval_subset_idx,
+                    memory_mode, neuron_sample_rate, rng_seed, override_val,
+                ).into_iter().map(|(ce, acc, _)| (ce, acc)).collect()
+            };
+
+            let candidates = if return_best_n {
+                neighbor_search::search_neighbors_best_n(
+                    &base_bits, &base_neurons, &base_connections,
+                    target_count, max_attempts, accuracy_threshold,
+                    &config, &eval_fn, seed, log_path_ref,
+                    generation, total_generations,
+                )
+            } else {
+                let (passed, _) = neighbor_search::search_neighbors_with_threshold(
+                    &base_bits, &base_neurons, &base_connections,
+                    target_count, max_attempts, accuracy_threshold,
+                    &config, &eval_fn, seed, log_path_ref,
+                    generation, total_generations,
+                );
+                passed
+            };
+
+            Ok(candidates
+                .into_iter()
+                .map(|c| (
+                    c.bits_per_neuron,
+                    c.neurons_per_cluster,
+                    c.connections,
+                    c.cross_entropy,
+                    c.accuracy,
+                ))
+                .collect())
+        })
+    }
+
+    /// Search for GA offspring above accuracy threshold (bitwise eval backend).
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (
+        population,
+        target_count,
+        max_attempts,
+        accuracy_threshold,
+        min_bits,
+        max_bits,
+        min_neurons,
+        max_neurons,
+        bits_mutation_rate,
+        neurons_mutation_rate,
+        crossover_rate,
+        tournament_size,
+        train_subset_idx,
+        eval_subset_idx,
+        memory_mode,
+        neuron_sample_rate,
+        rng_seed,
+        seed,
+        log_path = None,
+        generation = None,
+        total_generations = None,
+        return_best_n = true,
+        mutable_clusters = None
+    ))]
+    fn search_offspring(
+        &self,
+        py: Python<'_>,
+        population: Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64)>,
+        target_count: usize,
+        max_attempts: usize,
+        accuracy_threshold: f64,
+        min_bits: usize,
+        max_bits: usize,
+        min_neurons: usize,
+        max_neurons: usize,
+        bits_mutation_rate: f64,
+        neurons_mutation_rate: f64,
+        crossover_rate: f64,
+        tournament_size: usize,
+        train_subset_idx: usize,
+        eval_subset_idx: usize,
+        memory_mode: u8,
+        neuron_sample_rate: f32,
+        rng_seed: u64,
+        seed: u64,
+        log_path: Option<String>,
+        generation: Option<usize>,
+        total_generations: Option<usize>,
+        return_best_n: bool,
+        mutable_clusters: Option<Vec<usize>>,
+    ) -> PyResult<(Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64)>, usize, usize)> {
+        let num_clusters = if !population.is_empty() {
+            population[0].1.len()
+        } else {
+            return Ok((Vec::new(), 0, 0));
+        };
+        let total_input_bits = self.inner.total_input_bits;
+
+        let ga_config = neighbor_search::GAConfig {
+            num_clusters,
+            mutable_clusters,
+            min_bits,
+            max_bits,
+            min_neurons,
+            max_neurons,
+            bits_mutation_rate,
+            neurons_mutation_rate,
+            crossover_rate,
+            tournament_size,
+            total_input_bits,
+        };
+
+        let override_val = self.sparse_threshold_override;
+
+        py.allow_threads(|| {
+            let log_path_ref = log_path.as_deref();
+            let cache = &self.inner;
+
+            let eval_fn = |bits: &[usize], neurons: &[usize], conns: &[i64], count: usize| -> Vec<(f64, f64)> {
+                bitwise_ramlm::evaluate_genomes(
+                    cache, bits, neurons, conns, count,
+                    train_subset_idx, eval_subset_idx,
+                    memory_mode, neuron_sample_rate, rng_seed, override_val,
+                ).into_iter().map(|(ce, acc, _)| (ce, acc)).collect()
+            };
+
+            let result = neighbor_search::search_offspring(
+                &population, target_count, max_attempts, accuracy_threshold,
+                &ga_config, &eval_fn, seed, log_path_ref,
+                generation, total_generations, return_best_n,
+            );
+
+            let candidates: Vec<_> = result.candidates
+                .into_iter()
+                .map(|c| (
+                    c.bits_per_neuron,
+                    c.neurons_per_cluster,
+                    c.connections,
+                    c.cross_entropy,
+                    c.accuracy,
+                ))
+                .collect();
+            Ok((candidates, result.evaluated, result.viable))
+        })
+    }
 }
 
 /// Python module definition
