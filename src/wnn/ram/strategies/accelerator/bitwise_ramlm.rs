@@ -1654,7 +1654,7 @@ pub fn train_adapt_eval(
                     &adapted_bits, &adapted_neurons, &adapted_connections,
                     &cluster_storage, &train_subset.packed_input,
                     train_subset.words_per_example, &train_subset.target_bits,
-                    train_subset.num_examples, num_clusters,
+                    train_subset.num_examples, num_clusters, adapt_config,
                 );
 
                 let (pruned, grown) = adaptation::synaptogenesis_pass(
@@ -1672,13 +1672,14 @@ pub fn train_adapt_eval(
                     &adapted_bits, &adapted_neurons, &adapted_connections,
                     &cluster_storage, &train_subset.packed_input,
                     train_subset.words_per_example, &train_subset.target_bits,
-                    train_subset.num_examples, num_clusters,
+                    train_subset.num_examples, num_clusters, adapt_config,
                 );
                 let cluster_stats = adaptation::compute_cluster_stats(
                     &neuron_stats_for_cluster, &adapted_neurons, &adapted_bits,
                     &adapted_connections, &cluster_storage,
                     &train_subset.packed_input, train_subset.words_per_example,
                     &train_subset.target_bits, train_subset.num_examples, num_clusters,
+                    adapt_config,
                 );
 
                 let (added, removed) = adaptation::neurogenesis_pass(
@@ -1946,7 +1947,7 @@ pub fn evaluate_genomes_adaptive(
                             &adapted_bits, &adapted_neurons, &adapted_connections,
                             &cluster_storage, &train_subset.packed_input,
                             train_subset.words_per_example, &train_subset.target_bits,
-                            train_subset.num_examples, num_clusters,
+                            train_subset.num_examples, num_clusters, adapt_config,
                         );
                         let (pruned, grown) = adaptation::synaptogenesis_pass(
                             &mut adapted_bits, &mut adapted_connections,
@@ -1963,13 +1964,14 @@ pub fn evaluate_genomes_adaptive(
                             &adapted_bits, &adapted_neurons, &adapted_connections,
                             &cluster_storage, &train_subset.packed_input,
                             train_subset.words_per_example, &train_subset.target_bits,
-                            train_subset.num_examples, num_clusters,
+                            train_subset.num_examples, num_clusters, adapt_config,
                         );
                         let cluster_stats = adaptation::compute_cluster_stats(
                             &neuron_stats, &adapted_neurons, &adapted_bits,
                             &adapted_connections, &cluster_storage,
                             &train_subset.packed_input, train_subset.words_per_example,
                             &train_subset.target_bits, train_subset.num_examples, num_clusters,
+                            adapt_config,
                         );
                         let (added, removed) = adaptation::neurogenesis_pass(
                             &mut adapted_bits, &mut adapted_neurons, &mut adapted_connections,

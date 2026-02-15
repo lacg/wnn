@@ -50,6 +50,10 @@ pub struct AdaptationConfig {
 	// Shared
 	pub passes_per_eval: usize,
 	pub total_input_bits: usize,
+	/// Max examples to sample for stats computation (0 = use all).
+	/// Stats are statistical estimates — sampling 10K examples gives
+	/// <1% standard error while being 60x faster than scanning 600K.
+	pub stats_sample_size: usize,
 }
 
 impl Default for AdaptationConfig {
@@ -72,8 +76,26 @@ impl Default for AdaptationConfig {
 			cooldown_iterations: 5,
 			passes_per_eval: 1,
 			total_input_bits: 64,
+			stats_sample_size: 10_000,
 		}
 	}
+}
+
+/// Build a deterministic sample of example indices.
+/// If `sample_size == 0` or `sample_size >= num_examples`, returns all indices.
+fn build_sample_indices(num_examples: usize, sample_size: usize, seed: u64) -> Vec<usize> {
+	if sample_size == 0 || sample_size >= num_examples {
+		return (0..num_examples).collect();
+	}
+	let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+	let mut indices: Vec<usize> = (0..num_examples).collect();
+	// Fisher-Yates partial shuffle — only shuffle the first sample_size elements
+	for i in 0..sample_size {
+		let j = rng.gen_range(i..num_examples);
+		indices.swap(i, j);
+	}
+	indices.truncate(sample_size);
+	indices
 }
 
 /// Compute per-neuron statistics from training data and memory.
@@ -95,9 +117,15 @@ pub fn compute_neuron_stats(
 	target_bits: &[u8],
 	num_examples: usize,
 	num_clusters: usize,
+	config: &AdaptationConfig,
 ) -> Vec<NeuronStats> {
 	let total_neurons: usize = neurons_per_cluster.iter().sum();
 	let mut stats = Vec::with_capacity(total_neurons);
+
+	// Sample examples for stats — full scan is O(neurons*bits*examples) which is
+	// prohibitively slow (e.g. 200 neurons × 18 bits × 600K examples = 2B ops).
+	let sample_indices = build_sample_indices(num_examples, config.stats_sample_size, 42);
+	let n_sample = sample_indices.len();
 
 	// Build connection offsets
 	let mut conn_offsets = vec![0usize];
@@ -118,14 +146,14 @@ pub fn compute_neuron_stats(
 			for &conn_idx in neuron_conns {
 				let mut ones = 0u32;
 				let idx = conn_idx as usize;
-				for ex in 0..num_examples {
+				for &ex in &sample_indices {
 					let word_idx = ex * words_per_example + idx / 64;
 					let bit_idx = idx % 64;
 					if packed_input[word_idx] >> bit_idx & 1 == 1 {
 						ones += 1;
 					}
 				}
-				let p = ones as f32 / num_examples.max(1) as f32;
+				let p = ones as f32 / n_sample.max(1) as f32;
 				let h = if p > 0.0 && p < 1.0 {
 					-(p * p.ln() + (1.0 - p) * (1.0 - p).ln()) / std::f32::consts::LN_2
 				} else {
@@ -134,12 +162,12 @@ pub fn compute_neuron_stats(
 				conn_entropy.push(h);
 			}
 
-			// Fill rate from storage
+			// Fill rate from storage (reads from memory, not examples — no sampling needed)
 			let fill_rate = storage_fill_rate(&storages[cluster], local_n, n_bits);
 
 			// Error rate: multi-label — every example has a target for this cluster
 			let mut errors = 0u32;
-			for ex in 0..num_examples {
+			for &ex in &sample_indices {
 				let target = target_bits[ex * num_clusters + cluster];
 				// Compute address
 				let mut addr = 0u32;
@@ -159,7 +187,7 @@ pub fn compute_neuron_stats(
 					errors += 1;
 				}
 			}
-			let error_rate = if num_examples > 0 { errors as f32 / num_examples as f32 } else { 0.0 };
+			let error_rate = if n_sample > 0 { errors as f32 / n_sample as f32 } else { 0.0 };
 
 			stats.push(NeuronStats {
 				fill_rate,
@@ -188,6 +216,7 @@ pub fn compute_cluster_stats(
 	target_bits: &[u8],
 	num_examples: usize,
 	num_clusters: usize,
+	config: &AdaptationConfig,
 ) -> Vec<ClusterStats> {
 	let mut cluster_stats = Vec::with_capacity(num_clusters);
 	let mut conn_offsets = vec![0usize];
@@ -200,6 +229,11 @@ pub fn compute_cluster_stats(
 		neuron_offsets.push(neuron_offsets.last().unwrap() + n);
 	}
 
+	// Sample examples — full scan is O(clusters*neurons*examples) which is
+	// prohibitively slow for large datasets.
+	let sample_indices = build_sample_indices(num_examples, config.stats_sample_size, 43);
+	let n_sample = sample_indices.len();
+
 	for cluster in 0..num_clusters {
 		let n_neurons = neurons_per_cluster[cluster];
 		let neuron_base = neuron_offsets[cluster];
@@ -211,11 +245,11 @@ pub fn compute_cluster_stats(
 			0.0
 		};
 
-		// Multi-label: compute votes for ALL examples
+		// Multi-label: compute votes for sampled examples
 		let mut cluster_errors = 0u32;
-		let mut neuron_votes: Vec<Vec<bool>> = vec![Vec::with_capacity(num_examples); n_neurons];
+		let mut neuron_votes: Vec<Vec<bool>> = vec![Vec::with_capacity(n_sample); n_neurons];
 
-		for ex in 0..num_examples {
+		for &ex in &sample_indices {
 			let target = target_bits[ex * num_clusters + cluster];
 			let target_true = target != 0;
 			let mut votes_true = 0u32;
@@ -246,8 +280,8 @@ pub fn compute_cluster_stats(
 			if majority_true != target_true { cluster_errors += 1; }
 		}
 
-		let cluster_error_rate = if num_examples > 0 {
-			cluster_errors as f32 / num_examples as f32
+		let cluster_error_rate = if n_sample > 0 {
+			cluster_errors as f32 / n_sample as f32
 		} else {
 			0.0
 		};
@@ -256,24 +290,25 @@ pub fn compute_cluster_stats(
 		let mut uniqueness = vec![0.0f32; n_neurons];
 		let mut accuracy = vec![0.0f32; n_neurons];
 
-		if num_examples > 0 {
+		if n_sample > 0 {
 			for local_n in 0..n_neurons {
 				let mut disagree = 0u32;
 				let mut correct = 0u32;
-				for ex in 0..num_examples {
-					let my_vote = neuron_votes[local_n][ex];
+				for s in 0..n_sample {
+					let ex = sample_indices[s];
+					let my_vote = neuron_votes[local_n][s];
 					let target_true = target_bits[ex * num_clusters + cluster] != 0;
 
 					// Majority at this example
-					let majority_count: u32 = (0..n_neurons).map(|j| neuron_votes[j][ex] as u32).sum();
+					let majority_count: u32 = (0..n_neurons).map(|j| neuron_votes[j][s] as u32).sum();
 					let majority_vote = majority_count > (n_neurons as u32 / 2);
 					if my_vote != majority_vote { disagree += 1; }
 
 					// Correct if vote matches target
 					if my_vote == target_true { correct += 1; }
 				}
-				uniqueness[local_n] = disagree as f32 / num_examples as f32;
-				accuracy[local_n] = correct as f32 / num_examples as f32;
+				uniqueness[local_n] = disagree as f32 / n_sample as f32;
+				accuracy[local_n] = correct as f32 / n_sample as f32;
 			}
 		}
 

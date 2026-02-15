@@ -231,8 +231,8 @@ class ArchitectureStrategyMixin:
 		else:
 			self._log.info(f"  Best by Fitness:  CE={best_fit_ce:.4f}, Acc={best_fit_acc:.4%}")
 
-		top_k_ce = sum(ce for _, (ce, _) in full_evals) / len(full_evals)
-		top_k_acc = sum(acc for _, (_, acc) in full_evals) / len(full_evals)
+		top_k_ce = sum(r[0] for _, r in full_evals) / len(full_evals)
+		top_k_acc = sum(r[1] for _, r in full_evals) / len(full_evals)
 		self._log.info(f"  Top-{top_k} Mean:    CE={top_k_ce:.4f}, Acc={top_k_acc:.4%}")
 		self._log.info("=" * 60)
 

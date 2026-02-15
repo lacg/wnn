@@ -4736,6 +4736,7 @@ impl BitwiseCacheWrapper {
             cooldown_iterations,
             passes_per_eval,
             total_input_bits,
+            stats_sample_size: 10_000,
         };
 
         py.allow_threads(|| {
@@ -4816,6 +4817,7 @@ impl BitwiseCacheWrapper {
             cooldown_iterations,
             passes_per_eval,
             total_input_bits,
+            stats_sample_size: 10_000,
         };
 
         py.allow_threads(|| {
