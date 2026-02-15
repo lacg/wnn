@@ -159,6 +159,9 @@ pub mod eval_worker;
 #[path = "bitwise_ramlm.rs"]
 mod bitwise_ramlm;
 
+#[path = "adaptation.rs"]
+mod adaptation;
+
 pub use ram::RAMNeuron;
 pub use per_cluster::{PerClusterEvaluator, FitnessMode, TierOptConfig, ClusterOptResult, TierOptResult};
 #[cfg(target_os = "macos")]
@@ -4645,6 +4648,111 @@ impl BitwiseCacheWrapper {
                 ))
                 .collect();
             Ok((candidates, result.evaluated, result.viable))
+        })
+    }
+
+    /// Train a single genome with adaptation (synaptogenesis + neurogenesis), then evaluate.
+    ///
+    /// Returns: (adapted_bits, adapted_neurons, adapted_connections,
+    ///           ce, accuracy, weighted_bit_acc, pruned, grown, added, removed)
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (
+        bits_per_neuron,
+        neurons_per_cluster,
+        connections,
+        train_subset_idx,
+        eval_subset_idx,
+        memory_mode,
+        neuron_sample_rate,
+        rng_seed,
+        generation,
+        cooldowns,
+        synaptogenesis_enabled = false,
+        neurogenesis_enabled = false,
+        prune_entropy_threshold = 0.05,
+        grow_fill_threshold = 0.8,
+        grow_error_threshold = 0.5,
+        min_bits = 4,
+        max_bits = 24,
+        cluster_error_threshold = 0.5,
+        cluster_fill_threshold = 0.7,
+        neuron_uniqueness_threshold = 0.05,
+        min_neurons = 3,
+        max_neurons = 30,
+        max_neurons_per_pass = 3,
+        warmup_generations = 10,
+        cooldown_iterations = 5,
+        passes_per_eval = 1
+    ))]
+    fn train_adapt_eval(
+        &self,
+        py: Python<'_>,
+        bits_per_neuron: Vec<usize>,
+        neurons_per_cluster: Vec<usize>,
+        connections: Vec<i64>,
+        train_subset_idx: usize,
+        eval_subset_idx: usize,
+        memory_mode: u8,
+        neuron_sample_rate: f32,
+        rng_seed: u64,
+        generation: usize,
+        cooldowns: Vec<usize>,
+        synaptogenesis_enabled: bool,
+        neurogenesis_enabled: bool,
+        prune_entropy_threshold: f32,
+        grow_fill_threshold: f32,
+        grow_error_threshold: f32,
+        min_bits: usize,
+        max_bits: usize,
+        cluster_error_threshold: f32,
+        cluster_fill_threshold: f32,
+        neuron_uniqueness_threshold: f32,
+        min_neurons: usize,
+        max_neurons: usize,
+        max_neurons_per_pass: usize,
+        warmup_generations: usize,
+        cooldown_iterations: usize,
+        passes_per_eval: usize,
+    ) -> PyResult<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64, usize, usize, usize, usize, Vec<usize>)> {
+        let override_val = self.sparse_threshold_override;
+        let total_input_bits = self.inner.total_input_bits;
+        let mut cooldowns_mut = cooldowns;
+
+        let config = adaptation::AdaptationConfig {
+            synaptogenesis_enabled,
+            neurogenesis_enabled,
+            prune_entropy_threshold,
+            grow_fill_threshold,
+            grow_error_threshold,
+            min_bits,
+            max_bits,
+            cluster_error_threshold,
+            cluster_fill_threshold,
+            neuron_uniqueness_threshold,
+            min_neurons,
+            max_neurons,
+            max_neurons_per_pass,
+            warmup_generations,
+            cooldown_iterations,
+            passes_per_eval,
+            total_input_bits,
+        };
+
+        py.allow_threads(|| {
+            let cache = &self.inner;
+            let train_subset = &cache.train_subsets[train_subset_idx % cache.num_parts];
+            let eval_subset = &cache.eval_subsets[eval_subset_idx % cache.num_eval_parts];
+
+            let (a_bits, a_neurons, a_conns, ce, acc, bit_acc,
+                 pruned, grown, added, removed) =
+                bitwise_ramlm::train_adapt_eval(
+                    cache, &bits_per_neuron, &neurons_per_cluster, &connections,
+                    train_subset, eval_subset, memory_mode, neuron_sample_rate,
+                    rng_seed, override_val, &config, generation, &mut cooldowns_mut,
+                );
+
+            Ok((a_bits, a_neurons, a_conns, ce, acc, bit_acc,
+                pruned, grown, added, removed, cooldowns_mut))
         })
     }
 }
