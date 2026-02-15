@@ -802,6 +802,96 @@ class DashboardClient:
 		return result or {}
 
 	# =========================================================================
+	# HuggingFace export
+	# =========================================================================
+
+	def export_genome_hf(
+		self,
+		checkpoint_id: int,
+		output_dir: str = "exports",
+	) -> dict:
+		"""
+		Export a checkpoint's genome as a HuggingFace-compatible model.
+
+		This triggers the export process:
+		1. Fetches checkpoint + experiment metadata from the API
+		2. Loads the genome from the checkpoint file
+		3. Trains memory tables on the full dataset
+		4. Saves as HF-compatible directory (config.json + model.safetensors)
+
+		Args:
+			checkpoint_id: ID of the checkpoint to export
+			output_dir: Directory to save the exported model
+
+		Returns:
+			Dict with export metadata including 'output_dir' path
+		"""
+		# Step 1: Get export metadata from API
+		result = self._request(
+			"POST",
+			f"/api/checkpoints/{checkpoint_id}/export-hf",
+			json_data={"output_dir": output_dir}
+		)
+		if result is None:
+			raise ValueError(f"Checkpoint {checkpoint_id} not found")
+
+		self._logger(f"Export metadata received for checkpoint {checkpoint_id}")
+
+		# Step 2: Load genome from checkpoint file
+		checkpoint_path = result["checkpoint_path"]
+		architecture_type = result.get("architecture_type", "tiered")
+		context_size = result.get("context_size", 4)
+
+		import gzip
+		genome_data = None
+		try:
+			if checkpoint_path.endswith(".gz"):
+				with gzip.open(checkpoint_path, "rt") as f:
+					genome_data = json.load(f)
+			else:
+				with open(checkpoint_path, "r") as f:
+					genome_data = json.load(f)
+		except (FileNotFoundError, OSError) as e:
+			raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}") from e
+
+		# Step 3: Create HF config and model
+		try:
+			from wnn.hf import WNNConfig, WNNForCausalLM
+		except ImportError:
+			raise ImportError(
+				"HuggingFace dependencies required for export. "
+				"Install with: pip install wnn[hf]"
+			)
+
+		# Build config from genome data
+		config = WNNConfig.from_genome(genome_data, context_size=context_size)
+
+		# Create model and load genome weights
+		model = WNNForCausalLM(config)
+		model.load_from_genome(genome_data)
+
+		# Step 4: Save to HF-compatible directory
+		export_path = Path(output_dir) / f"wnn-{architecture_type}-ckpt{checkpoint_id}"
+		export_path.mkdir(parents=True, exist_ok=True)
+
+		model.save_pretrained(str(export_path))
+
+		# Save tokenizer config
+		from wnn.hf.tokenization_wnn import WNNTokenizerConfig
+		tokenizer_config = WNNTokenizerConfig()
+		tokenizer_config.save_pretrained(str(export_path))
+
+		self._logger(f"Exported HF model to {export_path}")
+
+		return {
+			"checkpoint_id": checkpoint_id,
+			"output_dir": str(export_path),
+			"architecture_type": architecture_type,
+			"best_ce": result.get("best_ce"),
+			"best_accuracy": result.get("best_accuracy"),
+		}
+
+	# =========================================================================
 	# Health check
 	# =========================================================================
 

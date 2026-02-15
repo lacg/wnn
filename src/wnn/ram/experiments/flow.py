@@ -171,6 +171,118 @@ class FlowConfig:
 			seed=seed,
 		)
 
+	# Architecture type
+	architecture_type: str = "tiered"
+
+	# Bitwise-specific config
+	num_clusters: int = 16
+	memory_mode: str = "QUAD_WEIGHTED"
+	neuron_sample_rate: float = 0.25
+	min_bits: int = 10
+	max_bits: int = 24
+	min_neurons: int = 10
+	max_neurons: int = 300
+	sparse_threshold: Optional[int] = None
+
+	@classmethod
+	def bitwise_7_phase(
+		cls,
+		name: str,
+		ga_generations: int = 250,
+		ts_iterations: int = 250,
+		population_size: int = 50,
+		neighbors_per_iter: int = 50,
+		patience: int = 10,
+		context_size: int = 4,
+		num_clusters: int = 16,
+		memory_mode: str = "QUAD_WEIGHTED",
+		neuron_sample_rate: float = 0.25,
+		min_bits: int = 10,
+		max_bits: int = 24,
+		min_neurons: int = 10,
+		max_neurons: int = 300,
+		fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK,
+		fitness_weight_ce: float = 1.0,
+		fitness_weight_acc: float = 1.0,
+		sparse_threshold: Optional[int] = None,
+		seed: Optional[int] = None,
+		description: Optional[str] = None,
+		seed_checkpoint_path: Optional[str] = None,
+	) -> "FlowConfig":
+		"""
+		Create a bitwise 7-phase flow configuration.
+
+		Matches the standalone run_bitwise_optimization.py pipeline:
+		  Phase 1: Grid Search (evaluates N×M grid of neurons×bits)
+		  Phase 2: GA Neurons (bits fixed from grid search)
+		  Phase 3: TS Neurons
+		  Phase 4: GA Bits (neurons fixed from Phase 3)
+		  Phase 5: TS Bits
+		  Phase 6: GA Connections (architecture fixed)
+		  Phase 7: TS Connections
+
+		The grid search phase uses a special ExperimentType and evaluates
+		combinations of [50,100,150,200] neurons × [14,16,18,20] bits.
+		"""
+		phases = [
+			("Phase 1: Grid Search", ExperimentType.GA, False, True, False, {"phase_type": "grid_search"}),
+			("Phase 2: GA Neurons", ExperimentType.GA, False, True, False, {}),
+			("Phase 3: TS Neurons", ExperimentType.TS, False, True, False, {}),
+			("Phase 4: GA Bits", ExperimentType.GA, True, False, False, {}),
+			("Phase 5: TS Bits", ExperimentType.TS, True, False, False, {}),
+			("Phase 6: GA Connections", ExperimentType.GA, False, False, True, {}),
+			("Phase 7: TS Connections", ExperimentType.TS, False, False, True, {}),
+		]
+
+		experiments = []
+		for phase_name, exp_type, opt_bits, opt_neurons, opt_conns, extra_params in phases:
+			config = ExperimentConfig(
+				name=phase_name,
+				experiment_type=exp_type,
+				optimize_bits=opt_bits,
+				optimize_neurons=opt_neurons,
+				optimize_connections=opt_conns,
+				generations=ga_generations,
+				population_size=population_size,
+				iterations=ts_iterations,
+				neighbors_per_iter=neighbors_per_iter,
+				patience=patience,
+				fitness_calculator_type=fitness_calculator_type,
+				fitness_weight_ce=fitness_weight_ce,
+				fitness_weight_acc=fitness_weight_acc,
+				seed=seed,
+				# Bitwise-specific bounds
+				bitwise_min_bits=min_bits,
+				bitwise_max_bits=max_bits,
+				bitwise_min_neurons=min_neurons,
+				bitwise_max_neurons=max_neurons,
+			)
+			# Store extra params for phase_type override
+			config._extra_params = extra_params
+			experiments.append(config)
+
+		return cls(
+			name=name,
+			experiments=experiments,
+			description=description or "Bitwise 7-phase optimization (grid → GA/TS neurons → bits → connections)",
+			seed_checkpoint_path=seed_checkpoint_path,
+			context_size=context_size,
+			patience=patience,
+			fitness_calculator_type=fitness_calculator_type,
+			fitness_weight_ce=fitness_weight_ce,
+			fitness_weight_acc=fitness_weight_acc,
+			seed=seed,
+			architecture_type="bitwise",
+			num_clusters=num_clusters,
+			memory_mode=memory_mode,
+			neuron_sample_rate=neuron_sample_rate,
+			min_bits=min_bits,
+			max_bits=max_bits,
+			min_neurons=min_neurons,
+			max_neurons=max_neurons,
+			sparse_threshold=sparse_threshold,
+		)
+
 	def to_api_config(self) -> APIFlowConfig:
 		"""Convert to API FlowConfig for dashboard registration."""
 		# Convert tier_config to string format for API compatibility
@@ -184,21 +296,37 @@ class FlowConfig:
 					tier_parts.append(f"{tier[0]},{tier[1]},{tier[2]}")
 			tier_config_str = ";".join(tier_parts)
 
+		params = {
+			"tier_config": tier_config_str,
+			"optimize_tier0_only": self.optimize_tier0_only,
+			"context_size": self.context_size,
+			"patience": self.patience,
+			"fitness_percentile": self.fitness_percentile,
+			"fitness_calculator": self.fitness_calculator_type.name.lower(),
+			"fitness_weight_ce": self.fitness_weight_ce,
+			"fitness_weight_acc": self.fitness_weight_acc,
+			"seed": self.seed,
+			"architecture_type": self.architecture_type,
+		}
+
+		# Add bitwise-specific params
+		if self.architecture_type == "bitwise":
+			params.update({
+				"num_clusters": self.num_clusters,
+				"memory_mode": self.memory_mode,
+				"neuron_sample_rate": self.neuron_sample_rate,
+				"min_bits": self.min_bits,
+				"max_bits": self.max_bits,
+				"min_neurons": self.min_neurons,
+				"max_neurons": self.max_neurons,
+				"sparse_threshold": self.sparse_threshold,
+			})
+
 		return APIFlowConfig(
 			name=self.name,
 			experiments=[exp.to_dict() for exp in self.experiments],
 			description=self.description,
-			params={
-				"tier_config": tier_config_str,
-				"optimize_tier0_only": self.optimize_tier0_only,
-				"context_size": self.context_size,
-				"patience": self.patience,
-				"fitness_percentile": self.fitness_percentile,
-				"fitness_calculator": self.fitness_calculator_type.name.lower(),
-				"fitness_weight_ce": self.fitness_weight_ce,
-				"fitness_weight_acc": self.fitness_weight_acc,
-				"seed": self.seed,
-			},
+			params=params,
 		)
 
 

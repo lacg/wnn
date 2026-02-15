@@ -378,8 +378,15 @@ class FlowWorker:
             safe_name = flow_name.lower().replace(" ", "_").replace("/", "_")
             checkpoint_dir = self.checkpoint_base_dir / safe_name
 
-            # Load data and create evaluator
-            evaluator = self._create_evaluator(context_size, params.get("seed"))
+            # Detect architecture type
+            architecture_type = params.get("architecture_type", "tiered")
+            is_bitwise = architecture_type == "bitwise"
+
+            # Load data and create appropriate evaluator
+            if is_bitwise:
+                evaluator = self._create_bitwise_evaluator(context_size, params)
+            else:
+                evaluator = self._create_evaluator(context_size, params.get("seed"))
 
             # Build experiment configs
             exp_configs = self._build_experiment_configs(experiments, params, evaluator.vocab_size)
@@ -406,7 +413,19 @@ class FlowWorker:
                 fitness_weight_ce=fitness_weight_ce,
                 fitness_weight_acc=fitness_weight_acc,
                 seed=params.get("seed"),
+                architecture_type=architecture_type,
             )
+
+            # Add bitwise-specific config
+            if is_bitwise:
+                flow_config.num_clusters = params.get("num_clusters", 16)
+                flow_config.memory_mode = params.get("memory_mode", "QUAD_WEIGHTED")
+                flow_config.neuron_sample_rate = params.get("neuron_sample_rate", 0.25)
+                flow_config.min_bits = params.get("min_bits", 10)
+                flow_config.max_bits = params.get("max_bits", 24)
+                flow_config.min_neurons = params.get("min_neurons", 10)
+                flow_config.max_neurons = params.get("max_neurons", 300)
+                flow_config.sparse_threshold = params.get("sparse_threshold")
 
             # Handle seed checkpoint
             seed_checkpoint_id = flow_data.get("seed_checkpoint_id")
@@ -501,6 +520,36 @@ class FlowWorker:
         self._log(f"  Vocab: {evaluator.vocab_size:,}, Context: {context_size}")
         return evaluator
 
+    def _create_bitwise_evaluator(self, context_size: int, params: dict):
+        """Create a BitwiseEvaluator using pre-cached data."""
+        self._log(f"Creating BitwiseEvaluator (context_size={context_size})...")
+
+        from wnn.ram.architecture.bitwise_evaluator import BitwiseEvaluator
+
+        # Map memory mode string to integer
+        memory_mode_map = {
+            "TERNARY": 0,
+            "QUAD_BINARY": 1,
+            "QUAD_WEIGHTED": 2,
+        }
+        memory_mode = memory_mode_map.get(params.get("memory_mode", "QUAD_WEIGHTED"), 2)
+        neuron_sample_rate = params.get("neuron_sample_rate", 0.25)
+
+        evaluator = BitwiseEvaluator(
+            train_tokens=self._train_tokens,
+            eval_tokens=self._eval_tokens,
+            vocab_size=self._vocab_size,
+            context_size=context_size,
+            num_parts=3,
+            memory_mode=memory_mode,
+            neuron_sample_rate=neuron_sample_rate,
+        )
+
+        self._log(f"  BitwiseEvaluator: vocab={evaluator.vocab_size:,}, "
+                   f"context={context_size}, mode={params.get('memory_mode', 'QUAD_WEIGHTED')}, "
+                   f"sample_rate={neuron_sample_rate}")
+        return evaluator
+
     def _build_experiment_configs(
         self,
         experiments: list[dict],
@@ -528,11 +577,17 @@ class FlowWorker:
             # Parse phase_type (API format) or use direct fields (config format)
             phase_type = exp_data.get("phase_type", "")
             if phase_type:
-                # API format: phase_type like "ga_neurons", "ts_bits", "ga_connections"
-                experiment_type = ExperimentType.GA if phase_type.startswith("ga") else ExperimentType.TS
-                optimize_neurons = "neurons" in phase_type
-                optimize_bits = "bits" in phase_type
-                optimize_connections = "connections" in phase_type
+                # API format: phase_type like "ga_neurons", "ts_bits", "ga_connections", "grid_search"
+                if phase_type == "grid_search":
+                    experiment_type = ExperimentType.GA
+                    optimize_neurons = True
+                    optimize_bits = False
+                    optimize_connections = False
+                else:
+                    experiment_type = ExperimentType.GA if phase_type.startswith("ga") else ExperimentType.TS
+                    optimize_neurons = "neurons" in phase_type
+                    optimize_bits = "bits" in phase_type
+                    optimize_connections = "connections" in phase_type
             else:
                 # Legacy config format
                 raw_type = exp_data.get("experiment_type", "ga")
@@ -565,6 +620,11 @@ class FlowWorker:
                 fitness_weight_ce=exp_weight_ce,
                 fitness_weight_acc=exp_weight_acc,
                 seed=seed,
+                # Bitwise-specific bounds from flow params
+                bitwise_min_bits=params.get("min_bits"),
+                bitwise_max_bits=params.get("max_bits"),
+                bitwise_min_neurons=params.get("min_neurons"),
+                bitwise_max_neurons=params.get("max_neurons"),
             )
             exp_configs.append(exp_config)
 

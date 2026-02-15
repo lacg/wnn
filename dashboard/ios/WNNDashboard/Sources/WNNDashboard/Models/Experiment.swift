@@ -28,6 +28,7 @@ public struct Experiment: Codable, Identifiable, Hashable {
     public let best_ce: Double?
     public let best_accuracy: Double?
     public let cluster_type: String?
+    public let architecture_type: ArchitectureType?
 
     public var createdDate: Date? { DateFormatters.parse( created_at) }
     public var startedDate: Date? { started_at.flatMap { DateFormatters.parse( $0) } }
@@ -59,6 +60,10 @@ public struct Experiment: Codable, Identifiable, Hashable {
             if i == 0 && (s == "ga" || s == "ts") { return s.uppercased() }
             return s.capitalized
         }.joined(separator: " ")
+    }
+
+    public var isBitwise: Bool {
+        architecture_type == .bitwise
     }
 
     public var parsedTierConfig: [TierConfigEntry]? {

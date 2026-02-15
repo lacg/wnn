@@ -18,6 +18,17 @@ public struct NewFlowView: View {
     @State private var isSubmitting = false
     @State private var error: String?
 
+    // Bitwise-specific config
+    @State private var bitwiseNumClusters = 16
+    @State private var bitwiseMinBits = 10
+    @State private var bitwiseMaxBits = 24
+    @State private var bitwiseMinNeurons = 10
+    @State private var bitwiseMaxNeurons = 300
+    @State private var bitwiseMemoryMode = "QUAD_WEIGHTED"
+    @State private var bitwiseNeuronSampleRate = 0.25
+
+    private var isBitwise: Bool { selectedTemplate == .bitwise7Phase }
+
     public init() {}
 
     public var body: some View {
@@ -36,15 +47,29 @@ public struct NewFlowView: View {
                     Stepper("Patience: \(patience)", value: $patience, in: 1...50)
                     Stepper("Population: \(population)", value: $population, in: 10...200, step: 10)
                 }
-                Section("Tier Configuration") {
-                    #if os(iOS)
-                    TextField("Tier Config", text: $tierConfig).fontDesign(.monospaced).textInputAutocapitalization(.never)
-                    #else
-                    TextField("Tier Config", text: $tierConfig).fontDesign(.monospaced)
-                    #endif
-                    Toggle("Tier 0 Only", isOn: $tier0Only)
-                    Text("Format: clusters,neurons,bits;...").font(.caption).foregroundColor(.secondary)
+
+                if isBitwise {
+                    BitwiseConfigEditorView(
+                        numClusters: $bitwiseNumClusters,
+                        minBits: $bitwiseMinBits,
+                        maxBits: $bitwiseMaxBits,
+                        minNeurons: $bitwiseMinNeurons,
+                        maxNeurons: $bitwiseMaxNeurons,
+                        memoryMode: $bitwiseMemoryMode,
+                        neuronSampleRate: $bitwiseNeuronSampleRate
+                    )
+                } else {
+                    Section("Tier Configuration") {
+                        #if os(iOS)
+                        TextField("Tier Config", text: $tierConfig).fontDesign(.monospaced).textInputAutocapitalization(.never)
+                        #else
+                        TextField("Tier Config", text: $tierConfig).fontDesign(.monospaced)
+                        #endif
+                        Toggle("Tier 0 Only", isOn: $tier0Only)
+                        Text("Format: clusters,neurons,bits;...").font(.caption).foregroundColor(.secondary)
+                    }
                 }
+
                 if let error = error { Section { Text(error).foregroundColor(.red) } }
             }
             .navigationTitle("New Flow")
@@ -67,7 +92,28 @@ public struct NewFlowView: View {
 
     private func createFlow() {
         isSubmitting = true; error = nil
-        let params: [String: AnyCodable] = ["ga_gens": AnyCodable(gaGenerations), "ts_iters": AnyCodable(tsIterations), "patience": AnyCodable(patience), "population": AnyCodable(population), "tier_config": AnyCodable(tierConfig), "tier0_only": AnyCodable(tier0Only)]
+
+        var params: [String: AnyCodable] = [
+            "ga_gens": AnyCodable(gaGenerations),
+            "ts_iters": AnyCodable(tsIterations),
+            "patience": AnyCodable(patience),
+            "population": AnyCodable(population),
+        ]
+
+        if isBitwise {
+            params["architecture_type"] = AnyCodable("bitwise")
+            params["num_clusters"] = AnyCodable(bitwiseNumClusters)
+            params["min_bits"] = AnyCodable(bitwiseMinBits)
+            params["max_bits"] = AnyCodable(bitwiseMaxBits)
+            params["min_neurons"] = AnyCodable(bitwiseMinNeurons)
+            params["max_neurons"] = AnyCodable(bitwiseMaxNeurons)
+            params["memory_mode"] = AnyCodable(bitwiseMemoryMode)
+            params["neuron_sample_rate"] = AnyCodable(bitwiseNeuronSampleRate)
+        } else {
+            params["tier_config"] = AnyCodable(tierConfig)
+            params["tier0_only"] = AnyCodable(tier0Only)
+        }
+
         let config = FlowConfig(experiments: selectedTemplate.defaultExperiments, template: selectedTemplate.rawValue, params: params)
         let request = CreateFlowRequest(name: name, description: description.isEmpty ? nil : description, config: config)
         Task {
@@ -78,11 +124,16 @@ public struct NewFlowView: View {
 }
 
 enum FlowTemplate: String, CaseIterable {
-    case standard6Phase = "standard-6-phase", neuronsOnly = "neurons-only", bitsOnly = "bits-only", fullOptimization = "full-optimization"
+    case standard6Phase = "standard-6-phase"
+    case bitwise7Phase = "bitwise-7-phase"
+    case neuronsOnly = "neurons-only"
+    case bitsOnly = "bits-only"
+    case fullOptimization = "full-optimization"
 
     var displayName: String {
         switch self {
-        case .standard6Phase: return "Standard 6-Phase"
+        case .standard6Phase: return "Standard 6-Phase (Tiered)"
+        case .bitwise7Phase: return "Bitwise 7-Phase"
         case .neuronsOnly: return "Neurons Only"
         case .bitsOnly: return "Bits Only"
         case .fullOptimization: return "Full Optimization"
@@ -98,6 +149,14 @@ enum FlowTemplate: String, CaseIterable {
             ExperimentSpec(name: "2b TS Bits", experiment_type: .ts, optimize_bits: true),
             ExperimentSpec(name: "3a GA Connections", experiment_type: .ga, optimize_connections: true),
             ExperimentSpec(name: "3b TS Connections", experiment_type: .ts, optimize_connections: true)]
+        case .bitwise7Phase: return [
+            ExperimentSpec(name: "1 Grid Search", experiment_type: .ga, optimize_bits: true, optimize_neurons: true, params: ["phase_type": AnyCodable("grid_search")]),
+            ExperimentSpec(name: "2 GA Neurons", experiment_type: .ga, optimize_neurons: true),
+            ExperimentSpec(name: "3 TS Neurons", experiment_type: .ts, optimize_neurons: true),
+            ExperimentSpec(name: "4 GA Bits", experiment_type: .ga, optimize_bits: true),
+            ExperimentSpec(name: "5 TS Bits", experiment_type: .ts, optimize_bits: true),
+            ExperimentSpec(name: "6 GA Connections", experiment_type: .ga, optimize_connections: true),
+            ExperimentSpec(name: "7 TS Connections", experiment_type: .ts, optimize_connections: true)]
         case .neuronsOnly: return [ExperimentSpec(name: "GA Neurons", experiment_type: .ga, optimize_neurons: true), ExperimentSpec(name: "TS Neurons", experiment_type: .ts, optimize_neurons: true)]
         case .bitsOnly: return [ExperimentSpec(name: "GA Bits", experiment_type: .ga, optimize_bits: true), ExperimentSpec(name: "TS Bits", experiment_type: .ts, optimize_bits: true)]
         case .fullOptimization: return [ExperimentSpec(name: "Full GA", experiment_type: .ga, optimize_bits: true, optimize_neurons: true, optimize_connections: true), ExperimentSpec(name: "Full TS", experiment_type: .ts, optimize_bits: true, optimize_neurons: true, optimize_connections: true)]

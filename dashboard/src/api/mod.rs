@@ -54,6 +54,7 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .route("/api/checkpoints", get(list_checkpoints).post(create_checkpoint))
         .route("/api/checkpoints/:id", get(get_checkpoint).delete(delete_checkpoint))
         .route("/api/checkpoints/:id/download", get(download_checkpoint))
+        .route("/api/checkpoints/:id/export-hf", post(export_checkpoint_hf))
         // WebSocket (database polling)
         .route("/ws", get(websocket_handler))
         .with_state(state)
@@ -1328,6 +1329,80 @@ async fn download_checkpoint(
         ],
         body,
     ).into_response()
+}
+
+// =============================================================================
+// HuggingFace export handler
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+struct ExportHfRequest {
+    #[serde(default = "default_export_dir")]
+    output_dir: String,
+}
+
+fn default_export_dir() -> String {
+    "exports".to_string()
+}
+
+/// Export a checkpoint's genome data for HuggingFace model creation.
+///
+/// Returns the checkpoint metadata + experiment info needed for HF export.
+/// The actual export (training memory + serializing safetensors) happens in Python.
+async fn export_checkpoint_hf(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Json(req): Json<ExportHfRequest>,
+) -> impl IntoResponse {
+    // Get checkpoint
+    let checkpoint = match crate::db::queries::get_checkpoint(&state.db, id).await {
+        Ok(Some(c)) => c,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Checkpoint not found"})),
+            ).into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            ).into_response();
+        }
+    };
+
+    // Get the experiment for architecture context
+    let experiment = match crate::db::queries::get_experiment(&state.db, checkpoint.experiment_id).await {
+        Ok(Some(e)) => e,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Experiment not found"})),
+            ).into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            ).into_response();
+        }
+    };
+
+    // Return all the data needed for Python-side HF export
+    (StatusCode::OK, Json(serde_json::json!({
+        "checkpoint_id": checkpoint.id,
+        "checkpoint_path": checkpoint.file_path,
+        "checkpoint_name": checkpoint.name,
+        "best_ce": checkpoint.best_ce,
+        "best_accuracy": checkpoint.best_accuracy,
+        "genome_stats": checkpoint.genome_stats,
+        "experiment_id": experiment.id,
+        "experiment_name": experiment.name,
+        "architecture_type": experiment.architecture_type,
+        "tier_config": experiment.tier_config,
+        "context_size": experiment.context_size,
+        "output_dir": req.output_dir,
+    }))).into_response()
 }
 
 // =============================================================================

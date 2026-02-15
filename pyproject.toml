@@ -31,6 +31,7 @@ Repository = "https://github.com/lacg/wnn"
 Issues = "https://github.com/lacg/wnn/issues"
 
 [project.optional-dependencies]
+hf = ["transformers>=4.30", "safetensors>=0.4"]
 hybrid = ["transformers>=4.30"]
 dev = ["pytest", "ruff"]
 

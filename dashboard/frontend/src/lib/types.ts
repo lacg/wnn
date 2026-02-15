@@ -147,10 +147,12 @@ export interface Experiment {
   current_iteration: number | null;
   best_ce: number | null;
   best_accuracy: number | null;
+  // Architecture type
+  architecture_type?: 'tiered' | 'bitwise';
   // Gating analysis
   gating_status: GatingStatus | null;
   gating_results: GatingResults | null;
-  // Cluster architecture type
+  // Cluster architecture type (legacy, prefer architecture_type)
   cluster_type?: 'tiered' | 'bitwise';
 }
 

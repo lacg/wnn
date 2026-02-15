@@ -65,6 +65,25 @@ async fn run_migrations(pool: &DbPool) -> Result<()> {
         .execute(pool)
         .await;
 
+    // Migration: Add architecture_type to experiments (tiered | bitwise)
+    let _ = sqlx::query("ALTER TABLE experiments ADD COLUMN architecture_type TEXT DEFAULT 'tiered'")
+        .execute(pool)
+        .await;
+
+    // Migration: Add bitwise-specific fields to genomes
+    let _ = sqlx::query("ALTER TABLE genomes ADD COLUMN architecture_type TEXT DEFAULT 'tiered'")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE genomes ADD COLUMN connections_json TEXT")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE genomes ADD COLUMN hf_config_json TEXT")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE genomes ADD COLUMN hf_export_path TEXT")
+        .execute(pool)
+        .await;
+
     Ok(())
 }
 
@@ -446,18 +465,23 @@ pub mod queries {
         // Create pending experiments for each experiment spec
         for (idx, exp_spec) in experiments.iter().enumerate() {
             // Derive phase_type from experiment spec
-            let opt_target = if exp_spec.optimize_bits {
-                "bits"
-            } else if exp_spec.optimize_neurons {
-                "neurons"
+            // Check for special phase types (e.g., grid_search for bitwise Phase 1)
+            let phase_type = if let Some(pt) = exp_spec.params.get("phase_type").and_then(|v| v.as_str()) {
+                pt.to_string()
             } else {
-                "connections"
+                let opt_target = if exp_spec.optimize_bits {
+                    "bits"
+                } else if exp_spec.optimize_neurons {
+                    "neurons"
+                } else {
+                    "connections"
+                };
+                let exp_type = match exp_spec.experiment_type {
+                    crate::models::ExperimentType::Ga => "ga",
+                    crate::models::ExperimentType::Ts => "ts",
+                };
+                format!("{}_{}", exp_type, opt_target)
             };
-            let exp_type = match exp_spec.experiment_type {
-                crate::models::ExperimentType::Ga => "ga",
-                crate::models::ExperimentType::Ts => "ts",
-            };
-            let phase_type = format!("{}_{}", exp_type, opt_target);
 
             // Get max_iterations: first from experiment params, then from flow config
             let max_iterations = exp_spec.params.get("generations")
@@ -747,7 +771,7 @@ pub mod queries {
                       population_size, pid, last_iteration, resume_checkpoint_id,
                       created_at, started_at, ended_at, paused_at,
                       phase_type, max_iterations, current_iteration, best_ce, best_accuracy,
-                      gating_status, gating_results
+                      architecture_type, gating_status, gating_results
                FROM experiments WHERE flow_id = ?
                ORDER BY sequence_order"#,
         )
@@ -1209,7 +1233,8 @@ pub mod queries {
                       e.fitness_weight_ce, e.fitness_weight_acc, e.tier_config, e.context_size,
                       e.population_size, e.pid, e.last_iteration, e.resume_checkpoint_id,
                       e.created_at, e.started_at, e.ended_at, e.paused_at,
-                      e.phase_type, e.max_iterations, e.current_iteration, e.best_ce, e.best_accuracy
+                      e.phase_type, e.max_iterations, e.current_iteration, e.best_ce, e.best_accuracy,
+                      e.architecture_type
                FROM experiments e
                LEFT JOIN flows f ON e.flow_id = f.id
                WHERE e.status = 'running'
@@ -1234,7 +1259,7 @@ pub mod queries {
                       population_size, pid, last_iteration, resume_checkpoint_id,
                       created_at, started_at, ended_at, paused_at,
                       phase_type, max_iterations, current_iteration, best_ce, best_accuracy,
-                      gating_status, gating_results
+                      architecture_type, gating_status, gating_results
                FROM experiments WHERE id = ?"#,
         )
         .bind(id)
@@ -1277,11 +1302,15 @@ pub mod queries {
             .and_then(|v| v.as_i64())
             .unwrap_or(50) as i32;
 
+        let architecture_type = config.get("architecture_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("tiered");
+
         let result = sqlx::query(
             r#"INSERT INTO experiments (
                 name, flow_id, status, fitness_calculator, fitness_weight_ce, fitness_weight_acc,
-                tier_config, context_size, population_size, created_at, started_at
-            ) VALUES (?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?)"#,
+                tier_config, context_size, population_size, architecture_type, created_at, started_at
+            ) VALUES (?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         )
         .bind(name)
         .bind(flow_id)
@@ -1291,6 +1320,7 @@ pub mod queries {
         .bind(&tier_config)
         .bind(context_size)
         .bind(population_size)
+        .bind(architecture_type)
         .bind(&now)
         .bind(&now)
         .execute(pool)
@@ -1332,12 +1362,16 @@ pub mod queries {
             .and_then(|v| v.as_i64())
             .unwrap_or(50) as i32;
 
+        let architecture_type = flow_config.params.get("architecture_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("tiered");
+
         let result = sqlx::query(
             r#"INSERT INTO experiments (
                 name, flow_id, sequence_order, status, phase_type, max_iterations,
                 tier_config, fitness_calculator, fitness_weight_ce, fitness_weight_acc,
-                context_size, population_size, created_at
-            ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+                context_size, population_size, architecture_type, created_at
+            ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         )
         .bind(name)
         .bind(flow_id)
@@ -1350,6 +1384,7 @@ pub mod queries {
         .bind(fitness_weight_acc)
         .bind(context_size)
         .bind(population_size)
+        .bind(architecture_type)
         .bind(&now)
         .execute(pool)
         .await?;
@@ -1450,7 +1485,7 @@ pub mod queries {
                       population_size, pid, last_iteration, resume_checkpoint_id,
                       created_at, started_at, ended_at, paused_at,
                       phase_type, max_iterations, current_iteration, best_ce, best_accuracy,
-                      gating_status, gating_results
+                      architecture_type, gating_status, gating_results
                FROM experiments
                ORDER BY created_at DESC
                LIMIT ? OFFSET ?"#,
@@ -1547,6 +1582,12 @@ pub mod queries {
             .flatten()
             .and_then(|s| serde_json::from_str(&s).ok());
 
+        let architecture_type: ArchitectureType = row.try_get::<Option<String>, _>("architecture_type")
+            .ok()
+            .flatten()
+            .map(|s| parse_architecture_type(&s))
+            .unwrap_or_default();
+
         Ok(Experiment {
             id: row.get("id"),
             flow_id: row.get("flow_id"),
@@ -1577,6 +1618,7 @@ pub mod queries {
             current_iteration: row.try_get("current_iteration").ok(),
             best_ce: row.try_get("best_ce").ok(),
             best_accuracy: row.try_get("best_accuracy").ok(),
+            architecture_type,
             gating_status,
             gating_results,
         })
@@ -1711,6 +1753,13 @@ pub mod queries {
 
         // If all parsing fails, return an error with context
         Err(anyhow::anyhow!("Failed to parse datetime: '{}'", s))
+    }
+
+    fn parse_architecture_type(s: &str) -> ArchitectureType {
+        match s {
+            "bitwise" => ArchitectureType::Bitwise,
+            _ => ArchitectureType::Tiered,
+        }
     }
 
     fn parse_flow_status(s: &str) -> FlowStatus {

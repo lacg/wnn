@@ -857,7 +857,7 @@
     {/if}
 
     <!-- Bitwise Cluster Stats (per-cluster view for bitwise experiments) -->
-    {#if experiment.cluster_type === 'bitwise' || bitwiseClusterStats}
+    {#if experiment.architecture_type === 'bitwise' || experiment.cluster_type === 'bitwise' || bitwiseClusterStats}
       <BitwiseClusterStats clusterStats={bitwiseClusterStats} />
     {/if}
 

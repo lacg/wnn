@@ -87,6 +87,23 @@ impl Default for CheckpointType {
 }
 
 // =============================================================================
+// Architecture Type
+// =============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchitectureType {
+    Tiered,
+    Bitwise,
+}
+
+impl Default for ArchitectureType {
+    fn default() -> Self {
+        ArchitectureType::Tiered
+    }
+}
+
+// =============================================================================
 // Flow Models
 // =============================================================================
 
@@ -181,6 +198,9 @@ pub struct Experiment {
     pub current_iteration: Option<i32>,
     pub best_ce: Option<f64>,
     pub best_accuracy: Option<f64>,
+    /// Architecture type: tiered or bitwise
+    #[serde(default)]
+    pub architecture_type: ArchitectureType,
     /// Gating analysis status: NULL (not run), 'pending', 'running', 'completed', 'failed'
     pub gating_status: Option<GatingStatus>,
     /// Gating analysis results (JSON blob)
@@ -283,6 +303,18 @@ pub struct Genome {
     pub total_clusters: i32,
     pub total_neurons: i32,
     pub total_memory_bytes: i64,
+    /// Architecture type: tiered or bitwise
+    #[serde(default)]
+    pub architecture_type: ArchitectureType,
+    /// Serialized connections for HF export (compressed JSON)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connections_json: Option<String>,
+    /// Full WNNConfig as JSON (for direct HF export)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hf_config_json: Option<String>,
+    /// Path to exported HF model directory
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hf_export_path: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 

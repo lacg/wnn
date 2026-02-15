@@ -7,6 +7,17 @@
   let description = '';
   let template = 'standard-6-phase';
   let phaseOrder = 'neurons_first';
+
+  // Bitwise-specific config
+  let bitwiseNumClusters = 16;
+  let bitwiseMinBits = 10;
+  let bitwiseMaxBits = 24;
+  let bitwiseMinNeurons = 10;
+  let bitwiseMaxNeurons = 300;
+  let bitwiseMemoryMode = 'QUAD_WEIGHTED';
+  let bitwiseNeuronSampleRate = 0.25;
+
+  $: isBitwise = template === 'bitwise-7-phase';
   let gaGenerations = 250;
   let tsIterations = 250;
   let populationSize = 50;
@@ -47,6 +58,24 @@
       fitnessWeightAcc = 1.0;
       contextSize = 4;
       tierConfig = '100,15,20,true;400,10,12,false;rest,5,8,false';
+    } else if (templateName === 'bitwise-7-phase') {
+      gaGenerations = 250;
+      tsIterations = 250;
+      populationSize = 50;
+      neighborsPerIter = 50;
+      patience = 10;
+      fitnessPercentile = 0.75;
+      fitnessCalculator = 'harmonic_rank';
+      fitnessWeightCe = 1.0;
+      fitnessWeightAcc = 1.0;
+      contextSize = 4;
+      bitwiseNumClusters = 16;
+      bitwiseMinBits = 10;
+      bitwiseMaxBits = 24;
+      bitwiseMinNeurons = 10;
+      bitwiseMaxNeurons = 300;
+      bitwiseMemoryMode = 'QUAD_WEIGHTED';
+      bitwiseNeuronSampleRate = 0.25;
     }
   }
 
@@ -69,6 +98,19 @@
   function generatePhases(templateName: string, order: string): PhaseSpec[] {
     if (templateName === 'empty') {
       return [];
+    }
+
+    // Bitwise 7-phase template (fixed order: grid → neurons → bits → connections)
+    if (templateName === 'bitwise-7-phase') {
+      return [
+        { name: 'Phase 1: Grid Search (neurons × bits)', experiment_type: 'ga', optimize_bits: true, optimize_neurons: true, optimize_connections: false },
+        { name: 'Phase 2: GA Neurons', experiment_type: 'ga', optimize_bits: false, optimize_neurons: true, optimize_connections: false },
+        { name: 'Phase 3: TS Neurons (refine)', experiment_type: 'ts', optimize_bits: false, optimize_neurons: true, optimize_connections: false },
+        { name: 'Phase 4: GA Bits', experiment_type: 'ga', optimize_bits: true, optimize_neurons: false, optimize_connections: false },
+        { name: 'Phase 5: TS Bits (refine)', experiment_type: 'ts', optimize_bits: true, optimize_neurons: false, optimize_connections: false },
+        { name: 'Phase 6: GA Connections', experiment_type: 'ga', optimize_bits: false, optimize_neurons: false, optimize_connections: true },
+        { name: 'Phase 7: TS Connections (refine)', experiment_type: 'ts', optimize_bits: false, optimize_neurons: false, optimize_connections: true },
+      ];
     }
 
     // Quick 4-phase template (neurons first, no connections phase)
@@ -118,15 +160,47 @@
 
     try {
       // Enrich experiments with their params (generations/iterations based on type)
-      const enrichedExperiments = experiments.map(exp => ({
+      const enrichedExperiments = experiments.map((exp, i) => ({
         ...exp,
         params: {
           generations: exp.experiment_type === 'ga' ? gaGenerations : undefined,
           iterations: exp.experiment_type === 'ts' ? tsIterations : undefined,
           population_size: populationSize,
           neighbors_per_iter: neighborsPerIter,
+          // First bitwise phase is a grid search (special handling in worker)
+          ...(isBitwise && i === 0 ? { phase_type: 'grid_search' } : {}),
         }
       }));
+
+      // Build params — bitwise and tiered share common search params
+      // but differ in architecture-specific config
+      const params: Record<string, unknown> = {
+        phase_order: phaseOrder,
+        ga_generations: gaGenerations,
+        ts_iterations: tsIterations,
+        population_size: populationSize,
+        neighbors_per_iter: neighborsPerIter,
+        patience,
+        fitness_percentile: fitnessPercentile,
+        fitness_calculator: fitnessCalculator,
+        fitness_weight_ce: fitnessWeightCe,
+        fitness_weight_acc: fitnessWeightAcc,
+        min_accuracy_floor: minAccuracyFloor,
+        context_size: contextSize,
+      };
+
+      if (isBitwise) {
+        params.architecture_type = 'bitwise';
+        params.num_clusters = bitwiseNumClusters;
+        params.min_bits = bitwiseMinBits;
+        params.max_bits = bitwiseMaxBits;
+        params.min_neurons = bitwiseMinNeurons;
+        params.max_neurons = bitwiseMaxNeurons;
+        params.memory_mode = bitwiseMemoryMode;
+        params.neuron_sample_rate = bitwiseNeuronSampleRate;
+      } else {
+        params.tier_config = tierConfig || null;
+      }
 
       // Experiments are passed separately (normalized design: Flow 1:N Experiments via FK)
       const response = await fetch('/api/flows', {
@@ -137,21 +211,7 @@
           description: description || null,
           config: {
             template,
-            params: {
-              phase_order: phaseOrder,
-              ga_generations: gaGenerations,
-              ts_iterations: tsIterations,
-              population_size: populationSize,
-              neighbors_per_iter: neighborsPerIter,
-              patience,
-              fitness_percentile: fitnessPercentile,
-              fitness_calculator: fitnessCalculator,
-              fitness_weight_ce: fitnessWeightCe,
-              fitness_weight_acc: fitnessWeightAcc,
-              min_accuracy_floor: minAccuracyFloor,
-              context_size: contextSize,
-              tier_config: tierConfig || null
-            }
+            params
           },
           experiments: enrichedExperiments,
           seed_checkpoint_id: seedCheckpointId
@@ -219,8 +279,9 @@
           <div class="form-group">
             <label for="template">Template</label>
             <select id="template" bind:value={template}>
-              <option value="quick-4-phase">Quick 4-Phase</option>
-              <option value="standard-6-phase">Standard 6-Phase</option>
+              <option value="quick-4-phase">Quick 4-Phase (Tiered)</option>
+              <option value="standard-6-phase">Standard 6-Phase (Tiered)</option>
+              <option value="bitwise-7-phase">Bitwise 7-Phase</option>
               <option value="empty">Empty (no phases)</option>
             </select>
             <span class="field-hint">
@@ -228,6 +289,8 @@
                 Fast iteration: neurons &rarr; bits (50 gens, patience 2)
               {:else if template === 'standard-6-phase'}
                 Full search: neurons &rarr; bits &rarr; connections (250 gens)
+              {:else if template === 'bitwise-7-phase'}
+                Grid search &rarr; neurons &rarr; bits &rarr; connections (per-cluster)
               {:else}
                 Add phases manually after creation
               {/if}
@@ -236,12 +299,14 @@
 
           <div class="form-group">
             <label for="phaseOrder">Phase Order</label>
-            <select id="phaseOrder" bind:value={phaseOrder} disabled={template === 'empty'}>
+            <select id="phaseOrder" bind:value={phaseOrder} disabled={template === 'empty' || isBitwise}>
               <option value="neurons_first">Neurons First</option>
               <option value="bits_first">Bits First</option>
             </select>
             <span class="field-hint">
-              {#if template === 'quick-4-phase'}
+              {#if isBitwise}
+                Fixed: grid &rarr; neurons &rarr; bits &rarr; connections
+              {:else if template === 'quick-4-phase'}
                 {phaseOrder === 'neurons_first' ? 'neurons → bits' : 'bits → neurons'} (no connections)
               {:else if phaseOrder === 'neurons_first'}
                 neurons &rarr; bits &rarr; connections
@@ -349,10 +414,56 @@
           </div>
         {/if}
 
-        <div class="form-section">
-          <h2>Tier Configuration</h2>
-          <TierConfigEditor bind:value={tierConfig} />
-        </div>
+        {#if isBitwise}
+          <div class="form-section">
+            <h2>Bitwise Configuration</h2>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="bitwiseNumClusters">Clusters</label>
+                <input type="number" id="bitwiseNumClusters" bind:value={bitwiseNumClusters} min="1" max="256" />
+                <span class="field-hint">Output clusters (default 16)</span>
+              </div>
+              <div class="form-group">
+                <label for="bitwiseMemoryMode">Memory Mode</label>
+                <select id="bitwiseMemoryMode" bind:value={bitwiseMemoryMode}>
+                  <option value="QUAD_WEIGHTED">Quad Weighted</option>
+                  <option value="QUAD_BINARY">Quad Binary</option>
+                  <option value="TERNARY">Ternary</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="bitwiseMinBits">Min Bits</label>
+                <input type="number" id="bitwiseMinBits" bind:value={bitwiseMinBits} min="1" max="64" />
+              </div>
+              <div class="form-group">
+                <label for="bitwiseMaxBits">Max Bits</label>
+                <input type="number" id="bitwiseMaxBits" bind:value={bitwiseMaxBits} min="1" max="64" />
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="bitwiseMinNeurons">Min Neurons</label>
+                <input type="number" id="bitwiseMinNeurons" bind:value={bitwiseMinNeurons} min="1" max="1000" />
+              </div>
+              <div class="form-group">
+                <label for="bitwiseMaxNeurons">Max Neurons</label>
+                <input type="number" id="bitwiseMaxNeurons" bind:value={bitwiseMaxNeurons} min="1" max="1000" />
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="bitwiseNeuronSampleRate">Neuron Sample Rate</label>
+              <input type="number" id="bitwiseNeuronSampleRate" bind:value={bitwiseNeuronSampleRate} min="0.01" max="1.0" step="0.01" />
+              <span class="field-hint">Fraction of neurons sampled per example (0.25 = 25%)</span>
+            </div>
+          </div>
+        {:else}
+          <div class="form-section">
+            <h2>Tier Configuration</h2>
+            <TierConfigEditor bind:value={tierConfig} />
+          </div>
+        {/if}
 
         <div class="form-section">
           <h2>Seed Checkpoint</h2>

@@ -87,6 +87,12 @@ class ExperimentConfig:
 	bitwise_neurons_per_cluster: int = 200
 	bitwise_bits_per_neuron: int = 16
 
+	# Bitwise architecture bounds (for per-cluster GA/TS optimization)
+	bitwise_min_bits: Optional[int] = None
+	bitwise_max_bits: Optional[int] = None
+	bitwise_min_neurons: Optional[int] = None
+	bitwise_max_neurons: Optional[int] = None
+
 	# Fitness calculator settings
 	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.NORMALIZED
 	fitness_weight_ce: float = 1.0

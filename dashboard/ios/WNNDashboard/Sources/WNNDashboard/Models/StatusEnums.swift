@@ -87,6 +87,22 @@ public enum ExperimentType: String, Codable {
     }
 }
 
+public enum ArchitectureType: String, Codable {
+    case tiered, bitwise
+
+    public var displayName: String {
+        switch self {
+        case .tiered: return "Tiered"
+        case .bitwise: return "Bitwise"
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = ArchitectureType(rawValue: raw) ?? .tiered
+    }
+}
+
 public enum GatingStatus: String, Codable, CaseIterable {
     case pending, running, completed, failed
 

@@ -94,6 +94,12 @@ public final class APIClient {
         try await request(path: "api/experiments/\(experimentId)/gating/\(gatingId)")
     }
 
+    // HuggingFace Export
+    public func exportCheckpointHF(checkpointId: Int64, outputDir: String = "exports") async throws -> ExportResult {
+        struct ExportRequest: Encodable { let output_dir: String }
+        return try await request(path: "api/checkpoints/\(checkpointId)/export-hf", method: "POST", body: ExportRequest(output_dir: outputDir))
+    }
+
     // Validation Summaries
     public func getExperimentValidations(experimentId: Int64) async throws -> [ValidationSummary] {
         try await request(path: "api/experiments/\(experimentId)/summaries")
