@@ -276,6 +276,7 @@ experiments/
 # Ad-hoc experiment runners (tracked runners are in project root with proper names)
 run_bitwise_experiment.py
 run_ctx2_longrun.sh
+run_ctx3_after_ctx2.sh
 run_overnight_context_sweep.sh
 
 # Dashboard runtime files
