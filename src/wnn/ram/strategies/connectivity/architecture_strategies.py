@@ -1761,13 +1761,11 @@ class GridSearchStrategy:
 		self._log(f"  Batch evaluation: {batch_elapsed:.1f}s total, "
 				  f"{batch_elapsed/total_configs:.1f}s/config")
 
-		# Phase 3: Collect results and record iterations
+		# Phase 3: Collect results (grid search is one-shot, no iterations)
 		results = []
 		for idx, ((neurons, bits, genome), (ce, acc, bit_acc)) in enumerate(
 			zip(config_list, evals)
 		):
-			per_config_elapsed = batch_elapsed / total_configs
-
 			self._log(f"  [{idx+1}/{total_configs}] n={neurons:3d}, b={bits:2d}: "
 					  f"CE={ce:.4f}  Acc={acc:.2%}")
 
@@ -1777,49 +1775,9 @@ class GridSearchStrategy:
 				"ce": ce,
 				"accuracy": acc,
 				"bit_accuracy": bit_acc,
-				"elapsed_s": per_config_elapsed,
+				"elapsed_s": batch_elapsed / total_configs,
 				"genome": genome,
 			})
-
-			# Record as iteration for dashboard tracking
-			if self._tracker and self._tracker_experiment_id:
-				try:
-					avg_ce = sum(r["ce"] for r in results) / len(results)
-					avg_acc = sum(r["accuracy"] for r in results) / len(results)
-					iter_id = self._tracker.record_iteration(
-						experiment_id=self._tracker_experiment_id,
-						iteration_num=idx + 1,
-						best_ce=min(r["ce"] for r in results),
-						best_accuracy=max(r["accuracy"] for r in results),
-						avg_ce=avg_ce,
-						avg_accuracy=avg_acc,
-						elapsed_secs=per_config_elapsed,
-						candidates_total=1,
-					)
-					# Record the genome evaluation for this iteration
-					if HAS_GENOME_TRACKING:
-						genome_config = self._genome_to_config(genome)
-						if genome_config:
-							genome_id = self._tracker.get_or_create_genome(
-								self._tracker_experiment_id, genome_config
-							)
-							self._tracker.record_genome_evaluation(
-								iteration_id=iter_id,
-								genome_id=genome_id,
-								position=0,
-								role=GenomeRole.INIT,
-								ce=ce,
-								accuracy=acc,
-							)
-					# Update experiment progress
-					self._tracker.update_experiment_progress(
-						self._tracker_experiment_id,
-						current_iteration=idx + 1,
-						best_ce=min(r["ce"] for r in results),
-						best_accuracy=max(r["accuracy"] for r in results),
-					)
-				except Exception as e:
-					self._log(f"  Warning: tracker error: {e}")
 
 		if not results:
 			raise ValueError("Grid search produced no results")
@@ -1839,9 +1797,48 @@ class GridSearchStrategy:
 					  f"CE={r['ce']:.4f}  Acc={r['accuracy']:.2%}  "
 					  f"Fit={r['fitness']:.4f}{marker}")
 
-		# Phase 5: Build output population with proportional representation
+		# Record 1 iteration for the whole grid search (it's a single step)
 		best_result = results[0]
 		best_genome = best_result["genome"]
+		if self._tracker and self._tracker_experiment_id:
+			try:
+				avg_ce = sum(r["ce"] for r in results) / len(results)
+				avg_acc = sum(r["accuracy"] for r in results) / len(results)
+				iter_id = self._tracker.record_iteration(
+					experiment_id=self._tracker_experiment_id,
+					iteration_num=1,
+					best_ce=best_result["ce"],
+					best_accuracy=best_result["accuracy"],
+					avg_ce=avg_ce,
+					avg_accuracy=avg_acc,
+					elapsed_secs=batch_elapsed,
+					candidates_total=total_configs,
+				)
+				# Record the best genome evaluation
+				if HAS_GENOME_TRACKING:
+					genome_config = self._genome_to_config(best_genome)
+					if genome_config:
+						genome_id = self._tracker.get_or_create_genome(
+							self._tracker_experiment_id, genome_config
+						)
+						self._tracker.record_genome_evaluation(
+							iteration_id=iter_id,
+							genome_id=genome_id,
+							position=0,
+							role=GenomeRole.INIT,
+							ce=best_result["ce"],
+							accuracy=best_result["accuracy"],
+						)
+				self._tracker.update_experiment_progress(
+					self._tracker_experiment_id,
+					current_iteration=1,
+					best_ce=best_result["ce"],
+					best_accuracy=best_result["accuracy"],
+				)
+			except Exception as e:
+				self._log(f"  Warning: tracker error: {e}")
+
+		# Phase 5: Build output population with proportional representation
 
 		top_k = min(cfg.top_k, len(results))
 		weights = list(range(top_k, 0, -1))  # [K, K-1, ..., 1]
@@ -1885,9 +1882,9 @@ class GridSearchStrategy:
 			initial_fitness=worst_ce,
 			final_fitness=best_ce,
 			improvement_percent=improvement,
-			iterations_run=len(results),
+			iterations_run=1,
 			method_name="GridSearch",
-			history=[(i + 1, r["ce"]) for i, r in enumerate(results)],
+			history=[(1, best_result["ce"])],
 			early_stopped=False,
 			stop_reason=StopReason.MAX_ITERATIONS,
 			final_population=output_population,

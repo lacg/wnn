@@ -498,16 +498,7 @@ pub mod queries {
                     // Fall back to flow-level params or grid size
                     match exp_spec.experiment_type {
                         crate::models::ExperimentType::GridSearch => {
-                            // Grid search: neurons_grid × bits_grid (defaults 4×4=16)
-                            let n_neurons = config.params.get("neurons_grid")
-                                .and_then(|v| v.as_array())
-                                .map(|a| a.len())
-                                .unwrap_or(4);
-                            let n_bits = config.params.get("bits_grid")
-                                .and_then(|v| v.as_array())
-                                .map(|a| a.len())
-                                .unwrap_or(4);
-                            Some((n_neurons * n_bits) as i32)
+                            Some(1) // Grid search is a single step
                         }
                         crate::models::ExperimentType::Ga => {
                             config.params.get("ga_generations")

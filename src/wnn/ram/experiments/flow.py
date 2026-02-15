@@ -275,11 +275,11 @@ class FlowConfig:
 				bitwise_min_neurons=min_neurons,
 				bitwise_max_neurons=max_neurons,
 			)
-			# Grid search: set grid params and correct max_iterations
+			# Grid search: set grid params (grid search is 1 step, no iterations)
 			if exp_type == ExperimentType.GRID_SEARCH:
 				config.neurons_grid = default_neurons_grid
 				config.bits_grid = default_bits_grid
-				config.generations = len(default_neurons_grid) * len(default_bits_grid)
+				config.generations = 1
 			# Store extra params for phase_type override
 			config._extra_params = extra_params
 			experiments.append(config)
@@ -506,7 +506,7 @@ class Flow:
 				else:
 					if exp_config.experiment_type == ExperimentType.GRID_SEARCH:
 						phase_type = "grid_search"
-						max_iters = exp_config.generations  # Set to grid size
+						max_iters = 1  # Grid search is a single step
 					else:
 						opt_target = "bits" if exp_config.optimize_bits else "neurons" if exp_config.optimize_neurons else "connections"
 						phase_type = f"{'ga' if exp_config.experiment_type == ExperimentType.GA else 'ts'}_{opt_target}"

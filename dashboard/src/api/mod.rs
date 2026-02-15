@@ -923,15 +923,7 @@ async fn add_experiment_to_flow(
         .or_else(|| {
             match exp_spec.experiment_type {
                 ExperimentType::GridSearch => {
-                    let n_neurons = flow.config.params.get("neurons_grid")
-                        .and_then(|v| v.as_array())
-                        .map(|a| a.len())
-                        .unwrap_or(4);
-                    let n_bits = flow.config.params.get("bits_grid")
-                        .and_then(|v| v.as_array())
-                        .map(|a| a.len())
-                        .unwrap_or(4);
-                    Some((n_neurons * n_bits) as i32)
+                    Some(1) // Grid search is a single step
                 }
                 ExperimentType::Ga => {
                     flow.config.params.get("ga_generations")

@@ -609,7 +609,7 @@ class FlowWorker:
             pop_size = exp_data.get("population_size") or params.get("population_size", 50)
 
             if experiment_type == ExperimentType.GRID_SEARCH:
-                max_iters = len(neurons_grid) * len(bits_grid)
+                max_iters = 1  # Grid search is a single step
             else:
                 max_iters = exp_data.get("max_iterations") or params.get("ga_generations", 250)
 
