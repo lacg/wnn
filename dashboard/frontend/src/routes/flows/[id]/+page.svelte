@@ -139,7 +139,7 @@
     fitness_weight_acc: 1.0,
     min_accuracy_floor: 0,
     threshold_start: 0,
-    threshold_max: 0.01,
+    threshold_step: 1,
     tier_config: '',
     phase_order: 'neurons_first',
     context_size: 4
@@ -199,7 +199,7 @@
         editConfig.fitness_weight_acc = p.fitness_weight_acc ?? 1.0;
         editConfig.min_accuracy_floor = p.min_accuracy_floor ?? 0;
         editConfig.threshold_start = p.threshold_start ?? 0;
-        editConfig.threshold_max = p.threshold_max ?? 0.01;
+        editConfig.threshold_step = p.threshold_step ?? 1;
         editConfig.phase_order = p.phase_order ?? 'neurons_first';
         editConfig.context_size = p.context_size ?? 4;
         if (p.tier_config) {
@@ -258,7 +258,7 @@
         fitness_weight_acc: editConfig.fitness_weight_acc,
         min_accuracy_floor: editConfig.min_accuracy_floor,
         threshold_start: editConfig.threshold_start,
-        threshold_max: editConfig.threshold_max,
+        threshold_step: editConfig.threshold_step,
         phase_order: editConfig.phase_order,
         context_size: editConfig.context_size,
       };
@@ -582,7 +582,7 @@
     }
   }
 
-  async function updateFitnessWeight(field: 'fitness_weight_ce' | 'fitness_weight_acc' | 'min_accuracy_floor' | 'threshold_start' | 'threshold_max', value: number) {
+  async function updateFitnessWeight(field: 'fitness_weight_ce' | 'fitness_weight_acc' | 'min_accuracy_floor' | 'threshold_start' | 'threshold_step', value: number) {
     if (!flow) return;
     saving = true;
 
@@ -1147,14 +1147,14 @@
 
           <div class="form-row">
             <div class="form-group">
-              <label for="threshold_start">Threshold Start</label>
-              <input type="number" id="threshold_start" bind:value={editConfig.threshold_start} min="0" max="0.5" step="0.001" />
-              <span class="form-hint">Accuracy filter at phase 1 (0 = 0%)</span>
+              <label for="threshold_start">Threshold Start (%)</label>
+              <input type="number" id="threshold_start" bind:value={editConfig.threshold_start} min="0" max="50" step="0.1" />
+              <span class="form-hint">Accuracy filter at phase 1 (0 = no filter)</span>
             </div>
             <div class="form-group">
-              <label for="threshold_max">Threshold Max</label>
-              <input type="number" id="threshold_max" bind:value={editConfig.threshold_max} min="0" max="0.5" step="0.001" />
-              <span class="form-hint">Accuracy filter at final phase (0.01 = 1%)</span>
+              <label for="threshold_step">Threshold Increase / Phase (%)</label>
+              <input type="number" id="threshold_step" bind:value={editConfig.threshold_step} min="0" max="50" step="0.1" />
+              <span class="form-hint">How much accuracy filter grows each phase</span>
             </div>
           </div>
 

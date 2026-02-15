@@ -34,8 +34,8 @@
   let fitnessWeightCe = 1.0;   // Weight for CE in harmonic calculations
   let fitnessWeightAcc = 1.0;  // Weight for accuracy in harmonic calculations
   let minAccuracyFloor = 0;  // 0 = disabled, 0.003 = 0.3% floor
-  let thresholdStart = 0;      // Accuracy filter at phase 1
-  let thresholdMax = 0.01;     // Accuracy filter at final phase (0.01 = 1%)
+  let thresholdStart = 0;      // Accuracy filter at phase 1 (%)
+  let thresholdStep = 1;       // Accuracy increase per phase (%)
   let contextSize = 4;
   let tierConfig = '100,15,20,true;400,10,12,false;rest,5,8,false';
 
@@ -229,7 +229,7 @@
         fitness_weight_acc: fitnessWeightAcc,
         min_accuracy_floor: minAccuracyFloor,
         threshold_start: thresholdStart,
-        threshold_max: thresholdMax,
+        threshold_step: thresholdStep,
         context_size: contextSize,
       };
 
@@ -448,14 +448,14 @@
 
         <div class="form-row">
           <div class="form-group">
-            <label for="thresholdStart">Threshold Start</label>
-            <input type="number" id="thresholdStart" bind:value={thresholdStart} min="0" max="0.5" step="0.001" />
-            <span class="field-hint">Accuracy filter at phase 1 (0 = 0%)</span>
+            <label for="thresholdStart">Threshold Start (%)</label>
+            <input type="number" id="thresholdStart" bind:value={thresholdStart} min="0" max="50" step="0.1" />
+            <span class="field-hint">Accuracy filter at phase 1 (0 = no filter)</span>
           </div>
           <div class="form-group">
-            <label for="thresholdMax">Threshold Max</label>
-            <input type="number" id="thresholdMax" bind:value={thresholdMax} min="0" max="0.5" step="0.001" />
-            <span class="field-hint">Accuracy filter at final phase (0.01 = 1%)</span>
+            <label for="thresholdStep">Threshold Increase / Phase (%)</label>
+            <input type="number" id="thresholdStep" bind:value={thresholdStep} min="0" max="50" step="0.1" />
+            <span class="field-hint">How much accuracy filter grows each phase</span>
           </div>
         </div>
       </div>

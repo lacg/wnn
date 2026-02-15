@@ -58,6 +58,7 @@ class ExperimentConfig:
 	check_interval: int = 10
 	threshold_delta: float = 0.01
 	threshold_reference: int = 1000
+	threshold_start: float = 0.0  # Starting threshold (fraction, e.g. 0.01 = 1%)
 
 	# Architecture bounds
 	min_bits: int = 4
@@ -376,7 +377,7 @@ class Experiment:
 			"check_interval": cfg.check_interval,
 			"threshold_delta": cfg.threshold_delta,
 			"threshold_reference": cfg.threshold_reference,
-			"initial_threshold": initial_threshold,
+			"initial_threshold": initial_threshold if initial_threshold is not None else (cfg.threshold_start if cfg.threshold_start > 0 else None),
 			"fitness_percentile": cfg.fitness_percentile,
 			"seed": cfg.seed,
 			"min_bits": cfg.min_bits,
