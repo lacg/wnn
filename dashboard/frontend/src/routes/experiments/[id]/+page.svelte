@@ -145,6 +145,18 @@
           iterations = newIters;
         }
       }
+
+      // Also refresh flow data so duration stays in sync
+      if (flow) {
+        const flowRes = await fetch(`/api/flows/${flow.id}`);
+        if (flowRes.ok) {
+          const newFlow = await flowRes.json();
+          flow.started_at = newFlow.started_at;
+          flow.completed_at = newFlow.completed_at;
+          flow.status = newFlow.status;
+          flow = flow;
+        }
+      }
     } catch (e) {
       // Silently fail on refresh - don't disrupt the UI
       console.error('Refresh failed:', e);

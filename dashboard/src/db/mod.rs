@@ -938,6 +938,15 @@ pub mod queries {
             .await?;
             Ok(result.rows_affected() > 0)
         } else {
+            // Resume restart: reset non-completed experiments' timestamps
+            // so they get fresh started_at when re-started (prevents stale durations)
+            sqlx::query(
+                "UPDATE experiments SET started_at = NULL, ended_at = NULL, status = 'pending' WHERE flow_id = ? AND status IN ('running', 'failed')"
+            )
+            .bind(id)
+            .execute(pool)
+            .await?;
+
             // Just reset status and pid
             let result = sqlx::query(
                 "UPDATE flows SET status = 'queued', pid = NULL, started_at = NULL, completed_at = NULL WHERE id = ?"
