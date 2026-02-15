@@ -322,7 +322,8 @@
 
     <!-- Main two-column layout -->
     <div class="form-columns">
-      <!-- Left column: Search parameters -->
+      <!-- Left column: Search parameters + Seed -->
+      <div class="left-column">
       <div class="form-section">
         <h2>Search Parameters</h2>
 
@@ -465,6 +466,7 @@
           Optionally seed from a previous run's checkpoint.
         </p>
         <SeedCheckpointSelector bind:value={seedCheckpointId} />
+      </div>
       </div>
 
       <!-- Right column: Phases + Tiers -->
@@ -648,7 +650,7 @@
     align-items: start;
   }
 
-  .right-column {
+  .left-column, .right-column {
     display: flex;
     flex-direction: column;
     gap: 1.5rem;
