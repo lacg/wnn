@@ -20,7 +20,8 @@ public struct Flow: Codable, Identifiable {
 
     public var duration: TimeInterval? {
         guard let start = startedDate else { return nil }
-        return (completedDate ?? Date()).timeIntervalSince(start)
+        let dur = (completedDate ?? Date()).timeIntervalSince(start)
+        return dur > 0 ? dur : nil
     }
 }
 

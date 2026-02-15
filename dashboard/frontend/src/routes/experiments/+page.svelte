@@ -33,7 +33,7 @@
     if (!end) return 'Running...';
     const startDate = new Date(start);
     const endDate = new Date(end);
-    const seconds = Math.floor((endDate.getTime() - startDate.getTime()) / 1000);
+    const seconds = Math.max(0, Math.floor((endDate.getTime() - startDate.getTime()) / 1000));
 
     if (seconds < 60) return `${seconds}s`;
     if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;

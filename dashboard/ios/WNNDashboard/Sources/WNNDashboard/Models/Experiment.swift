@@ -36,7 +36,8 @@ public struct Experiment: Codable, Identifiable, Hashable {
 
     public var duration: TimeInterval? {
         guard let start = startedDate else { return nil }
-        return (endedDate ?? Date()).timeIntervalSince(start)
+        let dur = (endedDate ?? Date()).timeIntervalSince(start)
+        return dur > 0 ? dur : nil
     }
 
     public var progress: Double {

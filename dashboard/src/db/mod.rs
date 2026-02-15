@@ -1457,6 +1457,8 @@ pub mod queries {
                 "running" => {
                     set_clauses.push("started_at = ?");
                     binds.push(now.clone());
+                    // Clear stale ended_at from previous runs
+                    set_clauses.push("ended_at = NULL");
                 }
                 "completed" | "failed" | "cancelled" => {
                     set_clauses.push("ended_at = ?");
