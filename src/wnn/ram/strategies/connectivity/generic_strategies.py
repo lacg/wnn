@@ -1463,7 +1463,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 						   f"best={best_fitness:.4f}, new_best={new_best:.4f}, avg={gen_avg:.4f}")
 
 			# Record iteration to tracker (if set)
-			if self._tracker and self._tracker_phase_id:
+			if self._tracker and self._tracker_experiment_id:
 				try:
 					best_acc = accuracy_values[gen_best_idx] if accuracy_values else None
 					# Compute average accuracy of the population
@@ -2274,7 +2274,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 						   f"best_ce={best_fitness:.4f}")
 
 			# Record iteration to tracker (if set)
-			if self._tracker and self._tracker_phase_id:
+			if self._tracker and self._tracker_experiment_id:
 				try:
 					# Compute top-k stats from all_neighbors by fitness ranking
 					valid_neighbors = [(g, ce, acc) for g, ce, acc in all_neighbors if acc is not None]
