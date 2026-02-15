@@ -242,7 +242,7 @@ class CachedEvaluator:
             genomes_neurons_flat = []
             genomes_connections_flat = []
             for g in genomes:
-                genomes_bits_flat.extend(g.bits_per_cluster)
+                genomes_bits_flat.extend(g.bits_per_neuron)
                 genomes_neurons_flat.extend(g.neurons_per_cluster)
                 if g.connections is not None:
                     genomes_connections_flat.extend(g.connections)
@@ -290,7 +290,7 @@ class CachedEvaluator:
             genomes_connections_flat = []
 
             for g in genomes:
-                genomes_bits_flat.extend(g.bits_per_cluster)
+                genomes_bits_flat.extend(g.bits_per_neuron)
                 genomes_neurons_flat.extend(g.neurons_per_cluster)
                 if g.connections is not None:
                     genomes_connections_flat.extend(g.connections)
@@ -379,7 +379,7 @@ class CachedEvaluator:
         genomes_connections_flat = []
 
         for g in genomes:
-            genomes_bits_flat.extend(g.bits_per_cluster)
+            genomes_bits_flat.extend(g.bits_per_neuron)
             genomes_neurons_flat.extend(g.neurons_per_cluster)
             if g.connections is not None:
                 genomes_connections_flat.extend(g.connections)
@@ -522,7 +522,7 @@ class CachedEvaluator:
 
         # Call Rust search
         results = self._cache.search_neighbors(
-            base_bits=genome.bits_per_cluster,
+            base_bits=genome.bits_per_neuron,
             base_neurons=genome.neurons_per_cluster,
             base_connections=genome.connections if genome.connections else [],
             target_count=target_count,
@@ -549,7 +549,7 @@ class CachedEvaluator:
         genomes = []
         for bits, neurons, connections, ce, acc in results:
             g = ClusterGenome(
-                bits_per_cluster=list(bits),
+                bits_per_neuron=list(bits),
                 neurons_per_cluster=list(neurons),
                 connections=list(connections) if connections else None,
             )
@@ -632,7 +632,7 @@ class CachedEvaluator:
         rust_population = []
         for genome, fitness in population:
             rust_population.append((
-                genome.bits_per_cluster,
+                genome.bits_per_neuron,
                 genome.neurons_per_cluster,
                 genome.connections if genome.connections else [],
                 fitness,
@@ -670,7 +670,7 @@ class CachedEvaluator:
         genomes = []
         for bits, neurons, connections, ce, acc in candidates:
             g = ClusterGenome(
-                bits_per_cluster=list(bits),
+                bits_per_neuron=list(bits),
                 neurons_per_cluster=list(neurons),
                 connections=list(connections) if connections else None,
             )
@@ -809,7 +809,7 @@ class CachedEvaluator:
         start = time.time()
 
         # Get genome configuration (direct attributes, not methods)
-        bits_flat = genome.bits_per_cluster
+        bits_flat = genome.bits_per_neuron
         neurons_flat = genome.neurons_per_cluster
         connections_flat = genome.connections if genome.connections else []
 

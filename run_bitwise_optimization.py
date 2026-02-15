@@ -365,7 +365,7 @@ def create_difficulty_tiered_seed(
 	import random
 	from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 
-	bits_per_cluster = []
+	bits_per_neuron = []
 	neurons_per_cluster = []
 
 	for i in range(num_clusters):
@@ -383,19 +383,17 @@ def create_difficulty_tiered_seed(
 		b = max(8, min(24, base_b + random.randint(-jitter_bits, jitter_bits)))
 
 		neurons_per_cluster.append(n)
-		bits_per_cluster.append(b)
+		# Each neuron in this cluster gets the same bits
+		bits_per_neuron.extend([b] * n)
 
 	# Build connections
 	connections = []
-	for cluster_idx in range(num_clusters):
-		n = neurons_per_cluster[cluster_idx]
-		b = bits_per_cluster[cluster_idx]
-		for _ in range(n):
-			for _ in range(b):
-				connections.append(random.randint(0, total_input_bits - 1))
+	for b in bits_per_neuron:
+		for _ in range(b):
+			connections.append(random.randint(0, total_input_bits - 1))
 
 	return ClusterGenome(
-		bits_per_cluster=bits_per_cluster,
+		bits_per_neuron=bits_per_neuron,
 		neurons_per_cluster=neurons_per_cluster,
 		connections=connections,
 	)

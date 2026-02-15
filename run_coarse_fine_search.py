@@ -113,7 +113,7 @@ def load_seed_data(seed_file: str) -> tuple[Optional[ClusterGenome], Optional[li
 		if genome is None and 'final' in data and 'genome_stats' in data['final']:
 			stats = data['final']['genome_stats']
 			genome = ClusterGenome(
-				bits_per_cluster=stats.get('bits_per_cluster', []),
+				bits_per_neuron=stats.get('bits_per_neuron', []),
 				neurons_per_cluster=stats.get('neurons_per_cluster', []),
 				connections=stats.get('connections'),
 			)

@@ -273,7 +273,7 @@ def main():
 		},
 		# Final genome (from Phase 2 TS)
 		"genome": {
-			"bits_per_cluster": conn_result.final_population[0].bits_per_cluster if conn_result.final_population else ts_result.best_genome.bits_per_cluster,
+			"bits_per_neuron": conn_result.final_population[0].bits_per_neuron if conn_result.final_population else ts_result.best_genome.bits_per_neuron,
 			"neurons_per_cluster": conn_result.final_population[0].neurons_per_cluster if conn_result.final_population else ts_result.best_genome.neurons_per_cluster,
 		},
 		"stats": ts_result.best_genome.stats(),

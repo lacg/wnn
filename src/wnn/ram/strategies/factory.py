@@ -279,7 +279,7 @@ class OptimizerStrategyFactory:
 		strategy = OptimizerStrategyFactory.create(
 			OptimizerStrategyType.CONNECTIVITY_GA,
 			num_clusters=100,
-			bits_per_cluster=16,
+			bits_per_neuron=16,
 		)
 	"""
 

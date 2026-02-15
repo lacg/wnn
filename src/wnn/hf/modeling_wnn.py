@@ -66,25 +66,29 @@ class WNNForCausalLM(PreTrainedModel):
 		self.register_buffer("token_bits", token_bits)
 
 		# Architecture arrays (stored as parameters for safetensors)
-		bits_t = torch.tensor(config.bits_per_cluster, dtype=torch.int32)
+		bits_t = torch.tensor(config.bits_per_neuron, dtype=torch.int32)
 		neurons_t = torch.tensor(config.neurons_per_cluster, dtype=torch.int32)
-		self.register_buffer("bits_per_cluster", bits_t)
+		self.register_buffer("bits_per_neuron", bits_t)
 		self.register_buffer("neurons_per_cluster", neurons_t)
 
 		# Connections: [total_neurons, max_bits] padded with -1
 		total_neurons = sum(config.neurons_per_cluster)
-		max_bits = max(config.bits_per_cluster) if config.bits_per_cluster else 1
+		max_bits = max(config.bits_per_neuron) if config.bits_per_neuron else 1
 		self.connections = torch.nn.Parameter(
 			torch.full((total_neurons, max_bits), -1, dtype=torch.int64),
 			requires_grad=False,
 		)
 
 		# Memory tables: one parameter per cluster
-		# Each is [neurons, 2^bits] storing the trained output values
+		# Each neuron gets its own 2^bits memory table.
+		# For simplicity, we use the max bits in each cluster for uniform-shaped tensors.
 		self.memory_keys = []
+		neuron_offset = 0
 		for i in range(config.num_clusters):
 			n = config.neurons_per_cluster[i] if i < len(config.neurons_per_cluster) else 1
-			b = config.bits_per_cluster[i] if i < len(config.bits_per_cluster) else 1
+			# Use max bits among neurons in this cluster for memory table size
+			cluster_bits = config.bits_per_neuron[neuron_offset:neuron_offset + n]
+			b = max(cluster_bits) if cluster_bits else 1
 			mem = torch.nn.Parameter(
 				torch.full((n, 2 ** b), 0.5, dtype=torch.float32),
 				requires_grad=False,
@@ -92,6 +96,7 @@ class WNNForCausalLM(PreTrainedModel):
 			key = f"memory_{i}"
 			self.register_parameter(key, mem)
 			self.memory_keys.append(key)
+			neuron_offset += n
 
 		self.post_init()
 
@@ -109,36 +114,31 @@ class WNNForCausalLM(PreTrainedModel):
 		3. Copy trained memory tables into self.memory_*
 
 		Args:
-			genome: ClusterGenome with bits_per_cluster, neurons_per_cluster,
+			genome: ClusterGenome with bits_per_neuron, neurons_per_cluster,
 				connections
 			train_tokens: Token IDs to train on
 			eval_tokens: Token IDs for evaluation (optional)
 		"""
 		from wnn.ram.core.models.bitwise_ramlm import BitwiseRAMLM
 
-		# Copy connections
-		offset = 0
+		# Copy connections (flat: neuron 0's bits, then neuron 1's, etc.)
+		conn_offsets = genome.connection_offsets
+		neuron_offsets = genome.cluster_neuron_offsets
 		for cluster_idx in range(self.num_clusters):
 			n = genome.neurons_per_cluster[cluster_idx]
-			b = genome.bits_per_cluster[cluster_idx]
 			for neuron_idx in range(n):
-				conn_start = offset
-				conn_end = offset + b
-				conns = genome.connections[conn_start:conn_end]
-				row = offset // b if b > 0 else 0
-				# Actually, connections are stored flat: for each cluster,
-				# neurons * bits connections contiguously
-				global_neuron = sum(genome.neurons_per_cluster[:cluster_idx]) + neuron_idx
-				for bit_idx, conn_val in enumerate(conns[neuron_idx * b:(neuron_idx + 1) * b] if len(conns) > b else conns):
-					self.connections.data[global_neuron, bit_idx] = conn_val
-				offset += b
+				global_neuron = neuron_offsets[cluster_idx] + neuron_idx
+				b = genome.bits_per_neuron[global_neuron]
+				start = conn_offsets[global_neuron]
+				for bit_idx in range(b):
+					self.connections.data[global_neuron, bit_idx] = genome.connections[start + bit_idx]
 
 		# Create and train BitwiseRAMLM
 		model = BitwiseRAMLM(
 			vocab_size=self.vocab_size,
 			context_size=self.context_size,
 			neurons_per_cluster=max(genome.neurons_per_cluster),
-			bits_per_neuron=max(genome.bits_per_cluster),
+			bits_per_neuron=max(genome.bits_per_neuron),
 		)
 		# Training happens through the evaluator path, not here
 		# The memory tables are populated during evaluation
@@ -238,12 +238,12 @@ class WNNForCausalLM(PreTrainedModel):
 		neuron_offset = 0
 		for cluster_idx in range(self.num_clusters):
 			n = int(self.neurons_per_cluster[cluster_idx].item())
-			b = int(self.bits_per_cluster[cluster_idx].item())
 			memory = getattr(self, f"memory_{cluster_idx}")
 
 			cluster_sum = torch.zeros(batch_size, device=device)
 			for neuron_idx in range(n):
 				global_idx = neuron_offset + neuron_idx
+				b = int(self.bits_per_neuron[global_idx].item())
 				# Get this neuron's connections
 				conns = self.connections[global_idx, :b]  # [b]
 

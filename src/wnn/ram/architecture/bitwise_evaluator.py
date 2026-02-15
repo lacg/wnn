@@ -155,32 +155,29 @@ class BitwiseEvaluator:
 		genomes: list[ClusterGenome],
 	) -> tuple[list[int], list[int], list[int]]:
 		"""
-		Flatten per-cluster arrays from genomes for Rust.
+		Flatten per-neuron arrays from genomes for Rust.
 
 		Returns:
 			(bits_flat, neurons_flat, connections_flat) where:
-			- bits_flat: [num_genomes * num_clusters]
+			- bits_flat: [num_genomes * total_neurons] per-neuron bit counts
 			- neurons_flat: [num_genomes * num_clusters]
-			- connections_flat: variable total
+			- connections_flat: variable total (sum of bits_per_neuron per genome)
 		"""
 		import random
-		num_clusters = bits_needed(self._vocab_size)
 
 		bits_flat = []
 		neurons_flat = []
 		connections_flat = []
 
 		for g in genomes:
-			bits_flat.extend(g.bits_per_cluster)
+			bits_flat.extend(g.bits_per_neuron)
 			neurons_flat.extend(g.neurons_per_cluster)
 			if g.connections is not None:
 				connections_flat.extend(g.connections)
 			else:
-				# Generate random connections based on per-cluster config
-				for c in range(num_clusters):
-					n_neurons = g.neurons_per_cluster[c]
-					n_bits = g.bits_per_cluster[c]
-					for _ in range(n_neurons * n_bits):
+				# Generate random connections based on per-neuron config
+				for b in g.bits_per_neuron:
+					for _ in range(b):
 						connections_flat.append(random.randint(0, self._total_input_bits - 1))
 
 		return bits_flat, neurons_flat, connections_flat
@@ -197,7 +194,7 @@ class BitwiseEvaluator:
 		"""
 		bits_flat, neurons_flat, connections_flat = self._flatten_genomes_heterogeneous(genomes)
 		results = self._rust_cache.evaluate_genomes(
-			bits_per_cluster_flat=bits_flat,
+			bits_per_neuron_flat=bits_flat,
 			neurons_per_cluster_flat=neurons_flat,
 			connections_flat=connections_flat,
 			num_genomes=len(genomes),
@@ -222,7 +219,7 @@ class BitwiseEvaluator:
 		"""
 		bits_flat, neurons_flat, connections_flat = self._flatten_genomes_heterogeneous(genomes)
 		results = self._rust_cache.evaluate_genomes_full(
-			bits_per_cluster_flat=bits_flat,
+			bits_per_neuron_flat=bits_flat,
 			neurons_per_cluster_flat=neurons_flat,
 			connections_flat=connections_flat,
 			num_genomes=len(genomes),
@@ -553,11 +550,16 @@ class BitwiseEvaluator:
 		mutable_clusters: Optional[list[int]],
 		rng: random.Random,
 	) -> ClusterGenome:
-		"""Mutate a genome to create a neighbor (matches Rust mutate_genome logic)."""
-		num_clusters = len(genome.bits_per_cluster)
-		new_bits = genome.bits_per_cluster.copy()
+		"""Mutate a genome to create a neighbor (matches Rust mutate_genome logic).
+
+		Operates on per-neuron bits. Mutation applies a per-cluster delta to all
+		neurons in that cluster, then adjusts connections accordingly.
+		"""
+		num_clusters = len(genome.neurons_per_cluster)
+		offsets = genome.cluster_neuron_offsets
+		old_bits = genome.bits_per_neuron.copy()
+		new_bits = genome.bits_per_neuron.copy()
 		new_neurons = genome.neurons_per_cluster.copy()
-		old_bits = genome.bits_per_cluster.copy()
 		old_neurons = genome.neurons_per_cluster.copy()
 
 		# Delta ranges: 10% of (min + max), minimum 1
@@ -570,18 +572,34 @@ class BitwiseEvaluator:
 				continue
 			if rng.random() < bits_mutation_rate:
 				delta = rng.randint(-bits_delta_max, bits_delta_max)
-				new_bits[i] = max(min_bits, min(max_bits, new_bits[i] + delta))
+				# Apply same delta to all neurons in this cluster
+				for n_idx in range(offsets[i], offsets[i + 1]):
+					new_bits[n_idx] = max(min_bits, min(max_bits, new_bits[n_idx] + delta))
 			if rng.random() < neurons_mutation_rate:
 				delta = rng.randint(-neurons_delta_max, neurons_delta_max)
 				new_neurons[i] = max(min_neurons, min(max_neurons, new_neurons[i] + delta))
 
+		# Rebuild per-neuron bits for changed neuron counts
+		final_bits = []
+		for c in range(num_clusters):
+			old_n = old_neurons[c]
+			new_n = new_neurons[c]
+			cluster_old_bits = new_bits[offsets[c]:offsets[c + 1]]
+			for n in range(new_n):
+				if n < old_n:
+					final_bits.append(cluster_old_bits[n])
+				else:
+					# New neuron: copy bits from random existing neuron in cluster
+					template = rng.randint(0, old_n - 1) if old_n > 0 else 0
+					final_bits.append(cluster_old_bits[template] if old_n > 0 else min_bits)
+
 		# Adjust connections for architecture changes
 		new_conns = self._adjust_connections(
-			genome.connections, old_bits, old_neurons, new_bits, new_neurons, rng,
+			genome.connections, old_bits, old_neurons, final_bits, new_neurons, rng,
 		)
 
 		return ClusterGenome(
-			bits_per_cluster=new_bits,
+			bits_per_neuron=final_bits,
 			neurons_per_cluster=new_neurons,
 			connections=new_conns,
 		)
@@ -595,26 +613,44 @@ class BitwiseEvaluator:
 		new_neurons: list[int],
 		rng: random.Random,
 	) -> Optional[list[int]]:
-		"""Adjust connections when architecture changes (matches Rust adjust_connections)."""
+		"""Adjust connections when architecture changes.
+
+		old_bits/new_bits: per-neuron bit counts (flat).
+		old_neurons/new_neurons: per-cluster neuron counts.
+		"""
 		if old_connections is None or len(old_connections) == 0:
 			return None
 
 		total_input_bits = self._total_input_bits
 		result = []
-		old_idx = 0
 
-		for c in range(len(new_bits)):
+		# Build connection offsets for old per-neuron bits
+		old_conn_offsets = [0]
+		for b in old_bits:
+			old_conn_offsets.append(old_conn_offsets[-1] + b)
+
+		# Build neuron offsets for old clusters
+		old_neuron_offsets = [0]
+		for n in old_neurons:
+			old_neuron_offsets.append(old_neuron_offsets[-1] + n)
+
+		new_neuron_idx = 0
+		for c in range(len(new_neurons)):
 			o_n = old_neurons[c]
-			o_b = old_bits[c]
 			n_n = new_neurons[c]
-			n_b = new_bits[c]
+			old_cluster_start = old_neuron_offsets[c]
 
 			for neuron in range(n_n):
+				n_b = new_bits[new_neuron_idx]
+
 				if neuron < o_n:
+					old_n_idx = old_cluster_start + neuron
+					o_b = old_bits[old_n_idx]
+					old_start = old_conn_offsets[old_n_idx]
+
 					for bit in range(n_b):
 						if bit < o_b:
-							conn_idx = old_idx + neuron * o_b + bit
-							conn = old_connections[conn_idx]
+							conn = old_connections[old_start + bit]
 							# 10% chance of small perturbation
 							if rng.random() < 0.1:
 								delta = rng.choice([-2, -1, 1, 2])
@@ -626,10 +662,12 @@ class BitwiseEvaluator:
 					# New neuron: copy from random existing with mutations
 					if o_n > 0:
 						template = rng.randint(0, o_n - 1)
+						tmpl_n_idx = old_cluster_start + template
+						o_b = old_bits[tmpl_n_idx]
+						tmpl_start = old_conn_offsets[tmpl_n_idx]
 						for bit in range(n_b):
 							if bit < o_b:
-								conn_idx = old_idx + template * o_b + bit
-								conn = old_connections[conn_idx]
+								conn = old_connections[tmpl_start + bit]
 								delta = rng.choice([-2, -1, 1, 2])
 								conn = max(0, min(total_input_bits - 1, conn + delta))
 								result.append(conn)
@@ -639,7 +677,7 @@ class BitwiseEvaluator:
 						for _ in range(n_b):
 							result.append(rng.randint(0, total_input_bits - 1))
 
-			old_idx += o_n * o_b
+				new_neuron_idx += 1
 
 		return result
 
@@ -831,25 +869,29 @@ class BitwiseEvaluator:
 		rng: random.Random,
 	) -> ClusterGenome:
 		"""Uniform crossover: randomly pick each cluster from either parent."""
-		n = len(parent1.bits_per_cluster)
+		n = len(parent1.neurons_per_cluster)
+		p1_offsets = parent1.cluster_neuron_offsets
+		p2_offsets = parent2.cluster_neuron_offsets
+
 		new_bits = []
 		new_neurons = []
 		for i in range(n):
 			if rng.random() < 0.5:
-				new_bits.append(parent1.bits_per_cluster[i])
+				# Take cluster i's neurons and per-neuron bits from parent1
 				new_neurons.append(parent1.neurons_per_cluster[i])
+				new_bits.extend(parent1.bits_per_neuron[p1_offsets[i]:p1_offsets[i + 1]])
 			else:
-				new_bits.append(parent2.bits_per_cluster[i])
 				new_neurons.append(parent2.neurons_per_cluster[i])
+				new_bits.extend(parent2.bits_per_neuron[p2_offsets[i]:p2_offsets[i + 1]])
 
 		# Connections: take from parent1 and adjust for new architecture
 		new_conns = self._adjust_connections(
 			parent1.connections,
-			parent1.bits_per_cluster, parent1.neurons_per_cluster,
+			parent1.bits_per_neuron, parent1.neurons_per_cluster,
 			new_bits, new_neurons, rng,
 		)
 		return ClusterGenome(
-			bits_per_cluster=new_bits,
+			bits_per_neuron=new_bits,
 			neurons_per_cluster=new_neurons,
 			connections=new_conns,
 		)

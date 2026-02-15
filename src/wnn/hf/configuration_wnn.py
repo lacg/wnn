@@ -34,7 +34,7 @@ class WNNConfig(PretrainedConfig):
 		vocab_size: int = 50257,
 		context_size: int = 4,
 		architecture_type: str = "bitwise",
-		bits_per_cluster: list[int] | None = None,
+		bits_per_neuron: list[int] | None = None,
 		neurons_per_cluster: list[int] | None = None,
 		memory_mode: str = "QUAD_WEIGHTED",
 		neuron_sample_rate: float = 0.25,
@@ -48,11 +48,11 @@ class WNNConfig(PretrainedConfig):
 		Args:
 			vocab_size: Token vocabulary size (default: GPT-2 50257)
 			context_size: Number of context tokens for prediction
-			architecture_type: "bitwise" (per-cluster heterogeneous) or
+			architecture_type: "bitwise" (per-neuron heterogeneous) or
 				"tiered" (grouped by frequency)
-			bits_per_cluster: Bits per neuron for each cluster [num_clusters].
-				For bitwise: one entry per cluster.
-				For tiered: derived from tier_config.
+			bits_per_neuron: Bits per neuron [total_neurons].
+				For bitwise: one entry per neuron (length = sum of neurons_per_cluster).
+				For tiered: derived from tier_config (uniform per cluster).
 			neurons_per_cluster: Neurons per cluster [num_clusters].
 			memory_mode: RAM memory mode — "TERNARY", "QUAD_BINARY",
 				or "QUAD_WEIGHTED"
@@ -61,7 +61,7 @@ class WNNConfig(PretrainedConfig):
 			tier_config: Tiered architecture string
 				(e.g., "100,15,20;400,10,12;rest,5,8")
 			num_clusters: Total number of output clusters
-				(inferred from bits_per_cluster if not set)
+				(inferred from neurons_per_cluster if not set)
 			encoding_type: Token bit encoding — "binary" or "gray_code"
 			sparse_threshold: Bits threshold for sparse memory storage
 				(None = auto)
@@ -69,12 +69,12 @@ class WNNConfig(PretrainedConfig):
 		self.vocab_size = vocab_size
 		self.context_size = context_size
 		self.architecture_type = architecture_type
-		self.bits_per_cluster = bits_per_cluster or []
+		self.bits_per_neuron = bits_per_neuron or []
 		self.neurons_per_cluster = neurons_per_cluster or []
 		self.memory_mode = memory_mode
 		self.neuron_sample_rate = neuron_sample_rate
 		self.tier_config = tier_config
-		self.num_clusters = num_clusters or len(self.bits_per_cluster)
+		self.num_clusters = num_clusters or len(self.neurons_per_cluster)
 		self.encoding_type = encoding_type
 		self.sparse_threshold = sparse_threshold
 		super().__init__(**kwargs)
@@ -92,7 +92,7 @@ class WNNConfig(PretrainedConfig):
 		"""Create a config from a ClusterGenome object.
 
 		Args:
-			genome: A ClusterGenome with bits_per_cluster and
+			genome: A ClusterGenome with bits_per_neuron and
 				neurons_per_cluster attributes
 			vocab_size: Token vocabulary size
 			context_size: Context window size
@@ -103,11 +103,11 @@ class WNNConfig(PretrainedConfig):
 			vocab_size=vocab_size,
 			context_size=context_size,
 			architecture_type="bitwise",
-			bits_per_cluster=list(genome.bits_per_cluster),
+			bits_per_neuron=list(genome.bits_per_neuron),
 			neurons_per_cluster=list(genome.neurons_per_cluster),
 			memory_mode=memory_mode,
 			neuron_sample_rate=neuron_sample_rate,
-			num_clusters=len(genome.bits_per_cluster),
+			num_clusters=len(genome.neurons_per_cluster),
 			**kwargs,
 		)
 
@@ -126,7 +126,7 @@ class WNNConfig(PretrainedConfig):
 			vocab_size: Token vocabulary size
 			context_size: Context window size
 		"""
-		bits = []
+		bits_per_neuron = []
 		neurons = []
 		remaining = vocab_size
 
@@ -143,17 +143,18 @@ class WNNConfig(PretrainedConfig):
 				count = int(clusters_str.strip())
 			remaining -= count
 
-			bits.extend([b] * count)
+			# Each cluster has n neurons, each with b bits
+			bits_per_neuron.extend([b] * (count * n))
 			neurons.extend([n] * count)
 
 		return cls(
 			vocab_size=vocab_size,
 			context_size=context_size,
 			architecture_type="tiered",
-			bits_per_cluster=bits,
+			bits_per_neuron=bits_per_neuron,
 			neurons_per_cluster=neurons,
 			tier_config=tier_config,
-			num_clusters=len(bits),
+			num_clusters=len(neurons),
 			**kwargs,
 		)
 
@@ -164,8 +165,5 @@ class WNNConfig(PretrainedConfig):
 
 	@property
 	def total_memory_words(self) -> int:
-		"""Total memory words (2^bits * neurons) across all clusters."""
-		return sum(
-			n * (2 ** b)
-			for n, b in zip(self.neurons_per_cluster, self.bits_per_cluster)
-		)
+		"""Total memory words (2^bits) across all neurons."""
+		return sum(2 ** b for b in self.bits_per_neuron)

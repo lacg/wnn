@@ -66,7 +66,7 @@ def parse_checkpoint_file(filepath: Path) -> Optional[dict]:
     if best_genome:
         try:
             # Parse genome structure to get stats
-            bits = best_genome.get('bits_per_cluster', [])
+            bits = best_genome.get('bits_per_neuron', [])
             neurons = best_genome.get('neurons_per_cluster', [])
             connections = best_genome.get('connections_per_cluster', [])
 

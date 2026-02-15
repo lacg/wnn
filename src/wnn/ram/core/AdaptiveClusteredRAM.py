@@ -10,8 +10,8 @@ Memory objects, making it memory-efficient even with 50K clusters.
 
 Example:
     genome = ClusterGenome(
-        bits_per_cluster=[20, 20, 18, 18, ..., 8, 8],      # 50K values
-        neurons_per_cluster=[15, 15, 13, 13, ..., 5, 5],   # 50K values
+        bits_per_neuron=[20]*15 + [20]*15 + [18]*13 + ...,  # total_neurons values
+        neurons_per_cluster=[15, 15, 13, 13, ..., 5, 5],    # num_clusters values
     )
     layer = AdaptiveClusteredRAM.from_genome(genome, total_input_bits=64)
 """
@@ -75,22 +75,24 @@ class AdaptiveClusteredRAM(RAMClusterBase):
 
 		Args:
 			total_input_bits: Number of input bits (e.g., 64 for 4 tokens × 16 bits)
-			genome: ClusterGenome with bits_per_cluster and neurons_per_cluster
+			genome: ClusterGenome with bits_per_neuron and neurons_per_cluster
 			rng: Random seed for reproducible connectivity initialization
 		"""
 		super().__init__()
 
-		self.num_clusters = len(genome.bits_per_cluster)
+		self.num_clusters = len(genome.neurons_per_cluster)
 		self.total_input_bits = total_input_bits
 		self.genome = genome
 
-		# Group clusters by their (neurons, bits) configuration
-		# config_key -> list of cluster_ids
+		# Group clusters by their (neurons, max_bits) configuration
+		# For per-neuron bits, use the max bits in each cluster for grouping
 		config_to_clusters: dict[tuple[int, int], list[int]] = {}
+		offsets = genome.cluster_neuron_offsets
 
 		for cluster_id in range(self.num_clusters):
 			neurons = genome.neurons_per_cluster[cluster_id]
-			bits = genome.bits_per_cluster[cluster_id]
+			cluster_bits = genome.bits_per_neuron[offsets[cluster_id]:offsets[cluster_id + 1]]
+			bits = max(cluster_bits) if cluster_bits else 1
 			key = (neurons, bits)
 
 			if key not in config_to_clusters:
@@ -126,7 +128,7 @@ class AdaptiveClusteredRAM(RAMClusterBase):
 			group_idx += 1
 
 		# Compute totals
-		self.total_neurons = genome.total_neurons()
+		self.total_neurons = genome.total_neurons
 		self.total_memory_cells = genome.total_memory_cells()
 
 		# Check if any group needs sparse backend (>10 bits)
@@ -700,27 +702,24 @@ class AdaptiveClusteredRAM(RAMClusterBase):
 		self._gpu_cache = None
 		self._sparse_connections_cache = None
 
-	def get_cluster_config(self, cluster_id: int) -> tuple[int, int]:
+	def get_cluster_config(self, cluster_id: int) -> tuple[int, list[int]]:
 		"""
-		Get (neurons, bits) configuration for a specific cluster.
+		Get (neurons, bits_list) configuration for a specific cluster.
 
 		Args:
 			cluster_id: Physical cluster ID
 
 		Returns:
-			Tuple of (neurons_per_cluster, bits_per_neuron)
+			Tuple of (neurons_per_cluster, per_neuron_bits_list)
 		"""
-		return (
-			self.genome.neurons_per_cluster[cluster_id],
-			self.genome.bits_per_cluster[cluster_id],
-		)
+		return self.genome.get_cluster_config(cluster_id)
 
 	def get_config(self) -> dict:
 		"""Get configuration dict for model recreation."""
 		return {
 			'total_input_bits': self.total_input_bits,
 			'genome': {
-				'bits_per_cluster': self.genome.bits_per_cluster,
+				'bits_per_neuron': self.genome.bits_per_neuron,
 				'neurons_per_cluster': self.genome.neurons_per_cluster,
 			},
 		}
@@ -729,7 +728,7 @@ class AdaptiveClusteredRAM(RAMClusterBase):
 	def from_config(cls, config: dict, rng: Optional[int] = None) -> "AdaptiveClusteredRAM":
 		"""Create an AdaptiveClusteredRAM from a configuration dict."""
 		genome = ClusterGenome(
-			bits_per_cluster=config['genome']['bits_per_cluster'],
+			bits_per_neuron=config['genome']['bits_per_neuron'],
 			neurons_per_cluster=config['genome']['neurons_per_cluster'],
 		)
 		return cls(

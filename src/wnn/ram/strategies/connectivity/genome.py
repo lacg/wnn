@@ -13,7 +13,7 @@ Usage:
 
 	# Or use ClusterGenome directly (already has clone())
 	from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
-	cluster = ClusterGenome(bits_per_cluster=[16, 12], neurons_per_cluster=[10, 8])
+	cluster = ClusterGenome(bits_per_neuron=[16]*10 + [12]*8, neurons_per_cluster=[10, 8])
 """
 
 from dataclasses import dataclass
