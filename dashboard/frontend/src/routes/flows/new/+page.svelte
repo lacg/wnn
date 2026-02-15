@@ -100,17 +100,26 @@
       return [];
     }
 
-    // Bitwise 7-phase template (fixed order: grid → neurons → bits → connections)
+    // Bitwise 7-phase template (grid search first, then neurons/bits order is configurable)
     if (templateName === 'bitwise-7-phase') {
-      return [
-        { name: 'Phase 1: Grid Search (neurons × bits)', experiment_type: 'ga', optimize_bits: true, optimize_neurons: true, optimize_connections: false },
-        { name: 'Phase 2: GA Neurons', experiment_type: 'ga', optimize_bits: false, optimize_neurons: true, optimize_connections: false },
-        { name: 'Phase 3: TS Neurons (refine)', experiment_type: 'ts', optimize_bits: false, optimize_neurons: true, optimize_connections: false },
-        { name: 'Phase 4: GA Bits', experiment_type: 'ga', optimize_bits: true, optimize_neurons: false, optimize_connections: false },
-        { name: 'Phase 5: TS Bits (refine)', experiment_type: 'ts', optimize_bits: true, optimize_neurons: false, optimize_connections: false },
+      const grid: PhaseSpec = { name: 'Phase 1: Grid Search (neurons × bits)', experiment_type: 'ga', optimize_bits: true, optimize_neurons: true, optimize_connections: false };
+      const neuronsPhases: PhaseSpec[] = [
+        { name: `Phase ${order === 'neurons_first' ? 2 : 4}: GA Neurons`, experiment_type: 'ga', optimize_bits: false, optimize_neurons: true, optimize_connections: false },
+        { name: `Phase ${order === 'neurons_first' ? 3 : 5}: TS Neurons (refine)`, experiment_type: 'ts', optimize_bits: false, optimize_neurons: true, optimize_connections: false },
+      ];
+      const bitsPhases: PhaseSpec[] = [
+        { name: `Phase ${order === 'bits_first' ? 2 : 4}: GA Bits`, experiment_type: 'ga', optimize_bits: true, optimize_neurons: false, optimize_connections: false },
+        { name: `Phase ${order === 'bits_first' ? 3 : 5}: TS Bits (refine)`, experiment_type: 'ts', optimize_bits: true, optimize_neurons: false, optimize_connections: false },
+      ];
+      const connectionsPhases: PhaseSpec[] = [
         { name: 'Phase 6: GA Connections', experiment_type: 'ga', optimize_bits: false, optimize_neurons: false, optimize_connections: true },
         { name: 'Phase 7: TS Connections (refine)', experiment_type: 'ts', optimize_bits: false, optimize_neurons: false, optimize_connections: true },
       ];
+      if (order === 'bits_first') {
+        return [grid, ...bitsPhases, ...neuronsPhases, ...connectionsPhases];
+      } else {
+        return [grid, ...neuronsPhases, ...bitsPhases, ...connectionsPhases];
+      }
     }
 
     // Quick 4-phase template (neurons first, no connections phase)
@@ -290,7 +299,7 @@
               {:else if template === 'standard-6-phase'}
                 Full search: neurons &rarr; bits &rarr; connections (250 gens)
               {:else if template === 'bitwise-7-phase'}
-                Grid search &rarr; neurons &rarr; bits &rarr; connections (per-cluster)
+                Grid search + 6 optimization phases (per-cluster, 250 gens)
               {:else}
                 Add phases manually after creation
               {/if}
@@ -299,13 +308,13 @@
 
           <div class="form-group">
             <label for="phaseOrder">Phase Order</label>
-            <select id="phaseOrder" bind:value={phaseOrder} disabled={template === 'empty' || isBitwise}>
+            <select id="phaseOrder" bind:value={phaseOrder} disabled={template === 'empty'}>
               <option value="neurons_first">Neurons First</option>
               <option value="bits_first">Bits First</option>
             </select>
             <span class="field-hint">
               {#if isBitwise}
-                Fixed: grid &rarr; neurons &rarr; bits &rarr; connections
+                grid &rarr; {phaseOrder === 'neurons_first' ? 'neurons → bits' : 'bits → neurons'} &rarr; connections
               {:else if template === 'quick-4-phase'}
                 {phaseOrder === 'neurons_first' ? 'neurons → bits' : 'bits → neurons'} (no connections)
               {:else if phaseOrder === 'neurons_first'}

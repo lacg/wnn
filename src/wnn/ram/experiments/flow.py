@@ -201,6 +201,7 @@ class FlowConfig:
 		max_bits: int = 24,
 		min_neurons: int = 10,
 		max_neurons: int = 300,
+		phase_order: str = "neurons_first",
 		fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK,
 		fitness_weight_ce: float = 1.0,
 		fitness_weight_acc: float = 1.0,
@@ -212,27 +213,40 @@ class FlowConfig:
 		"""
 		Create a bitwise 7-phase flow configuration.
 
-		Matches the standalone run_bitwise_optimization.py pipeline:
-		  Phase 1: Grid Search (evaluates N×M grid of neurons×bits)
-		  Phase 2: GA Neurons (bits fixed from grid search)
-		  Phase 3: TS Neurons
-		  Phase 4: GA Bits (neurons fixed from Phase 3)
-		  Phase 5: TS Bits
-		  Phase 6: GA Connections (architecture fixed)
-		  Phase 7: TS Connections
+		Phase 1 is always Grid Search. Phases 2-5 order depends on phase_order:
+		  neurons_first: grid → neurons → bits → connections
+		  bits_first: grid → bits → neurons → connections
 
 		The grid search phase uses a special ExperimentType and evaluates
 		combinations of [50,100,150,200] neurons × [14,16,18,20] bits.
 		"""
-		phases = [
-			("Phase 1: Grid Search", ExperimentType.GA, False, True, False, {"phase_type": "grid_search"}),
-			("Phase 2: GA Neurons", ExperimentType.GA, False, True, False, {}),
-			("Phase 3: TS Neurons", ExperimentType.TS, False, True, False, {}),
-			("Phase 4: GA Bits", ExperimentType.GA, True, False, False, {}),
-			("Phase 5: TS Bits", ExperimentType.TS, True, False, False, {}),
-			("Phase 6: GA Connections", ExperimentType.GA, False, False, True, {}),
-			("Phase 7: TS Connections", ExperimentType.TS, False, False, True, {}),
+		# Grid search is always first
+		grid_phase = ("Phase 1: Grid Search", ExperimentType.GA, False, True, False, {"phase_type": "grid_search"})
+
+		neurons_phases = [
+			("GA Neurons", ExperimentType.GA, False, True, False, {}),
+			("TS Neurons", ExperimentType.TS, False, True, False, {}),
 		]
+		bits_phases = [
+			("GA Bits", ExperimentType.GA, True, False, False, {}),
+			("TS Bits", ExperimentType.TS, True, False, False, {}),
+		]
+		connections_phases = [
+			("GA Connections", ExperimentType.GA, False, False, True, {}),
+			("TS Connections", ExperimentType.TS, False, False, True, {}),
+		]
+
+		if phase_order == "bits_first":
+			ordered = bits_phases + neurons_phases
+		else:
+			ordered = neurons_phases + bits_phases
+
+		# Number phases 2-7
+		numbered = []
+		for i, (pname, *rest) in enumerate(ordered + connections_phases, start=2):
+			numbered.append((f"Phase {i}: {pname}", *rest))
+
+		phases = [grid_phase] + numbered
 
 		experiments = []
 		for phase_name, exp_type, opt_bits, opt_neurons, opt_conns, extra_params in phases:
