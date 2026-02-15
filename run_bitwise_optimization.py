@@ -675,6 +675,19 @@ def main():
 	parser.add_argument("--gating-mode", type=int, default=0,
 						choices=[0, 1, 2],
 						help="0=TOKEN_LEVEL, 1=BIT_LEVEL, 2=DUAL_STAGE (default: 0)")
+	# Adaptation (training-time architecture modification)
+	parser.add_argument("--synaptogenesis", action="store_true",
+						help="Enable synaptogenesis (connection-level prune/grow)")
+	parser.add_argument("--neurogenesis", action="store_true",
+						help="Enable neurogenesis (cluster-level neuron add/remove)")
+	parser.add_argument("--adapt-warmup", type=int, default=10,
+						help="Generations before neurogenesis activates (default: 10)")
+	parser.add_argument("--adapt-cooldown", type=int, default=5,
+						help="Iterations between neurogenesis events per cluster (default: 5)")
+	parser.add_argument("--adapt-min-bits", type=int, default=4,
+						help="Minimum bits per neuron for adaptation (default: 4)")
+	parser.add_argument("--adapt-max-bits", type=int, default=24,
+						help="Maximum bits per neuron for adaptation (default: 24)")
 	args = parser.parse_args()
 
 	# Resolve fitness calculator type
@@ -1152,6 +1165,56 @@ def main():
 			logger=log,
 		)
 		all_results["gating"] = gated_eval
+		save()
+
+	# ── Phase 9 (optional): Training-time Adaptation ───────────────────
+	if (args.synaptogenesis or args.neurogenesis) and best_genome is not None:
+		from wnn.ram.architecture.bitwise_evaluator import AdaptationConfig
+
+		logger(f"\n{'='*70}")
+		logger(f"Phase 9: Adaptation (syn={args.synaptogenesis}, neu={args.neurogenesis})")
+		logger(f"{'='*70}")
+
+		adapt_config = AdaptationConfig(
+			synaptogenesis_enabled=args.synaptogenesis,
+			neurogenesis_enabled=args.neurogenesis,
+			warmup_generations=args.adapt_warmup,
+			cooldown_iterations=args.adapt_cooldown,
+			min_bits=args.adapt_min_bits,
+			max_bits=args.adapt_max_bits,
+		)
+
+		# Run adaptation for several passes on the best genome
+		cooldowns = None
+		for adapt_pass in range(3):
+			adapted_genome, ce, acc, stats = opt_evaluator.evaluate_with_adaptation(
+				genome=best_genome,
+				adapt_config=adapt_config,
+				generation=args.adapt_warmup + adapt_pass,  # Past warmup
+				cooldowns=cooldowns,
+			)
+			cooldowns = stats.get("cooldowns")
+			logger(f"  Pass {adapt_pass + 1}: CE={ce:.4f} Acc={acc:.2%} "
+				   f"pruned={stats['pruned']} grown={stats['grown']} "
+				   f"added={stats['added']} removed={stats['removed']}")
+
+			if stats['pruned'] + stats['grown'] + stats['added'] + stats['removed'] > 0:
+				best_genome = adapted_genome
+				best_ce = ce
+				logger(f"  → Genome adapted (total_neurons={sum(adapted_genome.neurons_per_cluster)}, "
+					   f"total_connections={sum(adapted_genome.bits_per_neuron)})")
+			else:
+				logger(f"  → No changes, adaptation converged")
+				break
+
+		# Full-eval on validation
+		adapt_result = full_evaluator.evaluate_batch_full([best_genome])[0]
+		logger(f"  Full-eval: CE={adapt_result[0]:.4f} Acc={adapt_result[1]:.2%} PPL={math.exp(adapt_result[0]):.0f}")
+		all_results["adaptation"] = {
+			"final_ce": adapt_result[0],
+			"final_accuracy": adapt_result[1],
+			"genome_stats": best_genome.stats(),
+		}
 		save()
 
 	# Save best genome separately

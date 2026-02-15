@@ -211,6 +211,20 @@ def main():
 		help="Gating threshold for majority voting (default: 0.5)"
 	)
 
+	# Adaptation (training-time architecture modification)
+	parser.add_argument(
+		"--synaptogenesis", action="store_true",
+		help="Enable synaptogenesis (connection-level prune/grow during training)"
+	)
+	parser.add_argument(
+		"--neurogenesis", action="store_true",
+		help="Enable neurogenesis (cluster-level neuron add/remove during training)"
+	)
+	parser.add_argument(
+		"--adapt-warmup", type=int, default=10,
+		help="Generations before neurogenesis activates (default: 10)"
+	)
+
 	# Dashboard integration
 	parser.add_argument(
 		"--dashboard-url", type=str, default=None,
