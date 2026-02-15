@@ -489,29 +489,30 @@ pub mod queries {
                 }
             };
 
-            // Get max_iterations: first from experiment params, then from flow config
-            let max_iterations = exp_spec.params.get("generations")
-                .or_else(|| exp_spec.params.get("iterations"))
-                .and_then(|v| v.as_i64())
-                .map(|v| v as i32)
-                .or_else(|| {
-                    // Fall back to flow-level params or grid size
-                    match exp_spec.experiment_type {
-                        crate::models::ExperimentType::GridSearch => {
-                            Some(1) // Grid search is a single step
+            // Get max_iterations: grid_search is always 1; others from params
+            let max_iterations = if exp_spec.experiment_type == crate::models::ExperimentType::GridSearch {
+                Some(1) // Grid search is a single step — always 1
+            } else {
+                exp_spec.params.get("generations")
+                    .or_else(|| exp_spec.params.get("iterations"))
+                    .and_then(|v| v.as_i64())
+                    .map(|v| v as i32)
+                    .or_else(|| {
+                        match exp_spec.experiment_type {
+                            crate::models::ExperimentType::GridSearch => unreachable!(),
+                            crate::models::ExperimentType::Ga => {
+                                config.params.get("ga_generations")
+                                    .and_then(|v| v.as_i64())
+                                    .map(|v| v as i32)
+                            }
+                            crate::models::ExperimentType::Ts => {
+                                config.params.get("ts_iterations")
+                                    .and_then(|v| v.as_i64())
+                                    .map(|v| v as i32)
+                            }
                         }
-                        crate::models::ExperimentType::Ga => {
-                            config.params.get("ga_generations")
-                                .and_then(|v| v.as_i64())
-                                .map(|v| v as i32)
-                        }
-                        crate::models::ExperimentType::Ts => {
-                            config.params.get("ts_iterations")
-                                .and_then(|v| v.as_i64())
-                                .map(|v| v as i32)
-                        }
-                    }
-                });
+                    })
+            };
 
             create_pending_experiment(
                 pool,

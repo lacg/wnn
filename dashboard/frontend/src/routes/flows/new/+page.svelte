@@ -206,8 +206,9 @@
       const enrichedExperiments = experiments.map((exp) => ({
         ...exp,
         params: {
-          generations: exp.experiment_type === 'ga' ? gaGenerations : undefined,
-          iterations: exp.experiment_type === 'ts' ? tsIterations : undefined,
+          // Grid search is a single step — don't pass generations/iterations
+          generations: (exp.phase_type === 'grid_search') ? undefined : (exp.experiment_type === 'ga' ? gaGenerations : undefined),
+          iterations: (exp.phase_type === 'grid_search') ? undefined : (exp.experiment_type === 'ts' ? tsIterations : undefined),
           population_size: populationSize,
           neighbors_per_iter: neighborsPerIter,
           ...(exp.phase_type ? { phase_type: exp.phase_type } : {}),

@@ -487,18 +487,21 @@
       // Convert experiments to ExperimentSpec format for the new API
       // Experiments are now passed separately, not in config
       const experimentSpecs = experiments.map(exp => {
+        const isGridSearch = exp.phase_type === 'grid_search';
         const isGa = exp.phase_type?.startsWith('ga');
         return {
           name: exp.name,
-          experiment_type: isGa ? 'ga' : 'ts',
+          experiment_type: isGridSearch ? 'grid_search' : (isGa ? 'ga' : 'ts'),
           optimize_bits: exp.phase_type?.includes('bits') ?? false,
           optimize_neurons: exp.phase_type?.includes('neurons') ?? false,
           optimize_connections: exp.phase_type?.includes('connections') ?? false,
           params: {
-            generations: isGa ? (currentFlow.config.params.ga_generations ?? 250) : undefined,
-            iterations: !isGa ? (currentFlow.config.params.ts_iterations ?? 250) : undefined,
+            // Grid search is a single step — don't pass generations/iterations
+            generations: isGridSearch ? undefined : (isGa ? (currentFlow.config.params.ga_generations ?? 250) : undefined),
+            iterations: isGridSearch ? undefined : (!isGa ? (currentFlow.config.params.ts_iterations ?? 250) : undefined),
             population_size: currentFlow.config.params.population_size ?? 50,
             neighbors_per_iter: currentFlow.config.params.neighbors_per_iter ?? 50,
+            ...(isGridSearch ? { phase_type: 'grid_search' } : {}),
           }
         };
       });
