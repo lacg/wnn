@@ -1914,7 +1914,9 @@ class GenericTSStrategy(ABC, Generic[T]):
 		"""Generate and evaluate neighbors for one iteration.
 
 		Override in subclasses for Rust-accelerated neighbor generation.
-		Default: Python single-path — all N neighbors from best-ranked genome.
+		Default: Python path with retry loop — generates batches of candidates,
+		evaluates them, and retries until target_count viable neighbors found
+		or max_attempts reached. Falls back to best-N if threshold not met.
 
 		Args:
 			best_genome: Best genome by fitness ranking (used as mutation source)
@@ -1926,41 +1928,63 @@ class GenericTSStrategy(ABC, Generic[T]):
 		Returns list of (genome, ce, accuracy) tuples for viable neighbors.
 		"""
 		cfg = self._config
+		max_attempts = n_neighbors * 5
+		total_evaluated = 0
 
-		# Generate N candidates from best genome
-		candidates: list[tuple[T, Any]] = []
-		for _ in range(n_neighbors):
-			neighbor, move = self.mutate_genome(self.clone_genome(best_genome), cfg.mutation_rate)
-			if not self.is_tabu_move(move, tabu_list):
-				candidates.append((neighbor, move))
+		viable: list[tuple[T, Any, float, Optional[float]]] = []  # (genome, move, ce, acc)
+		all_below_threshold: list[tuple[T, Any, float, Optional[float]]] = []
 
-		if not candidates:
-			return []
+		while len(viable) < n_neighbors and total_evaluated < max_attempts:
+			remaining = n_neighbors - len(viable)
+			batch_n = min(remaining + 5, n_neighbors, max_attempts - total_evaluated)
+			if batch_n <= 0:
+				break
 
-		# Evaluate all candidates (pass iteration info for per-batch logging)
-		if self._batch_evaluate_fn is not None:
-			to_eval = [n for n, _ in candidates]
-			results = self._batch_evaluate_fn(
-				to_eval, min_accuracy=threshold,
-				generation=iteration, total_generations=self._config.iterations,
-			)
-			fitness_values = [r[0] for r in results]
-			accuracy_values = [r[1] for r in results]
-		else:
-			fitness_values = [self._evaluate_fn(n) for n, _ in candidates]
-			accuracy_values = [None] * len(candidates)
+			# Generate batch of candidates
+			candidates: list[tuple[T, Any]] = []
+			for _ in range(batch_n):
+				neighbor, move = self.mutate_genome(self.clone_genome(best_genome), cfg.mutation_rate)
+				if not self.is_tabu_move(move, tabu_list):
+					candidates.append((neighbor, move))
 
-		# Build evaluated list: (genome, move, ce, acc)
-		evaluated = [(n, m, f, a) for (n, m), f, a in zip(candidates, fitness_values, accuracy_values)]
+			if not candidates:
+				total_evaluated += batch_n
+				continue
 
-		# Filter by threshold
-		viable = [(n, m, f, a) for n, m, f, a in evaluated if a is None or a >= threshold]
+			# Evaluate batch
+			if self._batch_evaluate_fn is not None:
+				to_eval = [n for n, _ in candidates]
+				results = self._batch_evaluate_fn(
+					to_eval, min_accuracy=threshold,
+					generation=iteration, total_generations=self._config.iterations,
+				)
+				fitness_values = [r[0] for r in results]
+				accuracy_values = [r[1] for r in results]
+			else:
+				fitness_values = [self._evaluate_fn(n) for n, _ in candidates]
+				accuracy_values = [None] * len(candidates)
+
+			total_evaluated += len(candidates)
+
+			# Sort into viable vs below-threshold
+			for (n, m), f, a in zip(candidates, fitness_values, accuracy_values):
+				if a is None or a >= threshold:
+					viable.append((n, m, f, a))
+				else:
+					all_below_threshold.append((n, m, f, a))
+
+		# If not enough viable, fall back to best by accuracy then CE
 		if not viable:
-			viable = sorted(evaluated, key=lambda x: x[2])[:1]
+			if all_below_threshold:
+				all_below_threshold.sort(key=lambda x: (-(x[3] or 0.0), x[2]))
+				viable = all_below_threshold[:1]
+		elif len(viable) < n_neighbors:
+			all_below_threshold.sort(key=lambda x: (-(x[3] or 0.0), x[2]))
+			need = n_neighbors - len(viable)
+			viable.extend(all_below_threshold[:need])
 
 		# Update tabu list with best neighbor's move
 		if viable:
-			# Use fitness calculator to find best neighbor for tabu tracking
 			viable_3t = [(n, f, a or 0.0) for n, m, f, a in viable]
 			ranked = self._fitness_calculator.rank(viable_3t)
 			best_idx = next(
