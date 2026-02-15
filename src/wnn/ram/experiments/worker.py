@@ -579,8 +579,8 @@ class FlowWorker:
             if phase_type:
                 # API format: phase_type like "ga_neurons", "ts_bits", "ga_connections", "grid_search"
                 if phase_type == "grid_search":
-                    experiment_type = ExperimentType.GA
-                    optimize_neurons = True
+                    experiment_type = ExperimentType.GRID_SEARCH
+                    optimize_neurons = False
                     optimize_bits = False
                     optimize_connections = False
                 else:
@@ -602,14 +602,25 @@ class FlowWorker:
             exp_weight_ce = exp_data.get("fitness_weight_ce") or default_weight_ce
             exp_weight_acc = exp_data.get("fitness_weight_acc") or default_weight_acc
 
+            # Grid search: set grid params and correct max_iterations
+            neurons_grid = params.get("neurons_grid", [50, 100, 150, 200])
+            bits_grid = params.get("bits_grid", [14, 16, 18, 20])
+            grid_top_k = params.get("grid_top_k", 3)
+            pop_size = exp_data.get("population_size") or params.get("population_size", 50)
+
+            if experiment_type == ExperimentType.GRID_SEARCH:
+                max_iters = len(neurons_grid) * len(bits_grid)
+            else:
+                max_iters = exp_data.get("max_iterations") or params.get("ga_generations", 250)
+
             exp_config = ExperimentConfig(
                 name=exp_data.get("name", "Unnamed"),
                 experiment_type=experiment_type,
                 optimize_bits=optimize_bits,
                 optimize_neurons=optimize_neurons,
                 optimize_connections=optimize_connections,
-                generations=exp_data.get("max_iterations") or params.get("ga_generations", 250),
-                population_size=exp_data.get("population_size") or params.get("population_size", 50),
+                generations=max_iters,
+                population_size=pop_size,
                 iterations=exp_data.get("max_iterations") or params.get("ts_iterations", 250),
                 neighbors_per_iter=params.get("neighbors_per_iter", 50),
                 patience=patience,
@@ -625,6 +636,10 @@ class FlowWorker:
                 bitwise_max_bits=params.get("max_bits"),
                 bitwise_min_neurons=params.get("min_neurons"),
                 bitwise_max_neurons=params.get("max_neurons"),
+                # Grid search params
+                neurons_grid=neurons_grid if experiment_type == ExperimentType.GRID_SEARCH else None,
+                bits_grid=bits_grid if experiment_type == ExperimentType.GRID_SEARCH else None,
+                grid_top_k=grid_top_k,
             )
             exp_configs.append(exp_config)
 

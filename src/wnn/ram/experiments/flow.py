@@ -221,7 +221,7 @@ class FlowConfig:
 		combinations of [50,100,150,200] neurons × [14,16,18,20] bits.
 		"""
 		# Grid search is always first
-		grid_phase = ("Phase 1: Grid Search", ExperimentType.GA, False, True, False, {"phase_type": "grid_search"})
+		grid_phase = ("Phase 1: Grid Search", ExperimentType.GRID_SEARCH, False, False, False, {"phase_type": "grid_search"})
 
 		neurons_phases = [
 			("GA Neurons", ExperimentType.GA, False, True, False, {}),
@@ -248,6 +248,10 @@ class FlowConfig:
 
 		phases = [grid_phase] + numbered
 
+		# Default grid for grid search
+		default_neurons_grid = [50, 100, 150, 200]
+		default_bits_grid = [14, 16, 18, 20]
+
 		experiments = []
 		for phase_name, exp_type, opt_bits, opt_neurons, opt_conns, extra_params in phases:
 			config = ExperimentConfig(
@@ -271,6 +275,11 @@ class FlowConfig:
 				bitwise_min_neurons=min_neurons,
 				bitwise_max_neurons=max_neurons,
 			)
+			# Grid search: set grid params and correct max_iterations
+			if exp_type == ExperimentType.GRID_SEARCH:
+				config.neurons_grid = default_neurons_grid
+				config.bits_grid = default_bits_grid
+				config.generations = len(default_neurons_grid) * len(default_bits_grid)
 			# Store extra params for phase_type override
 			config._extra_params = extra_params
 			experiments.append(config)
@@ -495,9 +504,13 @@ class Flow:
 					self._experiment_ids[idx] = existing_exp["id"]
 					self.log(f"Found existing experiment {existing_exp['id']}: {exp_config.name} (sequence_order={idx})")
 				else:
-					opt_target = "bits" if exp_config.optimize_bits else "neurons" if exp_config.optimize_neurons else "connections"
-					phase_type = f"{'ga' if exp_config.experiment_type == ExperimentType.GA else 'ts'}_{opt_target}"
-					max_iters = exp_config.generations if exp_config.experiment_type == ExperimentType.GA else exp_config.iterations
+					if exp_config.experiment_type == ExperimentType.GRID_SEARCH:
+						phase_type = "grid_search"
+						max_iters = exp_config.generations  # Set to grid size
+					else:
+						opt_target = "bits" if exp_config.optimize_bits else "neurons" if exp_config.optimize_neurons else "connections"
+						phase_type = f"{'ga' if exp_config.experiment_type == ExperimentType.GA else 'ts'}_{opt_target}"
+						max_iters = exp_config.generations if exp_config.experiment_type == ExperimentType.GA else exp_config.iterations
 
 					exp_id = self.tracker.create_pending_experiment(
 						name=exp_config.name,
@@ -577,8 +590,11 @@ class Flow:
 					tier_config_str = ";".join(tier_parts)
 
 				# Determine phase type string for tracking
-				opt_target = "bits" if exp_config.optimize_bits else "neurons" if exp_config.optimize_neurons else "connections"
-				phase_type = f"{'ga' if exp_config.experiment_type == ExperimentType.GA else 'ts'}_{opt_target}"
+				if exp_config.experiment_type == ExperimentType.GRID_SEARCH:
+					phase_type = "grid_search"
+				else:
+					opt_target = "bits" if exp_config.optimize_bits else "neurons" if exp_config.optimize_neurons else "connections"
+					phase_type = f"{'ga' if exp_config.experiment_type == ExperimentType.GA else 'ts'}_{opt_target}"
 
 				# Check if experiment already exists (created when flow was queued from dashboard)
 				existing_experiment_id = self._experiment_ids.get(idx)

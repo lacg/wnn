@@ -164,6 +164,7 @@ pub struct ExperimentSpec {
 pub enum ExperimentType {
     Ga,
     Ts,
+    GridSearch,
 }
 
 // =============================================================================

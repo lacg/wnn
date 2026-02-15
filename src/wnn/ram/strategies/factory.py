@@ -257,6 +257,7 @@ class OptimizerStrategyType(IntEnum):
 	# Architecture optimization (adaptive clustered RAM)
 	ARCHITECTURE_GA = auto()
 	ARCHITECTURE_TS = auto()
+	ARCHITECTURE_GRID_SEARCH = auto()
 
 
 class OptimizerStrategyFactory:
@@ -349,6 +350,10 @@ class OptimizerStrategyFactory:
 		fitness_weight_acc: float = 1.0,
 		# Accuracy floor: genomes below this accuracy get fitness = infinity
 		min_accuracy_floor: float | None = None,
+		# Grid search params (ARCHITECTURE_GRID_SEARCH only)
+		neurons_grid: list[int] | None = None,
+		bits_grid: list[int] | None = None,
+		grid_top_k: int = 3,
 	):
 		"""
 		Create an optimizer strategy.
@@ -495,6 +500,23 @@ class OptimizerStrategyFactory:
 					fitness_weight_ce=fitness_weight_ce,
 					fitness_weight_acc=fitness_weight_acc,
 					min_accuracy_floor=min_accuracy_floor,
+				)
+
+			case OptimizerStrategyType.ARCHITECTURE_GRID_SEARCH:
+				return OptimizerStrategyFactory._create_grid_search(
+					num_clusters=num_clusters,
+					neurons_grid=neurons_grid,
+					bits_grid=bits_grid,
+					top_k=grid_top_k,
+					population_size=population_size,
+					total_input_bits=total_input_bits,
+					seed=seed,
+					logger=logger,
+					batch_evaluator=batch_evaluator,
+					shutdown_check=shutdown_check,
+					fitness_calculator_type=fitness_calculator_type,
+					fitness_weight_ce=fitness_weight_ce,
+					fitness_weight_acc=fitness_weight_acc,
 				)
 
 			case OptimizerStrategyType.CONNECTIVITY_GA:
@@ -786,3 +808,44 @@ class OptimizerStrategyFactory:
 			mutation_rate=mutation_rate,
 		)
 		return SimulatedAnnealingStrategy(config=config, seed=seed, verbose=verbose)
+
+	@staticmethod
+	def _create_grid_search(
+		num_clusters: int,
+		neurons_grid: list[int] | None,
+		bits_grid: list[int] | None,
+		top_k: int,
+		population_size: int,
+		total_input_bits: int | None,
+		seed: int | None,
+		logger: Any,
+		batch_evaluator: Any,
+		shutdown_check: Any,
+		fitness_calculator_type: Any,
+		fitness_weight_ce: float,
+		fitness_weight_acc: float,
+	):
+		"""Create a GridSearchStrategy for architecture evaluation."""
+		from wnn.ram.fitness import FitnessCalculatorType
+		from wnn.ram.strategies.connectivity.architecture_strategies import (
+			GridSearchStrategy,
+			GridSearchConfig,
+		)
+		config = GridSearchConfig(
+			num_clusters=num_clusters,
+			neurons_grid=neurons_grid or [50, 100, 150, 200],
+			bits_grid=bits_grid or [14, 16, 18, 20],
+			top_k=top_k,
+			population_size=population_size,
+			total_input_bits=total_input_bits,
+			fitness_calculator_type=fitness_calculator_type or FitnessCalculatorType.HARMONIC_RANK,
+			fitness_weight_ce=fitness_weight_ce,
+			fitness_weight_acc=fitness_weight_acc,
+		)
+		return GridSearchStrategy(
+			config=config,
+			batch_evaluator=batch_evaluator,
+			seed=seed,
+			logger=logger,
+			shutdown_check=shutdown_check,
+		)

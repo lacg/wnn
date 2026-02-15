@@ -22,8 +22,9 @@ from wnn.ram.experiments.phased_search import PhaseResult
 
 class ExperimentType(IntEnum):
 	"""How we optimize."""
-	GA = 0    # Genetic Algorithm
-	TS = 1    # Tabu Search
+	GA = 0           # Genetic Algorithm
+	TS = 1           # Tabu Search
+	GRID_SEARCH = 2  # Grid search over neuron × bit configurations
 
 
 class ClusterType(IntEnum):
@@ -97,6 +98,11 @@ class ExperimentConfig:
 	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.NORMALIZED
 	fitness_weight_ce: float = 1.0
 	fitness_weight_acc: float = 1.0
+
+	# Grid search configuration (only used when experiment_type=GRID_SEARCH)
+	neurons_grid: Optional[list[int]] = None   # e.g. [50, 100, 150, 200]
+	bits_grid: Optional[list[int]] = None       # e.g. [14, 16, 18, 20]
+	grid_top_k: int = 3                         # Top-K configs to seed population
 
 	def to_dict(self) -> dict[str, Any]:
 		"""Convert to dictionary for JSON serialization.
@@ -336,11 +342,14 @@ class Experiment:
 		self.log("")
 
 		# Determine strategy type
+		is_grid_search = cfg.experiment_type == ExperimentType.GRID_SEARCH
 		is_ga = cfg.experiment_type == ExperimentType.GA
-		strategy_type = (
-			OptimizerStrategyType.ARCHITECTURE_GA if is_ga
-			else OptimizerStrategyType.ARCHITECTURE_TS
-		)
+		if is_grid_search:
+			strategy_type = OptimizerStrategyType.ARCHITECTURE_GRID_SEARCH
+		elif is_ga:
+			strategy_type = OptimizerStrategyType.ARCHITECTURE_GA
+		else:
+			strategy_type = OptimizerStrategyType.ARCHITECTURE_TS
 
 		# Determine num_clusters based on cluster type
 		if cfg.cluster_type == ClusterType.BITWISE:
@@ -392,7 +401,12 @@ class Experiment:
 			self.log(f"  Tier0-only mode: mutating first {tier0_clusters} clusters")
 
 		# Type-specific kwargs
-		if is_ga:
+		if is_grid_search:
+			strategy_kwargs["neurons_grid"] = cfg.neurons_grid
+			strategy_kwargs["bits_grid"] = cfg.bits_grid
+			strategy_kwargs["grid_top_k"] = cfg.grid_top_k
+			strategy_kwargs["population_size"] = cfg.population_size
+		elif is_ga:
 			strategy_kwargs["generations"] = cfg.generations
 			strategy_kwargs["population_size"] = cfg.population_size
 			strategy_kwargs["phase_name"] = cfg.name
@@ -455,7 +469,10 @@ class Experiment:
 		result = None
 		was_shutdown = False
 		try:
-			if is_ga:
+			if is_grid_search:
+				# Grid search ignores initial genome/population — evaluates fresh configs
+				result = strategy.optimize(evaluate_fn=None)
+			elif is_ga:
 				seed_pop = initial_population or ([initial_genome] if initial_genome else None)
 				result = strategy.optimize(
 					evaluate_fn=None,

@@ -476,11 +476,17 @@ pub mod queries {
                 } else {
                     "connections"
                 };
-                let exp_type = match exp_spec.experiment_type {
-                    crate::models::ExperimentType::Ga => "ga",
-                    crate::models::ExperimentType::Ts => "ts",
-                };
-                format!("{}_{}", exp_type, opt_target)
+                match exp_spec.experiment_type {
+                    crate::models::ExperimentType::GridSearch => "grid_search".to_string(),
+                    _ => {
+                        let exp_type = match exp_spec.experiment_type {
+                            crate::models::ExperimentType::Ga => "ga",
+                            crate::models::ExperimentType::Ts => "ts",
+                            crate::models::ExperimentType::GridSearch => unreachable!(),
+                        };
+                        format!("{}_{}", exp_type, opt_target)
+                    }
+                }
             };
 
             // Get max_iterations: first from experiment params, then from flow config
@@ -489,14 +495,31 @@ pub mod queries {
                 .and_then(|v| v.as_i64())
                 .map(|v| v as i32)
                 .or_else(|| {
-                    // Fall back to flow-level ga_generations/ts_iterations
-                    let key = match exp_spec.experiment_type {
-                        crate::models::ExperimentType::Ga => "ga_generations",
-                        crate::models::ExperimentType::Ts => "ts_iterations",
-                    };
-                    config.params.get(key)
-                        .and_then(|v| v.as_i64())
-                        .map(|v| v as i32)
+                    // Fall back to flow-level params or grid size
+                    match exp_spec.experiment_type {
+                        crate::models::ExperimentType::GridSearch => {
+                            // Grid search: neurons_grid × bits_grid (defaults 4×4=16)
+                            let n_neurons = config.params.get("neurons_grid")
+                                .and_then(|v| v.as_array())
+                                .map(|a| a.len())
+                                .unwrap_or(4);
+                            let n_bits = config.params.get("bits_grid")
+                                .and_then(|v| v.as_array())
+                                .map(|a| a.len())
+                                .unwrap_or(4);
+                            Some((n_neurons * n_bits) as i32)
+                        }
+                        crate::models::ExperimentType::Ga => {
+                            config.params.get("ga_generations")
+                                .and_then(|v| v.as_i64())
+                                .map(|v| v as i32)
+                        }
+                        crate::models::ExperimentType::Ts => {
+                            config.params.get("ts_iterations")
+                                .and_then(|v| v.as_i64())
+                                .map(|v| v as i32)
+                        }
+                    }
                 });
 
             create_pending_experiment(

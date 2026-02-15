@@ -118,14 +118,16 @@
 
       if (expRes.ok) {
         const newExp = await expRes.json();
-        // Only update fields that change during execution
+        // Update fields that change during execution
         experiment.status = newExp.status;
+        experiment.started_at = newExp.started_at;
         experiment.current_iteration = newExp.current_iteration;
         experiment.best_ce = newExp.best_ce;
         experiment.best_accuracy = newExp.best_accuracy;
         experiment.ended_at = newExp.ended_at;
         experiment.gating_status = newExp.gating_status;
         experiment.gating_results = newExp.gating_results;
+        experiment = experiment; // Trigger Svelte reactivity for duration display
 
         // Also update this experiment's status in flowExperiments for Flow Progress bar
         if (flowExperiments.length > 0) {

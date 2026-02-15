@@ -71,7 +71,7 @@ public enum CheckpointType: String, Codable, CaseIterable {
 }
 
 public enum ExperimentType: String, Codable {
-    case ga, ts, unknown
+    case ga, ts, grid_search, unknown
 
     public init(from decoder: Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
@@ -82,6 +82,7 @@ public enum ExperimentType: String, Codable {
         switch self {
         case .ga: return "GA"
         case .ts: return "TS"
+        case .grid_search: return "Grid"
         case .unknown: return "?"
         }
     }

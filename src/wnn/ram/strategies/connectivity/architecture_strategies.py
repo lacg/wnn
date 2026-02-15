@@ -4,6 +4,11 @@ Architecture optimization strategies using generic GA/TS base classes.
 These implement ClusterGenome-specific operations while reusing the core
 GA/TS algorithms from generic_strategies.py.
 
+Strategies:
+- ArchitectureGAStrategy: GA-based architecture optimization
+- ArchitectureTSStrategy: Tabu Search architecture optimization
+- GridSearchStrategy: One-shot evaluation of neuron × bit configurations
+
 Features:
 - Rust/Metal batch evaluation support for parallel genome evaluation
 - Population seeding between phases (GA → TS → GA → ...)
@@ -1623,3 +1628,284 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 
 		return result
 
+
+# =============================================================================
+# Grid Search Strategy
+# =============================================================================
+
+@dataclass
+class GridSearchConfig:
+	"""Configuration for grid search over neuron × bit combinations."""
+	num_clusters: int
+	neurons_grid: list[int] = field(default_factory=lambda: [50, 100, 150, 200])
+	bits_grid: list[int] = field(default_factory=lambda: [14, 16, 18, 20])
+	top_k: int = 3
+	population_size: int = 50  # Total genomes in output population
+	total_input_bits: Optional[int] = None
+	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK
+	fitness_weight_ce: float = 1.0
+	fitness_weight_acc: float = 1.0
+
+
+class GridSearchStrategy:
+	"""
+	One-shot evaluation of neuron × bit configurations.
+
+	Unlike GA/TS which iteratively optimize, grid search evaluates
+	each (neurons, bits) combination once and ranks by fitness.
+	Top-K configurations get proportionally more representation
+	in the output population, which seeds the next phase.
+
+	Each grid point is recorded as an iteration for dashboard tracking.
+
+	Evaluation uses the BitwiseEvaluator (Rust + Metal) for fast
+	train+eval. All grid configs are batched together so the evaluator
+	can leverage parallel CPU training + GPU forward passes.
+	"""
+
+	def __init__(
+		self,
+		config: GridSearchConfig,
+		batch_evaluator: Optional[Any] = None,
+		seed: Optional[int] = None,
+		logger: Optional[Callable[[str], None]] = None,
+		shutdown_check: Optional[Callable[[], bool]] = None,
+	):
+		self._config = config
+		self._batch_evaluator = batch_evaluator
+		self._seed = seed
+		self._rng = random.Random(seed)
+		self._log = logger or (lambda x: None)
+		self._shutdown_check = shutdown_check
+		self._tracker = None
+		self._tracker_experiment_id = None
+
+	@property
+	def name(self) -> str:
+		return "GridSearch"
+
+	def set_tracker(self, tracker: "ExperimentTracker", experiment_id: int, _unused: Optional[int] = None) -> None:
+		"""Set the experiment tracker for iteration recording."""
+		self._tracker = tracker
+		self._tracker_experiment_id = experiment_id
+
+	def _create_genome(self, neurons_per_cluster: int, bits_per_neuron: int) -> 'ClusterGenome':
+		"""Create a genome with uniform neurons/bits and random connections."""
+		from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
+
+		cfg = self._config
+		neurons = [neurons_per_cluster] * cfg.num_clusters
+		total_neurons = sum(neurons)
+		bits = [bits_per_neuron] * total_neurons
+
+		connections = None
+		if cfg.total_input_bits is not None:
+			connections = []
+			for b in bits:
+				for _ in range(b):
+					connections.append(self._rng.randint(0, cfg.total_input_bits - 1))
+
+		return ClusterGenome(bits_per_neuron=bits, neurons_per_cluster=neurons, connections=connections)
+
+	def optimize(
+		self,
+		evaluate_fn: Optional[Callable] = None,
+		initial_genome: Optional['ClusterGenome'] = None,
+		initial_population: Optional[list['ClusterGenome']] = None,
+		**kwargs,
+	) -> OptimizerResult['ClusterGenome']:
+		"""
+		Run grid search: evaluate each (neurons, bits) config and rank by fitness.
+
+		All grid genomes are created first, then evaluated in a single batch
+		through the Rust+Metal evaluator for maximum throughput.
+		"""
+		import time
+		from wnn.ram.fitness import FitnessCalculatorFactory
+
+		cfg = self._config
+		calculator = FitnessCalculatorFactory.create(
+			cfg.fitness_calculator_type,
+			weight_ce=cfg.fitness_weight_ce,
+			weight_acc=cfg.fitness_weight_acc,
+		)
+
+		total_configs = len(cfg.neurons_grid) * len(cfg.bits_grid)
+		self._log(f"\n{'='*70}")
+		self._log(f"Grid Search ({total_configs} configs)")
+		self._log(f"  neurons: {cfg.neurons_grid}")
+		self._log(f"  bits:    {cfg.bits_grid}")
+		self._log(f"  clusters: {cfg.num_clusters}")
+		self._log(f"{'='*70}")
+
+		# Phase 1: Create all genomes upfront
+		config_list = []  # [(neurons, bits, genome)]
+		for neurons in cfg.neurons_grid:
+			for bits in cfg.bits_grid:
+				genome = self._create_genome(neurons, bits)
+				config_list.append((neurons, bits, genome))
+
+		# Phase 2: Batch evaluate all genomes at once (Rust + Metal)
+		all_genomes = [g for _, _, g in config_list]
+		t0 = time.time()
+
+		if self._batch_evaluator is not None:
+			self._log(f"  Evaluating {total_configs} configs in batch (Rust + Metal)...")
+			evals = self._batch_evaluator.evaluate_batch(all_genomes)
+		elif evaluate_fn is not None:
+			evals = [(evaluate_fn(g), 0.0, 0.0) for g in all_genomes]
+		else:
+			raise ValueError("GridSearchStrategy requires a batch_evaluator or evaluate_fn")
+
+		batch_elapsed = time.time() - t0
+		self._log(f"  Batch evaluation: {batch_elapsed:.1f}s total, "
+				  f"{batch_elapsed/total_configs:.1f}s/config")
+
+		# Phase 3: Collect results and record iterations
+		results = []
+		for idx, ((neurons, bits, genome), (ce, acc, bit_acc)) in enumerate(
+			zip(config_list, evals)
+		):
+			per_config_elapsed = batch_elapsed / total_configs
+
+			self._log(f"  [{idx+1}/{total_configs}] n={neurons:3d}, b={bits:2d}: "
+					  f"CE={ce:.4f}  Acc={acc:.2%}")
+
+			results.append({
+				"neurons": neurons,
+				"bits": bits,
+				"ce": ce,
+				"accuracy": acc,
+				"bit_accuracy": bit_acc,
+				"elapsed_s": per_config_elapsed,
+				"genome": genome,
+			})
+
+			# Record as iteration for dashboard tracking
+			if self._tracker and self._tracker_experiment_id:
+				try:
+					avg_ce = sum(r["ce"] for r in results) / len(results)
+					avg_acc = sum(r["accuracy"] for r in results) / len(results)
+					iter_id = self._tracker.record_iteration(
+						experiment_id=self._tracker_experiment_id,
+						iteration_num=idx + 1,
+						best_ce=min(r["ce"] for r in results),
+						best_accuracy=max(r["accuracy"] for r in results),
+						avg_ce=avg_ce,
+						avg_accuracy=avg_acc,
+						elapsed_secs=per_config_elapsed,
+						candidates_total=1,
+					)
+					# Record the genome evaluation for this iteration
+					if HAS_GENOME_TRACKING:
+						genome_config = self._genome_to_config(genome)
+						if genome_config:
+							genome_id = self._tracker.get_or_create_genome(
+								self._tracker_experiment_id, genome_config
+							)
+							self._tracker.record_genome_evaluation(
+								iteration_id=iter_id,
+								genome_id=genome_id,
+								position=0,
+								role=GenomeRole.INIT,
+								ce=ce,
+								accuracy=acc,
+							)
+					# Update experiment progress
+					self._tracker.update_experiment_progress(
+						self._tracker_experiment_id,
+						current_iteration=idx + 1,
+						best_ce=min(r["ce"] for r in results),
+						best_accuracy=max(r["accuracy"] for r in results),
+					)
+				except Exception as e:
+					self._log(f"  Warning: tracker error: {e}")
+
+		if not results:
+			raise ValueError("Grid search produced no results")
+
+		# Phase 4: Rank by fitness
+		population = [(r, r["ce"], r["accuracy"]) for r in results]
+		fitness_scores = calculator.fitness(population)
+		for r, score in zip(results, fitness_scores):
+			r["fitness"] = score
+		results.sort(key=lambda r: r["fitness"])
+
+		self._log(f"\n{'─'*70}")
+		self._log(f"Grid Search Rankings (by {calculator.name}):")
+		for i, r in enumerate(results):
+			marker = " ★" if i < cfg.top_k else ""
+			self._log(f"  {i+1:2d}. n={r['neurons']:3d}, b={r['bits']:2d}: "
+					  f"CE={r['ce']:.4f}  Acc={r['accuracy']:.2%}  "
+					  f"Fit={r['fitness']:.4f}{marker}")
+
+		# Phase 5: Build output population with proportional representation
+		best_result = results[0]
+		best_genome = best_result["genome"]
+
+		top_k = min(cfg.top_k, len(results))
+		weights = list(range(top_k, 0, -1))  # [K, K-1, ..., 1]
+		total_weight = sum(weights)
+		genomes_per_config = [
+			max(1, round(w / total_weight * cfg.population_size)) for w in weights
+		]
+
+		# Adjust to hit exact population_size
+		while sum(genomes_per_config) > cfg.population_size:
+			for i in range(len(genomes_per_config) - 1, -1, -1):
+				if genomes_per_config[i] > 1:
+					genomes_per_config[i] -= 1
+					break
+		while sum(genomes_per_config) < cfg.population_size:
+			genomes_per_config[0] += 1
+
+		output_population = []
+		population_metrics = []
+		for i in range(top_k):
+			r = results[i]
+			n_genomes = genomes_per_config[i]
+			for _ in range(n_genomes):
+				# New genome with same config but fresh random connections
+				genome = self._create_genome(r["neurons"], r["bits"])
+				output_population.append(genome)
+				population_metrics.append((r["ce"], r["accuracy"]))
+
+			self._log(f"  Config n={r['neurons']:3d}, b={r['bits']:2d} → {n_genomes} genomes")
+
+		self._log(f"\nPopulation: {len(output_population)} genomes from top-{top_k} configs")
+
+		# Build OptimizerResult
+		worst_ce = results[-1]["ce"]
+		best_ce = best_result["ce"]
+		improvement = ((worst_ce - best_ce) / worst_ce * 100) if worst_ce > 0 else 0.0
+
+		return OptimizerResult(
+			initial_genome=best_genome,
+			best_genome=best_genome,
+			initial_fitness=worst_ce,
+			final_fitness=best_ce,
+			improvement_percent=improvement,
+			iterations_run=len(results),
+			method_name="GridSearch",
+			history=[(i + 1, r["ce"]) for i, r in enumerate(results)],
+			early_stopped=False,
+			stop_reason=StopReason.MAX_ITERATIONS,
+			final_population=output_population,
+			population_metrics=population_metrics,
+			initial_accuracy=results[-1]["accuracy"],
+			final_accuracy=best_result["accuracy"],
+			final_threshold=None,
+		)
+
+	def _genome_to_config(self, genome: 'ClusterGenome') -> Optional['GenomeConfig']:
+		"""Convert genome to GenomeConfig for tracker."""
+		if not HAS_GENOME_TRACKING:
+			return None
+		cfg = self._config
+		tiers = [TierConfig(
+			tier=0,
+			clusters=cfg.num_clusters,
+			neurons=genome.neurons_per_cluster[0] if genome.neurons_per_cluster else 0,
+			bits=genome.bits_per_neuron[0] if genome.bits_per_neuron else 0,
+		)]
+		return GenomeConfig(tiers=tiers)

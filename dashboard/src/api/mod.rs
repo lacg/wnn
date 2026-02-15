@@ -903,11 +903,17 @@ async fn add_experiment_to_flow(
     } else {
         "connections"
     };
-    let exp_type = match exp_spec.experiment_type {
-        ExperimentType::Ga => "ga",
-        ExperimentType::Ts => "ts",
+    let phase_type = match exp_spec.experiment_type {
+        ExperimentType::GridSearch => "grid_search".to_string(),
+        _ => {
+            let exp_type = match exp_spec.experiment_type {
+                ExperimentType::Ga => "ga",
+                ExperimentType::Ts => "ts",
+                ExperimentType::GridSearch => unreachable!(),
+            };
+            format!("{}_{}", exp_type, opt_target)
+        }
     };
-    let phase_type = format!("{}_{}", exp_type, opt_target);
 
     // Get max_iterations: first from experiment params, then from flow config
     let max_iterations = exp_spec.params.get("generations")
@@ -915,13 +921,29 @@ async fn add_experiment_to_flow(
         .and_then(|v| v.as_i64())
         .map(|v| v as i32)
         .or_else(|| {
-            let key = match exp_spec.experiment_type {
-                ExperimentType::Ga => "ga_generations",
-                ExperimentType::Ts => "ts_iterations",
-            };
-            flow.config.params.get(key)
-                .and_then(|v| v.as_i64())
-                .map(|v| v as i32)
+            match exp_spec.experiment_type {
+                ExperimentType::GridSearch => {
+                    let n_neurons = flow.config.params.get("neurons_grid")
+                        .and_then(|v| v.as_array())
+                        .map(|a| a.len())
+                        .unwrap_or(4);
+                    let n_bits = flow.config.params.get("bits_grid")
+                        .and_then(|v| v.as_array())
+                        .map(|a| a.len())
+                        .unwrap_or(4);
+                    Some((n_neurons * n_bits) as i32)
+                }
+                ExperimentType::Ga => {
+                    flow.config.params.get("ga_generations")
+                        .and_then(|v| v.as_i64())
+                        .map(|v| v as i32)
+                }
+                ExperimentType::Ts => {
+                    flow.config.params.get("ts_iterations")
+                        .and_then(|v| v.as_i64())
+                        .map(|v| v as i32)
+                }
+            }
         });
 
     // Create the experiment (use flow's config for tier_config etc.)

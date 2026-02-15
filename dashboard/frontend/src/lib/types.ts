@@ -74,7 +74,7 @@ export interface FlowConfig {
 
 export interface ExperimentSpec {
   name: string;
-  experiment_type: 'ga' | 'ts';
+  experiment_type: 'ga' | 'ts' | 'grid_search';
   optimize_bits: boolean;
   optimize_neurons: boolean;
   optimize_connections: boolean;
