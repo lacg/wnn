@@ -53,6 +53,12 @@ public struct NewFlowView: View {
 	@State private var bitwiseMemoryMode = "QUAD_WEIGHTED"
 	@State private var bitwiseNeuronSampleRate = 0.25
 
+	// Adaptation (Baldwin/Lamarckian)
+	@State private var synaptogenesis = false
+	@State private var neurogenesis = false
+	@State private var adaptWarmup = 10
+	@State private var adaptCooldown = 5
+
 	// Add-phase form state
 	@State private var newPhaseType: ExperimentType = .ga
 	@State private var newPhaseNeurons = true
@@ -155,7 +161,11 @@ public struct NewFlowView: View {
 						minNeurons: $bitwiseMinNeurons,
 						maxNeurons: $bitwiseMaxNeurons,
 						memoryMode: $bitwiseMemoryMode,
-						neuronSampleRate: $bitwiseNeuronSampleRate
+						neuronSampleRate: $bitwiseNeuronSampleRate,
+						synaptogenesis: $synaptogenesis,
+						neurogenesis: $neurogenesis,
+						adaptWarmup: $adaptWarmup,
+						adaptCooldown: $adaptCooldown
 					)
 				} else {
 					Section("Tier Configuration") {
@@ -286,6 +296,13 @@ public struct NewFlowView: View {
 			params["max_neurons"] = AnyCodable(bitwiseMaxNeurons)
 			params["memory_mode"] = AnyCodable(bitwiseMemoryMode)
 			params["neuron_sample_rate"] = AnyCodable(bitwiseNeuronSampleRate)
+			// Adaptation (Baldwin/Lamarckian)
+			if synaptogenesis || neurogenesis {
+				params["synaptogenesis"] = AnyCodable(synaptogenesis)
+				params["neurogenesis"] = AnyCodable(neurogenesis)
+				params["adapt_warmup"] = AnyCodable(adaptWarmup)
+				params["adapt_cooldown"] = AnyCodable(adaptCooldown)
+			}
 		} else {
 			params["tier_config"] = AnyCodable(tierConfig)
 			params["tier0_only"] = AnyCodable(tier0Only)

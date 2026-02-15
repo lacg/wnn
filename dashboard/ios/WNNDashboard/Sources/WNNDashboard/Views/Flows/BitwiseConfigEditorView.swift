@@ -10,6 +10,10 @@ public struct BitwiseConfigEditorView: View {
 	@Binding var maxNeurons: Int
 	@Binding var memoryMode: String
 	@Binding var neuronSampleRate: Double
+	@Binding var synaptogenesis: Bool
+	@Binding var neurogenesis: Bool
+	@Binding var adaptWarmup: Int
+	@Binding var adaptCooldown: Int
 
 	public init(
 		numClusters: Binding<Int>,
@@ -18,7 +22,11 @@ public struct BitwiseConfigEditorView: View {
 		minNeurons: Binding<Int>,
 		maxNeurons: Binding<Int>,
 		memoryMode: Binding<String>,
-		neuronSampleRate: Binding<Double>
+		neuronSampleRate: Binding<Double>,
+		synaptogenesis: Binding<Bool> = .constant(false),
+		neurogenesis: Binding<Bool> = .constant(false),
+		adaptWarmup: Binding<Int> = .constant(10),
+		adaptCooldown: Binding<Int> = .constant(5)
 	) {
 		self._numClusters = numClusters
 		self._minBits = minBits
@@ -27,6 +35,10 @@ public struct BitwiseConfigEditorView: View {
 		self._maxNeurons = maxNeurons
 		self._memoryMode = memoryMode
 		self._neuronSampleRate = neuronSampleRate
+		self._synaptogenesis = synaptogenesis
+		self._neurogenesis = neurogenesis
+		self._adaptWarmup = adaptWarmup
+		self._adaptCooldown = adaptCooldown
 	}
 
 	private let memoryModes = ["QUAD_WEIGHTED", "QUAD_BINARY", "TERNARY"]
@@ -65,6 +77,19 @@ public struct BitwiseConfigEditorView: View {
 			Text("Per-cluster neuron count range for GA/TS search")
 				.font(.caption)
 				.foregroundStyle(.secondary)
+		}
+
+		Section {
+			Toggle("Synaptogenesis", isOn: $synaptogenesis)
+			Toggle("Neurogenesis", isOn: $neurogenesis)
+			if synaptogenesis || neurogenesis {
+				Stepper("Warmup: \(adaptWarmup) gen", value: $adaptWarmup, in: 0...100)
+				Stepper("Cooldown: \(adaptCooldown) iter", value: $adaptCooldown, in: 0...50)
+			}
+		} header: {
+			Text("Adaptation (Baldwin Effect)")
+		} footer: {
+			Text("Developmental plasticity during evaluation. Neurons adapt synapses and clusters grow/shrink — evolution selects architectures that respond well to adaptation.")
 		}
 	}
 }
