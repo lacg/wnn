@@ -310,13 +310,13 @@ pub const DEFAULT_SPARSE_THRESHOLD: usize = 20;
 /// threshold where the total estimated memory fits the budget.
 /// Returns usize::MAX if all-dense fits.
 pub fn auto_sparse_threshold(
-	bits_per_cluster: &[usize],
+	max_bits_per_cluster: &[usize],
 	neurons_per_cluster: &[usize],
 	target_bytes: u64,
 	expected_train: usize,
 ) -> usize {
 	// Try all-dense first (fastest path)
-	let all_dense: u64 = bits_per_cluster.iter().zip(neurons_per_cluster.iter())
+	let all_dense: u64 = max_bits_per_cluster.iter().zip(neurons_per_cluster.iter())
 		.map(|(&b, &n)| {
 			let wpn = words_per_neuron(b);
 			(n * wpn * 8) as u64
@@ -327,12 +327,12 @@ pub fn auto_sparse_threshold(
 	}
 
 	// Find max bits in this genome
-	let max_bits = *bits_per_cluster.iter().max().unwrap_or(&0);
+	let max_bits = *max_bits_per_cluster.iter().max().unwrap_or(&0);
 
 	// Try thresholds from max_bits-1 down to 0
 	// Each step makes one more bit-width level sparse
 	for threshold in (0..max_bits).rev() {
-		let est: u64 = bits_per_cluster.iter().zip(neurons_per_cluster.iter())
+		let est: u64 = max_bits_per_cluster.iter().zip(neurons_per_cluster.iter())
 			.map(|(&b, &n)| ClusterStorage::estimated_bytes(n, b, threshold, expected_train))
 			.sum();
 		if est <= target_bytes {
