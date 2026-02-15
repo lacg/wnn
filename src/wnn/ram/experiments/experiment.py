@@ -98,6 +98,7 @@ class ExperimentConfig:
 	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.NORMALIZED
 	fitness_weight_ce: float = 1.0
 	fitness_weight_acc: float = 1.0
+	min_accuracy_floor: float = 0.0
 
 	# Grid search configuration (only used when experiment_type=GRID_SEARCH)
 	neurons_grid: Optional[list[int]] = None   # e.g. [50, 100, 150, 200]
@@ -386,6 +387,7 @@ class Experiment:
 			"fitness_calculator_type": cfg.fitness_calculator_type,
 			"fitness_weight_ce": cfg.fitness_weight_ce,
 			"fitness_weight_acc": cfg.fitness_weight_acc,
+			"min_accuracy_floor": cfg.min_accuracy_floor if cfg.min_accuracy_floor > 0 else None,
 		}
 
 		# Per-tier optimization: determine which clusters are optimizable

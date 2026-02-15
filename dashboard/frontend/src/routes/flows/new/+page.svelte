@@ -34,6 +34,8 @@
   let fitnessWeightCe = 1.0;   // Weight for CE in harmonic calculations
   let fitnessWeightAcc = 1.0;  // Weight for accuracy in harmonic calculations
   let minAccuracyFloor = 0;  // 0 = disabled, 0.003 = 0.3% floor
+  let thresholdDelta = 0.01;   // Progressive accuracy increase per phase
+  let thresholdReference = 1000;  // Generations for full threshold progress
   let contextSize = 4;
   let tierConfig = '100,15,20,true;400,10,12,false;rest,5,8,false';
 
@@ -226,6 +228,8 @@
         fitness_weight_ce: fitnessWeightCe,
         fitness_weight_acc: fitnessWeightAcc,
         min_accuracy_floor: minAccuracyFloor,
+        threshold_delta: thresholdDelta,
+        threshold_reference: thresholdReference,
         context_size: contextSize,
       };
 
@@ -439,6 +443,19 @@
           <label for="minAccuracyFloor">Accuracy Floor</label>
           <input type="number" id="minAccuracyFloor" bind:value={minAccuracyFloor} min="0" max="0.1" step="0.001" />
           <span class="field-hint">Min accuracy threshold (0.003 = 0.3%). 0 = disabled</span>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="thresholdDelta">Threshold Delta</label>
+            <input type="number" id="thresholdDelta" bind:value={thresholdDelta} min="0" max="0.1" step="0.001" />
+            <span class="field-hint">Progressive accuracy increase per phase (0.01 = 1%)</span>
+          </div>
+          <div class="form-group">
+            <label for="thresholdReference">Threshold Reference</label>
+            <input type="number" id="thresholdReference" bind:value={thresholdReference} min="1" max="10000" step="1" />
+            <span class="field-hint">Generations for full threshold progress</span>
+          </div>
         </div>
       </div>
 

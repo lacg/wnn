@@ -568,6 +568,9 @@ class FlowWorker:
         patience = params.get("patience", 10)
         fitness_percentile = params.get("fitness_percentile")
         seed = params.get("seed")
+        threshold_delta = params.get("threshold_delta", 0.01)
+        threshold_reference = params.get("threshold_reference", 1000)
+        min_accuracy_floor = params.get("min_accuracy_floor", 0.0)
         default_fitness_type = self._parse_fitness_calculator(params.get("fitness_calculator"))
         default_weight_ce = params.get("fitness_weight_ce", 1.0)
         default_weight_acc = params.get("fitness_weight_acc", 1.0)
@@ -630,6 +633,9 @@ class FlowWorker:
                 fitness_calculator_type=exp_fitness_type,
                 fitness_weight_ce=exp_weight_ce,
                 fitness_weight_acc=exp_weight_acc,
+                min_accuracy_floor=min_accuracy_floor,
+                threshold_delta=threshold_delta,
+                threshold_reference=threshold_reference,
                 seed=seed,
                 # Bitwise-specific bounds from flow params
                 bitwise_min_bits=params.get("min_bits"),
