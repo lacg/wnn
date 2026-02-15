@@ -75,6 +75,7 @@ async fn list_experiments(State(state): State<Arc<AppState>>) -> impl IntoRespon
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct CreateExperimentRequest {
     pub name: String,
     pub flow_id: Option<i64>,

@@ -295,6 +295,7 @@ pub struct Iteration {
 
 /// Unique genome configuration (deduplicated by config hash)
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct Genome {
     pub id: i64,
     pub experiment_id: i64,
@@ -320,6 +321,7 @@ pub struct Genome {
 
 /// Tier configuration for a genome
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct TierConfig {
     pub tier: i32,
     pub clusters: i32,

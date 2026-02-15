@@ -834,6 +834,7 @@ pub mod queries {
 
     /// Find stale running flows (no heartbeat in the last N seconds)
     /// Returns flows that should be re-queued
+    #[allow(dead_code)]
     pub async fn find_stale_running_flows(pool: &DbPool, stale_seconds: i64) -> Result<Vec<Flow>> {
         let cutoff = (Utc::now() - chrono::Duration::seconds(stale_seconds)).to_rfc3339();
         let rows = sqlx::query(
@@ -855,6 +856,7 @@ pub mod queries {
     }
 
     /// Re-queue a stale flow (reset status and clear pid/heartbeat)
+    #[allow(dead_code)]
     pub async fn requeue_stale_flow(pool: &DbPool, id: i64) -> Result<bool> {
         let result = sqlx::query(
             "UPDATE flows SET status = 'queued', pid = NULL, last_heartbeat = NULL WHERE id = ? AND status = 'running'"
@@ -1522,6 +1524,7 @@ pub mod queries {
     }
 
     /// Get iterations for an experiment
+    #[allow(dead_code)]
     pub async fn get_experiment_iterations(pool: &DbPool, experiment_id: i64) -> Result<Vec<Iteration>> {
         let rows = sqlx::query(
             r#"SELECT id, experiment_id, iteration_num, best_ce, best_accuracy, avg_ce, avg_accuracy,
@@ -2009,43 +2012,4 @@ pub mod queries {
         Ok(runs)
     }
 
-    // Legacy functions for backward compatibility (used by old experiments.gating_status)
-
-    /// Update gating status for an experiment (legacy)
-    pub async fn update_gating_status(
-        pool: &DbPool,
-        experiment_id: i64,
-        status: &GatingStatus,
-    ) -> Result<bool> {
-        let status_str = gating_status_to_str(status);
-
-        let result = sqlx::query(
-            "UPDATE experiments SET gating_status = ? WHERE id = ?"
-        )
-        .bind(status_str)
-        .bind(experiment_id)
-        .execute(pool)
-        .await?;
-
-        Ok(result.rows_affected() > 0)
-    }
-
-    /// Update gating results for an experiment (legacy)
-    pub async fn update_gating_results(
-        pool: &DbPool,
-        experiment_id: i64,
-        results: &GatingResults,
-    ) -> Result<bool> {
-        let results_json = serde_json::to_string(results)?;
-
-        let result = sqlx::query(
-            "UPDATE experiments SET gating_status = 'completed', gating_results = ? WHERE id = ?"
-        )
-        .bind(&results_json)
-        .bind(experiment_id)
-        .execute(pool)
-        .await?;
-
-        Ok(result.rows_affected() > 0)
-    }
 }
