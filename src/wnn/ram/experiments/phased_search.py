@@ -104,6 +104,12 @@ class PhasedSearchConfig:
 	gating_bits_per_neuron: int = 12
 	gating_threshold: float = 0.5
 
+	# Adaptation configuration (Baldwin effect)
+	synaptogenesis_enabled: bool = False
+	neurogenesis_enabled: bool = False
+	adapt_warmup: int = 10
+	adapt_cooldown: int = 5
+
 	def get_tier_boundaries(self, vocab_size: int) -> list[int]:
 		"""
 		Get tier boundaries as cluster indices.
@@ -670,6 +676,15 @@ class PhasedSearchRunner:
 		self.total_input_bits = self.config.context_size * bits_per_token
 		self.log("")
 		self.log(f"Input encoding: {self.config.context_size} tokens × {bits_per_token} bits = {self.total_input_bits} bits")
+
+		# Adaptation warning: CachedEvaluator (tiered) doesn't support adaptation yet.
+		# Use run_bitwise_optimization.py with --synaptogenesis/--neurogenesis for now.
+		if self.config.synaptogenesis_enabled or self.config.neurogenesis_enabled:
+			self.log("")
+			self.log("WARNING: Adaptation (synaptogenesis/neurogenesis) is configured but not yet")
+			self.log("  supported with the tiered CachedEvaluator backend used by coarse-fine search.")
+			self.log("  Use run_bitwise_optimization.py --phase all --synaptogenesis --neurogenesis instead.")
+			self.log("  Config is stored for future migration to BitwiseEvaluator backend.")
 
 	def _get_phase_names(self) -> dict[str, str]:
 		"""Get the phase names dict based on configured phase_order."""

@@ -8,6 +8,7 @@
 //! - **Neurogenesis** (cluster level): add/remove neurons per-cluster
 
 use rand::prelude::*;
+use rayon::prelude::*;
 use crate::neuron_memory::{self, ClusterStorage, CELLS_PER_WORD};
 
 /// Per-neuron statistics collected during training.
@@ -98,6 +99,36 @@ fn build_sample_indices(num_examples: usize, sample_size: usize, seed: u64) -> V
 	indices
 }
 
+/// Pre-compute ones-count for each input bit across sampled examples.
+///
+/// Returns `bit_ones[bit_idx]` = number of sampled examples where that bit is 1.
+/// This avoids redundant counting when multiple neurons share connections.
+fn precompute_bit_ones(
+	packed_input: &[u64],
+	words_per_example: usize,
+	sample_indices: &[usize],
+	total_input_bits: usize,
+) -> Vec<u32> {
+	let mut bit_ones = vec![0u32; total_input_bits];
+	for &ex in sample_indices {
+		let row_start = ex * words_per_example;
+		for (word_i, &word) in packed_input[row_start..row_start + words_per_example].iter().enumerate() {
+			if word == 0 { continue; }
+			let base_bit = word_i * 64;
+			let mut w = word;
+			while w != 0 {
+				let tz = w.trailing_zeros() as usize;
+				let bit_idx = base_bit + tz;
+				if bit_idx < total_input_bits {
+					bit_ones[bit_idx] += 1;
+				}
+				w &= w - 1; // clear lowest set bit
+			}
+		}
+	}
+	bit_ones
+}
+
 /// Compute per-neuron statistics from training data and memory.
 ///
 /// Uses the **bitwise multi-label** model: each cluster is an independent binary classifier.
@@ -107,6 +138,8 @@ fn build_sample_indices(num_examples: usize, sample_size: usize, seed: u64) -> V
 /// - fill_rate: fraction of address space with non-empty cells
 /// - error_rate: fraction of training examples where neuron voted incorrectly
 /// - connection_entropy: Shannon entropy of each input bit across training examples
+///
+/// Parallelized with rayon across neurons; bit counts pre-computed and shared.
 pub fn compute_neuron_stats(
 	bits_per_neuron: &[usize],
 	neurons_per_cluster: &[usize],
@@ -120,12 +153,14 @@ pub fn compute_neuron_stats(
 	config: &AdaptationConfig,
 ) -> Vec<NeuronStats> {
 	let total_neurons: usize = neurons_per_cluster.iter().sum();
-	let mut stats = Vec::with_capacity(total_neurons);
 
 	// Sample examples for stats — full scan is O(neurons*bits*examples) which is
 	// prohibitively slow (e.g. 200 neurons × 18 bits × 600K examples = 2B ops).
 	let sample_indices = build_sample_indices(num_examples, config.stats_sample_size, 42);
 	let n_sample = sample_indices.len();
+
+	// Pre-compute bit ones counts — shared across all neurons
+	let bit_ones = precompute_bit_ones(packed_input, words_per_example, &sample_indices, config.total_input_bits);
 
 	// Build connection offsets
 	let mut conn_offsets = vec![0usize];
@@ -133,78 +168,68 @@ pub fn compute_neuron_stats(
 		conn_offsets.push(conn_offsets.last().unwrap() + b);
 	}
 
+	// Build flat (global_n, cluster, local_n) tuples for parallel iteration
+	let mut neuron_info: Vec<(usize, usize, usize)> = Vec::with_capacity(total_neurons);
 	let mut global_n = 0;
 	for cluster in 0..num_clusters {
-		let n_neurons = neurons_per_cluster[cluster];
-		for local_n in 0..n_neurons {
-			let n_bits = bits_per_neuron[global_n];
-			let conn_start = conn_offsets[global_n];
-			let neuron_conns = &connections[conn_start..conn_start + n_bits];
-
-			// Connection entropy: H(p) for each connection's input bit
-			let mut conn_entropy = Vec::with_capacity(n_bits);
-			for &conn_idx in neuron_conns {
-				let mut ones = 0u32;
-				let idx = conn_idx as usize;
-				for &ex in &sample_indices {
-					let word_idx = ex * words_per_example + idx / 64;
-					let bit_idx = idx % 64;
-					if packed_input[word_idx] >> bit_idx & 1 == 1 {
-						ones += 1;
-					}
-				}
-				let p = ones as f32 / n_sample.max(1) as f32;
-				let h = if p > 0.0 && p < 1.0 {
-					-(p * p.ln() + (1.0 - p) * (1.0 - p).ln()) / std::f32::consts::LN_2
-				} else {
-					0.0
-				};
-				conn_entropy.push(h);
-			}
-
-			// Fill rate from storage (reads from memory, not examples — no sampling needed)
-			let fill_rate = storage_fill_rate(&storages[cluster], local_n, n_bits);
-
-			// Error rate: multi-label — every example has a target for this cluster
-			let mut errors = 0u32;
-			for &ex in &sample_indices {
-				let target = target_bits[ex * num_clusters + cluster];
-				// Compute address
-				let mut addr = 0u32;
-				for (bit_i, &conn_idx) in neuron_conns.iter().enumerate() {
-					let idx = conn_idx as usize;
-					let word_idx = ex * words_per_example + idx / 64;
-					let bit_idx = idx % 64;
-					if packed_input[word_idx] >> bit_idx & 1 == 1 {
-						addr |= 1 << (n_bits - 1 - bit_i);
-					}
-				}
-				let vote = storage_read(&storages[cluster], local_n, addr);
-				// Correct if vote agrees with target (>= 0.5 for 1, < 0.5 for 0)
-				let predicted_true = vote >= 0.5;
-				let target_true = target != 0;
-				if predicted_true != target_true {
-					errors += 1;
-				}
-			}
-			let error_rate = if n_sample > 0 { errors as f32 / n_sample as f32 } else { 0.0 };
-
-			stats.push(NeuronStats {
-				fill_rate,
-				error_rate,
-				connection_entropy: conn_entropy,
-			});
+		for local_n in 0..neurons_per_cluster[cluster] {
+			neuron_info.push((global_n, cluster, local_n));
 			global_n += 1;
 		}
 	}
 
-	stats
+	// Parallel per-neuron stats computation
+	neuron_info.par_iter().map(|&(global_n, cluster, local_n)| {
+		let n_bits = bits_per_neuron[global_n];
+		let conn_start = conn_offsets[global_n];
+		let neuron_conns = &connections[conn_start..conn_start + n_bits];
+
+		// Connection entropy from pre-computed bit counts
+		let conn_entropy: Vec<f32> = neuron_conns.iter().map(|&conn_idx| {
+			let ones = bit_ones[conn_idx as usize];
+			let p = ones as f32 / n_sample.max(1) as f32;
+			if p > 0.0 && p < 1.0 {
+				-(p * p.ln() + (1.0 - p) * (1.0 - p).ln()) / std::f32::consts::LN_2
+			} else {
+				0.0
+			}
+		}).collect();
+
+		// Fill rate from storage (reads from memory, not examples)
+		let fill_rate = storage_fill_rate(&storages[cluster], local_n, n_bits);
+
+		// Error rate: multi-label — every example has a target for this cluster
+		let mut errors = 0u32;
+		for &ex in &sample_indices {
+			let target = target_bits[ex * num_clusters + cluster];
+			let mut addr = 0u32;
+			for (bit_i, &conn_idx) in neuron_conns.iter().enumerate() {
+				let idx = conn_idx as usize;
+				let word_idx = ex * words_per_example + idx / 64;
+				let bit_idx = idx % 64;
+				if packed_input[word_idx] >> bit_idx & 1 == 1 {
+					addr |= 1 << (n_bits - 1 - bit_i);
+				}
+			}
+			let vote = storage_read(&storages[cluster], local_n, addr);
+			let predicted_true = vote >= 0.5;
+			let target_true = target != 0;
+			if predicted_true != target_true {
+				errors += 1;
+			}
+		}
+		let error_rate = if n_sample > 0 { errors as f32 / n_sample as f32 } else { 0.0 };
+
+		NeuronStats { fill_rate, error_rate, connection_entropy: conn_entropy }
+	}).collect()
 }
 
 /// Compute per-cluster statistics from neuron predictions.
 ///
 /// Uses **bitwise multi-label** model: `target_bits` is `[num_examples * num_clusters]`.
 /// For each cluster, ALL examples have a target (0 or 1).
+///
+/// Parallelized with rayon across clusters.
 pub fn compute_cluster_stats(
 	neuron_stats: &[NeuronStats],
 	neurons_per_cluster: &[usize],
@@ -218,7 +243,6 @@ pub fn compute_cluster_stats(
 	num_clusters: usize,
 	config: &AdaptationConfig,
 ) -> Vec<ClusterStats> {
-	let mut cluster_stats = Vec::with_capacity(num_clusters);
 	let mut conn_offsets = vec![0usize];
 	for &b in bits_per_neuron {
 		conn_offsets.push(conn_offsets.last().unwrap() + b);
@@ -234,7 +258,7 @@ pub fn compute_cluster_stats(
 	let sample_indices = build_sample_indices(num_examples, config.stats_sample_size, 43);
 	let n_sample = sample_indices.len();
 
-	for cluster in 0..num_clusters {
+	(0..num_clusters).into_par_iter().map(|cluster| {
 		let n_neurons = neurons_per_cluster[cluster];
 		let neuron_base = neuron_offsets[cluster];
 
@@ -299,12 +323,10 @@ pub fn compute_cluster_stats(
 					let my_vote = neuron_votes[local_n][s];
 					let target_true = target_bits[ex * num_clusters + cluster] != 0;
 
-					// Majority at this example
 					let majority_count: u32 = (0..n_neurons).map(|j| neuron_votes[j][s] as u32).sum();
 					let majority_vote = majority_count > (n_neurons as u32 / 2);
 					if my_vote != majority_vote { disagree += 1; }
 
-					// Correct if vote matches target
 					if my_vote == target_true { correct += 1; }
 				}
 				uniqueness[local_n] = disagree as f32 / n_sample as f32;
@@ -312,15 +334,13 @@ pub fn compute_cluster_stats(
 			}
 		}
 
-		cluster_stats.push(ClusterStats {
+		ClusterStats {
 			error_rate: cluster_error_rate,
 			mean_fill_rate: mean_fill,
 			neuron_uniqueness: uniqueness,
 			neuron_accuracy: accuracy,
-		});
-	}
-
-	cluster_stats
+		}
+	}).collect()
 }
 
 /// Synaptogenesis pass: prune low-entropy connections, grow where underfitting.
@@ -346,6 +366,20 @@ pub fn synaptogenesis_pass(
 	for &b in bits_per_neuron.iter() {
 		conn_offsets.push(conn_offsets.last().unwrap() + b);
 	}
+
+	// Pre-compute bit entropy for all input bits (used by grow path).
+	// Uses sampled examples for consistency with compute_neuron_stats.
+	let sample_indices = build_sample_indices(num_examples, config.stats_sample_size, 44);
+	let bit_ones = precompute_bit_ones(packed_input, words_per_example, &sample_indices, config.total_input_bits);
+	let n_sample = sample_indices.len();
+	let bit_entropy: Vec<f32> = bit_ones.iter().map(|&ones| {
+		let p = ones as f32 / n_sample.max(1) as f32;
+		if p > 0.0 && p < 1.0 {
+			-(p * p.ln() + (1.0 - p) * (1.0 - p).ln()) / std::f32::consts::LN_2
+		} else {
+			0.0
+		}
+	}).collect();
 
 	// Process each neuron
 	// We rebuild connections after all modifications to avoid index shifting issues
@@ -376,30 +410,15 @@ pub fn synaptogenesis_pass(
 			&& stats.fill_rate > config.grow_fill_threshold
 			&& stats.error_rate > config.grow_error_threshold
 		{
-			// Find highest-entropy unconnected input bit
+			// Find highest-entropy unconnected input bit (from precomputed table)
 			let conn_start = conn_offsets[n];
 			let used: std::collections::HashSet<i64> = connections[conn_start..conn_start + n_bits]
 				.iter().copied().collect();
 
-			// Compute entropy for all unconnected bits and pick the best
 			let mut best_bit: Option<(i64, f32)> = None;
 			for bit_idx in 0..config.total_input_bits {
 				if used.contains(&(bit_idx as i64)) { continue; }
-				// Compute entropy of this input bit
-				let mut ones = 0u32;
-				for ex in 0..num_examples {
-					let word_idx = ex * words_per_example + bit_idx / 64;
-					let bit_pos = bit_idx % 64;
-					if packed_input[word_idx] >> bit_pos & 1 == 1 {
-						ones += 1;
-					}
-				}
-				let p = ones as f32 / num_examples.max(1) as f32;
-				let h = if p > 0.0 && p < 1.0 {
-					-(p * p.ln() + (1.0 - p) * (1.0 - p).ln()) / std::f32::consts::LN_2
-				} else {
-					0.0
-				};
+				let h = bit_entropy[bit_idx];
 				if best_bit.is_none() || h > best_bit.unwrap().1 {
 					best_bit = Some((bit_idx as i64, h));
 				}

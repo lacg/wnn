@@ -346,6 +346,9 @@ def main():
 		log(f"    Neurons per gate: {args.gating_neurons}")
 		log(f"    Bits per neuron: {args.gating_bits}")
 		log(f"    Threshold: {args.gating_threshold}")
+	if args.synaptogenesis or args.neurogenesis:
+		log(f"  Adaptation (Baldwin effect): syn={args.synaptogenesis}, neu={args.neurogenesis}")
+		log(f"    Warmup: {args.adapt_warmup} generations")
 	log("")
 
 	# Load seed genome, population, and threshold if specified
@@ -413,6 +416,10 @@ def main():
 		gating_neurons_per_cluster=args.gating_neurons,
 		gating_bits_per_neuron=args.gating_bits,
 		gating_threshold=args.gating_threshold,
+		# Adaptation configuration (Baldwin effect)
+		synaptogenesis_enabled=args.synaptogenesis,
+		neurogenesis_enabled=args.neurogenesis,
+		adapt_warmup=args.adapt_warmup,
 	)
 
 	# Create dashboard client if URL provided
