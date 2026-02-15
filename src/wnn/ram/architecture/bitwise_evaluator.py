@@ -87,6 +87,7 @@ class BitwiseEvaluator:
 		pad_token_id: int = 50256,
 		memory_mode: int = 0,
 		neuron_sample_rate: float = 1.0,
+		adapt_config: Optional[AdaptationConfig] = None,
 	):
 		self._vocab_size = vocab_size
 		self._context_size = context_size
@@ -97,6 +98,8 @@ class BitwiseEvaluator:
 		self._pad_token_id = pad_token_id
 		self._memory_mode = memory_mode
 		self._neuron_sample_rate = neuron_sample_rate
+		self._adapt_config = adapt_config
+		self._generation = 0
 
 		self._train_tokens = train_tokens
 		self._eval_tokens = eval_tokens
@@ -260,6 +263,63 @@ class BitwiseEvaluator:
 			genome._cached_bit_acc = bit_acc
 		return results
 
+	def set_generation(self, gen: int) -> None:
+		"""Set current generation for adaptive evaluation warmup tracking."""
+		self._generation = gen
+
+	def _evaluate_batch_adaptive_rust(
+		self,
+		genomes: list[ClusterGenome],
+		train_subset_idx: int,
+		eval_subset_idx: int,
+	) -> list[tuple[float, float, float]]:
+		"""Evaluate with adaptation (Baldwin effect). Updates genomes IN-PLACE.
+
+		Each genome is adapted during evaluation: train → stats → adapt → retrain → eval.
+		GA/TS sees adapted fitness, so evolution selects for adaptable architectures.
+
+		Returns list of (ce, accuracy, weighted_bit_accuracy) tuples.
+		"""
+		config = self._adapt_config
+		bits_flat, neurons_flat, connections_flat = self._flatten_genomes_heterogeneous(genomes)
+		results = self._rust_cache.evaluate_genomes_adaptive(
+			bits_per_neuron_flat=bits_flat,
+			neurons_per_cluster_flat=neurons_flat,
+			connections_flat=connections_flat,
+			num_genomes=len(genomes),
+			train_subset_idx=train_subset_idx,
+			eval_subset_idx=eval_subset_idx,
+			memory_mode=self._memory_mode,
+			neuron_sample_rate=self._neuron_sample_rate,
+			rng_seed=self._seed,
+			generation=self._generation,
+			synaptogenesis_enabled=config.synaptogenesis_enabled,
+			neurogenesis_enabled=config.neurogenesis_enabled,
+			prune_entropy_threshold=config.prune_entropy_threshold,
+			grow_fill_threshold=config.grow_fill_threshold,
+			grow_error_threshold=config.grow_error_threshold,
+			min_bits=config.min_bits,
+			max_bits=config.max_bits,
+			cluster_error_threshold=config.cluster_error_threshold,
+			cluster_fill_threshold=config.cluster_fill_threshold,
+			neuron_uniqueness_threshold=config.neuron_uniqueness_threshold,
+			min_neurons=config.min_neurons,
+			max_neurons=config.max_neurons,
+			max_neurons_per_pass=config.max_neurons_per_pass,
+			warmup_generations=config.warmup_generations,
+			cooldown_iterations=config.cooldown_iterations,
+			passes_per_eval=config.passes_per_eval,
+		)
+		scores = []
+		for genome, (ce, acc, bit_acc, a_bits, a_neurons, a_conns, p, g, a, r) in zip(genomes, results):
+			# Update genome in-place with adapted architecture
+			genome.bits_per_neuron = list(a_bits)
+			genome.neurons_per_cluster = list(a_neurons)
+			genome.connections = list(a_conns)
+			genome._cached_bit_acc = bit_acc
+			scores.append((ce, acc, bit_acc))
+		return scores
+
 	# =========================================================================
 	# Python fallback evaluation
 	# =========================================================================
@@ -342,7 +402,10 @@ class BitwiseEvaluator:
 
 		if self._rust_cache is not None:
 			start = time.time()
-			results = self._evaluate_batch_rust(genomes, train_subset_idx, eval_subset_idx)
+			if self._adapt_config is not None:
+				results = self._evaluate_batch_adaptive_rust(genomes, train_subset_idx, eval_subset_idx)
+			else:
+				results = self._evaluate_batch_rust(genomes, train_subset_idx, eval_subset_idx)
 			elapsed = time.time() - start
 			log = logger if logger is not None else lambda x: None
 			if generation is not None:
@@ -847,8 +910,11 @@ class BitwiseEvaluator:
 				)
 				batch.append(mutant)
 
-			# Evaluate via Rust+Metal
-			results = self._evaluate_batch_rust(batch, train_subset_idx, eval_subset_idx)
+			# Evaluate via Rust+Metal (adaptive if config set)
+			if self._adapt_config is not None:
+				results = self._evaluate_batch_adaptive_rust(batch, train_subset_idx, eval_subset_idx)
+			else:
+				results = self._evaluate_batch_rust(batch, train_subset_idx, eval_subset_idx)
 			evaluated += len(results)
 
 			for g, (ce, acc, bit_acc) in zip(batch, results):
@@ -937,8 +1003,11 @@ class BitwiseEvaluator:
 				)
 				batch.append(child)
 
-			# Evaluate via Rust+Metal
-			results = self._evaluate_batch_rust(batch, train_subset_idx, eval_subset_idx)
+			# Evaluate via Rust+Metal (adaptive if config set)
+			if self._adapt_config is not None:
+				results = self._evaluate_batch_adaptive_rust(batch, train_subset_idx, eval_subset_idx)
+			else:
+				results = self._evaluate_batch_rust(batch, train_subset_idx, eval_subset_idx)
 			evaluated += len(results)
 
 			for g, (ce, acc, bit_acc) in zip(batch, results):

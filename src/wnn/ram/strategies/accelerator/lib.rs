@@ -4755,6 +4755,97 @@ impl BitwiseCacheWrapper {
                 pruned, grown, added, removed, cooldowns_mut))
         })
     }
+
+    /// Evaluate multiple genomes with per-genome adaptation (Baldwin effect).
+    ///
+    /// Each genome is adapted (synaptogenesis/neurogenesis) during evaluation,
+    /// so GA/TS sees adapted fitness. Returns adapted architecture per genome.
+    fn evaluate_genomes_adaptive(
+        &self,
+        py: Python<'_>,
+        bits_per_neuron_flat: Vec<usize>,
+        neurons_per_cluster_flat: Vec<usize>,
+        connections_flat: Vec<i64>,
+        num_genomes: usize,
+        train_subset_idx: usize,
+        eval_subset_idx: usize,
+        memory_mode: u8,
+        neuron_sample_rate: f32,
+        rng_seed: u64,
+        generation: usize,
+        // Adaptation config fields
+        synaptogenesis_enabled: bool,
+        neurogenesis_enabled: bool,
+        prune_entropy_threshold: f32,
+        grow_fill_threshold: f32,
+        grow_error_threshold: f32,
+        min_bits: usize,
+        max_bits: usize,
+        cluster_error_threshold: f32,
+        cluster_fill_threshold: f32,
+        neuron_uniqueness_threshold: f32,
+        min_neurons: usize,
+        max_neurons: usize,
+        max_neurons_per_pass: usize,
+        warmup_generations: usize,
+        cooldown_iterations: usize,
+        passes_per_eval: usize,
+    ) -> PyResult<Vec<(
+        f64, f64, f64,                      // ce, acc, bit_acc
+        Vec<usize>, Vec<usize>, Vec<i64>,   // adapted bits, neurons, connections
+        usize, usize, usize, usize,         // pruned, grown, added, removed
+    )>> {
+        let override_val = self.sparse_threshold_override;
+        let total_input_bits = self.inner.total_input_bits;
+
+        let config = adaptation::AdaptationConfig {
+            synaptogenesis_enabled,
+            neurogenesis_enabled,
+            prune_entropy_threshold,
+            grow_fill_threshold,
+            grow_error_threshold,
+            min_bits,
+            max_bits,
+            cluster_error_threshold,
+            cluster_fill_threshold,
+            neuron_uniqueness_threshold,
+            min_neurons,
+            max_neurons,
+            max_neurons_per_pass,
+            warmup_generations,
+            cooldown_iterations,
+            passes_per_eval,
+            total_input_bits,
+        };
+
+        py.allow_threads(|| {
+            let cache = &self.inner;
+            let train_subset = &cache.train_subsets[train_subset_idx % cache.num_parts];
+            let eval_subset = &cache.eval_subsets[eval_subset_idx % cache.num_eval_parts];
+
+            let results = bitwise_ramlm::evaluate_genomes_adaptive(
+                cache,
+                &bits_per_neuron_flat,
+                &neurons_per_cluster_flat,
+                &connections_flat,
+                num_genomes,
+                train_subset,
+                eval_subset,
+                memory_mode,
+                neuron_sample_rate,
+                rng_seed,
+                override_val,
+                &config,
+                generation,
+            );
+
+            Ok(results.into_iter().map(|r| (
+                r.ce, r.acc, r.bit_acc,
+                r.adapted_bits, r.adapted_neurons, r.adapted_connections,
+                r.pruned, r.grown, r.added, r.removed,
+            )).collect())
+        })
+    }
 }
 
 /// Python module definition

@@ -907,32 +907,28 @@ fn gpu_forward_heterogeneous(
 /// Train a single genome into pre-allocated memory, then forward pass into output slice.
 ///
 /// Per-neuron heterogeneous version: each neuron can have a different bit count.
-/// `bits_per_neuron` has length `sum(neurons_per_cluster)`.
-/// Each cluster independently uses dense or sparse storage via ClusterStorage
-/// (allocated using cluster_max_bits from layout).
+/// Train neuron memory from training data.
 ///
-/// Supports three memory modes:
-///   MODE_TERNARY (0): Majority vote (existing, default)
-///   MODE_QUAD_BINARY (1): 4-state nudging, binary threshold forward
-///   MODE_QUAD_WEIGHTED (2): 4-state nudging, weighted confidence forward
+/// Resets all cluster storage, then writes votes (TERNARY) or nudges (QUAD) into
+/// each neuron's memory cells based on training examples.
+///
+/// `bits_per_neuron` has length `sum(neurons_per_cluster)`.
+/// Each cluster independently uses dense or sparse storage via ClusterStorage.
 ///
 /// Fully sequential (no rayon, no atomics) — designed to be called from
 /// an outer par_iter over genomes.
-fn train_and_forward_into(
-    cache: &BitwiseTokenCache,
+fn train_into(
     connections: &[i64],
     bits_per_neuron: &[usize],
     neurons_per_cluster: &[usize],
+    num_clusters: usize,
     layout: &GenomeLayout,
     train_subset: &BitwiseSubset,
-    eval_subset: &BitwiseEvalSubset,
     clusters: &mut [ClusterStorage],
-    out_probs: &mut [f32],
     memory_mode: u8,
     neuron_sample_rate: f32,
     rng_seed: u64,
 ) {
-    let num_clusters = cache.num_bits;
     let num_examples = train_subset.num_examples;
 
     // Reset all cluster storage
@@ -1114,7 +1110,23 @@ fn train_and_forward_into(
             eprintln!("[BitwiseRAMLM] Unknown memory_mode={memory_mode}, falling back to TERNARY");
         }
     }
+}
 
+/// Forward-evaluate trained neuron memory on eval data, writing per-cluster probabilities.
+///
+/// Reads from immutable cluster storage. Tries Metal GPU first, falls back to CPU.
+/// Output: `out_probs[ex * num_clusters + cluster]` = P(bit=1) for that cluster.
+fn forward_eval_into(
+    connections: &[i64],
+    bits_per_neuron: &[usize],
+    neurons_per_cluster: &[usize],
+    num_clusters: usize,
+    layout: &GenomeLayout,
+    eval_subset: &BitwiseEvalSubset,
+    clusters: &[ClusterStorage],
+    out_probs: &mut [f32],
+    memory_mode: u8,
+) {
     // ===== GPU FORWARD PASS on eval data (try GPU, fall through to CPU if unavailable) =====
     #[cfg(target_os = "macos")]
     {
@@ -1234,6 +1246,35 @@ fn train_and_forward_into(
             }
         }
     }
+}
+
+/// Train neuron memory and forward-evaluate on eval data (convenience wrapper).
+///
+/// Equivalent to calling `train_into` followed by `forward_eval_into`.
+/// Kept for backward compatibility with callers that don't need the split.
+fn train_and_forward_into(
+    cache: &BitwiseTokenCache,
+    connections: &[i64],
+    bits_per_neuron: &[usize],
+    neurons_per_cluster: &[usize],
+    layout: &GenomeLayout,
+    train_subset: &BitwiseSubset,
+    eval_subset: &BitwiseEvalSubset,
+    clusters: &mut [ClusterStorage],
+    out_probs: &mut [f32],
+    memory_mode: u8,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+) {
+    let num_clusters = cache.num_bits;
+    train_into(
+        connections, bits_per_neuron, neurons_per_cluster, num_clusters,
+        layout, train_subset, clusters, memory_mode, neuron_sample_rate, rng_seed,
+    );
+    forward_eval_into(
+        connections, bits_per_neuron, neurons_per_cluster, num_clusters,
+        layout, eval_subset, clusters, out_probs, memory_mode,
+    );
 }
 
 /// Evaluate multiple genomes with per-neuron heterogeneous configs (subset training + eval).
@@ -1703,4 +1744,413 @@ pub fn train_adapt_eval(
     (adapted_bits, adapted_neurons, adapted_connections,
      ce, accuracy, weighted_bit_acc,
      total_pruned, total_grown, total_added, total_removed)
+}
+
+/// Result of adaptive evaluation for a single genome.
+pub struct AdaptiveResult {
+    pub ce: f64,
+    pub acc: f64,
+    pub bit_acc: f64,
+    pub adapted_bits: Vec<usize>,
+    pub adapted_neurons: Vec<usize>,
+    pub adapted_connections: Vec<i64>,
+    pub pruned: usize,
+    pub grown: usize,
+    pub added: usize,
+    pub removed: usize,
+}
+
+/// Evaluate multiple genomes with per-genome adaptation (Baldwin effect).
+///
+/// For each genome (in parallel):
+///   1. Train neuron memory from training data
+///   2. Compute neuron/cluster stats from trained memory
+///   3. Run synaptogenesis/neurogenesis passes to adapt architecture
+///   4. If architecture changed: re-allocate storage, retrain, re-forward
+///   5. Forward-evaluate on eval data
+///
+/// The flat score buffer layout is invariant under adaptation (always
+/// `num_eval * num_clusters` per genome), so Metal CE batching is preserved.
+///
+/// Returns one `AdaptiveResult` per genome containing adapted architecture + scores.
+pub fn evaluate_genomes_adaptive(
+    cache: &BitwiseTokenCache,
+    bits_per_neuron_flat: &[usize],
+    neurons_per_cluster_flat: &[usize],
+    connections_flat: &[i64],
+    num_genomes: usize,
+    train_subset: &BitwiseSubset,
+    eval_subset: &BitwiseEvalSubset,
+    memory_mode: u8,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+    sparse_threshold_override: Option<usize>,
+    adapt_config: &crate::adaptation::AdaptationConfig,
+    generation: usize,
+) -> Vec<AdaptiveResult> {
+    use crate::adaptation;
+    use std::sync::Mutex;
+
+    let num_clusters = cache.num_bits;
+    let num_eval = eval_subset.num_examples;
+    let scores_per_genome = num_eval * num_clusters;
+    let expected_train = train_subset.num_examples;
+    let empty_word: i64 = crate::neuron_memory::empty_word_for_mode(memory_mode);
+    let needs_adaptation = adapt_config.synaptogenesis_enabled || adapt_config.neurogenesis_enabled;
+
+    // Memory budget for concurrent genome training
+    let mem_budget: u64 = 20 * 1024 * 1024 * 1024; // 20 GiB
+    let target_per_genome = if num_genomes > 0 { mem_budget / num_genomes as u64 } else { mem_budget };
+
+    // Pre-compute per-genome offsets into bits_per_neuron_flat
+    let mut genome_bpn_offsets: Vec<usize> = Vec::with_capacity(num_genomes + 1);
+    genome_bpn_offsets.push(0);
+    for g in 0..num_genomes {
+        let base = g * num_clusters;
+        let neurons_slice = &neurons_per_cluster_flat[base..base + num_clusters];
+        let total_neurons: usize = neurons_slice.iter().sum();
+        genome_bpn_offsets.push(genome_bpn_offsets.last().unwrap() + total_neurons);
+    }
+
+    // Pre-compute per-genome layouts, thresholds, and connection offsets
+    let mut genome_layouts: Vec<GenomeLayout> = Vec::with_capacity(num_genomes);
+    let mut genome_conn_offsets: Vec<usize> = Vec::with_capacity(num_genomes);
+    let mut genome_thresholds: Vec<usize> = Vec::with_capacity(num_genomes);
+    let mut cumul_conn: usize = 0;
+
+    for g in 0..num_genomes {
+        let nc_base = g * num_clusters;
+        let neurons_slice = &neurons_per_cluster_flat[nc_base..nc_base + num_clusters];
+        let bpn_start = genome_bpn_offsets[g];
+        let bpn_end = genome_bpn_offsets[g + 1];
+        let bpn_slice = &bits_per_neuron_flat[bpn_start..bpn_end];
+
+        let cluster_max_bits: Vec<usize> = {
+            let mut v = Vec::with_capacity(num_clusters);
+            let mut off = 0;
+            for &nc in neurons_slice {
+                let max_b = bpn_slice[off..off + nc].iter().copied().max().unwrap_or(0);
+                v.push(max_b);
+                off += nc;
+            }
+            v
+        };
+
+        let threshold = match sparse_threshold_override {
+            Some(t) => t,
+            None => auto_sparse_threshold(&cluster_max_bits, neurons_slice, target_per_genome, expected_train),
+        };
+
+        let layout = compute_genome_layout(bpn_slice, neurons_slice, threshold, expected_train);
+        genome_conn_offsets.push(cumul_conn);
+        cumul_conn += layout.total_connections;
+        genome_layouts.push(layout);
+        genome_thresholds.push(threshold);
+    }
+
+    // Allocate output scores (uniform: always num_eval * num_clusters per genome)
+    let mut all_scores: Vec<f32> = vec![0.0f32; num_genomes * scores_per_genome];
+
+    // Per-genome adapted data slots (Mutex per genome — zero contention since each
+    // thread writes a unique index)
+    let adapted_data: Vec<Mutex<Option<(Vec<usize>, Vec<usize>, Vec<i64>, usize, usize, usize, usize)>>> =
+        (0..num_genomes).map(|_| Mutex::new(None)).collect();
+
+    // Phase 1: Train + Adapt + Forward (parallel over genomes with memory budgeting)
+    let genome_mem_bytes: Vec<u64> = genome_layouts.iter()
+        .map(|l| l.estimated_bytes)
+        .collect();
+
+    let mut batch_start = 0;
+    while batch_start < num_genomes {
+        // Pack genomes into this batch until budget is reached
+        let mut batch_mem: u64 = 0;
+        let mut batch_end = batch_start;
+        while batch_end < num_genomes {
+            let gm = genome_mem_bytes[batch_end];
+            // Double budget estimate for adaptive: may need re-allocate after adaptation
+            let gm_adaptive = if needs_adaptation { gm * 2 } else { gm };
+            if batch_mem + gm_adaptive > mem_budget && batch_end > batch_start {
+                break;
+            }
+            batch_mem += gm_adaptive;
+            batch_end += 1;
+        }
+
+        let batch_scores = &mut all_scores[batch_start * scores_per_genome..batch_end * scores_per_genome];
+
+        batch_scores
+            .par_chunks_mut(scores_per_genome)
+            .enumerate()
+            .for_each(|(i, score_slice)| {
+                let g = batch_start + i;
+                let layout = &genome_layouts[g];
+                let nc_base = g * num_clusters;
+                let neurons_slice = &neurons_per_cluster_flat[nc_base..nc_base + num_clusters];
+                let bpn_start = genome_bpn_offsets[g];
+                let bpn_end = genome_bpn_offsets[g + 1];
+                let bpn_slice = &bits_per_neuron_flat[bpn_start..bpn_end];
+                let conn_start = genome_conn_offsets[g];
+                let conn_end = conn_start + layout.total_connections;
+                let connections = &connections_flat[conn_start..conn_end];
+
+                let threshold = genome_thresholds[g];
+                let genome_rng_seed = rng_seed.wrapping_add(g as u64 * 1000007);
+
+                // Step 1: Allocate storage and train
+                let mut cluster_storage: Vec<ClusterStorage> = (0..num_clusters)
+                    .map(|c| ClusterStorage::new(
+                        neurons_slice[c], layout.cluster_max_bits[c],
+                        threshold, empty_word, memory_mode,
+                    ))
+                    .collect();
+
+                train_into(
+                    connections, bpn_slice, neurons_slice, num_clusters,
+                    layout, train_subset, &mut cluster_storage,
+                    memory_mode, neuron_sample_rate, genome_rng_seed,
+                );
+
+                if !needs_adaptation {
+                    // No adaptation — forward directly (same as non-adaptive path)
+                    forward_eval_into(
+                        connections, bpn_slice, neurons_slice, num_clusters,
+                        layout, eval_subset, &cluster_storage, score_slice, memory_mode,
+                    );
+                    // Store original genome as "adapted" (no changes)
+                    *adapted_data[g].lock().unwrap() = Some((
+                        bpn_slice.to_vec(), neurons_slice.to_vec(), connections.to_vec(),
+                        0, 0, 0, 0,
+                    ));
+                    return;
+                }
+
+                // Step 2: Adapt architecture
+                let mut adapted_bits = bpn_slice.to_vec();
+                let mut adapted_neurons = neurons_slice.to_vec();
+                let mut adapted_connections = connections.to_vec();
+                let mut total_pruned = 0usize;
+                let mut total_grown = 0usize;
+                let mut total_added = 0usize;
+                let mut total_removed = 0usize;
+
+                let mut adapt_rng = rand::rngs::StdRng::seed_from_u64(
+                    genome_rng_seed.wrapping_add(999)
+                );
+                // Fresh cooldowns per genome (each genome is new in GA/TS population)
+                let mut cooldowns = vec![0usize; num_clusters];
+
+                for _pass in 0..adapt_config.passes_per_eval {
+                    if adapt_config.synaptogenesis_enabled {
+                        let neuron_stats = adaptation::compute_neuron_stats(
+                            &adapted_bits, &adapted_neurons, &adapted_connections,
+                            &cluster_storage, &train_subset.packed_input,
+                            train_subset.words_per_example, &train_subset.target_bits,
+                            train_subset.num_examples, num_clusters,
+                        );
+                        let (pruned, grown) = adaptation::synaptogenesis_pass(
+                            &mut adapted_bits, &mut adapted_connections,
+                            &neuron_stats, adapt_config,
+                            &train_subset.packed_input, train_subset.words_per_example,
+                            train_subset.num_examples, &mut adapt_rng,
+                        );
+                        total_pruned += pruned;
+                        total_grown += grown;
+                    }
+
+                    if adapt_config.neurogenesis_enabled {
+                        let neuron_stats = adaptation::compute_neuron_stats(
+                            &adapted_bits, &adapted_neurons, &adapted_connections,
+                            &cluster_storage, &train_subset.packed_input,
+                            train_subset.words_per_example, &train_subset.target_bits,
+                            train_subset.num_examples, num_clusters,
+                        );
+                        let cluster_stats = adaptation::compute_cluster_stats(
+                            &neuron_stats, &adapted_neurons, &adapted_bits,
+                            &adapted_connections, &cluster_storage,
+                            &train_subset.packed_input, train_subset.words_per_example,
+                            &train_subset.target_bits, train_subset.num_examples, num_clusters,
+                        );
+                        let (added, removed) = adaptation::neurogenesis_pass(
+                            &mut adapted_bits, &mut adapted_neurons, &mut adapted_connections,
+                            &cluster_stats, adapt_config, generation, &mut cooldowns,
+                            &mut adapt_rng,
+                        );
+                        total_added += added;
+                        total_removed += removed;
+                    }
+                }
+
+                let architecture_changed = total_pruned > 0 || total_grown > 0
+                    || total_added > 0 || total_removed > 0;
+
+                // Step 3: Re-train with adapted architecture if changed, then forward
+                if architecture_changed {
+                    let new_cluster_max_bits: Vec<usize> = {
+                        let mut v = Vec::with_capacity(num_clusters);
+                        let mut off = 0;
+                        for &nc in &adapted_neurons {
+                            let max_b = adapted_bits[off..off + nc].iter().copied().max().unwrap_or(0);
+                            v.push(max_b);
+                            off += nc;
+                        }
+                        v
+                    };
+                    let new_threshold = match sparse_threshold_override {
+                        Some(t) => t,
+                        None => auto_sparse_threshold(
+                            &new_cluster_max_bits, &adapted_neurons,
+                            target_per_genome, expected_train,
+                        ),
+                    };
+                    let new_layout = compute_genome_layout(
+                        &adapted_bits, &adapted_neurons, new_threshold, expected_train,
+                    );
+
+                    let mut new_storage: Vec<ClusterStorage> = (0..num_clusters)
+                        .map(|c| ClusterStorage::new(
+                            adapted_neurons[c], new_layout.cluster_max_bits[c],
+                            new_threshold, empty_word, memory_mode,
+                        ))
+                        .collect();
+
+                    train_into(
+                        &adapted_connections, &adapted_bits, &adapted_neurons, num_clusters,
+                        &new_layout, train_subset, &mut new_storage,
+                        memory_mode, neuron_sample_rate, genome_rng_seed.wrapping_add(1),
+                    );
+                    forward_eval_into(
+                        &adapted_connections, &adapted_bits, &adapted_neurons, num_clusters,
+                        &new_layout, eval_subset, &new_storage, score_slice, memory_mode,
+                    );
+                } else {
+                    // No architecture change — forward with original storage
+                    forward_eval_into(
+                        &adapted_connections, &adapted_bits, &adapted_neurons, num_clusters,
+                        layout, eval_subset, &cluster_storage, score_slice, memory_mode,
+                    );
+                }
+
+                // Store adapted genome data
+                *adapted_data[g].lock().unwrap() = Some((
+                    adapted_bits, adapted_neurons, adapted_connections,
+                    total_pruned, total_grown, total_added, total_removed,
+                ));
+            });
+
+        batch_start = batch_end;
+    }
+
+    // Phase 1.5: Compute weighted BitAcc per genome (same as non-adaptive)
+    let num_bits = cache.num_bits;
+    let mut bit_weights = vec![0.0f64; num_bits];
+    {
+        let mut bit_ones = vec![0u64; num_bits];
+        for ex in 0..num_eval {
+            let target = eval_subset.targets[ex] as usize;
+            let tb_off = target * num_bits;
+            for b in 0..num_bits {
+                bit_ones[b] += cache.token_bits[tb_off + b] as u64;
+            }
+        }
+        for b in 0..num_bits {
+            let p = bit_ones[b] as f64 / num_eval as f64;
+            if p > 0.0 && p < 1.0 {
+                bit_weights[b] = (-p * p.ln() - (1.0 - p) * (1.0 - p).ln())
+                    / std::f64::consts::LN_2;
+            }
+        }
+    }
+    let total_weight: f64 = bit_weights.iter().sum();
+
+    let weighted_bit_accs: Vec<f64> = (0..num_genomes)
+        .into_par_iter()
+        .map(|g| {
+            let score_base = g * scores_per_genome;
+            let mut weighted_correct = 0.0f64;
+            for ex in 0..num_eval {
+                let target = eval_subset.targets[ex] as usize;
+                let tb_off = target * num_bits;
+                let sc_off = score_base + ex * num_bits;
+                for b in 0..num_bits {
+                    let predicted = all_scores[sc_off + b] > 0.5;
+                    let actual = cache.token_bits[tb_off + b] > 0;
+                    if predicted == actual {
+                        weighted_correct += bit_weights[b];
+                    }
+                }
+            }
+            if total_weight > 0.0 {
+                weighted_correct / (num_eval as f64 * total_weight)
+            } else {
+                0.0
+            }
+        })
+        .collect();
+
+    // Phase 2: CE computation (Metal GPU or CPU fallback)
+    let ce_results: Vec<(f64, f64)>;
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(metal) = get_metal_bitwise_ce() {
+            match metal.compute_ce_batch(
+                &all_scores,
+                &cache.token_bits,
+                &eval_subset.targets,
+                num_genomes,
+                num_eval,
+                cache.num_bits,
+                cache.vocab_size,
+            ) {
+                Ok(results) => {
+                    ce_results = results;
+                }
+                Err(e) => {
+                    eprintln!("[BitwiseCE] Metal failed, CPU fallback: {e}");
+                    ce_results = all_scores
+                        .par_chunks(scores_per_genome)
+                        .map(|scores| compute_ce_cpu(
+                            scores, &cache.token_bits, &eval_subset.targets,
+                            num_eval, cache.num_bits, cache.vocab_size,
+                        ))
+                        .collect();
+                }
+            }
+        } else {
+            ce_results = all_scores
+                .par_chunks(scores_per_genome)
+                .map(|scores| compute_ce_cpu(
+                    scores, &cache.token_bits, &eval_subset.targets,
+                    num_eval, cache.num_bits, cache.vocab_size,
+                ))
+                .collect();
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        ce_results = all_scores
+            .par_chunks(scores_per_genome)
+            .map(|scores| compute_ce_cpu(
+                scores, &cache.token_bits, &eval_subset.targets,
+                num_eval, cache.num_bits, cache.vocab_size,
+            ))
+            .collect();
+    }
+
+    // Combine CE results + adapted data → Vec<AdaptiveResult>
+    (0..num_genomes)
+        .map(|g| {
+            let (ce, acc) = ce_results[g];
+            let bit_acc = weighted_bit_accs[g];
+            let (a_bits, a_neurons, a_conns, pruned, grown, added, removed) =
+                adapted_data[g].lock().unwrap().take().unwrap();
+            AdaptiveResult {
+                ce, acc, bit_acc,
+                adapted_bits: a_bits,
+                adapted_neurons: a_neurons,
+                adapted_connections: a_conns,
+                pruned, grown, added, removed,
+            }
+        })
+        .collect()
 }

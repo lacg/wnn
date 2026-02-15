@@ -1089,7 +1089,12 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		return super()._generate_offspring(population, n_needed, threshold, generation)
 
 	def _on_generation_start(self, generation, **ctx):
-		"""Metal cleanup, checkpoint save, shutdown check."""
+		"""Metal cleanup, checkpoint save, shutdown check, generation tracking."""
+		# Update evaluator generation for adaptive evaluation (Baldwin effect)
+		evaluator = self._cached_evaluator or self._batch_evaluator
+		if evaluator is not None and hasattr(evaluator, 'set_generation'):
+			evaluator.set_generation(generation)
+
 		# Metal cleanup (every generation except first)
 		if generation > 0 and self._cached_evaluator is not None:
 			self._cleanup_metal(generation, log_interval=10)
@@ -1526,7 +1531,12 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 		return super()._generate_neighbors(best_genome, n_neighbors, threshold, iteration, tabu_list)
 
 	def _on_iteration_start(self, iteration, **ctx):
-		"""Metal cleanup and shutdown check."""
+		"""Metal cleanup, shutdown check, generation tracking."""
+		# Update evaluator generation for adaptive evaluation (Baldwin effect)
+		evaluator = self._cached_evaluator or self._batch_evaluator
+		if evaluator is not None and hasattr(evaluator, 'set_generation'):
+			evaluator.set_generation(iteration)
+
 		# Metal cleanup (every iteration except first)
 		if iteration > 0 and self._cached_evaluator is not None:
 			self._cleanup_metal(iteration, log_interval=10)

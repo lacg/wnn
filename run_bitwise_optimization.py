@@ -293,11 +293,14 @@ def phase1_grid_search(train_tokens, test_tokens, vocab_size, context_size, rate
 
 def create_evaluators(train_tokens, test_tokens, validation_tokens, vocab_size,
 					  context_size, rate, default_neurons, default_bits,
-					  num_train_parts=36, num_eval_parts=6):
+					  num_train_parts=36, num_eval_parts=6, adapt_config=None):
 	"""Create two BitwiseEvaluators: one for optimization, one for full validation.
 
 	opt_evaluator: trains on train_tokens (rotated ~67K), scores on test_tokens (rotated ~50K)
 	full_evaluator: trains on full train_tokens, evaluates on full validation_tokens
+
+	If adapt_config is provided, the opt_evaluator will run adaptation (synaptogenesis/
+	neurogenesis) inside every genome evaluation for the Baldwin effect.
 	"""
 	from wnn.ram.architecture.bitwise_evaluator import BitwiseEvaluator
 
@@ -312,6 +315,7 @@ def create_evaluators(train_tokens, test_tokens, validation_tokens, vocab_size,
 		num_eval_parts=num_eval_parts,
 		memory_mode=2,  # QUAD_WEIGHTED
 		neuron_sample_rate=rate,
+		adapt_config=adapt_config,
 	)
 
 	full_evaluator = BitwiseEvaluator(
@@ -942,14 +946,30 @@ def main():
 			best_genome = create_seed_genome(num_clusters, best_bits, best_neurons, total_input_bits)
 		logger(f"Using default config: bits={best_bits}, neurons={best_neurons}")
 
+	# Build adaptation config if flags are set
+	adapt_config = None
+	if args.synaptogenesis or args.neurogenesis:
+		from wnn.ram.architecture.bitwise_evaluator import AdaptationConfig
+		adapt_config = AdaptationConfig(
+			synaptogenesis_enabled=args.synaptogenesis,
+			neurogenesis_enabled=args.neurogenesis,
+			warmup_generations=args.adapt_warmup,
+			cooldown_iterations=args.adapt_cooldown,
+			min_bits=args.adapt_min_bits,
+			max_bits=args.adapt_max_bits,
+		)
+		logger(f"Adaptation enabled: syn={args.synaptogenesis}, neu={args.neurogenesis}, "
+			   f"warmup={args.adapt_warmup}, cooldown={args.adapt_cooldown}")
+
 	# Create two evaluators:
-	# opt_evaluator: rotated train+test for GA/TS fitness
-	# full_evaluator: full train + full validation for phase comparison
+	# opt_evaluator: rotated train+test for GA/TS fitness (with adaptation if enabled)
+	# full_evaluator: full train + full validation for phase comparison (no adaptation)
 	opt_evaluator, full_evaluator = create_evaluators(
 		train_tokens, test_tokens, validation_tokens, vocab_size,
 		context_size=args.context, rate=args.rate,
 		default_neurons=best_neurons, default_bits=best_bits,
 		num_train_parts=args.train_parts, num_eval_parts=args.eval_parts,
+		adapt_config=adapt_config,
 	)
 
 	# Full-eval initial population baseline on validation
@@ -1167,55 +1187,12 @@ def main():
 		all_results["gating"] = gated_eval
 		save()
 
-	# ── Phase 9 (optional): Training-time Adaptation ───────────────────
-	if (args.synaptogenesis or args.neurogenesis) and best_genome is not None:
-		from wnn.ram.architecture.bitwise_evaluator import AdaptationConfig
-
-		logger(f"\n{'='*70}")
-		logger(f"Phase 9: Adaptation (syn={args.synaptogenesis}, neu={args.neurogenesis})")
-		logger(f"{'='*70}")
-
-		adapt_config = AdaptationConfig(
-			synaptogenesis_enabled=args.synaptogenesis,
-			neurogenesis_enabled=args.neurogenesis,
-			warmup_generations=args.adapt_warmup,
-			cooldown_iterations=args.adapt_cooldown,
-			min_bits=args.adapt_min_bits,
-			max_bits=args.adapt_max_bits,
-		)
-
-		# Run adaptation for several passes on the best genome
-		cooldowns = None
-		for adapt_pass in range(3):
-			adapted_genome, ce, acc, stats = opt_evaluator.evaluate_with_adaptation(
-				genome=best_genome,
-				adapt_config=adapt_config,
-				generation=args.adapt_warmup + adapt_pass,  # Past warmup
-				cooldowns=cooldowns,
-			)
-			cooldowns = stats.get("cooldowns")
-			logger(f"  Pass {adapt_pass + 1}: CE={ce:.4f} Acc={acc:.2%} "
-				   f"pruned={stats['pruned']} grown={stats['grown']} "
-				   f"added={stats['added']} removed={stats['removed']}")
-
-			if stats['pruned'] + stats['grown'] + stats['added'] + stats['removed'] > 0:
-				best_genome = adapted_genome
-				best_ce = ce
-				logger(f"  → Genome adapted (total_neurons={sum(adapted_genome.neurons_per_cluster)}, "
-					   f"total_connections={sum(adapted_genome.bits_per_neuron)})")
-			else:
-				logger(f"  → No changes, adaptation converged")
-				break
-
-		# Full-eval on validation
-		adapt_result = full_evaluator.evaluate_batch_full([best_genome])[0]
-		logger(f"  Full-eval: CE={adapt_result[0]:.4f} Acc={adapt_result[1]:.2%} PPL={math.exp(adapt_result[0]):.0f}")
-		all_results["adaptation"] = {
-			"final_ce": adapt_result[0],
-			"final_accuracy": adapt_result[1],
-			"genome_stats": best_genome.stats(),
-		}
-		save()
+	# NOTE: Adaptation (synaptogenesis/neurogenesis) now runs INSIDE evaluation
+	# via the Baldwin effect — no separate Phase 9 needed. When --synaptogenesis
+	# or --neurogenesis flags are set, adapt_config is passed to BitwiseEvaluator
+	# at construction, and every genome evaluation automatically includes
+	# adaptation. This means GA/TS sees adapted fitness and evolves architectures
+	# that respond well to adaptation.
 
 	# Save best genome separately
 	if best_genome is not None:
