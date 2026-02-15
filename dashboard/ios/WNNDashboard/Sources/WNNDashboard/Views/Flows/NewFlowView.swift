@@ -113,9 +113,11 @@ public struct NewFlowView: View {
 					HStack {
 						Text("Phases (\(phases.count))")
 						Spacer()
+						#if os(iOS)
 						if !phases.isEmpty {
 							EditButton().textCase(nil)
 						}
+						#endif
 					}
 				}
 
