@@ -868,15 +868,49 @@ pub mod queries {
     }
 
     /// Update flow for restart: set status to queued, clear pid, optionally clear seed
-    /// If from_beginning is true, also deletes all linked experiments and their data
+    /// If from_beginning is true, deletes all linked experiments and their data,
+    /// then recreates fresh pending experiments from the saved metadata
     pub async fn update_flow_for_restart(
         pool: &DbPool,
         id: i64,
         clear_seed: Option<Option<i64>>,
     ) -> Result<bool> {
-        // If clearing seed (restart from beginning), also delete old experiment data
+        // If clearing seed (restart from beginning), snapshot experiments, delete, then recreate
         if clear_seed.is_some() {
+            // Snapshot experiment metadata before deletion
+            let saved_experiments: Vec<(String, i32, Option<String>, i32)> = sqlx::query_as(
+                "SELECT name, sequence_order, phase_type, max_iterations FROM experiments WHERE flow_id = ? ORDER BY sequence_order"
+            )
+            .bind(id)
+            .fetch_all(pool)
+            .await?;
+
+            // Delete all experiment data and experiments
             delete_flow_data(pool, id).await?;
+
+            // Recreate fresh pending experiments from snapshot
+            if !saved_experiments.is_empty() {
+                // Get the flow config for create_pending_experiment
+                let config_json: String = sqlx::query_scalar(
+                    "SELECT config_json FROM flows WHERE id = ?"
+                )
+                .bind(id)
+                .fetch_one(pool)
+                .await?;
+                let flow_config: crate::models::FlowConfig = serde_json::from_str(&config_json)?;
+
+                for (name, sequence_order, phase_type, max_iterations) in &saved_experiments {
+                    create_pending_experiment(
+                        pool,
+                        name,
+                        id,
+                        *sequence_order,
+                        phase_type.as_deref(),
+                        Some(*max_iterations),
+                        &flow_config,
+                    ).await?;
+                }
+            }
         }
 
         if let Some(seed_id) = clear_seed {
