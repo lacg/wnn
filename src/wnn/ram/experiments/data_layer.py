@@ -520,7 +520,24 @@ class DataLayer:
                     elite_count, offspring_count, offspring_viable, fitness_threshold,
                     elapsed_secs, baseline_ce, delta_baseline, delta_previous,
                     patience_counter, patience_max, candidates_total, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(experiment_id, iteration_num) DO UPDATE SET
+                    best_ce = excluded.best_ce,
+                    best_accuracy = excluded.best_accuracy,
+                    avg_ce = excluded.avg_ce,
+                    avg_accuracy = excluded.avg_accuracy,
+                    elite_count = excluded.elite_count,
+                    offspring_count = excluded.offspring_count,
+                    offspring_viable = excluded.offspring_viable,
+                    fitness_threshold = excluded.fitness_threshold,
+                    elapsed_secs = excluded.elapsed_secs,
+                    baseline_ce = excluded.baseline_ce,
+                    delta_baseline = excluded.delta_baseline,
+                    delta_previous = excluded.delta_previous,
+                    patience_counter = excluded.patience_counter,
+                    patience_max = excluded.patience_max,
+                    candidates_total = excluded.candidates_total,
+                    created_at = excluded.created_at""",
                 (
                     experiment_id, iteration_num, best_ce, best_accuracy, avg_ce, avg_accuracy,
                     elite_count, offspring_count, offspring_viable, fitness_threshold,
