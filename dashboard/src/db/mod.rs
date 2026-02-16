@@ -709,6 +709,54 @@ pub mod queries {
         Ok(())
     }
 
+    /// Clear display data for an experiment (iterations, genome_evaluations, genomes, validation_summaries)
+    /// but KEEP checkpoints so resume can seed from them.
+    async fn clear_experiment_display_data(pool: &DbPool, exp_id: i64) -> Result<()> {
+        // Delete validation summaries
+        sqlx::query("DELETE FROM validation_summaries WHERE experiment_id = ?")
+            .bind(exp_id)
+            .execute(pool)
+            .await?;
+
+        // Delete health checks for iterations
+        sqlx::query(
+            "DELETE FROM health_checks WHERE iteration_id IN (SELECT id FROM iterations WHERE experiment_id = ?)"
+        )
+        .bind(exp_id)
+        .execute(pool)
+        .await?;
+
+        // Delete genome evaluations for iterations
+        sqlx::query(
+            "DELETE FROM genome_evaluations WHERE iteration_id IN (SELECT id FROM iterations WHERE experiment_id = ?)"
+        )
+        .bind(exp_id)
+        .execute(pool)
+        .await?;
+
+        // Delete iterations
+        sqlx::query("DELETE FROM iterations WHERE experiment_id = ?")
+            .bind(exp_id)
+            .execute(pool)
+            .await?;
+
+        // Delete genome_evaluations that reference genomes
+        sqlx::query(
+            "DELETE FROM genome_evaluations WHERE genome_id IN (SELECT id FROM genomes WHERE experiment_id = ?)"
+        )
+        .bind(exp_id)
+        .execute(pool)
+        .await?;
+
+        // Delete genomes
+        sqlx::query("DELETE FROM genomes WHERE experiment_id = ?")
+            .bind(exp_id)
+            .execute(pool)
+            .await?;
+
+        Ok(())
+    }
+
     /// Delete all data for an experiment (iterations, genome_evaluations, genomes, checkpoints, validation_summaries)
     async fn delete_experiment_data(pool: &DbPool, exp_id: i64) -> Result<()> {
         // Delete validation summaries for this experiment
@@ -939,10 +987,22 @@ pub mod queries {
             .await?;
             Ok(result.rows_affected() > 0)
         } else {
-            // Resume restart: reset non-completed experiments' timestamps
-            // so they get fresh started_at when re-started (prevents stale durations)
+            // Resume: clear display data (iterations, genomes, etc.) for non-completed experiments
+            // so the dashboard shows a clean slate. Checkpoints are preserved for seeding.
+            let non_completed_exp_ids: Vec<i64> = sqlx::query_scalar(
+                "SELECT id FROM experiments WHERE flow_id = ? AND status != 'completed'"
+            )
+            .bind(id)
+            .fetch_all(pool)
+            .await?;
+
+            for exp_id in &non_completed_exp_ids {
+                clear_experiment_display_data(pool, *exp_id).await?;
+            }
+
+            // Reset non-completed experiments' timestamps
             sqlx::query(
-                "UPDATE experiments SET started_at = NULL, ended_at = NULL, status = 'pending' WHERE flow_id = ? AND status IN ('running', 'failed')"
+                "UPDATE experiments SET started_at = NULL, ended_at = NULL, status = 'pending' WHERE flow_id = ? AND status != 'completed'"
             )
             .bind(id)
             .execute(pool)
