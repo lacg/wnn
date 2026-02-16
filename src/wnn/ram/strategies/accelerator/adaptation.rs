@@ -310,6 +310,12 @@ pub fn compute_cluster_stats(
 			0.0
 		};
 
+		// Precompute majority vote per sample (was O(n²) when done per neuron×sample)
+		let majority_votes: Vec<bool> = (0..n_sample).map(|s| {
+			let votes_true: u32 = (0..n_neurons).map(|j| neuron_votes[j][s] as u32).sum();
+			votes_true > (n_neurons as u32 / 2)
+		}).collect();
+
 		// Neuron uniqueness + accuracy
 		let mut uniqueness = vec![0.0f32; n_neurons];
 		let mut accuracy = vec![0.0f32; n_neurons];
@@ -323,10 +329,7 @@ pub fn compute_cluster_stats(
 					let my_vote = neuron_votes[local_n][s];
 					let target_true = target_bits[ex * num_clusters + cluster] != 0;
 
-					let majority_count: u32 = (0..n_neurons).map(|j| neuron_votes[j][s] as u32).sum();
-					let majority_vote = majority_count > (n_neurons as u32 / 2);
-					if my_vote != majority_vote { disagree += 1; }
-
+					if my_vote != majority_votes[s] { disagree += 1; }
 					if my_vote == target_true { correct += 1; }
 				}
 				uniqueness[local_n] = disagree as f32 / n_sample as f32;

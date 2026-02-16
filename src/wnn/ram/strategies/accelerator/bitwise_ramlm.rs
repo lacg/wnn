@@ -1652,23 +1652,9 @@ pub fn evaluate_genomes_adaptive(
     let empty_word: i64 = crate::neuron_memory::empty_word_for_mode(memory_mode);
     let needs_adaptation = adapt_config.synaptogenesis_enabled || adapt_config.neurogenesis_enabled;
 
-    // GPU stats accelerator (macOS only) — shared across genome threads
-    #[cfg(target_os = "macos")]
-    let metal_stats: Option<std::sync::Arc<crate::metal_stats::MetalStatsComputer>> =
-        if needs_adaptation {
-            match crate::metal_stats::MetalStatsComputer::new() {
-                Ok(m) => {
-                    eprintln!("[Adaptation] GPU stats accelerator initialized");
-                    Some(std::sync::Arc::new(m))
-                }
-                Err(e) => {
-                    eprintln!("[Adaptation] GPU stats init failed (CPU fallback): {e}");
-                    None
-                }
-            }
-        } else {
-            None
-        };
+    // GPU stats disabled: per-genome GPU dispatch serializes what rayon parallelizes.
+    // CPU path with O(n²) fix is faster. GPU would need batched multi-genome dispatch.
+    // TODO: batch all genome stats into single GPU dispatch for true speedup.
 
     // Memory budget for concurrent genome training
     let mem_budget: u64 = 40 * 1024 * 1024 * 1024; // 40 GiB (Mac Studio has 64 GiB)
@@ -1826,31 +1812,13 @@ pub fn evaluate_genomes_adaptive(
                 let mut cooldowns = vec![0usize; num_clusters];
 
                 for _pass in 0..adapt_config.passes_per_eval {
-                    // Compute stats — GPU (combined neuron+cluster) or CPU fallback
-                    #[cfg(target_os = "macos")]
-                    let gpu_stats = metal_stats.as_ref().map(|metal| {
-                        adaptation::compute_neuron_and_cluster_stats_gpu(
-                            metal, &adapted_bits, &adapted_neurons, &adapted_connections,
-                            &cluster_storage, &train_subset.packed_input,
-                            train_subset.words_per_example, &train_subset.target_bits,
-                            train_subset.num_examples, num_clusters, adapt_config, memory_mode,
-                        )
-                    });
-                    #[cfg(not(target_os = "macos"))]
-                    let gpu_stats: Option<(Vec<adaptation::NeuronStats>, Vec<adaptation::ClusterStats>)> = None;
-
-                    let (mut neuron_stats, mut cluster_stats_cache) = match gpu_stats {
-                        Some((ns, cs)) => (ns, Some(cs)),
-                        None => {
-                            let ns = adaptation::compute_neuron_stats(
-                                &adapted_bits, &adapted_neurons, &adapted_connections,
-                                &cluster_storage, &train_subset.packed_input,
-                                train_subset.words_per_example, &train_subset.target_bits,
-                                train_subset.num_examples, num_clusters, adapt_config,
-                            );
-                            (ns, None)
-                        }
-                    };
+                    // Compute neuron stats (CPU, rayon-parallel across neurons)
+                    let mut neuron_stats = adaptation::compute_neuron_stats(
+                        &adapted_bits, &adapted_neurons, &adapted_connections,
+                        &cluster_storage, &train_subset.packed_input,
+                        train_subset.words_per_example, &train_subset.target_bits,
+                        train_subset.num_examples, num_clusters, adapt_config,
+                    );
 
                     if adapt_config.synaptogenesis_enabled {
                         let (pruned, grown) = adaptation::synaptogenesis_pass(
@@ -1864,46 +1832,23 @@ pub fn evaluate_genomes_adaptive(
 
                         // Recompute stats if synaptogenesis changed architecture
                         if adapt_config.neurogenesis_enabled && (pruned > 0 || grown > 0) {
-                            #[cfg(target_os = "macos")]
-                            let recomputed = metal_stats.as_ref().map(|metal| {
-                                adaptation::compute_neuron_and_cluster_stats_gpu(
-                                    metal, &adapted_bits, &adapted_neurons, &adapted_connections,
-                                    &cluster_storage, &train_subset.packed_input,
-                                    train_subset.words_per_example, &train_subset.target_bits,
-                                    train_subset.num_examples, num_clusters, adapt_config, memory_mode,
-                                )
-                            });
-                            #[cfg(not(target_os = "macos"))]
-                            let recomputed: Option<(Vec<adaptation::NeuronStats>, Vec<adaptation::ClusterStats>)> = None;
-
-                            match recomputed {
-                                Some((ns, cs)) => {
-                                    neuron_stats = ns;
-                                    cluster_stats_cache = Some(cs);
-                                }
-                                None => {
-                                    neuron_stats = adaptation::compute_neuron_stats(
-                                        &adapted_bits, &adapted_neurons, &adapted_connections,
-                                        &cluster_storage, &train_subset.packed_input,
-                                        train_subset.words_per_example, &train_subset.target_bits,
-                                        train_subset.num_examples, num_clusters, adapt_config,
-                                    );
-                                    cluster_stats_cache = None;
-                                }
-                            }
+                            neuron_stats = adaptation::compute_neuron_stats(
+                                &adapted_bits, &adapted_neurons, &adapted_connections,
+                                &cluster_storage, &train_subset.packed_input,
+                                train_subset.words_per_example, &train_subset.target_bits,
+                                train_subset.num_examples, num_clusters, adapt_config,
+                            );
                         }
                     }
 
                     if adapt_config.neurogenesis_enabled {
-                        let cluster_stats = cluster_stats_cache.unwrap_or_else(|| {
-                            adaptation::compute_cluster_stats(
-                                &neuron_stats, &adapted_neurons, &adapted_bits,
-                                &adapted_connections, &cluster_storage,
-                                &train_subset.packed_input, train_subset.words_per_example,
-                                &train_subset.target_bits, train_subset.num_examples, num_clusters,
-                                adapt_config,
-                            )
-                        });
+                        let cluster_stats = adaptation::compute_cluster_stats(
+                            &neuron_stats, &adapted_neurons, &adapted_bits,
+                            &adapted_connections, &cluster_storage,
+                            &train_subset.packed_input, train_subset.words_per_example,
+                            &train_subset.target_bits, train_subset.num_examples, num_clusters,
+                            adapt_config,
+                        );
                         let (added, removed) = adaptation::neurogenesis_pass(
                             &mut adapted_bits, &mut adapted_neurons, &mut adapted_connections,
                             &cluster_stats, adapt_config, generation, &mut cooldowns,
