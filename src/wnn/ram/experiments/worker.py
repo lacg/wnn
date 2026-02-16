@@ -717,8 +717,13 @@ class FlowWorker:
             grid_top_k = params.get("grid_top_k", num_grid_configs)  # Default: use all configs
             pop_size = exp_data.get("population_size") or params.get("population_size", 50)
 
+            is_adaptation = experiment_type in (
+                ExperimentType.NEUROGENESIS, ExperimentType.SYNAPTOGENESIS, ExperimentType.AXONOGENESIS,
+            )
             if experiment_type == ExperimentType.GRID_SEARCH:
                 max_iters = 1  # Grid search is a single step
+            elif is_adaptation:
+                max_iters = exp_data.get("max_iterations") or params.get("adaptation_iterations", 50)
             else:
                 max_iters = exp_data.get("max_iterations") or params.get("ga_generations", 250)
 
@@ -735,7 +740,10 @@ class FlowWorker:
                 optimize_connections=optimize_connections,
                 generations=max_iters,
                 population_size=pop_size,
-                iterations=exp_data.get("max_iterations") or params.get("ts_iterations", 250),
+                iterations=exp_data.get("max_iterations") or (
+                    params.get("adaptation_iterations", 50) if is_adaptation
+                    else params.get("ts_iterations", 250)
+                ),
                 neighbors_per_iter=params.get("neighbors_per_iter", 50),
                 patience=patience,
                 tier_config=exp_tier_config,

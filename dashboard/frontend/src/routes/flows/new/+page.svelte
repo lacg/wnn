@@ -23,9 +23,10 @@
   let adaptWarmup = 10;
   let adaptCooldown = 5;
 
-  $: isBitwise = template === 'bitwise-7-phase';
+  $: isBitwise = template === 'bitwise-7-phase' || template === 'bitwise-10-phase';
   let gaGenerations = 250;
   let tsIterations = 250;
+  let adaptationIterations = 50;
   let populationSize = 50;
   let neighborsPerIter = 50;
   let patience = 10;
@@ -88,6 +89,29 @@
       neurogenesis = true;
       adaptWarmup = 10;
       adaptCooldown = 5;
+    } else if (templateName === 'bitwise-10-phase') {
+      gaGenerations = 250;
+      tsIterations = 250;
+      adaptationIterations = 50;
+      populationSize = 50;
+      neighborsPerIter = 50;
+      patience = 10;
+      fitnessPercentile = 0.75;
+      fitnessCalculator = 'harmonic_rank';
+      fitnessWeightCe = 1.0;
+      fitnessWeightAcc = 1.0;
+      contextSize = 4;
+      bitwiseNumClusters = 16;
+      bitwiseMinBits = 10;
+      bitwiseMaxBits = 24;
+      bitwiseMinNeurons = 10;
+      bitwiseMaxNeurons = 300;
+      bitwiseMemoryMode = 'QUAD_WEIGHTED';
+      bitwiseNeuronSampleRate = 0.25;
+      synaptogenesis = false;
+      neurogenesis = false;
+      adaptWarmup = 0;
+      adaptCooldown = 0;
     }
   }
 
@@ -101,15 +125,15 @@
   // Phase templates - generates experiments array based on template and phase_order
   interface PhaseSpec {
     name: string;
-    experiment_type: 'ga' | 'ts';
+    experiment_type: 'ga' | 'ts' | 'neurogenesis' | 'synaptogenesis' | 'axonogenesis';
     optimize_bits: boolean;
     optimize_neurons: boolean;
     optimize_connections: boolean;
-    phase_type?: 'grid_search';
+    phase_type?: 'grid_search' | 'neurogenesis' | 'synaptogenesis' | 'axonogenesis';
   }
 
   // Add-phase form state
-  let newPhaseType: 'ga' | 'ts' = 'ga';
+  let newPhaseType: 'ga' | 'ts' | 'neurogenesis' | 'synaptogenesis' | 'axonogenesis' = 'ga';
   let newPhaseGrid = false;
   let newPhaseNeurons = true;
   let newPhaseBits = false;
@@ -130,6 +154,19 @@
       { name: 'GA Connections', experiment_type: 'ga', optimize_bits: false, optimize_neurons: false, optimize_connections: true },
       { name: 'TS Connections (refine)', experiment_type: 'ts', optimize_bits: false, optimize_neurons: false, optimize_connections: true },
     ];
+
+    if (templateName === 'bitwise-10-phase') {
+      const grid: PhaseSpec = { name: 'Grid Search (neurons × bits)', experiment_type: 'ga', optimize_bits: true, optimize_neurons: true, optimize_connections: false, phase_type: 'grid_search' };
+      const neurogenesisPhase: PhaseSpec = { name: 'Neurogenesis', experiment_type: 'neurogenesis', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'neurogenesis' };
+      const synaptogenesisPhase: PhaseSpec = { name: 'Synaptogenesis', experiment_type: 'synaptogenesis', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'synaptogenesis' };
+      const axonogenesisPhase: PhaseSpec = { name: 'Axonogenesis', experiment_type: 'axonogenesis', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'axonogenesis' };
+      return [
+        grid,
+        neuronsPhases[0], neurogenesisPhase, neuronsPhases[1],
+        bitsPhases[0], synaptogenesisPhase, bitsPhases[1],
+        connectionsPhases[0], axonogenesisPhase, connectionsPhases[1],
+      ];
+    }
 
     if (templateName === 'bitwise-7-phase') {
       const grid: PhaseSpec = { name: 'Grid Search (neurons × bits)', experiment_type: 'ga', optimize_bits: true, optimize_neurons: true, optimize_connections: false, phase_type: 'grid_search' };
@@ -158,6 +195,9 @@
     return `${type.toUpperCase()} ${targets.join(' + ')}`;
   }
 
+  const adaptationPhaseTypes = ['neurogenesis', 'synaptogenesis', 'axonogenesis'];
+  function isAdaptationType(t: string): boolean { return adaptationPhaseTypes.includes(t); }
+
   function addPhase() {
     if (newPhaseGrid) {
       experiments = [...experiments, {
@@ -167,6 +207,18 @@
         optimize_neurons: true,
         optimize_connections: false,
         phase_type: 'grid_search' as const,
+      }];
+      return;
+    }
+    if (isAdaptationType(newPhaseType)) {
+      const label = newPhaseType.charAt(0).toUpperCase() + newPhaseType.slice(1);
+      experiments = [...experiments, {
+        name: label,
+        experiment_type: newPhaseType as PhaseSpec['experiment_type'],
+        optimize_bits: false,
+        optimize_neurons: false,
+        optimize_connections: false,
+        phase_type: newPhaseType as PhaseSpec['phase_type'],
       }];
       return;
     }
@@ -203,17 +255,25 @@
 
     try {
       // Enrich experiments with their params (generations/iterations based on type)
-      const enrichedExperiments = experiments.map((exp) => ({
-        ...exp,
-        params: {
-          // Grid search is a single step — don't pass generations/iterations
-          generations: (exp.phase_type === 'grid_search') ? undefined : (exp.experiment_type === 'ga' ? gaGenerations : undefined),
-          iterations: (exp.phase_type === 'grid_search') ? undefined : (exp.experiment_type === 'ts' ? tsIterations : undefined),
-          population_size: populationSize,
-          neighbors_per_iter: neighborsPerIter,
-          ...(exp.phase_type ? { phase_type: exp.phase_type } : {}),
-        }
-      }));
+      const adaptationTypes = new Set(['neurogenesis', 'synaptogenesis', 'axonogenesis']);
+      const enrichedExperiments = experiments.map((exp) => {
+        const isAdaptation = adaptationTypes.has(exp.phase_type ?? '');
+        return {
+          ...exp,
+          params: {
+            // Grid search is a single step — don't pass generations/iterations
+            generations: (exp.phase_type === 'grid_search') ? undefined
+              : isAdaptation ? adaptationIterations
+              : (exp.experiment_type === 'ga' ? gaGenerations : undefined),
+            iterations: (exp.phase_type === 'grid_search') ? undefined
+              : isAdaptation ? adaptationIterations
+              : (exp.experiment_type === 'ts' ? tsIterations : undefined),
+            population_size: populationSize,
+            neighbors_per_iter: neighborsPerIter,
+            ...(exp.phase_type ? { phase_type: exp.phase_type } : {}),
+          }
+        };
+      });
 
       // Build params — bitwise and tiered share common search params
       // but differ in architecture-specific config
@@ -221,6 +281,7 @@
         phase_order: phaseOrder,
         ga_generations: gaGenerations,
         ts_iterations: tsIterations,
+        adaptation_iterations: adaptationIterations,
         population_size: populationSize,
         neighbors_per_iter: neighborsPerIter,
         patience,
@@ -335,6 +396,7 @@
               <option value="quick-4-phase">Quick 4-Phase (Tiered)</option>
               <option value="standard-6-phase">Standard 6-Phase (Tiered)</option>
               <option value="bitwise-7-phase">Bitwise 7-Phase</option>
+              <option value="bitwise-10-phase">Bitwise 10-Phase (+ Adaptation)</option>
               <option value="empty">Empty (no phases)</option>
             </select>
             <span class="field-hint">
@@ -344,6 +406,8 @@
                 Full search: neurons &rarr; bits &rarr; connections (250 gens)
               {:else if template === 'bitwise-7-phase'}
                 Exhaustive neurons &times; bits grid, then 6 GA/TS optimization phases
+              {:else if template === 'bitwise-10-phase'}
+                Grid + GA/adapt/TS for neurons &rarr; bits &rarr; connections (stats-guided adaptation phases)
               {:else}
                 Start empty, add phases manually below
               {/if}
@@ -352,12 +416,14 @@
 
           <div class="form-group">
             <label for="phaseOrder">Phase Order</label>
-            <select id="phaseOrder" bind:value={phaseOrder} disabled={template === 'empty'}>
+            <select id="phaseOrder" bind:value={phaseOrder} disabled={template === 'empty' || template === 'bitwise-10-phase'}>
               <option value="neurons_first">Neurons First</option>
               <option value="bits_first">Bits First</option>
             </select>
             <span class="field-hint">
-              {#if isBitwise}
+              {#if template === 'bitwise-10-phase'}
+                Fixed: grid &rarr; neurons (GA/adapt/TS) &rarr; bits (GA/adapt/TS) &rarr; connections (GA/adapt/TS)
+              {:else if isBitwise}
                 grid &rarr; {phaseOrder === 'neurons_first' ? 'neurons → bits' : 'bits → neurons'} &rarr; connections
               {:else if template === 'quick-4-phase'}
                 {phaseOrder === 'neurons_first' ? 'neurons → bits' : 'bits → neurons'} (no connections)
@@ -381,6 +447,16 @@
             <input type="number" id="tsIters" bind:value={tsIterations} min="1" />
           </div>
         </div>
+
+        {#if template === 'bitwise-10-phase'}
+          <div class="form-row">
+            <div class="form-group">
+              <label for="adaptIters">Adaptation Iterations</label>
+              <input type="number" id="adaptIters" bind:value={adaptationIterations} min="1" />
+              <span class="field-hint">Iterations for neurogenesis, synaptogenesis, axonogenesis phases</span>
+            </div>
+          </div>
+        {/if}
 
         <div class="form-row">
           <div class="form-group">
@@ -484,8 +560,11 @@
                   </div>
                   <span class="phase-num">{i + 1}</span>
                   <span class="phase-name">{phase.name}</span>
-                  <span class="phase-type" class:ga={phase.experiment_type === 'ga'} class:ts={phase.experiment_type === 'ts'}>
-                    {phase.experiment_type.toUpperCase()}
+                  <span class="phase-type"
+                    class:ga={phase.experiment_type === 'ga'}
+                    class:ts={phase.experiment_type === 'ts'}
+                    class:adapt={['neurogenesis', 'synaptogenesis', 'axonogenesis'].includes(phase.experiment_type)}>
+                    {phase.phase_type === 'grid_search' ? 'GRID' : phase.experiment_type.toUpperCase()}
                   </span>
                   <button type="button" class="remove-btn" on:click={() => removePhase(i)} title="Remove">&times;</button>
                 </div>
@@ -504,13 +583,20 @@
               <select bind:value={newPhaseType} class="phase-type-select">
                 <option value="ga">GA</option>
                 <option value="ts">TS</option>
+                {#if isBitwise}
+                  <option value="neurogenesis">Neurogenesis</option>
+                  <option value="synaptogenesis">Synaptogenesis</option>
+                  <option value="axonogenesis">Axonogenesis</option>
+                {/if}
               </select>
-              <label class="inline-check"><input type="checkbox" bind:checked={newPhaseNeurons} /> Neurons</label>
-              <label class="inline-check"><input type="checkbox" bind:checked={newPhaseBits} /> Bits</label>
-              <label class="inline-check"><input type="checkbox" bind:checked={newPhaseConnections} /> Connections</label>
+              {#if !isAdaptationType(newPhaseType)}
+                <label class="inline-check"><input type="checkbox" bind:checked={newPhaseNeurons} /> Neurons</label>
+                <label class="inline-check"><input type="checkbox" bind:checked={newPhaseBits} /> Bits</label>
+                <label class="inline-check"><input type="checkbox" bind:checked={newPhaseConnections} /> Connections</label>
+              {/if}
             {/if}
             <button type="button" class="btn btn-add" on:click={addPhase}
-              disabled={!newPhaseGrid && !newPhaseNeurons && !newPhaseBits && !newPhaseConnections}>
+              disabled={!newPhaseGrid && !isAdaptationType(newPhaseType) && !newPhaseNeurons && !newPhaseBits && !newPhaseConnections}>
               + Add Phase
             </button>
           </div>
@@ -845,6 +931,11 @@
   .phase-type.ts {
     background: rgba(16, 185, 129, 0.15);
     color: var(--accent-green);
+  }
+
+  .phase-type.adapt {
+    background: rgba(168, 85, 247, 0.15);
+    color: #a855f7;
   }
 
   .phase-move {
