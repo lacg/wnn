@@ -435,8 +435,36 @@ class DataLayer:
         now = _now_iso()
         with self._transaction() as conn:
             if status == ExperimentStatus.RUNNING:
+                # Clean up stale data from previous runs of this experiment
+                iter_ids = [
+                    row[0] for row in conn.execute(
+                        "SELECT id FROM iterations WHERE experiment_id = ?",
+                        (experiment_id,),
+                    ).fetchall()
+                ]
+                if iter_ids:
+                    placeholders = ",".join("?" * len(iter_ids))
+                    conn.execute(
+                        f"DELETE FROM genome_evaluations WHERE iteration_id IN ({placeholders})",
+                        iter_ids,
+                    )
+                    conn.execute(
+                        f"DELETE FROM health_checks WHERE iteration_id IN ({placeholders})",
+                        iter_ids,
+                    )
+                    conn.execute(
+                        "DELETE FROM iterations WHERE experiment_id = ?",
+                        (experiment_id,),
+                    )
+                    conn.execute(
+                        "DELETE FROM genomes WHERE experiment_id = ?",
+                        (experiment_id,),
+                    )
+                    self._logger(
+                        f"Cleaned {len(iter_ids)} old iterations for experiment {experiment_id}"
+                    )
                 conn.execute(
-                    "UPDATE experiments SET status = ?, started_at = ?, pid = ? WHERE id = ?",
+                    "UPDATE experiments SET status = ?, started_at = ?, pid = ?, current_iteration = 0 WHERE id = ?",
                     (status.value, now, pid or os.getpid(), experiment_id),
                 )
             elif status == ExperimentStatus.PAUSED:
