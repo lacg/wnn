@@ -545,6 +545,31 @@ class Flow:
 		current_evals: Optional[list[tuple[float, float]]] = None  # Cached metrics from previous phase
 		stopped_at_idx: Optional[int] = None  # Track where we stopped for checkpoint
 
+		# Auto-detect resume point from completed experiments in the database.
+		# This handles the case where a flow crashed (no graceful stop checkpoint)
+		# and the dashboard re-queues it without setting start_from_experiment.
+		# We only determine start_idx here — the existing skip loop below
+		# handles loading checkpoints and setting current_genome/population/etc.
+		if resume_from is None and self.tracker and self._flow_id and self.checkpoint_dir:
+			auto_resume_idx = 0
+			for idx in range(len(cfg.experiments)):
+				exp_id = self._experiment_ids.get(idx)
+				if not exp_id:
+					break
+				existing_exp = self.tracker.get_experiment_by_flow_sequence(self._flow_id, idx)
+				if not existing_exp or existing_exp.get("status") != "completed":
+					break
+				# Verify checkpoint file exists before committing to skip
+				exp_dir = self.checkpoint_dir / f"exp_{idx:02d}"
+				if not exp_dir.exists() or not list(exp_dir.glob("*.json.gz")):
+					self.log(f"Warning: experiment {idx} ({cfg.experiments[idx].name}) completed in DB but no checkpoint file — cannot skip")
+					break
+				auto_resume_idx = idx + 1
+
+			if auto_resume_idx > 0:
+				start_idx = auto_resume_idx
+				self.log(f"Auto-resuming from experiment {start_idx}/{len(cfg.experiments)} (skipping {start_idx} completed)")
+
 		try:
 			for idx, exp_config in enumerate(cfg.experiments):
 				if idx < start_idx:
@@ -556,6 +581,7 @@ class Flow:
 						current_population = result.final_population
 						current_threshold = result.final_threshold
 						current_fitness = result.final_fitness
+						current_evals = result.population_metrics  # May be None if not in checkpoint
 						self.log(f"Loaded checkpoint for experiment {idx}: CE={current_fitness:.4f}")
 					else:
 						# Checkpoint not found - try to query database for completed phase results
