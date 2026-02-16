@@ -1360,7 +1360,7 @@ fn evaluate_genomes_with_subset(
     let empty_word: i64 = crate::neuron_memory::empty_word_for_mode(memory_mode);
 
     // Memory budget for concurrent genome training
-    let mem_budget: u64 = 20 * 1024 * 1024 * 1024; // 20 GiB
+    let mem_budget: u64 = 40 * 1024 * 1024 * 1024; // 40 GiB (Mac Studio has 64 GiB)
     let target_per_genome = if num_genomes > 0 { mem_budget / num_genomes as u64 } else { mem_budget };
 
     // Pre-compute per-genome offsets into bits_per_neuron_flat.
@@ -1422,6 +1422,29 @@ fn evaluate_genomes_with_subset(
         .collect();
 
     let mut batch_start = 0;
+    let mut batch_num = 0usize;
+    let num_batches_total = {
+        // Pre-count batches for logging
+        let mut cnt = 0;
+        let mut s = 0;
+        while s < num_genomes {
+            let mut m: u64 = 0;
+            let mut e = s;
+            while e < num_genomes {
+                let gm = genome_mem_bytes[e];
+                if m + gm > mem_budget && e > s { break; }
+                m += gm;
+                e += 1;
+            }
+            cnt += 1;
+            s = e;
+        }
+        cnt
+    };
+    if num_batches_total > 1 {
+        eprintln!("[BitwiseEval] {} genomes split into {} batches (budget: {} GiB)",
+            num_genomes, num_batches_total, mem_budget / (1024 * 1024 * 1024));
+    }
     while batch_start < num_genomes {
         // Pack genomes into this batch until budget is reached
         let mut batch_mem: u64 = 0;
@@ -1434,6 +1457,14 @@ fn evaluate_genomes_with_subset(
             batch_mem += gm;
             batch_end += 1;
         }
+        if num_batches_total > 1 {
+            let batch_time = std::time::Instant::now();
+            eprintln!("[BitwiseEval] Batch {}/{}: genomes {}..{} ({:.1} GiB)",
+                batch_num + 1, num_batches_total, batch_start, batch_end,
+                batch_mem as f64 / (1024.0 * 1024.0 * 1024.0));
+            let _ = batch_time; // suppress unused warning
+        }
+        batch_num += 1;
 
         let batch_scores = &mut all_scores[batch_start * scores_per_genome..batch_end * scores_per_genome];
 
@@ -1622,7 +1653,7 @@ pub fn evaluate_genomes_adaptive(
     let needs_adaptation = adapt_config.synaptogenesis_enabled || adapt_config.neurogenesis_enabled;
 
     // Memory budget for concurrent genome training
-    let mem_budget: u64 = 20 * 1024 * 1024 * 1024; // 20 GiB
+    let mem_budget: u64 = 40 * 1024 * 1024 * 1024; // 40 GiB (Mac Studio has 64 GiB)
     let target_per_genome = if num_genomes > 0 { mem_budget / num_genomes as u64 } else { mem_budget };
 
     // Pre-compute per-genome offsets into bits_per_neuron_flat
