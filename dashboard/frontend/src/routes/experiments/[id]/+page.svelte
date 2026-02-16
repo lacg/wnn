@@ -1144,7 +1144,11 @@
           <div class="empty-state">No genome evaluations recorded</div>
         {:else}
           {@const elites = genomeEvaluations.filter(g => g.role === 'elite' || g.role === 'top_k').sort((a, b) => a.position - b.position)}
-          {@const others = genomeEvaluations.filter(g => g.role !== 'elite' && g.role !== 'top_k').sort((a, b) => a.ce - b.ce)}
+          {@const others = genomeEvaluations.filter(g => g.role !== 'elite' && g.role !== 'top_k').sort((a, b) => {
+            // Sort by fitness_score if available (lower = better), fall back to CE
+            if (a.fitness_score !== null && b.fitness_score !== null) return a.fitness_score - b.fitness_score;
+            return a.ce - b.ce;
+          })}
 
           {#if elites.length > 0}
             <h3>Top Genomes ({elites.length})</h3>
@@ -1181,6 +1185,9 @@
                     <th>#</th>
                     <th>CE</th>
                     <th>Accuracy</th>
+                    {#if others.some(g => g.fitness_score !== null)}
+                      <th>Fitness</th>
+                    {/if}
                     <th>Role</th>
                   </tr>
                 </thead>
@@ -1190,6 +1197,9 @@
                       <td>{idx + 1}</td>
                       <td>{formatCE(genome.ce)}</td>
                       <td>{formatAcc(genome.accuracy)}</td>
+                      {#if others.some(g => g.fitness_score !== null)}
+                        <td>{genome.fitness_score !== null ? genome.fitness_score.toFixed(2) : '—'}</td>
+                      {/if}
                       <td>{formatRole(genome.role)}</td>
                     </tr>
                   {/each}

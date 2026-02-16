@@ -1859,7 +1859,24 @@ class GridSearchStrategy:
 					best_result = {"ce": ce, "accuracy": acc, "genome": output_population[pop_idx]}
 					best_genome = output_population[pop_idx]
 
-		# Record 1 iteration with ALL population genomes (not just unique configs)
+		# Phase 6: Rank full population by fitness and sort
+		pop_tuples = [
+			(i, ce, acc) for i, (ce, acc) in enumerate(population_metrics)
+		]
+		pop_fitness_scores = calculator.fitness(pop_tuples)
+
+		# Sort population by fitness score (lower = better)
+		sorted_indices = sorted(range(len(output_population)), key=lambda i: pop_fitness_scores[i])
+		output_population = [output_population[i] for i in sorted_indices]
+		population_metrics = [population_metrics[i] for i in sorted_indices]
+		pop_fitness_scores = [pop_fitness_scores[i] for i in sorted_indices]
+
+		# Best genome is now first in the sorted list
+		best_genome = output_population[0]
+		best_ce_val = population_metrics[0][0]
+		best_acc_val = max(acc for _, acc in population_metrics)
+
+		# Record 1 iteration with ALL population genomes sorted by fitness
 		if self._tracker and self._tracker_experiment_id:
 			try:
 				avg_ce = sum(ce for ce, _ in population_metrics) / len(population_metrics)
@@ -1867,15 +1884,15 @@ class GridSearchStrategy:
 				iter_id = self._tracker.record_iteration(
 					experiment_id=self._tracker_experiment_id,
 					iteration_num=1,
-					best_ce=best_result["ce"],
-					best_accuracy=best_result["accuracy"],
+					best_ce=best_ce_val,
+					best_accuracy=best_acc_val,
 					avg_ce=avg_ce,
 					avg_accuracy=avg_acc,
 					elapsed_secs=batch_elapsed,
 					candidates_total=len(output_population),
 				)
 				if HAS_GENOME_TRACKING:
-					for pos, (genome, (ce, acc)) in enumerate(zip(output_population, population_metrics)):
+					for pos, (genome, (ce, acc), fit) in enumerate(zip(output_population, population_metrics, pop_fitness_scores)):
 						genome_config = self._genome_to_config(genome)
 						if genome_config:
 							genome_id = self._tracker.get_or_create_genome(
@@ -1888,36 +1905,36 @@ class GridSearchStrategy:
 								role=GenomeRole.INIT,
 								ce=ce,
 								accuracy=acc,
+								fitness_score=fit,
 							)
 				self._tracker.update_experiment_progress(
 					self._tracker_experiment_id,
 					current_iteration=1,
-					best_ce=best_result["ce"],
-					best_accuracy=best_result["accuracy"],
+					best_ce=best_ce_val,
+					best_accuracy=best_acc_val,
 				)
 			except Exception as e:
 				self._log(f"  Warning: tracker error: {e}")
 
 		# Build OptimizerResult
 		worst_ce = results[-1]["ce"]
-		best_ce = best_result["ce"]
-		improvement = ((worst_ce - best_ce) / worst_ce * 100) if worst_ce > 0 else 0.0
+		improvement = ((worst_ce - best_ce_val) / worst_ce * 100) if worst_ce > 0 else 0.0
 
 		return OptimizerResult(
 			initial_genome=best_genome,
 			best_genome=best_genome,
 			initial_fitness=worst_ce,
-			final_fitness=best_ce,
+			final_fitness=best_ce_val,
 			improvement_percent=improvement,
 			iterations_run=1,
 			method_name="GridSearch",
-			history=[(1, best_result["ce"])],
+			history=[(1, best_ce_val)],
 			early_stopped=False,
 			stop_reason=StopReason.MAX_ITERATIONS,
 			final_population=output_population,
 			population_metrics=population_metrics,
 			initial_accuracy=results[-1]["accuracy"],
-			final_accuracy=best_result["accuracy"],
+			final_accuracy=best_acc_val,
 			final_threshold=None,
 		)
 
