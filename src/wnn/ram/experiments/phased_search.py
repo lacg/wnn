@@ -195,7 +195,7 @@ class PhasedSearchConfig:
 			)
 
 		# Build per-cluster bits and neurons arrays
-		bits_per_cluster = []
+		cluster_bits = []
 		neurons_per_cluster = []
 		cluster_idx = 0
 
@@ -208,7 +208,7 @@ class PhasedSearchConfig:
 			else:
 				count = min(num_clusters, vocab_size - cluster_idx)
 
-			bits_per_cluster.extend([bits] * count)
+			cluster_bits.extend([bits] * count)
 			neurons_per_cluster.extend([neurons] * count)
 			cluster_idx += count
 
@@ -216,13 +216,20 @@ class PhasedSearchConfig:
 				break
 
 		# Pad if needed (shouldn't happen with proper config)
-		while len(bits_per_cluster) < vocab_size:
-			bits_per_cluster.append(self.default_bits)
+		while len(cluster_bits) < vocab_size:
+			cluster_bits.append(self.default_bits)
 			neurons_per_cluster.append(self.default_neurons)
 
+		# Expand per-cluster bits to per-neuron
+		cluster_bits = cluster_bits[:vocab_size]
+		neurons_per_cluster = neurons_per_cluster[:vocab_size]
+		bits_per_neuron = []
+		for b, n in zip(cluster_bits, neurons_per_cluster):
+			bits_per_neuron.extend([b] * n)
+
 		return ClusterGenome(
-			bits_per_cluster=bits_per_cluster[:vocab_size],
-			neurons_per_cluster=neurons_per_cluster[:vocab_size],
+			bits_per_neuron=bits_per_neuron,
+			neurons_per_cluster=neurons_per_cluster,
 		)
 
 	def create_tiered_random_genome(
@@ -267,7 +274,7 @@ class PhasedSearchConfig:
 			)
 
 		# Build per-cluster bits and neurons arrays with random variation
-		bits_per_cluster = []
+		cluster_bits = []
 		neurons_per_cluster = []
 		cluster_idx = 0
 
@@ -283,7 +290,7 @@ class PhasedSearchConfig:
 				# Random bits within ±variation of tier target, clamped to bounds
 				b = tier_bits + rng.randint(-bits_variation, bits_variation)
 				b = max(min_bits, min(max_bits, b))
-				bits_per_cluster.append(b)
+				cluster_bits.append(b)
 
 				# Random neurons within ±variation of tier target, clamped to bounds
 				n = tier_neurons + rng.randint(-neurons_variation, neurons_variation)
@@ -295,13 +302,20 @@ class PhasedSearchConfig:
 				break
 
 		# Pad if needed
-		while len(bits_per_cluster) < vocab_size:
-			bits_per_cluster.append(self.default_bits)
+		while len(cluster_bits) < vocab_size:
+			cluster_bits.append(self.default_bits)
 			neurons_per_cluster.append(self.default_neurons)
 
+		# Expand per-cluster bits to per-neuron
+		cluster_bits = cluster_bits[:vocab_size]
+		neurons_per_cluster = neurons_per_cluster[:vocab_size]
+		bits_per_neuron = []
+		for b, n in zip(cluster_bits, neurons_per_cluster):
+			bits_per_neuron.extend([b] * n)
+
 		return ClusterGenome(
-			bits_per_cluster=bits_per_cluster[:vocab_size],
-			neurons_per_cluster=neurons_per_cluster[:vocab_size],
+			bits_per_neuron=bits_per_neuron,
+			neurons_per_cluster=neurons_per_cluster,
 		)
 
 	def to_yaml(self) -> str:

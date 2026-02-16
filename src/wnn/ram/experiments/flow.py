@@ -542,6 +542,7 @@ class Flow:
 		current_population = seed_population
 		current_threshold = seed_threshold
 		current_fitness: Optional[float] = None
+		current_evals: Optional[list[tuple[float, float]]] = None  # Cached metrics from previous phase
 		stopped_at_idx: Optional[int] = None  # Track where we stopped for checkpoint
 
 		try:
@@ -685,6 +686,7 @@ class Flow:
 					initial_population=current_population,
 					initial_threshold=current_threshold,
 					tracker_experiment_id=tracker_experiment_id,  # Pass this experiment's ID
+					initial_evals=current_evals,
 				)
 
 				self._results.append(result)
@@ -707,6 +709,7 @@ class Flow:
 				current_population = result.final_population
 				current_threshold = result.final_threshold
 				current_fitness = result.final_fitness
+				current_evals = result.population_metrics
 
 			# Flow completed successfully
 			if self.dashboard_client and self._flow_id:
@@ -1007,7 +1010,7 @@ class Flow:
 				neurons=5,
 			)
 
-		bits_per_cluster = []
+		cluster_bits = []
 		neurons_per_cluster = []
 		cluster_idx = 0
 
@@ -1019,7 +1022,7 @@ class Flow:
 			else:
 				count = min(num_clusters, self.evaluator.vocab_size - cluster_idx)
 
-			bits_per_cluster.extend([bits] * count)
+			cluster_bits.extend([bits] * count)
 			neurons_per_cluster.extend([neurons] * count)
 			cluster_idx += count
 
@@ -1027,13 +1030,20 @@ class Flow:
 				break
 
 		# Pad if needed
-		while len(bits_per_cluster) < self.evaluator.vocab_size:
-			bits_per_cluster.append(8)
+		while len(cluster_bits) < self.evaluator.vocab_size:
+			cluster_bits.append(8)
 			neurons_per_cluster.append(5)
 
+		# Expand per-cluster bits to per-neuron
+		cluster_bits = cluster_bits[:self.evaluator.vocab_size]
+		neurons_per_cluster = neurons_per_cluster[:self.evaluator.vocab_size]
+		bits_per_neuron = []
+		for b, n in zip(cluster_bits, neurons_per_cluster):
+			bits_per_neuron.extend([b] * n)
+
 		genome = ClusterGenome(
-			bits_per_cluster=bits_per_cluster[:self.evaluator.vocab_size],
-			neurons_per_cluster=neurons_per_cluster[:self.evaluator.vocab_size],
+			bits_per_neuron=bits_per_neuron,
+			neurons_per_cluster=neurons_per_cluster,
 		)
 
 		# Initialize connections

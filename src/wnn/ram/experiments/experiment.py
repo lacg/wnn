@@ -316,6 +316,7 @@ class Experiment:
 		initial_population: Optional[list[ClusterGenome]] = None,
 		initial_threshold: Optional[float] = None,
 		tracker_experiment_id: Optional[int] = None,
+		initial_evals: Optional[list[tuple[float, float]]] = None,
 	) -> ExperimentResult:
 		"""
 		Run the experiment.
@@ -326,6 +327,7 @@ class Experiment:
 			initial_population: Population to seed from
 			initial_threshold: Starting accuracy threshold
 			tracker_experiment_id: V2 experiment ID for tracker (if using V2 tracking)
+			initial_evals: Cached eval results from previous phase (avoids re-evaluation for INIT validation)
 
 		Returns:
 			ExperimentResult with optimization results
@@ -449,11 +451,15 @@ class Experiment:
 		)
 
 		# Run INIT validation on seed population
-		# First evaluate to get baseline metrics, then run full validation on best genomes
+		# Use cached evals from previous phase if available (avoids redundant re-evaluation)
 		seed_pop = initial_population or ([initial_genome] if initial_genome else None)
 		if seed_pop:
-			self.log("  Evaluating initial population for validation selection...")
-			init_evals = self.evaluator.evaluate_batch(seed_pop)
+			if initial_evals and len(initial_evals) == len(seed_pop):
+				self.log(f"  Using cached metrics for INIT validation ({len(seed_pop)} genomes)")
+				init_evals = initial_evals
+			else:
+				self.log(f"  Evaluating initial population for validation selection ({len(seed_pop)} genomes)...")
+				init_evals = self.evaluator.evaluate_batch(seed_pop)
 			self._run_validation(
 				population=seed_pop,
 				evals=init_evals,
@@ -662,14 +668,14 @@ class Experiment:
 		"""
 		Compute a unique hash for a genome based on its configuration.
 
-		The hash is based on bits_per_cluster, neurons_per_cluster, and connections.
+		The hash is based on bits_per_neuron, neurons_per_cluster, and connections.
 		Two genomes with the same hash will produce identical results.
 		"""
 		import hashlib
 
 		# Create a string representation of the genome's defining characteristics
 		parts = [
-			",".join(str(b) for b in genome.bits_per_cluster),
+			",".join(str(b) for b in genome.bits_per_neuron),
 			",".join(str(n) for n in genome.neurons_per_cluster),
 		]
 		if genome.connections is not None:
@@ -687,9 +693,10 @@ class Experiment:
 		"""
 		Select genomes for validation: best CE, best Acc, best Fitness.
 
-		Always returns all three types, even if they refer to the same genome.
-		This allows the frontend to display all markers. Duplicate computation
-		is avoided via genome_hash caching in _run_validation.
+		Uses FitnessCalculator.bests() for correct, consistent selection
+		across all three metrics. Always returns all three types, even if
+		they refer to the same genome — deduplication happens via genome_hash
+		caching in _run_validation.
 
 		Args:
 			genomes: Population of genomes
@@ -704,32 +711,32 @@ class Experiment:
 
 		# Normalize evals to (ce, acc) — BitwiseEvaluator returns 3-tuples
 		normalized = [(e[0], e[1]) for e in evals]
-		genome_evals = list(zip(genomes, normalized))
 
-		# Sort by CE (lower = better) and Acc (higher = better)
-		by_ce = sorted(genome_evals, key=lambda x: x[1][0])
-		by_acc = sorted(genome_evals, key=lambda x: -x[1][1])
-
-		# Best by CE (always included)
-		best_ce_genome, (best_ce_ce, best_ce_acc) = by_ce[0]
-		selected = [(best_ce_genome, 'best_ce', best_ce_ce, best_ce_acc)]
-
-		# Best by Acc (always included, even if same genome as best_ce)
-		best_acc_genome, (best_acc_ce, best_acc_acc) = by_acc[0]
-		selected.append((best_acc_genome, 'best_acc', best_acc_ce, best_acc_acc))
-
-		# Best by Fitness (if using combined fitness)
+		# Use bests() for consistent selection across all three metrics
 		if fitness_calculator is not None:
 			try:
-				scored = [(g, fitness_calculator.calculate_fitness(ce, acc), ce, acc)
-						  for g, (ce, acc) in genome_evals]
-				by_fitness = sorted(scored, key=lambda x: -x[1])
-				best_fitness_genome, _, bf_ce, bf_acc = by_fitness[0]
-				selected.append((best_fitness_genome, 'best_fitness', bf_ce, bf_acc))
+				population = [(g, ce, acc) for g, (ce, acc) in zip(genomes, normalized)]
+				pop_bests = fitness_calculator.bests(population)
+				return [
+					(pop_bests.best_ce.genome, 'best_ce', pop_bests.best_ce.ce, pop_bests.best_ce.accuracy),
+					(pop_bests.best_acc.genome, 'best_acc', pop_bests.best_acc.ce, pop_bests.best_acc.accuracy),
+					(pop_bests.best_fitness.genome, 'best_fitness', pop_bests.best_fitness.ce, pop_bests.best_fitness.accuracy),
+				]
 			except Exception:
 				pass
 
-		return selected
+		# Fallback without fitness calculator: just CE and Acc
+		genome_evals = list(zip(genomes, normalized))
+		by_ce = sorted(genome_evals, key=lambda x: x[1][0])
+		by_acc = sorted(genome_evals, key=lambda x: -x[1][1])
+
+		best_ce_genome, (best_ce_ce, best_ce_acc) = by_ce[0]
+		best_acc_genome, (best_acc_ce, best_acc_acc) = by_acc[0]
+
+		return [
+			(best_ce_genome, 'best_ce', best_ce_ce, best_ce_acc),
+			(best_acc_genome, 'best_acc', best_acc_ce, best_acc_acc),
+		]
 
 	def _run_validation(
 		self,

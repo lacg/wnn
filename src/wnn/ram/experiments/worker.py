@@ -797,7 +797,7 @@ class FlowWorker:
 
                 # Convert to ClusterGenome
                 genome = ClusterGenome(
-                    bits_per_cluster=genome_data["bits_per_cluster"],
+                    bits_per_neuron=genome_data.get("bits_per_neuron", genome_data.get("bits_per_cluster", [])),
                     neurons_per_cluster=genome_data["neurons_per_cluster"],
                     connections=genome_data.get("connections"),
                 )
@@ -883,7 +883,7 @@ class FlowWorker:
 
         for genome_type, genome_data in genomes.items():
             # Compute simple hash from bits/neurons
-            config_hash = str(genome_data.get("bits_per_cluster", [])) + str(genome_data.get("neurons_per_cluster", []))
+            config_hash = str(genome_data.get("bits_per_neuron", genome_data.get("bits_per_cluster", []))) + str(genome_data.get("neurons_per_cluster", []))
             if config_hash not in seen_hashes:
                 seen_hashes[config_hash] = genome_type
                 deduped[genome_type] = genome_data
