@@ -660,7 +660,8 @@ class FlowWorker:
             # Grid search: set grid params and correct max_iterations
             neurons_grid = params.get("neurons_grid", [50, 100, 150, 200])
             bits_grid = params.get("bits_grid", [14, 16, 18, 20])
-            grid_top_k = params.get("grid_top_k", 3)
+            num_grid_configs = len(neurons_grid) * len(bits_grid)
+            grid_top_k = params.get("grid_top_k", num_grid_configs)  # Default: use all configs
             pop_size = exp_data.get("population_size") or params.get("population_size", 50)
 
             if experiment_type == ExperimentType.GRID_SEARCH:

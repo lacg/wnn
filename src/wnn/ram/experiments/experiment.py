@@ -104,7 +104,7 @@ class ExperimentConfig:
 	# Grid search configuration (only used when experiment_type=GRID_SEARCH)
 	neurons_grid: Optional[list[int]] = None   # e.g. [50, 100, 150, 200]
 	bits_grid: Optional[list[int]] = None       # e.g. [14, 16, 18, 20]
-	grid_top_k: int = 3                         # Top-K configs to seed population
+	grid_top_k: int = 16                        # Top-K configs to seed population (default: all 4×4 grid)
 
 	def to_dict(self) -> dict[str, Any]:
 		"""Convert to dictionary for JSON serialization.
