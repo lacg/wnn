@@ -573,30 +573,33 @@ class FlowWorker:
         return evaluator
 
     def _create_full_evaluator(self, context_size: int, params: dict):
-        """Create a full BitwiseEvaluator for validation.
+        """Create a full BitwiseEvaluator for validation summaries.
 
-        Trains on ALL train data (1 partition), evaluates on validation set.
-        Used for checkpoint validation summaries (held-out evaluation).
+        Used ONLY for the 1-3 genome summary at end of each phase.
+        Trains on train set, evaluates on validation set (held-out).
+        GA/TS never touches this evaluator.
         """
         from wnn.ram.architecture.bitwise_evaluator import BitwiseEvaluator
 
         memory_mode_map = {"TERNARY": 0, "QUAD_BINARY": 1, "QUAD_WEIGHTED": 2}
         memory_mode = memory_mode_map.get(params.get("memory_mode", "QUAD_WEIGHTED"), 2)
         neuron_sample_rate = params.get("neuron_sample_rate", 0.25)
+        full_train_parts = params.get("full_train_parts", 1)
+        full_eval_parts = params.get("full_eval_parts", 1)
 
         full_eval = BitwiseEvaluator(
             train_tokens=self._train_tokens,
             eval_tokens=self._validation_tokens,
             vocab_size=self._vocab_size,
             context_size=context_size,
-            num_parts=1,
-            num_eval_parts=1,
+            num_parts=full_train_parts,
+            num_eval_parts=full_eval_parts,
             memory_mode=memory_mode,
             neuron_sample_rate=neuron_sample_rate,
         )
 
-        self._log(f"  Full evaluator: train={len(self._train_tokens):,} tokens (1 part), "
-                   f"validation={len(self._validation_tokens):,} tokens (1 part)")
+        self._log(f"  Full evaluator: train={len(self._train_tokens):,} tokens ({full_train_parts} parts), "
+                   f"validation={len(self._validation_tokens):,} tokens ({full_eval_parts} parts)")
         return full_eval
 
     def _build_experiment_configs(
