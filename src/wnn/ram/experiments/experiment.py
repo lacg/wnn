@@ -785,13 +785,15 @@ class Experiment:
 						pass
 
 				if cached is not None:
-					ce, acc = cached
+					result = cached
+					ce, acc = result[0], result[1]
 					self.log(f"  {genome_type}: CE={ce:.4f}, Acc={acc:.4%} (cached)")
 				else:
 					# Run full validation
 					self.log(f"  {genome_type}: Running full validation...")
 					full_results = self.evaluator.evaluate_batch_full([genome])
-					ce, acc = full_results[0]
+					result = full_results[0]
+					ce, acc = result[0], result[1]
 					self.log(f"  {genome_type}: CE={ce:.4f}, Acc={acc:.4%} (validated)")
 
 				# Always store summary via dashboard API (even if cached)

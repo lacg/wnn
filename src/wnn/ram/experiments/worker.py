@@ -616,6 +616,11 @@ class FlowWorker:
             else:
                 max_iters = exp_data.get("max_iterations") or params.get("ga_generations", 250)
 
+            # Determine cluster_type from architecture_type
+            architecture_type = params.get("architecture_type", "tiered")
+            from wnn.ram.experiments.experiment import ClusterType
+            cluster_type = ClusterType.BITWISE if architecture_type == "bitwise" else ClusterType.TIERED
+
             exp_config = ExperimentConfig(
                 name=exp_data.get("name", "Unnamed"),
                 experiment_type=experiment_type,
@@ -638,6 +643,7 @@ class FlowWorker:
                 threshold_delta=per_phase_delta,
                 threshold_reference=max_iters,  # Full ramp within each phase
                 seed=seed,
+                cluster_type=cluster_type,
                 # Bitwise-specific bounds from flow params
                 bitwise_min_bits=params.get("min_bits"),
                 bitwise_max_bits=params.get("max_bits"),

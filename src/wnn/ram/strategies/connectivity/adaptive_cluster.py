@@ -19,6 +19,8 @@ import gzip
 import json
 import math
 import random
+
+import numpy as np
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
@@ -208,12 +210,9 @@ class ClusterGenome:
 
 		connections = None
 		if total_input_bits is not None:
-			if rng is not None:
-				random.seed(rng)
-			connections = []
-			for _ in range(total_neurons):
-				for _ in range(bits):
-					connections.append(random.randint(0, total_input_bits - 1))
+			total_connections = total_neurons * bits
+			np_rng = np.random.default_rng(rng)
+			connections = np_rng.integers(0, total_input_bits, size=total_connections).tolist()
 
 		return cls(
 			bits_per_neuron=bits_per_neuron,
@@ -306,10 +305,9 @@ class ClusterGenome:
 		# Initialize connections if total_input_bits provided
 		connections = None
 		if total_input_bits is not None:
-			connections = []
-			for b in bits_per_neuron:
-				for _ in range(b):
-					connections.append(random.randint(0, total_input_bits - 1))
+			total_connections = sum(bits_per_neuron)
+			np_rng = np.random.default_rng(rng)
+			connections = np_rng.integers(0, total_input_bits, size=total_connections).tolist()
 
 		return cls(bits_per_neuron=bits_per_neuron, neurons_per_cluster=neurons, connections=connections)
 
@@ -398,10 +396,8 @@ class ClusterGenome:
 				new_bits, new_neurons, old_neurons, tib
 			)
 		elif total_input_bits is not None:
-			new_connections = []
-			for b in new_bits:
-				for _ in range(b):
-					new_connections.append(random.randint(0, tib - 1))
+			total_conns = sum(new_bits)
+			new_connections = np.random.default_rng().integers(0, tib, size=total_conns).tolist()
 
 		return ClusterGenome(
 			bits_per_neuron=new_bits,
@@ -569,13 +565,9 @@ class ClusterGenome:
 
 	def initialize_connections(self, total_input_bits: int, rng: Optional[int] = None) -> None:
 		"""Initialize random connections for this genome."""
-		if rng is not None:
-			random.seed(rng)
-
-		self.connections = []
-		for b in self.bits_per_neuron:
-			for _ in range(b):
-				self.connections.append(random.randint(0, total_input_bits - 1))
+		total = sum(self.bits_per_neuron)
+		np_rng = np.random.default_rng(rng)
+		self.connections = np_rng.integers(0, total_input_bits, size=total).tolist()
 
 	def clone(self) -> ClusterGenome:
 		"""Create a deep copy of this genome including connections and cached fitness."""

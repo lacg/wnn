@@ -1691,6 +1691,7 @@ class GridSearchStrategy:
 
 	def _create_genome(self, neurons_per_cluster: int, bits_per_neuron: int) -> 'ClusterGenome':
 		"""Create a genome with uniform neurons/bits and random connections."""
+		import numpy as np
 		from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 
 		cfg = self._config
@@ -1700,10 +1701,9 @@ class GridSearchStrategy:
 
 		connections = None
 		if cfg.total_input_bits is not None:
-			connections = []
-			for b in bits:
-				for _ in range(b):
-					connections.append(self._rng.randint(0, cfg.total_input_bits - 1))
+			total_connections = total_neurons * bits_per_neuron
+			np_rng = np.random.default_rng(self._rng.randint(0, 2**31))
+			connections = np_rng.integers(0, cfg.total_input_bits, size=total_connections).tolist()
 
 		return ClusterGenome(bits_per_neuron=bits, neurons_per_cluster=neurons, connections=connections)
 
@@ -1814,21 +1814,22 @@ class GridSearchStrategy:
 					elapsed_secs=batch_elapsed,
 					candidates_total=total_configs,
 				)
-				# Record the best genome evaluation
+				# Record all config evaluations (one genome per config)
 				if HAS_GENOME_TRACKING:
-					genome_config = self._genome_to_config(best_genome)
-					if genome_config:
-						genome_id = self._tracker.get_or_create_genome(
-							self._tracker_experiment_id, genome_config
-						)
-						self._tracker.record_genome_evaluation(
-							iteration_id=iter_id,
-							genome_id=genome_id,
-							position=0,
-							role=GenomeRole.INIT,
-							ce=best_result["ce"],
-							accuracy=best_result["accuracy"],
-						)
+					for pos, r in enumerate(results):
+						genome_config = self._genome_to_config(r["genome"])
+						if genome_config:
+							genome_id = self._tracker.get_or_create_genome(
+								self._tracker_experiment_id, genome_config
+							)
+							self._tracker.record_genome_evaluation(
+								iteration_id=iter_id,
+								genome_id=genome_id,
+								position=pos,
+								role=GenomeRole.INIT,
+								ce=r["ce"],
+								accuracy=r["accuracy"],
+							)
 				self._tracker.update_experiment_progress(
 					self._tracker_experiment_id,
 					current_iteration=1,

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal, Optional
 
 from wnn.ram.fitness import FitnessCalculatorType
-from wnn.ram.experiments.experiment import Experiment, ExperimentConfig, ExperimentResult, ExperimentType
+from wnn.ram.experiments.experiment import Experiment, ClusterType, ExperimentConfig, ExperimentResult, ExperimentType
 from wnn.ram.experiments.dashboard_client import DashboardClient, FlowConfig as APIFlowConfig
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 
@@ -269,6 +269,7 @@ class FlowConfig:
 				fitness_weight_ce=fitness_weight_ce,
 				fitness_weight_acc=fitness_weight_acc,
 				seed=seed,
+				cluster_type=ClusterType.BITWISE,
 				# Bitwise-specific bounds
 				bitwise_min_bits=min_bits,
 				bitwise_max_bits=max_bits,
