@@ -18,6 +18,7 @@ Supports:
 
 import logging
 import random
+import time
 from abc import ABC, abstractmethod
 from collections import deque
 from dataclasses import dataclass, field
@@ -1361,6 +1362,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 		shutdown_requested = False
 		generation = 0
 		for generation in range(cfg.generations):
+			gen_start_time = time.time()
 			# Progressive threshold: gets stricter as generations progress
 			current_threshold = get_threshold(generation / cfg.threshold_reference)
 			# Only log if formatted values differ (avoid noise from tiny internal differences)
@@ -1488,6 +1490,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 						offspring_count=len(offspring),
 						offspring_viable=len(offspring),  # All offspring are viable at this point
 						fitness_threshold=current_threshold,
+						elapsed_secs=time.time() - gen_start_time,
 						baseline_ce=baseline_ce,
 						delta_baseline=delta_baseline,
 						delta_previous=delta_previous,
@@ -2167,6 +2170,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 		shutdown_requested = False
 		iteration = 0
 		for iteration in range(cfg.iterations):
+			iter_start_time = time.time()
 			# Progressive threshold
 			current_threshold = get_threshold(iteration / cfg.threshold_reference)
 			if prev_threshold is not None and f"{prev_threshold:.4%}" != f"{current_threshold:.4%}":
@@ -2312,6 +2316,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 						offspring_count=len(viable),
 						offspring_viable=len(viable),
 						fitness_threshold=current_threshold,
+						elapsed_secs=time.time() - iter_start_time,
 						baseline_ce=baseline_ce,
 						delta_baseline=delta_baseline,
 						delta_previous=delta_previous,
