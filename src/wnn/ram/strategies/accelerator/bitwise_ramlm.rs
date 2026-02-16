@@ -1957,10 +1957,11 @@ pub fn evaluate_genomes_adaptive(
 
                     if adapt_config.axonogenesis_enabled {
                         let rw = adaptation::axonogenesis_pass(
-                            &adapt_bits[i], &mut adapt_conns[i],
-                            &neuron_stats, adapt_config,
+                            &adapt_bits[i], &adapt_neurons[i], &mut adapt_conns[i],
+                            &neuron_stats, &trained_data[i].0, adapt_config,
                             &train_subset.packed_input, train_subset.words_per_example,
-                            train_subset.num_examples, adaptation_rate,
+                            &train_subset.target_bits, train_subset.num_examples,
+                            num_clusters, adaptation_rate,
                             &mut adapt_rngs[i],
                         );
                         adapt_rewired[i] += rw;

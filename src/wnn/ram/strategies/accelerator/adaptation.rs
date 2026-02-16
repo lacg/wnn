@@ -630,39 +630,61 @@ enum Modification {
 /// Unlike synaptogenesis (which changes the number of connections), axonogenesis
 /// keeps the same bit count but REPLACES which input bits each neuron observes.
 ///
-/// Algorithm (entropy-guided, v1):
-/// 1. For each neuron, rank existing connections by entropy (from NeuronStats)
-/// 2. Identify the K worst connections (below median * threshold)
-/// 3. Pre-compute marginal entropy of all input bits (proxy for MI with target)
-/// 4. For each weak connection, find the best unused bit by entropy
-/// 5. Swap if candidate entropy > old entropy * improvement_factor
-/// 6. Gate each swap by cosine-annealed rate
+/// Hybrid MI algorithm (3 stages):
+///
+/// Stage 1 — Entropy filter (FREE, uses pre-computed bit_ones):
+///   Identify weak connections (entropy < median * threshold) and filter candidate
+///   replacement bits by marginal entropy (skip near-constant bits). Eliminates ~90%.
+///
+/// Stage 2 — Accuracy delta (moderate, uses trained memory):
+///   For each weak connection × filtered candidate, compute per-neuron accuracy change
+///   by address flipping: swap one bit in the address, look up both old and new memory
+///   values, count net correct predictions. Only O(K × M × N_samples) memory lookups.
+///
+/// Stage 3 — Redundancy penalty (cheap, bit co-occurrence):
+///   Penalize candidates whose values are highly correlated with an existing connection.
+///   Uses Jaccard similarity on sampled bit values. Prevents connecting to redundant info.
 ///
 /// Returns rewired_count.
 pub fn axonogenesis_pass(
 	bits_per_neuron: &[usize],
+	neurons_per_cluster: &[usize],
 	connections: &mut Vec<i64>,
 	neuron_stats: &[NeuronStats],
+	storages: &[ClusterStorage],
 	config: &AdaptationConfig,
 	packed_input: &[u64],
 	words_per_example: usize,
+	target_bits: &[u8],
 	num_examples: usize,
+	num_clusters: usize,
 	rate: f32,
 	rng: &mut impl Rng,
 ) -> usize {
 	let total_neurons = bits_per_neuron.len();
 	let mut rewired = 0usize;
+	let max_candidates = 20usize;  // Top-M candidates by entropy per weak connection
 
-	// Build connection offsets
+	// Build connection offsets (per-neuron)
 	let mut conn_offsets = vec![0usize];
 	for &b in bits_per_neuron.iter() {
 		conn_offsets.push(conn_offsets.last().unwrap() + b);
 	}
 
-	// Pre-compute marginal entropy for all input bits (MI proxy)
+	// Build neuron-to-cluster mapping
+	let mut neuron_cluster = Vec::with_capacity(total_neurons);
+	let mut neuron_local_idx = Vec::with_capacity(total_neurons);
+	for (c, &nc) in neurons_per_cluster.iter().enumerate() {
+		for local in 0..nc {
+			neuron_cluster.push(c);
+			neuron_local_idx.push(local);
+		}
+	}
+
+	// Stage 1: Pre-compute marginal entropy for all input bits
 	let sample_indices = build_sample_indices(num_examples, config.stats_sample_size, 77);
-	let bit_ones = precompute_bit_ones(packed_input, words_per_example, &sample_indices, config.total_input_bits);
 	let n_sample = sample_indices.len();
+	let bit_ones = precompute_bit_ones(packed_input, words_per_example, &sample_indices, config.total_input_bits);
 	let bit_entropy: Vec<f32> = bit_ones.iter().map(|&ones| {
 		let p = ones as f32 / n_sample.max(1) as f32;
 		if p > 0.0 && p < 1.0 {
@@ -672,19 +694,41 @@ pub fn axonogenesis_pass(
 		}
 	}).collect();
 
+	// Minimum entropy for a candidate to be considered (skip near-constant bits)
+	let entropy_floor = 0.1f32;
+
+	// Pre-compute bit values for sampled examples (for redundancy computation).
+	// bit_vals[bit_idx][sample_i] = 0 or 1. Only computed for bits above entropy floor.
+	// We store as packed bytes for memory efficiency.
+	let mut bit_vals: Vec<Option<Vec<u8>>> = vec![None; config.total_input_bits];
+	for bit_idx in 0..config.total_input_bits {
+		if bit_entropy[bit_idx] >= entropy_floor {
+			let mut vals = Vec::with_capacity(n_sample);
+			for &ex in &sample_indices {
+				let row_start = ex * words_per_example;
+				let word_idx = bit_idx / 64;
+				let bit_pos = bit_idx % 64;
+				let bit = ((packed_input[row_start + word_idx] >> bit_pos) & 1) as u8;
+				vals.push(bit);
+			}
+			bit_vals[bit_idx] = Some(vals);
+		}
+	}
+
 	// Process each neuron
 	for n in 0..total_neurons {
 		let n_bits = bits_per_neuron[n];
-		if n_bits < 2 { continue; }  // Need at least 2 connections to consider rewiring
+		if n_bits < 2 { continue; }
 
 		let stats = &neuron_stats[n];
 		let conn_start = conn_offsets[n];
+		let cluster = neuron_cluster[n];
+		let local_n = neuron_local_idx[n];
 
-		// Find the threshold below which connections are candidates for rewiring
+		// Stage 1a: Find weak connections (entropy < median * threshold)
 		let median_ent = median_of(&stats.connection_entropy);
 		let rewire_threshold = median_ent * config.axon_entropy_threshold;
 
-		// Collect weak connections: (local_idx, entropy) sorted by entropy ascending
 		let mut weak_conns: Vec<(usize, f32)> = stats.connection_entropy.iter()
 			.enumerate()
 			.filter(|(_, &ent)| ent < rewire_threshold)
@@ -695,31 +739,116 @@ pub fn axonogenesis_pass(
 
 		if weak_conns.is_empty() { continue; }
 
-		// Build set of currently used connections (for this neuron)
+		// Stage 1b: Get candidate unused bits sorted by marginal entropy (descending)
 		let used: std::collections::HashSet<i64> = connections[conn_start..conn_start + n_bits]
 			.iter().copied().collect();
 
-		// For each weak connection, try to find a better replacement
-		for (local_idx, old_entropy) in &weak_conns {
+		let mut candidates: Vec<(i64, f32)> = (0..config.total_input_bits)
+			.filter(|&b| !used.contains(&(b as i64)) && bit_entropy[b] >= entropy_floor)
+			.map(|b| (b as i64, bit_entropy[b]))
+			.collect();
+		candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+		candidates.truncate(max_candidates);
+
+		if candidates.is_empty() { continue; }
+
+		// Pre-compute base addresses for this neuron on sampled examples
+		let neuron_conns = &connections[conn_start..conn_start + n_bits];
+		let mut base_addresses: Vec<u32> = Vec::with_capacity(n_sample);
+		for &ex in &sample_indices {
+			let row_start = ex * words_per_example;
+			let mut addr = 0u32;
+			for (i, &conn_idx) in neuron_conns.iter().enumerate() {
+				let idx = conn_idx as usize;
+				let bit = (packed_input[row_start + idx / 64] >> (idx % 64)) & 1;
+				addr |= (bit as u32) << (n_bits - 1 - i);
+			}
+			base_addresses.push(addr);
+		}
+
+		// Stage 3 prep: Pre-compute bit values of existing connections (for redundancy)
+		let existing_bit_vals: Vec<Option<&Vec<u8>>> = (0..n_bits)
+			.map(|i| {
+				let conn = neuron_conns[i] as usize;
+				if conn < config.total_input_bits { bit_vals[conn].as_ref() } else { None }
+			})
+			.collect();
+
+		// For each weak connection, find the best candidate using accuracy delta + redundancy
+		for &(local_idx, _old_entropy) in &weak_conns {
 			if rng.gen::<f32>() >= rate { continue; }
 
-			// Find best unused bit by marginal entropy
-			let mut best: Option<(i64, f32)> = None;
-			for bit_idx in 0..config.total_input_bits {
-				let conn_val = bit_idx as i64;
-				if used.contains(&conn_val) { continue; }
-				// Skip if already selected as replacement in a previous iteration of this loop
-				// (check current connections array which is being modified in-place)
-				if connections[conn_start..conn_start + n_bits].contains(&conn_val) { continue; }
-				let h = bit_entropy[bit_idx];
-				if best.is_none() || h > best.unwrap().1 {
-					best = Some((conn_val, h));
+			let old_conn = connections[conn_start + local_idx];
+			let mut best_candidate: Option<(i64, f32)> = None;  // (conn, adjusted_score)
+
+			for &(cand_conn, _cand_entropy) in &candidates {
+				// Skip if already used by this neuron (may have been rewired earlier in this loop)
+				if connections[conn_start..conn_start + n_bits].contains(&cand_conn) { continue; }
+
+				// Stage 2: Accuracy delta — measure per-neuron accuracy change from this swap
+				let mut delta = 0i32;
+				for (si, &ex) in sample_indices.iter().enumerate() {
+					let old_addr = base_addresses[si];
+					let target = target_bits[ex * num_clusters + cluster];
+
+					// Old prediction
+					let old_val = storage_read(&storages[cluster], local_n, old_addr);
+					let old_correct = (old_val >= 0.5) == (target > 0);
+
+					// Flip the address bit at local_idx if old/new input bits differ
+					let row_start = ex * words_per_example;
+					let old_bit = (packed_input[row_start + old_conn as usize / 64]
+						>> (old_conn as usize % 64)) & 1;
+					let new_bit = (packed_input[row_start + cand_conn as usize / 64]
+						>> (cand_conn as usize % 64)) & 1;
+					let new_addr = if old_bit != new_bit {
+						old_addr ^ (1u32 << (n_bits - 1 - local_idx))
+					} else {
+						old_addr
+					};
+
+					// New prediction
+					let new_val = storage_read(&storages[cluster], local_n, new_addr);
+					let new_correct = (new_val >= 0.5) == (target > 0);
+
+					delta += new_correct as i32 - old_correct as i32;
+				}
+
+				if delta <= 0 { continue; }  // No improvement — skip
+
+				// Stage 3: Redundancy penalty — penalize high correlation with existing connections
+				let mut max_jaccard = 0.0f32;
+				if let Some(cand_vals) = &bit_vals[cand_conn as usize] {
+					for (i, existing) in existing_bit_vals.iter().enumerate() {
+						if i == local_idx { continue; }  // Skip the connection being replaced
+						if let Some(existing_vals) = existing {
+							let mut both = 0u32;
+							let mut either = 0u32;
+							for si in 0..n_sample {
+								let a = cand_vals[si];
+								let b = existing_vals[si];
+								both += (a & b) as u32;
+								either += (a | b) as u32;
+							}
+							let jaccard = if either > 0 { both as f32 / either as f32 } else { 0.0 };
+							if jaccard > max_jaccard { max_jaccard = jaccard; }
+						}
+					}
+				}
+
+				// Adjusted score: accuracy delta scaled down by redundancy
+				// redundancy_weight 0.5 means a Jaccard=1.0 (identical) halves the score
+				let redundancy_weight = 0.5f32;
+				let adjusted_score = delta as f32 * (1.0 - redundancy_weight * max_jaccard);
+
+				if best_candidate.is_none() || adjusted_score > best_candidate.unwrap().1 {
+					best_candidate = Some((cand_conn, adjusted_score));
 				}
 			}
 
-			// Rewire if candidate is significantly better
-			if let Some((new_conn, new_entropy)) = best {
-				if new_entropy > old_entropy * config.axon_improvement_factor {
+			// Rewire if we found a positive-scoring candidate
+			if let Some((new_conn, score)) = best_candidate {
+				if score > 0.0 {
 					connections[conn_start + local_idx] = new_conn;
 					rewired += 1;
 				}
