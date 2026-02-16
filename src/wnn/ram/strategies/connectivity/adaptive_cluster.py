@@ -44,6 +44,23 @@ from wnn.ram.strategies.connectivity.generic_strategies import (
 if TYPE_CHECKING:
 	pass
 
+# Try to import Rust accelerator for fast connection generation
+try:
+	import ram_accelerator as _accel
+	_HAS_RUST = True
+except ImportError:
+	_HAS_RUST = False
+
+
+def generate_connections(bits_per_neuron: list[int], total_input_bits: int, seed: int | None = None) -> list[int]:
+	"""Generate random connections using Rust accelerator with numpy fallback."""
+	if seed is None:
+		seed = random.randint(0, 2**63)
+	if _HAS_RUST:
+		return _accel.generate_random_connections(bits_per_neuron, total_input_bits, seed)
+	np_rng = np.random.default_rng(seed)
+	return np_rng.integers(0, total_input_bits, size=sum(bits_per_neuron)).tolist()
+
 
 class GenomeInitStrategy(IntEnum):
 	"""
@@ -210,9 +227,7 @@ class ClusterGenome:
 
 		connections = None
 		if total_input_bits is not None:
-			total_connections = total_neurons * bits
-			np_rng = np.random.default_rng(rng)
-			connections = np_rng.integers(0, total_input_bits, size=total_connections).tolist()
+			connections = generate_connections(bits_per_neuron, total_input_bits, rng)
 
 		return cls(
 			bits_per_neuron=bits_per_neuron,
@@ -305,9 +320,7 @@ class ClusterGenome:
 		# Initialize connections if total_input_bits provided
 		connections = None
 		if total_input_bits is not None:
-			total_connections = sum(bits_per_neuron)
-			np_rng = np.random.default_rng(rng)
-			connections = np_rng.integers(0, total_input_bits, size=total_connections).tolist()
+			connections = generate_connections(bits_per_neuron, total_input_bits, rng)
 
 		return cls(bits_per_neuron=bits_per_neuron, neurons_per_cluster=neurons, connections=connections)
 
@@ -396,8 +409,7 @@ class ClusterGenome:
 				new_bits, new_neurons, old_neurons, tib
 			)
 		elif total_input_bits is not None:
-			total_conns = sum(new_bits)
-			new_connections = np.random.default_rng().integers(0, tib, size=total_conns).tolist()
+			new_connections = generate_connections(new_bits, tib)
 
 		return ClusterGenome(
 			bits_per_neuron=new_bits,
@@ -565,9 +577,7 @@ class ClusterGenome:
 
 	def initialize_connections(self, total_input_bits: int, rng: Optional[int] = None) -> None:
 		"""Initialize random connections for this genome."""
-		total = sum(self.bits_per_neuron)
-		np_rng = np.random.default_rng(rng)
-		self.connections = np_rng.integers(0, total_input_bits, size=total).tolist()
+		self.connections = generate_connections(self.bits_per_neuron, total_input_bits, rng)
 
 	def clone(self) -> ClusterGenome:
 		"""Create a deep copy of this genome including connections and cached fitness."""

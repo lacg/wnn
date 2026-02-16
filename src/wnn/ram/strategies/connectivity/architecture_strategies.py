@@ -978,9 +978,8 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		# Initialize connections if total_input_bits available
 		connections = None
 		if cfg.total_input_bits is not None:
-			total_conns = sum(bits_per_neuron)
-			np_rng = np.random.default_rng(self._rng.randint(0, 2**31))
-			connections = np_rng.integers(0, cfg.total_input_bits, size=total_conns).tolist()
+			from wnn.ram.strategies.connectivity.adaptive_cluster import generate_connections
+			connections = generate_connections(bits_per_neuron, cfg.total_input_bits, self._rng.randint(0, 2**63))
 
 		return ClusterGenome(bits_per_neuron=bits_per_neuron, neurons_per_cluster=neurons, connections=connections)
 
@@ -1029,9 +1028,8 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		# Initialize connections if total_input_bits available
 		connections = None
 		if cfg.total_input_bits is not None:
-			total_conns = sum(bits_per_neuron)
-			np_rng = np.random.default_rng(self._rng.randint(0, 2**31))
-			connections = np_rng.integers(0, cfg.total_input_bits, size=total_conns).tolist()
+			from wnn.ram.strategies.connectivity.adaptive_cluster import generate_connections
+			connections = generate_connections(bits_per_neuron, cfg.total_input_bits, self._rng.randint(0, 2**63))
 
 		return ClusterGenome(bits_per_neuron=bits_per_neuron, neurons_per_cluster=neurons, connections=connections)
 
@@ -1699,9 +1697,8 @@ class GridSearchStrategy:
 
 		connections = None
 		if cfg.total_input_bits is not None:
-			total_connections = total_neurons * bits_per_neuron
-			np_rng = np.random.default_rng(self._rng.randint(0, 2**31))
-			connections = np_rng.integers(0, cfg.total_input_bits, size=total_connections).tolist()
+			from wnn.ram.strategies.connectivity.adaptive_cluster import generate_connections
+			connections = generate_connections(bits, cfg.total_input_bits, self._rng.randint(0, 2**63))
 
 		return ClusterGenome(bits_per_neuron=bits, neurons_per_cluster=neurons, connections=connections)
 

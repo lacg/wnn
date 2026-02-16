@@ -6,6 +6,7 @@
 
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
+use rand::SeedableRng;
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
@@ -4744,6 +4745,55 @@ impl BitwiseCacheWrapper {
     }
 }
 
+// =============================================================================
+// Standalone utility: random connection generation (Rust-accelerated)
+// =============================================================================
+
+/// Generate random connections for a genome entirely in Rust.
+///
+/// Args:
+///   bits_per_neuron: List of bit counts per neuron (flat, [total_neurons])
+///   total_input_bits: Number of input bits to choose from
+///   seed: RNG seed for reproducibility
+///
+/// Returns: List of random connections in [0, total_input_bits), length = sum(bits_per_neuron)
+#[pyfunction]
+fn generate_random_connections(
+    bits_per_neuron: Vec<usize>,
+    total_input_bits: usize,
+    seed: u64,
+) -> Vec<i64> {
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+    neighbor_search::generate_random_connections(&bits_per_neuron, total_input_bits, &mut rng)
+}
+
+/// Generate random connections for multiple genomes in one call.
+///
+/// Args:
+///   all_bits_per_neuron: Concatenated bits_per_neuron for all genomes
+///   genome_neuron_counts: Number of neurons per genome (to split the flat array)
+///   total_input_bits: Number of input bits to choose from
+///   seed: Base RNG seed (each genome gets seed + genome_index)
+///
+/// Returns: Flat list of all connections for all genomes
+#[pyfunction]
+fn generate_random_connections_batch(
+    all_bits_per_neuron: Vec<usize>,
+    genome_neuron_counts: Vec<usize>,
+    total_input_bits: usize,
+    seed: u64,
+) -> Vec<i64> {
+    let mut result = Vec::new();
+    let mut offset = 0;
+    for (g, &n_neurons) in genome_neuron_counts.iter().enumerate() {
+        let bits_slice = &all_bits_per_neuron[offset..offset + n_neurons];
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed.wrapping_add(g as u64));
+        result.extend(neighbor_search::generate_random_connections(bits_slice, total_input_bits, &mut rng));
+        offset += n_neurons;
+    }
+    result
+}
+
 /// Python module definition
 #[pymodule]
 fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -4853,5 +4903,8 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ramlm_bitwise_train_and_eval_numpy, m)?)?;
     m.add_function(wrap_pyfunction!(ramlm_forward_batch_quad_binary_numpy, m)?)?;
     m.add_function(wrap_pyfunction!(ramlm_forward_batch_quad_weighted_numpy, m)?)?;
+    // Utility: Rust-accelerated random connection generation
+    m.add_function(wrap_pyfunction!(generate_random_connections, m)?)?;
+    m.add_function(wrap_pyfunction!(generate_random_connections_batch, m)?)?;
     Ok(())
 }

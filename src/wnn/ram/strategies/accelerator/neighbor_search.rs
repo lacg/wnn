@@ -390,6 +390,24 @@ fn adjust_connections_per_neuron(
     result
 }
 
+/// Generate random connections for a genome from scratch.
+///
+/// Each neuron gets `bits_per_neuron[i]` random connections in `[0, total_input_bits)`.
+/// Returns a flat Vec<i64> of length `sum(bits_per_neuron)`.
+pub fn generate_random_connections(
+    bits_per_neuron: &[usize],
+    total_input_bits: usize,
+    rng: &mut impl Rng,
+) -> Vec<i64> {
+    let total: usize = bits_per_neuron.iter().sum();
+    let mut connections = Vec::with_capacity(total);
+    let limit = total_input_bits as i64;
+    for _ in 0..total {
+        connections.push(rng.gen_range(0..limit));
+    }
+    connections
+}
+
 /// Search for neighbors above accuracy threshold (generic over eval backend).
 ///
 /// Generates candidates, evaluates via `evaluate_batch` closure, filters by threshold.
