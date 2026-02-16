@@ -1483,6 +1483,23 @@ pub mod queries {
                     binds.push(now.clone());
                     // Clear stale ended_at from previous runs
                     set_clauses.push("ended_at = NULL");
+                    // Clean stale data from previous runs of this experiment.
+                    // Order: genome_evaluations/health_checks (FK→iterations) first,
+                    // then iterations, genomes, validation_summaries (FK→experiments).
+                    sqlx::query(
+                        "DELETE FROM genome_evaluations WHERE iteration_id IN \
+                         (SELECT id FROM iterations WHERE experiment_id = ?)"
+                    ).bind(id).execute(pool).await?;
+                    sqlx::query(
+                        "DELETE FROM health_checks WHERE iteration_id IN \
+                         (SELECT id FROM iterations WHERE experiment_id = ?)"
+                    ).bind(id).execute(pool).await?;
+                    sqlx::query("DELETE FROM iterations WHERE experiment_id = ?")
+                        .bind(id).execute(pool).await?;
+                    sqlx::query("DELETE FROM genomes WHERE experiment_id = ?")
+                        .bind(id).execute(pool).await?;
+                    sqlx::query("DELETE FROM validation_summaries WHERE experiment_id = ?")
+                        .bind(id).execute(pool).await?;
                 }
                 "completed" | "failed" | "cancelled" => {
                     set_clauses.push("ended_at = ?");
