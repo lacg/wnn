@@ -702,6 +702,136 @@ fn storage_fill_rate(storage: &ClusterStorage, neuron_idx: usize, bits: usize) -
 	filled.min(total_cells) as f32 / total_cells.max(1) as f32
 }
 
+/// Compute neuron + cluster stats on GPU via Metal.
+///
+/// Returns `(Vec<NeuronStats>, Vec<ClusterStats>)` matching the CPU versions.
+/// Connection entropy is still computed on CPU (trivially fast from precomputed bit_ones).
+#[cfg(target_os = "macos")]
+pub fn compute_neuron_and_cluster_stats_gpu(
+	metal: &crate::metal_stats::MetalStatsComputer,
+	bits_per_neuron: &[usize],
+	neurons_per_cluster: &[usize],
+	connections: &[i64],
+	storages: &[ClusterStorage],
+	packed_input: &[u64],
+	words_per_example: usize,
+	target_bits: &[u8],
+	num_examples: usize,
+	num_clusters: usize,
+	config: &AdaptationConfig,
+	memory_mode: u8,
+) -> (Vec<NeuronStats>, Vec<ClusterStats>) {
+	let total_neurons: usize = neurons_per_cluster.iter().sum();
+
+	// Build sample indices (same seed as CPU path for consistency)
+	let sample_indices_usize = build_sample_indices(num_examples, config.stats_sample_size, 42);
+	let n_sample = sample_indices_usize.len();
+	let sample_indices_u32: Vec<u32> = sample_indices_usize.iter().map(|&i| i as u32).collect();
+
+	// Connection entropy on CPU (cheap — just mapping precomputed bit_ones)
+	let bit_ones = precompute_bit_ones(packed_input, words_per_example, &sample_indices_usize, config.total_input_bits);
+
+	let mut conn_offsets = vec![0usize];
+	for &b in bits_per_neuron {
+		conn_offsets.push(conn_offsets.last().unwrap() + b);
+	}
+
+	let conn_entropies: Vec<Vec<f32>> = (0..total_neurons).map(|n| {
+		let n_bits = bits_per_neuron[n];
+		let conn_start = conn_offsets[n];
+		connections[conn_start..conn_start + n_bits].iter().map(|&conn_idx| {
+			let ones = bit_ones[conn_idx as usize];
+			let p = ones as f32 / n_sample.max(1) as f32;
+			if p > 0.0 && p < 1.0 {
+				-(p * p.ln() + (1.0 - p) * (1.0 - p).ln()) / std::f32::consts::LN_2
+			} else {
+				0.0
+			}
+		}).collect()
+	}).collect();
+
+	// GPU computation
+	let (error_counts, filled_counts, cluster_errors, uniqueness_counts, accuracy_counts) =
+		metal.compute_all_stats(
+			packed_input, words_per_example,
+			connections, bits_per_neuron, neurons_per_cluster,
+			storages, target_bits, &sample_indices_u32,
+			num_clusters, memory_mode,
+		);
+
+	// Build NeuronStats
+	let neuron_stats: Vec<NeuronStats> = (0..total_neurons).map(|n| {
+		let n_bits = bits_per_neuron[n];
+		let total_cells = 1usize << n_bits;
+		let fill_rate = filled_counts[n].min(total_cells as u32) as f32 / total_cells.max(1) as f32;
+		let error_rate = if n_sample > 0 {
+			error_counts[n] as f32 / n_sample as f32
+		} else {
+			0.0
+		};
+		NeuronStats {
+			fill_rate,
+			error_rate,
+			connection_entropy: conn_entropies[n].clone(),
+		}
+	}).collect();
+
+	// Build ClusterStats
+	// Build neuron offsets for mapping global → cluster
+	let mut neuron_offsets = vec![0usize];
+	for &nc in neurons_per_cluster {
+		neuron_offsets.push(neuron_offsets.last().unwrap() + nc);
+	}
+
+	// Use the second sample seed for cluster stats (matching CPU path seed=43)
+	// Note: GPU uses the same samples as neuron stats (seed=42) because it reads
+	// the votes buffer produced by Pass 1. This is actually more correct than
+	// the CPU path which uses a different sample for cluster stats.
+	let cluster_sample_size = n_sample;
+
+	let cluster_stats: Vec<ClusterStats> = (0..num_clusters).map(|c| {
+		let n_neurons = neurons_per_cluster[c];
+		let neuron_base = neuron_offsets[c];
+
+		let mean_fill = if n_neurons > 0 {
+			(0..n_neurons).map(|i| neuron_stats[neuron_base + i].fill_rate).sum::<f32>() / n_neurons as f32
+		} else {
+			0.0
+		};
+
+		let error_rate = if cluster_sample_size > 0 {
+			cluster_errors[c] as f32 / cluster_sample_size as f32
+		} else {
+			0.0
+		};
+
+		let uniqueness: Vec<f32> = (0..n_neurons).map(|i| {
+			if cluster_sample_size > 0 {
+				uniqueness_counts[neuron_base + i] as f32 / cluster_sample_size as f32
+			} else {
+				0.0
+			}
+		}).collect();
+
+		let accuracy: Vec<f32> = (0..n_neurons).map(|i| {
+			if cluster_sample_size > 0 {
+				accuracy_counts[neuron_base + i] as f32 / cluster_sample_size as f32
+			} else {
+				0.0
+			}
+		}).collect();
+
+		ClusterStats {
+			error_rate,
+			mean_fill_rate: mean_fill,
+			neuron_uniqueness: uniqueness,
+			neuron_accuracy: accuracy,
+		}
+	}).collect();
+
+	(neuron_stats, cluster_stats)
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;

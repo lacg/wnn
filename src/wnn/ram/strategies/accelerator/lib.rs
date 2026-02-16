@@ -163,6 +163,10 @@ mod bitwise_ramlm;
 #[path = "adaptation.rs"]
 mod adaptation;
 
+#[cfg(target_os = "macos")]
+#[path = "metal_stats.rs"]
+mod metal_stats;
+
 pub use ram::RAMNeuron;
 pub use per_cluster::{PerClusterEvaluator, FitnessMode, TierOptConfig, ClusterOptResult, TierOptResult};
 #[cfg(target_os = "macos")]
