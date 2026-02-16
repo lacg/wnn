@@ -16,6 +16,8 @@ from urllib.parse import urljoin
 
 try:
 	import requests
+	import urllib3
+	urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 	HAS_REQUESTS = True
 except ImportError:
 	HAS_REQUESTS = False
