@@ -2267,6 +2267,7 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 		adapt = EvalAdaptConfig(
 			synaptogenesis_enabled=(mode == "synaptogenesis"),
 			neurogenesis_enabled=(mode == "neurogenesis"),
+			axonogenesis_enabled=(mode == "axonogenesis"),
 			min_bits=cfg.min_bits,
 			max_bits=cfg.max_bits,
 			min_neurons=cfg.min_neurons,

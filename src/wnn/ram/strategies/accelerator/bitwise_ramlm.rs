@@ -1612,6 +1612,7 @@ pub struct AdaptiveResult {
     pub grown: usize,
     pub added: usize,
     pub removed: usize,
+    pub rewired: usize,
 }
 
 /// Evaluate multiple genomes with per-genome adaptation (Baldwin effect).
@@ -1724,7 +1725,7 @@ pub fn evaluate_genomes_adaptive(
 
     // Per-genome adapted data slots (Mutex per genome — zero contention since each
     // thread writes a unique index)
-    let adapted_data: Vec<Mutex<Option<(Vec<usize>, Vec<usize>, Vec<i64>, usize, usize, usize, usize)>>> =
+    let adapted_data: Vec<Mutex<Option<(Vec<usize>, Vec<usize>, Vec<i64>, usize, usize, usize, usize, usize)>>> =
         (0..num_genomes).map(|_| Mutex::new(None)).collect();
 
     // Phase 1: Train + Adapt + Forward (parallel over genomes with memory budgeting)
@@ -1789,7 +1790,7 @@ pub fn evaluate_genomes_adaptive(
                     );
                     *adapted_data[g].lock().unwrap() = Some((
                         bpn_slice.to_vec(), neurons_slice.to_vec(), connections.to_vec(),
-                        0, 0, 0, 0,
+                        0, 0, 0, 0, 0,
                     ));
                 });
         } else {
@@ -1853,6 +1854,7 @@ pub fn evaluate_genomes_adaptive(
             let mut adapt_grown = vec![0usize; batch_size];
             let mut adapt_added = vec![0usize; batch_size];
             let mut adapt_removed = vec![0usize; batch_size];
+            let mut adapt_rewired = vec![0usize; batch_size];
             let mut adapt_cooldowns: Vec<Vec<usize>> = (0..batch_size).map(|_| vec![0usize; num_clusters]).collect();
             let mut adapt_rngs: Vec<rand::rngs::StdRng> = trained_data.iter().map(|(_, seed)| {
                 rand::rngs::StdRng::seed_from_u64(seed.wrapping_add(999))
@@ -1952,6 +1954,17 @@ pub fn evaluate_genomes_adaptive(
                         adapt_added[i] += added;
                         adapt_removed[i] += removed;
                     }
+
+                    if adapt_config.axonogenesis_enabled {
+                        let rw = adaptation::axonogenesis_pass(
+                            &adapt_bits[i], &mut adapt_conns[i],
+                            &neuron_stats, adapt_config,
+                            &train_subset.packed_input, train_subset.words_per_example,
+                            train_subset.num_examples, adaptation_rate,
+                            &mut adapt_rngs[i],
+                        );
+                        adapt_rewired[i] += rw;
+                    }
                 }
             }
 
@@ -1962,7 +1975,8 @@ pub fn evaluate_genomes_adaptive(
                 .for_each(|(i, score_slice)| {
                     let g = batch_start + i;
                     let changed = adapt_pruned[i] > 0 || adapt_grown[i] > 0
-                        || adapt_added[i] > 0 || adapt_removed[i] > 0;
+                        || adapt_added[i] > 0 || adapt_removed[i] > 0
+                        || adapt_rewired[i] > 0;
 
                     if changed {
                         let new_cluster_max_bits: Vec<usize> = {
@@ -2013,6 +2027,7 @@ pub fn evaluate_genomes_adaptive(
                     *adapted_data[g].lock().unwrap() = Some((
                         adapt_bits[i].clone(), adapt_neurons[i].clone(), adapt_conns[i].clone(),
                         adapt_pruned[i], adapt_grown[i], adapt_added[i], adapt_removed[i],
+                        adapt_rewired[i],
                     ));
                 });
         }
@@ -2121,14 +2136,14 @@ pub fn evaluate_genomes_adaptive(
         .map(|g| {
             let (ce, acc) = ce_results[g];
             let bit_acc = weighted_bit_accs[g];
-            let (a_bits, a_neurons, a_conns, pruned, grown, added, removed) =
+            let (a_bits, a_neurons, a_conns, pruned, grown, added, removed, rewired) =
                 adapted_data[g].lock().unwrap().take().unwrap();
             AdaptiveResult {
                 ce, acc, bit_acc,
                 adapted_bits: a_bits,
                 adapted_neurons: a_neurons,
                 adapted_connections: a_conns,
-                pruned, grown, added, removed,
+                pruned, grown, added, removed, rewired,
             }
         })
         .collect()

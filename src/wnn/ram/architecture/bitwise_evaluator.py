@@ -53,6 +53,12 @@ class AdaptationConfig:
 
 	# Neurogenesis (cluster level)
 	neurogenesis_enabled: bool = False
+
+	# Axonogenesis (connection rewiring)
+	axonogenesis_enabled: bool = False
+	axon_entropy_threshold: float = 0.3
+	axon_improvement_factor: float = 1.5
+	axon_rewire_count: int = 2
 	cluster_error_factor: float = 0.7      # Add if error > 0.5 * factor
 	cluster_fill_utilization: float = 0.5  # Add if mean_fill > expected * factor
 	neuron_prune_percentile: float = 0.1   # Bottom 10% candidates for removal
@@ -307,6 +313,7 @@ class BitwiseEvaluator:
 			generation=self._generation,
 			synaptogenesis_enabled=config.synaptogenesis_enabled,
 			neurogenesis_enabled=config.neurogenesis_enabled,
+			axonogenesis_enabled=config.axonogenesis_enabled,
 			prune_entropy_ratio=config.prune_entropy_ratio,
 			grow_fill_utilization=config.grow_fill_utilization,
 			grow_error_baseline=config.grow_error_baseline,
@@ -319,6 +326,9 @@ class BitwiseEvaluator:
 			max_growth_ratio=config.max_growth_ratio,
 			min_neurons=config.min_neurons,
 			max_neurons_per_pass=config.max_neurons_per_pass,
+			axon_entropy_threshold=config.axon_entropy_threshold,
+			axon_improvement_factor=config.axon_improvement_factor,
+			axon_rewire_count=config.axon_rewire_count,
 			warmup_generations=config.warmup_generations,
 			cooldown_iterations=config.cooldown_iterations,
 			stabilize_fraction=config.stabilize_fraction,
@@ -327,7 +337,7 @@ class BitwiseEvaluator:
 			stats_sample_size=config.stats_sample_size,
 		)
 		scores = []
-		for genome, (ce, acc, bit_acc, a_bits, a_neurons, a_conns, p, g, a, r) in zip(genomes, results):
+		for genome, (ce, acc, bit_acc, a_bits, a_neurons, a_conns, p, g, a, r, rw) in zip(genomes, results):
 			# Update genome in-place with adapted architecture
 			genome.bits_per_neuron = list(a_bits)
 			genome.neurons_per_cluster = list(a_neurons)

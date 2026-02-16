@@ -4676,6 +4676,7 @@ impl BitwiseCacheWrapper {
         // Adaptation config fields (relative thresholds)
         synaptogenesis_enabled: bool,
         neurogenesis_enabled: bool,
+        axonogenesis_enabled: bool,
         prune_entropy_ratio: f32,
         grow_fill_utilization: f32,
         grow_error_baseline: f32,
@@ -4688,6 +4689,9 @@ impl BitwiseCacheWrapper {
         max_growth_ratio: f32,
         min_neurons: usize,
         max_neurons_per_pass: usize,
+        axon_entropy_threshold: f32,
+        axon_improvement_factor: f32,
+        axon_rewire_count: usize,
         warmup_generations: usize,
         cooldown_iterations: usize,
         stabilize_fraction: f32,
@@ -4697,7 +4701,7 @@ impl BitwiseCacheWrapper {
     ) -> PyResult<Vec<(
         f64, f64, f64,                      // ce, acc, bit_acc
         Vec<usize>, Vec<usize>, Vec<i64>,   // adapted bits, neurons, connections
-        usize, usize, usize, usize,         // pruned, grown, added, removed
+        usize, usize, usize, usize, usize,  // pruned, grown, added, removed, rewired
     )>> {
         let override_val = self.sparse_threshold_override;
         let total_input_bits = self.inner.total_input_bits;
@@ -4705,6 +4709,10 @@ impl BitwiseCacheWrapper {
         let config = adaptation::AdaptationConfig {
             synaptogenesis_enabled,
             neurogenesis_enabled,
+            axonogenesis_enabled,
+            axon_entropy_threshold,
+            axon_improvement_factor,
+            axon_rewire_count,
             prune_entropy_ratio,
             grow_fill_utilization,
             grow_error_baseline,
@@ -4750,7 +4758,7 @@ impl BitwiseCacheWrapper {
             Ok(results.into_iter().map(|r| (
                 r.ce, r.acc, r.bit_acc,
                 r.adapted_bits, r.adapted_neurons, r.adapted_connections,
-                r.pruned, r.grown, r.added, r.removed,
+                r.pruned, r.grown, r.added, r.removed, r.rewired,
             )).collect())
         })
     }

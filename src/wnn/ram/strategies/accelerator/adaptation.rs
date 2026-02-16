@@ -1,4 +1,4 @@
-//! Training-time architecture adaptation: synaptogenesis and neurogenesis.
+//! Training-time architecture adaptation: synaptogenesis, neurogenesis, and axonogenesis.
 //!
 //! These mechanisms run within a single genome evaluation cycle, after initial
 //! training and before final evaluation. They adapt the architecture based on
@@ -6,6 +6,7 @@
 //!
 //! - **Synaptogenesis** (connection level): prune/grow connections per-neuron
 //! - **Neurogenesis** (cluster level): add/remove neurons per-cluster
+//! - **Axonogenesis** (connection rewiring): replace low-value with high-MI connections
 //!
 //! ## Design Principles (Literature-Informed)
 //!
@@ -66,6 +67,15 @@ pub struct AdaptationConfig {
 	pub min_neurons: usize,
 	pub max_neurons_per_pass: usize,
 
+	// Axonogenesis (connection rewiring)
+	pub axonogenesis_enabled: bool,
+	/// Rewire if worst entropy < median * ratio (reuses prune_entropy_ratio threshold)
+	pub axon_entropy_threshold: f32,
+	/// Only rewire if candidate entropy > old * factor (must be this much better)
+	pub axon_improvement_factor: f32,
+	/// Max connections to rewire per neuron per pass
+	pub axon_rewire_count: usize,
+
 	// Schedule (cosine annealing, warmup-excluded)
 	pub warmup_generations: usize,
 	pub cooldown_iterations: usize,
@@ -90,6 +100,10 @@ impl Default for AdaptationConfig {
 			min_bits: 4,
 			max_bits: 24,
 			neurogenesis_enabled: false,
+			axonogenesis_enabled: false,
+			axon_entropy_threshold: 0.3,
+			axon_improvement_factor: 1.5,
+			axon_rewire_count: 2,
 			cluster_error_factor: 0.7,
 			cluster_fill_utilization: 0.5,
 			neuron_prune_percentile: 0.1,
@@ -605,6 +619,119 @@ pub fn synaptogenesis_pass(
 enum Modification {
 	Prune(usize),  // index of connection to remove
 	Grow(i64),     // new connection index to add
+}
+
+// =============================================================================
+// Axonogenesis (MI-Guided Connection Rewiring)
+// =============================================================================
+
+/// Axonogenesis pass: rewire low-value connections to high-information input bits.
+///
+/// Unlike synaptogenesis (which changes the number of connections), axonogenesis
+/// keeps the same bit count but REPLACES which input bits each neuron observes.
+///
+/// Algorithm (entropy-guided, v1):
+/// 1. For each neuron, rank existing connections by entropy (from NeuronStats)
+/// 2. Identify the K worst connections (below median * threshold)
+/// 3. Pre-compute marginal entropy of all input bits (proxy for MI with target)
+/// 4. For each weak connection, find the best unused bit by entropy
+/// 5. Swap if candidate entropy > old entropy * improvement_factor
+/// 6. Gate each swap by cosine-annealed rate
+///
+/// Returns rewired_count.
+pub fn axonogenesis_pass(
+	bits_per_neuron: &[usize],
+	connections: &mut Vec<i64>,
+	neuron_stats: &[NeuronStats],
+	config: &AdaptationConfig,
+	packed_input: &[u64],
+	words_per_example: usize,
+	num_examples: usize,
+	rate: f32,
+	rng: &mut impl Rng,
+) -> usize {
+	let total_neurons = bits_per_neuron.len();
+	let mut rewired = 0usize;
+
+	// Build connection offsets
+	let mut conn_offsets = vec![0usize];
+	for &b in bits_per_neuron.iter() {
+		conn_offsets.push(conn_offsets.last().unwrap() + b);
+	}
+
+	// Pre-compute marginal entropy for all input bits (MI proxy)
+	let sample_indices = build_sample_indices(num_examples, config.stats_sample_size, 77);
+	let bit_ones = precompute_bit_ones(packed_input, words_per_example, &sample_indices, config.total_input_bits);
+	let n_sample = sample_indices.len();
+	let bit_entropy: Vec<f32> = bit_ones.iter().map(|&ones| {
+		let p = ones as f32 / n_sample.max(1) as f32;
+		if p > 0.0 && p < 1.0 {
+			-(p * p.ln() + (1.0 - p) * (1.0 - p).ln()) / std::f32::consts::LN_2
+		} else {
+			0.0
+		}
+	}).collect();
+
+	// Process each neuron
+	for n in 0..total_neurons {
+		let n_bits = bits_per_neuron[n];
+		if n_bits < 2 { continue; }  // Need at least 2 connections to consider rewiring
+
+		let stats = &neuron_stats[n];
+		let conn_start = conn_offsets[n];
+
+		// Find the threshold below which connections are candidates for rewiring
+		let median_ent = median_of(&stats.connection_entropy);
+		let rewire_threshold = median_ent * config.axon_entropy_threshold;
+
+		// Collect weak connections: (local_idx, entropy) sorted by entropy ascending
+		let mut weak_conns: Vec<(usize, f32)> = stats.connection_entropy.iter()
+			.enumerate()
+			.filter(|(_, &ent)| ent < rewire_threshold)
+			.map(|(idx, &ent)| (idx, ent))
+			.collect();
+		weak_conns.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+		weak_conns.truncate(config.axon_rewire_count);
+
+		if weak_conns.is_empty() { continue; }
+
+		// Build set of currently used connections (for this neuron)
+		let used: std::collections::HashSet<i64> = connections[conn_start..conn_start + n_bits]
+			.iter().copied().collect();
+
+		// For each weak connection, try to find a better replacement
+		for (local_idx, old_entropy) in &weak_conns {
+			if rng.gen::<f32>() >= rate { continue; }
+
+			// Find best unused bit by marginal entropy
+			let mut best: Option<(i64, f32)> = None;
+			for bit_idx in 0..config.total_input_bits {
+				let conn_val = bit_idx as i64;
+				if used.contains(&conn_val) { continue; }
+				// Skip if already selected as replacement in a previous iteration of this loop
+				// (check current connections array which is being modified in-place)
+				if connections[conn_start..conn_start + n_bits].contains(&conn_val) { continue; }
+				let h = bit_entropy[bit_idx];
+				if best.is_none() || h > best.unwrap().1 {
+					best = Some((conn_val, h));
+				}
+			}
+
+			// Rewire if candidate is significantly better
+			if let Some((new_conn, new_entropy)) = best {
+				if new_entropy > old_entropy * config.axon_improvement_factor {
+					connections[conn_start + local_idx] = new_conn;
+					rewired += 1;
+				}
+			}
+		}
+	}
+
+	if rewired > 0 {
+		eprintln!("[Adapt] Axonogenesis: rewired={} (rate={:.2})", rewired, rate);
+	}
+
+	rewired
 }
 
 // =============================================================================
