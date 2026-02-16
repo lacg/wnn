@@ -205,52 +205,49 @@ class FlowWorker:
             self._heartbeat_thread = None
 
     def _recover_stale_flows(self):
-        """Check for and recover stale running flows.
+        """Mark stale running flows as failed.
 
         A flow is stale if it's marked as 'running' but hasn't received
         a heartbeat recently. This happens when a worker crashes or is killed.
+        Does NOT auto-requeue — the user can restart manually from the dashboard.
         """
         try:
             flows = self.client.list_flows(status="running", limit=10)
             now = datetime.utcnow()
 
             for flow in flows:
+                # Skip flows owned by THIS worker (currently running)
+                if flow["id"] == self.current_flow_id:
+                    continue
+
                 last_heartbeat = flow.get("last_heartbeat")
+                is_stale = False
+
                 if last_heartbeat is None:
-                    # No heartbeat ever recorded - might be from old worker
-                    # Check if started_at is old enough
                     started_at = flow.get("started_at")
                     if started_at:
                         try:
                             started = datetime.fromisoformat(started_at.replace("Z", "+00:00")).replace(tzinfo=None)
-                            age = (now - started).total_seconds()
-                            if age > STALE_THRESHOLD:
-                                self._requeue_stale_flow(flow)
+                            is_stale = (now - started).total_seconds() > STALE_THRESHOLD
                         except Exception:
                             pass
                 else:
-                    # Check heartbeat age
                     try:
                         hb_time = datetime.fromisoformat(last_heartbeat.replace("Z", "+00:00")).replace(tzinfo=None)
-                        age = (now - hb_time).total_seconds()
-                        if age > STALE_THRESHOLD:
-                            self._requeue_stale_flow(flow)
+                        is_stale = (now - hb_time).total_seconds() > STALE_THRESHOLD
                     except Exception:
                         pass
-        except Exception as e:
-            # Don't fail the main loop if recovery fails
-            pass
 
-    def _requeue_stale_flow(self, flow: dict):
-        """Re-queue a stale flow so it can be picked up again."""
-        flow_id = flow["id"]
-        flow_name = flow.get("name", f"Flow {flow_id}")
-        self._log(f"Recovering stale flow: {flow_name} (ID: {flow_id})")
-        try:
-            self.client.requeue_flow(flow_id)
-            self._log(f"  Re-queued flow {flow_id}")
-        except Exception as e:
-            self._log(f"  Failed to re-queue flow {flow_id}: {e}")
+                if is_stale:
+                    flow_id = flow["id"]
+                    flow_name = flow.get("name", f"Flow {flow_id}")
+                    self._log(f"Stale flow detected: {flow_name} (ID: {flow_id}) — marking as failed")
+                    try:
+                        self.client.flow_failed(flow_id, "Worker crashed or was killed (stale heartbeat)")
+                    except Exception as e:
+                        self._log(f"  Failed to mark flow {flow_id} as failed: {e}")
+        except Exception:
+            pass
 
     def _precache_data(self):
         """Pre-cache tokenizer and dataset at startup to avoid network issues during flow execution."""
@@ -487,13 +484,18 @@ class FlowWorker:
                 # Flow was deleted - just clean up and move on
                 self._log(f"Flow {flow_id} was deleted, cleaning up")
             elif is_shutdown:
-                # Graceful shutdown - re-queue the flow so it can be resumed
-                self._log(f"Flow stopped due to shutdown, re-queuing for resume")
-                try:
-                    self.client.requeue_flow(flow_id)
-                except Exception:
-                    # Fallback: just log, don't mark as failed
-                    self._log(f"Warning: Could not re-queue flow {flow_id}")
+                # Check if user already cancelled this flow via dashboard
+                current_flow = self.client.get_flow(flow_id)
+                flow_status = current_flow.get("status", "") if current_flow else ""
+                if flow_status == "cancelled":
+                    self._log(f"Flow was cancelled by user, keeping cancelled status")
+                else:
+                    # Graceful shutdown (e.g., worker restart) - re-queue for resume
+                    self._log(f"Flow stopped due to shutdown, re-queuing for resume")
+                    try:
+                        self.client.requeue_flow(flow_id)
+                    except Exception:
+                        self._log(f"Warning: Could not re-queue flow {flow_id}")
             else:
                 # Actual error - mark as failed
                 self._log(f"Flow failed: {e}")

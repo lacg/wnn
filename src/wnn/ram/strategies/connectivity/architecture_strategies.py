@@ -1792,51 +1792,11 @@ class GridSearchStrategy:
 					  f"CE={r['ce']:.4f}  Acc={r['accuracy']:.2%}  "
 					  f"Fit={r['fitness']:.4f}{marker}")
 
-		# Record 1 iteration for the whole grid search (it's a single step)
-		best_result = results[0]
-		best_genome = best_result["genome"]
-		if self._tracker and self._tracker_experiment_id:
-			try:
-				avg_ce = sum(r["ce"] for r in results) / len(results)
-				avg_acc = sum(r["accuracy"] for r in results) / len(results)
-				iter_id = self._tracker.record_iteration(
-					experiment_id=self._tracker_experiment_id,
-					iteration_num=1,
-					best_ce=best_result["ce"],
-					best_accuracy=best_result["accuracy"],
-					avg_ce=avg_ce,
-					avg_accuracy=avg_acc,
-					elapsed_secs=batch_elapsed,
-					candidates_total=total_configs,
-				)
-				# Record all config evaluations (one genome per config)
-				if HAS_GENOME_TRACKING:
-					for pos, r in enumerate(results):
-						genome_config = self._genome_to_config(r["genome"])
-						if genome_config:
-							genome_id = self._tracker.get_or_create_genome(
-								self._tracker_experiment_id, genome_config
-							)
-							self._tracker.record_genome_evaluation(
-								iteration_id=iter_id,
-								genome_id=genome_id,
-								position=pos,
-								role=GenomeRole.INIT,
-								ce=r["ce"],
-								accuracy=r["accuracy"],
-							)
-				self._tracker.update_experiment_progress(
-					self._tracker_experiment_id,
-					current_iteration=1,
-					best_ce=best_result["ce"],
-					best_accuracy=best_result["accuracy"],
-				)
-			except Exception as e:
-				self._log(f"  Warning: tracker error: {e}")
-
 		# Phase 5: Build output population with proportional representation
 		# Better configs get more genomes (each with fresh random connections).
 		# Weights: [K, K-1, ..., 1] → best config gets K/sum(weights) of population.
+		best_result = results[0]
+		best_genome = best_result["genome"]
 
 		top_k = min(cfg.top_k, len(results))
 		weights = list(range(top_k, 0, -1))  # [K, K-1, ..., 1]
@@ -1868,6 +1828,45 @@ class GridSearchStrategy:
 			self._log(f"  #{i+1:2d} n={r['neurons']:3d}, b={r['bits']:2d} (CE={r['ce']:.4f}) → {n_genomes} genomes")
 
 		self._log(f"\nPopulation: {len(output_population)} genomes from top-{top_k} configs")
+
+		# Record 1 iteration with ALL population genomes (not just unique configs)
+		if self._tracker and self._tracker_experiment_id:
+			try:
+				avg_ce = sum(ce for ce, _ in population_metrics) / len(population_metrics)
+				avg_acc = sum(acc for _, acc in population_metrics) / len(population_metrics)
+				iter_id = self._tracker.record_iteration(
+					experiment_id=self._tracker_experiment_id,
+					iteration_num=1,
+					best_ce=best_result["ce"],
+					best_accuracy=best_result["accuracy"],
+					avg_ce=avg_ce,
+					avg_accuracy=avg_acc,
+					elapsed_secs=batch_elapsed,
+					candidates_total=len(output_population),
+				)
+				if HAS_GENOME_TRACKING:
+					for pos, (genome, (ce, acc)) in enumerate(zip(output_population, population_metrics)):
+						genome_config = self._genome_to_config(genome)
+						if genome_config:
+							genome_id = self._tracker.get_or_create_genome(
+								self._tracker_experiment_id, genome_config
+							)
+							self._tracker.record_genome_evaluation(
+								iteration_id=iter_id,
+								genome_id=genome_id,
+								position=pos,
+								role=GenomeRole.INIT,
+								ce=ce,
+								accuracy=acc,
+							)
+				self._tracker.update_experiment_progress(
+					self._tracker_experiment_id,
+					current_iteration=1,
+					best_ce=best_result["ce"],
+					best_accuracy=best_result["accuracy"],
+				)
+			except Exception as e:
+				self._log(f"  Warning: tracker error: {e}")
 
 		# Build OptimizerResult
 		worst_ce = results[-1]["ce"]
