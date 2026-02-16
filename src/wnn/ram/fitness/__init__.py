@@ -21,7 +21,7 @@ class FitnessCalculatorType(IntEnum):
 	# Note: Accuracy floor wrapping is handled separately via min_accuracy_floor parameter
 
 
-from .FitnessCalculator import FitnessCalculator
+from .FitnessCalculator import FitnessCalculator, GenomeBest, PopulationBests
 from .FitnessCalculatorCE import FitnessCalculatorCE
 from .FitnessCalculatorHarmonicRank import FitnessCalculatorHarmonicRank
 from .FitnessCalculatorNormalized import FitnessCalculatorNormalized
@@ -33,8 +33,10 @@ from .FitnessCalculatorFactory import FitnessCalculatorFactory
 __all__ = [
 	# Enum
 	"FitnessCalculatorType",
-	# Base class
+	# Base class + result types
 	"FitnessCalculator",
+	"GenomeBest",
+	"PopulationBests",
 	# Implementations
 	"FitnessCalculatorCE",
 	"FitnessCalculatorHarmonicRank",
