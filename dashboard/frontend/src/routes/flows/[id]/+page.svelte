@@ -1314,18 +1314,6 @@
               </div>
             {/if}
           {/if}
-          {#if flow.config.params.synaptogenesis || flow.config.params.neurogenesis}
-            <div class="param-item full-width" style="margin-top:0.5rem; padding-top:0.5rem; border-top:1px solid var(--border);">
-              <span class="param-label">Adaptation</span>
-              <span class="param-value">
-                {[
-                  flow.config.params.synaptogenesis ? 'Synaptogenesis' : '',
-                  flow.config.params.neurogenesis ? 'Neurogenesis' : '',
-                ].filter(Boolean).join(' + ')}
-                (warmup: {flow.config.params.adapt_warmup ?? 10}, cooldown: {flow.config.params.adapt_cooldown ?? 5})
-              </span>
-            </div>
-          {/if}
         </div>
       </section>
     {/if}

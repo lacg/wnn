@@ -544,7 +544,7 @@ class FlowWorker:
         """
         self._log(f"Creating BitwiseEvaluator (context_size={context_size})...")
 
-        from wnn.ram.architecture.bitwise_evaluator import BitwiseEvaluator, AdaptationConfig
+        from wnn.ram.architecture.bitwise_evaluator import BitwiseEvaluator
 
         # Map memory mode string to integer
         memory_mode_map = {
@@ -557,40 +557,6 @@ class FlowWorker:
         train_parts = params.get("train_parts", 4)
         eval_parts = params.get("eval_parts", 1)
 
-        # Build adaptation config if synaptogenesis or neurogenesis enabled
-        adapt_config = None
-        if params.get("synaptogenesis") or params.get("neurogenesis"):
-            # Compute total_generations from GA + TS phases
-            ga_gens = params.get("ga_generations", 250)
-            ts_iters = params.get("ts_iterations", 250)
-            total_gens = max(ga_gens, ts_iters)
-
-            adapt_config = AdaptationConfig(
-                synaptogenesis_enabled=bool(params.get("synaptogenesis", False)),
-                neurogenesis_enabled=bool(params.get("neurogenesis", False)),
-                min_bits=params.get("min_bits", 4),
-                max_bits=params.get("max_bits", 24),
-                min_neurons=params.get("min_neurons", 3),
-                warmup_generations=params.get("adapt_warmup", 10),
-                cooldown_iterations=params.get("adapt_cooldown", 5),
-                prune_entropy_ratio=params.get("adapt_prune_entropy_ratio", 0.3),
-                grow_fill_utilization=params.get("adapt_grow_fill_utilization", 0.5),
-                grow_error_baseline=params.get("adapt_grow_error_baseline", 0.35),
-                cluster_error_factor=params.get("adapt_cluster_error_factor", 0.7),
-                cluster_fill_utilization=params.get("adapt_cluster_fill_utilization", 0.5),
-                neuron_prune_percentile=params.get("adapt_neuron_prune_percentile", 0.1),
-                neuron_removal_factor=params.get("adapt_neuron_removal_factor", 0.5),
-                max_growth_ratio=params.get("adapt_max_growth_ratio", 1.5),
-                max_neurons_per_pass=params.get("adapt_max_neurons_per_pass", 3),
-                stabilize_fraction=params.get("adapt_stabilize_fraction", 0.25),
-                total_generations=total_gens,
-                passes_per_eval=params.get("adapt_passes", 1),
-                stats_sample_size=params.get("adapt_stats_sample_size", 10_000),
-            )
-            self._log(f"  Adaptation: synaptogenesis={adapt_config.synaptogenesis_enabled}, "
-                       f"neurogenesis={adapt_config.neurogenesis_enabled}, "
-                       f"warmup={adapt_config.warmup_generations}, cooldown={adapt_config.cooldown_iterations}")
-
         evaluator = BitwiseEvaluator(
             train_tokens=self._train_tokens,
             eval_tokens=self._test_tokens,
@@ -600,7 +566,6 @@ class FlowWorker:
             num_eval_parts=eval_parts,
             memory_mode=memory_mode,
             neuron_sample_rate=neuron_sample_rate,
-            adapt_config=adapt_config,
         )
 
         self._log(f"  BitwiseEvaluator: vocab={evaluator.vocab_size:,}, "

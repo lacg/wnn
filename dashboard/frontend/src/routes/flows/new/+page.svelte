@@ -17,12 +17,6 @@
   let bitwiseMemoryMode = 'QUAD_WEIGHTED';
   let bitwiseNeuronSampleRate = 0.25;
 
-  // Adaptation (Baldwin/Lamarckian)
-  let synaptogenesis = true;
-  let neurogenesis = true;
-  let adaptWarmup = 10;
-  let adaptCooldown = 5;
-
   $: isBitwise = template === 'bitwise-7-phase' || template === 'bitwise-10-phase';
   let gaGenerations = 250;
   let tsIterations = 250;
@@ -85,10 +79,6 @@
       bitwiseMaxNeurons = 300;
       bitwiseMemoryMode = 'QUAD_WEIGHTED';
       bitwiseNeuronSampleRate = 0.25;
-      synaptogenesis = true;
-      neurogenesis = true;
-      adaptWarmup = 10;
-      adaptCooldown = 5;
     } else if (templateName === 'bitwise-10-phase') {
       gaGenerations = 250;
       tsIterations = 250;
@@ -108,10 +98,6 @@
       bitwiseMaxNeurons = 300;
       bitwiseMemoryMode = 'QUAD_WEIGHTED';
       bitwiseNeuronSampleRate = 0.25;
-      synaptogenesis = false;
-      neurogenesis = false;
-      adaptWarmup = 0;
-      adaptCooldown = 0;
     }
   }
 
@@ -304,13 +290,6 @@
         params.max_neurons = bitwiseMaxNeurons;
         params.memory_mode = bitwiseMemoryMode;
         params.neuron_sample_rate = bitwiseNeuronSampleRate;
-        // Adaptation (Baldwin/Lamarckian)
-        if (synaptogenesis || neurogenesis) {
-          params.synaptogenesis = synaptogenesis;
-          params.neurogenesis = neurogenesis;
-          params.adapt_warmup = adaptWarmup;
-          params.adapt_cooldown = adaptCooldown;
-        }
       } else {
         params.tier_config = tierConfig || null;
       }
@@ -645,41 +624,6 @@
               <input type="number" id="bitwiseNeuronSampleRate" bind:value={bitwiseNeuronSampleRate} min="0.01" max="1.0" step="0.01" />
               <span class="field-hint">Fraction of neurons sampled per example (0.25 = 25%)</span>
             </div>
-          </div>
-
-          <div class="form-section">
-            <h2>Adaptation (Baldwin Effect)</h2>
-            <span class="field-hint" style="display:block; margin-top:-0.5rem; margin-bottom:0.75rem;">
-              Each genome is adapted during evaluation, then scored. Evolution selects architectures that respond well to adaptation (Baldwin effect).
-            </span>
-            <div class="form-row">
-              <div class="form-group">
-                <label class="inline-check">
-                  <input type="checkbox" bind:checked={synaptogenesis} /> Synaptogenesis
-                </label>
-                <span class="field-hint">Prune unused synapses, grow new ones on active neurons</span>
-              </div>
-              <div class="form-group">
-                <label class="inline-check">
-                  <input type="checkbox" bind:checked={neurogenesis} /> Neurogenesis
-                </label>
-                <span class="field-hint">Add neurons to struggling clusters, remove redundant ones</span>
-              </div>
-            </div>
-            {#if synaptogenesis || neurogenesis}
-              <div class="form-row" style="margin-top:0.75rem;">
-                <div class="form-group">
-                  <label for="adaptWarmup">Warmup Generations</label>
-                  <input type="number" id="adaptWarmup" bind:value={adaptWarmup} min="0" max="100" />
-                  <span class="field-hint">Let evolution stabilize before adaptation kicks in (0 = adapt from start)</span>
-                </div>
-                <div class="form-group">
-                  <label for="adaptCooldown">Cooldown Iterations</label>
-                  <input type="number" id="adaptCooldown" bind:value={adaptCooldown} min="0" max="50" />
-                  <span class="field-hint">Freeze a neuron after adapting it, preventing prune/grow oscillation</span>
-                </div>
-              </div>
-            {/if}
           </div>
         {:else}
           <div class="form-section">
