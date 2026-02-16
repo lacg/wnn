@@ -53,6 +53,7 @@ async fn main() -> Result<()> {
     let state = Arc::new(AppState {
         db,
         ws_tx,
+        current_log_path: tokio::sync::RwLock::new(None),
     });
 
     // Build router

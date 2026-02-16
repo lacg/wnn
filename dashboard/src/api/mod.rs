@@ -13,12 +13,15 @@ use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
+use tokio::sync::RwLock;
+
 use crate::db::DbPool;
 use crate::models::*;
 
 pub struct AppState {
     pub db: DbPool,
     pub ws_tx: broadcast::Sender<WsMessage>,
+    pub current_log_path: RwLock<Option<String>>,
 }
 
 pub fn routes(state: Arc<AppState>) -> Router {
@@ -55,6 +58,8 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .route("/api/checkpoints/:id", get(get_checkpoint).delete(delete_checkpoint))
         .route("/api/checkpoints/:id/download", get(download_checkpoint))
         .route("/api/checkpoints/:id/export-hf", post(export_checkpoint_hf))
+        // Worker log watching
+        .route("/api/watch", post(set_watch_log).get(get_watch_log))
         // WebSocket (database polling)
         .route("/ws", get(websocket_handler))
         .with_state(state)
@@ -1418,6 +1423,30 @@ async fn export_checkpoint_hf(
         "context_size": experiment.context_size,
         "output_dir": req.output_dir,
     }))).into_response()
+}
+
+// =============================================================================
+// Worker log watch
+// =============================================================================
+
+#[derive(Deserialize)]
+struct WatchLogRequest {
+    log_path: String,
+}
+
+async fn set_watch_log(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<WatchLogRequest>,
+) -> impl IntoResponse {
+    *state.current_log_path.write().await = Some(req.log_path.clone());
+    (StatusCode::OK, Json(serde_json::json!({"log_path": req.log_path}))).into_response()
+}
+
+async fn get_watch_log(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let path = state.current_log_path.read().await.clone();
+    (StatusCode::OK, Json(serde_json::json!({"log_path": path}))).into_response()
 }
 
 // =============================================================================
