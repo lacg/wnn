@@ -2318,7 +2318,6 @@ class GenericTSStrategy(ABC, Generic[T]):
 					# Record genome evaluations (if genome_to_config is implemented)
 					if iteration_id and self._tracker_experiment_id and HAS_TRACKER and GenomeRole is not None:
 						evaluations = []
-						top_k_ids = set()
 
 						# Record current best genome
 						best_config = self.genome_to_config(best)
@@ -2335,43 +2334,39 @@ class GenericTSStrategy(ABC, Generic[T]):
 								"accuracy": best_accuracy if best_accuracy is not None else 0.0,
 								"elite_rank": 0,
 							})
-							top_k_ids.add(best_genome_id)
 
-						# Record top-k neighbors
+						# Record ALL top-k neighbors (no dedup — same config may have different CE/acc)
 						for pos, (genome, ce, acc) in enumerate(all_neighbors[:cache_size]):
 							config = self.genome_to_config(genome)
 							if config is not None:
 								genome_id = self._tracker.get_or_create_genome(
 									self._tracker_experiment_id, config
 								)
-								if genome_id not in top_k_ids:
-									evaluations.append({
-										"iteration_id": iteration_id,
-										"genome_id": genome_id,
-										"position": pos + 1,
-										"role": GenomeRole.TOP_K,
-										"ce": ce,
-										"accuracy": acc if acc is not None else 0.0,
-										"elite_rank": pos + 1,
-									})
-									top_k_ids.add(genome_id)
+								evaluations.append({
+									"iteration_id": iteration_id,
+									"genome_id": genome_id,
+									"position": pos + 1,
+									"role": GenomeRole.TOP_K,
+									"ce": ce,
+									"accuracy": acc if acc is not None else 0.0,
+									"elite_rank": pos + 1,
+								})
 
-						# Record new viable neighbors
+						# Record ALL new viable neighbors
 						for pos, (genome, ce, acc) in enumerate(viable):
 							config = self.genome_to_config(genome)
 							if config is not None:
 								genome_id = self._tracker.get_or_create_genome(
 									self._tracker_experiment_id, config
 								)
-								if genome_id not in top_k_ids:
-									evaluations.append({
-										"iteration_id": iteration_id,
-										"genome_id": genome_id,
-										"position": cache_size + pos + 1,
-										"role": GenomeRole.NEIGHBOR,
-										"ce": ce,
-										"accuracy": acc if acc is not None else 0.0,
-									})
+								evaluations.append({
+									"iteration_id": iteration_id,
+									"genome_id": genome_id,
+									"position": cache_size + pos + 1,
+									"role": GenomeRole.NEIGHBOR,
+									"ce": ce,
+									"accuracy": acc if acc is not None else 0.0,
+								})
 
 						if evaluations:
 							self._tracker.record_genome_evaluations_batch(evaluations)
