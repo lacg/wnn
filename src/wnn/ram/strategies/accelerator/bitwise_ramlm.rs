@@ -1652,9 +1652,22 @@ pub fn evaluate_genomes_adaptive(
     let empty_word: i64 = crate::neuron_memory::empty_word_for_mode(memory_mode);
     let needs_adaptation = adapt_config.synaptogenesis_enabled || adapt_config.neurogenesis_enabled;
 
-    // GPU stats disabled: per-genome GPU dispatch serializes what rayon parallelizes.
-    // CPU path with O(n²) fix is faster. GPU would need batched multi-genome dispatch.
-    // TODO: batch all genome stats into single GPU dispatch for true speedup.
+    // GPU stats: create MetalStatsComputer once, shared across all genome evaluations.
+    // Default: batched multi-genome dispatch (single GPU dispatch for all genomes).
+    // Fallback: per-genome GPU dispatch when batched init fails.
+    #[cfg(target_os = "macos")]
+    let metal_stats_computer: Option<crate::metal_stats::MetalStatsComputer> = if needs_adaptation {
+        crate::metal_stats::MetalStatsComputer::new().ok()
+    } else {
+        None
+    };
+
+    // Cosine-annealed adaptation rate (same for all genomes in this generation)
+    let adaptation_rate = if needs_adaptation {
+        adaptation::adaptation_rate(generation, adapt_config)
+    } else {
+        0.0
+    };
 
     // Memory budget for concurrent genome training
     let mem_budget: u64 = 40 * 1024 * 1024 * 1024; // 40 GiB (Mac Studio has 64 GiB)
@@ -1736,48 +1749,40 @@ pub fn evaluate_genomes_adaptive(
         }
 
         let batch_scores = &mut all_scores[batch_start * scores_per_genome..batch_end * scores_per_genome];
+        let batch_size = batch_end - batch_start;
 
-        batch_scores
-            .par_chunks_mut(scores_per_genome)
-            .enumerate()
-            .for_each(|(i, score_slice)| {
-                let g = batch_start + i;
-                let layout = &genome_layouts[g];
-                let nc_base = g * num_clusters;
-                let neurons_slice = &neurons_per_cluster_flat[nc_base..nc_base + num_clusters];
-                let bpn_start = genome_bpn_offsets[g];
-                let bpn_end = genome_bpn_offsets[g + 1];
-                let bpn_slice = &bits_per_neuron_flat[bpn_start..bpn_end];
-                let conn_start = genome_conn_offsets[g];
-                let conn_end = conn_start + layout.total_connections;
-                let connections = &connections_flat[conn_start..conn_end];
+        if !needs_adaptation || adaptation_rate == 0.0 {
+            // === NO ADAPTATION PATH: Single rayon pass (train + forward) ===
+            batch_scores
+                .par_chunks_mut(scores_per_genome)
+                .enumerate()
+                .for_each(|(i, score_slice)| {
+                    let g = batch_start + i;
+                    let layout = &genome_layouts[g];
+                    let nc_base = g * num_clusters;
+                    let neurons_slice = &neurons_per_cluster_flat[nc_base..nc_base + num_clusters];
+                    let bpn_start = genome_bpn_offsets[g];
+                    let bpn_end = genome_bpn_offsets[g + 1];
+                    let bpn_slice = &bits_per_neuron_flat[bpn_start..bpn_end];
+                    let conn_start = genome_conn_offsets[g];
+                    let conn_end = conn_start + layout.total_connections;
+                    let connections = &connections_flat[conn_start..conn_end];
+                    let threshold = genome_thresholds[g];
+                    let genome_rng_seed = rng_seed.wrapping_add(g as u64 * 1000007);
 
-                let threshold = genome_thresholds[g];
-                let genome_rng_seed = rng_seed.wrapping_add(g as u64 * 1000007);
+                    let mut cluster_storage: Vec<ClusterStorage> = (0..num_clusters)
+                        .map(|c| ClusterStorage::new(
+                            neurons_slice[c], layout.cluster_max_bits[c],
+                            threshold, empty_word, memory_mode,
+                        ))
+                        .collect();
 
-                // Step 1: Allocate storage and train
-                let mut cluster_storage: Vec<ClusterStorage> = (0..num_clusters)
-                    .map(|c| ClusterStorage::new(
-                        neurons_slice[c], layout.cluster_max_bits[c],
-                        threshold, empty_word, memory_mode,
-                    ))
-                    .collect();
+                    train_into(
+                        connections, bpn_slice, neurons_slice, num_clusters,
+                        layout, train_subset, &mut cluster_storage,
+                        memory_mode, neuron_sample_rate, genome_rng_seed,
+                    );
 
-                train_into(
-                    connections, bpn_slice, neurons_slice, num_clusters,
-                    layout, train_subset, &mut cluster_storage,
-                    memory_mode, neuron_sample_rate, genome_rng_seed,
-                );
-
-                // Compute cosine-annealed adaptation rate
-                let rate = if needs_adaptation {
-                    adaptation::adaptation_rate(generation, adapt_config)
-                } else {
-                    0.0
-                };
-
-                if !needs_adaptation || rate == 0.0 {
-                    // No adaptation or rate=0 (warmup/stabilization) — skip stats entirely
                     forward_eval_into(
                         connections, bpn_slice, neurons_slice, num_clusters,
                         layout, eval_subset, &cluster_storage, score_slice, memory_mode,
@@ -1786,130 +1791,231 @@ pub fn evaluate_genomes_adaptive(
                         bpn_slice.to_vec(), neurons_slice.to_vec(), connections.to_vec(),
                         0, 0, 0, 0,
                     ));
-                    return;
-                }
+                });
+        } else {
+            // === ADAPTATION PATH: Multi-phase with batched GPU stats ===
 
-                // Step 2: Adapt architecture (rate > 0)
-                let mut adapted_bits = bpn_slice.to_vec();
-                let mut adapted_neurons = neurons_slice.to_vec();
-                let mut adapted_connections = connections.to_vec();
-                let initial_neurons = neurons_slice.to_vec();
-                let mut total_pruned = 0usize;
-                let mut total_grown = 0usize;
-                let mut total_added = 0usize;
-                let mut total_removed = 0usize;
+            // Phase 1: Train all genomes in batch (rayon parallel, CPU)
+            let trained_data: Vec<(Vec<ClusterStorage>, u64)> = (0..batch_size)
+                .into_par_iter()
+                .map(|i| {
+                    let g = batch_start + i;
+                    let layout = &genome_layouts[g];
+                    let nc_base = g * num_clusters;
+                    let neurons_slice = &neurons_per_cluster_flat[nc_base..nc_base + num_clusters];
+                    let bpn_start = genome_bpn_offsets[g];
+                    let bpn_end = genome_bpn_offsets[g + 1];
+                    let bpn_slice = &bits_per_neuron_flat[bpn_start..bpn_end];
+                    let conn_start = genome_conn_offsets[g];
+                    let conn_end = conn_start + layout.total_connections;
+                    let connections = &connections_flat[conn_start..conn_end];
+                    let threshold = genome_thresholds[g];
+                    let genome_rng_seed = rng_seed.wrapping_add(g as u64 * 1000007);
 
-                let mut adapt_rng = rand::rngs::StdRng::seed_from_u64(
-                    genome_rng_seed.wrapping_add(999)
-                );
-                // Fresh cooldowns per genome (each genome is new in GA/TS population)
-                let mut cooldowns = vec![0usize; num_clusters];
-
-                for _pass in 0..adapt_config.passes_per_eval {
-                    // Compute neuron stats (CPU, rayon-parallel across neurons)
-                    let mut neuron_stats = adaptation::compute_neuron_stats(
-                        &adapted_bits, &adapted_neurons, &adapted_connections,
-                        &cluster_storage, &train_subset.packed_input,
-                        train_subset.words_per_example, &train_subset.target_bits,
-                        train_subset.num_examples, num_clusters, adapt_config,
-                    );
-
-                    if adapt_config.synaptogenesis_enabled {
-                        let (pruned, grown) = adaptation::synaptogenesis_pass(
-                            &mut adapted_bits, &mut adapted_connections,
-                            &neuron_stats, adapt_config,
-                            &train_subset.packed_input, train_subset.words_per_example,
-                            train_subset.num_examples, rate, &mut adapt_rng,
-                        );
-                        total_pruned += pruned;
-                        total_grown += grown;
-
-                        // Recompute stats if synaptogenesis changed architecture
-                        if adapt_config.neurogenesis_enabled && (pruned > 0 || grown > 0) {
-                            neuron_stats = adaptation::compute_neuron_stats(
-                                &adapted_bits, &adapted_neurons, &adapted_connections,
-                                &cluster_storage, &train_subset.packed_input,
-                                train_subset.words_per_example, &train_subset.target_bits,
-                                train_subset.num_examples, num_clusters, adapt_config,
-                            );
-                        }
-                    }
-
-                    if adapt_config.neurogenesis_enabled {
-                        let cluster_stats = adaptation::compute_cluster_stats(
-                            &neuron_stats, &adapted_neurons, &adapted_bits,
-                            &adapted_connections, &cluster_storage,
-                            &train_subset.packed_input, train_subset.words_per_example,
-                            &train_subset.target_bits, train_subset.num_examples, num_clusters,
-                            adapt_config,
-                        );
-                        let (added, removed) = adaptation::neurogenesis_pass(
-                            &mut adapted_bits, &mut adapted_neurons, &mut adapted_connections,
-                            &cluster_stats, adapt_config, generation, &mut cooldowns,
-                            &initial_neurons, train_subset.num_examples, rate,
-                            &mut adapt_rng,
-                        );
-                        total_added += added;
-                        total_removed += removed;
-                    }
-                }
-
-                let architecture_changed = total_pruned > 0 || total_grown > 0
-                    || total_added > 0 || total_removed > 0;
-
-                // Step 3: Re-train with adapted architecture if changed, then forward
-                if architecture_changed {
-                    let new_cluster_max_bits: Vec<usize> = {
-                        let mut v = Vec::with_capacity(num_clusters);
-                        let mut off = 0;
-                        for &nc in &adapted_neurons {
-                            let max_b = adapted_bits[off..off + nc].iter().copied().max().unwrap_or(0);
-                            v.push(max_b);
-                            off += nc;
-                        }
-                        v
-                    };
-                    let new_threshold = match sparse_threshold_override {
-                        Some(t) => t,
-                        None => auto_sparse_threshold(
-                            &new_cluster_max_bits, &adapted_neurons,
-                            target_per_genome, expected_train,
-                        ),
-                    };
-                    let new_layout = compute_genome_layout(
-                        &adapted_bits, &adapted_neurons, new_threshold, expected_train,
-                    );
-
-                    let mut new_storage: Vec<ClusterStorage> = (0..num_clusters)
+                    let mut cluster_storage: Vec<ClusterStorage> = (0..num_clusters)
                         .map(|c| ClusterStorage::new(
-                            adapted_neurons[c], new_layout.cluster_max_bits[c],
-                            new_threshold, empty_word, memory_mode,
+                            neurons_slice[c], layout.cluster_max_bits[c],
+                            threshold, empty_word, memory_mode,
                         ))
                         .collect();
 
                     train_into(
-                        &adapted_connections, &adapted_bits, &adapted_neurons, num_clusters,
-                        &new_layout, train_subset, &mut new_storage,
-                        memory_mode, neuron_sample_rate, genome_rng_seed.wrapping_add(1),
+                        connections, bpn_slice, neurons_slice, num_clusters,
+                        layout, train_subset, &mut cluster_storage,
+                        memory_mode, neuron_sample_rate, genome_rng_seed,
                     );
-                    forward_eval_into(
-                        &adapted_connections, &adapted_bits, &adapted_neurons, num_clusters,
-                        &new_layout, eval_subset, &new_storage, score_slice, memory_mode,
-                    );
-                } else {
-                    // No architecture change — forward with original storage
-                    forward_eval_into(
-                        &adapted_connections, &adapted_bits, &adapted_neurons, num_clusters,
-                        layout, eval_subset, &cluster_storage, score_slice, memory_mode,
-                    );
-                }
 
-                // Store adapted genome data
-                *adapted_data[g].lock().unwrap() = Some((
-                    adapted_bits, adapted_neurons, adapted_connections,
-                    total_pruned, total_grown, total_added, total_removed,
-                ));
-            });
+                    (cluster_storage, genome_rng_seed)
+                })
+                .collect();
+
+            // Phase 2: Batched GPU stats + adaptation
+            // Mutable adaptation state per genome (cloned from originals)
+            let mut adapt_bits: Vec<Vec<usize>> = (0..batch_size).map(|i| {
+                let g = batch_start + i;
+                bits_per_neuron_flat[genome_bpn_offsets[g]..genome_bpn_offsets[g + 1]].to_vec()
+            }).collect();
+
+            let mut adapt_neurons: Vec<Vec<usize>> = (0..batch_size).map(|i| {
+                let g = batch_start + i;
+                neurons_per_cluster_flat[g * num_clusters..(g + 1) * num_clusters].to_vec()
+            }).collect();
+
+            let mut adapt_conns: Vec<Vec<i64>> = (0..batch_size).map(|i| {
+                let g = batch_start + i;
+                let layout = &genome_layouts[g];
+                let conn_start = genome_conn_offsets[g];
+                connections_flat[conn_start..conn_start + layout.total_connections].to_vec()
+            }).collect();
+
+            let initial_neurons: Vec<Vec<usize>> = adapt_neurons.clone();
+            let mut adapt_pruned = vec![0usize; batch_size];
+            let mut adapt_grown = vec![0usize; batch_size];
+            let mut adapt_added = vec![0usize; batch_size];
+            let mut adapt_removed = vec![0usize; batch_size];
+            let mut adapt_cooldowns: Vec<Vec<usize>> = (0..batch_size).map(|_| vec![0usize; num_clusters]).collect();
+            let mut adapt_rngs: Vec<rand::rngs::StdRng> = trained_data.iter().map(|(_, seed)| {
+                rand::rngs::StdRng::seed_from_u64(seed.wrapping_add(999))
+            }).collect();
+
+            for _pass in 0..adapt_config.passes_per_eval {
+                // Batch GPU stats: single dispatch for all genomes in batch
+                #[cfg(target_os = "macos")]
+                let all_stats: Vec<(Vec<adaptation::NeuronStats>, Vec<adaptation::ClusterStats>)> = match metal_stats_computer.as_ref() {
+                    Some(metal) => {
+                        let genome_inputs: Vec<adaptation::GenomeStatsInput> = (0..batch_size).map(|i| {
+                            adaptation::GenomeStatsInput {
+                                bits_per_neuron: &adapt_bits[i],
+                                neurons_per_cluster: &adapt_neurons[i],
+                                connections: &adapt_conns[i],
+                                storages: &trained_data[i].0,
+                            }
+                        }).collect();
+                        adaptation::compute_batch_stats_gpu(
+                            metal, &genome_inputs,
+                            &train_subset.packed_input, train_subset.words_per_example,
+                            &train_subset.target_bits, train_subset.num_examples,
+                            num_clusters, adapt_config, memory_mode,
+                        )
+                    }
+                    None => (0..batch_size).map(|i| {
+                        adaptation::compute_combined_stats(
+                            &adapt_bits[i], &adapt_neurons[i], &adapt_conns[i],
+                            &trained_data[i].0, &train_subset.packed_input,
+                            train_subset.words_per_example, &train_subset.target_bits,
+                            train_subset.num_examples, num_clusters, adapt_config,
+                        )
+                    }).collect(),
+                };
+                #[cfg(not(target_os = "macos"))]
+                let all_stats: Vec<(Vec<adaptation::NeuronStats>, Vec<adaptation::ClusterStats>)> = (0..batch_size).map(|i| {
+                    adaptation::compute_combined_stats(
+                        &adapt_bits[i], &adapt_neurons[i], &adapt_conns[i],
+                        &trained_data[i].0, &train_subset.packed_input,
+                        train_subset.words_per_example, &train_subset.target_bits,
+                        train_subset.num_examples, num_clusters, adapt_config,
+                    )
+                }).collect();
+
+                // Apply adaptation per genome (sequential — adaptation is lightweight)
+                for (i, (neuron_stats, mut cluster_stats)) in all_stats.into_iter().enumerate() {
+                    if adapt_config.synaptogenesis_enabled {
+                        let (pruned, grown) = adaptation::synaptogenesis_pass(
+                            &mut adapt_bits[i], &mut adapt_conns[i],
+                            &neuron_stats, adapt_config,
+                            &train_subset.packed_input, train_subset.words_per_example,
+                            train_subset.num_examples, adaptation_rate, &mut adapt_rngs[i],
+                        );
+                        adapt_pruned[i] += pruned;
+                        adapt_grown[i] += grown;
+
+                        // Recompute stats if synaptogenesis changed architecture
+                        if adapt_config.neurogenesis_enabled && (pruned > 0 || grown > 0) {
+                            #[cfg(target_os = "macos")]
+                            {
+                                let recomputed = match metal_stats_computer.as_ref() {
+                                    Some(metal) => adaptation::compute_neuron_and_cluster_stats_gpu(
+                                        metal, &adapt_bits[i], &adapt_neurons[i], &adapt_conns[i],
+                                        &trained_data[i].0, &train_subset.packed_input,
+                                        train_subset.words_per_example, &train_subset.target_bits,
+                                        train_subset.num_examples, num_clusters, adapt_config, memory_mode,
+                                    ),
+                                    None => adaptation::compute_combined_stats(
+                                        &adapt_bits[i], &adapt_neurons[i], &adapt_conns[i],
+                                        &trained_data[i].0, &train_subset.packed_input,
+                                        train_subset.words_per_example, &train_subset.target_bits,
+                                        train_subset.num_examples, num_clusters, adapt_config,
+                                    ),
+                                };
+                                cluster_stats = recomputed.1;
+                            }
+                            #[cfg(not(target_os = "macos"))]
+                            {
+                                let recomputed = adaptation::compute_combined_stats(
+                                    &adapt_bits[i], &adapt_neurons[i], &adapt_conns[i],
+                                    &trained_data[i].0, &train_subset.packed_input,
+                                    train_subset.words_per_example, &train_subset.target_bits,
+                                    train_subset.num_examples, num_clusters, adapt_config,
+                                );
+                                cluster_stats = recomputed.1;
+                            }
+                        }
+                    }
+
+                    if adapt_config.neurogenesis_enabled {
+                        let (added, removed) = adaptation::neurogenesis_pass(
+                            &mut adapt_bits[i], &mut adapt_neurons[i], &mut adapt_conns[i],
+                            &cluster_stats, adapt_config, generation, &mut adapt_cooldowns[i],
+                            &initial_neurons[i], train_subset.num_examples, adaptation_rate,
+                            &mut adapt_rngs[i],
+                        );
+                        adapt_added[i] += added;
+                        adapt_removed[i] += removed;
+                    }
+                }
+            }
+
+            // Phase 3: Retrain changed + forward eval (rayon parallel)
+            batch_scores
+                .par_chunks_mut(scores_per_genome)
+                .enumerate()
+                .for_each(|(i, score_slice)| {
+                    let g = batch_start + i;
+                    let changed = adapt_pruned[i] > 0 || adapt_grown[i] > 0
+                        || adapt_added[i] > 0 || adapt_removed[i] > 0;
+
+                    if changed {
+                        let new_cluster_max_bits: Vec<usize> = {
+                            let mut v = Vec::with_capacity(num_clusters);
+                            let mut off = 0;
+                            for &nc in &adapt_neurons[i] {
+                                let max_b = adapt_bits[i][off..off + nc].iter().copied().max().unwrap_or(0);
+                                v.push(max_b);
+                                off += nc;
+                            }
+                            v
+                        };
+                        let new_threshold = match sparse_threshold_override {
+                            Some(t) => t,
+                            None => auto_sparse_threshold(
+                                &new_cluster_max_bits, &adapt_neurons[i],
+                                target_per_genome, expected_train,
+                            ),
+                        };
+                        let new_layout = compute_genome_layout(
+                            &adapt_bits[i], &adapt_neurons[i], new_threshold, expected_train,
+                        );
+                        let genome_rng_seed = trained_data[i].1;
+
+                        let mut new_storage: Vec<ClusterStorage> = (0..num_clusters)
+                            .map(|c| ClusterStorage::new(
+                                adapt_neurons[i][c], new_layout.cluster_max_bits[c],
+                                new_threshold, empty_word, memory_mode,
+                            ))
+                            .collect();
+
+                        train_into(
+                            &adapt_conns[i], &adapt_bits[i], &adapt_neurons[i], num_clusters,
+                            &new_layout, train_subset, &mut new_storage,
+                            memory_mode, neuron_sample_rate, genome_rng_seed.wrapping_add(1),
+                        );
+                        forward_eval_into(
+                            &adapt_conns[i], &adapt_bits[i], &adapt_neurons[i], num_clusters,
+                            &new_layout, eval_subset, &new_storage, score_slice, memory_mode,
+                        );
+                    } else {
+                        forward_eval_into(
+                            &adapt_conns[i], &adapt_bits[i], &adapt_neurons[i], num_clusters,
+                            &genome_layouts[g], eval_subset, &trained_data[i].0, score_slice, memory_mode,
+                        );
+                    }
+
+                    *adapted_data[g].lock().unwrap() = Some((
+                        adapt_bits[i].clone(), adapt_neurons[i].clone(), adapt_conns[i].clone(),
+                        adapt_pruned[i], adapt_grown[i], adapt_added[i], adapt_removed[i],
+                    ));
+                });
+        }
 
         batch_start = batch_end;
     }

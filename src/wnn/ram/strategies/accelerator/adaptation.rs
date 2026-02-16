@@ -874,6 +874,37 @@ fn storage_fill_rate(storage: &ClusterStorage, neuron_idx: usize, bits: usize) -
 }
 
 // =============================================================================
+// Combined Stats (CPU fallback for non-macOS or when no GPU is available)
+// =============================================================================
+
+/// Compute combined neuron + cluster stats using CPU.
+/// On macOS, prefer `compute_neuron_and_cluster_stats_gpu()` for ~100x speedup.
+pub fn compute_combined_stats(
+	bits_per_neuron: &[usize],
+	neurons_per_cluster: &[usize],
+	connections: &[i64],
+	storages: &[ClusterStorage],
+	packed_input: &[u64],
+	words_per_example: usize,
+	target_bits: &[u8],
+	num_examples: usize,
+	num_clusters: usize,
+	config: &AdaptationConfig,
+) -> (Vec<NeuronStats>, Vec<ClusterStats>) {
+	let neuron_stats = compute_neuron_stats(
+		bits_per_neuron, neurons_per_cluster, connections,
+		storages, packed_input, words_per_example, target_bits,
+		num_examples, num_clusters, config,
+	);
+	let cluster_stats = compute_cluster_stats(
+		&neuron_stats, neurons_per_cluster, bits_per_neuron,
+		connections, storages, packed_input, words_per_example,
+		target_bits, num_examples, num_clusters, config,
+	);
+	(neuron_stats, cluster_stats)
+}
+
+// =============================================================================
 // GPU Stats
 // =============================================================================
 
@@ -1000,6 +1031,273 @@ pub fn compute_neuron_and_cluster_stats_gpu(
 	}).collect();
 
 	(neuron_stats, cluster_stats)
+}
+
+// =============================================================================
+// Batched Multi-Genome GPU Stats
+// =============================================================================
+
+/// Per-genome data for batched stats computation.
+pub struct GenomeStatsInput<'a> {
+	pub bits_per_neuron: &'a [usize],
+	pub neurons_per_cluster: &'a [usize],
+	pub connections: &'a [i64],
+	pub storages: &'a [ClusterStorage],
+}
+
+/// Compute stats for ALL genomes in a single GPU dispatch.
+///
+/// ~50x faster than per-genome dispatches:
+///   - Single GPU dispatch overhead instead of 50+
+///   - Shared input buffers (60-80% of GPU data)
+///   - GPU saturated with 10K+ neurons vs 200 per genome
+///
+/// Connection entropy is computed on CPU (trivially fast from precomputed bit_ones).
+#[cfg(target_os = "macos")]
+pub fn compute_batch_stats_gpu(
+	metal: &crate::metal_stats::MetalStatsComputer,
+	genomes: &[GenomeStatsInput],
+	packed_input: &[u64],
+	words_per_example: usize,
+	target_bits: &[u8],
+	num_examples: usize,
+	num_clusters_per_genome: usize,
+	config: &AdaptationConfig,
+	memory_mode: u8,
+) -> Vec<(Vec<NeuronStats>, Vec<ClusterStats>)> {
+	use crate::metal_stats::{BatchedNeuronMeta, BatchedClusterMeta};
+	use crate::neuron_memory::{MODE_QUAD_BINARY, MODE_QUAD_WEIGHTED, EMPTY_U8};
+
+	let num_genomes = genomes.len();
+	if num_genomes == 0 {
+		return Vec::new();
+	}
+
+	// Build sample indices (shared across all genomes)
+	let sample_indices_usize = build_sample_indices(num_examples, config.stats_sample_size, 42);
+	let n_sample = sample_indices_usize.len();
+	let sample_indices_u32: Vec<u32> = sample_indices_usize.iter().map(|&i| i as u32).collect();
+
+	// Precompute bit_ones for connection entropy (shared across all genomes)
+	let bit_ones = precompute_bit_ones(packed_input, words_per_example, &sample_indices_usize, config.total_input_bits);
+
+	let empty_cell = match memory_mode {
+		MODE_QUAD_BINARY | MODE_QUAD_WEIGHTED => 1u32,
+		_ => EMPTY_U8 as u32,
+	};
+
+	// =========================================================================
+	// Marshal all genomes into concatenated arrays
+	// =========================================================================
+
+	let mut all_neuron_metas: Vec<BatchedNeuronMeta> = Vec::new();
+	let mut all_cluster_metas: Vec<BatchedClusterMeta> = Vec::new();
+	let mut all_connections_i32: Vec<i32> = Vec::new();
+	let mut all_dense_words: Vec<i64> = Vec::new();
+	let mut all_sparse_keys: Vec<u64> = Vec::new();
+	let mut all_sparse_values: Vec<u8> = Vec::new();
+	let mut all_sparse_offsets: Vec<u32> = Vec::new();
+	let mut all_sparse_counts: Vec<u32> = Vec::new();
+
+	// Per-genome offsets for result partitioning
+	let mut genome_neuron_offsets: Vec<usize> = Vec::with_capacity(num_genomes + 1);
+	let mut genome_cluster_offsets: Vec<usize> = Vec::with_capacity(num_genomes + 1);
+	genome_neuron_offsets.push(0);
+	genome_cluster_offsets.push(0);
+
+	// Per-genome connection entropy (computed on CPU)
+	let mut all_conn_entropies: Vec<Vec<Vec<f32>>> = Vec::with_capacity(num_genomes);
+
+	let mut global_neuron_cursor = 0u32;
+	let mut dense_word_cursor = 0u32;
+	let mut sparse_neuron_cursor = 0u32;
+	let mut global_conn_offset = 0u32;
+
+	for genome in genomes {
+		let bpn = genome.bits_per_neuron;
+		let npc = genome.neurons_per_cluster;
+		let connections = genome.connections;
+		let storages = genome.storages;
+		let total_neurons: usize = npc.iter().sum();
+
+		// Connection entropy for this genome (CPU)
+		let mut conn_offsets = vec![0usize];
+		for &b in bpn {
+			conn_offsets.push(conn_offsets.last().unwrap() + b);
+		}
+		let conn_entropies: Vec<Vec<f32>> = (0..total_neurons).map(|n| {
+			let n_bits = bpn[n];
+			let conn_start = conn_offsets[n];
+			connections[conn_start..conn_start + n_bits].iter().map(|&conn_idx| {
+				let ones = bit_ones[conn_idx as usize];
+				let p = ones as f32 / n_sample.max(1) as f32;
+				if p > 0.0 && p < 1.0 {
+					-(p * p.ln() + (1.0 - p) * (1.0 - p).ln()) / std::f32::consts::LN_2
+				} else {
+					0.0
+				}
+			}).collect()
+		}).collect();
+		all_conn_entropies.push(conn_entropies);
+
+		// Append connections as i32
+		all_connections_i32.extend(connections.iter().map(|&c| c as i32));
+
+		// Marshal per-cluster storage and neuron metadata
+		let mut local_n = 0usize;
+		for cluster in 0..num_clusters_per_genome {
+			let n_neurons = npc[cluster];
+			all_cluster_metas.push(BatchedClusterMeta {
+				first_neuron: global_neuron_cursor,
+				num_neurons: n_neurons as u32,
+			});
+
+			match &storages[cluster] {
+				ClusterStorage::Dense { words, words_per_neuron, .. } => {
+					let wpn = *words_per_neuron;
+					all_dense_words.extend_from_slice(words);
+					for local_neuron in 0..n_neurons {
+						all_neuron_metas.push(BatchedNeuronMeta {
+							cluster_id: (genome_cluster_offsets.last().unwrap() + cluster) as u32,
+							bits: bpn[local_n] as u32,
+							conn_offset: global_conn_offset + conn_offsets[local_n] as u32,
+							is_sparse: 0,
+							dense_word_offset: dense_word_cursor + (local_neuron * wpn) as u32,
+							words_per_neuron: wpn as u32,
+							sparse_neuron_idx: 0,
+						});
+						local_n += 1;
+					}
+					dense_word_cursor += words.len() as u32;
+				}
+				ClusterStorage::Sparse { neurons: maps, .. } => {
+					for local_neuron in 0..n_neurons {
+						let map = &maps[local_neuron];
+						let sp_offset = all_sparse_keys.len() as u32;
+						let mut entries: Vec<(u32, u8)> = map.iter().map(|(&k, &v)| (k, v)).collect();
+						entries.sort_unstable_by_key(|(k, _)| *k);
+						let count = entries.len() as u32;
+						for (k, v) in entries {
+							all_sparse_keys.push(k as u64);
+							all_sparse_values.push(v);
+						}
+						all_sparse_offsets.push(sp_offset);
+						all_sparse_counts.push(count);
+						all_neuron_metas.push(BatchedNeuronMeta {
+							cluster_id: (genome_cluster_offsets.last().unwrap() + cluster) as u32,
+							bits: bpn[local_n] as u32,
+							conn_offset: global_conn_offset + conn_offsets[local_n] as u32,
+							is_sparse: 1,
+							dense_word_offset: 0,
+							words_per_neuron: 0,
+							sparse_neuron_idx: sparse_neuron_cursor,
+						});
+						sparse_neuron_cursor += 1;
+						local_n += 1;
+					}
+				}
+			}
+			global_neuron_cursor += n_neurons as u32;
+		}
+
+		global_conn_offset += connections.len() as u32;
+		genome_neuron_offsets.push(global_neuron_cursor as usize);
+		genome_cluster_offsets.push(genome_cluster_offsets.last().unwrap() + num_clusters_per_genome);
+	}
+
+	let total_neurons = global_neuron_cursor as usize;
+	let total_clusters = num_genomes * num_clusters_per_genome;
+
+	// =========================================================================
+	// Single GPU dispatch for all genomes
+	// =========================================================================
+
+	let result = metal.compute_all_stats_batched(
+		packed_input, words_per_example,
+		target_bits, &sample_indices_u32,
+		&all_connections_i32,
+		&all_neuron_metas,
+		&all_dense_words,
+		&all_sparse_keys,
+		&all_sparse_values,
+		&all_sparse_offsets,
+		&all_sparse_counts,
+		&all_cluster_metas,
+		total_neurons,
+		total_clusters,
+		empty_cell,
+	);
+
+	// =========================================================================
+	// Partition results back into per-genome (NeuronStats, ClusterStats)
+	// =========================================================================
+
+	(0..num_genomes).map(|g| {
+		let n_start = genome_neuron_offsets[g];
+		let n_end = genome_neuron_offsets[g + 1];
+		let c_start = genome_cluster_offsets[g];
+		let genome = &genomes[g];
+		let bpn = genome.bits_per_neuron;
+		let npc = genome.neurons_per_cluster;
+
+		// Build NeuronStats
+		let neuron_stats: Vec<NeuronStats> = (0..(n_end - n_start)).map(|local_n| {
+			let global_n = n_start + local_n;
+			let n_bits = bpn[local_n];
+			let total_cells = 1usize << n_bits;
+			let fill_rate = result.neuron_filled[global_n].min(total_cells as u32) as f32 / total_cells.max(1) as f32;
+			let error_rate = if n_sample > 0 {
+				result.neuron_errors[global_n] as f32 / n_sample as f32
+			} else {
+				0.0
+			};
+			NeuronStats {
+				fill_rate,
+				error_rate,
+				connection_entropy: all_conn_entropies[g][local_n].clone(),
+			}
+		}).collect();
+
+		// Build ClusterStats
+		let mut neuron_offset = 0usize;
+		let cluster_stats: Vec<ClusterStats> = (0..num_clusters_per_genome).map(|c| {
+			let n_neurons = npc[c];
+			let global_c = c_start + c;
+			let mean_fill = if n_neurons > 0 {
+				(0..n_neurons).map(|i| neuron_stats[neuron_offset + i].fill_rate).sum::<f32>() / n_neurons as f32
+			} else {
+				0.0
+			};
+			let error_rate = if n_sample > 0 {
+				result.cluster_errors[global_c] as f32 / n_sample as f32
+			} else {
+				0.0
+			};
+			let uniqueness: Vec<f32> = (0..n_neurons).map(|i| {
+				if n_sample > 0 {
+					result.uniqueness_counts[n_start + neuron_offset + i] as f32 / n_sample as f32
+				} else {
+					0.0
+				}
+			}).collect();
+			let accuracy: Vec<f32> = (0..n_neurons).map(|i| {
+				if n_sample > 0 {
+					result.accuracy_counts[n_start + neuron_offset + i] as f32 / n_sample as f32
+				} else {
+					0.0
+				}
+			}).collect();
+			neuron_offset += n_neurons;
+			ClusterStats {
+				error_rate,
+				mean_fill_rate: mean_fill,
+				neuron_uniqueness: uniqueness,
+				neuron_accuracy: accuracy,
+			}
+		}).collect();
+
+		(neuron_stats, cluster_stats)
+	}).collect()
 }
 
 #[cfg(test)]
