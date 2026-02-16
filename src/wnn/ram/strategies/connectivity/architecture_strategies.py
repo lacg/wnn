@@ -1834,39 +1834,25 @@ class GridSearchStrategy:
 			except Exception as e:
 				self._log(f"  Warning: tracker error: {e}")
 
-		# Phase 5: Build output population with tiered representation
+		# Phase 5: Build output population with proportional representation
 		# Better configs get more genomes (each with fresh random connections).
-		# Tiers: top 4 → 6 each, 5th → 5, 6-10 → 3 each, rest → 1 each.
-		# Adjusts dynamically to hit exact population_size.
+		# Weights: [K, K-1, ..., 1] → best config gets K/sum(weights) of population.
 
 		top_k = min(cfg.top_k, len(results))
-		target = cfg.population_size
-
-		# Assign genomes per rank using tiered allocation
-		genomes_per_config = []
-		for rank in range(top_k):
-			if rank < 4:
-				genomes_per_config.append(6)
-			elif rank < 5:
-				genomes_per_config.append(5)
-			elif rank < 10:
-				genomes_per_config.append(3)
-			else:
-				genomes_per_config.append(1)
+		weights = list(range(top_k, 0, -1))  # [K, K-1, ..., 1]
+		total_weight = sum(weights)
+		genomes_per_config = [
+			max(1, round(w / total_weight * cfg.population_size)) for w in weights
+		]
 
 		# Adjust to hit exact population_size
-		current = sum(genomes_per_config)
-		if current > target:
-			# Shrink from bottom ranks first
+		while sum(genomes_per_config) > cfg.population_size:
 			for i in range(len(genomes_per_config) - 1, -1, -1):
-				while genomes_per_config[i] > 1 and sum(genomes_per_config) > target:
+				if genomes_per_config[i] > 1:
 					genomes_per_config[i] -= 1
-		elif current < target:
-			# Add to top ranks first
-			for i in range(len(genomes_per_config)):
-				while sum(genomes_per_config) < target:
-					genomes_per_config[i] += 1
 					break
+		while sum(genomes_per_config) < cfg.population_size:
+			genomes_per_config[0] += 1
 
 		output_population = []
 		population_metrics = []
