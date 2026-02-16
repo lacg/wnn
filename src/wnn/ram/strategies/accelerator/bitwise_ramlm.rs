@@ -1779,6 +1779,19 @@ pub fn evaluate_genomes_adaptive(
                     return;
                 }
 
+                // Warmup guard: skip all adaptation (and expensive stats) before warmup
+                if generation < adapt_config.warmup_generations {
+                    forward_eval_into(
+                        connections, bpn_slice, neurons_slice, num_clusters,
+                        layout, eval_subset, &cluster_storage, score_slice, memory_mode,
+                    );
+                    *adapted_data[g].lock().unwrap() = Some((
+                        bpn_slice.to_vec(), neurons_slice.to_vec(), connections.to_vec(),
+                        0, 0, 0, 0,
+                    ));
+                    return;
+                }
+
                 // Step 2: Adapt architecture
                 let mut adapted_bits = bpn_slice.to_vec();
                 let mut adapted_neurons = neurons_slice.to_vec();
