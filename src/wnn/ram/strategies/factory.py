@@ -258,6 +258,10 @@ class OptimizerStrategyType(IntEnum):
 	ARCHITECTURE_GA = auto()
 	ARCHITECTURE_TS = auto()
 	ARCHITECTURE_GRID_SEARCH = auto()
+	# Stats-guided adaptation (dedicated phases)
+	ARCHITECTURE_NEUROGENESIS = auto()
+	ARCHITECTURE_SYNAPTOGENESIS = auto()
+	ARCHITECTURE_AXONOGENESIS = auto()
 
 
 class OptimizerStrategyFactory:
@@ -558,6 +562,36 @@ class OptimizerStrategyFactory:
 					verbose=verbose,
 				)
 
+			case (OptimizerStrategyType.ARCHITECTURE_NEUROGENESIS
+				| OptimizerStrategyType.ARCHITECTURE_SYNAPTOGENESIS
+				| OptimizerStrategyType.ARCHITECTURE_AXONOGENESIS):
+				return OptimizerStrategyFactory._create_adaptation_strategy(
+					strategy_type=strategy_type,
+					num_clusters=num_clusters,
+					min_bits=min_bits,
+					max_bits=max_bits,
+					min_neurons=min_neurons,
+					max_neurons=max_neurons,
+					total_input_bits=total_input_bits,
+					iterations=iterations,
+					population_size=population_size,
+					patience=patience,
+					check_interval=check_interval,
+					min_improvement_pct=min_improvement_pct if min_improvement_pct is not None else 0.5,
+					initial_threshold=initial_threshold,
+					threshold_delta=threshold_delta,
+					threshold_reference=threshold_reference,
+					seed=seed,
+					logger=logger,
+					batch_evaluator=batch_evaluator,
+					shutdown_check=shutdown_check,
+					fitness_calculator_type=fitness_calculator_type,
+					fitness_weight_ce=fitness_weight_ce,
+					fitness_weight_acc=fitness_weight_acc,
+					min_accuracy_floor=min_accuracy_floor,
+					phase_name=phase_name,
+				)
+
 			case _:
 				raise ValueError(f"Unknown optimizer strategy type: {strategy_type}")
 
@@ -847,5 +881,76 @@ class OptimizerStrategyFactory:
 			batch_evaluator=batch_evaluator,
 			seed=seed,
 			logger=logger,
+			shutdown_check=shutdown_check,
+		)
+
+	@staticmethod
+	def _create_adaptation_strategy(
+		strategy_type: 'OptimizerStrategyType',
+		num_clusters: int,
+		min_bits: int,
+		max_bits: int,
+		min_neurons: int,
+		max_neurons: int,
+		total_input_bits: int | None,
+		iterations: int,
+		population_size: int,
+		patience: int,
+		check_interval: int,
+		min_improvement_pct: float,
+		initial_threshold: float | None,
+		threshold_delta: float,
+		threshold_reference: int,
+		seed: int,
+		logger: Any,
+		batch_evaluator: Any,
+		shutdown_check: Any,
+		fitness_calculator_type: Any,
+		fitness_weight_ce: float,
+		fitness_weight_acc: float,
+		min_accuracy_floor: float | None,
+		phase_name: str,
+	):
+		"""Create a stats-guided adaptation strategy (neurogenesis, synaptogenesis, axonogenesis)."""
+		from wnn.ram.fitness import FitnessCalculatorType
+		from wnn.ram.strategies.connectivity.architecture_strategies import (
+			AdaptationStrategy,
+			AdaptationConfig as AdaptationStrategyConfig,
+		)
+
+		# Map strategy type to adaptation mode
+		adaptation_mode = {
+			OptimizerStrategyType.ARCHITECTURE_NEUROGENESIS: "neurogenesis",
+			OptimizerStrategyType.ARCHITECTURE_SYNAPTOGENESIS: "synaptogenesis",
+			OptimizerStrategyType.ARCHITECTURE_AXONOGENESIS: "axonogenesis",
+		}[strategy_type]
+
+		config = AdaptationStrategyConfig(
+			num_clusters=num_clusters,
+			min_bits=min_bits,
+			max_bits=max_bits,
+			min_neurons=min_neurons,
+			max_neurons=max_neurons,
+			total_input_bits=total_input_bits,
+			adaptation_mode=adaptation_mode,
+			iterations=iterations,
+			population_size=population_size,
+			patience=patience,
+			check_interval=check_interval,
+			min_improvement_pct=min_improvement_pct,
+			initial_threshold=initial_threshold,
+			threshold_delta=threshold_delta,
+			threshold_reference=threshold_reference,
+			fitness_calculator_type=fitness_calculator_type or FitnessCalculatorType.HARMONIC_RANK,
+			fitness_weight_ce=fitness_weight_ce,
+			fitness_weight_acc=fitness_weight_acc,
+			min_accuracy_floor=min_accuracy_floor,
+		)
+		return AdaptationStrategy(
+			config=config,
+			seed=seed,
+			logger=logger,
+			cached_evaluator=batch_evaluator,
+			phase_name=phase_name,
 			shutdown_check=shutdown_check,
 		)

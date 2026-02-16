@@ -508,9 +508,17 @@ class Flow:
 					self._experiment_ids[idx] = existing_exp["id"]
 					self.log(f"Found existing experiment {existing_exp['id']}: {exp_config.name} (sequence_order={idx})")
 				else:
+					adaptation_phase_types = {
+						ExperimentType.NEUROGENESIS: "neurogenesis",
+						ExperimentType.SYNAPTOGENESIS: "synaptogenesis",
+						ExperimentType.AXONOGENESIS: "axonogenesis",
+					}
 					if exp_config.experiment_type == ExperimentType.GRID_SEARCH:
 						phase_type = "grid_search"
 						max_iters = 1  # Grid search is a single step
+					elif exp_config.experiment_type in adaptation_phase_types:
+						phase_type = adaptation_phase_types[exp_config.experiment_type]
+						max_iters = exp_config.iterations
 					else:
 						opt_target = "bits" if exp_config.optimize_bits else "neurons" if exp_config.optimize_neurons else "connections"
 						phase_type = f"{'ga' if exp_config.experiment_type == ExperimentType.GA else 'ts'}_{opt_target}"
@@ -621,8 +629,15 @@ class Flow:
 					tier_config_str = ";".join(tier_parts)
 
 				# Determine phase type string for tracking
+				adaptation_phase_types = {
+					ExperimentType.NEUROGENESIS: "neurogenesis",
+					ExperimentType.SYNAPTOGENESIS: "synaptogenesis",
+					ExperimentType.AXONOGENESIS: "axonogenesis",
+				}
 				if exp_config.experiment_type == ExperimentType.GRID_SEARCH:
 					phase_type = "grid_search"
+				elif exp_config.experiment_type in adaptation_phase_types:
+					phase_type = adaptation_phase_types[exp_config.experiment_type]
 				else:
 					opt_target = "bits" if exp_config.optimize_bits else "neurons" if exp_config.optimize_neurons else "connections"
 					phase_type = f"{'ga' if exp_config.experiment_type == ExperimentType.GA else 'ts'}_{opt_target}"

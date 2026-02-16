@@ -22,9 +22,12 @@ from wnn.ram.experiments.phased_search import PhaseResult
 
 class ExperimentType(IntEnum):
 	"""How we optimize."""
-	GA = 0           # Genetic Algorithm
-	TS = 1           # Tabu Search
-	GRID_SEARCH = 2  # Grid search over neuron × bit configurations
+	GA = 0              # Genetic Algorithm
+	TS = 1              # Tabu Search
+	GRID_SEARCH = 2     # Grid search over neuron × bit configurations
+	NEUROGENESIS = 3    # Stats-guided neuron add/remove per cluster
+	SYNAPTOGENESIS = 4  # Stats-guided connection prune/grow per neuron
+	AXONOGENESIS = 5    # MI-guided connection rewiring
 
 
 class ClusterType(IntEnum):
@@ -352,8 +355,20 @@ class Experiment:
 		# Determine strategy type
 		is_grid_search = cfg.experiment_type == ExperimentType.GRID_SEARCH
 		is_ga = cfg.experiment_type == ExperimentType.GA
+		is_adaptation = cfg.experiment_type in (
+			ExperimentType.NEUROGENESIS,
+			ExperimentType.SYNAPTOGENESIS,
+			ExperimentType.AXONOGENESIS,
+		)
+		adaptation_type_map = {
+			ExperimentType.NEUROGENESIS: OptimizerStrategyType.ARCHITECTURE_NEUROGENESIS,
+			ExperimentType.SYNAPTOGENESIS: OptimizerStrategyType.ARCHITECTURE_SYNAPTOGENESIS,
+			ExperimentType.AXONOGENESIS: OptimizerStrategyType.ARCHITECTURE_AXONOGENESIS,
+		}
 		if is_grid_search:
 			strategy_type = OptimizerStrategyType.ARCHITECTURE_GRID_SEARCH
+		elif is_adaptation:
+			strategy_type = adaptation_type_map[cfg.experiment_type]
 		elif is_ga:
 			strategy_type = OptimizerStrategyType.ARCHITECTURE_GA
 		else:
@@ -415,6 +430,10 @@ class Experiment:
 			strategy_kwargs["bits_grid"] = cfg.bits_grid
 			strategy_kwargs["grid_top_k"] = cfg.grid_top_k
 			strategy_kwargs["population_size"] = cfg.population_size
+		elif is_adaptation:
+			strategy_kwargs["iterations"] = cfg.iterations
+			strategy_kwargs["population_size"] = cfg.population_size
+			strategy_kwargs["phase_name"] = cfg.name
 		elif is_ga:
 			strategy_kwargs["generations"] = cfg.generations
 			strategy_kwargs["population_size"] = cfg.population_size
@@ -485,6 +504,14 @@ class Experiment:
 			if is_grid_search:
 				# Grid search ignores initial genome/population — evaluates fresh configs
 				result = strategy.optimize(evaluate_fn=None)
+			elif is_adaptation:
+				# Adaptation: takes population, iteratively adapts
+				seed_pop = initial_population or ([initial_genome] if initial_genome else None)
+				result = strategy.optimize(
+					evaluate_fn=None,
+					initial_population=seed_pop,
+					initial_genome=initial_genome,
+				)
 			elif is_ga:
 				seed_pop = initial_population or ([initial_genome] if initial_genome else None)
 				result = strategy.optimize(

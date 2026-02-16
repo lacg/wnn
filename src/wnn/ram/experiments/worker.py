@@ -664,14 +664,30 @@ class FlowWorker:
         per_phase_delta = threshold_step_pct / 100.0  # 1% → 0.01
         min_accuracy_floor = params.get("min_accuracy_floor", 0.0)
 
+        # Fitness calculator defaults from flow params
+        default_fitness_type = self._parse_fitness_calculator(params.get("fitness_calculator"))
+        default_weight_ce = params.get("fitness_weight_ce", 1.0)
+        default_weight_acc = params.get("fitness_weight_acc", 1.0)
+
         exp_configs = []
         for exp_data in experiments:
             # Parse phase_type (API format) or use direct fields (config format)
             phase_type = exp_data.get("phase_type", "")
             if phase_type:
-                # API format: phase_type like "ga_neurons", "ts_bits", "ga_connections", "grid_search"
+                # API format: phase_type like "ga_neurons", "ts_bits", "ga_connections", "grid_search",
+                # "neurogenesis", "synaptogenesis", "axonogenesis"
+                adaptation_types = {
+                    "neurogenesis": ExperimentType.NEUROGENESIS,
+                    "synaptogenesis": ExperimentType.SYNAPTOGENESIS,
+                    "axonogenesis": ExperimentType.AXONOGENESIS,
+                }
                 if phase_type == "grid_search":
                     experiment_type = ExperimentType.GRID_SEARCH
+                    optimize_neurons = False
+                    optimize_bits = False
+                    optimize_connections = False
+                elif phase_type in adaptation_types:
+                    experiment_type = adaptation_types[phase_type]
                     optimize_neurons = False
                     optimize_bits = False
                     optimize_connections = False
