@@ -978,10 +978,9 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		# Initialize connections if total_input_bits available
 		connections = None
 		if cfg.total_input_bits is not None:
-			connections = []
-			for b in bits_per_neuron:
-				for _ in range(b):
-					connections.append(self._rng.randint(0, cfg.total_input_bits - 1))
+			total_conns = sum(bits_per_neuron)
+			np_rng = np.random.default_rng(self._rng.randint(0, 2**31))
+			connections = np_rng.integers(0, cfg.total_input_bits, size=total_conns).tolist()
 
 		return ClusterGenome(bits_per_neuron=bits_per_neuron, neurons_per_cluster=neurons, connections=connections)
 
@@ -1030,10 +1029,9 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		# Initialize connections if total_input_bits available
 		connections = None
 		if cfg.total_input_bits is not None:
-			connections = []
-			for b in bits_per_neuron:
-				for _ in range(b):
-					connections.append(self._rng.randint(0, cfg.total_input_bits - 1))
+			total_conns = sum(bits_per_neuron)
+			np_rng = np.random.default_rng(self._rng.randint(0, 2**31))
+			connections = np_rng.integers(0, cfg.total_input_bits, size=total_conns).tolist()
 
 		return ClusterGenome(bits_per_neuron=bits_per_neuron, neurons_per_cluster=neurons, connections=connections)
 
