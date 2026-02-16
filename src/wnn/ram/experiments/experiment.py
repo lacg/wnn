@@ -696,7 +696,9 @@ class Experiment:
 		if not genomes or not evals:
 			return []
 
-		genome_evals = list(zip(genomes, evals))
+		# Normalize evals to (ce, acc) — BitwiseEvaluator returns 3-tuples
+		normalized = [(e[0], e[1]) for e in evals]
+		genome_evals = list(zip(genomes, normalized))
 
 		# Sort by CE (lower = better) and Acc (higher = better)
 		by_ce = sorted(genome_evals, key=lambda x: x[1][0])
