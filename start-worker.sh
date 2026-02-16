@@ -26,7 +26,7 @@ source wnn/bin/activate
 
 if [ "$USE_TLS" = true ]; then
     URL="https://localhost:3000"
-    EXTRA_ARGS="--insecure"
+    EXTRA_ARGS="--no-ssl-verify"
     echo "Starting worker with TLS..."
 else
     URL="http://localhost:3000"
