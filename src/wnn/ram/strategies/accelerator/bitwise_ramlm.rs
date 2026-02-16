@@ -1808,13 +1808,15 @@ pub fn evaluate_genomes_adaptive(
                 let mut cooldowns = vec![0usize; num_clusters];
 
                 for _pass in 0..adapt_config.passes_per_eval {
+                    // Compute neuron stats once per pass
+                    let mut neuron_stats = adaptation::compute_neuron_stats(
+                        &adapted_bits, &adapted_neurons, &adapted_connections,
+                        &cluster_storage, &train_subset.packed_input,
+                        train_subset.words_per_example, &train_subset.target_bits,
+                        train_subset.num_examples, num_clusters, adapt_config,
+                    );
+
                     if adapt_config.synaptogenesis_enabled {
-                        let neuron_stats = adaptation::compute_neuron_stats(
-                            &adapted_bits, &adapted_neurons, &adapted_connections,
-                            &cluster_storage, &train_subset.packed_input,
-                            train_subset.words_per_example, &train_subset.target_bits,
-                            train_subset.num_examples, num_clusters, adapt_config,
-                        );
                         let (pruned, grown) = adaptation::synaptogenesis_pass(
                             &mut adapted_bits, &mut adapted_connections,
                             &neuron_stats, adapt_config,
@@ -1823,15 +1825,19 @@ pub fn evaluate_genomes_adaptive(
                         );
                         total_pruned += pruned;
                         total_grown += grown;
+
+                        // Recompute stats if synaptogenesis changed architecture
+                        if adapt_config.neurogenesis_enabled && (pruned > 0 || grown > 0) {
+                            neuron_stats = adaptation::compute_neuron_stats(
+                                &adapted_bits, &adapted_neurons, &adapted_connections,
+                                &cluster_storage, &train_subset.packed_input,
+                                train_subset.words_per_example, &train_subset.target_bits,
+                                train_subset.num_examples, num_clusters, adapt_config,
+                            );
+                        }
                     }
 
                     if adapt_config.neurogenesis_enabled {
-                        let neuron_stats = adaptation::compute_neuron_stats(
-                            &adapted_bits, &adapted_neurons, &adapted_connections,
-                            &cluster_storage, &train_subset.packed_input,
-                            train_subset.words_per_example, &train_subset.target_bits,
-                            train_subset.num_examples, num_clusters, adapt_config,
-                        );
                         let cluster_stats = adaptation::compute_cluster_stats(
                             &neuron_stats, &adapted_neurons, &adapted_bits,
                             &adapted_connections, &cluster_storage,
