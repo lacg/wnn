@@ -544,7 +544,7 @@ class FlowWorker:
         """
         self._log(f"Creating BitwiseEvaluator (context_size={context_size})...")
 
-        from wnn.ram.architecture.bitwise_evaluator import BitwiseEvaluator
+        from wnn.ram.architecture.bitwise_evaluator import BitwiseEvaluator, AdaptationConfig
 
         # Map memory mode string to integer
         memory_mode_map = {
@@ -557,6 +557,31 @@ class FlowWorker:
         train_parts = params.get("train_parts", 4)
         eval_parts = params.get("eval_parts", 1)
 
+        # Build adaptation config if synaptogenesis or neurogenesis enabled
+        adapt_config = None
+        if params.get("synaptogenesis") or params.get("neurogenesis"):
+            adapt_config = AdaptationConfig(
+                synaptogenesis_enabled=bool(params.get("synaptogenesis", False)),
+                neurogenesis_enabled=bool(params.get("neurogenesis", False)),
+                min_bits=params.get("min_bits", 4),
+                max_bits=params.get("max_bits", 24),
+                min_neurons=params.get("min_neurons", 3),
+                max_neurons=params.get("max_neurons", 30),
+                warmup_generations=params.get("adapt_warmup", 10),
+                cooldown_iterations=params.get("adapt_cooldown", 5),
+                prune_entropy_threshold=params.get("adapt_prune_entropy", 0.05),
+                grow_fill_threshold=params.get("adapt_grow_fill", 0.8),
+                grow_error_threshold=params.get("adapt_grow_error", 0.5),
+                cluster_error_threshold=params.get("adapt_cluster_error", 0.5),
+                cluster_fill_threshold=params.get("adapt_cluster_fill", 0.7),
+                neuron_uniqueness_threshold=params.get("adapt_neuron_uniqueness", 0.05),
+                max_neurons_per_pass=params.get("adapt_max_neurons_per_pass", 3),
+                passes_per_eval=params.get("adapt_passes", 1),
+            )
+            self._log(f"  Adaptation: synaptogenesis={adapt_config.synaptogenesis_enabled}, "
+                       f"neurogenesis={adapt_config.neurogenesis_enabled}, "
+                       f"warmup={adapt_config.warmup_generations}, cooldown={adapt_config.cooldown_iterations}")
+
         evaluator = BitwiseEvaluator(
             train_tokens=self._train_tokens,
             eval_tokens=self._test_tokens,
@@ -566,6 +591,7 @@ class FlowWorker:
             num_eval_parts=eval_parts,
             memory_mode=memory_mode,
             neuron_sample_rate=neuron_sample_rate,
+            adapt_config=adapt_config,
         )
 
         self._log(f"  BitwiseEvaluator: vocab={evaluator.vocab_size:,}, "
