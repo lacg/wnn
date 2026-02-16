@@ -1815,7 +1815,6 @@ class GridSearchStrategy:
 			genomes_per_config[0] += 1
 
 		output_population = []
-		population_metrics = []
 		for i in range(top_k):
 			r = results[i]
 			n_genomes = genomes_per_config[i]
@@ -1823,11 +1822,32 @@ class GridSearchStrategy:
 				# New genome with same config but fresh random connections
 				genome = self._create_genome(r["neurons"], r["bits"])
 				output_population.append(genome)
-				population_metrics.append((r["ce"], r["accuracy"]))
 
 			self._log(f"  #{i+1:2d} n={r['neurons']:3d}, b={r['bits']:2d} (CE={r['ce']:.4f}) → {n_genomes} genomes")
 
 		self._log(f"\nPopulation: {len(output_population)} genomes from top-{top_k} configs")
+
+		# Evaluate expanded population so each genome gets its own CE/accuracy
+		if self._batch_evaluator is not None:
+			self._log(f"  Evaluating {len(output_population)} expanded genomes...")
+			t1 = time.time()
+			expanded_evals = self._batch_evaluator.evaluate_batch(output_population)
+			expand_elapsed = time.time() - t1
+			population_metrics = [(ce, acc) for ce, acc, _ in expanded_evals]
+			batch_elapsed += expand_elapsed
+			self._log(f"  Expanded eval: {expand_elapsed:.1f}s")
+			# Update best result if an expanded genome beat the grid search best
+			for idx, (ce, acc, _) in enumerate(expanded_evals):
+				if ce < best_result["ce"]:
+					best_result = {"ce": ce, "accuracy": acc, "genome": output_population[idx]}
+					best_genome = output_population[idx]
+		else:
+			# Fallback: inherit parent config metrics
+			population_metrics = []
+			for i in range(top_k):
+				r = results[i]
+				for _ in range(genomes_per_config[i]):
+					population_metrics.append((r["ce"], r["accuracy"]))
 
 		# Record 1 iteration with ALL population genomes (not just unique configs)
 		if self._tracker and self._tracker_experiment_id:
