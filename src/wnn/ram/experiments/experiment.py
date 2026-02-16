@@ -238,6 +238,7 @@ class Experiment:
 		tracker: Optional[Any] = None,  # ExperimentTracker for V2 tracking
 		flow_id: Optional[int] = None,
 		shutdown_check: Optional[Callable[[], bool]] = None,  # Callable returning True if shutdown requested
+		full_evaluator: Optional[Any] = None,  # Separate evaluator for validation (uses validation set)
 	):
 		"""
 		Initialize experiment.
@@ -252,9 +253,11 @@ class Experiment:
 			tracker: Optional V2 tracker for direct database writes
 			flow_id: Optional flow ID for V2 tracking
 			shutdown_check: Optional callable that returns True if shutdown requested
+			full_evaluator: Separate evaluator for validation (trains on full train, evals on validation set)
 		"""
 		self.config = config
 		self.evaluator = evaluator
+		self.full_evaluator = full_evaluator
 		self.log = logger
 		self.checkpoint_dir = checkpoint_dir
 		self.dashboard_client = dashboard_client
@@ -791,9 +794,10 @@ class Experiment:
 					ce, acc = result[0], result[1]
 					self.log(f"  {genome_type}: CE={ce:.4f}, Acc={acc:.4%} (cached)")
 				else:
-					# Run full validation
+					# Run full validation (use full_evaluator if available — validates against held-out set)
+					val_evaluator = self.full_evaluator or self.evaluator
 					self.log(f"  {genome_type}: Running full validation...")
-					full_results = self.evaluator.evaluate_batch_full([genome])
+					full_results = val_evaluator.evaluate_batch_full([genome])
 					result = full_results[0]
 					ce, acc = result[0], result[1]
 					self.log(f"  {genome_type}: CE={ce:.4f}, Acc={acc:.4%} (validated)")

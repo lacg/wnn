@@ -409,6 +409,7 @@ class Flow:
 		flow_id: Optional[int] = None,
 		tracker: Optional[Any] = None,  # ExperimentTracker for V2 tracking
 		shutdown_check: Optional[Callable[[], bool]] = None,  # Callable returning True if shutdown requested
+		full_evaluator: Optional[Any] = None,  # Separate evaluator for validation (validation set)
 	):
 		"""
 		Initialize flow.
@@ -422,9 +423,11 @@ class Flow:
 			flow_id: Existing flow ID (skip creating new flow if provided)
 			tracker: Optional V2 tracker for direct database writes
 			shutdown_check: Optional callable that returns True if shutdown requested
+			full_evaluator: Separate evaluator for validation (trains full, evals validation set)
 		"""
 		self.config = config
 		self.evaluator = evaluator
+		self.full_evaluator = full_evaluator
 		self.log = logger
 		self.checkpoint_dir = checkpoint_dir
 		self.dashboard_client = dashboard_client
@@ -673,6 +676,7 @@ class Flow:
 					tracker=self.tracker,
 					flow_id=self._flow_id,
 					shutdown_check=self.shutdown_check,
+					full_evaluator=self.full_evaluator,
 				)
 
 				result = experiment.run(

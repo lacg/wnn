@@ -62,7 +62,8 @@ class FlowWorker:
         # Pre-cached data (loaded once at startup)
         self._tokenizer = None
         self._train_tokens: Optional[list[int]] = None
-        self._eval_tokens: Optional[list[int]] = None
+        self._test_tokens: Optional[list[int]] = None
+        self._validation_tokens: Optional[list[int]] = None
         self._vocab_size: Optional[int] = None
         self._cluster_order: Optional[list[int]] = None  # Tokens sorted by frequency
 
@@ -273,15 +274,22 @@ class FlowWorker:
         except Exception:
             dataset = load_dataset("wikitext", "wikitext-2-raw-v1", trust_remote_code=True)
 
-        # Tokenize once and cache
+        # Tokenize all three splits: train, test, validation
+        # - train: used for training RAM neurons during GA/TS (~2.4M tokens)
+        # - test: used for fitness scoring during GA/TS (~284K tokens)
+        # - validation: held out for full evaluation only (~248K tokens)
         self._log("  Tokenizing dataset...")
         train_text = "\n".join(dataset["train"]["text"])
-        eval_text = "\n".join(dataset["validation"]["text"])
+        test_text = "\n".join(dataset["test"]["text"])
+        validation_text = "\n".join(dataset["validation"]["text"])
 
-        self._train_tokens = self._tokenizer.encode(train_text, add_special_tokens=False)[:200_000]
-        self._eval_tokens = self._tokenizer.encode(eval_text, add_special_tokens=False)[:50_000]
+        self._train_tokens = self._tokenizer.encode(train_text, add_special_tokens=False)
+        self._test_tokens = self._tokenizer.encode(test_text, add_special_tokens=False)
+        self._validation_tokens = self._tokenizer.encode(validation_text, add_special_tokens=False)
 
-        self._log(f"  Cached {len(self._train_tokens):,} train tokens, {len(self._eval_tokens):,} eval tokens")
+        self._log(f"  Cached {len(self._train_tokens):,} train, "
+                  f"{len(self._test_tokens):,} test, "
+                  f"{len(self._validation_tokens):,} validation tokens")
 
         # Compute cluster order (tokens sorted by frequency, most frequent first)
         self._log("  Computing token frequencies...")
@@ -438,10 +446,16 @@ class FlowWorker:
                 except Exception as e:
                     self._log(f"Warning: Could not fetch seed checkpoint: {e}")
 
+            # Create full evaluator for validation (trains on ALL train data, evals on validation set)
+            full_evaluator = None
+            if is_bitwise and self._validation_tokens:
+                full_evaluator = self._create_full_evaluator(context_size, params)
+
             # Create and run flow (pass existing flow_id to avoid duplication)
             flow = Flow(
                 config=flow_config,
                 evaluator=evaluator,
+                full_evaluator=full_evaluator,
                 logger=self._log,
                 checkpoint_dir=checkpoint_dir,
                 dashboard_client=self.client,
@@ -505,7 +519,7 @@ class FlowWorker:
 
         evaluator = CachedEvaluator(
             train_tokens=self._train_tokens,
-            eval_tokens=self._eval_tokens,
+            eval_tokens=self._test_tokens,
             vocab_size=self._vocab_size,
             context_size=context_size,
             cluster_order=self._cluster_order,
@@ -521,7 +535,11 @@ class FlowWorker:
         return evaluator
 
     def _create_bitwise_evaluator(self, context_size: int, params: dict):
-        """Create a BitwiseEvaluator using pre-cached data."""
+        """Create a BitwiseEvaluator using pre-cached data.
+
+        Uses train split for training, test split for fitness scoring (GA/TS).
+        Validation split is reserved for full_evaluator (final validation).
+        """
         self._log(f"Creating BitwiseEvaluator (context_size={context_size})...")
 
         from wnn.ram.architecture.bitwise_evaluator import BitwiseEvaluator
@@ -534,21 +552,52 @@ class FlowWorker:
         }
         memory_mode = memory_mode_map.get(params.get("memory_mode", "QUAD_WEIGHTED"), 2)
         neuron_sample_rate = params.get("neuron_sample_rate", 0.25)
+        train_parts = params.get("train_parts", 4)
+        eval_parts = params.get("eval_parts", 1)
 
         evaluator = BitwiseEvaluator(
             train_tokens=self._train_tokens,
-            eval_tokens=self._eval_tokens,
+            eval_tokens=self._test_tokens,
             vocab_size=self._vocab_size,
             context_size=context_size,
-            num_parts=3,
+            num_parts=train_parts,
+            num_eval_parts=eval_parts,
             memory_mode=memory_mode,
             neuron_sample_rate=neuron_sample_rate,
         )
 
         self._log(f"  BitwiseEvaluator: vocab={evaluator.vocab_size:,}, "
                    f"context={context_size}, mode={params.get('memory_mode', 'QUAD_WEIGHTED')}, "
-                   f"sample_rate={neuron_sample_rate}")
+                   f"sample_rate={neuron_sample_rate}, "
+                   f"train_parts={train_parts}, eval_parts={eval_parts}")
         return evaluator
+
+    def _create_full_evaluator(self, context_size: int, params: dict):
+        """Create a full BitwiseEvaluator for validation.
+
+        Trains on ALL train data (1 partition), evaluates on validation set.
+        Used for checkpoint validation summaries (held-out evaluation).
+        """
+        from wnn.ram.architecture.bitwise_evaluator import BitwiseEvaluator
+
+        memory_mode_map = {"TERNARY": 0, "QUAD_BINARY": 1, "QUAD_WEIGHTED": 2}
+        memory_mode = memory_mode_map.get(params.get("memory_mode", "QUAD_WEIGHTED"), 2)
+        neuron_sample_rate = params.get("neuron_sample_rate", 0.25)
+
+        full_eval = BitwiseEvaluator(
+            train_tokens=self._train_tokens,
+            eval_tokens=self._validation_tokens,
+            vocab_size=self._vocab_size,
+            context_size=context_size,
+            num_parts=1,
+            num_eval_parts=1,
+            memory_mode=memory_mode,
+            neuron_sample_rate=neuron_sample_rate,
+        )
+
+        self._log(f"  Full evaluator: train={len(self._train_tokens):,} tokens (1 part), "
+                   f"validation={len(self._validation_tokens):,} tokens (1 part)")
+        return full_eval
 
     def _build_experiment_configs(
         self,
