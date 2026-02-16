@@ -179,6 +179,7 @@ class ExperimentResult:
 	elapsed_seconds: float
 	checkpoint_path: Optional[str] = None
 	was_shutdown: bool = False  # True if stopped due to external shutdown request
+	population_metrics: Optional[list[tuple[float, float]]] = None  # Cached (ce, acc) per genome in final_population
 
 	def to_phase_result(self) -> PhaseResult:
 		"""Convert to PhaseResult for compatibility."""
@@ -594,6 +595,7 @@ class Experiment:
 			final_threshold=result.final_threshold,
 			elapsed_seconds=elapsed,
 			was_shutdown=was_shutdown,
+			population_metrics=result.population_metrics,
 		)
 
 		# Save checkpoint
