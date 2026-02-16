@@ -1380,6 +1380,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 					best_accuracy=best_accuracy_val,
 					threshold=current_threshold,
 					early_stopper=early_stopper,
+					total_generations=cfg.generations,
 				)
 			except StopIteration:
 				shutdown_requested = True
@@ -2185,6 +2186,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 					best_fitness=best_fitness,
 					best_accuracy=best_accuracy,
 					threshold=current_threshold,
+					total_generations=cfg.iterations,
 				)
 			except StopIteration:
 				shutdown_requested = True

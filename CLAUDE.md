@@ -882,3 +882,14 @@ WNN_COALESCE_GROUPS=1 WNN_GROUP_LOG=1 python run_coarse_fine_search.py ...
 ### Dashboard Frontend (Svelte)
 
 - **Font size**: Always use `1rem` as the base font-size for text, labels, inputs, badges, hints, etc. This is an accessibility requirement — never use smaller sizes like `0.875rem` or `0.75rem` for body content
+
+## Documentation Locations
+
+- **`wnn/docs/`** — Code documentation, architecture, usage guides, design inspiration. For detailed research, link to llm-optimizer
+- **`llm-optimizer` repo** (`https://github.com/lacg/llm-optimizer`, Quarto pages at `https://lacg.github.io/llm-optimizer`) — Weekly research progress, experiment results, hypotheses, literature references. Base for future paper publishing
+
+## Engineering Priority Order
+
+1. **Performance** — Experiment throughput is everything in research. GPU+CPU hybrid is always a requirement when it can improve performance, never "future work."
+2. **Memory efficiency** — Maximize concurrent genome evaluation within 64GB unified memory
+3. **Bug-free correctness** — Results must be trustworthy for research conclusions

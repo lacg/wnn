@@ -6,6 +6,14 @@
 //!
 //! - **Synaptogenesis** (connection level): prune/grow connections per-neuron
 //! - **Neurogenesis** (cluster level): add/remove neurons per-cluster
+//!
+//! ## Design Principles (Literature-Informed)
+//!
+//! - **Percentile-based pruning** (SET, RigL): prune bottom X% by metric, not absolute
+//! - **Relative to expected capacity**: fill thresholds scale with `min(1, examples/2^bits)`
+//! - **Competition-gated removal** (JAK2/STAT1): only prune if peers perform better
+//! - **Cosine annealing schedule** (RigL): aggressive early, frozen last 25% post-warmup
+//! - **Contribution = uniqueness × accuracy** (Fisher Information): combined metric
 
 use rand::prelude::*;
 use rayon::prelude::*;
@@ -27,33 +35,48 @@ pub struct ClusterStats {
 }
 
 /// Configuration for training-time adaptation.
+///
+/// Uses **relative** thresholds that scale with architecture size, replacing
+/// the original absolute thresholds that failed for large architectures.
 #[derive(Clone)]
 pub struct AdaptationConfig {
 	// Synaptogenesis (connection level)
 	pub synaptogenesis_enabled: bool,
-	pub prune_entropy_threshold: f32,
-	pub grow_fill_threshold: f32,
-	pub grow_error_threshold: f32,
+	/// Prune if entropy < median * ratio (SET: 30% replacement)
+	pub prune_entropy_ratio: f32,
+	/// Grow if fill > expected_fill * factor (50% of expected)
+	pub grow_fill_utilization: f32,
+	/// Grow if error > this baseline (below random 0.5, above trained ~0.2)
+	pub grow_error_baseline: f32,
 	pub min_bits: usize,
 	pub max_bits: usize,
 
 	// Neurogenesis (cluster level)
 	pub neurogenesis_enabled: bool,
-	pub cluster_error_threshold: f32,
-	pub cluster_fill_threshold: f32,
-	pub neuron_uniqueness_threshold: f32,
+	/// Add neuron if error > 0.5 * factor (high error = underfitting)
+	pub cluster_error_factor: f32,
+	/// Add if mean_fill > expected * factor
+	pub cluster_fill_utilization: f32,
+	/// Bottom X% candidates for removal (Lottery Ticket: 80-96% prunable)
+	pub neuron_prune_percentile: f32,
+	/// Only remove if score < cluster_mean * factor (competition gate)
+	pub neuron_removal_factor: f32,
+	/// Max neurons = initial * ratio (biology: overproduction 1.5-3x)
+	pub max_growth_ratio: f32,
 	pub min_neurons: usize,
-	pub max_neurons: usize,
 	pub max_neurons_per_pass: usize,
+
+	// Schedule (cosine annealing, warmup-excluded)
 	pub warmup_generations: usize,
 	pub cooldown_iterations: usize,
+	/// Last fraction of post-warmup: frozen (RigL: stops at 75%)
+	pub stabilize_fraction: f32,
+	pub total_generations: usize,
 
 	// Shared
 	pub passes_per_eval: usize,
 	pub total_input_bits: usize,
 	/// Max examples to sample for stats computation (0 = use all).
-	/// Stats are statistical estimates — sampling 10K examples gives
-	/// <1% standard error while being 60x faster than scanning 600K.
 	pub stats_sample_size: usize,
 }
 
@@ -61,26 +84,110 @@ impl Default for AdaptationConfig {
 	fn default() -> Self {
 		Self {
 			synaptogenesis_enabled: false,
-			prune_entropy_threshold: 0.05,
-			grow_fill_threshold: 0.8,
-			grow_error_threshold: 0.5,
+			prune_entropy_ratio: 0.3,
+			grow_fill_utilization: 0.5,
+			grow_error_baseline: 0.35,
 			min_bits: 4,
 			max_bits: 24,
 			neurogenesis_enabled: false,
-			cluster_error_threshold: 0.5,
-			cluster_fill_threshold: 0.7,
-			neuron_uniqueness_threshold: 0.05,
+			cluster_error_factor: 0.7,
+			cluster_fill_utilization: 0.5,
+			neuron_prune_percentile: 0.1,
+			neuron_removal_factor: 0.5,
+			max_growth_ratio: 1.5,
 			min_neurons: 3,
-			max_neurons: 30,
 			max_neurons_per_pass: 3,
 			warmup_generations: 10,
 			cooldown_iterations: 5,
+			stabilize_fraction: 0.25,
+			total_generations: 250,
 			passes_per_eval: 1,
 			total_input_bits: 64,
 			stats_sample_size: 10_000,
 		}
 	}
 }
+
+// =============================================================================
+// Cosine Schedule + Helpers
+// =============================================================================
+
+/// Warmup-aware cosine annealing schedule for adaptation rate.
+///
+/// - Before warmup: rate = 0.0
+/// - Active window: cosine decay from 1.0 to 0.0
+/// - After stabilization: rate = 0.0 (frozen)
+///
+/// The warmup period does NOT count against the active schedule.
+pub fn adaptation_rate(generation: usize, config: &AdaptationConfig) -> f32 {
+	let warmup = config.warmup_generations;
+	if generation < warmup {
+		return 0.0;
+	}
+	let post_warmup = config.total_generations.saturating_sub(warmup);
+	if post_warmup == 0 {
+		return 1.0;
+	}
+	let active_window = ((1.0 - config.stabilize_fraction) * post_warmup as f32) as usize;
+	if active_window == 0 {
+		return 0.0;
+	}
+	let active_end = warmup + active_window;
+	if generation >= active_end {
+		return 0.0;
+	}
+	let progress = (generation - warmup) as f32 / active_window as f32;
+	0.5 * (1.0 + (std::f32::consts::PI * progress).cos())
+}
+
+/// Expected fill rate for a neuron with `bits` connection bits given `num_examples` training examples.
+///
+/// Based on address space math: each example writes at most one address, so
+/// expected fill = min(1.0, num_examples / 2^bits).
+pub fn expected_fill_rate(bits: usize, num_examples: usize) -> f32 {
+	if bits >= 32 {
+		return (num_examples as f64 / (1u64 << bits.min(63)) as f64).min(1.0) as f32;
+	}
+	(num_examples as f32 / (1u32 << bits) as f32).min(1.0)
+}
+
+/// Compute median of a float slice.
+pub fn median_of(values: &[f32]) -> f32 {
+	if values.is_empty() {
+		return 0.0;
+	}
+	let mut sorted = values.to_vec();
+	sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+	let mid = sorted.len() / 2;
+	if sorted.len() % 2 == 0 {
+		(sorted[mid - 1] + sorted[mid]) / 2.0
+	} else {
+		sorted[mid]
+	}
+}
+
+/// Compute percentile (0-100) of a float slice.
+pub fn percentile_of(values: &[f32], pct: f32) -> f32 {
+	if values.is_empty() {
+		return 0.0;
+	}
+	let mut sorted = values.to_vec();
+	sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+	let idx = ((pct / 100.0) * (sorted.len() - 1) as f32).round() as usize;
+	sorted[idx.min(sorted.len() - 1)]
+}
+
+/// Compute mean of a float slice.
+pub fn mean_of(values: &[f32]) -> f32 {
+	if values.is_empty() {
+		return 0.0;
+	}
+	values.iter().sum::<f32>() / values.len() as f32
+}
+
+// =============================================================================
+// Sampling + Bit Stats
+// =============================================================================
 
 /// Build a deterministic sample of example indices.
 /// If `sample_size == 0` or `sample_size >= num_examples`, returns all indices.
@@ -128,6 +235,10 @@ fn precompute_bit_ones(
 	}
 	bit_ones
 }
+
+// =============================================================================
+// Stats Computation (CPU)
+// =============================================================================
 
 /// Compute per-neuron statistics from training data and memory.
 ///
@@ -253,8 +364,7 @@ pub fn compute_cluster_stats(
 		neuron_offsets.push(neuron_offsets.last().unwrap() + n);
 	}
 
-	// Sample examples — full scan is O(clusters*neurons*examples) which is
-	// prohibitively slow for large datasets.
+	// Sample examples
 	let sample_indices = build_sample_indices(num_examples, config.stats_sample_size, 43);
 	let n_sample = sample_indices.len();
 
@@ -310,7 +420,7 @@ pub fn compute_cluster_stats(
 			0.0
 		};
 
-		// Precompute majority vote per sample (was O(n²) when done per neuron×sample)
+		// Precompute majority vote per sample
 		let majority_votes: Vec<bool> = (0..n_sample).map(|s| {
 			let votes_true: u32 = (0..n_neurons).map(|j| neuron_votes[j][s] as u32).sum();
 			votes_true > (n_neurons as u32 / 2)
@@ -346,9 +456,18 @@ pub fn compute_cluster_stats(
 	}).collect()
 }
 
+// =============================================================================
+// Synaptogenesis (Connection-Level Adaptation)
+// =============================================================================
+
 /// Synaptogenesis pass: prune low-entropy connections, grow where underfitting.
 ///
-/// Modifies bits_per_neuron and connections in-place.
+/// Uses **relative** thresholds:
+/// - Prune: entropy < median_entropy * prune_entropy_ratio (percentile-based)
+/// - Grow: fill > expected_fill * grow_fill_utilization AND error > grow_error_baseline
+///
+/// Stochastic: each action gated by `rng.gen::<f32>() < rate` (cosine schedule).
+///
 /// Returns (pruned_count, grown_count).
 pub fn synaptogenesis_pass(
 	bits_per_neuron: &mut Vec<usize>,
@@ -358,7 +477,8 @@ pub fn synaptogenesis_pass(
 	packed_input: &[u64],
 	words_per_example: usize,
 	num_examples: usize,
-	_rng: &mut impl Rng,
+	rate: f32,
+	rng: &mut impl Rng,
 ) -> (usize, usize) {
 	let total_neurons = bits_per_neuron.len();
 	let mut pruned = 0usize;
@@ -370,8 +490,7 @@ pub fn synaptogenesis_pass(
 		conn_offsets.push(conn_offsets.last().unwrap() + b);
 	}
 
-	// Pre-compute bit entropy for all input bits (used by grow path).
-	// Uses sampled examples for consistency with compute_neuron_stats.
+	// Pre-compute bit entropy for all input bits (used by grow path)
 	let sample_indices = build_sample_indices(num_examples, config.stats_sample_size, 44);
 	let bit_ones = precompute_bit_ones(packed_input, words_per_example, &sample_indices, config.total_input_bits);
 	let n_sample = sample_indices.len();
@@ -385,7 +504,6 @@ pub fn synaptogenesis_pass(
 	}).collect();
 
 	// Process each neuron
-	// We rebuild connections after all modifications to avoid index shifting issues
 	let mut new_bits = bits_per_neuron.clone();
 	let mut modifications: Vec<(usize, Modification)> = Vec::new();
 
@@ -393,13 +511,16 @@ pub fn synaptogenesis_pass(
 		let n_bits = bits_per_neuron[n];
 		let stats = &neuron_stats[n];
 
-		// Prune: remove lowest-entropy connection if below threshold
+		// Prune: remove lowest-entropy connection if below relative threshold
 		if n_bits > config.min_bits {
+			let median_ent = median_of(&stats.connection_entropy);
+			let prune_threshold = median_ent * config.prune_entropy_ratio;
+
 			if let Some((min_idx, &min_entropy)) = stats.connection_entropy.iter()
 				.enumerate()
 				.min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
 			{
-				if min_entropy < config.prune_entropy_threshold {
+				if min_entropy < prune_threshold && rng.gen::<f32>() < rate {
 					new_bits[n] = n_bits - 1;
 					modifications.push((n, Modification::Prune(min_idx)));
 					pruned += 1;
@@ -409,11 +530,13 @@ pub fn synaptogenesis_pass(
 		}
 
 		// Grow: add highest-entropy unconnected bit if underfitting
+		let exp_fill = expected_fill_rate(n_bits, num_examples);
 		if n_bits < config.max_bits
-			&& stats.fill_rate > config.grow_fill_threshold
-			&& stats.error_rate > config.grow_error_threshold
+			&& stats.fill_rate > exp_fill * config.grow_fill_utilization
+			&& stats.error_rate > config.grow_error_baseline
+			&& rng.gen::<f32>() < rate
 		{
-			// Find highest-entropy unconnected input bit (from precomputed table)
+			// Find highest-entropy unconnected input bit
 			let conn_start = conn_offsets[n];
 			let used: std::collections::HashSet<i64> = connections[conn_start..conn_start + n_bits]
 				.iter().copied().collect();
@@ -472,6 +595,10 @@ pub fn synaptogenesis_pass(
 		*connections = new_connections;
 	}
 
+	if pruned > 0 || grown > 0 {
+		eprintln!("[Adapt] Synaptogenesis: pruned={}, grown={} (rate={:.2})", pruned, grown, rate);
+	}
+
 	(pruned, grown)
 }
 
@@ -480,9 +607,19 @@ enum Modification {
 	Grow(i64),     // new connection index to add
 }
 
+// =============================================================================
+// Neurogenesis (Cluster-Level Adaptation)
+// =============================================================================
+
 /// Neurogenesis pass: add/remove neurons from clusters.
 ///
-/// Modifies bits_per_neuron, neurons_per_cluster, and connections in-place.
+/// Uses **relative** thresholds + competition gate:
+/// - Add: error > 0.5 * cluster_error_factor AND fill > expected * cluster_fill_utilization
+/// - Remove: score in bottom neuron_prune_percentile AND score < cluster_mean * neuron_removal_factor
+/// - Growth capped at initial_neurons * max_growth_ratio
+///
+/// Stochastic: each action gated by `rng.gen::<f32>() < rate` (cosine schedule).
+///
 /// Returns (added_count, removed_count).
 pub fn neurogenesis_pass(
 	bits_per_neuron: &mut Vec<usize>,
@@ -491,7 +628,10 @@ pub fn neurogenesis_pass(
 	cluster_stats: &[ClusterStats],
 	config: &AdaptationConfig,
 	generation: usize,
-	cooldowns: &mut Vec<usize>,  // per-cluster cooldown counters
+	cooldowns: &mut Vec<usize>,
+	initial_neurons: &[usize],
+	num_examples: usize,
+	rate: f32,
 	rng: &mut impl Rng,
 ) -> (usize, usize) {
 	if generation < config.warmup_generations {
@@ -541,10 +681,24 @@ pub fn neurogenesis_pass(
 		let stats = &cluster_stats[cluster];
 		let n_neurons = neurons_per_cluster[cluster];
 
+		// Compute expected fill for this cluster's neurons
+		let neuron_base = neuron_offsets[cluster];
+		let avg_bits = if n_neurons > 0 {
+			(0..n_neurons).map(|i| bits_per_neuron[neuron_base + i]).sum::<usize>() / n_neurons
+		} else {
+			0
+		};
+		let exp_fill = expected_fill_rate(avg_bits, num_examples);
+
+		// Growth cap: initial * max_growth_ratio
+		let max_neurons = (initial_neurons.get(cluster).copied().unwrap_or(n_neurons) as f32
+			* config.max_growth_ratio) as usize;
+
 		// Growth: high error + high fill + room to grow
-		if stats.error_rate > config.cluster_error_threshold
-			&& stats.mean_fill_rate > config.cluster_fill_threshold
-			&& n_neurons < config.max_neurons
+		if stats.error_rate > 0.5 * config.cluster_error_factor
+			&& stats.mean_fill_rate > exp_fill * config.cluster_fill_utilization
+			&& n_neurons < max_neurons
+			&& rng.gen::<f32>() < rate
 		{
 			// Find best-performing neuron to clone
 			let best_local = stats.neuron_accuracy.iter()
@@ -553,7 +707,7 @@ pub fn neurogenesis_pass(
 				.map(|(i, _)| i)
 				.unwrap_or(0);
 
-			let neurons_to_add = 1.min(config.max_neurons - n_neurons)
+			let neurons_to_add = 1.min(max_neurons - n_neurons)
 				.min(config.max_neurons_per_pass);
 			for _ in 0..neurons_to_add {
 				mods.push(ClusterMod {
@@ -566,18 +720,24 @@ pub fn neurogenesis_pass(
 			continue;
 		}
 
-		// Pruning: remove redundant neurons
-		if n_neurons > config.min_neurons {
-			// Find most redundant neuron (lowest uniqueness or lowest accuracy)
+		// Pruning: remove neurons with low contribution (percentile + competition gate)
+		if n_neurons > config.min_neurons && rng.gen::<f32>() < rate {
+			// Score = uniqueness × accuracy
+			let scores: Vec<f32> = (0..n_neurons)
+				.map(|i| stats.neuron_uniqueness[i] * stats.neuron_accuracy[i])
+				.collect();
+			let cluster_mean = mean_of(&scores);
+			let threshold = percentile_of(&scores, config.neuron_prune_percentile * 100.0);
+
+			// Find worst neuron below both thresholds (competition gate)
 			let mut worst_local = None;
 			let mut worst_score = f32::MAX;
 			for i in 0..n_neurons {
-				// Combine uniqueness and accuracy — low in both = prime candidate
-				let score = stats.neuron_uniqueness[i] + stats.neuron_accuracy[i];
-				if stats.neuron_uniqueness[i] < config.neuron_uniqueness_threshold
-					&& score < worst_score
+				if scores[i] <= threshold
+					&& scores[i] < cluster_mean * config.neuron_removal_factor
+					&& scores[i] < worst_score
 				{
-					worst_score = score;
+					worst_score = scores[i];
 					worst_local = Some(i);
 				}
 			}
@@ -669,8 +829,16 @@ pub fn neurogenesis_pass(
 		*connections = new_connections;
 	}
 
+	if added > 0 || removed > 0 {
+		eprintln!("[Adapt] Neurogenesis: added={}, removed={} (rate={:.2})", added, removed, rate);
+	}
+
 	(added, removed)
 }
+
+// =============================================================================
+// Storage Helpers
+// =============================================================================
 
 /// Read a cell value from ClusterStorage as a float vote.
 /// Bitwise path uses quad mode: [0.0, 0.25, 0.75, 1.0] for raw values 0-3.
@@ -704,6 +872,10 @@ fn storage_fill_rate(storage: &ClusterStorage, neuron_idx: usize, bits: usize) -
 	};
 	filled.min(total_cells) as f32 / total_cells.max(1) as f32
 }
+
+// =============================================================================
+// GPU Stats
+// =============================================================================
 
 /// Compute neuron + cluster stats on GPU via Metal.
 ///
@@ -780,16 +952,11 @@ pub fn compute_neuron_and_cluster_stats_gpu(
 	}).collect();
 
 	// Build ClusterStats
-	// Build neuron offsets for mapping global → cluster
 	let mut neuron_offsets = vec![0usize];
 	for &nc in neurons_per_cluster {
 		neuron_offsets.push(neuron_offsets.last().unwrap() + nc);
 	}
 
-	// Use the second sample seed for cluster stats (matching CPU path seed=43)
-	// Note: GPU uses the same samples as neuron stats (seed=42) because it reads
-	// the votes buffer produced by Pass 1. This is actually more correct than
-	// the CPU path which uses a different sample for cluster stats.
 	let cluster_sample_size = n_sample;
 
 	let cluster_stats: Vec<ClusterStats> = (0..num_clusters).map(|c| {
@@ -847,34 +1014,70 @@ mod tests {
 		assert_eq!(config.min_bits, 4);
 		assert_eq!(config.max_bits, 24);
 		assert_eq!(config.warmup_generations, 10);
+		assert!((config.prune_entropy_ratio - 0.3).abs() < 0.001);
+		assert!((config.grow_fill_utilization - 0.5).abs() < 0.001);
+		assert!((config.max_growth_ratio - 1.5).abs() < 0.001);
+		assert!((config.stabilize_fraction - 0.25).abs() < 0.001);
 	}
 
 	#[test]
-	fn test_synaptogenesis_noop_when_disabled() {
+	fn test_adaptation_rate_schedule() {
 		let config = AdaptationConfig {
-			synaptogenesis_enabled: false,
+			warmup_generations: 10,
+			total_generations: 250,
+			stabilize_fraction: 0.25,
 			..Default::default()
 		};
 
-		let mut bits = vec![8, 10, 12];
-		let mut connections: Vec<i64> = (0..30).collect();
-		let neuron_stats = vec![
-			NeuronStats { fill_rate: 0.9, error_rate: 0.6, connection_entropy: vec![0.01; 8] },
-			NeuronStats { fill_rate: 0.9, error_rate: 0.6, connection_entropy: vec![0.01; 10] },
-			NeuronStats { fill_rate: 0.9, error_rate: 0.6, connection_entropy: vec![0.01; 12] },
-		];
+		// Before warmup: rate = 0
+		assert_eq!(adaptation_rate(0, &config), 0.0);
+		assert_eq!(adaptation_rate(5, &config), 0.0);
+		assert_eq!(adaptation_rate(9, &config), 0.0);
 
-		// Even with stats suggesting changes, disabled config should noop
-		// (synaptogenesis_pass checks happen regardless — it's the caller's
-		// responsibility to check config.synaptogenesis_enabled)
-		// Just verify it doesn't panic
-		let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-		let (pruned, grown) = synaptogenesis_pass(
-			&mut bits, &mut connections, &neuron_stats, &config,
-			&[], 0, 0, &mut rng,
-		);
-		// All neurons have entropy below threshold → should prune
-		assert!(pruned > 0 || grown == 0);
+		// First active gen: rate ≈ 1.0
+		let rate_10 = adaptation_rate(10, &config);
+		assert!(rate_10 > 0.99, "rate at gen 10 should be ~1.0, got {}", rate_10);
+
+		// Mid-point: rate ≈ 0.5
+		// active_window = 240 * 0.75 = 180, midpoint = 10 + 90 = 100
+		let rate_100 = adaptation_rate(100, &config);
+		assert!(rate_100 > 0.4 && rate_100 < 0.6, "rate at gen 100 should be ~0.5, got {}", rate_100);
+
+		// End of active window: rate = 0
+		let rate_190 = adaptation_rate(190, &config);
+		assert!(rate_190 < 0.01, "rate at gen 190 should be ~0, got {}", rate_190);
+
+		// Stabilization: rate = 0
+		assert_eq!(adaptation_rate(191, &config), 0.0);
+		assert_eq!(adaptation_rate(250, &config), 0.0);
+	}
+
+	#[test]
+	fn test_expected_fill_rate() {
+		// 8-bit neuron with 1000 examples: 1000 / 256 = 3.9 → capped at 1.0
+		assert!((expected_fill_rate(8, 1000) - 1.0).abs() < 0.001);
+
+		// 20-bit neuron with 150K examples: 150000 / 1048576 ≈ 0.143
+		let fill = expected_fill_rate(20, 150_000);
+		assert!(fill > 0.14 && fill < 0.15, "expected fill for 20-bit/150K: {}", fill);
+
+		// 12-bit neuron with 50K examples: 50000 / 4096 ≈ 12.2 → capped at 1.0
+		assert!((expected_fill_rate(12, 50_000) - 1.0).abs() < 0.001);
+	}
+
+	#[test]
+	fn test_statistical_helpers() {
+		let vals = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+		assert!((median_of(&vals) - 3.0).abs() < 0.001);
+		assert!((mean_of(&vals) - 3.0).abs() < 0.001);
+		assert!((percentile_of(&vals, 0.0) - 1.0).abs() < 0.001);
+		assert!((percentile_of(&vals, 100.0) - 5.0).abs() < 0.001);
+		assert!((percentile_of(&vals, 50.0) - 3.0).abs() < 0.001);
+
+		// Empty
+		assert_eq!(median_of(&[]), 0.0);
+		assert_eq!(mean_of(&[]), 0.0);
+		assert_eq!(percentile_of(&[], 50.0), 0.0);
 	}
 
 	#[test]
@@ -889,6 +1092,7 @@ mod tests {
 		let mut neurons = vec![2, 2];
 		let mut connections: Vec<i64> = (0..36).collect();
 		let mut cooldowns = vec![0, 0];
+		let initial_neurons = vec![2, 2];
 		let cluster_stats = vec![
 			ClusterStats { error_rate: 0.9, mean_fill_rate: 0.9, neuron_uniqueness: vec![0.5, 0.5], neuron_accuracy: vec![0.5, 0.5] },
 			ClusterStats { error_rate: 0.9, mean_fill_rate: 0.9, neuron_uniqueness: vec![0.5, 0.5], neuron_accuracy: vec![0.5, 0.5] },
@@ -897,7 +1101,8 @@ mod tests {
 		let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 		let (added, removed) = neurogenesis_pass(
 			&mut bits, &mut neurons, &mut connections,
-			&cluster_stats, &config, 5, &mut cooldowns, &mut rng,
+			&cluster_stats, &config, 5, &mut cooldowns,
+			&initial_neurons, 1000, 1.0, &mut rng,
 		);
 
 		// Generation 5 < warmup 10 → no changes

@@ -1769,22 +1769,15 @@ pub fn evaluate_genomes_adaptive(
                     memory_mode, neuron_sample_rate, genome_rng_seed,
                 );
 
-                if !needs_adaptation {
-                    // No adaptation — forward directly (same as non-adaptive path)
-                    forward_eval_into(
-                        connections, bpn_slice, neurons_slice, num_clusters,
-                        layout, eval_subset, &cluster_storage, score_slice, memory_mode,
-                    );
-                    // Store original genome as "adapted" (no changes)
-                    *adapted_data[g].lock().unwrap() = Some((
-                        bpn_slice.to_vec(), neurons_slice.to_vec(), connections.to_vec(),
-                        0, 0, 0, 0,
-                    ));
-                    return;
-                }
+                // Compute cosine-annealed adaptation rate
+                let rate = if needs_adaptation {
+                    adaptation::adaptation_rate(generation, adapt_config)
+                } else {
+                    0.0
+                };
 
-                // Warmup guard: skip all adaptation (and expensive stats) before warmup
-                if generation < adapt_config.warmup_generations {
+                if !needs_adaptation || rate == 0.0 {
+                    // No adaptation or rate=0 (warmup/stabilization) — skip stats entirely
                     forward_eval_into(
                         connections, bpn_slice, neurons_slice, num_clusters,
                         layout, eval_subset, &cluster_storage, score_slice, memory_mode,
@@ -1796,10 +1789,11 @@ pub fn evaluate_genomes_adaptive(
                     return;
                 }
 
-                // Step 2: Adapt architecture
+                // Step 2: Adapt architecture (rate > 0)
                 let mut adapted_bits = bpn_slice.to_vec();
                 let mut adapted_neurons = neurons_slice.to_vec();
                 let mut adapted_connections = connections.to_vec();
+                let initial_neurons = neurons_slice.to_vec();
                 let mut total_pruned = 0usize;
                 let mut total_grown = 0usize;
                 let mut total_added = 0usize;
@@ -1825,7 +1819,7 @@ pub fn evaluate_genomes_adaptive(
                             &mut adapted_bits, &mut adapted_connections,
                             &neuron_stats, adapt_config,
                             &train_subset.packed_input, train_subset.words_per_example,
-                            train_subset.num_examples, &mut adapt_rng,
+                            train_subset.num_examples, rate, &mut adapt_rng,
                         );
                         total_pruned += pruned;
                         total_grown += grown;
@@ -1852,6 +1846,7 @@ pub fn evaluate_genomes_adaptive(
                         let (added, removed) = adaptation::neurogenesis_pass(
                             &mut adapted_bits, &mut adapted_neurons, &mut adapted_connections,
                             &cluster_stats, adapt_config, generation, &mut cooldowns,
+                            &initial_neurons, train_subset.num_examples, rate,
                             &mut adapt_rng,
                         );
                         total_added += added;

@@ -16,6 +16,36 @@ use crate::neuron_memory::{
 };
 
 // =============================================================================
+// Public types for batched multi-genome dispatch
+// =============================================================================
+
+/// Per-neuron metadata for batched GPU dispatch (public, built by caller).
+pub struct BatchedNeuronMeta {
+	pub cluster_id: u32,
+	pub bits: u32,
+	pub conn_offset: u32,
+	pub is_sparse: u32,
+	pub dense_word_offset: u32,
+	pub words_per_neuron: u32,
+	pub sparse_neuron_idx: u32,
+}
+
+/// Per-cluster metadata for batched GPU dispatch (public, built by caller).
+pub struct BatchedClusterMeta {
+	pub first_neuron: u32,
+	pub num_neurons: u32,
+}
+
+/// Results from batched multi-genome GPU stats computation.
+pub struct BatchedStatsResult {
+	pub neuron_errors: Vec<u32>,
+	pub neuron_filled: Vec<u32>,
+	pub cluster_errors: Vec<u32>,
+	pub uniqueness_counts: Vec<u32>,
+	pub accuracy_counts: Vec<u32>,
+}
+
+// =============================================================================
 // GPU Struct Layout (must match Metal shader exactly)
 // =============================================================================
 
@@ -330,6 +360,169 @@ impl MetalStatsComputer {
 		let accuracy_counts = self.read_buffer::<u32>(&buf_accuracy, total_neurons);
 
 		(error_counts, filled_counts, cluster_errors, uniqueness_counts, accuracy_counts)
+	}
+
+	/// Compute stats for multiple genomes in a single GPU dispatch.
+	///
+	/// All genomes share the same training data (packed_input, target_bits, sample_indices).
+	/// Per-genome data is concatenated with offsets for partitioning results.
+	///
+	/// This is ~50x faster than per-genome dispatches because:
+	/// 1. Single GPU dispatch overhead instead of 50+
+	/// 2. Shared input buffers (60-80% of GPU data)
+	/// 3. GPU saturated with 10K+ neurons vs 200 per genome
+	///
+	/// Returns `BatchedStatsResult` with all genomes' stats concatenated.
+	/// Use `neuron_offsets[g]..neuron_offsets[g+1]` to extract per-genome data.
+	pub fn compute_all_stats_batched(
+		&self,
+		// Shared across all genomes (same training data)
+		packed_input: &[u64],
+		words_per_example: usize,
+		target_bits: &[u8],
+		sample_indices: &[u32],
+		// Per-genome data (concatenated with offsets)
+		all_connections: &[i32],
+		all_neuron_metas: &[BatchedNeuronMeta],
+		all_dense_words: &[i64],
+		all_sparse_keys: &[u64],
+		all_sparse_values: &[u8],
+		all_sparse_offsets: &[u32],
+		all_sparse_counts: &[u32],
+		all_cluster_metas: &[BatchedClusterMeta],
+		total_neurons: usize,
+		total_clusters: usize,
+		empty_cell_value: u32,
+	) -> BatchedStatsResult {
+		let sample_size = sample_indices.len();
+
+		if total_neurons == 0 || sample_size == 0 {
+			return BatchedStatsResult {
+				neuron_errors: vec![0; total_neurons],
+				neuron_filled: vec![0; total_neurons],
+				cluster_errors: vec![0; total_clusters],
+				uniqueness_counts: vec![0; total_neurons],
+				accuracy_counts: vec![0; total_neurons],
+			};
+		}
+
+		// Convert batched metas to GPU structs
+		let neuron_metas: Vec<NeuronMeta> = all_neuron_metas.iter().map(|m| NeuronMeta {
+			cluster_id: m.cluster_id,
+			bits: m.bits,
+			conn_offset: m.conn_offset,
+			is_sparse: m.is_sparse,
+			dense_word_offset: m.dense_word_offset,
+			words_per_neuron: m.words_per_neuron,
+			sparse_neuron_idx: m.sparse_neuron_idx,
+		}).collect();
+
+		let cluster_metas: Vec<ClusterMetaGpu> = all_cluster_metas.iter().map(|m| ClusterMetaGpu {
+			first_neuron: m.first_neuron,
+			num_neurons: m.num_neurons,
+		}).collect();
+
+		let params = StatsParams {
+			num_neurons: total_neurons as u32,
+			sample_size: sample_size as u32,
+			words_per_example: words_per_example as u32,
+			num_clusters: total_clusters as u32,
+			empty_cell_value,
+		};
+
+		// Ensure non-empty buffers
+		let dense_words = if all_dense_words.is_empty() { &[0i64][..] } else { all_dense_words };
+		let sparse_keys = if all_sparse_keys.is_empty() { &[0u64][..] } else { all_sparse_keys };
+		let sparse_values = if all_sparse_values.is_empty() { &[0u8][..] } else { all_sparse_values };
+		let sparse_offsets = if all_sparse_offsets.is_empty() { &[0u32][..] } else { all_sparse_offsets };
+		let sparse_counts = if all_sparse_counts.is_empty() { &[0u32][..] } else { all_sparse_counts };
+
+		// Create Metal Buffers
+		let buf_packed = self.make_buffer(packed_input);
+		let buf_connections = self.make_buffer(all_connections);
+		let buf_targets = self.make_buffer(target_bits);
+		let buf_samples = self.make_buffer(sample_indices);
+		let buf_dense = self.make_buffer(dense_words);
+		let buf_sparse_keys = self.make_buffer(sparse_keys);
+		let buf_sparse_values = self.make_buffer(sparse_values);
+		let buf_sparse_offsets = self.make_buffer(sparse_offsets);
+		let buf_sparse_counts = self.make_buffer(sparse_counts);
+		let buf_neuron_meta = self.make_buffer(&neuron_metas);
+		let buf_params = self.make_buffer_from_struct(&params);
+
+		// Output buffers
+		let buf_error_counts = self.make_zero_buffer::<u32>(total_neurons);
+		let buf_filled_counts = self.make_zero_buffer::<u32>(total_neurons);
+		let votes_len = total_neurons * sample_size;
+		let buf_votes = self.make_zero_buffer::<u8>(votes_len.max(1));
+
+		// Pass 1: Per-Neuron Stats
+		let cmd_buf = self.command_queue.new_command_buffer();
+		{
+			let encoder = cmd_buf.new_compute_command_encoder();
+			encoder.set_compute_pipeline_state(&self.neuron_stats_pipeline);
+
+			encoder.set_buffer(0, Some(&buf_packed), 0);
+			encoder.set_buffer(1, Some(&buf_connections), 0);
+			encoder.set_buffer(2, Some(&buf_targets), 0);
+			encoder.set_buffer(3, Some(&buf_samples), 0);
+			encoder.set_buffer(4, Some(&buf_dense), 0);
+			encoder.set_buffer(5, Some(&buf_sparse_keys), 0);
+			encoder.set_buffer(6, Some(&buf_sparse_values), 0);
+			encoder.set_buffer(7, Some(&buf_sparse_offsets), 0);
+			encoder.set_buffer(8, Some(&buf_sparse_counts), 0);
+			encoder.set_buffer(9, Some(&buf_neuron_meta), 0);
+			encoder.set_buffer(10, Some(&buf_params), 0);
+			encoder.set_buffer(11, Some(&buf_error_counts), 0);
+			encoder.set_buffer(12, Some(&buf_filled_counts), 0);
+			encoder.set_buffer(13, Some(&buf_votes), 0);
+
+			let threads = MTLSize::new(total_neurons as u64, 1, 1);
+			let max_tpg = self.neuron_stats_pipeline.max_total_threads_per_threadgroup();
+			let tpg = MTLSize::new((total_neurons as u64).min(max_tpg), 1, 1);
+			encoder.dispatch_threads(threads, tpg);
+			encoder.end_encoding();
+		}
+
+		// Pass 2: Cluster Stats
+		let buf_cluster_meta = self.make_buffer(&cluster_metas);
+		let buf_cluster_errors = self.make_zero_buffer::<u32>(total_clusters);
+		let buf_uniqueness = self.make_zero_buffer::<u32>(total_neurons);
+		let buf_accuracy = self.make_zero_buffer::<u32>(total_neurons);
+
+		{
+			let encoder = cmd_buf.new_compute_command_encoder();
+			encoder.set_compute_pipeline_state(&self.cluster_stats_pipeline);
+
+			encoder.set_buffer(0, Some(&buf_votes), 0);
+			encoder.set_buffer(1, Some(&buf_targets), 0);
+			encoder.set_buffer(2, Some(&buf_samples), 0);
+			encoder.set_buffer(3, Some(&buf_cluster_meta), 0);
+			encoder.set_buffer(4, Some(&buf_params), 0);
+			encoder.set_buffer(5, Some(&buf_cluster_errors), 0);
+			encoder.set_buffer(6, Some(&buf_uniqueness), 0);
+			encoder.set_buffer(7, Some(&buf_accuracy), 0);
+
+			let threads = MTLSize::new(total_clusters as u64, sample_size as u64, 1);
+			let max_tpg = self.cluster_stats_pipeline.max_total_threads_per_threadgroup();
+			let tpg_x = (total_clusters as u64).min(max_tpg);
+			let tpg_y = (sample_size as u64).min(max_tpg / tpg_x.max(1));
+			let tpg = MTLSize::new(tpg_x, tpg_y.max(1), 1);
+			encoder.dispatch_threads(threads, tpg);
+			encoder.end_encoding();
+		}
+
+		cmd_buf.commit();
+		cmd_buf.wait_until_completed();
+
+		// Read back results
+		BatchedStatsResult {
+			neuron_errors: self.read_buffer::<u32>(&buf_error_counts, total_neurons),
+			neuron_filled: self.read_buffer::<u32>(&buf_filled_counts, total_neurons),
+			cluster_errors: self.read_buffer::<u32>(&buf_cluster_errors, total_clusters),
+			uniqueness_counts: self.read_buffer::<u32>(&buf_uniqueness, total_neurons),
+			accuracy_counts: self.read_buffer::<u32>(&buf_accuracy, total_neurons),
+		}
 	}
 
 	// =========================================================================

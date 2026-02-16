@@ -37,29 +37,39 @@ from wnn.ram.architecture.cached_evaluator import OffspringSearchResult
 
 @dataclass
 class AdaptationConfig:
-	"""Configuration for training-time architecture adaptation."""
+	"""Configuration for training-time architecture adaptation.
+
+	Uses **relative** thresholds that scale with architecture size.
+	See docs/ADAPTATION_MECHANISMS.md for design rationale.
+	"""
 
 	# Synaptogenesis (connection level)
 	synaptogenesis_enabled: bool = False
-	prune_entropy_threshold: float = 0.05
-	grow_fill_threshold: float = 0.8
-	grow_error_threshold: float = 0.5
+	prune_entropy_ratio: float = 0.3       # Prune if entropy < median * ratio
+	grow_fill_utilization: float = 0.5     # Grow if fill > expected_fill * factor
+	grow_error_baseline: float = 0.35      # Grow if error > this (below random 0.5)
 	min_bits: int = 4
 	max_bits: int = 24
 
 	# Neurogenesis (cluster level)
 	neurogenesis_enabled: bool = False
-	cluster_error_threshold: float = 0.5
-	cluster_fill_threshold: float = 0.7
-	neuron_uniqueness_threshold: float = 0.05
+	cluster_error_factor: float = 0.7      # Add if error > 0.5 * factor
+	cluster_fill_utilization: float = 0.5  # Add if mean_fill > expected * factor
+	neuron_prune_percentile: float = 0.1   # Bottom 10% candidates for removal
+	neuron_removal_factor: float = 0.5     # Only remove if score < mean * factor
+	max_growth_ratio: float = 1.5          # Max neurons = initial * ratio
 	min_neurons: int = 3
-	max_neurons: int = 30
 	max_neurons_per_pass: int = 3
+
+	# Schedule (cosine annealing, warmup-excluded)
 	warmup_generations: int = 10
 	cooldown_iterations: int = 5
+	stabilize_fraction: float = 0.25       # Last 25% of post-warmup: frozen
+	total_generations: int = 250
 
 	# Shared
 	passes_per_eval: int = 1
+	stats_sample_size: int = 10_000
 
 
 class BitwiseEvaluator:
@@ -263,9 +273,11 @@ class BitwiseEvaluator:
 			genome._cached_bit_acc = bit_acc
 		return results
 
-	def set_generation(self, gen: int) -> None:
+	def set_generation(self, gen: int, total_generations: int | None = None) -> None:
 		"""Set current generation for adaptive evaluation warmup tracking."""
 		self._generation = gen
+		if total_generations is not None and self._adapt_config is not None:
+			self._adapt_config.total_generations = total_generations
 
 	def _evaluate_batch_adaptive_rust(
 		self,
@@ -295,20 +307,24 @@ class BitwiseEvaluator:
 			generation=self._generation,
 			synaptogenesis_enabled=config.synaptogenesis_enabled,
 			neurogenesis_enabled=config.neurogenesis_enabled,
-			prune_entropy_threshold=config.prune_entropy_threshold,
-			grow_fill_threshold=config.grow_fill_threshold,
-			grow_error_threshold=config.grow_error_threshold,
+			prune_entropy_ratio=config.prune_entropy_ratio,
+			grow_fill_utilization=config.grow_fill_utilization,
+			grow_error_baseline=config.grow_error_baseline,
 			min_bits=config.min_bits,
 			max_bits=config.max_bits,
-			cluster_error_threshold=config.cluster_error_threshold,
-			cluster_fill_threshold=config.cluster_fill_threshold,
-			neuron_uniqueness_threshold=config.neuron_uniqueness_threshold,
+			cluster_error_factor=config.cluster_error_factor,
+			cluster_fill_utilization=config.cluster_fill_utilization,
+			neuron_prune_percentile=config.neuron_prune_percentile,
+			neuron_removal_factor=config.neuron_removal_factor,
+			max_growth_ratio=config.max_growth_ratio,
 			min_neurons=config.min_neurons,
-			max_neurons=config.max_neurons,
 			max_neurons_per_pass=config.max_neurons_per_pass,
 			warmup_generations=config.warmup_generations,
 			cooldown_iterations=config.cooldown_iterations,
+			stabilize_fraction=config.stabilize_fraction,
+			total_generations=config.total_generations,
 			passes_per_eval=config.passes_per_eval,
+			stats_sample_size=config.stats_sample_size,
 		)
 		scores = []
 		for genome, (ce, acc, bit_acc, a_bits, a_neurons, a_conns, p, g, a, r) in zip(genomes, results):

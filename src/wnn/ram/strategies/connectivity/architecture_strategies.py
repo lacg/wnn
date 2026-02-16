@@ -1087,7 +1087,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		# Update evaluator generation for adaptive evaluation (Baldwin effect)
 		evaluator = self._cached_evaluator or self._batch_evaluator
 		if evaluator is not None and hasattr(evaluator, 'set_generation'):
-			evaluator.set_generation(generation)
+			evaluator.set_generation(generation, total_generations=ctx.get('total_generations'))
 
 		# Metal cleanup (every generation except first)
 		if generation > 0 and self._cached_evaluator is not None:
@@ -1529,7 +1529,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 		# Update evaluator generation for adaptive evaluation (Baldwin effect)
 		evaluator = self._cached_evaluator or self._batch_evaluator
 		if evaluator is not None and hasattr(evaluator, 'set_generation'):
-			evaluator.set_generation(iteration)
+			evaluator.set_generation(iteration, total_generations=ctx.get('total_generations'))
 
 		# Metal cleanup (every iteration except first)
 		if iteration > 0 and self._cached_evaluator is not None:
