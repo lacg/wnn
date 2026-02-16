@@ -163,9 +163,11 @@
     }
   }
 
-  // Polling for running experiments - use light refresh
+  // Polling for active experiments - use light refresh
+  // Poll any non-terminal status so we catch pending→running transitions
   $: {
-    if (experiment?.status === 'running') {
+    const isActive = experiment?.status === 'running' || experiment?.status === 'pending' || experiment?.status === 'queued';
+    if (isActive) {
       if (!pollInterval) {
         pollInterval = setInterval(refreshRunningExperiment, 3000);
       }
