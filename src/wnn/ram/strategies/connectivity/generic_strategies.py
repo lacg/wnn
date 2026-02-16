@@ -1465,9 +1465,10 @@ class GenericGAStrategy(ABC, Generic[T]):
 			# Record iteration to tracker (if set)
 			if self._tracker and self._tracker_experiment_id:
 				try:
-					best_acc = accuracy_values[gen_best_idx] if accuracy_values else None
-					# Compute average accuracy of the population
+					# Actual bests: independent metrics from potentially different genomes
+					iter_best_ce = min(fitness_values)
 					valid_accs = [a for a in accuracy_values if a is not None]
+					iter_best_acc = max(valid_accs) if valid_accs else None
 					avg_acc = sum(valid_accs) / len(valid_accs) if valid_accs else None
 
 					# Get baseline and patience info for dashboard
@@ -1480,8 +1481,8 @@ class GenericGAStrategy(ABC, Generic[T]):
 					iteration_id = self._tracker.record_iteration(
 						experiment_id=self._tracker_experiment_id,
 						iteration_num=generation + 1,
-						best_ce=best_fitness,
-						best_accuracy=best_acc,
+						best_ce=iter_best_ce,
+						best_accuracy=iter_best_acc,
 						avg_ce=gen_avg,
 						avg_accuracy=avg_acc,
 						elite_count=total_elites,
@@ -1587,7 +1588,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 						final_population=final_population,
 						population_metrics=early_pop_metrics,
 						initial_accuracy=initial_accuracy,
-						final_accuracy=accuracy_values[gen_best_idx] if accuracy_values else None,
+						final_accuracy=max((a for a in accuracy_values if a is not None), default=None),
 						final_threshold=current_final_threshold,
 					)
 
@@ -1601,7 +1602,9 @@ class GenericGAStrategy(ABC, Generic[T]):
 		]
 		final_scores = fitness_calculator.fitness(final_tuples)
 		best_idx_final = min(range(len(final_scores)), key=lambda i: final_scores[i])
-		final_accuracy = accuracy_values[best_idx_final] if accuracy_values else None
+		# Actual best accuracy across entire population (independent of fitness ranking)
+		final_valid_accs = [a for a in accuracy_values if a is not None]
+		final_accuracy = max(final_valid_accs) if final_valid_accs else None
 
 		# Extract final population for seeding next phase (sorted by fitness score)
 		scored_pop = list(zip(population, final_scores))
@@ -2296,11 +2299,16 @@ class GenericTSStrategy(ABC, Generic[T]):
 					delta_previous = best_fitness - prev_best_fitness
 					patience_counter = early_stopper._patience_counter if hasattr(early_stopper, '_patience_counter') else 0
 
+					# Actual bests: independent metrics from potentially different genomes
+					iter_best_ce = min(f for _, f, _ in all_neighbors) if all_neighbors else best_fitness
+					iter_best_acc_vals = [a for _, _, a in all_neighbors if a is not None]
+					iter_best_acc = max(iter_best_acc_vals) if iter_best_acc_vals else best_accuracy
+
 					iteration_id = self._tracker.record_iteration(
 						experiment_id=self._tracker_experiment_id,
 						iteration_num=iteration + 1,
-						best_ce=best_fitness,
-						best_accuracy=best_accuracy,
+						best_ce=iter_best_ce,
+						best_accuracy=iter_best_acc,
 						avg_ce=top_k_avg_ce,
 						avg_accuracy=top_k_avg_acc,
 						elite_count=top_k_count,
@@ -2418,6 +2426,10 @@ class GenericTSStrategy(ABC, Generic[T]):
 		else:
 			stop_reason = None
 
+		# Actual best accuracy across all seen neighbors (independent of CE ranking)
+		all_accs = [a for _, _, a in all_neighbors if a is not None]
+		ts_final_accuracy = max(all_accs) if all_accs else best_accuracy
+
 		return OptimizerResult(
 			initial_genome=initial_genome,
 			best_genome=best,
@@ -2432,6 +2444,6 @@ class GenericTSStrategy(ABC, Generic[T]):
 			final_population=final_population,
 			population_metrics=population_metrics,
 			initial_accuracy=None,
-			final_accuracy=best_accuracy,
+			final_accuracy=ts_final_accuracy,
 			final_threshold=final_threshold,
 		)

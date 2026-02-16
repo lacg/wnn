@@ -1871,9 +1871,10 @@ class GridSearchStrategy:
 		population_metrics = [population_metrics[i] for i in sorted_indices]
 		pop_fitness_scores = [pop_fitness_scores[i] for i in sorted_indices]
 
-		# Best genome is now first in the sorted list
+		# Best genome by fitness is now first in the sorted list
 		best_genome = output_population[0]
-		best_ce_val = population_metrics[0][0]
+		# Actual bests: independent metrics from potentially different genomes
+		best_ce_val = min(ce for ce, _ in population_metrics)
 		best_acc_val = max(acc for _, acc in population_metrics)
 
 		# Record 1 iteration with ALL population genomes sorted by fitness
