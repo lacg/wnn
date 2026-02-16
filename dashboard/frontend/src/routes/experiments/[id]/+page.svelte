@@ -109,6 +109,7 @@
   // Light refresh for running experiments - only fetch new iterations and status
   async function refreshRunningExperiment() {
     if (!experiment) return;
+    const prevStatus = experiment.status;
 
     try {
       const [expRes, itersRes] = await Promise.all([
@@ -128,6 +129,13 @@
         experiment.gating_status = newExp.gating_status;
         experiment.gating_results = newExp.gating_results;
         experiment = experiment; // Trigger Svelte reactivity for duration display
+
+        // Status transition detected — do a full reload to get validation summaries,
+        // flow experiments, checkpoints, etc.
+        if (prevStatus !== newExp.status) {
+          await loadExperiment();
+          return;
+        }
 
         // Also update this experiment's status in flowExperiments for Flow Progress bar
         if (flowExperiments.length > 0) {

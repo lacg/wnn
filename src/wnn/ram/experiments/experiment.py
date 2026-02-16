@@ -498,8 +498,11 @@ class Experiment:
 
 			# Run FINAL validation (skip if shutdown was requested)
 			if not was_shutdown and result.final_population:
-				# Get final evals from the last iteration
-				final_evals = self.evaluator.evaluate_batch(result.final_population)
+				# Use cached metrics from the optimizer if available (avoids redundant re-eval)
+				if result.population_metrics:
+					final_evals = result.population_metrics
+				else:
+					final_evals = self.evaluator.evaluate_batch(result.final_population)
 				self._run_validation(
 					population=result.final_population,
 					evals=final_evals,
