@@ -790,7 +790,7 @@ class Flow:
 							context_size=cfg.context_size,
 							population_size=exp_config.population_size,
 							phase_type=phase_type,
-							max_iterations=exp_config.generations if exp_config.experiment_type == ExperimentType.GA else exp_config.iterations,
+							max_iterations=1 if exp_config.experiment_type == ExperimentType.GRID_SEARCH else (exp_config.generations if exp_config.experiment_type == ExperimentType.GA else exp_config.iterations),
 						)
 						experiment_id = tracker_experiment_id
 						self._experiment_ids[idx] = experiment_id
