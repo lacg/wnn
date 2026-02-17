@@ -153,6 +153,7 @@ const SPARSE_THRESHOLD: usize = 12;
 
 use crate::neuron_memory::{
     FALSE, TRUE, EMPTY, BITS_PER_CELL, CELLS_PER_WORD, CELL_MASK,
+    compute_address, NeuronTrainMeta,
 };
 
 /// Get the EMPTY cell value from the unified global setting
@@ -416,16 +417,47 @@ impl ConfigGroup {
     }
 }
 
-/// Compute memory address for a single neuron given input bits
-#[inline]
-fn compute_address(input_bits: &[bool], connections: &[i64], bits: usize) -> usize {
-    let mut address: usize = 0;
-    for (i, &conn_idx) in connections.iter().take(bits).enumerate() {
-        if input_bits[conn_idx as usize] {
-            address |= 1 << (bits - 1 - i);
-        }
+/// Maximum GPU output size: 256M addresses = 1GB output buffer.
+/// Beyond this, CPU fallback is used to avoid Metal allocation hangs.
+const MAX_GPU_ADDRESSES: usize = 256_000_000;
+
+/// Try to compute training addresses on GPU for adaptive training path.
+/// Returns None if GPU is unavailable, disabled, or the problem is too large.
+fn try_gpu_addresses_adaptive(
+    packed_input: &[u64],
+    words_per_example: usize,
+    per_neuron_bits: &[usize],
+    neuron_conn_offsets: &[usize],
+    connections: &[i64],
+    num_train: usize,
+) -> Option<Vec<u32>> {
+    let total_neurons = per_neuron_bits.len();
+    if total_neurons < 100 {
+        return None;
     }
-    address
+    // Guard against massive allocations (e.g. 251K neurons × 16K examples = 4B addresses = 16GB)
+    if total_neurons.saturating_mul(num_train) > MAX_GPU_ADDRESSES {
+        return None;
+    }
+
+    let trainer_mutex = crate::get_cached_metal_trainer().ok()?;
+    let mut guard = trainer_mutex.lock().ok()?;
+    let trainer = guard.as_mut()?;
+
+    let neuron_meta: Vec<NeuronTrainMeta> = (0..total_neurons)
+        .map(|n| NeuronTrainMeta {
+            bits: per_neuron_bits[n] as u32,
+            conn_offset: neuron_conn_offsets[n] as u32,
+        })
+        .collect();
+
+    trainer.compute_addresses(
+        packed_input,
+        connections,
+        &neuron_meta,
+        num_train,
+        words_per_example,
+    ).ok()
 }
 
 /// Read a memory cell value
@@ -1283,6 +1315,10 @@ pub fn evaluate_genomes_parallel(
         running_offset += conn_size;
     }
 
+    // Pack input bits to u64 once (shared across all genomes for GPU address computation)
+    let (packed_train_input, words_per_example) =
+        crate::neuron_memory::pack_bools_to_u64(train_input_bits, num_train, total_input_bits);
+
     // Check if progress logging is enabled via env var
     let progress_log = std::env::var("WNN_PROGRESS_LOG").map(|v| v == "1").unwrap_or(false);
     let log_path = std::env::var("WNN_LOG_PATH").ok();
@@ -1362,6 +1398,16 @@ pub fn evaluate_genomes_parallel(
             }
         }
 
+        // Compute training addresses on GPU (falls back to CPU if unavailable)
+        let gpu_addresses = try_gpu_addresses_adaptive(
+            &packed_train_input,
+            words_per_example,
+            &per_neuron_bits,
+            &neuron_conn_offsets,
+            &original_connections,
+            num_train,
+        );
+
         // Train this genome using per-neuron bits (PARALLEL across examples)
         train_genome_in_slot(
             &group_memories,
@@ -1377,6 +1423,7 @@ pub fn evaluate_genomes_parallel(
             num_train,
             num_negatives,
             total_input_bits,
+            gpu_addresses.as_deref(),
         );
 
         // Evaluate this genome - HYBRID Metal/CPU acceleration
@@ -1819,7 +1866,9 @@ fn get_available_memory_gb() -> f64 {
     64.0
 }
 
-/// Train a genome using the given memory slot
+/// Train a genome using the given memory slot.
+/// When `gpu_addresses` is Some, uses pre-computed GPU addresses instead of CPU compute_address().
+/// GPU address layout: addresses[global_neuron_idx * num_train + example_idx].
 fn train_genome_in_slot(
     memories: &[GroupMemory],
     groups: &[ConfigGroup],
@@ -1834,6 +1883,7 @@ fn train_genome_in_slot(
     num_train: usize,
     num_negatives: usize,
     total_input_bits: usize,
+    gpu_addresses: Option<&[u32]>,
 ) {
     // Use chunked parallel processing to balance parallelism vs overhead
     let chunk_size = 10_000.max(num_train / 20);
@@ -1862,9 +1912,13 @@ fn train_genome_in_slot(
 
             for n in 0..actual_neurons {
                 let global_n = cluster_neuron_starts[true_cluster] + n;
-                let n_bits = per_neuron_bits[global_n];
-                let conn_start = neuron_conn_offsets[global_n];
-                let address = compute_address(input_bits, &original_connections[conn_start..], n_bits);
+                let address = if let Some(addrs) = gpu_addresses {
+                    addrs[global_n * num_train + ex_idx] as usize
+                } else {
+                    let n_bits = per_neuron_bits[global_n];
+                    let conn_start = neuron_conn_offsets[global_n];
+                    compute_address(input_bits, &original_connections[conn_start..], n_bits)
+                };
                 memory.write(neuron_base + n, address, TRUE, false);
             }
         }
@@ -1891,9 +1945,13 @@ fn train_genome_in_slot(
 
             for n in 0..actual_neurons {
                 let global_n = cluster_neuron_starts[false_cluster] + n;
-                let n_bits = per_neuron_bits[global_n];
-                let conn_start = neuron_conn_offsets[global_n];
-                let address = compute_address(input_bits, &original_connections[conn_start..], n_bits);
+                let address = if let Some(addrs) = gpu_addresses {
+                    addrs[global_n * num_train + ex_idx] as usize
+                } else {
+                    let n_bits = per_neuron_bits[global_n];
+                    let conn_start = neuron_conn_offsets[global_n];
+                    compute_address(input_bits, &original_connections[conn_start..], n_bits)
+                };
                 memory.write(neuron_base + n, address, FALSE, false);
             }
         }
@@ -2629,6 +2687,10 @@ pub fn evaluate_genomes_parallel_hybrid(
     let mut total_eval_ms = 0u128;
     let mut total_sparse_keys = 0usize;
 
+    // Pack input bits to u64 once (shared across all genomes for GPU address computation)
+    let (packed_train_input, words_per_example) =
+        crate::neuron_memory::pack_bools_to_u64(train_input_bits, num_train, total_input_bits);
+
     // Progress logging for parallel batch (logs training completion, not final results)
     let progress_log = std::env::var("WNN_PROGRESS_LOG").map(|v| v == "1").unwrap_or(false);
     let log_path = std::env::var("WNN_LOG_PATH").ok();
@@ -2700,6 +2762,16 @@ pub fn evaluate_genomes_parallel_hybrid(
                     conns
                 };
 
+                // Compute training addresses on GPU (falls back to CPU if unavailable)
+                let gpu_addresses = try_gpu_addresses_adaptive(
+                    &packed_train_input,
+                    words_per_example,
+                    per_neuron_bits,
+                    &neuron_conn_offsets,
+                    &original_connections,
+                    num_train,
+                );
+
                 // Train this genome using per-neuron bits
                 train_genome_in_slot(
                     &memories,
@@ -2715,6 +2787,7 @@ pub fn evaluate_genomes_parallel_hybrid(
                     num_train,
                     num_negatives,
                     total_input_bits,
+                    gpu_addresses.as_deref(),
                 );
 
                 // Build GPU-padded connections (per-neuron → group layout with padding)

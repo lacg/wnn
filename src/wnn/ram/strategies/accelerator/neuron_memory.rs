@@ -207,6 +207,35 @@ pub fn nudge_cell_offset(
 }
 
 // =============================================================================
+// GPU Training Metadata (shared with Metal shader)
+// =============================================================================
+
+/// Per-neuron metadata for GPU address computation during training.
+/// Passed to Metal `train_compute_addresses` kernel.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct NeuronTrainMeta {
+	/// Number of address bits for this neuron
+	pub bits: u32,
+	/// Offset into the flat connections array for this neuron's connections
+	pub conn_offset: u32,
+}
+
+/// Parameters for GPU training address computation kernel.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct TrainAddressParams {
+	/// Number of training examples
+	pub num_examples: u32,
+	/// Words per example in packed_input (ceil(total_input_bits / 64))
+	pub words_per_example: u32,
+	/// Total number of neurons across all clusters
+	pub total_neurons: u32,
+	/// Padding for 16-byte alignment
+	pub _pad: u32,
+}
+
+// =============================================================================
 // Address Computation
 // =============================================================================
 

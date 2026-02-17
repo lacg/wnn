@@ -23,6 +23,15 @@ fn get_cached_metal_evaluator() -> Result<&'static Mutex<Option<metal_ramlm::Met
     }))
 }
 
+// Global cached Metal trainer for GPU address computation during training
+static METAL_TRAINER: OnceLock<Mutex<Option<metal_train::MetalTrainer>>> = OnceLock::new();
+
+fn get_cached_metal_trainer() -> Result<&'static Mutex<Option<metal_train::MetalTrainer>>, String> {
+    Ok(METAL_TRAINER.get_or_init(|| {
+        Mutex::new(metal_train::MetalTrainer::new().ok())
+    }))
+}
+
 // Global cached Metal evaluator for Gating (avoids shader recompilation)
 static METAL_GATING_EVALUATOR: OnceLock<Mutex<Option<metal_gating::MetalGatingEvaluator>>> = OnceLock::new();
 
@@ -166,6 +175,18 @@ mod adaptation;
 #[cfg(target_os = "macos")]
 #[path = "metal_stats.rs"]
 mod metal_stats;
+
+#[cfg(target_os = "macos")]
+#[path = "metal_train.rs"]
+mod metal_train;
+
+#[cfg(not(target_os = "macos"))]
+mod metal_train {
+    pub struct MetalTrainer;
+    impl MetalTrainer {
+        pub fn new() -> Result<Self, String> { Err("Metal not available on this platform".into()) }
+    }
+}
 
 pub use ram::RAMNeuron;
 pub use per_cluster::{PerClusterEvaluator, FitnessMode, TierOptConfig, ClusterOptResult, TierOptResult};
