@@ -165,6 +165,9 @@ pub enum ExperimentType {
     Ga,
     Ts,
     GridSearch,
+    Neurogenesis,
+    Synaptogenesis,
+    Axonogenesis,
 }
 
 // =============================================================================

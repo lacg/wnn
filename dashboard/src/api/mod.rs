@@ -914,6 +914,9 @@ async fn add_experiment_to_flow(
             let exp_type = match exp_spec.experiment_type {
                 ExperimentType::Ga => "ga",
                 ExperimentType::Ts => "ts",
+                ExperimentType::Neurogenesis => "neurogenesis",
+                ExperimentType::Synaptogenesis => "synaptogenesis",
+                ExperimentType::Axonogenesis => "axonogenesis",
                 ExperimentType::GridSearch => unreachable!(),
             };
             format!("{}_{}", exp_type, opt_target)
@@ -937,6 +940,11 @@ async fn add_experiment_to_flow(
                 }
                 ExperimentType::Ts => {
                     flow.config.params.get("ts_iterations")
+                        .and_then(|v| v.as_i64())
+                        .map(|v| v as i32)
+                }
+                ExperimentType::Neurogenesis | ExperimentType::Synaptogenesis | ExperimentType::Axonogenesis => {
+                    exp_spec.params.get("iterations")
                         .and_then(|v| v.as_i64())
                         .map(|v| v as i32)
                 }

@@ -482,6 +482,9 @@ pub mod queries {
                         let exp_type = match exp_spec.experiment_type {
                             crate::models::ExperimentType::Ga => "ga",
                             crate::models::ExperimentType::Ts => "ts",
+                            crate::models::ExperimentType::Neurogenesis => "neurogenesis",
+                            crate::models::ExperimentType::Synaptogenesis => "synaptogenesis",
+                            crate::models::ExperimentType::Axonogenesis => "axonogenesis",
                             crate::models::ExperimentType::GridSearch => unreachable!(),
                         };
                         format!("{}_{}", exp_type, opt_target)
@@ -507,6 +510,11 @@ pub mod queries {
                             }
                             crate::models::ExperimentType::Ts => {
                                 config.params.get("ts_iterations")
+                                    .and_then(|v| v.as_i64())
+                                    .map(|v| v as i32)
+                            }
+                            crate::models::ExperimentType::Neurogenesis | crate::models::ExperimentType::Synaptogenesis | crate::models::ExperimentType::Axonogenesis => {
+                                exp_spec.params.get("iterations")
                                     .and_then(|v| v.as_i64())
                                     .map(|v| v as i32)
                             }
