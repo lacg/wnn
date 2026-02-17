@@ -88,6 +88,9 @@ pub struct AdaptationConfig {
 	pub total_input_bits: usize,
 	/// Max examples to sample for stats computation (0 = use all).
 	pub stats_sample_size: usize,
+	/// Neuron sample rate (0.0-1.0). Each neuron trains on this fraction of examples.
+	/// Used to scale expected_fill_rate correctly in growth conditions.
+	pub neuron_sample_rate: f32,
 }
 
 impl Default for AdaptationConfig {
@@ -118,6 +121,7 @@ impl Default for AdaptationConfig {
 			passes_per_eval: 1,
 			total_input_bits: 64,
 			stats_sample_size: 10_000,
+			neuron_sample_rate: 1.0,
 		}
 	}
 }
@@ -544,7 +548,8 @@ pub fn synaptogenesis_pass(
 		}
 
 		// Grow: add highest-entropy unconnected bit if underfitting
-		let exp_fill = expected_fill_rate(n_bits, num_examples);
+		let effective_examples = (num_examples as f32 * config.neuron_sample_rate) as usize;
+		let exp_fill = expected_fill_rate(n_bits, effective_examples);
 		if n_bits < config.max_bits
 			&& stats.fill_rate > exp_fill * config.grow_fill_utilization
 			&& stats.error_rate > config.grow_error_baseline
@@ -937,14 +942,15 @@ pub fn neurogenesis_pass(
 		let stats = &cluster_stats[cluster];
 		let n_neurons = neurons_per_cluster[cluster];
 
-		// Compute expected fill for this cluster's neurons
+		// Compute expected fill for this cluster's neurons (accounting for sample rate)
 		let neuron_base = neuron_offsets[cluster];
 		let avg_bits = if n_neurons > 0 {
 			(0..n_neurons).map(|i| bits_per_neuron[neuron_base + i]).sum::<usize>() / n_neurons
 		} else {
 			0
 		};
-		let exp_fill = expected_fill_rate(avg_bits, num_examples);
+		let effective_examples = (num_examples as f32 * config.neuron_sample_rate) as usize;
+		let exp_fill = expected_fill_rate(avg_bits, effective_examples);
 
 		// Growth cap: initial * max_growth_ratio
 		let max_neurons = (initial_neurons.get(cluster).copied().unwrap_or(n_neurons) as f32

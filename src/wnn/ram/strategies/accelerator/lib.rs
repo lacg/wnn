@@ -4753,6 +4753,7 @@ impl BitwiseCacheWrapper {
             passes_per_eval,
             total_input_bits,
             stats_sample_size,
+            neuron_sample_rate,
         };
 
         py.allow_threads(|| {
