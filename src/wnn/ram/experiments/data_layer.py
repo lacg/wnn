@@ -466,7 +466,8 @@ class DataLayer:
                         f"Cleaned {len(iter_ids)} old iterations for experiment {experiment_id}"
                     )
                 conn.execute(
-                    "UPDATE experiments SET status = ?, started_at = ?, pid = ?, current_iteration = 0 WHERE id = ?",
+                    "UPDATE experiments SET status = ?, started_at = ?, pid = ?, current_iteration = 0, "
+                    "best_ce = NULL, best_accuracy = NULL, last_iteration = NULL, ended_at = NULL WHERE id = ?",
                     (status.value, now, pid or os.getpid(), experiment_id),
                 )
             elif status == ExperimentStatus.PAUSED:

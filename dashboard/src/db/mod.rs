@@ -1549,8 +1549,12 @@ pub mod queries {
                 "running" => {
                     set_clauses.push("started_at = ?");
                     binds.push(now.clone());
-                    // Clear stale ended_at from previous runs
+                    // Clear stale ended_at and metrics from previous runs
                     set_clauses.push("ended_at = NULL");
+                    set_clauses.push("current_iteration = 0");
+                    set_clauses.push("best_ce = NULL");
+                    set_clauses.push("best_accuracy = NULL");
+                    set_clauses.push("last_iteration = NULL");
                     // Clean stale data from previous runs of this experiment.
                     // Order: genome_evaluations/health_checks (FK→iterations) first,
                     // then iterations, genomes, validation_summaries (FK→experiments).
