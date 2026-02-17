@@ -243,6 +243,105 @@ pub fn reorganize_connections_for_coalescing(
     result
 }
 
+/// Convert per-neuron bits to per-cluster max bits (for `build_groups`).
+///
+/// `bits_per_neuron` has length `sum(neurons_per_cluster)` — one entry per neuron.
+/// Returns one entry per cluster: the maximum bits among that cluster's neurons.
+/// Pattern from `bitwise_ramlm.rs:1391-1400`.
+fn per_cluster_max_bits(bits_per_neuron: &[usize], neurons_per_cluster: &[usize]) -> Vec<usize> {
+    let mut result = Vec::with_capacity(neurons_per_cluster.len());
+    let mut offset = 0;
+    for &nc in neurons_per_cluster {
+        let max_b = bits_per_neuron[offset..offset + nc].iter().copied().max().unwrap_or(0);
+        result.push(max_b);
+        offset += nc;
+    }
+    result
+}
+
+/// Build per-neuron offset tables for heterogeneous-bits training.
+///
+/// Returns `(cluster_neuron_starts, neuron_conn_offsets)`:
+/// - `cluster_neuron_starts[c]` = first neuron index for cluster `c`
+/// - `neuron_conn_offsets[n]` = connection start offset for neuron `n` (cumulative sum of bits)
+///
+/// Pattern from `bitwise_ramlm.rs:683-704` (`compute_genome_layout`).
+fn build_neuron_metadata(
+    bits_per_neuron: &[usize],
+    neurons_per_cluster: &[usize],
+) -> (Vec<usize>, Vec<usize>) {
+    let num_clusters = neurons_per_cluster.len();
+    let total_neurons: usize = neurons_per_cluster.iter().sum();
+
+    // cluster_neuron_starts[c] = index of first neuron in cluster c
+    let mut cluster_neuron_starts = Vec::with_capacity(num_clusters);
+    let mut cumul = 0usize;
+    for &nc in neurons_per_cluster {
+        cluster_neuron_starts.push(cumul);
+        cumul += nc;
+    }
+
+    // neuron_conn_offsets[n] = start offset in connections array for neuron n
+    let mut neuron_conn_offsets = Vec::with_capacity(total_neurons);
+    let mut conn_off = 0usize;
+    for &b in bits_per_neuron {
+        neuron_conn_offsets.push(conn_off);
+        conn_off += b;
+    }
+
+    (cluster_neuron_starts, neuron_conn_offsets)
+}
+
+/// Pad per-neuron connections to group layout for GPU dispatch.
+///
+/// Each neuron's `n_bits` connections are padded to `group.bits` (= cluster max_bits) with
+/// connection index 0 (harmless padding). Same pattern as `bitwise_ramlm.rs:804-820`.
+///
+/// This replaces `reorganize_connections_for_coalescing` when per-neuron bits are heterogeneous.
+fn reorganize_connections_for_gpu(
+    original_connections: &[i64],
+    per_neuron_bits: &[usize],
+    neurons_per_cluster: &[usize],
+    groups: &[ConfigGroup],
+) -> Vec<i64> {
+    let (cluster_neuron_starts, neuron_conn_offsets) =
+        build_neuron_metadata(per_neuron_bits, neurons_per_cluster);
+
+    // Total size needed for group layout
+    let total_size: usize = groups.iter().map(|g| g.conn_size()).sum();
+    let mut result = vec![0i64; total_size]; // Pad with 0 (harmless connection index)
+
+    for group in groups {
+        let max_neurons = group.neurons;
+        let max_bits = group.bits;
+
+        for (local_idx, &cluster_id) in group.cluster_ids.iter().enumerate() {
+            let actual_neurons = if let Some(ref an) = group.actual_neurons {
+                an[local_idx] as usize
+            } else {
+                max_neurons
+            };
+
+            let neuron_start = cluster_neuron_starts[cluster_id];
+
+            for n in 0..actual_neurons {
+                let global_n = neuron_start + n;
+                let n_bits = per_neuron_bits[global_n];
+                let conn_start = neuron_conn_offsets[global_n];
+
+                // Destination in group layout
+                let dst = group.conn_offset + local_idx * max_neurons * max_bits + n * max_bits;
+
+                // Copy n_bits connections, rest stays 0 (padding)
+                result[dst..dst + n_bits]
+                    .copy_from_slice(&original_connections[conn_start..conn_start + n_bits]);
+            }
+        }
+    }
+
+    result
+}
+
 /// Configuration group - clusters sharing the same (neurons, bits) config
 /// For coalesced groups, neurons is the MAX neurons and actual_neurons stores per-cluster values
 #[derive(Clone, Debug)]
@@ -1153,17 +1252,33 @@ pub fn evaluate_genomes_parallel(
     // Check if connections are provided
     let use_provided_connections = !genomes_connections_flat.is_empty();
 
-    // Pre-compute per-genome connection offsets and sizes
-    // Each genome can have different bits/neurons, so we must calculate individually
+    // Pre-compute genome_bpn_offsets: genomes_bits_flat has total_neurons entries per genome
+    // (per-neuron bits), NOT num_clusters entries.
+    let mut genome_bpn_offsets: Vec<usize> = Vec::with_capacity(num_genomes + 1);
+    genome_bpn_offsets.push(0);
+    for g in 0..num_genomes {
+        let nc_base = g * num_clusters;
+        let total_neurons: usize = genomes_neurons_flat[nc_base..nc_base + num_clusters].iter().sum();
+        genome_bpn_offsets.push(genome_bpn_offsets.last().unwrap() + total_neurons);
+    }
+
+    debug_assert_eq!(
+        genomes_bits_flat.len(),
+        *genome_bpn_offsets.last().unwrap(),
+        "genomes_bits_flat length ({}) != expected total neurons ({})",
+        genomes_bits_flat.len(),
+        genome_bpn_offsets.last().unwrap(),
+    );
+
+    // Pre-compute per-genome connection offsets: conn_size = sum of per-neuron bits
     let mut conn_offsets: Vec<usize> = Vec::with_capacity(num_genomes);
     let mut conn_sizes: Vec<usize> = Vec::with_capacity(num_genomes);
     let mut running_offset = 0usize;
     for genome_idx in 0..num_genomes {
         conn_offsets.push(running_offset);
-        let genome_offset = genome_idx * num_clusters;
-        let conn_size: usize = (0..num_clusters)
-            .map(|i| genomes_bits_flat[genome_offset + i] * genomes_neurons_flat[genome_offset + i])
-            .sum();
+        let bpn_start = genome_bpn_offsets[genome_idx];
+        let bpn_end = genome_bpn_offsets[genome_idx + 1];
+        let conn_size: usize = genomes_bits_flat[bpn_start..bpn_end].iter().sum();
         conn_sizes.push(conn_size);
         running_offset += conn_size;
     }
@@ -1191,54 +1306,53 @@ pub fn evaluate_genomes_parallel(
     // Sequential is faster: ~6s/genome vs ~10s/genome with parallel outer loop
     let results: Vec<(f64, f64)> = (0..num_genomes).map(|genome_idx| {
         let genome_start = std::time::Instant::now();
-        // Extract this genome's configuration
+        // Extract this genome's per-neuron bits and per-cluster neurons
         let genome_offset = genome_idx * num_clusters;
-        let bits_per_cluster: Vec<usize> = genomes_bits_flat[genome_offset..genome_offset + num_clusters].to_vec();
         let neurons_per_cluster: Vec<usize> = genomes_neurons_flat[genome_offset..genome_offset + num_clusters].to_vec();
 
-        // Build config groups for this genome
-        // Coalescing is now supported even with provided connections by reorganizing them
+        // Extract per-neuron bits for this genome
+        let bpn_start = genome_bpn_offsets[genome_idx];
+        let bpn_end = genome_bpn_offsets[genome_idx + 1];
+        let per_neuron_bits: Vec<usize> = genomes_bits_flat[bpn_start..bpn_end].to_vec();
+
+        // Compute per-cluster max bits (for build_groups and GPU dispatch)
+        let bits_per_cluster = per_cluster_max_bits(&per_neuron_bits, &neurons_per_cluster);
+
+        // Build neuron metadata for per-neuron training and CPU eval
+        let (cluster_neuron_starts, neuron_conn_offsets) =
+            build_neuron_metadata(&per_neuron_bits, &neurons_per_cluster);
+
+        // Build config groups for this genome (using per-cluster max bits)
         let groups = build_groups(&bits_per_cluster, &neurons_per_cluster);
 
         // Create hybrid memory for each config group
-        // Dense for bits <= 12 (fast), Sparse for bits > 12 (memory-efficient)
         let group_memories: Vec<GroupMemory> = groups.iter()
             .map(|g| GroupMemory::new(g.total_neurons(), g.bits))
             .collect();
 
-        // Get or generate connections for this genome
-        let connections_flat: Vec<i64> = if use_provided_connections {
-            // Use pre-computed per-genome offset and size
+        // Get original per-neuron connections for this genome
+        let original_connections: Vec<i64> = if use_provided_connections {
             let conn_offset = conn_offsets[genome_idx];
             let conn_size = conn_sizes[genome_idx];
-            let original_connections = &genomes_connections_flat[conn_offset..conn_offset + conn_size];
-
-            // If coalescing is enabled, reorganize connections to match group layout
-            if use_coalesced_groups() {
-                reorganize_connections_for_coalescing(
-                    original_connections,
-                    &bits_per_cluster,
-                    &neurons_per_cluster,
-                    &groups,
-                )
-            } else {
-                original_connections.to_vec()
-            }
+            genomes_connections_flat[conn_offset..conn_offset + conn_size].to_vec()
         } else {
-            // Generate random connections (legacy fallback)
-            let total_conn_size: usize = groups.iter().map(|g| g.conn_size()).sum();
+            // Generate random per-neuron connections (legacy fallback)
+            let total_conn: usize = per_neuron_bits.iter().sum();
             let mut rng = rand::rngs::SmallRng::from_entropy();
-            let mut conns: Vec<i64> = Vec::with_capacity(total_conn_size);
-            for group in &groups {
-                let total_neurons = group.total_neurons();
-                for _ in 0..total_neurons {
-                    for _ in 0..group.bits {
-                        conns.push(rng.gen_range(0..total_input_bits as i64));
-                    }
-                }
+            let mut conns: Vec<i64> = Vec::with_capacity(total_conn);
+            for _ in 0..total_conn {
+                conns.push(rng.gen_range(0..total_input_bits as i64));
             }
             conns
         };
+
+        // Build GPU-padded connections (per-neuron → group layout with padding)
+        let gpu_connections = reorganize_connections_for_gpu(
+            &original_connections,
+            &per_neuron_bits,
+            &neurons_per_cluster,
+            &groups,
+        );
 
         // Build cluster-to-group mapping
         let mut cluster_to_group: Vec<(usize, usize)> = vec![(0, 0); num_clusters];
@@ -1248,65 +1362,22 @@ pub fn evaluate_genomes_parallel(
             }
         }
 
-        // Train this genome using hybrid memory (PARALLEL across examples)
-        (0..num_train).into_par_iter().for_each(|ex_idx| {
-            let input_start = ex_idx * total_input_bits;
-            let input_bits = &train_input_bits[input_start..input_start + total_input_bits];
-
-            let true_cluster = train_targets[ex_idx] as usize;
-
-            // Train positive example
-            {
-                let (group_idx, local_cluster) = cluster_to_group[true_cluster];
-                let group = &groups[group_idx];
-                let memory = &group_memories[group_idx];
-
-                // Use actual neurons if coalesced, otherwise MAX
-                let actual_neurons = if let Some(ref an) = group.actual_neurons {
-                    an[local_cluster] as usize
-                } else {
-                    group.neurons
-                };
-
-                let neuron_base = local_cluster * group.neurons;  // Keep MAX for memory layout
-                let conn_base = group.conn_offset + local_cluster * group.neurons * group.bits;
-
-                for n in 0..actual_neurons {  // Only iterate actual neurons
-                    let conn_start = conn_base + n * group.bits;
-                    let address = compute_address(input_bits, &connections_flat[conn_start..], group.bits);
-                    memory.write(neuron_base + n, address, TRUE, false);
-                }
-            }
-
-            // Train negative examples
-            let neg_start = ex_idx * num_negatives;
-            for k in 0..num_negatives {
-                let false_cluster = train_negatives[neg_start + k] as usize;
-                if false_cluster == true_cluster {
-                    continue;
-                }
-
-                let (group_idx, local_cluster) = cluster_to_group[false_cluster];
-                let group = &groups[group_idx];
-                let memory = &group_memories[group_idx];
-
-                // Use actual neurons if coalesced, otherwise MAX
-                let actual_neurons = if let Some(ref an) = group.actual_neurons {
-                    an[local_cluster] as usize
-                } else {
-                    group.neurons
-                };
-
-                let neuron_base = local_cluster * group.neurons;  // Keep MAX for memory layout
-                let conn_base = group.conn_offset + local_cluster * group.neurons * group.bits;
-
-                for n in 0..actual_neurons {  // Only iterate actual neurons
-                    let conn_start = conn_base + n * group.bits;
-                    let address = compute_address(input_bits, &connections_flat[conn_start..], group.bits);
-                    memory.write(neuron_base + n, address, FALSE, false);
-                }
-            }
-        });
+        // Train this genome using per-neuron bits (PARALLEL across examples)
+        train_genome_in_slot(
+            &group_memories,
+            &groups,
+            &original_connections,
+            &per_neuron_bits,
+            &cluster_neuron_starts,
+            &neuron_conn_offsets,
+            &cluster_to_group,
+            train_input_bits,
+            train_targets,
+            train_negatives,
+            num_train,
+            num_negatives,
+            total_input_bits,
+        );
 
         // Evaluate this genome - HYBRID Metal/CPU acceleration
         // - Dense groups (bits <= 12): Metal GPU (all examples at once)
@@ -1333,11 +1404,12 @@ pub fn evaluate_genomes_parallel(
 
             if let (Some(ref metal_eval), true) = (&metal, memory.is_dense()) {
                 // Metal path: evaluate all examples at once for this dense group
+                // GPU uses padded connections (group layout with max_bits per neuron)
                 if let Some(memory_words) = memory.export_for_metal() {
                     match evaluate_group_metal(
                         metal_eval.as_ref(),
                         &packed_eval,
-                        &connections_flat,
+                        &gpu_connections,
                         &memory_words,
                         group,
                         num_eval,
@@ -1345,19 +1417,15 @@ pub fn evaluate_genomes_parallel(
                         crate::neuron_memory::MODE_TERNARY,
                     ) {
                         Ok(group_scores) => {
-                            // Scatter Metal results to correct cluster positions
-                            // group_scores is [num_eval × num_clusters_in_group]
                             for ex_idx in 0..num_eval {
                                 for (local_cluster, &cluster_id) in group.cluster_ids.iter().enumerate() {
                                     let score_idx = ex_idx * group.cluster_count() + local_cluster;
                                     all_scores[ex_idx][cluster_id] = group_scores[score_idx] as f64;
                                 }
                             }
-                            continue; // Skip CPU path for this group
+                            continue;
                         }
-                        Err(_) => {
-                            // Metal failed, fall through to CPU path
-                        }
+                        Err(_) => {}
                     }
                 }
             }
@@ -1368,7 +1436,7 @@ pub fn evaluate_genomes_parallel(
                     match evaluate_group_sparse_gpu(
                         sparse_eval.as_ref(),
                         &packed_eval,
-                        &connections_flat,
+                        &gpu_connections,
                         &export,
                         group,
                         num_eval,
@@ -1376,29 +1444,25 @@ pub fn evaluate_genomes_parallel(
                         crate::neuron_memory::MODE_TERNARY,
                     ) {
                         Ok(group_scores) => {
-                            // Scatter GPU sparse results to correct cluster positions
                             for ex_idx in 0..num_eval {
                                 for (local_cluster, &cluster_id) in group.cluster_ids.iter().enumerate() {
                                     let score_idx = ex_idx * group.cluster_count() + local_cluster;
                                     all_scores[ex_idx][cluster_id] = group_scores[score_idx] as f64;
                                 }
                             }
-                            continue; // Skip CPU path for this group
+                            continue;
                         }
-                        Err(_) => {
-                            // GPU sparse failed, fall through to CPU path
-                        }
+                        Err(_) => {}
                     }
                 }
             }
 
-            // CPU path: evaluate examples in parallel for this group
+            // CPU path: evaluate examples in parallel using per-neuron bits
             all_scores.par_iter_mut().enumerate().for_each(|(ex_idx, scores)| {
                 let input_start = ex_idx * total_input_bits;
                 let input_bits = &eval_input_bits[input_start..input_start + total_input_bits];
 
                 for (local_cluster, &cluster_id) in group.cluster_ids.iter().enumerate() {
-                    // Use actual neurons if coalesced, otherwise MAX
                     let actual_neurons = if let Some(ref an) = group.actual_neurons {
                         an[local_cluster] as usize
                     } else {
@@ -1406,21 +1470,22 @@ pub fn evaluate_genomes_parallel(
                     };
 
                     let neuron_base = local_cluster * group.neurons;  // Keep MAX for memory layout
-                    let conn_base = group.conn_offset + local_cluster * group.neurons * group.bits;
 
                     let mut sum = 0.0f32;
-                    for n in 0..actual_neurons {  // Only iterate actual neurons
-                        let conn_start = conn_base + n * group.bits;
-                        let address = compute_address(input_bits, &connections_flat[conn_start..], group.bits);
+                    for n in 0..actual_neurons {
+                        let global_n = cluster_neuron_starts[cluster_id] + n;
+                        let n_bits = per_neuron_bits[global_n];
+                        let conn_start = neuron_conn_offsets[global_n];
+                        let address = compute_address(input_bits, &original_connections[conn_start..], n_bits);
                         let cell = memory.read(neuron_base + n, address);
                         sum += match cell {
                             FALSE => 0.0,
                             TRUE => 1.0,
-                            _ => empty_value, // EMPTY
+                            _ => empty_value,
                         };
                     }
 
-                    scores[cluster_id] = (sum / actual_neurons as f32) as f64;  // Divide by actual
+                    scores[cluster_id] = (sum / actual_neurons as f32) as f64;
                 }
             });
         }
@@ -1758,7 +1823,10 @@ fn get_available_memory_gb() -> f64 {
 fn train_genome_in_slot(
     memories: &[GroupMemory],
     groups: &[ConfigGroup],
-    connections_flat: &[i64],
+    original_connections: &[i64],    // Per-neuron layout (NOT group layout)
+    per_neuron_bits: &[usize],       // Bits per neuron
+    cluster_neuron_starts: &[usize], // First neuron idx per cluster
+    neuron_conn_offsets: &[usize],   // Conn offset per neuron
     cluster_to_group: &[(usize, usize)],
     train_input_bits: &[bool],
     train_targets: &[i64],
@@ -1768,12 +1836,10 @@ fn train_genome_in_slot(
     total_input_bits: usize,
 ) {
     // Use chunked parallel processing to balance parallelism vs overhead
-    // Large chunks reduce task scheduling overhead while still utilizing multiple cores
-    // With 200K examples, 10K chunks = 20 tasks per genome (reasonable for nested parallelism)
-    let chunk_size = 10_000.max(num_train / 20); // At least 20 chunks, minimum 10K per chunk
+    let chunk_size = 10_000.max(num_train / 20);
 
     (0..num_train).into_par_iter()
-        .with_min_len(chunk_size)  // Rayon processes at least this many items per task
+        .with_min_len(chunk_size)
         .for_each(|ex_idx| {
         let input_start = ex_idx * total_input_bits;
         let input_bits = &train_input_bits[input_start..input_start + total_input_bits];
@@ -1786,7 +1852,6 @@ fn train_genome_in_slot(
             let group = &groups[group_idx];
             let memory = &memories[group_idx];
 
-            // Use actual neurons if coalesced, otherwise use group.neurons (MAX)
             let actual_neurons = if let Some(ref an) = group.actual_neurons {
                 an[local_cluster] as usize
             } else {
@@ -1794,11 +1859,12 @@ fn train_genome_in_slot(
             };
 
             let neuron_base = local_cluster * group.neurons;  // Keep MAX for memory layout
-            let conn_base = group.conn_offset + local_cluster * group.neurons * group.bits;
 
-            for n in 0..actual_neurons {  // Only iterate over actual neurons
-                let conn_start = conn_base + n * group.bits;
-                let address = compute_address(input_bits, &connections_flat[conn_start..], group.bits);
+            for n in 0..actual_neurons {
+                let global_n = cluster_neuron_starts[true_cluster] + n;
+                let n_bits = per_neuron_bits[global_n];
+                let conn_start = neuron_conn_offsets[global_n];
+                let address = compute_address(input_bits, &original_connections[conn_start..], n_bits);
                 memory.write(neuron_base + n, address, TRUE, false);
             }
         }
@@ -1815,7 +1881,6 @@ fn train_genome_in_slot(
             let group = &groups[group_idx];
             let memory = &memories[group_idx];
 
-            // Use actual neurons if coalesced, otherwise use group.neurons (MAX)
             let actual_neurons = if let Some(ref an) = group.actual_neurons {
                 an[local_cluster] as usize
             } else {
@@ -1823,11 +1888,12 @@ fn train_genome_in_slot(
             };
 
             let neuron_base = local_cluster * group.neurons;  // Keep MAX for memory layout
-            let conn_base = group.conn_offset + local_cluster * group.neurons * group.bits;
 
-            for n in 0..actual_neurons {  // Only iterate over actual neurons
-                let conn_start = conn_base + n * group.bits;
-                let address = compute_address(input_bits, &connections_flat[conn_start..], group.bits);
+            for n in 0..actual_neurons {
+                let global_n = cluster_neuron_starts[false_cluster] + n;
+                let n_bits = per_neuron_bits[global_n];
+                let conn_start = neuron_conn_offsets[global_n];
+                let address = compute_address(input_bits, &original_connections[conn_start..], n_bits);
                 memory.write(neuron_base + n, address, FALSE, false);
             }
         }
@@ -2473,21 +2539,39 @@ pub fn evaluate_genomes_parallel_hybrid(
         return vec![];
     }
 
-    // Get first genome's config to determine pool sizing
-    let first_bits = &genomes_bits_flat[0..num_clusters];
+    // Pre-compute genome_bpn_offsets: genomes_bits_flat has total_neurons entries per genome
+    // (per-neuron bits), NOT num_clusters entries. This offset table maps each genome to its
+    // slice in genomes_bits_flat.
+    let mut genome_bpn_offsets: Vec<usize> = Vec::with_capacity(num_genomes + 1);
+    genome_bpn_offsets.push(0);
+    for g in 0..num_genomes {
+        let nc_base = g * num_clusters;
+        let total_neurons: usize = genomes_neurons_flat[nc_base..nc_base + num_clusters].iter().sum();
+        genome_bpn_offsets.push(genome_bpn_offsets.last().unwrap() + total_neurons);
+    }
+
+    debug_assert_eq!(
+        genomes_bits_flat.len(),
+        *genome_bpn_offsets.last().unwrap(),
+        "genomes_bits_flat length ({}) != expected total neurons ({})",
+        genomes_bits_flat.len(),
+        genome_bpn_offsets.last().unwrap(),
+    );
+
+    // Get first genome's config to determine pool sizing (use per-cluster max bits)
     let first_neurons = &genomes_neurons_flat[0..num_clusters];
+    let first_per_neuron_bits = &genomes_bits_flat[0..genome_bpn_offsets[1]];
+    let first_bits_per_cluster = per_cluster_max_bits(first_per_neuron_bits, first_neurons);
 
     // Calculate memory budget and pool size
-    // Override with WNN_BATCH_SIZE env var for testing (e.g., WNN_BATCH_SIZE=10)
     let batch_size = std::env::var("WNN_BATCH_SIZE")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or_else(|| {
-            // Dynamic calculation based on memory budget
             let budget_gb = get_available_memory_gb() * 0.6;
             let cpu_cores = rayon::current_num_threads();
             let (_, computed_batch) = calculate_pool_size(
-                first_bits,
+                &first_bits_per_cluster,
                 first_neurons,
                 num_clusters,
                 budget_gb,
@@ -2499,16 +2583,15 @@ pub fn evaluate_genomes_parallel_hybrid(
     // Pre-compute connection offsets and sizes for each genome (handles variable configs)
     let use_provided_connections = !genomes_connections_flat.is_empty();
 
-    // Compute per-genome connection offsets (for variable-sized genomes)
+    // Compute per-genome connection offsets: conn_size = sum of per-neuron bits
     let mut conn_offsets: Vec<usize> = Vec::with_capacity(num_genomes);
     let mut conn_sizes: Vec<usize> = Vec::with_capacity(num_genomes);
     let mut running_offset = 0usize;
     for genome_idx in 0..num_genomes {
         conn_offsets.push(running_offset);
-        let genome_offset = genome_idx * num_clusters;
-        let conn_size: usize = (0..num_clusters)
-            .map(|i| genomes_bits_flat[genome_offset + i] * genomes_neurons_flat[genome_offset + i])
-            .sum();
+        let bpn_start = genome_bpn_offsets[genome_idx];
+        let bpn_end = genome_bpn_offsets[genome_idx + 1];
+        let conn_size: usize = genomes_bits_flat[bpn_start..bpn_end].iter().sum();
         conn_sizes.push(conn_size);
         running_offset += conn_size;
     }
@@ -2568,14 +2651,24 @@ pub fn evaluate_genomes_parallel_hybrid(
             .map(|local_idx| {
                 let genome_idx = batch_start + local_idx;
 
-                // Get this genome's config
+                // Get this genome's config (per-neuron bits + per-cluster neurons)
                 let genome_offset = genome_idx * num_clusters;
-                let bits_per_cluster = &genomes_bits_flat[genome_offset..genome_offset + num_clusters];
                 let neurons_per_cluster = &genomes_neurons_flat[genome_offset..genome_offset + num_clusters];
 
-                // Build config groups for THIS genome
-                // Coalescing is now supported even with provided connections by reorganizing them
-                let groups = build_groups(bits_per_cluster, neurons_per_cluster);
+                // Extract per-neuron bits for this genome
+                let bpn_start = genome_bpn_offsets[genome_idx];
+                let bpn_end = genome_bpn_offsets[genome_idx + 1];
+                let per_neuron_bits = &genomes_bits_flat[bpn_start..bpn_end];
+
+                // Compute per-cluster max bits (for build_groups and GPU dispatch)
+                let bits_per_cluster = per_cluster_max_bits(per_neuron_bits, neurons_per_cluster);
+
+                // Build neuron metadata for per-neuron training
+                let (cluster_neuron_starts, neuron_conn_offsets) =
+                    build_neuron_metadata(per_neuron_bits, neurons_per_cluster);
+
+                // Build config groups for THIS genome (using per-cluster max bits)
+                let groups = build_groups(&bits_per_cluster, neurons_per_cluster);
 
                 // Build cluster-to-group mapping for THIS genome
                 let mut cluster_to_group: Vec<(usize, usize)> = vec![(0, 0); num_clusters];
@@ -2590,43 +2683,31 @@ pub fn evaluate_genomes_parallel_hybrid(
                     .map(|g| GroupMemory::new(g.total_neurons(), g.bits))
                     .collect();
 
-                // Get connections for this genome
-                let connections_flat: Vec<i64> = if use_provided_connections {
+                // Get original per-neuron connections for this genome
+                let original_connections: Vec<i64> = if use_provided_connections {
                     let conn_offset = conn_offsets[genome_idx];
                     let conn_size = conn_sizes[genome_idx];
-                    let original_connections = &genomes_connections_flat[conn_offset..conn_offset + conn_size];
-
-                    // If coalescing is enabled, reorganize connections to match group layout
-                    if use_coalesced_groups() {
-                        reorganize_connections_for_coalescing(
-                            original_connections,
-                            bits_per_cluster,
-                            neurons_per_cluster,
-                            &groups,
-                        )
-                    } else {
-                        original_connections.to_vec()
-                    }
+                    genomes_connections_flat[conn_offset..conn_offset + conn_size].to_vec()
                 } else {
-                    // Generate random connections based on THIS genome's config
+                    // Generate random per-neuron connections
                     use rand::{Rng, SeedableRng};
                     let mut rng = rand::rngs::SmallRng::seed_from_u64((genome_idx * 12345) as u64);
-                    let mut conns = Vec::new();
-                    for group in &groups {
-                        for _ in 0..group.total_neurons() {
-                            for _ in 0..group.bits {
-                                conns.push(rng.gen_range(0..total_input_bits as i64));
-                            }
-                        }
+                    let total_conn: usize = per_neuron_bits.iter().sum();
+                    let mut conns = Vec::with_capacity(total_conn);
+                    for _ in 0..total_conn {
+                        conns.push(rng.gen_range(0..total_input_bits as i64));
                     }
                     conns
                 };
 
-                // Train this genome
+                // Train this genome using per-neuron bits
                 train_genome_in_slot(
                     &memories,
                     &groups,
-                    &connections_flat,
+                    &original_connections,
+                    per_neuron_bits,
+                    &cluster_neuron_starts,
+                    &neuron_conn_offsets,
                     &cluster_to_group,
                     train_input_bits,
                     train_targets,
@@ -2636,8 +2717,16 @@ pub fn evaluate_genomes_parallel_hybrid(
                     total_input_bits,
                 );
 
+                // Build GPU-padded connections (per-neuron → group layout with padding)
+                let gpu_connections = reorganize_connections_for_gpu(
+                    &original_connections,
+                    per_neuron_bits,
+                    neurons_per_cluster,
+                    &groups,
+                );
+
                 // Export for GPU using THIS genome's groups
-                let export = export_genome_for_gpu(&memories, &groups, &connections_flat);
+                let export = export_genome_for_gpu(&memories, &groups, &gpu_connections);
 
                 (genome_idx, export)
             })
