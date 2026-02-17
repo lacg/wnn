@@ -416,10 +416,6 @@ def main():
 		gating_neurons_per_cluster=args.gating_neurons,
 		gating_bits_per_neuron=args.gating_bits,
 		gating_threshold=args.gating_threshold,
-		# Adaptation configuration (Baldwin effect)
-		synaptogenesis_enabled=args.synaptogenesis,
-		neurogenesis_enabled=args.neurogenesis,
-		adapt_warmup=args.adapt_warmup,
 	)
 
 	# Create dashboard client if URL provided
