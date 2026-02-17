@@ -26,7 +26,7 @@ use axum::{
 };
 use tokio::sync::broadcast;
 use tower_http::cors::CorsLayer;
-use tower_http::services::ServeDir;
+use tower_http::services::{ServeDir, ServeFile};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use api::AppState;
@@ -58,7 +58,7 @@ async fn main() -> Result<()> {
 
     // Build router
     let app = api::routes(state)
-        .nest_service("/", ServeDir::new("frontend/dist"))
+        .nest_service("/", ServeDir::new("frontend/dist").fallback(ServeFile::new("frontend/dist/index.html")))
         .layer(CorsLayer::permissive());
 
     // Get port from environment or use default
