@@ -2090,8 +2090,23 @@ class GenericTSStrategy(ABC, Generic[T]):
 		tabu_list: deque = deque(maxlen=cfg.tabu_size)
 
 		# All neighbors cache: genomes with their CE and Acc
+		# Re-evaluate initial genome to get actual accuracy (previous phase only passes CE)
+		initial_accuracy: Optional[float] = None
+		if batch_evaluate_fn is not None:
+			try:
+				init_results = batch_evaluate_fn([initial_genome])
+				if init_results:
+					initial_fitness = init_results[0][0]  # CE from this eval subset
+					initial_accuracy = init_results[0][1]  # Actual accuracy
+					best_fitness = initial_fitness
+					best_accuracy = initial_accuracy
+					best_ranked_ce = initial_fitness
+					best_ranked_accuracy = initial_accuracy
+			except Exception as e:
+				self._log.warning(f"[{self.name}] Failed to re-evaluate initial genome: {e}")
+
 		all_neighbors: list[tuple[T, float, Optional[float]]] = [
-			(self.clone_genome(initial_genome), initial_fitness, None)
+			(self.clone_genome(initial_genome), initial_fitness, initial_accuracy)
 		]
 
 		# Initial threshold
