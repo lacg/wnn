@@ -802,7 +802,10 @@ fn gpu_forward_heterogeneous(
 		}
 	}
 
-	// Helper: gather connections for a cluster, padding each neuron to max_bits stride
+	// Helper: gather connections for a cluster, PREFIX-padding each neuron to max_bits stride.
+	// PREFIX padding with -1 is critical for heterogeneous bits: the GPU shader computes
+	// address bit positions as (bits_per_neuron - 1 - i), so real connections must be at
+	// the END of the stride to match training's bit positions. The shader skips conn_idx < 0.
 	let gather_cluster_connections = |c: usize, max_bits: usize| -> Vec<i64> {
 		let neurons = neurons_per_cluster[c];
 		let neuron_start = layout.neuron_offsets[c];
@@ -811,11 +814,11 @@ fn gpu_forward_heterogeneous(
 			let global_n = neuron_start + n;
 			let n_bits = bits_per_neuron[global_n];
 			let conn_start = layout.conn_offsets[global_n];
-			out.extend_from_slice(&connections[conn_start..conn_start + n_bits]);
-			// Pad to max_bits with 0 (harmless connection index)
+			// Prefix-pad with -1 (skipped by shader) to align bit positions
 			for _ in n_bits..max_bits {
-				out.push(0);
+				out.push(-1);
 			}
+			out.extend_from_slice(&connections[conn_start..conn_start + n_bits]);
 		}
 		out
 	};
