@@ -1043,13 +1043,20 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			bits_mutation_rate = cfg.mutation_rate if arch_cfg.optimize_bits else 0.0
 			neurons_mutation_rate = cfg.mutation_rate if arch_cfg.optimize_neurons else 0.0
 
+			# fitness_percentile controls selectivity: generate a larger pool,
+			# rank by fitness, keep only the top fraction → return exactly n_needed.
+			# e.g. percentile=0.75 → generate ceil(24/0.75)=32, rank, keep best 24.
+			import math
+			pct = cfg.fitness_percentile if cfg.fitness_percentile and 0 < cfg.fitness_percentile < 1.0 else None
+			generate_count = math.ceil(n_needed / pct) if pct else n_needed
+
 			# Convert 3-tuple population to 2-tuple for Rust
 			rust_population = [(g, ce) for g, ce, _ in population]
 
 			search_result = evaluator.search_offspring(
 				population=rust_population,
-				target_count=n_needed,
-				max_attempts=n_needed * 5,
+				target_count=generate_count,
+				max_attempts=generate_count * 5,
 				accuracy_threshold=threshold,
 				min_bits=arch_cfg.min_bits,
 				max_bits=arch_cfg.max_bits,
@@ -1068,16 +1075,17 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 				mutable_clusters=arch_cfg.mutable_clusters,
 			)
 
-			# Convert to 3-tuples: (genome, ce, accuracy)
+			# Convert to 3-tuples, rank by fitness, return best n_needed
 			offspring = [
 				(g, g._cached_fitness[0], g._cached_fitness[1])
 				for g in search_result.genomes
 				if hasattr(g, '_cached_fitness')
 			]
 
-			# Apply percentile filter if configured
-			if cfg.fitness_percentile and cfg.fitness_percentile > 0 and offspring:
-				offspring = self._apply_percentile_filter(offspring)
+			if pct and len(offspring) > n_needed:
+				scores = self._fitness_calculator.fitness(offspring)
+				ranked = sorted(zip(offspring, scores), key=lambda x: x[1])
+				offspring = [item for item, _ in ranked[:n_needed]]
 
 			return offspring
 
@@ -1491,11 +1499,16 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 			bits_mutation_rate = cfg.mutation_rate if arch_cfg.optimize_bits else 0.0
 			neurons_mutation_rate = cfg.mutation_rate if arch_cfg.optimize_neurons else 0.0
 
-			self._log.debug(f"[{self.name}] Searching {n_neighbors} neighbors from best ranked...")
+			# fitness_percentile: generate larger pool, rank, keep best n_neighbors
+			import math
+			pct = cfg.fitness_percentile if cfg.fitness_percentile and 0 < cfg.fitness_percentile < 1.0 else None
+			generate_count = math.ceil(n_neighbors / pct) if pct else n_neighbors
+
+			self._log.debug(f"[{self.name}] Searching {generate_count} neighbors from best ranked (keeping best {n_neighbors})...")
 			neighbors_raw = evaluator.search_neighbors(
 				genome=best_genome,
-				target_count=n_neighbors,
-				max_attempts=n_neighbors * 5,
+				target_count=generate_count,
+				max_attempts=generate_count * 5,
 				accuracy_threshold=threshold,
 				min_bits=arch_cfg.min_bits,
 				max_bits=arch_cfg.max_bits,
@@ -1512,16 +1525,17 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				mutable_clusters=arch_cfg.mutable_clusters,
 			)
 
-			# Convert to 3-tuples: (genome, ce, accuracy)
+			# Convert to 3-tuples, rank by fitness, return best n_neighbors
 			neighbors = [
 				(g, g._cached_fitness[0], g._cached_fitness[1])
 				for g in neighbors_raw
 				if hasattr(g, '_cached_fitness')
 			]
 
-			# Apply percentile filter if configured
-			if cfg.fitness_percentile and cfg.fitness_percentile > 0 and neighbors:
-				neighbors = self._apply_percentile_filter(neighbors)
+			if pct and len(neighbors) > n_neighbors:
+				scores = self._fitness_calculator.fitness(neighbors)
+				ranked = sorted(zip(neighbors, scores), key=lambda x: x[1])
+				neighbors = [item for item, _ in ranked[:n_neighbors]]
 
 			return neighbors
 
