@@ -501,30 +501,19 @@ class Experiment:
 		result = None
 		was_shutdown = False
 		try:
-			if is_grid_search:
-				# Grid search ignores initial genome/population — evaluates fresh configs
-				result = strategy.optimize(evaluate_fn=None)
-			elif is_adaptation:
-				# Adaptation: takes population, iteratively adapts
-				seed_pop = initial_population or ([initial_genome] if initial_genome else None)
-				result = strategy.optimize(
-					evaluate_fn=None,
-					initial_population=seed_pop,
-					initial_genome=initial_genome,
-				)
-			elif is_ga:
-				seed_pop = initial_population or ([initial_genome] if initial_genome else None)
-				result = strategy.optimize(
-					evaluate_fn=None,
-					initial_population=seed_pop,
-				)
-			else:
-				result = strategy.optimize(
-					evaluate_fn=None,
-					initial_genome=initial_genome,
-					initial_fitness=initial_fitness,
-					initial_neighbors=initial_population,
-				)
+			# Unified dispatch: all strategies accept the same signature.
+			# GA/TS use OptimizationTemplate.optimize() (template method).
+			# GridSearch/Adaptation have their own optimize() with **kwargs.
+			seed_pop = initial_population or ([initial_genome] if initial_genome else None)
+			result = strategy.optimize(
+				evaluate_fn=None,
+				initial_genome=initial_genome,
+				initial_population=seed_pop,
+				initial_fitness=initial_fitness,
+				initial_evals=initial_evals,
+				batch_evaluate_fn=None,
+				initial_neighbors=initial_population,  # TS uses this for neighbor seeding
+			)
 
 			# Check if shutdown was requested (needed for phase status update)
 			from wnn.ram.strategies.connectivity.generic_strategies import StopReason

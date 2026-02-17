@@ -1130,10 +1130,11 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 
 	def optimize(
 		self,
-		evaluate_fn: Callable[['ClusterGenome'], float],
+		evaluate_fn: Callable[['ClusterGenome'], float] = None,
 		initial_genome: Optional['ClusterGenome'] = None,
 		initial_population: Optional[list['ClusterGenome']] = None,
 		batch_evaluate_fn: Optional[Callable[[list['ClusterGenome']], list[tuple[float, float]]]] = None,
+		**kwargs,
 	) -> OptimizerResult['ClusterGenome']:
 		"""
 		Run GA with optional Rust acceleration.
@@ -1223,6 +1224,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			initial_genome=initial_genome,
 			initial_population=initial_population,
 			batch_evaluate_fn=batch_evaluate_fn,
+			**kwargs,
 		)
 
 		# Validation summary (Rust path only: full-data evaluation)
@@ -1548,11 +1550,12 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 
 	def optimize(
 		self,
-		initial_genome: 'ClusterGenome',
-		initial_fitness: Optional[float],
-		evaluate_fn: Callable[['ClusterGenome'], float],
+		initial_genome: 'ClusterGenome' = None,
+		initial_fitness: Optional[float] = None,
+		evaluate_fn: Callable[['ClusterGenome'], float] = None,
 		initial_neighbors: Optional[list['ClusterGenome']] = None,
 		batch_evaluate_fn: Optional[Callable[[list['ClusterGenome']], list[tuple[float, float]]]] = None,
+		**kwargs,
 	) -> OptimizerResult['ClusterGenome']:
 		"""
 		Run TS with optional Rust acceleration.
@@ -1611,6 +1614,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 			evaluate_fn=evaluate_fn,
 			initial_neighbors=initial_neighbors,
 			batch_evaluate_fn=batch_evaluate_fn,
+			**kwargs,
 		)
 
 		# Validation summary (Rust path only: full-data evaluation)

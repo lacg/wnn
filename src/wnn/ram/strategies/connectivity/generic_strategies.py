@@ -1082,7 +1082,11 @@ class TSConfig(OptimizationConfig):
 	diversity_sources_pct: float = 0.0
 
 
-class GenericGAStrategy(ABC, Generic[T]):
+# Late import to avoid circular dependency (OptimizationTemplate imports from this file)
+from wnn.ram.strategies.connectivity.optimization_template import OptimizationTemplate
+
+
+class GenericGAStrategy(OptimizationTemplate[T]):
 	"""
 	Generic Genetic Algorithm strategy.
 
@@ -1101,20 +1105,9 @@ class GenericGAStrategy(ABC, Generic[T]):
 		seed: Optional[int] = None,
 		logger: Optional[Callable[[str], None]] = None,
 		log_level: int = logging.DEBUG,
+		shutdown_check: Optional[Callable[[], bool]] = None,
 	):
-		self._config = config or GAConfig()
-		self._seed = seed
-		# Use OptimizationLogger with optional file logging (DEBUG+ goes to file)
-		self._log = OptimizationLogger(self.name, level=log_level, file_logger=logger)
-		self._rng: Optional[random.Random] = None
-		# Tracker for iteration recording (set via set_tracker)
-		self._tracker: Optional["ExperimentTracker"] = None
-		self._tracker_experiment_id: Optional[int] = None
-
-	def set_tracker(self, tracker: "ExperimentTracker", experiment_id: int, _unused: Optional[int] = None) -> None:
-		"""Set the experiment tracker for iteration recording."""
-		self._tracker = tracker
-		self._tracker_experiment_id = experiment_id
+		super().__init__(config or GAConfig(), seed=seed, logger=logger, log_level=log_level, shutdown_check=shutdown_check)
 
 	@property
 	def config(self) -> GAConfig:
@@ -1123,10 +1116,6 @@ class GenericGAStrategy(ABC, Generic[T]):
 	@property
 	def name(self) -> str:
 		return "GenericGA"
-
-	def _ensure_rng(self) -> None:
-		if self._rng is None:
-			self._rng = random.Random(self._seed)
 
 	# =========================================================================
 	# Abstract genome operations - subclasses must implement
@@ -1151,19 +1140,6 @@ class GenericGAStrategy(ABC, Generic[T]):
 	def create_random_genome(self) -> T:
 		"""Create a new random genome (for population initialization)."""
 		...
-
-	# =========================================================================
-	# Optional genome tracking (subclasses can override)
-	# =========================================================================
-
-	def genome_to_config(self, genome: T) -> Optional["GenomeConfig"]:
-		"""
-		Convert a genome to a GenomeConfig for tracking.
-
-		Override in subclasses to enable genome-level tracking.
-		Returns None by default (genome tracking disabled).
-		"""
-		return None
 
 	# =========================================================================
 	# Hooks for subclass customization
@@ -1213,78 +1189,59 @@ class GenericGAStrategy(ABC, Generic[T]):
 		pass
 
 	# =========================================================================
-	# Core GA loop
+	# Core GA loop (Template Method: called by OptimizationTemplate.optimize())
 	# =========================================================================
 
-	def optimize(
+	def _run_optimization_loop(
 		self,
-		evaluate_fn: Callable[[T], float],
-		initial_genome: Optional[T] = None,
-		initial_population: Optional[list[T]] = None,
-		batch_evaluate_fn: Optional[Callable[[list[T]], list[tuple[float, float]]]] = None,
-		overfitting_callback: Optional[Callable[[T, float], Any]] = None,
-	) -> OptimizerResult[T]:
+		population: list[tuple[T, Optional[float], Optional[float]]],
+		fitness_calculator: Any,
+		early_stopper: EarlyStoppingTracker,
+		**kwargs,
+	) -> tuple[
+		T, list[tuple[int, float]], list[T], list[tuple[float, float]],
+		int, bool, Optional[StopReason], Optional[float], Optional[float],
+	]:
 		"""
-		Run Genetic Algorithm optimization.
+		Run the GA-specific optimization loop.
 
-		Args:
-			evaluate_fn: Function to evaluate a single genome (lower is better)
-			initial_genome: Optional seed genome (used if no initial_population)
-			initial_population: Optional seed population from previous phase
-			batch_evaluate_fn: Optional batch evaluation function returning list[(CE, accuracy)]
-			overfitting_callback: Optional callback for overfitting detection.
-				Called every check_interval generations with (best_genome, best_fitness).
-				Returns OverfittingControl (or any object with early_stop attribute).
-				If early_stop=True, optimization stops with stop_reason=StopReason.OVERFITTING.
-
-		Returns:
-			OptimizerResult with best genome and statistics
+		Receives a seeded population from the base class (with cached evals
+		from previous phase if available), completes it to target size, then
+		runs the standard GA loop: elitism, tournament selection, crossover,
+		mutation.
 		"""
-		self._ensure_rng()
 		cfg = self._config
 
-		# Store for use by _generate_offspring() hook
-		self._batch_evaluate_fn = batch_evaluate_fn
-		self._evaluate_fn = evaluate_fn
+		# Extract strategy-specific kwargs
+		initial_genome = kwargs.get('initial_genome')
+		overfitting_callback = kwargs.get('overfitting_callback')
+		batch_evaluate_fn = self._batch_evaluate_fn
+		evaluate_fn = self._evaluate_fn
 
-		# Create fitness calculator for unified ranking (from OptimizationConfig)
-		fitness_calculator = cfg.create_fitness_calculator()
-		self._fitness_calculator = fitness_calculator
-		self._log.info(f"[{self.name}] Fitness calculator: {fitness_calculator.name}")
-
-		# Threshold continuity: use initial_threshold from config if set (passed from previous phase)
-		# Otherwise, fall back to min_accuracy (first phase)
-		start_threshold = cfg.initial_threshold if cfg.initial_threshold is not None else cfg.min_accuracy
-		# End threshold depends on actual generations vs reference (constant rate)
-		actual_progress = min(1.0, cfg.generations / cfg.threshold_reference)
-		end_threshold = start_threshold + actual_progress * cfg.threshold_delta
-
-		# Helper to get current threshold based on progress
-		def get_threshold(progress: float = 0.0) -> float:
-			if not cfg.progressive_threshold:
-				return start_threshold
-			progress = max(0.0, min(1.0, progress))
-			return start_threshold + progress * cfg.threshold_delta
-
+		# Threshold setup (uses base infrastructure)
+		start_threshold, end_threshold = self._threshold_range(cfg.generations)
 		self._log.info(f"[{self.name}] Progressive threshold: {start_threshold:.2%} → {end_threshold:.2%} (rate: {cfg.threshold_delta/cfg.threshold_reference:.4%}/gen)")
+		initial_threshold = self._compute_threshold(0.0)
 
-		# Build initial population with viable candidates only (accuracy >= threshold at start)
-		initial_threshold = get_threshold(0.0)
-		if initial_population:
-			self._log.info(f"[{self.name}] Seeding population from {len(initial_population)} genomes")
-			# Generator creates mutations of best seed genome
-			def seed_generator() -> T:
-				return self.mutate_genome(self.clone_genome(initial_population[0]), cfg.mutation_rate * 3)
-			population = self._build_viable_population(
-				target_size=cfg.population_size,
-				generator_fn=seed_generator,
-				batch_fn=batch_evaluate_fn,
-				single_fn=evaluate_fn,
-				min_accuracy=initial_threshold,
-				seed_genomes=initial_population,
-			)
+		# Complete population from base's seed_population output
+		if population:
+			# Evaluate any without cached metrics (seeded genomes may need evaluation)
+			population = self._evaluate_population(population, batch_evaluate_fn, evaluate_fn)
+			remaining = cfg.population_size - len(population)
+			if remaining > 0:
+				self._log.info(f"[{self.name}] Filling {remaining} remaining slots from seeded population")
+				best_seed = population[0][0]
+				def seed_fill_generator() -> T:
+					return self.mutate_genome(self.clone_genome(best_seed), cfg.mutation_rate * 3)
+				new_pop = self._build_viable_population(
+					target_size=remaining,
+					generator_fn=seed_fill_generator,
+					batch_fn=batch_evaluate_fn,
+					single_fn=evaluate_fn,
+					min_accuracy=initial_threshold,
+				)
+				population = list(population) + new_pop
 		elif initial_genome is not None:
-			# Generator creates mutations of seed genome
 			def single_seed_generator() -> T:
 				return self.mutate_genome(self.clone_genome(initial_genome), cfg.mutation_rate * 3)
 			population = self._build_viable_population(
@@ -1323,14 +1280,8 @@ class GenericGAStrategy(ABC, Generic[T]):
 
 		history = [(0, best_fitness)]
 
-		# Initialize early stopping tracker
-		early_stop_config = EarlyStoppingConfig(
-			patience=cfg.patience,
-			check_interval=cfg.check_interval,
-			min_improvement_pct=cfg.min_improvement_pct,
-		)
-		early_stopper = EarlyStoppingTracker(early_stop_config, self._log, self.name)
-		early_stopper.reset(best_fitness)
+		# Initialize early stopping tracker (uses base infrastructure)
+		early_stopper = self._setup_early_stopping(best_fitness)
 
 		# Initialize adaptive scaler for dynamic parameter adjustment
 		adaptive_scaler = AdaptiveScaler(
@@ -1364,7 +1315,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 		for generation in range(cfg.generations):
 			gen_start_time = time.time()
 			# Progressive threshold: gets stricter as generations progress
-			current_threshold = get_threshold(generation / cfg.threshold_reference)
+			current_threshold = self._compute_threshold(generation / cfg.threshold_reference)
 			# Only log if formatted values differ (avoid noise from tiny internal differences)
 			if prev_threshold is not None and f"{prev_threshold:.4%}" != f"{current_threshold:.4%}":
 				self._log.debug(f"[{self.name}] Threshold changed: {prev_threshold:.4%} → {current_threshold:.4%}")
@@ -1570,29 +1521,15 @@ class GenericGAStrategy(ABC, Generic[T]):
 				control = overfitting_callback(best, best_fitness)
 				if hasattr(control, 'early_stop') and control.early_stop:
 					self._log.warning(f"[{self.name}] Overfitting early stop at gen {generation + 1}")
-					# Return early with overfitting stop reason
 					sorted_pop = sorted(population, key=lambda x: x[1])
 					final_population = [self.clone_genome(g) for g, _, _ in sorted_pop]
 					early_pop_metrics = [(ce, acc) for _, ce, acc in sorted_pop]
-					improvement_pct = (initial_fitness - best_fitness) / initial_fitness * 100 if initial_fitness > 0 else 0
-					current_final_threshold = get_threshold(generation / cfg.threshold_reference)
+					current_final_threshold = self._compute_threshold(generation / cfg.threshold_reference)
 					early_bests = fitness_calculator.bests(population)
-					return OptimizerResult(
-						initial_genome=initial_genome if initial_genome else population[0][0],
-						best_genome=best,
-						initial_fitness=initial_fitness,
-						final_fitness=best_fitness,
-						improvement_percent=improvement_pct,
-						iterations_run=generation + 1,
-						method_name=self.name,
-						history=history,
-						early_stopped=True,
-						stop_reason=StopReason.OVERFITTING,
-						final_population=final_population,
-						population_metrics=early_pop_metrics,
-						initial_accuracy=initial_accuracy,
-						final_accuracy=early_bests.best_acc.accuracy,
-						final_threshold=current_final_threshold,
+					return (
+						best, history, final_population, early_pop_metrics,
+						generation + 1, True, StopReason.OVERFITTING,
+						early_bests.best_acc.accuracy, current_final_threshold,
 					)
 
 			# Update previous best for next iteration's delta computation
@@ -1633,7 +1570,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 		diversity_change = final_ce_spread - initial_ce_spread
 
 		# Compute final threshold for next phase continuity
-		final_threshold = get_threshold(generation / cfg.threshold_reference) if cfg.generations > 0 else start_threshold
+		final_threshold = self._compute_threshold(generation / cfg.threshold_reference) if cfg.generations > 0 else self._compute_threshold(0.0)
 
 		self._log.info(f"[{self.name}] Analysis Summary:")
 		self._log.info(f"  CE improvement: {initial_fitness:.4f} → {best_fitness:.4f} ({(1 - best_fitness/initial_fitness)*100:+.2f}%)")
@@ -1643,32 +1580,14 @@ class GenericGAStrategy(ABC, Generic[T]):
 		self._log.info(f"  Improvement rate: {improved_iterations}/{total_gens} ({improvement_rate:.1f}%)")
 		self._log.info(f"  Final threshold: {final_threshold:.2%} (for next phase)")
 
-		improvement_pct = (initial_fitness - best_fitness) / initial_fitness * 100 if initial_fitness > 0 else 0
+		# Determine stop reason (uses base infrastructure)
+		stop_reason = self._determine_stop_reason(shutdown_requested, early_stopper)
 
-		# Determine stop reason
-		if shutdown_requested:
-			stop_reason = StopReason.SHUTDOWN
-		elif early_stopper.patience_exhausted:
-			stop_reason = StopReason.CONVERGENCE
-		else:
-			stop_reason = None
-
-		return OptimizerResult(
-			initial_genome=initial_genome if initial_genome else population[0][0],
-			best_genome=best,
-			initial_fitness=initial_fitness,
-			final_fitness=best_fitness,
-			improvement_percent=improvement_pct,
-			iterations_run=generation + 1,
-			method_name=self.name,
-			history=history,
-			early_stopped=early_stopper.patience_exhausted or shutdown_requested,
-			stop_reason=stop_reason,
-			final_population=final_population,
-			population_metrics=population_metrics,
-			initial_accuracy=initial_accuracy,
-			final_accuracy=final_accuracy,
-			final_threshold=final_threshold,
+		return (
+			best, history, final_population, population_metrics,
+			generation + 1,
+			early_stopper.patience_exhausted or shutdown_requested,
+			stop_reason, final_accuracy, final_threshold,
 		)
 
 	def _evaluate_population(
@@ -1828,7 +1747,7 @@ class GenericGAStrategy(ABC, Generic[T]):
 		return population[best_idx][0]
 
 
-class GenericTSStrategy(ABC, Generic[T]):
+class GenericTSStrategy(OptimizationTemplate[T]):
 	"""
 	Generic Tabu Search strategy.
 
@@ -1846,20 +1765,9 @@ class GenericTSStrategy(ABC, Generic[T]):
 		seed: Optional[int] = None,
 		logger: Optional[Callable[[str], None]] = None,
 		log_level: int = logging.DEBUG,
+		shutdown_check: Optional[Callable[[], bool]] = None,
 	):
-		self._config = config or TSConfig()
-		self._seed = seed
-		# Use OptimizationLogger with optional file logging (DEBUG+ goes to file)
-		self._log = OptimizationLogger(self.name, level=log_level, file_logger=logger)
-		self._rng: Optional[random.Random] = None
-		# Tracker for iteration recording (set via set_tracker)
-		self._tracker: Optional["ExperimentTracker"] = None
-		self._tracker_experiment_id: Optional[int] = None
-
-	def set_tracker(self, tracker: "ExperimentTracker", experiment_id: int, _unused: Optional[int] = None) -> None:
-		"""Set the experiment tracker for iteration recording."""
-		self._tracker = tracker
-		self._tracker_experiment_id = experiment_id
+		super().__init__(config or TSConfig(), seed=seed, logger=logger, log_level=log_level, shutdown_check=shutdown_check)
 
 	@property
 	def config(self) -> TSConfig:
@@ -1868,10 +1776,6 @@ class GenericTSStrategy(ABC, Generic[T]):
 	@property
 	def name(self) -> str:
 		return "GenericTS"
-
-	def _ensure_rng(self) -> None:
-		if self._rng is None:
-			self._rng = random.Random(self._seed)
 
 	# =========================================================================
 	# Abstract genome operations - subclasses must implement
@@ -1891,19 +1795,6 @@ class GenericTSStrategy(ABC, Generic[T]):
 	def is_tabu_move(self, move: Any, tabu_list: list[Any]) -> bool:
 		"""Check if a move is tabu (reverses a recent move)."""
 		...
-
-	# =========================================================================
-	# Optional genome tracking (subclasses can override)
-	# =========================================================================
-
-	def genome_to_config(self, genome: T) -> Optional["GenomeConfig"]:
-		"""
-		Convert a genome to a GenomeConfig for tracking.
-
-		Override in subclasses to enable genome-level tracking.
-		Returns None by default (genome tracking disabled).
-		"""
-		return None
 
 	# =========================================================================
 	# Hooks for subclass customization
@@ -2015,61 +1906,38 @@ class GenericTSStrategy(ABC, Generic[T]):
 		pass
 
 	# =========================================================================
-	# Core TS loop
+	# Core TS loop (Template Method: called by OptimizationTemplate.optimize())
 	# =========================================================================
 
-	def optimize(
+	def _run_optimization_loop(
 		self,
-		initial_genome: T,
-		initial_fitness: float,
-		evaluate_fn: Callable[[T], float],
-		initial_neighbors: Optional[list[T]] = None,
-		batch_evaluate_fn: Optional[Callable[[list[T]], list[tuple[float, float]]]] = None,
-		overfitting_callback: Optional[Callable[[T, float], Any]] = None,
-	) -> OptimizerResult[T]:
+		population: list[tuple[T, Optional[float], Optional[float]]],
+		fitness_calculator: Any,
+		early_stopper: EarlyStoppingTracker,
+		**kwargs,
+	) -> tuple[
+		T, list[tuple[int, float]], list[T], list[tuple[float, float]],
+		int, bool, Optional[StopReason], Optional[float], Optional[float],
+	]:
 		"""
-		Run Tabu Search optimization with fitness-ranked single-path search.
+		Run the TS-specific optimization loop.
 
-		Each iteration generates N neighbors from the best-ranked genome
-		(ranked by the configured fitness calculator: CE, HarmonicRank, etc.).
-
-		Args:
-			initial_genome: Starting genome
-			initial_fitness: Fitness of initial genome
-			evaluate_fn: Function to evaluate a single genome
-			initial_neighbors: Optional seed neighbors from previous phase
-			batch_evaluate_fn: Optional batch evaluation function returning list[(CE, accuracy)]
-			overfitting_callback: Optional callback for overfitting detection.
-
-		Returns:
-			OptimizerResult with best genome, statistics, and final_threshold for next phase
+		Receives kwargs with initial_genome, initial_fitness, initial_neighbors,
+		etc. The population parameter from base's seed_population is typically
+		empty (TS uses initial_neighbors instead of initial_population).
 		"""
-		self._ensure_rng()
 		cfg = self._config
 
-		# Store for use by _generate_neighbors() hook
-		self._batch_evaluate_fn = batch_evaluate_fn
-		self._evaluate_fn = evaluate_fn
+		# Extract strategy-specific kwargs
+		initial_genome = kwargs.get('initial_genome')
+		initial_fitness = kwargs.get('initial_fitness', 0.0)
+		initial_neighbors = kwargs.get('initial_neighbors')
+		overfitting_callback = kwargs.get('overfitting_callback')
+		batch_evaluate_fn = self._batch_evaluate_fn
+		evaluate_fn = self._evaluate_fn
 
-		# Create fitness calculator for unified ranking (from OptimizationConfig)
-		fitness_calculator = cfg.create_fitness_calculator()
-		self._fitness_calculator = fitness_calculator
-		self._log.info(f"[{self.name}] Fitness calculator: {fitness_calculator.name}")
-
-		# Threshold continuity: use initial_threshold from config if set (passed from previous phase)
-		# Otherwise, fall back to min_accuracy (first phase)
-		start_threshold = cfg.initial_threshold if cfg.initial_threshold is not None else cfg.min_accuracy
-		# End threshold depends on actual iterations vs reference (constant rate)
-		actual_progress = min(1.0, cfg.iterations / cfg.threshold_reference)
-		end_threshold = start_threshold + actual_progress * cfg.threshold_delta
-
-		# Helper to get current threshold based on progress
-		def get_threshold(progress: float = 0.0) -> float:
-			if not cfg.progressive_threshold:
-				return start_threshold
-			progress = max(0.0, min(1.0, progress))
-			return start_threshold + progress * cfg.threshold_delta
-
+		# Threshold setup (uses base infrastructure)
+		start_threshold, end_threshold = self._threshold_range(cfg.iterations)
 		self._log.info(f"[{self.name}] Progressive threshold: {start_threshold:.2%} → {end_threshold:.2%} (rate: {cfg.threshold_delta/cfg.threshold_reference:.4%}/iter)")
 
 		# Cache size for total_neighbors
@@ -2110,7 +1978,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 		]
 
 		# Initial threshold
-		current_threshold = get_threshold(0.0)
+		current_threshold = self._compute_threshold(0.0)
 
 		# Seed with initial neighbors if provided
 		if initial_neighbors:
@@ -2163,14 +2031,8 @@ class GenericTSStrategy(ABC, Generic[T]):
 		# Analysis tracking
 		improved_iterations = 0
 
-		# Initialize early stopping tracker
-		early_stop_config = EarlyStoppingConfig(
-			patience=cfg.patience,
-			check_interval=cfg.check_interval,
-			min_improvement_pct=cfg.min_improvement_pct,
-		)
-		early_stopper = EarlyStoppingTracker(early_stop_config, self._log, self.name)
-		early_stopper.reset(best_fitness)
+		# Initialize early stopping tracker (uses base infrastructure)
+		early_stopper = self._setup_early_stopping(best_fitness)
 
 		# Log config
 		diversity_str = f", diversity={cfg.diversity_sources_pct:.0%}" if cfg.diversity_sources_pct > 0 else ""
@@ -2188,7 +2050,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 		for iteration in range(cfg.iterations):
 			iter_start_time = time.time()
 			# Progressive threshold
-			current_threshold = get_threshold(iteration / cfg.threshold_reference)
+			current_threshold = self._compute_threshold(iteration / cfg.threshold_reference)
 			if prev_threshold is not None and f"{prev_threshold:.4%}" != f"{current_threshold:.4%}":
 				self._log.debug(f"[{self.name}] Threshold changed: {prev_threshold:.4%} → {current_threshold:.4%}")
 			prev_threshold = current_threshold
@@ -2425,7 +2287,7 @@ class GenericTSStrategy(ABC, Generic[T]):
 		population_metrics = [(all_neighbors[i][1], all_neighbors[i][2] or 0.0) for i in top_indices]
 
 		# Final threshold (for next phase)
-		final_threshold = get_threshold(iteration / cfg.threshold_reference) if cfg.iterations > 0 else start_threshold
+		final_threshold = self._compute_threshold(iteration / cfg.threshold_reference) if cfg.iterations > 0 else self._compute_threshold(0.0)
 
 		# Log analysis summary
 		total_iters = iteration + 1
@@ -2435,33 +2297,15 @@ class GenericTSStrategy(ABC, Generic[T]):
 		self._log.info(f"  Final population: {len(final_population)} by {fitness_calculator.name}")
 		self._log.info(f"  Final threshold: {final_threshold:.2%} (for next phase)")
 
-		improvement_pct = (start_fitness - best_fitness) / start_fitness * 100 if start_fitness > 0 else 0
-
-		# Determine stop reason
-		if shutdown_requested:
-			stop_reason = StopReason.SHUTDOWN
-		elif early_stopper.patience_exhausted:
-			stop_reason = StopReason.CONVERGENCE
-		else:
-			stop_reason = None
+		# Determine stop reason (uses base infrastructure)
+		stop_reason = self._determine_stop_reason(shutdown_requested, early_stopper)
 
 		# Three independent bests from all seen neighbors
 		ts_bests = fitness_calculator.bests(all_neighbors)
 
-		return OptimizerResult(
-			initial_genome=initial_genome,
-			best_genome=best,
-			initial_fitness=start_fitness,
-			final_fitness=best_fitness,
-			improvement_percent=improvement_pct,
-			iterations_run=iteration + 1,
-			method_name=self.name,
-			history=history,
-			early_stopped=early_stopper.patience_exhausted or shutdown_requested,
-			stop_reason=stop_reason,
-			final_population=final_population,
-			population_metrics=population_metrics,
-			initial_accuracy=None,
-			final_accuracy=ts_bests.best_acc.accuracy,
-			final_threshold=final_threshold,
+		return (
+			best, history, final_population, population_metrics,
+			iteration + 1,
+			early_stopper.patience_exhausted or shutdown_requested,
+			stop_reason, ts_bests.best_acc.accuracy, final_threshold,
 		)
