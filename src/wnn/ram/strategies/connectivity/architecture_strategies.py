@@ -2159,13 +2159,13 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 				evals = [evals[i] for i in sorted_indices]
 				fitness_scores = [fitness_scores[i] for i in sorted_indices]
 
-				# Update bests
-				top_ce = evals[0][0]
-				top_acc = evals[0][1] if len(evals[0]) > 1 else 0.0
-				if top_ce < best_ce:
-					best_ce = top_ce
-					best_acc = top_acc
-					best_genome = population[0].clone()
+				# Update bests independently (CE and accuracy tracked separately, like GA/TS)
+				pop_bests = calculator.bests(pop_tuples)
+				if pop_bests.best_ce.ce < best_ce:
+					best_ce = pop_bests.best_ce.ce
+					best_genome = pop_bests.best_fitness.genome.clone()
+				if pop_bests.best_acc.accuracy > best_acc:
+					best_acc = pop_bests.best_acc.accuracy
 
 				history.append((iteration + 1, best_ce))
 				iter_elapsed = _time.time() - iter_start
