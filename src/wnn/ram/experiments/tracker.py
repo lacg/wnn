@@ -58,6 +58,7 @@ class GenomeRole(str, Enum):
     TOP_K = "top_k"  # Top-k neighbors in TS cache (like GA elites)
     NEIGHBOR = "neighbor"  # Other evaluated neighbors
     CURRENT = "current"  # Current best genome being refined
+    SURVIVOR = "survivor"  # Survived adaptation (not elite, not offspring)
 
 
 class CheckpointType(str, Enum):
