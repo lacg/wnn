@@ -2523,8 +2523,41 @@ pub fn evaluate_genome_hybrid(
             };
 
             if !gpu_success {
-                // CPU fallback - would need to reconstruct memory, skip for now
-                // This shouldn't happen normally as dense Metal usually works
+                // CPU fallback for dense groups: read cells from exported memory words
+                let cpu_start = std::time::Instant::now();
+                all_scores.par_iter_mut().enumerate().for_each(|(ex_idx, scores)| {
+                    let input_start = ex_idx * total_input_bits;
+                    let input_bits = &eval_input_bits[input_start..input_start + total_input_bits];
+
+                    for (local_cluster, &cluster_id) in cluster_ids.iter().enumerate() {
+                        let actual_neurons = if let Some(ref an) = group.actual_neurons {
+                            an[local_cluster] as usize
+                        } else {
+                            group.neurons
+                        };
+
+                        let neuron_base = local_cluster * group.neurons;
+                        let conn_base = group.conn_offset + local_cluster * group.neurons * group.bits;
+
+                        let mut sum = 0.0f32;
+                        for n in 0..actual_neurons {
+                            let conn_start = conn_base + n * group.bits;
+                            let address = compute_address(input_bits, &export.connections[conn_start..], group.bits);
+                            let cell = read_cell(dense_words, neuron_base + n, address, group.words_per_neuron);
+                            sum += match cell {
+                                FALSE => 0.0,
+                                TRUE => 1.0,
+                                _ => empty_value,
+                            };
+                        }
+
+                        scores[cluster_id] = (sum / actual_neurons as f32) as f64;
+                    }
+                });
+                if timing_enabled {
+                    cpu_time_ms += cpu_start.elapsed().as_millis();
+                    cpu_calls += 1;
+                }
             }
         }
     }
