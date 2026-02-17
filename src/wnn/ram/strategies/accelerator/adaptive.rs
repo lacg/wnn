@@ -310,7 +310,8 @@ fn reorganize_connections_for_gpu(
 
     // Total size needed for group layout
     let total_size: usize = groups.iter().map(|g| g.conn_size()).sum();
-    let mut result = vec![0i64; total_size]; // Pad with 0 (harmless connection index)
+    // Initialize with -1 (skipped by GPU shader's `if conn_idx >= 0` check)
+    let mut result = vec![-1i64; total_size];
 
     for group in groups {
         let max_neurons = group.neurons;
@@ -330,11 +331,13 @@ fn reorganize_connections_for_gpu(
                 let n_bits = per_neuron_bits[global_n];
                 let conn_start = neuron_conn_offsets[global_n];
 
-                // Destination in group layout
+                // Destination in group layout: PREFIX-pad with -1, real connections at END.
+                // GPU shader computes address bit i as (max_bits-1-i), so real connections
+                // at the end match training's bit positions (actual_bits-1-i).
                 let dst = group.conn_offset + local_idx * max_neurons * max_bits + n * max_bits;
-
-                // Copy n_bits connections, rest stays 0 (padding)
-                result[dst..dst + n_bits]
+                let pad_size = max_bits - n_bits;
+                // Prefix is already -1 from initialization; copy real connections after it
+                result[dst + pad_size..dst + pad_size + n_bits]
                     .copy_from_slice(&original_connections[conn_start..conn_start + n_bits]);
             }
         }
