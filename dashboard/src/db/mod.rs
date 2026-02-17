@@ -596,6 +596,28 @@ pub mod queries {
             .execute(pool)
             .await?;
 
+        // When flow config changes, recompute max_iterations for pending experiments
+        if let Some(config_val) = config {
+            if let Ok(flow_config) = serde_json::from_value::<crate::models::FlowConfig>(config_val.clone()) {
+                let pending_experiments: Vec<(i64, Option<String>)> = sqlx::query_as(
+                    "SELECT id, phase_type FROM experiments WHERE flow_id = ? AND status = 'pending'"
+                )
+                .bind(id)
+                .fetch_all(pool)
+                .await?;
+
+                for (exp_id, phase_type) in &pending_experiments {
+                    if let Some(max_iters) = compute_max_iterations_from_phase_type(phase_type.as_deref(), &flow_config) {
+                        sqlx::query("UPDATE experiments SET max_iterations = ? WHERE id = ?")
+                            .bind(max_iters)
+                            .bind(exp_id)
+                            .execute(pool)
+                            .await?;
+                    }
+                }
+            }
+        }
+
         // Cascade status changes when flow fails/cancelled
         // Mark any running experiments as failed/cancelled too
         if status == Some("failed") || status == Some("cancelled") {
@@ -970,14 +992,16 @@ pub mod queries {
                 .await?;
                 let flow_config: crate::models::FlowConfig = serde_json::from_str(&config_json)?;
 
-                for (name, sequence_order, phase_type, max_iterations) in &saved_experiments {
+                for (name, sequence_order, phase_type, _old_max_iterations) in &saved_experiments {
+                    // Recompute max_iterations from current flow config instead of using stale DB values
+                    let max_iterations = compute_max_iterations_from_phase_type(phase_type.as_deref(), &flow_config);
                     create_pending_experiment(
                         pool,
                         name,
                         id,
                         *sequence_order,
                         phase_type.as_deref(),
-                        Some(*max_iterations),
+                        max_iterations,
                         &flow_config,
                     ).await?;
                 }
@@ -1015,6 +1039,33 @@ pub mod queries {
             .bind(id)
             .execute(pool)
             .await?;
+
+            // Recompute max_iterations from current flow config for ALL experiments
+            // (flow config may have been edited since experiments were created)
+            let config_json: String = sqlx::query_scalar(
+                "SELECT config_json FROM flows WHERE id = ?"
+            )
+            .bind(id)
+            .fetch_one(pool)
+            .await?;
+            let flow_config: crate::models::FlowConfig = serde_json::from_str(&config_json)?;
+
+            let all_experiments: Vec<(i64, Option<String>)> = sqlx::query_as(
+                "SELECT id, phase_type FROM experiments WHERE flow_id = ?"
+            )
+            .bind(id)
+            .fetch_all(pool)
+            .await?;
+
+            for (exp_id, phase_type) in &all_experiments {
+                if let Some(max_iters) = compute_max_iterations_from_phase_type(phase_type.as_deref(), &flow_config) {
+                    sqlx::query("UPDATE experiments SET max_iterations = ? WHERE id = ?")
+                        .bind(max_iters)
+                        .bind(exp_id)
+                        .execute(pool)
+                        .await?;
+                }
+            }
 
             // Just reset status and pid
             let result = sqlx::query(
@@ -1924,6 +1975,34 @@ pub mod queries {
             "cancelled" => FlowStatus::Cancelled,
             _ => FlowStatus::Pending,
         }
+    }
+
+    /// Compute max_iterations from phase_type and flow config.
+    /// Returns None if phase_type is unknown or config doesn't have the needed params.
+    fn compute_max_iterations_from_phase_type(
+        phase_type: Option<&str>,
+        config: &crate::models::FlowConfig,
+    ) -> Option<i32> {
+        let pt = phase_type?;
+        if pt == "grid_search" {
+            return Some(1);
+        }
+        if pt.starts_with("neurogenesis") || pt.starts_with("synaptogenesis") || pt.starts_with("axonogenesis") {
+            return config.params.get("adaptation_iterations")
+                .and_then(|v| v.as_i64())
+                .map(|v| v as i32);
+        }
+        if pt.starts_with("ga") {
+            return config.params.get("ga_generations")
+                .and_then(|v| v.as_i64())
+                .map(|v| v as i32);
+        }
+        if pt.starts_with("ts") {
+            return config.params.get("ts_iterations")
+                .and_then(|v| v.as_i64())
+                .map(|v| v as i32);
+        }
+        None
     }
 
     // =============================================================================

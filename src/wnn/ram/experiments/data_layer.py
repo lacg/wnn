@@ -519,6 +519,14 @@ class DataLayer:
                     params,
                 )
 
+    def update_experiment_max_iterations(self, experiment_id: int, max_iterations: int) -> None:
+        """Update max_iterations for an experiment."""
+        with self._transaction() as conn:
+            conn.execute(
+                "UPDATE experiments SET max_iterations = ? WHERE id = ?",
+                (max_iterations, experiment_id),
+            )
+
     # =========================================================================
     # Iteration methods
     # =========================================================================

@@ -620,29 +620,35 @@ class Flow:
 		# Create all experiments upfront with pending status (for both new and existing flows)
 		# This ensures experiments exist in DB before we start running them
 		if self.tracker and self._flow_id:
+			adaptation_phase_types = {
+				ExperimentType.NEUROGENESIS: "neurogenesis",
+				ExperimentType.SYNAPTOGENESIS: "synaptogenesis",
+				ExperimentType.AXONOGENESIS: "axonogenesis",
+			}
 			for idx, exp_config in enumerate(cfg.experiments):
+				# Compute correct max_iters from current config
+				if exp_config.experiment_type == ExperimentType.GRID_SEARCH:
+					phase_type = "grid_search"
+					max_iters = 1
+				elif exp_config.experiment_type in adaptation_phase_types:
+					phase_type = adaptation_phase_types[exp_config.experiment_type]
+					max_iters = exp_config.iterations
+				else:
+					opt_target = "bits" if exp_config.optimize_bits else "neurons" if exp_config.optimize_neurons else "connections"
+					phase_type = f"{'ga' if exp_config.experiment_type == ExperimentType.GA else 'ts'}_{opt_target}"
+					max_iters = exp_config.generations if exp_config.experiment_type == ExperimentType.GA else exp_config.iterations
+
 				# Check if experiment already exists for this flow/sequence
 				existing_exp = self.tracker.get_experiment_by_flow_sequence(self._flow_id, idx)
 				if existing_exp:
 					self._experiment_ids[idx] = existing_exp["id"]
-					self.log(f"Found existing experiment {existing_exp['id']}: {exp_config.name} (sequence_order={idx})")
+					# Update max_iterations to match current config (may have changed since creation)
+					try:
+						self.tracker.update_experiment_max_iterations(existing_exp["id"], max_iters)
+					except Exception:
+						pass  # Best-effort update
+					self.log(f"Found existing experiment {existing_exp['id']}: {exp_config.name} (sequence_order={idx}, max_iterations={max_iters})")
 				else:
-					adaptation_phase_types = {
-						ExperimentType.NEUROGENESIS: "neurogenesis",
-						ExperimentType.SYNAPTOGENESIS: "synaptogenesis",
-						ExperimentType.AXONOGENESIS: "axonogenesis",
-					}
-					if exp_config.experiment_type == ExperimentType.GRID_SEARCH:
-						phase_type = "grid_search"
-						max_iters = 1  # Grid search is a single step
-					elif exp_config.experiment_type in adaptation_phase_types:
-						phase_type = adaptation_phase_types[exp_config.experiment_type]
-						max_iters = exp_config.iterations
-					else:
-						opt_target = "bits" if exp_config.optimize_bits else "neurons" if exp_config.optimize_neurons else "connections"
-						phase_type = f"{'ga' if exp_config.experiment_type == ExperimentType.GA else 'ts'}_{opt_target}"
-						max_iters = exp_config.generations if exp_config.experiment_type == ExperimentType.GA else exp_config.iterations
-
 					exp_id = self.tracker.create_pending_experiment(
 						name=exp_config.name,
 						flow_id=self._flow_id,

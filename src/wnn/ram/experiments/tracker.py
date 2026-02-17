@@ -474,6 +474,9 @@ class SqliteTracker(ExperimentTracker):
             experiment_id, current_iteration, best_ce, best_accuracy, checkpoint_id
         )
 
+    def update_experiment_max_iterations(self, experiment_id: int, max_iterations: int) -> None:
+        self._db.update_experiment_max_iterations(experiment_id, max_iterations)
+
     def record_iteration(
         self,
         experiment_id: int,
