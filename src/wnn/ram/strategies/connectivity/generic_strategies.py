@@ -1070,7 +1070,7 @@ class GAConfig(OptimizationConfig):
 class TSConfig(OptimizationConfig):
 	"""Configuration for Tabu Search optimization."""
 	iterations: int = 100
-	neighbors_per_iter: int = 20
+	neighbors_per_iter: int = 50
 	tabu_size: int = 10
 	# Total neighbors cache for seeding next phase (top K by fitness)
 	total_neighbors_size: int = 50
@@ -1079,7 +1079,7 @@ class TSConfig(OptimizationConfig):
 	# Cooperative multi-start: fraction of top genomes used as neighbor sources.
 	# 0.0 = single best (classic TS), 0.2 = top 20% of cache as reference set.
 	# Based on Crainic, Toulouse & Gendreau (1997) cooperative TS taxonomy.
-	diversity_sources_pct: float = 0.0
+	diversity_sources_pct: float = 0.2
 
 
 # Late import to avoid circular dependency (OptimizationTemplate imports from this file)
