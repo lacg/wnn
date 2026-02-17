@@ -2102,6 +2102,8 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 		best_genome = population[0].clone()
 		best_ce = float('inf')
 		best_acc = 0.0
+		evals = [(float('inf'), 0.0)] * len(population)
+		fitness_scores = [float('inf')] * len(population)
 		history = []
 		shutdown_requested = [False]
 		start_time = _time.time()
