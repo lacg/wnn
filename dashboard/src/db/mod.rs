@@ -606,10 +606,22 @@ pub mod queries {
                 .fetch_all(pool)
                 .await?;
 
+                // Propagate flow config values to pending experiments
+                let new_pop_size = flow_config.params.get("population_size")
+                    .and_then(|v| v.as_i64())
+                    .map(|v| v as i32);
+
                 for (exp_id, phase_type) in &pending_experiments {
                     if let Some(max_iters) = compute_max_iterations_from_phase_type(phase_type.as_deref(), &flow_config) {
                         sqlx::query("UPDATE experiments SET max_iterations = ? WHERE id = ?")
                             .bind(max_iters)
+                            .bind(exp_id)
+                            .execute(pool)
+                            .await?;
+                    }
+                    if let Some(pop) = new_pop_size {
+                        sqlx::query("UPDATE experiments SET population_size = ? WHERE id = ?")
+                            .bind(pop)
                             .bind(exp_id)
                             .execute(pool)
                             .await?;
