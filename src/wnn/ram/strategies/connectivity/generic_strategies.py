@@ -1905,6 +1905,45 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 		"""
 		pass
 
+	def _select_top_n(
+		self,
+		candidates: list[tuple[T, float, Optional[float]]],
+		n: int,
+		fitness_calculator: Any,
+	) -> list[tuple[T, float, Optional[float]]]:
+		"""Select top N candidates by fitness ranking."""
+		if len(candidates) <= n:
+			return candidates
+		valid = [(g, ce, acc or 0.0) for g, ce, acc in candidates if acc is not None]
+		if valid:
+			ranked = fitness_calculator.rank(valid)
+			# Map ranked genomes back to original tuples (preserving Optional[float] acc)
+			id_to_tuple = {id(g): (g, ce, acc) for g, ce, acc in candidates}
+			result = []
+			for g, _ in ranked[:n]:
+				if id(g) in id_to_tuple:
+					result.append(id_to_tuple[id(g)])
+			return result if len(result) == n else candidates[:n]
+		return sorted(candidates, key=lambda x: x[1])[:n]
+
+	def _find_best_ranked(
+		self,
+		pop: list[tuple[T, float, Optional[float]]],
+		fitness_calculator: Any,
+	) -> tuple[T, float, Optional[float]]:
+		"""Find best genome in population by fitness ranking."""
+		valid = [(g, ce, acc or 0.0) for g, ce, acc in pop if acc is not None]
+		if valid:
+			ranked = fitness_calculator.rank(valid)
+			best_obj = ranked[0][0]
+			for g, ce, acc in pop:
+				if g is best_obj:
+					return self.clone_genome(g), ce, acc
+		# Fallback: best by CE
+		best_idx = min(range(len(pop)), key=lambda i: pop[i][1])
+		g, ce, acc = pop[best_idx]
+		return self.clone_genome(g), ce, acc
+
 	# =========================================================================
 	# Core TS loop (Template Method: called by OptimizationTemplate.optimize())
 	# =========================================================================
@@ -1920,7 +1959,12 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 		int, bool, Optional[StopReason], Optional[float], Optional[float],
 	]:
 		"""
-		Run the TS-specific optimization loop.
+		Run the population-based TS optimization loop (μ + λ strategy).
+
+		Each iteration:
+		1. Select top 20% of population as elite sources
+		2. Each source generates equal offspring (total = neighbors_per_iter)
+		3. Merge population + offspring, rank, keep top population_size
 
 		Receives kwargs with initial_genome, initial_fitness, initial_neighbors,
 		etc. The population parameter from base's seed_population is typically
@@ -1940,47 +1984,32 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 		start_threshold, end_threshold = self._threshold_range(cfg.iterations)
 		self._log.info(f"[{self.name}] Progressive threshold: {start_threshold:.2%} → {end_threshold:.2%} (rate: {cfg.threshold_delta/cfg.threshold_reference:.4%}/iter)")
 
-		# Cache size for total_neighbors
-		cache_size = cfg.total_neighbors_size or cfg.neighbors_per_iter
-
-		# Best genome tracking (single path by fitness ranking)
-		best_ranked_genome = self.clone_genome(initial_genome)
-		best_ranked_ce = initial_fitness
-		best_ranked_accuracy: Optional[float] = None
-
-		# Global best (by CE for return value / early stopping)
-		best = self.clone_genome(initial_genome)
-		best_fitness = initial_fitness
-		best_accuracy: Optional[float] = None
-		start_fitness = initial_fitness
+		# Population size (fixed throughout the run)
+		pop_size = cfg.total_neighbors_size or cfg.neighbors_per_iter
 
 		# Single tabu list
 		tabu_list: deque = deque(maxlen=cfg.tabu_size)
 
-		# All neighbors cache: genomes with their CE and Acc
 		# Re-evaluate initial genome to get actual accuracy (previous phase only passes CE)
 		initial_accuracy: Optional[float] = None
 		if batch_evaluate_fn is not None:
 			try:
 				init_results = batch_evaluate_fn([initial_genome])
 				if init_results:
-					initial_fitness = init_results[0][0]  # CE from this eval subset
-					initial_accuracy = init_results[0][1]  # Actual accuracy
-					best_fitness = initial_fitness
-					best_accuracy = initial_accuracy
-					best_ranked_ce = initial_fitness
-					best_ranked_accuracy = initial_accuracy
+					initial_fitness = init_results[0][0]
+					initial_accuracy = init_results[0][1]
 			except Exception as e:
 				self._log.warning(f"[{self.name}] Failed to re-evaluate initial genome: {e}")
 
-		all_neighbors: list[tuple[T, float, Optional[float]]] = [
+		# === Build initial population ===
+		pop: list[tuple[T, float, Optional[float]]] = [
 			(self.clone_genome(initial_genome), initial_fitness, initial_accuracy)
 		]
 
 		# Initial threshold
 		current_threshold = self._compute_threshold(0.0)
 
-		# Seed with initial neighbors if provided
+		# Seed with initial neighbors if provided (e.g., from previous GA phase)
 		if initial_neighbors:
 			self._log.info(f"[{self.name}] Seeding from {len(initial_neighbors)} neighbors")
 			if batch_evaluate_fn is not None:
@@ -1991,40 +2020,33 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 				seed_fitness = [evaluate_fn(g) for g in initial_neighbors]
 				seed_accuracy = [None] * len(initial_neighbors)
 
-			# Add all seed neighbors to the cache
 			for g, f, a in zip(initial_neighbors, seed_fitness, seed_accuracy):
-				all_neighbors.append((self.clone_genome(g), f, a))
+				pop.append((self.clone_genome(g), f, a))
 
-			# Find best by fitness ranking
-			valid_for_rank = [(g, ce, acc or 0.0) for g, ce, acc in all_neighbors if acc is not None]
-			if valid_for_rank:
-				ranked = fitness_calculator.rank(valid_for_rank)
-				best_ranked_obj = ranked[0][0]
-				best_ranked_genome = self.clone_genome(best_ranked_obj)
-				# Look up CE/acc from the original tuples
-				for g, ce, acc in valid_for_rank:
-					if g is best_ranked_obj:
-						best_ranked_ce = ce
-						best_ranked_accuracy = acc
-						break
-			else:
-				# Fallback: best by CE
-				best_ce_idx = min(range(len(seed_fitness)), key=lambda i: seed_fitness[i])
-				best_ranked_genome = self.clone_genome(initial_neighbors[best_ce_idx])
-				best_ranked_ce = seed_fitness[best_ce_idx]
-				best_ranked_accuracy = seed_accuracy[best_ce_idx]
+		# Trim initial population to pop_size by fitness ranking
+		if len(pop) > pop_size:
+			pop = self._select_top_n(pop, pop_size, fitness_calculator)
 
-			# Update global best (by CE)
-			best_ce_idx = min(range(len(all_neighbors)), key=lambda i: all_neighbors[i][1])
-			if all_neighbors[best_ce_idx][1] < best_fitness:
-				best = self.clone_genome(all_neighbors[best_ce_idx][0])
-				best_fitness = all_neighbors[best_ce_idx][1]
-				best_accuracy = all_neighbors[best_ce_idx][2]
+		# Global best tracking (by CE for return value / early stopping)
+		best = self.clone_genome(initial_genome)
+		best_fitness = initial_fitness
+		best_accuracy: Optional[float] = initial_accuracy
+		start_fitness = initial_fitness
 
-			# Log seed summary
-			best_acc_val = max((a for _, _, a in all_neighbors if a is not None), default=None)
-			self._log.info(f"[{self.name}] Seed: best_ce={best_fitness:.4f}, best_acc={best_acc_val:.2%}" if best_acc_val else
-						   f"[{self.name}] Seed: best_ce={best_fitness:.4f}, best_acc=N/A")
+		# Find best from initial population
+		for g, ce, acc in pop:
+			if ce < best_fitness:
+				best = self.clone_genome(g)
+				best_fitness = ce
+				best_accuracy = acc
+
+		# Best ranked genome (by fitness calculator)
+		best_ranked_genome, best_ranked_ce, best_ranked_accuracy = self._find_best_ranked(pop, fitness_calculator)
+
+		# Log seed summary
+		best_acc_val = max((a for _, _, a in pop if a is not None), default=None)
+		self._log.info(f"[{self.name}] Seed: best_ce={best_fitness:.4f}, best_acc={best_acc_val:.2%}, pop={len(pop)}" if best_acc_val else
+					   f"[{self.name}] Seed: best_ce={best_fitness:.4f}, best_acc=N/A, pop={len(pop)}")
 
 		history = [(0, best_fitness)]
 
@@ -2035,9 +2057,11 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 		early_stopper = self._setup_early_stopping(best_fitness)
 
 		# Log config
-		diversity_str = f", diversity={cfg.diversity_sources_pct:.0%}" if cfg.diversity_sources_pct > 0 else ""
-		self._log.info(f"[{self.name}] Config: neighbors={cfg.neighbors_per_iter} (single path by {fitness_calculator.name}), "
-					   f"iters={cfg.iterations}, cache={cache_size}{diversity_str}")
+		elite_pct = cfg.diversity_sources_pct if cfg.diversity_sources_pct > 0 else 1.0
+		n_elite_est = max(1, int(pop_size * elite_pct))
+		offspring_per_elite = max(1, cfg.neighbors_per_iter // n_elite_est)
+		self._log.info(f"[{self.name}] Config: pop={pop_size}, elite={elite_pct:.0%} ({n_elite_est} sources × {offspring_per_elite} offspring), "
+					   f"iters={cfg.iterations}, fitness={fitness_calculator.name}")
 
 		# Track threshold changes
 		prev_threshold: Optional[float] = None
@@ -2069,25 +2093,24 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 				shutdown_requested = True
 				break
 
-			# Generate neighbors — cooperative multi-start or single-source
-			if cfg.diversity_sources_pct > 0 and len(all_neighbors) > 1:
-				# Cooperative multi-start: top N% of cache as equal reference set
-				n_sources = max(1, int(len(all_neighbors) * cfg.diversity_sources_pct))
-				# Rank by fitness to pick the reference set
-				valid_for_div = [(g, ce, acc or 0.0) for g, ce, acc in all_neighbors if acc is not None]
-				if valid_for_div:
-					ranked_div = fitness_calculator.rank(valid_for_div)
-					sources = [self.clone_genome(g) for g, _ in ranked_div[:n_sources]]
+			# === (μ + λ) selection: generate offspring from elite sources ===
+			if cfg.diversity_sources_pct > 0 and len(pop) > 1:
+				# Population-based TS: top 20% of population as sources
+				n_sources = max(1, int(len(pop) * cfg.diversity_sources_pct))
+				valid_for_rank = [(g, ce, acc or 0.0) for g, ce, acc in pop if acc is not None]
+				if valid_for_rank:
+					ranked = fitness_calculator.rank(valid_for_rank)
+					sources = [self.clone_genome(g) for g, _ in ranked[:n_sources]]
 				else:
-					sources = [self.clone_genome(all_neighbors[0][0])]
+					sources = [self.clone_genome(pop[0][0])]
 					n_sources = 1
 
-				# Equal share per source, total capped at neighbors_per_iter
-				total_nbrs = cfg.neighbors_per_iter
-				per_source = max(1, total_nbrs // n_sources)
-				remainder = total_nbrs - (per_source * n_sources)
+				# Equal share per source
+				total_offspring = cfg.neighbors_per_iter
+				per_source = max(1, total_offspring // n_sources)
+				remainder = total_offspring - (per_source * n_sources)
 
-				all_generated: list[tuple] = []
+				offspring: list[tuple[T, float, Optional[float]]] = []
 				for si, source in enumerate(sources):
 					n = per_source + (1 if si < remainder else 0)
 					batch = self._generate_neighbors(
@@ -2095,11 +2118,10 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 						threshold=current_threshold, iteration=iteration,
 						tabu_list=tabu_list,
 					)
-					all_generated.extend(batch)
-				viable = all_generated
+					offspring.extend(batch)
 			else:
-				# Classic TS: all neighbors from single best-ranked genome
-				viable = self._generate_neighbors(
+				# Classic TS: all offspring from single best-ranked genome
+				offspring = self._generate_neighbors(
 					best_genome=best_ranked_genome,
 					n_neighbors=cfg.neighbors_per_iter,
 					threshold=current_threshold,
@@ -2107,46 +2129,27 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 					tabu_list=tabu_list,
 				)
 
-			if not viable:
+			if not offspring:
 				continue
 
-			# Add all viable to the total neighbors cache
-			for n, f, a in viable:
-				all_neighbors.append((self.clone_genome(n), f, a))
+			# === (μ + λ) replacement: merge population + offspring, keep top pop_size ===
+			combined: list[tuple[T, float, Optional[float]]] = []
+			for g, ce, acc in pop:
+				combined.append((self.clone_genome(g), ce, acc))
+			for g, ce, acc in offspring:
+				combined.append((self.clone_genome(g), ce, acc))
 
-			# Cap cache by fitness ranking
-			if len(all_neighbors) > cache_size * 2:
-				valid_for_cap = [(g, ce, acc or 0.0) for g, ce, acc in all_neighbors if acc is not None]
-				if valid_for_cap:
-					ranked_for_cap = fitness_calculator.rank(valid_for_cap)
-					# Build a lookup: genome identity -> (ce, acc) from original tuples
-					genome_data = {id(g): (ce, acc) for g, ce, acc in valid_for_cap}
-					all_neighbors = [
-						(g, genome_data[id(g)][0], genome_data[id(g)][1])
-						for g, _ in ranked_for_cap[:cache_size]
-					]
-				else:
-					all_neighbors = sorted(all_neighbors, key=lambda x: x[1])[:cache_size]
+			pop = self._select_top_n(combined, pop_size, fitness_calculator)
 
-			# Update best_ranked by fitness ranking (includes all neighbors)
-			valid_for_rank = [(g, ce, acc or 0.0) for g, ce, acc in all_neighbors if acc is not None]
-			if valid_for_rank:
-				ranked = fitness_calculator.rank(valid_for_rank)
-				best_ranked_obj = ranked[0][0]
-				best_ranked_genome = self.clone_genome(best_ranked_obj)
-				# Look up CE/acc from original tuples
-				for g, ce, acc in valid_for_rank:
-					if g is best_ranked_obj:
-						best_ranked_ce = ce
-						best_ranked_accuracy = acc
-						break
+			# Update best_ranked from new population
+			best_ranked_genome, best_ranked_ce, best_ranked_accuracy = self._find_best_ranked(pop, fitness_calculator)
 
 			# Update global best (by CE)
-			for n, f, a in viable:
-				if f < best_fitness:
-					best = self.clone_genome(n)
-					best_fitness = f
-					best_accuracy = a
+			for g, ce, acc in pop:
+				if ce < best_fitness:
+					best = self.clone_genome(g)
+					best_fitness = ce
+					best_accuracy = acc
 					improved_iterations += 1
 
 			history.append((iteration + 1, best_fitness))
@@ -2156,24 +2159,15 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 			ranked_acc_str = f"{best_ranked_accuracy:.2%}" if best_ranked_accuracy is not None else "N/A"
 			self._log.info(f"[{self.name}] Iter {iteration + 1:0{iter_width}d}/{cfg.iterations}: "
 						   f"best_ranked=(CE={best_ranked_ce:.4f}, Acc={ranked_acc_str}), "
-						   f"best_ce={best_fitness:.4f}")
+						   f"best_ce={best_fitness:.4f}, pop={len(pop)}")
 
 			# Record iteration to tracker (if set)
 			if self._tracker and self._tracker_experiment_id:
 				try:
-					# Compute top-k stats from all_neighbors by fitness ranking
-					valid_neighbors = [(g, ce, acc) for g, ce, acc in all_neighbors if acc is not None]
-					if valid_neighbors:
-						ranked_for_stats = fitness_calculator.rank(valid_neighbors)
-						top_k = ranked_for_stats[:cache_size]
-						top_k_count = len(top_k)
-						top_k_avg_ce = sum(ce for (_, ce, _) in valid_neighbors[:top_k_count]) / top_k_count
-						valid_accs = [acc for _, _, acc in valid_neighbors[:top_k_count] if acc is not None]
-						top_k_avg_acc = sum(valid_accs) / len(valid_accs) if valid_accs else None
-					else:
-						top_k_count = len(all_neighbors)
-						top_k_avg_ce = sum(f for _, f, _ in all_neighbors) / len(all_neighbors) if all_neighbors else None
-						top_k_avg_acc = None
+					# Compute population stats
+					pop_avg_ce = sum(ce for _, ce, _ in pop) / len(pop) if pop else None
+					valid_accs = [acc for _, _, acc in pop if acc is not None]
+					pop_avg_acc = sum(valid_accs) / len(valid_accs) if valid_accs else None
 
 					# Get baseline and patience info for dashboard
 					baseline_ce = early_stopper._best_fitness if hasattr(early_stopper, '_best_fitness') else None
@@ -2181,19 +2175,19 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 					delta_previous = best_fitness - prev_best_fitness
 					patience_counter = early_stopper._patience_counter if hasattr(early_stopper, '_patience_counter') else 0
 
-					# Three independent bests from potentially different genomes
-					iter_bests = fitness_calculator.bests(all_neighbors)
+					# Three independent bests from population
+					iter_bests = fitness_calculator.bests(pop)
 
 					iteration_id = self._tracker.record_iteration(
 						experiment_id=self._tracker_experiment_id,
 						iteration_num=iteration + 1,
 						best_ce=iter_bests.best_ce.ce,
 						best_accuracy=iter_bests.best_acc.accuracy,
-						avg_ce=top_k_avg_ce,
-						avg_accuracy=top_k_avg_acc,
-						elite_count=top_k_count,
-						offspring_count=len(viable),
-						offspring_viable=len(viable),
+						avg_ce=pop_avg_ce,
+						avg_accuracy=pop_avg_acc,
+						elite_count=len(pop),
+						offspring_count=len(offspring),
+						offspring_viable=len(offspring),
 						fitness_threshold=current_threshold,
 						elapsed_secs=time.time() - iter_start_time,
 						baseline_ce=baseline_ce,
@@ -2201,31 +2195,15 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 						delta_previous=delta_previous,
 						patience_counter=patience_counter,
 						patience_max=cfg.patience,
-						candidates_total=len(all_neighbors),
+						candidates_total=len(pop) + len(offspring),
 					)
 
 					# Record genome evaluations (if genome_to_config is implemented)
 					if iteration_id and self._tracker_experiment_id and HAS_TRACKER and GenomeRole is not None:
 						evaluations = []
 
-						# Record current best genome
-						best_config = self.genome_to_config(best)
-						if best_config is not None:
-							best_genome_id = self._tracker.get_or_create_genome(
-								self._tracker_experiment_id, best_config
-							)
-							evaluations.append({
-								"iteration_id": iteration_id,
-								"genome_id": best_genome_id,
-								"position": 0,
-								"role": GenomeRole.CURRENT,
-								"ce": best_fitness,
-								"accuracy": best_accuracy if best_accuracy is not None else 0.0,
-								"elite_rank": 0,
-							})
-
-						# Record ALL top-k neighbors (no dedup — same config may have different CE/acc)
-						for pos, (genome, ce, acc) in enumerate(all_neighbors[:cache_size]):
+						# Record population members as TOP_K
+						for pos, (genome, ce, acc) in enumerate(pop):
 							config = self.genome_to_config(genome)
 							if config is not None:
 								genome_id = self._tracker.get_or_create_genome(
@@ -2234,15 +2212,15 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 								evaluations.append({
 									"iteration_id": iteration_id,
 									"genome_id": genome_id,
-									"position": pos + 1,
+									"position": pos,
 									"role": GenomeRole.TOP_K,
 									"ce": ce,
 									"accuracy": acc if acc is not None else 0.0,
-									"elite_rank": pos + 1,
+									"elite_rank": pos,
 								})
 
-						# Record ALL new viable neighbors
-						for pos, (genome, ce, acc) in enumerate(viable):
+						# Record offspring as NEIGHBOR
+						for pos, (genome, ce, acc) in enumerate(offspring):
 							config = self.genome_to_config(genome)
 							if config is not None:
 								genome_id = self._tracker.get_or_create_genome(
@@ -2251,7 +2229,7 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 								evaluations.append({
 									"iteration_id": iteration_id,
 									"genome_id": genome_id,
-									"position": cache_size + pos + 1,
+									"position": len(pop) + pos,
 									"role": GenomeRole.NEIGHBOR,
 									"ce": ce,
 									"accuracy": acc if acc is not None else 0.0,
@@ -2276,15 +2254,9 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 			# Update previous best for next iteration's delta computation
 			prev_best_fitness = best_fitness
 
-		# === Build final_population: top K by fitness (unified ranking) ===
-		neighbor_tuples = [
-			(i, f, a or 0.0) for i, (g, f, a) in enumerate(all_neighbors)
-		]
-		neighbor_scores = fitness_calculator.fitness(neighbor_tuples)
-		scored = sorted(range(len(neighbor_scores)), key=lambda i: neighbor_scores[i])
-		top_indices = scored[:cache_size]
-		final_population = [self.clone_genome(all_neighbors[i][0]) for i in top_indices]
-		population_metrics = [(all_neighbors[i][1], all_neighbors[i][2] or 0.0) for i in top_indices]
+		# === Build final_population from current population ===
+		final_population = [self.clone_genome(g) for g, _, _ in pop]
+		population_metrics = [(ce, acc or 0.0) for _, ce, acc in pop]
 
 		# Final threshold (for next phase)
 		final_threshold = self._compute_threshold(iteration / cfg.threshold_reference) if cfg.iterations > 0 else self._compute_threshold(0.0)
@@ -2300,8 +2272,8 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 		# Determine stop reason (uses base infrastructure)
 		stop_reason = self._determine_stop_reason(shutdown_requested, early_stopper)
 
-		# Three independent bests from all seen neighbors
-		ts_bests = fitness_calculator.bests(all_neighbors)
+		# Three independent bests from final population
+		ts_bests = fitness_calculator.bests(pop)
 
 		return (
 			best, history, final_population, population_metrics,
