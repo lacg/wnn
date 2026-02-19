@@ -1177,7 +1177,7 @@
           {/if}
 
           {#if others.length > 0}
-            <h3>Other Genomes ({others.length})</h3>
+            <h3>Offspring ({others.length})</h3>
             <div class="genome-table-scroll">
               <table class="genome-table">
                 <thead>

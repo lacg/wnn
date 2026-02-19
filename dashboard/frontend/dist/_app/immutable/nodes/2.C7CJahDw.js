@@ -1,0 +1,1 @@
+import{R as t}from"../chunks/BUApaBEI.js";function r(e,o){throw new t(e,o.toString())}function n(){throw r(302,"/flows")}const l=Object.freeze(Object.defineProperty({__proto__:null,load:n},Symbol.toStringTag,{value:"Module"}));export{l as universal};
