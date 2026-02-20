@@ -277,6 +277,7 @@ class ArchitectureStrategyMixin:
 			early_stopped=result.early_stopped,
 			stop_reason=result.stop_reason,
 			final_population=result.final_population,
+			population_metrics=result.population_metrics,
 			initial_accuracy=result.initial_accuracy,
 			final_accuracy=bests.best_acc.accuracy,
 			final_threshold=result.final_threshold,
