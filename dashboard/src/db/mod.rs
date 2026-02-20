@@ -799,8 +799,14 @@ pub mod queries {
         Ok(())
     }
 
-    /// Delete all data for an experiment (iterations, genome_evaluations, genomes, checkpoints, validation_summaries)
+    /// Delete all data for an experiment (iterations, genome_evaluations, genomes, checkpoints, validation_summaries, gating_runs)
     async fn delete_experiment_data(pool: &DbPool, exp_id: i64) -> Result<()> {
+        // Delete gating runs for this experiment
+        sqlx::query("DELETE FROM gating_runs WHERE experiment_id = ?")
+            .bind(exp_id)
+            .execute(pool)
+            .await?;
+
         // Delete validation summaries for this experiment
         sqlx::query("DELETE FROM validation_summaries WHERE experiment_id = ?")
             .bind(exp_id)
@@ -867,6 +873,93 @@ pub mod queries {
         }
 
         Ok(())
+    }
+
+    /// Delete a single experiment (must be pending status).
+    /// Cascades to all child data, then re-numbers remaining experiments.
+    pub async fn delete_experiment(pool: &DbPool, exp_id: i64) -> Result<bool> {
+        // Verify experiment exists and get its flow_id and status
+        let row = sqlx::query("SELECT flow_id, status FROM experiments WHERE id = ?")
+            .bind(exp_id)
+            .fetch_optional(pool)
+            .await?;
+
+        let Some(row) = row else { return Ok(false) };
+        let status: String = row.get("status");
+        let flow_id: Option<i64> = row.get("flow_id");
+
+        if status != "pending" {
+            anyhow::bail!("Can only delete pending experiments (current status: {})", status);
+        }
+
+        // Delete all child data
+        delete_experiment_data(pool, exp_id).await?;
+
+        // Delete the experiment itself
+        sqlx::query("DELETE FROM experiments WHERE id = ?")
+            .bind(exp_id)
+            .execute(pool)
+            .await?;
+
+        // Re-number remaining experiments for this flow to close gaps
+        if let Some(fid) = flow_id {
+            let remaining_ids: Vec<i64> = sqlx::query_scalar(
+                "SELECT id FROM experiments WHERE flow_id = ? ORDER BY sequence_order"
+            )
+            .bind(fid)
+            .fetch_all(pool)
+            .await?;
+
+            for (idx, eid) in remaining_ids.iter().enumerate() {
+                sqlx::query("UPDATE experiments SET sequence_order = ? WHERE id = ?")
+                    .bind(idx as i32)
+                    .bind(eid)
+                    .execute(pool)
+                    .await?;
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// Reorder experiments within a flow.
+    /// `experiment_ids` must contain all experiment IDs for the flow, in the desired order.
+    pub async fn reorder_experiments(pool: &DbPool, flow_id: i64, experiment_ids: &[i64]) -> Result<bool> {
+        // Get all experiment IDs for this flow
+        let existing_ids: Vec<i64> = sqlx::query_scalar(
+            "SELECT id FROM experiments WHERE flow_id = ? ORDER BY sequence_order"
+        )
+        .bind(flow_id)
+        .fetch_all(pool)
+        .await?;
+
+        // Validate: same count and same set of IDs
+        if existing_ids.len() != experiment_ids.len() {
+            anyhow::bail!(
+                "Expected {} experiment IDs, got {}",
+                existing_ids.len(),
+                experiment_ids.len()
+            );
+        }
+
+        let mut expected: Vec<i64> = existing_ids.clone();
+        expected.sort();
+        let mut provided: Vec<i64> = experiment_ids.to_vec();
+        provided.sort();
+        if expected != provided {
+            anyhow::bail!("Provided experiment IDs don't match the flow's experiments");
+        }
+
+        // Update sequence_order for each experiment
+        for (idx, eid) in experiment_ids.iter().enumerate() {
+            sqlx::query("UPDATE experiments SET sequence_order = ? WHERE id = ?")
+                .bind(idx as i32)
+                .bind(eid)
+                .execute(pool)
+                .await?;
+        }
+
+        Ok(true)
     }
 
     pub async fn list_flow_experiments(pool: &DbPool, flow_id: i64) -> Result<Vec<Experiment>> {

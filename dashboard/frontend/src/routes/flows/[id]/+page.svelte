@@ -112,7 +112,7 @@
   let editingExpIndex: number | null = null;
   let editingExp: {
     name: string;
-    experiment_type: 'ga' | 'ts';
+    experiment_type: string;
     optimize_bits: boolean;
     optimize_neurons: boolean;
     optimize_connections: boolean;
@@ -120,11 +120,14 @@
   let showAddPhase = false;
   let newPhase = {
     name: '',
-    experiment_type: 'ga' as 'ga' | 'ts',
+    experiment_type: 'ga' as string,
     optimize_bits: false,
     optimize_neurons: true,
     optimize_connections: false
   };
+
+  // Types that don't need Optimize radios
+  $: newPhaseHidesOptimize = ['grid_search', 'neurogenesis', 'synaptogenesis', 'axonogenesis'].includes(newPhase.experiment_type);
 
   // Edit form state
   let editConfig = {
@@ -343,18 +346,53 @@
 
   async function deleteExperiment(index: number) {
     if (!flow || !canEditExperiment(index)) return;
-    const exp = experiments[index];
+    const exp = displayExperiments[index];
     if (!exp) return;
     if (!confirm(`Delete "${exp.name}"? This cannot be undone.`)) return;
 
     saving = true;
     try {
-      // TODO: Add DELETE /api/experiments/:id endpoint
-      // For now, just show a message
-      error = 'Experiment deletion not yet implemented';
+      const res = await fetch(`/api/experiments/${exp.id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Failed to delete experiment');
+      }
       await loadFlow();
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to delete';
+    } finally {
+      saving = false;
+    }
+  }
+
+  async function moveExperiment(index: number, direction: -1 | 1) {
+    if (!flow) return;
+    const newIndex = index + direction;
+    if (newIndex < 0 || newIndex >= displayExperiments.length) return;
+
+    // Swap in local array to get new order
+    const reordered = [...displayExperiments];
+    [reordered[index], reordered[newIndex]] = [reordered[newIndex], reordered[index]];
+    const experimentIds = reordered.map(e => e.id);
+
+    saving = true;
+    try {
+      const res = await fetch(`/api/flows/${flowId}/experiments/reorder`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ experiment_ids: experimentIds })
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Failed to reorder');
+      }
+
+      // Update from response
+      const updated = await res.json();
+      experiments = Array.isArray(updated) ? updated : [];
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Failed to reorder';
     } finally {
       saving = false;
     }
@@ -1339,34 +1377,50 @@
               </div>
               <div class="form-group">
                 <label>Type</label>
-                <select bind:value={newPhase.experiment_type}>
+                <select bind:value={newPhase.experiment_type} on:change={() => {
+                  if (newPhase.experiment_type === 'grid_search') {
+                    newPhase.optimize_neurons = true;
+                    newPhase.optimize_bits = true;
+                    newPhase.optimize_connections = false;
+                  } else if (['neurogenesis', 'synaptogenesis', 'axonogenesis'].includes(newPhase.experiment_type)) {
+                    newPhase.optimize_neurons = false;
+                    newPhase.optimize_bits = false;
+                    newPhase.optimize_connections = false;
+                  }
+                }}>
                   <option value="ga">GA (Genetic Algorithm)</option>
                   <option value="ts">TS (Tabu Search)</option>
+                  <option value="grid_search">Grid Search</option>
+                  <option value="neurogenesis">Neurogenesis</option>
+                  <option value="synaptogenesis">Synaptogenesis</option>
+                  <option value="axonogenesis">Axonogenesis</option>
                 </select>
               </div>
             </div>
-            <div class="form-row">
-              <div class="form-group">
-                <label>Optimize</label>
-                <div class="checkbox-row">
-                  <label class="checkbox-label">
-                    <input type="radio" name="new-optimize" checked={newPhase.optimize_neurons}
-                           on:change={() => { newPhase.optimize_neurons = true; newPhase.optimize_bits = false; newPhase.optimize_connections = false; }} />
-                    Neurons
-                  </label>
-                  <label class="checkbox-label">
-                    <input type="radio" name="new-optimize" checked={newPhase.optimize_bits}
-                           on:change={() => { newPhase.optimize_neurons = false; newPhase.optimize_bits = true; newPhase.optimize_connections = false; }} />
-                    Bits
-                  </label>
-                  <label class="checkbox-label">
-                    <input type="radio" name="new-optimize" checked={newPhase.optimize_connections}
-                           on:change={() => { newPhase.optimize_neurons = false; newPhase.optimize_bits = false; newPhase.optimize_connections = true; }} />
-                    Connections
-                  </label>
+            {#if !newPhaseHidesOptimize}
+              <div class="form-row">
+                <div class="form-group">
+                  <label>Optimize</label>
+                  <div class="checkbox-row">
+                    <label class="checkbox-label">
+                      <input type="radio" name="new-optimize" checked={newPhase.optimize_neurons}
+                             on:change={() => { newPhase.optimize_neurons = true; newPhase.optimize_bits = false; newPhase.optimize_connections = false; }} />
+                      Neurons
+                    </label>
+                    <label class="checkbox-label">
+                      <input type="radio" name="new-optimize" checked={newPhase.optimize_bits}
+                             on:change={() => { newPhase.optimize_neurons = false; newPhase.optimize_bits = true; newPhase.optimize_connections = false; }} />
+                      Bits
+                    </label>
+                    <label class="checkbox-label">
+                      <input type="radio" name="new-optimize" checked={newPhase.optimize_connections}
+                             on:change={() => { newPhase.optimize_neurons = false; newPhase.optimize_bits = false; newPhase.optimize_connections = true; }} />
+                      Connections
+                    </label>
+                  </div>
                 </div>
               </div>
-            </div>
+            {/if}
             <div class="form-actions">
               <button class="btn btn-secondary" on:click={() => showAddPhase = false}>Cancel</button>
               <button class="btn btn-primary" on:click={addExperiment} disabled={saving}>
@@ -1381,6 +1435,7 @@
         <table>
           <thead>
             <tr>
+              <th class="col-reorder"></th>
               <th class="col-order">#</th>
               <th class="col-name">Name</th>
               <th class="col-type">Type</th>
@@ -1398,10 +1453,20 @@
               {@const isPending = exp.status === 'pending'}
               {@const canEdit = canEditExperiment(i)}
               {@const isEditingName = editingExpIndex === i}
-              {@const expType = exp.phase_type?.startsWith('ga') ? 'GA' : exp.phase_type?.startsWith('ts') ? 'TS' : '—'}
-              {@const optimizeTarget = exp.phase_type?.includes('bits') ? 'Bits' : exp.phase_type?.includes('neurons') ? 'Neurons' : exp.phase_type?.includes('connections') ? 'Conn' : '—'}
+              {@const isGridSearch = exp.phase_type === 'grid_search'}
+              {@const isAdapt = ['neurogenesis', 'synaptogenesis', 'axonogenesis'].includes(exp.phase_type ?? '')}
+              {@const expType = isGridSearch ? 'GRID' : isAdapt ? exp.phase_type?.toUpperCase()?.slice(0, 5) ?? '—' : exp.phase_type?.startsWith('ga') ? 'GA' : exp.phase_type?.startsWith('ts') ? 'TS' : '—'}
+              {@const optimizeTarget = isGridSearch ? '' : isAdapt ? '' : exp.phase_type?.includes('bits') ? 'Bits' : exp.phase_type?.includes('neurons') ? 'Neurons' : exp.phase_type?.includes('connections') ? 'Conn' : '—'}
               {@const expLink = getExperimentLink(exp)}
               <tr class:row-running={isRunning} class:row-completed={isCompleted} class:row-pending={isPending}>
+                <td class="col-reorder">
+                  {#if isPending && canEdit}
+                    <div class="reorder-buttons">
+                      <button class="move-btn" on:click={() => moveExperiment(i, -1)} disabled={i === 0 || saving} title="Move up">&uarr;</button>
+                      <button class="move-btn" on:click={() => moveExperiment(i, 1)} disabled={i === displayExperiments.length - 1 || saving} title="Move down">&darr;</button>
+                    </div>
+                  {/if}
+                </td>
                 <td class="col-order">
                   <span class="order-badge" class:order-completed={isCompleted} class:order-running={isRunning}>
                     {#if isCompleted}✓{:else}{i + 1}{/if}
@@ -1416,8 +1481,8 @@
                   </a>
                 </td>
                 <td class="col-type">
-                  <span class="type-badge" class:type-ga={expType === 'GA'} class:type-ts={expType === 'TS'}>{expType}</span>
-                  <span class="target-badge">{optimizeTarget}</span>
+                  <span class="type-badge" class:type-ga={expType === 'GA'} class:type-ts={expType === 'TS'} class:type-grid={isGridSearch} class:type-adapt={isAdapt}>{expType}</span>
+                  {#if optimizeTarget}<span class="target-badge">{optimizeTarget}</span>{/if}
                 </td>
                 <td class="col-iters">
                   {#if isPending && canEdit}
@@ -2108,6 +2173,7 @@
     border-bottom: none;
   }
 
+  .experiments-table .col-reorder { width: 44px; text-align: center; padding: 0.25rem !important; }
   .experiments-table .col-order { width: 40px; text-align: center; }
   .experiments-table .col-name { min-width: 200px; text-align: left; }
   .experiments-table .col-type { width: 140px; white-space: nowrap; text-align: center; }
@@ -2116,6 +2182,34 @@
   .experiments-table .col-ce { width: 100px; text-align: right; }
   .experiments-table .col-acc { width: 100px; text-align: right; }
   .experiments-table .col-actions { width: 120px; text-align: center; }
+
+  .reorder-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+
+  .move-btn {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 0 4px;
+    font-size: 1rem;
+    line-height: 1.2;
+    transition: all 0.15s;
+  }
+
+  .move-btn:hover:not(:disabled) {
+    background: var(--border);
+    color: var(--text-primary);
+  }
+
+  .move-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
 
   .iters-input {
     width: 70px;
@@ -2246,6 +2340,16 @@
   .type-badge.type-ts {
     background: rgba(16, 185, 129, 0.15);
     color: var(--accent-green);
+  }
+
+  .type-badge.type-grid {
+    background: rgba(245, 158, 11, 0.15);
+    color: var(--accent-yellow, #f59e0b);
+  }
+
+  .type-badge.type-adapt {
+    background: rgba(139, 92, 246, 0.15);
+    color: var(--accent-purple, #8b5cf6);
   }
 
   .target-badge {

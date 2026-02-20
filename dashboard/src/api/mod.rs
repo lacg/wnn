@@ -29,7 +29,7 @@ pub fn routes(state: Arc<AppState>) -> Router {
         // Experiments
         .route("/api/experiments", get(list_experiments).post(create_experiment))
         .route("/api/experiments/current", get(get_current_experiment))
-        .route("/api/experiments/:id", get(get_experiment).patch(update_experiment))
+        .route("/api/experiments/:id", get(get_experiment).patch(update_experiment).delete(delete_experiment))
         .route("/api/experiments/:id/iterations", get(get_experiment_iterations))
         .route("/api/experiments/:id/summaries", get(get_validation_summaries).post(create_validation_summary))
         // Gating runs
@@ -45,6 +45,7 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .route("/api/flows/:id", get(get_flow).patch(update_flow).delete(delete_flow))
         .route("/api/flows/:id/experiments", get(list_flow_experiments).post(add_experiment_to_flow))
         .route("/api/flows/:id/experiments/link", post(link_experiment_to_flow))
+        .route("/api/flows/:id/experiments/reorder", axum::routing::put(reorder_flow_experiments))
         .route("/api/flows/:id/stop", post(stop_flow))
         .route("/api/flows/:id/restart", post(restart_flow))
         .route("/api/flows/:id/pid", patch(update_flow_pid))
@@ -187,6 +188,28 @@ async fn update_experiment(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
         ).into_response(),
+    }
+}
+
+async fn delete_experiment(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    match crate::db::queries::delete_experiment(&state.db, id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Experiment not found"})),
+        ).into_response(),
+        Err(e) => {
+            let msg = e.to_string();
+            let status = if msg.contains("Can only delete pending") {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (status, Json(serde_json::json!({"error": msg}))).into_response()
+        }
     }
 }
 
@@ -970,6 +993,59 @@ async fn add_experiment_to_flow(
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+/// Reorder experiments within a flow
+#[derive(Debug, Deserialize)]
+pub struct ReorderExperimentsRequest {
+    pub experiment_ids: Vec<i64>,
+}
+
+async fn reorder_flow_experiments(
+    State(state): State<Arc<AppState>>,
+    Path(flow_id): Path<i64>,
+    Json(req): Json<ReorderExperimentsRequest>,
+) -> impl IntoResponse {
+    // Verify flow exists and is not running
+    let flow = match crate::db::queries::get_flow(&state.db, flow_id).await {
+        Ok(Some(f)) => f,
+        Ok(None) => return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Flow not found"})),
+        ).into_response(),
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    };
+
+    if flow.status == FlowStatus::Running {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Cannot reorder experiments while flow is running"})),
+        ).into_response();
+    }
+
+    match crate::db::queries::reorder_experiments(&state.db, flow_id, &req.experiment_ids).await {
+        Ok(true) => {
+            // Return updated experiment list
+            match crate::db::queries::list_flow_experiments(&state.db, flow_id).await {
+                Ok(experiments) => (StatusCode::OK, Json(experiments)).into_response(),
+                Err(e) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": e.to_string()})),
+                ).into_response(),
+            }
+        }
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Flow not found"})),
+        ).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": e.to_string()})),
         ).into_response(),
     }
