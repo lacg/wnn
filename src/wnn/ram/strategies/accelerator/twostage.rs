@@ -23,7 +23,8 @@ use crate::bitwise_ramlm::{
 /// Created once per experiment configuration. Holds:
 /// - Cluster mapping (token → group)
 /// - Stage 1 data: context → cluster_id bits (bitwise prediction)
-/// - Stage 2 data: added in Sprint 2
+/// - Stage 2 selector data: K separate per-group datasets (context-only input)
+/// - Stage 2 concat data: single dataset with wider input (context + cluster_id bits)
 pub struct TwoStageTokenCache {
     // ── Cluster mapping ──────────────────────────────────────────────
     pub k: usize,                          // Number of token-groups
@@ -46,6 +47,21 @@ pub struct TwoStageTokenCache {
     pub stage1_eval_subsets: Vec<BitwiseEvalSubset>,
     pub stage1_full_train: BitwiseSubset,
     pub stage1_full_eval: BitwiseEvalSubset,
+
+    // ── Stage 2: within-group prediction ─────────────────────────────
+    /// Bit patterns for within-group indices: [max_cluster_size * bits_per_within_index] (MSB-first)
+    pub stage2_within_bits: Vec<u8>,
+
+    // Stage 2 — selector mode: K separate datasets (context-only input)
+    pub stage2_selector_train: Vec<BitwiseSubset>,     // [K] one per group
+    pub stage2_selector_eval: Vec<BitwiseEvalSubset>,  // [K] one per group
+
+    // Stage 2 — input_concat mode: single dataset, wider input (context + cluster_id bits)
+    pub stage2_concat_input_bits: usize,               // context_input_bits + bits_per_cluster_id
+    pub stage2_concat_full_train: BitwiseSubset,
+    pub stage2_concat_full_eval: BitwiseEvalSubset,
+    pub stage2_concat_train_subsets: Vec<BitwiseSubset>,
+    pub stage2_concat_eval_subsets: Vec<BitwiseEvalSubset>,
 
     // ── Vocab-level (for combined CE in Sprint 3) ────────────────────
     pub vocab_size: usize,
@@ -139,12 +155,103 @@ impl TwoStageTokenCache {
             context_input_bits, bits_per_cluster_id, &cluster_of, num_eval_parts,
         );
 
-        let eval_subset_n: usize = stage1_eval_subsets.iter().map(|s| s.num_examples).sum();
+        // ── Build Stage 2 within_bits table: [max_cluster_size * bits_per_within_index] ──
+        let mut stage2_within_bits = vec![0u8; max_cluster_size * bits_per_within_index];
+        for idx in 0..max_cluster_size {
+            for b in 0..bits_per_within_index {
+                stage2_within_bits[idx * bits_per_within_index + b] =
+                    ((idx >> (bits_per_within_index - 1 - b)) & 1) as u8;
+            }
+        }
+
+        // ── Encode Stage 2 selector data (K per-group datasets) ──────
+        let stage2_selector_train: Vec<BitwiseSubset> = (0..k)
+            .map(|g| {
+                Self::encode_stage2_selector(
+                    &train_tokens, context_size, bits_per_token,
+                    context_input_bits, bits_per_within_index,
+                    &cluster_of, &index_in_cluster, g,
+                    true, // is_train
+                ).0
+            })
+            .collect();
+
+        let stage2_selector_eval: Vec<BitwiseEvalSubset> = (0..k)
+            .map(|g| {
+                Self::encode_stage2_selector(
+                    &eval_tokens, context_size, bits_per_token,
+                    context_input_bits, bits_per_within_index,
+                    &cluster_of, &index_in_cluster, g,
+                    false, // is_eval
+                ).1
+            })
+            .collect();
+
+        // ── Encode Stage 2 concat data (single wider-input dataset) ──
+        let stage2_concat_input_bits = context_input_bits + bits_per_cluster_id;
+
+        let (concat_full_input, _concat_full_targets, concat_full_tb, concat_full_n) =
+            Self::encode_stage2_concat_sequence(
+                &train_tokens, context_size, bits_per_token,
+                context_input_bits, bits_per_cluster_id, bits_per_within_index,
+                &cluster_of, &index_in_cluster,
+            );
+        let (concat_full_packed, concat_full_wpe) =
+            pack_input_bits(&concat_full_input, concat_full_n, stage2_concat_input_bits);
+        drop(concat_full_input);
+        let stage2_concat_full_train = BitwiseSubset {
+            input_bits: Vec::new(),
+            packed_input: concat_full_packed,
+            target_bits: concat_full_tb,
+            num_examples: concat_full_n,
+            words_per_example: concat_full_wpe,
+        };
+
+        let stage2_concat_train_subsets = Self::split_and_encode_stage2_concat(
+            &train_tokens, context_size, bits_per_token,
+            context_input_bits, bits_per_cluster_id, bits_per_within_index,
+            &cluster_of, &index_in_cluster, num_parts, true,
+        );
+
+        let (concat_eval_input, concat_eval_targets, _, concat_eval_n) =
+            Self::encode_stage2_concat_sequence(
+                &eval_tokens, context_size, bits_per_token,
+                context_input_bits, bits_per_cluster_id, bits_per_within_index,
+                &cluster_of, &index_in_cluster,
+            );
+        let (concat_eval_packed, concat_eval_wpe) =
+            pack_input_bits(&concat_eval_input, concat_eval_n, stage2_concat_input_bits);
+        drop(concat_eval_input);
+        let stage2_concat_full_eval = BitwiseEvalSubset {
+            packed_input: concat_eval_packed,
+            targets: concat_eval_targets,
+            num_examples: concat_eval_n,
+            words_per_example: concat_eval_wpe,
+        };
+
+        let stage2_concat_eval_subsets = Self::split_and_encode_stage2_concat_eval(
+            &eval_tokens, context_size, bits_per_token,
+            context_input_bits, bits_per_cluster_id, bits_per_within_index,
+            &cluster_of, &index_in_cluster, num_eval_parts,
+        );
+
+        // ── Logging ──────────────────────────────────────────────────
+        let s1_eval_n: usize = stage1_eval_subsets.iter().map(|s| s.num_examples).sum();
+        let sel_train_n: usize = stage2_selector_train.iter().map(|s| s.num_examples).sum();
+        let sel_eval_n: usize = stage2_selector_eval.iter().map(|s| s.num_examples).sum();
         eprintln!(
             "[TwoStageCache] K={k}, vocab={vocab_size}, ctx={context_size}, \
              s1_bits={bits_per_cluster_id}, s2_bits={bits_per_within_index}, \
-             max_group={max_cluster_size}, \
-             train={full_n} ({num_parts} parts), eval={full_eval_n} ({num_eval_parts} parts, {eval_subset_n} total)"
+             max_group={max_cluster_size}, concat_input={stage2_concat_input_bits}b"
+        );
+        eprintln!(
+            "  Stage1: train={full_n} ({num_parts} parts), eval={full_eval_n} ({num_eval_parts} parts, {s1_eval_n} total)"
+        );
+        eprintln!(
+            "  Stage2 selector: {k} groups, train={sel_train_n} total, eval={sel_eval_n} total"
+        );
+        eprintln!(
+            "  Stage2 concat: train={concat_full_n} ({num_parts} parts), eval={concat_eval_n} ({num_eval_parts} parts)"
         );
 
         Self {
@@ -163,6 +270,14 @@ impl TwoStageTokenCache {
             stage1_eval_subsets,
             stage1_full_train,
             stage1_full_eval,
+            stage2_within_bits,
+            stage2_selector_train,
+            stage2_selector_eval,
+            stage2_concat_input_bits,
+            stage2_concat_full_train,
+            stage2_concat_full_eval,
+            stage2_concat_train_subsets,
+            stage2_concat_eval_subsets,
             vocab_size,
             num_parts,
             num_eval_parts,
@@ -289,6 +404,264 @@ impl TwoStageTokenCache {
             .collect()
     }
 
+    // ── Stage 2 selector encoding ───────────────────────────────────
+
+    /// Encode a per-group dataset for selector mode.
+    ///
+    /// Filters examples where cluster_of[target] == group_id.
+    /// Input = context bits only (same width as Stage 1).
+    /// Target = index_in_cluster[target].
+    ///
+    /// Returns (train_subset, eval_subset) — caller picks one based on is_train.
+    fn encode_stage2_selector(
+        tokens: &[u32],
+        context_size: usize,
+        bits_per_token: usize,
+        context_input_bits: usize,
+        bits_per_within_index: usize,
+        cluster_of: &[u16],
+        index_in_cluster: &[u16],
+        group_id: usize,
+        is_train: bool,
+    ) -> (BitwiseSubset, BitwiseEvalSubset) {
+        if tokens.len() <= context_size {
+            let empty_train = BitwiseSubset {
+                input_bits: Vec::new(), packed_input: Vec::new(),
+                target_bits: Vec::new(), num_examples: 0, words_per_example: 0,
+            };
+            let empty_eval = BitwiseEvalSubset {
+                packed_input: Vec::new(), targets: Vec::new(),
+                num_examples: 0, words_per_example: 0,
+            };
+            return (empty_train, empty_eval);
+        }
+
+        // Collect indices of examples belonging to this group
+        let total_ex = tokens.len() - context_size;
+        let group_indices: Vec<usize> = (0..total_ex)
+            .filter(|&i| cluster_of[tokens[i + context_size] as usize] as usize == group_id)
+            .collect();
+        let num_ex = group_indices.len();
+
+        if num_ex == 0 {
+            let empty_train = BitwiseSubset {
+                input_bits: Vec::new(), packed_input: Vec::new(),
+                target_bits: Vec::new(), num_examples: 0, words_per_example: 0,
+            };
+            let empty_eval = BitwiseEvalSubset {
+                packed_input: Vec::new(), targets: Vec::new(),
+                num_examples: 0, words_per_example: 0,
+            };
+            return (empty_train, empty_eval);
+        }
+
+        let mut input_bits = vec![false; num_ex * context_input_bits];
+        let mut targets = vec![0u32; num_ex];
+        let mut target_bits = vec![0u8; num_ex * bits_per_within_index];
+
+        // Encode filtered examples (parallel over group examples)
+        input_bits
+            .par_chunks_mut(context_input_bits)
+            .zip(targets.par_iter_mut())
+            .zip(target_bits.par_chunks_mut(bits_per_within_index))
+            .zip(group_indices.par_iter())
+            .for_each(|(((inp, tgt), tb), &orig_idx)| {
+                // Encode context tokens
+                for ctx in 0..context_size {
+                    let token = tokens[orig_idx + ctx] as usize;
+                    let off = ctx * bits_per_token;
+                    for b in 0..bits_per_token {
+                        inp[off + b] = ((token >> (bits_per_token - 1 - b)) & 1) == 1;
+                    }
+                }
+                // Target = within-group index
+                let target_token = tokens[orig_idx + context_size] as usize;
+                let within_idx = index_in_cluster[target_token] as usize;
+                *tgt = within_idx as u32;
+                for b in 0..bits_per_within_index {
+                    tb[b] = ((within_idx >> (bits_per_within_index - 1 - b)) & 1) as u8;
+                }
+            });
+
+        let (packed, wpe) = pack_input_bits(&input_bits, num_ex, context_input_bits);
+
+        let train = if is_train {
+            BitwiseSubset {
+                input_bits: Vec::new(),
+                packed_input: packed.clone(),
+                target_bits,
+                num_examples: num_ex,
+                words_per_example: wpe,
+            }
+        } else {
+            BitwiseSubset {
+                input_bits: Vec::new(), packed_input: Vec::new(),
+                target_bits: Vec::new(), num_examples: 0, words_per_example: 0,
+            }
+        };
+
+        let eval = if !is_train {
+            BitwiseEvalSubset {
+                packed_input: packed,
+                targets,
+                num_examples: num_ex,
+                words_per_example: wpe,
+            }
+        } else {
+            BitwiseEvalSubset {
+                packed_input: Vec::new(), targets: Vec::new(),
+                num_examples: 0, words_per_example: 0,
+            }
+        };
+
+        (train, eval)
+    }
+
+    // ── Stage 2 concat encoding ──────────────────────────────────────
+
+    /// Encode ALL examples for input_concat mode.
+    ///
+    /// Input = context bits + cluster_id bits of TRUE target (teacher forcing).
+    /// Target = index_in_cluster[target].
+    fn encode_stage2_concat_sequence(
+        tokens: &[u32],
+        context_size: usize,
+        bits_per_token: usize,
+        context_input_bits: usize,
+        bits_per_cluster_id: usize,
+        bits_per_within_index: usize,
+        cluster_of: &[u16],
+        index_in_cluster: &[u16],
+    ) -> (Vec<bool>, Vec<u32>, Vec<u8>, usize) {
+        let total_input_bits = context_input_bits + bits_per_cluster_id;
+
+        if tokens.len() <= context_size {
+            return (vec![], vec![], vec![], 0);
+        }
+
+        let num_ex = tokens.len() - context_size;
+        let mut input_bits = vec![false; num_ex * total_input_bits];
+        let mut targets = vec![0u32; num_ex];
+        let mut target_bits = vec![0u8; num_ex * bits_per_within_index];
+
+        input_bits
+            .par_chunks_mut(total_input_bits)
+            .zip(targets.par_iter_mut())
+            .zip(target_bits.par_chunks_mut(bits_per_within_index))
+            .enumerate()
+            .for_each(|(i, ((inp, tgt), tb))| {
+                // Encode context tokens (same as Stage 1)
+                for ctx in 0..context_size {
+                    let token = tokens[i + ctx] as usize;
+                    let off = ctx * bits_per_token;
+                    for b in 0..bits_per_token {
+                        inp[off + b] = ((token >> (bits_per_token - 1 - b)) & 1) == 1;
+                    }
+                }
+                // Append cluster_id bits of TRUE target (teacher forcing)
+                let target_token = tokens[i + context_size] as usize;
+                let cluster_id = cluster_of[target_token] as usize;
+                for b in 0..bits_per_cluster_id {
+                    inp[context_input_bits + b] =
+                        ((cluster_id >> (bits_per_cluster_id - 1 - b)) & 1) == 1;
+                }
+                // Target = within-group index
+                let within_idx = index_in_cluster[target_token] as usize;
+                *tgt = within_idx as u32;
+                for b in 0..bits_per_within_index {
+                    tb[b] = ((within_idx >> (bits_per_within_index - 1 - b)) & 1) as u8;
+                }
+            });
+
+        (input_bits, targets, target_bits, num_ex)
+    }
+
+    /// Split and encode Stage 2 concat subsets (train or eval).
+    fn split_and_encode_stage2_concat(
+        tokens: &[u32],
+        context_size: usize,
+        bits_per_token: usize,
+        context_input_bits: usize,
+        bits_per_cluster_id: usize,
+        bits_per_within_index: usize,
+        cluster_of: &[u16],
+        index_in_cluster: &[u16],
+        num_parts: usize,
+        is_train: bool,
+    ) -> Vec<BitwiseSubset> where Vec<BitwiseSubset>: Sized {
+        // This generic return works for both — but we need separate impls
+        // for BitwiseSubset (train) and BitwiseEvalSubset (eval).
+        // Use a single function that returns both and pick the one needed.
+        let n = tokens.len();
+        let part_size = n / num_parts;
+        let total_input_bits = context_input_bits + bits_per_cluster_id;
+
+        if is_train {
+            (0..num_parts)
+                .map(|i| {
+                    let start = i * part_size;
+                    let end = if i < num_parts - 1 { start + part_size } else { n };
+                    let part = &tokens[start..end];
+                    let (input_bits, _, target_bits, num_ex) =
+                        Self::encode_stage2_concat_sequence(
+                            part, context_size, bits_per_token,
+                            context_input_bits, bits_per_cluster_id, bits_per_within_index,
+                            cluster_of, index_in_cluster,
+                        );
+                    let (packed, wpe) = pack_input_bits(&input_bits, num_ex, total_input_bits);
+                    BitwiseSubset {
+                        input_bits: Vec::new(),
+                        packed_input: packed,
+                        target_bits,
+                        num_examples: num_ex,
+                        words_per_example: wpe,
+                    }
+                })
+                .collect()
+        } else {
+            // Return empty vec — caller should use split_and_encode_stage2_concat_eval
+            Vec::new()
+        }
+    }
+
+    /// Split and encode Stage 2 concat eval subsets.
+    fn split_and_encode_stage2_concat_eval(
+        tokens: &[u32],
+        context_size: usize,
+        bits_per_token: usize,
+        context_input_bits: usize,
+        bits_per_cluster_id: usize,
+        bits_per_within_index: usize,
+        cluster_of: &[u16],
+        index_in_cluster: &[u16],
+        num_parts: usize,
+    ) -> Vec<BitwiseEvalSubset> {
+        let n = tokens.len();
+        let part_size = n / num_parts;
+        let total_input_bits = context_input_bits + bits_per_cluster_id;
+
+        (0..num_parts)
+            .map(|i| {
+                let start = i * part_size;
+                let end = if i < num_parts - 1 { start + part_size } else { n };
+                let part = &tokens[start..end];
+                let (input_bits, targets, _, num_ex) =
+                    Self::encode_stage2_concat_sequence(
+                        part, context_size, bits_per_token,
+                        context_input_bits, bits_per_cluster_id, bits_per_within_index,
+                        cluster_of, index_in_cluster,
+                    );
+                let (packed, wpe) = pack_input_bits(&input_bits, num_ex, total_input_bits);
+                BitwiseEvalSubset {
+                    packed_input: packed,
+                    targets,
+                    num_examples: num_ex,
+                    words_per_example: wpe,
+                }
+            })
+            .collect()
+    }
+
     // ── Rotation ─────────────────────────────────────────────────────
 
     pub fn next_train_idx(&self) -> usize {
@@ -369,6 +742,120 @@ pub fn evaluate_stage1_genomes_full(
         num_genomes,
         &cache.stage1_full_train,
         &cache.stage1_full_eval,
+        memory_mode,
+        neuron_sample_rate,
+        rng_seed,
+        sparse_threshold_override,
+    )
+}
+
+// ── Stage 2 evaluation — selector mode ──────────────────────────────────
+
+/// Evaluate Stage 2 genomes for a single group (selector mode).
+///
+/// Uses per-group filtered data: only examples where target ∈ group_id.
+/// Input = context bits only (same width as Stage 1).
+/// CE reconstruction over cluster_sizes[group_id] possible within-group tokens.
+///
+/// Returns: Vec<(within_ce, within_accuracy, bit_acc)> per genome.
+pub fn evaluate_stage2_selector_genomes(
+    cache: &TwoStageTokenCache,
+    bits_per_neuron_flat: &[usize],
+    neurons_per_cluster_flat: &[usize],
+    connections_flat: &[i64],
+    num_genomes: usize,
+    group_id: usize,
+    memory_mode: u8,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+    sparse_threshold_override: Option<usize>,
+) -> Vec<(f64, f64, f64)> {
+    let train_subset = &cache.stage2_selector_train[group_id];
+    let eval_subset = &cache.stage2_selector_eval[group_id];
+
+    if eval_subset.num_examples == 0 {
+        return vec![(0.0, 0.0, 0.0); num_genomes];
+    }
+
+    evaluate_genomes_with_params(
+        cache.bits_per_within_index,
+        &cache.stage2_within_bits,
+        cache.cluster_sizes[group_id],
+        bits_per_neuron_flat,
+        neurons_per_cluster_flat,
+        connections_flat,
+        num_genomes,
+        train_subset,
+        eval_subset,
+        memory_mode,
+        neuron_sample_rate,
+        rng_seed,
+        sparse_threshold_override,
+    )
+}
+
+// ── Stage 2 evaluation — input_concat mode ──────────────────────────────
+
+/// Evaluate Stage 2 genomes with input_concat mode (subset rotation).
+///
+/// Uses all examples with wider input: context bits + cluster_id bits.
+/// CE reconstruction over max_cluster_size possible within-group indices.
+///
+/// Returns: Vec<(within_ce, within_accuracy, bit_acc)> per genome.
+pub fn evaluate_stage2_concat_genomes(
+    cache: &TwoStageTokenCache,
+    bits_per_neuron_flat: &[usize],
+    neurons_per_cluster_flat: &[usize],
+    connections_flat: &[i64],
+    num_genomes: usize,
+    train_subset_idx: usize,
+    eval_subset_idx: usize,
+    memory_mode: u8,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+    sparse_threshold_override: Option<usize>,
+) -> Vec<(f64, f64, f64)> {
+    let train_subset = &cache.stage2_concat_train_subsets[train_subset_idx % cache.num_parts];
+    let eval_subset = &cache.stage2_concat_eval_subsets[eval_subset_idx % cache.num_eval_parts];
+    evaluate_genomes_with_params(
+        cache.bits_per_within_index,
+        &cache.stage2_within_bits,
+        cache.max_cluster_size,
+        bits_per_neuron_flat,
+        neurons_per_cluster_flat,
+        connections_flat,
+        num_genomes,
+        train_subset,
+        eval_subset,
+        memory_mode,
+        neuron_sample_rate,
+        rng_seed,
+        sparse_threshold_override,
+    )
+}
+
+/// Evaluate Stage 2 genomes with input_concat mode — full data.
+pub fn evaluate_stage2_concat_genomes_full(
+    cache: &TwoStageTokenCache,
+    bits_per_neuron_flat: &[usize],
+    neurons_per_cluster_flat: &[usize],
+    connections_flat: &[i64],
+    num_genomes: usize,
+    memory_mode: u8,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+    sparse_threshold_override: Option<usize>,
+) -> Vec<(f64, f64, f64)> {
+    evaluate_genomes_with_params(
+        cache.bits_per_within_index,
+        &cache.stage2_within_bits,
+        cache.max_cluster_size,
+        bits_per_neuron_flat,
+        neurons_per_cluster_flat,
+        connections_flat,
+        num_genomes,
+        &cache.stage2_concat_full_train,
+        &cache.stage2_concat_full_eval,
         memory_mode,
         neuron_sample_rate,
         rng_seed,

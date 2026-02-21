@@ -4901,6 +4901,88 @@ impl TwoStageCacheWrapper {
     fn cluster_sizes(&self) -> Vec<usize> {
         self.inner.cluster_sizes.clone()
     }
+
+    fn stage2_concat_input_bits(&self) -> usize { self.inner.stage2_concat_input_bits }
+
+    // ── Stage 2 evaluation — selector mode ───────────────────────────
+
+    /// Evaluate Stage 2 genomes for one group (selector mode).
+    ///
+    /// Input = context bits only. Trains+evaluates on examples where target ∈ group_id.
+    #[allow(clippy::too_many_arguments)]
+    fn evaluate_stage2_selector_genomes(
+        &self,
+        py: Python<'_>,
+        bits_per_neuron_flat: Vec<usize>,
+        neurons_per_cluster_flat: Vec<usize>,
+        connections_flat: Vec<i64>,
+        num_genomes: usize,
+        group_id: usize,
+        memory_mode: u8,
+        neuron_sample_rate: f32,
+        rng_seed: u64,
+    ) -> PyResult<Vec<(f64, f64, f64)>> {
+        let override_val = self.sparse_threshold_override;
+        py.allow_threads(|| {
+            Ok(twostage::evaluate_stage2_selector_genomes(
+                &self.inner, &bits_per_neuron_flat, &neurons_per_cluster_flat,
+                &connections_flat, num_genomes, group_id,
+                memory_mode, neuron_sample_rate, rng_seed, override_val,
+            ))
+        })
+    }
+
+    // ── Stage 2 evaluation — input_concat mode ───────────────────────
+
+    /// Evaluate Stage 2 genomes with input_concat mode (subset rotation).
+    ///
+    /// Input = context bits + cluster_id bits (teacher forcing from true target).
+    #[allow(clippy::too_many_arguments)]
+    fn evaluate_stage2_concat_genomes(
+        &self,
+        py: Python<'_>,
+        bits_per_neuron_flat: Vec<usize>,
+        neurons_per_cluster_flat: Vec<usize>,
+        connections_flat: Vec<i64>,
+        num_genomes: usize,
+        train_subset_idx: usize,
+        eval_subset_idx: usize,
+        memory_mode: u8,
+        neuron_sample_rate: f32,
+        rng_seed: u64,
+    ) -> PyResult<Vec<(f64, f64, f64)>> {
+        let override_val = self.sparse_threshold_override;
+        py.allow_threads(|| {
+            Ok(twostage::evaluate_stage2_concat_genomes(
+                &self.inner, &bits_per_neuron_flat, &neurons_per_cluster_flat,
+                &connections_flat, num_genomes, train_subset_idx, eval_subset_idx,
+                memory_mode, neuron_sample_rate, rng_seed, override_val,
+            ))
+        })
+    }
+
+    /// Evaluate Stage 2 genomes with input_concat mode — full data.
+    #[allow(clippy::too_many_arguments)]
+    fn evaluate_stage2_concat_genomes_full(
+        &self,
+        py: Python<'_>,
+        bits_per_neuron_flat: Vec<usize>,
+        neurons_per_cluster_flat: Vec<usize>,
+        connections_flat: Vec<i64>,
+        num_genomes: usize,
+        memory_mode: u8,
+        neuron_sample_rate: f32,
+        rng_seed: u64,
+    ) -> PyResult<Vec<(f64, f64, f64)>> {
+        let override_val = self.sparse_threshold_override;
+        py.allow_threads(|| {
+            Ok(twostage::evaluate_stage2_concat_genomes_full(
+                &self.inner, &bits_per_neuron_flat, &neurons_per_cluster_flat,
+                &connections_flat, num_genomes,
+                memory_mode, neuron_sample_rate, rng_seed, override_val,
+            ))
+        })
+    }
 }
 
 // =============================================================================
