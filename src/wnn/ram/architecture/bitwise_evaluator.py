@@ -21,64 +21,20 @@ Usage:
 
 	# Evaluate genomes (same interface as CachedEvaluator)
 	results = evaluator.evaluate_batch(genomes)
-	# → [(ce, acc, weighted_bit_acc), (ce, acc, weighted_bit_acc), ...]
-	# weighted_bit_acc uses entropy-based weights (balanced bits matter more)
+	# → [EvalResult(ce, accuracy, bit_accuracy), ...]
+	# bit_accuracy uses entropy-based weights (balanced bits matter more)
 """
 
 import random
 import time
-from dataclasses import dataclass, field
 from typing import Optional, Callable
 
-from wnn.ram.core.RAMClusterLayer import bits_needed
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 from wnn.ram.architecture.cached_evaluator import OffspringSearchResult
+from wnn.ram.architecture.base_evaluator import BaseEvaluator, EvalResult, AdaptationConfig
 
 
-@dataclass
-class AdaptationConfig:
-	"""Configuration for training-time architecture adaptation.
-
-	Uses **relative** thresholds that scale with architecture size.
-	See docs/ADAPTATION_MECHANISMS.md for design rationale.
-	"""
-
-	# Synaptogenesis (connection level)
-	synaptogenesis_enabled: bool = False
-	prune_entropy_ratio: float = 0.3       # Prune if entropy < median * ratio
-	grow_fill_utilization: float = 0.5     # Grow if fill > expected_fill * factor
-	grow_error_baseline: float = 0.35      # Grow if error > this (below random 0.5)
-	min_bits: int = 4
-	max_bits: int = 24
-
-	# Neurogenesis (cluster level)
-	neurogenesis_enabled: bool = False
-
-	# Axonogenesis (connection rewiring)
-	axonogenesis_enabled: bool = False
-	axon_entropy_threshold: float = 0.3
-	axon_improvement_factor: float = 1.5
-	axon_rewire_count: int = 2
-	cluster_error_factor: float = 0.7      # Add if error > 0.5 * factor
-	cluster_fill_utilization: float = 0.5  # Add if mean_fill > expected * factor
-	neuron_prune_percentile: float = 0.1   # Bottom 10% candidates for removal
-	neuron_removal_factor: float = 0.5     # Only remove if score < mean * factor
-	max_growth_ratio: float = 1.5          # Max neurons = initial * ratio
-	min_neurons: int = 3
-	max_neurons_per_pass: int = 3
-
-	# Schedule (cosine annealing, warmup-excluded)
-	warmup_generations: int = 10
-	cooldown_iterations: int = 5
-	stabilize_fraction: float = 0.25       # Last 25% of post-warmup: frozen
-	total_generations: int = 250
-
-	# Shared
-	passes_per_eval: int = 1
-	stats_sample_size: int = 10_000
-
-
-class BitwiseEvaluator:
+class BitwiseEvaluator(BaseEvaluator):
 	"""
 	Evaluator for BitwiseRAMLM genomes.
 
@@ -105,35 +61,27 @@ class BitwiseEvaluator:
 		neuron_sample_rate: float = 1.0,
 		adapt_config: Optional[AdaptationConfig] = None,
 	):
-		self._vocab_size = vocab_size
-		self._context_size = context_size
+		super().__init__(
+			train_tokens=train_tokens,
+			eval_tokens=eval_tokens,
+			vocab_size=vocab_size,
+			context_size=context_size,
+			num_parts=num_parts,
+			num_eval_parts=num_eval_parts,
+			seed=seed,
+			memory_mode=memory_mode,
+			neuron_sample_rate=neuron_sample_rate,
+			adapt_config=adapt_config,
+		)
+
+		# BitwiseEvaluator-specific fields
 		self._neurons_per_cluster = neurons_per_cluster
 		self._bits_per_neuron = bits_per_neuron
-		self._num_parts = num_parts
-		self._num_eval_parts = num_eval_parts
 		self._pad_token_id = pad_token_id
-		self._memory_mode = memory_mode
-		self._neuron_sample_rate = neuron_sample_rate
-		self._adapt_config = adapt_config
-		self._generation = 0
-
-		self._train_tokens = train_tokens
-		self._eval_tokens = eval_tokens
-
-		# Compute input dimensions
-		self._bits_per_token = bits_needed(vocab_size)
-		self._total_input_bits = context_size * self._bits_per_token
 
 		# Subset rotation (for Python fallback)
-		if seed is None:
-			seed = int(time.time() * 1000) % (2**32)
-		self._seed = seed
 		self._train_rotation_idx = 0
 		self._eval_rotation_idx = 0
-
-		# Per-generation metrics history for correlation tracking
-		# Each entry: (generation, best_ce, best_acc, best_bit_acc, mean_ce, mean_acc, mean_bit_acc)
-		self._generation_log: list[tuple[int, float, float, float, float, float, float]] = []
 
 		# Try Rust+Metal backend
 		self._rust_cache = None
@@ -176,22 +124,6 @@ class BitwiseEvaluator:
 		idx = self._eval_rotation_idx % self._num_eval_parts
 		self._eval_rotation_idx += 1
 		return idx
-
-	@property
-	def vocab_size(self) -> int:
-		return self._vocab_size
-
-	@property
-	def total_input_bits(self) -> int:
-		return self._total_input_bits
-
-	@property
-	def num_parts(self) -> int:
-		return self._num_parts
-
-	@property
-	def num_eval_parts(self) -> int:
-		return self._num_eval_parts
 
 	# =========================================================================
 	# Rust+Metal evaluation (primary path)
@@ -278,12 +210,6 @@ class BitwiseEvaluator:
 		for genome, (_, _, bit_acc) in zip(genomes, results):
 			genome._cached_bit_acc = bit_acc
 		return results
-
-	def set_generation(self, gen: int, total_generations: int | None = None) -> None:
-		"""Set current generation for adaptive evaluation warmup tracking."""
-		self._generation = gen
-		if total_generations is not None and self._adapt_config is not None:
-			self._adapt_config.total_generations = total_generations
 
 	def _evaluate_batch_adaptive_rust(
 		self,
@@ -402,7 +328,7 @@ class BitwiseEvaluator:
 		return results
 
 	# =========================================================================
-	# Public interface (matches CachedEvaluator)
+	# Public interface
 	# =========================================================================
 
 	def evaluate_batch(
@@ -416,10 +342,10 @@ class BitwiseEvaluator:
 		min_accuracy: Optional[float] = None,
 		streaming: bool = True,
 		stream_batch_size: int = 1,
-	) -> list[tuple[float, float, float]]:
+	) -> list[EvalResult]:
 		"""Evaluate multiple genomes using subset rotation (both train and eval).
 
-		Returns list of (ce, accuracy, weighted_bit_accuracy) tuples.
+		Returns list of EvalResult (with bit_accuracy populated).
 		"""
 		if train_subset_idx is None:
 			train_subset_idx = self.next_train_idx()
@@ -429,21 +355,21 @@ class BitwiseEvaluator:
 		if self._rust_cache is not None:
 			start = time.time()
 			if self._adapt_config is not None:
-				results = self._evaluate_batch_adaptive_rust(genomes, train_subset_idx, eval_subset_idx)
+				raw_results = self._evaluate_batch_adaptive_rust(genomes, train_subset_idx, eval_subset_idx)
 			else:
-				results = self._evaluate_batch_rust(genomes, train_subset_idx, eval_subset_idx)
+				raw_results = self._evaluate_batch_rust(genomes, train_subset_idx, eval_subset_idx)
 			elapsed = time.time() - start
 			log = logger if logger is not None else lambda x: None
 			if generation is not None:
 				gen = generation + 1
 				total = total_generations or "?"
-				best_ce = min(r[0] for r in results) if results else 0.0
-				best_acc = max(r[1] for r in results) if results else 0.0
-				best_bit_acc = max(r[2] for r in results) if results else 0.0
-				n = len(results)
-				mean_ce = sum(r[0] for r in results) / n if n else 0.0
-				mean_acc = sum(r[1] for r in results) / n if n else 0.0
-				mean_bit_acc = sum(r[2] for r in results) / n if n else 0.0
+				best_ce = min(r[0] for r in raw_results) if raw_results else 0.0
+				best_acc = max(r[1] for r in raw_results) if raw_results else 0.0
+				best_bit_acc = max(r[2] for r in raw_results) if raw_results else 0.0
+				n = len(raw_results)
+				mean_ce = sum(r[0] for r in raw_results) / n if n else 0.0
+				mean_acc = sum(r[1] for r in raw_results) / n if n else 0.0
+				mean_bit_acc = sum(r[2] for r in raw_results) / n if n else 0.0
 				log(f"[Gen {gen:02d}/{total}] {len(genomes)} genomes in {elapsed:.1f}s "
 					f"(best CE={best_ce:.4f}, Acc={best_acc:.2%}, BitAcc={best_bit_acc:.2%})")
 				# Record for correlation tracking
@@ -451,7 +377,8 @@ class BitwiseEvaluator:
 					generation, best_ce, best_acc, best_bit_acc,
 					mean_ce, mean_acc, mean_bit_acc,
 				))
-			return results
+			return [EvalResult(ce=ce, accuracy=acc, bit_accuracy=bit_acc)
+					for ce, acc, bit_acc in raw_results]
 
 		# Python fallback (no bit_acc available)
 		train_data = self._train_parts[train_subset_idx % self._num_parts]
@@ -459,56 +386,34 @@ class BitwiseEvaluator:
 			genomes, train_data, self._eval_tokens,
 			logger, generation, total_generations,
 		)
-		# Pad with 0.0 for bit_acc
-		return [(ce, acc, 0.0) for ce, acc in py_results]
+		# bit_accuracy=0.0 for Python fallback (not available)
+		return [EvalResult(ce=ce, accuracy=acc, bit_accuracy=0.0)
+				for ce, acc in py_results]
 
 	def evaluate_batch_full(
 		self,
 		genomes: list[ClusterGenome],
 		logger: Optional[Callable[[str], None]] = None,
-	) -> list[tuple[float, float, float]]:
+	) -> list[EvalResult]:
 		"""Evaluate genomes using full train + eval data.
 
-		Returns list of (ce, accuracy, weighted_bit_accuracy) tuples.
+		Returns list of EvalResult (with bit_accuracy populated).
 		"""
 		if self._rust_cache is not None:
 			start = time.time()
-			results = self._evaluate_batch_full_rust(genomes)
+			raw_results = self._evaluate_batch_full_rust(genomes)
 			elapsed = time.time() - start
 			log = logger if logger is not None else lambda x: None
 			log(f"[Full] {len(genomes)} genomes in {elapsed:.1f}s")
-			return results
+			return [EvalResult(ce=ce, accuracy=acc, bit_accuracy=bit_acc)
+					for ce, acc, bit_acc in raw_results]
 
 		# Python fallback
 		py_results = self._evaluate_batch_python(
 			genomes, self._train_tokens, self._eval_tokens, logger,
 		)
-		return [(ce, acc, 0.0) for ce, acc in py_results]
-
-	def evaluate_single(
-		self,
-		genome: ClusterGenome,
-		train_subset_idx: Optional[int] = None,
-		eval_subset_idx: Optional[int] = None,
-	) -> float:
-		"""Evaluate a single genome, returning CE only."""
-		result = self.evaluate_batch([genome], train_subset_idx, eval_subset_idx)[0]
-		return result[0]
-
-	def evaluate_single_with_accuracy(
-		self,
-		genome: ClusterGenome,
-		train_subset_idx: Optional[int] = None,
-		eval_subset_idx: Optional[int] = None,
-	) -> tuple[float, float]:
-		"""Evaluate a single genome, returning (CE, accuracy)."""
-		result = self.evaluate_batch([genome], train_subset_idx, eval_subset_idx)[0]
-		return (result[0], result[1])
-
-	def evaluate_single_full(self, genome: ClusterGenome) -> tuple[float, float]:
-		"""Evaluate a single genome with full data."""
-		result = self.evaluate_batch_full([genome])[0]
-		return (result[0], result[1])
+		return [EvalResult(ce=ce, accuracy=acc, bit_accuracy=0.0)
+				for ce, acc in py_results]
 
 	# =========================================================================
 	# Gated evaluation (all 3 modes: TOKEN_LEVEL, BIT_LEVEL, DUAL_STAGE)
@@ -1018,18 +923,6 @@ class BitwiseEvaluator:
 			neurons_per_cluster=new_neurons,
 			connections=new_conns,
 		)
-
-	@property
-	def generation_log(self) -> list[tuple[int, float, float, float, float, float, float]]:
-		"""Per-generation metrics from evaluate_batch calls.
-
-		Each entry: (generation, best_ce, best_acc, best_bit_acc, mean_ce, mean_acc, mean_bit_acc)
-		"""
-		return self._generation_log
-
-	def clear_generation_log(self) -> None:
-		"""Clear per-generation metrics (call between phases)."""
-		self._generation_log.clear()
 
 	def reset(self, seed: Optional[int] = None) -> None:
 		"""Reset subset rotation (both train and eval)."""

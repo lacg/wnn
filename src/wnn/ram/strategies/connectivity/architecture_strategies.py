@@ -1865,7 +1865,7 @@ class GridSearchStrategy:
 			batch_elapsed += expand_elapsed
 			self._log(f"  New genome eval: {expand_elapsed:.1f}s")
 			# Fill in the placeholder metrics
-			for idx_in_new, (ce, acc, _) in enumerate(new_evals):
+			for idx_in_new, (ce, acc, *_) in enumerate(new_evals):
 				pop_idx = new_genome_indices[idx_in_new]
 				population_metrics[pop_idx] = (ce, acc)
 				# Update best result if a new genome beat the grid search best

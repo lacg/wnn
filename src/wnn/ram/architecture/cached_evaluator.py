@@ -37,6 +37,7 @@ from wnn.ram.architecture.genome_log import (
 )
 from wnn.ram.strategies.connectivity.generic_strategies import OptimizationLogger
 from wnn.ram.core import RAMClusterLayer, GatingModel, create_gating
+from wnn.ram.architecture.base_evaluator import BaseEvaluator, EvalResult
 
 
 class OffspringSearchResult(NamedTuple):
@@ -69,7 +70,7 @@ class CachedEvaluatorConfig:
     gating_threshold: float = 0.5  # Threshold for majority voting
 
 
-class CachedEvaluator:
+class CachedEvaluator(BaseEvaluator):
     """
     Rust-backed evaluator with persistent token storage.
 
@@ -114,17 +115,19 @@ class CachedEvaluator:
                 "cd src/wnn/ram/strategies/accelerator && maturin develop --release"
             )
 
-        self._vocab_size = vocab_size
-        self._context_size = context_size
-        self._num_parts = num_parts
+        super().__init__(
+            train_tokens=train_tokens,
+            eval_tokens=eval_tokens,
+            vocab_size=vocab_size,
+            context_size=context_size,
+            num_parts=num_parts,
+            seed=seed,
+        )
+
+        # CachedEvaluator-specific fields
         self._empty_value = empty_value
         self._log_path = log_path
         self._use_hybrid = use_hybrid
-
-        # Time-based seed if not specified
-        if seed is None:
-            import time
-            seed = int(time.time() * 1000) % (2**32)
 
         # Create the Rust TokenCache
         self._cache = ram_accelerator.TokenCacheWrapper(
@@ -136,7 +139,7 @@ class CachedEvaluator:
             cluster_order=cluster_order,
             num_parts=num_parts,
             num_negatives=num_negatives,
-            seed=seed,
+            seed=self._seed,
         )
 
         # Track call counts for logging
@@ -164,7 +167,7 @@ class CachedEvaluator:
         min_accuracy: Optional[float] = None,
         streaming: bool = True,  # Log per-genome as they complete
         stream_batch_size: int = 1,  # How many genomes per Rust call in streaming mode
-    ) -> list[tuple[float, float]]:
+    ) -> list[EvalResult]:
         """
         Evaluate multiple genomes using specified train/eval subsets.
 
@@ -183,7 +186,7 @@ class CachedEvaluator:
             stream_batch_size: Number of genomes per Rust call in streaming mode (default 1)
 
         Returns:
-            List of (cross-entropy, accuracy) tuples for each genome
+            List of EvalResult for each genome (bit_accuracy=None for tiered)
         """
         import time
         import sys
@@ -249,7 +252,7 @@ class CachedEvaluator:
 
             # Single Rust call - Rust logs each genome as it completes
             if self._use_hybrid:
-                results = self._cache.evaluate_genomes_hybrid(
+                raw_results = self._cache.evaluate_genomes_hybrid(
                     genomes_bits_flat,
                     genomes_neurons_flat,
                     genomes_connections_flat,
@@ -259,7 +262,7 @@ class CachedEvaluator:
                     self._empty_value,
                 )
             else:
-                results = self._cache.evaluate_genomes(
+                raw_results = self._cache.evaluate_genomes(
                     genomes_bits_flat,
                     genomes_neurons_flat,
                     genomes_connections_flat,
@@ -297,7 +300,7 @@ class CachedEvaluator:
 
             # Use hybrid evaluation if enabled (4-8x faster)
             if self._use_hybrid:
-                results = self._cache.evaluate_genomes_hybrid(
+                raw_results = self._cache.evaluate_genomes_hybrid(
                     genomes_bits_flat,
                     genomes_neurons_flat,
                     genomes_connections_flat,
@@ -307,7 +310,7 @@ class CachedEvaluator:
                     self._empty_value,
                 )
             else:
-                results = self._cache.evaluate_genomes(
+                raw_results = self._cache.evaluate_genomes(
                     genomes_bits_flat,
                     genomes_neurons_flat,
                     genomes_connections_flat,
@@ -321,7 +324,7 @@ class CachedEvaluator:
 
         # Count how many pass the threshold
         if min_accuracy is not None:
-            shown_count = sum(1 for _, acc in results if acc >= min_accuracy)
+            shown_count = sum(1 for _, acc in raw_results if acc >= min_accuracy)
         else:
             shown_count = num_genomes
 
@@ -334,7 +337,7 @@ class CachedEvaluator:
         if not streaming_was_used and not rust_progress:
             current_gen = (generation + 1) if generation is not None else 1
             avg_duration = elapsed / num_genomes if num_genomes > 0 else 0.0
-            for i, (ce, acc) in enumerate(results):
+            for i, (ce, acc) in enumerate(raw_results):
                 passes = min_accuracy is None or acc >= min_accuracy
                 base_msg = format_genome_log(
                     current_gen, total_gens, GenomeLogType.INITIAL,
@@ -354,13 +357,13 @@ class CachedEvaluator:
         sys.stdout.flush()
         sys.stderr.flush()
 
-        return results
+        return [EvalResult(ce=ce, accuracy=acc) for ce, acc in raw_results]
 
     def evaluate_batch_full(
         self,
         genomes: list[ClusterGenome],
         logger: Optional[Callable[[str], None]] = None,
-    ) -> list[tuple[float, float]]:
+    ) -> list[EvalResult]:
         """
         Evaluate genomes using full train/eval data (for final evaluation).
 
@@ -369,7 +372,7 @@ class CachedEvaluator:
             logger: Optional logging function
 
         Returns:
-            List of (cross-entropy, accuracy) tuples for each genome
+            List of EvalResult for each genome (bit_accuracy=None for tiered)
         """
         log = logger or (lambda x: None)
 
@@ -386,7 +389,7 @@ class CachedEvaluator:
 
         # Call Rust evaluator with full cached data (use hybrid if enabled)
         if self._use_hybrid:
-            results = self._cache.evaluate_genomes_full_hybrid(
+            raw_results = self._cache.evaluate_genomes_full_hybrid(
                 genomes_bits_flat,
                 genomes_neurons_flat,
                 genomes_connections_flat,
@@ -394,7 +397,7 @@ class CachedEvaluator:
                 self._empty_value,
             )
         else:
-            results = self._cache.evaluate_genomes_full(
+            raw_results = self._cache.evaluate_genomes_full(
                 genomes_bits_flat,
                 genomes_neurons_flat,
                 genomes_connections_flat,
@@ -402,33 +405,10 @@ class CachedEvaluator:
                 self._empty_value,
             )
 
-        for i, (ce, acc) in enumerate(results):
+        for i, (ce, acc) in enumerate(raw_results):
             log(format_genome_log(1, 1, GenomeLogType.FINAL, i + 1, num_genomes, ce, acc))
 
-        return results
-
-    def evaluate_single(
-        self,
-        genome: ClusterGenome,
-        train_subset_idx: Optional[int] = None,
-        eval_subset_idx: Optional[int] = None,
-    ) -> float:
-        """Evaluate a single genome, returning CE only. Auto-advances rotation if indices not provided."""
-        ce, _ = self.evaluate_batch([genome], train_subset_idx, eval_subset_idx)[0]
-        return ce
-
-    def evaluate_single_with_accuracy(
-        self,
-        genome: ClusterGenome,
-        train_subset_idx: Optional[int] = None,
-        eval_subset_idx: Optional[int] = None,
-    ) -> tuple[float, float]:
-        """Evaluate a single genome, returning (CE, accuracy). Auto-advances rotation if indices not provided."""
-        return self.evaluate_batch([genome], train_subset_idx, eval_subset_idx)[0]
-
-    def evaluate_single_full(self, genome: ClusterGenome) -> tuple[float, float]:
-        """Evaluate a single genome with full data, returning (CE, accuracy)."""
-        return self.evaluate_batch_full([genome])[0]
+        return [EvalResult(ce=ce, accuracy=acc) for ce, acc in raw_results]
 
     def reset(self, seed: Optional[int] = None) -> None:
         """Reset subset rotators with optional new seed."""
@@ -440,21 +420,6 @@ class CachedEvaluator:
     def num_train_subsets(self) -> int:
         """Number of train subsets."""
         return self._cache.num_train_subsets()
-
-    @property
-    def vocab_size(self) -> int:
-        """Vocabulary size."""
-        return self._cache.vocab_size()
-
-    @property
-    def total_input_bits(self) -> int:
-        """Total input bits per example."""
-        return self._cache.total_input_bits()
-
-    @property
-    def num_parts(self) -> int:
-        """Number of parts tokens are divided into."""
-        return self._num_parts
 
     def search_neighbors(
         self,
