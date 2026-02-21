@@ -113,6 +113,23 @@ Full WikiText-2 dataset (2.4M train, 251K val, 288K test tokens) with GA+TS opti
 Quick answer on your question: GPT-2 small (124M params) scores ~29.4 PPL / ~3.38 CE on WikiText-2 test. The larger variants: medium (355M) ~22.8 PPL, large (774M) ~19.9 PPL,  
   XL (1.5B) ~18.3 PPL.
 
+                                                                                                                                                                                  
+  ┌───────────────────────┬──────────┬──────────────────────────────────────┐                                                                                                    
+  │         Model         │    CE    │            What it means             │
+  ├───────────────────────┼──────────┼──────────────────────────────────────┤                                                                                                    │ Unigram               │ 7.44     │ Just token frequencies, zero context │
+  ├───────────────────────┼──────────┼──────────────────────────────────────┤
+  │ Bigram (interpolated) │ ~6.04    │ One token of context                 │
+  ├───────────────────────┼──────────┼──────────────────────────────────────┤
+  │ 5-gram KenLM          │ ~4.5-5.0 │ Classical n-gram with smoothing      │
+  ├───────────────────────┼──────────┼──────────────────────────────────────┤
+  │ GPT-2 small (124M)    │ ~3.5     │ Transformer baseline                 │
+  ├───────────────────────┼──────────┼──────────────────────────────────────┤
+  │ GPT-2 large (774M)    │ ~2.8     │ Larger transformer                   │
+  ├───────────────────────┼──────────┼──────────────────────────────────────┤
+  │ State of the art      │ <2.0     │ Modern LLMs                          │
+  └───────────────────────┴──────────┴──────────────────────────────────────┘
+
+
 #### Overall Rankings (by Test PPL)
 
 | Rank | Experiment | Config | Ctx | Test PPL | Test Acc | Notes |

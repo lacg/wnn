@@ -169,6 +169,9 @@ pub mod eval_worker;
 #[path = "bitwise_ramlm.rs"]
 mod bitwise_ramlm;
 
+#[path = "twostage.rs"]
+mod twostage;
+
 #[path = "adaptation.rs"]
 mod adaptation;
 
@@ -4787,6 +4790,120 @@ impl BitwiseCacheWrapper {
 }
 
 // =============================================================================
+// Two-Stage Token Cache — PyO3 wrapper for two-stage RAM evaluation
+// =============================================================================
+
+#[pyclass]
+struct TwoStageCacheWrapper {
+    inner: twostage::TwoStageTokenCache,
+    sparse_threshold_override: Option<usize>,
+}
+
+#[pymethods]
+impl TwoStageCacheWrapper {
+    #[new]
+    #[pyo3(signature = (train_tokens, eval_tokens, vocab_size, context_size, k, num_parts, num_eval_parts, pad_token_id, sparse_threshold=None))]
+    fn new(
+        train_tokens: Vec<u32>,
+        eval_tokens: Vec<u32>,
+        vocab_size: usize,
+        context_size: usize,
+        k: usize,
+        num_parts: usize,
+        num_eval_parts: usize,
+        pad_token_id: u32,
+        sparse_threshold: Option<usize>,
+    ) -> Self {
+        Self {
+            inner: twostage::TwoStageTokenCache::new(
+                train_tokens, eval_tokens, vocab_size, context_size,
+                k, num_parts, num_eval_parts, pad_token_id,
+            ),
+            sparse_threshold_override: sparse_threshold,
+        }
+    }
+
+    /// Evaluate Stage 1 genomes (cluster prediction) with subset rotation.
+    #[allow(clippy::too_many_arguments)]
+    fn evaluate_stage1_genomes(
+        &self,
+        py: Python<'_>,
+        bits_per_neuron_flat: Vec<usize>,
+        neurons_per_cluster_flat: Vec<usize>,
+        connections_flat: Vec<i64>,
+        num_genomes: usize,
+        train_subset_idx: usize,
+        eval_subset_idx: usize,
+        memory_mode: u8,
+        neuron_sample_rate: f32,
+        rng_seed: u64,
+    ) -> PyResult<Vec<(f64, f64, f64)>> {
+        let override_val = self.sparse_threshold_override;
+        py.allow_threads(|| {
+            Ok(twostage::evaluate_stage1_genomes(
+                &self.inner, &bits_per_neuron_flat, &neurons_per_cluster_flat,
+                &connections_flat, num_genomes, train_subset_idx, eval_subset_idx,
+                memory_mode, neuron_sample_rate, rng_seed, override_val,
+            ))
+        })
+    }
+
+    /// Evaluate Stage 1 genomes with full (non-rotated) data.
+    #[allow(clippy::too_many_arguments)]
+    fn evaluate_stage1_genomes_full(
+        &self,
+        py: Python<'_>,
+        bits_per_neuron_flat: Vec<usize>,
+        neurons_per_cluster_flat: Vec<usize>,
+        connections_flat: Vec<i64>,
+        num_genomes: usize,
+        memory_mode: u8,
+        neuron_sample_rate: f32,
+        rng_seed: u64,
+    ) -> PyResult<Vec<(f64, f64, f64)>> {
+        let override_val = self.sparse_threshold_override;
+        py.allow_threads(|| {
+            Ok(twostage::evaluate_stage1_genomes_full(
+                &self.inner, &bits_per_neuron_flat, &neurons_per_cluster_flat,
+                &connections_flat, num_genomes,
+                memory_mode, neuron_sample_rate, rng_seed, override_val,
+            ))
+        })
+    }
+
+    /// Get next train subset index (advances rotator).
+    fn next_train_idx(&self) -> usize {
+        self.inner.next_train_idx()
+    }
+
+    /// Get next eval subset index (advances rotator).
+    fn next_eval_idx(&self) -> usize {
+        self.inner.next_eval_idx()
+    }
+
+    /// Reset subset rotation.
+    fn reset(&self) {
+        self.inner.reset();
+    }
+
+    // ── Clustering info ──────────────────────────────────────────────
+
+    fn k(&self) -> usize { self.inner.k }
+    fn vocab_size(&self) -> usize { self.inner.vocab_size }
+    fn context_size(&self) -> usize { self.inner.context_size }
+    fn bits_per_cluster_id(&self) -> usize { self.inner.bits_per_cluster_id }
+    fn bits_per_within_index(&self) -> usize { self.inner.bits_per_within_index }
+    fn max_cluster_size(&self) -> usize { self.inner.max_cluster_size }
+    fn stage1_input_bits(&self) -> usize { self.inner.context_input_bits }
+    fn num_parts(&self) -> usize { self.inner.num_parts }
+    fn num_eval_parts(&self) -> usize { self.inner.num_eval_parts }
+
+    fn cluster_sizes(&self) -> Vec<usize> {
+        self.inner.cluster_sizes.clone()
+    }
+}
+
+// =============================================================================
 // Standalone utility: random connection generation (Rust-accelerated)
 // =============================================================================
 
@@ -4938,6 +5055,8 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(reset_gating_buffer_cache, m)?)?;
     // Bitwise RAMLM evaluation (full Rust+Metal pipeline)
     m.add_class::<BitwiseCacheWrapper>()?;
+    // Two-stage RAMLM evaluation (group prediction + within-group)
+    m.add_class::<TwoStageCacheWrapper>()?;
     // Bitwise RAMLM — nudge training + quad forward
     m.add_function(wrap_pyfunction!(ramlm_bitwise_train_batch_nudge_numpy, m)?)?;
     m.add_function(wrap_pyfunction!(ramlm_bitwise_train_neuron_parallel_numpy, m)?)?;

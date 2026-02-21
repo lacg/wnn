@@ -323,14 +323,14 @@ pub struct BitwiseTokenCache {
     current_eval_idx: AtomicUsize,
 }
 
-fn bits_needed(n: usize) -> usize {
+pub(crate) fn bits_needed(n: usize) -> usize {
     if n <= 1 { return 1; }
     ((n as f64).log2().ceil()) as usize
 }
 
 /// Pack boolean input bits into u64 words for cache-efficient address computation.
 /// Reduces memory footprint 8x (1 byte/bit → 1 bit/bit).
-fn pack_input_bits(input_bits: &[bool], num_examples: usize, total_input_bits: usize) -> (Vec<u64>, usize) {
+pub(crate) fn pack_input_bits(input_bits: &[bool], num_examples: usize, total_input_bits: usize) -> (Vec<u64>, usize) {
     let words_per_example = (total_input_bits + 63) / 64;
     let mut packed = vec![0u64; num_examples * words_per_example];
     for ex in 0..num_examples {
@@ -1371,7 +1371,7 @@ fn forward_eval_into(
 /// Equivalent to calling `train_into` followed by `forward_eval_into`.
 /// Kept for backward compatibility with callers that don't need the split.
 fn train_and_forward_into(
-    cache: &BitwiseTokenCache,
+    num_clusters: usize,
     connections: &[i64],
     bits_per_neuron: &[usize],
     neurons_per_cluster: &[usize],
@@ -1384,7 +1384,6 @@ fn train_and_forward_into(
     neuron_sample_rate: f32,
     rng_seed: u64,
 ) {
-    let num_clusters = cache.num_bits;
     train_into(
         connections, bits_per_neuron, neurons_per_cluster, num_clusters,
         layout, train_subset, clusters, memory_mode, neuron_sample_rate, rng_seed,
@@ -1469,7 +1468,40 @@ fn evaluate_genomes_with_subset(
     rng_seed: u64,
     sparse_threshold_override: Option<usize>,
 ) -> Vec<(f64, f64, f64)> {
-    let num_clusters = cache.num_bits;
+    evaluate_genomes_with_params(
+        cache.num_bits, &cache.token_bits, cache.vocab_size,
+        bits_per_neuron_flat, neurons_per_cluster_flat, connections_flat,
+        num_genomes, train_subset, eval_subset,
+        memory_mode, neuron_sample_rate, rng_seed, sparse_threshold_override,
+    )
+}
+
+/// Generic evaluation: train+forward+CE with explicit output parameters.
+///
+/// Decoupled from BitwiseTokenCache — takes num_clusters, token_bits, vocab_size
+/// as explicit params. Used by both BitwiseTokenCache and TwoStageTokenCache.
+///
+/// - `num_clusters`: Number of output clusters (bit-planes), e.g. 16 for tokens, 8 for stage1
+/// - `token_bits`: [vocab_size * num_clusters] bit patterns for CE reconstruction (MSB-first)
+/// - `vocab_size`: Number of distinct output classes for CE computation
+///
+/// Returns: Vec<(ce, accuracy, weighted_bit_accuracy)> per genome.
+pub(crate) fn evaluate_genomes_with_params(
+    num_clusters: usize,
+    token_bits: &[u8],
+    vocab_size: usize,
+    bits_per_neuron_flat: &[usize],
+    neurons_per_cluster_flat: &[usize],
+    connections_flat: &[i64],
+    num_genomes: usize,
+    train_subset: &BitwiseSubset,
+    eval_subset: &BitwiseEvalSubset,
+    memory_mode: u8,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+    sparse_threshold_override: Option<usize>,
+) -> Vec<(f64, f64, f64)> {
+    let num_clusters = num_clusters;
     let num_eval = eval_subset.num_examples;
     let scores_per_genome = num_eval * num_clusters;
     let expected_train = train_subset.num_examples;
@@ -1613,7 +1645,7 @@ fn evaluate_genomes_with_subset(
 
                 let genome_rng_seed = rng_seed.wrapping_add(g as u64 * 1000007);
                 train_and_forward_into(
-                    cache, connections, bpn_slice, neurons_slice, layout,
+                    num_clusters, connections, bpn_slice, neurons_slice, layout,
                     train_subset, eval_subset, &mut cluster_storage, score_slice,
                     memory_mode, neuron_sample_rate, genome_rng_seed,
                 );
@@ -1625,7 +1657,7 @@ fn evaluate_genomes_with_subset(
     // Phase 1.5: Compute weighted BitAcc per genome
     // Weight each bit by its entropy in the eval targets: balanced bits (50/50) matter
     // more than degenerate bits (always 0 or always 1).
-    let num_bits = cache.num_bits;
+    let num_bits = num_clusters;
     let mut bit_weights = vec![0.0f64; num_bits];
     {
         let mut bit_ones = vec![0u64; num_bits];
@@ -1633,7 +1665,7 @@ fn evaluate_genomes_with_subset(
             let target = eval_subset.targets[ex] as usize;
             let tb_off = target * num_bits;
             for b in 0..num_bits {
-                bit_ones[b] += cache.token_bits[tb_off + b] as u64;
+                bit_ones[b] += token_bits[tb_off + b] as u64;
             }
         }
         for b in 0..num_bits {
@@ -1659,7 +1691,7 @@ fn evaluate_genomes_with_subset(
                 let sc_off = score_base + ex * num_bits;
                 for b in 0..num_bits {
                     let predicted = all_scores[sc_off + b] > 0.5;
-                    let actual = cache.token_bits[tb_off + b] > 0;
+                    let actual = token_bits[tb_off + b] > 0;
                     if predicted == actual {
                         weighted_correct += bit_weights[b];
                     }
@@ -1678,12 +1710,12 @@ fn evaluate_genomes_with_subset(
     if let Some(metal) = get_metal_bitwise_ce() {
         match metal.compute_ce_batch(
             &all_scores,
-            &cache.token_bits,
+            token_bits,
             &eval_subset.targets,
             num_genomes,
             num_eval,
-            cache.num_bits,
-            cache.vocab_size,
+            num_clusters,
+            vocab_size,
         ) {
             Ok(ce_results) => {
                 return ce_results.into_iter()
@@ -1703,11 +1735,11 @@ fn evaluate_genomes_with_subset(
         .map(|scores| {
             compute_ce_cpu(
                 scores,
-                &cache.token_bits,
+                token_bits,
                 &eval_subset.targets,
                 num_eval,
-                cache.num_bits,
-                cache.vocab_size,
+                num_clusters,
+                vocab_size,
             )
         })
         .collect();
