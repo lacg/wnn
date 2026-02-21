@@ -1750,6 +1750,52 @@ pub(crate) fn evaluate_genomes_with_params(
         .collect()
 }
 
+/// Train a single genome and return raw per-bit probability scores.
+///
+/// Encapsulates: layout computation → ClusterStorage allocation → train → forward.
+/// Returns `scores[num_eval * num_clusters]` — per-bit probabilities for each eval example.
+///
+/// This is a lower-level helper used by `compute_combined_ce()` to get raw scores
+/// from each stage before combining them. Unlike `evaluate_genomes_with_params`,
+/// this skips the CE reconstruction step and returns the raw probability outputs.
+pub(crate) fn train_and_get_scores(
+    connections: &[i64],
+    bits_per_neuron: &[usize],
+    neurons_per_cluster: &[usize],
+    num_clusters: usize,
+    train_subset: &BitwiseSubset,
+    eval_subset: &BitwiseEvalSubset,
+    memory_mode: u8,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+    sparse_threshold: usize,
+) -> Vec<f32> {
+    let num_eval = eval_subset.num_examples;
+    let expected_train = train_subset.num_examples;
+    let empty_word: i64 = crate::neuron_memory::empty_word_for_mode(memory_mode);
+
+    let layout = compute_genome_layout(
+        bits_per_neuron, neurons_per_cluster, sparse_threshold, expected_train,
+    );
+
+    let mut cluster_storage: Vec<ClusterStorage> = (0..num_clusters)
+        .map(|c| ClusterStorage::new(
+            neurons_per_cluster[c], layout.cluster_max_bits[c],
+            sparse_threshold, empty_word, memory_mode,
+        ))
+        .collect();
+
+    let mut scores = vec![0.0f32; num_eval * num_clusters];
+
+    train_and_forward_into(
+        num_clusters, connections, bits_per_neuron, neurons_per_cluster, &layout,
+        train_subset, eval_subset, &mut cluster_storage, &mut scores,
+        memory_mode, neuron_sample_rate, rng_seed,
+    );
+
+    scores
+}
+
 /// Result of adaptive evaluation for a single genome.
 pub struct AdaptiveResult {
     pub ce: f64,

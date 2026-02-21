@@ -4983,6 +4983,42 @@ impl TwoStageCacheWrapper {
             ))
         })
     }
+
+    // ── Combined CE computation ─────────────────────────────────────────
+
+    /// Compute combined two-stage CE from both stages' genomes.
+    ///
+    /// Trains Stage 1 and Stage 2 (input_concat) independently, then reconstructs
+    /// the joint distribution P(token) = P(group) × P(token|group).
+    ///
+    /// Returns: (combined_ce, combined_accuracy, stage1_ce, stage2_ce)
+    #[allow(clippy::too_many_arguments)]
+    fn evaluate_combined_ce(
+        &self,
+        py: Python<'_>,
+        // Stage 1 genome
+        s1_bits_per_neuron: Vec<usize>,
+        s1_neurons_per_cluster: Vec<usize>,
+        s1_connections: Vec<i64>,
+        // Stage 2 genome (input_concat)
+        s2_bits_per_neuron: Vec<usize>,
+        s2_neurons_per_cluster: Vec<usize>,
+        s2_connections: Vec<i64>,
+        // Training params
+        memory_mode: u8,
+        neuron_sample_rate: f32,
+        rng_seed: u64,
+        sparse_threshold: usize,
+    ) -> PyResult<(f64, f64, f64, f64)> {
+        py.allow_threads(|| {
+            Ok(twostage::compute_combined_ce(
+                &self.inner,
+                &s1_bits_per_neuron, &s1_neurons_per_cluster, &s1_connections,
+                &s2_bits_per_neuron, &s2_neurons_per_cluster, &s2_connections,
+                memory_mode, neuron_sample_rate, rng_seed, sparse_threshold,
+            ))
+        })
+    }
 }
 
 // =============================================================================

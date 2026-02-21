@@ -16,6 +16,7 @@ use crate::bitwise_ramlm::{
     bits_needed, pack_input_bits,
     BitwiseSubset, BitwiseEvalSubset,
     evaluate_genomes_with_params,
+    train_and_get_scores,
 };
 
 /// Two-stage token cache with pre-encoded data for both stages.
@@ -65,6 +66,8 @@ pub struct TwoStageTokenCache {
 
     // ── Vocab-level (for combined CE in Sprint 3) ────────────────────
     pub vocab_size: usize,
+    /// Original token_ids for full eval examples (needed for combined CE lookups).
+    pub eval_target_token_ids: Vec<u32>,
 
     // ── Rotation state ───────────────────────────────────────────────
     pub num_parts: usize,
@@ -235,6 +238,11 @@ impl TwoStageTokenCache {
             &cluster_of, &index_in_cluster, num_eval_parts,
         );
 
+        // ── Build eval target token_ids for combined CE ──────────────
+        let eval_target_token_ids: Vec<u32> = (0..full_eval_n)
+            .map(|i| eval_tokens[i + context_size])
+            .collect();
+
         // ── Logging ──────────────────────────────────────────────────
         let s1_eval_n: usize = stage1_eval_subsets.iter().map(|s| s.num_examples).sum();
         let sel_train_n: usize = stage2_selector_train.iter().map(|s| s.num_examples).sum();
@@ -279,6 +287,7 @@ impl TwoStageTokenCache {
             stage2_concat_train_subsets,
             stage2_concat_eval_subsets,
             vocab_size,
+            eval_target_token_ids,
             num_parts,
             num_eval_parts,
             current_train_idx: AtomicUsize::new(0),
@@ -860,5 +869,200 @@ pub fn evaluate_stage2_concat_genomes_full(
         neuron_sample_rate,
         rng_seed,
         sparse_threshold_override,
+    )
+}
+
+// ── Combined CE computation ─────────────────────────────────────────────
+
+/// Compute combined two-stage CE from raw per-bit probability scores.
+///
+/// Trains both stages, forwards on eval data, then reconstructs the joint distribution:
+///   P(token_t) = P(group_g | context) × P(token_t | group_g, context)
+///
+/// For each eval example:
+///   1. Reconstruct log P(group_k) for all K groups from Stage 1 scores
+///   2. Normalize via logsumexp → log P_norm(group_k)
+///   3. Reconstruct log P(within_j | true_group) for all tokens in the true group
+///   4. Normalize via logsumexp → log P_norm(within_j | true_group)
+///   5. CE = -log P_norm(true_group) - log P_norm(true_within)
+///
+/// Uses teacher-forced Stage 2 scores (conditioned on true cluster_id in input).
+/// Combined CE = CE_s1 + CE_s2 exactly (by chain rule with per-stage normalization).
+///
+/// Returns: (combined_ce, combined_accuracy, stage1_ce, stage2_ce)
+pub fn compute_combined_ce(
+    cache: &TwoStageTokenCache,
+    // Stage 1 genome params (single genome)
+    s1_bits_per_neuron: &[usize],
+    s1_neurons_per_cluster: &[usize],
+    s1_connections: &[i64],
+    // Stage 2 genome params — input_concat mode (single genome)
+    s2_bits_per_neuron: &[usize],
+    s2_neurons_per_cluster: &[usize],
+    s2_connections: &[i64],
+    // Training params
+    memory_mode: u8,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+    sparse_threshold: usize,
+) -> (f64, f64, f64, f64) {
+    let eps = 1e-7f64;
+
+    // Train + forward Stage 1 → raw per-bit probabilities
+    let s1_scores = train_and_get_scores(
+        s1_connections, s1_bits_per_neuron, s1_neurons_per_cluster,
+        cache.bits_per_cluster_id,
+        &cache.stage1_full_train, &cache.stage1_full_eval,
+        memory_mode, neuron_sample_rate, rng_seed, sparse_threshold,
+    );
+
+    // Train + forward Stage 2 (input_concat) → raw per-bit probabilities
+    let s2_scores = train_and_get_scores(
+        s2_connections, s2_bits_per_neuron, s2_neurons_per_cluster,
+        cache.bits_per_within_index,
+        &cache.stage2_concat_full_train, &cache.stage2_concat_full_eval,
+        memory_mode, neuron_sample_rate, rng_seed.wrapping_add(1), sparse_threshold,
+    );
+
+    let num_eval = cache.stage1_full_eval.num_examples;
+    let s1_bits = cache.bits_per_cluster_id;
+    let s2_bits = cache.bits_per_within_index;
+    let k = cache.k;
+
+    // Reconstruct combined CE per example (parallel over examples)
+    let results: Vec<(f64, f64, f64, u32)> = (0..num_eval)
+        .into_par_iter()
+        .map(|ex| {
+            // Use original token_id to look up cluster membership
+            let token_id = cache.eval_target_token_ids[ex] as usize;
+            let true_group = cache.cluster_of[token_id] as usize;
+            let true_within = cache.index_in_cluster[token_id] as usize;
+
+            // ── Stage 1: log P(group_k) for all K groups ──
+            let s1_base = ex * s1_bits;
+
+            // Precompute log(p_b) and log(1-p_b) for this example's Stage 1 bits
+            let mut s1_log_p = vec![0.0f64; s1_bits];
+            let mut s1_log_1mp = vec![0.0f64; s1_bits];
+            for b in 0..s1_bits {
+                let p = (s1_scores[s1_base + b] as f64).clamp(eps, 1.0 - eps);
+                s1_log_p[b] = p.ln();
+                s1_log_1mp[b] = (1.0 - p).ln();
+            }
+
+            // Reconstruct log P_raw(group_k) with online logsumexp
+            let mut max_s1 = f64::NEG_INFINITY;
+            let mut sum_exp_s1 = 0.0f64;
+            let mut log_p_true_group_raw = 0.0f64;
+            let mut s1_predicted = 0usize;
+            let mut s1_predicted_lp = f64::NEG_INFINITY;
+
+            for gk in 0..k {
+                let bit_base = gk * s1_bits;
+                let mut log_p = 0.0f64;
+                for b in 0..s1_bits {
+                    if cache.stage1_cluster_bits[bit_base + b] == 1 {
+                        log_p += s1_log_p[b];
+                    } else {
+                        log_p += s1_log_1mp[b];
+                    }
+                }
+
+                if gk == true_group {
+                    log_p_true_group_raw = log_p;
+                }
+                if log_p > s1_predicted_lp {
+                    s1_predicted_lp = log_p;
+                    s1_predicted = gk;
+                }
+
+                // Online logsumexp accumulation
+                if log_p > max_s1 {
+                    sum_exp_s1 = sum_exp_s1 * (max_s1 - log_p).exp() + 1.0;
+                    max_s1 = log_p;
+                } else {
+                    sum_exp_s1 += (log_p - max_s1).exp();
+                }
+            }
+
+            let log_z1 = max_s1 + sum_exp_s1.ln();
+            let log_p_true_group = log_p_true_group_raw - log_z1;
+
+            // ── Stage 2: log P(within_j | true_group) ──
+            let s2_base = ex * s2_bits;
+            let group_size = cache.cluster_sizes[true_group];
+
+            // Precompute log(p_b) and log(1-p_b) for this example's Stage 2 bits
+            let mut s2_log_p = vec![0.0f64; s2_bits];
+            let mut s2_log_1mp = vec![0.0f64; s2_bits];
+            for b in 0..s2_bits {
+                let p = (s2_scores[s2_base + b] as f64).clamp(eps, 1.0 - eps);
+                s2_log_p[b] = p.ln();
+                s2_log_1mp[b] = (1.0 - p).ln();
+            }
+
+            // Reconstruct log P_raw(within_j) with online logsumexp
+            let mut max_s2 = f64::NEG_INFINITY;
+            let mut sum_exp_s2 = 0.0f64;
+            let mut log_p_true_within_raw = 0.0f64;
+            let mut s2_predicted = 0usize;
+            let mut s2_predicted_lp = f64::NEG_INFINITY;
+
+            for j in 0..group_size {
+                let bit_base = j * s2_bits;
+                let mut log_p = 0.0f64;
+                for b in 0..s2_bits {
+                    if cache.stage2_within_bits[bit_base + b] == 1 {
+                        log_p += s2_log_p[b];
+                    } else {
+                        log_p += s2_log_1mp[b];
+                    }
+                }
+
+                if j == true_within {
+                    log_p_true_within_raw = log_p;
+                }
+                if log_p > s2_predicted_lp {
+                    s2_predicted_lp = log_p;
+                    s2_predicted = j;
+                }
+
+                // Online logsumexp accumulation
+                if log_p > max_s2 {
+                    sum_exp_s2 = sum_exp_s2 * (max_s2 - log_p).exp() + 1.0;
+                    max_s2 = log_p;
+                } else {
+                    sum_exp_s2 += (log_p - max_s2).exp();
+                }
+            }
+
+            let log_z2 = max_s2 + sum_exp_s2.ln();
+            let log_p_true_within = log_p_true_within_raw - log_z2;
+
+            // ── Combine ──
+            let s1_ce = -log_p_true_group;
+            let s2_ce = -log_p_true_within;
+            let combined_ce = s1_ce + s2_ce;
+
+            let correct = if s1_predicted == true_group && s2_predicted == true_within {
+                1u32
+            } else {
+                0u32
+            };
+
+            (combined_ce, s1_ce, s2_ce, correct)
+        })
+        .collect();
+
+    let total_ce: f64 = results.iter().map(|r| r.0).sum();
+    let total_s1_ce: f64 = results.iter().map(|r| r.1).sum();
+    let total_s2_ce: f64 = results.iter().map(|r| r.2).sum();
+    let total_correct: u32 = results.iter().map(|r| r.3).sum();
+
+    (
+        total_ce / num_eval as f64,
+        total_correct as f64 / num_eval as f64,
+        total_s1_ce / num_eval as f64,
+        total_s2_ce / num_eval as f64,
     )
 }
