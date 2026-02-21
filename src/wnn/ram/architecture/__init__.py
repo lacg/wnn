@@ -12,3 +12,4 @@ from .token_rotator import TokenRotator, DatasetRotator, RotatorConfig
 from .base_evaluator import BaseEvaluator, EvalResult, AdaptationConfig
 from .cached_evaluator import CachedEvaluator, CachedEvaluatorConfig
 from .token_clustering import TokenClustering
+from .twostage_evaluator import TwoStageEvaluator

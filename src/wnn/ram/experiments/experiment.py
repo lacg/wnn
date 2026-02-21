@@ -34,6 +34,13 @@ class ClusterType(IntEnum):
 	"""What cluster architecture to use."""
 	TIERED = 0    # Existing RAMLM with tiered clusters (50K)
 	BITWISE = 1   # BitwiseRAMLM with per-bit clusters (16)
+	TWO_STAGE = 2 # Two-stage: group prediction + within-group prediction
+
+
+class StageMode(IntEnum):
+	"""How Stage 2 receives Stage 1's output in two-stage architecture."""
+	SELECTOR = 0       # Stage 1 picks which sub-model (K separate models)
+	INPUT_CONCAT = 1   # Stage 1 output bits appended to Stage 2 input
 
 
 @dataclass
@@ -109,6 +116,12 @@ class ExperimentConfig:
 	bits_grid: Optional[list[int]] = None       # e.g. [14, 16, 18, 20]
 	grid_top_k: int = 16                        # Top-K configs to seed population (default: all 4×4 grid)
 
+	# Two-stage configuration (only used when cluster_type=TWO_STAGE)
+	num_token_groups: int = 256                  # K — number of token groups
+	target_stage: int = 1                        # Which stage this experiment optimizes (1 or 2)
+	stage2_mode: StageMode = StageMode.INPUT_CONCAT
+	frozen_stage1_genome: Optional[dict] = None  # Serialized genome from Stage 1 (set by flow)
+
 	def to_dict(self) -> dict[str, Any]:
 		"""Convert to dictionary for JSON serialization.
 
@@ -138,6 +151,8 @@ class ExperimentConfig:
 			result["cluster_type"] = result["cluster_type"].name.lower()
 		if "fitness_calculator_type" in result:
 			result["fitness_calculator_type"] = result["fitness_calculator_type"].name.lower()
+		if "stage2_mode" in result:
+			result["stage2_mode"] = result["stage2_mode"].name.lower()
 		return result
 
 	@classmethod
@@ -162,6 +177,12 @@ class ExperimentConfig:
 				data["fitness_calculator_type"] = FitnessCalculatorType[data["fitness_calculator_type"].upper()]
 			except KeyError:
 				data["fitness_calculator_type"] = FitnessCalculatorType.NORMALIZED
+		# Convert stage2_mode string back to enum
+		if "stage2_mode" in data and isinstance(data["stage2_mode"], str):
+			try:
+				data["stage2_mode"] = StageMode[data["stage2_mode"].upper()]
+			except KeyError:
+				data["stage2_mode"] = StageMode.INPUT_CONCAT
 		return cls(**data)
 
 
@@ -375,7 +396,12 @@ class Experiment:
 			strategy_type = OptimizerStrategyType.ARCHITECTURE_TS
 
 		# Determine num_clusters based on cluster type
-		if cfg.cluster_type == ClusterType.BITWISE:
+		if cfg.cluster_type == ClusterType.TWO_STAGE:
+			# TwoStageEvaluator.num_clusters is stage-aware (reads from target_stage)
+			num_clusters = self.evaluator.num_clusters
+			stage_label = f"Stage {cfg.target_stage}"
+			self.log(f"  Two-Stage ({stage_label}): {num_clusters} clusters, k={cfg.num_token_groups}")
+		elif cfg.cluster_type == ClusterType.BITWISE:
 			from wnn.ram.core.RAMClusterLayer import bits_needed
 			num_clusters = bits_needed(self.vocab_size)
 			self.log(f"  Bitwise: {num_clusters} clusters ({cfg.bitwise_neurons_per_cluster} neurons, {cfg.bitwise_bits_per_neuron} bits)")
