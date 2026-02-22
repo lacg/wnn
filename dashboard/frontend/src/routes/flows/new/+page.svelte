@@ -570,7 +570,7 @@
     {#if isMultiStage}
       <div class="form-section">
         <h2>Multi-Stage Configuration</h2>
-        <div class="form-row-3">
+        <div class="form-row-4">
           <div class="form-group">
             <label for="selectedStage">Edit Stage</label>
             <select id="selectedStage" bind:value={selectedStage}>
@@ -593,23 +593,18 @@
               {/if}
             </span>
           </div>
-          <!-- Per-stage config (inline, no extra header) -->
           {#each stageConfigs as config, i}
             {#if i === selectedStage}
               <div class="form-group">
                 <label for="stageArch_{i}">Architecture</label>
-                <div class="stage-fields">
-                  <div class="stage-field">
-                    <select id="stageArch_{i}" bind:value={config.clusterType}>
-                      <option value="bitwise">Bitwise</option>
-                      <option value="tiered">Tiered</option>
-                    </select>
-                  </div>
-                  <div class="stage-field">
-                    <label for="stageK_{i}">K</label>
-                    <input type="number" id="stageK_{i}" bind:value={config.k} min="2" max="1024" />
-                  </div>
-                </div>
+                <select id="stageArch_{i}" bind:value={config.clusterType}>
+                  <option value="bitwise">Bitwise</option>
+                  <option value="tiered">Tiered</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="stageK_{i}">K</label>
+                <input type="number" id="stageK_{i}" bind:value={config.k} min="2" max="1024" />
               </div>
             {/if}
           {/each}
