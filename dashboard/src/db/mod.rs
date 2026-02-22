@@ -2066,6 +2066,7 @@ pub mod queries {
     fn parse_architecture_type(s: &str) -> ArchitectureType {
         match s {
             "bitwise" => ArchitectureType::Bitwise,
+            "multi_stage" | "multistage" => ArchitectureType::MultiStage,
             _ => ArchitectureType::Tiered,
         }
     }

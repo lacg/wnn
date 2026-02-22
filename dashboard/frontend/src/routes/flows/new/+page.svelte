@@ -17,7 +17,22 @@
   let bitwiseMemoryMode = 'QUAD_WEIGHTED';
   let bitwiseNeuronSampleRate = 0.25;
 
+  // Multi-stage config
+  let numStages = 2;
+  let stageK0 = 256;
+  let stageK1 = 256;
+  let stageClusterType0 = 'bitwise';
+  let stageClusterType1 = 'bitwise';
+  let stageMode = 'input_concat';
+  let msMinBits = 4;
+  let msMaxBits = 24;
+  let msMinNeurons = 5;
+  let msMaxNeurons = 300;
+  let msMemoryMode = 'QUAD_WEIGHTED';
+  let msNeuronSampleRate = 0.25;
+
   $: isBitwise = template === 'bitwise-7-phase' || template === 'bitwise-10-phase';
+  $: isMultiStage = template === 'multi-stage-10-phase';
   let gaGenerations = 250;
   let tsIterations = 250;
   let adaptationIterations = 50;
@@ -98,6 +113,29 @@
       bitwiseMaxNeurons = 300;
       bitwiseMemoryMode = 'QUAD_WEIGHTED';
       bitwiseNeuronSampleRate = 0.25;
+    } else if (templateName === 'multi-stage-10-phase') {
+      gaGenerations = 250;
+      tsIterations = 250;
+      populationSize = 50;
+      neighborsPerIter = 50;
+      patience = 10;
+      fitnessPercentile = 0.75;
+      fitnessCalculator = 'harmonic_rank';
+      fitnessWeightCe = 1.0;
+      fitnessWeightAcc = 1.0;
+      contextSize = 4;
+      numStages = 2;
+      stageClusterType0 = 'bitwise';
+      stageClusterType1 = 'bitwise';
+      stageK0 = 256;
+      stageK1 = 256;
+      stageMode = 'input_concat';
+      msMinBits = 4;
+      msMaxBits = 24;
+      msMinNeurons = 5;
+      msMaxNeurons = 300;
+      msMemoryMode = 'QUAD_WEIGHTED';
+      msNeuronSampleRate = 0.25;
     }
   }
 
@@ -140,6 +178,19 @@
       { name: 'GA Connections', experiment_type: 'ga', optimize_bits: false, optimize_neurons: false, optimize_connections: true },
       { name: 'TS Connections (refine)', experiment_type: 'ts', optimize_bits: false, optimize_neurons: false, optimize_connections: true },
     ];
+
+    if (templateName === 'multi-stage-10-phase') {
+      const phases: PhaseSpec[] = [];
+      for (let s = 0; s < numStages; s++) {
+        const prefix = `S${s}`;
+        phases.push({ name: `${prefix}: Grid Search`, experiment_type: 'ga', optimize_bits: true, optimize_neurons: true, optimize_connections: false, phase_type: 'grid_search' });
+        phases.push({ name: `${prefix}: GA Neurons`, experiment_type: 'ga', optimize_bits: false, optimize_neurons: true, optimize_connections: false });
+        phases.push({ name: `${prefix}: TS Neurons`, experiment_type: 'ts', optimize_bits: false, optimize_neurons: true, optimize_connections: false });
+        phases.push({ name: `${prefix}: GA Connections`, experiment_type: 'ga', optimize_bits: false, optimize_neurons: false, optimize_connections: true });
+        phases.push({ name: `${prefix}: TS Connections`, experiment_type: 'ts', optimize_bits: false, optimize_neurons: false, optimize_connections: true });
+      }
+      return phases;
+    }
 
     if (templateName === 'bitwise-10-phase') {
       const grid: PhaseSpec = { name: 'Grid Search (neurons × bits)', experiment_type: 'ga', optimize_bits: true, optimize_neurons: true, optimize_connections: false, phase_type: 'grid_search' };
@@ -281,7 +332,19 @@
         context_size: contextSize,
       };
 
-      if (isBitwise) {
+      if (isMultiStage) {
+        params.architecture_type = 'multi_stage';
+        params.num_stages = numStages;
+        params.stage_k = [stageK0, stageK1];
+        params.stage_cluster_type = [stageClusterType0, stageClusterType1];
+        params.stage_mode = stageMode;
+        params.min_bits = msMinBits;
+        params.max_bits = msMaxBits;
+        params.min_neurons = msMinNeurons;
+        params.max_neurons = msMaxNeurons;
+        params.memory_mode = msMemoryMode;
+        params.neuron_sample_rate = msNeuronSampleRate;
+      } else if (isBitwise) {
         params.architecture_type = 'bitwise';
         params.num_clusters = bitwiseNumClusters;
         params.min_bits = bitwiseMinBits;
@@ -376,6 +439,7 @@
               <option value="standard-6-phase">Standard 6-Phase (Tiered)</option>
               <option value="bitwise-7-phase">Bitwise 7-Phase</option>
               <option value="bitwise-10-phase">Bitwise 10-Phase (+ Adaptation)</option>
+              <option value="multi-stage-10-phase">Multi-Stage 10-Phase (2-stage)</option>
               <option value="empty">Empty (no phases)</option>
             </select>
             <span class="field-hint">
@@ -387,6 +451,8 @@
                 Exhaustive neurons &times; bits grid, then 6 GA/TS optimization phases
               {:else if template === 'bitwise-10-phase'}
                 Grid + GA/adapt/TS for neurons &rarr; bits &rarr; connections (stats-guided adaptation phases)
+              {:else if template === 'multi-stage-10-phase'}
+                2-stage pipeline: 5 phases per stage (grid &rarr; GA/TS neurons &rarr; GA/TS connections)
               {:else}
                 Start empty, add phases manually below
               {/if}
@@ -395,12 +461,14 @@
 
           <div class="form-group">
             <label for="phaseOrder">Phase Order</label>
-            <select id="phaseOrder" bind:value={phaseOrder} disabled={template === 'empty' || template === 'bitwise-10-phase'}>
+            <select id="phaseOrder" bind:value={phaseOrder} disabled={template === 'empty' || template === 'bitwise-10-phase' || isMultiStage}>
               <option value="neurons_first">Neurons First</option>
               <option value="bits_first">Bits First</option>
             </select>
             <span class="field-hint">
-              {#if template === 'bitwise-10-phase'}
+              {#if isMultiStage}
+                Fixed: per-stage grid &rarr; neurons &rarr; connections
+              {:else if template === 'bitwise-10-phase'}
                 Fixed: grid &rarr; neurons (GA/adapt/TS) &rarr; bits (GA/adapt/TS) &rarr; connections (GA/adapt/TS)
               {:else if isBitwise}
                 grid &rarr; {phaseOrder === 'neurons_first' ? 'neurons → bits' : 'bits → neurons'} &rarr; connections
@@ -581,7 +649,88 @@
           </div>
         </div>
 
-        {#if isBitwise}
+        {#if isMultiStage}
+          <div class="form-section">
+            <h2>Multi-Stage Configuration</h2>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="numStages">Stages</label>
+                <input type="number" id="numStages" bind:value={numStages} min="2" max="4" disabled />
+                <span class="field-hint">Number of prediction stages (2 for now)</span>
+              </div>
+              <div class="form-group">
+                <label for="stageMode">Stage Connection</label>
+                <select id="stageMode" bind:value={stageMode}>
+                  <option value="input_concat">Input Concat</option>
+                </select>
+                <span class="field-hint">How stages connect (input_concat = stage 2 sees stage 1 output)</span>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="stageClusterType0">Stage 0 Architecture</label>
+                <select id="stageClusterType0" bind:value={stageClusterType0}>
+                  <option value="bitwise">Bitwise</option>
+                  <option value="tiered">Tiered</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="stageK0">Stage 0 K</label>
+                <input type="number" id="stageK0" bind:value={stageK0} min="2" max="1024" />
+                <span class="field-hint">Output classes for stage 0</span>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="stageClusterType1">Stage 1 Architecture</label>
+                <select id="stageClusterType1" bind:value={stageClusterType1}>
+                  <option value="bitwise">Bitwise</option>
+                  <option value="tiered">Tiered</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="stageK1">Stage 1 K</label>
+                <input type="number" id="stageK1" bind:value={stageK1} min="2" max="1024" />
+                <span class="field-hint">Output classes for stage 1</span>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="msMinBits">Min Bits</label>
+                <input type="number" id="msMinBits" bind:value={msMinBits} min="1" max="64" />
+              </div>
+              <div class="form-group">
+                <label for="msMaxBits">Max Bits</label>
+                <input type="number" id="msMaxBits" bind:value={msMaxBits} min="1" max="64" />
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="msMinNeurons">Min Neurons</label>
+                <input type="number" id="msMinNeurons" bind:value={msMinNeurons} min="1" max="1000" />
+              </div>
+              <div class="form-group">
+                <label for="msMaxNeurons">Max Neurons</label>
+                <input type="number" id="msMaxNeurons" bind:value={msMaxNeurons} min="1" max="1000" />
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="msMemoryMode">Memory Mode</label>
+                <select id="msMemoryMode" bind:value={msMemoryMode}>
+                  <option value="QUAD_WEIGHTED">Quad Weighted</option>
+                  <option value="QUAD_BINARY">Quad Binary</option>
+                  <option value="TERNARY">Ternary</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="msNeuronSampleRate">Neuron Sample Rate</label>
+                <input type="number" id="msNeuronSampleRate" bind:value={msNeuronSampleRate} min="0.01" max="1.0" step="0.01" />
+                <span class="field-hint">Fraction of neurons sampled per example</span>
+              </div>
+            </div>
+          </div>
+        {:else if isBitwise}
           <div class="form-section">
             <h2>Bitwise Configuration</h2>
             <div class="form-row">

@@ -386,9 +386,12 @@ class FlowWorker:
             # Detect architecture type
             architecture_type = params.get("architecture_type", "tiered")
             is_bitwise = architecture_type == "bitwise"
+            is_multi_stage = architecture_type == "multi_stage"
 
             # Load data and create appropriate evaluator
-            if is_bitwise:
+            if is_multi_stage:
+                evaluator = self._create_multistage_evaluator(context_size, params)
+            elif is_bitwise:
                 evaluator = self._create_bitwise_evaluator(context_size, params)
             else:
                 evaluator = self._create_evaluator(context_size, params.get("seed"))
@@ -431,6 +434,26 @@ class FlowWorker:
                 flow_config.min_neurons = params.get("min_neurons", 10)
                 flow_config.max_neurons = params.get("max_neurons", 300)
                 flow_config.sparse_threshold = params.get("sparse_threshold")
+
+            # Add multi-stage config
+            if is_multi_stage:
+                flow_config.num_stages = params.get("num_stages", 2)
+                flow_config.stage_k = params.get("stage_k")
+                flow_config.stage_cluster_type = params.get("stage_cluster_type")
+                # Parse stage_mode
+                raw_mode = params.get("stage_mode")
+                if isinstance(raw_mode, str):
+                    from wnn.ram.experiments.experiment import StageMode
+                    mode_map = {"input_concat": StageMode.INPUT_CONCAT}
+                    flow_config.stage_mode = [mode_map.get(raw_mode, StageMode.INPUT_CONCAT)]
+                elif isinstance(raw_mode, list):
+                    flow_config.stage_mode = raw_mode
+                flow_config.memory_mode = params.get("memory_mode", "QUAD_WEIGHTED")
+                flow_config.neuron_sample_rate = params.get("neuron_sample_rate", 0.25)
+                flow_config.min_bits = params.get("min_bits", 4)
+                flow_config.max_bits = params.get("max_bits", 24)
+                flow_config.min_neurons = params.get("min_neurons", 5)
+                flow_config.max_neurons = params.get("max_neurons", 300)
 
             # Handle seed checkpoint
             seed_checkpoint_id = flow_data.get("seed_checkpoint_id")
@@ -574,6 +597,60 @@ class FlowWorker:
                    f"train_parts={train_parts}, eval_parts={eval_parts}")
         return evaluator
 
+    def _create_multistage_evaluator(self, context_size: int, params: dict):
+        """Create a MultiStageEvaluator using pre-cached data.
+
+        Uses train split for training, test split for fitness scoring (GA/TS).
+        """
+        self._log(f"Creating MultiStageEvaluator (context_size={context_size})...")
+
+        from wnn.ram.architecture.multistage_evaluator import MultiStageEvaluator
+
+        memory_mode_map = {"TERNARY": 0, "QUAD_BINARY": 1, "QUAD_WEIGHTED": 2}
+        memory_mode = memory_mode_map.get(params.get("memory_mode", "QUAD_WEIGHTED"), 2)
+        neuron_sample_rate = params.get("neuron_sample_rate", 0.25)
+        train_parts = params.get("train_parts", 4)
+        eval_parts = params.get("eval_parts", 1)
+
+        num_stages = params.get("num_stages", 2)
+        stage_k = params.get("stage_k")
+        stage_cluster_type = params.get("stage_cluster_type")
+
+        # Parse stage_mode from params (could be string or list of ints)
+        raw_stage_mode = params.get("stage_mode")
+        if raw_stage_mode is not None:
+            from wnn.ram.experiments.experiment import StageMode
+            if isinstance(raw_stage_mode, str):
+                mode_map = {"input_concat": StageMode.INPUT_CONCAT}
+                stage_mode = [mode_map.get(raw_stage_mode, StageMode.INPUT_CONCAT)]
+            elif isinstance(raw_stage_mode, list):
+                stage_mode = raw_stage_mode
+            else:
+                stage_mode = None
+        else:
+            stage_mode = None
+
+        evaluator = MultiStageEvaluator(
+            train_tokens=self._train_tokens,
+            eval_tokens=self._test_tokens,
+            vocab_size=self._vocab_size,
+            context_size=context_size,
+            num_stages=num_stages,
+            stage_k=stage_k,
+            stage_cluster_type=stage_cluster_type,
+            stage_mode=stage_mode,
+            target_stage=0,  # Flow.run() switches this at stage boundaries
+            num_parts=train_parts,
+            num_eval_parts=eval_parts,
+            memory_mode=memory_mode,
+            neuron_sample_rate=neuron_sample_rate,
+        )
+
+        self._log(f"  MultiStageEvaluator: stages={num_stages}, k={stage_k}, "
+                   f"types={stage_cluster_type}, mode={params.get('memory_mode', 'QUAD_WEIGHTED')}, "
+                   f"sample_rate={neuron_sample_rate}")
+        return evaluator
+
     def _create_full_evaluator(self, context_size: int, params: dict):
         """Create a full BitwiseEvaluator for validation summaries.
 
@@ -695,10 +772,24 @@ class FlowWorker:
             # Determine cluster_type from architecture_type
             architecture_type = params.get("architecture_type", "tiered")
             from wnn.ram.experiments.experiment import ClusterType
-            cluster_type = ClusterType.BITWISE if architecture_type == "bitwise" else ClusterType.TIERED
+            if architecture_type == "multi_stage":
+                cluster_type = ClusterType.MULTI_STAGE
+            elif architecture_type == "bitwise":
+                cluster_type = ClusterType.BITWISE
+            else:
+                cluster_type = ClusterType.TIERED
+
+            # Multi-stage fields: extract target_stage from experiment name prefix (S0:, S1:, etc.)
+            ms_target_stage = 0
+            exp_name = exp_data.get("name", "Unnamed")
+            if exp_name.startswith("S") and ":" in exp_name[:4]:
+                try:
+                    ms_target_stage = int(exp_name[1:exp_name.index(":")])
+                except (ValueError, IndexError):
+                    pass
 
             exp_config = ExperimentConfig(
-                name=exp_data.get("name", "Unnamed"),
+                name=exp_name,
                 experiment_type=experiment_type,
                 optimize_bits=optimize_bits,
                 optimize_neurons=optimize_neurons,
@@ -732,6 +823,12 @@ class FlowWorker:
                 neurons_grid=neurons_grid if experiment_type == ExperimentType.GRID_SEARCH else None,
                 bits_grid=bits_grid if experiment_type == ExperimentType.GRID_SEARCH else None,
                 grid_top_k=grid_top_k,
+                # Multi-stage fields
+                num_stages=params.get("num_stages", 2) if architecture_type == "multi_stage" else 1,
+                stage_k=params.get("stage_k") if architecture_type == "multi_stage" else None,
+                stage_cluster_type=params.get("stage_cluster_type") if architecture_type == "multi_stage" else None,
+                stage_mode=params.get("stage_mode") if architecture_type == "multi_stage" else None,
+                target_stage=ms_target_stage if architecture_type == "multi_stage" else 0,
             )
             exp_configs.append(exp_config)
 

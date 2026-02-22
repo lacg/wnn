@@ -1,30 +1,29 @@
 """
-Two-Stage Evaluator — Evaluates two-stage (group + within-group) RAM LM genomes.
+Multi-Stage Evaluator — Evaluates multi-stage RAM LM genomes.
 
-Wraps TwoStageCacheWrapper from Rust. Supports:
-- Stage 1 evaluation: predict cluster_id bits from context
-- Stage 2 evaluation (input_concat): predict within-group index bits from context + cluster_id
+Wraps MultiStageCacheWrapper from Rust. Supports:
+- Stage 0 evaluation: predict cluster_id bits from context
+- Stage 1 evaluation (input_concat): predict within-group index bits from context + cluster_id
 - Combined CE: joint P(token) = P(group|ctx) × P(token|group,ctx)
 
 Usage:
-	evaluator = TwoStageEvaluator(
+	evaluator = MultiStageEvaluator(
 		train_tokens=train_tokens,
 		eval_tokens=eval_tokens,
 		vocab_size=50257,
 		context_size=4,
-		k=256,
-		target_stage=1,  # which stage GA/TS optimizes
+		stage_k=[256, 256],
+		target_stage=0,  # 0-indexed: which stage GA/TS optimizes
 	)
 
-	# Evaluate Stage 1 genomes
+	# Evaluate Stage 0 genomes
 	results = evaluator.evaluate_batch(genomes)
-	# → [EvalResult(ce, accuracy, bit_accuracy), ...]
 
-	# Combined CE (needs genomes for both stages)
-	combined = evaluator.compute_combined_metrics(stage1_genome, stage2_genome)
-	# → EvalResult(ce, accuracy, cluster_ce=..., within_ce=...)
+	# Combined CE (needs genomes for all stages)
+	combined = evaluator.compute_combined_metrics([stage0_genome, stage1_genome])
 """
 
+import math
 import random
 import time
 from typing import Optional, Callable
@@ -33,11 +32,58 @@ from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 from wnn.ram.architecture.base_evaluator import BaseEvaluator, EvalResult, AdaptationConfig
 
 
-class TwoStageEvaluator(BaseEvaluator):
-	"""Evaluator for two-stage RAM LM genomes.
+def compute_default_k(num_stages: int, stage_cluster_types: list[str], vocab_size: int = 50257) -> list[int]:
+	"""Compute default K values per stage so that the product >= vocab_size.
 
-	Primary path: Rust+Metal via TwoStageCacheWrapper.
-	target_stage determines which stage evaluate_batch() operates on.
+	For 2 stages:
+	  bitwise+bitwise: [256, 256]  (65536 > 50257)
+	  tiered+tiered:   [225, 224]  (50400 ≈ 50257)
+	  mixed:           tiered=197, bitwise=256 (50432 ≈ 50257)
+
+	For N>2: distribute evenly in log-space, round up so product >= vocab_size.
+	"""
+	if num_stages == 2:
+		t0, t1 = stage_cluster_types[0], stage_cluster_types[1]
+		if t0 == "bitwise" and t1 == "bitwise":
+			return [256, 256]
+		elif t0 == "tiered" and t1 == "tiered":
+			k = math.ceil(math.sqrt(vocab_size))
+			return [k, math.ceil(vocab_size / k)]
+		else:
+			# Mixed: bitwise stages get 256 (power of 2), tiered gets remainder
+			result = []
+			bitwise_product = 1
+			tiered_indices = []
+			for i, ct in enumerate(stage_cluster_types):
+				if ct == "bitwise":
+					result.append(256)
+					bitwise_product *= 256
+				else:
+					result.append(0)
+					tiered_indices.append(i)
+			if tiered_indices:
+				remaining = math.ceil(vocab_size / bitwise_product)
+				per_tiered = math.ceil(remaining ** (1.0 / len(tiered_indices)))
+				for idx in tiered_indices:
+					result[idx] = per_tiered
+			return result
+
+	# General N>2: distribute evenly in log-space
+	per_stage_k = math.ceil(vocab_size ** (1.0 / num_stages))
+	result = [per_stage_k] * num_stages
+	# Adjust last stage to ensure product >= vocab_size
+	product = 1
+	for k in result[:-1]:
+		product *= k
+	result[-1] = math.ceil(vocab_size / product)
+	return result
+
+
+class MultiStageEvaluator(BaseEvaluator):
+	"""Evaluator for multi-stage RAM LM genomes.
+
+	Primary path: Rust+Metal via MultiStageCacheWrapper.
+	target_stage (0-indexed) determines which stage evaluate_batch() operates on.
 	"""
 
 	def __init__(
@@ -46,8 +92,11 @@ class TwoStageEvaluator(BaseEvaluator):
 		eval_tokens: list[int],
 		vocab_size: int = 50257,
 		context_size: int = 4,
-		k: int = 256,
-		target_stage: int = 1,
+		num_stages: int = 2,
+		stage_k: Optional[list[int]] = None,
+		stage_cluster_type: Optional[list[str]] = None,
+		stage_mode: Optional[list[int]] = None,
+		target_stage: int = 0,
 		num_parts: int = 3,
 		num_eval_parts: int = 1,
 		seed: Optional[int] = None,
@@ -57,6 +106,17 @@ class TwoStageEvaluator(BaseEvaluator):
 		adapt_config: Optional[AdaptationConfig] = None,
 		sparse_threshold: Optional[int] = None,
 	):
+		assert num_stages == 2, "Only 2 stages supported in Rust backend (for now)"
+
+		# Defaults
+		if stage_cluster_type is None:
+			stage_cluster_type = ["bitwise", "bitwise"]
+		if stage_k is None:
+			stage_k = compute_default_k(num_stages, stage_cluster_type, vocab_size)
+		if stage_mode is None:
+			from wnn.ram.experiments.experiment import StageMode
+			stage_mode = [StageMode.INPUT_CONCAT]
+
 		super().__init__(
 			train_tokens=train_tokens,
 			eval_tokens=eval_tokens,
@@ -70,19 +130,22 @@ class TwoStageEvaluator(BaseEvaluator):
 			adapt_config=adapt_config,
 		)
 
-		self._k = k
+		self._num_stages = num_stages
+		self._stage_k = stage_k
+		self._stage_cluster_type = stage_cluster_type
+		self._stage_mode = stage_mode
 		self._target_stage = target_stage
 		self._pad_token_id = pad_token_id
 		self._sparse_threshold = sparse_threshold
 
-		# Create Rust backend
-		from ram_accelerator import TwoStageCacheWrapper
-		self._cache = TwoStageCacheWrapper(
+		# Create Rust backend (internally handles 2-stage encoding)
+		from ram_accelerator import MultiStageCacheWrapper
+		self._cache = MultiStageCacheWrapper(
 			train_tokens=list(train_tokens),
 			eval_tokens=list(eval_tokens),
 			vocab_size=vocab_size,
 			context_size=context_size,
-			k=k,
+			k=stage_k[0],  # Rust uses K from stage 0
 			num_parts=num_parts,
 			num_eval_parts=num_eval_parts,
 			pad_token_id=pad_token_id,
@@ -95,13 +158,17 @@ class TwoStageEvaluator(BaseEvaluator):
 		self._stage1_input_bits = self._cache.stage1_input_bits()
 		self._stage2_concat_input_bits = self._cache.stage2_concat_input_bits()
 
+		# Per-stage dimensions (lists indexed by stage)
+		self._stage_num_clusters = [self._bits_per_cluster_id, self._bits_per_within_index]
+		self._stage_input_bits = [self._stage1_input_bits, self._stage2_concat_input_bits]
+
 		print(
-			f"[TwoStageEvaluator] Rust backend active "
-			f"(k={k}, target_stage={target_stage}, "
-			f"s1_clusters={self._bits_per_cluster_id}, "
-			f"s2_clusters={self._bits_per_within_index}, "
-			f"s1_input={self._stage1_input_bits}, "
-			f"s2_input={self._stage2_concat_input_bits})"
+			f"[MultiStageEvaluator] Rust backend active "
+			f"(stages={num_stages}, k={stage_k}, target_stage={target_stage}, "
+			f"s0_clusters={self._bits_per_cluster_id}, "
+			f"s1_clusters={self._bits_per_within_index}, "
+			f"s0_input={self._stage1_input_bits}, "
+			f"s1_input={self._stage2_concat_input_bits})"
 		)
 
 	# ── Rotation (delegated to Rust) ─────────────────────────────────
@@ -120,26 +187,26 @@ class TwoStageEvaluator(BaseEvaluator):
 
 	@target_stage.setter
 	def target_stage(self, value: int) -> None:
-		assert value in (1, 2), f"target_stage must be 1 or 2, got {value}"
+		assert 0 <= value < self._num_stages, f"target_stage must be 0..{self._num_stages-1}, got {value}"
 		self._target_stage = value
 
 	@property
 	def total_input_bits(self) -> int:
 		"""Input bits for the active stage."""
-		if self._target_stage == 1:
-			return self._stage1_input_bits
-		return self._stage2_concat_input_bits
+		return self._stage_input_bits[self._target_stage]
 
 	@property
 	def num_clusters(self) -> int:
 		"""Output clusters (bit-clusters) for the active stage."""
-		if self._target_stage == 1:
-			return self._bits_per_cluster_id
-		return self._bits_per_within_index
+		return self._stage_num_clusters[self._target_stage]
 
 	@property
-	def k(self) -> int:
-		return self._k
+	def num_stages(self) -> int:
+		return self._num_stages
+
+	@property
+	def stage_k(self) -> list[int]:
+		return self._stage_k
 
 	@property
 	def bits_per_cluster_id(self) -> int:
@@ -177,9 +244,9 @@ class TwoStageEvaluator(BaseEvaluator):
 
 		return bits_flat, neurons_flat, connections_flat
 
-	# ── Stage 1 evaluation ───────────────────────────────────────────
+	# ── Stage 0 evaluation ───────────────────────────────────────────
 
-	def _evaluate_stage1_rust(
+	def _evaluate_stage0_rust(
 		self,
 		genomes: list[ClusterGenome],
 		train_idx: int,
@@ -198,7 +265,7 @@ class TwoStageEvaluator(BaseEvaluator):
 			rng_seed=self._seed,
 		)
 
-	def _evaluate_stage1_full_rust(
+	def _evaluate_stage0_full_rust(
 		self,
 		genomes: list[ClusterGenome],
 	) -> list[tuple[float, float, float]]:
@@ -213,9 +280,9 @@ class TwoStageEvaluator(BaseEvaluator):
 			rng_seed=self._seed,
 		)
 
-	# ── Stage 2 evaluation (input_concat) ────────────────────────────
+	# ── Stage 1 evaluation (input_concat) ────────────────────────────
 
-	def _evaluate_stage2_concat_rust(
+	def _evaluate_stage1_concat_rust(
 		self,
 		genomes: list[ClusterGenome],
 		train_idx: int,
@@ -234,7 +301,7 @@ class TwoStageEvaluator(BaseEvaluator):
 			rng_seed=self._seed,
 		)
 
-	def _evaluate_stage2_concat_full_rust(
+	def _evaluate_stage1_concat_full_rust(
 		self,
 		genomes: list[ClusterGenome],
 	) -> list[tuple[float, float, float]]:
@@ -268,10 +335,10 @@ class TwoStageEvaluator(BaseEvaluator):
 			eval_subset_idx = self.next_eval_idx()
 
 		start = time.time()
-		if self._target_stage == 1:
-			raw = self._evaluate_stage1_rust(genomes, train_subset_idx, eval_subset_idx)
+		if self._target_stage == 0:
+			raw = self._evaluate_stage0_rust(genomes, train_subset_idx, eval_subset_idx)
 		else:
-			raw = self._evaluate_stage2_concat_rust(genomes, train_subset_idx, eval_subset_idx)
+			raw = self._evaluate_stage1_concat_rust(genomes, train_subset_idx, eval_subset_idx)
 		elapsed = time.time() - start
 
 		# Cache bit accuracy on genomes
@@ -312,10 +379,10 @@ class TwoStageEvaluator(BaseEvaluator):
 	) -> list[EvalResult]:
 		"""Evaluate genomes with full (non-rotated) data for the active target_stage."""
 		start = time.time()
-		if self._target_stage == 1:
-			raw = self._evaluate_stage1_full_rust(genomes)
+		if self._target_stage == 0:
+			raw = self._evaluate_stage0_full_rust(genomes)
 		else:
-			raw = self._evaluate_stage2_concat_full_rust(genomes)
+			raw = self._evaluate_stage1_concat_full_rust(genomes)
 		elapsed = time.time() - start
 
 		for genome, (_, _, bit_acc) in zip(genomes, raw):
@@ -334,25 +401,32 @@ class TwoStageEvaluator(BaseEvaluator):
 
 	def compute_combined_metrics(
 		self,
-		stage1_genome: ClusterGenome,
-		stage2_genome: ClusterGenome,
+		stage_genomes: list[ClusterGenome],
 	) -> EvalResult:
 		"""Compute combined CE over the full vocabulary.
+
+		Args:
+			stage_genomes: List of genomes, one per stage (0-indexed).
 
 		Trains both stages independently, reconstructs the joint distribution
 		P(token) = P(group|ctx) × P(token|group,ctx), and computes CE + accuracy.
 
 		Returns EvalResult with ce, accuracy, plus cluster_ce and within_ce breakdown.
 		"""
+		assert len(stage_genomes) == self._num_stages, \
+			f"Expected {self._num_stages} genomes, got {len(stage_genomes)}"
+
+		stage0_genome = stage_genomes[0]
+		stage1_genome = stage_genomes[1]
 		sparse_threshold = self._sparse_threshold or 4096
 
-		combined_ce, combined_acc, s1_ce, s2_ce = self._cache.evaluate_combined_ce(
-			s1_bits_per_neuron=list(stage1_genome.bits_per_neuron),
-			s1_neurons_per_cluster=list(stage1_genome.neurons_per_cluster),
-			s1_connections=list(stage1_genome.connections or []),
-			s2_bits_per_neuron=list(stage2_genome.bits_per_neuron),
-			s2_neurons_per_cluster=list(stage2_genome.neurons_per_cluster),
-			s2_connections=list(stage2_genome.connections or []),
+		combined_ce, combined_acc, s0_ce, s1_ce = self._cache.evaluate_combined_ce(
+			s1_bits_per_neuron=list(stage0_genome.bits_per_neuron),
+			s1_neurons_per_cluster=list(stage0_genome.neurons_per_cluster),
+			s1_connections=list(stage0_genome.connections or []),
+			s2_bits_per_neuron=list(stage1_genome.bits_per_neuron),
+			s2_neurons_per_cluster=list(stage1_genome.neurons_per_cluster),
+			s2_connections=list(stage1_genome.connections or []),
 			memory_mode=self._memory_mode,
 			neuron_sample_rate=self._neuron_sample_rate,
 			rng_seed=self._seed,
@@ -362,8 +436,8 @@ class TwoStageEvaluator(BaseEvaluator):
 		return EvalResult(
 			ce=combined_ce,
 			accuracy=combined_acc,
-			cluster_ce=s1_ce,
-			within_ce=s2_ce,
+			cluster_ce=s0_ce,
+			within_ce=s1_ce,
 		)
 
 	# ── Mutation + search (same pattern as BitwiseEvaluator) ─────────
@@ -544,10 +618,10 @@ class TwoStageEvaluator(BaseEvaluator):
 				for _ in range(batch_n)
 			]
 
-			if self._target_stage == 1:
-				results = self._evaluate_stage1_rust(batch, train_subset_idx, eval_subset_idx)
+			if self._target_stage == 0:
+				results = self._evaluate_stage0_rust(batch, train_subset_idx, eval_subset_idx)
 			else:
-				results = self._evaluate_stage2_concat_rust(batch, train_subset_idx, eval_subset_idx)
+				results = self._evaluate_stage1_concat_rust(batch, train_subset_idx, eval_subset_idx)
 			evaluated += len(results)
 
 			for g, (ce, acc, bit_acc) in zip(batch, results):
@@ -631,10 +705,10 @@ class TwoStageEvaluator(BaseEvaluator):
 				)
 				batch.append(child)
 
-			if self._target_stage == 1:
-				results = self._evaluate_stage1_rust(batch, train_subset_idx, eval_subset_idx)
+			if self._target_stage == 0:
+				results = self._evaluate_stage0_rust(batch, train_subset_idx, eval_subset_idx)
 			else:
-				results = self._evaluate_stage2_concat_rust(batch, train_subset_idx, eval_subset_idx)
+				results = self._evaluate_stage1_concat_rust(batch, train_subset_idx, eval_subset_idx)
 			evaluated += len(results)
 
 			for g, (ce, acc, bit_acc) in zip(batch, results):
@@ -706,10 +780,10 @@ class TwoStageEvaluator(BaseEvaluator):
 		mode_names = {0: "TERNARY", 1: "QUAD_BINARY", 2: "QUAD_WEIGHTED"}
 		mode = mode_names.get(self._memory_mode, f"UNKNOWN({self._memory_mode})")
 		return (
-			f"TwoStageEvaluator(vocab={self._vocab_size}, "
-			f"context={self._context_size}, k={self._k}, "
+			f"MultiStageEvaluator(vocab={self._vocab_size}, "
+			f"context={self._context_size}, k={self._stage_k}, "
 			f"target_stage={self._target_stage}, "
-			f"s1_clusters={self._bits_per_cluster_id}, "
-			f"s2_clusters={self._bits_per_within_index}, "
+			f"s0_clusters={self._bits_per_cluster_id}, "
+			f"s1_clusters={self._bits_per_within_index}, "
 			f"mode={mode})"
 		)

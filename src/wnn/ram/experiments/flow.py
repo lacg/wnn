@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal, Optional
 
 from wnn.ram.fitness import FitnessCalculatorType
-from wnn.ram.experiments.experiment import Experiment, ClusterType, ExperimentConfig, ExperimentResult, ExperimentType
+from wnn.ram.experiments.experiment import Experiment, ClusterType, ExperimentConfig, ExperimentResult, ExperimentType, StageMode
 from wnn.ram.experiments.dashboard_client import DashboardClient, FlowConfig as APIFlowConfig
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 
@@ -183,6 +183,12 @@ class FlowConfig:
 	min_neurons: int = 10
 	max_neurons: int = 300
 	sparse_threshold: Optional[int] = None
+
+	# Multi-stage specific config
+	num_stages: int = 1
+	stage_k: Optional[list[int]] = None
+	stage_cluster_type: Optional[list[str]] = None
+	stage_mode: Optional[list[int]] = None
 
 	@classmethod
 	def bitwise_7_phase(
@@ -426,6 +432,136 @@ class FlowConfig:
 			sparse_threshold=sparse_threshold,
 		)
 
+	@classmethod
+	def multi_stage_flow(
+		cls,
+		name: str,
+		num_stages: int = 2,
+		stage_k: Optional[list[int]] = None,
+		stage_cluster_type: Optional[list[str]] = None,
+		stage_mode: Optional[list[int]] = None,
+		ga_generations: int = 250,
+		ts_iterations: int = 250,
+		population_size: int = 50,
+		neighbors_per_iter: int = 50,
+		patience: int = 10,
+		context_size: int = 4,
+		memory_mode: str = "QUAD_WEIGHTED",
+		neuron_sample_rate: float = 0.25,
+		min_bits: int = 4,
+		max_bits: int = 24,
+		min_neurons: int = 5,
+		max_neurons: int = 300,
+		neurons_grid: Optional[list[int]] = None,
+		bits_grid: Optional[list[int]] = None,
+		fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK,
+		fitness_weight_ce: float = 1.0,
+		fitness_weight_acc: float = 1.0,
+		sparse_threshold: Optional[int] = None,
+		seed: Optional[int] = None,
+		description: Optional[str] = None,
+		seed_checkpoint_path: Optional[str] = None,
+	) -> "FlowConfig":
+		"""Create a multi-stage flow with 5 experiments per stage.
+
+		Per stage: Grid → GA Neurons → TS Neurons → GA Connections → TS Connections
+		Names prefixed: "S0: Grid Search", "S1: GA Neurons", etc.
+
+		Args:
+			num_stages: Number of stages (currently must be 2)
+			stage_k: K per stage; uses compute_default_k() if None
+			stage_cluster_type: Per-stage architecture type (default: ["bitwise", "bitwise"])
+			stage_mode: StageMode values between stages (default: [INPUT_CONCAT])
+		"""
+		assert num_stages == 2, "Only 2 stages supported (for now)"
+
+		if stage_cluster_type is None:
+			stage_cluster_type = ["bitwise"] * num_stages
+		if stage_k is None:
+			from wnn.ram.architecture.multistage_evaluator import compute_default_k
+			stage_k = compute_default_k(num_stages, stage_cluster_type)
+		if stage_mode is None:
+			stage_mode = [StageMode.INPUT_CONCAT]
+
+		# Default grid values for multi-stage (smaller output space per stage)
+		if neurons_grid is None:
+			neurons_grid = [5, 10, 25, 50, 100, 200, 300]
+		if bits_grid is None:
+			bits_grid = [4, 6, 8, 10, 12, 16, 20, 24]
+
+		experiments = []
+		for stage in range(num_stages):
+			prefix = f"S{stage}"
+
+			# 5 phases per stage
+			stage_phases = [
+				(f"{prefix}: Grid Search", ExperimentType.GRID_SEARCH, False, False, False),
+				(f"{prefix}: GA Neurons", ExperimentType.GA, False, True, False),
+				(f"{prefix}: TS Neurons", ExperimentType.TS, False, True, False),
+				(f"{prefix}: GA Connections", ExperimentType.GA, False, False, True),
+				(f"{prefix}: TS Connections", ExperimentType.TS, False, False, True),
+			]
+
+			for phase_name, exp_type, opt_bits, opt_neurons, opt_conns in stage_phases:
+				config = ExperimentConfig(
+					name=phase_name,
+					experiment_type=exp_type,
+					optimize_bits=opt_bits,
+					optimize_neurons=opt_neurons,
+					optimize_connections=opt_conns,
+					generations=ga_generations,
+					population_size=population_size,
+					iterations=ts_iterations,
+					neighbors_per_iter=neighbors_per_iter,
+					patience=patience,
+					fitness_calculator_type=fitness_calculator_type,
+					fitness_weight_ce=fitness_weight_ce,
+					fitness_weight_acc=fitness_weight_acc,
+					seed=seed,
+					cluster_type=ClusterType.MULTI_STAGE,
+					# Multi-stage config
+					num_stages=num_stages,
+					stage_k=stage_k,
+					stage_cluster_type=stage_cluster_type,
+					stage_mode=[m if isinstance(m, int) else m.value for m in stage_mode],
+					target_stage=stage,
+					# Bitwise-specific bounds
+					bitwise_min_bits=min_bits,
+					bitwise_max_bits=max_bits,
+					bitwise_min_neurons=min_neurons,
+					bitwise_max_neurons=max_neurons,
+				)
+				if exp_type == ExperimentType.GRID_SEARCH:
+					config.neurons_grid = neurons_grid
+					config.bits_grid = bits_grid
+					config.generations = 1
+				experiments.append(config)
+
+		return cls(
+			name=name,
+			experiments=experiments,
+			description=description or f"Multi-stage {num_stages * 5}-phase optimization ({num_stages} stages × 5 phases)",
+			seed_checkpoint_path=seed_checkpoint_path,
+			context_size=context_size,
+			patience=patience,
+			fitness_calculator_type=fitness_calculator_type,
+			fitness_weight_ce=fitness_weight_ce,
+			fitness_weight_acc=fitness_weight_acc,
+			seed=seed,
+			architecture_type="multi_stage",
+			memory_mode=memory_mode,
+			neuron_sample_rate=neuron_sample_rate,
+			min_bits=min_bits,
+			max_bits=max_bits,
+			min_neurons=min_neurons,
+			max_neurons=max_neurons,
+			sparse_threshold=sparse_threshold,
+			num_stages=num_stages,
+			stage_k=stage_k,
+			stage_cluster_type=stage_cluster_type,
+			stage_mode=[m if isinstance(m, int) else m.value for m in stage_mode],
+		)
+
 	def to_api_config(self) -> APIFlowConfig:
 		"""Convert to API FlowConfig for dashboard registration."""
 		# Convert tier_config to string format for API compatibility
@@ -465,6 +601,22 @@ class FlowConfig:
 				"sparse_threshold": self.sparse_threshold,
 			})
 
+		# Add multi-stage params
+		if self.architecture_type == "multi_stage":
+			params.update({
+				"num_stages": self.num_stages,
+				"stage_k": self.stage_k,
+				"stage_cluster_type": self.stage_cluster_type,
+				"stage_mode": self.stage_mode,
+				"memory_mode": self.memory_mode,
+				"neuron_sample_rate": self.neuron_sample_rate,
+				"min_bits": self.min_bits,
+				"max_bits": self.max_bits,
+				"min_neurons": self.min_neurons,
+				"max_neurons": self.max_neurons,
+				"sparse_threshold": self.sparse_threshold,
+			})
+
 		return APIFlowConfig(
 			name=self.name,
 			experiments=[exp.to_dict() for exp in self.experiments],
@@ -484,6 +636,12 @@ class FlowResult:
 	final_accuracy: Optional[float]
 	total_elapsed_seconds: float
 	flow_id: Optional[int] = None
+
+	# Multi-stage fields
+	stage_genomes: Optional[list[ClusterGenome]] = None
+	combined_ce: Optional[float] = None
+	combined_accuracy: Optional[float] = None
+	per_stage_ce: Optional[list[float]] = None
 
 	def get_best_by_accuracy(self) -> Optional[ExperimentResult]:
 		"""Get the experiment result with best accuracy."""
@@ -668,6 +826,10 @@ class Flow:
 		# Create initial genome from tier config if not seeded
 		if seed_genome is None and cfg.tier_config:
 			seed_genome = self._create_tiered_genome()
+
+		# Multi-stage tracking: frozen genomes per completed stage
+		is_multi_stage = cfg.architecture_type == "multi_stage" and cfg.num_stages > 1
+		frozen_genomes: list[Optional[ClusterGenome]] = [None] * cfg.num_stages if is_multi_stage else []
 
 		# Run experiments
 		start_idx = resume_from or 0
@@ -877,6 +1039,34 @@ class Flow:
 				current_fitness = result.final_fitness
 				current_evals = result.population_metrics
 
+				# Multi-stage: detect stage boundary
+				if is_multi_stage and idx + 1 < len(cfg.experiments):
+					next_config = cfg.experiments[idx + 1]
+					if hasattr(next_config, 'target_stage') and next_config.target_stage != exp_config.target_stage:
+						prev_stage = exp_config.target_stage
+						next_stage = next_config.target_stage
+						self.log("")
+						self.log("=" * 70)
+						self.log(f"  STAGE BOUNDARY: S{prev_stage} → S{next_stage}")
+						self.log("=" * 70)
+
+						# Freeze previous stage genome
+						frozen_genomes[prev_stage] = current_genome
+						self.log(f"  Frozen S{prev_stage} genome: {current_genome}")
+
+						# Switch evaluator target stage
+						self.evaluator.target_stage = next_stage
+						self.log(f"  Evaluator target_stage → {next_stage}")
+
+						# Reset state for new stage
+						current_genome = None
+						current_population = None
+						current_fitness = None
+						current_threshold = None
+						current_evals = None
+						self.log(f"  State reset for S{next_stage}")
+						self.log("")
+
 			# Flow completed successfully
 			if self.dashboard_client and self._flow_id:
 				try:
@@ -928,13 +1118,43 @@ class Flow:
 			raise ValueError("Flow completed but no experiment results were recorded.")
 		final_result = self._results[-1]
 
+		# Multi-stage: compute combined CE
+		stage_genomes_list = None
+		combined_ce = None
+		combined_accuracy = None
+		per_stage_ce = None
+
+		if is_multi_stage and current_genome is not None:
+			# Last stage genome = current_genome
+			frozen_genomes[cfg.num_stages - 1] = current_genome
+			stage_genomes_list = list(frozen_genomes)
+
+			# Check all stages have genomes
+			if all(g is not None for g in stage_genomes_list):
+				self.log("")
+				self.log("Computing combined CE across all stages...")
+				try:
+					combined_result = self.evaluator.compute_combined_metrics(stage_genomes_list)
+					combined_ce = combined_result.ce
+					combined_accuracy = combined_result.accuracy
+					per_stage_ce = [combined_result.cluster_ce, combined_result.within_ce]
+					self.log(f"  Combined CE: {combined_ce:.4f}")
+					self.log(f"  Combined Accuracy: {combined_accuracy:.2%}")
+					self.log(f"  Per-stage CE: S0={per_stage_ce[0]:.4f}, S1={per_stage_ce[1]:.4f}")
+				except Exception as e:
+					self.log(f"  Warning: Failed to compute combined CE: {e}")
+
 		self.log("")
 		self.log("=" * 70)
 		self.log(f"  FLOW COMPLETE: {cfg.name}")
 		self.log("=" * 70)
-		self.log(f"  Final CE: {final_result.final_fitness:.4f}")
-		if final_result.final_accuracy:
-			self.log(f"  Final Accuracy: {final_result.final_accuracy:.2%}")
+		if combined_ce is not None:
+			self.log(f"  Combined CE: {combined_ce:.4f}")
+			self.log(f"  Combined Accuracy: {combined_accuracy:.2%}")
+		else:
+			self.log(f"  Final CE: {final_result.final_fitness:.4f}")
+			if final_result.final_accuracy:
+				self.log(f"  Final Accuracy: {final_result.final_accuracy:.2%}")
 		self.log(f"  Total Duration: {elapsed:.1f}s")
 		self.log("")
 
@@ -942,10 +1162,14 @@ class Flow:
 			flow_name=cfg.name,
 			experiment_results=self._results,
 			final_genome=final_result.best_genome,
-			final_fitness=final_result.final_fitness,
-			final_accuracy=final_result.final_accuracy,
+			final_fitness=combined_ce if combined_ce is not None else final_result.final_fitness,
+			final_accuracy=combined_accuracy if combined_accuracy is not None else final_result.final_accuracy,
 			total_elapsed_seconds=elapsed,
 			flow_id=self._flow_id,
+			stage_genomes=stage_genomes_list,
+			combined_ce=combined_ce,
+			combined_accuracy=combined_accuracy,
+			per_stage_ce=per_stage_ce,
 		)
 
 	def _load_seed_checkpoint(

@@ -1,12 +1,12 @@
-//! Two-Stage Token Cache — Pre-encoded data for two-stage RAM evaluation.
+//! Multi-Stage Token Cache — Pre-encoded data for multi-stage RAM evaluation.
 //!
 //! Splits token prediction into:
-//!   Stage 1: Predict token-group (cluster_id) from context
-//!   Stage 2: Predict token within group from context (+ optional cluster info)
+//!   Stage 0: Predict token-group (cluster_id) from context
+//!   Stage 1: Predict token within group from context (+ optional cluster info)
 //!
 //! P(token) = P(group | context) × P(token_in_group | context, group)
 //!
-//! Stage 1 reuses the bitwise evaluation pipeline (train_into + forward_eval_into + CE)
+//! Stage 0 reuses the bitwise evaluation pipeline (train_into + forward_eval_into + CE)
 //! with cluster_id as the output instead of token_id.
 
 use rayon::prelude::*;
@@ -26,7 +26,7 @@ use crate::bitwise_ramlm::{
 /// - Stage 1 data: context → cluster_id bits (bitwise prediction)
 /// - Stage 2 selector data: K separate per-group datasets (context-only input)
 /// - Stage 2 concat data: single dataset with wider input (context + cluster_id bits)
-pub struct TwoStageTokenCache {
+pub struct MultiStageTokenCache {
     // ── Cluster mapping ──────────────────────────────────────────────
     pub k: usize,                          // Number of token-groups
     pub cluster_of: Vec<u16>,              // [vocab_size] → group_id (0..K-1)
@@ -76,7 +76,7 @@ pub struct TwoStageTokenCache {
     current_eval_idx: AtomicUsize,
 }
 
-impl TwoStageTokenCache {
+impl MultiStageTokenCache {
     pub fn new(
         train_tokens: Vec<u32>,
         eval_tokens: Vec<u32>,
@@ -248,7 +248,7 @@ impl TwoStageTokenCache {
         let sel_train_n: usize = stage2_selector_train.iter().map(|s| s.num_examples).sum();
         let sel_eval_n: usize = stage2_selector_eval.iter().map(|s| s.num_examples).sum();
         eprintln!(
-            "[TwoStageCache] K={k}, vocab={vocab_size}, ctx={context_size}, \
+            "[MultiStageCache] K={k}, vocab={vocab_size}, ctx={context_size}, \
              s1_bits={bits_per_cluster_id}, s2_bits={bits_per_within_index}, \
              max_group={max_cluster_size}, concat_input={stage2_concat_input_bits}b"
         );
@@ -698,7 +698,7 @@ impl TwoStageTokenCache {
 ///
 /// Returns: Vec<(cluster_ce, cluster_accuracy, bit_acc)> per genome.
 pub fn evaluate_stage1_genomes(
-    cache: &TwoStageTokenCache,
+    cache: &MultiStageTokenCache,
     bits_per_neuron_flat: &[usize],
     neurons_per_cluster_flat: &[usize],
     connections_flat: &[i64],
@@ -731,7 +731,7 @@ pub fn evaluate_stage1_genomes(
 
 /// Evaluate Stage 1 genomes with full (non-rotated) data.
 pub fn evaluate_stage1_genomes_full(
-    cache: &TwoStageTokenCache,
+    cache: &MultiStageTokenCache,
     bits_per_neuron_flat: &[usize],
     neurons_per_cluster_flat: &[usize],
     connections_flat: &[i64],
@@ -768,7 +768,7 @@ pub fn evaluate_stage1_genomes_full(
 ///
 /// Returns: Vec<(within_ce, within_accuracy, bit_acc)> per genome.
 pub fn evaluate_stage2_selector_genomes(
-    cache: &TwoStageTokenCache,
+    cache: &MultiStageTokenCache,
     bits_per_neuron_flat: &[usize],
     neurons_per_cluster_flat: &[usize],
     connections_flat: &[i64],
@@ -812,7 +812,7 @@ pub fn evaluate_stage2_selector_genomes(
 ///
 /// Returns: Vec<(within_ce, within_accuracy, bit_acc)> per genome.
 pub fn evaluate_stage2_concat_genomes(
-    cache: &TwoStageTokenCache,
+    cache: &MultiStageTokenCache,
     bits_per_neuron_flat: &[usize],
     neurons_per_cluster_flat: &[usize],
     connections_flat: &[i64],
@@ -845,7 +845,7 @@ pub fn evaluate_stage2_concat_genomes(
 
 /// Evaluate Stage 2 genomes with input_concat mode — full data.
 pub fn evaluate_stage2_concat_genomes_full(
-    cache: &TwoStageTokenCache,
+    cache: &MultiStageTokenCache,
     bits_per_neuron_flat: &[usize],
     neurons_per_cluster_flat: &[usize],
     connections_flat: &[i64],
@@ -891,7 +891,7 @@ pub fn evaluate_stage2_concat_genomes_full(
 ///
 /// Returns: (combined_ce, combined_accuracy, stage1_ce, stage2_ce)
 pub fn compute_combined_ce(
-    cache: &TwoStageTokenCache,
+    cache: &MultiStageTokenCache,
     // Stage 1 genome params (single genome)
     s1_bits_per_neuron: &[usize],
     s1_neurons_per_cluster: &[usize],

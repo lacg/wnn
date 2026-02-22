@@ -1,12 +1,12 @@
 """
-End-to-end test for TwoStageEvaluator.
+End-to-end test for MultiStageEvaluator.
 
 Tests:
-1. Construct TwoStageEvaluator with small token data
-2. Create random genomes for Stage 1 and Stage 2
-3. Evaluate Stage 1 genomes (subset + full)
-4. Evaluate Stage 2 genomes (subset + full)
-5. Compute combined CE and verify CE_combined ≈ CE_s1 + CE_s2
+1. Construct MultiStageEvaluator with small token data
+2. Create random genomes for Stage 0 and Stage 1
+3. Evaluate Stage 0 genomes (subset + full)
+4. Evaluate Stage 1 genomes (subset + full)
+5. Compute combined CE and verify CE_combined ≈ CE_s0 + CE_s1
 6. Run a mini GA-style evaluation (search_neighbors)
 """
 
@@ -17,7 +17,7 @@ import random
 # Setup path
 sys.path.insert(0, "src/wnn")
 
-from wnn.ram.architecture.twostage_evaluator import TwoStageEvaluator
+from wnn.ram.architecture.multistage_evaluator import MultiStageEvaluator, compute_default_k
 from wnn.ram.architecture.base_evaluator import EvalResult
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 
@@ -34,10 +34,32 @@ def create_random_genome(num_clusters: int, total_input_bits: int, neurons: int 
 	)
 
 
-def test_basic_evaluation():
-	"""Test basic Stage 1 and Stage 2 evaluation."""
+def test_compute_default_k():
+	"""Test compute_default_k utility function."""
 	print("=" * 60)
-	print("  Test: Basic TwoStageEvaluator Evaluation")
+	print("  Test: compute_default_k")
+	print("=" * 60)
+
+	k_bb = compute_default_k(2, ["bitwise", "bitwise"])
+	print(f"  bitwise+bitwise: {k_bb}")
+	assert k_bb == [256, 256], f"Expected [256,256], got {k_bb}"
+
+	k_tt = compute_default_k(2, ["tiered", "tiered"])
+	print(f"  tiered+tiered:   {k_tt}")
+	assert k_tt[0] * k_tt[1] >= 50257, f"Product {k_tt[0]*k_tt[1]} < 50257"
+
+	k_mixed = compute_default_k(2, ["tiered", "bitwise"])
+	print(f"  tiered+bitwise:  {k_mixed}")
+	assert k_mixed[1] == 256
+	assert k_mixed[0] * k_mixed[1] >= 50257
+
+	print("  PASS: compute_default_k returns correct values")
+
+
+def test_basic_evaluation():
+	"""Test basic Stage 0 and Stage 1 evaluation."""
+	print("\n" + "=" * 60)
+	print("  Test: Basic MultiStageEvaluator Evaluation")
 	print("=" * 60)
 
 	# Small synthetic token data (vocab 1000, ~2K train, ~500 eval)
@@ -49,27 +71,54 @@ def test_basic_evaluation():
 	train_tokens = [random.randint(0, vocab_size - 1) for _ in range(2000)]
 	eval_tokens = [random.randint(0, vocab_size - 1) for _ in range(500)]
 
-	# Create evaluator (target_stage=1)
-	print("\n  Creating TwoStageEvaluator (target_stage=1)...")
-	eval_s1 = TwoStageEvaluator(
+	# Create evaluator (target_stage=0, 0-indexed)
+	print("\n  Creating MultiStageEvaluator (target_stage=0)...")
+	evaluator = MultiStageEvaluator(
 		train_tokens=train_tokens,
 		eval_tokens=eval_tokens,
 		vocab_size=vocab_size,
 		context_size=context_size,
-		k=k,
-		target_stage=1,
+		stage_k=[k, vocab_size // k + 1],
+		target_stage=0,  # 0-indexed
 		num_parts=2,
 		num_eval_parts=1,
 		seed=42,
 		pad_token_id=0,
 	)
-	print(f"  {eval_s1}")
-	print(f"  Stage 1: num_clusters={eval_s1.num_clusters}, total_input_bits={eval_s1.total_input_bits}")
+	print(f"  Stage 0: num_clusters={evaluator.num_clusters}, total_input_bits={evaluator.total_input_bits}")
 
-	# Stage 1 genome
+	# Stage 0 genome
+	s0_genome = create_random_genome(
+		num_clusters=evaluator.num_clusters,
+		total_input_bits=evaluator.total_input_bits,
+		neurons=20,
+		bits=8,
+	)
+	print(f"  Stage 0 genome: {len(s0_genome.neurons_per_cluster)} clusters, "
+		  f"{sum(s0_genome.neurons_per_cluster)} neurons")
+
+	# Evaluate Stage 0
+	start = time.time()
+	results_s0 = evaluator.evaluate_batch([s0_genome])
+	elapsed = time.time() - start
+	print(f"\n  Stage 0 subset eval: CE={results_s0[0].ce:.4f}, "
+		  f"Acc={results_s0[0].accuracy:.4%}, "
+		  f"BitAcc={results_s0[0].bit_accuracy:.4%} ({elapsed:.2f}s)")
+
+	# Full eval
+	results_s0_full = evaluator.evaluate_batch_full([s0_genome])
+	print(f"  Stage 0 full eval:   CE={results_s0_full[0].ce:.4f}, "
+		  f"Acc={results_s0_full[0].accuracy:.4%}, "
+		  f"BitAcc={results_s0_full[0].bit_accuracy:.4%}")
+
+	# Switch to Stage 1 (0-indexed)
+	evaluator.target_stage = 1
+	print(f"\n  Switched to Stage 1: num_clusters={evaluator.num_clusters}, "
+		  f"total_input_bits={evaluator.total_input_bits}")
+
 	s1_genome = create_random_genome(
-		num_clusters=eval_s1.num_clusters,
-		total_input_bits=eval_s1.total_input_bits,
+		num_clusters=evaluator.num_clusters,
+		total_input_bits=evaluator.total_input_bits,
 		neurons=20,
 		bits=8,
 	)
@@ -78,86 +127,58 @@ def test_basic_evaluation():
 
 	# Evaluate Stage 1
 	start = time.time()
-	results_s1 = eval_s1.evaluate_batch([s1_genome])
+	results_s1 = evaluator.evaluate_batch([s1_genome])
 	elapsed = time.time() - start
-	print(f"\n  Stage 1 subset eval: CE={results_s1[0].ce:.4f}, "
+	print(f"  Stage 1 subset eval: CE={results_s1[0].ce:.4f}, "
 		  f"Acc={results_s1[0].accuracy:.4%}, "
 		  f"BitAcc={results_s1[0].bit_accuracy:.4%} ({elapsed:.2f}s)")
 
-	# Full eval
-	results_s1_full = eval_s1.evaluate_batch_full([s1_genome])
+	results_s1_full = evaluator.evaluate_batch_full([s1_genome])
 	print(f"  Stage 1 full eval:   CE={results_s1_full[0].ce:.4f}, "
 		  f"Acc={results_s1_full[0].accuracy:.4%}, "
 		  f"BitAcc={results_s1_full[0].bit_accuracy:.4%}")
 
-	# Switch to Stage 2
-	eval_s1.target_stage = 2
-	print(f"\n  Switched to Stage 2: num_clusters={eval_s1.num_clusters}, "
-		  f"total_input_bits={eval_s1.total_input_bits}")
-
-	s2_genome = create_random_genome(
-		num_clusters=eval_s1.num_clusters,
-		total_input_bits=eval_s1.total_input_bits,
-		neurons=20,
-		bits=8,
-	)
-	print(f"  Stage 2 genome: {len(s2_genome.neurons_per_cluster)} clusters, "
-		  f"{sum(s2_genome.neurons_per_cluster)} neurons")
-
-	# Evaluate Stage 2
-	start = time.time()
-	results_s2 = eval_s1.evaluate_batch([s2_genome])
-	elapsed = time.time() - start
-	print(f"  Stage 2 subset eval: CE={results_s2[0].ce:.4f}, "
-		  f"Acc={results_s2[0].accuracy:.4%}, "
-		  f"BitAcc={results_s2[0].bit_accuracy:.4%} ({elapsed:.2f}s)")
-
-	results_s2_full = eval_s1.evaluate_batch_full([s2_genome])
-	print(f"  Stage 2 full eval:   CE={results_s2_full[0].ce:.4f}, "
-		  f"Acc={results_s2_full[0].accuracy:.4%}, "
-		  f"BitAcc={results_s2_full[0].bit_accuracy:.4%}")
-
 	print("\n  PASS: Basic evaluation works for both stages")
-	return eval_s1, s1_genome, s2_genome
+	return evaluator, s0_genome, s1_genome
 
 
-def test_combined_ce(evaluator, s1_genome, s2_genome):
-	"""Test combined CE computation and verify CE_combined ≈ CE_s1 + CE_s2."""
+def test_combined_ce(evaluator, s0_genome, s1_genome):
+	"""Test combined CE computation and verify CE_combined ≈ CE_s0 + CE_s1."""
 	print("\n" + "=" * 60)
 	print("  Test: Combined CE Computation")
 	print("=" * 60)
 
-	# Compute combined CE
+	# Compute combined CE — takes a list of stage genomes (0-indexed)
 	start = time.time()
-	combined = evaluator.compute_combined_metrics(s1_genome, s2_genome)
+	combined = evaluator.compute_combined_metrics([s0_genome, s1_genome])
 	elapsed = time.time() - start
 
 	print(f"\n  Combined CE:    {combined.ce:.4f}")
 	print(f"  Combined Acc:   {combined.accuracy:.4%}")
-	print(f"  Stage 1 CE:     {combined.cluster_ce:.4f}")
-	print(f"  Stage 2 CE:     {combined.within_ce:.4f}")
-	print(f"  S1 + S2:        {combined.cluster_ce + combined.within_ce:.4f}")
+	print(f"  Stage 0 CE:     {combined.cluster_ce:.4f}")
+	print(f"  Stage 1 CE:     {combined.within_ce:.4f}")
+	print(f"  S0 + S1:        {combined.cluster_ce + combined.within_ce:.4f}")
 	print(f"  Elapsed:        {elapsed:.2f}s")
 
-	# Verify CE_combined ≈ CE_s1 + CE_s2 (within 1% relative tolerance)
+	# Verify CE_combined ≈ CE_s0 + CE_s1 (within 1% relative tolerance)
 	sum_ce = combined.cluster_ce + combined.within_ce
 	rel_error = abs(combined.ce - sum_ce) / max(combined.ce, 1e-10)
 	print(f"\n  Relative error: {rel_error:.6f}")
 	assert rel_error < 0.01, f"Combined CE mismatch: {combined.ce} vs {sum_ce} (rel={rel_error:.4f})"
-	print("  PASS: CE_combined ≈ CE_s1 + CE_s2 (< 1% relative error)")
+	print("  PASS: CE_combined ≈ CE_s0 + CE_s1 (< 1% relative error)")
 
 
-def test_search_neighbors(evaluator, s1_genome):
-	"""Test search_neighbors for Stage 1."""
+def test_search_neighbors(evaluator, s0_genome):
+	"""Test search_neighbors for Stage 0."""
 	print("\n" + "=" * 60)
-	print("  Test: search_neighbors (Stage 1)")
+	print("  Test: search_neighbors (Stage 0)")
 	print("=" * 60)
 
-	evaluator.target_stage = 1
+	evaluator.target_stage = 0  # 0-indexed
 
 	start = time.time()
 	neighbors = evaluator.search_neighbors(
-		genome=s1_genome,
+		genome=s0_genome,
 		target_count=5,
 		max_attempts=20,
 		accuracy_threshold=0.0,  # Accept all (random data, accuracy will be low)
@@ -188,7 +209,7 @@ def test_batch_multi_genome(evaluator):
 	print("  Test: Multi-Genome Batch Evaluation")
 	print("=" * 60)
 
-	evaluator.target_stage = 1
+	evaluator.target_stage = 0  # 0-indexed
 	genomes = [
 		create_random_genome(evaluator.num_clusters, evaluator.total_input_bits, neurons=15, bits=6)
 		for _ in range(5)
@@ -210,12 +231,13 @@ def test_batch_multi_genome(evaluator):
 
 if __name__ == "__main__":
 	print("\n" + "=" * 60)
-	print("  TwoStageEvaluator End-to-End Test")
+	print("  MultiStageEvaluator End-to-End Test")
 	print("=" * 60 + "\n")
 
-	evaluator, s1_genome, s2_genome = test_basic_evaluation()
-	test_combined_ce(evaluator, s1_genome, s2_genome)
-	test_search_neighbors(evaluator, s1_genome)
+	test_compute_default_k()
+	evaluator, s0_genome, s1_genome = test_basic_evaluation()
+	test_combined_ce(evaluator, s0_genome, s1_genome)
+	test_search_neighbors(evaluator, s0_genome)
 	test_batch_multi_genome(evaluator)
 
 	print("\n" + "=" * 60)

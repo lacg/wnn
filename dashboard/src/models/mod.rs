@@ -95,6 +95,7 @@ impl Default for CheckpointType {
 pub enum ArchitectureType {
     Tiered,
     Bitwise,
+    MultiStage,
 }
 
 impl Default for ArchitectureType {
