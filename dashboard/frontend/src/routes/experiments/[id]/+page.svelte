@@ -379,6 +379,9 @@
   // Grid search: detect and auto-load results
   $: isGridSearch = experiment?.name?.includes('Grid Search') ?? false;
 
+  // Hide threshold column for experiment types that don't use progressive thresholds (e.g. adaptation)
+  $: hasThresholdData = iterations.some(i => i.fitness_threshold !== null && i.fitness_threshold !== undefined);
+
   // Auto-load grid search genome evaluations when iterations arrive or update
   let _lastGridIterCount = 0;
   $: if (isGridSearch && iterations.length > 0 && !gridSearchLoading && iterations.length !== _lastGridIterCount) {
@@ -1285,7 +1288,7 @@
                 <th>Best Acc</th>
                 <th>Avg CE</th>
                 <th>Avg Acc</th>
-                <th>Threshold</th>
+                {#if hasThresholdData}<th>Threshold</th>{/if}
                 <th>Δ Prev</th>
                 <th>Patience</th>
                 <th>Time</th>
@@ -1307,7 +1310,7 @@
                   <td class:best={iter.best_accuracy !== null && iter.best_accuracy === bestAcc}>{formatAccShort(iter.best_accuracy)}</td>
                   <td class="secondary">{iter.avg_ce ? formatCE(iter.avg_ce) : '—'}</td>
                   <td class="secondary">{formatAccShort(iter.avg_accuracy)}</td>
-                  <td class="secondary">{iter.fitness_threshold !== null ? formatAccShort(iter.fitness_threshold) : '—'}</td>
+                  {#if hasThresholdData}<td class="secondary">{iter.fitness_threshold !== null ? formatAccShort(iter.fitness_threshold) : '—'}</td>{/if}
                   <td class:delta-positive={iter.delta_previous && iter.delta_previous < 0} class:delta-negative={iter.delta_previous && iter.delta_previous > 0}>
                     {iter.delta_previous !== null ? (iter.delta_previous < 0 ? '↓' : iter.delta_previous > 0 ? '↑' : '') + Math.abs(iter.delta_previous).toFixed(4) : '—'}
                   </td>
