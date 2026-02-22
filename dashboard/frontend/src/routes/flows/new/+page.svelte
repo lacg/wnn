@@ -583,17 +583,23 @@
             <label for="stageMode">Stage Connection</label>
             <select id="stageMode" bind:value={stageMode}>
               <option value="input_concat">Input Concat</option>
+              <option value="selector">Selector (cluster routing)</option>
             </select>
-            <span class="field-hint">Stage N+1 sees stage N output bits</span>
+            <span class="field-hint">
+              {#if stageMode === 'input_concat'}
+                Stage N+1 sees stage N output bits
+              {:else}
+                Stage N output selects which cluster group to use
+              {/if}
+            </span>
           </div>
-          <!-- Per-stage config -->
+          <!-- Per-stage config (inline, no extra header) -->
           {#each stageConfigs as config, i}
             {#if i === selectedStage}
-              <div class="form-group stage-config-inline">
-                <div class="stage-config-header">Stage {i}</div>
+              <div class="form-group">
+                <label for="stageArch_{i}">Architecture</label>
                 <div class="stage-fields">
                   <div class="stage-field">
-                    <label for="stageArch_{i}">Architecture</label>
                     <select id="stageArch_{i}" bind:value={config.clusterType}>
                       <option value="bitwise">Bitwise</option>
                       <option value="tiered">Tiered</option>
@@ -983,11 +989,20 @@
   }
 
   .form-section {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: 8px;
+    background: var(--glass-bg);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    border: 1px solid var(--glass-border);
+    border-radius: 12px;
     padding: 1.25rem;
     margin-bottom: 1.5rem;
+    box-shadow: var(--glass-shadow), var(--glass-inset);
+    transition: box-shadow 0.3s ease, border-color 0.3s ease;
+  }
+
+  .form-section:hover {
+    box-shadow: var(--glass-shadow-hover), var(--glass-inset);
+    border-color: var(--glass-border-highlight);
   }
 
   .form-columns .form-section {
@@ -1071,17 +1086,22 @@
   input, select, textarea {
     width: 100%;
     padding: 0.5rem 0.75rem;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--bg-primary);
+    border: 1px solid var(--glass-border);
+    border-radius: 8px;
+    background: var(--glass-input-bg);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
     color: var(--text-primary);
     font-size: 1rem;
     font-family: inherit;
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.15);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
   }
 
   input:focus, select:focus, textarea:focus {
     outline: none;
-    border-color: var(--accent-blue);
+    border-color: rgba(59, 130, 246, 0.6);
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.15), 0 0 0 3px rgba(59, 130, 246, 0.15);
   }
 
   textarea {
@@ -1096,22 +1116,30 @@
 
   .btn {
     padding: 0.5rem 1rem;
-    border-radius: 6px;
+    border-radius: 8px;
     font-size: 1rem;
     font-weight: 500;
     text-decoration: none;
     border: none;
     cursor: pointer;
-    transition: all 0.2s;
+    transition: all 0.25s ease;
   }
 
   .btn-primary {
-    background: var(--accent-blue);
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.85), rgba(99, 102, 241, 0.85));
+    border: 1px solid rgba(59, 130, 246, 0.4);
     color: white;
+    box-shadow: 0 4px 16px rgba(59, 130, 246, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15);
   }
 
   .btn-primary:hover:not(:disabled) {
-    opacity: 0.9;
+    box-shadow: 0 6px 20px rgba(59, 130, 246, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    transform: translateY(-1px);
+  }
+
+  .btn-primary:active:not(:disabled) {
+    transform: translateY(0);
+    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.2);
   }
 
   .btn-primary:disabled {
@@ -1120,22 +1148,31 @@
   }
 
   .btn-secondary {
-    background: var(--bg-tertiary);
+    background: rgba(51, 65, 85, 0.5);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid var(--glass-border);
     color: var(--text-primary);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15), var(--glass-inset);
   }
 
   .btn-secondary:hover {
-    background: var(--border);
+    background: rgba(71, 85, 105, 0.5);
+    border-color: var(--glass-border-highlight);
+    transform: translateY(-1px);
   }
 
   .error-message {
     background: rgba(239, 68, 68, 0.1);
-    border: 1px solid var(--accent-red);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(239, 68, 68, 0.3);
     color: var(--accent-red);
     padding: 0.75rem 1rem;
-    border-radius: 6px;
+    border-radius: 8px;
     font-size: 1rem;
     margin-bottom: 1rem;
+    box-shadow: 0 0 16px rgba(239, 68, 68, 0.1);
   }
 
   /* Phases Preview */
@@ -1150,6 +1187,16 @@
     align-items: center;
     gap: 0.5rem;
     font-size: 1rem;
+    padding: 0.375rem 0.5rem;
+    border-radius: 8px;
+    background: rgba(30, 41, 59, 0.3);
+    border: 1px solid rgba(148, 163, 184, 0.08);
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+
+  .phase-item:hover {
+    background: rgba(30, 41, 59, 0.5);
+    border-color: rgba(148, 163, 184, 0.15);
   }
 
   .phase-num {
@@ -1158,11 +1205,12 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: var(--bg-tertiary);
-    border-radius: 4px;
+    background: rgba(59, 130, 246, 0.15);
+    border: 1px solid rgba(59, 130, 246, 0.2);
+    border-radius: 6px;
     font-size: 1rem;
-    color: var(--text-secondary);
-    font-weight: 500;
+    color: var(--accent-blue);
+    font-weight: 600;
     flex-shrink: 0;
   }
 
@@ -1182,17 +1230,23 @@
 
   .phase-type.ga {
     background: rgba(59, 130, 246, 0.15);
+    border: 1px solid rgba(59, 130, 246, 0.2);
     color: var(--accent-blue);
+    box-shadow: 0 0 8px rgba(59, 130, 246, 0.1);
   }
 
   .phase-type.ts {
     background: rgba(16, 185, 129, 0.15);
+    border: 1px solid rgba(16, 185, 129, 0.2);
     color: var(--accent-green);
+    box-shadow: 0 0 8px rgba(16, 185, 129, 0.1);
   }
 
   .phase-type.adapt {
     background: rgba(168, 85, 247, 0.15);
+    border: 1px solid rgba(168, 85, 247, 0.2);
     color: #a855f7;
+    box-shadow: 0 0 8px rgba(168, 85, 247, 0.1);
   }
 
   .phase-move {
@@ -1202,9 +1256,9 @@
   }
 
   .move-btn {
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border);
-    border-radius: 3px;
+    background: rgba(51, 65, 85, 0.4);
+    border: 1px solid rgba(148, 163, 184, 0.1);
+    border-radius: 4px;
     color: var(--text-secondary);
     cursor: pointer;
     font-size: 1rem;
@@ -1279,19 +1333,23 @@
   }
 
   .btn-add {
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border);
+    background: rgba(51, 65, 85, 0.4);
+    border: 1px solid var(--glass-border);
     color: var(--text-primary);
     padding: 0.25rem 0.75rem;
-    border-radius: 6px;
+    border-radius: 8px;
     font-size: 1rem;
     cursor: pointer;
-    transition: all 0.15s;
+    transition: all 0.2s ease;
     margin-left: auto;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
   }
 
   .btn-add:hover:not(:disabled) {
-    background: var(--border);
+    background: rgba(71, 85, 105, 0.5);
+    border-color: var(--glass-border-highlight);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
   }
 
   .btn-add:disabled {
@@ -1305,17 +1363,6 @@
   }
 
   /* Multi-stage config */
-  .stage-config-inline {
-    margin-bottom: 0;
-  }
-
-  .stage-config-header {
-    font-size: 1rem;
-    font-weight: 600;
-    color: var(--accent-blue);
-    margin-bottom: 0.375rem;
-  }
-
   .stage-fields {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -1335,7 +1382,7 @@
     color: var(--text-secondary);
     margin: 0.75rem 0 0.5rem 0;
     padding-top: 0.75rem;
-    border-top: 1px solid var(--border);
+    border-top: 1px solid rgba(148, 163, 184, 0.12);
     text-transform: uppercase;
     letter-spacing: 0.03em;
   }

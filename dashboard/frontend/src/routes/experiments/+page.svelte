@@ -139,9 +139,12 @@
   }
 
   .experiments-table {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: 8px;
+    background: var(--glass-bg);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    border: 1px solid var(--glass-border);
+    border-radius: 12px;
+    box-shadow: var(--glass-shadow), var(--glass-inset);
     overflow: hidden;
   }
 
@@ -153,7 +156,7 @@
   th, td {
     padding: 0.75rem 1rem;
     text-align: left;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid rgba(71, 85, 105, 0.4);
   }
 
   th {
@@ -161,7 +164,7 @@
     font-weight: 600;
     color: var(--text-tertiary);
     text-transform: uppercase;
-    background: var(--bg-tertiary);
+    background: rgba(30, 41, 59, 0.3);
   }
 
   td {
@@ -187,9 +190,12 @@
     display: inline-block;
     font-size: 1rem;
     padding: 0.25rem 0.5rem;
-    border-radius: 4px;
+    border-radius: 8px;
     color: white;
     text-transform: capitalize;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
   }
 
   .config-preview {
@@ -201,9 +207,10 @@
   .config-tag {
     font-size: 1rem;
     color: var(--text-tertiary);
-    background: var(--bg-tertiary);
+    background: rgba(51, 65, 85, 0.4);
+    border: 1px solid var(--glass-border);
     padding: 0.25rem 0.5rem;
-    border-radius: 3px;
+    border-radius: 8px;
   }
 
   .col-ce, .col-acc {

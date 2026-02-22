@@ -46,8 +46,11 @@
 
 <style>
   .header {
-    background: var(--bg-secondary);
-    border-bottom: 1px solid var(--border);
+    background: rgba(30, 41, 59, 0.7);
+    backdrop-filter: blur(24px) saturate(1.2);
+    -webkit-backdrop-filter: blur(24px) saturate(1.2);
+    border-bottom: 1px solid var(--glass-border);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
     padding: 1rem 0;
     position: sticky;
     top: 0;
@@ -86,14 +89,16 @@
     color: var(--text-secondary);
     text-decoration: none;
     font-size: 1rem;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
+    padding: 0.25rem 0.75rem;
+    border-radius: 6px;
     transition: all 0.2s;
+    border: 1px solid transparent;
   }
 
   .nav-link:hover {
     color: var(--text-primary);
-    background: var(--bg-tertiary);
+    background: rgba(51, 65, 85, 0.5);
+    border-color: var(--glass-border);
   }
 
   .header-right {
@@ -118,25 +123,29 @@
 
   .status-dot.connected {
     background: var(--accent-green);
+    box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
   }
 
   .status-dot.disconnected {
     background: var(--accent-red);
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.5);
   }
 
   .settings-link {
-    color: var(--text-tertiary);
+    color: var(--text-secondary);
     padding: 0.375rem;
-    border-radius: 4px;
+    border-radius: 6px;
     display: flex;
     align-items: center;
     justify-content: center;
     transition: all 0.2s;
+    border: 1px solid transparent;
   }
 
   .settings-link:hover {
     color: var(--text-primary);
-    background: var(--bg-tertiary);
+    background: rgba(51, 65, 85, 0.5);
+    border-color: var(--glass-border);
   }
 
   main {

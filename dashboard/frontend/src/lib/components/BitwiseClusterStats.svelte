@@ -91,11 +91,14 @@
 
 <style>
 	.gating-section {
-		background: var(--bg-secondary);
-		border: 1px solid var(--border);
-		border-radius: 8px;
+		background: var(--glass-bg);
+		backdrop-filter: blur(var(--glass-blur));
+		-webkit-backdrop-filter: blur(var(--glass-blur));
+		border: 1px solid var(--glass-border);
+		border-radius: 12px;
 		padding: 1rem;
 		border-left: 4px solid var(--accent-purple, #9b59b6);
+		box-shadow: var(--glass-shadow), var(--glass-inset);
 	}
 
 	.gating-header {

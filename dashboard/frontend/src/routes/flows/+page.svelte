@@ -146,7 +146,7 @@
 
   .btn {
     padding: 0.5rem 1rem;
-    border-radius: 6px;
+    border-radius: 10px;
     font-size: 1rem;
     font-weight: 500;
     text-decoration: none;
@@ -154,12 +154,15 @@
   }
 
   .btn-primary {
-    background: var(--accent-blue);
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.85), rgba(99, 102, 241, 0.85));
+    border: 1px solid rgba(59, 130, 246, 0.4);
+    box-shadow: 0 4px 16px rgba(59, 130, 246, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15);
     color: white;
   }
 
   .btn-primary:hover {
-    opacity: 0.9;
+    box-shadow: 0 6px 20px rgba(59, 130, 246, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    transform: translateY(-1px);
   }
 
   .loading, .error, .empty {
@@ -185,16 +188,20 @@
   }
 
   .flow-card {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: 8px;
+    background: var(--glass-bg);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    border: 1px solid var(--glass-border);
+    border-radius: 12px;
+    box-shadow: var(--glass-shadow), var(--glass-inset);
     padding: 1.25rem;
     text-decoration: none;
     transition: all 0.2s;
   }
 
   .flow-card:hover {
-    border-color: var(--accent-blue);
+    border-color: rgba(59, 130, 246, 0.4);
+    box-shadow: var(--glass-shadow-hover), var(--glass-inset), 0 0 20px rgba(59, 130, 246, 0.1);
     transform: translateY(-2px);
   }
 
@@ -221,11 +228,14 @@
   .status-badge {
     font-size: 1rem;
     padding: 0.25rem 0.5rem;
-    border-radius: 4px;
+    border-radius: 8px;
     color: white;
     text-transform: capitalize;
     white-space: nowrap;
     flex-shrink: 0;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
   }
 
   .flow-description {
@@ -275,11 +285,11 @@
 
   .btn-delete {
     background: transparent;
-    border: 1px solid var(--border);
+    border: 1px solid var(--glass-border);
     color: var(--text-secondary);
     width: 24px;
     height: 24px;
-    border-radius: 4px;
+    border-radius: 8px;
     cursor: pointer;
     font-size: 1rem;
     line-height: 1;
@@ -290,8 +300,8 @@
   }
 
   .btn-delete:hover {
-    background: var(--accent-red);
-    border-color: var(--accent-red);
+    background: rgba(239, 68, 68, 0.7);
+    border-color: rgba(239, 68, 68, 0.3);
     color: white;
   }
 

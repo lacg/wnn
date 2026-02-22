@@ -52,23 +52,27 @@
   }
 
   button {
-    background: var(--accent-blue);
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.85), rgba(99, 102, 241, 0.85));
     color: white;
-    border: none;
+    border: 1px solid rgba(59, 130, 246, 0.4);
+    box-shadow: 0 4px 16px rgba(59, 130, 246, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15);
   }
 
   button:hover {
-    opacity: 0.9;
+    box-shadow: 0 6px 20px rgba(59, 130, 246, 0.35);
+    transform: translateY(-1px);
   }
 
   a {
-    background: var(--bg-card);
+    background: var(--glass-bg);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
     color: var(--text-primary);
-    border: 1px solid var(--border);
+    border: 1px solid var(--glass-border);
   }
 
   a:hover {
-    background: var(--bg-secondary);
+    border-color: var(--glass-border-highlight);
   }
 
   .error-hint {

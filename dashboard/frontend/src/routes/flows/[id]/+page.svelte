@@ -1691,8 +1691,10 @@
   }
 
   .info-card {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
+    background: var(--glass-bg);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    border: 1px solid var(--glass-border);
     border-radius: 6px;
     padding: 0.75rem 1rem;
     display: flex;
@@ -1724,9 +1726,11 @@
 
   /* Edit Form Styles */
   .edit-section {
-    background: var(--bg-secondary);
+    background: var(--glass-bg);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
     border: 1px solid var(--accent-blue);
-    border-radius: 8px;
+    border-radius: 12px;
     padding: 1.5rem;
   }
 
@@ -1775,7 +1779,7 @@
   input[type="text"],
   select {
     padding: 0.5rem 0.75rem;
-    border: 1px solid var(--border);
+    border: 1px solid var(--glass-border);
     border-radius: 4px;
     background: var(--bg-primary);
     color: var(--text-primary);
@@ -1800,7 +1804,7 @@
     gap: 0.5rem;
     margin-top: 1rem;
     padding-top: 1rem;
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--glass-border);
   }
 
   .btn {
@@ -1828,9 +1832,9 @@
   }
 
   .btn-secondary {
-    background: var(--bg-tertiary);
+    background: rgba(51, 65, 85, 0.4);
     color: var(--text-primary);
-    border: 1px solid var(--border);
+    border: 1px solid var(--glass-border);
   }
 
   .btn-secondary:hover:not(:disabled) {
@@ -1842,9 +1846,11 @@
     display: grid;
     grid-template-columns: repeat(4, 1fr);
     gap: 1rem;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: 8px;
+    background: var(--glass-bg);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    border: 1px solid var(--glass-border);
+    border-radius: 12px;
     padding: 1rem;
   }
 
@@ -1864,9 +1870,9 @@
     flex-direction: column;
     gap: 0.5rem;
     padding: 0.75rem;
-    background: var(--bg-tertiary);
+    background: rgba(51, 65, 85, 0.4);
     border-radius: 6px;
-    border: 1px solid var(--border);
+    border: 1px solid var(--glass-border);
   }
 
   .param-group-label {
@@ -1920,8 +1926,10 @@
     display: flex;
     align-items: center;
     gap: 1rem;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
+    background: var(--glass-bg);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    border: 1px solid var(--glass-border);
     border-radius: 6px;
     padding: 0.75rem 1rem;
   }
@@ -1950,7 +1958,9 @@
 
   .experiment-item-link.pending:hover {
     border-color: var(--border);
-    background: var(--bg-secondary);
+    background: var(--glass-bg);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
   }
 
   .experiment-item-link.pending .view-arrow {
@@ -1986,7 +1996,7 @@
     width: 24px;
     height: 24px;
     border-radius: 50%;
-    background: var(--bg-tertiary);
+    background: rgba(51, 65, 85, 0.4);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -2029,7 +2039,7 @@
   }
 
   .status-pending {
-    background: var(--bg-tertiary);
+    background: rgba(51, 65, 85, 0.4);
     color: var(--text-tertiary);
   }
 
@@ -2048,7 +2058,7 @@
   .exp-tag {
     font-size: 1rem;
     color: var(--text-tertiary);
-    background: var(--bg-tertiary);
+    background: rgba(51, 65, 85, 0.4);
     padding: 0.125rem 0.375rem;
     border-radius: 3px;
   }
@@ -2058,7 +2068,7 @@
     gap: 1rem;
     margin-top: 0.5rem;
     padding-top: 0.5rem;
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--glass-border);
   }
 
   .metric {
@@ -2137,9 +2147,11 @@
 
   /* Experiments Table */
   .experiments-table {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: 8px;
+    background: var(--glass-bg);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    border: 1px solid var(--glass-border);
+    border-radius: 12px;
     overflow: hidden;
   }
 
@@ -2152,20 +2164,20 @@
   .experiments-table td {
     padding: 0.75rem 1rem;
     text-align: left;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--glass-border);
   }
 
   .experiments-table th {
-    font-size: 0.75rem;
+    font-size: 1rem;
     font-weight: 600;
     color: var(--text-tertiary);
     text-align: center;
     text-transform: uppercase;
-    background: var(--bg-tertiary);
+    background: rgba(51, 65, 85, 0.4);
   }
 
   .experiments-table td {
-    font-size: 0.875rem;
+    font-size: 1rem;
     color: var(--text-primary);
   }
 
@@ -2190,8 +2202,8 @@
   }
 
   .move-btn {
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border);
+    background: rgba(51, 65, 85, 0.4);
+    border: 1px solid var(--glass-border);
     border-radius: 3px;
     color: var(--text-secondary);
     cursor: pointer;
@@ -2214,11 +2226,11 @@
   .iters-input {
     width: 70px;
     padding: 0.25rem 0.5rem;
-    border: 1px solid var(--border);
+    border: 1px solid var(--glass-border);
     border-radius: 4px;
     background: var(--bg-primary);
     color: var(--text-primary);
-    font-size: 0.875rem;
+    font-size: 1rem;
     text-align: center;
   }
 
@@ -2233,7 +2245,7 @@
   }
 
   .iters-progress {
-    font-size: 0.875rem;
+    font-size: 1rem;
     font-family: monospace;
     color: var(--accent-blue);
   }
@@ -2249,8 +2261,8 @@
     width: 24px;
     height: 24px;
     border-radius: 50%;
-    background: var(--bg-tertiary);
-    font-size: 0.75rem;
+    background: rgba(51, 65, 85, 0.4);
+    font-size: 1rem;
     font-weight: 600;
     color: var(--text-secondary);
   }
@@ -2282,7 +2294,7 @@
   }
 
   .cell-link:hover {
-    background: var(--bg-tertiary);
+    background: rgba(51, 65, 85, 0.4);
     color: var(--accent-blue);
   }
 
@@ -2298,7 +2310,7 @@
     border-radius: 4px;
     background: var(--bg-primary);
     color: var(--text-primary);
-    font-size: 0.875rem;
+    font-size: 1rem;
     min-width: 180px;
   }
 
@@ -2316,7 +2328,7 @@
     display: inline-flex;
     align-items: center;
     gap: 0.25rem;
-    font-size: 0.625rem;
+    font-size: 1rem;
     font-weight: 600;
     color: var(--accent-blue);
     text-transform: uppercase;
@@ -2326,7 +2338,7 @@
   }
 
   .type-badge {
-    font-size: 0.75rem;
+    font-size: 1rem;
     font-weight: 600;
     padding: 0.125rem 0.375rem;
     border-radius: 3px;
@@ -2353,14 +2365,14 @@
   }
 
   .target-badge {
-    font-size: 0.75rem;
+    font-size: 1rem;
     color: var(--text-tertiary);
     margin-left: 0.25rem;
   }
 
   .status-pill {
     display: inline-block;
-    font-size: 0.625rem;
+    font-size: 1rem;
     font-weight: 600;
     padding: 0.25rem 0.5rem;
     border-radius: 9999px;
@@ -2427,9 +2439,11 @@
 
   /* Add phase form */
   .add-phase-form {
-    background: var(--bg-secondary);
+    background: var(--glass-bg);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
     border: 1px solid var(--accent-blue);
-    border-radius: 8px;
+    border-radius: 12px;
     padding: 1rem;
     margin-bottom: 1rem;
   }
@@ -2469,7 +2483,7 @@
   .edit-exp-form input[type="text"],
   .edit-exp-form select {
     padding: 0.375rem 0.5rem;
-    border: 1px solid var(--border);
+    border: 1px solid var(--glass-border);
     border-radius: 4px;
     background: var(--bg-primary);
     color: var(--text-primary);
@@ -2506,7 +2520,7 @@
     gap: 0.5rem;
     margin-top: 0.5rem;
     padding-top: 0.75rem;
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--glass-border);
   }
 
   /* Experiment actions */
@@ -2524,7 +2538,7 @@
     height: 32px;
     border: none;
     border-radius: 4px;
-    background: var(--bg-tertiary);
+    background: rgba(51, 65, 85, 0.4);
     color: var(--text-secondary);
     cursor: pointer;
     transition: all 0.15s;
@@ -2547,9 +2561,11 @@
 
   /* Final Results */
   .final-results-card {
-    background: var(--bg-secondary);
+    background: var(--glass-bg);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
     border: 1px solid var(--accent-green);
-    border-radius: 8px;
+    border-radius: 12px;
     padding: 1.5rem;
   }
 
@@ -2588,7 +2604,7 @@
     gap: 0.75rem;
     justify-content: center;
     padding-top: 1rem;
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--glass-border);
   }
 
   .empty-state {
@@ -2611,7 +2627,7 @@
 
   .inline-select {
     padding: 0.25rem 0.5rem;
-    border: 1px solid var(--border);
+    border: 1px solid var(--glass-border);
     border-radius: 4px;
     background: var(--bg-primary);
     color: var(--text-primary);
@@ -2638,7 +2654,7 @@
   .inline-input {
     width: 70px;
     padding: 0.25rem 0.5rem;
-    border: 1px solid var(--border);
+    border: 1px solid var(--glass-border);
     border-radius: 4px;
     background: var(--bg-primary);
     color: var(--text-primary);
@@ -2664,9 +2680,11 @@
 
   /* Validation Progression Chart */
   .card {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: 8px;
+    background: var(--glass-bg);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    border: 1px solid var(--glass-border);
+    border-radius: 12px;
     overflow: hidden;
   }
 
@@ -2675,12 +2693,12 @@
     justify-content: space-between;
     align-items: center;
     padding: 0.75rem 1rem;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-tertiary);
+    border-bottom: 1px solid var(--glass-border);
+    background: rgba(51, 65, 85, 0.4);
   }
 
   .card-title {
-    font-size: 0.875rem;
+    font-size: 1rem;
     font-weight: 600;
     color: var(--text-primary);
   }

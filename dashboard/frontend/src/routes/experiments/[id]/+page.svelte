@@ -1287,8 +1287,10 @@
 
   /* Flow Progress Bar */
   .flow-progress {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
+    background: var(--glass-bg);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    border: 1px solid var(--glass-border);
     border-radius: 0.5rem;
     padding: 0.75rem 1rem;
     margin-bottom: 1rem;
@@ -1407,8 +1409,10 @@
   }
 
   .info-card {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
+    background: var(--glass-bg);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    border: 1px solid var(--glass-border);
     border-radius: 0.5rem;
     padding: 1rem;
     display: flex;
@@ -1453,8 +1457,10 @@
 
   /* Validation Section */
   .validation-section {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
+    background: var(--glass-bg);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    border: 1px solid var(--glass-border);
     border-radius: 0.5rem;
     padding: 1rem;
     margin-bottom: 1.5rem;
@@ -1466,7 +1472,7 @@
     align-items: center;
     margin-bottom: 1rem;
     padding-bottom: 0.5rem;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--glass-border);
   }
 
   .validation-title {
@@ -1475,7 +1481,7 @@
   }
 
   .validation-subtitle {
-    font-size: 0.8rem;
+    font-size: 1rem;
     color: var(--text-secondary);
     margin-left: 0.5rem;
   }
@@ -1483,7 +1489,7 @@
   .validation-legend {
     display: flex;
     gap: 1rem;
-    font-size: 0.8rem;
+    font-size: 1rem;
   }
 
   .legend-marker {
@@ -1506,7 +1512,7 @@
 
   .validation-card {
     background: var(--bg-primary);
-    border: 1px solid var(--border);
+    border: 1px solid var(--glass-border);
     border-radius: 0.5rem;
     padding: 0.75rem;
   }
@@ -1520,7 +1526,7 @@
   }
 
   .card-label {
-    font-size: 0.8rem;
+    font-size: 1rem;
     font-weight: 600;
     color: var(--text-secondary);
     margin-bottom: 0.5rem;
@@ -1542,7 +1548,7 @@
     align-items: center;
     gap: 0.5rem;
     font-family: monospace;
-    font-size: 0.85rem;
+    font-size: 1rem;
   }
 
   .metric-item .metric-marker {
@@ -1567,8 +1573,10 @@
 
   /* Card styles */
   .card {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
+    background: var(--glass-bg);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    border: 1px solid var(--glass-border);
     border-radius: 0.5rem;
     margin-bottom: 1.5rem;
   }
@@ -1578,7 +1586,7 @@
     justify-content: space-between;
     align-items: center;
     padding: 1rem;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--glass-border);
   }
 
   .card-title {
@@ -1697,7 +1705,7 @@
   th, td {
     padding: 0.5rem 0.625rem;
     text-align: left;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--glass-border);
   }
 
   th {
@@ -1705,7 +1713,7 @@
     font-weight: 600;
     color: var(--text-secondary);
     text-transform: uppercase;
-    background: var(--bg-tertiary);
+    background: rgba(51, 65, 85, 0.4);
     position: sticky;
     top: 0;
     z-index: 1;
@@ -1741,7 +1749,7 @@
   .timestamp {
     color: var(--text-secondary);
     font-family: monospace;
-    font-size: 0.85rem;
+    font-size: 1rem;
   }
 
   .delta-positive {
@@ -1798,7 +1806,7 @@
     display: flex;
     flex-direction: column;
     box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
-    border: 1px solid var(--border);
+    border: 1px solid var(--glass-border);
   }
 
   .modal-header {
@@ -1806,7 +1814,7 @@
     justify-content: space-between;
     align-items: center;
     padding: 1rem 1.5rem;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--glass-border);
   }
 
   .modal-header h2 {
@@ -1876,7 +1884,7 @@
   .genome-table-scroll {
     max-height: 15rem;
     overflow-y: auto;
-    border: 1px solid var(--border);
+    border: 1px solid var(--glass-border);
     border-radius: 0.25rem;
   }
 
@@ -1919,7 +1927,7 @@
 
   .btn-secondary {
     padding: 0.5rem 1rem;
-    font-size: 0.9rem;
+    font-size: 1rem;
     border: 1px solid var(--accent-blue);
     border-radius: 0.375rem;
     background: transparent;
@@ -1939,7 +1947,7 @@
   }
 
   .gating-status {
-    font-size: 0.9rem;
+    font-size: 1rem;
     padding: 0.25rem 0.5rem;
     border-radius: 0.25rem;
   }
@@ -1951,8 +1959,10 @@
 
   /* Gating Results Section */
   .gating-section {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
+    background: var(--glass-bg);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    border: 1px solid var(--glass-border);
     border-radius: 0.5rem;
     padding: 1rem;
     margin-bottom: 1.5rem;
@@ -1965,7 +1975,7 @@
     align-items: center;
     margin-bottom: 1rem;
     padding-bottom: 0.5rem;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--glass-border);
   }
 
   .gating-title {
@@ -1975,7 +1985,7 @@
   }
 
   .gating-meta {
-    font-size: 0.85rem;
+    font-size: 1rem;
     color: var(--text-secondary);
   }
 
@@ -1986,24 +1996,24 @@
   .gating-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 0.9rem;
+    font-size: 1rem;
   }
 
   .gating-table th {
-    background: var(--bg-tertiary);
+    background: rgba(51, 65, 85, 0.4);
     padding: 0.5rem 0.75rem;
     text-align: center;
     font-weight: 600;
     color: var(--text-secondary);
-    font-size: 0.8rem;
+    font-size: 1rem;
     text-transform: uppercase;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--glass-border);
   }
 
   .gating-table td {
     padding: 0.5rem 0.75rem;
     text-align: center;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--glass-border);
   }
 
   .gating-table tr:last-child td {
@@ -2028,7 +2038,7 @@
     border: 1px solid var(--accent-red);
     border-radius: 0.25rem;
     color: var(--accent-red);
-    font-size: 0.9rem;
+    font-size: 1rem;
   }
 
   /* Validation Progression Table */
@@ -2039,24 +2049,24 @@
   .validation-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 0.9rem;
+    font-size: 1rem;
   }
 
   .validation-table th {
-    background: var(--bg-tertiary);
+    background: rgba(51, 65, 85, 0.4);
     padding: 0.5rem 0.75rem;
     text-align: center;
     font-weight: 600;
     color: var(--text-secondary);
-    font-size: 0.8rem;
+    font-size: 1rem;
     text-transform: uppercase;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--glass-border);
   }
 
   .validation-table td {
     padding: 0.5rem 0.75rem;
     text-align: center;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--glass-border);
   }
 
   .validation-table tr:last-child td {
@@ -2085,21 +2095,21 @@
   .current-marker {
     color: var(--accent-blue);
     margin-left: 0.5rem;
-    font-size: 0.8rem;
+    font-size: 1rem;
   }
 
   .metric-acc-inline {
     color: var(--text-secondary);
-    font-size: 0.8rem;
+    font-size: 1rem;
     margin-left: 0.25rem;
   }
 
   .validation-table .delta {
-    font-size: 0.85rem;
+    font-size: 1rem;
   }
 
   .validation-table th[colspan] {
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--glass-border);
   }
 
   .validation-table .best-ce-col {
