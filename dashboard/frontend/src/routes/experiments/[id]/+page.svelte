@@ -722,9 +722,9 @@
         {/if}
       </div>
       <div class="info-card">
-        <span class="info-label">Iterations</span>
-        <span class="info-value">{iterations.length}{#if maxIterations}/{maxIterations}{/if}</span>
-        {#if avgSecsPerIter !== null}
+        <span class="info-label">{isGridSearch ? 'Configs Tested' : 'Iterations'}</span>
+        <span class="info-value">{isGridSearch ? gridSearchResults.length : iterations.length}{#if !isGridSearch && maxIterations}/{maxIterations}{/if}</span>
+        {#if avgSecsPerIter !== null && !isGridSearch}
           <span class="info-subvalue">{avgSecsPerIter.toFixed(1)}s/iter</span>
         {/if}
       </div>
@@ -951,8 +951,8 @@
       <BitwiseClusterStats clusterStats={bitwiseClusterStats} />
     {/if}
 
-    <!-- Chart -->
-    {#if chartData.length > 0}
+    <!-- Chart (hidden for grid search — results shown in Grid Search Results section) -->
+    {#if chartData.length > 0 && !isGridSearch}
       <div class="card">
         <div class="card-header">
           <span class="card-title">
@@ -1188,7 +1188,8 @@
       </div>
     {/if}
 
-    <!-- Iterations Table -->
+    <!-- Iterations Table (hidden for grid search) -->
+    {#if !isGridSearch}
     <div class="card">
       <div class="card-header">
         <span class="card-title">Iterations</span>
@@ -1243,6 +1244,7 @@
         </div>
       {/if}
     </div>
+    {/if}
   {/if}
 </div>
 
