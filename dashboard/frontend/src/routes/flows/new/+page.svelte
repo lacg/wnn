@@ -32,7 +32,7 @@
   let msNeuronSampleRate = 0.25;
 
   $: isBitwise = template === 'bitwise-7-phase' || template === 'bitwise-10-phase';
-  $: isMultiStage = template === 'multi-stage-10-phase';
+  $: isMultiStage = template === 'multi-stage-20-phase';
   let gaGenerations = 250;
   let tsIterations = 250;
   let adaptationIterations = 50;
@@ -113,9 +113,10 @@
       bitwiseMaxNeurons = 300;
       bitwiseMemoryMode = 'QUAD_WEIGHTED';
       bitwiseNeuronSampleRate = 0.25;
-    } else if (templateName === 'multi-stage-10-phase') {
+    } else if (templateName === 'multi-stage-20-phase') {
       gaGenerations = 250;
       tsIterations = 250;
+      adaptationIterations = 50;
       populationSize = 50;
       neighborsPerIter = 50;
       patience = 10;
@@ -179,15 +180,20 @@
       { name: 'TS Connections (refine)', experiment_type: 'ts', optimize_bits: false, optimize_neurons: false, optimize_connections: true },
     ];
 
-    if (templateName === 'multi-stage-10-phase') {
+    if (templateName === 'multi-stage-20-phase') {
       const phases: PhaseSpec[] = [];
       for (let s = 0; s < numStages; s++) {
-        const prefix = `S${s}`;
-        phases.push({ name: `${prefix}: Grid Search`, experiment_type: 'ga', optimize_bits: true, optimize_neurons: true, optimize_connections: false, phase_type: 'grid_search' });
-        phases.push({ name: `${prefix}: GA Neurons`, experiment_type: 'ga', optimize_bits: false, optimize_neurons: true, optimize_connections: false });
-        phases.push({ name: `${prefix}: TS Neurons`, experiment_type: 'ts', optimize_bits: false, optimize_neurons: true, optimize_connections: false });
-        phases.push({ name: `${prefix}: GA Connections`, experiment_type: 'ga', optimize_bits: false, optimize_neurons: false, optimize_connections: true });
-        phases.push({ name: `${prefix}: TS Connections`, experiment_type: 'ts', optimize_bits: false, optimize_neurons: false, optimize_connections: true });
+        const p = `S${s}`;
+        phases.push({ name: `${p}: Grid Search`, experiment_type: 'ga', optimize_bits: true, optimize_neurons: true, optimize_connections: false, phase_type: 'grid_search' });
+        phases.push({ name: `${p}: GA Neurons`, experiment_type: 'ga', optimize_bits: false, optimize_neurons: true, optimize_connections: false });
+        phases.push({ name: `${p}: Neurogenesis`, experiment_type: 'neurogenesis', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'neurogenesis' });
+        phases.push({ name: `${p}: TS Neurons`, experiment_type: 'ts', optimize_bits: false, optimize_neurons: true, optimize_connections: false });
+        phases.push({ name: `${p}: GA Bits`, experiment_type: 'ga', optimize_bits: true, optimize_neurons: false, optimize_connections: false });
+        phases.push({ name: `${p}: Synaptogenesis`, experiment_type: 'synaptogenesis', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'synaptogenesis' });
+        phases.push({ name: `${p}: TS Bits`, experiment_type: 'ts', optimize_bits: true, optimize_neurons: false, optimize_connections: false });
+        phases.push({ name: `${p}: GA Connections`, experiment_type: 'ga', optimize_bits: false, optimize_neurons: false, optimize_connections: true });
+        phases.push({ name: `${p}: Axonogenesis`, experiment_type: 'axonogenesis', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'axonogenesis' });
+        phases.push({ name: `${p}: TS Connections`, experiment_type: 'ts', optimize_bits: false, optimize_neurons: false, optimize_connections: true });
       }
       return phases;
     }
@@ -439,7 +445,7 @@
               <option value="standard-6-phase">Standard 6-Phase (Tiered)</option>
               <option value="bitwise-7-phase">Bitwise 7-Phase</option>
               <option value="bitwise-10-phase">Bitwise 10-Phase (+ Adaptation)</option>
-              <option value="multi-stage-10-phase">Multi-Stage 10-Phase (2-stage)</option>
+              <option value="multi-stage-20-phase">Multi-Stage 20-Phase (2-stage + Adaptation)</option>
               <option value="empty">Empty (no phases)</option>
             </select>
             <span class="field-hint">
@@ -451,8 +457,8 @@
                 Exhaustive neurons &times; bits grid, then 6 GA/TS optimization phases
               {:else if template === 'bitwise-10-phase'}
                 Grid + GA/adapt/TS for neurons &rarr; bits &rarr; connections (stats-guided adaptation phases)
-              {:else if template === 'multi-stage-10-phase'}
-                2-stage pipeline: 5 phases per stage (grid &rarr; GA/TS neurons &rarr; GA/TS connections)
+              {:else if template === 'multi-stage-20-phase'}
+                2-stage pipeline: 10 phases per stage (grid &rarr; GA/adapt/TS neurons &rarr; bits &rarr; connections)
               {:else}
                 Start empty, add phases manually below
               {/if}
@@ -495,7 +501,7 @@
           </div>
         </div>
 
-        {#if template === 'bitwise-10-phase'}
+        {#if template === 'bitwise-10-phase' || isMultiStage}
           <div class="form-row">
             <div class="form-group">
               <label for="adaptIters">Adaptation Iterations</label>
@@ -621,7 +627,7 @@
             <p class="empty-phases">No phases. Use a template or add phases manually.</p>
           {/if}
           <div class="add-phase-row">
-            {#if isBitwise}
+            {#if isBitwise || isMultiStage}
               <label class="inline-check">
                 <input type="checkbox" bind:checked={newPhaseGrid} /> Grid Search
               </label>
@@ -630,7 +636,7 @@
               <select bind:value={newPhaseType} class="phase-type-select">
                 <option value="ga">GA</option>
                 <option value="ts">TS</option>
-                {#if isBitwise}
+                {#if isBitwise || isMultiStage}
                   <option value="neurogenesis">Neurogenesis</option>
                   <option value="synaptogenesis">Synaptogenesis</option>
                   <option value="axonogenesis">Axonogenesis</option>

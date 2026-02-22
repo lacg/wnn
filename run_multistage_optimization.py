@@ -81,6 +81,8 @@ def main():
 						help="TS neighbors per iteration (default: 50)")
 	parser.add_argument("--patience", type=int, default=10,
 						help="Early stop patience (default: 10)")
+	parser.add_argument("--adapt-iters", type=int, default=50,
+						help="Adaptation iterations (neurogenesis/synaptogenesis/axonogenesis) (default: 50)")
 
 	# Bounds
 	parser.add_argument("--min-bits", type=int, default=4,
@@ -179,6 +181,7 @@ def main():
 		stage_mode=stage_mode,
 		ga_generations=args.ga_gens,
 		ts_iterations=args.ts_iters,
+		adaptation_iterations=args.adapt_iters,
 		population_size=args.population,
 		neighbors_per_iter=args.neighbors,
 		patience=args.patience,

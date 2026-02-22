@@ -442,6 +442,7 @@ class FlowConfig:
 		stage_mode: Optional[list[int]] = None,
 		ga_generations: int = 250,
 		ts_iterations: int = 250,
+		adaptation_iterations: int = 50,
 		population_size: int = 50,
 		neighbors_per_iter: int = 50,
 		patience: int = 10,
@@ -462,9 +463,13 @@ class FlowConfig:
 		description: Optional[str] = None,
 		seed_checkpoint_path: Optional[str] = None,
 	) -> "FlowConfig":
-		"""Create a multi-stage flow with 5 experiments per stage.
+		"""Create a multi-stage flow with 10 experiments per stage.
 
-		Per stage: Grid → GA Neurons → TS Neurons → GA Connections → TS Connections
+		Per stage (same as bitwise-10-phase):
+		  Grid → GA Neurons → Neurogenesis → TS Neurons →
+		  GA Bits → Synaptogenesis → TS Bits →
+		  GA Connections → Axonogenesis → TS Connections
+
 		Names prefixed: "S0: Grid Search", "S1: GA Neurons", etc.
 
 		Args:
@@ -472,6 +477,7 @@ class FlowConfig:
 			stage_k: K per stage; uses compute_default_k() if None
 			stage_cluster_type: Per-stage architecture type (default: ["bitwise", "bitwise"])
 			stage_mode: StageMode values between stages (default: [INPUT_CONCAT])
+			adaptation_iterations: Iterations for neurogenesis/synaptogenesis/axonogenesis phases
 		"""
 		assert num_stages == 2, "Only 2 stages supported (for now)"
 
@@ -489,29 +495,43 @@ class FlowConfig:
 		if bits_grid is None:
 			bits_grid = [4, 6, 8, 10, 12, 16, 20, 24]
 
+		adaptation_types = {ExperimentType.NEUROGENESIS, ExperimentType.SYNAPTOGENESIS, ExperimentType.AXONOGENESIS}
+
 		experiments = []
 		for stage in range(num_stages):
 			prefix = f"S{stage}"
 
-			# 5 phases per stage
+			# 10 phases per stage (mirrors bitwise-10-phase)
 			stage_phases = [
 				(f"{prefix}: Grid Search", ExperimentType.GRID_SEARCH, False, False, False),
 				(f"{prefix}: GA Neurons", ExperimentType.GA, False, True, False),
+				(f"{prefix}: Neurogenesis", ExperimentType.NEUROGENESIS, False, False, False),
 				(f"{prefix}: TS Neurons", ExperimentType.TS, False, True, False),
+				(f"{prefix}: GA Bits", ExperimentType.GA, True, False, False),
+				(f"{prefix}: Synaptogenesis", ExperimentType.SYNAPTOGENESIS, False, False, False),
+				(f"{prefix}: TS Bits", ExperimentType.TS, True, False, False),
 				(f"{prefix}: GA Connections", ExperimentType.GA, False, False, True),
+				(f"{prefix}: Axonogenesis", ExperimentType.AXONOGENESIS, False, False, False),
 				(f"{prefix}: TS Connections", ExperimentType.TS, False, False, True),
 			]
 
 			for phase_name, exp_type, opt_bits, opt_neurons, opt_conns in stage_phases:
+				if exp_type in adaptation_types:
+					iters = adaptation_iterations
+					gens = adaptation_iterations
+				else:
+					iters = ts_iterations
+					gens = ga_generations
+
 				config = ExperimentConfig(
 					name=phase_name,
 					experiment_type=exp_type,
 					optimize_bits=opt_bits,
 					optimize_neurons=opt_neurons,
 					optimize_connections=opt_conns,
-					generations=ga_generations,
+					generations=gens,
 					population_size=population_size,
-					iterations=ts_iterations,
+					iterations=iters,
 					neighbors_per_iter=neighbors_per_iter,
 					patience=patience,
 					fitness_calculator_type=fitness_calculator_type,
@@ -540,7 +560,7 @@ class FlowConfig:
 		return cls(
 			name=name,
 			experiments=experiments,
-			description=description or f"Multi-stage {num_stages * 5}-phase optimization ({num_stages} stages × 5 phases)",
+			description=description or f"Multi-stage {num_stages * 10}-phase optimization ({num_stages} stages × 10 phases)",
 			seed_checkpoint_path=seed_checkpoint_path,
 			context_size=context_size,
 			patience=patience,
