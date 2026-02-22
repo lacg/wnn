@@ -1806,27 +1806,26 @@ class GridSearchStrategy:
 					  f"CE={r['ce']:.4f}  Acc={r['accuracy']:.2%}  "
 					  f"Fit={r['fitness']:.4f}{marker}")
 
-		# Phase 5: Build output population with proportional representation
-		# Better configs get more genomes (each with fresh random connections).
-		# Weights: [K, K-1, ..., 1] → best config gets K/sum(weights) of population.
+		# Phase 5: Build output population with exponential representation.
+		# Better configs get exponentially more genomes (powers of 2 from bottom).
+		# E.g. top-5 with pop=50: 5th=1, 4th=2, 3rd=4, 2nd=8, 1st=remainder(35).
 		best_result = results[0]
 		best_genome = best_result["genome"]
 
 		top_k = min(cfg.top_k, len(results))
-		weights = list(range(top_k, 0, -1))  # [K, K-1, ..., 1]
-		total_weight = sum(weights)
-		genomes_per_config = [
-			max(1, round(w / total_weight * cfg.population_size)) for w in weights
-		]
-
-		# Adjust to hit exact population_size
+		# Exponential weights: last place=1, second-to-last=2, ..., 2^(k-2), remainder
+		genomes_per_config = [1 << i for i in range(top_k)]  # [1, 2, 4, 8, 16, ...]
+		genomes_per_config.reverse()  # [16, 8, 4, 2, 1] (best first)
+		# First place gets the remainder to fill population_size
+		allocated = sum(genomes_per_config)
+		if allocated < cfg.population_size:
+			genomes_per_config[0] += cfg.population_size - allocated
+		# If exponential sum exceeds population_size, trim from the top
 		while sum(genomes_per_config) > cfg.population_size:
 			for i in range(len(genomes_per_config) - 1, -1, -1):
 				if genomes_per_config[i] > 1:
 					genomes_per_config[i] -= 1
 					break
-		while sum(genomes_per_config) < cfg.population_size:
-			genomes_per_config[0] += 1
 
 		# Reuse original evaluated genomes + create new variations for the rest.
 		# Each config's first genome is the already-evaluated original;
@@ -2181,7 +2180,9 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 					f"{iter_elapsed:.1f}s"
 				)
 
-				# Record iteration in tracker
+				# Record iteration in tracker (with patience/threshold for dashboard)
+				prev_best = early_stopper._prev_best if early_stopper._prev_best is not None else best_ce
+				delta_previous = best_ce - prev_best
 				if self._tracker and self._tracker_experiment_id:
 					try:
 						iter_id = self._tracker.record_iteration(
@@ -2193,6 +2194,9 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 							avg_accuracy=avg_acc,
 							elapsed_secs=iter_elapsed,
 							candidates_total=len(population),
+							delta_previous=delta_previous,
+							patience_counter=early_stopper._patience_counter,
+							patience_max=cfg.patience,
 						)
 						# Record genome evaluations
 						if HAS_GENOME_TRACKING:

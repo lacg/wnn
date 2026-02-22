@@ -867,8 +867,8 @@ class OptimizerStrategyFactory:
 		)
 		config = GridSearchConfig(
 			num_clusters=num_clusters,
-			neurons_grid=neurons_grid or [50, 100, 150, 200],
-			bits_grid=bits_grid or [14, 16, 18, 20],
+			neurons_grid=neurons_grid or [5, 55, 105, 155, 205, 255, 300],
+			bits_grid=bits_grid or [4, 8, 11, 15, 18, 21, 24],
 			top_k=top_k,
 			population_size=population_size,
 			total_input_bits=total_input_bits,
