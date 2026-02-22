@@ -2,8 +2,8 @@
 Multi-Stage Evaluator — Evaluates multi-stage RAM LM genomes.
 
 Wraps MultiStageCacheWrapper from Rust. Supports:
-- Stage 0 evaluation: predict cluster_id bits from context
-- Stage 1 evaluation (input_concat): predict within-group index bits from context + cluster_id
+- Stage-agnostic bitwise evaluation: predict target bits from context (+ previous stage outputs)
+- Tiered evaluation: direct K-class prediction with softmax CE
 - Combined CE: joint P(token) = P(group|ctx) × P(token|group,ctx)
 
 Usage:
@@ -106,8 +106,6 @@ class MultiStageEvaluator(BaseEvaluator):
 		adapt_config: Optional[AdaptationConfig] = None,
 		sparse_threshold: Optional[int] = None,
 	):
-		assert num_stages == 2, "Only 2 stages supported in Rust backend (for now)"
-
 		# Defaults
 		if stage_cluster_type is None:
 			stage_cluster_type = ["bitwise", "bitwise"]
@@ -138,7 +136,7 @@ class MultiStageEvaluator(BaseEvaluator):
 		self._pad_token_id = pad_token_id
 		self._sparse_threshold = sparse_threshold
 
-		# Create Rust backend (internally handles 2-stage encoding)
+		# Create Rust backend
 		from ram_accelerator import MultiStageCacheWrapper
 		self._cache = MultiStageCacheWrapper(
 			train_tokens=list(train_tokens),
@@ -150,25 +148,26 @@ class MultiStageEvaluator(BaseEvaluator):
 			num_eval_parts=num_eval_parts,
 			pad_token_id=pad_token_id,
 			sparse_threshold=sparse_threshold,
+			stage_cluster_types=stage_cluster_type,
 		)
 
-		# Cache stage dimensions from Rust
-		self._bits_per_cluster_id = self._cache.bits_per_cluster_id()
-		self._bits_per_within_index = self._cache.bits_per_within_index()
-		self._stage1_input_bits = self._cache.stage1_input_bits()
-		self._stage2_concat_input_bits = self._cache.stage2_concat_input_bits()
+		# Cache stage dimensions from Rust (stage-agnostic)
+		self._stage_input_bits = [self._cache.stage_input_bits(s) for s in range(num_stages)]
+		self._bitwise_output_bits = [self._cache.bitwise_output_bits(s) for s in range(num_stages)]
 
-		# Per-stage dimensions (lists indexed by stage)
-		self._stage_num_clusters = [self._bits_per_cluster_id, self._bits_per_within_index]
-		self._stage_input_bits = [self._stage1_input_bits, self._stage2_concat_input_bits]
+		# Per-stage dimensions — polymorphic on stage type
+		# Tiered: K_s (direct class count), Bitwise: ceil(log2(K_s)) (bit count)
+		self._stage_num_clusters = [
+			self._cache.stage_num_output_clusters(s) for s in range(num_stages)
+		]
 
+		stage_types = [stage_cluster_type[s] if s < len(stage_cluster_type) else "bitwise" for s in range(num_stages)]
 		print(
 			f"[MultiStageEvaluator] Rust backend active "
 			f"(stages={num_stages}, k={stage_k}, target_stage={target_stage}, "
-			f"s0_clusters={self._bits_per_cluster_id}, "
-			f"s1_clusters={self._bits_per_within_index}, "
-			f"s0_input={self._stage1_input_bits}, "
-			f"s1_input={self._stage2_concat_input_bits})"
+			f"types={'+'.join(stage_types)}, "
+			f"clusters={self._stage_num_clusters}, "
+			f"input_bits={self._stage_input_bits})"
 		)
 
 	# ── Rotation (delegated to Rust) ─────────────────────────────────
@@ -210,11 +209,11 @@ class MultiStageEvaluator(BaseEvaluator):
 
 	@property
 	def bits_per_cluster_id(self) -> int:
-		return self._bits_per_cluster_id
+		return self._bitwise_output_bits[0]
 
 	@property
 	def bits_per_within_index(self) -> int:
-		return self._bits_per_within_index
+		return self._bitwise_output_bits[1] if self._num_stages > 1 else 0
 
 	@property
 	def cluster_sizes(self) -> list[int]:
@@ -244,16 +243,18 @@ class MultiStageEvaluator(BaseEvaluator):
 
 		return bits_flat, neurons_flat, connections_flat
 
-	# ── Stage 0 evaluation ───────────────────────────────────────────
+	# ── Bitwise evaluation (stage-agnostic) ──────────────────────────
 
-	def _evaluate_stage0_rust(
+	def _evaluate_bitwise_rust(
 		self,
+		stage: int,
 		genomes: list[ClusterGenome],
 		train_idx: int,
 		eval_idx: int,
 	) -> list[tuple[float, float, float]]:
 		bits_flat, neurons_flat, conns_flat = self._flatten_genomes(genomes)
-		return self._cache.evaluate_stage1_genomes(
+		return self._cache.evaluate_bitwise_genomes(
+			stage=stage,
 			bits_per_neuron_flat=bits_flat,
 			neurons_per_cluster_flat=neurons_flat,
 			connections_flat=conns_flat,
@@ -265,12 +266,14 @@ class MultiStageEvaluator(BaseEvaluator):
 			rng_seed=self._seed,
 		)
 
-	def _evaluate_stage0_full_rust(
+	def _evaluate_bitwise_full_rust(
 		self,
+		stage: int,
 		genomes: list[ClusterGenome],
 	) -> list[tuple[float, float, float]]:
 		bits_flat, neurons_flat, conns_flat = self._flatten_genomes(genomes)
-		return self._cache.evaluate_stage1_genomes_full(
+		return self._cache.evaluate_bitwise_genomes_full(
+			stage=stage,
 			bits_per_neuron_flat=bits_flat,
 			neurons_per_cluster_flat=neurons_flat,
 			connections_flat=conns_flat,
@@ -280,41 +283,47 @@ class MultiStageEvaluator(BaseEvaluator):
 			rng_seed=self._seed,
 		)
 
-	# ── Stage 1 evaluation (input_concat) ────────────────────────────
+	# ── Tiered evaluation ────────────────────────────────────────────
 
-	def _evaluate_stage1_concat_rust(
+	def _evaluate_tiered_rust(
 		self,
 		genomes: list[ClusterGenome],
+		stage: int,
 		train_idx: int,
 		eval_idx: int,
 	) -> list[tuple[float, float, float]]:
 		bits_flat, neurons_flat, conns_flat = self._flatten_genomes(genomes)
-		return self._cache.evaluate_stage2_concat_genomes(
+		raw = self._cache.evaluate_tiered_genomes(
+			stage=stage,
 			bits_per_neuron_flat=bits_flat,
 			neurons_per_cluster_flat=neurons_flat,
 			connections_flat=conns_flat,
 			num_genomes=len(genomes),
 			train_subset_idx=train_idx,
 			eval_subset_idx=eval_idx,
-			memory_mode=self._memory_mode,
-			neuron_sample_rate=self._neuron_sample_rate,
-			rng_seed=self._seed,
 		)
+		# Tiered returns (ce, acc), add 0.0 for bit_acc to match interface
+		return [(ce, acc, 0.0) for ce, acc in raw]
 
-	def _evaluate_stage1_concat_full_rust(
+	def _evaluate_tiered_full_rust(
 		self,
 		genomes: list[ClusterGenome],
+		stage: int,
 	) -> list[tuple[float, float, float]]:
 		bits_flat, neurons_flat, conns_flat = self._flatten_genomes(genomes)
-		return self._cache.evaluate_stage2_concat_genomes_full(
+		raw = self._cache.evaluate_tiered_genomes_full(
+			stage=stage,
 			bits_per_neuron_flat=bits_flat,
 			neurons_per_cluster_flat=neurons_flat,
 			connections_flat=conns_flat,
 			num_genomes=len(genomes),
-			memory_mode=self._memory_mode,
-			neuron_sample_rate=self._neuron_sample_rate,
-			rng_seed=self._seed,
 		)
+		return [(ce, acc, 0.0) for ce, acc in raw]
+
+	# ── Dispatch helper ──────────────────────────────────────────────
+
+	def _is_stage_tiered(self, stage: int) -> bool:
+		return self._stage_cluster_type[stage] == "tiered"
 
 	# ── Public interface (dispatches by target_stage) ────────────────
 
@@ -335,10 +344,10 @@ class MultiStageEvaluator(BaseEvaluator):
 			eval_subset_idx = self.next_eval_idx()
 
 		start = time.time()
-		if self._target_stage == 0:
-			raw = self._evaluate_stage0_rust(genomes, train_subset_idx, eval_subset_idx)
+		if self._is_stage_tiered(self._target_stage):
+			raw = self._evaluate_tiered_rust(genomes, self._target_stage, train_subset_idx, eval_subset_idx)
 		else:
-			raw = self._evaluate_stage1_concat_rust(genomes, train_subset_idx, eval_subset_idx)
+			raw = self._evaluate_bitwise_rust(self._target_stage, genomes, train_subset_idx, eval_subset_idx)
 		elapsed = time.time() - start
 
 		# Cache bit accuracy on genomes
@@ -379,10 +388,10 @@ class MultiStageEvaluator(BaseEvaluator):
 	) -> list[EvalResult]:
 		"""Evaluate genomes with full (non-rotated) data for the active target_stage."""
 		start = time.time()
-		if self._target_stage == 0:
-			raw = self._evaluate_stage0_full_rust(genomes)
+		if self._is_stage_tiered(self._target_stage):
+			raw = self._evaluate_tiered_full_rust(genomes, self._target_stage)
 		else:
-			raw = self._evaluate_stage1_concat_full_rust(genomes)
+			raw = self._evaluate_bitwise_full_rust(self._target_stage, genomes)
 		elapsed = time.time() - start
 
 		for genome, (_, _, bit_acc) in zip(genomes, raw):
@@ -408,7 +417,7 @@ class MultiStageEvaluator(BaseEvaluator):
 		Args:
 			stage_genomes: List of genomes, one per stage (0-indexed).
 
-		Trains both stages independently, reconstructs the joint distribution
+		Trains all stages independently, reconstructs the joint distribution
 		P(token) = P(group|ctx) × P(token|group,ctx), and computes CE + accuracy.
 
 		Returns EvalResult with ce, accuracy, plus cluster_ce and within_ce breakdown.
@@ -416,17 +425,24 @@ class MultiStageEvaluator(BaseEvaluator):
 		assert len(stage_genomes) == self._num_stages, \
 			f"Expected {self._num_stages} genomes, got {len(stage_genomes)}"
 
-		stage0_genome = stage_genomes[0]
-		stage1_genome = stage_genomes[1]
 		sparse_threshold = self._sparse_threshold or 4096
 
+		# Flatten all stages into concatenated arrays
+		all_bits = []
+		all_neurons = []
+		all_connections = []
+		stage_num_clusters = []
+		for g in stage_genomes:
+			all_bits.extend(g.bits_per_neuron)
+			all_neurons.extend(g.neurons_per_cluster)
+			all_connections.extend(g.connections or [])
+			stage_num_clusters.append(len(g.neurons_per_cluster))
+
 		combined_ce, combined_acc, s0_ce, s1_ce = self._cache.evaluate_combined_ce(
-			s1_bits_per_neuron=list(stage0_genome.bits_per_neuron),
-			s1_neurons_per_cluster=list(stage0_genome.neurons_per_cluster),
-			s1_connections=list(stage0_genome.connections or []),
-			s2_bits_per_neuron=list(stage1_genome.bits_per_neuron),
-			s2_neurons_per_cluster=list(stage1_genome.neurons_per_cluster),
-			s2_connections=list(stage1_genome.connections or []),
+			all_bits_per_neuron=all_bits,
+			all_neurons_per_cluster=all_neurons,
+			all_connections=all_connections,
+			stage_num_clusters=stage_num_clusters,
 			memory_mode=self._memory_mode,
 			neuron_sample_rate=self._neuron_sample_rate,
 			rng_seed=self._seed,
@@ -618,10 +634,10 @@ class MultiStageEvaluator(BaseEvaluator):
 				for _ in range(batch_n)
 			]
 
-			if self._target_stage == 0:
-				results = self._evaluate_stage0_rust(batch, train_subset_idx, eval_subset_idx)
+			if self._is_stage_tiered(self._target_stage):
+				results = self._evaluate_tiered_rust(batch, self._target_stage, train_subset_idx, eval_subset_idx)
 			else:
-				results = self._evaluate_stage1_concat_rust(batch, train_subset_idx, eval_subset_idx)
+				results = self._evaluate_bitwise_rust(self._target_stage, batch, train_subset_idx, eval_subset_idx)
 			evaluated += len(results)
 
 			for g, (ce, acc, bit_acc) in zip(batch, results):
@@ -705,10 +721,10 @@ class MultiStageEvaluator(BaseEvaluator):
 				)
 				batch.append(child)
 
-			if self._target_stage == 0:
-				results = self._evaluate_stage0_rust(batch, train_subset_idx, eval_subset_idx)
+			if self._is_stage_tiered(self._target_stage):
+				results = self._evaluate_tiered_rust(batch, self._target_stage, train_subset_idx, eval_subset_idx)
 			else:
-				results = self._evaluate_stage1_concat_rust(batch, train_subset_idx, eval_subset_idx)
+				results = self._evaluate_bitwise_rust(self._target_stage, batch, train_subset_idx, eval_subset_idx)
 			evaluated += len(results)
 
 			for g, (ce, acc, bit_acc) in zip(batch, results):
@@ -783,7 +799,6 @@ class MultiStageEvaluator(BaseEvaluator):
 			f"MultiStageEvaluator(vocab={self._vocab_size}, "
 			f"context={self._context_size}, k={self._stage_k}, "
 			f"target_stage={self._target_stage}, "
-			f"s0_clusters={self._bits_per_cluster_id}, "
-			f"s1_clusters={self._bits_per_within_index}, "
+			f"clusters={self._stage_num_clusters}, "
 			f"mode={mode})"
 		)

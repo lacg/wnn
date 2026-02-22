@@ -249,7 +249,7 @@ pub fn reorganize_connections_for_coalescing(
 /// `bits_per_neuron` has length `sum(neurons_per_cluster)` — one entry per neuron.
 /// Returns one entry per cluster: the maximum bits among that cluster's neurons.
 /// Pattern from `bitwise_ramlm.rs:1391-1400`.
-fn per_cluster_max_bits(bits_per_neuron: &[usize], neurons_per_cluster: &[usize]) -> Vec<usize> {
+pub(crate) fn per_cluster_max_bits(bits_per_neuron: &[usize], neurons_per_cluster: &[usize]) -> Vec<usize> {
     let mut result = Vec::with_capacity(neurons_per_cluster.len());
     let mut offset = 0;
     for &nc in neurons_per_cluster {
@@ -267,7 +267,7 @@ fn per_cluster_max_bits(bits_per_neuron: &[usize], neurons_per_cluster: &[usize]
 /// - `neuron_conn_offsets[n]` = connection start offset for neuron `n` (cumulative sum of bits)
 ///
 /// Pattern from `bitwise_ramlm.rs:683-704` (`compute_genome_layout`).
-fn build_neuron_metadata(
+pub(crate) fn build_neuron_metadata(
     bits_per_neuron: &[usize],
     neurons_per_cluster: &[usize],
 ) -> (Vec<usize>, Vec<usize>) {
@@ -299,7 +299,7 @@ fn build_neuron_metadata(
 /// connection index 0 (harmless padding). Same pattern as `bitwise_ramlm.rs:804-820`.
 ///
 /// This replaces `reorganize_connections_for_coalescing` when per-neuron bits are heterogeneous.
-fn reorganize_connections_for_gpu(
+pub(crate) fn reorganize_connections_for_gpu(
     original_connections: &[i64],
     per_neuron_bits: &[usize],
     neurons_per_cluster: &[usize],
@@ -426,7 +426,7 @@ const MAX_GPU_ADDRESSES: usize = 256_000_000;
 
 /// Try to compute training addresses on GPU for adaptive training path.
 /// Returns None if GPU is unavailable, disabled, or the problem is too large.
-fn try_gpu_addresses_adaptive(
+pub(crate) fn try_gpu_addresses_adaptive(
     packed_input: &[u64],
     words_per_example: usize,
     per_neuron_bits: &[usize],
@@ -868,7 +868,7 @@ pub fn train_batch_adaptive(
 
 /// Dense memory for a config group (bit-packed, fast for bits <= 12)
 /// Uses atomic operations for thread-safe concurrent writes.
-struct GroupDenseMemory {
+pub(crate) struct GroupDenseMemory {
     /// Bit-packed memory words [total_neurons * words_per_neuron]
     words: Vec<AtomicI64>,
     words_per_neuron: usize,
@@ -990,7 +990,7 @@ impl SparseGpuExport {
 
 /// Sparse memory for a config group (concurrent hash-based, for bits > 12)
 /// Uses DashMap for thread-safe concurrent access during parallel training.
-struct GroupSparseMemory {
+pub(crate) struct GroupSparseMemory {
     /// Per-neuron concurrent hash maps: address -> cell value (0=FALSE, 1=TRUE, 2=EMPTY default)
     neurons: Vec<DashMap<u64, u8>>,
 }
@@ -1088,13 +1088,13 @@ impl GroupSparseMemory {
 
 /// Hybrid memory - Dense for low bits, Sparse for high bits
 /// Both variants support thread-safe concurrent access for parallel training.
-enum GroupMemory {
+pub(crate) enum GroupMemory {
     Dense(GroupDenseMemory),
     Sparse(GroupSparseMemory),
 }
 
 impl GroupMemory {
-    fn new(num_neurons: usize, bits: usize) -> Self {
+    pub(crate) fn new(num_neurons: usize, bits: usize) -> Self {
         if bits <= SPARSE_THRESHOLD {
             GroupMemory::Dense(GroupDenseMemory::new(num_neurons, bits))
         } else {
@@ -1103,12 +1103,12 @@ impl GroupMemory {
     }
 
     /// Check if this is dense memory (can be accelerated with Metal)
-    fn is_dense(&self) -> bool {
+    pub(crate) fn is_dense(&self) -> bool {
         matches!(self, GroupMemory::Dense(_))
     }
 
     /// Export for Metal GPU (only works for Dense, returns None for Sparse)
-    fn export_for_metal(&self) -> Option<Vec<i64>> {
+    pub(crate) fn export_for_metal(&self) -> Option<Vec<i64>> {
         match self {
             GroupMemory::Dense(m) => Some(m.export_for_metal()),
             GroupMemory::Sparse(_) => None,
@@ -1116,7 +1116,7 @@ impl GroupMemory {
     }
 
     /// Export sparse memory for GPU binary search (returns None for Dense)
-    fn export_for_gpu_sparse(&self) -> Option<SparseGpuExport> {
+    pub(crate) fn export_for_gpu_sparse(&self) -> Option<SparseGpuExport> {
         match self {
             GroupMemory::Dense(_) => None,
             GroupMemory::Sparse(m) => Some(m.export_for_gpu()),
@@ -1124,12 +1124,12 @@ impl GroupMemory {
     }
 
     /// Check if this is sparse memory
-    fn is_sparse(&self) -> bool {
+    pub(crate) fn is_sparse(&self) -> bool {
         matches!(self, GroupMemory::Sparse(_))
     }
 
     #[inline]
-    fn read(&self, neuron_idx: usize, address: usize) -> i64 {
+    pub(crate) fn read(&self, neuron_idx: usize, address: usize) -> i64 {
         match self {
             GroupMemory::Dense(m) => m.read(neuron_idx, address),
             GroupMemory::Sparse(m) => m.read(neuron_idx, address as u64) as i64,
@@ -1138,7 +1138,7 @@ impl GroupMemory {
 
     /// Thread-safe write (both variants support concurrent access)
     #[inline]
-    fn write(&self, neuron_idx: usize, address: usize, value: i64, allow_override: bool) -> bool {
+    pub(crate) fn write(&self, neuron_idx: usize, address: usize, value: i64, allow_override: bool) -> bool {
         match self {
             GroupMemory::Dense(m) => m.write(neuron_idx, address, value, allow_override),
             GroupMemory::Sparse(m) => m.write(neuron_idx, address as u64, value as u8, allow_override),
@@ -1150,7 +1150,7 @@ impl GroupMemory {
 ///
 /// Returns scores for [num_examples × num_clusters_in_group] as f32.
 /// The scores are in group-local cluster order (need scattering to global order).
-fn evaluate_group_metal(
+pub(crate) fn evaluate_group_metal(
     metal: &crate::metal_ramlm::MetalRAMLMEvaluator,
     packed_eval: &[u64],
     connections_flat: &[i64],
@@ -1186,7 +1186,7 @@ fn evaluate_group_metal(
 ///
 /// Returns scores for [num_examples × num_clusters_in_group] as f32.
 /// The scores are in group-local cluster order (need scattering to global order).
-fn evaluate_group_sparse_gpu(
+pub(crate) fn evaluate_group_sparse_gpu(
     sparse_evaluator: &crate::metal_ramlm::MetalSparseEvaluator,
     packed_eval: &[u64],
     connections_flat: &[i64],
@@ -1872,7 +1872,7 @@ fn get_available_memory_gb() -> f64 {
 /// Train a genome using the given memory slot.
 /// When `gpu_addresses` is Some, uses pre-computed GPU addresses instead of CPU compute_address().
 /// GPU address layout: addresses[global_neuron_idx * num_train + example_idx].
-fn train_genome_in_slot(
+pub(crate) fn train_genome_in_slot(
     memories: &[GroupMemory],
     groups: &[ConfigGroup],
     original_connections: &[i64],    // Per-neuron layout (NOT group layout)

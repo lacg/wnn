@@ -229,16 +229,230 @@ def test_batch_multi_genome(evaluator):
 	print("  PASS: Multi-genome batch evaluation works")
 
 
+def test_tiered_evaluation():
+	"""Test tiered (direct K-class) evaluation for both stages."""
+	print("\n" + "=" * 60)
+	print("  Test: Tiered Evaluation (tiered+tiered)")
+	print("=" * 60)
+
+	vocab_size = 200
+	context_size = 4
+	k = 15
+	random.seed(42)
+
+	train_tokens = [random.randint(0, vocab_size - 1) for _ in range(2000)]
+	eval_tokens = [random.randint(0, vocab_size - 1) for _ in range(500)]
+
+	evaluator = MultiStageEvaluator(
+		train_tokens=train_tokens,
+		eval_tokens=eval_tokens,
+		vocab_size=vocab_size,
+		context_size=context_size,
+		stage_k=[k, vocab_size // k + 1],
+		stage_cluster_type=["tiered", "tiered"],
+		target_stage=0,
+		num_parts=2,
+		num_eval_parts=1,
+		seed=42,
+		pad_token_id=0,
+	)
+
+	print(f"  Stage 0: num_clusters={evaluator.num_clusters}, input_bits={evaluator.total_input_bits}")
+	assert evaluator.num_clusters == k, f"Expected {k} clusters, got {evaluator.num_clusters}"
+
+	# Stage 0 tiered genome
+	s0_genome = create_random_genome(
+		num_clusters=evaluator.num_clusters,
+		total_input_bits=evaluator.total_input_bits,
+		neurons=10,
+		bits=6,
+	)
+
+	start = time.time()
+	results = evaluator.evaluate_batch([s0_genome])
+	elapsed = time.time() - start
+	print(f"  Stage 0 tiered: CE={results[0].ce:.4f}, Acc={results[0].accuracy:.4%} ({elapsed:.2f}s)")
+	assert results[0].ce > 0, f"CE should be positive, got {results[0].ce}"
+	assert results[0].bit_accuracy == 0.0, f"Tiered has no bit_accuracy, got {results[0].bit_accuracy}"
+
+	# Full eval
+	results_full = evaluator.evaluate_batch_full([s0_genome])
+	print(f"  Stage 0 full:   CE={results_full[0].ce:.4f}, Acc={results_full[0].accuracy:.4%}")
+
+	# Switch to Stage 1
+	evaluator.target_stage = 1
+	print(f"\n  Stage 1: num_clusters={evaluator.num_clusters}, input_bits={evaluator.total_input_bits}")
+
+	s1_genome = create_random_genome(
+		num_clusters=evaluator.num_clusters,
+		total_input_bits=evaluator.total_input_bits,
+		neurons=10,
+		bits=6,
+	)
+	results_s1 = evaluator.evaluate_batch([s1_genome])
+	print(f"  Stage 1 tiered: CE={results_s1[0].ce:.4f}, Acc={results_s1[0].accuracy:.4%}")
+	assert results_s1[0].ce > 0
+
+	print("  PASS: Tiered evaluation works for both stages")
+	return evaluator, s0_genome, s1_genome
+
+
+def test_mixed_evaluation():
+	"""Test mixed stage types (tiered+bitwise and bitwise+tiered)."""
+	print("\n" + "=" * 60)
+	print("  Test: Mixed Evaluation (tiered+bitwise)")
+	print("=" * 60)
+
+	vocab_size = 200
+	context_size = 4
+	k = 15
+	random.seed(42)
+
+	train_tokens = [random.randint(0, vocab_size - 1) for _ in range(2000)]
+	eval_tokens = [random.randint(0, vocab_size - 1) for _ in range(500)]
+
+	# tiered+bitwise
+	evaluator_tb = MultiStageEvaluator(
+		train_tokens=train_tokens,
+		eval_tokens=eval_tokens,
+		vocab_size=vocab_size,
+		context_size=context_size,
+		stage_k=[k, vocab_size // k + 1],
+		stage_cluster_type=["tiered", "bitwise"],
+		target_stage=0,
+		num_parts=2,
+		num_eval_parts=1,
+		seed=42,
+		pad_token_id=0,
+	)
+
+	# Stage 0 is tiered → num_clusters = K
+	assert evaluator_tb.num_clusters == k
+	s0_genome = create_random_genome(evaluator_tb.num_clusters, evaluator_tb.total_input_bits, neurons=10, bits=6)
+	results = evaluator_tb.evaluate_batch([s0_genome])
+	print(f"  Stage 0 (tiered): CE={results[0].ce:.4f}, Acc={results[0].accuracy:.4%}")
+
+	# Stage 1 is bitwise → num_clusters = bits_per_within_index
+	evaluator_tb.target_stage = 1
+	s1_genome = create_random_genome(evaluator_tb.num_clusters, evaluator_tb.total_input_bits, neurons=10, bits=6)
+	results_s1 = evaluator_tb.evaluate_batch([s1_genome])
+	print(f"  Stage 1 (bitwise): CE={results_s1[0].ce:.4f}, Acc={results_s1[0].accuracy:.4%}")
+
+	# bitwise+tiered
+	print("\n  Testing bitwise+tiered...")
+	evaluator_bt = MultiStageEvaluator(
+		train_tokens=train_tokens,
+		eval_tokens=eval_tokens,
+		vocab_size=vocab_size,
+		context_size=context_size,
+		stage_k=[k, vocab_size // k + 1],
+		stage_cluster_type=["bitwise", "tiered"],
+		target_stage=0,
+		num_parts=2,
+		num_eval_parts=1,
+		seed=42,
+		pad_token_id=0,
+	)
+
+	s0_genome_bt = create_random_genome(evaluator_bt.num_clusters, evaluator_bt.total_input_bits, neurons=10, bits=6)
+	results_bt = evaluator_bt.evaluate_batch([s0_genome_bt])
+	print(f"  Stage 0 (bitwise): CE={results_bt[0].ce:.4f}, Acc={results_bt[0].accuracy:.4%}")
+
+	evaluator_bt.target_stage = 1
+	s1_genome_bt = create_random_genome(evaluator_bt.num_clusters, evaluator_bt.total_input_bits, neurons=10, bits=6)
+	results_bt_s1 = evaluator_bt.evaluate_batch([s1_genome_bt])
+	print(f"  Stage 1 (tiered): CE={results_bt_s1[0].ce:.4f}, Acc={results_bt_s1[0].accuracy:.4%}")
+
+	print("  PASS: Mixed evaluation works for both combinations")
+
+
+def test_frequency_mapping():
+	"""Test that frequency-interleaved mapping produces balanced clusters."""
+	print("\n" + "=" * 60)
+	print("  Test: Frequency-Interleaved Cluster Mapping")
+	print("=" * 60)
+
+	vocab_size = 200
+	context_size = 4
+	k = 10
+	random.seed(42)
+
+	# Create tokens with skewed frequency (Zipfian-like)
+	train_tokens = []
+	for _ in range(5000):
+		# Token 0 appears most, token 199 least
+		token = min(int(random.expovariate(0.02)), vocab_size - 1)
+		train_tokens.append(token)
+	eval_tokens = [random.randint(0, vocab_size - 1) for _ in range(500)]
+
+	evaluator = MultiStageEvaluator(
+		train_tokens=train_tokens,
+		eval_tokens=eval_tokens,
+		vocab_size=vocab_size,
+		context_size=context_size,
+		stage_k=[k, vocab_size // k + 1],
+		stage_cluster_type=["tiered", "tiered"],
+		target_stage=0,
+		num_parts=2,
+		num_eval_parts=1,
+		seed=42,
+		pad_token_id=0,
+	)
+
+	# Check cluster sizes are balanced
+	sizes = evaluator.cluster_sizes
+	min_size = min(sizes)
+	max_size = max(sizes)
+	print(f"  Cluster sizes: min={min_size}, max={max_size}, k={k}")
+	print(f"  Size ratio: {max_size / max(min_size, 1):.2f}")
+
+	# With frequency-interleaved mapping, sizes should be nearly equal
+	# (vocab_size / k = 20, so sizes should all be ~20)
+	assert max_size - min_size <= 1, f"Clusters unbalanced: {min_size} to {max_size}"
+	print("  PASS: Frequency mapping produces balanced clusters")
+
+
+def test_combined_ce_tiered(evaluator, s0_genome, s1_genome):
+	"""Test combined CE for tiered stages."""
+	print("\n" + "=" * 60)
+	print("  Test: Combined CE (Tiered)")
+	print("=" * 60)
+
+	start = time.time()
+	combined = evaluator.compute_combined_metrics([s0_genome, s1_genome])
+	elapsed = time.time() - start
+
+	print(f"\n  Combined CE:    {combined.ce:.4f}")
+	print(f"  Combined Acc:   {combined.accuracy:.4%}")
+	print(f"  Stage 0 CE:     {combined.cluster_ce:.4f}")
+	print(f"  Stage 1 CE:     {combined.within_ce:.4f}")
+	print(f"  S0 + S1:        {combined.cluster_ce + combined.within_ce:.4f}")
+	print(f"  Elapsed:        {elapsed:.2f}s")
+
+	sum_ce = combined.cluster_ce + combined.within_ce
+	rel_error = abs(combined.ce - sum_ce) / max(combined.ce, 1e-10)
+	print(f"\n  Relative error: {rel_error:.6f}")
+	assert rel_error < 0.01, f"Combined CE mismatch: {combined.ce} vs {sum_ce} (rel={rel_error:.4f})"
+	print("  PASS: CE_combined ≈ CE_s0 + CE_s1 (tiered, < 1% relative error)")
+
+
 if __name__ == "__main__":
 	print("\n" + "=" * 60)
 	print("  MultiStageEvaluator End-to-End Test")
 	print("=" * 60 + "\n")
 
+	# Bitwise tests
 	test_compute_default_k()
 	evaluator, s0_genome, s1_genome = test_basic_evaluation()
 	test_combined_ce(evaluator, s0_genome, s1_genome)
 	test_search_neighbors(evaluator, s0_genome)
 	test_batch_multi_genome(evaluator)
+
+	# Tiered tests
+	tiered_evaluator, tiered_s0, tiered_s1 = test_tiered_evaluation()
+	test_mixed_evaluation()
+	test_frequency_mapping()
+	test_combined_ce_tiered(tiered_evaluator, tiered_s0, tiered_s1)
 
 	print("\n" + "=" * 60)
 	print("  ALL TESTS PASSED")

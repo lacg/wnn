@@ -4790,7 +4790,7 @@ impl BitwiseCacheWrapper {
 }
 
 // =============================================================================
-// Two-Stage Token Cache — PyO3 wrapper for two-stage RAM evaluation
+// Multi-Stage Token Cache — PyO3 wrapper for stage-agnostic RAM evaluation
 // =============================================================================
 
 #[pyclass]
@@ -4802,7 +4802,7 @@ struct MultiStageCacheWrapper {
 #[pymethods]
 impl MultiStageCacheWrapper {
     #[new]
-    #[pyo3(signature = (train_tokens, eval_tokens, vocab_size, context_size, k, num_parts, num_eval_parts, pad_token_id, sparse_threshold=None))]
+    #[pyo3(signature = (train_tokens, eval_tokens, vocab_size, context_size, k, num_parts, num_eval_parts, pad_token_id, sparse_threshold=None, stage_cluster_types=None))]
     fn new(
         train_tokens: Vec<u32>,
         eval_tokens: Vec<u32>,
@@ -4813,21 +4813,26 @@ impl MultiStageCacheWrapper {
         num_eval_parts: usize,
         pad_token_id: u32,
         sparse_threshold: Option<usize>,
+        stage_cluster_types: Option<Vec<String>>,
     ) -> Self {
         Self {
             inner: multistage::MultiStageTokenCache::new(
                 train_tokens, eval_tokens, vocab_size, context_size,
                 k, num_parts, num_eval_parts, pad_token_id,
+                stage_cluster_types,
             ),
             sparse_threshold_override: sparse_threshold,
         }
     }
 
-    /// Evaluate Stage 1 genomes (cluster prediction) with subset rotation.
+    // ── Bitwise evaluation (stage-agnostic) ─────────────────────────
+
+    /// Evaluate bitwise genomes for any stage with subset rotation.
     #[allow(clippy::too_many_arguments)]
-    fn evaluate_stage1_genomes(
+    fn evaluate_bitwise_genomes(
         &self,
         py: Python<'_>,
+        stage: usize,
         bits_per_neuron_flat: Vec<usize>,
         neurons_per_cluster_flat: Vec<usize>,
         connections_flat: Vec<i64>,
@@ -4840,19 +4845,20 @@ impl MultiStageCacheWrapper {
     ) -> PyResult<Vec<(f64, f64, f64)>> {
         let override_val = self.sparse_threshold_override;
         py.allow_threads(|| {
-            Ok(multistage::evaluate_stage1_genomes(
-                &self.inner, &bits_per_neuron_flat, &neurons_per_cluster_flat,
+            Ok(multistage::evaluate_bitwise_genomes(
+                &self.inner, stage, &bits_per_neuron_flat, &neurons_per_cluster_flat,
                 &connections_flat, num_genomes, train_subset_idx, eval_subset_idx,
                 memory_mode, neuron_sample_rate, rng_seed, override_val,
             ))
         })
     }
 
-    /// Evaluate Stage 1 genomes with full (non-rotated) data.
+    /// Evaluate bitwise genomes with full (non-rotated) data.
     #[allow(clippy::too_many_arguments)]
-    fn evaluate_stage1_genomes_full(
+    fn evaluate_bitwise_genomes_full(
         &self,
         py: Python<'_>,
+        stage: usize,
         bits_per_neuron_flat: Vec<usize>,
         neurons_per_cluster_flat: Vec<usize>,
         connections_flat: Vec<i64>,
@@ -4863,56 +4869,20 @@ impl MultiStageCacheWrapper {
     ) -> PyResult<Vec<(f64, f64, f64)>> {
         let override_val = self.sparse_threshold_override;
         py.allow_threads(|| {
-            Ok(multistage::evaluate_stage1_genomes_full(
-                &self.inner, &bits_per_neuron_flat, &neurons_per_cluster_flat,
+            Ok(multistage::evaluate_bitwise_genomes_full(
+                &self.inner, stage, &bits_per_neuron_flat, &neurons_per_cluster_flat,
                 &connections_flat, num_genomes,
                 memory_mode, neuron_sample_rate, rng_seed, override_val,
             ))
         })
     }
 
-    /// Get next train subset index (advances rotator).
-    fn next_train_idx(&self) -> usize {
-        self.inner.next_train_idx()
-    }
-
-    /// Get next eval subset index (advances rotator).
-    fn next_eval_idx(&self) -> usize {
-        self.inner.next_eval_idx()
-    }
-
-    /// Reset subset rotation.
-    fn reset(&self) {
-        self.inner.reset();
-    }
-
-    // ── Clustering info ──────────────────────────────────────────────
-
-    fn k(&self) -> usize { self.inner.k }
-    fn vocab_size(&self) -> usize { self.inner.vocab_size }
-    fn context_size(&self) -> usize { self.inner.context_size }
-    fn bits_per_cluster_id(&self) -> usize { self.inner.bits_per_cluster_id }
-    fn bits_per_within_index(&self) -> usize { self.inner.bits_per_within_index }
-    fn max_cluster_size(&self) -> usize { self.inner.max_cluster_size }
-    fn stage1_input_bits(&self) -> usize { self.inner.context_input_bits }
-    fn num_parts(&self) -> usize { self.inner.num_parts }
-    fn num_eval_parts(&self) -> usize { self.inner.num_eval_parts }
-
-    fn cluster_sizes(&self) -> Vec<usize> {
-        self.inner.cluster_sizes.clone()
-    }
-
-    fn stage2_concat_input_bits(&self) -> usize { self.inner.stage2_concat_input_bits }
-
-    // ── Stage 2 evaluation — selector mode ───────────────────────────
-
-    /// Evaluate Stage 2 genomes for one group (selector mode).
-    ///
-    /// Input = context bits only. Trains+evaluates on examples where target ∈ group_id.
+    /// Evaluate bitwise genomes for one group (selector mode).
     #[allow(clippy::too_many_arguments)]
-    fn evaluate_stage2_selector_genomes(
+    fn evaluate_bitwise_selector_genomes(
         &self,
         py: Python<'_>,
+        stage: usize,
         bits_per_neuron_flat: Vec<usize>,
         neurons_per_cluster_flat: Vec<usize>,
         connections_flat: Vec<i64>,
@@ -4924,98 +4894,155 @@ impl MultiStageCacheWrapper {
     ) -> PyResult<Vec<(f64, f64, f64)>> {
         let override_val = self.sparse_threshold_override;
         py.allow_threads(|| {
-            Ok(multistage::evaluate_stage2_selector_genomes(
-                &self.inner, &bits_per_neuron_flat, &neurons_per_cluster_flat,
+            Ok(multistage::evaluate_bitwise_selector_genomes(
+                &self.inner, stage, &bits_per_neuron_flat, &neurons_per_cluster_flat,
                 &connections_flat, num_genomes, group_id,
                 memory_mode, neuron_sample_rate, rng_seed, override_val,
             ))
         })
     }
 
-    // ── Stage 2 evaluation — input_concat mode ───────────────────────
+    // ── Rotation ────────────────────────────────────────────────────
 
-    /// Evaluate Stage 2 genomes with input_concat mode (subset rotation).
-    ///
-    /// Input = context bits + cluster_id bits (teacher forcing from true target).
-    #[allow(clippy::too_many_arguments)]
-    fn evaluate_stage2_concat_genomes(
-        &self,
-        py: Python<'_>,
-        bits_per_neuron_flat: Vec<usize>,
-        neurons_per_cluster_flat: Vec<usize>,
-        connections_flat: Vec<i64>,
-        num_genomes: usize,
-        train_subset_idx: usize,
-        eval_subset_idx: usize,
-        memory_mode: u8,
-        neuron_sample_rate: f32,
-        rng_seed: u64,
-    ) -> PyResult<Vec<(f64, f64, f64)>> {
-        let override_val = self.sparse_threshold_override;
-        py.allow_threads(|| {
-            Ok(multistage::evaluate_stage2_concat_genomes(
-                &self.inner, &bits_per_neuron_flat, &neurons_per_cluster_flat,
-                &connections_flat, num_genomes, train_subset_idx, eval_subset_idx,
-                memory_mode, neuron_sample_rate, rng_seed, override_val,
-            ))
-        })
+    fn next_train_idx(&self) -> usize {
+        self.inner.next_train_idx()
     }
 
-    /// Evaluate Stage 2 genomes with input_concat mode — full data.
-    #[allow(clippy::too_many_arguments)]
-    fn evaluate_stage2_concat_genomes_full(
-        &self,
-        py: Python<'_>,
-        bits_per_neuron_flat: Vec<usize>,
-        neurons_per_cluster_flat: Vec<usize>,
-        connections_flat: Vec<i64>,
-        num_genomes: usize,
-        memory_mode: u8,
-        neuron_sample_rate: f32,
-        rng_seed: u64,
-    ) -> PyResult<Vec<(f64, f64, f64)>> {
-        let override_val = self.sparse_threshold_override;
-        py.allow_threads(|| {
-            Ok(multistage::evaluate_stage2_concat_genomes_full(
-                &self.inner, &bits_per_neuron_flat, &neurons_per_cluster_flat,
-                &connections_flat, num_genomes,
-                memory_mode, neuron_sample_rate, rng_seed, override_val,
-            ))
-        })
+    fn next_eval_idx(&self) -> usize {
+        self.inner.next_eval_idx()
     }
 
-    // ── Combined CE computation ─────────────────────────────────────────
+    fn reset(&self) {
+        self.inner.reset();
+    }
 
-    /// Compute combined two-stage CE from both stages' genomes.
+    // ── Clustering info (stage-agnostic) ────────────────────────────
+
+    fn k(&self) -> usize { self.inner.k }
+    fn vocab_size(&self) -> usize { self.inner.vocab_size }
+    fn context_size(&self) -> usize { self.inner.context_size }
+    fn max_cluster_size(&self) -> usize { self.inner.max_cluster_size }
+    fn num_parts(&self) -> usize { self.inner.num_parts }
+    fn num_eval_parts(&self) -> usize { self.inner.num_eval_parts }
+
+    fn cluster_sizes(&self) -> Vec<usize> {
+        self.inner.cluster_sizes.clone()
+    }
+
+    /// Get total input bits for a given stage.
+    fn stage_input_bits(&self, stage: usize) -> usize {
+        self.inner.stage_input_bits.get(stage).copied().unwrap_or(0)
+    }
+
+    /// Get output bits (target bit count) for a given bitwise stage.
+    fn bitwise_output_bits(&self, stage: usize) -> usize {
+        self.inner.bitwise_output_bits.get(stage).copied().unwrap_or(0)
+    }
+
+    // ── Combined CE computation ─────────────────────────────────────
+
+    /// Compute combined multi-stage CE from per-stage genome params.
     ///
-    /// Trains Stage 1 and Stage 2 (input_concat) independently, then reconstructs
-    /// the joint distribution P(token) = P(group) × P(token|group).
+    /// Takes flat concatenated arrays for all stages, plus stage_num_clusters
+    /// to partition them.
     ///
-    /// Returns: (combined_ce, combined_accuracy, stage1_ce, stage2_ce)
+    /// Returns: (combined_ce, combined_accuracy, stage0_ce, stage1_ce)
     #[allow(clippy::too_many_arguments)]
     fn evaluate_combined_ce(
         &self,
         py: Python<'_>,
-        // Stage 1 genome
-        s1_bits_per_neuron: Vec<usize>,
-        s1_neurons_per_cluster: Vec<usize>,
-        s1_connections: Vec<i64>,
-        // Stage 2 genome (input_concat)
-        s2_bits_per_neuron: Vec<usize>,
-        s2_neurons_per_cluster: Vec<usize>,
-        s2_connections: Vec<i64>,
-        // Training params
+        all_bits_per_neuron: Vec<usize>,
+        all_neurons_per_cluster: Vec<usize>,
+        all_connections: Vec<i64>,
+        stage_num_clusters: Vec<usize>,
         memory_mode: u8,
         neuron_sample_rate: f32,
         rng_seed: u64,
         sparse_threshold: usize,
     ) -> PyResult<(f64, f64, f64, f64)> {
         py.allow_threads(|| {
+            // Partition flat arrays by stage
+            let num_stages = stage_num_clusters.len();
+            let mut stage_bits: Vec<&[usize]> = Vec::with_capacity(num_stages);
+            let mut stage_neurons: Vec<&[usize]> = Vec::with_capacity(num_stages);
+            let mut stage_conns: Vec<&[i64]> = Vec::with_capacity(num_stages);
+
+            let mut neuron_offset = 0usize;
+            let mut cluster_offset = 0usize;
+            let mut conn_offset = 0usize;
+
+            for s in 0..num_stages {
+                let n_clusters = stage_num_clusters[s];
+                let neurons_slice = &all_neurons_per_cluster[cluster_offset..cluster_offset + n_clusters];
+                let total_neurons: usize = neurons_slice.iter().sum();
+                let bits_slice = &all_bits_per_neuron[neuron_offset..neuron_offset + total_neurons];
+                let total_conns: usize = bits_slice.iter().sum();
+                let conns_slice = &all_connections[conn_offset..conn_offset + total_conns];
+
+                stage_bits.push(bits_slice);
+                stage_neurons.push(neurons_slice);
+                stage_conns.push(conns_slice);
+
+                neuron_offset += total_neurons;
+                cluster_offset += n_clusters;
+                conn_offset += total_conns;
+            }
+
             Ok(multistage::compute_combined_ce(
                 &self.inner,
-                &s1_bits_per_neuron, &s1_neurons_per_cluster, &s1_connections,
-                &s2_bits_per_neuron, &s2_neurons_per_cluster, &s2_connections,
+                &stage_bits, &stage_neurons, &stage_conns,
                 memory_mode, neuron_sample_rate, rng_seed, sparse_threshold,
+            ))
+        })
+    }
+
+    // ── Tiered stage methods ────────────────────────────────────────
+
+    fn is_stage_tiered(&self, stage: usize) -> bool {
+        self.inner.stage_is_tiered.get(stage).copied().unwrap_or(false)
+    }
+
+    fn stage_num_output_clusters(&self, stage: usize) -> usize {
+        self.inner.stage_num_output_clusters.get(stage).copied().unwrap_or(0)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn evaluate_tiered_genomes(
+        &self,
+        py: Python<'_>,
+        stage: usize,
+        bits_per_neuron_flat: Vec<usize>,
+        neurons_per_cluster_flat: Vec<usize>,
+        connections_flat: Vec<i64>,
+        num_genomes: usize,
+        train_subset_idx: usize,
+        eval_subset_idx: usize,
+    ) -> PyResult<Vec<(f64, f64)>> {
+        py.allow_threads(|| {
+            Ok(multistage::evaluate_tiered_genomes(
+                &self.inner, stage,
+                &bits_per_neuron_flat, &neurons_per_cluster_flat,
+                &connections_flat, num_genomes,
+                train_subset_idx, eval_subset_idx,
+            ))
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn evaluate_tiered_genomes_full(
+        &self,
+        py: Python<'_>,
+        stage: usize,
+        bits_per_neuron_flat: Vec<usize>,
+        neurons_per_cluster_flat: Vec<usize>,
+        connections_flat: Vec<i64>,
+        num_genomes: usize,
+    ) -> PyResult<Vec<(f64, f64)>> {
+        py.allow_threads(|| {
+            Ok(multistage::evaluate_tiered_genomes_full(
+                &self.inner, stage,
+                &bits_per_neuron_flat, &neurons_per_cluster_flat,
+                &connections_flat, num_genomes,
             ))
         })
     }
