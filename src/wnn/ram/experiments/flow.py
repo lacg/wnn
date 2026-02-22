@@ -1074,6 +1074,13 @@ class Flow:
 						frozen_genomes[prev_stage] = current_genome
 						self.log(f"  Frozen S{prev_stage} genome: {current_genome}")
 
+						# Re-encode next stage data with previous stage's predictions
+						if prev_stage == 0 and hasattr(self.evaluator, 'recompute_stage1_with_predictions'):
+							self.log(f"  Recomputing S{next_stage} data with S{prev_stage} predictions...")
+							s0_train_acc, s0_eval_acc = self.evaluator.recompute_stage1_with_predictions(current_genome)
+							self.log(f"  S0 cluster accuracy: train={s0_train_acc:.2%}, eval={s0_eval_acc:.2%}")
+							self.log(f"  S{next_stage} data now uses realistic cluster inputs")
+
 						# Switch evaluator target stage
 						self.evaluator.target_stage = next_stage
 						self.log(f"  Evaluator target_stage → {next_stage}")

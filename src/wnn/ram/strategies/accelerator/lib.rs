@@ -5046,6 +5046,49 @@ impl MultiStageCacheWrapper {
             ))
         })
     }
+
+    /// Re-encode stage 1 data using frozen stage 0's actual predictions.
+    ///
+    /// Trains stage 0 on full train data, gets predictions for both train and eval,
+    /// then re-encodes all stage 1 data with those predictions instead of teacher forcing.
+    ///
+    /// Returns: (train_accuracy, eval_accuracy) — stage 0 cluster prediction accuracy.
+    #[allow(clippy::too_many_arguments)]
+    fn recompute_stage1_with_predictions(
+        &mut self,
+        py: Python<'_>,
+        stage0_bits_per_neuron: Vec<usize>,
+        stage0_neurons_per_cluster: Vec<usize>,
+        stage0_connections: Vec<i64>,
+        memory_mode: u8,
+        neuron_sample_rate: f32,
+        rng_seed: u64,
+        sparse_threshold: usize,
+    ) -> PyResult<(f64, f64)> {
+        py.allow_threads(|| {
+            let (train_preds, eval_preds, train_correct, eval_correct) =
+                multistage::predict_stage0_clusters(
+                    &self.inner,
+                    &stage0_bits_per_neuron,
+                    &stage0_neurons_per_cluster,
+                    &stage0_connections,
+                    memory_mode,
+                    neuron_sample_rate,
+                    rng_seed,
+                    sparse_threshold,
+                );
+
+            let num_train = self.inner.bitwise_full_train[0].num_examples;
+            let num_eval = self.inner.bitwise_full_eval[0].num_examples;
+
+            self.inner.recompute_stage1_data(&train_preds, &eval_preds);
+
+            let train_acc = train_correct as f64 / num_train.max(1) as f64;
+            let eval_acc = eval_correct as f64 / num_eval.max(1) as f64;
+
+            Ok((train_acc, eval_acc))
+        })
+    }
 }
 
 // =============================================================================

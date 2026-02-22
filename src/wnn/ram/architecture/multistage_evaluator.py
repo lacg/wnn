@@ -456,6 +456,25 @@ class MultiStageEvaluator(BaseEvaluator):
 			within_ce=s1_ce,
 		)
 
+	# ── Re-encode stage 1 with stage 0 predictions ─────────────────
+
+	def recompute_stage1_with_predictions(self, stage0_genome: ClusterGenome) -> tuple[float, float]:
+		"""Re-encode stage 1 data using frozen stage 0's actual predictions.
+
+		Returns (train_accuracy, eval_accuracy) for stage 0 cluster prediction.
+		"""
+		sparse_threshold = self._sparse_threshold or 4096
+
+		return self._cache.recompute_stage1_with_predictions(
+			stage0_bits_per_neuron=list(stage0_genome.bits_per_neuron),
+			stage0_neurons_per_cluster=list(stage0_genome.neurons_per_cluster),
+			stage0_connections=list(stage0_genome.connections or []),
+			memory_mode=self._memory_mode,
+			neuron_sample_rate=self._neuron_sample_rate,
+			rng_seed=self._seed,
+			sparse_threshold=sparse_threshold,
+		)
+
 	# ── Mutation + search (same pattern as BitwiseEvaluator) ─────────
 
 	def _mutate_genome(
