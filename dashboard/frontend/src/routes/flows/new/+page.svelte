@@ -8,7 +8,7 @@
   let template = 'bitwise-7-phase';
   let phaseOrder = 'neurons_first';
 
-  // Bitwise-specific config
+  // Bitwise-specific config (single-stage only)
   let bitwiseNumClusters = 16;
   let bitwiseMinBits = 10;
   let bitwiseMaxBits = 24;
@@ -33,7 +33,7 @@
 
   let stageConfigs: StageConfig[] = [defaultStageConfig(), defaultStageConfig()];
 
-  // Shared multi-stage params
+  // Shared multi-stage architecture params
   let msMinBits = 4;
   let msMaxBits = 24;
   let msMinNeurons = 5;
@@ -73,7 +73,7 @@
   let contextSize = 4;
   let tierConfig = '100,15,20,true;400,10,12,false;rest,5,8,false';
 
-  // Apply template defaults when template changes (only in single-stage mode)
+  // Apply template defaults (only in single-stage mode)
   function applyTemplateDefaults(templateName: string) {
     if (isMultiStage) return;
 
@@ -142,14 +142,13 @@
     }
   }
 
-  // Watch for template changes
   $: applyTemplateDefaults(template);
   let seedCheckpointId: number | null = null;
 
   let loading = false;
   let error: string | null = null;
 
-  // Phase templates - generates experiments array based on template and phase_order
+  // Phase spec interface
   interface PhaseSpec {
     name: string;
     experiment_type: 'ga' | 'ts' | 'neurogenesis' | 'synaptogenesis' | 'axonogenesis';
@@ -167,21 +166,22 @@
   let newPhaseConnections = false;
 
   /** Generate the 10-phase pipeline for a single stage. */
-  function generate10PhaseForStage(stagePrefix: string): PhaseSpec[] {
+  function generate10PhaseForStage(prefix: string): PhaseSpec[] {
     return [
-      { name: `${stagePrefix}: Grid Search`, experiment_type: 'ga', optimize_bits: true, optimize_neurons: true, optimize_connections: false, phase_type: 'grid_search' },
-      { name: `${stagePrefix}: GA Neurons`, experiment_type: 'ga', optimize_bits: false, optimize_neurons: true, optimize_connections: false },
-      { name: `${stagePrefix}: Neurogenesis`, experiment_type: 'neurogenesis', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'neurogenesis' },
-      { name: `${stagePrefix}: TS Neurons`, experiment_type: 'ts', optimize_bits: false, optimize_neurons: true, optimize_connections: false },
-      { name: `${stagePrefix}: GA Bits`, experiment_type: 'ga', optimize_bits: true, optimize_neurons: false, optimize_connections: false },
-      { name: `${stagePrefix}: Synaptogenesis`, experiment_type: 'synaptogenesis', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'synaptogenesis' },
-      { name: `${stagePrefix}: TS Bits`, experiment_type: 'ts', optimize_bits: true, optimize_neurons: false, optimize_connections: false },
-      { name: `${stagePrefix}: GA Connections`, experiment_type: 'ga', optimize_bits: false, optimize_neurons: false, optimize_connections: true },
-      { name: `${stagePrefix}: Axonogenesis`, experiment_type: 'axonogenesis', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'axonogenesis' },
-      { name: `${stagePrefix}: TS Connections`, experiment_type: 'ts', optimize_bits: false, optimize_neurons: false, optimize_connections: true },
+      { name: `${prefix}: Grid Search`, experiment_type: 'ga', optimize_bits: true, optimize_neurons: true, optimize_connections: false, phase_type: 'grid_search' },
+      { name: `${prefix}: GA Neurons`, experiment_type: 'ga', optimize_bits: false, optimize_neurons: true, optimize_connections: false },
+      { name: `${prefix}: Neurogenesis`, experiment_type: 'neurogenesis', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'neurogenesis' },
+      { name: `${prefix}: TS Neurons`, experiment_type: 'ts', optimize_bits: false, optimize_neurons: true, optimize_connections: false },
+      { name: `${prefix}: GA Bits`, experiment_type: 'ga', optimize_bits: true, optimize_neurons: false, optimize_connections: false },
+      { name: `${prefix}: Synaptogenesis`, experiment_type: 'synaptogenesis', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'synaptogenesis' },
+      { name: `${prefix}: TS Bits`, experiment_type: 'ts', optimize_bits: true, optimize_neurons: false, optimize_connections: false },
+      { name: `${prefix}: GA Connections`, experiment_type: 'ga', optimize_bits: false, optimize_neurons: false, optimize_connections: true },
+      { name: `${prefix}: Axonogenesis`, experiment_type: 'axonogenesis', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'axonogenesis' },
+      { name: `${prefix}: TS Connections`, experiment_type: 'ts', optimize_bits: false, optimize_neurons: false, optimize_connections: true },
     ];
   }
 
+  /** Generate single-stage phases from template. */
   function generatePhases(templateName: string, order: string): PhaseSpec[] {
     if (templateName === 'empty') return [];
 
@@ -222,25 +222,41 @@
       return [...neuronsPhases, ...bitsPhases];
     }
 
-    // standard-6-phase (default)
+    // standard-6-phase
     if (order === 'bits_first') return [...bitsPhases, ...neuronsPhases, ...connectionsPhases];
     return [...neuronsPhases, ...bitsPhases, ...connectionsPhases];
   }
 
-  /** Generate phases: multi-stage uses 10-phase per stage, single-stage uses template. */
-  function generateAllPhases(isMS: boolean, stages: number, tmpl: string, order: string): PhaseSpec[] {
-    if (isMS) {
-      const phases: PhaseSpec[] = [];
-      for (let s = 0; s < stages; s++) {
-        phases.push(...generate10PhaseForStage(`S${s}`));
-      }
-      return phases;
+  // --- Per-stage phase storage (multi-stage only) ---
+  let perStagePhases: PhaseSpec[][] = [];
+
+  // Initialize/resize per-stage phases when numStages changes
+  $: if (isMultiStage && perStagePhases.length !== numStages) {
+    const updated = [...perStagePhases];
+    while (updated.length < numStages) {
+      updated.push(generate10PhaseForStage(`S${updated.length}`));
     }
-    return generatePhases(tmpl, order);
+    if (updated.length > numStages) {
+      updated.length = numStages;
+    }
+    perStagePhases = updated;
   }
 
-  // Reactive: regenerate phases when any relevant input changes
-  $: experiments = generateAllPhases(isMultiStage, numStages, template, phaseOrder);
+  // Single-stage phases from template
+  let singleStagePhases: PhaseSpec[] = [];
+  $: if (!isMultiStage) {
+    singleStagePhases = generatePhases(template, phaseOrder);
+  }
+
+  // What to display in the Phases panel
+  $: displayPhases = isMultiStage
+    ? (perStagePhases[selectedStage] ?? [])
+    : singleStagePhases;
+
+  // All experiments flattened for submit
+  $: allExperiments = isMultiStage
+    ? perStagePhases.flat()
+    : singleStagePhases;
 
   function generatePhaseName(type: string, neurons: boolean, bits: boolean, connections: boolean): string {
     const targets: string[] = [];
@@ -254,49 +270,68 @@
   function isAdaptationType(t: string): boolean { return adaptationPhaseTypes.includes(t); }
 
   function addPhase() {
+    let newPhase: PhaseSpec;
+
     if (newPhaseGrid) {
-      experiments = [...experiments, {
+      newPhase = {
         name: 'Grid Search (neurons × bits)',
         experiment_type: 'ga' as const,
         optimize_bits: true,
         optimize_neurons: true,
         optimize_connections: false,
         phase_type: 'grid_search' as const,
-      }];
-      return;
-    }
-    if (isAdaptationType(newPhaseType)) {
+      };
+    } else if (isAdaptationType(newPhaseType)) {
       const label = newPhaseType.charAt(0).toUpperCase() + newPhaseType.slice(1);
-      experiments = [...experiments, {
+      newPhase = {
         name: label,
         experiment_type: newPhaseType as PhaseSpec['experiment_type'],
         optimize_bits: false,
         optimize_neurons: false,
         optimize_connections: false,
         phase_type: newPhaseType as PhaseSpec['phase_type'],
-      }];
-      return;
+      };
+    } else {
+      if (!newPhaseNeurons && !newPhaseBits && !newPhaseConnections) return;
+      newPhase = {
+        name: generatePhaseName(newPhaseType, newPhaseNeurons, newPhaseBits, newPhaseConnections),
+        experiment_type: newPhaseType,
+        optimize_bits: newPhaseBits,
+        optimize_neurons: newPhaseNeurons,
+        optimize_connections: newPhaseConnections,
+      };
     }
-    if (!newPhaseNeurons && !newPhaseBits && !newPhaseConnections) return;
-    experiments = [...experiments, {
-      name: generatePhaseName(newPhaseType, newPhaseNeurons, newPhaseBits, newPhaseConnections),
-      experiment_type: newPhaseType,
-      optimize_bits: newPhaseBits,
-      optimize_neurons: newPhaseNeurons,
-      optimize_connections: newPhaseConnections,
-    }];
+
+    if (isMultiStage) {
+      newPhase.name = `S${selectedStage}: ${newPhase.name}`;
+      perStagePhases[selectedStage] = [...perStagePhases[selectedStage], newPhase];
+      perStagePhases = perStagePhases;
+    } else {
+      singleStagePhases = [...singleStagePhases, newPhase];
+    }
   }
 
   function removePhase(index: number) {
-    experiments = experiments.filter((_, i) => i !== index);
+    if (isMultiStage) {
+      perStagePhases[selectedStage] = perStagePhases[selectedStage].filter((_, i) => i !== index);
+      perStagePhases = perStagePhases;
+    } else {
+      singleStagePhases = singleStagePhases.filter((_, i) => i !== index);
+    }
   }
 
   function movePhase(index: number, direction: -1 | 1) {
+    const arr = isMultiStage ? perStagePhases[selectedStage] : singleStagePhases;
     const newIndex = index + direction;
-    if (newIndex < 0 || newIndex >= experiments.length) return;
-    const copy = [...experiments];
+    if (newIndex < 0 || newIndex >= arr.length) return;
+    const copy = [...arr];
     [copy[index], copy[newIndex]] = [copy[newIndex], copy[index]];
-    experiments = copy;
+    if (isMultiStage) {
+      perStagePhases[selectedStage] = copy;
+      perStagePhases = perStagePhases;
+    } else {
+      singleStagePhases = copy;
+    }
   }
 
   async function handleSubmit() {
@@ -309,9 +344,8 @@
     error = null;
 
     try {
-      // Enrich experiments with their params (generations/iterations based on type)
       const adaptationTypes = new Set(['neurogenesis', 'synaptogenesis', 'axonogenesis']);
-      const enrichedExperiments = experiments.map((exp) => {
+      const enrichedExperiments = allExperiments.map((exp) => {
         const isAdaptation = adaptationTypes.has(exp.phase_type ?? '');
         return {
           ...exp,
@@ -329,7 +363,6 @@
         };
       });
 
-      // Build params
       const params: Record<string, unknown> = {
         phase_order: phaseOrder,
         ga_generations: gaGenerations,
@@ -414,30 +447,110 @@
       <div class="error-message">{error}</div>
     {/if}
 
-    <!-- Top row: Name + Description side by side -->
+    <!-- Top row: Name + Description + Stages -->
     <div class="form-section">
-      <div class="form-row">
+      <div class="form-row-header">
         <div class="form-group">
           <label for="name">Name *</label>
-          <input
-            type="text"
-            id="name"
-            bind:value={name}
-            placeholder="e.g., Pass 1 - Initial Search"
-          />
+          <input type="text" id="name" bind:value={name} placeholder="e.g., Pass 1 - Initial Search" />
         </div>
-
         <div class="form-group">
           <label for="description">Description</label>
-          <input
-            type="text"
-            id="description"
-            bind:value={description}
-            placeholder="Optional description..."
-          />
+          <input type="text" id="description" bind:value={description} placeholder="Optional description..." />
+        </div>
+        <div class="form-group">
+          <label for="numStages">Stages</label>
+          <input type="number" id="numStages" bind:value={numStages} min="1" max="4" />
+          <span class="field-hint">
+            {#if numStages === 1}
+              Single-stage
+            {:else}
+              {numStages}-stage factorized
+            {/if}
+          </span>
         </div>
       </div>
     </div>
+
+    <!-- Multi-Stage Configuration (full width, only when stages > 1) -->
+    {#if isMultiStage}
+      <div class="form-section">
+        <h2>Multi-Stage Configuration</h2>
+        <div class="form-row-3">
+          <div class="form-group">
+            <label for="selectedStage">Edit Stage</label>
+            <select id="selectedStage" bind:value={selectedStage}>
+              {#each Array(numStages) as _, i}
+                <option value={i}>Stage {i}</option>
+              {/each}
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="stageMode">Stage Connection</label>
+            <select id="stageMode" bind:value={stageMode}>
+              <option value="input_concat">Input Concat</option>
+            </select>
+            <span class="field-hint">Stage N+1 sees stage N output bits</span>
+          </div>
+          <!-- Per-stage config -->
+          {#each stageConfigs as config, i}
+            {#if i === selectedStage}
+              <div class="form-group stage-config-inline">
+                <div class="stage-config-header">Stage {i}</div>
+                <div class="stage-fields">
+                  <div class="stage-field">
+                    <label for="stageArch_{i}">Architecture</label>
+                    <select id="stageArch_{i}" bind:value={config.clusterType}>
+                      <option value="bitwise">Bitwise</option>
+                      <option value="tiered">Tiered</option>
+                    </select>
+                  </div>
+                  <div class="stage-field">
+                    <label for="stageK_{i}">K</label>
+                    <input type="number" id="stageK_{i}" bind:value={config.k} min="2" max="1024" />
+                  </div>
+                </div>
+              </div>
+            {/if}
+          {/each}
+        </div>
+
+        <div class="shared-params-header">Shared Parameters</div>
+        <div class="form-row-4">
+          <div class="form-group">
+            <label for="msMinBits">Min Bits</label>
+            <input type="number" id="msMinBits" bind:value={msMinBits} min="1" max="64" />
+          </div>
+          <div class="form-group">
+            <label for="msMaxBits">Max Bits</label>
+            <input type="number" id="msMaxBits" bind:value={msMaxBits} min="1" max="64" />
+          </div>
+          <div class="form-group">
+            <label for="msMinNeurons">Min Neurons</label>
+            <input type="number" id="msMinNeurons" bind:value={msMinNeurons} min="1" max="1000" />
+          </div>
+          <div class="form-group">
+            <label for="msMaxNeurons">Max Neurons</label>
+            <input type="number" id="msMaxNeurons" bind:value={msMaxNeurons} min="1" max="1000" />
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="msMemoryMode">Memory Mode</label>
+            <select id="msMemoryMode" bind:value={msMemoryMode}>
+              <option value="QUAD_WEIGHTED">Quad Weighted</option>
+              <option value="QUAD_BINARY">Quad Binary</option>
+              <option value="TERNARY">Ternary</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="msNeuronSampleRate">Neuron Sample Rate</label>
+            <input type="number" id="msNeuronSampleRate" bind:value={msNeuronSampleRate} min="0.01" max="1.0" step="0.01" />
+            <span class="field-hint">Fraction of neurons sampled per example</span>
+          </div>
+        </div>
+      </div>
+    {/if}
 
     <!-- Main two-column layout -->
     <div class="form-columns">
@@ -446,48 +559,32 @@
       <div class="form-section">
         <h2>Search Parameters</h2>
 
-        <div class="form-row">
-          <div class="form-group">
-            <label for="template">Template</label>
-            <select id="template" bind:value={template} disabled={isMultiStage}>
-              <option value="quick-4-phase">Quick 4-Phase (Tiered)</option>
-              <option value="standard-6-phase">Standard 6-Phase (Tiered)</option>
-              <option value="bitwise-7-phase">Bitwise 7-Phase</option>
-              <option value="bitwise-10-phase">Bitwise 10-Phase (+ Adaptation)</option>
-              <option value="empty">Empty (no phases)</option>
-            </select>
-            <span class="field-hint">
-              {#if isMultiStage}
-                10-phase per stage (auto-generated)
-              {:else if template === 'quick-4-phase'}
-                Fast iteration: neurons &rarr; bits (50 gens, patience 2)
-              {:else if template === 'standard-6-phase'}
-                Full search: neurons &rarr; bits &rarr; connections (250 gens)
-              {:else if template === 'bitwise-7-phase'}
-                Exhaustive neurons &times; bits grid, then 6 GA/TS optimization phases
-              {:else if template === 'bitwise-10-phase'}
-                Grid + GA/adapt/TS for neurons &rarr; bits &rarr; connections (stats-guided adaptation phases)
-              {:else}
-                Start empty, add phases manually below
-              {/if}
-            </span>
-          </div>
-
-          <div class="form-group">
-            <label for="numStages">Stages</label>
-            <input type="number" id="numStages" bind:value={numStages} min="1" max="4" />
-            <span class="field-hint">
-              {#if numStages === 1}
-                Single-stage prediction
-              {:else}
-                {numStages}-stage factorized: P(token) = {#each Array(numStages) as _, i}{#if i > 0} &times; {/if}P(s{i}){/each}
-              {/if}
-            </span>
-          </div>
-        </div>
-
         {#if !isMultiStage}
           <div class="form-row">
+            <div class="form-group">
+              <label for="template">Template</label>
+              <select id="template" bind:value={template}>
+                <option value="quick-4-phase">Quick 4-Phase (Tiered)</option>
+                <option value="standard-6-phase">Standard 6-Phase (Tiered)</option>
+                <option value="bitwise-7-phase">Bitwise 7-Phase</option>
+                <option value="bitwise-10-phase">Bitwise 10-Phase (+ Adaptation)</option>
+                <option value="empty">Empty (no phases)</option>
+              </select>
+              <span class="field-hint">
+                {#if template === 'quick-4-phase'}
+                  Fast iteration: neurons &rarr; bits (50 gens, patience 2)
+                {:else if template === 'standard-6-phase'}
+                  Full search: neurons &rarr; bits &rarr; connections (250 gens)
+                {:else if template === 'bitwise-7-phase'}
+                  Exhaustive neurons &times; bits grid, then 6 GA/TS optimization phases
+                {:else if template === 'bitwise-10-phase'}
+                  Grid + GA/adapt/TS for neurons &rarr; bits &rarr; connections
+                {:else}
+                  Start empty, add phases manually below
+                {/if}
+              </span>
+            </div>
+
             <div class="form-group">
               <label for="phaseOrder">Phase Order</label>
               <select id="phaseOrder" bind:value={phaseOrder} disabled={template === 'empty' || template === 'bitwise-10-phase'}>
@@ -496,11 +593,11 @@
               </select>
               <span class="field-hint">
                 {#if template === 'bitwise-10-phase'}
-                  Fixed: grid &rarr; neurons (GA/adapt/TS) &rarr; bits (GA/adapt/TS) &rarr; connections (GA/adapt/TS)
+                  Fixed: grid &rarr; neurons &rarr; bits &rarr; connections
                 {:else if isBitwise}
                   grid &rarr; {phaseOrder === 'neurons_first' ? 'neurons → bits' : 'bits → neurons'} &rarr; connections
                 {:else if template === 'quick-4-phase'}
-                  {phaseOrder === 'neurons_first' ? 'neurons → bits' : 'bits → neurons'} (no connections)
+                  {phaseOrder === 'neurons_first' ? 'neurons → bits' : 'bits → neurons'}
                 {:else if phaseOrder === 'neurons_first'}
                   neurons &rarr; bits &rarr; connections
                 {:else}
@@ -528,7 +625,7 @@
             <div class="form-group">
               <label for="adaptIters">Adaptation Iterations</label>
               <input type="number" id="adaptIters" bind:value={adaptationIterations} min="1" />
-              <span class="field-hint">Iterations for neurogenesis, synaptogenesis, axonogenesis phases</span>
+              <span class="field-hint">Iterations for neurogenesis, synaptogenesis, axonogenesis</span>
             </div>
           </div>
         {/if}
@@ -624,14 +721,20 @@
       <!-- Right column: Phases + Architecture config -->
       <div class="right-column">
         <div class="form-section">
-          <h2>Phases ({experiments.length})</h2>
-          {#if experiments.length > 0}
+          <h2>
+            {#if isMultiStage}
+              Stage {selectedStage} Phases ({displayPhases.length})
+            {:else}
+              Phases ({displayPhases.length})
+            {/if}
+          </h2>
+          {#if displayPhases.length > 0}
             <div class="phase-list">
-              {#each experiments as phase, i}
+              {#each displayPhases as phase, i}
                 <div class="phase-item">
                   <div class="phase-move">
                     <button type="button" class="move-btn" on:click={() => movePhase(i, -1)} disabled={i === 0} title="Move up">&uarr;</button>
-                    <button type="button" class="move-btn" on:click={() => movePhase(i, 1)} disabled={i === experiments.length - 1} title="Move down">&darr;</button>
+                    <button type="button" class="move-btn" on:click={() => movePhase(i, 1)} disabled={i === displayPhases.length - 1} title="Move down">&darr;</button>
                   </div>
                   <span class="phase-num">{i + 1}</span>
                   <span class="phase-name">{phase.name}</span>
@@ -677,145 +780,59 @@
           </div>
         </div>
 
-        {#if isMultiStage}
-          <div class="form-section">
-            <h2>Multi-Stage Configuration</h2>
-
-            <div class="form-row">
-              <div class="form-group">
-                <label for="selectedStage">Edit Stage</label>
-                <select id="selectedStage" bind:value={selectedStage}>
-                  {#each Array(numStages) as _, i}
-                    <option value={i}>Stage {i}</option>
-                  {/each}
-                </select>
-              </div>
-              <div class="form-group">
-                <label for="stageMode">Stage Connection</label>
-                <select id="stageMode" bind:value={stageMode}>
-                  <option value="input_concat">Input Concat</option>
-                </select>
-                <span class="field-hint">Stage N+1 sees stage N output bits</span>
-              </div>
-            </div>
-
-            <!-- Per-stage config rendered via {#each} for proper Svelte reactivity -->
-            {#each stageConfigs as config, i}
-              {#if i === selectedStage}
-                <div class="stage-config-panel">
-                  <div class="stage-config-header">Stage {i} Settings</div>
-                  <div class="form-row">
-                    <div class="form-group">
-                      <label for="stageArch_{i}">Architecture</label>
-                      <select id="stageArch_{i}" bind:value={config.clusterType}>
-                        <option value="bitwise">Bitwise</option>
-                        <option value="tiered">Tiered</option>
-                      </select>
-                    </div>
-                    <div class="form-group">
-                      <label for="stageK_{i}">K (Output Classes)</label>
-                      <input type="number" id="stageK_{i}" bind:value={config.k} min="2" max="1024" />
-                      <span class="field-hint">
-                        {#if i === 0}
-                          Groups for coarse prediction
-                        {:else}
-                          Classes within each group
-                        {/if}
-                      </span>
-                    </div>
-                  </div>
+        <!-- Architecture config (single-stage only — multi-stage config is above) -->
+        {#if !isMultiStage}
+          {#if isBitwise}
+            <div class="form-section">
+              <h2>Bitwise Configuration</h2>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="bitwiseNumClusters">Clusters</label>
+                  <input type="number" id="bitwiseNumClusters" bind:value={bitwiseNumClusters} min="1" max="256" />
+                  <span class="field-hint">Output clusters (default 16)</span>
                 </div>
-              {/if}
-            {/each}
-
-            <div class="stage-config-header" style="margin-top: 0.75rem;">Shared Parameters</div>
-            <div class="form-row">
-              <div class="form-group">
-                <label for="msMinBits">Min Bits</label>
-                <input type="number" id="msMinBits" bind:value={msMinBits} min="1" max="64" />
+                <div class="form-group">
+                  <label for="bitwiseMemoryMode">Memory Mode</label>
+                  <select id="bitwiseMemoryMode" bind:value={bitwiseMemoryMode}>
+                    <option value="QUAD_WEIGHTED">Quad Weighted</option>
+                    <option value="QUAD_BINARY">Quad Binary</option>
+                    <option value="TERNARY">Ternary</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="bitwiseMinBits">Min Bits</label>
+                  <input type="number" id="bitwiseMinBits" bind:value={bitwiseMinBits} min="1" max="64" />
+                </div>
+                <div class="form-group">
+                  <label for="bitwiseMaxBits">Max Bits</label>
+                  <input type="number" id="bitwiseMaxBits" bind:value={bitwiseMaxBits} min="1" max="64" />
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="bitwiseMinNeurons">Min Neurons</label>
+                  <input type="number" id="bitwiseMinNeurons" bind:value={bitwiseMinNeurons} min="1" max="1000" />
+                </div>
+                <div class="form-group">
+                  <label for="bitwiseMaxNeurons">Max Neurons</label>
+                  <input type="number" id="bitwiseMaxNeurons" bind:value={bitwiseMaxNeurons} min="1" max="1000" />
+                </div>
               </div>
               <div class="form-group">
-                <label for="msMaxBits">Max Bits</label>
-                <input type="number" id="msMaxBits" bind:value={msMaxBits} min="1" max="64" />
-              </div>
-            </div>
-            <div class="form-row">
-              <div class="form-group">
-                <label for="msMinNeurons">Min Neurons</label>
-                <input type="number" id="msMinNeurons" bind:value={msMinNeurons} min="1" max="1000" />
-              </div>
-              <div class="form-group">
-                <label for="msMaxNeurons">Max Neurons</label>
-                <input type="number" id="msMaxNeurons" bind:value={msMaxNeurons} min="1" max="1000" />
-              </div>
-            </div>
-            <div class="form-row">
-              <div class="form-group">
-                <label for="msMemoryMode">Memory Mode</label>
-                <select id="msMemoryMode" bind:value={msMemoryMode}>
-                  <option value="QUAD_WEIGHTED">Quad Weighted</option>
-                  <option value="QUAD_BINARY">Quad Binary</option>
-                  <option value="TERNARY">Ternary</option>
-                </select>
-              </div>
-              <div class="form-group">
-                <label for="msNeuronSampleRate">Neuron Sample Rate</label>
-                <input type="number" id="msNeuronSampleRate" bind:value={msNeuronSampleRate} min="0.01" max="1.0" step="0.01" />
-                <span class="field-hint">Fraction of neurons sampled per example</span>
+                <label for="bitwiseNeuronSampleRate">Neuron Sample Rate</label>
+                <input type="number" id="bitwiseNeuronSampleRate" bind:value={bitwiseNeuronSampleRate} min="0.01" max="1.0" step="0.01" />
+                <span class="field-hint">Fraction of neurons sampled per example (0.25 = 25%)</span>
               </div>
             </div>
-          </div>
-        {:else if isBitwise}
-          <div class="form-section">
-            <h2>Bitwise Configuration</h2>
-            <div class="form-row">
-              <div class="form-group">
-                <label for="bitwiseNumClusters">Clusters</label>
-                <input type="number" id="bitwiseNumClusters" bind:value={bitwiseNumClusters} min="1" max="256" />
-                <span class="field-hint">Output clusters (default 16)</span>
-              </div>
-              <div class="form-group">
-                <label for="bitwiseMemoryMode">Memory Mode</label>
-                <select id="bitwiseMemoryMode" bind:value={bitwiseMemoryMode}>
-                  <option value="QUAD_WEIGHTED">Quad Weighted</option>
-                  <option value="QUAD_BINARY">Quad Binary</option>
-                  <option value="TERNARY">Ternary</option>
-                </select>
-              </div>
+          {:else}
+            <div class="form-section">
+              <h2>Tier Configuration</h2>
+              <TierConfigEditor bind:value={tierConfig} />
             </div>
-            <div class="form-row">
-              <div class="form-group">
-                <label for="bitwiseMinBits">Min Bits</label>
-                <input type="number" id="bitwiseMinBits" bind:value={bitwiseMinBits} min="1" max="64" />
-              </div>
-              <div class="form-group">
-                <label for="bitwiseMaxBits">Max Bits</label>
-                <input type="number" id="bitwiseMaxBits" bind:value={bitwiseMaxBits} min="1" max="64" />
-              </div>
-            </div>
-            <div class="form-row">
-              <div class="form-group">
-                <label for="bitwiseMinNeurons">Min Neurons</label>
-                <input type="number" id="bitwiseMinNeurons" bind:value={bitwiseMinNeurons} min="1" max="1000" />
-              </div>
-              <div class="form-group">
-                <label for="bitwiseMaxNeurons">Max Neurons</label>
-                <input type="number" id="bitwiseMaxNeurons" bind:value={bitwiseMaxNeurons} min="1" max="1000" />
-              </div>
-            </div>
-            <div class="form-group">
-              <label for="bitwiseNeuronSampleRate">Neuron Sample Rate</label>
-              <input type="number" id="bitwiseNeuronSampleRate" bind:value={bitwiseNeuronSampleRate} min="0.01" max="1.0" step="0.01" />
-              <span class="field-hint">Fraction of neurons sampled per example (0.25 = 25%)</span>
-            </div>
-          </div>
-        {:else}
-          <div class="form-section">
-            <h2>Tier Configuration</h2>
-            <TierConfigEditor bind:value={tierConfig} />
-          </div>
+          {/if}
         {/if}
-
       </div>
     </div>
 
@@ -928,6 +945,24 @@
   .form-row {
     display: grid;
     grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+  }
+
+  .form-row-header {
+    display: grid;
+    grid-template-columns: 2fr 2fr 1fr;
+    gap: 0.75rem;
+  }
+
+  .form-row-3 {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 0.75rem;
+  }
+
+  .form-row-4 {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
     gap: 0.75rem;
   }
 
@@ -1175,19 +1210,38 @@
     cursor: not-allowed;
   }
 
-  /* Stage config panel */
-  .stage-config-panel {
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 0.75rem;
-    background: var(--bg-primary);
+  /* Multi-stage config */
+  .stage-config-inline {
+    margin-bottom: 0;
   }
 
   .stage-config-header {
     font-size: 1rem;
+    font-weight: 600;
+    color: var(--accent-blue);
+    margin-bottom: 0.375rem;
+  }
+
+  .stage-fields {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
+  }
+
+  .stage-field label {
+    font-size: 1rem;
+    font-weight: 400;
+    color: var(--text-secondary);
+    margin-bottom: 0.25rem;
+  }
+
+  .shared-params-header {
+    font-size: 1rem;
     font-weight: 500;
     color: var(--text-secondary);
-    margin-bottom: 0.5rem;
+    margin: 0.75rem 0 0.5rem 0;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--border);
     text-transform: uppercase;
     letter-spacing: 0.03em;
   }
