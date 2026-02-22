@@ -17,9 +17,11 @@ use crate::bitwise_ramlm::{
     BitwiseSubset, BitwiseEvalSubset,
     evaluate_genomes_with_params,
     train_and_get_scores,
+    compute_genome_layout, train_into, forward_eval_into,
 };
 use crate::neuron_memory::{
     compute_address, pack_bools_to_u64,
+    ClusterStorage,
     TRUE, FALSE,
 };
 use crate::adaptive::{
@@ -947,15 +949,20 @@ impl MultiStageTokenCache {
             .collect()
     }
 
-    // ── Re-encode stage 1 data with predicted clusters ────────────────
+    // ── Re-encode stage data with predicted clusters ──────────────────
 
-    /// Re-encode all stage 1 data using predicted clusters instead of teacher forcing.
-    pub fn recompute_stage1_data(
+    /// Re-encode all data for `target_stage` using predicted clusters from the
+    /// previous stage instead of teacher forcing.
+    ///
+    /// `target_stage` must be > 0 (stage 0 has no previous stage to predict from).
+    pub fn recompute_stage_data(
         &mut self,
+        target_stage: usize,
         train_predictions: &[u32],
         eval_predictions: &[u32],
     ) {
-        let s = 1; // stage 1
+        assert!(target_stage > 0, "Cannot recompute stage 0 — it has no previous stage");
+        let s = target_stage;
         let total_input = self.stage_input_bits[s];
         let target_bits_count = self.bitwise_output_bits[s];
         let prev_output_bits_slice = &self.bitwise_output_bits[..s];
@@ -1036,9 +1043,9 @@ impl MultiStageTokenCache {
                 .collect();
         }
 
-        // ── Tiered data (if stage 1 is tiered) ──
+        // ── Tiered data (if this stage is tiered) ──
         if self.stage_is_tiered[s] {
-            let bits_per_cluster_id = self.bitwise_output_bits[0];
+            let bits_per_cluster_id = self.bitwise_output_bits[s - 1];
             let stage_input = self.stage_input_bits[s];
             let stage_num_classes = self.bitwise_vocab_size[s];
             let num_neg = self.tiered_num_negatives[s];
@@ -1101,7 +1108,7 @@ impl MultiStageTokenCache {
         }
 
         eprintln!(
-            "[recompute_stage1_data] Re-encoded S1: bitwise train={n}, eval={eval_n}"
+            "[recompute_stage_data] Re-encoded S{s}: bitwise train={n}, eval={eval_n}"
         );
     }
 
@@ -1121,17 +1128,20 @@ impl MultiStageTokenCache {
     }
 }
 
-// ── Stage 0 prediction ──────────────────────────────────────────────────
+// ── Stage prediction ────────────────────────────────────────────────────
 
-/// Train stage 0 and predict cluster_id for every example in both train and eval data.
+/// Train a frozen stage and predict its output class for every example in train and eval data.
 ///
-/// Uses `train_and_get_scores()` to train on full train data and forward on eval,
-/// then a second call to forward on train data. Extracts argmax predictions from
-/// the bitwise bit-product reconstruction.
+/// Trains once on full train data, then forwards on both eval and train data
+/// (reusing the same trained memory). Extracts argmax predictions from the
+/// bitwise bit-product reconstruction.
+///
+/// `stage`: which stage to predict (0, 1, ...).
 ///
 /// Returns: (train_predictions, eval_predictions, train_correct, eval_correct)
-pub fn predict_stage0_clusters(
+pub fn predict_stage_clusters(
     cache: &MultiStageTokenCache,
+    stage: usize,
     bits_per_neuron: &[usize],
     neurons_per_cluster: &[usize],
     connections: &[i64],
@@ -1140,22 +1150,66 @@ pub fn predict_stage0_clusters(
     rng_seed: u64,
     sparse_threshold: usize,
 ) -> (Vec<u32>, Vec<u32>, usize, usize) {
-    let k = cache.k;
-    let s0_bits = cache.bitwise_output_bits[0];
+    let vocab_size = cache.bitwise_vocab_size[stage]; // K for stage 0, max_cluster_size for stage 1, etc.
+    let out_bits = cache.bitwise_output_bits[stage];
+    let num_clusters = out_bits; // bitwise: num_clusters = number of output bit positions
     let eps = 1e-7f64;
 
-    // Helper: extract argmax cluster predictions from per-example bitwise scores.
-    // scores: [num_examples × num_clusters], where num_clusters = s0_bits (bit positions)
-    let extract_predictions = |scores: &[f32], num_examples: usize| -> (Vec<u32>, usize) {
+    let num_train = cache.bitwise_full_train[stage].num_examples;
+    let num_eval = cache.bitwise_full_eval[stage].num_examples;
+
+    // ── Train once, forward twice ──────────────────────────────────
+    let empty_word: i64 = crate::neuron_memory::empty_word_for_mode(memory_mode);
+    let layout = compute_genome_layout(
+        bits_per_neuron, neurons_per_cluster, sparse_threshold, num_train,
+    );
+
+    let mut cluster_storage: Vec<ClusterStorage> = (0..num_clusters)
+        .map(|c| ClusterStorage::new(
+            neurons_per_cluster[c], layout.cluster_max_bits[c],
+            sparse_threshold, empty_word, memory_mode,
+        ))
+        .collect();
+
+    // Train on full train data
+    train_into(
+        connections, bits_per_neuron, neurons_per_cluster, num_clusters,
+        &layout, &cache.bitwise_full_train[stage], &mut cluster_storage,
+        memory_mode, neuron_sample_rate, rng_seed,
+    );
+
+    // Forward on eval data
+    let mut eval_scores = vec![0.0f32; num_eval * num_clusters];
+    forward_eval_into(
+        connections, bits_per_neuron, neurons_per_cluster, num_clusters,
+        &layout, &cache.bitwise_full_eval[stage], &cluster_storage,
+        &mut eval_scores, memory_mode,
+    );
+
+    // Forward on train data (reuse trained memory — no second training)
+    let train_as_eval = BitwiseEvalSubset {
+        packed_input: cache.bitwise_full_train[stage].packed_input.clone(),
+        targets: vec![0u32; num_train], // unused for forward
+        num_examples: num_train,
+        words_per_example: cache.bitwise_full_train[stage].words_per_example,
+    };
+    let mut train_scores = vec![0.0f32; num_train * num_clusters];
+    forward_eval_into(
+        connections, bits_per_neuron, neurons_per_cluster, num_clusters,
+        &layout, &train_as_eval, &cluster_storage,
+        &mut train_scores, memory_mode,
+    );
+
+    // ── Extract argmax predictions ─────────────────────────────────
+    let extract_predictions = |scores: &[f32], num_examples: usize| -> Vec<u32> {
         let mut predictions = vec![0u32; num_examples];
-        let correct = AtomicUsize::new(0);
 
         predictions.par_iter_mut().enumerate().for_each(|(ex, pred)| {
-            // Compute log-product for each cluster (same as compute_combined_ce stage 0)
-            let base = ex * s0_bits;
-            let mut log_p = vec![0.0f64; s0_bits];
-            let mut log_1mp = vec![0.0f64; s0_bits];
-            for b in 0..s0_bits {
+            // Bit-product reconstruction: log P(class_k) = sum over bits of log(p_b or 1-p_b)
+            let base = ex * out_bits;
+            let mut log_p = vec![0.0f64; out_bits];
+            let mut log_1mp = vec![0.0f64; out_bits];
+            for b in 0..out_bits {
                 let p = (scores[base + b] as f64).clamp(eps, 1.0 - eps);
                 log_p[b] = p.ln();
                 log_1mp[b] = (1.0 - p).ln();
@@ -1163,11 +1217,11 @@ pub fn predict_stage0_clusters(
 
             let mut best_k = 0usize;
             let mut best_lp = f64::NEG_INFINITY;
-            for gk in 0..k {
-                let bit_base = gk * s0_bits;
+            for gk in 0..vocab_size {
+                let bit_base = gk * out_bits;
                 let mut lp = 0.0f64;
-                for b in 0..s0_bits {
-                    if cache.bitwise_token_bits[0][bit_base + b] == 1 {
+                for b in 0..out_bits {
+                    if cache.bitwise_token_bits[stage][bit_base + b] == 1 {
                         lp += log_p[b];
                     } else {
                         lp += log_1mp[b];
@@ -1181,55 +1235,48 @@ pub fn predict_stage0_clusters(
             *pred = best_k as u32;
         });
 
-        let correct_count = correct.load(Ordering::Relaxed);
-        (predictions, correct_count)
+        predictions
     };
 
-    // 1. Train on full train data, forward on eval data
-    let eval_scores = train_and_get_scores(
-        connections, bits_per_neuron, neurons_per_cluster, s0_bits,
-        &cache.bitwise_full_train[0], &cache.bitwise_full_eval[0],
-        memory_mode, neuron_sample_rate, rng_seed, sparse_threshold,
-    );
-    let num_eval = cache.bitwise_full_eval[0].num_examples;
-    let (eval_predictions, _) = extract_predictions(&eval_scores, num_eval);
+    let eval_predictions = extract_predictions(&eval_scores, num_eval);
+    let train_predictions = extract_predictions(&train_scores, num_train);
 
-    // Count eval correct
-    let eval_correct: usize = (0..num_eval)
-        .filter(|&i| {
-            let token = cache.eval_tokens[i + cache.context_size] as usize;
-            eval_predictions[i] == cache.cluster_of[token] as u32
-        })
-        .count();
-
-    // 2. Train again on full train data, forward on train data (treating train as eval)
-    // Create a BitwiseEvalSubset from full train data for forward pass
-    let train_as_eval = BitwiseEvalSubset {
-        packed_input: cache.bitwise_full_train[0].packed_input.clone(),
-        targets: vec![0u32; cache.bitwise_full_train[0].num_examples], // unused for prediction
-        num_examples: cache.bitwise_full_train[0].num_examples,
-        words_per_example: cache.bitwise_full_train[0].words_per_example,
+    // ── Count correct predictions ──────────────────────────────────
+    // For stage 0: target is cluster_of[token]; for stage 1+: target is index_in_cluster[token]
+    let (train_correct, eval_correct) = if stage == 0 {
+        let tc: usize = (0..num_train)
+            .filter(|&i| {
+                let token = cache.train_tokens[i + cache.context_size] as usize;
+                train_predictions[i] == cache.cluster_of[token] as u32
+            })
+            .count();
+        let ec: usize = (0..num_eval)
+            .filter(|&i| {
+                let token = cache.eval_tokens[i + cache.context_size] as usize;
+                eval_predictions[i] == cache.cluster_of[token] as u32
+            })
+            .count();
+        (tc, ec)
+    } else {
+        let tc: usize = (0..num_train)
+            .filter(|&i| {
+                let token = cache.train_tokens[i + cache.context_size] as usize;
+                train_predictions[i] == cache.index_in_cluster[token] as u32
+            })
+            .count();
+        let ec: usize = (0..num_eval)
+            .filter(|&i| {
+                let token = cache.eval_tokens[i + cache.context_size] as usize;
+                eval_predictions[i] == cache.index_in_cluster[token] as u32
+            })
+            .count();
+        (tc, ec)
     };
-    let train_scores = train_and_get_scores(
-        connections, bits_per_neuron, neurons_per_cluster, s0_bits,
-        &cache.bitwise_full_train[0], &train_as_eval,
-        memory_mode, neuron_sample_rate, rng_seed, sparse_threshold,
-    );
-    let num_train = cache.bitwise_full_train[0].num_examples;
-    let (train_predictions, _) = extract_predictions(&train_scores, num_train);
-
-    // Count train correct
-    let train_correct: usize = (0..num_train)
-        .filter(|&i| {
-            let token = cache.train_tokens[i + cache.context_size] as usize;
-            train_predictions[i] == cache.cluster_of[token] as u32
-        })
-        .count();
 
     eprintln!(
-        "[predict_stage0_clusters] train: {}/{} correct ({:.2}%), eval: {}/{} correct ({:.2}%)",
-        train_correct, num_train, 100.0 * train_correct as f64 / num_train as f64,
-        eval_correct, num_eval, 100.0 * eval_correct as f64 / num_eval as f64,
+        "[predict_stage_clusters] S{stage}: train={train_correct}/{num_train} ({:.2}%), eval={eval_correct}/{num_eval} ({:.2}%)",
+        100.0 * train_correct as f64 / num_train.max(1) as f64,
+        100.0 * eval_correct as f64 / num_eval.max(1) as f64,
     );
 
     (train_predictions, eval_predictions, train_correct, eval_correct)

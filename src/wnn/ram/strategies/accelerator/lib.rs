@@ -5047,19 +5047,22 @@ impl MultiStageCacheWrapper {
         })
     }
 
-    /// Re-encode stage 1 data using frozen stage 0's actual predictions.
+    /// Re-encode data for `target_stage` using frozen previous stage's actual predictions.
     ///
-    /// Trains stage 0 on full train data, gets predictions for both train and eval,
-    /// then re-encodes all stage 1 data with those predictions instead of teacher forcing.
+    /// Trains the frozen stage on full train data, gets predictions for both train and
+    /// eval, then re-encodes all `target_stage` data with those predictions instead of
+    /// teacher forcing.
     ///
-    /// Returns: (train_accuracy, eval_accuracy) — stage 0 cluster prediction accuracy.
+    /// Returns: (train_accuracy, eval_accuracy) — prediction accuracy for the frozen stage.
     #[allow(clippy::too_many_arguments)]
-    fn recompute_stage1_with_predictions(
+    fn recompute_stage_with_predictions(
         &mut self,
         py: Python<'_>,
-        stage0_bits_per_neuron: Vec<usize>,
-        stage0_neurons_per_cluster: Vec<usize>,
-        stage0_connections: Vec<i64>,
+        frozen_stage: usize,
+        target_stage: usize,
+        bits_per_neuron: Vec<usize>,
+        neurons_per_cluster: Vec<usize>,
+        connections: Vec<i64>,
         memory_mode: u8,
         neuron_sample_rate: f32,
         rng_seed: u64,
@@ -5067,21 +5070,22 @@ impl MultiStageCacheWrapper {
     ) -> PyResult<(f64, f64)> {
         py.allow_threads(|| {
             let (train_preds, eval_preds, train_correct, eval_correct) =
-                multistage::predict_stage0_clusters(
+                multistage::predict_stage_clusters(
                     &self.inner,
-                    &stage0_bits_per_neuron,
-                    &stage0_neurons_per_cluster,
-                    &stage0_connections,
+                    frozen_stage,
+                    &bits_per_neuron,
+                    &neurons_per_cluster,
+                    &connections,
                     memory_mode,
                     neuron_sample_rate,
                     rng_seed,
                     sparse_threshold,
                 );
 
-            let num_train = self.inner.bitwise_full_train[0].num_examples;
-            let num_eval = self.inner.bitwise_full_eval[0].num_examples;
+            let num_train = self.inner.bitwise_full_train[frozen_stage].num_examples;
+            let num_eval = self.inner.bitwise_full_eval[frozen_stage].num_examples;
 
-            self.inner.recompute_stage1_data(&train_preds, &eval_preds);
+            self.inner.recompute_stage_data(target_stage, &train_preds, &eval_preds);
 
             let train_acc = train_correct as f64 / num_train.max(1) as f64;
             let eval_acc = eval_correct as f64 / num_eval.max(1) as f64;

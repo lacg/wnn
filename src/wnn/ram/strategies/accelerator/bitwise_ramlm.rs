@@ -653,35 +653,23 @@ fn compute_address_packed(packed_words: &[u64], connections: &[i64], bits_per_ne
 /// With per-neuron bits, each neuron can have a different bit count.
 /// `conn_offsets` is per-neuron (length total_neurons + 1).
 /// `cluster_max_bits` holds the max bits within each cluster (used for ClusterStorage allocation).
-struct GenomeLayout {
-    /// Cumulative neuron offsets: neuron_offsets[c] = first global neuron index for cluster c.
-    /// Length: num_clusters + 1 (last entry = total_neurons).
-    neuron_offsets: Vec<usize>,
-    /// Cumulative memory word offsets: mem_offsets[c] = first memory word for cluster c (dense only)
-    mem_offsets: Vec<usize>,
-    /// Per-neuron cumulative connection offsets: conn_offsets[n] = first connection index for neuron n.
-    /// Length: total_neurons + 1 (last entry = total_connections).
-    conn_offsets: Vec<usize>,
-    /// Words per neuron for each cluster (based on cluster_max_bits).
-    /// Used for ClusterStorage dense memory layout.
-    words_per_neuron: Vec<usize>,
-    /// Max bits within each cluster (for ClusterStorage allocation).
-    cluster_max_bits: Vec<usize>,
-    /// Total memory words needed (for dense-only fallback estimate)
-    total_memory_words: usize,
-    /// Total connections needed
-    total_connections: usize,
-    /// Estimated total bytes for this genome (accounts for dense/sparse mix)
-    estimated_bytes: u64,
-    /// Whether each cluster uses sparse storage
-    cluster_is_sparse: Vec<bool>,
+pub(crate) struct GenomeLayout {
+    pub(crate) neuron_offsets: Vec<usize>,
+    pub(crate) mem_offsets: Vec<usize>,
+    pub(crate) conn_offsets: Vec<usize>,
+    pub(crate) words_per_neuron: Vec<usize>,
+    pub(crate) cluster_max_bits: Vec<usize>,
+    pub(crate) total_memory_words: usize,
+    pub(crate) total_connections: usize,
+    pub(crate) estimated_bytes: u64,
+    pub(crate) cluster_is_sparse: Vec<bool>,
 }
 
 /// Compute per-cluster layout from per-neuron bit counts.
 ///
 /// `bits_per_neuron` has length `sum(neurons_per_cluster)` — one entry per neuron.
 /// Connection offsets are per-neuron. ClusterStorage uses max bits within each cluster.
-fn compute_genome_layout(
+pub(crate) fn compute_genome_layout(
     bits_per_neuron: &[usize],
     neurons_per_cluster: &[usize],
     sparse_threshold: usize,
@@ -921,7 +909,7 @@ fn gpu_forward_heterogeneous(
 ///
 /// Fully sequential (no rayon, no atomics) — designed to be called from
 /// an outer par_iter over genomes.
-fn train_into(
+pub(crate) fn train_into(
     connections: &[i64],
     bits_per_neuron: &[usize],
     neurons_per_cluster: &[usize],
@@ -1234,7 +1222,7 @@ fn try_gpu_address_computation(
 ///
 /// Reads from immutable cluster storage. Tries Metal GPU first, falls back to CPU.
 /// Output: `out_probs[ex * num_clusters + cluster]` = P(bit=1) for that cluster.
-fn forward_eval_into(
+pub(crate) fn forward_eval_into(
     connections: &[i64],
     bits_per_neuron: &[usize],
     neurons_per_cluster: &[usize],

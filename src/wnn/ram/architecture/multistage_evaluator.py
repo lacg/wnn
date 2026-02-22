@@ -456,19 +456,31 @@ class MultiStageEvaluator(BaseEvaluator):
 			within_ce=s1_ce,
 		)
 
-	# ── Re-encode stage 1 with stage 0 predictions ─────────────────
+	# ── Re-encode stage with predicted clusters ─────────────────────
 
-	def recompute_stage1_with_predictions(self, stage0_genome: ClusterGenome) -> tuple[float, float]:
-		"""Re-encode stage 1 data using frozen stage 0's actual predictions.
+	def recompute_stage_with_predictions(
+		self,
+		frozen_stage: int,
+		target_stage: int,
+		frozen_genome: ClusterGenome,
+	) -> tuple[float, float]:
+		"""Re-encode target_stage data using frozen_stage's actual predictions.
 
-		Returns (train_accuracy, eval_accuracy) for stage 0 cluster prediction.
+		Args:
+			frozen_stage: Stage whose genome is frozen and will be used to predict.
+			target_stage: Stage whose data will be re-encoded with predictions.
+			frozen_genome: The frozen stage's genome.
+
+		Returns (train_accuracy, eval_accuracy) for the frozen stage's predictions.
 		"""
 		sparse_threshold = self._sparse_threshold or 4096
 
-		return self._cache.recompute_stage1_with_predictions(
-			stage0_bits_per_neuron=list(stage0_genome.bits_per_neuron),
-			stage0_neurons_per_cluster=list(stage0_genome.neurons_per_cluster),
-			stage0_connections=list(stage0_genome.connections or []),
+		return self._cache.recompute_stage_with_predictions(
+			frozen_stage=frozen_stage,
+			target_stage=target_stage,
+			bits_per_neuron=list(frozen_genome.bits_per_neuron),
+			neurons_per_cluster=list(frozen_genome.neurons_per_cluster),
+			connections=list(frozen_genome.connections or []),
 			memory_mode=self._memory_mode,
 			neuron_sample_rate=self._neuron_sample_rate,
 			rng_seed=self._seed,
