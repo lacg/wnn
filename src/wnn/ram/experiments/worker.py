@@ -758,13 +758,15 @@ class FlowWorker:
             if not neurons_grid:
                 mn = params.get("min_neurons", 5)
                 mx = params.get("max_neurons", 300)
-                n_steps = min(7, max(3, (mx - mn) // 30))
-                neurons_grid = [mn + round(i * (mx - mn) / (n_steps - 1)) for i in range(n_steps)]
+                # Round step to nearest 50, generate clean values: 5, 50, 100, 150, ...
+                step = max(10, round((mx - mn) / 6 / 50) * 50) or 50
+                neurons_grid = [mn] + list(range(((mn // step) + 1) * step, mx, step)) + [mx]
             if not bits_grid:
                 mb = params.get("min_bits", 4)
                 xb = params.get("max_bits", 24)
-                b_steps = min(7, max(3, (xb - mb) // 3))
-                bits_grid = [mb + round(i * (xb - mb) / (b_steps - 1)) for i in range(b_steps)]
+                # Round step to nearest 2 or 4, generate clean values: 4, 8, 12, ...
+                step = max(2, round((xb - mb) / 6 / 2) * 2) or 4
+                bits_grid = [mb] + list(range(((mb // step) + 1) * step, xb, step)) + [xb]
             num_grid_configs = len(neurons_grid) * len(bits_grid)
             grid_top_k = params.get("grid_top_k", 5)  # Default: top-5 configs
             pop_size = exp_data.get("population_size") or params.get("population_size", 50)
