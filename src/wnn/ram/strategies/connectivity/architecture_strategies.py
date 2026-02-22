@@ -107,6 +107,19 @@ class ArchitectureStrategyMixin:
 			return True
 		return False
 
+	def _compute_threshold(self, progress: float = 0.0) -> float:
+		"""Compute progressive accuracy threshold at given progress [0, 1].
+
+		Shared across GA, TS, and Adaptation strategies. Config must provide:
+		initial_threshold, progressive_threshold, threshold_delta, min_accuracy.
+		"""
+		cfg = self._config
+		start = cfg.initial_threshold if cfg.initial_threshold is not None else getattr(cfg, 'min_accuracy', 0.0)
+		if not getattr(cfg, 'progressive_threshold', True):
+			return start
+		progress = max(0.0, min(1.0, progress))
+		return start + progress * cfg.threshold_delta
+
 	def _genome_to_config_impl(self, genome: 'ClusterGenome') -> Optional['GenomeConfig']:
 		"""
 		Convert a ClusterGenome to a GenomeConfig for tracking.
@@ -2041,6 +2054,8 @@ class AdaptationConfig:
 	initial_threshold: Optional[float] = None
 	threshold_delta: float = 0.01
 	threshold_reference: int = 1000
+	progressive_threshold: bool = True
+	min_accuracy: float = 0.0
 	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK
 	fitness_weight_ce: float = 1.0
 	fitness_weight_acc: float = 1.0
@@ -2151,6 +2166,9 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 		self._log(f"  Iterations: {cfg.iterations}")
 		self._log(f"  Patience: {cfg.patience} (check every {cfg.check_interval})")
 		self._log(f"  Fitness: {calculator.name}")
+		start_threshold = self._compute_threshold(0.0)
+		end_threshold = self._compute_threshold(min(1.0, cfg.iterations / cfg.threshold_reference))
+		self._log(f"  Threshold: {start_threshold:.4%} → {end_threshold:.4%}")
 		self._log("")
 
 		# Early stopping
@@ -2173,6 +2191,9 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 		try:
 			for iteration in range(cfg.iterations):
 				iter_start = _time.time()
+
+				# Progressive threshold (shared with GA/TS via mixin)
+				current_threshold = self._compute_threshold(iteration / cfg.threshold_reference)
 
 				# Check shutdown
 				if self._check_and_set_shutdown(shutdown_requested):
@@ -2242,6 +2263,7 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 							avg_accuracy=avg_acc,
 							elapsed_secs=iter_elapsed,
 							candidates_total=len(population),
+							fitness_threshold=current_threshold,
 							delta_previous=delta_previous,
 							patience_counter=early_stopper._patience_counter,
 							patience_max=cfg.patience,
@@ -2322,7 +2344,7 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 			population_metrics=population_metrics,
 			initial_accuracy=0.0,
 			final_accuracy=best_acc,
-			final_threshold=cfg.initial_threshold,
+			final_threshold=self._compute_threshold(min(1.0, (len(history) - 1) / cfg.threshold_reference) if history else 0.0),
 		)
 
 	def _configure_evaluator_adaptation(self, evaluator):
