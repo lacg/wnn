@@ -25,13 +25,66 @@
   interface StageConfig {
     clusterType: string;
     k: number;
+    gaGenerations: number;
+    tsIterations: number;
+    adaptationIterations: number;
+    populationSize: number;
+    neighborsPerIter: number;
+    patience: number;
+    fitnessPercentile: number;
+    fitnessCalculator: string;
+    fitnessWeightCe: number;
+    fitnessWeightAcc: number;
+    minAccuracyFloor: number;
+    thresholdStart: number;
+    thresholdStep: number;
   }
 
   function defaultStageConfig(): StageConfig {
-    return { clusterType: 'bitwise', k: 256 };
+    return {
+      clusterType: 'bitwise', k: 256,
+      gaGenerations: 250, tsIterations: 250, adaptationIterations: 50,
+      populationSize: 50, neighborsPerIter: 50, patience: 10,
+      fitnessPercentile: 0.75, fitnessCalculator: 'harmonic_rank',
+      fitnessWeightCe: 1.0, fitnessWeightAcc: 1.0,
+      minAccuracyFloor: 0, thresholdStart: 0, thresholdStep: 1,
+    };
   }
 
   let stageConfigs: StageConfig[] = [defaultStageConfig(), defaultStageConfig()];
+
+  // Track previous stage for save/load on switch
+  let _prevStage = 0;
+
+  function saveSearchParamsToStage(stage: number) {
+    if (stage < 0 || stage >= stageConfigs.length) return;
+    stageConfigs[stage] = {
+      ...stageConfigs[stage],
+      gaGenerations, tsIterations, adaptationIterations,
+      populationSize, neighborsPerIter, patience,
+      fitnessPercentile, fitnessCalculator,
+      fitnessWeightCe, fitnessWeightAcc,
+      minAccuracyFloor, thresholdStart, thresholdStep,
+    };
+  }
+
+  function loadSearchParamsFromStage(stage: number) {
+    if (stage < 0 || stage >= stageConfigs.length) return;
+    const c = stageConfigs[stage];
+    gaGenerations = c.gaGenerations;
+    tsIterations = c.tsIterations;
+    adaptationIterations = c.adaptationIterations;
+    populationSize = c.populationSize;
+    neighborsPerIter = c.neighborsPerIter;
+    patience = c.patience;
+    fitnessPercentile = c.fitnessPercentile;
+    fitnessCalculator = c.fitnessCalculator;
+    fitnessWeightCe = c.fitnessWeightCe;
+    fitnessWeightAcc = c.fitnessWeightAcc;
+    minAccuracyFloor = c.minAccuracyFloor;
+    thresholdStart = c.thresholdStart;
+    thresholdStep = c.thresholdStep;
+  }
 
   // Shared multi-stage architecture params
   let msMinBits = 4;
@@ -55,6 +108,13 @@
     if (selectedStage >= numStages) {
       selectedStage = Math.max(0, numStages - 1);
     }
+  }
+
+  // Save/load search params when switching stages
+  $: if (isMultiStage && selectedStage !== _prevStage) {
+    saveSearchParamsToStage(_prevStage);
+    loadSearchParamsFromStage(selectedStage);
+    _prevStage = selectedStage;
   }
 
   let gaGenerations = 250;
@@ -344,24 +404,47 @@
     error = null;
 
     try {
+      // Save current stage's search params before submit
+      if (isMultiStage) {
+        saveSearchParamsToStage(selectedStage);
+      }
+
       const adaptationTypes = new Set(['neurogenesis', 'synaptogenesis', 'axonogenesis']);
-      const enrichedExperiments = allExperiments.map((exp) => {
+
+      // Helper to get search params for a given experiment
+      function getSearchParams(exp: PhaseSpec, stageIdx: number) {
+        const cfg = isMultiStage ? stageConfigs[stageIdx] : null;
+        const gens = cfg ? cfg.gaGenerations : gaGenerations;
+        const tsIts = cfg ? cfg.tsIterations : tsIterations;
+        const adaptIts = cfg ? cfg.adaptationIterations : adaptationIterations;
+        const pop = cfg ? cfg.populationSize : populationSize;
+        const neighbors = cfg ? cfg.neighborsPerIter : neighborsPerIter;
+
         const isAdaptation = adaptationTypes.has(exp.phase_type ?? '');
         return {
-          ...exp,
-          params: {
-            generations: (exp.phase_type === 'grid_search') ? undefined
-              : isAdaptation ? adaptationIterations
-              : (exp.experiment_type === 'ga' ? gaGenerations : undefined),
-            iterations: (exp.phase_type === 'grid_search') ? undefined
-              : isAdaptation ? adaptationIterations
-              : (exp.experiment_type === 'ts' ? tsIterations : undefined),
-            population_size: populationSize,
-            neighbors_per_iter: neighborsPerIter,
-            ...(exp.phase_type ? { phase_type: exp.phase_type } : {}),
-          }
+          generations: (exp.phase_type === 'grid_search') ? undefined
+            : isAdaptation ? adaptIts
+            : (exp.experiment_type === 'ga' ? gens : undefined),
+          iterations: (exp.phase_type === 'grid_search') ? undefined
+            : isAdaptation ? adaptIts
+            : (exp.experiment_type === 'ts' ? tsIts : undefined),
+          population_size: pop,
+          neighbors_per_iter: neighbors,
+          ...(exp.phase_type ? { phase_type: exp.phase_type } : {}),
         };
-      });
+      }
+
+      // Enrich experiments with per-stage search params
+      let enrichedExperiments;
+      if (isMultiStage) {
+        enrichedExperiments = perStagePhases.flatMap((phases, stageIdx) =>
+          phases.map((exp) => ({ ...exp, params: getSearchParams(exp, stageIdx) }))
+        );
+      } else {
+        enrichedExperiments = singleStagePhases.map((exp) => ({
+          ...exp, params: getSearchParams(exp, 0),
+        }));
+      }
 
       const params: Record<string, unknown> = {
         phase_order: phaseOrder,
@@ -393,6 +476,17 @@
         params.max_neurons = msMaxNeurons;
         params.memory_mode = msMemoryMode;
         params.neuron_sample_rate = msNeuronSampleRate;
+        // Per-stage search params
+        params.stage_ga_generations = stageConfigs.slice(0, numStages).map(s => s.gaGenerations);
+        params.stage_ts_iterations = stageConfigs.slice(0, numStages).map(s => s.tsIterations);
+        params.stage_adaptation_iterations = stageConfigs.slice(0, numStages).map(s => s.adaptationIterations);
+        params.stage_population_size = stageConfigs.slice(0, numStages).map(s => s.populationSize);
+        params.stage_neighbors_per_iter = stageConfigs.slice(0, numStages).map(s => s.neighborsPerIter);
+        params.stage_patience = stageConfigs.slice(0, numStages).map(s => s.patience);
+        params.stage_fitness_percentile = stageConfigs.slice(0, numStages).map(s => s.fitnessPercentile);
+        params.stage_fitness_calculator = stageConfigs.slice(0, numStages).map(s => s.fitnessCalculator);
+        params.stage_fitness_weight_ce = stageConfigs.slice(0, numStages).map(s => s.fitnessWeightCe);
+        params.stage_fitness_weight_acc = stageConfigs.slice(0, numStages).map(s => s.fitnessWeightAcc);
       } else if (isBitwise) {
         params.architecture_type = 'bitwise';
         params.num_clusters = bitwiseNumClusters;
