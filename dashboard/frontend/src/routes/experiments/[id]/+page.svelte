@@ -34,12 +34,8 @@
 
   // Grid search results
   let gridSearchResults: { rank: number; neurons: number; bits: number; ce: number; accuracy: number; fitness: number | null; count: number; elapsed?: number }[] = [];
+  let expandedPopulation: { rank: number; neurons: number; bits: number; ce: number; accuracy: number; fitness: number | null }[] = [];
   let gridSearchLoading = false;
-
-  interface GridConfig { neurons: number; bits: number; ce: number | null; accuracy: number | null; fitness: number | null; status: 'pending' | 'testing' | 'done' }
-  let gridConfigs: GridConfig[] = [];
-  let gridNeuronsAxis: number[] = [];
-  let gridBitsAxis: number[] = [];
 
   $: experimentId = $page.params.id;
 
@@ -430,6 +426,33 @@
       // Sort by CE (fitness is null for per-config iterations, computed later)
       results.sort((a, b) => a.ce - b.ce);
       gridSearchResults = results.map((r, i) => ({ ...r, rank: i + 1 }));
+
+      // Load expanded population from the final iteration (N+1)
+      const totalConfigs = configIters.length > 0 ? configIters[0].candidates_total ?? 0 : 0;
+      const finalIter = iterations.find(i => i.iteration_num > totalConfigs);
+      if (finalIter) {
+        const res = await fetch(`/api/iterations/${finalIter.id}/genomes`);
+        if (res.ok) {
+          const evals: GenomeEvaluation[] = await res.json();
+          const expanded: typeof expandedPopulation = [];
+          for (const ev of evals) {
+            let neurons = 0, bits = 0;
+            if (ev.tiers_json) {
+              try {
+                const tiers: GenomeTier[] = JSON.parse(ev.tiers_json);
+                if (tiers.length > 0) { neurons = tiers[0].neurons; bits = tiers[0].bits; }
+              } catch {}
+            }
+            expanded.push({
+              rank: ev.position + 1, neurons, bits,
+              ce: ev.ce, accuracy: ev.accuracy, fitness: ev.fitness_score,
+            });
+          }
+          expandedPopulation = expanded;
+        }
+      } else {
+        expandedPopulation = [];
+      }
     } catch (e) {
       console.error('Failed to load grid search results:', e);
     } finally {
@@ -1186,6 +1209,60 @@
           <div class="empty-state">Results will appear as configs are evaluated</div>
         {/if}
       </div>
+
+      <!-- Expanded Population (after grid search completes, top-K seeded with fresh connections) -->
+      {#if expandedPopulation.length > 0}
+        {@const bestCeGenome = expandedPopulation.reduce((best, g) => g.ce < best.ce ? g : best, expandedPopulation[0])}
+        {@const bestAccGenome = expandedPopulation.reduce((best, g) => g.accuracy > best.accuracy ? g : best, expandedPopulation[0])}
+        <div class="gating-section" style="border-left-color: var(--accent-green);">
+          <div class="gating-header">
+            <span class="gating-title">Expanded Population</span>
+            <span class="gating-meta">
+              {expandedPopulation.length} genomes (top-K with fresh connections)
+            </span>
+          </div>
+
+          <div class="expanded-summary">
+            <div class="expanded-best">
+              <span class="expanded-label">Best CE</span>
+              <span class="expanded-value">{bestCeGenome.ce.toFixed(4)}</span>
+              <span class="expanded-detail">{bestCeGenome.neurons}n {bestCeGenome.bits}b &middot; Acc {(bestCeGenome.accuracy * 100).toFixed(2)}%</span>
+            </div>
+            <div class="expanded-best">
+              <span class="expanded-label">Best Accuracy</span>
+              <span class="expanded-value">{(bestAccGenome.accuracy * 100).toFixed(2)}%</span>
+              <span class="expanded-detail">{bestAccGenome.neurons}n {bestAccGenome.bits}b &middot; CE {bestAccGenome.ce.toFixed(4)}</span>
+            </div>
+          </div>
+
+          <div class="table-scroll">
+            <table class="gating-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Neurons</th>
+                  <th>Bits</th>
+                  <th>CE</th>
+                  <th>Accuracy</th>
+                  <th>Fitness</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each expandedPopulation as g}
+                  <tr class:expanded-best-ce={g.ce === bestCeGenome.ce} class:expanded-best-acc={g.accuracy === bestAccGenome.accuracy}>
+                    <td class="mono">{g.rank}</td>
+                    <td class="mono">{g.neurons.toLocaleString()}</td>
+                    <td class="mono">{g.bits}</td>
+                    <td class="mono">{g.ce.toFixed(4)}</td>
+                    <td class="mono">{(g.accuracy * 100).toFixed(2)}%</td>
+                    <td class="mono">{g.fitness !== null ? g.fitness.toFixed(4) : '—'}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      {/if}
     {/if}
 
     <!-- Iterations Table (hidden for grid search) -->
@@ -2208,6 +2285,52 @@
     justify-content: space-between;
     font-size: 1rem;
     color: var(--text-secondary);
+  }
+
+  .expanded-summary {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+
+  .expanded-best {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+    padding: 0.75rem;
+    text-align: center;
+  }
+
+  .expanded-label {
+    display: block;
+    font-size: 1rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    font-weight: 500;
+    margin-bottom: 0.25rem;
+  }
+
+  .expanded-value {
+    display: block;
+    font-size: 1.5rem;
+    font-weight: 700;
+    font-family: 'Berkeley Mono', monospace;
+    color: var(--accent-green);
+  }
+
+  .expanded-detail {
+    display: block;
+    font-size: 1rem;
+    color: var(--text-secondary);
+    margin-top: 0.25rem;
+  }
+
+  .expanded-best-ce td {
+    background: rgba(34, 197, 94, 0.1);
+  }
+
+  .expanded-best-acc td {
+    background: rgba(59, 130, 246, 0.1);
   }
 
   .gating-table .genome-type {
