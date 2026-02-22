@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
-  import type { Experiment, Iteration, GenomeEvaluation, Flow, ValidationSummary, GatingResults, Checkpoint, TierStats, BitwiseClusterStat } from '$lib/types';
+  import type { Experiment, Iteration, GenomeEvaluation, GenomeTier, Flow, ValidationSummary, GatingResults, Checkpoint, TierStats, BitwiseClusterStat } from '$lib/types';
   import { formatDate } from '$lib/dateFormat';
   import { gatingRunUpdates } from '$lib/stores';
   import BitwiseClusterStats from '$lib/components/BitwiseClusterStats.svelte';
@@ -31,6 +31,15 @@
 
   // Chart tooltip state
   let tooltipData: { x: number; y: number; iter: number; ce: number; acc: number | null; avgCe: number | null; avgAcc: number | null } | null = null;
+
+  // Grid search results
+  let gridSearchResults: { rank: number; neurons: number; bits: number; ce: number; accuracy: number; fitness: number | null; count: number; elapsed?: number }[] = [];
+  let gridSearchLoading = false;
+
+  interface GridConfig { neurons: number; bits: number; ce: number | null; accuracy: number | null; fitness: number | null; status: 'pending' | 'testing' | 'done' }
+  let gridConfigs: GridConfig[] = [];
+  let gridNeuronsAxis: number[] = [];
+  let gridBitsAxis: number[] = [];
 
   $: experimentId = $page.params.id;
 
@@ -370,6 +379,63 @@
 
   // Max iterations from experiment config
   $: maxIterations = experiment?.max_iterations ?? null;
+
+  // Grid search: detect and auto-load results
+  $: isGridSearch = experiment?.name?.includes('Grid Search') ?? false;
+
+  // Auto-load grid search genome evaluations when iterations arrive or update
+  let _lastGridIterCount = 0;
+  $: if (isGridSearch && iterations.length > 0 && !gridSearchLoading && iterations.length !== _lastGridIterCount) {
+    _lastGridIterCount = iterations.length;
+    loadGridSearchResults();
+  }
+
+  async function loadGridSearchResults() {
+    if (!iterations.length) return;
+    gridSearchLoading = true;
+    try {
+      // Each per-config iteration has one genome evaluation with (neurons, bits)
+      // The final iteration (N+1) has the expanded population — skip it
+      const configIters = iterations.filter(i => i.candidates_total && i.candidates_total > 1);
+      const perConfigIters = configIters.length > 0
+        ? iterations.filter(i => i.iteration_num <= (configIters[0]?.candidates_total ?? iterations.length))
+        : iterations;
+
+      const results: { neurons: number; bits: number; ce: number; accuracy: number; fitness: number | null; count: number; elapsed: number }[] = [];
+
+      // Fetch genome evaluations for each per-config iteration
+      const fetches = perConfigIters.map(iter =>
+        fetch(`/api/iterations/${iter.id}/genomes`).then(r => r.ok ? r.json() : [])
+      );
+      const allEvals = await Promise.all(fetches);
+
+      for (let i = 0; i < perConfigIters.length; i++) {
+        const evals: GenomeEvaluation[] = allEvals[i];
+        const iter = perConfigIters[i];
+        if (evals.length === 0) continue;
+        const ev = evals[0];
+        let neurons = 0, bits = 0;
+        if (ev.tiers_json) {
+          try {
+            const tiers: GenomeTier[] = JSON.parse(ev.tiers_json);
+            if (tiers.length > 0) { neurons = tiers[0].neurons; bits = tiers[0].bits; }
+          } catch {}
+        }
+        results.push({
+          neurons, bits, ce: ev.ce, accuracy: ev.accuracy,
+          fitness: ev.fitness_score, count: 1, elapsed: iter.elapsed_secs ?? 0,
+        });
+      }
+
+      // Sort by CE (fitness is null for per-config iterations, computed later)
+      results.sort((a, b) => a.ce - b.ce);
+      gridSearchResults = results.map((r, i) => ({ ...r, rank: i + 1 }));
+    } catch (e) {
+      console.error('Failed to load grid search results:', e);
+    } finally {
+      gridSearchLoading = false;
+    }
+  }
 
   // Average seconds per iteration
   $: avgSecsPerIter = iterations.length > 0
@@ -1037,6 +1103,88 @@
             {/if}
           </svg>
         </div>
+      </div>
+    {/if}
+
+    <!-- Grid Search Results -->
+    {#if isGridSearch}
+      {@const totalConfigs = iterations.length > 0 && iterations[0].candidates_total ? iterations[0].candidates_total : 0}
+      {@const testedCount = gridSearchResults.length}
+      {@const pendingCount = totalConfigs > testedCount ? totalConfigs - testedCount : 0}
+      {@const totalElapsed = gridSearchResults.reduce((s, r) => s + (r.elapsed ?? 0), 0)}
+      {@const avgTimePerConfig = testedCount > 0 ? totalElapsed / testedCount : 0}
+      {@const estimatedRemaining = pendingCount * avgTimePerConfig}
+      {@const progressPct = totalConfigs > 0 ? (testedCount / totalConfigs) * 100 : 0}
+
+      <div class="gating-section" style="border-left-color: var(--accent-blue);">
+        <div class="gating-header">
+          <span class="gating-title">Grid Search Results</span>
+          <span class="gating-meta">
+            {#if testedCount > 0 && pendingCount > 0}
+              {testedCount} / {totalConfigs} configs
+            {:else if testedCount > 0}
+              {testedCount} configs tested
+            {:else if experiment?.status === 'running'}
+              Evaluating...
+            {/if}
+          </span>
+        </div>
+
+        <!-- Progress bar (shown while running) -->
+        {#if experiment?.status === 'running' && totalConfigs > 0}
+          <div class="grid-progress">
+            <div class="grid-progress-bar">
+              <div class="grid-progress-fill" style="width: {progressPct}%"></div>
+            </div>
+            <div class="grid-progress-info">
+              <span>{testedCount} tested, {pendingCount} remaining</span>
+              {#if estimatedRemaining > 0}
+                <span>~{estimatedRemaining >= 60 ? Math.ceil(estimatedRemaining / 60) + 'm' : Math.ceil(estimatedRemaining) + 's'} remaining (avg {avgTimePerConfig.toFixed(1)}s/config)</span>
+              {/if}
+            </div>
+          </div>
+        {/if}
+
+        {#if gridSearchLoading}
+          <div class="empty-state">Loading grid search results...</div>
+        {:else if gridSearchResults.length > 0}
+          {@const topK = 5}
+          <div class="table-scroll">
+            <table class="gating-table">
+              <thead>
+                <tr>
+                  <th>Rank</th>
+                  <th>Neurons</th>
+                  <th>Bits</th>
+                  <th>CE</th>
+                  <th>Accuracy</th>
+                  <th>Time</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each gridSearchResults as r}
+                  <tr class:grid-top-k={r.rank <= topK}>
+                    <td class="mono">
+                      {#if r.rank <= topK}
+                        <span class="grid-rank-star">&#9733;</span>
+                      {/if}
+                      {r.rank}
+                    </td>
+                    <td class="mono">{r.neurons.toLocaleString()}</td>
+                    <td class="mono">{r.bits}</td>
+                    <td class="mono">{r.ce.toFixed(4)}</td>
+                    <td class="mono">{(r.accuracy * 100).toFixed(2)}%</td>
+                    <td class="mono">{r.elapsed ? r.elapsed.toFixed(1) + 's' : '—'}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {:else if experiment?.status === 'completed'}
+          <div class="empty-state">No genome tracking data available</div>
+        {:else}
+          <div class="empty-state">Results will appear as configs are evaluated</div>
+        {/if}
       </div>
     {/if}
 
@@ -2018,6 +2166,46 @@
 
   .gating-table tr:last-child td {
     border-bottom: none;
+  }
+
+  .grid-top-k {
+    background: rgba(59, 130, 246, 0.1);
+  }
+
+  .grid-top-k td:first-child {
+    font-weight: 600;
+    color: var(--accent-blue);
+  }
+
+  .grid-rank-star {
+    color: var(--accent-yellow);
+    margin-right: 0.25rem;
+  }
+
+  .grid-progress {
+    margin-bottom: 1rem;
+  }
+
+  .grid-progress-bar {
+    height: 8px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 0.5rem;
+  }
+
+  .grid-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent-blue), var(--accent-green));
+    border-radius: 4px;
+    transition: width 0.5s ease;
+  }
+
+  .grid-progress-info {
+    display: flex;
+    justify-content: space-between;
+    font-size: 1rem;
+    color: var(--text-secondary);
   }
 
   .gating-table .genome-type {

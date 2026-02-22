@@ -348,6 +348,8 @@ pub struct GenomeEvaluation {
     pub fitness_score: Option<f64>,
     pub eval_time_ms: Option<i32>,
     pub created_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tiers_json: Option<String>,
 }
 
 // =============================================================================

@@ -221,6 +221,13 @@ export interface TierStats {
   total_connections: number;
 }
 
+export interface GenomeTier {
+  tier: number;
+  clusters: number;
+  neurons: number;
+  bits: number;
+}
+
 export interface GenomeEvaluation {
   id: number;
   iteration_id: number;
@@ -233,6 +240,7 @@ export interface GenomeEvaluation {
   fitness_score: number | null;
   eval_time_ms: number | null;
   created_at: string;
+  tiers_json?: string;
 }
 
 // =============================================================================

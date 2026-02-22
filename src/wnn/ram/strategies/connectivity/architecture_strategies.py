@@ -1754,29 +1754,33 @@ class GridSearchStrategy:
 				genome = self._create_genome(neurons, bits)
 				config_list.append((neurons, bits, genome))
 
-		# Phase 2: Batch evaluate all genomes at once (Rust + Metal)
-		all_genomes = [g for _, _, g in config_list]
+		# Phase 2: Evaluate one config at a time for real-time dashboard progress
 		t0 = time.time()
-
-		if self._batch_evaluator is not None:
-			self._log(f"  Evaluating {total_configs} configs in batch (Rust + Metal)...")
-			evals = self._batch_evaluator.evaluate_batch(all_genomes)
-		elif evaluate_fn is not None:
-			evals = [(evaluate_fn(g), 0.0, 0.0) for g in all_genomes]
-		else:
-			raise ValueError("GridSearchStrategy requires a batch_evaluator or evaluate_fn")
-
-		batch_elapsed = time.time() - t0
-		self._log(f"  Batch evaluation: {batch_elapsed:.1f}s total, "
-				  f"{batch_elapsed/total_configs:.1f}s/config")
-
-		# Phase 3: Collect results (grid search is one-shot, no iterations)
 		results = []
-		for idx, ((neurons, bits, genome), (ce, acc, bit_acc)) in enumerate(
-			zip(config_list, evals)
-		):
+		best_ce_so_far = float('inf')
+		best_acc_so_far = 0.0
+
+		for idx, (neurons, bits, genome) in enumerate(config_list):
+			if self._shutdown_check and self._shutdown_check():
+				self._log(f"  Shutdown requested at config {idx}")
+				break
+
+			t_config = time.time()
+			if self._batch_evaluator is not None:
+				evals = self._batch_evaluator.evaluate_batch([genome])
+				ce, acc, bit_acc = evals[0]
+			elif evaluate_fn is not None:
+				ce = evaluate_fn(genome)
+				acc, bit_acc = 0.0, 0.0
+			else:
+				raise ValueError("GridSearchStrategy requires a batch_evaluator or evaluate_fn")
+			config_elapsed = time.time() - t_config
+
 			self._log(f"  [{idx+1}/{total_configs}] n={neurons:3d}, b={bits:2d}: "
-					  f"CE={ce:.4f}  Acc={acc:.2%}")
+					  f"CE={ce:.4f}  Acc={acc:.2%}  ({config_elapsed:.1f}s)")
+
+			best_ce_so_far = min(best_ce_so_far, ce)
+			best_acc_so_far = max(best_acc_so_far, acc)
 
 			results.append({
 				"neurons": neurons,
@@ -1784,9 +1788,52 @@ class GridSearchStrategy:
 				"ce": ce,
 				"accuracy": acc,
 				"bit_accuracy": bit_acc,
-				"elapsed_s": batch_elapsed / total_configs,
+				"elapsed_s": config_elapsed,
 				"genome": genome,
 			})
+
+			# Record each config as a separate iteration for real-time dashboard tracking
+			if self._tracker and self._tracker_experiment_id:
+				try:
+					avg_ce = sum(r["ce"] for r in results) / len(results)
+					avg_acc = sum(r["accuracy"] for r in results) / len(results)
+					iter_id = self._tracker.record_iteration(
+						experiment_id=self._tracker_experiment_id,
+						iteration_num=idx + 1,
+						best_ce=best_ce_so_far,
+						best_accuracy=best_acc_so_far,
+						avg_ce=avg_ce,
+						avg_accuracy=avg_acc,
+						elapsed_secs=config_elapsed,
+						candidates_total=total_configs,
+					)
+					if HAS_GENOME_TRACKING and iter_id:
+						genome_config = self._genome_to_config(genome)
+						if genome_config:
+							genome_id = self._tracker.get_or_create_genome(
+								self._tracker_experiment_id, genome_config
+							)
+							self._tracker.record_genome_evaluation(
+								iteration_id=iter_id,
+								genome_id=genome_id,
+								position=0,
+								role=GenomeRole.INIT,
+								ce=ce,
+								accuracy=acc,
+								fitness_score=None,
+							)
+					self._tracker.update_experiment_progress(
+						self._tracker_experiment_id,
+						current_iteration=idx + 1,
+						best_ce=best_ce_so_far,
+						best_accuracy=best_acc_so_far,
+					)
+				except Exception as e:
+					self._log(f"  Warning: tracker error: {e}")
+
+		batch_elapsed = time.time() - t0
+		self._log(f"  Total evaluation: {batch_elapsed:.1f}s, "
+				  f"{batch_elapsed/len(results):.1f}s/config avg")
 
 		if not results:
 			raise ValueError("Grid search produced no results")
@@ -1889,14 +1936,15 @@ class GridSearchStrategy:
 		pop_bests = calculator.bests(pop_tuples)
 		best_genome = pop_bests.best_fitness.genome
 
-		# Record 1 iteration with ALL population genomes sorted by fitness
+		# Record final iteration with ALL population genomes sorted by fitness
+		final_iter_num = len(results) + 1  # After per-config iterations
 		if self._tracker and self._tracker_experiment_id:
 			try:
 				avg_ce = sum(ce for ce, _ in population_metrics) / len(population_metrics)
 				avg_acc = sum(acc for _, acc in population_metrics) / len(population_metrics)
 				iter_id = self._tracker.record_iteration(
 					experiment_id=self._tracker_experiment_id,
-					iteration_num=1,
+					iteration_num=final_iter_num,
 					best_ce=pop_bests.best_ce.ce,
 					best_accuracy=pop_bests.best_acc.accuracy,
 					avg_ce=avg_ce,

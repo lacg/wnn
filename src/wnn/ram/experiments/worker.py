@@ -775,7 +775,7 @@ class FlowWorker:
                 ExperimentType.NEUROGENESIS, ExperimentType.SYNAPTOGENESIS, ExperimentType.AXONOGENESIS,
             )
             if experiment_type == ExperimentType.GRID_SEARCH:
-                max_iters = 1  # Grid search is a single step
+                max_iters = num_grid_configs  # One iteration per (neurons, bits) config
             elif is_adaptation:
                 max_iters = exp_data.get("max_iterations") or params.get("adaptation_iterations", 50)
             else:

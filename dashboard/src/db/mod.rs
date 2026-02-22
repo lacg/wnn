@@ -1971,8 +1971,9 @@ pub mod queries {
         let rows = sqlx::query(
             r#"SELECT ge.id, ge.iteration_id, ge.genome_id, ge.position, ge.role,
                       ge.elite_rank, ge.ce, ge.accuracy, ge.fitness_score, ge.eval_time_ms,
-                      ge.created_at
+                      ge.created_at, g.tiers_json
                FROM genome_evaluations ge
+               LEFT JOIN genomes g ON ge.genome_id = g.id
                WHERE ge.iteration_id = ?
                ORDER BY ge.position"#,
         )
@@ -1994,6 +1995,7 @@ pub mod queries {
                 fitness_score: row.get("fitness_score"),
                 eval_time_ms: row.get("eval_time_ms"),
                 created_at: parse_datetime(row.get("created_at"))?,
+                tiers_json: row.get("tiers_json"),
             });
         }
         Ok(evaluations)
