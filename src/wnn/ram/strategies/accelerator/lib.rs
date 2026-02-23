@@ -5017,6 +5017,7 @@ impl MultiStageCacheWrapper {
         num_genomes: usize,
         train_subset_idx: usize,
         eval_subset_idx: usize,
+        memory_mode: u8,
     ) -> PyResult<Vec<(f64, f64)>> {
         py.allow_threads(|| {
             Ok(multistage::evaluate_tiered_genomes(
@@ -5024,6 +5025,7 @@ impl MultiStageCacheWrapper {
                 &bits_per_neuron_flat, &neurons_per_cluster_flat,
                 &connections_flat, num_genomes,
                 train_subset_idx, eval_subset_idx,
+                memory_mode,
             ))
         })
     }
@@ -5037,12 +5039,14 @@ impl MultiStageCacheWrapper {
         neurons_per_cluster_flat: Vec<usize>,
         connections_flat: Vec<i64>,
         num_genomes: usize,
+        memory_mode: u8,
     ) -> PyResult<Vec<(f64, f64)>> {
         py.allow_threads(|| {
             Ok(multistage::evaluate_tiered_genomes_full(
                 &self.inner, stage,
                 &bits_per_neuron_flat, &neurons_per_cluster_flat,
                 &connections_flat, num_genomes,
+                memory_mode,
             ))
         })
     }

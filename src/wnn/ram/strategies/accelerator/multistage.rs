@@ -32,6 +32,18 @@ use crate::adaptive::{
     GroupMemory,
 };
 
+/// Convert memory_mode to the appropriate empty_value for tiered evaluation.
+///
+/// TERNARY (mode 0): EMPTY cells abstain → 0.0
+/// QUAD_WEIGHTED (mode 2): EMPTY cells get baseline weight → 0.25
+fn empty_value_for_mode(memory_mode: u8) -> f32 {
+    match memory_mode {
+        crate::neuron_memory::MODE_QUAD_WEIGHTED => crate::neuron_memory::QUAD_WEIGHTS[1], // 0.25
+        crate::neuron_memory::MODE_QUAD_BINARY => 0.0, // QUAD_BINARY: only >=2 counts
+        _ => 0.0, // TERNARY: EMPTY abstains
+    }
+}
+
 /// Training/evaluation data for a tiered stage (direct K-class prediction).
 ///
 /// Unlike BitwiseSubset which stores target_bits (one-hot per bit), this stores
@@ -1440,6 +1452,7 @@ pub fn compute_combined_ce(
             stage_tiered_scores[s] = train_and_get_tiered_scores(
                 stage_connections[s], stage_bits_per_neuron[s], stage_neurons_per_cluster[s],
                 cache.bitwise_vocab_size[s], train, eval, cache.stage_input_bits[s],
+                memory_mode,
             );
         } else {
             stage_bitwise_scores[s] = train_and_get_scores(
@@ -1605,6 +1618,7 @@ pub fn evaluate_tiered_genomes(
     num_genomes: usize,
     train_subset_idx: usize,
     eval_subset_idx: usize,
+    memory_mode: u8,
 ) -> Vec<(f64, f64)> {
     let train_subs = match &cache.tiered_train_subsets[stage] {
         Some(subs) => subs,
@@ -1621,6 +1635,10 @@ pub fn evaluate_tiered_genomes(
     let total_input_bits = cache.stage_input_bits[stage];
     let num_clusters = cache.stage_num_output_clusters[stage];
 
+    let empty_value = empty_value_for_mode(memory_mode);
+    // Sync global empty_value so GPU shaders use the same value as CPU fallback
+    crate::neuron_memory::set_empty_value(empty_value);
+
     crate::adaptive::evaluate_genomes_parallel(
         bits_per_neuron_flat,
         neurons_per_cluster_flat,
@@ -1636,7 +1654,7 @@ pub fn evaluate_tiered_genomes(
         &eval.targets,
         eval.num_examples,
         total_input_bits,
-        0.0, // empty_value
+        empty_value,
     )
 }
 
@@ -1648,6 +1666,7 @@ pub fn evaluate_tiered_genomes_full(
     neurons_per_cluster_flat: &[usize],
     connections_flat: &[i64],
     num_genomes: usize,
+    memory_mode: u8,
 ) -> Vec<(f64, f64)> {
     let train = match &cache.tiered_full_train[stage] {
         Some(t) => t,
@@ -1661,6 +1680,9 @@ pub fn evaluate_tiered_genomes_full(
     let total_input_bits = cache.stage_input_bits[stage];
     let num_clusters = cache.stage_num_output_clusters[stage];
 
+    let empty_value = empty_value_for_mode(memory_mode);
+    crate::neuron_memory::set_empty_value(empty_value);
+
     crate::adaptive::evaluate_genomes_parallel(
         bits_per_neuron_flat,
         neurons_per_cluster_flat,
@@ -1676,7 +1698,7 @@ pub fn evaluate_tiered_genomes_full(
         &eval.targets,
         eval.num_examples,
         total_input_bits,
-        0.0,
+        empty_value,
     )
 }
 
@@ -1693,8 +1715,10 @@ pub fn train_and_get_tiered_scores(
     train_data: &TieredSubset,
     eval_data: &TieredEvalSubset,
     total_input_bits: usize,
+    memory_mode: u8,
 ) -> Vec<f64> {
-    let empty_value = 0.0f32;
+    let empty_value = empty_value_for_mode(memory_mode);
+    crate::neuron_memory::set_empty_value(empty_value);
 
     // Build cluster metadata
     let (cluster_neuron_starts, neuron_conn_offsets) =
@@ -1762,7 +1786,7 @@ pub fn train_and_get_tiered_scores(
                     if let Ok(group_scores) = evaluate_group_metal(
                         &metal, &packed_eval, &connections_flat, &mem_words,
                         group, num_eval, words_per_example,
-                        crate::neuron_memory::MODE_TERNARY,
+                        memory_mode,
                     ) {
                         for ex_idx in 0..num_eval {
                             for (local_cluster, &cluster_id) in group.cluster_ids.iter().enumerate() {
@@ -1783,7 +1807,7 @@ pub fn train_and_get_tiered_scores(
                     if let Ok(group_scores) = evaluate_group_sparse_gpu(
                         &sparse_eval, &packed_eval, &connections_flat, &export,
                         group, num_eval, words_per_example,
-                        crate::neuron_memory::MODE_TERNARY,
+                        memory_mode,
                     ) {
                         for ex_idx in 0..num_eval {
                             for (local_cluster, &cluster_id) in group.cluster_ids.iter().enumerate() {
