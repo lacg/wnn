@@ -91,6 +91,7 @@ class CachedEvaluator(BaseEvaluator):
         seed: Optional[int] = None,  # None = time-based
         log_path: Optional[str] = None,
         use_hybrid: bool = True,  # Use hybrid CPU+GPU evaluation (4-8x faster)
+        neuron_sample_rate: float = 1.0,
     ):
         """
         Create a cached evaluator with all tokens pre-encoded in Rust.
@@ -122,6 +123,7 @@ class CachedEvaluator(BaseEvaluator):
             context_size=context_size,
             num_parts=num_parts,
             seed=seed,
+            neuron_sample_rate=neuron_sample_rate,
         )
 
         # CachedEvaluator-specific fields
@@ -260,7 +262,7 @@ class CachedEvaluator(BaseEvaluator):
                     train_subset_idx,
                     eval_subset_idx,
                     self._empty_value,
-                    1.0,  # neuron_sample_rate
+                    self._neuron_sample_rate,
                     0,    # rng_seed
                 )
             else:
@@ -272,7 +274,7 @@ class CachedEvaluator(BaseEvaluator):
                     train_subset_idx,
                     eval_subset_idx,
                     self._empty_value,
-                    1.0,  # neuron_sample_rate
+                    self._neuron_sample_rate,
                     0,    # rng_seed
                 )
 
@@ -312,7 +314,7 @@ class CachedEvaluator(BaseEvaluator):
                     train_subset_idx,
                     eval_subset_idx,
                     self._empty_value,
-                    1.0,  # neuron_sample_rate
+                    self._neuron_sample_rate,
                     0,    # rng_seed
                 )
             else:
@@ -324,7 +326,7 @@ class CachedEvaluator(BaseEvaluator):
                     train_subset_idx,
                     eval_subset_idx,
                     self._empty_value,
-                    1.0,  # neuron_sample_rate
+                    self._neuron_sample_rate,
                     0,    # rng_seed
                 )
 
@@ -403,7 +405,7 @@ class CachedEvaluator(BaseEvaluator):
                 genomes_connections_flat,
                 num_genomes,
                 self._empty_value,
-                1.0,  # neuron_sample_rate
+                self._neuron_sample_rate,
                 0,    # rng_seed
             )
         else:
@@ -413,7 +415,7 @@ class CachedEvaluator(BaseEvaluator):
                 genomes_connections_flat,
                 num_genomes,
                 self._empty_value,
-                1.0,  # neuron_sample_rate
+                self._neuron_sample_rate,
                 0,    # rng_seed
             )
 

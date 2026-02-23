@@ -394,7 +394,7 @@ class FlowWorker:
             elif is_bitwise:
                 evaluator = self._create_bitwise_evaluator(context_size, params)
             else:
-                evaluator = self._create_evaluator(context_size, params.get("seed"))
+                evaluator = self._create_evaluator(context_size, params.get("seed"), params.get("neuron_sample_rate", 0.25))
 
             # Build experiment configs
             exp_configs = self._build_experiment_configs(experiments, params, evaluator.vocab_size)
@@ -536,9 +536,9 @@ class FlowWorker:
             self._stop_current_flow = False  # Reset for next flow
             self._close_log_file()
 
-    def _create_evaluator(self, context_size: int, seed: Optional[int] = None):
+    def _create_evaluator(self, context_size: int, seed: Optional[int] = None, neuron_sample_rate: float = 0.25):
         """Create the cached evaluator using pre-cached data."""
-        self._log(f"Creating evaluator (context_size={context_size})...")
+        self._log(f"Creating evaluator (context_size={context_size}, sample_rate={neuron_sample_rate})...")
 
         from wnn.ram.architecture.cached_evaluator import CachedEvaluator
 
@@ -553,7 +553,8 @@ class FlowWorker:
             empty_value=0.0,
             seed=seed or int(time.time() * 1000) % (2**32),
             use_hybrid=True,
-            log_path=str(self._log_file) if self._log_file else None,  # Pass log path for Rust-side logging
+            log_path=str(self._log_file) if self._log_file else None,
+            neuron_sample_rate=neuron_sample_rate,
         )
 
         self._log(f"  Vocab: {evaluator.vocab_size:,}, Context: {context_size}")
