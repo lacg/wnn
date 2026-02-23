@@ -1929,6 +1929,7 @@ class GridSearchStrategy:
 		self._log(f"\nPopulation: {len(output_population)} genomes ({top_k} original + {len(new_genomes)} new)")
 
 		# Evaluate the NEW genomes one at a time for per-genome progress logging
+		num_seed_recorded = 0
 		if new_genomes and self._batch_evaluator is not None:
 			self._log(f"  Evaluating {len(new_genomes)} new genomes...")
 			t1 = time.time()
@@ -1951,6 +1952,46 @@ class GridSearchStrategy:
 				if ce < best_result["ce"]:
 					best_result = {"ce": ce, "accuracy": acc, "genome": output_population[pop_idx]}
 					best_genome = output_population[pop_idx]
+				# Record each seed genome as its own iteration for real-time dashboard tracking
+				if self._tracker and self._tracker_experiment_id:
+					try:
+						best_ce_so_far = min(best_ce_so_far, ce)
+						best_acc_so_far = max(best_acc_so_far, acc)
+						seed_iter_num = len(results) + idx_in_new + 1
+						iter_id = self._tracker.record_iteration(
+							experiment_id=self._tracker_experiment_id,
+							iteration_num=seed_iter_num,
+							best_ce=best_ce_so_far,
+							best_accuracy=best_acc_so_far,
+							avg_ce=ce,
+							avg_accuracy=acc,
+							elapsed_secs=g_elapsed,
+							candidates_total=len(new_genomes),
+						)
+						if HAS_GENOME_TRACKING and iter_id:
+							genome_config = self._genome_to_config(genome)
+							if genome_config:
+								genome_id = self._tracker.get_or_create_genome(
+									self._tracker_experiment_id, genome_config
+								)
+								self._tracker.record_genome_evaluation(
+									iteration_id=iter_id,
+									genome_id=genome_id,
+									position=0,
+									role=GenomeRole.INIT,
+									ce=ce,
+									accuracy=acc,
+									fitness_score=None,
+								)
+						self._tracker.update_experiment_progress(
+							self._tracker_experiment_id,
+							current_iteration=seed_iter_num,
+							best_ce=best_ce_so_far,
+							best_accuracy=best_acc_so_far,
+						)
+						num_seed_recorded += 1
+					except Exception as e:
+						self._log(f"  Warning: seed tracker error: {e}")
 			batch_elapsed += expand_elapsed
 			self._log(f"  New genome eval total: {expand_elapsed:.1f}s "
 					  f"({expand_elapsed/len(new_genomes):.1f}s/genome avg)")
@@ -1973,7 +2014,7 @@ class GridSearchStrategy:
 		best_genome = pop_bests.best_fitness.genome
 
 		# Record final iteration with ALL population genomes sorted by fitness
-		final_iter_num = len(results) + 1  # After per-config iterations
+		final_iter_num = len(results) + num_seed_recorded + 1  # After per-config + seed iterations
 		if self._tracker and self._tracker_experiment_id:
 			try:
 				avg_ce = sum(ce for ce, _ in population_metrics) / len(population_metrics)

@@ -35,6 +35,7 @@
   // Grid search results
   let gridSearchResults: { rank: number; neurons: number; bits: number; ce: number; accuracy: number; fitness: number | null; count: number; elapsed?: number }[] = [];
   let expandedPopulation: { rank: number; neurons: number; bits: number; ce: number; accuracy: number; fitness: number | null }[] = [];
+  let seedEvalComplete = false;
   let gridSearchLoading = false;
 
   $: experimentId = $page.params.id;
@@ -432,15 +433,24 @@
       });
       gridSearchResults = results.map((r, i) => ({ ...r, rank: i + 1 }));
 
-      // Load expanded population from the final iteration (N+1)
+      // Load expanded population from seed iterations or final summary
+      // Three iteration phases: per-config (1..N), seed (N+1..N+K), final summary (N+K+1)
       const totalConfigs = configIters.length > 0 ? configIters[0].candidates_total ?? 0 : 0;
-      const finalIter = iterations.find(i => i.iteration_num > totalConfigs);
-      if (finalIter) {
-        const res = await fetch(`/api/iterations/${finalIter.id}/genomes`);
-        if (res.ok) {
-          const evals: GenomeEvaluation[] = await res.json();
+      const afterConfigIters = iterations.filter(i => i.iteration_num > totalConfigs);
+      if (afterConfigIters.length > 0) {
+        // Find the max iteration_num to identify the final summary
+        const maxIterNum = Math.max(...afterConfigIters.map(i => i.iteration_num));
+        const maxIter = afterConfigIters.find(i => i.iteration_num === maxIterNum)!;
+
+        // Check if this is the final summary (has multiple genome evaluations)
+        // vs a seed iteration (has exactly 1). Fetch it to check.
+        const maxRes = await fetch(`/api/iterations/${maxIter.id}/genomes`);
+        const maxEvals: GenomeEvaluation[] = maxRes.ok ? await maxRes.json() : [];
+
+        if (maxEvals.length > 1) {
+          // Final summary iteration — show full sorted population
           const expanded: typeof expandedPopulation = [];
-          for (const ev of evals) {
+          for (const ev of maxEvals) {
             let neurons = 0, bits = 0;
             if (ev.tiers_json) {
               try {
@@ -454,9 +464,41 @@
             });
           }
           expandedPopulation = expanded;
+          seedEvalComplete = true;
+        } else {
+          // Seed evaluation still in progress — gather individual seed genomes
+          const seedIters = afterConfigIters.sort((a, b) => a.iteration_num - b.iteration_num);
+          const seedFetches = seedIters.map(si =>
+            fetch(`/api/iterations/${si.id}/genomes`).then(r => r.ok ? r.json() : [])
+          );
+          const seedEvals = await Promise.all(seedFetches);
+          const expanded: typeof expandedPopulation = [];
+          const seedTotal = seedIters.length > 0 ? seedIters[0].candidates_total ?? 0 : 0;
+          for (let s = 0; s < seedIters.length; s++) {
+            const evals: GenomeEvaluation[] = seedEvals[s];
+            if (evals.length === 0) continue;
+            const ev = evals[0];
+            let neurons = 0, bits = 0;
+            if (ev.tiers_json) {
+              try {
+                const tiers: GenomeTier[] = JSON.parse(ev.tiers_json);
+                if (tiers.length > 0) { neurons = tiers[0].neurons; bits = tiers[0].bits; }
+              } catch {}
+            }
+            expanded.push({
+              rank: s + 1, neurons, bits,
+              ce: ev.ce, accuracy: ev.accuracy, fitness: ev.fitness_score,
+            });
+          }
+          // Sort by CE while in-progress (no fitness yet)
+          expanded.sort((a, b) => a.ce - b.ce);
+          expanded.forEach((g, i) => g.rank = i + 1);
+          expandedPopulation = expanded;
+          seedEvalComplete = false;
         }
       } else {
         expandedPopulation = [];
+        seedEvalComplete = false;
       }
     } catch (e) {
       console.error('Failed to load grid search results:', e);
@@ -1223,9 +1265,9 @@
         {@const bestAccGenome = expandedPopulation.reduce((best, g) => g.accuracy > best.accuracy ? g : best, expandedPopulation[0])}
         <div class="gating-section" style="border-left-color: var(--accent-green);">
           <div class="gating-header">
-            <span class="gating-title">Seeded Population</span>
+            <span class="gating-title">Seeded Population{#if !seedEvalComplete} (evaluating...){/if}</span>
             <span class="gating-meta">
-              {expandedPopulation.length} genomes &middot;
+              {expandedPopulation.length} genomes{#if !seedEvalComplete} so far{/if} &middot;
               Best CE: {bestCeGenome.ce.toFixed(4)} ({bestCeGenome.neurons}n {bestCeGenome.bits}b) &middot;
               Best Acc: {(bestAccGenome.accuracy * 100).toFixed(2)}% ({bestAccGenome.neurons}n {bestAccGenome.bits}b)
             </span>
