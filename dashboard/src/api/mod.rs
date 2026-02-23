@@ -1069,11 +1069,11 @@ async fn stop_flow(
         ).into_response(),
     };
 
-    // Check if flow is running
-    if flow.status != FlowStatus::Running {
+    // Check if flow is running or queued
+    if flow.status != FlowStatus::Running && flow.status != FlowStatus::Queued {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Flow is not running"})),
+            Json(serde_json::json!({"error": "Flow is not running or queued"})),
         ).into_response();
     }
 

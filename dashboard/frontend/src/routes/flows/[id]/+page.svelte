@@ -934,7 +934,7 @@
         {#if flow.status === 'queued'}
           <span class="queued-hint">Waiting for worker to pick up...</span>
         {/if}
-        {#if flow.status === 'running'}
+        {#if flow.status === 'running' || flow.status === 'queued'}
           <button class="btn btn-danger" on:click={stopFlow}>
             Stop
           </button>

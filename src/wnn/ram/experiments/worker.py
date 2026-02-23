@@ -772,8 +772,8 @@ class FlowWorker:
             )
 
             if is_tiered_stage:
-                neurons_grid = params.get("tiered_neurons_grid") or [3, 5, 7, 10, 15, 20, 25]
-                bits_grid = params.get("tiered_bits_grid") or [8, 12, 16, 20, 24]
+                neurons_grid = params.get("tiered_neurons_grid") or [15, 20, 25, 30, 50]
+                bits_grid = params.get("tiered_bits_grid") or [14, 16, 18, 20, 22, 24, 26]
             else:
                 neurons_grid = params.get("neurons_grid")
                 bits_grid = params.get("bits_grid")
