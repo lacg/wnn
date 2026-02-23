@@ -3097,6 +3097,8 @@ fn evaluate_genomes_parallel<'py>(
     num_eval: usize,
     total_input_bits: usize,
     empty_value: f32,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
 ) -> PyResult<Vec<(f64, f64)>> {
     // Returns Vec of (cross_entropy, accuracy) tuples - one per genome
     // Extract data before allow_threads
@@ -3130,7 +3132,7 @@ fn evaluate_genomes_parallel<'py>(
         let fitness = adaptive::evaluate_genomes_parallel(
             &genomes_bits_flat,
             &genomes_neurons_flat,
-            &genomes_connections_flat,  // Pass connections to Rust
+            &genomes_connections_flat,
             num_genomes,
             num_clusters,
             &train_input_bools,
@@ -3143,6 +3145,8 @@ fn evaluate_genomes_parallel<'py>(
             num_eval,
             total_input_bits,
             empty_value,
+            neuron_sample_rate,
+            rng_seed,
         );
         Ok(fitness)
     })
@@ -3180,6 +3184,8 @@ fn evaluate_genomes_parallel_multisubset<'py>(
     num_negatives: usize,
     total_input_bits: usize,
     empty_value: f32,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
 ) -> PyResult<Vec<(f64, f64)>> {
     // Extract data before allow_threads
     let train_subsets_slice = train_subsets_flat.as_slice().map_err(|e| {
@@ -3227,6 +3233,8 @@ fn evaluate_genomes_parallel_multisubset<'py>(
             num_negatives,
             total_input_bits,
             empty_value,
+            neuron_sample_rate,
+            rng_seed,
         );
         Ok(fitness)
     })
@@ -3260,6 +3268,8 @@ fn evaluate_genomes_parallel_hybrid<'py>(
     num_eval: usize,
     total_input_bits: usize,
     empty_value: f32,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
 ) -> PyResult<Vec<(f64, f64)>> {
     // Extract data before allow_threads
     let train_input_slice = train_input_bits.as_slice().map_err(|e| {
@@ -3305,6 +3315,8 @@ fn evaluate_genomes_parallel_hybrid<'py>(
             num_eval,
             total_input_bits,
             empty_value,
+            neuron_sample_rate,
+            rng_seed,
         );
         Ok(fitness)
     })
@@ -3414,6 +3426,8 @@ impl TokenCacheWrapper {
         train_subset_idx: usize,
         eval_subset_idx: usize,
         empty_value: f32,
+        neuron_sample_rate: f32,
+        rng_seed: u64,
     ) -> PyResult<Vec<(f64, f64)>> {
         py.allow_threads(|| {
             Ok(token_cache::evaluate_genomes_cached(
@@ -3425,6 +3439,8 @@ impl TokenCacheWrapper {
                 train_subset_idx,
                 eval_subset_idx,
                 empty_value,
+                neuron_sample_rate,
+                rng_seed,
             ))
         })
     }
@@ -3438,6 +3454,8 @@ impl TokenCacheWrapper {
         genomes_connections_flat: Vec<i64>,
         num_genomes: usize,
         empty_value: f32,
+        neuron_sample_rate: f32,
+        rng_seed: u64,
     ) -> PyResult<Vec<(f64, f64)>> {
         py.allow_threads(|| {
             Ok(token_cache::evaluate_genomes_cached_full(
@@ -3447,6 +3465,8 @@ impl TokenCacheWrapper {
                 &genomes_connections_flat,
                 num_genomes,
                 empty_value,
+                neuron_sample_rate,
+                rng_seed,
             ))
         })
     }
@@ -3465,6 +3485,8 @@ impl TokenCacheWrapper {
         train_subset_idx: usize,
         eval_subset_idx: usize,
         empty_value: f32,
+        neuron_sample_rate: f32,
+        rng_seed: u64,
     ) -> PyResult<Vec<(f64, f64)>> {
         py.allow_threads(|| {
             Ok(token_cache::evaluate_genomes_cached_hybrid(
@@ -3476,6 +3498,8 @@ impl TokenCacheWrapper {
                 train_subset_idx,
                 eval_subset_idx,
                 empty_value,
+                neuron_sample_rate,
+                rng_seed,
             ))
         })
     }
@@ -3489,6 +3513,8 @@ impl TokenCacheWrapper {
         genomes_connections_flat: Vec<i64>,
         num_genomes: usize,
         empty_value: f32,
+        neuron_sample_rate: f32,
+        rng_seed: u64,
     ) -> PyResult<Vec<(f64, f64)>> {
         py.allow_threads(|| {
             Ok(token_cache::evaluate_genomes_cached_full_hybrid(
@@ -3498,6 +3524,8 @@ impl TokenCacheWrapper {
                 &genomes_connections_flat,
                 num_genomes,
                 empty_value,
+                neuron_sample_rate,
+                rng_seed,
             ))
         })
     }
@@ -3641,6 +3669,7 @@ impl TokenCacheWrapper {
                 crate::token_cache::evaluate_genomes_cached_hybrid(
                     cache, bits, neurons, conns, count,
                     train_subset_idx, eval_subset_idx, empty_value,
+                    1.0, 0, // no neuron sampling for neighbor search
                 )
             };
 
@@ -3765,6 +3794,7 @@ impl TokenCacheWrapper {
                 crate::token_cache::evaluate_genomes_cached_hybrid(
                     cache, bits, neurons, conns, count,
                     train_subset_idx, eval_subset_idx, empty_value,
+                    1.0, 0, // no neuron sampling for GA offspring search
                 )
             };
 
@@ -5018,6 +5048,8 @@ impl MultiStageCacheWrapper {
         train_subset_idx: usize,
         eval_subset_idx: usize,
         memory_mode: u8,
+        neuron_sample_rate: f32,
+        rng_seed: u64,
     ) -> PyResult<Vec<(f64, f64)>> {
         py.allow_threads(|| {
             Ok(multistage::evaluate_tiered_genomes(
@@ -5025,7 +5057,7 @@ impl MultiStageCacheWrapper {
                 &bits_per_neuron_flat, &neurons_per_cluster_flat,
                 &connections_flat, num_genomes,
                 train_subset_idx, eval_subset_idx,
-                memory_mode,
+                memory_mode, neuron_sample_rate, rng_seed,
             ))
         })
     }
@@ -5040,13 +5072,15 @@ impl MultiStageCacheWrapper {
         connections_flat: Vec<i64>,
         num_genomes: usize,
         memory_mode: u8,
+        neuron_sample_rate: f32,
+        rng_seed: u64,
     ) -> PyResult<Vec<(f64, f64)>> {
         py.allow_threads(|| {
             Ok(multistage::evaluate_tiered_genomes_full(
                 &self.inner, stage,
                 &bits_per_neuron_flat, &neurons_per_cluster_flat,
                 &connections_flat, num_genomes,
-                memory_mode,
+                memory_mode, neuron_sample_rate, rng_seed,
             ))
         })
     }

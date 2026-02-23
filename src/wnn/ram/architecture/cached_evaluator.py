@@ -260,6 +260,8 @@ class CachedEvaluator(BaseEvaluator):
                     train_subset_idx,
                     eval_subset_idx,
                     self._empty_value,
+                    1.0,  # neuron_sample_rate
+                    0,    # rng_seed
                 )
             else:
                 raw_results = self._cache.evaluate_genomes(
@@ -270,6 +272,8 @@ class CachedEvaluator(BaseEvaluator):
                     train_subset_idx,
                     eval_subset_idx,
                     self._empty_value,
+                    1.0,  # neuron_sample_rate
+                    0,    # rng_seed
                 )
 
             # Disable progress logging after evaluation
@@ -308,6 +312,8 @@ class CachedEvaluator(BaseEvaluator):
                     train_subset_idx,
                     eval_subset_idx,
                     self._empty_value,
+                    1.0,  # neuron_sample_rate
+                    0,    # rng_seed
                 )
             else:
                 raw_results = self._cache.evaluate_genomes(
@@ -318,6 +324,8 @@ class CachedEvaluator(BaseEvaluator):
                     train_subset_idx,
                     eval_subset_idx,
                     self._empty_value,
+                    1.0,  # neuron_sample_rate
+                    0,    # rng_seed
                 )
 
         elapsed = time.time() - overall_start
@@ -395,6 +403,8 @@ class CachedEvaluator(BaseEvaluator):
                 genomes_connections_flat,
                 num_genomes,
                 self._empty_value,
+                1.0,  # neuron_sample_rate
+                0,    # rng_seed
             )
         else:
             raw_results = self._cache.evaluate_genomes_full(
@@ -403,6 +413,8 @@ class CachedEvaluator(BaseEvaluator):
                 genomes_connections_flat,
                 num_genomes,
                 self._empty_value,
+                1.0,  # neuron_sample_rate
+                0,    # rng_seed
             )
 
         for i, (ce, acc) in enumerate(raw_results):

@@ -302,6 +302,8 @@ class MultiStageEvaluator(BaseEvaluator):
 			train_subset_idx=train_idx,
 			eval_subset_idx=eval_idx,
 			memory_mode=self._memory_mode,
+			neuron_sample_rate=self._neuron_sample_rate,
+			rng_seed=self._seed,
 		)
 		# Tiered returns (ce, acc), add 0.0 for bit_acc to match interface
 		return [(ce, acc, 0.0) for ce, acc in raw]
@@ -319,6 +321,8 @@ class MultiStageEvaluator(BaseEvaluator):
 			connections_flat=conns_flat,
 			num_genomes=len(genomes),
 			memory_mode=self._memory_mode,
+			neuron_sample_rate=self._neuron_sample_rate,
+			rng_seed=self._seed,
 		)
 		return [(ce, acc, 0.0) for ce, acc in raw]
 

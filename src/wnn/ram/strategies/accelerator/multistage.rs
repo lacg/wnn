@@ -1459,7 +1459,7 @@ pub fn compute_combined_ce(
             stage_tiered_scores[s] = train_and_get_tiered_scores(
                 stage_connections[s], stage_bits_per_neuron[s], stage_neurons_per_cluster[s],
                 cache.bitwise_vocab_size[s], train, eval, cache.stage_input_bits[s],
-                memory_mode,
+                memory_mode, neuron_sample_rate, rng_seed.wrapping_add(s as u64),
             );
         } else {
             stage_bitwise_scores[s] = train_and_get_scores(
@@ -1626,6 +1626,8 @@ pub fn evaluate_tiered_genomes(
     train_subset_idx: usize,
     eval_subset_idx: usize,
     memory_mode: u8,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
 ) -> Vec<(f64, f64)> {
     let train_subs = match &cache.tiered_train_subsets[stage] {
         Some(subs) => subs,
@@ -1663,6 +1665,8 @@ pub fn evaluate_tiered_genomes(
         eval.num_examples,
         total_input_bits,
         empty_value,
+        neuron_sample_rate,
+        rng_seed,
     )
 }
 
@@ -1675,6 +1679,8 @@ pub fn evaluate_tiered_genomes_full(
     connections_flat: &[i64],
     num_genomes: usize,
     memory_mode: u8,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
 ) -> Vec<(f64, f64)> {
     let train = match &cache.tiered_full_train[stage] {
         Some(t) => t,
@@ -1708,6 +1714,8 @@ pub fn evaluate_tiered_genomes_full(
         eval.num_examples,
         total_input_bits,
         empty_value,
+        neuron_sample_rate,
+        rng_seed,
     )
 }
 
@@ -1725,6 +1733,8 @@ pub fn train_and_get_tiered_scores(
     eval_data: &TieredEvalSubset,
     total_input_bits: usize,
     memory_mode: u8,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
 ) -> Vec<f64> {
     let empty_value = empty_value_for_mode(memory_mode);
     crate::neuron_memory::set_empty_value(empty_value);
@@ -1775,6 +1785,8 @@ pub fn train_and_get_tiered_scores(
         train_data.num_negatives,
         total_input_bits,
         gpu_addresses.as_deref(),
+        neuron_sample_rate,
+        rng_seed,
     );
 
     // Evaluate — build per-example scores

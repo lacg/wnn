@@ -444,6 +444,8 @@ pub fn evaluate_genomes_cached(
     train_subset_idx: usize,
     eval_subset_idx: usize,
     empty_value: f32,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
 ) -> Vec<(f64, f64)> {
     let train = cache.train_subset(train_subset_idx);
     let eval = cache.eval_subset(eval_subset_idx);
@@ -465,6 +467,8 @@ pub fn evaluate_genomes_cached(
         eval.num_examples,
         cache.total_input_bits(),
         empty_value,
+        neuron_sample_rate,
+        rng_seed,
     )
 }
 
@@ -476,6 +480,8 @@ pub fn evaluate_genomes_cached_full(
     genomes_connections_flat: &[i64],
     num_genomes: usize,
     empty_value: f32,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
 ) -> Vec<(f64, f64)> {
     let train = cache.full_train();
     let eval = cache.full_eval();
@@ -496,6 +502,8 @@ pub fn evaluate_genomes_cached_full(
         eval.num_examples,
         cache.total_input_bits(),
         empty_value,
+        neuron_sample_rate,
+        rng_seed,
     )
 }
 
@@ -511,12 +519,12 @@ pub fn evaluate_genomes_cached_hybrid(
     train_subset_idx: usize,
     eval_subset_idx: usize,
     empty_value: f32,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
 ) -> Vec<(f64, f64)> {
     let train = cache.train_subset(train_subset_idx);
     let eval = cache.eval_subset(eval_subset_idx);
 
-    // Always use parallel hybrid (fast, ~3.5s/genome)
-    // Progress logging now built into parallel_hybrid when WNN_PROGRESS_LOG=1
     crate::adaptive::evaluate_genomes_parallel_hybrid(
         genomes_bits_flat,
         genomes_neurons_flat,
@@ -533,6 +541,8 @@ pub fn evaluate_genomes_cached_hybrid(
         eval.num_examples,
         cache.total_input_bits(),
         empty_value,
+        neuron_sample_rate,
+        rng_seed,
     )
 }
 
@@ -544,6 +554,8 @@ pub fn evaluate_genomes_cached_full_hybrid(
     genomes_connections_flat: &[i64],
     num_genomes: usize,
     empty_value: f32,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
 ) -> Vec<(f64, f64)> {
     let train = cache.full_train();
     let eval = cache.full_eval();
@@ -564,6 +576,8 @@ pub fn evaluate_genomes_cached_full_hybrid(
         eval.num_examples,
         cache.total_input_bits(),
         empty_value,
+        neuron_sample_rate,
+        rng_seed,
     )
 }
 

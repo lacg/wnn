@@ -1306,6 +1306,8 @@ pub fn evaluate_genomes_parallel(
     num_eval: usize,
     total_input_bits: usize,
     empty_value: f32,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
 ) -> Vec<(f64, f64)> {
     let memory_mode = crate::neuron_memory::get_memory_mode();
     use rand::prelude::*;
@@ -1454,6 +1456,8 @@ pub fn evaluate_genomes_parallel(
             num_negatives,
             total_input_bits,
             gpu_addresses.as_deref(),
+            neuron_sample_rate,
+            rng_seed.wrapping_add(genome_idx as u64),
         );
 
         // Evaluate this genome - HYBRID Metal/CPU acceleration
@@ -1694,6 +1698,8 @@ pub fn evaluate_genomes_parallel_multisubset(
     num_negatives: usize,
     total_input_bits: usize,
     empty_value: f32,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
 ) -> Vec<(f64, f64)> {
     // Compute offsets for train subsets
     let mut train_offsets: Vec<usize> = Vec::with_capacity(train_subset_counts.len() + 1);
@@ -1761,6 +1767,8 @@ pub fn evaluate_genomes_parallel_multisubset(
         num_eval,
         total_input_bits,
         empty_value,
+        neuron_sample_rate,
+        rng_seed,
     )
 }
 
@@ -1916,7 +1924,11 @@ pub(crate) fn train_genome_in_slot(
     num_negatives: usize,
     total_input_bits: usize,
     gpu_addresses: Option<&[u32]>,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
 ) {
+    let use_sampling = neuron_sample_rate < 1.0;
+
     // Use chunked parallel processing to balance parallelism vs overhead
     let chunk_size = 10_000.max(num_train / 20);
 
@@ -1944,6 +1956,22 @@ pub(crate) fn train_genome_in_slot(
 
             for n in 0..actual_neurons {
                 let global_n = cluster_neuron_starts[true_cluster] + n;
+
+                // Per-(neuron, example) deterministic sampling
+                // Uses hash of (rng_seed, neuron_idx, example_idx) for parallel-safe decisions
+                if use_sampling {
+                    let mut rng = (rng_seed as u32)
+                        .wrapping_add(global_n as u32 * 1000003)
+                        .wrapping_add(ex_idx as u32 * 2654435761);
+                    if rng == 0 { rng = 1; }
+                    rng ^= rng << 13;
+                    rng ^= rng >> 17;
+                    rng ^= rng << 5;
+                    if (rng >> 8) as f32 / 16777216.0 >= neuron_sample_rate {
+                        continue;
+                    }
+                }
+
                 let address = if let Some(addrs) = gpu_addresses {
                     addrs[global_n * num_train + ex_idx] as usize
                 } else {
@@ -1977,6 +2005,21 @@ pub(crate) fn train_genome_in_slot(
 
             for n in 0..actual_neurons {
                 let global_n = cluster_neuron_starts[false_cluster] + n;
+
+                // Same per-(neuron, example) sampling for negative examples
+                if use_sampling {
+                    let mut rng = (rng_seed as u32)
+                        .wrapping_add(global_n as u32 * 1000003)
+                        .wrapping_add(ex_idx as u32 * 2654435761);
+                    if rng == 0 { rng = 1; }
+                    rng ^= rng << 13;
+                    rng ^= rng >> 17;
+                    rng ^= rng << 5;
+                    if (rng >> 8) as f32 / 16777216.0 >= neuron_sample_rate {
+                        continue;
+                    }
+                }
+
                 let address = if let Some(addrs) = gpu_addresses {
                     addrs[global_n * num_train + ex_idx] as usize
                 } else {
@@ -2658,6 +2701,8 @@ pub fn evaluate_genomes_parallel_hybrid(
     num_eval: usize,
     total_input_bits: usize,
     empty_value: f32,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
 ) -> Vec<(f64, f64)> {
     let _memory_mode = crate::neuron_memory::get_memory_mode();
     if num_genomes == 0 {
@@ -2855,6 +2900,8 @@ pub fn evaluate_genomes_parallel_hybrid(
                     num_negatives,
                     total_input_bits,
                     gpu_addresses.as_deref(),
+                    neuron_sample_rate,
+                    rng_seed.wrapping_add(genome_idx as u64),
                 );
 
                 // Build GPU-padded connections (per-neuron → group layout with padding)
