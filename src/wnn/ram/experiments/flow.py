@@ -504,9 +504,9 @@ class FlowConfig:
 		# Default grids for tiered stages (smaller ranges — tiered has sparse
 		# address spaces, so large neurons/bits cause degenerate scores)
 		if tiered_neurons_grid is None:
-			tiered_neurons_grid = [15, 20, 25, 30, 50]
+			tiered_neurons_grid = [25, 50, 75, 100, 150]
 		if tiered_bits_grid is None:
-			tiered_bits_grid = [14, 16, 18, 20, 22, 24, 26]
+			tiered_bits_grid = [16, 17, 18, 20, 21, 22]
 
 		adaptation_types = {ExperimentType.NEUROGENESIS, ExperimentType.SYNAPTOGENESIS, ExperimentType.AXONOGENESIS}
 
