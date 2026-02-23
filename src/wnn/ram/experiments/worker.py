@@ -752,6 +752,16 @@ class FlowWorker:
             exp_weight_ce = exp_data.get("fitness_weight_ce") or default_weight_ce
             exp_weight_acc = exp_data.get("fitness_weight_acc") or default_weight_acc
 
+            # Determine architecture_type and target_stage early (needed for grid selection)
+            architecture_type = params.get("architecture_type", "tiered")
+            ms_target_stage = 0
+            exp_name = exp_data.get("name", "Unnamed")
+            if exp_name.startswith("S") and ":" in exp_name[:4]:
+                try:
+                    ms_target_stage = int(exp_name[1:exp_name.index(":")])
+                except (ValueError, IndexError):
+                    pass
+
             # Grid search: select grid based on stage type (tiered vs bitwise)
             # For multi-stage flows, tiered stages use smaller grids
             stage_cluster_types = params.get("stage_cluster_type", [])
@@ -794,7 +804,6 @@ class FlowWorker:
                 max_iters = exp_data.get("max_iterations") or params.get("ga_generations", 250)
 
             # Determine cluster_type from architecture_type
-            architecture_type = params.get("architecture_type", "tiered")
             from wnn.ram.experiments.experiment import ClusterType
             if architecture_type == "multi_stage":
                 cluster_type = ClusterType.MULTI_STAGE
@@ -802,15 +811,6 @@ class FlowWorker:
                 cluster_type = ClusterType.BITWISE
             else:
                 cluster_type = ClusterType.TIERED
-
-            # Multi-stage fields: extract target_stage from experiment name prefix (S0:, S1:, etc.)
-            ms_target_stage = 0
-            exp_name = exp_data.get("name", "Unnamed")
-            if exp_name.startswith("S") and ":" in exp_name[:4]:
-                try:
-                    ms_target_stage = int(exp_name[1:exp_name.index(":")])
-                except (ValueError, IndexError):
-                    pass
 
             exp_config = ExperimentConfig(
                 name=exp_name,
