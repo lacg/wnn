@@ -694,6 +694,99 @@ class MultiStageEvaluator(BaseEvaluator):
 
 		return passed
 
+	def search_neighbors_batch(
+		self,
+		sources: list[tuple[ClusterGenome, int]],
+		max_attempts_multiplier: int,
+		accuracy_threshold: float,
+		min_bits: int,
+		max_bits: int,
+		min_neurons: int,
+		max_neurons: int,
+		bits_mutation_rate: float = 0.1,
+		neurons_mutation_rate: float = 0.05,
+		train_subset_idx: Optional[int] = None,
+		eval_subset_idx: Optional[int] = None,
+		seed: Optional[int] = None,
+		return_best_n: bool = True,
+		mutable_clusters: Optional[list[int]] = None,
+	) -> list[list[ClusterGenome]]:
+		"""Search neighbors for multiple source genomes in a single Rust call.
+
+		Args:
+			sources: List of (genome, target_count) pairs
+			max_attempts_multiplier: Generate target_count * this many candidates per source
+			Other args: same as search_neighbors
+
+		Returns:
+			List of neighbor lists, one per source (same order as input)
+		"""
+		if train_subset_idx is None:
+			train_subset_idx = self.next_train_idx()
+		if eval_subset_idx is None:
+			eval_subset_idx = 0
+		if seed is None:
+			seed = int(time.time() * 1000) % (2**32)
+
+		rng = random.Random(seed)
+
+		# Generate all candidates for all sources
+		all_candidates: list[ClusterGenome] = []
+		source_ranges: list[tuple[int, int, int]] = []  # (start_idx, end_idx, target_count)
+
+		for source_genome, target_count in sources:
+			gen_count = min(target_count * max_attempts_multiplier, target_count * 5)
+			start = len(all_candidates)
+			for _ in range(gen_count):
+				all_candidates.append(
+					self._mutate_genome(
+						source_genome, bits_mutation_rate, neurons_mutation_rate,
+						min_bits, max_bits, min_neurons, max_neurons,
+						mutable_clusters, rng,
+					)
+				)
+			source_ranges.append((start, len(all_candidates), target_count))
+
+		if not all_candidates:
+			return [[] for _ in sources]
+
+		# Single Rust evaluation call for ALL candidates
+		if self._is_stage_tiered(self._target_stage):
+			results = self._evaluate_tiered_rust(all_candidates, self._target_stage, train_subset_idx, eval_subset_idx)
+		else:
+			results = self._evaluate_bitwise_rust(self._target_stage, all_candidates, train_subset_idx, eval_subset_idx)
+
+		# Cache fitness on genomes
+		for g, (ce, acc, bit_acc) in zip(all_candidates, results):
+			g._cached_fitness = (ce, acc)
+			g._cached_bit_acc = bit_acc
+
+		# Split results back by source and filter
+		output: list[list[ClusterGenome]] = []
+		for start, end, target_count in source_ranges:
+			passed = []
+			below = []
+			for i in range(start, end):
+				g = all_candidates[i]
+				if g._cached_fitness[1] >= accuracy_threshold:
+					passed.append(g)
+				else:
+					below.append(g)
+
+			# Take best up to target_count
+			if len(passed) >= target_count:
+				passed.sort(key=lambda g: (-g._cached_fitness[1], g._cached_fitness[0]))
+				output.append(passed[:target_count])
+			elif return_best_n:
+				below.sort(key=lambda g: (-g._cached_fitness[1], g._cached_fitness[0]))
+				need = target_count - len(passed)
+				passed.extend(below[:need])
+				output.append(passed)
+			else:
+				output.append(passed)
+
+		return output
+
 	def search_offspring(
 		self,
 		population: list[tuple[ClusterGenome, float]],

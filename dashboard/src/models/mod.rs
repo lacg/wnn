@@ -123,6 +123,8 @@ pub struct Flow {
     pub pid: Option<i64>,
     /// Last heartbeat from worker (for detecting stale running flows)
     pub last_heartbeat: Option<DateTime<Utc>>,
+    /// Real-time status message (e.g., "Loading checkpoints...", "Starting experiment S0: GA Neurons")
+    pub status_message: Option<String>,
 }
 
 /// Flow configuration - flow-level settings only

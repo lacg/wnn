@@ -2129,23 +2129,40 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 				total_offspring = cfg.neighbors_per_iter
 				per_source = max(1, total_offspring // n_sources)
 				remainder = total_offspring - (per_source * n_sources)
+				counts = [per_source + (1 if si < remainder else 0) for si in range(n_sources)]
 
+				# Try batch evaluation (single Rust call for all sources)
 				offspring: list[tuple[T, float, Optional[float]]] = []
-				for si, source in enumerate(sources):
-					n = per_source + (1 if si < remainder else 0)
-					# Update status message for dashboard progress
+				batch_result = None
+				if hasattr(self, '_generate_neighbors_batch'):
 					if self._tracker and self._tracker_experiment_id:
 						best_ce_str = f"{best_fitness:.4f}" if best_fitness < 999 else "N/A"
 						self._tracker.update_experiment_progress(
 							self._tracker_experiment_id,
-							status_message=f"Iter {iteration + 1}/{cfg.iterations}: source {si + 1}/{n_sources}, {len(offspring)}/{total_offspring} offspring (best CE={best_ce_str})",
+							status_message=f"Iter {iteration + 1}/{cfg.iterations}: batch evaluating {total_offspring} offspring from {n_sources} sources (best CE={best_ce_str})",
 						)
-					batch = self._generate_neighbors(
-						best_genome=source, n_neighbors=n,
-						threshold=current_threshold, iteration=iteration,
-						tabu_list=tabu_list,
+					batch_result = self._generate_neighbors_batch(
+						sources, counts, current_threshold, iteration, tabu_list,
 					)
-					offspring.extend(batch)
+
+				if batch_result is not None:
+					for source_offspring in batch_result:
+						offspring.extend(source_offspring)
+				else:
+					# Fallback: per-source evaluation
+					for si, source in enumerate(sources):
+						if self._tracker and self._tracker_experiment_id:
+							best_ce_str = f"{best_fitness:.4f}" if best_fitness < 999 else "N/A"
+							self._tracker.update_experiment_progress(
+								self._tracker_experiment_id,
+								status_message=f"Iter {iteration + 1}/{cfg.iterations}: source {si + 1}/{n_sources}, {len(offspring)}/{total_offspring} offspring (best CE={best_ce_str})",
+							)
+						batch = self._generate_neighbors(
+							best_genome=source, n_neighbors=counts[si],
+							threshold=current_threshold, iteration=iteration,
+							tabu_list=tabu_list,
+						)
+						offspring.extend(batch)
 			else:
 				# Classic TS: all offspring from single best-ranked genome
 				if self._tracker and self._tracker_experiment_id:

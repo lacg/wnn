@@ -61,6 +61,7 @@ export interface Flow {
   status: FlowStatus;
   seed_checkpoint_id: number | null;
   pid: number | null;
+  status_message: string | null;
 }
 
 // Flow-level configuration (normalized: experiments stored in experiments table, not here)

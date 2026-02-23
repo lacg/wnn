@@ -755,6 +755,7 @@ pub struct UpdateFlowRequest {
     pub status: Option<FlowStatus>,
     pub config: Option<serde_json::Value>,
     pub seed_checkpoint_id: Option<Option<i64>>, // None = don't update, Some(None) = clear, Some(Some(id)) = set
+    pub status_message: Option<String>,
 }
 
 async fn update_flow(
@@ -780,6 +781,7 @@ async fn update_flow(
         status_str,
         req.config.as_ref(),
         req.seed_checkpoint_id,
+        req.status_message.as_deref(),
     ).await {
         Ok(true) => {
             // Fetch and return updated flow
@@ -1171,7 +1173,7 @@ async fn restart_flow(
             );
             // Serialize FlowConfig to serde_json::Value for update
             if let Ok(config_json) = serde_json::to_value(&current_flow.config) {
-                let _ = crate::db::queries::update_flow(&state.db, id, None, None, None, Some(&config_json), None).await;
+                let _ = crate::db::queries::update_flow(&state.db, id, None, None, None, Some(&config_json), None, None).await;
             }
         }
     }

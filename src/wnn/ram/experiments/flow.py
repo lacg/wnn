@@ -757,6 +757,14 @@ class Flow:
 		self._experiment_ids: dict[int, int] = {}  # idx -> experiment_id
 		self._results: list[ExperimentResult] = []
 
+	def _update_flow_status(self, message: str) -> None:
+		"""Update flow status message on dashboard."""
+		if self.dashboard_client and self._flow_id:
+			try:
+				self.dashboard_client.update_flow(self._flow_id, status_message=message)
+			except Exception:
+				pass  # Non-critical, don't fail the flow
+
 	def run(
 		self,
 		resume_from: Optional[int] = None,
@@ -860,6 +868,7 @@ class Flow:
 					self.log(f"Created pending experiment {exp_id}: {exp_config.name} (sequence_order={idx})")
 
 		# Load seed from checkpoint if specified
+		self._update_flow_status("Initializing flow...")
 		if cfg.seed_checkpoint_path and not seed_genome:
 			seed_genome, seed_population, seed_threshold = self._load_seed_checkpoint(
 				cfg.seed_checkpoint_path
@@ -911,6 +920,7 @@ class Flow:
 			for idx, exp_config in enumerate(cfg.experiments):
 				if idx < start_idx:
 					# Load checkpoint for skipped experiments
+					self._update_flow_status(f"Loading checkpoint for experiment {idx + 1}/{len(cfg.experiments)}: {exp_config.name}")
 					result = self._load_experiment_checkpoint(idx)
 					if result:
 						self._results.append(result)
@@ -921,6 +931,7 @@ class Flow:
 						current_evals = result.population_metrics
 						# Self-heal old checkpoints: evaluate population and re-save with metrics
 						if current_evals is None and current_population:
+							self._update_flow_status(f"Backfilling metrics for experiment {idx + 1}: {exp_config.name} ({len(current_population)} genomes)")
 							self.log(f"  Backfilling population_metrics for experiment {idx} ({len(current_population)} genomes)...")
 							eval_results = self.evaluator.evaluate_batch(current_population)
 							current_evals = [(r.ce, r.accuracy) for r in eval_results]
@@ -942,6 +953,9 @@ class Flow:
 								f"Either run from the beginning or provide a valid checkpoint."
 							)
 					continue
+
+				# Update flow status for dashboard visibility
+				self._update_flow_status(f"Starting experiment {idx + 1}/{len(cfg.experiments)}: {exp_config.name}")
 
 				# Create experiment checkpoint directory
 				exp_checkpoint_dir = None

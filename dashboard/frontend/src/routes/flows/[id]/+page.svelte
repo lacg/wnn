@@ -46,13 +46,18 @@
     }
   });
 
-  // Refresh experiments and validations without full page reload
+  // Refresh flow, experiments and validations without full page reload
   async function refreshExperiments() {
     try {
-      const [expsRes, validationsRes] = await Promise.all([
+      const [flowRes, expsRes, validationsRes] = await Promise.all([
+        fetch(`/api/flows/${flowId}`),
         fetch(`/api/flows/${flowId}/experiments`),
         fetch(`/api/flows/${flowId}/validations`)
       ]);
+      if (flowRes.ok) {
+        const flowData = await flowRes.json();
+        if (flowData) flow = flowData;
+      }
       if (expsRes.ok) {
         const expsData = await expsRes.json();
         experiments = Array.isArray(expsData) ? expsData : [];
@@ -916,6 +921,9 @@
         <span class="status-badge" style="background: {getStatusColor(flow.status)}">
           {flow.status}
         </span>
+        {#if flow.status_message && (flow.status === 'running' || flow.status === 'queued')}
+          <span class="flow-status-message">{flow.status_message}</span>
+        {/if}
       </div>
       <div class="header-actions">
         <button class="btn btn-sm btn-secondary" on:click={duplicateFlow} disabled={duplicating} title="Duplicate flow">
@@ -1676,6 +1684,13 @@
     border-radius: 4px;
     color: white;
     text-transform: capitalize;
+  }
+
+  .flow-status-message {
+    font-size: 1rem;
+    color: var(--text-secondary, #888);
+    font-style: italic;
+    margin-left: 0.5rem;
   }
 
   .description {

@@ -1556,6 +1556,70 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 		# Fallback to Python single-path generation
 		return super()._generate_neighbors(best_genome, n_neighbors, threshold, iteration, tabu_list)
 
+	def _generate_neighbors_batch(self, sources, counts, threshold, iteration, tabu_list):
+		"""Generate neighbors for multiple sources in a single Rust evaluation call.
+
+		Returns list of offspring lists, one per source. Falls back to per-source
+		_generate_neighbors if cached evaluator doesn't support batch search.
+		"""
+		evaluator = self._cached_evaluator
+		if evaluator is None or not hasattr(evaluator, 'search_neighbors_batch'):
+			return None  # Signal caller to fall back to per-source loop
+
+		cfg = self._config
+		arch_cfg = self._arch_config
+
+		bits_mutation_rate = cfg.mutation_rate if arch_cfg.optimize_bits else 0.0
+		neurons_mutation_rate = cfg.mutation_rate if arch_cfg.optimize_neurons else 0.0
+
+		import math
+		pct = cfg.fitness_percentile if cfg.fitness_percentile and 0 < cfg.fitness_percentile < 1.0 else None
+
+		# Build source list with inflated counts for fitness percentile filtering
+		batch_sources = []
+		for source, count in zip(sources, counts):
+			gen_count = math.ceil(count / pct) if pct else count
+			batch_sources.append((source, gen_count))
+
+		total_candidates = sum(gc for _, gc in batch_sources)
+		self._log.debug(
+			f"[{self.name}] Batch searching {total_candidates} neighbors "
+			f"from {len(sources)} sources (single Rust call)..."
+		)
+
+		results_by_source = evaluator.search_neighbors_batch(
+			sources=batch_sources,
+			max_attempts_multiplier=3,
+			accuracy_threshold=threshold,
+			min_bits=arch_cfg.min_bits,
+			max_bits=arch_cfg.max_bits,
+			min_neurons=arch_cfg.min_neurons,
+			max_neurons=arch_cfg.max_neurons,
+			bits_mutation_rate=bits_mutation_rate,
+			neurons_mutation_rate=neurons_mutation_rate,
+			train_subset_idx=self._phase_train_idx,
+			eval_subset_idx=0,
+			seed=self._seed_offset + iteration * 1000,
+			return_best_n=True,
+			mutable_clusters=arch_cfg.mutable_clusters,
+		)
+
+		# Convert to 3-tuples and apply fitness percentile filtering per source
+		all_offspring = []
+		for source_neighbors, target_count in zip(results_by_source, counts):
+			neighbors = [
+				(g, g._cached_fitness[0], g._cached_fitness[1])
+				for g in source_neighbors
+				if hasattr(g, '_cached_fitness')
+			]
+			if pct and len(neighbors) > target_count:
+				scores = self._fitness_calculator.fitness(neighbors)
+				ranked = sorted(zip(neighbors, scores), key=lambda x: x[1])
+				neighbors = [item for item, _ in ranked[:target_count]]
+			all_offspring.append(neighbors)
+
+		return all_offspring
+
 	def _on_iteration_start(self, iteration, **ctx):
 		"""Metal cleanup, shutdown check, generation tracking."""
 		# Update evaluator generation for adaptive evaluation (Baldwin effect)

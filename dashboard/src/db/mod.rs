@@ -75,6 +75,11 @@ async fn run_migrations(pool: &DbPool) -> Result<()> {
         .execute(pool)
         .await;
 
+    // Migration: Add status_message to flows for real-time flow progress tracking
+    let _ = sqlx::query("ALTER TABLE flows ADD COLUMN status_message TEXT")
+        .execute(pool)
+        .await;
+
     // Migration: Add bitwise-specific fields to genomes
     let _ = sqlx::query("ALTER TABLE genomes ADD COLUMN architecture_type TEXT DEFAULT 'tiered'")
         .execute(pool)
@@ -549,6 +554,7 @@ pub mod queries {
         status: Option<&str>,
         config: Option<&serde_json::Value>,
         seed_checkpoint_id: Option<Option<i64>>,
+        status_message: Option<&str>,
     ) -> Result<bool> {
         // Build dynamic update query using raw SQL with proper binding
         let mut set_clauses = Vec::new();
@@ -576,13 +582,16 @@ pub mod queries {
         if seed_checkpoint_id.is_some() {
             set_clauses.push("seed_checkpoint_id = ?6");
         }
+        if status_message.is_some() {
+            set_clauses.push("status_message = ?7");
+        }
 
         if set_clauses.is_empty() {
             return Ok(false);
         }
 
         let query = format!(
-            "UPDATE flows SET {} WHERE id = ?7",
+            "UPDATE flows SET {} WHERE id = ?8",
             set_clauses.join(", ")
         );
 
@@ -597,6 +606,7 @@ pub mod queries {
             .bind(&now)
             .bind(config_json.as_deref().unwrap_or(""))
             .bind(seed_id)
+            .bind(status_message.unwrap_or(""))
             .bind(id)
             .execute(pool)
             .await?;
@@ -1011,6 +1021,7 @@ pub mod queries {
             last_heartbeat: row.get::<Option<String>, _>("last_heartbeat")
                 .map(|s| parse_datetime(s))
                 .transpose()?,
+            status_message: row.get("status_message"),
         })
     }
 
