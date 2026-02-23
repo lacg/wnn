@@ -810,12 +810,15 @@ impl MultiStageTokenCache {
 
         let mut input_bits = vec![false; num_ex * total_input_bits];
         let mut targets = vec![0i64; num_ex];
-        let mut negatives = vec![0i64; num_ex * num_negatives];
+        // Allocate at least 1 element per example so par_chunks_mut produces
+        // the correct number of chunks even when num_negatives == 0.
+        let neg_stride = num_negatives.max(1);
+        let mut negatives = vec![0i64; num_ex * neg_stride];
 
         input_bits
             .par_chunks_mut(total_input_bits)
             .zip(targets.par_iter_mut())
-            .zip(negatives.par_chunks_mut(num_negatives.max(1)))
+            .zip(negatives.par_chunks_mut(neg_stride))
             .enumerate()
             .for_each(|(i, ((inp, tgt), negs))| {
                 for ctx in 0..context_size {
@@ -861,6 +864,10 @@ impl MultiStageTokenCache {
                 }
             });
 
+        // Trim negatives to actual size (we may have over-allocated for zip alignment)
+        if num_negatives == 0 {
+            negatives.clear();
+        }
         (input_bits, targets, negatives, num_ex)
     }
 
@@ -1636,8 +1643,9 @@ pub fn evaluate_tiered_genomes(
     let num_clusters = cache.stage_num_output_clusters[stage];
 
     let empty_value = empty_value_for_mode(memory_mode);
-    // Sync global empty_value so GPU shaders use the same value as CPU fallback
+    // Sync globals so GPU shaders use the correct mode and empty_value
     crate::neuron_memory::set_empty_value(empty_value);
+    crate::neuron_memory::set_memory_mode(memory_mode);
 
     crate::adaptive::evaluate_genomes_parallel(
         bits_per_neuron_flat,
@@ -1682,6 +1690,7 @@ pub fn evaluate_tiered_genomes_full(
 
     let empty_value = empty_value_for_mode(memory_mode);
     crate::neuron_memory::set_empty_value(empty_value);
+    crate::neuron_memory::set_memory_mode(memory_mode);
 
     crate::adaptive::evaluate_genomes_parallel(
         bits_per_neuron_flat,
@@ -1719,6 +1728,7 @@ pub fn train_and_get_tiered_scores(
 ) -> Vec<f64> {
     let empty_value = empty_value_for_mode(memory_mode);
     crate::neuron_memory::set_empty_value(empty_value);
+    crate::neuron_memory::set_memory_mode(memory_mode);
 
     // Build cluster metadata
     let (cluster_neuron_starts, neuron_conn_offsets) =

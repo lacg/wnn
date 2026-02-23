@@ -64,6 +64,7 @@ pub const MODE_QUAD_WEIGHTED: u8 = 2;
 //   0.5 = EMPTY cells add uncertainty (old default)
 
 static EMPTY_VALUE_BITS: AtomicU32 = AtomicU32::new(0); // 0.0f32 as bits
+static MEMORY_MODE: AtomicU32 = AtomicU32::new(0); // MODE_TERNARY by default
 
 /// Get the global EMPTY cell value for ternary forward pass.
 pub fn get_empty_value() -> f32 {
@@ -73,6 +74,16 @@ pub fn get_empty_value() -> f32 {
 /// Set the global EMPTY cell value (call from Python before evaluation).
 pub fn set_empty_value(value: f32) {
 	EMPTY_VALUE_BITS.store(value.to_bits(), Ordering::Relaxed);
+}
+
+/// Get the global memory mode (for GPU shader dispatch).
+pub fn get_memory_mode() -> u8 {
+	MEMORY_MODE.load(Ordering::Relaxed) as u8
+}
+
+/// Set the global memory mode.
+pub fn set_memory_mode(mode: u8) {
+	MEMORY_MODE.store(mode as u32, Ordering::Relaxed);
 }
 
 // =============================================================================
