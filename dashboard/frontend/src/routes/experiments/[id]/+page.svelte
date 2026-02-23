@@ -1186,6 +1186,7 @@
                   <th>Bits</th>
                   <th>CE</th>
                   <th>Accuracy</th>
+                  <th>Fitness</th>
                   <th>Time</th>
                 </tr>
               </thead>
@@ -1202,6 +1203,7 @@
                     <td class="mono">{r.bits}</td>
                     <td class="mono">{r.ce.toFixed(4)}</td>
                     <td class="mono">{(r.accuracy * 100).toFixed(2)}%</td>
+                    <td class="mono">{r.fitness !== null ? r.fitness.toFixed(4) : '—'}</td>
                     <td class="mono">{r.elapsed ? r.elapsed.toFixed(1) + 's' : '—'}</td>
                   </tr>
                 {/each}
@@ -1217,50 +1219,48 @@
 
       <!-- Expanded Population (after grid search completes, top-K seeded with fresh connections) -->
       {#if expandedPopulation.length > 0}
-        {@const bestCeGenome = expandedPopulation.reduce((best, g) => g.ce < best.ce ? g : best, expandedPopulation[0])}
-        {@const bestAccGenome = expandedPopulation.reduce((best, g) => g.accuracy > best.accuracy ? g : best, expandedPopulation[0])}
+        {@const configCounts = (() => {
+          const counts = new Map();
+          for (const g of expandedPopulation) {
+            const key = `${g.neurons},${g.bits}`;
+            const existing = counts.get(key);
+            if (existing) {
+              existing.count++;
+              if (g.ce < existing.bestCe) existing.bestCe = g.ce;
+              if (g.accuracy > existing.bestAcc) existing.bestAcc = g.accuracy;
+            } else {
+              counts.set(key, { neurons: g.neurons, bits: g.bits, count: 1, bestCe: g.ce, bestAcc: g.accuracy });
+            }
+          }
+          return [...counts.values()].sort((a, b) => b.count - a.count);
+        })()}
         <div class="gating-section" style="border-left-color: var(--accent-green);">
           <div class="gating-header">
-            <span class="gating-title">Expanded Population</span>
+            <span class="gating-title">Seeded Population</span>
             <span class="gating-meta">
-              {expandedPopulation.length} genomes (top-K with fresh connections)
+              {expandedPopulation.length} genomes from top-{configCounts.length} configs
             </span>
-          </div>
-
-          <div class="expanded-summary">
-            <div class="expanded-best">
-              <span class="expanded-label">Best CE</span>
-              <span class="expanded-value">{bestCeGenome.ce.toFixed(4)}</span>
-              <span class="expanded-detail">{bestCeGenome.neurons}n {bestCeGenome.bits}b &middot; Acc {(bestCeGenome.accuracy * 100).toFixed(2)}%</span>
-            </div>
-            <div class="expanded-best">
-              <span class="expanded-label">Best Accuracy</span>
-              <span class="expanded-value">{(bestAccGenome.accuracy * 100).toFixed(2)}%</span>
-              <span class="expanded-detail">{bestAccGenome.neurons}n {bestAccGenome.bits}b &middot; CE {bestAccGenome.ce.toFixed(4)}</span>
-            </div>
           </div>
 
           <div class="table-scroll">
             <table class="gating-table">
               <thead>
                 <tr>
-                  <th>#</th>
                   <th>Neurons</th>
                   <th>Bits</th>
-                  <th>CE</th>
-                  <th>Accuracy</th>
-                  <th>Fitness</th>
+                  <th>Genomes</th>
+                  <th>Best CE</th>
+                  <th>Best Acc</th>
                 </tr>
               </thead>
               <tbody>
-                {#each expandedPopulation as g}
-                  <tr class:expanded-best-ce={g.ce === bestCeGenome.ce} class:expanded-best-acc={g.accuracy === bestAccGenome.accuracy}>
-                    <td class="mono">{g.rank}</td>
-                    <td class="mono">{g.neurons.toLocaleString()}</td>
-                    <td class="mono">{g.bits}</td>
-                    <td class="mono">{g.ce.toFixed(4)}</td>
-                    <td class="mono">{(g.accuracy * 100).toFixed(2)}%</td>
-                    <td class="mono">{g.fitness !== null ? g.fitness.toFixed(4) : '—'}</td>
+                {#each configCounts as c}
+                  <tr>
+                    <td class="mono">{c.neurons.toLocaleString()}</td>
+                    <td class="mono">{c.bits}</td>
+                    <td class="mono">{c.count}</td>
+                    <td class="mono">{c.bestCe.toFixed(4)}</td>
+                    <td class="mono">{(c.bestAcc * 100).toFixed(2)}%</td>
                   </tr>
                 {/each}
               </tbody>
