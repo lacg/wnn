@@ -1582,27 +1582,39 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 			batch_sources.append((source, gen_count))
 
 		total_candidates = sum(gc for _, gc in batch_sources)
-		self._log.debug(
+		self._log.info(
 			f"[{self.name}] Batch searching {total_candidates} neighbors "
-			f"from {len(sources)} sources (single Rust call)..."
+			f"from {len(sources)} sources"
 		)
 
-		results_by_source = evaluator.search_neighbors_batch(
-			sources=batch_sources,
-			max_attempts_multiplier=3,
-			accuracy_threshold=threshold,
-			min_bits=arch_cfg.min_bits,
-			max_bits=arch_cfg.max_bits,
-			min_neurons=arch_cfg.min_neurons,
-			max_neurons=arch_cfg.max_neurons,
-			bits_mutation_rate=bits_mutation_rate,
-			neurons_mutation_rate=neurons_mutation_rate,
-			train_subset_idx=self._phase_train_idx,
-			eval_subset_idx=0,
-			seed=self._seed_offset + iteration * 1000,
-			return_best_n=True,
-			mutable_clusters=arch_cfg.mutable_clusters,
-		)
+		def on_progress(batch_num, total_batches, done, total):
+			self._log.info(
+				f"[{self.name}] Evaluating {done}/{total} candidates "
+				f"(sub-batch {batch_num}/{total_batches})"
+			)
+
+		if hasattr(evaluator, 'set_progress_callback'):
+			evaluator.set_progress_callback(on_progress)
+		try:
+			results_by_source = evaluator.search_neighbors_batch(
+				sources=batch_sources,
+				max_attempts_multiplier=3,
+				accuracy_threshold=threshold,
+				min_bits=arch_cfg.min_bits,
+				max_bits=arch_cfg.max_bits,
+				min_neurons=arch_cfg.min_neurons,
+				max_neurons=arch_cfg.max_neurons,
+				bits_mutation_rate=bits_mutation_rate,
+				neurons_mutation_rate=neurons_mutation_rate,
+				train_subset_idx=self._phase_train_idx,
+				eval_subset_idx=0,
+				seed=self._seed_offset + iteration * 1000,
+				return_best_n=True,
+				mutable_clusters=arch_cfg.mutable_clusters,
+			)
+		finally:
+			if hasattr(evaluator, 'set_progress_callback'):
+				evaluator.set_progress_callback(None)
 
 		# Convert to 3-tuples and apply fitness percentile filtering per source
 		all_offspring = []

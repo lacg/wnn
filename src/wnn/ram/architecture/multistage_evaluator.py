@@ -25,6 +25,7 @@ Usage:
 
 import logging
 import math
+import os
 import random
 import time
 from typing import Optional, Callable
@@ -137,6 +138,8 @@ class MultiStageEvaluator(BaseEvaluator):
 		self._pad_token_id = pad_token_id
 		self._sparse_threshold = sparse_threshold
 
+		self._progress_callback = None
+
 		# Create Rust backend
 		from ram_accelerator import MultiStageCacheWrapper
 		self._cache = MultiStageCacheWrapper(
@@ -220,6 +223,10 @@ class MultiStageEvaluator(BaseEvaluator):
 	def cluster_sizes(self) -> list[int]:
 		return self._cache.cluster_sizes()
 
+	def set_progress_callback(self, callback):
+		"""Set callback(batch_num, total_batches, evaluated_so_far, total) for sub-batch progress."""
+		self._progress_callback = callback
+
 	# ── Genome flattening ────────────────────────────────────────────
 
 	def _flatten_genomes(
@@ -293,6 +300,35 @@ class MultiStageEvaluator(BaseEvaluator):
 		train_idx: int,
 		eval_idx: int,
 	) -> list[tuple[float, float, float]]:
+		max_sub = int(os.environ.get("WNN_MAX_TIERED_BATCH", "10"))
+		if len(genomes) <= max_sub:
+			return self._evaluate_tiered_rust_single(genomes, stage, train_idx, eval_idx)
+
+		all_results = []
+		n = len(genomes)
+		total_batches = (n + max_sub - 1) // max_sub
+		for i in range(0, n, max_sub):
+			chunk = genomes[i:i + max_sub]
+			t0 = time.time()
+			results = self._evaluate_tiered_rust_single(chunk, stage, train_idx, eval_idx)
+			elapsed = time.time() - t0
+			batch_num = i // max_sub + 1
+			logging.info(
+				f"[tiered_rust] sub-batch {batch_num}/{total_batches}: "
+				f"{len(chunk)} genomes in {elapsed:.1f}s ({elapsed/len(chunk):.2f}s/genome)"
+			)
+			all_results.extend(results)
+			if self._progress_callback:
+				self._progress_callback(batch_num, total_batches, len(all_results), n)
+		return all_results
+
+	def _evaluate_tiered_rust_single(
+		self,
+		genomes: list[ClusterGenome],
+		stage: int,
+		train_idx: int,
+		eval_idx: int,
+	) -> list[tuple[float, float, float]]:
 		bits_flat, neurons_flat, conns_flat = self._flatten_genomes(genomes)
 		t0 = time.time()
 		raw = self._cache.evaluate_tiered_genomes(
@@ -314,6 +350,33 @@ class MultiStageEvaluator(BaseEvaluator):
 		return [(ce, acc, 0.0) for ce, acc in raw]
 
 	def _evaluate_tiered_full_rust(
+		self,
+		genomes: list[ClusterGenome],
+		stage: int,
+	) -> list[tuple[float, float, float]]:
+		max_sub = int(os.environ.get("WNN_MAX_TIERED_BATCH", "10"))
+		if len(genomes) <= max_sub:
+			return self._evaluate_tiered_full_rust_single(genomes, stage)
+
+		all_results = []
+		n = len(genomes)
+		total_batches = (n + max_sub - 1) // max_sub
+		for i in range(0, n, max_sub):
+			chunk = genomes[i:i + max_sub]
+			t0 = time.time()
+			results = self._evaluate_tiered_full_rust_single(chunk, stage)
+			elapsed = time.time() - t0
+			batch_num = i // max_sub + 1
+			logging.info(
+				f"[tiered_full_rust] sub-batch {batch_num}/{total_batches}: "
+				f"{len(chunk)} genomes in {elapsed:.1f}s ({elapsed/len(chunk):.2f}s/genome)"
+			)
+			all_results.extend(results)
+			if self._progress_callback:
+				self._progress_callback(batch_num, total_batches, len(all_results), n)
+		return all_results
+
+	def _evaluate_tiered_full_rust_single(
 		self,
 		genomes: list[ClusterGenome],
 		stage: int,
