@@ -1363,6 +1363,12 @@ class Flow:
 			pr = data.get('phase_result', {})
 			metadata = data.get('_metadata', {})
 
+			# Load population metrics (saved as list of [ce, acc] pairs)
+			pop_metrics_raw = data.get('population_metrics')
+			pop_metrics = None
+			if pop_metrics_raw is not None:
+				pop_metrics = [(ce, acc) for ce, acc in pop_metrics_raw]
+
 			return ExperimentResult(
 				experiment_name=pr.get('phase_name', f"Experiment {idx}"),
 				strategy_type=pr.get('strategy_type', 'unknown'),
@@ -1376,6 +1382,7 @@ class Flow:
 				final_threshold=pr.get('final_threshold'),
 				elapsed_seconds=metadata.get('elapsed_seconds', 0.0),
 				checkpoint_path=str(checkpoint_path),
+				population_metrics=pop_metrics,
 			)
 
 		except Exception as e:
