@@ -1928,22 +1928,32 @@ class GridSearchStrategy:
 
 		self._log(f"\nPopulation: {len(output_population)} genomes ({top_k} original + {len(new_genomes)} new)")
 
-		# Evaluate only the NEW genomes (originals already have metrics)
+		# Evaluate the NEW genomes one at a time for per-genome progress logging
 		if new_genomes and self._batch_evaluator is not None:
 			self._log(f"  Evaluating {len(new_genomes)} new genomes...")
 			t1 = time.time()
-			new_evals = self._batch_evaluator.evaluate_batch(new_genomes)
-			expand_elapsed = time.time() - t1
-			batch_elapsed += expand_elapsed
-			self._log(f"  New genome eval: {expand_elapsed:.1f}s")
-			# Fill in the placeholder metrics
-			for idx_in_new, (ce, acc, *_) in enumerate(new_evals):
+			expand_elapsed = 0.0
+			for idx_in_new, genome in enumerate(new_genomes):
+				t_g = time.time()
+				evals = self._batch_evaluator.evaluate_batch([genome])
+				ce, acc = evals[0].ce, evals[0].accuracy
+				g_elapsed = time.time() - t_g
+				expand_elapsed += g_elapsed
 				pop_idx = new_genome_indices[idx_in_new]
 				population_metrics[pop_idx] = (ce, acc)
+				# Log per-genome result
+				g = output_population[pop_idx]
+				neurons = g.neurons_per_cluster[0] if g.neurons_per_cluster else 0
+				bits = g.bits_per_neuron[0] if g.bits_per_neuron else 0
+				self._log(f"  [{idx_in_new+1}/{len(new_genomes)}] n={neurons:3d}, b={bits:2d}: "
+						  f"CE={ce:.4f}  Acc={acc:.2%}  ({g_elapsed:.1f}s)")
 				# Update best result if a new genome beat the grid search best
 				if ce < best_result["ce"]:
 					best_result = {"ce": ce, "accuracy": acc, "genome": output_population[pop_idx]}
 					best_genome = output_population[pop_idx]
+			batch_elapsed += expand_elapsed
+			self._log(f"  New genome eval total: {expand_elapsed:.1f}s "
+					  f"({expand_elapsed/len(new_genomes):.1f}s/genome avg)")
 
 		# Phase 6: Rank full population by fitness and sort
 		pop_tuples = [
