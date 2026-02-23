@@ -455,6 +455,8 @@ class FlowConfig:
 		max_neurons: int = 300,
 		neurons_grid: Optional[list[int]] = None,
 		bits_grid: Optional[list[int]] = None,
+		tiered_neurons_grid: Optional[list[int]] = None,
+		tiered_bits_grid: Optional[list[int]] = None,
 		fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK,
 		fitness_weight_ce: float = 1.0,
 		fitness_weight_acc: float = 1.0,
@@ -478,6 +480,10 @@ class FlowConfig:
 			stage_cluster_type: Per-stage architecture type (default: ["bitwise", "bitwise"])
 			stage_mode: StageMode values between stages (default: [INPUT_CONCAT])
 			adaptation_iterations: Iterations for neurogenesis/synaptogenesis/axonogenesis phases
+			neurons_grid: Grid of neuron counts for bitwise stages (default: [5,10,25,50,100,200,300])
+			bits_grid: Grid of bit counts for bitwise stages (default: [4,6,8,10,12,16,20,24])
+			tiered_neurons_grid: Grid of neuron counts for tiered stages (default: [3,5,7,10,15,20,25])
+			tiered_bits_grid: Grid of bit counts for tiered stages (default: [8,12,16,20,24])
 		"""
 		assert num_stages == 2, "Only 2 stages supported (for now)"
 
@@ -489,17 +495,33 @@ class FlowConfig:
 		if stage_mode is None:
 			stage_mode = [StageMode.INPUT_CONCAT]
 
-		# Default grid values for multi-stage (smaller output space per stage)
+		# Default grids for bitwise stages
 		if neurons_grid is None:
 			neurons_grid = [5, 10, 25, 50, 100, 200, 300]
 		if bits_grid is None:
 			bits_grid = [4, 6, 8, 10, 12, 16, 20, 24]
+
+		# Default grids for tiered stages (smaller ranges — tiered has sparse
+		# address spaces, so large neurons/bits cause degenerate scores)
+		if tiered_neurons_grid is None:
+			tiered_neurons_grid = [3, 5, 7, 10, 15, 20, 25]
+		if tiered_bits_grid is None:
+			tiered_bits_grid = [8, 12, 16, 20, 24]
 
 		adaptation_types = {ExperimentType.NEUROGENESIS, ExperimentType.SYNAPTOGENESIS, ExperimentType.AXONOGENESIS}
 
 		experiments = []
 		for stage in range(num_stages):
 			prefix = f"S{stage}"
+			is_tiered = stage_cluster_type[stage] == "tiered"
+
+			# Select grid and bounds based on stage type
+			stage_neurons_grid = tiered_neurons_grid if is_tiered else neurons_grid
+			stage_bits_grid = tiered_bits_grid if is_tiered else bits_grid
+			stage_min_neurons = min(stage_neurons_grid)
+			stage_max_neurons = max(stage_neurons_grid)
+			stage_min_bits = min(stage_bits_grid)
+			stage_max_bits = max(stage_bits_grid)
 
 			# 10 phases per stage (mirrors bitwise-10-phase)
 			stage_phases = [
@@ -545,15 +567,15 @@ class FlowConfig:
 					stage_cluster_type=stage_cluster_type,
 					stage_mode=[m if isinstance(m, int) else m.value for m in stage_mode],
 					target_stage=stage,
-					# Bitwise-specific bounds
-					bitwise_min_bits=min_bits,
-					bitwise_max_bits=max_bits,
-					bitwise_min_neurons=min_neurons,
-					bitwise_max_neurons=max_neurons,
+					# Stage-specific bounds (tiered uses smaller ranges)
+					bitwise_min_bits=stage_min_bits,
+					bitwise_max_bits=stage_max_bits,
+					bitwise_min_neurons=stage_min_neurons,
+					bitwise_max_neurons=stage_max_neurons,
 				)
 				if exp_type == ExperimentType.GRID_SEARCH:
-					config.neurons_grid = neurons_grid
-					config.bits_grid = bits_grid
+					config.neurons_grid = stage_neurons_grid
+					config.bits_grid = stage_bits_grid
 					config.generations = 1
 				experiments.append(config)
 

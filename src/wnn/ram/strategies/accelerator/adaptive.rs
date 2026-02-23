@@ -1128,6 +1128,32 @@ impl GroupMemory {
         matches!(self, GroupMemory::Sparse(_))
     }
 
+    /// Return (total_capacity, filled_count) for diagnostics
+    pub(crate) fn fill_stats(&self) -> (usize, usize) {
+        match self {
+            GroupMemory::Dense(m) => {
+                let total = m.words.len() * CELLS_PER_WORD;
+                let empty_cell = EMPTY;
+                let mut filled = 0usize;
+                for w in &m.words {
+                    let word = w.load(std::sync::atomic::Ordering::Relaxed);
+                    for i in 0..CELLS_PER_WORD {
+                        let cell = (word >> (i * 2)) & 0x3;
+                        if cell != empty_cell {
+                            filled += 1;
+                        }
+                    }
+                }
+                (total, filled)
+            }
+            GroupMemory::Sparse(m) => {
+                let filled: usize = m.neurons.iter().map(|dm| dm.len()).sum();
+                // Sparse has no fixed capacity, report filled as both
+                (filled, filled)
+            }
+        }
+    }
+
     #[inline]
     pub(crate) fn read(&self, neuron_idx: usize, address: usize) -> i64 {
         match self {
@@ -1343,6 +1369,9 @@ pub fn evaluate_genomes_parallel(
     // SEQUENTIAL genome evaluation - each genome gets full thread pool for token parallelism
     // Parallel genome eval causes contention: 10 genomes × nested token parallelism = thrashing
     // Sequential is faster: ~6s/genome vs ~10s/genome with parallel outer loop
+    // [DIAG] Check if diagnostics are enabled via WNN_DIAG=1
+    let diag_enabled = std::env::var("WNN_DIAG").map(|v| v == "1").unwrap_or(false);
+
     let results: Vec<(f64, f64)> = (0..num_genomes).map(|genome_idx| {
         let genome_start = std::time::Instant::now();
         // Extract this genome's per-neuron bits and per-cluster neurons
@@ -1411,6 +1440,15 @@ pub fn evaluate_genomes_parallel(
             num_train,
         );
 
+        // [DIAG] Log GPU address computation result
+        if diag_enabled && genome_idx == 0 {
+            let total_neurons: usize = neurons_per_cluster.iter().sum();
+            let gpu_addr_count = gpu_addresses.as_ref().map(|a| a.len()).unwrap_or(0);
+            eprintln!("[DIAG] genome 0 training: total_neurons={total_neurons}, gpu_addresses={} ({})",
+                if gpu_addresses.is_some() { "GPU" } else { "CPU" },
+                gpu_addr_count);
+        }
+
         // Train this genome using per-neuron bits (PARALLEL across examples)
         train_genome_in_slot(
             &group_memories,
@@ -1428,6 +1466,17 @@ pub fn evaluate_genomes_parallel(
             total_input_bits,
             gpu_addresses.as_deref(),
         );
+
+        // [DIAG] Log memory fill state after training
+        if diag_enabled && genome_idx == 0 {
+            for (gi, g) in groups.iter().enumerate() {
+                let mem = &group_memories[gi];
+                let (total_cells, filled) = mem.fill_stats();
+                eprintln!("[DIAG] post-train group {gi}: bits={} neurons={} clusters={} fill={filled}/{total_cells} ({:.1}%)",
+                    g.bits, g.neurons, g.cluster_count(),
+                    if total_cells > 0 { filled as f64 / total_cells as f64 * 100.0 } else { 0.0 });
+            }
+        }
 
         // Evaluate this genome - HYBRID Metal/CPU acceleration
         // - Dense groups (bits <= 12): Metal GPU (all examples at once)
@@ -1448,6 +1497,17 @@ pub fn evaluate_genomes_parallel(
             eval_input_bits, num_eval, total_input_bits
         );
 
+        // [DIAG] Log group summary for first genome
+        if diag_enabled && genome_idx == 0 {
+            eprintln!("[DIAG] genome 0: {} clusters, {} groups, {} eval examples, {} input bits",
+                num_clusters, groups.len(), num_eval, total_input_bits);
+            for (gi, g) in groups.iter().enumerate() {
+                let mem = &group_memories[gi];
+                eprintln!("[DIAG]   group {gi}: {} clusters, max_neurons={}, bits={}, total_neurons={}, is_dense={}, is_sparse={}",
+                    g.cluster_count(), g.neurons, g.bits, g.total_neurons(), mem.is_dense(), mem.is_sparse());
+            }
+        }
+
         // Process each group - Metal for dense, GPU sparse for sparse, CPU fallback
         for (group_idx, group) in groups.iter().enumerate() {
             let memory = &group_memories[group_idx];
@@ -1467,6 +1527,9 @@ pub fn evaluate_genomes_parallel(
                         crate::neuron_memory::MODE_TERNARY,
                     ) {
                         Ok(group_scores) => {
+                            if diag_enabled && genome_idx == 0 {
+                                eprintln!("[DIAG]   group {group_idx}: path=GPU_DENSE (ok)");
+                            }
                             for ex_idx in 0..num_eval {
                                 for (local_cluster, &cluster_id) in group.cluster_ids.iter().enumerate() {
                                     let score_idx = ex_idx * group.cluster_count() + local_cluster;
@@ -1475,8 +1538,14 @@ pub fn evaluate_genomes_parallel(
                             }
                             continue;
                         }
-                        Err(_) => {}
+                        Err(e) => {
+                            if diag_enabled && genome_idx == 0 {
+                                eprintln!("[DIAG]   group {group_idx}: GPU_DENSE failed: {e}");
+                            }
+                        }
                     }
+                } else if diag_enabled && genome_idx == 0 {
+                    eprintln!("[DIAG]   group {group_idx}: GPU_DENSE export_for_metal() returned None");
                 }
             }
 
@@ -1494,6 +1563,9 @@ pub fn evaluate_genomes_parallel(
                         crate::neuron_memory::MODE_TERNARY,
                     ) {
                         Ok(group_scores) => {
+                            if diag_enabled && genome_idx == 0 {
+                                eprintln!("[DIAG]   group {group_idx}: path=GPU_SPARSE (ok)");
+                            }
                             for ex_idx in 0..num_eval {
                                 for (local_cluster, &cluster_id) in group.cluster_ids.iter().enumerate() {
                                     let score_idx = ex_idx * group.cluster_count() + local_cluster;
@@ -1502,9 +1574,23 @@ pub fn evaluate_genomes_parallel(
                             }
                             continue;
                         }
-                        Err(_) => {}
+                        Err(e) => {
+                            if diag_enabled && genome_idx == 0 {
+                                eprintln!("[DIAG]   group {group_idx}: GPU_SPARSE failed: {e}");
+                            }
+                        }
                     }
+                } else if diag_enabled && genome_idx == 0 {
+                    eprintln!("[DIAG]   group {group_idx}: GPU_SPARSE export_for_gpu_sparse() returned None");
                 }
+            } else if diag_enabled && genome_idx == 0 && !memory.is_dense() {
+                let has_sparse = sparse_metal.is_some();
+                let is_sparse = memory.is_sparse();
+                eprintln!("[DIAG]   group {group_idx}: skipped GPU_SPARSE (has_eval={has_sparse}, is_sparse={is_sparse})");
+            }
+
+            if diag_enabled && genome_idx == 0 {
+                eprintln!("[DIAG]   group {group_idx}: path=CPU (fallback)");
             }
 
             // CPU path: evaluate examples in parallel using per-neuron bits
@@ -1538,6 +1624,26 @@ pub fn evaluate_genomes_parallel(
                     scores[cluster_id] = (sum / actual_neurons as f32) as f64;
                 }
             });
+        }
+
+        // [DIAG] Log score distribution for first genome, first few examples
+        if diag_enabled && genome_idx == 0 {
+            for ex_idx in 0..num_eval.min(3) {
+                let target = eval_targets[ex_idx] as usize;
+                let target_score = all_scores[ex_idx][target];
+                let max_score = all_scores[ex_idx].iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                let max_idx = all_scores[ex_idx].iter().enumerate()
+                    .max_by(|a, b| a.1.partial_cmp(b.1).unwrap()).unwrap().0;
+                let nonzero = all_scores[ex_idx].iter().filter(|&&s| s > 0.0).count();
+                let all_same = all_scores[ex_idx].iter().all(|&s| (s - all_scores[ex_idx][0]).abs() < 1e-12);
+                eprintln!("[DIAG] ex{ex_idx}: target={target} target_score={target_score:.6}, max_idx={max_idx} max_score={max_score:.6}, nonzero={nonzero}/{num_clusters}, all_same={all_same}");
+            }
+            // Summary: how many clusters have unique scores?
+            let mut unique_scores: std::collections::HashSet<u64> = std::collections::HashSet::new();
+            for &s in &all_scores[0] {
+                unique_scores.insert(s.to_bits());
+            }
+            eprintln!("[DIAG] ex0: unique_score_values={}", unique_scores.len());
         }
 
         // Compute CE and accuracy from pre-computed scores (parallel across examples)

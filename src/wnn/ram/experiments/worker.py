@@ -752,21 +752,33 @@ class FlowWorker:
             exp_weight_ce = exp_data.get("fitness_weight_ce") or default_weight_ce
             exp_weight_acc = exp_data.get("fitness_weight_acc") or default_weight_acc
 
-            # Grid search: derive grids from UI min/max params if not explicitly provided
-            neurons_grid = params.get("neurons_grid")
-            bits_grid = params.get("bits_grid")
-            if not neurons_grid:
-                mn = params.get("min_neurons", 5)
-                mx = params.get("max_neurons", 300)
-                # Round step to nearest 50, generate clean values: 5, 50, 100, 150, ...
-                step = max(10, round((mx - mn) / 6 / 50) * 50) or 50
-                neurons_grid = [mn] + list(range(((mn // step) + 1) * step, mx, step)) + [mx]
-            if not bits_grid:
-                mb = params.get("min_bits", 4)
-                xb = params.get("max_bits", 24)
-                # Round step to nearest 2 or 4, generate clean values: 4, 8, 12, ...
-                step = max(2, round((xb - mb) / 6 / 2) * 2) or 4
-                bits_grid = [mb] + list(range(((mb // step) + 1) * step, xb, step)) + [xb]
+            # Grid search: select grid based on stage type (tiered vs bitwise)
+            # For multi-stage flows, tiered stages use smaller grids
+            stage_cluster_types = params.get("stage_cluster_type", [])
+            is_tiered_stage = (
+                architecture_type == "multi_stage"
+                and ms_target_stage < len(stage_cluster_types)
+                and stage_cluster_types[ms_target_stage] == "tiered"
+            )
+
+            if is_tiered_stage:
+                neurons_grid = params.get("tiered_neurons_grid") or [3, 5, 7, 10, 15, 20, 25]
+                bits_grid = params.get("tiered_bits_grid") or [8, 12, 16, 20, 24]
+            else:
+                neurons_grid = params.get("neurons_grid")
+                bits_grid = params.get("bits_grid")
+                if not neurons_grid:
+                    mn = params.get("min_neurons", 5)
+                    mx = params.get("max_neurons", 300)
+                    # Round step to nearest 50, generate clean values: 5, 50, 100, 150, ...
+                    step = max(10, round((mx - mn) / 6 / 50) * 50) or 50
+                    neurons_grid = [mn] + list(range(((mn // step) + 1) * step, mx, step)) + [mx]
+                if not bits_grid:
+                    mb = params.get("min_bits", 4)
+                    xb = params.get("max_bits", 24)
+                    # Round step to nearest 2 or 4, generate clean values: 4, 8, 12, ...
+                    step = max(2, round((xb - mb) / 6 / 2) * 2) or 4
+                    bits_grid = [mb] + list(range(((mb // step) + 1) * step, xb, step)) + [xb]
             num_grid_configs = len(neurons_grid) * len(bits_grid)
             grid_top_k = params.get("grid_top_k", 5)  # Default: top-5 configs
             pop_size = exp_data.get("population_size") or params.get("population_size", 50)
@@ -826,11 +838,11 @@ class FlowWorker:
                 threshold_reference=max_iters,  # Full ramp within each phase
                 seed=seed,
                 cluster_type=cluster_type,
-                # Bitwise-specific bounds from flow params
-                bitwise_min_bits=params.get("min_bits"),
-                bitwise_max_bits=params.get("max_bits"),
-                bitwise_min_neurons=params.get("min_neurons"),
-                bitwise_max_neurons=params.get("max_neurons"),
+                # Stage-specific bounds: tiered stages use their grid extremes
+                bitwise_min_bits=min(bits_grid) if is_tiered_stage else params.get("min_bits"),
+                bitwise_max_bits=max(bits_grid) if is_tiered_stage else params.get("max_bits"),
+                bitwise_min_neurons=min(neurons_grid) if is_tiered_stage else params.get("min_neurons"),
+                bitwise_max_neurons=max(neurons_grid) if is_tiered_stage else params.get("max_neurons"),
                 # Grid search params
                 neurons_grid=neurons_grid if experiment_type == ExperimentType.GRID_SEARCH else None,
                 bits_grid=bits_grid if experiment_type == ExperimentType.GRID_SEARCH else None,
