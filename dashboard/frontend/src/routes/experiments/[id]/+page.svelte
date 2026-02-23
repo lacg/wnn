@@ -131,6 +131,7 @@
         experiment.current_iteration = newExp.current_iteration;
         experiment.best_ce = newExp.best_ce;
         experiment.best_accuracy = newExp.best_accuracy;
+        experiment.status_message = newExp.status_message;
         experiment.ended_at = newExp.ended_at;
         experiment.gating_status = newExp.gating_status;
         experiment.gating_results = newExp.gating_results;
@@ -806,6 +807,10 @@
         {/if}
       </div>
     </div>
+
+    {#if experiment.status === 'running' && experiment.status_message}
+      <div class="status-message">{experiment.status_message}</div>
+    {/if}
 
     <!-- Cumulative Validation Progression -->
     {#if cumulativeValidationProgression.length > 0}
@@ -1483,6 +1488,16 @@
     max-width: 1400px;
     margin: 0 auto;
     padding: 1rem;
+  }
+
+  .status-message {
+    font-size: 1rem;
+    color: var(--text-secondary);
+    background: var(--bg-secondary);
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    margin-bottom: 1rem;
+    font-family: var(--font-mono, monospace);
   }
 
   .loading, .error {

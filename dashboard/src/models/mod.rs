@@ -203,6 +203,8 @@ pub struct Experiment {
     pub current_iteration: Option<i32>,
     pub best_ce: Option<f64>,
     pub best_accuracy: Option<f64>,
+    /// Real-time status message (e.g., "Iter 3/50: source 2/10, 10/50 offspring")
+    pub status_message: Option<String>,
     /// Architecture type: tiered or bitwise
     #[serde(default)]
     pub architecture_type: ArchitectureType,

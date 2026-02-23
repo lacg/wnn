@@ -147,6 +147,8 @@ export interface Experiment {
   current_iteration: number | null;
   best_ce: number | null;
   best_accuracy: number | null;
+  // Real-time status message (e.g., "Iter 3/50: source 2/10, 10/50 offspring")
+  status_message: string | null;
   // Architecture type
   architecture_type?: 'tiered' | 'bitwise';
   // Gating analysis

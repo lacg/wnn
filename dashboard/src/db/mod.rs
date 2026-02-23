@@ -70,6 +70,11 @@ async fn run_migrations(pool: &DbPool) -> Result<()> {
         .execute(pool)
         .await;
 
+    // Migration: Add status_message to experiments for real-time progress tracking
+    let _ = sqlx::query("ALTER TABLE experiments ADD COLUMN status_message TEXT")
+        .execute(pool)
+        .await;
+
     // Migration: Add bitwise-specific fields to genomes
     let _ = sqlx::query("ALTER TABLE genomes ADD COLUMN architecture_type TEXT DEFAULT 'tiered'")
         .execute(pool)
@@ -969,7 +974,7 @@ pub mod queries {
                       population_size, pid, last_iteration, resume_checkpoint_id,
                       created_at, started_at, ended_at, paused_at,
                       phase_type, max_iterations, current_iteration, best_ce, best_accuracy,
-                      architecture_type, gating_status, gating_results
+                      status_message, architecture_type, gating_status, gating_results
                FROM experiments WHERE flow_id = ?
                ORDER BY sequence_order"#,
         )
@@ -1518,7 +1523,7 @@ pub mod queries {
                       e.population_size, e.pid, e.last_iteration, e.resume_checkpoint_id,
                       e.created_at, e.started_at, e.ended_at, e.paused_at,
                       e.phase_type, e.max_iterations, e.current_iteration, e.best_ce, e.best_accuracy,
-                      e.architecture_type
+                      e.status_message, e.architecture_type
                FROM experiments e
                LEFT JOIN flows f ON e.flow_id = f.id
                WHERE e.status = 'running'
@@ -1543,7 +1548,7 @@ pub mod queries {
                       population_size, pid, last_iteration, resume_checkpoint_id,
                       created_at, started_at, ended_at, paused_at,
                       phase_type, max_iterations, current_iteration, best_ce, best_accuracy,
-                      architecture_type, gating_status, gating_results
+                      status_message, architecture_type, gating_status, gating_results
                FROM experiments WHERE id = ?"#,
         )
         .bind(id)
@@ -1792,7 +1797,7 @@ pub mod queries {
                       population_size, pid, last_iteration, resume_checkpoint_id,
                       created_at, started_at, ended_at, paused_at,
                       phase_type, max_iterations, current_iteration, best_ce, best_accuracy,
-                      architecture_type, gating_status, gating_results
+                      status_message, architecture_type, gating_status, gating_results
                FROM experiments
                ORDER BY created_at DESC
                LIMIT ? OFFSET ?"#,
@@ -1926,6 +1931,7 @@ pub mod queries {
             current_iteration: row.try_get("current_iteration").ok(),
             best_ce: row.try_get("best_ce").ok(),
             best_accuracy: row.try_get("best_accuracy").ok(),
+            status_message: row.try_get::<Option<String>, _>("status_message").ok().flatten(),
             architecture_type,
             gating_status,
             gating_results,

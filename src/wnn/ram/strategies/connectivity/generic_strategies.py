@@ -1374,6 +1374,12 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 
 			# Generate offspring via hook (overridable for Rust acceleration)
 			needed_offspring = cfg.population_size - len(new_population)
+			if self._tracker and self._tracker_experiment_id:
+				best_ce_str = f"{best_fitness:.4f}" if best_fitness < 999 else "N/A"
+				self._tracker.update_experiment_progress(
+					self._tracker_experiment_id,
+					status_message=f"Gen {generation + 1}/{cfg.generations}: evaluating {needed_offspring} offspring (best CE={best_ce_str})",
+				)
 			offspring = self._generate_offspring(population, needed_offspring, current_threshold, generation)
 
 			# Combine elites with viable offspring
@@ -1990,9 +1996,15 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 		# Single tabu list
 		tabu_list: deque = deque(maxlen=cfg.tabu_size)
 
-		# Re-evaluate initial genome to get actual accuracy (previous phase only passes CE)
+		# Use cached eval for initial genome if available from previous phase
 		initial_accuracy: Optional[float] = None
-		if batch_evaluate_fn is not None:
+		initial_evals = kwargs.get('initial_evals')
+		if initial_evals:
+			# Find the best genome's eval from initial_evals (first entry = best from prev phase)
+			initial_fitness = initial_evals[0][0]
+			initial_accuracy = initial_evals[0][1]
+			self._log.info(f"[{self.name}] Using cached eval for initial genome: CE={initial_fitness:.4f}, Acc={initial_accuracy:.2%}")
+		elif batch_evaluate_fn is not None:
 			try:
 				init_results = batch_evaluate_fn([initial_genome])
 				if init_results:
@@ -2011,8 +2023,16 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 
 		# Seed with initial neighbors if provided (e.g., from previous GA phase)
 		if initial_neighbors:
-			self._log.info(f"[{self.name}] Seeding from {len(initial_neighbors)} neighbors")
-			if batch_evaluate_fn is not None:
+			has_cached = (
+				initial_evals is not None
+				and len(initial_evals) == len(initial_neighbors)
+			)
+			if has_cached:
+				self._log.info(f"[{self.name}] Using {len(initial_neighbors)} cached evals from previous phase")
+				seed_fitness = [ce for ce, _ in initial_evals]
+				seed_accuracy = [acc for _, acc in initial_evals]
+			elif batch_evaluate_fn is not None:
+				self._log.info(f"[{self.name}] Evaluating {len(initial_neighbors)} neighbors (no cached evals)")
 				results = batch_evaluate_fn(initial_neighbors, min_accuracy=current_threshold)
 				seed_fitness = [r[0] for r in results]
 				seed_accuracy = [r[1] for r in results]
@@ -2113,6 +2133,13 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 				offspring: list[tuple[T, float, Optional[float]]] = []
 				for si, source in enumerate(sources):
 					n = per_source + (1 if si < remainder else 0)
+					# Update status message for dashboard progress
+					if self._tracker and self._tracker_experiment_id:
+						best_ce_str = f"{best_fitness:.4f}" if best_fitness < 999 else "N/A"
+						self._tracker.update_experiment_progress(
+							self._tracker_experiment_id,
+							status_message=f"Iter {iteration + 1}/{cfg.iterations}: source {si + 1}/{n_sources}, {len(offspring)}/{total_offspring} offspring (best CE={best_ce_str})",
+						)
 					batch = self._generate_neighbors(
 						best_genome=source, n_neighbors=n,
 						threshold=current_threshold, iteration=iteration,
@@ -2121,6 +2148,12 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 					offspring.extend(batch)
 			else:
 				# Classic TS: all offspring from single best-ranked genome
+				if self._tracker and self._tracker_experiment_id:
+					best_ce_str = f"{best_fitness:.4f}" if best_fitness < 999 else "N/A"
+					self._tracker.update_experiment_progress(
+						self._tracker_experiment_id,
+						status_message=f"Iter {iteration + 1}/{cfg.iterations}: evaluating {cfg.neighbors_per_iter} neighbors (best CE={best_ce_str})",
+					)
 				offspring = self._generate_neighbors(
 					best_genome=best_ranked_genome,
 					n_neighbors=cfg.neighbors_per_iter,

@@ -320,6 +320,13 @@ class DataLayer:
         """)
         conn.commit()
 
+        # Schema migrations (add columns that may not exist in older databases)
+        try:
+            conn.execute("ALTER TABLE experiments ADD COLUMN status_message TEXT")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
     def close(self):
         """Close the database connection for the current thread."""
         if hasattr(self._local, "conn"):
@@ -494,6 +501,7 @@ class DataLayer:
         best_ce: Optional[float] = None,
         best_accuracy: Optional[float] = None,
         resume_checkpoint_id: Optional[int] = None,
+        status_message: Optional[str] = None,
     ) -> None:
         """Update experiment progress (simplified model - no phase layer)."""
         with self._transaction() as conn:
@@ -512,6 +520,9 @@ class DataLayer:
             if resume_checkpoint_id is not None:
                 updates.append("resume_checkpoint_id = ?")
                 params.append(resume_checkpoint_id)
+            if status_message is not None:
+                updates.append("status_message = ?")
+                params.append(status_message)
             if updates:
                 params.append(experiment_id)
                 conn.execute(

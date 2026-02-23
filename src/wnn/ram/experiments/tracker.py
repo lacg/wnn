@@ -214,6 +214,7 @@ class ExperimentTracker(ABC):
         best_ce: Optional[float] = None,
         best_accuracy: Optional[float] = None,
         checkpoint_id: Optional[int] = None,
+        status_message: Optional[str] = None,
     ) -> None:
         """Update experiment progress."""
         pass
@@ -474,9 +475,11 @@ class SqliteTracker(ExperimentTracker):
         best_ce: Optional[float] = None,
         best_accuracy: Optional[float] = None,
         checkpoint_id: Optional[int] = None,
+        status_message: Optional[str] = None,
     ) -> None:
         self._db.update_experiment_progress(
-            experiment_id, current_iteration, best_ce, best_accuracy, checkpoint_id
+            experiment_id, current_iteration, best_ce, best_accuracy, checkpoint_id,
+            status_message=status_message,
         )
 
     def update_experiment_max_iterations(self, experiment_id: int, max_iterations: int) -> None:
