@@ -1040,12 +1040,12 @@ class FlowWorker:
     def _parse_fitness_calculator(self, fitness_calculator: Optional[str]) -> FitnessCalculatorType:
         """Parse fitness calculator string to enum."""
         if not fitness_calculator:
-            return FitnessCalculatorType.NORMALIZED  # Default
+            return FitnessCalculatorType.HARMONIC_RANK  # Default
         try:
             return FitnessCalculatorType[fitness_calculator.upper()]
         except KeyError:
-            self._log(f"Warning: Unknown fitness calculator '{fitness_calculator}', using NORMALIZED")
-            return FitnessCalculatorType.NORMALIZED
+            self._log(f"Warning: Unknown fitness calculator '{fitness_calculator}', using HARMONIC_RANK")
+            return FitnessCalculatorType.HARMONIC_RANK
 
     def _parse_tier_config(self, tier_config) -> Optional[list[tuple]]:
         """Parse tier config from string or array format.

@@ -301,6 +301,11 @@ class ExperimentTracker(ABC):
         """Record multiple genome evaluations. Returns evaluation IDs."""
         pass
 
+    @abstractmethod
+    def update_genome_evaluation_fitness_batch(self, updates: list[tuple[int, float]]) -> None:
+        """Update fitness_score for multiple genome evaluations."""
+        pass
+
     # =========================================================================
     # Health check tracking
     # =========================================================================
@@ -567,6 +572,10 @@ class SqliteTracker(ExperimentTracker):
     ) -> list[int]:
         return self._db.create_genome_evaluations_batch(evaluations)
 
+    def update_genome_evaluation_fitness_batch(self, updates: list[tuple[int, float]]) -> None:
+        """Update fitness_score for multiple genome evaluations."""
+        self._db.update_genome_evaluation_fitness_batch(updates)
+
     def record_health_check(
         self,
         iteration_id: int,
@@ -659,6 +668,9 @@ class NoOpTracker(ExperimentTracker):
 
     def record_genome_evaluations_batch(self, evaluations: list[dict]) -> list[int]:
         return [self._get_id() for _ in evaluations]
+
+    def update_genome_evaluation_fitness_batch(self, updates: list[tuple[int, float]]) -> None:
+        pass
 
     def record_health_check(self, iteration_id: int, k: int, top_k_ce: float, top_k_accuracy: float, **kwargs) -> int:
         return self._get_id()

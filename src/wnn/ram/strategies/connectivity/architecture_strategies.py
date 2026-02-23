@@ -1826,7 +1826,7 @@ class GridSearchStrategy:
 							genome_id = self._tracker.get_or_create_genome(
 								self._tracker_experiment_id, genome_config
 							)
-							self._tracker.record_genome_evaluation(
+							eval_id = self._tracker.record_genome_evaluation(
 								iteration_id=iter_id,
 								genome_id=genome_id,
 								position=0,
@@ -1835,6 +1835,7 @@ class GridSearchStrategy:
 								accuracy=acc,
 								fitness_score=None,
 							)
+							results[-1]["eval_id"] = eval_id
 					self._tracker.update_experiment_progress(
 						self._tracker_experiment_id,
 						current_iteration=idx + 1,
@@ -1857,6 +1858,18 @@ class GridSearchStrategy:
 		for r, score in zip(results, fitness_scores):
 			r["fitness"] = score
 		results.sort(key=lambda r: r["fitness"])
+
+		# Update fitness scores in DB for per-config genome evaluations
+		if self._tracker and self._tracker_experiment_id:
+			fitness_updates = [
+				(r["eval_id"], r["fitness"])
+				for r in results if "eval_id" in r
+			]
+			if fitness_updates:
+				try:
+					self._tracker.update_genome_evaluation_fitness_batch(fitness_updates)
+				except Exception as e:
+					self._log(f"  Warning: failed to update fitness scores: {e}")
 
 		self._log(f"\n{'─'*70}")
 		self._log(f"Grid Search Rankings (by {calculator.name}):")

@@ -423,8 +423,13 @@
         });
       }
 
-      // Sort by CE (fitness is null for per-config iterations, computed later)
-      results.sort((a, b) => a.ce - b.ce);
+      // Sort by fitness (lower = better), fall back to CE if fitness unavailable
+      results.sort((a, b) => {
+        if (a.fitness != null && b.fitness != null) return a.fitness - b.fitness;
+        if (a.fitness != null) return -1;
+        if (b.fitness != null) return 1;
+        return a.ce - b.ce;
+      });
       gridSearchResults = results.map((r, i) => ({ ...r, rank: i + 1 }));
 
       // Load expanded population from the final iteration (N+1)

@@ -786,6 +786,20 @@ class DataLayer:
                 ids.append(cursor.lastrowid)
         return ids
 
+    def update_genome_evaluation_fitness_batch(self, updates: list[tuple[int, float]]) -> None:
+        """Update fitness_score for multiple genome evaluations.
+
+        Args:
+            updates: List of (eval_id, fitness_score) tuples.
+        """
+        if not updates:
+            return
+        with self._transaction() as conn:
+            conn.executemany(
+                "UPDATE genome_evaluations SET fitness_score = ? WHERE id = ?",
+                [(score, eval_id) for eval_id, score in updates],
+            )
+
     def get_iteration_evaluations(self, iteration_id: int) -> list[dict]:
         """Get all genome evaluations for an iteration."""
         rows = self._get_conn().execute(
