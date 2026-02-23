@@ -503,7 +503,7 @@ class Experiment:
 			else:
 				self.log(f"  Evaluating initial population for validation selection ({len(seed_pop)} genomes)...")
 				init_evals = self.evaluator.evaluate_batch(seed_pop)
-				initial_evals = init_evals  # Reuse in strategy to avoid double evaluation
+				initial_evals = [(r.ce, r.accuracy) for r in init_evals]  # Reuse in strategy (plain tuples)
 			self._run_validation(
 				population=seed_pop,
 				evals=init_evals,
