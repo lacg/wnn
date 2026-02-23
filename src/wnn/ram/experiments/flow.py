@@ -918,7 +918,14 @@ class Flow:
 						current_population = result.final_population
 						current_threshold = result.final_threshold
 						current_fitness = result.final_fitness
-						current_evals = result.population_metrics  # May be None if not in checkpoint
+						current_evals = result.population_metrics
+						# Self-heal old checkpoints: evaluate population and re-save with metrics
+						if current_evals is None and current_population:
+							self.log(f"  Backfilling population_metrics for experiment {idx} ({len(current_population)} genomes)...")
+							eval_results = self.evaluator.evaluate_batch(current_population)
+							current_evals = [(r.ce, r.accuracy) for r in eval_results]
+							result.population_metrics = current_evals
+							self._resave_checkpoint(idx, result)
 						self.log(f"Loaded checkpoint for experiment {idx}: CE={current_fitness:.4f}")
 					else:
 						# Checkpoint not found - try to query database for completed phase results
@@ -1388,6 +1395,26 @@ class Flow:
 		except Exception as e:
 			self.log(f"Warning: Failed to load checkpoint for experiment {idx}: {e}")
 			return None
+
+	def _resave_checkpoint(self, idx: int, result: ExperimentResult) -> None:
+		"""Re-save a checkpoint with updated fields (e.g. backfilled population_metrics)."""
+		if not self.checkpoint_dir:
+			return
+		exp_dir = self.checkpoint_dir / f"exp_{idx:02d}"
+		checkpoints = list(exp_dir.glob("*.json.gz"))
+		if not checkpoints:
+			return
+		checkpoint_path = checkpoints[0]
+		try:
+			with gzip.open(checkpoint_path, 'rt', encoding='utf-8') as f:
+				data = json.load(f)
+			if result.population_metrics is not None:
+				data["population_metrics"] = result.population_metrics
+			with gzip.open(checkpoint_path, 'wt', encoding='utf-8') as f:
+				json.dump(data, f, separators=(',', ':'))
+			self.log(f"  Re-saved checkpoint with population_metrics: {checkpoint_path}")
+		except Exception as e:
+			self.log(f"  Warning: Failed to re-save checkpoint: {e}")
 
 	def _load_from_database(
 		self,
