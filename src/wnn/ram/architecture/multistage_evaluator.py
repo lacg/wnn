@@ -23,6 +23,7 @@ Usage:
 	combined = evaluator.compute_combined_metrics([stage0_genome, stage1_genome])
 """
 
+import logging
 import math
 import random
 import time
@@ -293,6 +294,7 @@ class MultiStageEvaluator(BaseEvaluator):
 		eval_idx: int,
 	) -> list[tuple[float, float, float]]:
 		bits_flat, neurons_flat, conns_flat = self._flatten_genomes(genomes)
+		t0 = time.time()
 		raw = self._cache.evaluate_tiered_genomes(
 			stage=stage,
 			bits_per_neuron_flat=bits_flat,
@@ -305,6 +307,9 @@ class MultiStageEvaluator(BaseEvaluator):
 			neuron_sample_rate=self._neuron_sample_rate,
 			rng_seed=self._seed,
 		)
+		elapsed = time.time() - t0
+		if len(genomes) > 0:
+			logging.debug(f"[tiered_rust] {len(genomes)} genomes in {elapsed:.1f}s ({elapsed/len(genomes):.2f}s/genome)")
 		# Tiered returns (ce, acc), add 0.0 for bit_acc to match interface
 		return [(ce, acc, 0.0) for ce, acc in raw]
 

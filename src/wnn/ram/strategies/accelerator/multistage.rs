@@ -1612,7 +1612,7 @@ pub fn compute_combined_ce(
 
 /// Evaluate tiered genomes for a given stage using the adaptive evaluation pipeline.
 ///
-/// Delegates to `adaptive::evaluate_genomes_parallel()` which uses Metal GPU + rayon CPU
+/// Delegates to `adaptive::evaluate_genomes_parallel_hybrid()` which uses Metal GPU + rayon CPU
 /// with target+negatives training and softmax CE.
 ///
 /// Returns: Vec<(ce, accuracy)> per genome.
@@ -1649,7 +1649,7 @@ pub fn evaluate_tiered_genomes(
     crate::neuron_memory::set_empty_value(empty_value);
     crate::neuron_memory::set_memory_mode(memory_mode);
 
-    crate::adaptive::evaluate_genomes_parallel(
+    crate::adaptive::evaluate_genomes_parallel_hybrid(
         bits_per_neuron_flat,
         neurons_per_cluster_flat,
         connections_flat,
