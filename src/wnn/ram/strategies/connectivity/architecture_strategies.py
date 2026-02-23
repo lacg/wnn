@@ -1598,7 +1598,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 		try:
 			results_by_source = evaluator.search_neighbors_batch(
 				sources=batch_sources,
-				max_attempts_multiplier=3,
+				max_attempts_multiplier=1,
 				accuracy_threshold=threshold,
 				min_bits=arch_cfg.min_bits,
 				max_bits=arch_cfg.max_bits,

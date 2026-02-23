@@ -2776,8 +2776,8 @@ pub fn evaluate_genomes_parallel_hybrid(
         empty_value,
     });
 
-    // Get persistent eval worker (initialized once, stays alive for session)
-    let eval_worker = get_eval_worker();
+    // Warm up the persistent eval worker (initialized once, stays alive for session)
+    let _eval_worker = get_eval_worker();
 
     // Collect all results
     let mut all_results: Vec<(usize, f64, f64)> = Vec::with_capacity(num_genomes);
@@ -2819,10 +2819,39 @@ pub fn evaluate_genomes_parallel_hybrid(
 
         let train_start = std::time::Instant::now();
 
-        // Train batch in parallel - each genome builds its own config (handles variable architectures)
-        let batch_exports: Vec<(usize, GenomeExport)> = (0..current_batch_size)
+        // Stream exports from training to eval via bounded channel.
+        // This ensures only 1-2 exports are in memory during eval, avoiding the
+        // 5.5x cache pollution penalty from holding all exports simultaneously.
+        // Channel capacity 2 allows training to stay slightly ahead of eval.
+        let (export_tx, export_rx) = std::sync::mpsc::sync_channel::<(usize, GenomeExport)>(2);
+
+        // Spawn drainer thread: receives and evaluates exports ONE AT A TIME.
+        // Each export is dropped after eval before the next is received,
+        // keeping memory footprint to ~1-2 exports (~2GB) instead of N exports.
+        let eval_data_for_drain = Arc::clone(&eval_data);
+        let drainer = std::thread::spawn(move || {
+            let eval_worker = get_eval_worker();
+            let mut results: Vec<(usize, f64, f64)> = Vec::new();
+            let mut drain_eval_ms = 0u128;
+            let mut drain_sparse_keys = 0usize;
+            for (genome_idx, export) in export_rx {
+                drain_sparse_keys += export.sparse_exports.iter()
+                    .map(|se| se.keys.len()).sum::<usize>();
+                let eval_start = std::time::Instant::now();
+                let single = eval_worker.evaluate(
+                    vec![(genome_idx, export)],
+                    Arc::clone(&eval_data_for_drain),
+                );
+                drain_eval_ms += eval_start.elapsed().as_millis();
+                results.extend(single);
+            }
+            (results, drain_eval_ms, drain_sparse_keys)
+        });
+
+        // Train batch in parallel, streaming exports through channel as they complete
+        (0..current_batch_size)
             .into_par_iter()
-            .map(|local_idx| {
+            .for_each(|local_idx| {
                 let genome_idx = batch_start + local_idx;
 
                 // Get this genome's config (per-neuron bits + per-cluster neurons)
@@ -2915,26 +2944,19 @@ pub fn evaluate_genomes_parallel_hybrid(
                 // Export for GPU using THIS genome's groups
                 let export = export_genome_for_gpu(&memories, &groups, &gpu_connections);
 
-                (genome_idx, export)
-            })
-            .collect();
+                // Stream export to drainer (blocks if channel full — back-pressure)
+                // DashMaps and training data are freed here; only the export crosses the channel
+                export_tx.send((genome_idx, export)).unwrap();
+            });
+
+        drop(export_tx); // Signal end of stream — drainer loop exits
 
         let train_elapsed = train_start.elapsed();
 
-        // Track sparse export sizes for timing diagnostics
-        let sparse_keys_total: usize = if timing_enabled {
-            batch_exports.iter()
-                .map(|(_, export)| export.sparse_exports.iter().map(|se| se.keys.len()).sum::<usize>())
-                .sum()
-        } else { 0 };
+        // Collect eval results from drainer thread
+        let (batch_results, batch_eval_ms, batch_sparse_keys) = drainer.join().unwrap();
 
-        let eval_start = std::time::Instant::now();
-
-        // Send to persistent eval worker and get results
-        let batch_results = eval_worker.evaluate(batch_exports, Arc::clone(&eval_data));
-
-        let eval_elapsed_secs = eval_start.elapsed().as_secs_f64();
-        let batch_total_secs = train_elapsed.as_secs_f64() + eval_elapsed_secs;
+        let batch_total_secs = train_elapsed.as_secs_f64();
 
         // Log results with CE/Acc after batch completes
         if progress_log {
@@ -2972,8 +2994,8 @@ pub fn evaluate_genomes_parallel_hybrid(
 
         if timing_enabled {
             total_train_ms += train_elapsed.as_millis();
-            total_eval_ms += (eval_elapsed_secs * 1000.0) as u128;
-            total_sparse_keys += sparse_keys_total;
+            total_eval_ms += batch_eval_ms;
+            total_sparse_keys += batch_sparse_keys;
         }
     }
 
