@@ -455,6 +455,7 @@ class CachedEvaluator(BaseEvaluator):
         total_generations: Optional[int] = None,
         return_best_n: bool = True,
         mutable_clusters: Optional[list[int]] = None,
+        phase_type: int = 0,
     ) -> list[ClusterGenome]:
         """
         Search for neighbor genomes above accuracy threshold, entirely in Rust.
@@ -522,6 +523,7 @@ class CachedEvaluator(BaseEvaluator):
             total_generations=total_generations,
             return_best_n=return_best_n,
             mutable_clusters=mutable_clusters,
+            phase_type=phase_type,
         )
 
         # Convert results to ClusterGenome objects
@@ -560,6 +562,7 @@ class CachedEvaluator(BaseEvaluator):
         total_generations: Optional[int] = None,
         return_best_n: bool = True,
         mutable_clusters: Optional[list[int]] = None,  # List of cluster indices to mutate (None = all)
+        phase_type: int = 0,
     ) -> OffspringSearchResult:
         """
         Search for GA offspring above accuracy threshold, entirely in Rust.
@@ -643,6 +646,7 @@ class CachedEvaluator(BaseEvaluator):
             total_generations=total_generations,
             return_best_n=return_best_n,
             mutable_clusters=mutable_clusters,  # Tier0-only: only mutate first N clusters
+            phase_type=phase_type,
         )
 
         # Convert results to ClusterGenome objects

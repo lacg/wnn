@@ -723,6 +723,7 @@ class BitwiseEvaluator(BaseEvaluator):
 		total_generations: Optional[int] = None,
 		return_best_n: bool = True,
 		mutable_clusters: Optional[list[int]] = None,
+		phase_type: int = 0,
 	) -> list[ClusterGenome]:
 		"""Search for neighbor genomes above accuracy threshold.
 
@@ -807,6 +808,7 @@ class BitwiseEvaluator(BaseEvaluator):
 		total_generations: Optional[int] = None,
 		return_best_n: bool = True,
 		mutable_clusters: Optional[list[int]] = None,
+		phase_type: int = 0,
 	) -> OffspringSearchResult:
 		"""Search for GA offspring above accuracy threshold.
 

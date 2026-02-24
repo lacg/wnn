@@ -709,6 +709,7 @@ class MultiStageEvaluator(BaseEvaluator):
 		total_generations: Optional[int] = None,
 		return_best_n: bool = True,
 		mutable_clusters: Optional[list[int]] = None,
+		phase_type: int = 0,
 	) -> list[ClusterGenome]:
 		"""Search for neighbor genomes above accuracy threshold."""
 		if train_subset_idx is None:
@@ -778,6 +779,7 @@ class MultiStageEvaluator(BaseEvaluator):
 		seed: Optional[int] = None,
 		return_best_n: bool = True,
 		mutable_clusters: Optional[list[int]] = None,
+		phase_type: int = 0,
 	) -> list[list[ClusterGenome]]:
 		"""Search neighbors for multiple source genomes in a single Rust call.
 
@@ -877,6 +879,7 @@ class MultiStageEvaluator(BaseEvaluator):
 		total_generations: Optional[int] = None,
 		return_best_n: bool = True,
 		mutable_clusters: Optional[list[int]] = None,
+		phase_type: int = 0,
 	):
 		"""Search for GA offspring above accuracy threshold."""
 		from wnn.ram.architecture.cached_evaluator import OffspringSearchResult
