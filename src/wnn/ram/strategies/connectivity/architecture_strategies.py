@@ -877,6 +877,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 				train_subset_idx=self._phase_train_idx,
 				eval_subset_idx=0,
 				seed=self._seed_offset + generation,
+				logger=self._log,
 				generation=generation,
 				total_generations=cfg.generations,
 				return_best_n=True,
@@ -1191,6 +1192,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				train_subset_idx=self._phase_train_idx,
 				eval_subset_idx=0,
 				seed=self._seed_offset + iteration * 1000,
+				logger=self._log,
 				generation=iteration,
 				total_generations=cfg.iterations,
 				return_best_n=True,
@@ -1280,6 +1282,9 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				return_best_n=True,
 				mutable_clusters=arch_cfg.mutable_clusters,
 				phase_type=int(self._phase_type),
+				logger=self._log,
+				generation=iteration,
+				total_generations=cfg.iterations,
 			)
 		finally:
 			if hasattr(evaluator, 'set_progress_callback'):

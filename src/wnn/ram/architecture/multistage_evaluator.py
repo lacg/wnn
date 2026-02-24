@@ -582,6 +582,9 @@ class MultiStageEvaluator(BaseEvaluator):
 		return_best_n: bool = True,
 		mutable_clusters: Optional[list[int]] = None,
 		phase_type: int = 0,
+		logger: Optional[Callable[[str], None]] = None,
+		generation: Optional[int] = None,
+		total_generations: Optional[int] = None,
 	) -> list[list[ClusterGenome]]:
 		"""Search neighbors for multiple source genomes in a single eval call.
 
@@ -626,10 +629,23 @@ class MultiStageEvaluator(BaseEvaluator):
 			return [[] for _ in sources]
 
 		# Single Rust evaluation call for ALL candidates
+		start_t = time.time()
 		if self._is_stage_tiered(self._target_stage):
 			results = self._evaluate_tiered_rust(all_candidates, self._target_stage, train_subset_idx, eval_subset_idx)
 		else:
 			results = self._evaluate_bitwise_rust(self._target_stage, all_candidates, train_subset_idx, eval_subset_idx)
+		elapsed = time.time() - start_t
+
+		# Log progress if logger provided
+		log = logger if logger is not None else lambda x: None
+		if generation is not None and results:
+			gen = generation + 1
+			total = total_generations or "?"
+			best_ce = min(r[0] for r in results)
+			best_acc = max(r[1] for r in results)
+			best_bit_acc = max(r[2] for r in results)
+			log(f"[Gen {gen:02d}/{total}] {len(all_candidates)} candidates in {elapsed:.1f}s "
+				f"(best CE={best_ce:.4f}, Acc={best_acc:.2%}, BitAcc={best_bit_acc:.2%})")
 
 		# Cache fitness on genomes
 		for g, (ce, acc, bit_acc) in zip(all_candidates, results):

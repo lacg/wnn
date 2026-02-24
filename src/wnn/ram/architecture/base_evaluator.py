@@ -328,6 +328,7 @@ class BaseEvaluator(ABC):
 		eval_subset_idx: Optional[int] = None,
 		seed: Optional[int] = None,
 		log_path: Optional[str] = None,
+		logger: Optional[Callable[[str], None]] = None,
 		generation: Optional[int] = None,
 		total_generations: Optional[int] = None,
 		return_best_n: bool = True,
@@ -370,6 +371,8 @@ class BaseEvaluator(ABC):
 
 			results = self.evaluate_batch(
 				batch, train_subset_idx, eval_subset_idx,
+				logger=logger, generation=generation,
+				total_generations=total_generations,
 			)
 			evaluated += len(results)
 
@@ -409,6 +412,7 @@ class BaseEvaluator(ABC):
 		eval_subset_idx: Optional[int] = None,
 		seed: Optional[int] = None,
 		log_path: Optional[str] = None,
+		logger: Optional[Callable[[str], None]] = None,
 		generation: Optional[int] = None,
 		total_generations: Optional[int] = None,
 		return_best_n: bool = True,
@@ -462,6 +466,8 @@ class BaseEvaluator(ABC):
 
 			results = self.evaluate_batch(
 				batch, train_subset_idx, eval_subset_idx,
+				logger=logger, generation=generation,
+				total_generations=total_generations,
 			)
 			evaluated += len(results)
 
@@ -501,6 +507,9 @@ class BaseEvaluator(ABC):
 		return_best_n: bool = True,
 		mutable_clusters: Optional[list[int]] = None,
 		phase_type: int = 0,
+		logger: Optional[Callable[[str], None]] = None,
+		generation: Optional[int] = None,
+		total_generations: Optional[int] = None,
 	) -> list[list[ClusterGenome]]:
 		"""Search neighbors for multiple source genomes.
 
@@ -519,6 +528,8 @@ class BaseEvaluator(ABC):
 				seed, return_best_n=return_best_n,
 				mutable_clusters=mutable_clusters,
 				phase_type=phase_type,
+				logger=logger, generation=generation,
+				total_generations=total_generations,
 			)
 			results.append(neighbors)
 		return results
