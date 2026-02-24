@@ -299,11 +299,14 @@ kernel void sparse_forward_to_buffer(
     device float* shared_buffer [[buffer(8)]],         // Shared across all groups
     uint2 thread_pos [[thread_position_in_grid]]
 ) {
-    uint local_cluster = thread_pos.x;
-    uint example_idx = thread_pos.y;
+    // X = examples (SIMD-coalesced), Y = clusters
+    // This ensures 32 threads in a SIMD group access the SAME cluster's key arrays
+    // for different examples, maximizing GPU cache reuse during binary search.
+    uint example_idx = thread_pos.x;
+    uint local_cluster = thread_pos.y;
 
-    if (local_cluster >= params.num_group_clusters) return;
     if (example_idx >= params.num_examples) return;
+    if (local_cluster >= params.num_group_clusters) return;
 
     device const ulong* packed_input = packed_input_flat + example_idx * params.words_per_example;
     uint start_neuron = local_cluster * params.neurons_per_cluster;
@@ -342,11 +345,12 @@ kernel void sparse_forward_to_buffer_masked(
     device float* shared_buffer [[buffer(9)]],              // Shared across all groups
     uint2 thread_pos [[thread_position_in_grid]]
 ) {
-    uint local_cluster = thread_pos.x;
-    uint example_idx = thread_pos.y;
+    // X = examples (SIMD-coalesced), Y = clusters
+    uint example_idx = thread_pos.x;
+    uint local_cluster = thread_pos.y;
 
-    if (local_cluster >= params.num_group_clusters) return;
     if (example_idx >= params.num_examples) return;
+    if (local_cluster >= params.num_group_clusters) return;
 
     device const ulong* packed_input = packed_input_flat + example_idx * params.words_per_example;
     uint actual_neuron_count = actual_neurons[local_cluster];

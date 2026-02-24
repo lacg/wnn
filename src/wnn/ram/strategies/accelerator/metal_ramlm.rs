@@ -1883,10 +1883,11 @@ impl MetalGroupEvaluator {
         encoder.set_buffer(7, Some(&params_buffer), 0);
         encoder.set_buffer(8, Some(scores_buffer), 0);
 
-        let grid_size = MTLSize::new(num_group_clusters as u64, num_examples as u64, 1);
+        // Grid: X = examples (SIMD-coalesced), Y = clusters
+        let grid_size = MTLSize::new(num_examples as u64, num_group_clusters as u64, 1);
         let thread_group_size = MTLSize::new(
-            32.min(num_group_clusters as u64),
-            8.min(num_examples as u64),
+            32.min(num_examples as u64),
+            8.min(num_group_clusters as u64),
             1,
         );
         encoder.dispatch_threads(grid_size, thread_group_size);
@@ -2074,10 +2075,13 @@ impl MetalGroupEvaluator {
                 encoder.set_buffer(8, Some(scores_buffer), 0);
             }
 
-            let grid_size = MTLSize::new(num_group_clusters as u64, num_examples as u64, 1);
+            // Grid: X = examples (SIMD-coalesced), Y = clusters
+            // SIMD groups of 32 threads span X, so all threads in a group
+            // access the SAME cluster's key arrays → cache-friendly binary search
+            let grid_size = MTLSize::new(num_examples as u64, num_group_clusters as u64, 1);
             let thread_group_size = MTLSize::new(
-                32.min(num_group_clusters as u64),
-                8.min(num_examples as u64),
+                32.min(num_examples as u64),
+                8.min(num_group_clusters as u64),
                 1,
             );
             encoder.dispatch_threads(grid_size, thread_group_size);
