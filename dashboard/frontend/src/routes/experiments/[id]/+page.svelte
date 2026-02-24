@@ -1272,7 +1272,7 @@
           <div class="gating-header">
             <span class="gating-title">Seeded Population{#if !seedEvalComplete} (evaluating...){/if}</span>
             <span class="gating-meta">
-              {expandedPopulation.length} genomes{#if !seedEvalComplete} so far{/if} &middot;
+              {expandedPopulation.length} genomes{#if !seedEvalComplete}&nbsp;so far{/if} &middot;
               Best CE: {bestCeGenome.ce.toFixed(4)} ({bestCeGenome.neurons}n {bestCeGenome.bits}b) &middot;
               Best Acc: {(bestAccGenome.accuracy * 100).toFixed(2)}% ({bestAccGenome.neurons}n {bestAccGenome.bits}b)
             </span>
