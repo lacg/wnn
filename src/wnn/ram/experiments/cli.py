@@ -401,9 +401,9 @@ def flow_run(
 			)
 			rprint(f"[dim]  Bitwise mode: {evaluator}[/dim]")
 		else:
-			from wnn.ram.strategies.connectivity.evaluator import CachedEvaluator
+			from wnn.ram.architecture.tiered_evaluator import TieredEvaluator
 
-			evaluator = CachedEvaluator(
+			evaluator = TieredEvaluator(
 				train_tokens=train_tokens,
 				eval_tokens=eval_tokens,
 				vocab_size=tokenizer.vocab_size,

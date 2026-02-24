@@ -690,7 +690,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		seed: Optional[int] = None,
 		logger: Optional[Callable[[str], None]] = None,
 		batch_evaluator: Optional['RustParallelEvaluator'] = None,
-		cached_evaluator: Optional[Any] = None,  # CachedEvaluator for Rust search_offspring
+		cached_evaluator: Optional[Any] = None,  # BaseEvaluator for Rust search_offspring
 		checkpoint_config: Optional[CheckpointConfig] = None,  # Checkpoint configuration
 		phase_name: str = "GA Optimization",  # Phase name for checkpoints
 		shutdown_check: Optional[Callable[[], bool]] = None,  # Callable returning True if shutdown requested
@@ -722,7 +722,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		return genome.clone()
 
 	def mutate_genome(self, genome: 'ClusterGenome', mutation_rate: float) -> 'ClusterGenome':
-		"""Phase-aware mutation dispatching to ClusterGenome.mutate_phased()."""
+		"""Phase-aware mutation dispatching to ClusterGenome.mutate()."""
 		from wnn.ram.strategies.connectivity.adaptive_cluster import AdaptiveClusterConfig
 		self._ensure_rng()
 		cfg = self._arch_config
@@ -731,12 +731,12 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			min_neurons=cfg.min_neurons, max_neurons=cfg.max_neurons,
 		)
 		tib = cfg.total_input_bits or 64
-		return genome.mutate_phased(self._phase_type, mutation_rate, mutation_config, tib, self._rng)
+		return genome.mutate(self._phase_type, mutation_rate, mutation_config, tib, self._rng)
 
 	def crossover_genomes(self, parent1: 'ClusterGenome', parent2: 'ClusterGenome') -> 'ClusterGenome':
-		"""Phase-aware crossover dispatching to ClusterGenome.crossover_phased()."""
+		"""Phase-aware crossover dispatching to ClusterGenome.crossover()."""
 		self._ensure_rng()
-		return parent1.crossover_phased(parent2, self._phase_type, self._rng)
+		return parent1.crossover(parent2, self._phase_type, self._rng)
 
 	def create_random_genome(self) -> 'ClusterGenome':
 		"""
@@ -1071,7 +1071,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 		seed: Optional[int] = None,
 		logger: Optional[Callable[[str], None]] = None,
 		batch_evaluator: Optional['RustParallelEvaluator'] = None,
-		cached_evaluator: Optional[Any] = None,  # CachedEvaluator for Rust search_neighbors
+		cached_evaluator: Optional[Any] = None,  # BaseEvaluator for Rust search_neighbors
 		shutdown_check: Optional[Callable[[], bool]] = None,  # Callable returning True if shutdown requested
 	):
 		super().__init__(config=ts_config, seed=seed, logger=logger)
@@ -1099,7 +1099,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 		return genome.clone()
 
 	def mutate_genome(self, genome: 'ClusterGenome', mutation_rate: float) -> tuple['ClusterGenome', Any]:
-		"""Phase-aware mutation dispatching to ClusterGenome.mutate_phased().
+		"""Phase-aware mutation dispatching to ClusterGenome.mutate().
 
 		Returns (new_genome, move_info) where move_info is a hash of the mutated
 		architecture (for tabu tracking).
@@ -1112,7 +1112,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 			min_neurons=cfg.min_neurons, max_neurons=cfg.max_neurons,
 		)
 		tib = cfg.total_input_bits or 64
-		mutant = genome.mutate_phased(self._phase_type, mutation_rate, mutation_config, tib, self._rng)
+		mutant = genome.mutate(self._phase_type, mutation_rate, mutation_config, tib, self._rng)
 
 		# Compute move info for tabu tracking: hash of changed dimensions
 		if self._phase_type == PhaseType.NEURONS:

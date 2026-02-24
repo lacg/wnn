@@ -1,12 +1,15 @@
 """
-Cached Evaluator - Uses Rust TokenCache for zero-copy genome evaluation.
+Tiered Evaluator - Uses Rust TokenCache for zero-copy genome evaluation.
+
+Evaluates tiered RAM architectures where clusters are grouped by frequency
+tiers with different bits/neurons configurations.
 
 Holds all tokens in Rust memory for the entire session. Provides per-iteration
 subset rotation with zero Python→Rust data transfer overhead.
 
 Usage:
     # Create cache once at session start
-    evaluator = CachedEvaluator(
+    evaluator = TieredEvaluator(
         train_tokens=train_tokens,
         eval_tokens=eval_tokens,
         vocab_size=50257,
@@ -26,7 +29,7 @@ Usage:
 
 import os
 from dataclasses import dataclass
-from typing import Optional, Callable, NamedTuple
+from typing import Optional, Callable
 
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 from wnn.ram.architecture.genome_log import (
@@ -37,25 +40,12 @@ from wnn.ram.architecture.genome_log import (
 )
 from wnn.ram.strategies.connectivity.generic_strategies import OptimizationLogger
 from wnn.ram.core import RAMClusterLayer, GatingModel, create_gating
-from wnn.ram.architecture.base_evaluator import BaseEvaluator, EvalResult
-
-
-class OffspringSearchResult(NamedTuple):
-    """Result of offspring search with counts for tracking.
-
-    Attributes:
-        genomes: List of ClusterGenome objects (viable + fallback if return_best_n)
-        evaluated: Total candidates evaluated
-        viable: Candidates that passed accuracy threshold (before fallback)
-    """
-    genomes: list[ClusterGenome]
-    evaluated: int
-    viable: int
+from wnn.ram.architecture.base_evaluator import BaseEvaluator, EvalResult, OffspringSearchResult
 
 
 @dataclass
-class CachedEvaluatorConfig:
-    """Configuration for CachedEvaluator."""
+class TieredEvaluatorConfig:
+    """Configuration for TieredEvaluator."""
     vocab_size: int = 50257
     context_size: int = 4
     num_parts: int = 3  # Default to thirds
@@ -70,7 +60,7 @@ class CachedEvaluatorConfig:
     gating_threshold: float = 0.5  # Threshold for majority voting
 
 
-class CachedEvaluator(BaseEvaluator):
+class TieredEvaluator(BaseEvaluator):
     """
     Rust-backed evaluator with persistent token storage.
 
@@ -126,7 +116,7 @@ class CachedEvaluator(BaseEvaluator):
             neuron_sample_rate=neuron_sample_rate,
         )
 
-        # CachedEvaluator-specific fields
+        # TieredEvaluator-specific fields
         self._empty_value = empty_value
         self._log_path = log_path
         self._use_hybrid = use_hybrid
@@ -712,7 +702,7 @@ class CachedEvaluator(BaseEvaluator):
     def create_gating_from_config(
         self,
         genome: ClusterGenome,
-        config: 'CachedEvaluatorConfig',
+        config: 'TieredEvaluatorConfig',
         rng: Optional[int] = None,
     ) -> Optional[GatingModel]:
         """
@@ -722,7 +712,7 @@ class CachedEvaluator(BaseEvaluator):
 
         Args:
             genome: ClusterGenome to create gating for
-            config: CachedEvaluatorConfig with gating parameters
+            config: TieredEvaluatorConfig with gating parameters
             rng: Random seed
 
         Returns:
@@ -827,7 +817,7 @@ class CachedEvaluator(BaseEvaluator):
 
     def __repr__(self) -> str:
         return (
-            f"CachedEvaluator(vocab={self._vocab_size}, "
+            f"TieredEvaluator(vocab={self._vocab_size}, "
             f"context={self._context_size}, "
             f"parts={self._num_parts}, "
             f"train_calls={self._train_call_count}, "

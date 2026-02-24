@@ -19,7 +19,7 @@ Usage:
 		bits_per_neuron=10,
 	)
 
-	# Evaluate genomes (same interface as CachedEvaluator)
+	# Evaluate genomes (same interface as TieredEvaluator)
 	results = evaluator.evaluate_batch(genomes)
 	# → [EvalResult(ce, accuracy, bit_accuracy), ...]
 	# bit_accuracy uses entropy-based weights (balanced bits matter more)
@@ -30,7 +30,7 @@ import time
 from typing import Optional, Callable
 
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
-from wnn.ram.architecture.cached_evaluator import OffspringSearchResult
+from wnn.ram.architecture.base_evaluator import OffspringSearchResult
 from wnn.ram.architecture.base_evaluator import BaseEvaluator, EvalResult, AdaptationConfig
 
 
@@ -42,7 +42,7 @@ class BitwiseEvaluator(BaseEvaluator):
 	Fallback: Python (sequential, creates BitwiseRAMLM per genome).
 
 	Supports data rotation (subset training) for GA/TS diversity,
-	matching CachedEvaluator's interface.
+	matching TieredEvaluator's interface.
 	"""
 
 	def __init__(
@@ -554,154 +554,11 @@ class BitwiseEvaluator(BaseEvaluator):
 		return results
 
 	# =========================================================================
-	# Neighbor/offspring search (matches CachedEvaluator interface)
+	# Neighbor/offspring search (Rust+Metal fast path)
 	# =========================================================================
-	# Mutation is done in Python, evaluation via Rust+Metal batch path.
-	# This enables ArchitectureTSStrategy and ArchitectureGAStrategy to use
-	# the fast path with retry loops instead of falling back to generic Python.
-
-	def _mutate_genome(
-		self,
-		genome: ClusterGenome,
-		bits_mutation_rate: float,
-		neurons_mutation_rate: float,
-		min_bits: int,
-		max_bits: int,
-		min_neurons: int,
-		max_neurons: int,
-		mutable_clusters: Optional[list[int]],
-		rng: random.Random,
-	) -> ClusterGenome:
-		"""Mutate a genome to create a neighbor (matches Rust mutate_genome logic).
-
-		Operates on per-neuron bits. Mutation applies a per-cluster delta to all
-		neurons in that cluster, then adjusts connections accordingly.
-		"""
-		num_clusters = len(genome.neurons_per_cluster)
-		offsets = genome.cluster_neuron_offsets
-		old_bits = genome.bits_per_neuron.copy()
-		new_bits = genome.bits_per_neuron.copy()
-		new_neurons = genome.neurons_per_cluster.copy()
-		old_neurons = genome.neurons_per_cluster.copy()
-
-		# Delta ranges: 10% of (min + max), minimum 1
-		bits_delta_max = max(1, round(0.1 * (min_bits + max_bits)))
-		neurons_delta_max = max(1, round(0.1 * (min_neurons + max_neurons)))
-
-		indices = mutable_clusters if mutable_clusters is not None else list(range(num_clusters))
-		for i in indices:
-			if i >= num_clusters:
-				continue
-			if rng.random() < bits_mutation_rate:
-				delta = rng.randint(-bits_delta_max, bits_delta_max)
-				# Apply same delta to all neurons in this cluster
-				for n_idx in range(offsets[i], offsets[i + 1]):
-					new_bits[n_idx] = max(min_bits, min(max_bits, new_bits[n_idx] + delta))
-			if rng.random() < neurons_mutation_rate:
-				delta = rng.randint(-neurons_delta_max, neurons_delta_max)
-				new_neurons[i] = max(min_neurons, min(max_neurons, new_neurons[i] + delta))
-
-		# Rebuild per-neuron bits for changed neuron counts
-		final_bits = []
-		for c in range(num_clusters):
-			old_n = old_neurons[c]
-			new_n = new_neurons[c]
-			cluster_old_bits = new_bits[offsets[c]:offsets[c + 1]]
-			for n in range(new_n):
-				if n < old_n:
-					final_bits.append(cluster_old_bits[n])
-				else:
-					# New neuron: copy bits from random existing neuron in cluster
-					template = rng.randint(0, old_n - 1) if old_n > 0 else 0
-					final_bits.append(cluster_old_bits[template] if old_n > 0 else min_bits)
-
-		# Adjust connections for architecture changes
-		new_conns = self._adjust_connections(
-			genome.connections, old_bits, old_neurons, final_bits, new_neurons, rng,
-		)
-
-		return ClusterGenome(
-			bits_per_neuron=final_bits,
-			neurons_per_cluster=new_neurons,
-			connections=new_conns,
-		)
-
-	def _adjust_connections(
-		self,
-		old_connections: Optional[list[int]],
-		old_bits: list[int],
-		old_neurons: list[int],
-		new_bits: list[int],
-		new_neurons: list[int],
-		rng: random.Random,
-	) -> Optional[list[int]]:
-		"""Adjust connections when architecture changes.
-
-		old_bits/new_bits: per-neuron bit counts (flat).
-		old_neurons/new_neurons: per-cluster neuron counts.
-		"""
-		if old_connections is None or len(old_connections) == 0:
-			return None
-
-		total_input_bits = self._total_input_bits
-		result = []
-
-		# Build connection offsets for old per-neuron bits
-		old_conn_offsets = [0]
-		for b in old_bits:
-			old_conn_offsets.append(old_conn_offsets[-1] + b)
-
-		# Build neuron offsets for old clusters
-		old_neuron_offsets = [0]
-		for n in old_neurons:
-			old_neuron_offsets.append(old_neuron_offsets[-1] + n)
-
-		new_neuron_idx = 0
-		for c in range(len(new_neurons)):
-			o_n = old_neurons[c]
-			n_n = new_neurons[c]
-			old_cluster_start = old_neuron_offsets[c]
-
-			for neuron in range(n_n):
-				n_b = new_bits[new_neuron_idx]
-
-				if neuron < o_n:
-					old_n_idx = old_cluster_start + neuron
-					o_b = old_bits[old_n_idx]
-					old_start = old_conn_offsets[old_n_idx]
-
-					for bit in range(n_b):
-						if bit < o_b:
-							conn = old_connections[old_start + bit]
-							# 10% chance of small perturbation
-							if rng.random() < 0.1:
-								delta = rng.choice([-2, -1, 1, 2])
-								conn = max(0, min(total_input_bits - 1, conn + delta))
-							result.append(conn)
-						else:
-							result.append(rng.randint(0, total_input_bits - 1))
-				else:
-					# New neuron: copy from random existing with mutations
-					if o_n > 0:
-						template = rng.randint(0, o_n - 1)
-						tmpl_n_idx = old_cluster_start + template
-						o_b = old_bits[tmpl_n_idx]
-						tmpl_start = old_conn_offsets[tmpl_n_idx]
-						for bit in range(n_b):
-							if bit < o_b:
-								conn = old_connections[tmpl_start + bit]
-								delta = rng.choice([-2, -1, 1, 2])
-								conn = max(0, min(total_input_bits - 1, conn + delta))
-								result.append(conn)
-							else:
-								result.append(rng.randint(0, total_input_bits - 1))
-					else:
-						for _ in range(n_b):
-							result.append(rng.randint(0, total_input_bits - 1))
-
-				new_neuron_idx += 1
-
-		return result
+	# Overrides BaseEvaluator to use specialized Rust eval paths
+	# (_evaluate_batch_rust / _evaluate_batch_adaptive_rust) which skip
+	# logging/progress overhead. Mutation via base class _mutate_genome_phased().
 
 	def search_neighbors(
 		self,
@@ -727,9 +584,18 @@ class BitwiseEvaluator(BaseEvaluator):
 	) -> list[ClusterGenome]:
 		"""Search for neighbor genomes above accuracy threshold.
 
-		Mutation in Python, evaluation via Rust+Metal batch path.
-		Implements retry loop matching Rust search_neighbors_best_n behavior.
+		Phase-aware mutation via ClusterGenome.mutate(), evaluation via Rust+Metal batch path.
 		"""
+		if self._rust_cache is None:
+			return super().search_neighbors(
+				genome, target_count, max_attempts, accuracy_threshold,
+				min_bits, max_bits, min_neurons, max_neurons,
+				bits_mutation_rate, neurons_mutation_rate,
+				train_subset_idx, eval_subset_idx, seed, log_path,
+				generation, total_generations, return_best_n,
+				mutable_clusters, phase_type,
+			)
+
 		if train_subset_idx is None:
 			train_subset_idx = self.next_train_idx()
 		if eval_subset_idx is None:
@@ -743,25 +609,21 @@ class BitwiseEvaluator(BaseEvaluator):
 		evaluated = 0
 		batch_size = 50
 
-		gen_str = f"{(generation or 0) + 1}/{total_generations or '?'}"
-
 		while len(passed) < target_count and evaluated < max_attempts:
 			remaining = target_count - len(passed)
 			batch_n = min(remaining + 5, batch_size, max_attempts - evaluated)
 			if batch_n <= 0:
 				break
 
-			# Generate mutations
-			batch = []
-			for _ in range(batch_n):
-				mutant = self._mutate_genome(
-					genome, bits_mutation_rate, neurons_mutation_rate,
-					min_bits, max_bits, min_neurons, max_neurons,
-					mutable_clusters, rng,
+			batch = [
+				self._mutate_genome_phased(
+					genome, phase_type,
+					bits_mutation_rate, neurons_mutation_rate,
+					min_bits, max_bits, min_neurons, max_neurons, rng,
 				)
-				batch.append(mutant)
+				for _ in range(batch_n)
+			]
 
-			# Evaluate via Rust+Metal (adaptive if config set)
 			if self._adapt_config is not None:
 				results = self._evaluate_batch_adaptive_rust(batch, train_subset_idx, eval_subset_idx)
 			else:
@@ -778,7 +640,6 @@ class BitwiseEvaluator(BaseEvaluator):
 				else:
 					all_candidates.append(g)
 
-		# Fallback: return best N by accuracy then CE
 		if len(passed) < target_count and return_best_n:
 			all_candidates.sort(key=lambda g: (-g._cached_fitness[1], g._cached_fitness[0]))
 			need = target_count - len(passed)
@@ -812,9 +673,19 @@ class BitwiseEvaluator(BaseEvaluator):
 	) -> OffspringSearchResult:
 		"""Search for GA offspring above accuracy threshold.
 
-		Tournament selection + crossover + mutation in Python,
-		evaluation via Rust+Metal batch path. Retry loop included.
+		Phase-aware crossover + mutation via ClusterGenome,
+		evaluation via Rust+Metal batch path.
 		"""
+		if self._rust_cache is None:
+			return super().search_offspring(
+				population, target_count, max_attempts, accuracy_threshold,
+				min_bits, max_bits, min_neurons, max_neurons,
+				bits_mutation_rate, neurons_mutation_rate, crossover_rate,
+				tournament_size, train_subset_idx, eval_subset_idx,
+				seed, log_path, generation, total_generations,
+				return_best_n, mutable_clusters, phase_type,
+			)
+
 		if not population:
 			return OffspringSearchResult(genomes=[], evaluated=0, viable=0)
 
@@ -825,6 +696,8 @@ class BitwiseEvaluator(BaseEvaluator):
 		if seed is None:
 			seed = int(time.time() * 1000) % (2**32)
 
+		from wnn.ram.strategies.connectivity.adaptive_cluster import PhaseType
+		pt = PhaseType(phase_type)
 		rng = random.Random(seed)
 		passed: list[ClusterGenome] = []
 		all_candidates: list[ClusterGenome] = []
@@ -840,22 +713,19 @@ class BitwiseEvaluator(BaseEvaluator):
 
 			batch = []
 			for _ in range(batch_n):
-				# Tournament selection
 				parent1 = self._tournament_select(population, tournament_size, rng)
 				if rng.random() < crossover_rate and len(population) > 1:
 					parent2 = self._tournament_select(population, tournament_size, rng)
-					child = self._crossover(parent1, parent2, rng)
+					child = parent1.crossover(parent2, pt, rng)
 				else:
 					child = parent1.clone()
-				# Mutate
-				child = self._mutate_genome(
-					child, bits_mutation_rate, neurons_mutation_rate,
-					min_bits, max_bits, min_neurons, max_neurons,
-					mutable_clusters, rng,
+				child = self._mutate_genome_phased(
+					child, phase_type,
+					bits_mutation_rate, neurons_mutation_rate,
+					min_bits, max_bits, min_neurons, max_neurons, rng,
 				)
 				batch.append(child)
 
-			# Evaluate via Rust+Metal (adaptive if config set)
 			if self._adapt_config is not None:
 				results = self._evaluate_batch_adaptive_rust(batch, train_subset_idx, eval_subset_idx)
 			else:
@@ -873,58 +743,12 @@ class BitwiseEvaluator(BaseEvaluator):
 				else:
 					all_candidates.append(g)
 
-		# Fallback: return best N by accuracy then CE
 		if len(passed) < target_count and return_best_n:
 			all_candidates.sort(key=lambda g: (-g._cached_fitness[1], g._cached_fitness[0]))
 			need = target_count - len(passed)
 			passed.extend(all_candidates[:need])
 
 		return OffspringSearchResult(genomes=passed, evaluated=evaluated, viable=viable_count)
-
-	def _tournament_select(
-		self,
-		population: list[tuple[ClusterGenome, float]],
-		tournament_size: int,
-		rng: random.Random,
-	) -> ClusterGenome:
-		"""Tournament selection: pick best (lowest fitness) from random subset."""
-		contestants = rng.sample(population, min(tournament_size, len(population)))
-		best = min(contestants, key=lambda x: x[1])
-		return best[0].clone()
-
-	def _crossover(
-		self,
-		parent1: ClusterGenome,
-		parent2: ClusterGenome,
-		rng: random.Random,
-	) -> ClusterGenome:
-		"""Uniform crossover: randomly pick each cluster from either parent."""
-		n = len(parent1.neurons_per_cluster)
-		p1_offsets = parent1.cluster_neuron_offsets
-		p2_offsets = parent2.cluster_neuron_offsets
-
-		new_bits = []
-		new_neurons = []
-		for i in range(n):
-			if rng.random() < 0.5:
-				# Take cluster i's neurons and per-neuron bits from parent1
-				new_neurons.append(parent1.neurons_per_cluster[i])
-				new_bits.extend(parent1.bits_per_neuron[p1_offsets[i]:p1_offsets[i + 1]])
-			else:
-				new_neurons.append(parent2.neurons_per_cluster[i])
-				new_bits.extend(parent2.bits_per_neuron[p2_offsets[i]:p2_offsets[i + 1]])
-
-		# Connections: take from parent1 and adjust for new architecture
-		new_conns = self._adjust_connections(
-			parent1.connections,
-			parent1.bits_per_neuron, parent1.neurons_per_cluster,
-			new_bits, new_neurons, rng,
-		)
-		return ClusterGenome(
-			bits_per_neuron=new_bits,
-			neurons_per_cluster=new_neurons,
-			connections=new_conns,
-		)
 
 	def reset(self, seed: Optional[int] = None) -> None:
 		"""Reset subset rotation (both train and eval)."""

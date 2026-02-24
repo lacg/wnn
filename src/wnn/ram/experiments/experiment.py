@@ -252,7 +252,7 @@ class Experiment:
 	def __init__(
 		self,
 		config: ExperimentConfig,
-		evaluator: Any,  # CachedEvaluator
+		evaluator: Any,  # TieredEvaluator or BitwiseEvaluator or MultiStageEvaluator
 		logger: Callable[[str], None],
 		checkpoint_dir: Optional[Path] = None,
 		dashboard_client: Optional[Any] = None,
@@ -267,7 +267,7 @@ class Experiment:
 
 		Args:
 			config: Experiment configuration
-			evaluator: CachedEvaluator instance for genome evaluation
+			evaluator: BaseEvaluator instance for genome evaluation
 			logger: Logging function
 			checkpoint_dir: Directory for saving checkpoints
 			dashboard_client: Optional DashboardClient for API integration

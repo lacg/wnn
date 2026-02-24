@@ -3,23 +3,29 @@ Base Evaluator — Abstract base class for all genome evaluators.
 
 Provides shared behavior:
 - EvalResult: Standardized evaluation result with backward-compatible tuple unpacking
+- OffspringSearchResult: Named tuple for search_offspring results
 - AdaptationConfig: Configuration for training-time architecture adaptation
 - BaseEvaluator: ABC with data rotation, seed management, generation tracking,
-  adaptation config, and convenience methods
+  adaptation config, search methods, and convenience methods
 
 Subclasses implement the actual evaluation logic:
 - BitwiseEvaluator: Bitwise RAM with Rust+Metal pipeline
-- CachedEvaluator: Tiered RAM with Rust hybrid CPU+GPU
-- TwoStageEvaluator: Two-stage (group prediction + within-group) — future
+- TieredEvaluator: Tiered RAM with Rust hybrid CPU+GPU
+- MultiStageEvaluator: Multi-stage orchestrator
 """
 
+import random
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Optional, Callable
+from typing import Optional, Callable, NamedTuple
 
 from wnn.ram.core.RAMClusterLayer import bits_needed
-from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
+from wnn.ram.strategies.connectivity.adaptive_cluster import (
+	ClusterGenome,
+	AdaptiveClusterConfig,
+	PhaseType,
+)
 
 
 @dataclass
@@ -103,6 +109,19 @@ class EvalResult:
 	def __len__(self) -> int:
 		"""Length: 2 if bit_accuracy is None, 3 otherwise."""
 		return 3 if self.bit_accuracy is not None else 2
+
+
+class OffspringSearchResult(NamedTuple):
+	"""Result of offspring search with counts for tracking.
+
+	Attributes:
+		genomes: List of ClusterGenome objects (viable + fallback if return_best_n)
+		evaluated: Total candidates evaluated
+		viable: Candidates that passed accuracy threshold (before fallback)
+	"""
+	genomes: list[ClusterGenome]
+	evaluated: int
+	viable: int
 
 
 class BaseEvaluator(ABC):
@@ -255,3 +274,251 @@ class BaseEvaluator(ABC):
 	def clear_generation_log(self) -> None:
 		"""Clear per-generation metrics (call between phases)."""
 		self._generation_log.clear()
+
+	# ── Search methods (shared, overridable for Rust fast paths) ─────────
+
+	def _tournament_select(
+		self,
+		population: list[tuple[ClusterGenome, float]],
+		tournament_size: int,
+		rng: random.Random,
+	) -> ClusterGenome:
+		"""Tournament selection: pick best (lowest fitness) from random subset."""
+		contestants = rng.sample(population, min(tournament_size, len(population)))
+		best = min(contestants, key=lambda x: x[1])
+		return best[0].clone()
+
+	def _mutate_genome_phased(
+		self,
+		genome: ClusterGenome,
+		phase_type: int,
+		bits_mutation_rate: float,
+		neurons_mutation_rate: float,
+		min_bits: int,
+		max_bits: int,
+		min_neurons: int,
+		max_neurons: int,
+		rng: random.Random,
+	) -> ClusterGenome:
+		"""Mutate a genome using ClusterGenome.mutate() with phase-aware rate dispatch."""
+		pt = PhaseType(phase_type)
+		if pt == PhaseType.NEURONS:
+			rate = neurons_mutation_rate
+		else:
+			rate = bits_mutation_rate
+		config = AdaptiveClusterConfig(
+			min_bits=min_bits, max_bits=max_bits,
+			min_neurons=min_neurons, max_neurons=max_neurons,
+		)
+		return genome.mutate(pt, rate, config, self.total_input_bits, rng)
+
+	def search_neighbors(
+		self,
+		genome: ClusterGenome,
+		target_count: int,
+		max_attempts: int,
+		accuracy_threshold: float,
+		min_bits: int,
+		max_bits: int,
+		min_neurons: int,
+		max_neurons: int,
+		bits_mutation_rate: float = 0.1,
+		neurons_mutation_rate: float = 0.05,
+		train_subset_idx: Optional[int] = None,
+		eval_subset_idx: Optional[int] = None,
+		seed: Optional[int] = None,
+		log_path: Optional[str] = None,
+		generation: Optional[int] = None,
+		total_generations: Optional[int] = None,
+		return_best_n: bool = True,
+		mutable_clusters: Optional[list[int]] = None,
+		phase_type: int = 0,
+	) -> list[ClusterGenome]:
+		"""Search for neighbor genomes above accuracy threshold.
+
+		Uses ClusterGenome.mutate() for phase-aware mutation, then
+		self.evaluate_batch() for evaluation. Subclasses may override
+		to delegate to Rust fast paths.
+		"""
+		if train_subset_idx is None:
+			train_subset_idx = self.next_train_idx()
+		if eval_subset_idx is None:
+			eval_subset_idx = 0
+		if seed is None:
+			seed = int(time.time() * 1000) % (2**32)
+
+		rng = random.Random(seed)
+		passed: list[ClusterGenome] = []
+		all_candidates: list[ClusterGenome] = []
+		evaluated = 0
+		batch_size = 50
+
+		while len(passed) < target_count and evaluated < max_attempts:
+			remaining = target_count - len(passed)
+			batch_n = min(remaining + 5, batch_size, max_attempts - evaluated)
+			if batch_n <= 0:
+				break
+
+			batch = [
+				self._mutate_genome_phased(
+					genome, phase_type,
+					bits_mutation_rate, neurons_mutation_rate,
+					min_bits, max_bits, min_neurons, max_neurons, rng,
+				)
+				for _ in range(batch_n)
+			]
+
+			results = self.evaluate_batch(
+				batch, train_subset_idx, eval_subset_idx,
+			)
+			evaluated += len(results)
+
+			for g, r in zip(batch, results):
+				g._cached_fitness = (r.ce, r.accuracy)
+				if r.bit_accuracy is not None:
+					g._cached_bit_acc = r.bit_accuracy
+				if r.accuracy >= accuracy_threshold:
+					passed.append(g)
+					if len(passed) >= target_count:
+						break
+				else:
+					all_candidates.append(g)
+
+		if len(passed) < target_count and return_best_n:
+			all_candidates.sort(key=lambda g: (-g._cached_fitness[1], g._cached_fitness[0]))
+			need = target_count - len(passed)
+			passed.extend(all_candidates[:need])
+
+		return passed
+
+	def search_offspring(
+		self,
+		population: list[tuple[ClusterGenome, float]],
+		target_count: int,
+		max_attempts: int,
+		accuracy_threshold: float,
+		min_bits: int,
+		max_bits: int,
+		min_neurons: int,
+		max_neurons: int,
+		bits_mutation_rate: float = 0.1,
+		neurons_mutation_rate: float = 0.1,
+		crossover_rate: float = 0.7,
+		tournament_size: int = 3,
+		train_subset_idx: Optional[int] = None,
+		eval_subset_idx: Optional[int] = None,
+		seed: Optional[int] = None,
+		log_path: Optional[str] = None,
+		generation: Optional[int] = None,
+		total_generations: Optional[int] = None,
+		return_best_n: bool = True,
+		mutable_clusters: Optional[list[int]] = None,
+		phase_type: int = 0,
+	) -> OffspringSearchResult:
+		"""Search for GA offspring above accuracy threshold.
+
+		Uses ClusterGenome.crossover() + ClusterGenome.mutate() for
+		phase-aware genetic operations, then self.evaluate_batch().
+		Subclasses may override to delegate to Rust fast paths.
+		"""
+		if not population:
+			return OffspringSearchResult(genomes=[], evaluated=0, viable=0)
+
+		if train_subset_idx is None:
+			train_subset_idx = self.next_train_idx()
+		if eval_subset_idx is None:
+			eval_subset_idx = 0
+		if seed is None:
+			seed = int(time.time() * 1000) % (2**32)
+
+		pt = PhaseType(phase_type)
+		rng = random.Random(seed)
+		passed: list[ClusterGenome] = []
+		all_candidates: list[ClusterGenome] = []
+		evaluated = 0
+		viable_count = 0
+		batch_size = 50
+
+		while len(passed) < target_count and evaluated < max_attempts:
+			remaining = target_count - len(passed)
+			batch_n = min(remaining + 5, batch_size, max_attempts - evaluated)
+			if batch_n <= 0:
+				break
+
+			batch = []
+			for _ in range(batch_n):
+				parent1 = self._tournament_select(population, tournament_size, rng)
+				if rng.random() < crossover_rate and len(population) > 1:
+					parent2 = self._tournament_select(population, tournament_size, rng)
+					child = parent1.crossover(parent2, pt, rng)
+				else:
+					child = parent1.clone()
+				child = self._mutate_genome_phased(
+					child, phase_type,
+					bits_mutation_rate, neurons_mutation_rate,
+					min_bits, max_bits, min_neurons, max_neurons, rng,
+				)
+				batch.append(child)
+
+			results = self.evaluate_batch(
+				batch, train_subset_idx, eval_subset_idx,
+			)
+			evaluated += len(results)
+
+			for g, r in zip(batch, results):
+				g._cached_fitness = (r.ce, r.accuracy)
+				if r.bit_accuracy is not None:
+					g._cached_bit_acc = r.bit_accuracy
+				if r.accuracy >= accuracy_threshold:
+					viable_count += 1
+					passed.append(g)
+					if len(passed) >= target_count:
+						break
+				else:
+					all_candidates.append(g)
+
+		if len(passed) < target_count and return_best_n:
+			all_candidates.sort(key=lambda g: (-g._cached_fitness[1], g._cached_fitness[0]))
+			need = target_count - len(passed)
+			passed.extend(all_candidates[:need])
+
+		return OffspringSearchResult(genomes=passed, evaluated=evaluated, viable=viable_count)
+
+	def search_neighbors_batch(
+		self,
+		sources: list[tuple[ClusterGenome, int]],
+		max_attempts_multiplier: int,
+		accuracy_threshold: float,
+		min_bits: int,
+		max_bits: int,
+		min_neurons: int,
+		max_neurons: int,
+		bits_mutation_rate: float = 0.1,
+		neurons_mutation_rate: float = 0.05,
+		train_subset_idx: Optional[int] = None,
+		eval_subset_idx: Optional[int] = None,
+		seed: Optional[int] = None,
+		return_best_n: bool = True,
+		mutable_clusters: Optional[list[int]] = None,
+		phase_type: int = 0,
+	) -> list[list[ClusterGenome]]:
+		"""Search neighbors for multiple source genomes.
+
+		Default: per-source loop calling search_neighbors().
+		MultiStageEvaluator overrides for single-batch optimization.
+		"""
+		results = []
+		for genome, target_count in sources:
+			max_attempts = target_count * max_attempts_multiplier
+			neighbors = self.search_neighbors(
+				genome, target_count, max_attempts,
+				accuracy_threshold,
+				min_bits, max_bits, min_neurons, max_neurons,
+				bits_mutation_rate, neurons_mutation_rate,
+				train_subset_idx, eval_subset_idx,
+				seed, return_best_n=return_best_n,
+				mutable_clusters=mutable_clusters,
+				phase_type=phase_type,
+			)
+			results.append(neighbors)
+		return results

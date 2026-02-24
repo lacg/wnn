@@ -721,7 +721,7 @@ class Flow:
 	def __init__(
 		self,
 		config: FlowConfig,
-		evaluator: Any,  # CachedEvaluator
+		evaluator: Any,  # TieredEvaluator or MultiStageEvaluator
 		logger: Callable[[str], None],
 		checkpoint_dir: Optional[Path] = None,
 		dashboard_client: Optional[DashboardClient] = None,
@@ -735,7 +735,7 @@ class Flow:
 
 		Args:
 			config: Flow configuration
-			evaluator: CachedEvaluator instance
+			evaluator: BaseEvaluator instance
 			logger: Logging function
 			checkpoint_dir: Directory for checkpoints
 			dashboard_client: Optional dashboard client for API integration

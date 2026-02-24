@@ -24,7 +24,7 @@ from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 from wnn.ram.core.reporting import OptimizationResultsTable, PhaseComparisonTable, PhaseMetrics
 from wnn.ram.core import bits_needed
 from wnn.ram.core.gating import GatingModel
-from wnn.ram.architecture.cached_evaluator import CachedEvaluator
+from wnn.ram.architecture.tiered_evaluator import TieredEvaluator
 
 # Optional dashboard integration
 try:
@@ -494,7 +494,7 @@ class PhasedSearchRunner:
 		self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
 		self.dashboard_client = dashboard_client
 		self.tracker = tracker
-		self.evaluator: Optional[CachedEvaluator] = None
+		self.evaluator: Optional[TieredEvaluator] = None
 		self.vocab_size: int = 0
 		self.total_input_bits: int = 0
 		self.token_frequencies: list[int] = []
@@ -659,7 +659,7 @@ class PhasedSearchRunner:
 		# Create cached evaluator
 		self.log("")
 		self.log("Creating cached evaluator with per-iteration rotation...")
-		self.evaluator = CachedEvaluator(
+		self.evaluator = TieredEvaluator(
 			train_tokens=train_tokens,
 			eval_tokens=eval_tokens,
 			vocab_size=vocab_size,

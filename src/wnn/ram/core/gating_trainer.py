@@ -1,7 +1,7 @@
 """
 Standalone GatingTrainer for architecture-agnostic gating training.
 
-Works with both tiered (CachedEvaluator) and bitwise (BitwiseEvaluator) architectures
+Works with both tiered (TieredEvaluator) and bitwise (BitwiseEvaluator) architectures
 via the GatingMode enum. The trainer creates and trains gating model(s) without
 depending on any specific evaluator class.
 

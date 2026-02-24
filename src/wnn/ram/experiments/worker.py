@@ -540,9 +540,9 @@ class FlowWorker:
         """Create the cached evaluator using pre-cached data."""
         self._log(f"Creating evaluator (context_size={context_size}, sample_rate={neuron_sample_rate})...")
 
-        from wnn.ram.architecture.cached_evaluator import CachedEvaluator
+        from wnn.ram.architecture.tiered_evaluator import TieredEvaluator
 
-        evaluator = CachedEvaluator(
+        evaluator = TieredEvaluator(
             train_tokens=self._train_tokens,
             eval_tokens=self._test_tokens,
             vocab_size=self._vocab_size,
