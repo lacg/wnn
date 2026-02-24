@@ -58,6 +58,8 @@ if TYPE_CHECKING:
 		AdaptiveClusterConfig,
 	)
 
+from wnn.ram.strategies.connectivity.adaptive_cluster import PhaseType
+
 
 # =============================================================================
 # Shared Mixin for Architecture Strategies
@@ -76,6 +78,19 @@ class ArchitectureStrategyMixin:
 
 	_shutdown_check: Optional[Callable[[], bool]]
 	_log: Any  # Logger
+
+	def _derive_phase_type(self) -> 'PhaseType':
+		"""Derive PhaseType from optimize_* flags in ArchitectureConfig."""
+		cfg = self._arch_config
+		if cfg.optimize_connections and not cfg.optimize_bits and not cfg.optimize_neurons:
+			return PhaseType.CONNECTIONS
+		elif cfg.optimize_neurons and not cfg.optimize_bits:
+			return PhaseType.NEURONS
+		elif cfg.optimize_bits and not cfg.optimize_neurons:
+			return PhaseType.BITS
+		else:
+			# Both bits+neurons or default: use Neurons phase (most general)
+			return PhaseType.NEURONS
 
 	def _cleanup_metal(self, iteration: int, log_interval: int = 10) -> None:
 		"""Run GC and reset Metal evaluators to prevent buffer accumulation."""
@@ -693,6 +708,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		self._checkpoint_config = checkpoint_config
 		self._phase_name = phase_name
 		self._shutdown_check = shutdown_check
+		self._phase_type = self._derive_phase_type()
 
 	@property
 	def name(self) -> str:
@@ -706,251 +722,21 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 		return genome.clone()
 
 	def mutate_genome(self, genome: 'ClusterGenome', mutation_rate: float) -> 'ClusterGenome':
-		"""
-		Mutate genome based on optimize_* flags in config.
-
-		The optimizer is phase-agnostic. Callers control what gets optimized
-		by setting optimize_bits, optimize_neurons, optimize_connections.
-
-		Mutation delta ranges are 10% of (min + max):
-		- Neurons: 10% × (min_neurons + max_neurons)
-		- Bits: 10% × (min_bits + max_bits)
-		- Connections: 10% × bits_per_token (stays close to token boundaries)
-
-		Bits are mutated per-neuron: for each mutable cluster, each neuron's
-		bits_per_neuron is independently mutated.
-
-		When neurons_per_cluster changes, bits_per_neuron is rebuilt to match:
-		- Kept neurons retain their (possibly mutated) bits
-		- New neurons get bits copied from a random existing neuron in that cluster
-
-		Also adjusts connections when architecture changes.
-		"""
+		"""Phase-aware mutation dispatching to ClusterGenome.mutate_phased()."""
+		from wnn.ram.strategies.connectivity.adaptive_cluster import AdaptiveClusterConfig
 		self._ensure_rng()
 		cfg = self._arch_config
-		mutant = genome.clone()
-
-		# Calculate delta ranges: 10% of (min + max), minimum 1
-		bits_delta_max = max(1, round(0.1 * (cfg.min_bits + cfg.max_bits)))
-		neurons_delta_max = max(1, round(0.1 * (cfg.min_neurons + cfg.max_neurons)))
-
-		# Track old architecture for connection adjustment
-		old_bits_per_neuron = genome.bits_per_neuron.copy()
-		old_neurons = genome.neurons_per_cluster.copy()
-
-		# If only optimizing connections, skip architecture mutation
-		if cfg.optimize_connections and not cfg.optimize_bits and not cfg.optimize_neurons:
-			if genome.connections is not None and cfg.total_input_bits is not None:
-				mutant.connections = self._mutate_connections_only(
-					genome.connections.copy(), cfg.total_input_bits, mutation_rate
-				)
-			return mutant
-
-		# Mutate architecture (bits and/or neurons)
-		# If mutable_clusters is set, only mutate clusters in that set (per-tier optimization)
-		if cfg.mutable_clusters is not None:
-			mutable_set = set(cfg.mutable_clusters)
-		else:
-			mutable_set = set(range(cfg.num_clusters))
-
-		neuron_offsets = genome.cluster_neuron_offsets
-
-		# Phase 1: Mutate bits per neuron in-place (using original offsets)
-		for i in range(cfg.num_clusters):
-			if i not in mutable_set:
-				continue
-			if self._rng.random() < mutation_rate:
-				if cfg.optimize_bits:
-					n_start = neuron_offsets[i]
-					n_end = neuron_offsets[i + 1]
-					for n_idx in range(n_start, n_end):
-						delta = self._rng.randint(-bits_delta_max, bits_delta_max)
-						new_bits = mutant.bits_per_neuron[n_idx] + delta
-						mutant.bits_per_neuron[n_idx] = max(cfg.min_bits, min(cfg.max_bits, new_bits))
-
-				if cfg.optimize_neurons:
-					delta = self._rng.randint(-neurons_delta_max, neurons_delta_max)
-					new_neurons = mutant.neurons_per_cluster[i] + delta
-					mutant.neurons_per_cluster[i] = max(cfg.min_neurons, min(cfg.max_neurons, new_neurons))
-
-		# Phase 2: Rebuild bits_per_neuron to match new neurons_per_cluster
-		# (handles neurons being added or removed from clusters)
-		if cfg.optimize_neurons:
-			new_bits_per_neuron = []
-			for i in range(cfg.num_clusters):
-				n_start = neuron_offsets[i]
-				n_end = neuron_offsets[i + 1]
-				old_n = n_end - n_start  # original neuron count
-				new_n = mutant.neurons_per_cluster[i]
-				# Bits that were (possibly mutated) for existing neurons
-				cluster_bits = mutant.bits_per_neuron[n_start:n_end]
-
-				if new_n <= old_n:
-					# Fewer or same neurons: keep first new_n
-					new_bits_per_neuron.extend(cluster_bits[:new_n])
-				else:
-					# More neurons: keep all existing, add new ones
-					new_bits_per_neuron.extend(cluster_bits)
-					for _ in range(new_n - old_n):
-						# New neuron gets bits from random existing neuron in cluster
-						if old_n > 0:
-							template = self._rng.randint(0, old_n - 1)
-							new_bits_per_neuron.append(cluster_bits[template])
-						else:
-							new_bits_per_neuron.append(cfg.default_bits)
-			mutant.bits_per_neuron = new_bits_per_neuron
-
-		# Adjust connections if they exist and architecture changed
-		if genome.connections is not None and cfg.total_input_bits is not None:
-			mutant.connections = self._adjust_connections_for_mutation(
-				genome, mutant, old_bits_per_neuron, old_neurons, cfg.total_input_bits
-			)
-
-		return mutant
-
-	def _mutate_connections_only(
-		self,
-		connections: list[int],
-		total_input_bits: int,
-		mutation_rate: float,
-	) -> list[int]:
-		"""
-		Mutate connections without changing architecture.
-
-		Delta range is 10% of bits_per_token (stays close to token boundaries).
-		Assumes context × bits_per_token = total_input_bits.
-		"""
-		# Estimate bits_per_token: typically 16 for GPT-2 vocab
-		# Use sqrt heuristic: bits_per_token ≈ log2(vocab) ≈ 16
-		bits_per_token = 16  # Could be passed in, but 16 is reasonable default
-		conn_delta_max = max(1, round(0.1 * bits_per_token))  # 10% of 16 = 2
-
-		result = connections.copy()
-		for i in range(len(result)):
-			if self._rng.random() < mutation_rate:
-				delta = self._rng.randint(-conn_delta_max, conn_delta_max)
-				result[i] = max(0, min(total_input_bits - 1, result[i] + delta))
-		return result
-
-	def _adjust_connections_for_mutation(
-		self,
-		old_genome: 'ClusterGenome',
-		new_genome: 'ClusterGenome',
-		old_bits_per_neuron: list[int],
-		old_neurons: list[int],
-		total_input_bits: int,
-	) -> list[int]:
-		"""Adjust connections when architecture changes during mutation.
-
-		Uses per-neuron bits from old and new genomes with connection_offsets
-		for precise indexing into the flat connections array.
-		"""
-		result = []
-		old_neuron_offsets = old_genome.cluster_neuron_offsets
-		old_conn_offsets = old_genome.connection_offsets
-		new_neuron_offsets = new_genome.cluster_neuron_offsets
-
-		for cluster_idx in range(len(new_genome.neurons_per_cluster)):
-			o_neurons = old_neurons[cluster_idx]
-			n_neurons = new_genome.neurons_per_cluster[cluster_idx]
-			old_n_start = old_neuron_offsets[cluster_idx]
-			new_n_start = new_neuron_offsets[cluster_idx]
-
-			for local_neuron in range(n_neurons):
-				new_global = new_n_start + local_neuron
-				n_bits = new_genome.bits_per_neuron[new_global]
-
-				if local_neuron < o_neurons:
-					# Existing neuron - copy and adjust connections
-					old_global = old_n_start + local_neuron
-					o_bits = old_bits_per_neuron[old_global]
-					old_conn_start = old_conn_offsets[old_global]
-
-					for bit_idx in range(n_bits):
-						if bit_idx < o_bits:
-							# Copy existing connection, with small random mutation
-							old_conn = old_genome.connections[old_conn_start + bit_idx]
-							# 10% chance of small perturbation
-							if self._rng.random() < 0.1:
-								delta = self._rng.choice([-2, -1, 1, 2])
-								new_conn = max(0, min(total_input_bits - 1, old_conn + delta))
-							else:
-								new_conn = old_conn
-							result.append(new_conn)
-						else:
-							# New bit position - add random connection
-							result.append(self._rng.randint(0, total_input_bits - 1))
-				else:
-					# New neuron - copy connections from random existing neuron with mutations
-					if o_neurons > 0:
-						template_local = self._rng.randint(0, o_neurons - 1)
-						template_global = old_n_start + template_local
-						template_bits = old_bits_per_neuron[template_global]
-						template_conn_start = old_conn_offsets[template_global]
-
-						for bit_idx in range(n_bits):
-							if bit_idx < template_bits:
-								# Copy from template with mutation
-								old_conn = old_genome.connections[template_conn_start + bit_idx]
-								delta = self._rng.choice([-2, -1, 1, 2])
-								new_conn = max(0, min(total_input_bits - 1, old_conn + delta))
-								result.append(new_conn)
-							else:
-								result.append(self._rng.randint(0, total_input_bits - 1))
-					else:
-						# No existing neurons to copy from - fully random
-						for _ in range(n_bits):
-							result.append(self._rng.randint(0, total_input_bits - 1))
-
-		return result
+		mutation_config = AdaptiveClusterConfig(
+			min_bits=cfg.min_bits, max_bits=cfg.max_bits,
+			min_neurons=cfg.min_neurons, max_neurons=cfg.max_neurons,
+		)
+		tib = cfg.total_input_bits or 64
+		return genome.mutate_phased(self._phase_type, mutation_rate, mutation_config, tib, self._rng)
 
 	def crossover_genomes(self, parent1: 'ClusterGenome', parent2: 'ClusterGenome') -> 'ClusterGenome':
-		"""
-		Single-point crossover at cluster boundary.
-
-		Child inherits per-neuron bits for entire clusters from the chosen parent.
-		Connections are inherited from the parent whose cluster config is taken.
-		"""
-		from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
-
+		"""Phase-aware crossover dispatching to ClusterGenome.crossover_phased()."""
 		self._ensure_rng()
-		n = len(parent1.neurons_per_cluster)
-		crossover_point = self._rng.randint(1, n - 1)
-
-		# Build child neurons_per_cluster
-		child_neurons = parent1.neurons_per_cluster[:crossover_point] + parent2.neurons_per_cluster[crossover_point:]
-
-		# Build child bits_per_neuron using cluster_neuron_offsets
-		p1_offsets = parent1.cluster_neuron_offsets
-		p2_offsets = parent2.cluster_neuron_offsets
-
-		# Take per-neuron bits from parent1 for clusters [0, crossover_point)
-		p1_neuron_end = p1_offsets[crossover_point]
-		child_bits = list(parent1.bits_per_neuron[:p1_neuron_end])
-
-		# Take per-neuron bits from parent2 for clusters [crossover_point, n)
-		p2_neuron_start = p2_offsets[crossover_point]
-		child_bits.extend(parent2.bits_per_neuron[p2_neuron_start:])
-
-		# Build child connections if parents have them
-		child_connections = None
-		if parent1.connections is not None and parent2.connections is not None:
-			p1_conn_offsets = parent1.connection_offsets
-			p2_conn_offsets = parent2.connection_offsets
-
-			# Parent1 connections for clusters [0, crossover_point)
-			p1_conn_end = p1_conn_offsets[p1_neuron_end]
-			child_connections = list(parent1.connections[:p1_conn_end])
-
-			# Parent2 connections for clusters [crossover_point, n)
-			p2_conn_start = p2_conn_offsets[p2_neuron_start]
-			child_connections.extend(parent2.connections[p2_conn_start:])
-
-		return ClusterGenome(
-			bits_per_neuron=child_bits,
-			neurons_per_cluster=child_neurons,
-			connections=child_connections,
-		)
+		return parent1.crossover_phased(parent2, self._phase_type, self._rng)
 
 	def create_random_genome(self) -> 'ClusterGenome':
 		"""
@@ -1053,9 +839,17 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			arch_cfg = self._arch_config
 			evaluator = self._cached_evaluator
 
-			# Phase-aware mutation rates
-			bits_mutation_rate = cfg.mutation_rate if arch_cfg.optimize_bits else 0.0
-			neurons_mutation_rate = cfg.mutation_rate if arch_cfg.optimize_neurons else 0.0
+			# Phase-aware mutation rates: each phase uses cfg.mutation_rate
+			# for its own dimension, 0.0 for others
+			if self._phase_type == PhaseType.NEURONS:
+				bits_mutation_rate = 0.0
+				neurons_mutation_rate = cfg.mutation_rate
+			elif self._phase_type == PhaseType.BITS:
+				bits_mutation_rate = cfg.mutation_rate
+				neurons_mutation_rate = 0.0
+			else:  # CONNECTIONS
+				bits_mutation_rate = cfg.mutation_rate
+				neurons_mutation_rate = 0.0
 
 			# fitness_percentile controls selectivity: generate a larger pool,
 			# rank by fitness, keep only the top fraction → return exactly n_needed.
@@ -1087,6 +881,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 				total_generations=cfg.generations,
 				return_best_n=True,
 				mutable_clusters=arch_cfg.mutable_clusters,
+				phase_type=int(self._phase_type),
 			)
 
 			# Convert to 3-tuples, rank by fitness, return best n_needed
@@ -1290,6 +1085,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 		else:
 			self._cached_evaluator = None
 		self._shutdown_check = shutdown_check
+		self._phase_type = self._derive_phase_type()
 
 	@property
 	def name(self) -> str:
@@ -1303,178 +1099,32 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 		return genome.clone()
 
 	def mutate_genome(self, genome: 'ClusterGenome', mutation_rate: float) -> tuple['ClusterGenome', Any]:
+		"""Phase-aware mutation dispatching to ClusterGenome.mutate_phased().
+
+		Returns (new_genome, move_info) where move_info is a hash of the mutated
+		architecture (for tabu tracking).
 		"""
-		Generate a neighbor by mutating multiple clusters based on mutation_rate.
-
-		The optimizer is phase-agnostic. Callers control what gets optimized
-		by setting optimize_bits, optimize_neurons, optimize_connections.
-
-		Mutation delta ranges are 10% of (min + max):
-		- Neurons: 10% × (min_neurons + max_neurons)
-		- Bits: 10% × (min_bits + max_bits)
-		- Connections: 10% × bits_per_token
-
-		Bits are mutated per-neuron: for each mutable cluster, each neuron's
-		bits_per_neuron is independently mutated.
-
-		Returns (new_genome, move_info) where move_info is a tuple of mutated cluster indices
-		for tabu tracking.
-		"""
+		from wnn.ram.strategies.connectivity.adaptive_cluster import AdaptiveClusterConfig
 		self._ensure_rng()
 		cfg = self._arch_config
-		mutant = genome.clone()
+		mutation_config = AdaptiveClusterConfig(
+			min_bits=cfg.min_bits, max_bits=cfg.max_bits,
+			min_neurons=cfg.min_neurons, max_neurons=cfg.max_neurons,
+		)
+		tib = cfg.total_input_bits or 64
+		mutant = genome.mutate_phased(self._phase_type, mutation_rate, mutation_config, tib, self._rng)
 
-		# Calculate delta ranges: 10% of (min + max), minimum 1
-		bits_delta_max = max(1, round(0.1 * (cfg.min_bits + cfg.max_bits)))
-		neurons_delta_max = max(1, round(0.1 * (cfg.min_neurons + cfg.max_neurons)))
-		bits_per_token = 16  # Reasonable default for GPT-2 vocab
-		conn_delta_max = max(1, round(0.1 * bits_per_token))
-
-		# If only optimizing connections, mutate connections based on mutation_rate
-		if cfg.optimize_connections and not cfg.optimize_bits and not cfg.optimize_neurons:
-			if genome.connections is not None and cfg.total_input_bits is not None:
-				mutated_indices = []
-				for i in range(len(genome.connections)):
-					if self._rng.random() < mutation_rate:
-						old_val = mutant.connections[i]
-						delta = self._rng.randint(-conn_delta_max, conn_delta_max)
-						new_val = max(0, min(cfg.total_input_bits - 1, old_val + delta))
-						mutant.connections[i] = new_val
-						mutated_indices.append(i)
-				move = tuple(mutated_indices) if mutated_indices else None
-			else:
-				move = None
-			return mutant, move
-
-		# Track old architecture for connection adjustment
-		old_bits_per_neuron = genome.bits_per_neuron.copy()
-		old_neurons = genome.neurons_per_cluster.copy()
-
-		# Mutate multiple clusters based on mutation_rate
-		# If mutable_clusters is set, only mutate clusters in that set (per-tier optimization)
-		if cfg.mutable_clusters is not None:
-			mutable_set = set(cfg.mutable_clusters)
+		# Compute move info for tabu tracking: hash of changed dimensions
+		if self._phase_type == PhaseType.NEURONS:
+			changed = tuple(c for c in range(len(genome.neurons_per_cluster))
+						   if genome.neurons_per_cluster[c] != mutant.neurons_per_cluster[c])
+		elif self._phase_type == PhaseType.BITS:
+			changed = tuple(c for c in range(len(genome.bits_per_neuron))
+						   if genome.bits_per_neuron[c] != mutant.bits_per_neuron[c])
 		else:
-			mutable_set = set(range(cfg.num_clusters))
-
-		neuron_offsets = genome.cluster_neuron_offsets
-
-		# Phase 1: Mutate bits per neuron and neurons_per_cluster
-		mutated_clusters = []
-		for i in range(cfg.num_clusters):
-			if i not in mutable_set:
-				continue
-			if self._rng.random() < mutation_rate:
-				mutated_clusters.append(i)
-
-				if cfg.optimize_bits:
-					# Mutate each neuron's bits independently
-					n_start = neuron_offsets[i]
-					n_end = neuron_offsets[i + 1]
-					for n_idx in range(n_start, n_end):
-						delta = self._rng.randint(-bits_delta_max, bits_delta_max)
-						new_bits = mutant.bits_per_neuron[n_idx] + delta
-						mutant.bits_per_neuron[n_idx] = max(cfg.min_bits, min(cfg.max_bits, new_bits))
-
-				if cfg.optimize_neurons:
-					delta = self._rng.randint(-neurons_delta_max, neurons_delta_max)
-					new_neurons = mutant.neurons_per_cluster[i] + delta
-					mutant.neurons_per_cluster[i] = max(cfg.min_neurons, min(cfg.max_neurons, new_neurons))
-
-		# Phase 2: Rebuild bits_per_neuron to match new neurons_per_cluster
-		if cfg.optimize_neurons:
-			new_bits_per_neuron = []
-			for i in range(cfg.num_clusters):
-				n_start = neuron_offsets[i]
-				n_end = neuron_offsets[i + 1]
-				old_n = n_end - n_start
-				new_n = mutant.neurons_per_cluster[i]
-				cluster_bits = mutant.bits_per_neuron[n_start:n_end]
-
-				if new_n <= old_n:
-					new_bits_per_neuron.extend(cluster_bits[:new_n])
-				else:
-					new_bits_per_neuron.extend(cluster_bits)
-					for _ in range(new_n - old_n):
-						if old_n > 0:
-							template = self._rng.randint(0, old_n - 1)
-							new_bits_per_neuron.append(cluster_bits[template])
-						else:
-							new_bits_per_neuron.append(cfg.default_bits)
-			mutant.bits_per_neuron = new_bits_per_neuron
-
-		# Move is tuple of mutated cluster indices (for tabu tracking)
-		move = tuple(mutated_clusters) if mutated_clusters else None
-
-		# Adjust connections if they exist and architecture changed
-		if genome.connections is not None and cfg.total_input_bits is not None:
-			mutant.connections = self._adjust_connections_for_mutation_ts(
-				genome, mutant, old_bits_per_neuron, old_neurons, cfg.total_input_bits
-			)
-
+			changed = None  # Connections phase: no cluster-level tabu
+		move = changed if changed else None
 		return mutant, move
-
-	def _adjust_connections_for_mutation_ts(
-		self,
-		old_genome: 'ClusterGenome',
-		new_genome: 'ClusterGenome',
-		old_bits_per_neuron: list[int],
-		old_neurons: list[int],
-		total_input_bits: int,
-	) -> list[int]:
-		"""Adjust connections when architecture changes during TS mutation.
-
-		Uses per-neuron bits from old and new genomes with connection_offsets
-		for precise indexing into the flat connections array.
-		"""
-		result = []
-		old_neuron_offsets = old_genome.cluster_neuron_offsets
-		old_conn_offsets = old_genome.connection_offsets
-		new_neuron_offsets = new_genome.cluster_neuron_offsets
-
-		for cluster_idx in range(len(new_genome.neurons_per_cluster)):
-			o_neurons = old_neurons[cluster_idx]
-			n_neurons = new_genome.neurons_per_cluster[cluster_idx]
-			old_n_start = old_neuron_offsets[cluster_idx]
-			new_n_start = new_neuron_offsets[cluster_idx]
-
-			for local_neuron in range(n_neurons):
-				new_global = new_n_start + local_neuron
-				n_bits = new_genome.bits_per_neuron[new_global]
-
-				if local_neuron < o_neurons:
-					# Existing neuron - copy connections
-					old_global = old_n_start + local_neuron
-					o_bits = old_bits_per_neuron[old_global]
-					old_conn_start = old_conn_offsets[old_global]
-
-					for bit_idx in range(n_bits):
-						if bit_idx < o_bits:
-							result.append(old_genome.connections[old_conn_start + bit_idx])
-						else:
-							# New bit position - add random connection
-							result.append(self._rng.randint(0, total_input_bits - 1))
-				else:
-					# New neuron - copy from random existing with slight mutation
-					if o_neurons > 0:
-						template_local = self._rng.randint(0, o_neurons - 1)
-						template_global = old_n_start + template_local
-						template_bits = old_bits_per_neuron[template_global]
-						template_conn_start = old_conn_offsets[template_global]
-
-						for bit_idx in range(n_bits):
-							if bit_idx < template_bits:
-								old_conn = old_genome.connections[template_conn_start + bit_idx]
-								delta = self._rng.choice([-2, -1, 1, 2])
-								new_conn = max(0, min(total_input_bits - 1, old_conn + delta))
-								result.append(new_conn)
-							else:
-								result.append(self._rng.randint(0, total_input_bits - 1))
-					else:
-						for _ in range(n_bits):
-							result.append(self._rng.randint(0, total_input_bits - 1))
-
-		return result
 
 	def is_tabu_move(self, move: Any, tabu_list: list[Any]) -> bool:
 		"""
@@ -1509,9 +1159,17 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 			arch_cfg = self._arch_config
 			evaluator = self._cached_evaluator
 
-			# Phase-aware mutation rates
-			bits_mutation_rate = cfg.mutation_rate if arch_cfg.optimize_bits else 0.0
-			neurons_mutation_rate = cfg.mutation_rate if arch_cfg.optimize_neurons else 0.0
+			# Phase-aware mutation rates: each phase uses cfg.mutation_rate
+			# for its own dimension, 0.0 for others
+			if self._phase_type == PhaseType.NEURONS:
+				bits_mutation_rate = 0.0
+				neurons_mutation_rate = cfg.mutation_rate
+			elif self._phase_type == PhaseType.BITS:
+				bits_mutation_rate = cfg.mutation_rate
+				neurons_mutation_rate = 0.0
+			else:  # CONNECTIONS
+				bits_mutation_rate = cfg.mutation_rate
+				neurons_mutation_rate = 0.0
 
 			# fitness_percentile: generate larger pool, rank, keep best n_neighbors
 			import math
@@ -1537,6 +1195,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				total_generations=cfg.iterations,
 				return_best_n=True,
 				mutable_clusters=arch_cfg.mutable_clusters,
+				phase_type=int(self._phase_type),
 			)
 
 			# Convert to 3-tuples, rank by fitness, return best n_neighbors
@@ -1569,8 +1228,17 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 		cfg = self._config
 		arch_cfg = self._arch_config
 
-		bits_mutation_rate = cfg.mutation_rate if arch_cfg.optimize_bits else 0.0
-		neurons_mutation_rate = cfg.mutation_rate if arch_cfg.optimize_neurons else 0.0
+		# Phase-aware mutation rates: each phase uses cfg.mutation_rate
+		# for its own dimension, 0.0 for others
+		if self._phase_type == PhaseType.NEURONS:
+			bits_mutation_rate = 0.0
+			neurons_mutation_rate = cfg.mutation_rate
+		elif self._phase_type == PhaseType.BITS:
+			bits_mutation_rate = cfg.mutation_rate
+			neurons_mutation_rate = 0.0
+		else:  # CONNECTIONS
+			bits_mutation_rate = cfg.mutation_rate
+			neurons_mutation_rate = 0.0
 
 		import math
 		pct = cfg.fitness_percentile if cfg.fitness_percentile and 0 < cfg.fitness_percentile < 1.0 else None
@@ -1611,6 +1279,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				seed=self._seed_offset + iteration * 1000,
 				return_best_n=True,
 				mutable_clusters=arch_cfg.mutable_clusters,
+				phase_type=int(self._phase_type),
 			)
 		finally:
 			if hasattr(evaluator, 'set_progress_callback'):

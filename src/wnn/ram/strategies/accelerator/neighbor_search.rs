@@ -14,6 +14,19 @@ use rand::SeedableRng;
 use std::fs::OpenOptions;
 use chrono::Local;
 
+/// Phase type for phase-aware crossover and mutation.
+///
+/// Each optimization phase only touches its own dimension:
+/// - Neurons: changes neuron counts, preserves existing neurons' bits + connections
+/// - Bits: changes bit counts per neuron, adds/removes connections (no drift)
+/// - Connections: perturbs connection targets, preserves architecture
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PhaseType {
+    Neurons = 0,
+    Bits = 1,
+    Connections = 2,
+}
+
 /// Configuration for genome mutation.
 #[derive(Clone)]
 pub struct MutationConfig {
@@ -28,6 +41,7 @@ pub struct MutationConfig {
     pub bits_mutation_rate: f64,
     pub neurons_mutation_rate: f64,
     pub total_input_bits: usize,
+    pub phase_type: PhaseType,
 }
 
 impl MutationConfig {
@@ -173,12 +187,40 @@ pub fn format_gen_prefix(generation: usize, total_generations: usize) -> String 
     )
 }
 
-/// Mutate a genome to create a neighbor (per-neuron bits).
+/// Compute cumulative neuron offsets per cluster: [0, n0, n0+n1, ...].
+fn compute_neuron_offsets(neurons_per_cluster: &[usize]) -> Vec<usize> {
+    let mut offsets = Vec::with_capacity(neurons_per_cluster.len() + 1);
+    offsets.push(0usize);
+    for &n in neurons_per_cluster {
+        offsets.push(offsets.last().unwrap() + n);
+    }
+    offsets
+}
+
+/// Compute cumulative connection offsets per neuron: [0, b0, b0+b1, ...].
+fn compute_conn_offsets(bits_per_neuron: &[usize]) -> Vec<usize> {
+    let mut offsets = Vec::with_capacity(bits_per_neuron.len() + 1);
+    offsets.push(0usize);
+    for &b in bits_per_neuron {
+        offsets.push(offsets.last().unwrap() + b);
+    }
+    offsets
+}
+
+/// Get mutable cluster indices from config.
+fn mutable_clusters(config: &MutationConfig) -> Vec<usize> {
+    match &config.mutable_clusters {
+        Some(indices) => indices.clone(),
+        None => (0..config.num_clusters).collect(),
+    }
+}
+
+/// Mutate a genome to create a neighbor, dispatching by phase type.
 ///
-/// Mutations include:
-/// - bits_per_neuron: ±delta per-neuron with mutation_rate (only mutable clusters)
-/// - neurons_per_cluster: ±delta per-cluster with mutation_rate (only mutable clusters)
-/// - connections: adjusted when architecture changes, small perturbations
+/// Each phase only touches its own dimension:
+/// - Neurons: add/remove neurons, preserve existing bits + connections
+/// - Bits: change bit counts, add/remove connections (no drift on existing)
+/// - Connections: perturb connection targets, preserve architecture
 pub fn mutate_genome(
     bits_per_neuron: &[usize],
     neurons_per_cluster: &[usize],
@@ -186,30 +228,116 @@ pub fn mutate_genome(
     config: &MutationConfig,
     rng: &mut impl Rng,
 ) -> (Vec<usize>, Vec<usize>, Vec<i64>) {
-    let bits_delta_max = config.bits_delta_max();
-    let neurons_delta_max = config.neurons_delta_max();
-
-    let mut new_bits = bits_per_neuron.to_vec();
-    let mut new_neurons = neurons_per_cluster.to_vec();
-    let old_neurons = neurons_per_cluster.to_vec();
-
-    // Build cluster→neuron offset mapping
-    let mut neuron_offsets = Vec::with_capacity(config.num_clusters + 1);
-    neuron_offsets.push(0usize);
-    for &n in neurons_per_cluster {
-        neuron_offsets.push(neuron_offsets.last().unwrap() + n);
+    match config.phase_type {
+        PhaseType::Neurons => mutate_neurons_phase(bits_per_neuron, neurons_per_cluster, connections, config, rng),
+        PhaseType::Bits => mutate_bits_phase(bits_per_neuron, neurons_per_cluster, connections, config, rng),
+        PhaseType::Connections => mutate_connections_phase(bits_per_neuron, neurons_per_cluster, connections, config, rng),
     }
+}
 
-    // Mutable cluster indices
-    let mutable: Vec<usize> = match &config.mutable_clusters {
-        Some(indices) => indices.clone(),
-        None => (0..config.num_clusters).collect(),
-    };
+/// Neurons phase mutation: add/remove neurons per cluster.
+///
+/// - Existing neurons keep their bits + connections untouched
+/// - New neurons get the mode bit size + fully random connections
+/// - Removed neurons are dropped from end of cluster
+fn mutate_neurons_phase(
+    bits_per_neuron: &[usize],
+    neurons_per_cluster: &[usize],
+    connections: &[i64],
+    config: &MutationConfig,
+    rng: &mut impl Rng,
+) -> (Vec<usize>, Vec<usize>, Vec<i64>) {
+    let neurons_delta_max = config.neurons_delta_max();
+    let neuron_off = compute_neuron_offsets(neurons_per_cluster);
+    let conn_off = compute_conn_offsets(bits_per_neuron);
+    let mutable = mutable_clusters(config);
 
-    // Phase 1: Mutate bits per-neuron
+    let mut new_neurons = neurons_per_cluster.to_vec();
+
+    // Determine which clusters change
     for &c in &mutable {
         if c >= config.num_clusters { continue; }
-        for n_idx in neuron_offsets[c]..neuron_offsets[c + 1] {
+        if rng.gen::<f64>() < config.neurons_mutation_rate {
+            let delta = rng.gen_range(-neurons_delta_max..=neurons_delta_max);
+            let new_n = (new_neurons[c] as i32 + delta)
+                .max(config.min_neurons as i32)
+                .min(config.max_neurons as i32) as usize;
+            new_neurons[c] = new_n;
+        }
+    }
+
+    // Rebuild bits_per_neuron and connections to match new neuron counts
+    let mut new_bits = Vec::new();
+    let mut new_conns = Vec::new();
+
+    for c in 0..config.num_clusters {
+        let old_n = neurons_per_cluster[c];
+        let new_n = new_neurons[c];
+        let old_start = neuron_off[c];
+
+        // Compute mode bit size for this cluster (for new neurons)
+        let cluster_bits: Vec<usize> = (old_start..neuron_off[c + 1])
+            .map(|i| bits_per_neuron[i])
+            .collect();
+        let mode_bits = if cluster_bits.is_empty() {
+            (config.min_bits + config.max_bits) / 2
+        } else {
+            // Simple mode: most common value
+            let mut counts = std::collections::HashMap::new();
+            for &b in &cluster_bits {
+                *counts.entry(b).or_insert(0usize) += 1;
+            }
+            *counts.iter().max_by_key(|&(_, &count)| count).unwrap().0
+        };
+
+        // Copy existing neurons (up to min of old/new)
+        let keep_n = old_n.min(new_n);
+        for local in 0..keep_n {
+            let global = old_start + local;
+            new_bits.push(bits_per_neuron[global]);
+            // Copy connections verbatim
+            let cs = conn_off[global];
+            let ce = conn_off[global + 1];
+            new_conns.extend_from_slice(&connections[cs..ce]);
+        }
+
+        // Add new neurons with mode bit size + random connections
+        for _ in keep_n..new_n {
+            new_bits.push(mode_bits);
+            for _ in 0..mode_bits {
+                new_conns.push(rng.gen_range(0..config.total_input_bits as i64));
+            }
+        }
+    }
+
+    (new_bits, new_neurons, new_conns)
+}
+
+/// Bits phase mutation: change bit counts per neuron.
+///
+/// - Add bits → add random connections (one per added bit)
+/// - Remove bits → randomly drop connections (Fisher-Yates partial shuffle)
+/// - Existing connections are NEVER drifted
+fn mutate_bits_phase(
+    bits_per_neuron: &[usize],
+    neurons_per_cluster: &[usize],
+    connections: &[i64],
+    config: &MutationConfig,
+    rng: &mut impl Rng,
+) -> (Vec<usize>, Vec<usize>, Vec<i64>) {
+    let bits_delta_max = config.bits_delta_max();
+    let neuron_off = compute_neuron_offsets(neurons_per_cluster);
+    let conn_off = compute_conn_offsets(bits_per_neuron);
+    let mutable = mutable_clusters(config);
+    let mutable_set: std::collections::HashSet<usize> = mutable.into_iter().collect();
+
+    let mut new_bits = bits_per_neuron.to_vec();
+    let new_neurons = neurons_per_cluster.to_vec(); // unchanged
+
+    // Mutate bit counts for neurons in mutable clusters
+    for c in 0..config.num_clusters {
+        if !mutable_set.contains(&c) { continue; }
+        for n_idx in neuron_off[c]..neuron_off[c + 1] {
             if rng.gen::<f64>() < config.bits_mutation_rate {
                 let delta = rng.gen_range(-bits_delta_max..=bits_delta_max);
                 let new_val = (new_bits[n_idx] as i32 + delta)
@@ -220,178 +348,68 @@ pub fn mutate_genome(
         }
     }
 
-    // Phase 2: Mutate neuron count per-cluster (add/remove neurons)
-    for &c in &mutable {
-        if c >= config.num_clusters { continue; }
-        if rng.gen::<f64>() < config.neurons_mutation_rate {
-            let delta = rng.gen_range(-neurons_delta_max..=neurons_delta_max);
-            let new_n = (new_neurons[c] as i32 + delta)
-                .max(config.min_neurons as i32)
-                .min(config.max_neurons as i32) as usize;
-            let old_n = old_neurons[c];
+    // Rebuild connections: preserve existing, add/remove as needed
+    let mut new_conns = Vec::new();
+    let total_neurons: usize = neurons_per_cluster.iter().sum();
 
-            if new_n > old_n {
-                // Add neurons: clone random existing neuron's bits
-                let cluster_start = neuron_offsets[c];
-                let cluster_end = neuron_offsets[c + 1];
-                for _ in 0..(new_n - old_n) {
-                    let template = rng.gen_range(cluster_start..cluster_end);
-                    // Insert at end of new_bits (will be re-ordered below)
-                    new_bits.push(new_bits[template]);
-                }
-            } else if new_n < old_n {
-                // Remove trailing neurons from this cluster
-                // Mark for removal (we'll rebuild below)
+    for n_idx in 0..total_neurons {
+        let old_b = bits_per_neuron[n_idx];
+        let new_b = new_bits[n_idx];
+        let cs = conn_off[n_idx];
+
+        if new_b == old_b {
+            // Unchanged: copy all connections verbatim
+            new_conns.extend_from_slice(&connections[cs..cs + old_b]);
+        } else if new_b > old_b {
+            // More bits: keep ALL existing connections, add random for new bits
+            new_conns.extend_from_slice(&connections[cs..cs + old_b]);
+            for _ in 0..(new_b - old_b) {
+                new_conns.push(rng.gen_range(0..config.total_input_bits as i64));
             }
-            new_neurons[c] = new_n;
+        } else {
+            // Fewer bits: randomly select which connections to KEEP (Fisher-Yates)
+            // Build index array and partial shuffle to select `new_b` to keep
+            let mut indices: Vec<usize> = (0..old_b).collect();
+            for i in 0..new_b {
+                let j = rng.gen_range(i..old_b);
+                indices.swap(i, j);
+            }
+            // Sort the kept indices to preserve relative order
+            let mut kept: Vec<usize> = indices[..new_b].to_vec();
+            kept.sort_unstable();
+            for &idx in &kept {
+                new_conns.push(connections[cs + idx]);
+            }
         }
     }
 
-    // Rebuild new_bits to match new_neurons layout if neurons changed
-    // (The simple push/remove above doesn't maintain correct ordering)
-    let total_old: usize = old_neurons.iter().sum();
-    let total_new: usize = new_neurons.iter().sum();
-    if total_new != total_old || new_bits.len() != total_new {
-        let mut rebuilt_bits = Vec::with_capacity(total_new);
-        let mut old_offset = 0;
-        for c in 0..config.num_clusters {
-            let old_n = old_neurons[c];
-            let new_n = new_neurons[c];
-            // Copy existing neurons (up to min of old/new)
-            let copy_n = old_n.min(new_n);
-            for j in 0..copy_n {
-                rebuilt_bits.push(new_bits[old_offset + j]);
-            }
-            // Add new neurons if needed
-            if new_n > old_n {
-                for _ in 0..(new_n - old_n) {
-                    let template = if old_n > 0 {
-                        new_bits[old_offset + rng.gen_range(0..old_n)]
-                    } else {
-                        rng.gen_range(config.min_bits..=config.max_bits)
-                    };
-                    rebuilt_bits.push(template);
-                }
-            }
-            old_offset += old_n;
-        }
-        new_bits = rebuilt_bits;
-    }
-
-    // Adjust connections for architecture changes
-    let new_connections = adjust_connections_per_neuron(
-        connections,
-        bits_per_neuron,
-        &old_neurons,
-        &new_bits,
-        &new_neurons,
-        config.total_input_bits,
-        rng,
-    );
-
-    (new_bits, new_neurons, new_connections)
+    (new_bits, new_neurons, new_conns)
 }
 
-/// Adjust connections when per-neuron architecture changes.
+/// Connections phase mutation: perturb connection targets.
 ///
-/// Each neuron has its own bit count, so connections are a flat array where
-/// neuron i owns `bits_per_neuron[i]` contiguous connections. When bits change
-/// (grow/shrink) or neurons are added/removed, this function rebuilds the
-/// connection array to match the new architecture.
-fn adjust_connections_per_neuron(
-    old_connections: &[i64],
-    old_bits_per_neuron: &[usize],
-    old_neurons_per_cluster: &[usize],
-    new_bits_per_neuron: &[usize],
-    new_neurons_per_cluster: &[usize],
-    total_input_bits: usize,
+/// - Neurons and bits unchanged
+/// - Each connection has bits_mutation_rate chance of ±2 perturbation
+fn mutate_connections_phase(
+    bits_per_neuron: &[usize],
+    neurons_per_cluster: &[usize],
+    connections: &[i64],
+    config: &MutationConfig,
     rng: &mut impl Rng,
-) -> Vec<i64> {
-    if old_connections.is_empty() {
-        return Vec::new();
-    }
+) -> (Vec<usize>, Vec<usize>, Vec<i64>) {
+    let new_bits = bits_per_neuron.to_vec();
+    let new_neurons = neurons_per_cluster.to_vec();
 
-    let num_clusters = old_neurons_per_cluster.len();
-    let mut result = Vec::new();
-
-    // Build old connection offsets per neuron (cumulative sum of old bits)
-    let mut old_conn_offsets = vec![0usize];
-    for &b in old_bits_per_neuron {
-        old_conn_offsets.push(old_conn_offsets.last().unwrap() + b);
-    }
-
-    // Build old/new neuron offsets per cluster
-    let mut old_neuron_offsets = vec![0usize];
-    for &n in old_neurons_per_cluster {
-        old_neuron_offsets.push(old_neuron_offsets.last().unwrap() + n);
-    }
-    let mut new_neuron_offsets = vec![0usize];
-    for &n in new_neurons_per_cluster {
-        new_neuron_offsets.push(new_neuron_offsets.last().unwrap() + n);
-    }
-
-    for c in 0..num_clusters {
-        let old_n = old_neurons_per_cluster[c];
-        let new_n = new_neurons_per_cluster[c];
-        let old_cluster_start = old_neuron_offsets[c];
-        let new_cluster_start = new_neuron_offsets[c];
-
-        for local_idx in 0..new_n {
-            let new_global = new_cluster_start + local_idx;
-            let n_bits = new_bits_per_neuron[new_global];
-
-            if local_idx < old_n {
-                // Existing neuron — copy connections, drift only if bits changed
-                let old_global = old_cluster_start + local_idx;
-                let o_bits = old_bits_per_neuron[old_global];
-                let old_start = old_conn_offsets[old_global];
-                let bits_changed = n_bits != o_bits;
-
-                for bit_idx in 0..n_bits {
-                    if bit_idx < o_bits {
-                        let old_conn = old_connections[old_start + bit_idx];
-                        // Only drift connections when this neuron's bit count changed.
-                        // Unconditional drift (10% of 180K connections) destroys
-                        // offspring quality, making GA/TS optimization ineffective.
-                        let new_conn = if bits_changed && rng.gen::<f64>() < 0.1 {
-                            let delta = rng.gen_range(-2i64..=2i64);
-                            (old_conn + delta).max(0).min(total_input_bits as i64 - 1)
-                        } else {
-                            old_conn
-                        };
-                        result.push(new_conn);
-                    } else {
-                        result.push(rng.gen_range(0..total_input_bits as i64));
-                    }
-                }
-            } else {
-                // New neuron — clone from random existing + mutate
-                if old_n > 0 {
-                    let template_local = rng.gen_range(0..old_n);
-                    let template_global = old_cluster_start + template_local;
-                    let template_bits = old_bits_per_neuron[template_global];
-                    let template_start = old_conn_offsets[template_global];
-
-                    for bit_idx in 0..n_bits {
-                        if bit_idx < template_bits {
-                            let old_conn = old_connections[template_start + bit_idx];
-                            let delta = *[-2i64, -1, 1, 2].choose(rng).unwrap();
-                            let new_conn = (old_conn + delta).max(0).min(total_input_bits as i64 - 1);
-                            result.push(new_conn);
-                        } else {
-                            result.push(rng.gen_range(0..total_input_bits as i64));
-                        }
-                    }
-                } else {
-                    for _ in 0..n_bits {
-                        result.push(rng.gen_range(0..total_input_bits as i64));
-                    }
-                }
-            }
+    let mut new_conns = connections.to_vec();
+    let limit = config.total_input_bits as i64;
+    for conn in &mut new_conns {
+        if rng.gen::<f64>() < config.bits_mutation_rate {
+            let delta = rng.gen_range(-2i64..=2i64);
+            *conn = (*conn + delta).max(0).min(limit - 1);
         }
     }
 
-    result
+    (new_bits, new_neurons, new_conns)
 }
 
 /// Generate random connections for a genome from scratch.
@@ -646,6 +664,7 @@ pub struct GAConfig {
     pub crossover_rate: f64,        // Probability of crossover vs clone
     pub tournament_size: usize,     // Tournament selection size
     pub total_input_bits: usize,
+    pub phase_type: PhaseType,
 }
 
 /// Tournament selection: pick best from random subset.
@@ -668,59 +687,150 @@ fn tournament_select<'a>(
     &population[best_idx]
 }
 
-/// Single-point crossover at cluster boundary (per-neuron bits).
+/// Phase-aware crossover dispatch.
 ///
 /// Population tuples are (bits_per_neuron, neurons_per_cluster, connections, fitness).
-/// bits_per_neuron is [total_neurons] and connections is flat [sum(bits_per_neuron)],
-/// so we need neuron offsets and connection offsets to slice at cluster boundaries.
 fn crossover(
+    parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+    parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+    num_clusters: usize,
+    phase_type: PhaseType,
+    rng: &mut impl Rng,
+) -> (Vec<usize>, Vec<usize>, Vec<i64>) {
+    match phase_type {
+        PhaseType::Neurons => crossover_neurons(parent1, parent2, num_clusters, rng),
+        PhaseType::Bits => crossover_bits(parent1, parent2, num_clusters, rng),
+        PhaseType::Connections => crossover_connections(parent1, parent2, num_clusters, rng),
+    }
+}
+
+/// Neuron-pool crossover: for each cluster, pool neurons from both parents,
+/// shuffle, sample child_n without replacement.
+fn crossover_neurons(
     parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
     parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
     num_clusters: usize,
     rng: &mut impl Rng,
 ) -> (Vec<usize>, Vec<usize>, Vec<i64>) {
-    let crossover_point = rng.gen_range(1..num_clusters);
+    let p1_neuron_off = compute_neuron_offsets(&parent1.1);
+    let p2_neuron_off = compute_neuron_offsets(&parent2.1);
+    let p1_conn_off = compute_conn_offsets(&parent1.0);
+    let p2_conn_off = compute_conn_offsets(&parent2.0);
 
-    // neurons_per_cluster is per-cluster — straightforward crossover
-    let child_neurons: Vec<usize> = parent1.1[..crossover_point].iter()
-        .chain(parent2.1[crossover_point..].iter())
-        .copied()
-        .collect();
-
-    // Compute neuron offsets for each parent (cumulative sum of neurons_per_cluster)
-    let p1_neuron_off: Vec<usize> = std::iter::once(0)
-        .chain(parent1.1.iter().scan(0, |acc, &n| { *acc += n; Some(*acc) }))
-        .collect();
-    let p2_neuron_off: Vec<usize> = std::iter::once(0)
-        .chain(parent2.1.iter().scan(0, |acc, &n| { *acc += n; Some(*acc) }))
-        .collect();
-
-    // bits_per_neuron: take parent1's neurons for clusters < crossover_point, parent2's for rest
     let mut child_bits = Vec::new();
-    child_bits.extend_from_slice(&parent1.0[..p1_neuron_off[crossover_point]]);
-    child_bits.extend_from_slice(&parent2.0[p2_neuron_off[crossover_point]..]);
+    let mut child_neurons = Vec::new();
+    let mut child_conns = Vec::new();
 
-    // Connections: need per-neuron connection offsets to slice correctly
-    let mut child_connections = Vec::new();
-    if !parent1.2.is_empty() && !parent2.2.is_empty() {
-        // Connection offsets = cumulative sum of bits_per_neuron
-        let p1_conn_off: Vec<usize> = std::iter::once(0)
-            .chain(parent1.0.iter().scan(0, |acc, &b| { *acc += b; Some(*acc) }))
-            .collect();
-        let p2_conn_off: Vec<usize> = std::iter::once(0)
-            .chain(parent2.0.iter().scan(0, |acc, &b| { *acc += b; Some(*acc) }))
-            .collect();
+    for c in 0..num_clusters {
+        let p1_n = parent1.1[c];
+        let p2_n = parent2.1[c];
 
-        // Parent1 connections for neurons 0..p1_neuron_off[crossover_point]
-        let p1_conn_end = p1_conn_off[p1_neuron_off[crossover_point]];
-        child_connections.extend_from_slice(&parent1.2[..p1_conn_end]);
+        // child_n = randomly chosen from {parent1_n, parent2_n}
+        let child_n = if rng.gen::<bool>() { p1_n } else { p2_n };
+        child_neurons.push(child_n);
 
-        // Parent2 connections for neurons p2_neuron_off[crossover_point]..end
-        let p2_conn_start = p2_conn_off[p2_neuron_off[crossover_point]];
-        child_connections.extend_from_slice(&parent2.2[p2_conn_start..]);
+        // Pool all neurons from both parents as (bits, connections_slice)
+        struct NeuronData<'a> { bits: usize, conns: &'a [i64] }
+        let mut pool: Vec<NeuronData> = Vec::with_capacity(p1_n + p2_n);
+
+        for local in 0..p1_n {
+            let global = p1_neuron_off[c] + local;
+            let cs = p1_conn_off[global];
+            let ce = p1_conn_off[global + 1];
+            pool.push(NeuronData {
+                bits: parent1.0[global],
+                conns: if parent1.2.is_empty() { &[] } else { &parent1.2[cs..ce] },
+            });
+        }
+        for local in 0..p2_n {
+            let global = p2_neuron_off[c] + local;
+            let cs = p2_conn_off[global];
+            let ce = p2_conn_off[global + 1];
+            pool.push(NeuronData {
+                bits: parent2.0[global],
+                conns: if parent2.2.is_empty() { &[] } else { &parent2.2[cs..ce] },
+            });
+        }
+
+        // Shuffle pool and take first child_n (sample without replacement)
+        pool.shuffle(rng);
+        for neuron in pool.into_iter().take(child_n) {
+            child_bits.push(neuron.bits);
+            child_conns.extend_from_slice(neuron.conns);
+        }
     }
 
-    (child_bits, child_neurons, child_connections)
+    (child_bits, child_neurons, child_conns)
+}
+
+/// Cluster-level crossover: per-cluster coin flip, take whole cluster from one parent.
+fn crossover_bits(
+    parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+    parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+    num_clusters: usize,
+    rng: &mut impl Rng,
+) -> (Vec<usize>, Vec<usize>, Vec<i64>) {
+    let p1_neuron_off = compute_neuron_offsets(&parent1.1);
+    let p2_neuron_off = compute_neuron_offsets(&parent2.1);
+    let p1_conn_off = compute_conn_offsets(&parent1.0);
+    let p2_conn_off = compute_conn_offsets(&parent2.0);
+
+    let mut child_bits = Vec::new();
+    let mut child_neurons = Vec::new();
+    let mut child_conns = Vec::new();
+
+    for c in 0..num_clusters {
+        if rng.gen::<bool>() {
+            // Take from parent1
+            let ns = p1_neuron_off[c];
+            let ne = p1_neuron_off[c + 1];
+            child_neurons.push(parent1.1[c]);
+            child_bits.extend_from_slice(&parent1.0[ns..ne]);
+            if !parent1.2.is_empty() {
+                let cs = p1_conn_off[ns];
+                let ce = p1_conn_off[ne];
+                child_conns.extend_from_slice(&parent1.2[cs..ce]);
+            }
+        } else {
+            // Take from parent2
+            let ns = p2_neuron_off[c];
+            let ne = p2_neuron_off[c + 1];
+            child_neurons.push(parent2.1[c]);
+            child_bits.extend_from_slice(&parent2.0[ns..ne]);
+            if !parent2.2.is_empty() {
+                let cs = p2_conn_off[ns];
+                let ce = p2_conn_off[ne];
+                child_conns.extend_from_slice(&parent2.2[cs..ce]);
+            }
+        }
+    }
+
+    (child_bits, child_neurons, child_conns)
+}
+
+/// Connection-level crossover: per-connection coin flip if same architecture,
+/// otherwise fall back to cluster-level crossover.
+fn crossover_connections(
+    parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+    parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+    num_clusters: usize,
+    rng: &mut impl Rng,
+) -> (Vec<usize>, Vec<usize>, Vec<i64>) {
+    // Check if parents have identical architecture
+    let same_arch = parent1.1 == parent2.1 && parent1.0 == parent2.0;
+
+    if same_arch && !parent1.2.is_empty() && !parent2.2.is_empty() {
+        // Per-connection coin flip (architecture is identical)
+        let child_bits = parent1.0.clone();
+        let child_neurons = parent1.1.clone();
+        let child_conns: Vec<i64> = parent1.2.iter().zip(parent2.2.iter())
+            .map(|(&c1, &c2)| if rng.gen::<bool>() { c1 } else { c2 })
+            .collect();
+        (child_bits, child_neurons, child_conns)
+    } else {
+        // Different architectures: fall back to cluster-level
+        crossover_bits(parent1, parent2, num_clusters, rng)
+    }
 }
 
 /// Mutate a genome for GA (reuses MutationConfig logic).
@@ -742,6 +852,7 @@ fn mutate_ga(
         bits_mutation_rate: config.bits_mutation_rate,
         neurons_mutation_rate: config.neurons_mutation_rate,
         total_input_bits: config.total_input_bits,
+        phase_type: config.phase_type,
     };
     mutate_genome(bits, neurons, connections, &mutation_config, rng)
 }
@@ -802,7 +913,7 @@ where
             let p2 = tournament_select(population, ga_config.tournament_size, &mut rng);
 
             let child = if rng.gen::<f64>() < ga_config.crossover_rate {
-                crossover(p1, p2, ga_config.num_clusters, &mut rng)
+                crossover(p1, p2, ga_config.num_clusters, ga_config.phase_type, &mut rng)
             } else {
                 (p1.0.clone(), p1.1.clone(), p1.2.clone())
             };
@@ -900,19 +1011,18 @@ mod tests {
             bits_mutation_rate: 0.1,
             neurons_mutation_rate: 0.05,
             total_input_bits: 64,
+            phase_type: PhaseType::Bits,
         };
 
         assert_eq!(config.bits_delta_max(), 2); // 10% of 24 = 2.4 -> 2
         assert_eq!(config.neurons_delta_max(), 2); // 10% of 16 = 1.6 -> 2
     }
 
-    #[test]
-    fn test_mutate_genome_per_neuron() {
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let neurons = vec![1, 2, 3]; // 3 clusters, 6 neurons total
-        let config = MutationConfig {
-            num_clusters: 3,
-            neurons_per_cluster: neurons.clone(),
+    /// Helper to create a test config for a specific phase.
+    fn test_config(neurons: &[usize], phase: PhaseType) -> MutationConfig {
+        MutationConfig {
+            num_clusters: neurons.len(),
+            neurons_per_cluster: neurons.to_vec(),
             mutable_clusters: None,
             min_bits: 4,
             max_bits: 20,
@@ -921,63 +1031,181 @@ mod tests {
             bits_mutation_rate: 1.0,
             neurons_mutation_rate: 1.0,
             total_input_bits: 64,
-        };
+            phase_type: phase,
+        }
+    }
 
-        // Per-neuron bits: [neuron0=8, neuron1=10, neuron2=10, neuron3=12, neuron4=12, neuron5=12]
-        let bits = vec![8, 10, 10, 12, 12, 12];
-        // Connections: 8 + 10 + 10 + 12 + 12 + 12 = 64
-        let connections: Vec<i64> = (0..64).collect();
+    #[test]
+    fn test_mutate_neurons_phase() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let neurons = vec![2, 3]; // 2 clusters, 5 neurons total
+        let bits = vec![8, 10, 12, 12, 12];
+        let connections: Vec<i64> = (0..54).collect(); // 8+10+12+12+12 = 54
+        let config = test_config(&neurons, PhaseType::Neurons);
 
         let (new_bits, new_neurons, new_conns) = mutate_genome(
             &bits, &neurons, &connections, &config, &mut rng
         );
 
-        // Should have valid values within bounds
-        for &b in &new_bits {
-            assert!(b >= config.min_bits && b <= config.max_bits);
-        }
+        // Neurons per cluster should be within bounds
         for &n in &new_neurons {
             assert!(n >= config.min_neurons && n <= config.max_neurons);
         }
-
-        // Total neurons should match sum of new_neurons
-        let total_neurons: usize = new_neurons.iter().sum();
-        assert_eq!(new_bits.len(), total_neurons);
-
-        // Connection count should match sum of per-neuron bits
-        let expected_conns: usize = new_bits.iter().sum();
-        assert_eq!(new_conns.len(), expected_conns);
+        // Total neurons should match bits length
+        assert_eq!(new_bits.len(), new_neurons.iter().sum::<usize>());
+        // Connection count should match sum of bits
+        assert_eq!(new_conns.len(), new_bits.iter().sum::<usize>());
+        // Existing neurons should keep their EXACT connections
+        // (first min(old_n, new_n) neurons per cluster should be verbatim)
+        let old_conn_off = compute_conn_offsets(&bits);
+        let new_conn_off = compute_conn_offsets(&new_bits);
+        let old_neuron_off = compute_neuron_offsets(&neurons);
+        let new_neuron_off = compute_neuron_offsets(&new_neurons);
+        for c in 0..neurons.len() {
+            let keep = neurons[c].min(new_neurons[c]);
+            for local in 0..keep {
+                let old_g = old_neuron_off[c] + local;
+                let new_g = new_neuron_off[c] + local;
+                // Bits unchanged
+                assert_eq!(new_bits[new_g], bits[old_g]);
+                // Connections unchanged
+                let old_cs = old_conn_off[old_g];
+                let new_cs = new_conn_off[new_g];
+                let b = bits[old_g];
+                assert_eq!(&new_conns[new_cs..new_cs + b], &connections[old_cs..old_cs + b]);
+            }
+        }
     }
 
     #[test]
-    fn test_crossover_per_neuron() {
+    fn test_mutate_bits_phase_no_drift() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        // Parent1: 3 clusters, neurons=[2, 1, 2], bits=[8,8, 10, 12,12]
+        let neurons = vec![2, 2];
+        let bits = vec![8, 8, 8, 8];
+        let connections: Vec<i64> = (0..32).collect(); // 4 × 8 = 32
+        let config = test_config(&neurons, PhaseType::Bits);
+
+        let (new_bits, new_neurons, new_conns) = mutate_genome(
+            &bits, &neurons, &connections, &config, &mut rng
+        );
+
+        // Neurons unchanged in bits phase
+        assert_eq!(new_neurons, neurons);
+        // Check all connections: unchanged connections should be EXACT copies
+        let old_conn_off = compute_conn_offsets(&bits);
+        let new_conn_off = compute_conn_offsets(&new_bits);
+        for n_idx in 0..4 {
+            let old_b = bits[n_idx];
+            let new_b = new_bits[n_idx];
+            let keep = old_b.min(new_b);
+            // Existing connections preserved verbatim (no drift!)
+            let old_cs = old_conn_off[n_idx];
+            let new_cs = new_conn_off[n_idx];
+            // If bits decreased, we kept a random subset; if increased, first old_b are preserved
+            if new_b >= old_b {
+                // All old connections should be at the start
+                for i in 0..old_b {
+                    assert_eq!(new_conns[new_cs + i], connections[old_cs + i],
+                        "Connection {i} of neuron {n_idx} was drifted!");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_mutate_connections_phase_preserves_architecture() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let neurons = vec![2, 3];
+        let bits = vec![8, 10, 12, 12, 12];
+        let connections: Vec<i64> = (0..54).collect();
+        let config = test_config(&neurons, PhaseType::Connections);
+
+        let (new_bits, new_neurons, new_conns) = mutate_genome(
+            &bits, &neurons, &connections, &config, &mut rng
+        );
+
+        // Architecture completely unchanged
+        assert_eq!(new_bits, bits);
+        assert_eq!(new_neurons, neurons);
+        // Same number of connections
+        assert_eq!(new_conns.len(), connections.len());
+        // Some connections should have changed (rate=1.0)
+        let changed = new_conns.iter().zip(connections.iter()).filter(|(a, b)| a != b).count();
+        assert!(changed > 0, "No connections were perturbed");
+    }
+
+    #[test]
+    fn test_crossover_neurons_phase() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
         let p1 = (
-            vec![8, 8, 10, 12, 12],    // bits_per_neuron
-            vec![2, 1, 2],              // neurons_per_cluster
-            (0..50i64).collect::<Vec<_>>(), // 8+8+10+12+12 = 50 conns
+            vec![8, 8, 10, 12, 12],
+            vec![2, 1, 2],
+            (0..50i64).collect::<Vec<_>>(),
             10.0,
         );
-        // Parent2: 3 clusters, neurons=[1, 3, 1], bits=[6, 14,14,14, 16]
         let p2 = (
             vec![6, 14, 14, 14, 16],
             vec![1, 3, 1],
-            (100..164i64).collect::<Vec<_>>(), // 6+14+14+14+16 = 64 conns
+            (100..164i64).collect::<Vec<_>>(),
             11.0,
         );
 
-        let (child_bits, child_neurons, child_conns) = crossover(&p1, &p2, 3, &mut rng);
-
-        // neurons_per_cluster should be mix of parents
+        let (child_bits, child_neurons, child_conns) = crossover(&p1, &p2, 3, PhaseType::Neurons, &mut rng);
         assert_eq!(child_neurons.len(), 3);
+        assert_eq!(child_bits.len(), child_neurons.iter().sum::<usize>());
+        assert_eq!(child_conns.len(), child_bits.iter().sum::<usize>());
+    }
 
-        // Total neurons should match bits length
-        let total_neurons: usize = child_neurons.iter().sum();
-        assert_eq!(child_bits.len(), total_neurons);
+    #[test]
+    fn test_crossover_bits_phase() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let p1 = (
+            vec![8, 8, 10, 12, 12],
+            vec![2, 1, 2],
+            (0..50i64).collect::<Vec<_>>(),
+            10.0,
+        );
+        let p2 = (
+            vec![6, 14, 14, 14, 16],
+            vec![1, 3, 1],
+            (100..164i64).collect::<Vec<_>>(),
+            11.0,
+        );
 
-        // Connection count should match sum of bits
-        let expected_conns: usize = child_bits.iter().sum();
-        assert_eq!(child_conns.len(), expected_conns);
+        let (child_bits, child_neurons, child_conns) = crossover(&p1, &p2, 3, PhaseType::Bits, &mut rng);
+        assert_eq!(child_neurons.len(), 3);
+        assert_eq!(child_bits.len(), child_neurons.iter().sum::<usize>());
+        assert_eq!(child_conns.len(), child_bits.iter().sum::<usize>());
+        // Each cluster should come entirely from one parent
+        for c in 0..3 {
+            assert!(child_neurons[c] == p1.1[c] || child_neurons[c] == p2.1[c]);
+        }
+    }
+
+    #[test]
+    fn test_crossover_connections_same_arch() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        // Same architecture, different connections
+        let p1 = (
+            vec![4, 4, 4],
+            vec![1, 1, 1],
+            vec![0, 1, 2, 3, 10, 11, 12, 13, 20, 21, 22, 23],
+            10.0,
+        );
+        let p2 = (
+            vec![4, 4, 4],
+            vec![1, 1, 1],
+            vec![50, 51, 52, 53, 60, 61, 62, 63, 40, 41, 42, 43],
+            11.0,
+        );
+
+        let (child_bits, child_neurons, child_conns) = crossover(&p1, &p2, 3, PhaseType::Connections, &mut rng);
+        // Architecture unchanged
+        assert_eq!(child_bits, p1.0);
+        assert_eq!(child_neurons, p1.1);
+        // Each connection from one parent
+        for (i, &conn) in child_conns.iter().enumerate() {
+            assert!(conn == p1.2[i] || conn == p2.2[i]);
+        }
     }
 }

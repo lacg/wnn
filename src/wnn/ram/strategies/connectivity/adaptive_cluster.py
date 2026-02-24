@@ -62,6 +62,19 @@ def generate_connections(bits_per_neuron: list[int], total_input_bits: int, seed
 	return np_rng.integers(0, total_input_bits, size=sum(bits_per_neuron)).tolist()
 
 
+class PhaseType(IntEnum):
+	"""Phase type for phase-aware crossover and mutation.
+
+	Each optimization phase only touches its own dimension:
+	- NEURONS: changes neuron counts, preserves existing neurons' bits + connections
+	- BITS: changes bit counts per neuron, adds/removes connections (no drift)
+	- CONNECTIONS: perturbs connection targets, preserves architecture
+	"""
+	NEURONS = 0
+	BITS = 1
+	CONNECTIONS = 2
+
+
 class GenomeInitStrategy(IntEnum):
 	"""
 	Initialization strategy for adaptive cluster genomes.
@@ -527,6 +540,238 @@ class ClusterGenome:
 			bits_per_neuron=child_bits,
 			neurons_per_cluster=child_neurons,
 			connections=child_connections,
+		)
+
+	# =========================================================================
+	# Phase-Aware Genetic Operations
+	# =========================================================================
+
+	def crossover_phased(
+		self,
+		other: ClusterGenome,
+		phase_type: PhaseType,
+		rng: random.Random | None = None,
+	) -> ClusterGenome:
+		"""Phase-aware crossover dispatch."""
+		if rng is None:
+			rng = random.Random()
+		match phase_type:
+			case PhaseType.NEURONS:
+				return self._crossover_neurons(other, rng)
+			case PhaseType.BITS:
+				return self._crossover_bits(other, rng)
+			case PhaseType.CONNECTIONS:
+				return self._crossover_connections(other, rng)
+
+	def _crossover_neurons(self, other: ClusterGenome, rng: random.Random) -> ClusterGenome:
+		"""Neuron-pool crossover: pool neurons from both parents per cluster, sample child_n."""
+		num_clusters = len(self.neurons_per_cluster)
+		self_off = self.cluster_neuron_offsets
+		other_off = other.cluster_neuron_offsets
+		self_conn_off = self.connection_offsets
+		other_conn_off = other.connection_offsets
+
+		child_bits = []
+		child_neurons = []
+		child_conns = [] if (self.connections is not None and other.connections is not None) else None
+
+		for c in range(num_clusters):
+			p1_n = self.neurons_per_cluster[c]
+			p2_n = other.neurons_per_cluster[c]
+			child_n = p1_n if rng.random() < 0.5 else p2_n
+
+			# Pool all neurons from both parents
+			pool = []
+			for local in range(p1_n):
+				g = self_off[c] + local
+				bits = self.bits_per_neuron[g]
+				conns = self.connections[self_conn_off[g]:self_conn_off[g + 1]] if self.connections else []
+				pool.append((bits, conns))
+			for local in range(p2_n):
+				g = other_off[c] + local
+				bits = other.bits_per_neuron[g]
+				conns = other.connections[other_conn_off[g]:other_conn_off[g + 1]] if other.connections else []
+				pool.append((bits, conns))
+
+			rng.shuffle(pool)
+			child_neurons.append(child_n)
+			for bits, conns in pool[:child_n]:
+				child_bits.append(bits)
+				if child_conns is not None:
+					child_conns.extend(conns)
+
+		return ClusterGenome(bits_per_neuron=child_bits, neurons_per_cluster=child_neurons, connections=child_conns)
+
+	def _crossover_bits(self, other: ClusterGenome, rng: random.Random) -> ClusterGenome:
+		"""Cluster-level crossover: per-cluster coin flip, take whole cluster from one parent."""
+		num_clusters = len(self.neurons_per_cluster)
+		self_off = self.cluster_neuron_offsets
+		other_off = other.cluster_neuron_offsets
+		self_conn_off = self.connection_offsets
+		other_conn_off = other.connection_offsets
+
+		child_bits = []
+		child_neurons = []
+		child_conns = [] if (self.connections is not None and other.connections is not None) else None
+
+		for c in range(num_clusters):
+			if rng.random() < 0.5:
+				# Take from self
+				ns, ne = self_off[c], self_off[c + 1]
+				child_neurons.append(self.neurons_per_cluster[c])
+				child_bits.extend(self.bits_per_neuron[ns:ne])
+				if child_conns is not None:
+					child_conns.extend(self.connections[self_conn_off[ns]:self_conn_off[ne]])
+			else:
+				# Take from other
+				ns, ne = other_off[c], other_off[c + 1]
+				child_neurons.append(other.neurons_per_cluster[c])
+				child_bits.extend(other.bits_per_neuron[ns:ne])
+				if child_conns is not None:
+					child_conns.extend(other.connections[other_conn_off[ns]:other_conn_off[ne]])
+
+		return ClusterGenome(bits_per_neuron=child_bits, neurons_per_cluster=child_neurons, connections=child_conns)
+
+	def _crossover_connections(self, other: ClusterGenome, rng: random.Random) -> ClusterGenome:
+		"""Connection-level crossover: per-connection coin flip if same architecture, else cluster-level."""
+		same_arch = (self.neurons_per_cluster == other.neurons_per_cluster and
+					 self.bits_per_neuron == other.bits_per_neuron)
+
+		if same_arch and self.connections is not None and other.connections is not None:
+			child_conns = [
+				c1 if rng.random() < 0.5 else c2
+				for c1, c2 in zip(self.connections, other.connections)
+			]
+			return ClusterGenome(
+				bits_per_neuron=self.bits_per_neuron.copy(),
+				neurons_per_cluster=self.neurons_per_cluster.copy(),
+				connections=child_conns,
+			)
+		return self._crossover_bits(other, rng)
+
+	def mutate_phased(
+		self,
+		phase_type: PhaseType,
+		mutation_rate: float,
+		config: AdaptiveClusterConfig,
+		total_input_bits: int,
+		rng: random.Random | None = None,
+	) -> ClusterGenome:
+		"""Phase-aware mutation dispatch."""
+		if rng is None:
+			rng = random.Random()
+		match phase_type:
+			case PhaseType.NEURONS:
+				return self._mutate_neurons(mutation_rate, config, total_input_bits, rng)
+			case PhaseType.BITS:
+				return self._mutate_bits(mutation_rate, config, total_input_bits, rng)
+			case PhaseType.CONNECTIONS:
+				return self._mutate_connections(mutation_rate, config, total_input_bits, rng)
+
+	def _mutate_neurons(
+		self, mutation_rate: float, config: AdaptiveClusterConfig,
+		total_input_bits: int, rng: random.Random,
+	) -> ClusterGenome:
+		"""Neurons phase: add/remove neurons. Existing neurons keep bits + connections."""
+		neurons_delta_max = max(1, round(0.1 * (config.min_neurons + config.max_neurons)))
+		offsets = self.cluster_neuron_offsets
+		conn_off = self.connection_offsets
+
+		new_neurons = self.neurons_per_cluster.copy()
+		for c in range(len(new_neurons)):
+			if rng.random() < mutation_rate:
+				delta = rng.randint(-neurons_delta_max, neurons_delta_max)
+				new_neurons[c] = max(config.min_neurons, min(config.max_neurons, new_neurons[c] + delta))
+
+		# Rebuild bits + connections
+		new_bits = []
+		new_conns = [] if self.connections is not None else None
+		for c in range(len(new_neurons)):
+			old_n = self.neurons_per_cluster[c]
+			new_n = new_neurons[c]
+			keep = min(old_n, new_n)
+
+			# Mode bit size for new neurons
+			cluster_bits = self.bits_per_neuron[offsets[c]:offsets[c + 1]]
+			mode_bits = max(set(cluster_bits), key=cluster_bits.count) if cluster_bits else config.min_bits
+
+			# Copy existing neurons verbatim
+			for local in range(keep):
+				g = offsets[c] + local
+				new_bits.append(self.bits_per_neuron[g])
+				if new_conns is not None:
+					new_conns.extend(self.connections[conn_off[g]:conn_off[g + 1]])
+
+			# Add new neurons with mode bits + random connections
+			for _ in range(keep, new_n):
+				new_bits.append(mode_bits)
+				if new_conns is not None:
+					for _ in range(mode_bits):
+						new_conns.append(rng.randint(0, total_input_bits - 1))
+
+		return ClusterGenome(bits_per_neuron=new_bits, neurons_per_cluster=new_neurons, connections=new_conns)
+
+	def _mutate_bits(
+		self, mutation_rate: float, config: AdaptiveClusterConfig,
+		total_input_bits: int, rng: random.Random,
+	) -> ClusterGenome:
+		"""Bits phase: change bit counts per neuron. No drift on existing connections."""
+		bits_delta_max = max(1, round(0.1 * (config.min_bits + config.max_bits)))
+		new_neurons = self.neurons_per_cluster.copy()  # unchanged
+		new_bits = self.bits_per_neuron.copy()
+		conn_off = self.connection_offsets
+
+		# Mutate bit counts
+		for n_idx in range(len(new_bits)):
+			if rng.random() < mutation_rate:
+				delta = rng.randint(-bits_delta_max, bits_delta_max)
+				new_bits[n_idx] = max(config.min_bits, min(config.max_bits, new_bits[n_idx] + delta))
+
+		# Rebuild connections
+		new_conns = None
+		if self.connections is not None:
+			new_conns = []
+			for n_idx in range(len(new_bits)):
+				old_b = self.bits_per_neuron[n_idx]
+				new_b = new_bits[n_idx]
+				cs = conn_off[n_idx]
+
+				if new_b == old_b:
+					new_conns.extend(self.connections[cs:cs + old_b])
+				elif new_b > old_b:
+					# Keep all existing, add random for new bits
+					new_conns.extend(self.connections[cs:cs + old_b])
+					for _ in range(new_b - old_b):
+						new_conns.append(rng.randint(0, total_input_bits - 1))
+				else:
+					# Fewer bits: randomly select which to keep (Fisher-Yates)
+					indices = list(range(old_b))
+					for i in range(new_b):
+						j = rng.randint(i, old_b - 1)
+						indices[i], indices[j] = indices[j], indices[i]
+					kept = sorted(indices[:new_b])
+					for idx in kept:
+						new_conns.append(self.connections[cs + idx])
+
+		return ClusterGenome(bits_per_neuron=new_bits, neurons_per_cluster=new_neurons, connections=new_conns)
+
+	def _mutate_connections(
+		self, mutation_rate: float, config: AdaptiveClusterConfig,
+		total_input_bits: int, rng: random.Random,
+	) -> ClusterGenome:
+		"""Connections phase: perturb connection targets. Architecture unchanged."""
+		new_conns = None
+		if self.connections is not None:
+			new_conns = self.connections.copy()
+			for i in range(len(new_conns)):
+				if rng.random() < mutation_rate:
+					delta = rng.randint(-2, 2)
+					new_conns[i] = max(0, min(total_input_bits - 1, new_conns[i] + delta))
+
+		return ClusterGenome(
+			bits_per_neuron=self.bits_per_neuron.copy(),
+			neurons_per_cluster=self.neurons_per_cluster.copy(),
+			connections=new_conns,
 		)
 
 	# =========================================================================
