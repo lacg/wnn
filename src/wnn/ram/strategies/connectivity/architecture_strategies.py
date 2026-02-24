@@ -2021,7 +2021,9 @@ class GridSearchStrategy:
 			expand_elapsed = 0.0
 			for idx_in_new, genome in enumerate(new_genomes):
 				t_g = time.time()
-				evals = self._batch_evaluator.evaluate_batch([genome])
+				evals = self._batch_evaluator.evaluate_batch(
+					[genome], train_subset_idx=grid_train_idx,
+				)
 				ce, acc = evals[0].ce, evals[0].accuracy
 				g_elapsed = time.time() - t_g
 				expand_elapsed += g_elapsed
