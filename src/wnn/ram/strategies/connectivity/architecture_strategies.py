@@ -2307,6 +2307,11 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 		original_adapt_config = evaluator._adapt_config
 		self._configure_evaluator_adaptation(evaluator)
 
+		# Fix train subset for the entire phase so all iterations are comparable
+		# (auto-advancing would evaluate each iteration on a different subset,
+		# confusing early stopping and fitness tracking)
+		phase_train_idx = evaluator.next_train_idx()
+
 		self._log(f"\n{'='*70}")
 		self._log(f"  {self._phase_name}: {self.name}")
 		self._log(f"{'='*70}")
@@ -2315,6 +2320,7 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 		self._log(f"  Iterations: {cfg.iterations}")
 		self._log(f"  Patience: {cfg.patience} (check every {cfg.check_interval})")
 		self._log(f"  Fitness: {calculator.name}")
+		self._log(f"  Train subset: {phase_train_idx}")
 		start_threshold = self._compute_threshold(0.0)
 		end_threshold = self._compute_threshold(min(1.0, cfg.iterations / cfg.threshold_reference))
 		self._log(f"  Threshold: {start_threshold:.4%} → {end_threshold:.4%}")
@@ -2355,6 +2361,7 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 				# Evaluate all genomes (adaptation happens in-place via Rust)
 				evals = evaluator.evaluate_batch(
 					population,
+					train_subset_idx=phase_train_idx,
 					generation=iteration,
 					total_generations=cfg.iterations,
 				)
