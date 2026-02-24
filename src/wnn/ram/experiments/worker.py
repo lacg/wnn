@@ -415,7 +415,7 @@ class FlowWorker:
                 tier_config=tier_config,
                 optimize_tier0_only=params.get("optimize_tier0_only", params.get("tier0_only", False)),
                 context_size=context_size,
-                patience=params.get("patience", 10),
+                patience=params.get("patience", 3),
                 fitness_percentile=params.get("fitness_percentile"),
                 fitness_calculator_type=fitness_calculator_type,
                 fitness_weight_ce=fitness_weight_ce,
@@ -697,7 +697,7 @@ class FlowWorker:
         # Flow-level defaults from params
         tier_config = self._parse_tier_config(params.get("tier_config"))
         tier0_only = params.get("tier0_only", params.get("optimize_tier0_only", False))
-        patience = params.get("patience", 10)
+        patience = params.get("patience", 3)
         fitness_percentile = params.get("fitness_percentile")
         seed = params.get("seed")
         # Threshold params are in % from the UI (e.g. 0 = 0%, 1 = 1%)

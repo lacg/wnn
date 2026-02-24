@@ -64,7 +64,7 @@ class ExperimentConfig:
 	neighbors_per_iter: int = 50
 
 	# Shared
-	patience: int = 10
+	patience: int = 3
 	check_interval: int = 10
 	threshold_delta: float = 0.01
 	threshold_reference: int = 1000

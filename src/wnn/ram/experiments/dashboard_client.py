@@ -61,7 +61,7 @@ class FlowConfig:
 		ts_iterations: int = 250,
 		population_size: int = 50,
 		neighbors_per_iter: int = 50,
-		patience: int = 10,
+		patience: int = 3,
 		phase_order: str = "neurons_first",
 		**kwargs,
 	) -> "FlowConfig":
@@ -130,7 +130,7 @@ class DashboardClient:
 		client = DashboardClient()
 
 		# Create a flow
-		flow_config = FlowConfig.standard_6_phase("Pass 1", patience=10)
+		flow_config = FlowConfig.standard_6_phase("Pass 1", patience=3)
 		flow_id = client.create_flow(flow_config)
 
 		# Notify flow started

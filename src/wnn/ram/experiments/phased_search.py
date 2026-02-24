@@ -61,7 +61,7 @@ class PhasedSearchConfig:
 	neighbors_per_iter: int = 50
 
 	# Early stopping
-	patience: int = 10
+	patience: int = 3
 	check_interval: int = 10  # Check every N generations/iterations
 
 	# Architecture defaults (used when tiered config not specified)

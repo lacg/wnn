@@ -49,7 +49,7 @@ class FlowConfig:
 	context_size: int = 4
 
 	# Shared optimization params
-	patience: int = 10
+	patience: int = 3
 	check_interval: int = 10
 	threshold_delta: float = 0.01
 	threshold_reference: int = 1000
@@ -71,7 +71,7 @@ class FlowConfig:
 		ts_iterations: int = 250,
 		population_size: int = 50,
 		neighbors_per_iter: int = 50,
-		patience: int = 10,
+		patience: int = 3,
 		phase_order: Literal["neurons_first", "bits_first"] = "neurons_first",
 		tier_config: Optional[list[tuple[Optional[int], int, int]]] = None,
 		optimize_tier0_only: bool = False,
@@ -198,7 +198,7 @@ class FlowConfig:
 		ts_iterations: int = 250,
 		population_size: int = 50,
 		neighbors_per_iter: int = 50,
-		patience: int = 10,
+		patience: int = 3,
 		context_size: int = 4,
 		num_clusters: int = 16,
 		memory_mode: str = "QUAD_WEIGHTED",
@@ -322,7 +322,7 @@ class FlowConfig:
 		adaptation_iterations: int = 50,
 		population_size: int = 50,
 		neighbors_per_iter: int = 50,
-		patience: int = 10,
+		patience: int = 3,
 		context_size: int = 4,
 		num_clusters: int = 16,
 		memory_mode: str = "QUAD_WEIGHTED",
@@ -445,7 +445,7 @@ class FlowConfig:
 		adaptation_iterations: int = 50,
 		population_size: int = 50,
 		neighbors_per_iter: int = 50,
-		patience: int = 10,
+		patience: int = 3,
 		context_size: int = 4,
 		memory_mode: str = "QUAD_WEIGHTED",
 		neuron_sample_rate: float = 0.25,
@@ -703,7 +703,7 @@ class Flow:
 	Example usage:
 		config = FlowConfig.standard_6_phase(
 			name="Pass 1",
-			patience=10,
+			patience=3,
 			tier_config=[(100, 15, 20), (400, 10, 12), (None, 5, 8)],
 		)
 

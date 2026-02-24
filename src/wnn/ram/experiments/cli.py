@@ -226,7 +226,7 @@ def flow_create(
 	ga_generations: int = typer.Option(250, "--ga-gens", help="GA generations"),
 	ts_iterations: int = typer.Option(250, "--ts-iters", help="TS iterations"),
 	population_size: int = typer.Option(50, "--population", help="Population size"),
-	patience: int = typer.Option(10, "--patience", help="Early stopping patience"),
+	patience: int = typer.Option(3, "--patience", help="Early stopping patience"),
 	url: str = typer.Option("https://localhost:3000", "--url", help="Dashboard URL"),
 ):
 	"""Create a new flow."""
@@ -347,7 +347,7 @@ def flow_run(
 		# Parse tier config from params
 		tier_config = params.get("tier_config")
 		tier0_only = params.get("optimize_tier0_only", params.get("tier0_only", False))
-		patience = params.get("patience", 10)
+		patience = params.get("patience", 3)
 		fitness_percentile = params.get("fitness_percentile")
 		seed = params.get("seed")
 		phase_order = params.get("phase_order", "neurons_first")
