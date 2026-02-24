@@ -482,8 +482,8 @@ class FlowConfig:
 			adaptation_iterations: Iterations for neurogenesis/synaptogenesis/axonogenesis phases
 			neurons_grid: Grid of neuron counts for bitwise stages (default: [5,10,25,50,100,200,300])
 			bits_grid: Grid of bit counts for bitwise stages (default: [4,6,8,10,12,16,20,24])
-			tiered_neurons_grid: Grid of neuron counts for tiered stages (default: [3,5,7,10,15,20,25])
-			tiered_bits_grid: Grid of bit counts for tiered stages (default: [8,12,16,20,24])
+			tiered_neurons_grid: Grid of neuron counts for tiered stages (default: [20,30,40,50])
+			tiered_bits_grid: Grid of bit counts for tiered stages (default: [18,19,20,21,22,23])
 		"""
 		assert num_stages == 2, "Only 2 stages supported (for now)"
 
@@ -504,9 +504,9 @@ class FlowConfig:
 		# Default grids for tiered stages (smaller ranges — tiered has sparse
 		# address spaces, so large neurons/bits cause degenerate scores)
 		if tiered_neurons_grid is None:
-			tiered_neurons_grid = [25, 50, 75, 100, 150]
+			tiered_neurons_grid = [20, 30, 40, 50]
 		if tiered_bits_grid is None:
-			tiered_bits_grid = [16, 17, 18, 20, 21, 22]
+			tiered_bits_grid = [18, 19, 20, 21, 22, 23]
 
 		adaptation_types = {ExperimentType.NEUROGENESIS, ExperimentType.SYNAPTOGENESIS, ExperimentType.AXONOGENESIS}
 
