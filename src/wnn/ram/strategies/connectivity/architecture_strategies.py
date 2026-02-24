@@ -1004,15 +1004,16 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 						max_bits=arch_cfg.max_bits,
 						min_neurons=arch_cfg.min_neurons,
 						max_neurons=arch_cfg.max_neurons,
-						bits_mutation_rate=0.3 if arch_cfg.optimize_bits else 0.0,
-						neurons_mutation_rate=0.3 if arch_cfg.optimize_neurons else 0.0,
 					)
+					mutation_rate = 0.3
 					expanded = list(initial_population)
 					for i in range(need_count):
 						seed = initial_population[i % seed_count]
 						mutated = seed.mutate(
-							config=mutation_config,
-							total_input_bits=self._cached_evaluator.total_input_bits,
+							self._phase_type, mutation_rate,
+							mutation_config,
+							self._cached_evaluator.total_input_bits,
+							self._rng,
 						)
 						expanded.append(mutated)
 					initial_population = expanded
