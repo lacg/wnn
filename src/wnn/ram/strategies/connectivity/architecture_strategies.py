@@ -1844,6 +1844,13 @@ class GridSearchStrategy:
 				config_list.append((neurons, bits, genome))
 
 		# Phase 2: Evaluate one config at a time for real-time dashboard progress
+		# Fix train subset to a single index so all configs are compared fairly
+		# (auto-advancing would evaluate each config on a different subset)
+		grid_train_idx = None
+		if self._batch_evaluator is not None and hasattr(self._batch_evaluator, 'next_train_idx'):
+			grid_train_idx = self._batch_evaluator.next_train_idx()
+			self._log(f"  Using fixed train subset {grid_train_idx} for all {total_configs} configs")
+
 		t0 = time.time()
 		results = []
 		best_ce_so_far = float('inf')
@@ -1856,7 +1863,9 @@ class GridSearchStrategy:
 
 			t_config = time.time()
 			if self._batch_evaluator is not None:
-				evals = self._batch_evaluator.evaluate_batch([genome])
+				evals = self._batch_evaluator.evaluate_batch(
+					[genome], train_subset_idx=grid_train_idx,
+				)
 				ce, acc, bit_acc = evals[0]
 			elif evaluate_fn is not None:
 				ce = evaluate_fn(genome)
