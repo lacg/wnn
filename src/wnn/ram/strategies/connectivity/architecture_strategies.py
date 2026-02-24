@@ -983,7 +983,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 
 		# Set up phase state for Rust acceleration
 		if self._cached_evaluator is not None:
-			self._phase_train_idx = self._cached_evaluator.next_train_idx()
+			self._phase_train_idx = self._cached_evaluator.random_train_idx(self._rng)
 			self._seed_offset = int(time.time() * 1000) % (2**16)
 			cfg = self._config
 
@@ -1358,7 +1358,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 
 		# Set up phase state for Rust acceleration
 		if self._cached_evaluator is not None:
-			self._phase_train_idx = self._cached_evaluator.next_train_idx()
+			self._phase_train_idx = self._cached_evaluator.random_train_idx(self._rng)
 			self._seed_offset = int(time.time() * 1000) % (2**16)
 
 			# Ensure initial genome has connections
@@ -1521,8 +1521,8 @@ class GridSearchStrategy:
 		# Fix train subset to a single index so all configs are compared fairly
 		# (auto-advancing would evaluate each config on a different subset)
 		grid_train_idx = None
-		if self._batch_evaluator is not None and hasattr(self._batch_evaluator, 'next_train_idx'):
-			grid_train_idx = self._batch_evaluator.next_train_idx()
+		if self._batch_evaluator is not None and hasattr(self._batch_evaluator, 'random_train_idx'):
+			grid_train_idx = self._batch_evaluator.random_train_idx(self._rng)
 			self._log(f"  Using fixed train subset {grid_train_idx} for all {total_configs} configs")
 
 		t0 = time.time()
@@ -1913,6 +1913,7 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 	):
 		self._config = config
 		self._seed = seed or 42
+		self._rng = random.Random(self._seed)
 		self._log = logger or (lambda x: None)
 		self._cached_evaluator = cached_evaluator
 		self._phase_name = phase_name
@@ -1986,7 +1987,7 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 		# Fix train subset for the entire phase so all iterations are comparable
 		# (auto-advancing would evaluate each iteration on a different subset,
 		# confusing early stopping and fitness tracking)
-		phase_train_idx = evaluator.next_train_idx()
+		phase_train_idx = evaluator.random_train_idx(self._rng)
 
 		self._log(f"\n{'='*70}")
 		self._log(f"  {self._phase_name}: {self.name}")

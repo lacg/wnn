@@ -181,6 +181,12 @@ class BaseEvaluator(ABC):
 	@abstractmethod
 	def next_eval_idx(self) -> int: ...
 
+	def random_train_idx(self, rng: Optional[random.Random] = None) -> int:
+		"""Pick a random train subset index (uniform, no state advancement)."""
+		if rng is None:
+			rng = random.Random()
+		return rng.randint(0, self._num_parts - 1)
+
 	# ── Core evaluation (abstract) ────────────────────────────────────────
 
 	@abstractmethod
