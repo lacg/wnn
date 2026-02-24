@@ -341,15 +341,19 @@ fn adjust_connections_per_neuron(
             let n_bits = new_bits_per_neuron[new_global];
 
             if local_idx < old_n {
-                // Existing neuron — copy and adjust connections
+                // Existing neuron — copy connections, drift only if bits changed
                 let old_global = old_cluster_start + local_idx;
                 let o_bits = old_bits_per_neuron[old_global];
                 let old_start = old_conn_offsets[old_global];
+                let bits_changed = n_bits != o_bits;
 
                 for bit_idx in 0..n_bits {
                     if bit_idx < o_bits {
                         let old_conn = old_connections[old_start + bit_idx];
-                        let new_conn = if rng.gen::<f64>() < 0.1 {
+                        // Only drift connections when this neuron's bit count changed.
+                        // Unconditional drift (10% of 180K connections) destroys
+                        // offspring quality, making GA/TS optimization ineffective.
+                        let new_conn = if bits_changed && rng.gen::<f64>() < 0.1 {
                             let delta = rng.gen_range(-2i64..=2i64);
                             (old_conn + delta).max(0).min(total_input_bits as i64 - 1)
                         } else {

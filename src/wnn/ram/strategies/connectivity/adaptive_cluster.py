@@ -439,15 +439,16 @@ class ClusterGenome:
 				n_bits = new_bits[new_neuron_idx]
 
 				if local_n < o_n:
-					# Existing neuron
+					# Existing neuron — copy connections, drift only if bits changed
 					old_global_idx = old_cluster_start + local_n
 					old_b = self.bits_per_neuron[old_global_idx]
 					old_start = old_conn_offsets[old_global_idx]
+					bits_changed = n_bits != old_b
 
 					for bit_idx in range(n_bits):
 						if bit_idx < old_b:
 							old_conn = self.connections[old_start + bit_idx]
-							if random.random() < 0.1:
+							if bits_changed and random.random() < 0.1:
 								delta = random.choice([-2, -1, 1, 2])
 								old_conn = max(0, min(total_input_bits - 1, old_conn + delta))
 							result.append(old_conn)
