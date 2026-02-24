@@ -2001,15 +2001,27 @@ class GridSearchStrategy:
 			output_population.append(r["genome"])
 			population_metrics.append((r["ce"], r["accuracy"]))
 
-			# Remaining: fresh random connections (need evaluation)
+			# Remaining: clone original + perturb connections (not fully random).
+			# Fully random connections produce baseline CE (~5.38), wiping out the
+			# original's connection quality (~5.24). Perturbing 20% preserves most
+			# good connections while adding diversity for the GA.
+			original = r["genome"]
 			for _ in range(n_genomes - 1):
-				genome = self._create_genome(r["neurons"], r["bits"])
+				genome = original.clone()
+				if genome.connections is not None and cfg.total_input_bits is not None:
+					import random
+					total_input = cfg.total_input_bits
+					conns = genome.connections
+					n_perturb = max(1, len(conns) // 5)  # 20% of connections
+					indices = random.sample(range(len(conns)), n_perturb)
+					for idx in indices:
+						conns[idx] = random.randint(0, total_input - 1)
 				new_genome_indices.append(len(output_population))
 				output_population.append(genome)
 				population_metrics.append((0.0, 0.0))  # placeholder
 				new_genomes.append(genome)
 
-			self._log(f"  #{i+1:2d} n={r['neurons']:3d}, b={r['bits']:2d} (CE={r['ce']:.4f}) → {n_genomes} genomes (1 original + {n_genomes - 1} new)")
+			self._log(f"  #{i+1:2d} n={r['neurons']:3d}, b={r['bits']:2d} (CE={r['ce']:.4f}) → {n_genomes} genomes (1 original + {n_genomes - 1} perturbed)")
 
 		self._log(f"\nPopulation: {len(output_population)} genomes ({top_k} original + {len(new_genomes)} new)")
 
@@ -2021,7 +2033,9 @@ class GridSearchStrategy:
 			expand_elapsed = 0.0
 			for idx_in_new, genome in enumerate(new_genomes):
 				t_g = time.time()
-				evals = self._batch_evaluator.evaluate_batch([genome])
+				evals = self._batch_evaluator.evaluate_batch(
+					[genome], train_subset_idx=grid_train_idx,
+				)
 				ce, acc = evals[0].ce, evals[0].accuracy
 				g_elapsed = time.time() - t_g
 				expand_elapsed += g_elapsed
