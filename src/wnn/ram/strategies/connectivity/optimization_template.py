@@ -270,6 +270,7 @@ class OptimizationTemplate(ABC, Generic[T]):
 		initial_population: Optional[list[T]],
 		initial_evals: Optional[list[tuple[float, float]]],
 		target_size: int,
+		force_re_evaluate: bool = False,
 	) -> list[tuple[T, Optional[float], Optional[float]]]:
 		"""
 		Seed population from previous phase with cached (CE, acc) reuse.
@@ -278,6 +279,11 @@ class OptimizationTemplate(ABC, Generic[T]):
 		previous phase provides both genomes AND their evaluation metrics,
 		we reuse those metrics instead of re-evaluating — saving significant
 		compute time.
+
+		When force_re_evaluate is True, cached evals are discarded so all
+		seeded genomes will be re-evaluated on the current phase's train
+		subset. This prevents apples-to-oranges comparisons at phase
+		transitions where different train subsets are used.
 
 		Rules for size mismatch:
 		- same size → use all, skip re-evaluation
@@ -288,6 +294,7 @@ class OptimizationTemplate(ABC, Generic[T]):
 			initial_population: Genomes from previous phase
 			initial_evals: Cached (CE, accuracy) per genome, matching order
 			target_size: Desired population size
+			force_re_evaluate: If True, discard cached evals (phase transition)
 
 		Returns:
 			List of (genome, ce, accuracy) triples. May be shorter than
@@ -299,7 +306,8 @@ class OptimizationTemplate(ABC, Generic[T]):
 
 		# Pair genomes with cached metrics
 		has_cached = (
-			initial_evals is not None
+			not force_re_evaluate
+			and initial_evals is not None
 			and len(initial_evals) == len(initial_population)
 		)
 
@@ -313,11 +321,16 @@ class OptimizationTemplate(ABC, Generic[T]):
 				for g, (ce, acc) in zip(initial_population, initial_evals)
 			]
 		else:
-			# No cached metrics — mark for evaluation
-			self._log.info(
-				f"[{self.name}] Seeding {len(initial_population)} genomes "
-				f"(metrics not cached, will need evaluation)"
-			)
+			if force_re_evaluate and initial_evals:
+				self._log.info(
+					f"[{self.name}] Re-evaluating {len(initial_population)} seeded genomes "
+					f"(phase transition — different train subset)"
+				)
+			else:
+				self._log.info(
+					f"[{self.name}] Seeding {len(initial_population)} genomes "
+					f"(metrics not cached, will need evaluation)"
+				)
 			seeded = [
 				(self.clone_genome(g), None, None)
 				for g in initial_population
@@ -408,9 +421,18 @@ class OptimizationTemplate(ABC, Generic[T]):
 		# 2. Setup fitness calculator
 		fitness_calculator = self._setup_fitness_calculator()
 
-		# 3. Seed population with cached evals
+		# 3. Seed population — force re-evaluation at phase transitions
+		# (cached evals used a different train subset)
 		target_size = self._get_target_size()
-		seeded = self.seed_population(initial_population, initial_evals, target_size)
+		force_re_eval = (
+			initial_population is not None
+			and initial_evals is not None
+			and len(initial_evals) == len(initial_population)
+		)
+		seeded = self.seed_population(
+			initial_population, initial_evals, target_size,
+			force_re_evaluate=force_re_eval,
+		)
 
 		# 4. Delegate to strategy-specific loop
 		(

@@ -1996,14 +1996,27 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 		# Single tabu list
 		tabu_list: deque = deque(maxlen=cfg.tabu_size)
 
-		# Use cached eval for initial genome if available from previous phase
+		# Re-evaluate initial genome on current phase's train subset
+		# (cached evals from previous phase used a different subset)
 		initial_accuracy: Optional[float] = None
 		initial_evals = kwargs.get('initial_evals')
-		if initial_evals:
-			# Find the best genome's eval from initial_evals (first entry = best from prev phase)
+		if initial_evals and batch_evaluate_fn is not None:
+			self._log.info(f"[{self.name}] Re-evaluating initial genome (phase transition — different train subset)")
+			try:
+				init_results = batch_evaluate_fn([initial_genome])
+				if init_results:
+					initial_fitness = init_results[0][0]
+					initial_accuracy = init_results[0][1]
+					self._log.info(f"[{self.name}] Re-evaluated initial genome: CE={initial_fitness:.4f}, Acc={initial_accuracy:.2%}")
+			except Exception as e:
+				self._log.warning(f"[{self.name}] Failed to re-evaluate initial genome: {e}, falling back to cached")
+				initial_fitness = initial_evals[0][0]
+				initial_accuracy = initial_evals[0][1]
+		elif initial_evals:
+			# No batch_evaluate_fn — fall back to cached evals
 			initial_fitness = initial_evals[0][0]
 			initial_accuracy = initial_evals[0][1]
-			self._log.info(f"[{self.name}] Using cached eval for initial genome: CE={initial_fitness:.4f}, Acc={initial_accuracy:.2%}")
+			self._log.info(f"[{self.name}] Using cached eval for initial genome (no evaluator): CE={initial_fitness:.4f}, Acc={initial_accuracy:.2%}")
 		elif batch_evaluate_fn is not None:
 			try:
 				init_results = batch_evaluate_fn([initial_genome])
@@ -2022,15 +2035,13 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 		current_threshold = self._compute_threshold(0.0)
 
 		# Seed with initial neighbors if provided (e.g., from previous GA phase)
+		# Always re-evaluate at phase transitions (cached evals used different train subset)
 		if initial_neighbors:
-			has_cached = (
-				initial_evals is not None
-				and len(initial_evals) == len(initial_neighbors)
-			)
-			if has_cached:
-				self._log.info(f"[{self.name}] Using {len(initial_neighbors)} cached evals from previous phase")
-				seed_fitness = [ce for ce, _ in initial_evals]
-				seed_accuracy = [acc for _, acc in initial_evals]
+			if initial_evals is not None and batch_evaluate_fn is not None:
+				self._log.info(f"[{self.name}] Re-evaluating {len(initial_neighbors)} seeded neighbors (phase transition — different train subset)")
+				results = batch_evaluate_fn(initial_neighbors, min_accuracy=current_threshold)
+				seed_fitness = [r[0] for r in results]
+				seed_accuracy = [r[1] for r in results]
 			elif batch_evaluate_fn is not None:
 				self._log.info(f"[{self.name}] Evaluating {len(initial_neighbors)} neighbors (no cached evals)")
 				results = batch_evaluate_fn(initial_neighbors, min_accuracy=current_threshold)
