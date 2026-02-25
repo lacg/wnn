@@ -1404,6 +1404,7 @@ class PhasedSearchRunner:
 		# Run all phases dynamically based on phase_specs
 		# =====================================================================
 		prev_result: Optional[PhaseResult] = None
+		prev_train_idx: Optional[int] = None  # Track previous phase's train subset
 
 		for idx, (phase_key, phase_name, strategy_type, opt_bits, opt_neurons, opt_conns) in enumerate(phase_specs):
 			if start_idx > idx:
@@ -1488,8 +1489,14 @@ class PhasedSearchRunner:
 				except Exception as e:
 					self.log(f"Warning: Failed to notify tracker of phase start: {e}")
 
-			# Cycle train subsets so each phase trains on different data
-			phase_train_idx = idx % self.evaluator.num_parts
+			# Random train subset, avoiding previous phase's subset
+			n = self.evaluator.num_parts
+			if prev_train_idx is None:
+				phase_train_idx = random.randint(0, n - 1)
+			else:
+				candidates = [i for i in range(n) if i != prev_train_idx]
+				phase_train_idx = random.choice(candidates)
+			prev_train_idx = phase_train_idx
 
 			phase_result = self.run_phase(
 				phase_name=phase_name,
@@ -1603,8 +1610,14 @@ class PhasedSearchRunner:
 			init_threshold = prev_result.final_threshold if prev_result else seed_threshold
 			init_fitness = prev_result.final_fitness if prev_result and strategy_type == OptimizerStrategyType.ARCHITECTURE_TS else None
 
-			# Cycle train subsets for additional phases too
-			phase_train_idx = phase_idx % self.evaluator.num_parts
+			# Random train subset, avoiding previous phase's subset
+			n = self.evaluator.num_parts
+			if prev_train_idx is None:
+				phase_train_idx = random.randint(0, n - 1)
+			else:
+				candidates = [i for i in range(n) if i != prev_train_idx]
+				phase_train_idx = random.choice(candidates)
+			prev_train_idx = phase_train_idx
 
 			phase_result = self.run_phase(
 				phase_name=phase_name,

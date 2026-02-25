@@ -10,6 +10,7 @@ This module provides:
 
 import gzip
 import json
+import random
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -916,6 +917,7 @@ class Flow:
 				start_idx = auto_resume_idx
 				self.log(f"Auto-resuming from experiment {start_idx}/{len(cfg.experiments)} (skipping {start_idx} completed)")
 
+		prev_train_idx = None  # Track previous phase's train subset to avoid collision
 		try:
 			for idx, exp_config in enumerate(cfg.experiments):
 				if idx < start_idx:
@@ -1071,8 +1073,14 @@ class Flow:
 					full_evaluator=self.full_evaluator,
 				)
 
-				# Cycle train subsets so each experiment trains on different data
-				exp_train_idx = idx % self.evaluator.num_parts
+				# Random train subset, avoiding previous phase's subset
+				n = self.evaluator.num_parts
+				if prev_train_idx is None:
+					exp_train_idx = random.randint(0, n - 1)
+				else:
+					candidates = [i for i in range(n) if i != prev_train_idx]
+					exp_train_idx = random.choice(candidates)
+				prev_train_idx = exp_train_idx
 
 				result = experiment.run(
 					initial_genome=current_genome,
