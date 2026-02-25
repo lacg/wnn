@@ -444,16 +444,32 @@ class FlowWorker:
                 raw_mode = params.get("stage_mode")
                 if isinstance(raw_mode, str):
                     from wnn.ram.experiments.experiment import StageMode
-                    mode_map = {"input_concat": StageMode.INPUT_CONCAT}
+                    mode_map = {
+                        "input_concat": StageMode.INPUT_CONCAT,
+                        "selector": StageMode.SELECTOR,
+                    }
                     flow_config.stage_mode = [mode_map.get(raw_mode, StageMode.INPUT_CONCAT)]
                 elif isinstance(raw_mode, list):
-                    flow_config.stage_mode = raw_mode
+                    from wnn.ram.experiments.experiment import StageMode
+                    mode_map = {
+                        "input_concat": StageMode.INPUT_CONCAT,
+                        "selector": StageMode.SELECTOR,
+                    }
+                    flow_config.stage_mode = [
+                        mode_map.get(m, StageMode.INPUT_CONCAT) if isinstance(m, str) else m
+                        for m in raw_mode
+                    ]
                 flow_config.memory_mode = params.get("memory_mode", "QUAD_WEIGHTED")
                 flow_config.neuron_sample_rate = params.get("neuron_sample_rate", 0.25)
                 flow_config.min_bits = params.get("min_bits", 4)
                 flow_config.max_bits = params.get("max_bits", 24)
                 flow_config.min_neurons = params.get("min_neurons", 5)
                 flow_config.max_neurons = params.get("max_neurons", 300)
+                # Per-stage bounds from dashboard
+                flow_config.stage_min_bits_list = params.get("stage_min_bits")
+                flow_config.stage_max_bits_list = params.get("stage_max_bits")
+                flow_config.stage_min_neurons_list = params.get("stage_min_neurons")
+                flow_config.stage_max_neurons_list = params.get("stage_max_neurons")
 
             # Handle seed checkpoint
             seed_checkpoint_id = flow_data.get("seed_checkpoint_id")
@@ -763,31 +779,53 @@ class FlowWorker:
                 except (ValueError, IndexError):
                     pass
 
-            # Grid search: select grid based on stage type (tiered vs bitwise)
-            # For multi-stage flows, tiered stages use smaller grids
+            # Grid search: select grid based on stage type (tiered vs bitwise vs selector)
             stage_cluster_types = params.get("stage_cluster_type", [])
             is_tiered_stage = (
                 architecture_type == "multi_stage"
                 and ms_target_stage < len(stage_cluster_types)
                 and stage_cluster_types[ms_target_stage] == "tiered"
             )
+            # Check if this stage uses SELECTOR mode (previous stage's mode == selector)
+            raw_modes = params.get("stage_mode")
+            is_selector_stage = False
+            if architecture_type == "multi_stage" and ms_target_stage > 0 and raw_modes:
+                prev_mode = raw_modes[ms_target_stage - 1] if isinstance(raw_modes, list) else raw_modes
+                is_selector_stage = (prev_mode == "selector" or prev_mode == 0)
 
-            if is_tiered_stage:
+            # Per-stage bounds from dashboard params
+            stage_min_bits_arr = params.get("stage_min_bits")
+            stage_max_bits_arr = params.get("stage_max_bits")
+            stage_min_neurons_arr = params.get("stage_min_neurons")
+            stage_max_neurons_arr = params.get("stage_max_neurons")
+
+            if is_selector_stage:
+                # SELECTOR sub-models have ~225× less data — use smaller grid
+                neurons_grid = [5, 10, 15]
+                bits_grid = [5, 6, 7, 8, 9, 10]
+            elif is_tiered_stage:
                 neurons_grid = params.get("tiered_neurons_grid") or [20, 30, 40, 50]
                 bits_grid = params.get("tiered_bits_grid") or [18, 19, 20, 21, 22, 23]
             else:
                 neurons_grid = params.get("neurons_grid")
                 bits_grid = params.get("bits_grid")
+                # Per-stage bounds override for grid generation
+                mn = (stage_min_neurons_arr[ms_target_stage]
+                      if stage_min_neurons_arr and ms_target_stage < len(stage_min_neurons_arr)
+                      else params.get("min_neurons", 5))
+                mx = (stage_max_neurons_arr[ms_target_stage]
+                      if stage_max_neurons_arr and ms_target_stage < len(stage_max_neurons_arr)
+                      else params.get("max_neurons", 300))
                 if not neurons_grid:
-                    mn = params.get("min_neurons", 5)
-                    mx = params.get("max_neurons", 300)
-                    # Round step to nearest 50, generate clean values: 5, 50, 100, 150, ...
                     step = max(10, round((mx - mn) / 6 / 50) * 50) or 50
                     neurons_grid = [mn] + list(range(((mn // step) + 1) * step, mx, step)) + [mx]
+                mb = (stage_min_bits_arr[ms_target_stage]
+                      if stage_min_bits_arr and ms_target_stage < len(stage_min_bits_arr)
+                      else params.get("min_bits", 4))
+                xb = (stage_max_bits_arr[ms_target_stage]
+                      if stage_max_bits_arr and ms_target_stage < len(stage_max_bits_arr)
+                      else params.get("max_bits", 24))
                 if not bits_grid:
-                    mb = params.get("min_bits", 4)
-                    xb = params.get("max_bits", 24)
-                    # Round step to nearest 2 or 4, generate clean values: 4, 8, 12, ...
                     step = max(2, round((xb - mb) / 6 / 2) * 2) or 4
                     bits_grid = [mb] + list(range(((mb // step) + 1) * step, xb, step)) + [xb]
             num_grid_configs = len(neurons_grid) * len(bits_grid)
@@ -839,11 +877,24 @@ class FlowWorker:
                 threshold_reference=max_iters,  # Full ramp within each phase
                 seed=seed,
                 cluster_type=cluster_type,
-                # Stage-specific bounds: tiered stages use their grid extremes
-                bitwise_min_bits=min(bits_grid) if is_tiered_stage else params.get("min_bits"),
-                bitwise_max_bits=max(bits_grid) if is_tiered_stage else params.get("max_bits"),
-                bitwise_min_neurons=min(neurons_grid) if is_tiered_stage else params.get("min_neurons"),
-                bitwise_max_neurons=max(neurons_grid) if is_tiered_stage else params.get("max_neurons"),
+                # Stage-specific bounds: tiered/selector stages use their grid extremes,
+                # per-stage arrays take precedence over global params
+                bitwise_min_bits=(
+                    min(bits_grid) if (is_tiered_stage or is_selector_stage)
+                    else (stage_min_bits_arr[ms_target_stage] if stage_min_bits_arr and ms_target_stage < len(stage_min_bits_arr) else params.get("min_bits"))
+                ),
+                bitwise_max_bits=(
+                    max(bits_grid) if (is_tiered_stage or is_selector_stage)
+                    else (stage_max_bits_arr[ms_target_stage] if stage_max_bits_arr and ms_target_stage < len(stage_max_bits_arr) else params.get("max_bits"))
+                ),
+                bitwise_min_neurons=(
+                    min(neurons_grid) if (is_tiered_stage or is_selector_stage)
+                    else (stage_min_neurons_arr[ms_target_stage] if stage_min_neurons_arr and ms_target_stage < len(stage_min_neurons_arr) else params.get("min_neurons"))
+                ),
+                bitwise_max_neurons=(
+                    max(neurons_grid) if (is_tiered_stage or is_selector_stage)
+                    else (stage_max_neurons_arr[ms_target_stage] if stage_max_neurons_arr and ms_target_stage < len(stage_max_neurons_arr) else params.get("max_neurons"))
+                ),
                 # Grid search params
                 neurons_grid=neurons_grid if experiment_type == ExperimentType.GRID_SEARCH else None,
                 bits_grid=bits_grid if experiment_type == ExperimentType.GRID_SEARCH else None,
@@ -852,7 +903,7 @@ class FlowWorker:
                 num_stages=params.get("num_stages", 2) if architecture_type == "multi_stage" else 1,
                 stage_k=params.get("stage_k") if architecture_type == "multi_stage" else None,
                 stage_cluster_type=params.get("stage_cluster_type") if architecture_type == "multi_stage" else None,
-                stage_mode=params.get("stage_mode") if architecture_type == "multi_stage" else None,
+                stage_mode=self._parse_stage_mode(params.get("stage_mode")) if architecture_type == "multi_stage" else None,
                 target_stage=ms_target_stage if architecture_type == "multi_stage" else 0,
             )
             exp_configs.append(exp_config)
@@ -1037,6 +1088,24 @@ class FlowWorker:
                 self._log(f"    {genome_type} same as {seen_hashes[config_hash]}, skipping")
 
         return deduped
+
+    def _parse_stage_mode(self, raw_mode) -> Optional[list[int]]:
+        """Parse stage_mode from dashboard params into list of StageMode integers."""
+        if raw_mode is None:
+            return None
+        from wnn.ram.experiments.experiment import StageMode
+        mode_map = {
+            "input_concat": StageMode.INPUT_CONCAT,
+            "selector": StageMode.SELECTOR,
+        }
+        if isinstance(raw_mode, str):
+            return [mode_map.get(raw_mode, StageMode.INPUT_CONCAT)]
+        if isinstance(raw_mode, list):
+            return [
+                mode_map.get(m, StageMode.INPUT_CONCAT) if isinstance(m, str) else int(m)
+                for m in raw_mode
+            ]
+        return [int(raw_mode)]
 
     def _parse_fitness_calculator(self, fitness_calculator: Optional[str]) -> FitnessCalculatorType:
         """Parse fitness calculator string to enum."""

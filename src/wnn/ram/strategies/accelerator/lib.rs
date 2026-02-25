@@ -4948,6 +4948,18 @@ impl MultiStageCacheWrapper {
         })
     }
 
+    /// Get the number of eval examples per selector group for a given stage.
+    fn selector_eval_counts(&self, stage: usize) -> Vec<usize> {
+        if stage < self.inner.bitwise_selector_eval.len() {
+            self.inner.bitwise_selector_eval[stage]
+                .iter()
+                .map(|s| s.num_examples)
+                .collect()
+        } else {
+            Vec::new()
+        }
+    }
+
     // ── Rotation ────────────────────────────────────────────────────
 
     fn next_train_idx(&self) -> usize {
@@ -5035,6 +5047,59 @@ impl MultiStageCacheWrapper {
             }
 
             Ok(multistage::compute_combined_ce(
+                &self.inner,
+                &stage_bits, &stage_neurons, &stage_conns,
+                memory_mode, neuron_sample_rate, rng_seed, sparse_threshold,
+            ))
+        })
+    }
+
+    /// Compute combined CE for SELECTOR mode.
+    ///
+    /// S0 is evaluated normally (bitwise or tiered).
+    /// S1 is evaluated per-group using selector data (K sub-models).
+    #[allow(clippy::too_many_arguments)]
+    fn evaluate_combined_ce_selector(
+        &self,
+        py: Python<'_>,
+        all_bits_per_neuron: Vec<usize>,
+        all_neurons_per_cluster: Vec<usize>,
+        all_connections: Vec<i64>,
+        stage_num_clusters: Vec<usize>,
+        memory_mode: u8,
+        neuron_sample_rate: f32,
+        rng_seed: u64,
+        sparse_threshold: usize,
+    ) -> PyResult<(f64, f64, f64, f64)> {
+        py.allow_threads(|| {
+            // Partition flat arrays by stage (same as evaluate_combined_ce)
+            let num_stages = stage_num_clusters.len();
+            let mut stage_bits: Vec<&[usize]> = Vec::with_capacity(num_stages);
+            let mut stage_neurons: Vec<&[usize]> = Vec::with_capacity(num_stages);
+            let mut stage_conns: Vec<&[i64]> = Vec::with_capacity(num_stages);
+
+            let mut neuron_offset = 0usize;
+            let mut cluster_offset = 0usize;
+            let mut conn_offset = 0usize;
+
+            for s in 0..num_stages {
+                let n_clusters = stage_num_clusters[s];
+                let neurons_slice = &all_neurons_per_cluster[cluster_offset..cluster_offset + n_clusters];
+                let total_neurons: usize = neurons_slice.iter().sum();
+                let bits_slice = &all_bits_per_neuron[neuron_offset..neuron_offset + total_neurons];
+                let total_conns: usize = bits_slice.iter().sum();
+                let conns_slice = &all_connections[conn_offset..conn_offset + total_conns];
+
+                stage_bits.push(bits_slice);
+                stage_neurons.push(neurons_slice);
+                stage_conns.push(conns_slice);
+
+                neuron_offset += total_neurons;
+                cluster_offset += n_clusters;
+                conn_offset += total_conns;
+            }
+
+            Ok(multistage::compute_combined_ce_selector(
                 &self.inner,
                 &stage_bits, &stage_neurons, &stage_conns,
                 memory_mode, neuron_sample_rate, rng_seed, sparse_threshold,

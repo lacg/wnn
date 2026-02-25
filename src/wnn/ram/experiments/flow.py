@@ -190,6 +190,11 @@ class FlowConfig:
 	stage_k: Optional[list[int]] = None
 	stage_cluster_type: Optional[list[str]] = None
 	stage_mode: Optional[list[int]] = None
+	# Per-stage bounds override (indexed by stage)
+	stage_min_bits_list: Optional[list[int]] = None
+	stage_max_bits_list: Optional[list[int]] = None
+	stage_min_neurons_list: Optional[list[int]] = None
+	stage_max_neurons_list: Optional[list[int]] = None
 
 	@classmethod
 	def bitwise_7_phase(
@@ -458,6 +463,11 @@ class FlowConfig:
 		bits_grid: Optional[list[int]] = None,
 		tiered_neurons_grid: Optional[list[int]] = None,
 		tiered_bits_grid: Optional[list[int]] = None,
+		# Per-stage bounds override (indexed by stage, None = use global/auto)
+		stage_min_bits_list: Optional[list[int]] = None,
+		stage_max_bits_list: Optional[list[int]] = None,
+		stage_min_neurons_list: Optional[list[int]] = None,
+		stage_max_neurons_list: Optional[list[int]] = None,
 		fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK,
 		fitness_weight_ce: float = 1.0,
 		fitness_weight_acc: float = 1.0,
@@ -515,14 +525,42 @@ class FlowConfig:
 		for stage in range(num_stages):
 			prefix = f"S{stage}"
 			is_tiered = stage_cluster_type[stage] == "tiered"
+			is_selector = (
+				stage > 0
+				and stage_mode is not None
+				and len(stage_mode) >= stage
+				and (stage_mode[stage - 1] if isinstance(stage_mode[stage - 1], int) else stage_mode[stage - 1].value) == StageMode.SELECTOR
+			)
 
 			# Select grid and bounds based on stage type
-			stage_neurons_grid = tiered_neurons_grid if is_tiered else neurons_grid
-			stage_bits_grid = tiered_bits_grid if is_tiered else bits_grid
-			stage_min_neurons = min(stage_neurons_grid)
-			stage_max_neurons = max(stage_neurons_grid)
-			stage_min_bits = min(stage_bits_grid)
-			stage_max_bits = max(stage_bits_grid)
+			if is_selector:
+				# SELECTOR sub-models have 225× less data — use smaller grid
+				stage_neurons_grid = [5, 10, 15]
+				stage_bits_grid = [5, 6, 7, 8, 9, 10]
+			elif is_tiered:
+				stage_neurons_grid = tiered_neurons_grid
+				stage_bits_grid = tiered_bits_grid
+			else:
+				stage_neurons_grid = neurons_grid
+				stage_bits_grid = bits_grid
+
+			# Per-stage overrides from dashboard params (take precedence)
+			if stage_min_bits_list and stage < len(stage_min_bits_list):
+				stage_min_bits = stage_min_bits_list[stage]
+			else:
+				stage_min_bits = min(stage_bits_grid)
+			if stage_max_bits_list and stage < len(stage_max_bits_list):
+				stage_max_bits = stage_max_bits_list[stage]
+			else:
+				stage_max_bits = max(stage_bits_grid)
+			if stage_min_neurons_list and stage < len(stage_min_neurons_list):
+				stage_min_neurons = stage_min_neurons_list[stage]
+			else:
+				stage_min_neurons = min(stage_neurons_grid)
+			if stage_max_neurons_list and stage < len(stage_max_neurons_list):
+				stage_max_neurons = stage_max_neurons_list[stage]
+			else:
+				stage_max_neurons = max(stage_neurons_grid)
 
 			# 10 phases per stage (mirrors bitwise-10-phase)
 			stage_phases = [

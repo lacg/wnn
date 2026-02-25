@@ -1608,6 +1608,219 @@ pub fn compute_combined_ce(
     )
 }
 
+// ── SELECTOR combined CE ────────────────────────────────────────────────
+
+/// Compute combined CE for SELECTOR mode.
+///
+/// S0 is evaluated normally (bitwise or tiered) on full eval data.
+/// S1 trains K separate sub-models (one per group) using selector data,
+/// then combines: P(token) = P(group|ctx) × P(within|group,ctx).
+///
+/// Returns: (combined_ce, combined_accuracy, stage0_ce, stage1_ce)
+pub fn compute_combined_ce_selector(
+    cache: &MultiStageTokenCache,
+    stage_bits_per_neuron: &[&[usize]],
+    stage_neurons_per_cluster: &[&[usize]],
+    stage_connections: &[&[i64]],
+    memory_mode: u8,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+    sparse_threshold: usize,
+) -> (f64, f64, f64, f64) {
+    let eps = 1e-7f64;
+    let epsilon = 1e-10f64;
+    let num_eval = cache.bitwise_full_eval[0].num_examples;
+    let k = cache.k;
+
+    // ── S0: get scores normally (same as INPUT_CONCAT) ──
+    let mut stage_tiered_scores_0: Vec<f64> = Vec::new();
+    let mut stage_bitwise_scores_0: Vec<f32> = Vec::new();
+
+    if cache.stage_is_tiered[0] {
+        let train = cache.tiered_full_train[0].as_ref().unwrap();
+        let eval = cache.tiered_full_eval[0].as_ref().unwrap();
+        stage_tiered_scores_0 = train_and_get_tiered_scores(
+            stage_connections[0], stage_bits_per_neuron[0], stage_neurons_per_cluster[0],
+            cache.bitwise_vocab_size[0], train, eval, cache.stage_input_bits[0],
+            memory_mode, neuron_sample_rate, rng_seed,
+        );
+    } else {
+        stage_bitwise_scores_0 = train_and_get_scores(
+            stage_connections[0], stage_bits_per_neuron[0], stage_neurons_per_cluster[0],
+            cache.bitwise_output_bits[0],
+            &cache.bitwise_full_train[0], &cache.bitwise_full_eval[0],
+            memory_mode, neuron_sample_rate, rng_seed, sparse_threshold,
+        );
+    }
+
+    // ── S1 SELECTOR: train K sub-models, get per-group scores ──
+    // For each group g, train on selector_train[1][g], forward on selector_eval[1][g]
+    // Result: per-group Vec<f32> of shape [num_eval_in_group × output_bits]
+    let s1_stage = 1; // SELECTOR is always between stage 0 and stage 1
+    let s1_output_bits = cache.bitwise_output_bits[s1_stage];
+    let selector_train = &cache.bitwise_selector_train[s1_stage];
+    let selector_eval = &cache.bitwise_selector_eval[s1_stage];
+
+    // Train each group's sub-model and get scores
+    let group_scores: Vec<Vec<f32>> = (0..k)
+        .map(|g| {
+            if selector_eval[g].num_examples == 0 {
+                return Vec::new();
+            }
+            train_and_get_scores(
+                stage_connections[s1_stage],
+                stage_bits_per_neuron[s1_stage],
+                stage_neurons_per_cluster[s1_stage],
+                s1_output_bits,
+                &selector_train[g], &selector_eval[g],
+                memory_mode, neuron_sample_rate,
+                rng_seed.wrapping_add(1 + g as u64), sparse_threshold,
+            )
+        })
+        .collect();
+
+    // ── Build mapping: global eval index → (group, position_in_group) ──
+    // For each group, track how many eval examples we've seen so far
+    let mut group_pos_counter = vec![0usize; k];
+    let eval_to_group_pos: Vec<(usize, usize)> = (0..num_eval)
+        .map(|ex| {
+            let token_id = cache.eval_target_token_ids[ex] as usize;
+            let group = cache.cluster_of[token_id] as usize;
+            let pos = group_pos_counter[group];
+            group_pos_counter[group] += 1;
+            (group, pos)
+        })
+        .collect();
+
+    // ── Combine per-example ──
+    let results: Vec<(f64, f64, f64, u32)> = (0..num_eval)
+        .into_par_iter()
+        .map(|ex| {
+            let token_id = cache.eval_target_token_ids[ex] as usize;
+            let true_group = cache.cluster_of[token_id] as usize;
+            let true_within = cache.index_in_cluster[token_id] as usize;
+
+            // ── S0: compute log P(true_group) ──
+            let (log_p_true_group, s0_predicted) = if cache.stage_is_tiered[0] {
+                let base = ex * k;
+                let scores = &stage_tiered_scores_0[base..base + k];
+                let max_s = scores.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                let exp_scores: Vec<f64> = scores.iter().map(|&s| (s - max_s).exp()).collect();
+                let sum_exp: f64 = exp_scores.iter().sum();
+                let log_p = (exp_scores[true_group] / sum_exp + epsilon).ln();
+                let predicted = scores.iter().enumerate()
+                    .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+                    .map(|(idx, _)| idx).unwrap_or(0);
+                (log_p, predicted)
+            } else {
+                let s0_bits = cache.bitwise_output_bits[0];
+                let s0_base = ex * s0_bits;
+                let mut s0_log_p = vec![0.0f64; s0_bits];
+                let mut s0_log_1mp = vec![0.0f64; s0_bits];
+                for b in 0..s0_bits {
+                    let p = (stage_bitwise_scores_0[s0_base + b] as f64).clamp(eps, 1.0 - eps);
+                    s0_log_p[b] = p.ln();
+                    s0_log_1mp[b] = (1.0 - p).ln();
+                }
+
+                let mut max_s0 = f64::NEG_INFINITY;
+                let mut sum_exp_s0 = 0.0f64;
+                let mut log_p_true_raw = 0.0f64;
+                let mut predicted = 0usize;
+                let mut predicted_lp = f64::NEG_INFINITY;
+
+                for gk in 0..k {
+                    let bit_base = gk * s0_bits;
+                    let mut log_p = 0.0f64;
+                    for b in 0..s0_bits {
+                        if cache.bitwise_token_bits[0][bit_base + b] == 1 {
+                            log_p += s0_log_p[b];
+                        } else {
+                            log_p += s0_log_1mp[b];
+                        }
+                    }
+                    if gk == true_group { log_p_true_raw = log_p; }
+                    if log_p > predicted_lp { predicted_lp = log_p; predicted = gk; }
+                    if log_p > max_s0 {
+                        sum_exp_s0 = sum_exp_s0 * (max_s0 - log_p).exp() + 1.0;
+                        max_s0 = log_p;
+                    } else {
+                        sum_exp_s0 += (log_p - max_s0).exp();
+                    }
+                }
+                let log_z0 = max_s0 + sum_exp_s0.ln();
+                (log_p_true_raw - log_z0, predicted)
+            };
+
+            // ── S1 SELECTOR: compute log P(true_within | true_group) ──
+            let (group, pos_in_group) = eval_to_group_pos[ex];
+            let group_size = cache.cluster_sizes[true_group];
+
+            let (log_p_true_within, s1_predicted) = if group_scores[group].is_empty() {
+                // No eval data for this group — uniform fallback
+                let log_uniform = -(group_size as f64).ln();
+                (log_uniform, 0)
+            } else {
+                let s1_base = pos_in_group * s1_output_bits;
+                let mut s1_log_p = vec![0.0f64; s1_output_bits];
+                let mut s1_log_1mp = vec![0.0f64; s1_output_bits];
+                for b in 0..s1_output_bits {
+                    let p = (group_scores[group][s1_base + b] as f64).clamp(eps, 1.0 - eps);
+                    s1_log_p[b] = p.ln();
+                    s1_log_1mp[b] = (1.0 - p).ln();
+                }
+
+                let mut max_s1 = f64::NEG_INFINITY;
+                let mut sum_exp_s1 = 0.0f64;
+                let mut log_p_true_raw = 0.0f64;
+                let mut predicted = 0usize;
+                let mut predicted_lp = f64::NEG_INFINITY;
+
+                for j in 0..group_size {
+                    let bit_base = j * s1_output_bits;
+                    let mut log_p = 0.0f64;
+                    for b in 0..s1_output_bits {
+                        if cache.bitwise_token_bits[s1_stage][bit_base + b] == 1 {
+                            log_p += s1_log_p[b];
+                        } else {
+                            log_p += s1_log_1mp[b];
+                        }
+                    }
+                    if j == true_within { log_p_true_raw = log_p; }
+                    if log_p > predicted_lp { predicted_lp = log_p; predicted = j; }
+                    if log_p > max_s1 {
+                        sum_exp_s1 = sum_exp_s1 * (max_s1 - log_p).exp() + 1.0;
+                        max_s1 = log_p;
+                    } else {
+                        sum_exp_s1 += (log_p - max_s1).exp();
+                    }
+                }
+                let log_z1 = max_s1 + sum_exp_s1.ln();
+                (log_p_true_raw - log_z1, predicted)
+            };
+
+            let s0_ce = -log_p_true_group;
+            let s1_ce = -log_p_true_within;
+            let combined_ce = s0_ce + s1_ce;
+            let correct = if s0_predicted == true_group && s1_predicted == true_within { 1u32 } else { 0u32 };
+
+            (combined_ce, s0_ce, s1_ce, correct)
+        })
+        .collect();
+
+    let total_ce: f64 = results.iter().map(|r| r.0).sum();
+    let total_s0_ce: f64 = results.iter().map(|r| r.1).sum();
+    let total_s1_ce: f64 = results.iter().map(|r| r.2).sum();
+    let total_correct: u32 = results.iter().map(|r| r.3).sum();
+
+    (
+        total_ce / num_eval as f64,
+        total_correct as f64 / num_eval as f64,
+        total_s0_ce / num_eval as f64,
+        total_s1_ce / num_eval as f64,
+    )
+}
+
 // ── Tiered evaluation ───────────────────────────────────────────────────
 
 /// Evaluate tiered genomes for a given stage using the adaptive evaluation pipeline.

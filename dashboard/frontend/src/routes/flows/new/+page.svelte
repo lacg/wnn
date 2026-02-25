@@ -25,6 +25,10 @@
   interface StageConfig {
     clusterType: string;
     k: number;
+    minBits: number;
+    maxBits: number;
+    minNeurons: number;
+    maxNeurons: number;
     gaGenerations: number;
     tsIterations: number;
     adaptationIterations: number;
@@ -43,6 +47,7 @@
   function defaultStageConfig(): StageConfig {
     return {
       clusterType: 'bitwise', k: 256,
+      minBits: 4, maxBits: 24, minNeurons: 5, maxNeurons: 300,
       gaGenerations: 250, tsIterations: 250, adaptationIterations: 50,
       populationSize: 50, neighborsPerIter: 50, patience: 10,
       fitnessPercentile: 0.75, fitnessCalculator: 'harmonic_rank',
@@ -87,10 +92,6 @@
   }
 
   // Shared multi-stage architecture params
-  let msMinBits = 4;
-  let msMaxBits = 24;
-  let msMinNeurons = 5;
-  let msMaxNeurons = 300;
   let msMemoryMode = 'QUAD_WEIGHTED';
   let msNeuronSampleRate = 0.25;
 
@@ -470,10 +471,16 @@
         params.stage_k = stageConfigs.slice(0, numStages).map(s => s.k);
         params.stage_cluster_type = stageConfigs.slice(0, numStages).map(s => s.clusterType);
         params.stage_mode = stageMode;
-        params.min_bits = msMinBits;
-        params.max_bits = msMaxBits;
-        params.min_neurons = msMinNeurons;
-        params.max_neurons = msMaxNeurons;
+        // Per-stage bounds
+        params.stage_min_bits = stageConfigs.slice(0, numStages).map(s => s.minBits);
+        params.stage_max_bits = stageConfigs.slice(0, numStages).map(s => s.maxBits);
+        params.stage_min_neurons = stageConfigs.slice(0, numStages).map(s => s.minNeurons);
+        params.stage_max_neurons = stageConfigs.slice(0, numStages).map(s => s.maxNeurons);
+        // Global fallbacks (from S0 values)
+        params.min_bits = stageConfigs[0].minBits;
+        params.max_bits = stageConfigs[0].maxBits;
+        params.min_neurons = stageConfigs[0].minNeurons;
+        params.max_neurons = stageConfigs[0].maxNeurons;
         params.memory_mode = msMemoryMode;
         params.neuron_sample_rate = msNeuronSampleRate;
         // Per-stage search params
@@ -610,25 +617,29 @@
           {/each}
         </div>
 
-        <div class="shared-params-header">Shared Parameters</div>
-        <div class="form-row-4">
-          <div class="form-group">
-            <label for="msMinBits">Min Bits</label>
-            <input type="number" id="msMinBits" bind:value={msMinBits} min="1" max="64" />
-          </div>
-          <div class="form-group">
-            <label for="msMaxBits">Max Bits</label>
-            <input type="number" id="msMaxBits" bind:value={msMaxBits} min="1" max="64" />
-          </div>
-          <div class="form-group">
-            <label for="msMinNeurons">Min Neurons</label>
-            <input type="number" id="msMinNeurons" bind:value={msMinNeurons} min="1" max="1000" />
-          </div>
-          <div class="form-group">
-            <label for="msMaxNeurons">Max Neurons</label>
-            <input type="number" id="msMaxNeurons" bind:value={msMaxNeurons} min="1" max="1000" />
-          </div>
-        </div>
+        <div class="shared-params-header">Per-Stage Bounds (Stage {selectedStage})</div>
+        {#each stageConfigs as config, i}
+          {#if i === selectedStage}
+            <div class="form-row-4">
+              <div class="form-group">
+                <label for="stageMinBits_{i}">Min Bits</label>
+                <input type="number" id="stageMinBits_{i}" bind:value={config.minBits} min="1" max="64" />
+              </div>
+              <div class="form-group">
+                <label for="stageMaxBits_{i}">Max Bits</label>
+                <input type="number" id="stageMaxBits_{i}" bind:value={config.maxBits} min="1" max="64" />
+              </div>
+              <div class="form-group">
+                <label for="stageMinNeurons_{i}">Min Neurons</label>
+                <input type="number" id="stageMinNeurons_{i}" bind:value={config.minNeurons} min="1" max="1000" />
+              </div>
+              <div class="form-group">
+                <label for="stageMaxNeurons_{i}">Max Neurons</label>
+                <input type="number" id="stageMaxNeurons_{i}" bind:value={config.maxNeurons} min="1" max="1000" />
+              </div>
+            </div>
+          {/if}
+        {/each}
         <div class="form-row">
           <div class="form-group">
             <label for="msMemoryMode">Memory Mode</label>

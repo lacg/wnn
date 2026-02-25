@@ -195,7 +195,13 @@ class MultiStageEvaluator(BaseEvaluator):
 
 	@property
 	def total_input_bits(self) -> int:
-		"""Input bits for the active stage."""
+		"""Input bits for the active stage.
+
+		For SELECTOR stages, input = context bits only (stage 0's input size),
+		NOT context + S0_output which is used for INPUT_CONCAT.
+		"""
+		if self._is_stage_selector(self._target_stage):
+			return self._stage_input_bits[0]  # context_input_bits only
 		return self._stage_input_bits[self._target_stage]
 
 	@property
@@ -290,6 +296,69 @@ class MultiStageEvaluator(BaseEvaluator):
 			neuron_sample_rate=self._neuron_sample_rate,
 			rng_seed=self._seed,
 		)
+
+	# ── Selector evaluation (per-group) ─────────────────────────────
+
+	def _evaluate_selector_rust(
+		self,
+		stage: int,
+		genomes: list[ClusterGenome],
+		train_idx: int,
+		eval_idx: int,
+	) -> list[tuple[float, float, float]]:
+		"""Evaluate genomes across K selector groups, combining results.
+
+		Each group g has its own dataset (examples where target ∈ group g).
+		We evaluate each genome on all K groups and aggregate:
+		  CE = weighted average by group example count
+		  Acc = total correct / total examples
+		"""
+		eval_counts = self._cache.selector_eval_counts(stage)
+		total_eval = sum(eval_counts)
+		if total_eval == 0:
+			return [(0.0, 0.0, 0.0)] * len(genomes)
+
+		bits_flat, neurons_flat, conns_flat = self._flatten_genomes(genomes)
+
+		# Accumulate per-genome weighted CE and correct counts
+		genome_ce_sum = [0.0] * len(genomes)
+		genome_correct = [0.0] * len(genomes)
+		genome_bit_acc_sum = [0.0] * len(genomes)
+
+		for g, count in enumerate(eval_counts):
+			if count == 0:
+				continue
+			group_results = self._cache.evaluate_bitwise_selector_genomes(
+				stage=stage,
+				bits_per_neuron_flat=bits_flat,
+				neurons_per_cluster_flat=neurons_flat,
+				connections_flat=conns_flat,
+				num_genomes=len(genomes),
+				group_id=g,
+				memory_mode=self._memory_mode,
+				neuron_sample_rate=self._neuron_sample_rate,
+				rng_seed=self._seed,
+			)
+			weight = count / total_eval
+			for i, (ce, acc, bit_acc) in enumerate(group_results):
+				genome_ce_sum[i] += ce * weight
+				genome_correct[i] += acc * count  # acc is fraction, * count = correct count
+				genome_bit_acc_sum[i] += bit_acc * weight
+
+		return [
+			(genome_ce_sum[i], genome_correct[i] / total_eval, genome_bit_acc_sum[i])
+			for i in range(len(genomes))
+		]
+
+	def _evaluate_selector_full_rust(
+		self,
+		stage: int,
+		genomes: list[ClusterGenome],
+	) -> list[tuple[float, float, float]]:
+		"""Full (non-rotated) selector evaluation."""
+		# For selector, full eval uses the same selector data (already full)
+		# Just pass through train_idx=0, eval_idx=0 (selector uses full data)
+		return self._evaluate_selector_rust(stage, genomes, 0, 0)
 
 	# ── Tiered evaluation ────────────────────────────────────────────
 
@@ -399,6 +468,17 @@ class MultiStageEvaluator(BaseEvaluator):
 	def _is_stage_tiered(self, stage: int) -> bool:
 		return self._stage_cluster_type[stage] == "tiered"
 
+	def _is_stage_selector(self, stage: int) -> bool:
+		"""Check if this stage uses SELECTOR mode (i.e., the previous stage selected groups)."""
+		if stage == 0:
+			return False
+		from wnn.ram.experiments.experiment import StageMode
+		return (
+			self._stage_mode is not None
+			and len(self._stage_mode) >= stage
+			and self._stage_mode[stage - 1] == StageMode.SELECTOR
+		)
+
 	# ── Public interface (dispatches by target_stage) ────────────────
 
 	def evaluate_batch(
@@ -418,7 +498,9 @@ class MultiStageEvaluator(BaseEvaluator):
 			eval_subset_idx = self.next_eval_idx()
 
 		start = time.time()
-		if self._is_stage_tiered(self._target_stage):
+		if self._is_stage_selector(self._target_stage):
+			raw = self._evaluate_selector_rust(self._target_stage, genomes, train_subset_idx, eval_subset_idx)
+		elif self._is_stage_tiered(self._target_stage):
 			raw = self._evaluate_tiered_rust(genomes, self._target_stage, train_subset_idx, eval_subset_idx)
 		else:
 			raw = self._evaluate_bitwise_rust(self._target_stage, genomes, train_subset_idx, eval_subset_idx)
@@ -462,7 +544,9 @@ class MultiStageEvaluator(BaseEvaluator):
 	) -> list[EvalResult]:
 		"""Evaluate genomes with full (non-rotated) data for the active target_stage."""
 		start = time.time()
-		if self._is_stage_tiered(self._target_stage):
+		if self._is_stage_selector(self._target_stage):
+			raw = self._evaluate_selector_full_rust(self._target_stage, genomes)
+		elif self._is_stage_tiered(self._target_stage):
 			raw = self._evaluate_tiered_full_rust(genomes, self._target_stage)
 		else:
 			raw = self._evaluate_bitwise_full_rust(self._target_stage, genomes)
@@ -494,12 +578,20 @@ class MultiStageEvaluator(BaseEvaluator):
 		Trains all stages independently, reconstructs the joint distribution
 		P(token) = P(group|ctx) × P(token|group,ctx), and computes CE + accuracy.
 
+		For SELECTOR mode, dispatches to selector-specific combined CE that
+		trains K separate sub-models for S1.
+
 		Returns EvalResult with ce, accuracy, plus cluster_ce and within_ce breakdown.
 		"""
 		assert len(stage_genomes) == self._num_stages, \
 			f"Expected {self._num_stages} genomes, got {len(stage_genomes)}"
 
 		sparse_threshold = self._sparse_threshold or 4096
+
+		# Check if any stage uses SELECTOR mode
+		uses_selector = any(
+			self._is_stage_selector(s) for s in range(1, self._num_stages)
+		)
 
 		# Flatten all stages into concatenated arrays
 		all_bits = []
@@ -512,16 +604,28 @@ class MultiStageEvaluator(BaseEvaluator):
 			all_connections.extend(g.connections or [])
 			stage_num_clusters.append(len(g.neurons_per_cluster))
 
-		combined_ce, combined_acc, s0_ce, s1_ce = self._cache.evaluate_combined_ce(
-			all_bits_per_neuron=all_bits,
-			all_neurons_per_cluster=all_neurons,
-			all_connections=all_connections,
-			stage_num_clusters=stage_num_clusters,
-			memory_mode=self._memory_mode,
-			neuron_sample_rate=self._neuron_sample_rate,
-			rng_seed=self._seed,
-			sparse_threshold=sparse_threshold,
-		)
+		if uses_selector:
+			combined_ce, combined_acc, s0_ce, s1_ce = self._cache.evaluate_combined_ce_selector(
+				all_bits_per_neuron=all_bits,
+				all_neurons_per_cluster=all_neurons,
+				all_connections=all_connections,
+				stage_num_clusters=stage_num_clusters,
+				memory_mode=self._memory_mode,
+				neuron_sample_rate=self._neuron_sample_rate,
+				rng_seed=self._seed,
+				sparse_threshold=sparse_threshold,
+			)
+		else:
+			combined_ce, combined_acc, s0_ce, s1_ce = self._cache.evaluate_combined_ce(
+				all_bits_per_neuron=all_bits,
+				all_neurons_per_cluster=all_neurons,
+				all_connections=all_connections,
+				stage_num_clusters=stage_num_clusters,
+				memory_mode=self._memory_mode,
+				neuron_sample_rate=self._neuron_sample_rate,
+				rng_seed=self._seed,
+				sparse_threshold=sparse_threshold,
+			)
 
 		return EvalResult(
 			ce=combined_ce,
@@ -630,7 +734,9 @@ class MultiStageEvaluator(BaseEvaluator):
 
 		# Single Rust evaluation call for ALL candidates
 		start_t = time.time()
-		if self._is_stage_tiered(self._target_stage):
+		if self._is_stage_selector(self._target_stage):
+			results = self._evaluate_selector_rust(self._target_stage, all_candidates, train_subset_idx, eval_subset_idx)
+		elif self._is_stage_tiered(self._target_stage):
 			results = self._evaluate_tiered_rust(all_candidates, self._target_stage, train_subset_idx, eval_subset_idx)
 		else:
 			results = self._evaluate_bitwise_rust(self._target_stage, all_candidates, train_subset_idx, eval_subset_idx)
