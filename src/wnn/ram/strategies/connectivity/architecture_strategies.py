@@ -983,7 +983,14 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 
 		# Set up phase state for Rust acceleration
 		if self._cached_evaluator is not None:
-			self._phase_train_idx = self._cached_evaluator.random_train_idx(self._rng)
+			# Use explicit train subset if provided (phased_search cycles through subsets),
+			# otherwise pick randomly. Ensures different phases use different data.
+			if 'train_subset_idx' in kwargs:
+				self._phase_train_idx = kwargs.pop('train_subset_idx')
+			else:
+				self._ensure_rng()
+				self._phase_train_idx = self._cached_evaluator.random_train_idx(self._rng)
+			self._log.info(f"[{self.name}] Using train subset {self._phase_train_idx}")
 			self._seed_offset = int(time.time() * 1000) % (2**16)
 			cfg = self._config
 
@@ -1359,7 +1366,14 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 
 		# Set up phase state for Rust acceleration
 		if self._cached_evaluator is not None:
-			self._phase_train_idx = self._cached_evaluator.random_train_idx(self._rng)
+			# Use explicit train subset if provided (phased_search cycles through subsets),
+			# otherwise pick randomly. Ensures different phases use different data.
+			if 'train_subset_idx' in kwargs:
+				self._phase_train_idx = kwargs.pop('train_subset_idx')
+			else:
+				self._ensure_rng()
+				self._phase_train_idx = self._cached_evaluator.random_train_idx(self._rng)
+			self._log.info(f"[{self.name}] Using train subset {self._phase_train_idx}")
 			self._seed_offset = int(time.time() * 1000) % (2**16)
 
 			# Ensure initial genome has connections
@@ -1521,9 +1535,10 @@ class GridSearchStrategy:
 		# Phase 2: Evaluate one config at a time for real-time dashboard progress
 		# Fix train subset to a single index so all configs are compared fairly
 		# (auto-advancing would evaluate each config on a different subset)
-		grid_train_idx = None
-		if self._batch_evaluator is not None and hasattr(self._batch_evaluator, 'random_train_idx'):
+		grid_train_idx = kwargs.get('train_subset_idx', None)
+		if grid_train_idx is None and self._batch_evaluator is not None and hasattr(self._batch_evaluator, 'random_train_idx'):
 			grid_train_idx = self._batch_evaluator.random_train_idx(self._rng)
+		if grid_train_idx is not None:
 			self._log(f"  Using fixed train subset {grid_train_idx} for all {total_configs} configs")
 
 		t0 = time.time()
@@ -1988,7 +2003,9 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 		# Fix train subset for the entire phase so all iterations are comparable
 		# (auto-advancing would evaluate each iteration on a different subset,
 		# confusing early stopping and fitness tracking)
-		phase_train_idx = evaluator.random_train_idx(self._rng)
+		phase_train_idx = kwargs.get('train_subset_idx', None)
+		if phase_train_idx is None:
+			phase_train_idx = evaluator.random_train_idx(self._rng)
 
 		self._log(f"\n{'='*70}")
 		self._log(f"  {self._phase_name}: {self.name}")

@@ -1071,6 +1071,9 @@ class Flow:
 					full_evaluator=self.full_evaluator,
 				)
 
+				# Cycle train subsets so each experiment trains on different data
+				exp_train_idx = idx % self.evaluator.num_parts
+
 				result = experiment.run(
 					initial_genome=current_genome,
 					initial_fitness=current_fitness if exp_config.experiment_type == ExperimentType.TS else None,
@@ -1078,6 +1081,7 @@ class Flow:
 					initial_threshold=current_threshold,
 					tracker_experiment_id=tracker_experiment_id,  # Pass this experiment's ID
 					initial_evals=current_evals,
+					train_subset_idx=exp_train_idx,
 				)
 
 				self._results.append(result)

@@ -339,6 +339,7 @@ class Experiment:
 		initial_threshold: Optional[float] = None,
 		tracker_experiment_id: Optional[int] = None,
 		initial_evals: Optional[list[tuple[float, float]]] = None,
+		train_subset_idx: Optional[int] = None,
 	) -> ExperimentResult:
 		"""
 		Run the experiment.
@@ -350,6 +351,7 @@ class Experiment:
 			initial_threshold: Starting accuracy threshold
 			tracker_experiment_id: V2 experiment ID for tracker (if using V2 tracking)
 			initial_evals: Cached eval results from previous phase (avoids re-evaluation for INIT validation)
+			train_subset_idx: Which train subset to use (cycled per phase to avoid subset bias)
 
 		Returns:
 			ExperimentResult with optimization results
@@ -364,6 +366,8 @@ class Experiment:
 		self.log(f"  Type: {cfg.experiment_type.name}")
 		self.log(f"  Cluster: {cfg.cluster_type.name}")
 		self.log(f"  Optimize: bits={cfg.optimize_bits}, neurons={cfg.optimize_neurons}, connections={cfg.optimize_connections}")
+		if train_subset_idx is not None:
+			self.log(f"  Train subset: {train_subset_idx} (of {self.evaluator.num_parts})")
 		if initial_genome:
 			self.log(f"  Starting from: {initial_genome}")
 		if initial_population:
@@ -529,15 +533,18 @@ class Experiment:
 			# GA/TS use OptimizationTemplate.optimize() (template method).
 			# GridSearch/Adaptation have their own optimize() with **kwargs.
 			seed_pop = initial_population or ([initial_genome] if initial_genome else None)
-			result = strategy.optimize(
-				evaluate_fn=None,
-				initial_genome=initial_genome,
-				initial_population=seed_pop,
-				initial_fitness=initial_fitness,
-				initial_evals=initial_evals,
-				batch_evaluate_fn=None,
-				initial_neighbors=initial_population,  # TS uses this for neighbor seeding
-			)
+			opt_kwargs = {
+				"evaluate_fn": None,
+				"initial_genome": initial_genome,
+				"initial_population": seed_pop,
+				"initial_fitness": initial_fitness,
+				"initial_evals": initial_evals,
+				"batch_evaluate_fn": None,
+				"initial_neighbors": initial_population,  # TS uses this for neighbor seeding
+			}
+			if train_subset_idx is not None:
+				opt_kwargs["train_subset_idx"] = train_subset_idx
+			result = strategy.optimize(**opt_kwargs)
 
 			# Check if shutdown was requested (needed for phase status update)
 			from wnn.ram.strategies.connectivity.generic_strategies import StopReason

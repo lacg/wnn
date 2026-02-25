@@ -893,6 +893,7 @@ class PhasedSearchRunner:
 		initial_fitness: Optional[float] = None,
 		initial_population: Optional[list[ClusterGenome]] = None,
 		initial_threshold: Optional[float] = None,
+		train_subset_idx: Optional[int] = None,
 	) -> PhaseResult:
 		"""
 		Run a single optimization phase.
@@ -907,6 +908,7 @@ class PhasedSearchRunner:
 			initial_fitness: Fitness of initial genome (required for TS)
 			initial_population: Population to seed from
 			initial_threshold: Starting accuracy threshold
+			train_subset_idx: Which train subset to use (cycles per phase)
 
 		Returns:
 			PhaseResult with optimization results
@@ -917,9 +919,10 @@ class PhasedSearchRunner:
 		self.log(f"{'='*60}")
 		self.log(f"  {phase_name}")
 		self.log(f"{'='*60}")
+		self.log(f"  Type: {'GA' if strategy_type == OptimizerStrategyType.ARCHITECTURE_GA else 'TS'}")
 		self.log(f"  optimize_bits={optimize_bits}, optimize_neurons={optimize_neurons}")
 		self.log(f"  optimize_connections={optimize_connections}")
-		self.log(f"  Per-iteration rotation: {self.evaluator.num_parts} subsets")
+		self.log(f"  Train subset: {train_subset_idx} (of {self.evaluator.num_parts})")
 		if initial_genome:
 			self.log(f"  Starting from previous best: {initial_genome}")
 		if initial_population:
@@ -1025,6 +1028,11 @@ class PhasedSearchRunner:
 				strategy.set_tracker(self.tracker, self._tracker_phase_id, self._tracker_experiment_id)
 
 		# Run optimization
+		# Build kwargs with optional train_subset_idx
+		opt_kwargs = {"evaluate_fn": None}
+		if train_subset_idx is not None:
+			opt_kwargs["train_subset_idx"] = train_subset_idx
+
 		if is_ga:
 			# GA: use initial_population if available, else [initial_genome], else None (fresh)
 			if initial_population:
@@ -1034,20 +1042,20 @@ class PhasedSearchRunner:
 			else:
 				seed_pop = None
 			result = strategy.optimize(
-				evaluate_fn=None,
 				initial_population=seed_pop,
+				**opt_kwargs,
 			)
 		else:
 			# TS: requires initial_genome
 			if initial_genome is not None:
 				result = strategy.optimize(
-					evaluate_fn=None,
 					initial_genome=initial_genome,
 					initial_fitness=initial_fitness,
 					initial_neighbors=initial_population,
+					**opt_kwargs,
 				)
 			else:
-				result = strategy.optimize(evaluate_fn=None)
+				result = strategy.optimize(**opt_kwargs)
 
 		self.log("")
 		self.log(f"{phase_name} Result:")
@@ -1480,6 +1488,9 @@ class PhasedSearchRunner:
 				except Exception as e:
 					self.log(f"Warning: Failed to notify tracker of phase start: {e}")
 
+			# Cycle train subsets so each phase trains on different data
+			phase_train_idx = idx % self.evaluator.num_parts
+
 			phase_result = self.run_phase(
 				phase_name=phase_name,
 				strategy_type=strategy_type,
@@ -1490,6 +1501,7 @@ class PhasedSearchRunner:
 				initial_fitness=init_fitness,
 				initial_population=init_population,
 				initial_threshold=init_threshold,
+				train_subset_idx=phase_train_idx,
 			)
 
 			# Notify dashboard of phase status (only if not stopped by user)
@@ -1591,6 +1603,9 @@ class PhasedSearchRunner:
 			init_threshold = prev_result.final_threshold if prev_result else seed_threshold
 			init_fitness = prev_result.final_fitness if prev_result and strategy_type == OptimizerStrategyType.ARCHITECTURE_TS else None
 
+			# Cycle train subsets for additional phases too
+			phase_train_idx = phase_idx % self.evaluator.num_parts
+
 			phase_result = self.run_phase(
 				phase_name=phase_name,
 				strategy_type=strategy_type,
@@ -1601,6 +1616,7 @@ class PhasedSearchRunner:
 				initial_fitness=init_fitness,
 				initial_population=init_population,
 				initial_threshold=init_threshold,
+				train_subset_idx=phase_train_idx,
 			)
 
 			# Notify dashboard of phase status (only if not stopped by user)
