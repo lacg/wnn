@@ -875,11 +875,10 @@ pub(crate) struct GroupDenseMemory {
 }
 
 impl GroupDenseMemory {
-    fn new(num_neurons: usize, bits: usize) -> Self {
+    fn new(num_neurons: usize, bits: usize, memory_mode: u8) -> Self {
         let words_per_neuron = (1usize << bits).div_ceil(CELLS_PER_WORD);
         let total_words = num_neurons * words_per_neuron;
-        // Initialize all cells to EMPTY (pack 31 EMPTY values per word)
-        let empty_word: i64 = (0..31).fold(0i64, |acc, i| acc | (EMPTY << (i * 2)));
+        let empty_word = crate::neuron_memory::empty_word_for_mode(memory_mode);
         Self {
             words: (0..total_words).map(|_| AtomicI64::new(empty_word)).collect(),
             words_per_neuron,
@@ -945,6 +944,38 @@ impl GroupDenseMemory {
             // CAS failed, retry
         }
     }
+
+    /// Thread-safe atomic nudge for quad modes (CAS loop).
+    /// Moves cell one step toward target: +1 if target_true, -1 if target_false.
+    /// Clamps to [0, 3] (QUAD_FALSE..QUAD_TRUE).
+    #[inline]
+    fn nudge(&self, neuron_idx: usize, address: usize, target_true: bool) -> bool {
+        let word_idx = address / CELLS_PER_WORD;
+        let cell_idx = address % CELLS_PER_WORD;
+        let word_offset = neuron_idx * self.words_per_neuron + word_idx;
+        let shift = cell_idx * BITS_PER_CELL;
+        let mask = CELL_MASK << shift;
+        let delta = 2 * (target_true as i64) - 1; // +1 or -1
+
+        loop {
+            let old_word = self.words[word_offset].load(Ordering::Relaxed);
+            let old_cell = (old_word >> shift) & CELL_MASK;
+
+            let new_cell = (old_cell + delta).clamp(crate::neuron_memory::QUAD_FALSE, crate::neuron_memory::QUAD_TRUE);
+            if new_cell == old_cell {
+                return false; // already at boundary
+            }
+
+            let new_word = (old_word & !mask) | (new_cell << shift);
+            if self.words[word_offset]
+                .compare_exchange_weak(old_word, new_word, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                return true;
+            }
+            // CAS failed, retry
+        }
+    }
 }
 
 /// GPU-compatible sparse memory export (sorted arrays for binary search)
@@ -991,14 +1022,21 @@ impl SparseGpuExport {
 /// Sparse memory for a config group (concurrent hash-based, for bits > 12)
 /// Uses DashMap for thread-safe concurrent access during parallel training.
 pub(crate) struct GroupSparseMemory {
-    /// Per-neuron concurrent hash maps: address -> cell value (0=FALSE, 1=TRUE, 2=EMPTY default)
+    /// Per-neuron concurrent hash maps: address -> cell value
     neurons: Vec<DashMap<u64, u8>>,
+    /// Default cell value for unvisited addresses (EMPTY_U8=2 for ternary, 1=QUAD_WEAK_FALSE for quad)
+    default_empty: u8,
 }
 
 impl GroupSparseMemory {
-    fn new(num_neurons: usize) -> Self {
+    fn new(num_neurons: usize, memory_mode: u8) -> Self {
+        let default_empty = match memory_mode {
+            crate::neuron_memory::MODE_QUAD_BINARY | crate::neuron_memory::MODE_QUAD_WEIGHTED => 1, // QUAD_WEAK_FALSE
+            _ => EMPTY as u8, // 2
+        };
         Self {
             neurons: (0..num_neurons).map(|_| DashMap::new()).collect(),
+            default_empty,
         }
     }
 
@@ -1038,7 +1076,7 @@ impl GroupSparseMemory {
 
     #[inline]
     fn read(&self, neuron_idx: usize, address: u64) -> u8 {
-        *self.neurons[neuron_idx].get(&address).map(|v| *v).as_ref().unwrap_or(&2) // EMPTY
+        *self.neurons[neuron_idx].get(&address).map(|v| *v).as_ref().unwrap_or(&self.default_empty)
     }
 
     /// Thread-safe write using DashMap
@@ -1084,6 +1122,42 @@ impl GroupSparseMemory {
             }
         }
     }
+
+    /// Thread-safe nudge for quad modes using DashMap entry API.
+    /// Moves cell one step toward target. For vacant entries, inserts one step
+    /// from default (QUAD_WEAK_TRUE=2 if target_true, QUAD_WEAK_FALSE=1 stays if target_false).
+    #[inline]
+    fn nudge(&self, neuron_idx: usize, address: u64, target_true: bool) -> bool {
+        let map = &self.neurons[neuron_idx];
+        match map.entry(address) {
+            dashmap::mapref::entry::Entry::Occupied(mut e) => {
+                let old_cell = *e.get() as i64;
+                let delta = 2 * (target_true as i64) - 1;
+                let new_cell = (old_cell + delta).clamp(crate::neuron_memory::QUAD_FALSE, crate::neuron_memory::QUAD_TRUE) as u8;
+                if new_cell == old_cell as u8 {
+                    return false;
+                }
+                // Remove entry if it matches default_empty (saves memory)
+                if new_cell == self.default_empty {
+                    e.remove();
+                } else {
+                    e.insert(new_cell);
+                }
+                true
+            }
+            dashmap::mapref::entry::Entry::Vacant(e) => {
+                // Default is QUAD_WEAK_FALSE (1). Nudge toward true → insert 2, toward false → insert 0
+                let default = self.default_empty as i64;
+                let delta = 2 * (target_true as i64) - 1;
+                let new_cell = (default + delta).clamp(crate::neuron_memory::QUAD_FALSE, crate::neuron_memory::QUAD_TRUE) as u8;
+                if new_cell == self.default_empty {
+                    return false; // no change from default
+                }
+                e.insert(new_cell);
+                true
+            }
+        }
+    }
 }
 
 /// Hybrid memory - Dense for low bits, Sparse for high bits
@@ -1094,11 +1168,11 @@ pub(crate) enum GroupMemory {
 }
 
 impl GroupMemory {
-    pub(crate) fn new(num_neurons: usize, bits: usize) -> Self {
+    pub(crate) fn new(num_neurons: usize, bits: usize, memory_mode: u8) -> Self {
         if bits <= SPARSE_THRESHOLD {
-            GroupMemory::Dense(GroupDenseMemory::new(num_neurons, bits))
+            GroupMemory::Dense(GroupDenseMemory::new(num_neurons, bits, memory_mode))
         } else {
-            GroupMemory::Sparse(GroupSparseMemory::new(num_neurons))
+            GroupMemory::Sparse(GroupSparseMemory::new(num_neurons, memory_mode))
         }
     }
 
@@ -1168,6 +1242,15 @@ impl GroupMemory {
         match self {
             GroupMemory::Dense(m) => m.write(neuron_idx, address, value, allow_override),
             GroupMemory::Sparse(m) => m.write(neuron_idx, address as u64, value as u8, allow_override),
+        }
+    }
+
+    /// Thread-safe nudge for quad modes — moves cell one step toward target.
+    #[inline]
+    pub(crate) fn nudge(&self, neuron_idx: usize, address: usize, target_true: bool) -> bool {
+        match self {
+            GroupMemory::Dense(m) => m.nudge(neuron_idx, address, target_true),
+            GroupMemory::Sparse(m) => m.nudge(neuron_idx, address as u64, target_true),
         }
     }
 }
@@ -1395,7 +1478,7 @@ pub fn evaluate_genomes_parallel(
 
         // Create hybrid memory for each config group
         let group_memories: Vec<GroupMemory> = groups.iter()
-            .map(|g| GroupMemory::new(g.total_neurons(), g.bits))
+            .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
             .collect();
 
         // Get original per-neuron connections for this genome
@@ -1458,6 +1541,7 @@ pub fn evaluate_genomes_parallel(
             gpu_addresses.as_deref(),
             neuron_sample_rate,
             rng_seed.wrapping_add(genome_idx as u64),
+            memory_mode,
         );
 
         // Evaluate this genome - HYBRID Metal/CPU acceleration
@@ -1797,6 +1881,8 @@ struct GenomeMemoryPool {
     memories: Vec<Vec<GroupMemory>>,
     /// Config groups template (same for all genomes with same config)
     groups_template: Vec<ConfigGroup>,
+    /// Memory mode (for correct reset empty values)
+    memory_mode: u8,
 }
 
 impl GenomeMemoryPool {
@@ -1805,13 +1891,14 @@ impl GenomeMemoryPool {
         pool_size: usize,
         bits_per_cluster: &[usize],
         neurons_per_cluster: &[usize],
+        memory_mode: u8,
     ) -> Self {
         let groups_template = build_groups(bits_per_cluster, neurons_per_cluster);
 
         let memories = (0..pool_size)
             .map(|_| {
                 groups_template.iter()
-                    .map(|g| GroupMemory::new(g.total_neurons(), g.bits))
+                    .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
                     .collect()
             })
             .collect();
@@ -1819,21 +1906,21 @@ impl GenomeMemoryPool {
         Self {
             memories,
             groups_template,
+            memory_mode,
         }
     }
 
     /// Reset all memory in a pool slot (clear for reuse)
     fn reset_slot(&self, slot: usize) {
+        let empty_word = crate::neuron_memory::empty_word_for_mode(self.memory_mode);
         for memory in &self.memories[slot] {
             match memory {
                 GroupMemory::Dense(m) => {
-                    // Reset dense memory to EMPTY
                     for word in &m.words {
-                        word.store(0x5555555555555555i64, std::sync::atomic::Ordering::Relaxed); // All EMPTY
+                        word.store(empty_word, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
                 GroupMemory::Sparse(m) => {
-                    // Clear sparse memory
                     for neuron_map in &m.neurons {
                         neuron_map.clear();
                     }
@@ -1926,8 +2013,10 @@ pub(crate) fn train_genome_in_slot(
     gpu_addresses: Option<&[u32]>,
     neuron_sample_rate: f32,
     rng_seed: u64,
+    memory_mode: u8,
 ) {
     let use_sampling = neuron_sample_rate < 1.0;
+    let use_nudge = memory_mode != crate::neuron_memory::MODE_TERNARY;
 
     // Use chunked parallel processing to balance parallelism vs overhead
     let chunk_size = 10_000.max(num_train / 20);
@@ -1979,7 +2068,11 @@ pub(crate) fn train_genome_in_slot(
                     let conn_start = neuron_conn_offsets[global_n];
                     compute_address(input_bits, &original_connections[conn_start..], n_bits)
                 };
-                memory.write(neuron_base + n, address, TRUE, false);
+                if use_nudge {
+                    memory.nudge(neuron_base + n, address, true);
+                } else {
+                    memory.write(neuron_base + n, address, TRUE, false);
+                }
             }
         }
 
@@ -2027,7 +2120,11 @@ pub(crate) fn train_genome_in_slot(
                     let conn_start = neuron_conn_offsets[global_n];
                     compute_address(input_bits, &original_connections[conn_start..], n_bits)
                 };
-                memory.write(neuron_base + n, address, FALSE, false);
+                if use_nudge {
+                    memory.nudge(neuron_base + n, address, false);
+                } else {
+                    memory.write(neuron_base + n, address, FALSE, false);
+                }
             }
         }
     });
@@ -2154,6 +2251,7 @@ pub fn evaluate_genome_hybrid(
                         group.neurons,
                         num_clusters,
                         empty_value,
+                        memory_mode,
                     );
 
                     if let Ok((ce, acc)) = result {
@@ -2704,7 +2802,7 @@ pub fn evaluate_genomes_parallel_hybrid(
     neuron_sample_rate: f32,
     rng_seed: u64,
 ) -> Vec<(f64, f64)> {
-    let _memory_mode = crate::neuron_memory::get_memory_mode();
+    let memory_mode = crate::neuron_memory::get_memory_mode();
     if num_genomes == 0 {
         return vec![];
     }
@@ -2854,7 +2952,7 @@ pub fn evaluate_genomes_parallel_hybrid(
 
                 // Create memory for THIS genome
                 let memories: Vec<GroupMemory> = groups.iter()
-                    .map(|g| GroupMemory::new(g.total_neurons(), g.bits))
+                    .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
                     .collect();
 
                 // Get original per-neuron connections for this genome
@@ -2902,6 +3000,7 @@ pub fn evaluate_genomes_parallel_hybrid(
                     gpu_addresses.as_deref(),
                     neuron_sample_rate,
                     rng_seed.wrapping_add(genome_idx as u64),
+                    memory_mode,
                 );
 
                 // Build GPU-padded connections (per-neuron → group layout with padding)
@@ -3031,6 +3130,7 @@ pub fn evaluate_genome_with_gating(
     use crate::gating::RAMGating;
 
     let epsilon = 1e-10f64;
+    let memory_mode = crate::neuron_memory::get_memory_mode();
 
     // ========================================================================
     // Step 1: Train base RAM (same as existing evaluation)
@@ -3043,7 +3143,7 @@ pub fn evaluate_genome_with_gating(
 
     // Create hybrid memory for each config group
     let group_memories: Vec<GroupMemory> = groups.iter()
-        .map(|g| GroupMemory::new(g.total_neurons(), g.bits))
+        .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
         .collect();
 
     // Reorganize connections for coalescing if needed
@@ -3067,6 +3167,7 @@ pub fn evaluate_genome_with_gating(
     }
 
     // Train: iterate over training examples (parallel)
+    let use_nudge = memory_mode != crate::neuron_memory::MODE_TERNARY;
     (0..num_train).into_par_iter().for_each(|ex_idx| {
         let input_start = ex_idx * total_input_bits;
         let input_bits = &train_input_bits[input_start..input_start + total_input_bits];
@@ -3091,7 +3192,11 @@ pub fn evaluate_genome_with_gating(
             for n in 0..actual_neurons {
                 let conn_start = conn_base + n * group.bits;
                 let address = compute_address(input_bits, &connections[conn_start..], group.bits);
-                memory.write(neuron_base + n, address, TRUE, false);
+                if use_nudge {
+                    memory.nudge(neuron_base + n, address, true);
+                } else {
+                    memory.write(neuron_base + n, address, TRUE, false);
+                }
             }
         }
 
@@ -3119,7 +3224,11 @@ pub fn evaluate_genome_with_gating(
             for n in 0..actual_neurons {
                 let conn_start = conn_base + n * group.bits;
                 let address = compute_address(input_bits, &connections[conn_start..], group.bits);
-                memory.write(neuron_base + n, address, FALSE, false);
+                if use_nudge {
+                    memory.nudge(neuron_base + n, address, false);
+                } else {
+                    memory.write(neuron_base + n, address, FALSE, false);
+                }
             }
         }
     });

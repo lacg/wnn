@@ -21,9 +21,18 @@
 #include <metal_stdlib>
 using namespace metal;
 
+// Memory mode constants (must match neuron_memory.rs)
+constant uint MEM_MODE_TERNARY = 0;
+constant uint MEM_MODE_QUAD_BINARY = 1;
+constant uint MEM_MODE_QUAD_WEIGHTED = 2;
+
+// Cell value constants
 constant uint CELL_FALSE = 0;
 constant uint CELL_TRUE = 1;
 constant uint CELL_EMPTY = 2;
+
+// Quad weights for QUAD_WEIGHTED mode (must match neuron_memory.rs QUAD_WEIGHTS)
+constant float QUAD_WEIGHTS[4] = {0.0f, 0.25f, 0.75f, 1.0f};
 
 struct SparseCEParams {
     uint num_examples;
@@ -33,6 +42,8 @@ struct SparseCEParams {
     uint neurons_per_cluster;
     uint num_clusters;
     float empty_value;
+    uint memory_mode;           // 0=TERNARY, 1=QUAD_BINARY, 2=QUAD_WEIGHTED
+    uint default_cell_value;    // 2 for TERNARY (CELL_EMPTY), 1 for QUAD (QUAD_WEAK_FALSE)
 };
 
 // Compute memory address (same as sparse_forward.metal)
@@ -55,15 +66,16 @@ inline ulong compute_address_ce(
     return address;
 }
 
-// Binary search (same as sparse_forward.metal)
+// Binary search with configurable default value
 inline uint binary_search_ce(
     device const ulong* keys,
     device const uchar* values,
     uint start,
     uint count,
-    ulong address
+    ulong address,
+    uint default_value
 ) {
-    if (count == 0) return CELL_EMPTY;
+    if (count == 0) return default_value;
 
     uint left = 0;
     uint right = count;
@@ -80,7 +92,68 @@ inline uint binary_search_ce(
             right = mid;
         }
     }
-    return CELL_EMPTY;
+    return default_value;
+}
+
+// Compute cluster score based on memory mode
+inline float compute_cluster_score(
+    device const ulong* packed_input,
+    device const int* connections,
+    device const ulong* keys,
+    device const uchar* values,
+    device const uint* offsets,
+    device const uint* counts,
+    uint start_neuron,
+    uint neurons_per_cluster,
+    uint bits_per_neuron,
+    uint memory_mode,
+    uint default_cell_value,
+    float empty_value
+) {
+    if (memory_mode == MEM_MODE_QUAD_WEIGHTED) {
+        float weighted_sum = 0.0f;
+        for (uint n = 0; n < neurons_per_cluster; n++) {
+            uint neuron_idx = start_neuron + n;
+            device const int* conn = connections + neuron_idx * bits_per_neuron;
+            ulong address = compute_address_ce(packed_input, conn, bits_per_neuron);
+            uint mem_start = offsets[neuron_idx];
+            uint mem_count = counts[neuron_idx];
+            uint cell_value = binary_search_ce(keys, values, mem_start, mem_count, address, default_cell_value);
+            if (cell_value > 3) cell_value = default_cell_value; // safety clamp
+            weighted_sum += QUAD_WEIGHTS[cell_value];
+        }
+        return weighted_sum / float(neurons_per_cluster);
+    } else if (memory_mode == MEM_MODE_QUAD_BINARY) {
+        uint count_high = 0;
+        for (uint n = 0; n < neurons_per_cluster; n++) {
+            uint neuron_idx = start_neuron + n;
+            device const int* conn = connections + neuron_idx * bits_per_neuron;
+            ulong address = compute_address_ce(packed_input, conn, bits_per_neuron);
+            uint mem_start = offsets[neuron_idx];
+            uint mem_count = counts[neuron_idx];
+            uint cell_value = binary_search_ce(keys, values, mem_start, mem_count, address, default_cell_value);
+            if (cell_value >= 2) count_high++;  // QUAD_WEAK_TRUE(2) and QUAD_TRUE(3) count as true
+        }
+        return float(count_high) / float(neurons_per_cluster);
+    } else {
+        // TERNARY mode (existing logic)
+        uint count_true = 0;
+        uint count_empty = 0;
+        for (uint n = 0; n < neurons_per_cluster; n++) {
+            uint neuron_idx = start_neuron + n;
+            device const int* conn = connections + neuron_idx * bits_per_neuron;
+            ulong address = compute_address_ce(packed_input, conn, bits_per_neuron);
+            uint mem_start = offsets[neuron_idx];
+            uint mem_count = counts[neuron_idx];
+            uint cell_value = binary_search_ce(keys, values, mem_start, mem_count, address, default_cell_value);
+            if (cell_value == CELL_TRUE) {
+                count_true++;
+            } else if (cell_value == CELL_EMPTY) {
+                count_empty++;
+            }
+        }
+        return (float(count_true) + empty_value * float(count_empty)) / float(neurons_per_cluster);
+    }
 }
 
 //
@@ -114,7 +187,6 @@ kernel void sparse_forward_with_ce(
     int target_cluster = targets[example_idx];
 
     // Compute raw scores for all clusters
-    // Using threadgroup memory would be better but this is simpler
     float max_score = -1e10f;
     float target_score = 0.0f;
     uint predicted_cluster = 0;
@@ -123,28 +195,11 @@ kernel void sparse_forward_with_ce(
     for (uint cluster_idx = 0; cluster_idx < params.num_clusters; cluster_idx++) {
         uint start_neuron = cluster_idx * params.neurons_per_cluster;
 
-        uint count_true = 0;
-        uint count_empty = 0;
-
-        for (uint n = 0; n < params.neurons_per_cluster; n++) {
-            uint neuron_idx = start_neuron + n;
-            device const int* conn = connections + neuron_idx * params.bits_per_neuron;
-
-            ulong address = compute_address_ce(packed_input, conn, params.bits_per_neuron);
-
-            uint mem_start = offsets[neuron_idx];
-            uint mem_count = counts[neuron_idx];
-
-            uint cell_value = binary_search_ce(keys, values, mem_start, mem_count, address);
-
-            if (cell_value == CELL_TRUE) {
-                count_true++;
-            } else if (cell_value == CELL_EMPTY) {
-                count_empty++;
-            }
-        }
-
-        float score = (float(count_true) + params.empty_value * float(count_empty)) / float(params.neurons_per_cluster);
+        float score = compute_cluster_score(
+            packed_input, connections, keys, values, offsets, counts,
+            start_neuron, params.neurons_per_cluster, params.bits_per_neuron,
+            params.memory_mode, params.default_cell_value, params.empty_value
+        );
 
         if (score > max_score) {
             max_score = score;
@@ -165,28 +220,12 @@ kernel void sparse_forward_with_ce(
     for (uint cluster_idx = 0; cluster_idx < params.num_clusters; cluster_idx++) {
         uint start_neuron = cluster_idx * params.neurons_per_cluster;
 
-        uint count_true = 0;
-        uint count_empty = 0;
+        float score = compute_cluster_score(
+            packed_input, connections, keys, values, offsets, counts,
+            start_neuron, params.neurons_per_cluster, params.bits_per_neuron,
+            params.memory_mode, params.default_cell_value, params.empty_value
+        );
 
-        for (uint n = 0; n < params.neurons_per_cluster; n++) {
-            uint neuron_idx = start_neuron + n;
-            device const int* conn = connections + neuron_idx * params.bits_per_neuron;
-
-            ulong address = compute_address_ce(packed_input, conn, params.bits_per_neuron);
-
-            uint mem_start = offsets[neuron_idx];
-            uint mem_count = counts[neuron_idx];
-
-            uint cell_value = binary_search_ce(keys, values, mem_start, mem_count, address);
-
-            if (cell_value == CELL_TRUE) {
-                count_true++;
-            } else if (cell_value == CELL_EMPTY) {
-                count_empty++;
-            }
-        }
-
-        float score = (float(count_true) + params.empty_value * float(count_empty)) / float(params.neurons_per_cluster);
         sum_exp += exp(score - max_score);
     }
 
@@ -244,28 +283,11 @@ kernel void sparse_forward_with_ce_online(
     for (uint cluster_idx = 0; cluster_idx < params.num_clusters; cluster_idx++) {
         uint start_neuron = cluster_idx * params.neurons_per_cluster;
 
-        uint count_true = 0;
-        uint count_empty = 0;
-
-        for (uint n = 0; n < params.neurons_per_cluster; n++) {
-            uint neuron_idx = start_neuron + n;
-            device const int* conn = connections + neuron_idx * params.bits_per_neuron;
-
-            ulong address = compute_address_ce(packed_input, conn, params.bits_per_neuron);
-
-            uint mem_start = offsets[neuron_idx];
-            uint mem_count = counts[neuron_idx];
-
-            uint cell_value = binary_search_ce(keys, values, mem_start, mem_count, address);
-
-            if (cell_value == CELL_TRUE) {
-                count_true++;
-            } else if (cell_value == CELL_EMPTY) {
-                count_empty++;
-            }
-        }
-
-        float score = (float(count_true) + params.empty_value * float(count_empty)) / float(params.neurons_per_cluster);
+        float score = compute_cluster_score(
+            packed_input, connections, keys, values, offsets, counts,
+            start_neuron, params.neurons_per_cluster, params.bits_per_neuron,
+            params.memory_mode, params.default_cell_value, params.empty_value
+        );
 
         // Track predicted (argmax)
         if (score > predicted_score) {

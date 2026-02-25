@@ -1756,7 +1756,7 @@ pub fn train_and_get_tiered_scores(
 
     // Create memory
     let memories: Vec<GroupMemory> = groups.iter()
-        .map(|g| GroupMemory::new(g.total_neurons(), g.bits))
+        .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
         .collect();
 
     // Try GPU address computation
@@ -1787,6 +1787,7 @@ pub fn train_and_get_tiered_scores(
         gpu_addresses.as_deref(),
         neuron_sample_rate,
         rng_seed,
+        memory_mode,
     );
 
     // Evaluate — build per-example scores
