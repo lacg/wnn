@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
-  import type { Flow, Experiment, Checkpoint, ValidationSummary } from '$lib/types';
+  import type { Flow, Experiment, Checkpoint, ValidationSummary, CombinedValidation } from '$lib/types';
   import { formatDate } from '$lib/dateFormat';
   import { currentFlow, flows } from '$lib/stores';
   import TierConfigEditor from '$lib/components/TierConfigEditor.svelte';
@@ -98,6 +98,7 @@
   let experiments: Experiment[] = [];
   let checkpoints: Checkpoint[] = [];
   let validationSummaries: ValidationSummary[] = [];
+  let combinedValidations: CombinedValidation[] = [];
   let loading = true;
   let error: string | null = null;
   let saving = false;
@@ -173,11 +174,12 @@
   async function loadFlow() {
     loading = true;
     try {
-      const [flowRes, expsRes, checkpointsRes, validationsRes] = await Promise.all([
+      const [flowRes, expsRes, checkpointsRes, validationsRes, combinedRes] = await Promise.all([
         fetch(`/api/flows/${flowId}`),
         fetch(`/api/flows/${flowId}/experiments`),
         fetch(`/api/checkpoints`),
-        fetch(`/api/flows/${flowId}/validations`)
+        fetch(`/api/flows/${flowId}/validations`),
+        fetch(`/api/flows/${flowId}/combined-validations`)
       ]);
 
       if (!flowRes.ok) throw new Error('Flow not found');
@@ -192,6 +194,9 @@
       // Ensure validationSummaries is always an array
       const validationsData = validationsRes.ok ? await validationsRes.json() : [];
       validationSummaries = Array.isArray(validationsData) ? validationsData : [];
+      // Load combined validations (multi-stage end-to-end metrics)
+      const combinedData = combinedRes.ok ? await combinedRes.json() : [];
+      combinedValidations = Array.isArray(combinedData) ? combinedData : [];
 
       // Populate edit form from config
       if (flow?.config?.params) {
@@ -1553,8 +1558,53 @@
       </div>
     </section>
 
-    <!-- Final Results (for completed flows) -->
-    {#if flow.status === 'completed'}
+    <!-- Combined Results (for completed multi-stage flows) -->
+    {#if flow.status === 'completed' && combinedValidations.length > 0}
+      <section class="section">
+        <h2>Combined Results</h2>
+        <div class="final-results-card">
+          <div class="table-container">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Genome Type</th>
+                  <th>Combined CE</th>
+                  <th>Combined ACC</th>
+                  {#if combinedValidations[0]?.per_stage_ce}
+                    {#each combinedValidations[0].per_stage_ce as _, i}
+                      <th>S{i} CE</th>
+                    {/each}
+                  {/if}
+                </tr>
+              </thead>
+              <tbody>
+                {#each combinedValidations as cv}
+                  <tr>
+                    <td>
+                      <span class="genome-type-badge" class:best-ce={cv.genome_type === 'best_ce'} class:best-acc={cv.genome_type === 'best_acc'} class:best-fitness={cv.genome_type === 'best_fitness'}>
+                        {cv.genome_type === 'best_ce' ? 'Best CE' : cv.genome_type === 'best_acc' ? 'Best ACC' : 'Best Fitness'}
+                      </span>
+                    </td>
+                    <td class="mono">{cv.combined_ce.toFixed(4)}</td>
+                    <td class="mono">{(cv.combined_accuracy * 100).toFixed(2)}%</td>
+                    {#if cv.per_stage_ce}
+                      {#each cv.per_stage_ce as stageCe}
+                        <td class="mono">{stageCe.toFixed(4)}</td>
+                      {/each}
+                    {/if}
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+          <div class="results-footer">
+            <a href="/" class="btn btn-secondary">View Iterations</a>
+            <a href="/checkpoints" class="btn btn-secondary">View All Checkpoints</a>
+          </div>
+        </div>
+      </section>
+    <!-- Final Results fallback (single-stage completed flows) -->
+    {:else if flow.status === 'completed'}
       {@const finalCheckpoint = checkpoints.find(c => c.is_final && experiments.some(e => e.id === c.experiment_id))}
       <section class="section">
         <h2>Final Results</h2>
@@ -2801,5 +2851,29 @@
 
   .val-chart .tooltip-group rect {
     filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.1));
+  }
+
+  /* Combined Results table */
+  .genome-type-badge {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    font-size: 1rem;
+    font-weight: 500;
+  }
+
+  .genome-type-badge.best-ce {
+    background: color-mix(in srgb, var(--accent-blue) 20%, transparent);
+    color: var(--accent-blue);
+  }
+
+  .genome-type-badge.best-acc {
+    background: color-mix(in srgb, var(--accent-green) 20%, transparent);
+    color: var(--accent-green);
+  }
+
+  .genome-type-badge.best-fitness {
+    background: color-mix(in srgb, var(--accent-purple, #8b5cf6) 20%, transparent);
+    color: var(--accent-purple, #8b5cf6);
   }
 </style>

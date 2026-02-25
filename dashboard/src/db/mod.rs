@@ -94,6 +94,22 @@ async fn run_migrations(pool: &DbPool) -> Result<()> {
         .execute(pool)
         .await;
 
+    // Migration: Create combined_validations table for multi-stage end-to-end metrics
+    let _ = sqlx::query(
+        r#"CREATE TABLE IF NOT EXISTS combined_validations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            flow_id INTEGER NOT NULL REFERENCES flows(id),
+            genome_type TEXT NOT NULL,
+            combined_ce REAL NOT NULL,
+            combined_accuracy REAL NOT NULL,
+            per_stage_ce_json TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            UNIQUE(flow_id, genome_type)
+        )"#,
+    )
+    .execute(pool)
+    .await;
+
     Ok(())
 }
 
@@ -357,6 +373,23 @@ CREATE TABLE IF NOT EXISTS gating_runs (
 
 CREATE INDEX IF NOT EXISTS idx_gating_runs_experiment ON gating_runs(experiment_id);
 CREATE INDEX IF NOT EXISTS idx_gating_runs_status ON gating_runs(status);
+
+-- ============================================================================
+-- COMBINED_VALIDATIONS: End-to-end metrics for multi-stage flows
+-- Pairs each genome type (best_ce, best_acc, best_fitness) across stages
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS combined_validations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    flow_id INTEGER NOT NULL REFERENCES flows(id),
+    genome_type TEXT NOT NULL,        -- 'best_ce', 'best_acc', 'best_fitness'
+    combined_ce REAL NOT NULL,
+    combined_accuracy REAL NOT NULL,
+    per_stage_ce_json TEXT,           -- JSON array e.g. [1.23, 3.45]
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    UNIQUE(flow_id, genome_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_combined_validations_flow ON combined_validations(flow_id);
 
 -- ============================================================================
 -- INDEXES for efficient queries
@@ -1516,6 +1549,82 @@ pub mod queries {
             "best_fitness" => GenomeValidationType::BestFitness,
             _ => GenomeValidationType::BestCe,
         }
+    }
+
+    // =============================================================================
+    // Combined Validation queries (multi-stage end-to-end metrics)
+    // =============================================================================
+
+    pub async fn get_combined_validations(
+        pool: &DbPool,
+        flow_id: i64,
+    ) -> Result<Vec<CombinedValidation>> {
+        let rows = sqlx::query(
+            r#"SELECT id, flow_id, genome_type, combined_ce, combined_accuracy,
+                      per_stage_ce_json, created_at
+               FROM combined_validations
+               WHERE flow_id = ?
+               ORDER BY genome_type"#,
+        )
+        .bind(flow_id)
+        .fetch_all(pool)
+        .await?;
+
+        let mut results = Vec::with_capacity(rows.len());
+        for row in rows {
+            results.push(row_to_combined_validation(&row)?);
+        }
+        Ok(results)
+    }
+
+    pub async fn upsert_combined_validation(
+        pool: &DbPool,
+        flow_id: i64,
+        genome_type: &str,
+        combined_ce: f64,
+        combined_accuracy: f64,
+        per_stage_ce: Option<&[f64]>,
+    ) -> Result<i64> {
+        let now = Utc::now().to_rfc3339();
+        let per_stage_ce_json = per_stage_ce.map(|v| serde_json::to_string(v).unwrap_or_default());
+
+        let result = sqlx::query(
+            r#"INSERT INTO combined_validations
+               (flow_id, genome_type, combined_ce, combined_accuracy, per_stage_ce_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(flow_id, genome_type) DO UPDATE SET
+                 combined_ce = excluded.combined_ce,
+                 combined_accuracy = excluded.combined_accuracy,
+                 per_stage_ce_json = excluded.per_stage_ce_json,
+                 created_at = excluded.created_at"#,
+        )
+        .bind(flow_id)
+        .bind(genome_type)
+        .bind(combined_ce)
+        .bind(combined_accuracy)
+        .bind(&per_stage_ce_json)
+        .bind(&now)
+        .execute(pool)
+        .await?;
+
+        Ok(result.last_insert_rowid())
+    }
+
+    fn row_to_combined_validation(row: &sqlx::sqlite::SqliteRow) -> Result<CombinedValidation> {
+        let genome_type_str: String = row.get("genome_type");
+        let per_stage_ce_json: Option<String> = row.get("per_stage_ce_json");
+        let per_stage_ce = per_stage_ce_json
+            .and_then(|json| serde_json::from_str::<Vec<f64>>(&json).ok());
+
+        Ok(CombinedValidation {
+            id: row.get("id"),
+            flow_id: row.get("flow_id"),
+            genome_type: parse_genome_validation_type(&genome_type_str),
+            combined_ce: row.get("combined_ce"),
+            combined_accuracy: row.get("combined_accuracy"),
+            per_stage_ce,
+            created_at: parse_datetime(row.get("created_at"))?,
+        })
     }
 
     // =============================================================================

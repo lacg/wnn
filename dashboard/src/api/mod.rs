@@ -51,6 +51,7 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .route("/api/flows/:id/pid", patch(update_flow_pid))
         .route("/api/flows/:id/heartbeat", post(update_flow_heartbeat))
         .route("/api/flows/:id/validations", get(get_flow_validations))
+        .route("/api/flows/:id/combined-validations", get(get_combined_validations).post(create_combined_validation))
         .route("/api/flows/:id/run-gating", post(run_flow_gating))
         // Validations
         .route("/api/validations/check", get(check_cached_validation))
@@ -310,6 +311,53 @@ async fn get_flow_validations(
 ) -> impl IntoResponse {
     match crate::db::queries::get_flow_validation_summaries(&state.db, flow_id).await {
         Ok(summaries) => (StatusCode::OK, Json(summaries)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+// =============================================================================
+// Combined Validation handlers (multi-stage end-to-end metrics)
+// =============================================================================
+
+async fn get_combined_validations(
+    State(state): State<Arc<AppState>>,
+    Path(flow_id): Path<i64>,
+) -> impl IntoResponse {
+    match crate::db::queries::get_combined_validations(&state.db, flow_id).await {
+        Ok(validations) => (StatusCode::OK, Json(validations)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateCombinedValidationRequest {
+    pub genome_type: String,       // 'best_ce', 'best_acc', 'best_fitness'
+    pub combined_ce: f64,
+    pub combined_accuracy: f64,
+    pub per_stage_ce: Option<Vec<f64>>,
+}
+
+async fn create_combined_validation(
+    State(state): State<Arc<AppState>>,
+    Path(flow_id): Path<i64>,
+    Json(req): Json<CreateCombinedValidationRequest>,
+) -> impl IntoResponse {
+    let per_stage_ce_slice = req.per_stage_ce.as_deref();
+    match crate::db::queries::upsert_combined_validation(
+        &state.db,
+        flow_id,
+        &req.genome_type,
+        req.combined_ce,
+        req.combined_accuracy,
+        per_stage_ce_slice,
+    ).await {
+        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({"id": id}))).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),

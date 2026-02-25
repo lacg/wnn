@@ -920,6 +920,8 @@ class Flow:
 		# Multi-stage tracking: frozen genomes per completed stage
 		is_multi_stage = cfg.architecture_type == "multi_stage" and cfg.num_stages > 1
 		frozen_genomes: list[Optional[ClusterGenome]] = [None] * cfg.num_stages if is_multi_stage else []
+		# Track populations + metrics per stage for combined validation (best_ce, best_acc, best_fitness)
+		frozen_populations: dict[int, tuple[list[ClusterGenome], list[tuple[float, float]]]] = {}
 
 		# Run experiments
 		start_idx = resume_from or 0
@@ -1163,8 +1165,10 @@ class Flow:
 						self.log(f"  STAGE BOUNDARY: S{prev_stage} → S{next_stage}")
 						self.log("=" * 70)
 
-						# Freeze previous stage genome
+						# Freeze previous stage genome + population for combined validation
 						frozen_genomes[prev_stage] = current_genome
+						if current_population is not None and current_evals is not None:
+							frozen_populations[prev_stage] = (list(current_population), list(current_evals))
 						self.log(f"  Frozen S{prev_stage} genome: {current_genome}")
 
 						# Re-encode next stage data with previous stage's predictions
@@ -1242,31 +1246,60 @@ class Flow:
 			raise ValueError("Flow completed but no experiment results were recorded.")
 		final_result = self._results[-1]
 
-		# Multi-stage: compute combined CE
+		# Multi-stage: compute combined CE for all 3 genome types
 		stage_genomes_list = None
 		combined_ce = None
 		combined_accuracy = None
 		per_stage_ce = None
 
 		if is_multi_stage and current_genome is not None:
-			# Last stage genome = current_genome
+			# Last stage genome = current_genome (best_fitness)
 			frozen_genomes[cfg.num_stages - 1] = current_genome
 			stage_genomes_list = list(frozen_genomes)
+
+			# Save last stage population for combined validation
+			if current_population is not None and current_evals is not None:
+				frozen_populations[cfg.num_stages - 1] = (list(current_population), list(current_evals))
 
 			# Check all stages have genomes
 			if all(g is not None for g in stage_genomes_list):
 				self.log("")
-				self.log("Computing combined CE across all stages...")
-				try:
-					combined_result = self.evaluator.compute_combined_metrics(stage_genomes_list)
-					combined_ce = combined_result.ce
-					combined_accuracy = combined_result.accuracy
-					per_stage_ce = [combined_result.cluster_ce, combined_result.within_ce]
-					self.log(f"  Combined CE: {combined_ce:.4f}")
-					self.log(f"  Combined Accuracy: {combined_accuracy:.2%}")
-					self.log(f"  Per-stage CE: S0={per_stage_ce[0]:.4f}, S1={per_stage_ce[1]:.4f}")
-				except Exception as e:
-					self.log(f"  Warning: Failed to compute combined CE: {e}")
+				self.log("Computing combined metrics across all stages for all genome types...")
+
+				# Compute combined for all 3 genome types (best_ce, best_acc, best_fitness)
+				genome_types_to_compute = self._build_combined_genome_pairs(
+					frozen_genomes, frozen_populations, cfg.num_stages
+				)
+
+				for genome_type, genome_pair in genome_types_to_compute.items():
+					try:
+						result = self.evaluator.compute_combined_metrics(genome_pair)
+						ce = result.ce
+						acc = result.accuracy
+						stage_ces = [result.cluster_ce, result.within_ce]
+						self.log(f"  {genome_type}: CE={ce:.4f}, ACC={acc:.2%}, S0={stage_ces[0]:.4f}, S1={stage_ces[1]:.4f}")
+
+						# Use best_fitness as the primary combined result
+						if genome_type == "best_fitness":
+							combined_ce = ce
+							combined_accuracy = acc
+							per_stage_ce = stage_ces
+
+						# Store in dashboard
+						if self.dashboard_client and self._flow_id:
+							try:
+								self.dashboard_client.create_combined_validation(
+									flow_id=self._flow_id,
+									genome_type=genome_type,
+									combined_ce=ce,
+									combined_accuracy=acc,
+									per_stage_ce=stage_ces,
+								)
+							except Exception as e:
+								self.log(f"  Warning: Failed to store combined validation: {e}")
+
+					except Exception as e:
+						self.log(f"  Warning: Failed to compute combined metrics for {genome_type}: {e}")
 
 		self.log("")
 		self.log("=" * 70)
@@ -1295,6 +1328,52 @@ class Flow:
 			combined_accuracy=combined_accuracy,
 			per_stage_ce=per_stage_ce,
 		)
+
+	def _build_combined_genome_pairs(
+		self,
+		frozen_genomes: list[Optional[ClusterGenome]],
+		frozen_populations: dict[int, tuple[list[ClusterGenome], list[tuple[float, float]]]],
+		num_stages: int,
+	) -> dict[str, list[ClusterGenome]]:
+		"""Build genome pairs for combined validation across stages.
+
+		For each genome type (best_ce, best_acc, best_fitness), pick the corresponding
+		genome from each stage's population and pair them together.
+
+		Returns:
+			Dict mapping genome_type -> list of genomes (one per stage)
+		"""
+		pairs: dict[str, list[ClusterGenome]] = {}
+
+		# best_fitness = the frozen genomes (what was already tracked)
+		if all(g is not None for g in frozen_genomes):
+			pairs["best_fitness"] = [g for g in frozen_genomes if g is not None]
+
+		# best_ce and best_acc from population metrics
+		for genome_type in ("best_ce", "best_acc"):
+			stage_picks: list[Optional[ClusterGenome]] = []
+			for stage in range(num_stages):
+				if stage in frozen_populations:
+					pop, metrics = frozen_populations[stage]
+					if not pop or not metrics or len(pop) != len(metrics):
+						stage_picks.append(frozen_genomes[stage])
+						continue
+
+					if genome_type == "best_ce":
+						# Minimum CE
+						best_idx = min(range(len(metrics)), key=lambda i: metrics[i][0])
+					else:
+						# Maximum accuracy
+						best_idx = max(range(len(metrics)), key=lambda i: metrics[i][1])
+					stage_picks.append(pop[best_idx])
+				else:
+					# Fall back to frozen genome (best_fitness) if no population tracked
+					stage_picks.append(frozen_genomes[stage])
+
+			if all(g is not None for g in stage_picks):
+				pairs[genome_type] = [g for g in stage_picks if g is not None]
+
+		return pairs
 
 	def _load_seed_checkpoint(
 		self,

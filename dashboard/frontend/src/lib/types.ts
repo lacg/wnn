@@ -285,6 +285,20 @@ export interface ValidationSummary {
 }
 
 // =============================================================================
+// Combined Validation types (multi-stage end-to-end metrics)
+// =============================================================================
+
+export interface CombinedValidation {
+  id: number;
+  flow_id: number;
+  genome_type: GenomeValidationType;
+  combined_ce: number;
+  combined_accuracy: number;
+  per_stage_ce: number[] | null;
+  created_at: string;
+}
+
+// =============================================================================
 // Checkpoint types
 // =============================================================================
 

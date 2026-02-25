@@ -414,6 +414,24 @@ pub struct ValidationSummary {
 }
 
 // =============================================================================
+// Combined Validation Models (multi-stage end-to-end metrics)
+// =============================================================================
+
+/// Combined (end-to-end) validation result for a multi-stage flow.
+/// Pairs S0's best_X genome with S1's best_X genome and runs both stages together.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CombinedValidation {
+    pub id: i64,
+    pub flow_id: i64,
+    pub genome_type: GenomeValidationType,
+    pub combined_ce: f64,
+    pub combined_accuracy: f64,
+    /// Per-stage CE breakdown as JSON array, e.g. [1.23, 3.45]
+    pub per_stage_ce: Option<Vec<f64>>,
+    pub created_at: DateTime<Utc>,
+}
+
+// =============================================================================
 // Checkpoint Models
 // =============================================================================
 

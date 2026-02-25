@@ -690,6 +690,54 @@ class DashboardClient:
 		return None
 
 	# =========================================================================
+	# Combined Validation methods (multi-stage end-to-end metrics)
+	# =========================================================================
+
+	def create_combined_validation(
+		self,
+		flow_id: int,
+		genome_type: str,       # 'best_ce', 'best_acc', 'best_fitness'
+		combined_ce: float,
+		combined_accuracy: float,
+		per_stage_ce: Optional[list[float]] = None,
+	) -> dict:
+		"""
+		Create or update a combined validation record for a multi-stage flow.
+
+		Args:
+			flow_id: Flow ID
+			genome_type: 'best_ce', 'best_acc', or 'best_fitness'
+			combined_ce: End-to-end cross-entropy
+			combined_accuracy: End-to-end accuracy
+			per_stage_ce: Optional per-stage CE breakdown
+
+		Returns:
+			Dict with 'id' of the created/updated record
+		"""
+		data = {
+			"genome_type": genome_type,
+			"combined_ce": combined_ce,
+			"combined_accuracy": combined_accuracy,
+			"per_stage_ce": per_stage_ce,
+		}
+		result = self._request("POST", f"/api/flows/{flow_id}/combined-validations", json_data=data)
+		self._logger(f"Created combined validation for flow {flow_id}: {genome_type}")
+		return result
+
+	def get_combined_validations(self, flow_id: int) -> list[dict]:
+		"""
+		Get combined validations for a flow.
+
+		Args:
+			flow_id: Flow ID
+
+		Returns:
+			List of combined validation records
+		"""
+		result = self._request("GET", f"/api/flows/{flow_id}/combined-validations")
+		return result if result else []
+
+	# =========================================================================
 	# Gating Run methods (resource-based API)
 	# =========================================================================
 

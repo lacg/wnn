@@ -676,6 +676,19 @@ class Experiment:
 		if result.population_metrics is not None:
 			data["population_metrics"] = result.population_metrics
 
+		# Save best_ce and best_acc genomes for combined validation (future-proofing)
+		if result.final_population and result.population_metrics:
+			try:
+				metrics = result.population_metrics
+				# Best CE = minimum CE
+				best_ce_idx = min(range(len(metrics)), key=lambda i: metrics[i][0])
+				data["best_ce_genome"] = result.final_population[best_ce_idx].serialize()
+				# Best ACC = maximum accuracy
+				best_acc_idx = max(range(len(metrics)), key=lambda i: metrics[i][1])
+				data["best_acc_genome"] = result.final_population[best_acc_idx].serialize()
+			except Exception:
+				pass  # Non-critical, skip silently
+
 		with gzip.open(filepath, 'wt', encoding='utf-8') as f:
 			json.dump(data, f, separators=(',', ':'))
 
