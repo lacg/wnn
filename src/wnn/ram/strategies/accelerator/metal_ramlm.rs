@@ -308,7 +308,7 @@ impl MetalRAMLMEvaluator {
         neurons_per_cluster: usize,
         num_clusters: usize,
         words_per_neuron: usize,
-        memory_mode: u8,
+        _memory_mode: u8,
     ) -> Result<Vec<f32>, String> {
         if num_examples == 0 {
             return Ok(vec![]);
@@ -331,6 +331,7 @@ impl MetalRAMLMEvaluator {
             memory_mode: u32,
         }
 
+        // Force TERNARY: training writes TERNARY values (0/1) regardless of memory_mode
         let params = RAMLMParams {
             num_examples: num_examples as u32,
             words_per_example: words_per_example as u32,
@@ -340,7 +341,7 @@ impl MetalRAMLMEvaluator {
             num_clusters: num_clusters as u32,
             words_per_neuron: words_per_neuron as u32,
             empty_value: crate::neuron_memory::get_empty_value(),
-            memory_mode: memory_mode as u32,
+            memory_mode: 0, // Force TERNARY (training writes 0/1)
         };
 
         // Create buffers
@@ -521,7 +522,7 @@ impl MetalSparseEvaluator {
         bits_per_neuron: usize,
         neurons_per_cluster: usize,
         num_clusters: usize,
-        memory_mode: u8,
+        _memory_mode: u8,
     ) -> Result<Vec<f32>, String> {
         if num_examples == 0 {
             return Ok(vec![]);
@@ -529,9 +530,7 @@ impl MetalSparseEvaluator {
 
         let connections_i32: Vec<i32> = connections_flat.iter().map(|&c| c as i32).collect();
 
-        // Default cell value: EMPTY(2) for ternary, WEAK_FALSE(1) for quad
-        let default_cell: u32 = if memory_mode == 0 { 2 } else { 1 };
-
+        // Force TERNARY: training writes TERNARY values (0/1) regardless of memory_mode
         #[repr(C)]
         struct SparseParams {
             num_examples: u32,
@@ -553,8 +552,8 @@ impl MetalSparseEvaluator {
             neurons_per_cluster: neurons_per_cluster as u32,
             num_clusters: num_clusters as u32,
             empty_value: crate::neuron_memory::get_empty_value(),
-            memory_mode: memory_mode as u32,
-            default_cell_value: default_cell,
+            memory_mode: 0, // Force TERNARY (training writes 0/1)
+            default_cell_value: 2, // CELL_EMPTY for TERNARY
         };
 
         // Create buffers
@@ -669,7 +668,7 @@ impl MetalSparseEvaluator {
         num_examples: usize,
         words_per_example: usize,
         num_clusters: usize,
-        memory_mode: u8,
+        _memory_mode: u8,
     ) -> Result<Vec<f32>, String> {
         if num_examples == 0 {
             return Ok(vec![]);
@@ -696,15 +695,15 @@ impl MetalSparseEvaluator {
             start_neuron: u32,
         }
 
-        let default_cell: u32 = if memory_mode == 0 { 2 } else { 1 };
+        // Force TERNARY: training writes TERNARY values (0/1) regardless of memory_mode
         let params = TieredParams {
             num_examples: num_examples as u32,
             words_per_example: words_per_example as u32,
             num_clusters: num_clusters as u32,
             num_tiers: tier_configs.len() as u32,
             empty_value: crate::neuron_memory::get_empty_value(),
-            memory_mode: memory_mode as u32,
-            default_cell_value: default_cell,
+            memory_mode: 0, // Force TERNARY (training writes 0/1)
+            default_cell_value: 2, // CELL_EMPTY for TERNARY
         };
 
         let tiers: Vec<TierInfo> = tier_configs.iter().map(|&(ec, npc, bpn, sn)| TierInfo {
@@ -818,7 +817,7 @@ impl MetalSparseEvaluator {
         num_examples: usize,
         words_per_example: usize,
         num_clusters: usize,
-        memory_mode: u8,
+        _memory_mode: u8,
     ) -> Result<Vec<f32>, String> {
         if num_examples == 0 || num_clusters == 0 {
             return Ok(vec![]);
@@ -844,14 +843,14 @@ impl MetalSparseEvaluator {
             connection_offset: u32,
         }
 
-        let default_cell: u32 = if memory_mode == 0 { 2 } else { 1 };
+        // Force TERNARY: training writes TERNARY values (0/1) regardless of memory_mode
         let params = GeneralParams {
             num_examples: num_examples as u32,
             words_per_example: words_per_example as u32,
             num_clusters: num_clusters as u32,
             empty_value: crate::neuron_memory::get_empty_value(),
-            memory_mode: memory_mode as u32,
-            default_cell_value: default_cell,
+            memory_mode: 0, // Force TERNARY (training writes 0/1)
+            default_cell_value: 2, // CELL_EMPTY for TERNARY
         };
 
         let cluster_info_structs: Vec<ClusterInfo> = cluster_infos.iter().map(|&(n, b, s, c)| ClusterInfo {
@@ -1046,7 +1045,7 @@ impl MetalBatchedEvaluator {
         num_clusters: usize,
         num_genomes: usize,
         empty_value: f32,
-        memory_mode: u8,
+        _memory_mode: u8,
     ) -> Result<Vec<f32>, String> {
         if num_genomes == 0 || num_examples == 0 {
             return Ok(vec![]);
@@ -1098,7 +1097,7 @@ impl MetalBatchedEvaluator {
             MTLResourceOptions::StorageModeShared,
         );
 
-        let default_cell: u32 = if memory_mode == 0 { 2 } else { 1 };
+        // Force TERNARY: training writes TERNARY values (0/1) regardless of memory_mode
         let params = BatchedSparseParams {
             num_examples: num_examples as u32,
             words_per_example: words_per_example as u32,
@@ -1108,8 +1107,8 @@ impl MetalBatchedEvaluator {
             num_clusters: num_clusters as u32,
             num_genomes: num_genomes as u32,
             empty_value,
-            memory_mode: memory_mode as u32,
-            default_cell_value: default_cell,
+            memory_mode: 0, // Force TERNARY (training writes 0/1)
+            default_cell_value: 2, // CELL_EMPTY for TERNARY
         };
 
         let params_buffer = self.device.new_buffer_with_data(
@@ -1810,7 +1809,7 @@ impl MetalGroupEvaluator {
         neurons_per_cluster: usize,
         num_clusters: usize,
         empty_value: f32,
-        memory_mode: u8,
+        _memory_mode: u8,
     ) {
         // Detailed timing (enabled via WNN_SPARSE_TIMING env var)
         let sparse_timing = std::env::var("WNN_SPARSE_TIMING").is_ok();
@@ -1825,7 +1824,7 @@ impl MetalGroupEvaluator {
 
         let t_prep = t0.elapsed();
 
-        let default_cell: u32 = if memory_mode == 0 { 2 } else { 1 };
+        // Force TERNARY: training writes TERNARY values (0/1) regardless of memory_mode
         let params = SparseToBufferParams {
             num_examples: num_examples as u32,
             words_per_example: words_per_example as u32,
@@ -1835,8 +1834,8 @@ impl MetalGroupEvaluator {
             num_group_clusters: num_group_clusters as u32,
             total_clusters: num_clusters as u32,
             empty_value,
-            memory_mode: memory_mode as u32,
-            default_cell_value: default_cell,
+            memory_mode: 0, // Force TERNARY (training writes 0/1)
+            default_cell_value: 2, // CELL_EMPTY for TERNARY
         };
         // Convert params to slice for get_or_create_buffer
         let params_slice = unsafe {
@@ -1932,7 +1931,7 @@ impl MetalGroupEvaluator {
         words_per_example: usize,
         num_clusters: usize,
         empty_value: f32,
-        memory_mode: u8,
+        _memory_mode: u8,
     ) {
         if sparse_groups.is_empty() {
             return;
@@ -1950,7 +1949,14 @@ impl MetalGroupEvaluator {
             Uniform(Vec<u8>),
             Masked(Vec<u8>),
         }
-        let default_cell: u32 = if memory_mode == 0 { 2 } else { 1 };
+        // CRITICAL: Training (train_genome_in_slot) always writes TERNARY values
+        // (0=FALSE, 1=TRUE) to sparse memory regardless of memory_mode. The FAST_PATH
+        // (sparse_forward_with_ce_online) also uses TERNARY interpretation. Force TERNARY
+        // here so the FULL_GPU_PATH matches, preventing a 4× scoring mismatch where
+        // trained-positive cells (value 1) would be interpreted as QUAD_WEIGHTS[1]=0.25
+        // instead of TRUE=1.0.
+        let default_cell: u32 = 2; // CELL_EMPTY (TERNARY default for not-found)
+        let eval_memory_mode: u32 = 0; // MEM_MODE_TERNARY
         let mut converted_data: Vec<(Vec<i32>, Vec<u32>, ParamsBytes)> = Vec::with_capacity(sparse_groups.len());
         for group in sparse_groups {
             let connections_i32: Vec<i32> = group.connections.iter().map(|&c| c as i32).collect();
@@ -1967,7 +1973,7 @@ impl MetalGroupEvaluator {
                     num_group_clusters: group.cluster_ids.len() as u32,
                     total_clusters: num_clusters as u32,
                     empty_value,
-                    memory_mode: memory_mode as u32,
+                    memory_mode: eval_memory_mode,
                     default_cell_value: default_cell,
                 };
                 ParamsBytes::Masked(unsafe {
@@ -1987,7 +1993,7 @@ impl MetalGroupEvaluator {
                     num_group_clusters: group.cluster_ids.len() as u32,
                     total_clusters: num_clusters as u32,
                     empty_value,
-                    memory_mode: memory_mode as u32,
+                    memory_mode: eval_memory_mode,
                     default_cell_value: default_cell,
                 };
                 ParamsBytes::Uniform(unsafe {
@@ -2128,7 +2134,7 @@ impl MetalGroupEvaluator {
         num_clusters: usize,
         words_per_neuron: usize,
         empty_value: f32,
-        memory_mode: u8,
+        _memory_mode: u8,
     ) {
         let num_group_clusters = cluster_ids.len();
         let num_neurons = num_group_clusters * neurons_per_cluster;
@@ -2137,6 +2143,7 @@ impl MetalGroupEvaluator {
         let connections_i32: Vec<i32> = connections.iter().map(|&c| c as i32).collect();
         let cluster_ids_u32: Vec<u32> = cluster_ids.iter().map(|&c| c as u32).collect();
 
+        // Force TERNARY mode: training writes TERNARY values (0/1) to dense memory too
         let params = DenseToBufferParams {
             num_examples: num_examples as u32,
             words_per_example: words_per_example as u32,
@@ -2147,7 +2154,7 @@ impl MetalGroupEvaluator {
             total_clusters: num_clusters as u32,
             words_per_neuron: words_per_neuron as u32,
             empty_value,
-            memory_mode: memory_mode as u32,
+            memory_mode: 0, // Force TERNARY (training writes 0/1)
         };
         // Convert params to slice for get_or_create_buffer
         let params_slice = unsafe {
