@@ -29,6 +29,8 @@
     maxBits: number;
     minNeurons: number;
     maxNeurons: number;
+    neuronsGrid: string;
+    bitsGrid: string;
     gaGenerations: number;
     tsIterations: number;
     adaptationIterations: number;
@@ -48,6 +50,8 @@
     return {
       clusterType: 'bitwise', k: 256,
       minBits: 4, maxBits: 24, minNeurons: 5, maxNeurons: 300,
+      neuronsGrid: '5,10,25,50,100,200,300',
+      bitsGrid: '4,6,8,10,12,16,20,24',
       gaGenerations: 250, tsIterations: 250, adaptationIterations: 50,
       populationSize: 50, neighborsPerIter: 50, patience: 10,
       fitnessPercentile: 0.75, fitnessCalculator: 'harmonic_rank',
@@ -94,6 +98,9 @@
   // Shared multi-stage architecture params
   let msMemoryMode = 'QUAD_WEIGHTED';
   let msNeuronSampleRate = 0.25;
+  let msTemplate = 'full';
+  let invalidMode = false;
+  let topM = 5;
 
   $: isMultiStage = numStages >= 2;
   $: isBitwise = !isMultiStage && (template === 'bitwise-7-phase' || template === 'bitwise-10-phase');
@@ -242,6 +249,18 @@
     ];
   }
 
+  /** Generate the 2-phase fast pipeline for a single stage. */
+  function generate2PhaseForStage(prefix: string): PhaseSpec[] {
+    return [
+      { name: `${prefix}: Grid Search`, experiment_type: 'ga', optimize_bits: true, optimize_neurons: true, optimize_connections: false, phase_type: 'grid_search' },
+      { name: `${prefix}: GA Neurons`, experiment_type: 'ga', optimize_bits: false, optimize_neurons: true, optimize_connections: false },
+    ];
+  }
+
+  function generatePhasesForStage(prefix: string, tmpl: string): PhaseSpec[] {
+    return tmpl === 'fast' ? generate2PhaseForStage(prefix) : generate10PhaseForStage(prefix);
+  }
+
   /** Generate single-stage phases from template. */
   function generatePhases(templateName: string, order: string): PhaseSpec[] {
     if (templateName === 'empty') return [];
@@ -291,11 +310,20 @@
   // --- Per-stage phase storage (multi-stage only) ---
   let perStagePhases: PhaseSpec[][] = [];
 
-  // Initialize/resize per-stage phases when numStages changes
+  // Regenerate per-stage phases when template changes
+  let _prevMsTemplate = msTemplate;
+  $: if (isMultiStage && msTemplate !== _prevMsTemplate) {
+    _prevMsTemplate = msTemplate;
+    perStagePhases = Array.from({ length: numStages }, (_, i) =>
+      generatePhasesForStage(`S${i}`, msTemplate)
+    );
+  }
+
+  // Resize per-stage phases when numStages changes
   $: if (isMultiStage && perStagePhases.length !== numStages) {
     const updated = [...perStagePhases];
     while (updated.length < numStages) {
-      updated.push(generate10PhaseForStage(`S${updated.length}`));
+      updated.push(generatePhasesForStage(`S${updated.length}`, msTemplate));
     }
     if (updated.length > numStages) {
       updated.length = numStages;
@@ -483,6 +511,8 @@
         params.max_neurons = stageConfigs[0].maxNeurons;
         params.memory_mode = msMemoryMode;
         params.neuron_sample_rate = msNeuronSampleRate;
+        params.invalid_mode = invalidMode;
+        params.top_m = topM;
         // Per-stage search params
         params.stage_ga_generations = stageConfigs.slice(0, numStages).map(s => s.gaGenerations);
         params.stage_ts_iterations = stageConfigs.slice(0, numStages).map(s => s.tsIterations);
@@ -494,6 +524,14 @@
         params.stage_fitness_calculator = stageConfigs.slice(0, numStages).map(s => s.fitnessCalculator);
         params.stage_fitness_weight_ce = stageConfigs.slice(0, numStages).map(s => s.fitnessWeightCe);
         params.stage_fitness_weight_acc = stageConfigs.slice(0, numStages).map(s => s.fitnessWeightAcc);
+        // Per-stage grids (comma-separated strings → arrays of numbers)
+        params.stage_neurons_grid = stageConfigs.slice(0, numStages).map(s =>
+          s.neuronsGrid.split(',').map(v => parseInt(v.trim())).filter(v => !isNaN(v))
+        );
+        params.stage_bits_grid = stageConfigs.slice(0, numStages).map(s =>
+          s.bitsGrid.split(',').map(v => parseInt(v.trim())).filter(v => !isNaN(v))
+        );
+        params.ms_template = msTemplate;
       } else if (isBitwise) {
         params.architecture_type = 'bitwise';
         params.num_clusters = bitwiseNumClusters;
@@ -600,6 +638,20 @@
               {/if}
             </span>
           </div>
+          <div class="form-group">
+            <label for="msTemplate">Template</label>
+            <select id="msTemplate" bind:value={msTemplate}>
+              <option value="full">Full (10 phases/stage)</option>
+              <option value="fast">Fast (2 phases/stage)</option>
+            </select>
+            <span class="field-hint">
+              {#if msTemplate === 'fast'}
+                Grid Search + GA Neurons only
+              {:else}
+                All 10 optimization phases
+              {/if}
+            </span>
+          </div>
           {#each stageConfigs as config, i}
             {#if i === selectedStage}
               <div class="form-group">
@@ -638,6 +690,18 @@
                 <input type="number" id="stageMaxNeurons_{i}" bind:value={config.maxNeurons} min="1" max="1000" />
               </div>
             </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="stageNeuronsGrid_{i}">Neurons Grid</label>
+                <input type="text" id="stageNeuronsGrid_{i}" bind:value={config.neuronsGrid} placeholder="5,10,25,50,100" />
+                <span class="field-hint">Comma-separated neuron counts for grid search</span>
+              </div>
+              <div class="form-group">
+                <label for="stageBitsGrid_{i}">Bits Grid</label>
+                <input type="text" id="stageBitsGrid_{i}" bind:value={config.bitsGrid} placeholder="4,6,8,10,12" />
+                <span class="field-hint">Comma-separated bit counts for grid search</span>
+              </div>
+            </div>
           {/if}
         {/each}
         <div class="form-row">
@@ -655,6 +719,24 @@
             <span class="field-hint">Fraction of neurons sampled per example</span>
           </div>
         </div>
+        {#if stageMode === 'selector'}
+          <div class="form-row">
+            <div class="form-group">
+              <label for="invalidMode">
+                <input type="checkbox" id="invalidMode" bind:checked={invalidMode} />
+                Invalid Token Mode
+              </label>
+              <span class="field-hint">S1 groups learn to reject wrong-group inputs</span>
+            </div>
+            {#if invalidMode}
+              <div class="form-group">
+                <label for="topM">Top-M Groups</label>
+                <input type="number" id="topM" bind:value={topM} min="0" max="50" step="1" />
+                <span class="field-hint">Groups per example in augmented training (0 = all)</span>
+              </div>
+            {/if}
+          </div>
+        {/if}
       </div>
     {/if}
 

@@ -465,6 +465,8 @@ class FlowWorker:
                 flow_config.max_bits = params.get("max_bits", 24)
                 flow_config.min_neurons = params.get("min_neurons", 5)
                 flow_config.max_neurons = params.get("max_neurons", 300)
+                flow_config.invalid_mode = params.get("invalid_mode", False)
+                flow_config.top_m = params.get("top_m", 5)
                 # Per-stage bounds from dashboard
                 flow_config.stage_min_bits_list = params.get("stage_min_bits")
                 flow_config.stage_max_bits_list = params.get("stage_max_bits")
@@ -799,7 +801,25 @@ class FlowWorker:
             stage_min_neurons_arr = params.get("stage_min_neurons")
             stage_max_neurons_arr = params.get("stage_max_neurons")
 
-            if is_selector_stage:
+            # Check for per-stage grid overrides from dashboard params
+            stage_neurons_grid_arr = params.get("stage_neurons_grid")
+            stage_bits_grid_arr = params.get("stage_bits_grid")
+            has_stage_neurons_grid = (
+                stage_neurons_grid_arr
+                and ms_target_stage < len(stage_neurons_grid_arr)
+                and stage_neurons_grid_arr[ms_target_stage]
+            )
+            has_stage_bits_grid = (
+                stage_bits_grid_arr
+                and ms_target_stage < len(stage_bits_grid_arr)
+                and stage_bits_grid_arr[ms_target_stage]
+            )
+
+            if has_stage_neurons_grid or has_stage_bits_grid:
+                # Per-stage grid overrides take precedence
+                neurons_grid = stage_neurons_grid_arr[ms_target_stage] if has_stage_neurons_grid else None
+                bits_grid = stage_bits_grid_arr[ms_target_stage] if has_stage_bits_grid else None
+            elif is_selector_stage:
                 # SELECTOR sub-models have ~225× less data — use smaller grid
                 neurons_grid = [5, 10, 15]
                 bits_grid = [5, 6, 7, 8, 9, 10]

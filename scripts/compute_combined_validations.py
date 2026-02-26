@@ -125,6 +125,12 @@ def main():
 	parser.add_argument("--dashboard-url", default="https://localhost:3000", help="Dashboard API URL")
 	parser.add_argument("--dry-run", action="store_true", help="Print results without storing")
 	parser.add_argument("--checkpoint-dir", type=str, help="Override checkpoint directory path")
+	parser.add_argument("--label-smoothing", type=float, default=0.0,
+		help="Label smoothing epsilon (0.0 = disabled, try 0.01-0.1)")
+	parser.add_argument("--invalid-mode", action="store_true",
+		help="Enable invalid token mode for S1 filtered gating")
+	parser.add_argument("--top-m", type=int, default=5,
+		help="Number of top S0 groups per example (0=all, default: 5)")
 	args = parser.parse_args()
 
 	# Get flow info from dashboard
@@ -367,7 +373,12 @@ def main():
 		else:
 			# All stages have genomes
 			try:
-				result = evaluator.compute_combined_metrics(genome_pair)
+				result = evaluator.compute_combined_metrics(
+					genome_pair,
+					label_smoothing=args.label_smoothing,
+					invalid_mode=args.invalid_mode,
+					top_m=args.top_m,
+				)
 				ce = result.ce
 				acc = result.accuracy
 				per_stage_ce = [result.cluster_ce, result.within_ce]

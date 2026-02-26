@@ -190,6 +190,9 @@ class FlowConfig:
 	stage_k: Optional[list[int]] = None
 	stage_cluster_type: Optional[list[str]] = None
 	stage_mode: Optional[list[int]] = None
+	# Invalid token mode: S1 groups reject wrong-group inputs via filtered gating
+	invalid_mode: bool = False
+	top_m: int = 5
 	# Per-stage bounds override (indexed by stage)
 	stage_min_bits_list: Optional[list[int]] = None
 	stage_max_bits_list: Optional[list[int]] = None
@@ -475,13 +478,17 @@ class FlowConfig:
 		seed: Optional[int] = None,
 		description: Optional[str] = None,
 		seed_checkpoint_path: Optional[str] = None,
+		template: str = "full",
 	) -> "FlowConfig":
-		"""Create a multi-stage flow with 10 experiments per stage.
+		"""Create a multi-stage flow with experiments per stage.
 
-		Per stage (same as bitwise-10-phase):
-		  Grid → GA Neurons → Neurogenesis → TS Neurons →
-		  GA Bits → Synaptogenesis → TS Bits →
-		  GA Connections → Axonogenesis → TS Connections
+		Templates:
+		  "full" (default): 10 phases per stage (same as bitwise-10-phase):
+		    Grid → GA Neurons → Neurogenesis → TS Neurons →
+		    GA Bits → Synaptogenesis → TS Bits →
+		    GA Connections → Axonogenesis → TS Connections
+		  "fast": 2 phases per stage for rapid K experiments:
+		    Grid Search (expanded grid) → GA Neurons (250 gens, patience 5)
 
 		Names prefixed: "S0: Grid Search", "S1: GA Neurons", etc.
 
@@ -495,6 +502,7 @@ class FlowConfig:
 			bits_grid: Grid of bit counts for bitwise stages (default: [4,6,8,10,12,16,20,24])
 			tiered_neurons_grid: Grid of neuron counts for tiered stages (default: [20,30,40,50])
 			tiered_bits_grid: Grid of bit counts for tiered stages (default: [18,19,20,21,22,23])
+			template: "full" (10 phases/stage) or "fast" (2 phases/stage)
 		"""
 		assert num_stages == 2, "Only 2 stages supported (for now)"
 
@@ -522,6 +530,8 @@ class FlowConfig:
 		adaptation_types = {ExperimentType.NEUROGENESIS, ExperimentType.SYNAPTOGENESIS, ExperimentType.AXONOGENESIS}
 
 		experiments = []
+		is_fast = template == "fast"
+
 		for stage in range(num_stages):
 			prefix = f"S{stage}"
 			is_tiered = stage_cluster_type[stage] == "tiered"
@@ -534,9 +544,14 @@ class FlowConfig:
 
 			# Select grid and bounds based on stage type
 			if is_selector:
-				# SELECTOR sub-models have 225× less data — use smaller grid
-				stage_neurons_grid = [5, 10, 15]
-				stage_bits_grid = [5, 6, 7, 8, 9, 10]
+				if is_fast:
+					# Fast template: expanded grid for rapid K experiments
+					stage_neurons_grid = [5, 10, 25, 50, 75, 100, 150]
+					stage_bits_grid = [5, 6, 7, 8, 9, 10]
+				else:
+					# Full template: smaller grid (SELECTOR sub-models have 225× less data)
+					stage_neurons_grid = [5, 10, 15]
+					stage_bits_grid = [5, 6, 7, 8, 9, 10]
 			elif is_tiered:
 				stage_neurons_grid = tiered_neurons_grid
 				stage_bits_grid = tiered_bits_grid
@@ -562,19 +577,26 @@ class FlowConfig:
 			else:
 				stage_max_neurons = max(stage_neurons_grid)
 
-			# 10 phases per stage (mirrors bitwise-10-phase)
-			stage_phases = [
-				(f"{prefix}: Grid Search", ExperimentType.GRID_SEARCH, False, False, False),
-				(f"{prefix}: GA Neurons", ExperimentType.GA, False, True, False),
-				(f"{prefix}: Neurogenesis", ExperimentType.NEUROGENESIS, False, False, False),
-				(f"{prefix}: TS Neurons", ExperimentType.TS, False, True, False),
-				(f"{prefix}: GA Bits", ExperimentType.GA, True, False, False),
-				(f"{prefix}: Synaptogenesis", ExperimentType.SYNAPTOGENESIS, False, False, False),
-				(f"{prefix}: TS Bits", ExperimentType.TS, True, False, False),
-				(f"{prefix}: GA Connections", ExperimentType.GA, False, False, True),
-				(f"{prefix}: Axonogenesis", ExperimentType.AXONOGENESIS, False, False, False),
-				(f"{prefix}: TS Connections", ExperimentType.TS, False, False, True),
-			]
+			if is_fast:
+				# Fast template: 2 phases per stage (Grid + GA Neurons)
+				stage_phases = [
+					(f"{prefix}: Grid Search", ExperimentType.GRID_SEARCH, False, False, False),
+					(f"{prefix}: GA Neurons", ExperimentType.GA, False, True, False),
+				]
+			else:
+				# Full template: 10 phases per stage (mirrors bitwise-10-phase)
+				stage_phases = [
+					(f"{prefix}: Grid Search", ExperimentType.GRID_SEARCH, False, False, False),
+					(f"{prefix}: GA Neurons", ExperimentType.GA, False, True, False),
+					(f"{prefix}: Neurogenesis", ExperimentType.NEUROGENESIS, False, False, False),
+					(f"{prefix}: TS Neurons", ExperimentType.TS, False, True, False),
+					(f"{prefix}: GA Bits", ExperimentType.GA, True, False, False),
+					(f"{prefix}: Synaptogenesis", ExperimentType.SYNAPTOGENESIS, False, False, False),
+					(f"{prefix}: TS Bits", ExperimentType.TS, True, False, False),
+					(f"{prefix}: GA Connections", ExperimentType.GA, False, False, True),
+					(f"{prefix}: Axonogenesis", ExperimentType.AXONOGENESIS, False, False, False),
+					(f"{prefix}: TS Connections", ExperimentType.TS, False, False, True),
+				]
 
 			for phase_name, exp_type, opt_bits, opt_neurons, opt_conns in stage_phases:
 				if exp_type in adaptation_types:
@@ -583,6 +605,9 @@ class FlowConfig:
 				else:
 					iters = ts_iterations
 					gens = ga_generations
+
+				# Fast template: GA neurons gets higher patience for deeper search
+				phase_patience = max(patience, 5) if is_fast and exp_type == ExperimentType.GA else patience
 
 				config = ExperimentConfig(
 					name=phase_name,
@@ -594,7 +619,7 @@ class FlowConfig:
 					population_size=population_size,
 					iterations=iters,
 					neighbors_per_iter=neighbors_per_iter,
-					patience=patience,
+					patience=phase_patience,
 					fitness_calculator_type=fitness_calculator_type,
 					fitness_weight_ce=fitness_weight_ce,
 					fitness_weight_acc=fitness_weight_acc,
@@ -621,7 +646,11 @@ class FlowConfig:
 		return cls(
 			name=name,
 			experiments=experiments,
-			description=description or f"Multi-stage {num_stages * 10}-phase optimization ({num_stages} stages × 10 phases)",
+			description=description or (
+				f"Multi-stage fast {num_stages * 2}-phase optimization ({num_stages} stages × 2 phases)"
+				if is_fast else
+				f"Multi-stage {num_stages * 10}-phase optimization ({num_stages} stages × 10 phases)"
+			),
 			seed_checkpoint_path=seed_checkpoint_path,
 			context_size=context_size,
 			patience=patience,
@@ -696,6 +725,8 @@ class FlowConfig:
 				"min_neurons": self.min_neurons,
 				"max_neurons": self.max_neurons,
 				"sparse_threshold": self.sparse_threshold,
+				"invalid_mode": self.invalid_mode,
+				"top_m": self.top_m,
 			})
 
 		return APIFlowConfig(
@@ -826,9 +857,22 @@ class Flow:
 		cfg = self.config
 		start_time = time.time()
 
-		# Check for empty flow
+		# Handle empty flow gracefully — complete immediately
 		if not cfg.experiments:
-			raise ValueError("Flow has no experiments configured. Add experiments before running.")
+			self.log("Flow has no experiments — completing immediately.")
+			from wnn.ram.architecture.cluster_genome import ClusterGenome
+			empty_genome = seed_genome or ClusterGenome(
+				bits_per_neuron=[], neurons_per_cluster=[], connections=[],
+			)
+			return FlowResult(
+				flow_name=cfg.name,
+				experiment_results=[],
+				final_genome=empty_genome,
+				final_fitness=seed_threshold or 0.0,
+				final_accuracy=None,
+				total_elapsed_seconds=0.0,
+				flow_id=self._flow_id,
+			)
 
 		self.log("")
 		self.log("=" * 70)
@@ -1273,7 +1317,11 @@ class Flow:
 
 				for genome_type, genome_pair in genome_types_to_compute.items():
 					try:
-						result = self.evaluator.compute_combined_metrics(genome_pair)
+						result = self.evaluator.compute_combined_metrics(
+							genome_pair,
+							invalid_mode=cfg.invalid_mode,
+							top_m=cfg.top_m,
+						)
 						ce = result.ce
 						acc = result.accuracy
 						stage_ces = [result.cluster_ce, result.within_ce]
