@@ -858,8 +858,18 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			pct = cfg.fitness_percentile if cfg.fitness_percentile and 0 < cfg.fitness_percentile < 1.0 else None
 			generate_count = math.ceil(n_needed / pct) if pct else n_needed
 
-			# Convert 3-tuple population to 2-tuple for Rust
+			# Convert 3-tuple population to 2-tuple for evaluator
 			rust_population = [(g, ce) for g, ce, _ in population]
+
+			# Pre-compute fitness scores so tournament selection uses the
+			# same metric as elite selection (e.g. HarmonicRank), not raw CE
+			fitness_scores = None
+			if self._fitness_calculator is not None:
+				pop_tuples = [
+					(i, ce, acc or 0.0)
+					for i, (_, ce, acc) in enumerate(population)
+				]
+				fitness_scores = self._fitness_calculator.fitness(pop_tuples)
 
 			search_result = evaluator.search_offspring(
 				population=rust_population,
@@ -883,6 +893,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 				return_best_n=True,
 				mutable_clusters=arch_cfg.mutable_clusters,
 				phase_type=int(self._phase_type),
+				fitness_scores=fitness_scores,
 			)
 
 			# Convert to 3-tuples, rank by fitness, return best n_needed

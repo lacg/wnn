@@ -107,6 +107,7 @@ class MultiStageEvaluator(BaseEvaluator):
 		neuron_sample_rate: float = 1.0,
 		adapt_config: Optional[AdaptationConfig] = None,
 		sparse_threshold: Optional[int] = None,
+		log_path: Optional[str] = None,
 	):
 		# Defaults
 		if stage_cluster_type is None:
@@ -128,6 +129,7 @@ class MultiStageEvaluator(BaseEvaluator):
 			memory_mode=memory_mode,
 			neuron_sample_rate=neuron_sample_rate,
 			adapt_config=adapt_config,
+			log_path=log_path,
 		)
 
 		self._num_stages = num_stages
@@ -497,18 +499,13 @@ class MultiStageEvaluator(BaseEvaluator):
 		if eval_subset_idx is None:
 			eval_subset_idx = self.next_eval_idx()
 
-		# Enable Rust per-genome progress logging when WNN_LOG_PATH is set
-		progress_env_set = False
-		if len(genomes) > 1 and os.environ.get("WNN_LOG_PATH"):
-			current_gen = (generation + 1) if generation is not None else 0
-			total_gens = total_generations or 1
-			os.environ["WNN_PROGRESS_LOG"] = "1"
-			os.environ["WNN_PROGRESS_GEN"] = str(current_gen)
-			os.environ["WNN_PROGRESS_TOTAL_GENS"] = str(total_gens)
-			os.environ["WNN_PROGRESS_TYPE"] = kwargs.get("log_type", "Eval")
-			os.environ["WNN_PROGRESS_TOTAL"] = str(len(genomes))
-			os.environ["WNN_PROGRESS_OFFSET"] = "0"
-			progress_env_set = True
+		# Rust per-genome progress logging (centralized in BaseEvaluator)
+		progress_env_set = self._setup_progress_env(
+			num_genomes=len(genomes),
+			generation=generation,
+			total_generations=total_generations,
+			log_type=kwargs.get("log_type", "Eval"),
+		)
 
 		start = time.time()
 		if self._is_stage_selector(self._target_stage):
@@ -520,7 +517,7 @@ class MultiStageEvaluator(BaseEvaluator):
 		elapsed = time.time() - start
 
 		if progress_env_set:
-			os.environ.pop("WNN_PROGRESS_LOG", None)
+			self._cleanup_progress_env()
 
 		# Cache bit accuracy on genomes
 		for genome, (_, _, bit_acc) in zip(genomes, raw):

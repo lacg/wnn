@@ -114,11 +114,11 @@ class TieredEvaluator(BaseEvaluator):
             num_parts=num_parts,
             seed=seed,
             neuron_sample_rate=neuron_sample_rate,
+            log_path=log_path,
         )
 
         # TieredEvaluator-specific fields
         self._empty_value = empty_value
-        self._log_path = log_path
         self._use_hybrid = use_hybrid
 
         # Create the Rust TokenCache
@@ -555,6 +555,7 @@ class TieredEvaluator(BaseEvaluator):
         return_best_n: bool = True,
         mutable_clusters: Optional[list[int]] = None,  # List of cluster indices to mutate (None = all)
         phase_type: int = 0,
+        fitness_scores: Optional[list[float]] = None,  # TODO: pass to Rust tournament
     ) -> OffspringSearchResult:
         """
         Search for GA offspring above accuracy threshold, entirely in Rust.

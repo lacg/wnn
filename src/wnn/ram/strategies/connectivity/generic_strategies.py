@@ -1372,6 +1372,10 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 				acc_str = f", Acc={elite_accuracy:.2%}" if elite_accuracy is not None else ""
 				self._log.debug(f"[Elite {i + 1:0{elite_width}d}/{total_elites}] CE={elite_fitness:.4f}{acc_str} (score={combined_scores[elite_idx]:.4f})")
 
+			# Store fitness scores for tournament selection (so offspring parents
+			# are selected by the same metric as elites, not just raw CE)
+			self._current_fitness_scores = combined_scores
+
 			# Generate offspring via hook (overridable for Rust acceleration)
 			needed_offspring = cfg.population_size - len(new_population)
 			if self._tracker and self._tracker_experiment_id:
@@ -1747,9 +1751,18 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		return viable[:target_size]
 
 	def _tournament_select(self, population: list[tuple[T, float, Optional[float]]], tournament_size: int = 3) -> T:
-		"""Tournament selection: pick best from random subset."""
+		"""Tournament selection using fitness scores (not raw CE).
+
+		Uses pre-computed fitness scores from _current_fitness_scores if available,
+		otherwise falls back to CE (population[i][1]).  Fitness scores align tournament
+		selection with elite selection — both respect the fitness calculator.
+		"""
 		indices = self._rng.sample(range(len(population)), min(tournament_size, len(population)))
-		best_idx = min(indices, key=lambda i: population[i][1])
+		scores = getattr(self, '_current_fitness_scores', None)
+		if scores is not None and len(scores) == len(population):
+			best_idx = min(indices, key=lambda i: scores[i])
+		else:
+			best_idx = min(indices, key=lambda i: population[i][1])
 		return population[best_idx][0]
 
 

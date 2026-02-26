@@ -14,6 +14,7 @@ Subclasses implement the actual evaluation logic:
 - MultiStageEvaluator: Multi-stage orchestrator
 """
 
+import os
 import random
 import time
 from abc import ABC, abstractmethod
@@ -149,6 +150,7 @@ class BaseEvaluator(ABC):
 		memory_mode: int = 0,
 		neuron_sample_rate: float = 1.0,
 		adapt_config: Optional[AdaptationConfig] = None,
+		log_path: Optional[str] = None,
 	):
 		self._vocab_size = vocab_size
 		self._context_size = context_size
@@ -158,6 +160,7 @@ class BaseEvaluator(ABC):
 		self._neuron_sample_rate = neuron_sample_rate
 		self._adapt_config = adapt_config
 		self._generation = 0
+		self._log_path = log_path
 
 		if seed is None:
 			seed = int(time.time() * 1000) % (2**32)
@@ -186,6 +189,36 @@ class BaseEvaluator(ABC):
 		if rng is None:
 			rng = random.Random()
 		return rng.randint(0, self._num_parts - 1)
+
+	# ── Rust progress logging ─────────────────────────────────────────────
+
+	def _setup_progress_env(
+		self,
+		num_genomes: int,
+		generation: Optional[int] = None,
+		total_generations: Optional[int] = None,
+		log_type: str = "Eval",
+		offset: int = 0,
+	) -> bool:
+		"""Set WNN_PROGRESS_* env vars for Rust per-genome logging.
+
+		Returns True if env vars were set (caller should call _cleanup_progress_env).
+		Only activates when log_path is available and batch has >1 genome.
+		"""
+		if num_genomes <= 1 or not self._log_path:
+			return False
+		os.environ["WNN_LOG_PATH"] = self._log_path
+		os.environ["WNN_PROGRESS_LOG"] = "1"
+		os.environ["WNN_PROGRESS_GEN"] = str((generation + 1) if generation is not None else 0)
+		os.environ["WNN_PROGRESS_TOTAL_GENS"] = str(total_generations or 1)
+		os.environ["WNN_PROGRESS_TYPE"] = log_type
+		os.environ["WNN_PROGRESS_TOTAL"] = str(num_genomes)
+		os.environ["WNN_PROGRESS_OFFSET"] = str(offset)
+		return True
+
+	def _cleanup_progress_env(self) -> None:
+		"""Remove WNN_PROGRESS_* env vars after Rust call."""
+		os.environ.pop("WNN_PROGRESS_LOG", None)
 
 	# ── Core evaluation (abstract) ────────────────────────────────────────
 
@@ -288,11 +321,21 @@ class BaseEvaluator(ABC):
 		population: list[tuple[ClusterGenome, float]],
 		tournament_size: int,
 		rng: random.Random,
+		fitness_scores: Optional[list[float]] = None,
 	) -> ClusterGenome:
-		"""Tournament selection: pick best (lowest fitness) from random subset."""
-		contestants = rng.sample(population, min(tournament_size, len(population)))
-		best = min(contestants, key=lambda x: x[1])
-		return best[0].clone()
+		"""Tournament selection using fitness scores when available.
+
+		When fitness_scores is provided, selection uses those (aligning with
+		the GA's fitness calculator — e.g. HarmonicRank).  Otherwise falls
+		back to CE (population[i][1]).
+		"""
+		k = min(tournament_size, len(population))
+		indices = rng.sample(range(len(population)), k)
+		if fitness_scores is not None and len(fitness_scores) == len(population):
+			best_idx = min(indices, key=lambda i: fitness_scores[i])
+		else:
+			best_idx = min(indices, key=lambda i: population[i][1])
+		return population[best_idx][0].clone()
 
 	def _mutate_genome_phased(
 		self,
@@ -424,12 +467,16 @@ class BaseEvaluator(ABC):
 		return_best_n: bool = True,
 		mutable_clusters: Optional[list[int]] = None,
 		phase_type: int = 0,
+		fitness_scores: Optional[list[float]] = None,
 	) -> OffspringSearchResult:
 		"""Search for GA offspring above accuracy threshold.
 
 		Uses ClusterGenome.crossover() + ClusterGenome.mutate() for
 		phase-aware genetic operations, then self.evaluate_batch().
 		Subclasses may override to delegate to Rust fast paths.
+
+		When fitness_scores is provided, tournament selection uses those
+		instead of raw CE — aligning parent selection with elite selection.
 		"""
 		if not population:
 			return OffspringSearchResult(genomes=[], evaluated=0, viable=0)
@@ -457,9 +504,9 @@ class BaseEvaluator(ABC):
 
 			batch = []
 			for _ in range(batch_n):
-				parent1 = self._tournament_select(population, tournament_size, rng)
+				parent1 = self._tournament_select(population, tournament_size, rng, fitness_scores)
 				if rng.random() < crossover_rate and len(population) > 1:
-					parent2 = self._tournament_select(population, tournament_size, rng)
+					parent2 = self._tournament_select(population, tournament_size, rng, fitness_scores)
 					child = parent1.crossover(parent2, pt, rng)
 				else:
 					child = parent1.clone()
