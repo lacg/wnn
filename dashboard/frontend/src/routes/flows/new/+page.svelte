@@ -46,6 +46,40 @@
     thresholdStep: number;
   }
 
+  // Mode-specific grid defaults (must match worker.py fallback grids)
+  const GRID_DEFAULTS: Record<string, { neurons: string; bits: string }> = {
+    bitwise:  { neurons: '5,10,25,50,100,200,300', bits: '4,6,8,10,12,16,20,24' },
+    tiered:   { neurons: '20,30,40,50',             bits: '18,19,20,21,22,23' },
+    selector: { neurons: '5,10,15',                  bits: '5,6,7,8,9,10' },
+  };
+  const ALL_DEFAULT_NEURONS = new Set(Object.values(GRID_DEFAULTS).map(d => d.neurons));
+  const ALL_DEFAULT_BITS = new Set(Object.values(GRID_DEFAULTS).map(d => d.bits));
+
+  function stageGridMode(stageIdx: number): string {
+    if (stageMode === 'selector' && stageIdx > 0) return 'selector';
+    return stageConfigs[stageIdx]?.clusterType === 'tiered' ? 'tiered' : 'bitwise';
+  }
+
+  /** Update grid defaults for a stage IF the user hasn't customized them. */
+  function applyGridDefaults(stageIdx: number) {
+    const config = stageConfigs[stageIdx];
+    if (!config) return;
+    const defaults = GRID_DEFAULTS[stageGridMode(stageIdx)];
+    if (ALL_DEFAULT_NEURONS.has(config.neuronsGrid)) {
+      config.neuronsGrid = defaults.neurons;
+    }
+    if (ALL_DEFAULT_BITS.has(config.bitsGrid)) {
+      config.bitsGrid = defaults.bits;
+    }
+    stageConfigs = stageConfigs; // trigger Svelte reactivity
+  }
+
+  function handleStageModeChange() {
+    for (let i = 0; i < stageConfigs.length; i++) {
+      applyGridDefaults(i);
+    }
+  }
+
   function defaultStageConfig(): StageConfig {
     return {
       clusterType: 'bitwise', k: 256,
@@ -107,8 +141,16 @@
 
   // Resize stageConfigs when numStages changes
   $: {
+    const prevLen = stageConfigs.length;
     while (stageConfigs.length < numStages) {
-      stageConfigs = [...stageConfigs, defaultStageConfig()];
+      const newIdx = stageConfigs.length;
+      const cfg = defaultStageConfig();
+      // Apply mode-specific grid defaults for the new stage
+      const mode = stageMode === 'selector' && newIdx > 0 ? 'selector'
+        : cfg.clusterType === 'tiered' ? 'tiered' : 'bitwise';
+      cfg.neuronsGrid = GRID_DEFAULTS[mode].neurons;
+      cfg.bitsGrid = GRID_DEFAULTS[mode].bits;
+      stageConfigs = [...stageConfigs, cfg];
     }
     if (stageConfigs.length > numStages) {
       stageConfigs = stageConfigs.slice(0, numStages);
@@ -626,7 +668,7 @@
           </div>
           <div class="form-group">
             <label for="stageMode">Stage Connection</label>
-            <select id="stageMode" bind:value={stageMode}>
+            <select id="stageMode" bind:value={stageMode} on:change={handleStageModeChange}>
               <option value="input_concat">Input Concat</option>
               <option value="selector">Selector (cluster routing)</option>
             </select>
@@ -656,7 +698,7 @@
             {#if i === selectedStage}
               <div class="form-group">
                 <label for="stageArch_{i}">Architecture</label>
-                <select id="stageArch_{i}" bind:value={config.clusterType}>
+                <select id="stageArch_{i}" bind:value={config.clusterType} on:change={() => applyGridDefaults(i)}>
                   <option value="bitwise">Bitwise</option>
                   <option value="tiered">Tiered</option>
                 </select>
@@ -693,13 +735,15 @@
             <div class="form-row">
               <div class="form-group">
                 <label for="stageNeuronsGrid_{i}">Neurons Grid</label>
-                <input type="text" id="stageNeuronsGrid_{i}" bind:value={config.neuronsGrid} placeholder="5,10,25,50,100" />
-                <span class="field-hint">Comma-separated neuron counts for grid search</span>
+                <input type="text" id="stageNeuronsGrid_{i}" bind:value={config.neuronsGrid}
+                  placeholder={GRID_DEFAULTS[stageGridMode(i)].neurons} />
+                <span class="field-hint">Defaults: {stageGridMode(i)}</span>
               </div>
               <div class="form-group">
                 <label for="stageBitsGrid_{i}">Bits Grid</label>
-                <input type="text" id="stageBitsGrid_{i}" bind:value={config.bitsGrid} placeholder="4,6,8,10,12" />
-                <span class="field-hint">Comma-separated bit counts for grid search</span>
+                <input type="text" id="stageBitsGrid_{i}" bind:value={config.bitsGrid}
+                  placeholder={GRID_DEFAULTS[stageGridMode(i)].bits} />
+                <span class="field-hint">Defaults: {stageGridMode(i)}</span>
               </div>
             </div>
           {/if}
