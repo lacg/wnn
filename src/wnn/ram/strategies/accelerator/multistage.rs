@@ -16,7 +16,8 @@ use crate::bitwise_ramlm::{
     bits_needed, pack_input_bits,
     BitwiseSubset, BitwiseEvalSubset,
     evaluate_genomes_with_params,
-    train_and_get_scores,
+    train_and_get_scores, train_and_get_scores_with_model,
+    forward_scores_on_subset, forward_scores_on_eval, train_only,
     compute_genome_layout, train_into, forward_eval_into,
 };
 use crate::neuron_memory::{
@@ -259,6 +260,7 @@ impl MultiStageTokenCache {
                 target_bits,
                 num_examples: n,
                 words_per_example: wpe,
+                weights: Vec::new(),
             });
 
             // Train subsets
@@ -611,6 +613,7 @@ impl MultiStageTokenCache {
                     target_bits,
                     num_examples: num_ex,
                     words_per_example: wpe,
+                    weights: Vec::new(),
                 }
             })
             .collect()
@@ -685,6 +688,7 @@ impl MultiStageTokenCache {
             let empty_train = BitwiseSubset {
                 input_bits: Vec::new(), packed_input: Vec::new(),
                 target_bits: Vec::new(), num_examples: 0, words_per_example: 0,
+                weights: Vec::new(),
             };
             let empty_eval = BitwiseEvalSubset {
                 packed_input: Vec::new(), targets: Vec::new(),
@@ -710,6 +714,7 @@ impl MultiStageTokenCache {
             let empty_train = BitwiseSubset {
                 input_bits: Vec::new(), packed_input: Vec::new(),
                 target_bits: Vec::new(), num_examples: 0, words_per_example: 0,
+                weights: Vec::new(),
             };
             let empty_eval = BitwiseEvalSubset {
                 packed_input: Vec::new(), targets: Vec::new(),
@@ -752,11 +757,13 @@ impl MultiStageTokenCache {
                 target_bits,
                 num_examples: num_ex,
                 words_per_example: wpe,
+                weights: Vec::new(),
             }
         } else {
             BitwiseSubset {
                 input_bits: Vec::new(), packed_input: Vec::new(),
                 target_bits: Vec::new(), num_examples: 0, words_per_example: 0,
+                weights: Vec::new(),
             }
         };
 
@@ -1002,6 +1009,7 @@ impl MultiStageTokenCache {
             target_bits,
             num_examples: n,
             words_per_example: wpe,
+            weights: Vec::new(),
         };
 
         // ── Bitwise full eval ──
@@ -1439,6 +1447,7 @@ pub fn compute_combined_ce(
     neuron_sample_rate: f32,
     rng_seed: u64,
     sparse_threshold: usize,
+    label_smoothing: f64,
 ) -> (f64, f64, f64, f64) {
     let eps = 1e-7f64;
     let epsilon = 1e-10f64;
@@ -1588,7 +1597,15 @@ pub fn compute_combined_ce(
 
             let s0_ce = -log_p_true_group;
             let s1_ce = -log_p_true_within;
-            let combined_ce = s0_ce + s1_ce;
+            let combined_ce = if label_smoothing > 0.0 {
+                let log_p_hier = log_p_true_group + log_p_true_within;
+                let p_hier = log_p_hier.exp();
+                let p_smooth = (1.0 - label_smoothing) * p_hier
+                             + label_smoothing / cache.vocab_size as f64;
+                -p_smooth.ln()
+            } else {
+                s0_ce + s1_ce
+            };
             let correct = if s0_predicted == true_group && s1_predicted == true_within { 1u32 } else { 0u32 };
 
             (combined_ce, s0_ce, s1_ce, correct)
@@ -1610,11 +1627,313 @@ pub fn compute_combined_ce(
 
 // ── SELECTOR combined CE ────────────────────────────────────────────────
 
+/// Check if group g is in the top-M groups by probability for a given example.
+fn is_in_top_m(probs: &[f32], ex: usize, k: usize, g: usize, top_m: usize) -> bool {
+    let base = ex * k;
+    let p_g = probs[base + g];
+    let higher = (0..k).filter(|&gk| probs[base + gk] > p_g).count();
+    higher < top_m
+}
+
+/// Build augmented training subsets for invalid token mode.
+///
+/// For each group g, creates a training subset containing:
+/// - Examples where target ∈ group g: target = within-group index
+/// - Examples where target ∉ group g: target = cluster_sizes[g] (invalid code)
+/// - Weight = P(g|context) from S0
+///
+/// When top_m > 0, only includes out-group examples where g is in the
+/// example's top-M S0 predictions (limits training cost from K×N to ~M×N).
+fn build_augmented_selector_subsets(
+    cache: &MultiStageTokenCache,
+    s1_stage: usize,
+    train_group_probs: &[f32],  // [num_train × K]
+    augmented_output_bits: usize,
+    top_m: usize,
+) -> Vec<BitwiseSubset> {
+    let k = cache.k;
+    let num_train = cache.bitwise_full_train[s1_stage].num_examples;
+    let context_size = cache.context_size;
+    let wpe = cache.bitwise_full_train[s1_stage].words_per_example;
+
+    (0..k).map(|g| {
+        let invalid_code = cache.cluster_sizes[g];
+
+        // Collect (global_idx, is_in_group) for all examples to include
+        let mut included: Vec<(usize, bool)> = Vec::new();
+        for ex in 0..num_train {
+            let target_token = cache.train_tokens[ex + context_size] as usize;
+            let true_group = cache.cluster_of[target_token] as usize;
+            let is_in_group = true_group == g;
+
+            if is_in_group {
+                included.push((ex, true));
+            } else if top_m == 0 || is_in_top_m(train_group_probs, ex, k, g, top_m) {
+                included.push((ex, false));
+            }
+        }
+
+        let num_aug = included.len();
+        let mut packed_input = vec![0u64; num_aug * wpe];
+        let mut target_bits = vec![0u8; num_aug * augmented_output_bits];
+        let mut weights = vec![0.0f32; num_aug];
+
+        for (i, &(global_idx, is_in_group)) in included.iter().enumerate() {
+            // Copy packed input from S1 stage train data (includes context + cluster_id)
+            let src_start = global_idx * wpe;
+            packed_input[i * wpe..(i + 1) * wpe]
+                .copy_from_slice(&cache.bitwise_full_train[s1_stage].packed_input[src_start..src_start + wpe]);
+
+            // Encode target: within-group index for in-group, invalid_code for out-group
+            let target = if is_in_group {
+                let target_token = cache.train_tokens[global_idx + context_size] as usize;
+                cache.index_in_cluster[target_token] as usize
+            } else {
+                invalid_code
+            };
+
+            for b in 0..augmented_output_bits {
+                target_bits[i * augmented_output_bits + b] =
+                    ((target >> (augmented_output_bits - 1 - b)) & 1) as u8;
+            }
+
+            weights[i] = train_group_probs[global_idx * k + g];
+        }
+
+        BitwiseSubset {
+            input_bits: Vec::new(),
+            packed_input,
+            target_bits,
+            num_examples: num_aug,
+            words_per_example: wpe,
+            weights,
+        }
+    }).collect()
+}
+
+/// Compute CE using filtered mixture evaluation for invalid token mode.
+///
+/// For each eval example:
+/// 1. S0 gives P(g|context) for all K groups
+/// 2. Each S1_g gives per-class scores including "invalid" class
+/// 3. Filtered gate: gate(g) = P(g|S0) × (1 - P(invalid|S1_g))
+/// 4. CE = -log P_filt(true_group) - log P(true_within | S1_true, valid)
+fn eval_filtered_mixture(
+    cache: &MultiStageTokenCache,
+    stage_bitwise_scores_0: &[f32],
+    stage_tiered_scores_0: &[f64],
+    all_group_eval_scores: &[Vec<f32>],  // [K][num_eval × augmented_output_bits]
+    augmented_output_bits: usize,
+    label_smoothing: f64,
+) -> (f64, f64, f64, f64) {
+    let eps = 1e-7f64;
+    let epsilon = 1e-10f64;
+    let num_eval = cache.bitwise_full_eval[0].num_examples;
+    let k = cache.k;
+
+    // Compute S0 group probs for eval data (reuse existing helper for bitwise)
+    let eval_group_probs: Vec<f32> = if !stage_bitwise_scores_0.is_empty() {
+        compute_group_softmax_bitwise(
+            stage_bitwise_scores_0, num_eval,
+            cache.bitwise_output_bits[0], k, &cache.bitwise_token_bits[0],
+        )
+    } else {
+        // Tiered S0: direct softmax over K scores
+        let mut probs = vec![0.0f32; num_eval * k];
+        for ex in 0..num_eval {
+            let base = ex * k;
+            let scores = &stage_tiered_scores_0[base..base + k];
+            let max_s = scores.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let sum_exp: f64 = scores.iter().map(|&s| (s - max_s).exp()).sum();
+            for gk in 0..k {
+                probs[base + gk] = ((scores[gk] - max_s).exp() / sum_exp) as f32;
+            }
+        }
+        probs
+    };
+
+    let results: Vec<(f64, f64, f64, u32)> = (0..num_eval)
+        .into_par_iter()
+        .map(|ex| {
+            let token_id = cache.eval_target_token_ids[ex] as usize;
+            let true_group = cache.cluster_of[token_id] as usize;
+            let true_within = cache.index_in_cluster[token_id] as usize;
+
+            // S0: log P(true_group) from eval group probs
+            let p_true_group = (eval_group_probs[ex * k + true_group] as f64).max(epsilon);
+            let log_p_s0 = p_true_group.ln();
+
+            // For each group g: compute P(invalid|S1_g) and gate
+            let mut gates = vec![0.0f64; k];
+            let mut s1_log_p_within_valid = 0.0f64; // log P(true_within | S1_true_group, valid)
+            let mut best_predicted_g = 0usize;
+            let mut best_predicted_within = 0usize;
+            let mut best_predicted_score = f64::NEG_INFINITY;
+
+            for g in 0..k {
+                let group_size = cache.cluster_sizes[g];
+                let invalid_code = group_size; // "invalid" is at index group_size
+                let total_classes = group_size + 1;
+                let p_s0_g = eval_group_probs[ex * k + g] as f64;
+
+                if all_group_eval_scores[g].is_empty() || p_s0_g < epsilon {
+                    gates[g] = 0.0;
+                    continue;
+                }
+
+                // Compute per-class log-probs from S1_g bitwise scores
+                let s1_base = ex * augmented_output_bits;
+                let mut s1_log_p = vec![0.0f64; augmented_output_bits];
+                let mut s1_log_1mp = vec![0.0f64; augmented_output_bits];
+                for b in 0..augmented_output_bits {
+                    let p = (all_group_eval_scores[g][s1_base + b] as f64).clamp(eps, 1.0 - eps);
+                    s1_log_p[b] = p.ln();
+                    s1_log_1mp[b] = (1.0 - p).ln();
+                }
+
+                // Softmax over total_classes (valid classes + invalid)
+                let mut max_lp = f64::NEG_INFINITY;
+                let mut class_log_probs = vec![0.0f64; total_classes];
+                for j in 0..total_classes {
+                    let mut lp = 0.0f64;
+                    for b in 0..augmented_output_bits {
+                        if ((j >> (augmented_output_bits - 1 - b)) & 1) == 1 {
+                            lp += s1_log_p[b];
+                        } else {
+                            lp += s1_log_1mp[b];
+                        }
+                    }
+                    class_log_probs[j] = lp;
+                    if lp > max_lp { max_lp = lp; }
+                }
+                let sum_exp: f64 = class_log_probs.iter().map(|&lp| (lp - max_lp).exp()).sum();
+                let log_z = max_lp + sum_exp.ln();
+
+                // P(invalid|S1_g) and P(valid|S1_g)
+                let p_invalid = (class_log_probs[invalid_code] - log_z).exp();
+                let p_valid = (1.0 - p_invalid).max(epsilon);
+
+                // Filtered gate
+                gates[g] = p_s0_g * p_valid;
+
+                // If this is the true group, compute S1 contribution
+                if g == true_group {
+                    let log_p_true_class = class_log_probs[true_within] - log_z;
+                    s1_log_p_within_valid = log_p_true_class - p_valid.ln();
+                }
+
+                // Track best prediction for accuracy
+                let best_j = class_log_probs[..group_size].iter()
+                    .enumerate()
+                    .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+                    .map(|(idx, _)| idx)
+                    .unwrap_or(0);
+                let score = (p_s0_g * p_valid).ln() + class_log_probs[best_j] - log_z - p_valid.ln();
+                if score > best_predicted_score {
+                    best_predicted_score = score;
+                    best_predicted_g = g;
+                    best_predicted_within = best_j;
+                }
+            }
+
+            // Renormalize gates
+            let gate_sum: f64 = gates.iter().sum();
+            let log_p_filt_true = if gate_sum > epsilon {
+                (gates[true_group] / gate_sum).max(epsilon).ln()
+            } else {
+                -(k as f64).ln() // uniform fallback
+            };
+
+            let s0_ce = -log_p_s0;
+            let s1_ce = -s1_log_p_within_valid;
+            let combined_ce = if label_smoothing > 0.0 {
+                let log_p_hier = log_p_filt_true + s1_log_p_within_valid;
+                let p_hier = log_p_hier.exp();
+                let p_smooth = (1.0 - label_smoothing) * p_hier
+                             + label_smoothing / cache.vocab_size as f64;
+                -p_smooth.ln()
+            } else {
+                -log_p_filt_true - s1_log_p_within_valid
+            };
+            let correct = if best_predicted_g == true_group && best_predicted_within == true_within { 1u32 } else { 0u32 };
+
+            (combined_ce, s0_ce, s1_ce, correct)
+        })
+        .collect();
+
+    let total_ce: f64 = results.iter().map(|r| r.0).sum();
+    let total_s0_ce: f64 = results.iter().map(|r| r.1).sum();
+    let total_s1_ce: f64 = results.iter().map(|r| r.2).sum();
+    let total_correct: u32 = results.iter().map(|r| r.3).sum();
+
+    (
+        total_ce / num_eval as f64,
+        total_correct as f64 / num_eval as f64,
+        total_s0_ce / num_eval as f64,
+        total_s1_ce / num_eval as f64,
+    )
+}
+
+/// Compute softmax P(group | context) for each example from bitwise per-bit scores.
+///
+/// `scores`: `[num_examples × num_bits]` — per-bit probabilities from S0 forward
+/// `token_bits`: `[K × num_bits]` — bit patterns for each group
+///
+/// Returns: `[num_examples × K]` — P(group | context) per example
+fn compute_group_softmax_bitwise(
+    scores: &[f32],
+    num_examples: usize,
+    num_bits: usize,
+    k: usize,
+    token_bits: &[u8],
+) -> Vec<f32> {
+    let eps = 1e-7f64;
+    let mut result = vec![0.0f32; num_examples * k];
+
+    for ex in 0..num_examples {
+        let mut log_p = vec![0.0f64; num_bits];
+        let mut log_1mp = vec![0.0f64; num_bits];
+        for b in 0..num_bits {
+            let p = (scores[ex * num_bits + b] as f64).clamp(eps, 1.0 - eps);
+            log_p[b] = p.ln();
+            log_1mp[b] = (1.0 - p).ln();
+        }
+
+        let mut max_lp = f64::NEG_INFINITY;
+        let mut log_probs = vec![0.0f64; k];
+        for gk in 0..k {
+            let mut lp = 0.0f64;
+            for b in 0..num_bits {
+                if token_bits[gk * num_bits + b] == 1 {
+                    lp += log_p[b];
+                } else {
+                    lp += log_1mp[b];
+                }
+            }
+            log_probs[gk] = lp;
+            if lp > max_lp { max_lp = lp; }
+        }
+
+        let sum_exp: f64 = log_probs.iter().map(|&lp| (lp - max_lp).exp()).sum();
+        let base = ex * k;
+        for gk in 0..k {
+            result[base + gk] = ((log_probs[gk] - max_lp).exp() / sum_exp) as f32;
+        }
+    }
+
+    result
+}
+
 /// Compute combined CE for SELECTOR mode.
 ///
 /// S0 is evaluated normally (bitwise or tiered) on full eval data.
 /// S1 trains K separate sub-models (one per group) using selector data,
 /// then combines: P(token) = P(group|ctx) × P(within|group,ctx).
+///
+/// **Soft-weighted S1 training (Phase B):** When S0 is bitwise, the trained S0 model
+/// is re-forwarded on training data to compute P(group|context) per train example.
+/// Each S1 group's training subset is weighted by the S0 confidence for that group,
+/// giving stronger signal to examples where S0 is more confident.
 ///
 /// Returns: (combined_ce, combined_accuracy, stage0_ce, stage1_ce)
 pub fn compute_combined_ce_selector(
@@ -1626,15 +1945,20 @@ pub fn compute_combined_ce_selector(
     neuron_sample_rate: f32,
     rng_seed: u64,
     sparse_threshold: usize,
+    label_smoothing: f64,
+    invalid_mode: bool,
+    top_m: usize,
 ) -> (f64, f64, f64, f64) {
     let eps = 1e-7f64;
     let epsilon = 1e-10f64;
     let num_eval = cache.bitwise_full_eval[0].num_examples;
     let k = cache.k;
 
-    // ── S0: get scores normally (same as INPUT_CONCAT) ──
+    // ── S0: train + forward on eval, optionally keep model for re-forwarding ──
     let mut stage_tiered_scores_0: Vec<f64> = Vec::new();
     let mut stage_bitwise_scores_0: Vec<f32> = Vec::new();
+    // S0 model kept for soft-weighting S1 (bitwise S0 only)
+    let mut s0_model: Option<(Vec<ClusterStorage>, crate::bitwise_ramlm::GenomeLayout)> = None;
 
     if cache.stage_is_tiered[0] {
         let train = cache.tiered_full_train[0].as_ref().unwrap();
@@ -1645,21 +1969,114 @@ pub fn compute_combined_ce_selector(
             memory_mode, neuron_sample_rate, rng_seed,
         );
     } else {
-        stage_bitwise_scores_0 = train_and_get_scores(
+        let (scores, clusters, layout) = train_and_get_scores_with_model(
             stage_connections[0], stage_bits_per_neuron[0], stage_neurons_per_cluster[0],
             cache.bitwise_output_bits[0],
             &cache.bitwise_full_train[0], &cache.bitwise_full_eval[0],
             memory_mode, neuron_sample_rate, rng_seed, sparse_threshold,
         );
+        stage_bitwise_scores_0 = scores;
+        s0_model = Some((clusters, layout));
     }
 
     // ── S1 SELECTOR: train K sub-models, get per-group scores ──
-    // For each group g, train on selector_train[1][g], forward on selector_eval[1][g]
-    // Result: per-group Vec<f32> of shape [num_eval_in_group × output_bits]
-    let s1_stage = 1; // SELECTOR is always between stage 0 and stage 1
+    let s1_stage = 1;
     let s1_output_bits = cache.bitwise_output_bits[s1_stage];
-    let selector_train = &cache.bitwise_selector_train[s1_stage];
     let selector_eval = &cache.bitwise_selector_eval[s1_stage];
+
+    // Compute P(group|context) per train example from S0 model (shared by Phase B + C)
+    let train_group_probs: Option<Vec<f32>> = s0_model.as_ref().map(|(clusters, layout)| {
+        let s0_bits = cache.bitwise_output_bits[0];
+        let s0_train_scores = forward_scores_on_subset(
+            stage_connections[0], stage_bits_per_neuron[0], stage_neurons_per_cluster[0],
+            s0_bits, layout,
+            &cache.bitwise_full_train[0], clusters, memory_mode,
+        );
+        let num_train = cache.bitwise_full_train[0].num_examples;
+        compute_group_softmax_bitwise(&s0_train_scores, num_train, s0_bits, k, &cache.bitwise_token_bits[0])
+    });
+
+    // ── Invalid token mode (Phase C): augmented S1 training + filtered mixture eval ──
+    if invalid_mode {
+        debug_assert!(
+            cache.max_cluster_size < (1usize << s1_output_bits),
+            "Invalid mode requires max_cluster_size ({}) < 2^output_bits ({}). \
+             Power-of-2 cluster sizes need an extra output bit.",
+            cache.max_cluster_size, 1usize << s1_output_bits,
+        );
+
+        let num_train = cache.bitwise_full_train[0].num_examples;
+        // Fall back to uniform probs if S0 is tiered (no model to re-forward)
+        let tgp = train_group_probs.unwrap_or_else(|| vec![1.0 / k as f32; num_train * k]);
+
+        let augmented_subsets = build_augmented_selector_subsets(
+            cache, s1_stage, &tgp, s1_output_bits, top_m,
+        );
+
+        // Train each group on augmented data, then forward on ALL eval examples
+        let all_group_eval_scores: Vec<Vec<f32>> = (0..k)
+            .map(|g| {
+                if augmented_subsets[g].num_examples == 0 { return Vec::new(); }
+                let (clusters, layout) = train_only(
+                    stage_connections[s1_stage], stage_bits_per_neuron[s1_stage],
+                    stage_neurons_per_cluster[s1_stage], s1_output_bits,
+                    &augmented_subsets[g], memory_mode, neuron_sample_rate,
+                    rng_seed.wrapping_add(1 + g as u64), sparse_threshold,
+                );
+                forward_scores_on_eval(
+                    stage_connections[s1_stage], stage_bits_per_neuron[s1_stage],
+                    stage_neurons_per_cluster[s1_stage], s1_output_bits,
+                    &layout, &cache.bitwise_full_eval[s1_stage], &clusters, memory_mode,
+                )
+            })
+            .collect();
+
+        return eval_filtered_mixture(
+            cache, &stage_bitwise_scores_0, &stage_tiered_scores_0,
+            &all_group_eval_scores, s1_output_bits, label_smoothing,
+        );
+    }
+
+    // ── Normal mode: weighted S1 training (Phase B) ──
+    let weighted_selector_train: Option<Vec<BitwiseSubset>> = train_group_probs.map(|tgp| {
+        let context_size = cache.context_size;
+        let num_train = cache.bitwise_full_train[0].num_examples;
+        let selector_train = &cache.bitwise_selector_train[s1_stage];
+        let mut group_weights: Vec<Vec<f32>> = (0..k)
+            .map(|g| vec![0.0f32; selector_train[g].num_examples])
+            .collect();
+        let mut group_counters = vec![0usize; k];
+
+        for orig_idx in 0..num_train {
+            let target_token = cache.train_tokens[orig_idx + context_size] as usize;
+            let g = cache.cluster_of[target_token] as usize;
+            let pos = group_counters[g];
+            if pos < group_weights[g].len() {
+                group_weights[g][pos] = tgp[orig_idx * k + g];
+            }
+            group_counters[g] += 1;
+        }
+
+        (0..k)
+            .map(|g| {
+                let orig = &selector_train[g];
+                BitwiseSubset {
+                    input_bits: Vec::new(),
+                    packed_input: orig.packed_input.clone(),
+                    target_bits: orig.target_bits.clone(),
+                    num_examples: orig.num_examples,
+                    words_per_example: orig.words_per_example,
+                    weights: std::mem::take(&mut group_weights[g]),
+                }
+            })
+            .collect()
+    });
+
+    // Pick which training subsets to use (weighted if available, original otherwise)
+    let selector_train_ref: &[BitwiseSubset] = match &weighted_selector_train {
+        Some(w) => w,
+        None => &cache.bitwise_selector_train[s1_stage],
+    };
 
     // Train each group's sub-model and get scores
     let group_scores: Vec<Vec<f32>> = (0..k)
@@ -1672,7 +2089,7 @@ pub fn compute_combined_ce_selector(
                 stage_bits_per_neuron[s1_stage],
                 stage_neurons_per_cluster[s1_stage],
                 s1_output_bits,
-                &selector_train[g], &selector_eval[g],
+                &selector_train_ref[g], &selector_eval[g],
                 memory_mode, neuron_sample_rate,
                 rng_seed.wrapping_add(1 + g as u64), sparse_threshold,
             )
@@ -1680,7 +2097,6 @@ pub fn compute_combined_ce_selector(
         .collect();
 
     // ── Build mapping: global eval index → (group, position_in_group) ──
-    // For each group, track how many eval examples we've seen so far
     let mut group_pos_counter = vec![0usize; k];
     let eval_to_group_pos: Vec<(usize, usize)> = (0..num_eval)
         .map(|ex| {
@@ -1757,7 +2173,6 @@ pub fn compute_combined_ce_selector(
             let group_size = cache.cluster_sizes[true_group];
 
             let (log_p_true_within, s1_predicted) = if group_scores[group].is_empty() {
-                // No eval data for this group — uniform fallback
                 let log_uniform = -(group_size as f64).ln();
                 (log_uniform, 0)
             } else {
@@ -1801,7 +2216,15 @@ pub fn compute_combined_ce_selector(
 
             let s0_ce = -log_p_true_group;
             let s1_ce = -log_p_true_within;
-            let combined_ce = s0_ce + s1_ce;
+            let combined_ce = if label_smoothing > 0.0 {
+                let log_p_hier = log_p_true_group + log_p_true_within;
+                let p_hier = log_p_hier.exp();
+                let p_smooth = (1.0 - label_smoothing) * p_hier
+                             + label_smoothing / cache.vocab_size as f64;
+                -p_smooth.ln()
+            } else {
+                s0_ce + s1_ce
+            };
             let correct = if s0_predicted == true_group && s1_predicted == true_within { 1u32 } else { 0u32 };
 
             (combined_ce, s0_ce, s1_ce, correct)

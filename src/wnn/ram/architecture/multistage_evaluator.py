@@ -569,11 +569,21 @@ class MultiStageEvaluator(BaseEvaluator):
 	def compute_combined_metrics(
 		self,
 		stage_genomes: list[ClusterGenome],
+		label_smoothing: float = 0.0,
+		invalid_mode: bool = False,
+		top_m: int = 5,
 	) -> EvalResult:
 		"""Compute combined CE over the full vocabulary.
 
 		Args:
 			stage_genomes: List of genomes, one per stage (0-indexed).
+			label_smoothing: Epsilon for label smoothing (0.0 = disabled).
+				CE_smooth = -log[(1-ε) × P_hierarchical + ε/vocab_size]
+			invalid_mode: If True, S1 groups train on ALL examples with an
+				"invalid" target for out-of-group data. Enables self-correction
+				of S0 mistakes via filtered mixture evaluation.
+			top_m: Number of top S0 groups per example to include in augmented
+				training. 0 = all groups (expensive). Default 5.
 
 		Trains all stages independently, reconstructs the joint distribution
 		P(token) = P(group|ctx) × P(token|group,ctx), and computes CE + accuracy.
@@ -614,6 +624,9 @@ class MultiStageEvaluator(BaseEvaluator):
 				neuron_sample_rate=self._neuron_sample_rate,
 				rng_seed=self._seed,
 				sparse_threshold=sparse_threshold,
+				label_smoothing=label_smoothing,
+				invalid_mode=invalid_mode,
+				top_m=top_m,
 			)
 		else:
 			combined_ce, combined_acc, s0_ce, s1_ce = self._cache.evaluate_combined_ce(
@@ -625,6 +638,7 @@ class MultiStageEvaluator(BaseEvaluator):
 				neuron_sample_rate=self._neuron_sample_rate,
 				rng_seed=self._seed,
 				sparse_threshold=sparse_threshold,
+				label_smoothing=label_smoothing,
 			)
 
 		return EvalResult(

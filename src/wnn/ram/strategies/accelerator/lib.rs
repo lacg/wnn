@@ -5017,6 +5017,7 @@ impl MultiStageCacheWrapper {
         neuron_sample_rate: f32,
         rng_seed: u64,
         sparse_threshold: usize,
+        label_smoothing: f64,
     ) -> PyResult<(f64, f64, f64, f64)> {
         py.allow_threads(|| {
             // Partition flat arrays by stage
@@ -5050,6 +5051,7 @@ impl MultiStageCacheWrapper {
                 &self.inner,
                 &stage_bits, &stage_neurons, &stage_conns,
                 memory_mode, neuron_sample_rate, rng_seed, sparse_threshold,
+                label_smoothing,
             ))
         })
     }
@@ -5058,6 +5060,11 @@ impl MultiStageCacheWrapper {
     ///
     /// S0 is evaluated normally (bitwise or tiered).
     /// S1 is evaluated per-group using selector data (K sub-models).
+    ///
+    /// When `invalid_mode` is true (Phase C), S1 groups train on ALL examples
+    /// with an "invalid" target for out-of-group data, enabling self-correction
+    /// of S0 mistakes. `top_m` limits the number of groups each example trains
+    /// on (0 = all groups).
     #[allow(clippy::too_many_arguments)]
     fn evaluate_combined_ce_selector(
         &self,
@@ -5070,6 +5077,9 @@ impl MultiStageCacheWrapper {
         neuron_sample_rate: f32,
         rng_seed: u64,
         sparse_threshold: usize,
+        label_smoothing: f64,
+        invalid_mode: bool,
+        top_m: usize,
     ) -> PyResult<(f64, f64, f64, f64)> {
         py.allow_threads(|| {
             // Partition flat arrays by stage (same as evaluate_combined_ce)
@@ -5103,6 +5113,7 @@ impl MultiStageCacheWrapper {
                 &self.inner,
                 &stage_bits, &stage_neurons, &stage_conns,
                 memory_mode, neuron_sample_rate, rng_seed, sparse_threshold,
+                label_smoothing, invalid_mode, top_m,
             ))
         })
     }

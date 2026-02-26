@@ -282,6 +282,9 @@ pub struct BitwiseSubset {
     pub target_bits: Vec<u8>,    // [N * num_bits]
     pub num_examples: usize,
     pub words_per_example: usize,
+    /// Optional per-example weights for soft-weighted training.
+    /// Empty = all weights 1.0 (unweighted). When non-empty: [N] f32 values.
+    pub weights: Vec<f32>,
 }
 
 /// Pre-encoded eval subset for bitwise CE computation.
@@ -378,6 +381,7 @@ impl BitwiseTokenCache {
             target_bits: full_target_bits,
             num_examples: full_n,
             words_per_example: full_wpe,
+            weights: Vec::new(),
         };
 
         // Split training data into subsets
@@ -481,7 +485,7 @@ impl BitwiseTokenCache {
                 let (input_bits, _, target_bits, num_ex) =
                     Self::encode_sequence(part, context_size, bits_per_token, total_input_bits, num_bits);
                 let (packed, wpe) = pack_input_bits(&input_bits, num_ex, total_input_bits);
-                BitwiseSubset { input_bits: Vec::new(), packed_input: packed, target_bits, num_examples: num_ex, words_per_example: wpe }
+                BitwiseSubset { input_bits: Vec::new(), packed_input: packed, target_bits, num_examples: num_ex, words_per_example: wpe, weights: Vec::new() }
             })
             .collect()
     }
@@ -896,6 +900,108 @@ fn gpu_forward_heterogeneous(
 	true
 }
 
+/// Iterate over (sampled) examples for a single neuron, calling `callback(example_idx, address)`.
+///
+/// Handles GPU-addressed vs CPU-fallback, and geometric-skip sampling vs full iteration.
+/// Used by `train_into()` to eliminate duplication across storage types and training modes.
+#[inline(always)]
+fn for_each_example<F>(
+    global_neuron: usize,
+    num_examples: usize,
+    gpu_addresses: &Option<Vec<u32>>,
+    packed_input: &[u64],
+    wpe: usize,
+    connections: &[i64],
+    bits_per_neuron: &[usize],
+    layout: &GenomeLayout,
+    use_sampling: bool,
+    inv_log_complement: f32,
+    rng_seed: u64,
+    mut callback: F,
+) where
+    F: FnMut(usize, usize), // (example_idx, address)
+{
+    let mut neuron_rng = (rng_seed as u32).wrapping_add(global_neuron as u32 * 1000003);
+    if neuron_rng == 0 { neuron_rng = 1; }
+
+    if let Some(ref gpu_addrs) = gpu_addresses {
+        let addr_base = global_neuron * num_examples;
+        if use_sampling {
+            let mut ex = geometric_skip(&mut neuron_rng, inv_log_complement);
+            while ex < num_examples {
+                callback(ex, gpu_addrs[addr_base + ex] as usize);
+                ex += geometric_skip(&mut neuron_rng, inv_log_complement) + 1;
+            }
+        } else {
+            for ex in 0..num_examples {
+                callback(ex, gpu_addrs[addr_base + ex] as usize);
+            }
+        }
+    } else {
+        let n_bits = bits_per_neuron[global_neuron];
+        let conn_start = layout.conn_offsets[global_neuron];
+        let conns = &connections[conn_start..conn_start + n_bits];
+
+        if use_sampling {
+            let mut ex = geometric_skip(&mut neuron_rng, inv_log_complement);
+            while ex < num_examples {
+                let packed = &packed_input[ex * wpe..(ex + 1) * wpe];
+                callback(ex, compute_address_packed(packed, conns, n_bits));
+                ex += geometric_skip(&mut neuron_rng, inv_log_complement) + 1;
+            }
+        } else {
+            for ex in 0..num_examples {
+                let packed = &packed_input[ex * wpe..(ex + 1) * wpe];
+                callback(ex, compute_address_packed(packed, conns, n_bits));
+            }
+        }
+    }
+}
+
+/// Accumulate TERNARY votes for all neurons in one cluster.
+///
+/// For each neuron × (sampled) example, computes vote = ±weight and calls
+/// `accumulate(neuron_local_idx, address, vote)`. Reusable for any storage backend
+/// (dense flat array, sparse HashMap, etc).
+#[inline(always)]
+fn accumulate_ternary_votes<A>(
+    c_neurons: usize,
+    neuron_base: usize,
+    num_clusters: usize,
+    cluster: usize,
+    num_examples: usize,
+    gpu_addresses: &Option<Vec<u32>>,
+    train_subset: &BitwiseSubset,
+    wpe: usize,
+    connections: &[i64],
+    bits_per_neuron: &[usize],
+    layout: &GenomeLayout,
+    use_sampling: bool,
+    inv_log_complement: f32,
+    rng_seed: u64,
+    has_weights: bool,
+    mut accumulate: A,
+) where
+    A: FnMut(usize, usize, f32), // (neuron_local_idx, address, vote)
+{
+    for n in 0..c_neurons {
+        let global_n = neuron_base + n;
+
+        for_each_example(
+            global_n, num_examples, gpu_addresses,
+            &train_subset.packed_input, wpe,
+            connections, bits_per_neuron, layout,
+            use_sampling, inv_log_complement, rng_seed,
+            |ex, addr| {
+                let target_bit = train_subset.target_bits[ex * num_clusters + cluster];
+                let w = if has_weights { train_subset.weights[ex] } else { 1.0 };
+                let vote = if target_bit == 1 { w } else { -w };
+                accumulate(n, addr, vote);
+            },
+        );
+    }
+}
+
 /// Train a single genome into pre-allocated memory, then forward pass into output slice.
 ///
 /// Per-neuron heterogeneous version: each neuron can have a different bit count.
@@ -951,19 +1057,18 @@ pub(crate) fn train_into(
         None
     };
 
+    let wpe = train_subset.words_per_example;
+    let has_weights = !train_subset.weights.is_empty();
+
     match memory_mode {
         MODE_TERNARY => {
-            // ===== TRAINING: Majority vote (neuron-major for L1 cache locality) =====
+            // ===== TRAINING: Majority vote with f32 (supports fractional weights) =====
             let max_dense_votes = (0..num_clusters)
                 .filter(|&c| clusters[c].is_dense())
-                .map(|c| {
-                    let max_bits = layout.cluster_max_bits[c];
-                    neurons_per_cluster[c] * (1usize << max_bits)
-                })
+                .map(|c| neurons_per_cluster[c] * (1usize << layout.cluster_max_bits[c]))
                 .max()
                 .unwrap_or(0);
-            let mut dense_votes = vec![0i32; max_dense_votes];
-            let wpe = train_subset.words_per_example;
+            let mut dense_votes = vec![0.0f32; max_dense_votes];
 
             for cluster in 0..num_clusters {
                 let c_neurons = neurons_per_cluster[cluster];
@@ -972,145 +1077,46 @@ pub(crate) fn train_into(
                 if clusters[cluster].is_dense() {
                     let c_max_bits = layout.cluster_max_bits[cluster];
                     let c_addresses = 1usize << c_max_bits;
-                    let vote_size = c_neurons * c_addresses;
-                    dense_votes[..vote_size].fill(0);
+                    dense_votes[..(c_neurons * c_addresses)].fill(0.0);
 
-                    for n in 0..c_neurons {
-                        let global_n = neuron_base + n;
-                        let vote_base = n * c_addresses;
+                    accumulate_ternary_votes(
+                        c_neurons, neuron_base, num_clusters, cluster,
+                        num_examples, &gpu_addresses, train_subset, wpe,
+                        connections, bits_per_neuron, layout,
+                        use_sampling, inv_log_complement, rng_seed, has_weights,
+                        |n, addr, vote| { dense_votes[n * c_addresses + addr] += vote; },
+                    );
 
-                        let mut neuron_rng = (rng_seed as u32)
-                            .wrapping_add(global_n as u32 * 1000003);
-                        if neuron_rng == 0 { neuron_rng = 1; }
-
-                        if let Some(ref gpu_addrs) = gpu_addresses {
-                            // GPU fast path: addresses already computed
-                            let addr_base = global_n * num_examples;
-                            if use_sampling {
-                                let mut ex = geometric_skip(&mut neuron_rng, inv_log_complement);
-                                while ex < num_examples {
-                                    let target_bit = train_subset.target_bits[ex * num_clusters + cluster];
-                                    let vote: i32 = if target_bit == 1 { 1 } else { -1 };
-                                    let addr = gpu_addrs[addr_base + ex] as usize;
-                                    dense_votes[vote_base + addr] += vote;
-                                    ex += geometric_skip(&mut neuron_rng, inv_log_complement) + 1;
-                                }
-                            } else {
-                                for ex in 0..num_examples {
-                                    let target_bit = train_subset.target_bits[ex * num_clusters + cluster];
-                                    let vote: i32 = if target_bit == 1 { 1 } else { -1 };
-                                    let addr = gpu_addrs[addr_base + ex] as usize;
-                                    dense_votes[vote_base + addr] += vote;
-                                }
-                            }
-                        } else {
-                            // CPU fallback
-                            let n_bits = bits_per_neuron[global_n];
-                            let conn_start = layout.conn_offsets[global_n];
-                            let conns = &connections[conn_start..conn_start + n_bits];
-
-                            if use_sampling {
-                                let mut ex = geometric_skip(&mut neuron_rng, inv_log_complement);
-                                while ex < num_examples {
-                                    let packed = &train_subset.packed_input[ex * wpe..(ex + 1) * wpe];
-                                    let target_bit = train_subset.target_bits[ex * num_clusters + cluster];
-                                    let vote: i32 = if target_bit == 1 { 1 } else { -1 };
-                                    let addr = compute_address_packed(packed, conns, n_bits);
-                                    dense_votes[vote_base + addr] += vote;
-                                    ex += geometric_skip(&mut neuron_rng, inv_log_complement) + 1;
-                                }
-                            } else {
-                                for ex in 0..num_examples {
-                                    let packed = &train_subset.packed_input[ex * wpe..(ex + 1) * wpe];
-                                    let target_bit = train_subset.target_bits[ex * num_clusters + cluster];
-                                    let vote: i32 = if target_bit == 1 { 1 } else { -1 };
-                                    let addr = compute_address_packed(packed, conns, n_bits);
-                                    dense_votes[vote_base + addr] += vote;
-                                }
-                            }
-                        }
-                    }
-
+                    // Write cells from accumulated votes
                     for n in 0..c_neurons {
                         let global_n = neuron_base + n;
                         let n_bits = bits_per_neuron[global_n];
-                        let c_addresses = 1usize << n_bits;
-                        let c_max_addresses = 1usize << c_max_bits;
-                        for addr in 0..c_addresses {
-                            let v = dense_votes[n * c_max_addresses + addr];
-                            if v > 0 {
-                                clusters[cluster].write_cell(n, addr, TRUE);
-                            } else if v < 0 {
-                                clusters[cluster].write_cell(n, addr, FALSE);
-                            }
+                        let n_addrs = 1usize << n_bits;
+                        for addr in 0..n_addrs {
+                            let v = dense_votes[n * c_addresses + addr];
+                            if v > 0.0 { clusters[cluster].write_cell(n, addr, TRUE); }
+                            else if v < 0.0 { clusters[cluster].write_cell(n, addr, FALSE); }
                         }
                     }
                 } else {
-                    // Sparse path: per-neuron HashMap votes
+                    // Sparse path: per-neuron HashMap votes (f32)
                     use rustc_hash::FxHashMap;
-                    let mut sparse_votes: Vec<FxHashMap<u32, i32>> =
+                    let mut sparse_votes: Vec<FxHashMap<u32, f32>> =
                         (0..c_neurons).map(|_| FxHashMap::default()).collect();
 
-                    for n in 0..c_neurons {
-                        let global_n = neuron_base + n;
+                    accumulate_ternary_votes(
+                        c_neurons, neuron_base, num_clusters, cluster,
+                        num_examples, &gpu_addresses, train_subset, wpe,
+                        connections, bits_per_neuron, layout,
+                        use_sampling, inv_log_complement, rng_seed, has_weights,
+                        |n, addr, vote| { *sparse_votes[n].entry(addr as u32).or_insert(0.0) += vote; },
+                    );
 
-                        let mut neuron_rng = (rng_seed as u32)
-                            .wrapping_add(global_n as u32 * 1000003);
-                        if neuron_rng == 0 { neuron_rng = 1; }
-
-                        if let Some(ref gpu_addrs) = gpu_addresses {
-                            let addr_base = global_n * num_examples;
-                            if use_sampling {
-                                let mut ex = geometric_skip(&mut neuron_rng, inv_log_complement);
-                                while ex < num_examples {
-                                    let target_bit = train_subset.target_bits[ex * num_clusters + cluster];
-                                    let vote: i32 = if target_bit == 1 { 1 } else { -1 };
-                                    let addr = gpu_addrs[addr_base + ex];
-                                    *sparse_votes[n].entry(addr).or_insert(0) += vote;
-                                    ex += geometric_skip(&mut neuron_rng, inv_log_complement) + 1;
-                                }
-                            } else {
-                                for ex in 0..num_examples {
-                                    let target_bit = train_subset.target_bits[ex * num_clusters + cluster];
-                                    let vote: i32 = if target_bit == 1 { 1 } else { -1 };
-                                    let addr = gpu_addrs[addr_base + ex];
-                                    *sparse_votes[n].entry(addr).or_insert(0) += vote;
-                                }
-                            }
-                        } else {
-                            let n_bits = bits_per_neuron[global_n];
-                            let conn_start = layout.conn_offsets[global_n];
-                            let conns = &connections[conn_start..conn_start + n_bits];
-
-                            if use_sampling {
-                                let mut ex = geometric_skip(&mut neuron_rng, inv_log_complement);
-                                while ex < num_examples {
-                                    let packed = &train_subset.packed_input[ex * wpe..(ex + 1) * wpe];
-                                    let target_bit = train_subset.target_bits[ex * num_clusters + cluster];
-                                    let vote: i32 = if target_bit == 1 { 1 } else { -1 };
-                                    let addr = compute_address_packed(packed, conns, n_bits);
-                                    *sparse_votes[n].entry(addr as u32).or_insert(0) += vote;
-                                    ex += geometric_skip(&mut neuron_rng, inv_log_complement) + 1;
-                                }
-                            } else {
-                                for ex in 0..num_examples {
-                                    let packed = &train_subset.packed_input[ex * wpe..(ex + 1) * wpe];
-                                    let target_bit = train_subset.target_bits[ex * num_clusters + cluster];
-                                    let vote: i32 = if target_bit == 1 { 1 } else { -1 };
-                                    let addr = compute_address_packed(packed, conns, n_bits);
-                                    *sparse_votes[n].entry(addr as u32).or_insert(0) += vote;
-                                }
-                            }
-                        }
-                    }
-
+                    // Write cells from accumulated votes
                     for n in 0..c_neurons {
                         for (&addr, &v) in &sparse_votes[n] {
-                            if v > 0 {
-                                clusters[cluster].write_cell(n, addr as usize, TRUE);
-                            } else if v < 0 {
-                                clusters[cluster].write_cell(n, addr as usize, FALSE);
-                            }
+                            if v > 0.0 { clusters[cluster].write_cell(n, addr as usize, TRUE); }
+                            else if v < 0.0 { clusters[cluster].write_cell(n, addr as usize, FALSE); }
                         }
                     }
                 }
@@ -1118,8 +1124,6 @@ pub(crate) fn train_into(
         }
         MODE_QUAD_BINARY | MODE_QUAD_WEIGHTED => {
             // ===== TRAINING: Sequential nudging (neuron-major for L1 cache locality) =====
-            let wpe = train_subset.words_per_example;
-
             for cluster in 0..num_clusters {
                 let c_neurons = neurons_per_cluster[cluster];
                 let neuron_base = layout.neuron_offsets[cluster];
@@ -1127,50 +1131,16 @@ pub(crate) fn train_into(
                 for n in 0..c_neurons {
                     let global_n = neuron_base + n;
 
-                    let mut neuron_rng = (rng_seed as u32)
-                        .wrapping_add(global_n as u32 * 1000003);
-                    if neuron_rng == 0 { neuron_rng = 1; }
-
-                    if let Some(ref gpu_addrs) = gpu_addresses {
-                        let addr_base = global_n * num_examples;
-                        if use_sampling {
-                            let mut ex = geometric_skip(&mut neuron_rng, inv_log_complement);
-                            while ex < num_examples {
-                                let target_true = train_subset.target_bits[ex * num_clusters + cluster] == 1;
-                                let addr = gpu_addrs[addr_base + ex] as usize;
-                                clusters[cluster].nudge_cell(n, addr, target_true);
-                                ex += geometric_skip(&mut neuron_rng, inv_log_complement) + 1;
-                            }
-                        } else {
-                            for ex in 0..num_examples {
-                                let target_true = train_subset.target_bits[ex * num_clusters + cluster] == 1;
-                                let addr = gpu_addrs[addr_base + ex] as usize;
-                                clusters[cluster].nudge_cell(n, addr, target_true);
-                            }
-                        }
-                    } else {
-                        let n_bits = bits_per_neuron[global_n];
-                        let conn_start = layout.conn_offsets[global_n];
-                        let conns = &connections[conn_start..conn_start + n_bits];
-
-                        if use_sampling {
-                            let mut ex = geometric_skip(&mut neuron_rng, inv_log_complement);
-                            while ex < num_examples {
-                                let packed = &train_subset.packed_input[ex * wpe..(ex + 1) * wpe];
-                                let target_true = train_subset.target_bits[ex * num_clusters + cluster] == 1;
-                                let addr = compute_address_packed(packed, conns, n_bits);
-                                clusters[cluster].nudge_cell(n, addr, target_true);
-                                ex += geometric_skip(&mut neuron_rng, inv_log_complement) + 1;
-                            }
-                        } else {
-                            for ex in 0..num_examples {
-                                let packed = &train_subset.packed_input[ex * wpe..(ex + 1) * wpe];
-                                let target_true = train_subset.target_bits[ex * num_clusters + cluster] == 1;
-                                let addr = compute_address_packed(packed, conns, n_bits);
-                                clusters[cluster].nudge_cell(n, addr, target_true);
-                            }
-                        }
-                    }
+                    for_each_example(
+                        global_n, num_examples, &gpu_addresses,
+                        &train_subset.packed_input, wpe,
+                        connections, bits_per_neuron, layout,
+                        use_sampling, inv_log_complement, rng_seed,
+                        |ex, addr| {
+                            let target_true = train_subset.target_bits[ex * num_clusters + cluster] == 1;
+                            clusters[cluster].nudge_cell(n, addr, target_true);
+                        },
+                    );
                 }
             }
         }
@@ -1758,6 +1728,29 @@ pub(crate) fn train_and_get_scores(
     rng_seed: u64,
     sparse_threshold: usize,
 ) -> Vec<f32> {
+    train_and_get_scores_with_model(
+        connections, bits_per_neuron, neurons_per_cluster, num_clusters,
+        train_subset, eval_subset, memory_mode, neuron_sample_rate,
+        rng_seed, sparse_threshold,
+    ).0
+}
+
+/// Like `train_and_get_scores`, but also returns the trained model (clusters + layout).
+///
+/// Enables re-forwarding the trained model on different data (e.g., train data)
+/// to get predictions for soft-weighting downstream training.
+pub(crate) fn train_and_get_scores_with_model(
+    connections: &[i64],
+    bits_per_neuron: &[usize],
+    neurons_per_cluster: &[usize],
+    num_clusters: usize,
+    train_subset: &BitwiseSubset,
+    eval_subset: &BitwiseEvalSubset,
+    memory_mode: u8,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+    sparse_threshold: usize,
+) -> (Vec<f32>, Vec<ClusterStorage>, GenomeLayout) {
     let num_eval = eval_subset.num_examples;
     let expected_train = train_subset.num_examples;
     let empty_word: i64 = crate::neuron_memory::empty_word_for_mode(memory_mode);
@@ -1781,7 +1774,93 @@ pub(crate) fn train_and_get_scores(
         memory_mode, neuron_sample_rate, rng_seed,
     );
 
+    (scores, cluster_storage, layout)
+}
+
+/// Forward-only evaluation on a BitwiseSubset (e.g., training data).
+///
+/// Uses an already-trained model (clusters) to compute per-bit probabilities
+/// on new data. Useful for getting S0 predictions on train data after training.
+pub(crate) fn forward_scores_on_subset(
+    connections: &[i64],
+    bits_per_neuron: &[usize],
+    neurons_per_cluster: &[usize],
+    num_clusters: usize,
+    layout: &GenomeLayout,
+    subset: &BitwiseSubset,
+    clusters: &[ClusterStorage],
+    memory_mode: u8,
+) -> Vec<f32> {
+    let num = subset.num_examples;
+    let eval_wrapper = BitwiseEvalSubset {
+        packed_input: subset.packed_input.clone(),
+        targets: Vec::new(),
+        num_examples: num,
+        words_per_example: subset.words_per_example,
+    };
+    let mut scores = vec![0.0f32; num * num_clusters];
+    forward_eval_into(
+        connections, bits_per_neuron, neurons_per_cluster, num_clusters,
+        layout, &eval_wrapper, clusters, &mut scores, memory_mode,
+    );
     scores
+}
+
+/// Forward-only evaluation on a BitwiseEvalSubset using a pre-trained model.
+///
+/// Unlike `forward_scores_on_subset` which takes BitwiseSubset (training data),
+/// this takes BitwiseEvalSubset directly, avoiding a clone when the eval data
+/// is already in eval format.
+pub(crate) fn forward_scores_on_eval(
+    connections: &[i64],
+    bits_per_neuron: &[usize],
+    neurons_per_cluster: &[usize],
+    num_clusters: usize,
+    layout: &GenomeLayout,
+    eval_subset: &BitwiseEvalSubset,
+    clusters: &[ClusterStorage],
+    memory_mode: u8,
+) -> Vec<f32> {
+    let num = eval_subset.num_examples;
+    let mut scores = vec![0.0f32; num * num_clusters];
+    forward_eval_into(
+        connections, bits_per_neuron, neurons_per_cluster, num_clusters,
+        layout, eval_subset, clusters, &mut scores, memory_mode,
+    );
+    scores
+}
+
+/// Train a model without forward evaluation. Returns (clusters, layout).
+///
+/// Useful when you need to train and then forward on DIFFERENT data
+/// (e.g., Phase C invalid mode: train on augmented subsets, forward on all eval).
+pub(crate) fn train_only(
+    connections: &[i64],
+    bits_per_neuron: &[usize],
+    neurons_per_cluster: &[usize],
+    num_clusters: usize,
+    train_subset: &BitwiseSubset,
+    memory_mode: u8,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+    sparse_threshold: usize,
+) -> (Vec<ClusterStorage>, GenomeLayout) {
+    let expected_train = train_subset.num_examples;
+    let empty_word: i64 = crate::neuron_memory::empty_word_for_mode(memory_mode);
+    let layout = compute_genome_layout(
+        bits_per_neuron, neurons_per_cluster, sparse_threshold, expected_train,
+    );
+    let mut cluster_storage: Vec<ClusterStorage> = (0..num_clusters)
+        .map(|c| ClusterStorage::new(
+            neurons_per_cluster[c], layout.cluster_max_bits[c],
+            sparse_threshold, empty_word, memory_mode,
+        ))
+        .collect();
+    train_into(
+        connections, bits_per_neuron, neurons_per_cluster, num_clusters,
+        &layout, train_subset, &mut cluster_storage, memory_mode, neuron_sample_rate, rng_seed,
+    );
+    (cluster_storage, layout)
 }
 
 /// Result of adaptive evaluation for a single genome.
