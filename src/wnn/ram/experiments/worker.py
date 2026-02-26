@@ -668,6 +668,11 @@ class FlowWorker:
         self._log(f"  MultiStageEvaluator: stages={num_stages}, k={stage_k}, "
                    f"types={stage_cluster_type}, mode={params.get('memory_mode', 'QUAD_WEIGHTED')}, "
                    f"sample_rate={neuron_sample_rate}")
+
+        # Set WNN_LOG_PATH for Rust per-genome progress logging
+        if self._log_file:
+            os.environ["WNN_LOG_PATH"] = str(self._log_file)
+
         return evaluator
 
     def _create_full_evaluator(self, context_size: int, params: dict):

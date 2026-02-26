@@ -497,6 +497,19 @@ class MultiStageEvaluator(BaseEvaluator):
 		if eval_subset_idx is None:
 			eval_subset_idx = self.next_eval_idx()
 
+		# Enable Rust per-genome progress logging when WNN_LOG_PATH is set
+		progress_env_set = False
+		if len(genomes) > 1 and os.environ.get("WNN_LOG_PATH"):
+			current_gen = (generation + 1) if generation is not None else 0
+			total_gens = total_generations or 1
+			os.environ["WNN_PROGRESS_LOG"] = "1"
+			os.environ["WNN_PROGRESS_GEN"] = str(current_gen)
+			os.environ["WNN_PROGRESS_TOTAL_GENS"] = str(total_gens)
+			os.environ["WNN_PROGRESS_TYPE"] = kwargs.get("log_type", "Eval")
+			os.environ["WNN_PROGRESS_TOTAL"] = str(len(genomes))
+			os.environ["WNN_PROGRESS_OFFSET"] = "0"
+			progress_env_set = True
+
 		start = time.time()
 		if self._is_stage_selector(self._target_stage):
 			raw = self._evaluate_selector_rust(self._target_stage, genomes, train_subset_idx, eval_subset_idx)
@@ -505,6 +518,9 @@ class MultiStageEvaluator(BaseEvaluator):
 		else:
 			raw = self._evaluate_bitwise_rust(self._target_stage, genomes, train_subset_idx, eval_subset_idx)
 		elapsed = time.time() - start
+
+		if progress_env_set:
+			os.environ.pop("WNN_PROGRESS_LOG", None)
 
 		# Cache bit accuracy on genomes
 		for genome, (_, _, bit_acc) in zip(genomes, raw):
