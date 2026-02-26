@@ -724,6 +724,11 @@ class DashboardClient:
 		self._logger(f"Created combined validation for flow {flow_id}: {genome_type}")
 		return result
 
+	def get_flow_validation_summaries(self, flow_id: int) -> list[dict]:
+		"""Get all validation summaries for a flow (across all experiments)."""
+		result = self._request("GET", f"/api/flows/{flow_id}/validations")
+		return result if result else []
+
 	def get_combined_validations(self, flow_id: int) -> list[dict]:
 		"""
 		Get combined validations for a flow.

@@ -396,6 +396,8 @@ pub enum GenomeValidationType {
     BestCe,
     BestAcc,
     BestFitness,
+    BestOverallCe,
+    BestOverallAcc,
 }
 
 /// Full-dataset validation result for a single genome at a checkpoint

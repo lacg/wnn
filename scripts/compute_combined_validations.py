@@ -6,6 +6,9 @@ Loads checkpoint files for the last experiment of each stage, identifies
 best_ce / best_acc / best_fitness genomes from each stage's population,
 then calls compute_combined_metrics() for each genome type pair.
 
+Also computes "best overall" CE and ACC by finding the genome with the absolute
+best CE (or ACC) across ALL experiments in each stage, not just the last one.
+
 Results are stored in the dashboard via POST /api/flows/{id}/combined-validations.
 
 Usage:
@@ -70,6 +73,50 @@ def find_best_genomes(checkpoint_data: dict):
 				results["best_acc"] = best_fitness_genome
 
 	return results
+
+
+def find_best_overall_experiments(validations, exp_by_stage, num_stages):
+	"""Find which experiment had the best CE and best ACC for each stage.
+
+	Uses validation summaries (final point, best_ce/best_acc genome types)
+	to find the absolute best across all experiments in each stage.
+
+	Returns:
+		dict mapping stage -> {"best_ce_exp": exp, "best_acc_exp": exp,
+		                       "best_ce_val": float, "best_acc_val": float}
+	"""
+	# Build experiment_id -> stage mapping
+	exp_id_to_stage = {}
+	for stage, exps in exp_by_stage.items():
+		for exp in exps:
+			exp_id_to_stage[exp['id']] = stage
+
+	# Filter to final validation summaries only
+	final_vals = [v for v in validations if v.get('validation_point') == 'final']
+
+	result = {}
+	for stage in range(num_stages):
+		stage_exp_ids = {e['id'] for e in exp_by_stage.get(stage, [])}
+
+		# Find best CE: lowest CE among best_ce genome type validations
+		ce_vals = [v for v in final_vals
+				   if v['experiment_id'] in stage_exp_ids and v.get('genome_type') == 'best_ce']
+		acc_vals = [v for v in final_vals
+					if v['experiment_id'] in stage_exp_ids and v.get('genome_type') == 'best_acc']
+
+		stage_result = {}
+		if ce_vals:
+			best_ce_val = min(ce_vals, key=lambda v: v['ce'])
+			stage_result['best_ce_exp_id'] = best_ce_val['experiment_id']
+			stage_result['best_ce_val'] = best_ce_val['ce']
+		if acc_vals:
+			best_acc_val = max(acc_vals, key=lambda v: v['accuracy'])
+			stage_result['best_acc_exp_id'] = best_acc_val['experiment_id']
+			stage_result['best_acc_val'] = best_acc_val['accuracy']
+
+		result[stage] = stage_result
+
+	return result
 
 
 def main():
@@ -137,12 +184,6 @@ def main():
 			print("Error: Could not determine checkpoint directory. Use --checkpoint-dir")
 			sys.exit(1)
 
-	# Load last checkpoint of each stage
-	# Convention: experiments are numbered exp_00 through exp_N
-	# Stage boundary: S0 ends at exp_09 (or similar), S1 starts at exp_10
-	# We need the LAST experiment of each stage
-	stage_checkpoints: dict[int, dict] = {}
-
 	# Get experiments sorted by sequence order
 	experiments = client.list_flow_experiments(args.flow_id)
 	if not experiments:
@@ -151,13 +192,17 @@ def main():
 
 	# Group experiments by target_stage (from name pattern like "S0: ..." or "S1: ...")
 	exp_by_stage: dict[int, list] = {}
+	exp_by_id: dict[int, dict] = {}
 	for exp in experiments:
 		name = exp.get('name', '')
+		exp_by_id[exp['id']] = exp
 		for s in range(num_stages):
 			if f"S{s}" in name:
 				exp_by_stage.setdefault(s, []).append(exp)
 				break
 
+	# Load last checkpoint of each stage
+	stage_checkpoints: dict[int, dict] = {}
 	for stage in range(num_stages):
 		stage_exps = exp_by_stage.get(stage, [])
 		if not stage_exps:
@@ -189,16 +234,65 @@ def main():
 		genomes = stage_genomes[stage]
 		print(f"  Stage {stage} genomes: {', '.join(genomes.keys())}")
 
+	# --- Best Overall: find best CE/ACC across ALL experiments per stage ---
+	print()
+	print("Finding best overall genomes across all experiments...")
+	validations = client.get_flow_validation_summaries(args.flow_id)
+	best_overall = find_best_overall_experiments(validations, exp_by_stage, num_stages)
+
+	# Load checkpoints for best-overall experiments (if different from last)
+	overall_genomes: dict[str, list] = {}  # genome_type -> [s0_genome, s1_genome]
+
+	for overall_type, genome_key in [("best_overall_ce", "best_ce"), ("best_overall_acc", "best_acc")]:
+		genome_pair = []
+		all_found = True
+		for stage in range(num_stages):
+			info = best_overall.get(stage, {})
+			exp_id_key = f"{genome_key}_exp_id"
+			val_key = f"{genome_key}_val"
+
+			if exp_id_key not in info:
+				print(f"  {overall_type}: No validation data for stage {stage}, skipping")
+				all_found = False
+				break
+
+			best_exp_id = info[exp_id_key]
+			best_exp = exp_by_id.get(best_exp_id)
+			if not best_exp:
+				print(f"  {overall_type}: Experiment {best_exp_id} not found, skipping")
+				all_found = False
+				break
+
+			best_exp_idx = best_exp.get('sequence_order', 0)
+			val_display = f"CE={info[val_key]:.4f}" if "ce" in genome_key else f"ACC={info[val_key]:.2%}"
+			print(f"  {overall_type} S{stage}: exp_{best_exp_idx:02d} ({best_exp.get('name', '?')}) {val_display}")
+
+			# Load checkpoint for this experiment
+			exp_dir = ckpt_base / f"exp_{best_exp_idx:02d}"
+			ckpt_files = list(exp_dir.glob("*.json.gz"))
+			if not ckpt_files:
+				print(f"  {overall_type}: No checkpoint for exp_{best_exp_idx:02d}, skipping")
+				all_found = False
+				break
+
+			ckpt_data = load_checkpoint(ckpt_files[0])
+			genomes = find_best_genomes(ckpt_data)
+			genome = genomes.get(genome_key)
+			if genome is None:
+				print(f"  {overall_type}: No {genome_key} genome in checkpoint, skipping")
+				all_found = False
+				break
+
+			genome_pair.append(genome)
+
+		if all_found and len(genome_pair) == num_stages:
+			overall_genomes[overall_type] = genome_pair
+
 	# Create evaluator for combined metrics
 	print()
 	print("Creating MultiStageEvaluator...")
 	from wnn.ram.architecture.multistage_evaluator import MultiStageEvaluator
 	from wnn.ram.experiments.experiment import StageMode
-
-	# Load tokenizer + data
-	from wnn.ram.experiments.worker import FlowWorker
-	worker = FlowWorker.__new__(FlowWorker)
-	worker._log = print
 
 	# Load data the same way as the worker
 	print("Loading GPT-2 tokenizer + WikiText-2...")
@@ -249,11 +343,23 @@ def main():
 	print("  Computing Combined Metrics")
 	print("=" * 70)
 
-	for genome_type in ("best_ce", "best_acc", "best_fitness"):
+	# All genome types to compute: standard 3 + best overall 2
+	all_genome_types = [
+		("best_ce", stage_genomes),
+		("best_acc", stage_genomes),
+		("best_fitness", stage_genomes),
+	]
+	# Add best overall types
+	for overall_type, genome_pair in overall_genomes.items():
+		# Wrap in a stage_genomes-like structure
+		overall_stage_genomes = {s: {overall_type: genome_pair[s]} for s in range(num_stages)}
+		all_genome_types.append((overall_type, overall_stage_genomes))
+
+	for genome_type, genomes_map in all_genome_types:
 		# Build genome pair: one from each stage
 		genome_pair = []
 		for stage in range(num_stages):
-			g = stage_genomes[stage].get(genome_type)
+			g = genomes_map[stage].get(genome_type)
 			if g is None:
 				print(f"  {genome_type}: Missing genome for stage {stage}, skipping")
 				break
@@ -279,7 +385,9 @@ def main():
 					print(f"    -> Stored in dashboard")
 
 			except Exception as e:
+				import traceback
 				print(f"  {genome_type}: Failed - {e}")
+				traceback.print_exc()
 
 	print()
 	print("Done!")

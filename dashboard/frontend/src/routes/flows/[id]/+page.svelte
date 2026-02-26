@@ -1581,8 +1581,8 @@
                 {#each combinedValidations as cv}
                   <tr>
                     <td>
-                      <span class="genome-type-badge" class:best-ce={cv.genome_type === 'best_ce'} class:best-acc={cv.genome_type === 'best_acc'} class:best-fitness={cv.genome_type === 'best_fitness'}>
-                        {cv.genome_type === 'best_ce' ? 'Best CE' : cv.genome_type === 'best_acc' ? 'Best ACC' : 'Best Fitness'}
+                      <span class="genome-type-badge" class:best-ce={cv.genome_type === 'best_ce' || cv.genome_type === 'best_overall_ce'} class:best-acc={cv.genome_type === 'best_acc' || cv.genome_type === 'best_overall_acc'} class:best-fitness={cv.genome_type === 'best_fitness'} class:best-overall={cv.genome_type === 'best_overall_ce' || cv.genome_type === 'best_overall_acc'}>
+                        {cv.genome_type === 'best_ce' ? 'Best CE' : cv.genome_type === 'best_acc' ? 'Best ACC' : cv.genome_type === 'best_fitness' ? 'Best Fitness' : cv.genome_type === 'best_overall_ce' ? 'Best Overall CE' : 'Best Overall ACC'}
                       </span>
                     </td>
                     <td class="mono">{cv.combined_ce.toFixed(4)}</td>
@@ -2875,5 +2875,10 @@
   .genome-type-badge.best-fitness {
     background: color-mix(in srgb, var(--accent-purple, #8b5cf6) 20%, transparent);
     color: var(--accent-purple, #8b5cf6);
+  }
+
+  .genome-type-badge.best-overall {
+    border: 1.5px solid currentColor;
+    font-weight: 600;
   }
 </style>

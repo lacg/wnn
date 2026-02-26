@@ -1547,6 +1547,8 @@ pub mod queries {
             "best_ce" => GenomeValidationType::BestCe,
             "best_acc" => GenomeValidationType::BestAcc,
             "best_fitness" => GenomeValidationType::BestFitness,
+            "best_overall_ce" => GenomeValidationType::BestOverallCe,
+            "best_overall_acc" => GenomeValidationType::BestOverallAcc,
             _ => GenomeValidationType::BestCe,
         }
     }
