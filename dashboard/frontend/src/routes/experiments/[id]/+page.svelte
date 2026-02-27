@@ -491,8 +491,13 @@
               ce: ev.ce, accuracy: ev.accuracy, fitness: ev.fitness_score,
             });
           }
-          // Sort by CE while in-progress (no fitness yet)
-          expanded.sort((a, b) => a.ce - b.ce);
+          // Sort by fitness (lower = better), fall back to CE
+          expanded.sort((a, b) => {
+            if (a.fitness != null && b.fitness != null) return a.fitness - b.fitness;
+            if (a.fitness != null) return -1;
+            if (b.fitness != null) return 1;
+            return a.ce - b.ce;
+          });
           expanded.forEach((g, i) => g.rank = i + 1);
           expandedPopulation = expanded;
           seedEvalComplete = false;
@@ -1413,13 +1418,17 @@
         {:else if genomeEvaluations.length === 0}
           <div class="empty-state">No genome evaluations recorded</div>
         {:else}
-          {@const elites = genomeEvaluations.filter(g => g.role === 'elite' || g.role === 'top_k').sort((a, b) => a.position - b.position)}
+          {@const elites = genomeEvaluations.filter(g => g.role === 'elite' || g.role === 'top_k').sort((a, b) => {
+            if (a.fitness_score !== null && b.fitness_score !== null) return a.fitness_score - b.fitness_score;
+            return a.position - b.position;
+          })}
           {@const others = genomeEvaluations.filter(g => g.role !== 'elite' && g.role !== 'top_k').sort((a, b) => {
             // Sort by fitness_score if available (lower = better), fall back to CE
             if (a.fitness_score !== null && b.fitness_score !== null) return a.fitness_score - b.fitness_score;
             return a.ce - b.ce;
           })}
 
+          {@const hasFitness = [...elites, ...others].some(g => g.fitness_score !== null)}
           {#if elites.length > 0}
             <h3>Top Genomes ({elites.length})</h3>
             <div class="genome-table-scroll">
@@ -1427,15 +1436,19 @@
                 <thead>
                   <tr>
                     <th>#</th>
+                    {#if hasFitness}<th>Fitness</th>{/if}
                     <th>CE</th>
                     <th>Accuracy</th>
                     <th>Role</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {#each elites as genome}
+                  {#each elites as genome, idx}
                     <tr class="elite">
-                      <td>{genome.elite_rank !== null ? genome.elite_rank + 1 : genome.position + 1}</td>
+                      <td>{idx + 1}</td>
+                      {#if hasFitness}
+                        <td class="mono">{genome.fitness_score !== null ? genome.fitness_score.toFixed(2) : '—'}</td>
+                      {/if}
                       <td class:best={genome.ce === selectedIteration.best_ce}>{formatCE(genome.ce)}</td>
                       <td>{formatAcc(genome.accuracy)}</td>
                       <td>{formatRole(genome.role)}</td>
@@ -1453,11 +1466,9 @@
                 <thead>
                   <tr>
                     <th>#</th>
+                    {#if hasFitness}<th>Fitness</th>{/if}
                     <th>CE</th>
                     <th>Accuracy</th>
-                    {#if others.some(g => g.fitness_score !== null)}
-                      <th>Fitness</th>
-                    {/if}
                     <th>Role</th>
                   </tr>
                 </thead>
@@ -1465,11 +1476,11 @@
                   {#each others as genome, idx}
                     <tr>
                       <td>{idx + 1}</td>
+                      {#if hasFitness}
+                        <td class="mono">{genome.fitness_score !== null ? genome.fitness_score.toFixed(2) : '—'}</td>
+                      {/if}
                       <td>{formatCE(genome.ce)}</td>
                       <td>{formatAcc(genome.accuracy)}</td>
-                      {#if others.some(g => g.fitness_score !== null)}
-                        <td>{genome.fitness_score !== null ? genome.fitness_score.toFixed(2) : '—'}</td>
-                      {/if}
                       <td>{formatRole(genome.role)}</td>
                     </tr>
                   {/each}

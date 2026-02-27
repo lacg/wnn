@@ -1472,6 +1472,8 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 								)
 								# Role: first total_elites are elites, rest are offspring
 								role = GenomeRole.ELITE if pos < total_elites else GenomeRole.OFFSPRING
+								# Include fitness score from the fitness calculator
+								fs = combined_scores[pos] if pos < len(combined_scores) else None
 								evaluations.append({
 									"iteration_id": iteration_id,
 									"genome_id": genome_id,
@@ -1480,6 +1482,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 									"ce": ce,
 									"accuracy": acc if acc is not None else 0.0,
 									"elite_rank": pos if pos < total_elites else None,
+									"fitness_score": fs,
 								})
 						if evaluations:
 							self._tracker.record_genome_evaluations_batch(evaluations)
@@ -2276,6 +2279,11 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 					if iteration_id and self._tracker_experiment_id and HAS_TRACKER and GenomeRole is not None:
 						evaluations = []
 
+						# Compute fitness scores for combined pop + offspring
+						all_items = list(pop) + list(offspring)
+						all_tuples = [(i, ce, acc or 0.0) for i, (_, ce, acc) in enumerate(all_items)]
+						all_scores = fitness_calculator.fitness(all_tuples) if fitness_calculator else [None] * len(all_items)
+
 						# Record population members as TOP_K
 						for pos, (genome, ce, acc) in enumerate(pop):
 							config = self.genome_to_config(genome)
@@ -2291,6 +2299,7 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 									"ce": ce,
 									"accuracy": acc if acc is not None else 0.0,
 									"elite_rank": pos,
+									"fitness_score": all_scores[pos],
 								})
 
 						# Record offspring as NEIGHBOR
@@ -2307,6 +2316,7 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 									"role": GenomeRole.NEIGHBOR,
 									"ce": ce,
 									"accuracy": acc if acc is not None else 0.0,
+									"fitness_score": all_scores[len(pop) + pos],
 								})
 
 						if evaluations:
