@@ -339,6 +339,14 @@
     }
   }
 
+  function parseTier(g: GenomeEvaluation): { neurons: number | null; bits: number | null } {
+    if (!g.tiers_json) return { neurons: null, bits: null };
+    try {
+      const t: GenomeTier[] = JSON.parse(g.tiers_json);
+      return t.length > 0 ? { neurons: t[0].neurons, bits: t[0].bits } : { neurons: null, bits: null };
+    } catch { return { neurons: null, bits: null }; }
+  }
+
   // Flow steps directly from DB experiments (all exist with pending/running/completed status)
   $: flowSteps = flowExperiments
     .sort((a, b) => (a.sequence_order ?? 0) - (b.sequence_order ?? 0))
@@ -1429,6 +1437,7 @@
           })}
 
           {@const hasFitness = [...elites, ...others].some(g => g.fitness_score !== null)}
+          {@const hasTiers = [...elites, ...others].some(g => g.tiers_json)}
           {#if elites.length > 0}
             <h3>Top Genomes ({elites.length})</h3>
             <div class="genome-table-scroll">
@@ -1439,11 +1448,13 @@
                     {#if hasFitness}<th>Fitness</th>{/if}
                     <th>CE</th>
                     <th>Accuracy</th>
+                    {#if hasTiers}<th>Neurons</th><th>Bits</th>{/if}
                     <th>Role</th>
                   </tr>
                 </thead>
                 <tbody>
                   {#each elites as genome, idx}
+                    {@const tier = parseTier(genome)}
                     <tr class="elite">
                       <td>{idx + 1}</td>
                       {#if hasFitness}
@@ -1451,6 +1462,10 @@
                       {/if}
                       <td class:best={genome.ce === selectedIteration.best_ce}>{formatCE(genome.ce)}</td>
                       <td>{formatAcc(genome.accuracy)}</td>
+                      {#if hasTiers}
+                        <td class="mono">{tier.neurons ?? '—'}</td>
+                        <td class="mono">{tier.bits ?? '—'}</td>
+                      {/if}
                       <td>{formatRole(genome.role)}</td>
                     </tr>
                   {/each}
@@ -1469,11 +1484,13 @@
                     {#if hasFitness}<th>Fitness</th>{/if}
                     <th>CE</th>
                     <th>Accuracy</th>
+                    {#if hasTiers}<th>Neurons</th><th>Bits</th>{/if}
                     <th>Role</th>
                   </tr>
                 </thead>
                 <tbody>
                   {#each others as genome, idx}
+                    {@const tier = parseTier(genome)}
                     <tr>
                       <td>{idx + 1}</td>
                       {#if hasFitness}
@@ -1481,6 +1498,10 @@
                       {/if}
                       <td>{formatCE(genome.ce)}</td>
                       <td>{formatAcc(genome.accuracy)}</td>
+                      {#if hasTiers}
+                        <td class="mono">{tier.neurons ?? '—'}</td>
+                        <td class="mono">{tier.bits ?? '—'}</td>
+                      {/if}
                       <td>{formatRole(genome.role)}</td>
                     </tr>
                   {/each}
