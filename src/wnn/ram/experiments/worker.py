@@ -467,6 +467,7 @@ class FlowWorker:
                 flow_config.max_neurons = params.get("max_neurons", 300)
                 flow_config.invalid_mode = params.get("invalid_mode", False)
                 flow_config.top_m = params.get("top_m", 5)
+                flow_config.label_smoothing = params.get("label_smoothing", 0.0)
                 # Per-stage bounds from dashboard
                 flow_config.stage_min_bits_list = params.get("stage_min_bits")
                 flow_config.stage_max_bits_list = params.get("stage_max_bits")

@@ -193,6 +193,8 @@ class FlowConfig:
 	# Invalid token mode: S1 groups reject wrong-group inputs via filtered gating
 	invalid_mode: bool = False
 	top_m: int = 5
+	# Label smoothing: CE_smooth = -log[(1-ε) × P_hierarchical + ε/vocab_size]
+	label_smoothing: float = 0.0
 	# Per-stage bounds override (indexed by stage)
 	stage_min_bits_list: Optional[list[int]] = None
 	stage_max_bits_list: Optional[list[int]] = None
@@ -727,6 +729,7 @@ class FlowConfig:
 				"sparse_threshold": self.sparse_threshold,
 				"invalid_mode": self.invalid_mode,
 				"top_m": self.top_m,
+				"label_smoothing": self.label_smoothing,
 			})
 
 		return APIFlowConfig(
@@ -1319,6 +1322,7 @@ class Flow:
 					try:
 						result = self.evaluator.compute_combined_metrics(
 							genome_pair,
+							label_smoothing=cfg.label_smoothing,
 							invalid_mode=cfg.invalid_mode,
 							top_m=cfg.top_m,
 						)
