@@ -1041,6 +1041,42 @@ class Flow:
 								f"No checkpoint or database results found for experiment {idx} ({exp_config.name}). "
 								f"Either run from the beginning or provide a valid checkpoint."
 							)
+					# Stage boundary detection during skip (mirrors logic at ~line 1220)
+					if is_multi_stage and idx + 1 < len(cfg.experiments):
+						next_config = cfg.experiments[idx + 1]
+						if hasattr(next_config, 'target_stage') and next_config.target_stage != exp_config.target_stage:
+							prev_stage = exp_config.target_stage
+							next_stage = next_config.target_stage
+							self.log(f"  Stage boundary during resume: S{prev_stage} → S{next_stage}")
+
+							# Freeze previous stage genome + population
+							frozen_genomes[prev_stage] = current_genome
+							if current_population is not None and current_evals is not None:
+								frozen_populations[prev_stage] = (list(current_population), list(current_evals))
+							self.log(f"  Frozen S{prev_stage} genome: {current_genome}")
+
+							# Re-encode next stage data with previous stage's predictions
+							if hasattr(self.evaluator, 'recompute_stage_with_predictions'):
+								self.log(f"  Recomputing S{next_stage} data with S{prev_stage} predictions...")
+								train_acc, eval_acc = self.evaluator.recompute_stage_with_predictions(
+									frozen_stage=prev_stage,
+									target_stage=next_stage,
+									frozen_genome=current_genome,
+								)
+								self.log(f"  S{prev_stage} prediction accuracy: train={train_acc:.2%}, eval={eval_acc:.2%}")
+
+							# Switch evaluator target stage
+							self.evaluator.target_stage = next_stage
+							self.log(f"  Evaluator target_stage → {next_stage}")
+
+							# Reset state for new stage
+							current_genome = None
+							current_population = None
+							current_fitness = None
+							current_threshold = None
+							current_evals = None
+							self.log(f"  State reset for S{next_stage}")
+
 					continue
 
 				# Update flow status for dashboard visibility
