@@ -48,7 +48,7 @@
 
   // Mode-specific grid defaults (must match worker.py fallback grids)
   const GRID_DEFAULTS: Record<string, { neurons: string; bits: string }> = {
-    bitwise:  { neurons: '5,10,25,50,100,200,300', bits: '4,6,8,10,12,16,20,24' },
+    bitwise:  { neurons: '5,10,25,50', bits: '4,6,8,10,12,16,20,24' },
     tiered:   { neurons: '20,30,40,50',             bits: '18,19,20,21,22,23' },
     selector: { neurons: '5,10,15',                  bits: '5,6,7,8,9,10' },
   };
@@ -84,7 +84,7 @@
     return {
       clusterType: 'bitwise', k: 256,
       minBits: 4, maxBits: 24, minNeurons: 5, maxNeurons: 300,
-      neuronsGrid: '5,10,25,50,100,200,300',
+      neuronsGrid: '5,10,25,50',
       bitsGrid: '4,6,8,10,12,16,20,24',
       gaGenerations: 250, tsIterations: 250, adaptationIterations: 50,
       populationSize: 50, neighborsPerIter: 50, patience: 10,

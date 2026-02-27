@@ -516,7 +516,7 @@ class FlowConfig:
 
 		# Default grids for bitwise stages
 		if neurons_grid is None:
-			neurons_grid = [5, 10, 25, 50, 100, 200, 300]
+			neurons_grid = [5, 10, 25, 50]
 		if bits_grid is None:
 			bits_grid = [4, 6, 8, 10, 12, 16, 20, 24]
 
