@@ -146,6 +146,7 @@ impl MultiStageTokenCache {
         num_eval_parts: usize,
         _pad_token_id: u32,
         stage_cluster_types: Option<Vec<String>>,
+        custom_cluster_of: Option<Vec<u16>>,
     ) -> Self {
         let bits_per_token = bits_needed(vocab_size);
         let context_input_bits = context_size * bits_per_token;
@@ -169,7 +170,16 @@ impl MultiStageTokenCache {
         let mut index_in_cluster = vec![0u16; vocab_size];
         let mut cluster_tokens: Vec<Vec<u32>> = vec![Vec::new(); k];
 
-        if any_tiered {
+        if let Some(ref custom) = custom_cluster_of {
+            // Custom clustering (e.g. semantic via GPT-2 embeddings)
+            assert_eq!(custom.len(), vocab_size,
+                "custom_cluster_of length {} != vocab_size {}", custom.len(), vocab_size);
+            for t in 0..vocab_size {
+                cluster_of[t] = custom[t];
+                index_in_cluster[t] = cluster_tokens[custom[t] as usize].len() as u16;
+                cluster_tokens[custom[t] as usize].push(t as u32);
+            }
+        } else if any_tiered {
             // Frequency-interleaved: sort tokens by training frequency, assign by rank
             let mut token_freq = vec![0u64; vocab_size];
             for &t in &train_tokens {

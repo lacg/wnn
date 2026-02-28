@@ -4848,7 +4848,7 @@ struct MultiStageCacheWrapper {
 #[pymethods]
 impl MultiStageCacheWrapper {
     #[new]
-    #[pyo3(signature = (train_tokens, eval_tokens, vocab_size, context_size, k, num_parts, num_eval_parts, pad_token_id, sparse_threshold=None, stage_cluster_types=None))]
+    #[pyo3(signature = (train_tokens, eval_tokens, vocab_size, context_size, k, num_parts, num_eval_parts, pad_token_id, sparse_threshold=None, stage_cluster_types=None, custom_cluster_of=None))]
     fn new(
         train_tokens: Vec<u32>,
         eval_tokens: Vec<u32>,
@@ -4860,12 +4860,13 @@ impl MultiStageCacheWrapper {
         pad_token_id: u32,
         sparse_threshold: Option<usize>,
         stage_cluster_types: Option<Vec<String>>,
+        custom_cluster_of: Option<Vec<u16>>,
     ) -> Self {
         Self {
             inner: multistage::MultiStageTokenCache::new(
                 train_tokens, eval_tokens, vocab_size, context_size,
                 k, num_parts, num_eval_parts, pad_token_id,
-                stage_cluster_types,
+                stage_cluster_types, custom_cluster_of,
             ),
             sparse_threshold_override: sparse_threshold,
         }

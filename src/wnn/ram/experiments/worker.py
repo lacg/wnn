@@ -636,6 +636,29 @@ class FlowWorker:
         stage_k = params.get("stage_k")
         stage_cluster_type = params.get("stage_cluster_type")
 
+        # Handle semantic clustering: compute in Python, pass to Rust as custom_cluster_of
+        custom_cluster_of = None
+        if stage_cluster_type and "semantic" in stage_cluster_type:
+            from wnn.ram.architecture.token_clustering import TokenClustering
+            from wnn.ram.architecture.multistage_evaluator import compute_default_k
+
+            # Compute K values (semantic behaves like tiered for K)
+            if stage_k is None:
+                stage_k = compute_default_k(num_stages, stage_cluster_type, self._vocab_size)
+
+            semantic_k = stage_k[stage_cluster_type.index("semantic")]
+            cache_dir = str(Path("cache"))
+            self._log(f"  Computing semantic clustering (k={semantic_k})...")
+            clustering = TokenClustering.create_semantic(self._vocab_size, semantic_k, cache_dir)
+            custom_cluster_of = clustering.cluster_of
+            self._log(f"  Semantic clustering: k={semantic_k}, max_group={clustering.max_cluster_size}, "
+                       f"min_group={min(len(g) for g in clustering.cluster_tokens)}")
+
+            # Replace "semantic" → "tiered" for Rust (both use direct K-class prediction)
+            stage_cluster_type = [
+                "tiered" if t == "semantic" else t for t in stage_cluster_type
+            ]
+
         # Parse stage_mode from params (could be string or list of ints)
         raw_stage_mode = params.get("stage_mode")
         if raw_stage_mode is not None:
@@ -665,6 +688,7 @@ class FlowWorker:
             memory_mode=memory_mode,
             neuron_sample_rate=neuron_sample_rate,
             log_path=str(self._log_file) if self._log_file else None,
+            custom_cluster_of=custom_cluster_of,
         )
 
         self._log(f"  MultiStageEvaluator: stages={num_stages}, k={stage_k}, "

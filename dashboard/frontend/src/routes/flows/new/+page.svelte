@@ -50,6 +50,7 @@
   const GRID_DEFAULTS: Record<string, { neurons: string; bits: string }> = {
     bitwise:  { neurons: '5,10,25,50', bits: '4,6,8,10,12,16,20,24' },
     tiered:   { neurons: '20,30,40,50',             bits: '18,19,20,21,22,23' },
+    semantic: { neurons: '20,30,40,50',             bits: '18,19,20,21,22,23' },
     selector: { neurons: '5,10,15',                  bits: '5,6,7,8,9,10' },
   };
   const ALL_DEFAULT_NEURONS = new Set(Object.values(GRID_DEFAULTS).map(d => d.neurons));
@@ -57,7 +58,9 @@
 
   function stageGridMode(stageIdx: number): string {
     if (stageMode === 'selector' && stageIdx > 0) return 'selector';
-    return stageConfigs[stageIdx]?.clusterType === 'tiered' ? 'tiered' : 'bitwise';
+    const ct = stageConfigs[stageIdx]?.clusterType;
+    if (ct === 'tiered' || ct === 'semantic') return ct;
+    return 'bitwise';
   }
 
   /** Update grid defaults for a stage IF the user hasn't customized them. */
@@ -147,7 +150,7 @@
       const cfg = defaultStageConfig();
       // Apply mode-specific grid defaults for the new stage
       const mode = stageMode === 'selector' && newIdx > 0 ? 'selector'
-        : cfg.clusterType === 'tiered' ? 'tiered' : 'bitwise';
+        : (cfg.clusterType === 'tiered' || cfg.clusterType === 'semantic') ? cfg.clusterType : 'bitwise';
       cfg.neuronsGrid = GRID_DEFAULTS[mode].neurons;
       cfg.bitsGrid = GRID_DEFAULTS[mode].bits;
       stageConfigs = [...stageConfigs, cfg];
@@ -701,6 +704,7 @@
                 <select id="stageArch_{i}" bind:value={config.clusterType} on:change={() => applyGridDefaults(i)}>
                   <option value="bitwise">Bitwise</option>
                   <option value="tiered">Tiered</option>
+                  <option value="semantic">Semantic (GPT-2 embeddings)</option>
                 </select>
               </div>
               <div class="form-group">

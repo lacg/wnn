@@ -1,18 +1,22 @@
 """
 Token Clustering — Balanced token-to-group assignment for two-stage prediction.
 
-Splits vocabulary into K balanced groups using frequency-interleaved round-robin:
-  token rank i → group (i % K)
-
-GPT-2 token IDs are roughly frequency-ordered, so round-robin on raw IDs
-gives each group similar total training data density.
+Splits vocabulary into K balanced groups using:
+  - Round-robin: token_id % K (frequency-interleaved for GPT-2)
+  - Semantic: K-means on GPT-2 wte embeddings (similar tokens share groups)
 
 Each group gets ≈ vocab_size/K tokens. Stage 1 predicts the group,
 Stage 2 predicts the token within the group.
 """
 
+import json
+import logging
 from dataclasses import dataclass
 from math import ceil, log2
+from pathlib import Path
+from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 def _bits_needed(n: int) -> int:
@@ -71,6 +75,123 @@ class TokenClustering:
 
 		for token_id in range(vocab_size):
 			group = token_id % k
+			cluster_of[token_id] = group
+			index_in_cluster[token_id] = len(cluster_tokens[group])
+			cluster_tokens[group].append(token_id)
+
+		max_cluster_size = max(len(g) for g in cluster_tokens)
+		bits_per_cluster_id = _bits_needed(k)
+		bits_per_within_index = _bits_needed(max_cluster_size)
+
+		return cls(
+			k=k,
+			vocab_size=vocab_size,
+			cluster_of=cluster_of,
+			index_in_cluster=index_in_cluster,
+			cluster_tokens=cluster_tokens,
+			max_cluster_size=max_cluster_size,
+			bits_per_cluster_id=bits_per_cluster_id,
+			bits_per_within_index=bits_per_within_index,
+		)
+
+	@classmethod
+	def create_semantic(
+		cls, vocab_size: int, k: int, cache_dir: Optional[str] = None
+	) -> 'TokenClustering':
+		"""Create clustering via K-means on GPT-2 token embeddings.
+
+		Semantically similar tokens (e.g. "cat", "dog") share groups,
+		making group prediction from context much easier for S0.
+
+		Args:
+			vocab_size: Total vocabulary (e.g. 50257)
+			k: Number of groups (e.g. 225 for tiered)
+			cache_dir: Directory to cache clustering result. None = no caching.
+
+		Returns:
+			TokenClustering with semantically coherent groups.
+		"""
+		if k < 2:
+			raise ValueError(f"k must be >= 2, got {k}")
+		if k > vocab_size:
+			raise ValueError(f"k ({k}) > vocab_size ({vocab_size})")
+
+		# Check cache first
+		cache_path = None
+		if cache_dir is not None:
+			cache_path = Path(cache_dir) / f"semantic_clusters_k{k}.json"
+			if cache_path.exists():
+				logger.info(f"Loading cached semantic clustering from {cache_path}")
+				with open(cache_path) as f:
+					labels = json.load(f)
+				assert len(labels) == vocab_size, f"Cached labels size {len(labels)} != vocab_size {vocab_size}"
+				return cls._from_labels(vocab_size, k, labels)
+
+		# Load GPT-2 embeddings
+		import numpy as np
+		from transformers import GPT2Model
+		logger.info("Loading GPT-2 embeddings for semantic clustering...")
+		model = GPT2Model.from_pretrained("gpt2")
+		embeddings = model.wte.weight.detach().numpy()[:vocab_size]  # (vocab_size, 768)
+
+		# K-means clustering
+		from sklearn.cluster import MiniBatchKMeans
+		logger.info(f"Running MiniBatchKMeans (k={k}) on {vocab_size} embeddings...")
+		kmeans = MiniBatchKMeans(n_clusters=k, random_state=42, batch_size=1024)
+		labels = kmeans.fit_predict(embeddings).tolist()
+
+		# Balance enforcement: reassign tokens in over-capacity clusters
+		target_size = vocab_size / k
+		max_size = int(target_size * 2)
+		cluster_counts = [0] * k
+		for lbl in labels:
+			cluster_counts[lbl] += 1
+
+		oversized = {c for c, cnt in enumerate(cluster_counts) if cnt > max_size}
+		if oversized:
+			logger.info(f"Rebalancing {len(oversized)} oversized clusters (max_size={max_size})...")
+			centers = kmeans.cluster_centers_  # (k, 768)
+			for token_id in range(vocab_size):
+				if labels[token_id] not in oversized:
+					continue
+				# Find nearest under-capacity cluster
+				emb = embeddings[token_id]
+				dists = np.linalg.norm(centers - emb, axis=1)
+				for nearest in np.argsort(dists):
+					nearest = int(nearest)
+					if cluster_counts[nearest] < max_size:
+						old = labels[token_id]
+						cluster_counts[old] -= 1
+						labels[token_id] = nearest
+						cluster_counts[nearest] += 1
+						if cluster_counts[old] <= max_size:
+							oversized.discard(old)
+						break
+
+		# Cache result
+		if cache_path is not None:
+			cache_path.parent.mkdir(parents=True, exist_ok=True)
+			with open(cache_path, 'w') as f:
+				json.dump(labels, f)
+			logger.info(f"Cached semantic clustering to {cache_path}")
+
+		sizes = [cluster_counts[c] for c in range(k)]
+		logger.info(
+			f"Semantic clustering: k={k}, min_size={min(sizes)}, max_size={max(sizes)}, "
+			f"mean_size={sum(sizes)/len(sizes):.1f}"
+		)
+
+		return cls._from_labels(vocab_size, k, labels)
+
+	@classmethod
+	def _from_labels(cls, vocab_size: int, k: int, labels: list[int]) -> 'TokenClustering':
+		"""Build a TokenClustering from pre-computed cluster labels."""
+		cluster_of = [0] * vocab_size
+		index_in_cluster = [0] * vocab_size
+		cluster_tokens: list[list[int]] = [[] for _ in range(k)]
+
+		for token_id in range(vocab_size):
+			group = labels[token_id]
 			cluster_of[token_id] = group
 			index_in_cluster[token_id] = len(cluster_tokens[group])
 			cluster_tokens[group].append(token_id)

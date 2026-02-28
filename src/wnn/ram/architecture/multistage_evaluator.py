@@ -45,7 +45,11 @@ def compute_default_k(num_stages: int, stage_cluster_types: list[str], vocab_siz
 	For N>2: distribute evenly in log-space, round up so product >= vocab_size.
 	"""
 	if num_stages == 2:
-		t0, t1 = stage_cluster_types[0], stage_cluster_types[1]
+		# Normalize: "semantic" behaves like "tiered" for K computation
+		def _effective(t: str) -> str:
+			return "tiered" if t == "semantic" else t
+
+		t0, t1 = _effective(stage_cluster_types[0]), _effective(stage_cluster_types[1])
 		if t0 == "bitwise" and t1 == "bitwise":
 			return [256, 256]
 		elif t0 == "tiered" and t1 == "tiered":
@@ -57,7 +61,8 @@ def compute_default_k(num_stages: int, stage_cluster_types: list[str], vocab_siz
 			bitwise_product = 1
 			tiered_indices = []
 			for i, ct in enumerate(stage_cluster_types):
-				if ct == "bitwise":
+				eff = _effective(ct)
+				if eff == "bitwise":
 					result.append(256)
 					bitwise_product *= 256
 				else:
@@ -108,6 +113,7 @@ class MultiStageEvaluator(BaseEvaluator):
 		adapt_config: Optional[AdaptationConfig] = None,
 		sparse_threshold: Optional[int] = None,
 		log_path: Optional[str] = None,
+		custom_cluster_of: Optional[list[int]] = None,
 	):
 		# Defaults
 		if stage_cluster_type is None:
@@ -155,6 +161,7 @@ class MultiStageEvaluator(BaseEvaluator):
 			pad_token_id=pad_token_id,
 			sparse_threshold=sparse_threshold,
 			stage_cluster_types=stage_cluster_type,
+			custom_cluster_of=custom_cluster_of,
 		)
 
 		# Cache stage dimensions from Rust (stage-agnostic)
