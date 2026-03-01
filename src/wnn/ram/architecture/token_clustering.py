@@ -4,13 +4,20 @@ Token Clustering — Balanced token-to-group assignment for two-stage prediction
 Splits vocabulary into K balanced groups using:
   - Round-robin: token_id % K (frequency-interleaved for GPT-2)
   - Semantic: K-means on GPT-2 wte embeddings (similar tokens share groups)
+  - Semantic Bitwise: Hierarchical PCA bisection (bit positions have semantic meaning)
 
 Each group gets ≈ vocab_size/K tokens. Stage 1 predicts the group,
 Stage 2 predicts the token within the group.
+
+Clustering strategies (GoF Strategy pattern):
+  - BalancedStrategy      → round-robin, rust_stage_type varies
+  - SemanticStrategy      → K-means, rust_stage_type = "tiered"
+  - SemanticBitwiseStrategy → PCA bisection, rust_stage_type = "bitwise"
 """
 
 import json
 import logging
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from math import ceil, log2
 from pathlib import Path
@@ -229,3 +236,207 @@ class TokenClustering:
 	def cluster_size(self, group_id: int) -> int:
 		"""Number of tokens in the given group."""
 		return len(self.cluster_tokens[group_id])
+
+
+# ── Clustering Strategy (GoF Strategy pattern) ──────────────────────
+
+class ClusteringStrategy(ABC):
+	"""Abstract base for clustering strategies.
+
+	Each strategy knows:
+	  (a) how to compute cluster_of (via create())
+	  (b) what Rust eval path to use (rust_stage_type)
+	  (c) cache key for deduplication
+	"""
+
+	@abstractmethod
+	def create(self, vocab_size: int, k: int, cache_dir: Optional[str] = None) -> TokenClustering:
+		"""Create a TokenClustering using this strategy."""
+
+	@property
+	@abstractmethod
+	def rust_stage_type(self) -> str:
+		"""Rust stage type: 'tiered' or 'bitwise'."""
+
+	@property
+	@abstractmethod
+	def cache_key(self) -> str:
+		"""Unique key identifying this strategy for caching."""
+
+
+class BalancedStrategy(ClusteringStrategy):
+	"""Round-robin balanced clustering. rust_stage_type is configurable."""
+
+	def __init__(self, eval_type: str = "bitwise"):
+		self._eval_type = eval_type
+
+	def create(self, vocab_size: int, k: int, cache_dir: Optional[str] = None) -> TokenClustering:
+		return TokenClustering.create_balanced(vocab_size, k)
+
+	@property
+	def rust_stage_type(self) -> str:
+		return self._eval_type
+
+	@property
+	def cache_key(self) -> str:
+		return f"balanced_{self._eval_type}"
+
+
+class SemanticStrategy(ClusteringStrategy):
+	"""K-means on GPT-2 embeddings. Always uses tiered eval."""
+
+	def create(self, vocab_size: int, k: int, cache_dir: Optional[str] = None) -> TokenClustering:
+		return TokenClustering.create_semantic(vocab_size, k, cache_dir)
+
+	@property
+	def rust_stage_type(self) -> str:
+		return "tiered"
+
+	@property
+	def cache_key(self) -> str:
+		return "semantic"
+
+
+class SemanticBitwiseStrategy(ClusteringStrategy):
+	"""Hierarchical PCA bisection — bit positions have semantic meaning.
+
+	For K=256 (8 bits), recursively splits embedding space:
+	  1. PCA-1 on all embeddings → split at median → bit 0
+	  2. Within each half, PCA-1 → split at median → bit 1
+	  3. Continue for 8 levels → 256 leaves
+
+	Cluster ID = path through tree (LSB-first). Tokens with similar
+	embeddings share most bits → bitwise prediction from context
+	is much easier than random bit assignment.
+
+	K must be a power of 2.
+	"""
+
+	def create(self, vocab_size: int, k: int, cache_dir: Optional[str] = None) -> TokenClustering:
+		if k < 2 or (k & (k - 1)) != 0:
+			raise ValueError(f"SemanticBitwiseStrategy requires K to be a power of 2, got {k}")
+		if k > vocab_size:
+			raise ValueError(f"k ({k}) > vocab_size ({vocab_size})")
+
+		num_bits = _bits_needed(k)
+
+		# Check cache
+		cache_path = None
+		if cache_dir is not None:
+			cache_path = Path(cache_dir) / f"semantic_bitwise_clusters_k{k}.json"
+			if cache_path.exists():
+				logger.info(f"Loading cached semantic-bitwise clustering from {cache_path}")
+				with open(cache_path) as f:
+					labels = json.load(f)
+				assert len(labels) == vocab_size, f"Cached labels size {len(labels)} != {vocab_size}"
+				return TokenClustering._from_labels(vocab_size, k, labels)
+
+		# Load GPT-2 embeddings
+		import numpy as np
+		from transformers import GPT2Model
+		logger.info("Loading GPT-2 embeddings for semantic-bitwise clustering...")
+		model = GPT2Model.from_pretrained("gpt2")
+		embeddings = model.wte.weight.detach().numpy()[:vocab_size]  # (vocab_size, 768)
+
+		# Hierarchical PCA bisection
+		labels = [0] * vocab_size
+		# groups: list of (bit_prefix, token_indices)
+		groups = [(0, list(range(vocab_size)))]
+
+		for bit_level in range(num_bits):
+			next_groups = []
+			for prefix, indices in groups:
+				if len(indices) < 3:
+					# Too few tokens for PCA — split by token ID
+					mid = len(indices) // 2
+					sorted_idx = sorted(indices)
+					for tok in sorted_idx[:mid]:
+						labels[tok] = prefix  # bit=0
+					for tok in sorted_idx[mid:]:
+						labels[tok] = prefix | (1 << bit_level)  # bit=1
+					next_groups.append((prefix, sorted_idx[:mid]))
+					next_groups.append((prefix | (1 << bit_level), sorted_idx[mid:]))
+					continue
+
+				# PCA-1: find direction of maximum variance
+				embs = embeddings[indices]  # (n, 768)
+				mean = embs.mean(axis=0)
+				centered = embs - mean
+
+				# Power iteration for dominant eigenvector (faster than full SVD)
+				v = np.random.RandomState(42 + bit_level).randn(centered.shape[1])
+				for _ in range(20):
+					v = centered.T @ (centered @ v)
+					norm = np.linalg.norm(v)
+					if norm > 0:
+						v /= norm
+
+				# Project onto principal component and split at median
+				projections = centered @ v
+				median = np.median(projections)
+
+				low, high = [], []
+				for j, tok in enumerate(indices):
+					if projections[j] <= median:
+						labels[tok] = prefix  # bit=0
+						low.append(tok)
+					else:
+						labels[tok] = prefix | (1 << bit_level)  # bit=1
+						high.append(tok)
+
+				next_groups.append((prefix, low))
+				next_groups.append((prefix | (1 << bit_level), high))
+
+			groups = next_groups
+			logger.info(f"  PCA bisection level {bit_level}: {len(groups)} groups")
+
+		# Cache result
+		if cache_path is not None:
+			cache_path.parent.mkdir(parents=True, exist_ok=True)
+			with open(cache_path, 'w') as f:
+				json.dump(labels, f)
+			logger.info(f"Cached semantic-bitwise clustering to {cache_path}")
+
+		# Log stats
+		cluster_counts = [0] * k
+		for lbl in labels:
+			cluster_counts[lbl] += 1
+		sizes = [c for c in cluster_counts if c > 0]
+		logger.info(
+			f"Semantic-bitwise clustering: k={k}, num_bits={num_bits}, "
+			f"groups_with_tokens={len(sizes)}, "
+			f"min_size={min(sizes)}, max_size={max(sizes)}, "
+			f"mean_size={sum(sizes)/len(sizes):.1f}"
+		)
+
+		return TokenClustering._from_labels(vocab_size, k, labels)
+
+	@property
+	def rust_stage_type(self) -> str:
+		return "bitwise"
+
+	@property
+	def cache_key(self) -> str:
+		return "semantic_bitwise"
+
+
+def get_clustering_strategy(stage_type: str) -> ClusteringStrategy:
+	"""Factory: stage_type → ClusteringStrategy.
+
+	Args:
+		stage_type: One of "bitwise", "tiered", "semantic", "semantic_bitwise"
+
+	Returns:
+		The appropriate ClusteringStrategy instance.
+	"""
+	strategies = {
+		"bitwise": lambda: BalancedStrategy("bitwise"),
+		"tiered": lambda: BalancedStrategy("tiered"),
+		"semantic": lambda: SemanticStrategy(),
+		"semantic_bitwise": lambda: SemanticBitwiseStrategy(),
+	}
+	factory = strategies.get(stage_type)
+	if factory is None:
+		raise ValueError(f"Unknown clustering strategy: {stage_type!r}. "
+						 f"Valid: {list(strategies.keys())}")
+	return factory()

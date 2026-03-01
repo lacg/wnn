@@ -48,10 +48,11 @@
 
   // Mode-specific grid defaults (must match worker.py fallback grids)
   const GRID_DEFAULTS: Record<string, { neurons: string; bits: string }> = {
-    bitwise:  { neurons: '5,10,25,50', bits: '4,6,8,10,12,16,20,24' },
-    tiered:   { neurons: '20,30,40,50',             bits: '18,19,20,21,22,23' },
-    semantic: { neurons: '20,30,40,50',             bits: '18,19,20,21,22,23' },
-    selector: { neurons: '5,10,15',                  bits: '5,6,7,8,9,10' },
+    bitwise:           { neurons: '5,10,25,50', bits: '4,6,8,10,12,16,20,24' },
+    tiered:            { neurons: '20,30,40,50',             bits: '18,19,20,21,22,23' },
+    semantic:          { neurons: '20,30,40,50',             bits: '18,19,20,21,22,23' },
+    semantic_bitwise:  { neurons: '5,10,25,50', bits: '4,6,8,10,12,16,20,24' },
+    selector:          { neurons: '5,10,15',                  bits: '5,6,7,8,9,10' },
   };
   const ALL_DEFAULT_NEURONS = new Set(Object.values(GRID_DEFAULTS).map(d => d.neurons));
   const ALL_DEFAULT_BITS = new Set(Object.values(GRID_DEFAULTS).map(d => d.bits));
@@ -60,6 +61,7 @@
     if (stageMode === 'selector' && stageIdx > 0) return 'selector';
     const ct = stageConfigs[stageIdx]?.clusterType;
     if (ct === 'tiered' || ct === 'semantic') return ct;
+    if (ct === 'semantic_bitwise') return 'semantic_bitwise';
     return 'bitwise';
   }
 
@@ -150,7 +152,8 @@
       const cfg = defaultStageConfig();
       // Apply mode-specific grid defaults for the new stage
       const mode = stageMode === 'selector' && newIdx > 0 ? 'selector'
-        : (cfg.clusterType === 'tiered' || cfg.clusterType === 'semantic') ? cfg.clusterType : 'bitwise';
+        : (cfg.clusterType === 'tiered' || cfg.clusterType === 'semantic') ? cfg.clusterType
+        : cfg.clusterType === 'semantic_bitwise' ? 'semantic_bitwise' : 'bitwise';
       cfg.neuronsGrid = GRID_DEFAULTS[mode].neurons;
       cfg.bitsGrid = GRID_DEFAULTS[mode].bits;
       stageConfigs = [...stageConfigs, cfg];
@@ -705,6 +708,7 @@
                   <option value="bitwise">Bitwise</option>
                   <option value="tiered">Tiered</option>
                   <option value="semantic">Semantic (GPT-2 embeddings)</option>
+                  <option value="semantic_bitwise">Semantic Bitwise (PCA bisection)</option>
                 </select>
               </div>
               <div class="form-group">

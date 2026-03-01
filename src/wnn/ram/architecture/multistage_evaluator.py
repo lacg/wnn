@@ -45,9 +45,13 @@ def compute_default_k(num_stages: int, stage_cluster_types: list[str], vocab_siz
 	For N>2: distribute evenly in log-space, round up so product >= vocab_size.
 	"""
 	if num_stages == 2:
-		# Normalize: "semantic" behaves like "tiered" for K computation
+		# Normalize: "semantic" → "tiered", "semantic_bitwise" → "bitwise" for K computation
 		def _effective(t: str) -> str:
-			return "tiered" if t == "semantic" else t
+			if t == "semantic":
+				return "tiered"
+			if t == "semantic_bitwise":
+				return "bitwise"
+			return t
 
 		t0, t1 = _effective(stage_cluster_types[0]), _effective(stage_cluster_types[1])
 		if t0 == "bitwise" and t1 == "bitwise":

@@ -636,28 +636,33 @@ class FlowWorker:
         stage_k = params.get("stage_k")
         stage_cluster_type = params.get("stage_cluster_type")
 
-        # Handle semantic clustering: compute in Python, pass to Rust as custom_cluster_of
+        # Handle custom clustering strategies (semantic, semantic_bitwise, etc.)
         custom_cluster_of = None
-        if stage_cluster_type and "semantic" in stage_cluster_type:
-            from wnn.ram.architecture.token_clustering import TokenClustering
+        strategy_types = {"semantic", "semantic_bitwise"}
+        if stage_cluster_type and any(t in strategy_types for t in stage_cluster_type):
+            from wnn.ram.architecture.token_clustering import get_clustering_strategy
             from wnn.ram.architecture.multistage_evaluator import compute_default_k
 
-            # Compute K values (semantic behaves like tiered for K)
+            # Compute K values first (strategies need K)
             if stage_k is None:
                 stage_k = compute_default_k(num_stages, stage_cluster_type, self._vocab_size)
 
-            semantic_k = stage_k[stage_cluster_type.index("semantic")]
             cache_dir = str(Path("cache"))
-            self._log(f"  Computing semantic clustering (k={semantic_k})...")
-            clustering = TokenClustering.create_semantic(self._vocab_size, semantic_k, cache_dir)
-            custom_cluster_of = clustering.cluster_of
-            self._log(f"  Semantic clustering: k={semantic_k}, max_group={clustering.max_cluster_size}, "
-                       f"min_group={min(len(g) for g in clustering.cluster_tokens)}")
+            rust_types = list(stage_cluster_type)
 
-            # Replace "semantic" → "tiered" for Rust (both use direct K-class prediction)
-            stage_cluster_type = [
-                "tiered" if t == "semantic" else t for t in stage_cluster_type
-            ]
+            for i, stype in enumerate(stage_cluster_type):
+                if stype not in strategy_types:
+                    continue
+                strategy = get_clustering_strategy(stype)
+                k = stage_k[i]
+                self._log(f"  Computing {stype} clustering for stage {i} (k={k})...")
+                clustering = strategy.create(self._vocab_size, k, cache_dir)
+                custom_cluster_of = clustering.cluster_of
+                rust_types[i] = strategy.rust_stage_type
+                self._log(f"  {stype} clustering: k={k}, max_group={clustering.max_cluster_size}, "
+                           f"min_group={min(len(g) for g in clustering.cluster_tokens)}")
+
+            stage_cluster_type = rust_types
 
         # Parse stage_mode from params (could be string or list of ints)
         raw_stage_mode = params.get("stage_mode")
