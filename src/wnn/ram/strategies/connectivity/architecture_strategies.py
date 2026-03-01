@@ -1438,7 +1438,7 @@ class GridSearchConfig:
 	num_clusters: int
 	neurons_grid: list[int] = field(default_factory=lambda: [50, 100, 150, 200])
 	bits_grid: list[int] = field(default_factory=lambda: [14, 16, 18, 20])
-	top_k: int = 3
+	top_k: int = 15
 	population_size: int = 50  # Total genomes in output population
 	total_input_bits: Optional[int] = None
 	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK
@@ -1665,26 +1665,19 @@ class GridSearchStrategy:
 					  f"CE={r['ce']:.4f}  Acc={r['accuracy']:.2%}  "
 					  f"Fit={r['fitness']:.4f}{marker}")
 
-		# Phase 5: Build output population with exponential representation.
-		# Better configs get exponentially more genomes (powers of 2 from bottom).
-		# E.g. top-5 with pop=50: 5th=1, 4th=2, 3rd=4, 2nd=8, 1st=remainder(35).
+		# Phase 5: Build output population with balanced representation.
+		# Top 5 configs get 5 genomes each (25), top 6-15 get 3 each (30) = 55 total.
+		# After evaluation, select top population_size (50) by fitness.
 		best_result = results[0]
 		best_genome = best_result["genome"]
 
 		top_k = min(cfg.top_k, len(results))
-		# Exponential weights: last place=1, second-to-last=2, ..., 2^(k-2), remainder
-		genomes_per_config = [1 << i for i in range(top_k)]  # [1, 2, 4, 8, 16, ...]
-		genomes_per_config.reverse()  # [16, 8, 4, 2, 1] (best first)
-		# First place gets the remainder to fill population_size
-		allocated = sum(genomes_per_config)
-		if allocated < cfg.population_size:
-			genomes_per_config[0] += cfg.population_size - allocated
-		# If exponential sum exceeds population_size, trim from the top
-		while sum(genomes_per_config) > cfg.population_size:
-			for i in range(len(genomes_per_config) - 1, -1, -1):
-				if genomes_per_config[i] > 1:
-					genomes_per_config[i] -= 1
-					break
+		genomes_per_config = []
+		for i in range(top_k):
+			if i < 5:
+				genomes_per_config.append(5)
+			else:
+				genomes_per_config.append(3)
 
 		# Reuse original evaluated genomes + create new variations for the rest.
 		# Each config's first genome is the already-evaluated original;
@@ -1797,7 +1790,19 @@ class GridSearchStrategy:
 		population_metrics = [population_metrics[i] for i in sorted_indices]
 		pop_fitness_scores = [pop_fitness_scores[i] for i in sorted_indices]
 
-		# Three independent bests from potentially different genomes
+		# Trim to population_size (balanced seeding may overshoot)
+		if len(output_population) > cfg.population_size:
+			dropped = len(output_population) - cfg.population_size
+			self._log(f"  Trimming population: {len(output_population)} → {cfg.population_size} (dropped {dropped} weakest)")
+			output_population = output_population[:cfg.population_size]
+			population_metrics = population_metrics[:cfg.population_size]
+			pop_fitness_scores = pop_fitness_scores[:cfg.population_size]
+
+		# Three independent bests from potentially different genomes (recompute after trim)
+		pop_tuples = [
+			(output_population[i], ce, acc)
+			for i, (ce, acc) in enumerate(population_metrics)
+		]
 		pop_bests = calculator.bests(pop_tuples)
 		best_genome = pop_bests.best_fitness.genome
 

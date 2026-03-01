@@ -881,7 +881,7 @@ class FlowWorker:
                     step = max(2, round((xb - mb) / 6 / 2) * 2) or 4
                     bits_grid = [mb] + list(range(((mb // step) + 1) * step, xb, step)) + [xb]
             num_grid_configs = len(neurons_grid) * len(bits_grid)
-            grid_top_k = params.get("grid_top_k", 5)  # Default: top-5 configs
+            grid_top_k = params.get("grid_top_k", 15)  # Default: top-15 configs (balanced seeding)
             pop_size = exp_data.get("population_size") or params.get("population_size", 50)
 
             is_adaptation = experiment_type in (

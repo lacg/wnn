@@ -357,7 +357,7 @@ class OptimizerStrategyFactory:
 		# Grid search params (ARCHITECTURE_GRID_SEARCH only)
 		neurons_grid: list[int] | None = None,
 		bits_grid: list[int] | None = None,
-		grid_top_k: int = 3,
+		grid_top_k: int = 15,
 	):
 		"""
 		Create an optimizer strategy.
