@@ -1,3 +1,6 @@
+# Clustering cache (GPT-2 embeddings, PCA bisection)
+cache/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
