@@ -1445,7 +1445,7 @@ pub fn evaluate_bitwise_selector_genomes(
 /// Trains all stages, forwards on eval data, then reconstructs the joint distribution:
 ///   P(token_t) = P(group_g | context) × P(token_t | group_g, context)
 ///
-/// Returns: (combined_ce, combined_accuracy, stage0_ce, stage1_ce)
+/// Returns: (combined_ce, combined_accuracy, stage0_ce, stage1_ce, stage0_acc, stage1_acc)
 pub fn compute_combined_ce(
     cache: &MultiStageTokenCache,
     // Per-stage genome params (slices for each stage)
@@ -1458,7 +1458,7 @@ pub fn compute_combined_ce(
     rng_seed: u64,
     sparse_threshold: usize,
     label_smoothing: f64,
-) -> (f64, f64, f64, f64) {
+) -> (f64, f64, f64, f64, f64, f64) {
     let eps = 1e-7f64;
     let epsilon = 1e-10f64;
     let num_eval = cache.bitwise_full_eval[0].num_examples;
@@ -1491,7 +1491,7 @@ pub fn compute_combined_ce(
     }
 
     // ── Reconstruct combined CE per example ──
-    let results: Vec<(f64, f64, f64, u32)> = (0..num_eval)
+    let results: Vec<(f64, f64, f64, u32, u32, u32)> = (0..num_eval)
         .into_par_iter()
         .map(|ex| {
             let token_id = cache.eval_target_token_ids[ex] as usize;
@@ -1617,8 +1617,10 @@ pub fn compute_combined_ce(
                 s0_ce + s1_ce
             };
             let correct = if s0_predicted == true_group && s1_predicted == true_within { 1u32 } else { 0u32 };
+            let s0_correct = if s0_predicted == true_group { 1u32 } else { 0u32 };
+            let s1_correct = if s1_predicted == true_within { 1u32 } else { 0u32 };
 
-            (combined_ce, s0_ce, s1_ce, correct)
+            (combined_ce, s0_ce, s1_ce, correct, s0_correct, s1_correct)
         })
         .collect();
 
@@ -1626,12 +1628,16 @@ pub fn compute_combined_ce(
     let total_s0_ce: f64 = results.iter().map(|r| r.1).sum();
     let total_s1_ce: f64 = results.iter().map(|r| r.2).sum();
     let total_correct: u32 = results.iter().map(|r| r.3).sum();
+    let total_s0_correct: u32 = results.iter().map(|r| r.4).sum();
+    let total_s1_correct: u32 = results.iter().map(|r| r.5).sum();
 
     (
         total_ce / num_eval as f64,
         total_correct as f64 / num_eval as f64,
         total_s0_ce / num_eval as f64,
         total_s1_ce / num_eval as f64,
+        total_s0_correct as f64 / num_eval as f64,
+        total_s1_correct as f64 / num_eval as f64,
     )
 }
 
@@ -1735,7 +1741,7 @@ fn eval_filtered_mixture(
     all_group_eval_scores: &[Vec<f32>],  // [K][num_eval × augmented_output_bits]
     augmented_output_bits: usize,
     label_smoothing: f64,
-) -> (f64, f64, f64, f64) {
+) -> (f64, f64, f64, f64, f64, f64) {
     let eps = 1e-7f64;
     let epsilon = 1e-10f64;
     let num_eval = cache.bitwise_full_eval[0].num_examples;
@@ -1762,7 +1768,7 @@ fn eval_filtered_mixture(
         probs
     };
 
-    let results: Vec<(f64, f64, f64, u32)> = (0..num_eval)
+    let results: Vec<(f64, f64, f64, u32, u32, u32)> = (0..num_eval)
         .into_par_iter()
         .map(|ex| {
             let token_id = cache.eval_target_token_ids[ex] as usize;
@@ -1866,8 +1872,10 @@ fn eval_filtered_mixture(
                 -log_p_filt_true - s1_log_p_within_valid
             };
             let correct = if best_predicted_g == true_group && best_predicted_within == true_within { 1u32 } else { 0u32 };
+            let s0_correct = if best_predicted_g == true_group { 1u32 } else { 0u32 };
+            let s1_correct = if best_predicted_within == true_within { 1u32 } else { 0u32 };
 
-            (combined_ce, s0_ce, s1_ce, correct)
+            (combined_ce, s0_ce, s1_ce, correct, s0_correct, s1_correct)
         })
         .collect();
 
@@ -1875,12 +1883,16 @@ fn eval_filtered_mixture(
     let total_s0_ce: f64 = results.iter().map(|r| r.1).sum();
     let total_s1_ce: f64 = results.iter().map(|r| r.2).sum();
     let total_correct: u32 = results.iter().map(|r| r.3).sum();
+    let total_s0_correct: u32 = results.iter().map(|r| r.4).sum();
+    let total_s1_correct: u32 = results.iter().map(|r| r.5).sum();
 
     (
         total_ce / num_eval as f64,
         total_correct as f64 / num_eval as f64,
         total_s0_ce / num_eval as f64,
         total_s1_ce / num_eval as f64,
+        total_s0_correct as f64 / num_eval as f64,
+        total_s1_correct as f64 / num_eval as f64,
     )
 }
 
@@ -1945,7 +1957,7 @@ fn compute_group_softmax_bitwise(
 /// Each S1 group's training subset is weighted by the S0 confidence for that group,
 /// giving stronger signal to examples where S0 is more confident.
 ///
-/// Returns: (combined_ce, combined_accuracy, stage0_ce, stage1_ce)
+/// Returns: (combined_ce, combined_accuracy, stage0_ce, stage1_ce, stage0_acc, stage1_acc)
 pub fn compute_combined_ce_selector(
     cache: &MultiStageTokenCache,
     stage_bits_per_neuron: &[&[usize]],
@@ -1958,7 +1970,7 @@ pub fn compute_combined_ce_selector(
     label_smoothing: f64,
     invalid_mode: bool,
     top_m: usize,
-) -> (f64, f64, f64, f64) {
+) -> (f64, f64, f64, f64, f64, f64) {
     let eps = 1e-7f64;
     let epsilon = 1e-10f64;
     let num_eval = cache.bitwise_full_eval[0].num_examples;
@@ -2119,7 +2131,7 @@ pub fn compute_combined_ce_selector(
         .collect();
 
     // ── Combine per-example ──
-    let results: Vec<(f64, f64, f64, u32)> = (0..num_eval)
+    let results: Vec<(f64, f64, f64, u32, u32, u32)> = (0..num_eval)
         .into_par_iter()
         .map(|ex| {
             let token_id = cache.eval_target_token_ids[ex] as usize;
@@ -2236,8 +2248,10 @@ pub fn compute_combined_ce_selector(
                 s0_ce + s1_ce
             };
             let correct = if s0_predicted == true_group && s1_predicted == true_within { 1u32 } else { 0u32 };
+            let s0_correct = if s0_predicted == true_group { 1u32 } else { 0u32 };
+            let s1_correct = if s1_predicted == true_within { 1u32 } else { 0u32 };
 
-            (combined_ce, s0_ce, s1_ce, correct)
+            (combined_ce, s0_ce, s1_ce, correct, s0_correct, s1_correct)
         })
         .collect();
 
@@ -2245,12 +2259,16 @@ pub fn compute_combined_ce_selector(
     let total_s0_ce: f64 = results.iter().map(|r| r.1).sum();
     let total_s1_ce: f64 = results.iter().map(|r| r.2).sum();
     let total_correct: u32 = results.iter().map(|r| r.3).sum();
+    let total_s0_correct: u32 = results.iter().map(|r| r.4).sum();
+    let total_s1_correct: u32 = results.iter().map(|r| r.5).sum();
 
     (
         total_ce / num_eval as f64,
         total_correct as f64 / num_eval as f64,
         total_s0_ce / num_eval as f64,
         total_s1_ce / num_eval as f64,
+        total_s0_correct as f64 / num_eval as f64,
+        total_s1_correct as f64 / num_eval as f64,
     )
 }
 

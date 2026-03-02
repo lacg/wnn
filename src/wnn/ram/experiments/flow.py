@@ -1365,7 +1365,8 @@ class Flow:
 						ce = result.ce
 						acc = result.accuracy
 						stage_ces = [result.cluster_ce, result.within_ce]
-						self.log(f"  {genome_type}: CE={ce:.4f}, ACC={acc:.2%}, S0={stage_ces[0]:.4f}, S1={stage_ces[1]:.4f}")
+						stage_accs = [result.cluster_accuracy, result.within_accuracy]
+						self.log(f"  {genome_type}: CE={ce:.4f}, ACC={acc:.2%}, S0 CE={stage_ces[0]:.4f} ACC={stage_accs[0]:.2%}, S1 CE={stage_ces[1]:.4f} ACC={stage_accs[1]:.2%}")
 
 						# Use best_fitness as the primary combined result
 						if genome_type == "best_fitness":
@@ -1382,6 +1383,7 @@ class Flow:
 									combined_ce=ce,
 									combined_accuracy=acc,
 									per_stage_ce=stage_ces,
+									per_stage_acc=stage_accs,
 								)
 							except Exception as e:
 								self.log(f"  Warning: Failed to store combined validation: {e}")

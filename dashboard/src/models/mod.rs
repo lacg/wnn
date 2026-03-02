@@ -430,6 +430,8 @@ pub struct CombinedValidation {
     pub combined_accuracy: f64,
     /// Per-stage CE breakdown as JSON array, e.g. [1.23, 3.45]
     pub per_stage_ce: Option<Vec<f64>>,
+    /// Per-stage accuracy breakdown as JSON array, e.g. [0.45, 0.32]
+    pub per_stage_acc: Option<Vec<f64>>,
     pub created_at: DateTime<Utc>,
 }
 

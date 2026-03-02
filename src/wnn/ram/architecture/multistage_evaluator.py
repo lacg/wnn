@@ -639,7 +639,7 @@ class MultiStageEvaluator(BaseEvaluator):
 			stage_num_clusters.append(len(g.neurons_per_cluster))
 
 		if uses_selector:
-			combined_ce, combined_acc, s0_ce, s1_ce = self._cache.evaluate_combined_ce_selector(
+			combined_ce, combined_acc, s0_ce, s1_ce, s0_acc, s1_acc = self._cache.evaluate_combined_ce_selector(
 				all_bits_per_neuron=all_bits,
 				all_neurons_per_cluster=all_neurons,
 				all_connections=all_connections,
@@ -653,7 +653,7 @@ class MultiStageEvaluator(BaseEvaluator):
 				top_m=top_m,
 			)
 		else:
-			combined_ce, combined_acc, s0_ce, s1_ce = self._cache.evaluate_combined_ce(
+			combined_ce, combined_acc, s0_ce, s1_ce, s0_acc, s1_acc = self._cache.evaluate_combined_ce(
 				all_bits_per_neuron=all_bits,
 				all_neurons_per_cluster=all_neurons,
 				all_connections=all_connections,
@@ -670,6 +670,8 @@ class MultiStageEvaluator(BaseEvaluator):
 			accuracy=combined_acc,
 			cluster_ce=s0_ce,
 			within_ce=s1_ce,
+			cluster_accuracy=s0_acc,
+			within_accuracy=s1_acc,
 		)
 
 	# ── Re-encode stage with predicted clusters ─────────────────────

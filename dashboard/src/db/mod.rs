@@ -110,6 +110,11 @@ async fn run_migrations(pool: &DbPool) -> Result<()> {
     .execute(pool)
     .await;
 
+    // Migration: Add per_stage_acc_json to combined_validations
+    let _ = sqlx::query("ALTER TABLE combined_validations ADD COLUMN per_stage_acc_json TEXT")
+        .execute(pool)
+        .await;
+
     Ok(())
 }
 
@@ -1563,7 +1568,7 @@ pub mod queries {
     ) -> Result<Vec<CombinedValidation>> {
         let rows = sqlx::query(
             r#"SELECT id, flow_id, genome_type, combined_ce, combined_accuracy,
-                      per_stage_ce_json, created_at
+                      per_stage_ce_json, per_stage_acc_json, created_at
                FROM combined_validations
                WHERE flow_id = ?
                ORDER BY genome_type"#,
@@ -1586,18 +1591,21 @@ pub mod queries {
         combined_ce: f64,
         combined_accuracy: f64,
         per_stage_ce: Option<&[f64]>,
+        per_stage_acc: Option<&[f64]>,
     ) -> Result<i64> {
         let now = Utc::now().to_rfc3339();
         let per_stage_ce_json = per_stage_ce.map(|v| serde_json::to_string(v).unwrap_or_default());
+        let per_stage_acc_json = per_stage_acc.map(|v| serde_json::to_string(v).unwrap_or_default());
 
         let result = sqlx::query(
             r#"INSERT INTO combined_validations
-               (flow_id, genome_type, combined_ce, combined_accuracy, per_stage_ce_json, created_at)
-               VALUES (?, ?, ?, ?, ?, ?)
+               (flow_id, genome_type, combined_ce, combined_accuracy, per_stage_ce_json, per_stage_acc_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(flow_id, genome_type) DO UPDATE SET
                  combined_ce = excluded.combined_ce,
                  combined_accuracy = excluded.combined_accuracy,
                  per_stage_ce_json = excluded.per_stage_ce_json,
+                 per_stage_acc_json = excluded.per_stage_acc_json,
                  created_at = excluded.created_at"#,
         )
         .bind(flow_id)
@@ -1605,6 +1613,7 @@ pub mod queries {
         .bind(combined_ce)
         .bind(combined_accuracy)
         .bind(&per_stage_ce_json)
+        .bind(&per_stage_acc_json)
         .bind(&now)
         .execute(pool)
         .await?;
@@ -1617,6 +1626,9 @@ pub mod queries {
         let per_stage_ce_json: Option<String> = row.get("per_stage_ce_json");
         let per_stage_ce = per_stage_ce_json
             .and_then(|json| serde_json::from_str::<Vec<f64>>(&json).ok());
+        let per_stage_acc_json: Option<String> = row.get("per_stage_acc_json");
+        let per_stage_acc = per_stage_acc_json
+            .and_then(|json| serde_json::from_str::<Vec<f64>>(&json).ok());
 
         Ok(CombinedValidation {
             id: row.get("id"),
@@ -1625,6 +1637,7 @@ pub mod queries {
             combined_ce: row.get("combined_ce"),
             combined_accuracy: row.get("combined_accuracy"),
             per_stage_ce,
+            per_stage_acc,
             created_at: parse_datetime(row.get("created_at"))?,
         })
     }

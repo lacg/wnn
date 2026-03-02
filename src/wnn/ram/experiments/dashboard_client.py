@@ -700,6 +700,7 @@ class DashboardClient:
 		combined_ce: float,
 		combined_accuracy: float,
 		per_stage_ce: Optional[list[float]] = None,
+		per_stage_acc: Optional[list[float]] = None,
 	) -> dict:
 		"""
 		Create or update a combined validation record for a multi-stage flow.
@@ -710,6 +711,7 @@ class DashboardClient:
 			combined_ce: End-to-end cross-entropy
 			combined_accuracy: End-to-end accuracy
 			per_stage_ce: Optional per-stage CE breakdown
+			per_stage_acc: Optional per-stage accuracy breakdown
 
 		Returns:
 			Dict with 'id' of the created/updated record
@@ -719,6 +721,7 @@ class DashboardClient:
 			"combined_ce": combined_ce,
 			"combined_accuracy": combined_accuracy,
 			"per_stage_ce": per_stage_ce,
+			"per_stage_acc": per_stage_acc,
 		}
 		result = self._request("POST", f"/api/flows/{flow_id}/combined-validations", json_data=data)
 		self._logger(f"Created combined validation for flow {flow_id}: {genome_type}")

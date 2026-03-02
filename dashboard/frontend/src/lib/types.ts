@@ -295,6 +295,7 @@ export interface CombinedValidation {
   combined_ce: number;
   combined_accuracy: number;
   per_stage_ce: number[] | null;
+  per_stage_acc: number[] | null;
   created_at: string;
 }
 

@@ -1573,6 +1573,7 @@
                   {#if combinedValidations[0]?.per_stage_ce}
                     {#each combinedValidations[0].per_stage_ce as _, i}
                       <th>S{i} CE</th>
+                      <th>S{i} ACC</th>
                     {/each}
                   {/if}
                 </tr>
@@ -1588,8 +1589,9 @@
                     <td class="mono">{cv.combined_ce.toFixed(4)}</td>
                     <td class="mono">{(cv.combined_accuracy * 100).toFixed(2)}%</td>
                     {#if cv.per_stage_ce}
-                      {#each cv.per_stage_ce as stageCe}
+                      {#each cv.per_stage_ce as stageCe, i}
                         <td class="mono">{stageCe.toFixed(4)}</td>
+                        <td class="mono">{cv.per_stage_acc ? (cv.per_stage_acc[i] * 100).toFixed(2) + '%' : '—'}</td>
                       {/each}
                     {/if}
                   </tr>
