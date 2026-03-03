@@ -1383,7 +1383,9 @@
 
 <!-- Iteration Details Modal -->
 {#if showIterationModal && selectedIteration}
+  <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
   <div class="modal-overlay" on:click={closeIterationModal} on:keydown={(e) => e.key === 'Escape' && closeIterationModal()} role="dialog" aria-modal="true" tabindex="-1">
+    <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
     <div class="modal" on:click|stopPropagation on:keydown|stopPropagation role="document">
       <div class="modal-header">
         <h2>Iteration {selectedIteration.iteration_num}</h2>

@@ -1216,6 +1216,7 @@
 
           {#if !isBitwise}
             <div class="form-group full-width">
+              <!-- svelte-ignore a11y-label-has-associated-control -->
               <label>Tier Config</label>
               <TierConfigEditor bind:value={editConfig.tier_config} />
             </div>
@@ -1387,12 +1388,12 @@
           <div class="edit-exp-form">
             <div class="form-row">
               <div class="form-group">
-                <label>Name</label>
-                <input type="text" bind:value={newPhase.name} placeholder="Extra Experiment: GA Neurons" />
+                <label for="new-exp-name">Name</label>
+                <input type="text" id="new-exp-name" bind:value={newPhase.name} placeholder="Extra Experiment: GA Neurons" />
               </div>
               <div class="form-group">
-                <label>Type</label>
-                <select bind:value={newPhase.experiment_type} on:change={() => {
+                <label for="new-exp-type">Type</label>
+                <select id="new-exp-type" bind:value={newPhase.experiment_type} on:change={() => {
                   if (newPhase.experiment_type === 'grid_search') {
                     newPhase.optimize_neurons = true;
                     newPhase.optimize_bits = true;
@@ -1415,6 +1416,7 @@
             {#if !newPhaseHidesOptimize}
               <div class="form-row">
                 <div class="form-group">
+                  <!-- svelte-ignore a11y-label-has-associated-control -->
                   <label>Optimize</label>
                   <div class="checkbox-row">
                     <label class="checkbox-label">
