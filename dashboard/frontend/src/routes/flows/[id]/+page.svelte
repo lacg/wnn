@@ -921,7 +921,9 @@
             <button class="btn btn-sm btn-secondary" on:click={cancelEditName}>✕</button>
           </div>
         {:else}
-          <h1 class="flow-name-editable" on:click={startEditName} title="Click to rename">{flow.name}</h1>
+          <button class="flow-name-editable" on:click={startEditName} title="Click to rename">
+            <h1>{flow.name}</h1>
+          </button>
         {/if}
         <span class="status-badge" style="background: {getStatusColor(flow.status)}">
           {flow.status}
@@ -1702,6 +1704,15 @@
     margin: -0.25rem -0.5rem;
     border-radius: 4px;
     transition: background-color 0.15s;
+    background: none;
+    border: none;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+  }
+
+  .flow-name-editable h1 {
+    margin: 0;
   }
 
   .flow-name-editable:hover {
@@ -1821,19 +1832,6 @@
 
   .form-group.full-width {
     grid-column: 1 / -1;
-  }
-
-  .form-group.checkbox-group {
-    flex-direction: row;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  .form-group.checkbox-group label {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    cursor: pointer;
   }
 
   label {
@@ -1979,224 +1977,6 @@
   .param-value.mono {
     font-family: monospace;
     font-size: 1rem;
-  }
-
-  /* Experiments List */
-  .experiments-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-
-  .experiment-item,
-  .experiment-item-link {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    background: var(--glass-bg);
-    backdrop-filter: blur(var(--glass-blur));
-    -webkit-backdrop-filter: blur(var(--glass-blur));
-    border: 1px solid var(--glass-border);
-    border-radius: 6px;
-    padding: 0.75rem 1rem;
-  }
-
-  .experiment-item-link {
-    text-decoration: none;
-    color: inherit;
-    cursor: pointer;
-    transition: border-color 0.15s, background-color 0.15s;
-  }
-
-  .experiment-item-link:hover {
-    border-color: var(--accent-blue);
-    background: rgba(59, 130, 246, 0.05);
-  }
-
-  .experiment-item-link.completed:hover {
-    border-color: var(--accent-green);
-    background: rgba(34, 197, 94, 0.05);
-  }
-
-  .experiment-item-link.pending {
-    opacity: 0.6;
-    cursor: default;
-  }
-
-  .experiment-item-link.pending:hover {
-    border-color: var(--border);
-    background: var(--glass-bg);
-    backdrop-filter: blur(var(--glass-blur));
-    -webkit-backdrop-filter: blur(var(--glass-blur));
-  }
-
-  .experiment-item-link.pending .view-arrow {
-    opacity: 0.3;
-  }
-
-  .live-indicator {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    font-size: 1rem;
-    font-weight: 600;
-    color: var(--accent-blue);
-    text-transform: uppercase;
-  }
-
-  .view-arrow {
-    font-size: 1.25rem;
-    color: var(--text-tertiary);
-    transition: transform 0.15s, color 0.15s;
-  }
-
-  .experiment-item-link:hover .view-arrow {
-    transform: translateX(3px);
-    color: var(--accent-blue);
-  }
-
-  .experiment-item-link.completed:hover .view-arrow {
-    color: var(--accent-green);
-  }
-
-  .exp-order {
-    width: 24px;
-    height: 24px;
-    border-radius: 50%;
-    background: rgba(51, 65, 85, 0.4);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1rem;
-    font-weight: 600;
-    color: var(--text-secondary);
-  }
-
-  .exp-content {
-    flex: 1;
-  }
-
-  .exp-header {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-  }
-
-  .exp-name {
-    font-weight: 500;
-    color: var(--text-primary);
-  }
-
-  .status-indicator {
-    font-size: 1rem;
-    padding: 0.125rem 0.375rem;
-    border-radius: 3px;
-    text-transform: uppercase;
-    font-weight: 600;
-  }
-
-  .status-completed {
-    background: var(--accent-green);
-    color: white;
-  }
-
-  .status-running {
-    background: var(--accent-blue);
-    color: white;
-  }
-
-  .status-pending {
-    background: rgba(51, 65, 85, 0.4);
-    color: var(--text-tertiary);
-  }
-
-  .exp-meta {
-    display: flex;
-    gap: 0.5rem;
-    margin-top: 0.25rem;
-  }
-
-  .exp-type {
-    font-size: 1rem;
-    color: var(--accent-blue);
-    font-weight: 600;
-  }
-
-  .exp-tag {
-    font-size: 1rem;
-    color: var(--text-tertiary);
-    background: rgba(51, 65, 85, 0.4);
-    padding: 0.125rem 0.375rem;
-    border-radius: 3px;
-  }
-
-  .exp-metrics {
-    display: flex;
-    gap: 1rem;
-    margin-top: 0.5rem;
-    padding-top: 0.5rem;
-    border-top: 1px solid var(--glass-border);
-  }
-
-  .metric {
-    display: flex;
-    gap: 0.375rem;
-    align-items: baseline;
-  }
-
-  .metric-label {
-    font-size: 1rem;
-    color: var(--text-tertiary);
-    text-transform: uppercase;
-  }
-
-  .metric-value {
-    font-size: 1rem;
-    font-weight: 600;
-    color: var(--text-primary);
-    font-family: monospace;
-  }
-
-  .experiment-item.running {
-    border-color: var(--accent-blue);
-    background: rgba(59, 130, 246, 0.05);
-  }
-
-  .experiment-item.completed {
-    border-color: var(--accent-green);
-  }
-
-  .exp-order.order-completed {
-    background: var(--accent-green);
-    color: white;
-  }
-
-  .exp-order.order-running {
-    background: var(--accent-blue);
-    color: white;
-  }
-
-  .checkmark {
-    font-size: 1rem;
-  }
-
-  .live-btn {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.375rem 0.75rem;
-    background: var(--accent-blue);
-    color: white;
-    font-size: 1rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    text-decoration: none;
-    border-radius: 4px;
-    transition: background 0.15s;
-  }
-
-  .live-btn:hover {
-    background: #2563eb;
   }
 
   .pulse {
@@ -2365,32 +2145,6 @@
     color: var(--accent-blue);
   }
 
-  .inline-edit {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-  }
-
-  .inline-name-input {
-    padding: 0.25rem 0.5rem;
-    border: 1px solid var(--accent-blue);
-    border-radius: 4px;
-    background: var(--bg-primary);
-    color: var(--text-primary);
-    font-size: 1rem;
-    min-width: 180px;
-  }
-
-  .inline-name-input:focus {
-    outline: none;
-    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
-  }
-
-  .btn-save {
-    background: var(--accent-green) !important;
-    color: white !important;
-  }
-
   .live-badge {
     display: inline-flex;
     align-items: center;
@@ -2453,10 +2207,6 @@
     justify-content: flex-end;
   }
 
-  .action-buttons a.btn-icon {
-    text-decoration: none;
-  }
-
   .row-running {
     background: rgba(59, 130, 246, 0.05);
   }
@@ -2467,14 +2217,6 @@
 
   .row-pending {
     opacity: 0.7;
-  }
-
-  .status-dot {
-    display: inline-block;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    margin-right: 0.5rem;
   }
 
   @media (max-width: 768px) {
@@ -2590,13 +2332,6 @@
     border-top: 1px solid var(--glass-border);
   }
 
-  /* Experiment actions */
-  .exp-actions {
-    display: flex;
-    gap: 0.5rem;
-    align-items: center;
-  }
-
   .btn-icon {
     display: flex;
     align-items: center;
@@ -2619,11 +2354,6 @@
   .btn-icon.btn-danger:hover {
     background: var(--accent-red);
     color: white;
-  }
-
-  .experiment-item.editing {
-    border-color: var(--accent-blue);
-    background: rgba(59, 130, 246, 0.05);
   }
 
   /* Final Results */
@@ -2684,12 +2414,6 @@
     .results-grid {
       grid-template-columns: 1fr;
     }
-  }
-
-  /* Inline editable select in params */
-  .param-editable {
-    display: flex;
-    align-items: center;
   }
 
   .inline-select {

@@ -1846,9 +1846,6 @@
     letter-spacing: 0.5px;
   }
 
-  .validation-card.init .card-label { color: var(--accent-blue); }
-  .validation-card.final .card-label { color: var(--accent-green); }
-
   .validation-metrics {
     display: flex;
     flex-direction: column;
@@ -1862,17 +1859,6 @@
     font-family: monospace;
     font-size: 1rem;
   }
-
-  .metric-item .metric-marker {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
-
-  .metric-item.best_ce .metric-marker { background: var(--accent-blue); }
-  .metric-item.best_acc .metric-marker { background: var(--accent-green); }
-  .metric-item.best_fitness .metric-marker { background: var(--accent-purple, #9b59b6); }
 
   .metric-ce {
     color: var(--text-primary);
@@ -2500,10 +2486,6 @@
     color: var(--text-secondary);
     font-size: 1rem;
     margin-left: 0.25rem;
-  }
-
-  .validation-table .delta {
-    font-size: 1rem;
   }
 
   .validation-table th[colspan] {

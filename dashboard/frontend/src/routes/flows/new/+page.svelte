@@ -1210,12 +1210,6 @@
     gap: 0.75rem;
   }
 
-  .form-row-3 {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    gap: 0.75rem;
-  }
-
   .form-row-4 {
     display: grid;
     grid-template-columns: 1fr 1fr 1fr 1fr;
@@ -1230,7 +1224,7 @@
     margin-bottom: 0.375rem;
   }
 
-  input, select, textarea {
+  input, select {
     width: 100%;
     padding: 0.5rem 0.75rem;
     border: 1px solid var(--glass-border);
@@ -1245,14 +1239,10 @@
     transition: border-color 0.2s ease, box-shadow 0.2s ease;
   }
 
-  input:focus, select:focus, textarea:focus {
+  input:focus, select:focus {
     outline: none;
     border-color: rgba(59, 130, 246, 0.6);
     box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.15), 0 0 0 3px rgba(59, 130, 246, 0.15);
-  }
-
-  textarea {
-    resize: vertical;
   }
 
   .form-actions {
@@ -1510,19 +1500,6 @@
   }
 
   /* Multi-stage config */
-  .stage-fields {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.5rem;
-  }
-
-  .stage-field label {
-    font-size: 1rem;
-    font-weight: 400;
-    color: var(--text-secondary);
-    margin-bottom: 0.25rem;
-  }
-
   .shared-params-header {
     font-size: 1rem;
     font-weight: 500;
