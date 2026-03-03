@@ -4848,7 +4848,7 @@ struct MultiStageCacheWrapper {
 #[pymethods]
 impl MultiStageCacheWrapper {
     #[new]
-    #[pyo3(signature = (train_tokens, eval_tokens, vocab_size, context_size, k, num_parts, num_eval_parts, pad_token_id, sparse_threshold=None, stage_cluster_types=None, custom_cluster_of=None))]
+    #[pyo3(signature = (train_tokens, eval_tokens, vocab_size, context_size, k, num_parts, num_eval_parts, pad_token_id, sparse_threshold=None, stage_cluster_types=None, custom_cluster_of=None, stage_context_sizes=None))]
     fn new(
         train_tokens: Vec<u32>,
         eval_tokens: Vec<u32>,
@@ -4861,12 +4861,14 @@ impl MultiStageCacheWrapper {
         sparse_threshold: Option<usize>,
         stage_cluster_types: Option<Vec<String>>,
         custom_cluster_of: Option<Vec<u16>>,
+        stage_context_sizes: Option<Vec<usize>>,
     ) -> Self {
         Self {
             inner: multistage::MultiStageTokenCache::new(
                 train_tokens, eval_tokens, vocab_size, context_size,
                 k, num_parts, num_eval_parts, pad_token_id,
                 stage_cluster_types, custom_cluster_of,
+                stage_context_sizes,
             ),
             sparse_threshold_override: sparse_threshold,
         }
@@ -4979,7 +4981,8 @@ impl MultiStageCacheWrapper {
 
     fn k(&self) -> usize { self.inner.k }
     fn vocab_size(&self) -> usize { self.inner.vocab_size }
-    fn context_size(&self) -> usize { self.inner.context_size }
+    fn context_size(&self) -> usize { self.inner.max_context_size }
+    fn stage_context_sizes(&self) -> Vec<usize> { self.inner.stage_context_sizes.clone() }
     fn max_cluster_size(&self) -> usize { self.inner.max_cluster_size }
     fn num_parts(&self) -> usize { self.inner.num_parts }
     fn num_eval_parts(&self) -> usize { self.inner.num_eval_parts }

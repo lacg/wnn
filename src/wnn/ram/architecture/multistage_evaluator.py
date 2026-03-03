@@ -102,7 +102,7 @@ class MultiStageEvaluator(BaseEvaluator):
 		train_tokens: list[int],
 		eval_tokens: list[int],
 		vocab_size: int = 50257,
-		context_size: int = 4,
+		context_size: int | list[int] = 4,
 		num_stages: int = 2,
 		stage_k: Optional[list[int]] = None,
 		stage_cluster_type: Optional[list[str]] = None,
@@ -119,6 +119,16 @@ class MultiStageEvaluator(BaseEvaluator):
 		log_path: Optional[str] = None,
 		custom_cluster_of: Optional[list[int]] = None,
 	):
+		# Normalize context_size to per-stage list
+		if isinstance(context_size, int):
+			stage_context_sizes = [context_size] * num_stages
+		else:
+			stage_context_sizes = list(context_size)
+			assert len(stage_context_sizes) == num_stages, \
+				f"stage_context_sizes length {len(stage_context_sizes)} != num_stages {num_stages}"
+		self._stage_context_sizes = stage_context_sizes
+		max_context_size = max(stage_context_sizes)
+
 		# Defaults
 		if stage_cluster_type is None:
 			stage_cluster_type = ["bitwise", "bitwise"]
@@ -132,7 +142,7 @@ class MultiStageEvaluator(BaseEvaluator):
 			train_tokens=train_tokens,
 			eval_tokens=eval_tokens,
 			vocab_size=vocab_size,
-			context_size=context_size,
+			context_size=max_context_size,
 			num_parts=num_parts,
 			num_eval_parts=num_eval_parts,
 			seed=seed,
@@ -158,7 +168,7 @@ class MultiStageEvaluator(BaseEvaluator):
 			train_tokens=list(train_tokens),
 			eval_tokens=list(eval_tokens),
 			vocab_size=vocab_size,
-			context_size=context_size,
+			context_size=max_context_size,
 			k=stage_k[0],  # Rust uses K from stage 0
 			num_parts=num_parts,
 			num_eval_parts=num_eval_parts,
@@ -166,6 +176,7 @@ class MultiStageEvaluator(BaseEvaluator):
 			sparse_threshold=sparse_threshold,
 			stage_cluster_types=stage_cluster_type,
 			custom_cluster_of=custom_cluster_of,
+			stage_context_sizes=stage_context_sizes,
 		)
 
 		# Cache stage dimensions from Rust (stage-agnostic)
@@ -833,9 +844,10 @@ class MultiStageEvaluator(BaseEvaluator):
 	def __repr__(self) -> str:
 		mode_names = {0: "TERNARY", 1: "QUAD_BINARY", 2: "QUAD_WEIGHTED"}
 		mode = mode_names.get(self._memory_mode, f"UNKNOWN({self._memory_mode})")
+		ctx = self._stage_context_sizes if len(set(self._stage_context_sizes)) > 1 else self._context_size
 		return (
 			f"MultiStageEvaluator(vocab={self._vocab_size}, "
-			f"context={self._context_size}, k={self._stage_k}, "
+			f"context={ctx}, k={self._stage_k}, "
 			f"target_stage={self._target_stage}, "
 			f"clusters={self._stage_num_clusters}, "
 			f"mode={mode})"

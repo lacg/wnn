@@ -622,7 +622,10 @@ class FlowWorker:
 
         Uses train split for training, test split for fitness scoring (GA/TS).
         """
-        self._log(f"Creating MultiStageEvaluator (context_size={context_size})...")
+        # Per-stage context sizes (e.g., [2, 4] for S0=2, S1=4)
+        stage_context_size = params.get("stage_context_size")
+        effective_ctx = stage_context_size if stage_context_size else context_size
+        self._log(f"Creating MultiStageEvaluator (context_size={effective_ctx})...")
 
         from wnn.ram.architecture.multistage_evaluator import MultiStageEvaluator
 
@@ -682,7 +685,7 @@ class FlowWorker:
             train_tokens=self._train_tokens,
             eval_tokens=self._test_tokens,
             vocab_size=self._vocab_size,
-            context_size=context_size,
+            context_size=effective_ctx,
             num_stages=num_stages,
             stage_k=stage_k,
             stage_cluster_type=stage_cluster_type,

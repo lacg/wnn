@@ -84,12 +84,13 @@ pub struct MultiStageTokenCache {
     pub max_cluster_size: usize,
 
     // ── Bit dimensions (stage-agnostic) ──────────────────────────────
-    pub context_size: usize,
-    pub bits_per_token: usize,             // 16 (for context encoding)
-    pub context_input_bits: usize,         // context_size * bits_per_token
-    pub bitwise_output_bits: Vec<usize>,   // [num_stages] — target bits per stage
-    pub stage_input_bits: Vec<usize>,      // [num_stages] — total input bits per stage
-    pub bitwise_vocab_size: Vec<usize>,    // [num_stages] — vocab for CE reconstruction
+    pub max_context_size: usize,
+    pub stage_context_sizes: Vec<usize>,       // [num_stages] — per-stage context window
+    pub bits_per_token: usize,                 // 16 (for context encoding)
+    pub stage_context_input_bits: Vec<usize>,  // [num_stages] — stage_context_sizes[s] * bits_per_token
+    pub bitwise_output_bits: Vec<usize>,       // [num_stages] — target bits per stage
+    pub stage_input_bits: Vec<usize>,          // [num_stages] — total input bits per stage
+    pub bitwise_vocab_size: Vec<usize>,        // [num_stages] — vocab for CE reconstruction
 
     // ── Bitwise data per stage ───────────────────────────────────────
     /// Bit patterns for each stage's classes: [num_stages][num_classes × bits]
@@ -147,16 +148,25 @@ impl MultiStageTokenCache {
         _pad_token_id: u32,
         stage_cluster_types: Option<Vec<String>>,
         custom_cluster_of: Option<Vec<u16>>,
+        stage_context_sizes: Option<Vec<usize>>,
     ) -> Self {
         let bits_per_token = bits_needed(vocab_size);
-        let context_input_bits = context_size * bits_per_token;
+
+        // ── Per-stage context sizes ─────────────────────────────────
+        let num_stages = 2; // Currently fixed at 2
+        let stage_ctx = stage_context_sizes.unwrap_or_else(|| vec![context_size; num_stages]);
+        assert_eq!(stage_ctx.len(), num_stages,
+            "stage_context_sizes length {} != num_stages {}", stage_ctx.len(), num_stages);
+        let max_context_size = *stage_ctx.iter().max().unwrap();
+        let stage_context_input_bits: Vec<usize> = stage_ctx.iter()
+            .map(|&cs| cs * bits_per_token)
+            .collect();
 
         // Keep raw tokens for later re-encoding with predicted clusters
         let stored_train_tokens = train_tokens.clone();
         let stored_eval_tokens = eval_tokens.clone();
 
         // Parse stage cluster types (default: all bitwise)
-        let num_stages = 2; // Currently fixed at 2
         let stage_types = stage_cluster_types.unwrap_or_else(|| vec!["bitwise".to_string(); num_stages]);
         let stage_is_tiered: Vec<bool> = stage_types.iter()
             .map(|t| t.to_lowercase() == "tiered")
@@ -216,11 +226,11 @@ impl MultiStageTokenCache {
         let stage_output_bits_raw = vec![bits_needed(k), bits_needed(max_cluster_size)];
         let stage_vocab = vec![k, max_cluster_size];
 
-        // Input bits: stage 0 = context only, stage s>0 = context + sum(output_bits[0..s])
+        // Input bits: stage s = stage_context_input_bits[s] + sum(output_bits[0..s])
         let mut stage_input_bits_raw = vec![0usize; num_stages];
-        stage_input_bits_raw[0] = context_input_bits;
+        stage_input_bits_raw[0] = stage_context_input_bits[0];
         for s in 1..num_stages {
-            stage_input_bits_raw[s] = context_input_bits + stage_output_bits_raw[..s].iter().sum::<usize>();
+            stage_input_bits_raw[s] = stage_context_input_bits[s] + stage_output_bits_raw[..s].iter().sum::<usize>();
         }
 
         let stage_num_output_clusters: Vec<usize> = (0..num_stages)
@@ -253,12 +263,14 @@ impl MultiStageTokenCache {
             let total_input = stage_input_bits_raw[s];
             let target_bits_count = stage_output_bits_raw[s];
             let prev_output_bits = &stage_output_bits_raw[..s];
+            let s_ctx = stage_ctx[s];
+            let s_ctx_bits = stage_context_input_bits[s];
 
             // Full train
             let (input_bits, _targets, target_bits, n) =
                 Self::encode_bitwise_stage_sequence(
-                    &train_tokens, context_size, bits_per_token,
-                    context_input_bits, s, total_input, target_bits_count,
+                    &train_tokens, s_ctx, max_context_size, bits_per_token,
+                    s_ctx_bits, s, total_input, target_bits_count,
                     prev_output_bits, &cluster_of, &index_in_cluster,
                     None,
                 );
@@ -275,8 +287,8 @@ impl MultiStageTokenCache {
 
             // Train subsets
             bitwise_train_subsets.push(Self::split_and_encode_bitwise_train(
-                &train_tokens, context_size, bits_per_token,
-                context_input_bits, s, total_input, target_bits_count,
+                &train_tokens, s_ctx, max_context_size, bits_per_token,
+                s_ctx_bits, s, total_input, target_bits_count,
                 prev_output_bits, &cluster_of, &index_in_cluster, num_parts,
                 None,
             ));
@@ -284,8 +296,8 @@ impl MultiStageTokenCache {
             // Full eval
             let (eval_input, eval_targets, _, eval_n) =
                 Self::encode_bitwise_stage_sequence(
-                    &eval_tokens, context_size, bits_per_token,
-                    context_input_bits, s, total_input, target_bits_count,
+                    &eval_tokens, s_ctx, max_context_size, bits_per_token,
+                    s_ctx_bits, s, total_input, target_bits_count,
                     prev_output_bits, &cluster_of, &index_in_cluster,
                     None,
                 );
@@ -300,14 +312,14 @@ impl MultiStageTokenCache {
 
             // Eval subsets
             bitwise_eval_subsets.push(Self::split_and_encode_bitwise_eval(
-                &eval_tokens, context_size, bits_per_token,
-                context_input_bits, s, total_input, target_bits_count,
+                &eval_tokens, s_ctx, max_context_size, bits_per_token,
+                s_ctx_bits, s, total_input, target_bits_count,
                 prev_output_bits, &cluster_of, &index_in_cluster, num_eval_parts,
                 None,
             ));
 
             eprintln!(
-                "  Stage{s} bitwise: bits={target_bits_count}, vocab={}, train={n}, eval={eval_n}, input={total_input}b",
+                "  Stage{s} bitwise: bits={target_bits_count}, vocab={}, train={n}, eval={eval_n}, input={total_input}b, ctx={s_ctx}",
                 stage_vocab[s]
             );
         }
@@ -323,11 +335,14 @@ impl MultiStageTokenCache {
                 bitwise_selector_eval.push(Vec::new());
             } else {
                 // Stage 1+: create K per-group datasets
+                // Selector uses stage s's context size for input encoding
+                let sel_ctx = stage_ctx[s];
+                let sel_ctx_bits = stage_context_input_bits[s];
                 let sel_train: Vec<BitwiseSubset> = (0..k)
                     .map(|g| {
                         Self::encode_bitwise_selector(
-                            &train_tokens, context_size, bits_per_token,
-                            context_input_bits, stage_output_bits_raw[s],
+                            &train_tokens, sel_ctx, max_context_size, bits_per_token,
+                            sel_ctx_bits, stage_output_bits_raw[s],
                             &cluster_of, &index_in_cluster, g,
                             true, None,
                         ).0
@@ -336,8 +351,8 @@ impl MultiStageTokenCache {
                 let sel_eval: Vec<BitwiseEvalSubset> = (0..k)
                     .map(|g| {
                         Self::encode_bitwise_selector(
-                            &eval_tokens, context_size, bits_per_token,
-                            context_input_bits, stage_output_bits_raw[s],
+                            &eval_tokens, sel_ctx, max_context_size, bits_per_token,
+                            sel_ctx_bits, stage_output_bits_raw[s],
                             &cluster_of, &index_in_cluster, g,
                             false, None,
                         ).1
@@ -356,7 +371,7 @@ impl MultiStageTokenCache {
         // ── Build eval target token_ids for combined CE ──────────────
         let eval_n_total = bitwise_full_eval[0].num_examples;
         let eval_target_token_ids: Vec<u32> = (0..eval_n_total)
-            .map(|i| eval_tokens[i + context_size])
+            .map(|i| eval_tokens[i + max_context_size])
             .collect();
 
         // ── Encode tiered data per stage ─────────────────────────────
@@ -377,12 +392,14 @@ impl MultiStageTokenCache {
 
             let stage_input = stage_input_bits_raw[stage];
             let stage_num_classes = stage_vocab[stage];
+            let t_ctx = stage_ctx[stage];
+            let t_ctx_bits = stage_context_input_bits[stage];
 
             // Encode full train
             let (train_input, train_targets_i64, train_negs, train_n) =
                 Self::encode_tiered_stage_sequence(
-                    &train_tokens, context_size, bits_per_token,
-                    context_input_bits, stage_output_bits_raw[0],
+                    &train_tokens, t_ctx, max_context_size, bits_per_token,
+                    t_ctx_bits, stage_output_bits_raw[0],
                     &cluster_of, &index_in_cluster,
                     stage, stage_num_classes, num_neg,
                     None,
@@ -401,8 +418,8 @@ impl MultiStageTokenCache {
             // Encode full eval
             let (eval_input, eval_targets_i64, _, eval_n) =
                 Self::encode_tiered_stage_sequence(
-                    &eval_tokens, context_size, bits_per_token,
-                    context_input_bits, stage_output_bits_raw[0],
+                    &eval_tokens, t_ctx, max_context_size, bits_per_token,
+                    t_ctx_bits, stage_output_bits_raw[0],
                     &cluster_of, &index_in_cluster,
                     stage, stage_num_classes, 0,
                     None,
@@ -418,8 +435,8 @@ impl MultiStageTokenCache {
 
             // Encode train subsets
             let train_subs = Self::split_and_encode_tiered_train(
-                &train_tokens, context_size, bits_per_token,
-                context_input_bits, stage_output_bits_raw[0],
+                &train_tokens, t_ctx, max_context_size, bits_per_token,
+                t_ctx_bits, stage_output_bits_raw[0],
                 &cluster_of, &index_in_cluster,
                 stage, stage_input, stage_num_classes, num_neg, num_parts,
                 None,
@@ -428,8 +445,8 @@ impl MultiStageTokenCache {
 
             // Encode eval subsets
             let eval_subs = Self::split_and_encode_tiered_eval(
-                &eval_tokens, context_size, bits_per_token,
-                context_input_bits, stage_output_bits_raw[0],
+                &eval_tokens, t_ctx, max_context_size, bits_per_token,
+                t_ctx_bits, stage_output_bits_raw[0],
                 &cluster_of, &index_in_cluster,
                 stage, stage_input, stage_num_classes, num_eval_parts,
                 None,
@@ -446,10 +463,11 @@ impl MultiStageTokenCache {
         let stage_labels: Vec<String> = (0..num_stages)
             .map(|s| if stage_is_tiered[s] { "tiered".to_string() } else { "bitwise".to_string() })
             .collect();
+        let ctx_str: Vec<String> = stage_ctx.iter().map(|c| c.to_string()).collect();
         eprintln!(
-            "[MultiStageCache] K={k}, vocab={vocab_size}, ctx={context_size}, \
+            "[MultiStageCache] K={k}, vocab={vocab_size}, ctx=[{}], max_ctx={max_context_size}, \
              stages={}, mapping={mapping_type}",
-            stage_labels.join("+")
+            ctx_str.join(","), stage_labels.join("+")
         );
         for s in 0..num_stages {
             eprintln!(
@@ -464,9 +482,10 @@ impl MultiStageTokenCache {
             index_in_cluster,
             cluster_sizes,
             max_cluster_size,
-            context_size,
+            max_context_size,
+            stage_context_sizes: stage_ctx,
             bits_per_token,
-            context_input_bits,
+            stage_context_input_bits,
             bitwise_output_bits: stage_output_bits_raw,
             stage_input_bits: stage_input_bits_raw,
             bitwise_vocab_size: stage_vocab,
@@ -505,6 +524,7 @@ impl MultiStageTokenCache {
     fn encode_bitwise_stage_sequence(
         tokens: &[u32],
         context_size: usize,
+        max_context_size: usize,
         bits_per_token: usize,
         context_input_bits: usize,
         stage: usize,
@@ -515,11 +535,12 @@ impl MultiStageTokenCache {
         index_in_cluster: &[u16],
         predicted_clusters: Option<&[u32]>,
     ) -> (Vec<bool>, Vec<u32>, Vec<u8>, usize) {
-        if tokens.len() <= context_size {
+        if tokens.len() <= max_context_size {
             return (vec![], vec![], vec![], 0);
         }
 
-        let num_ex = tokens.len() - context_size;
+        let num_ex = tokens.len() - max_context_size;
+        let ctx_offset = max_context_size - context_size;
         let mut input_bits = vec![false; num_ex * total_input_bits];
         let mut targets = vec![0u32; num_ex];
         let mut target_bits = vec![0u8; num_ex * target_bits_count];
@@ -540,16 +561,16 @@ impl MultiStageTokenCache {
             .zip(target_bits.par_chunks_mut(target_bits_count))
             .enumerate()
             .for_each(|(i, ((inp, tgt), tb))| {
-                // Encode context tokens (same for all stages)
+                // Encode context tokens (offset by ctx_offset for shorter contexts)
                 for ctx in 0..context_size {
-                    let token = tokens[i + ctx] as usize;
+                    let token = tokens[i + ctx_offset + ctx] as usize;
                     let off = ctx * bits_per_token;
                     for b in 0..bits_per_token {
                         inp[off + b] = ((token >> (bits_per_token - 1 - b)) & 1) == 1;
                     }
                 }
 
-                let target_token = tokens[i + context_size] as usize;
+                let target_token = tokens[i + max_context_size] as usize;
 
                 if stage == 0 {
                     // Stage 0: target = cluster_id
@@ -584,6 +605,7 @@ impl MultiStageTokenCache {
     fn split_and_encode_bitwise_train(
         tokens: &[u32],
         context_size: usize,
+        max_context_size: usize,
         bits_per_token: usize,
         context_input_bits: usize,
         stage: usize,
@@ -603,15 +625,15 @@ impl MultiStageTokenCache {
                 let end = if i < num_parts - 1 { start + part_size } else { n };
                 let part = &tokens[start..end];
                 // Slice predictions to match this part's examples.
-                // Part tokens[start..end] produces num_ex = (end-start)-context_size examples.
+                // Part tokens[start..end] produces num_ex = (end-start)-max_context_size examples.
                 // Part example j corresponds to full example (start + j).
                 let part_preds = predicted_clusters.map(|p| {
-                    let num_ex = if end > start + context_size { end - start - context_size } else { 0 };
+                    let num_ex = if end > start + max_context_size { end - start - max_context_size } else { 0 };
                     &p[start..start + num_ex]
                 });
                 let (input_bits, _, target_bits, num_ex) =
                     Self::encode_bitwise_stage_sequence(
-                        part, context_size, bits_per_token,
+                        part, context_size, max_context_size, bits_per_token,
                         context_input_bits, stage, total_input_bits, target_bits_count,
                         previous_output_bits, cluster_of, index_in_cluster,
                         part_preds,
@@ -633,6 +655,7 @@ impl MultiStageTokenCache {
     fn split_and_encode_bitwise_eval(
         tokens: &[u32],
         context_size: usize,
+        max_context_size: usize,
         bits_per_token: usize,
         context_input_bits: usize,
         stage: usize,
@@ -652,12 +675,12 @@ impl MultiStageTokenCache {
                 let end = if i < num_parts - 1 { start + part_size } else { n };
                 let part = &tokens[start..end];
                 let part_preds = predicted_clusters.map(|p| {
-                    let num_ex = if end > start + context_size { end - start - context_size } else { 0 };
+                    let num_ex = if end > start + max_context_size { end - start - max_context_size } else { 0 };
                     &p[start..start + num_ex]
                 });
                 let (input_bits, targets, _, num_ex) =
                     Self::encode_bitwise_stage_sequence(
-                        part, context_size, bits_per_token,
+                        part, context_size, max_context_size, bits_per_token,
                         context_input_bits, stage, total_input_bits, target_bits_count,
                         previous_output_bits, cluster_of, index_in_cluster,
                         part_preds,
@@ -685,6 +708,7 @@ impl MultiStageTokenCache {
     fn encode_bitwise_selector(
         tokens: &[u32],
         context_size: usize,
+        max_context_size: usize,
         bits_per_token: usize,
         context_input_bits: usize,
         bits_per_within_index: usize,
@@ -694,7 +718,7 @@ impl MultiStageTokenCache {
         is_train: bool,
         predicted_clusters: Option<&[u32]>,
     ) -> (BitwiseSubset, BitwiseEvalSubset) {
-        if tokens.len() <= context_size {
+        if tokens.len() <= max_context_size {
             let empty_train = BitwiseSubset {
                 input_bits: Vec::new(), packed_input: Vec::new(),
                 target_bits: Vec::new(), num_examples: 0, words_per_example: 0,
@@ -709,12 +733,13 @@ impl MultiStageTokenCache {
 
         // Collect indices of examples belonging to this group
         // With predictions: filter by predicted cluster; without: filter by true cluster
-        let total_ex = tokens.len() - context_size;
+        let total_ex = tokens.len() - max_context_size;
+        let ctx_offset = max_context_size - context_size;
         let group_indices: Vec<usize> = (0..total_ex)
             .filter(|&i| {
                 match predicted_clusters {
                     Some(preds) => preds[i] as usize == group_id,
-                    None => cluster_of[tokens[i + context_size] as usize] as usize == group_id,
+                    None => cluster_of[tokens[i + max_context_size] as usize] as usize == group_id,
                 }
             })
             .collect();
@@ -744,13 +769,13 @@ impl MultiStageTokenCache {
             .zip(group_indices.par_iter())
             .for_each(|(((inp, tgt), tb), &orig_idx)| {
                 for ctx in 0..context_size {
-                    let token = tokens[orig_idx + ctx] as usize;
+                    let token = tokens[orig_idx + ctx_offset + ctx] as usize;
                     let off = ctx * bits_per_token;
                     for b in 0..bits_per_token {
                         inp[off + b] = ((token >> (bits_per_token - 1 - b)) & 1) == 1;
                     }
                 }
-                let target_token = tokens[orig_idx + context_size] as usize;
+                let target_token = tokens[orig_idx + max_context_size] as usize;
                 let within_idx = index_in_cluster[target_token] as usize;
                 *tgt = within_idx as u32;
                 for b in 0..bits_per_within_index {
@@ -805,6 +830,7 @@ impl MultiStageTokenCache {
     fn encode_tiered_stage_sequence(
         tokens: &[u32],
         context_size: usize,
+        max_context_size: usize,
         bits_per_token: usize,
         context_input_bits: usize,
         bits_per_cluster_id: usize,
@@ -815,11 +841,12 @@ impl MultiStageTokenCache {
         num_negatives: usize,
         predicted_clusters: Option<&[u32]>,
     ) -> (Vec<bool>, Vec<i64>, Vec<i64>, usize) {
-        if tokens.len() <= context_size {
+        if tokens.len() <= max_context_size {
             return (vec![], vec![], vec![], 0);
         }
 
-        let num_ex = tokens.len() - context_size;
+        let num_ex = tokens.len() - max_context_size;
+        let ctx_offset = max_context_size - context_size;
         let total_input_bits = match stage {
             0 => context_input_bits,
             _ => context_input_bits + bits_per_cluster_id,
@@ -839,14 +866,14 @@ impl MultiStageTokenCache {
             .enumerate()
             .for_each(|(i, ((inp, tgt), negs))| {
                 for ctx in 0..context_size {
-                    let token = tokens[i + ctx] as usize;
+                    let token = tokens[i + ctx_offset + ctx] as usize;
                     let off = ctx * bits_per_token;
                     for b in 0..bits_per_token {
                         inp[off + b] = ((token >> (bits_per_token - 1 - b)) & 1) == 1;
                     }
                 }
 
-                let target_token = tokens[i + context_size] as usize;
+                let target_token = tokens[i + max_context_size] as usize;
 
                 match stage {
                     0 => {
@@ -892,6 +919,7 @@ impl MultiStageTokenCache {
     fn split_and_encode_tiered_train(
         tokens: &[u32],
         context_size: usize,
+        max_context_size: usize,
         bits_per_token: usize,
         context_input_bits: usize,
         bits_per_cluster_id: usize,
@@ -913,12 +941,12 @@ impl MultiStageTokenCache {
                 let end = if i < num_parts - 1 { start + part_size } else { n };
                 let part = &tokens[start..end];
                 let part_preds = predicted_clusters.map(|p| {
-                    let num_ex = if end > start + context_size { end - start - context_size } else { 0 };
+                    let num_ex = if end > start + max_context_size { end - start - max_context_size } else { 0 };
                     &p[start..start + num_ex]
                 });
                 let (input_bits, targets, negatives, num_ex) =
                     Self::encode_tiered_stage_sequence(
-                        part, context_size, bits_per_token,
+                        part, context_size, max_context_size, bits_per_token,
                         context_input_bits, bits_per_cluster_id,
                         cluster_of, index_in_cluster,
                         stage, num_classes, num_negatives,
@@ -942,6 +970,7 @@ impl MultiStageTokenCache {
     fn split_and_encode_tiered_eval(
         tokens: &[u32],
         context_size: usize,
+        max_context_size: usize,
         bits_per_token: usize,
         context_input_bits: usize,
         bits_per_cluster_id: usize,
@@ -962,12 +991,12 @@ impl MultiStageTokenCache {
                 let end = if i < num_eval_parts - 1 { start + part_size } else { n };
                 let part = &tokens[start..end];
                 let part_preds = predicted_clusters.map(|p| {
-                    let num_ex = if end > start + context_size { end - start - context_size } else { 0 };
+                    let num_ex = if end > start + max_context_size { end - start - max_context_size } else { 0 };
                     &p[start..start + num_ex]
                 });
                 let (input_bits, targets, _, num_ex) =
                     Self::encode_tiered_stage_sequence(
-                        part, context_size, bits_per_token,
+                        part, context_size, max_context_size, bits_per_token,
                         context_input_bits, bits_per_cluster_id,
                         cluster_of, index_in_cluster,
                         stage, num_classes, 0,
@@ -1003,11 +1032,14 @@ impl MultiStageTokenCache {
         let target_bits_count = self.bitwise_output_bits[s];
         let prev_output_bits_slice = &self.bitwise_output_bits[..s];
 
+        let s_ctx = self.stage_context_sizes[s];
+        let s_ctx_bits = self.stage_context_input_bits[s];
+
         // ── Bitwise full train ──
         let (input_bits, _targets, target_bits, n) =
             Self::encode_bitwise_stage_sequence(
-                &self.train_tokens, self.context_size, self.bits_per_token,
-                self.context_input_bits, s, total_input, target_bits_count,
+                &self.train_tokens, s_ctx, self.max_context_size, self.bits_per_token,
+                s_ctx_bits, s, total_input, target_bits_count,
                 prev_output_bits_slice, &self.cluster_of, &self.index_in_cluster,
                 Some(train_predictions),
             );
@@ -1025,8 +1057,8 @@ impl MultiStageTokenCache {
         // ── Bitwise full eval ──
         let (eval_input, eval_targets, _, eval_n) =
             Self::encode_bitwise_stage_sequence(
-                &self.eval_tokens, self.context_size, self.bits_per_token,
-                self.context_input_bits, s, total_input, target_bits_count,
+                &self.eval_tokens, s_ctx, self.max_context_size, self.bits_per_token,
+                s_ctx_bits, s, total_input, target_bits_count,
                 prev_output_bits_slice, &self.cluster_of, &self.index_in_cluster,
                 Some(eval_predictions),
             );
@@ -1041,16 +1073,16 @@ impl MultiStageTokenCache {
 
         // ── Bitwise train subsets ──
         self.bitwise_train_subsets[s] = Self::split_and_encode_bitwise_train(
-            &self.train_tokens, self.context_size, self.bits_per_token,
-            self.context_input_bits, s, total_input, target_bits_count,
+            &self.train_tokens, s_ctx, self.max_context_size, self.bits_per_token,
+            s_ctx_bits, s, total_input, target_bits_count,
             prev_output_bits_slice, &self.cluster_of, &self.index_in_cluster,
             self.num_parts, Some(train_predictions),
         );
 
         // ── Bitwise eval subsets ──
         self.bitwise_eval_subsets[s] = Self::split_and_encode_bitwise_eval(
-            &self.eval_tokens, self.context_size, self.bits_per_token,
-            self.context_input_bits, s, total_input, target_bits_count,
+            &self.eval_tokens, s_ctx, self.max_context_size, self.bits_per_token,
+            s_ctx_bits, s, total_input, target_bits_count,
             prev_output_bits_slice, &self.cluster_of, &self.index_in_cluster,
             self.num_eval_parts, Some(eval_predictions),
         );
@@ -1061,8 +1093,8 @@ impl MultiStageTokenCache {
             self.bitwise_selector_train[s] = (0..k)
                 .map(|g| {
                     Self::encode_bitwise_selector(
-                        &self.train_tokens, self.context_size, self.bits_per_token,
-                        self.context_input_bits, self.bitwise_output_bits[s],
+                        &self.train_tokens, s_ctx, self.max_context_size, self.bits_per_token,
+                        s_ctx_bits, self.bitwise_output_bits[s],
                         &self.cluster_of, &self.index_in_cluster, g,
                         true, Some(train_predictions),
                     ).0
@@ -1071,8 +1103,8 @@ impl MultiStageTokenCache {
             self.bitwise_selector_eval[s] = (0..k)
                 .map(|g| {
                     Self::encode_bitwise_selector(
-                        &self.eval_tokens, self.context_size, self.bits_per_token,
-                        self.context_input_bits, self.bitwise_output_bits[s],
+                        &self.eval_tokens, s_ctx, self.max_context_size, self.bits_per_token,
+                        s_ctx_bits, self.bitwise_output_bits[s],
                         &self.cluster_of, &self.index_in_cluster, g,
                         false, Some(eval_predictions),
                     ).1
@@ -1090,8 +1122,8 @@ impl MultiStageTokenCache {
             // Full train
             let (train_input, train_targets_i64, train_negs, train_n) =
                 Self::encode_tiered_stage_sequence(
-                    &self.train_tokens, self.context_size, self.bits_per_token,
-                    self.context_input_bits, bits_per_cluster_id,
+                    &self.train_tokens, s_ctx, self.max_context_size, self.bits_per_token,
+                    s_ctx_bits, bits_per_cluster_id,
                     &self.cluster_of, &self.index_in_cluster,
                     s, stage_num_classes, num_neg,
                     Some(train_predictions),
@@ -1110,8 +1142,8 @@ impl MultiStageTokenCache {
             // Full eval
             let (eval_input_t, eval_targets_i64, _, eval_n_t) =
                 Self::encode_tiered_stage_sequence(
-                    &self.eval_tokens, self.context_size, self.bits_per_token,
-                    self.context_input_bits, bits_per_cluster_id,
+                    &self.eval_tokens, s_ctx, self.max_context_size, self.bits_per_token,
+                    s_ctx_bits, bits_per_cluster_id,
                     &self.cluster_of, &self.index_in_cluster,
                     s, stage_num_classes, 0,
                     Some(eval_predictions),
@@ -1127,8 +1159,8 @@ impl MultiStageTokenCache {
 
             // Train subsets
             self.tiered_train_subsets[s] = Some(Self::split_and_encode_tiered_train(
-                &self.train_tokens, self.context_size, self.bits_per_token,
-                self.context_input_bits, bits_per_cluster_id,
+                &self.train_tokens, s_ctx, self.max_context_size, self.bits_per_token,
+                s_ctx_bits, bits_per_cluster_id,
                 &self.cluster_of, &self.index_in_cluster,
                 s, stage_input, stage_num_classes, num_neg, self.num_parts,
                 Some(train_predictions),
@@ -1136,8 +1168,8 @@ impl MultiStageTokenCache {
 
             // Eval subsets
             self.tiered_eval_subsets[s] = Some(Self::split_and_encode_tiered_eval(
-                &self.eval_tokens, self.context_size, self.bits_per_token,
-                self.context_input_bits, bits_per_cluster_id,
+                &self.eval_tokens, s_ctx, self.max_context_size, self.bits_per_token,
+                s_ctx_bits, bits_per_cluster_id,
                 &self.cluster_of, &self.index_in_cluster,
                 s, stage_input, stage_num_classes, self.num_eval_parts,
                 Some(eval_predictions),
@@ -1283,13 +1315,13 @@ pub fn predict_stage_clusters(
     let (train_correct, eval_correct) = if stage == 0 {
         let tc: usize = (0..num_train)
             .filter(|&i| {
-                let token = cache.train_tokens[i + cache.context_size] as usize;
+                let token = cache.train_tokens[i + cache.max_context_size] as usize;
                 train_predictions[i] == cache.cluster_of[token] as u32
             })
             .count();
         let ec: usize = (0..num_eval)
             .filter(|&i| {
-                let token = cache.eval_tokens[i + cache.context_size] as usize;
+                let token = cache.eval_tokens[i + cache.max_context_size] as usize;
                 eval_predictions[i] == cache.cluster_of[token] as u32
             })
             .count();
@@ -1297,13 +1329,13 @@ pub fn predict_stage_clusters(
     } else {
         let tc: usize = (0..num_train)
             .filter(|&i| {
-                let token = cache.train_tokens[i + cache.context_size] as usize;
+                let token = cache.train_tokens[i + cache.max_context_size] as usize;
                 train_predictions[i] == cache.index_in_cluster[token] as u32
             })
             .count();
         let ec: usize = (0..num_eval)
             .filter(|&i| {
-                let token = cache.eval_tokens[i + cache.context_size] as usize;
+                let token = cache.eval_tokens[i + cache.max_context_size] as usize;
                 eval_predictions[i] == cache.index_in_cluster[token] as u32
             })
             .count();
@@ -1669,7 +1701,7 @@ fn build_augmented_selector_subsets(
 ) -> Vec<BitwiseSubset> {
     let k = cache.k;
     let num_train = cache.bitwise_full_train[s1_stage].num_examples;
-    let context_size = cache.context_size;
+    let context_size = cache.max_context_size;
     let wpe = cache.bitwise_full_train[s1_stage].words_per_example;
 
     (0..k).map(|g| {
@@ -2061,7 +2093,7 @@ pub fn compute_combined_ce_selector(
 
     // ── Normal mode: weighted S1 training (Phase B) ──
     let weighted_selector_train: Option<Vec<BitwiseSubset>> = train_group_probs.map(|tgp| {
-        let context_size = cache.context_size;
+        let context_size = cache.max_context_size;
         let num_train = cache.bitwise_full_train[0].num_examples;
         let selector_train = &cache.bitwise_selector_train[s1_stage];
         let mut group_weights: Vec<Vec<f32>> = (0..k)

@@ -25,6 +25,7 @@
   interface StageConfig {
     clusterType: string;
     k: number;
+    contextSize: number;
     minBits: number;
     maxBits: number;
     minNeurons: number;
@@ -87,7 +88,7 @@
 
   function defaultStageConfig(): StageConfig {
     return {
-      clusterType: 'bitwise', k: 256,
+      clusterType: 'bitwise', k: 256, contextSize: 4,
       minBits: 4, maxBits: 24, minNeurons: 5, maxNeurons: 300,
       neuronsGrid: '5,10,25,50',
       bitsGrid: '4,6,8,10,12,16,20,24',
@@ -546,6 +547,8 @@
         params.num_stages = numStages;
         params.stage_k = stageConfigs.slice(0, numStages).map(s => s.k);
         params.stage_cluster_type = stageConfigs.slice(0, numStages).map(s => s.clusterType);
+        params.stage_context_size = stageConfigs.slice(0, numStages).map(s => s.contextSize);
+        params.context_size = Math.max(...stageConfigs.slice(0, numStages).map(s => s.contextSize));
         params.stage_mode = stageMode;
         // Per-stage bounds
         params.stage_min_bits = stageConfigs.slice(0, numStages).map(s => s.minBits);
@@ -714,6 +717,10 @@
               <div class="form-group">
                 <label for="stageK_{i}">K</label>
                 <input type="number" id="stageK_{i}" bind:value={config.k} min="2" max="1024" />
+              </div>
+              <div class="form-group">
+                <label for="stageCtx_{i}">Context</label>
+                <input type="number" id="stageCtx_{i}" bind:value={config.contextSize} min="2" max="16" />
               </div>
             {/if}
           {/each}
