@@ -1310,8 +1310,18 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		# Track previous best for delta computation
 		prev_best_fitness = best_fitness
 
+		def _fmt_duration(s):
+			if s < 60:
+				return f"{s:.0f}s"
+			elif s < 3600:
+				return f"{s/60:.1f}m"
+			else:
+				return f"{s/3600:.1f}h"
+
 		shutdown_requested = False
 		generation = 0
+		loop_start_time = time.time()
+		cumulative_offspring_secs = 0.0
 		for generation in range(cfg.generations):
 			gen_start_time = time.time()
 			# Progressive threshold: gets stricter as generations progress
@@ -1384,7 +1394,10 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 					self._tracker_experiment_id,
 					status_message=f"Gen {generation + 1}/{cfg.generations}: evaluating {needed_offspring} offspring (best CE={best_ce_str})",
 				)
+			offspring_start = time.time()
 			offspring = self._generate_offspring(population, needed_offspring, current_threshold, generation)
+			offspring_secs = time.time() - offspring_start
+			cumulative_offspring_secs += offspring_secs
 
 			# Combine elites with viable offspring
 			population = new_population + offspring
@@ -1420,11 +1433,28 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			if best_fitness < prev_best:
 				improved_iterations += 1
 
-			# Log progress
+			# Log progress with timing
+			gen_elapsed = time.time() - gen_start_time
+			total_elapsed = time.time() - loop_start_time
 			gen_avg = sum(fitness_values) / len(fitness_values)
 			gen_width = len(str(cfg.generations))
-			self._log.info(f"[{self.name}] Gen {generation + 1:0{gen_width}d}/{cfg.generations}: "
-						   f"best={best_fitness:.4f}, new_best={new_best:.4f}, avg={gen_avg:.4f}")
+			rate = len(offspring) / offspring_secs if offspring_secs > 0 else 0
+			# ETA based on average time per generation so far
+			gens_done = generation + 1
+			gens_remaining = cfg.generations - gens_done
+			avg_gen_secs = total_elapsed / gens_done
+			eta_secs = gens_remaining * avg_gen_secs
+			# Delta from previous generation
+			delta = best_fitness - prev_best_fitness
+			delta_str = f"{delta:+.4f}" if delta != 0 else "="
+			# Best accuracy
+			acc_str = f", acc={best_accuracy_val:.2%}" if best_accuracy_val is not None else ""
+			self._log.info(
+				f"[{self.name}] Gen {generation + 1:0{gen_width}d}/{cfg.generations}: "
+				f"best={best_fitness:.4f} ({delta_str}), new_best={new_best:.4f}, avg={gen_avg:.4f}{acc_str} "
+				f"| {gen_elapsed:.1f}s (offspring: {offspring_secs:.1f}s, {rate:.1f} gen/s) "
+				f"[elapsed: {_fmt_duration(total_elapsed)}, ETA: {_fmt_duration(eta_secs)}]"
+			)
 
 			# Record iteration to tracker (if set)
 			if self._tracker and self._tracker_experiment_id:
@@ -1585,12 +1615,16 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		# Compute final threshold for next phase continuity
 		final_threshold = self._compute_threshold(generation / cfg.threshold_reference) if cfg.generations > 0 else self._compute_threshold(0.0)
 
+		total_wall_time = time.time() - loop_start_time
+		offspring_pct = cumulative_offspring_secs / total_wall_time * 100 if total_wall_time > 0 else 0
 		self._log.info(f"[{self.name}] Analysis Summary:")
 		self._log.info(f"  CE improvement: {initial_fitness:.4f} → {best_fitness:.4f} ({(1 - best_fitness/initial_fitness)*100:+.2f}%)")
 		self._log.info(f"  CE spread: {initial_ce_spread:.4f} → {final_ce_spread:.4f} ({diversity_change:+.4f})")
 		self._log.info(f"  Elite survivals: {elite_survivals}/{len(initial_elite_genomes) if initial_elite_genomes else 0}")
 		self._log.info(f"  Elite win rate: {elite_wins}/{total_gens} ({elite_win_rate:.1f}%)")
 		self._log.info(f"  Improvement rate: {improved_iterations}/{total_gens} ({improvement_rate:.1f}%)")
+		self._log.info(f"  Wall time: {_fmt_duration(total_wall_time)} total, {_fmt_duration(cumulative_offspring_secs)} offspring ({offspring_pct:.0f}%)")
+		self._log.info(f"  Avg gen: {total_wall_time / total_gens:.1f}s" if total_gens > 0 else "")
 		self._log.info(f"  Final threshold: {final_threshold:.2%} (for next phase)")
 
 		# Determine stop reason (uses base infrastructure)
@@ -2116,8 +2150,18 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 		# Track previous best for delta computation
 		prev_best_fitness = best_fitness
 
+		def _fmt_duration_ts(s):
+			if s < 60:
+				return f"{s:.0f}s"
+			elif s < 3600:
+				return f"{s/60:.1f}m"
+			else:
+				return f"{s/3600:.1f}h"
+
 		shutdown_requested = False
 		iteration = 0
+		loop_start_time = time.time()
+		cumulative_offspring_secs = 0.0
 		for iteration in range(cfg.iterations):
 			iter_start_time = time.time()
 			# Progressive threshold
@@ -2141,6 +2185,7 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 				break
 
 			# === (μ + λ) selection: generate offspring from elite sources ===
+			offspring_start = time.time()
 			if cfg.diversity_sources_pct > 0 and len(pop) > 1:
 				# Population-based TS: top 20% of population as sources
 				n_sources = max(1, int(len(pop) * cfg.diversity_sources_pct))
@@ -2206,6 +2251,9 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 					tabu_list=tabu_list,
 				)
 
+			offspring_secs = time.time() - offspring_start
+			cumulative_offspring_secs += offspring_secs
+
 			if not offspring:
 				continue
 
@@ -2231,12 +2279,26 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 
 			history.append((iteration + 1, best_fitness))
 
-			# Log progress
+			# Log progress with timing
+			iter_elapsed = time.time() - iter_start_time
+			total_elapsed = time.time() - loop_start_time
 			iter_width = len(str(cfg.iterations))
+			rate = len(offspring) / offspring_secs if offspring_secs > 0 else 0
+			iters_done = iteration + 1
+			iters_remaining = cfg.iterations - iters_done
+			avg_iter_secs = total_elapsed / iters_done
+			eta_secs = iters_remaining * avg_iter_secs
+			# Delta from previous iteration
+			delta = best_fitness - prev_best_fitness
+			delta_str = f"{delta:+.4f}" if delta != 0 else "="
 			ranked_acc_str = f"{best_ranked_accuracy:.2%}" if best_ranked_accuracy is not None else "N/A"
-			self._log.info(f"[{self.name}] Iter {iteration + 1:0{iter_width}d}/{cfg.iterations}: "
-						   f"best_ranked=(CE={best_ranked_ce:.4f}, Acc={ranked_acc_str}), "
-						   f"best_ce={best_fitness:.4f}, pop={len(pop)}")
+			self._log.info(
+				f"[{self.name}] Iter {iteration + 1:0{iter_width}d}/{cfg.iterations}: "
+				f"best_ranked=(CE={best_ranked_ce:.4f}, Acc={ranked_acc_str}), "
+				f"best_ce={best_fitness:.4f} ({delta_str}), pop={len(pop)} "
+				f"| {iter_elapsed:.1f}s (offspring: {offspring_secs:.1f}s, {rate:.1f} gen/s) "
+				f"[elapsed: {_fmt_duration_ts(total_elapsed)}, ETA: {_fmt_duration_ts(eta_secs)}]"
+			)
 
 			# Record iteration to tracker (if set)
 			if self._tracker and self._tracker_experiment_id:
@@ -2347,9 +2409,13 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 
 		# Log analysis summary
 		total_iters = iteration + 1
+		total_wall_time = time.time() - loop_start_time
+		offspring_pct = cumulative_offspring_secs / total_wall_time * 100 if total_wall_time > 0 else 0
 		self._log.info(f"[{self.name}] Analysis Summary:")
 		self._log.info(f"  CE improvement: {start_fitness:.4f} → {best_fitness:.4f} ({(1 - best_fitness/start_fitness)*100:+.2f}%)")
 		self._log.info(f"  Improved iterations: {improved_iterations}/{total_iters}")
+		self._log.info(f"  Wall time: {_fmt_duration_ts(total_wall_time)} total, {_fmt_duration_ts(cumulative_offspring_secs)} offspring ({offspring_pct:.0f}%)")
+		self._log.info(f"  Avg iter: {total_wall_time / total_iters:.1f}s" if total_iters > 0 else "")
 		self._log.info(f"  Final population: {len(final_population)} by {fitness_calculator.name}")
 		self._log.info(f"  Final threshold: {final_threshold:.2%} (for next phase)")
 
