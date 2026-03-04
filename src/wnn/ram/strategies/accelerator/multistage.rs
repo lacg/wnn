@@ -1255,36 +1255,11 @@ fn compute_reweight_weights(
             }
         }
 
-        // Find target class from target_bits
+        // Reconstruct target class index from target_bits (big-endian binary encoding)
         let target_base = ex * out_bits;
         let mut target_k = 0usize;
-        let mut target_best_lp = f64::NEG_INFINITY;
-        for gk in 0..vocab_size {
-            let bit_base = gk * out_bits;
-            let mut matches = true;
-            for b in 0..out_bits {
-                if token_bits[bit_base + b] != target_bits[target_base + b] {
-                    matches = false;
-                    break;
-                }
-            }
-            if matches {
-                target_k = gk;
-                break;
-            }
-            // Fallback: best matching class by log-prob with target bits
-            let mut lp = 0.0f64;
-            for b in 0..out_bits {
-                if target_bits[target_base + b] == 1 {
-                    lp += log_p[b];
-                } else {
-                    lp += log_1mp[b];
-                }
-            }
-            if lp > target_best_lp {
-                target_best_lp = lp;
-                target_k = gk;
-            }
+        for b in 0..out_bits {
+            target_k = (target_k << 1) | (target_bits[target_base + b] as usize);
         }
 
         if best_k != target_k {
