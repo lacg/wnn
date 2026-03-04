@@ -188,6 +188,8 @@
   let thresholdStart = 0;
   let thresholdStep = 1;
   let contextSize = 4;
+  let reweightRounds = 0;
+  let reweightMaxBoost = 4;
   let tierConfig = '100,15,20,true;400,10,12,false;rest,5,8,false';
 
   // Apply template defaults (only in single-stage mode)
@@ -583,6 +585,10 @@
           s.bitsGrid.split(',').map(v => parseInt(v.trim())).filter(v => !isNaN(v))
         );
         params.ms_template = msTemplate;
+        if (reweightRounds > 0) {
+          params.reweight_rounds = reweightRounds;
+          params.reweight_max_boost = reweightMaxBoost;
+        }
       } else if (isBitwise) {
         params.architecture_type = 'bitwise';
         params.num_clusters = bitwiseNumClusters;
@@ -954,6 +960,22 @@
             <span class="field-hint">How much accuracy filter grows each phase</span>
           </div>
         </div>
+
+        {#if isMultiStage}
+          <div class="form-row">
+            <div class="form-group">
+              <label for="reweightRounds">S1 Re-weight Rounds</label>
+              <input type="number" id="reweightRounds" bind:value={reweightRounds} min="0" max="10" />
+              <span class="field-hint">Iterative re-weighting for S1 prediction (0 = off)</span>
+            </div>
+
+            <div class="form-group">
+              <label for="reweightMaxBoost">S1 Max Boost</label>
+              <input type="number" id="reweightMaxBoost" bind:value={reweightMaxBoost} min="1" max="10" />
+              <span class="field-hint">Max nudge repeat for misclassified examples</span>
+            </div>
+          </div>
+        {/if}
       </div>
 
       <div class="form-section">

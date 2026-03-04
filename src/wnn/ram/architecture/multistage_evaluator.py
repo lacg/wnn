@@ -118,6 +118,8 @@ class MultiStageEvaluator(BaseEvaluator):
 		sparse_threshold: Optional[int] = None,
 		log_path: Optional[str] = None,
 		custom_cluster_of: Optional[list[int]] = None,
+		reweight_rounds: int = 0,
+		reweight_max_boost: int = 4,
 	):
 		# Normalize context_size to per-stage list
 		if isinstance(context_size, int):
@@ -177,6 +179,8 @@ class MultiStageEvaluator(BaseEvaluator):
 			stage_cluster_types=stage_cluster_type,
 			custom_cluster_of=custom_cluster_of,
 			stage_context_sizes=stage_context_sizes,
+			reweight_rounds=reweight_rounds if reweight_rounds > 0 else None,
+			reweight_max_boost=reweight_max_boost if reweight_rounds > 0 else None,
 		)
 
 		# Cache stage dimensions from Rust (stage-agnostic)

@@ -134,6 +134,10 @@ pub struct MultiStageTokenCache {
     pub num_eval_parts: usize,
     current_train_idx: AtomicUsize,
     current_eval_idx: AtomicUsize,
+
+    // ── S1 iterative re-weighting ────────────────────────────────────
+    pub reweight_rounds: usize,    // 0 = disabled (default)
+    pub reweight_max_boost: usize, // max nudge repeat for confidently-wrong examples (default 4)
 }
 
 impl MultiStageTokenCache {
@@ -511,6 +515,8 @@ impl MultiStageTokenCache {
             num_eval_parts,
             current_train_idx: AtomicUsize::new(0),
             current_eval_idx: AtomicUsize::new(0),
+            reweight_rounds: 0,
+            reweight_max_boost: 4,
         }
     }
 
@@ -1197,6 +1203,102 @@ impl MultiStageTokenCache {
     }
 }
 
+// ── Re-weighting helpers ────────────────────────────────────────────────
+
+/// Compute per-example weights for iterative re-weighting.
+///
+/// For each misclassified training example, computes confidence in the wrong
+/// prediction and returns `1 + floor(confidence * max_boost)`. Correctly
+/// classified examples get weight 1.
+fn compute_reweight_weights(
+    train_scores: &[f32],
+    target_bits: &[u8],
+    token_bits: &[u8],
+    out_bits: usize,
+    vocab_size: usize,
+    num_examples: usize,
+    max_boost: usize,
+    eps: f64,
+) -> Vec<f32> {
+    let mut weights = vec![1.0f32; num_examples];
+
+    weights.par_iter_mut().enumerate().for_each(|(ex, weight)| {
+        let base = ex * out_bits;
+
+        // Compute log-probabilities per bit
+        let mut log_p = vec![0.0f64; out_bits];
+        let mut log_1mp = vec![0.0f64; out_bits];
+        for b in 0..out_bits {
+            let p = (train_scores[base + b] as f64).clamp(eps, 1.0 - eps);
+            log_p[b] = p.ln();
+            log_1mp[b] = (1.0 - p).ln();
+        }
+
+        // Find predicted class (argmax) and its log-probability
+        let mut best_k = 0usize;
+        let mut best_lp = f64::NEG_INFINITY;
+        let mut all_lps = vec![0.0f64; vocab_size];
+        for gk in 0..vocab_size {
+            let bit_base = gk * out_bits;
+            let mut lp = 0.0f64;
+            for b in 0..out_bits {
+                if token_bits[bit_base + b] == 1 {
+                    lp += log_p[b];
+                } else {
+                    lp += log_1mp[b];
+                }
+            }
+            all_lps[gk] = lp;
+            if lp > best_lp {
+                best_lp = lp;
+                best_k = gk;
+            }
+        }
+
+        // Find target class from target_bits
+        let target_base = ex * out_bits;
+        let mut target_k = 0usize;
+        let mut target_best_lp = f64::NEG_INFINITY;
+        for gk in 0..vocab_size {
+            let bit_base = gk * out_bits;
+            let mut matches = true;
+            for b in 0..out_bits {
+                if token_bits[bit_base + b] != target_bits[target_base + b] {
+                    matches = false;
+                    break;
+                }
+            }
+            if matches {
+                target_k = gk;
+                break;
+            }
+            // Fallback: best matching class by log-prob with target bits
+            let mut lp = 0.0f64;
+            for b in 0..out_bits {
+                if target_bits[target_base + b] == 1 {
+                    lp += log_p[b];
+                } else {
+                    lp += log_1mp[b];
+                }
+            }
+            if lp > target_best_lp {
+                target_best_lp = lp;
+                target_k = gk;
+            }
+        }
+
+        if best_k != target_k {
+            // Softmax to get confidence in wrong prediction
+            let max_lp = best_lp; // already the max
+            let sum_exp: f64 = all_lps.iter().map(|&lp| (lp - max_lp).exp()).collect::<Vec<_>>().iter().sum();
+            let confidence = 1.0 / sum_exp; // exp(best_lp - max_lp) / sum = 1.0 / sum
+            *weight = 1.0 + (confidence * max_boost as f64).floor() as f32;
+        }
+    });
+
+    weights
+}
+
 // ── Stage prediction ────────────────────────────────────────────────────
 
 /// Train a frozen stage and predict its output class for every example in train and eval data.
@@ -1218,6 +1320,8 @@ pub fn predict_stage_clusters(
     neuron_sample_rate: f32,
     rng_seed: u64,
     sparse_threshold: usize,
+    reweight_rounds: usize,
+    reweight_max_boost: usize,
 ) -> (Vec<u32>, Vec<u32>, usize, usize) {
     let vocab_size = cache.bitwise_vocab_size[stage]; // K for stage 0, max_cluster_size for stage 1, etc.
     let out_bits = cache.bitwise_output_bits[stage];
@@ -1268,6 +1372,60 @@ pub fn predict_stage_clusters(
         &layout, &train_as_eval, &cluster_storage,
         &mut train_scores, memory_mode,
     );
+
+    // ── Iterative re-weighting ─────────────────────────────────────
+    if reweight_rounds > 0 {
+        // Clone train subset so we can set weights on it
+        let mut weighted_train = BitwiseSubset {
+            input_bits: cache.bitwise_full_train[stage].input_bits.clone(),
+            packed_input: cache.bitwise_full_train[stage].packed_input.clone(),
+            target_bits: cache.bitwise_full_train[stage].target_bits.clone(),
+            num_examples: num_train,
+            words_per_example: cache.bitwise_full_train[stage].words_per_example,
+            weights: Vec::new(),
+        };
+
+        for round in 0..reweight_rounds {
+            // Compute per-example weights from training scores
+            let weights = compute_reweight_weights(
+                &train_scores, &cache.bitwise_full_train[stage].target_bits,
+                &cache.bitwise_token_bits[stage],
+                num_clusters, vocab_size, num_train, reweight_max_boost, eps,
+            );
+
+            let boosted: usize = weights.iter().filter(|&&w| w > 1.0).count();
+            eprintln!(
+                "[predict_stage_clusters] S{stage} reweight round {}/{}: boosted {}/{} examples",
+                round + 1, reweight_rounds, boosted, num_train,
+            );
+
+            weighted_train.weights = weights;
+
+            // Reset clusters and re-train with weights
+            for cs in cluster_storage.iter_mut() { cs.reset(); }
+            train_into(
+                connections, bits_per_neuron, neurons_per_cluster, num_clusters,
+                &layout, &weighted_train, &mut cluster_storage,
+                memory_mode, neuron_sample_rate, rng_seed.wrapping_add(round as u64 + 1),
+            );
+
+            // Re-forward on eval data
+            eval_scores.fill(0.0);
+            forward_eval_into(
+                connections, bits_per_neuron, neurons_per_cluster, num_clusters,
+                &layout, &cache.bitwise_full_eval[stage], &cluster_storage,
+                &mut eval_scores, memory_mode,
+            );
+
+            // Re-forward on train data
+            train_scores.fill(0.0);
+            forward_eval_into(
+                connections, bits_per_neuron, neurons_per_cluster, num_clusters,
+                &layout, &train_as_eval, &cluster_storage,
+                &mut train_scores, memory_mode,
+            );
+        }
+    }
 
     // ── Extract argmax predictions ─────────────────────────────────
     let extract_predictions = |scores: &[f32], num_examples: usize| -> Vec<u32> {

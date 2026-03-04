@@ -1138,7 +1138,12 @@ pub(crate) fn train_into(
                         use_sampling, inv_log_complement, rng_seed,
                         |ex, addr| {
                             let target_true = train_subset.target_bits[ex * num_clusters + cluster] == 1;
-                            clusters[cluster].nudge_cell(n, addr, target_true);
+                            let repeats = if has_weights {
+                                (train_subset.weights[ex] as usize).max(1)
+                            } else { 1 };
+                            for _ in 0..repeats {
+                                clusters[cluster].nudge_cell(n, addr, target_true);
+                            }
                         },
                     );
                 }

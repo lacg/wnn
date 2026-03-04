@@ -681,6 +681,9 @@ class FlowWorker:
         else:
             stage_mode = None
 
+        reweight_rounds = params.get("reweight_rounds", 0)
+        reweight_max_boost = params.get("reweight_max_boost", 4)
+
         evaluator = MultiStageEvaluator(
             train_tokens=self._train_tokens,
             eval_tokens=self._test_tokens,
@@ -697,6 +700,8 @@ class FlowWorker:
             neuron_sample_rate=neuron_sample_rate,
             log_path=str(self._log_file) if self._log_file else None,
             custom_cluster_of=custom_cluster_of,
+            reweight_rounds=reweight_rounds,
+            reweight_max_boost=reweight_max_boost,
         )
 
         self._log(f"  MultiStageEvaluator: stages={num_stages}, k={stage_k}, "

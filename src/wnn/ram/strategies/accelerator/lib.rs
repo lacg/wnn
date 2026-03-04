@@ -4843,12 +4843,14 @@ impl BitwiseCacheWrapper {
 struct MultiStageCacheWrapper {
     inner: multistage::MultiStageTokenCache,
     sparse_threshold_override: Option<usize>,
+    reweight_rounds: usize,
+    reweight_max_boost: usize,
 }
 
 #[pymethods]
 impl MultiStageCacheWrapper {
     #[new]
-    #[pyo3(signature = (train_tokens, eval_tokens, vocab_size, context_size, k, num_parts, num_eval_parts, pad_token_id, sparse_threshold=None, stage_cluster_types=None, custom_cluster_of=None, stage_context_sizes=None))]
+    #[pyo3(signature = (train_tokens, eval_tokens, vocab_size, context_size, k, num_parts, num_eval_parts, pad_token_id, sparse_threshold=None, stage_cluster_types=None, custom_cluster_of=None, stage_context_sizes=None, reweight_rounds=None, reweight_max_boost=None))]
     fn new(
         train_tokens: Vec<u32>,
         eval_tokens: Vec<u32>,
@@ -4862,15 +4864,24 @@ impl MultiStageCacheWrapper {
         stage_cluster_types: Option<Vec<String>>,
         custom_cluster_of: Option<Vec<u16>>,
         stage_context_sizes: Option<Vec<usize>>,
+        reweight_rounds: Option<usize>,
+        reweight_max_boost: Option<usize>,
     ) -> Self {
+        let rw_rounds = reweight_rounds.unwrap_or(0);
+        let rw_max_boost = reweight_max_boost.unwrap_or(4);
+        let mut cache = multistage::MultiStageTokenCache::new(
+            train_tokens, eval_tokens, vocab_size, context_size,
+            k, num_parts, num_eval_parts, pad_token_id,
+            stage_cluster_types, custom_cluster_of,
+            stage_context_sizes,
+        );
+        cache.reweight_rounds = rw_rounds;
+        cache.reweight_max_boost = rw_max_boost;
         Self {
-            inner: multistage::MultiStageTokenCache::new(
-                train_tokens, eval_tokens, vocab_size, context_size,
-                k, num_parts, num_eval_parts, pad_token_id,
-                stage_cluster_types, custom_cluster_of,
-                stage_context_sizes,
-            ),
+            inner: cache,
             sparse_threshold_override: sparse_threshold,
+            reweight_rounds: rw_rounds,
+            reweight_max_boost: rw_max_boost,
         }
     }
 
@@ -5202,6 +5213,8 @@ impl MultiStageCacheWrapper {
         rng_seed: u64,
         sparse_threshold: usize,
     ) -> PyResult<(f64, f64)> {
+        let rw_rounds = self.reweight_rounds;
+        let rw_max_boost = self.reweight_max_boost;
         py.allow_threads(|| {
             let (train_preds, eval_preds, train_correct, eval_correct) =
                 multistage::predict_stage_clusters(
@@ -5214,6 +5227,8 @@ impl MultiStageCacheWrapper {
                     neuron_sample_rate,
                     rng_seed,
                     sparse_threshold,
+                    rw_rounds,
+                    rw_max_boost,
                 );
 
             let num_train = self.inner.bitwise_full_train[frozen_stage].num_examples;
