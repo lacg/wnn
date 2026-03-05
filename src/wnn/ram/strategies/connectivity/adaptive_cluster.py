@@ -636,6 +636,10 @@ class ClusterGenome:
 		"""Initialize random connections for this genome."""
 		self.connections = generate_connections(self.bits_per_neuron, total_input_bits, rng)
 
+	def fingerprint(self) -> tuple:
+		"""Identity tuple for deduplication — same architecture = same eval result."""
+		return (tuple(self.bits_per_neuron), tuple(self.neurons_per_cluster))
+
 	def clone(self) -> ClusterGenome:
 		"""Create a deep copy of this genome including connections and cached fitness."""
 		genome = ClusterGenome(

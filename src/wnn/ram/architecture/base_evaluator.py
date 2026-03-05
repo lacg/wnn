@@ -444,20 +444,36 @@ class BaseEvaluator(ABC):
 		best_acc_so_far = 0.0
 		start_time = time.time()
 
+		# Track fingerprints to avoid duplicate neighbors
+		known_fps: set = set()
+		if hasattr(genome, 'fingerprint'):
+			known_fps.add(genome.fingerprint())
+
 		while len(passed) < target_count and evaluated < max_attempts:
 			remaining = target_count - len(passed)
 			batch_n = min(remaining + 5, batch_size, max_attempts - evaluated)
 			if batch_n <= 0:
 				break
 
-			batch = [
-				self._mutate_genome_phased(
+			batch = []
+			for _ in range(batch_n):
+				child = self._mutate_genome_phased(
 					genome, phase_type,
 					bits_mutation_rate, neurons_mutation_rate,
 					min_bits, max_bits, min_neurons, max_neurons, rng,
 				)
-				for _ in range(batch_n)
-			]
+				# Re-mutate if duplicate (up to 3 retries)
+				if hasattr(child, 'fingerprint'):
+					for _ in range(3):
+						if child.fingerprint() not in known_fps:
+							break
+						child = self._mutate_genome_phased(
+							genome, phase_type,
+							bits_mutation_rate, neurons_mutation_rate,
+							min_bits, max_bits, min_neurons, max_neurons, rng,
+						)
+					known_fps.add(child.fingerprint())
+				batch.append(child)
 
 			results = self.evaluate_batch(
 				batch, train_subset_idx, eval_subset_idx,
@@ -552,6 +568,12 @@ class BaseEvaluator(ABC):
 		best_acc_so_far = 0.0
 		start_time = time.time()
 
+		# Build fingerprint set from current population to avoid duplicates
+		known_fps: set = set()
+		for g, _ in population:
+			if hasattr(g, 'fingerprint'):
+				known_fps.add(g.fingerprint())
+
 		while len(passed) < target_count and evaluated < max_attempts:
 			remaining = target_count - len(passed)
 			batch_n = min(remaining + 5, batch_size, max_attempts - evaluated)
@@ -571,6 +593,17 @@ class BaseEvaluator(ABC):
 					bits_mutation_rate, neurons_mutation_rate,
 					min_bits, max_bits, min_neurons, max_neurons, rng,
 				)
+				# Re-mutate if offspring is a duplicate (up to 3 retries)
+				if hasattr(child, 'fingerprint'):
+					for _ in range(3):
+						if child.fingerprint() not in known_fps:
+							break
+						child = self._mutate_genome_phased(
+							child, phase_type,
+							bits_mutation_rate, neurons_mutation_rate,
+							min_bits, max_bits, min_neurons, max_neurons, rng,
+						)
+					known_fps.add(child.fingerprint())
 				batch.append(child)
 
 			results = self.evaluate_batch(

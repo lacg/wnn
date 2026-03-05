@@ -1360,7 +1360,19 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			]
 			combined_scores = fitness_calculator.fitness(pop_tuples)
 			elite_sorted = sorted(range(len(combined_scores)), key=lambda i: combined_scores[i])
-			all_elite_indices = elite_sorted[:n_elites]
+
+			# Deduplicate elites by fingerprint — same architecture = same eval,
+			# so keeping multiple copies wastes elite slots and reduces diversity.
+			seen_fingerprints: set = set()
+			all_elite_indices = []
+			for idx in elite_sorted:
+				if len(all_elite_indices) >= n_elites:
+					break
+				genome = population[idx][0]
+				fp = genome.fingerprint() if hasattr(genome, 'fingerprint') else id(genome)
+				if fp not in seen_fingerprints:
+					seen_fingerprints.add(fp)
+					all_elite_indices.append(idx)
 			total_elites = len(all_elite_indices)
 
 			# Track initial elites (first generation only) for survival analysis
@@ -1967,7 +1979,17 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 		n: int,
 		fitness_calculator: Any,
 	) -> list[tuple[T, float, Optional[float]]]:
-		"""Select top N candidates by fitness ranking."""
+		"""Select top N unique candidates by fitness ranking."""
+		# Deduplicate by fingerprint before ranking — same architecture = same eval
+		seen_fps: set = set()
+		unique_candidates = []
+		for g, ce, acc in candidates:
+			fp = g.fingerprint() if hasattr(g, 'fingerprint') else id(g)
+			if fp not in seen_fps:
+				seen_fps.add(fp)
+				unique_candidates.append((g, ce, acc))
+		candidates = unique_candidates
+
 		if len(candidates) <= n:
 			return candidates
 		valid = [(g, ce, acc or 0.0) for g, ce, acc in candidates if acc is not None]

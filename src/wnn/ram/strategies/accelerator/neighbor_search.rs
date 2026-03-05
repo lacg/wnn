@@ -501,6 +501,11 @@ where
     let mut best_acc_so_far = 0.0_f64;
     let start_time = Instant::now();
 
+    // Track fingerprints to avoid duplicate neighbors
+    let mut known_fps: std::collections::HashSet<(Vec<usize>, Vec<usize>)> =
+        std::collections::HashSet::new();
+    known_fps.insert((base_bits.to_vec(), base_neurons.to_vec()));
+
     while passed.len() < target_count && evaluated < max_attempts {
         let remaining_needed = target_count - passed.len();
         let batch_to_generate = (remaining_needed + 5).min(batch_size).min(max_attempts - evaluated);
@@ -510,13 +515,26 @@ where
         let mut batch_genomes: Vec<(Vec<usize>, Vec<usize>, Vec<i64>)> = Vec::new();
 
         for _ in 0..batch_to_generate {
-            let (new_bits, new_neurons, new_conns) = mutate_genome(
+            let (mut new_bits, mut new_neurons, mut new_conns) = mutate_genome(
                 base_bits,
                 base_neurons,
                 base_connections,
                 mutation_config,
                 &mut rng,
             );
+
+            // Re-mutate if duplicate (up to 3 retries)
+            for _ in 0..3 {
+                let fp = (new_bits.clone(), new_neurons.clone());
+                if !known_fps.contains(&fp) {
+                    break;
+                }
+                let remut = mutate_genome(base_bits, base_neurons, base_connections, mutation_config, &mut rng);
+                new_bits = remut.0;
+                new_neurons = remut.1;
+                new_conns = remut.2;
+            }
+            known_fps.insert((new_bits.clone(), new_neurons.clone()));
 
             batch_bits.extend(&new_bits);
             batch_neurons.extend(&new_neurons);
@@ -616,6 +634,11 @@ where
     let mut best_acc_so_far = 0.0_f64;
     let start_time = Instant::now();
 
+    // Track fingerprints to avoid duplicate neighbors
+    let mut known_fps: std::collections::HashSet<(Vec<usize>, Vec<usize>)> =
+        std::collections::HashSet::new();
+    known_fps.insert((base_bits.to_vec(), base_neurons.to_vec()));
+
     while passed.len() < target_count && evaluated < max_attempts {
         let remaining_needed = target_count - passed.len();
         let batch_to_generate = (remaining_needed + 5).min(batch_size).min(max_attempts - evaluated);
@@ -625,13 +648,26 @@ where
         let mut batch_genomes: Vec<(Vec<usize>, Vec<usize>, Vec<i64>)> = Vec::new();
 
         for _ in 0..batch_to_generate {
-            let (new_bits, new_neurons, new_conns) = mutate_genome(
+            let (mut new_bits, mut new_neurons, mut new_conns) = mutate_genome(
                 base_bits,
                 base_neurons,
                 base_connections,
                 mutation_config,
                 &mut rng,
             );
+
+            // Re-mutate if duplicate (up to 3 retries)
+            for _ in 0..3 {
+                let fp = (new_bits.clone(), new_neurons.clone());
+                if !known_fps.contains(&fp) {
+                    break;
+                }
+                let remut = mutate_genome(base_bits, base_neurons, base_connections, mutation_config, &mut rng);
+                new_bits = remut.0;
+                new_neurons = remut.1;
+                new_conns = remut.2;
+            }
+            known_fps.insert((new_bits.clone(), new_neurons.clone()));
 
             batch_bits.extend(&new_bits);
             batch_neurons.extend(&new_neurons);
@@ -992,6 +1028,13 @@ where
         }
     }
 
+    // Build fingerprint set from population to avoid duplicate offspring
+    let mut known_fps: std::collections::HashSet<(Vec<usize>, Vec<usize>)> =
+        std::collections::HashSet::new();
+    for (bits, neurons, _, _) in population {
+        known_fps.insert((bits.clone(), neurons.clone()));
+    }
+
     while passed.len() < target_count && evaluated < max_attempts {
         let remaining_needed = target_count - passed.len();
         let batch_to_generate = (remaining_needed + 5).min(batch_size).min(max_attempts - evaluated);
@@ -1010,13 +1053,26 @@ where
                 (p1.0.clone(), p1.1.clone(), p1.2.clone())
             };
 
-            let (new_bits, new_neurons, new_conns) = mutate_ga(
+            let (mut new_bits, mut new_neurons, mut new_conns) = mutate_ga(
                 &child.0,
                 &child.1,
                 &child.2,
                 ga_config,
                 &mut rng,
             );
+
+            // Re-mutate if offspring is a duplicate (up to 3 retries)
+            for _ in 0..3 {
+                let fp = (new_bits.clone(), new_neurons.clone());
+                if !known_fps.contains(&fp) {
+                    break;
+                }
+                let remut = mutate_ga(&new_bits, &new_neurons, &new_conns, ga_config, &mut rng);
+                new_bits = remut.0;
+                new_neurons = remut.1;
+                new_conns = remut.2;
+            }
+            known_fps.insert((new_bits.clone(), new_neurons.clone()));
 
             batch_bits.extend(&new_bits);
             batch_neurons.extend(&new_neurons);
