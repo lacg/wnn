@@ -28,7 +28,7 @@ pub struct LiveProgress {
     pub phase: String,
     pub evaluated: usize,
     pub target_count: usize,
-    pub viable: usize,
+    pub viable: Option<usize>,
     pub best_ce: f64,
     pub best_acc: f64,
     pub elapsed_secs: f64,
@@ -558,7 +558,7 @@ where
             if let Ok(mut guard) = lp.write() {
                 if let Some(ref mut p) = *guard {
                     p.evaluated = evaluated;
-                    p.viable = passed.len();
+                    p.viable = Some(passed.len());
                     p.best_ce = best_ce_so_far;
                     p.best_acc = best_acc_so_far;
                     p.elapsed_secs = start_time.elapsed().as_secs_f64();
@@ -675,7 +675,7 @@ where
             if let Ok(mut guard) = lp.write() {
                 if let Some(ref mut p) = *guard {
                     p.evaluated = evaluated;
-                    p.viable = passed.len();
+                    p.viable = Some(passed.len());
                     p.best_ce = best_ce_so_far;
                     p.best_acc = best_acc_so_far;
                     p.elapsed_secs = start_time.elapsed().as_secs_f64();
@@ -983,7 +983,7 @@ where
                 p.phase = "ga_offspring".into();
                 p.target_count = target_count;
                 p.evaluated = 0;
-                p.viable = 0;
+                p.viable = Some(0);
                 p.best_ce = f64::MAX;
                 p.best_acc = 0.0;
                 p.elapsed_secs = 0.0;
@@ -1060,7 +1060,7 @@ where
             if let Ok(mut guard) = lp.write() {
                 if let Some(ref mut p) = *guard {
                     p.evaluated = evaluated;
-                    p.viable = passed.len();
+                    p.viable = Some(passed.len());
                     p.best_ce = best_ce_so_far;
                     p.best_acc = best_acc_so_far;
                     p.elapsed_secs = start_time.elapsed().as_secs_f64();

@@ -3612,7 +3612,10 @@ impl TokenCacheWrapper {
                 dict.set_item("phase", &lp.phase)?;
                 dict.set_item("evaluated", lp.evaluated)?;
                 dict.set_item("target_count", lp.target_count)?;
-                dict.set_item("viable", lp.viable)?;
+                match lp.viable {
+                    Some(v) => dict.set_item("viable", v)?,
+                    None => dict.set_item("viable", py.None())?,
+                }
                 dict.set_item("best_ce", lp.best_ce)?;
                 dict.set_item("best_acc", lp.best_acc)?;
                 dict.set_item("elapsed_secs", lp.elapsed_secs)?;
@@ -3707,7 +3710,7 @@ impl TokenCacheWrapper {
                 generation: generation.map(|g| g as i32 + 1).unwrap_or(1),
                 total_generations: total_generations.map(|g| g as i32).unwrap_or(100),
                 phase: "ts_neighbors".into(),
-                evaluated: 0, target_count, viable: 0,
+                evaluated: 0, target_count, viable: Some(0),
                 best_ce: f64::MAX, best_acc: 0.0, elapsed_secs: 0.0,
                 updated_at: neighbor_search::LiveProgress::now_unix(),
             });
@@ -3860,7 +3863,7 @@ impl TokenCacheWrapper {
                 generation: generation.map(|g| g as i32 + 1).unwrap_or(1),
                 total_generations: total_generations.map(|g| g as i32).unwrap_or(100),
                 phase: "ga_offspring".into(),
-                evaluated: 0, target_count, viable: 0,
+                evaluated: 0, target_count, viable: Some(0),
                 best_ce: f64::MAX, best_acc: 0.0, elapsed_secs: 0.0,
                 updated_at: neighbor_search::LiveProgress::now_unix(),
             });
@@ -4593,7 +4596,10 @@ impl BitwiseCacheWrapper {
                 dict.set_item("phase", &lp.phase)?;
                 dict.set_item("evaluated", lp.evaluated)?;
                 dict.set_item("target_count", lp.target_count)?;
-                dict.set_item("viable", lp.viable)?;
+                match lp.viable {
+                    Some(v) => dict.set_item("viable", v)?,
+                    None => dict.set_item("viable", py.None())?,
+                }
                 dict.set_item("best_ce", lp.best_ce)?;
                 dict.set_item("best_acc", lp.best_acc)?;
                 dict.set_item("elapsed_secs", lp.elapsed_secs)?;
@@ -4691,7 +4697,7 @@ impl BitwiseCacheWrapper {
                 generation: generation.map(|g| g as i32 + 1).unwrap_or(1),
                 total_generations: total_generations.map(|g| g as i32).unwrap_or(100),
                 phase: "ts_neighbors".into(),
-                evaluated: 0, target_count, viable: 0,
+                evaluated: 0, target_count, viable: Some(0),
                 best_ce: f64::MAX, best_acc: 0.0, elapsed_secs: 0.0,
                 updated_at: neighbor_search::LiveProgress::now_unix(),
             });
@@ -4837,7 +4843,7 @@ impl BitwiseCacheWrapper {
                 generation: generation.map(|g| g as i32 + 1).unwrap_or(1),
                 total_generations: total_generations.map(|g| g as i32).unwrap_or(100),
                 phase: "ga_offspring".into(),
-                evaluated: 0, target_count, viable: 0,
+                evaluated: 0, target_count, viable: Some(0),
                 best_ce: f64::MAX, best_acc: 0.0, elapsed_secs: 0.0,
                 updated_at: neighbor_search::LiveProgress::now_unix(),
             });
@@ -5004,6 +5010,9 @@ struct MultiStageCacheWrapper {
     reweight_max_boost: usize,
     live_progress: Arc<RwLock<Option<neighbor_search::LiveProgress>>>,
     experiment_id: i64,
+    progress_generation: i32,
+    progress_total_generations: i32,
+    progress_phase: String,
 }
 
 #[pymethods]
@@ -5043,11 +5052,40 @@ impl MultiStageCacheWrapper {
             reweight_max_boost: rw_max_boost,
             live_progress: Arc::new(RwLock::new(None)),
             experiment_id: 0,
+            progress_generation: 0,
+            progress_total_generations: 0,
+            progress_phase: "evaluate_batch".into(),
         }
     }
 
     fn set_experiment_context(&mut self, experiment_id: i64) {
         self.experiment_id = experiment_id;
+    }
+
+    /// Set progress context (generation, total, phase) so Rust sub-batch
+    /// updates report correct values to the observer thread.
+    /// Pre-seeds the LiveProgress Arc so Rust only needs to update
+    /// evaluated/target_count/elapsed_secs in place.
+    fn set_progress_context(&mut self, generation: i32, total_generations: i32, phase: String) {
+        self.progress_generation = generation;
+        self.progress_total_generations = total_generations;
+        self.progress_phase = phase.clone();
+        // Pre-seed the Arc so Rust sub-batch updates preserve these fields
+        if let Ok(mut guard) = self.live_progress.write() {
+            *guard = Some(neighbor_search::LiveProgress {
+                experiment_id: self.experiment_id,
+                generation,
+                total_generations,
+                phase,
+                evaluated: 0,
+                target_count: 0,
+                viable: None,
+                best_ce: 0.0,
+                best_acc: 0.0,
+                elapsed_secs: 0.0,
+                updated_at: neighbor_search::LiveProgress::now_unix(),
+            });
+        }
     }
 
     fn get_live_progress(&self, py: Python<'_>) -> PyResult<Option<pyo3::PyObject>> {
@@ -5063,7 +5101,10 @@ impl MultiStageCacheWrapper {
                 dict.set_item("phase", &lp.phase)?;
                 dict.set_item("evaluated", lp.evaluated)?;
                 dict.set_item("target_count", lp.target_count)?;
-                dict.set_item("viable", lp.viable)?;
+                match lp.viable {
+                    Some(v) => dict.set_item("viable", v)?,
+                    None => dict.set_item("viable", py.None())?,
+                }
                 dict.set_item("best_ce", lp.best_ce)?;
                 dict.set_item("best_acc", lp.best_acc)?;
                 dict.set_item("elapsed_secs", lp.elapsed_secs)?;

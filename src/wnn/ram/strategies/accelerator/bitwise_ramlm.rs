@@ -1469,7 +1469,7 @@ pub(crate) fn evaluate_genomes_with_params(
     rng_seed: u64,
     sparse_threshold_override: Option<usize>,
     live_progress: Option<&std::sync::Arc<std::sync::RwLock<Option<crate::neighbor_search::LiveProgress>>>>,
-    experiment_id: i64,
+    _experiment_id: i64,
 ) -> Vec<(f64, f64, f64)> {
     let start_time = std::time::Instant::now();
     let num_clusters = num_clusters;
@@ -1622,22 +1622,17 @@ pub(crate) fn evaluate_genomes_with_params(
                 );
             });
 
-        // Update live progress after each batch (read by observer thread)
+        // Update live progress after each batch (read by observer thread).
+        // Only update fields Rust knows about; preserve generation/phase/viable
+        // that Python pre-seeded via set_progress_context().
         if let Some(ref lp) = live_progress {
             if let Ok(mut guard) = lp.write() {
-                *guard = Some(crate::neighbor_search::LiveProgress {
-                    experiment_id,
-                    generation: 0,
-                    total_generations: 0,
-                    phase: "evaluate_batch".into(),
-                    evaluated: batch_end,
-                    target_count: num_genomes,
-                    viable: 0,
-                    best_ce: 0.0,
-                    best_acc: 0.0,
-                    elapsed_secs: start_time.elapsed().as_secs_f64(),
-                    updated_at: crate::neighbor_search::LiveProgress::now_unix(),
-                });
+                if let Some(ref mut p) = *guard {
+                    p.evaluated = batch_end;
+                    p.target_count = num_genomes;
+                    p.elapsed_secs = start_time.elapsed().as_secs_f64();
+                    p.updated_at = crate::neighbor_search::LiveProgress::now_unix();
+                }
             }
         }
 

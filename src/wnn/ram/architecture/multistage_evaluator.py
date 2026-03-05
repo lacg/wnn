@@ -552,6 +552,15 @@ class MultiStageEvaluator(BaseEvaluator):
 			log_type=kwargs.get("log_type", "Eval"),
 		)
 
+		# Pre-seed Rust cache with progress context so sub-batch updates
+		# report correct generation/phase to the observer thread.
+		if hasattr(self._cache, 'set_progress_context'):
+			self._cache.set_progress_context(
+				(generation or 0) + 1,
+				total_generations or 0,
+				self._current_phase,
+			)
+
 		start = time.time()
 		if self._is_stage_selector(self._target_stage):
 			raw = self._evaluate_selector_rust(self._target_stage, genomes, train_subset_idx, eval_subset_idx)

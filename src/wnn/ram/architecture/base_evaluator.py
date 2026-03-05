@@ -162,6 +162,7 @@ class BaseEvaluator(ABC):
 		self._generation = 0
 		self._log_path = log_path
 		self._live_progress: Optional[dict] = None
+		self._current_phase: str = "evaluate_batch"
 		self._experiment_id: Optional[int] = None
 
 		if seed is None:
@@ -425,6 +426,7 @@ class BaseEvaluator(ABC):
 		self.evaluate_batch() for evaluation. Subclasses may override
 		to delegate to Rust fast paths.
 		"""
+		self._current_phase = "ts_neighbors"
 		if train_subset_idx is None:
 			train_subset_idx = self.next_train_idx()
 		if eval_subset_idx is None:
@@ -538,6 +540,7 @@ class BaseEvaluator(ABC):
 		if seed is None:
 			seed = int(time.time() * 1000) % (2**32)
 
+		self._current_phase = "ga_offspring"
 		pt = PhaseType(phase_type)
 		rng = random.Random(seed)
 		passed: list[ClusterGenome] = []

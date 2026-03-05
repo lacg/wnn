@@ -33,7 +33,7 @@
   let tooltipData: { x: number; y: number; iter: number; ce: number; acc: number | null; avgCe: number | null; avgAcc: number | null } | null = null;
 
   // Live generation progress (in-memory, no DB)
-  let liveProgress: { generation: number; total_generations: number; phase: string; evaluated: number; target_count: number; viable: number; best_ce: number; best_acc: number; elapsed_secs: number } | null = null;
+  let liveProgress: { generation: number; total_generations: number; phase: string; evaluated: number; target_count: number; viable: number | null; best_ce: number; best_acc: number; elapsed_secs: number } | null = null;
 
   // Grid search results
   let gridSearchResults: { rank: number; neurons: number; bits: number; ce: number; accuracy: number; fitness: number | null; count: number; elapsed?: number }[] = [];
@@ -1338,13 +1338,19 @@
     <div class="live-progress-card">
       <div class="live-progress-bar">
         <span class="live-dot"></span>
-        <strong>Gen {liveProgress.generation}/{liveProgress.total_generations}</strong>
-        <span class="live-phase">{liveProgress.phase === 'ga_offspring' ? 'GA Offspring' : 'TS Neighbors'}</span>
+        {#if liveProgress.total_generations > 0}
+          <strong>Gen {liveProgress.generation}/{liveProgress.total_generations}</strong>
+        {/if}
+        <span class="live-phase">{liveProgress.phase === 'ga_offspring' ? 'GA Offspring' : liveProgress.phase === 'ts_neighbors' ? 'TS Neighbors' : 'Evaluating'}</span>
         <progress value={liveProgress.evaluated} max={liveProgress.target_count}></progress>
         <span>{liveProgress.evaluated}/{liveProgress.target_count}</span>
-        <span>({liveProgress.viable} viable)</span>
-        <span class="live-metric">CE: {liveProgress.best_ce.toFixed(4)}</span>
-        <span class="live-metric">Acc: {(liveProgress.best_acc * 100).toFixed(2)}%</span>
+        {#if liveProgress.viable != null}
+          <span>({liveProgress.viable} viable)</span>
+        {/if}
+        {#if liveProgress.best_ce > 0}
+          <span class="live-metric">CE: {liveProgress.best_ce.toFixed(4)}</span>
+          <span class="live-metric">Acc: {(liveProgress.best_acc * 100).toFixed(2)}%</span>
+        {/if}
         <span class="live-elapsed">{liveProgress.elapsed_secs.toFixed(0)}s</span>
       </div>
     </div>
