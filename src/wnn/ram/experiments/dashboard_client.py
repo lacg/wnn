@@ -963,3 +963,23 @@ class DashboardClient:
 			return True
 		except Exception:
 			return False
+
+	# =========================================================================
+	# Live progress (in-memory, no DB)
+	# =========================================================================
+
+	def post_live_progress(self, experiment_id: int, data: dict) -> bool:
+		"""POST live progress to dashboard (in-memory store)."""
+		try:
+			self._request("POST", f"/api/experiments/{experiment_id}/live-progress", json_data=data)
+			return True
+		except Exception:
+			return False
+
+	def clear_live_progress(self, experiment_id: int) -> bool:
+		"""Clear live progress after generation completes."""
+		try:
+			self._request("DELETE", f"/api/experiments/{experiment_id}/live-progress")
+			return True
+		except Exception:
+			return False

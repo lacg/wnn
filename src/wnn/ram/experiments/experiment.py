@@ -490,6 +490,10 @@ class Experiment:
 			except Exception as e:
 				self.log(f"  Warning: Failed to set up V2 tracking: {e}")
 
+		# Pass dashboard client for live progress reporting
+		if self.dashboard_client and hasattr(strategy, 'set_dashboard_client'):
+			strategy.set_dashboard_client(self.dashboard_client)
+
 		# Create fitness calculator for validation genome selection
 		fitness_calculator = FitnessCalculatorFactory.create(
 			cfg.fitness_calculator_type,

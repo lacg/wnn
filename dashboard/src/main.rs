@@ -54,6 +54,7 @@ async fn main() -> Result<()> {
         db,
         ws_tx,
         current_log_path: tokio::sync::RwLock::new(None),
+        live_progress: std::sync::Mutex::new(std::collections::HashMap::new()),
     });
 
     // Build router

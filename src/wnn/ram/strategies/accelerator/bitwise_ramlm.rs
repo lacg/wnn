@@ -324,6 +324,9 @@ pub struct BitwiseTokenCache {
     pub num_eval_parts: usize,
     current_train_idx: AtomicUsize,
     current_eval_idx: AtomicUsize,
+
+    // Live progress for observer thread (updated during search_offspring/search_neighbors)
+    pub live_progress: Arc<RwLock<Option<crate::neighbor_search::LiveProgress>>>,
 }
 
 pub(crate) fn bits_needed(n: usize) -> usize {
@@ -419,6 +422,7 @@ impl BitwiseTokenCache {
             num_parts, num_eval_parts,
             current_train_idx: AtomicUsize::new(0),
             current_eval_idx: AtomicUsize::new(0),
+            live_progress: Arc::new(RwLock::new(None)),
         }
     }
 

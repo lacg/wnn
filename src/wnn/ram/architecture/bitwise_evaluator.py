@@ -109,6 +109,17 @@ class BitwiseEvaluator(BaseEvaluator):
 				end = start + part_size if i < num_parts - 1 else n
 				self._train_parts.append(train_tokens[start:end])
 
+	def get_live_progress(self):
+		"""Forward live progress from Rust cache."""
+		if self._rust_cache is not None and hasattr(self._rust_cache, 'get_live_progress'):
+			return self._rust_cache.get_live_progress()
+		return None
+
+	def set_experiment_context(self, experiment_id: int):
+		"""Forward experiment context to Rust cache."""
+		if self._rust_cache is not None and hasattr(self._rust_cache, 'set_experiment_context'):
+			self._rust_cache.set_experiment_context(experiment_id)
+
 	def next_train_idx(self) -> int:
 		"""Advance and return next train subset index."""
 		if self._rust_cache is not None:

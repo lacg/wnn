@@ -3333,6 +3333,7 @@ fn evaluate_genomes_parallel_hybrid<'py>(
 #[pyclass]
 struct TokenCacheWrapper {
     inner: token_cache::TokenCache,
+    experiment_id: Option<i64>,
 }
 
 #[pymethods]
@@ -3377,6 +3378,7 @@ impl TokenCacheWrapper {
                 encoding_bits,
                 num_eval_parts.unwrap_or(1),
             ),
+            experiment_id: None,
         }
     }
 
@@ -3588,6 +3590,38 @@ impl TokenCacheWrapper {
         })
     }
 
+    /// Set experiment context for live progress reporting.
+    fn set_experiment_context(&mut self, experiment_id: i64) {
+        self.experiment_id = Some(experiment_id);
+    }
+
+    /// Get current live progress from active search (if any).
+    ///
+    /// Returns None if no search is in progress, otherwise returns a dict
+    /// with progress fields. Called by the Python observer thread.
+    fn get_live_progress(&self, py: Python<'_>) -> PyResult<Option<pyo3::PyObject>> {
+        let guard = self.inner.live_progress.read()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Lock poisoned: {}", e)))?;
+        match &*guard {
+            None => Ok(None),
+            Some(lp) => {
+                let dict = pyo3::types::PyDict::new(py);
+                dict.set_item("experiment_id", lp.experiment_id)?;
+                dict.set_item("generation", lp.generation)?;
+                dict.set_item("total_generations", lp.total_generations)?;
+                dict.set_item("phase", &lp.phase)?;
+                dict.set_item("evaluated", lp.evaluated)?;
+                dict.set_item("target_count", lp.target_count)?;
+                dict.set_item("viable", lp.viable)?;
+                dict.set_item("best_ce", lp.best_ce)?;
+                dict.set_item("best_acc", lp.best_acc)?;
+                dict.set_item("elapsed_secs", lp.elapsed_secs)?;
+                dict.set_item("updated_at", lp.updated_at)?;
+                Ok(Some(dict.into()))
+            }
+        }
+    }
+
     /// Search for neighbors above accuracy threshold, all in Rust.
     ///
     /// This eliminates Python↔Rust round trips by doing mutation, evaluation,
@@ -3664,7 +3698,22 @@ impl TokenCacheWrapper {
             phase_type: phase,
         };
 
-        py.allow_threads(|| {
+        // Set up live progress for observer thread
+        let lp_arc = self.inner.live_progress.clone();
+        let exp_id = self.experiment_id.unwrap_or(0);
+        if let Ok(mut guard) = lp_arc.write() {
+            *guard = Some(neighbor_search::LiveProgress {
+                experiment_id: exp_id,
+                generation: generation.map(|g| g as i32 + 1).unwrap_or(1),
+                total_generations: total_generations.map(|g| g as i32).unwrap_or(100),
+                phase: "ts_neighbors".into(),
+                evaluated: 0, target_count, viable: 0,
+                best_ce: f64::MAX, best_acc: 0.0, elapsed_secs: 0.0,
+                updated_at: neighbor_search::LiveProgress::now_unix(),
+            });
+        }
+
+        let result = py.allow_threads(|| {
             let log_path_ref = log_path.as_deref();
             let cache = &self.inner;
 
@@ -3677,19 +3726,21 @@ impl TokenCacheWrapper {
                 )
             };
 
+            let lp_ref = Some(&lp_arc);
+
             let candidates = if return_best_n {
                 neighbor_search::search_neighbors_best_n(
                     &base_bits, &base_neurons, &base_connections,
                     target_count, max_attempts, accuracy_threshold,
                     &config, &eval_fn, seed, log_path_ref,
-                    generation, total_generations,
+                    generation, total_generations, lp_ref,
                 )
             } else {
                 let (passed, _) = neighbor_search::search_neighbors_with_threshold(
                     &base_bits, &base_neurons, &base_connections,
                     target_count, max_attempts, accuracy_threshold,
                     &config, &eval_fn, seed, log_path_ref,
-                    generation, total_generations,
+                    generation, total_generations, lp_ref,
                 );
                 passed
             };
@@ -3704,7 +3755,13 @@ impl TokenCacheWrapper {
                     c.accuracy,
                 ))
                 .collect())
-        })
+        });
+
+        // Clear live progress after search completes
+        if let Ok(mut guard) = lp_arc.write() {
+            *guard = None;
+        }
+        result
     }
 
     /// Search for GA offspring above accuracy threshold, all in Rust.
@@ -3794,7 +3851,22 @@ impl TokenCacheWrapper {
             phase_type: phase,
         };
 
-        py.allow_threads(|| {
+        // Set up live progress for observer thread
+        let lp_arc = self.inner.live_progress.clone();
+        let exp_id = self.experiment_id.unwrap_or(0);
+        if let Ok(mut guard) = lp_arc.write() {
+            *guard = Some(neighbor_search::LiveProgress {
+                experiment_id: exp_id,
+                generation: generation.map(|g| g as i32 + 1).unwrap_or(1),
+                total_generations: total_generations.map(|g| g as i32).unwrap_or(100),
+                phase: "ga_offspring".into(),
+                evaluated: 0, target_count, viable: 0,
+                best_ce: f64::MAX, best_acc: 0.0, elapsed_secs: 0.0,
+                updated_at: neighbor_search::LiveProgress::now_unix(),
+            });
+        }
+
+        let result = py.allow_threads(|| {
             let log_path_ref = log_path.as_deref();
             let cache = &self.inner;
 
@@ -3806,10 +3878,12 @@ impl TokenCacheWrapper {
                 )
             };
 
+            let lp_ref = Some(&lp_arc);
+
             let result = neighbor_search::search_offspring(
                 &population, target_count, max_attempts, accuracy_threshold,
                 &ga_config, &eval_fn, seed, log_path_ref,
-                generation, total_generations, return_best_n,
+                generation, total_generations, return_best_n, lp_ref,
             );
 
             let candidates: Vec<_> = result.candidates
@@ -3823,7 +3897,13 @@ impl TokenCacheWrapper {
                 ))
                 .collect();
             Ok((candidates, result.evaluated, result.viable))
-        })
+        });
+
+        // Clear live progress after search completes
+        if let Ok(mut guard) = lp_arc.write() {
+            *guard = None;
+        }
+        result
     }
 }
 
@@ -4394,6 +4474,7 @@ struct BitwiseCacheWrapper {
     inner: bitwise_ramlm::BitwiseTokenCache,
     /// Optional override: None = auto-compute per genome based on budget.
     sparse_threshold_override: Option<usize>,
+    experiment_id: Option<i64>,
 }
 
 #[pymethods]
@@ -4416,6 +4497,7 @@ impl BitwiseCacheWrapper {
                 num_parts, num_eval_parts, pad_token_id,
             ),
             sparse_threshold_override: sparse_threshold,
+            experiment_id: None,
         }
     }
 
@@ -4491,6 +4573,35 @@ impl BitwiseCacheWrapper {
     fn num_parts(&self) -> usize { self.inner.num_parts }
     fn num_eval_parts(&self) -> usize { self.inner.num_eval_parts }
     fn num_bits(&self) -> usize { self.inner.num_bits }
+
+    /// Set experiment context for live progress reporting.
+    fn set_experiment_context(&mut self, experiment_id: i64) {
+        self.experiment_id = Some(experiment_id);
+    }
+
+    /// Get current live progress from active search (if any).
+    fn get_live_progress(&self, py: Python<'_>) -> PyResult<Option<pyo3::PyObject>> {
+        let guard = self.inner.live_progress.read()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Lock poisoned: {}", e)))?;
+        match &*guard {
+            None => Ok(None),
+            Some(lp) => {
+                let dict = pyo3::types::PyDict::new(py);
+                dict.set_item("experiment_id", lp.experiment_id)?;
+                dict.set_item("generation", lp.generation)?;
+                dict.set_item("total_generations", lp.total_generations)?;
+                dict.set_item("phase", &lp.phase)?;
+                dict.set_item("evaluated", lp.evaluated)?;
+                dict.set_item("target_count", lp.target_count)?;
+                dict.set_item("viable", lp.viable)?;
+                dict.set_item("best_ce", lp.best_ce)?;
+                dict.set_item("best_acc", lp.best_acc)?;
+                dict.set_item("elapsed_secs", lp.elapsed_secs)?;
+                dict.set_item("updated_at", lp.updated_at)?;
+                Ok(Some(dict.into()))
+            }
+        }
+    }
 
     /// Search for neighbors above accuracy threshold (bitwise eval backend).
     ///
@@ -4571,7 +4682,22 @@ impl BitwiseCacheWrapper {
 
         let override_val = self.sparse_threshold_override;
 
-        py.allow_threads(|| {
+        // Set up live progress for observer thread
+        let lp_arc = self.inner.live_progress.clone();
+        let exp_id = self.experiment_id.unwrap_or(0);
+        if let Ok(mut guard) = lp_arc.write() {
+            *guard = Some(neighbor_search::LiveProgress {
+                experiment_id: exp_id,
+                generation: generation.map(|g| g as i32 + 1).unwrap_or(1),
+                total_generations: total_generations.map(|g| g as i32).unwrap_or(100),
+                phase: "ts_neighbors".into(),
+                evaluated: 0, target_count, viable: 0,
+                best_ce: f64::MAX, best_acc: 0.0, elapsed_secs: 0.0,
+                updated_at: neighbor_search::LiveProgress::now_unix(),
+            });
+        }
+
+        let result = py.allow_threads(|| {
             let log_path_ref = log_path.as_deref();
             let cache = &self.inner;
 
@@ -4583,19 +4709,21 @@ impl BitwiseCacheWrapper {
                 ).into_iter().map(|(ce, acc, _)| (ce, acc)).collect()
             };
 
+            let lp_ref = Some(&lp_arc);
+
             let candidates = if return_best_n {
                 neighbor_search::search_neighbors_best_n(
                     &base_bits, &base_neurons, &base_connections,
                     target_count, max_attempts, accuracy_threshold,
                     &config, &eval_fn, seed, log_path_ref,
-                    generation, total_generations,
+                    generation, total_generations, lp_ref,
                 )
             } else {
                 let (passed, _) = neighbor_search::search_neighbors_with_threshold(
                     &base_bits, &base_neurons, &base_connections,
                     target_count, max_attempts, accuracy_threshold,
                     &config, &eval_fn, seed, log_path_ref,
-                    generation, total_generations,
+                    generation, total_generations, lp_ref,
                 );
                 passed
             };
@@ -4610,7 +4738,13 @@ impl BitwiseCacheWrapper {
                     c.accuracy,
                 ))
                 .collect())
-        })
+        });
+
+        // Clear live progress after search completes
+        if let Ok(mut guard) = lp_arc.write() {
+            *guard = None;
+        }
+        result
     }
 
     /// Search for GA offspring above accuracy threshold (bitwise eval backend).
@@ -4694,7 +4828,22 @@ impl BitwiseCacheWrapper {
 
         let override_val = self.sparse_threshold_override;
 
-        py.allow_threads(|| {
+        // Set up live progress for observer thread
+        let lp_arc = self.inner.live_progress.clone();
+        let exp_id = self.experiment_id.unwrap_or(0);
+        if let Ok(mut guard) = lp_arc.write() {
+            *guard = Some(neighbor_search::LiveProgress {
+                experiment_id: exp_id,
+                generation: generation.map(|g| g as i32 + 1).unwrap_or(1),
+                total_generations: total_generations.map(|g| g as i32).unwrap_or(100),
+                phase: "ga_offspring".into(),
+                evaluated: 0, target_count, viable: 0,
+                best_ce: f64::MAX, best_acc: 0.0, elapsed_secs: 0.0,
+                updated_at: neighbor_search::LiveProgress::now_unix(),
+            });
+        }
+
+        let result = py.allow_threads(|| {
             let log_path_ref = log_path.as_deref();
             let cache = &self.inner;
 
@@ -4706,10 +4855,12 @@ impl BitwiseCacheWrapper {
                 ).into_iter().map(|(ce, acc, _)| (ce, acc)).collect()
             };
 
+            let lp_ref = Some(&lp_arc);
+
             let result = neighbor_search::search_offspring(
                 &population, target_count, max_attempts, accuracy_threshold,
                 &ga_config, &eval_fn, seed, log_path_ref,
-                generation, total_generations, return_best_n,
+                generation, total_generations, return_best_n, lp_ref,
             );
 
             let candidates: Vec<_> = result.candidates
@@ -4723,7 +4874,13 @@ impl BitwiseCacheWrapper {
                 ))
                 .collect();
             Ok((candidates, result.evaluated, result.viable))
-        })
+        });
+
+        // Clear live progress after search completes
+        if let Ok(mut guard) = lp_arc.write() {
+            *guard = None;
+        }
+        result
     }
 
     /// Evaluate multiple genomes with per-genome adaptation (Baldwin effect).

@@ -10,6 +10,9 @@
 use rand::prelude::*;
 use rand::SeedableRng;
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+
+use crate::neighbor_search::LiveProgress;
 
 /// Pre-computed token subset with all data needed for evaluation.
 #[derive(Clone)]
@@ -111,6 +114,9 @@ pub struct TokenCache {
     // Full datasets for final evaluation
     full_train: TokenSubset,
     full_eval: TokenSubset,
+
+    // Live progress for observer thread (updated during search_offspring/search_neighbors)
+    pub live_progress: Arc<RwLock<Option<LiveProgress>>>,
 }
 
 impl TokenCache {
@@ -251,6 +257,7 @@ impl TokenCache {
             eval_rotator: SubsetRotator::new(actual_eval_parts, seed + 200),
             full_train,
             full_eval,
+            live_progress: Arc::new(RwLock::new(None)),
         }
     }
 

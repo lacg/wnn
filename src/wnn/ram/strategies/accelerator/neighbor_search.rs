@@ -12,7 +12,37 @@
 use rand::prelude::*;
 use rand::SeedableRng;
 use std::fs::OpenOptions;
+use std::sync::{Arc, RwLock};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use chrono::Local;
+
+/// Live progress data shared between search functions and Python observer.
+///
+/// Updated per-batch during search_offspring/search_neighbors. The Python
+/// observer thread reads this periodically and POSTs to the dashboard.
+#[derive(Clone, Debug)]
+pub struct LiveProgress {
+    pub experiment_id: i64,
+    pub generation: i32,
+    pub total_generations: i32,
+    pub phase: String,
+    pub evaluated: usize,
+    pub target_count: usize,
+    pub viable: usize,
+    pub best_ce: f64,
+    pub best_acc: f64,
+    pub elapsed_secs: f64,
+    pub updated_at: f64,
+}
+
+impl LiveProgress {
+    pub fn now_unix() -> f64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64()
+    }
+}
 
 /// Phase type for phase-aware crossover and mutation.
 ///
@@ -449,6 +479,7 @@ pub fn search_neighbors_with_threshold<F>(
     log_path: Option<&str>,
     generation: Option<usize>,
     total_generations: Option<usize>,
+    live_progress: Option<&Arc<RwLock<Option<LiveProgress>>>>,
 ) -> (Vec<CandidateResult>, usize)
 where
     F: Fn(&[usize], &[usize], &[i64], usize) -> Vec<(f64, f64)>,
@@ -466,6 +497,9 @@ where
     let gen_prefix = format_gen_prefix(current_gen, total_gens);
 
     let mut shown_count = 0;
+    let mut best_ce_so_far = f64::MAX;
+    let mut best_acc_so_far = 0.0_f64;
+    let start_time = Instant::now();
 
     while passed.len() < target_count && evaluated < max_attempts {
         let remaining_needed = target_count - passed.len();
@@ -494,6 +528,8 @@ where
 
         for (i, (ce, acc)) in results.iter().enumerate() {
             evaluated += 1;
+            best_ce_so_far = best_ce_so_far.min(*ce);
+            best_acc_so_far = best_acc_so_far.max(*acc);
             let (bits, neurons, conns) = &batch_genomes[i];
 
             if *acc >= accuracy_threshold {
@@ -513,6 +549,20 @@ where
 
                 if passed.len() >= target_count {
                     break;
+                }
+            }
+        }
+
+        // Update live progress after each batch
+        if let Some(lp) = live_progress {
+            if let Ok(mut guard) = lp.write() {
+                if let Some(ref mut p) = *guard {
+                    p.evaluated = evaluated;
+                    p.viable = passed.len();
+                    p.best_ce = best_ce_so_far;
+                    p.best_acc = best_acc_so_far;
+                    p.elapsed_secs = start_time.elapsed().as_secs_f64();
+                    p.updated_at = LiveProgress::now_unix();
                 }
             }
         }
@@ -543,6 +593,7 @@ pub fn search_neighbors_best_n<F>(
     log_path: Option<&str>,
     generation: Option<usize>,
     total_generations: Option<usize>,
+    live_progress: Option<&Arc<RwLock<Option<LiveProgress>>>>,
 ) -> Vec<CandidateResult>
 where
     F: Fn(&[usize], &[usize], &[i64], usize) -> Vec<(f64, f64)>,
@@ -561,6 +612,9 @@ where
     let gen_prefix = format_gen_prefix(current_gen, total_gens);
 
     let mut shown_count = 0;
+    let mut best_ce_so_far = f64::MAX;
+    let mut best_acc_so_far = 0.0_f64;
+    let start_time = Instant::now();
 
     while passed.len() < target_count && evaluated < max_attempts {
         let remaining_needed = target_count - passed.len();
@@ -589,6 +643,8 @@ where
 
         for (i, (ce, acc)) in results.iter().enumerate() {
             evaluated += 1;
+            best_ce_so_far = best_ce_so_far.min(*ce);
+            best_acc_so_far = best_acc_so_far.max(*acc);
             let (bits, neurons, conns) = &batch_genomes[i];
 
             let candidate = CandidateResult {
@@ -611,6 +667,20 @@ where
                 }
             } else {
                 all_candidates.push(candidate);
+            }
+        }
+
+        // Update live progress after each batch
+        if let Some(lp) = live_progress {
+            if let Ok(mut guard) = lp.write() {
+                if let Some(ref mut p) = *guard {
+                    p.evaluated = evaluated;
+                    p.viable = passed.len();
+                    p.best_ce = best_ce_so_far;
+                    p.best_acc = best_acc_so_far;
+                    p.elapsed_secs = start_time.elapsed().as_secs_f64();
+                    p.updated_at = LiveProgress::now_unix();
+                }
             }
         }
     }
@@ -881,6 +951,7 @@ pub fn search_offspring<F>(
     generation: Option<usize>,
     total_generations: Option<usize>,
     return_best_n: bool,
+    live_progress: Option<&Arc<RwLock<Option<LiveProgress>>>>,
 ) -> OffspringSearchResult
 where
     F: Fn(&[usize], &[usize], &[i64], usize) -> Vec<(f64, f64)>,
@@ -899,6 +970,27 @@ where
     let gen_prefix = format_gen_prefix(current_gen, total_gens);
 
     let mut shown_count = 0;
+    let mut best_ce_so_far = f64::MAX;
+    let mut best_acc_so_far = 0.0_f64;
+    let start_time = Instant::now();
+
+    // Initialize live progress for this search
+    if let Some(lp) = live_progress {
+        if let Ok(mut guard) = lp.write() {
+            if let Some(ref mut p) = *guard {
+                p.generation = current_gen as i32;
+                p.total_generations = total_gens as i32;
+                p.phase = "ga_offspring".into();
+                p.target_count = target_count;
+                p.evaluated = 0;
+                p.viable = 0;
+                p.best_ce = f64::MAX;
+                p.best_acc = 0.0;
+                p.elapsed_secs = 0.0;
+                p.updated_at = LiveProgress::now_unix();
+            }
+        }
+    }
 
     while passed.len() < target_count && evaluated < max_attempts {
         let remaining_needed = target_count - passed.len();
@@ -936,6 +1028,8 @@ where
 
         for (i, (ce, acc)) in results.iter().enumerate() {
             evaluated += 1;
+            best_ce_so_far = best_ce_so_far.min(*ce);
+            best_acc_so_far = best_acc_so_far.max(*acc);
             let (bits, neurons, conns) = &batch_genomes[i];
 
             let candidate = CandidateResult {
@@ -958,6 +1052,20 @@ where
                 }
             } else {
                 all_candidates.push(candidate);
+            }
+        }
+
+        // Update live progress after each batch
+        if let Some(lp) = live_progress {
+            if let Ok(mut guard) = lp.write() {
+                if let Some(ref mut p) = *guard {
+                    p.evaluated = evaluated;
+                    p.viable = passed.len();
+                    p.best_ce = best_ce_so_far;
+                    p.best_acc = best_acc_so_far;
+                    p.elapsed_secs = start_time.elapsed().as_secs_f64();
+                    p.updated_at = LiveProgress::now_unix();
+                }
             }
         }
     }

@@ -202,6 +202,19 @@ class MultiStageEvaluator(BaseEvaluator):
 			f"input_bits={self._stage_input_bits})"
 		)
 
+	# ── Live progress (delegated to Rust) ────────────────────────────
+
+	def get_live_progress(self):
+		"""Forward live progress from Rust cache."""
+		if hasattr(self._cache, 'get_live_progress'):
+			return self._cache.get_live_progress()
+		return None
+
+	def set_experiment_context(self, experiment_id: int):
+		"""Forward experiment context to Rust cache."""
+		if hasattr(self._cache, 'set_experiment_context'):
+			self._cache.set_experiment_context(experiment_id)
+
 	# ── Rotation (delegated to Rust) ─────────────────────────────────
 
 	def next_train_idx(self) -> int:

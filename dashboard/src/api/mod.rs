@@ -18,10 +18,17 @@ use tokio::sync::RwLock;
 use crate::db::DbPool;
 use crate::models::*;
 
+/// In-memory live progress entry (no DB persistence).
+pub(crate) struct LiveProgressEntry {
+    data: serde_json::Value,
+    updated_at: std::time::Instant,
+}
+
 pub struct AppState {
     pub db: DbPool,
     pub ws_tx: broadcast::Sender<WsMessage>,
     pub current_log_path: RwLock<Option<String>>,
+    pub live_progress: std::sync::Mutex<std::collections::HashMap<i64, LiveProgressEntry>>,
 }
 
 pub fn routes(state: Arc<AppState>) -> Router {
@@ -60,6 +67,8 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .route("/api/checkpoints/:id", get(get_checkpoint).delete(delete_checkpoint))
         .route("/api/checkpoints/:id/download", get(download_checkpoint))
         .route("/api/checkpoints/:id/export-hf", post(export_checkpoint_hf))
+        // Live progress (in-memory, no DB)
+        .route("/api/experiments/:id/live-progress", get(get_live_progress).post(post_live_progress).delete(clear_live_progress))
         // Worker log watching
         .route("/api/watch", post(set_watch_log).get(get_watch_log))
         // WebSocket (database polling)
@@ -316,6 +325,45 @@ async fn get_flow_validations(
             Json(serde_json::json!({"error": e.to_string()})),
         ).into_response(),
     }
+}
+
+// =============================================================================
+// Live Progress handlers (in-memory, no DB)
+// =============================================================================
+
+async fn post_live_progress(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Json(data): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let mut map = state.live_progress.lock().unwrap();
+    map.insert(id, LiveProgressEntry {
+        data,
+        updated_at: std::time::Instant::now(),
+    });
+    StatusCode::OK
+}
+
+async fn get_live_progress(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    let map = state.live_progress.lock().unwrap();
+    match map.get(&id) {
+        Some(entry) if entry.updated_at.elapsed() < std::time::Duration::from_secs(300) => {
+            (StatusCode::OK, Json(entry.data.clone())).into_response()
+        }
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn clear_live_progress(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    let mut map = state.live_progress.lock().unwrap();
+    map.remove(&id);
+    StatusCode::OK
 }
 
 // =============================================================================
