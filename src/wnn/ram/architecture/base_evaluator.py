@@ -161,6 +161,8 @@ class BaseEvaluator(ABC):
 		self._adapt_config = adapt_config
 		self._generation = 0
 		self._log_path = log_path
+		self._live_progress: Optional[dict] = None
+		self._experiment_id: Optional[int] = None
 
 		if seed is None:
 			seed = int(time.time() * 1000) % (2**32)
@@ -175,6 +177,39 @@ class BaseEvaluator(ABC):
 
 		# Per-generation metrics history for correlation tracking
 		self._generation_log: list[tuple] = []
+
+	# ── Live progress (Python-level, for observer thread) ─────────────────
+
+	def get_live_progress(self) -> Optional[dict]:
+		"""Return current live progress dict, or None if not in a search."""
+		return self._live_progress
+
+	def set_experiment_context(self, experiment_id: int) -> None:
+		"""Set the experiment ID for live progress reporting."""
+		self._experiment_id = experiment_id
+
+	def _update_live_progress(
+		self, phase: str, evaluated: int, target_count: int, viable: int,
+		best_ce: float, best_acc: float, elapsed_secs: float,
+		generation: Optional[int] = None, total_generations: Optional[int] = None,
+	) -> None:
+		"""Update the live progress dict (read by observer thread)."""
+		self._live_progress = {
+			"experiment_id": self._experiment_id or 0,
+			"generation": generation or 0,
+			"total_generations": total_generations or 0,
+			"phase": phase,
+			"evaluated": evaluated,
+			"target_count": target_count,
+			"viable": viable,
+			"best_ce": best_ce,
+			"best_acc": best_acc,
+			"elapsed_secs": elapsed_secs,
+		}
+
+	def _clear_live_progress(self) -> None:
+		"""Clear live progress after search completes."""
+		self._live_progress = None
 
 	# ── Rotation (abstract — each subclass delegates to its Rust cache) ───
 
@@ -401,7 +436,11 @@ class BaseEvaluator(ABC):
 		passed: list[ClusterGenome] = []
 		all_candidates: list[ClusterGenome] = []
 		evaluated = 0
+		viable_count = 0
 		batch_size = 50
+		best_ce_so_far = float('inf')
+		best_acc_so_far = 0.0
+		start_time = time.time()
 
 		while len(passed) < target_count and evaluated < max_attempts:
 			remaining = target_count - len(passed)
@@ -425,17 +464,28 @@ class BaseEvaluator(ABC):
 			)
 			evaluated += len(results)
 
+			for r in results:
+				best_ce_so_far = min(best_ce_so_far, r.ce)
+				best_acc_so_far = max(best_acc_so_far, r.accuracy)
+			self._update_live_progress(
+				"ts_neighbors", evaluated, target_count, viable_count,
+				best_ce_so_far, best_acc_so_far, time.time() - start_time,
+				generation, total_generations,
+			)
+
 			for g, r in zip(batch, results):
 				g._cached_fitness = (r.ce, r.accuracy)
 				if r.bit_accuracy is not None:
 					g._cached_bit_acc = r.bit_accuracy
 				if r.accuracy >= accuracy_threshold:
+					viable_count += 1
 					passed.append(g)
 					if len(passed) >= target_count:
 						break
 				else:
 					all_candidates.append(g)
 
+		self._clear_live_progress()
 		if len(passed) < target_count and return_best_n:
 			all_candidates.sort(key=lambda g: (-g._cached_fitness[1], g._cached_fitness[0]))
 			need = target_count - len(passed)
@@ -495,6 +545,9 @@ class BaseEvaluator(ABC):
 		evaluated = 0
 		viable_count = 0
 		batch_size = 50
+		best_ce_so_far = float('inf')
+		best_acc_so_far = 0.0
+		start_time = time.time()
 
 		while len(passed) < target_count and evaluated < max_attempts:
 			remaining = target_count - len(passed)
@@ -524,6 +577,16 @@ class BaseEvaluator(ABC):
 			)
 			evaluated += len(results)
 
+			# Update live progress
+			for r in results:
+				best_ce_so_far = min(best_ce_so_far, r.ce)
+				best_acc_so_far = max(best_acc_so_far, r.accuracy)
+			self._update_live_progress(
+				"ga_offspring", evaluated, target_count, viable_count,
+				best_ce_so_far, best_acc_so_far, time.time() - start_time,
+				generation, total_generations,
+			)
+
 			for g, r in zip(batch, results):
 				g._cached_fitness = (r.ce, r.accuracy)
 				if r.bit_accuracy is not None:
@@ -536,6 +599,7 @@ class BaseEvaluator(ABC):
 				else:
 					all_candidates.append(g)
 
+		self._clear_live_progress()
 		if len(passed) < target_count and return_best_n:
 			all_candidates.sort(key=lambda g: (-g._cached_fitness[1], g._cached_fitness[0]))
 			need = target_count - len(passed)

@@ -205,13 +205,19 @@ class MultiStageEvaluator(BaseEvaluator):
 	# ── Live progress (delegated to Rust) ────────────────────────────
 
 	def get_live_progress(self):
-		"""Forward live progress from Rust cache."""
+		"""Check Python-level progress first, then Rust cache."""
+		# Python base class tracks progress in search_offspring/search_neighbors
+		base = super().get_live_progress()
+		if base is not None:
+			return base
+		# Fallback to Rust cache (used when Rust search path is active)
 		if hasattr(self._cache, 'get_live_progress'):
 			return self._cache.get_live_progress()
 		return None
 
 	def set_experiment_context(self, experiment_id: int):
-		"""Forward experiment context to Rust cache."""
+		"""Set experiment context on both Python base and Rust cache."""
+		super().set_experiment_context(experiment_id)
 		if hasattr(self._cache, 'set_experiment_context'):
 			self._cache.set_experiment_context(experiment_id)
 

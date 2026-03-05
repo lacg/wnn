@@ -142,6 +142,12 @@ class ArchitectureStrategyMixin:
 		evaluator = getattr(self, '_cached_evaluator', None)
 		client = self._dashboard_client
 		experiment_id = getattr(self, '_tracker_experiment_id', None)
+		if not evaluator:
+			self._log("[LiveProgress] No evaluator, skipping observer")
+		if not client:
+			self._log("[LiveProgress] No dashboard client, skipping observer")
+		if not experiment_id:
+			self._log("[LiveProgress] No experiment_id, skipping observer")
 		if evaluator and client and experiment_id:
 			# Tell Rust which experiment this is for
 			if hasattr(evaluator, 'set_experiment_context'):
@@ -152,6 +158,7 @@ class ArchitectureStrategyMixin:
 				cache.set_experiment_context(experiment_id)
 			observer = LiveProgressObserver(evaluator, client, experiment_id)
 			observer.start()
+			self._log(f"[LiveProgress] Observer started for experiment {experiment_id}")
 			return observer
 		return None
 
