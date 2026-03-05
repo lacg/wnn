@@ -927,81 +927,76 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			arch_cfg = self._arch_config
 			evaluator = self._cached_evaluator
 
-			# Start live progress observer (reports to dashboard during Rust search)
-			observer = self._start_live_observer()
-			try:
-				# Phase-aware mutation rates: each phase uses cfg.mutation_rate
-				# for its own dimension, 0.0 for others
-				if self._phase_type == PhaseType.NEURONS:
-					bits_mutation_rate = 0.0
-					neurons_mutation_rate = cfg.mutation_rate
-				elif self._phase_type == PhaseType.BITS:
-					bits_mutation_rate = cfg.mutation_rate
-					neurons_mutation_rate = 0.0
-				else:  # CONNECTIONS
-					bits_mutation_rate = cfg.mutation_rate
-					neurons_mutation_rate = 0.0
+			# Phase-aware mutation rates: each phase uses cfg.mutation_rate
+			# for its own dimension, 0.0 for others
+			if self._phase_type == PhaseType.NEURONS:
+				bits_mutation_rate = 0.0
+				neurons_mutation_rate = cfg.mutation_rate
+			elif self._phase_type == PhaseType.BITS:
+				bits_mutation_rate = cfg.mutation_rate
+				neurons_mutation_rate = 0.0
+			else:  # CONNECTIONS
+				bits_mutation_rate = cfg.mutation_rate
+				neurons_mutation_rate = 0.0
 
-				# fitness_percentile controls selectivity: generate a larger pool,
-				# rank by fitness, keep only the top fraction → return exactly n_needed.
-				# e.g. percentile=0.75 → generate ceil(24/0.75)=32, rank, keep best 24.
-				import math
-				pct = cfg.fitness_percentile if cfg.fitness_percentile and 0 < cfg.fitness_percentile < 1.0 else None
-				generate_count = math.ceil(n_needed / pct) if pct else n_needed
+			# fitness_percentile controls selectivity: generate a larger pool,
+			# rank by fitness, keep only the top fraction → return exactly n_needed.
+			# e.g. percentile=0.75 → generate ceil(24/0.75)=32, rank, keep best 24.
+			import math
+			pct = cfg.fitness_percentile if cfg.fitness_percentile and 0 < cfg.fitness_percentile < 1.0 else None
+			generate_count = math.ceil(n_needed / pct) if pct else n_needed
 
-				# Convert 3-tuple population to 2-tuple for evaluator
-				rust_population = [(g, ce) for g, ce, _ in population]
+			# Convert 3-tuple population to 2-tuple for evaluator
+			rust_population = [(g, ce) for g, ce, _ in population]
 
-				# Pre-compute fitness scores so tournament selection uses the
-				# same metric as elite selection (e.g. HarmonicRank), not raw CE
-				fitness_scores = None
-				if self._fitness_calculator is not None:
-					pop_tuples = [
-						(i, ce, acc or 0.0)
-						for i, (_, ce, acc) in enumerate(population)
-					]
-					fitness_scores = self._fitness_calculator.fitness(pop_tuples)
-
-				search_result = evaluator.search_offspring(
-					population=rust_population,
-					target_count=generate_count,
-					max_attempts=generate_count * 5,
-					accuracy_threshold=threshold,
-					min_bits=arch_cfg.min_bits,
-					max_bits=arch_cfg.max_bits,
-					min_neurons=arch_cfg.min_neurons,
-					max_neurons=arch_cfg.max_neurons,
-					bits_mutation_rate=bits_mutation_rate,
-					neurons_mutation_rate=neurons_mutation_rate,
-					crossover_rate=cfg.crossover_rate,
-					tournament_size=cfg.tournament_size,
-					train_subset_idx=self._phase_train_idx,
-					eval_subset_idx=0,
-					seed=self._seed_offset + generation,
-					logger=self._log,
-					generation=generation,
-					total_generations=cfg.generations,
-					return_best_n=True,
-					mutable_clusters=arch_cfg.mutable_clusters,
-					phase_type=int(self._phase_type),
-					fitness_scores=fitness_scores,
-				)
-
-				# Convert to 3-tuples, rank by fitness, return best n_needed
-				offspring = [
-					(g, g._cached_fitness[0], g._cached_fitness[1])
-					for g in search_result.genomes
-					if hasattr(g, '_cached_fitness')
+			# Pre-compute fitness scores so tournament selection uses the
+			# same metric as elite selection (e.g. HarmonicRank), not raw CE
+			fitness_scores = None
+			if self._fitness_calculator is not None:
+				pop_tuples = [
+					(i, ce, acc or 0.0)
+					for i, (_, ce, acc) in enumerate(population)
 				]
+				fitness_scores = self._fitness_calculator.fitness(pop_tuples)
 
-				if pct and len(offspring) > n_needed:
-					scores = self._fitness_calculator.fitness(offspring)
-					ranked = sorted(zip(offspring, scores), key=lambda x: x[1])
-					offspring = [item for item, _ in ranked[:n_needed]]
+			search_result = evaluator.search_offspring(
+				population=rust_population,
+				target_count=generate_count,
+				max_attempts=generate_count * 5,
+				accuracy_threshold=threshold,
+				min_bits=arch_cfg.min_bits,
+				max_bits=arch_cfg.max_bits,
+				min_neurons=arch_cfg.min_neurons,
+				max_neurons=arch_cfg.max_neurons,
+				bits_mutation_rate=bits_mutation_rate,
+				neurons_mutation_rate=neurons_mutation_rate,
+				crossover_rate=cfg.crossover_rate,
+				tournament_size=cfg.tournament_size,
+				train_subset_idx=self._phase_train_idx,
+				eval_subset_idx=0,
+				seed=self._seed_offset + generation,
+				logger=self._log,
+				generation=generation,
+				total_generations=cfg.generations,
+				return_best_n=True,
+				mutable_clusters=arch_cfg.mutable_clusters,
+				phase_type=int(self._phase_type),
+				fitness_scores=fitness_scores,
+			)
 
-				return offspring
-			finally:
-				self._stop_live_observer(observer)
+			# Convert to 3-tuples, rank by fitness, return best n_needed
+			offspring = [
+				(g, g._cached_fitness[0], g._cached_fitness[1])
+				for g in search_result.genomes
+				if hasattr(g, '_cached_fitness')
+			]
+
+			if pct and len(offspring) > n_needed:
+				scores = self._fitness_calculator.fitness(offspring)
+				ranked = sorted(zip(offspring, scores), key=lambda x: x[1])
+				offspring = [item for item, _ in ranked[:n_needed]]
+
+			return offspring
 
 		# Fallback to Python generation
 		return super()._generate_offspring(population, n_needed, threshold, generation)
@@ -1148,14 +1143,19 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 				genomes, logger=self._log, min_accuracy=min_accuracy,
 			)
 
-		# Delegate to unified loop (uses our _generate_offspring override)
-		result = super().optimize(
-			evaluate_fn=evaluate_fn,
-			initial_genome=initial_genome,
-			initial_population=initial_population,
-			batch_evaluate_fn=batch_evaluate_fn,
-			**kwargs,
-		)
+		# Start live progress observer — covers genesis, re-evaluation, and all generations
+		observer = self._start_live_observer()
+		try:
+			# Delegate to unified loop (uses our _generate_offspring override)
+			result = super().optimize(
+				evaluate_fn=evaluate_fn,
+				initial_genome=initial_genome,
+				initial_population=initial_population,
+				batch_evaluate_fn=batch_evaluate_fn,
+				**kwargs,
+			)
+		finally:
+			self._stop_live_observer(observer)
 
 		# Validation summary (Rust path only: full-data evaluation)
 		if self._cached_evaluator is not None:
@@ -1272,64 +1272,59 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 			arch_cfg = self._arch_config
 			evaluator = self._cached_evaluator
 
-			# Start live progress observer
-			observer = self._start_live_observer()
-			try:
-				# Phase-aware mutation rates: each phase uses cfg.mutation_rate
-				# for its own dimension, 0.0 for others
-				if self._phase_type == PhaseType.NEURONS:
-					bits_mutation_rate = 0.0
-					neurons_mutation_rate = cfg.mutation_rate
-				elif self._phase_type == PhaseType.BITS:
-					bits_mutation_rate = cfg.mutation_rate
-					neurons_mutation_rate = 0.0
-				else:  # CONNECTIONS
-					bits_mutation_rate = cfg.mutation_rate
-					neurons_mutation_rate = 0.0
+			# Phase-aware mutation rates: each phase uses cfg.mutation_rate
+			# for its own dimension, 0.0 for others
+			if self._phase_type == PhaseType.NEURONS:
+				bits_mutation_rate = 0.0
+				neurons_mutation_rate = cfg.mutation_rate
+			elif self._phase_type == PhaseType.BITS:
+				bits_mutation_rate = cfg.mutation_rate
+				neurons_mutation_rate = 0.0
+			else:  # CONNECTIONS
+				bits_mutation_rate = cfg.mutation_rate
+				neurons_mutation_rate = 0.0
 
-				# fitness_percentile: generate larger pool, rank, keep best n_neighbors
-				import math
-				pct = cfg.fitness_percentile if cfg.fitness_percentile and 0 < cfg.fitness_percentile < 1.0 else None
-				generate_count = math.ceil(n_neighbors / pct) if pct else n_neighbors
+			# fitness_percentile: generate larger pool, rank, keep best n_neighbors
+			import math
+			pct = cfg.fitness_percentile if cfg.fitness_percentile and 0 < cfg.fitness_percentile < 1.0 else None
+			generate_count = math.ceil(n_neighbors / pct) if pct else n_neighbors
 
-				self._log.debug(f"[{self.name}] Searching {generate_count} neighbors from best ranked (keeping best {n_neighbors})...")
-				neighbors_raw = evaluator.search_neighbors(
-					genome=best_genome,
-					target_count=generate_count,
-					max_attempts=generate_count * 5,
-					accuracy_threshold=threshold,
-					min_bits=arch_cfg.min_bits,
-					max_bits=arch_cfg.max_bits,
-					min_neurons=arch_cfg.min_neurons,
-					max_neurons=arch_cfg.max_neurons,
-					bits_mutation_rate=bits_mutation_rate,
-					neurons_mutation_rate=neurons_mutation_rate,
-					train_subset_idx=self._phase_train_idx,
-					eval_subset_idx=0,
-					seed=self._seed_offset + iteration * 1000,
-					logger=self._log,
-					generation=iteration,
-					total_generations=cfg.iterations,
-					return_best_n=True,
-					mutable_clusters=arch_cfg.mutable_clusters,
-					phase_type=int(self._phase_type),
-				)
+			self._log.debug(f"[{self.name}] Searching {generate_count} neighbors from best ranked (keeping best {n_neighbors})...")
+			neighbors_raw = evaluator.search_neighbors(
+				genome=best_genome,
+				target_count=generate_count,
+				max_attempts=generate_count * 5,
+				accuracy_threshold=threshold,
+				min_bits=arch_cfg.min_bits,
+				max_bits=arch_cfg.max_bits,
+				min_neurons=arch_cfg.min_neurons,
+				max_neurons=arch_cfg.max_neurons,
+				bits_mutation_rate=bits_mutation_rate,
+				neurons_mutation_rate=neurons_mutation_rate,
+				train_subset_idx=self._phase_train_idx,
+				eval_subset_idx=0,
+				seed=self._seed_offset + iteration * 1000,
+				logger=self._log,
+				generation=iteration,
+				total_generations=cfg.iterations,
+				return_best_n=True,
+				mutable_clusters=arch_cfg.mutable_clusters,
+				phase_type=int(self._phase_type),
+			)
 
-				# Convert to 3-tuples, rank by fitness, return best n_neighbors
-				neighbors = [
-					(g, g._cached_fitness[0], g._cached_fitness[1])
-					for g in neighbors_raw
-					if hasattr(g, '_cached_fitness')
-				]
+			# Convert to 3-tuples, rank by fitness, return best n_neighbors
+			neighbors = [
+				(g, g._cached_fitness[0], g._cached_fitness[1])
+				for g in neighbors_raw
+				if hasattr(g, '_cached_fitness')
+			]
 
-				if pct and len(neighbors) > n_neighbors:
-					scores = self._fitness_calculator.fitness(neighbors)
-					ranked = sorted(zip(neighbors, scores), key=lambda x: x[1])
-					neighbors = [item for item, _ in ranked[:n_neighbors]]
+			if pct and len(neighbors) > n_neighbors:
+				scores = self._fitness_calculator.fitness(neighbors)
+				ranked = sorted(zip(neighbors, scores), key=lambda x: x[1])
+				neighbors = [item for item, _ in ranked[:n_neighbors]]
 
-				return neighbors
-			finally:
-				self._stop_live_observer(observer)
+			return neighbors
 
 		# Fallback to Python single-path generation
 		return super()._generate_neighbors(best_genome, n_neighbors, threshold, iteration, tabu_list)
@@ -1509,15 +1504,20 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				genomes, logger=self._log, min_accuracy=min_accuracy,
 			)
 
-		# Delegate to unified loop (uses our _generate_neighbors override)
-		result = super().optimize(
-			initial_genome=initial_genome,
-			initial_fitness=initial_fitness,
-			evaluate_fn=evaluate_fn,
-			initial_neighbors=initial_neighbors,
-			batch_evaluate_fn=batch_evaluate_fn,
-			**kwargs,
-		)
+		# Start live progress observer — covers initial eval, seeded neighbors, and all iterations
+		observer = self._start_live_observer()
+		try:
+			# Delegate to unified loop (uses our _generate_neighbors override)
+			result = super().optimize(
+				initial_genome=initial_genome,
+				initial_fitness=initial_fitness,
+				evaluate_fn=evaluate_fn,
+				initial_neighbors=initial_neighbors,
+				batch_evaluate_fn=batch_evaluate_fn,
+				**kwargs,
+			)
+		finally:
+			self._stop_live_observer(observer)
 
 		# Validation summary (Rust path only: full-data evaluation)
 		if self._cached_evaluator is not None:
