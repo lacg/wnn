@@ -374,6 +374,23 @@ class BitwiseEvaluator(BaseEvaluator):
 			else:
 				raw_results = self._evaluate_batch_rust(genomes, train_subset_idx, eval_subset_idx)
 			elapsed = time.time() - start
+
+			# Update live progress (read by observer thread for dashboard)
+			if raw_results:
+				best_ce = min(r[0] for r in raw_results)
+				best_acc = max(r[1] for r in raw_results)
+				self._update_live_progress(
+					phase="evaluate_batch",
+					evaluated=len(raw_results),
+					target_count=len(genomes),
+					viable=sum(1 for r in raw_results if r[1] > 0),
+					best_ce=best_ce,
+					best_acc=best_acc,
+					elapsed_secs=elapsed,
+					generation=generation,
+					total_generations=total_generations,
+				)
+
 			log = logger if logger is not None else lambda x: None
 			if generation is not None:
 				gen = generation + 1

@@ -568,6 +568,22 @@ class MultiStageEvaluator(BaseEvaluator):
 		for genome, (_, _, bit_acc) in zip(genomes, raw):
 			genome._cached_bit_acc = bit_acc
 
+		# Update live progress (read by observer thread for dashboard)
+		if raw:
+			best_ce = min(r[0] for r in raw)
+			best_acc = max(r[1] for r in raw)
+			self._update_live_progress(
+				phase="evaluate_batch",
+				evaluated=len(raw),
+				target_count=len(genomes),
+				viable=sum(1 for r in raw if r[1] > 0),
+				best_ce=best_ce,
+				best_acc=best_acc,
+				elapsed_secs=elapsed,
+				generation=generation,
+				total_generations=total_generations,
+			)
+
 		# Logging
 		log = logger if logger is not None else lambda x: None
 		if generation is not None:
