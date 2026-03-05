@@ -1440,6 +1440,7 @@ fn evaluate_genomes_with_subset(
         bits_per_neuron_flat, neurons_per_cluster_flat, connections_flat,
         num_genomes, train_subset, eval_subset,
         memory_mode, neuron_sample_rate, rng_seed, sparse_threshold_override,
+        None, 0,
     )
 }
 
@@ -1467,7 +1468,10 @@ pub(crate) fn evaluate_genomes_with_params(
     neuron_sample_rate: f32,
     rng_seed: u64,
     sparse_threshold_override: Option<usize>,
+    live_progress: Option<&std::sync::Arc<std::sync::RwLock<Option<crate::neighbor_search::LiveProgress>>>>,
+    experiment_id: i64,
 ) -> Vec<(f64, f64, f64)> {
+    let start_time = std::time::Instant::now();
     let num_clusters = num_clusters;
     let num_eval = eval_subset.num_examples;
     let scores_per_genome = num_eval * num_clusters;
@@ -1617,6 +1621,25 @@ pub(crate) fn evaluate_genomes_with_params(
                     memory_mode, neuron_sample_rate, genome_rng_seed,
                 );
             });
+
+        // Update live progress after each batch (read by observer thread)
+        if let Some(ref lp) = live_progress {
+            if let Ok(mut guard) = lp.write() {
+                *guard = Some(crate::neighbor_search::LiveProgress {
+                    experiment_id,
+                    generation: 0,
+                    total_generations: 0,
+                    phase: "evaluate_batch".into(),
+                    evaluated: batch_end,
+                    target_count: num_genomes,
+                    viable: 0,
+                    best_ce: 0.0,
+                    best_acc: 0.0,
+                    elapsed_secs: start_time.elapsed().as_secs_f64(),
+                    updated_at: crate::neighbor_search::LiveProgress::now_unix(),
+                });
+            }
+        }
 
         batch_start = batch_end;
     }

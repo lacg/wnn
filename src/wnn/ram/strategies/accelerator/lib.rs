@@ -9,7 +9,7 @@ use pyo3::types::PyModule;
 use rand::SeedableRng;
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::sync::{Mutex, OnceLock};
 use numpy::PyReadonlyArray1;
 
@@ -5002,6 +5002,8 @@ struct MultiStageCacheWrapper {
     sparse_threshold_override: Option<usize>,
     reweight_rounds: usize,
     reweight_max_boost: usize,
+    live_progress: Arc<RwLock<Option<neighbor_search::LiveProgress>>>,
+    experiment_id: i64,
 }
 
 #[pymethods]
@@ -5039,6 +5041,34 @@ impl MultiStageCacheWrapper {
             sparse_threshold_override: sparse_threshold,
             reweight_rounds: rw_rounds,
             reweight_max_boost: rw_max_boost,
+            live_progress: Arc::new(RwLock::new(None)),
+            experiment_id: 0,
+        }
+    }
+
+    fn set_experiment_context(&mut self, experiment_id: i64) {
+        self.experiment_id = experiment_id;
+    }
+
+    fn get_live_progress(&self, py: Python<'_>) -> PyResult<Option<pyo3::PyObject>> {
+        let guard = self.live_progress.read()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("lock: {e}")))?;
+        match &*guard {
+            None => Ok(None),
+            Some(lp) => {
+                let dict = pyo3::types::PyDict::new(py);
+                dict.set_item("experiment_id", lp.experiment_id)?;
+                dict.set_item("generation", lp.generation)?;
+                dict.set_item("total_generations", lp.total_generations)?;
+                dict.set_item("phase", &lp.phase)?;
+                dict.set_item("evaluated", lp.evaluated)?;
+                dict.set_item("target_count", lp.target_count)?;
+                dict.set_item("viable", lp.viable)?;
+                dict.set_item("best_ce", lp.best_ce)?;
+                dict.set_item("best_acc", lp.best_acc)?;
+                dict.set_item("elapsed_secs", lp.elapsed_secs)?;
+                Ok(Some(dict.into()))
+            }
         }
     }
 
@@ -5061,11 +5091,14 @@ impl MultiStageCacheWrapper {
         rng_seed: u64,
     ) -> PyResult<Vec<(f64, f64, f64)>> {
         let override_val = self.sparse_threshold_override;
+        let lp_arc = self.live_progress.clone();
+        let exp_id = self.experiment_id;
         py.allow_threads(|| {
             Ok(multistage::evaluate_bitwise_genomes(
                 &self.inner, stage, &bits_per_neuron_flat, &neurons_per_cluster_flat,
                 &connections_flat, num_genomes, train_subset_idx, eval_subset_idx,
                 memory_mode, neuron_sample_rate, rng_seed, override_val,
+                Some(&lp_arc), exp_id,
             ))
         })
     }

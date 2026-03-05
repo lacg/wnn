@@ -1504,6 +1504,8 @@ pub fn evaluate_bitwise_genomes(
     neuron_sample_rate: f32,
     rng_seed: u64,
     sparse_threshold_override: Option<usize>,
+    live_progress: Option<&std::sync::Arc<std::sync::RwLock<Option<crate::neighbor_search::LiveProgress>>>>,
+    experiment_id: i64,
 ) -> Vec<(f64, f64, f64)> {
     let train_subset = &cache.bitwise_train_subsets[stage][train_subset_idx % cache.num_parts];
     let eval_subset = &cache.bitwise_eval_subsets[stage][eval_subset_idx % cache.num_eval_parts];
@@ -1521,6 +1523,8 @@ pub fn evaluate_bitwise_genomes(
         neuron_sample_rate,
         rng_seed,
         sparse_threshold_override,
+        live_progress,
+        experiment_id,
     )
 }
 
@@ -1551,6 +1555,7 @@ pub fn evaluate_bitwise_genomes_full(
         neuron_sample_rate,
         rng_seed,
         sparse_threshold_override,
+        None, 0,
     )
 }
 
@@ -1596,6 +1601,8 @@ pub fn evaluate_bitwise_selector_genomes(
         neuron_sample_rate,
         rng_seed,
         sparse_threshold_override,
+        None,
+        0,
     )
 }
 
