@@ -206,6 +206,8 @@ class DashboardClient:
 					return None
 
 				response.raise_for_status()
+				if not response.content:
+					return None
 				return response.json()
 
 			except requests.RequestException as e:
