@@ -1113,6 +1113,11 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 					)
 					mutation_rate = 0.3
 					expanded = list(initial_population)
+					# Dedup: track known fingerprints to avoid duplicate mutants
+					known_fps = set()
+					for g in initial_population:
+						if hasattr(g, 'fingerprint'):
+							known_fps.add(g.fingerprint())
 					for i in range(need_count):
 						seed = initial_population[i % seed_count]
 						mutated = seed.mutate(
@@ -1121,6 +1126,19 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 							self._cached_evaluator.total_input_bits,
 							self._rng,
 						)
+						# Re-mutate if duplicate (up to 3 retries)
+						if hasattr(mutated, 'fingerprint'):
+							for _ in range(3):
+								fp = mutated.fingerprint()
+								if fp not in known_fps:
+									break
+								mutated = seed.mutate(
+									self._phase_type, mutation_rate,
+									mutation_config,
+									self._cached_evaluator.total_input_bits,
+									self._rng,
+								)
+							known_fps.add(mutated.fingerprint())
 						expanded.append(mutated)
 					initial_population = expanded
 

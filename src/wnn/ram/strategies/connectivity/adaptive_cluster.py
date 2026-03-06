@@ -637,8 +637,13 @@ class ClusterGenome:
 		self.connections = generate_connections(self.bits_per_neuron, total_input_bits, rng)
 
 	def fingerprint(self) -> tuple:
-		"""Identity tuple for deduplication — same architecture = same eval result."""
-		return (tuple(self.bits_per_neuron), tuple(self.neurons_per_cluster))
+		"""Identity tuple for deduplication — same genome = same eval result.
+
+		Includes connections because they define which input bits each neuron
+		observes. Same bits/neurons but different connections = different genome.
+		"""
+		conn = tuple(self.connections) if self.connections is not None else ()
+		return (tuple(self.bits_per_neuron), tuple(self.neurons_per_cluster), conn)
 
 	def clone(self) -> ClusterGenome:
 		"""Create a deep copy of this genome including connections and cached fitness."""

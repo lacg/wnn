@@ -1740,9 +1740,19 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 
 		import time as _time
 
+		# Track fingerprints to avoid duplicates in population
+		known_fps: set = set()
+
 		# First, evaluate seed genomes if provided (always accepted — they're explicit seeds)
 		if seed_genomes:
-			to_eval = [self.clone_genome(g) for g in seed_genomes[:target_size]]
+			# Deduplicate seeds by fingerprint
+			unique_seeds = []
+			for g in seed_genomes[:target_size]:
+				fp = g.fingerprint() if hasattr(g, 'fingerprint') else id(g)
+				if fp not in known_fps:
+					known_fps.add(fp)
+					unique_seeds.append(self.clone_genome(g))
+			to_eval = unique_seeds
 			self._log.info(f"[{self.name}] Evaluating {len(to_eval)} seed genomes...")
 			t0 = _time.time()
 			if batch_fn is not None:
@@ -1764,11 +1774,19 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		while len(viable) < target_size and attempt < max_attempts:
 			attempt += 1
 			needed = target_size - len(viable)
-			# Generate a batch of candidates (extra to account for filtering)
+			# Generate a batch of candidates (extra to account for filtering + dedup)
 			batch_size = min(needed * 2, needed + 10)  # Generate extra
-			candidates = [generator_fn() for _ in range(batch_size)]
+			candidates = []
+			for _ in range(batch_size):
+				g = generator_fn()
+				fp = g.fingerprint() if hasattr(g, 'fingerprint') else id(g)
+				if fp not in known_fps:
+					known_fps.add(fp)
+					candidates.append(g)
+			if not candidates:
+				continue
 
-			self._log.info(f"[{self.name}] Building population: attempt {attempt}, evaluating {batch_size} candidates ({len(viable)}/{target_size} viable)")
+			self._log.info(f"[{self.name}] Building population: attempt {attempt}, evaluating {len(candidates)} candidates ({len(viable)}/{target_size} viable)")
 			t0 = _time.time()
 			# Evaluate
 			if batch_fn is not None:
@@ -2107,8 +2125,26 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 		current_threshold = self._compute_threshold(0.0)
 
 		# Seed with initial neighbors if provided (e.g., from previous GA phase)
-		# Always re-evaluate at phase transitions (cached evals used different train subset)
+		# Deduplicate seeds against initial genome and each other
 		if initial_neighbors:
+			# Build fingerprint set from initial genome
+			seen_fps: set = set()
+			ig = pop[0][0]  # initial_genome clone
+			if hasattr(ig, 'fingerprint'):
+				seen_fps.add(ig.fingerprint())
+
+			# Filter out duplicate neighbors
+			unique_neighbors = []
+			for g in initial_neighbors:
+				fp = g.fingerprint() if hasattr(g, 'fingerprint') else id(g)
+				if fp not in seen_fps:
+					seen_fps.add(fp)
+					unique_neighbors.append(g)
+			if len(unique_neighbors) < len(initial_neighbors):
+				self._log.info(f"[{self.name}] Dedup: {len(initial_neighbors)} → {len(unique_neighbors)} unique seeded neighbors")
+			initial_neighbors = unique_neighbors
+
+			# Always re-evaluate at phase transitions (cached evals used different train subset)
 			if initial_evals is not None and batch_evaluate_fn is not None:
 				self._log.info(f"[{self.name}] Re-evaluating {len(initial_neighbors)} seeded neighbors (phase transition — different train subset)")
 				results = batch_evaluate_fn(initial_neighbors, min_accuracy=current_threshold)

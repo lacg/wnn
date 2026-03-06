@@ -501,10 +501,10 @@ where
     let mut best_acc_so_far = 0.0_f64;
     let start_time = Instant::now();
 
-    // Track fingerprints to avoid duplicate neighbors
-    let mut known_fps: std::collections::HashSet<(Vec<usize>, Vec<usize>)> =
+    // Track fingerprints (bits + neurons + connections) to avoid duplicate neighbors
+    let mut known_fps: std::collections::HashSet<(Vec<usize>, Vec<usize>, Vec<i64>)> =
         std::collections::HashSet::new();
-    known_fps.insert((base_bits.to_vec(), base_neurons.to_vec()));
+    known_fps.insert((base_bits.to_vec(), base_neurons.to_vec(), base_connections.to_vec()));
 
     while passed.len() < target_count && evaluated < max_attempts {
         let remaining_needed = target_count - passed.len();
@@ -525,7 +525,7 @@ where
 
             // Re-mutate if duplicate (up to 3 retries)
             for _ in 0..3 {
-                let fp = (new_bits.clone(), new_neurons.clone());
+                let fp = (new_bits.clone(), new_neurons.clone(), new_conns.clone());
                 if !known_fps.contains(&fp) {
                     break;
                 }
@@ -534,7 +534,7 @@ where
                 new_neurons = remut.1;
                 new_conns = remut.2;
             }
-            known_fps.insert((new_bits.clone(), new_neurons.clone()));
+            known_fps.insert((new_bits.clone(), new_neurons.clone(), new_conns.clone()));
 
             batch_bits.extend(&new_bits);
             batch_neurons.extend(&new_neurons);
@@ -634,10 +634,10 @@ where
     let mut best_acc_so_far = 0.0_f64;
     let start_time = Instant::now();
 
-    // Track fingerprints to avoid duplicate neighbors
-    let mut known_fps: std::collections::HashSet<(Vec<usize>, Vec<usize>)> =
+    // Track fingerprints (bits + neurons + connections) to avoid duplicate neighbors
+    let mut known_fps: std::collections::HashSet<(Vec<usize>, Vec<usize>, Vec<i64>)> =
         std::collections::HashSet::new();
-    known_fps.insert((base_bits.to_vec(), base_neurons.to_vec()));
+    known_fps.insert((base_bits.to_vec(), base_neurons.to_vec(), base_connections.to_vec()));
 
     while passed.len() < target_count && evaluated < max_attempts {
         let remaining_needed = target_count - passed.len();
@@ -658,7 +658,7 @@ where
 
             // Re-mutate if duplicate (up to 3 retries)
             for _ in 0..3 {
-                let fp = (new_bits.clone(), new_neurons.clone());
+                let fp = (new_bits.clone(), new_neurons.clone(), new_conns.clone());
                 if !known_fps.contains(&fp) {
                     break;
                 }
@@ -667,7 +667,7 @@ where
                 new_neurons = remut.1;
                 new_conns = remut.2;
             }
-            known_fps.insert((new_bits.clone(), new_neurons.clone()));
+            known_fps.insert((new_bits.clone(), new_neurons.clone(), new_conns.clone()));
 
             batch_bits.extend(&new_bits);
             batch_neurons.extend(&new_neurons);
@@ -1028,11 +1028,11 @@ where
         }
     }
 
-    // Build fingerprint set from population to avoid duplicate offspring
-    let mut known_fps: std::collections::HashSet<(Vec<usize>, Vec<usize>)> =
+    // Build fingerprint set (bits + neurons + connections) from population
+    let mut known_fps: std::collections::HashSet<(Vec<usize>, Vec<usize>, Vec<i64>)> =
         std::collections::HashSet::new();
-    for (bits, neurons, _, _) in population {
-        known_fps.insert((bits.clone(), neurons.clone()));
+    for (bits, neurons, conns, _) in population {
+        known_fps.insert((bits.clone(), neurons.clone(), conns.clone()));
     }
 
     while passed.len() < target_count && evaluated < max_attempts {
@@ -1063,7 +1063,7 @@ where
 
             // Re-mutate if offspring is a duplicate (up to 3 retries)
             for _ in 0..3 {
-                let fp = (new_bits.clone(), new_neurons.clone());
+                let fp = (new_bits.clone(), new_neurons.clone(), new_conns.clone());
                 if !known_fps.contains(&fp) {
                     break;
                 }
@@ -1072,7 +1072,7 @@ where
                 new_neurons = remut.1;
                 new_conns = remut.2;
             }
-            known_fps.insert((new_bits.clone(), new_neurons.clone()));
+            known_fps.insert((new_bits.clone(), new_neurons.clone(), new_conns.clone()));
 
             batch_bits.extend(&new_bits);
             batch_neurons.extend(&new_neurons);
