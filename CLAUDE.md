@@ -893,3 +893,33 @@ WNN_COALESCE_GROUPS=1 WNN_GROUP_LOG=1 python run_coarse_fine_search.py ...
 1. **Performance** — Experiment throughput is everything in research. GPU+CPU hybrid is always a requirement when it can improve performance, never "future work."
 2. **Memory efficiency** — Maximize concurrent genome evaluation within 64GB unified memory
 3. **Bug-free correctness** — Results must be trustworthy for research conclusions
+
+## Behavioral Rules
+
+### Rule 1: Investigate Before Implementing
+When asked to investigate or debug an issue, ALWAYS investigate and diagnose first before implementing fixes. Do not skip profiling, analysis, or root cause investigation to jump straight to implementation.
+
+### Rule 2: Flow/Experiment Creation Protocol
+When creating experiment flows:
+1. Include experiments in the POST body (flows without experiments do nothing)
+2. Use `queued` not `pending` for initial status
+3. Use experiment_type `grid_search` for grid searches (not `ga`)
+4. Verify the flow has experiments after creation
+
+### Rule 3: Minimal Design
+When presenting a plan or architecture, keep it minimal. Prefer simple in-memory solutions over DB-based approaches. Do not use hardcoded field names (`stage0_`, `stage1_`) when indexed vectors/arrays work. Design for the simplest viable approach first.
+
+### Rule 4: Python Indentation Care
+When editing Python files, double-check indentation matches surrounding code (tabs, not spaces) before submitting edits.
+
+### Rule 5: Show Real Data
+When asked about data or results, show ACTUAL values from the database — never compute or estimate. Provide combined metrics, not per-stage breakdowns, unless explicitly asked.
+
+### Rule 6: Full-Stack Tracing
+This project spans Rust (accelerator), Python (strategies/worker), and Svelte (dashboard). When implementing features, trace the full stack — don't leave gaps in parameter forwarding.
+
+## Workflow Patterns
+
+1. **Plan-then-implement**: If `.claude/plans/` has an approved plan, implement directly — don't re-explore
+2. **Investigation-only**: When user says "investigate"/"debug", no code changes until approved
+3. **Compact multi-task**: Numbered task lists → complete each fully (including commit) before next
