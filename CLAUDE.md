@@ -902,9 +902,10 @@ When asked to investigate or debug an issue, ALWAYS investigate and diagnose fir
 ### Rule 2: Flow/Experiment Creation Protocol
 When creating experiment flows:
 1. Include experiments in the POST body (flows without experiments do nothing)
-2. Use `queued` not `pending` for initial status
-3. Use experiment_type `grid_search` for grid searches (not `ga`)
-4. Verify the flow has experiments after creation
+2. Use experiment_type `grid_search` for grid searches (not `ga`)
+3. Experiment params go in the flat `params` HashMap, not a nested `config` object
+4. Use `optimize_bits`, `optimize_neurons`, `optimize_connections` booleans to control what gets optimized
+5. Verify the flow has experiments after creation by checking the API response
 
 ### Rule 3: Minimal Design
 When presenting a plan or architecture, keep it minimal. Prefer simple in-memory solutions over DB-based approaches. Do not use hardcoded field names (`stage0_`, `stage1_`) when indexed vectors/arrays work. Design for the simplest viable approach first.
