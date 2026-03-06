@@ -1782,18 +1782,19 @@ class GridSearchStrategy:
 					  f"Fit={r['fitness']:.4f}{marker}")
 
 		# Phase 5: Build output population with balanced representation.
-		# Top 5 configs get 5 genomes each (25), top 6-15 get 3 each (30) = 55 total.
-		# After evaluation, select top population_size (50) by fitness.
+		# Generate population_size * 1.1 genomes (10% extra for fitness trimming),
+		# distributed evenly across top_k configs with extra going to top-ranked.
 		best_result = results[0]
 		best_genome = best_result["genome"]
 
 		top_k = min(cfg.top_k, len(results))
+		target_total = max(top_k, int(cfg.population_size * 1.1))
+		base_per_config = target_total // top_k
+		remainder = target_total - base_per_config * top_k
 		genomes_per_config = []
 		for i in range(top_k):
-			if i < 5:
-				genomes_per_config.append(5)
-			else:
-				genomes_per_config.append(3)
+			extra = 1 if i < remainder else 0
+			genomes_per_config.append(max(1, base_per_config + extra))
 
 		# Reuse original evaluated genomes + create new variations for the rest.
 		# Each config's first genome is the already-evaluated original;
