@@ -115,6 +115,11 @@ async fn run_migrations(pool: &DbPool) -> Result<()> {
         .execute(pool)
         .await;
 
+    // Migration: Add params_json to experiments for per-experiment params (lambda_sweep etc.)
+    let _ = sqlx::query("ALTER TABLE experiments ADD COLUMN params_json TEXT")
+        .execute(pool)
+        .await;
+
     Ok(())
 }
 
@@ -526,6 +531,7 @@ pub mod queries {
                 };
                 match exp_spec.experiment_type {
                     crate::models::ExperimentType::GridSearch => "grid_search".to_string(),
+                    crate::models::ExperimentType::LambdaSweep => "lambda_sweep".to_string(),
                     _ => {
                         let exp_type = match exp_spec.experiment_type {
                             crate::models::ExperimentType::Ga => "ga",
@@ -533,7 +539,7 @@ pub mod queries {
                             crate::models::ExperimentType::Neurogenesis => "neurogenesis",
                             crate::models::ExperimentType::Synaptogenesis => "synaptogenesis",
                             crate::models::ExperimentType::Axonogenesis => "axonogenesis",
-                            crate::models::ExperimentType::GridSearch => unreachable!(),
+                            crate::models::ExperimentType::GridSearch | crate::models::ExperimentType::LambdaSweep => unreachable!(),
                         };
                         format!("{}_{}", exp_type, opt_target)
                     }
@@ -541,8 +547,8 @@ pub mod queries {
             };
 
             // Get max_iterations: grid_search is always 1; others from params
-            let max_iterations = if exp_spec.experiment_type == crate::models::ExperimentType::GridSearch {
-                Some(1) // Grid search is a single step — always 1
+            let max_iterations = if matches!(exp_spec.experiment_type, crate::models::ExperimentType::GridSearch | crate::models::ExperimentType::LambdaSweep) {
+                Some(1) // Grid search / lambda sweep is a single step — always 1
             } else {
                 exp_spec.params.get("generations")
                     .or_else(|| exp_spec.params.get("iterations"))
@@ -550,7 +556,7 @@ pub mod queries {
                     .map(|v| v as i32)
                     .or_else(|| {
                         match exp_spec.experiment_type {
-                            crate::models::ExperimentType::GridSearch => unreachable!(),
+                            crate::models::ExperimentType::GridSearch | crate::models::ExperimentType::LambdaSweep => unreachable!(),
                             crate::models::ExperimentType::Ga => {
                                 config.params.get("ga_generations")
                                     .and_then(|v| v.as_i64())
@@ -570,6 +576,7 @@ pub mod queries {
                     })
             };
 
+            let exp_params = if exp_spec.params.is_empty() { None } else { Some(&exp_spec.params) };
             create_pending_experiment(
                 pool,
                 &exp_spec.name,
@@ -578,6 +585,7 @@ pub mod queries {
                 Some(&phase_type),
                 max_iterations,
                 config,
+                exp_params,
             ).await?;
         }
 
@@ -1022,7 +1030,8 @@ pub mod queries {
                       population_size, pid, last_iteration, resume_checkpoint_id,
                       created_at, started_at, ended_at, paused_at,
                       phase_type, max_iterations, current_iteration, best_ce, best_accuracy,
-                      status_message, architecture_type, gating_status, gating_results
+                      status_message, architecture_type, gating_status, gating_results,
+                      params_json
                FROM experiments WHERE flow_id = ?
                ORDER BY sequence_order"#,
         )
@@ -1162,6 +1171,7 @@ pub mod queries {
                         phase_type.as_deref(),
                         max_iterations,
                         &flow_config,
+                        None,  // params not preserved on restart
                     ).await?;
                 }
             }
@@ -1683,7 +1693,8 @@ pub mod queries {
                       population_size, pid, last_iteration, resume_checkpoint_id,
                       created_at, started_at, ended_at, paused_at,
                       phase_type, max_iterations, current_iteration, best_ce, best_accuracy,
-                      status_message, architecture_type, gating_status, gating_results
+                      status_message, architecture_type, gating_status, gating_results,
+                      params_json
                FROM experiments WHERE id = ?"#,
         )
         .bind(id)
@@ -1763,6 +1774,7 @@ pub mod queries {
         phase_type: Option<&str>,
         max_iterations: Option<i32>,
         flow_config: &crate::models::FlowConfig,
+        exp_params: Option<&std::collections::HashMap<String, serde_json::Value>>,
     ) -> Result<i64> {
         let now = Utc::now().to_rfc3339();
 
@@ -1790,12 +1802,16 @@ pub mod queries {
             .and_then(|v| v.as_str())
             .unwrap_or("tiered");
 
+        let params_json = exp_params
+            .filter(|p| !p.is_empty())
+            .map(|p| serde_json::to_string(p).unwrap_or_default());
+
         let result = sqlx::query(
             r#"INSERT INTO experiments (
                 name, flow_id, sequence_order, status, phase_type, max_iterations,
                 tier_config, fitness_calculator, fitness_weight_ce, fitness_weight_acc,
-                context_size, population_size, architecture_type, created_at
-            ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+                context_size, population_size, architecture_type, params_json, created_at
+            ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         )
         .bind(name)
         .bind(flow_id)
@@ -1809,6 +1825,7 @@ pub mod queries {
         .bind(context_size)
         .bind(population_size)
         .bind(architecture_type)
+        .bind(&params_json)
         .bind(&now)
         .execute(pool)
         .await?;
@@ -1932,7 +1949,8 @@ pub mod queries {
                       population_size, pid, last_iteration, resume_checkpoint_id,
                       created_at, started_at, ended_at, paused_at,
                       phase_type, max_iterations, current_iteration, best_ce, best_accuracy,
-                      status_message, architecture_type, gating_status, gating_results
+                      status_message, architecture_type, gating_status, gating_results,
+                      params_json
                FROM experiments
                ORDER BY created_at DESC
                LIMIT ? OFFSET ?"#,
@@ -2070,6 +2088,10 @@ pub mod queries {
             architecture_type,
             gating_status,
             gating_results,
+            params: row.try_get::<Option<String>, _>("params_json")
+                .ok()
+                .flatten()
+                .and_then(|s| serde_json::from_str(&s).ok()),
         })
     }
 

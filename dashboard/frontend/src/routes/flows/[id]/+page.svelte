@@ -129,11 +129,16 @@
     experiment_type: 'ga' as string,
     optimize_bits: false,
     optimize_neurons: true,
-    optimize_connections: false
+    optimize_connections: false,
+    // Lambda sweep fields
+    s0_checkpoint_id: null as number | null,
+    s1_checkpoint_id: null as number | null,
+    lambda_values: '0.01,0.05,0.1,0.2,0.3,0.5,0.7,0.9',
+    genome_type: 'best_ce' as string,
   };
 
   // Types that don't need Optimize radios
-  $: newPhaseHidesOptimize = ['grid_search', 'neurogenesis', 'synaptogenesis', 'axonogenesis'].includes(newPhase.experiment_type);
+  $: newPhaseHidesOptimize = ['grid_search', 'neurogenesis', 'synaptogenesis', 'axonogenesis', 'lambda_sweep'].includes(newPhase.experiment_type);
 
   // Edit form state
   let editConfig = {
@@ -413,6 +418,17 @@
     saving = true;
 
     try {
+      // Build params based on experiment type
+      let expParams: Record<string, any> = {};
+      if (newPhase.experiment_type === 'lambda_sweep') {
+        expParams = {
+          lambda_values: newPhase.lambda_values.split(',').map(s => parseFloat(s.trim())).filter(n => !isNaN(n)),
+          s0_checkpoint_id: newPhase.s0_checkpoint_id,
+          s1_checkpoint_id: newPhase.s1_checkpoint_id,
+          genome_type: newPhase.genome_type,
+        };
+      }
+
       // Call the new dedicated endpoint to add experiment to the experiments table
       const res = await fetch(`/api/flows/${flowId}/experiments`, {
         method: 'POST',
@@ -424,7 +440,7 @@
             optimize_bits: newPhase.optimize_bits,
             optimize_neurons: newPhase.optimize_neurons,
             optimize_connections: newPhase.optimize_connections,
-            params: {}
+            params: expParams
           }
         })
       });
@@ -440,7 +456,11 @@
         experiment_type: 'ga',
         optimize_bits: false,
         optimize_neurons: true,
-        optimize_connections: false
+        optimize_connections: false,
+        s0_checkpoint_id: null,
+        s1_checkpoint_id: null,
+        lambda_values: '0.01,0.05,0.1,0.2,0.3,0.5,0.7,0.9',
+        genome_type: 'best_ce',
       };
       await loadFlow();
     } catch (e) {
@@ -1398,7 +1418,7 @@
                     newPhase.optimize_neurons = true;
                     newPhase.optimize_bits = true;
                     newPhase.optimize_connections = false;
-                  } else if (['neurogenesis', 'synaptogenesis', 'axonogenesis'].includes(newPhase.experiment_type)) {
+                  } else if (['neurogenesis', 'synaptogenesis', 'axonogenesis', 'lambda_sweep'].includes(newPhase.experiment_type)) {
                     newPhase.optimize_neurons = false;
                     newPhase.optimize_bits = false;
                     newPhase.optimize_connections = false;
@@ -1410,6 +1430,7 @@
                   <option value="neurogenesis">Neurogenesis</option>
                   <option value="synaptogenesis">Synaptogenesis</option>
                   <option value="axonogenesis">Axonogenesis</option>
+                  <option value="lambda_sweep">Lambda Sweep (unigram interpolation)</option>
                 </select>
               </div>
             </div>
@@ -1435,6 +1456,50 @@
                       Connections
                     </label>
                   </div>
+                </div>
+              </div>
+            {/if}
+            {#if newPhase.experiment_type === 'lambda_sweep'}
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="new-s0-ckpt">S0 Checkpoint ID</label>
+                  <div class="checkpoint-selector">
+                    <input type="number" id="new-s0-ckpt" bind:value={newPhase.s0_checkpoint_id} placeholder="Checkpoint ID" />
+                    <select on:change={(e) => { const v = e.target?.value; if (v) newPhase.s0_checkpoint_id = parseInt(v); }}>
+                      <option value="">Select from list...</option>
+                      {#each checkpoints.filter(c => c.flow_name) as ckpt}
+                        <option value={ckpt.id}>#{ckpt.id} — {ckpt.flow_name} — {ckpt.name} (CE: {ckpt.best_ce?.toFixed(4) ?? '?'})</option>
+                      {/each}
+                    </select>
+                  </div>
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="new-s1-ckpt">S1 Checkpoint ID</label>
+                  <div class="checkpoint-selector">
+                    <input type="number" id="new-s1-ckpt" bind:value={newPhase.s1_checkpoint_id} placeholder="Checkpoint ID" />
+                    <select on:change={(e) => { const v = e.target?.value; if (v) newPhase.s1_checkpoint_id = parseInt(v); }}>
+                      <option value="">Select from list...</option>
+                      {#each checkpoints.filter(c => c.flow_name) as ckpt}
+                        <option value={ckpt.id}>#{ckpt.id} — {ckpt.flow_name} — {ckpt.name} (CE: {ckpt.best_ce?.toFixed(4) ?? '?'})</option>
+                      {/each}
+                    </select>
+                  </div>
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="new-lambda-values">Lambda Values (comma-separated)</label>
+                  <input type="text" id="new-lambda-values" bind:value={newPhase.lambda_values} placeholder="0.01,0.05,0.1,0.2,0.3,0.5,0.7,0.9" />
+                </div>
+                <div class="form-group">
+                  <label for="new-genome-type">Genome Type</label>
+                  <select id="new-genome-type" bind:value={newPhase.genome_type}>
+                    <option value="best_ce">Best CE</option>
+                    <option value="best_acc">Best ACC</option>
+                    <option value="best_fitness">Best Fitness</option>
+                  </select>
                 </div>
               </div>
             {/if}
@@ -1562,8 +1627,8 @@
       </div>
     </section>
 
-    <!-- Combined Results (for completed multi-stage flows) -->
-    {#if flow.status === 'completed' && combinedValidations.length > 0}
+    <!-- Combined Results (for completed or running multi-stage flows) -->
+    {#if combinedValidations.length > 0}
       <section class="section">
         <h2>Combined Results</h2>
         <div class="final-results-card">
@@ -1586,8 +1651,8 @@
                 {#each combinedValidations as cv}
                   <tr>
                     <td>
-                      <span class="genome-type-badge" class:best-ce={cv.genome_type === 'best_ce' || cv.genome_type === 'best_overall_ce'} class:best-acc={cv.genome_type === 'best_acc' || cv.genome_type === 'best_overall_acc'} class:best-fitness={cv.genome_type === 'best_fitness'} class:best-overall={cv.genome_type === 'best_overall_ce' || cv.genome_type === 'best_overall_acc'}>
-                        {cv.genome_type === 'best_ce' ? 'Best CE' : cv.genome_type === 'best_acc' ? 'Best ACC' : cv.genome_type === 'best_fitness' ? 'Best Fitness' : cv.genome_type === 'best_overall_ce' ? 'Best Overall CE' : 'Best Overall ACC'}
+                      <span class="genome-type-badge" class:best-ce={cv.genome_type === 'best_ce' || cv.genome_type === 'best_overall_ce'} class:best-acc={cv.genome_type === 'best_acc' || cv.genome_type === 'best_overall_acc'} class:best-fitness={cv.genome_type === 'best_fitness'} class:best-overall={cv.genome_type === 'best_overall_ce' || cv.genome_type === 'best_overall_acc'} class:lambda-sweep={cv.genome_type.startsWith('unigram_l')}>
+                        {cv.genome_type === 'best_ce' ? 'Best CE' : cv.genome_type === 'best_acc' ? 'Best ACC' : cv.genome_type === 'best_fitness' ? 'Best Fitness' : cv.genome_type === 'best_overall_ce' ? 'Best Overall CE' : cv.genome_type === 'best_overall_acc' ? 'Best Overall ACC' : cv.genome_type.startsWith('unigram_l') ? `λ=${cv.genome_type.replace('unigram_l', '')}` : cv.genome_type}
                       </span>
                     </td>
                     <td class="mono">{cv.combined_ce.toFixed(4)}</td>
@@ -2608,5 +2673,27 @@
   .genome-type-badge.best-overall {
     border: 1.5px solid currentColor;
     font-weight: 600;
+  }
+
+  .genome-type-badge.lambda-sweep {
+    background: color-mix(in srgb, var(--accent-orange, #f59e0b) 20%, transparent);
+    color: var(--accent-orange, #f59e0b);
+    font-family: var(--font-mono, monospace);
+  }
+
+  .checkpoint-selector {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+
+  .checkpoint-selector input[type="number"] {
+    width: 6rem;
+    flex-shrink: 0;
+  }
+
+  .checkpoint-selector select {
+    flex: 1;
+    min-width: 0;
   }
 </style>

@@ -468,6 +468,7 @@ class FlowWorker:
                 flow_config.invalid_mode = params.get("invalid_mode", False)
                 flow_config.top_m = params.get("top_m", 5)
                 flow_config.label_smoothing = params.get("label_smoothing", 0.0)
+                flow_config.unigram_lambda = params.get("unigram_lambda", 0.0)
                 # Per-stage bounds from dashboard
                 flow_config.stage_min_bits_list = params.get("stage_min_bits")
                 flow_config.stage_max_bits_list = params.get("stage_max_bits")
@@ -772,6 +773,12 @@ class FlowWorker:
 
         exp_configs = []
         for exp_data in experiments:
+            # Merge per-experiment params into exp_data for uniform access
+            if exp_data.get("params") and isinstance(exp_data["params"], dict):
+                for k, v in exp_data["params"].items():
+                    if k not in exp_data:  # Don't override top-level fields
+                        exp_data[k] = v
+
             # Parse phase_type (API format) or use direct fields (config format)
             phase_type = exp_data.get("phase_type", "")
             if phase_type:
@@ -784,6 +791,11 @@ class FlowWorker:
                 }
                 if phase_type == "grid_search":
                     experiment_type = ExperimentType.GRID_SEARCH
+                    optimize_neurons = False
+                    optimize_bits = False
+                    optimize_connections = False
+                elif phase_type == "lambda_sweep":
+                    experiment_type = ExperimentType.LAMBDA_SWEEP
                     optimize_neurons = False
                     optimize_bits = False
                     optimize_connections = False
@@ -800,7 +812,16 @@ class FlowWorker:
             else:
                 # Legacy config format
                 raw_type = exp_data.get("experiment_type", "ga")
-                experiment_type = ExperimentType.GA if raw_type == "ga" else ExperimentType.TS
+                type_map = {
+                    "ga": ExperimentType.GA,
+                    "ts": ExperimentType.TS,
+                    "grid_search": ExperimentType.GRID_SEARCH,
+                    "lambda_sweep": ExperimentType.LAMBDA_SWEEP,
+                    "neurogenesis": ExperimentType.NEUROGENESIS,
+                    "synaptogenesis": ExperimentType.SYNAPTOGENESIS,
+                    "axonogenesis": ExperimentType.AXONOGENESIS,
+                }
+                experiment_type = type_map.get(raw_type, ExperimentType.GA)
                 optimize_neurons = exp_data.get("optimize_neurons", False)
                 optimize_bits = exp_data.get("optimize_bits", False)
                 optimize_connections = exp_data.get("optimize_connections", False)
@@ -965,6 +986,11 @@ class FlowWorker:
                 stage_cluster_type=params.get("stage_cluster_type") if architecture_type == "multi_stage" else None,
                 stage_mode=self._parse_stage_mode(params.get("stage_mode")) if architecture_type == "multi_stage" else None,
                 target_stage=ms_target_stage if architecture_type == "multi_stage" else 0,
+                # Lambda sweep params
+                lambda_values=exp_data.get("lambda_values") if experiment_type == ExperimentType.LAMBDA_SWEEP else None,
+                s0_checkpoint_id=exp_data.get("s0_checkpoint_id") if experiment_type == ExperimentType.LAMBDA_SWEEP else None,
+                s1_checkpoint_id=exp_data.get("s1_checkpoint_id") if experiment_type == ExperimentType.LAMBDA_SWEEP else None,
+                genome_type=exp_data.get("genome_type", "best_ce") if experiment_type == ExperimentType.LAMBDA_SWEEP else "best_ce",
             )
             exp_configs.append(exp_config)
 

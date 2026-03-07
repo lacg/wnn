@@ -171,6 +171,7 @@ pub enum ExperimentType {
     Neurogenesis,
     Synaptogenesis,
     Axonogenesis,
+    LambdaSweep,
 }
 
 // =============================================================================
@@ -214,6 +215,9 @@ pub struct Experiment {
     pub gating_status: Option<GatingStatus>,
     /// Gating analysis results (JSON blob)
     pub gating_results: Option<GatingResults>,
+    /// Per-experiment params (lambda_sweep etc.)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub params: Option<std::collections::HashMap<String, serde_json::Value>>,
 }
 
 /// Status of gating analysis for an experiment

@@ -138,6 +138,11 @@ pub struct MultiStageTokenCache {
     // ── S1 iterative re-weighting ────────────────────────────────────
     pub reweight_rounds: usize,    // 0 = disabled (default)
     pub reweight_max_boost: usize, // max nudge repeat for confidently-wrong examples (default 4)
+
+    // ── Unigram probabilities (for interpolation) ─────────────────────
+    /// P(token) estimated from training data with add-1 smoothing.
+    /// [vocab_size] — precomputed once at cache construction.
+    pub unigram_probs: Vec<f64>,
 }
 
 impl MultiStageTokenCache {
@@ -509,7 +514,7 @@ impl MultiStageTokenCache {
             tiered_full_train,
             tiered_full_eval,
             tiered_num_negatives,
-            train_tokens: stored_train_tokens,
+            train_tokens: stored_train_tokens.clone(),
             eval_tokens: stored_eval_tokens,
             num_parts,
             num_eval_parts,
@@ -517,6 +522,16 @@ impl MultiStageTokenCache {
             current_eval_idx: AtomicUsize::new(0),
             reweight_rounds: 0,
             reweight_max_boost: 4,
+            unigram_probs: {
+                let mut counts = vec![0u64; vocab_size];
+                for &t in &stored_train_tokens {
+                    if (t as usize) < vocab_size {
+                        counts[t as usize] += 1;
+                    }
+                }
+                let total = stored_train_tokens.len() as f64 + vocab_size as f64; // add-1 smoothing
+                counts.iter().map(|&c| (c as f64 + 1.0) / total).collect()
+            },
         }
     }
 
@@ -1630,6 +1645,7 @@ pub fn compute_combined_ce(
     rng_seed: u64,
     sparse_threshold: usize,
     label_smoothing: f64,
+    unigram_lambda: f64,
 ) -> (f64, f64, f64, f64, f64, f64) {
     let eps = 1e-7f64;
     let epsilon = 1e-10f64;
@@ -1779,8 +1795,13 @@ pub fn compute_combined_ce(
 
             let s0_ce = -log_p_true_group;
             let s1_ce = -log_p_true_within;
-            let combined_ce = if label_smoothing > 0.0 {
-                let log_p_hier = log_p_true_group + log_p_true_within;
+            let log_p_hier = log_p_true_group + log_p_true_within;
+            let combined_ce = if unigram_lambda > 0.0 {
+                let p_hier = log_p_hier.exp();
+                let p_uni = cache.unigram_probs[token_id];
+                let p_final = (1.0 - unigram_lambda) * p_hier + unigram_lambda * p_uni;
+                -(p_final.max(epsilon)).ln()
+            } else if label_smoothing > 0.0 {
                 let p_hier = log_p_hier.exp();
                 let p_smooth = (1.0 - label_smoothing) * p_hier
                              + label_smoothing / cache.vocab_size as f64;
@@ -1913,6 +1934,7 @@ fn eval_filtered_mixture(
     all_group_eval_scores: &[Vec<f32>],  // [K][num_eval × augmented_output_bits]
     augmented_output_bits: usize,
     label_smoothing: f64,
+    unigram_lambda: f64,
 ) -> (f64, f64, f64, f64, f64, f64) {
     let eps = 1e-7f64;
     let epsilon = 1e-10f64;
@@ -2034,8 +2056,13 @@ fn eval_filtered_mixture(
 
             let s0_ce = -log_p_s0;
             let s1_ce = -s1_log_p_within_valid;
-            let combined_ce = if label_smoothing > 0.0 {
-                let log_p_hier = log_p_filt_true + s1_log_p_within_valid;
+            let log_p_hier = log_p_filt_true + s1_log_p_within_valid;
+            let combined_ce = if unigram_lambda > 0.0 {
+                let p_hier = log_p_hier.exp();
+                let p_uni = cache.unigram_probs[token_id];
+                let p_final = (1.0 - unigram_lambda) * p_hier + unigram_lambda * p_uni;
+                -(p_final.max(epsilon)).ln()
+            } else if label_smoothing > 0.0 {
                 let p_hier = log_p_hier.exp();
                 let p_smooth = (1.0 - label_smoothing) * p_hier
                              + label_smoothing / cache.vocab_size as f64;
@@ -2142,6 +2169,7 @@ pub fn compute_combined_ce_selector(
     label_smoothing: f64,
     invalid_mode: bool,
     top_m: usize,
+    unigram_lambda: f64,
 ) -> (f64, f64, f64, f64, f64, f64) {
     let eps = 1e-7f64;
     let epsilon = 1e-10f64;
@@ -2227,7 +2255,7 @@ pub fn compute_combined_ce_selector(
 
         return eval_filtered_mixture(
             cache, &stage_bitwise_scores_0, &stage_tiered_scores_0,
-            &all_group_eval_scores, s1_output_bits, label_smoothing,
+            &all_group_eval_scores, s1_output_bits, label_smoothing, unigram_lambda,
         );
     }
 
@@ -2410,8 +2438,13 @@ pub fn compute_combined_ce_selector(
 
             let s0_ce = -log_p_true_group;
             let s1_ce = -log_p_true_within;
-            let combined_ce = if label_smoothing > 0.0 {
-                let log_p_hier = log_p_true_group + log_p_true_within;
+            let log_p_hier = log_p_true_group + log_p_true_within;
+            let combined_ce = if unigram_lambda > 0.0 {
+                let p_hier = log_p_hier.exp();
+                let p_uni = cache.unigram_probs[token_id];
+                let p_final = (1.0 - unigram_lambda) * p_hier + unigram_lambda * p_uni;
+                -(p_final.max(epsilon)).ln()
+            } else if label_smoothing > 0.0 {
                 let p_hier = log_p_hier.exp();
                 let p_smooth = (1.0 - label_smoothing) * p_hier
                              + label_smoothing / cache.vocab_size as f64;

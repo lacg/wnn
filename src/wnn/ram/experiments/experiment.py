@@ -28,6 +28,7 @@ class ExperimentType(IntEnum):
 	NEUROGENESIS = 3    # Stats-guided neuron add/remove per cluster
 	SYNAPTOGENESIS = 4  # Stats-guided connection prune/grow per neuron
 	AXONOGENESIS = 5    # MI-guided connection rewiring
+	LAMBDA_SWEEP = 6    # Unigram interpolation lambda sweep (eval-only)
 
 
 class ClusterType(IntEnum):
@@ -123,6 +124,12 @@ class ExperimentConfig:
 	stage_mode: Optional[list[int]] = None       # StageMode values between stages (len = num_stages-1)
 	target_stage: int = 0                        # 0-indexed: which stage this experiment optimizes
 	frozen_genomes: Optional[list[Optional[dict]]] = None  # serialized genome per completed stage
+
+	# Lambda sweep configuration (only used when experiment_type=LAMBDA_SWEEP)
+	lambda_values: Optional[list[float]] = None     # Lambda values to sweep
+	s0_checkpoint_id: Optional[int] = None           # Checkpoint ID for stage 0 genome
+	s1_checkpoint_id: Optional[int] = None           # Checkpoint ID for stage 1 genome
+	genome_type: str = "best_ce"                     # Which genome from checkpoint (best_ce, best_acc, best_fitness)
 
 	def to_dict(self) -> dict[str, Any]:
 		"""Convert to dictionary for JSON serialization.

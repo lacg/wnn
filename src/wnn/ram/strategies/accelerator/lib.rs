@@ -5264,6 +5264,7 @@ impl MultiStageCacheWrapper {
         rng_seed: u64,
         sparse_threshold: usize,
         label_smoothing: f64,
+        unigram_lambda: f64,
     ) -> PyResult<(f64, f64, f64, f64, f64, f64)> {
         py.allow_threads(|| {
             // Partition flat arrays by stage
@@ -5297,7 +5298,7 @@ impl MultiStageCacheWrapper {
                 &self.inner,
                 &stage_bits, &stage_neurons, &stage_conns,
                 memory_mode, neuron_sample_rate, rng_seed, sparse_threshold,
-                label_smoothing,
+                label_smoothing, unigram_lambda,
             ))
         })
     }
@@ -5326,6 +5327,7 @@ impl MultiStageCacheWrapper {
         label_smoothing: f64,
         invalid_mode: bool,
         top_m: usize,
+        unigram_lambda: f64,
     ) -> PyResult<(f64, f64, f64, f64, f64, f64)> {
         py.allow_threads(|| {
             // Partition flat arrays by stage (same as evaluate_combined_ce)
@@ -5359,7 +5361,7 @@ impl MultiStageCacheWrapper {
                 &self.inner,
                 &stage_bits, &stage_neurons, &stage_conns,
                 memory_mode, neuron_sample_rate, rng_seed, sparse_threshold,
-                label_smoothing, invalid_mode, top_m,
+                label_smoothing, invalid_mode, top_m, unigram_lambda,
             ))
         })
     }

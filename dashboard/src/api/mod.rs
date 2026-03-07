@@ -1034,6 +1034,7 @@ async fn add_experiment_to_flow(
     };
     let phase_type = match exp_spec.experiment_type {
         ExperimentType::GridSearch => "grid_search".to_string(),
+        ExperimentType::LambdaSweep => "lambda_sweep".to_string(),
         _ => {
             let exp_type = match exp_spec.experiment_type {
                 ExperimentType::Ga => "ga",
@@ -1041,7 +1042,7 @@ async fn add_experiment_to_flow(
                 ExperimentType::Neurogenesis => "neurogenesis",
                 ExperimentType::Synaptogenesis => "synaptogenesis",
                 ExperimentType::Axonogenesis => "axonogenesis",
-                ExperimentType::GridSearch => unreachable!(),
+                ExperimentType::GridSearch | ExperimentType::LambdaSweep => unreachable!(),
             };
             format!("{}_{}", exp_type, opt_target)
         }
@@ -1054,8 +1055,8 @@ async fn add_experiment_to_flow(
         .map(|v| v as i32)
         .or_else(|| {
             match exp_spec.experiment_type {
-                ExperimentType::GridSearch => {
-                    Some(1) // Grid search is a single step
+                ExperimentType::GridSearch | ExperimentType::LambdaSweep => {
+                    Some(1) // Grid search / lambda sweep is a single step
                 }
                 ExperimentType::Ga => {
                     flow.config.params.get("ga_generations")
@@ -1076,6 +1077,7 @@ async fn add_experiment_to_flow(
         });
 
     // Create the experiment (use flow's config for tier_config etc.)
+    let exp_params = if exp_spec.params.is_empty() { None } else { Some(&exp_spec.params) };
     match crate::db::queries::create_pending_experiment(
         &state.db,
         &exp_spec.name,
@@ -1084,6 +1086,7 @@ async fn add_experiment_to_flow(
         Some(&phase_type),
         max_iterations,
         &flow.config,
+        exp_params,
     ).await {
         Ok(id) => {
             // Fetch the created experiment

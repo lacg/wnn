@@ -195,6 +195,8 @@ class FlowConfig:
 	top_m: int = 5
 	# Label smoothing: CE_smooth = -log[(1-ε) × P_hierarchical + ε/vocab_size]
 	label_smoothing: float = 0.0
+	# Unigram interpolation (Jelinek-Mercer): P = (1-λ)×P_hier + λ×P_unigram
+	unigram_lambda: float = 0.0
 	# Per-stage bounds override (indexed by stage)
 	stage_min_bits_list: Optional[list[int]] = None
 	stage_max_bits_list: Optional[list[int]] = None
@@ -730,6 +732,7 @@ class FlowConfig:
 				"invalid_mode": self.invalid_mode,
 				"top_m": self.top_m,
 				"label_smoothing": self.label_smoothing,
+			"unigram_lambda": self.unigram_lambda,
 			})
 
 		return APIFlowConfig(
@@ -1111,6 +1114,8 @@ class Flow:
 				}
 				if exp_config.experiment_type == ExperimentType.GRID_SEARCH:
 					phase_type = "grid_search"
+				elif exp_config.experiment_type == ExperimentType.LAMBDA_SWEEP:
+					phase_type = "lambda_sweep"
 				elif exp_config.experiment_type in adaptation_phase_types:
 					phase_type = adaptation_phase_types[exp_config.experiment_type]
 				else:
@@ -1146,7 +1151,7 @@ class Flow:
 							context_size=cfg.context_size,
 							population_size=exp_config.population_size,
 							phase_type=phase_type,
-							max_iterations=1 if exp_config.experiment_type == ExperimentType.GRID_SEARCH else (exp_config.generations if exp_config.experiment_type == ExperimentType.GA else exp_config.iterations),
+							max_iterations=1 if exp_config.experiment_type in (ExperimentType.GRID_SEARCH, ExperimentType.LAMBDA_SWEEP) else (exp_config.generations if exp_config.experiment_type == ExperimentType.GA else exp_config.iterations),
 						)
 						experiment_id = tracker_experiment_id
 						self._experiment_ids[idx] = experiment_id
@@ -1180,6 +1185,15 @@ class Flow:
 					self.log(f"Shutdown requested, stopping flow before experiment {idx}")
 					stopped_at_idx = idx
 					raise FlowStoppedError("Shutdown requested")
+
+				# ── Lambda sweep: eval-only, no training ──
+				if exp_config.experiment_type == ExperimentType.LAMBDA_SWEEP:
+					result = self._run_lambda_sweep(
+						exp_config, experiment_id, exp_checkpoint_dir,
+					)
+					self._results.append(result)
+					# Lambda sweep doesn't update genome state
+					continue
 
 				# Create and run experiment
 				# Run init validation on first experiment only (Phase 1a)
@@ -1361,6 +1375,7 @@ class Flow:
 							label_smoothing=cfg.label_smoothing,
 							invalid_mode=cfg.invalid_mode,
 							top_m=cfg.top_m,
+							unigram_lambda=cfg.unigram_lambda,
 						)
 						ce = result.ce
 						acc = result.accuracy
@@ -1418,6 +1433,180 @@ class Flow:
 			combined_accuracy=combined_accuracy,
 			per_stage_ce=per_stage_ce,
 		)
+
+	def _run_lambda_sweep(
+		self,
+		exp_config: ExperimentConfig,
+		experiment_id: Optional[int],
+		checkpoint_dir: Optional[Path],
+	) -> ExperimentResult:
+		"""Run a lambda sweep experiment (eval-only, no training).
+
+		Loads genomes from specified checkpoints, sweeps unigram_lambda values,
+		and stores each result as a combined validation in the dashboard.
+		"""
+		import time as _time
+		cfg = self.config
+		start = _time.time()
+
+		self.log("")
+		self.log("=" * 70)
+		self.log(f"  LAMBDA SWEEP: {exp_config.name}")
+		self.log("=" * 70)
+
+		lambda_values = exp_config.lambda_values or [0.0, 0.01, 0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 0.9]
+		self.log(f"  Lambda values: {lambda_values}")
+		self.log(f"  Genome type: {exp_config.genome_type}")
+
+		# Load genomes from checkpoints
+		checkpoint_ids = [exp_config.s0_checkpoint_id, exp_config.s1_checkpoint_id]
+		stage_genomes: list[ClusterGenome] = []
+
+		for stage, ckpt_id in enumerate(checkpoint_ids):
+			if ckpt_id is None:
+				raise ValueError(f"Missing checkpoint ID for stage {stage} (s{stage}_checkpoint_id)")
+
+			self.log(f"  Loading S{stage} genome from checkpoint {ckpt_id}...")
+			ckpt = self.dashboard_client.get_checkpoint(ckpt_id)
+			if not ckpt or not ckpt.get("file_path"):
+				raise ValueError(f"Checkpoint {ckpt_id} not found or has no file_path")
+
+			ckpt_path = Path(ckpt["file_path"])
+			if not ckpt_path.exists():
+				raise ValueError(f"Checkpoint file not found: {ckpt_path}")
+
+			if ckpt_path.suffix == '.gz':
+				with gzip.open(ckpt_path, 'rt', encoding='utf-8') as f:
+					data = json.load(f)
+			else:
+				with open(ckpt_path, 'r') as f:
+					data = json.load(f)
+
+			# Extract genome by type
+			genome = self._extract_genome_from_checkpoint(data, exp_config.genome_type)
+			if genome is None:
+				raise ValueError(f"Could not find {exp_config.genome_type} genome in checkpoint {ckpt_id}")
+
+			self.log(f"    S{stage}: {len(genome.neurons_per_cluster)} clusters, "
+					 f"bits={genome.bits_per_neuron[:3]}..., neurons={genome.neurons_per_cluster[:3]}...")
+			stage_genomes.append(genome)
+
+		# Sweep lambda values
+		self.log("")
+		self.log(f"  {'Lambda':>8}  {'Combined CE':>12}  {'Combined Acc':>12}  {'S0 CE':>8}  {'S1 CE':>8}")
+		self.log(f"  {'─'*8}  {'─'*12}  {'─'*12}  {'─'*8}  {'─'*8}")
+
+		best_ce = float('inf')
+		best_lambda = 0.0
+		results_table = []
+
+		for lam in lambda_values:
+			result = self.evaluator.compute_combined_metrics(
+				stage_genomes,
+				label_smoothing=cfg.label_smoothing,
+				invalid_mode=cfg.invalid_mode,
+				top_m=cfg.top_m,
+				unigram_lambda=lam,
+			)
+			ce = result.ce
+			acc = result.accuracy
+			s0_ce = result.cluster_ce
+			s1_ce = result.within_ce
+
+			self.log(f"  {lam:>8.3f}  {ce:>12.4f}  {acc:>11.2%}  {s0_ce:>8.4f}  {s1_ce:>8.4f}")
+
+			if ce < best_ce:
+				best_ce = ce
+				best_lambda = lam
+
+			results_table.append({
+				"lambda": lam, "ce": ce, "accuracy": acc,
+				"s0_ce": s0_ce, "s1_ce": s1_ce,
+			})
+
+			# Store each lambda result as a combined validation
+			if self.dashboard_client and self._flow_id:
+				try:
+					self.dashboard_client.create_combined_validation(
+						flow_id=self._flow_id,
+						genome_type=f"unigram_l{lam:.3f}",
+						combined_ce=ce,
+						combined_accuracy=acc,
+						per_stage_ce=[s0_ce, s1_ce],
+					)
+				except Exception as e:
+					self.log(f"    Warning: Failed to store validation: {e}")
+
+		self.log("")
+		self.log(f"  Best: λ={best_lambda:.3f} → CE={best_ce:.4f}")
+
+		elapsed = _time.time() - start
+		self.log(f"  Completed in {elapsed:.1f}s")
+
+		# Mark experiment as completed
+		if self.dashboard_client and experiment_id:
+			try:
+				self.dashboard_client.experiment_completed(
+					experiment_id,
+					best_ce=best_ce,
+					best_accuracy=max(r["accuracy"] for r in results_table),
+				)
+			except Exception:
+				pass
+		if self.tracker and experiment_id:
+			try:
+				self.tracker.update_experiment_status(experiment_id, "completed")
+			except Exception:
+				pass
+
+		# Return a minimal ExperimentResult
+		return ExperimentResult(
+			experiment_name=exp_config.name,
+			strategy_type="lambda_sweep",
+			initial_fitness=None,
+			final_fitness=best_ce,
+			final_accuracy=max(r["accuracy"] for r in results_table),
+			improvement_percent=0.0,
+			iterations_run=len(lambda_values),
+			best_genome=stage_genomes[0],  # S0 genome as placeholder
+			final_population=None,
+			final_threshold=None,
+			elapsed_seconds=elapsed,
+		)
+
+	def _extract_genome_from_checkpoint(
+		self, data: dict, genome_type: str,
+	) -> Optional[ClusterGenome]:
+		"""Extract a specific genome type from checkpoint data."""
+		# Try pre-saved best_ce/best_acc genomes first
+		if genome_type == "best_ce" and "best_ce_genome" in data:
+			return ClusterGenome.deserialize(data["best_ce_genome"])
+		if genome_type == "best_acc" and "best_acc_genome" in data:
+			return ClusterGenome.deserialize(data["best_acc_genome"])
+
+		# Fall back to phase_result
+		if "phase_result" in data:
+			pr = data["phase_result"]
+			if genome_type == "best_fitness" and "best_genome" in pr:
+				return ClusterGenome.deserialize(pr["best_genome"])
+
+			# For best_ce/best_acc, search population_metrics
+			pop = pr.get("final_population")
+			metrics = data.get("population_metrics")
+			if pop and metrics and len(pop) == len(metrics):
+				if genome_type == "best_ce":
+					best_idx = min(range(len(metrics)), key=lambda i: metrics[i][0])
+				elif genome_type == "best_acc":
+					best_idx = max(range(len(metrics)), key=lambda i: metrics[i][1])
+				else:
+					best_idx = 0
+				return ClusterGenome.deserialize(pop[best_idx])
+
+			# Last resort: use best_genome regardless of type
+			if "best_genome" in pr:
+				return ClusterGenome.deserialize(pr["best_genome"])
+
+		return None
 
 	def _build_combined_genome_pairs(
 		self,

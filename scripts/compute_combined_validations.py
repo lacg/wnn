@@ -131,6 +131,10 @@ def main():
 		help="Enable invalid token mode for S1 filtered gating")
 	parser.add_argument("--top-m", type=int, default=5,
 		help="Number of top S0 groups per example (0=all, default: 5)")
+	parser.add_argument("--unigram-lambda", type=float, default=0.0,
+		help="Unigram interpolation weight (0.0 = disabled, try 0.01-0.5)")
+	parser.add_argument("--lambda-sweep", type=str, default=None,
+		help="Sweep lambda values (comma-separated, e.g. '0.01,0.05,0.1,0.2,0.3,0.5')")
 	args = parser.parse_args()
 
 	# Get flow info from dashboard
@@ -378,6 +382,7 @@ def main():
 					label_smoothing=args.label_smoothing,
 					invalid_mode=args.invalid_mode,
 					top_m=args.top_m,
+					unigram_lambda=args.unigram_lambda,
 				)
 				ce = result.ce
 				acc = result.accuracy
@@ -399,6 +404,51 @@ def main():
 				import traceback
 				print(f"  {genome_type}: Failed - {e}")
 				traceback.print_exc()
+
+	# --- Lambda Sweep ---
+	if args.lambda_sweep:
+		lambdas = [float(x.strip()) for x in args.lambda_sweep.split(",")]
+		print()
+		print("=" * 70)
+		print(f"  Unigram Lambda Sweep: {lambdas}")
+		print("=" * 70)
+
+		# Use best_ce genome pair for the sweep
+		sweep_genome_pair = []
+		for stage in range(num_stages):
+			g = stage_genomes[stage].get("best_ce")
+			if g is None:
+				print(f"  Lambda sweep: Missing best_ce genome for stage {stage}, skipping")
+				break
+			sweep_genome_pair.append(g)
+		else:
+			for lam in lambdas:
+				try:
+					result = evaluator.compute_combined_metrics(
+						sweep_genome_pair,
+						label_smoothing=args.label_smoothing,
+						invalid_mode=args.invalid_mode,
+						top_m=args.top_m,
+						unigram_lambda=lam,
+					)
+					ce = result.ce
+					acc = result.accuracy
+					per_stage_ce = [result.cluster_ce, result.within_ce]
+					genome_type_label = f"unigram_l{lam:.3f}"
+
+					print(f"  λ={lam:.3f}: CE={ce:.4f}, ACC={acc:.2%}, S0={per_stage_ce[0]:.4f}, S1={per_stage_ce[1]:.4f}")
+
+					if not args.dry_run:
+						client.create_combined_validation(
+							flow_id=args.flow_id,
+							genome_type=genome_type_label,
+							combined_ce=ce,
+							combined_accuracy=acc,
+							per_stage_ce=per_stage_ce,
+						)
+
+				except Exception as e:
+					print(f"  λ={lam:.3f}: Failed - {e}")
 
 	print()
 	print("Done!")
