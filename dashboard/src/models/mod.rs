@@ -436,6 +436,8 @@ pub struct CombinedValidation {
     pub per_stage_ce: Option<Vec<f64>>,
     /// Per-stage accuracy breakdown as JSON array, e.g. [0.45, 0.32]
     pub per_stage_acc: Option<Vec<f64>>,
+    /// Unigram interpolation lambda (only set for lambda sweep results)
+    pub unigram_lambda: Option<f64>,
     pub created_at: DateTime<Utc>,
 }
 

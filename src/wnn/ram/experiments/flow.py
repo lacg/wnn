@@ -1533,6 +1533,7 @@ class Flow:
 						combined_ce=ce,
 						combined_accuracy=acc,
 						per_stage_ce=[s0_ce, s1_ce],
+						unigram_lambda=lam,
 					)
 				except Exception as e:
 					self.log(f"    Warning: Failed to store validation: {e}")

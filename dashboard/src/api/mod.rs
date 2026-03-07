@@ -390,6 +390,7 @@ pub struct CreateCombinedValidationRequest {
     pub combined_accuracy: f64,
     pub per_stage_ce: Option<Vec<f64>>,
     pub per_stage_acc: Option<Vec<f64>>,
+    pub unigram_lambda: Option<f64>,
 }
 
 async fn create_combined_validation(
@@ -407,6 +408,7 @@ async fn create_combined_validation(
         req.combined_accuracy,
         per_stage_ce_slice,
         per_stage_acc_slice,
+        req.unigram_lambda,
     ).await {
         Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({"id": id}))).into_response(),
         Err(e) => (

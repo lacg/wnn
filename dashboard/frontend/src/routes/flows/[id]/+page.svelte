@@ -1637,6 +1637,9 @@
               <thead>
                 <tr>
                   <th>Genome Type</th>
+                  {#if combinedValidations.some(cv => cv.unigram_lambda != null)}
+                    <th>Lambda</th>
+                  {/if}
                   <th>Combined CE</th>
                   <th>Combined ACC</th>
                   {#if combinedValidations[0]?.per_stage_ce}
@@ -1655,6 +1658,9 @@
                         {cv.genome_type === 'best_ce' ? 'Best CE' : cv.genome_type === 'best_acc' ? 'Best ACC' : cv.genome_type === 'best_fitness' ? 'Best Fitness' : cv.genome_type === 'best_overall_ce' ? 'Best Overall CE' : cv.genome_type === 'best_overall_acc' ? 'Best Overall ACC' : cv.genome_type.startsWith('unigram_l') ? `λ=${cv.genome_type.replace('unigram_l', '')}` : cv.genome_type}
                       </span>
                     </td>
+                    {#if combinedValidations.some(cv => cv.unigram_lambda != null)}
+                      <td class="mono">{cv.unigram_lambda != null ? cv.unigram_lambda.toFixed(3) : '—'}</td>
+                    {/if}
                     <td class="mono">{cv.combined_ce.toFixed(4)}</td>
                     <td class="mono">{(cv.combined_accuracy * 100).toFixed(2)}%</td>
                     {#if cv.per_stage_ce}

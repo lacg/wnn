@@ -673,7 +673,7 @@ class FlowWorker:
         if raw_stage_mode is not None:
             from wnn.ram.experiments.experiment import StageMode
             if isinstance(raw_stage_mode, str):
-                mode_map = {"input_concat": StageMode.INPUT_CONCAT}
+                mode_map = {"input_concat": StageMode.INPUT_CONCAT, "selector": StageMode.SELECTOR}
                 stage_mode = [mode_map.get(raw_stage_mode, StageMode.INPUT_CONCAT)]
             elif isinstance(raw_stage_mode, list):
                 stage_mode = raw_stage_mode

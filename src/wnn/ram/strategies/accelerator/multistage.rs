@@ -82,6 +82,8 @@ pub struct MultiStageTokenCache {
     pub index_in_cluster: Vec<u16>,        // [vocab_size] → within-group index
     pub cluster_sizes: Vec<usize>,         // [K] → tokens per group
     pub max_cluster_size: usize,
+    /// Reverse mapping: cluster_members[g][j] = token_id for group g, within-index j
+    pub cluster_members: Vec<Vec<u32>>,
 
     // ── Bit dimensions (stage-agnostic) ──────────────────────────────
     pub max_context_size: usize,
@@ -485,6 +487,19 @@ impl MultiStageTokenCache {
             );
         }
 
+        // Build reverse mapping: (group, within_index) → token_id
+        let cluster_members: Vec<Vec<u32>> = {
+            let mut members: Vec<Vec<u32>> = cluster_sizes.iter().map(|&sz| vec![0u32; sz]).collect();
+            for t in 0..vocab_size {
+                let g = cluster_of[t] as usize;
+                let j = index_in_cluster[t] as usize;
+                if g < members.len() && j < members[g].len() {
+                    members[g][j] = t as u32;
+                }
+            }
+            members
+        };
+
         Self {
             k,
             cluster_of,
@@ -532,6 +547,7 @@ impl MultiStageTokenCache {
                 let total = stored_train_tokens.len() as f64 + vocab_size as f64; // add-1 smoothing
                 counts.iter().map(|&c| (c as f64 + 1.0) / total).collect()
             },
+            cluster_members,
         }
     }
 
@@ -1678,6 +1694,13 @@ pub fn compute_combined_ce(
         }
     }
 
+    // Precompute unigram argmax for interpolated accuracy
+    let unigram_argmax: usize = cache.unigram_probs.iter().enumerate()
+        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+        .map(|(idx, _)| idx).unwrap_or(0);
+    let unigram_argmax_group = cache.cluster_of[unigram_argmax] as usize;
+    let unigram_argmax_p = cache.unigram_probs[unigram_argmax];
+
     // ── Reconstruct combined CE per example ──
     let results: Vec<(f64, f64, f64, u32, u32, u32)> = (0..num_eval)
         .into_par_iter()
@@ -1809,6 +1832,92 @@ pub fn compute_combined_ce(
             } else {
                 s0_ce + s1_ce
             };
+
+            // When unigram_lambda > 0, compute interpolated accuracy:
+            // P_final(t) = (1-λ)×P_hier(t) + λ×P_unigram(t), then argmax
+            if unigram_lambda > 0.0 {
+                let one_minus_lambda = 1.0 - unigram_lambda;
+                let p_true_group_prob = log_p_true_group.exp();
+                let group_size = cache.cluster_sizes[true_group];
+
+                // Compute P_final for each token in the true group
+                let mut best_p_final = f64::NEG_INFINITY;
+                let mut best_token_id = 0usize;
+
+                if !cache.stage_is_tiered[1] {
+                    // Bitwise S1: recompute per-token softmax P(j|group) from neuron scores
+                    let s1_bits = cache.bitwise_output_bits[1];
+                    let s1_base = ex * s1_bits;
+                    let mut s1_lp = vec![0.0f64; s1_bits];
+                    let mut s1_l1mp = vec![0.0f64; s1_bits];
+                    for b in 0..s1_bits {
+                        let p = (stage_bitwise_scores[1][s1_base + b] as f64).clamp(eps, 1.0 - eps);
+                        s1_lp[b] = p.ln();
+                        s1_l1mp[b] = (1.0 - p).ln();
+                    }
+
+                    let mut cls_lp = vec![0.0f64; group_size];
+                    let mut max_lp = f64::NEG_INFINITY;
+                    for j in 0..group_size {
+                        let bit_base = j * s1_bits;
+                        let mut logp = 0.0f64;
+                        for b in 0..s1_bits {
+                            if cache.bitwise_token_bits[1][bit_base + b] == 1 {
+                                logp += s1_lp[b];
+                            } else {
+                                logp += s1_l1mp[b];
+                            }
+                        }
+                        cls_lp[j] = logp;
+                        if logp > max_lp { max_lp = logp; }
+                    }
+                    let sum_exp: f64 = cls_lp.iter().map(|&v| (v - max_lp).exp()).sum();
+                    let log_z_g = max_lp + sum_exp.ln();
+
+                    for j in 0..group_size {
+                        let p_s1_j = (cls_lp[j] - log_z_g).exp();
+                        let p_hier_j = p_true_group_prob * p_s1_j;
+                        let tid = cache.cluster_members[true_group][j] as usize;
+                        let p_final = one_minus_lambda * p_hier_j + unigram_lambda * cache.unigram_probs[tid];
+                        if p_final > best_p_final {
+                            best_p_final = p_final;
+                            best_token_id = tid;
+                        }
+                    }
+                } else {
+                    // Tiered S1: use raw scores directly
+                    let base = ex * cache.max_cluster_size;
+                    let scores = &stage_tiered_scores[1][base..base + group_size];
+                    let max_s = scores.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                    let sum_exp: f64 = scores.iter().map(|&s| (s - max_s).exp()).sum();
+
+                    for j in 0..group_size {
+                        let p_s1_j = (scores[j] - max_s).exp() / sum_exp;
+                        let p_hier_j = p_true_group_prob * p_s1_j;
+                        let tid = cache.cluster_members[true_group][j] as usize;
+                        let p_final = one_minus_lambda * p_hier_j + unigram_lambda * cache.unigram_probs[tid];
+                        if p_final > best_p_final {
+                            best_p_final = p_final;
+                            best_token_id = tid;
+                        }
+                    }
+                }
+
+                // Compare with unigram argmax if it's NOT in the true group
+                if unigram_argmax_group != true_group {
+                    let p_final_uni = unigram_lambda * unigram_argmax_p;
+                    if p_final_uni > best_p_final {
+                        best_token_id = unigram_argmax;
+                    }
+                }
+
+                let s0_correct = if s0_predicted == true_group { 1u32 } else { 0u32 };
+                let s1_correct = if s1_predicted == true_within { 1u32 } else { 0u32 };
+                return (combined_ce, s0_ce, s1_ce,
+                        if best_token_id == token_id { 1u32 } else { 0u32 },
+                        s0_correct, s1_correct);
+            }
+
             let correct = if s0_predicted == true_group && s1_predicted == true_within { 1u32 } else { 0u32 };
             let s0_correct = if s0_predicted == true_group { 1u32 } else { 0u32 };
             let s1_correct = if s1_predicted == true_within { 1u32 } else { 0u32 };
@@ -2070,7 +2179,77 @@ fn eval_filtered_mixture(
             } else {
                 -log_p_filt_true - s1_log_p_within_valid
             };
-            let correct = if best_predicted_g == true_group && best_predicted_within == true_within { 1u32 } else { 0u32 };
+            // When unigram_lambda > 0, compute accuracy from the interpolated
+            // distribution argmax: argmax_t[(1-λ) × P_hier(t) + λ × P_unigram(t)]
+            let correct = if unigram_lambda > 0.0 && gate_sum > epsilon {
+                // Second pass: compute P_final for every token, find argmax
+                let inv_gate_sum = 1.0 / gate_sum;
+                let one_minus_lambda = 1.0 - unigram_lambda;
+                let mut best_p_final = f64::NEG_INFINITY;
+                let mut best_token_id = 0usize;
+
+                for g in 0..k {
+                    let group_size = cache.cluster_sizes[g];
+                    let p_s0_g = eval_group_probs[ex * k + g] as f64;
+
+                    if all_group_eval_scores[g].is_empty() || p_s0_g < epsilon {
+                        // No model signal; only unigram contribution
+                        for j in 0..group_size {
+                            let tid = cache.cluster_members[g][j] as usize;
+                            let p_final = unigram_lambda * cache.unigram_probs[tid];
+                            if p_final > best_p_final {
+                                best_p_final = p_final;
+                                best_token_id = tid;
+                            }
+                        }
+                        continue;
+                    }
+
+                    // Recompute S1 class log-probs for group g
+                    let s1_base = ex * augmented_output_bits;
+                    let mut s1_lp = vec![0.0f64; augmented_output_bits];
+                    let mut s1_l1mp = vec![0.0f64; augmented_output_bits];
+                    for b in 0..augmented_output_bits {
+                        let p = (all_group_eval_scores[g][s1_base + b] as f64).clamp(eps, 1.0 - eps);
+                        s1_lp[b] = p.ln();
+                        s1_l1mp[b] = (1.0 - p).ln();
+                    }
+                    let total_classes = group_size + 1; // +1 for invalid
+                    let mut max_lp = f64::NEG_INFINITY;
+                    let mut cls_lp = vec![0.0f64; total_classes];
+                    for j in 0..total_classes {
+                        let mut lp = 0.0f64;
+                        for b in 0..augmented_output_bits {
+                            if ((j >> (augmented_output_bits - 1 - b)) & 1) == 1 {
+                                lp += s1_lp[b];
+                            } else {
+                                lp += s1_l1mp[b];
+                            }
+                        }
+                        cls_lp[j] = lp;
+                        if lp > max_lp { max_lp = lp; }
+                    }
+                    let sum_exp: f64 = cls_lp.iter().map(|&lp| (lp - max_lp).exp()).sum();
+                    let log_z_g = max_lp + sum_exp.ln();
+
+                    // P_hier(j_in_g) = p_s0_g × P(j|S1_g) / gate_sum
+                    // where P(j|S1_g) = exp(cls_lp[j] - log_z_g)
+                    for j in 0..group_size {
+                        let p_s1_j = (cls_lp[j] - log_z_g).exp();
+                        let p_hier_j = p_s0_g * p_s1_j * inv_gate_sum;
+                        let tid = cache.cluster_members[g][j] as usize;
+                        let p_final = one_minus_lambda * p_hier_j + unigram_lambda * cache.unigram_probs[tid];
+                        if p_final > best_p_final {
+                            best_p_final = p_final;
+                            best_token_id = tid;
+                        }
+                    }
+                }
+
+                if best_token_id == token_id { 1u32 } else { 0u32 }
+            } else {
+                if best_predicted_g == true_group && best_predicted_within == true_within { 1u32 } else { 0u32 }
+            };
             let s0_correct = if best_predicted_g == true_group { 1u32 } else { 0u32 };
             let s1_correct = if best_predicted_within == true_within { 1u32 } else { 0u32 };
 
@@ -2318,6 +2497,13 @@ pub fn compute_combined_ce_selector(
         })
         .collect();
 
+    // Precompute unigram argmax for interpolated accuracy
+    let unigram_argmax: usize = cache.unigram_probs.iter().enumerate()
+        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+        .map(|(idx, _)| idx).unwrap_or(0);
+    let unigram_argmax_group = cache.cluster_of[unigram_argmax] as usize;
+    let unigram_argmax_p = cache.unigram_probs[unigram_argmax];
+
     // ── Build mapping: global eval index → (group, position_in_group) ──
     let mut group_pos_counter = vec![0usize; k];
     let eval_to_group_pos: Vec<(usize, usize)> = (0..num_eval)
@@ -2452,6 +2638,84 @@ pub fn compute_combined_ce_selector(
             } else {
                 s0_ce + s1_ce
             };
+            // When unigram_lambda > 0, compute interpolated accuracy:
+            // Compare P_final for all tokens in the true group (exact) with the
+            // unigram top-1 token's P_final (lower bound for non-true groups)
+            if unigram_lambda > 0.0 {
+                let one_minus_lambda = 1.0 - unigram_lambda;
+                let p_true_group_prob = log_p_true_group.exp();
+                let (group, pos_in_group) = eval_to_group_pos[ex];
+                let group_size = cache.cluster_sizes[true_group];
+
+                let mut best_p_final = f64::NEG_INFINITY;
+                let mut best_token_id = 0usize;
+
+                if !group_scores[group].is_empty() {
+                    let s1_base = pos_in_group * s1_output_bits;
+                    let mut s1_lp = vec![0.0f64; s1_output_bits];
+                    let mut s1_l1mp = vec![0.0f64; s1_output_bits];
+                    for b in 0..s1_output_bits {
+                        let p = (group_scores[group][s1_base + b] as f64).clamp(eps, 1.0 - eps);
+                        s1_lp[b] = p.ln();
+                        s1_l1mp[b] = (1.0 - p).ln();
+                    }
+
+                    let mut max_lp = f64::NEG_INFINITY;
+                    let mut cls_lp = vec![0.0f64; group_size];
+                    for j in 0..group_size {
+                        let bit_base = j * s1_output_bits;
+                        let mut logp = 0.0f64;
+                        for b in 0..s1_output_bits {
+                            if cache.bitwise_token_bits[s1_stage][bit_base + b] == 1 {
+                                logp += s1_lp[b];
+                            } else {
+                                logp += s1_l1mp[b];
+                            }
+                        }
+                        cls_lp[j] = logp;
+                        if logp > max_lp { max_lp = logp; }
+                    }
+                    let sum_exp: f64 = cls_lp.iter().map(|&v| (v - max_lp).exp()).sum();
+                    let log_z_g = max_lp + sum_exp.ln();
+
+                    for j in 0..group_size {
+                        let p_s1_j = (cls_lp[j] - log_z_g).exp();
+                        let p_hier_j = p_true_group_prob * p_s1_j;
+                        let tid = cache.cluster_members[true_group][j] as usize;
+                        let p_final = one_minus_lambda * p_hier_j + unigram_lambda * cache.unigram_probs[tid];
+                        if p_final > best_p_final {
+                            best_p_final = p_final;
+                            best_token_id = tid;
+                        }
+                    }
+                } else {
+                    // Uniform within group
+                    for j in 0..group_size {
+                        let tid = cache.cluster_members[true_group][j] as usize;
+                        let p_hier_j = p_true_group_prob / group_size as f64;
+                        let p_final = one_minus_lambda * p_hier_j + unigram_lambda * cache.unigram_probs[tid];
+                        if p_final > best_p_final {
+                            best_p_final = p_final;
+                            best_token_id = tid;
+                        }
+                    }
+                }
+
+                // Compare with unigram argmax if it's NOT in the true group
+                if unigram_argmax_group != true_group {
+                    // Lower bound: P_model contribution unknown, use 0
+                    let p_final_uni = unigram_lambda * unigram_argmax_p;
+                    if p_final_uni > best_p_final {
+                        best_token_id = unigram_argmax;
+                    }
+                }
+
+                let s0_correct = if s0_predicted == true_group { 1u32 } else { 0u32 };
+                let s1_correct = if s1_predicted == true_within { 1u32 } else { 0u32 };
+                return (combined_ce, s0_ce, s1_ce,
+                        if best_token_id == token_id { 1u32 } else { 0u32 },
+                        s0_correct, s1_correct);
+            }
             let correct = if s0_predicted == true_group && s1_predicted == true_within { 1u32 } else { 0u32 };
             let s0_correct = if s0_predicted == true_group { 1u32 } else { 0u32 };
             let s1_correct = if s1_predicted == true_within { 1u32 } else { 0u32 };

@@ -703,6 +703,7 @@ class DashboardClient:
 		combined_accuracy: float,
 		per_stage_ce: Optional[list[float]] = None,
 		per_stage_acc: Optional[list[float]] = None,
+		unigram_lambda: Optional[float] = None,
 	) -> dict:
 		"""
 		Create or update a combined validation record for a multi-stage flow.
@@ -714,6 +715,7 @@ class DashboardClient:
 			combined_accuracy: End-to-end accuracy
 			per_stage_ce: Optional per-stage CE breakdown
 			per_stage_acc: Optional per-stage accuracy breakdown
+			unigram_lambda: Optional lambda value for unigram interpolation
 
 		Returns:
 			Dict with 'id' of the created/updated record
@@ -724,6 +726,7 @@ class DashboardClient:
 			"combined_accuracy": combined_accuracy,
 			"per_stage_ce": per_stage_ce,
 			"per_stage_acc": per_stage_acc,
+			"unigram_lambda": unigram_lambda,
 		}
 		result = self._request("POST", f"/api/flows/{flow_id}/combined-validations", json_data=data)
 		self._logger(f"Created combined validation for flow {flow_id}: {genome_type}")
