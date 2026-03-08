@@ -10,6 +10,7 @@
 //! Stage-agnostic: all methods take a `stage` index instead of hardcoded stage numbers.
 
 use rayon::prelude::*;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::bitwise_ramlm::{
@@ -145,6 +146,19 @@ pub struct MultiStageTokenCache {
     /// P(token) estimated from training data with add-1 smoothing.
     /// [vocab_size] — precomputed once at cache construction.
     pub unigram_probs: Vec<f64>,
+
+    // ── KN bigram probabilities (for interpolation) ─────────────────
+    /// Decomposed Kneser-Ney bigram: P_KN(cur|prev) = first_term[prev][cur] + lambda[prev] * pcont[cur]
+    /// Sparse first term: only observed (prev, cur) pairs. HashMap<prev, HashMap<cur, (c-d)/c(prev)>>
+    pub kn_first_term: Vec<HashMap<u32, f64>>,
+    /// Backoff weight per context: lambda[prev] = d * N1+(prev,•) / c(prev)
+    pub kn_lambda: Vec<f64>,
+    /// Continuation probability: P_cont(cur) = |{prev: c(prev,cur)>0}| / total_unique_bigrams
+    pub kn_pcont: Vec<f64>,
+    /// Precomputed KN bigram argmax per context: argmax_cur P_KN(cur|prev)
+    pub kn_bigram_argmax: Vec<u32>,
+    /// Previous token for each eval example (for bigram interpolation)
+    pub eval_prev_token_ids: Vec<u32>,
 }
 
 impl MultiStageTokenCache {
@@ -379,10 +393,13 @@ impl MultiStageTokenCache {
             }
         }
 
-        // ── Build eval target token_ids for combined CE ──────────────
+        // ── Build eval target/prev token_ids for combined CE ──────────
         let eval_n_total = bitwise_full_eval[0].num_examples;
         let eval_target_token_ids: Vec<u32> = (0..eval_n_total)
             .map(|i| eval_tokens[i + max_context_size])
+            .collect();
+        let eval_prev_token_ids: Vec<u32> = (0..eval_n_total)
+            .map(|i| eval_tokens[i + max_context_size - 1])
             .collect();
 
         // ── Encode tiered data per stage ─────────────────────────────
@@ -500,7 +517,7 @@ impl MultiStageTokenCache {
             members
         };
 
-        Self {
+        let mut result = Self {
             k,
             cluster_of,
             index_in_cluster,
@@ -547,8 +564,114 @@ impl MultiStageTokenCache {
                 let total = stored_train_tokens.len() as f64 + vocab_size as f64; // add-1 smoothing
                 counts.iter().map(|&c| (c as f64 + 1.0) / total).collect()
             },
+            // ── Kneser-Ney bigram computation ────────────────────────────
+            kn_first_term: Vec::new(),  // populated below
+            kn_lambda: Vec::new(),
+            kn_pcont: Vec::new(),
+            kn_bigram_argmax: Vec::new(),
+            eval_prev_token_ids,
             cluster_members,
+        };
+
+        // Build KN bigram tables from training tokens
+        {
+            // Count bigrams
+            let mut bigram_counts: Vec<HashMap<u32, u64>> = vec![HashMap::new(); vocab_size];
+            let mut context_counts = vec![0u64; vocab_size];
+            for i in 1..result.train_tokens.len() {
+                let prev = result.train_tokens[i - 1] as usize;
+                let cur = result.train_tokens[i] as u32;
+                if prev < vocab_size {
+                    *bigram_counts[prev].entry(cur).or_insert(0) += 1;
+                    context_counts[prev] += 1;
+                }
+            }
+
+            // Discount d = n1 / (n1 + 2*n2)
+            let mut n1 = 0u64;
+            let mut n2 = 0u64;
+            for prev_map in &bigram_counts {
+                for &c in prev_map.values() {
+                    if c == 1 { n1 += 1; }
+                    else if c == 2 { n2 += 1; }
+                }
+            }
+            let d = if n1 + 2 * n2 > 0 { n1 as f64 / (n1 + 2 * n2) as f64 } else { 0.75 };
+
+            // Continuation counts: for each cur, how many unique prev tokens
+            let mut continuation_count = vec![0u64; vocab_size];
+            let mut total_unique_bigrams = 0u64;
+            for prev_map in &bigram_counts {
+                for (&cur, _) in prev_map {
+                    if (cur as usize) < vocab_size {
+                        continuation_count[cur as usize] += 1;
+                    }
+                    total_unique_bigrams += 1;
+                }
+            }
+
+            // P_cont(cur)
+            let kn_pcont: Vec<f64> = continuation_count.iter()
+                .map(|&c| if total_unique_bigrams > 0 { c as f64 / total_unique_bigrams as f64 } else { 1.0 / vocab_size as f64 })
+                .collect();
+
+            // N1+(prev, •) = unique continuations after prev
+            // kn_lambda[prev] = d * N1+(prev) / c(prev)
+            let kn_lambda: Vec<f64> = (0..vocab_size).map(|prev| {
+                let c = context_counts[prev];
+                if c == 0 { return 0.0; }
+                let n1_plus = bigram_counts[prev].len() as f64;
+                d * n1_plus / c as f64
+            }).collect();
+
+            // First term: (c(prev,cur) - d) / c(prev) for observed pairs
+            let kn_first_term: Vec<HashMap<u32, f64>> = (0..vocab_size).map(|prev| {
+                let c_prev = context_counts[prev] as f64;
+                if c_prev == 0.0 { return HashMap::new(); }
+                bigram_counts[prev].iter()
+                    .map(|(&cur, &c)| (cur, (c as f64 - d).max(0.0) / c_prev))
+                    .collect()
+            }).collect();
+
+            // Precompute bigram argmax per context
+            let kn_bigram_argmax: Vec<u32> = (0..vocab_size).map(|prev| {
+                let c_prev = context_counts[prev];
+                if c_prev == 0 {
+                    // Unseen context: argmax of P_cont
+                    kn_pcont.iter().enumerate()
+                        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+                        .map(|(idx, _)| idx as u32).unwrap_or(0)
+                } else {
+                    // Check all observed continuations + high-pcont tokens
+                    let lam = kn_lambda[prev];
+                    let mut best_tok = 0u32;
+                    let mut best_p = f64::NEG_INFINITY;
+                    // All observed bigrams for this prev
+                    for (&cur, &ft) in &kn_first_term[prev] {
+                        let p = ft + lam * kn_pcont[cur as usize];
+                        if p > best_p { best_p = p; best_tok = cur; }
+                    }
+                    // Also check global continuation argmax (might beat observed via backoff)
+                    let pcont_argmax = kn_pcont.iter().enumerate()
+                        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+                        .map(|(idx, _)| idx).unwrap_or(0);
+                    let p_pcont = kn_first_term[prev].get(&(pcont_argmax as u32)).copied().unwrap_or(0.0)
+                                + lam * kn_pcont[pcont_argmax];
+                    if p_pcont > best_p { best_tok = pcont_argmax as u32; }
+                    best_tok
+                }
+            }).collect();
+
+            let n_bigrams = kn_first_term.iter().map(|m| m.len()).sum::<usize>();
+            eprintln!("[MultiStageCache] KN bigram: d={d:.4}, unique_bigrams={n_bigrams}, total_pairs={total_unique_bigrams}");
+
+            result.kn_first_term = kn_first_term;
+            result.kn_lambda = kn_lambda;
+            result.kn_pcont = kn_pcont;
+            result.kn_bigram_argmax = kn_bigram_argmax;
         }
+
+        result
     }
 
     // ── Generic bitwise encoding ─────────────────────────────────────
@@ -1662,6 +1785,7 @@ pub fn compute_combined_ce(
     sparse_threshold: usize,
     label_smoothing: f64,
     unigram_lambda: f64,
+    bigram_lambda: f64,
 ) -> (f64, f64, f64, f64, f64, f64) {
     let eps = 1e-7f64;
     let epsilon = 1e-10f64;
@@ -1699,7 +1823,7 @@ pub fn compute_combined_ce(
         .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
         .map(|(idx, _)| idx).unwrap_or(0);
     let unigram_argmax_group = cache.cluster_of[unigram_argmax] as usize;
-    let unigram_argmax_p = cache.unigram_probs[unigram_argmax];
+    let _unigram_argmax_p = cache.unigram_probs[unigram_argmax];
 
     // ── Reconstruct combined CE per example ──
     let results: Vec<(f64, f64, f64, u32, u32, u32)> = (0..num_eval)
@@ -1819,10 +1943,18 @@ pub fn compute_combined_ce(
             let s0_ce = -log_p_true_group;
             let s1_ce = -log_p_true_within;
             let log_p_hier = log_p_true_group + log_p_true_within;
-            let combined_ce = if unigram_lambda > 0.0 {
+            let any_interp = unigram_lambda > 0.0 || bigram_lambda > 0.0;
+            let combined_ce = if any_interp {
                 let p_hier = log_p_hier.exp();
+                let model_weight = (1.0 - unigram_lambda - bigram_lambda).max(0.0);
                 let p_uni = cache.unigram_probs[token_id];
-                let p_final = (1.0 - unigram_lambda) * p_hier + unigram_lambda * p_uni;
+                let prev_tok = cache.eval_prev_token_ids[ex] as usize;
+                let p_bi = cache.kn_first_term.get(prev_tok)
+                    .and_then(|m| m.get(&(token_id as u32)).copied())
+                    .unwrap_or(0.0)
+                    + cache.kn_lambda.get(prev_tok).copied().unwrap_or(0.0)
+                    * cache.kn_pcont.get(token_id).copied().unwrap_or(1.0 / cache.vocab_size as f64);
+                let p_final = model_weight * p_hier + unigram_lambda * p_uni + bigram_lambda * p_bi;
                 -(p_final.max(epsilon)).ln()
             } else if label_smoothing > 0.0 {
                 let p_hier = log_p_hier.exp();
@@ -1833,12 +1965,24 @@ pub fn compute_combined_ce(
                 s0_ce + s1_ce
             };
 
-            // When unigram_lambda > 0, compute interpolated accuracy:
-            // P_final(t) = (1-λ)×P_hier(t) + λ×P_unigram(t), then argmax
-            if unigram_lambda > 0.0 {
-                let one_minus_lambda = 1.0 - unigram_lambda;
+            // When interpolation active, compute interpolated accuracy:
+            // P_final(t) = w_model×P_hier(t) + λ_uni×P_unigram(t) + λ_bi×P_bigram(t|prev), then argmax
+            if any_interp {
+                let model_weight = (1.0 - unigram_lambda - bigram_lambda).max(0.0);
                 let p_true_group_prob = log_p_true_group.exp();
                 let group_size = cache.cluster_sizes[true_group];
+                let prev_tok = cache.eval_prev_token_ids[ex] as usize;
+
+                // Helper: compute P_final for a token given its P_hier contribution
+                let p_final_for = |tid: usize, p_hier_j: f64| -> f64 {
+                    let p_uni = cache.unigram_probs[tid];
+                    let p_bi = cache.kn_first_term.get(prev_tok)
+                        .and_then(|m| m.get(&(tid as u32)).copied())
+                        .unwrap_or(0.0)
+                        + cache.kn_lambda.get(prev_tok).copied().unwrap_or(0.0)
+                        * cache.kn_pcont.get(tid).copied().unwrap_or(1.0 / cache.vocab_size as f64);
+                    model_weight * p_hier_j + unigram_lambda * p_uni + bigram_lambda * p_bi
+                };
 
                 // Compute P_final for each token in the true group
                 let mut best_p_final = f64::NEG_INFINITY;
@@ -1878,7 +2022,7 @@ pub fn compute_combined_ce(
                         let p_s1_j = (cls_lp[j] - log_z_g).exp();
                         let p_hier_j = p_true_group_prob * p_s1_j;
                         let tid = cache.cluster_members[true_group][j] as usize;
-                        let p_final = one_minus_lambda * p_hier_j + unigram_lambda * cache.unigram_probs[tid];
+                        let p_final = p_final_for(tid, p_hier_j);
                         if p_final > best_p_final {
                             best_p_final = p_final;
                             best_token_id = tid;
@@ -1895,7 +2039,7 @@ pub fn compute_combined_ce(
                         let p_s1_j = (scores[j] - max_s).exp() / sum_exp;
                         let p_hier_j = p_true_group_prob * p_s1_j;
                         let tid = cache.cluster_members[true_group][j] as usize;
-                        let p_final = one_minus_lambda * p_hier_j + unigram_lambda * cache.unigram_probs[tid];
+                        let p_final = p_final_for(tid, p_hier_j);
                         if p_final > best_p_final {
                             best_p_final = p_final;
                             best_token_id = tid;
@@ -1905,9 +2049,21 @@ pub fn compute_combined_ce(
 
                 // Compare with unigram argmax if it's NOT in the true group
                 if unigram_argmax_group != true_group {
-                    let p_final_uni = unigram_lambda * unigram_argmax_p;
+                    let p_final_uni = p_final_for(unigram_argmax, 0.0);
                     if p_final_uni > best_p_final {
+                        best_p_final = p_final_uni;
                         best_token_id = unigram_argmax;
+                    }
+                }
+                // Compare with bigram argmax if it's NOT in the true group
+                if bigram_lambda > 0.0 {
+                    let bi_argmax = cache.kn_bigram_argmax.get(prev_tok).copied().unwrap_or(0) as usize;
+                    let bi_argmax_group = cache.cluster_of[bi_argmax] as usize;
+                    if bi_argmax_group != true_group && bi_argmax != unigram_argmax {
+                        let p_final_bi = p_final_for(bi_argmax, 0.0);
+                        if p_final_bi > best_p_final {
+                            best_token_id = bi_argmax;
+                        }
                     }
                 }
 
@@ -2349,6 +2505,7 @@ pub fn compute_combined_ce_selector(
     invalid_mode: bool,
     top_m: usize,
     unigram_lambda: f64,
+    bigram_lambda: f64,
 ) -> (f64, f64, f64, f64, f64, f64) {
     let eps = 1e-7f64;
     let epsilon = 1e-10f64;
@@ -2502,7 +2659,7 @@ pub fn compute_combined_ce_selector(
         .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
         .map(|(idx, _)| idx).unwrap_or(0);
     let unigram_argmax_group = cache.cluster_of[unigram_argmax] as usize;
-    let unigram_argmax_p = cache.unigram_probs[unigram_argmax];
+    let _unigram_argmax_p = cache.unigram_probs[unigram_argmax];
 
     // ── Build mapping: global eval index → (group, position_in_group) ──
     let mut group_pos_counter = vec![0usize; k];
@@ -2625,10 +2782,18 @@ pub fn compute_combined_ce_selector(
             let s0_ce = -log_p_true_group;
             let s1_ce = -log_p_true_within;
             let log_p_hier = log_p_true_group + log_p_true_within;
-            let combined_ce = if unigram_lambda > 0.0 {
+            let any_interp_sel = unigram_lambda > 0.0 || bigram_lambda > 0.0;
+            let combined_ce = if any_interp_sel {
                 let p_hier = log_p_hier.exp();
+                let model_weight = (1.0 - unigram_lambda - bigram_lambda).max(0.0);
                 let p_uni = cache.unigram_probs[token_id];
-                let p_final = (1.0 - unigram_lambda) * p_hier + unigram_lambda * p_uni;
+                let prev_tok = cache.eval_prev_token_ids[ex] as usize;
+                let p_bi = cache.kn_first_term.get(prev_tok)
+                    .and_then(|m| m.get(&(token_id as u32)).copied())
+                    .unwrap_or(0.0)
+                    + cache.kn_lambda.get(prev_tok).copied().unwrap_or(0.0)
+                    * cache.kn_pcont.get(token_id).copied().unwrap_or(1.0 / cache.vocab_size as f64);
+                let p_final = model_weight * p_hier + unigram_lambda * p_uni + bigram_lambda * p_bi;
                 -(p_final.max(epsilon)).ln()
             } else if label_smoothing > 0.0 {
                 let p_hier = log_p_hier.exp();
@@ -2638,14 +2803,23 @@ pub fn compute_combined_ce_selector(
             } else {
                 s0_ce + s1_ce
             };
-            // When unigram_lambda > 0, compute interpolated accuracy:
-            // Compare P_final for all tokens in the true group (exact) with the
-            // unigram top-1 token's P_final (lower bound for non-true groups)
-            if unigram_lambda > 0.0 {
-                let one_minus_lambda = 1.0 - unigram_lambda;
+            // When interpolation active, compute interpolated accuracy
+            if any_interp_sel {
+                let model_weight = (1.0 - unigram_lambda - bigram_lambda).max(0.0);
                 let p_true_group_prob = log_p_true_group.exp();
                 let (group, pos_in_group) = eval_to_group_pos[ex];
                 let group_size = cache.cluster_sizes[true_group];
+                let prev_tok = cache.eval_prev_token_ids[ex] as usize;
+
+                let p_final_for_sel = |tid: usize, p_hier_j: f64| -> f64 {
+                    let p_uni = cache.unigram_probs[tid];
+                    let p_bi = cache.kn_first_term.get(prev_tok)
+                        .and_then(|m| m.get(&(tid as u32)).copied())
+                        .unwrap_or(0.0)
+                        + cache.kn_lambda.get(prev_tok).copied().unwrap_or(0.0)
+                        * cache.kn_pcont.get(tid).copied().unwrap_or(1.0 / cache.vocab_size as f64);
+                    model_weight * p_hier_j + unigram_lambda * p_uni + bigram_lambda * p_bi
+                };
 
                 let mut best_p_final = f64::NEG_INFINITY;
                 let mut best_token_id = 0usize;
@@ -2682,7 +2856,7 @@ pub fn compute_combined_ce_selector(
                         let p_s1_j = (cls_lp[j] - log_z_g).exp();
                         let p_hier_j = p_true_group_prob * p_s1_j;
                         let tid = cache.cluster_members[true_group][j] as usize;
-                        let p_final = one_minus_lambda * p_hier_j + unigram_lambda * cache.unigram_probs[tid];
+                        let p_final = p_final_for_sel(tid, p_hier_j);
                         if p_final > best_p_final {
                             best_p_final = p_final;
                             best_token_id = tid;
@@ -2693,7 +2867,7 @@ pub fn compute_combined_ce_selector(
                     for j in 0..group_size {
                         let tid = cache.cluster_members[true_group][j] as usize;
                         let p_hier_j = p_true_group_prob / group_size as f64;
-                        let p_final = one_minus_lambda * p_hier_j + unigram_lambda * cache.unigram_probs[tid];
+                        let p_final = p_final_for_sel(tid, p_hier_j);
                         if p_final > best_p_final {
                             best_p_final = p_final;
                             best_token_id = tid;
@@ -2703,10 +2877,21 @@ pub fn compute_combined_ce_selector(
 
                 // Compare with unigram argmax if it's NOT in the true group
                 if unigram_argmax_group != true_group {
-                    // Lower bound: P_model contribution unknown, use 0
-                    let p_final_uni = unigram_lambda * unigram_argmax_p;
+                    let p_final_uni = p_final_for_sel(unigram_argmax, 0.0);
                     if p_final_uni > best_p_final {
+                        best_p_final = p_final_uni;
                         best_token_id = unigram_argmax;
+                    }
+                }
+                // Compare with bigram argmax
+                if bigram_lambda > 0.0 {
+                    let bi_argmax = cache.kn_bigram_argmax.get(prev_tok).copied().unwrap_or(0) as usize;
+                    let bi_argmax_group = cache.cluster_of[bi_argmax] as usize;
+                    if bi_argmax_group != true_group && bi_argmax != unigram_argmax {
+                        let p_final_bi = p_final_for_sel(bi_argmax, 0.0);
+                        if p_final_bi > best_p_final {
+                            best_token_id = bi_argmax;
+                        }
                     }
                 }
 

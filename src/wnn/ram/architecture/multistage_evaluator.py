@@ -656,6 +656,7 @@ class MultiStageEvaluator(BaseEvaluator):
 		invalid_mode: bool = False,
 		top_m: int = 5,
 		unigram_lambda: float = 0.0,
+		bigram_lambda: float = 0.0,
 	) -> EvalResult:
 		"""Compute combined CE over the full vocabulary.
 
@@ -712,6 +713,7 @@ class MultiStageEvaluator(BaseEvaluator):
 				invalid_mode=invalid_mode,
 				top_m=top_m,
 				unigram_lambda=unigram_lambda,
+				bigram_lambda=bigram_lambda,
 			)
 		else:
 			combined_ce, combined_acc, s0_ce, s1_ce, s0_acc, s1_acc = self._cache.evaluate_combined_ce(
@@ -725,6 +727,7 @@ class MultiStageEvaluator(BaseEvaluator):
 				sparse_threshold=sparse_threshold,
 				label_smoothing=label_smoothing,
 				unigram_lambda=unigram_lambda,
+				bigram_lambda=bigram_lambda,
 			)
 
 		return EvalResult(

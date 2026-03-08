@@ -469,6 +469,7 @@ class FlowWorker:
                 flow_config.top_m = params.get("top_m", 5)
                 flow_config.label_smoothing = params.get("label_smoothing", 0.0)
                 flow_config.unigram_lambda = params.get("unigram_lambda", 0.0)
+                flow_config.bigram_lambda = params.get("bigram_lambda", 0.0)
                 # Per-stage bounds from dashboard
                 flow_config.stage_min_bits_list = params.get("stage_min_bits")
                 flow_config.stage_max_bits_list = params.get("stage_max_bits")
@@ -988,6 +989,7 @@ class FlowWorker:
                 target_stage=ms_target_stage if architecture_type == "multi_stage" else 0,
                 # Lambda sweep params
                 lambda_values=exp_data.get("lambda_values") if experiment_type == ExperimentType.LAMBDA_SWEEP else None,
+                bigram_lambda_values=exp_data.get("bigram_lambda_values") if experiment_type == ExperimentType.LAMBDA_SWEEP else None,
                 s0_checkpoint_id=exp_data.get("s0_checkpoint_id") if experiment_type == ExperimentType.LAMBDA_SWEEP else None,
                 s1_checkpoint_id=exp_data.get("s1_checkpoint_id") if experiment_type == ExperimentType.LAMBDA_SWEEP else None,
                 genome_type=exp_data.get("genome_type", "best_ce") if experiment_type == ExperimentType.LAMBDA_SWEEP else "best_ce",

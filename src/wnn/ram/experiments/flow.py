@@ -195,8 +195,10 @@ class FlowConfig:
 	top_m: int = 5
 	# Label smoothing: CE_smooth = -log[(1-ε) × P_hierarchical + ε/vocab_size]
 	label_smoothing: float = 0.0
-	# Unigram interpolation (Jelinek-Mercer): P = (1-λ)×P_hier + λ×P_unigram
+	# Unigram interpolation (Jelinek-Mercer): P = (1-λ_u)×P_hier + λ_u×P_unigram
 	unigram_lambda: float = 0.0
+	# KN bigram interpolation: P = w×P_hier + λ_u×P_unigram + λ_b×P_KN_bigram
+	bigram_lambda: float = 0.0
 	# Per-stage bounds override (indexed by stage)
 	stage_min_bits_list: Optional[list[int]] = None
 	stage_max_bits_list: Optional[list[int]] = None
@@ -733,6 +735,7 @@ class FlowConfig:
 				"top_m": self.top_m,
 				"label_smoothing": self.label_smoothing,
 			"unigram_lambda": self.unigram_lambda,
+			"bigram_lambda": self.bigram_lambda,
 			})
 
 		return APIFlowConfig(
@@ -1376,6 +1379,7 @@ class Flow:
 							invalid_mode=cfg.invalid_mode,
 							top_m=cfg.top_m,
 							unigram_lambda=cfg.unigram_lambda,
+						bigram_lambda=cfg.bigram_lambda,
 						)
 						ce = result.ce
 						acc = result.accuracy
@@ -1455,7 +1459,10 @@ class Flow:
 		self.log("=" * 70)
 
 		lambda_values = exp_config.lambda_values or [0.0, 0.01, 0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 0.9]
+		bigram_lambda_values = exp_config.bigram_lambda_values
 		self.log(f"  Lambda values: {lambda_values}")
+		if bigram_lambda_values:
+			self.log(f"  Bigram lambda values: {bigram_lambda_values}")
 		self.log(f"  Genome type: {exp_config.genome_type}")
 
 		# Load genomes from checkpoints
@@ -1491,55 +1498,73 @@ class Flow:
 					 f"bits={genome.bits_per_neuron[:3]}..., neurons={genome.neurons_per_cluster[:3]}...")
 			stage_genomes.append(genome)
 
-		# Sweep lambda values
-		self.log("")
-		self.log(f"  {'Lambda':>8}  {'Combined CE':>12}  {'Combined Acc':>12}  {'S0 CE':>8}  {'S1 CE':>8}")
-		self.log(f"  {'─'*8}  {'─'*12}  {'─'*12}  {'─'*8}  {'─'*8}")
+		# Build sweep points: (unigram_lambda, bigram_lambda) pairs
+		if bigram_lambda_values:
+			# 2D grid sweep
+			sweep_points = [(ul, bl) for ul in lambda_values for bl in bigram_lambda_values
+							if ul + bl <= 1.0 + 1e-9]
+			self.log("")
+			self.log(f"  {'λ_uni':>8}  {'λ_bi':>8}  {'Combined CE':>12}  {'Combined Acc':>12}  {'S0 CE':>8}  {'S1 CE':>8}")
+			self.log(f"  {'─'*8}  {'─'*8}  {'─'*12}  {'─'*12}  {'─'*8}  {'─'*8}")
+		else:
+			sweep_points = [(lam, 0.0) for lam in lambda_values]
+			self.log("")
+			self.log(f"  {'Lambda':>8}  {'Combined CE':>12}  {'Combined Acc':>12}  {'S0 CE':>8}  {'S1 CE':>8}")
+			self.log(f"  {'─'*8}  {'─'*12}  {'─'*12}  {'─'*8}  {'─'*8}")
 
 		best_ce = float('inf')
-		best_lambda = 0.0
+		best_point = (0.0, 0.0)
 		results_table = []
 
-		for lam in lambda_values:
+		for uni_lam, bi_lam in sweep_points:
 			result = self.evaluator.compute_combined_metrics(
 				stage_genomes,
 				label_smoothing=cfg.label_smoothing,
 				invalid_mode=cfg.invalid_mode,
 				top_m=cfg.top_m,
-				unigram_lambda=lam,
+				unigram_lambda=uni_lam,
+				bigram_lambda=bi_lam,
 			)
 			ce = result.ce
 			acc = result.accuracy
 			s0_ce = result.cluster_ce
 			s1_ce = result.within_ce
 
-			self.log(f"  {lam:>8.3f}  {ce:>12.4f}  {acc:>11.2%}  {s0_ce:>8.4f}  {s1_ce:>8.4f}")
+			if bigram_lambda_values:
+				self.log(f"  {uni_lam:>8.3f}  {bi_lam:>8.3f}  {ce:>12.4f}  {acc:>11.2%}  {s0_ce:>8.4f}  {s1_ce:>8.4f}")
+			else:
+				self.log(f"  {uni_lam:>8.3f}  {ce:>12.4f}  {acc:>11.2%}  {s0_ce:>8.4f}  {s1_ce:>8.4f}")
 
 			if ce < best_ce:
 				best_ce = ce
-				best_lambda = lam
+				best_point = (uni_lam, bi_lam)
 
 			results_table.append({
-				"lambda": lam, "ce": ce, "accuracy": acc,
+				"unigram_lambda": uni_lam, "bigram_lambda": bi_lam,
+				"ce": ce, "accuracy": acc,
 				"s0_ce": s0_ce, "s1_ce": s1_ce,
 			})
 
-			# Store each lambda result as a combined validation
+			# Store each result as a combined validation
 			if self.dashboard_client and self._flow_id:
 				try:
+					genome_label = f"uni{uni_lam:.3f}_bi{bi_lam:.3f}" if bi_lam > 0 else f"unigram_l{uni_lam:.3f}"
 					self.dashboard_client.create_combined_validation(
 						flow_id=self._flow_id,
-						genome_type=f"unigram_l{lam:.3f}",
+						genome_type=genome_label,
 						combined_ce=ce,
 						combined_accuracy=acc,
 						per_stage_ce=[s0_ce, s1_ce],
-						unigram_lambda=lam,
+						unigram_lambda=uni_lam,
 					)
 				except Exception as e:
 					self.log(f"    Warning: Failed to store validation: {e}")
 
 		self.log("")
-		self.log(f"  Best: λ={best_lambda:.3f} → CE={best_ce:.4f}")
+		if bigram_lambda_values:
+			self.log(f"  Best: λ_uni={best_point[0]:.3f}, λ_bi={best_point[1]:.3f} → CE={best_ce:.4f}")
+		else:
+			self.log(f"  Best: λ={best_point[0]:.3f} → CE={best_ce:.4f}")
 
 		elapsed = _time.time() - start
 		self.log(f"  Completed in {elapsed:.1f}s")
@@ -1568,7 +1593,7 @@ class Flow:
 			final_fitness=best_ce,
 			final_accuracy=max(r["accuracy"] for r in results_table),
 			improvement_percent=0.0,
-			iterations_run=len(lambda_values),
+			iterations_run=len(sweep_points),
 			best_genome=stage_genomes[0],  # S0 genome as placeholder
 			final_population=None,
 			final_threshold=None,

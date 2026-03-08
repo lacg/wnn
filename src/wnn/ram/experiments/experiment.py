@@ -126,7 +126,8 @@ class ExperimentConfig:
 	frozen_genomes: Optional[list[Optional[dict]]] = None  # serialized genome per completed stage
 
 	# Lambda sweep configuration (only used when experiment_type=LAMBDA_SWEEP)
-	lambda_values: Optional[list[float]] = None     # Lambda values to sweep
+	lambda_values: Optional[list[float]] = None     # Unigram lambda values to sweep
+	bigram_lambda_values: Optional[list[float]] = None  # KN bigram lambda values to sweep (2D grid if both set)
 	s0_checkpoint_id: Optional[int] = None           # Checkpoint ID for stage 0 genome
 	s1_checkpoint_id: Optional[int] = None           # Checkpoint ID for stage 1 genome
 	genome_type: str = "best_ce"                     # Which genome from checkpoint (best_ce, best_acc, best_fitness)
