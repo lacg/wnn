@@ -1,16 +1,20 @@
 """IDS training runner — WNN classifier for UNSW-NB15.
 
 Usage:
-	python -m wnn.ids.train --classification binary --ga-gens 50 --ts-iters 100
-	python -m wnn.ids.train --classification multi --neurons 10 --bits 12
+	python -m wnn.ids.train --classification binary
+	python -m wnn.ids.train --classification multi
+	python -m wnn.ids.train --classification binary --ga-gens 250 --ts-iters 250 --patience 5
 """
 
 import argparse
 import json
+import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+
+import numpy as np
 
 from wnn.ids import load_unsw_nb15
 from wnn.ids.metrics import compute_ids_metrics, format_ids_report
@@ -22,46 +26,139 @@ from wnn.ram.strategies.connectivity.architecture_strategies import (
 	ArchitectureTSStrategy,
 )
 from wnn.ram.strategies.connectivity.generic_strategies import GAConfig, TSConfig
+from wnn.ram.fitness import FitnessCalculatorType
 
 
 @dataclass
 class IDSTrainConfig:
 	classification: str = "binary"
 	n_bits: int = 8
-	neurons: int = 5
+	# Initial genome defaults (overridden by asymmetric allocation in multi-class)
+	neurons: int = 10
 	address_bits: int = 12
+	# Optimization
 	ga_gens: int = 50
-	ts_iters: int = 100
+	ts_iters: int = 250
 	patience: int = 5
-	population: int = 30
-	neighbors: int = 30
+	population: int = 150
+	neighbors: int = 150
 	num_parts: int = 3
 	seed: int = 42
+	# Fitness: accuracy-dominant for IDS (CE is just a training signal)
+	fitness_weight_ce: float = 0.3
+	fitness_weight_acc: float = 1.0
 	output: Optional[str] = None
 
 
-def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
-	"""Run full IDS training experiment.
+def create_asymmetric_genome(
+	y_train: np.ndarray,
+	num_classes: int,
+	total_features: int,
+	seed: int = 42,
+) -> ClusterGenome:
+	"""Create a genome with per-class bits/neurons matched to training density.
 
-	Returns dict with final metrics.
+	Address space (bits) is chosen so each neuron sees >= 1 visit per slot
+	on average. More neurons for classes with more data (more patterns to learn).
+
+	Density rule: visits_per_slot = examples / (2^bits)
+	We want visits_per_slot >= min_density (default 2.0).
+	So: bits <= log2(examples / min_density)
 	"""
+	min_density = 2.0  # Minimum visits per address slot for meaningful learning
+	min_bits = 4
+	max_bits = 14
+	min_neurons = 3
+	max_neurons = 20
+
+	# Count examples per class
+	class_counts = []
+	for c in range(num_classes):
+		class_counts.append(int((y_train == c).sum()))
+
+	bits_per_class = []
+	neurons_per_class = []
+
+	for c in range(num_classes):
+		count = class_counts[c]
+
+		# Bits: largest address space where density >= min_density
+		if count > 0:
+			ideal_bits = int(math.log2(count / min_density))
+			bits = max(min_bits, min(max_bits, ideal_bits))
+		else:
+			bits = min_bits
+
+		# Neurons: proportional to sqrt(count), scaled to [min_neurons, max_neurons]
+		# sqrt because doubling data doesn't need doubling neurons
+		if count > 0:
+			raw = math.sqrt(count)
+		else:
+			raw = 0
+		bits_per_class.append(bits)
+		neurons_per_class.append(raw)
+
+	# Normalize neurons to [min_neurons, max_neurons]
+	raw_values = neurons_per_class
+	if max(raw_values) > 0:
+		scale = max_neurons / max(raw_values)
+		neurons_per_class = [
+			max(min_neurons, min(max_neurons, int(round(r * scale))))
+			for r in raw_values
+		]
+	else:
+		neurons_per_class = [min_neurons] * num_classes
+
+	# Build per-neuron bits list
+	all_bits = []
+	for c in range(num_classes):
+		all_bits.extend([bits_per_class[c]] * neurons_per_class[c])
+
+	genome = ClusterGenome(
+		bits_per_neuron=all_bits,
+		neurons_per_cluster=neurons_per_class,
+		connections=None,
+	)
+
+	# Initialize random connections
+	import random
+	rng = random.Random(seed)
+	conns = []
+	for b in all_bits:
+		conns.extend(rng.sample(range(total_features), min(b, total_features)))
+	genome.connections = conns
+
+	# Log the allocation
+	print("Asymmetric genome allocation:")
+	for c in range(num_classes):
+		print(f"  Class {c:2d} ({class_counts[c]:>7,} examples): "
+			  f"{bits_per_class[c]:2d} bits, {neurons_per_class[c]:2d} neurons "
+			  f"(density: {class_counts[c] / 2**bits_per_class[c]:.1f}/slot)")
+
+	return genome
+
+
+def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
+	"""Run full IDS training experiment."""
 	print(f"=== WNN IDS Classifier ({cfg.classification}) ===")
-	print(f"Config: neurons={cfg.neurons}, bits={cfg.address_bits}, "
-		  f"GA={cfg.ga_gens}gen, TS={cfg.ts_iters}iter, pop={cfg.population}")
+	print(f"Config: pop={cfg.population}, GA={cfg.ga_gens}gen, TS={cfg.ts_iters}iter, "
+		  f"patience={cfg.patience}, fitness_weights=(CE={cfg.fitness_weight_ce}, Acc={cfg.fitness_weight_acc})")
 
 	# Load dataset
 	t0 = time.time()
 	dataset = load_unsw_nb15(n_bits=cfg.n_bits)
 	total_features = dataset.X_train.shape[1]
-	print(f"Dataset loaded: {dataset.X_train.shape[0]} train, {dataset.X_test.shape[0]} test, "
+	print(f"Dataset: {dataset.X_train.shape[0]:,} train, {dataset.X_test.shape[0]:,} test, "
 		  f"{total_features} features ({time.time()-t0:.1f}s)")
 
 	if cfg.classification == "binary":
 		num_classes = 2
 		class_names = ["Normal", "Attack"]
+		y_train = dataset.y_train_binary
 	else:
 		num_classes = len(dataset.category_names)
 		class_names = dataset.category_names
+		y_train = dataset.y_train_multi
 
 	# Create evaluator
 	t0 = time.time()
@@ -71,18 +168,24 @@ def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 		num_parts=cfg.num_parts,
 		seed=cfg.seed,
 	)
-	print(f"Evaluator created ({time.time()-t0:.1f}s)")
+	print(f"Evaluator: {repr(evaluator)} ({time.time()-t0:.1f}s)")
 
-	# Create initial genome
-	genome = ClusterGenome.create_uniform(
-		num_clusters=num_classes,
-		bits=cfg.address_bits,
-		neurons=cfg.neurons,
-		total_input_bits=total_features,
-		rng=cfg.seed,
-	)
-	print(f"Initial genome: {num_classes} clusters, {genome.total_neurons} neurons, "
-		  f"{cfg.address_bits} bits/neuron")
+	# Create initial genome — asymmetric for multi-class, uniform for binary
+	if cfg.classification == "multi":
+		genome = create_asymmetric_genome(
+			y_train, num_classes, total_features, seed=cfg.seed,
+		)
+	else:
+		genome = ClusterGenome.create_uniform(
+			num_clusters=num_classes,
+			bits=cfg.address_bits,
+			neurons=cfg.neurons,
+			total_input_bits=total_features,
+			rng=cfg.seed,
+		)
+		print(f"Uniform genome: {num_classes} clusters × {cfg.neurons} neurons × {cfg.address_bits} bits")
+
+	print(f"Total: {genome.total_neurons} neurons, {genome.total_memory_cells():,} memory cells")
 
 	# Evaluate initial genome
 	result = evaluator.evaluate_batch_full([genome])[0]
@@ -113,14 +216,13 @@ def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 		num_classes=num_classes, total_features=total_features,
 	)
 
-	# Final evaluation on full data
+	# Final evaluation
 	print("\n=== Final Evaluation ===")
 	final_result = evaluator.evaluate_batch_full([best_genome])[0]
 	print(f"Final: CE={final_result.ce:.4f}, Acc={final_result.accuracy*100:.2f}%")
+	print(f"Genome: neurons={best_genome.neurons_per_cluster}, "
+		  f"bits={best_genome.bits_per_neuron[:10]}{'...' if len(best_genome.bits_per_neuron) > 10 else ''}")
 
-	# Compute IDS-specific metrics
-	# For now, report the CE/accuracy from the evaluator
-	# Full per-class metrics would require forward-pass prediction (future work)
 	metrics = {
 		"classification": cfg.classification,
 		"num_classes": num_classes,
@@ -142,6 +244,8 @@ def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 			"patience": cfg.patience,
 			"population": cfg.population,
 			"seed": cfg.seed,
+			"fitness_weight_ce": cfg.fitness_weight_ce,
+			"fitness_weight_acc": cfg.fitness_weight_acc,
 		},
 	}
 
@@ -149,7 +253,7 @@ def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 		output_path = Path(cfg.output)
 		output_path.parent.mkdir(parents=True, exist_ok=True)
 		output_path.write_text(json.dumps(metrics, indent=2))
-		print(f"Results saved to {cfg.output}")
+		print(f"\nResults saved to {cfg.output}")
 
 	return metrics
 
@@ -184,7 +288,7 @@ def _run_phase(
 		total_input_bits=total_features,
 	)
 
-	# GA phase
+	# GA phase — accuracy-dominant fitness for IDS
 	ga_config = GAConfig(
 		population_size=cfg.population,
 		generations=cfg.ga_gens,
@@ -192,6 +296,9 @@ def _run_phase(
 		mutation_rate=0.1,
 		crossover_rate=0.7,
 		tournament_size=3,
+		fitness_calculator_type=FitnessCalculatorType.HARMONIC_RANK,
+		fitness_weight_ce=cfg.fitness_weight_ce,
+		fitness_weight_acc=cfg.fitness_weight_acc,
 	)
 
 	ga_strategy = ArchitectureGAStrategy(
@@ -203,24 +310,26 @@ def _run_phase(
 	)
 
 	t0 = time.time()
-	ga_result = ga_strategy.optimize(
-		initial_population=[genome],
-	)
+	ga_result = ga_strategy.optimize(initial_population=[genome])
 	ga_time = time.time() - t0
 	print(f"  GA {phase_name}: CE {best_ce:.4f} -> {ga_result.final_fitness:.4f}, "
-		  f"Acc {ga_result.final_accuracy*100:.2f}% ({ga_result.iterations_run} gens, {ga_time:.1f}s)")
+		  f"Acc {(ga_result.final_accuracy or 0)*100:.2f}% "
+		  f"({ga_result.iterations_run} gens, {ga_time:.1f}s)")
 
 	best_genome = ga_result.best_genome
 	best_ce = ga_result.final_fitness
 	best_acc = ga_result.final_accuracy or best_acc
 
-	# TS phase (refinement)
+	# TS phase — same accuracy-dominant fitness
 	ts_config = TSConfig(
 		iterations=cfg.ts_iters,
 		neighbors_per_iter=cfg.neighbors,
 		total_neighbors_size=cfg.neighbors,
 		patience=cfg.patience,
 		mutation_rate=0.1,
+		fitness_calculator_type=FitnessCalculatorType.HARMONIC_RANK,
+		fitness_weight_ce=cfg.fitness_weight_ce,
+		fitness_weight_acc=cfg.fitness_weight_acc,
 	)
 
 	ts_strategy = ArchitectureTSStrategy(
@@ -239,7 +348,8 @@ def _run_phase(
 	)
 	ts_time = time.time() - t0
 	print(f"  TS {phase_name}: CE {best_ce:.4f} -> {ts_result.final_fitness:.4f}, "
-		  f"Acc {ts_result.final_accuracy*100:.2f}% ({ts_result.iterations_run} iters, {ts_time:.1f}s)")
+		  f"Acc {(ts_result.final_accuracy or 0)*100:.2f}% "
+		  f"({ts_result.iterations_run} iters, {ts_time:.1f}s)")
 
 	if ts_result.final_fitness < best_ce:
 		best_genome = ts_result.best_genome
@@ -253,15 +363,19 @@ def main():
 	parser = argparse.ArgumentParser(description="WNN IDS Classifier Training")
 	parser.add_argument("--classification", choices=["binary", "multi"], default="binary")
 	parser.add_argument("--n-bits", type=int, default=8, help="Thermometer encoding bits")
-	parser.add_argument("--neurons", type=int, default=5, help="Initial neurons per class")
-	parser.add_argument("--bits", type=int, default=12, help="Initial address bits per neuron")
+	parser.add_argument("--neurons", type=int, default=10, help="Initial neurons per class (binary)")
+	parser.add_argument("--bits", type=int, default=12, help="Initial address bits per neuron (binary)")
 	parser.add_argument("--ga-gens", type=int, default=50)
-	parser.add_argument("--ts-iters", type=int, default=100)
+	parser.add_argument("--ts-iters", type=int, default=250)
 	parser.add_argument("--patience", type=int, default=5)
-	parser.add_argument("--population", type=int, default=30)
-	parser.add_argument("--neighbors", type=int, default=30)
+	parser.add_argument("--population", type=int, default=150)
+	parser.add_argument("--neighbors", type=int, default=150)
 	parser.add_argument("--num-parts", type=int, default=3)
 	parser.add_argument("--seed", type=int, default=42)
+	parser.add_argument("--fitness-ce-weight", type=float, default=0.3,
+		help="CE weight in fitness ranking (lower = more accuracy-focused)")
+	parser.add_argument("--fitness-acc-weight", type=float, default=1.0,
+		help="Accuracy weight in fitness ranking")
 	parser.add_argument("--output", type=str, default=None, help="JSON output path")
 	args = parser.parse_args()
 
@@ -277,6 +391,8 @@ def main():
 		neighbors=args.neighbors,
 		num_parts=args.num_parts,
 		seed=args.seed,
+		fitness_weight_ce=args.fitness_ce_weight,
+		fitness_weight_acc=args.fitness_acc_weight,
 		output=args.output,
 	)
 
