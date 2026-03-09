@@ -64,6 +64,54 @@ class IDSDataset:
 	feature_names: list[str]  # feature names in order
 
 
+def create_attack_only_dataset(dataset: IDSDataset) -> IDSDataset:
+	"""Create a dataset containing only attack examples for Stage 1 classification.
+
+	Filters to y_binary == 1, remaps multi-class labels from 1-9 → 0-8
+	(dropping Normal=0). Returns a new IDSDataset with 9 attack classes.
+	"""
+	# Filter to attack examples
+	train_mask = dataset.y_train_binary == 1
+	test_mask = dataset.y_test_binary == 1
+
+	X_train = dataset.X_train[train_mask]
+	X_test = dataset.X_test[test_mask]
+
+	# Remap multi-class labels: 1-9 → 0-8 (drop Normal)
+	y_train_multi = dataset.y_train_multi[train_mask] - 1
+	y_test_multi = dataset.y_test_multi[test_mask] - 1
+
+	# Clamp any stray Normal labels (y_multi=0 → remapped to -1) to 0
+	y_train_multi = np.clip(y_train_multi, 0, 8)
+	y_test_multi = np.clip(y_test_multi, 0, 8)
+
+	# All examples are attacks, so binary labels are all 1
+	y_train_binary = np.ones(len(X_train), dtype=np.int32)
+	y_test_binary = np.ones(len(X_test), dtype=np.int32)
+
+	# Attack category names (excluding Normal)
+	attack_names = dataset.category_names[1:]  # ["Analysis", "Backdoor", ..., "Worms"]
+
+	print(f"Attack-only dataset: {len(X_train):,} train, {len(X_test):,} test, "
+		  f"{len(attack_names)} classes")
+	for i, name in enumerate(attack_names):
+		n_train = int((y_train_multi == i).sum())
+		n_test = int((y_test_multi == i).sum())
+		print(f"  [{i}] {name:15s}: {n_train:>7,} train, {n_test:>6,} test")
+
+	return IDSDataset(
+		X_train=X_train,
+		y_train_binary=y_train_binary,
+		y_train_multi=y_train_multi,
+		X_test=X_test,
+		y_test_binary=y_test_binary,
+		y_test_multi=y_test_multi,
+		encoder=dataset.encoder,
+		category_names=attack_names,
+		feature_names=dataset.feature_names,
+	)
+
+
 HF_DATASET_ID = "lacg030175/UNSW-NB15"
 
 

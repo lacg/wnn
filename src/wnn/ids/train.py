@@ -30,7 +30,7 @@ from typing import Optional
 
 import numpy as np
 
-from wnn.ids import load_unsw_nb15
+from wnn.ids import load_unsw_nb15, create_attack_only_dataset
 from wnn.ids.metrics import compute_ids_metrics, format_ids_report
 from wnn.ram.architecture.ids_evaluator import IDSEvaluator
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome, PhaseType
@@ -411,6 +411,187 @@ def _run_phase(
 	return best_genome, best_ce, best_acc
 
 
+def run_hierarchical_experiment(cfg: IDSTrainConfig) -> dict:
+	"""Run two-stage hierarchical IDS experiment.
+
+	Stage 0: Binary gate (normal vs attack) on full dataset.
+	Stage 1: 9-class attack classifier on attack-only examples.
+	Both stages use the same input features (thermometer-encoded flow).
+	"""
+	print(f"=== Hierarchical IDS Classifier (split={cfg.split}) ===")
+	print(f"  Stage 0: Binary gate (normal vs attack)")
+	print(f"  Stage 1: 9-class attack type classifier")
+	print()
+
+	# ── Load full dataset ─────────────────────────────────────────────
+	t0 = time.time()
+	dataset = load_unsw_nb15(n_bits=cfg.n_bits, split=cfg.split)
+	total_features = dataset.X_train.shape[1]
+	load_time = time.time() - t0
+
+	# ── Stage 0: Binary classification ────────────────────────────────
+	print("=" * 60)
+	print("STAGE 0: Binary Gate (Normal vs Attack)")
+	print("=" * 60)
+
+	s0_cfg = IDSTrainConfig(
+		classification="binary",
+		n_bits=cfg.n_bits,
+		neurons=cfg.neurons,
+		address_bits=cfg.address_bits,
+		ga_gens=cfg.ga_gens,
+		ts_iters=cfg.ts_iters,
+		patience=cfg.patience,
+		population=cfg.population,
+		neighbors=cfg.neighbors,
+		num_parts=cfg.num_parts,
+		seed=cfg.seed,
+		fitness_weight_ce=cfg.fitness_weight_ce,
+		fitness_weight_acc=cfg.fitness_weight_acc,
+		split=cfg.split,
+	)
+
+	# Reuse loaded dataset — run_ids_experiment will reload, but that's fine
+	# for correctness. For the hierarchical runner, Stage 0 is binary.
+	s0_metrics = run_ids_experiment(s0_cfg)
+
+	# ── Stage 1: Attack type classification ───────────────────────────
+	print()
+	print("=" * 60)
+	print("STAGE 1: Attack Type Classification (9 classes)")
+	print("=" * 60)
+
+	attack_dataset = create_attack_only_dataset(dataset)
+	attack_features = attack_dataset.X_train.shape[1]
+	num_attack_classes = len(attack_dataset.category_names)
+
+	print(f"Attack dataset: {attack_dataset.X_train.shape[0]:,} train, "
+		  f"{attack_dataset.X_test.shape[0]:,} test, {num_attack_classes} classes")
+
+	# Create Stage 1 evaluator (9-class, attack-only data)
+	s1_evaluator = IDSEvaluator(
+		dataset=attack_dataset,
+		classification="multi",
+		num_parts=cfg.num_parts,
+		seed=cfg.seed + 2000,
+	)
+	print(f"Stage 1 evaluator: {repr(s1_evaluator)}")
+
+	# Grid search for Stage 1
+	grid_config = GridSearchConfig(
+		num_clusters=num_attack_classes,
+		neurons_grid=cfg.neurons_grid,
+		bits_grid=cfg.bits_grid,
+		top_k=cfg.grid_top_k,
+		population_size=cfg.population,
+		total_input_bits=attack_features,
+		fitness_calculator_type=FitnessCalculatorType.HARMONIC_RANK,
+		fitness_weight_ce=cfg.fitness_weight_ce,
+		fitness_weight_acc=cfg.fitness_weight_acc,
+	)
+	grid_strategy = GridSearchStrategy(
+		config=grid_config,
+		batch_evaluator=s1_evaluator,
+		seed=cfg.seed + 2000,
+		logger=print,
+	)
+
+	t0 = time.time()
+	grid_result = grid_strategy.optimize()
+	print(f"Grid search: CE={grid_result.final_fitness:.4f}, "
+		  f"Acc={grid_result.final_accuracy*100:.2f}% ({time.time()-t0:.1f}s)")
+
+	best_genome = grid_result.best_genome
+	best_ce = grid_result.final_fitness
+	best_acc = grid_result.final_accuracy or 0.0
+	seed_population = grid_result.final_population
+
+	# Asymmetric genome for 9-class with varying attack counts
+	asym_genome = create_asymmetric_genome(
+		attack_dataset.y_train_multi, num_attack_classes, attack_features,
+		seed=cfg.seed + 2000,
+	)
+	asym_result = s1_evaluator.evaluate_batch_full([asym_genome])[0]
+	print(f"Asymmetric genome: CE={asym_result.ce:.4f}, Acc={asym_result.accuracy*100:.2f}%")
+	if asym_result.ce < best_ce:
+		best_genome = asym_genome
+		best_ce = asym_result.ce
+		best_acc = asym_result.accuracy
+		print("  → Using asymmetric genome")
+	else:
+		print("  → Keeping grid search genome")
+
+	# Phase 1: Neurons
+	best_genome, best_ce, best_acc = _run_phase(
+		"neurons", s1_evaluator, best_genome, best_ce, best_acc, cfg,
+		optimize_bits=False, optimize_neurons=True, optimize_connections=False,
+		num_classes=num_attack_classes, total_features=attack_features,
+		seed_population=seed_population,
+	)
+
+	# Phase 2: Bits
+	best_genome, best_ce, best_acc = _run_phase(
+		"bits", s1_evaluator, best_genome, best_ce, best_acc, cfg,
+		optimize_bits=True, optimize_neurons=False, optimize_connections=False,
+		num_classes=num_attack_classes, total_features=attack_features,
+	)
+
+	# Phase 3: Connections
+	best_genome, best_ce, best_acc = _run_phase(
+		"connections", s1_evaluator, best_genome, best_ce, best_acc, cfg,
+		optimize_bits=False, optimize_neurons=False, optimize_connections=True,
+		num_classes=num_attack_classes, total_features=attack_features,
+	)
+
+	# Final Stage 1 evaluation
+	print("\n=== Stage 1 Final Evaluation ===")
+	s1_final = s1_evaluator.evaluate_batch_full([best_genome])[0]
+	print(f"Stage 1: CE={s1_final.ce:.4f}, Acc={s1_final.accuracy*100:.2f}%")
+	print(f"Genome: neurons={best_genome.neurons_per_cluster}")
+
+	# ── Combined report ───────────────────────────────────────────────
+	print()
+	print("=" * 60)
+	print("COMBINED RESULTS")
+	print("=" * 60)
+	print(f"Stage 0 (Binary gate):       {s0_metrics['accuracy']*100:.2f}%")
+	print(f"Stage 1 (Attack classifier): {s1_final.accuracy*100:.2f}%")
+	print(f"  (Stage 1 tested on {attack_dataset.X_test.shape[0]:,} attack examples only)")
+	print()
+	print("At inference:")
+	print("  1. All traffic → Stage 0 (< 1 KB, 6 neurons)")
+	print("  2. If attack → Stage 1 classifies type")
+	print("  3. If normal → pass through")
+
+	metrics = {
+		"mode": "hierarchical",
+		"split": cfg.split,
+		"stage0": s0_metrics,
+		"stage1": {
+			"classification": "attack_type",
+			"num_classes": num_attack_classes,
+			"class_names": attack_dataset.category_names,
+			"ce": s1_final.ce,
+			"accuracy": s1_final.accuracy,
+			"genome": {
+				"bits_per_neuron": best_genome.bits_per_neuron,
+				"neurons_per_cluster": best_genome.neurons_per_cluster,
+				"total_neurons": best_genome.total_neurons,
+			},
+			"train_examples": int(attack_dataset.X_train.shape[0]),
+			"test_examples": int(attack_dataset.X_test.shape[0]),
+		},
+	}
+
+	if cfg.output:
+		output_path = Path(cfg.output)
+		output_path.parent.mkdir(parents=True, exist_ok=True)
+		output_path.write_text(json.dumps(metrics, indent=2))
+		print(f"\nResults saved to {cfg.output}")
+
+	return metrics
+
+
 def main():
 	parser = argparse.ArgumentParser(description="WNN IDS Classifier Training")
 	parser.add_argument("--classification", choices=["binary", "multi"], default="binary")
@@ -430,6 +611,8 @@ def main():
 		help="Accuracy weight in fitness ranking")
 	parser.add_argument("--split", choices=["standard", "random"], default="standard",
 		help="Evaluation protocol: 'standard' (temporal) or 'random' (i.i.d.)")
+	parser.add_argument("--hierarchical", action="store_true",
+		help="Two-stage: binary gate → attack type classifier")
 	parser.add_argument("--output", type=str, default=None, help="JSON output path")
 	args = parser.parse_args()
 
@@ -451,7 +634,10 @@ def main():
 		output=args.output,
 	)
 
-	run_ids_experiment(cfg)
+	if args.hierarchical:
+		run_hierarchical_experiment(cfg)
+	else:
+		run_ids_experiment(cfg)
 
 
 if __name__ == "__main__":
