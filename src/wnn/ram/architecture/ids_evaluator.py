@@ -153,7 +153,7 @@ class IDSEvaluator(BaseEvaluator):
 			0,  # rng_seed
 		)
 
-		return [EvalResult(ce=ce, accuracy=acc) for ce, acc in raw_results]
+		return [EvalResult(ce=ce, accuracy=acc, bit_accuracy=0.0) for ce, acc in raw_results]
 
 	def evaluate_batch_full(
 		self,
@@ -172,7 +172,7 @@ class IDSEvaluator(BaseEvaluator):
 			0,  # rng_seed
 		)
 
-		return [EvalResult(ce=ce, accuracy=acc) for ce, acc in raw_results]
+		return [EvalResult(ce=ce, accuracy=acc, bit_accuracy=0.0) for ce, acc in raw_results]
 
 	def search_neighbors(
 		self,

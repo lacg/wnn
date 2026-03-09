@@ -4,15 +4,17 @@ Usage:
 	python -m wnn.ids.train --classification binary
 	python -m wnn.ids.train --classification multi
 
-Six optimization phases:
-	GA/TS (random search):
-		1. neurons      — GA+TS on neuron counts per class
-		2. bits         — GA+TS on address bits per neuron
-		3. connections  — GA+TS on input wiring
-	Adaptation (stats-guided):
-		4. neurogenesis  — add/remove neurons based on error/fill stats
-		5. axonogenesis  — rewire connections based on entropy
-		6. synaptogenesis — grow/prune address space based on utilization
+Seven optimization phases (matching the LM pipeline structure):
+	0.  Grid search  — evaluate neuron × bit combinations to find best seed
+	1a. GA neurons    — explore neuron counts per class
+	1b. TS neurons    — refine neuron counts
+	2a. GA bits       — explore address bits per neuron
+	2b. TS bits       — refine address bits
+	3a. GA connections — explore input wiring
+	3b. TS connections — refine input wiring
+
+Phases 8-10 (neurogenesis, axonogenesis, synaptogenesis) require Rust-side
+adaptation hooks in IDSEvaluator — planned for Phase B2.
 """
 
 import argparse
@@ -33,8 +35,8 @@ from wnn.ram.strategies.connectivity.architecture_strategies import (
 	ArchitectureConfig,
 	ArchitectureGAStrategy,
 	ArchitectureTSStrategy,
-	AdaptationConfig as AdaptStrategyConfig,
-	AdaptationStrategy,
+	GridSearchConfig,
+	GridSearchStrategy,
 )
 from wnn.ram.strategies.connectivity.generic_strategies import GAConfig, TSConfig
 from wnn.ram.fitness import FitnessCalculatorType
@@ -44,7 +46,7 @@ from wnn.ram.fitness import FitnessCalculatorType
 class IDSTrainConfig:
 	classification: str = "binary"
 	n_bits: int = 8
-	# Initial genome defaults (overridden by asymmetric allocation in multi-class)
+	# Initial genome defaults (overridden by grid search or asymmetric allocation)
 	neurons: int = 10
 	address_bits: int = 12
 	# Optimization
@@ -55,6 +57,10 @@ class IDSTrainConfig:
 	neighbors: int = 150
 	num_parts: int = 3
 	seed: int = 42
+	# Grid search
+	neurons_grid: list[int] = field(default_factory=lambda: [3, 5, 8, 10, 15, 20])
+	bits_grid: list[int] = field(default_factory=lambda: [4, 6, 8, 10, 12, 14])
+	grid_top_k: int = 10
 	# Fitness: accuracy-dominant for IDS (CE is just a training signal)
 	fitness_weight_ce: float = 0.3
 	fitness_weight_acc: float = 1.0
@@ -181,36 +187,62 @@ def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 	)
 	print(f"Evaluator: {repr(evaluator)} ({time.time()-t0:.1f}s)")
 
-	# Create initial genome — asymmetric for multi-class, uniform for binary
+	# ── Phase 0: Grid search ─────────────────────────────────────────
+	grid_config = GridSearchConfig(
+		num_clusters=num_classes,
+		neurons_grid=cfg.neurons_grid,
+		bits_grid=cfg.bits_grid,
+		top_k=cfg.grid_top_k,
+		population_size=cfg.population,
+		total_input_bits=total_features,
+		fitness_calculator_type=FitnessCalculatorType.HARMONIC_RANK,
+		fitness_weight_ce=cfg.fitness_weight_ce,
+		fitness_weight_acc=cfg.fitness_weight_acc,
+	)
+	grid_strategy = GridSearchStrategy(
+		config=grid_config,
+		batch_evaluator=evaluator,
+		seed=cfg.seed,
+		logger=print,
+	)
+
+	t0 = time.time()
+	grid_result = grid_strategy.optimize()
+	grid_time = time.time() - t0
+	print(f"Grid search: CE={grid_result.final_fitness:.4f}, "
+		  f"Acc={grid_result.final_accuracy*100:.2f}% "
+		  f"({grid_time:.1f}s)")
+
+	best_genome = grid_result.best_genome
+	best_ce = grid_result.final_fitness
+	best_acc = grid_result.final_accuracy or 0.0
+	seed_population = grid_result.final_population
+
+	# For multi-class: override with asymmetric genome if it's better
 	if cfg.classification == "multi":
-		genome = create_asymmetric_genome(
+		asym_genome = create_asymmetric_genome(
 			y_train, num_classes, total_features, seed=cfg.seed,
 		)
-	else:
-		genome = ClusterGenome.create_uniform(
-			num_clusters=num_classes,
-			bits=cfg.address_bits,
-			neurons=cfg.neurons,
-			total_input_bits=total_features,
-			rng=cfg.seed,
-		)
-		print(f"Uniform genome: {num_classes} clusters × {cfg.neurons} neurons × {cfg.address_bits} bits")
+		asym_result = evaluator.evaluate_batch_full([asym_genome])[0]
+		print(f"Asymmetric genome: CE={asym_result.ce:.4f}, Acc={asym_result.accuracy*100:.2f}%")
+		if asym_result.ce < best_ce:
+			best_genome = asym_genome
+			best_ce = asym_result.ce
+			best_acc = asym_result.accuracy
+			print("  → Using asymmetric genome (better than grid search)")
+		else:
+			print("  → Keeping grid search genome (better than asymmetric)")
 
-	print(f"Total: {genome.total_neurons} neurons, {genome.total_memory_cells():,} memory cells")
+	print(f"Total: {best_genome.total_neurons} neurons, {best_genome.total_memory_cells():,} memory cells")
 
-	# Evaluate initial genome
-	result = evaluator.evaluate_batch_full([genome])[0]
-	print(f"Initial: CE={result.ce:.4f}, Acc={result.accuracy*100:.2f}%")
-
-	best_genome = genome
-	best_ce = result.ce
-	best_acc = result.accuracy
+	# ── Phases 1-3: GA + TS (neurons → bits → connections) ───────────
 
 	# Phase 1: Optimize neurons (GA + TS)
 	best_genome, best_ce, best_acc = _run_phase(
 		"neurons", evaluator, best_genome, best_ce, best_acc, cfg,
 		optimize_bits=False, optimize_neurons=True, optimize_connections=False,
 		num_classes=num_classes, total_features=total_features,
+		seed_population=seed_population,
 	)
 
 	# Phase 2: Optimize bits (GA + TS)
@@ -227,14 +259,7 @@ def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 		num_classes=num_classes, total_features=total_features,
 	)
 
-	# Phase 4-6: Stats-guided adaptation (neurogenesis, axonogenesis, synaptogenesis)
-	for adapt_mode in ["neurogenesis", "axonogenesis", "synaptogenesis"]:
-		best_genome, best_ce, best_acc = _run_adaptation(
-			adapt_mode, evaluator, best_genome, best_ce, best_acc, cfg,
-			num_classes=num_classes, total_features=total_features,
-		)
-
-	# Final evaluation
+	# ── Final evaluation ──────────────────────────────────────────────
 	print("\n=== Final Evaluation ===")
 	final_result = evaluator.evaluate_batch_full([best_genome])[0]
 	print(f"Final: CE={final_result.ce:.4f}, Acc={final_result.accuracy*100:.2f}%")
@@ -288,6 +313,7 @@ def _run_phase(
 	optimize_connections: bool,
 	num_classes: int,
 	total_features: int,
+	seed_population: list[ClusterGenome] | None = None,
 ) -> tuple[ClusterGenome, float, float]:
 	"""Run GA + TS for a single optimization phase."""
 	print(f"\n--- Phase: {phase_name} ---")
@@ -327,8 +353,11 @@ def _run_phase(
 		cached_evaluator=evaluator,
 	)
 
+	# Seed GA with grid search population if available, otherwise just the genome
+	initial_pop = seed_population if seed_population else [genome]
+
 	t0 = time.time()
-	ga_result = ga_strategy.optimize(initial_population=[genome])
+	ga_result = ga_strategy.optimize(initial_population=initial_pop)
 	ga_time = time.time() - t0
 	print(f"  GA {phase_name}: CE {best_ce:.4f} -> {ga_result.final_fitness:.4f}, "
 		  f"Acc {(ga_result.final_accuracy or 0)*100:.2f}% "
@@ -373,60 +402,6 @@ def _run_phase(
 		best_genome = ts_result.best_genome
 		best_ce = ts_result.final_fitness
 		best_acc = ts_result.final_accuracy or best_acc
-
-	return best_genome, best_ce, best_acc
-
-
-def _run_adaptation(
-	mode: str,
-	evaluator: IDSEvaluator,
-	genome: ClusterGenome,
-	best_ce: float,
-	best_acc: float,
-	cfg: IDSTrainConfig,
-	num_classes: int,
-	total_features: int,
-) -> tuple[ClusterGenome, float, float]:
-	"""Run stats-guided adaptation for a single mode (neurogenesis/axonogenesis/synaptogenesis)."""
-	print(f"\n--- Adaptation: {mode} ---")
-
-	adapt_config = AdaptStrategyConfig(
-		num_clusters=num_classes,
-		min_bits=4,
-		max_bits=24,
-		min_neurons=3,
-		max_neurons=30,
-		total_input_bits=total_features,
-		adaptation_mode=mode,
-		iterations=cfg.ts_iters,
-		population_size=cfg.population,
-		patience=cfg.patience,
-		fitness_calculator_type=FitnessCalculatorType.HARMONIC_RANK,
-		fitness_weight_ce=cfg.fitness_weight_ce,
-		fitness_weight_acc=cfg.fitness_weight_acc,
-	)
-
-	strategy = AdaptationStrategy(
-		config=adapt_config,
-		seed=cfg.seed + 2000,
-		logger=print,
-		cached_evaluator=evaluator,
-		phase_name=f"IDS-{mode}",
-	)
-
-	t0 = time.time()
-	result = strategy.optimize(initial_genome=genome)
-	elapsed = time.time() - t0
-	print(f"  {mode}: CE {best_ce:.4f} -> {result.final_fitness:.4f}, "
-		  f"Acc {(result.final_accuracy or 0)*100:.2f}% "
-		  f"({result.iterations_run} iters, {elapsed:.1f}s)")
-
-	if result.final_fitness < best_ce:
-		best_genome = result.best_genome
-		best_ce = result.final_fitness
-		best_acc = result.final_accuracy or best_acc
-	else:
-		best_genome = genome
 
 	return best_genome, best_ce, best_acc
 
