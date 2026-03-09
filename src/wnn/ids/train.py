@@ -31,7 +31,9 @@ from typing import Optional
 import numpy as np
 
 from wnn.ids import load_unsw_nb15, create_attack_only_dataset
+from wnn.ids.bitwise import create_bitwise_codebook, create_per_bit_dataset
 from wnn.ids.metrics import compute_ids_metrics, format_ids_report
+from wnn.ids.predict import predict_ids
 from wnn.ram.architecture.ids_evaluator import IDSEvaluator
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome, PhaseType
 from wnn.ram.strategies.connectivity.architecture_strategies import (
@@ -68,6 +70,7 @@ class IDSTrainConfig:
 	fitness_weight_ce: float = 0.3
 	fitness_weight_acc: float = 1.0
 	split: str = "standard"  # "standard" or "random"
+	bitwise_quick: bool = False  # Quick mode: grid search + connections only
 	output: Optional[str] = None
 
 
@@ -592,6 +595,219 @@ def run_hierarchical_experiment(cfg: IDSTrainConfig) -> dict:
 	return metrics
 
 
+def run_bitwise_experiment(cfg: IDSTrainConfig) -> dict:
+	"""Run bitwise ECOC attack classification with error-correcting codes.
+
+	Trains 7 independent binary classifiers, one per output bit of a [7,4,3]
+	Hamming codeword. At inference, the 7 predicted bits are decoded to the
+	nearest valid codeword (Hamming distance). Single-bit error correction
+	is free from the code's minimum distance of 3.
+
+	Pipeline per bit:
+		Grid search → GA neurons → TS neurons → GA bits → TS bits
+		→ GA connections → TS connections
+
+	With --bitwise-quick: Grid search → GA connections → TS connections only.
+	"""
+	print(f"=== Bitwise ECOC Attack Classifier (split={cfg.split}) ===")
+	print(f"Config: pop={cfg.population}, GA={cfg.ga_gens}gen, TS={cfg.ts_iters}iter, "
+		  f"patience={cfg.patience}")
+	print()
+
+	# ── Load attack-only dataset ──────────────────────────────────────
+	t0 = time.time()
+	full_dataset = load_unsw_nb15(n_bits=cfg.n_bits, split=cfg.split)
+	attack_dataset = create_attack_only_dataset(full_dataset)
+	total_features = attack_dataset.X_train.shape[1]
+	num_attack_classes = len(attack_dataset.category_names)
+	load_time = time.time() - t0
+	print(f"Loaded in {load_time:.1f}s: {total_features} features, {num_attack_classes} classes")
+
+	# ── Create Hamming codebook ───────────────────────────────────────
+	codebook = create_bitwise_codebook(attack_dataset.category_names, num_bits=7)
+	print()
+
+	# ── Train one binary classifier per output bit ────────────────────
+	bit_genomes = []
+	bit_accuracies = []
+	total_train_time = 0.0
+
+	for bit_idx in range(codebook.num_bits):
+		print(f"\n{'='*60}")
+		print(f"BIT {bit_idx}/{codebook.num_bits}: Training binary classifier")
+		print(f"{'='*60}")
+
+		# Create per-bit binary dataset
+		bit_dataset = create_per_bit_dataset(attack_dataset, codebook, bit_idx)
+
+		# Show bit class balance
+		n_zeros = int((bit_dataset.y_train_binary == 0).sum())
+		n_ones = int((bit_dataset.y_train_binary == 1).sum())
+		print(f"  Bit {bit_idx} balance: {n_zeros:,} zeros ({n_zeros*100/(n_zeros+n_ones):.1f}%), "
+			  f"{n_ones:,} ones ({n_ones*100/(n_zeros+n_ones):.1f}%)")
+
+		# Create evaluator for this bit (binary: 2 classes)
+		evaluator = IDSEvaluator(
+			dataset=bit_dataset,
+			classification="binary",
+			num_parts=cfg.num_parts,
+			seed=cfg.seed + bit_idx * 100,
+		)
+
+		# Grid search
+		grid_config = GridSearchConfig(
+			num_clusters=2,
+			neurons_grid=cfg.neurons_grid,
+			bits_grid=cfg.bits_grid,
+			top_k=cfg.grid_top_k,
+			population_size=cfg.population,
+			total_input_bits=total_features,
+			fitness_calculator_type=FitnessCalculatorType.HARMONIC_RANK,
+			fitness_weight_ce=cfg.fitness_weight_ce,
+			fitness_weight_acc=cfg.fitness_weight_acc,
+		)
+		grid_strategy = GridSearchStrategy(
+			config=grid_config,
+			batch_evaluator=evaluator,
+			seed=cfg.seed + bit_idx * 100,
+			logger=print,
+		)
+
+		t_bit = time.time()
+		grid_result = grid_strategy.optimize()
+		print(f"  Grid: CE={grid_result.final_fitness:.4f}, "
+			  f"Acc={grid_result.final_accuracy*100:.2f}%")
+
+		best_genome = grid_result.best_genome
+		best_ce = grid_result.final_fitness
+		best_acc = grid_result.final_accuracy or 0.0
+		seed_pop = grid_result.final_population
+
+		if cfg.bitwise_quick:
+			# Quick mode: only connections phase
+			best_genome, best_ce, best_acc = _run_phase(
+				"connections", evaluator, best_genome, best_ce, best_acc, cfg,
+				optimize_bits=False, optimize_neurons=False, optimize_connections=True,
+				num_classes=2, total_features=total_features,
+				seed_population=seed_pop,
+			)
+		else:
+			# Full pipeline: neurons → bits → connections
+			best_genome, best_ce, best_acc = _run_phase(
+				"neurons", evaluator, best_genome, best_ce, best_acc, cfg,
+				optimize_bits=False, optimize_neurons=True, optimize_connections=False,
+				num_classes=2, total_features=total_features,
+				seed_population=seed_pop,
+			)
+			best_genome, best_ce, best_acc = _run_phase(
+				"bits", evaluator, best_genome, best_ce, best_acc, cfg,
+				optimize_bits=True, optimize_neurons=False, optimize_connections=False,
+				num_classes=2, total_features=total_features,
+			)
+			best_genome, best_ce, best_acc = _run_phase(
+				"connections", evaluator, best_genome, best_ce, best_acc, cfg,
+				optimize_bits=False, optimize_neurons=False, optimize_connections=True,
+				num_classes=2, total_features=total_features,
+			)
+
+		# Final eval for this bit
+		final = evaluator.evaluate_batch_full([best_genome])[0]
+		bit_time = time.time() - t_bit
+		total_train_time += bit_time
+
+		print(f"  Bit {bit_idx} final: Acc={final.accuracy*100:.2f}%, "
+			  f"CE={final.ce:.4f} ({bit_time:.1f}s)")
+		print(f"  Genome: neurons={best_genome.neurons_per_cluster}, "
+			  f"bits={best_genome.bits_per_neuron}")
+
+		bit_genomes.append(best_genome)
+		bit_accuracies.append(final.accuracy)
+
+	# ── Combined evaluation via codeword decoding ─────────────────────
+	print(f"\n{'='*60}")
+	print("COMBINED EVALUATION: Codeword Decoding")
+	print(f"{'='*60}")
+	print(f"Per-bit accuracies: {[f'{a*100:.1f}%' for a in bit_accuracies]}")
+	print(f"Mean per-bit accuracy: {np.mean(bit_accuracies)*100:.2f}%")
+	print(f"Total training time: {total_train_time:.1f}s")
+
+	# Predict each bit on the test set using Python WNN predictor
+	# This re-trains each bit's classifier and returns per-example predictions
+	predicted_bits = np.zeros((len(attack_dataset.X_test), codebook.num_bits), dtype=bool)
+
+	print("  Running per-example prediction (Python WNN)...")
+	for bit_idx in range(codebook.num_bits):
+		bit_dataset = create_per_bit_dataset(attack_dataset, codebook, bit_idx)
+
+		# predict_ids trains the WNN and returns per-example test predictions
+		predictions = predict_ids(
+			genome=bit_genomes[bit_idx],
+			dataset=bit_dataset,
+			classification="binary",
+			empty_value=0.0,
+		)
+		# Binary classifier: class 1 means bit is set
+		predicted_bits[:, bit_idx] = predictions == 1
+		bit_acc = np.mean(predictions == bit_dataset.y_test_binary)
+		print(f"  Bit {bit_idx}: test acc={bit_acc*100:.2f}%")
+
+	# Decode predicted codewords to class indices
+	predicted_classes = codebook.decode_batch(predicted_bits)
+	true_classes = attack_dataset.y_test_multi
+
+	# Compute metrics
+	from sklearn.metrics import accuracy_score, classification_report
+	combined_acc = accuracy_score(true_classes, predicted_classes)
+	print(f"\n  Combined accuracy (codeword decoding): {combined_acc*100:.2f}%")
+	print(f"  Error correction: can correct {(codebook.min_distance - 1) // 2} bit errors")
+	print()
+	print(classification_report(
+		true_classes, predicted_classes,
+		target_names=attack_dataset.category_names,
+		zero_division=0,
+	))
+
+	metrics = {
+		"mode": "bitwise",
+		"split": cfg.split,
+		"num_classes": num_attack_classes,
+		"class_names": attack_dataset.category_names,
+		"codebook": {
+			"num_bits": codebook.num_bits,
+			"min_distance": codebook.min_distance,
+			"codewords": codebook.codewords.astype(int).tolist(),
+		},
+		"per_bit_accuracy": bit_accuracies,
+		"mean_bit_accuracy": float(np.mean(bit_accuracies)),
+		"combined_accuracy": float(combined_acc),
+		"total_train_time": total_train_time,
+		"bit_genomes": [
+			{
+				"bits_per_neuron": g.bits_per_neuron,
+				"neurons_per_cluster": g.neurons_per_cluster,
+				"total_neurons": g.total_neurons,
+			}
+			for g in bit_genomes
+		],
+		"config": {
+			"n_bits": cfg.n_bits,
+			"ga_gens": cfg.ga_gens,
+			"ts_iters": cfg.ts_iters,
+			"patience": cfg.patience,
+			"population": cfg.population,
+			"bitwise_quick": cfg.bitwise_quick,
+		},
+	}
+
+	if cfg.output:
+		output_path = Path(cfg.output)
+		output_path.parent.mkdir(parents=True, exist_ok=True)
+		output_path.write_text(json.dumps(metrics, indent=2, default=str))
+		print(f"\nResults saved to {cfg.output}")
+
+	return metrics
+
+
 def main():
 	parser = argparse.ArgumentParser(description="WNN IDS Classifier Training")
 	parser.add_argument("--classification", choices=["binary", "multi"], default="binary")
@@ -613,6 +829,10 @@ def main():
 		help="Evaluation protocol: 'standard' (temporal) or 'random' (i.i.d.)")
 	parser.add_argument("--hierarchical", action="store_true",
 		help="Two-stage: binary gate → attack type classifier")
+	parser.add_argument("--bitwise", action="store_true",
+		help="Bitwise ECOC: 7 binary classifiers with Hamming error correction")
+	parser.add_argument("--bitwise-quick", action="store_true",
+		help="Bitwise quick mode: grid search + connections only (skip neurons/bits phases)")
 	parser.add_argument("--output", type=str, default=None, help="JSON output path")
 	args = parser.parse_args()
 
@@ -631,10 +851,15 @@ def main():
 		fitness_weight_ce=args.fitness_ce_weight,
 		fitness_weight_acc=args.fitness_acc_weight,
 		split=args.split,
+		bitwise_quick=args.bitwise_quick,
 		output=args.output,
 	)
 
-	if args.hierarchical:
+	if args.bitwise or args.bitwise_quick:
+		if args.bitwise_quick:
+			cfg.bitwise_quick = True
+		run_bitwise_experiment(cfg)
+	elif args.hierarchical:
 		run_hierarchical_experiment(cfg)
 	else:
 		run_ids_experiment(cfg)
