@@ -4,17 +4,20 @@ Usage:
 	python -m wnn.ids.train --classification binary
 	python -m wnn.ids.train --classification multi
 
-Seven optimization phases (matching the LM pipeline structure):
-	0.  Grid search  — evaluate neuron × bit combinations to find best seed
-	1a. GA neurons    — explore neuron counts per class
-	1b. TS neurons    — refine neuron counts
-	2a. GA bits       — explore address bits per neuron
-	2b. TS bits       — refine address bits
+Ten optimization phases (GA → Adapt → TS per dimension):
+	0.  Grid search    — evaluate neuron × bit combos to find best seed
+	1a. GA neurons     — explore neuron counts per class
+	1b. Neurogenesis   — stats-guided neuron add/remove (planned, needs Rust hooks)
+	1c. TS neurons     — refine neuron counts
+	2a. GA bits        — explore address bits per neuron
+	2b. Synaptogenesis — stats-guided bit grow/prune (planned, needs Rust hooks)
+	2c. TS bits        — refine address bits
 	3a. GA connections — explore input wiring
-	3b. TS connections — refine input wiring
+	3b. Axonogenesis   — stats-guided connection rewiring (planned, needs Rust hooks)
+	3c. TS connections — refine input wiring
 
-Phases 8-10 (neurogenesis, axonogenesis, synaptogenesis) require Rust-side
-adaptation hooks in IDSEvaluator — planned for Phase B2.
+Currently runs 0 → 1a → 1c → 2a → 2c → 3a → 3c (7 phases).
+Adaptation phases (1b, 2b, 3b) require Rust-side training stats in IDSEvaluator.
 """
 
 import argparse
