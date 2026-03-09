@@ -366,6 +366,41 @@ pub fn evaluate_genomes_ids_cached_full_hybrid(
     )
 }
 
+/// Train a single genome on full training data and return per-example predictions on eval set.
+///
+/// Used by the bitwise ECOC classifier for per-bit predictions that are
+/// combined via nearest-codeword decoding.
+pub fn predict_examples_ids_cached(
+    cache: &IDSCache,
+    bits_flat: &[usize],
+    neurons_flat: &[usize],
+    connections_flat: &[i64],
+    empty_value: f32,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+) -> Vec<i64> {
+    let train = cache.full_train();
+    let eval = cache.full_eval();
+
+    crate::adaptive::train_and_predict_single(
+        bits_flat,
+        neurons_flat,
+        connections_flat,
+        cache.num_classes(),
+        &train.input_bits,
+        &train.targets,
+        &train.negatives,
+        train.num_examples,
+        cache.num_negatives(),
+        &eval.input_bits,
+        eval.num_examples,
+        cache.total_features(),
+        empty_value,
+        neuron_sample_rate,
+        rng_seed,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

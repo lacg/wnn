@@ -320,6 +320,26 @@ class IDSEvaluator(BaseEvaluator):
 
 		return OffspringSearchResult(genomes=genomes, evaluated=evaluated, viable=viable)
 
+	def predict(
+		self,
+		genome: ClusterGenome,
+		rng_seed: int = 0,
+	) -> list[int]:
+		"""Train genome on full training data and return per-example test predictions.
+
+		Returns list of predicted class indices for each eval example.
+		Uses the Rust accelerator with GPU for both training and inference.
+		"""
+		bits_flat, neurons_flat, connections_flat = self._flatten_genomes([genome])
+		return self._cache.predict_examples(
+			bits_flat,
+			neurons_flat,
+			connections_flat,
+			self._empty_value,
+			self._neuron_sample_rate,
+			rng_seed,
+		)
+
 	def reset(self, seed: Optional[int] = None) -> None:
 		self._cache.reset(seed)
 		self._train_call_count = 0

@@ -11,6 +11,20 @@ Always use context7 when I need code generation, setup or configuration steps, o
 ### Commit and Push
 **ALWAYS commit and push after making changes.** After any new features, bug fixes, or test scripts that have been successfully compiled, verified, and quickly tested, immediately commit and push to the repository with a proper message. Do not wait for the user to ask - this should be automatic.
 
+### Memory Mode: QUAD_WEIGHTED Always
+**The default memory mode is QUAD_WEIGHTED (mode=2). NEVER use TERNARY mode.**
+- QUAD_WEIGHTED uses 4-state nudging cells: FALSE=0.0, WEAK_FALSE=0.25, WEAK_TRUE=0.75, TRUE=1.0
+- This provides graduated confidence instead of binary True/False
+- The Rust accelerator default is set in `neuron_memory.rs` (`MEMORY_MODE` AtomicU32 = 2)
+- All CPU fallback paths in `adaptive.rs` must use `cell_to_weight()` — never hardcode `FALSE => 0.0, TRUE => 1.0, _ => empty_value`
+- Metal GPU shaders already handle QUAD_WEIGHTED via `QUAD_WEIGHTS[cell_value]`
+
+### No Python Shortcuts for Rust Operations
+**NEVER reimplement Rust accelerator logic in Python.** If the Rust accelerator doesn't expose a needed function (like per-example predictions), add it to Rust properly — modify `adaptive.rs` / `ids_cache.rs` / `lib.rs`, rebuild with `maturin develop --release`. Python shortcut reimplementations:
+- Run slower (no GPU, no rayon parallelism)
+- Produce different results (wrong memory mode, missing QUAD_WEIGHTED)
+- Create maintenance burden (two implementations to keep in sync)
+
 ### iOS/iPadOS/macOS Development
 All Apple platform code (Swift/SwiftUI) should:
 - **Target version 26** (iOS 26, iPadOS 26, macOS 26)

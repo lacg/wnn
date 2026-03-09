@@ -161,6 +161,28 @@ fn get_empty_value() -> f32 {
     crate::neuron_memory::get_empty_value()
 }
 
+/// Convert a raw cell value to a forward-pass weight based on memory mode.
+///
+/// - TERNARY: FALSE=0.0, TRUE=1.0, EMPTY=empty_value
+/// - QUAD_WEIGHTED: QUAD_WEIGHTS[cell] = [0.0, 0.25, 0.75, 1.0]
+/// - QUAD_BINARY: same as QUAD_WEIGHTED (uses same 4-state encoding)
+#[inline(always)]
+fn cell_to_weight(cell: i64, memory_mode: u8, empty_value: f32) -> f32 {
+    match memory_mode {
+        crate::neuron_memory::MODE_QUAD_BINARY | crate::neuron_memory::MODE_QUAD_WEIGHTED => {
+            crate::neuron_memory::QUAD_WEIGHTS[cell.clamp(0, 3) as usize]
+        }
+        _ => {
+            // TERNARY
+            match cell {
+                FALSE => 0.0,
+                TRUE => 1.0,
+                _ => empty_value,
+            }
+        }
+    }
+}
+
 /// Check if group coalescing is enabled (set WNN_COALESCE_GROUPS=1)
 fn use_coalesced_groups() -> bool {
     std::env::var("WNN_COALESCE_GROUPS").is_ok()
@@ -1645,11 +1667,7 @@ pub fn evaluate_genomes_parallel(
                         let conn_start = neuron_conn_offsets[global_n];
                         let address = compute_address(input_bits, &original_connections[conn_start..], n_bits);
                         let cell = memory.read(neuron_base + n, address);
-                        sum += match cell {
-                            FALSE => 0.0,
-                            TRUE => 1.0,
-                            _ => empty_value,
-                        };
+                        sum += cell_to_weight(cell, memory_mode, empty_value);
                     }
 
                     scores[cluster_id] = (sum / actual_neurons as f32) as f64;
@@ -2636,11 +2654,7 @@ pub fn evaluate_genome_hybrid(
                             let conn_start = conn_base + n * group.bits;
                             let address = compute_address(input_bits, &export.connections[conn_start..], group.bits);
                             let cell = sparse_export.lookup(neuron_base + n, address as u64);
-                            sum += match cell as i64 {
-                                FALSE => 0.0,
-                                TRUE => 1.0,
-                                _ => empty_value,
-                            };
+                            sum += cell_to_weight(cell as i64, memory_mode, empty_value);
                         }
 
                         scores[cluster_id] = (sum / actual_neurons as f32) as f64;  // Divide by actual
@@ -2715,11 +2729,7 @@ pub fn evaluate_genome_hybrid(
                             let conn_start = conn_base + n * group.bits;
                             let address = compute_address(input_bits, &export.connections[conn_start..], group.bits);
                             let cell = read_cell(dense_words, neuron_base + n, address, group.words_per_neuron);
-                            sum += match cell {
-                                FALSE => 0.0,
-                                TRUE => 1.0,
-                                _ => empty_value,
-                            };
+                            sum += cell_to_weight(cell, memory_mode, empty_value);
                         }
 
                         scores[cluster_id] = (sum / actual_neurons as f32) as f64;
@@ -2766,6 +2776,270 @@ pub fn evaluate_genome_hybrid(
     let accuracy = total_correct as f64 / num_eval as f64;
 
     (avg_ce, accuracy)
+}
+
+/// Predict per-example class indices for a single trained genome.
+///
+/// Same score computation as `evaluate_genome_hybrid`, but returns
+/// Vec<i64> of predicted class indices instead of (CE, accuracy).
+/// Used by the bitwise ECOC classifier to combine per-bit predictions.
+pub fn predict_genome_hybrid(
+    export: &GenomeExport,
+    eval_input_bits: &[bool],
+    num_eval: usize,
+    num_clusters: usize,
+    total_input_bits: usize,
+    empty_value: f32,
+    metal: Option<&crate::metal_ramlm::MetalRAMLMEvaluator>,
+    sparse_metal: Option<&crate::metal_ramlm::MetalSparseEvaluator>,
+) -> Vec<i64> {
+    let memory_mode = crate::neuron_memory::get_memory_mode();
+
+    // Pack eval input bits to u64 for GPU
+    let (packed_eval, words_per_example) = crate::neuron_memory::pack_bools_to_u64(
+        eval_input_bits, num_eval, total_input_bits
+    );
+
+    // Build per-example scores (same as evaluate_genome_hybrid CPU path)
+    let mut all_scores: Vec<Vec<f64>> = vec![vec![0.0; num_clusters]; num_eval];
+
+    let mut dense_idx = 0usize;
+    let mut sparse_idx = 0usize;
+
+    for (is_sparse, group_idx, cluster_ids) in &export.group_info {
+        let group = &export.groups[*group_idx];
+
+        if *is_sparse {
+            let sparse_export = &export.sparse_exports[sparse_idx];
+            sparse_idx += 1;
+
+            let gpu_success = if let Some(sparse_eval) = sparse_metal {
+                match evaluate_group_sparse_gpu(
+                    sparse_eval,
+                    &packed_eval,
+                    &export.connections,
+                    sparse_export,
+                    group,
+                    num_eval,
+                    words_per_example,
+                    memory_mode,
+                ) {
+                    Ok(group_scores) => {
+                        let num_group_clusters = group.cluster_count();
+                        all_scores.par_iter_mut().enumerate().for_each(|(ex_idx, scores)| {
+                            for (local_cluster, &cluster_id) in cluster_ids.iter().enumerate() {
+                                let score_idx = ex_idx * num_group_clusters + local_cluster;
+                                scores[cluster_id] = group_scores[score_idx] as f64;
+                            }
+                        });
+                        true
+                    }
+                    Err(_) => false,
+                }
+            } else {
+                false
+            };
+
+            if !gpu_success {
+                all_scores.par_iter_mut().enumerate().for_each(|(ex_idx, scores)| {
+                    let input_start = ex_idx * total_input_bits;
+                    let input_bits = &eval_input_bits[input_start..input_start + total_input_bits];
+
+                    for (local_cluster, &cluster_id) in cluster_ids.iter().enumerate() {
+                        let actual_neurons = if let Some(ref an) = group.actual_neurons {
+                            an[local_cluster] as usize
+                        } else {
+                            group.neurons
+                        };
+
+                        let neuron_base = local_cluster * group.neurons;
+                        let conn_base = group.conn_offset + local_cluster * group.neurons * group.bits;
+
+                        let mut sum = 0.0f32;
+                        for n in 0..actual_neurons {
+                            let conn_start = conn_base + n * group.bits;
+                            let address = compute_address(input_bits, &export.connections[conn_start..], group.bits);
+                            let cell = sparse_export.lookup(neuron_base + n, address as u64);
+                            sum += cell_to_weight(cell as i64, memory_mode, empty_value);
+                        }
+
+                        scores[cluster_id] = (sum / actual_neurons as f32) as f64;
+                    }
+                });
+            }
+        } else {
+            let dense_words = &export.dense_exports[dense_idx];
+            dense_idx += 1;
+
+            let gpu_success = if let Some(metal_eval) = metal {
+                match evaluate_group_metal(
+                    metal_eval,
+                    &packed_eval,
+                    &export.connections,
+                    dense_words,
+                    group,
+                    num_eval,
+                    words_per_example,
+                    memory_mode,
+                ) {
+                    Ok(group_scores) => {
+                        let num_group_clusters = group.cluster_count();
+                        all_scores.par_iter_mut().enumerate().for_each(|(ex_idx, scores)| {
+                            for (local_cluster, &cluster_id) in cluster_ids.iter().enumerate() {
+                                let score_idx = ex_idx * num_group_clusters + local_cluster;
+                                scores[cluster_id] = group_scores[score_idx] as f64;
+                            }
+                        });
+                        true
+                    }
+                    Err(_) => false,
+                }
+            } else {
+                false
+            };
+
+            if !gpu_success {
+                all_scores.par_iter_mut().enumerate().for_each(|(ex_idx, scores)| {
+                    let input_start = ex_idx * total_input_bits;
+                    let input_bits = &eval_input_bits[input_start..input_start + total_input_bits];
+
+                    for (local_cluster, &cluster_id) in cluster_ids.iter().enumerate() {
+                        let actual_neurons = if let Some(ref an) = group.actual_neurons {
+                            an[local_cluster] as usize
+                        } else {
+                            group.neurons
+                        };
+
+                        let neuron_base = local_cluster * group.neurons;
+                        let conn_base = group.conn_offset + local_cluster * group.neurons * group.bits;
+
+                        let mut sum = 0.0f32;
+                        for n in 0..actual_neurons {
+                            let conn_start = conn_base + n * group.bits;
+                            let address = compute_address(input_bits, &export.connections[conn_start..], group.bits);
+                            let cell = read_cell(dense_words, neuron_base + n, address, group.words_per_neuron);
+                            sum += cell_to_weight(cell, memory_mode, empty_value);
+                        }
+
+                        scores[cluster_id] = (sum / actual_neurons as f32) as f64;
+                    }
+                });
+            }
+        }
+    }
+
+    // Return argmax predictions (not CE/accuracy)
+    all_scores.par_iter().map(|scores| {
+        scores.iter().enumerate()
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+            .map(|(idx, _)| idx as i64)
+            .unwrap_or(0)
+    }).collect()
+}
+
+/// Train a single genome and return per-example predicted class indices.
+///
+/// Combines the training path from `evaluate_genomes_parallel_hybrid` (single genome)
+/// with `predict_genome_hybrid` for per-example predictions.
+#[allow(clippy::too_many_arguments)]
+pub fn train_and_predict_single(
+    genomes_bits_flat: &[usize],
+    genomes_neurons_flat: &[usize],
+    genomes_connections_flat: &[i64],
+    num_clusters: usize,
+    train_input_bits: &[bool],
+    train_targets: &[i64],
+    train_negatives: &[i64],
+    num_train: usize,
+    num_negatives: usize,
+    eval_input_bits: &[bool],
+    num_eval: usize,
+    total_input_bits: usize,
+    empty_value: f32,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+) -> Vec<i64> {
+    let memory_mode = crate::neuron_memory::get_memory_mode();
+
+    // Extract single genome config
+    let neurons_per_cluster = genomes_neurons_flat;
+    let per_neuron_bits = genomes_bits_flat;
+    let bits_per_cluster = per_cluster_max_bits(per_neuron_bits, neurons_per_cluster);
+
+    let (cluster_neuron_starts, neuron_conn_offsets) =
+        build_neuron_metadata(per_neuron_bits, neurons_per_cluster);
+    let groups = build_groups(&bits_per_cluster, neurons_per_cluster);
+
+    let mut cluster_to_group: Vec<(usize, usize)> = vec![(0, 0); num_clusters];
+    for (group_idx, group) in groups.iter().enumerate() {
+        for (local_idx, &cluster_id) in group.cluster_ids.iter().enumerate() {
+            cluster_to_group[cluster_id] = (group_idx, local_idx);
+        }
+    }
+
+    let memories: Vec<GroupMemory> = groups.iter()
+        .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
+        .collect();
+
+    let original_connections = genomes_connections_flat.to_vec();
+
+    // Pack training input for GPU address computation
+    let (packed_train_input, words_per_example) =
+        crate::neuron_memory::pack_bools_to_u64(train_input_bits, num_train, total_input_bits);
+
+    let gpu_addresses = try_gpu_addresses_adaptive(
+        &packed_train_input,
+        words_per_example,
+        per_neuron_bits,
+        &neuron_conn_offsets,
+        &original_connections,
+        num_train,
+    );
+
+    // Train
+    train_genome_in_slot(
+        &memories,
+        &groups,
+        &original_connections,
+        per_neuron_bits,
+        &cluster_neuron_starts,
+        &neuron_conn_offsets,
+        &cluster_to_group,
+        train_input_bits,
+        train_targets,
+        train_negatives,
+        num_train,
+        num_negatives,
+        total_input_bits,
+        gpu_addresses.as_deref(),
+        neuron_sample_rate,
+        rng_seed,
+        memory_mode,
+    );
+
+    // Export and predict
+    let gpu_connections = reorganize_connections_for_gpu(
+        &original_connections,
+        per_neuron_bits,
+        neurons_per_cluster,
+        &groups,
+    );
+    let export = export_genome_for_gpu(&memories, &groups, &gpu_connections);
+
+    // Get Metal evaluators for GPU prediction
+    let metal = get_metal_evaluator();
+    let sparse_metal = get_sparse_metal_evaluator();
+
+    predict_genome_hybrid(
+        &export,
+        eval_input_bits,
+        num_eval,
+        num_clusters,
+        total_input_bits,
+        empty_value,
+        metal.as_deref(),
+        sparse_metal.as_deref(),
+    )
 }
 
 /// Evaluate genomes in PARALLEL with CPU+GPU HYBRID evaluation and PIPELINING.
@@ -3290,11 +3564,7 @@ pub fn evaluate_genome_with_gating(
                     let conn_start = conn_base + n * group.bits;
                     let address = compute_address(input_bits, &connections[conn_start..], group.bits);
                     let cell = memory.read(neuron_base + n, address);
-                    sum += match cell {
-                        FALSE => 0.0,
-                        TRUE => 1.0,
-                        _ => empty_value,
-                    };
+                    sum += cell_to_weight(cell, memory_mode, empty_value);
                 }
 
                 scores[cluster_id] = (sum / actual_neurons as f32) as f64;

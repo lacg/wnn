@@ -33,7 +33,6 @@ import numpy as np
 from wnn.ids import load_unsw_nb15, create_attack_only_dataset
 from wnn.ids.bitwise import create_bitwise_codebook, create_per_bit_dataset
 from wnn.ids.metrics import compute_ids_metrics, format_ids_report
-from wnn.ids.predict import predict_ids
 from wnn.ram.architecture.ids_evaluator import IDSEvaluator
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome, PhaseType
 from wnn.ram.strategies.connectivity.architecture_strategies import (
@@ -731,21 +730,23 @@ def run_bitwise_experiment(cfg: IDSTrainConfig) -> dict:
 	print(f"Mean per-bit accuracy: {np.mean(bit_accuracies)*100:.2f}%")
 	print(f"Total training time: {total_train_time:.1f}s")
 
-	# Predict each bit on the test set using Python WNN predictor
-	# This re-trains each bit's classifier and returns per-example predictions
+	# Predict each bit on the test set using Rust GPU accelerator
+	# Each bit's classifier is re-trained on full data and predicts on eval set
 	predicted_bits = np.zeros((len(attack_dataset.X_test), codebook.num_bits), dtype=bool)
 
-	print("  Running per-example prediction (Python WNN)...")
+	print("  Running per-example prediction (Rust GPU)...")
 	for bit_idx in range(codebook.num_bits):
 		bit_dataset = create_per_bit_dataset(attack_dataset, codebook, bit_idx)
 
-		# predict_ids trains the WNN and returns per-example test predictions
-		predictions = predict_ids(
-			genome=bit_genomes[bit_idx],
+		# Create evaluator for this bit to get full-data predictions
+		pred_evaluator = IDSEvaluator(
 			dataset=bit_dataset,
 			classification="binary",
-			empty_value=0.0,
+			num_parts=1,
+			seed=cfg.seed + bit_idx * 100,
 		)
+		# predict() trains on full training data and returns per-example eval predictions
+		predictions = np.array(pred_evaluator.predict(bit_genomes[bit_idx]))
 		# Binary classifier: class 1 means bit is set
 		predicted_bits[:, bit_idx] = predictions == 1
 		bit_acc = np.mean(predictions == bit_dataset.y_test_binary)

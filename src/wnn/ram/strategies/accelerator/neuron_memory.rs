@@ -64,7 +64,7 @@ pub const MODE_QUAD_WEIGHTED: u8 = 2;
 //   0.5 = EMPTY cells add uncertainty (old default)
 
 static EMPTY_VALUE_BITS: AtomicU32 = AtomicU32::new(0); // 0.0f32 as bits
-static MEMORY_MODE: AtomicU32 = AtomicU32::new(0); // MODE_TERNARY by default
+static MEMORY_MODE: AtomicU32 = AtomicU32::new(2); // MODE_QUAD_WEIGHTED by default
 
 /// Get the global EMPTY cell value for ternary forward pass.
 pub fn get_empty_value() -> f32 {
