@@ -64,63 +64,114 @@ class IDSDataset:
 	feature_names: list[str]  # feature names in order
 
 
+HF_DATASET_ID = "lacg030175/UNSW-NB15"
+
+
+def _load_from_huggingface(config: str) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
+	"""Load train/test from our published HuggingFace dataset.
+
+	Configs: "standard" (175K/82K temporal) or "random" (1.4M/158K deduped).
+	"""
+	from datasets import load_dataset
+
+	print(f"  Loading from HuggingFace: {HF_DATASET_ID} ({config})...")
+	ds = load_dataset(HF_DATASET_ID, config)
+	df_train = ds["train"].to_pandas()
+	df_test = ds["test"].to_pandas()
+
+	# Features: everything except labels and IDs
+	exclude = {"id", "label", "Label", "attack_cat", "Attack_cat"}
+	if config == "random":
+		# Random config has IP/port columns — drop nominal features
+		exclude |= {"srcip", "dstip", "sport", "dsport"}
+	common_features = sorted((set(df_train.columns) - exclude) & (set(df_test.columns) - exclude))
+
+	# Encode any string columns as integers
+	from sklearn.preprocessing import LabelEncoder
+	for col in common_features:
+		if df_train[col].dtype == object:
+			le = LabelEncoder()
+			le.fit(pd.concat([df_train[col], df_test[col]]).astype(str).fillna("?"))
+			df_train[col] = le.transform(df_train[col].astype(str).fillna("?"))
+			df_test[col] = le.transform(df_test[col].astype(str).fillna("?"))
+
+	print(f"  {config.capitalize()} split: {len(df_train):,} train, {len(df_test):,} test")
+	print(f"  Using {len(common_features)} features")
+	return df_train, df_test, common_features
+
+
+def _load_standard_split_local(data_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
+	"""Fallback: load standard split from local CSV files."""
+	df_train = pd.read_csv(data_dir / "UNSW_NB15_training-set.csv")
+	test_csv = data_dir / "UNSW_NB15_testing-set.csv"
+	if test_csv.exists():
+		df_test = pd.read_csv(test_csv, encoding="utf-8-sig")
+	else:
+		print("  WARNING: Test CSV not found, falling back to parquet (34 features)")
+		df_test = pd.read_parquet(data_dir / "train.parquet")
+
+	exclude = {"id", "label", "Label", "attack_cat", "Attack_cat"}
+	common_features = sorted((set(df_train.columns) - exclude) & (set(df_test.columns) - exclude))
+	print(f"  Standard split (local): {len(df_train):,} train, {len(df_test):,} test")
+	print(f"  Using {len(common_features)} features")
+	return df_train, df_test, common_features
+
+
 def load_unsw_nb15(
 	data_dir: str | Path | None = None,
 	n_bits: int = 8,
 	method: ThermometerType = ThermometerType.DISTRIBUTIVE,
+	split: str = "standard",
 ) -> IDSDataset:
 	"""Load UNSW-NB15 with thermometer encoding.
 
-	Uses both CSV files (training + testing) with all 42 features.
+	Primary source: our published HuggingFace dataset (lacg030175/UNSW-NB15).
+	Fallback: local CSV files (standard split only).
+
+	Two evaluation protocols:
+	- "standard": Original temporal train/test (175K/82K, ~87% RF baseline)
+	- "random": Deduped 90/10 random split (1.4M/158K, ~99.6% RF baseline)
 
 	Args:
-		data_dir: path to data/unsw-nb15/ directory. Auto-detected if None.
+		data_dir: path to local data directory (fallback only). Auto-detected if None.
 		n_bits: bits per numeric feature for thermometer encoding.
 		method: thermometer encoding strategy.
+		split: "standard" or "random" evaluation protocol.
 
 	Returns:
 		IDSDataset with binary-encoded features and labels.
 	"""
-	if data_dir is None:
-		# Auto-detect from project root
-		candidates = [
-			Path(__file__).parents[4] / "data" / "unsw-nb15",
-			Path.cwd() / "data" / "unsw-nb15",
-		]
-		for c in candidates:
-			if c.exists():
-				data_dir = c
-				break
-		if data_dir is None:
-			raise FileNotFoundError(
-				"UNSW-NB15 data not found. Expected at data/unsw-nb15/. "
-				"Run explore_unsw_nb15.py to download."
-			)
-	data_dir = Path(data_dir)
+	if split not in ("standard", "random"):
+		raise ValueError(f"split must be 'standard' or 'random', got '{split}'")
 
 	# ── Load raw data ──────────────────────────────────────────────────
-	print(f"Loading UNSW-NB15 from {data_dir}...")
+	print(f"Loading UNSW-NB15 (split={split})...")
 
-	# CSV training set (175K rows, all 45 columns)
-	df_train = pd.read_csv(data_dir / "UNSW_NB15_training-set.csv")
-
-	# CSV testing set (82K rows, all 45 columns)
-	test_csv = data_dir / "UNSW_NB15_testing-set.csv"
-	if test_csv.exists():
-		df_test = pd.read_csv(test_csv, encoding="utf-8-sig")  # BOM-aware
-	else:
-		# Fallback to parquet (missing 8 features)
-		print("  WARNING: Test CSV not found, falling back to parquet (34 features)")
-		df_test = pd.read_parquet(data_dir / "train.parquet")
-
-	# ── Use all features present in BOTH files ─────────────────────────
-	exclude = {"id", "label", "Label", "attack_cat", "Attack_cat"}
-	train_features = set(df_train.columns) - exclude
-	test_features = set(df_test.columns) - exclude
-	common_features = sorted(train_features & test_features)
-
-	print(f"  Train: {len(df_train):,} rows, Test: {len(df_test):,} rows")
-	print(f"  Using {len(common_features)} features")
+	try:
+		df_train, df_test, common_features = _load_from_huggingface(split)
+	except Exception as e:
+		if split == "random":
+			raise RuntimeError(
+				f"Random split requires HuggingFace dataset ({HF_DATASET_ID}). "
+				f"Install: pip install datasets\nError: {e}"
+			)
+		# Fallback to local CSVs for standard split only
+		print(f"  HuggingFace unavailable ({e}), trying local CSV fallback...")
+		if data_dir is None:
+			candidates = [
+				Path(__file__).parents[4] / "data" / "unsw-nb15",
+				Path.cwd() / "data" / "unsw-nb15",
+			]
+			for c in candidates:
+				if c.exists():
+					data_dir = c
+					break
+			if data_dir is None:
+				raise FileNotFoundError(
+					f"UNSW-NB15 data not found. Install 'datasets' for HuggingFace "
+					f"or place CSVs at data/unsw-nb15/. Original error: {e}"
+				)
+		df_train, df_test, common_features = _load_standard_split_local(Path(data_dir))
 
 	# ── Extract labels ─────────────────────────────────────────────────
 	# Binary labels

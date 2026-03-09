@@ -67,6 +67,7 @@ class IDSTrainConfig:
 	# Fitness: accuracy-dominant for IDS (CE is just a training signal)
 	fitness_weight_ce: float = 0.3
 	fitness_weight_acc: float = 1.0
+	split: str = "standard"  # "standard" or "random"
 	output: Optional[str] = None
 
 
@@ -160,13 +161,13 @@ def create_asymmetric_genome(
 
 def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 	"""Run full IDS training experiment."""
-	print(f"=== WNN IDS Classifier ({cfg.classification}) ===")
+	print(f"=== WNN IDS Classifier ({cfg.classification}, split={cfg.split}) ===")
 	print(f"Config: pop={cfg.population}, GA={cfg.ga_gens}gen, TS={cfg.ts_iters}iter, "
 		  f"patience={cfg.patience}, fitness_weights=(CE={cfg.fitness_weight_ce}, Acc={cfg.fitness_weight_acc})")
 
 	# Load dataset
 	t0 = time.time()
-	dataset = load_unsw_nb15(n_bits=cfg.n_bits)
+	dataset = load_unsw_nb15(n_bits=cfg.n_bits, split=cfg.split)
 	total_features = dataset.X_train.shape[1]
 	print(f"Dataset: {dataset.X_train.shape[0]:,} train, {dataset.X_test.shape[0]:,} test, "
 		  f"{total_features} features ({time.time()-t0:.1f}s)")
@@ -271,6 +272,7 @@ def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 
 	metrics = {
 		"classification": cfg.classification,
+		"split": cfg.split,
 		"num_classes": num_classes,
 		"total_features": total_features,
 		"ce": final_result.ce,
@@ -426,6 +428,8 @@ def main():
 		help="CE weight in fitness ranking (lower = more accuracy-focused)")
 	parser.add_argument("--fitness-acc-weight", type=float, default=1.0,
 		help="Accuracy weight in fitness ranking")
+	parser.add_argument("--split", choices=["standard", "random"], default="standard",
+		help="Evaluation protocol: 'standard' (temporal) or 'random' (i.i.d.)")
 	parser.add_argument("--output", type=str, default=None, help="JSON output path")
 	args = parser.parse_args()
 
@@ -443,6 +447,7 @@ def main():
 		seed=args.seed,
 		fitness_weight_ce=args.fitness_ce_weight,
 		fitness_weight_acc=args.fitness_acc_weight,
+		split=args.split,
 		output=args.output,
 	)
 
