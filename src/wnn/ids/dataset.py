@@ -134,14 +134,9 @@ def _load_from_huggingface(config: str) -> tuple[pd.DataFrame, pd.DataFrame, lis
 		exclude |= {"srcip", "dstip", "sport", "dsport"}
 	common_features = sorted((set(df_train.columns) - exclude) & (set(df_test.columns) - exclude))
 
-	# Encode any string columns as integers
-	from sklearn.preprocessing import LabelEncoder
-	for col in common_features:
-		if df_train[col].dtype == object:
-			le = LabelEncoder()
-			le.fit(pd.concat([df_train[col], df_test[col]]).astype(str).fillna("?"))
-			df_train[col] = le.transform(df_train[col].astype(str).fillna("?"))
-			df_test[col] = le.transform(df_test[col].astype(str).fillna("?"))
+	# Note: string columns (proto, service, state) are kept as-is.
+	# ThermometerEncoder handles them as categoricals with binary coding,
+	# which is correct (no false ordering imposed by LabelEncoder).
 
 	print(f"  {config.capitalize()} split: {len(df_train):,} train, {len(df_test):,} test")
 	print(f"  Using {len(common_features)} features")
