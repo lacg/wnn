@@ -3,7 +3,16 @@
 Usage:
 	python -m wnn.ids.train --classification binary
 	python -m wnn.ids.train --classification multi
-	python -m wnn.ids.train --classification binary --ga-gens 250 --ts-iters 250 --patience 5
+
+Six optimization phases:
+	GA/TS (random search):
+		1. neurons      — GA+TS on neuron counts per class
+		2. bits         — GA+TS on address bits per neuron
+		3. connections  — GA+TS on input wiring
+	Adaptation (stats-guided):
+		4. neurogenesis  — add/remove neurons based on error/fill stats
+		5. axonogenesis  — rewire connections based on entropy
+		6. synaptogenesis — grow/prune address space based on utilization
 """
 
 import argparse
@@ -24,6 +33,8 @@ from wnn.ram.strategies.connectivity.architecture_strategies import (
 	ArchitectureConfig,
 	ArchitectureGAStrategy,
 	ArchitectureTSStrategy,
+	AdaptationConfig as AdaptStrategyConfig,
+	AdaptationStrategy,
 )
 from wnn.ram.strategies.connectivity.generic_strategies import GAConfig, TSConfig
 from wnn.ram.fitness import FitnessCalculatorType
@@ -37,7 +48,7 @@ class IDSTrainConfig:
 	neurons: int = 10
 	address_bits: int = 12
 	# Optimization
-	ga_gens: int = 50
+	ga_gens: int = 250
 	ts_iters: int = 250
 	patience: int = 5
 	population: int = 150
@@ -216,6 +227,13 @@ def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 		num_classes=num_classes, total_features=total_features,
 	)
 
+	# Phase 4-6: Stats-guided adaptation (neurogenesis, axonogenesis, synaptogenesis)
+	for adapt_mode in ["neurogenesis", "axonogenesis", "synaptogenesis"]:
+		best_genome, best_ce, best_acc = _run_adaptation(
+			adapt_mode, evaluator, best_genome, best_ce, best_acc, cfg,
+			num_classes=num_classes, total_features=total_features,
+		)
+
 	# Final evaluation
 	print("\n=== Final Evaluation ===")
 	final_result = evaluator.evaluate_batch_full([best_genome])[0]
@@ -359,13 +377,67 @@ def _run_phase(
 	return best_genome, best_ce, best_acc
 
 
+def _run_adaptation(
+	mode: str,
+	evaluator: IDSEvaluator,
+	genome: ClusterGenome,
+	best_ce: float,
+	best_acc: float,
+	cfg: IDSTrainConfig,
+	num_classes: int,
+	total_features: int,
+) -> tuple[ClusterGenome, float, float]:
+	"""Run stats-guided adaptation for a single mode (neurogenesis/axonogenesis/synaptogenesis)."""
+	print(f"\n--- Adaptation: {mode} ---")
+
+	adapt_config = AdaptStrategyConfig(
+		num_clusters=num_classes,
+		min_bits=4,
+		max_bits=24,
+		min_neurons=3,
+		max_neurons=30,
+		total_input_bits=total_features,
+		adaptation_mode=mode,
+		iterations=cfg.ts_iters,
+		population_size=cfg.population,
+		patience=cfg.patience,
+		fitness_calculator_type=FitnessCalculatorType.HARMONIC_RANK,
+		fitness_weight_ce=cfg.fitness_weight_ce,
+		fitness_weight_acc=cfg.fitness_weight_acc,
+	)
+
+	strategy = AdaptationStrategy(
+		config=adapt_config,
+		seed=cfg.seed + 2000,
+		logger=print,
+		cached_evaluator=evaluator,
+		phase_name=f"IDS-{mode}",
+	)
+
+	t0 = time.time()
+	result = strategy.optimize(initial_genome=genome)
+	elapsed = time.time() - t0
+	print(f"  {mode}: CE {best_ce:.4f} -> {result.final_fitness:.4f}, "
+		  f"Acc {(result.final_accuracy or 0)*100:.2f}% "
+		  f"({result.iterations_run} iters, {elapsed:.1f}s)")
+
+	if result.final_fitness < best_ce:
+		best_genome = result.best_genome
+		best_ce = result.final_fitness
+		best_acc = result.final_accuracy or best_acc
+	else:
+		best_genome = genome
+
+	return best_genome, best_ce, best_acc
+
+
 def main():
 	parser = argparse.ArgumentParser(description="WNN IDS Classifier Training")
 	parser.add_argument("--classification", choices=["binary", "multi"], default="binary")
 	parser.add_argument("--n-bits", type=int, default=8, help="Thermometer encoding bits")
 	parser.add_argument("--neurons", type=int, default=10, help="Initial neurons per class (binary)")
 	parser.add_argument("--bits", type=int, default=12, help="Initial address bits per neuron (binary)")
-	parser.add_argument("--ga-gens", type=int, default=50)
+	parser.add_argument("--ga-gens", type=int, default=250)
 	parser.add_argument("--ts-iters", type=int, default=250)
 	parser.add_argument("--patience", type=int, default=5)
 	parser.add_argument("--population", type=int, default=150)
