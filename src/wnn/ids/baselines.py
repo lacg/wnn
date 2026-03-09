@@ -270,21 +270,149 @@ def run_raw_baselines():
 	return results
 
 
-if __name__ == "__main__":
-	# Run both: encoded (for WNN comparison) and raw (true baselines)
-	encoded = run_baselines()
-	raw = run_raw_baselines()
+def run_random_split_baselines():
+	"""Run RF and XGBoost with FWIW's random-split methodology.
+
+	Replicates FWIW's evaluation protocol:
+	1. Load full 2.28M records (HuggingFace Mouwiya/UNSW-NB15)
+	2. Drop duplicates (~30% are dupes)
+	3. Random 90/10 split (random_state=0)
+	4. Optionally oversample minority class
+	5. Drop nominal features (srcip, dstip, sport, dsport)
+	"""
+	import pandas as pd
+	from pathlib import Path
+	from sklearn.model_selection import train_test_split
+	from sklearn.preprocessing import LabelEncoder
+	from sklearn.utils import resample
+
+	# Load full dataset (saved as parquet from HuggingFace)
+	full_parquet = Path(__file__).parents[4] / "data" / "unsw-nb15" / "full_dataset.parquet"
+	if not full_parquet.exists():
+		full_parquet = Path.cwd() / "data" / "unsw-nb15" / "full_dataset.parquet"
+	if not full_parquet.exists():
+		raise FileNotFoundError(
+			"Full UNSW-NB15 parquet not found. Run:\n"
+			"  from datasets import load_dataset\n"
+			"  ds = load_dataset('Mouwiya/UNSW-NB15', split='train')\n"
+			"  ds.to_pandas().to_parquet('data/unsw-nb15/full_dataset.parquet')"
+		)
 
 	print(f"\n{'=' * 70}")
-	print("ENCODING IMPACT (binary task)")
+	print("RANDOM SPLIT BASELINES (FWIW methodology)")
 	print(f"{'=' * 70}")
-	print(f"{'Input':25s} {'RF Acc':>10s} {'XGB Acc':>10s}")
-	print(f"{'-'*25} {'-'*10} {'-'*10}")
-	rf_enc = encoded.get("rf_binary_acc", 0)
-	xgb_enc = encoded.get("xgb_binary_acc", 0)
-	rf_raw = raw.get("rf_raw_binary_acc", 0)
-	xgb_raw = raw.get("xgb_raw_binary_acc", 0)
-	n_raw = len(ds.feature_names)
-	n_enc = ds.X_train.shape[1]
-	print(f"{'Raw features (' + str(n_raw) + ' cols)':25s} {100*rf_raw:>9.2f}% {100*xgb_raw:>9.2f}%")
-	print(f"{'Thermometer (' + str(n_enc) + ' bits)':25s} {100*rf_enc:>9.2f}% {100*xgb_enc:>9.2f}%")
+
+	df = pd.read_parquet(full_parquet)
+	print(f"  Total: {len(df):,} records")
+
+	# Drop duplicates
+	n_before = len(df)
+	df = df.drop_duplicates()
+	print(f"  After dedup: {len(df):,} (dropped {n_before - len(df):,})")
+
+	# Features (drop nominal IPs + ports + labels)
+	exclude = {'srcip', 'dstip', 'sport', 'dsport', 'label', 'attack_cat'}
+	feature_cols = [c for c in df.columns if c not in exclude]
+
+	for col in feature_cols:
+		if df[col].dtype == object:
+			le = LabelEncoder()
+			df[col] = le.fit_transform(df[col].astype(str).fillna("?"))
+
+	X = df[feature_cols].fillna(0).values.astype(np.float32)
+	y = df['label'].values.astype(np.int32)
+
+	# Random 90/10 split
+	X_train, X_test, y_train, y_test = train_test_split(
+		X, y, test_size=0.1, random_state=0, stratify=y
+	)
+	print(f"  Train: {len(X_train):,}, Test: {len(X_test):,}")
+
+	results = {}
+
+	for oversample in [True, False]:
+		suffix = "os" if oversample else "noos"
+
+		if oversample:
+			mask_normal = y_train == 0
+			mask_attack = y_train == 1
+			n_normal = mask_normal.sum()
+			X_attack_up = resample(X_train[mask_attack], n_samples=n_normal, random_state=0)
+			X_tr = np.vstack([X_train[mask_normal], X_attack_up])
+			y_tr = np.concatenate([y_train[mask_normal], np.ones(n_normal, dtype=np.int32)])
+		else:
+			X_tr, y_tr = X_train, y_train
+
+		# Random Forest
+		label = f"RF random split {'+ oversample' if oversample else '(natural)'}"
+		print(f"\n--- {label} ---")
+		rf = RandomForestClassifier(n_estimators=100, n_jobs=-1, random_state=42)
+		t0 = time.time()
+		rf.fit(X_tr, y_tr)
+		train_time = time.time() - t0
+
+		y_pred = rf.predict(X_test)
+		acc = accuracy_score(y_test, y_pred)
+		f1 = f1_score(y_test, y_pred, average="macro", zero_division=0)
+		cm = confusion_matrix(y_test, y_pred)
+		tn, fp, fn, tp = cm.ravel()
+		fpr = fp / (fp + tn)
+
+		print(f"  Accuracy:  {acc:.4f} ({100*acc:.2f}%)")
+		print(f"  F1 (macro):{f1:.4f}")
+		print(f"  FPR:       {fpr:.4f}")
+		print(f"  Confusion: TN={tn:,} FP={fp:,} FN={fn:,} TP={tp:,}")
+		print(f"  Train time: {train_time:.1f}s")
+
+		results[f"rf_random_{suffix}_acc"] = acc
+		results[f"rf_random_{suffix}_f1"] = f1
+		results[f"rf_random_{suffix}_fpr"] = fpr
+
+		# XGBoost
+		try:
+			from xgboost import XGBClassifier
+			label = f"XGB random split {'+ oversample' if oversample else '(natural)'}"
+			print(f"\n--- {label} ---")
+			xgb = XGBClassifier(
+				n_estimators=100, max_depth=6, learning_rate=0.1,
+				n_jobs=-1, random_state=42, eval_metric="logloss", verbosity=0,
+			)
+			t0 = time.time()
+			xgb.fit(X_tr, y_tr)
+			train_time = time.time() - t0
+
+			y_pred = xgb.predict(X_test)
+			acc = accuracy_score(y_test, y_pred)
+			f1 = f1_score(y_test, y_pred, average="macro", zero_division=0)
+			cm = confusion_matrix(y_test, y_pred)
+			tn, fp, fn, tp = cm.ravel()
+			fpr = fp / (fp + tn)
+
+			print(f"  Accuracy:  {acc:.4f} ({100*acc:.2f}%)")
+			print(f"  F1 (macro):{f1:.4f}")
+			print(f"  FPR:       {fpr:.4f}")
+			print(f"  Confusion: TN={tn:,} FP={fp:,} FN={fn:,} TP={tp:,}")
+			print(f"  Train time: {train_time:.1f}s")
+
+			results[f"xgb_random_{suffix}_acc"] = acc
+			results[f"xgb_random_{suffix}_f1"] = f1
+			results[f"xgb_random_{suffix}_fpr"] = fpr
+		except ImportError:
+			pass
+
+	return results
+
+
+if __name__ == "__main__":
+	import sys
+
+	if "--random-split" in sys.argv:
+		run_random_split_baselines()
+	elif "--all" in sys.argv:
+		run_baselines()
+		run_raw_baselines()
+		run_random_split_baselines()
+	else:
+		# Default: standard split baselines
+		run_baselines()
+		run_raw_baselines()
