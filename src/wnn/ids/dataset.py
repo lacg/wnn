@@ -71,8 +71,7 @@ def load_unsw_nb15(
 ) -> IDSDataset:
 	"""Load UNSW-NB15 with thermometer encoding.
 
-	Uses the CSV training set (175K rows, 42 features) and parquet test set
-	(82K rows, 34 features). Only the 34 common features are used.
+	Uses both CSV files (training + testing) with all 42 features.
 
 	Args:
 		data_dir: path to data/unsw-nb15/ directory. Auto-detected if None.
@@ -102,20 +101,26 @@ def load_unsw_nb15(
 	# ── Load raw data ──────────────────────────────────────────────────
 	print(f"Loading UNSW-NB15 from {data_dir}...")
 
-	# CSV training set (175K rows, all features)
+	# CSV training set (175K rows, all 45 columns)
 	df_train = pd.read_csv(data_dir / "UNSW_NB15_training-set.csv")
 
-	# Parquet "train" is actually the test set (82K rows, see exploration)
-	df_test = pd.read_parquet(data_dir / "train.parquet")
+	# CSV testing set (82K rows, all 45 columns)
+	test_csv = data_dir / "UNSW_NB15_testing-set.csv"
+	if test_csv.exists():
+		df_test = pd.read_csv(test_csv, encoding="utf-8-sig")  # BOM-aware
+	else:
+		# Fallback to parquet (missing 8 features)
+		print("  WARNING: Test CSV not found, falling back to parquet (34 features)")
+		df_test = pd.read_parquet(data_dir / "train.parquet")
 
-	# ── Use common features only ───────────────────────────────────────
+	# ── Use all features present in BOTH files ─────────────────────────
 	exclude = {"id", "label", "Label", "attack_cat", "Attack_cat"}
 	train_features = set(df_train.columns) - exclude
 	test_features = set(df_test.columns) - exclude
 	common_features = sorted(train_features & test_features)
 
 	print(f"  Train: {len(df_train):,} rows, Test: {len(df_test):,} rows")
-	print(f"  Using {len(common_features)} common features")
+	print(f"  Using {len(common_features)} features")
 
 	# ── Extract labels ─────────────────────────────────────────────────
 	# Binary labels

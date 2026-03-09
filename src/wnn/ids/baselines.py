@@ -179,7 +179,7 @@ def run_raw_baselines():
 	if data_dir is None:
 		raise FileNotFoundError("UNSW-NB15 data not found")
 	df_train = pd.read_csv(data_dir / "UNSW_NB15_training-set.csv")
-	df_test = pd.read_parquet(data_dir / "train.parquet")  # swapped in HF mirror
+	df_test = pd.read_csv(data_dir / "UNSW_NB15_testing-set.csv", encoding="utf-8-sig")
 
 	exclude = {"id", "label", "Label", "attack_cat", "Attack_cat"}
 	train_features = set(df_train.columns) - exclude
@@ -284,5 +284,7 @@ if __name__ == "__main__":
 	xgb_enc = encoded.get("xgb_binary_acc", 0)
 	rf_raw = raw.get("rf_raw_binary_acc", 0)
 	xgb_raw = raw.get("xgb_raw_binary_acc", 0)
-	print(f"{'Raw features (34 cols)':25s} {100*rf_raw:>9.2f}% {100*xgb_raw:>9.2f}%")
-	print(f"{'Thermometer (257 bits)':25s} {100*rf_enc:>9.2f}% {100*xgb_enc:>9.2f}%")
+	n_raw = len(ds.feature_names)
+	n_enc = ds.X_train.shape[1]
+	print(f"{'Raw features (' + str(n_raw) + ' cols)':25s} {100*rf_raw:>9.2f}% {100*xgb_raw:>9.2f}%")
+	print(f"{'Thermometer (' + str(n_enc) + ' bits)':25s} {100*rf_enc:>9.2f}% {100*xgb_enc:>9.2f}%")
