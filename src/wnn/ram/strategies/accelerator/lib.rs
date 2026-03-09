@@ -142,6 +142,9 @@ mod adaptive;
 #[path = "token_cache.rs"]
 mod token_cache;
 
+#[path = "ids_cache.rs"]
+mod ids_cache;
+
 #[path = "neighbor_search.rs"]
 mod neighbor_search;
 
@@ -3911,6 +3914,374 @@ impl TokenCacheWrapper {
 }
 
 // =============================================================================
+// IDSCache Python Wrapper
+// =============================================================================
+
+/// Python wrapper for IDS (Intrusion Detection System) cache.
+///
+/// Holds pre-encoded binary features for classification tasks.
+/// Parallel to TokenCacheWrapper but for tabular binary data.
+#[pyclass]
+struct IDSCacheWrapper {
+    inner: ids_cache::IDSCache,
+}
+
+#[pymethods]
+impl IDSCacheWrapper {
+    /// Create a new IDS cache with stratified partitioning.
+    #[new]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (train_features, train_labels, eval_features, eval_labels, num_classes, total_features, num_parts, num_negatives, seed))]
+    fn new(
+        train_features: Vec<bool>,
+        train_labels: Vec<i64>,
+        eval_features: Vec<bool>,
+        eval_labels: Vec<i64>,
+        num_classes: usize,
+        total_features: usize,
+        num_parts: usize,
+        num_negatives: usize,
+        seed: u64,
+    ) -> Self {
+        Self {
+            inner: ids_cache::IDSCache::new(
+                train_features,
+                train_labels,
+                eval_features,
+                eval_labels,
+                num_classes,
+                total_features,
+                num_parts,
+                num_negatives,
+                seed,
+            ),
+        }
+    }
+
+    /// Get the next train subset index (advances rotator).
+    fn next_train_idx(&mut self) -> usize {
+        self.inner.next_train_idx()
+    }
+
+    /// Reset rotators with optional new seed.
+    #[pyo3(signature = (seed=None))]
+    fn reset(&mut self, seed: Option<u64>) {
+        self.inner.reset(seed);
+    }
+
+    /// Get number of train subsets.
+    fn num_train_subsets(&self) -> usize {
+        self.inner.num_train_subsets()
+    }
+
+    /// Get number of classes.
+    fn num_classes(&self) -> usize {
+        self.inner.num_classes()
+    }
+
+    /// Get total features (input bits).
+    fn total_features(&self) -> usize {
+        self.inner.total_features()
+    }
+
+    /// Evaluate genomes using hybrid CPU+GPU with a specific train subset.
+    #[allow(clippy::too_many_arguments)]
+    fn evaluate_genomes_hybrid(
+        &self,
+        py: Python<'_>,
+        genomes_bits_flat: Vec<usize>,
+        genomes_neurons_flat: Vec<usize>,
+        genomes_connections_flat: Vec<i64>,
+        num_genomes: usize,
+        train_subset_idx: usize,
+        empty_value: f32,
+        neuron_sample_rate: f32,
+        rng_seed: u64,
+    ) -> PyResult<Vec<(f64, f64)>> {
+        py.allow_threads(|| {
+            Ok(ids_cache::evaluate_genomes_ids_cached_hybrid(
+                &self.inner,
+                &genomes_bits_flat,
+                &genomes_neurons_flat,
+                &genomes_connections_flat,
+                num_genomes,
+                train_subset_idx,
+                empty_value,
+                neuron_sample_rate,
+                rng_seed,
+            ))
+        })
+    }
+
+    /// Evaluate genomes using full data with hybrid CPU+GPU.
+    fn evaluate_genomes_full_hybrid(
+        &self,
+        py: Python<'_>,
+        genomes_bits_flat: Vec<usize>,
+        genomes_neurons_flat: Vec<usize>,
+        genomes_connections_flat: Vec<i64>,
+        num_genomes: usize,
+        empty_value: f32,
+        neuron_sample_rate: f32,
+        rng_seed: u64,
+    ) -> PyResult<Vec<(f64, f64)>> {
+        py.allow_threads(|| {
+            Ok(ids_cache::evaluate_genomes_ids_cached_full_hybrid(
+                &self.inner,
+                &genomes_bits_flat,
+                &genomes_neurons_flat,
+                &genomes_connections_flat,
+                num_genomes,
+                empty_value,
+                neuron_sample_rate,
+                rng_seed,
+            ))
+        })
+    }
+
+    /// Search for neighbors above accuracy threshold, all in Rust.
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (
+        base_bits,
+        base_neurons,
+        base_connections,
+        target_count,
+        max_attempts,
+        accuracy_threshold,
+        min_bits,
+        max_bits,
+        min_neurons,
+        max_neurons,
+        bits_mutation_rate,
+        neurons_mutation_rate,
+        train_subset_idx,
+        empty_value,
+        seed,
+        log_path = None,
+        generation = None,
+        total_generations = None,
+        return_best_n = true,
+        mutable_clusters = None,
+        phase_type = 0
+    ))]
+    fn search_neighbors(
+        &self,
+        py: Python<'_>,
+        base_bits: Vec<usize>,
+        base_neurons: Vec<usize>,
+        base_connections: Vec<i64>,
+        target_count: usize,
+        max_attempts: usize,
+        accuracy_threshold: f64,
+        min_bits: usize,
+        max_bits: usize,
+        min_neurons: usize,
+        max_neurons: usize,
+        bits_mutation_rate: f64,
+        neurons_mutation_rate: f64,
+        train_subset_idx: usize,
+        empty_value: f32,
+        seed: u64,
+        log_path: Option<String>,
+        generation: Option<usize>,
+        total_generations: Option<usize>,
+        return_best_n: bool,
+        mutable_clusters: Option<Vec<usize>>,
+        phase_type: u8,
+    ) -> PyResult<Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64)>> {
+        let num_clusters = base_neurons.len();
+        let total_input_bits = self.inner.total_features();
+        let phase = match phase_type {
+            1 => neighbor_search::PhaseType::Bits,
+            2 => neighbor_search::PhaseType::Connections,
+            _ => neighbor_search::PhaseType::Neurons,
+        };
+
+        let config = neighbor_search::MutationConfig {
+            num_clusters,
+            neurons_per_cluster: base_neurons.clone(),
+            mutable_clusters,
+            min_bits,
+            max_bits,
+            min_neurons,
+            max_neurons,
+            bits_mutation_rate,
+            neurons_mutation_rate,
+            total_input_bits,
+            phase_type: phase,
+        };
+
+        let lp_arc = self.inner.live_progress.clone();
+
+        let result = py.allow_threads(|| {
+            let log_path_ref = log_path.as_deref();
+            let cache = &self.inner;
+
+            let eval_fn = |bits: &[usize], neurons: &[usize], conns: &[i64], count: usize| -> Vec<(f64, f64)> {
+                ids_cache::evaluate_genomes_ids_cached_hybrid(
+                    cache, bits, neurons, conns, count,
+                    train_subset_idx, empty_value,
+                    1.0, 0,
+                )
+            };
+
+            let lp_ref = Some(&lp_arc);
+
+            let candidates = if return_best_n {
+                neighbor_search::search_neighbors_best_n(
+                    &base_bits, &base_neurons, &base_connections,
+                    target_count, max_attempts, accuracy_threshold,
+                    &config, &eval_fn, seed, log_path_ref,
+                    generation, total_generations, lp_ref,
+                )
+            } else {
+                let (passed, _) = neighbor_search::search_neighbors_with_threshold(
+                    &base_bits, &base_neurons, &base_connections,
+                    target_count, max_attempts, accuracy_threshold,
+                    &config, &eval_fn, seed, log_path_ref,
+                    generation, total_generations, lp_ref,
+                );
+                passed
+            };
+
+            Ok(candidates
+                .into_iter()
+                .map(|c| (
+                    c.bits_per_neuron,
+                    c.neurons_per_cluster,
+                    c.connections,
+                    c.cross_entropy,
+                    c.accuracy,
+                ))
+                .collect())
+        });
+
+        if let Ok(mut guard) = lp_arc.write() {
+            *guard = None;
+        }
+        result
+    }
+
+    /// Search for GA offspring above accuracy threshold, all in Rust.
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (
+        population,
+        target_count,
+        max_attempts,
+        accuracy_threshold,
+        min_bits,
+        max_bits,
+        min_neurons,
+        max_neurons,
+        bits_mutation_rate,
+        neurons_mutation_rate,
+        crossover_rate,
+        tournament_size,
+        train_subset_idx,
+        empty_value,
+        seed,
+        log_path = None,
+        generation = None,
+        total_generations = None,
+        return_best_n = true,
+        mutable_clusters = None,
+        phase_type = 0
+    ))]
+    fn search_offspring(
+        &self,
+        py: Python<'_>,
+        population: Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64)>,
+        target_count: usize,
+        max_attempts: usize,
+        accuracy_threshold: f64,
+        min_bits: usize,
+        max_bits: usize,
+        min_neurons: usize,
+        max_neurons: usize,
+        bits_mutation_rate: f64,
+        neurons_mutation_rate: f64,
+        crossover_rate: f64,
+        tournament_size: usize,
+        train_subset_idx: usize,
+        empty_value: f32,
+        seed: u64,
+        log_path: Option<String>,
+        generation: Option<usize>,
+        total_generations: Option<usize>,
+        return_best_n: bool,
+        mutable_clusters: Option<Vec<usize>>,
+        phase_type: u8,
+    ) -> PyResult<(Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64)>, usize, usize)> {
+        let num_clusters = if !population.is_empty() {
+            population[0].1.len()
+        } else {
+            return Ok((Vec::new(), 0, 0));
+        };
+        let total_input_bits = self.inner.total_features();
+        let phase = match phase_type {
+            1 => neighbor_search::PhaseType::Bits,
+            2 => neighbor_search::PhaseType::Connections,
+            _ => neighbor_search::PhaseType::Neurons,
+        };
+
+        let ga_config = neighbor_search::GAConfig {
+            num_clusters,
+            mutable_clusters,
+            min_bits,
+            max_bits,
+            min_neurons,
+            max_neurons,
+            bits_mutation_rate,
+            neurons_mutation_rate,
+            crossover_rate,
+            tournament_size,
+            total_input_bits,
+            phase_type: phase,
+        };
+
+        let lp_arc = self.inner.live_progress.clone();
+
+        let result = py.allow_threads(|| {
+            let log_path_ref = log_path.as_deref();
+            let cache = &self.inner;
+
+            let eval_fn = |bits: &[usize], neurons: &[usize], conns: &[i64], count: usize| -> Vec<(f64, f64)> {
+                ids_cache::evaluate_genomes_ids_cached_hybrid(
+                    cache, bits, neurons, conns, count,
+                    train_subset_idx, empty_value,
+                    1.0, 0,
+                )
+            };
+
+            let lp_ref = Some(&lp_arc);
+
+            let result = neighbor_search::search_offspring(
+                &population, target_count, max_attempts, accuracy_threshold,
+                &ga_config, &eval_fn, seed, log_path_ref,
+                generation, total_generations, return_best_n, lp_ref,
+            );
+
+            let candidates: Vec<_> = result.candidates
+                .into_iter()
+                .map(|c| (
+                    c.bits_per_neuron,
+                    c.neurons_per_cluster,
+                    c.connections,
+                    c.cross_entropy,
+                    c.accuracy,
+                ))
+                .collect();
+            Ok((candidates, result.evaluated, result.viable))
+        });
+
+        if let Ok(mut guard) = lp_arc.write() {
+            *guard = None;
+        }
+        result
+    }
+}
+
+// =============================================================================
 // RAMGating Python Wrapper
 // =============================================================================
 
@@ -5621,6 +5992,8 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(evaluate_genomes_parallel_hybrid, m)?)?;
     // Token cache for persistent token storage with subset rotation
     m.add_class::<TokenCacheWrapper>()?;
+    // IDS cache for intrusion detection classification
+    m.add_class::<IDSCacheWrapper>()?;
     // RAM-based gating (weightless per-cluster gating with majority voting)
     m.add_class::<RAMGatingWrapper>()?;
     m.add_function(wrap_pyfunction!(apply_gates, m)?)?;
