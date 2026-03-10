@@ -2206,6 +2206,155 @@ thread_local! {
 
 /// Evaluate a genome export using CPU+GPU hybrid
 /// Returns (cross_entropy, accuracy)
+/// Compute per-example, per-cluster scores from a trained genome export.
+///
+/// Shared by `evaluate_genome_hybrid` (CE/accuracy) and `predict_genome_hybrid` (argmax).
+/// Tries GPU evaluation (sparse + dense) for each group, falling back to CPU binary search.
+fn compute_per_example_scores(
+    export: &GenomeExport,
+    eval_input_bits: &[bool],
+    packed_eval: &[u64],
+    words_per_example: usize,
+    num_eval: usize,
+    num_clusters: usize,
+    total_input_bits: usize,
+    empty_value: f32,
+    memory_mode: u8,
+    metal: Option<&crate::metal_ramlm::MetalRAMLMEvaluator>,
+    sparse_metal: Option<&crate::metal_ramlm::MetalSparseEvaluator>,
+) -> Vec<Vec<f64>> {
+    let mut all_scores: Vec<Vec<f64>> = vec![vec![0.0; num_clusters]; num_eval];
+
+    let mut dense_idx = 0usize;
+    let mut sparse_idx = 0usize;
+
+    for (is_sparse, group_idx, cluster_ids) in &export.group_info {
+        let group = &export.groups[*group_idx];
+
+        if *is_sparse {
+            let sparse_export = &export.sparse_exports[sparse_idx];
+            sparse_idx += 1;
+
+            let gpu_success = if let Some(sparse_eval) = sparse_metal {
+                match evaluate_group_sparse_gpu(
+                    sparse_eval,
+                    packed_eval,
+                    &export.connections,
+                    sparse_export,
+                    group,
+                    num_eval,
+                    words_per_example,
+                    memory_mode,
+                ) {
+                    Ok(group_scores) => {
+                        let num_group_clusters = group.cluster_count();
+                        all_scores.par_iter_mut().enumerate().for_each(|(ex_idx, scores)| {
+                            for (local_cluster, &cluster_id) in cluster_ids.iter().enumerate() {
+                                let score_idx = ex_idx * num_group_clusters + local_cluster;
+                                scores[cluster_id] = group_scores[score_idx] as f64;
+                            }
+                        });
+                        true
+                    }
+                    Err(_) => false,
+                }
+            } else {
+                false
+            };
+
+            if !gpu_success {
+                // CPU fallback using binary search
+                all_scores.par_iter_mut().enumerate().for_each(|(ex_idx, scores)| {
+                    let input_start = ex_idx * total_input_bits;
+                    let input_bits = &eval_input_bits[input_start..input_start + total_input_bits];
+
+                    for (local_cluster, &cluster_id) in cluster_ids.iter().enumerate() {
+                        let actual_neurons = if let Some(ref an) = group.actual_neurons {
+                            an[local_cluster] as usize
+                        } else {
+                            group.neurons
+                        };
+
+                        let neuron_base = local_cluster * group.neurons;
+                        let conn_base = group.conn_offset + local_cluster * group.neurons * group.bits;
+
+                        let mut sum = 0.0f32;
+                        for n in 0..actual_neurons {
+                            let conn_start = conn_base + n * group.bits;
+                            let address = compute_address(input_bits, &export.connections[conn_start..], group.bits);
+                            let cell = sparse_export.lookup(neuron_base + n, address as u64);
+                            sum += cell_to_weight(cell as i64, memory_mode, empty_value);
+                        }
+
+                        scores[cluster_id] = (sum / actual_neurons as f32) as f64;
+                    }
+                });
+            }
+        } else {
+            let dense_words = &export.dense_exports[dense_idx];
+            dense_idx += 1;
+
+            let gpu_success = if let Some(metal_eval) = metal {
+                match evaluate_group_metal(
+                    metal_eval,
+                    packed_eval,
+                    &export.connections,
+                    dense_words,
+                    group,
+                    num_eval,
+                    words_per_example,
+                    memory_mode,
+                ) {
+                    Ok(group_scores) => {
+                        let num_group_clusters = group.cluster_count();
+                        all_scores.par_iter_mut().enumerate().for_each(|(ex_idx, scores)| {
+                            for (local_cluster, &cluster_id) in cluster_ids.iter().enumerate() {
+                                let score_idx = ex_idx * num_group_clusters + local_cluster;
+                                scores[cluster_id] = group_scores[score_idx] as f64;
+                            }
+                        });
+                        true
+                    }
+                    Err(_) => false,
+                }
+            } else {
+                false
+            };
+
+            if !gpu_success {
+                // CPU fallback for dense groups
+                all_scores.par_iter_mut().enumerate().for_each(|(ex_idx, scores)| {
+                    let input_start = ex_idx * total_input_bits;
+                    let input_bits = &eval_input_bits[input_start..input_start + total_input_bits];
+
+                    for (local_cluster, &cluster_id) in cluster_ids.iter().enumerate() {
+                        let actual_neurons = if let Some(ref an) = group.actual_neurons {
+                            an[local_cluster] as usize
+                        } else {
+                            group.neurons
+                        };
+
+                        let neuron_base = local_cluster * group.neurons;
+                        let conn_base = group.conn_offset + local_cluster * group.neurons * group.bits;
+
+                        let mut sum = 0.0f32;
+                        for n in 0..actual_neurons {
+                            let conn_start = conn_base + n * group.bits;
+                            let address = compute_address(input_bits, &export.connections[conn_start..], group.bits);
+                            let cell = read_cell(dense_words, neuron_base + n, address, group.words_per_neuron);
+                            sum += cell_to_weight(cell, memory_mode, empty_value);
+                        }
+
+                        scores[cluster_id] = (sum / actual_neurons as f32) as f64;
+                    }
+                });
+            }
+        }
+    }
+
+    all_scores
+}
+
 pub fn evaluate_genome_hybrid(
     export: &GenomeExport,
     eval_input_bits: &[bool],
@@ -2223,11 +2372,6 @@ pub fn evaluate_genome_hybrid(
     // Detailed timing (enabled via WNN_GROUP_TIMING env var)
     let timing_enabled = std::env::var("WNN_GROUP_TIMING").is_ok();
     let eval_start = std::time::Instant::now();
-    let mut gpu_time_ms = 0u128;
-    let mut cpu_time_ms = 0u128;
-    let mut scatter_time_ms = 0u128;
-    let mut gpu_calls = 0usize;
-    let mut cpu_calls = 0usize;
 
     // Pack eval input bits to u64 for GPU (pack once, reuse for all GPU paths)
     let (packed_eval, words_per_example) = crate::neuron_memory::pack_bools_to_u64(
@@ -2465,291 +2609,16 @@ pub fn evaluate_genome_hybrid(
     }
     } // cfg(target_os = "macos")
 
-    // Legacy GPU CE PATH: Disabled - kept for reference, macOS only
-    #[cfg(target_os = "macos")]
-    {
-        static CE_REDUCE_EVALUATOR: std::sync::OnceLock<Option<crate::metal_ramlm::MetalCEReduceEvaluator>> = std::sync::OnceLock::new();
-        let _ce_reduce = CE_REDUCE_EVALUATOR.get_or_init(|| {
-            crate::metal_ramlm::MetalCEReduceEvaluator::new().ok()
-        });
+    // CPU FALLBACK PATH: Compute per-example scores using shared function
+    let all_scores = compute_per_example_scores(
+        export, eval_input_bits, &packed_eval, words_per_example,
+        num_eval, num_clusters, total_input_bits, empty_value,
+        memory_mode, metal, sparse_metal,
+    );
 
-        // Disabled: Legacy GPU CE path with CPU→GPU scatter is slower
-        if false {
-            let ce_eval = _ce_reduce.as_ref().unwrap();
-            let scores_buffer = ce_eval.create_scores_buffer(num_eval, num_clusters);
-
-            let mut dense_idx = 0usize;
-            let mut sparse_idx = 0usize;
-            let mut all_gpu_success = true;
-
-            for (is_sparse, group_idx, cluster_ids) in &export.group_info {
-                let group = &export.groups[*group_idx];
-
-                let group_scores_result = if *is_sparse {
-                    let sparse_export = &export.sparse_exports[sparse_idx];
-                    sparse_idx += 1;
-
-                    let call_start = std::time::Instant::now();
-                    let result = if let Some(sparse_eval) = sparse_metal {
-                        evaluate_group_sparse_gpu(
-                            sparse_eval,
-                            &packed_eval,
-                            &export.connections,
-                            sparse_export,
-                            group,
-                            num_eval,
-                            words_per_example,
-                            memory_mode,
-                        )
-                    } else {
-                        Err("No sparse evaluator".to_string())
-                    };
-                    if timing_enabled && result.is_ok() {
-                        gpu_time_ms += call_start.elapsed().as_millis();
-                        gpu_calls += 1;
-                    }
-                    result
-                } else {
-                    let dense_words = &export.dense_exports[dense_idx];
-                    dense_idx += 1;
-
-                    let call_start = std::time::Instant::now();
-                    let result = if let Some(metal_eval) = metal {
-                        evaluate_group_metal(
-                            metal_eval,
-                            &packed_eval,
-                            &export.connections,
-                            dense_words,
-                            group,
-                            num_eval,
-                            words_per_example,
-                            memory_mode,
-                        )
-                    } else {
-                        Err("No metal evaluator".to_string())
-                    };
-                    if timing_enabled && result.is_ok() {
-                        gpu_time_ms += call_start.elapsed().as_millis();
-                        gpu_calls += 1;
-                    }
-                    result
-                };
-
-                match group_scores_result {
-                    Ok(group_scores) => {
-                        let scatter_start = std::time::Instant::now();
-                        ce_eval.scatter_to_buffer(
-                            &group_scores,
-                            &scores_buffer,
-                            cluster_ids,
-                            num_eval,
-                            num_clusters,
-                        );
-                        if timing_enabled {
-                            scatter_time_ms += scatter_start.elapsed().as_millis();
-                        }
-                    }
-                    Err(_) => {
-                        all_gpu_success = false;
-                        break;
-                    }
-                }
-            }
-
-            if all_gpu_success {
-                let ce_start = std::time::Instant::now();
-                let result = ce_eval.compute_ce_from_buffer(
-                    &scores_buffer,
-                    eval_targets,
-                    num_eval,
-                    num_clusters,
-                );
-                if timing_enabled {
-                    let ce_time = ce_start.elapsed().as_millis();
-                    let total_ms = eval_start.elapsed().as_millis();
-                    eprintln!(
-                        "[EVAL_HYBRID] GPU_CE_PATH total={}ms gpu={}ms({}calls) scatter={}ms ce={}ms",
-                        total_ms, gpu_time_ms, gpu_calls, scatter_time_ms, ce_time
-                    );
-                }
-                if let Ok((ce, acc)) = result {
-                    return (ce, acc);
-                }
-            }
-        }
-    } // cfg(target_os = "macos") Legacy GPU CE PATH
-
-    // CPU FALLBACK PATH: Process groups separately, accumulate scores, compute CE on CPU
-    // Pre-compute scores for all examples × clusters
-    let mut all_scores: Vec<Vec<f64>> = vec![vec![0.0; num_clusters]; num_eval];
-
-    let mut dense_idx = 0usize;
-    let mut sparse_idx = 0usize;
-
-    for (is_sparse, group_idx, cluster_ids) in &export.group_info {
-        let group = &export.groups[*group_idx];
-
-        if *is_sparse {
-            // Try GPU sparse evaluation
-            let sparse_export = &export.sparse_exports[sparse_idx];
-            sparse_idx += 1;
-
-            let call_start = std::time::Instant::now();
-            let gpu_success = if let Some(sparse_eval) = sparse_metal {
-                match evaluate_group_sparse_gpu(
-                    sparse_eval,
-                    &packed_eval,
-                    &export.connections,
-                    sparse_export,
-                    group,
-                    num_eval,
-                    words_per_example,
-                    memory_mode,
-                ) {
-                    Ok(group_scores) => {
-                        if timing_enabled {
-                            gpu_time_ms += call_start.elapsed().as_millis();
-                            gpu_calls += 1;
-                        }
-                        // Parallel scatter using rayon - each thread handles different examples
-                        let scatter_start = std::time::Instant::now();
-                        let num_group_clusters = group.cluster_count();
-                        all_scores.par_iter_mut().enumerate().for_each(|(ex_idx, scores)| {
-                            for (local_cluster, &cluster_id) in cluster_ids.iter().enumerate() {
-                                let score_idx = ex_idx * num_group_clusters + local_cluster;
-                                scores[cluster_id] = group_scores[score_idx] as f64;
-                            }
-                        });
-                        if timing_enabled {
-                            scatter_time_ms += scatter_start.elapsed().as_millis();
-                        }
-                        true
-                    }
-                    Err(_) => false,
-                }
-            } else {
-                false
-            };
-
-            if !gpu_success {
-                // CPU fallback using binary search
-                let cpu_start = std::time::Instant::now();
-                all_scores.par_iter_mut().enumerate().for_each(|(ex_idx, scores)| {
-                    let input_start = ex_idx * total_input_bits;
-                    let input_bits = &eval_input_bits[input_start..input_start + total_input_bits];
-
-                    for (local_cluster, &cluster_id) in cluster_ids.iter().enumerate() {
-                        // Use actual neurons if coalesced, otherwise MAX
-                        let actual_neurons = if let Some(ref an) = group.actual_neurons {
-                            an[local_cluster] as usize
-                        } else {
-                            group.neurons
-                        };
-
-                        let neuron_base = local_cluster * group.neurons;  // Keep MAX for memory layout
-                        let conn_base = group.conn_offset + local_cluster * group.neurons * group.bits;
-
-                        let mut sum = 0.0f32;
-                        for n in 0..actual_neurons {  // Only iterate actual neurons
-                            let conn_start = conn_base + n * group.bits;
-                            let address = compute_address(input_bits, &export.connections[conn_start..], group.bits);
-                            let cell = sparse_export.lookup(neuron_base + n, address as u64);
-                            sum += cell_to_weight(cell as i64, memory_mode, empty_value);
-                        }
-
-                        scores[cluster_id] = (sum / actual_neurons as f32) as f64;  // Divide by actual
-                    }
-                });
-                if timing_enabled {
-                    cpu_time_ms += cpu_start.elapsed().as_millis();
-                    cpu_calls += 1;
-                }
-            }
-        } else {
-            // Try GPU dense evaluation
-            let call_start = std::time::Instant::now();
-            let dense_words = &export.dense_exports[dense_idx];
-            dense_idx += 1;
-
-            let gpu_success = if let Some(metal_eval) = metal {
-                match evaluate_group_metal(
-                    metal_eval,
-                    &packed_eval,
-                    &export.connections,
-                    dense_words,
-                    group,
-                    num_eval,
-                    words_per_example,
-                    memory_mode,
-                ) {
-                    Ok(group_scores) => {
-                        if timing_enabled {
-                            gpu_time_ms += call_start.elapsed().as_millis();
-                            gpu_calls += 1;
-                        }
-                        // Parallel scatter using rayon - each thread handles different examples
-                        let scatter_start = std::time::Instant::now();
-                        let num_group_clusters = group.cluster_count();
-                        all_scores.par_iter_mut().enumerate().for_each(|(ex_idx, scores)| {
-                            for (local_cluster, &cluster_id) in cluster_ids.iter().enumerate() {
-                                let score_idx = ex_idx * num_group_clusters + local_cluster;
-                                scores[cluster_id] = group_scores[score_idx] as f64;
-                            }
-                        });
-                        if timing_enabled {
-                            scatter_time_ms += scatter_start.elapsed().as_millis();
-                        }
-                        true
-                    }
-                    Err(_) => false,
-                }
-            } else {
-                false
-            };
-
-            if !gpu_success {
-                // CPU fallback for dense groups: read cells from exported memory words
-                let cpu_start = std::time::Instant::now();
-                all_scores.par_iter_mut().enumerate().for_each(|(ex_idx, scores)| {
-                    let input_start = ex_idx * total_input_bits;
-                    let input_bits = &eval_input_bits[input_start..input_start + total_input_bits];
-
-                    for (local_cluster, &cluster_id) in cluster_ids.iter().enumerate() {
-                        let actual_neurons = if let Some(ref an) = group.actual_neurons {
-                            an[local_cluster] as usize
-                        } else {
-                            group.neurons
-                        };
-
-                        let neuron_base = local_cluster * group.neurons;
-                        let conn_base = group.conn_offset + local_cluster * group.neurons * group.bits;
-
-                        let mut sum = 0.0f32;
-                        for n in 0..actual_neurons {
-                            let conn_start = conn_base + n * group.bits;
-                            let address = compute_address(input_bits, &export.connections[conn_start..], group.bits);
-                            let cell = read_cell(dense_words, neuron_base + n, address, group.words_per_neuron);
-                            sum += cell_to_weight(cell, memory_mode, empty_value);
-                        }
-
-                        scores[cluster_id] = (sum / actual_neurons as f32) as f64;
-                    }
-                });
-                if timing_enabled {
-                    cpu_time_ms += cpu_start.elapsed().as_millis();
-                    cpu_calls += 1;
-                }
-            }
-        }
-    }
-
-    // Print timing summary if enabled
     if timing_enabled {
         let total_ms = eval_start.elapsed().as_millis();
-        eprintln!(
-            "[EVAL_HYBRID] total={}ms gpu={}ms({}calls) cpu={}ms({}calls) scatter={}ms",
-            total_ms, gpu_time_ms, gpu_calls, cpu_time_ms, cpu_calls, scatter_time_ms
-        );
+        eprintln!("[EVAL_HYBRID] CPU_FALLBACK total={}ms", total_ms);
     }
 
     // Compute CE and accuracy from pre-computed scores
@@ -2780,8 +2649,8 @@ pub fn evaluate_genome_hybrid(
 
 /// Predict per-example class indices for a single trained genome.
 ///
-/// Same score computation as `evaluate_genome_hybrid`, but returns
-/// Vec<i64> of predicted class indices instead of (CE, accuracy).
+/// Delegates to `compute_per_example_scores` for the shared score computation,
+/// then returns argmax predictions instead of CE/accuracy.
 /// Used by the bitwise ECOC classifier to combine per-bit predictions.
 pub fn predict_genome_hybrid(
     export: &GenomeExport,
@@ -2795,138 +2664,15 @@ pub fn predict_genome_hybrid(
 ) -> Vec<i64> {
     let memory_mode = crate::neuron_memory::get_memory_mode();
 
-    // Pack eval input bits to u64 for GPU
     let (packed_eval, words_per_example) = crate::neuron_memory::pack_bools_to_u64(
         eval_input_bits, num_eval, total_input_bits
     );
 
-    // Build per-example scores (same as evaluate_genome_hybrid CPU path)
-    let mut all_scores: Vec<Vec<f64>> = vec![vec![0.0; num_clusters]; num_eval];
-
-    let mut dense_idx = 0usize;
-    let mut sparse_idx = 0usize;
-
-    for (is_sparse, group_idx, cluster_ids) in &export.group_info {
-        let group = &export.groups[*group_idx];
-
-        if *is_sparse {
-            let sparse_export = &export.sparse_exports[sparse_idx];
-            sparse_idx += 1;
-
-            let gpu_success = if let Some(sparse_eval) = sparse_metal {
-                match evaluate_group_sparse_gpu(
-                    sparse_eval,
-                    &packed_eval,
-                    &export.connections,
-                    sparse_export,
-                    group,
-                    num_eval,
-                    words_per_example,
-                    memory_mode,
-                ) {
-                    Ok(group_scores) => {
-                        let num_group_clusters = group.cluster_count();
-                        all_scores.par_iter_mut().enumerate().for_each(|(ex_idx, scores)| {
-                            for (local_cluster, &cluster_id) in cluster_ids.iter().enumerate() {
-                                let score_idx = ex_idx * num_group_clusters + local_cluster;
-                                scores[cluster_id] = group_scores[score_idx] as f64;
-                            }
-                        });
-                        true
-                    }
-                    Err(_) => false,
-                }
-            } else {
-                false
-            };
-
-            if !gpu_success {
-                all_scores.par_iter_mut().enumerate().for_each(|(ex_idx, scores)| {
-                    let input_start = ex_idx * total_input_bits;
-                    let input_bits = &eval_input_bits[input_start..input_start + total_input_bits];
-
-                    for (local_cluster, &cluster_id) in cluster_ids.iter().enumerate() {
-                        let actual_neurons = if let Some(ref an) = group.actual_neurons {
-                            an[local_cluster] as usize
-                        } else {
-                            group.neurons
-                        };
-
-                        let neuron_base = local_cluster * group.neurons;
-                        let conn_base = group.conn_offset + local_cluster * group.neurons * group.bits;
-
-                        let mut sum = 0.0f32;
-                        for n in 0..actual_neurons {
-                            let conn_start = conn_base + n * group.bits;
-                            let address = compute_address(input_bits, &export.connections[conn_start..], group.bits);
-                            let cell = sparse_export.lookup(neuron_base + n, address as u64);
-                            sum += cell_to_weight(cell as i64, memory_mode, empty_value);
-                        }
-
-                        scores[cluster_id] = (sum / actual_neurons as f32) as f64;
-                    }
-                });
-            }
-        } else {
-            let dense_words = &export.dense_exports[dense_idx];
-            dense_idx += 1;
-
-            let gpu_success = if let Some(metal_eval) = metal {
-                match evaluate_group_metal(
-                    metal_eval,
-                    &packed_eval,
-                    &export.connections,
-                    dense_words,
-                    group,
-                    num_eval,
-                    words_per_example,
-                    memory_mode,
-                ) {
-                    Ok(group_scores) => {
-                        let num_group_clusters = group.cluster_count();
-                        all_scores.par_iter_mut().enumerate().for_each(|(ex_idx, scores)| {
-                            for (local_cluster, &cluster_id) in cluster_ids.iter().enumerate() {
-                                let score_idx = ex_idx * num_group_clusters + local_cluster;
-                                scores[cluster_id] = group_scores[score_idx] as f64;
-                            }
-                        });
-                        true
-                    }
-                    Err(_) => false,
-                }
-            } else {
-                false
-            };
-
-            if !gpu_success {
-                all_scores.par_iter_mut().enumerate().for_each(|(ex_idx, scores)| {
-                    let input_start = ex_idx * total_input_bits;
-                    let input_bits = &eval_input_bits[input_start..input_start + total_input_bits];
-
-                    for (local_cluster, &cluster_id) in cluster_ids.iter().enumerate() {
-                        let actual_neurons = if let Some(ref an) = group.actual_neurons {
-                            an[local_cluster] as usize
-                        } else {
-                            group.neurons
-                        };
-
-                        let neuron_base = local_cluster * group.neurons;
-                        let conn_base = group.conn_offset + local_cluster * group.neurons * group.bits;
-
-                        let mut sum = 0.0f32;
-                        for n in 0..actual_neurons {
-                            let conn_start = conn_base + n * group.bits;
-                            let address = compute_address(input_bits, &export.connections[conn_start..], group.bits);
-                            let cell = read_cell(dense_words, neuron_base + n, address, group.words_per_neuron);
-                            sum += cell_to_weight(cell, memory_mode, empty_value);
-                        }
-
-                        scores[cluster_id] = (sum / actual_neurons as f32) as f64;
-                    }
-                });
-            }
-        }
-    }
+    let all_scores = compute_per_example_scores(
+        export, eval_input_bits, &packed_eval, words_per_example,
+        num_eval, num_clusters, total_input_bits, empty_value,
+        memory_mode, metal, sparse_metal,
+    );
 
     // Return argmax predictions (not CE/accuracy)
     all_scores.par_iter().map(|scores| {
