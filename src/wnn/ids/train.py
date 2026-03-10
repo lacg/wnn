@@ -287,7 +287,7 @@ def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 	if cfg.val_fraction > 0:
 		overfitting_cb = create_overfitting_callback(
 			evaluator=test_evaluator,  # uses 175K train → 82K test
-			patience=3,
+			patience=5,
 			logger=print,
 		)
 
@@ -644,7 +644,7 @@ def run_hierarchical_experiment(cfg: IDSTrainConfig) -> dict:
 	if cfg.val_fraction > 0:
 		s1_overfit_cb = create_overfitting_callback(
 			evaluator=s1_test_evaluator,
-			patience=3,
+			patience=5,
 			logger=print,
 		)
 
