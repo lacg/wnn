@@ -4041,6 +4041,95 @@ impl IDSCacheWrapper {
         })
     }
 
+    /// Evaluate genomes with training-time adaptation (synaptogenesis + neurogenesis).
+    ///
+    /// Returns (ce, acc, f1, adapted_bits, adapted_neurons, adapted_conns,
+    ///          pruned, grown, added, removed) per genome.
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (
+        genomes_bits_flat, genomes_neurons_flat, genomes_connections_flat,
+        num_genomes, train_subset_idx, empty_value, neuron_sample_rate, rng_seed,
+        synaptogenesis_enabled, neurogenesis_enabled,
+        min_bits = 4, max_bits = 24,
+        warmup_generations = 10, total_generations = 250, generation = 0,
+        total_input_bits = 336, stats_sample_size = 10000, passes_per_eval = 1,
+        prune_entropy_ratio = 0.3, grow_fill_utilization = 0.5, grow_error_baseline = 0.35,
+        min_neurons = 3, max_neurons_per_pass = 3, max_growth_ratio = 1.5,
+        cooldown_iterations = 5, stabilize_fraction = 0.25
+    ))]
+    fn evaluate_genomes_hybrid_adaptive(
+        &self,
+        py: Python<'_>,
+        genomes_bits_flat: Vec<usize>,
+        genomes_neurons_flat: Vec<usize>,
+        genomes_connections_flat: Vec<i64>,
+        num_genomes: usize,
+        train_subset_idx: usize,
+        empty_value: f32,
+        neuron_sample_rate: f32,
+        rng_seed: u64,
+        synaptogenesis_enabled: bool,
+        neurogenesis_enabled: bool,
+        min_bits: usize,
+        max_bits: usize,
+        warmup_generations: usize,
+        total_generations: usize,
+        generation: usize,
+        total_input_bits: usize,
+        stats_sample_size: usize,
+        passes_per_eval: usize,
+        prune_entropy_ratio: f32,
+        grow_fill_utilization: f32,
+        grow_error_baseline: f32,
+        min_neurons: usize,
+        max_neurons_per_pass: usize,
+        max_growth_ratio: f32,
+        cooldown_iterations: usize,
+        stabilize_fraction: f32,
+    ) -> PyResult<Vec<(f64, f64, f64, Vec<usize>, Vec<usize>, Vec<i64>, usize, usize, usize, usize)>> {
+        py.allow_threads(|| {
+            let adapt_config = adaptation::AdaptationConfig {
+                synaptogenesis_enabled,
+                neurogenesis_enabled,
+                min_bits,
+                max_bits,
+                warmup_generations,
+                total_generations,
+                total_input_bits,
+                stats_sample_size,
+                passes_per_eval,
+                neuron_sample_rate,
+                prune_entropy_ratio,
+                grow_fill_utilization,
+                grow_error_baseline,
+                min_neurons,
+                max_neurons_per_pass,
+                max_growth_ratio,
+                cooldown_iterations,
+                stabilize_fraction,
+                ..Default::default()
+            };
+            let results = ids_cache::evaluate_genomes_ids_cached_hybrid_adaptive(
+                &self.inner,
+                &genomes_bits_flat,
+                &genomes_neurons_flat,
+                &genomes_connections_flat,
+                num_genomes,
+                train_subset_idx,
+                empty_value,
+                neuron_sample_rate,
+                rng_seed,
+                &adapt_config,
+                generation,
+            );
+            Ok(results.into_iter().map(|r| (
+                r.ce, r.accuracy, r.f1_macro,
+                r.adapted_bits, r.adapted_neurons, r.adapted_connections,
+                r.pruned, r.grown, r.added, r.removed,
+            )).collect())
+        })
+    }
+
     /// Train a single genome on full training data and return per-example predictions.
     ///
     /// Returns Vec<i64> of predicted class indices for each eval example.

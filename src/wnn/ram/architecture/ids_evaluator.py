@@ -176,6 +176,64 @@ class IDSEvaluator(BaseEvaluator):
 
 		return [EvalResult(ce=ce, accuracy=acc, f1_macro=f1) for ce, acc, f1 in raw_results]
 
+	def evaluate_batch_adaptive(
+		self,
+		genomes: list[ClusterGenome],
+		train_subset_idx: Optional[int] = None,
+		generation: int = 0,
+		total_generations: int = 250,
+		synaptogenesis: bool = True,
+		neurogenesis: bool = False,
+		min_bits: int = 4,
+		max_bits: int = 24,
+		warmup_generations: int = 10,
+		stats_sample_size: int = 10000,
+		passes_per_eval: int = 1,
+		**kwargs,
+	) -> list[tuple[EvalResult, ClusterGenome]]:
+		"""Evaluate with training-time adaptation, returning adapted genomes.
+
+		After initial training, computes per-neuron/cluster statistics and applies
+		adaptation passes (synaptogenesis prunes/grows connections, neurogenesis
+		adds/removes neurons). If the genome was modified, it is retrained and
+		the adapted architecture is returned alongside the scores.
+
+		Returns list of (EvalResult, adapted_ClusterGenome) tuples.
+		"""
+		if train_subset_idx is None:
+			train_subset_idx = self.next_train_idx()
+
+		bits_flat, neurons_flat, connections_flat = self._flatten_genomes(genomes)
+
+		raw_results = self._cache.evaluate_genomes_hybrid_adaptive(
+			bits_flat, neurons_flat, connections_flat,
+			len(genomes), train_subset_idx,
+			self._empty_value, self._neuron_sample_rate, 0,
+			synaptogenesis_enabled=synaptogenesis,
+			neurogenesis_enabled=neurogenesis,
+			min_bits=min_bits,
+			max_bits=max_bits,
+			warmup_generations=warmup_generations,
+			total_generations=total_generations,
+			generation=generation,
+			total_input_bits=self._total_input_bits,
+			stats_sample_size=stats_sample_size,
+			passes_per_eval=passes_per_eval,
+			**kwargs,
+		)
+
+		results = []
+		for ce, acc, f1, adapted_bits, adapted_neurons, adapted_conns, pruned, grown, added, removed in raw_results:
+			eval_result = EvalResult(ce=ce, accuracy=acc, f1_macro=f1)
+			adapted_genome = ClusterGenome(
+				bits_per_neuron=list(adapted_bits),
+				neurons_per_cluster=list(adapted_neurons),
+				connections=list(adapted_conns) if adapted_conns else None,
+			)
+			adapted_genome._cached_fitness = (ce, acc, f1)
+			results.append((eval_result, adapted_genome))
+		return results
+
 	def search_neighbors(
 		self,
 		genome: ClusterGenome,

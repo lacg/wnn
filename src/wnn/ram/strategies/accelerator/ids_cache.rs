@@ -401,6 +401,50 @@ pub fn predict_examples_ids_cached(
     )
 }
 
+/// Evaluate genomes with training-time adaptation (synaptogenesis + neurogenesis).
+///
+/// Returns adapted genome parameters alongside scores, enabling the Baldwin effect:
+/// genomes are structurally modified during evaluation, and the adapted architecture
+/// is returned for use in subsequent GA/TS generations.
+pub fn evaluate_genomes_ids_cached_hybrid_adaptive(
+    cache: &IDSCache,
+    genomes_bits_flat: &[usize],
+    genomes_neurons_flat: &[usize],
+    genomes_connections_flat: &[i64],
+    num_genomes: usize,
+    train_subset_idx: usize,
+    empty_value: f32,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+    adapt_config: &crate::adaptation::AdaptationConfig,
+    generation: usize,
+) -> Vec<crate::adaptive::AdaptiveGenomeResult> {
+    let train = cache.train_subset(train_subset_idx);
+    let eval = cache.full_eval();
+
+    crate::adaptive::evaluate_genomes_parallel_hybrid_adaptive(
+        genomes_bits_flat,
+        genomes_neurons_flat,
+        genomes_connections_flat,
+        num_genomes,
+        cache.num_classes(),
+        &train.input_bits,
+        &train.targets,
+        &train.negatives,
+        train.num_examples,
+        cache.num_negatives(),
+        &eval.input_bits,
+        &eval.targets,
+        eval.num_examples,
+        cache.total_features(),
+        empty_value,
+        neuron_sample_rate,
+        rng_seed,
+        adapt_config,
+        generation,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

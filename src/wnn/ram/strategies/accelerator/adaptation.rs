@@ -209,7 +209,7 @@ pub fn mean_of(values: &[f32]) -> f32 {
 
 /// Build a deterministic sample of example indices.
 /// If `sample_size == 0` or `sample_size >= num_examples`, returns all indices.
-fn build_sample_indices(num_examples: usize, sample_size: usize, seed: u64) -> Vec<usize> {
+pub(crate) fn build_sample_indices(num_examples: usize, sample_size: usize, seed: u64) -> Vec<usize> {
 	if sample_size == 0 || sample_size >= num_examples {
 		return (0..num_examples).collect();
 	}
@@ -228,7 +228,7 @@ fn build_sample_indices(num_examples: usize, sample_size: usize, seed: u64) -> V
 ///
 /// Returns `bit_ones[bit_idx]` = number of sampled examples where that bit is 1.
 /// This avoids redundant counting when multiple neurons share connections.
-fn precompute_bit_ones(
+pub(crate) fn precompute_bit_ones(
 	packed_input: &[u64],
 	words_per_example: usize,
 	sample_indices: &[usize],

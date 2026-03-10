@@ -7,17 +7,17 @@ Usage:
 Ten optimization phases (GA → Adapt → TS per dimension):
 	0.  Grid search    — evaluate neuron × bit combos to find best seed
 	1a. GA neurons     — explore neuron counts per class
-	1b. Neurogenesis   — stats-guided neuron add/remove (planned, needs Rust hooks)
+	1b. *genesis       — stats-guided neuron add/remove + connection prune/grow
 	1c. TS neurons     — refine neuron counts
 	2a. GA bits        — explore address bits per neuron
-	2b. Synaptogenesis — stats-guided bit grow/prune (planned, needs Rust hooks)
+	2b. *genesis       — stats-guided adaptation (if --synaptogenesis/--neurogenesis)
 	2c. TS bits        — refine address bits
 	3a. GA connections — explore input wiring
-	3b. Axonogenesis   — stats-guided connection rewiring (planned, needs Rust hooks)
+	3b. *genesis       — stats-guided adaptation (if enabled)
 	3c. TS connections — refine input wiring
 
-Currently runs 0 → 1a → 1c → 2a → 2c → 3a → 3c (7 phases).
-Adaptation phases (1b, 2b, 3b) require Rust-side training stats in IDSEvaluator.
+Default: 0 → 1a → 1c → 2a → 2c → 3a → 3c (7 phases).
+With --genesis: 0 → 1a → 1b → 1c → 2a → 2b → 2c → 3a → 3b → 3c (10 phases).
 """
 
 import argparse
@@ -75,6 +75,11 @@ class IDSTrainConfig:
 	split: str = "standard"  # "standard" or "random"
 	val_fraction: float = 0.25  # Validation holdout fraction from training data (0=disabled)
 	bitwise_quick: bool = False  # Quick mode: grid search + connections only
+	# Adaptation (*genesis)
+	synaptogenesis: bool = False  # Prune/grow connections based on neuron stats
+	neurogenesis: bool = False    # Add/remove neurons based on cluster stats
+	adaptation_passes: int = 3    # How many adaptation cycles per phase
+	adaptation_warmup: int = 0    # Generations to skip before adaptation (0=immediate)
 	output: Optional[str] = None
 
 
@@ -233,8 +238,15 @@ def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 	"""Run full IDS training experiment."""
 	print(f"=== WNN IDS Classifier ({cfg.classification}, split={cfg.split}) ===")
 	f1_str = f", F1={cfg.fitness_weight_f1}" if cfg.fitness_weight_f1 > 0 else ""
+	genesis_flags = []
+	if cfg.synaptogenesis:
+		genesis_flags.append("synaptogenesis")
+	if cfg.neurogenesis:
+		genesis_flags.append("neurogenesis")
+	genesis_str = f", *genesis=[{'+'.join(genesis_flags)}]×{cfg.adaptation_passes}" if genesis_flags else ""
 	print(f"Config: pop={cfg.population}, GA={cfg.ga_gens}gen, TS={cfg.ts_iters}iter, "
-		  f"patience={cfg.patience}, fitness_weights=(CE={cfg.fitness_weight_ce}, Acc={cfg.fitness_weight_acc}{f1_str})")
+		  f"patience={cfg.patience}, fitness_weights=(CE={cfg.fitness_weight_ce}, Acc={cfg.fitness_weight_acc}{f1_str})"
+		  f"{genesis_str}")
 
 	# Load dataset
 	t0 = time.time()
@@ -420,6 +432,9 @@ def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 			"fitness_weight_f1": cfg.fitness_weight_f1,
 			"beta": cfg.beta,
 			"val_fraction": cfg.val_fraction,
+			"synaptogenesis": cfg.synaptogenesis,
+			"neurogenesis": cfg.neurogenesis,
+			"adaptation_passes": cfg.adaptation_passes,
 		},
 	}
 
@@ -430,6 +445,63 @@ def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 		print(f"\nResults saved to {cfg.output}")
 
 	return metrics
+
+
+def _run_adaptation_pass(
+	evaluator: IDSEvaluator,
+	genomes: list[ClusterGenome],
+	cfg: IDSTrainConfig,
+	phase_name: str,
+	generation: int = 50,
+	total_generations: int = 100,
+) -> list[ClusterGenome]:
+	"""Run *genesis adaptation on a population of genomes.
+
+	Trains each genome, computes per-neuron/cluster statistics, applies
+	synaptogenesis and/or neurogenesis, retrains if modified, and returns
+	the adapted genomes. Genomes that don't change are returned as-is.
+	"""
+	if not cfg.synaptogenesis and not cfg.neurogenesis:
+		return genomes
+
+	adapted_genomes = []
+	for pass_idx in range(cfg.adaptation_passes):
+		results = evaluator.evaluate_batch_adaptive(
+			genomes,
+			generation=generation + pass_idx,
+			total_generations=total_generations,
+			synaptogenesis=cfg.synaptogenesis,
+			neurogenesis=cfg.neurogenesis,
+			warmup_generations=cfg.adaptation_warmup,
+			passes_per_eval=1,
+		)
+
+		total_pruned = sum(1 for _, g in results if hasattr(g, '_adaptation_stats') and False)
+		# Extract adapted genomes and report
+		adapted_genomes = [adapted_g for _, adapted_g in results]
+		changes = []
+		for (result, adapted_g), orig_g in zip(results, genomes):
+			if adapted_g.total_neurons != orig_g.total_neurons:
+				changes.append(f"neurons:{orig_g.total_neurons}->{adapted_g.total_neurons}")
+			if len(adapted_g.bits_per_neuron) != len(orig_g.bits_per_neuron) or \
+				adapted_g.bits_per_neuron != orig_g.bits_per_neuron:
+				changes.append("bits:changed")
+		if changes:
+			print(f"  Adapt pass {pass_idx+1}/{cfg.adaptation_passes}: {', '.join(changes[:5])}"
+				  + (f" (+{len(changes)-5} more)" if len(changes) > 5 else ""))
+		else:
+			print(f"  Adapt pass {pass_idx+1}/{cfg.adaptation_passes}: no changes")
+			break  # No point continuing if nothing changed
+		genomes = adapted_genomes
+
+	# Re-evaluate adapted genomes to get final fitness
+	final_results = evaluator.evaluate_batch_full(adapted_genomes)
+	best_idx = min(range(len(final_results)), key=lambda i: final_results[i].ce)
+	best = final_results[best_idx]
+	print(f"  Adapt {phase_name}: best CE={best.ce:.4f}, Acc={best.accuracy*100:.2f}%"
+		  + (f", F1={best.f1_macro:.4f}" if best.f1_macro else ""))
+
+	return adapted_genomes
 
 
 def _run_phase(
@@ -504,6 +576,25 @@ def _run_phase(
 	best_ce = ga_result.final_fitness
 	best_acc = ga_result.final_accuracy or best_acc
 
+	# Adaptation pass (*genesis) — between GA and TS
+	if cfg.synaptogenesis or cfg.neurogenesis:
+		adapted_pop = _run_adaptation_pass(
+			evaluator, ga_result.final_population[:20], cfg, phase_name,
+			generation=cfg.ga_gens, total_generations=cfg.ga_gens + cfg.ts_iters,
+		)
+		# Use best adapted genome
+		adapted_results = evaluator.evaluate_batch_full(adapted_pop)
+		best_adapted_idx = min(range(len(adapted_results)), key=lambda i: adapted_results[i].ce)
+		if adapted_results[best_adapted_idx].ce < best_ce:
+			best_genome = adapted_pop[best_adapted_idx]
+			best_ce = adapted_results[best_adapted_idx].ce
+			best_acc = adapted_results[best_adapted_idx].accuracy
+			print(f"  *genesis improved: CE={best_ce:.4f}, Acc={best_acc*100:.2f}%")
+		# Replace GA population with adapted genomes for TS seeding
+		ga_result_population = adapted_pop
+	else:
+		ga_result_population = ga_result.final_population
+
 	# TS phase — same accuracy-dominant fitness
 	ts_config = TSConfig(
 		iterations=cfg.ts_iters,
@@ -532,7 +623,7 @@ def _run_phase(
 	ts_result = ts_strategy.optimize(
 		initial_genome=best_genome,
 		initial_fitness=best_ce,
-		initial_neighbors=ga_result.final_population,
+		initial_neighbors=ga_result_population,
 		**ts_kwargs,
 	)
 	ts_time = time.time() - t0
@@ -1018,6 +1109,14 @@ def main():
 		help="Bitwise ECOC: 7 binary classifiers with Hamming error correction")
 	parser.add_argument("--bitwise-quick", action="store_true",
 		help="Bitwise quick mode: grid search + connections only (skip neurons/bits phases)")
+	parser.add_argument("--synaptogenesis", action="store_true",
+		help="Enable synaptogenesis: prune/grow neuron connections based on training stats")
+	parser.add_argument("--neurogenesis", action="store_true",
+		help="Enable neurogenesis: add/remove neurons based on cluster-level stats")
+	parser.add_argument("--genesis", action="store_true",
+		help="Enable both synaptogenesis and neurogenesis")
+	parser.add_argument("--adaptation-passes", type=int, default=3,
+		help="Number of adaptation cycles per phase (default: 3)")
 	parser.add_argument("--output", type=str, default=None, help="JSON output path")
 	args = parser.parse_args()
 
@@ -1046,6 +1145,9 @@ def main():
 		split=args.split,
 		val_fraction=args.val_fraction,
 		bitwise_quick=args.bitwise_quick,
+		synaptogenesis=args.synaptogenesis or args.genesis,
+		neurogenesis=args.neurogenesis or args.genesis,
+		adaptation_passes=args.adaptation_passes,
 		output=args.output,
 	)
 
