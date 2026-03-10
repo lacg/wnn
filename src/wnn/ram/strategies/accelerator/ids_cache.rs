@@ -291,6 +291,10 @@ impl IDSCache {
     pub fn reset(&mut self, seed: Option<u64>) {
         self.train_rotator.reset(seed);
     }
+
+    pub fn num_parts(&self) -> usize {
+        self.num_parts
+    }
 }
 
 // ── Evaluation functions (delegate to adaptive.rs) ─────────────────────
@@ -309,6 +313,114 @@ pub fn evaluate_genomes_ids_cached_hybrid(
 ) -> Vec<(f64, f64, f64, f64)> {
     let train = cache.train_subset(train_subset_idx);
     let eval = cache.full_eval();
+
+    crate::adaptive::evaluate_genomes_parallel_hybrid(
+        genomes_bits_flat,
+        genomes_neurons_flat,
+        genomes_connections_flat,
+        num_genomes,
+        cache.num_classes(),
+        &train.input_bits,
+        &train.targets,
+        &train.negatives,
+        train.num_examples,
+        cache.num_negatives(),
+        &eval.input_bits,
+        &eval.targets,
+        eval.num_examples,
+        cache.total_features(),
+        empty_value,
+        neuron_sample_rate,
+        rng_seed,
+    )
+}
+
+/// Merge all subsets except the excluded one into a single IDSSubset.
+///
+/// Used for K-fold cross-validation: K-1 folds become the training set,
+/// the excluded fold becomes the eval set.
+fn merge_subsets_except(subsets: &[IDSSubset], exclude_idx: usize) -> IDSSubset {
+    let total_features = if subsets.is_empty() || subsets[0].num_examples == 0 {
+        0
+    } else {
+        subsets[0].input_bits.len() / subsets[0].num_examples
+    };
+
+    let mut merged_input_bits = Vec::new();
+    let mut merged_targets = Vec::new();
+    let mut merged_negatives = Vec::new();
+    let mut merged_num_examples = 0;
+
+    let num_negatives_per_example = if subsets.is_empty() || subsets[0].num_examples == 0 {
+        0
+    } else {
+        subsets[0].negatives.len() / subsets[0].num_examples
+    };
+
+    for (i, subset) in subsets.iter().enumerate() {
+        if i == exclude_idx {
+            continue;
+        }
+        merged_input_bits.extend_from_slice(&subset.input_bits);
+        merged_targets.extend_from_slice(&subset.targets);
+        merged_negatives.extend_from_slice(&subset.negatives);
+        merged_num_examples += subset.num_examples;
+    }
+
+    // Sanity checks
+    if merged_num_examples > 0 {
+        assert_eq!(
+            merged_input_bits.len(),
+            merged_num_examples * total_features,
+            "merge_subsets_except: input_bits length mismatch"
+        );
+        assert_eq!(
+            merged_negatives.len(),
+            merged_num_examples * num_negatives_per_example,
+            "merge_subsets_except: negatives length mismatch"
+        );
+    }
+
+    IDSSubset {
+        input_bits: merged_input_bits,
+        targets: merged_targets,
+        negatives: merged_negatives,
+        num_examples: merged_num_examples,
+    }
+}
+
+/// Evaluate genomes using K-fold cross-validation.
+///
+/// Merges all subsets except `held_out_fold` for training, uses the held-out
+/// fold as the eval set. This gives a more robust estimate of F1/FPR since
+/// every example eventually serves as both train and eval.
+pub fn evaluate_genomes_ids_kfold_hybrid(
+    cache: &IDSCache,
+    genomes_bits_flat: &[usize],
+    genomes_neurons_flat: &[usize],
+    genomes_connections_flat: &[i64],
+    num_genomes: usize,
+    held_out_fold: usize,
+    empty_value: f32,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+) -> Vec<(f64, f64, f64, f64)> {
+    assert!(
+        held_out_fold < cache.num_parts(),
+        "held_out_fold {} >= num_parts {}",
+        held_out_fold,
+        cache.num_parts(),
+    );
+
+    // Build train set from all folds except the held-out one
+    let all_subsets: Vec<&IDSSubset> = (0..cache.num_parts())
+        .map(|i| cache.train_subset(i))
+        .collect();
+    let owned_subsets: Vec<IDSSubset> = all_subsets.iter().map(|s| (*s).clone()).collect();
+    let train = merge_subsets_except(&owned_subsets, held_out_fold);
+
+    // Use the held-out fold as eval
+    let eval = cache.train_subset(held_out_fold);
 
     crate::adaptive::evaluate_genomes_parallel_hybrid(
         genomes_bits_flat,
@@ -548,6 +660,93 @@ mod tests {
                 "class0: {} not in [20,27]", class0_count);
             assert!(class1_count >= 8 && class1_count <= 12,
                 "class1: {} not in [8,12]", class1_count);
+        }
+    }
+
+    #[test]
+    fn test_merge_subsets_except() {
+        // 3 subsets with known sizes
+        let total_features = 4;
+        let num_classes = 2;
+        let num_negatives = 1;
+
+        let s0 = IDSCache::build_subset(
+            &vec![true; 3 * total_features], &vec![0, 1, 0],
+            total_features, num_classes, num_negatives, 42,
+        );
+        let s1 = IDSCache::build_subset(
+            &vec![false; 2 * total_features], &vec![1, 0],
+            total_features, num_classes, num_negatives, 43,
+        );
+        let s2 = IDSCache::build_subset(
+            &vec![true; 4 * total_features], &vec![0, 1, 1, 0],
+            total_features, num_classes, num_negatives, 44,
+        );
+
+        let subsets = vec![s0.clone(), s1.clone(), s2.clone()];
+
+        // Exclude fold 0: merge s1 + s2 = 2 + 4 = 6 examples
+        let merged = merge_subsets_except(&subsets, 0);
+        assert_eq!(merged.num_examples, 6);
+        assert_eq!(merged.input_bits.len(), 6 * total_features);
+        assert_eq!(merged.targets.len(), 6);
+        assert_eq!(merged.negatives.len(), 6 * num_negatives);
+
+        // Exclude fold 1: merge s0 + s2 = 3 + 4 = 7 examples
+        let merged = merge_subsets_except(&subsets, 1);
+        assert_eq!(merged.num_examples, 7);
+
+        // Exclude fold 2: merge s0 + s1 = 3 + 2 = 5 examples
+        let merged = merge_subsets_except(&subsets, 2);
+        assert_eq!(merged.num_examples, 5);
+    }
+
+    #[test]
+    fn test_kfold_uses_all_data() {
+        // Verify that K-fold uses training data (not eval data) for both train and eval
+        let total_features = 4;
+        let num_classes = 2;
+        let num_parts = 3;
+        let num_train = 12;
+
+        let mut features = vec![false; num_train * total_features];
+        let mut labels = vec![0i64; num_train];
+        for i in 0..num_train {
+            labels[i] = (i % num_classes) as i64;
+            for j in 0..total_features {
+                features[i * total_features + j] = ((i + j) % 2) == 0;
+            }
+        }
+
+        let cache = IDSCache::new(
+            features.clone(),
+            labels.clone(),
+            vec![false; 4 * total_features],  // small eval set (shouldn't be used in kfold)
+            vec![0i64; 4],
+            num_classes,
+            total_features,
+            num_parts,
+            1,
+            42,
+        );
+
+        // Each fold should have ~4 examples (12/3)
+        // Merging 2 folds should give ~8 examples
+        let all_subsets: Vec<IDSSubset> = (0..num_parts)
+            .map(|i| cache.train_subset(i).clone())
+            .collect();
+
+        let total_in_subsets: usize = all_subsets.iter().map(|s| s.num_examples).sum();
+        assert_eq!(total_in_subsets, num_train);
+
+        for held_out in 0..num_parts {
+            let train_merged = merge_subsets_except(&all_subsets, held_out);
+            let eval_fold = &all_subsets[held_out];
+            assert_eq!(
+                train_merged.num_examples + eval_fold.num_examples,
+                num_train,
+                "fold {}: train + eval should equal total", held_out
+            );
         }
     }
 }

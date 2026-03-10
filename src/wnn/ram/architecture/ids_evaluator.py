@@ -43,6 +43,7 @@ class IDSEvaluator(BaseEvaluator):
 		seed: Optional[int] = None,
 		log_path: Optional[str] = None,
 		neuron_sample_rate: float = 1.0,
+		k_folds: int = 1,  # 1 = no k-fold (original behavior), >1 = K-fold CV
 	):
 		if classification == "binary":
 			y_train = dataset.y_train_binary
@@ -109,6 +110,12 @@ class IDSEvaluator(BaseEvaluator):
 		)
 
 		self._train_call_count = 0
+		self._k_folds = k_folds
+		if k_folds > 1 and k_folds != num_parts:
+			raise ValueError(
+				f"k_folds={k_folds} must equal num_parts={num_parts} "
+				f"(each part becomes one fold)"
+			)
 
 	def next_train_idx(self) -> int:
 		self._train_call_count += 1
@@ -173,16 +180,31 @@ class IDSEvaluator(BaseEvaluator):
 
 		bits_flat, neurons_flat, connections_flat = self._flatten_genomes(genomes)
 
-		raw_results = self._cache.evaluate_genomes_hybrid(
-			bits_flat,
-			neurons_flat,
-			connections_flat,
-			len(genomes),
-			train_subset_idx,
-			self._empty_value,
-			self._neuron_sample_rate,
-			0,  # rng_seed
-		)
+		if self._k_folds > 1:
+			# K-fold CV: train on K-1 folds, eval on held-out fold
+			# train_subset_idx from the rotator becomes the held-out fold index
+			raw_results = self._cache.evaluate_genomes_kfold_hybrid(
+				bits_flat,
+				neurons_flat,
+				connections_flat,
+				len(genomes),
+				train_subset_idx,  # held_out_fold
+				self._empty_value,
+				self._neuron_sample_rate,
+				0,  # rng_seed
+			)
+		else:
+			# Original behavior: train on one subset, eval on separate eval set
+			raw_results = self._cache.evaluate_genomes_hybrid(
+				bits_flat,
+				neurons_flat,
+				connections_flat,
+				len(genomes),
+				train_subset_idx,
+				self._empty_value,
+				self._neuron_sample_rate,
+				0,  # rng_seed
+			)
 
 		return [EvalResult(ce=ce, accuracy=acc, f1_macro=f1, fpr=fpr) for ce, acc, f1, fpr in raw_results]
 
@@ -460,9 +482,10 @@ class IDSEvaluator(BaseEvaluator):
 		return self.predict(genome, rng_seed)
 
 	def __repr__(self) -> str:
+		kfold_str = f", k_folds={self._k_folds}" if self._k_folds > 1 else ""
 		return (
 			f"IDSEvaluator(classes={self._num_classes}, "
 			f"features={self._total_input_bits}, "
 			f"classification='{self._classification}', "
-			f"parts={self._num_parts})"
+			f"parts={self._num_parts}{kfold_str})"
 		)

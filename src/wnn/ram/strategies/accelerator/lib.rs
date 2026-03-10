@@ -4043,6 +4043,39 @@ impl IDSCacheWrapper {
         })
     }
 
+    /// Evaluate genomes using K-fold cross-validation with hybrid CPU+GPU.
+    ///
+    /// Merges all subsets except `held_out_fold` for training, uses the
+    /// held-out fold as the eval set. Rotates the held-out fold each
+    /// generation for more robust F1/FPR estimates.
+    #[allow(clippy::too_many_arguments)]
+    fn evaluate_genomes_kfold_hybrid(
+        &self,
+        py: Python<'_>,
+        genomes_bits_flat: Vec<usize>,
+        genomes_neurons_flat: Vec<usize>,
+        genomes_connections_flat: Vec<i64>,
+        num_genomes: usize,
+        held_out_fold: usize,
+        empty_value: f32,
+        neuron_sample_rate: f32,
+        rng_seed: u64,
+    ) -> PyResult<Vec<(f64, f64, f64, f64)>> {
+        py.allow_threads(|| {
+            Ok(ids_cache::evaluate_genomes_ids_kfold_hybrid(
+                &self.inner,
+                &genomes_bits_flat,
+                &genomes_neurons_flat,
+                &genomes_connections_flat,
+                num_genomes,
+                held_out_fold,
+                empty_value,
+                neuron_sample_rate,
+                rng_seed,
+            ))
+        })
+    }
+
     /// Evaluate genomes with training-time adaptation (*genesis).
     ///
     /// Returns (ce, acc, f1, adapted_bits, adapted_neurons, adapted_conns,
