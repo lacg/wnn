@@ -771,7 +771,7 @@
 
   // Get final checkpoint for an experiment
   function getFinalCheckpoint(experimentId: number): Checkpoint | null {
-    return checkpoints.find(c => c.experiment_id === experimentId && c.is_final) ?? null;
+    return checkpoints.find(c => c.experiment_id === experimentId && c.checkpoint_type === 'experiment_end') ?? null;
   }
 
   // Format CE value
@@ -1713,23 +1713,29 @@
       </section>
     <!-- Final Results fallback (single-stage completed flows) -->
     {:else if flow.status === 'completed'}
-      {@const finalCheckpoint = checkpoints.find(c => c.is_final && experiments.some(e => e.id === c.experiment_id))}
+      {@const flowCheckpoints = checkpoints.filter(c => c.checkpoint_type === 'experiment_end' && experiments.some(e => e.id === c.experiment_id))}
+      {@const bestCeCheckpoint = flowCheckpoints.filter(c => c.best_ce != null).sort((a, b) => a.best_ce - b.best_ce)[0]}
+      {@const bestAccCheckpoint = flowCheckpoints.filter(c => c.best_accuracy != null).sort((a, b) => b.best_accuracy - a.best_accuracy)[0]}
       <section class="section">
         <h2>Final Results</h2>
-        {#if finalCheckpoint}
+        {#if bestCeCheckpoint}
           <div class="final-results-card">
             <div class="results-grid">
               <div class="result-item">
                 <div class="result-label">Best CE</div>
-                <div class="result-value">{finalCheckpoint.final_fitness?.toFixed(4) ?? '—'}</div>
+                <div class="result-value">{bestCeCheckpoint.best_ce?.toFixed(4) ?? '—'}</div>
+              </div>
+              <div class="result-item">
+                <div class="result-label">CE Phase</div>
+                <div class="result-value">{bestCeCheckpoint.name}</div>
               </div>
               <div class="result-item">
                 <div class="result-label">Best Accuracy</div>
-                <div class="result-value">{finalCheckpoint.final_accuracy ? (finalCheckpoint.final_accuracy * 100).toFixed(2) + '%' : '—'}</div>
+                <div class="result-value">{bestAccCheckpoint?.best_accuracy ? (bestAccCheckpoint.best_accuracy * 100).toFixed(2) + '%' : '—'}</div>
               </div>
               <div class="result-item">
-                <div class="result-label">Checkpoint</div>
-                <div class="result-value result-path">{finalCheckpoint.name}</div>
+                <div class="result-label">Accuracy Phase</div>
+                <div class="result-value">{bestAccCheckpoint?.name ?? '—'}</div>
               </div>
             </div>
             <div class="results-footer">
