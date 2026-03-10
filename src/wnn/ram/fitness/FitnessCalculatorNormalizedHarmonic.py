@@ -69,8 +69,8 @@ class FitnessCalculatorNormalizedHarmonic(FitnessCalculator[G]):
 			return [0.0]  # Single genome is "best"
 
 		# Extract metrics
-		ce_values = [ce for _, ce, _ in population]
-		acc_values = [acc for _, _, acc in population]
+		ce_values = [t[1] for t in population]
+		acc_values = [t[2] for t in population]
 
 		# Normalize CE to [0, 1] where 0 = best (lowest CE), 1 = worst (highest CE)
 		min_ce = min(ce_values)

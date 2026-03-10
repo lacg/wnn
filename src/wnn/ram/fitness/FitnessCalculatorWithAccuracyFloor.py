@@ -75,8 +75,8 @@ class FitnessCalculatorWithAccuracyFloor(FitnessCalculator[G]):
 
 		# Override with infinity for genomes below accuracy floor
 		result = []
-		for (_, _, acc), score in zip(population, base_scores):
-			if acc < self._min_accuracy:
+		for t, score in zip(population, base_scores):
+			if t[2] < self._min_accuracy:
 				result.append(math.inf)
 			else:
 				result.append(score)

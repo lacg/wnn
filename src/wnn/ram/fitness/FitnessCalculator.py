@@ -80,7 +80,7 @@ class FitnessCalculator(ABC, Generic[G]):
 		"""
 		fitness_scores = self.fitness(population)
 		# Pair genomes with their fitness scores
-		ranked = [(genome, score) for (genome, _, _), score in zip(population, fitness_scores)]
+		ranked = [(t[0], score) for t, score in zip(population, fitness_scores)]
 		# Sort by fitness (lower = better)
 		ranked.sort(key=lambda x: x[1])
 		return ranked
@@ -106,8 +106,8 @@ class FitnessCalculator(ABC, Generic[G]):
 
 		# Normalize None accuracy to 0.0 for fitness calculation
 		normalized = [
-			(g, ce, acc if acc is not None else 0.0)
-			for g, ce, acc in population
+			(t[0], t[1], t[2] if t[2] is not None else 0.0)
+			for t in population
 		]
 		scores = self.fitness(normalized)
 
@@ -116,8 +116,8 @@ class FitnessCalculator(ABC, Generic[G]):
 		best_fit_idx = min(range(len(scores)), key=lambda i: scores[i])
 
 		def _make(idx: int) -> GenomeBest[G]:
-			g, ce, acc = normalized[idx]
-			return GenomeBest(genome=g, ce=ce, accuracy=acc, fitness_score=scores[idx])
+			return GenomeBest(genome=normalized[idx][0], ce=normalized[idx][1],
+				accuracy=normalized[idx][2], fitness_score=scores[idx])
 
 		return PopulationBests(
 			best_ce=_make(best_ce_idx),

@@ -2385,7 +2385,7 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 			if self._tracker and self._tracker_experiment_id:
 				try:
 					# Compute population stats
-					pop_avg_ce = sum(ce for _, ce, _ in pop) / len(pop) if pop else None
+					pop_avg_ce = sum(t[1] for t in pop) / len(pop) if pop else None
 					valid_accs = [t[2] for t in pop if t[2] is not None]
 					pop_avg_acc = sum(valid_accs) / len(valid_accs) if valid_accs else None
 
@@ -2482,8 +2482,8 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 			prev_best_fitness = best_fitness
 
 		# === Build final_population from current population ===
-		final_population = [self.clone_genome(g) for g, _, _ in pop]
-		population_metrics = [(ce, acc or 0.0) for _, ce, acc in pop]
+		final_population = [self.clone_genome(t[0]) for t in pop]
+		population_metrics = [(t[1], t[2] or 0.0) for t in pop]
 
 		# Final threshold (for next phase)
 		final_threshold = self._compute_threshold(iteration / cfg.threshold_reference) if cfg.iterations > 0 else self._compute_threshold(0.0)

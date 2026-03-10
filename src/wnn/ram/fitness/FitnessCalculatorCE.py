@@ -32,7 +32,7 @@ class FitnessCalculatorCE(FitnessCalculator[G]):
 		Returns:
 			List of CE values (fitness = CE, lower is better)
 		"""
-		return [ce for _, ce, _ in population]
+		return [t[1] for t in population]
 
 	@property
 	def name(self) -> str:
