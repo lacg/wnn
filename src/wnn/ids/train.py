@@ -68,6 +68,10 @@ class IDSTrainConfig:
 	# Fitness: accuracy-dominant for IDS (CE is just a training signal)
 	fitness_weight_ce: float = 0.3
 	fitness_weight_acc: float = 1.0
+	fitness_weight_f1: float = 0.0  # F1-macro weight (0.0=off, >0=included in ranking)
+	# Tunable knobs for FPR vs recall tradeoff (used in final reporting)
+	beta: float = 1.0  # F-beta: <1 favors precision/low FPR, >1 favors recall
+	class_weights: Optional[list[float]] = None  # Per-class importance (None=uniform)
 	split: str = "standard"  # "standard" or "random"
 	bitwise_quick: bool = False  # Quick mode: grid search + connections only
 	output: Optional[str] = None
@@ -164,8 +168,9 @@ def create_asymmetric_genome(
 def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 	"""Run full IDS training experiment."""
 	print(f"=== WNN IDS Classifier ({cfg.classification}, split={cfg.split}) ===")
+	f1_str = f", F1={cfg.fitness_weight_f1}" if cfg.fitness_weight_f1 > 0 else ""
 	print(f"Config: pop={cfg.population}, GA={cfg.ga_gens}gen, TS={cfg.ts_iters}iter, "
-		  f"patience={cfg.patience}, fitness_weights=(CE={cfg.fitness_weight_ce}, Acc={cfg.fitness_weight_acc})")
+		  f"patience={cfg.patience}, fitness_weights=(CE={cfg.fitness_weight_ce}, Acc={cfg.fitness_weight_acc}{f1_str})")
 
 	# Load dataset
 	t0 = time.time()
@@ -204,6 +209,7 @@ def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 		fitness_calculator_type=FitnessCalculatorType.HARMONIC_RANK,
 		fitness_weight_ce=cfg.fitness_weight_ce,
 		fitness_weight_acc=cfg.fitness_weight_acc,
+		fitness_weight_f1=cfg.fitness_weight_f1,
 	)
 	grid_strategy = GridSearchStrategy(
 		config=grid_config,
@@ -268,9 +274,23 @@ def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 	# ── Final evaluation ──────────────────────────────────────────────
 	print("\n=== Final Evaluation ===")
 	final_result = evaluator.evaluate_batch_full([best_genome])[0]
-	print(f"Final: CE={final_result.ce:.4f}, Acc={final_result.accuracy*100:.2f}%")
+	print(f"Final: CE={final_result.ce:.4f}, Acc={final_result.accuracy*100:.2f}%"
+		  + (f", F1={final_result.f1_macro:.4f}" if final_result.f1_macro is not None else ""))
 	print(f"Genome: neurons={best_genome.neurons_per_cluster}, "
 		  f"bits={best_genome.bits_per_neuron[:10]}{'...' if len(best_genome.bits_per_neuron) > 10 else ''}")
+
+	# Per-example predictions for detailed IDS metrics
+	predictions = evaluator.predict(best_genome)
+	if cfg.classification == "binary":
+		y_test = dataset.y_test_binary
+	else:
+		y_test = dataset.y_test_multi
+	ids_metrics = compute_ids_metrics(
+		y_test, predictions, num_classes,
+		beta=cfg.beta, class_weights=cfg.class_weights,
+	)
+	print()
+	print(format_ids_report(ids_metrics, class_names=class_names))
 
 	metrics = {
 		"classification": cfg.classification,
@@ -279,6 +299,8 @@ def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 		"total_features": total_features,
 		"ce": final_result.ce,
 		"accuracy": final_result.accuracy,
+		"f1_macro": ids_metrics["f1_macro"],
+		"ids_metrics": ids_metrics,
 		"genome": {
 			"bits_per_neuron": best_genome.bits_per_neuron,
 			"neurons_per_cluster": best_genome.neurons_per_cluster,
@@ -296,6 +318,8 @@ def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 			"seed": cfg.seed,
 			"fitness_weight_ce": cfg.fitness_weight_ce,
 			"fitness_weight_acc": cfg.fitness_weight_acc,
+			"fitness_weight_f1": cfg.fitness_weight_f1,
+			"beta": cfg.beta,
 		},
 	}
 
@@ -350,6 +374,7 @@ def _run_phase(
 		fitness_calculator_type=FitnessCalculatorType.HARMONIC_RANK,
 		fitness_weight_ce=cfg.fitness_weight_ce,
 		fitness_weight_acc=cfg.fitness_weight_acc,
+		fitness_weight_f1=cfg.fitness_weight_f1,
 	)
 
 	ga_strategy = ArchitectureGAStrategy(
@@ -384,6 +409,7 @@ def _run_phase(
 		fitness_calculator_type=FitnessCalculatorType.HARMONIC_RANK,
 		fitness_weight_ce=cfg.fitness_weight_ce,
 		fitness_weight_acc=cfg.fitness_weight_acc,
+		fitness_weight_f1=cfg.fitness_weight_f1,
 	)
 
 	ts_strategy = ArchitectureTSStrategy(
@@ -450,6 +476,7 @@ def run_hierarchical_experiment(cfg: IDSTrainConfig) -> dict:
 		seed=cfg.seed,
 		fitness_weight_ce=cfg.fitness_weight_ce,
 		fitness_weight_acc=cfg.fitness_weight_acc,
+		fitness_weight_f1=cfg.fitness_weight_f1,
 		split=cfg.split,
 	)
 
@@ -490,6 +517,7 @@ def run_hierarchical_experiment(cfg: IDSTrainConfig) -> dict:
 		fitness_calculator_type=FitnessCalculatorType.HARMONIC_RANK,
 		fitness_weight_ce=cfg.fitness_weight_ce,
 		fitness_weight_acc=cfg.fitness_weight_acc,
+		fitness_weight_f1=cfg.fitness_weight_f1,
 	)
 	grid_strategy = GridSearchStrategy(
 		config=grid_config,
@@ -826,6 +854,12 @@ def main():
 		help="CE weight in fitness ranking (lower = more accuracy-focused)")
 	parser.add_argument("--fitness-acc-weight", type=float, default=1.0,
 		help="Accuracy weight in fitness ranking")
+	parser.add_argument("--fitness-f1-weight", type=float, default=0.0,
+		help="F1-macro weight in fitness ranking (0=disabled, >0=included)")
+	parser.add_argument("--beta", type=float, default=1.0,
+		help="F-beta score: <1 favors precision/low FPR, >1 favors recall")
+	parser.add_argument("--class-weights", type=str, default=None,
+		help="Per-class importance weights, comma-separated (e.g. '1.0,2.0')")
 	parser.add_argument("--split", choices=["standard", "random"], default="standard",
 		help="Evaluation protocol: 'standard' (temporal) or 'random' (i.i.d.)")
 	parser.add_argument("--hierarchical", action="store_true",
@@ -836,6 +870,11 @@ def main():
 		help="Bitwise quick mode: grid search + connections only (skip neurons/bits phases)")
 	parser.add_argument("--output", type=str, default=None, help="JSON output path")
 	args = parser.parse_args()
+
+	# Parse class weights if provided
+	class_weights = None
+	if args.class_weights:
+		class_weights = [float(w) for w in args.class_weights.split(",")]
 
 	cfg = IDSTrainConfig(
 		classification=args.classification,
@@ -851,6 +890,9 @@ def main():
 		seed=args.seed,
 		fitness_weight_ce=args.fitness_ce_weight,
 		fitness_weight_acc=args.fitness_acc_weight,
+		fitness_weight_f1=args.fitness_f1_weight,
+		beta=args.beta,
+		class_weights=class_weights,
 		split=args.split,
 		bitwise_quick=args.bitwise_quick,
 		output=args.output,

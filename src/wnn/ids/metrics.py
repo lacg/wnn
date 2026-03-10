@@ -4,12 +4,19 @@ import numpy as np
 from sklearn.metrics import (
 	accuracy_score,
 	f1_score,
+	fbeta_score,
 	confusion_matrix,
 	classification_report,
 )
 
 
-def compute_ids_metrics(y_true, y_pred, num_classes: int) -> dict:
+def compute_ids_metrics(
+	y_true,
+	y_pred,
+	num_classes: int,
+	beta: float = 1.0,
+	class_weights: list[float] | None = None,
+) -> dict:
 	"""Compute standard IDS classification metrics.
 
 	Args:
@@ -17,8 +24,16 @@ def compute_ids_metrics(y_true, y_pred, num_classes: int) -> dict:
 		y_pred: Predicted labels (array-like)
 		num_classes: Number of classes (2 for binary, 10 for multi)
 
+	Args:
+		y_true: Ground truth labels (array-like)
+		y_pred: Predicted labels (array-like)
+		num_classes: Number of classes (2 for binary, 10 for multi)
+		beta: F-beta parameter (<1 favors precision/low FPR, >1 favors recall)
+		class_weights: Per-class importance weights for weighted F1 (None=uniform)
+
 	Returns:
-		Dict with accuracy, f1_macro, per_class_f1, per_class_recall,
+		Dict with accuracy, f1_macro, fbeta_macro (if beta!=1.0),
+		f1_weighted (if class_weights), per_class_f1, per_class_recall,
 		fpr (for binary), and confusion_matrix.
 	"""
 	y_true = np.asarray(y_true)
@@ -44,6 +59,22 @@ def compute_ids_metrics(y_true, y_pred, num_classes: int) -> dict:
 		"confusion_matrix": cm.tolist(),
 	}
 
+	# F-beta score (when beta != 1.0)
+	if beta != 1.0:
+		fbeta = fbeta_score(y_true, y_pred, beta=beta, average="macro", zero_division=0)
+		result["fbeta_macro"] = float(fbeta)
+		result["beta"] = beta
+
+	# Weighted F1 with custom class weights
+	if class_weights is not None:
+		# sklearn's "weighted" average uses sample counts; for custom weights,
+		# compute manually: weighted avg of per-class F1
+		weights = np.array(class_weights[:num_classes], dtype=float)
+		weights = weights / weights.sum()  # normalize
+		f1_weighted = float(np.dot(f1_per_class[:len(weights)], weights))
+		result["f1_weighted"] = f1_weighted
+		result["class_weights"] = [float(w) for w in weights]
+
 	# FPR for binary classification (false positive rate)
 	if num_classes == 2 and cm.shape == (2, 2):
 		tn, fp, fn, tp = cm.ravel()
@@ -66,6 +97,11 @@ def format_ids_report(metrics: dict, class_names: list[str] | None = None) -> st
 	lines = []
 	lines.append(f"Accuracy:  {metrics['accuracy']:.4f} ({metrics['accuracy']*100:.2f}%)")
 	lines.append(f"F1 Macro:  {metrics['f1_macro']:.4f}")
+
+	if "fbeta_macro" in metrics:
+		lines.append(f"F{metrics['beta']:.1f} Macro: {metrics['fbeta_macro']:.4f}")
+	if "f1_weighted" in metrics:
+		lines.append(f"F1 Weighted: {metrics['f1_weighted']:.4f}")
 
 	if "fpr" in metrics:
 		lines.append(f"FPR:       {metrics['fpr']:.4f}")

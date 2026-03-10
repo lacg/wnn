@@ -1031,6 +1031,7 @@ class OptimizationConfig:
 	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK
 	fitness_weight_ce: float = 1.0
 	fitness_weight_acc: float = 1.0
+	fitness_weight_f1: float = 0.0  # F1-macro weight (0.0 = disabled, >0 = included in ranking)
 	# Accuracy floor: genomes below this get fitness = infinity (0.0 = disabled)
 	min_accuracy_floor: float = 0.0
 	# Early stopping
@@ -1044,6 +1045,7 @@ class OptimizationConfig:
 			self.fitness_calculator_type,
 			weight_ce=self.fitness_weight_ce,
 			weight_acc=self.fitness_weight_acc,
+			weight_f1=self.fitness_weight_f1,
 			min_accuracy_floor=self.min_accuracy_floor if self.min_accuracy_floor > 0 else None,
 		)
 

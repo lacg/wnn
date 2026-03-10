@@ -23,6 +23,7 @@ class FitnessCalculatorFactory:
 		mode: FitnessCalculatorType,
 		weight_ce: float = 1.0,
 		weight_acc: float = 1.0,
+		weight_f1: float = 0.0,
 		min_accuracy_floor: Optional[float] = None,
 	) -> FitnessCalculator:
 		"""
@@ -32,6 +33,7 @@ class FitnessCalculatorFactory:
 			mode: Type of fitness calculator to create
 			weight_ce: Weight for CE (used for HARMONIC_RANK and NORMALIZED)
 			weight_acc: Weight for accuracy (used for HARMONIC_RANK and NORMALIZED)
+			weight_f1: Weight for F1-macro (used for HARMONIC_RANK, 0.0 = disabled)
 			min_accuracy_floor: If set (> 0), wrap calculator with accuracy floor.
 				Genomes below this accuracy get fitness = infinity.
 
@@ -46,7 +48,7 @@ class FitnessCalculatorFactory:
 			case FitnessCalculatorType.CE:
 				base = FitnessCalculatorCE()
 			case FitnessCalculatorType.HARMONIC_RANK:
-				base = FitnessCalculatorHarmonicRank(weight_ce=weight_ce, weight_acc=weight_acc)
+				base = FitnessCalculatorHarmonicRank(weight_ce=weight_ce, weight_acc=weight_acc, weight_f1=weight_f1)
 			case FitnessCalculatorType.NORMALIZED:
 				base = FitnessCalculatorNormalized(weight_ce=weight_ce, weight_acc=weight_acc)
 			case FitnessCalculatorType.NORMALIZED_HARMONIC:

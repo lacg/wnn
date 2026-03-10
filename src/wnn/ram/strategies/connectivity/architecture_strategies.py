@@ -986,7 +986,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 
 			# Convert to 3-tuples, rank by fitness, return best n_needed
 			offspring = [
-				(g, g._cached_fitness[0], g._cached_fitness[1])
+				(g, *g._cached_fitness)
 				for g in search_result.genomes
 				if hasattr(g, '_cached_fitness')
 			]
@@ -1560,6 +1560,7 @@ class GridSearchConfig:
 	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK
 	fitness_weight_ce: float = 1.0
 	fitness_weight_acc: float = 1.0
+	fitness_weight_f1: float = 0.0
 
 
 class GridSearchStrategy:
@@ -1642,6 +1643,7 @@ class GridSearchStrategy:
 			cfg.fitness_calculator_type,
 			weight_ce=cfg.fitness_weight_ce,
 			weight_acc=cfg.fitness_weight_acc,
+			weight_f1=cfg.fitness_weight_f1,
 		)
 
 		total_configs = len(cfg.neurons_grid) * len(cfg.bits_grid)
