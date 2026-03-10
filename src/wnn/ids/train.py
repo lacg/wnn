@@ -78,6 +78,7 @@ class IDSTrainConfig:
 	# Adaptation (*genesis)
 	synaptogenesis: bool = False  # Prune/grow connections based on neuron stats
 	neurogenesis: bool = False    # Add/remove neurons based on cluster stats
+	axonogenesis: bool = False    # Rewire low-value connections to high-MI inputs
 	adaptation_passes: int = 3    # How many adaptation cycles per phase
 	adaptation_warmup: int = 0    # Generations to skip before adaptation (0=immediate)
 	output: Optional[str] = None
@@ -243,6 +244,8 @@ def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 		genesis_flags.append("synaptogenesis")
 	if cfg.neurogenesis:
 		genesis_flags.append("neurogenesis")
+	if cfg.axonogenesis:
+		genesis_flags.append("axonogenesis")
 	genesis_str = f", *genesis=[{'+'.join(genesis_flags)}]×{cfg.adaptation_passes}" if genesis_flags else ""
 	print(f"Config: pop={cfg.population}, GA={cfg.ga_gens}gen, TS={cfg.ts_iters}iter, "
 		  f"patience={cfg.patience}, fitness_weights=(CE={cfg.fitness_weight_ce}, Acc={cfg.fitness_weight_acc}{f1_str})"
@@ -434,6 +437,7 @@ def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 			"val_fraction": cfg.val_fraction,
 			"synaptogenesis": cfg.synaptogenesis,
 			"neurogenesis": cfg.neurogenesis,
+			"axonogenesis": cfg.axonogenesis,
 			"adaptation_passes": cfg.adaptation_passes,
 		},
 	}
@@ -461,7 +465,7 @@ def _run_adaptation_pass(
 	synaptogenesis and/or neurogenesis, retrains if modified, and returns
 	the adapted genomes. Genomes that don't change are returned as-is.
 	"""
-	if not cfg.synaptogenesis and not cfg.neurogenesis:
+	if not cfg.synaptogenesis and not cfg.neurogenesis and not cfg.axonogenesis:
 		return genomes
 
 	adapted_genomes = []
@@ -472,6 +476,7 @@ def _run_adaptation_pass(
 			total_generations=total_generations,
 			synaptogenesis=cfg.synaptogenesis,
 			neurogenesis=cfg.neurogenesis,
+			axonogenesis=cfg.axonogenesis,
 			warmup_generations=cfg.adaptation_warmup,
 			passes_per_eval=1,
 		)
@@ -1113,8 +1118,10 @@ def main():
 		help="Enable synaptogenesis: prune/grow neuron connections based on training stats")
 	parser.add_argument("--neurogenesis", action="store_true",
 		help="Enable neurogenesis: add/remove neurons based on cluster-level stats")
+	parser.add_argument("--axonogenesis", action="store_true",
+		help="Enable axonogenesis: rewire low-value connections to high-MI input bits")
 	parser.add_argument("--genesis", action="store_true",
-		help="Enable both synaptogenesis and neurogenesis")
+		help="Enable all *genesis mechanisms (synaptogenesis + neurogenesis + axonogenesis)")
 	parser.add_argument("--adaptation-passes", type=int, default=3,
 		help="Number of adaptation cycles per phase (default: 3)")
 	parser.add_argument("--output", type=str, default=None, help="JSON output path")
@@ -1147,6 +1154,7 @@ def main():
 		bitwise_quick=args.bitwise_quick,
 		synaptogenesis=args.synaptogenesis or args.genesis,
 		neurogenesis=args.neurogenesis or args.genesis,
+		axonogenesis=args.axonogenesis or args.genesis,
 		adaptation_passes=args.adaptation_passes,
 		output=args.output,
 	)

@@ -3227,6 +3227,7 @@ pub struct AdaptiveGenomeResult {
     pub grown: usize,
     pub added: usize,
     pub removed: usize,
+    pub rewired: usize,
 }
 
 /// Compute NeuronStats from adaptive training state (GroupMemory-based).
@@ -3447,7 +3448,241 @@ pub(crate) fn compute_cluster_stats_adaptive(
     }).collect()
 }
 
-/// Evaluate genomes with training-time adaptation (synaptogenesis + neurogenesis).
+/// Axonogenesis for the adaptive (GroupMemory) path.
+///
+/// Rewires low-value connections to high-entropy input bits using the same 3-stage
+/// algorithm as `adaptation::axonogenesis_pass`, but reads from GroupMemory instead
+/// of ClusterStorage and uses class-label targets instead of target_bits.
+///
+/// Returns the number of rewired connections.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn axonogenesis_pass_adaptive(
+    bits_per_neuron: &[usize],
+    neurons_per_cluster: &[usize],
+    connections: &mut Vec<i64>,
+    neuron_stats: &[crate::adaptation::NeuronStats],
+    memories: &[GroupMemory],
+    groups: &[ConfigGroup],
+    cluster_to_group: &[(usize, usize)],
+    _cluster_neuron_starts: &[usize],
+    config: &crate::adaptation::AdaptationConfig,
+    packed_input: &[u64],
+    words_per_example: usize,
+    train_targets: &[i64],
+    num_examples: usize,
+    _num_clusters: usize,
+    _memory_mode: u8,
+    _empty_value: f32,
+    rate: f32,
+    rng: &mut impl rand::Rng,
+) -> usize {
+    use crate::adaptation::{build_sample_indices, precompute_bit_ones};
+
+    let total_neurons = bits_per_neuron.len();
+    let mut rewired = 0usize;
+    let max_candidates = 20usize;
+
+    // Build connection offsets per neuron
+    let mut conn_offsets = vec![0usize];
+    for &b in bits_per_neuron.iter() {
+        conn_offsets.push(conn_offsets.last().unwrap() + b);
+    }
+
+    // Build neuron → cluster mapping
+    let mut neuron_cluster = Vec::with_capacity(total_neurons);
+    let mut neuron_local_idx = Vec::with_capacity(total_neurons);
+    for (c, &nc) in neurons_per_cluster.iter().enumerate() {
+        for local in 0..nc {
+            neuron_cluster.push(c);
+            neuron_local_idx.push(local);
+        }
+    }
+
+    // Stage 1: Pre-compute marginal entropy for all input bits
+    let sample_indices = build_sample_indices(num_examples, config.stats_sample_size, 77);
+    let n_sample = sample_indices.len();
+    let bit_ones = precompute_bit_ones(packed_input, words_per_example, &sample_indices, config.total_input_bits);
+    let bit_entropy: Vec<f32> = bit_ones.iter().map(|&ones| {
+        let p = ones as f32 / n_sample.max(1) as f32;
+        if p > 0.0 && p < 1.0 {
+            -(p * p.ln() + (1.0 - p) * (1.0 - p).ln()) / std::f32::consts::LN_2
+        } else {
+            0.0
+        }
+    }).collect();
+
+    let entropy_floor = 0.1f32;
+
+    // Pre-compute bit values for sampled examples (for Stage 3 redundancy)
+    let mut bit_vals: Vec<Option<Vec<u8>>> = vec![None; config.total_input_bits];
+    for bit_idx in 0..config.total_input_bits {
+        if bit_entropy[bit_idx] >= entropy_floor {
+            let mut vals = Vec::with_capacity(n_sample);
+            for &ex in &sample_indices {
+                let row_start = ex * words_per_example;
+                let word_idx = bit_idx / 64;
+                let bit_pos = bit_idx % 64;
+                let bit = ((packed_input[row_start + word_idx] >> bit_pos) & 1) as u8;
+                vals.push(bit);
+            }
+            bit_vals[bit_idx] = Some(vals);
+        }
+    }
+
+    // Process each neuron
+    for n in 0..total_neurons {
+        let n_bits = bits_per_neuron[n];
+        if n_bits < 2 { continue; }
+
+        let stats = &neuron_stats[n];
+        let conn_start = conn_offsets[n];
+        let cluster = neuron_cluster[n];
+        let local_n = neuron_local_idx[n];
+
+        // Resolve GroupMemory location for this neuron
+        let (group_idx, local_cluster) = cluster_to_group[cluster];
+        let group = &groups[group_idx];
+        let memory = &memories[group_idx];
+        let neuron_in_group = local_cluster * group.neurons + local_n;
+
+        // Stage 1a: Find weak connections (entropy < median × threshold)
+        let median_ent = crate::adaptation::median_of(&stats.connection_entropy);
+        let rewire_threshold = median_ent * config.axon_entropy_threshold;
+
+        let mut weak_conns: Vec<(usize, f32)> = stats.connection_entropy.iter()
+            .enumerate()
+            .filter(|(_, &ent)| ent < rewire_threshold)
+            .map(|(idx, &ent)| (idx, ent))
+            .collect();
+        weak_conns.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        weak_conns.truncate(config.axon_rewire_count);
+
+        if weak_conns.is_empty() { continue; }
+
+        // Stage 1b: Get candidate unused bits sorted by marginal entropy (desc)
+        let used: std::collections::HashSet<i64> = connections[conn_start..conn_start + n_bits]
+            .iter().copied().collect();
+
+        let mut candidates: Vec<(i64, f32)> = (0..config.total_input_bits)
+            .filter(|&b| !used.contains(&(b as i64)) && bit_entropy[b] >= entropy_floor)
+            .map(|b| (b as i64, bit_entropy[b]))
+            .collect();
+        candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        candidates.truncate(max_candidates);
+
+        if candidates.is_empty() { continue; }
+
+        // Pre-compute base addresses for this neuron on sampled examples
+        let neuron_conns = &connections[conn_start..conn_start + n_bits];
+        let mut base_addresses: Vec<usize> = Vec::with_capacity(n_sample);
+        for &ex in &sample_indices {
+            let row_start = ex * words_per_example;
+            let mut addr = 0usize;
+            for (i, &conn_idx) in neuron_conns.iter().enumerate() {
+                let idx = conn_idx as usize;
+                let bit = (packed_input[row_start + idx / 64] >> (idx % 64)) & 1;
+                addr |= (bit as usize) << (n_bits - 1 - i);
+            }
+            base_addresses.push(addr);
+        }
+
+        // Stage 3 prep: existing connection bit values
+        let existing_bit_vals: Vec<Option<&Vec<u8>>> = (0..n_bits)
+            .map(|i| {
+                let conn = neuron_conns[i] as usize;
+                if conn < config.total_input_bits { bit_vals[conn].as_ref() } else { None }
+            })
+            .collect();
+
+        // For each weak connection, find the best replacement via accuracy delta + redundancy
+        for &(local_idx, _old_entropy) in &weak_conns {
+            if rng.gen::<f32>() >= rate { continue; }
+
+            let old_conn = connections[conn_start + local_idx];
+            let mut best_candidate: Option<(i64, f32)> = None;
+
+            for &(cand_conn, _cand_entropy) in &candidates {
+                if connections[conn_start..conn_start + n_bits].contains(&cand_conn) { continue; }
+
+                // Stage 2: Accuracy delta — measure per-neuron accuracy from swapping
+                let mut delta = 0i32;
+                for (si, &ex) in sample_indices.iter().enumerate() {
+                    let old_addr = base_addresses[si];
+                    // Target: is this cluster the correct one for this example?
+                    let target_is_this = train_targets[ex] as usize == cluster;
+
+                    // Old prediction (current connection)
+                    let old_cell = memory.read(neuron_in_group, old_addr);
+                    let old_weight = crate::neuron_memory::QUAD_WEIGHTS[old_cell.clamp(0, 3) as usize];
+                    let old_correct = (old_weight >= 0.5) == target_is_this;
+
+                    // Flip address bit at local_idx if old/new input bits differ
+                    let row_start = ex * words_per_example;
+                    let old_bit = (packed_input[row_start + old_conn as usize / 64]
+                        >> (old_conn as usize % 64)) & 1;
+                    let new_bit = (packed_input[row_start + cand_conn as usize / 64]
+                        >> (cand_conn as usize % 64)) & 1;
+                    let new_addr = if old_bit != new_bit {
+                        old_addr ^ (1 << (n_bits - 1 - local_idx))
+                    } else {
+                        old_addr
+                    };
+
+                    // New prediction
+                    let new_cell = memory.read(neuron_in_group, new_addr);
+                    let new_weight = crate::neuron_memory::QUAD_WEIGHTS[new_cell.clamp(0, 3) as usize];
+                    let new_correct = (new_weight >= 0.5) == target_is_this;
+
+                    delta += new_correct as i32 - old_correct as i32;
+                }
+
+                if delta <= 0 { continue; }
+
+                // Stage 3: Redundancy penalty (Jaccard similarity)
+                let mut max_jaccard = 0.0f32;
+                if let Some(cand_vals) = &bit_vals[cand_conn as usize] {
+                    for (i, existing) in existing_bit_vals.iter().enumerate() {
+                        if i == local_idx { continue; }
+                        if let Some(existing_vals) = existing {
+                            let mut both = 0u32;
+                            let mut either = 0u32;
+                            for si in 0..n_sample {
+                                let a = cand_vals[si];
+                                let b = existing_vals[si];
+                                both += (a & b) as u32;
+                                either += (a | b) as u32;
+                            }
+                            let jaccard = if either > 0 { both as f32 / either as f32 } else { 0.0 };
+                            if jaccard > max_jaccard { max_jaccard = jaccard; }
+                        }
+                    }
+                }
+
+                let redundancy_weight = 0.5f32;
+                let adjusted_score = delta as f32 * (1.0 - redundancy_weight * max_jaccard);
+
+                if best_candidate.is_none() || adjusted_score > best_candidate.unwrap().1 {
+                    best_candidate = Some((cand_conn, adjusted_score));
+                }
+            }
+
+            if let Some((new_conn, score)) = best_candidate {
+                if score > 0.0 {
+                    connections[conn_start + local_idx] = new_conn;
+                    rewired += 1;
+                }
+            }
+        }
+    }
+
+    if rewired > 0 {
+        eprintln!("[Adapt] Axonogenesis: rewired={} (rate={:.2})", rewired, rate);
+    }
+
+    rewired
+}
+
+/// Evaluate genomes with training-time adaptation (synaptogenesis + neurogenesis + axonogenesis).
 ///
 /// Same interface as `evaluate_genomes_parallel_hybrid` but:
 /// 1. After training, computes stats from trained memory
@@ -3513,7 +3748,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
             AdaptiveGenomeResult {
                 ce, accuracy: acc, f1_macro: f1,
                 adapted_bits: bits, adapted_neurons: neurons, adapted_connections: conns,
-                pruned: 0, grown: 0, added: 0, removed: 0,
+                pruned: 0, grown: 0, added: 0, removed: 0, rewired: 0,
             }
         }).collect();
     }
@@ -3577,7 +3812,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
         });
 
     let mut all_results: Vec<(usize, f64, f64, f64)> = Vec::with_capacity(num_genomes);
-    let mut all_adapted: Vec<(usize, Vec<usize>, Vec<usize>, Vec<i64>, usize, usize, usize, usize)> =
+    let mut all_adapted: Vec<(usize, Vec<usize>, Vec<usize>, Vec<i64>, usize, usize, usize, usize, usize)> =
         Vec::with_capacity(num_genomes);
     let num_batches = (num_genomes + batch_size - 1) / batch_size;
 
@@ -3661,6 +3896,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
             grown: usize,
             added: usize,
             removed: usize,
+            rewired: usize,
             genome_idx: usize,
         }
 
@@ -3679,6 +3915,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
             let mut total_grown = 0usize;
             let mut total_added = 0usize;
             let mut total_removed = 0usize;
+            let mut total_rewired = 0usize;
 
             // Compute stats from ORIGINAL trained state (not adapted copies).
             // Stats must match the memory architecture — adapted bits/conns may have
@@ -3731,13 +3968,26 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
                     total_added += a;
                     total_removed += r;
                 }
+
+                // Axonogenesis (MI-guided connection rewiring)
+                if adapt_config.axonogenesis_enabled {
+                    let rw = axonogenesis_pass_adaptive(
+                        &adapt_bits, &adapt_neurons, &mut adapt_conns,
+                        &neuron_stats, &state.memories, &state.groups,
+                        &state.cluster_to_group, &state.cluster_neuron_starts,
+                        adapt_config, &packed_train_input, words_per_example,
+                        train_targets, num_train, num_clusters,
+                        memory_mode, empty_value, rate, &mut rng,
+                    );
+                    total_rewired += rw;
+                }
             }
 
-            let changed = total_pruned > 0 || total_grown > 0 || total_added > 0 || total_removed > 0;
+            let changed = total_pruned > 0 || total_grown > 0 || total_added > 0 || total_removed > 0 || total_rewired > 0;
             adapted_states.push(AdaptedState {
                 bits: adapt_bits, neurons: adapt_neurons, connections: adapt_conns,
                 changed, pruned: total_pruned, grown: total_grown,
-                added: total_added, removed: total_removed,
+                added: total_added, removed: total_removed, rewired: total_rewired,
                 genome_idx: state.genome_idx,
             });
         }
@@ -3799,7 +4049,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
             all_adapted.push((
                 adapted.genome_idx,
                 adapted.bits, adapted.neurons, adapted.connections,
-                adapted.pruned, adapted.grown, adapted.added, adapted.removed,
+                adapted.pruned, adapted.grown, adapted.added, adapted.removed, adapted.rewired,
             ));
         }
     }
@@ -3811,12 +4061,12 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
         score_map[idx] = (ce, acc, f1);
     }
 
-    all_adapted.into_iter().map(|(idx, bits, neurons, conns, pruned, grown, added, removed)| {
+    all_adapted.into_iter().map(|(idx, bits, neurons, conns, pruned, grown, added, removed, rewired)| {
         let (ce, acc, f1) = score_map[idx];
         AdaptiveGenomeResult {
             ce, accuracy: acc, f1_macro: f1,
             adapted_bits: bits, adapted_neurons: neurons, adapted_connections: conns,
-            pruned, grown, added, removed,
+            pruned, grown, added, removed, rewired,
         }
     }).collect()
 }

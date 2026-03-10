@@ -142,6 +142,35 @@ class IDSEvaluator(BaseEvaluator):
 		if train_subset_idx is None:
 			train_subset_idx = self.next_train_idx()
 
+		# If _adapt_config is set (by AdaptationStrategy for dedicated *genesis phases),
+		# delegate to adaptive path — train, adapt architecture, retrain, eval.
+		# Genomes are updated in-place with adapted architecture.
+		if self._adapt_config is not None:
+			config = self._adapt_config
+			adaptive_results = self.evaluate_batch_adaptive(
+				genomes,
+				train_subset_idx=train_subset_idx,
+				generation=self._generation,
+				total_generations=config.total_generations,
+				synaptogenesis=config.synaptogenesis_enabled,
+				neurogenesis=config.neurogenesis_enabled,
+				axonogenesis=config.axonogenesis_enabled,
+				min_bits=config.min_bits,
+				max_bits=config.max_bits,
+				warmup_generations=config.warmup_generations,
+				stats_sample_size=config.stats_sample_size,
+				passes_per_eval=config.passes_per_eval,
+			)
+			# Update genomes in-place (like BitwiseEvaluator does)
+			results = []
+			for genome, (eval_result, adapted_genome) in zip(genomes, adaptive_results):
+				genome.bits_per_neuron = adapted_genome.bits_per_neuron
+				genome.neurons_per_cluster = adapted_genome.neurons_per_cluster
+				genome.connections = adapted_genome.connections
+				genome._cached_fitness = adapted_genome._cached_fitness
+				results.append(eval_result)
+			return results
+
 		bits_flat, neurons_flat, connections_flat = self._flatten_genomes(genomes)
 
 		raw_results = self._cache.evaluate_genomes_hybrid(
@@ -184,6 +213,7 @@ class IDSEvaluator(BaseEvaluator):
 		total_generations: int = 250,
 		synaptogenesis: bool = True,
 		neurogenesis: bool = False,
+		axonogenesis: bool = False,
 		min_bits: int = 4,
 		max_bits: int = 24,
 		warmup_generations: int = 10,
@@ -194,9 +224,13 @@ class IDSEvaluator(BaseEvaluator):
 		"""Evaluate with training-time adaptation, returning adapted genomes.
 
 		After initial training, computes per-neuron/cluster statistics and applies
-		adaptation passes (synaptogenesis prunes/grows connections, neurogenesis
-		adds/removes neurons). If the genome was modified, it is retrained and
-		the adapted architecture is returned alongside the scores.
+		adaptation passes:
+		  - synaptogenesis: prune/grow connections per neuron
+		  - neurogenesis: add/remove neurons per cluster
+		  - axonogenesis: rewire low-value connections to high-MI inputs
+
+		If the genome was modified, it is retrained and the adapted architecture
+		is returned alongside the scores.
 
 		Returns list of (EvalResult, adapted_ClusterGenome) tuples.
 		"""
@@ -211,6 +245,7 @@ class IDSEvaluator(BaseEvaluator):
 			self._empty_value, self._neuron_sample_rate, 0,
 			synaptogenesis_enabled=synaptogenesis,
 			neurogenesis_enabled=neurogenesis,
+			axonogenesis_enabled=axonogenesis,
 			min_bits=min_bits,
 			max_bits=max_bits,
 			warmup_generations=warmup_generations,
@@ -223,7 +258,7 @@ class IDSEvaluator(BaseEvaluator):
 		)
 
 		results = []
-		for ce, acc, f1, adapted_bits, adapted_neurons, adapted_conns, pruned, grown, added, removed in raw_results:
+		for ce, acc, f1, adapted_bits, adapted_neurons, adapted_conns, pruned, grown, added, removed, rewired in raw_results:
 			eval_result = EvalResult(ce=ce, accuracy=acc, f1_macro=f1)
 			adapted_genome = ClusterGenome(
 				bits_per_neuron=list(adapted_bits),
