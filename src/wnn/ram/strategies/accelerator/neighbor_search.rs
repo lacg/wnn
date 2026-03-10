@@ -93,6 +93,7 @@ pub struct CandidateResult {
     pub connections: Vec<i64>,
     pub cross_entropy: f64,
     pub accuracy: f64,
+    pub f1_macro: f64,
 }
 
 /// Result of offspring/neighbor search including counts.
@@ -482,7 +483,7 @@ pub fn search_neighbors_with_threshold<F>(
     live_progress: Option<&Arc<RwLock<Option<LiveProgress>>>>,
 ) -> (Vec<CandidateResult>, usize)
 where
-    F: Fn(&[usize], &[usize], &[i64], usize) -> Vec<(f64, f64)>,
+    F: Fn(&[usize], &[usize], &[i64], usize) -> Vec<(f64, f64, f64)>,
 {
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
     let mut logger = FileLogger::new(log_path);
@@ -544,7 +545,7 @@ where
 
         let results = evaluate_batch(&batch_bits, &batch_neurons, &batch_connections, batch_to_generate);
 
-        for (i, (ce, acc)) in results.iter().enumerate() {
+        for (i, (ce, acc, f1)) in results.iter().enumerate() {
             evaluated += 1;
             best_ce_so_far = best_ce_so_far.min(*ce);
             best_acc_so_far = best_acc_so_far.max(*acc);
@@ -563,6 +564,7 @@ where
                     connections: conns.clone(),
                     cross_entropy: *ce,
                     accuracy: *acc,
+                    f1_macro: *f1,
                 });
 
                 if passed.len() >= target_count {
@@ -614,7 +616,7 @@ pub fn search_neighbors_best_n<F>(
     live_progress: Option<&Arc<RwLock<Option<LiveProgress>>>>,
 ) -> Vec<CandidateResult>
 where
-    F: Fn(&[usize], &[usize], &[i64], usize) -> Vec<(f64, f64)>,
+    F: Fn(&[usize], &[usize], &[i64], usize) -> Vec<(f64, f64, f64)>,
 {
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
     let mut logger = FileLogger::new(log_path);
@@ -677,7 +679,7 @@ where
 
         let results = evaluate_batch(&batch_bits, &batch_neurons, &batch_connections, batch_to_generate);
 
-        for (i, (ce, acc)) in results.iter().enumerate() {
+        for (i, (ce, acc, f1)) in results.iter().enumerate() {
             evaluated += 1;
             best_ce_so_far = best_ce_so_far.min(*ce);
             best_acc_so_far = best_acc_so_far.max(*acc);
@@ -689,6 +691,7 @@ where
                 connections: conns.clone(),
                 cross_entropy: *ce,
                 accuracy: *acc,
+                f1_macro: *f1,
             };
 
             if *acc >= accuracy_threshold {
@@ -990,7 +993,7 @@ pub fn search_offspring<F>(
     live_progress: Option<&Arc<RwLock<Option<LiveProgress>>>>,
 ) -> OffspringSearchResult
 where
-    F: Fn(&[usize], &[usize], &[i64], usize) -> Vec<(f64, f64)>,
+    F: Fn(&[usize], &[usize], &[i64], usize) -> Vec<(f64, f64, f64)>,
 {
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
     let mut logger = FileLogger::new(log_path);
@@ -1082,7 +1085,7 @@ where
 
         let results = evaluate_batch(&batch_bits, &batch_neurons, &batch_connections, batch_to_generate);
 
-        for (i, (ce, acc)) in results.iter().enumerate() {
+        for (i, (ce, acc, f1)) in results.iter().enumerate() {
             evaluated += 1;
             best_ce_so_far = best_ce_so_far.min(*ce);
             best_acc_so_far = best_acc_so_far.max(*acc);
@@ -1094,6 +1097,7 @@ where
                 connections: conns.clone(),
                 cross_entropy: *ce,
                 accuracy: *acc,
+                f1_macro: *f1,
             };
 
             if *acc >= accuracy_threshold {

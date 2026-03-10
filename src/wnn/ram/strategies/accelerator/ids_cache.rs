@@ -306,7 +306,7 @@ pub fn evaluate_genomes_ids_cached_hybrid(
     empty_value: f32,
     neuron_sample_rate: f32,
     rng_seed: u64,
-) -> Vec<(f64, f64)> {
+) -> Vec<(f64, f64, f64)> {
     let train = cache.train_subset(train_subset_idx);
     let eval = cache.full_eval();
 
@@ -341,7 +341,7 @@ pub fn evaluate_genomes_ids_cached_full_hybrid(
     empty_value: f32,
     neuron_sample_rate: f32,
     rng_seed: u64,
-) -> Vec<(f64, f64)> {
+) -> Vec<(f64, f64, f64)> {
     let train = cache.full_train();
     let eval = cache.full_eval();
 

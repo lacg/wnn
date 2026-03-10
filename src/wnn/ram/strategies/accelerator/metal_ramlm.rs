@@ -94,6 +94,7 @@ struct CEBufferCache {
     targets_buffer: Option<CachedBuffer>,
     ce_buffer: Option<CachedBuffer>,
     correct_buffer: Option<CachedBuffer>,
+    predicted_buffer: Option<CachedBuffer>,
     // Track the targets data to know if we need to update
     cached_targets_hash: u64,
 }
@@ -104,6 +105,7 @@ impl CEBufferCache {
             targets_buffer: None,
             ce_buffer: None,
             correct_buffer: None,
+            predicted_buffer: None,
             cached_targets_hash: 0,
         }
     }
@@ -1283,9 +1285,9 @@ impl MetalSparseCEEvaluator {
         num_clusters: usize,
         empty_value: f32,
         memory_mode: u8,
-    ) -> Result<(f64, f64), String> {
+    ) -> Result<(f64, f64, Vec<u32>), String> {
         if num_examples == 0 {
-            return Ok((0.0, 0.0));
+            return Ok((0.0, 0.0, vec![]));
         }
 
         // Convert connections to i32 for Metal
@@ -1355,13 +1357,18 @@ impl MetalSparseCEEvaluator {
             MTLResourceOptions::StorageModeShared,
         );
 
-        // Output buffers: one float CE and one uint correct per example
+        // Output buffers: one float CE, one uint correct, one uint predicted per example
         let ce_buffer = self.device.new_buffer(
             (num_examples * mem::size_of::<f32>()) as u64,
             MTLResourceOptions::StorageModeShared,
         );
 
         let correct_buffer = self.device.new_buffer(
+            (num_examples * mem::size_of::<u32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let predicted_buffer = self.device.new_buffer(
             (num_examples * mem::size_of::<u32>()) as u64,
             MTLResourceOptions::StorageModeShared,
         );
@@ -1381,6 +1388,7 @@ impl MetalSparseCEEvaluator {
         encoder.set_buffer(7, Some(&params_buffer), 0);
         encoder.set_buffer(8, Some(&ce_buffer), 0);
         encoder.set_buffer(9, Some(&correct_buffer), 0);
+        encoder.set_buffer(10, Some(&predicted_buffer), 0);
 
         // Grid: one thread per example
         let grid_size = MTLSize::new(num_examples as u64, 1, 1);
@@ -1392,24 +1400,27 @@ impl MetalSparseCEEvaluator {
         command_buffer.commit();
         command_buffer.wait_until_completed();
 
-        // Read results and reduce on CPU (GPU reduction would be faster but more complex)
+        // Read results and reduce on CPU
         let ce_ptr = ce_buffer.contents() as *const f32;
         let correct_ptr = correct_buffer.contents() as *const u32;
+        let predicted_ptr = predicted_buffer.contents() as *const u32;
 
-        let (total_ce, total_correct): (f64, u64) = unsafe {
+        let (total_ce, total_correct, predictions): (f64, u64, Vec<u32>) = unsafe {
             let ce_slice = std::slice::from_raw_parts(ce_ptr, num_examples);
             let correct_slice = std::slice::from_raw_parts(correct_ptr, num_examples);
+            let predicted_slice = std::slice::from_raw_parts(predicted_ptr, num_examples);
 
             let total_ce: f64 = ce_slice.iter().map(|&c| c as f64).sum();
             let total_correct: u64 = correct_slice.iter().map(|&c| c as u64).sum();
+            let predictions: Vec<u32> = predicted_slice.to_vec();
 
-            (total_ce, total_correct)
+            (total_ce, total_correct, predictions)
         };
 
         let avg_ce = total_ce / num_examples as f64;
         let accuracy = total_correct as f64 / num_examples as f64;
 
-        Ok((avg_ce, accuracy))
+        Ok((avg_ce, accuracy, predictions))
     }
 }
 
@@ -1546,7 +1557,7 @@ impl MetalCEReduceEvaluator {
         targets: &[i64],
         num_examples: usize,
         num_clusters: usize,
-    ) -> Result<(f64, f64), String> {
+    ) -> Result<(f64, f64, Vec<u32>), String> {
         let targets_i32: Vec<i32> = targets.iter().map(|&t| t as i32).collect();
         let targets_buffer = self.device.new_buffer_with_data(
             targets_i32.as_ptr() as *const _,
@@ -1572,6 +1583,10 @@ impl MetalCEReduceEvaluator {
             (num_examples * mem::size_of::<u32>()) as u64,
             MTLResourceOptions::StorageModeShared,
         );
+        let predicted_buffer = self.device.new_buffer(
+            (num_examples * mem::size_of::<u32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
 
         let command_buffer = self.command_queue.new_command_buffer();
         let encoder = command_buffer.new_compute_command_encoder();
@@ -1582,6 +1597,7 @@ impl MetalCEReduceEvaluator {
         encoder.set_buffer(2, Some(&params_buffer), 0);
         encoder.set_buffer(3, Some(&ce_buffer), 0);
         encoder.set_buffer(4, Some(&correct_buffer), 0);
+        encoder.set_buffer(5, Some(&predicted_buffer), 0);
 
         let grid_size = MTLSize::new(num_examples as u64, 1, 1);
         let max_threads = self.ce_reduce_pipeline.max_total_threads_per_threadgroup();
@@ -1592,24 +1608,27 @@ impl MetalCEReduceEvaluator {
         command_buffer.commit();
         command_buffer.wait_until_completed();
 
-        // Sum CE and correct on CPU
+        // Sum CE and correct on CPU, read predictions
         let ce_ptr = ce_buffer.contents() as *const f32;
         let correct_ptr = correct_buffer.contents() as *const u32;
+        let predicted_ptr = predicted_buffer.contents() as *const u32;
 
-        let (total_ce, total_correct): (f64, u64) = unsafe {
+        let (total_ce, total_correct, predictions): (f64, u64, Vec<u32>) = unsafe {
             let ce_slice = std::slice::from_raw_parts(ce_ptr, num_examples);
             let correct_slice = std::slice::from_raw_parts(correct_ptr, num_examples);
+            let predicted_slice = std::slice::from_raw_parts(predicted_ptr, num_examples);
 
             let total_ce: f64 = ce_slice.iter().map(|&c| c as f64).sum();
             let total_correct: u64 = correct_slice.iter().map(|&c| c as u64).sum();
+            let predictions: Vec<u32> = predicted_slice.to_vec();
 
-            (total_ce, total_correct)
+            (total_ce, total_correct, predictions)
         };
 
         let avg_ce = total_ce / num_examples as f64;
         let accuracy = total_correct as f64 / num_examples as f64;
 
-        Ok((avg_ce, accuracy))
+        Ok((avg_ce, accuracy, predictions))
     }
 }
 
@@ -2205,15 +2224,16 @@ impl MetalGroupEvaluator {
         command_buffer.wait_until_completed();
     }
 
-    /// Compute CE and accuracy from accumulated scores buffer
-    /// Uses cached buffers to avoid allocation overhead
+    /// Compute CE, accuracy, and per-example predictions from accumulated scores buffer.
+    /// Uses cached buffers to avoid allocation overhead.
+    /// Returns (avg_ce, accuracy, predictions_vec).
     pub fn compute_ce_from_buffer(
         &self,
         scores_buffer: &Buffer,
         targets: &[i64],
         num_examples: usize,
         num_clusters: usize,
-    ) -> Result<(f64, f64), String> {
+    ) -> Result<(f64, f64, Vec<u32>), String> {
         let current_gen = get_sparse_cache_generation();
 
         // Simple hash of targets for cache invalidation (first + last + len)
@@ -2226,12 +2246,13 @@ impl MetalGroupEvaluator {
         };
 
         // Get or create cached buffers
-        let (targets_buffer, ce_buffer, correct_buffer) = CE_BUFFER_CACHE.with(|cache| {
+        let (targets_buffer, ce_buffer, correct_buffer, predicted_buffer) = CE_BUFFER_CACHE.with(|cache| {
             let mut cache = cache.borrow_mut();
             let targets_i32: Vec<i32> = targets.iter().map(|&t| t as i32).collect();
             let required_targets_bytes = (targets_i32.len() * mem::size_of::<i32>()) as u64;
             let required_ce_bytes = (num_examples * mem::size_of::<f32>()) as u64;
             let required_correct_bytes = (num_examples * mem::size_of::<u32>()) as u64;
+            let required_predicted_bytes = (num_examples * mem::size_of::<u32>()) as u64;
 
             // Check targets buffer - simplified logic to avoid borrow issues
             // First check if we can reuse the existing buffer
@@ -2318,7 +2339,36 @@ impl MetalGroupEvaluator {
                 buf
             };
 
-            (tgt_buf, ce_buf, correct_buf)
+            // Predicted buffer - just needs to be large enough
+            let pred_buf = if let Some(ref cached) = cache.predicted_buffer {
+                if cached.cache_gen == current_gen && cached.capacity_bytes >= required_predicted_bytes {
+                    cached.buffer.clone()
+                } else {
+                    let buf = self.device.new_buffer(
+                        required_predicted_bytes,
+                        MTLResourceOptions::StorageModeShared,
+                    );
+                    cache.predicted_buffer = Some(CachedBuffer {
+                        buffer: buf.clone(),
+                        capacity_bytes: required_predicted_bytes,
+                        cache_gen: current_gen,
+                    });
+                    buf
+                }
+            } else {
+                let buf = self.device.new_buffer(
+                    required_predicted_bytes,
+                    MTLResourceOptions::StorageModeShared,
+                );
+                cache.predicted_buffer = Some(CachedBuffer {
+                    buffer: buf.clone(),
+                    capacity_bytes: required_predicted_bytes,
+                    cache_gen: current_gen,
+                });
+                buf
+            };
+
+            (tgt_buf, ce_buf, correct_buf, pred_buf)
         });
 
         // Params buffer is small, just create it each time
@@ -2341,6 +2391,7 @@ impl MetalGroupEvaluator {
         encoder.set_buffer(2, Some(&params_buffer), 0);
         encoder.set_buffer(3, Some(&ce_buffer), 0);
         encoder.set_buffer(4, Some(&correct_buffer), 0);
+        encoder.set_buffer(5, Some(&predicted_buffer), 0);
 
         let grid_size = MTLSize::new(num_examples as u64, 1, 1);
         let max_threads = self.ce_reduce_pipeline.max_total_threads_per_threadgroup();
@@ -2351,24 +2402,27 @@ impl MetalGroupEvaluator {
         command_buffer.commit();
         command_buffer.wait_until_completed();
 
-        // Sum CE and correct on CPU
+        // Sum CE and correct on CPU, read predictions
         let ce_ptr = ce_buffer.contents() as *const f32;
         let correct_ptr = correct_buffer.contents() as *const u32;
+        let predicted_ptr = predicted_buffer.contents() as *const u32;
 
-        let (total_ce, total_correct): (f64, u64) = unsafe {
+        let (total_ce, total_correct, predictions): (f64, u64, Vec<u32>) = unsafe {
             let ce_slice = std::slice::from_raw_parts(ce_ptr, num_examples);
             let correct_slice = std::slice::from_raw_parts(correct_ptr, num_examples);
+            let predicted_slice = std::slice::from_raw_parts(predicted_ptr, num_examples);
 
             let total_ce: f64 = ce_slice.iter().map(|&c| c as f64).sum();
             let total_correct: u64 = correct_slice.iter().map(|&c| c as u64).sum();
+            let predictions: Vec<u32> = predicted_slice.to_vec();
 
-            (total_ce, total_correct)
+            (total_ce, total_correct, predictions)
         };
 
         let avg_ce = total_ce / num_examples as f64;
         let accuracy = total_correct as f64 / num_examples as f64;
 
-        Ok((avg_ce, accuracy))
+        Ok((avg_ce, accuracy, predictions))
     }
 }
 

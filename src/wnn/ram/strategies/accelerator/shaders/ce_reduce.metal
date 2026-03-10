@@ -39,6 +39,7 @@ kernel void reduce_scores_to_ce(
     constant CEReduceParams& params [[buffer(2)]],
     device float* ce_out [[buffer(3)]],             // [num_examples]
     device uint* correct_out [[buffer(4)]],         // [num_examples]
+    device uint* predicted_out [[buffer(5)]],       // [num_examples]
     uint example_idx [[thread_position_in_grid]]
 ) {
     if (example_idx >= params.num_examples) return;
@@ -71,6 +72,7 @@ kernel void reduce_scores_to_ce(
 
     ce_out[example_idx] = ce;
     correct_out[example_idx] = (predicted_cluster == uint(target_cluster)) ? 1 : 0;
+    predicted_out[example_idx] = predicted_cluster;
 }
 
 //

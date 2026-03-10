@@ -84,6 +84,7 @@ class EvalResult:
 	"""
 	ce: float                              # Cross-entropy (lower = better)
 	accuracy: float                        # Token accuracy (higher = better)
+	f1_macro: Optional[float] = None       # F1-macro (higher = better)
 	bit_accuracy: Optional[float] = None   # Weighted bit accuracy (bitwise only)
 	cluster_ce: Optional[float] = None     # Stage 1 CE (two-stage only)
 	cluster_accuracy: Optional[float] = None  # Stage 1 accuracy (two-stage only)

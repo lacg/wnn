@@ -16,6 +16,7 @@
 // - targets: [num_examples] - target cluster for each example
 // - ce_out: [num_examples] - cross-entropy per example (reduced later)
 // - correct_out: [num_examples] - 1 if correct, 0 otherwise
+// - predicted_out: [num_examples] - predicted cluster index per example (for F1 computation)
 //
 
 #include <metal_stdlib>
@@ -179,6 +180,7 @@ kernel void sparse_forward_with_ce(
     constant SparseCEParams& params [[buffer(7)]],
     device float* ce_out [[buffer(8)]],
     device uint* correct_out [[buffer(9)]],
+    device uint* predicted_out [[buffer(10)]],
     uint example_idx [[thread_position_in_grid]]
 ) {
     if (example_idx >= params.num_examples) return;
@@ -235,6 +237,7 @@ kernel void sparse_forward_with_ce(
 
     ce_out[example_idx] = ce;
     correct_out[example_idx] = (predicted_cluster == uint(target_cluster)) ? 1 : 0;
+    predicted_out[example_idx] = predicted_cluster;
 }
 
 //
@@ -263,6 +266,7 @@ kernel void sparse_forward_with_ce_online(
     constant SparseCEParams& params [[buffer(7)]],
     device float* ce_out [[buffer(8)]],
     device uint* correct_out [[buffer(9)]],
+    device uint* predicted_out [[buffer(10)]],
     uint example_idx [[thread_position_in_grid]]
 ) {
     if (example_idx >= params.num_examples) return;
@@ -316,6 +320,7 @@ kernel void sparse_forward_with_ce_online(
 
     ce_out[example_idx] = ce;
     correct_out[example_idx] = (predicted_cluster == uint(target_cluster)) ? 1 : 0;
+    predicted_out[example_idx] = predicted_cluster;
 }
 
 //

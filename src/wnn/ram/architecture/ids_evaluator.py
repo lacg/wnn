@@ -153,7 +153,7 @@ class IDSEvaluator(BaseEvaluator):
 			0,  # rng_seed
 		)
 
-		return [EvalResult(ce=ce, accuracy=acc, bit_accuracy=0.0) for ce, acc in raw_results]
+		return [EvalResult(ce=ce, accuracy=acc, f1_macro=f1) for ce, acc, f1 in raw_results]
 
 	def evaluate_batch_full(
 		self,
@@ -172,7 +172,7 @@ class IDSEvaluator(BaseEvaluator):
 			0,  # rng_seed
 		)
 
-		return [EvalResult(ce=ce, accuracy=acc, bit_accuracy=0.0) for ce, acc in raw_results]
+		return [EvalResult(ce=ce, accuracy=acc, f1_macro=f1) for ce, acc, f1 in raw_results]
 
 	def search_neighbors(
 		self,
@@ -229,13 +229,13 @@ class IDSEvaluator(BaseEvaluator):
 		)
 
 		genomes = []
-		for bits, neurons, connections, ce, acc in results:
+		for bits, neurons, connections, ce, acc, f1 in results:
 			g = ClusterGenome(
 				bits_per_neuron=list(bits),
 				neurons_per_cluster=list(neurons),
 				connections=list(connections) if connections else None,
 			)
-			g._cached_fitness = (ce, acc)
+			g._cached_fitness = (ce, acc, f1)
 			genomes.append(g)
 		return genomes
 
@@ -309,13 +309,13 @@ class IDSEvaluator(BaseEvaluator):
 		)
 
 		genomes = []
-		for bits, neurons, connections, ce, acc in candidates:
+		for bits, neurons, connections, ce, acc, f1 in candidates:
 			g = ClusterGenome(
 				bits_per_neuron=list(bits),
 				neurons_per_cluster=list(neurons),
 				connections=list(connections) if connections else None,
 			)
-			g._cached_fitness = (ce, acc)
+			g._cached_fitness = (ce, acc, f1)
 			genomes.append(g)
 
 		return OffspringSearchResult(genomes=genomes, evaluated=evaluated, viable=viable)
