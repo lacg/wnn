@@ -1660,7 +1660,7 @@ pub fn evaluate_bitwise_genomes(
     sparse_threshold_override: Option<usize>,
     live_progress: Option<&std::sync::Arc<std::sync::RwLock<Option<crate::neighbor_search::LiveProgress>>>>,
     experiment_id: i64,
-) -> Vec<(f64, f64, f64)> {
+) -> Vec<(f64, f64, f64, f64)> {
     let train_subset = &cache.bitwise_train_subsets[stage][train_subset_idx % cache.num_parts];
     let eval_subset = &cache.bitwise_eval_subsets[stage][eval_subset_idx % cache.num_eval_parts];
     evaluate_genomes_with_params(
@@ -1694,7 +1694,7 @@ pub fn evaluate_bitwise_genomes_full(
     neuron_sample_rate: f32,
     rng_seed: u64,
     sparse_threshold_override: Option<usize>,
-) -> Vec<(f64, f64, f64)> {
+) -> Vec<(f64, f64, f64, f64)> {
     evaluate_genomes_with_params(
         cache.bitwise_output_bits[stage],
         &cache.bitwise_token_bits[stage],
@@ -1733,12 +1733,12 @@ pub fn evaluate_bitwise_selector_genomes(
     neuron_sample_rate: f32,
     rng_seed: u64,
     sparse_threshold_override: Option<usize>,
-) -> Vec<(f64, f64, f64)> {
+) -> Vec<(f64, f64, f64, f64)> {
     let train_subset = &cache.bitwise_selector_train[stage][group_id];
     let eval_subset = &cache.bitwise_selector_eval[stage][group_id];
 
     if eval_subset.num_examples == 0 {
-        return vec![(0.0, 0.0, 0.0); num_genomes];
+        return vec![(0.0, 0.0, 0.0, 0.0); num_genomes];
     }
 
     evaluate_genomes_with_params(
@@ -2946,14 +2946,14 @@ pub fn evaluate_tiered_genomes(
     memory_mode: u8,
     neuron_sample_rate: f32,
     rng_seed: u64,
-) -> Vec<(f64, f64, f64)> {
+) -> Vec<(f64, f64, f64, f64)> {
     let train_subs = match &cache.tiered_train_subsets[stage] {
         Some(subs) => subs,
-        None => return vec![(f64::MAX, 0.0, 0.0); num_genomes],
+        None => return vec![(f64::MAX, 0.0, 0.0, 0.0); num_genomes],
     };
     let eval_subs = match &cache.tiered_eval_subsets[stage] {
         Some(subs) => subs,
-        None => return vec![(f64::MAX, 0.0, 0.0); num_genomes],
+        None => return vec![(f64::MAX, 0.0, 0.0, 0.0); num_genomes],
     };
 
     let train = &train_subs[train_subset_idx % train_subs.len()];
@@ -2999,14 +2999,14 @@ pub fn evaluate_tiered_genomes_full(
     memory_mode: u8,
     neuron_sample_rate: f32,
     rng_seed: u64,
-) -> Vec<(f64, f64, f64)> {
+) -> Vec<(f64, f64, f64, f64)> {
     let train = match &cache.tiered_full_train[stage] {
         Some(t) => t,
-        None => return vec![(f64::MAX, 0.0, 0.0); num_genomes],
+        None => return vec![(f64::MAX, 0.0, 0.0, 0.0); num_genomes],
     };
     let eval = match &cache.tiered_full_eval[stage] {
         Some(e) => e,
-        None => return vec![(f64::MAX, 0.0, 0.0); num_genomes],
+        None => return vec![(f64::MAX, 0.0, 0.0, 0.0); num_genomes],
     };
 
     let total_input_bits = cache.stage_input_bits[stage];

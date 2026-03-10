@@ -130,7 +130,7 @@ class OptimizationTemplate(ABC, Generic[T]):
 		T,                                        # best_genome
 		list[tuple[int, float]],                  # history: [(iteration, best_fitness)]
 		list[T],                                  # final_population (sorted by fitness)
-		list[tuple[float, float]],                # population_metrics: [(ce, acc)]
+		list[tuple],                              # population_metrics: [(ce, acc, f1?, fpr?)]
 		int,                                      # iterations_run
 		bool,                                     # early_stopped
 		Optional[StopReason],                     # stop_reason
@@ -237,7 +237,7 @@ class OptimizationTemplate(ABC, Generic[T]):
 		early_stopped: bool,
 		stop_reason: Optional[StopReason],
 		final_population: Optional[list[T]],
-		population_metrics: Optional[list[tuple[float, float]]],
+		population_metrics: Optional[list[tuple]],
 		initial_accuracy: Optional[float] = None,
 		final_accuracy: Optional[float] = None,
 		final_threshold: Optional[float] = None,
@@ -268,12 +268,12 @@ class OptimizationTemplate(ABC, Generic[T]):
 	def seed_population(
 		self,
 		initial_population: Optional[list[T]],
-		initial_evals: Optional[list[tuple[float, float]]],
+		initial_evals: Optional[list[tuple]],
 		target_size: int,
 		force_re_evaluate: bool = False,
-	) -> list[tuple[T, Optional[float], Optional[float]]]:
+	) -> list[tuple]:
 		"""
-		Seed population from previous phase with cached (CE, acc) reuse.
+		Seed population from previous phase with cached (CE, acc, f1?, fpr?) reuse.
 
 		This is the core mechanism for phase-to-phase data flow. When a
 		previous phase provides both genomes AND their evaluation metrics,
@@ -317,8 +317,10 @@ class OptimizationTemplate(ABC, Generic[T]):
 				f"from previous phase (no re-evaluation)"
 			)
 			seeded = [
-				(self.clone_genome(g), ce, acc)
-				for g, (ce, acc) in zip(initial_population, initial_evals)
+				(self.clone_genome(g), e[0], e[1],
+				 e[2] if len(e) > 2 else None,
+				 e[3] if len(e) > 3 else None)
+				for g, e in zip(initial_population, initial_evals)
 			]
 		else:
 			if force_re_evaluate and initial_evals:
@@ -371,7 +373,7 @@ class OptimizationTemplate(ABC, Generic[T]):
 		initial_genome: Optional[T] = None,
 		initial_population: Optional[list[T]] = None,
 		initial_fitness: Optional[float] = None,
-		initial_evals: Optional[list[tuple[float, float]]] = None,
+		initial_evals: Optional[list[tuple]] = None,
 		batch_evaluate_fn: Optional[Callable] = None,
 		overfitting_callback: Optional[Callable] = None,
 		# TS-specific (kept for backward compat)

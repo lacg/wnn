@@ -237,6 +237,71 @@ pub fn compute_f1_macro(predictions: &[u32], targets: &[i64], num_classes: usize
     if num_active_classes == 0 { 0.0 } else { f1_sum / num_active_classes as f64 }
 }
 
+/// Compute both F1-macro and FPR-macro from the same confusion matrix.
+/// FPR(c) = FP(c) / (FP(c) + TN(c))  where TN(c) = total - TP(c) - FP(c) - FN(c)
+/// Returns (f1_macro, fpr_macro).
+pub fn compute_f1_fpr(predictions: &[u32], targets: &[i64], num_classes: usize) -> (f64, f64) {
+    if num_classes == 0 || predictions.is_empty() {
+        return (0.0, 0.0);
+    }
+
+    // Build confusion matrix: confusion[true_class * K + predicted_class]
+    let mut confusion = vec![0u64; num_classes * num_classes];
+    for (pred, target) in predictions.iter().zip(targets.iter()) {
+        let t = *target as usize;
+        let p = *pred as usize;
+        if t < num_classes && p < num_classes {
+            confusion[t * num_classes + p] += 1;
+        }
+    }
+
+    let total: f64 = confusion.iter().sum::<u64>() as f64;
+    let mut f1_sum = 0.0f64;
+    let mut fpr_sum = 0.0f64;
+    let mut num_active_classes = 0usize;
+
+    for c in 0..num_classes {
+        let tp = confusion[c * num_classes + c] as f64;
+        let fp: f64 = (0..num_classes)
+            .filter(|&t| t != c)
+            .map(|t| confusion[t * num_classes + c] as f64)
+            .sum();
+        let fn_count: f64 = (0..num_classes)
+            .filter(|&p| p != c)
+            .map(|p| confusion[c * num_classes + p] as f64)
+            .sum();
+        let tn = total - tp - fp - fn_count;
+
+        // Skip classes with no support (no true examples)
+        if tp + fn_count == 0.0 {
+            continue;
+        }
+
+        num_active_classes += 1;
+
+        // F1
+        let precision = if tp + fp > 0.0 { tp / (tp + fp) } else { 0.0 };
+        let recall = if tp + fn_count > 0.0 { tp / (tp + fn_count) } else { 0.0 };
+        let f1 = if precision + recall > 0.0 {
+            2.0 * precision * recall / (precision + recall)
+        } else {
+            0.0
+        };
+        f1_sum += f1;
+
+        // FPR
+        let fpr = if fp + tn > 0.0 { fp / (fp + tn) } else { 0.0 };
+        fpr_sum += fpr;
+    }
+
+    if num_active_classes == 0 {
+        (0.0, 0.0)
+    } else {
+        let n = num_active_classes as f64;
+        (f1_sum / n, fpr_sum / n)
+    }
+}
+
 /// Check if group coalescing is enabled (set WNN_COALESCE_GROUPS=1)
 fn use_coalesced_groups() -> bool {
     std::env::var("WNN_COALESCE_GROUPS").is_ok()
@@ -1497,7 +1562,7 @@ pub fn evaluate_genomes_parallel(
     empty_value: f32,
     neuron_sample_rate: f32,
     rng_seed: u64,
-) -> Vec<(f64, f64, f64)> {
+) -> Vec<(f64, f64, f64, f64)> {
     let memory_mode = crate::neuron_memory::get_memory_mode();
     use rand::prelude::*;
     use rand::SeedableRng;
@@ -1561,7 +1626,7 @@ pub fn evaluate_genomes_parallel(
     // SEQUENTIAL genome evaluation - each genome gets full thread pool for token parallelism
     // Parallel genome eval causes contention: 10 genomes × nested token parallelism = thrashing
     // Sequential is faster: ~6s/genome vs ~10s/genome with parallel outer loop
-    let results: Vec<(f64, f64, f64)> = (0..num_genomes).map(|genome_idx| {
+    let results: Vec<(f64, f64, f64, f64)> = (0..num_genomes).map(|genome_idx| {
         let genome_start = std::time::Instant::now();
         // Extract this genome's per-neuron bits and per-cluster neurons
         let genome_offset = genome_idx * num_clusters;
@@ -1787,7 +1852,7 @@ pub fn evaluate_genomes_parallel(
 
         let avg_ce = total_ce / num_eval as f64;
         let accuracy = total_correct as f64 / num_eval as f64;
-        let f1 = compute_f1_macro(&predictions, eval_targets, num_clusters);
+        let (f1, fpr) = compute_f1_fpr(&predictions, eval_targets, num_clusters);
 
         // Progress logging (to log file if WNN_LOG_PATH set, otherwise stderr)
         // Format matches Python's format_genome_log for consistency
@@ -1833,7 +1898,7 @@ pub fn evaluate_genomes_parallel(
             }
         }
 
-        (avg_ce, accuracy, f1)
+        (avg_ce, accuracy, f1, fpr)
     }).collect();
 
     results
@@ -1891,7 +1956,7 @@ pub fn evaluate_genomes_parallel_multisubset(
     empty_value: f32,
     neuron_sample_rate: f32,
     rng_seed: u64,
-) -> Vec<(f64, f64, f64)> {
+) -> Vec<(f64, f64, f64, f64)> {
     // Compute offsets for train subsets
     let mut train_offsets: Vec<usize> = Vec::with_capacity(train_subset_counts.len() + 1);
     let mut train_target_offsets: Vec<usize> = Vec::with_capacity(train_subset_counts.len() + 1);
@@ -2454,7 +2519,7 @@ pub fn evaluate_genome_hybrid(
     empty_value: f32,
     metal: Option<&crate::metal_ramlm::MetalRAMLMEvaluator>,
     sparse_metal: Option<&crate::metal_ramlm::MetalSparseEvaluator>,
-) -> (f64, f64, f64) {
+) -> (f64, f64, f64, f64) {
     let memory_mode = crate::neuron_memory::get_memory_mode();
     let epsilon = 1e-10f64;
 
@@ -2506,7 +2571,7 @@ pub fn evaluate_genome_hybrid(
                     );
 
                     if let Ok((ce, acc, predictions)) = result {
-                        let f1 = compute_f1_macro(&predictions, eval_targets, num_clusters);
+                        let (f1, fpr) = compute_f1_fpr(&predictions, eval_targets, num_clusters);
                         if timing_enabled {
                             let elapsed = call_start.elapsed().as_millis();
                             let total_ms = eval_start.elapsed().as_millis();
@@ -2515,7 +2580,7 @@ pub fn evaluate_genome_hybrid(
                                 total_ms, elapsed
                             );
                         }
-                        return (ce, acc, f1);
+                        return (ce, acc, f1, fpr);
                     }
                     // Fall through to standard path if CE evaluator fails
                 }
@@ -2677,7 +2742,7 @@ pub fn evaluate_genome_hybrid(
                 let ce_time_ms = if phase_timing { ce_start.elapsed().as_micros() as f64 / 1000.0 } else { 0.0 };
 
                 if let Ok((ce, acc, predictions)) = result {
-                    let f1 = compute_f1_macro(&predictions, eval_targets, num_clusters);
+                    let (f1, fpr) = compute_f1_fpr(&predictions, eval_targets, num_clusters);
                     if timing_enabled {
                         let elapsed = gpu_start.elapsed().as_millis();
                         if phase_timing {
@@ -2692,7 +2757,7 @@ pub fn evaluate_genome_hybrid(
                             );
                         }
                     }
-                    return (ce, acc, f1);
+                    return (ce, acc, f1, fpr);
                 }
             }
             // Fall through to CPU path if full GPU fails
@@ -2737,9 +2802,9 @@ pub fn evaluate_genome_hybrid(
 
     let avg_ce = total_ce / num_eval as f64;
     let accuracy = total_correct as f64 / num_eval as f64;
-    let f1 = compute_f1_macro(&predictions, eval_targets, num_clusters);
+    let (f1, fpr) = compute_f1_fpr(&predictions, eval_targets, num_clusters);
 
-    (avg_ce, accuracy, f1)
+    (avg_ce, accuracy, f1, fpr)
 }
 
 /// Predict per-example class indices for a single trained genome.
@@ -2916,7 +2981,7 @@ pub fn evaluate_genomes_parallel_hybrid(
     empty_value: f32,
     neuron_sample_rate: f32,
     rng_seed: u64,
-) -> Vec<(f64, f64, f64)> {
+) -> Vec<(f64, f64, f64, f64)> {
     let memory_mode = crate::neuron_memory::get_memory_mode();
     if num_genomes == 0 {
         return vec![];
@@ -2993,7 +3058,7 @@ pub fn evaluate_genomes_parallel_hybrid(
     let eval_worker = get_eval_worker();
 
     // Collect all results
-    let mut all_results: Vec<(usize, f64, f64, f64)> = Vec::with_capacity(num_genomes);
+    let mut all_results: Vec<(usize, f64, f64, f64, f64)> = Vec::with_capacity(num_genomes);
 
     // Process genomes in batches
     let num_batches = (num_genomes + batch_size - 1) / batch_size;
@@ -3158,7 +3223,7 @@ pub fn evaluate_genomes_parallel_hybrid(
             let pos_width = total_count.to_string().len();
             let type_padded = format!("{:<4}", &log_type[..log_type.len().min(4)]);
 
-            for (genome_idx, ce, acc, _f1) in &batch_results {
+            for (genome_idx, ce, acc, _f1, _fpr) in &batch_results {
                 let overall_position = batch_offset + genome_idx + 1;
                 let msg = format!(
                     "{} | [Gen {:0gen_width$}/{:0gen_width$}] Genome {:0pos_width$}/{} ({}): CE={:.4}, Acc={:.4}% ({:.1}s)\n",
@@ -3203,9 +3268,9 @@ pub fn evaluate_genomes_parallel_hybrid(
     }
 
     // Sort results by genome index and return
-    let mut results: Vec<(f64, f64, f64)> = vec![(0.0, 0.0, 0.0); num_genomes];
-    for (genome_idx, ce, acc, f1) in all_results {
-        results[genome_idx] = (ce, acc, f1);
+    let mut results: Vec<(f64, f64, f64, f64)> = vec![(0.0, 0.0, 0.0, 0.0); num_genomes];
+    for (genome_idx, ce, acc, f1, fpr) in all_results {
+        results[genome_idx] = (ce, acc, f1, fpr);
     }
 
     results
@@ -3220,6 +3285,7 @@ pub struct AdaptiveGenomeResult {
     pub ce: f64,
     pub accuracy: f64,
     pub f1_macro: f64,
+    pub fpr: f64,
     pub adapted_bits: Vec<usize>,
     pub adapted_neurons: Vec<usize>,
     pub adapted_connections: Vec<i64>,
@@ -3737,7 +3803,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
         }
         let mut conn_offset = 0usize;
 
-        return standard.into_iter().enumerate().map(|(g, (ce, acc, f1))| {
+        return standard.into_iter().enumerate().map(|(g, (ce, acc, f1, fpr))| {
             let bpn_start = genome_bpn_offsets[g];
             let bpn_end = genome_bpn_offsets[g + 1];
             let bits = genomes_bits_flat[bpn_start..bpn_end].to_vec();
@@ -3746,7 +3812,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
             let conns = genomes_connections_flat[conn_offset..conn_offset + conn_size].to_vec();
             conn_offset += conn_size;
             AdaptiveGenomeResult {
-                ce, accuracy: acc, f1_macro: f1,
+                ce, accuracy: acc, f1_macro: f1, fpr,
                 adapted_bits: bits, adapted_neurons: neurons, adapted_connections: conns,
                 pruned: 0, grown: 0, added: 0, removed: 0, rewired: 0,
             }
@@ -3811,7 +3877,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
             computed_batch
         });
 
-    let mut all_results: Vec<(usize, f64, f64, f64)> = Vec::with_capacity(num_genomes);
+    let mut all_results: Vec<(usize, f64, f64, f64, f64)> = Vec::with_capacity(num_genomes);
     let mut all_adapted: Vec<(usize, Vec<usize>, Vec<usize>, Vec<i64>, usize, usize, usize, usize, usize)> =
         Vec::with_capacity(num_genomes);
     let num_batches = (num_genomes + batch_size - 1) / batch_size;
@@ -4056,15 +4122,15 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
 
     // Sort by genome index and build final results
     all_adapted.sort_by_key(|a| a.0);
-    let mut score_map: Vec<(f64, f64, f64)> = vec![(0.0, 0.0, 0.0); num_genomes];
-    for (idx, ce, acc, f1) in all_results {
-        score_map[idx] = (ce, acc, f1);
+    let mut score_map: Vec<(f64, f64, f64, f64)> = vec![(0.0, 0.0, 0.0, 0.0); num_genomes];
+    for (idx, ce, acc, f1, fpr) in all_results {
+        score_map[idx] = (ce, acc, f1, fpr);
     }
 
     all_adapted.into_iter().map(|(idx, bits, neurons, conns, pruned, grown, added, removed, rewired)| {
-        let (ce, acc, f1) = score_map[idx];
+        let (ce, acc, f1, fpr) = score_map[idx];
         AdaptiveGenomeResult {
-            ce, accuracy: acc, f1_macro: f1,
+            ce, accuracy: acc, f1_macro: f1, fpr,
             adapted_bits: bits, adapted_neurons: neurons, adapted_connections: conns,
             pruned, grown, added, removed, rewired,
         }

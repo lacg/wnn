@@ -387,13 +387,13 @@ class MultiStageEvaluator(BaseEvaluator):
 				rng_seed=self._seed,
 			)
 			weight = count / total_eval
-			for i, (ce, acc, bit_acc) in enumerate(group_results):
+			for i, (ce, acc, bit_acc, _fpr) in enumerate(group_results):
 				genome_ce_sum[i] += ce * weight
 				genome_correct[i] += acc * count  # acc is fraction, * count = correct count
 				genome_bit_acc_sum[i] += bit_acc * weight
 
 		return [
-			(genome_ce_sum[i], genome_correct[i] / total_eval, genome_bit_acc_sum[i])
+			(genome_ce_sum[i], genome_correct[i] / total_eval, genome_bit_acc_sum[i], 0.0)
 			for i in range(len(genomes))
 		]
 
@@ -574,7 +574,7 @@ class MultiStageEvaluator(BaseEvaluator):
 			self._cleanup_progress_env()
 
 		# Cache bit accuracy on genomes
-		for genome, (_, _, bit_acc) in zip(genomes, raw):
+		for genome, (_, _, bit_acc, _) in zip(genomes, raw):
 			genome._cached_bit_acc = bit_acc
 
 		# Update live progress (read by observer thread for dashboard)
@@ -617,7 +617,7 @@ class MultiStageEvaluator(BaseEvaluator):
 
 		return [
 			EvalResult(ce=ce, accuracy=acc, bit_accuracy=bit_acc)
-			for ce, acc, bit_acc in raw
+			for ce, acc, bit_acc, _fpr in raw
 		]
 
 	def evaluate_batch_full(
@@ -635,7 +635,7 @@ class MultiStageEvaluator(BaseEvaluator):
 			raw = self._evaluate_bitwise_full_rust(self._target_stage, genomes)
 		elapsed = time.time() - start
 
-		for genome, (_, _, bit_acc) in zip(genomes, raw):
+		for genome, (_, _, bit_acc, _) in zip(genomes, raw):
 			genome._cached_bit_acc = bit_acc
 
 		log = logger if logger is not None else lambda x: None
@@ -644,7 +644,7 @@ class MultiStageEvaluator(BaseEvaluator):
 
 		return [
 			EvalResult(ce=ce, accuracy=acc, bit_accuracy=bit_acc)
-			for ce, acc, bit_acc in raw
+			for ce, acc, bit_acc, _fpr in raw
 		]
 
 	# ── Combined CE ──────────────────────────────────────────────────
@@ -859,7 +859,7 @@ class MultiStageEvaluator(BaseEvaluator):
 				f"(best CE={best_ce:.4f}, Acc={best_acc:.2%}, BitAcc={best_bit_acc:.2%})")
 
 		# Cache fitness on genomes
-		for g, (ce, acc, bit_acc) in zip(all_candidates, results):
+		for g, (ce, acc, bit_acc, _fpr) in zip(all_candidates, results):
 			g._cached_fitness = (ce, acc)
 			g._cached_bit_acc = bit_acc
 

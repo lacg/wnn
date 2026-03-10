@@ -1379,7 +1379,7 @@ pub fn evaluate_genomes(
     neuron_sample_rate: f32,
     rng_seed: u64,
     sparse_threshold_override: Option<usize>,
-) -> Vec<(f64, f64, f64)> {
+) -> Vec<(f64, f64, f64, f64)> {
     let train_subset = &cache.train_subsets[train_subset_idx % cache.num_parts];
     let eval_subset = &cache.eval_subsets[eval_subset_idx % cache.num_eval_parts];
     evaluate_genomes_with_subset(
@@ -1400,7 +1400,7 @@ pub fn evaluate_genomes_full(
     neuron_sample_rate: f32,
     rng_seed: u64,
     sparse_threshold_override: Option<usize>,
-) -> Vec<(f64, f64, f64)> {
+) -> Vec<(f64, f64, f64, f64)> {
     evaluate_genomes_with_subset(
         cache, bits_per_neuron_flat, neurons_per_cluster_flat,
         connections_flat, num_genomes, &cache.full_train, &cache.full_eval,
@@ -1434,7 +1434,7 @@ fn evaluate_genomes_with_subset(
     neuron_sample_rate: f32,
     rng_seed: u64,
     sparse_threshold_override: Option<usize>,
-) -> Vec<(f64, f64, f64)> {
+) -> Vec<(f64, f64, f64, f64)> {
     evaluate_genomes_with_params(
         cache.num_bits, &cache.token_bits, cache.vocab_size,
         bits_per_neuron_flat, neurons_per_cluster_flat, connections_flat,
@@ -1470,7 +1470,7 @@ pub(crate) fn evaluate_genomes_with_params(
     sparse_threshold_override: Option<usize>,
     live_progress: Option<&std::sync::Arc<std::sync::RwLock<Option<crate::neighbor_search::LiveProgress>>>>,
     _experiment_id: i64,
-) -> Vec<(f64, f64, f64)> {
+) -> Vec<(f64, f64, f64, f64)> {
     let start_time = std::time::Instant::now();
     let num_clusters = num_clusters;
     let num_eval = eval_subset.num_examples;
@@ -1705,7 +1705,7 @@ pub(crate) fn evaluate_genomes_with_params(
             Ok(ce_results) => {
                 return ce_results.into_iter()
                     .zip(weighted_bit_accs)
-                    .map(|((ce, acc), bit_acc)| (ce, acc, bit_acc))
+                    .map(|((ce, acc), bit_acc)| (ce, acc, bit_acc, 0.0))
                     .collect();
             }
             Err(e) => {
@@ -1731,7 +1731,7 @@ pub(crate) fn evaluate_genomes_with_params(
 
     ce_results.into_iter()
         .zip(weighted_bit_accs)
-        .map(|((ce, acc), bit_acc)| (ce, acc, bit_acc))
+        .map(|((ce, acc), bit_acc)| (ce, acc, bit_acc, 0.0))
         .collect()
 }
 

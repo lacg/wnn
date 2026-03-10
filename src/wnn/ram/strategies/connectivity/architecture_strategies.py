@@ -954,7 +954,9 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			fitness_scores = None
 			if self._fitness_calculator is not None:
 				pop_tuples = [
-					(i, t[1], t[2] or 0.0)
+					(i, t[1], t[2] or 0.0,
+					 t[3] if len(t) > 3 else None,
+					 t[4] if len(t) > 4 else None)
 					for i, t in enumerate(population)
 				]
 				fitness_scores = self._fitness_calculator.fitness(pop_tuples)
@@ -1330,9 +1332,9 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				phase_type=int(self._phase_type),
 			)
 
-			# Convert to 3-tuples, rank by fitness, return best n_neighbors
+			# Convert to tuples (genome, ce, acc, f1?, fpr?), rank by fitness, return best n_neighbors
 			neighbors = [
-				(g, g._cached_fitness[0], g._cached_fitness[1])
+				(g, *g._cached_fitness)
 				for g in neighbors_raw
 				if hasattr(g, '_cached_fitness')
 			]
@@ -1420,11 +1422,11 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 			if hasattr(evaluator, 'set_progress_callback'):
 				evaluator.set_progress_callback(None)
 
-		# Convert to 3-tuples and apply fitness percentile filtering per source
+		# Convert to tuples and apply fitness percentile filtering per source
 		all_offspring = []
 		for source_neighbors, target_count in zip(results_by_source, counts):
 			neighbors = [
-				(g, g._cached_fitness[0], g._cached_fitness[1])
+				(g, *g._cached_fitness)
 				for g in source_neighbors
 				if hasattr(g, '_cached_fitness')
 			]
@@ -1682,13 +1684,17 @@ class GridSearchStrategy:
 
 			t_config = time.time()
 			if self._batch_evaluator is not None:
-				evals = self._batch_evaluator.evaluate_batch(
+				grid_evals = self._batch_evaluator.evaluate_batch(
 					[genome], train_subset_idx=grid_train_idx,
 				)
-				ce, acc, bit_acc = evals[0].ce, evals[0].accuracy, evals[0].bit_accuracy or 0.0
+				grid_ev = grid_evals[0]
+				ce, acc, bit_acc = grid_ev.ce, grid_ev.accuracy, grid_ev.bit_accuracy or 0.0
+				f1_macro = getattr(grid_ev, 'f1_macro', None)
+				fpr = getattr(grid_ev, 'fpr', None)
 			elif evaluate_fn is not None:
 				ce = evaluate_fn(genome)
 				acc, bit_acc = 0.0, 0.0
+				f1_macro, fpr = None, None
 			else:
 				raise ValueError("GridSearchStrategy requires a batch_evaluator or evaluate_fn")
 			config_elapsed = time.time() - t_config
@@ -1705,6 +1711,8 @@ class GridSearchStrategy:
 				"ce": ce,
 				"accuracy": acc,
 				"bit_accuracy": bit_acc,
+				"f1_macro": f1_macro,
+				"fpr": fpr,
 				"elapsed_s": config_elapsed,
 				"genome": genome,
 			})
@@ -1757,7 +1765,7 @@ class GridSearchStrategy:
 			raise ValueError("Grid search produced no results")
 
 		# Phase 4: Rank by fitness
-		population = [(r, r["ce"], r["accuracy"]) for r in results]
+		population = [(r, r["ce"], r["accuracy"], r.get("f1_macro"), r.get("fpr")) for r in results]
 		fitness_scores = calculator.fitness(population)
 		for r, score in zip(results, fitness_scores):
 			r["fitness"] = score
@@ -1812,14 +1820,14 @@ class GridSearchStrategy:
 
 			# First genome: reuse the original (already evaluated)
 			output_population.append(r["genome"])
-			population_metrics.append((r["ce"], r["accuracy"]))
+			population_metrics.append((r["ce"], r["accuracy"], r.get("f1_macro"), r.get("fpr")))
 
 			# Remaining: fresh random connections (need evaluation)
 			for _ in range(n_genomes - 1):
 				genome = self._create_genome(r["neurons"], r["bits"])
 				new_genome_indices.append(len(output_population))
 				output_population.append(genome)
-				population_metrics.append((0.0, 0.0))  # placeholder
+				population_metrics.append((0.0, 0.0, None, None))  # placeholder
 				new_genomes.append(genome)
 
 			self._log(f"  #{i+1:2d} n={r['neurons']:3d}, b={r['bits']:2d} (CE={r['ce']:.4f}) → {n_genomes} genomes (1 original + {n_genomes - 1} new)")
@@ -1837,11 +1845,12 @@ class GridSearchStrategy:
 				evals = self._batch_evaluator.evaluate_batch(
 					[genome], train_subset_idx=grid_train_idx,
 				)
-				ce, acc = evals[0].ce, evals[0].accuracy
+				ev = evals[0]
+				ce, acc = ev.ce, ev.accuracy
 				g_elapsed = time.time() - t_g
 				expand_elapsed += g_elapsed
 				pop_idx = new_genome_indices[idx_in_new]
-				population_metrics[pop_idx] = (ce, acc)
+				population_metrics[pop_idx] = (ce, acc, getattr(ev, 'f1_macro', None), getattr(ev, 'fpr', None))
 				# Log per-genome result
 				g = output_population[pop_idx]
 				neurons = g.neurons_per_cluster[0] if g.neurons_per_cluster else 0
@@ -2305,7 +2314,11 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 			stop_reason = StopReason.MAX_ITERATIONS
 
 		# Build population metrics for downstream phases
-		population_metrics = [(e[0], e[1] if len(e) > 1 else 0.0) for e in evals]
+		population_metrics = [
+			(e[0], e[1] if len(e) > 1 else 0.0,
+			 getattr(e, 'f1_macro', None), getattr(e, 'fpr', None))
+			for e in evals
+		]
 
 		initial_ce = history[0][1] if history else best_ce
 		improvement = ((initial_ce - best_ce) / initial_ce * 100) if initial_ce > 0 else 0.0

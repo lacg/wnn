@@ -85,6 +85,7 @@ class EvalResult:
 	ce: float                              # Cross-entropy (lower = better)
 	accuracy: float                        # Token accuracy (higher = better)
 	f1_macro: Optional[float] = None       # F1-macro (higher = better)
+	fpr: Optional[float] = None            # False positive rate macro (IDS, lower = better)
 	bit_accuracy: Optional[float] = None   # Weighted bit accuracy (bitwise only)
 	cluster_ce: Optional[float] = None     # Stage 1 CE (two-stage only)
 	cluster_accuracy: Optional[float] = None  # Stage 1 accuracy (two-stage only)
@@ -92,7 +93,10 @@ class EvalResult:
 	within_accuracy: Optional[float] = None  # Stage 2 accuracy (two-stage only)
 
 	def __iter__(self):
-		"""Yield (ce, accuracy) or (ce, accuracy, bit_accuracy) for tuple unpacking."""
+		"""Yield (ce, accuracy[, bit_accuracy]) for backward-compat tuple unpacking.
+
+		For f1_macro/fpr, use named attribute access (result.f1_macro, result.fpr).
+		"""
 		yield self.ce
 		yield self.accuracy
 		if self.bit_accuracy is not None:

@@ -184,7 +184,7 @@ class IDSEvaluator(BaseEvaluator):
 			0,  # rng_seed
 		)
 
-		return [EvalResult(ce=ce, accuracy=acc, f1_macro=f1) for ce, acc, f1 in raw_results]
+		return [EvalResult(ce=ce, accuracy=acc, f1_macro=f1, fpr=fpr) for ce, acc, f1, fpr in raw_results]
 
 	def evaluate_batch_full(
 		self,
@@ -203,7 +203,7 @@ class IDSEvaluator(BaseEvaluator):
 			0,  # rng_seed
 		)
 
-		return [EvalResult(ce=ce, accuracy=acc, f1_macro=f1) for ce, acc, f1 in raw_results]
+		return [EvalResult(ce=ce, accuracy=acc, f1_macro=f1, fpr=fpr) for ce, acc, f1, fpr in raw_results]
 
 	def evaluate_batch_adaptive(
 		self,
@@ -258,14 +258,14 @@ class IDSEvaluator(BaseEvaluator):
 		)
 
 		results = []
-		for ce, acc, f1, adapted_bits, adapted_neurons, adapted_conns, pruned, grown, added, removed, rewired in raw_results:
-			eval_result = EvalResult(ce=ce, accuracy=acc, f1_macro=f1)
+		for ce, acc, f1, fpr, adapted_bits, adapted_neurons, adapted_conns, pruned, grown, added, removed, rewired in raw_results:
+			eval_result = EvalResult(ce=ce, accuracy=acc, f1_macro=f1, fpr=fpr)
 			adapted_genome = ClusterGenome(
 				bits_per_neuron=list(adapted_bits),
 				neurons_per_cluster=list(adapted_neurons),
 				connections=list(adapted_conns) if adapted_conns else None,
 			)
-			adapted_genome._cached_fitness = (ce, acc, f1)
+			adapted_genome._cached_fitness = (ce, acc, f1, fpr)
 			results.append((eval_result, adapted_genome))
 		return results
 
@@ -324,13 +324,13 @@ class IDSEvaluator(BaseEvaluator):
 		)
 
 		genomes = []
-		for bits, neurons, connections, ce, acc, f1 in results:
+		for bits, neurons, connections, ce, acc, f1, fpr in results:
 			g = ClusterGenome(
 				bits_per_neuron=list(bits),
 				neurons_per_cluster=list(neurons),
 				connections=list(connections) if connections else None,
 			)
-			g._cached_fitness = (ce, acc, f1)
+			g._cached_fitness = (ce, acc, f1, fpr)
 			genomes.append(g)
 		return genomes
 
@@ -404,13 +404,13 @@ class IDSEvaluator(BaseEvaluator):
 		)
 
 		genomes = []
-		for bits, neurons, connections, ce, acc, f1 in candidates:
+		for bits, neurons, connections, ce, acc, f1, fpr in candidates:
 			g = ClusterGenome(
 				bits_per_neuron=list(bits),
 				neurons_per_cluster=list(neurons),
 				connections=list(connections) if connections else None,
 			)
-			g._cached_fitness = (ce, acc, f1)
+			g._cached_fitness = (ce, acc, f1, fpr)
 			genomes.append(g)
 
 		return OffspringSearchResult(genomes=genomes, evaluated=evaluated, viable=viable)

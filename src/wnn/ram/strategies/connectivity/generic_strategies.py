@@ -272,8 +272,8 @@ class OptimizerResult(Generic[T]):
 	stop_reason: Optional[StopReason] = None
 	# For population seeding between phases
 	final_population: Optional[list[T]] = None
-	# Per-genome (CE, accuracy) matching final_population order
-	population_metrics: Optional[list[tuple[float, float]]] = None
+	# Per-genome (CE, accuracy, f1?, fpr?) matching final_population order
+	population_metrics: Optional[list[tuple]] = None
 	# Accuracy tracking
 	initial_accuracy: Optional[float] = None
 	final_accuracy: Optional[float] = None
@@ -1267,15 +1267,20 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		fitness_values = [t[1] for t in population]
 		accuracy_values = [t[2] for t in population]
 		f1_values = [t[3] if len(t) > 3 else None for t in population]
+		fpr_values = [t[4] if len(t) > 4 else None for t in population]
 
-		def _fc_tuples(fv, av, f1v):
-			"""Build fitness calculator tuples, including F1 when available."""
-			if any(v is not None for v in f1v):
+		def _fc_tuples(fv, av, f1v, fprv=None):
+			"""Build fitness calculator tuples, including F1/FPR when available."""
+			has_f1 = any(v is not None for v in f1v)
+			has_fpr = fprv is not None and any(v is not None for v in fprv)
+			if has_f1 and has_fpr:
+				return [(i, fv[i], av[i] or 0.0, f1v[i] or 0.0, fprv[i] if fprv[i] is not None else 1.0) for i in range(len(fv))]
+			elif has_f1:
 				return [(i, fv[i], av[i] or 0.0, f1v[i] or 0.0) for i in range(len(fv))]
 			return [(i, fv[i], av[i] or 0.0) for i in range(len(fv))]
 
 		# Find initial best using fitness calculator (unified ranking)
-		init_tuples = _fc_tuples(fitness_values, accuracy_values, f1_values)
+		init_tuples = _fc_tuples(fitness_values, accuracy_values, f1_values, fpr_values)
 		init_scores = fitness_calculator.fitness(init_tuples)
 		best_idx = min(range(len(init_scores)), key=lambda i: init_scores[i])
 		best = self.clone_genome(population[best_idx][0])
@@ -1360,7 +1365,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			n_elites = max(1, int(cfg.population_size * cfg.elitism_pct * 2))
 
 			# Build tuples for fitness ranking (includes F1 when available)
-			pop_tuples = _fc_tuples(fitness_values, accuracy_values, f1_values)
+			pop_tuples = _fc_tuples(fitness_values, accuracy_values, f1_values, fpr_values)
 			combined_scores = fitness_calculator.fitness(pop_tuples)
 			elite_sorted = sorted(range(len(combined_scores)), key=lambda i: combined_scores[i])
 
@@ -1393,8 +1398,9 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 				elite_fitness = fitness_values[elite_idx]
 				elite_accuracy = accuracy_values[elite_idx]
 				elite_f1 = f1_values[elite_idx]
+				elite_fpr = fpr_values[elite_idx]
 				if elite_f1 is not None:
-					new_population.append((elite_genome, elite_fitness, elite_accuracy, elite_f1))
+					new_population.append((elite_genome, elite_fitness, elite_accuracy, elite_f1, elite_fpr))
 				else:
 					new_population.append((elite_genome, elite_fitness, elite_accuracy))
 
@@ -1425,7 +1431,8 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			pool_fv = [t[1] for t in pool]
 			pool_av = [t[2] for t in pool]
 			pool_f1 = [t[3] if len(t) > 3 else None for t in pool]
-			pool_tuples = _fc_tuples(pool_fv, pool_av, pool_f1)
+			pool_fpr = [t[4] if len(t) > 4 else None for t in pool]
+			pool_tuples = _fc_tuples(pool_fv, pool_av, pool_f1, pool_fpr)
 			pool_scores = fitness_calculator.fitness(pool_tuples)
 
 			# Truncation select: keep top pop_size by fitness score
@@ -1435,6 +1442,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			fitness_values = [pool_fv[i] for i in keep_indices]
 			accuracy_values = [pool_av[i] for i in keep_indices]
 			f1_values = [pool_f1[i] for i in keep_indices]
+			fpr_values = [pool_fpr[i] for i in keep_indices]
 
 			# Update best
 			gen_best_idx = 0  # After sorting, index 0 is the best
@@ -1583,9 +1591,10 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 						fitness_values.extend([t[1] for t in new_individuals])
 						accuracy_values.extend([t[2] for t in new_individuals])
 						f1_values.extend([t[3] if len(t) > 3 else None for t in new_individuals])
+						fpr_values.extend([t[4] if len(t) > 4 else None for t in new_individuals])
 				elif cfg.population_size < old_pop_size:
 					# Shrink population - keep best by fitness score
-					shrink_tuples = _fc_tuples(fitness_values, accuracy_values, f1_values)
+					shrink_tuples = _fc_tuples(fitness_values, accuracy_values, f1_values, fpr_values)
 					shrink_scores = fitness_calculator.fitness(shrink_tuples)
 					shrink_order = sorted(range(len(shrink_scores)), key=lambda i: shrink_scores[i])
 					keep_indices = shrink_order[:cfg.population_size]
@@ -1593,6 +1602,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 					fitness_values = [fitness_values[i] for i in keep_indices]
 					accuracy_values = [accuracy_values[i] for i in keep_indices]
 					f1_values = [f1_values[i] for i in keep_indices]
+					fpr_values = [fpr_values[i] for i in keep_indices]
 
 			# Overfitting callback check (same interval as early stopping)
 			if overfitting_callback is not None and (generation + 1) % cfg.check_interval == 0:
@@ -1618,14 +1628,17 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		final_accuracy = final_bests.best_acc.accuracy
 
 		# Compute final scores for sorting
-		final_tuples = _fc_tuples(fitness_values, accuracy_values, f1_values)
+		final_tuples = _fc_tuples(fitness_values, accuracy_values, f1_values, fpr_values)
 		final_scores = fitness_calculator.fitness(final_tuples)
 
 		# Extract final population for seeding next phase (sorted by fitness score)
 		scored_pop = list(zip(population, final_scores))
 		scored_pop.sort(key=lambda x: x[1])
 		final_population = [self.clone_genome(t[0]) for t, _ in scored_pop]
-		population_metrics = [(t[1], t[2]) for t, _ in scored_pop]
+		population_metrics = [
+			(t[1], t[2], t[3] if len(t) > 3 else None, t[4] if len(t) > 4 else None)
+			for t, _ in scored_pop
+		]
 
 		# Compute final diversity
 		final_ce_spread = max(fitness_values) - min(fitness_values) if fitness_values else 0.0
@@ -2058,8 +2071,7 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 		# Fallback: best by CE
 		best_idx = min(range(len(pop)), key=lambda i: pop[i][1])
 		best_item = pop[best_idx]
-		g, ce, acc = best_item[0], best_item[1], best_item[2]
-		return self.clone_genome(g), ce, acc
+		return (self.clone_genome(best_item[0]),) + best_item[1:]
 
 	# =========================================================================
 	# Core TS loop (Template Method: called by OptimizationTemplate.optimize())
@@ -2483,7 +2495,10 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 
 		# === Build final_population from current population ===
 		final_population = [self.clone_genome(t[0]) for t in pop]
-		population_metrics = [(t[1], t[2] or 0.0) for t in pop]
+		population_metrics = [
+			(t[1], t[2] or 0.0, t[3] if len(t) > 3 else None, t[4] if len(t) > 4 else None)
+			for t in pop
+		]
 
 		# Final threshold (for next phase)
 		final_threshold = self._compute_threshold(iteration / cfg.threshold_reference) if cfg.iterations > 0 else self._compute_threshold(0.0)

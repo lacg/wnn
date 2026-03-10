@@ -3102,7 +3102,7 @@ fn evaluate_genomes_parallel<'py>(
     empty_value: f32,
     neuron_sample_rate: f32,
     rng_seed: u64,
-) -> PyResult<Vec<(f64, f64, f64)>> {
+) -> PyResult<Vec<(f64, f64, f64, f64)>> {
     // Returns Vec of (cross_entropy, accuracy) tuples - one per genome
     // Extract data before allow_threads
     let train_input_slice = train_input_bits.as_slice().map_err(|e| {
@@ -3189,7 +3189,7 @@ fn evaluate_genomes_parallel_multisubset<'py>(
     empty_value: f32,
     neuron_sample_rate: f32,
     rng_seed: u64,
-) -> PyResult<Vec<(f64, f64, f64)>> {
+) -> PyResult<Vec<(f64, f64, f64, f64)>> {
     // Extract data before allow_threads
     let train_subsets_slice = train_subsets_flat.as_slice().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Train subsets not contiguous: {}", e))
@@ -3273,7 +3273,7 @@ fn evaluate_genomes_parallel_hybrid<'py>(
     empty_value: f32,
     neuron_sample_rate: f32,
     rng_seed: u64,
-) -> PyResult<Vec<(f64, f64, f64)>> {
+) -> PyResult<Vec<(f64, f64, f64, f64)>> {
     // Extract data before allow_threads
     let train_input_slice = train_input_bits.as_slice().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Train input not contiguous: {}", e))
@@ -3433,7 +3433,7 @@ impl TokenCacheWrapper {
         empty_value: f32,
         neuron_sample_rate: f32,
         rng_seed: u64,
-    ) -> PyResult<Vec<(f64, f64, f64)>> {
+    ) -> PyResult<Vec<(f64, f64, f64, f64)>> {
         py.allow_threads(|| {
             Ok(token_cache::evaluate_genomes_cached(
                 &self.inner,
@@ -3461,7 +3461,7 @@ impl TokenCacheWrapper {
         empty_value: f32,
         neuron_sample_rate: f32,
         rng_seed: u64,
-    ) -> PyResult<Vec<(f64, f64, f64)>> {
+    ) -> PyResult<Vec<(f64, f64, f64, f64)>> {
         py.allow_threads(|| {
             Ok(token_cache::evaluate_genomes_cached_full(
                 &self.inner,
@@ -3492,7 +3492,7 @@ impl TokenCacheWrapper {
         empty_value: f32,
         neuron_sample_rate: f32,
         rng_seed: u64,
-    ) -> PyResult<Vec<(f64, f64, f64)>> {
+    ) -> PyResult<Vec<(f64, f64, f64, f64)>> {
         py.allow_threads(|| {
             Ok(token_cache::evaluate_genomes_cached_hybrid(
                 &self.inner,
@@ -3520,7 +3520,7 @@ impl TokenCacheWrapper {
         empty_value: f32,
         neuron_sample_rate: f32,
         rng_seed: u64,
-    ) -> PyResult<Vec<(f64, f64, f64)>> {
+    ) -> PyResult<Vec<(f64, f64, f64, f64)>> {
         py.allow_threads(|| {
             Ok(token_cache::evaluate_genomes_cached_full_hybrid(
                 &self.inner,
@@ -3685,7 +3685,7 @@ impl TokenCacheWrapper {
         return_best_n: bool,
         mutable_clusters: Option<Vec<usize>>,
         phase_type: u8,
-    ) -> PyResult<Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64)>> {
+    ) -> PyResult<Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64, f64)>> {
         let num_clusters = base_neurons.len();
         let total_input_bits = self.inner.total_input_bits();
         let phase = match phase_type { 1 => neighbor_search::PhaseType::Bits, 2 => neighbor_search::PhaseType::Connections, _ => neighbor_search::PhaseType::Neurons };
@@ -3724,7 +3724,7 @@ impl TokenCacheWrapper {
             let cache = &self.inner;
 
             // Closure captures the token cache and eval params
-            let eval_fn = |bits: &[usize], neurons: &[usize], conns: &[i64], count: usize| -> Vec<(f64, f64, f64)> {
+            let eval_fn = |bits: &[usize], neurons: &[usize], conns: &[i64], count: usize| -> Vec<(f64, f64, f64, f64)> {
                 crate::token_cache::evaluate_genomes_cached_hybrid(
                     cache, bits, neurons, conns, count,
                     train_subset_idx, eval_subset_idx, empty_value,
@@ -3760,6 +3760,7 @@ impl TokenCacheWrapper {
                     c.cross_entropy,
                     c.accuracy,
                     c.f1_macro,
+                    c.fpr,
                 ))
                 .collect())
         });
@@ -3833,7 +3834,7 @@ impl TokenCacheWrapper {
         return_best_n: bool,
         mutable_clusters: Option<Vec<usize>>,
         phase_type: u8,
-    ) -> PyResult<(Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64)>, usize, usize)> {
+    ) -> PyResult<(Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64, f64)>, usize, usize)> {
         // Returns: (candidates, evaluated, viable)
         let num_clusters = if !population.is_empty() {
             population[0].1.len()  // neurons_per_cluster length = num_clusters
@@ -3877,7 +3878,7 @@ impl TokenCacheWrapper {
             let log_path_ref = log_path.as_deref();
             let cache = &self.inner;
 
-            let eval_fn = |bits: &[usize], neurons: &[usize], conns: &[i64], count: usize| -> Vec<(f64, f64, f64)> {
+            let eval_fn = |bits: &[usize], neurons: &[usize], conns: &[i64], count: usize| -> Vec<(f64, f64, f64, f64)> {
                 crate::token_cache::evaluate_genomes_cached_hybrid(
                     cache, bits, neurons, conns, count,
                     train_subset_idx, eval_subset_idx, empty_value,
@@ -3902,6 +3903,7 @@ impl TokenCacheWrapper {
                     c.cross_entropy,
                     c.accuracy,
                     c.f1_macro,
+                    c.fpr,
                 ))
                 .collect();
             Ok((candidates, result.evaluated, result.viable))
@@ -3999,7 +4001,7 @@ impl IDSCacheWrapper {
         empty_value: f32,
         neuron_sample_rate: f32,
         rng_seed: u64,
-    ) -> PyResult<Vec<(f64, f64, f64)>> {
+    ) -> PyResult<Vec<(f64, f64, f64, f64)>> {
         py.allow_threads(|| {
             Ok(ids_cache::evaluate_genomes_ids_cached_hybrid(
                 &self.inner,
@@ -4026,7 +4028,7 @@ impl IDSCacheWrapper {
         empty_value: f32,
         neuron_sample_rate: f32,
         rng_seed: u64,
-    ) -> PyResult<Vec<(f64, f64, f64)>> {
+    ) -> PyResult<Vec<(f64, f64, f64, f64)>> {
         py.allow_threads(|| {
             Ok(ids_cache::evaluate_genomes_ids_cached_full_hybrid(
                 &self.inner,
@@ -4091,7 +4093,7 @@ impl IDSCacheWrapper {
         axon_entropy_threshold: f32,
         axon_improvement_factor: f32,
         axon_rewire_count: usize,
-    ) -> PyResult<Vec<(f64, f64, f64, Vec<usize>, Vec<usize>, Vec<i64>, usize, usize, usize, usize, usize)>> {
+    ) -> PyResult<Vec<(f64, f64, f64, f64, Vec<usize>, Vec<usize>, Vec<i64>, usize, usize, usize, usize, usize)>> {
         py.allow_threads(|| {
             let adapt_config = adaptation::AdaptationConfig {
                 synaptogenesis_enabled,
@@ -4132,7 +4134,7 @@ impl IDSCacheWrapper {
                 generation,
             );
             Ok(results.into_iter().map(|r| (
-                r.ce, r.accuracy, r.f1_macro,
+                r.ce, r.accuracy, r.f1_macro, r.fpr,
                 r.adapted_bits, r.adapted_neurons, r.adapted_connections,
                 r.pruned, r.grown, r.added, r.removed, r.rewired,
             )).collect())
@@ -4215,7 +4217,7 @@ impl IDSCacheWrapper {
         return_best_n: bool,
         mutable_clusters: Option<Vec<usize>>,
         phase_type: u8,
-    ) -> PyResult<Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64)>> {
+    ) -> PyResult<Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64, f64)>> {
         let num_clusters = base_neurons.len();
         let total_input_bits = self.inner.total_features();
         let phase = match phase_type {
@@ -4244,7 +4246,7 @@ impl IDSCacheWrapper {
             let log_path_ref = log_path.as_deref();
             let cache = &self.inner;
 
-            let eval_fn = |bits: &[usize], neurons: &[usize], conns: &[i64], count: usize| -> Vec<(f64, f64, f64)> {
+            let eval_fn = |bits: &[usize], neurons: &[usize], conns: &[i64], count: usize| -> Vec<(f64, f64, f64, f64)> {
                 ids_cache::evaluate_genomes_ids_cached_hybrid(
                     cache, bits, neurons, conns, count,
                     train_subset_idx, empty_value,
@@ -4280,6 +4282,7 @@ impl IDSCacheWrapper {
                     c.cross_entropy,
                     c.accuracy,
                     c.f1_macro,
+                    c.fpr,
                 ))
                 .collect())
         });
@@ -4339,7 +4342,7 @@ impl IDSCacheWrapper {
         return_best_n: bool,
         mutable_clusters: Option<Vec<usize>>,
         phase_type: u8,
-    ) -> PyResult<(Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64)>, usize, usize)> {
+    ) -> PyResult<(Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64, f64)>, usize, usize)> {
         let num_clusters = if !population.is_empty() {
             population[0].1.len()
         } else {
@@ -4373,7 +4376,7 @@ impl IDSCacheWrapper {
             let log_path_ref = log_path.as_deref();
             let cache = &self.inner;
 
-            let eval_fn = |bits: &[usize], neurons: &[usize], conns: &[i64], count: usize| -> Vec<(f64, f64, f64)> {
+            let eval_fn = |bits: &[usize], neurons: &[usize], conns: &[i64], count: usize| -> Vec<(f64, f64, f64, f64)> {
                 ids_cache::evaluate_genomes_ids_cached_hybrid(
                     cache, bits, neurons, conns, count,
                     train_subset_idx, empty_value,
@@ -4398,6 +4401,7 @@ impl IDSCacheWrapper {
                     c.cross_entropy,
                     c.accuracy,
                     c.f1_macro,
+                    c.fpr,
                 ))
                 .collect();
             Ok((candidates, result.evaluated, result.viable))
@@ -5022,7 +5026,7 @@ impl BitwiseCacheWrapper {
         memory_mode: u8,
         neuron_sample_rate: f32,
         rng_seed: u64,
-    ) -> PyResult<Vec<(f64, f64, f64)>> {
+    ) -> PyResult<Vec<(f64, f64, f64, f64)>> {
         let override_val = self.sparse_threshold_override;
         py.allow_threads(|| {
             Ok(bitwise_ramlm::evaluate_genomes(
@@ -5045,7 +5049,7 @@ impl BitwiseCacheWrapper {
         memory_mode: u8,
         neuron_sample_rate: f32,
         rng_seed: u64,
-    ) -> PyResult<Vec<(f64, f64, f64)>> {
+    ) -> PyResult<Vec<(f64, f64, f64, f64)>> {
         let override_val = self.sparse_threshold_override;
         py.allow_threads(|| {
             Ok(bitwise_ramlm::evaluate_genomes_full(
@@ -5167,7 +5171,7 @@ impl BitwiseCacheWrapper {
         return_best_n: bool,
         mutable_clusters: Option<Vec<usize>>,
         phase_type: u8,
-    ) -> PyResult<Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64)>> {
+    ) -> PyResult<Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64, f64)>> {
         let num_clusters = base_neurons.len();
         let total_input_bits = self.inner.total_input_bits;
         let phase = match phase_type { 1 => neighbor_search::PhaseType::Bits, 2 => neighbor_search::PhaseType::Connections, _ => neighbor_search::PhaseType::Neurons };
@@ -5207,7 +5211,7 @@ impl BitwiseCacheWrapper {
             let log_path_ref = log_path.as_deref();
             let cache = &self.inner;
 
-            let eval_fn = |bits: &[usize], neurons: &[usize], conns: &[i64], count: usize| -> Vec<(f64, f64, f64)> {
+            let eval_fn = |bits: &[usize], neurons: &[usize], conns: &[i64], count: usize| -> Vec<(f64, f64, f64, f64)> {
                 bitwise_ramlm::evaluate_genomes(
                     cache, bits, neurons, conns, count,
                     train_subset_idx, eval_subset_idx,
@@ -5243,6 +5247,7 @@ impl BitwiseCacheWrapper {
                     c.cross_entropy,
                     c.accuracy,
                     c.f1_macro,
+                    c.fpr,
                 ))
                 .collect())
         });
@@ -5309,7 +5314,7 @@ impl BitwiseCacheWrapper {
         return_best_n: bool,
         mutable_clusters: Option<Vec<usize>>,
         phase_type: u8,
-    ) -> PyResult<(Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64)>, usize, usize)> {
+    ) -> PyResult<(Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64, f64)>, usize, usize)> {
         let num_clusters = if !population.is_empty() {
             population[0].1.len()
         } else {
@@ -5354,7 +5359,7 @@ impl BitwiseCacheWrapper {
             let log_path_ref = log_path.as_deref();
             let cache = &self.inner;
 
-            let eval_fn = |bits: &[usize], neurons: &[usize], conns: &[i64], count: usize| -> Vec<(f64, f64, f64)> {
+            let eval_fn = |bits: &[usize], neurons: &[usize], conns: &[i64], count: usize| -> Vec<(f64, f64, f64, f64)> {
                 bitwise_ramlm::evaluate_genomes(
                     cache, bits, neurons, conns, count,
                     train_subset_idx, eval_subset_idx,
@@ -5379,6 +5384,7 @@ impl BitwiseCacheWrapper {
                     c.cross_entropy,
                     c.accuracy,
                     c.f1_macro,
+                    c.fpr,
                 ))
                 .collect();
             Ok((candidates, result.evaluated, result.viable))
@@ -5632,7 +5638,7 @@ impl MultiStageCacheWrapper {
         memory_mode: u8,
         neuron_sample_rate: f32,
         rng_seed: u64,
-    ) -> PyResult<Vec<(f64, f64, f64)>> {
+    ) -> PyResult<Vec<(f64, f64, f64, f64)>> {
         let override_val = self.sparse_threshold_override;
         let lp_arc = self.live_progress.clone();
         let exp_id = self.experiment_id;
@@ -5659,7 +5665,7 @@ impl MultiStageCacheWrapper {
         memory_mode: u8,
         neuron_sample_rate: f32,
         rng_seed: u64,
-    ) -> PyResult<Vec<(f64, f64, f64)>> {
+    ) -> PyResult<Vec<(f64, f64, f64, f64)>> {
         let override_val = self.sparse_threshold_override;
         py.allow_threads(|| {
             Ok(multistage::evaluate_bitwise_genomes_full(
@@ -5684,7 +5690,7 @@ impl MultiStageCacheWrapper {
         memory_mode: u8,
         neuron_sample_rate: f32,
         rng_seed: u64,
-    ) -> PyResult<Vec<(f64, f64, f64)>> {
+    ) -> PyResult<Vec<(f64, f64, f64, f64)>> {
         let override_val = self.sparse_threshold_override;
         py.allow_threads(|| {
             Ok(multistage::evaluate_bitwise_selector_genomes(
@@ -5894,7 +5900,7 @@ impl MultiStageCacheWrapper {
         memory_mode: u8,
         neuron_sample_rate: f32,
         rng_seed: u64,
-    ) -> PyResult<Vec<(f64, f64, f64)>> {
+    ) -> PyResult<Vec<(f64, f64, f64, f64)>> {
         py.allow_threads(|| {
             Ok(multistage::evaluate_tiered_genomes(
                 &self.inner, stage,
@@ -5918,7 +5924,7 @@ impl MultiStageCacheWrapper {
         memory_mode: u8,
         neuron_sample_rate: f32,
         rng_seed: u64,
-    ) -> PyResult<Vec<(f64, f64, f64)>> {
+    ) -> PyResult<Vec<(f64, f64, f64, f64)>> {
         py.allow_threads(|| {
             Ok(multistage::evaluate_tiered_genomes_full(
                 &self.inner, stage,

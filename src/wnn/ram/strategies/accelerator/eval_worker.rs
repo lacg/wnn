@@ -123,7 +123,7 @@ struct EvalBatchRequest {
 
 /// Response containing evaluation results
 pub struct EvalBatchResponse {
-    pub results: Vec<(usize, f64, f64, f64)>, // (genome_idx, ce, accuracy, f1_macro)
+    pub results: Vec<(usize, f64, f64, f64, f64)>, // (genome_idx, ce, accuracy, f1_macro, fpr)
 }
 
 // ============================================================================
@@ -182,11 +182,11 @@ impl EvalWorkerPool {
 
             // Evaluate exports sequentially - GPU doesn't benefit from parallel access
             // (multiple threads competing for GPU causes contention and slowdown)
-            let results: Vec<(usize, f64, f64, f64)> = request
+            let results: Vec<(usize, f64, f64, f64, f64)> = request
                 .exports
                 .into_iter()
                 .map(|(genome_idx, export)| {
-                    let (ce, acc, f1) = evaluate_genome_hybrid(
+                    let (ce, acc, f1, fpr) = evaluate_genome_hybrid(
                         &export,
                         &eval_data.eval_input_bits,
                         &eval_data.eval_targets,
@@ -197,7 +197,7 @@ impl EvalWorkerPool {
                         metal,
                         sparse_metal,
                     );
-                    (genome_idx, ce, acc, f1)
+                    (genome_idx, ce, acc, f1, fpr)
                 })
                 .collect();
 
@@ -222,12 +222,12 @@ impl EvalWorkerPool {
     /// * `eval_data` - Shared evaluation data (Arc for zero-copy)
     ///
     /// # Returns
-    /// Vector of (genome_idx, cross_entropy, accuracy, f1_macro) tuples
+    /// Vector of (genome_idx, cross_entropy, accuracy, f1_macro, fpr) tuples
     pub fn evaluate(
         &self,
         exports: Vec<(usize, GenomeExport)>,
         eval_data: Arc<EvalData>,
-    ) -> Vec<(usize, f64, f64, f64)> {
+    ) -> Vec<(usize, f64, f64, f64, f64)> {
         // Create one-shot response channel
         let (response_tx, response_rx) = mpsc::channel();
 

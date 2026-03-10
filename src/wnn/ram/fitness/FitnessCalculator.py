@@ -104,9 +104,9 @@ class FitnessCalculator(ABC, Generic[G]):
 		if not population:
 			raise ValueError("Cannot compute bests on empty population")
 
-		# Normalize None accuracy to 0.0 for fitness calculation
+		# Normalize None accuracy to 0.0 for fitness calculation, preserving extra fields (f1, fpr)
 		normalized = [
-			(t[0], t[1], t[2] if t[2] is not None else 0.0)
+			(t[0], t[1], t[2] if t[2] is not None else 0.0) + t[3:]
 			for t in population
 		]
 		scores = self.fitness(normalized)

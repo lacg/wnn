@@ -410,7 +410,7 @@ class BitwiseEvaluator(BaseEvaluator):
 					mean_ce, mean_acc, mean_bit_acc,
 				))
 			return [EvalResult(ce=ce, accuracy=acc, bit_accuracy=bit_acc)
-					for ce, acc, bit_acc in raw_results]
+					for ce, acc, bit_acc, _fpr in raw_results]
 
 		# Python fallback (no bit_acc available)
 		train_data = self._train_parts[train_subset_idx % self._num_parts]
@@ -438,7 +438,7 @@ class BitwiseEvaluator(BaseEvaluator):
 			log = logger if logger is not None else lambda x: None
 			log(f"[Full] {len(genomes)} genomes in {elapsed:.1f}s")
 			return [EvalResult(ce=ce, accuracy=acc, bit_accuracy=bit_acc)
-					for ce, acc, bit_acc in raw_results]
+					for ce, acc, bit_acc, _fpr in raw_results]
 
 		# Python fallback
 		py_results = self._evaluate_batch_python(

@@ -357,7 +357,7 @@ class TieredEvaluator(BaseEvaluator):
         sys.stdout.flush()
         sys.stderr.flush()
 
-        return [EvalResult(ce=ce, accuracy=acc, f1_macro=f1) for ce, acc, f1 in raw_results]
+        return [EvalResult(ce=ce, accuracy=acc, f1_macro=f1, fpr=fpr) for ce, acc, f1, fpr in raw_results]
 
     def evaluate_batch_full(
         self,
@@ -409,10 +409,10 @@ class TieredEvaluator(BaseEvaluator):
                 0,    # rng_seed
             )
 
-        for i, (ce, acc, _f1) in enumerate(raw_results):
+        for i, (ce, acc, _f1, _fpr) in enumerate(raw_results):
             log(format_genome_log(1, 1, GenomeLogType.FINAL, i + 1, num_genomes, ce, acc))
 
-        return [EvalResult(ce=ce, accuracy=acc, f1_macro=f1) for ce, acc, f1 in raw_results]
+        return [EvalResult(ce=ce, accuracy=acc, f1_macro=f1, fpr=fpr) for ce, acc, f1, fpr in raw_results]
 
     def reset(self, seed: Optional[int] = None) -> None:
         """Reset subset rotators with optional new seed."""
@@ -519,14 +519,14 @@ class TieredEvaluator(BaseEvaluator):
 
         # Convert results to ClusterGenome objects
         genomes = []
-        for bits, neurons, connections, ce, acc, f1 in results:
+        for bits, neurons, connections, ce, acc, f1, fpr in results:
             g = ClusterGenome(
                 bits_per_neuron=list(bits),
                 neurons_per_cluster=list(neurons),
                 connections=list(connections) if connections else None,
             )
             # Store fitness for later use
-            g._cached_fitness = (ce, acc, f1)
+            g._cached_fitness = (ce, acc, f1, fpr)
             genomes.append(g)
 
         return genomes
@@ -644,14 +644,14 @@ class TieredEvaluator(BaseEvaluator):
 
         # Convert results to ClusterGenome objects
         genomes = []
-        for bits, neurons, connections, ce, acc in candidates:
+        for bits, neurons, connections, ce, acc, f1, fpr in candidates:
             g = ClusterGenome(
                 bits_per_neuron=list(bits),
                 neurons_per_cluster=list(neurons),
                 connections=list(connections) if connections else None,
             )
             # Store fitness for later use
-            g._cached_fitness = (ce, acc)
+            g._cached_fitness = (ce, acc, f1, fpr)
             genomes.append(g)
 
         return OffspringSearchResult(genomes=genomes, evaluated=evaluated, viable=viable)
