@@ -538,6 +538,15 @@ class DataLayer:
                 (max_iterations, experiment_id),
             )
 
+    def update_experiment_extra_metrics(self, experiment_id: int, metrics: dict) -> None:
+        """Store extra metrics (IDS: F1, FPR, confusion matrix) as JSON."""
+        import json
+        with self._transaction() as conn:
+            conn.execute(
+                "UPDATE experiments SET extra_metrics_json = ? WHERE id = ?",
+                (json.dumps(metrics), experiment_id),
+            )
+
     # =========================================================================
     # Iteration methods
     # =========================================================================

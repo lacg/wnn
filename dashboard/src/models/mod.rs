@@ -96,6 +96,7 @@ pub enum ArchitectureType {
     Tiered,
     Bitwise,
     MultiStage,
+    Ids,
 }
 
 impl Default for ArchitectureType {
@@ -218,6 +219,9 @@ pub struct Experiment {
     /// Per-experiment params (lambda_sweep etc.)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub params: Option<std::collections::HashMap<String, serde_json::Value>>,
+    /// Extra metrics (IDS: F1, FPR, confusion matrix; stored as JSON)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extra_metrics: Option<serde_json::Value>,
 }
 
 /// Status of gating analysis for an experiment

@@ -125,6 +125,11 @@ async fn run_migrations(pool: &DbPool) -> Result<()> {
         .execute(pool)
         .await;
 
+    // Migration: Add extra_metrics_json to experiments (IDS metrics: F1, FPR, confusion matrix)
+    let _ = sqlx::query("ALTER TABLE experiments ADD COLUMN extra_metrics_json TEXT")
+        .execute(pool)
+        .await;
+
     Ok(())
 }
 
@@ -1036,7 +1041,7 @@ pub mod queries {
                       created_at, started_at, ended_at, paused_at,
                       phase_type, max_iterations, current_iteration, best_ce, best_accuracy,
                       status_message, architecture_type, gating_status, gating_results,
-                      params_json
+                      params_json, extra_metrics_json
                FROM experiments WHERE flow_id = ?
                ORDER BY sequence_order"#,
         )
@@ -1705,7 +1710,7 @@ pub mod queries {
                       created_at, started_at, ended_at, paused_at,
                       phase_type, max_iterations, current_iteration, best_ce, best_accuracy,
                       status_message, architecture_type, gating_status, gating_results,
-                      params_json
+                      params_json, extra_metrics_json
                FROM experiments WHERE id = ?"#,
         )
         .bind(id)
@@ -1961,7 +1966,7 @@ pub mod queries {
                       created_at, started_at, ended_at, paused_at,
                       phase_type, max_iterations, current_iteration, best_ce, best_accuracy,
                       status_message, architecture_type, gating_status, gating_results,
-                      params_json
+                      params_json, extra_metrics_json
                FROM experiments
                ORDER BY created_at DESC
                LIMIT ? OFFSET ?"#,
@@ -2100,6 +2105,10 @@ pub mod queries {
             gating_status,
             gating_results,
             params: row.try_get::<Option<String>, _>("params_json")
+                .ok()
+                .flatten()
+                .and_then(|s| serde_json::from_str(&s).ok()),
+            extra_metrics: row.try_get::<Option<String>, _>("extra_metrics_json")
                 .ok()
                 .flatten()
                 .and_then(|s| serde_json::from_str(&s).ok()),
@@ -2243,6 +2252,7 @@ pub mod queries {
         match s {
             "bitwise" => ArchitectureType::Bitwise,
             "multi_stage" | "multistage" => ArchitectureType::MultiStage,
+            "ids" => ArchitectureType::Ids,
             _ => ArchitectureType::Tiered,
         }
     }

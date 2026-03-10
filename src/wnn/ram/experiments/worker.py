@@ -387,9 +387,12 @@ class FlowWorker:
             architecture_type = params.get("architecture_type", "tiered")
             is_bitwise = architecture_type == "bitwise"
             is_multi_stage = architecture_type == "multi_stage"
+            is_ids = architecture_type == "ids"
 
             # Load data and create appropriate evaluator
-            if is_multi_stage:
+            if is_ids:
+                evaluator, ids_test_evaluator = self._create_ids_evaluators(params)
+            elif is_multi_stage:
                 evaluator = self._create_multistage_evaluator(context_size, params)
             elif is_bitwise:
                 evaluator = self._create_bitwise_evaluator(context_size, params)
@@ -476,6 +479,15 @@ class FlowWorker:
                 flow_config.stage_min_neurons_list = params.get("stage_min_neurons")
                 flow_config.stage_max_neurons_list = params.get("stage_max_neurons")
 
+            # Add IDS-specific config
+            if is_ids:
+                flow_config.ids_classification = params.get("ids_classification", "binary")
+                flow_config.ids_n_bits = params.get("ids_n_bits", 8)
+                flow_config.ids_val_fraction = params.get("ids_val_fraction", 0.25)
+                flow_config.ids_num_parts = params.get("ids_num_parts", 3)
+                flow_config.ids_fitness_weight_f1 = params.get("ids_fitness_weight_f1", 0.0)
+                flow_config.ids_split = params.get("ids_split", "standard")
+
             # Handle seed checkpoint
             seed_checkpoint_id = flow_data.get("seed_checkpoint_id")
             if seed_checkpoint_id:
@@ -489,7 +501,9 @@ class FlowWorker:
 
             # Create full evaluator for validation (trains on ALL train data, evals on validation set)
             full_evaluator = None
-            if is_bitwise and self._validation_tokens:
+            if is_ids:
+                full_evaluator = ids_test_evaluator
+            elif is_bitwise and self._validation_tokens:
                 full_evaluator = self._create_full_evaluator(context_size, params)
 
             # Create and run flow (pass existing flow_id to avoid duplication)
@@ -741,6 +755,58 @@ class FlowWorker:
         self._log(f"  Full evaluator: train={len(self._train_tokens):,} tokens ({full_train_parts} parts), "
                    f"validation={len(self._validation_tokens):,} tokens ({full_eval_parts} parts)")
         return full_eval
+
+    def _create_ids_evaluators(self, params: dict):
+        """Create IDS evaluators: optimizer (131K/44K) + test (175K/82K).
+
+        Returns (optimizer_evaluator, test_evaluator) tuple.
+        The optimizer evaluator uses a 75/25 split of training data.
+        The test evaluator uses full training + original test set (for overfitting monitoring).
+        """
+        from wnn.ids import load_unsw_nb15, split_train_validation
+        from wnn.ram.architecture.ids_evaluator import IDSEvaluator
+
+        classification = params.get("ids_classification", "binary")
+        n_bits = params.get("ids_n_bits", 8)
+        val_fraction = params.get("ids_val_fraction", 0.25)
+        num_parts = params.get("ids_num_parts", 3)
+        split = params.get("ids_split", "standard")
+        seed = params.get("seed", 42)
+
+        self._log(f"Loading UNSW-NB15 dataset (classification={classification}, split={split})...")
+        full_dataset = load_unsw_nb15(n_bits=n_bits, split=split)
+
+        y_train = full_dataset.y_train_binary if classification == "binary" else full_dataset.y_train_multi
+        y_test = full_dataset.y_test_binary if classification == "binary" else full_dataset.y_test_multi
+        num_classes = 2 if classification == "binary" else len(full_dataset.category_names)
+
+        self._log(f"  Train: {len(y_train):,} examples, Test: {len(y_test):,} examples, "
+                   f"Classes: {num_classes}, Features: {full_dataset.X_train.shape[1]}")
+
+        # Split training data: 75% optimizer train, 25% optimizer eval (validation)
+        train_val_dataset, test_dataset = split_train_validation(
+            full_dataset, val_fraction=val_fraction, seed=seed,
+        )
+
+        # Optimizer evaluator: 131K train (3-part rotation), 44K validation for fitness
+        self._log(f"Creating optimizer IDSEvaluator ({len(train_val_dataset.X_train):,} train / "
+                   f"{len(train_val_dataset.X_test):,} eval, {num_parts} parts)...")
+        optimizer_eval = IDSEvaluator(
+            dataset=train_val_dataset,
+            classification=classification,
+            num_parts=num_parts,
+        )
+
+        # Test evaluator: full 175K train, 82K test (for overfitting monitoring + final reporting)
+        self._log(f"Creating test IDSEvaluator ({len(test_dataset.X_train):,} train / "
+                   f"{len(test_dataset.X_test):,} eval, 1 part)...")
+        test_eval = IDSEvaluator(
+            dataset=test_dataset,
+            classification=classification,
+            num_parts=1,
+        )
+
+        return optimizer_eval, test_eval
 
     def _build_experiment_configs(
         self,

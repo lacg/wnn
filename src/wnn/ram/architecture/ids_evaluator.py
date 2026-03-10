@@ -78,6 +78,8 @@ class IDSEvaluator(BaseEvaluator):
 		self._empty_value = empty_value
 		self._num_classes = num_classes
 		self._classification = classification
+		self._y_test = [int(y) for y in y_test]
+		self._class_names = list(dataset.category_names) if hasattr(dataset, 'category_names') else None
 
 		# Import and create Rust cache
 		try:
@@ -351,6 +353,18 @@ class IDSEvaluator(BaseEvaluator):
 	@property
 	def num_classes(self) -> int:
 		return self._num_classes
+
+	@property
+	def y_test(self) -> list[int]:
+		return self._y_test
+
+	@property
+	def class_names(self) -> list[str] | None:
+		return self._class_names
+
+	def predict_classes(self, genome: ClusterGenome, rng_seed: int = 0) -> list[int]:
+		"""Alias for predict() — returns per-example class predictions on eval set."""
+		return self.predict(genome, rng_seed)
 
 	def __repr__(self) -> str:
 		return (

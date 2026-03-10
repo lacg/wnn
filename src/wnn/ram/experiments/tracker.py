@@ -219,6 +219,10 @@ class ExperimentTracker(ABC):
         """Update experiment progress."""
         pass
 
+    def update_experiment_extra_metrics(self, experiment_id: int, metrics: dict) -> None:
+        """Store extra metrics (IDS: F1, FPR, confusion matrix) as JSON. Optional."""
+        pass
+
     # =========================================================================
     # Iteration tracking
     # =========================================================================
@@ -484,6 +488,9 @@ class SqliteTracker(ExperimentTracker):
 
     def update_experiment_max_iterations(self, experiment_id: int, max_iterations: int) -> None:
         self._db.update_experiment_max_iterations(experiment_id, max_iterations)
+
+    def update_experiment_extra_metrics(self, experiment_id: int, metrics: dict) -> None:
+        self._db.update_experiment_extra_metrics(experiment_id, metrics)
 
     def record_iteration(
         self,

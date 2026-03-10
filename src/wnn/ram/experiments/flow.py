@@ -205,6 +205,14 @@ class FlowConfig:
 	stage_min_neurons_list: Optional[list[int]] = None
 	stage_max_neurons_list: Optional[list[int]] = None
 
+	# IDS-specific config (architecture_type="ids")
+	ids_classification: str = "binary"  # "binary" or "multi"
+	ids_n_bits: int = 8  # thermometer encoding bits per feature
+	ids_val_fraction: float = 0.25  # validation holdout fraction
+	ids_num_parts: int = 3  # training data rotation parts
+	ids_fitness_weight_f1: float = 0.0  # F1-macro weight in fitness
+	ids_split: str = "standard"  # "standard" or "random"
+
 	@classmethod
 	def bitwise_7_phase(
 		cls,
@@ -1254,6 +1262,13 @@ class Flow:
 				current_fitness = result.final_fitness
 				current_evals = result.population_metrics
 
+				# IDS: compute and store extra metrics (F1, FPR, per-class) on test set
+				if cfg.architecture_type == "ids" and self.full_evaluator and current_genome and tracker_experiment_id:
+					try:
+						self._store_ids_metrics(current_genome, tracker_experiment_id)
+					except Exception as e:
+						self.log(f"  Warning: Failed to compute IDS metrics: {e}")
+
 				# Multi-stage: detect stage boundary
 				if is_multi_stage and idx + 1 < len(cfg.experiments):
 					next_config = cfg.experiments[idx + 1]
@@ -1437,6 +1452,38 @@ class Flow:
 			combined_accuracy=combined_accuracy,
 			per_stage_ce=per_stage_ce,
 		)
+
+	def _store_ids_metrics(self, genome: ClusterGenome, experiment_id: int):
+		"""Compute IDS metrics on the test set and store via tracker."""
+		from wnn.ids.metrics import compute_ids_metrics
+
+		self.log(f"  Computing IDS metrics on test set...")
+		results = self.full_evaluator.evaluate_batch_full([genome])
+		if not results:
+			return
+
+		test_acc = results[0].accuracy
+		test_ce = results[0].ce
+
+		# Get predictions for per-class metrics
+		evaluator = self.full_evaluator
+		if hasattr(evaluator, 'predict_classes'):
+			y_pred = evaluator.predict_classes(genome)
+			y_true = evaluator.y_test
+			num_classes = evaluator.num_classes
+			class_names = getattr(evaluator, 'class_names', None)
+
+			metrics = compute_ids_metrics(y_true, y_pred, num_classes)
+			if class_names:
+				metrics['class_names'] = class_names
+
+			self.log(f"  Test: acc={test_acc:.4f}, F1={metrics.get('f1_macro', 0):.4f}, "
+					  f"FPR={metrics.get('fpr', 0):.4f}")
+
+			if self.tracker:
+				self.tracker.update_experiment_extra_metrics(experiment_id, metrics)
+		else:
+			self.log(f"  Test: acc={test_acc:.4f}, CE={test_ce:.4f} (no per-class metrics)")
 
 	def _run_lambda_sweep(
 		self,

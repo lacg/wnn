@@ -17,6 +17,14 @@
   let bitwiseMemoryMode = 'QUAD_WEIGHTED';
   let bitwiseNeuronSampleRate = 0.25;
 
+  // IDS-specific config
+  let idsClassification = 'binary';
+  let idsNBits = 8;
+  let idsValFraction = 0.25;
+  let idsNumParts = 3;
+  let idsFitnessWeightF1 = 0.0;
+  let idsSplit = 'standard';
+
   // Multi-stage config
   let numStages = 1;
   let stageMode = 'input_concat';
@@ -144,6 +152,7 @@
 
   $: isMultiStage = numStages >= 2;
   $: isBitwise = !isMultiStage && (template === 'bitwise-7-phase' || template === 'bitwise-10-phase');
+  $: isIDS = !isMultiStage && (template === 'ids-binary-7-phase' || template === 'ids-multi-7-phase');
 
   // Resize stageConfigs when numStages changes
   $: {
@@ -258,6 +267,38 @@
       bitwiseMaxNeurons = 300;
       bitwiseMemoryMode = 'QUAD_WEIGHTED';
       bitwiseNeuronSampleRate = 0.25;
+    } else if (templateName === 'ids-binary-7-phase') {
+      gaGenerations = 250;
+      tsIterations = 250;
+      populationSize = 150;
+      neighborsPerIter = 150;
+      patience = 5;
+      fitnessPercentile = 0.75;
+      fitnessCalculator = 'normalized';
+      fitnessWeightCe = 0.3;
+      fitnessWeightAcc = 1.0;
+      idsClassification = 'binary';
+      idsNBits = 8;
+      idsValFraction = 0.25;
+      idsNumParts = 3;
+      idsFitnessWeightF1 = 0.0;
+      idsSplit = 'standard';
+    } else if (templateName === 'ids-multi-7-phase') {
+      gaGenerations = 250;
+      tsIterations = 250;
+      populationSize = 150;
+      neighborsPerIter = 150;
+      patience = 5;
+      fitnessPercentile = 0.75;
+      fitnessCalculator = 'normalized';
+      fitnessWeightCe = 0.3;
+      fitnessWeightAcc = 1.0;
+      idsClassification = 'multi';
+      idsNBits = 8;
+      idsValFraction = 0.25;
+      idsNumParts = 3;
+      idsFitnessWeightF1 = 0.0;
+      idsSplit = 'standard';
     }
   }
 
@@ -345,6 +386,11 @@
     if (templateName === 'bitwise-7-phase') {
       const grid: PhaseSpec = { name: 'Grid Search (neurons × bits)', experiment_type: 'ga', optimize_bits: true, optimize_neurons: true, optimize_connections: false, phase_type: 'grid_search' };
       if (order === 'bits_first') return [grid, ...bitsPhases, ...neuronsPhases, ...connectionsPhases];
+      return [grid, ...neuronsPhases, ...bitsPhases, ...connectionsPhases];
+    }
+
+    if (templateName === 'ids-binary-7-phase' || templateName === 'ids-multi-7-phase') {
+      const grid: PhaseSpec = { name: 'Grid Search (neurons × bits)', experiment_type: 'ga', optimize_bits: true, optimize_neurons: true, optimize_connections: false, phase_type: 'grid_search' };
       return [grid, ...neuronsPhases, ...bitsPhases, ...connectionsPhases];
     }
 
@@ -589,6 +635,14 @@
           params.reweight_rounds = reweightRounds;
           params.reweight_max_boost = reweightMaxBoost;
         }
+      } else if (isIDS) {
+        params.architecture_type = 'ids';
+        params.ids_classification = idsClassification;
+        params.ids_n_bits = idsNBits;
+        params.ids_val_fraction = idsValFraction;
+        params.ids_num_parts = idsNumParts;
+        params.ids_fitness_weight_f1 = idsFitnessWeightF1;
+        params.ids_split = idsSplit;
       } else if (isBitwise) {
         params.architecture_type = 'bitwise';
         params.num_clusters = bitwiseNumClusters;
@@ -821,6 +875,8 @@
                 <option value="standard-6-phase">Standard 6-Phase (Tiered)</option>
                 <option value="bitwise-7-phase">Bitwise 7-Phase</option>
                 <option value="bitwise-10-phase">Bitwise 10-Phase (+ Adaptation)</option>
+                <option value="ids-binary-7-phase">IDS Binary 7-Phase (UNSW-NB15)</option>
+                <option value="ids-multi-7-phase">IDS Multi-class 7-Phase (UNSW-NB15)</option>
                 <option value="empty">Empty (no phases)</option>
               </select>
               <span class="field-hint">
@@ -832,6 +888,10 @@
                   Exhaustive neurons &times; bits grid, then 6 GA/TS optimization phases
                 {:else if template === 'bitwise-10-phase'}
                   Grid + GA/adapt/TS for neurons &rarr; bits &rarr; connections
+                {:else if template === 'ids-binary-7-phase'}
+                  IDS binary (attack vs normal) on UNSW-NB15 &mdash; 7 phases
+                {:else if template === 'ids-multi-7-phase'}
+                  IDS 10-class classification on UNSW-NB15 &mdash; 7 phases
                 {:else}
                   Start empty, add phases manually below
                 {/if}
@@ -901,11 +961,13 @@
             <input type="number" id="patience" bind:value={patience} min="1" />
           </div>
 
+          {#if !isIDS}
           <div class="form-group">
             <label for="contextSize">Context Size</label>
             <input type="number" id="contextSize" bind:value={contextSize} min="2" max="16" />
             <span class="field-hint">N-gram context window (4 = 4-gram)</span>
           </div>
+          {/if}
         </div>
 
         <div class="form-row">
@@ -1051,7 +1113,52 @@
 
         <!-- Architecture config (single-stage only — multi-stage config is above) -->
         {#if !isMultiStage}
-          {#if isBitwise}
+          {#if isIDS}
+            <div class="form-section">
+              <h2>IDS Configuration (UNSW-NB15)</h2>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="idsClassification">Classification</label>
+                  <select id="idsClassification" bind:value={idsClassification}>
+                    <option value="binary">Binary (attack vs normal)</option>
+                    <option value="multi">Multi-class (10 categories)</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label for="idsSplit">Data Split</label>
+                  <select id="idsSplit" bind:value={idsSplit}>
+                    <option value="standard">Standard (paper split)</option>
+                    <option value="random">Random (stratified)</option>
+                  </select>
+                  <span class="field-hint">Standard = original train/test split</span>
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="idsNBits">Thermometer Bits</label>
+                  <input type="number" id="idsNBits" bind:value={idsNBits} min="4" max="16" />
+                  <span class="field-hint">Bits per feature (8 = 336 total input bits)</span>
+                </div>
+                <div class="form-group">
+                  <label for="idsValFraction">Validation Fraction</label>
+                  <input type="number" id="idsValFraction" bind:value={idsValFraction} min="0" max="0.5" step="0.05" />
+                  <span class="field-hint">Holdout from training for optimizer eval</span>
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="idsNumParts">Training Parts</label>
+                  <input type="number" id="idsNumParts" bind:value={idsNumParts} min="1" max="5" />
+                  <span class="field-hint">Rotation subsets for training data</span>
+                </div>
+                <div class="form-group">
+                  <label for="idsFitnessWeightF1">F1 Weight</label>
+                  <input type="number" id="idsFitnessWeightF1" bind:value={idsFitnessWeightF1} min="0" max="5" step="0.1" />
+                  <span class="field-hint">F1-macro weight in fitness (0 = off)</span>
+                </div>
+              </div>
+            </div>
+          {:else if isBitwise}
             <div class="form-section">
               <h2>Bitwise Configuration</h2>
               <div class="form-row">

@@ -5,6 +5,7 @@
   import { formatDate } from '$lib/dateFormat';
   import { currentFlow, flows } from '$lib/stores';
   import TierConfigEditor from '$lib/components/TierConfigEditor.svelte';
+  import IDSMetrics from '$lib/components/IDSMetrics.svelte';
 
   // Note: With normalized design, experiments come from the experiments table (via DB),
   // NOT from flow.config.experiments. The `experiments` array is fetched separately
@@ -168,6 +169,7 @@
 
   $: flowId = $page.params.id;
   $: isBitwise = flow?.config?.params?.architecture_type === 'bitwise';
+  $: isIDS = flow?.config?.params?.architecture_type === 'ids';
 
   // Reactive display experiments - re-computed when flow or experiments change
   $: displayExperiments = getDisplayExperiments(flow, experiments);
@@ -1022,6 +1024,20 @@
           <span class="info-value">{flow.config.template}</span>
         </div>
       {/if}
+      {#if isIDS}
+        <div class="info-card">
+          <span class="info-label">Task</span>
+          <span class="info-value">IDS {flow.config.params?.ids_classification ?? 'binary'}</span>
+        </div>
+        <div class="info-card">
+          <span class="info-label">Dataset</span>
+          <span class="info-value">UNSW-NB15 ({flow.config.params?.ids_split ?? 'standard'})</span>
+        </div>
+        <div class="info-card">
+          <span class="info-label">Encoding</span>
+          <span class="info-value">{flow.config.params?.ids_n_bits ?? 8}-bit thermometer</span>
+        </div>
+      {/if}
     </div>
 
     <!-- Validation Progression Chart -->
@@ -1626,6 +1642,21 @@
         </table>
       </div>
     </section>
+
+    <!-- IDS Metrics (shown for IDS flows when experiments have extra_metrics) -->
+    {#if isIDS}
+      {@const idsExperiments = experiments.filter(e => e.extra_metrics && e.status === 'completed')}
+      {#if idsExperiments.length > 0}
+        <section class="section">
+          <h2>IDS Results (Test Set)</h2>
+          {#each idsExperiments as exp}
+            {#if exp.extra_metrics}
+              <IDSMetrics metrics={exp.extra_metrics} title="{exp.name}" />
+            {/if}
+          {/each}
+        </section>
+      {/if}
+    {/if}
 
     <!-- Combined Results (for completed or running multi-stage flows) -->
     {#if combinedValidations.length > 0}

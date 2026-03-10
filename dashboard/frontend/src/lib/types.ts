@@ -151,12 +151,29 @@ export interface Experiment {
   // Real-time status message (e.g., "Iter 3/50: source 2/10, 10/50 offspring")
   status_message: string | null;
   // Architecture type
-  architecture_type?: 'tiered' | 'bitwise';
+  architecture_type?: 'tiered' | 'bitwise' | 'ids';
   // Gating analysis
   gating_status: GatingStatus | null;
   gating_results: GatingResults | null;
   // Cluster architecture type (legacy, prefer architecture_type)
   cluster_type?: 'tiered' | 'bitwise';
+  // Extra metrics (IDS: F1, FPR, confusion matrix)
+  extra_metrics?: IDSMetrics | null;
+}
+
+// =============================================================================
+// IDS metrics types
+// =============================================================================
+
+export interface IDSMetrics {
+  accuracy: number;
+  f1_macro: number;
+  fpr?: number;
+  per_class_f1?: Record<string, number>;
+  per_class_recall?: Record<string, number>;
+  per_class_precision?: Record<string, number>;
+  confusion_matrix?: number[][];
+  class_names?: string[];
 }
 
 // =============================================================================
