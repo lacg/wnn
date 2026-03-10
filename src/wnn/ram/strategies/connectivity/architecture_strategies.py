@@ -417,7 +417,7 @@ class ArchitectureStrategyMixin:
 				mode=FilterMode.LOWER_IS_BETTER,
 				metric_name="CE",
 			)
-			offspring_2t = [(g, ce) for g, ce, _ in offspring]
+			offspring_2t = [(t[0], t[1]) for t in offspring]
 			filter_result = ce_filter.apply(offspring_2t, key=lambda g, f: f)
 			kept_ids = {id(g) for g, _ in filter_result.kept}
 			offspring = [t for t in offspring if id(t[0]) in kept_ids]
@@ -431,7 +431,7 @@ class ArchitectureStrategyMixin:
 				mode=FilterMode.LOWER_IS_BETTER,
 				metric_name=fitness_calculator.name,
 			)
-			filter_input = [((g, ce, acc), score) for (g, ce, acc), score in offspring_with_fitness]
+			filter_input = [(item, score) for item, score in offspring_with_fitness]
 			filter_result = fitness_filter.apply(filter_input, key=lambda t, f: f)
 			offspring = [t for t, _ in filter_result.kept]
 
@@ -947,15 +947,15 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			generate_count = math.ceil(n_needed / pct) if pct else n_needed
 
 			# Convert 3-tuple population to 2-tuple for evaluator
-			rust_population = [(g, ce) for g, ce, _ in population]
+			rust_population = [(t[0], t[1]) for t in population]
 
 			# Pre-compute fitness scores so tournament selection uses the
 			# same metric as elite selection (e.g. HarmonicRank), not raw CE
 			fitness_scores = None
 			if self._fitness_calculator is not None:
 				pop_tuples = [
-					(i, ce, acc or 0.0)
-					for i, (_, ce, acc) in enumerate(population)
+					(i, t[1], t[2] or 0.0)
+					for i, t in enumerate(population)
 				]
 				fitness_scores = self._fitness_calculator.fitness(pop_tuples)
 
@@ -1017,7 +1017,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			population = ctx.get('population', [])
 			self._checkpoint_mgr.save(
 				iteration=generation,
-				population=[(g, ce) for g, ce, _ in population],
+				population=[(t[0], t[1]) for t in population],
 				best_genome=ctx.get('best_genome'),
 				best_fitness=(ctx.get('best_fitness'), ctx.get('best_accuracy')),
 				current_threshold=ctx.get('threshold', 0.0),
@@ -1033,7 +1033,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 				population = ctx.get('population', [])
 				self._checkpoint_mgr.save(
 					iteration=generation,
-					population=[(g, ce) for g, ce, _ in population],
+					population=[(t[0], t[1]) for t in population],
 					best_genome=ctx.get('best_genome'),
 					best_fitness=(ctx.get('best_fitness'), ctx.get('best_accuracy')),
 					current_threshold=ctx.get('threshold', 0.0),
@@ -2035,6 +2035,7 @@ class AdaptationConfig:
 	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK
 	fitness_weight_ce: float = 1.0
 	fitness_weight_acc: float = 1.0
+	fitness_weight_f1: float = 0.0
 	min_accuracy_floor: Optional[float] = None
 
 
@@ -2129,6 +2130,7 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 			cfg.fitness_calculator_type,
 			weight_ce=cfg.fitness_weight_ce,
 			weight_acc=cfg.fitness_weight_acc,
+			weight_f1=cfg.fitness_weight_f1,
 		)
 
 		# Configure evaluator's adaptation mode for this phase
