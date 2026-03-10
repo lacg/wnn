@@ -1683,7 +1683,7 @@ class GridSearchStrategy:
 				evals = self._batch_evaluator.evaluate_batch(
 					[genome], train_subset_idx=grid_train_idx,
 				)
-				ce, acc, bit_acc = evals[0]
+				ce, acc, bit_acc = evals[0].ce, evals[0].accuracy, evals[0].bit_accuracy or 0.0
 			elif evaluate_fn is not None:
 				ce = evaluate_fn(genome)
 				acc, bit_acc = 0.0, 0.0
