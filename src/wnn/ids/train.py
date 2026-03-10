@@ -30,7 +30,7 @@ from typing import Optional
 
 import numpy as np
 
-from wnn.ids import load_unsw_nb15, create_attack_only_dataset
+from wnn.ids import load_unsw_nb15, create_attack_only_dataset, split_train_validation
 from wnn.ids.bitwise import create_bitwise_codebook, create_per_bit_dataset
 from wnn.ids.metrics import compute_ids_metrics, format_ids_report
 from wnn.ram.architecture.ids_evaluator import IDSEvaluator
@@ -73,6 +73,7 @@ class IDSTrainConfig:
 	beta: float = 1.0  # F-beta: <1 favors precision/low FPR, >1 favors recall
 	class_weights: Optional[list[float]] = None  # Per-class importance (None=uniform)
 	split: str = "standard"  # "standard" or "random"
+	val_fraction: float = 0.25  # Validation holdout fraction from training data (0=disabled)
 	bitwise_quick: bool = False  # Quick mode: grid search + connections only
 	output: Optional[str] = None
 
@@ -165,6 +166,69 @@ def create_asymmetric_genome(
 	return genome
 
 
+class _OverfitControl:
+	"""Simple control object returned by overfitting callback."""
+	def __init__(self, early_stop: bool = False):
+		self.early_stop = early_stop
+
+
+def create_overfitting_callback(
+	evaluator: IDSEvaluator,
+	baseline_acc: float | None = None,
+	patience: int = 3,
+	logger=print,
+):
+	"""Create an overfitting detection callback for GA/TS optimization.
+
+	Evaluates the current best genome on the FULL training + validation set
+	(via evaluate_batch_full) and compares validation accuracy against the
+	subset-rotation training accuracy. If validation accuracy drops below
+	the baseline for `patience` consecutive checks, signals early stop.
+
+	Args:
+		evaluator: IDSEvaluator (with validation data in its "test" slot)
+		baseline_acc: Initial validation accuracy to compare against (auto-set on first call)
+		patience: How many consecutive degradations before stopping
+		logger: Print function for logging
+
+	Returns:
+		Callable compatible with overfitting_callback(genome, fitness) -> control
+	"""
+	state = {"best_val_acc": baseline_acc, "degradation_count": 0, "call_count": 0}
+
+	def callback(genome, train_fitness):
+		state["call_count"] += 1
+		# Evaluate on full train → validation
+		result = evaluator.evaluate_batch_full([genome])[0]
+		val_acc = result.accuracy
+		val_ce = result.ce
+
+		# Auto-set baseline on first call
+		if state["best_val_acc"] is None:
+			state["best_val_acc"] = val_acc
+
+		# Compare: is validation improving?
+		if val_acc >= state["best_val_acc"]:
+			state["best_val_acc"] = val_acc
+			state["degradation_count"] = 0
+			logger(f"  [overfit check #{state['call_count']}] val_acc={val_acc*100:.2f}% "
+				   f"(best={state['best_val_acc']*100:.2f}%) ✓")
+		else:
+			state["degradation_count"] += 1
+			gap = state["best_val_acc"] - val_acc
+			logger(f"  [overfit check #{state['call_count']}] val_acc={val_acc*100:.2f}% "
+				   f"(best={state['best_val_acc']*100:.2f}%, gap={gap*100:.2f}%, "
+				   f"degradation {state['degradation_count']}/{patience})")
+
+		if state["degradation_count"] >= patience:
+			logger(f"  [overfit check] EARLY STOP: validation degraded {patience} consecutive times")
+			return _OverfitControl(early_stop=True)
+
+		return _OverfitControl(early_stop=False)
+
+	return callback
+
+
 def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 	"""Run full IDS training experiment."""
 	print(f"=== WNN IDS Classifier ({cfg.classification}, split={cfg.split}) ===")
@@ -174,29 +238,58 @@ def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 
 	# Load dataset
 	t0 = time.time()
-	dataset = load_unsw_nb15(n_bits=cfg.n_bits, split=cfg.split)
-	total_features = dataset.X_train.shape[1]
-	print(f"Dataset: {dataset.X_train.shape[0]:,} train, {dataset.X_test.shape[0]:,} test, "
+	full_dataset = load_unsw_nb15(n_bits=cfg.n_bits, split=cfg.split)
+	total_features = full_dataset.X_train.shape[1]
+	print(f"Dataset: {full_dataset.X_train.shape[0]:,} train, {full_dataset.X_test.shape[0]:,} test, "
 		  f"{total_features} features ({time.time()-t0:.1f}s)")
 
 	if cfg.classification == "binary":
 		num_classes = 2
 		class_names = ["Normal", "Attack"]
-		y_train = dataset.y_train_binary
+		y_train = full_dataset.y_train_binary
 	else:
-		num_classes = len(dataset.category_names)
-		class_names = dataset.category_names
-		y_train = dataset.y_train_multi
+		num_classes = len(full_dataset.category_names)
+		class_names = full_dataset.category_names
+		y_train = full_dataset.y_train_multi
 
-	# Create evaluator
+	# Validation holdout: split training data so optimizer never sees 82K test set
+	overfitting_cb = None
+	if cfg.val_fraction > 0:
+		train_val_dataset, _ = split_train_validation(
+			full_dataset, val_fraction=cfg.val_fraction, seed=cfg.seed,
+		)
+		opt_dataset = train_val_dataset  # optimization: 131K train (3-part rotation), 44K val as eval
+		y_train = opt_dataset.y_train_binary if cfg.classification == "binary" else opt_dataset.y_train_multi
+	else:
+		opt_dataset = full_dataset  # no validation split — optimizer uses full 175K train + 82K test
+
+	# Create optimizer evaluator (per-generation fitness: trains on subset of opt_dataset, evals on opt_dataset.X_test)
 	t0 = time.time()
 	evaluator = IDSEvaluator(
-		dataset=dataset,
+		dataset=opt_dataset,
 		classification=cfg.classification,
 		num_parts=cfg.num_parts,
 		seed=cfg.seed,
 	)
-	print(f"Evaluator: {repr(evaluator)} ({time.time()-t0:.1f}s)")
+	print(f"Optimizer evaluator: {repr(evaluator)} ({time.time()-t0:.1f}s)")
+
+	# Create test evaluator (175K train → 82K test) for overfitting checks + end-of-phase reporting
+	t0 = time.time()
+	test_evaluator = IDSEvaluator(
+		dataset=full_dataset,
+		classification=cfg.classification,
+		num_parts=1,  # no subset rotation — always full 175K train → 82K test
+		seed=cfg.seed,
+	)
+	print(f"Test evaluator: {repr(test_evaluator)} ({time.time()-t0:.1f}s)")
+
+	# Overfitting callback: every 10 gens, evaluate best genome on 82K test set
+	if cfg.val_fraction > 0:
+		overfitting_cb = create_overfitting_callback(
+			evaluator=test_evaluator,  # uses 175K train → 82K test
+			patience=3,
+			logger=print,
+		)
 
 	# ── Phase 0: Grid search ─────────────────────────────────────────
 	grid_config = GridSearchConfig(
@@ -255,6 +348,8 @@ def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 		optimize_bits=False, optimize_neurons=True, optimize_connections=False,
 		num_classes=num_classes, total_features=total_features,
 		seed_population=seed_population,
+		overfitting_callback=overfitting_cb,
+		test_evaluator=test_evaluator,
 	)
 
 	# Phase 2: Optimize bits (GA + TS)
@@ -262,6 +357,8 @@ def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 		"bits", evaluator, best_genome, best_ce, best_acc, cfg,
 		optimize_bits=True, optimize_neurons=False, optimize_connections=False,
 		num_classes=num_classes, total_features=total_features,
+		overfitting_callback=overfitting_cb,
+		test_evaluator=test_evaluator,
 	)
 
 	# Phase 3: Optimize connections (GA + TS)
@@ -269,22 +366,24 @@ def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 		"connections", evaluator, best_genome, best_ce, best_acc, cfg,
 		optimize_bits=False, optimize_neurons=False, optimize_connections=True,
 		num_classes=num_classes, total_features=total_features,
+		overfitting_callback=overfitting_cb,
+		test_evaluator=test_evaluator,
 	)
 
-	# ── Final evaluation ──────────────────────────────────────────────
-	print("\n=== Final Evaluation ===")
-	final_result = evaluator.evaluate_batch_full([best_genome])[0]
+	# ── Final evaluation on 82K test set (175K train → 82K test) ────
+	print("\n=== Final Evaluation (Test Set: 175K train → 82K test) ===")
+	final_result = test_evaluator.evaluate_batch_full([best_genome])[0]
 	print(f"Final: CE={final_result.ce:.4f}, Acc={final_result.accuracy*100:.2f}%"
 		  + (f", F1={final_result.f1_macro:.4f}" if final_result.f1_macro is not None else ""))
 	print(f"Genome: neurons={best_genome.neurons_per_cluster}, "
 		  f"bits={best_genome.bits_per_neuron[:10]}{'...' if len(best_genome.bits_per_neuron) > 10 else ''}")
 
-	# Per-example predictions for detailed IDS metrics
-	predictions = evaluator.predict(best_genome)
+	# Per-example predictions for detailed IDS metrics (on 82K test set)
+	predictions = test_evaluator.predict(best_genome)
 	if cfg.classification == "binary":
-		y_test = dataset.y_test_binary
+		y_test = full_dataset.y_test_binary
 	else:
-		y_test = dataset.y_test_multi
+		y_test = full_dataset.y_test_multi
 	ids_metrics = compute_ids_metrics(
 		y_test, predictions, num_classes,
 		beta=cfg.beta, class_weights=cfg.class_weights,
@@ -320,6 +419,7 @@ def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 			"fitness_weight_acc": cfg.fitness_weight_acc,
 			"fitness_weight_f1": cfg.fitness_weight_f1,
 			"beta": cfg.beta,
+			"val_fraction": cfg.val_fraction,
 		},
 	}
 
@@ -345,6 +445,8 @@ def _run_phase(
 	num_classes: int,
 	total_features: int,
 	seed_population: list[ClusterGenome] | None = None,
+	overfitting_callback=None,
+	test_evaluator: IDSEvaluator | None = None,
 ) -> tuple[ClusterGenome, float, float]:
 	"""Run GA + TS for a single optimization phase."""
 	print(f"\n--- Phase: {phase_name} ---")
@@ -389,7 +491,10 @@ def _run_phase(
 	initial_pop = seed_population if seed_population else [genome]
 
 	t0 = time.time()
-	ga_result = ga_strategy.optimize(initial_population=initial_pop)
+	ga_kwargs = {}
+	if overfitting_callback is not None:
+		ga_kwargs["overfitting_callback"] = overfitting_callback
+	ga_result = ga_strategy.optimize(initial_population=initial_pop, **ga_kwargs)
 	ga_time = time.time() - t0
 	print(f"  GA {phase_name}: CE {best_ce:.4f} -> {ga_result.final_fitness:.4f}, "
 		  f"Acc {(ga_result.final_accuracy or 0)*100:.2f}% "
@@ -421,10 +526,14 @@ def _run_phase(
 	)
 
 	t0 = time.time()
+	ts_kwargs = {}
+	if overfitting_callback is not None:
+		ts_kwargs["overfitting_callback"] = overfitting_callback
 	ts_result = ts_strategy.optimize(
 		initial_genome=best_genome,
 		initial_fitness=best_ce,
 		initial_neighbors=ga_result.final_population,
+		**ts_kwargs,
 	)
 	ts_time = time.time() - t0
 	print(f"  TS {phase_name}: CE {best_ce:.4f} -> {ts_result.final_fitness:.4f}, "
@@ -435,6 +544,13 @@ def _run_phase(
 		best_genome = ts_result.best_genome
 		best_ce = ts_result.final_fitness
 		best_acc = ts_result.final_accuracy or best_acc
+
+	# End-of-phase test evaluation (175K train → 82K test)
+	if test_evaluator is not None:
+		test_result = test_evaluator.evaluate_batch_full([best_genome])[0]
+		print(f"  Phase {phase_name} test: CE={test_result.ce:.4f}, "
+			  f"Acc={test_result.accuracy*100:.2f}%"
+			  + (f", F1={test_result.f1_macro:.4f}" if test_result.f1_macro is not None else ""))
 
 	return best_genome, best_ce, best_acc
 
@@ -478,6 +594,7 @@ def run_hierarchical_experiment(cfg: IDSTrainConfig) -> dict:
 		fitness_weight_acc=cfg.fitness_weight_acc,
 		fitness_weight_f1=cfg.fitness_weight_f1,
 		split=cfg.split,
+		val_fraction=cfg.val_fraction,
 	)
 
 	# Reuse loaded dataset — run_ids_experiment will reload, but that's fine
@@ -490,21 +607,46 @@ def run_hierarchical_experiment(cfg: IDSTrainConfig) -> dict:
 	print("STAGE 1: Attack Type Classification (9 classes)")
 	print("=" * 60)
 
-	attack_dataset = create_attack_only_dataset(dataset)
-	attack_features = attack_dataset.X_train.shape[1]
-	num_attack_classes = len(attack_dataset.category_names)
+	full_attack_dataset = create_attack_only_dataset(dataset)
+	attack_features = full_attack_dataset.X_train.shape[1]
+	num_attack_classes = len(full_attack_dataset.category_names)
 
-	print(f"Attack dataset: {attack_dataset.X_train.shape[0]:,} train, "
-		  f"{attack_dataset.X_test.shape[0]:,} test, {num_attack_classes} classes")
+	print(f"Attack dataset: {full_attack_dataset.X_train.shape[0]:,} train, "
+		  f"{full_attack_dataset.X_test.shape[0]:,} test, {num_attack_classes} classes")
 
-	# Create Stage 1 evaluator (9-class, attack-only data)
+	# Validation split for Stage 1
+	s1_overfit_cb = None
+	if cfg.val_fraction > 0:
+		s1_train_val, _ = split_train_validation(
+			full_attack_dataset, val_fraction=cfg.val_fraction, seed=cfg.seed + 2000,
+		)
+		s1_opt_dataset = s1_train_val
+	else:
+		s1_opt_dataset = full_attack_dataset
+
+	# Create Stage 1 optimizer evaluator
 	s1_evaluator = IDSEvaluator(
-		dataset=attack_dataset,
+		dataset=s1_opt_dataset,
 		classification="multi",
 		num_parts=cfg.num_parts,
 		seed=cfg.seed + 2000,
 	)
-	print(f"Stage 1 evaluator: {repr(s1_evaluator)}")
+	print(f"Stage 1 optimizer evaluator: {repr(s1_evaluator)}")
+
+	# Stage 1 test evaluator (full attack train → attack test)
+	s1_test_evaluator = IDSEvaluator(
+		dataset=full_attack_dataset,
+		classification="multi",
+		num_parts=1,
+		seed=cfg.seed + 2000,
+	)
+
+	if cfg.val_fraction > 0:
+		s1_overfit_cb = create_overfitting_callback(
+			evaluator=s1_test_evaluator,
+			patience=3,
+			logger=print,
+		)
 
 	# Grid search for Stage 1
 	grid_config = GridSearchConfig(
@@ -538,7 +680,7 @@ def run_hierarchical_experiment(cfg: IDSTrainConfig) -> dict:
 
 	# Asymmetric genome for 9-class with varying attack counts
 	asym_genome = create_asymmetric_genome(
-		attack_dataset.y_train_multi, num_attack_classes, attack_features,
+		s1_opt_dataset.y_train_multi, num_attack_classes, attack_features,
 		seed=cfg.seed + 2000,
 	)
 	asym_result = s1_evaluator.evaluate_batch_full([asym_genome])[0]
@@ -557,6 +699,8 @@ def run_hierarchical_experiment(cfg: IDSTrainConfig) -> dict:
 		optimize_bits=False, optimize_neurons=True, optimize_connections=False,
 		num_classes=num_attack_classes, total_features=attack_features,
 		seed_population=seed_population,
+		overfitting_callback=s1_overfit_cb,
+		test_evaluator=s1_test_evaluator,
 	)
 
 	# Phase 2: Bits
@@ -564,6 +708,8 @@ def run_hierarchical_experiment(cfg: IDSTrainConfig) -> dict:
 		"bits", s1_evaluator, best_genome, best_ce, best_acc, cfg,
 		optimize_bits=True, optimize_neurons=False, optimize_connections=False,
 		num_classes=num_attack_classes, total_features=attack_features,
+		overfitting_callback=s1_overfit_cb,
+		test_evaluator=s1_test_evaluator,
 	)
 
 	# Phase 3: Connections
@@ -571,11 +717,13 @@ def run_hierarchical_experiment(cfg: IDSTrainConfig) -> dict:
 		"connections", s1_evaluator, best_genome, best_ce, best_acc, cfg,
 		optimize_bits=False, optimize_neurons=False, optimize_connections=True,
 		num_classes=num_attack_classes, total_features=attack_features,
+		overfitting_callback=s1_overfit_cb,
+		test_evaluator=s1_test_evaluator,
 	)
 
-	# Final Stage 1 evaluation
+	# Final Stage 1 evaluation (full attack train → attack test)
 	print("\n=== Stage 1 Final Evaluation ===")
-	s1_final = s1_evaluator.evaluate_batch_full([best_genome])[0]
+	s1_final = s1_test_evaluator.evaluate_batch_full([best_genome])[0]
 	print(f"Stage 1: CE={s1_final.ce:.4f}, Acc={s1_final.accuracy*100:.2f}%")
 	print(f"Genome: neurons={best_genome.neurons_per_cluster}")
 
@@ -586,7 +734,7 @@ def run_hierarchical_experiment(cfg: IDSTrainConfig) -> dict:
 	print("=" * 60)
 	print(f"Stage 0 (Binary gate):       {s0_metrics['accuracy']*100:.2f}%")
 	print(f"Stage 1 (Attack classifier): {s1_final.accuracy*100:.2f}%")
-	print(f"  (Stage 1 tested on {attack_dataset.X_test.shape[0]:,} attack examples only)")
+	print(f"  (Stage 1 tested on {full_attack_dataset.X_test.shape[0]:,} attack examples only)")
 	print()
 	print("At inference:")
 	print("  1. All traffic → Stage 0 (< 1 KB, 6 neurons)")
@@ -600,7 +748,7 @@ def run_hierarchical_experiment(cfg: IDSTrainConfig) -> dict:
 		"stage1": {
 			"classification": "attack_type",
 			"num_classes": num_attack_classes,
-			"class_names": attack_dataset.category_names,
+			"class_names": full_attack_dataset.category_names,
 			"ce": s1_final.ce,
 			"accuracy": s1_final.accuracy,
 			"genome": {
@@ -608,8 +756,8 @@ def run_hierarchical_experiment(cfg: IDSTrainConfig) -> dict:
 				"neurons_per_cluster": best_genome.neurons_per_cluster,
 				"total_neurons": best_genome.total_neurons,
 			},
-			"train_examples": int(attack_dataset.X_train.shape[0]),
-			"test_examples": int(attack_dataset.X_test.shape[0]),
+			"train_examples": int(full_attack_dataset.X_train.shape[0]),
+			"test_examples": int(full_attack_dataset.X_test.shape[0]),
 		},
 	}
 
@@ -860,6 +1008,8 @@ def main():
 		help="F-beta score: <1 favors precision/low FPR, >1 favors recall")
 	parser.add_argument("--class-weights", type=str, default=None,
 		help="Per-class importance weights, comma-separated (e.g. '1.0,2.0')")
+	parser.add_argument("--val-fraction", type=float, default=0.25,
+		help="Validation holdout fraction from training data (0=disabled, default 0.25)")
 	parser.add_argument("--split", choices=["standard", "random"], default="standard",
 		help="Evaluation protocol: 'standard' (temporal) or 'random' (i.i.d.)")
 	parser.add_argument("--hierarchical", action="store_true",
@@ -894,6 +1044,7 @@ def main():
 		beta=args.beta,
 		class_weights=class_weights,
 		split=args.split,
+		val_fraction=args.val_fraction,
 		bitwise_quick=args.bitwise_quick,
 		output=args.output,
 	)

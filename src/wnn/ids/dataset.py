@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from dataclasses import dataclass
+from sklearn.model_selection import train_test_split
 
 from .encoder import ThermometerEncoder, ThermometerType
 
@@ -62,6 +63,80 @@ class IDSDataset:
 	encoder: ThermometerEncoder
 	category_names: list[str]  # index → category name
 	feature_names: list[str]  # feature names in order
+
+
+def split_train_validation(
+	dataset: IDSDataset,
+	val_fraction: float = 0.25,
+	seed: int = 42,
+) -> tuple[IDSDataset, IDSDataset]:
+	"""Split training data into train + validation, keeping original test set separate.
+
+	Uses stratified sampling on multi-class labels to preserve class distribution.
+	Returns two IDSDataset objects:
+	  - train_dataset: reduced training set (for optimization), validation as "test" slot
+	  - test_dataset: original full training set for train, original test set for eval
+	                   (used only for final reporting)
+
+	The train_dataset puts validation data in the X_test/y_test slots so the existing
+	IDSEvaluator/IDSCache can use it without changes — the Rust evaluator treats
+	whatever is in the "test" slot as the eval set.
+
+	Args:
+		dataset: Original dataset with full training + test data
+		val_fraction: Fraction of training data to hold out (default 0.25 = 25%)
+		seed: Random seed for reproducible splits
+
+	Returns:
+		(train_val_dataset, test_dataset) — first for optimization, second for final eval
+	"""
+	n_train = len(dataset.X_train)
+	indices = np.arange(n_train)
+
+	train_idx, val_idx = train_test_split(
+		indices,
+		test_size=val_fraction,
+		random_state=seed,
+		stratify=dataset.y_train_multi,  # stratify on multi-class for best balance
+	)
+
+	# Train-val dataset: reduced train, validation in "test" slot
+	train_val_dataset = IDSDataset(
+		X_train=dataset.X_train[train_idx],
+		y_train_binary=dataset.y_train_binary[train_idx],
+		y_train_multi=dataset.y_train_multi[train_idx],
+		X_test=dataset.X_train[val_idx],
+		y_test_binary=dataset.y_train_binary[val_idx],
+		y_test_multi=dataset.y_train_multi[val_idx],
+		encoder=dataset.encoder,
+		category_names=dataset.category_names,
+		feature_names=dataset.feature_names,
+	)
+
+	# Test dataset: full original train → test (for final eval after optimization)
+	test_dataset = IDSDataset(
+		X_train=dataset.X_train,
+		y_train_binary=dataset.y_train_binary,
+		y_train_multi=dataset.y_train_multi,
+		X_test=dataset.X_test,
+		y_test_binary=dataset.y_test_binary,
+		y_test_multi=dataset.y_test_multi,
+		encoder=dataset.encoder,
+		category_names=dataset.category_names,
+		feature_names=dataset.feature_names,
+	)
+
+	print(f"Validation split: {len(train_idx):,} train, {len(val_idx):,} val "
+		  f"({val_fraction*100:.0f}% holdout, seed={seed})")
+
+	# Show per-class distribution in validation
+	for c in range(len(dataset.category_names)):
+		n_t = int((dataset.y_train_multi[train_idx] == c).sum())
+		n_v = int((dataset.y_train_multi[val_idx] == c).sum())
+		pct = n_v / (n_t + n_v) * 100 if (n_t + n_v) > 0 else 0
+		print(f"  {dataset.category_names[c]:15s}: {n_t:>7,} train, {n_v:>5,} val ({pct:.1f}%)")
+
+	return train_val_dataset, test_dataset
 
 
 def create_attack_only_dataset(dataset: IDSDataset) -> IDSDataset:
