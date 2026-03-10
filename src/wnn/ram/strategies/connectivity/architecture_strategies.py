@@ -1722,6 +1722,8 @@ class GridSearchStrategy:
 				try:
 					avg_ce = sum(r["ce"] for r in results) / len(results)
 					avg_acc = sum(r["accuracy"] for r in results) / len(results)
+					best_f1_so_far = max((r.get("f1_macro") for r in results if r.get("f1_macro") is not None), default=None)
+					best_fpr_so_far = min((r.get("fpr") for r in results if r.get("fpr") is not None), default=None)
 					iter_id = self._tracker.record_iteration(
 						experiment_id=self._tracker_experiment_id,
 						iteration_num=idx + 1,
@@ -1731,6 +1733,8 @@ class GridSearchStrategy:
 						avg_accuracy=avg_acc,
 						elapsed_secs=config_elapsed,
 						candidates_total=total_configs,
+						best_f1=best_f1_so_far,
+						best_fpr=best_fpr_so_far,
 					)
 					if HAS_GENOME_TRACKING and iter_id:
 						genome_config = self._genome_to_config(genome)
@@ -1867,6 +1871,8 @@ class GridSearchStrategy:
 						best_ce_so_far = min(best_ce_so_far, ce)
 						best_acc_so_far = max(best_acc_so_far, acc)
 						seed_iter_num = len(results) + idx_in_new + 1
+						ev_f1 = getattr(ev, 'f1_macro', None)
+						ev_fpr = getattr(ev, 'fpr', None)
 						iter_id = self._tracker.record_iteration(
 							experiment_id=self._tracker_experiment_id,
 							iteration_num=seed_iter_num,
@@ -1876,6 +1882,8 @@ class GridSearchStrategy:
 							avg_accuracy=acc,
 							elapsed_secs=g_elapsed,
 							candidates_total=len(new_genomes),
+							best_f1=ev_f1,
+							best_fpr=ev_fpr,
 						)
 						if HAS_GENOME_TRACKING and iter_id:
 							genome_config = self._genome_to_config(genome)
@@ -1907,8 +1915,8 @@ class GridSearchStrategy:
 
 		# Phase 6: Rank full population by fitness and sort
 		pop_tuples = [
-			(output_population[i], ce, acc)
-			for i, (ce, acc) in enumerate(population_metrics)
+			(output_population[i],) + tuple(m)
+			for i, m in enumerate(population_metrics)
 		]
 		pop_fitness_scores = calculator.fitness(pop_tuples)
 
@@ -1928,8 +1936,8 @@ class GridSearchStrategy:
 
 		# Three independent bests from potentially different genomes (recompute after trim)
 		pop_tuples = [
-			(output_population[i], ce, acc)
-			for i, (ce, acc) in enumerate(population_metrics)
+			(output_population[i],) + tuple(m)
+			for i, m in enumerate(population_metrics)
 		]
 		pop_bests = calculator.bests(pop_tuples)
 		best_genome = pop_bests.best_fitness.genome
@@ -1938,8 +1946,10 @@ class GridSearchStrategy:
 		final_iter_num = len(results) + num_seed_recorded + 1  # After per-config + seed iterations
 		if self._tracker and self._tracker_experiment_id:
 			try:
-				avg_ce = sum(ce for ce, _ in population_metrics) / len(population_metrics)
-				avg_acc = sum(acc for _, acc in population_metrics) / len(population_metrics)
+				avg_ce = sum(m[0] for m in population_metrics) / len(population_metrics)
+				avg_acc = sum(m[1] for m in population_metrics) / len(population_metrics)
+				pm_f1s = [m[2] for m in population_metrics if len(m) > 2 and m[2] is not None]
+				pm_fprs = [m[3] for m in population_metrics if len(m) > 3 and m[3] is not None]
 				iter_id = self._tracker.record_iteration(
 					experiment_id=self._tracker_experiment_id,
 					iteration_num=final_iter_num,
@@ -1949,9 +1959,12 @@ class GridSearchStrategy:
 					avg_accuracy=avg_acc,
 					elapsed_secs=batch_elapsed,
 					candidates_total=len(output_population),
+					best_f1=max(pm_f1s) if pm_f1s else None,
+					best_fpr=min(pm_fprs) if pm_fprs else None,
 				)
 				if HAS_GENOME_TRACKING:
-					for pos, (genome, (ce, acc), fit) in enumerate(zip(output_population, population_metrics, pop_fitness_scores)):
+					for pos, (genome, m, fit) in enumerate(zip(output_population, population_metrics, pop_fitness_scores)):
+						ce, acc = m[0], m[1]
 						genome_config = self._genome_to_config(genome)
 						if genome_config:
 							genome_id = self._tracker.get_or_create_genome(
@@ -2251,6 +2264,11 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 				delta_previous = best_ce - prev_best
 				if self._tracker and self._tracker_experiment_id:
 					try:
+						# Extract best F1/FPR from EvalResult objects
+						ev_f1s = [getattr(e, 'f1_macro', None) for e in evals]
+						ev_fprs = [getattr(e, 'fpr', None) for e in evals]
+						valid_f1s = [v for v in ev_f1s if v is not None]
+						valid_fprs = [v for v in ev_fprs if v is not None]
 						iter_id = self._tracker.record_iteration(
 							experiment_id=self._tracker_experiment_id,
 							iteration_num=iteration + 1,
@@ -2264,6 +2282,8 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 							delta_previous=delta_previous,
 							patience_counter=early_stopper._patience_counter,
 							patience_max=cfg.patience,
+							best_f1=max(valid_f1s) if valid_f1s else None,
+							best_fpr=min(valid_fprs) if valid_fprs else None,
 						)
 						# Record genome evaluations
 						if HAS_GENOME_TRACKING:

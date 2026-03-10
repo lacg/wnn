@@ -291,6 +291,9 @@ pub struct Iteration {
     pub best_accuracy: Option<f64>,
     pub avg_ce: Option<f64>,
     pub avg_accuracy: Option<f64>,
+    // IDS metrics (None for LM experiments)
+    pub best_f1: Option<f64>,
+    pub best_fpr: Option<f64>,
     pub elite_count: Option<i32>,
     pub offspring_count: Option<i32>,
     pub offspring_viable: Option<i32>,

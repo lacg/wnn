@@ -30,7 +30,7 @@
   let gatingRuns: GatingRun[] = [];
 
   // Chart tooltip state
-  let tooltipData: { x: number; y: number; iter: number; ce: number; acc: number | null; avgCe: number | null; avgAcc: number | null } | null = null;
+  let tooltipData: { x: number; y: number; iter: number; ce: number; acc: number | null; avgCe: number | null; avgAcc: number | null; f1?: number | null; fpr?: number | null } | null = null;
 
   // Live generation progress (in-memory, no DB)
   let liveProgress: { generation: number; total_generations: number; phase: string; evaluated: number; target_count: number; viable: number | null; best_ce: number; best_acc: number; elapsed_secs: number } | null = null;
@@ -326,6 +326,16 @@
     return (acc * 100).toFixed(2) + '%';
   }
 
+  function formatF1(f1: number | null | undefined): string {
+    if (f1 === null || f1 === undefined) return '—';
+    return (f1 * 100).toFixed(2) + '%';
+  }
+
+  function formatFPR(fpr: number | null | undefined): string {
+    if (fpr === null || fpr === undefined) return '—';
+    return (fpr * 100).toFixed(3) + '%';
+  }
+
   function formatDuration(start: string | null, end: string | null): string {
     if (!start) return '—';
     const startDate = new Date(start);
@@ -376,16 +386,27 @@
     ce: iter.best_ce,
     acc: iter.best_accuracy !== null ? iter.best_accuracy * 100 : null,
     avgCe: iter.avg_ce,
-    avgAcc: iter.avg_accuracy !== null ? iter.avg_accuracy * 100 : null
+    avgAcc: iter.avg_accuracy !== null ? iter.avg_accuracy * 100 : null,
+    f1: iter.best_f1 !== null && iter.best_f1 !== undefined ? iter.best_f1 * 100 : null,
+    fpr: iter.best_fpr !== null && iter.best_fpr !== undefined ? iter.best_fpr * 100 : null
   }));
 
   // Metrics
   $: bestCE = iterations.length > 0 ? Math.min(...iterations.map(i => i.best_ce)) : Infinity;
   $: bestAcc = iterations.length > 0 ? Math.max(...iterations.filter(i => i.best_accuracy !== null).map(i => i.best_accuracy!)) : null;
+  $: bestF1 = iterations.length > 0 ? Math.max(...iterations.filter(i => i.best_f1 !== null && i.best_f1 !== undefined).map(i => i.best_f1!), 0) || null : null;
+  $: bestFpr = iterations.length > 0
+    ? (() => {
+        const fprVals = iterations.filter(i => i.best_fpr !== null && i.best_fpr !== undefined).map(i => i.best_fpr!);
+        return fprVals.length > 0 ? Math.min(...fprVals) : null;
+      })()
+    : null;
 
   // Baseline values (first iteration)
   $: baselineCE = iterations.length > 0 ? iterations[0].best_ce : null;
   $: baselineAcc = iterations.length > 0 ? iterations[0].best_accuracy : null;
+  $: baselineF1 = iterations.length > 0 ? iterations[0].best_f1 ?? null : null;
+  $: baselineFpr = iterations.length > 0 ? iterations[0].best_fpr ?? null : null;
 
   // Improvement percentages
   $: ceImprovement = baselineCE !== null && bestCE !== Infinity && baselineCE > 0
@@ -394,10 +415,18 @@
   $: accImprovement = baselineAcc !== null && bestAcc !== null && baselineAcc > 0
     ? ((bestAcc - baselineAcc) / baselineAcc) * 100
     : null;
+  $: f1Improvement = baselineF1 !== null && bestF1 !== null && baselineF1 > 0
+    ? ((bestF1 - baselineF1) / baselineF1) * 100
+    : null;
+  $: fprImprovement = baselineFpr !== null && bestFpr !== null && baselineFpr > 0
+    ? ((baselineFpr - bestFpr) / baselineFpr) * 100
+    : null;
 
   // Max iterations from experiment config
   $: maxIterations = experiment?.max_iterations ?? null;
 
+  // Experiment type detection
+  $: isIDS = experiment?.architecture_type === 'ids';
   // Grid search: detect and auto-load results
   $: isGridSearch = experiment?.name?.includes('Grid Search') ?? false;
 
@@ -565,6 +594,21 @@
   $: avgAccValues = chartData.filter(p => p.avgAcc !== null && p.avgAcc !== undefined).map(p => p.avgAcc!);
   $: combinedAccMax = avgAccValues.length > 0 ? Math.max(accMax, ...avgAccValues) : accMax;
   $: accRange = combinedAccMax || 0.001;
+
+  // IDS chart: cumulative best F1 (max) and best FPR (min)
+  $: cumulativeIdsData = (() => {
+    let maxF1 = 0;
+    let minFpr = 100;
+    return chartData.map(p => {
+      if (p.f1 !== null) maxF1 = Math.max(maxF1, p.f1);
+      if (p.fpr !== null) minFpr = Math.min(minFpr, p.fpr);
+      return { iter: p.iter, f1: maxF1 > 0 ? maxF1 : null, fpr: minFpr < 100 ? minFpr : null };
+    });
+  })();
+  $: f1Data = chartData.filter(p => p.f1 !== null);
+  $: f1Max = f1Data.length > 0 ? Math.max(...f1Data.map(p => p.f1!)) : 100;
+  $: fprData = chartData.filter(p => p.fpr !== null);
+  $: fprMax = fprData.length > 0 ? Math.max(...fprData.map(p => p.fpr!)) : 100;
 
   // Chart dimensions
   const chartPadding = { top: 40, right: 60, bottom: 40, left: 60 };
@@ -799,24 +843,54 @@
 
     <!-- Info Cards -->
     <div class="info-cards">
-      <div class="info-card">
-        <span class="info-label">Best CE</span>
-        <span class="info-value best">{formatCE(bestCE)}</span>
-        {#if ceImprovement !== null}
-          <span class="info-delta" class:improved={ceImprovement > 0} class:worsened={ceImprovement < 0}>
-            {ceImprovement > 0 ? '↓' : '↑'}{Math.abs(ceImprovement).toFixed(2)}%
-          </span>
-        {/if}
-      </div>
-      <div class="info-card">
-        <span class="info-label">Best Acc</span>
-        <span class="info-value">{formatAcc(bestAcc)}</span>
-        {#if accImprovement !== null}
-          <span class="info-delta" class:improved={accImprovement > 0} class:worsened={accImprovement < 0}>
-            {accImprovement > 0 ? '↑' : '↓'}{Math.abs(accImprovement).toFixed(2)}%
-          </span>
-        {/if}
-      </div>
+      {#if isIDS}
+        <div class="info-card">
+          <span class="info-label">Best F1-macro</span>
+          <span class="info-value best">{formatF1(bestF1)}</span>
+          {#if f1Improvement !== null}
+            <span class="info-delta" class:improved={f1Improvement > 0} class:worsened={f1Improvement < 0}>
+              {f1Improvement > 0 ? '↑' : '↓'}{Math.abs(f1Improvement).toFixed(2)}%
+            </span>
+          {/if}
+        </div>
+        <div class="info-card">
+          <span class="info-label">Best FPR</span>
+          <span class="info-value">{formatFPR(bestFpr)}</span>
+          {#if fprImprovement !== null}
+            <span class="info-delta" class:improved={fprImprovement > 0} class:worsened={fprImprovement < 0}>
+              {fprImprovement > 0 ? '↓' : '↑'}{Math.abs(fprImprovement).toFixed(2)}%
+            </span>
+          {/if}
+        </div>
+        <div class="info-card">
+          <span class="info-label">Best Acc</span>
+          <span class="info-value">{formatAcc(bestAcc)}</span>
+          {#if accImprovement !== null}
+            <span class="info-delta" class:improved={accImprovement > 0} class:worsened={accImprovement < 0}>
+              {accImprovement > 0 ? '↑' : '↓'}{Math.abs(accImprovement).toFixed(2)}%
+            </span>
+          {/if}
+        </div>
+      {:else}
+        <div class="info-card">
+          <span class="info-label">Best CE</span>
+          <span class="info-value best">{formatCE(bestCE)}</span>
+          {#if ceImprovement !== null}
+            <span class="info-delta" class:improved={ceImprovement > 0} class:worsened={ceImprovement < 0}>
+              {ceImprovement > 0 ? '↓' : '↑'}{Math.abs(ceImprovement).toFixed(2)}%
+            </span>
+          {/if}
+        </div>
+        <div class="info-card">
+          <span class="info-label">Best Acc</span>
+          <span class="info-value">{formatAcc(bestAcc)}</span>
+          {#if accImprovement !== null}
+            <span class="info-delta" class:improved={accImprovement > 0} class:worsened={accImprovement < 0}>
+              {accImprovement > 0 ? '↑' : '↓'}{Math.abs(accImprovement).toFixed(2)}%
+            </span>
+          {/if}
+        </div>
+      {/if}
       <div class="info-card">
         <span class="info-label">{isGridSearch ? 'Configs Tested' : 'Iterations'}</span>
         <span class="info-value">{isGridSearch ? gridSearchResults.length : iterations.length}{#if !isGridSearch && maxIterations}/{maxIterations}{/if}</span>
@@ -1059,147 +1133,257 @@
             Progress ({chartData.length} iterations)
           </span>
           <div class="chart-legend">
-            <span class="legend-item"><span class="legend-line ce"></span> Best CE</span>
-            <span class="legend-item"><span class="legend-line ce-avg"></span> Avg CE</span>
-            <span class="legend-item"><span class="legend-line acc"></span> Best Acc</span>
-            <span class="legend-item"><span class="legend-line acc-avg"></span> Avg Acc</span>
+            {#if isIDS}
+              <span class="legend-item"><span class="legend-line ce"></span> Best F1</span>
+              <span class="legend-item"><span class="legend-line acc"></span> Best FPR</span>
+            {:else}
+              <span class="legend-item"><span class="legend-line ce"></span> Best CE</span>
+              <span class="legend-item"><span class="legend-line ce-avg"></span> Avg CE</span>
+              <span class="legend-item"><span class="legend-line acc"></span> Best Acc</span>
+              <span class="legend-item"><span class="legend-line acc-avg"></span> Avg Acc</span>
+            {/if}
           </div>
         </div>
         <div class="chart-container">
           <svg viewBox="0 0 {chartSvgWidth} {chartSvgHeight}" class="line-chart">
-            <!-- Y-axis labels (CE on left) -->
-            <text x={chartPadding.left - 5} y={chartPadding.top + 5} text-anchor="end" class="axis-label ce-label">{combinedCeMax.toFixed(2)}</text>
-            <text x={chartPadding.left - 5} y={chartPadding.top + chartHeight - 5} text-anchor="end" class="axis-label ce-label">{combinedCeMin.toFixed(2)}</text>
+            {#if isIDS}
+              <!-- IDS Chart: F1 (left, blue) + FPR (right, green) -->
+              <!-- Y-axis labels (F1 on left, 0-100%) -->
+              <text x={chartPadding.left - 5} y={chartPadding.top + 5} text-anchor="end" class="axis-label ce-label">100%</text>
+              <text x={chartPadding.left - 5} y={chartPadding.top + chartHeight - 5} text-anchor="end" class="axis-label ce-label">0%</text>
 
-            <!-- Y-axis labels (Acc on right) -->
-            {#if accData.length > 0}
-              <text x={chartSvgWidth - chartPadding.right + 5} y={chartPadding.top + 5} text-anchor="start" class="axis-label acc-label">{combinedAccMax.toFixed(2)}%</text>
-              <text x={chartSvgWidth - chartPadding.right + 5} y={chartPadding.top + chartHeight - 5} text-anchor="start" class="axis-label acc-label">0.00%</text>
-            {/if}
+              <!-- Y-axis labels (FPR on right, 0-fprMax%) -->
+              {#if fprData.length > 0}
+                {@const fprAxisMax = Math.max(fprMax * 1.2, 1)}
+                <text x={chartSvgWidth - chartPadding.right + 5} y={chartPadding.top + 5} text-anchor="start" class="axis-label acc-label">{fprAxisMax.toFixed(1)}%</text>
+                <text x={chartSvgWidth - chartPadding.right + 5} y={chartPadding.top + chartHeight - 5} text-anchor="start" class="axis-label acc-label">0%</text>
+              {/if}
 
-            <!-- Grid lines -->
-            <line x1={chartPadding.left} y1={chartPadding.top} x2={chartPadding.left + chartWidth} y2={chartPadding.top} stroke="var(--border)" stroke-dasharray="4" />
-            <line x1={chartPadding.left} y1={chartPadding.top + chartHeight} x2={chartPadding.left + chartWidth} y2={chartPadding.top + chartHeight} stroke="var(--border)" stroke-dasharray="4" />
-            <line x1={chartPadding.left} y1={chartPadding.top + chartHeight / 2} x2={chartPadding.left + chartWidth} y2={chartPadding.top + chartHeight / 2} stroke="var(--border)" stroke-dasharray="2" opacity="0.5" />
+              <!-- Grid lines -->
+              <line x1={chartPadding.left} y1={chartPadding.top} x2={chartPadding.left + chartWidth} y2={chartPadding.top} stroke="var(--border)" stroke-dasharray="4" />
+              <line x1={chartPadding.left} y1={chartPadding.top + chartHeight} x2={chartPadding.left + chartWidth} y2={chartPadding.top + chartHeight} stroke="var(--border)" stroke-dasharray="4" />
+              <line x1={chartPadding.left} y1={chartPadding.top + chartHeight / 2} x2={chartPadding.left + chartWidth} y2={chartPadding.top + chartHeight / 2} stroke="var(--border)" stroke-dasharray="2" opacity="0.5" />
 
-            <!-- X-axis line -->
-            <line x1={chartPadding.left} y1={chartPadding.top + chartHeight} x2={chartPadding.left + chartWidth} y2={chartPadding.top + chartHeight} stroke="var(--text-tertiary)" />
+              <!-- X-axis line -->
+              <line x1={chartPadding.left} y1={chartPadding.top + chartHeight} x2={chartPadding.left + chartWidth} y2={chartPadding.top + chartHeight} stroke="var(--text-tertiary)" />
 
-            <!-- X-axis ticks and labels -->
-            {#each xAxisTicks as tickIdx}
-              {@const x = chartPadding.left + (tickIdx / Math.max(chartData.length - 1, 1)) * chartWidth}
-              <line x1={x} y1={chartPadding.top + chartHeight} x2={x} y2={chartPadding.top + chartHeight + 5} stroke="var(--text-tertiary)" />
-              <text x={x} y={chartPadding.top + chartHeight + 18} text-anchor="middle" class="axis-label x-label">{chartData[tickIdx]?.iter ?? tickIdx + 1}</text>
-            {/each}
+              <!-- X-axis ticks and labels -->
+              {#each xAxisTicks as tickIdx}
+                {@const x = chartPadding.left + (tickIdx / Math.max(chartData.length - 1, 1)) * chartWidth}
+                <line x1={x} y1={chartPadding.top + chartHeight} x2={x} y2={chartPadding.top + chartHeight + 5} stroke="var(--text-tertiary)" />
+                <text x={x} y={chartPadding.top + chartHeight + 18} text-anchor="middle" class="axis-label x-label">{chartData[tickIdx]?.iter ?? tickIdx + 1}</text>
+              {/each}
 
-            <!-- Avg CE line (dashed, behind main line) -->
-            {#if avgCeValues.length > 0}
+              <!-- Best F1 line (cumulative max, blue, 0-100% scale) -->
+              {#if f1Data.length > 0}
+                <polyline
+                  fill="none"
+                  stroke="var(--accent-blue)"
+                  stroke-width="2"
+                  points={cumulativeIdsData.map((p, i) => {
+                    if (p.f1 === null) return null;
+                    const x = chartPadding.left + (i / Math.max(cumulativeIdsData.length - 1, 1)) * chartWidth;
+                    const y = chartPadding.top + chartHeight - (p.f1 / 100) * chartHeight;
+                    return `${x},${y}`;
+                  }).filter(Boolean).join(' ')}
+                />
+              {/if}
+
+              <!-- Best FPR line (cumulative min, green, 0-fprMax scale) -->
+              {#if fprData.length > 0}
+                {@const fprAxisMax = Math.max(fprMax * 1.2, 1)}
+                <polyline
+                  fill="none"
+                  stroke="var(--accent-green)"
+                  stroke-width="2"
+                  points={cumulativeIdsData.map((p, i) => {
+                    if (p.fpr === null) return null;
+                    const x = chartPadding.left + (i / Math.max(cumulativeIdsData.length - 1, 1)) * chartWidth;
+                    const y = chartPadding.top + chartHeight - (p.fpr / fprAxisMax) * chartHeight;
+                    return `${x},${y}`;
+                  }).filter(Boolean).join(' ')}
+                />
+              {/if}
+
+              <!-- Best F1 marker -->
+              {#each [cumulativeIdsData.findIndex(p => p.f1 !== null && p.f1 === f1Max)] as bestIdx}
+                {#if bestIdx >= 0}
+                  <circle cx={chartPadding.left + (bestIdx / Math.max(cumulativeIdsData.length - 1, 1)) * chartWidth} cy={chartPadding.top + chartHeight - (f1Max / 100) * chartHeight} r="5" fill="var(--accent-blue)" />
+                  <text x={chartPadding.left + (bestIdx / Math.max(cumulativeIdsData.length - 1, 1)) * chartWidth} y={chartPadding.top + chartHeight - (f1Max / 100) * chartHeight - 8} text-anchor="middle" class="best-label" fill="var(--accent-blue)">{f1Max.toFixed(2)}%</text>
+                {/if}
+              {/each}
+
+              <!-- Hover zones -->
+              {#each chartData as point, i}
+                <rect
+                  x={chartPadding.left + (i / Math.max(chartData.length - 1, 1)) * chartWidth - chartWidth / Math.max(chartData.length, 1) / 2}
+                  y={chartPadding.top}
+                  width={chartWidth / Math.max(chartData.length, 1)}
+                  height={chartHeight}
+                  fill="transparent"
+                  role="button"
+                  tabindex="-1"
+                  on:mouseenter={() => {
+                    const cumPoint = cumulativeIdsData[i];
+                    const x = chartPadding.left + (i / Math.max(chartData.length - 1, 1)) * chartWidth;
+                    tooltipData = { x, y: chartPadding.top + chartHeight / 2, iter: point.iter, ce: 0, acc: point.acc, avgCe: null, avgAcc: null, f1: cumPoint.f1, fpr: cumPoint.fpr };
+                  }}
+                  on:mouseleave={() => tooltipData = null}
+                />
+              {/each}
+
+              <!-- Tooltip -->
+              {#if tooltipData}
+                <g transform="translate({tooltipData.x}, {tooltipData.y})">
+                  <rect x="-85" y="-50" width="170" height="90" fill="var(--bg-card)" stroke="var(--border)" rx="6" class="tooltip-bg" />
+                  <text x="0" y="-30" text-anchor="middle" class="tooltip-title">Iter {tooltipData.iter}</text>
+                  {#if tooltipData.f1 !== null && tooltipData.f1 !== undefined}
+                    <text x="-70" y="-5" class="tooltip-label ce-label">Best F1:</text>
+                    <text x="70" y="-5" text-anchor="end" class="tooltip-value ce-label">{tooltipData.f1.toFixed(2)}%</text>
+                  {/if}
+                  {#if tooltipData.fpr !== null && tooltipData.fpr !== undefined}
+                    <text x="-70" y="20" class="tooltip-label acc-label">Best FPR:</text>
+                    <text x="70" y="20" text-anchor="end" class="tooltip-value acc-label">{tooltipData.fpr.toFixed(3)}%</text>
+                  {/if}
+                </g>
+              {/if}
+
+            {:else}
+              <!-- LM Chart: CE (left, blue) + Acc (right, green) -->
+              <!-- Y-axis labels (CE on left) -->
+              <text x={chartPadding.left - 5} y={chartPadding.top + 5} text-anchor="end" class="axis-label ce-label">{combinedCeMax.toFixed(2)}</text>
+              <text x={chartPadding.left - 5} y={chartPadding.top + chartHeight - 5} text-anchor="end" class="axis-label ce-label">{combinedCeMin.toFixed(2)}</text>
+
+              <!-- Y-axis labels (Acc on right) -->
+              {#if accData.length > 0}
+                <text x={chartSvgWidth - chartPadding.right + 5} y={chartPadding.top + 5} text-anchor="start" class="axis-label acc-label">{combinedAccMax.toFixed(2)}%</text>
+                <text x={chartSvgWidth - chartPadding.right + 5} y={chartPadding.top + chartHeight - 5} text-anchor="start" class="axis-label acc-label">0.00%</text>
+              {/if}
+
+              <!-- Grid lines -->
+              <line x1={chartPadding.left} y1={chartPadding.top} x2={chartPadding.left + chartWidth} y2={chartPadding.top} stroke="var(--border)" stroke-dasharray="4" />
+              <line x1={chartPadding.left} y1={chartPadding.top + chartHeight} x2={chartPadding.left + chartWidth} y2={chartPadding.top + chartHeight} stroke="var(--border)" stroke-dasharray="4" />
+              <line x1={chartPadding.left} y1={chartPadding.top + chartHeight / 2} x2={chartPadding.left + chartWidth} y2={chartPadding.top + chartHeight / 2} stroke="var(--border)" stroke-dasharray="2" opacity="0.5" />
+
+              <!-- X-axis line -->
+              <line x1={chartPadding.left} y1={chartPadding.top + chartHeight} x2={chartPadding.left + chartWidth} y2={chartPadding.top + chartHeight} stroke="var(--text-tertiary)" />
+
+              <!-- X-axis ticks and labels -->
+              {#each xAxisTicks as tickIdx}
+                {@const x = chartPadding.left + (tickIdx / Math.max(chartData.length - 1, 1)) * chartWidth}
+                <line x1={x} y1={chartPadding.top + chartHeight} x2={x} y2={chartPadding.top + chartHeight + 5} stroke="var(--text-tertiary)" />
+                <text x={x} y={chartPadding.top + chartHeight + 18} text-anchor="middle" class="axis-label x-label">{chartData[tickIdx]?.iter ?? tickIdx + 1}</text>
+              {/each}
+
+              <!-- Avg CE line (dashed, behind main line) -->
+              {#if avgCeValues.length > 0}
+                <polyline
+                  fill="none"
+                  stroke="var(--accent-blue)"
+                  stroke-width="1.5"
+                  stroke-dasharray="4 2"
+                  opacity="0.5"
+                  points={chartData.map((p, i) => {
+                    if (p.avgCe === null || p.avgCe === undefined) return null;
+                    const x = chartPadding.left + (i / Math.max(chartData.length - 1, 1)) * chartWidth;
+                    const y = chartPadding.top + chartHeight - ((p.avgCe - combinedCeMin) / combinedCeRange) * chartHeight;
+                    return `${x},${y}`;
+                  }).filter(Boolean).join(' ')}
+                />
+              {/if}
+
+              <!-- Best CE line (cumulative min) -->
               <polyline
                 fill="none"
                 stroke="var(--accent-blue)"
-                stroke-width="1.5"
-                stroke-dasharray="4 2"
-                opacity="0.5"
-                points={chartData.map((p, i) => {
-                  if (p.avgCe === null || p.avgCe === undefined) return null;
-                  const x = chartPadding.left + (i / Math.max(chartData.length - 1, 1)) * chartWidth;
-                  const y = chartPadding.top + chartHeight - ((p.avgCe - combinedCeMin) / combinedCeRange) * chartHeight;
-                  return `${x},${y}`;
-                }).filter(Boolean).join(' ')}
-              />
-            {/if}
-
-            <!-- Best CE line (cumulative min) -->
-            <polyline
-              fill="none"
-              stroke="var(--accent-blue)"
-              stroke-width="2"
-              points={cumulativeData.map((p, i) => {
-                const x = chartPadding.left + (i / Math.max(cumulativeData.length - 1, 1)) * chartWidth;
-                const y = chartPadding.top + chartHeight - ((p.ce - combinedCeMin) / combinedCeRange) * chartHeight;
-                return `${x},${y}`;
-              }).join(' ')}
-            />
-
-            <!-- Avg Accuracy line (dashed, behind main line) -->
-            {#if avgAccValues.length > 0}
-              <polyline
-                fill="none"
-                stroke="var(--accent-green)"
-                stroke-width="1.5"
-                stroke-dasharray="4 2"
-                opacity="0.5"
-                points={chartData.map((p, i) => {
-                  if (p.avgAcc === null || p.avgAcc === undefined) return null;
-                  const x = chartPadding.left + (i / Math.max(chartData.length - 1, 1)) * chartWidth;
-                  const y = chartPadding.top + chartHeight - (p.avgAcc / accRange) * chartHeight;
-                  return `${x},${y}`;
-                }).filter(Boolean).join(' ')}
-              />
-            {/if}
-
-            <!-- Best Accuracy line (cumulative max) -->
-            {#if accData.length > 0}
-              <polyline
-                fill="none"
-                stroke="var(--accent-green)"
                 stroke-width="2"
                 points={cumulativeData.map((p, i) => {
-                  if (p.acc === null) return null;
                   const x = chartPadding.left + (i / Math.max(cumulativeData.length - 1, 1)) * chartWidth;
-                  const y = chartPadding.top + chartHeight - (p.acc / accRange) * chartHeight;
+                  const y = chartPadding.top + chartHeight - ((p.ce - combinedCeMin) / combinedCeRange) * chartHeight;
                   return `${x},${y}`;
-                }).filter(Boolean).join(' ')}
+                }).join(' ')}
               />
-            {/if}
 
-            <!-- Best CE marker -->
-            {#each [cumulativeData.findIndex(p => p.ce === ceMin)] as bestIdx}
-              {#if bestIdx >= 0}
-                <circle cx={chartPadding.left + (bestIdx / Math.max(cumulativeData.length - 1, 1)) * chartWidth} cy={chartPadding.top + chartHeight - ((ceMin - combinedCeMin) / combinedCeRange) * chartHeight} r="5" fill="var(--accent-blue)" />
-                <text x={chartPadding.left + (bestIdx / Math.max(cumulativeData.length - 1, 1)) * chartWidth} y={chartPadding.top + chartHeight - ((ceMin - combinedCeMin) / combinedCeRange) * chartHeight - 8} text-anchor="middle" class="best-label" fill="var(--accent-blue)">{ceMin.toFixed(4)}</text>
+              <!-- Avg Accuracy line (dashed, behind main line) -->
+              {#if avgAccValues.length > 0}
+                <polyline
+                  fill="none"
+                  stroke="var(--accent-green)"
+                  stroke-width="1.5"
+                  stroke-dasharray="4 2"
+                  opacity="0.5"
+                  points={chartData.map((p, i) => {
+                    if (p.avgAcc === null || p.avgAcc === undefined) return null;
+                    const x = chartPadding.left + (i / Math.max(chartData.length - 1, 1)) * chartWidth;
+                    const y = chartPadding.top + chartHeight - (p.avgAcc / accRange) * chartHeight;
+                    return `${x},${y}`;
+                  }).filter(Boolean).join(' ')}
+                />
               {/if}
-            {/each}
 
-            <!-- Hover zones -->
-            {#each chartData as point, i}
-              <rect
-                x={chartPadding.left + (i / Math.max(chartData.length - 1, 1)) * chartWidth - chartWidth / Math.max(chartData.length, 1) / 2}
-                y={chartPadding.top}
-                width={chartWidth / Math.max(chartData.length, 1)}
-                height={chartHeight}
-                fill="transparent"
-                role="button"
-                tabindex="-1"
-                on:mouseenter={() => {
-                  const cumPoint = cumulativeData[i];
-                  const x = chartPadding.left + (i / Math.max(chartData.length - 1, 1)) * chartWidth;
-                  tooltipData = { x, y: chartPadding.top + chartHeight / 2, iter: point.iter, ce: cumPoint.ce, acc: cumPoint.acc, avgCe: point.avgCe, avgAcc: point.avgAcc };
-                }}
-                on:mouseleave={() => tooltipData = null}
-              />
-            {/each}
+              <!-- Best Accuracy line (cumulative max) -->
+              {#if accData.length > 0}
+                <polyline
+                  fill="none"
+                  stroke="var(--accent-green)"
+                  stroke-width="2"
+                  points={cumulativeData.map((p, i) => {
+                    if (p.acc === null) return null;
+                    const x = chartPadding.left + (i / Math.max(cumulativeData.length - 1, 1)) * chartWidth;
+                    const y = chartPadding.top + chartHeight - (p.acc / accRange) * chartHeight;
+                    return `${x},${y}`;
+                  }).filter(Boolean).join(' ')}
+                />
+              {/if}
 
-            <!-- Tooltip -->
-            {#if tooltipData}
-              <g transform="translate({tooltipData.x}, {tooltipData.y})">
-                <rect x="-85" y="-70" width="170" height="120" fill="var(--bg-card)" stroke="var(--border)" rx="6" class="tooltip-bg" />
-                <text x="0" y="-50" text-anchor="middle" class="tooltip-title">Iter {tooltipData.iter}</text>
-                <text x="-70" y="-25" class="tooltip-label ce-label">Best CE:</text>
-                <text x="70" y="-25" text-anchor="end" class="tooltip-value ce-label">{tooltipData.ce.toFixed(4)}</text>
-                {#if tooltipData.avgCe !== null && tooltipData.avgCe !== undefined}
-                  <text x="-70" y="-5" class="tooltip-label ce-label">Avg CE:</text>
-                  <text x="70" y="-5" text-anchor="end" class="tooltip-value ce-label" opacity="0.7">{tooltipData.avgCe.toFixed(4)}</text>
+              <!-- Best CE marker -->
+              {#each [cumulativeData.findIndex(p => p.ce === ceMin)] as bestIdx}
+                {#if bestIdx >= 0}
+                  <circle cx={chartPadding.left + (bestIdx / Math.max(cumulativeData.length - 1, 1)) * chartWidth} cy={chartPadding.top + chartHeight - ((ceMin - combinedCeMin) / combinedCeRange) * chartHeight} r="5" fill="var(--accent-blue)" />
+                  <text x={chartPadding.left + (bestIdx / Math.max(cumulativeData.length - 1, 1)) * chartWidth} y={chartPadding.top + chartHeight - ((ceMin - combinedCeMin) / combinedCeRange) * chartHeight - 8} text-anchor="middle" class="best-label" fill="var(--accent-blue)">{ceMin.toFixed(4)}</text>
                 {/if}
-                {#if tooltipData.acc !== null}
-                  <text x="-70" y="20" class="tooltip-label acc-label">Best Acc:</text>
-                  <text x="70" y="20" text-anchor="end" class="tooltip-value acc-label">{tooltipData.acc.toFixed(3)}%</text>
-                {/if}
-                {#if tooltipData.avgAcc !== null && tooltipData.avgAcc !== undefined}
-                  <text x="-70" y="40" class="tooltip-label acc-label">Avg Acc:</text>
-                  <text x="70" y="40" text-anchor="end" class="tooltip-value acc-label" opacity="0.7">{tooltipData.avgAcc.toFixed(3)}%</text>
-                {/if}
-              </g>
+              {/each}
+
+              <!-- Hover zones -->
+              {#each chartData as point, i}
+                <rect
+                  x={chartPadding.left + (i / Math.max(chartData.length - 1, 1)) * chartWidth - chartWidth / Math.max(chartData.length, 1) / 2}
+                  y={chartPadding.top}
+                  width={chartWidth / Math.max(chartData.length, 1)}
+                  height={chartHeight}
+                  fill="transparent"
+                  role="button"
+                  tabindex="-1"
+                  on:mouseenter={() => {
+                    const cumPoint = cumulativeData[i];
+                    const x = chartPadding.left + (i / Math.max(chartData.length - 1, 1)) * chartWidth;
+                    tooltipData = { x, y: chartPadding.top + chartHeight / 2, iter: point.iter, ce: cumPoint.ce, acc: cumPoint.acc, avgCe: point.avgCe, avgAcc: point.avgAcc };
+                  }}
+                  on:mouseleave={() => tooltipData = null}
+                />
+              {/each}
+
+              <!-- Tooltip -->
+              {#if tooltipData}
+                <g transform="translate({tooltipData.x}, {tooltipData.y})">
+                  <rect x="-85" y="-70" width="170" height="120" fill="var(--bg-card)" stroke="var(--border)" rx="6" class="tooltip-bg" />
+                  <text x="0" y="-50" text-anchor="middle" class="tooltip-title">Iter {tooltipData.iter}</text>
+                  <text x="-70" y="-25" class="tooltip-label ce-label">Best CE:</text>
+                  <text x="70" y="-25" text-anchor="end" class="tooltip-value ce-label">{tooltipData.ce.toFixed(4)}</text>
+                  {#if tooltipData.avgCe !== null && tooltipData.avgCe !== undefined}
+                    <text x="-70" y="-5" class="tooltip-label ce-label">Avg CE:</text>
+                    <text x="70" y="-5" text-anchor="end" class="tooltip-value ce-label" opacity="0.7">{tooltipData.avgCe.toFixed(4)}</text>
+                  {/if}
+                  {#if tooltipData.acc !== null}
+                    <text x="-70" y="20" class="tooltip-label acc-label">Best Acc:</text>
+                    <text x="70" y="20" text-anchor="end" class="tooltip-value acc-label">{tooltipData.acc.toFixed(3)}%</text>
+                  {/if}
+                  {#if tooltipData.avgAcc !== null && tooltipData.avgAcc !== undefined}
+                    <text x="-70" y="40" class="tooltip-label acc-label">Avg Acc:</text>
+                    <text x="70" y="40" text-anchor="end" class="tooltip-value acc-label" opacity="0.7">{tooltipData.avgAcc.toFixed(3)}%</text>
+                  {/if}
+                </g>
+              {/if}
             {/if}
           </svg>
         </div>
@@ -1348,7 +1532,9 @@
           <span>({liveProgress.viable} viable)</span>
         {/if}
         {#if liveProgress.best_ce > 0}
-          <span class="live-metric">CE: {liveProgress.best_ce.toFixed(4)}</span>
+          {#if !isIDS}
+            <span class="live-metric">CE: {liveProgress.best_ce.toFixed(4)}</span>
+          {/if}
           <span class="live-metric">Acc: {(liveProgress.best_acc * 100).toFixed(2)}%</span>
         {/if}
         <span class="live-elapsed">{liveProgress.elapsed_secs.toFixed(0)}s</span>
@@ -1372,10 +1558,16 @@
               <tr>
                 <th>Iter</th>
                 <th>Timestamp</th>
-                <th>Best CE</th>
-                <th>Best Acc</th>
-                <th>Avg CE</th>
-                <th>Avg Acc</th>
+                {#if isIDS}
+                  <th>Best F1</th>
+                  <th>Best FPR</th>
+                  <th>Best Acc</th>
+                {:else}
+                  <th>Best CE</th>
+                  <th>Best Acc</th>
+                  <th>Avg CE</th>
+                  <th>Avg Acc</th>
+                {/if}
                 <th>Threshold</th>
                 <th>Δ Prev</th>
                 <th>Patience</th>
@@ -1394,10 +1586,16 @@
                 >
                   <td>{iter.iteration_num}</td>
                   <td class="timestamp">{formatDate(iter.created_at)}</td>
-                  <td class:best={iter.best_ce === bestCE}>{formatCE(iter.best_ce)}</td>
-                  <td class:best={iter.best_accuracy !== null && iter.best_accuracy === bestAcc}>{formatAccShort(iter.best_accuracy)}</td>
-                  <td class="secondary">{iter.avg_ce ? formatCE(iter.avg_ce) : '—'}</td>
-                  <td class="secondary">{formatAccShort(iter.avg_accuracy)}</td>
+                  {#if isIDS}
+                    <td class:best={iter.best_f1 !== null && bestF1 !== null && iter.best_f1 === bestF1}>{formatF1(iter.best_f1)}</td>
+                    <td class:best={iter.best_fpr !== null && bestFpr !== null && iter.best_fpr === bestFpr}>{formatFPR(iter.best_fpr)}</td>
+                    <td class:best={iter.best_accuracy !== null && iter.best_accuracy === bestAcc}>{formatAccShort(iter.best_accuracy)}</td>
+                  {:else}
+                    <td class:best={iter.best_ce === bestCE}>{formatCE(iter.best_ce)}</td>
+                    <td class:best={iter.best_accuracy !== null && iter.best_accuracy === bestAcc}>{formatAccShort(iter.best_accuracy)}</td>
+                    <td class="secondary">{iter.avg_ce ? formatCE(iter.avg_ce) : '—'}</td>
+                    <td class="secondary">{formatAccShort(iter.avg_accuracy)}</td>
+                  {/if}
                   <td class="secondary">{iter.fitness_threshold !== null ? formatAccShort(iter.fitness_threshold) : '—'}</td>
                   <td class:delta-positive={iter.delta_previous && iter.delta_previous < 0} class:delta-negative={iter.delta_previous && iter.delta_previous > 0}>
                     {iter.delta_previous !== null ? (iter.delta_previous < 0 ? '↓' : iter.delta_previous > 0 ? '↑' : '') + Math.abs(iter.delta_previous).toFixed(4) : '—'}
@@ -1428,25 +1626,40 @@
       </div>
       <div class="modal-body">
         <div class="iteration-summary">
-          <div class="summary-item">
-            <span class="label">Best CE</span>
-            <span class="value">{formatCE(selectedIteration.best_ce)}</span>
-          </div>
-          <div class="summary-item">
-            <span class="label">Best Accuracy</span>
-            <span class="value">{formatAcc(selectedIteration.best_accuracy)}</span>
-          </div>
-          {#if selectedIteration.avg_ce}
+          {#if isIDS}
             <div class="summary-item">
-              <span class="label">Avg CE</span>
-              <span class="value">{formatCE(selectedIteration.avg_ce)}</span>
+              <span class="label">Best F1-macro</span>
+              <span class="value">{formatF1(selectedIteration.best_f1)}</span>
             </div>
-          {/if}
-          {#if selectedIteration.avg_accuracy !== null && selectedIteration.avg_accuracy !== undefined}
             <div class="summary-item">
-              <span class="label">Avg Accuracy</span>
-              <span class="value">{formatAcc(selectedIteration.avg_accuracy)}</span>
+              <span class="label">Best FPR</span>
+              <span class="value">{formatFPR(selectedIteration.best_fpr)}</span>
             </div>
+            <div class="summary-item">
+              <span class="label">Best Accuracy</span>
+              <span class="value">{formatAcc(selectedIteration.best_accuracy)}</span>
+            </div>
+          {:else}
+            <div class="summary-item">
+              <span class="label">Best CE</span>
+              <span class="value">{formatCE(selectedIteration.best_ce)}</span>
+            </div>
+            <div class="summary-item">
+              <span class="label">Best Accuracy</span>
+              <span class="value">{formatAcc(selectedIteration.best_accuracy)}</span>
+            </div>
+            {#if selectedIteration.avg_ce}
+              <div class="summary-item">
+                <span class="label">Avg CE</span>
+                <span class="value">{formatCE(selectedIteration.avg_ce)}</span>
+              </div>
+            {/if}
+            {#if selectedIteration.avg_accuracy !== null && selectedIteration.avg_accuracy !== undefined}
+              <div class="summary-item">
+                <span class="label">Avg Accuracy</span>
+                <span class="value">{formatAcc(selectedIteration.avg_accuracy)}</span>
+              </div>
+            {/if}
           {/if}
           {#if selectedIteration.delta_previous !== null}
             <div class="summary-item">
@@ -1483,7 +1696,7 @@
                   <tr>
                     <th>#</th>
                     {#if hasFitness}<th>Fitness</th>{/if}
-                    <th>CE</th>
+                    {#if !isIDS}<th>CE</th>{/if}
                     <th>Accuracy</th>
                     {#if hasTiers}<th>Neurons</th><th>Bits</th>{/if}
                     <th>Role</th>
@@ -1497,7 +1710,7 @@
                       {#if hasFitness}
                         <td class="mono">{genome.fitness_score !== null ? genome.fitness_score.toFixed(2) : '—'}</td>
                       {/if}
-                      <td class:best={genome.ce === selectedIteration.best_ce}>{formatCE(genome.ce)}</td>
+                      {#if !isIDS}<td class:best={genome.ce === selectedIteration.best_ce}>{formatCE(genome.ce)}</td>{/if}
                       <td>{formatAcc(genome.accuracy)}</td>
                       {#if hasTiers}
                         <td class="mono">{tier.neurons ?? '—'}</td>
@@ -1519,7 +1732,7 @@
                   <tr>
                     <th>#</th>
                     {#if hasFitness}<th>Fitness</th>{/if}
-                    <th>CE</th>
+                    {#if !isIDS}<th>CE</th>{/if}
                     <th>Accuracy</th>
                     {#if hasTiers}<th>Neurons</th><th>Bits</th>{/if}
                     <th>Role</th>
@@ -1533,7 +1746,7 @@
                       {#if hasFitness}
                         <td class="mono">{genome.fitness_score !== null ? genome.fitness_score.toFixed(2) : '—'}</td>
                       {/if}
-                      <td>{formatCE(genome.ce)}</td>
+                      {#if !isIDS}<td>{formatCE(genome.ce)}</td>{/if}
                       <td>{formatAcc(genome.accuracy)}</td>
                       {#if hasTiers}
                         <td class="mono">{tier.neurons ?? '—'}</td>

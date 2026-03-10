@@ -247,6 +247,8 @@ class ExperimentTracker(ABC):
         patience_counter: Optional[int] = None,
         patience_max: Optional[int] = None,
         candidates_total: Optional[int] = None,
+        best_f1: Optional[float] = None,
+        best_fpr: Optional[float] = None,
     ) -> int:
         """Record an iteration/generation. Returns iteration ID."""
         pass
@@ -511,11 +513,14 @@ class SqliteTracker(ExperimentTracker):
         patience_counter: Optional[int] = None,
         patience_max: Optional[int] = None,
         candidates_total: Optional[int] = None,
+        best_f1: Optional[float] = None,
+        best_fpr: Optional[float] = None,
     ) -> int:
         return self._db.create_iteration(
             experiment_id, iteration_num, best_ce, best_accuracy, avg_ce, avg_accuracy,
             elite_count, offspring_count, offspring_viable, fitness_threshold, elapsed_secs,
-            baseline_ce, delta_baseline, delta_previous, patience_counter, patience_max, candidates_total
+            baseline_ce, delta_baseline, delta_previous, patience_counter, patience_max, candidates_total,
+            best_f1=best_f1, best_fpr=best_fpr,
         )
 
     def get_or_create_genome(

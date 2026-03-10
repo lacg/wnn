@@ -130,6 +130,14 @@ async fn run_migrations(pool: &DbPool) -> Result<()> {
         .execute(pool)
         .await;
 
+    // Migration: Add IDS metrics to iterations (per-iteration F1 and FPR tracking)
+    let _ = sqlx::query("ALTER TABLE iterations ADD COLUMN best_f1 REAL")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE iterations ADD COLUMN best_fpr REAL")
+        .execute(pool)
+        .await;
+
     Ok(())
 }
 
@@ -214,6 +222,10 @@ CREATE TABLE IF NOT EXISTS iterations (
     best_accuracy REAL,
     avg_ce REAL,
     avg_accuracy REAL,
+
+    -- IDS metrics (NULL for LM experiments)
+    best_f1 REAL,
+    best_fpr REAL,
 
     -- Population info
     elite_count INTEGER,
@@ -2027,7 +2039,8 @@ pub mod queries {
     pub async fn get_recent_iterations(pool: &DbPool, experiment_id: i64, limit: i32) -> Result<Vec<Iteration>> {
         let rows = sqlx::query(
             r#"SELECT id, experiment_id, iteration_num, best_ce, best_accuracy, avg_ce,
-                      avg_accuracy, elite_count, offspring_count, offspring_viable,
+                      avg_accuracy, best_f1, best_fpr,
+                      elite_count, offspring_count, offspring_viable,
                       fitness_threshold, elapsed_secs, baseline_ce, delta_baseline,
                       delta_previous, patience_counter, patience_max, candidates_total,
                       created_at
@@ -2134,6 +2147,8 @@ pub mod queries {
             best_accuracy: row.get("best_accuracy"),
             avg_ce: row.get("avg_ce"),
             avg_accuracy: row.get("avg_accuracy"),
+            best_f1: row.try_get("best_f1").ok().flatten(),
+            best_fpr: row.try_get("best_fpr").ok().flatten(),
             elite_count: row.get("elite_count"),
             offspring_count: row.get("offspring_count"),
             offspring_viable: row.get("offspring_viable"),

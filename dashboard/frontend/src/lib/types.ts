@@ -189,6 +189,9 @@ export interface Iteration {
   best_accuracy: number | null;
   avg_ce: number | null;
   avg_accuracy: number | null;
+  // IDS metrics (null for LM experiments)
+  best_f1: number | null;
+  best_fpr: number | null;
   elite_count: number | null;
   offspring_count: number | null;
   offspring_viable: number | null;

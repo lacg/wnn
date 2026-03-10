@@ -1539,8 +1539,13 @@
               <th class="col-type">Type</th>
               <th class="col-iters">Iterations</th>
               <th class="col-status">Status</th>
-              <th class="col-ce">Best CE</th>
-              <th class="col-acc">Best Acc</th>
+              {#if isIDS}
+                <th class="col-ce">Best F1</th>
+                <th class="col-acc">Best Acc</th>
+              {:else}
+                <th class="col-ce">Best CE</th>
+                <th class="col-acc">Best Acc</th>
+              {/if}
               <th class="col-actions">Actions</th>
             </tr>
           </thead>
@@ -1601,7 +1606,11 @@
                 <td class="col-status">
                   <span class="status-pill" style="background: {getStatusColor(exp.status)}">{exp.status}</span>
                 </td>
-                <td class="col-ce mono">{formatCE(exp.best_ce)}</td>
+                {#if isIDS}
+                  <td class="col-ce mono">{exp.extra_metrics?.f1_macro != null ? (exp.extra_metrics.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
+                {:else}
+                  <td class="col-ce mono">{formatCE(exp.best_ce)}</td>
+                {/if}
                 <td class="col-acc mono">{formatAccuracy(exp.best_accuracy)}</td>
                 <td class="col-actions">
                   <div class="action-buttons">
@@ -1721,14 +1730,16 @@
         {#if bestCeCheckpoint}
           <div class="final-results-card">
             <div class="results-grid">
-              <div class="result-item">
-                <div class="result-label">Best CE</div>
-                <div class="result-value">{bestCeCheckpoint.best_ce?.toFixed(4) ?? '—'}</div>
-              </div>
-              <div class="result-item">
-                <div class="result-label">CE Phase</div>
-                <div class="result-value">{bestCeCheckpoint.name}</div>
-              </div>
+              {#if !isIDS}
+                <div class="result-item">
+                  <div class="result-label">Best CE</div>
+                  <div class="result-value">{bestCeCheckpoint.best_ce?.toFixed(4) ?? '—'}</div>
+                </div>
+                <div class="result-item">
+                  <div class="result-label">CE Phase</div>
+                  <div class="result-value">{bestCeCheckpoint.name}</div>
+                </div>
+              {/if}
               <div class="result-item">
                 <div class="result-label">Best Accuracy</div>
                 <div class="result-value">{bestAccCheckpoint?.best_accuracy ? (bestAccCheckpoint.best_accuracy * 100).toFixed(2) + '%' : '—'}</div>

@@ -1514,6 +1514,12 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 					patience_counter = early_stopper._patience_counter if hasattr(early_stopper, '_patience_counter') else 0
 					candidates_total = len(offspring)  # In generic GA, all offspring are viable
 
+					# Extract best F1/FPR for IDS tracking
+					valid_f1s = [v for v in f1_values if v is not None]
+					valid_fprs = [v for v in fpr_values if v is not None]
+					best_f1_val = max(valid_f1s) if valid_f1s else None
+					best_fpr_val = min(valid_fprs) if valid_fprs else None
+
 					iteration_id = self._tracker.record_iteration(
 						experiment_id=self._tracker_experiment_id,
 						iteration_num=generation + 1,
@@ -1532,6 +1538,8 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 						patience_counter=patience_counter,
 						patience_max=cfg.patience,
 						candidates_total=candidates_total,
+						best_f1=best_f1_val,
+						best_fpr=best_fpr_val,
 					)
 
 					# Record genome evaluations (if genome_to_config is implemented)
@@ -2410,6 +2418,12 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 					# Three independent bests from population
 					iter_bests = fitness_calculator.bests(pop)
 
+					# Extract best F1/FPR for IDS tracking
+					pop_f1s = [t[3] for t in pop if len(t) > 3 and t[3] is not None]
+					pop_fprs = [t[4] for t in pop if len(t) > 4 and t[4] is not None]
+					best_f1_val = max(pop_f1s) if pop_f1s else None
+					best_fpr_val = min(pop_fprs) if pop_fprs else None
+
 					iteration_id = self._tracker.record_iteration(
 						experiment_id=self._tracker_experiment_id,
 						iteration_num=iteration + 1,
@@ -2428,6 +2442,8 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 						patience_counter=patience_counter,
 						patience_max=cfg.patience,
 						candidates_total=len(pop) + len(offspring),
+						best_f1=best_f1_val,
+						best_fpr=best_fpr_val,
 					)
 
 					# Record genome evaluations (if genome_to_config is implemented)
