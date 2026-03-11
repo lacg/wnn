@@ -1725,21 +1725,55 @@
       {@const flowCheckpoints = checkpoints.filter(c => c.checkpoint_type === 'experiment_end' && experiments.some(e => e.id === c.experiment_id))}
       {@const bestCeCheckpoint = flowCheckpoints.filter(c => c.best_ce != null).sort((a, b) => a.best_ce - b.best_ce)[0]}
       {@const bestAccCheckpoint = flowCheckpoints.filter(c => c.best_accuracy != null).sort((a, b) => b.best_accuracy - a.best_accuracy)[0]}
+      {@const completedExps = experiments.filter(e => e.status === 'completed')}
+      {@const bestF1Exp = isIDS ? completedExps.filter(e => e.extra_metrics?.f1_macro != null).sort((a, b) => (b.extra_metrics?.f1_macro ?? 0) - (a.extra_metrics?.f1_macro ?? 0))[0] : null}
+      {@const bestFprExp = isIDS ? completedExps.filter(e => e.extra_metrics?.fpr != null).sort((a, b) => (a.extra_metrics?.fpr ?? 1) - (b.extra_metrics?.fpr ?? 1))[0] : null}
       <section class="section">
         <h2>Final Results</h2>
-        {#if bestCeCheckpoint}
+        {#if isIDS && (bestF1Exp || bestAccCheckpoint)}
           <div class="final-results-card">
             <div class="results-grid">
-              {#if !isIDS}
-                <div class="result-item">
-                  <div class="result-label">Best CE</div>
-                  <div class="result-value">{bestCeCheckpoint.best_ce?.toFixed(4) ?? '—'}</div>
-                </div>
-                <div class="result-item">
-                  <div class="result-label">CE Phase</div>
-                  <div class="result-value">{bestCeCheckpoint.name}</div>
-                </div>
-              {/if}
+              <div class="result-item">
+                <div class="result-label">Best F1-Macro</div>
+                <div class="result-value">{bestF1Exp?.extra_metrics?.f1_macro != null ? (bestF1Exp.extra_metrics.f1_macro * 100).toFixed(2) + '%' : '—'}</div>
+              </div>
+              <div class="result-item">
+                <div class="result-label">F1 Phase</div>
+                <div class="result-value">{bestF1Exp?.name ?? '—'}</div>
+              </div>
+              <div class="result-item">
+                <div class="result-label">Best FPR</div>
+                <div class="result-value">{bestFprExp?.extra_metrics?.fpr != null ? (bestFprExp.extra_metrics.fpr * 100).toFixed(2) + '%' : '—'}</div>
+              </div>
+              <div class="result-item">
+                <div class="result-label">FPR Phase</div>
+                <div class="result-value">{bestFprExp?.name ?? '—'}</div>
+              </div>
+              <div class="result-item">
+                <div class="result-label">Best Accuracy</div>
+                <div class="result-value">{bestAccCheckpoint?.best_accuracy ? (bestAccCheckpoint.best_accuracy * 100).toFixed(2) + '%' : '—'}</div>
+              </div>
+              <div class="result-item">
+                <div class="result-label">Accuracy Phase</div>
+                <div class="result-value">{bestAccCheckpoint?.name ?? '—'}</div>
+              </div>
+            </div>
+            <div class="results-footer">
+              <a href="/" class="btn btn-secondary">View Iterations</a>
+              <a href="/checkpoints" class="btn btn-secondary">View All Checkpoints</a>
+            </div>
+          </div>
+        {:else if bestCeCheckpoint}
+          <div class="final-results-card">
+            <div class="results-grid">
+              <div class="result-item">
+                <div class="result-label">Best CE</div>
+                <div class="result-value">{bestCeCheckpoint.best_ce?.toFixed(4) ?? '—'}</div>
+              </div>
+              <div class="result-item">
+                <div class="result-label">CE Phase</div>
+                <div class="result-value">{bestCeCheckpoint.name}</div>
+              </div>
               <div class="result-item">
                 <div class="result-label">Best Accuracy</div>
                 <div class="result-value">{bestAccCheckpoint?.best_accuracy ? (bestAccCheckpoint.best_accuracy * 100).toFixed(2) + '%' : '—'}</div>
