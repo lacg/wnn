@@ -52,6 +52,10 @@ pub enum FitnessCalculator {
     Ce,
     HarmonicRank,
     WeightedHarmonic,
+    Normalized,
+    NormalizedHarmonic,
+    IdsSecurity,
+    IdsRecall,
 }
 
 impl Default for FitnessCalculator {

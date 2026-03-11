@@ -2260,6 +2260,10 @@ pub mod queries {
             "ce" => FitnessCalculator::Ce,
             "harmonic_rank" => FitnessCalculator::HarmonicRank,
             "weighted_harmonic" => FitnessCalculator::WeightedHarmonic,
+            "normalized" => FitnessCalculator::Normalized,
+            "normalized_harmonic" => FitnessCalculator::NormalizedHarmonic,
+            "ids_security" => FitnessCalculator::IdsSecurity,
+            "ids_recall" => FitnessCalculator::IdsRecall,
             _ => FitnessCalculator::HarmonicRank,
         }
     }
