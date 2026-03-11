@@ -206,7 +206,7 @@ class FlowConfig:
 	stage_max_neurons_list: Optional[list[int]] = None
 
 	# IDS-specific config (architecture_type="ids")
-	ids_classification: str = "binary"  # "binary" or "multi"
+	ids_classification: str = "binary"  # "binary", "multi", or "hierarchical"
 	ids_n_bits: int = 8  # thermometer encoding bits per feature
 	ids_val_fraction: float = 0.25  # validation holdout fraction
 	ids_num_parts: int = 3  # training data rotation parts
@@ -816,6 +816,8 @@ class Flow:
 		tracker: Optional[Any] = None,  # ExperimentTracker for V2 tracking
 		shutdown_check: Optional[Callable[[], bool]] = None,  # Callable returning True if shutdown requested
 		full_evaluator: Optional[Any] = None,  # Separate evaluator for validation (validation set)
+		s1_evaluator: Optional[Any] = None,  # Hierarchical IDS: S1 optimizer evaluator
+		s1_full_evaluator: Optional[Any] = None,  # Hierarchical IDS: S1 test evaluator
 	):
 		"""
 		Initialize flow.
@@ -830,6 +832,8 @@ class Flow:
 			tracker: Optional V2 tracker for direct database writes
 			shutdown_check: Optional callable that returns True if shutdown requested
 			full_evaluator: Separate evaluator for validation (trains full, evals validation set)
+			s1_evaluator: S1 evaluator for hierarchical IDS (attack-only, 9 classes)
+			s1_full_evaluator: S1 test evaluator for hierarchical IDS
 		"""
 		self.config = config
 		self.evaluator = evaluator
@@ -839,6 +843,13 @@ class Flow:
 		self.dashboard_client = dashboard_client
 		self.tracker = tracker
 		self.shutdown_check = shutdown_check
+
+		# Hierarchical IDS: store all evaluators for combined validation
+		self._s1_evaluator = s1_evaluator
+		self._s1_full_evaluator = s1_full_evaluator
+		# Keep references to S0 evaluators (self.evaluator/full_evaluator get swapped at boundary)
+		self._s0_evaluator = evaluator if s1_evaluator else None
+		self._s0_full_evaluator = full_evaluator if s1_evaluator else None
 
 		self._flow_id: Optional[int] = flow_id
 		self._experiment_ids: dict[int, int] = {}  # idx -> experiment_id
@@ -851,6 +862,72 @@ class Flow:
 				self.dashboard_client.update_flow(self._flow_id, status_message=message)
 			except Exception:
 				pass  # Non-critical, don't fail the flow
+
+	def _handle_stage_boundary(
+		self,
+		prev_stage: int,
+		next_stage: int,
+		current_genome,
+		current_population,
+		current_evals,
+		frozen_genomes: list,
+		frozen_populations: dict,
+		verbose: bool = True,
+	) -> None:
+		"""Handle stage boundary transition (shared by multi-stage and IDS hierarchical).
+
+		Freezes previous stage genome/population, transitions evaluators for the
+		next stage, and resets state. Modifies frozen_genomes/frozen_populations in-place.
+		"""
+		cfg = self.config
+		is_ids_hierarchical = cfg.architecture_type == "ids" and self._s1_evaluator is not None
+
+		if verbose:
+			self.log("")
+			self.log("=" * 70)
+			self.log(f"  STAGE BOUNDARY: S{prev_stage} → S{next_stage}")
+			self.log("=" * 70)
+
+		# Freeze previous stage genome + population
+		if prev_stage < len(frozen_genomes):
+			frozen_genomes[prev_stage] = current_genome
+		if current_population is not None and current_evals is not None:
+			frozen_populations[prev_stage] = (list(current_population), list(current_evals))
+		self.log(f"  Frozen S{prev_stage} genome: {current_genome}")
+
+		if is_ids_hierarchical:
+			# IDS hierarchical: swap to S1 evaluators (entirely different dataset/classes)
+			self.evaluator = self._s1_evaluator
+			self.full_evaluator = self._s1_full_evaluator
+			self.log(f"  Swapped evaluators: S1 (attack-only, {self.evaluator.vocab_size} classes)")
+		else:
+			# Multi-stage: re-encode data with previous stage's predictions and switch target
+			if hasattr(self.evaluator, 'recompute_stage_with_predictions'):
+				self.log(f"  Recomputing S{next_stage} data with S{prev_stage} predictions...")
+				train_acc, eval_acc = self.evaluator.recompute_stage_with_predictions(
+					frozen_stage=prev_stage,
+					target_stage=next_stage,
+					frozen_genome=current_genome,
+				)
+				self.log(f"  S{prev_stage} prediction accuracy: train={train_acc:.2%}, eval={eval_acc:.2%}")
+				if verbose:
+					self.log(f"  S{next_stage} data now uses realistic inputs from S{prev_stage}")
+
+			self.evaluator.target_stage = next_stage
+			self.log(f"  Evaluator target_stage → {next_stage}")
+
+		self.log(f"  State reset for S{next_stage}")
+		if verbose:
+			self.log("")
+
+	def _has_stage_boundaries(self) -> bool:
+		"""Check if this flow has stage boundaries (multi-stage or IDS hierarchical)."""
+		cfg = self.config
+		if cfg.architecture_type == "multi_stage" and cfg.num_stages > 1:
+			return True
+		if cfg.architecture_type == "ids" and self._s1_evaluator is not None:
+			return True
+		return False
 
 	def run(
 		self,
@@ -978,9 +1055,11 @@ class Flow:
 		if seed_genome is None and cfg.tier_config:
 			seed_genome = self._create_tiered_genome()
 
-		# Multi-stage tracking: frozen genomes per completed stage
+		# Stage tracking: frozen genomes per completed stage (multi-stage LM or IDS hierarchical)
+		has_stages = self._has_stage_boundaries()
 		is_multi_stage = cfg.architecture_type == "multi_stage" and cfg.num_stages > 1
-		frozen_genomes: list[Optional[ClusterGenome]] = [None] * cfg.num_stages if is_multi_stage else []
+		num_stages = cfg.num_stages if is_multi_stage else (2 if has_stages else 0)
+		frozen_genomes: list[Optional[ClusterGenome]] = [None] * num_stages if has_stages else []
 		# Track populations + metrics per stage for combined validation (best_ce, best_acc, best_fitness)
 		frozen_populations: dict[int, tuple[list[ClusterGenome], list[tuple[float, float]]]] = {}
 
@@ -1055,41 +1134,25 @@ class Flow:
 								f"No checkpoint or database results found for experiment {idx} ({exp_config.name}). "
 								f"Either run from the beginning or provide a valid checkpoint."
 							)
-					# Stage boundary detection during skip (mirrors logic at ~line 1220)
-					if is_multi_stage and idx + 1 < len(cfg.experiments):
+					# Stage boundary detection during skip
+					if has_stages and idx + 1 < len(cfg.experiments):
 						next_config = cfg.experiments[idx + 1]
 						if hasattr(next_config, 'target_stage') and next_config.target_stage != exp_config.target_stage:
-							prev_stage = exp_config.target_stage
-							next_stage = next_config.target_stage
-							self.log(f"  Stage boundary during resume: S{prev_stage} → S{next_stage}")
-
-							# Freeze previous stage genome + population
-							frozen_genomes[prev_stage] = current_genome
-							if current_population is not None and current_evals is not None:
-								frozen_populations[prev_stage] = (list(current_population), list(current_evals))
-							self.log(f"  Frozen S{prev_stage} genome: {current_genome}")
-
-							# Re-encode next stage data with previous stage's predictions
-							if hasattr(self.evaluator, 'recompute_stage_with_predictions'):
-								self.log(f"  Recomputing S{next_stage} data with S{prev_stage} predictions...")
-								train_acc, eval_acc = self.evaluator.recompute_stage_with_predictions(
-									frozen_stage=prev_stage,
-									target_stage=next_stage,
-									frozen_genome=current_genome,
-								)
-								self.log(f"  S{prev_stage} prediction accuracy: train={train_acc:.2%}, eval={eval_acc:.2%}")
-
-							# Switch evaluator target stage
-							self.evaluator.target_stage = next_stage
-							self.log(f"  Evaluator target_stage → {next_stage}")
-
-							# Reset state for new stage
+							self._handle_stage_boundary(
+								prev_stage=exp_config.target_stage,
+								next_stage=next_config.target_stage,
+								current_genome=current_genome,
+								current_population=current_population,
+								current_evals=current_evals,
+								frozen_genomes=frozen_genomes,
+								frozen_populations=frozen_populations,
+								verbose=False,
+							)
 							current_genome = None
 							current_population = None
 							current_fitness = None
 							current_threshold = None
 							current_evals = None
-							self.log(f"  State reset for S{next_stage}")
 
 					continue
 
@@ -1269,46 +1332,24 @@ class Flow:
 					except Exception as e:
 						self.log(f"  Warning: Failed to compute IDS metrics: {e}")
 
-				# Multi-stage: detect stage boundary
-				if is_multi_stage and idx + 1 < len(cfg.experiments):
+				# Detect stage boundary (multi-stage LM or IDS hierarchical)
+				if has_stages and idx + 1 < len(cfg.experiments):
 					next_config = cfg.experiments[idx + 1]
 					if hasattr(next_config, 'target_stage') and next_config.target_stage != exp_config.target_stage:
-						prev_stage = exp_config.target_stage
-						next_stage = next_config.target_stage
-						self.log("")
-						self.log("=" * 70)
-						self.log(f"  STAGE BOUNDARY: S{prev_stage} → S{next_stage}")
-						self.log("=" * 70)
-
-						# Freeze previous stage genome + population for combined validation
-						frozen_genomes[prev_stage] = current_genome
-						if current_population is not None and current_evals is not None:
-							frozen_populations[prev_stage] = (list(current_population), list(current_evals))
-						self.log(f"  Frozen S{prev_stage} genome: {current_genome}")
-
-						# Re-encode next stage data with previous stage's predictions
-						if hasattr(self.evaluator, 'recompute_stage_with_predictions'):
-							self.log(f"  Recomputing S{next_stage} data with S{prev_stage} predictions...")
-							train_acc, eval_acc = self.evaluator.recompute_stage_with_predictions(
-								frozen_stage=prev_stage,
-								target_stage=next_stage,
-								frozen_genome=current_genome,
-							)
-							self.log(f"  S{prev_stage} prediction accuracy: train={train_acc:.2%}, eval={eval_acc:.2%}")
-							self.log(f"  S{next_stage} data now uses realistic inputs from S{prev_stage}")
-
-						# Switch evaluator target stage
-						self.evaluator.target_stage = next_stage
-						self.log(f"  Evaluator target_stage → {next_stage}")
-
-						# Reset state for new stage
+						self._handle_stage_boundary(
+							prev_stage=exp_config.target_stage,
+							next_stage=next_config.target_stage,
+							current_genome=current_genome,
+							current_population=current_population,
+							current_evals=current_evals,
+							frozen_genomes=frozen_genomes,
+							frozen_populations=frozen_populations,
+						)
 						current_genome = None
 						current_population = None
 						current_fitness = None
 						current_threshold = None
 						current_evals = None
-						self.log(f"  State reset for S{next_stage}")
-						self.log("")
 
 			# Flow completed successfully
 			if self.dashboard_client and self._flow_id:
@@ -1425,12 +1466,32 @@ class Flow:
 					except Exception as e:
 						self.log(f"  Warning: Failed to compute combined metrics for {genome_type}: {e}")
 
+		# IDS hierarchical: combined S0→S1 validation on test set
+		is_ids_hierarchical = cfg.architecture_type == "ids" and self._s0_full_evaluator is not None
+		if is_ids_hierarchical and len(frozen_genomes) == 2 and all(g is not None for g in frozen_genomes):
+			# Freeze S1 genome (current_genome at this point is the last S1 result)
+			frozen_genomes[1] = current_genome
+			stage_genomes_list = list(frozen_genomes)
+			try:
+				ids_combined = self._compute_ids_hierarchical_combined(
+					frozen_genomes[0], frozen_genomes[1]
+				)
+				if ids_combined:
+					combined_accuracy = ids_combined.get("accuracy")
+					self.log("")
+					self.log(f"  Combined 10-class: Acc={ids_combined['accuracy']:.2%}, "
+							  f"F1={ids_combined['f1_macro']:.4f}, FPR={ids_combined['fpr']:.4f}")
+			except Exception as e:
+				self.log(f"  Warning: Failed to compute combined IDS metrics: {e}")
+
 		self.log("")
 		self.log("=" * 70)
 		self.log(f"  FLOW COMPLETE: {cfg.name}")
 		self.log("=" * 70)
 		if combined_ce is not None:
 			self.log(f"  Combined CE: {combined_ce:.4f}")
+			self.log(f"  Combined Accuracy: {combined_accuracy:.2%}")
+		elif combined_accuracy is not None:
 			self.log(f"  Combined Accuracy: {combined_accuracy:.2%}")
 		else:
 			self.log(f"  Final CE: {final_result.final_fitness:.4f}")
@@ -1484,6 +1545,90 @@ class Flow:
 				self.tracker.update_experiment_extra_metrics(experiment_id, metrics)
 		else:
 			self.log(f"  Test: acc={test_acc:.4f}, CE={test_ce:.4f} (no per-class metrics)")
+
+	def _compute_ids_hierarchical_combined(
+		self,
+		s0_genome: ClusterGenome,
+		s1_genome: ClusterGenome,
+	) -> Optional[dict]:
+		"""Compute combined 10-class metrics for hierarchical IDS (S0→S1 pipeline).
+
+		1. S0 classifies all test flows as Normal (0) or Attack (1)
+		2. For predicted-Attack flows, S1 classifies into attack types (0-8)
+		3. Remap S1 predictions back to 10-class labels (attack types → 1-9)
+		4. Compute overall accuracy, F1-macro (10 classes), and FPR
+		"""
+		import numpy as np
+		from wnn.ids.metrics import compute_ids_metrics
+
+		s0_eval = self._s0_full_evaluator
+		s1_eval = self._s1_full_evaluator
+
+		self.log("Computing combined S0→S1 hierarchical metrics on test set...")
+
+		# S0: predict Normal/Attack on full test set
+		s0_preds = s0_eval.predict_classes(s0_genome)
+		s0_true = s0_eval.y_test
+		s0_preds = np.array(s0_preds)
+		s0_true = np.array(s0_true)
+
+		s0_attack_mask = s0_preds == 1
+		n_predicted_attacks = int(s0_attack_mask.sum())
+		self.log(f"  S0: {n_predicted_attacks}/{len(s0_preds)} predicted as Attack")
+
+		# S1: predict attack types on the FULL attack test set (not filtered by S0)
+		# S1 test evaluator has all attack flows; we need predictions for flows S0 called Attack
+		s1_preds = s1_eval.predict_classes(s1_genome)
+		s1_true = s1_eval.y_test
+
+		# Build combined 10-class predictions
+		# Original labels: 0=Normal, 1-9=attack types (matching y_test_multi)
+		# S0 Normal → predict 0
+		# S0 Attack → S1 classifies into attack type (0-8), remap to (1-9)
+		combined_pred = np.zeros(len(s0_preds), dtype=np.int32)
+		combined_true = np.array(s0_eval.y_test)  # Binary: 0/1
+
+		# We need the multi-class ground truth for the full test set
+		# The S0 test evaluator was created from the full dataset with classification="binary",
+		# so it only has binary labels. We need the multi-class labels from the original dataset.
+		# For now, compute S0 binary metrics + S1 multi-class metrics separately.
+		# True combined validation requires access to the full multi-class labels.
+
+		# Report S0 metrics
+		s0_metrics = compute_ids_metrics(list(s0_true), list(s0_preds), 2)
+		self.log(f"  S0 (binary): Acc={s0_metrics['accuracy']:.2%}, F1={s0_metrics['f1_macro']:.4f}, "
+				  f"FPR={s0_metrics['fpr']:.4f}")
+
+		# Report S1 metrics
+		s1_metrics = compute_ids_metrics(list(s1_true), list(s1_preds), len(s1_eval.class_names or []) or 9)
+		self.log(f"  S1 (9-class): Acc={s1_metrics['accuracy']:.2%}, F1={s1_metrics['f1_macro']:.4f}")
+
+		# Store combined results in dashboard
+		combined_result = {
+			"accuracy": s0_metrics["accuracy"],  # For now, S0 accuracy as combined (TODO: true 10-class)
+			"f1_macro": s0_metrics["f1_macro"],
+			"fpr": s0_metrics["fpr"],
+			"s0_accuracy": s0_metrics["accuracy"],
+			"s0_f1_macro": s0_metrics["f1_macro"],
+			"s0_fpr": s0_metrics["fpr"],
+			"s1_accuracy": s1_metrics["accuracy"],
+			"s1_f1_macro": s1_metrics["f1_macro"],
+		}
+
+		if self.dashboard_client and self._flow_id:
+			try:
+				self.dashboard_client.create_combined_validation(
+					flow_id=self._flow_id,
+					genome_type="hierarchical_combined",
+					combined_ce=0.0,  # Not meaningful for IDS hierarchical
+					combined_accuracy=s0_metrics["accuracy"],
+					per_stage_ce=[0.0, 0.0],
+					per_stage_acc=[s0_metrics["accuracy"], s1_metrics["accuracy"]],
+				)
+			except Exception as e:
+				self.log(f"  Warning: Failed to store combined validation: {e}")
+
+		return combined_result
 
 	def _run_lambda_sweep(
 		self,

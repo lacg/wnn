@@ -19,6 +19,7 @@ class FitnessCalculatorType(IntEnum):
 	NORMALIZED = 2      # Normalized [0,1] scale weighted sum (arithmetic mean)
 	NORMALIZED_HARMONIC = 3  # Normalized [0,1] scale weighted harmonic mean
 	IDS_SECURITY = 4    # F1 × (1 - FPR)^2 — penalizes false positives for IDS
+	IDS_RECALL = 5      # F1 × (1 - FPR)^1 — recall-biased, tolerates higher FPR
 	# Note: Accuracy floor wrapping is handled separately via min_accuracy_floor parameter
 
 
@@ -29,6 +30,7 @@ from .FitnessCalculatorNormalized import FitnessCalculatorNormalized
 from .FitnessCalculatorNormalizedHarmonic import FitnessCalculatorNormalizedHarmonic
 from .FitnessCalculatorWithAccuracyFloor import FitnessCalculatorWithAccuracyFloor
 from .FitnessCalculatorIDSSecurity import FitnessCalculatorIDSSecurity
+from .FitnessCalculatorIDSRecall import FitnessCalculatorIDSRecall
 from .FitnessCalculatorFactory import FitnessCalculatorFactory
 
 
@@ -46,6 +48,7 @@ __all__ = [
 	"FitnessCalculatorNormalizedHarmonic",
 	"FitnessCalculatorWithAccuracyFloor",
 	"FitnessCalculatorIDSSecurity",
+	"FitnessCalculatorIDSRecall",
 	# Factory
 	"FitnessCalculatorFactory",
 ]

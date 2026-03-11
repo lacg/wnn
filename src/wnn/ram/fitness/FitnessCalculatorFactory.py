@@ -12,6 +12,7 @@ from .FitnessCalculatorNormalized import FitnessCalculatorNormalized
 from .FitnessCalculatorNormalizedHarmonic import FitnessCalculatorNormalizedHarmonic
 from .FitnessCalculatorWithAccuracyFloor import FitnessCalculatorWithAccuracyFloor
 from .FitnessCalculatorIDSSecurity import FitnessCalculatorIDSSecurity
+from .FitnessCalculatorIDSRecall import FitnessCalculatorIDSRecall
 
 G = TypeVar('G')
 
@@ -56,6 +57,8 @@ class FitnessCalculatorFactory:
 				base = FitnessCalculatorNormalizedHarmonic(weight_ce=weight_ce, weight_acc=weight_acc)
 			case FitnessCalculatorType.IDS_SECURITY:
 				base = FitnessCalculatorIDSSecurity()
+			case FitnessCalculatorType.IDS_RECALL:
+				base = FitnessCalculatorIDSRecall()
 			case _:
 				raise ValueError(f"Unsupported FitnessCalculatorType: {mode}")
 

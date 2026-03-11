@@ -390,8 +390,15 @@ class FlowWorker:
             is_ids = architecture_type == "ids"
 
             # Load data and create appropriate evaluator
+            ids_s1_evaluator = None
+            ids_s1_test_evaluator = None
             if is_ids:
-                evaluator, ids_test_evaluator = self._create_ids_evaluators(params)
+                ids_result = self._create_ids_evaluators(params)
+                if len(ids_result) == 4:
+                    # Hierarchical: (s0_opt, s0_test, s1_opt, s1_test)
+                    evaluator, ids_test_evaluator, ids_s1_evaluator, ids_s1_test_evaluator = ids_result
+                else:
+                    evaluator, ids_test_evaluator = ids_result
             elif is_multi_stage:
                 evaluator = self._create_multistage_evaluator(context_size, params)
             elif is_bitwise:
@@ -519,6 +526,8 @@ class FlowWorker:
                 flow_id=flow_id,
                 tracker=self.tracker,
                 shutdown_check=self.should_stop,  # Pass shutdown check for graceful stop
+                s1_evaluator=ids_s1_evaluator,
+                s1_full_evaluator=ids_s1_test_evaluator,
             )
 
             # Check if we should start from a specific experiment (skip earlier ones)
@@ -761,9 +770,8 @@ class FlowWorker:
     def _create_ids_evaluators(self, params: dict):
         """Create IDS evaluators: optimizer (131K/44K) + test (175K/82K).
 
-        Returns (optimizer_evaluator, test_evaluator) tuple.
-        The optimizer evaluator uses a 75/25 split of training data.
-        The test evaluator uses full training + original test set (for overfitting monitoring).
+        Returns (optimizer_evaluator, test_evaluator) for flat classification,
+        or (s0_opt, s0_test, s1_opt, s1_test) for hierarchical classification.
         """
         from wnn.ids import load_unsw_nb15, split_train_validation
         from wnn.ram.architecture.ids_evaluator import IDSEvaluator
@@ -778,6 +786,11 @@ class FlowWorker:
 
         self._log(f"Loading UNSW-NB15 dataset (classification={classification}, split={split})...")
         full_dataset = load_unsw_nb15(n_bits=n_bits, split=split)
+
+        if classification == "hierarchical":
+            return self._create_hierarchical_ids_evaluators(
+                full_dataset, params, val_fraction, num_parts, k_folds, seed,
+            )
 
         y_train = full_dataset.y_train_binary if classification == "binary" else full_dataset.y_train_multi
         y_test = full_dataset.y_test_binary if classification == "binary" else full_dataset.y_test_multi
@@ -812,6 +825,46 @@ class FlowWorker:
         )
 
         return optimizer_eval, test_eval
+
+    def _create_hierarchical_ids_evaluators(self, full_dataset, params, val_fraction, num_parts, k_folds, seed):
+        """Create S0 (binary) + S1 (attack-only 9-class) evaluator pairs for hierarchical IDS.
+
+        S0: Normal vs Attack (2 classes) — trained on all flows
+        S1: 9 attack types — trained on attack flows only
+
+        Returns (s0_opt, s0_test, s1_opt, s1_test).
+        """
+        from wnn.ids import split_train_validation, create_attack_only_dataset
+        from wnn.ram.architecture.ids_evaluator import IDSEvaluator
+
+        # ── S0: Binary (all flows) ──
+        self._log("── S0: Binary (Normal vs Attack) ──")
+        self._log(f"  Train: {len(full_dataset.y_train_binary):,}, Test: {len(full_dataset.y_test_binary):,}, Classes: 2")
+
+        s0_train_val, s0_test_ds = split_train_validation(full_dataset, val_fraction=val_fraction, seed=seed)
+
+        kfold_label = f", k_folds={k_folds}" if k_folds > 1 else ""
+        self._log(f"  S0 optimizer: {len(s0_train_val.X_train):,} train / {len(s0_train_val.X_test):,} eval, "
+                   f"{num_parts} parts{kfold_label}")
+        s0_opt = IDSEvaluator(dataset=s0_train_val, classification="binary", num_parts=num_parts, k_folds=k_folds)
+        self._log(f"  S0 test: {len(s0_test_ds.X_train):,} train / {len(s0_test_ds.X_test):,} eval")
+        s0_test = IDSEvaluator(dataset=s0_test_ds, classification="binary", num_parts=1)
+
+        # ── S1: Attack types (attack flows only) ──
+        self._log("── S1: Attack Classification (9 types) ──")
+        attack_dataset = create_attack_only_dataset(full_dataset)
+        num_attack_classes = len(attack_dataset.category_names)
+
+        s1_train_val, s1_test_ds = split_train_validation(attack_dataset, val_fraction=val_fraction, seed=seed)
+
+        self._log(f"  S1 optimizer: {len(s1_train_val.X_train):,} train / {len(s1_train_val.X_test):,} eval, "
+                   f"{num_parts} parts{kfold_label}")
+        s1_opt = IDSEvaluator(dataset=s1_train_val, classification="multi", num_parts=num_parts, k_folds=k_folds)
+        self._log(f"  S1 test: {len(s1_test_ds.X_train):,} train / {len(s1_test_ds.X_test):,} eval, "
+                   f"Classes: {num_attack_classes}")
+        s1_test = IDSEvaluator(dataset=s1_test_ds, classification="multi", num_parts=1)
+
+        return s0_opt, s0_test, s1_opt, s1_test
 
     def _build_experiment_configs(
         self,
@@ -1057,7 +1110,7 @@ class FlowWorker:
                 stage_k=params.get("stage_k") if architecture_type == "multi_stage" else None,
                 stage_cluster_type=params.get("stage_cluster_type") if architecture_type == "multi_stage" else None,
                 stage_mode=self._parse_stage_mode(params.get("stage_mode")) if architecture_type == "multi_stage" else None,
-                target_stage=ms_target_stage if architecture_type == "multi_stage" else 0,
+                target_stage=ms_target_stage if architecture_type in ("multi_stage", "ids") else 0,
                 # Lambda sweep params
                 lambda_values=exp_data.get("lambda_values") if experiment_type == ExperimentType.LAMBDA_SWEEP else None,
                 bigram_lambda_values=exp_data.get("bigram_lambda_values") if experiment_type == ExperimentType.LAMBDA_SWEEP else None,
