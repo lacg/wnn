@@ -301,6 +301,8 @@ export interface ValidationSummary {
   genome_hash: string;
   ce: number;
   accuracy: number;
+  f1_macro: number | null;
+  fpr: number | null;
   created_at: string;
 }
 

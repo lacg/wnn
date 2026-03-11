@@ -876,6 +876,9 @@ class Experiment:
 					except Exception:
 						pass
 
+				# Initialize IDS metrics (set by non-cached path, None for cached/LM)
+				f1 = None
+				fpr_val = None
 				if cached is not None:
 					result = cached
 					ce, acc = result[0], result[1]
@@ -887,7 +890,13 @@ class Experiment:
 					full_results = val_evaluator.evaluate_batch_full([genome])
 					result = full_results[0]
 					ce, acc = result[0], result[1]
-					self.log(f"  {genome_type}: CE={ce:.4f}, Acc={acc:.4%} (validated)")
+					# Extract IDS metrics if available
+					f1 = getattr(result, 'f1_macro', None)
+					fpr_val = getattr(result, 'fpr', None)
+					if f1 is not None:
+						self.log(f"  {genome_type}: CE={ce:.4f}, Acc={acc:.4%}, F1={f1:.4%}, FPR={fpr_val:.4%} (validated)")
+					else:
+						self.log(f"  {genome_type}: CE={ce:.4f}, Acc={acc:.4%} (validated)")
 
 				# Always store summary via dashboard API (even if cached)
 				# This ensures each (experiment_id, validation_point, genome_type) has a record
@@ -901,6 +910,8 @@ class Experiment:
 							ce=ce,
 							accuracy=acc,
 							flow_id=flow_id,
+							f1_macro=f1,
+							fpr=fpr_val,
 						)
 					except Exception as e:
 						self.log(f"  Warning: Failed to save {genome_type} summary: {e}")

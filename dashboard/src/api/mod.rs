@@ -264,6 +264,8 @@ pub struct CreateValidationSummaryRequest {
     pub genome_hash: String,
     pub ce: f64,
     pub accuracy: f64,
+    pub f1_macro: Option<f64>,
+    pub fpr: Option<f64>,
 }
 
 async fn create_validation_summary(
@@ -280,6 +282,8 @@ async fn create_validation_summary(
         &req.genome_hash,
         req.ce,
         req.accuracy,
+        req.f1_macro,
+        req.fpr,
     ).await {
         Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({"id": id}))).into_response(),
         Err(e) => (

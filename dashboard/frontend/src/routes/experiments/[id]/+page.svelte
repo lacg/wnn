@@ -688,7 +688,7 @@
     expId: number;
     sequenceOrder: number;
     validationPoint: 'init' | 'final';
-    summaries: { genomeType: string; ce: number; accuracy: number }[];
+    summaries: { genomeType: string; ce: number; accuracy: number; f1_macro: number | null; fpr: number | null }[];
   }
 
   $: cumulativeValidationProgression = (() => {
@@ -706,7 +706,7 @@
           expId: experiment.id,
           sequenceOrder: experiment.sequence_order ?? 0,
           validationPoint: 'init',
-          summaries: initSummaries.map(s => ({ genomeType: s.genome_type, ce: s.ce, accuracy: s.accuracy }))
+          summaries: initSummaries.map(s => ({ genomeType: s.genome_type, ce: s.ce, accuracy: s.accuracy, f1_macro: s.f1_macro, fpr: s.fpr }))
         });
       }
       if (finalSummaries.length > 0) {
@@ -715,7 +715,7 @@
           expId: experiment.id,
           sequenceOrder: experiment.sequence_order ?? 0,
           validationPoint: 'final',
-          summaries: finalSummaries.map(s => ({ genomeType: s.genome_type, ce: s.ce, accuracy: s.accuracy }))
+          summaries: finalSummaries.map(s => ({ genomeType: s.genome_type, ce: s.ce, accuracy: s.accuracy, f1_macro: s.f1_macro, fpr: s.fpr }))
         });
       }
       return points;
@@ -768,7 +768,7 @@
         expId,
         sequenceOrder: seqOrder,
         validationPoint: point as 'init' | 'final',
-        summaries: validations.map(v => ({ genomeType: v.genome_type, ce: v.ce, accuracy: v.accuracy }))
+        summaries: validations.map(v => ({ genomeType: v.genome_type, ce: v.ce, accuracy: v.accuracy, f1_macro: v.f1_macro, fpr: v.fpr }))
       });
     }
 
@@ -981,14 +981,14 @@
                     {/if}
                   </td>
                   {#if isIDS}
+                    <td class="mono best-ce-col">{bestCeSummary?.f1_macro != null ? (bestCeSummary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono best-ce-col">{bestCeSummary?.fpr != null ? (bestCeSummary.fpr * 100).toFixed(2) + '%' : '—'}</td>
                     <td class="mono best-ce-col">{bestCeSummary ? (bestCeSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
-                    <td class="mono best-ce-col">—</td>
-                    <td class="mono best-ce-col">{bestCeSummary ? (bestCeSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono best-acc-col">{bestAccSummary?.f1_macro != null ? (bestAccSummary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono best-acc-col">{bestAccSummary?.fpr != null ? (bestAccSummary.fpr * 100).toFixed(2) + '%' : '—'}</td>
                     <td class="mono best-acc-col">{bestAccSummary ? (bestAccSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
-                    <td class="mono best-acc-col">—</td>
-                    <td class="mono best-acc-col">{bestAccSummary ? (bestAccSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
-                    <td class="mono best-fit-col">{bestFitSummary ? (bestFitSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
-                    <td class="mono best-fit-col">—</td>
+                    <td class="mono best-fit-col">{bestFitSummary?.f1_macro != null ? (bestFitSummary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono best-fit-col">{bestFitSummary?.fpr != null ? (bestFitSummary.fpr * 100).toFixed(2) + '%' : '—'}</td>
                     <td class="mono best-fit-col">{bestFitSummary ? (bestFitSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
                   {:else}
                     <td class="mono best-ce-col">{bestCeSummary ? bestCeSummary.ce.toFixed(4) : '—'}</td>

@@ -138,6 +138,14 @@ async fn run_migrations(pool: &DbPool) -> Result<()> {
         .execute(pool)
         .await;
 
+    // Migration: Add IDS metrics to validation_summaries (F1-macro and FPR)
+    let _ = sqlx::query("ALTER TABLE validation_summaries ADD COLUMN f1_macro REAL")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE validation_summaries ADD COLUMN fpr REAL")
+        .execute(pool)
+        .await;
+
     Ok(())
 }
 
@@ -346,6 +354,8 @@ CREATE TABLE IF NOT EXISTS validation_summaries (
     genome_hash TEXT NOT NULL,        -- Config hash for deduplication
     ce REAL NOT NULL,
     accuracy REAL NOT NULL,
+    f1_macro REAL,                    -- IDS: F1-macro score (NULL for LM experiments)
+    fpr REAL,                         -- IDS: False positive rate (NULL for LM experiments)
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
 
     -- One record per genome type per checkpoint
@@ -1457,7 +1467,7 @@ pub mod queries {
     ) -> Result<Vec<ValidationSummary>> {
         let rows = sqlx::query(
             r#"SELECT id, flow_id, experiment_id, validation_point, genome_type,
-                      genome_hash, ce, accuracy, created_at
+                      genome_hash, ce, accuracy, f1_macro, fpr, created_at
                FROM validation_summaries
                WHERE experiment_id = ?
                ORDER BY validation_point, genome_type"#,
@@ -1480,7 +1490,7 @@ pub mod queries {
     ) -> Result<Vec<ValidationSummary>> {
         let rows = sqlx::query(
             r#"SELECT vs.id, vs.flow_id, vs.experiment_id, vs.validation_point, vs.genome_type,
-                      vs.genome_hash, vs.ce, vs.accuracy, vs.created_at
+                      vs.genome_hash, vs.ce, vs.accuracy, vs.f1_macro, vs.fpr, vs.created_at
                FROM validation_summaries vs
                JOIN experiments e ON vs.experiment_id = e.id
                WHERE e.flow_id = ?
@@ -1526,18 +1536,22 @@ pub mod queries {
         genome_hash: &str,
         ce: f64,
         accuracy: f64,
+        f1_macro: Option<f64>,
+        fpr: Option<f64>,
     ) -> Result<i64> {
         let now = Utc::now().to_rfc3339();
 
         let result = sqlx::query(
             r#"INSERT INTO validation_summaries
-               (flow_id, experiment_id, validation_point, genome_type, genome_hash, ce, accuracy, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               (flow_id, experiment_id, validation_point, genome_type, genome_hash, ce, accuracy, f1_macro, fpr, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(experiment_id, validation_point, genome_type) DO UPDATE SET
                  flow_id = excluded.flow_id,
                  genome_hash = excluded.genome_hash,
                  ce = excluded.ce,
                  accuracy = excluded.accuracy,
+                 f1_macro = excluded.f1_macro,
+                 fpr = excluded.fpr,
                  created_at = excluded.created_at"#,
         )
         .bind(flow_id)
@@ -1547,6 +1561,8 @@ pub mod queries {
         .bind(genome_hash)
         .bind(ce)
         .bind(accuracy)
+        .bind(f1_macro)
+        .bind(fpr)
         .bind(&now)
         .execute(pool)
         .await?;
@@ -1567,6 +1583,8 @@ pub mod queries {
             genome_hash: row.get("genome_hash"),
             ce: row.get("ce"),
             accuracy: row.get("accuracy"),
+            f1_macro: row.get("f1_macro"),
+            fpr: row.get("fpr"),
             created_at: parse_datetime(row.get("created_at"))?,
         })
     }

@@ -423,6 +423,8 @@ pub struct ValidationSummary {
     pub genome_hash: String,
     pub ce: f64,
     pub accuracy: f64,
+    pub f1_macro: Option<f64>,
+    pub fpr: Option<f64>,
     pub created_at: DateTime<Utc>,
 }
 
