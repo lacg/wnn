@@ -296,6 +296,8 @@ class ExperimentTracker(ABC):
         elite_rank: Optional[int] = None,
         fitness_score: Optional[float] = None,
         eval_time_ms: Optional[int] = None,
+        f1_macro: Optional[float] = None,
+        fpr: Optional[float] = None,
     ) -> int:
         """Record a genome evaluation. Returns evaluation ID."""
         pass
@@ -574,11 +576,14 @@ class SqliteTracker(ExperimentTracker):
         elite_rank: Optional[int] = None,
         fitness_score: Optional[float] = None,
         eval_time_ms: Optional[int] = None,
+        f1_macro: Optional[float] = None,
+        fpr: Optional[float] = None,
     ) -> int:
         from wnn.ram.experiments.data_layer import GenomeRole as DLRole
         return self._db.create_genome_evaluation(
             iteration_id, genome_id, position, DLRole(role.value),
-            ce, accuracy, elite_rank, fitness_score, eval_time_ms
+            ce, accuracy, elite_rank, fitness_score, eval_time_ms,
+            f1_macro, fpr
         )
 
     def record_genome_evaluations_batch(

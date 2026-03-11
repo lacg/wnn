@@ -261,6 +261,8 @@ export interface GenomeEvaluation {
   ce: number;
   accuracy: number;
   fitness_score: number | null;
+  f1_macro: number | null;
+  fpr: number | null;
   eval_time_ms: number | null;
   created_at: string;
   tiers_json?: string;

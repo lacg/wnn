@@ -471,7 +471,7 @@
         results.push({
           neurons, bits, ce: ev.ce, accuracy: ev.accuracy,
           fitness: ev.fitness_score, count: 1, elapsed: iter.elapsed_secs ?? 0,
-          f1_macro: iter.best_f1 ?? null, fpr: iter.best_fpr ?? null,
+          f1_macro: ev.f1_macro ?? iter.best_f1 ?? null, fpr: ev.fpr ?? iter.best_fpr ?? null,
         });
       }
 
@@ -512,6 +512,7 @@
             expanded.push({
               rank: ev.position + 1, neurons, bits,
               ce: ev.ce, accuracy: ev.accuracy, fitness: ev.fitness_score,
+              f1_macro: ev.f1_macro, fpr: ev.fpr,
             });
           }
           expandedPopulation = expanded;
@@ -539,6 +540,7 @@
             expanded.push({
               rank: s + 1, neurons, bits,
               ce: ev.ce, accuracy: ev.accuracy, fitness: ev.fitness_score,
+              f1_macro: ev.f1_macro, fpr: ev.fpr,
             });
           }
           // Sort by fitness (lower = better), fall back to CE

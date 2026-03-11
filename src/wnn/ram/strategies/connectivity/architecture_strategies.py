@@ -1750,6 +1750,8 @@ class GridSearchStrategy:
 								ce=ce,
 								accuracy=acc,
 								fitness_score=None,
+								f1_macro=f1_macro,
+								fpr=fpr,
 							)
 							results[-1]["eval_id"] = eval_id
 					self._tracker.update_experiment_progress(
@@ -1899,6 +1901,8 @@ class GridSearchStrategy:
 									ce=ce,
 									accuracy=acc,
 									fitness_score=None,
+									f1_macro=ev_f1,
+									fpr=ev_fpr,
 								)
 						self._tracker.update_experiment_progress(
 							self._tracker_experiment_id,
@@ -1978,6 +1982,8 @@ class GridSearchStrategy:
 								ce=ce,
 								accuracy=acc,
 								fitness_score=fit,
+								f1_macro=m[2] if len(m) > 2 else None,
+								fpr=m[3] if len(m) > 3 else None,
 							)
 				self._tracker.update_experiment_progress(
 					self._tracker_experiment_id,
@@ -2287,9 +2293,12 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 						)
 						# Record genome evaluations
 						if HAS_GENOME_TRACKING:
-							for pos, (genome, (ce, acc, *_), fit) in enumerate(
+							for pos, (genome, ev_tuple, fit) in enumerate(
 								zip(population, evals, fitness_scores)
 							):
+								ce, acc = ev_tuple[0], ev_tuple[1]
+								ev_f1 = ev_tuple[2] if len(ev_tuple) > 2 else None
+								ev_fpr = ev_tuple[3] if len(ev_tuple) > 3 else None
 								genome_config = self.genome_to_config(genome)
 								if genome_config:
 									genome_id = self._tracker.get_or_create_genome(
@@ -2303,6 +2312,8 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 										ce=ce,
 										accuracy=acc,
 										fitness_score=fit,
+										f1_macro=ev_f1,
+										fpr=ev_fpr,
 									)
 						self._tracker.update_experiment_progress(
 							self._tracker_experiment_id,

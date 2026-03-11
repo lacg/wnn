@@ -146,6 +146,14 @@ async fn run_migrations(pool: &DbPool) -> Result<()> {
         .execute(pool)
         .await;
 
+    // Migration: Add IDS metrics to genome_evaluations (per-genome F1-macro and FPR)
+    let _ = sqlx::query("ALTER TABLE genome_evaluations ADD COLUMN f1_macro REAL")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE genome_evaluations ADD COLUMN fpr REAL")
+        .execute(pool)
+        .await;
+
     Ok(())
 }
 
@@ -305,6 +313,8 @@ CREATE TABLE IF NOT EXISTS genome_evaluations (
     ce REAL NOT NULL,
     accuracy REAL NOT NULL,
     fitness_score REAL,
+    f1_macro REAL,        -- IDS: F1-macro score (NULL for LM experiments)
+    fpr REAL,             -- IDS: False positive rate (NULL for LM experiments)
 
     -- Timing
     eval_time_ms INTEGER,
@@ -2186,7 +2196,8 @@ pub mod queries {
     pub async fn get_genome_evaluations(pool: &DbPool, iteration_id: i64) -> Result<Vec<GenomeEvaluation>> {
         let rows = sqlx::query(
             r#"SELECT ge.id, ge.iteration_id, ge.genome_id, ge.position, ge.role,
-                      ge.elite_rank, ge.ce, ge.accuracy, ge.fitness_score, ge.eval_time_ms,
+                      ge.elite_rank, ge.ce, ge.accuracy, ge.fitness_score,
+                      ge.f1_macro, ge.fpr, ge.eval_time_ms,
                       ge.created_at, g.tiers_json
                FROM genome_evaluations ge
                LEFT JOIN genomes g ON ge.genome_id = g.id
@@ -2209,6 +2220,8 @@ pub mod queries {
                 ce: row.get("ce"),
                 accuracy: row.get("accuracy"),
                 fitness_score: row.get("fitness_score"),
+                f1_macro: row.get("f1_macro"),
+                fpr: row.get("fpr"),
                 eval_time_ms: row.get("eval_time_ms"),
                 created_at: parse_datetime(row.get("created_at"))?,
                 tiers_json: row.get("tiers_json"),

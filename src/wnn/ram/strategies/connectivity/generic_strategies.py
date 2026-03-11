@@ -1547,6 +1547,8 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 						evaluations = []
 						for pos, item in enumerate(population):
 							genome, ce, acc = item[0], item[1], item[2]
+							item_f1 = item[3] if len(item) > 3 else None
+							item_fpr = item[4] if len(item) > 4 else None
 							config = self.genome_to_config(genome)
 							if config is not None:
 								genome_id = self._tracker.get_or_create_genome(
@@ -1565,6 +1567,8 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 									"accuracy": acc if acc is not None else 0.0,
 									"elite_rank": pos if pos < total_elites else None,
 									"fitness_score": fs,
+									"f1_macro": item_f1,
+									"fpr": item_fpr,
 								})
 						if evaluations:
 							self._tracker.record_genome_evaluations_batch(evaluations)
@@ -2471,6 +2475,8 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 									"accuracy": item[2] if item[2] is not None else 0.0,
 									"elite_rank": pos,
 									"fitness_score": all_scores[pos],
+									"f1_macro": item[3] if len(item) > 3 else None,
+									"fpr": item[4] if len(item) > 4 else None,
 								})
 
 						# Record offspring as NEIGHBOR
@@ -2488,6 +2494,8 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 									"ce": item[1],
 									"accuracy": item[2] if item[2] is not None else 0.0,
 									"fitness_score": all_scores[len(pop) + pos],
+									"f1_macro": item[3] if len(item) > 3 else None,
+									"fpr": item[4] if len(item) > 4 else None,
 								})
 
 						if evaluations:

@@ -764,17 +764,19 @@ class DataLayer:
         elite_rank: Optional[int] = None,
         fitness_score: Optional[float] = None,
         eval_time_ms: Optional[int] = None,
+        f1_macro: Optional[float] = None,
+        fpr: Optional[float] = None,
     ) -> int:
         """Create a genome evaluation record."""
         with self._transaction() as conn:
             cursor = conn.execute(
                 """INSERT OR REPLACE INTO genome_evaluations
                    (iteration_id, genome_id, position, role, elite_rank, ce, accuracy,
-                    fitness_score, eval_time_ms, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    fitness_score, eval_time_ms, f1_macro, fpr, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     iteration_id, genome_id, position, role.value, elite_rank,
-                    ce, accuracy, fitness_score, eval_time_ms, _now_iso(),
+                    ce, accuracy, fitness_score, eval_time_ms, f1_macro, fpr, _now_iso(),
                 ),
             )
             return cursor.lastrowid
@@ -794,8 +796,8 @@ class DataLayer:
                 cursor = conn.execute(
                     """INSERT OR REPLACE INTO genome_evaluations
                        (iteration_id, genome_id, position, role, elite_rank, ce, accuracy,
-                        fitness_score, eval_time_ms, created_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        fitness_score, eval_time_ms, f1_macro, fpr, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         eval_data["iteration_id"],
                         eval_data["genome_id"],
@@ -806,6 +808,8 @@ class DataLayer:
                         eval_data["accuracy"],
                         eval_data.get("fitness_score"),
                         eval_data.get("eval_time_ms"),
+                        eval_data.get("f1_macro"),
+                        eval_data.get("fpr"),
                         now,
                     ),
                 )
