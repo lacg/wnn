@@ -303,10 +303,12 @@ async fn check_cached_validation(
     Query(query): Query<CheckCachedValidationQuery>,
 ) -> impl IntoResponse {
     match crate::db::queries::get_cached_validation(&state.db, &query.genome_hash).await {
-        Ok(Some((ce, accuracy))) => (StatusCode::OK, Json(serde_json::json!({
+        Ok(Some((ce, accuracy, f1_macro, fpr))) => (StatusCode::OK, Json(serde_json::json!({
             "found": true,
             "ce": ce,
-            "accuracy": accuracy
+            "accuracy": accuracy,
+            "f1_macro": f1_macro,
+            "fpr": fpr
         }))).into_response(),
         Ok(None) => (StatusCode::OK, Json(serde_json::json!({
             "found": false

@@ -876,13 +876,19 @@ class Experiment:
 					except Exception:
 						pass
 
-				# Initialize IDS metrics (set by non-cached path, None for cached/LM)
+				# Initialize IDS metrics
 				f1 = None
 				fpr_val = None
 				if cached is not None:
 					result = cached
 					ce, acc = result[0], result[1]
-					self.log(f"  {genome_type}: CE={ce:.4f}, Acc={acc:.4%} (cached)")
+					# Extract cached IDS metrics (f1_macro, fpr) if available
+					f1 = result[2] if len(result) > 2 else None
+					fpr_val = result[3] if len(result) > 3 else None
+					if f1 is not None:
+						self.log(f"  {genome_type}: CE={ce:.4f}, Acc={acc:.4%}, F1={f1:.4%}, FPR={fpr_val:.4%} (cached)")
+					else:
+						self.log(f"  {genome_type}: CE={ce:.4f}, Acc={acc:.4%} (cached)")
 				else:
 					# Run full validation (use full_evaluator if available — validates against held-out set)
 					val_evaluator = self.full_evaluator or self.evaluator

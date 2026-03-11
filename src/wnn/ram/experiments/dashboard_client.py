@@ -530,7 +530,7 @@ class DashboardClient:
 	# Validation Summary methods
 	# =========================================================================
 
-	def check_cached_validation(self, genome_hash: str) -> Optional[tuple[float, float]]:
+	def check_cached_validation(self, genome_hash: str) -> Optional[tuple[float, float, Optional[float], Optional[float]]]:
 		"""
 		Check if a genome has already been validated.
 
@@ -538,12 +538,12 @@ class DashboardClient:
 			genome_hash: The genome's config hash
 
 		Returns:
-			Tuple of (ce, accuracy) if found, None if not validated yet
+			Tuple of (ce, accuracy, f1_macro, fpr) if found, None if not validated yet
 		"""
 		try:
 			result = self._request("GET", "/api/validations/check", params={"genome_hash": genome_hash})
 			if result.get("found"):
-				return (result["ce"], result["accuracy"])
+				return (result["ce"], result["accuracy"], result.get("f1_macro"), result.get("fpr"))
 			return None
 		except Exception:
 			return None

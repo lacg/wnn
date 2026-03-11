@@ -1522,16 +1522,16 @@ pub mod queries {
     pub async fn get_cached_validation(
         pool: &DbPool,
         genome_hash: &str,
-    ) -> Result<Option<(f64, f64)>> {
+    ) -> Result<Option<(f64, f64, Option<f64>, Option<f64>)>> {
         let row = sqlx::query(
-            r#"SELECT ce, accuracy FROM validation_summaries WHERE genome_hash = ? LIMIT 1"#,
+            r#"SELECT ce, accuracy, f1_macro, fpr FROM validation_summaries WHERE genome_hash = ? LIMIT 1"#,
         )
         .bind(genome_hash)
         .fetch_optional(pool)
         .await?;
 
         match row {
-            Some(r) => Ok(Some((r.get("ce"), r.get("accuracy")))),
+            Some(r) => Ok(Some((r.get("ce"), r.get("accuracy"), r.get("f1_macro"), r.get("fpr")))),
             None => Ok(None),
         }
     }
