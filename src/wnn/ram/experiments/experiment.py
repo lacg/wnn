@@ -796,13 +796,31 @@ class Experiment:
 		if not genomes or not evals:
 			return []
 
-		# Normalize evals to (ce, acc) — BitwiseEvaluator returns 3-tuples
-		normalized = [(e[0], e[1]) for e in evals]
+		# Extract metrics from evals — preserve F1/FPR for IDS fitness calculators
+		# evals can be: plain tuples (ce, acc [, f1, fpr]), EvalResult objects, or 2-tuples
+		def _extract(e):
+			"""Extract (ce, acc, f1_macro, fpr) from various eval formats."""
+			ce = e[0] if not hasattr(e, 'ce') else e.ce
+			acc = e[1] if not hasattr(e, 'accuracy') else e.accuracy
+			f1 = None
+			fpr = None
+			if hasattr(e, 'f1_macro'):
+				f1 = e.f1_macro
+			elif isinstance(e, (tuple, list)) and len(e) > 2:
+				f1 = e[2]
+			if hasattr(e, 'fpr'):
+				fpr = e.fpr
+			elif isinstance(e, (tuple, list)) and len(e) > 3:
+				fpr = e[3]
+			return (ce, acc, f1, fpr)
+
+		extracted = [_extract(e) for e in evals]
 
 		# Use bests() for consistent selection across all three metrics
 		if fitness_calculator is not None:
 			try:
-				population = [(g, ce, acc) for g, (ce, acc) in zip(genomes, normalized)]
+				# Build 5-element tuples so IDS fitness calculators can use F1/FPR
+				population = [(g, ce, acc, f1, fpr) for g, (ce, acc, f1, fpr) in zip(genomes, extracted)]
 				pop_bests = fitness_calculator.bests(population)
 				return [
 					(pop_bests.best_ce.genome, 'best_ce', pop_bests.best_ce.ce, pop_bests.best_ce.accuracy),
@@ -813,12 +831,12 @@ class Experiment:
 				pass
 
 		# Fallback without fitness calculator: just CE and Acc
-		genome_evals = list(zip(genomes, normalized))
+		genome_evals = list(zip(genomes, extracted))
 		by_ce = sorted(genome_evals, key=lambda x: x[1][0])
 		by_acc = sorted(genome_evals, key=lambda x: -x[1][1])
 
-		best_ce_genome, (best_ce_ce, best_ce_acc) = by_ce[0]
-		best_acc_genome, (best_acc_ce, best_acc_acc) = by_acc[0]
+		best_ce_genome, (best_ce_ce, best_ce_acc, _, _) = by_ce[0]
+		best_acc_genome, (best_acc_ce, best_acc_acc, _, _) = by_acc[0]
 
 		return [
 			(best_ce_genome, 'best_ce', best_ce_ce, best_ce_acc),
