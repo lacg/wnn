@@ -209,6 +209,9 @@ class ExperimentResult:
 	checkpoint_path: Optional[str] = None
 	was_shutdown: bool = False  # True if stopped due to external shutdown request
 	population_metrics: Optional[list[tuple[float, float]]] = None  # Cached (ce, acc) per genome in final_population
+	validation_f1: Optional[float] = None     # F1-macro from final validation (Rust)
+	validation_fpr: Optional[float] = None    # FPR from final validation (Rust)
+	validation_acc: Optional[float] = None    # Accuracy from final validation (Rust)
 
 	def to_phase_result(self) -> PhaseResult:
 		"""Convert to PhaseResult for compatibility."""
@@ -563,13 +566,14 @@ class Experiment:
 			was_shutdown = result.stop_reason == StopReason.SHUTDOWN if result.stop_reason else False
 
 			# Run FINAL validation (skip if shutdown was requested)
+			val_results = {}
 			if not was_shutdown and result.final_population:
 				# Use cached metrics from the optimizer if available (avoids redundant re-eval)
 				if result.population_metrics:
 					final_evals = result.population_metrics
 				else:
 					final_evals = self.evaluator.evaluate_batch(result.final_population)
-				self._run_validation(
+				val_results = self._run_validation(
 					population=result.final_population,
 					evals=final_evals,
 					validation_point='final',
@@ -640,6 +644,9 @@ class Experiment:
 		if result.initial_fitness and result.initial_fitness > 0:
 			improvement = (result.initial_fitness - result.final_fitness) / result.initial_fitness * 100
 
+		# Extract validation metrics for best genome (used by flow for IDS Results)
+		best_val = val_results.get('best_ce') or val_results.get('best_fitness') or {} if val_results else {}
+
 		# Create result
 		exp_result = ExperimentResult(
 			experiment_name=cfg.name,
@@ -655,6 +662,9 @@ class Experiment:
 			elapsed_seconds=elapsed,
 			was_shutdown=was_shutdown,
 			population_metrics=result.population_metrics,
+			validation_f1=best_val.get('f1'),
+			validation_fpr=best_val.get('fpr'),
+			validation_acc=best_val.get('acc'),
 		)
 
 		# Save checkpoint
@@ -823,7 +833,7 @@ class Experiment:
 		experiment_id: int,
 		flow_id: Optional[int] = None,
 		fitness_calculator: Optional[Any] = None,
-	) -> None:
+	) -> dict:
 		"""
 		Run full validation on selected genomes from population.
 
@@ -850,9 +860,11 @@ class Experiment:
 		self.log(f"  {validation_point.upper()} VALIDATION (Full Dataset)")
 		self.log("=" * 60)
 
+		results = {}
+
 		if not population or not evals:
 			self.log("  No population to validate")
-			return
+			return results
 
 		try:
 			# Select 1-3 best genomes
@@ -860,7 +872,7 @@ class Experiment:
 
 			if not selected:
 				self.log("  No genomes selected for validation")
-				return
+				return results
 
 			self.log(f"  Selected {len(selected)} genome(s): {[label for _, label, _, _ in selected]}")
 
@@ -904,6 +916,9 @@ class Experiment:
 					else:
 						self.log(f"  {genome_type}: CE={ce:.4f}, Acc={acc:.4%} (validated)")
 
+				# Collect results keyed by genome_type
+				results[genome_type] = {'ce': ce, 'acc': acc, 'f1': f1, 'fpr': fpr_val}
+
 				# Always store summary via dashboard API (even if cached)
 				# This ensures each (experiment_id, validation_point, genome_type) has a record
 				if self.dashboard_client and self.experiment_id:
@@ -927,3 +942,5 @@ class Experiment:
 
 		except Exception as e:
 			self.log(f"  Warning: {validation_point} validation failed: {e}")
+
+		return results
