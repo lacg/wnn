@@ -1526,12 +1526,14 @@
       {#if expandedPopulation.length > 0}
         {@const bestCeGenome = expandedPopulation.reduce((best, g) => g.ce < best.ce ? g : best, expandedPopulation[0])}
         {@const bestAccGenome = expandedPopulation.reduce((best, g) => g.accuracy > best.accuracy ? g : best, expandedPopulation[0])}
+        {@const bestF1Genome = isIDS ? expandedPopulation.filter(g => g.f1_macro != null).reduce((best, g) => (g.f1_macro ?? 0) > (best?.f1_macro ?? 0) ? g : best, expandedPopulation[0]) : null}
         <div class="gating-section" style="border-left-color: var(--accent-green);">
           <div class="gating-header">
             <span class="gating-title">Seeded Population{#if !seedEvalComplete} (evaluating...){/if}</span>
             <span class="gating-meta">
               {expandedPopulation.length} genomes{#if !seedEvalComplete}&nbsp;so far{/if} &middot;
               {#if isIDS}
+                Best F1: {bestF1Genome?.f1_macro != null ? (bestF1Genome.f1_macro * 100).toFixed(2) + '%' : '—'} ({bestF1Genome?.neurons}n {bestF1Genome?.bits}b) &middot;
                 Best Acc: {(bestAccGenome.accuracy * 100).toFixed(2)}% ({bestAccGenome.neurons}n {bestAccGenome.bits}b)
               {:else}
                 Best CE: {bestCeGenome.ce.toFixed(4)} ({bestCeGenome.neurons}n {bestCeGenome.bits}b) &middot;
@@ -1547,7 +1549,12 @@
                   <th>#</th>
                   <th>Neurons</th>
                   <th>Bits</th>
-                  {#if !isIDS}<th>CE</th>{/if}
+                  {#if isIDS}
+                    <th>F1</th>
+                    <th>FPR</th>
+                  {:else}
+                    <th>CE</th>
+                  {/if}
                   <th>Accuracy</th>
                   <th>Fitness</th>
                 </tr>
@@ -1558,7 +1565,12 @@
                     <td class="mono">{g.rank}</td>
                     <td class="mono">{g.neurons.toLocaleString()}</td>
                     <td class="mono">{g.bits}</td>
-                    {#if !isIDS}<td class="mono">{g.ce.toFixed(4)}</td>{/if}
+                    {#if isIDS}
+                      <td class="mono">{g.f1_macro != null ? (g.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
+                      <td class="mono">{g.fpr != null ? (g.fpr * 100).toFixed(2) + '%' : '—'}</td>
+                    {:else}
+                      <td class="mono">{g.ce.toFixed(4)}</td>
+                    {/if}
                     <td class="mono">{(g.accuracy * 100).toFixed(2)}%</td>
                     <td class="mono">{g.fitness !== null ? g.fitness.toFixed(4) : '—'}</td>
                   </tr>
