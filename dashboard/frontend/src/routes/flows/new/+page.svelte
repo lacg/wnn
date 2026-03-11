@@ -1217,13 +1217,6 @@
                   <span class="field-hint">1 = off, 5 = default (also sets data partitions)</span>
                 </div>
               </div>
-              <div class="form-row">
-                <div class="form-group">
-                  <label for="idsFitnessWeightF1">F1 Weight</label>
-                  <input type="number" id="idsFitnessWeightF1" bind:value={idsFitnessWeightF1} min="0" max="5" step="0.1" />
-                  <span class="field-hint">F1-macro weight in fitness (0 = off)</span>
-                </div>
-              </div>
             </div>
           {:else if isBitwise}
             <div class="form-section">
