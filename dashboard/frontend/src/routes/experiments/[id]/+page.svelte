@@ -935,16 +935,19 @@
               {#if isIDS}
                 <tr>
                   <th rowspan="2">Phase</th>
-                  <th colspan="2">Best F1-macro Genome</th>
-                  <th colspan="2">Best FPR Genome</th>
-                  <th colspan="2">Best Fitness Genome</th>
+                  <th colspan="3">Best F1-macro Genome</th>
+                  <th colspan="3">Best FPR Genome</th>
+                  <th colspan="3">Best Fitness Genome</th>
                 </tr>
                 <tr>
                   <th>F1</th>
+                  <th>FPR</th>
                   <th>Acc</th>
                   <th>F1</th>
                   <th>FPR</th>
+                  <th>Acc</th>
                   <th>F1</th>
+                  <th>FPR</th>
                   <th>Acc</th>
                 </tr>
               {:else}
@@ -979,10 +982,13 @@
                   </td>
                   {#if isIDS}
                     <td class="mono best-ce-col">{bestCeSummary ? (bestCeSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono best-ce-col">—</td>
                     <td class="mono best-ce-col">{bestCeSummary ? (bestCeSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
                     <td class="mono best-acc-col">{bestAccSummary ? (bestAccSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
-                    <td class="mono best-acc-col">{bestAccSummary ? (bestAccSummary.accuracy * 100).toFixed(3) + '%' : '—'}</td>
+                    <td class="mono best-acc-col">—</td>
+                    <td class="mono best-acc-col">{bestAccSummary ? (bestAccSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
                     <td class="mono best-fit-col">{bestFitSummary ? (bestFitSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono best-fit-col">—</td>
                     <td class="mono best-fit-col">{bestFitSummary ? (bestFitSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
                   {:else}
                     <td class="mono best-ce-col">{bestCeSummary ? bestCeSummary.ce.toFixed(4) : '—'}</td>
