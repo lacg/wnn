@@ -918,28 +918,51 @@
         <div class="validation-header">
           <span class="validation-title">📈 Validation Progression</span>
           <div class="validation-legend">
-            <span class="legend-item"><span class="legend-marker best-ce"></span> Best CE</span>
-            <span class="legend-item"><span class="legend-marker best-acc"></span> Best Acc</span>
-            <span class="legend-item"><span class="legend-marker best-fitness"></span> Best Fitness</span>
+            {#if isIDS}
+              <span class="legend-item"><span class="legend-marker best-ce"></span> Best F1-macro</span>
+              <span class="legend-item"><span class="legend-marker best-acc"></span> Best FPR</span>
+              <span class="legend-item"><span class="legend-marker best-fitness"></span> Best Fitness</span>
+            {:else}
+              <span class="legend-item"><span class="legend-marker best-ce"></span> Best CE</span>
+              <span class="legend-item"><span class="legend-marker best-acc"></span> Best Acc</span>
+              <span class="legend-item"><span class="legend-marker best-fitness"></span> Best Fitness</span>
+            {/if}
           </div>
         </div>
         <div class="validation-table-container">
           <table class="validation-table">
             <thead>
-              <tr>
-                <th rowspan="2">Phase</th>
-                <th colspan="2">Best CE Genome</th>
-                <th colspan="2">Best Acc Genome</th>
-                <th colspan="2">Best Fitness Genome</th>
-              </tr>
-              <tr>
-                <th>CE</th>
-                <th>Acc</th>
-                <th>CE</th>
-                <th>Acc</th>
-                <th>CE</th>
-                <th>Acc</th>
-              </tr>
+              {#if isIDS}
+                <tr>
+                  <th rowspan="2">Phase</th>
+                  <th colspan="2">Best F1-macro Genome</th>
+                  <th colspan="2">Best FPR Genome</th>
+                  <th colspan="2">Best Fitness Genome</th>
+                </tr>
+                <tr>
+                  <th>F1</th>
+                  <th>Acc</th>
+                  <th>F1</th>
+                  <th>FPR</th>
+                  <th>F1</th>
+                  <th>Acc</th>
+                </tr>
+              {:else}
+                <tr>
+                  <th rowspan="2">Phase</th>
+                  <th colspan="2">Best CE Genome</th>
+                  <th colspan="2">Best Acc Genome</th>
+                  <th colspan="2">Best Fitness Genome</th>
+                </tr>
+                <tr>
+                  <th>CE</th>
+                  <th>Acc</th>
+                  <th>CE</th>
+                  <th>Acc</th>
+                  <th>CE</th>
+                  <th>Acc</th>
+                </tr>
+              {/if}
             </thead>
             <tbody>
               {#each cumulativeValidationProgression as point, idx}
@@ -954,12 +977,21 @@
                       <span class="current-marker">◀</span>
                     {/if}
                   </td>
-                  <td class="mono best-ce-col">{bestCeSummary ? bestCeSummary.ce.toFixed(4) : '—'}</td>
-                  <td class="mono best-ce-col">{bestCeSummary ? (bestCeSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
-                  <td class="mono best-acc-col">{bestAccSummary ? bestAccSummary.ce.toFixed(4) : '—'}</td>
-                  <td class="mono best-acc-col">{bestAccSummary ? (bestAccSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
-                  <td class="mono best-fit-col">{bestFitSummary ? bestFitSummary.ce.toFixed(4) : '—'}</td>
-                  <td class="mono best-fit-col">{bestFitSummary ? (bestFitSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+                  {#if isIDS}
+                    <td class="mono best-ce-col">{bestCeSummary ? (bestCeSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono best-ce-col">{bestCeSummary ? (bestCeSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono best-acc-col">{bestAccSummary ? (bestAccSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono best-acc-col">{bestAccSummary ? (bestAccSummary.accuracy * 100).toFixed(3) + '%' : '—'}</td>
+                    <td class="mono best-fit-col">{bestFitSummary ? (bestFitSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono best-fit-col">{bestFitSummary ? (bestFitSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+                  {:else}
+                    <td class="mono best-ce-col">{bestCeSummary ? bestCeSummary.ce.toFixed(4) : '—'}</td>
+                    <td class="mono best-ce-col">{bestCeSummary ? (bestCeSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono best-acc-col">{bestAccSummary ? bestAccSummary.ce.toFixed(4) : '—'}</td>
+                    <td class="mono best-acc-col">{bestAccSummary ? (bestAccSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono best-fit-col">{bestFitSummary ? bestFitSummary.ce.toFixed(4) : '—'}</td>
+                    <td class="mono best-fit-col">{bestFitSummary ? (bestFitSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+                  {/if}
                 </tr>
               {/each}
             </tbody>
