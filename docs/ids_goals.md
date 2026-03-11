@@ -1,55 +1,80 @@
-  Standard Split (175K train / 82K test — what we use)                                                                                                                            
-                                                                                                                                                                                  
-  This is the harder, more realistic split. Results are significantly lower:                                                                                                      
-                                                                                                                                                                                  
-  ┌────────────────────────┬──────────┬─────────┬─────────┐
-  │         Model          │ Accuracy │   F1    │   FPR   │
-  ├────────────────────────┼──────────┼─────────┼─────────┤
-  │ Random Forest          │ ~87-88%  │ ~87-88% │ ~10-15% │
-  ├────────────────────────┼──────────┼─────────┼─────────┤
-  │ XGBoost                │ ~87%     │ ~87%    │ ~12%    │
-  ├────────────────────────┼──────────┼─────────┼─────────┤
-  │ SVM                    │ ~86%     │ ~85%    │ ~15%    │
-  ├────────────────────────┼──────────┼─────────┼─────────┤
-  │ DNN                    │ ~88%     │ ~87%    │ ~10%    │
-  ├────────────────────────┼──────────┼─────────┼─────────┤
-  │ BiLSTM (deep learning) │ ~89%     │ ~89%    │ ~8%     │
-  └────────────────────────┴──────────┴─────────┴─────────┘
+# IDS Goals — UNSW-NB15 Binary Classification
 
-  Random Split (70/30 or 80/20 random shuffle)
+## Standard Split (175K train / 82K test — what we use)
 
-  Much easier — inflated numbers due to data leakage between train/test:
+This is the harder, more realistic split with temporal separation between train/test.
 
-  ┌───────────────┬──────────┬────────┬─────┐
-  │     Model     │ Accuracy │   F1   │ FPR │
-  ├───────────────┼──────────┼────────┼─────┤
-  │ RF / XGBoost  │ 98-99%   │ 97-99% │ <2% │
-  ├───────────────┼──────────┼────────┼─────┤
-  │ Deep Learning │ 98-99%   │ 98-99% │ <1% │
-  └───────────────┴──────────┴────────┴─────┘
+### Literature Baselines
 
-  Realistic Goals for Our WNN
+| Model                  | Accuracy | F1-Macro | FPR    | Source                        |
+|------------------------|----------|----------|--------|-------------------------------|
+| Random Forest          | 87.2%    | ~87%     | ~12%   | Our reproduction (Week 18)    |
+| XGBoost                | 87.3%    | ~87%     | ~12%   | Our reproduction (Week 18)    |
+| SVM                    | ~86%     | ~85%     | ~15%   | Kasongo & Sun 2020            |
+| DNN (sequential)       | ~88%     | ~87%     | ~10%   | Zoghi & Serpen 2024           |
+| BiLSTM (deep learning) | ~89%     | ~89%     | ~8%    | Abdalgawad et al. 2024        |
 
-  On the standard split (which we're using), reasonable targets:
+### Our WNN Targets
 
-  ┌──────────┬───────────────────────┬────────────────────┬────────────────┐
-  │  Metric  │ Classical ML baseline │ Deep Learning SOTA │ Our WNN target │
-  ├──────────┼───────────────────────┼────────────────────┼────────────────┤
-  │ F1-Macro │ ~87%                  │ ~89%               │ 85-88%         │
-  ├──────────┼───────────────────────┼────────────────────┼────────────────┤
-  │ FPR      │ ~10-15%               │ ~8%                │ <12%           │
-  ├──────────┼───────────────────────┼────────────────────┼────────────────┤
-  │ Accuracy │ ~87%                  │ ~89%               │ 85-88%         │
-  └──────────┴───────────────────────┴────────────────────┴────────────────┘
+| Metric                    | Target | Stretch Goal | Basis                                    |
+|---------------------------|--------|--------------|------------------------------------------|
+| **Accuracy**              | ≥ 88%  | ≥ 90%        | Beat RF (87.2%) and XGBoost (87.3%)      |
+| **F1-Macro**              | ≥ 87%  | ≥ 89%        | Match or beat classical ML (~87%)        |
+| **FPR**                   | ≤ 12%  | ≤ 8%         | Match classical ML; stretch = BiLSTM     |
+| Multi-class (10 classes)  | ≥ 85%  | ≥ 88% (F1)   | Novel benchmark (no WNN prior art)       |
 
-  Matching the RF baseline (~87% F1, ~12% FPR) would be a strong result for a weightless neural network. Beating it would be publishable. The standard split is hard because the
-  train/test distributions differ significantly (the dataset authors deliberately made it challenging).
+Matching RF/XGBoost (~87% F1, ~12% FPR) validates the architecture.
+**Beating them is publishable** — no prior WNN work reports results on the standard split.
 
-  Where is experiment 1576 right now on these metrics?
+## Random Split (90/10 deduplicated — FWIW comparison)
 
-  Sources:
-  - Zoghi 2024 - Building an IDS on UNSW-NB15
-  - Enhanced IDS Performance with UNSW-NB15
-  - Performance Analysis using Feature Selection on UNSW-NB15
-  - UNSW-NB15 Dataset
-  - Oversampling, Stacking Feature Embedding (2024)
+Much easier — inflated numbers due to data leakage between train/test:
+
+| Model          | Accuracy | F1     | FPR  |
+|----------------|----------|--------|------|
+| RF / XGBoost   | 98-99%   | 97-99% | <2%  |
+| Deep Learning  | 98-99%   | 98-99% | <1%  |
+| FWIW WNN       | 98.5%    | —      | —    |
+
+Target: ≥ 98.5% (match FWIW).
+
+## Research FPR vs Production FPR
+
+**Our FPR targets above (8–12%) are research metrics on a balanced test set.**
+
+Production deployment is a fundamentally different regime:
+
+- In production, 95–99% of traffic is normal
+- A 10% FPR on 1M flows/day = **~100,000 false alerts/day**
+- Industry guidance: <1% FPR is "good", <0.1% is "excellent"
+- **Alert fatigue** is the #1 operational killer of IDS tools — teams turn off noisy detectors
+
+This is why production IDS uses **cascading architectures**:
+
+```
+Tier 1: WNN on FPGA (5ns, inspects EVERY packet)
+  ↓ flags ~5% suspicious
+Tier 2: Deep model on CPU/GPU (re-examines flagged subset only)
+  ↓ confirms ~0.1% as true alerts
+SOC analyst
+```
+
+The WNN's value is not standalone FPR but **throughput × recall at the first tier** —
+inspecting every packet at line rate rather than sampling 1 in 100.
+
+Production FPR targets (for the cascading system):
+
+| Tier          | FPR Target | Role                                  |
+|---------------|------------|---------------------------------------|
+| Tier 1 (WNN)  | ≤ 5%       | High recall, flags suspicious traffic |
+| Tier 2 (Deep) | ≤ 0.1%     | High precision, confirms real threats |
+| Combined      | ≤ 0.1%     | What the SOC analyst actually sees    |
+
+## Sources
+
+- [Zoghi & Serpen 2024 — Building an IDS on UNSW-NB15](https://onlinelibrary.wiley.com/doi/full/10.1002/cpe.8242)
+- [Abdalgawad et al. 2024 — Enhanced IDS Performance](https://www.mdpi.com/1999-4893/17/2/64)
+- [Kasongo & Sun 2020 — Feature Selection on UNSW-NB15](https://journalofbigdata.springeropen.com/articles/10.1186/s40537-020-00379-6)
+- [UNSW-NB15 Dataset](https://research.unsw.edu.au/projects/unsw-nb15-dataset)
+- [Check Point — FPR in Cybersecurity](https://www.checkpoint.com/cyber-hub/cyber-security/what-is-a-false-positive-rate-in-cybersecurity/)
+- [Fidelis Security — Reducing IDS False Positives](https://fidelissecurity.com/cybersecurity-101/network-security/reducing-false-positives-in-intrusion-detection-systems/)
