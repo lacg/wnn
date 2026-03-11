@@ -1037,6 +1037,14 @@
           <span class="info-label">Encoding</span>
           <span class="info-value">{flow.config.params?.ids_n_bits ?? 8}-bit thermometer</span>
         </div>
+        <div class="info-card">
+          <span class="info-label">Bits</span>
+          <span class="info-value">{flow.config.params?.min_bits ?? 4}–{flow.config.params?.max_bits ?? 24}</span>
+        </div>
+        <div class="info-card">
+          <span class="info-label">Neurons</span>
+          <span class="info-value">{flow.config.params?.min_neurons ?? 5}–{flow.config.params?.max_neurons ?? 300}</span>
+        </div>
       {/if}
     </div>
 

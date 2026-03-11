@@ -24,6 +24,10 @@
   let idsKFolds = 5;
   let idsFitnessWeightF1 = 0.0;
   let idsSplit = 'standard';
+  let idsMinBits = 4;
+  let idsMaxBits = 14;
+  let idsMinNeurons = 5;
+  let idsMaxNeurons = 300;
 
   // Multi-stage config
   let numStages = 1;
@@ -686,7 +690,13 @@
         params.architecture_type = 'ids';
         // Split combined classification into classification + ids_arch_type
         const isBitwiseIds = idsClassification === 'multi_bitwise';
-        params.ids_classification = idsClassification === 'binary' ? 'binary' : 'multi';
+        const classMap: Record<string, string> = {
+          'binary': 'binary',
+          'hierarchical': 'hierarchical',
+          'multi_tiered': 'multi',
+          'multi_bitwise': 'multi',
+        };
+        params.ids_classification = classMap[idsClassification] || 'binary';
         params.ids_arch_type = isBitwiseIds ? 'bitwise' : 'tiered';
         params.ids_n_bits = idsNBits;
         params.ids_val_fraction = idsValFraction;
@@ -694,6 +704,10 @@
         params.ids_k_folds = idsKFolds;
         params.ids_fitness_weight_f1 = idsFitnessWeightF1;
         params.ids_split = idsSplit;
+        params.min_bits = idsMinBits;
+        params.max_bits = idsMaxBits;
+        params.min_neurons = idsMinNeurons;
+        params.max_neurons = idsMaxNeurons;
       } else if (isBitwise) {
         params.architecture_type = 'bitwise';
         params.num_clusters = bitwiseNumClusters;
@@ -1179,11 +1193,13 @@
                   <label for="idsClassification">Classification</label>
                   <select id="idsClassification" bind:value={idsClassification}>
                     <option value="binary">Binary (attack vs normal)</option>
+                    <option value="hierarchical">Hierarchical S0→S1 (binary + 9 attack types)</option>
                     <option value="multi_tiered">Multi-class Tiered (10 categories)</option>
                     <option value="multi_bitwise">Multi-class Bitwise (10 categories)</option>
                   </select>
                   <span class="field-hint">
                     {#if idsClassification === 'binary'}2 classes — tiered architecture
+                    {:else if idsClassification === 'hierarchical'}S0: Normal vs Attack → S1: 9 attack types (separate genomes)
                     {:else if idsClassification === 'multi_tiered'}10 classes — frequency-based tier allocation
                     {:else}10 classes — per-cluster independent bits/neurons
                     {/if}
@@ -1215,6 +1231,29 @@
                   <label for="idsKFolds">K-Fold CV</label>
                   <input type="number" id="idsKFolds" bind:value={idsKFolds} min="1" max="10" />
                   <span class="field-hint">1 = off, 5 = default (also sets data partitions)</span>
+                </div>
+              </div>
+              <h3>Neuron Architecture Bounds</h3>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="idsMinBits">Min Bits</label>
+                  <input type="number" id="idsMinBits" bind:value={idsMinBits} min="2" max="24" />
+                  <span class="field-hint">Min address bits per neuron</span>
+                </div>
+                <div class="form-group">
+                  <label for="idsMaxBits">Max Bits</label>
+                  <input type="number" id="idsMaxBits" bind:value={idsMaxBits} min="2" max="24" />
+                  <span class="field-hint">Max address bits (lower = more generalization)</span>
+                </div>
+                <div class="form-group">
+                  <label for="idsMinNeurons">Min Neurons</label>
+                  <input type="number" id="idsMinNeurons" bind:value={idsMinNeurons} min="1" max="500" />
+                  <span class="field-hint">Min neurons per class</span>
+                </div>
+                <div class="form-group">
+                  <label for="idsMaxNeurons">Max Neurons</label>
+                  <input type="number" id="idsMaxNeurons" bind:value={idsMaxNeurons} min="1" max="500" />
+                  <span class="field-hint">Max neurons per class</span>
                 </div>
               </div>
             </div>
