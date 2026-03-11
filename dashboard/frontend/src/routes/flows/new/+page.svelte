@@ -1237,12 +1237,12 @@
               <div class="form-row">
                 <div class="form-group">
                   <label for="idsMinBits">Min Bits</label>
-                  <input type="number" id="idsMinBits" bind:value={idsMinBits} min="2" max="24" />
+                  <input type="number" id="idsMinBits" bind:value={idsMinBits} min="2" max="32" />
                   <span class="field-hint">Min address bits per neuron</span>
                 </div>
                 <div class="form-group">
                   <label for="idsMaxBits">Max Bits</label>
-                  <input type="number" id="idsMaxBits" bind:value={idsMaxBits} min="2" max="24" />
+                  <input type="number" id="idsMaxBits" bind:value={idsMaxBits} min="2" max="32" />
                   <span class="field-hint">Max address bits (lower = more generalization)</span>
                 </div>
                 <div class="form-group">
