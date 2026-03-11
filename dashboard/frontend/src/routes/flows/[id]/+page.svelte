@@ -1734,28 +1734,19 @@
           <div class="final-results-card">
             <div class="results-grid">
               <div class="result-item">
+                <div class="result-phase">{bestF1Exp?.name ?? '—'}</div>
                 <div class="result-label">Best F1-Macro</div>
                 <div class="result-value">{bestF1Exp?.extra_metrics?.f1_macro != null ? (bestF1Exp.extra_metrics.f1_macro * 100).toFixed(2) + '%' : '—'}</div>
               </div>
               <div class="result-item">
-                <div class="result-label">F1 Phase</div>
-                <div class="result-value">{bestF1Exp?.name ?? '—'}</div>
-              </div>
-              <div class="result-item">
+                <div class="result-phase">{bestFprExp?.name ?? '—'}</div>
                 <div class="result-label">Best FPR</div>
                 <div class="result-value">{bestFprExp?.extra_metrics?.fpr != null ? (bestFprExp.extra_metrics.fpr * 100).toFixed(2) + '%' : '—'}</div>
               </div>
               <div class="result-item">
-                <div class="result-label">FPR Phase</div>
-                <div class="result-value">{bestFprExp?.name ?? '—'}</div>
-              </div>
-              <div class="result-item">
+                <div class="result-phase">{bestAccCheckpoint?.name ?? '—'}</div>
                 <div class="result-label">Best Accuracy</div>
                 <div class="result-value">{bestAccCheckpoint?.best_accuracy ? (bestAccCheckpoint.best_accuracy * 100).toFixed(2) + '%' : '—'}</div>
-              </div>
-              <div class="result-item">
-                <div class="result-label">Accuracy Phase</div>
-                <div class="result-value">{bestAccCheckpoint?.name ?? '—'}</div>
               </div>
             </div>
             <div class="results-footer">
@@ -1767,20 +1758,14 @@
           <div class="final-results-card">
             <div class="results-grid">
               <div class="result-item">
+                <div class="result-phase">{bestCeCheckpoint.name}</div>
                 <div class="result-label">Best CE</div>
                 <div class="result-value">{bestCeCheckpoint.best_ce?.toFixed(4) ?? '—'}</div>
               </div>
               <div class="result-item">
-                <div class="result-label">CE Phase</div>
-                <div class="result-value">{bestCeCheckpoint.name}</div>
-              </div>
-              <div class="result-item">
+                <div class="result-phase">{bestAccCheckpoint?.name ?? '—'}</div>
                 <div class="result-label">Best Accuracy</div>
                 <div class="result-value">{bestAccCheckpoint?.best_accuracy ? (bestAccCheckpoint.best_accuracy * 100).toFixed(2) + '%' : '—'}</div>
-              </div>
-              <div class="result-item">
-                <div class="result-label">Accuracy Phase</div>
-                <div class="result-value">{bestAccCheckpoint?.name ?? '—'}</div>
               </div>
             </div>
             <div class="results-footer">
@@ -2537,6 +2522,12 @@
     color: var(--text-tertiary);
     text-transform: uppercase;
     margin-bottom: 0.5rem;
+  }
+
+  .result-phase {
+    font-size: 1rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.25rem;
   }
 
   .result-value {
