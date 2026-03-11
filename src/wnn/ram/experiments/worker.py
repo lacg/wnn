@@ -963,7 +963,11 @@ class FlowWorker:
 
             # Get experiment-specific settings or fall back to flow params
             exp_tier_config = self._parse_tier_config(exp_data.get("tier_config")) or tier_config
-            exp_fitness_type = self._parse_fitness_calculator(exp_data.get("fitness_calculator")) or default_fitness_type
+            exp_fitness_type = (
+                self._parse_fitness_calculator(exp_data["fitness_calculator"])
+                if exp_data.get("fitness_calculator")
+                else default_fitness_type
+            )
             exp_weight_ce = exp_data.get("fitness_weight_ce") or default_weight_ce
             exp_weight_acc = exp_data.get("fitness_weight_acc") or default_weight_acc
 
