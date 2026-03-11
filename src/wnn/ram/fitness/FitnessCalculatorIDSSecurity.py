@@ -55,6 +55,9 @@ class FitnessCalculatorIDSSecurity(FitnessCalculator[G]):
 		# Fallback: rank by CE if IDS metrics not available
 		return [t[1] for t in population]
 
+	def bests(self, population):
+		return self._ids_bests(population)
+
 	@property
 	def name(self) -> str:
 		return "IDSSecurity(F1×(1-FPR)²)"

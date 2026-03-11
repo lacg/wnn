@@ -92,10 +92,15 @@ class FitnessCalculator(ABC, Generic[G]):
 		Returns the genome with the best CE, best accuracy, and best fitness
 		score. These are typically three DIFFERENT genomes.
 
+		For IDS calculators (overridden via _ids_bests):
+		- best_ce → highest F1-macro (dashboard: "Best F1-macro Genome")
+		- best_acc → lowest FPR (dashboard: "Best FPR Genome")
+		- best_fitness → best combined score
+
 		Handles None accuracy values by treating them as 0.0.
 
 		Args:
-			population: List of (genome, ce, accuracy) tuples.
+			population: List of (genome, ce, accuracy[, f1, fpr]) tuples.
 				Accuracy may be None (treated as 0.0).
 
 		Returns:
@@ -122,6 +127,53 @@ class FitnessCalculator(ABC, Generic[G]):
 		return PopulationBests(
 			best_ce=_make(best_ce_idx),
 			best_acc=_make(best_acc_idx),
+			best_fitness=_make(best_fit_idx),
+		)
+
+	def _ids_bests(self, population: list[tuple]) -> PopulationBests[G]:
+		"""IDS-aware bests: select by F1-macro, FPR, and combined fitness.
+
+		For IDS experiments, the dashboard columns are:
+		- "Best F1-macro Genome" → best_ce slot → select by HIGHEST F1-macro
+		- "Best FPR Genome" → best_acc slot → select by LOWEST FPR
+		- "Best Fitness Genome" → best_fitness slot → select by best combined score
+
+		Falls back to standard CE/accuracy selection if F1/FPR not available.
+		"""
+		if not population:
+			raise ValueError("Cannot compute bests on empty population")
+
+		normalized = [
+			(t[0], t[1], t[2] if t[2] is not None else 0.0) + t[3:]
+			for t in population
+		]
+		scores = self.fitness(normalized)
+
+		# Check if IDS metrics are available
+		has_ids = len(normalized[0]) >= 5 and any(
+			t[3] is not None for t in normalized
+		)
+
+		if has_ids:
+			# Select by F1-macro (highest) and FPR (lowest)
+			best_f1_idx = max(range(len(normalized)),
+				key=lambda i: normalized[i][3] if normalized[i][3] is not None else -1.0)
+			best_fpr_idx = min(range(len(normalized)),
+				key=lambda i: normalized[i][4] if normalized[i][4] is not None else 2.0)
+		else:
+			# Fallback to CE/accuracy
+			best_f1_idx = min(range(len(normalized)), key=lambda i: normalized[i][1])
+			best_fpr_idx = max(range(len(normalized)), key=lambda i: normalized[i][2])
+
+		best_fit_idx = min(range(len(scores)), key=lambda i: scores[i])
+
+		def _make(idx: int) -> GenomeBest[G]:
+			return GenomeBest(genome=normalized[idx][0], ce=normalized[idx][1],
+				accuracy=normalized[idx][2], fitness_score=scores[idx])
+
+		return PopulationBests(
+			best_ce=_make(best_f1_idx),
+			best_acc=_make(best_fpr_idx),
 			best_fitness=_make(best_fit_idx),
 		)
 
