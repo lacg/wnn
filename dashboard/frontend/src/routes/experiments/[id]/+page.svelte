@@ -36,8 +36,8 @@
   let liveProgress: { generation: number; total_generations: number; phase: string; evaluated: number; target_count: number; viable: number | null; best_ce: number; best_acc: number; elapsed_secs: number } | null = null;
 
   // Grid search results
-  let gridSearchResults: { rank: number; neurons: number; bits: number; ce: number; accuracy: number; fitness: number | null; count: number; elapsed?: number }[] = [];
-  let expandedPopulation: { rank: number; neurons: number; bits: number; ce: number; accuracy: number; fitness: number | null }[] = [];
+  let gridSearchResults: { rank: number; neurons: number; bits: number; ce: number; accuracy: number; fitness: number | null; count: number; elapsed?: number; f1_macro?: number | null; fpr?: number | null }[] = [];
+  let expandedPopulation: { rank: number; neurons: number; bits: number; ce: number; accuracy: number; fitness: number | null; f1_macro?: number | null; fpr?: number | null }[] = [];
   let seedEvalComplete = false;
   let gridSearchLoading = false;
 
@@ -448,7 +448,7 @@
         ? iterations.filter(i => i.iteration_num <= (configIters[0]?.candidates_total ?? iterations.length))
         : iterations;
 
-      const results: { neurons: number; bits: number; ce: number; accuracy: number; fitness: number | null; count: number; elapsed: number }[] = [];
+      const results: { neurons: number; bits: number; ce: number; accuracy: number; fitness: number | null; count: number; elapsed: number; f1_macro?: number | null; fpr?: number | null }[] = [];
 
       // Fetch genome evaluations for each per-config iteration
       const fetches = perConfigIters.map(iter =>
@@ -471,6 +471,7 @@
         results.push({
           neurons, bits, ce: ev.ce, accuracy: ev.accuracy,
           fitness: ev.fitness_score, count: 1, elapsed: iter.elapsed_secs ?? 0,
+          f1_macro: iter.best_f1 ?? null, fpr: iter.best_fpr ?? null,
         });
       }
 
@@ -1440,7 +1441,12 @@
                   <th>Rank</th>
                   <th>Neurons</th>
                   <th>Bits</th>
-                  <th>CE</th>
+                  {#if isIDS}
+                    <th>F1</th>
+                    <th>FPR</th>
+                  {:else}
+                    <th>CE</th>
+                  {/if}
                   <th>Accuracy</th>
                   <th>Fitness</th>
                   <th>Time</th>
@@ -1457,7 +1463,12 @@
                     </td>
                     <td class="mono">{r.neurons.toLocaleString()}</td>
                     <td class="mono">{r.bits}</td>
-                    <td class="mono">{r.ce.toFixed(4)}</td>
+                    {#if isIDS}
+                      <td class="mono">{r.f1_macro != null ? (r.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
+                      <td class="mono">{r.fpr != null ? (r.fpr * 100).toFixed(3) + '%' : '—'}</td>
+                    {:else}
+                      <td class="mono">{r.ce.toFixed(4)}</td>
+                    {/if}
                     <td class="mono">{(r.accuracy * 100).toFixed(2)}%</td>
                     <td class="mono">{r.fitness !== null ? r.fitness.toFixed(4) : '—'}</td>
                     <td class="mono">{r.elapsed ? r.elapsed.toFixed(1) + 's' : '—'}</td>
@@ -1482,8 +1493,12 @@
             <span class="gating-title">Seeded Population{#if !seedEvalComplete} (evaluating...){/if}</span>
             <span class="gating-meta">
               {expandedPopulation.length} genomes{#if !seedEvalComplete}&nbsp;so far{/if} &middot;
-              Best CE: {bestCeGenome.ce.toFixed(4)} ({bestCeGenome.neurons}n {bestCeGenome.bits}b) &middot;
-              Best Acc: {(bestAccGenome.accuracy * 100).toFixed(2)}% ({bestAccGenome.neurons}n {bestAccGenome.bits}b)
+              {#if isIDS}
+                Best Acc: {(bestAccGenome.accuracy * 100).toFixed(2)}% ({bestAccGenome.neurons}n {bestAccGenome.bits}b)
+              {:else}
+                Best CE: {bestCeGenome.ce.toFixed(4)} ({bestCeGenome.neurons}n {bestCeGenome.bits}b) &middot;
+                Best Acc: {(bestAccGenome.accuracy * 100).toFixed(2)}% ({bestAccGenome.neurons}n {bestAccGenome.bits}b)
+              {/if}
             </span>
           </div>
 
@@ -1494,7 +1509,7 @@
                   <th>#</th>
                   <th>Neurons</th>
                   <th>Bits</th>
-                  <th>CE</th>
+                  {#if !isIDS}<th>CE</th>{/if}
                   <th>Accuracy</th>
                   <th>Fitness</th>
                 </tr>
@@ -1505,7 +1520,7 @@
                     <td class="mono">{g.rank}</td>
                     <td class="mono">{g.neurons.toLocaleString()}</td>
                     <td class="mono">{g.bits}</td>
-                    <td class="mono">{g.ce.toFixed(4)}</td>
+                    {#if !isIDS}<td class="mono">{g.ce.toFixed(4)}</td>{/if}
                     <td class="mono">{(g.accuracy * 100).toFixed(2)}%</td>
                     <td class="mono">{g.fitness !== null ? g.fitness.toFixed(4) : '—'}</td>
                   </tr>
