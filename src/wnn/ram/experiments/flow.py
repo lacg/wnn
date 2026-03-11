@@ -183,6 +183,7 @@ class FlowConfig:
 	max_bits: int = 24
 	min_neurons: int = 10
 	max_neurons: int = 300
+	max_bit_delta: int = 0  # Max bits change per mutation (0 = auto)
 	sparse_threshold: Optional[int] = None
 
 	# Multi-stage specific config
@@ -950,6 +951,12 @@ class Flow:
 		"""
 		cfg = self.config
 		start_time = time.time()
+
+		# Propagate max_bit_delta to evaluators (controls bit mutation step size)
+		if cfg.max_bit_delta > 0:
+			self.evaluator._max_bit_delta = cfg.max_bit_delta
+			if self.full_evaluator:
+				self.full_evaluator._max_bit_delta = cfg.max_bit_delta
 
 		# Handle empty flow gracefully — complete immediately
 		if not cfg.experiments:

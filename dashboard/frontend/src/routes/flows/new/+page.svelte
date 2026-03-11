@@ -28,6 +28,7 @@
   let idsMaxBits = 14;
   let idsMinNeurons = 5;
   let idsMaxNeurons = 300;
+  let idsMaxBitDelta = 0;
 
   // Multi-stage config
   let numStages = 1;
@@ -708,6 +709,7 @@
         params.max_bits = idsMaxBits;
         params.min_neurons = idsMinNeurons;
         params.max_neurons = idsMaxNeurons;
+        if (idsMaxBitDelta > 0) params.max_bit_delta = idsMaxBitDelta;
       } else if (isBitwise) {
         params.architecture_type = 'bitwise';
         params.num_clusters = bitwiseNumClusters;
@@ -1049,6 +1051,7 @@
               <option value="harmonic_rank">Harmonic Rank</option>
               <option value="normalized_harmonic">Normalized Harmonic</option>
               <option value="ids_security">IDS Security: F1 × (1−FPR)²</option>
+              <option value="ids_recall">IDS Recall: F1 × (1−FPR)¹</option>
               <option value="ce">CE Only</option>
             </select>
           </div>
@@ -1254,6 +1257,13 @@
                   <label for="idsMaxNeurons">Max Neurons</label>
                   <input type="number" id="idsMaxNeurons" bind:value={idsMaxNeurons} min="1" max="500" />
                   <span class="field-hint">Max neurons per class</span>
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="idsMaxBitDelta">Max Bit Delta</label>
+                  <input type="number" id="idsMaxBitDelta" bind:value={idsMaxBitDelta} min="0" max="16" />
+                  <span class="field-hint">0 = auto (~10% of range). Limits bit jumps per mutation to prevent overfitting</span>
                 </div>
               </div>
             </div>

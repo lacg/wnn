@@ -505,6 +505,7 @@ class FlowWorker:
                 flow_config.stage_max_bits_list = params.get("stage_max_bits")
                 flow_config.stage_min_neurons_list = params.get("stage_min_neurons")
                 flow_config.stage_max_neurons_list = params.get("stage_max_neurons")
+                flow_config.max_bit_delta = params.get("max_bit_delta", 0)
 
             # Handle seed checkpoint
             seed_checkpoint_id = flow_data.get("seed_checkpoint_id")

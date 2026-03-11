@@ -156,6 +156,9 @@ class AdaptiveClusterConfig:
 	bits_mutation_step: int = 1
 	"""How much to change bits per mutation (+/- this value)"""
 
+	max_bit_delta: int = 0
+	"""Max bits change per mutation (0 = auto: ~10% of bit range). Caps overfitting jumps."""
+
 	# Mutation rates (Phase 2: neurons)
 	neurons_mutation_rate: float = 0.05
 	"""Probability of mutating neuron count for a cluster"""
@@ -527,7 +530,10 @@ class ClusterGenome:
 		total_input_bits: int, rng: random.Random,
 	) -> ClusterGenome:
 		"""Bits phase: change bit counts per neuron. No drift on existing connections."""
-		bits_delta_max = max(1, round(0.1 * (config.min_bits + config.max_bits)))
+		if config.max_bit_delta > 0:
+			bits_delta_max = config.max_bit_delta
+		else:
+			bits_delta_max = max(1, round(0.1 * (config.min_bits + config.max_bits)))
 		new_neurons = self.neurons_per_cluster.copy()  # unchanged
 		new_bits = self.bits_per_neuron.copy()
 		conn_off = self.connection_offsets

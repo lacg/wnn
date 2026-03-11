@@ -399,6 +399,7 @@ class BaseEvaluator(ABC):
 		config = AdaptiveClusterConfig(
 			min_bits=min_bits, max_bits=max_bits,
 			min_neurons=min_neurons, max_neurons=max_neurons,
+			max_bit_delta=getattr(self, '_max_bit_delta', 0),
 		)
 		return genome.mutate(pt, rate, config, self.total_input_bits, rng)
 
