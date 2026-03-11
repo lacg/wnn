@@ -496,6 +496,15 @@ class FlowWorker:
                 flow_config.ids_k_folds = params.get("ids_k_folds", 5)
                 flow_config.ids_fitness_weight_f1 = params.get("ids_fitness_weight_f1", 0.0)
                 flow_config.ids_split = params.get("ids_split", "standard")
+                # Global and per-stage bounds (shared with bitwise/multi_stage)
+                flow_config.min_bits = params.get("min_bits", 4)
+                flow_config.max_bits = params.get("max_bits", 24)
+                flow_config.min_neurons = params.get("min_neurons", 5)
+                flow_config.max_neurons = params.get("max_neurons", 300)
+                flow_config.stage_min_bits_list = params.get("stage_min_bits")
+                flow_config.stage_max_bits_list = params.get("stage_max_bits")
+                flow_config.stage_min_neurons_list = params.get("stage_min_neurons")
+                flow_config.stage_max_neurons_list = params.get("stage_max_neurons")
 
             # Handle seed checkpoint
             seed_checkpoint_id = flow_data.get("seed_checkpoint_id")
