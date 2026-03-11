@@ -484,7 +484,8 @@ class FlowWorker:
                 flow_config.ids_classification = params.get("ids_classification", "binary")
                 flow_config.ids_n_bits = params.get("ids_n_bits", 8)
                 flow_config.ids_val_fraction = params.get("ids_val_fraction", 0.25)
-                flow_config.ids_num_parts = params.get("ids_num_parts", 3)
+                flow_config.ids_num_parts = params.get("ids_num_parts", 5)
+                flow_config.ids_k_folds = params.get("ids_k_folds", 5)
                 flow_config.ids_fitness_weight_f1 = params.get("ids_fitness_weight_f1", 0.0)
                 flow_config.ids_split = params.get("ids_split", "standard")
 
@@ -769,7 +770,8 @@ class FlowWorker:
         classification = params.get("ids_classification", "binary")
         n_bits = params.get("ids_n_bits", 8)
         val_fraction = params.get("ids_val_fraction", 0.25)
-        num_parts = params.get("ids_num_parts", 3)
+        num_parts = params.get("ids_num_parts", 5)
+        k_folds = params.get("ids_k_folds", 5)
         split = params.get("ids_split", "standard")
         seed = params.get("seed", 42)
 
@@ -788,13 +790,15 @@ class FlowWorker:
             full_dataset, val_fraction=val_fraction, seed=seed,
         )
 
-        # Optimizer evaluator: 131K train (3-part rotation), 44K validation for fitness
+        # Optimizer evaluator: train (K-fold or subset rotation), validation for fitness
+        kfold_label = f", k_folds={k_folds}" if k_folds > 1 else ""
         self._log(f"Creating optimizer IDSEvaluator ({len(train_val_dataset.X_train):,} train / "
-                   f"{len(train_val_dataset.X_test):,} eval, {num_parts} parts)...")
+                   f"{len(train_val_dataset.X_test):,} eval, {num_parts} parts{kfold_label})...")
         optimizer_eval = IDSEvaluator(
             dataset=train_val_dataset,
             classification=classification,
             num_parts=num_parts,
+            k_folds=k_folds,
         )
 
         # Test evaluator: full 175K train, 82K test (for overfitting monitoring + final reporting)

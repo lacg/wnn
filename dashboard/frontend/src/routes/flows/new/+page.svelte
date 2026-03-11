@@ -21,7 +21,8 @@
   let idsClassification = 'binary';
   let idsNBits = 8;
   let idsValFraction = 0.25;
-  let idsNumParts = 3;
+  let idsNumParts = 5;
+  let idsKFolds = 5;
   let idsFitnessWeightF1 = 0.0;
   let idsSplit = 'standard';
 
@@ -274,13 +275,14 @@
       neighborsPerIter = 150;
       patience = 5;
       fitnessPercentile = 0.75;
-      fitnessCalculator = 'normalized';
+      fitnessCalculator = 'ids_security';
       fitnessWeightCe = 0.3;
       fitnessWeightAcc = 1.0;
       idsClassification = 'binary';
       idsNBits = 8;
       idsValFraction = 0.25;
-      idsNumParts = 3;
+      idsNumParts = 5;
+      idsKFolds = 5;
       idsFitnessWeightF1 = 0.0;
       idsSplit = 'standard';
     } else if (templateName === 'ids-multi-7-phase') {
@@ -290,13 +292,14 @@
       neighborsPerIter = 150;
       patience = 5;
       fitnessPercentile = 0.75;
-      fitnessCalculator = 'normalized';
+      fitnessCalculator = 'ids_security';
       fitnessWeightCe = 0.3;
       fitnessWeightAcc = 1.0;
       idsClassification = 'multi';
       idsNBits = 8;
       idsValFraction = 0.25;
-      idsNumParts = 3;
+      idsNumParts = 5;
+      idsKFolds = 5;
       idsFitnessWeightF1 = 0.0;
       idsSplit = 'standard';
     } else if (templateName === 'ids-binary-10-phase') {
@@ -307,13 +310,14 @@
       neighborsPerIter = 150;
       patience = 5;
       fitnessPercentile = 0.75;
-      fitnessCalculator = 'normalized';
+      fitnessCalculator = 'ids_security';
       fitnessWeightCe = 0.3;
       fitnessWeightAcc = 1.0;
       idsClassification = 'binary';
       idsNBits = 8;
       idsValFraction = 0.25;
-      idsNumParts = 3;
+      idsNumParts = 5;
+      idsKFolds = 5;
       idsFitnessWeightF1 = 0.0;
       idsSplit = 'standard';
     } else if (templateName === 'ids-multi-10-phase') {
@@ -324,13 +328,14 @@
       neighborsPerIter = 150;
       patience = 5;
       fitnessPercentile = 0.75;
-      fitnessCalculator = 'normalized';
+      fitnessCalculator = 'ids_security';
       fitnessWeightCe = 0.3;
       fitnessWeightAcc = 1.0;
       idsClassification = 'multi';
       idsNBits = 8;
       idsValFraction = 0.25;
-      idsNumParts = 3;
+      idsNumParts = 5;
+      idsKFolds = 5;
       idsFitnessWeightF1 = 0.0;
       idsSplit = 'standard';
     }
@@ -688,6 +693,7 @@
         params.ids_n_bits = idsNBits;
         params.ids_val_fraction = idsValFraction;
         params.ids_num_parts = idsNumParts;
+        params.ids_k_folds = idsKFolds;
         params.ids_fitness_weight_f1 = idsFitnessWeightF1;
         params.ids_split = idsSplit;
       } else if (isBitwise) {
@@ -1030,6 +1036,7 @@
               <option value="normalized">Normalized (Recommended)</option>
               <option value="harmonic_rank">Harmonic Rank</option>
               <option value="normalized_harmonic">Normalized Harmonic</option>
+              <option value="ids_security">IDS Security: F1 × (1−FPR)²</option>
               <option value="ce">CE Only</option>
             </select>
           </div>
@@ -1201,9 +1208,16 @@
               <div class="form-row">
                 <div class="form-group">
                   <label for="idsNumParts">Training Parts</label>
-                  <input type="number" id="idsNumParts" bind:value={idsNumParts} min="1" max="5" />
-                  <span class="field-hint">Rotation subsets for training data</span>
+                  <input type="number" id="idsNumParts" bind:value={idsNumParts} min="1" max="10" />
+                  <span class="field-hint">Stratified data partitions</span>
                 </div>
+                <div class="form-group">
+                  <label for="idsKFolds">K-Fold CV</label>
+                  <input type="number" id="idsKFolds" bind:value={idsKFolds} min="1" max="10" />
+                  <span class="field-hint">K-fold cross-validation (1 = off, 5 = default)</span>
+                </div>
+              </div>
+              <div class="form-row">
                 <div class="form-group">
                   <label for="idsFitnessWeightF1">F1 Weight</label>
                   <input type="number" id="idsFitnessWeightF1" bind:value={idsFitnessWeightF1} min="0" max="5" step="0.1" />
