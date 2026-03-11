@@ -297,8 +297,32 @@ pub fn compute_f1_fpr(predictions: &[u32], targets: &[i64], num_classes: usize) 
     if num_active_classes == 0 {
         (0.0, 0.0)
     } else {
-        let n = num_active_classes as f64;
-        (f1_sum / n, fpr_sum / n)
+        let f1_macro = f1_sum / num_active_classes as f64;
+
+        // For binary classification (IDS): return the false alarm rate of the
+        // positive class (class 1) instead of macro-averaged FPR.  This is the
+        // standard IDS metric: fraction of normal traffic falsely flagged.
+        // For multi-class, keep macro-average (no single "binary FPR" exists).
+        let fpr = if num_classes == 2 {
+            // FPR of class 1 = normals predicted as attack / all normals
+            let fp_1: f64 = (0..num_classes)
+                .filter(|&t| t != 1)
+                .map(|t| confusion[t * num_classes + 1] as f64)
+                .sum();
+            let tn_1 = {
+                let tp_1 = confusion[1 * num_classes + 1] as f64;
+                let fn_1: f64 = (0..num_classes)
+                    .filter(|&p| p != 1)
+                    .map(|p| confusion[1 * num_classes + p] as f64)
+                    .sum();
+                total - tp_1 - fp_1 - fn_1
+            };
+            if fp_1 + tn_1 > 0.0 { fp_1 / (fp_1 + tn_1) } else { 0.0 }
+        } else {
+            fpr_sum / num_active_classes as f64
+        };
+
+        (f1_macro, fpr)
     }
 }
 
