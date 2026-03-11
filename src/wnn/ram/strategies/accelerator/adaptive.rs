@@ -299,27 +299,18 @@ pub fn compute_f1_fpr(predictions: &[u32], targets: &[i64], num_classes: usize) 
     } else {
         let f1_macro = f1_sum / num_active_classes as f64;
 
-        // For binary classification (IDS): return the false alarm rate of the
-        // positive class (class 1) instead of macro-averaged FPR.  This is the
-        // standard IDS metric: fraction of normal traffic falsely flagged.
-        // For multi-class, keep macro-average (no single "binary FPR" exists).
-        let fpr = if num_classes == 2 {
-            // FPR of class 1 = normals predicted as attack / all normals
-            let fp_1: f64 = (0..num_classes)
-                .filter(|&t| t != 1)
-                .map(|t| confusion[t * num_classes + 1] as f64)
-                .sum();
-            let tn_1 = {
-                let tp_1 = confusion[1 * num_classes + 1] as f64;
-                let fn_1: f64 = (0..num_classes)
-                    .filter(|&p| p != 1)
-                    .map(|p| confusion[1 * num_classes + p] as f64)
-                    .sum();
-                total - tp_1 - fp_1 - fn_1
-            };
-            if fp_1 + tn_1 > 0.0 { fp_1 / (fp_1 + tn_1) } else { 0.0 }
+        // IDS FPR: fraction of Normal (class 0) samples misclassified as any
+        // attack class.  Same formula for binary and multi-class — class 0 is
+        // always Normal in UNSW-NB15.
+        //   FPR = (Normal predicted as non-Normal) / (all Normal samples)
+        let normal_total: f64 = (0..num_classes)
+            .map(|p| confusion[0 * num_classes + p] as f64)
+            .sum();
+        let normal_correct = confusion[0] as f64;  // confusion[0*K + 0] = TN
+        let fpr = if normal_total > 0.0 {
+            (normal_total - normal_correct) / normal_total
         } else {
-            fpr_sum / num_active_classes as f64
+            0.0
         };
 
         (f1_macro, fpr)

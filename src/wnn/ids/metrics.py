@@ -75,26 +75,14 @@ def compute_ids_metrics(
 		result["f1_weighted"] = f1_weighted
 		result["class_weights"] = [float(w) for w in weights]
 
-	# FPR: binary → false alarm rate; multi-class → macro-average
+	# IDS FPR: Normal (class 0) samples misclassified as any attack class.
+	# Same formula for binary and multi-class — class 0 is always Normal.
+	normal_total = float(cm[0].sum())
+	normal_correct = float(cm[0, 0])
+	result["fpr"] = float((normal_total - normal_correct) / normal_total) if normal_total > 0 else 0.0
 	if num_classes == 2 and cm.shape == (2, 2):
 		tn, fp, fn, tp = cm.ravel()
-		result["fpr"] = float(fp / (fp + tn)) if (fp + tn) > 0 else 0.0
 		result["fnr"] = float(fn / (fn + tp)) if (fn + tp) > 0 else 0.0
-	elif num_classes > 2:
-		# Macro-averaged FPR across all classes
-		fpr_sum = 0.0
-		n_active = 0
-		total = float(cm.sum())
-		for c in range(num_classes):
-			tp_c = float(cm[c, c])
-			fp_c = float(cm[:, c].sum() - tp_c)
-			fn_c = float(cm[c, :].sum() - tp_c)
-			if tp_c + fn_c == 0:
-				continue
-			tn_c = total - tp_c - fp_c - fn_c
-			fpr_sum += fp_c / (fp_c + tn_c) if (fp_c + tn_c) > 0 else 0.0
-			n_active += 1
-		result["fpr"] = float(fpr_sum / n_active) if n_active > 0 else 0.0
 
 	return result
 
