@@ -21,7 +21,6 @@
   let idsClassification = 'binary';
   let idsNBits = 8;
   let idsValFraction = 0.25;
-  let idsNumParts = 5;
   let idsKFolds = 5;
   let idsFitnessWeightF1 = 0.0;
   let idsSplit = 'standard';
@@ -281,7 +280,6 @@
       idsClassification = 'binary';
       idsNBits = 8;
       idsValFraction = 0.25;
-      idsNumParts = 5;
       idsKFolds = 5;
       idsFitnessWeightF1 = 0.0;
       idsSplit = 'standard';
@@ -295,10 +293,9 @@
       fitnessCalculator = 'ids_security';
       fitnessWeightCe = 0.3;
       fitnessWeightAcc = 1.0;
-      idsClassification = 'multi';
+      idsClassification = 'multi_tiered';
       idsNBits = 8;
       idsValFraction = 0.25;
-      idsNumParts = 5;
       idsKFolds = 5;
       idsFitnessWeightF1 = 0.0;
       idsSplit = 'standard';
@@ -316,7 +313,6 @@
       idsClassification = 'binary';
       idsNBits = 8;
       idsValFraction = 0.25;
-      idsNumParts = 5;
       idsKFolds = 5;
       idsFitnessWeightF1 = 0.0;
       idsSplit = 'standard';
@@ -331,10 +327,9 @@
       fitnessCalculator = 'ids_security';
       fitnessWeightCe = 0.3;
       fitnessWeightAcc = 1.0;
-      idsClassification = 'multi';
+      idsClassification = 'multi_tiered';
       idsNBits = 8;
       idsValFraction = 0.25;
-      idsNumParts = 5;
       idsKFolds = 5;
       idsFitnessWeightF1 = 0.0;
       idsSplit = 'standard';
@@ -689,10 +684,13 @@
         }
       } else if (isIDS) {
         params.architecture_type = 'ids';
-        params.ids_classification = idsClassification;
+        // Split combined classification into classification + ids_arch_type
+        const isBitwiseIds = idsClassification === 'multi_bitwise';
+        params.ids_classification = idsClassification === 'binary' ? 'binary' : 'multi';
+        params.ids_arch_type = isBitwiseIds ? 'bitwise' : 'tiered';
         params.ids_n_bits = idsNBits;
         params.ids_val_fraction = idsValFraction;
-        params.ids_num_parts = idsNumParts;
+        params.ids_num_parts = idsKFolds > 1 ? idsKFolds : 3;
         params.ids_k_folds = idsKFolds;
         params.ids_fitness_weight_f1 = idsFitnessWeightF1;
         params.ids_split = idsSplit;
@@ -1181,8 +1179,15 @@
                   <label for="idsClassification">Classification</label>
                   <select id="idsClassification" bind:value={idsClassification}>
                     <option value="binary">Binary (attack vs normal)</option>
-                    <option value="multi">Multi-class (10 categories)</option>
+                    <option value="multi_tiered">Multi-class Tiered (10 categories)</option>
+                    <option value="multi_bitwise">Multi-class Bitwise (10 categories)</option>
                   </select>
+                  <span class="field-hint">
+                    {#if idsClassification === 'binary'}2 classes — tiered architecture
+                    {:else if idsClassification === 'multi_tiered'}10 classes — frequency-based tier allocation
+                    {:else}10 classes — per-cluster independent bits/neurons
+                    {/if}
+                  </span>
                 </div>
                 <div class="form-group">
                   <label for="idsSplit">Data Split</label>
@@ -1207,14 +1212,9 @@
               </div>
               <div class="form-row">
                 <div class="form-group">
-                  <label for="idsNumParts">Training Parts</label>
-                  <input type="number" id="idsNumParts" bind:value={idsNumParts} min="1" max="10" />
-                  <span class="field-hint">Stratified data partitions</span>
-                </div>
-                <div class="form-group">
                   <label for="idsKFolds">K-Fold CV</label>
                   <input type="number" id="idsKFolds" bind:value={idsKFolds} min="1" max="10" />
-                  <span class="field-hint">K-fold cross-validation (1 = off, 5 = default)</span>
+                  <span class="field-hint">1 = off, 5 = default (also sets data partitions)</span>
                 </div>
               </div>
               <div class="form-row">

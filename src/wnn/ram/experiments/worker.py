@@ -482,6 +482,7 @@ class FlowWorker:
             # Add IDS-specific config
             if is_ids:
                 flow_config.ids_classification = params.get("ids_classification", "binary")
+                flow_config.ids_arch_type = params.get("ids_arch_type", "tiered")
                 flow_config.ids_n_bits = params.get("ids_n_bits", 8)
                 flow_config.ids_val_fraction = params.get("ids_val_fraction", 0.25)
                 flow_config.ids_num_parts = params.get("ids_num_parts", 5)
