@@ -793,6 +793,8 @@ class FlowWorker:
         k_folds = params.get("ids_k_folds", 5)
         split = params.get("ids_split", "standard")
         seed = params.get("seed", 42)
+        neuron_sample_rate = params.get("neuron_sample_rate", 0.25)
+        balance_classes = params.get("balance_classes", False)
 
         self._log(f"Loading UNSW-NB15 dataset (classification={classification}, split={split})...")
         full_dataset = load_unsw_nb15(n_bits=n_bits, split=split)
@@ -818,20 +820,26 @@ class FlowWorker:
         kfold_label = f", k_folds={k_folds}" if k_folds > 1 else ""
         self._log(f"Creating optimizer IDSEvaluator ({len(train_val_dataset.X_train):,} train / "
                    f"{len(train_val_dataset.X_test):,} eval, {num_parts} parts{kfold_label})...")
+        balance_label = ", balanced" if balance_classes else ""
+        self._log(f"  neuron_sample_rate={neuron_sample_rate}, balance_classes={balance_classes}")
         optimizer_eval = IDSEvaluator(
             dataset=train_val_dataset,
             classification=classification,
             num_parts=num_parts,
             k_folds=k_folds,
+            neuron_sample_rate=neuron_sample_rate,
+            balance_classes=balance_classes,
         )
 
         # Test evaluator: full 175K train, 82K test (for overfitting monitoring + final reporting)
         self._log(f"Creating test IDSEvaluator ({len(test_dataset.X_train):,} train / "
-                   f"{len(test_dataset.X_test):,} eval, 1 part)...")
+                   f"{len(test_dataset.X_test):,} eval, 1 part{balance_label})...")
         test_eval = IDSEvaluator(
             dataset=test_dataset,
             classification=classification,
             num_parts=1,
+            neuron_sample_rate=neuron_sample_rate,
+            balance_classes=balance_classes,
         )
 
         return optimizer_eval, test_eval
@@ -856,9 +864,13 @@ class FlowWorker:
         kfold_label = f", k_folds={k_folds}" if k_folds > 1 else ""
         self._log(f"  S0 optimizer: {len(s0_train_val.X_train):,} train / {len(s0_train_val.X_test):,} eval, "
                    f"{num_parts} parts{kfold_label}")
-        s0_opt = IDSEvaluator(dataset=s0_train_val, classification="binary", num_parts=num_parts, k_folds=k_folds)
+        neuron_sample_rate = params.get("neuron_sample_rate", 0.25)
+        balance_classes = params.get("balance_classes", False)
+        s0_opt = IDSEvaluator(dataset=s0_train_val, classification="binary", num_parts=num_parts, k_folds=k_folds,
+                              neuron_sample_rate=neuron_sample_rate, balance_classes=balance_classes)
         self._log(f"  S0 test: {len(s0_test_ds.X_train):,} train / {len(s0_test_ds.X_test):,} eval")
-        s0_test = IDSEvaluator(dataset=s0_test_ds, classification="binary", num_parts=1)
+        s0_test = IDSEvaluator(dataset=s0_test_ds, classification="binary", num_parts=1,
+                               neuron_sample_rate=neuron_sample_rate, balance_classes=balance_classes)
 
         # ── S1: Attack types (attack flows only) ──
         self._log("── S1: Attack Classification (9 types) ──")
@@ -869,10 +881,12 @@ class FlowWorker:
 
         self._log(f"  S1 optimizer: {len(s1_train_val.X_train):,} train / {len(s1_train_val.X_test):,} eval, "
                    f"{num_parts} parts{kfold_label}")
-        s1_opt = IDSEvaluator(dataset=s1_train_val, classification="multi", num_parts=num_parts, k_folds=k_folds)
+        s1_opt = IDSEvaluator(dataset=s1_train_val, classification="multi", num_parts=num_parts, k_folds=k_folds,
+                              neuron_sample_rate=neuron_sample_rate, balance_classes=balance_classes)
         self._log(f"  S1 test: {len(s1_test_ds.X_train):,} train / {len(s1_test_ds.X_test):,} eval, "
                    f"Classes: {num_attack_classes}")
-        s1_test = IDSEvaluator(dataset=s1_test_ds, classification="multi", num_parts=1)
+        s1_test = IDSEvaluator(dataset=s1_test_ds, classification="multi", num_parts=1,
+                               neuron_sample_rate=neuron_sample_rate, balance_classes=balance_classes)
 
         return s0_opt, s0_test, s1_opt, s1_test
 

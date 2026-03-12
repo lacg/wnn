@@ -2985,6 +2985,7 @@ pub fn evaluate_tiered_genomes(
         empty_value,
         neuron_sample_rate,
         rng_seed,
+        None, // class_weights: multi-stage LM path doesn't use class balancing
     )
 }
 
@@ -3106,6 +3107,7 @@ pub fn train_and_get_tiered_scores(
         neuron_sample_rate,
         rng_seed,
         memory_mode,
+        None, // class_weights: multi-stage LM path doesn't use class balancing
     );
 
     // Evaluate — build per-example scores

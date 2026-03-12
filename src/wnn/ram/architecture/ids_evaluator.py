@@ -42,8 +42,9 @@ class IDSEvaluator(BaseEvaluator):
 		empty_value: float = 0.0,
 		seed: Optional[int] = None,
 		log_path: Optional[str] = None,
-		neuron_sample_rate: float = 1.0,
+		neuron_sample_rate: float = 0.25,
 		k_folds: int = 1,  # 1 = no k-fold (original behavior), >1 = K-fold CV
+		balance_classes: bool = False,
 	):
 		if classification == "binary":
 			y_train = dataset.y_train_binary
@@ -107,6 +108,7 @@ class IDSEvaluator(BaseEvaluator):
 			num_parts=num_parts,
 			num_negatives=num_negatives,
 			seed=self._seed,
+			balance_classes=balance_classes,
 		)
 
 		self._train_call_count = 0

@@ -550,6 +550,7 @@ pub fn evaluate_genomes_cached_hybrid(
         empty_value,
         neuron_sample_rate,
         rng_seed,
+        None, // class_weights: LM path doesn't use class balancing
     )
 }
 
@@ -585,6 +586,7 @@ pub fn evaluate_genomes_cached_full_hybrid(
         empty_value,
         neuron_sample_rate,
         rng_seed,
+        None, // class_weights: LM path doesn't use class balancing
     )
 }
 

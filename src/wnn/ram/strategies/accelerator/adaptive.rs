@@ -1728,6 +1728,7 @@ pub fn evaluate_genomes_parallel(
             neuron_sample_rate,
             rng_seed.wrapping_add(genome_idx as u64),
             memory_mode,
+            None, // class_weights: only used by IDS via evaluate_genomes_parallel_hybrid
         );
 
         // Evaluate this genome - HYBRID Metal/CPU acceleration
@@ -2180,6 +2181,28 @@ fn get_available_memory_gb() -> f64 {
     64.0
 }
 
+/// Compute per-class weights for balanced training: max_count / count.
+///
+/// Given class labels and number of classes, returns a Vec<u32> where each entry
+/// is the integer weight for that class index. Minority classes get higher weights
+/// to counteract the effect of class imbalance on address saturation.
+///
+/// Example: labels with 119K attack (class 1) and 56K normal (class 0)
+///   → weights = [2, 1] (119K/56K ≈ 2, 119K/119K = 1)
+pub fn compute_class_weights(labels: &[i64], num_classes: usize) -> Vec<u32> {
+    let mut counts = vec![0u64; num_classes];
+    for &label in labels {
+        let c = label as usize;
+        if c < num_classes {
+            counts[c] += 1;
+        }
+    }
+    let max_count = *counts.iter().max().unwrap_or(&1);
+    counts.iter().map(|&c| {
+        if c == 0 { 1 } else { (max_count / c).max(1) as u32 }
+    }).collect()
+}
+
 /// Train a genome using the given memory slot.
 /// When `gpu_addresses` is Some, uses pre-computed GPU addresses instead of CPU compute_address().
 /// GPU address layout: addresses[global_neuron_idx * num_train + example_idx].
@@ -2201,6 +2224,7 @@ pub(crate) fn train_genome_in_slot(
     neuron_sample_rate: f32,
     rng_seed: u64,
     memory_mode: u8,
+    class_weights: Option<&[u32]>,
 ) {
     let use_sampling = neuron_sample_rate < 1.0;
     let use_nudge = memory_mode != crate::neuron_memory::MODE_TERNARY;
@@ -2255,8 +2279,11 @@ pub(crate) fn train_genome_in_slot(
                     let conn_start = neuron_conn_offsets[global_n];
                     compute_address(input_bits, &original_connections[conn_start..], n_bits)
                 };
+                let repeats = class_weights.map_or(1u32, |w| w[true_cluster]);
                 if use_nudge {
-                    memory.nudge(neuron_base + n, address, true);
+                    for _ in 0..repeats {
+                        memory.nudge(neuron_base + n, address, true);
+                    }
                 } else {
                     memory.write(neuron_base + n, address, TRUE, false);
                 }
@@ -2307,8 +2334,13 @@ pub(crate) fn train_genome_in_slot(
                     let conn_start = neuron_conn_offsets[global_n];
                     compute_address(input_bits, &original_connections[conn_start..], n_bits)
                 };
+                // For negative nudges, weight by the TRUE class of the example
+                // (the example "belongs to" true_cluster, so its weight applies)
+                let repeats = class_weights.map_or(1u32, |w| w[true_cluster]);
                 if use_nudge {
-                    memory.nudge(neuron_base + n, address, false);
+                    for _ in 0..repeats {
+                        memory.nudge(neuron_base + n, address, false);
+                    }
                 } else {
                     memory.write(neuron_base + n, address, FALSE, false);
                 }
@@ -2879,6 +2911,7 @@ pub fn train_and_predict_single(
     empty_value: f32,
     neuron_sample_rate: f32,
     rng_seed: u64,
+    class_weights: Option<&[u32]>,
 ) -> Vec<i64> {
     let memory_mode = crate::neuron_memory::get_memory_mode();
 
@@ -2936,6 +2969,7 @@ pub fn train_and_predict_single(
         neuron_sample_rate,
         rng_seed,
         memory_mode,
+        class_weights,
     );
 
     // Export and predict
@@ -2996,6 +3030,7 @@ pub fn evaluate_genomes_parallel_hybrid(
     empty_value: f32,
     neuron_sample_rate: f32,
     rng_seed: u64,
+    class_weights: Option<&[u32]>,
 ) -> Vec<(f64, f64, f64, f64)> {
     let memory_mode = crate::neuron_memory::get_memory_mode();
     if num_genomes == 0 {
@@ -3196,6 +3231,7 @@ pub fn evaluate_genomes_parallel_hybrid(
                     neuron_sample_rate,
                     rng_seed.wrapping_add(genome_idx as u64),
                     memory_mode,
+                    class_weights,
                 );
 
                 // Build GPU-padded connections (per-neuron → group layout with padding)
@@ -3806,6 +3842,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
             num_train, num_negatives,
             eval_input_bits, eval_targets, num_eval,
             total_input_bits, empty_value, neuron_sample_rate, rng_seed,
+            None, // class_weights: adaptive path doesn't use class balancing
         );
 
         // Rebuild per-genome bits/neurons/connections from flat arrays
@@ -3958,6 +3995,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
                     num_train, num_negatives, total_input_bits,
                     gpu_addresses.as_deref(), neuron_sample_rate,
                     rng_seed.wrapping_add(genome_idx as u64), memory_mode,
+                    None, // class_weights: adaptive path doesn't use class balancing
                 );
                 TrainedState {
                     memories, groups, cluster_to_group, cluster_neuron_starts,
@@ -4102,6 +4140,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
                         num_train, num_negatives, total_input_bits,
                         gpu_addresses.as_deref(), neuron_sample_rate,
                         rng_seed.wrapping_add(adapted.genome_idx as u64), memory_mode,
+                        None, // class_weights: adaptive path doesn't use class balancing
                     );
                     let gpu_conns = reorganize_connections_for_gpu(
                         &adapted.connections, &adapted.bits, &adapted.neurons, &groups,

@@ -48,6 +48,9 @@ pub struct IDSCache {
     // Rotator for train subsets
     train_rotator: SubsetRotator,
 
+    // Class weights for balanced training (None = unweighted)
+    class_weights: Option<Vec<u32>>,
+
     // Live progress for observer thread
     pub live_progress: Arc<RwLock<Option<LiveProgress>>>,
 }
@@ -75,6 +78,7 @@ impl IDSCache {
         num_parts: usize,
         num_negatives: usize,
         seed: u64,
+        balance_classes: bool,
     ) -> Self {
         let num_train = train_labels.len();
         let num_eval = eval_labels.len();
@@ -102,6 +106,13 @@ impl IDSCache {
             num_negatives, num_parts, seed,
         );
 
+        // Compute class weights: max_count / count per class (upweights minority)
+        let class_weights = if balance_classes {
+            Some(crate::adaptive::compute_class_weights(&train_labels, num_classes))
+        } else {
+            None
+        };
+
         Self {
             num_classes,
             total_features,
@@ -110,6 +121,7 @@ impl IDSCache {
             train_subsets,
             full_train,
             full_eval,
+            class_weights,
             train_rotator: SubsetRotator::new(num_parts, seed + 100),
             live_progress: Arc::new(RwLock::new(None)),
         }
@@ -332,6 +344,7 @@ pub fn evaluate_genomes_ids_cached_hybrid(
         empty_value,
         neuron_sample_rate,
         rng_seed,
+        cache.class_weights.as_deref(),
     )
 }
 
@@ -440,6 +453,7 @@ pub fn evaluate_genomes_ids_kfold_hybrid(
         empty_value,
         neuron_sample_rate,
         rng_seed,
+        cache.class_weights.as_deref(),
     )
 }
 
@@ -475,6 +489,7 @@ pub fn evaluate_genomes_ids_cached_full_hybrid(
         empty_value,
         neuron_sample_rate,
         rng_seed,
+        cache.class_weights.as_deref(),
     )
 }
 
@@ -510,6 +525,7 @@ pub fn predict_examples_ids_cached(
         empty_value,
         neuron_sample_rate,
         rng_seed,
+        cache.class_weights.as_deref(),
     )
 }
 
@@ -589,6 +605,7 @@ mod tests {
             2,  // num_parts
             1,  // num_negatives (binary: 1 negative per example)
             42,
+            false,  // balance_classes
         );
 
         assert_eq!(cache.num_classes(), 2);
@@ -728,6 +745,7 @@ mod tests {
             num_parts,
             1,
             42,
+            false,  // balance_classes
         );
 
         // Each fold should have ~4 examples (12/3)

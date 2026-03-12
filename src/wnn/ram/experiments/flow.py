@@ -213,6 +213,7 @@ class FlowConfig:
 	ids_num_parts: int = 3  # training data rotation parts
 	ids_fitness_weight_f1: float = 0.0  # F1-macro weight in fitness
 	ids_split: str = "standard"  # "standard" or "random"
+	balance_classes: bool = False  # Class-balanced training (upweight minority class)
 
 	@classmethod
 	def bitwise_7_phase(

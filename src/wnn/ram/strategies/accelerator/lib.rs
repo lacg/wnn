@@ -3320,6 +3320,7 @@ fn evaluate_genomes_parallel_hybrid<'py>(
             empty_value,
             neuron_sample_rate,
             rng_seed,
+            None, // class_weights: direct PyO3 call doesn't use class balancing
         );
         Ok(fitness)
     })
@@ -3935,7 +3936,7 @@ impl IDSCacheWrapper {
     /// Create a new IDS cache with stratified partitioning.
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (train_features, train_labels, eval_features, eval_labels, num_classes, total_features, num_parts, num_negatives, seed))]
+    #[pyo3(signature = (train_features, train_labels, eval_features, eval_labels, num_classes, total_features, num_parts, num_negatives, seed, balance_classes=false))]
     fn new(
         train_features: Vec<bool>,
         train_labels: Vec<i64>,
@@ -3946,6 +3947,7 @@ impl IDSCacheWrapper {
         num_parts: usize,
         num_negatives: usize,
         seed: u64,
+        balance_classes: bool,
     ) -> Self {
         Self {
             inner: ids_cache::IDSCache::new(
@@ -3958,6 +3960,7 @@ impl IDSCacheWrapper {
                 num_parts,
                 num_negatives,
                 seed,
+                balance_classes,
             ),
         }
     }

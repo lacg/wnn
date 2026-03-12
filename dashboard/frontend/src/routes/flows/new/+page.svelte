@@ -29,6 +29,8 @@
   let idsMinNeurons = 5;
   let idsMaxNeurons = 300;
   let idsMaxBitDelta = 0;
+  let idsNeuronSampleRate = 0.25;
+  let idsBalanceClasses = true;
 
   // Multi-stage config
   let numStages = 1;
@@ -710,6 +712,8 @@
         params.min_neurons = idsMinNeurons;
         params.max_neurons = idsMaxNeurons;
         if (idsMaxBitDelta > 0) params.max_bit_delta = idsMaxBitDelta;
+        params.neuron_sample_rate = idsNeuronSampleRate;
+        params.balance_classes = idsBalanceClasses;
       } else if (isBitwise) {
         params.architecture_type = 'bitwise';
         params.num_clusters = bitwiseNumClusters;
@@ -1234,6 +1238,20 @@
                   <label for="idsKFolds">K-Fold CV</label>
                   <input type="number" id="idsKFolds" bind:value={idsKFolds} min="1" max="10" />
                   <span class="field-hint">1 = off, 5 = default (also sets data partitions)</span>
+                </div>
+                <div class="form-group">
+                  <label for="idsNeuronSampleRate">Neuron Sample Rate</label>
+                  <input type="number" id="idsNeuronSampleRate" bind:value={idsNeuronSampleRate} min="0.01" max="1.0" step="0.05" />
+                  <span class="field-hint">Fraction of neurons trained per example (0.25 = 25%)</span>
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="idsBalanceClasses">
+                    <input type="checkbox" id="idsBalanceClasses" bind:checked={idsBalanceClasses} />
+                    Balance Classes
+                  </label>
+                  <span class="field-hint">Upweight minority class during training to prevent address saturation bias</span>
                 </div>
               </div>
               <h3>Neuron Architecture Bounds</h3>
