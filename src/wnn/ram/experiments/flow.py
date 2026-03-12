@@ -2024,11 +2024,11 @@ class Flow:
 			pr = data.get('phase_result', {})
 			metadata = data.get('_metadata', {})
 
-			# Load population metrics (saved as list of [ce, acc] pairs)
+			# Load population metrics (saved as list of [ce, acc, ...] tuples)
 			pop_metrics_raw = data.get('population_metrics')
 			pop_metrics = None
 			if pop_metrics_raw is not None:
-				pop_metrics = [(ce, acc) for ce, acc in pop_metrics_raw]
+				pop_metrics = [tuple(m) for m in pop_metrics_raw]
 
 			return ExperimentResult(
 				experiment_name=pr.get('phase_name', f"Experiment {idx}"),
