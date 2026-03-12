@@ -197,6 +197,7 @@ class ClusterGenome:
 		bits_per_neuron: list[int],
 		neurons_per_cluster: list[int],
 		connections: Optional[list[int]] = None,
+		threshold: float = 0.5,
 	):
 		"""
 		Create a genome with specified architecture and connections.
@@ -205,10 +206,12 @@ class ClusterGenome:
 			bits_per_neuron: Bits per neuron [total_neurons]
 			neurons_per_cluster: Neurons per cluster [num_clusters]
 			connections: Flattened connection indices (default: None = not initialized)
+			threshold: Decision threshold for single-cluster classification (default: 0.5)
 		"""
 		self.bits_per_neuron = bits_per_neuron
 		self.neurons_per_cluster = neurons_per_cluster
 		self.connections = connections
+		self.threshold = threshold
 
 	# =========================================================================
 	# Factory Methods
@@ -657,6 +660,7 @@ class ClusterGenome:
 			bits_per_neuron=self.bits_per_neuron.copy(),
 			neurons_per_cluster=self.neurons_per_cluster.copy(),
 			connections=self.connections.copy() if self.connections is not None else None,
+			threshold=self.threshold,
 		)
 		if hasattr(self, '_cached_fitness') and self._cached_fitness is not None:
 			genome._cached_fitness = self._cached_fitness
@@ -785,6 +789,8 @@ class ClusterGenome:
 		}
 		if self.connections is not None:
 			data["connections"] = self.connections
+		if self.threshold != 0.5:
+			data["threshold"] = self.threshold
 		if hasattr(self, '_cached_fitness') and self._cached_fitness is not None:
 			data["cached_fitness"] = self._cached_fitness
 		return data
@@ -800,6 +806,7 @@ class ClusterGenome:
 			bits_per_neuron=data["bits_per_neuron"],
 			neurons_per_cluster=data["neurons_per_cluster"],
 			connections=data.get("connections"),
+			threshold=data.get("threshold", 0.5),
 		)
 		if "cached_fitness" in data:
 			genome._cached_fitness = tuple(data["cached_fitness"])

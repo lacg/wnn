@@ -255,9 +255,7 @@ pub fn compute_f1_fpr(predictions: &[u32], targets: &[i64], num_classes: usize) 
         }
     }
 
-    let total: f64 = confusion.iter().sum::<u64>() as f64;
     let mut f1_sum = 0.0f64;
-    let mut fpr_sum = 0.0f64;
     let mut num_active_classes = 0usize;
 
     for c in 0..num_classes {
@@ -270,8 +268,6 @@ pub fn compute_f1_fpr(predictions: &[u32], targets: &[i64], num_classes: usize) 
             .filter(|&p| p != c)
             .map(|p| confusion[c * num_classes + p] as f64)
             .sum();
-        let tn = total - tp - fp - fn_count;
-
         // Skip classes with no support (no true examples)
         if tp + fn_count == 0.0 {
             continue;
@@ -289,9 +285,6 @@ pub fn compute_f1_fpr(predictions: &[u32], targets: &[i64], num_classes: usize) 
         };
         f1_sum += f1;
 
-        // FPR
-        let fpr = if fp + tn > 0.0 { fp / (fp + tn) } else { 0.0 };
-        fpr_sum += fpr;
     }
 
     if num_active_classes == 0 {
@@ -2660,7 +2653,8 @@ pub fn evaluate_genome_hybrid(
     empty_value: f32,
     metal: Option<&crate::metal_ramlm::MetalRAMLMEvaluator>,
     sparse_metal: Option<&crate::metal_ramlm::MetalSparseEvaluator>,
-) -> (f64, f64, f64, f64) {
+    override_threshold: Option<f64>,
+) -> (f64, f64, f64, f64, f64) {
     let memory_mode = crate::neuron_memory::get_memory_mode();
     let epsilon = 1e-10f64;
 
@@ -2673,7 +2667,7 @@ pub fn evaluate_genome_hybrid(
         eval_input_bits, num_eval, total_input_bits
     );
 
-    // SINGLE-CLUSTER BINARY DISCRIMINATOR: adaptive threshold, binary cross-entropy
+    // SINGLE-CLUSTER BINARY DISCRIMINATOR: use override or find threshold, binary cross-entropy
     if num_clusters == 1 {
         let all_scores = compute_per_example_scores(
             export, eval_input_bits, &packed_eval, words_per_example,
@@ -2690,11 +2684,14 @@ pub fn evaluate_genome_hybrid(
         }
         let ce = total_ce / num_eval as f64;
 
-        // Find optimal threshold via F1-macro sweep
+        // Use override threshold (from training calibration) or find on eval data (fallback)
         let flat_scores: Vec<f64> = all_scores.iter().map(|s| s[0]).collect();
-        let (threshold, _f1, _fpr) = find_optimal_threshold_f1(&flat_scores, eval_targets);
+        let threshold = override_threshold.unwrap_or_else(|| {
+            let (t, _f1, _fpr) = find_optimal_threshold_f1(&flat_scores, eval_targets);
+            t
+        });
 
-        // Apply optimal threshold for predictions
+        // Apply threshold for predictions
         let mut correct = 0u64;
         let mut predictions = Vec::with_capacity(num_eval);
         for ex_idx in 0..num_eval {
@@ -2704,7 +2701,7 @@ pub fn evaluate_genome_hybrid(
         }
         let acc = correct as f64 / num_eval as f64;
         let (f1, fpr) = compute_f1_fpr(&predictions, eval_targets, 2);
-        return (ce, acc, f1, fpr);
+        return (ce, acc, f1, fpr, threshold);
     }
 
     // FAST PATH: If single sparse group covering all clusters, use direct CE computation
@@ -2755,7 +2752,7 @@ pub fn evaluate_genome_hybrid(
                                 total_ms, elapsed
                             );
                         }
-                        return (ce, acc, f1, fpr);
+                        return (ce, acc, f1, fpr, 0.5);
                     }
                     // Fall through to standard path if CE evaluator fails
                 }
@@ -2932,7 +2929,7 @@ pub fn evaluate_genome_hybrid(
                             );
                         }
                     }
-                    return (ce, acc, f1, fpr);
+                    return (ce, acc, f1, fpr, 0.5);
                 }
             }
             // Fall through to CPU path if full GPU fails
@@ -2979,7 +2976,7 @@ pub fn evaluate_genome_hybrid(
     let accuracy = total_correct as f64 / num_eval as f64;
     let (f1, fpr) = compute_f1_fpr(&predictions, eval_targets, num_clusters);
 
-    (avg_ce, accuracy, f1, fpr)
+    (avg_ce, accuracy, f1, fpr, 0.5)
 }
 
 /// Predict per-example class indices for a single trained genome.
@@ -3187,7 +3184,7 @@ pub fn evaluate_genomes_parallel_hybrid(
     neuron_sample_rate: f32,
     rng_seed: u64,
     class_weights: Option<&[u32]>,
-) -> Vec<(f64, f64, f64, f64)> {
+) -> Vec<(f64, f64, f64, f64, f64)> {
     let memory_mode = crate::neuron_memory::get_memory_mode();
     if num_genomes == 0 {
         return vec![];
@@ -3264,7 +3261,7 @@ pub fn evaluate_genomes_parallel_hybrid(
     let eval_worker = get_eval_worker();
 
     // Collect all results
-    let mut all_results: Vec<(usize, f64, f64, f64, f64)> = Vec::with_capacity(num_genomes);
+    let mut all_results: Vec<(usize, f64, f64, f64, f64, f64)> = Vec::with_capacity(num_genomes);
 
     // Process genomes in batches
     let num_batches = (num_genomes + batch_size - 1) / batch_size;
@@ -3304,7 +3301,7 @@ pub fn evaluate_genomes_parallel_hybrid(
         let train_start = std::time::Instant::now();
 
         // Train batch in parallel - each genome builds its own config (handles variable architectures)
-        let batch_exports: Vec<(usize, GenomeExport)> = (0..current_batch_size)
+        let batch_exports: Vec<(usize, GenomeExport, Option<f64>)> = (0..current_batch_size)
             .into_par_iter()
             .map(|local_idx| {
                 let genome_idx = batch_start + local_idx;
@@ -3401,7 +3398,25 @@ pub fn evaluate_genomes_parallel_hybrid(
                 // Export for GPU using THIS genome's groups
                 let export = export_genome_for_gpu(&memories, &groups, &gpu_connections);
 
-                (genome_idx, export)
+                // Single-cluster: calibrate threshold on training data
+                let calibrated_threshold: Option<f64> = if num_clusters == 1 {
+                    let metal_arc = get_metal_evaluator();
+                    let sparse_metal_arc = get_sparse_metal_evaluator();
+                    let train_scores = compute_per_example_scores(
+                        &export, train_input_bits, &packed_train_input, words_per_example,
+                        num_train, num_clusters, total_input_bits, empty_value,
+                        memory_mode,
+                        metal_arc.as_ref().map(|a| a.as_ref()),
+                        sparse_metal_arc.as_ref().map(|a| a.as_ref()),
+                    );
+                    let flat_scores: Vec<f64> = train_scores.iter().map(|s| s[0]).collect();
+                    let (t, _f1, _fpr) = find_optimal_threshold_f1(&flat_scores, train_targets);
+                    Some(t)
+                } else {
+                    None
+                };
+
+                (genome_idx, export, calibrated_threshold)
             })
             .collect();
 
@@ -3410,7 +3425,7 @@ pub fn evaluate_genomes_parallel_hybrid(
         // Track sparse export sizes for timing diagnostics
         let sparse_keys_total: usize = if timing_enabled {
             batch_exports.iter()
-                .map(|(_, export)| export.sparse_exports.iter().map(|se| se.keys.len()).sum::<usize>())
+                .map(|(_, export, _)| export.sparse_exports.iter().map(|se| se.keys.len()).sum::<usize>())
                 .sum()
         } else { 0 };
 
@@ -3430,7 +3445,7 @@ pub fn evaluate_genomes_parallel_hybrid(
             let pos_width = total_count.to_string().len();
             let type_padded = format!("{:<4}", &log_type[..log_type.len().min(4)]);
 
-            for (genome_idx, ce, acc, _f1, _fpr) in &batch_results {
+            for (genome_idx, ce, acc, _f1, _fpr, _threshold) in &batch_results {
                 let overall_position = batch_offset + genome_idx + 1;
                 let msg = format!(
                     "{} | [Gen {:0gen_width$}/{:0gen_width$}] Genome {:0pos_width$}/{} ({}): CE={:.4}, Acc={:.4}% ({:.1}s)\n",
@@ -3475,9 +3490,9 @@ pub fn evaluate_genomes_parallel_hybrid(
     }
 
     // Sort results by genome index and return
-    let mut results: Vec<(f64, f64, f64, f64)> = vec![(0.0, 0.0, 0.0, 0.0); num_genomes];
-    for (genome_idx, ce, acc, f1, fpr) in all_results {
-        results[genome_idx] = (ce, acc, f1, fpr);
+    let mut results: Vec<(f64, f64, f64, f64, f64)> = vec![(0.0, 0.0, 0.0, 0.0, 0.5); num_genomes];
+    for (genome_idx, ce, acc, f1, fpr, threshold) in all_results {
+        results[genome_idx] = (ce, acc, f1, fpr, threshold);
     }
 
     results
@@ -4011,7 +4026,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
         }
         let mut conn_offset = 0usize;
 
-        return standard.into_iter().enumerate().map(|(g, (ce, acc, f1, fpr))| {
+        return standard.into_iter().enumerate().map(|(g, (ce, acc, f1, fpr, _threshold))| {
             let bpn_start = genome_bpn_offsets[g];
             let bpn_end = genome_bpn_offsets[g + 1];
             let bits = genomes_bits_flat[bpn_start..bpn_end].to_vec();
@@ -4085,7 +4100,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
             computed_batch
         });
 
-    let mut all_results: Vec<(usize, f64, f64, f64, f64)> = Vec::with_capacity(num_genomes);
+    let mut all_results: Vec<(usize, f64, f64, f64, f64, f64)> = Vec::with_capacity(num_genomes);
     let mut all_adapted: Vec<(usize, Vec<usize>, Vec<usize>, Vec<i64>, usize, usize, usize, usize, usize)> =
         Vec::with_capacity(num_genomes);
     let num_batches = (num_genomes + batch_size - 1) / batch_size;
@@ -4268,7 +4283,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
         }
 
         // Phase 3: Retrain changed genomes + export all (parallel)
-        let batch_exports: Vec<(usize, GenomeExport)> = adapted_states.par_iter()
+        let batch_exports: Vec<(usize, GenomeExport, Option<f64>)> = adapted_states.par_iter()
             .enumerate()
             .map(|(local_idx, adapted)| {
                 if adapted.changed {
@@ -4302,7 +4317,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
                         &adapted.connections, &adapted.bits, &adapted.neurons, &groups,
                     );
                     let export = export_genome_for_gpu(&memories, &groups, &gpu_conns);
-                    (adapted.genome_idx, export)
+                    (adapted.genome_idx, export, None)
                 } else {
                     // Use Phase 1 trained state directly
                     let state = &trained_states[local_idx];
@@ -4311,7 +4326,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
                         &state.neurons_per_cluster, &state.groups,
                     );
                     let export = export_genome_for_gpu(&state.memories, &state.groups, &gpu_conns);
-                    (state.genome_idx, export)
+                    (state.genome_idx, export, None)
                 }
             })
             .collect();
@@ -4333,7 +4348,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
     // Sort by genome index and build final results
     all_adapted.sort_by_key(|a| a.0);
     let mut score_map: Vec<(f64, f64, f64, f64)> = vec![(0.0, 0.0, 0.0, 0.0); num_genomes];
-    for (idx, ce, acc, f1, fpr) in all_results {
+    for (idx, ce, acc, f1, fpr, _threshold) in all_results {
         score_map[idx] = (ce, acc, f1, fpr);
     }
 

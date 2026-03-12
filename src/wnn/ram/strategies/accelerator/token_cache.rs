@@ -551,7 +551,7 @@ pub fn evaluate_genomes_cached_hybrid(
         neuron_sample_rate,
         rng_seed,
         None, // class_weights: LM path doesn't use class balancing
-    )
+    ).into_iter().map(|(ce, acc, f1, fpr, _)| (ce, acc, f1, fpr)).collect()
 }
 
 /// Evaluate genomes using full cached data with hybrid CPU+GPU (4-8x speedup).
@@ -587,7 +587,7 @@ pub fn evaluate_genomes_cached_full_hybrid(
         neuron_sample_rate,
         rng_seed,
         None, // class_weights: LM path doesn't use class balancing
-    )
+    ).into_iter().map(|(ce, acc, f1, fpr, _)| (ce, acc, f1, fpr)).collect()
 }
 
 /// Evaluate a single genome WITH gating, returning both gated and non-gated metrics.

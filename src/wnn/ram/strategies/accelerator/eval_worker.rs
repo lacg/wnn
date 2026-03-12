@@ -116,14 +116,16 @@ impl EvalData {
 
 /// Request to evaluate a batch of genome exports
 struct EvalBatchRequest {
-    exports: Vec<(usize, GenomeExport)>,
+    /// (genome_idx, export, optional calibrated threshold from training)
+    exports: Vec<(usize, GenomeExport, Option<f64>)>,
     eval_data: Arc<EvalData>,
     response_tx: mpsc::Sender<EvalBatchResponse>,
 }
 
 /// Response containing evaluation results
 pub struct EvalBatchResponse {
-    pub results: Vec<(usize, f64, f64, f64, f64)>, // (genome_idx, ce, accuracy, f1_macro, fpr)
+    /// (genome_idx, ce, accuracy, f1_macro, fpr, threshold)
+    pub results: Vec<(usize, f64, f64, f64, f64, f64)>,
 }
 
 // ============================================================================
@@ -182,11 +184,11 @@ impl EvalWorkerPool {
 
             // Evaluate exports sequentially - GPU doesn't benefit from parallel access
             // (multiple threads competing for GPU causes contention and slowdown)
-            let results: Vec<(usize, f64, f64, f64, f64)> = request
+            let results: Vec<(usize, f64, f64, f64, f64, f64)> = request
                 .exports
                 .into_iter()
-                .map(|(genome_idx, export)| {
-                    let (ce, acc, f1, fpr) = evaluate_genome_hybrid(
+                .map(|(genome_idx, export, override_threshold)| {
+                    let (ce, acc, f1, fpr, threshold) = evaluate_genome_hybrid(
                         &export,
                         &eval_data.eval_input_bits,
                         &eval_data.eval_targets,
@@ -196,8 +198,9 @@ impl EvalWorkerPool {
                         eval_data.empty_value,
                         metal,
                         sparse_metal,
+                        override_threshold,
                     );
-                    (genome_idx, ce, acc, f1, fpr)
+                    (genome_idx, ce, acc, f1, fpr, threshold)
                 })
                 .collect();
 
@@ -218,16 +221,16 @@ impl EvalWorkerPool {
     /// Submit a batch for evaluation and wait for results
     ///
     /// # Arguments
-    /// * `exports` - Vector of (genome_idx, GenomeExport) tuples
+    /// * `exports` - Vector of (genome_idx, GenomeExport, override_threshold) tuples
     /// * `eval_data` - Shared evaluation data (Arc for zero-copy)
     ///
     /// # Returns
-    /// Vector of (genome_idx, cross_entropy, accuracy, f1_macro, fpr) tuples
+    /// Vector of (genome_idx, cross_entropy, accuracy, f1_macro, fpr, threshold) tuples
     pub fn evaluate(
         &self,
-        exports: Vec<(usize, GenomeExport)>,
+        exports: Vec<(usize, GenomeExport, Option<f64>)>,
         eval_data: Arc<EvalData>,
-    ) -> Vec<(usize, f64, f64, f64, f64)> {
+    ) -> Vec<(usize, f64, f64, f64, f64, f64)> {
         // Create one-shot response channel
         let (response_tx, response_rx) = mpsc::channel();
 
@@ -252,7 +255,7 @@ impl EvalWorkerPool {
     /// Returns a receiver that will contain results when ready.
     pub fn evaluate_async(
         &self,
-        exports: Vec<(usize, GenomeExport)>,
+        exports: Vec<(usize, GenomeExport, Option<f64>)>,
         eval_data: Arc<EvalData>,
     ) -> Receiver<EvalBatchResponse> {
         let (response_tx, response_rx) = mpsc::channel();

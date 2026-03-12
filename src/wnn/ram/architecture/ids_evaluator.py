@@ -218,7 +218,12 @@ class IDSEvaluator(BaseEvaluator):
 				0,  # rng_seed
 			)
 
-		return [EvalResult(ce=ce, accuracy=acc, f1_macro=f1, fpr=fpr) for ce, acc, f1, fpr in raw_results]
+		results = []
+		for genome, (ce, acc, f1, fpr, threshold) in zip(genomes, raw_results):
+			genome.threshold = threshold
+			genome._cached_fitness = (ce, acc, f1, fpr)
+			results.append(EvalResult(ce=ce, accuracy=acc, f1_macro=f1, fpr=fpr))
+		return results
 
 	def evaluate_batch_full(
 		self,
@@ -237,7 +242,11 @@ class IDSEvaluator(BaseEvaluator):
 			0,  # rng_seed
 		)
 
-		return [EvalResult(ce=ce, accuracy=acc, f1_macro=f1, fpr=fpr) for ce, acc, f1, fpr in raw_results]
+		results = []
+		for genome, (ce, acc, f1, fpr, threshold) in zip(genomes, raw_results):
+			genome.threshold = threshold
+			results.append(EvalResult(ce=ce, accuracy=acc, f1_macro=f1, fpr=fpr))
+		return results
 
 	def evaluate_batch_adaptive(
 		self,
