@@ -361,12 +361,18 @@
     }
   }
 
-  function parseTier(g: GenomeEvaluation): { neurons: number | null; bits: number | null } {
-    if (!g.tiers_json) return { neurons: null, bits: null };
+  function parseTier(g: GenomeEvaluation): { neurons: string; bits: string } {
+    if (!g.tiers_json) return { neurons: '—', bits: '—' };
     try {
       const t: GenomeTier[] = JSON.parse(g.tiers_json);
-      return t.length > 0 ? { neurons: t[0].neurons, bits: t[0].bits } : { neurons: null, bits: null };
-    } catch { return { neurons: null, bits: null }; }
+      if (t.length === 0) return { neurons: '—', bits: '—' };
+      if (t.length === 1) return { neurons: String(t[0].neurons), bits: String(t[0].bits) };
+      // Multiple tiers: show per-tier values joined with +
+      return {
+        neurons: t.map(tier => String(tier.neurons)).join('+'),
+        bits: t.map(tier => String(tier.bits)).join('+'),
+      };
+    } catch { return { neurons: '—', bits: '—' }; }
   }
 
   // Flow steps directly from DB experiments (all exist with pending/running/completed status)
@@ -1785,8 +1791,8 @@
                         <td>{formatFPR(genome.fpr)}</td>
                       {/if}
                       {#if hasTiers}
-                        <td class="mono">{tier.neurons ?? '—'}</td>
-                        <td class="mono">{tier.bits ?? '—'}</td>
+                        <td class="mono">{tier.neurons}</td>
+                        <td class="mono">{tier.bits}</td>
                       {/if}
                       <td>{formatRole(genome.role)}</td>
                     </tr>
@@ -1826,8 +1832,8 @@
                         <td>{formatFPR(genome.fpr)}</td>
                       {/if}
                       {#if hasTiers}
-                        <td class="mono">{tier.neurons ?? '—'}</td>
-                        <td class="mono">{tier.bits ?? '—'}</td>
+                        <td class="mono">{tier.neurons}</td>
+                        <td class="mono">{tier.bits}</td>
                       {/if}
                       <td>{formatRole(genome.role)}</td>
                     </tr>
