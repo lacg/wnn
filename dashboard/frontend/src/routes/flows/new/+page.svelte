@@ -1241,7 +1241,7 @@
                 </div>
                 <div class="form-group">
                   <label for="idsNeuronSampleRate">Neuron Sample Rate</label>
-                  <input type="number" id="idsNeuronSampleRate" bind:value={idsNeuronSampleRate} min="0.01" max="1.0" step="0.05" />
+                  <input type="number" id="idsNeuronSampleRate" bind:value={idsNeuronSampleRate} min="0.05" max="1.0" step="0.05" />
                   <span class="field-hint">Fraction of neurons trained per example (0.25 = 25%)</span>
                 </div>
               </div>

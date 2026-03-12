@@ -2134,6 +2134,8 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 		# Re-evaluate initial genome on current phase's train subset
 		# (cached evals from previous phase used a different subset)
 		initial_accuracy: Optional[float] = None
+		initial_f1: Optional[float] = None
+		initial_fpr: Optional[float] = None
 		initial_evals = kwargs.get('initial_evals')
 		if initial_evals and batch_evaluate_fn is not None:
 			self._log.info(f"[{self.name}] Re-evaluating initial genome (phase transition — different train subset)")
@@ -2142,6 +2144,8 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 				if init_results:
 					initial_fitness = init_results[0][0]
 					initial_accuracy = init_results[0][1]
+					initial_f1 = getattr(init_results[0], 'f1_macro', None)
+					initial_fpr = getattr(init_results[0], 'fpr', None)
 					self._log.info(f"[{self.name}] Re-evaluated initial genome: CE={initial_fitness:.4f}, Acc={initial_accuracy:.2%}")
 			except Exception as e:
 				self._log.warning(f"[{self.name}] Failed to re-evaluate initial genome: {e}, falling back to cached")
@@ -2158,13 +2162,20 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 				if init_results:
 					initial_fitness = init_results[0][0]
 					initial_accuracy = init_results[0][1]
+					initial_f1 = getattr(init_results[0], 'f1_macro', None)
+					initial_fpr = getattr(init_results[0], 'fpr', None)
 			except Exception as e:
 				self._log.warning(f"[{self.name}] Failed to re-evaluate initial genome: {e}")
 
 		# === Build initial population ===
-		pop: list[tuple[T, float, Optional[float]]] = [
-			(self.clone_genome(initial_genome), initial_fitness, initial_accuracy)
-		]
+		if initial_f1 is not None:
+			pop: list = [
+				(self.clone_genome(initial_genome), initial_fitness, initial_accuracy, initial_f1, initial_fpr)
+			]
+		else:
+			pop: list = [
+				(self.clone_genome(initial_genome), initial_fitness, initial_accuracy)
+			]
 
 		# Initial threshold
 		current_threshold = self._compute_threshold(0.0)
@@ -2195,17 +2206,26 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 				results = batch_evaluate_fn(initial_neighbors, min_accuracy=current_threshold)
 				seed_fitness = [r[0] for r in results]
 				seed_accuracy = [r[1] for r in results]
+				seed_f1 = [getattr(r, 'f1_macro', None) for r in results]
+				seed_fpr = [getattr(r, 'fpr', None) for r in results]
 			elif batch_evaluate_fn is not None:
 				self._log.info(f"[{self.name}] Evaluating {len(initial_neighbors)} neighbors (no cached evals)")
 				results = batch_evaluate_fn(initial_neighbors, min_accuracy=current_threshold)
 				seed_fitness = [r[0] for r in results]
 				seed_accuracy = [r[1] for r in results]
+				seed_f1 = [getattr(r, 'f1_macro', None) for r in results]
+				seed_fpr = [getattr(r, 'fpr', None) for r in results]
 			else:
 				seed_fitness = [evaluate_fn(g) for g in initial_neighbors]
 				seed_accuracy = [None] * len(initial_neighbors)
+				seed_f1 = [None] * len(initial_neighbors)
+				seed_fpr = [None] * len(initial_neighbors)
 
-			for g, f, a in zip(initial_neighbors, seed_fitness, seed_accuracy):
-				pop.append((self.clone_genome(g), f, a))
+			for g, f, a, f1, fpr in zip(initial_neighbors, seed_fitness, seed_accuracy, seed_f1, seed_fpr):
+				if f1 is not None:
+					pop.append((self.clone_genome(g), f, a, f1, fpr))
+				else:
+					pop.append((self.clone_genome(g), f, a))
 
 		# Trim initial population to pop_size by fitness ranking
 		if len(pop) > pop_size:
