@@ -317,6 +317,89 @@ pub fn compute_f1_fpr(predictions: &[u32], targets: &[i64], num_classes: usize) 
     }
 }
 
+/// Find the optimal threshold for binary (single-cluster) classification.
+///
+/// Efficiently sweeps all unique score boundaries in O(n log n) time.
+/// Returns (threshold, f1_macro, fpr) where f1_macro is maximized.
+/// The threshold is set to the midpoint between adjacent sorted scores.
+pub fn find_optimal_threshold_f1(scores: &[f64], labels: &[i64]) -> (f64, f64, f64) {
+    let n = scores.len();
+    if n == 0 {
+        return (0.5, 0.0, 0.0);
+    }
+
+    // Create (score, label) pairs and sort by score ascending
+    let mut pairs: Vec<(f64, i64)> = scores.iter().copied()
+        .zip(labels.iter().copied())
+        .collect();
+    pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let total_pos = labels.iter().filter(|&&l| l == 1).count() as u64;
+    let total_neg = (n as u64) - total_pos;
+
+    if total_pos == 0 || total_neg == 0 {
+        return (0.5, 0.0, 0.0);
+    }
+
+    // Start: threshold = -inf → everything predicted as 1 (attack)
+    let mut tp = total_pos;
+    let mut fp = total_neg;
+    let mut fn_count = 0u64;
+    let mut tn = 0u64;
+
+    let mut best_f1 = 0.0f64;
+    let mut best_threshold = 0.5f64;
+    let mut best_fpr = 1.0f64;
+
+    // Sweep threshold from low to high
+    // Moving examples below threshold from "predicted 1" to "predicted 0"
+    let mut i = 0;
+    while i < n {
+        let current_score = pairs[i].0;
+
+        // Process all examples with the same score
+        while i < n && pairs[i].0 == current_score {
+            if pairs[i].1 == 1 {
+                tp -= 1;
+                fn_count += 1;
+            } else {
+                fp -= 1;
+                tn += 1;
+            }
+            i += 1;
+        }
+
+        // Compute F1-macro at this threshold boundary
+        // F1 for attack class (label=1)
+        let f1_pos = if 2 * tp + fp + fn_count > 0 {
+            2.0 * tp as f64 / (2.0 * tp as f64 + fp as f64 + fn_count as f64)
+        } else {
+            0.0
+        };
+        // F1 for normal class (label=0)
+        let f1_neg = if 2 * tn + fn_count + fp > 0 {
+            2.0 * tn as f64 / (2.0 * tn as f64 + fn_count as f64 + fp as f64)
+        } else {
+            0.0
+        };
+        let f1_macro = (f1_pos + f1_neg) / 2.0;
+
+        if f1_macro > best_f1 {
+            best_f1 = f1_macro;
+            // Threshold: midpoint between current score and next, or slightly above if last
+            best_threshold = if i < n {
+                (current_score + pairs[i].0) / 2.0
+            } else {
+                current_score + 1e-6
+            };
+            // FPR = normal samples predicted as attack / total normal
+            best_fpr = fp as f64 / total_neg as f64;
+        }
+    }
+
+    (best_threshold, best_f1, best_fpr)
+}
+
 /// Check if group coalescing is enabled (set WNN_COALESCE_GROUPS=1)
 fn use_coalesced_groups() -> bool {
     std::env::var("WNN_COALESCE_GROUPS").is_ok()
@@ -2590,7 +2673,7 @@ pub fn evaluate_genome_hybrid(
         eval_input_bits, num_eval, total_input_bits
     );
 
-    // SINGLE-CLUSTER BINARY DISCRIMINATOR: threshold at 0.5, binary cross-entropy
+    // SINGLE-CLUSTER BINARY DISCRIMINATOR: adaptive threshold, binary cross-entropy
     if num_clusters == 1 {
         let all_scores = compute_per_example_scores(
             export, eval_input_bits, &packed_eval, words_per_example,
@@ -2598,18 +2681,27 @@ pub fn evaluate_genome_hybrid(
             memory_mode, metal, sparse_metal,
         );
 
+        // BCE loss (threshold-independent)
         let mut total_ce = 0.0f64;
-        let mut correct = 0u64;
-        let mut predictions = Vec::with_capacity(num_eval);
         for ex_idx in 0..num_eval {
             let s = (all_scores[ex_idx][0]).clamp(epsilon, 1.0 - epsilon);
             let y = eval_targets[ex_idx] as f64;
             total_ce += -(y * s.ln() + (1.0 - y) * (1.0 - s).ln());
-            let pred = if all_scores[ex_idx][0] >= 0.5 { 1u32 } else { 0u32 };
+        }
+        let ce = total_ce / num_eval as f64;
+
+        // Find optimal threshold via F1-macro sweep
+        let flat_scores: Vec<f64> = all_scores.iter().map(|s| s[0]).collect();
+        let (threshold, _f1, _fpr) = find_optimal_threshold_f1(&flat_scores, eval_targets);
+
+        // Apply optimal threshold for predictions
+        let mut correct = 0u64;
+        let mut predictions = Vec::with_capacity(num_eval);
+        for ex_idx in 0..num_eval {
+            let pred = if all_scores[ex_idx][0] >= threshold { 1u32 } else { 0u32 };
             predictions.push(pred);
             if pred as i64 == eval_targets[ex_idx] { correct += 1; }
         }
-        let ce = total_ce / num_eval as f64;
         let acc = correct as f64 / num_eval as f64;
         let (f1, fpr) = compute_f1_fpr(&predictions, eval_targets, 2);
         return (ce, acc, f1, fpr);
@@ -2904,6 +2996,7 @@ pub fn predict_genome_hybrid(
     empty_value: f32,
     metal: Option<&crate::metal_ramlm::MetalRAMLMEvaluator>,
     sparse_metal: Option<&crate::metal_ramlm::MetalSparseEvaluator>,
+    single_cluster_threshold: Option<f64>,
 ) -> Vec<i64> {
     let memory_mode = crate::neuron_memory::get_memory_mode();
 
@@ -2917,10 +3010,11 @@ pub fn predict_genome_hybrid(
         memory_mode, metal, sparse_metal,
     );
 
-    // Single-cluster binary discriminator: threshold at 0.5
+    // Single-cluster binary discriminator: use provided threshold or default 0.5
     if num_clusters == 1 {
+        let threshold = single_cluster_threshold.unwrap_or(0.5);
         return all_scores.par_iter().map(|scores| {
-            if scores[0] >= 0.5 { 1i64 } else { 0i64 }
+            if scores[0] >= threshold { 1i64 } else { 0i64 }
         }).collect();
     }
 
@@ -3028,6 +3122,24 @@ pub fn train_and_predict_single(
     let metal = get_metal_evaluator();
     let sparse_metal = get_sparse_metal_evaluator();
 
+    // Single-cluster: calibrate threshold on training data before predicting eval
+    let threshold = if num_clusters == 1 {
+        let train_scores = compute_per_example_scores(
+            &export, train_input_bits, &packed_train_input, words_per_example,
+            num_train, num_clusters, total_input_bits, empty_value,
+            memory_mode, metal.as_deref(), sparse_metal.as_deref(),
+        );
+        let flat_scores: Vec<f64> = train_scores.iter().map(|s| s[0]).collect();
+        let (t, f1, fpr) = find_optimal_threshold_f1(&flat_scores, train_targets);
+        eprintln!(
+            "[SINGLE_CLUSTER] Train calibration: threshold={:.4}, train_f1={:.4}, train_fpr={:.4}",
+            t, f1, fpr
+        );
+        Some(t)
+    } else {
+        None
+    };
+
     predict_genome_hybrid(
         &export,
         eval_input_bits,
@@ -3037,6 +3149,7 @@ pub fn train_and_predict_single(
         empty_value,
         metal.as_deref(),
         sparse_metal.as_deref(),
+        threshold,
     )
 }
 
