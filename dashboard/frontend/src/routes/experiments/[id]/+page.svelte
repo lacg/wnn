@@ -1765,6 +1765,7 @@
                     {#if hasFitness}<th>Fitness</th>{/if}
                     {#if !isIDS}<th>CE</th>{/if}
                     <th>Accuracy</th>
+                    {#if isIDS}<th>F1-Macro</th><th>FPR</th>{/if}
                     {#if hasTiers}<th>Neurons</th><th>Bits</th>{/if}
                     <th>Role</th>
                   </tr>
@@ -1779,6 +1780,10 @@
                       {/if}
                       {#if !isIDS}<td class:best={genome.ce === selectedIteration.best_ce}>{formatCE(genome.ce)}</td>{/if}
                       <td>{formatAcc(genome.accuracy)}</td>
+                      {#if isIDS}
+                        <td>{formatF1(genome.f1_macro)}</td>
+                        <td>{formatFPR(genome.fpr)}</td>
+                      {/if}
                       {#if hasTiers}
                         <td class="mono">{tier.neurons ?? '—'}</td>
                         <td class="mono">{tier.bits ?? '—'}</td>
@@ -1801,6 +1806,7 @@
                     {#if hasFitness}<th>Fitness</th>{/if}
                     {#if !isIDS}<th>CE</th>{/if}
                     <th>Accuracy</th>
+                    {#if isIDS}<th>F1-Macro</th><th>FPR</th>{/if}
                     {#if hasTiers}<th>Neurons</th><th>Bits</th>{/if}
                     <th>Role</th>
                   </tr>
@@ -1815,6 +1821,10 @@
                       {/if}
                       {#if !isIDS}<td>{formatCE(genome.ce)}</td>{/if}
                       <td>{formatAcc(genome.accuracy)}</td>
+                      {#if isIDS}
+                        <td>{formatF1(genome.f1_macro)}</td>
+                        <td>{formatFPR(genome.fpr)}</td>
+                      {/if}
                       {#if hasTiers}
                         <td class="mono">{tier.neurons ?? '—'}</td>
                         <td class="mono">{tier.bits ?? '—'}</td>
