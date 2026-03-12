@@ -45,6 +45,7 @@ class IDSEvaluator(BaseEvaluator):
 		neuron_sample_rate: float = 0.25,
 		k_folds: int = 1,  # 1 = no k-fold (original behavior), >1 = K-fold CV
 		balance_classes: bool = False,
+		single_cluster: bool = False,  # Single-cluster discriminator mode
 	):
 		if classification == "binary":
 			y_train = dataset.y_train_binary
@@ -59,15 +60,22 @@ class IDSEvaluator(BaseEvaluator):
 
 		total_features = dataset.X_train.shape[1]
 
+		if single_cluster:
+			num_negatives = 0  # No negative clusters in single-cluster mode
+
 		if num_negatives is None:
 			num_negatives = num_classes - 1
 
+		# Single-cluster mode: 1 genome cluster (threshold discriminator)
+		# Multi-cluster mode: num_classes genome clusters (softmax argmax)
+		genome_clusters = 1 if single_cluster else num_classes
+
 		# BaseEvaluator expects LM-style args; pass minimal values
-		# context_size=1 and vocab_size=num_classes keeps base_evaluator happy
+		# vocab_size controls genome cluster count via experiment.py
 		super().__init__(
 			train_tokens=[],
 			eval_tokens=[],
-			vocab_size=num_classes,
+			vocab_size=genome_clusters,
 			context_size=1,
 			num_parts=num_parts,
 			seed=seed,
@@ -98,6 +106,7 @@ class IDSEvaluator(BaseEvaluator):
 		eval_features = dataset.X_test.ravel().tolist()
 		eval_labels = [int(y) for y in y_test]
 
+		self._single_cluster = single_cluster
 		self._cache = ram_accelerator.IDSCacheWrapper(
 			train_features=train_features,
 			train_labels=train_labels,
@@ -109,6 +118,7 @@ class IDSEvaluator(BaseEvaluator):
 			num_negatives=num_negatives,
 			seed=self._seed,
 			balance_classes=balance_classes,
+			single_cluster=single_cluster,
 		)
 
 		self._train_call_count = 0
@@ -485,9 +495,10 @@ class IDSEvaluator(BaseEvaluator):
 
 	def __repr__(self) -> str:
 		kfold_str = f", k_folds={self._k_folds}" if self._k_folds > 1 else ""
+		sc_str = ", single_cluster" if self._single_cluster else ""
 		return (
 			f"IDSEvaluator(classes={self._num_classes}, "
 			f"features={self._total_input_bits}, "
 			f"classification='{self._classification}', "
-			f"parts={self._num_parts}{kfold_str})"
+			f"parts={self._num_parts}{kfold_str}{sc_str})"
 		)

@@ -19,6 +19,7 @@
 
   // IDS-specific config
   let idsClassification = 'binary';
+  let idsSingleCluster = false;
   let idsNBits = 8;
   let idsValFraction = 0.25;
   let idsKFolds = 5;
@@ -714,6 +715,7 @@
         if (idsMaxBitDelta > 0) params.max_bit_delta = idsMaxBitDelta;
         params.neuron_sample_rate = idsNeuronSampleRate;
         params.balance_classes = idsBalanceClasses;
+        params.ids_single_cluster = idsSingleCluster;
       } else if (isBitwise) {
         params.architecture_type = 'bitwise';
         params.num_clusters = bitwiseNumClusters;
@@ -1252,6 +1254,13 @@
                     Balance Classes
                   </label>
                   <span class="field-hint">Upweight minority class during training to prevent address saturation bias</span>
+                </div>
+                <div class="form-group">
+                  <label for="idsSingleCluster">
+                    <input type="checkbox" id="idsSingleCluster" bind:checked={idsSingleCluster} />
+                    Single-Cluster Mode
+                  </label>
+                  <span class="field-hint">1 cluster, threshold at 0.5 (unchecked = 2 clusters with softmax argmax)</span>
                 </div>
               </div>
               <h3>Neuron Architecture Bounds</h3>

@@ -2238,7 +2238,15 @@ pub(crate) fn train_genome_in_slot(
         let input_start = ex_idx * total_input_bits;
         let input_bits = &train_input_bits[input_start..input_start + total_input_bits];
 
-        let true_cluster = train_targets[ex_idx] as usize;
+        let num_clusters = cluster_to_group.len();
+        // Single-cluster mode: always target cluster 0, nudge direction = label
+        // Multi-cluster mode: target cluster = label, always nudge TRUE
+        let true_cluster = if num_clusters == 1 { 0 } else { train_targets[ex_idx] as usize };
+        let nudge_direction = if num_clusters == 1 {
+            train_targets[ex_idx] == 1  // Attack=TRUE, Normal=FALSE
+        } else {
+            true  // Always positive for target cluster in multi-cluster mode
+        };
 
         // Train positive example
         {
@@ -2279,13 +2287,16 @@ pub(crate) fn train_genome_in_slot(
                     let conn_start = neuron_conn_offsets[global_n];
                     compute_address(input_bits, &original_connections[conn_start..], n_bits)
                 };
-                let repeats = class_weights.map_or(1u32, |w| w[true_cluster]);
+                // Weight by original label for class balancing
+                let weight_idx = train_targets[ex_idx] as usize;
+                let repeats = class_weights.map_or(1u32, |w| w[weight_idx]);
                 if use_nudge {
                     for _ in 0..repeats {
-                        memory.nudge(neuron_base + n, address, true);
+                        memory.nudge(neuron_base + n, address, nudge_direction);
                     }
                 } else {
-                    memory.write(neuron_base + n, address, TRUE, false);
+                    let value = if nudge_direction { TRUE } else { FALSE };
+                    memory.write(neuron_base + n, address, value, false);
                 }
             }
         }
@@ -2578,6 +2589,31 @@ pub fn evaluate_genome_hybrid(
     let (packed_eval, words_per_example) = crate::neuron_memory::pack_bools_to_u64(
         eval_input_bits, num_eval, total_input_bits
     );
+
+    // SINGLE-CLUSTER BINARY DISCRIMINATOR: threshold at 0.5, binary cross-entropy
+    if num_clusters == 1 {
+        let all_scores = compute_per_example_scores(
+            export, eval_input_bits, &packed_eval, words_per_example,
+            num_eval, num_clusters, total_input_bits, empty_value,
+            memory_mode, metal, sparse_metal,
+        );
+
+        let mut total_ce = 0.0f64;
+        let mut correct = 0u64;
+        let mut predictions = Vec::with_capacity(num_eval);
+        for ex_idx in 0..num_eval {
+            let s = (all_scores[ex_idx][0]).clamp(epsilon, 1.0 - epsilon);
+            let y = eval_targets[ex_idx] as f64;
+            total_ce += -(y * s.ln() + (1.0 - y) * (1.0 - s).ln());
+            let pred = if all_scores[ex_idx][0] >= 0.5 { 1u32 } else { 0u32 };
+            predictions.push(pred);
+            if pred as i64 == eval_targets[ex_idx] { correct += 1; }
+        }
+        let ce = total_ce / num_eval as f64;
+        let acc = correct as f64 / num_eval as f64;
+        let (f1, fpr) = compute_f1_fpr(&predictions, eval_targets, 2);
+        return (ce, acc, f1, fpr);
+    }
 
     // FAST PATH: If single sparse group covering all clusters, use direct CE computation
     // This avoids the 10GB GPU→CPU transfer by computing CE on GPU
@@ -2880,6 +2916,13 @@ pub fn predict_genome_hybrid(
         num_eval, num_clusters, total_input_bits, empty_value,
         memory_mode, metal, sparse_metal,
     );
+
+    // Single-cluster binary discriminator: threshold at 0.5
+    if num_clusters == 1 {
+        return all_scores.par_iter().map(|scores| {
+            if scores[0] >= 0.5 { 1i64 } else { 0i64 }
+        }).collect();
+    }
 
     // Return argmax predictions (not CE/accuracy)
     all_scores.par_iter().map(|scores| {

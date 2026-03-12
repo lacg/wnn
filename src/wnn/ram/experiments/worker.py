@@ -795,6 +795,7 @@ class FlowWorker:
         seed = params.get("seed", 42)
         neuron_sample_rate = params.get("neuron_sample_rate", 0.25)
         balance_classes = params.get("balance_classes", False)
+        single_cluster = params.get("ids_single_cluster", False)
 
         self._log(f"Loading UNSW-NB15 dataset (classification={classification}, split={split})...")
         full_dataset = load_unsw_nb15(n_bits=n_bits, split=split)
@@ -821,7 +822,8 @@ class FlowWorker:
         self._log(f"Creating optimizer IDSEvaluator ({len(train_val_dataset.X_train):,} train / "
                    f"{len(train_val_dataset.X_test):,} eval, {num_parts} parts{kfold_label})...")
         balance_label = ", balanced" if balance_classes else ""
-        self._log(f"  neuron_sample_rate={neuron_sample_rate}, balance_classes={balance_classes}")
+        sc_label = ", single-cluster" if single_cluster else ""
+        self._log(f"  neuron_sample_rate={neuron_sample_rate}, balance_classes={balance_classes}{sc_label}")
         optimizer_eval = IDSEvaluator(
             dataset=train_val_dataset,
             classification=classification,
@@ -829,6 +831,7 @@ class FlowWorker:
             k_folds=k_folds,
             neuron_sample_rate=neuron_sample_rate,
             balance_classes=balance_classes,
+            single_cluster=single_cluster,
         )
 
         # Test evaluator: full 175K train, 82K test (for overfitting monitoring + final reporting)
@@ -840,6 +843,7 @@ class FlowWorker:
             num_parts=1,
             neuron_sample_rate=neuron_sample_rate,
             balance_classes=balance_classes,
+            single_cluster=single_cluster,
         )
 
         return optimizer_eval, test_eval

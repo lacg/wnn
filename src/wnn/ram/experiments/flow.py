@@ -214,6 +214,7 @@ class FlowConfig:
 	ids_fitness_weight_f1: float = 0.0  # F1-macro weight in fitness
 	ids_split: str = "standard"  # "standard" or "random"
 	balance_classes: bool = False  # Class-balanced training (upweight minority class)
+	ids_single_cluster: bool = False  # Single-cluster discriminator (1 cluster, threshold 0.5)
 
 	@classmethod
 	def bitwise_7_phase(

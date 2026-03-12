@@ -51,6 +51,11 @@ pub struct IDSCache {
     // Class weights for balanced training (None = unweighted)
     class_weights: Option<Vec<u32>>,
 
+    // Single-cluster discriminator mode: 1 cluster, threshold at 0.5
+    // When true, num_genome_clusters=1 and num_negatives=0
+    single_cluster: bool,
+    num_genome_clusters: usize,
+
     // Live progress for observer thread
     pub live_progress: Arc<RwLock<Option<LiveProgress>>>,
 }
@@ -79,6 +84,7 @@ impl IDSCache {
         num_negatives: usize,
         seed: u64,
         balance_classes: bool,
+        single_cluster: bool,
     ) -> Self {
         let num_train = train_labels.len();
         let num_eval = eval_labels.len();
@@ -90,20 +96,24 @@ impl IDSCache {
             "eval_features length mismatch: {} != {} * {}",
             eval_features.len(), num_eval, total_features);
 
+        // Single-cluster mode: 1 genome cluster, 0 negatives
+        let num_genome_clusters = if single_cluster { 1 } else { num_classes };
+        let actual_negatives = if single_cluster { 0 } else { num_negatives };
+
         // Build full train subset
         let full_train = Self::build_subset(
-            &train_features, &train_labels, total_features, num_classes, num_negatives, seed,
+            &train_features, &train_labels, total_features, num_classes, actual_negatives, seed,
         );
 
         // Build full eval subset
         let full_eval = Self::build_subset(
-            &eval_features, &eval_labels, total_features, num_classes, num_negatives, seed + 1,
+            &eval_features, &eval_labels, total_features, num_classes, actual_negatives, seed + 1,
         );
 
         // Stratified partitioning of training data
         let train_subsets = Self::create_stratified_subsets(
             &train_features, &train_labels, total_features, num_classes,
-            num_negatives, num_parts, seed,
+            actual_negatives, num_parts, seed,
         );
 
         // Compute class weights: max_count / count per class (upweights minority)
@@ -116,12 +126,14 @@ impl IDSCache {
         Self {
             num_classes,
             total_features,
-            num_negatives,
+            num_negatives: actual_negatives,
             num_parts,
             train_subsets,
             full_train,
             full_eval,
             class_weights,
+            single_cluster,
+            num_genome_clusters,
             train_rotator: SubsetRotator::new(num_parts, seed + 100),
             live_progress: Arc::new(RwLock::new(None)),
         }
@@ -296,6 +308,10 @@ impl IDSCache {
         self.num_negatives
     }
 
+    pub fn num_genome_clusters(&self) -> usize {
+        self.num_genome_clusters
+    }
+
     pub fn num_train_subsets(&self) -> usize {
         self.train_subsets.len()
     }
@@ -331,7 +347,7 @@ pub fn evaluate_genomes_ids_cached_hybrid(
         genomes_neurons_flat,
         genomes_connections_flat,
         num_genomes,
-        cache.num_classes(),
+        cache.num_genome_clusters(),
         &train.input_bits,
         &train.targets,
         &train.negatives,
@@ -440,7 +456,7 @@ pub fn evaluate_genomes_ids_kfold_hybrid(
         genomes_neurons_flat,
         genomes_connections_flat,
         num_genomes,
-        cache.num_classes(),
+        cache.num_genome_clusters(),
         &train.input_bits,
         &train.targets,
         &train.negatives,
@@ -476,7 +492,7 @@ pub fn evaluate_genomes_ids_cached_full_hybrid(
         genomes_neurons_flat,
         genomes_connections_flat,
         num_genomes,
-        cache.num_classes(),
+        cache.num_genome_clusters(),
         &train.input_bits,
         &train.targets,
         &train.negatives,
@@ -513,7 +529,7 @@ pub fn predict_examples_ids_cached(
         bits_flat,
         neurons_flat,
         connections_flat,
-        cache.num_classes(),
+        cache.num_genome_clusters(),
         &train.input_bits,
         &train.targets,
         &train.negatives,
@@ -555,7 +571,7 @@ pub fn evaluate_genomes_ids_cached_hybrid_adaptive(
         genomes_neurons_flat,
         genomes_connections_flat,
         num_genomes,
-        cache.num_classes(),
+        cache.num_genome_clusters(),
         &train.input_bits,
         &train.targets,
         &train.negatives,
@@ -606,6 +622,7 @@ mod tests {
             1,  // num_negatives (binary: 1 negative per example)
             42,
             false,  // balance_classes
+            false,  // single_cluster
         );
 
         assert_eq!(cache.num_classes(), 2);
@@ -746,6 +763,7 @@ mod tests {
             1,
             42,
             false,  // balance_classes
+            false,  // single_cluster
         );
 
         // Each fold should have ~4 examples (12/3)
