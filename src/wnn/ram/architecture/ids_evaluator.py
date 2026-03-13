@@ -402,6 +402,7 @@ class IDSEvaluator(BaseEvaluator):
 		mutable_clusters: Optional[list[int]] = None,
 		phase_type: int = 0,
 		fitness_scores: Optional[list[float]] = None,
+		cluster_crossover_ratio: float = 0.0,
 	) -> OffspringSearchResult:
 		if not population:
 			return OffspringSearchResult(genomes=[], evaluated=0, viable=0)
@@ -444,6 +445,7 @@ class IDSEvaluator(BaseEvaluator):
 			return_best_n=return_best_n,
 			mutable_clusters=mutable_clusters,
 			phase_type=phase_type,
+			cluster_crossover_ratio=cluster_crossover_ratio,
 		)
 
 		genomes = []

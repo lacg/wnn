@@ -1149,6 +1149,8 @@ class FlowWorker:
                 s0_checkpoint_id=exp_data.get("s0_checkpoint_id") if experiment_type == ExperimentType.LAMBDA_SWEEP else None,
                 s1_checkpoint_id=exp_data.get("s1_checkpoint_id") if experiment_type == ExperimentType.LAMBDA_SWEEP else None,
                 genome_type=exp_data.get("genome_type", "best_ce") if experiment_type == ExperimentType.LAMBDA_SWEEP else "best_ce",
+                # Cluster crossover ratio
+                cluster_crossover_ratio=float(params.get("cluster_crossover_ratio", 0.0)),
             )
             exp_configs.append(exp_config)
 

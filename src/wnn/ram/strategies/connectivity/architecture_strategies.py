@@ -755,6 +755,8 @@ class ArchitectureConfig:
 	total_input_bits: Optional[int] = None
 	# Per-tier optimization: list of cluster indices that can be mutated (None = all clusters mutable)
 	mutable_clusters: Optional[list[int]] = None
+	# Cluster-level crossover ratio: 0.0 = all phase-specific, 1.0 = all cluster-level
+	cluster_crossover_ratio: float = 0.0
 
 
 class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['ClusterGenome']):
@@ -984,6 +986,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 				mutable_clusters=arch_cfg.mutable_clusters,
 				phase_type=int(self._phase_type),
 				fitness_scores=fitness_scores,
+				cluster_crossover_ratio=arch_cfg.cluster_crossover_ratio,
 			)
 
 			# Convert to 3-tuples, rank by fitness, return best n_needed
@@ -1349,9 +1352,9 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 			import math
 			pct = cfg.fitness_percentile if cfg.fitness_percentile and 0 < cfg.fitness_percentile < 1.0 else None
 			generate_count = math.ceil(n_neighbors / pct) if pct else n_neighbors
-			# Over-generate by 20% to compensate for tabu filtering
+			# Over-generate by 50% to compensate for tabu filtering
 			if tabu_list:
-				generate_count = math.ceil(generate_count * 1.2)
+				generate_count = math.ceil(generate_count * 1.5)
 
 			self._log.debug(f"[{self.name}] Searching {generate_count} neighbors from best ranked (keeping best {n_neighbors})...")
 			neighbors_raw = evaluator.search_neighbors(
@@ -1452,9 +1455,9 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 		batch_sources = []
 		for source, count in zip(sources, counts):
 			gen_count = math.ceil(count / pct) if pct else count
-			# Over-generate by 20% to compensate for tabu filtering
+			# Over-generate by 50% to compensate for tabu filtering
 			if tabu_list:
-				gen_count = math.ceil(gen_count * 1.2)
+				gen_count = math.ceil(gen_count * 1.5)
 			batch_sources.append((source, gen_count))
 
 		total_candidates = sum(gc for _, gc in batch_sources)

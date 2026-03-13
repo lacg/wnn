@@ -556,6 +556,7 @@ class TieredEvaluator(BaseEvaluator):
         mutable_clusters: Optional[list[int]] = None,  # List of cluster indices to mutate (None = all)
         phase_type: int = 0,
         fitness_scores: Optional[list[float]] = None,  # TODO: pass to Rust tournament
+        cluster_crossover_ratio: float = 0.0,
     ) -> OffspringSearchResult:
         """
         Search for GA offspring above accuracy threshold, entirely in Rust.
@@ -640,6 +641,7 @@ class TieredEvaluator(BaseEvaluator):
             return_best_n=return_best_n,
             mutable_clusters=mutable_clusters,  # Tier0-only: only mutate first N clusters
             phase_type=phase_type,
+            cluster_crossover_ratio=cluster_crossover_ratio,
         )
 
         # Convert results to ClusterGenome objects

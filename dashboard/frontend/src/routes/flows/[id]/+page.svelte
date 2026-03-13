@@ -157,7 +157,8 @@
     threshold_step: 1,
     tier_config: '',
     phase_order: 'neurons_first',
-    context_size: 4
+    context_size: 4,
+    cluster_crossover_ratio: 0.0
   };
 
   // Flow rename state
@@ -222,6 +223,7 @@
         editConfig.threshold_step = p.threshold_step ?? 1;
         editConfig.phase_order = p.phase_order ?? 'neurons_first';
         editConfig.context_size = p.context_size ?? 4;
+        editConfig.cluster_crossover_ratio = p.cluster_crossover_ratio ?? 0.0;
         if (p.tier_config) {
           // Handle both string and array formats
           if (typeof p.tier_config === 'string') {
@@ -281,6 +283,7 @@
         threshold_step: editConfig.threshold_step,
         phase_order: editConfig.phase_order,
         context_size: editConfig.context_size,
+        cluster_crossover_ratio: editConfig.cluster_crossover_ratio,
       };
       // Only include tier_config for tiered architectures
       if (!isBitwise) {
@@ -1203,6 +1206,14 @@
 
           <div class="form-row">
             <div class="form-group">
+              <label for="cluster_crossover_ratio">Cluster Crossover Ratio</label>
+              <input type="number" id="cluster_crossover_ratio" bind:value={editConfig.cluster_crossover_ratio} min="0" max="1" step="0.1" />
+              <span class="form-hint">0 = phase-specific only, 1 = cluster-level only</span>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
               <label for="fitness_percentile">Fitness Percentile</label>
               <input type="number" id="fitness_percentile" bind:value={editConfig.fitness_percentile} min="0" max="1" step="0.05" />
               <span class="form-hint">Keep top N% by fitness (0.75 = top 75%)</span>
@@ -1308,6 +1319,12 @@
             <span class="param-label">Fitness %</span>
             <span class="param-value">{flow.config.params.fitness_percentile ?? 0.75}</span>
           </div>
+          {#if flow.config.params.cluster_crossover_ratio}
+            <div class="param-item">
+              <span class="param-label">Cluster XO Ratio</span>
+              <span class="param-value">{flow.config.params.cluster_crossover_ratio}</span>
+            </div>
+          {/if}
           <div class="param-group full-width">
             <span class="param-group-label">Fitness</span>
             <div class="param-group-items">

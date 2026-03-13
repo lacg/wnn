@@ -3689,7 +3689,7 @@ impl TokenCacheWrapper {
     ) -> PyResult<Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64, f64)>> {
         let num_clusters = base_neurons.len();
         let total_input_bits = self.inner.total_input_bits();
-        let phase = match phase_type { 1 => neighbor_search::PhaseType::Bits, 2 => neighbor_search::PhaseType::Connections, _ => neighbor_search::PhaseType::Neurons };
+        let phase = match phase_type { 1 => neighbor_search::PhaseType::Bits, 2 => neighbor_search::PhaseType::Connections, 3 => neighbor_search::PhaseType::Cluster, _ => neighbor_search::PhaseType::Neurons };
 
         let config = neighbor_search::MutationConfig {
             num_clusters,
@@ -3808,7 +3808,8 @@ impl TokenCacheWrapper {
         total_generations = None,
         return_best_n = true,
         mutable_clusters = None,
-        phase_type = 0
+        phase_type = 0,
+        cluster_crossover_ratio = 0.0
     ))]
     fn search_offspring(
         &self,
@@ -3835,6 +3836,7 @@ impl TokenCacheWrapper {
         return_best_n: bool,
         mutable_clusters: Option<Vec<usize>>,
         phase_type: u8,
+        cluster_crossover_ratio: f64,
     ) -> PyResult<(Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64, f64)>, usize, usize)> {
         // Returns: (candidates, evaluated, viable)
         let num_clusters = if !population.is_empty() {
@@ -3843,7 +3845,7 @@ impl TokenCacheWrapper {
             return Ok((Vec::new(), 0, 0));
         };
         let total_input_bits = self.inner.total_input_bits();
-        let phase = match phase_type { 1 => neighbor_search::PhaseType::Bits, 2 => neighbor_search::PhaseType::Connections, _ => neighbor_search::PhaseType::Neurons };
+        let phase = match phase_type { 1 => neighbor_search::PhaseType::Bits, 2 => neighbor_search::PhaseType::Connections, 3 => neighbor_search::PhaseType::Cluster, _ => neighbor_search::PhaseType::Neurons };
 
         let ga_config = neighbor_search::GAConfig {
             num_clusters,
@@ -3858,6 +3860,7 @@ impl TokenCacheWrapper {
             tournament_size,
             total_input_bits,
             phase_type: phase,
+            cluster_crossover_ratio,
         };
 
         // Set up live progress for observer thread
@@ -4354,7 +4357,8 @@ impl IDSCacheWrapper {
         total_generations = None,
         return_best_n = true,
         mutable_clusters = None,
-        phase_type = 0
+        phase_type = 0,
+        cluster_crossover_ratio = 0.0
     ))]
     fn search_offspring(
         &self,
@@ -4380,6 +4384,7 @@ impl IDSCacheWrapper {
         return_best_n: bool,
         mutable_clusters: Option<Vec<usize>>,
         phase_type: u8,
+        cluster_crossover_ratio: f64,
     ) -> PyResult<(Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64, f64)>, usize, usize)> {
         let num_clusters = if !population.is_empty() {
             population[0].1.len()
@@ -4406,6 +4411,7 @@ impl IDSCacheWrapper {
             tournament_size,
             total_input_bits,
             phase_type: phase,
+            cluster_crossover_ratio,
         };
 
         let lp_arc = self.inner.live_progress.clone();
@@ -5212,7 +5218,7 @@ impl BitwiseCacheWrapper {
     ) -> PyResult<Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64, f64)>> {
         let num_clusters = base_neurons.len();
         let total_input_bits = self.inner.total_input_bits;
-        let phase = match phase_type { 1 => neighbor_search::PhaseType::Bits, 2 => neighbor_search::PhaseType::Connections, _ => neighbor_search::PhaseType::Neurons };
+        let phase = match phase_type { 1 => neighbor_search::PhaseType::Bits, 2 => neighbor_search::PhaseType::Connections, 3 => neighbor_search::PhaseType::Cluster, _ => neighbor_search::PhaseType::Neurons };
 
         let config = neighbor_search::MutationConfig {
             num_clusters,
@@ -5323,7 +5329,8 @@ impl BitwiseCacheWrapper {
         total_generations = None,
         return_best_n = true,
         mutable_clusters = None,
-        phase_type = 0
+        phase_type = 0,
+        cluster_crossover_ratio = 0.0
     ))]
     fn search_offspring(
         &self,
@@ -5352,6 +5359,7 @@ impl BitwiseCacheWrapper {
         return_best_n: bool,
         mutable_clusters: Option<Vec<usize>>,
         phase_type: u8,
+        cluster_crossover_ratio: f64,
     ) -> PyResult<(Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64, f64)>, usize, usize)> {
         let num_clusters = if !population.is_empty() {
             population[0].1.len()
@@ -5359,7 +5367,7 @@ impl BitwiseCacheWrapper {
             return Ok((Vec::new(), 0, 0));
         };
         let total_input_bits = self.inner.total_input_bits;
-        let phase = match phase_type { 1 => neighbor_search::PhaseType::Bits, 2 => neighbor_search::PhaseType::Connections, _ => neighbor_search::PhaseType::Neurons };
+        let phase = match phase_type { 1 => neighbor_search::PhaseType::Bits, 2 => neighbor_search::PhaseType::Connections, 3 => neighbor_search::PhaseType::Cluster, _ => neighbor_search::PhaseType::Neurons };
 
         let ga_config = neighbor_search::GAConfig {
             num_clusters,
@@ -5374,6 +5382,7 @@ impl BitwiseCacheWrapper {
             tournament_size,
             total_input_bits,
             phase_type: phase,
+            cluster_crossover_ratio,
         };
 
         let override_val = self.sparse_threshold_override;

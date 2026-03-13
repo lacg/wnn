@@ -358,6 +358,8 @@ class OptimizerStrategyFactory:
 		neurons_grid: list[int] | None = None,
 		bits_grid: list[int] | None = None,
 		grid_top_k: int = 15,
+		# Cluster crossover ratio (GA only): 0.0 = phase-specific, 1.0 = all cluster-level
+		cluster_crossover_ratio: float = 0.0,
 	):
 		"""
 		Create an optimizer strategy.
@@ -468,6 +470,7 @@ class OptimizerStrategyFactory:
 					fitness_weight_ce=fitness_weight_ce,
 					fitness_weight_acc=fitness_weight_acc,
 					min_accuracy_floor=min_accuracy_floor,
+					cluster_crossover_ratio=cluster_crossover_ratio,
 				)
 
 			case OptimizerStrategyType.ARCHITECTURE_TS:
@@ -636,6 +639,7 @@ class OptimizerStrategyFactory:
 		fitness_weight_ce: float = 1.0,
 		fitness_weight_acc: float = 1.0,
 		min_accuracy_floor: float | None = None,
+		cluster_crossover_ratio: float = 0.0,
 	):
 		"""Create an ArchitectureGAStrategy."""
 		from wnn.ram.fitness import FitnessCalculatorType
@@ -659,6 +663,7 @@ class OptimizerStrategyFactory:
 			token_frequencies=token_frequencies,
 			total_input_bits=total_input_bits,
 			mutable_clusters=mutable_clusters,
+			cluster_crossover_ratio=cluster_crossover_ratio,
 		)
 		ga_config = GAConfig(
 			population_size=population_size,

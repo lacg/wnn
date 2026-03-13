@@ -112,6 +112,9 @@ class ExperimentConfig:
 	fitness_weight_acc: float = 1.0
 	min_accuracy_floor: float = 0.0
 
+	# Cluster-level crossover ratio: 0.0 = all phase-specific, 1.0 = all cluster-level
+	cluster_crossover_ratio: float = 0.0
+
 	# Grid search configuration (only used when experiment_type=GRID_SEARCH)
 	neurons_grid: Optional[list[int]] = None   # e.g. [50, 100, 150, 200]
 	bits_grid: Optional[list[int]] = None       # e.g. [14, 16, 18, 20]
@@ -461,6 +464,10 @@ class Experiment:
 			tier0_clusters = cfg.tier_config[0][0] or self.vocab_size
 			strategy_kwargs["mutable_clusters"] = list(range(tier0_clusters))
 			self.log(f"  Tier0-only mode: mutating first {tier0_clusters} clusters")
+
+		# Cluster crossover ratio
+		if cfg.cluster_crossover_ratio > 0:
+			strategy_kwargs["cluster_crossover_ratio"] = cfg.cluster_crossover_ratio
 
 		# Type-specific kwargs
 		if is_grid_search:
