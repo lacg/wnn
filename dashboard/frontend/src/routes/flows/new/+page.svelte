@@ -19,7 +19,7 @@
 
   // IDS-specific config
   let idsClassification = 'binary';
-  let idsSingleCluster = false;
+  let idsSingleCluster = true;
   let idsNBits = 8;
   let idsValFraction = 0.25;
   let idsKFolds = 5;
@@ -205,7 +205,7 @@
   let thresholdStart = 0;
   let thresholdStep = 1;
   let contextSize = 4;
-  let clusterCrossoverRatio = 0.0;
+  let clusterCrossoverRatio = 0.8;
   let reweightRounds = 0;
   let reweightMaxBoost = 4;
   let tierConfig = '100,15,20,true;400,10,12,false;rest,5,8,false';
