@@ -48,3 +48,5 @@ include = ["wnn*"]
 
 [project.scripts]
 wnn-exp = "wnn.ram.experiments.cli:main"
+wnn-verify = "wnn.hf.verify:main"
+wnn-export = "wnn.hf.export_pipeline:main"

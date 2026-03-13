@@ -324,6 +324,9 @@ pub struct Genome {
     pub id: i64,
     pub experiment_id: i64,
     pub config_hash: String,
+    /// Connection-inclusive hash (NULL for architecture-only rows, set for leaderboard genomes)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub genome_hash: Option<String>,
     pub tiers_json: String,
     pub total_clusters: i32,
     pub total_neurons: i32,
@@ -454,6 +457,47 @@ pub struct CombinedValidation {
     /// Unigram interpolation lambda (only set for lambda sweep results)
     pub unigram_lambda: Option<f64>,
     pub created_at: DateTime<Utc>,
+}
+
+// =============================================================================
+// Best Genome Models (Leaderboard)
+// =============================================================================
+
+/// A best genome entry in the leaderboard
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BestGenome {
+    pub id: i64,
+    pub task_type: String,
+    pub stage: String,
+    pub metric: String,
+    pub genome_id: i64,
+    pub genome_hash: String,
+    pub rank: Option<i32>,
+    pub ce: f64,
+    pub accuracy: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub f1_macro: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fpr: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flow_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub experiment_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hf_repo_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hf_exported_at: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    // Joined from genomes table
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tiers_json: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_clusters: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_neurons: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub architecture_type_str: Option<String>,
 }
 
 // =============================================================================

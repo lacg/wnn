@@ -964,6 +964,43 @@ class DashboardClient:
 		}
 
 	# =========================================================================
+	# Best Genomes (Leaderboard)
+	# =========================================================================
+
+	def submit_best_genomes(self, genomes_payload: list[dict]) -> dict:
+		"""POST /api/best-genomes — submit genome(s) to leaderboard."""
+		return self._request("POST", "/api/best-genomes", json_data={"genomes": genomes_payload}) or {}
+
+	def recalculate_best_genomes(self, task_type: str, stage: str, metric: str, max_entries: int = 150) -> dict:
+		"""POST /api/best-genomes/recalculate — trigger re-ranking."""
+		return self._request("POST", "/api/best-genomes/recalculate", json_data={
+			"task_type": task_type,
+			"stage": stage,
+			"metric": metric,
+			"max_entries": max_entries,
+		}) or {}
+
+	def list_best_genomes(self, task_type: str = None, stage: str = None,
+						  metric: str = None, limit: int = 50, offset: int = 0) -> list[dict]:
+		"""GET /api/best-genomes — paginated leaderboard."""
+		params = {"limit": limit, "offset": offset}
+		if task_type:
+			params["task_type"] = task_type
+		if stage:
+			params["stage"] = stage
+		if metric:
+			params["metric"] = metric
+		return self._request("GET", "/api/best-genomes", params=params) or []
+
+	def get_best_genome(self, best_genome_id: int) -> dict | None:
+		"""GET /api/best-genomes/:id — single entry with genome details."""
+		return self._request("GET", f"/api/best-genomes/{best_genome_id}")
+
+	def get_best_genome_data(self, best_genome_id: int) -> dict | None:
+		"""GET /api/best-genomes/:id/download — full genome data."""
+		return self._request("GET", f"/api/best-genomes/{best_genome_id}/download")
+
+	# =========================================================================
 	# Health check
 	# =========================================================================
 

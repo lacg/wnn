@@ -370,6 +370,35 @@ export interface Checkpoint {
 }
 
 // =============================================================================
+// Best Genome (Leaderboard)
+// =============================================================================
+
+export interface BestGenome {
+  id: number;
+  task_type: string;
+  stage: string;
+  metric: string;
+  genome_id: number;
+  genome_hash: string;
+  rank: number | null;
+  ce: number;
+  accuracy: number;
+  f1_macro: number | null;
+  fpr: number | null;
+  flow_id: number | null;
+  experiment_id: number | null;
+  hf_repo_id: string | null;
+  hf_exported_at: string | null;
+  created_at: string;
+  updated_at: string;
+  // Joined from genomes table
+  tiers_json: string | null;
+  total_clusters: number | null;
+  total_neurons: number | null;
+  architecture_type_str: string | null;
+}
+
+// =============================================================================
 // Dashboard snapshot
 // =============================================================================
 

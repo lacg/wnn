@@ -955,6 +955,49 @@ class Experiment:
 					except Exception as e:
 						self.log(f"  Warning: Failed to save {genome_type} summary: {e}")
 
+				# Submit to best genomes leaderboard (final validation only)
+				if self.dashboard_client and validation_point == 'final':
+					try:
+						# Determine task_type from cluster type / IDS metrics
+						task_type = "ids" if f1 is not None else "lm"
+						# Determine stage from experiment name (e.g., "S0: GA Neurons" → "stage_0")
+						exp_name = self.config.name if self.config else ""
+						if exp_name.startswith("S1:") or exp_name.startswith("S1 "):
+							stage = "stage_1"
+						elif exp_name.startswith("S2:") or exp_name.startswith("S2 "):
+							stage = "stage_2"
+						else:
+							stage = "stage_0"
+						# Determine metric from genome_type
+						metric = genome_type.replace("best_", "")  # "ce", "acc", "fitness"
+						if metric == "acc":
+							metric = "accuracy"
+						# Serialize genome data for storage
+						genome_data = {
+							"config_hash": genome_hash[:16],
+							"tiers_json": str(genome),
+							"total_clusters": len(genome.neurons_per_cluster),
+							"total_neurons": sum(genome.neurons_per_cluster),
+							"architecture_type": task_type,
+						}
+						if genome.connections is not None:
+							genome_data["connections_json"] = ",".join(str(c) for c in genome.connections)
+						self.dashboard_client.submit_best_genomes([{
+							"task_type": task_type,
+							"stage": stage,
+							"metric": metric,
+							"genome_hash": genome_hash,
+							"ce": ce,
+							"accuracy": acc,
+							"f1_macro": f1,
+							"fpr": fpr_val,
+							"flow_id": flow_id,
+							"experiment_id": self.experiment_id,
+							"genome_data": genome_data,
+						}])
+					except Exception as e:
+						self.log(f"  Warning: leaderboard submit failed: {e}")
+
 			self.log("=" * 60)
 			self.log("")
 

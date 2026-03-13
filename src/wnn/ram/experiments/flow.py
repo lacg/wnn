@@ -206,6 +206,13 @@ class FlowConfig:
 	stage_min_neurons_list: Optional[list[int]] = None
 	stage_max_neurons_list: Optional[list[int]] = None
 
+	# Seed from leaderboard
+	seed_from_leaderboard: bool = False
+	seed_leaderboard_task_type: str = "lm"
+	seed_leaderboard_stage: str = "stage_0"
+	seed_leaderboard_metric: str = "ce"
+	seed_leaderboard_count: int = 10
+
 	# IDS-specific config (architecture_type="ids")
 	ids_classification: str = "binary"  # "binary", "multi", or "hierarchical"
 	ids_n_bits: int = 8  # thermometer encoding bits per feature
@@ -1059,6 +1066,18 @@ class Flow:
 			seed_genome, seed_population, seed_threshold = self._load_seed_checkpoint(
 				cfg.seed_checkpoint_path
 			)
+
+		# Load seed from leaderboard if configured (and no checkpoint seed)
+		if cfg.seed_from_leaderboard and not seed_genome and self.tracker:
+			try:
+				self.log("Loading seed from leaderboard...")
+				seed_genome, seed_population = self._load_seed_from_leaderboard()
+				if seed_genome:
+					self.log(f"  Seeded from leaderboard: {seed_genome}")
+					if seed_population:
+						self.log(f"  Population: {len(seed_population)} genomes")
+			except Exception as e:
+				self.log(f"  Warning: leaderboard seed failed: {e}")
 
 		# Create initial genome from tier config if not seeded
 		if seed_genome is None and cfg.tier_config:
@@ -1938,6 +1957,67 @@ class Flow:
 		except Exception as e:
 			self.log(f"Warning: Failed to load seed checkpoint: {e}")
 			return None, None, None
+
+	def _load_seed_from_leaderboard(
+		self,
+	) -> tuple[Optional[ClusterGenome], Optional[list[ClusterGenome]]]:
+		"""Load seed genome(s) from the best genomes leaderboard."""
+		cfg = self.config
+		entries = self.tracker.list_best_genomes(
+			task_type=cfg.seed_leaderboard_task_type,
+			stage=cfg.seed_leaderboard_stage,
+			metric=cfg.seed_leaderboard_metric,
+			limit=cfg.seed_leaderboard_count,
+		)
+		if not entries:
+			self.log("  No genomes found on leaderboard")
+			return None, None
+
+		population = []
+		for entry in entries:
+			data = self.tracker.get_best_genome_data(entry["id"])
+			if not data or not data.get("connections_json"):
+				continue
+			# Reconstruct ClusterGenome from tiers_json + connections_json
+			try:
+				tiers_json = data.get("tiers_json", "[]")
+				connections_str = data["connections_json"]
+				connections = [int(c) for c in connections_str.split(",") if c.strip()]
+				# Parse tiers to get bits_per_neuron and neurons_per_cluster
+				# tiers_json from genome.__str__() or stored as JSON array
+				import json as _json
+				tiers = _json.loads(tiers_json) if tiers_json.startswith("[") else []
+				if tiers and isinstance(tiers[0], dict):
+					bits_per_neuron = []
+					neurons_per_cluster = []
+					for tier in tiers:
+						n = tier.get("neurons", 1)
+						b = tier.get("bits", 1)
+						c = tier.get("clusters", 1)
+						bits_per_neuron.extend([b] * c)
+						neurons_per_cluster.extend([n] * c)
+				else:
+					# Fallback: use total_clusters/neurons with defaults
+					total_clusters = data.get("total_clusters", 1)
+					total_neurons = data.get("total_neurons", total_clusters)
+					npg = max(1, total_neurons // total_clusters)
+					bits_per_neuron = [16] * total_clusters
+					neurons_per_cluster = [npg] * total_clusters
+
+				genome = ClusterGenome(
+					bits_per_neuron=bits_per_neuron,
+					neurons_per_cluster=neurons_per_cluster,
+					connections=connections if connections else None,
+				)
+				population.append(genome)
+			except Exception as e:
+				self.log(f"  Warning: failed to deserialize leaderboard genome {entry.get('id')}: {e}")
+
+		if not population:
+			return None, None
+
+		best = population[0]  # First entry = best ranked
+		return best, population
 
 	def _save_stop_checkpoint_to_db(
 		self,

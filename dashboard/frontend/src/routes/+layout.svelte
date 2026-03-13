@@ -20,6 +20,7 @@
         <a href="/flows" class="nav-link">Flows</a>
         <a href="/experiments" class="nav-link">History</a>
         <a href="/checkpoints" class="nav-link">Checkpoints</a>
+        <a href="/leaderboard" class="nav-link">Leaderboard</a>
       </nav>
     </div>
     <div class="header-right">
