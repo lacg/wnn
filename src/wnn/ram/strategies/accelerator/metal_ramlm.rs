@@ -2511,7 +2511,7 @@ mod tests {
         );
 
         assert!(result.is_ok(), "compute_ce failed: {:?}", result.err());
-        let (avg_ce, accuracy) = result.unwrap();
+        let (avg_ce, accuracy, _predictions) = result.unwrap();
 
         // With all neurons returning TRUE, all clusters should have score 1.0
         // Softmax over [1.0, 1.0, 1.0, 1.0] = [0.25, 0.25, 0.25, 0.25]

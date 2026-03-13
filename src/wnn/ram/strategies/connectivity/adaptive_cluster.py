@@ -62,6 +62,31 @@ def generate_connections(bits_per_neuron: list[int], total_input_bits: int, seed
 	return np_rng.integers(0, total_input_bits, size=sum(bits_per_neuron)).tolist()
 
 
+def enforce_unique_connections(
+	conns: list[int],
+	bits_per_neuron: list[int],
+	total_input_bits: int,
+	rng: random.Random,
+) -> None:
+	"""Ensure no duplicate input bit indices within any neuron. Modifies conns in-place."""
+	offset = 0
+	for b in bits_per_neuron:
+		neuron_slice = conns[offset:offset + b]
+		seen: set[int] = set()
+		for i, c in enumerate(neuron_slice):
+			if c in seen:
+				# Replace with a random index not already in this neuron
+				for _ in range(100):
+					candidate = rng.randint(0, total_input_bits - 1)
+					if candidate not in seen:
+						conns[offset + i] = candidate
+						seen.add(candidate)
+						break
+			else:
+				seen.add(c)
+		offset += b
+
+
 class PhaseType(IntEnum):
 	"""Phase type for phase-aware crossover and mutation.
 
@@ -420,32 +445,37 @@ class ClusterGenome:
 		return ClusterGenome(bits_per_neuron=child_bits, neurons_per_cluster=child_neurons, connections=child_conns)
 
 	def _crossover_bits(self, other: ClusterGenome, rng: random.Random) -> ClusterGenome:
-		"""Cluster-level crossover: per-cluster coin flip, take whole cluster from one parent."""
+		"""Per-neuron crossover: mix bit counts from both parents, preserve self's neuron counts."""
 		num_clusters = len(self.neurons_per_cluster)
 		self_off = self.cluster_neuron_offsets
 		other_off = other.cluster_neuron_offsets
 		self_conn_off = self.connection_offsets
 		other_conn_off = other.connection_offsets
 
+		child_neurons = self.neurons_per_cluster.copy()
 		child_bits = []
-		child_neurons = []
 		child_conns = [] if (self.connections is not None and other.connections is not None) else None
 
 		for c in range(num_clusters):
-			if rng.random() < 0.5:
-				# Take from self
-				ns, ne = self_off[c], self_off[c + 1]
-				child_neurons.append(self.neurons_per_cluster[c])
-				child_bits.extend(self.bits_per_neuron[ns:ne])
-				if child_conns is not None:
-					child_conns.extend(self.connections[self_conn_off[ns]:self_conn_off[ne]])
-			else:
-				# Take from other
-				ns, ne = other_off[c], other_off[c + 1]
-				child_neurons.append(other.neurons_per_cluster[c])
-				child_bits.extend(other.bits_per_neuron[ns:ne])
-				if child_conns is not None:
-					child_conns.extend(other.connections[other_conn_off[ns]:other_conn_off[ne]])
+			p1_n = self.neurons_per_cluster[c]
+			p2_n = other.neurons_per_cluster[c]
+
+			for local in range(p1_n):
+				g_self = self_off[c] + local
+				# Take bits from other if it has a neuron at this position
+				if local < p2_n and rng.random() < 0.5:
+					g_other = other_off[c] + local
+					child_bits.append(other.bits_per_neuron[g_other])
+					if child_conns is not None:
+						child_conns.extend(
+							other.connections[other_conn_off[g_other]:other_conn_off[g_other + 1]]
+						)
+				else:
+					child_bits.append(self.bits_per_neuron[g_self])
+					if child_conns is not None:
+						child_conns.extend(
+							self.connections[self_conn_off[g_self]:self_conn_off[g_self + 1]]
+						)
 
 		return ClusterGenome(bits_per_neuron=child_bits, neurons_per_cluster=child_neurons, connections=child_conns)
 
@@ -465,6 +495,183 @@ class ClusterGenome:
 				connections=child_conns,
 			)
 		return self._crossover_bits(other, rng)
+
+	# =========================================================================
+	# Two-Offspring Crossover (Classical GA: 2 parents → 2 children)
+	# =========================================================================
+
+	def crossover2(
+		self,
+		other: ClusterGenome,
+		phase_type: PhaseType,
+		rng: random.Random | None = None,
+	) -> tuple[ClusterGenome, ClusterGenome]:
+		"""Phase-aware crossover returning 2 complementary offspring."""
+		if rng is None:
+			rng = random.Random()
+		match phase_type:
+			case PhaseType.NEURONS:
+				return self._crossover2_neurons(other, rng)
+			case PhaseType.BITS:
+				return self._crossover2_bits(other, rng)
+			case PhaseType.CONNECTIONS:
+				return self._crossover2_connections(other, rng)
+
+	def _crossover2_neurons(self, other: ClusterGenome, rng: random.Random) -> tuple[ClusterGenome, ClusterGenome]:
+		"""Pool & partition: pool all neurons per cluster, partition to preserve each parent's neuron count."""
+		num_clusters = len(self.neurons_per_cluster)
+		self_off = self.cluster_neuron_offsets
+		other_off = other.cluster_neuron_offsets
+		self_conn_off = self.connection_offsets
+		other_conn_off = other.connection_offsets
+
+		c1_bits, c1_neurons, c1_conns = [], [], []
+		c2_bits, c2_neurons, c2_conns = [], [], []
+		has_conns = self.connections is not None and other.connections is not None
+
+		for c in range(num_clusters):
+			p1_n = self.neurons_per_cluster[c]
+			p2_n = other.neurons_per_cluster[c]
+
+			# Pool all neurons from both parents
+			pool = []
+			for local in range(p1_n):
+				g = self_off[c] + local
+				bits = self.bits_per_neuron[g]
+				conns = self.connections[self_conn_off[g]:self_conn_off[g + 1]] if self.connections else []
+				pool.append((bits, conns))
+			for local in range(p2_n):
+				g = other_off[c] + local
+				bits = other.bits_per_neuron[g]
+				conns = other.connections[other_conn_off[g]:other_conn_off[g + 1]] if other.connections else []
+				pool.append((bits, conns))
+
+			rng.shuffle(pool)
+
+			# child1 takes first p1_n, child2 takes remaining p2_n
+			c1_neurons.append(p1_n)
+			for bits, conns in pool[:p1_n]:
+				c1_bits.append(bits)
+				if has_conns:
+					c1_conns.extend(conns)
+
+			c2_neurons.append(p2_n)
+			for bits, conns in pool[p1_n:]:
+				c2_bits.append(bits)
+				if has_conns:
+					c2_conns.extend(conns)
+
+		child1 = ClusterGenome(bits_per_neuron=c1_bits, neurons_per_cluster=c1_neurons,
+							   connections=c1_conns if has_conns else None)
+		child2 = ClusterGenome(bits_per_neuron=c2_bits, neurons_per_cluster=c2_neurons,
+							   connections=c2_conns if has_conns else None)
+		return child1, child2
+
+	def _crossover2_bits(self, other: ClusterGenome, rng: random.Random) -> tuple[ClusterGenome, ClusterGenome]:
+		"""Per-neuron swap: pre-record swap decisions, build both children incrementally."""
+		num_clusters = len(self.neurons_per_cluster)
+		self_off = self.cluster_neuron_offsets
+		other_off = other.cluster_neuron_offsets
+		self_conn_off = self.connection_offsets
+		other_conn_off = other.connection_offsets
+
+		# Pre-compute swap decisions
+		swap_map = []
+		for c in range(num_clusters):
+			min_n = min(self.neurons_per_cluster[c], other.neurons_per_cluster[c])
+			swap_map.append([rng.random() < 0.5 for _ in range(min_n)])
+
+		c1_neurons = self.neurons_per_cluster.copy()
+		c2_neurons = other.neurons_per_cluster.copy()
+		c1_bits, c2_bits = [], []
+		has_conns = self.connections is not None and other.connections is not None
+		c1_conns, c2_conns = [], []
+
+		for c in range(num_clusters):
+			p1_n = self.neurons_per_cluster[c]
+			p2_n = other.neurons_per_cluster[c]
+
+			# Build child1 (p1_n neurons)
+			for local in range(p1_n):
+				swap = local < len(swap_map[c]) and swap_map[c][local]
+				if swap:
+					g = other_off[c] + local
+					c1_bits.append(other.bits_per_neuron[g])
+					if has_conns:
+						c1_conns.extend(other.connections[other_conn_off[g]:other_conn_off[g + 1]])
+				else:
+					g = self_off[c] + local
+					c1_bits.append(self.bits_per_neuron[g])
+					if has_conns:
+						c1_conns.extend(self.connections[self_conn_off[g]:self_conn_off[g + 1]])
+
+			# Build child2 (p2_n neurons) — complementary at shared positions
+			for local in range(p2_n):
+				swap = local < len(swap_map[c]) and swap_map[c][local]
+				if swap:
+					g = self_off[c] + local
+					c2_bits.append(self.bits_per_neuron[g])
+					if has_conns:
+						c2_conns.extend(self.connections[self_conn_off[g]:self_conn_off[g + 1]])
+				else:
+					g = other_off[c] + local
+					c2_bits.append(other.bits_per_neuron[g])
+					if has_conns:
+						c2_conns.extend(other.connections[other_conn_off[g]:other_conn_off[g + 1]])
+
+		child1 = ClusterGenome(bits_per_neuron=c1_bits, neurons_per_cluster=c1_neurons,
+							   connections=c1_conns if has_conns else None)
+		child2 = ClusterGenome(bits_per_neuron=c2_bits, neurons_per_cluster=c2_neurons,
+							   connections=c2_conns if has_conns else None)
+		return child1, child2
+
+	def _crossover2_connections(self, other: ClusterGenome, rng: random.Random) -> tuple[ClusterGenome, ClusterGenome]:
+		"""Pool & distribute: pool all connections per cluster, shuffle, distribute by architecture."""
+		num_clusters = len(self.neurons_per_cluster)
+		self_off = self.cluster_neuron_offsets
+		other_off = other.cluster_neuron_offsets
+		self_conn_off = self.connection_offsets
+		other_conn_off = other.connection_offsets
+
+		# Children inherit architecture from their respective parent
+		c1_neurons = self.neurons_per_cluster.copy()
+		c2_neurons = other.neurons_per_cluster.copy()
+		c1_bits = self.bits_per_neuron.copy()
+		c2_bits = other.bits_per_neuron.copy()
+		c1_conns = []
+		c2_conns = []
+
+		total_input_bits = max(max(self.connections) + 1 if self.connections else 0,
+							  max(other.connections) + 1 if other.connections else 0)
+
+		for c in range(num_clusters):
+			# Pool all connections from both parents for this cluster
+			pool = []
+			p1_start = self_conn_off[self_off[c]]
+			p1_end = self_conn_off[self_off[c + 1]] if self_off[c + 1] <= len(self.bits_per_neuron) else self_conn_off[-1]
+			if self.connections:
+				pool.extend(self.connections[p1_start:p1_end])
+			p1_conn_count = p1_end - p1_start
+
+			p2_start = other_conn_off[other_off[c]]
+			p2_end = other_conn_off[other_off[c + 1]] if other_off[c + 1] <= len(other.bits_per_neuron) else other_conn_off[-1]
+			if other.connections:
+				pool.extend(other.connections[p2_start:p2_end])
+			p2_conn_count = p2_end - p2_start
+
+			rng.shuffle(pool)
+
+			c1_conns.extend(pool[:p1_conn_count])
+			c2_conns.extend(pool[p1_conn_count:])
+
+		# Enforce uniqueness
+		if total_input_bits > 0:
+			enforce_unique_connections(c1_conns, c1_bits, total_input_bits, rng)
+			enforce_unique_connections(c2_conns, c2_bits, total_input_bits, rng)
+
+		child1 = ClusterGenome(bits_per_neuron=c1_bits, neurons_per_cluster=c1_neurons, connections=c1_conns)
+		child2 = ClusterGenome(bits_per_neuron=c2_bits, neurons_per_cluster=c2_neurons, connections=c2_conns)
+		return child1, child2
 
 	def mutate(
 		self,

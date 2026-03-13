@@ -875,7 +875,7 @@ fn crossover_neurons(
     (child_bits, child_neurons, child_conns)
 }
 
-/// Cluster-level crossover: per-cluster coin flip, take whole cluster from one parent.
+/// Per-neuron crossover: mix bit counts from both parents, preserve parent1's neuron counts.
 fn crossover_bits(
     parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
     parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
@@ -887,32 +887,32 @@ fn crossover_bits(
     let p1_conn_off = compute_conn_offsets(&parent1.0);
     let p2_conn_off = compute_conn_offsets(&parent2.0);
 
+    let child_neurons = parent1.1.clone(); // Preserve parent1's neuron counts
     let mut child_bits = Vec::new();
-    let mut child_neurons = Vec::new();
     let mut child_conns = Vec::new();
 
     for c in 0..num_clusters {
-        if rng.gen::<bool>() {
-            // Take from parent1
-            let ns = p1_neuron_off[c];
-            let ne = p1_neuron_off[c + 1];
-            child_neurons.push(parent1.1[c]);
-            child_bits.extend_from_slice(&parent1.0[ns..ne]);
-            if !parent1.2.is_empty() {
-                let cs = p1_conn_off[ns];
-                let ce = p1_conn_off[ne];
-                child_conns.extend_from_slice(&parent1.2[cs..ce]);
-            }
-        } else {
-            // Take from parent2
-            let ns = p2_neuron_off[c];
-            let ne = p2_neuron_off[c + 1];
-            child_neurons.push(parent2.1[c]);
-            child_bits.extend_from_slice(&parent2.0[ns..ne]);
-            if !parent2.2.is_empty() {
-                let cs = p2_conn_off[ns];
-                let ce = p2_conn_off[ne];
-                child_conns.extend_from_slice(&parent2.2[cs..ce]);
+        let p1_n = parent1.1[c];
+        let p2_n = parent2.1[c];
+
+        for local in 0..p1_n {
+            let g1 = p1_neuron_off[c] + local;
+            // Take bits from parent2 if it has a neuron at this position
+            if local < p2_n && rng.gen::<bool>() {
+                let g2 = p2_neuron_off[c] + local;
+                child_bits.push(parent2.0[g2]);
+                if !parent2.2.is_empty() {
+                    let cs = p2_conn_off[g2];
+                    let ce = p2_conn_off[g2 + 1];
+                    child_conns.extend_from_slice(&parent2.2[cs..ce]);
+                }
+            } else {
+                child_bits.push(parent1.0[g1]);
+                if !parent1.2.is_empty() {
+                    let cs = p1_conn_off[g1];
+                    let ce = p1_conn_off[g1 + 1];
+                    child_conns.extend_from_slice(&parent1.2[cs..ce]);
+                }
             }
         }
     }
@@ -943,6 +943,252 @@ fn crossover_connections(
         // Different architectures: fall back to cluster-level
         crossover_bits(parent1, parent2, num_clusters, rng)
     }
+}
+
+/// Enforce unique connections per neuron. Replaces duplicates with random indices.
+fn enforce_unique_connections(
+    conns: &mut [i64],
+    bits_per_neuron: &[usize],
+    total_input_bits: usize,
+    rng: &mut impl Rng,
+) {
+    let mut offset = 0;
+    for &b in bits_per_neuron {
+        let mut seen = std::collections::HashSet::with_capacity(b);
+        for i in 0..b {
+            let c = conns[offset + i];
+            if !seen.insert(c) {
+                // Duplicate — replace with random unique index
+                for _ in 0..100 {
+                    let candidate = rng.gen_range(0..total_input_bits as i64);
+                    if !seen.contains(&candidate) {
+                        conns[offset + i] = candidate;
+                        seen.insert(candidate);
+                        break;
+                    }
+                }
+            }
+        }
+        offset += b;
+    }
+}
+
+/// Phase-aware crossover producing 2 complementary offspring.
+///
+/// Returns ((child1_bits, child1_neurons, child1_conns), (child2_bits, child2_neurons, child2_conns)).
+fn crossover2(
+    parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+    parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+    num_clusters: usize,
+    phase_type: PhaseType,
+    total_input_bits: usize,
+    rng: &mut impl Rng,
+) -> ((Vec<usize>, Vec<usize>, Vec<i64>), (Vec<usize>, Vec<usize>, Vec<i64>)) {
+    match phase_type {
+        PhaseType::Neurons => crossover2_neurons(parent1, parent2, num_clusters, rng),
+        PhaseType::Bits => crossover2_bits(parent1, parent2, num_clusters, rng),
+        PhaseType::Connections => crossover2_connections(parent1, parent2, num_clusters, total_input_bits, rng),
+    }
+}
+
+/// Neuron crossover (2 offspring): pool & partition.
+/// Pool all neurons per cluster, shuffle, child1 takes p1_n, child2 takes p2_n.
+fn crossover2_neurons(
+    parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+    parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+    num_clusters: usize,
+    rng: &mut impl Rng,
+) -> ((Vec<usize>, Vec<usize>, Vec<i64>), (Vec<usize>, Vec<usize>, Vec<i64>)) {
+    let p1_neuron_off = compute_neuron_offsets(&parent1.1);
+    let p2_neuron_off = compute_neuron_offsets(&parent2.1);
+    let p1_conn_off = compute_conn_offsets(&parent1.0);
+    let p2_conn_off = compute_conn_offsets(&parent2.0);
+
+    let mut c1_bits = Vec::new();
+    let mut c1_neurons = Vec::new();
+    let mut c1_conns = Vec::new();
+    let mut c2_bits = Vec::new();
+    let mut c2_neurons = Vec::new();
+    let mut c2_conns = Vec::new();
+
+    for c in 0..num_clusters {
+        let p1_n = parent1.1[c];
+        let p2_n = parent2.1[c];
+
+        struct NeuronData { bits: usize, conns: Vec<i64> }
+        let mut pool: Vec<NeuronData> = Vec::with_capacity(p1_n + p2_n);
+
+        for local in 0..p1_n {
+            let global = p1_neuron_off[c] + local;
+            let cs = p1_conn_off[global];
+            let ce = p1_conn_off[global + 1];
+            pool.push(NeuronData {
+                bits: parent1.0[global],
+                conns: if parent1.2.is_empty() { vec![] } else { parent1.2[cs..ce].to_vec() },
+            });
+        }
+        for local in 0..p2_n {
+            let global = p2_neuron_off[c] + local;
+            let cs = p2_conn_off[global];
+            let ce = p2_conn_off[global + 1];
+            pool.push(NeuronData {
+                bits: parent2.0[global],
+                conns: if parent2.2.is_empty() { vec![] } else { parent2.2[cs..ce].to_vec() },
+            });
+        }
+
+        pool.shuffle(rng);
+
+        // child1 takes first p1_n
+        c1_neurons.push(p1_n);
+        for neuron in pool.iter().take(p1_n) {
+            c1_bits.push(neuron.bits);
+            c1_conns.extend_from_slice(&neuron.conns);
+        }
+
+        // child2 takes remaining p2_n
+        c2_neurons.push(p2_n);
+        for neuron in pool.iter().skip(p1_n) {
+            c2_bits.push(neuron.bits);
+            c2_conns.extend_from_slice(&neuron.conns);
+        }
+    }
+
+    ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns))
+}
+
+/// Bit crossover (2 offspring): per-neuron swap.
+/// Record swap decisions first, then build both children incrementally.
+fn crossover2_bits(
+    parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+    parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+    num_clusters: usize,
+    rng: &mut impl Rng,
+) -> ((Vec<usize>, Vec<usize>, Vec<i64>), (Vec<usize>, Vec<usize>, Vec<i64>)) {
+    let p1_neuron_off = compute_neuron_offsets(&parent1.1);
+    let p2_neuron_off = compute_neuron_offsets(&parent2.1);
+    let p1_conn_off = compute_conn_offsets(&parent1.0);
+    let p2_conn_off = compute_conn_offsets(&parent2.0);
+
+    // Pre-compute swap decisions for shared positions
+    let mut swap_map: Vec<Vec<bool>> = Vec::with_capacity(num_clusters);
+    for c in 0..num_clusters {
+        let min_n = parent1.1[c].min(parent2.1[c]);
+        let decisions: Vec<bool> = (0..min_n).map(|_| rng.gen::<bool>()).collect();
+        swap_map.push(decisions);
+    }
+
+    let c1_neurons = parent1.1.clone();
+    let c2_neurons = parent2.1.clone();
+    let mut c1_bits = Vec::new();
+    let mut c2_bits = Vec::new();
+    let mut c1_conns = Vec::new();
+    let mut c2_conns = Vec::new();
+
+    for c in 0..num_clusters {
+        let p1_n = parent1.1[c];
+        let p2_n = parent2.1[c];
+
+        // Build child1 (has p1_n neurons)
+        for local in 0..p1_n {
+            let swap = local < swap_map[c].len() && swap_map[c][local];
+            if swap {
+                // Take from parent2
+                let g2 = p2_neuron_off[c] + local;
+                c1_bits.push(parent2.0[g2]);
+                if !parent2.2.is_empty() {
+                    c1_conns.extend_from_slice(&parent2.2[p2_conn_off[g2]..p2_conn_off[g2 + 1]]);
+                }
+            } else {
+                // Keep from parent1
+                let g1 = p1_neuron_off[c] + local;
+                c1_bits.push(parent1.0[g1]);
+                if !parent1.2.is_empty() {
+                    c1_conns.extend_from_slice(&parent1.2[p1_conn_off[g1]..p1_conn_off[g1 + 1]]);
+                }
+            }
+        }
+
+        // Build child2 (has p2_n neurons) — complementary at shared positions
+        for local in 0..p2_n {
+            let swap = local < swap_map[c].len() && swap_map[c][local];
+            if swap {
+                // Complement: take from parent1
+                let g1 = p1_neuron_off[c] + local;
+                c2_bits.push(parent1.0[g1]);
+                if !parent1.2.is_empty() {
+                    c2_conns.extend_from_slice(&parent1.2[p1_conn_off[g1]..p1_conn_off[g1 + 1]]);
+                }
+            } else {
+                // Keep from parent2
+                let g2 = p2_neuron_off[c] + local;
+                c2_bits.push(parent2.0[g2]);
+                if !parent2.2.is_empty() {
+                    c2_conns.extend_from_slice(&parent2.2[p2_conn_off[g2]..p2_conn_off[g2 + 1]]);
+                }
+            }
+        }
+    }
+
+    ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns))
+}
+
+/// Connection crossover (2 offspring): pool & distribute.
+/// Pool all connections per cluster, shuffle, distribute by each child's architecture.
+fn crossover2_connections(
+    parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+    parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+    num_clusters: usize,
+    total_input_bits: usize,
+    rng: &mut impl Rng,
+) -> ((Vec<usize>, Vec<usize>, Vec<i64>), (Vec<usize>, Vec<usize>, Vec<i64>)) {
+    let p1_neuron_off = compute_neuron_offsets(&parent1.1);
+    let p2_neuron_off = compute_neuron_offsets(&parent2.1);
+    let p1_conn_off = compute_conn_offsets(&parent1.0);
+    let p2_conn_off = compute_conn_offsets(&parent2.0);
+
+    let c1_bits = parent1.0.clone();
+    let c2_bits = parent2.0.clone();
+    let c1_neurons = parent1.1.clone();
+    let c2_neurons = parent2.1.clone();
+    let mut c1_conns = Vec::new();
+    let mut c2_conns = Vec::new();
+
+    for c in 0..num_clusters {
+        // Pool connections from both parents for this cluster
+        let p1_start_neuron = p1_neuron_off[c];
+        let p1_end_neuron = p1_neuron_off[c + 1];
+        let p1_conn_start = p1_conn_off[p1_start_neuron];
+        let p1_conn_end = p1_conn_off[p1_end_neuron];
+        let p1_conn_count = p1_conn_end - p1_conn_start;
+
+        let p2_start_neuron = p2_neuron_off[c];
+        let p2_end_neuron = p2_neuron_off[c + 1];
+        let p2_conn_start = p2_conn_off[p2_start_neuron];
+        let p2_conn_end = p2_conn_off[p2_end_neuron];
+        let p2_conn_count = p2_conn_end - p2_conn_start;
+
+        let mut pool: Vec<i64> = Vec::with_capacity(p1_conn_count + p2_conn_count);
+        if !parent1.2.is_empty() {
+            pool.extend_from_slice(&parent1.2[p1_conn_start..p1_conn_end]);
+        }
+        if !parent2.2.is_empty() {
+            pool.extend_from_slice(&parent2.2[p2_conn_start..p2_conn_end]);
+        }
+
+        pool.shuffle(rng);
+
+        c1_conns.extend_from_slice(&pool[..p1_conn_count]);
+        c2_conns.extend_from_slice(&pool[p1_conn_count..]);
+    }
+
+    // Enforce uniqueness
+    if total_input_bits > 0 {
+        enforce_unique_connections(&mut c1_conns, &c1_bits, total_input_bits, rng);
+        enforce_unique_connections(&mut c2_conns, &c2_bits, total_input_bits, rng);
+    }
+
+    ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns))
 }
 
 /// Mutate a genome for GA (reuses MutationConfig logic).
@@ -1049,44 +1295,71 @@ where
         let mut batch_connections: Vec<i64> = Vec::new();
         let mut batch_genomes: Vec<(Vec<usize>, Vec<usize>, Vec<i64>)> = Vec::new();
 
-        for _ in 0..batch_to_generate {
+        let mut i = 0;
+        while i < batch_to_generate {
             let p1 = tournament_select(population, ga_config.tournament_size, &mut rng);
-            let p2 = tournament_select(population, ga_config.tournament_size, &mut rng);
 
-            let child = if rng.gen::<f64>() < ga_config.crossover_rate {
-                crossover(p1, p2, ga_config.num_clusters, ga_config.phase_type, &mut rng)
-            } else {
-                (p1.0.clone(), p1.1.clone(), p1.2.clone())
-            };
+            if rng.gen::<f64>() < ga_config.crossover_rate && population.len() > 1 {
+                let p2 = tournament_select(population, ga_config.tournament_size, &mut rng);
+                let (child1, child2) = crossover2(
+                    p1, p2, ga_config.num_clusters, ga_config.phase_type,
+                    ga_config.total_input_bits, &mut rng,
+                );
 
-            let (mut new_bits, mut new_neurons, mut new_conns) = mutate_ga(
-                &child.0,
-                &child.1,
-                &child.2,
-                ga_config,
-                &mut rng,
-            );
-
-            // Re-mutate if offspring is a duplicate (up to 3 retries)
-            for _ in 0..3 {
-                let fp = (new_bits.clone(), new_neurons.clone(), new_conns.clone());
-                if !known_fps.contains(&fp) {
-                    break;
+                for child in [child1, child2] {
+                    let (mut new_bits, mut new_neurons, mut new_conns) = mutate_ga(
+                        &child.0, &child.1, &child.2, ga_config, &mut rng,
+                    );
+                    for _ in 0..3 {
+                        let fp = (new_bits.clone(), new_neurons.clone(), new_conns.clone());
+                        if !known_fps.contains(&fp) { break; }
+                        let remut = mutate_ga(&new_bits, &new_neurons, &new_conns, ga_config, &mut rng);
+                        new_bits = remut.0;
+                        new_neurons = remut.1;
+                        new_conns = remut.2;
+                    }
+                    known_fps.insert((new_bits.clone(), new_neurons.clone(), new_conns.clone()));
+                    batch_bits.extend(&new_bits);
+                    batch_neurons.extend(&new_neurons);
+                    batch_connections.extend(&new_conns);
+                    batch_genomes.push((new_bits, new_neurons, new_conns));
                 }
-                let remut = mutate_ga(&new_bits, &new_neurons, &new_conns, ga_config, &mut rng);
-                new_bits = remut.0;
-                new_neurons = remut.1;
-                new_conns = remut.2;
+                i += 2;
+            } else {
+                let child = (p1.0.clone(), p1.1.clone(), p1.2.clone());
+                let (mut new_bits, mut new_neurons, mut new_conns) = mutate_ga(
+                    &child.0, &child.1, &child.2, ga_config, &mut rng,
+                );
+                for _ in 0..3 {
+                    let fp = (new_bits.clone(), new_neurons.clone(), new_conns.clone());
+                    if !known_fps.contains(&fp) { break; }
+                    let remut = mutate_ga(&new_bits, &new_neurons, &new_conns, ga_config, &mut rng);
+                    new_bits = remut.0;
+                    new_neurons = remut.1;
+                    new_conns = remut.2;
+                }
+                known_fps.insert((new_bits.clone(), new_neurons.clone(), new_conns.clone()));
+                batch_bits.extend(&new_bits);
+                batch_neurons.extend(&new_neurons);
+                batch_connections.extend(&new_conns);
+                batch_genomes.push((new_bits, new_neurons, new_conns));
+                i += 1;
             }
-            known_fps.insert((new_bits.clone(), new_neurons.clone(), new_conns.clone()));
-
-            batch_bits.extend(&new_bits);
-            batch_neurons.extend(&new_neurons);
-            batch_connections.extend(&new_conns);
-            batch_genomes.push((new_bits, new_neurons, new_conns));
+        }
+        // Trim if crossover overshot batch_to_generate
+        batch_genomes.truncate(batch_to_generate);
+        // Rebuild flat arrays from trimmed genomes
+        batch_bits.clear();
+        batch_neurons.clear();
+        batch_connections.clear();
+        for (b, n, c) in &batch_genomes {
+            batch_bits.extend(b);
+            batch_neurons.extend(n);
+            batch_connections.extend(c);
         }
 
-        let results = evaluate_batch(&batch_bits, &batch_neurons, &batch_connections, batch_to_generate);
+        let actual_batch_size = batch_genomes.len();
+        let results = evaluate_batch(&batch_bits, &batch_neurons, &batch_connections, actual_batch_size);
 
         for (i, (ce, acc, f1, fpr)) in results.iter().enumerate() {
             evaluated += 1;
@@ -1345,13 +1618,10 @@ mod tests {
         );
 
         let (child_bits, child_neurons, child_conns) = crossover(&p1, &p2, 3, PhaseType::Bits, &mut rng);
-        assert_eq!(child_neurons.len(), 3);
+        // Neuron counts must always match parent1 (bits phase doesn't change neurons)
+        assert_eq!(child_neurons, p1.1);
         assert_eq!(child_bits.len(), child_neurons.iter().sum::<usize>());
         assert_eq!(child_conns.len(), child_bits.iter().sum::<usize>());
-        // Each cluster should come entirely from one parent
-        for c in 0..3 {
-            assert!(child_neurons[c] == p1.1[c] || child_neurons[c] == p2.1[c]);
-        }
     }
 
     #[test]
@@ -1378,6 +1648,199 @@ mod tests {
         // Each connection from one parent
         for (i, &conn) in child_conns.iter().enumerate() {
             assert!(conn == p1.2[i] || conn == p2.2[i]);
+        }
+    }
+
+    // =========================================================================
+    // crossover2 tests (2 parents → 2 offspring)
+    // =========================================================================
+
+    fn make_test_parents() -> (
+        (Vec<usize>, Vec<usize>, Vec<i64>, f64),
+        (Vec<usize>, Vec<usize>, Vec<i64>, f64),
+    ) {
+        // Parent1: 3 clusters, [2,1,2] neurons, bits=[8,8,10,12,12]
+        let p1 = (
+            vec![8, 8, 10, 12, 12],
+            vec![2, 1, 2],
+            (0..50i64).collect::<Vec<_>>(),  // 8+8+10+12+12 = 50
+            10.0,
+        );
+        // Parent2: 3 clusters, [1,3,1] neurons, bits=[6,14,14,14,16]
+        let p2 = (
+            vec![6, 14, 14, 14, 16],
+            vec![1, 3, 1],
+            (100..164i64).collect::<Vec<_>>(),  // 6+14+14+14+16 = 64
+            11.0,
+        );
+        (p1, p2)
+    }
+
+    #[test]
+    fn test_crossover2_neurons_preserves_parent_neuron_counts() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let (p1, p2) = make_test_parents();
+
+        let ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns)) =
+            crossover2_neurons(&p1, &p2, 3, &mut rng);
+
+        // child1 preserves parent1's neuron counts
+        assert_eq!(c1_neurons, p1.1, "child1 must have parent1's neuron counts");
+        // child2 preserves parent2's neuron counts
+        assert_eq!(c2_neurons, p2.1, "child2 must have parent2's neuron counts");
+
+        // Structural consistency
+        assert_eq!(c1_bits.len(), c1_neurons.iter().sum::<usize>());
+        assert_eq!(c1_conns.len(), c1_bits.iter().sum::<usize>());
+        assert_eq!(c2_bits.len(), c2_neurons.iter().sum::<usize>());
+        assert_eq!(c2_conns.len(), c2_bits.iter().sum::<usize>());
+    }
+
+    #[test]
+    fn test_crossover2_neurons_full_partition() {
+        // All neurons from both parents must appear in exactly one child
+        let mut rng = rand::rngs::StdRng::seed_from_u64(123);
+        let (p1, p2) = make_test_parents();
+
+        let ((_, c1_neurons, _), (_, c2_neurons, _)) =
+            crossover2_neurons(&p1, &p2, 3, &mut rng);
+
+        for c in 0..3 {
+            let total_parent_neurons = p1.1[c] + p2.1[c];
+            let total_child_neurons = c1_neurons[c] + c2_neurons[c];
+            assert_eq!(total_child_neurons, total_parent_neurons,
+                "cluster {c}: all parent neurons must be partitioned");
+        }
+    }
+
+    #[test]
+    fn test_crossover2_bits_preserves_neuron_counts() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let (p1, p2) = make_test_parents();
+
+        let ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns)) =
+            crossover2_bits(&p1, &p2, 3, &mut rng);
+
+        // Phase isolation: neuron counts MUST equal parent's
+        assert_eq!(c1_neurons, p1.1, "bits phase must not change child1 neuron counts");
+        assert_eq!(c2_neurons, p2.1, "bits phase must not change child2 neuron counts");
+
+        // Structural consistency
+        assert_eq!(c1_bits.len(), c1_neurons.iter().sum::<usize>());
+        assert_eq!(c1_conns.len(), c1_bits.iter().sum::<usize>());
+        assert_eq!(c2_bits.len(), c2_neurons.iter().sum::<usize>());
+        assert_eq!(c2_conns.len(), c2_bits.iter().sum::<usize>());
+    }
+
+    #[test]
+    fn test_crossover2_bits_swap_complementary() {
+        // With seed forcing all swaps, child1 should have parent2's bits and vice versa
+        // for the shared positions
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        // Same neuron counts for simplicity
+        let p1 = (
+            vec![8, 10, 12],
+            vec![1, 1, 1],
+            (0..30i64).collect::<Vec<_>>(),
+            10.0,
+        );
+        let p2 = (
+            vec![6, 14, 16],
+            vec![1, 1, 1],
+            (100..136i64).collect::<Vec<_>>(),
+            11.0,
+        );
+
+        let ((c1_bits, _, _), (c2_bits, _, _)) = crossover2_bits(&p1, &p2, 3, &mut rng);
+
+        // Each bit at position i should be from one parent in c1 and the OTHER parent in c2
+        for i in 0..3 {
+            assert!(
+                (c1_bits[i] == p1.0[i] && c2_bits[i] == p2.0[i]) ||
+                (c1_bits[i] == p2.0[i] && c2_bits[i] == p1.0[i]),
+                "position {i}: bits must be complementary"
+            );
+        }
+    }
+
+    #[test]
+    fn test_crossover2_connections_preserves_architecture() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let (p1, p2) = make_test_parents();
+
+        let ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns)) =
+            crossover2_connections(&p1, &p2, 3, 200, &mut rng);
+
+        // Phase isolation: both architecture dimensions unchanged
+        assert_eq!(c1_bits, p1.0, "connections phase must not change child1 bits");
+        assert_eq!(c1_neurons, p1.1, "connections phase must not change child1 neurons");
+        assert_eq!(c2_bits, p2.0, "connections phase must not change child2 bits");
+        assert_eq!(c2_neurons, p2.1, "connections phase must not change child2 neurons");
+
+        // Connection counts match architecture
+        assert_eq!(c1_conns.len(), c1_bits.iter().sum::<usize>());
+        assert_eq!(c2_conns.len(), c2_bits.iter().sum::<usize>());
+    }
+
+    #[test]
+    fn test_crossover2_connections_pool_is_complete() {
+        // All connections from both parents should appear across both children
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        // Same architecture for simple verification
+        let p1 = (
+            vec![4, 4],
+            vec![1, 1],
+            vec![0, 1, 2, 3, 10, 11, 12, 13],
+            10.0,
+        );
+        let p2 = (
+            vec![4, 4],
+            vec![1, 1],
+            vec![50, 51, 52, 53, 60, 61, 62, 63],
+            11.0,
+        );
+
+        let ((_, _, c1_conns), (_, _, c2_conns)) =
+            crossover2_connections(&p1, &p2, 2, 200, &mut rng);
+
+        // Total connections across both children = total from both parents
+        let mut all_child: Vec<i64> = c1_conns.iter().chain(c2_conns.iter()).cloned().collect();
+        let mut all_parent: Vec<i64> = p1.2.iter().chain(p2.2.iter()).cloned().collect();
+        all_child.sort();
+        all_parent.sort();
+        assert_eq!(all_child, all_parent, "pool must be fully distributed");
+    }
+
+    #[test]
+    fn test_enforce_unique_connections() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        // 2 neurons: 4 bits each. First neuron has duplicates.
+        let mut conns = vec![5, 5, 5, 3, 10, 11, 12, 13];
+        let bits_per_neuron = vec![4, 4];
+        enforce_unique_connections(&mut conns, &bits_per_neuron, 64, &mut rng);
+
+        // First neuron: all 4 connections must be unique
+        let neuron0: std::collections::HashSet<i64> = conns[0..4].iter().cloned().collect();
+        assert_eq!(neuron0.len(), 4, "neuron 0 must have 4 unique connections");
+        // Second neuron was already unique
+        assert_eq!(&conns[4..8], &[10, 11, 12, 13]);
+    }
+
+    #[test]
+    fn test_crossover2_dispatch() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let (p1, p2) = make_test_parents();
+
+        // Test dispatch for each phase
+        for phase in [PhaseType::Neurons, PhaseType::Bits, PhaseType::Connections] {
+            let ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns)) =
+                crossover2(&p1, &p2, 3, phase, 200, &mut rng);
+
+            // Basic structural validity
+            assert_eq!(c1_bits.len(), c1_neurons.iter().sum::<usize>());
+            assert_eq!(c1_conns.len(), c1_bits.iter().sum::<usize>());
+            assert_eq!(c2_bits.len(), c2_neurons.iter().sum::<usize>());
+            assert_eq!(c2_conns.len(), c2_bits.iter().sum::<usize>());
         }
     }
 }
