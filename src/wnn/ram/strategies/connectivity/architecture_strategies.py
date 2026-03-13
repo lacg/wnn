@@ -1247,7 +1247,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 		tib = cfg.total_input_bits or 64
 		mutant = genome.mutate(self._phase_type, mutation_rate, mutation_config, tib, self._rng)
 
-		# Compute move info for tabu tracking: hash of changed dimensions
+		# Compute move info for tabu tracking: tuple of changed cluster indices
 		if self._phase_type == PhaseType.NEURONS:
 			changed = tuple(c for c in range(len(genome.neurons_per_cluster))
 						   if genome.neurons_per_cluster[c] != mutant.neurons_per_cluster[c])
@@ -1255,7 +1255,21 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 			changed = tuple(c for c in range(len(genome.bits_per_neuron))
 						   if genome.bits_per_neuron[c] != mutant.bits_per_neuron[c])
 		else:
-			changed = None  # Connections phase: no cluster-level tabu
+			# Connections phase: track which clusters had any connection change
+			changed_clusters = []
+			if genome.connections is not None and mutant.connections is not None:
+				g_off = genome.cluster_neuron_offsets
+				g_conn_off = genome.connection_offsets
+				m_conn_off = mutant.connection_offsets
+				for c in range(len(genome.neurons_per_cluster)):
+					c_start = g_conn_off[g_off[c]]
+					c_end = g_conn_off[g_off[c + 1]]
+					m_start = m_conn_off[g_off[c]]
+					m_end = m_conn_off[g_off[c + 1]]
+					if (c_end - c_start != m_end - m_start or
+						genome.connections[c_start:c_end] != mutant.connections[m_start:m_end]):
+						changed_clusters.append(c)
+			changed = tuple(changed_clusters)
 		move = changed if changed else None
 		return mutant, move
 
@@ -1285,6 +1299,32 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 	# Hooks: Rust-accelerated neighbor generation + lifecycle
 	# =========================================================================
 
+	def _compute_move_info(self, source: 'ClusterGenome', neighbor: 'ClusterGenome') -> Any:
+		"""Compute tabu move info by comparing source and neighbor genomes."""
+		if self._phase_type == PhaseType.NEURONS:
+			changed = tuple(c for c in range(len(source.neurons_per_cluster))
+						   if source.neurons_per_cluster[c] != neighbor.neurons_per_cluster[c])
+		elif self._phase_type == PhaseType.BITS:
+			changed = tuple(c for c in range(len(source.bits_per_neuron))
+						   if source.bits_per_neuron[c] != neighbor.bits_per_neuron[c])
+		else:
+			# Connections phase: track which clusters had any connection change
+			changed_clusters = []
+			if source.connections is not None and neighbor.connections is not None:
+				g_off = source.cluster_neuron_offsets
+				g_conn_off = source.connection_offsets
+				n_conn_off = neighbor.connection_offsets
+				for c in range(len(source.neurons_per_cluster)):
+					c_start = g_conn_off[g_off[c]]
+					c_end = g_conn_off[g_off[c + 1]]
+					n_start = n_conn_off[g_off[c]]
+					n_end = n_conn_off[g_off[c + 1]]
+					if (c_end - c_start != n_end - n_start or
+						source.connections[c_start:c_end] != neighbor.connections[n_start:n_end]):
+						changed_clusters.append(c)
+			changed = tuple(changed_clusters)
+		return changed if changed else None
+
 	def _generate_neighbors(self, best_genome, n_neighbors, threshold, iteration, tabu_list):
 		"""Generate neighbors via Rust search_neighbors or Python fallback."""
 		if self._cached_evaluator is not None:
@@ -1305,9 +1345,13 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				neurons_mutation_rate = 0.0
 
 			# fitness_percentile: generate larger pool, rank, keep best n_neighbors
+			# Also over-generate to compensate for tabu filtering
 			import math
 			pct = cfg.fitness_percentile if cfg.fitness_percentile and 0 < cfg.fitness_percentile < 1.0 else None
 			generate_count = math.ceil(n_neighbors / pct) if pct else n_neighbors
+			# Over-generate by 20% to compensate for tabu filtering
+			if tabu_list:
+				generate_count = math.ceil(generate_count * 1.2)
 
 			self._log.debug(f"[{self.name}] Searching {generate_count} neighbors from best ranked (keeping best {n_neighbors})...")
 			neighbors_raw = evaluator.search_neighbors(
@@ -1339,10 +1383,37 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				if hasattr(g, '_cached_fitness')
 			]
 
+			# Post-filter: remove tabu neighbors
+			if tabu_list:
+				non_tabu = []
+				for t in neighbors:
+					move = self._compute_move_info(best_genome, t[0])
+					if not self.is_tabu_move(move, tabu_list):
+						non_tabu.append(t)
+				filtered_count = len(neighbors) - len(non_tabu)
+				if filtered_count > 0:
+					self._log.debug(f"[{self.name}] Tabu filtered {filtered_count}/{len(neighbors)} neighbors")
+				neighbors = non_tabu
+
 			if pct and len(neighbors) > n_neighbors:
 				scores = self._fitness_calculator.fitness(neighbors)
 				ranked = sorted(zip(neighbors, scores), key=lambda x: x[1])
 				neighbors = [item for item, _ in ranked[:n_neighbors]]
+
+			# Add best neighbor's move to tabu list
+			if neighbors:
+				best_neighbor = neighbors[0]  # Already ranked or first viable
+				if len(neighbors) > 1:
+					# Find best by fitness ranking
+					best_ranked_neighbors = self._fitness_calculator.rank(
+						[(t[0], t[1], t[2] if len(t) > 2 else None) for t in neighbors]
+					)
+					best_neighbor = next(
+						t for t in neighbors if t[0] is best_ranked_neighbors[0][0]
+					)
+				move = self._compute_move_info(best_genome, best_neighbor[0])
+				if move is not None:
+					tabu_list.append(move)
 
 			return neighbors
 
@@ -1377,10 +1448,13 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 		import math
 		pct = cfg.fitness_percentile if cfg.fitness_percentile and 0 < cfg.fitness_percentile < 1.0 else None
 
-		# Build source list with inflated counts for fitness percentile filtering
+		# Build source list with inflated counts for fitness percentile + tabu filtering
 		batch_sources = []
 		for source, count in zip(sources, counts):
 			gen_count = math.ceil(count / pct) if pct else count
+			# Over-generate by 20% to compensate for tabu filtering
+			if tabu_list:
+				gen_count = math.ceil(gen_count * 1.2)
 			batch_sources.append((source, gen_count))
 
 		total_candidates = sum(gc for _, gc in batch_sources)
@@ -1422,19 +1496,49 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 			if hasattr(evaluator, 'set_progress_callback'):
 				evaluator.set_progress_callback(None)
 
-		# Convert to tuples and apply fitness percentile filtering per source
+		# Convert to tuples, tabu-filter, and apply fitness percentile filtering per source
 		all_offspring = []
-		for source_neighbors, target_count in zip(results_by_source, counts):
+		total_tabu_filtered = 0
+		for (source, _), source_neighbors, target_count in zip(batch_sources, results_by_source, counts):
 			neighbors = [
 				(g, *g._cached_fitness)
 				for g in source_neighbors
 				if hasattr(g, '_cached_fitness')
 			]
+
+			# Post-filter: remove tabu neighbors
+			if tabu_list:
+				non_tabu = []
+				for t in neighbors:
+					move = self._compute_move_info(source, t[0])
+					if not self.is_tabu_move(move, tabu_list):
+						non_tabu.append(t)
+				total_tabu_filtered += len(neighbors) - len(non_tabu)
+				neighbors = non_tabu
+
 			if pct and len(neighbors) > target_count:
 				scores = self._fitness_calculator.fitness(neighbors)
 				ranked = sorted(zip(neighbors, scores), key=lambda x: x[1])
 				neighbors = [item for item, _ in ranked[:target_count]]
+
+			# Add best neighbor's move to tabu list
+			if neighbors:
+				best_neighbor = neighbors[0]
+				if len(neighbors) > 1:
+					best_ranked_neighbors = self._fitness_calculator.rank(
+						[(t[0], t[1], t[2] if len(t) > 2 else None) for t in neighbors]
+					)
+					best_neighbor = next(
+						t for t in neighbors if t[0] is best_ranked_neighbors[0][0]
+					)
+				move = self._compute_move_info(source, best_neighbor[0])
+				if move is not None:
+					tabu_list.append(move)
+
 			all_offspring.append(neighbors)
+
+		if total_tabu_filtered > 0:
+			self._log.debug(f"[{self.name}] Tabu filtered {total_tabu_filtered} neighbors across all sources")
 
 		return all_offspring
 

@@ -1,11 +1,18 @@
 """
-Tabu Search strategy for connectivity optimization.
+LEGACY — Per-connection Tabu Search strategy.
 
-From Garcia (2003) thesis, Tabu Search achieved the best results:
-- 17.27% error reduction on T2 topology
-- Only 5 iterations needed for convergence
-- 30 neighbors per iteration
-- Tabu list size of 5 to avoid cycling
+This module is SUPERSEDED by GenericTSStrategy + ArchitectureTSStrategy in
+generic_strategies.py / architecture_strategies.py, which provide:
+- Phase-aware mutation (neurons/bits/connections)
+- Population-based (μ+λ) selection with top-20% elite sources
+- Rust/Metal batch evaluation
+- Dashboard integration
+
+This class operates on flat Tensor connections only and is NOT used by
+IDS flows or any current experiment runner. Kept for historical reference.
+
+Original reference: Garcia (2003) thesis — 17.27% error reduction on T2,
+5 iterations, 30 neighbors, tabu list size 5.
 """
 
 from collections import deque
