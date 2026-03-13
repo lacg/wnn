@@ -773,36 +773,49 @@ mod tests {
 
         let metal_eval = MetalGatingEvaluator::new().unwrap();
 
-        // Create training batch
+        // Train one example at a time to avoid CPU/GPU race condition differences.
+        // (CPU uses non-atomic load-check-store = "last writer wins" on collision,
+        //  GPU uses CAS = "first writer wins" — different semantics when parallel.)
+        // Use distinct input patterns per example to maximize address diversity.
         let batch_size = 5;
-        let input_flat: Vec<bool> = (0..batch_size * total_input_bits)
-            .map(|i| ((i * 3) % 2) == 0)
-            .collect();
-
-        // Target gates: each example has one target cluster open
-        let mut target_gates: Vec<bool> = vec![false; batch_size * 10];
         for b in 0..batch_size {
-            target_gates[b * 10 + (b * 2) % 10] = true;
+            // Each example gets a different bit pattern based on its index
+            let input: Vec<bool> = (0..total_input_bits)
+                .map(|i| ((i + b * 7) % 3) != 0)
+                .collect();
+
+            let mut targets = vec![false; 10];
+            targets[(b * 2) % 10] = true;
+
+            // CPU: train single example
+            gating_cpu.train_single(&input, &targets, false);
+
+            // GPU: train single example via batch API (batch_size=1)
+            let (packed, wpe) = neuron_memory::pack_bools_to_u64(&input, 1, total_input_bits);
+            let target_bools: Vec<bool> = targets.clone();
+            let gpu_memory = metal_eval.train_batch(
+                &gating_gpu, &packed, &target_bools, 1, wpe
+            ).unwrap();
+            gating_gpu.import_memory(&gpu_memory).unwrap();
         }
-
-        // Train on CPU
-        gating_cpu.train_batch(&input_flat, &target_gates, batch_size, false);
-
-        // Train on GPU (pack first)
-        let (packed, wpe) = neuron_memory::pack_bools_to_u64(&input_flat, batch_size, total_input_bits);
-        let gpu_memory = metal_eval.train_batch(&gating_gpu, &packed, &target_gates, batch_size, wpe).unwrap();
-        gating_gpu.import_memory(&gpu_memory).unwrap();
 
         invalidate_gating_cache();
 
-        // Test input
-        let test_input: Vec<bool> = (0..total_input_bits).map(|i| ((i * 3) % 2) == 0).collect();
+        // Test with each training input — CPU and GPU should agree
+        for b in 0..batch_size {
+            let test_input: Vec<bool> = (0..total_input_bits)
+                .map(|i| ((i + b * 7) % 3) != 0)
+                .collect();
 
-        // Forward on both should give same results
-        let cpu_gates = gating_cpu.forward_single(&test_input);
-        let gpu_gates = gating_gpu.forward_single(&test_input);
+            let cpu_gates = gating_cpu.forward_single(&test_input);
+            let gpu_gates = gating_gpu.forward_single(&test_input);
 
-        assert_eq!(cpu_gates, gpu_gates, "CPU and GPU trained models should produce same output");
+            assert_eq!(
+                cpu_gates, gpu_gates,
+                "CPU/GPU mismatch for example {}: cpu={:?} gpu={:?}",
+                b, cpu_gates, gpu_gates
+            );
+        }
     }
 
     #[test]

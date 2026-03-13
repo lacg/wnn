@@ -243,10 +243,15 @@ kernel void gating_train(
         uint mask = 0xFFu << shift;
         uint new_value = uint(target_cell) << shift;
 
-        // Atomic read-modify-write to update just our byte
+        // Atomic read-modify-write to update just our byte (only if EMPTY)
+        // Matches CPU behavior: only write to CELL_EMPTY cells (allow_override=false)
         uint old_val = atomic_load_explicit(&memory[mem_word_idx], memory_order_relaxed);
         uint updated;
         do {
+            // Extract current byte value at our position
+            uint current_byte = (old_val >> shift) & 0xFFu;
+            // Only write to EMPTY cells — first writer wins (RAM semantics)
+            if (current_byte != CELL_EMPTY) break;
             updated = (old_val & ~mask) | new_value;
         } while (!atomic_compare_exchange_weak_explicit(
             &memory[mem_word_idx],
