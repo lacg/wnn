@@ -1151,6 +1151,8 @@ class FlowWorker:
                 genome_type=exp_data.get("genome_type", "best_ce") if experiment_type == ExperimentType.LAMBDA_SWEEP else "best_ce",
                 # Cluster crossover ratio
                 cluster_crossover_ratio=float(params.get("cluster_crossover_ratio", 0.0)),
+                # Pool-and-shuffle crossover ratio
+                pool_shuffle_ratio=float(params.get("pool_shuffle_ratio", 0.0)),
             )
             exp_configs.append(exp_config)
 

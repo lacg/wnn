@@ -545,6 +545,7 @@ class BaseEvaluator(ABC):
 		phase_type: int = 0,
 		fitness_scores: Optional[list[float]] = None,
 		cluster_crossover_ratio: float = 0.0,
+		pool_shuffle_ratio: float = 0.0,
 	) -> OffspringSearchResult:
 		"""Search for GA offspring above accuracy threshold.
 
@@ -556,6 +557,7 @@ class BaseEvaluator(ABC):
 		instead of raw CE — aligning parent selection with elite selection.
 
 		cluster_crossover_ratio: fraction of crossovers using CLUSTER mode (0.0-1.0).
+		pool_shuffle_ratio: fraction using old pool-and-shuffle crossover (0.0-1.0).
 		"""
 		if not population:
 			return OffspringSearchResult(genomes=[], evaluated=0, viable=0)
@@ -598,7 +600,11 @@ class BaseEvaluator(ABC):
 				if rng.random() < crossover_rate and len(population) > 1:
 					parent2 = self._tournament_select(population, tournament_size, rng, fitness_scores)
 					xo_pt = PhaseType.CLUSTER if rng.random() < cluster_crossover_ratio else pt
-					child1, child2 = parent1.crossover2(parent2, xo_pt, rng)
+					if pool_shuffle_ratio > 0.0 and rng.random() < pool_shuffle_ratio:
+						child1 = parent1._crossover_pool_shuffle(parent2, xo_pt, rng)
+						child2 = parent2._crossover_pool_shuffle(parent1, xo_pt, rng)
+					else:
+						child1, child2 = parent1.crossover2(parent2, xo_pt, rng)
 					child1 = self._mutate_genome_phased(
 						child1, phase_type,
 						bits_mutation_rate, neurons_mutation_rate,

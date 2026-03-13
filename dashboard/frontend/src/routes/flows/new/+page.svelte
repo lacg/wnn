@@ -206,6 +206,7 @@
   let thresholdStep = 1;
   let contextSize = 4;
   let clusterCrossoverRatio = 0.8;
+  let poolShuffleRatio = 0.0;
   let reweightRounds = 0;
   let reweightMaxBoost = 4;
   let tierConfig = '100,15,20,true;400,10,12,false;rest,5,8,false';
@@ -645,6 +646,7 @@
         threshold_step: thresholdStep,
         context_size: contextSize,
         cluster_crossover_ratio: clusterCrossoverRatio,
+        pool_shuffle_ratio: poolShuffleRatio,
       };
 
       if (isMultiStage) {
@@ -1041,6 +1043,11 @@
             <label for="clusterCrossoverRatio">Cluster Crossover Ratio</label>
             <input type="number" id="clusterCrossoverRatio" bind:value={clusterCrossoverRatio} min="0" max="1" step="0.1" />
             <span class="field-hint">0 = phase-specific only, 1 = cluster-level only</span>
+          </div>
+          <div class="form-group">
+            <label for="poolShuffleRatio">Pool Shuffle Ratio</label>
+            <input type="number" id="poolShuffleRatio" bind:value={poolShuffleRatio} min="0" max="1" step="0.1" />
+            <span class="field-hint">0 = uniform (2→2), 1 = pool-and-shuffle (2→1)</span>
           </div>
         </div>
 

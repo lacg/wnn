@@ -158,7 +158,8 @@
     tier_config: '',
     phase_order: 'neurons_first',
     context_size: 4,
-    cluster_crossover_ratio: 0.0
+    cluster_crossover_ratio: 0.0,
+    pool_shuffle_ratio: 0.0
   };
 
   // Flow rename state
@@ -224,6 +225,7 @@
         editConfig.phase_order = p.phase_order ?? 'neurons_first';
         editConfig.context_size = p.context_size ?? 4;
         editConfig.cluster_crossover_ratio = p.cluster_crossover_ratio ?? 0.0;
+        editConfig.pool_shuffle_ratio = p.pool_shuffle_ratio ?? 0.0;
         if (p.tier_config) {
           // Handle both string and array formats
           if (typeof p.tier_config === 'string') {
@@ -284,6 +286,7 @@
         phase_order: editConfig.phase_order,
         context_size: editConfig.context_size,
         cluster_crossover_ratio: editConfig.cluster_crossover_ratio,
+        pool_shuffle_ratio: editConfig.pool_shuffle_ratio,
       };
       // Only include tier_config for tiered architectures
       if (!isBitwise) {
@@ -1210,6 +1213,11 @@
               <input type="number" id="cluster_crossover_ratio" bind:value={editConfig.cluster_crossover_ratio} min="0" max="1" step="0.1" />
               <span class="form-hint">0 = phase-specific only, 1 = cluster-level only</span>
             </div>
+            <div class="form-group">
+              <label for="pool_shuffle_ratio">Pool Shuffle Ratio</label>
+              <input type="number" id="pool_shuffle_ratio" bind:value={editConfig.pool_shuffle_ratio} min="0" max="1" step="0.1" />
+              <span class="form-hint">0 = uniform (2→2), 1 = pool-and-shuffle (2→1)</span>
+            </div>
           </div>
 
           <div class="form-row">
@@ -1323,6 +1331,12 @@
             <div class="param-item">
               <span class="param-label">Cluster XO Ratio</span>
               <span class="param-value">{flow.config.params.cluster_crossover_ratio}</span>
+            </div>
+          {/if}
+          {#if flow.config.params.pool_shuffle_ratio}
+            <div class="param-item">
+              <span class="param-label">Pool Shuffle Ratio</span>
+              <span class="param-value">{flow.config.params.pool_shuffle_ratio}</span>
             </div>
           {/if}
           <div class="param-group full-width">

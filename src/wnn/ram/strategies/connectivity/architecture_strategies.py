@@ -757,6 +757,8 @@ class ArchitectureConfig:
 	mutable_clusters: Optional[list[int]] = None
 	# Cluster-level crossover ratio: 0.0 = all phase-specific, 1.0 = all cluster-level
 	cluster_crossover_ratio: float = 0.0
+	# Pool-and-shuffle crossover ratio: 0.0 = all uniform (2→2), 1.0 = all pool-and-shuffle (2→1)
+	pool_shuffle_ratio: float = 0.0
 
 
 class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['ClusterGenome']):
@@ -987,6 +989,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 				phase_type=int(self._phase_type),
 				fitness_scores=fitness_scores,
 				cluster_crossover_ratio=arch_cfg.cluster_crossover_ratio,
+				pool_shuffle_ratio=arch_cfg.pool_shuffle_ratio,
 			)
 
 			# Convert to 3-tuples, rank by fitness, return best n_needed

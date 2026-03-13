@@ -360,6 +360,8 @@ class OptimizerStrategyFactory:
 		grid_top_k: int = 15,
 		# Cluster crossover ratio (GA only): 0.0 = phase-specific, 1.0 = all cluster-level
 		cluster_crossover_ratio: float = 0.0,
+		# Pool-and-shuffle crossover ratio (GA only): 0.0 = all uniform (2→2), 1.0 = all pool-and-shuffle (2→1)
+		pool_shuffle_ratio: float = 0.0,
 	):
 		"""
 		Create an optimizer strategy.
@@ -471,6 +473,7 @@ class OptimizerStrategyFactory:
 					fitness_weight_acc=fitness_weight_acc,
 					min_accuracy_floor=min_accuracy_floor,
 					cluster_crossover_ratio=cluster_crossover_ratio,
+					pool_shuffle_ratio=pool_shuffle_ratio,
 				)
 
 			case OptimizerStrategyType.ARCHITECTURE_TS:
@@ -640,6 +643,7 @@ class OptimizerStrategyFactory:
 		fitness_weight_acc: float = 1.0,
 		min_accuracy_floor: float | None = None,
 		cluster_crossover_ratio: float = 0.0,
+		pool_shuffle_ratio: float = 0.0,
 	):
 		"""Create an ArchitectureGAStrategy."""
 		from wnn.ram.fitness import FitnessCalculatorType
@@ -664,6 +668,7 @@ class OptimizerStrategyFactory:
 			total_input_bits=total_input_bits,
 			mutable_clusters=mutable_clusters,
 			cluster_crossover_ratio=cluster_crossover_ratio,
+			pool_shuffle_ratio=pool_shuffle_ratio,
 		)
 		ga_config = GAConfig(
 			population_size=population_size,

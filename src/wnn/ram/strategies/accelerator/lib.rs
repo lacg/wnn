@@ -3809,7 +3809,8 @@ impl TokenCacheWrapper {
         return_best_n = true,
         mutable_clusters = None,
         phase_type = 0,
-        cluster_crossover_ratio = 0.0
+        cluster_crossover_ratio = 0.0,
+        pool_shuffle_ratio = 0.0
     ))]
     fn search_offspring(
         &self,
@@ -3837,6 +3838,7 @@ impl TokenCacheWrapper {
         mutable_clusters: Option<Vec<usize>>,
         phase_type: u8,
         cluster_crossover_ratio: f64,
+        pool_shuffle_ratio: f64,
     ) -> PyResult<(Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64, f64)>, usize, usize)> {
         // Returns: (candidates, evaluated, viable)
         let num_clusters = if !population.is_empty() {
@@ -3861,6 +3863,7 @@ impl TokenCacheWrapper {
             total_input_bits,
             phase_type: phase,
             cluster_crossover_ratio,
+            pool_shuffle_ratio,
         };
 
         // Set up live progress for observer thread
@@ -4358,7 +4361,8 @@ impl IDSCacheWrapper {
         return_best_n = true,
         mutable_clusters = None,
         phase_type = 0,
-        cluster_crossover_ratio = 0.0
+        cluster_crossover_ratio = 0.0,
+        pool_shuffle_ratio = 0.0
     ))]
     fn search_offspring(
         &self,
@@ -4385,6 +4389,7 @@ impl IDSCacheWrapper {
         mutable_clusters: Option<Vec<usize>>,
         phase_type: u8,
         cluster_crossover_ratio: f64,
+        pool_shuffle_ratio: f64,
     ) -> PyResult<(Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64, f64)>, usize, usize)> {
         let num_clusters = if !population.is_empty() {
             population[0].1.len()
@@ -4412,6 +4417,7 @@ impl IDSCacheWrapper {
             total_input_bits,
             phase_type: phase,
             cluster_crossover_ratio,
+            pool_shuffle_ratio,
         };
 
         let lp_arc = self.inner.live_progress.clone();
@@ -5330,7 +5336,8 @@ impl BitwiseCacheWrapper {
         return_best_n = true,
         mutable_clusters = None,
         phase_type = 0,
-        cluster_crossover_ratio = 0.0
+        cluster_crossover_ratio = 0.0,
+        pool_shuffle_ratio = 0.0
     ))]
     fn search_offspring(
         &self,
@@ -5360,6 +5367,7 @@ impl BitwiseCacheWrapper {
         mutable_clusters: Option<Vec<usize>>,
         phase_type: u8,
         cluster_crossover_ratio: f64,
+        pool_shuffle_ratio: f64,
     ) -> PyResult<(Vec<(Vec<usize>, Vec<usize>, Vec<i64>, f64, f64, f64, f64)>, usize, usize)> {
         let num_clusters = if !population.is_empty() {
             population[0].1.len()
@@ -5383,6 +5391,7 @@ impl BitwiseCacheWrapper {
             total_input_bits,
             phase_type: phase,
             cluster_crossover_ratio,
+            pool_shuffle_ratio,
         };
 
         let override_val = self.sparse_threshold_override;
