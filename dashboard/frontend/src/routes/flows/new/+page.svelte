@@ -205,6 +205,7 @@
   let thresholdStart = 0;
   let thresholdStep = 1;
   let contextSize = 4;
+  let clusterCrossoverRatio = 0.0;
   let reweightRounds = 0;
   let reweightMaxBoost = 4;
   let tierConfig = '100,15,20,true;400,10,12,false;rest,5,8,false';
@@ -643,6 +644,7 @@
         threshold_start: thresholdStart,
         threshold_step: thresholdStep,
         context_size: contextSize,
+        cluster_crossover_ratio: clusterCrossoverRatio,
       };
 
       if (isMultiStage) {
@@ -1031,6 +1033,14 @@
           <div class="form-group">
             <label for="neighborsPerIter">Neighbors/Iter (TS)</label>
             <input type="number" id="neighborsPerIter" bind:value={neighborsPerIter} min="1" />
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="clusterCrossoverRatio">Cluster Crossover Ratio</label>
+            <input type="number" id="clusterCrossoverRatio" bind:value={clusterCrossoverRatio} min="0" max="1" step="0.1" />
+            <span class="field-hint">0 = phase-specific only, 1 = cluster-level only</span>
           </div>
         </div>
 
