@@ -1724,7 +1724,7 @@ mod tests {
             11.0,
         );
 
-        let (child_bits, child_neurons, child_conns) = crossover(&p1, &p2, 3, PhaseType::Neurons, 64, &mut rng);
+        let (child_bits, child_neurons, child_conns) = crossover(&p1, &p2, 3, PhaseType::Neurons, 64, 0.0, &mut rng);
         assert_eq!(child_neurons.len(), 3);
         assert_eq!(child_bits.len(), child_neurons.iter().sum::<usize>());
         assert_eq!(child_conns.len(), child_bits.iter().sum::<usize>());
@@ -1746,7 +1746,7 @@ mod tests {
             11.0,
         );
 
-        let (child_bits, child_neurons, child_conns) = crossover(&p1, &p2, 3, PhaseType::Bits, 64, &mut rng);
+        let (child_bits, child_neurons, child_conns) = crossover(&p1, &p2, 3, PhaseType::Bits, 64, 0.0, &mut rng);
         // Neuron counts must always match parent1 (bits phase doesn't change neurons)
         assert_eq!(child_neurons, p1.1);
         assert_eq!(child_bits.len(), child_neurons.iter().sum::<usize>());
@@ -1770,7 +1770,7 @@ mod tests {
             11.0,
         );
 
-        let (child_bits, child_neurons, child_conns) = crossover(&p1, &p2, 3, PhaseType::Connections, 64, &mut rng);
+        let (child_bits, child_neurons, child_conns) = crossover(&p1, &p2, 3, PhaseType::Connections, 64, 0.0, &mut rng);
         // Architecture unchanged
         assert_eq!(child_bits, p1.0);
         assert_eq!(child_neurons, p1.1);
