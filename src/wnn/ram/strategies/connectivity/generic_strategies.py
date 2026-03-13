@@ -1288,6 +1288,11 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		initial_fitness = fitness_values[0] if initial_genome else best_fitness
 		initial_accuracy = accuracy_values[best_idx]
 		best_accuracy_val = initial_accuracy
+		# Running global best F1/FPR (for dashboard tracking, like best_fitness/best_accuracy_val)
+		valid_init_f1 = [v for v in f1_values if v is not None]
+		valid_init_fpr = [v for v in fpr_values if v is not None]
+		best_f1_global = max(valid_init_f1) if valid_init_f1 else None
+		best_fpr_global = min(valid_init_fpr) if valid_init_fpr else None
 
 		history = [(0, best_fitness)]
 
@@ -1514,11 +1519,17 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 					patience_counter = early_stopper._patience_counter if hasattr(early_stopper, '_patience_counter') else 0
 					candidates_total = len(offspring)  # In generic GA, all offspring are viable
 
-					# Extract best F1/FPR for IDS tracking
+					# Update running global best F1/FPR (like best_fitness/best_accuracy_val)
 					valid_f1s = [v for v in f1_values if v is not None]
 					valid_fprs = [v for v in fpr_values if v is not None]
-					best_f1_val = max(valid_f1s) if valid_f1s else None
-					best_fpr_val = min(valid_fprs) if valid_fprs else None
+					if valid_f1s:
+						gen_best_f1 = max(valid_f1s)
+						if best_f1_global is None or gen_best_f1 > best_f1_global:
+							best_f1_global = gen_best_f1
+					if valid_fprs:
+						gen_best_fpr = min(valid_fprs)
+						if best_fpr_global is None or gen_best_fpr < best_fpr_global:
+							best_fpr_global = gen_best_fpr
 
 					iteration_id = self._tracker.record_iteration(
 						experiment_id=self._tracker_experiment_id,
@@ -1538,8 +1549,8 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 						patience_counter=patience_counter,
 						patience_max=cfg.patience,
 						candidates_total=candidates_total,
-						best_f1=best_f1_val,
-						best_fpr=best_fpr_val,
+						best_f1=best_f1_global,
+						best_fpr=best_fpr_global,
 					)
 
 					# Record genome evaluations (if genome_to_config is implemented)
@@ -2236,6 +2247,11 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 		best_fitness = initial_fitness
 		best_accuracy: Optional[float] = initial_accuracy
 		start_fitness = initial_fitness
+		# Running global best F1/FPR (for dashboard tracking)
+		pop_f1_init = [t[3] for t in pop if len(t) > 3 and t[3] is not None]
+		pop_fpr_init = [t[4] for t in pop if len(t) > 4 and t[4] is not None]
+		best_f1_global: Optional[float] = max(pop_f1_init) if pop_f1_init else None
+		best_fpr_global: Optional[float] = min(pop_fpr_init) if pop_fpr_init else None
 
 		# Find best from initial population
 		for t in pop:
@@ -2442,11 +2458,17 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 					# Three independent bests from population
 					iter_bests = fitness_calculator.bests(pop)
 
-					# Extract best F1/FPR for IDS tracking
+					# Update running global best F1/FPR (like best_fitness/best_accuracy)
 					pop_f1s = [t[3] for t in pop if len(t) > 3 and t[3] is not None]
 					pop_fprs = [t[4] for t in pop if len(t) > 4 and t[4] is not None]
-					best_f1_val = max(pop_f1s) if pop_f1s else None
-					best_fpr_val = min(pop_fprs) if pop_fprs else None
+					if pop_f1s:
+						iter_best_f1 = max(pop_f1s)
+						if best_f1_global is None or iter_best_f1 > best_f1_global:
+							best_f1_global = iter_best_f1
+					if pop_fprs:
+						iter_best_fpr = min(pop_fprs)
+						if best_fpr_global is None or iter_best_fpr < best_fpr_global:
+							best_fpr_global = iter_best_fpr
 
 					iteration_id = self._tracker.record_iteration(
 						experiment_id=self._tracker_experiment_id,
@@ -2466,8 +2488,8 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 						patience_counter=patience_counter,
 						patience_max=cfg.patience,
 						candidates_total=len(pop) + len(offspring),
-						best_f1=best_f1_val,
-						best_fpr=best_fpr_val,
+						best_f1=best_f1_global,
+						best_fpr=best_fpr_global,
 					)
 
 					# Record genome evaluations (if genome_to_config is implemented)
