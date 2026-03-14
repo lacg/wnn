@@ -333,8 +333,17 @@ class FlowWorker:
         self._log("Worker stopped")
 
     def _get_next_queued_flow(self) -> Optional[dict]:
-        """Get the next queued flow from the dashboard."""
+        """Get the next queued flow from the dashboard.
+
+        Only returns a flow if no other flow is currently running,
+        ensuring at most one flow executes at a time.
+        """
         try:
+            # Check if any flow is already running (from this or another worker)
+            running = self.client.list_flows(status="running", limit=1)
+            if running:
+                return None  # Wait for the running flow to finish
+
             flows = self.client.list_flows(status="queued", limit=1)
             if flows:
                 return flows[0]
