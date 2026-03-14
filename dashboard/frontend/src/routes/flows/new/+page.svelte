@@ -20,7 +20,7 @@
   // IDS-specific config
   let idsClassification = 'binary';
   let idsSingleCluster = true;
-  let idsNBits = 8;
+  let idsNBits = 16;
   let idsValFraction = 0.25;
   let idsKFolds = 5;
   let idsFitnessWeightF1 = 0.0;
@@ -28,7 +28,7 @@
   let idsMinBits = 4;
   let idsMaxBits = 14;
   let idsMinNeurons = 5;
-  let idsMaxNeurons = 300;
+  let idsMaxNeurons = 500;
   let idsMaxBitDelta = 0;
   let idsNeuronSampleRate = 0.25;
   let idsBalanceClasses = true;
@@ -285,11 +285,11 @@
       neighborsPerIter = 150;
       patience = 5;
       fitnessPercentile = 0.75;
-      fitnessCalculator = 'ids_security';
+      fitnessCalculator = 'ids_recall';
       fitnessWeightCe = 0.3;
       fitnessWeightAcc = 1.0;
       idsClassification = 'binary';
-      idsNBits = 8;
+      idsNBits = 16;
       idsValFraction = 0.25;
       idsKFolds = 5;
       idsFitnessWeightF1 = 0.0;
@@ -301,11 +301,11 @@
       neighborsPerIter = 150;
       patience = 5;
       fitnessPercentile = 0.75;
-      fitnessCalculator = 'ids_security';
+      fitnessCalculator = 'ids_recall';
       fitnessWeightCe = 0.3;
       fitnessWeightAcc = 1.0;
       idsClassification = 'multi_tiered';
-      idsNBits = 8;
+      idsNBits = 16;
       idsValFraction = 0.25;
       idsKFolds = 5;
       idsFitnessWeightF1 = 0.0;
@@ -318,11 +318,11 @@
       neighborsPerIter = 150;
       patience = 5;
       fitnessPercentile = 0.75;
-      fitnessCalculator = 'ids_security';
+      fitnessCalculator = 'ids_recall';
       fitnessWeightCe = 0.3;
       fitnessWeightAcc = 1.0;
       idsClassification = 'binary';
-      idsNBits = 8;
+      idsNBits = 16;
       idsValFraction = 0.25;
       idsKFolds = 5;
       idsFitnessWeightF1 = 0.0;
@@ -335,11 +335,11 @@
       neighborsPerIter = 150;
       patience = 5;
       fitnessPercentile = 0.75;
-      fitnessCalculator = 'ids_security';
+      fitnessCalculator = 'ids_recall';
       fitnessWeightCe = 0.3;
       fitnessWeightAcc = 1.0;
       idsClassification = 'multi_tiered';
-      idsNBits = 8;
+      idsNBits = 16;
       idsValFraction = 0.25;
       idsKFolds = 5;
       idsFitnessWeightF1 = 0.0;
@@ -1303,12 +1303,12 @@
                 </div>
                 <div class="form-group">
                   <label for="idsMinNeurons">Min Neurons</label>
-                  <input type="number" id="idsMinNeurons" bind:value={idsMinNeurons} min="1" max="500" />
+                  <input type="number" id="idsMinNeurons" bind:value={idsMinNeurons} min="1" max="1000" />
                   <span class="field-hint">Min neurons per class</span>
                 </div>
                 <div class="form-group">
                   <label for="idsMaxNeurons">Max Neurons</label>
-                  <input type="number" id="idsMaxNeurons" bind:value={idsMaxNeurons} min="1" max="500" />
+                  <input type="number" id="idsMaxNeurons" bind:value={idsMaxNeurons} min="1" max="1000" />
                   <span class="field-hint">Max neurons per class</span>
                 </div>
               </div>
