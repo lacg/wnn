@@ -3396,7 +3396,7 @@ pub fn evaluate_genomes_parallel_hybrid(
                     rng_seed.wrapping_add(genome_idx as u64),
                     memory_mode,
                     class_weights,
-                    false, // sequential: inside outer par_iter, avoid nested parallelism deadlock
+                    true, // parallel: rayon handles nested parallelism via work-stealing
                 );
 
                 // Build GPU-padded connections (per-neuron → group layout with padding)
@@ -4203,7 +4203,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
                     gpu_addresses.as_deref(), neuron_sample_rate,
                     rng_seed.wrapping_add(genome_idx as u64), memory_mode,
                     None, // class_weights: adaptive path doesn't use class balancing
-                    false, // sequential: inside outer par_iter
+                    true, // parallel: rayon work-stealing handles nested parallelism
                 );
                 TrainedState {
                     memories, groups, cluster_to_group, cluster_neuron_starts,
@@ -4349,7 +4349,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
                         gpu_addresses.as_deref(), neuron_sample_rate,
                         rng_seed.wrapping_add(adapted.genome_idx as u64), memory_mode,
                         None, // class_weights: adaptive path doesn't use class balancing
-                        false, // sequential: inside outer par_iter
+                        true, // parallel: rayon work-stealing handles nested parallelism
                     );
                     let gpu_conns = reorganize_connections_for_gpu(
                         &adapted.connections, &adapted.bits, &adapted.neurons, &groups,
