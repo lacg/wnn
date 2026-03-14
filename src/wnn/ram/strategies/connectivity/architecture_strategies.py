@@ -2359,10 +2359,10 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 					total_generations=cfg.iterations,
 				)
 
-				# Build (genome, ce, acc) tuples for fitness ranking
+				# Build (genome, ce, acc, f1, fpr) tuples for fitness ranking
 				pop_tuples = [
-					(genome, ce, acc)
-					for genome, (ce, acc, *_rest) in zip(population, evals)
+					(genome, e[0], e[1], getattr(e, 'f1_macro', None), getattr(e, 'fpr', None))
+					for genome, e in zip(population, evals)
 				]
 
 				# Compute fitness and sort
@@ -2438,8 +2438,8 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 								zip(population, evals, fitness_scores)
 							):
 								ce, acc = ev_tuple[0], ev_tuple[1]
-								ev_f1 = ev_tuple[2] if len(ev_tuple) > 2 else None
-								ev_fpr = ev_tuple[3] if len(ev_tuple) > 3 else None
+								ev_f1 = getattr(ev_tuple, 'f1_macro', None)
+								ev_fpr = getattr(ev_tuple, 'fpr', None)
 								genome_config = self.genome_to_config(genome)
 								if genome_config:
 									genome_id = self._tracker.get_or_create_genome(
