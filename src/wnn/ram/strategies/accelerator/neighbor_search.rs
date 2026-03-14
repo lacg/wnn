@@ -821,50 +821,52 @@ fn crossover(
     rng: &mut impl Rng,
 ) -> (Vec<usize>, Vec<usize>, Vec<i64>) {
     if pool_shuffle_ratio > 0.0 && rng.gen::<f64>() < pool_shuffle_ratio {
-        return crossover_pool_shuffle(parent1, parent2, num_clusters, phase_type, rng);
+        let (child1, _) = crossover_pool_shuffle(parent1, parent2, num_clusters, phase_type, rng);
+        return child1;
     }
     let (child1, _) = crossover2(parent1, parent2, num_clusters, phase_type, rng);
     child1
 }
 
-/// Old-style 2→1 pool-and-shuffle crossover dispatch.
+/// Pool-and-shuffle crossover producing 2 complementary offspring.
 fn crossover_pool_shuffle(
     parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
     parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
     num_clusters: usize,
     phase_type: PhaseType,
     rng: &mut impl Rng,
-) -> (Vec<usize>, Vec<usize>, Vec<i64>) {
+) -> ((Vec<usize>, Vec<usize>, Vec<i64>), (Vec<usize>, Vec<usize>, Vec<i64>)) {
     match phase_type {
         PhaseType::Neurons => crossover_ps_neurons(parent1, parent2, num_clusters, rng),
         PhaseType::Bits => crossover_ps_bits(parent1, parent2, num_clusters, rng),
         PhaseType::Connections => crossover_ps_connections(parent1, parent2, num_clusters, rng),
-        PhaseType::Cluster => {
-            let (child1, _) = crossover2_cluster(parent1, parent2, num_clusters, rng);
-            child1
-        }
+        PhaseType::Cluster => crossover2_cluster(parent1, parent2, num_clusters, rng),
     }
 }
 
-/// Pool-and-shuffle neuron crossover (2→1): pool all neurons, shuffle, take child_n.
+/// Pool-and-shuffle neuron crossover (2→2 complementary): pool all neurons, shuffle once,
+/// child1 takes first p1_n, child2 takes next p2_n. Guarantees no overlap.
 fn crossover_ps_neurons(
     parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
     parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
     num_clusters: usize,
     rng: &mut impl Rng,
-) -> (Vec<usize>, Vec<usize>, Vec<i64>) {
+) -> ((Vec<usize>, Vec<usize>, Vec<i64>), (Vec<usize>, Vec<usize>, Vec<i64>)) {
     let p1_neuron_off = compute_neuron_offsets(&parent1.1);
     let p2_neuron_off = compute_neuron_offsets(&parent2.1);
     let p1_conn_off = compute_conn_offsets(&parent1.0);
     let p2_conn_off = compute_conn_offsets(&parent2.0);
-    let mut child_bits = Vec::new();
-    let mut child_neurons = Vec::new();
-    let mut child_conns = Vec::new();
+    let mut c1_bits = Vec::new();
+    let mut c1_neurons = Vec::new();
+    let mut c1_conns = Vec::new();
+    let mut c2_bits = Vec::new();
+    let mut c2_neurons = Vec::new();
+    let mut c2_conns = Vec::new();
     for c in 0..num_clusters {
         let p1_n = parent1.1[c];
         let p2_n = parent2.1[c];
-        let child_n = if rng.gen::<bool>() { p1_n } else { p2_n };
-        child_neurons.push(child_n);
+        c1_neurons.push(p1_n);
+        c2_neurons.push(p2_n);
         struct NeuronData<'a> { bits: usize, conns: &'a [i64] }
         let mut pool: Vec<NeuronData> = Vec::with_capacity(p1_n + p2_n);
         for local in 0..p1_n {
@@ -886,69 +888,113 @@ fn crossover_ps_neurons(
             });
         }
         pool.shuffle(rng);
-        for neuron in pool.into_iter().take(child_n) {
-            child_bits.push(neuron.bits);
-            child_conns.extend_from_slice(neuron.conns);
+        // Complementary partition: child1 gets first p1_n, child2 gets next p2_n
+        for (i, neuron) in pool.into_iter().enumerate() {
+            if i < p1_n {
+                c1_bits.push(neuron.bits);
+                c1_conns.extend_from_slice(neuron.conns);
+            } else if i < p1_n + p2_n {
+                c2_bits.push(neuron.bits);
+                c2_conns.extend_from_slice(neuron.conns);
+            }
         }
     }
-    (child_bits, child_neurons, child_conns)
+    ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns))
 }
 
-/// Pool-and-shuffle bits crossover (2→1): per-neuron coin flip, preserves parent1's neuron counts.
+/// Pool-and-shuffle bits crossover (2→2 complementary): per-neuron coin flip with complement.
+/// Both children preserve their respective parent's neuron counts.
 fn crossover_ps_bits(
     parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
     parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
     num_clusters: usize,
     rng: &mut impl Rng,
-) -> (Vec<usize>, Vec<usize>, Vec<i64>) {
+) -> ((Vec<usize>, Vec<usize>, Vec<i64>), (Vec<usize>, Vec<usize>, Vec<i64>)) {
     let p1_neuron_off = compute_neuron_offsets(&parent1.1);
     let p2_neuron_off = compute_neuron_offsets(&parent2.1);
     let p1_conn_off = compute_conn_offsets(&parent1.0);
     let p2_conn_off = compute_conn_offsets(&parent2.0);
-    let child_neurons = parent1.1.clone();
-    let mut child_bits = Vec::new();
-    let mut child_conns = Vec::new();
+    let c1_neurons = parent1.1.clone();
+    let c2_neurons = parent2.1.clone();
+    let mut c1_bits = Vec::new();
+    let mut c1_conns = Vec::new();
+    let mut c2_bits = Vec::new();
+    let mut c2_conns = Vec::new();
     for c in 0..num_clusters {
         let p1_n = parent1.1[c];
         let p2_n = parent2.1[c];
+        let shared = p1_n.min(p2_n);
         for local in 0..p1_n {
             let g1 = p1_neuron_off[c] + local;
-            if local < p2_n && rng.gen::<bool>() {
+            if local < shared && rng.gen::<bool>() {
+                // Swap: child1 gets p2's bits, child2 gets p1's bits
                 let g2 = p2_neuron_off[c] + local;
-                child_bits.push(parent2.0[g2]);
+                c1_bits.push(parent2.0[g2]);
                 if !parent2.2.is_empty() {
                     let cs = p2_conn_off[g2];
                     let ce = p2_conn_off[g2 + 1];
-                    child_conns.extend_from_slice(&parent2.2[cs..ce]);
+                    c1_conns.extend_from_slice(&parent2.2[cs..ce]);
                 }
             } else {
-                child_bits.push(parent1.0[g1]);
+                // No swap: child1 keeps p1's bits
+                c1_bits.push(parent1.0[g1]);
                 if !parent1.2.is_empty() {
                     let cs = p1_conn_off[g1];
                     let ce = p1_conn_off[g1 + 1];
-                    child_conns.extend_from_slice(&parent1.2[cs..ce]);
+                    c1_conns.extend_from_slice(&parent1.2[cs..ce]);
+                }
+            }
+        }
+        for local in 0..p2_n {
+            let g2 = p2_neuron_off[c] + local;
+            if local < shared && rng.gen::<bool>() {
+                // Swap: child2 gets p1's bits
+                let g1 = p1_neuron_off[c] + local;
+                c2_bits.push(parent1.0[g1]);
+                if !parent1.2.is_empty() {
+                    let cs = p1_conn_off[g1];
+                    let ce = p1_conn_off[g1 + 1];
+                    c2_conns.extend_from_slice(&parent1.2[cs..ce]);
+                }
+            } else {
+                // No swap: child2 keeps p2's bits
+                c2_bits.push(parent2.0[g2]);
+                if !parent2.2.is_empty() {
+                    let cs = p2_conn_off[g2];
+                    let ce = p2_conn_off[g2 + 1];
+                    c2_conns.extend_from_slice(&parent2.2[cs..ce]);
                 }
             }
         }
     }
-    (child_bits, child_neurons, child_conns)
+    ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns))
 }
 
-/// Pool-and-shuffle connections crossover (2→1): per-connection coin flip if same arch.
+/// Pool-and-shuffle connections crossover (2→2 complementary): per-connection coin flip with complement.
 fn crossover_ps_connections(
     parent1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
     parent2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
     num_clusters: usize,
     rng: &mut impl Rng,
-) -> (Vec<usize>, Vec<usize>, Vec<i64>) {
+) -> ((Vec<usize>, Vec<usize>, Vec<i64>), (Vec<usize>, Vec<usize>, Vec<i64>)) {
     let same_arch = parent1.1 == parent2.1 && parent1.0 == parent2.0;
     if same_arch && !parent1.2.is_empty() && !parent2.2.is_empty() {
-        let child_bits = parent1.0.clone();
-        let child_neurons = parent1.1.clone();
-        let child_conns: Vec<i64> = parent1.2.iter().zip(parent2.2.iter())
-            .map(|(&c1, &c2)| if rng.gen::<bool>() { c1 } else { c2 })
-            .collect();
-        (child_bits, child_neurons, child_conns)
+        let c1_bits = parent1.0.clone();
+        let c1_neurons = parent1.1.clone();
+        let c2_bits = parent2.0.clone();
+        let c2_neurons = parent2.1.clone();
+        let mut c1_conns = Vec::with_capacity(parent1.2.len());
+        let mut c2_conns = Vec::with_capacity(parent2.2.len());
+        for (&p1c, &p2c) in parent1.2.iter().zip(parent2.2.iter()) {
+            if rng.gen::<bool>() {
+                c1_conns.push(p2c);  // child1 gets p2's connection
+                c2_conns.push(p1c);  // child2 gets p1's connection (complement)
+            } else {
+                c1_conns.push(p1c);  // child1 keeps p1's connection
+                c2_conns.push(p2c);  // child2 keeps p2's connection (complement)
+            }
+        }
+        ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns))
     } else {
         crossover_ps_bits(parent1, parent2, num_clusters, rng)
     }
@@ -1425,12 +1471,9 @@ where
                     ga_config.phase_type
                 };
 
-                // Decide crossover method: pool-shuffle (old 2→1) or uniform (new 2→2)
+                // Decide crossover method: pool-shuffle or uniform (both 2→2 complementary)
                 let (child1, child2) = if ga_config.pool_shuffle_ratio > 0.0 && rng.gen::<f64>() < ga_config.pool_shuffle_ratio {
-                    // Old-style: 2→1, call twice for 2 children
-                    let c1 = crossover_pool_shuffle(p1, p2, ga_config.num_clusters, xo_phase, &mut rng);
-                    let c2 = crossover_pool_shuffle(p2, p1, ga_config.num_clusters, xo_phase, &mut rng);
-                    (c1, c2)
+                    crossover_pool_shuffle(p1, p2, ga_config.num_clusters, xo_phase, &mut rng)
                 } else {
                     crossover2(p1, p2, ga_config.num_clusters, xo_phase, &mut rng)
                 };

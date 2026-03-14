@@ -601,8 +601,7 @@ class BaseEvaluator(ABC):
 					parent2 = self._tournament_select(population, tournament_size, rng, fitness_scores)
 					xo_pt = PhaseType.CLUSTER if rng.random() < cluster_crossover_ratio else pt
 					if pool_shuffle_ratio > 0.0 and rng.random() < pool_shuffle_ratio:
-						child1 = parent1._crossover_pool_shuffle(parent2, xo_pt, rng)
-						child2 = parent2._crossover_pool_shuffle(parent1, xo_pt, rng)
+						child1, child2 = parent1.crossover_pool_shuffle2(parent2, xo_pt, rng)
 					else:
 						child1, child2 = parent1.crossover2(parent2, xo_pt, rng)
 					child1 = self._mutate_genome_phased(
