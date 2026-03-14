@@ -20,13 +20,13 @@
   // IDS-specific config
   let idsClassification = 'binary';
   let idsSingleCluster = true;
-  let idsNBits = 16;
+  let idsNBits = 8;
   let idsValFraction = 0.25;
   let idsKFolds = 5;
   let idsFitnessWeightF1 = 0.0;
   let idsSplit = 'standard';
   let idsMinBits = 4;
-  let idsMaxBits = 14;
+  let idsMaxBits = 16;
   let idsMinNeurons = 5;
   let idsMaxNeurons = 500;
   let idsMaxBitDelta = 0;
@@ -289,7 +289,7 @@
       fitnessWeightCe = 0.3;
       fitnessWeightAcc = 1.0;
       idsClassification = 'binary';
-      idsNBits = 16;
+      idsNBits = 8;
       idsValFraction = 0.25;
       idsKFolds = 5;
       idsFitnessWeightF1 = 0.0;
@@ -305,7 +305,7 @@
       fitnessWeightCe = 0.3;
       fitnessWeightAcc = 1.0;
       idsClassification = 'multi_tiered';
-      idsNBits = 16;
+      idsNBits = 8;
       idsValFraction = 0.25;
       idsKFolds = 5;
       idsFitnessWeightF1 = 0.0;
@@ -322,7 +322,7 @@
       fitnessWeightCe = 0.3;
       fitnessWeightAcc = 1.0;
       idsClassification = 'binary';
-      idsNBits = 16;
+      idsNBits = 8;
       idsValFraction = 0.25;
       idsKFolds = 5;
       idsFitnessWeightF1 = 0.0;
@@ -339,7 +339,7 @@
       fitnessWeightCe = 0.3;
       fitnessWeightAcc = 1.0;
       idsClassification = 'multi_tiered';
-      idsNBits = 16;
+      idsNBits = 8;
       idsValFraction = 0.25;
       idsKFolds = 5;
       idsFitnessWeightF1 = 0.0;
