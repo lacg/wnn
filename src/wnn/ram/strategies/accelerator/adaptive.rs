@@ -3445,8 +3445,30 @@ pub fn evaluate_genomes_parallel_hybrid(
 
         let eval_start = std::time::Instant::now();
 
-        // Send to persistent eval worker and get results
-        let batch_results = eval_worker.evaluate(batch_exports, Arc::clone(&eval_data));
+        // Evaluate inline (eval worker thread causes rayon deadlock when
+        // compute_per_example_scores tries to use par_iter from a non-rayon thread)
+        let metal_arc = get_metal_evaluator();
+        let sparse_metal_arc = get_sparse_metal_evaluator();
+        let metal_ref = metal_arc.as_ref().map(|a| a.as_ref());
+        let sparse_metal_ref = sparse_metal_arc.as_ref().map(|a| a.as_ref());
+        let batch_results: Vec<(usize, f64, f64, f64, f64, f64)> = batch_exports
+            .into_iter()
+            .map(|(genome_idx, export, override_threshold)| {
+                let (ce, acc, f1, fpr, threshold) = evaluate_genome_hybrid(
+                    &export,
+                    &eval_data.eval_input_bits,
+                    &eval_data.eval_targets,
+                    eval_data.num_eval,
+                    eval_data.num_clusters,
+                    eval_data.total_input_bits,
+                    eval_data.empty_value,
+                    metal_ref,
+                    sparse_metal_ref,
+                    override_threshold,
+                );
+                (genome_idx, ce, acc, f1, fpr, threshold)
+            })
+            .collect();
 
         let eval_elapsed_secs = eval_start.elapsed().as_secs_f64();
         let batch_total_secs = train_elapsed.as_secs_f64() + eval_elapsed_secs;
