@@ -1005,6 +1005,14 @@ pub mod queries {
             .execute(pool)
             .await?;
 
+        // Delete best_genomes that reference genomes from this experiment
+        sqlx::query(
+            "DELETE FROM best_genomes WHERE genome_id IN (SELECT id FROM genomes WHERE experiment_id = ?)"
+        )
+        .bind(exp_id)
+        .execute(pool)
+        .await?;
+
         // Delete genome_evaluations that reference genomes from this experiment
         sqlx::query(
             "DELETE FROM genome_evaluations WHERE genome_id IN (SELECT id FROM genomes WHERE experiment_id = ?)"
