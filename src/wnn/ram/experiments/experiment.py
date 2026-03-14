@@ -118,6 +118,9 @@ class ExperimentConfig:
 	# Pool-and-shuffle crossover ratio: 0.0 = all uniform (2→2), 1.0 = all pool-and-shuffle (2→1)
 	pool_shuffle_ratio: float = 0.0
 
+	# Assortative mating ratio: 0.0 = random p2, 1.0 = always pick most similar p2 (NEAT-style)
+	assortative_mating_ratio: float = 0.85
+
 	# Grid search configuration (only used when experiment_type=GRID_SEARCH)
 	neurons_grid: Optional[list[int]] = None   # e.g. [50, 100, 150, 200]
 	bits_grid: Optional[list[int]] = None       # e.g. [14, 16, 18, 20]
@@ -475,6 +478,10 @@ class Experiment:
 		# Pool-and-shuffle crossover ratio
 		if cfg.pool_shuffle_ratio > 0:
 			strategy_kwargs["pool_shuffle_ratio"] = cfg.pool_shuffle_ratio
+
+		# Assortative mating ratio (NEAT-style)
+		if cfg.assortative_mating_ratio > 0:
+			strategy_kwargs["assortative_mating_ratio"] = cfg.assortative_mating_ratio
 
 		# Type-specific kwargs
 		if is_grid_search:

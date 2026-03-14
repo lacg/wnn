@@ -207,6 +207,7 @@
   let contextSize = 4;
   let clusterCrossoverRatio = 0.8;
   let poolShuffleRatio = 0.0;
+  let assortativeMatingRatio = 0.85;
   let reweightRounds = 0;
   let reweightMaxBoost = 4;
   let tierConfig = '100,15,20,true;400,10,12,false;rest,5,8,false';
@@ -647,6 +648,7 @@
         context_size: contextSize,
         cluster_crossover_ratio: clusterCrossoverRatio,
         pool_shuffle_ratio: poolShuffleRatio,
+        assortative_mating_ratio: assortativeMatingRatio,
       };
 
       if (isMultiStage) {
@@ -1048,6 +1050,13 @@
             <label for="poolShuffleRatio">Pool Shuffle Ratio</label>
             <input type="number" id="poolShuffleRatio" bind:value={poolShuffleRatio} min="0" max="1" step="0.1" />
             <span class="field-hint">0 = uniform (2→2), 1 = pool-and-shuffle (2→1)</span>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="assortativeMatingRatio">Assortative Mating Ratio</label>
+            <input type="number" id="assortativeMatingRatio" bind:value={assortativeMatingRatio} min="0" max="1" step="0.05" />
+            <span class="field-hint">0 = random p2, 0.85 = NEAT-style (similar mates)</span>
           </div>
         </div>
 

@@ -378,6 +378,36 @@ class BaseEvaluator(ABC):
 			best_idx = min(indices, key=lambda i: population[i][1])
 		return population[best_idx][0].clone()
 
+	def _assortative_select(
+		self,
+		population: list[tuple[ClusterGenome, float]],
+		reference: ClusterGenome,
+		tournament_size: int,
+		rng: random.Random,
+		fitness_scores: Optional[list[float]] = None,
+	) -> ClusterGenome:
+		"""Assortative tournament selection: pick most architecturally similar to reference.
+
+		Runs an expanded tournament (2× size), picks candidate closest to reference
+		in neuron count + mean bits (NEAT-style speciation).
+		"""
+		k = min(tournament_size * 2, len(population))
+		indices = rng.sample(range(len(population)), k)
+
+		ref_n = sum(reference.neurons_per_cluster)
+		ref_b = sum(reference.bits_per_neuron) / max(1, len(reference.bits_per_neuron))
+
+		def distance(idx: int) -> float:
+			g = population[idx][0]
+			n = sum(g.neurons_per_cluster)
+			b = sum(g.bits_per_neuron) / max(1, len(g.bits_per_neuron))
+			max_n = max(ref_n, n, 1)
+			max_b = max(ref_b, b, 1.0)
+			return abs(ref_n - n) / max_n + 0.5 * abs(ref_b - b) / max_b
+
+		best_idx = min(indices, key=distance)
+		return population[best_idx][0].clone()
+
 	def _mutate_genome_phased(
 		self,
 		genome: ClusterGenome,
@@ -546,6 +576,7 @@ class BaseEvaluator(ABC):
 		fitness_scores: Optional[list[float]] = None,
 		cluster_crossover_ratio: float = 0.0,
 		pool_shuffle_ratio: float = 0.0,
+		assortative_mating_ratio: float = 0.0,
 	) -> OffspringSearchResult:
 		"""Search for GA offspring above accuracy threshold.
 
@@ -598,23 +629,27 @@ class BaseEvaluator(ABC):
 			while i < batch_n:
 				parent1 = self._tournament_select(population, tournament_size, rng, fitness_scores)
 				if rng.random() < crossover_rate and len(population) > 1:
-					parent2 = self._tournament_select(population, tournament_size, rng, fitness_scores)
-					xo_pt = PhaseType.CLUSTER if rng.random() < cluster_crossover_ratio else pt
-					if pool_shuffle_ratio > 0.0 and rng.random() < pool_shuffle_ratio:
-						child1, child2 = parent1.crossover_pool_shuffle2(parent2, xo_pt, rng)
+					# Assortative mating: pick p2 similar to p1 (NEAT-style)
+					if assortative_mating_ratio > 0.0 and rng.random() < assortative_mating_ratio:
+						parent2 = self._assortative_select(population, parent1, tournament_size, rng, fitness_scores)
 					else:
+						parent2 = self._tournament_select(population, tournament_size, rng, fitness_scores)
+					xo_pt = PhaseType.CLUSTER if rng.random() < cluster_crossover_ratio else pt
+					use_pool_shuffle = pool_shuffle_ratio > 0.0 and rng.random() < pool_shuffle_ratio
+					if use_pool_shuffle:
+						# 2→1: pool-shuffle, keep only child1
+						child1, _child2 = parent1.crossover_pool_shuffle2(parent2, xo_pt, rng)
+						children = [child1]
+					else:
+						# 2→2: uniform crossover, both children
 						child1, child2 = parent1.crossover2(parent2, xo_pt, rng)
-					child1 = self._mutate_genome_phased(
-						child1, phase_type,
-						bits_mutation_rate, neurons_mutation_rate,
-						min_bits, max_bits, min_neurons, max_neurons, rng,
-					)
-					child2 = self._mutate_genome_phased(
-						child2, phase_type,
-						bits_mutation_rate, neurons_mutation_rate,
-						min_bits, max_bits, min_neurons, max_neurons, rng,
-					)
-					for child in (child1, child2):
+						children = [child1, child2]
+					for child in children:
+						child = self._mutate_genome_phased(
+							child, phase_type,
+							bits_mutation_rate, neurons_mutation_rate,
+							min_bits, max_bits, min_neurons, max_neurons, rng,
+						)
 						if hasattr(child, 'fingerprint'):
 							for _ in range(3):
 								if child.fingerprint() not in known_fps:
@@ -626,7 +661,7 @@ class BaseEvaluator(ABC):
 								)
 							known_fps.add(child.fingerprint())
 						batch.append(child)
-					i += 2
+					i += len(children)
 				else:
 					child = parent1.clone()
 					child = self._mutate_genome_phased(

@@ -786,6 +786,7 @@ pub struct GAConfig {
     pub phase_type: PhaseType,
     pub cluster_crossover_ratio: f64,  // 0.0 = phase-specific, 1.0 = all cluster-level
     pub pool_shuffle_ratio: f64,       // 0.0 = all uniform (2→2), 1.0 = all pool-and-shuffle (2→1)
+    pub assortative_mating_ratio: f64, // 0.0 = random p2, 1.0 = always pick most similar p2
 }
 
 /// Tournament selection: pick best from random subset.
@@ -802,6 +803,55 @@ fn tournament_select<'a>(
         if population[idx].3 < best_fitness {  // Lower CE is better
             best_idx = idx;
             best_fitness = population[idx].3;
+        }
+    }
+
+    &population[best_idx]
+}
+
+/// Compute architectural distance between two genomes.
+/// Neurons weighted 2× more than bits (via 0.5 coefficient on bits term).
+/// Returns value in [0.0, 1.5]: 0 = identical architecture, higher = more different.
+fn genome_distance(
+    g1: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+    g2: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+) -> f64 {
+    let n1: usize = g1.1.iter().sum();
+    let n2: usize = g2.1.iter().sum();
+    let max_n = n1.max(n2).max(1) as f64;
+    let neuron_dist = (n1 as f64 - n2 as f64).abs() / max_n;
+
+    // Mean bits per neuron
+    let total_neurons_1 = g1.0.len().max(1) as f64;
+    let total_neurons_2 = g2.0.len().max(1) as f64;
+    let mean_b1 = g1.0.iter().sum::<usize>() as f64 / total_neurons_1;
+    let mean_b2 = g2.0.iter().sum::<usize>() as f64 / total_neurons_2;
+    let max_b = mean_b1.max(mean_b2).max(1.0);
+    let bits_dist = (mean_b1 - mean_b2).abs() / max_b;
+
+    neuron_dist + 0.5 * bits_dist
+}
+
+/// Assortative tournament selection: pick the most architecturally similar
+/// genome to `reference` from a tournament of random candidates.
+/// Still fitness-gated: only considers tournament-worthy candidates.
+fn assortative_tournament_select<'a>(
+    population: &'a [(Vec<usize>, Vec<usize>, Vec<i64>, f64)],
+    reference: &(Vec<usize>, Vec<usize>, Vec<i64>, f64),
+    tournament_size: usize,
+    rng: &mut impl Rng,
+) -> &'a (Vec<usize>, Vec<usize>, Vec<i64>, f64) {
+    // Run a larger tournament (2× size) to have more candidates to pick from
+    let expanded_size = (tournament_size * 2).min(population.len());
+    let mut best_idx = rng.gen_range(0..population.len());
+    let mut best_dist = genome_distance(&population[best_idx], reference);
+
+    for _ in 1..expanded_size {
+        let idx = rng.gen_range(0..population.len());
+        let dist = genome_distance(&population[idx], reference);
+        if dist < best_dist {
+            best_idx = idx;
+            best_dist = dist;
         }
     }
 
@@ -1464,21 +1514,36 @@ where
             let p1 = tournament_select(population, ga_config.tournament_size, &mut rng);
 
             if rng.gen::<f64>() < ga_config.crossover_rate && population.len() > 1 {
-                let p2 = tournament_select(population, ga_config.tournament_size, &mut rng);
+                // Assortative mating: pick p2 similar to p1 (NEAT-style)
+                let p2 = if ga_config.assortative_mating_ratio > 0.0
+                    && rng.gen::<f64>() < ga_config.assortative_mating_ratio
+                {
+                    assortative_tournament_select(population, p1, ga_config.tournament_size, &mut rng)
+                } else {
+                    tournament_select(population, ga_config.tournament_size, &mut rng)
+                };
+
                 let xo_phase = if rng.gen::<f64>() < ga_config.cluster_crossover_ratio {
                     PhaseType::Cluster
                 } else {
                     ga_config.phase_type
                 };
 
-                // Decide crossover method: pool-shuffle or uniform (both 2→2 complementary)
-                let (child1, child2) = if ga_config.pool_shuffle_ratio > 0.0 && rng.gen::<f64>() < ga_config.pool_shuffle_ratio {
-                    crossover_pool_shuffle(p1, p2, ga_config.num_clusters, xo_phase, &mut rng)
+                // Pool-shuffle = 2→1 (one child), uniform = 2→2 (both children)
+                let use_pool_shuffle = ga_config.pool_shuffle_ratio > 0.0
+                    && rng.gen::<f64>() < ga_config.pool_shuffle_ratio;
+
+                let children: Vec<(Vec<usize>, Vec<usize>, Vec<i64>)> = if use_pool_shuffle {
+                    // 2→1: pool-shuffle produces complementary pair, keep only child1
+                    let (child1, _child2) = crossover_pool_shuffle(p1, p2, ga_config.num_clusters, xo_phase, &mut rng);
+                    vec![child1]
                 } else {
-                    crossover2(p1, p2, ga_config.num_clusters, xo_phase, &mut rng)
+                    // 2→2: uniform crossover produces both children
+                    let (child1, child2) = crossover2(p1, p2, ga_config.num_clusters, xo_phase, &mut rng);
+                    vec![child1, child2]
                 };
 
-                for child in [child1, child2] {
+                for child in &children {
                     let (mut new_bits, mut new_neurons, mut new_conns) = mutate_ga(
                         &child.0, &child.1, &child.2, ga_config, &mut rng,
                     );
@@ -1496,7 +1561,7 @@ where
                     batch_connections.extend(&new_conns);
                     batch_genomes.push((new_bits, new_neurons, new_conns));
                 }
-                i += 2;
+                i += children.len();
             } else {
                 let child = (p1.0.clone(), p1.1.clone(), p1.2.clone());
                 let (mut new_bits, mut new_neurons, mut new_conns) = mutate_ga(

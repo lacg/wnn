@@ -404,6 +404,7 @@ class IDSEvaluator(BaseEvaluator):
 		fitness_scores: Optional[list[float]] = None,
 		cluster_crossover_ratio: float = 0.0,
 		pool_shuffle_ratio: float = 0.0,
+		assortative_mating_ratio: float = 0.0,
 	) -> OffspringSearchResult:
 		if not population:
 			return OffspringSearchResult(genomes=[], evaluated=0, viable=0)
@@ -448,6 +449,7 @@ class IDSEvaluator(BaseEvaluator):
 			phase_type=phase_type,
 			cluster_crossover_ratio=cluster_crossover_ratio,
 			pool_shuffle_ratio=pool_shuffle_ratio,
+			assortative_mating_ratio=assortative_mating_ratio,
 		)
 
 		genomes = []

@@ -759,6 +759,8 @@ class ArchitectureConfig:
 	cluster_crossover_ratio: float = 0.0
 	# Pool-and-shuffle crossover ratio: 0.0 = all uniform (2→2), 1.0 = all pool-and-shuffle (2→1)
 	pool_shuffle_ratio: float = 0.0
+	# Assortative mating ratio: 0.0 = random p2, 1.0 = always pick most similar p2 (NEAT-style)
+	assortative_mating_ratio: float = 0.85
 
 
 class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['ClusterGenome']):
@@ -990,6 +992,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 				fitness_scores=fitness_scores,
 				cluster_crossover_ratio=arch_cfg.cluster_crossover_ratio,
 				pool_shuffle_ratio=arch_cfg.pool_shuffle_ratio,
+				assortative_mating_ratio=arch_cfg.assortative_mating_ratio,
 			)
 
 			# Convert to 3-tuples, rank by fitness, return best n_needed

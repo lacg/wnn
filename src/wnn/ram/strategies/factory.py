@@ -362,6 +362,7 @@ class OptimizerStrategyFactory:
 		cluster_crossover_ratio: float = 0.0,
 		# Pool-and-shuffle crossover ratio (GA only): 0.0 = all uniform (2→2), 1.0 = all pool-and-shuffle (2→1)
 		pool_shuffle_ratio: float = 0.0,
+		assortative_mating_ratio: float = 0.0,
 	):
 		"""
 		Create an optimizer strategy.
@@ -474,6 +475,7 @@ class OptimizerStrategyFactory:
 					min_accuracy_floor=min_accuracy_floor,
 					cluster_crossover_ratio=cluster_crossover_ratio,
 					pool_shuffle_ratio=pool_shuffle_ratio,
+					assortative_mating_ratio=assortative_mating_ratio,
 				)
 
 			case OptimizerStrategyType.ARCHITECTURE_TS:
@@ -644,6 +646,7 @@ class OptimizerStrategyFactory:
 		min_accuracy_floor: float | None = None,
 		cluster_crossover_ratio: float = 0.0,
 		pool_shuffle_ratio: float = 0.0,
+		assortative_mating_ratio: float = 0.0,
 	):
 		"""Create an ArchitectureGAStrategy."""
 		from wnn.ram.fitness import FitnessCalculatorType
@@ -669,6 +672,7 @@ class OptimizerStrategyFactory:
 			mutable_clusters=mutable_clusters,
 			cluster_crossover_ratio=cluster_crossover_ratio,
 			pool_shuffle_ratio=pool_shuffle_ratio,
+			assortative_mating_ratio=assortative_mating_ratio,
 		)
 		ga_config = GAConfig(
 			population_size=population_size,

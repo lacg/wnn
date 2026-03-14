@@ -558,6 +558,7 @@ class TieredEvaluator(BaseEvaluator):
         fitness_scores: Optional[list[float]] = None,  # TODO: pass to Rust tournament
         cluster_crossover_ratio: float = 0.0,
         pool_shuffle_ratio: float = 0.0,
+        assortative_mating_ratio: float = 0.0,
     ) -> OffspringSearchResult:
         """
         Search for GA offspring above accuracy threshold, entirely in Rust.
@@ -644,6 +645,7 @@ class TieredEvaluator(BaseEvaluator):
             phase_type=phase_type,
             cluster_crossover_ratio=cluster_crossover_ratio,
             pool_shuffle_ratio=pool_shuffle_ratio,
+            assortative_mating_ratio=assortative_mating_ratio,
         )
 
         # Convert results to ClusterGenome objects

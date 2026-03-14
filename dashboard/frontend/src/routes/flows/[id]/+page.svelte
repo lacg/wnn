@@ -159,7 +159,8 @@
     phase_order: 'neurons_first',
     context_size: 4,
     cluster_crossover_ratio: 0.0,
-    pool_shuffle_ratio: 0.0
+    pool_shuffle_ratio: 0.0,
+    assortative_mating_ratio: 0.85
   };
 
   // Flow rename state
@@ -226,6 +227,7 @@
         editConfig.context_size = p.context_size ?? 4;
         editConfig.cluster_crossover_ratio = p.cluster_crossover_ratio ?? 0.0;
         editConfig.pool_shuffle_ratio = p.pool_shuffle_ratio ?? 0.0;
+        editConfig.assortative_mating_ratio = p.assortative_mating_ratio ?? 0.85;
         if (p.tier_config) {
           // Handle both string and array formats
           if (typeof p.tier_config === 'string') {
@@ -287,6 +289,7 @@
         context_size: editConfig.context_size,
         cluster_crossover_ratio: editConfig.cluster_crossover_ratio,
         pool_shuffle_ratio: editConfig.pool_shuffle_ratio,
+        assortative_mating_ratio: editConfig.assortative_mating_ratio,
       };
       // Only include tier_config for tiered architectures
       if (!isBitwise) {
@@ -1219,6 +1222,13 @@
               <span class="form-hint">0 = uniform (2→2), 1 = pool-and-shuffle (2→1)</span>
             </div>
           </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="assortative_mating_ratio">Assortative Mating Ratio</label>
+              <input type="number" id="assortative_mating_ratio" bind:value={editConfig.assortative_mating_ratio} min="0" max="1" step="0.05" />
+              <span class="form-hint">0 = random p2, 0.85 = NEAT-style (similar mates), 1 = always similar</span>
+            </div>
+          </div>
 
           <div class="form-row">
             <div class="form-group">
@@ -1337,6 +1347,12 @@
             <div class="param-item">
               <span class="param-label">Pool Shuffle Ratio</span>
               <span class="param-value">{flow.config.params.pool_shuffle_ratio}</span>
+            </div>
+          {/if}
+          {#if flow.config.params.assortative_mating_ratio}
+            <div class="param-item">
+              <span class="param-label">Assortative Mating</span>
+              <span class="param-value">{flow.config.params.assortative_mating_ratio}</span>
             </div>
           {/if}
           <div class="param-group full-width">

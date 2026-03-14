@@ -1153,6 +1153,8 @@ class FlowWorker:
                 cluster_crossover_ratio=float(params.get("cluster_crossover_ratio", 0.0)),
                 # Pool-and-shuffle crossover ratio
                 pool_shuffle_ratio=float(params.get("pool_shuffle_ratio", 0.0)),
+                # Assortative mating ratio (NEAT-style)
+                assortative_mating_ratio=float(params.get("assortative_mating_ratio", 0.85)),
             )
             exp_configs.append(exp_config)
 
