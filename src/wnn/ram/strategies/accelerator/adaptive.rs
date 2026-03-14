@@ -3312,7 +3312,7 @@ pub fn evaluate_genomes_parallel_hybrid(
         let train_start = std::time::Instant::now();
 
         // Train batch in parallel - each genome builds its own config (handles variable architectures)
-        let batch_exports: Vec<(usize, GenomeExport, Option<f64>)> = (0..current_batch_size)
+        let mut batch_exports: Vec<(usize, GenomeExport, Option<f64>)> = (0..current_batch_size)
             .into_par_iter()
             .map(|local_idx| {
                 let genome_idx = batch_start + local_idx;
@@ -3410,27 +3410,29 @@ pub fn evaluate_genomes_parallel_hybrid(
                 // Export for GPU using THIS genome's groups
                 let export = export_genome_for_gpu(&memories, &groups, &gpu_connections);
 
-                // Single-cluster: calibrate threshold on training data
-                let calibrated_threshold: Option<f64> = if num_clusters == 1 {
-                    let metal_arc = get_metal_evaluator();
-                    let sparse_metal_arc = get_sparse_metal_evaluator();
-                    let train_scores = compute_per_example_scores(
-                        &export, train_input_bits, &packed_train_input, words_per_example,
-                        num_train, num_clusters, total_input_bits, empty_value,
-                        memory_mode,
-                        metal_arc.as_ref().map(|a| a.as_ref()),
-                        sparse_metal_arc.as_ref().map(|a| a.as_ref()),
-                    );
-                    let flat_scores: Vec<f64> = train_scores.iter().map(|s| s[0]).collect();
-                    let (t, _f1, _fpr) = find_optimal_threshold_f1(&flat_scores, train_targets);
-                    Some(t)
-                } else {
-                    None
-                };
-
-                (genome_idx, export, calibrated_threshold)
+                // Threshold calibration done AFTER par_iter to avoid nested parallelism
+                (genome_idx, export, None)
             })
             .collect();
+
+        // Single-cluster: calibrate thresholds sequentially (compute_per_example_scores
+        // uses par_iter internally, which would deadlock inside the outer par_iter above)
+        if num_clusters == 1 {
+            let metal_arc = get_metal_evaluator();
+            let sparse_metal_arc = get_sparse_metal_evaluator();
+            for (_, export, threshold) in batch_exports.iter_mut() {
+                let train_scores = compute_per_example_scores(
+                    export, train_input_bits, &packed_train_input, words_per_example,
+                    num_train, num_clusters, total_input_bits, empty_value,
+                    memory_mode,
+                    metal_arc.as_ref().map(|a| a.as_ref()),
+                    sparse_metal_arc.as_ref().map(|a| a.as_ref()),
+                );
+                let flat_scores: Vec<f64> = train_scores.iter().map(|s| s[0]).collect();
+                let (t, _f1, _fpr) = find_optimal_threshold_f1(&flat_scores, train_targets);
+                *threshold = Some(t);
+            }
+        }
 
         let train_elapsed = train_start.elapsed();
 
