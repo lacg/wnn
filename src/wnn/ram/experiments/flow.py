@@ -1068,7 +1068,7 @@ class Flow:
 			)
 
 		# Load seed from leaderboard if configured (and no checkpoint seed)
-		if cfg.seed_from_leaderboard and not seed_genome and self.tracker:
+		if cfg.seed_from_leaderboard and not seed_genome and self.dashboard_client:
 			try:
 				self.log("Loading seed from leaderboard...")
 				seed_genome, seed_population = self._load_seed_from_leaderboard()
@@ -1963,7 +1963,7 @@ class Flow:
 	) -> tuple[Optional[ClusterGenome], Optional[list[ClusterGenome]]]:
 		"""Load seed genome(s) from the best genomes leaderboard."""
 		cfg = self.config
-		entries = self.tracker.list_best_genomes(
+		entries = self.dashboard_client.list_best_genomes(
 			task_type=cfg.seed_leaderboard_task_type,
 			stage=cfg.seed_leaderboard_stage,
 			metric=cfg.seed_leaderboard_metric,
@@ -1975,7 +1975,7 @@ class Flow:
 
 		population = []
 		for entry in entries:
-			data = self.tracker.get_best_genome_data(entry["id"])
+			data = self.dashboard_client.get_best_genome_data(entry["id"])
 			if not data or not data.get("connections_json"):
 				continue
 			# Reconstruct ClusterGenome from tiers_json + connections_json

@@ -516,6 +516,15 @@ class FlowWorker:
                 flow_config.stage_max_neurons_list = params.get("stage_max_neurons")
                 flow_config.max_bit_delta = params.get("max_bit_delta", 0)
 
+            # Handle leaderboard seeding
+            if params.get("seed_from_leaderboard"):
+                flow_config.seed_from_leaderboard = True
+                flow_config.seed_leaderboard_task_type = params.get("seed_leaderboard_task_type", "ids" if is_ids else "lm")
+                flow_config.seed_leaderboard_stage = params.get("seed_leaderboard_stage", "stage_0")
+                flow_config.seed_leaderboard_metric = params.get("seed_leaderboard_metric", "f1_macro" if is_ids else "ce")
+                flow_config.seed_leaderboard_count = params.get("seed_leaderboard_count", 150)
+                self._log(f"Seeding from leaderboard: top {flow_config.seed_leaderboard_count} by {flow_config.seed_leaderboard_metric}")
+
             # Handle seed checkpoint
             seed_checkpoint_id = flow_data.get("seed_checkpoint_id")
             if seed_checkpoint_id:

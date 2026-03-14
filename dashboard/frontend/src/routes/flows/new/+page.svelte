@@ -212,6 +212,10 @@
   let reweightMaxBoost = 4;
   let tierConfig = '100,15,20,true;400,10,12,false;rest,5,8,false';
 
+  // Leaderboard seeding
+  let seedFromLeaderboard = false;
+  let seedLeaderboardCount = 150;
+
   // Apply template defaults (only in single-stage mode)
   function applyTemplateDefaults(templateName: string) {
     if (isMultiStage) return;
@@ -651,6 +655,11 @@
         assortative_mating_ratio: assortativeMatingRatio,
       };
 
+      if (seedFromLeaderboard) {
+        params.seed_from_leaderboard = true;
+        params.seed_leaderboard_count = seedLeaderboardCount;
+      }
+
       if (isMultiStage) {
         params.architecture_type = 'multi_stage';
         params.num_stages = numStages;
@@ -746,7 +755,7 @@
             params
           },
           experiments: enrichedExperiments,
-          seed_checkpoint_id: seedCheckpointId
+          seed_checkpoint_id: seedFromLeaderboard ? null : seedCheckpointId
         })
       });
 
@@ -1148,11 +1157,28 @@
       </div>
 
       <div class="form-section">
-        <h2>Seed Checkpoint</h2>
+        <h2>Seed Population</h2>
         <p class="section-hint">
-          Optionally seed from a previous run's checkpoint.
+          Seed from a checkpoint or the leaderboard. Remove Grid Search when using leaderboard seed.
         </p>
-        <SeedCheckpointSelector bind:value={seedCheckpointId} />
+        <div class="form-group">
+          <label for="seedFromLeaderboard">
+            <input type="checkbox" id="seedFromLeaderboard" bind:checked={seedFromLeaderboard} />
+            Seed from Leaderboard
+          </label>
+          <span class="field-hint">Use top genomes (with connections) as initial population — skip Grid Search</span>
+        </div>
+        {#if seedFromLeaderboard}
+          <div class="form-row">
+            <div class="form-group">
+              <label for="seedLeaderboardCount">Top N Genomes</label>
+              <input type="number" id="seedLeaderboardCount" bind:value={seedLeaderboardCount} min="10" max="500" step="10" />
+              <span class="field-hint">Number of genomes to pull from leaderboard</span>
+            </div>
+          </div>
+        {:else}
+          <SeedCheckpointSelector bind:value={seedCheckpointId} />
+        {/if}
       </div>
       </div>
 
