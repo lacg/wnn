@@ -1805,6 +1805,7 @@ pub fn evaluate_genomes_parallel(
             rng_seed.wrapping_add(genome_idx as u64),
             memory_mode,
             None, // class_weights: only used by IDS via evaluate_genomes_parallel_hybrid
+            true, // parallel: safe here, not inside outer par_iter
         );
 
         // Evaluate this genome - HYBRID Metal/CPU acceleration
@@ -2282,6 +2283,8 @@ pub fn compute_class_weights(labels: &[i64], num_classes: usize) -> Vec<u32> {
 /// Train a genome using the given memory slot.
 /// When `gpu_addresses` is Some, uses pre-computed GPU addresses instead of CPU compute_address().
 /// GPU address layout: addresses[global_neuron_idx * num_train + example_idx].
+/// When `parallel` is true, uses rayon par_iter for example-level parallelism.
+/// Set `parallel=false` when calling from within an outer par_iter to avoid nested parallelism deadlock.
 pub(crate) fn train_genome_in_slot(
     memories: &[GroupMemory],
     groups: &[ConfigGroup],
@@ -2301,16 +2304,12 @@ pub(crate) fn train_genome_in_slot(
     rng_seed: u64,
     memory_mode: u8,
     class_weights: Option<&[u32]>,
+    parallel: bool,
 ) {
     let use_sampling = neuron_sample_rate < 1.0;
     let use_nudge = memory_mode != crate::neuron_memory::MODE_TERNARY;
 
-    // Use chunked parallel processing to balance parallelism vs overhead
-    let chunk_size = 10_000.max(num_train / 20);
-
-    (0..num_train).into_par_iter()
-        .with_min_len(chunk_size)
-        .for_each(|ex_idx| {
+    let train_one_example = |ex_idx: usize| {
         let input_start = ex_idx * total_input_bits;
         let input_bits = &train_input_bits[input_start..input_start + total_input_bits];
 
@@ -2433,7 +2432,18 @@ pub(crate) fn train_genome_in_slot(
                 }
             }
         }
-    });
+    };
+
+    if parallel {
+        let chunk_size = 10_000.max(num_train / 20);
+        (0..num_train).into_par_iter()
+            .with_min_len(chunk_size)
+            .for_each(|ex_idx| train_one_example(ex_idx));
+    } else {
+        for ex_idx in 0..num_train {
+            train_one_example(ex_idx);
+        }
+    }
 }
 
 /// Export trained memory to GPU-compatible format
@@ -3104,6 +3114,7 @@ pub fn train_and_predict_single(
         rng_seed,
         memory_mode,
         class_weights,
+        true, // parallel: standalone call, safe to use par_iter
     );
 
     // Export and predict
@@ -3385,6 +3396,7 @@ pub fn evaluate_genomes_parallel_hybrid(
                     rng_seed.wrapping_add(genome_idx as u64),
                     memory_mode,
                     class_weights,
+                    false, // sequential: inside outer par_iter, avoid nested parallelism deadlock
                 );
 
                 // Build GPU-padded connections (per-neuron → group layout with padding)
@@ -4167,6 +4179,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
                     gpu_addresses.as_deref(), neuron_sample_rate,
                     rng_seed.wrapping_add(genome_idx as u64), memory_mode,
                     None, // class_weights: adaptive path doesn't use class balancing
+                    false, // sequential: inside outer par_iter
                 );
                 TrainedState {
                     memories, groups, cluster_to_group, cluster_neuron_starts,
@@ -4312,6 +4325,7 @@ pub fn evaluate_genomes_parallel_hybrid_adaptive(
                         gpu_addresses.as_deref(), neuron_sample_rate,
                         rng_seed.wrapping_add(adapted.genome_idx as u64), memory_mode,
                         None, // class_weights: adaptive path doesn't use class balancing
+                        false, // sequential: inside outer par_iter
                     );
                     let gpu_conns = reorganize_connections_for_gpu(
                         &adapted.connections, &adapted.bits, &adapted.neurons, &groups,

@@ -3108,6 +3108,7 @@ pub fn train_and_get_tiered_scores(
         rng_seed,
         memory_mode,
         None, // class_weights: multi-stage LM path doesn't use class balancing
+        true, // parallel: standalone call, safe to use par_iter
     );
 
     // Evaluate — build per-example scores
