@@ -229,6 +229,7 @@ class IDSEvaluator(BaseEvaluator):
 		self,
 		genomes: list[ClusterGenome],
 		logger: Optional[Callable[[str], None]] = None,
+		override_threshold: Optional[float] = None,
 	) -> list[EvalResult]:
 		bits_flat, neurons_flat, connections_flat = self._flatten_genomes(genomes)
 
@@ -240,6 +241,7 @@ class IDSEvaluator(BaseEvaluator):
 			self._empty_value,
 			self._neuron_sample_rate,
 			0,  # rng_seed
+			override_threshold=override_threshold,
 		)
 
 		results = []

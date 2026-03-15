@@ -272,6 +272,7 @@ pub struct CreateValidationSummaryRequest {
     pub accuracy: f64,
     pub f1_macro: Option<f64>,
     pub fpr: Option<f64>,
+    pub threshold_metadata: Option<String>,
 }
 
 async fn create_validation_summary(
@@ -290,6 +291,7 @@ async fn create_validation_summary(
         req.accuracy,
         req.f1_macro,
         req.fpr,
+        req.threshold_metadata.as_deref(),
     ).await {
         Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({"id": id}))).into_response(),
         Err(e) => (

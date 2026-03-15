@@ -434,6 +434,7 @@ pub struct ValidationSummary {
     pub accuracy: f64,
     pub f1_macro: Option<f64>,
     pub fpr: Option<f64>,
+    pub threshold_metadata: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
 }
 

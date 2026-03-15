@@ -294,6 +294,18 @@ export interface HealthCheck {
 export type ValidationPoint = 'init' | 'final';
 export type GenomeValidationType = 'best_ce' | 'best_acc' | 'best_fitness' | 'best_overall_ce' | 'best_overall_acc';
 
+export interface ThresholdResult {
+  f1: number;
+  fpr: number;
+  threshold?: number;
+}
+
+export interface ThresholdMetadata {
+  fixed_05: ThresholdResult;
+  train_cal: ThresholdResult;
+  test_cal: ThresholdResult;
+}
+
 export interface ValidationSummary {
   id: number;
   flow_id: number | null;
@@ -305,6 +317,7 @@ export interface ValidationSummary {
   accuracy: number;
   f1_macro: number | null;
   fpr: number | null;
+  threshold_metadata: ThresholdMetadata | null;
   created_at: string;
 }
 

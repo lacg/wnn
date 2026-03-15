@@ -559,6 +559,7 @@ class DashboardClient:
 		flow_id: Optional[int] = None,
 		f1_macro: Optional[float] = None,
 		fpr: Optional[float] = None,
+		threshold_metadata: Optional[str] = None,
 	) -> dict:
 		"""
 		Create a validation summary record for a genome at a checkpoint.
@@ -573,6 +574,7 @@ class DashboardClient:
 			flow_id: Optional flow ID
 			f1_macro: IDS F1-macro score (None for LM experiments)
 			fpr: IDS false positive rate (None for LM experiments)
+			threshold_metadata: JSON string with three-threshold results (IDS single-cluster only)
 
 		Returns:
 			Dict with 'id' of the created/updated summary
@@ -586,6 +588,7 @@ class DashboardClient:
 			"accuracy": accuracy,
 			"f1_macro": f1_macro,
 			"fpr": fpr,
+			"threshold_metadata": threshold_metadata,
 		}
 		result = self._request("POST", f"/api/experiments/{experiment_id}/summaries", json_data=data)
 		self._logger(f"Created {validation_point}/{genome_type} validation for experiment {experiment_id}")

@@ -955,6 +955,50 @@ class Experiment:
 					else:
 						self.log(f"  {genome_type}: CE={ce:.4f}, Acc={acc:.4%} (validated)")
 
+				# Three-threshold validation for single-cluster IDS
+				threshold_metadata = None
+				val_evaluator = self.full_evaluator or self.evaluator
+				is_single_cluster = (
+					hasattr(val_evaluator, '_single_cluster') and val_evaluator._single_cluster
+				) if cached is None else False
+
+				if is_single_cluster and f1 is not None:
+					threshold_metadata = {}
+					train_threshold = genome.threshold  # from train-calibrated run above
+
+					# 1. Train-calibrated (already computed — override=None calibrates on train scores)
+					threshold_metadata['train_cal'] = {
+						'f1': f1, 'fpr': fpr_val, 'threshold': train_threshold,
+					}
+					self.log(f"    Train-cal:   F1={f1:.4%}, FPR={fpr_val:.4%}, t={train_threshold:.4f}")
+
+					# 2. Fixed 0.5 — distribution-agnostic baseline
+					fixed_results = val_evaluator.evaluate_batch_full([genome], override_threshold=0.5)
+					fr = fixed_results[0]
+					threshold_metadata['fixed_05'] = {
+						'f1': fr.f1_macro, 'fpr': fr.fpr,
+					}
+					self.log(f"    Fixed 0.5:   F1={fr.f1_macro:.4%}, FPR={fr.fpr:.4%}")
+
+					# 3. Test-calibrated: find threshold on holdout, apply to test
+					# 3a: override=-1.0 sweeps eval data (43K holdout) for optimal threshold
+					self.evaluator.evaluate_batch_full([genome], override_threshold=-1.0)
+					holdout_threshold = genome.threshold  # threshold found on holdout
+
+					# 3b: Apply holdout threshold to full validation (175K train → 82K test)
+					test_cal_results = val_evaluator.evaluate_batch_full(
+						[genome], override_threshold=holdout_threshold,
+					)
+					tcr = test_cal_results[0]
+					threshold_metadata['test_cal'] = {
+						'f1': tcr.f1_macro, 'fpr': tcr.fpr, 'threshold': holdout_threshold,
+					}
+					self.log(f"    Test-cal:    F1={tcr.f1_macro:.4%}, FPR={tcr.fpr:.4%}, t={holdout_threshold:.4f}")
+
+					# Use test-calibrated as primary metric (most honest)
+					f1 = tcr.f1_macro
+					fpr_val = tcr.fpr
+
 				# Collect results keyed by genome_type
 				results[genome_type] = {'ce': ce, 'acc': acc, 'f1': f1, 'fpr': fpr_val}
 
@@ -972,6 +1016,7 @@ class Experiment:
 							flow_id=flow_id,
 							f1_macro=f1,
 							fpr=fpr_val,
+							threshold_metadata=json.dumps(threshold_metadata) if threshold_metadata else None,
 						)
 					except Exception as e:
 						self.log(f"  Warning: Failed to save {genome_type} summary: {e}")
@@ -1003,6 +1048,8 @@ class Experiment:
 						}
 						if genome.connections is not None:
 							genome_data["connections_json"] = ",".join(str(c) for c in genome.connections)
+						if threshold_metadata:
+							genome_data["threshold_metadata"] = threshold_metadata
 						self.dashboard_client.submit_best_genomes([{
 							"task_type": task_type,
 							"stage": stage,

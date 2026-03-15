@@ -146,6 +146,11 @@ async fn run_migrations(pool: &DbPool) -> Result<()> {
         .execute(pool)
         .await;
 
+    // Migration: Add three-threshold metadata to validation_summaries (JSON)
+    let _ = sqlx::query("ALTER TABLE validation_summaries ADD COLUMN threshold_metadata TEXT")
+        .execute(pool)
+        .await;
+
     // Migration: Add IDS metrics to genome_evaluations (per-genome F1-macro and FPR)
     let _ = sqlx::query("ALTER TABLE genome_evaluations ADD COLUMN f1_macro REAL")
         .execute(pool)
@@ -1552,7 +1557,7 @@ pub mod queries {
     ) -> Result<Vec<ValidationSummary>> {
         let rows = sqlx::query(
             r#"SELECT id, flow_id, experiment_id, validation_point, genome_type,
-                      genome_hash, ce, accuracy, f1_macro, fpr, created_at
+                      genome_hash, ce, accuracy, f1_macro, fpr, threshold_metadata, created_at
                FROM validation_summaries
                WHERE experiment_id = ?
                ORDER BY validation_point, genome_type"#,
@@ -1575,7 +1580,7 @@ pub mod queries {
     ) -> Result<Vec<ValidationSummary>> {
         let rows = sqlx::query(
             r#"SELECT vs.id, vs.flow_id, vs.experiment_id, vs.validation_point, vs.genome_type,
-                      vs.genome_hash, vs.ce, vs.accuracy, vs.f1_macro, vs.fpr, vs.created_at
+                      vs.genome_hash, vs.ce, vs.accuracy, vs.f1_macro, vs.fpr, vs.threshold_metadata, vs.created_at
                FROM validation_summaries vs
                JOIN experiments e ON vs.experiment_id = e.id
                WHERE e.flow_id = ?
@@ -1623,13 +1628,14 @@ pub mod queries {
         accuracy: f64,
         f1_macro: Option<f64>,
         fpr: Option<f64>,
+        threshold_metadata: Option<&str>,
     ) -> Result<i64> {
         let now = Utc::now().to_rfc3339();
 
         let result = sqlx::query(
             r#"INSERT INTO validation_summaries
-               (flow_id, experiment_id, validation_point, genome_type, genome_hash, ce, accuracy, f1_macro, fpr, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               (flow_id, experiment_id, validation_point, genome_type, genome_hash, ce, accuracy, f1_macro, fpr, threshold_metadata, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(experiment_id, validation_point, genome_type) DO UPDATE SET
                  flow_id = excluded.flow_id,
                  genome_hash = excluded.genome_hash,
@@ -1637,6 +1643,7 @@ pub mod queries {
                  accuracy = excluded.accuracy,
                  f1_macro = excluded.f1_macro,
                  fpr = excluded.fpr,
+                 threshold_metadata = excluded.threshold_metadata,
                  created_at = excluded.created_at"#,
         )
         .bind(flow_id)
@@ -1648,6 +1655,7 @@ pub mod queries {
         .bind(accuracy)
         .bind(f1_macro)
         .bind(fpr)
+        .bind(threshold_metadata)
         .bind(&now)
         .execute(pool)
         .await?;
@@ -1658,6 +1666,9 @@ pub mod queries {
     fn row_to_validation_summary(row: &sqlx::sqlite::SqliteRow) -> Result<ValidationSummary> {
         let validation_point_str: String = row.get("validation_point");
         let genome_type_str: String = row.get("genome_type");
+        let threshold_metadata_str: Option<String> = row.get("threshold_metadata");
+        let threshold_metadata = threshold_metadata_str
+            .and_then(|s| serde_json::from_str(&s).ok());
 
         Ok(ValidationSummary {
             id: row.get("id"),
@@ -1670,6 +1681,7 @@ pub mod queries {
             accuracy: row.get("accuracy"),
             f1_macro: row.get("f1_macro"),
             fpr: row.get("fpr"),
+            threshold_metadata,
             created_at: parse_datetime(row.get("created_at"))?,
         })
     }

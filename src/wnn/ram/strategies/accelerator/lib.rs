@@ -4032,6 +4032,7 @@ impl IDSCacheWrapper {
     }
 
     /// Evaluate genomes using full data with hybrid CPU+GPU.
+    #[pyo3(signature = (genomes_bits_flat, genomes_neurons_flat, genomes_connections_flat, num_genomes, empty_value, neuron_sample_rate, rng_seed, override_threshold=None))]
     fn evaluate_genomes_full_hybrid(
         &self,
         py: Python<'_>,
@@ -4042,6 +4043,7 @@ impl IDSCacheWrapper {
         empty_value: f32,
         neuron_sample_rate: f32,
         rng_seed: u64,
+        override_threshold: Option<f64>,
     ) -> PyResult<Vec<(f64, f64, f64, f64, f64)>> {
         py.allow_threads(|| {
             Ok(ids_cache::evaluate_genomes_ids_cached_full_hybrid(
@@ -4053,6 +4055,7 @@ impl IDSCacheWrapper {
                 empty_value,
                 neuron_sample_rate,
                 rng_seed,
+                override_threshold,
             ))
         })
     }

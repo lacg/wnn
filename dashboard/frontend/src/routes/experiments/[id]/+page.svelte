@@ -696,7 +696,7 @@
     expId: number;
     sequenceOrder: number;
     validationPoint: 'init' | 'final';
-    summaries: { genomeType: string; ce: number; accuracy: number; f1_macro: number | null; fpr: number | null }[];
+    summaries: { genomeType: string; ce: number; accuracy: number; f1_macro: number | null; fpr: number | null; threshold_metadata: any | null }[];
   }
 
   $: cumulativeValidationProgression = (() => {
@@ -714,7 +714,7 @@
           expId: experiment.id,
           sequenceOrder: experiment.sequence_order ?? 0,
           validationPoint: 'init',
-          summaries: initSummaries.map(s => ({ genomeType: s.genome_type, ce: s.ce, accuracy: s.accuracy, f1_macro: s.f1_macro, fpr: s.fpr }))
+          summaries: initSummaries.map(s => ({ genomeType: s.genome_type, ce: s.ce, accuracy: s.accuracy, f1_macro: s.f1_macro, fpr: s.fpr, threshold_metadata: s.threshold_metadata }))
         });
       }
       if (finalSummaries.length > 0) {
@@ -723,7 +723,7 @@
           expId: experiment.id,
           sequenceOrder: experiment.sequence_order ?? 0,
           validationPoint: 'final',
-          summaries: finalSummaries.map(s => ({ genomeType: s.genome_type, ce: s.ce, accuracy: s.accuracy, f1_macro: s.f1_macro, fpr: s.fpr }))
+          summaries: finalSummaries.map(s => ({ genomeType: s.genome_type, ce: s.ce, accuracy: s.accuracy, f1_macro: s.f1_macro, fpr: s.fpr, threshold_metadata: s.threshold_metadata }))
         });
       }
       return points;
@@ -776,7 +776,7 @@
         expId,
         sequenceOrder: seqOrder,
         validationPoint: point as 'init' | 'final',
-        summaries: validations.map(v => ({ genomeType: v.genome_type, ce: v.ce, accuracy: v.accuracy, f1_macro: v.f1_macro, fpr: v.fpr }))
+        summaries: validations.map(v => ({ genomeType: v.genome_type, ce: v.ce, accuracy: v.accuracy, f1_macro: v.f1_macro, fpr: v.fpr, threshold_metadata: v.threshold_metadata }))
       });
     }
 
@@ -989,6 +989,7 @@
                     {/if}
                   </td>
                   {#if isIDS}
+                    {@const hasThresholds = bestFitSummary?.threshold_metadata || bestCeSummary?.threshold_metadata || bestAccSummary?.threshold_metadata}
                     <td class="mono best-ce-col">{bestCeSummary?.f1_macro != null ? (bestCeSummary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
                     <td class="mono best-ce-col">{bestCeSummary?.fpr != null ? (bestCeSummary.fpr * 100).toFixed(2) + '%' : '—'}</td>
                     <td class="mono best-ce-col">{bestCeSummary ? (bestCeSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
@@ -1007,6 +1008,27 @@
                     <td class="mono best-fit-col">{bestFitSummary ? (bestFitSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
                   {/if}
                 </tr>
+                {#if isIDS && hasThresholds}
+                  {@const fitTm = bestFitSummary?.threshold_metadata}
+                  <tr class="threshold-detail-row">
+                    <td class="phase-name threshold-label">Thresholds</td>
+                    <td colspan="9" class="threshold-detail-cell">
+                      {#if fitTm}
+                        <span class="threshold-item" title="Train-calibrated: threshold from 175K training scores">
+                          Train: F1={( fitTm.train_cal.f1 * 100).toFixed(1)}% FPR={( fitTm.train_cal.fpr * 100).toFixed(1)}%
+                        </span>
+                        <span class="threshold-sep">|</span>
+                        <span class="threshold-item" title="Fixed 0.5: distribution-agnostic baseline">
+                          Fixed: F1={( fitTm.fixed_05.f1 * 100).toFixed(1)}% FPR={( fitTm.fixed_05.fpr * 100).toFixed(1)}%
+                        </span>
+                        <span class="threshold-sep">|</span>
+                        <span class="threshold-item threshold-primary" title="Test-calibrated: threshold from 43K holdout applied to 82K test (primary)">
+                          Holdout: F1={( fitTm.test_cal.f1 * 100).toFixed(1)}% FPR={( fitTm.test_cal.fpr * 100).toFixed(1)}%
+                        </span>
+                      {/if}
+                    </td>
+                  </tr>
+                {/if}
               {/each}
             </tbody>
           </table>
@@ -2890,5 +2912,37 @@
 
   .validation-table .best-fit-col {
     background: rgba(155, 89, 182, 0.05);
+  }
+
+  .threshold-detail-row td {
+    padding: 0.25rem 0.75rem !important;
+    border-bottom: 1px solid var(--glass-border) !important;
+  }
+
+  .threshold-label {
+    font-size: 1rem;
+    color: var(--text-dim);
+    font-style: italic;
+    font-weight: 400 !important;
+  }
+
+  .threshold-detail-cell {
+    text-align: left !important;
+    font-size: 1rem;
+    color: var(--text-dim);
+  }
+
+  .threshold-item {
+    white-space: nowrap;
+  }
+
+  .threshold-primary {
+    color: var(--accent-blue);
+    font-weight: 500;
+  }
+
+  .threshold-sep {
+    margin: 0 0.5rem;
+    color: var(--glass-border);
   }
 </style>

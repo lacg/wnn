@@ -3418,19 +3418,36 @@ pub fn evaluate_genomes_parallel_hybrid(
         // Single-cluster: calibrate thresholds sequentially (compute_per_example_scores
         // uses par_iter internally, which would deadlock inside the outer par_iter above)
         if num_clusters == 1 {
-            let metal_arc = get_metal_evaluator();
-            let sparse_metal_arc = get_sparse_metal_evaluator();
-            for (_, export, threshold) in batch_exports.iter_mut() {
-                let train_scores = compute_per_example_scores(
-                    export, train_input_bits, &packed_train_input, words_per_example,
-                    num_train, num_clusters, total_input_bits, empty_value,
-                    memory_mode,
-                    metal_arc.as_ref().map(|a| a.as_ref()),
-                    sparse_metal_arc.as_ref().map(|a| a.as_ref()),
-                );
-                let flat_scores: Vec<f64> = train_scores.iter().map(|s| s[0]).collect();
-                let (t, _f1, _fpr) = find_optimal_threshold_f1(&flat_scores, train_targets);
-                *threshold = Some(t);
+            // Check for threshold override (set by evaluate_genomes_parallel_hybrid_with_override)
+            let override_t: Option<f64> = std::env::var("WNN_OVERRIDE_THRESHOLD")
+                .ok().and_then(|v| v.parse().ok());
+
+            if let Some(t) = override_t {
+                if t < 0.0 {
+                    // -1.0: don't set override, let evaluate_genome_hybrid find on eval data
+                    // (batch_exports already have None as threshold)
+                } else {
+                    // Fixed threshold (e.g., 0.5)
+                    for (_, _, threshold) in batch_exports.iter_mut() {
+                        *threshold = Some(t);
+                    }
+                }
+            } else {
+                // Default: calibrate on training data
+                let metal_arc = get_metal_evaluator();
+                let sparse_metal_arc = get_sparse_metal_evaluator();
+                for (_, export, threshold) in batch_exports.iter_mut() {
+                    let train_scores = compute_per_example_scores(
+                        export, train_input_bits, &packed_train_input, words_per_example,
+                        num_train, num_clusters, total_input_bits, empty_value,
+                        memory_mode,
+                        metal_arc.as_ref().map(|a| a.as_ref()),
+                        sparse_metal_arc.as_ref().map(|a| a.as_ref()),
+                    );
+                    let flat_scores: Vec<f64> = train_scores.iter().map(|s| s[0]).collect();
+                    let (t, _f1, _fpr) = find_optimal_threshold_f1(&flat_scores, train_targets);
+                    *threshold = Some(t);
+                }
             }
         }
 
@@ -3531,6 +3548,66 @@ pub fn evaluate_genomes_parallel_hybrid(
         results[genome_idx] = (ce, acc, f1, fpr, threshold);
     }
 
+    results
+}
+
+/// Same as evaluate_genomes_parallel_hybrid but with optional threshold override.
+/// - None: train-calibrated threshold (58d57c6, current default)
+/// - Some(-1.0): find optimal on EVAL data (302a36d = data leakage test)
+/// - Some(t >= 0): fixed threshold (e.g. 0.5 for 5aa659d)
+///
+/// Works by running the standard pipeline then overriding the threshold in batch_exports
+/// before the inline eval step. For Some(-1.0), passes None to evaluate_genome_hybrid
+/// which triggers its internal eval-data threshold sweep.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_genomes_parallel_hybrid_with_override(
+    genomes_bits_flat: &[usize],
+    genomes_neurons_flat: &[usize],
+    genomes_connections_flat: &[i64],
+    num_genomes: usize,
+    num_clusters: usize,
+    train_input_bits: &[bool],
+    train_targets: &[i64],
+    train_negatives: &[i64],
+    num_train: usize,
+    num_negatives: usize,
+    eval_input_bits: &[bool],
+    eval_targets: &[i64],
+    num_eval: usize,
+    total_input_bits: usize,
+    empty_value: f32,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+    class_weights: Option<&[u32]>,
+    override_threshold: Option<f64>,
+) -> Vec<(f64, f64, f64, f64, f64)> {
+    if override_threshold.is_none() {
+        return evaluate_genomes_parallel_hybrid(
+            genomes_bits_flat, genomes_neurons_flat, genomes_connections_flat,
+            num_genomes, num_clusters,
+            train_input_bits, train_targets, train_negatives,
+            num_train, num_negatives,
+            eval_input_bits, eval_targets, num_eval,
+            total_input_bits, empty_value, neuron_sample_rate, rng_seed,
+            class_weights,
+        );
+    }
+
+    // Set OVERRIDE_THRESHOLD env var so the inline eval in evaluate_genomes_parallel_hybrid
+    // can pick it up. This is a hack but avoids duplicating 300 lines of code.
+    let t = override_threshold.unwrap();
+    let env_key = "WNN_OVERRIDE_THRESHOLD";
+    std::env::set_var(env_key, format!("{}", t));
+    let results = evaluate_genomes_parallel_hybrid(
+        genomes_bits_flat, genomes_neurons_flat, genomes_connections_flat,
+        num_genomes, num_clusters,
+        train_input_bits, train_targets, train_negatives,
+        num_train, num_negatives,
+        eval_input_bits, eval_targets, num_eval,
+        total_input_bits, empty_value, neuron_sample_rate, rng_seed,
+        class_weights,
+    );
+    std::env::remove_var(env_key);
     results
 }
 

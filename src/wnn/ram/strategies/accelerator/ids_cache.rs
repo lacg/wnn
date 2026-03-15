@@ -483,11 +483,12 @@ pub fn evaluate_genomes_ids_cached_full_hybrid(
     empty_value: f32,
     neuron_sample_rate: f32,
     rng_seed: u64,
+    override_threshold: Option<f64>,
 ) -> Vec<(f64, f64, f64, f64, f64)> {
     let train = cache.full_train();
     let eval = cache.full_eval();
 
-    crate::adaptive::evaluate_genomes_parallel_hybrid(
+    crate::adaptive::evaluate_genomes_parallel_hybrid_with_override(
         genomes_bits_flat,
         genomes_neurons_flat,
         genomes_connections_flat,
@@ -506,6 +507,7 @@ pub fn evaluate_genomes_ids_cached_full_hybrid(
         neuron_sample_rate,
         rng_seed,
         cache.class_weights.as_deref(),
+        override_threshold,
     )
 }
 
