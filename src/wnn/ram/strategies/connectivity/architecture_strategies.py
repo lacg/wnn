@@ -1317,21 +1317,20 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 			changed = tuple(c for c in range(len(source.bits_per_neuron))
 						   if source.bits_per_neuron[c] != neighbor.bits_per_neuron[c])
 		else:
-			# Connections phase: track which clusters had any connection change
-			changed_clusters = []
+			# Connections phase: track which NEURONS had connection changes
+			# (not clusters — single-cluster genomes only have cluster 0,
+			# so cluster-level tracking makes every move tabu after the first)
+			changed_neurons = []
 			if source.connections is not None and neighbor.connections is not None:
-				g_off = source.cluster_neuron_offsets
-				g_conn_off = source.connection_offsets
-				n_conn_off = neighbor.connection_offsets
-				for c in range(len(source.neurons_per_cluster)):
-					c_start = g_conn_off[g_off[c]]
-					c_end = g_conn_off[g_off[c + 1]]
-					n_start = n_conn_off[g_off[c]]
-					n_end = n_conn_off[g_off[c + 1]]
-					if (c_end - c_start != n_end - n_start or
-						source.connections[c_start:c_end] != neighbor.connections[n_start:n_end]):
-						changed_clusters.append(c)
-			changed = tuple(changed_clusters)
+				s_off = source.connection_offsets
+				n_off = neighbor.connection_offsets
+				num_neurons = len(source.bits_per_neuron)
+				for n in range(num_neurons):
+					s_conns = source.connections[s_off[n]:s_off[n + 1]]
+					n_conns = neighbor.connections[n_off[n]:n_off[n + 1]]
+					if s_conns != n_conns:
+						changed_neurons.append(n)
+			changed = tuple(changed_neurons)
 		return changed if changed else None
 
 	def _generate_neighbors(self, best_genome, n_neighbors, threshold, iteration, tabu_list):
