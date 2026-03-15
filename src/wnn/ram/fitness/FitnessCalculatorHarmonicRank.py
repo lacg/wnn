@@ -2,8 +2,10 @@
 Harmonic Rank fitness calculator.
 
 Ranks genomes by weighted harmonic mean of their CE, accuracy, and
-optionally F1-macro ranks. Supports tunable knobs for IDS use cases
-(FPR vs recall tradeoff via F1 weight).
+optionally F1-macro and FPR ranks. Supports tunable knobs for IDS use
+cases (FPR vs recall tradeoff via independent metric weights).
+
+Population tuples: (genome, ce, accuracy[, f1_macro[, fpr]])
 """
 
 from typing import TypeVar
@@ -17,21 +19,17 @@ class FitnessCalculatorHarmonicRank(FitnessCalculator[G]):
 	"""
 	Fitness calculator using weighted harmonic mean of ranks.
 
-	With 2 metrics (default):
-		WHM = (w_ce + w_acc) / (w_ce/rank_ce + w_acc/rank_acc)
+	WHM = sum(weights) / sum(weight_i / rank_i)
 
-	With 3 metrics (when weight_f1 > 0):
-		WHM = (w_ce + w_acc + w_f1) / (w_ce/rank_ce + w_acc/rank_acc + w_f1/rank_f1)
+	Up to 4 metrics: CE, accuracy, F1-macro, FPR.
+	Metrics with weight=0 or missing data are excluded.
 
-	F1-macro rank is computed from the 4th element of population tuples
-	(genome, ce, accuracy, f1_macro). If tuples have only 3 elements,
-	F1 weight is ignored gracefully.
+	Population tuples: (genome, ce, accuracy[, f1_macro[, fpr]])
 
 	Knobs for IDS:
-	- weight_f1=0.0 (default): CE+accuracy only (LM behavior)
-	- weight_f1=0.5: F1 as tiebreaker (mild F1 preference)
-	- weight_f1=1.0: F1 equal to accuracy (balanced classification)
-	- weight_f1=2.0: F1-dominant (prioritize per-class balance)
+	- weight_f1=0, weight_fpr=0 (default): CE+accuracy only (LM behavior)
+	- weight_f1=0.3, weight_fpr=0.4: IDS-balanced (F1 + low false alarms)
+	- weight_fpr=1.0: FPR-dominant (minimize false positives at all costs)
 	"""
 
 	def __init__(
@@ -39,17 +37,28 @@ class FitnessCalculatorHarmonicRank(FitnessCalculator[G]):
 		weight_ce: float = 1.0,
 		weight_acc: float = 1.0,
 		weight_f1: float = 0.0,
+		weight_fpr: float = 0.0,
 	):
 		self.weight_ce = weight_ce
 		self.weight_acc = weight_acc
 		self.weight_f1 = weight_f1
+		self.weight_fpr = weight_fpr
+
+	def _compute_ranks(self, values: list[float], ascending: bool = True) -> list[int]:
+		"""Compute ranks (1 = best). ascending=True means lower value = rank 1."""
+		n = len(values)
+		order = sorted(range(n), key=lambda i: values[i] if ascending else -values[i])
+		ranks = [0] * n
+		for rank, idx in enumerate(order, start=1):
+			ranks[idx] = rank
+		return ranks
 
 	def fitness(self, population: list[tuple]) -> list[float]:
 		"""
-		Compute fitness as harmonic mean of CE, accuracy, and optionally F1 ranks.
+		Compute fitness as weighted harmonic mean of metric ranks.
 
 		Args:
-			population: List of (genome, ce, accuracy) or (genome, ce, accuracy, f1) tuples
+			population: List of (genome, ce, accuracy[, f1[, fpr]]) tuples
 
 		Returns:
 			List of harmonic mean values (lower = better)
@@ -60,45 +69,37 @@ class FitnessCalculatorHarmonicRank(FitnessCalculator[G]):
 		if n == 1:
 			return [1.0]
 
-		# Extract metrics
-		ce_values = [t[1] for t in population]
-		acc_values = [t[2] for t in population]
+		tuple_len = len(population[0])
 
-		# Check if F1 is available and requested
-		use_f1 = self.weight_f1 > 0 and len(population[0]) > 3
-		f1_values = [t[3] for t in population] if use_f1 else None
+		# Build list of (ranks, weight) for active metrics
+		active = []
 
-		# Compute CE ranks (lower CE = better = rank 1)
-		ce_sorted = sorted(range(n), key=lambda i: ce_values[i])
-		rank_ce = [0] * n
-		for rank, idx in enumerate(ce_sorted, start=1):
-			rank_ce[idx] = rank
+		if self.weight_ce > 0:
+			ranks = self._compute_ranks([t[1] for t in population], ascending=True)
+			active.append((ranks, self.weight_ce))
 
-		# Compute accuracy ranks (higher acc = better = rank 1)
-		acc_sorted = sorted(range(n), key=lambda i: -acc_values[i])
-		rank_acc = [0] * n
-		for rank, idx in enumerate(acc_sorted, start=1):
-			rank_acc[idx] = rank
+		if self.weight_acc > 0:
+			ranks = self._compute_ranks([t[2] for t in population], ascending=False)
+			active.append((ranks, self.weight_acc))
 
-		# Compute F1 ranks (higher F1 = better = rank 1)
-		rank_f1 = None
-		if use_f1:
-			f1_sorted = sorted(range(n), key=lambda i: -f1_values[i])
-			rank_f1 = [0] * n
-			for rank, idx in enumerate(f1_sorted, start=1):
-				rank_f1[idx] = rank
+		if self.weight_f1 > 0 and tuple_len > 3:
+			f1_vals = [t[3] if t[3] is not None else 0.0 for t in population]
+			ranks = self._compute_ranks(f1_vals, ascending=False)
+			active.append((ranks, self.weight_f1))
 
-		# Compute weighted harmonic mean
-		w_ce = self.weight_ce
-		w_acc = self.weight_acc
-		w_f1 = self.weight_f1 if use_f1 else 0.0
-		w_sum = w_ce + w_acc + w_f1
+		if self.weight_fpr > 0 and tuple_len > 4:
+			fpr_vals = [t[4] if t[4] is not None else 1.0 for t in population]
+			ranks = self._compute_ranks(fpr_vals, ascending=True)  # lower FPR = better
+			active.append((ranks, self.weight_fpr))
+
+		if not active:
+			return [1.0] * n
+
+		w_sum = sum(w for _, w in active)
 
 		fitness_scores = []
 		for i in range(n):
-			inv_sum = w_ce / rank_ce[i] + w_acc / rank_acc[i]
-			if use_f1:
-				inv_sum += w_f1 / rank_f1[i]
+			inv_sum = sum(w / ranks[i] for ranks, w in active)
 			whm = w_sum / inv_sum
 			fitness_scores.append(whm)
 
@@ -107,12 +108,14 @@ class FitnessCalculatorHarmonicRank(FitnessCalculator[G]):
 	@property
 	def name(self) -> str:
 		parts = []
-		if self.weight_ce != 1.0:
+		if self.weight_ce != 1.0 or self.weight_fpr > 0:
 			parts.append(f"ce={self.weight_ce}")
-		if self.weight_acc != 1.0:
+		if self.weight_acc != 1.0 or self.weight_fpr > 0:
 			parts.append(f"acc={self.weight_acc}")
 		if self.weight_f1 > 0:
 			parts.append(f"f1={self.weight_f1}")
+		if self.weight_fpr > 0:
+			parts.append(f"fpr={self.weight_fpr}")
 		if not parts:
 			return "HarmonicRank"
 		return f"HarmonicRank({', '.join(parts)})"

@@ -60,6 +60,8 @@ class FlowConfig:
 	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.NORMALIZED
 	fitness_weight_ce: float = 1.0
 	fitness_weight_acc: float = 1.0
+	fitness_weight_f1: float = 0.0
+	fitness_weight_fpr: float = 0.0
 
 	# Random seed
 	seed: Optional[int] = None
@@ -81,6 +83,8 @@ class FlowConfig:
 		fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.NORMALIZED,
 		fitness_weight_ce: float = 1.0,
 		fitness_weight_acc: float = 1.0,
+		fitness_weight_f1: float = 0.0,
+		fitness_weight_fpr: float = 0.0,
 		seed: Optional[int] = None,
 		description: Optional[str] = None,
 		seed_checkpoint_path: Optional[str] = None,
@@ -152,6 +156,8 @@ class FlowConfig:
 				fitness_calculator_type=fitness_calculator_type,
 				fitness_weight_ce=fitness_weight_ce,
 				fitness_weight_acc=fitness_weight_acc,
+			fitness_weight_f1=fitness_weight_f1,
+			fitness_weight_fpr=fitness_weight_fpr,
 				seed=seed,
 			)
 			experiments.append(config)
@@ -169,6 +175,8 @@ class FlowConfig:
 			fitness_calculator_type=fitness_calculator_type,
 			fitness_weight_ce=fitness_weight_ce,
 			fitness_weight_acc=fitness_weight_acc,
+			fitness_weight_f1=fitness_weight_f1,
+			fitness_weight_fpr=fitness_weight_fpr,
 			seed=seed,
 		)
 
@@ -219,6 +227,7 @@ class FlowConfig:
 	ids_val_fraction: float = 0.25  # validation holdout fraction
 	ids_num_parts: int = 3  # training data rotation parts
 	ids_fitness_weight_f1: float = 0.0  # F1-macro weight in fitness
+	ids_fitness_weight_fpr: float = 0.0  # FPR weight in fitness (lower FPR = better)
 	ids_split: str = "standard"  # "standard" or "random"
 	balance_classes: bool = False  # Class-balanced training (upweight minority class)
 	ids_single_cluster: bool = False  # Single-cluster discriminator (1 cluster, threshold 0.5)
@@ -307,6 +316,8 @@ class FlowConfig:
 				fitness_calculator_type=fitness_calculator_type,
 				fitness_weight_ce=fitness_weight_ce,
 				fitness_weight_acc=fitness_weight_acc,
+			fitness_weight_f1=fitness_weight_f1,
+			fitness_weight_fpr=fitness_weight_fpr,
 				seed=seed,
 				cluster_type=ClusterType.BITWISE,
 				# Bitwise-specific bounds
@@ -334,6 +345,8 @@ class FlowConfig:
 			fitness_calculator_type=fitness_calculator_type,
 			fitness_weight_ce=fitness_weight_ce,
 			fitness_weight_acc=fitness_weight_acc,
+			fitness_weight_f1=fitness_weight_f1,
+			fitness_weight_fpr=fitness_weight_fpr,
 			seed=seed,
 			architecture_type="bitwise",
 			num_clusters=num_clusters,
@@ -430,6 +443,8 @@ class FlowConfig:
 				fitness_calculator_type=fitness_calculator_type,
 				fitness_weight_ce=fitness_weight_ce,
 				fitness_weight_acc=fitness_weight_acc,
+			fitness_weight_f1=fitness_weight_f1,
+			fitness_weight_fpr=fitness_weight_fpr,
 				seed=seed,
 				cluster_type=ClusterType.BITWISE,
 				bitwise_min_bits=min_bits,
@@ -453,6 +468,8 @@ class FlowConfig:
 			fitness_calculator_type=fitness_calculator_type,
 			fitness_weight_ce=fitness_weight_ce,
 			fitness_weight_acc=fitness_weight_acc,
+			fitness_weight_f1=fitness_weight_f1,
+			fitness_weight_fpr=fitness_weight_fpr,
 			seed=seed,
 			architecture_type="bitwise",
 			num_clusters=num_clusters,
@@ -647,6 +664,8 @@ class FlowConfig:
 					fitness_calculator_type=fitness_calculator_type,
 					fitness_weight_ce=fitness_weight_ce,
 					fitness_weight_acc=fitness_weight_acc,
+			fitness_weight_f1=fitness_weight_f1,
+			fitness_weight_fpr=fitness_weight_fpr,
 					seed=seed,
 					cluster_type=ClusterType.MULTI_STAGE,
 					# Multi-stage config
@@ -681,6 +700,8 @@ class FlowConfig:
 			fitness_calculator_type=fitness_calculator_type,
 			fitness_weight_ce=fitness_weight_ce,
 			fitness_weight_acc=fitness_weight_acc,
+			fitness_weight_f1=fitness_weight_f1,
+			fitness_weight_fpr=fitness_weight_fpr,
 			seed=seed,
 			architecture_type="multi_stage",
 			memory_mode=memory_mode,
@@ -718,6 +739,8 @@ class FlowConfig:
 			"fitness_calculator": self.fitness_calculator_type.name.lower(),
 			"fitness_weight_ce": self.fitness_weight_ce,
 			"fitness_weight_acc": self.fitness_weight_acc,
+			"fitness_weight_f1": self.fitness_weight_f1,
+			"fitness_weight_fpr": self.fitness_weight_fpr,
 			"seed": self.seed,
 			"architecture_type": self.architecture_type,
 		}

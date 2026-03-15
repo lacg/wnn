@@ -110,6 +110,8 @@ class ExperimentConfig:
 	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.NORMALIZED
 	fitness_weight_ce: float = 1.0
 	fitness_weight_acc: float = 1.0
+	fitness_weight_f1: float = 0.0
+	fitness_weight_fpr: float = 0.0
 	min_accuracy_floor: float = 0.0
 
 	# Cluster-level crossover ratio: 0.0 = all phase-specific, 1.0 = all cluster-level

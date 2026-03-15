@@ -1032,6 +1032,7 @@ class OptimizationConfig:
 	fitness_weight_ce: float = 1.0
 	fitness_weight_acc: float = 1.0
 	fitness_weight_f1: float = 0.0  # F1-macro weight (0.0 = disabled, >0 = included in ranking)
+	fitness_weight_fpr: float = 0.0  # FPR weight (0.0 = disabled, >0 = lower FPR ranked better)
 	# Accuracy floor: genomes below this get fitness = infinity (0.0 = disabled)
 	min_accuracy_floor: float = 0.0
 	# Early stopping
@@ -1046,6 +1047,7 @@ class OptimizationConfig:
 			weight_ce=self.fitness_weight_ce,
 			weight_acc=self.fitness_weight_acc,
 			weight_f1=self.fitness_weight_f1,
+			weight_fpr=self.fitness_weight_fpr,
 			min_accuracy_floor=self.min_accuracy_floor if self.min_accuracy_floor > 0 else None,
 		)
 

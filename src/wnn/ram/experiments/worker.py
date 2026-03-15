@@ -425,6 +425,8 @@ class FlowWorker:
             fitness_calculator_type = self._parse_fitness_calculator(params.get("fitness_calculator"))
             fitness_weight_ce = params.get("fitness_weight_ce", 1.0)
             fitness_weight_acc = params.get("fitness_weight_acc", 1.0)
+            fitness_weight_f1 = params.get("fitness_weight_f1", params.get("ids_fitness_weight_f1", 0.0))
+            fitness_weight_fpr = params.get("fitness_weight_fpr", params.get("ids_fitness_weight_fpr", 0.0))
 
             # Create flow config
             flow_config = FlowConfig(
@@ -439,6 +441,8 @@ class FlowWorker:
                 fitness_calculator_type=fitness_calculator_type,
                 fitness_weight_ce=fitness_weight_ce,
                 fitness_weight_acc=fitness_weight_acc,
+                fitness_weight_f1=fitness_weight_f1,
+                fitness_weight_fpr=fitness_weight_fpr,
                 seed=params.get("seed"),
                 architecture_type=architecture_type,
             )
@@ -504,6 +508,7 @@ class FlowWorker:
                 flow_config.ids_num_parts = params.get("ids_num_parts", 5)
                 flow_config.ids_k_folds = params.get("ids_k_folds", 5)
                 flow_config.ids_fitness_weight_f1 = params.get("ids_fitness_weight_f1", 0.0)
+                flow_config.ids_fitness_weight_fpr = params.get("ids_fitness_weight_fpr", 0.0)
                 flow_config.ids_split = params.get("ids_split", "standard")
                 # Global and per-stage bounds (shared with bitwise/multi_stage)
                 flow_config.min_bits = params.get("min_bits", 4)

@@ -1675,6 +1675,7 @@ class GridSearchConfig:
 	fitness_weight_ce: float = 1.0
 	fitness_weight_acc: float = 1.0
 	fitness_weight_f1: float = 0.0
+	fitness_weight_fpr: float = 0.0
 
 
 class GridSearchStrategy:
@@ -1758,6 +1759,7 @@ class GridSearchStrategy:
 			weight_ce=cfg.fitness_weight_ce,
 			weight_acc=cfg.fitness_weight_acc,
 			weight_f1=cfg.fitness_weight_f1,
+			weight_fpr=cfg.fitness_weight_fpr,
 		)
 
 		total_configs = len(cfg.neurons_grid) * len(cfg.bits_grid)
@@ -2194,6 +2196,7 @@ class AdaptationConfig:
 	fitness_weight_ce: float = 1.0
 	fitness_weight_acc: float = 1.0
 	fitness_weight_f1: float = 0.0
+	fitness_weight_fpr: float = 0.0
 	min_accuracy_floor: Optional[float] = None
 
 
@@ -2289,6 +2292,7 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 			weight_ce=cfg.fitness_weight_ce,
 			weight_acc=cfg.fitness_weight_acc,
 			weight_f1=cfg.fitness_weight_f1,
+			weight_fpr=cfg.fitness_weight_fpr,
 		)
 
 		# Configure evaluator's adaptation mode for this phase
