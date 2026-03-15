@@ -304,6 +304,7 @@ export interface ThresholdMetadata {
   fixed_05: ThresholdResult;
   train_cal: ThresholdResult;
   test_cal: ThresholdResult;
+  val_cal?: ThresholdResult;
 }
 
 export interface ValidationSummary {

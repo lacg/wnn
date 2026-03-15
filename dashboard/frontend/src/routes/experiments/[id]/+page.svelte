@@ -989,7 +989,6 @@
                     {/if}
                   </td>
                   {#if isIDS}
-                    {@const hasThresholds = bestFitSummary?.threshold_metadata || bestCeSummary?.threshold_metadata || bestAccSummary?.threshold_metadata}
                     <td class="mono best-ce-col">{bestCeSummary?.f1_macro != null ? (bestCeSummary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
                     <td class="mono best-ce-col">{bestCeSummary?.fpr != null ? (bestCeSummary.fpr * 100).toFixed(2) + '%' : '—'}</td>
                     <td class="mono best-ce-col">{bestCeSummary ? (bestCeSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
@@ -1008,7 +1007,7 @@
                     <td class="mono best-fit-col">{bestFitSummary ? (bestFitSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
                   {/if}
                 </tr>
-                {#if isIDS && hasThresholds}
+                {#if isIDS && (bestFitSummary?.threshold_metadata || bestCeSummary?.threshold_metadata || bestAccSummary?.threshold_metadata)}
                   {@const fitTm = bestFitSummary?.threshold_metadata}
                   <tr class="threshold-detail-row">
                     <td class="phase-name threshold-label">Thresholds</td>
@@ -1025,6 +1024,12 @@
                         <span class="threshold-item threshold-primary" title="Test-calibrated: threshold from 43K holdout applied to 82K test (primary)">
                           Holdout: F1={( fitTm.test_cal.f1 * 100).toFixed(1)}% FPR={( fitTm.test_cal.fpr * 100).toFixed(1)}%
                         </span>
+                        {#if fitTm.val_cal}
+                          <span class="threshold-sep">|</span>
+                          <span class="threshold-item threshold-oracle" title="Validation-calibrated (oracle): optimal threshold on 82K test — upper bound for live threshold tuning">
+                            Oracle: F1={( fitTm.val_cal.f1 * 100).toFixed(1)}% FPR={( fitTm.val_cal.fpr * 100).toFixed(1)}%
+                          </span>
+                        {/if}
                       {/if}
                     </td>
                   </tr>
@@ -2939,6 +2944,11 @@
   .threshold-primary {
     color: var(--accent-blue);
     font-weight: 500;
+  }
+
+  .threshold-oracle {
+    color: var(--accent-yellow);
+    font-style: italic;
   }
 
   .threshold-sep {

@@ -995,6 +995,17 @@ class Experiment:
 					}
 					self.log(f"    Test-cal:    F1={tcr.f1_macro:.4%}, FPR={tcr.fpr:.4%}, t={holdout_threshold:.4f}")
 
+					# 4. Validation-calibrated (oracle): sweep 82K test for optimal threshold
+					# This is the upper bound — in production, you'd update thresholds
+					# periodically using recent labeled data (similar effect)
+					oracle_results = val_evaluator.evaluate_batch_full([genome], override_threshold=-1.0)
+					or_ = oracle_results[0]
+					oracle_threshold = genome.threshold
+					threshold_metadata['val_cal'] = {
+						'f1': or_.f1_macro, 'fpr': or_.fpr, 'threshold': oracle_threshold,
+					}
+					self.log(f"    Val-cal:     F1={or_.f1_macro:.4%}, FPR={or_.fpr:.4%}, t={oracle_threshold:.4f} (oracle)")
+
 					# Use test-calibrated as primary metric (most honest)
 					f1 = tcr.f1_macro
 					fpr_val = tcr.fpr
