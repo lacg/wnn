@@ -25,6 +25,24 @@ This is the harder, more realistic split with temporal separation between train/
 Matching RF/XGBoost (~87% F1, ~12% FPR) validates the architecture.
 **Beating them is publishable** — no prior WNN work reports results on the standard split.
 
+### Our WNN Results (Binary, Single-Cluster, Standard Split)
+
+Flow 155: 77-neuron single-cluster, ids_recall fitness, 150 pop, 10-phase optimization.
+Four-threshold validation — see threshold sensitivity analysis below.
+
+| Threshold Mode    | best_ce genome        | best_acc genome       | Notes                          |
+|-------------------|-----------------------|-----------------------|--------------------------------|
+| **Fixed 0.5**     | F1=57.4%, FPR=0.56%   | F1=67.2%, FPR=0.49%   | Fair comparison vs BiLSTM      |
+| **Train-cal**     | F1=85.8%, FPR=22.0%   | F1=80.8%, FPR=39.0%   | Prone to overfit               |
+| **Holdout-cal**   | F1=61.9%, FPR=1.09%   | F1=79.6%, FPR=41.2%   | Primary honest metric          |
+| **Oracle**        | F1=88.4%, FPR=11.8%   | F1=85.0%, FPR=21.2%   | Upper bound (test-set leakage) |
+
+Key findings:
+- **Sub-1% FPR at default threshold** — production-grade false positive rate
+- **Oracle F1 of 88.4%** — architecture CAN reach near-BiLSTM (89%), gap is threshold generalization
+- **Model size: 365–383 KB** — fits in FPGA BRAM
+- BiLSTM uses implicit 0.5 threshold, so Fixed 0.5 is the fair comparison
+
 ## Random Split (90/10 deduplicated — FWIW comparison)
 
 Much easier — inflated numbers due to data leakage between train/test:
