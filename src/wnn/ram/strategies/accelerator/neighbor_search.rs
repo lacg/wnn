@@ -915,8 +915,11 @@ fn crossover_ps_neurons(
     for c in 0..num_clusters {
         let p1_n = parent1.1[c];
         let p2_n = parent2.1[c];
-        c1_neurons.push(p1_n);
-        c2_neurons.push(p2_n);
+        // Randomly pick either parent's neuron count for each child (like flow 122)
+        let c1_n = if rng.gen::<bool>() { p1_n } else { p2_n };
+        let c2_n = if rng.gen::<bool>() { p1_n } else { p2_n };
+        c1_neurons.push(c1_n);
+        c2_neurons.push(c2_n);
         struct NeuronData<'a> { bits: usize, conns: &'a [i64] }
         let mut pool: Vec<NeuronData> = Vec::with_capacity(p1_n + p2_n);
         for local in 0..p1_n {
@@ -938,15 +941,14 @@ fn crossover_ps_neurons(
             });
         }
         pool.shuffle(rng);
-        // Complementary partition: child1 gets first p1_n, child2 gets next p2_n
-        for (i, neuron) in pool.into_iter().enumerate() {
-            if i < p1_n {
-                c1_bits.push(neuron.bits);
-                c1_conns.extend_from_slice(neuron.conns);
-            } else if i < p1_n + p2_n {
-                c2_bits.push(neuron.bits);
-                c2_conns.extend_from_slice(neuron.conns);
-            }
+        // Each child samples its count from the shuffled pool
+        for neuron in pool.iter().take(c1_n) {
+            c1_bits.push(neuron.bits);
+            c1_conns.extend_from_slice(neuron.conns);
+        }
+        for neuron in pool.iter().skip(c1_n).take(c2_n) {
+            c2_bits.push(neuron.bits);
+            c2_conns.extend_from_slice(neuron.conns);
         }
     }
     ((c1_bits, c1_neurons, c1_conns), (c2_bits, c2_neurons, c2_conns))
