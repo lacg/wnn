@@ -2394,68 +2394,27 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 			offspring_secs = time.time() - offspring_start
 			cumulative_offspring_secs += offspring_secs
 
-			if not offspring:
-				# Still record iteration for dashboard visibility (even with no offspring)
-				if self._tracker and self._tracker_experiment_id:
-					try:
-						pop_avg_ce = sum(t[1] for t in pop) / len(pop) if pop else None
-						valid_accs = [t[2] for t in pop if t[2] is not None]
-						pop_avg_acc = sum(valid_accs) / len(valid_accs) if valid_accs else None
-						iter_bests = fitness_calculator.bests(pop)
-						delta_previous = best_fitness - prev_best_fitness
-						patience_counter = early_stopper._patience_counter if hasattr(early_stopper, '_patience_counter') else 0
-						pop_f1s = [t[3] for t in pop if len(t) > 3 and t[3] is not None]
-						pop_fprs = [t[4] for t in pop if len(t) > 4 and t[4] is not None]
-						if pop_f1s:
-							iter_best_f1 = max(pop_f1s)
-							if best_f1_global is None or iter_best_f1 > best_f1_global:
-								best_f1_global = iter_best_f1
-						if pop_fprs:
-							iter_best_fpr = min(pop_fprs)
-							if best_fpr_global is None or iter_best_fpr < best_fpr_global:
-								best_fpr_global = iter_best_fpr
-						self._tracker.record_iteration(
-							experiment_id=self._tracker_experiment_id,
-							iteration_num=iteration + 1,
-							best_ce=iter_bests.best_ce.ce,
-							best_accuracy=iter_bests.best_acc.accuracy,
-							avg_ce=pop_avg_ce,
-							avg_accuracy=pop_avg_acc,
-							offspring_count=0,
-							offspring_viable=0,
-							fitness_threshold=current_threshold,
-							elapsed_secs=time.time() - iter_start_time,
-							delta_previous=delta_previous,
-							patience_counter=patience_counter,
-							patience_max=cfg.patience,
-							candidates_total=len(pop),
-							best_f1=best_f1_global,
-							best_fpr=best_fpr_global,
-						)
-					except Exception:
-						pass
-				continue
+			if offspring:
+				# === (μ + λ) replacement: merge population + offspring, keep top pop_size ===
+				combined = []
+				for t in pop:
+					combined.append((self.clone_genome(t[0]),) + t[1:])
+				for t in offspring:
+					combined.append((self.clone_genome(t[0]),) + t[1:])
 
-			# === (μ + λ) replacement: merge population + offspring, keep top pop_size ===
-			combined = []
-			for t in pop:
-				combined.append((self.clone_genome(t[0]),) + t[1:])
-			for t in offspring:
-				combined.append((self.clone_genome(t[0]),) + t[1:])
+				pop = self._select_top_n(combined, pop_size, fitness_calculator)
 
-			pop = self._select_top_n(combined, pop_size, fitness_calculator)
+				# Update best_ranked from new population
+				best_ranked = self._find_best_ranked(pop, fitness_calculator)
+				best_ranked_genome, best_ranked_ce, best_ranked_accuracy = best_ranked[0], best_ranked[1], best_ranked[2]
 
-			# Update best_ranked from new population
-			best_ranked = self._find_best_ranked(pop, fitness_calculator)
-			best_ranked_genome, best_ranked_ce, best_ranked_accuracy = best_ranked[0], best_ranked[1], best_ranked[2]
-
-			# Update global best (by CE)
-			for t in pop:
-				if t[1] < best_fitness:
-					best = self.clone_genome(t[0])
-					best_fitness = t[1]
-					best_accuracy = t[2]
-					improved_iterations += 1
+				# Update global best (by CE)
+				for t in pop:
+					if t[1] < best_fitness:
+						best = self.clone_genome(t[0])
+						best_fitness = t[1]
+						best_accuracy = t[2]
+						improved_iterations += 1
 
 			history.append((iteration + 1, best_fitness))
 
