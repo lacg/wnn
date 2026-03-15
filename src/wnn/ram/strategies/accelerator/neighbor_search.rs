@@ -286,7 +286,6 @@ fn mutate_neurons_phase(
     config: &MutationConfig,
     rng: &mut impl Rng,
 ) -> (Vec<usize>, Vec<usize>, Vec<i64>) {
-    let neurons_delta_max = config.neurons_delta_max();
     let neuron_off = compute_neuron_offsets(neurons_per_cluster);
     let conn_off = compute_conn_offsets(bits_per_neuron);
     let mutable = mutable_clusters(config);
@@ -297,7 +296,10 @@ fn mutate_neurons_phase(
     for &c in &mutable {
         if c >= config.num_clusters { continue; }
         if rng.gen::<f64>() < config.neurons_mutation_rate {
-            let delta = rng.gen_range(-neurons_delta_max..=neurons_delta_max);
+            // Delta = 3% of current neuron count, min ±1
+            let current_n = new_neurons[c] as f64;
+            let delta_max = (0.03 * current_n).round().max(1.0) as i32;
+            let delta = rng.gen_range(-delta_max..=delta_max);
             let new_n = (new_neurons[c] as i32 + delta)
                 .max(config.min_neurons as i32)
                 .min(config.max_neurons as i32) as usize;
@@ -1699,7 +1701,8 @@ mod tests {
         };
 
         assert_eq!(config.bits_delta_max(), 2); // 10% of 24 = 2.4 -> 2
-        assert_eq!(config.neurons_delta_max(), 2); // 10% of 16 = 1.6 -> 2
+        // neurons_delta_max is no longer used — delta is computed per-cluster
+        // as 3% of current neuron count (min 1) inside mutate_neurons_phase
     }
 
     /// Helper to create a test config for a specific phase.
