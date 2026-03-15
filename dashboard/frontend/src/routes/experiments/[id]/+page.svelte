@@ -1008,7 +1008,7 @@
                   {/if}
                 </tr>
                 {#if isIDS && (bestFitSummary?.threshold_metadata || bestCeSummary?.threshold_metadata || bestAccSummary?.threshold_metadata)}
-                  {@const fitTm = bestFitSummary?.threshold_metadata}
+                  {@const fitTm = bestFitSummary?.threshold_metadata || bestCeSummary?.threshold_metadata || bestAccSummary?.threshold_metadata}
                   <tr class="threshold-detail-row">
                     <td class="phase-name threshold-label">Thresholds</td>
                     <td colspan="9" class="threshold-detail-cell">
