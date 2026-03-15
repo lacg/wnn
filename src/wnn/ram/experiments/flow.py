@@ -993,7 +993,7 @@ class Flow:
 		# Handle empty flow gracefully — complete immediately
 		if not cfg.experiments:
 			self.log("Flow has no experiments — completing immediately.")
-			from wnn.ram.architecture.cluster_genome import ClusterGenome
+			from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 			empty_genome = seed_genome or ClusterGenome(
 				bits_per_neuron=[], neurons_per_cluster=[], connections=[],
 			)
