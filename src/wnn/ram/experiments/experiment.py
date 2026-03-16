@@ -1019,11 +1019,9 @@ class Experiment:
 					# Learns P(attack) = sigmoid(a*score + b) from holdout data,
 					# absorbing distribution shift + class imbalance between train/test
 					try:
-						# score_examples trains on 131K, returns raw scores for 43K holdout
+						# score_examples trains on full train, returns raw scores for eval set
 						holdout_scores = self.evaluator.score_examples(genome)
-						# _y_test holds the eval labels (43K holdout for self.evaluator)
 						holdout_labels_list = self.evaluator._y_test
-
 						if holdout_scores and holdout_labels_list and len(holdout_scores) == len(holdout_labels_list):
 							import math
 
