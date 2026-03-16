@@ -2932,15 +2932,15 @@
     font-family: monospace;
   }
 
-  /* Actual result row (main data) — dark green */
+  /* Actual result row (main data) — bright green, bold */
   .validation-table tbody tr:not(.threshold-sub-row) td.mono {
-    color: #16a34a;
+    color: #22c55e;
+    font-weight: 600;
   }
 
-  /* Holdout — below actual, also green but slightly lighter */
+  /* Holdout — dark green */
   .threshold-holdout-row td {
-    color: #22c55e !important;
-    font-weight: 500;
+    color: #16a34a !important;
   }
 
   /* Train-cal — default dim */
