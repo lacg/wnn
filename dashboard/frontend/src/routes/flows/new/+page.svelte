@@ -159,8 +159,8 @@
   let topM = 5;
 
   $: isMultiStage = numStages >= 2;
-  $: isBitwise = !isMultiStage && (template === 'bitwise-7-phase' || template === 'bitwise-10-phase');
-  $: isIDS = !isMultiStage && (template === 'ids-binary-7-phase' || template === 'ids-multi-7-phase' || template === 'ids-binary-10-phase' || template === 'ids-multi-10-phase');
+  $: isBitwise = !isMultiStage && template.startsWith('bitwise-');
+  $: isIDS = !isMultiStage && template.startsWith('ids-');
 
   // Resize stageConfigs when numStages changes
   $: {
@@ -282,6 +282,23 @@
       bitwiseMaxNeurons = 300;
       bitwiseMemoryMode = 'QUAD_WEIGHTED';
       bitwiseNeuronSampleRate = 0.25;
+    } else if (templateName === 'ids-binary-2-phase' || templateName === 'ids-binary-5-phase') {
+      gaGenerations = 250;
+      tsIterations = 250;
+      adaptationIterations = 50;
+      populationSize = 150;
+      neighborsPerIter = 150;
+      patience = 5;
+      fitnessPercentile = 0.75;
+      fitnessCalculator = 'ids_recall';
+      fitnessWeightCe = 0.3;
+      fitnessWeightAcc = 1.0;
+      idsClassification = 'binary';
+      idsNBits = 8;
+      idsValFraction = 0.25;
+      idsKFolds = 5;
+      idsFitnessWeightF1 = 0.0;
+      idsSplit = 'standard';
     } else if (templateName === 'ids-binary-7-phase') {
       gaGenerations = 250;
       tsIterations = 250;
@@ -419,10 +436,19 @@
       { name: 'TS Connections (refine)', experiment_type: 'ts', optimize_bits: false, optimize_neurons: false, optimize_connections: true },
     ];
 
+    const grid: PhaseSpec = { name: 'Grid Search (neurons × bits)', experiment_type: 'grid_search', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'grid_search' };
+    const synaptogenesisPhase: PhaseSpec = { name: 'Synaptogenesis', experiment_type: 'synaptogenesis', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'synaptogenesis' };
+
+    if (templateName === 'bitwise-2-phase' || templateName === 'ids-binary-2-phase' || templateName === 'ids-multi-2-phase') {
+      return [grid, neuronsPhases[0]];
+    }
+
+    if (templateName === 'bitwise-5-phase' || templateName === 'ids-binary-5-phase' || templateName === 'ids-multi-5-phase') {
+      return [grid, neuronsPhases[0], bitsPhases[0], synaptogenesisPhase, connectionsPhases[0]];
+    }
+
     if (templateName === 'bitwise-10-phase') {
-      const grid: PhaseSpec = { name: 'Grid Search (neurons × bits)', experiment_type: 'grid_search', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'grid_search' };
       const neurogenesisPhase: PhaseSpec = { name: 'Neurogenesis', experiment_type: 'neurogenesis', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'neurogenesis' };
-      const synaptogenesisPhase: PhaseSpec = { name: 'Synaptogenesis', experiment_type: 'synaptogenesis', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'synaptogenesis' };
       const axonogenesisPhase: PhaseSpec = { name: 'Axonogenesis', experiment_type: 'axonogenesis', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'axonogenesis' };
       return [
         grid,
@@ -433,20 +459,16 @@
     }
 
     if (templateName === 'bitwise-7-phase') {
-      const grid: PhaseSpec = { name: 'Grid Search (neurons × bits)', experiment_type: 'grid_search', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'grid_search' };
       if (order === 'bits_first') return [grid, ...bitsPhases, ...neuronsPhases, ...connectionsPhases];
       return [grid, ...neuronsPhases, ...bitsPhases, ...connectionsPhases];
     }
 
     if (templateName === 'ids-binary-7-phase' || templateName === 'ids-multi-7-phase') {
-      const grid: PhaseSpec = { name: 'Grid Search (neurons × bits)', experiment_type: 'grid_search', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'grid_search' };
       return [grid, ...neuronsPhases, ...bitsPhases, ...connectionsPhases];
     }
 
     if (templateName === 'ids-binary-10-phase' || templateName === 'ids-multi-10-phase') {
-      const grid: PhaseSpec = { name: 'Grid Search (neurons × bits)', experiment_type: 'grid_search', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'grid_search' };
       const neurogenesisPhase: PhaseSpec = { name: 'Neurogenesis', experiment_type: 'neurogenesis', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'neurogenesis' };
-      const synaptogenesisPhase: PhaseSpec = { name: 'Synaptogenesis', experiment_type: 'synaptogenesis', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'synaptogenesis' };
       const axonogenesisPhase: PhaseSpec = { name: 'Axonogenesis', experiment_type: 'axonogenesis', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'axonogenesis' };
       return [
         grid,
@@ -961,8 +983,12 @@
               <select id="template" bind:value={template}>
                 <option value="quick-4-phase">Quick 4-Phase (Tiered)</option>
                 <option value="standard-6-phase">Standard 6-Phase (Tiered)</option>
+                <option value="bitwise-2-phase">Bitwise 2-Phase Explorer (Grid + GA Neurons)</option>
+                <option value="bitwise-5-phase">Bitwise 5-Phase Deep (GA only + Synapt)</option>
                 <option value="bitwise-7-phase">Bitwise 7-Phase</option>
                 <option value="bitwise-10-phase">Bitwise 10-Phase (+ Adaptation)</option>
+                <option value="ids-binary-2-phase">IDS Binary 2-Phase Explorer (UNSW-NB15)</option>
+                <option value="ids-binary-5-phase">IDS Binary 5-Phase Deep (UNSW-NB15)</option>
                 <option value="ids-binary-7-phase">IDS Binary 7-Phase (UNSW-NB15)</option>
                 <option value="ids-binary-10-phase">IDS Binary 10-Phase + *genesis (UNSW-NB15)</option>
                 <option value="ids-multi-7-phase">IDS Multi-class 7-Phase (UNSW-NB15)</option>

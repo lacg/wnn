@@ -360,6 +360,200 @@ class FlowConfig:
 		)
 
 	@classmethod
+	def bitwise_2_phase(
+		cls,
+		name: str,
+		ga_generations: int = 250,
+		population_size: int = 50,
+		patience: int = 3,
+		context_size: int = 4,
+		num_clusters: int = 16,
+		memory_mode: str = "QUAD_WEIGHTED",
+		neuron_sample_rate: float = 0.25,
+		min_bits: int = 10,
+		max_bits: int = 24,
+		min_neurons: int = 10,
+		max_neurons: int = 300,
+		fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK,
+		fitness_weight_ce: float = 1.0,
+		fitness_weight_acc: float = 1.0,
+		fitness_weight_f1: float = 0.0,
+		fitness_weight_fpr: float = 0.0,
+		sparse_threshold: Optional[int] = None,
+		seed: Optional[int] = None,
+		description: Optional[str] = None,
+		seed_checkpoint_path: Optional[str] = None,
+	) -> "FlowConfig":
+		"""
+		Explorer template: Grid Search + GA Neurons only.
+
+		Fast (2 experiments, ~1hr) for screening configurations.
+		GA Neurons is the highest-value phase (+2.4pt avg, 64% improve).
+		"""
+		phases = [
+			("Grid Search (neurons × bits)", ExperimentType.GRID_SEARCH, False, False, False, {"phase_type": "grid_search"}),
+			("GA Neurons", ExperimentType.GA, False, True, False, {}),
+		]
+
+		default_neurons_grid = [50, 100, 150, 200]
+		default_bits_grid = [14, 16, 18, 20]
+
+		experiments = []
+		for phase_name, exp_type, opt_bits, opt_neurons, opt_conns, extra_params in phases:
+			config = ExperimentConfig(
+				name=phase_name,
+				experiment_type=exp_type,
+				optimize_bits=opt_bits,
+				optimize_neurons=opt_neurons,
+				optimize_connections=opt_conns,
+				generations=ga_generations,
+				population_size=population_size,
+				iterations=1,
+				neighbors_per_iter=1,
+				patience=patience,
+				fitness_calculator_type=fitness_calculator_type,
+				fitness_weight_ce=fitness_weight_ce,
+				fitness_weight_acc=fitness_weight_acc,
+				fitness_weight_f1=fitness_weight_f1,
+				fitness_weight_fpr=fitness_weight_fpr,
+				seed=seed,
+				cluster_type=ClusterType.BITWISE,
+				bitwise_min_bits=min_bits,
+				bitwise_max_bits=max_bits,
+				bitwise_min_neurons=min_neurons,
+				bitwise_max_neurons=max_neurons,
+			)
+			if exp_type == ExperimentType.GRID_SEARCH:
+				config.neurons_grid = default_neurons_grid
+				config.bits_grid = default_bits_grid
+				config.generations = 1
+			config._extra_params = extra_params
+			experiments.append(config)
+
+		return cls(
+			name=name,
+			experiments=experiments,
+			description=description or "Explorer 2-phase (grid → GA neurons)",
+			seed_checkpoint_path=seed_checkpoint_path,
+			context_size=context_size,
+			patience=patience,
+			fitness_calculator_type=fitness_calculator_type,
+			fitness_weight_ce=fitness_weight_ce,
+			fitness_weight_acc=fitness_weight_acc,
+			fitness_weight_f1=fitness_weight_f1,
+			fitness_weight_fpr=fitness_weight_fpr,
+			seed=seed,
+			architecture_type="bitwise",
+			num_clusters=num_clusters,
+			memory_mode=memory_mode,
+			neuron_sample_rate=neuron_sample_rate,
+			min_bits=min_bits,
+			max_bits=max_bits,
+			min_neurons=min_neurons,
+			max_neurons=max_neurons,
+			sparse_threshold=sparse_threshold,
+		)
+
+	@classmethod
+	def bitwise_5_phase(
+		cls,
+		name: str,
+		ga_generations: int = 250,
+		adaptation_iterations: int = 50,
+		population_size: int = 50,
+		patience: int = 3,
+		context_size: int = 4,
+		num_clusters: int = 16,
+		memory_mode: str = "QUAD_WEIGHTED",
+		neuron_sample_rate: float = 0.25,
+		min_bits: int = 10,
+		max_bits: int = 24,
+		min_neurons: int = 10,
+		max_neurons: int = 300,
+		fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK,
+		fitness_weight_ce: float = 1.0,
+		fitness_weight_acc: float = 1.0,
+		fitness_weight_f1: float = 0.0,
+		fitness_weight_fpr: float = 0.0,
+		sparse_threshold: Optional[int] = None,
+		seed: Optional[int] = None,
+		description: Optional[str] = None,
+		seed_checkpoint_path: Optional[str] = None,
+	) -> "FlowConfig":
+		"""
+		Deep template: Grid + GA Neurons + GA Bits + Synaptogenesis + GA Connections.
+
+		Drops all TS phases (55-77% regression rate) and keeps only GA exploration
+		phases plus synaptogenesis (stats-guided connection pruning/growing).
+		"""
+		phases = [
+			("Grid Search (neurons × bits)", ExperimentType.GRID_SEARCH, False, False, False, {"phase_type": "grid_search"}),
+			("GA Neurons", ExperimentType.GA, False, True, False, {}),
+			("GA Bits", ExperimentType.GA, True, False, False, {}),
+			("Synaptogenesis", ExperimentType.SYNAPTOGENESIS, False, False, False, {"phase_type": "synaptogenesis"}),
+			("GA Connections", ExperimentType.GA, False, False, True, {}),
+		]
+
+		default_neurons_grid = [50, 100, 150, 200]
+		default_bits_grid = [14, 16, 18, 20]
+
+		experiments = []
+		for phase_name, exp_type, opt_bits, opt_neurons, opt_conns, extra_params in phases:
+			config = ExperimentConfig(
+				name=phase_name,
+				experiment_type=exp_type,
+				optimize_bits=opt_bits,
+				optimize_neurons=opt_neurons,
+				optimize_connections=opt_conns,
+				generations=ga_generations,
+				population_size=population_size,
+				iterations=adaptation_iterations if exp_type == ExperimentType.SYNAPTOGENESIS else 1,
+				neighbors_per_iter=1,
+				patience=patience,
+				fitness_calculator_type=fitness_calculator_type,
+				fitness_weight_ce=fitness_weight_ce,
+				fitness_weight_acc=fitness_weight_acc,
+				fitness_weight_f1=fitness_weight_f1,
+				fitness_weight_fpr=fitness_weight_fpr,
+				seed=seed,
+				cluster_type=ClusterType.BITWISE,
+				bitwise_min_bits=min_bits,
+				bitwise_max_bits=max_bits,
+				bitwise_min_neurons=min_neurons,
+				bitwise_max_neurons=max_neurons,
+			)
+			if exp_type == ExperimentType.GRID_SEARCH:
+				config.neurons_grid = default_neurons_grid
+				config.bits_grid = default_bits_grid
+				config.generations = 1
+			config._extra_params = extra_params
+			experiments.append(config)
+
+		return cls(
+			name=name,
+			experiments=experiments,
+			description=description or "Deep 5-phase (grid → GA neurons → GA bits → synaptogenesis → GA connections)",
+			seed_checkpoint_path=seed_checkpoint_path,
+			context_size=context_size,
+			patience=patience,
+			fitness_calculator_type=fitness_calculator_type,
+			fitness_weight_ce=fitness_weight_ce,
+			fitness_weight_acc=fitness_weight_acc,
+			fitness_weight_f1=fitness_weight_f1,
+			fitness_weight_fpr=fitness_weight_fpr,
+			seed=seed,
+			architecture_type="bitwise",
+			num_clusters=num_clusters,
+			memory_mode=memory_mode,
+			neuron_sample_rate=neuron_sample_rate,
+			min_bits=min_bits,
+			max_bits=max_bits,
+			min_neurons=min_neurons,
+			max_neurons=max_neurons,
+			sparse_threshold=sparse_threshold,
+		)
+
+	@classmethod
 	def bitwise_10_phase(
 		cls,
 		name: str,
