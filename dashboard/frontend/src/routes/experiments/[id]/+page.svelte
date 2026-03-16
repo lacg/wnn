@@ -1008,39 +1008,27 @@
                   {/if}
                 </tr>
                 {#if isIDS && (bestCeSummary?.threshold_metadata || bestAccSummary?.threshold_metadata || bestFitSummary?.threshold_metadata)}
-                  <tr class="threshold-detail-row">
-                    <td class="phase-name threshold-label">Thresholds</td>
-                    <td colspan="3" class="threshold-detail-cell best-ce-col">
-                      {#if bestCeSummary?.threshold_metadata}
-                        <span class="threshold-compact" title="Train: F1={( bestCeSummary.threshold_metadata.train_cal.f1 * 100).toFixed(1)}% FPR={( bestCeSummary.threshold_metadata.train_cal.fpr * 100).toFixed(1)}%&#10;Fixed: F1={( bestCeSummary.threshold_metadata.fixed_05.f1 * 100).toFixed(1)}% FPR={( bestCeSummary.threshold_metadata.fixed_05.fpr * 100).toFixed(1)}%&#10;Holdout: F1={( bestCeSummary.threshold_metadata.test_cal.f1 * 100).toFixed(1)}% FPR={( bestCeSummary.threshold_metadata.test_cal.fpr * 100).toFixed(1)}%{bestCeSummary.threshold_metadata.val_cal ? `\nOracle: F1=${( bestCeSummary.threshold_metadata.val_cal.f1 * 100).toFixed(1)}% FPR=${( bestCeSummary.threshold_metadata.val_cal.fpr * 100).toFixed(1)}%` : ''}">
-                          T:{( bestCeSummary.threshold_metadata.train_cal.f1 * 100).toFixed(1)}%
-                          F:{( bestCeSummary.threshold_metadata.fixed_05.f1 * 100).toFixed(1)}%
-                          <strong>H:{( bestCeSummary.threshold_metadata.test_cal.f1 * 100).toFixed(1)}%</strong>
-                          {#if bestCeSummary.threshold_metadata.val_cal}O:{( bestCeSummary.threshold_metadata.val_cal.f1 * 100).toFixed(1)}%{/if}
-                        </span>
-                      {:else}<span class="threshold-none">—</span>{/if}
-                    </td>
-                    <td colspan="3" class="threshold-detail-cell best-acc-col">
-                      {#if bestAccSummary?.threshold_metadata}
-                        <span class="threshold-compact" title="Train: F1={( bestAccSummary.threshold_metadata.train_cal.f1 * 100).toFixed(1)}% FPR={( bestAccSummary.threshold_metadata.train_cal.fpr * 100).toFixed(1)}%&#10;Fixed: F1={( bestAccSummary.threshold_metadata.fixed_05.f1 * 100).toFixed(1)}% FPR={( bestAccSummary.threshold_metadata.fixed_05.fpr * 100).toFixed(1)}%&#10;Holdout: F1={( bestAccSummary.threshold_metadata.test_cal.f1 * 100).toFixed(1)}% FPR={( bestAccSummary.threshold_metadata.test_cal.fpr * 100).toFixed(1)}%{bestAccSummary.threshold_metadata.val_cal ? `\nOracle: F1=${( bestAccSummary.threshold_metadata.val_cal.f1 * 100).toFixed(1)}% FPR=${( bestAccSummary.threshold_metadata.val_cal.fpr * 100).toFixed(1)}%` : ''}">
-                          T:{( bestAccSummary.threshold_metadata.train_cal.f1 * 100).toFixed(1)}%
-                          F:{( bestAccSummary.threshold_metadata.fixed_05.f1 * 100).toFixed(1)}%
-                          <strong>H:{( bestAccSummary.threshold_metadata.test_cal.f1 * 100).toFixed(1)}%</strong>
-                          {#if bestAccSummary.threshold_metadata.val_cal}O:{( bestAccSummary.threshold_metadata.val_cal.f1 * 100).toFixed(1)}%{/if}
-                        </span>
-                      {:else}<span class="threshold-none">—</span>{/if}
-                    </td>
-                    <td colspan="3" class="threshold-detail-cell best-fit-col">
-                      {#if bestFitSummary?.threshold_metadata}
-                        <span class="threshold-compact" title="Train: F1={( bestFitSummary.threshold_metadata.train_cal.f1 * 100).toFixed(1)}% FPR={( bestFitSummary.threshold_metadata.train_cal.fpr * 100).toFixed(1)}%&#10;Fixed: F1={( bestFitSummary.threshold_metadata.fixed_05.f1 * 100).toFixed(1)}% FPR={( bestFitSummary.threshold_metadata.fixed_05.fpr * 100).toFixed(1)}%&#10;Holdout: F1={( bestFitSummary.threshold_metadata.test_cal.f1 * 100).toFixed(1)}% FPR={( bestFitSummary.threshold_metadata.test_cal.fpr * 100).toFixed(1)}%{bestFitSummary.threshold_metadata.val_cal ? `\nOracle: F1=${( bestFitSummary.threshold_metadata.val_cal.f1 * 100).toFixed(1)}% FPR=${( bestFitSummary.threshold_metadata.val_cal.fpr * 100).toFixed(1)}%` : ''}">
-                          T:{( bestFitSummary.threshold_metadata.train_cal.f1 * 100).toFixed(1)}%
-                          F:{( bestFitSummary.threshold_metadata.fixed_05.f1 * 100).toFixed(1)}%
-                          <strong>H:{( bestFitSummary.threshold_metadata.test_cal.f1 * 100).toFixed(1)}%</strong>
-                          {#if bestFitSummary.threshold_metadata.val_cal}O:{( bestFitSummary.threshold_metadata.val_cal.f1 * 100).toFixed(1)}%{/if}
-                        </span>
-                      {:else}<span class="threshold-none">—</span>{/if}
-                    </td>
-                  </tr>
+                  {#each [
+                    { key: 'train_cal', label: '┣ Train-cal', cls: '' },
+                    { key: 'fixed_05', label: '┣ Fixed 0.5', cls: '' },
+                    { key: 'test_cal', label: '┣ Holdout', cls: 'threshold-primary-row' },
+                    { key: 'val_cal', label: '┗ Oracle', cls: 'threshold-oracle-row' },
+                  ] as mode}
+                    {#if (bestCeSummary?.threshold_metadata?.[mode.key] || bestAccSummary?.threshold_metadata?.[mode.key] || bestFitSummary?.threshold_metadata?.[mode.key])}
+                      <tr class="threshold-sub-row {mode.cls}">
+                        <td class="phase-name threshold-mode-label">{mode.label}</td>
+                        <td class="mono best-ce-col">{bestCeSummary?.threshold_metadata?.[mode.key]?.f1 != null ? (bestCeSummary.threshold_metadata[mode.key].f1 * 100).toFixed(2) + '%' : '—'}</td>
+                        <td class="mono best-ce-col">{bestCeSummary?.threshold_metadata?.[mode.key]?.fpr != null ? (bestCeSummary.threshold_metadata[mode.key].fpr * 100).toFixed(2) + '%' : '—'}</td>
+                        <td class="mono best-ce-col">{bestCeSummary?.threshold_metadata?.[mode.key]?.acc != null ? (bestCeSummary.threshold_metadata[mode.key].acc * 100).toFixed(2) + '%' : '—'}</td>
+                        <td class="mono best-acc-col">{bestAccSummary?.threshold_metadata?.[mode.key]?.f1 != null ? (bestAccSummary.threshold_metadata[mode.key].f1 * 100).toFixed(2) + '%' : '—'}</td>
+                        <td class="mono best-acc-col">{bestAccSummary?.threshold_metadata?.[mode.key]?.fpr != null ? (bestAccSummary.threshold_metadata[mode.key].fpr * 100).toFixed(2) + '%' : '—'}</td>
+                        <td class="mono best-acc-col">{bestAccSummary?.threshold_metadata?.[mode.key]?.acc != null ? (bestAccSummary.threshold_metadata[mode.key].acc * 100).toFixed(2) + '%' : '—'}</td>
+                        <td class="mono best-fit-col">{bestFitSummary?.threshold_metadata?.[mode.key]?.f1 != null ? (bestFitSummary.threshold_metadata[mode.key].f1 * 100).toFixed(2) + '%' : '—'}</td>
+                        <td class="mono best-fit-col">{bestFitSummary?.threshold_metadata?.[mode.key]?.fpr != null ? (bestFitSummary.threshold_metadata[mode.key].fpr * 100).toFixed(2) + '%' : '—'}</td>
+                        <td class="mono best-fit-col">{bestFitSummary?.threshold_metadata?.[mode.key]?.acc != null ? (bestFitSummary.threshold_metadata[mode.key].acc * 100).toFixed(2) + '%' : '—'}</td>
+                      </tr>
+                    {/if}
+                  {/each}
                 {/if}
               {/each}
             </tbody>
@@ -2927,35 +2915,32 @@
     background: rgba(155, 89, 182, 0.05);
   }
 
-  .threshold-detail-row td {
-    padding: 0.25rem 0.75rem !important;
+  .threshold-sub-row td {
+    padding: 0.2rem 0.75rem !important;
+    border-bottom: none !important;
+    color: var(--text-dim);
+    font-size: 1rem;
+  }
+
+  .threshold-sub-row:last-child td {
     border-bottom: 1px solid var(--glass-border) !important;
   }
 
-  .threshold-label {
-    font-size: 1rem;
-    color: var(--text-dim);
-    font-style: italic;
+  .threshold-mode-label {
     font-weight: 400 !important;
-  }
-
-  .threshold-detail-cell {
-    text-align: center !important;
     font-size: 1rem;
     color: var(--text-dim);
-  }
-
-  .threshold-compact {
     white-space: nowrap;
-    font-size: 1rem;
-    cursor: help;
+    font-family: monospace;
   }
 
-  .threshold-compact strong {
-    color: var(--accent-blue);
+  .threshold-primary-row td {
+    color: var(--accent-blue) !important;
+    font-weight: 500;
   }
 
-  .threshold-none {
-    color: var(--text-dim);
+  .threshold-oracle-row td {
+    color: var(--text-dim) !important;
+    font-style: italic;
   }
 </style>

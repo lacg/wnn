@@ -977,17 +977,17 @@ class Experiment:
 
 					# 1. Train-calibrated (already computed — override=None calibrates on train scores)
 					threshold_metadata['train_cal'] = {
-						'f1': f1, 'fpr': fpr_val, 'threshold': train_threshold,
+						'f1': f1, 'fpr': fpr_val, 'acc': acc, 'threshold': train_threshold,
 					}
-					self.log(f"    Train-cal:   F1={f1:.4%}, FPR={fpr_val:.4%}, t={train_threshold:.4f}")
+					self.log(f"    Train-cal:   F1={f1:.4%}, FPR={fpr_val:.4%}, Acc={acc:.4%}, t={train_threshold:.4f}")
 
 					# 2. Fixed 0.5 — distribution-agnostic baseline
 					fixed_results = val_evaluator.evaluate_batch_full([genome], override_threshold=0.5)
 					fr = fixed_results[0]
 					threshold_metadata['fixed_05'] = {
-						'f1': fr.f1_macro, 'fpr': fr.fpr,
+						'f1': fr.f1_macro, 'fpr': fr.fpr, 'acc': fr.accuracy,
 					}
-					self.log(f"    Fixed 0.5:   F1={fr.f1_macro:.4%}, FPR={fr.fpr:.4%}")
+					self.log(f"    Fixed 0.5:   F1={fr.f1_macro:.4%}, FPR={fr.fpr:.4%}, Acc={fr.accuracy:.4%}")
 
 					# 3. Test-calibrated: find threshold on holdout, apply to test
 					# 3a: override=-1.0 sweeps eval data (43K holdout) for optimal threshold
@@ -1000,9 +1000,9 @@ class Experiment:
 					)
 					tcr = test_cal_results[0]
 					threshold_metadata['test_cal'] = {
-						'f1': tcr.f1_macro, 'fpr': tcr.fpr, 'threshold': holdout_threshold,
+						'f1': tcr.f1_macro, 'fpr': tcr.fpr, 'acc': tcr.accuracy, 'threshold': holdout_threshold,
 					}
-					self.log(f"    Test-cal:    F1={tcr.f1_macro:.4%}, FPR={tcr.fpr:.4%}, t={holdout_threshold:.4f}")
+					self.log(f"    Test-cal:    F1={tcr.f1_macro:.4%}, FPR={tcr.fpr:.4%}, Acc={tcr.accuracy:.4%}, t={holdout_threshold:.4f}")
 
 					# 4. Validation-calibrated (oracle): sweep 82K test for optimal threshold
 					# This is the upper bound — in production, you'd update thresholds
@@ -1011,9 +1011,9 @@ class Experiment:
 					or_ = oracle_results[0]
 					oracle_threshold = genome.threshold
 					threshold_metadata['val_cal'] = {
-						'f1': or_.f1_macro, 'fpr': or_.fpr, 'threshold': oracle_threshold,
+						'f1': or_.f1_macro, 'fpr': or_.fpr, 'acc': or_.accuracy, 'threshold': oracle_threshold,
 					}
-					self.log(f"    Val-cal:     F1={or_.f1_macro:.4%}, FPR={or_.fpr:.4%}, t={oracle_threshold:.4f} (oracle)")
+					self.log(f"    Val-cal:     F1={or_.f1_macro:.4%}, FPR={or_.fpr:.4%}, Acc={or_.accuracy:.4%}, t={oracle_threshold:.4f} (oracle)")
 
 					# Use test-calibrated as primary metric (most honest)
 					f1 = tcr.f1_macro
