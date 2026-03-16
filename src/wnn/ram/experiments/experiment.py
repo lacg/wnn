@@ -1098,6 +1098,117 @@ class Experiment:
 					except Exception as e:
 						self.log(f"    Platt:       skipped ({e})")
 
+					# 6. Beta calibration: logit(P) = a*ln(s) - b*ln(1-s) + c
+					# Designed for bounded [0,1] scores — handles bimodal WNN distributions
+					# (Kull et al. 2017, AISTATS)
+					try:
+						if holdout_scores and holdout_labels_list:
+							import math
+							scores = holdout_scores
+							labels = holdout_labels_list
+							n = len(scores)
+							n_pos = sum(1 for l in labels if l == 1)
+							n_neg = n - n_pos
+							t_pos = (n_pos + 1) / (n_pos + 2)
+							t_neg = 1.0 / (n_neg + 2)
+
+							# Transform scores: x1 = ln(s), x2 = -ln(1-s)
+							# Clamp to avoid log(0)
+							EPS = 1e-10
+							x1 = [math.log(max(s, EPS)) for s in scores]
+							x2 = [-math.log(max(1 - s, EPS)) for s in scores]
+
+							# Fit logistic regression on (x1, x2) → same Newton method as Platt
+							a, b, c = 1.0, 1.0, 0.0
+							for _ in range(100):
+								g_a = g_b = g_c = 0.0
+								h_aa = h_ab = h_ac = h_bb = h_bc = h_cc = 0.0
+								for i in range(n):
+									fval = a * x1[i] + b * x2[i] + c
+									if fval >= 0:
+										p = 1.0 / (1.0 + math.exp(-fval))
+									else:
+										ef = math.exp(fval)
+										p = ef / (1.0 + ef)
+									p = max(1e-15, min(1 - 1e-15, p))
+									t = t_pos if labels[i] == 1 else t_neg
+									d = p - t
+									g_a += d * x1[i]; g_b += d * x2[i]; g_c += d
+									w = p * (1 - p)
+									h_aa += w * x1[i]**2; h_ab += w * x1[i] * x2[i]; h_ac += w * x1[i]
+									h_bb += w * x2[i]**2; h_bc += w * x2[i]; h_cc += w
+
+								# 3x3 Newton step (solve H * delta = -g)
+								h_aa += 1e-6; h_bb += 1e-6; h_cc += 1e-6
+								# Use simple iteration instead of full 3x3 inverse
+								a -= 0.1 * g_a / h_aa
+								b -= 0.1 * g_b / h_bb
+								c -= 0.1 * g_c / h_cc
+								if abs(g_a / max(h_aa, 1e-10)) < 1e-6 and abs(g_b / max(h_bb, 1e-10)) < 1e-6:
+									break
+
+							# Find threshold: a*ln(s) + b*(-ln(1-s)) + c = 0
+							# Binary search for the score where this equals 0
+							lo, hi = 0.001, 0.999
+							for _ in range(100):
+								mid = (lo + hi) / 2
+								val = a * math.log(mid) + b * (-math.log(1 - mid)) + c
+								if val < 0:
+									lo = mid
+								else:
+									hi = mid
+							beta_threshold = (lo + hi) / 2
+
+							beta_results = val_evaluator.evaluate_batch_full(
+								[genome], override_threshold=beta_threshold,
+							)
+							br = beta_results[0]
+							threshold_metadata['beta'] = {
+								'f1': br.f1_macro, 'fpr': br.fpr, 'acc': br.accuracy,
+								'threshold': beta_threshold, 'a': a, 'b': b, 'c': c,
+							}
+							self.log(f"    Beta:        F1={br.f1_macro:.4%}, FPR={br.fpr:.4%}, Acc={br.accuracy:.4%}, t={beta_threshold:.4f} (a={a:.3f}, b={b:.3f}, c={c:.3f})")
+					except Exception as e:
+						self.log(f"    Beta:        skipped ({e})")
+
+					# 7. Empirical table: P(attack|score) computed per discrete score value
+					# Zero assumptions — uses WNN's discrete score nature directly
+					try:
+						if holdout_scores and holdout_labels_list:
+							scores = holdout_scores
+							labels = holdout_labels_list
+
+							# Build empirical P(attack|score) table from holdout
+							from collections import defaultdict
+							score_counts = defaultdict(lambda: [0, 0])  # score → [n_normal, n_attack]
+							for s, l in zip(scores, labels):
+								score_counts[round(s, 6)][l] += 1
+
+							# Find threshold: highest score where P(attack) < 0.5
+							sorted_scores = sorted(score_counts.keys())
+							empirical_threshold = 0.5
+							for s in sorted_scores:
+								counts = score_counts[s]
+								total = counts[0] + counts[1]
+								if total > 0:
+									p_attack = counts[1] / total
+									if p_attack >= 0.5:
+										empirical_threshold = s
+										break
+
+							emp_results = val_evaluator.evaluate_batch_full(
+								[genome], override_threshold=empirical_threshold,
+							)
+							er = emp_results[0]
+							n_bins = len(sorted_scores)
+							threshold_metadata['empirical'] = {
+								'f1': er.f1_macro, 'fpr': er.fpr, 'acc': er.accuracy,
+								'threshold': empirical_threshold, 'n_bins': n_bins,
+							}
+							self.log(f"    Empirical:   F1={er.f1_macro:.4%}, FPR={er.fpr:.4%}, Acc={er.accuracy:.4%}, t={empirical_threshold:.4f} ({n_bins} bins)")
+					except Exception as e:
+						self.log(f"    Empirical:   skipped ({e})")
+
 					# Use test-calibrated as primary metric (most honest)
 					f1 = tcr.f1_macro
 					fpr_val = tcr.fpr

@@ -1011,6 +1011,8 @@
                   {#each [
                     { key: 'test_cal', label: '┣ Holdout', cls: 'threshold-holdout-row' },
                     { key: 'platt', label: '┣ Platt', cls: 'threshold-platt-row' },
+                    { key: 'beta', label: '┣ Beta', cls: 'threshold-beta-row' },
+                    { key: 'empirical', label: '┣ Empirical', cls: 'threshold-empirical-row' },
                     { key: 'train_cal', label: '┣ Train-cal', cls: 'threshold-train-row' },
                     { key: 'fixed_05', label: '┣ Fixed 0.5', cls: 'threshold-fixed-row' },
                     { key: 'val_cal', label: '┗ Oracle', cls: 'threshold-oracle-row' },
@@ -2944,9 +2946,19 @@
     color: #16a34a !important;
   }
 
-  /* Platt scaling — cyan/teal (calibrated, production-ready) */
+  /* Platt scaling — cyan/teal */
   .threshold-platt-row td {
     color: #06b6d4 !important;
+  }
+
+  /* Beta calibration — purple (parametric, 3 params) */
+  .threshold-beta-row td {
+    color: #a855f7 !important;
+  }
+
+  /* Empirical table — bright green (zero assumptions, data-driven) */
+  .threshold-empirical-row td {
+    color: #22c55e !important;
     font-weight: 500;
   }
 
