@@ -1598,20 +1598,27 @@ pub mod queries {
     }
 
     /// Check if a genome has already been validated (by genome_hash)
-    /// Returns the cached CE and accuracy if found
+    /// Returns the cached CE, accuracy, f1_macro, fpr, and threshold_metadata if found
     pub async fn get_cached_validation(
         pool: &DbPool,
         genome_hash: &str,
-    ) -> Result<Option<(f64, f64, Option<f64>, Option<f64>)>> {
+    ) -> Result<Option<(f64, f64, Option<f64>, Option<f64>, Option<serde_json::Value>)>> {
         let row = sqlx::query(
-            r#"SELECT ce, accuracy, f1_macro, fpr FROM validation_summaries WHERE genome_hash = ? LIMIT 1"#,
+            r#"SELECT ce, accuracy, f1_macro, fpr, threshold_metadata
+               FROM validation_summaries WHERE genome_hash = ?
+               ORDER BY threshold_metadata IS NOT NULL DESC
+               LIMIT 1"#,
         )
         .bind(genome_hash)
         .fetch_optional(pool)
         .await?;
 
         match row {
-            Some(r) => Ok(Some((r.get("ce"), r.get("accuracy"), r.get("f1_macro"), r.get("fpr")))),
+            Some(r) => {
+                let tm_str: Option<String> = r.get("threshold_metadata");
+                let tm = tm_str.and_then(|s| serde_json::from_str(&s).ok());
+                Ok(Some((r.get("ce"), r.get("accuracy"), r.get("f1_macro"), r.get("fpr"), tm)))
+            },
             None => Ok(None),
         }
     }

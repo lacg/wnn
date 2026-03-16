@@ -1007,30 +1007,38 @@
                     <td class="mono best-fit-col">{bestFitSummary ? (bestFitSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
                   {/if}
                 </tr>
-                {#if isIDS && (bestFitSummary?.threshold_metadata || bestCeSummary?.threshold_metadata || bestAccSummary?.threshold_metadata)}
-                  {@const fitTm = bestFitSummary?.threshold_metadata || bestCeSummary?.threshold_metadata || bestAccSummary?.threshold_metadata}
+                {#if isIDS && (bestCeSummary?.threshold_metadata || bestAccSummary?.threshold_metadata || bestFitSummary?.threshold_metadata)}
                   <tr class="threshold-detail-row">
                     <td class="phase-name threshold-label">Thresholds</td>
-                    <td colspan="9" class="threshold-detail-cell">
-                      {#if fitTm}
-                        <span class="threshold-item" title="Train-calibrated: threshold from 175K training scores">
-                          Train: F1={( fitTm.train_cal.f1 * 100).toFixed(1)}% FPR={( fitTm.train_cal.fpr * 100).toFixed(1)}%
+                    <td colspan="3" class="threshold-detail-cell best-ce-col">
+                      {#if bestCeSummary?.threshold_metadata}
+                        <span class="threshold-compact" title="Train: F1={( bestCeSummary.threshold_metadata.train_cal.f1 * 100).toFixed(1)}% FPR={( bestCeSummary.threshold_metadata.train_cal.fpr * 100).toFixed(1)}%&#10;Fixed: F1={( bestCeSummary.threshold_metadata.fixed_05.f1 * 100).toFixed(1)}% FPR={( bestCeSummary.threshold_metadata.fixed_05.fpr * 100).toFixed(1)}%&#10;Holdout: F1={( bestCeSummary.threshold_metadata.test_cal.f1 * 100).toFixed(1)}% FPR={( bestCeSummary.threshold_metadata.test_cal.fpr * 100).toFixed(1)}%{bestCeSummary.threshold_metadata.val_cal ? `\nOracle: F1=${( bestCeSummary.threshold_metadata.val_cal.f1 * 100).toFixed(1)}% FPR=${( bestCeSummary.threshold_metadata.val_cal.fpr * 100).toFixed(1)}%` : ''}">
+                          T:{( bestCeSummary.threshold_metadata.train_cal.f1 * 100).toFixed(1)}%
+                          F:{( bestCeSummary.threshold_metadata.fixed_05.f1 * 100).toFixed(1)}%
+                          <strong>H:{( bestCeSummary.threshold_metadata.test_cal.f1 * 100).toFixed(1)}%</strong>
+                          {#if bestCeSummary.threshold_metadata.val_cal}O:{( bestCeSummary.threshold_metadata.val_cal.f1 * 100).toFixed(1)}%{/if}
                         </span>
-                        <span class="threshold-sep">|</span>
-                        <span class="threshold-item" title="Fixed 0.5: distribution-agnostic baseline">
-                          Fixed: F1={( fitTm.fixed_05.f1 * 100).toFixed(1)}% FPR={( fitTm.fixed_05.fpr * 100).toFixed(1)}%
+                      {:else}<span class="threshold-none">—</span>{/if}
+                    </td>
+                    <td colspan="3" class="threshold-detail-cell best-acc-col">
+                      {#if bestAccSummary?.threshold_metadata}
+                        <span class="threshold-compact" title="Train: F1={( bestAccSummary.threshold_metadata.train_cal.f1 * 100).toFixed(1)}% FPR={( bestAccSummary.threshold_metadata.train_cal.fpr * 100).toFixed(1)}%&#10;Fixed: F1={( bestAccSummary.threshold_metadata.fixed_05.f1 * 100).toFixed(1)}% FPR={( bestAccSummary.threshold_metadata.fixed_05.fpr * 100).toFixed(1)}%&#10;Holdout: F1={( bestAccSummary.threshold_metadata.test_cal.f1 * 100).toFixed(1)}% FPR={( bestAccSummary.threshold_metadata.test_cal.fpr * 100).toFixed(1)}%{bestAccSummary.threshold_metadata.val_cal ? `\nOracle: F1=${( bestAccSummary.threshold_metadata.val_cal.f1 * 100).toFixed(1)}% FPR=${( bestAccSummary.threshold_metadata.val_cal.fpr * 100).toFixed(1)}%` : ''}">
+                          T:{( bestAccSummary.threshold_metadata.train_cal.f1 * 100).toFixed(1)}%
+                          F:{( bestAccSummary.threshold_metadata.fixed_05.f1 * 100).toFixed(1)}%
+                          <strong>H:{( bestAccSummary.threshold_metadata.test_cal.f1 * 100).toFixed(1)}%</strong>
+                          {#if bestAccSummary.threshold_metadata.val_cal}O:{( bestAccSummary.threshold_metadata.val_cal.f1 * 100).toFixed(1)}%{/if}
                         </span>
-                        <span class="threshold-sep">|</span>
-                        <span class="threshold-item threshold-primary" title="Test-calibrated: threshold from 43K holdout applied to 82K test (primary)">
-                          Holdout: F1={( fitTm.test_cal.f1 * 100).toFixed(1)}% FPR={( fitTm.test_cal.fpr * 100).toFixed(1)}%
+                      {:else}<span class="threshold-none">—</span>{/if}
+                    </td>
+                    <td colspan="3" class="threshold-detail-cell best-fit-col">
+                      {#if bestFitSummary?.threshold_metadata}
+                        <span class="threshold-compact" title="Train: F1={( bestFitSummary.threshold_metadata.train_cal.f1 * 100).toFixed(1)}% FPR={( bestFitSummary.threshold_metadata.train_cal.fpr * 100).toFixed(1)}%&#10;Fixed: F1={( bestFitSummary.threshold_metadata.fixed_05.f1 * 100).toFixed(1)}% FPR={( bestFitSummary.threshold_metadata.fixed_05.fpr * 100).toFixed(1)}%&#10;Holdout: F1={( bestFitSummary.threshold_metadata.test_cal.f1 * 100).toFixed(1)}% FPR={( bestFitSummary.threshold_metadata.test_cal.fpr * 100).toFixed(1)}%{bestFitSummary.threshold_metadata.val_cal ? `\nOracle: F1=${( bestFitSummary.threshold_metadata.val_cal.f1 * 100).toFixed(1)}% FPR=${( bestFitSummary.threshold_metadata.val_cal.fpr * 100).toFixed(1)}%` : ''}">
+                          T:{( bestFitSummary.threshold_metadata.train_cal.f1 * 100).toFixed(1)}%
+                          F:{( bestFitSummary.threshold_metadata.fixed_05.f1 * 100).toFixed(1)}%
+                          <strong>H:{( bestFitSummary.threshold_metadata.test_cal.f1 * 100).toFixed(1)}%</strong>
+                          {#if bestFitSummary.threshold_metadata.val_cal}O:{( bestFitSummary.threshold_metadata.val_cal.f1 * 100).toFixed(1)}%{/if}
                         </span>
-                        {#if fitTm.val_cal}
-                          <span class="threshold-sep">|</span>
-                          <span class="threshold-item threshold-oracle" title="Validation-calibrated (oracle): optimal threshold on 82K test — upper bound for live threshold tuning">
-                            Oracle: F1={( fitTm.val_cal.f1 * 100).toFixed(1)}% FPR={( fitTm.val_cal.fpr * 100).toFixed(1)}%
-                          </span>
-                        {/if}
-                      {/if}
+                      {:else}<span class="threshold-none">—</span>{/if}
                     </td>
                   </tr>
                 {/if}
@@ -2932,27 +2940,22 @@
   }
 
   .threshold-detail-cell {
-    text-align: left !important;
+    text-align: center !important;
     font-size: 1rem;
     color: var(--text-dim);
   }
 
-  .threshold-item {
+  .threshold-compact {
     white-space: nowrap;
+    font-size: 1rem;
+    cursor: help;
   }
 
-  .threshold-primary {
+  .threshold-compact strong {
     color: var(--accent-blue);
-    font-weight: 500;
   }
 
-  .threshold-oracle {
-    color: var(--accent-yellow);
-    font-style: italic;
-  }
-
-  .threshold-sep {
-    margin: 0 0.5rem;
-    color: var(--glass-border);
+  .threshold-none {
+    color: var(--text-dim);
   }
 </style>

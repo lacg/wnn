@@ -932,12 +932,14 @@ class Experiment:
 				# Initialize IDS metrics
 				f1 = None
 				fpr_val = None
+				cached_threshold_metadata = None
 				if cached is not None:
 					result = cached
 					ce, acc = result[0], result[1]
 					# Extract cached IDS metrics (f1_macro, fpr) if available
 					f1 = result[2] if len(result) > 2 else None
 					fpr_val = result[3] if len(result) > 3 else None
+					cached_threshold_metadata = result[4] if len(result) > 4 else None
 					if f1 is not None:
 						self.log(f"  {genome_type}: CE={ce:.4f}, Acc={acc:.4%}, F1={f1:.4%}, FPR={fpr_val:.4%} (cached)")
 					else:
@@ -962,9 +964,14 @@ class Experiment:
 				val_evaluator = self.full_evaluator or self.evaluator
 				is_single_cluster = (
 					hasattr(val_evaluator, '_single_cluster') and val_evaluator._single_cluster
-				) if cached is None else False
+				)
 
-				if is_single_cluster and f1 is not None:
+				# Use cached threshold_metadata if available (avoids re-running expensive 4-threshold eval)
+				if cached_threshold_metadata is not None and is_single_cluster:
+					threshold_metadata = cached_threshold_metadata
+					self.log(f"    Thresholds: (cached from prior validation)")
+
+				elif is_single_cluster and f1 is not None and cached is None:
 					threshold_metadata = {}
 					train_threshold = genome.threshold  # from train-calibrated run above
 
