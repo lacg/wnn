@@ -1098,20 +1098,9 @@ class Experiment:
 					except Exception as e:
 						self.log(f"    Platt:       skipped ({e})")
 
-					# Primary metric selection: Platt if reasonable, else holdout
-					platt_data = threshold_metadata.get('platt')
-					if platt_data and platt_data['f1'] > 0.3 and platt_data.get('a', 0) > 0:
-						# Platt succeeded and gives reasonable F1 (>30%) with positive slope
-						f1 = platt_data['f1']
-						fpr_val = platt_data['fpr']
-						genome.threshold = platt_data['threshold']
-						self.log(f"    Primary:     Platt (F1={f1:.4%})")
-					else:
-						# Fall back to holdout-calibrated
-						f1 = tcr.f1_macro
-						fpr_val = tcr.fpr
-						genome.threshold = holdout_threshold
-						self.log(f"    Primary:     Holdout (F1={f1:.4%}) — Platt unreliable")
+					# Use test-calibrated as primary metric (most honest)
+					f1 = tcr.f1_macro
+					fpr_val = tcr.fpr
 
 				# Collect results keyed by genome_type
 				results[genome_type] = {'ce': ce, 'acc': acc, 'f1': f1, 'fpr': fpr_val}
