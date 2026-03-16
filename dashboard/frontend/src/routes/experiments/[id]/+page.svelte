@@ -1009,9 +1009,9 @@
                 </tr>
                 {#if isIDS && (bestCeSummary?.threshold_metadata || bestAccSummary?.threshold_metadata || bestFitSummary?.threshold_metadata)}
                   {#each [
-                    { key: 'train_cal', label: '┣ Train-cal', cls: '' },
-                    { key: 'fixed_05', label: '┣ Fixed 0.5', cls: '' },
-                    { key: 'test_cal', label: '┣ Holdout', cls: 'threshold-primary-row' },
+                    { key: 'test_cal', label: '┣ Holdout', cls: 'threshold-holdout-row' },
+                    { key: 'train_cal', label: '┣ Train-cal', cls: 'threshold-train-row' },
+                    { key: 'fixed_05', label: '┣ Fixed 0.5', cls: 'threshold-fixed-row' },
                     { key: 'val_cal', label: '┗ Oracle', cls: 'threshold-oracle-row' },
                   ] as mode}
                     {#if (bestCeSummary?.threshold_metadata?.[mode.key] || bestAccSummary?.threshold_metadata?.[mode.key] || bestFitSummary?.threshold_metadata?.[mode.key])}
@@ -2918,7 +2918,6 @@
   .threshold-sub-row td {
     padding: 0.2rem 0.75rem !important;
     border-bottom: none !important;
-    color: var(--text-dim);
     font-size: 1rem;
   }
 
@@ -2929,18 +2928,34 @@
   .threshold-mode-label {
     font-weight: 400 !important;
     font-size: 1rem;
-    color: var(--text-dim);
     white-space: nowrap;
     font-family: monospace;
   }
 
-  .threshold-primary-row td {
-    color: var(--accent-blue) !important;
+  /* Actual result row (main data) — dark green */
+  .validation-table tbody tr:not(.threshold-sub-row) td.mono {
+    color: #16a34a;
+  }
+
+  /* Holdout — below actual, also green but slightly lighter */
+  .threshold-holdout-row td {
+    color: #22c55e !important;
     font-weight: 500;
   }
 
-  .threshold-oracle-row td {
+  /* Train-cal — default dim */
+  .threshold-train-row td {
     color: var(--text-dim) !important;
+  }
+
+  /* Fixed 0.5 — orange */
+  .threshold-fixed-row td {
+    color: #f59e0b !important;
+  }
+
+  /* Oracle — orange/amber, italic */
+  .threshold-oracle-row td {
+    color: #f97316 !important;
     font-style: italic;
   }
 </style>
