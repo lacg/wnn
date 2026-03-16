@@ -2702,7 +2702,7 @@ pub mod queries {
                WHERE (? IS NULL OR bg.task_type = ?)
                  AND (? IS NULL OR bg.stage = ?)
                  AND (? IS NULL OR bg.metric = ?)
-               ORDER BY bg.rank ASC NULLS LAST, bg.ce ASC
+               ORDER BY bg.rank ASC NULLS LAST, bg.f1_macro DESC NULLS LAST, bg.ce ASC
                LIMIT ? OFFSET ?"#,
         )
         .bind(task_type).bind(task_type)

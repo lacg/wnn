@@ -360,7 +360,7 @@
   // Phase spec interface
   interface PhaseSpec {
     name: string;
-    experiment_type: 'ga' | 'ts' | 'neurogenesis' | 'synaptogenesis' | 'axonogenesis';
+    experiment_type: 'ga' | 'ts' | 'grid_search' | 'neurogenesis' | 'synaptogenesis' | 'axonogenesis';
     optimize_bits: boolean;
     optimize_neurons: boolean;
     optimize_connections: boolean;
@@ -377,7 +377,7 @@
   /** Generate the 10-phase pipeline for a single stage. */
   function generate10PhaseForStage(prefix: string): PhaseSpec[] {
     return [
-      { name: `${prefix}: Grid Search`, experiment_type: 'ga', optimize_bits: true, optimize_neurons: true, optimize_connections: false, phase_type: 'grid_search' },
+      { name: `${prefix}: Grid Search`, experiment_type: 'grid_search', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'grid_search' },
       { name: `${prefix}: GA Neurons`, experiment_type: 'ga', optimize_bits: false, optimize_neurons: true, optimize_connections: false },
       { name: `${prefix}: Neurogenesis`, experiment_type: 'neurogenesis', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'neurogenesis' },
       { name: `${prefix}: TS Neurons`, experiment_type: 'ts', optimize_bits: false, optimize_neurons: true, optimize_connections: false },
@@ -393,7 +393,7 @@
   /** Generate the 2-phase fast pipeline for a single stage. */
   function generate2PhaseForStage(prefix: string): PhaseSpec[] {
     return [
-      { name: `${prefix}: Grid Search`, experiment_type: 'ga', optimize_bits: true, optimize_neurons: true, optimize_connections: false, phase_type: 'grid_search' },
+      { name: `${prefix}: Grid Search`, experiment_type: 'grid_search', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'grid_search' },
       { name: `${prefix}: GA Neurons`, experiment_type: 'ga', optimize_bits: false, optimize_neurons: true, optimize_connections: false },
     ];
   }
@@ -420,7 +420,7 @@
     ];
 
     if (templateName === 'bitwise-10-phase') {
-      const grid: PhaseSpec = { name: 'Grid Search (neurons × bits)', experiment_type: 'ga', optimize_bits: true, optimize_neurons: true, optimize_connections: false, phase_type: 'grid_search' };
+      const grid: PhaseSpec = { name: 'Grid Search (neurons × bits)', experiment_type: 'grid_search', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'grid_search' };
       const neurogenesisPhase: PhaseSpec = { name: 'Neurogenesis', experiment_type: 'neurogenesis', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'neurogenesis' };
       const synaptogenesisPhase: PhaseSpec = { name: 'Synaptogenesis', experiment_type: 'synaptogenesis', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'synaptogenesis' };
       const axonogenesisPhase: PhaseSpec = { name: 'Axonogenesis', experiment_type: 'axonogenesis', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'axonogenesis' };
@@ -433,18 +433,18 @@
     }
 
     if (templateName === 'bitwise-7-phase') {
-      const grid: PhaseSpec = { name: 'Grid Search (neurons × bits)', experiment_type: 'ga', optimize_bits: true, optimize_neurons: true, optimize_connections: false, phase_type: 'grid_search' };
+      const grid: PhaseSpec = { name: 'Grid Search (neurons × bits)', experiment_type: 'grid_search', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'grid_search' };
       if (order === 'bits_first') return [grid, ...bitsPhases, ...neuronsPhases, ...connectionsPhases];
       return [grid, ...neuronsPhases, ...bitsPhases, ...connectionsPhases];
     }
 
     if (templateName === 'ids-binary-7-phase' || templateName === 'ids-multi-7-phase') {
-      const grid: PhaseSpec = { name: 'Grid Search (neurons × bits)', experiment_type: 'ga', optimize_bits: true, optimize_neurons: true, optimize_connections: false, phase_type: 'grid_search' };
+      const grid: PhaseSpec = { name: 'Grid Search (neurons × bits)', experiment_type: 'grid_search', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'grid_search' };
       return [grid, ...neuronsPhases, ...bitsPhases, ...connectionsPhases];
     }
 
     if (templateName === 'ids-binary-10-phase' || templateName === 'ids-multi-10-phase') {
-      const grid: PhaseSpec = { name: 'Grid Search (neurons × bits)', experiment_type: 'ga', optimize_bits: true, optimize_neurons: true, optimize_connections: false, phase_type: 'grid_search' };
+      const grid: PhaseSpec = { name: 'Grid Search (neurons × bits)', experiment_type: 'grid_search', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'grid_search' };
       const neurogenesisPhase: PhaseSpec = { name: 'Neurogenesis', experiment_type: 'neurogenesis', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'neurogenesis' };
       const synaptogenesisPhase: PhaseSpec = { name: 'Synaptogenesis', experiment_type: 'synaptogenesis', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'synaptogenesis' };
       const axonogenesisPhase: PhaseSpec = { name: 'Axonogenesis', experiment_type: 'axonogenesis', optimize_bits: false, optimize_neurons: false, optimize_connections: false, phase_type: 'axonogenesis' };
