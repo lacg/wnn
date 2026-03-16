@@ -1210,6 +1210,7 @@ class Experiment:
 					# Use test-calibrated as primary metric (most honest)
 					f1 = tcr.f1_macro
 					fpr_val = tcr.fpr
+					acc = tcr.accuracy
 
 				# Collect results keyed by genome_type
 				results[genome_type] = {'ce': ce, 'acc': acc, 'f1': f1, 'fpr': fpr_val}
