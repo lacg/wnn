@@ -547,6 +547,42 @@ pub fn predict_examples_ids_cached(
     )
 }
 
+/// Train a single genome on full training data and return per-example RAW SCORES.
+///
+/// Returns Vec<f64> of raw scores (not thresholded) for each eval example.
+/// Used for Platt scaling calibration.
+pub fn score_examples_ids_cached(
+    cache: &IDSCache,
+    bits_flat: &[usize],
+    neurons_flat: &[usize],
+    connections_flat: &[i64],
+    empty_value: f32,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+) -> Vec<f64> {
+    let train = cache.full_train();
+    let eval = cache.full_eval();
+
+    crate::adaptive::train_and_score_single(
+        bits_flat,
+        neurons_flat,
+        connections_flat,
+        cache.num_genome_clusters(),
+        &train.input_bits,
+        &train.targets,
+        &train.negatives,
+        train.num_examples,
+        cache.num_negatives(),
+        &eval.input_bits,
+        eval.num_examples,
+        cache.total_features(),
+        empty_value,
+        neuron_sample_rate,
+        rng_seed,
+        cache.class_weights.as_deref(),
+    )
+}
+
 /// Evaluate genomes with training-time adaptation (synaptogenesis + neurogenesis).
 ///
 /// Returns adapted genome parameters alongside scores, enabling the Baldwin effect:

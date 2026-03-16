@@ -1015,6 +1015,89 @@ class Experiment:
 					}
 					self.log(f"    Val-cal:     F1={or_.f1_macro:.4%}, FPR={or_.fpr:.4%}, Acc={or_.accuracy:.4%}, t={oracle_threshold:.4f} (oracle)")
 
+					# 5. Platt scaling: fit sigmoid calibration on holdout scores, apply to test
+					# Learns P(attack) = sigmoid(a*score + b) from holdout data,
+					# absorbing distribution shift + class imbalance between train/test
+					try:
+						# score_examples trains on 131K, returns raw scores for 43K holdout
+						holdout_scores = self.evaluator.score_examples(genome)
+						# _y_test holds the eval labels (43K holdout for self.evaluator)
+						holdout_labels_list = self.evaluator._y_test
+
+						if holdout_scores and holdout_labels_list and len(holdout_scores) == len(holdout_labels_list):
+							import math
+
+							# Fit Platt scaling: minimize NLL for sigmoid(a*score + b) vs labels
+							scores = holdout_scores
+							labels = holdout_labels_list
+							n = len(scores)
+							n_pos = sum(1 for l in labels if l == 1)
+							n_neg = n - n_pos
+
+							# Initialize with reasonable values
+							a = 1.0
+							b = 0.0
+
+							# Newton's method (Platt's algorithm)
+							# Target: t_i = (N+ + 1) / (N+ + 2) for positives, 1/(N- + 2) for negatives
+							t_pos = (n_pos + 1) / (n_pos + 2)
+							t_neg = 1.0 / (n_neg + 2)
+
+							for _ in range(100):  # Newton iterations
+								g_a = 0.0  # gradient w.r.t. a
+								g_b = 0.0  # gradient w.r.t. b
+								h_aa = 0.0  # Hessian
+								h_ab = 0.0
+								h_bb = 0.0
+
+								for i in range(n):
+									fval = a * scores[i] + b
+									# Numerically stable sigmoid
+									if fval >= 0:
+										p = 1.0 / (1.0 + math.exp(-fval))
+									else:
+										ef = math.exp(fval)
+										p = ef / (1.0 + ef)
+									p = max(1e-15, min(1 - 1e-15, p))
+
+									t = t_pos if labels[i] == 1 else t_neg
+									d = p - t
+									g_a += d * scores[i]
+									g_b += d
+									w = p * (1 - p)
+									h_aa += w * scores[i] * scores[i]
+									h_ab += w * scores[i]
+									h_bb += w
+
+								# Regularize Hessian
+								h_aa += 1e-6
+								h_bb += 1e-6
+								det = h_aa * h_bb - h_ab * h_ab
+								if abs(det) < 1e-12:
+									break
+								da = -(h_bb * g_a - h_ab * g_b) / det
+								db = -(h_aa * g_b - h_ab * g_a) / det
+								a += da
+								b += db
+								if abs(da) < 1e-8 and abs(db) < 1e-8:
+									break
+
+							# Apply Platt threshold to test: sigmoid(a*score + b) > 0.5
+							# This is equivalent to: score > -b/a (when a > 0)
+							platt_threshold = -b / a if abs(a) > 1e-10 else 0.5
+
+							platt_results = val_evaluator.evaluate_batch_full(
+								[genome], override_threshold=platt_threshold,
+							)
+							pr = platt_results[0]
+							threshold_metadata['platt'] = {
+								'f1': pr.f1_macro, 'fpr': pr.fpr, 'acc': pr.accuracy,
+								'threshold': platt_threshold, 'a': a, 'b': b,
+							}
+							self.log(f"    Platt:       F1={pr.f1_macro:.4%}, FPR={pr.fpr:.4%}, Acc={pr.accuracy:.4%}, t={platt_threshold:.4f} (a={a:.4f}, b={b:.4f})")
+					except Exception as e:
+						self.log(f"    Platt:       skipped ({e})")
+
 					# Use test-calibrated as primary metric (most honest)
 					f1 = tcr.f1_macro
 					fpr_val = tcr.fpr

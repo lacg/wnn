@@ -1010,6 +1010,7 @@
                 {#if isIDS && (bestCeSummary?.threshold_metadata || bestAccSummary?.threshold_metadata || bestFitSummary?.threshold_metadata)}
                   {#each [
                     { key: 'test_cal', label: '┣ Holdout', cls: 'threshold-holdout-row' },
+                    { key: 'platt', label: '┣ Platt', cls: 'threshold-platt-row' },
                     { key: 'train_cal', label: '┣ Train-cal', cls: 'threshold-train-row' },
                     { key: 'fixed_05', label: '┣ Fixed 0.5', cls: 'threshold-fixed-row' },
                     { key: 'val_cal', label: '┗ Oracle', cls: 'threshold-oracle-row' },
@@ -2941,6 +2942,12 @@
   /* Holdout — dark green */
   .threshold-holdout-row td {
     color: #16a34a !important;
+  }
+
+  /* Platt scaling — cyan/teal (calibrated, production-ready) */
+  .threshold-platt-row td {
+    color: #06b6d4 !important;
+    font-weight: 500;
   }
 
   /* Train-cal — default dim */

@@ -3161,6 +3161,96 @@ pub fn train_and_predict_single(
     )
 }
 
+/// Train a single genome and return per-example RAW SCORES on eval set.
+///
+/// Like `train_and_predict_single` but returns `Vec<f64>` scores instead of
+/// thresholded class predictions. Used for Platt scaling calibration.
+#[allow(clippy::too_many_arguments)]
+pub fn train_and_score_single(
+    genomes_bits_flat: &[usize],
+    genomes_neurons_flat: &[usize],
+    genomes_connections_flat: &[i64],
+    num_clusters: usize,
+    train_input_bits: &[bool],
+    train_targets: &[i64],
+    train_negatives: &[i64],
+    num_train: usize,
+    num_negatives: usize,
+    eval_input_bits: &[bool],
+    num_eval: usize,
+    total_input_bits: usize,
+    empty_value: f32,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+    class_weights: Option<&[u32]>,
+) -> Vec<f64> {
+    let memory_mode = crate::neuron_memory::get_memory_mode();
+
+    let neurons_per_cluster = genomes_neurons_flat;
+    let per_neuron_bits = genomes_bits_flat;
+    let bits_per_cluster = per_cluster_max_bits(per_neuron_bits, neurons_per_cluster);
+
+    let (cluster_neuron_starts, neuron_conn_offsets) =
+        build_neuron_metadata(per_neuron_bits, neurons_per_cluster);
+    let groups = build_groups(&bits_per_cluster, neurons_per_cluster);
+
+    let mut cluster_to_group: Vec<(usize, usize)> = vec![(0, 0); num_clusters];
+    for (group_idx, group) in groups.iter().enumerate() {
+        for (local_idx, &cluster_id) in group.cluster_ids.iter().enumerate() {
+            cluster_to_group[cluster_id] = (group_idx, local_idx);
+        }
+    }
+
+    let memories: Vec<GroupMemory> = groups.iter()
+        .map(|g| GroupMemory::new(g.total_neurons(), g.bits, memory_mode))
+        .collect();
+
+    let original_connections = genomes_connections_flat.to_vec();
+
+    let (packed_train_input, words_per_example) =
+        crate::neuron_memory::pack_bools_to_u64(train_input_bits, num_train, total_input_bits);
+
+    let gpu_addresses = try_gpu_addresses_adaptive(
+        &packed_train_input, words_per_example,
+        per_neuron_bits, &neuron_conn_offsets,
+        &original_connections, num_train,
+    );
+
+    // Train
+    train_genome_in_slot(
+        &memories, &groups, &original_connections,
+        per_neuron_bits, &cluster_neuron_starts, &neuron_conn_offsets,
+        &cluster_to_group,
+        train_input_bits, train_targets, train_negatives,
+        num_train, num_negatives, total_input_bits,
+        gpu_addresses.as_deref(),
+        neuron_sample_rate, rng_seed, memory_mode, class_weights,
+        true,
+    );
+
+    // Export and compute raw scores
+    let gpu_connections = reorganize_connections_for_gpu(
+        &original_connections, per_neuron_bits, neurons_per_cluster, &groups,
+    );
+    let export = export_genome_for_gpu(&memories, &groups, &gpu_connections);
+
+    let metal = get_metal_evaluator();
+    let sparse_metal = get_sparse_metal_evaluator();
+
+    let (packed_eval, eval_words) = crate::neuron_memory::pack_bools_to_u64(
+        eval_input_bits, num_eval, total_input_bits
+    );
+
+    let all_scores = compute_per_example_scores(
+        &export, eval_input_bits, &packed_eval, eval_words,
+        num_eval, num_clusters, total_input_bits, empty_value,
+        memory_mode, metal.as_deref(), sparse_metal.as_deref(),
+    );
+
+    // Return raw score for cluster 0 (single-cluster mode)
+    all_scores.iter().map(|scores| scores[0]).collect()
+}
+
 /// Evaluate genomes in PARALLEL with CPU+GPU HYBRID evaluation and PIPELINING.
 ///
 /// Strategy:
