@@ -281,7 +281,7 @@ def load_unsw_nb15(
 
 	Feature selection modes:
 	- "all": All features at uniform n_bits (~321 bits at 8b)
-	- "top20": Top-20 RF features only, all at 16 bits (~308 bits)
+	- "top20": Top-20 RF features only, all at n_bits (e.g. 8b→~148, 16b→~288)
 	- "top20_split": All features, top-20 at 16 bits + rest at rest_bits (~varies)
 
 	Args:
@@ -361,18 +361,18 @@ def load_unsw_nb15(
 			  f"({method.value}, {n_bits} bits/feature, feature_selection=all)")
 
 	elif feature_selection == "top20":
-		# Top-20 RF features only, all at 16 bits
+		# Top-20 RF features only, all at n_bits
 		top20 = [f for f in TOP20_RF_FEATURES if f in common_features]
 		if len(top20) < len(TOP20_RF_FEATURES):
 			missing = set(TOP20_RF_FEATURES) - set(common_features)
 			print(f"  WARNING: {len(missing)} top-20 features not in dataset: {missing}")
-		encoder = ThermometerEncoder(n_bits=16, method=method)
+		encoder = ThermometerEncoder(n_bits=n_bits, method=method)
 		encoder.fit(df_train[top20])
 		X_train = encoder.transform(df_train[top20])
 		X_test = encoder.transform(df_test[top20])
 		used_features = top20
 		print(f"  Encoder: {encoder.total_bits} total bits "
-			  f"({method.value}, 16 bits/feature, feature_selection=top20, {len(top20)} features)")
+			  f"({method.value}, {n_bits} bits/feature, feature_selection=top20, {len(top20)} features)")
 
 	elif feature_selection == "top20_split":
 		# All features: top-20 at 16 bits, rest at rest_bits
