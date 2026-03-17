@@ -21,7 +21,7 @@
 
   async function loadFlows() {
     try {
-      const response = await fetch('/api/flows');
+      const response = await fetch('/api/flows?limit=500');
       if (!response.ok) throw new Error('Failed to fetch flows');
       const data = await response.json();
       flows.set(data);
