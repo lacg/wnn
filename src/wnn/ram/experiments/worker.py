@@ -819,9 +819,10 @@ class FlowWorker:
         neuron_sample_rate = params.get("neuron_sample_rate", 0.25)
         balance_classes = params.get("balance_classes", False)
         single_cluster = params.get("ids_single_cluster", False)
+        feature_selection = params.get("ids_feature_selection", "all")
 
-        self._log(f"Loading UNSW-NB15 dataset (classification={classification}, split={split})...")
-        full_dataset = load_unsw_nb15(n_bits=n_bits, split=split)
+        self._log(f"Loading UNSW-NB15 dataset (classification={classification}, split={split}, feature_selection={feature_selection})...")
+        full_dataset = load_unsw_nb15(n_bits=n_bits, split=split, feature_selection=feature_selection)
 
         if classification == "hierarchical":
             return self._create_hierarchical_ids_evaluators(

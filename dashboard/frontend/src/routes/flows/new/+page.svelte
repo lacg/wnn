@@ -25,6 +25,7 @@
   let idsKFolds = 5;
   let idsFitnessWeightF1 = 0.0;
   let idsSplit = 'standard';
+  let idsFeatureSelection = 'all';
   let idsMinBits = 4;
   let idsMaxBits = 16;
   let idsMinNeurons = 5;
@@ -299,6 +300,7 @@
       idsKFolds = 5;
       idsFitnessWeightF1 = 0.0;
       idsSplit = 'standard';
+      idsFeatureSelection = 'all';
     } else if (templateName === 'ids-binary-7-phase') {
       gaGenerations = 250;
       tsIterations = 250;
@@ -315,6 +317,7 @@
       idsKFolds = 5;
       idsFitnessWeightF1 = 0.0;
       idsSplit = 'standard';
+      idsFeatureSelection = 'all';
     } else if (templateName === 'ids-multi-7-phase') {
       gaGenerations = 250;
       tsIterations = 250;
@@ -331,6 +334,7 @@
       idsKFolds = 5;
       idsFitnessWeightF1 = 0.0;
       idsSplit = 'standard';
+      idsFeatureSelection = 'all';
     } else if (templateName === 'ids-binary-10-phase') {
       gaGenerations = 250;
       tsIterations = 250;
@@ -348,6 +352,7 @@
       idsKFolds = 5;
       idsFitnessWeightF1 = 0.0;
       idsSplit = 'standard';
+      idsFeatureSelection = 'all';
     } else if (templateName === 'ids-multi-10-phase') {
       gaGenerations = 250;
       tsIterations = 250;
@@ -365,6 +370,7 @@
       idsKFolds = 5;
       idsFitnessWeightF1 = 0.0;
       idsSplit = 'standard';
+      idsFeatureSelection = 'all';
     }
   }
 
@@ -745,6 +751,7 @@
         params.ids_k_folds = idsKFolds;
         params.ids_fitness_weight_f1 = idsFitnessWeightF1;
         params.ids_split = idsSplit;
+        params.ids_feature_selection = idsFeatureSelection;
         params.min_bits = idsMinBits;
         params.max_bits = idsMaxBits;
         params.min_neurons = idsMinNeurons;
@@ -1299,6 +1306,22 @@
                     <option value="random">Random (stratified)</option>
                   </select>
                   <span class="field-hint">Standard = original train/test split</span>
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="idsFeatureSelection">Feature Selection</label>
+                  <select id="idsFeatureSelection" bind:value={idsFeatureSelection}>
+                    <option value="all">All features (uniform)</option>
+                    <option value="top20">Top-20 RF features only</option>
+                    <option value="top20_split">Top-20 high-res + rest standard</option>
+                  </select>
+                  <span class="field-hint">
+                    {#if idsFeatureSelection === 'all'}All 42 features at {idsNBits}b each
+                    {:else if idsFeatureSelection === 'top20'}20 features at 16b each (~308 bits)
+                    {:else}Top-20 at 16b + rest at {idsNBits}b (~472 bits)
+                    {/if}
+                  </span>
                 </div>
               </div>
               <div class="form-row">

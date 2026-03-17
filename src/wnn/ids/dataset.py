@@ -187,6 +187,33 @@ def create_attack_only_dataset(dataset: IDSDataset) -> IDSDataset:
 	)
 
 
+# Top-20 features by Random Forest importance (captures ~87% of total importance).
+# Based on RF analysis of UNSW-NB15 standard split with 100 trees.
+TOP20_RF_FEATURES = [
+	"ct_dst_sport_ltm",
+	"ct_src_dport_ltm",
+	"ct_srv_dst",
+	"ct_state_ttl",
+	"dinpkt",
+	"dmean",
+	"dpkts",
+	"dttl",
+	"dur",
+	"sbytes",
+	"sinpkt",
+	"sjit",
+	"smean",
+	"spkts",
+	"sttl",
+	"swin",
+	"tcprtt",
+	"proto",
+	"service",
+	"state",
+]
+
+VALID_FEATURE_SELECTIONS = ("all", "top20", "top20_split")
+
 HF_DATASET_ID = "lacg030175/UNSW-NB15"
 
 
@@ -240,6 +267,7 @@ def load_unsw_nb15(
 	n_bits: int = 8,
 	method: ThermometerType = ThermometerType.DISTRIBUTIVE,
 	split: str = "standard",
+	feature_selection: str = "all",
 ) -> IDSDataset:
 	"""Load UNSW-NB15 with thermometer encoding.
 
@@ -250,17 +278,25 @@ def load_unsw_nb15(
 	- "standard": Original temporal train/test (175K/82K, ~87% RF baseline)
 	- "random": Deduped 90/10 random split (1.4M/158K, ~99.6% RF baseline)
 
+	Feature selection modes:
+	- "all": All features at uniform n_bits (~321 bits at 8b)
+	- "top20": Top-20 RF features only, all at 16 bits (~308 bits)
+	- "top20_split": All features, top-20 at 16 bits + rest at 8 bits (~472 bits)
+
 	Args:
 		data_dir: path to local data directory (fallback only). Auto-detected if None.
 		n_bits: bits per numeric feature for thermometer encoding.
 		method: thermometer encoding strategy.
 		split: "standard" or "random" evaluation protocol.
+		feature_selection: feature selection mode ("all", "top20", "top20_split").
 
 	Returns:
 		IDSDataset with binary-encoded features and labels.
 	"""
 	if split not in ("standard", "random"):
 		raise ValueError(f"split must be 'standard' or 'random', got '{split}'")
+	if feature_selection not in VALID_FEATURE_SELECTIONS:
+		raise ValueError(f"feature_selection must be one of {VALID_FEATURE_SELECTIONS}, got '{feature_selection}'")
 
 	# ── Load raw data ──────────────────────────────────────────────────
 	print(f"Loading UNSW-NB15 (split={split})...")
@@ -311,16 +347,59 @@ def load_unsw_nb15(
 	y_train_multi = encode_categories(df_train["attack_cat"])
 	y_test_multi = encode_categories(df_test["attack_cat"])
 
-	# ── Fit encoder on training data ───────────────────────────────────
-	encoder = ThermometerEncoder(n_bits=n_bits, method=method)
-	encoder.fit(df_train[common_features])
+	# ── Encode features based on feature_selection mode ───────────────
+	if feature_selection == "all":
+		# Default: all features at uniform n_bits
+		encoder = ThermometerEncoder(n_bits=n_bits, method=method)
+		encoder.fit(df_train[common_features])
+		X_train = encoder.transform(df_train[common_features])
+		X_test = encoder.transform(df_test[common_features])
+		used_features = common_features
+		print(f"  Encoder: {encoder.total_bits} total bits "
+			  f"({method.value}, {n_bits} bits/feature, feature_selection=all)")
 
-	print(f"  Encoder: {encoder.total_bits} total bits "
-		  f"({method.value}, {n_bits} bits/feature)")
+	elif feature_selection == "top20":
+		# Top-20 RF features only, all at 16 bits
+		top20 = [f for f in TOP20_RF_FEATURES if f in common_features]
+		if len(top20) < len(TOP20_RF_FEATURES):
+			missing = set(TOP20_RF_FEATURES) - set(common_features)
+			print(f"  WARNING: {len(missing)} top-20 features not in dataset: {missing}")
+		encoder = ThermometerEncoder(n_bits=16, method=method)
+		encoder.fit(df_train[top20])
+		X_train = encoder.transform(df_train[top20])
+		X_test = encoder.transform(df_test[top20])
+		used_features = top20
+		print(f"  Encoder: {encoder.total_bits} total bits "
+			  f"({method.value}, 16 bits/feature, feature_selection=top20, {len(top20)} features)")
 
-	# ── Transform ──────────────────────────────────────────────────────
-	X_train = encoder.transform(df_train[common_features])
-	X_test = encoder.transform(df_test[common_features])
+	elif feature_selection == "top20_split":
+		# All features: top-20 at 16 bits, rest at n_bits
+		top20 = [f for f in TOP20_RF_FEATURES if f in common_features]
+		rest = [f for f in common_features if f not in TOP20_RF_FEATURES]
+		if len(top20) < len(TOP20_RF_FEATURES):
+			missing = set(TOP20_RF_FEATURES) - set(common_features)
+			print(f"  WARNING: {len(missing)} top-20 features not in dataset: {missing}")
+
+		# Encode top-20 at 16 bits
+		enc_top = ThermometerEncoder(n_bits=16, method=method)
+		enc_top.fit(df_train[top20])
+		X_train_top = enc_top.transform(df_train[top20])
+		X_test_top = enc_top.transform(df_test[top20])
+
+		# Encode rest at n_bits
+		enc_rest = ThermometerEncoder(n_bits=n_bits, method=method)
+		enc_rest.fit(df_train[rest])
+		X_train_rest = enc_rest.transform(df_train[rest])
+		X_test_rest = enc_rest.transform(df_test[rest])
+
+		# Concatenate: top-20 first, then rest
+		X_train = np.hstack([X_train_top, X_train_rest])
+		X_test = np.hstack([X_test_top, X_test_rest])
+		encoder = enc_top  # Primary encoder (for metadata)
+		used_features = top20 + rest
+		total_bits = X_train.shape[1]
+		print(f"  Encoder: {total_bits} total bits "
+			  f"({method.value}, top-20@16b + {len(rest)} rest@{n_bits}b, feature_selection=top20_split)")
 
 	print(f"  X_train: {X_train.shape}, X_test: {X_test.shape}")
 	print(f"  Train: {(y_train_binary == 0).sum():,} normal, "
@@ -337,5 +416,5 @@ def load_unsw_nb15(
 		y_test_multi=y_test_multi,
 		encoder=encoder,
 		category_names=ATTACK_CATEGORIES,
-		feature_names=common_features,
+		feature_names=used_features,
 	)
