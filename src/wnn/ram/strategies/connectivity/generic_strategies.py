@@ -1406,10 +1406,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 				elite_accuracy = accuracy_values[elite_idx]
 				elite_f1 = f1_values[elite_idx]
 				elite_fpr = fpr_values[elite_idx]
-				if elite_f1 is not None:
-					new_population.append((elite_genome, elite_fitness, elite_accuracy, elite_f1, elite_fpr))
-				else:
-					new_population.append((elite_genome, elite_fitness, elite_accuracy))
+				new_population.append((elite_genome, elite_fitness, elite_accuracy, elite_f1, elite_fpr))
 
 				acc_str = f", Acc={elite_accuracy:.2%}" if elite_accuracy is not None else ""
 				self._log.debug(f"[Elite {i + 1:0{elite_width}d}/{total_elites}] CE={elite_fitness:.4f}{acc_str} (score={combined_scores[elite_idx]:.4f})")
@@ -1728,29 +1725,34 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		Returns:
 			Updated population with fitness and accuracy filled in
 		"""
-		unknown_indices = [i for i, t in enumerate(population) if t[1] is None]
+		# Re-evaluate items missing fitness OR missing f1/fpr (3-tuple legacy)
+		unknown_indices = [i for i, t in enumerate(population) if t[1] is None or len(t) <= 3]
 
 		if not unknown_indices:
-			return list(population)  # All cached
+			return list(population)  # All cached with f1/fpr
 
 		to_eval = [population[i][0] for i in unknown_indices]
 
-		# Batch evaluate - returns (CE, accuracy[, bit_acc]) tuples
+		# Batch evaluate - returns (CE, accuracy[, bit_acc]) tuples or EvalResult objects
 		if batch_fn is not None:
 			results = batch_fn(to_eval)
 			new_fitness = [r[0] for r in results]
 			new_accuracy = [r[1] for r in results]
+			new_f1 = [getattr(r, 'f1_macro', None) for r in results]
+			new_fpr = [getattr(r, 'fpr', None) for r in results]
 		else:
 			# Fallback to single evaluation (no accuracy)
 			new_fitness = [single_fn(g) for g in to_eval]
 			new_accuracy = [None] * len(to_eval)
+			new_f1 = [None] * len(to_eval)
+			new_fpr = [None] * len(to_eval)
 
 		# Note: Real-time per-genome logging happens in evaluate_batch (adaptive_cluster.py)
 		# with timing info. We don't duplicate logging here.
 
 		result = list(population)
-		for idx, fit, acc in zip(unknown_indices, new_fitness, new_accuracy):
-			result[idx] = (result[idx][0], fit, acc)
+		for idx, fit, acc, f1, fpr in zip(unknown_indices, new_fitness, new_accuracy, new_f1, new_fpr):
+			result[idx] = (result[idx][0], fit, acc, f1, fpr)
 
 		return result
 
