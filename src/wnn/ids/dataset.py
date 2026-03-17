@@ -268,6 +268,7 @@ def load_unsw_nb15(
 	method: ThermometerType = ThermometerType.DISTRIBUTIVE,
 	split: str = "standard",
 	feature_selection: str = "all",
+	rest_bits: int | None = None,
 ) -> IDSDataset:
 	"""Load UNSW-NB15 with thermometer encoding.
 
@@ -281,7 +282,7 @@ def load_unsw_nb15(
 	Feature selection modes:
 	- "all": All features at uniform n_bits (~321 bits at 8b)
 	- "top20": Top-20 RF features only, all at 16 bits (~308 bits)
-	- "top20_split": All features, top-20 at 16 bits + rest at 8 bits (~472 bits)
+	- "top20_split": All features, top-20 at 16 bits + rest at rest_bits (~varies)
 
 	Args:
 		data_dir: path to local data directory (fallback only). Auto-detected if None.
@@ -289,6 +290,7 @@ def load_unsw_nb15(
 		method: thermometer encoding strategy.
 		split: "standard" or "random" evaluation protocol.
 		feature_selection: feature selection mode ("all", "top20", "top20_split").
+		rest_bits: bits for non-top-20 features in "top20_split" mode. Defaults to n_bits.
 
 	Returns:
 		IDSDataset with binary-encoded features and labels.
@@ -373,7 +375,8 @@ def load_unsw_nb15(
 			  f"({method.value}, 16 bits/feature, feature_selection=top20, {len(top20)} features)")
 
 	elif feature_selection == "top20_split":
-		# All features: top-20 at 16 bits, rest at n_bits
+		# All features: top-20 at 16 bits, rest at rest_bits
+		rb = rest_bits if rest_bits is not None else n_bits
 		top20 = [f for f in TOP20_RF_FEATURES if f in common_features]
 		rest = [f for f in common_features if f not in TOP20_RF_FEATURES]
 		if len(top20) < len(TOP20_RF_FEATURES):
@@ -386,8 +389,8 @@ def load_unsw_nb15(
 		X_train_top = enc_top.transform(df_train[top20])
 		X_test_top = enc_top.transform(df_test[top20])
 
-		# Encode rest at n_bits
-		enc_rest = ThermometerEncoder(n_bits=n_bits, method=method)
+		# Encode rest at rest_bits
+		enc_rest = ThermometerEncoder(n_bits=rb, method=method)
 		enc_rest.fit(df_train[rest])
 		X_train_rest = enc_rest.transform(df_train[rest])
 		X_test_rest = enc_rest.transform(df_test[rest])
@@ -399,7 +402,7 @@ def load_unsw_nb15(
 		used_features = top20 + rest
 		total_bits = X_train.shape[1]
 		print(f"  Encoder: {total_bits} total bits "
-			  f"({method.value}, top-20@16b + {len(rest)} rest@{n_bits}b, feature_selection=top20_split)")
+			  f"({method.value}, top-20@16b + {len(rest)} rest@{rb}b, feature_selection=top20_split)")
 
 	print(f"  X_train: {X_train.shape}, X_test: {X_test.shape}")
 	print(f"  Train: {(y_train_binary == 0).sum():,} normal, "

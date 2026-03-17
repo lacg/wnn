@@ -74,6 +74,7 @@ class IDSTrainConfig:
 	class_weights: Optional[list[float]] = None  # Per-class importance (None=uniform)
 	split: str = "standard"  # "standard" or "random"
 	feature_selection: str = "all"  # "all", "top20", or "top20_split"
+	rest_bits: Optional[int] = None  # Bits for non-top-20 features in top20_split (None=use n_bits)
 	val_fraction: float = 0.25  # Validation holdout fraction from training data (0=disabled)
 	bitwise_quick: bool = False  # Quick mode: grid search + connections only
 	# Adaptation (*genesis)
@@ -254,7 +255,7 @@ def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 
 	# Load dataset
 	t0 = time.time()
-	full_dataset = load_unsw_nb15(n_bits=cfg.n_bits, split=cfg.split, feature_selection=cfg.feature_selection)
+	full_dataset = load_unsw_nb15(n_bits=cfg.n_bits, split=cfg.split, feature_selection=cfg.feature_selection, rest_bits=cfg.rest_bits)
 	total_features = full_dataset.X_train.shape[1]
 	print(f"Dataset: {full_dataset.X_train.shape[0]:,} train, {full_dataset.X_test.shape[0]:,} test, "
 		  f"{total_features} features ({time.time()-t0:.1f}s)")
@@ -666,7 +667,7 @@ def run_hierarchical_experiment(cfg: IDSTrainConfig) -> dict:
 
 	# ── Load full dataset ─────────────────────────────────────────────
 	t0 = time.time()
-	dataset = load_unsw_nb15(n_bits=cfg.n_bits, split=cfg.split, feature_selection=cfg.feature_selection)
+	dataset = load_unsw_nb15(n_bits=cfg.n_bits, split=cfg.split, feature_selection=cfg.feature_selection, rest_bits=cfg.rest_bits)
 	total_features = dataset.X_train.shape[1]
 	load_time = time.time() - t0
 
@@ -888,7 +889,7 @@ def run_bitwise_experiment(cfg: IDSTrainConfig) -> dict:
 
 	# ── Load attack-only dataset ──────────────────────────────────────
 	t0 = time.time()
-	full_dataset = load_unsw_nb15(n_bits=cfg.n_bits, split=cfg.split, feature_selection=cfg.feature_selection)
+	full_dataset = load_unsw_nb15(n_bits=cfg.n_bits, split=cfg.split, feature_selection=cfg.feature_selection, rest_bits=cfg.rest_bits)
 	attack_dataset = create_attack_only_dataset(full_dataset)
 	total_features = attack_dataset.X_train.shape[1]
 	num_attack_classes = len(attack_dataset.category_names)
@@ -1110,7 +1111,9 @@ def main():
 	parser.add_argument("--split", choices=["standard", "random"], default="standard",
 		help="Evaluation protocol: 'standard' (temporal) or 'random' (i.i.d.)")
 	parser.add_argument("--feature-selection", choices=["all", "top20", "top20_split"], default="all",
-		help="Feature selection: 'all' (uniform), 'top20' (RF top-20@16b), 'top20_split' (top-20@16b + rest@8b)")
+		help="Feature selection: 'all' (uniform), 'top20' (RF top-20@16b), 'top20_split' (top-20@16b + rest)")
+	parser.add_argument("--rest-bits", type=int, default=None,
+		help="Bits for non-top-20 features in top20_split mode (default: same as --n-bits)")
 	parser.add_argument("--hierarchical", action="store_true",
 		help="Two-stage: binary gate → attack type classifier")
 	parser.add_argument("--bitwise", action="store_true",
@@ -1154,6 +1157,7 @@ def main():
 		class_weights=class_weights,
 		split=args.split,
 		feature_selection=args.feature_selection,
+		rest_bits=args.rest_bits,
 		val_fraction=args.val_fraction,
 		bitwise_quick=args.bitwise_quick,
 		synaptogenesis=args.synaptogenesis or args.genesis,

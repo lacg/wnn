@@ -820,9 +820,10 @@ class FlowWorker:
         balance_classes = params.get("balance_classes", False)
         single_cluster = params.get("ids_single_cluster", False)
         feature_selection = params.get("ids_feature_selection", "all")
+        rest_bits = params.get("ids_rest_bits", None)
 
         self._log(f"Loading UNSW-NB15 dataset (classification={classification}, split={split}, feature_selection={feature_selection})...")
-        full_dataset = load_unsw_nb15(n_bits=n_bits, split=split, feature_selection=feature_selection)
+        full_dataset = load_unsw_nb15(n_bits=n_bits, split=split, feature_selection=feature_selection, rest_bits=rest_bits)
 
         if classification == "hierarchical":
             return self._create_hierarchical_ids_evaluators(

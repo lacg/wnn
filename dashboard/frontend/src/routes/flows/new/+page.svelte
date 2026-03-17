@@ -26,6 +26,7 @@
   let idsFitnessWeightF1 = 0.0;
   let idsSplit = 'standard';
   let idsFeatureSelection = 'all';
+  let idsRestBits = 8;
   let idsMinBits = 4;
   let idsMaxBits = 16;
   let idsMinNeurons = 5;
@@ -752,6 +753,9 @@
         params.ids_fitness_weight_f1 = idsFitnessWeightF1;
         params.ids_split = idsSplit;
         params.ids_feature_selection = idsFeatureSelection;
+        if (idsFeatureSelection === 'top20_split') {
+          params.ids_rest_bits = idsRestBits;
+        }
         params.min_bits = idsMinBits;
         params.max_bits = idsMaxBits;
         params.min_neurons = idsMinNeurons;
@@ -1318,11 +1322,18 @@
                   </select>
                   <span class="field-hint">
                     {#if idsFeatureSelection === 'all'}All 42 features at {idsNBits}b each
-                    {:else if idsFeatureSelection === 'top20'}20 features at 16b each (~308 bits)
-                    {:else}Top-20 at 16b + rest at {idsNBits}b (~472 bits)
+                    {:else if idsFeatureSelection === 'top20'}20 features at 16b each (~288 bits)
+                    {:else}Top-20 at 16b + rest at {idsRestBits}b
                     {/if}
                   </span>
                 </div>
+                {#if idsFeatureSelection === 'top20_split'}
+                  <div class="form-group">
+                    <label for="idsRestBits">Rest Features Bits</label>
+                    <input type="number" id="idsRestBits" bind:value={idsRestBits} min="2" max="16" />
+                    <span class="field-hint">Bits for the 22 non-top-20 features</span>
+                  </div>
+                {/if}
               </div>
               <div class="form-row">
                 <div class="form-group">
