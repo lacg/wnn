@@ -1820,7 +1820,12 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 				best_acc = max(r[1] for r in results if r[1] is not None) if results else 0.0
 				self._log.info(f"[{self.name}] Seed eval: {len(to_eval)} genomes in {elapsed:.1f}s (best CE={best_ce:.4f}, Acc={best_acc:.2%})")
 				for genome, r in zip(to_eval, results):
-					viable.append((genome, r[0], r[1]))
+					f1 = getattr(r, 'f1_macro', None)
+					fpr = getattr(r, 'fpr', None)
+					if f1 is not None:
+						viable.append((genome, r[0], r[1], f1, fpr))
+					else:
+						viable.append((genome, r[0], r[1]))
 			else:
 				for genome in to_eval:
 					ce = single_fn(genome)
@@ -1855,7 +1860,12 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 					acc = r[1]
 					ce = r[0]
 					if acc is None or acc >= min_accuracy:
-						viable.append((genome, ce, acc))
+						f1 = getattr(r, 'f1_macro', None)
+						fpr = getattr(r, 'fpr', None)
+						if f1 is not None:
+							viable.append((genome, ce, acc, f1, fpr))
+						else:
+							viable.append((genome, ce, acc))
 						if len(viable) >= target_size:
 							break
 					else:
