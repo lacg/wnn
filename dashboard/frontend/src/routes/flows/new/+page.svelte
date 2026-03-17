@@ -23,6 +23,7 @@
   let idsNBits = 8;
   let idsValFraction = 0.25;
   let idsKFolds = 5;
+  let idsKFoldPerGen = 1;
   let idsFitnessWeightF1 = 0.0;
   let idsSplit = 'standard';
   let idsFeatureSelection = 'all';
@@ -299,6 +300,7 @@
       idsNBits = 8;
       idsValFraction = 0.25;
       idsKFolds = 5;
+      idsKFoldPerGen = 1;
       idsFitnessWeightF1 = 0.0;
       idsSplit = 'standard';
       idsFeatureSelection = 'all';
@@ -316,6 +318,7 @@
       idsNBits = 8;
       idsValFraction = 0.25;
       idsKFolds = 5;
+      idsKFoldPerGen = 1;
       idsFitnessWeightF1 = 0.0;
       idsSplit = 'standard';
       idsFeatureSelection = 'all';
@@ -333,6 +336,7 @@
       idsNBits = 8;
       idsValFraction = 0.25;
       idsKFolds = 5;
+      idsKFoldPerGen = 1;
       idsFitnessWeightF1 = 0.0;
       idsSplit = 'standard';
       idsFeatureSelection = 'all';
@@ -351,6 +355,7 @@
       idsNBits = 8;
       idsValFraction = 0.25;
       idsKFolds = 5;
+      idsKFoldPerGen = 1;
       idsFitnessWeightF1 = 0.0;
       idsSplit = 'standard';
       idsFeatureSelection = 'all';
@@ -369,6 +374,7 @@
       idsNBits = 8;
       idsValFraction = 0.25;
       idsKFolds = 5;
+      idsKFoldPerGen = 1;
       idsFitnessWeightF1 = 0.0;
       idsSplit = 'standard';
       idsFeatureSelection = 'all';
@@ -750,6 +756,9 @@
         params.ids_val_fraction = idsValFraction;
         params.ids_num_parts = idsKFolds > 1 ? idsKFolds : 3;
         params.ids_k_folds = idsKFolds;
+        if (idsKFoldPerGen > 1) {
+          params.ids_kfold_per_gen = idsKFoldPerGen;
+        }
         params.ids_fitness_weight_f1 = idsFitnessWeightF1;
         params.ids_split = idsSplit;
         params.ids_feature_selection = idsFeatureSelection;
@@ -1353,6 +1362,13 @@
                   <input type="number" id="idsKFolds" bind:value={idsKFolds} min="1" max="10" />
                   <span class="field-hint">1 = off, 5 = default (also sets data partitions)</span>
                 </div>
+                <div class="form-group">
+                  <label for="idsKFoldPerGen">Folds per Gen</label>
+                  <input type="number" id="idsKFoldPerGen" bind:value={idsKFoldPerGen} min="1" max={idsKFolds} />
+                  <span class="field-hint">Folds evaluated per generation (1 = rotate, {idsKFolds} = all folds, {idsKFoldPerGen}x cost)</span>
+                </div>
+              </div>
+              <div class="form-row">
                 <div class="form-group">
                   <label for="idsNeuronSampleRate">Neuron Sample Rate</label>
                   <input type="number" id="idsNeuronSampleRate" bind:value={idsNeuronSampleRate} min="0.05" max="1.0" step="0.05" />

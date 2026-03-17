@@ -44,6 +44,7 @@ class IDSEvaluator(BaseEvaluator):
 		log_path: Optional[str] = None,
 		neuron_sample_rate: float = 0.25,
 		k_folds: int = 1,  # 1 = no k-fold (original behavior), >1 = K-fold CV
+		kfold_per_gen: int = 1,  # How many folds to eval per generation (1..k_folds)
 		balance_classes: bool = False,
 		single_cluster: bool = False,  # Single-cluster discriminator mode
 	):
@@ -123,6 +124,8 @@ class IDSEvaluator(BaseEvaluator):
 
 		self._train_call_count = 0
 		self._k_folds = k_folds
+		self._kfold_per_gen = min(kfold_per_gen, k_folds) if k_folds > 1 else 1
+		self._kfold_rotation_offset = 0  # tracks which folds to use next
 		if k_folds > 1 and k_folds != num_parts:
 			raise ValueError(
 				f"k_folds={k_folds} must equal num_parts={num_parts} "
@@ -192,30 +195,57 @@ class IDSEvaluator(BaseEvaluator):
 
 		bits_flat, neurons_flat, connections_flat = self._flatten_genomes(genomes)
 
-		if self._k_folds > 1:
-			# K-fold CV: train on K-1 folds, eval on held-out fold
-			# train_subset_idx from the rotator becomes the held-out fold index
+		if self._k_folds > 1 and self._kfold_per_gen > 1:
+			# Multi-fold per generation: evaluate on N folds, average results
+			# Pick which folds to use this generation (rotating window)
+			fold_indices = []
+			for i in range(self._kfold_per_gen):
+				fold_indices.append((self._kfold_rotation_offset + i) % self._k_folds)
+			self._kfold_rotation_offset = (self._kfold_rotation_offset + self._kfold_per_gen) % self._k_folds
+
+			# Evaluate on each fold
+			n_genomes = len(genomes)
+			accum_ce = [0.0] * n_genomes
+			accum_acc = [0.0] * n_genomes
+			accum_f1 = [0.0] * n_genomes
+			accum_fpr = [0.0] * n_genomes
+			accum_threshold = [0.0] * n_genomes
+
+			for fold_idx in fold_indices:
+				fold_results = self._cache.evaluate_genomes_kfold_hybrid(
+					bits_flat, neurons_flat, connections_flat,
+					n_genomes, fold_idx,
+					self._empty_value, self._neuron_sample_rate, 0,
+				)
+				for g_idx, (ce, acc, f1, fpr, threshold) in enumerate(fold_results):
+					accum_ce[g_idx] += ce
+					accum_acc[g_idx] += acc
+					accum_f1[g_idx] += f1
+					accum_fpr[g_idx] += fpr
+					accum_threshold[g_idx] += threshold
+
+			# Average across folds
+			n_folds = len(fold_indices)
+			raw_results = [
+				(accum_ce[i] / n_folds, accum_acc[i] / n_folds,
+				 accum_f1[i] / n_folds, accum_fpr[i] / n_folds,
+				 accum_threshold[i] / n_folds)
+				for i in range(n_genomes)
+			]
+
+		elif self._k_folds > 1:
+			# Single fold per generation (original k-fold behavior)
 			raw_results = self._cache.evaluate_genomes_kfold_hybrid(
-				bits_flat,
-				neurons_flat,
-				connections_flat,
-				len(genomes),
-				train_subset_idx,  # held_out_fold
-				self._empty_value,
-				self._neuron_sample_rate,
-				0,  # rng_seed
+				bits_flat, neurons_flat, connections_flat,
+				len(genomes), train_subset_idx,
+				self._empty_value, self._neuron_sample_rate, 0,
 			)
 		else:
-			# Original behavior: train on one subset, eval on separate eval set
+			# No k-fold: train on one subset, eval on separate eval set
 			raw_results = self._cache.evaluate_genomes_hybrid(
-				bits_flat,
-				neurons_flat,
-				connections_flat,
-				len(genomes),
-				train_subset_idx,
-				self._empty_value,
-				self._neuron_sample_rate,
-				0,  # rng_seed
+				bits_flat, neurons_flat, connections_flat,
+				len(genomes), train_subset_idx,
+				self._empty_value, self._neuron_sample_rate, 0,
 			)
 
 		results = []

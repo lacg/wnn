@@ -821,6 +821,7 @@ class FlowWorker:
         single_cluster = params.get("ids_single_cluster", False)
         feature_selection = params.get("ids_feature_selection", "all")
         rest_bits = params.get("ids_rest_bits", None)
+        kfold_per_gen = params.get("ids_kfold_per_gen", 1)
 
         self._log(f"Loading UNSW-NB15 dataset (classification={classification}, split={split}, feature_selection={feature_selection})...")
         full_dataset = load_unsw_nb15(n_bits=n_bits, split=split, feature_selection=feature_selection, rest_bits=rest_bits)
@@ -844,8 +845,9 @@ class FlowWorker:
 
         # Optimizer evaluator: train (K-fold or subset rotation), validation for fitness
         kfold_label = f", k_folds={k_folds}" if k_folds > 1 else ""
+        kfpg_label = f", kfold_per_gen={kfold_per_gen}" if kfold_per_gen > 1 else ""
         self._log(f"Creating optimizer IDSEvaluator ({len(train_val_dataset.X_train):,} train / "
-                   f"{len(train_val_dataset.X_test):,} eval, {num_parts} parts{kfold_label})...")
+                   f"{len(train_val_dataset.X_test):,} eval, {num_parts} parts{kfold_label}{kfpg_label})...")
         balance_label = ", balanced" if balance_classes else ""
         sc_label = ", single-cluster" if single_cluster else ""
         self._log(f"  neuron_sample_rate={neuron_sample_rate}, balance_classes={balance_classes}{sc_label}")
@@ -854,6 +856,7 @@ class FlowWorker:
             classification=classification,
             num_parts=num_parts,
             k_folds=k_folds,
+            kfold_per_gen=kfold_per_gen,
             neuron_sample_rate=neuron_sample_rate,
             balance_classes=balance_classes,
             single_cluster=single_cluster,
