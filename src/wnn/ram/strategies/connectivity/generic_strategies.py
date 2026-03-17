@@ -1286,8 +1286,8 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		init_scores = fitness_calculator.fitness(init_tuples)
 		best_idx = min(range(len(init_scores)), key=lambda i: init_scores[i])
 		best = self.clone_genome(population[best_idx][0])
-		best_fitness = fitness_values[best_idx]  # Report CE as fitness for compatibility
-		initial_fitness = fitness_values[0] if initial_genome else best_fitness
+		best_fitness = init_scores[best_idx]  # Use harmonic fitness score, not raw CE
+		initial_fitness = init_scores[0] if initial_genome else best_fitness
 		initial_accuracy = accuracy_values[best_idx]
 		best_accuracy_val = initial_accuracy
 		# Running global best F1/FPR (for dashboard tracking, like best_fitness/best_accuracy_val)
@@ -1447,12 +1447,13 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			accuracy_values = [pool_av[i] for i in keep_indices]
 			f1_values = [pool_f1[i] for i in keep_indices]
 			fpr_values = [pool_fpr[i] for i in keep_indices]
+			combined_scores = [pool_scores[i] for i in keep_indices]
 
-			# Update best
+			# Update best (by harmonic fitness score, not raw CE)
 			gen_best_idx = 0  # After sorting, index 0 is the best
-			if fitness_values[gen_best_idx] < best_fitness:
+			if combined_scores[gen_best_idx] < best_fitness:
 				best = self.clone_genome(population[gen_best_idx][0])
-				best_fitness = fitness_values[gen_best_idx]
+				best_fitness = combined_scores[gen_best_idx]
 				best_accuracy_val = accuracy_values[gen_best_idx]
 
 			history.append((generation + 1, best_fitness))
@@ -2256,23 +2257,25 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 		if len(pop) > pop_size:
 			pop = self._select_top_n(pop, pop_size, fitness_calculator)
 
-		# Global best tracking (by CE for return value / early stopping)
-		best = self.clone_genome(initial_genome)
-		best_fitness = initial_fitness
-		best_accuracy: Optional[float] = initial_accuracy
-		start_fitness = initial_fitness
+		# Global best tracking (by fitness calculator score, not raw CE)
 		# Running global best F1/FPR (for dashboard tracking)
 		pop_f1_init = [t[3] for t in pop if len(t) > 3 and t[3] is not None]
 		pop_fpr_init = [t[4] for t in pop if len(t) > 4 and t[4] is not None]
 		best_f1_global: Optional[float] = max(pop_f1_init) if pop_f1_init else None
 		best_fpr_global: Optional[float] = min(pop_fpr_init) if pop_fpr_init else None
 
-		# Find best from initial population
-		for t in pop:
-			if t[1] < best_fitness:
-				best = self.clone_genome(t[0])
-				best_fitness = t[1]
-				best_accuracy = t[2]
+		# Find best from initial population using fitness calculator
+		pop_fv = [t[1] for t in pop]
+		pop_av = [t[2] for t in pop]
+		pop_f1v = [t[3] if len(t) > 3 else None for t in pop]
+		pop_fprv = [t[4] if len(t) > 4 else None for t in pop]
+		init_tuples = _fc_tuples(pop_fv, pop_av, pop_f1v, pop_fprv)
+		init_scores = fitness_calculator.fitness(init_tuples)
+		best_idx = min(range(len(init_scores)), key=lambda i: init_scores[i])
+		best = self.clone_genome(pop[best_idx][0])
+		best_fitness = init_scores[best_idx]
+		best_accuracy: Optional[float] = pop_av[best_idx]
+		start_fitness = best_fitness if not initial_fitness else initial_fitness
 
 		# Best ranked genome (by fitness calculator)
 		best_ranked = self._find_best_ranked(pop, fitness_calculator)
@@ -2422,13 +2425,19 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 				best_ranked = self._find_best_ranked(pop, fitness_calculator)
 				best_ranked_genome, best_ranked_ce, best_ranked_accuracy = best_ranked[0], best_ranked[1], best_ranked[2]
 
-				# Update global best (by CE)
-				for t in pop:
-					if t[1] < best_fitness:
-						best = self.clone_genome(t[0])
-						best_fitness = t[1]
-						best_accuracy = t[2]
-						improved_iterations += 1
+				# Update global best (by fitness calculator score)
+				pop_fv_iter = [t[1] for t in pop]
+				pop_av_iter = [t[2] for t in pop]
+				pop_f1v_iter = [t[3] if len(t) > 3 else None for t in pop]
+				pop_fprv_iter = [t[4] if len(t) > 4 else None for t in pop]
+				iter_tuples = _fc_tuples(pop_fv_iter, pop_av_iter, pop_f1v_iter, pop_fprv_iter)
+				iter_scores = fitness_calculator.fitness(iter_tuples)
+				iter_best_idx = min(range(len(iter_scores)), key=lambda i: iter_scores[i])
+				if iter_scores[iter_best_idx] < best_fitness:
+					best = self.clone_genome(pop[iter_best_idx][0])
+					best_fitness = iter_scores[iter_best_idx]
+					best_accuracy = pop_av_iter[iter_best_idx]
+					improved_iterations += 1
 
 			history.append((iteration + 1, best_fitness))
 
