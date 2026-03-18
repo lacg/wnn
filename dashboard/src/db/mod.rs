@@ -632,9 +632,10 @@ pub mod queries {
 
         // Create pending experiments for each experiment spec
         for (idx, exp_spec) in experiments.iter().enumerate() {
-            // Derive phase_type from experiment spec
-            // Check for special phase types (e.g., grid_search for bitwise Phase 1)
-            let phase_type = if let Some(pt) = exp_spec.params.get("phase_type").and_then(|v| v.as_str()) {
+            // Use explicit phase_type if provided, otherwise derive
+            let phase_type = if let Some(ref pt) = exp_spec.phase_type {
+                pt.clone()
+            } else if let Some(pt) = exp_spec.params.get("phase_type").and_then(|v| v.as_str()) {
                 pt.to_string()
             } else {
                 let opt_target = if exp_spec.optimize_bits {
