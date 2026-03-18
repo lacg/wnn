@@ -1978,27 +1978,26 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 		# If not enough viable, fall back to best by accuracy then CE
 		if not viable:
 			if all_below_threshold:
-				all_below_threshold.sort(key=lambda x: (-(x[3] or 0.0), x[2]))
+				all_below_threshold.sort(key=lambda x: (-(x[2].acc), x[2].ce))
 				viable = all_below_threshold[:1]
 		elif len(viable) < n_neighbors:
-			all_below_threshold.sort(key=lambda x: (-(x[3] or 0.0), x[2]))
+			all_below_threshold.sort(key=lambda x: (-(x[2].acc), x[2].ce))
 			need = n_neighbors - len(viable)
 			viable.extend(all_below_threshold[:need])
 
 		# Update tabu list with best neighbor's move
 		if viable:
-			viable_3t = [(n, f, a or 0.0) for n, m, f, a in viable]
-			ranked = self._fitness_calculator.rank(viable_3t)
-			best_idx = next(
-				i for i, (n, m, f, a) in enumerate(viable)
-				if n is ranked[0][0]
-			)
-			_, m, _, _ = viable[best_idx]
-			if m is not None:
-				tabu_list.append(m)
+			viable_metrics = [em for _, _, em in viable]
+			viable_genomes = [n for n, _, _ in viable]
+			ranked = self._fitness_calculator.rank(viable_genomes, viable_metrics)
+			best_genome = ranked[0][0]
+			best_idx = next(i for i, (n, _, _) in enumerate(viable) if n is best_genome)
+			_, m_phase, _ = viable[best_idx]
+			if m_phase is not None:
+				tabu_list.append(m_phase)
 
-		# Return viable neighbors as 3-tuples (genome, ce, accuracy)
-		return [(n, f, a) for n, _, f, a in viable]
+		# Return viable neighbors as (genome, Metrics) tuples
+		return [(n, em) for n, _, em in viable]
 
 	def _on_iteration_start(self, iteration: int, **ctx) -> None:
 		"""Hook called at start of each iteration.
@@ -2098,8 +2097,7 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 		# Re-evaluate initial genome on current phase's train subset
 		# (cached evals from previous phase used a different subset)
 		initial_accuracy: Optional[float] = None
-		initial_f1: Optional[float] = None
-		initial_fpr: Optional[float] = None
+		# initial_f1/initial_fpr removed — now part of Metrics
 		initial_evals = kwargs.get('initial_evals')
 		if initial_evals and batch_evaluate_fn is not None:
 			self._log.info(f"[{self.name}] Re-evaluating initial genome (phase transition — different train subset)")
@@ -2162,31 +2160,16 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 			initial_neighbors = unique_neighbors
 
 			# Always re-evaluate at phase transitions (cached evals used different train subset)
-			if initial_evals is not None and batch_evaluate_fn is not None:
-				self._log.info(f"[{self.name}] Re-evaluating {len(initial_neighbors)} seeded neighbors (phase transition — different train subset)")
+			if batch_evaluate_fn is not None:
+				reason = "phase transition" if initial_evals is not None else "no cached evals"
+				self._log.info(f"[{self.name}] Re-evaluating {len(initial_neighbors)} seeded neighbors ({reason})")
 				results = batch_evaluate_fn(initial_neighbors, min_accuracy=current_threshold)
-				seed_fitness = [r[0] for r in results]
-				seed_accuracy = [r[1] for r in results]
-				seed_f1 = [getattr(r, 'f1_macro', None) for r in results]
-				seed_fpr = [getattr(r, 'fpr', None) for r in results]
-			elif batch_evaluate_fn is not None:
-				self._log.info(f"[{self.name}] Evaluating {len(initial_neighbors)} neighbors (no cached evals)")
-				results = batch_evaluate_fn(initial_neighbors, min_accuracy=current_threshold)
-				seed_fitness = [r[0] for r in results]
-				seed_accuracy = [r[1] for r in results]
-				seed_f1 = [getattr(r, 'f1_macro', None) for r in results]
-				seed_fpr = [getattr(r, 'fpr', None) for r in results]
+				seed_metrics = [r if isinstance(r, _M) else _M(ce=r.ce, acc=r.acc, f1=r.f1, fpr=r.fpr) for r in results]
 			else:
-				seed_fitness = [evaluate_fn(g) for g in initial_neighbors]
-				seed_accuracy = [None] * len(initial_neighbors)
-				seed_f1 = [None] * len(initial_neighbors)
-				seed_fpr = [None] * len(initial_neighbors)
+				seed_metrics = [_M(ce=evaluate_fn(g), acc=0.0) for g in initial_neighbors]
 
-			for g, f, a, f1, fpr in zip(initial_neighbors, seed_fitness, seed_accuracy, seed_f1, seed_fpr):
-				if f1 is not None:
-					pop.append((self.clone_genome(g), f, a, f1, fpr))
-				else:
-					pop.append((self.clone_genome(g), f, a))
+			for g, m in zip(initial_neighbors, seed_metrics):
+				pop.append((self.clone_genome(g), m))
 
 		# Trim initial population to pop_size by fitness ranking
 		if len(pop) > pop_size:
