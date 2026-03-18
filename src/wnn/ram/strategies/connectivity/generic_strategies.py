@@ -1525,7 +1525,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 						iteration_num=generation + 1,
 						best_ce=iter_bests.best_ce.metrics.ce,
 						best_accuracy=iter_bests.best_acc.metrics.acc,
-						avg_ce=gen_avg,
+						avg_ce=gen_avg_ce,
 						avg_accuracy=avg_acc,
 						elite_count=total_elites,
 						offspring_count=len(offspring),
@@ -1568,7 +1568,9 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 						if evaluations:
 							self._tracker.record_genome_evaluations_batch(evaluations)
 				except Exception as e:
-					self._log.debug(f"Tracker error: {e}")
+					self._log.warning(f"Tracker error: {e}")
+					import traceback
+					traceback.print_exc()
 
 			# Early stopping check (checks at configured intervals)
 			if early_stopper.check(generation, best_fitness):
@@ -2498,7 +2500,9 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 						if evaluations:
 							self._tracker.record_genome_evaluations_batch(evaluations)
 				except Exception as e:
-					self._log.debug(f"Tracker error: {e}")
+					self._log.warning(f"Tracker error: {e}")
+					import traceback
+					traceback.print_exc()
 
 			# Early stopping check
 			if early_stopper.check(iteration, best_fitness):
