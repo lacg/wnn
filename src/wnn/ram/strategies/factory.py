@@ -471,7 +471,7 @@ class OptimizerStrategyFactory:
 					phase_name=phase_name,
 					shutdown_check=shutdown_check,
 					fitness_calculator_type=fitness_calculator_type,
-				fitness_weight_ce=fitness_weights.ce, fitness_weight_acc=fitness_weights.acc, fitness_weight_f1=fitness_weights.f1, fitness_weight_fpr=fitness_weights.fpr,
+				fitness_weights=fitness_weights,
 					min_accuracy_floor=min_accuracy_floor,
 					cluster_crossover_ratio=cluster_crossover_ratio,
 					pool_shuffle_ratio=pool_shuffle_ratio,
@@ -509,7 +509,7 @@ class OptimizerStrategyFactory:
 					batch_evaluator=batch_evaluator,
 					shutdown_check=shutdown_check,
 					fitness_calculator_type=fitness_calculator_type,
-				fitness_weight_ce=fitness_weights.ce, fitness_weight_acc=fitness_weights.acc, fitness_weight_f1=fitness_weights.f1, fitness_weight_fpr=fitness_weights.fpr,
+				fitness_weights=fitness_weights,
 					min_accuracy_floor=min_accuracy_floor,
 				)
 
@@ -526,7 +526,7 @@ class OptimizerStrategyFactory:
 					batch_evaluator=batch_evaluator,
 					shutdown_check=shutdown_check,
 					fitness_calculator_type=fitness_calculator_type,
-				fitness_weight_ce=fitness_weights.ce, fitness_weight_acc=fitness_weights.acc, fitness_weight_f1=fitness_weights.f1, fitness_weight_fpr=fitness_weights.fpr,
+				fitness_weights=fitness_weights,
 				)
 
 			case OptimizerStrategyType.CONNECTIVITY_GA:
@@ -592,7 +592,7 @@ class OptimizerStrategyFactory:
 					batch_evaluator=batch_evaluator,
 					shutdown_check=shutdown_check,
 					fitness_calculator_type=fitness_calculator_type,
-				fitness_weight_ce=fitness_weights.ce, fitness_weight_acc=fitness_weights.acc, fitness_weight_f1=fitness_weights.f1, fitness_weight_fpr=fitness_weights.fpr,
+				fitness_weights=fitness_weights,
 					min_accuracy_floor=min_accuracy_floor,
 					phase_name=phase_name,
 				)
@@ -946,7 +946,7 @@ class OptimizerStrategyFactory:
 			threshold_delta=threshold_delta,
 			threshold_reference=threshold_reference,
 			fitness_calculator_type=fitness_calculator_type or FitnessCalculatorType.HARMONIC_RANK,
-				fitness_weight_ce=fitness_weights.ce, fitness_weight_acc=fitness_weights.acc, fitness_weight_f1=fitness_weights.f1, fitness_weight_fpr=fitness_weights.fpr,
+				fitness_weights=fitness_weights,
 			min_accuracy_floor=min_accuracy_floor,
 		)
 		return AdaptationStrategy(
