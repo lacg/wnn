@@ -2451,17 +2451,18 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 								genome_id = self._tracker.get_or_create_genome(
 									self._tracker_experiment_id, config
 								)
+								m = item[1]  # Metrics object
 								evaluations.append({
 									"iteration_id": iteration_id,
 									"genome_id": genome_id,
 									"position": pos,
 									"role": GenomeRole.TOP_K,
-									"ce": item[1],
-									"accuracy": item[2] if item[2] is not None else 0.0,
+									"ce": m.ce,
+									"accuracy": m.acc if m.acc is not None else 0.0,
 									"elite_rank": pos,
 									"fitness_score": all_scores[pos],
-									"f1_macro": item[3] if len(item) > 3 else None,
-									"fpr": item[4] if len(item) > 4 else None,
+									"f1_macro": m.f1,
+									"fpr": m.fpr,
 								})
 
 						# Record offspring as NEIGHBOR
@@ -2471,16 +2472,17 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 								genome_id = self._tracker.get_or_create_genome(
 									self._tracker_experiment_id, config
 								)
+								m = item[1]  # Metrics object
 								evaluations.append({
 									"iteration_id": iteration_id,
 									"genome_id": genome_id,
 									"position": len(pop) + pos,
 									"role": GenomeRole.NEIGHBOR,
-									"ce": item[1],
-									"accuracy": item[2] if item[2] is not None else 0.0,
+									"ce": m.ce,
+									"accuracy": m.acc if m.acc is not None else 0.0,
 									"fitness_score": all_scores[len(pop) + pos],
-									"f1_macro": item[3] if len(item) > 3 else None,
-									"fpr": item[4] if len(item) > 4 else None,
+									"f1_macro": m.f1,
+									"fpr": m.fpr,
 								})
 
 						if evaluations:
