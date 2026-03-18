@@ -330,12 +330,8 @@ class ArchitectureStrategyMixin:
 		# Evaluate on full validation data
 		full_results = evaluator.evaluate_batch_full(top_genomes)
 
-		# Use fitness calculator to extract three independent bests
-		val_population = [
-			(genome, r[0], r[1])
-			for genome, r in zip(top_genomes, full_results)
-		]
-		bests = self._fitness_calculator.bests(val_population)
+		# Use fitness calculator to extract bests
+		bests = self._fitness_calculator.bests(top_genomes, full_results)
 
 		self._log.info(f"  Best by CE:       CE={bests.best_ce.metrics.ce:.4f}, Acc={bests.best_ce.metrics.acc:.4%}")
 		self._log.info(f"  Best by Accuracy: CE={bests.best_acc.metrics.ce:.4f}, Acc={bests.best_acc.metrics.acc:.4%}")
@@ -347,8 +343,8 @@ class ArchitectureStrategyMixin:
 		else:
 			self._log.info(f"  Best by Fitness:  CE={bests.best_fitness.metrics.ce:.4f}, Acc={bests.best_fitness.metrics.acc:.4%}")
 
-		top_k_ce = sum(r[0] for r in full_results) / len(full_results)
-		top_k_acc = sum(r[1] for r in full_results) / len(full_results)
+		top_k_ce = sum(r.ce for r in full_results) / len(full_results)
+		top_k_acc = sum(r.acc for r in full_results) / len(full_results)
 		self._log.info(f"  Top-{top_k} Mean:    CE={top_k_ce:.4f}, Acc={top_k_acc:.4%}")
 		self._log.info("=" * 60)
 
@@ -2377,8 +2373,8 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 				iter_elapsed = _time.time() - iter_start
 
 				# Log progress
-				avg_ce = sum(e[0] for e in evals) / len(evals)
-				avg_acc = sum(e[1] for e in evals) / len(evals) if len(evals[0]) > 1 else 0.0
+				avg_ce = sum(e.ce for e in evals) / len(evals)
+				avg_acc = sum(e.acc for e in evals) / len(evals)
 				self._log(
 					f"  [{iteration+1:3d}/{cfg.iterations}] "
 					f"best CE={best_ce:.4f} acc={best_acc:.2%} | "
@@ -2474,11 +2470,7 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 			stop_reason = StopReason.MAX_ITERATIONS
 
 		# Build population metrics for downstream phases
-		population_metrics = [
-			(e[0], e[1] if len(e) > 1 else 0.0,
-			 e.f1, e.fpr)
-			for e in evals
-		]
+		population_metrics = [e if isinstance(e, _M) else _M(ce=e.ce, acc=e.acc, f1=e.f1, fpr=e.fpr) for e in evals]
 
 		initial_ce = history[0][1] if history else best_ce
 		improvement = ((initial_ce - best_ce) / initial_ce * 100) if initial_ce > 0 else 0.0
