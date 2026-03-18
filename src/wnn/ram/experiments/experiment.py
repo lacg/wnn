@@ -731,10 +731,10 @@ class Experiment:
 			try:
 				metrics = result.population_metrics
 				# Best CE = minimum CE
-				best_ce_idx = min(range(len(metrics)), key=lambda i: metrics[i][0])
+				best_ce_idx = min(range(len(metrics)), key=lambda i: metrics[i].ce if hasattr(metrics[i], 'ce') else metrics[i][0])
 				data["best_ce_genome"] = result.final_population[best_ce_idx].serialize()
 				# Best ACC = maximum accuracy
-				best_acc_idx = max(range(len(metrics)), key=lambda i: metrics[i][1])
+				best_acc_idx = max(range(len(metrics)), key=lambda i: metrics[i].acc if hasattr(metrics[i], 'acc') else metrics[i][1])
 				data["best_acc_genome"] = result.final_population[best_acc_idx].serialize()
 			except Exception:
 				pass  # Non-critical, skip silently

@@ -2063,10 +2063,15 @@ class Flow:
 			pop = pr.get("final_population")
 			metrics = data.get("population_metrics")
 			if pop and metrics and len(pop) == len(metrics):
+				# Handle both old (tuple) and new (dict/Metrics) format
+				def _get_ce(m):
+					return m.get("ce", m[0]) if isinstance(m, dict) else (m.ce if hasattr(m, 'ce') else m[0])
+				def _get_acc(m):
+					return m.get("acc", m[1]) if isinstance(m, dict) else (m.acc if hasattr(m, 'acc') else m[1])
 				if genome_type == "best_ce":
-					best_idx = min(range(len(metrics)), key=lambda i: metrics[i][0])
+					best_idx = min(range(len(metrics)), key=lambda i: _get_ce(metrics[i]))
 				elif genome_type == "best_acc":
-					best_idx = max(range(len(metrics)), key=lambda i: metrics[i][1])
+					best_idx = max(range(len(metrics)), key=lambda i: _get_acc(metrics[i]))
 				else:
 					best_idx = 0
 				return ClusterGenome.deserialize(pop[best_idx])
@@ -2107,12 +2112,14 @@ class Flow:
 						stage_picks.append(frozen_genomes[stage])
 						continue
 
+					def _get_ce_s(m):
+						return m.get("ce", m[0]) if isinstance(m, dict) else (m.ce if hasattr(m, 'ce') else m[0])
+					def _get_acc_s(m):
+						return m.get("acc", m[1]) if isinstance(m, dict) else (m.acc if hasattr(m, 'acc') else m[1])
 					if genome_type == "best_ce":
-						# Minimum CE
-						best_idx = min(range(len(metrics)), key=lambda i: metrics[i][0])
+						best_idx = min(range(len(metrics)), key=lambda i: _get_ce_s(metrics[i]))
 					else:
-						# Maximum accuracy
-						best_idx = max(range(len(metrics)), key=lambda i: metrics[i][1])
+						best_idx = max(range(len(metrics)), key=lambda i: _get_acc_s(metrics[i]))
 					stage_picks.append(pop[best_idx])
 				else:
 					# Fall back to frozen genome (best_fitness) if no population tracked

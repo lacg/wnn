@@ -1945,15 +1945,16 @@ class GridSearchStrategy:
 			n_genomes = genomes_per_config[i]
 
 			# First genome: reuse the original (already evaluated)
+			from wnn.ram.metrics import Metrics as _Metrics
 			output_population.append(r["genome"])
-			population_metrics.append((r["ce"], r["accuracy"], r.get("f1_macro"), r.get("fpr")))
+			population_metrics.append(_Metrics(ce=r["ce"], acc=r["accuracy"], f1=r.get("f1_macro"), fpr=r.get("fpr")))
 
 			# Remaining: fresh random connections (need evaluation)
 			for _ in range(n_genomes - 1):
 				genome = self._create_genome(r["neurons"], r["bits"])
 				new_genome_indices.append(len(output_population))
 				output_population.append(genome)
-				population_metrics.append((0.0, 0.0, None, None))  # placeholder
+				population_metrics.append(_Metrics(ce=0.0, acc=0.0))  # placeholder
 				new_genomes.append(genome)
 
 			self._log(f"  #{i+1:2d} n={r['neurons']:3d}, b={r['bits']:2d} (CE={r['ce']:.4f}) → {n_genomes} genomes (1 original + {n_genomes - 1} new)")
@@ -1976,7 +1977,7 @@ class GridSearchStrategy:
 				g_elapsed = time.time() - t_g
 				expand_elapsed += g_elapsed
 				pop_idx = new_genome_indices[idx_in_new]
-				population_metrics[pop_idx] = (ce, acc, getattr(ev, 'f1_macro', None), getattr(ev, 'fpr', None))
+				population_metrics[pop_idx] = _Metrics(ce=ce, acc=acc, f1=ev.f1, fpr=ev.fpr)
 				# Log per-genome result
 				g = output_population[pop_idx]
 				neurons = g.neurons_per_cluster[0] if g.neurons_per_cluster else 0
@@ -2074,10 +2075,10 @@ class GridSearchStrategy:
 		final_iter_num = len(results) + num_seed_recorded + 1  # After per-config + seed iterations
 		if self._tracker and self._tracker_experiment_id:
 			try:
-				avg_ce = sum(m[0] for m in population_metrics) / len(population_metrics)
-				avg_acc = sum(m[1] for m in population_metrics) / len(population_metrics)
-				pm_f1s = [m[2] for m in population_metrics if len(m) > 2 and m[2] is not None]
-				pm_fprs = [m[3] for m in population_metrics if len(m) > 3 and m[3] is not None]
+				avg_ce = sum(m.ce for m in population_metrics) / len(population_metrics)
+				avg_acc = sum(m.acc for m in population_metrics) / len(population_metrics)
+				pm_f1s = [m.f1 for m in population_metrics if m.f1 is not None]
+				pm_fprs = [m.fpr for m in population_metrics if m.fpr is not None]
 				if pm_f1s:
 					final_f1 = max(pm_f1s)
 					if best_f1_so_far is None or final_f1 > best_f1_so_far:
@@ -2100,7 +2101,7 @@ class GridSearchStrategy:
 				)
 				if HAS_GENOME_TRACKING:
 					for pos, (genome, m, fit) in enumerate(zip(output_population, population_metrics, pop_fitness_scores)):
-						ce, acc = m[0], m[1]
+						ce, acc = m.ce, m.acc
 						genome_config = self._genome_to_config(genome)
 						if genome_config:
 							genome_id = self._tracker.get_or_create_genome(
@@ -2114,8 +2115,8 @@ class GridSearchStrategy:
 								ce=ce,
 								accuracy=acc,
 								fitness_score=fit,
-								f1_macro=m[2] if len(m) > 2 else None,
-								fpr=m[3] if len(m) > 3 else None,
+								f1_macro=m.f1,
+								fpr=m.fpr,
 							)
 				self._tracker.update_experiment_progress(
 					self._tracker_experiment_id,
