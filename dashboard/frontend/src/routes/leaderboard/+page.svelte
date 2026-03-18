@@ -10,6 +10,11 @@
 	// Filters
 	let taskType = 'ids';
 	let stage = '';
+	let thresholdFilter = '';
+
+	// Sorting
+	let sortColumn = 'fitnessScore';
+	let sortAsc = true;
 
 	// Fitness weights (configurable, default: F1+FPR focused for IDS)
 	let wCe = 0.3;
@@ -42,6 +47,18 @@
 		{ value: 'combined', label: 'Combined' },
 	];
 
+	const thresholdModes = [
+		{ value: '', label: 'All Thresholds' },
+		{ value: 'train_cal', label: 'Train-cal' },
+		{ value: 'fixed_05', label: 'Fixed 0.5' },
+		{ value: 'test_cal', label: 'Holdout' },
+		{ value: 'val_cal', label: 'Oracle' },
+		{ value: 'platt', label: 'Platt' },
+		{ value: 'beta', label: 'Beta' },
+		{ value: 'empirical', label: 'Empirical' },
+		{ value: 'empirical_cumulative', label: 'Emp-cumul' },
+	];
+
 	async function fetchGenomes() {
 		loading = true;
 		error = null;
@@ -67,11 +84,11 @@
 		fetchGenomes();
 	}
 
-	// Deduplicate by genome_hash, keeping the best metrics across duplicates
+	// Deduplicate by genome_hash + threshold_mode, keeping the best metrics across duplicates
 	function deduplicateGenomes(genomes: BestGenome[]): BestGenome[] {
 		const map = new Map<string, BestGenome & { sources: string[] }>();
 		for (const g of genomes) {
-			const key = g.genome_hash;
+			const key = `${g.genome_hash}_${g.threshold_mode || 'train_cal'}`;
 			const existing = map.get(key);
 			if (!existing) {
 				map.set(key, { ...g, sources: [g.metric] });
@@ -158,9 +175,27 @@
 		return scored;
 	}
 
-	// Reactive: recompute whenever rawGenomes or weights change
+	// Reactive: recompute whenever rawGenomes, filters, or weights change
 	$: deduplicated = deduplicateGenomes(rawGenomes);
-	$: rankedGenomes = computeFitnessRanking(deduplicated);
+	$: filteredByThreshold = thresholdFilter
+		? deduplicated.filter(g => (g.threshold_mode || 'train_cal') === thresholdFilter)
+		: deduplicated;
+	$: ranked = computeFitnessRanking(filteredByThreshold);
+
+	function toggleSort(column: string) {
+		if (sortColumn === column) {
+			sortAsc = !sortAsc;
+		} else {
+			sortColumn = column;
+			sortAsc = column === 'fitnessScore' || column === 'ce' || column === 'fpr';
+		}
+	}
+
+	$: rankedGenomes = [...ranked].sort((a: any, b: any) => {
+		const va = a[sortColumn] ?? 0;
+		const vb = b[sortColumn] ?? 0;
+		return sortAsc ? va - vb : vb - va;
+	});
 
 	// Expanded row tracking
 	let expandedHash: string | null = null;
@@ -213,6 +248,14 @@
 				{/each}
 			</select>
 		</div>
+		<div class="filter-group">
+			<label for="threshold">Threshold</label>
+			<select id="threshold" bind:value={thresholdFilter}>
+				{#each thresholdModes as t}
+					<option value={t.value}>{t.label}</option>
+				{/each}
+			</select>
+		</div>
 		<div class="filter-group weight-toggle">
 			<button class="weights-btn" on:click={() => showWeights = !showWeights}>
 				{showWeights ? 'Hide' : 'Show'} Weights
@@ -255,14 +298,14 @@
 			<table>
 				<thead>
 					<tr>
-						<th class="col-rank">Rank</th>
-						<th class="col-score">Score</th>
+						<th class="col-rank sortable" on:click={() => toggleSort('fitnessRank')}>Rank {sortColumn === 'fitnessRank' ? (sortAsc ? '▲' : '▼') : ''}</th>
+						<th class="col-score sortable" on:click={() => toggleSort('fitnessScore')}>Score {sortColumn === 'fitnessScore' ? (sortAsc ? '▲' : '▼') : ''}</th>
 						<th class="col-task">Task</th>
 						<th class="col-threshold">Threshold</th>
-						<th class="col-f1">F1</th>
-						<th class="col-fpr">FPR</th>
-						<th class="col-acc">Accuracy</th>
-						<th class="col-ce">CE</th>
+						<th class="col-f1 sortable" on:click={() => toggleSort('f1_macro')}>F1 {sortColumn === 'f1_macro' ? (sortAsc ? '▲' : '▼') : ''}</th>
+						<th class="col-fpr sortable" on:click={() => toggleSort('fpr')}>FPR {sortColumn === 'fpr' ? (sortAsc ? '▲' : '▼') : ''}</th>
+						<th class="col-acc sortable" on:click={() => toggleSort('accuracy')}>Accuracy {sortColumn === 'accuracy' ? (sortAsc ? '▲' : '▼') : ''}</th>
+						<th class="col-ce sortable" on:click={() => toggleSort('ce')}>CE {sortColumn === 'ce' ? (sortAsc ? '▲' : '▼') : ''}</th>
 						<th class="col-arch">Neurons</th>
 						<th class="col-flow">Flow</th>
 					</tr>
@@ -639,7 +682,21 @@
 	.col-rank { width: 60px; text-align: center; }
 	.col-score { width: 60px; text-align: right; }
 	.col-task { width: 60px; }
+	.col-threshold { width: 80px; }
 	.col-ce, .col-acc, .col-f1, .col-fpr { width: 80px; text-align: right; }
 	.col-arch { width: 70px; text-align: right; }
 	.col-flow { width: 60px; }
+
+	.sortable {
+		cursor: pointer;
+		user-select: none;
+	}
+	.sortable:hover {
+		color: var(--accent-blue);
+	}
+
+	.tag-threshold {
+		font-size: 1rem;
+		opacity: 0.7;
+	}
 </style>

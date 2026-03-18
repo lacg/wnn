@@ -1411,7 +1411,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				if len(neighbors) > 1:
 					# Find best by fitness ranking
 					best_ranked_neighbors = self._fitness_calculator.rank(
-						[(t[0], t[1], t[2] if len(t) > 2 else None) for t in neighbors]
+						[t[0] for t in neighbors], [t[1] for t in neighbors]
 					)
 					best_neighbor = next(
 						t for t in neighbors if t[0] is best_ranked_neighbors[0][0]
@@ -1531,7 +1531,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				best_neighbor = neighbors[0]
 				if len(neighbors) > 1:
 					best_ranked_neighbors = self._fitness_calculator.rank(
-						[(t[0], t[1], t[2] if len(t) > 2 else None) for t in neighbors]
+						[t[0] for t in neighbors], [t[1] for t in neighbors]
 					)
 					best_neighbor = next(
 						t for t in neighbors if t[0] is best_ranked_neighbors[0][0]
