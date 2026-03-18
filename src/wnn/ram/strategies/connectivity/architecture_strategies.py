@@ -1754,12 +1754,11 @@ class GridSearchStrategy:
 		from wnn.ram.fitness import FitnessCalculatorFactory
 
 		cfg = self._config
+		from wnn.ram.metrics import FitnessWeights
 		calculator = FitnessCalculatorFactory.create(
 			cfg.fitness_calculator_type,
-			weight_ce=cfg.fitness_weight_ce,
-			weight_acc=cfg.fitness_weight_acc,
-			weight_f1=cfg.fitness_weight_f1,
-			weight_fpr=cfg.fitness_weight_fpr,
+			weights=FitnessWeights(ce=cfg.fitness_weight_ce, acc=cfg.fitness_weight_acc,
+								   f1=cfg.fitness_weight_f1, fpr=cfg.fitness_weight_fpr),
 		)
 
 		total_configs = len(cfg.neurons_grid) * len(cfg.bits_grid)
@@ -2288,12 +2287,11 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 				clone.initialize_connections(cfg.total_input_bits)
 			population.append(clone)
 
+		from wnn.ram.metrics import FitnessWeights
 		calculator = FitnessCalculatorFactory.create(
 			cfg.fitness_calculator_type,
-			weight_ce=cfg.fitness_weight_ce,
-			weight_acc=cfg.fitness_weight_acc,
-			weight_f1=cfg.fitness_weight_f1,
-			weight_fpr=cfg.fitness_weight_fpr,
+			weights=FitnessWeights(ce=cfg.fitness_weight_ce, acc=cfg.fitness_weight_acc,
+								   f1=cfg.fitness_weight_f1, fpr=cfg.fitness_weight_fpr),
 		)
 
 		# Configure evaluator's adaptation mode for this phase

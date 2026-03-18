@@ -33,6 +33,8 @@ Usage:
 from enum import IntEnum, auto
 from typing import Any
 
+from wnn.ram.metrics import FitnessWeights
+
 from wnn.ram.strategies.base import (
 	TrainStrategyBase,
 	ForwardStrategyBase,
@@ -350,10 +352,7 @@ class OptimizerStrategyFactory:
 		shutdown_check: Any = None,
 		# Fitness calculator settings
 		fitness_calculator_type: Any = None,  # FitnessCalculatorType enum from wnn.ram.fitness
-		fitness_weight_ce: float = 1.0,
-		fitness_weight_acc: float = 1.0,
-		fitness_weight_f1: float = 0.0,
-		fitness_weight_fpr: float = 0.0,
+		fitness_weights: FitnessWeights | None = None,
 		# Accuracy floor: genomes below this accuracy get fitness = infinity
 		min_accuracy_floor: float | None = None,
 		# Grid search params (ARCHITECTURE_GRID_SEARCH only)
@@ -472,10 +471,7 @@ class OptimizerStrategyFactory:
 					phase_name=phase_name,
 					shutdown_check=shutdown_check,
 					fitness_calculator_type=fitness_calculator_type,
-					fitness_weight_ce=fitness_weight_ce,
-					fitness_weight_acc=fitness_weight_acc,
-					fitness_weight_f1=fitness_weight_f1,
-					fitness_weight_fpr=fitness_weight_fpr,
+				fitness_weights=fitness_weights,
 					min_accuracy_floor=min_accuracy_floor,
 					cluster_crossover_ratio=cluster_crossover_ratio,
 					pool_shuffle_ratio=pool_shuffle_ratio,
@@ -513,10 +509,7 @@ class OptimizerStrategyFactory:
 					batch_evaluator=batch_evaluator,
 					shutdown_check=shutdown_check,
 					fitness_calculator_type=fitness_calculator_type,
-					fitness_weight_ce=fitness_weight_ce,
-					fitness_weight_acc=fitness_weight_acc,
-					fitness_weight_f1=fitness_weight_f1,
-					fitness_weight_fpr=fitness_weight_fpr,
+				fitness_weights=fitness_weights,
 					min_accuracy_floor=min_accuracy_floor,
 				)
 
@@ -533,10 +526,7 @@ class OptimizerStrategyFactory:
 					batch_evaluator=batch_evaluator,
 					shutdown_check=shutdown_check,
 					fitness_calculator_type=fitness_calculator_type,
-					fitness_weight_ce=fitness_weight_ce,
-					fitness_weight_acc=fitness_weight_acc,
-					fitness_weight_f1=fitness_weight_f1,
-					fitness_weight_fpr=fitness_weight_fpr,
+				fitness_weights=fitness_weights,
 				)
 
 			case OptimizerStrategyType.CONNECTIVITY_GA:
@@ -602,10 +592,7 @@ class OptimizerStrategyFactory:
 					batch_evaluator=batch_evaluator,
 					shutdown_check=shutdown_check,
 					fitness_calculator_type=fitness_calculator_type,
-					fitness_weight_ce=fitness_weight_ce,
-					fitness_weight_acc=fitness_weight_acc,
-					fitness_weight_f1=fitness_weight_f1,
-					fitness_weight_fpr=fitness_weight_fpr,
+				fitness_weights=fitness_weights,
 					min_accuracy_floor=min_accuracy_floor,
 					phase_name=phase_name,
 				)
@@ -651,10 +638,7 @@ class OptimizerStrategyFactory:
 		phase_name: str = "GA Optimization",
 		shutdown_check: Any = None,  # Callable[[], bool] for graceful shutdown
 		fitness_calculator_type: Any = None,
-		fitness_weight_ce: float = 1.0,
-		fitness_weight_acc: float = 1.0,
-		fitness_weight_f1: float = 0.0,
-		fitness_weight_fpr: float = 0.0,
+		fitness_weights: FitnessWeights = None,
 		min_accuracy_floor: float | None = None,
 		cluster_crossover_ratio: float = 0.0,
 		pool_shuffle_ratio: float = 0.0,
@@ -700,10 +684,7 @@ class OptimizerStrategyFactory:
 			fresh_population=fresh_population,
 			seed_only=seed_only,
 			fitness_calculator_type=fitness_calculator_type or FitnessCalculatorType.HARMONIC_RANK,
-			fitness_weight_ce=fitness_weight_ce,
-			fitness_weight_acc=fitness_weight_acc,
-			fitness_weight_f1=fitness_weight_f1,
-			fitness_weight_fpr=fitness_weight_fpr,
+				fitness_weights=fitness_weights,
 			min_accuracy_floor=min_accuracy_floor or 0.0,
 		)
 		# Pass batch_evaluator as cached_evaluator if it supports search_offspring
@@ -745,10 +726,7 @@ class OptimizerStrategyFactory:
 		batch_evaluator: Any = None,
 		shutdown_check: Any = None,
 		fitness_calculator_type: Any = None,
-		fitness_weight_ce: float = 1.0,
-		fitness_weight_acc: float = 1.0,
-		fitness_weight_f1: float = 0.0,
-		fitness_weight_fpr: float = 0.0,
+		fitness_weights: FitnessWeights = None,
 		min_accuracy_floor: float | None = None,
 	):
 		"""Create an ArchitectureTSStrategy."""
@@ -787,10 +765,7 @@ class OptimizerStrategyFactory:
 			threshold_reference=threshold_reference,
 			fitness_percentile=fitness_percentile,
 			fitness_calculator_type=fitness_calculator_type or FitnessCalculatorType.HARMONIC_RANK,
-			fitness_weight_ce=fitness_weight_ce,
-			fitness_weight_acc=fitness_weight_acc,
-			fitness_weight_f1=fitness_weight_f1,
-			fitness_weight_fpr=fitness_weight_fpr,
+				fitness_weights=fitness_weights,
 			min_accuracy_floor=min_accuracy_floor or 0.0,
 		)
 		return ArchitectureTSStrategy(arch_config, ts_config, seed, logger, batch_evaluator, shutdown_check=shutdown_check)
@@ -888,10 +863,7 @@ class OptimizerStrategyFactory:
 		batch_evaluator: Any,
 		shutdown_check: Any,
 		fitness_calculator_type: Any,
-		fitness_weight_ce: float,
-		fitness_weight_acc: float,
-		fitness_weight_f1: float = 0.0,
-		fitness_weight_fpr: float = 0.0,
+		fitness_weights: FitnessWeights = None,
 	):
 		"""Create a GridSearchStrategy for architecture evaluation."""
 		from wnn.ram.fitness import FitnessCalculatorType
@@ -907,10 +879,7 @@ class OptimizerStrategyFactory:
 			population_size=population_size,
 			total_input_bits=total_input_bits,
 			fitness_calculator_type=fitness_calculator_type or FitnessCalculatorType.HARMONIC_RANK,
-			fitness_weight_ce=fitness_weight_ce,
-			fitness_weight_acc=fitness_weight_acc,
-			fitness_weight_f1=fitness_weight_f1,
-			fitness_weight_fpr=fitness_weight_fpr,
+				fitness_weights=fitness_weights,
 		)
 		return GridSearchStrategy(
 			config=config,
@@ -942,10 +911,7 @@ class OptimizerStrategyFactory:
 		batch_evaluator: Any,
 		shutdown_check: Any,
 		fitness_calculator_type: Any,
-		fitness_weight_ce: float,
-		fitness_weight_acc: float,
-		fitness_weight_f1: float = 0.0,
-		fitness_weight_fpr: float = 0.0,
+		fitness_weights: FitnessWeights = None,
 		min_accuracy_floor: float | None = None,
 		phase_name: str = "Adaptation",
 	):
@@ -980,10 +946,7 @@ class OptimizerStrategyFactory:
 			threshold_delta=threshold_delta,
 			threshold_reference=threshold_reference,
 			fitness_calculator_type=fitness_calculator_type or FitnessCalculatorType.HARMONIC_RANK,
-			fitness_weight_ce=fitness_weight_ce,
-			fitness_weight_acc=fitness_weight_acc,
-			fitness_weight_f1=fitness_weight_f1,
-			fitness_weight_fpr=fitness_weight_fpr,
+				fitness_weights=fitness_weights,
 			min_accuracy_floor=min_accuracy_floor,
 		)
 		return AdaptationStrategy(

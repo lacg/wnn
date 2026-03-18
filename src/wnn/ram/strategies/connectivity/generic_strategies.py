@@ -1031,23 +1031,25 @@ class OptimizationConfig:
 	fitness_calculator_type: FitnessCalculatorType = FitnessCalculatorType.HARMONIC_RANK
 	fitness_weight_ce: float = 1.0
 	fitness_weight_acc: float = 1.0
-	fitness_weight_f1: float = 0.0  # F1-macro weight (0.0 = disabled, >0 = included in ranking)
-	fitness_weight_fpr: float = 0.0  # FPR weight (0.0 = disabled, >0 = lower FPR ranked better)
-	# Accuracy floor: genomes below this get fitness = infinity (0.0 = disabled)
+	fitness_weight_f1: float = 0.0
+	fitness_weight_fpr: float = 0.0
 	min_accuracy_floor: float = 0.0
 	# Early stopping
 	patience: int = 5
 	check_interval: int = 10
 	min_improvement_pct: float = 0.1
 
+	@property
+	def fitness_weights(self) -> 'FitnessWeights':
+		from wnn.ram.metrics import FitnessWeights
+		return FitnessWeights(ce=self.fitness_weight_ce, acc=self.fitness_weight_acc,
+							  f1=self.fitness_weight_f1, fpr=self.fitness_weight_fpr)
+
 	def create_fitness_calculator(self) -> 'FitnessCalculator':
 		"""Create a FitnessCalculator from this config."""
 		return FitnessCalculatorFactory.create(
 			self.fitness_calculator_type,
-			weight_ce=self.fitness_weight_ce,
-			weight_acc=self.fitness_weight_acc,
-			weight_f1=self.fitness_weight_f1,
-			weight_fpr=self.fitness_weight_fpr,
+			weights=self.fitness_weights,
 			min_accuracy_floor=self.min_accuracy_floor if self.min_accuracy_floor > 0 else None,
 		)
 

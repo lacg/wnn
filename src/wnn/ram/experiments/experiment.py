@@ -457,10 +457,10 @@ class Experiment:
 			"max_neurons": cfg.bitwise_max_neurons if cfg.bitwise_max_neurons is not None else cfg.max_neurons,
 			# Fitness calculator settings
 			"fitness_calculator_type": cfg.fitness_calculator_type,
-			"fitness_weight_ce": cfg.fitness_weight_ce,
-			"fitness_weight_acc": cfg.fitness_weight_acc,
-			"fitness_weight_f1": cfg.fitness_weight_f1,
-			"fitness_weight_fpr": cfg.fitness_weight_fpr,
+			"fitness_weights": FitnessWeights(
+				ce=cfg.fitness_weight_ce, acc=cfg.fitness_weight_acc,
+				f1=cfg.fitness_weight_f1, fpr=cfg.fitness_weight_fpr,
+			),
 			"min_accuracy_floor": cfg.min_accuracy_floor if cfg.min_accuracy_floor > 0 else None,
 		}
 
@@ -534,10 +534,10 @@ class Experiment:
 		# Create fitness calculator for validation genome selection
 		fitness_calculator = FitnessCalculatorFactory.create(
 			cfg.fitness_calculator_type,
-			weight_ce=cfg.fitness_weight_ce,
-			weight_acc=cfg.fitness_weight_acc,
-			weight_f1=cfg.fitness_weight_f1,
-			weight_fpr=cfg.fitness_weight_fpr,
+			weights=FitnessWeights(
+				ce=cfg.fitness_weight_ce, acc=cfg.fitness_weight_acc,
+				f1=cfg.fitness_weight_f1, fpr=cfg.fitness_weight_fpr,
+			),
 		)
 
 		# Run INIT validation on seed population
