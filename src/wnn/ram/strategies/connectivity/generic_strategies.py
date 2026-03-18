@@ -2346,9 +2346,9 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 				# Update best_ranked from new population
 				best_ranked = self._find_best_ranked(pop, fitness_calculator)
 				best_ranked_genome = best_ranked[0]
-		best_ranked_m = best_ranked[1]
-		best_ranked_ce = best_ranked_m.ce if hasattr(best_ranked_m, 'ce') else best_ranked_m
-		best_ranked_accuracy = best_ranked_m.acc if hasattr(best_ranked_m, 'acc') else None
+				best_ranked_m = best_ranked[1]
+				best_ranked_ce = best_ranked_m.ce if hasattr(best_ranked_m, 'ce') else best_ranked_m
+				best_ranked_accuracy = best_ranked_m.acc if hasattr(best_ranked_m, 'acc') else None
 
 				# Update global best (by fitness calculator score)
 				iter_metrics = _ts_pop_metrics(pop)
