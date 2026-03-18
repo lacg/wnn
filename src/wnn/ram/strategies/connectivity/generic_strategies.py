@@ -2106,40 +2106,37 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 			try:
 				init_results = batch_evaluate_fn([initial_genome])
 				if init_results:
-					initial_fitness = init_results[0][0]
-					initial_accuracy = init_results[0][1]
-					initial_f1 = getattr(init_results[0], 'f1_macro', None)
-					initial_fpr = getattr(init_results[0], 'fpr', None)
+					r = init_results[0]
+					initial_fitness = r.ce if hasattr(r, 'ce') else r[0]
+					initial_accuracy = r.acc if hasattr(r, 'acc') else r[1]
 					self._log.info(f"[{self.name}] Re-evaluated initial genome: CE={initial_fitness:.4f}, Acc={initial_accuracy:.2%}")
 			except Exception as e:
 				self._log.warning(f"[{self.name}] Failed to re-evaluate initial genome: {e}, falling back to cached")
-				initial_fitness = initial_evals[0][0]
-				initial_accuracy = initial_evals[0][1]
+				e0 = initial_evals[0]
+				initial_fitness = e0.ce if hasattr(e0, 'ce') else e0[0]
+				initial_accuracy = e0.acc if hasattr(e0, 'acc') else e0[1]
 		elif initial_evals:
 			# No batch_evaluate_fn — fall back to cached evals
-			initial_fitness = initial_evals[0][0]
-			initial_accuracy = initial_evals[0][1]
+			e0 = initial_evals[0]
+			initial_fitness = e0.ce if hasattr(e0, 'ce') else e0[0]
+			initial_accuracy = e0.acc if hasattr(e0, 'acc') else e0[1]
 			self._log.info(f"[{self.name}] Using cached eval for initial genome (no evaluator): CE={initial_fitness:.4f}, Acc={initial_accuracy:.2%}")
 		elif batch_evaluate_fn is not None:
 			try:
 				init_results = batch_evaluate_fn([initial_genome])
 				if init_results:
-					initial_fitness = init_results[0][0]
-					initial_accuracy = init_results[0][1]
-					initial_f1 = getattr(init_results[0], 'f1_macro', None)
-					initial_fpr = getattr(init_results[0], 'fpr', None)
+					r = init_results[0]
+					initial_fitness = r.ce if hasattr(r, 'ce') else r[0]
+					initial_accuracy = r.acc if hasattr(r, 'acc') else r[1]
 			except Exception as e:
 				self._log.warning(f"[{self.name}] Failed to re-evaluate initial genome: {e}")
 
-		# === Build initial population ===
-		if initial_f1 is not None:
-			pop: list = [
-				(self.clone_genome(initial_genome), initial_fitness, initial_accuracy, initial_f1, initial_fpr)
-			]
-		else:
-			pop: list = [
-				(self.clone_genome(initial_genome), initial_fitness, initial_accuracy)
-			]
+		# === Build initial population as (genome, Metrics) ===
+		from wnn.ram.metrics import Metrics as _M
+		init_metrics = _M(ce=initial_fitness, acc=initial_accuracy or 0.0)
+		pop: list = [
+			(self.clone_genome(initial_genome), init_metrics)
+		]
 
 		# Initial threshold
 		current_threshold = self._compute_threshold(0.0)
