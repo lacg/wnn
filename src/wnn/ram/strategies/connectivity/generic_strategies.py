@@ -1472,22 +1472,20 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			# Log progress with timing
 			gen_elapsed = time.time() - gen_start_time
 			total_elapsed = time.time() - loop_start_time
-			gen_avg = sum(fitness_values) / len(fitness_values)
+			cur_metrics = _pop_metrics(population)
+			gen_avg_ce = sum(m.ce for m in cur_metrics) / len(cur_metrics)
 			gen_width = len(str(cfg.generations))
 			rate = len(offspring) / offspring_secs if offspring_secs > 0 else 0
-			# ETA based on average time per generation so far
 			gens_done = generation + 1
 			gens_remaining = cfg.generations - gens_done
 			avg_gen_secs = total_elapsed / gens_done
 			eta_secs = gens_remaining * avg_gen_secs
-			# Delta from previous generation
 			delta = best_fitness - prev_best_fitness
 			delta_str = f"{delta:+.4f}" if delta != 0 else "="
-			# Best accuracy
 			acc_str = f", acc={best_accuracy_val:.2%}" if best_accuracy_val is not None else ""
 			self._log.info(
 				f"[{self.name}] Gen {generation + 1:0{gen_width}d}/{cfg.generations}: "
-				f"best={best_fitness:.4f} ({delta_str}), avg={gen_avg:.4f}{acc_str} "
+				f"best={best_fitness:.4f} ({delta_str}), avg={gen_avg_ce:.4f}{acc_str} "
 				f"[elites survived: {surviving_elites}/{total_elites}] "
 				f"| {gen_elapsed:.1f}s (offspring: {offspring_secs:.1f}s, {rate:.1f} gen/s) "
 				f"[elapsed: {_fmt_duration(total_elapsed)}, ETA: {_fmt_duration(eta_secs)}]"
@@ -1496,27 +1494,27 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			# Record iteration to tracker (if set)
 			if self._tracker and self._tracker_experiment_id:
 				try:
-					# Three independent bests from potentially different genomes
-					iter_bests = fitness_calculator.bests(population)
-					valid_accs = [a for a in accuracy_values if a is not None]
-					avg_acc = sum(valid_accs) / len(valid_accs) if valid_accs else None
+					# Bests from population using fitness calculator
+					genomes_list = [t[0] for t in population]
+					iter_bests = fitness_calculator.bests(genomes_list, cur_metrics)
+					avg_acc = sum(m.acc for m in cur_metrics) / len(cur_metrics)
 
-					# Get baseline and patience info for dashboard
+					# Patience and baseline info
 					baseline_ce = early_stopper._best_fitness if hasattr(early_stopper, '_best_fitness') else None
 					delta_baseline = (best_fitness - baseline_ce) if baseline_ce is not None else None
 					delta_previous = best_fitness - prev_best_fitness
 					patience_counter = early_stopper._patience_counter if hasattr(early_stopper, '_patience_counter') else 0
-					candidates_total = len(offspring)  # In generic GA, all offspring are viable
+					candidates_total = len(offspring)
 
-					# Update running global best F1/FPR (like best_fitness/best_accuracy_val)
-					valid_f1s = [v for v in f1_values if v is not None]
-					valid_fprs = [v for v in fpr_values if v is not None]
-					if valid_f1s:
-						gen_best_f1 = max(valid_f1s)
+					# Update running global best F1/FPR
+					gen_f1s = [m.f1 for m in cur_metrics if m.f1 is not None]
+					gen_fprs = [m.fpr for m in cur_metrics if m.fpr is not None]
+					if gen_f1s:
+						gen_best_f1 = max(gen_f1s)
 						if best_f1_global is None or gen_best_f1 > best_f1_global:
 							best_f1_global = gen_best_f1
-					if valid_fprs:
-						gen_best_fpr = min(valid_fprs)
+					if gen_fprs:
+						gen_best_fpr = min(gen_fprs)
 						if best_fpr_global is None or gen_best_fpr < best_fpr_global:
 							best_fpr_global = gen_best_fpr
 
@@ -1545,30 +1543,25 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 					# Record genome evaluations (if genome_to_config is implemented)
 					if iteration_id and self._tracker_experiment_id and HAS_TRACKER and GenomeRole is not None:
 						evaluations = []
-						for pos, item in enumerate(population):
-							genome, ce, acc = item[0], item[1], item[2]
-							item_f1 = item[3] if len(item) > 3 else None
-							item_fpr = item[4] if len(item) > 4 else None
+						for pos, (genome, m) in enumerate(population):
 							config = self.genome_to_config(genome)
 							if config is not None:
 								genome_id = self._tracker.get_or_create_genome(
 									self._tracker_experiment_id, config
 								)
-								# Role: first total_elites are elites, rest are offspring
 								role = GenomeRole.ELITE if pos < total_elites else GenomeRole.OFFSPRING
-								# Include fitness score from the fitness calculator
 								fs = combined_scores[pos] if pos < len(combined_scores) else None
 								evaluations.append({
 									"iteration_id": iteration_id,
 									"genome_id": genome_id,
 									"position": pos,
 									"role": role,
-									"ce": ce,
-									"accuracy": acc if acc is not None else 0.0,
+									"ce": m.ce,
+									"accuracy": m.acc,
 									"elite_rank": pos if pos < total_elites else None,
 									"fitness_score": fs,
-									"f1_macro": item_f1,
-									"fpr": item_fpr,
+									"f1_macro": m.f1,
+									"fpr": m.fpr,
 								})
 						if evaluations:
 							self._tracker.record_genome_evaluations_batch(evaluations)
@@ -1600,34 +1593,30 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 							min_accuracy=current_threshold,
 						)
 						population.extend(new_individuals)
-						fitness_values.extend([t[1] for t in new_individuals])
-						accuracy_values.extend([t[2] for t in new_individuals])
-						f1_values.extend([t[3] if len(t) > 3 else None for t in new_individuals])
-						fpr_values.extend([t[4] if len(t) > 4 else None for t in new_individuals])
 				elif cfg.population_size < old_pop_size:
-					# Shrink population - keep best by fitness score
-					shrink_tuples = _fc_tuples(fitness_values, accuracy_values, f1_values, fpr_values)
-					shrink_scores = fitness_calculator.fitness(shrink_tuples)
+					# Shrink population — keep best by fitness score
+					shrink_metrics = _pop_metrics(population)
+					shrink_scores = fitness_calculator.fitness(shrink_metrics)
 					shrink_order = sorted(range(len(shrink_scores)), key=lambda i: shrink_scores[i])
 					keep_indices = shrink_order[:cfg.population_size]
 					population = [population[i] for i in keep_indices]
-					fitness_values = [fitness_values[i] for i in keep_indices]
-					accuracy_values = [accuracy_values[i] for i in keep_indices]
-					f1_values = [f1_values[i] for i in keep_indices]
-					fpr_values = [fpr_values[i] for i in keep_indices]
 
 			# Overfitting callback check (same interval as early stopping)
 			if overfitting_callback is not None and (generation + 1) % cfg.check_interval == 0:
 				control = overfitting_callback(best, best_fitness)
 				if hasattr(control, 'early_stop') and control.early_stop:
 					self._log.warning(f"[{self.name}] Overfitting early stop at gen {generation + 1}")
-					sorted_pop = sorted(population, key=lambda x: x[1])
+					early_metrics = _pop_metrics(population)
+					early_scores = fitness_calculator.fitness(early_metrics)
+					early_order = sorted(range(len(early_scores)), key=lambda i: early_scores[i])
+					sorted_pop = [population[i] for i in early_order]
 					final_population = [self.clone_genome(t[0]) for t in sorted_pop]
-					early_pop_metrics = [(t[1], t[2]) for t in sorted_pop]
+					pop_metrics_out = [t[1] for t in sorted_pop]
 					current_final_threshold = self._compute_threshold(generation / cfg.threshold_reference)
-					early_bests = fitness_calculator.bests(population)
+					genomes_list = [t[0] for t in population]
+					early_bests = fitness_calculator.bests(genomes_list, early_metrics)
 					return (
-						best, history, final_population, early_pop_metrics,
+						best, history, final_population, pop_metrics_out,
 						generation + 1, True, StopReason.OVERFITTING,
 						early_bests.best_acc.metrics.acc, current_final_threshold,
 					)
@@ -1635,32 +1624,28 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			# Update previous best for next iteration's delta computation
 			prev_best_fitness = best_fitness
 
-		# Get final bests using fitness calculator (three independent metrics)
-		final_bests = fitness_calculator.bests(population)
+		# Get final bests using fitness calculator
+		final_metrics = _pop_metrics(population)
+		genomes_list = [t[0] for t in population]
+		final_bests = fitness_calculator.bests(genomes_list, final_metrics)
 		final_accuracy = final_bests.best_acc.metrics.acc
 
-		# Compute final scores for sorting
-		final_tuples = _fc_tuples(fitness_values, accuracy_values, f1_values, fpr_values)
-		final_scores = fitness_calculator.fitness(final_tuples)
-
-		# Extract final population for seeding next phase (sorted by fitness score)
+		# Sort final population by fitness score for seeding next phase
+		final_scores = fitness_calculator.fitness(final_metrics)
 		scored_pop = list(zip(population, final_scores))
 		scored_pop.sort(key=lambda x: x[1])
 		final_population = [self.clone_genome(t[0]) for t, _ in scored_pop]
-		population_metrics = [
-			(t[1], t[2], t[3] if len(t) > 3 else None, t[4] if len(t) > 4 else None)
-			for t, _ in scored_pop
-		]
+		population_metrics = [t[1] for t, _ in scored_pop]  # list[Metrics]
 
 		# Compute final diversity
-		final_ce_spread = max(fitness_values) - min(fitness_values) if fitness_values else 0.0
+		final_ce_spread = max(m.ce for m in final_metrics) - min(m.ce for m in final_metrics) if final_metrics else 0.0
 
-		# Count elite survivals (how many initial elites made it to final population)
+		# Count elite survivals
 		elite_survivals = 0
 		if initial_elite_genomes:
-			final_fitness_set = set(t[1] for t in population)
-			for _, elite_fit in initial_elite_genomes:
-				if elite_fit in final_fitness_set:
+			final_scores_set = set(combined_scores)
+			for _, elite_score in initial_elite_genomes:
+				if elite_score in final_scores_set:
 					elite_survivals += 1
 
 		# Log analysis summary
@@ -1715,34 +1700,26 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		Returns:
 			Updated population with fitness and accuracy filled in
 		"""
-		# Re-evaluate items missing fitness OR missing f1/fpr (3-tuple legacy)
-		unknown_indices = [i for i, t in enumerate(population) if t[1] is None or len(t) <= 3]
+		from wnn.ram.metrics import Metrics
+
+		# Re-evaluate items without Metrics
+		unknown_indices = [i for i, t in enumerate(population) if not isinstance(t[1], Metrics)]
 
 		if not unknown_indices:
-			return list(population)  # All cached with f1/fpr
+			return list(population)  # All have Metrics
 
 		to_eval = [population[i][0] for i in unknown_indices]
 
-		# Batch evaluate - returns (CE, accuracy[, bit_acc]) tuples or EvalResult objects
+		# Batch evaluate — returns list[Metrics]
 		if batch_fn is not None:
 			results = batch_fn(to_eval)
-			new_fitness = [r[0] for r in results]
-			new_accuracy = [r[1] for r in results]
-			new_f1 = [getattr(r, 'f1_macro', None) for r in results]
-			new_fpr = [getattr(r, 'fpr', None) for r in results]
+			new_metrics = [r if isinstance(r, Metrics) else Metrics(ce=r.ce, acc=r.acc, f1=r.f1, fpr=r.fpr) for r in results]
 		else:
-			# Fallback to single evaluation (no accuracy)
-			new_fitness = [single_fn(g) for g in to_eval]
-			new_accuracy = [None] * len(to_eval)
-			new_f1 = [None] * len(to_eval)
-			new_fpr = [None] * len(to_eval)
-
-		# Note: Real-time per-genome logging happens in evaluate_batch (adaptive_cluster.py)
-		# with timing info. We don't duplicate logging here.
+			new_metrics = [Metrics(ce=single_fn(g), acc=0.0) for g in to_eval]
 
 		result = list(population)
-		for idx, fit, acc, f1, fpr in zip(unknown_indices, new_fitness, new_accuracy, new_f1, new_fpr):
-			result[idx] = (result[idx][0], fit, acc, f1, fpr)
+		for idx, m in zip(unknown_indices, new_metrics):
+			result[idx] = (result[idx][0], m)
 
 		return result
 
@@ -1757,31 +1734,17 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		max_attempts: int = 10,
 		generation: Optional[int] = None,
 		total_generations: Optional[int] = None,
-	) -> list[tuple[T, float, Optional[float]]]:
+	):
 		"""
 		Build a population of viable candidates (accuracy >= min_accuracy).
 
-		Generates candidates, evaluates them, and keeps only viable ones.
-		Continues until target_size is reached or max_attempts exceeded.
-
-		Args:
-			target_size: Number of viable candidates needed
-			generator_fn: Function to generate a new random genome
-			batch_fn: Batch evaluation function returning list[(CE, accuracy)]
-			single_fn: Single evaluation function (fallback)
-			min_accuracy: Minimum accuracy threshold (0.0001 = 0.01%)
-			seed_genomes: Optional seed genomes to include (evaluated first)
-			max_attempts: Maximum generation attempts before giving up
-			generation: Current generation/iteration number (passed to batch_fn for logging)
-			total_generations: Total generations/iterations (passed to batch_fn for logging)
-
-		Returns:
-			List of (genome, fitness, accuracy) tuples for viable candidates
+		Returns list of (genome, Metrics) tuples.
 		"""
-		viable: list[tuple[T, float, Optional[float]]] = []
+		from wnn.ram.metrics import Metrics
+
+		viable: list[tuple] = []
 		filtered_count = 0
 
-		# Extra kwargs for batch evaluation (generation/total for per-batch logging)
 		batch_kwargs: dict = {"min_accuracy": min_accuracy}
 		if generation is not None:
 			batch_kwargs["generation"] = generation
@@ -1789,13 +1752,18 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			batch_kwargs["total_generations"] = total_generations
 
 		import time as _time
-
-		# Track fingerprints to avoid duplicates in population
 		known_fps: set = set()
 
-		# First, evaluate seed genomes if provided (always accepted — they're explicit seeds)
+		def _to_metrics(r) -> Metrics:
+			"""Convert evaluator result to Metrics."""
+			if isinstance(r, Metrics):
+				return r
+			return Metrics(ce=r.ce, acc=r.acc, f1=r.f1, fpr=r.fpr,
+						   threshold=getattr(r, 'threshold', None),
+						   bit_accuracy=getattr(r, 'bit_accuracy', None))
+
+		# Evaluate seed genomes (always accepted)
 		if seed_genomes:
-			# Deduplicate seeds by fingerprint
 			unique_seeds = []
 			for g in seed_genomes[:target_size]:
 				fp = g.fingerprint() if hasattr(g, 'fingerprint') else id(g)
@@ -1808,20 +1776,16 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			if batch_fn is not None:
 				results = batch_fn(to_eval, **batch_kwargs)
 				elapsed = _time.time() - t0
-				best_ce = min(r[0] for r in results) if results else 0.0
-				best_acc = max(r[1] for r in results if r[1] is not None) if results else 0.0
+				metrics = [_to_metrics(r) for r in results]
+				best_ce = min(m.ce for m in metrics) if metrics else 0.0
+				best_acc = max(m.acc for m in metrics) if metrics else 0.0
 				self._log.info(f"[{self.name}] Seed eval: {len(to_eval)} genomes in {elapsed:.1f}s (best CE={best_ce:.4f}, Acc={best_acc:.2%})")
-				for genome, r in zip(to_eval, results):
-					f1 = getattr(r, 'f1_macro', None)
-					fpr = getattr(r, 'fpr', None)
-					if f1 is not None:
-						viable.append((genome, r[0], r[1], f1, fpr))
-					else:
-						viable.append((genome, r[0], r[1]))
+				for genome, m in zip(to_eval, metrics):
+					viable.append((genome, m))
 			else:
 				for genome in to_eval:
 					ce = single_fn(genome)
-					viable.append((genome, ce, None))
+					viable.append((genome, Metrics(ce=ce, acc=0.0)))
 			self._log.info(f"[{self.name}] {len(viable)}/{target_size} viable after seed eval")
 
 		# Generate new candidates until we have enough
@@ -1829,8 +1793,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		while len(viable) < target_size and attempt < max_attempts:
 			attempt += 1
 			needed = target_size - len(viable)
-			# Generate a batch of candidates (extra to account for filtering + dedup)
-			batch_size = min(needed * 2, needed + 10)  # Generate extra
+			batch_size = min(needed * 2, needed + 10)
 			candidates = []
 			for _ in range(batch_size):
 				g = generator_fn()
@@ -1843,21 +1806,14 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 
 			self._log.info(f"[{self.name}] Building population: attempt {attempt}, evaluating {len(candidates)} candidates ({len(viable)}/{target_size} viable)")
 			t0 = _time.time()
-			# Evaluate
 			if batch_fn is not None:
 				results = batch_fn(candidates, **batch_kwargs)
 				elapsed = _time.time() - t0
 				self._log.info(f"[{self.name}] Batch eval: {len(candidates)} candidates in {elapsed:.1f}s")
 				for genome, r in zip(candidates, results):
-					acc = r[1]
-					ce = r[0]
-					if acc is None or acc >= min_accuracy:
-						f1 = getattr(r, 'f1_macro', None)
-						fpr = getattr(r, 'fpr', None)
-						if f1 is not None:
-							viable.append((genome, ce, acc, f1, fpr))
-						else:
-							viable.append((genome, ce, acc))
+					m = _to_metrics(r)
+					if m.acc >= min_accuracy:
+						viable.append((genome, m))
 						if len(viable) >= target_size:
 							break
 					else:
@@ -1865,7 +1821,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			else:
 				for genome in candidates:
 					ce = single_fn(genome)
-					viable.append((genome, ce, None))
+					viable.append((genome, Metrics(ce=ce, acc=0.0)))
 					if len(viable) >= target_size:
 						break
 
