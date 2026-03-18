@@ -311,17 +311,26 @@ class OptimizationTemplate(ABC, Generic[T]):
 			and len(initial_evals) == len(initial_population)
 		)
 
+		from wnn.ram.metrics import Metrics
+
 		if has_cached:
 			self._log.info(
 				f"[{self.name}] Using {len(initial_population)} cached evals "
 				f"from previous phase (no re-evaluation)"
 			)
-			seeded = [
-				(self.clone_genome(g), e[0], e[1],
-				 e[2] if len(e) > 2 else None,
-				 e[3] if len(e) > 3 else None)
-				for g, e in zip(initial_population, initial_evals)
-			]
+			seeded = []
+			for g, e in zip(initial_population, initial_evals):
+				if isinstance(e, Metrics):
+					seeded.append((self.clone_genome(g), e))
+				elif isinstance(e, dict):
+					seeded.append((self.clone_genome(g), Metrics.from_dict(e)))
+				else:
+					# Legacy tuple (ce, acc[, f1, fpr])
+					seeded.append((self.clone_genome(g), Metrics(
+						ce=e[0], acc=e[1],
+						f1=e[2] if len(e) > 2 else None,
+						fpr=e[3] if len(e) > 3 else None,
+					)))
 		else:
 			if force_re_evaluate and initial_evals:
 				self._log.info(
@@ -334,7 +343,7 @@ class OptimizationTemplate(ABC, Generic[T]):
 					f"(metrics not cached, will need evaluation)"
 				)
 			seeded = [
-				(self.clone_genome(g), None, None)
+				(self.clone_genome(g), None)
 				for g in initial_population
 			]
 
@@ -342,7 +351,8 @@ class OptimizationTemplate(ABC, Generic[T]):
 		if len(seeded) > target_size:
 			if has_cached and self._fitness_calculator is not None:
 				# Top-k by fitness ranking (greedy — best genomes survive)
-				fitness_scores = self._fitness_calculator.fitness(seeded)
+				seeded_metrics = [t[1] for t in seeded if isinstance(t[1], Metrics)]
+				fitness_scores = self._fitness_calculator.fitness(seeded_metrics) if seeded_metrics else [0.0] * len(seeded)
 				ranked_indices = sorted(
 					range(len(fitness_scores)), key=lambda i: fitness_scores[i]
 				)
