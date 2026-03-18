@@ -1013,6 +1013,7 @@
                     { key: 'platt', label: '┣ Platt', cls: 'threshold-platt-row' },
                     { key: 'beta', label: '┣ Beta', cls: 'threshold-beta-row' },
                     { key: 'empirical', label: '┣ Empirical', cls: 'threshold-empirical-row' },
+                    { key: 'empirical_cumulative', label: '┣ Emp-cumul', cls: 'threshold-empirical-row' },
                     { key: 'train_cal', label: '┣ Train-cal', cls: 'threshold-train-row' },
                     { key: 'fixed_05', label: '┣ Fixed 0.5', cls: 'threshold-fixed-row' },
                     { key: 'val_cal', label: '┗ Oracle', cls: 'threshold-oracle-row' },

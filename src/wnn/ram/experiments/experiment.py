@@ -1207,6 +1207,43 @@ class Experiment:
 					except Exception as e:
 						self.log(f"    Empirical:   skipped ({e})")
 
+					# 8. Empirical-cumulative: sort-based F1 maximization on holdout scores
+					# Unlike per-bin empirical, this considers ALL examples above each threshold
+					try:
+						if holdout_scores and holdout_labels_list:
+							import numpy as np
+							scores_arr = np.array(holdout_scores)
+							labels_arr = np.array(holdout_labels_list)
+
+							# Sort by score descending — sweep threshold from high to low
+							sorted_idx = np.argsort(-scores_arr)
+							sorted_labels = labels_arr[sorted_idx]
+							sorted_scores = scores_arr[sorted_idx]
+
+							cum_tp = np.cumsum(sorted_labels)           # attacks above threshold
+							cum_fp = np.cumsum(1 - sorted_labels)       # normals above threshold
+							total_pos = labels_arr.sum()
+							total_neg = len(labels_arr) - total_pos
+
+							prec = np.where(cum_tp + cum_fp > 0, cum_tp / (cum_tp + cum_fp), 0)
+							rec = np.where(total_pos > 0, cum_tp / total_pos, 0)
+							f1_arr = np.where(prec + rec > 0, 2 * prec * rec / (prec + rec), 0)
+
+							best_idx = int(np.argmax(f1_arr))
+							emp_cum_threshold = float(sorted_scores[best_idx])
+
+							ec_results = val_evaluator.evaluate_batch_full(
+								[genome], override_threshold=emp_cum_threshold,
+							)
+							ec = ec_results[0]
+							threshold_metadata['empirical_cumulative'] = {
+								'f1': ec.f1_macro, 'fpr': ec.fpr, 'acc': ec.accuracy,
+								'threshold': emp_cum_threshold,
+							}
+							self.log(f"    Emp-cumul:   F1={ec.f1_macro:.4%}, FPR={ec.fpr:.4%}, Acc={ec.accuracy:.4%}, t={emp_cum_threshold:.4f}")
+					except Exception as e:
+						self.log(f"    Emp-cumul:   skipped ({e})")
+
 					# Use test-calibrated as primary metric (most honest)
 					f1 = tcr.f1_macro
 					fpr_val = tcr.fpr
