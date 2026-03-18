@@ -1951,26 +1951,25 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 				continue
 
 			# Evaluate batch
+			from wnn.ram.metrics import Metrics as _Metrics
 			if self._batch_evaluate_fn is not None:
 				to_eval = [n for n, _ in candidates]
 				results = self._batch_evaluate_fn(
 					to_eval, min_accuracy=threshold,
 					generation=iteration, total_generations=self._config.iterations,
 				)
-				fitness_values = [r[0] for r in results]
-				accuracy_values = [r[1] for r in results]
+				eval_metrics = [r if isinstance(r, _Metrics) else _Metrics(ce=r.ce, acc=r.acc, f1=r.f1, fpr=r.fpr) for r in results]
 			else:
-				fitness_values = [self._evaluate_fn(n) for n, _ in candidates]
-				accuracy_values = [None] * len(candidates)
+				eval_metrics = [_Metrics(ce=self._evaluate_fn(n), acc=0.0) for n, _ in candidates]
 
 			total_evaluated += len(candidates)
 
 			# Sort into viable vs below-threshold
-			for (n, m), f, a in zip(candidates, fitness_values, accuracy_values):
-				if a is None or a >= threshold:
-					viable.append((n, m, f, a))
+			for (n, m_phase), em in zip(candidates, eval_metrics):
+				if em.acc >= threshold:
+					viable.append((n, m_phase, em))
 				else:
-					all_below_threshold.append((n, m, f, a))
+					all_below_threshold.append((n, m_phase, em))
 
 		# If not enough viable, fall back to best by accuracy then CE
 		if not viable:
@@ -2026,33 +2025,23 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 
 		if len(candidates) <= n:
 			return candidates
-		valid = [t for t in candidates if t[2] is not None]
-		if valid:
-			ranked = fitness_calculator.rank(valid)
-			# Map ranked genomes back to original tuples
-			id_to_tuple = {id(t[0]): t for t in candidates}
-			result = []
-			for g, _ in ranked[:n]:
-				if id(g) in id_to_tuple:
-					result.append(id_to_tuple[id(g)])
-			return result if len(result) == n else candidates[:n]
-		return sorted(candidates, key=lambda x: x[1])[:n]
+		# Rank by fitness calculator
+		genomes = [t[0] for t in candidates]
+		metrics = [t[1] for t in candidates]
+		scores = fitness_calculator.fitness(metrics)
+		ranked_idx = sorted(range(len(scores)), key=lambda i: scores[i])
+		return [candidates[i] for i in ranked_idx[:n]]
 
 	def _find_best_ranked(
 		self,
-		pop: list[tuple[T, float, Optional[float]]],
+		pop: list[tuple],
 		fitness_calculator: Any,
-	) -> tuple[T, float, Optional[float]]:
+	) -> tuple:
 		"""Find best genome in population by fitness ranking."""
-		valid = [t for t in pop if t[2] is not None]
-		if valid:
-			ranked = fitness_calculator.rank(valid)
-			best_obj = ranked[0][0]
-			for t in pop:
-				if t[0] is best_obj:
-					return (self.clone_genome(t[0]),) + t[1:]
-		# Fallback: best by CE
-		best_idx = min(range(len(pop)), key=lambda i: pop[i][1])
+		genomes = [t[0] for t in pop]
+		metrics = [t[1] for t in pop]
+		scores = fitness_calculator.fitness(metrics)
+		best_idx = min(range(len(scores)), key=lambda i: scores[i])
 		best_item = pop[best_idx]
 		return (self.clone_genome(best_item[0]),) + best_item[1:]
 
@@ -2202,32 +2191,32 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 		if len(pop) > pop_size:
 			pop = self._select_top_n(pop, pop_size, fitness_calculator)
 
-		# Global best tracking (by fitness calculator score, not raw CE)
-		# Running global best F1/FPR (for dashboard tracking)
-		pop_f1_init = [t[3] for t in pop if len(t) > 3 and t[3] is not None]
-		pop_fpr_init = [t[4] for t in pop if len(t) > 4 and t[4] is not None]
-		best_f1_global: Optional[float] = max(pop_f1_init) if pop_f1_init else None
-		best_fpr_global: Optional[float] = min(pop_fpr_init) if pop_fpr_init else None
+		from wnn.ram.metrics import Metrics
+
+		def _ts_pop_metrics(p) -> list[Metrics]:
+			return [t[1] for t in p]
+
+		# Global best F1/FPR tracking
+		ts_init_metrics = _ts_pop_metrics(pop)
+		init_f1s = [m.f1 for m in ts_init_metrics if m.f1 is not None]
+		init_fprs = [m.fpr for m in ts_init_metrics if m.fpr is not None]
+		best_f1_global: Optional[float] = max(init_f1s) if init_f1s else None
+		best_fpr_global: Optional[float] = min(init_fprs) if init_fprs else None
 
 		# Find best from initial population using fitness calculator
-		pop_fv = [t[1] for t in pop]
-		pop_av = [t[2] for t in pop]
-		pop_f1v = [t[3] if len(t) > 3 else None for t in pop]
-		pop_fprv = [t[4] if len(t) > 4 else None for t in pop]
-		init_tuples = _fc_tuples(pop_fv, pop_av, pop_f1v, pop_fprv)
-		init_scores = fitness_calculator.fitness(init_tuples)
+		init_scores = fitness_calculator.fitness(ts_init_metrics)
 		best_idx = min(range(len(init_scores)), key=lambda i: init_scores[i])
 		best = self.clone_genome(pop[best_idx][0])
 		best_fitness = init_scores[best_idx]
-		best_accuracy: Optional[float] = pop_av[best_idx]
+		best_accuracy: Optional[float] = ts_init_metrics[best_idx].acc
 		start_fitness = best_fitness if not initial_fitness else initial_fitness
 
-		# Best ranked genome (by fitness calculator)
+		# Best ranked genome
 		best_ranked = self._find_best_ranked(pop, fitness_calculator)
 		best_ranked_genome, best_ranked_ce, best_ranked_accuracy = best_ranked[0], best_ranked[1], best_ranked[2]
 
 		# Log seed summary
-		best_acc_val = max((t[2] for t in pop if t[2] is not None), default=None)
+		best_acc_val = max((m.acc for m in ts_init_metrics), default=None)
 		self._log.info(f"[{self.name}] Seed: best_ce={best_fitness:.4f}, best_acc={best_acc_val:.2%}, pop={len(pop)}" if best_acc_val else
 					   f"[{self.name}] Seed: best_ce={best_fitness:.4f}, best_acc=N/A, pop={len(pop)}")
 
@@ -2291,9 +2280,10 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 			if cfg.diversity_sources_pct > 0 and len(pop) > 1:
 				# Population-based TS: top 20% of population as sources
 				n_sources = max(1, int(len(pop) * cfg.diversity_sources_pct))
-				valid_for_rank = [t for t in pop if t[2] is not None]
-				if valid_for_rank:
-					ranked = fitness_calculator.rank(valid_for_rank)
+				ts_rank_genomes = [t[0] for t in pop]
+				ts_rank_metrics = [t[1] for t in pop]
+				if ts_rank_metrics:
+					ranked = fitness_calculator.rank(ts_rank_genomes, ts_rank_metrics)
 					sources = [self.clone_genome(g) for g, _ in ranked[:n_sources]]
 				else:
 					sources = [self.clone_genome(pop[0][0])]
@@ -2371,17 +2361,13 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 				best_ranked_genome, best_ranked_ce, best_ranked_accuracy = best_ranked[0], best_ranked[1], best_ranked[2]
 
 				# Update global best (by fitness calculator score)
-				pop_fv_iter = [t[1] for t in pop]
-				pop_av_iter = [t[2] for t in pop]
-				pop_f1v_iter = [t[3] if len(t) > 3 else None for t in pop]
-				pop_fprv_iter = [t[4] if len(t) > 4 else None for t in pop]
-				iter_tuples = _fc_tuples(pop_fv_iter, pop_av_iter, pop_f1v_iter, pop_fprv_iter)
-				iter_scores = fitness_calculator.fitness(iter_tuples)
+				iter_metrics = _ts_pop_metrics(pop)
+				iter_scores = fitness_calculator.fitness(iter_metrics)
 				iter_best_idx = min(range(len(iter_scores)), key=lambda i: iter_scores[i])
 				if iter_scores[iter_best_idx] < best_fitness:
 					best = self.clone_genome(pop[iter_best_idx][0])
 					best_fitness = iter_scores[iter_best_idx]
-					best_accuracy = pop_av_iter[iter_best_idx]
+					best_accuracy = iter_metrics[iter_best_idx].acc
 					improved_iterations += 1
 
 			history.append((iteration + 1, best_fitness))
@@ -2411,22 +2397,23 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 			if self._tracker and self._tracker_experiment_id:
 				try:
 					# Compute population stats
-					pop_avg_ce = sum(t[1] for t in pop) / len(pop) if pop else None
-					valid_accs = [t[2] for t in pop if t[2] is not None]
-					pop_avg_acc = sum(valid_accs) / len(valid_accs) if valid_accs else None
+					ts_cur_metrics = _ts_pop_metrics(pop)
+					pop_avg_ce = sum(m.ce for m in ts_cur_metrics) / len(ts_cur_metrics) if ts_cur_metrics else None
+					pop_avg_acc = sum(m.acc for m in ts_cur_metrics) / len(ts_cur_metrics) if ts_cur_metrics else None
 
-					# Get baseline and patience info for dashboard
+					# Baseline and patience info
 					baseline_ce = early_stopper._best_fitness if hasattr(early_stopper, '_best_fitness') else None
 					delta_baseline = (best_fitness - baseline_ce) if baseline_ce is not None else None
 					delta_previous = best_fitness - prev_best_fitness
 					patience_counter = early_stopper._patience_counter if hasattr(early_stopper, '_patience_counter') else 0
 
-					# Three independent bests from population
-					iter_bests = fitness_calculator.bests(pop)
+					# Bests from population
+					ts_genomes = [t[0] for t in pop]
+					iter_bests = fitness_calculator.bests(ts_genomes, ts_cur_metrics)
 
-					# Update running global best F1/FPR (like best_fitness/best_accuracy)
-					pop_f1s = [t[3] for t in pop if len(t) > 3 and t[3] is not None]
-					pop_fprs = [t[4] for t in pop if len(t) > 4 and t[4] is not None]
+					# Update running global best F1/FPR
+					pop_f1s = [m.f1 for m in ts_cur_metrics if m.f1 is not None]
+					pop_fprs = [m.fpr for m in ts_cur_metrics if m.fpr is not None]
 					if pop_f1s:
 						iter_best_f1 = max(pop_f1s)
 						if best_f1_global is None or iter_best_f1 > best_f1_global:
@@ -2464,8 +2451,8 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 
 						# Compute fitness scores for combined pop + offspring
 						all_items = list(pop) + list(offspring)
-						all_tuples = [(i, t[1], t[2] or 0.0) for i, t in enumerate(all_items)]
-						all_scores = fitness_calculator.fitness(all_tuples) if fitness_calculator else [None] * len(all_items)
+						all_metrics = [t[1] for t in all_items]
+						all_scores = fitness_calculator.fitness(all_metrics) if fitness_calculator else [None] * len(all_items)
 
 						# Record population members as TOP_K
 						for pos, item in enumerate(pop):
@@ -2527,10 +2514,7 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 
 		# === Build final_population from current population ===
 		final_population = [self.clone_genome(t[0]) for t in pop]
-		population_metrics = [
-			(t[1], t[2] or 0.0, t[3] if len(t) > 3 else None, t[4] if len(t) > 4 else None)
-			for t in pop
-		]
+		population_metrics = [t[1] for t in pop]  # list[Metrics]
 
 		# Final threshold (for next phase)
 		final_threshold = self._compute_threshold(iteration / cfg.threshold_reference) if cfg.iterations > 0 else self._compute_threshold(0.0)
