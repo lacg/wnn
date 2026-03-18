@@ -10,7 +10,7 @@
 	// Filters
 	let taskType = 'ids';
 	let stage = '';
-	let thresholdFilter = '';
+	let selectedThresholds: Set<string> = new Set();
 
 	// Sorting
 	let sortColumn = 'fitnessScore';
@@ -177,8 +177,8 @@
 
 	// Reactive: recompute whenever rawGenomes, filters, or weights change
 	$: deduplicated = deduplicateGenomes(rawGenomes);
-	$: filteredByThreshold = thresholdFilter
-		? deduplicated.filter(g => (g.threshold_mode || 'train_cal') === thresholdFilter)
+	$: filteredByThreshold = selectedThresholds.size > 0
+		? deduplicated.filter(g => selectedThresholds.has(g.threshold_mode || 'train_cal'))
 		: deduplicated;
 	$: ranked = computeFitnessRanking(filteredByThreshold);
 
@@ -248,13 +248,23 @@
 				{/each}
 			</select>
 		</div>
-		<div class="filter-group">
-			<label for="threshold">Threshold</label>
-			<select id="threshold" bind:value={thresholdFilter}>
-				{#each thresholdModes as t}
-					<option value={t.value}>{t.label}</option>
+		<div class="filter-group threshold-filters">
+			<label>Threshold</label>
+			<div class="threshold-checkboxes">
+				{#each thresholdModes.filter(t => t.value) as t}
+					<label class="threshold-check">
+						<input type="checkbox" checked={selectedThresholds.has(t.value)}
+							on:change={(e) => {
+								if (e.currentTarget.checked) {
+									selectedThresholds = new Set([...selectedThresholds, t.value]);
+								} else {
+									selectedThresholds = new Set([...selectedThresholds].filter(v => v !== t.value));
+								}
+							}} />
+						{t.label}
+					</label>
 				{/each}
-			</select>
+			</div>
 		</div>
 		<div class="filter-group weight-toggle">
 			<button class="weights-btn" on:click={() => showWeights = !showWeights}>
@@ -698,5 +708,28 @@
 	.tag-threshold {
 		font-size: 1rem;
 		opacity: 0.7;
+	}
+
+	.threshold-filters {
+		flex: 2;
+	}
+
+	.threshold-checkboxes {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.25rem 0.75rem;
+	}
+
+	.threshold-check {
+		display: flex;
+		align-items: center;
+		gap: 0.25rem;
+		font-size: 1rem;
+		color: var(--text-secondary);
+		cursor: pointer;
+	}
+
+	.threshold-check input {
+		cursor: pointer;
 	}
 </style>
