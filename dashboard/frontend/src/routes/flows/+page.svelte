@@ -139,6 +139,7 @@
     <div class="flows-grid">
       {#each pagedFlows as flow}
         <a href="/flows/{flow.id}" class="flow-card" class:deleting={deleting === flow.id}>
+          <span class="flow-id-label">F{flow.id}</span>
           <div class="flow-header">
             <h3 class="flow-name">{flow.name}</h3>
             <div class="flow-header-actions">
@@ -330,6 +331,13 @@
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
     gap: 1rem;
+  }
+
+  .flow-id-label {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #b91c1c;
+    opacity: 0.8;
   }
 
   .flow-card {
