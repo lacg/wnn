@@ -1266,35 +1266,27 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 				min_accuracy=initial_threshold,
 			)
 
-		fitness_values = [t[1] for t in population]
-		accuracy_values = [t[2] for t in population]
-		f1_values = [t[3] if len(t) > 3 else None for t in population]
-		fpr_values = [t[4] if len(t) > 4 else None for t in population]
+		# Extract Metrics from population tuples
+		# Population format: (genome, Metrics) — Metrics has ce, acc, f1, fpr
+		from wnn.ram.metrics import Metrics
 
-		def _fc_tuples(fv, av, f1v, fprv=None):
-			"""Build fitness calculator tuples, including F1/FPR when available."""
-			has_f1 = any(v is not None for v in f1v)
-			has_fpr = fprv is not None and any(v is not None for v in fprv)
-			if has_f1 and has_fpr:
-				return [(i, fv[i], av[i] or 0.0, f1v[i] or 0.0, fprv[i] if fprv[i] is not None else 1.0) for i in range(len(fv))]
-			elif has_f1:
-				return [(i, fv[i], av[i] or 0.0, f1v[i] or 0.0) for i in range(len(fv))]
-			return [(i, fv[i], av[i] or 0.0) for i in range(len(fv))]
+		def _pop_metrics(pop) -> list[Metrics]:
+			"""Extract Metrics list from population."""
+			return [t[1] for t in pop]
 
-		# Find initial best using fitness calculator (unified ranking)
-		init_tuples = _fc_tuples(fitness_values, accuracy_values, f1_values, fpr_values)
-		init_scores = fitness_calculator.fitness(init_tuples)
+		# Find initial best using fitness calculator
+		metrics_list = _pop_metrics(population)
+		init_scores = fitness_calculator.fitness(metrics_list)
 		best_idx = min(range(len(init_scores)), key=lambda i: init_scores[i])
 		best = self.clone_genome(population[best_idx][0])
-		best_fitness = init_scores[best_idx]  # Use harmonic fitness score, not raw CE
+		best_fitness = init_scores[best_idx]
 		initial_fitness = init_scores[0] if initial_genome else best_fitness
-		initial_accuracy = accuracy_values[best_idx]
-		best_accuracy_val = initial_accuracy
-		# Running global best F1/FPR (for dashboard tracking, like best_fitness/best_accuracy_val)
-		valid_init_f1 = [v for v in f1_values if v is not None]
-		valid_init_fpr = [v for v in fpr_values if v is not None]
-		best_f1_global = max(valid_init_f1) if valid_init_f1 else None
-		best_fpr_global = min(valid_init_fpr) if valid_init_fpr else None
+		best_accuracy_val = metrics_list[best_idx].acc
+		# Running global best F1/FPR (for dashboard tracking)
+		init_f1s = [m.f1 for m in metrics_list if m.f1 is not None]
+		init_fprs = [m.fpr for m in metrics_list if m.fpr is not None]
+		best_f1_global = max(init_f1s) if init_f1s else None
+		best_fpr_global = min(init_fprs) if init_fprs else None
 
 		history = [(0, best_fitness)]
 
@@ -1309,7 +1301,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 		)
 
 		# Track initial diversity (CE spread)
-		initial_ce_spread = max(fitness_values) - min(fitness_values) if fitness_values else 0.0
+		initial_ce_spread = max(m.ce for m in metrics_list) - min(m.ce for m in metrics_list) if metrics_list else 0.0
 
 		# Log config and initial best
 		self._log.info(f"[{self.name}] Config: pop={cfg.population_size}, gens={cfg.generations}, "
@@ -1371,19 +1363,16 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			# Unified elitism: use fitness calculator to rank, keep top 20%
 			n_elites = max(1, int(cfg.population_size * cfg.elitism_pct * 2))
 
-			# Build tuples for fitness ranking (includes F1 when available)
-			pop_tuples = _fc_tuples(fitness_values, accuracy_values, f1_values, fpr_values)
-			combined_scores = fitness_calculator.fitness(pop_tuples)
-			# Debug: detect broken fitness (all 1.0)
+			# Compute fitness scores from population metrics
+			pop_metrics = _pop_metrics(population)
+			combined_scores = fitness_calculator.fitness(pop_metrics)
+			# Debug: detect broken fitness (all identical)
 			if len(combined_scores) > 1 and all(s == combined_scores[0] for s in combined_scores):
-				has_f1_dbg = any(v is not None for v in f1_values)
-				has_fpr_dbg = fpr_values is not None and any(v is not None for v in fpr_values)
+				sample = pop_metrics[:3]
 				self._log.warning(
 					f"[{self.name}] WARNING: All fitness scores identical ({combined_scores[0]:.4f})! "
-					f"pop_size={len(population)}, tuple_len={len(pop_tuples[0]) if pop_tuples else 0}, "
-					f"has_f1={has_f1_dbg}, has_fpr={has_fpr_dbg}, "
-					f"f1_sample={f1_values[:3]}, fpr_sample={fpr_values[:3] if fpr_values else None}, "
-					f"pop_tuple_lens={[len(t) for t in population[:3]]}, "
+					f"pop_size={len(population)}, "
+					f"sample_metrics={[str(m) for m in sample]}, "
 					f"calculator={fitness_calculator.name}"
 				)
 			elite_sorted = sorted(range(len(combined_scores)), key=lambda i: combined_scores[i])
@@ -1405,23 +1394,19 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			# Track initial elites (first generation only) for survival analysis
 			if generation == 0:
 				initial_elite_genomes = [
-					(self.clone_genome(population[idx][0]), fitness_values[idx])
+					(self.clone_genome(population[idx][0]), combined_scores[idx])
 					for idx in all_elite_indices
 				]
 				self._log.info(f"[{self.name}] Elitism: {total_elites} by {fitness_calculator.name}")
 
-			# Add elites to new population
+			# Add elites to new population as (genome, Metrics)
 			elite_width = len(str(total_elites))
 			for i, elite_idx in enumerate(all_elite_indices):
 				elite_genome = self.clone_genome(population[elite_idx][0])
-				elite_fitness = fitness_values[elite_idx]
-				elite_accuracy = accuracy_values[elite_idx]
-				elite_f1 = f1_values[elite_idx]
-				elite_fpr = fpr_values[elite_idx]
-				new_population.append((elite_genome, elite_fitness, elite_accuracy, elite_f1, elite_fpr))
+				elite_m = pop_metrics[elite_idx]
+				new_population.append((elite_genome, elite_m))
 
-				acc_str = f", Acc={elite_accuracy:.2%}" if elite_accuracy is not None else ""
-				self._log.debug(f"[Elite {i + 1:0{elite_width}d}/{total_elites}] CE={elite_fitness:.4f}{acc_str} (score={combined_scores[elite_idx]:.4f})")
+				self._log.debug(f"[Elite {i + 1:0{elite_width}d}/{total_elites}] {elite_m} (score={combined_scores[elite_idx]:.4f})")
 
 			# Store fitness scores for tournament selection (so offspring parents
 			# are selected by the same metric as elites, not just raw CE)
@@ -1444,29 +1429,21 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 
 			# μ+λ selection: pool elites + offspring, keep top pop_size
 			pool = new_population + offspring
-			pool_fv = [t[1] for t in pool]
-			pool_av = [t[2] for t in pool]
-			pool_f1 = [t[3] if len(t) > 3 else None for t in pool]
-			pool_fpr = [t[4] if len(t) > 4 else None for t in pool]
-			pool_tuples = _fc_tuples(pool_fv, pool_av, pool_f1, pool_fpr)
-			pool_scores = fitness_calculator.fitness(pool_tuples)
+			pool_metrics = _pop_metrics(pool)
+			pool_scores = fitness_calculator.fitness(pool_metrics)
 
 			# Truncation select: keep top pop_size by fitness score
 			ranked_indices = sorted(range(len(pool)), key=lambda i: pool_scores[i])
 			keep_indices = ranked_indices[:cfg.population_size]
 			population = [pool[i] for i in keep_indices]
-			fitness_values = [pool_fv[i] for i in keep_indices]
-			accuracy_values = [pool_av[i] for i in keep_indices]
-			f1_values = [pool_f1[i] for i in keep_indices]
-			fpr_values = [pool_fpr[i] for i in keep_indices]
 			combined_scores = [pool_scores[i] for i in keep_indices]
 
-			# Update best (by harmonic fitness score, not raw CE)
+			# Update best (by fitness calculator score)
 			gen_best_idx = 0  # After sorting, index 0 is the best
 			if combined_scores[gen_best_idx] < best_fitness:
 				best = self.clone_genome(population[gen_best_idx][0])
 				best_fitness = combined_scores[gen_best_idx]
-				best_accuracy_val = accuracy_values[gen_best_idx]
+				best_accuracy_val = population[gen_best_idx][1].acc
 
 			history.append((generation + 1, best_fitness))
 
