@@ -653,6 +653,8 @@ class OptimizerStrategyFactory:
 		fitness_calculator_type: Any = None,
 		fitness_weight_ce: float = 1.0,
 		fitness_weight_acc: float = 1.0,
+		fitness_weight_f1: float = 0.0,
+		fitness_weight_fpr: float = 0.0,
 		min_accuracy_floor: float | None = None,
 		cluster_crossover_ratio: float = 0.0,
 		pool_shuffle_ratio: float = 0.0,
@@ -745,6 +747,8 @@ class OptimizerStrategyFactory:
 		fitness_calculator_type: Any = None,
 		fitness_weight_ce: float = 1.0,
 		fitness_weight_acc: float = 1.0,
+		fitness_weight_f1: float = 0.0,
+		fitness_weight_fpr: float = 0.0,
 		min_accuracy_floor: float | None = None,
 	):
 		"""Create an ArchitectureTSStrategy."""
@@ -886,6 +890,8 @@ class OptimizerStrategyFactory:
 		fitness_calculator_type: Any,
 		fitness_weight_ce: float,
 		fitness_weight_acc: float,
+		fitness_weight_f1: float = 0.0,
+		fitness_weight_fpr: float = 0.0,
 	):
 		"""Create a GridSearchStrategy for architecture evaluation."""
 		from wnn.ram.fitness import FitnessCalculatorType
@@ -938,8 +944,10 @@ class OptimizerStrategyFactory:
 		fitness_calculator_type: Any,
 		fitness_weight_ce: float,
 		fitness_weight_acc: float,
-		min_accuracy_floor: float | None,
-		phase_name: str,
+		fitness_weight_f1: float = 0.0,
+		fitness_weight_fpr: float = 0.0,
+		min_accuracy_floor: float | None = None,
+		phase_name: str = "Adaptation",
 	):
 		"""Create a stats-guided adaptation strategy (neurogenesis, synaptogenesis, axonogenesis)."""
 		from wnn.ram.fitness import FitnessCalculatorType
