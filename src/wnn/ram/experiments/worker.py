@@ -1016,6 +1016,8 @@ class FlowWorker:
             )
             exp_weight_ce = exp_data.get("fitness_weight_ce") or default_weight_ce
             exp_weight_acc = exp_data.get("fitness_weight_acc") or default_weight_acc
+            exp_weight_f1 = exp_data.get("fitness_weight_f1") or params.get("fitness_weight_f1", params.get("ids_fitness_weight_f1", 0.0))
+            exp_weight_fpr = exp_data.get("fitness_weight_fpr") or params.get("fitness_weight_fpr", params.get("ids_fitness_weight_fpr", 0.0))
 
             # Determine architecture_type and target_stage early (needed for grid selection)
             architecture_type = params.get("architecture_type", "tiered")
@@ -1137,6 +1139,8 @@ class FlowWorker:
                 fitness_calculator_type=exp_fitness_type,
                 fitness_weight_ce=exp_weight_ce,
                 fitness_weight_acc=exp_weight_acc,
+                fitness_weight_f1=exp_weight_f1,
+                fitness_weight_fpr=exp_weight_fpr,
                 min_accuracy_floor=min_accuracy_floor,
                 threshold_start=threshold_start_pct / 100.0,  # Convert % to fraction
                 threshold_delta=per_phase_delta,
