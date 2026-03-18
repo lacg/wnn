@@ -953,8 +953,8 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			pct = cfg.fitness_percentile if cfg.fitness_percentile and 0 < cfg.fitness_percentile < 1.0 else None
 			generate_count = math.ceil(n_needed / pct) if pct else n_needed
 
-			# Convert 3-tuple population to 2-tuple for evaluator
-			rust_population = [(t[0], t[1]) for t in population]
+			# Convert (genome, Metrics) to (genome, ce_float) for Rust evaluator
+			rust_population = [(t[0], t[1].ce) for t in population]
 
 			# Pre-compute fitness scores so tournament selection uses the
 			# same metric as elite selection (e.g. HarmonicRank), not raw CE
@@ -1024,7 +1024,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			population = ctx.get('population', [])
 			self._checkpoint_mgr.save(
 				iteration=generation,
-				population=[(t[0], t[1]) for t in population],
+				population=[(t[0], t[1].ce) for t in population],
 				best_genome=ctx.get('best_genome'),
 				best_fitness=(ctx.get('best_fitness'), ctx.get('best_accuracy')),
 				current_threshold=ctx.get('threshold', 0.0),
@@ -1040,7 +1040,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 				population = ctx.get('population', [])
 				self._checkpoint_mgr.save(
 					iteration=generation,
-					population=[(t[0], t[1]) for t in population],
+					population=[(t[0], t[1].ce) for t in population],
 					best_genome=ctx.get('best_genome'),
 					best_fitness=(ctx.get('best_fitness'), ctx.get('best_accuracy')),
 					current_threshold=ctx.get('threshold', 0.0),
