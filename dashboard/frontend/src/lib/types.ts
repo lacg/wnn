@@ -401,6 +401,7 @@ export interface BestGenome {
   fpr: number | null;
   flow_id: number | null;
   experiment_id: number | null;
+  threshold_mode: string;
   hf_repo_id: string | null;
   hf_exported_at: string | null;
   created_at: string;
