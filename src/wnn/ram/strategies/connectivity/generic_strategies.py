@@ -1374,6 +1374,18 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 			# Build tuples for fitness ranking (includes F1 when available)
 			pop_tuples = _fc_tuples(fitness_values, accuracy_values, f1_values, fpr_values)
 			combined_scores = fitness_calculator.fitness(pop_tuples)
+			# Debug: detect broken fitness (all 1.0)
+			if len(combined_scores) > 1 and all(s == combined_scores[0] for s in combined_scores):
+				has_f1_dbg = any(v is not None for v in f1_values)
+				has_fpr_dbg = fpr_values is not None and any(v is not None for v in fpr_values)
+				self._log.warning(
+					f"[{self.name}] WARNING: All fitness scores identical ({combined_scores[0]:.4f})! "
+					f"pop_size={len(population)}, tuple_len={len(pop_tuples[0]) if pop_tuples else 0}, "
+					f"has_f1={has_f1_dbg}, has_fpr={has_fpr_dbg}, "
+					f"f1_sample={f1_values[:3]}, fpr_sample={fpr_values[:3] if fpr_values else None}, "
+					f"pop_tuple_lens={[len(t) for t in population[:3]]}, "
+					f"calculator={fitness_calculator.name}"
+				)
 			elite_sorted = sorted(range(len(combined_scores)), key=lambda i: combined_scores[i])
 
 			# Deduplicate elites by fingerprint — same architecture = same eval,
