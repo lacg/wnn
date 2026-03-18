@@ -2527,7 +2527,9 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 		stop_reason = self._determine_stop_reason(shutdown_requested, early_stopper)
 
 		# Three independent bests from final population
-		ts_bests = fitness_calculator.bests(pop)
+		ts_final_genomes = [t[0] for t in pop]
+		ts_final_metrics = [t[1] for t in pop]
+		ts_bests = fitness_calculator.bests(ts_final_genomes, ts_final_metrics)
 
 		return (
 			best, history, final_population, population_metrics,
