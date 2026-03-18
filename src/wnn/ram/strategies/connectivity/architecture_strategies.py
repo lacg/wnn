@@ -587,8 +587,8 @@ class CheckpointManager:
 		for genome, ce in population:
 			gd = self._genome_to_dict(genome)
 			# Try to get accuracy from cached fitness
-			if hasattr(genome, '_cached_fitness') and genome._cached_fitness:
-				gd['fitness'] = list(genome._cached_fitness)
+			if hasattr(genome, 'metrics') and genome.metrics is not None:
+				gd['fitness'] = genome.metrics.to_dict()
 			else:
 				gd['fitness'] = [ce, 0.0]
 			pop_data.append(gd)
@@ -647,7 +647,12 @@ class CheckpointManager:
 			ce = gd['fitness'][0] if gd.get('fitness') else 0.0
 			# Restore cached fitness if available
 			if gd.get('fitness'):
-				genome._cached_fitness = tuple(gd['fitness'])
+				from wnn.ram.metrics import Metrics as _M
+				if isinstance(gd['fitness'], dict):
+					genome.metrics = _M.from_dict(gd['fitness'])
+				else:
+					f = gd['fitness']
+					genome.metrics = _M(ce=f[0], acc=f[1], f1=f[2] if len(f) > 2 else None, fpr=f[3] if len(f) > 3 else None)
 			population.append((genome, ce))
 
 		# Reconstruct best genome
@@ -987,11 +992,11 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 				assortative_mating_ratio=arch_cfg.assortative_mating_ratio,
 			)
 
-			# Convert to 3-tuples, rank by fitness, return best n_needed
+			# Convert to (genome, Metrics) tuples, rank by fitness, return best n_needed
 			offspring = [
-				(g, *g._cached_fitness)
+				(g, g.metrics)
 				for g in search_result.genomes
-				if hasattr(g, '_cached_fitness')
+				if hasattr(g, 'metrics') and g.metrics is not None
 			]
 
 			if pct and len(offspring) > n_needed:
@@ -1376,11 +1381,11 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				phase_type=int(self._phase_type),
 			)
 
-			# Convert to tuples (genome, ce, acc, f1?, fpr?), rank by fitness, return best n_neighbors
+			# Convert to (genome, Metrics) tuples, rank by fitness, return best n_neighbors
 			neighbors = [
-				(g, *g._cached_fitness)
+				(g, g.metrics)
 				for g in neighbors_raw
-				if hasattr(g, '_cached_fitness')
+				if hasattr(g, 'metrics') and g.metrics is not None
 			]
 
 			# Post-filter: remove tabu neighbors
@@ -1501,9 +1506,9 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 		total_tabu_filtered = 0
 		for (source, _), source_neighbors, target_count in zip(batch_sources, results_by_source, counts):
 			neighbors = [
-				(g, *g._cached_fitness)
+				(g, g.metrics)
 				for g in source_neighbors
-				if hasattr(g, '_cached_fitness')
+				if hasattr(g, 'metrics') and g.metrics is not None
 			]
 
 			# Post-filter: remove tabu neighbors
