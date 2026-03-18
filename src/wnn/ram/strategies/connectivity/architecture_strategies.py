@@ -423,7 +423,8 @@ class ArchitectureStrategyMixin:
 			offspring = [t for t in offspring if id(t[0]) in kept_ids]
 		else:
 			# HARMONIC_RANK or NORMALIZED: filter by fitness score
-			fitness_scores = fitness_calculator.fitness(offspring)
+			offspring_metrics = [t[1] for t in offspring]
+			fitness_scores = fitness_calculator.fitness(offspring_metrics)
 			offspring_with_fitness = list(zip(offspring, fitness_scores))
 
 			fitness_filter = PercentileFilter(
@@ -959,13 +960,8 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			# same metric as elite selection (e.g. HarmonicRank), not raw CE
 			fitness_scores = None
 			if self._fitness_calculator is not None:
-				pop_tuples = [
-					(i, t[1], t[2] or 0.0,
-					 t[3] if len(t) > 3 else None,
-					 t[4] if len(t) > 4 else None)
-					for i, t in enumerate(population)
-				]
-				fitness_scores = self._fitness_calculator.fitness(pop_tuples)
+				pop_metrics_list = [t[1] for t in population]
+				fitness_scores = self._fitness_calculator.fitness(pop_metrics_list)
 
 			search_result = evaluator.search_offspring(
 				population=rust_population,
@@ -1003,7 +999,7 @@ class ArchitectureGAStrategy(ArchitectureStrategyMixin, GenericGAStrategy['Clust
 			]
 
 			if pct and len(offspring) > n_needed:
-				scores = self._fitness_calculator.fitness(offspring)
+				scores = self._fitness_calculator.fitness([t[1] for t in offspring])
 				ranked = sorted(zip(offspring, scores), key=lambda x: x[1])
 				offspring = [item for item, _ in ranked[:n_needed]]
 
@@ -1404,7 +1400,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				neighbors = non_tabu
 
 			if pct and len(neighbors) > n_neighbors:
-				scores = self._fitness_calculator.fitness(neighbors)
+				scores = self._fitness_calculator.fitness([t[1] for t in neighbors])
 				ranked = sorted(zip(neighbors, scores), key=lambda x: x[1])
 				neighbors = [item for item, _ in ranked[:n_neighbors]]
 
@@ -1525,7 +1521,7 @@ class ArchitectureTSStrategy(ArchitectureStrategyMixin, GenericTSStrategy['Clust
 				neighbors = non_tabu
 
 			if pct and len(neighbors) > target_count:
-				scores = self._fitness_calculator.fitness(neighbors)
+				scores = self._fitness_calculator.fitness([t[1] for t in neighbors])
 				ranked = sorted(zip(neighbors, scores), key=lambda x: x[1])
 				neighbors = [item for item, _ in ranked[:target_count]]
 
@@ -1890,8 +1886,9 @@ class GridSearchStrategy:
 			raise ValueError("Grid search produced no results")
 
 		# Phase 4: Rank by fitness
-		population = [(r, r["ce"], r["accuracy"], r.get("f1_macro"), r.get("fpr")) for r in results]
-		fitness_scores = calculator.fitness(population)
+		from wnn.ram.metrics import Metrics as _M
+		rank_metrics = [_M(ce=r["ce"], acc=r["accuracy"], f1=r.get("f1_macro"), fpr=r.get("fpr")) for r in results]
+		fitness_scores = calculator.fitness(rank_metrics)
 		for r, score in zip(results, fitness_scores):
 			r["fitness"] = score
 		results.sort(key=lambda r: r["fitness"])
@@ -2042,11 +2039,7 @@ class GridSearchStrategy:
 					  f"({expand_elapsed/len(new_genomes):.1f}s/genome avg)")
 
 		# Phase 6: Rank full population by fitness and sort
-		pop_tuples = [
-			(output_population[i],) + tuple(m)
-			for i, m in enumerate(population_metrics)
-		]
-		pop_fitness_scores = calculator.fitness(pop_tuples)
+		pop_fitness_scores = calculator.fitness(population_metrics)
 
 		# Sort population by fitness score (lower = better)
 		sorted_indices = sorted(range(len(output_population)), key=lambda i: pop_fitness_scores[i])
@@ -2063,11 +2056,7 @@ class GridSearchStrategy:
 			pop_fitness_scores = pop_fitness_scores[:cfg.population_size]
 
 		# Three independent bests from potentially different genomes (recompute after trim)
-		pop_tuples = [
-			(output_population[i],) + tuple(m)
-			for i, m in enumerate(population_metrics)
-		]
-		pop_bests = calculator.bests(pop_tuples)
+		pop_bests = calculator.bests(output_population, population_metrics)
 		best_genome = pop_bests.best_fitness.genome
 
 		# Record final iteration with ALL population genomes sorted by fitness
@@ -2361,14 +2350,11 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 					total_generations=cfg.iterations,
 				)
 
-				# Build (genome, ce, acc, f1, fpr) tuples for fitness ranking
-				pop_tuples = [
-					(genome, e[0], e[1], getattr(e, 'f1_macro', None), getattr(e, 'fpr', None))
-					for genome, e in zip(population, evals)
-				]
+				# Convert evals to Metrics for fitness ranking
+				eval_metrics = [e if isinstance(e, _M) else _M(ce=e.ce, acc=e.acc, f1=e.f1, fpr=e.fpr) for e in evals]
 
 				# Compute fitness and sort
-				fitness_scores = calculator.fitness(pop_tuples)
+				fitness_scores = calculator.fitness(eval_metrics)
 				sorted_indices = sorted(
 					range(len(population)),
 					key=lambda i: fitness_scores[i],
@@ -2380,7 +2366,7 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 				fitness_scores = [fitness_scores[i] for i in sorted_indices]
 
 				# Update bests independently (CE and accuracy tracked separately, like GA/TS)
-				pop_bests = calculator.bests(pop_tuples)
+				pop_bests = calculator.bests(population, eval_metrics)
 				if pop_bests.best_ce.metrics.ce < best_ce:
 					best_ce = pop_bests.best_ce.metrics.ce
 					best_genome = pop_bests.best_fitness.genome.clone()
