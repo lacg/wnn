@@ -1800,8 +1800,8 @@ class GridSearchStrategy:
 				)
 				grid_ev = grid_evals[0]
 				ce, acc, bit_acc = grid_ev.ce, grid_ev.acc, grid_ev.bit_accuracy or 0.0
-				f1_macro = getattr(grid_ev, 'f1_macro', None)
-				fpr = getattr(grid_ev, 'fpr', None)
+				f1_macro = grid_ev.f1
+				fpr = grid_ev.fpr
 			elif evaluate_fn is not None:
 				ce = evaluate_fn(genome)
 				acc, bit_acc = 0.0, 0.0
@@ -1990,8 +1990,8 @@ class GridSearchStrategy:
 						best_ce_so_far = min(best_ce_so_far, ce)
 						best_acc_so_far = max(best_acc_so_far, acc)
 						seed_iter_num = len(results) + idx_in_new + 1
-						ev_f1 = getattr(ev, 'f1_macro', None)
-						ev_fpr = getattr(ev, 'fpr', None)
+						ev_f1 = ev.f1
+						ev_fpr = ev.fpr
 						if ev_f1 is not None and (best_f1_so_far is None or ev_f1 > best_f1_so_far):
 							best_f1_so_far = ev_f1
 						if ev_fpr is not None and (best_fpr_so_far is None or ev_fpr < best_fpr_so_far):
@@ -2392,8 +2392,8 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 				if self._tracker and self._tracker_experiment_id:
 					try:
 						# Update running global best F1/FPR (like best_ce/best_acc)
-						ev_f1s = [getattr(e, 'f1_macro', None) for e in evals]
-						ev_fprs = [getattr(e, 'fpr', None) for e in evals]
+						ev_f1s = [e.f1 for e in evals]
+						ev_fprs = [e.fpr for e in evals]
 						valid_f1s = [v for v in ev_f1s if v is not None]
 						valid_fprs = [v for v in ev_fprs if v is not None]
 						if valid_f1s:
@@ -2426,7 +2426,7 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 								zip(population, evals, fitness_scores)
 							):
 								ce, acc = ev_tuple[0], ev_tuple[1]
-								ev_f1 = getattr(ev_tuple, 'f1_macro', None)
+								ev_f1 = ev_tuple.f1
 								ev_fpr = getattr(ev_tuple, 'fpr', None)
 								genome_config = self.genome_to_config(genome)
 								if genome_config:
@@ -2476,7 +2476,7 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 		# Build population metrics for downstream phases
 		population_metrics = [
 			(e[0], e[1] if len(e) > 1 else 0.0,
-			 getattr(e, 'f1_macro', None), getattr(e, 'fpr', None))
+			 e.f1, e.fpr)
 			for e in evals
 		]
 

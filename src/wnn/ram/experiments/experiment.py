@@ -830,20 +830,17 @@ class Experiment:
 		# Extract metrics from evals — preserve F1/FPR for IDS fitness calculators
 		# evals can be: plain tuples (ce, acc [, f1, fpr]), EvalResult objects, or 2-tuples
 		def _extract(e):
-			"""Extract (ce, acc, f1_macro, fpr) from various eval formats."""
-			ce = e[0] if not hasattr(e, 'ce') else e.ce
-			acc = e[1] if not hasattr(e, 'accuracy') else e.acc
-			f1 = None
-			fpr = None
-			if hasattr(e, 'f1_macro'):
-				f1 = e.f1
-			elif isinstance(e, (tuple, list)) and len(e) > 2:
-				f1 = e[2]
-			if hasattr(e, 'fpr'):
-				fpr = e.fpr
-			elif isinstance(e, (tuple, list)) and len(e) > 3:
-				fpr = e[3]
-			return (ce, acc, f1, fpr)
+			"""Extract (ce, acc, f1, fpr) from Metrics or legacy tuple."""
+			if hasattr(e, 'ce'):
+				# Metrics object
+				return (e.ce, e.acc, e.f1, e.fpr)
+			elif isinstance(e, dict):
+				return (e['ce'], e['acc'], e.get('f1'), e.get('fpr'))
+			else:
+				# Legacy tuple
+				return (e[0], e[1],
+						e[2] if len(e) > 2 else None,
+						e[3] if len(e) > 3 else None)
 
 		extracted = [_extract(e) for e in evals]
 
