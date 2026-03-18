@@ -458,6 +458,8 @@ class Experiment:
 			"fitness_calculator_type": cfg.fitness_calculator_type,
 			"fitness_weight_ce": cfg.fitness_weight_ce,
 			"fitness_weight_acc": cfg.fitness_weight_acc,
+			"fitness_weight_f1": cfg.fitness_weight_f1,
+			"fitness_weight_fpr": cfg.fitness_weight_fpr,
 			"min_accuracy_floor": cfg.min_accuracy_floor if cfg.min_accuracy_floor > 0 else None,
 		}
 
@@ -533,6 +535,8 @@ class Experiment:
 			cfg.fitness_calculator_type,
 			weight_ce=cfg.fitness_weight_ce,
 			weight_acc=cfg.fitness_weight_acc,
+			weight_f1=cfg.fitness_weight_f1,
+			weight_fpr=cfg.fitness_weight_fpr,
 		)
 
 		# Run INIT validation on seed population
