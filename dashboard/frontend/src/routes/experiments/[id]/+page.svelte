@@ -943,7 +943,7 @@
               {#if isIDS}
                 <tr>
                   <th rowspan="2">Phase</th>
-                  <th colspan="3">Best F1-macro Genome</th>
+                  <th colspan="3">Best F1 Genome</th>
                   <th colspan="3">Best FPR Genome</th>
                   <th colspan="3">Best Fitness Genome</th>
                 </tr>
@@ -977,8 +977,8 @@
             </thead>
             <tbody>
               {#each cumulativeValidationProgression as point, idx}
-                {@const bestCeSummary = point.summaries.find(s => s.genomeType === 'best_ce')}
-                {@const bestAccSummary = point.summaries.find(s => s.genomeType === 'best_acc')}
+                {@const bestF1Summary = point.summaries.find(s => s.genomeType === 'best_f1') || point.summaries.find(s => s.genomeType === 'best_ce')}
+                {@const bestFprSummary = point.summaries.find(s => s.genomeType === 'best_fpr') || point.summaries.find(s => s.genomeType === 'best_acc')}
                 {@const bestFitSummary = point.summaries.find(s => s.genomeType === 'best_fitness')}
                 {@const isCurrentExp = point.expId === experiment?.id}
                 <tr class:current-phase={isCurrentExp && point.validationPoint === 'final'}>
@@ -989,25 +989,25 @@
                     {/if}
                   </td>
                   {#if isIDS}
-                    <td class="mono best-ce-col">{bestCeSummary?.f1_macro != null ? (bestCeSummary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
-                    <td class="mono best-ce-col">{bestCeSummary?.fpr != null ? (bestCeSummary.fpr * 100).toFixed(2) + '%' : '—'}</td>
-                    <td class="mono best-ce-col">{bestCeSummary ? (bestCeSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
-                    <td class="mono best-acc-col">{bestAccSummary?.f1_macro != null ? (bestAccSummary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
-                    <td class="mono best-acc-col">{bestAccSummary?.fpr != null ? (bestAccSummary.fpr * 100).toFixed(2) + '%' : '—'}</td>
-                    <td class="mono best-acc-col">{bestAccSummary ? (bestAccSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono best-ce-col">{bestF1Summary?.f1_macro != null ? (bestF1Summary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono best-ce-col">{bestF1Summary?.fpr != null ? (bestF1Summary.fpr * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono best-ce-col">{bestF1Summary ? (bestF1Summary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono best-acc-col">{bestFprSummary?.f1_macro != null ? (bestFprSummary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono best-acc-col">{bestFprSummary?.fpr != null ? (bestFprSummary.fpr * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono best-acc-col">{bestFprSummary ? (bestFprSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
                     <td class="mono best-fit-col">{bestFitSummary?.f1_macro != null ? (bestFitSummary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
                     <td class="mono best-fit-col">{bestFitSummary?.fpr != null ? (bestFitSummary.fpr * 100).toFixed(2) + '%' : '—'}</td>
                     <td class="mono best-fit-col">{bestFitSummary ? (bestFitSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
                   {:else}
-                    <td class="mono best-ce-col">{bestCeSummary ? bestCeSummary.ce.toFixed(4) : '—'}</td>
-                    <td class="mono best-ce-col">{bestCeSummary ? (bestCeSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
-                    <td class="mono best-acc-col">{bestAccSummary ? bestAccSummary.ce.toFixed(4) : '—'}</td>
-                    <td class="mono best-acc-col">{bestAccSummary ? (bestAccSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono best-ce-col">{bestF1Summary ? bestF1Summary.ce.toFixed(4) : '—'}</td>
+                    <td class="mono best-ce-col">{bestF1Summary ? (bestF1Summary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono best-acc-col">{bestFprSummary ? bestFprSummary.ce.toFixed(4) : '—'}</td>
+                    <td class="mono best-acc-col">{bestFprSummary ? (bestFprSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
                     <td class="mono best-fit-col">{bestFitSummary ? bestFitSummary.ce.toFixed(4) : '—'}</td>
                     <td class="mono best-fit-col">{bestFitSummary ? (bestFitSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
                   {/if}
                 </tr>
-                {#if isIDS && (bestCeSummary?.threshold_metadata || bestAccSummary?.threshold_metadata || bestFitSummary?.threshold_metadata)}
+                {#if isIDS && (bestF1Summary?.threshold_metadata || bestFprSummary?.threshold_metadata || bestFitSummary?.threshold_metadata)}
                   {#each [
                     { key: 'test_cal', label: '┣ Holdout', cls: 'threshold-holdout-row' },
                     { key: 'platt', label: '┣ Platt', cls: 'threshold-platt-row' },
@@ -1018,15 +1018,15 @@
                     { key: 'fixed_05', label: '┣ Fixed 0.5', cls: 'threshold-fixed-row' },
                     { key: 'val_cal', label: '┗ Oracle', cls: 'threshold-oracle-row' },
                   ] as mode}
-                    {#if (bestCeSummary?.threshold_metadata?.[mode.key] || bestAccSummary?.threshold_metadata?.[mode.key] || bestFitSummary?.threshold_metadata?.[mode.key])}
+                    {#if (bestF1Summary?.threshold_metadata?.[mode.key] || bestFprSummary?.threshold_metadata?.[mode.key] || bestFitSummary?.threshold_metadata?.[mode.key])}
                       <tr class="threshold-sub-row {mode.cls}">
                         <td class="phase-name threshold-mode-label">{mode.label}</td>
-                        <td class="mono best-ce-col">{bestCeSummary?.threshold_metadata?.[mode.key]?.f1 != null ? (bestCeSummary.threshold_metadata[mode.key].f1 * 100).toFixed(2) + '%' : '—'}</td>
-                        <td class="mono best-ce-col">{bestCeSummary?.threshold_metadata?.[mode.key]?.fpr != null ? (bestCeSummary.threshold_metadata[mode.key].fpr * 100).toFixed(2) + '%' : '—'}</td>
-                        <td class="mono best-ce-col">{bestCeSummary?.threshold_metadata?.[mode.key]?.acc != null ? (bestCeSummary.threshold_metadata[mode.key].acc * 100).toFixed(2) + '%' : '—'}</td>
-                        <td class="mono best-acc-col">{bestAccSummary?.threshold_metadata?.[mode.key]?.f1 != null ? (bestAccSummary.threshold_metadata[mode.key].f1 * 100).toFixed(2) + '%' : '—'}</td>
-                        <td class="mono best-acc-col">{bestAccSummary?.threshold_metadata?.[mode.key]?.fpr != null ? (bestAccSummary.threshold_metadata[mode.key].fpr * 100).toFixed(2) + '%' : '—'}</td>
-                        <td class="mono best-acc-col">{bestAccSummary?.threshold_metadata?.[mode.key]?.acc != null ? (bestAccSummary.threshold_metadata[mode.key].acc * 100).toFixed(2) + '%' : '—'}</td>
+                        <td class="mono best-ce-col">{bestF1Summary?.threshold_metadata?.[mode.key]?.f1 != null ? (bestF1Summary.threshold_metadata[mode.key].f1 * 100).toFixed(2) + '%' : '—'}</td>
+                        <td class="mono best-ce-col">{bestF1Summary?.threshold_metadata?.[mode.key]?.fpr != null ? (bestF1Summary.threshold_metadata[mode.key].fpr * 100).toFixed(2) + '%' : '—'}</td>
+                        <td class="mono best-ce-col">{bestF1Summary?.threshold_metadata?.[mode.key]?.acc != null ? (bestF1Summary.threshold_metadata[mode.key].acc * 100).toFixed(2) + '%' : '—'}</td>
+                        <td class="mono best-acc-col">{bestFprSummary?.threshold_metadata?.[mode.key]?.f1 != null ? (bestFprSummary.threshold_metadata[mode.key].f1 * 100).toFixed(2) + '%' : '—'}</td>
+                        <td class="mono best-acc-col">{bestFprSummary?.threshold_metadata?.[mode.key]?.fpr != null ? (bestFprSummary.threshold_metadata[mode.key].fpr * 100).toFixed(2) + '%' : '—'}</td>
+                        <td class="mono best-acc-col">{bestFprSummary?.threshold_metadata?.[mode.key]?.acc != null ? (bestFprSummary.threshold_metadata[mode.key].acc * 100).toFixed(2) + '%' : '—'}</td>
                         <td class="mono best-fit-col">{bestFitSummary?.threshold_metadata?.[mode.key]?.f1 != null ? (bestFitSummary.threshold_metadata[mode.key].f1 * 100).toFixed(2) + '%' : '—'}</td>
                         <td class="mono best-fit-col">{bestFitSummary?.threshold_metadata?.[mode.key]?.fpr != null ? (bestFitSummary.threshold_metadata[mode.key].fpr * 100).toFixed(2) + '%' : '—'}</td>
                         <td class="mono best-fit-col">{bestFitSummary?.threshold_metadata?.[mode.key]?.acc != null ? (bestFitSummary.threshold_metadata[mode.key].acc * 100).toFixed(2) + '%' : '—'}</td>
