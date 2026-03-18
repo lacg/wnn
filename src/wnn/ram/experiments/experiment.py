@@ -14,6 +14,7 @@ from typing import Any, Callable, Optional
 
 from enum import IntEnum
 
+from wnn.ram.metrics import Metrics, GenomeType, FitnessWeights
 from wnn.ram.fitness import FitnessCalculatorType, FitnessCalculatorFactory
 from wnn.ram.strategies.factory import OptimizerStrategyFactory, OptimizerStrategyType
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
@@ -843,31 +844,32 @@ class Experiment:
 
 		extracted = [_extract(e) for e in evals]
 
-		# Use bests() for consistent selection across all three metrics
+		from wnn.ram.metrics import Metrics, GenomeType
+
+		# Build Metrics for each genome
+		metrics_list = [Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr) for ce, acc, f1, fpr in extracted]
+
+		# Use bests() for consistent selection across all metrics
 		if fitness_calculator is not None:
 			try:
-				# Build 5-element tuples so IDS fitness calculators can use F1/FPR
-				population = [(g, ce, acc, f1, fpr) for g, (ce, acc, f1, fpr) in zip(genomes, extracted)]
-				pop_bests = fitness_calculator.bests(population)
+				pop_bests = fitness_calculator.bests(genomes, metrics_list)
 				return [
-					(pop_bests.best_ce.genome, 'best_ce', pop_bests.best_ce.ce, pop_bests.best_ce.acc),
-					(pop_bests.best_acc.genome, 'best_acc', pop_bests.best_acc.ce, pop_bests.best_acc.acc),
-					(pop_bests.best_fitness.genome, 'best_fitness', pop_bests.best_fitness.ce, pop_bests.best_fitness.acc),
+					(pop_bests.best_ce.genome, GenomeType.BEST_CE, pop_bests.best_ce.metrics),
+					(pop_bests.best_acc.genome, GenomeType.BEST_ACC, pop_bests.best_acc.metrics),
+					(pop_bests.best_f1.genome, GenomeType.BEST_F1, pop_bests.best_f1.metrics),
+					(pop_bests.best_fpr.genome, GenomeType.BEST_FPR, pop_bests.best_fpr.metrics),
+					(pop_bests.best_fitness.genome, GenomeType.BEST_FITNESS, pop_bests.best_fitness.metrics),
 				]
 			except Exception:
 				pass
 
-		# Fallback without fitness calculator: just CE and Acc
-		genome_evals = list(zip(genomes, extracted))
-		by_ce = sorted(genome_evals, key=lambda x: x[1][0])
-		by_acc = sorted(genome_evals, key=lambda x: -x[1][1])
-
-		best_ce_genome, (best_ce_ce, best_ce_acc, _, _) = by_ce[0]
-		best_acc_genome, (best_acc_ce, best_acc_acc, _, _) = by_acc[0]
+		# Fallback: select by CE and Acc
+		best_ce_idx = min(range(len(metrics_list)), key=lambda i: metrics_list[i].ce)
+		best_acc_idx = max(range(len(metrics_list)), key=lambda i: metrics_list[i].acc)
 
 		return [
-			(best_ce_genome, 'best_ce', best_ce_ce, best_ce_acc),
-			(best_acc_genome, 'best_acc', best_acc_ce, best_acc_acc),
+			(genomes[best_ce_idx], GenomeType.BEST_CE, metrics_list[best_ce_idx]),
+			(genomes[best_acc_idx], GenomeType.BEST_ACC, metrics_list[best_acc_idx]),
 		]
 
 	def _run_validation(
@@ -919,10 +921,10 @@ class Experiment:
 				self.log("  No genomes selected for validation")
 				return results
 
-			self.log(f"  Selected {len(selected)} genome(s): {[label for _, label, _, _ in selected]}")
+			self.log(f"  Selected {len(selected)} genome(s): {[gt.value for _, gt, _ in selected]}")
 
 			# Process each selected genome
-			for genome, genome_type, train_ce, train_acc in selected:
+			for genome, genome_type, train_metrics in selected:
 				genome_hash = self._compute_genome_hash(genome)
 
 				# Check if already validated
@@ -945,23 +947,22 @@ class Experiment:
 					fpr_val = result[3] if len(result) > 3 else None
 					cached_threshold_metadata = result[4] if len(result) > 4 else None
 					if f1 is not None:
-						self.log(f"  {genome_type}: CE={ce:.4f}, Acc={acc:.4%}, F1={f1:.4%}, FPR={fpr_val:.4%} (cached)")
+						self.log(f"  {genome_type.value}: CE={ce:.4f}, Acc={acc:.4%}, F1={f1:.4%}, FPR={fpr_val:.4%} (cached)")
 					else:
-						self.log(f"  {genome_type}: CE={ce:.4f}, Acc={acc:.4%} (cached)")
+						self.log(f"  {genome_type.value}: CE={ce:.4f}, Acc={acc:.4%} (cached)")
 				else:
 					# Run full validation (use full_evaluator if available — validates against held-out set)
 					val_evaluator = self.full_evaluator or self.evaluator
-					self.log(f"  {genome_type}: Running full validation...")
+					self.log(f"  {genome_type.value}: Running full validation...")
 					full_results = val_evaluator.evaluate_batch_full([genome])
-					result = full_results[0]
-					ce, acc = result[0], result[1]
-					# Extract IDS metrics if available
-					f1 = getattr(result, 'f1_macro', None)
-					fpr_val = getattr(result, 'fpr', None)
+					result = full_results[0]  # Metrics object
+					ce, acc = result.ce, result.acc
+					f1 = result.f1
+					fpr_val = result.fpr
 					if f1 is not None:
-						self.log(f"  {genome_type}: CE={ce:.4f}, Acc={acc:.4%}, F1={f1:.4%}, FPR={fpr_val:.4%} (validated)")
+						self.log(f"  {genome_type.value}: CE={ce:.4f}, Acc={acc:.4%}, F1={f1:.4%}, FPR={fpr_val:.4%} (validated)")
 					else:
-						self.log(f"  {genome_type}: CE={ce:.4f}, Acc={acc:.4%} (validated)")
+						self.log(f"  {genome_type.value}: CE={ce:.4f}, Acc={acc:.4%} (validated)")
 
 				# Three-threshold validation for single-cluster IDS
 				threshold_metadata = None
@@ -1253,8 +1254,8 @@ class Experiment:
 					fpr_val = tcr.fpr
 					acc = tcr.acc
 
-				# Collect results keyed by genome_type
-				results[genome_type] = {'ce': ce, 'acc': acc, 'f1': f1, 'fpr': fpr_val}
+				# Collect results keyed by genome_type (use .value for dict key)
+				results[genome_type.value] = {'ce': ce, 'acc': acc, 'f1': f1, 'fpr': fpr_val}
 
 				# Always store summary via dashboard API (even if cached)
 				# This ensures each (experiment_id, validation_point, genome_type) has a record
@@ -1263,7 +1264,7 @@ class Experiment:
 						self.dashboard_client.create_validation_summary(
 							experiment_id=self.experiment_id,
 							validation_point=validation_point,
-							genome_type=genome_type,
+							genome_type=genome_type.value,
 							genome_hash=genome_hash,
 							ce=ce,
 							accuracy=acc,
@@ -1273,7 +1274,7 @@ class Experiment:
 							threshold_metadata=json.dumps(threshold_metadata) if threshold_metadata else None,
 						)
 					except Exception as e:
-						self.log(f"  Warning: Failed to save {genome_type} summary: {e}")
+						self.log(f"  Warning: Failed to save {genome_type.value} summary: {e}")
 
 				# Submit to best genomes leaderboard (final validation only)
 				if self.dashboard_client and validation_point == 'final':
@@ -1289,9 +1290,14 @@ class Experiment:
 						else:
 							stage = "stage_0"
 						# Determine metric from genome_type
-						metric = genome_type.replace("best_", "")  # "ce", "acc", "fitness"
-						if metric == "acc":
-							metric = "accuracy"
+						metric_map = {
+							GenomeType.BEST_CE: "ce",
+							GenomeType.BEST_ACC: "accuracy",
+							GenomeType.BEST_F1: "f1_macro",
+							GenomeType.BEST_FPR: "fpr",
+							GenomeType.BEST_FITNESS: "fitness",
+						}
+						metric = metric_map.get(genome_type, "ce")
 						# Serialize genome data for storage
 						genome_data = {
 							"config_hash": genome_hash[:16],
