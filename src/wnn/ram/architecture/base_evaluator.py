@@ -21,12 +21,16 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional, Callable, NamedTuple
 
+from wnn.ram.metrics import Metrics
 from wnn.ram.core.RAMClusterLayer import bits_needed
 from wnn.ram.strategies.connectivity.adaptive_cluster import (
 	ClusterGenome,
 	AdaptiveClusterConfig,
 	PhaseType,
 )
+
+# EvalResult is now just Metrics. All evaluators return Metrics directly.
+EvalResult = Metrics
 
 
 @dataclass
@@ -72,49 +76,11 @@ class AdaptationConfig:
 	stats_sample_size: int = 10_000
 
 
-@dataclass
-class EvalResult:
-	"""Standardized evaluation result for all evaluators.
 
-	Supports backward-compatible tuple unpacking:
-	- When bit_accuracy is None: unpacks as (ce, accuracy)
-	- When bit_accuracy is set: unpacks as (ce, accuracy, bit_accuracy)
-
-	Two-stage fields (cluster_ce, within_ce, etc.) are for future use.
-	"""
-	ce: float                              # Cross-entropy (lower = better)
-	accuracy: float                        # Token accuracy (higher = better)
-	f1_macro: Optional[float] = None       # F1-macro (higher = better)
-	fpr: Optional[float] = None            # False positive rate macro (IDS, lower = better)
-	bit_accuracy: Optional[float] = None   # Weighted bit accuracy (bitwise only)
-	cluster_ce: Optional[float] = None     # Stage 1 CE (two-stage only)
-	cluster_accuracy: Optional[float] = None  # Stage 1 accuracy (two-stage only)
-	within_ce: Optional[float] = None      # Stage 2 CE (two-stage only)
-	within_accuracy: Optional[float] = None  # Stage 2 accuracy (two-stage only)
-
-	def __iter__(self):
-		"""Yield (ce, accuracy[, bit_accuracy]) for backward-compat tuple unpacking.
-
-		For f1_macro/fpr, use named attribute access (result.f1_macro, result.fpr).
-		"""
-		yield self.ce
-		yield self.accuracy
-		if self.bit_accuracy is not None:
-			yield self.bit_accuracy
-
-	def __getitem__(self, idx: int):
-		"""Index-based access: result[0]=ce, result[1]=accuracy, result[2]=bit_accuracy."""
-		if idx == 0:
-			return self.ce
-		elif idx == 1:
-			return self.accuracy
-		elif idx == 2:
-			return self.bit_accuracy
-		raise IndexError(f"EvalResult index {idx} out of range")
-
-	def __len__(self) -> int:
-		"""Length: 2 if bit_accuracy is None, 3 otherwise."""
-		return 3 if self.bit_accuracy is not None else 2
+# NOTE: EvalResult used to be a separate dataclass with __iter__/__getitem__/__len__
+# for tuple unpacking. It is now an alias for Metrics (defined above).
+# Old field mapping: ce→ce, accuracy→acc, f1_macro→f1, fpr→fpr, bit_accuracy→bit_accuracy
+# Removed fields: cluster_ce, cluster_accuracy, within_ce, within_accuracy (unused)
 
 
 class OffspringSearchResult(NamedTuple):
@@ -305,12 +271,12 @@ class BaseEvaluator(ABC):
 		r = self.evaluate_batch(
 			[genome], train_subset_idx, eval_subset_idx,
 		)[0]
-		return (r.ce, r.accuracy)
+		return (r.ce, r.acc)
 
 	def evaluate_single_full(self, genome: ClusterGenome) -> tuple[float, float]:
 		"""Evaluate a single genome with full data, returning (CE, accuracy)."""
 		r = self.evaluate_batch_full([genome])[0]
-		return (r.ce, r.accuracy)
+		return (r.ce, r.acc)
 
 	# ── Generation tracking (shared) ──────────────────────────────────────
 
@@ -522,7 +488,7 @@ class BaseEvaluator(ABC):
 
 			for r in results:
 				best_ce_so_far = min(best_ce_so_far, r.ce)
-				best_acc_so_far = max(best_acc_so_far, r.accuracy)
+				best_acc_so_far = max(best_acc_so_far, r.acc)
 			self._update_live_progress(
 				"ts_neighbors", evaluated, target_count, viable_count,
 				best_ce_so_far, best_acc_so_far, time.time() - start_time,
@@ -530,10 +496,10 @@ class BaseEvaluator(ABC):
 			)
 
 			for g, r in zip(batch, results):
-				g._cached_fitness = (r.ce, r.accuracy)
+				g.metrics = r
 				if r.bit_accuracy is not None:
 					g._cached_bit_acc = r.bit_accuracy
-				if r.accuracy >= accuracy_threshold:
+				if r.acc >= accuracy_threshold:
 					viable_count += 1
 					passed.append(g)
 					if len(passed) >= target_count:
@@ -543,7 +509,7 @@ class BaseEvaluator(ABC):
 
 		self._clear_live_progress()
 		if len(passed) < target_count and return_best_n:
-			all_candidates.sort(key=lambda g: (-g._cached_fitness[1], g._cached_fitness[0]))
+			all_candidates.sort(key=lambda g: (-g.metrics.acc, g.metrics.ce))
 			need = target_count - len(passed)
 			passed.extend(all_candidates[:need])
 
@@ -693,7 +659,7 @@ class BaseEvaluator(ABC):
 			# Update live progress
 			for r in results:
 				best_ce_so_far = min(best_ce_so_far, r.ce)
-				best_acc_so_far = max(best_acc_so_far, r.accuracy)
+				best_acc_so_far = max(best_acc_so_far, r.acc)
 			self._update_live_progress(
 				"ga_offspring", evaluated, target_count, viable_count,
 				best_ce_so_far, best_acc_so_far, time.time() - start_time,
@@ -701,10 +667,10 @@ class BaseEvaluator(ABC):
 			)
 
 			for g, r in zip(batch, results):
-				g._cached_fitness = (r.ce, r.accuracy)
+				g.metrics = r
 				if r.bit_accuracy is not None:
 					g._cached_bit_acc = r.bit_accuracy
-				if r.accuracy >= accuracy_threshold:
+				if r.acc >= accuracy_threshold:
 					viable_count += 1
 					passed.append(g)
 					if len(passed) >= target_count:
@@ -714,7 +680,7 @@ class BaseEvaluator(ABC):
 
 		self._clear_live_progress()
 		if len(passed) < target_count and return_best_n:
-			all_candidates.sort(key=lambda g: (-g._cached_fitness[1], g._cached_fitness[0]))
+			all_candidates.sort(key=lambda g: (-g.metrics.acc, g.metrics.ce))
 			need = target_count - len(passed)
 			passed.extend(all_candidates[:need])
 

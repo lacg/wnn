@@ -1546,8 +1546,8 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 					iteration_id = self._tracker.record_iteration(
 						experiment_id=self._tracker_experiment_id,
 						iteration_num=generation + 1,
-						best_ce=iter_bests.best_ce.ce,
-						best_accuracy=iter_bests.best_acc.accuracy,
+						best_ce=iter_bests.best_ce.metrics.ce,
+						best_accuracy=iter_bests.best_acc.metrics.acc,
 						avg_ce=gen_avg,
 						avg_accuracy=avg_acc,
 						elite_count=total_elites,
@@ -1652,7 +1652,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 					return (
 						best, history, final_population, early_pop_metrics,
 						generation + 1, True, StopReason.OVERFITTING,
-						early_bests.best_acc.accuracy, current_final_threshold,
+						early_bests.best_acc.metrics.acc, current_final_threshold,
 					)
 
 			# Update previous best for next iteration's delta computation
@@ -1660,7 +1660,7 @@ class GenericGAStrategy(OptimizationTemplate[T]):
 
 		# Get final bests using fitness calculator (three independent metrics)
 		final_bests = fitness_calculator.bests(population)
-		final_accuracy = final_bests.best_acc.accuracy
+		final_accuracy = final_bests.best_acc.metrics.acc
 
 		# Compute final scores for sorting
 		final_tuples = _fc_tuples(fitness_values, accuracy_values, f1_values, fpr_values)
@@ -2506,8 +2506,8 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 					iteration_id = self._tracker.record_iteration(
 						experiment_id=self._tracker_experiment_id,
 						iteration_num=iteration + 1,
-						best_ce=iter_bests.best_ce.ce,
-						best_accuracy=iter_bests.best_acc.accuracy,
+						best_ce=iter_bests.best_ce.metrics.ce,
+						best_accuracy=iter_bests.best_acc.metrics.acc,
 						avg_ce=pop_avg_ce,
 						avg_accuracy=pop_avg_acc,
 						elite_count=len(pop),
@@ -2624,5 +2624,5 @@ class GenericTSStrategy(OptimizationTemplate[T]):
 			best, history, final_population, population_metrics,
 			iteration + 1,
 			early_stopper.patience_exhausted or shutdown_requested,
-			stop_reason, ts_bests.best_acc.accuracy, final_threshold,
+			stop_reason, ts_bests.best_acc.metrics.acc, final_threshold,
 		)

@@ -549,7 +549,7 @@ class Experiment:
 			else:
 				self.log(f"  Evaluating initial population for validation selection ({len(seed_pop)} genomes)...")
 				init_evals = self.evaluator.evaluate_batch(seed_pop)
-				initial_evals = [(r.ce, r.accuracy) for r in init_evals]  # Reuse in strategy (plain tuples)
+				initial_evals = [(r.ce, r.acc) for r in init_evals]  # Reuse in strategy (plain tuples)
 			self._run_validation(
 				population=seed_pop,
 				evals=init_evals,
@@ -828,11 +828,11 @@ class Experiment:
 		def _extract(e):
 			"""Extract (ce, acc, f1_macro, fpr) from various eval formats."""
 			ce = e[0] if not hasattr(e, 'ce') else e.ce
-			acc = e[1] if not hasattr(e, 'accuracy') else e.accuracy
+			acc = e[1] if not hasattr(e, 'accuracy') else e.acc
 			f1 = None
 			fpr = None
 			if hasattr(e, 'f1_macro'):
-				f1 = e.f1_macro
+				f1 = e.f1
 			elif isinstance(e, (tuple, list)) and len(e) > 2:
 				f1 = e[2]
 			if hasattr(e, 'fpr'):
@@ -850,9 +850,9 @@ class Experiment:
 				population = [(g, ce, acc, f1, fpr) for g, (ce, acc, f1, fpr) in zip(genomes, extracted)]
 				pop_bests = fitness_calculator.bests(population)
 				return [
-					(pop_bests.best_ce.genome, 'best_ce', pop_bests.best_ce.ce, pop_bests.best_ce.accuracy),
-					(pop_bests.best_acc.genome, 'best_acc', pop_bests.best_acc.ce, pop_bests.best_acc.accuracy),
-					(pop_bests.best_fitness.genome, 'best_fitness', pop_bests.best_fitness.ce, pop_bests.best_fitness.accuracy),
+					(pop_bests.best_ce.genome, 'best_ce', pop_bests.best_ce.ce, pop_bests.best_ce.acc),
+					(pop_bests.best_acc.genome, 'best_acc', pop_bests.best_acc.ce, pop_bests.best_acc.acc),
+					(pop_bests.best_fitness.genome, 'best_fitness', pop_bests.best_fitness.ce, pop_bests.best_fitness.acc),
 				]
 			except Exception:
 				pass
@@ -989,9 +989,9 @@ class Experiment:
 					fixed_results = val_evaluator.evaluate_batch_full([genome], override_threshold=0.5)
 					fr = fixed_results[0]
 					threshold_metadata['fixed_05'] = {
-						'f1': fr.f1_macro, 'fpr': fr.fpr, 'acc': fr.accuracy,
+						'f1': fr.f1, 'fpr': fr.fpr, 'acc': fr.acc,
 					}
-					self.log(f"    Fixed 0.5:   F1={fr.f1_macro:.4%}, FPR={fr.fpr:.4%}, Acc={fr.accuracy:.4%}")
+					self.log(f"    Fixed 0.5:   F1={fr.f1:.4%}, FPR={fr.fpr:.4%}, Acc={fr.acc:.4%}")
 
 					# 3. Test-calibrated: find threshold on holdout, apply to test
 					# 3a: override=-1.0 sweeps eval data (43K holdout) for optimal threshold
@@ -1004,9 +1004,9 @@ class Experiment:
 					)
 					tcr = test_cal_results[0]
 					threshold_metadata['test_cal'] = {
-						'f1': tcr.f1_macro, 'fpr': tcr.fpr, 'acc': tcr.accuracy, 'threshold': holdout_threshold,
+						'f1': tcr.f1, 'fpr': tcr.fpr, 'acc': tcr.acc, 'threshold': holdout_threshold,
 					}
-					self.log(f"    Test-cal:    F1={tcr.f1_macro:.4%}, FPR={tcr.fpr:.4%}, Acc={tcr.accuracy:.4%}, t={holdout_threshold:.4f}")
+					self.log(f"    Test-cal:    F1={tcr.f1:.4%}, FPR={tcr.fpr:.4%}, Acc={tcr.acc:.4%}, t={holdout_threshold:.4f}")
 
 					# 4. Validation-calibrated (oracle): sweep 82K test for optimal threshold
 					# This is the upper bound — in production, you'd update thresholds
@@ -1015,9 +1015,9 @@ class Experiment:
 					or_ = oracle_results[0]
 					oracle_threshold = genome.threshold
 					threshold_metadata['val_cal'] = {
-						'f1': or_.f1_macro, 'fpr': or_.fpr, 'acc': or_.accuracy, 'threshold': oracle_threshold,
+						'f1': or_.f1, 'fpr': or_.fpr, 'acc': or_.acc, 'threshold': oracle_threshold,
 					}
-					self.log(f"    Val-cal:     F1={or_.f1_macro:.4%}, FPR={or_.fpr:.4%}, Acc={or_.accuracy:.4%}, t={oracle_threshold:.4f} (oracle)")
+					self.log(f"    Val-cal:     F1={or_.f1:.4%}, FPR={or_.fpr:.4%}, Acc={or_.acc:.4%}, t={oracle_threshold:.4f} (oracle)")
 
 					# 5. Platt scaling: fit sigmoid calibration on holdout scores, apply to test
 					# Learns P(attack) = sigmoid(a*score + b) from holdout data,
@@ -1093,10 +1093,10 @@ class Experiment:
 							)
 							pr = platt_results[0]
 							threshold_metadata['platt'] = {
-								'f1': pr.f1_macro, 'fpr': pr.fpr, 'acc': pr.accuracy,
+								'f1': pr.f1, 'fpr': pr.fpr, 'acc': pr.acc,
 								'threshold': platt_threshold, 'a': a, 'b': b,
 							}
-							self.log(f"    Platt:       F1={pr.f1_macro:.4%}, FPR={pr.fpr:.4%}, Acc={pr.accuracy:.4%}, t={platt_threshold:.4f} (a={a:.4f}, b={b:.4f})")
+							self.log(f"    Platt:       F1={pr.f1:.4%}, FPR={pr.fpr:.4%}, Acc={pr.acc:.4%}, t={platt_threshold:.4f} (a={a:.4f}, b={b:.4f})")
 					except Exception as e:
 						self.log(f"    Platt:       skipped ({e})")
 
@@ -1166,10 +1166,10 @@ class Experiment:
 							)
 							br = beta_results[0]
 							threshold_metadata['beta'] = {
-								'f1': br.f1_macro, 'fpr': br.fpr, 'acc': br.accuracy,
+								'f1': br.f1, 'fpr': br.fpr, 'acc': br.acc,
 								'threshold': beta_threshold, 'a': a, 'b': b, 'c': c,
 							}
-							self.log(f"    Beta:        F1={br.f1_macro:.4%}, FPR={br.fpr:.4%}, Acc={br.accuracy:.4%}, t={beta_threshold:.4f} (a={a:.3f}, b={b:.3f}, c={c:.3f})")
+							self.log(f"    Beta:        F1={br.f1:.4%}, FPR={br.fpr:.4%}, Acc={br.acc:.4%}, t={beta_threshold:.4f} (a={a:.3f}, b={b:.3f}, c={c:.3f})")
 					except Exception as e:
 						self.log(f"    Beta:        skipped ({e})")
 
@@ -1204,10 +1204,10 @@ class Experiment:
 							er = emp_results[0]
 							n_bins = len(sorted_scores)
 							threshold_metadata['empirical'] = {
-								'f1': er.f1_macro, 'fpr': er.fpr, 'acc': er.accuracy,
+								'f1': er.f1, 'fpr': er.fpr, 'acc': er.acc,
 								'threshold': empirical_threshold, 'n_bins': n_bins,
 							}
-							self.log(f"    Empirical:   F1={er.f1_macro:.4%}, FPR={er.fpr:.4%}, Acc={er.accuracy:.4%}, t={empirical_threshold:.4f} ({n_bins} bins)")
+							self.log(f"    Empirical:   F1={er.f1:.4%}, FPR={er.fpr:.4%}, Acc={er.acc:.4%}, t={empirical_threshold:.4f} ({n_bins} bins)")
 					except Exception as e:
 						self.log(f"    Empirical:   skipped ({e})")
 
@@ -1241,17 +1241,17 @@ class Experiment:
 							)
 							ec = ec_results[0]
 							threshold_metadata['empirical_cumulative'] = {
-								'f1': ec.f1_macro, 'fpr': ec.fpr, 'acc': ec.accuracy,
+								'f1': ec.f1, 'fpr': ec.fpr, 'acc': ec.acc,
 								'threshold': emp_cum_threshold,
 							}
-							self.log(f"    Emp-cumul:   F1={ec.f1_macro:.4%}, FPR={ec.fpr:.4%}, Acc={ec.accuracy:.4%}, t={emp_cum_threshold:.4f}")
+							self.log(f"    Emp-cumul:   F1={ec.f1:.4%}, FPR={ec.fpr:.4%}, Acc={ec.acc:.4%}, t={emp_cum_threshold:.4f}")
 					except Exception as e:
 						self.log(f"    Emp-cumul:   skipped ({e})")
 
 					# Use test-calibrated as primary metric (most honest)
-					f1 = tcr.f1_macro
+					f1 = tcr.f1
 					fpr_val = tcr.fpr
-					acc = tcr.accuracy
+					acc = tcr.acc
 
 				# Collect results keyed by genome_type
 				results[genome_type] = {'ce': ce, 'acc': acc, 'f1': f1, 'fpr': fpr_val}

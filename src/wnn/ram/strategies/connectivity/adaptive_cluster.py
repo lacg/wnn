@@ -997,8 +997,8 @@ class ClusterGenome:
 			connections=self.connections.copy() if self.connections is not None else None,
 			threshold=self.threshold,
 		)
-		if hasattr(self, '_cached_fitness') and self._cached_fitness is not None:
-			genome._cached_fitness = self._cached_fitness
+		if hasattr(self, 'metrics') and self.metrics is not None:
+			genome.metrics = self.metrics
 		return genome
 
 	def to_tensor(self) -> Tensor:
@@ -1126,8 +1126,8 @@ class ClusterGenome:
 			data["connections"] = self.connections
 		if self.threshold != 0.5:
 			data["threshold"] = self.threshold
-		if hasattr(self, '_cached_fitness') and self._cached_fitness is not None:
-			data["cached_fitness"] = self._cached_fitness
+		if hasattr(self, 'metrics') and self.metrics is not None:
+			data["cached_metrics"] = self.metrics.to_dict()
 		return data
 
 	def to_dict(self) -> dict[str, Any]:
@@ -1143,8 +1143,18 @@ class ClusterGenome:
 			connections=data.get("connections"),
 			threshold=data.get("threshold", 0.5),
 		)
-		if "cached_fitness" in data:
-			genome._cached_fitness = tuple(data["cached_fitness"])
+		if "cached_metrics" in data:
+			from wnn.ram.metrics import Metrics
+			genome.metrics = Metrics.from_dict(data["cached_metrics"])
+		elif "cached_fitness" in data:
+			# Legacy: convert old (ce, acc[, f1, fpr]) tuple to Metrics
+			from wnn.ram.metrics import Metrics
+			cf = data["cached_fitness"]
+			genome.metrics = Metrics(
+				ce=cf[0], acc=cf[1],
+				f1=cf[2] if len(cf) > 2 else None,
+				fpr=cf[3] if len(cf) > 3 else None,
+			)
 		return genome
 
 	@classmethod

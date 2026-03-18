@@ -31,6 +31,7 @@ import time
 from typing import Optional, Callable
 
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
+from wnn.ram.metrics import Metrics
 from wnn.ram.architecture.base_evaluator import BaseEvaluator, EvalResult, AdaptationConfig
 
 
@@ -616,7 +617,7 @@ class MultiStageEvaluator(BaseEvaluator):
 			))
 
 		return [
-			EvalResult(ce=ce, accuracy=acc, bit_accuracy=bit_acc)
+			Metrics(ce=ce, acc=acc, bit_accuracy=bit_acc)
 			for ce, acc, bit_acc, _fpr in raw
 		]
 
@@ -643,7 +644,7 @@ class MultiStageEvaluator(BaseEvaluator):
 		log(f"[Full] [{stage_label}] {len(genomes)} genomes in {elapsed:.1f}s")
 
 		return [
-			EvalResult(ce=ce, accuracy=acc, bit_accuracy=bit_acc)
+			Metrics(ce=ce, acc=acc, bit_accuracy=bit_acc)
 			for ce, acc, bit_acc, _fpr in raw
 		]
 
@@ -730,13 +731,13 @@ class MultiStageEvaluator(BaseEvaluator):
 				bigram_lambda=bigram_lambda,
 			)
 
-		return EvalResult(
+		return Metrics(
 			ce=combined_ce,
-			accuracy=combined_acc,
-			cluster_ce=s0_ce,
-			within_ce=s1_ce,
-			cluster_accuracy=s0_acc,
-			within_accuracy=s1_acc,
+			acc=combined_acc,
+			stage_metrics=[
+				Metrics(ce=s0_ce, acc=s0_acc),
+				Metrics(ce=s1_ce, acc=s1_acc),
+			],
 		)
 
 	# ── Re-encode stage with predicted clusters ─────────────────────
@@ -860,8 +861,7 @@ class MultiStageEvaluator(BaseEvaluator):
 
 		# Cache fitness on genomes
 		for g, (ce, acc, bit_acc, _fpr) in zip(all_candidates, results):
-			g._cached_fitness = (ce, acc)
-			g._cached_bit_acc = bit_acc
+			g.metrics = Metrics(ce=ce, acc=acc, bit_accuracy=bit_acc)
 
 		# Split results back by source and filter
 		output: list[list[ClusterGenome]] = []
@@ -870,17 +870,17 @@ class MultiStageEvaluator(BaseEvaluator):
 			below = []
 			for i in range(start, end):
 				g = all_candidates[i]
-				if g._cached_fitness[1] >= accuracy_threshold:
+				if g.metrics.acc >= accuracy_threshold:
 					passed.append(g)
 				else:
 					below.append(g)
 
 			# Take best up to target_count
 			if len(passed) >= target_count:
-				passed.sort(key=lambda g: (-g._cached_fitness[1], g._cached_fitness[0]))
+				passed.sort(key=lambda g: (-g.metrics.acc, g.metrics.ce))
 				output.append(passed[:target_count])
 			elif return_best_n:
-				below.sort(key=lambda g: (-g._cached_fitness[1], g._cached_fitness[0]))
+				below.sort(key=lambda g: (-g.metrics.acc, g.metrics.ce))
 				need = target_count - len(passed)
 				passed.extend(below[:need])
 				output.append(passed)

@@ -1361,7 +1361,7 @@ class Flow:
 							self._update_flow_status(f"Backfilling metrics for experiment {idx + 1}: {exp_config.name} ({len(current_population)} genomes)")
 							self.log(f"  Backfilling population_metrics for experiment {idx} ({len(current_population)} genomes)...")
 							eval_results = self.evaluator.evaluate_batch(current_population)
-							current_evals = [(r.ce, r.accuracy) for r in eval_results]
+							current_evals = [(r.ce, r.acc) for r in eval_results]
 							result.population_metrics = current_evals
 							self._resave_checkpoint(idx, result)
 						self.log(f"Loaded checkpoint for experiment {idx}: CE={current_fitness:.4f}")
@@ -1683,9 +1683,9 @@ class Flow:
 						bigram_lambda=cfg.bigram_lambda,
 						)
 						ce = result.ce
-						acc = result.accuracy
-						stage_ces = [result.cluster_ce, result.within_ce]
-						stage_accs = [result.cluster_accuracy, result.within_accuracy]
+						acc = result.acc
+						stage_ces = [sm.ce for sm in result.stage_metrics] if result.stage_metrics else [0.0, 0.0]
+						stage_accs = [sm.acc for sm in result.stage_metrics] if result.stage_metrics else [0.0, 0.0]
 						self.log(f"  {genome_type}: CE={ce:.4f}, ACC={acc:.2%}, S0 CE={stage_ces[0]:.4f} ACC={stage_accs[0]:.2%}, S1 CE={stage_ces[1]:.4f} ACC={stage_accs[1]:.2%}")
 
 						# Use best_fitness as the primary combined result
@@ -1969,9 +1969,9 @@ class Flow:
 				bigram_lambda=bi_lam,
 			)
 			ce = result.ce
-			acc = result.accuracy
-			s0_ce = result.cluster_ce
-			s1_ce = result.within_ce
+			acc = result.acc
+			s0_ce = result.stage_metrics[0].ce if result.stage_metrics else 0.0
+			s1_ce = result.stage_metrics[1].ce if result.stage_metrics and len(result.stage_metrics) > 1 else 0.0
 
 			if bigram_lambda_values:
 				self.log(f"  {uni_lam:>8.3f}  {bi_lam:>8.3f}  {ce:>12.4f}  {acc:>11.2%}  {s0_ce:>8.4f}  {s1_ce:>8.4f}")

@@ -22,6 +22,7 @@ import time
 from typing import Optional, Callable
 
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
+from wnn.ram.metrics import Metrics
 from wnn.ram.architecture.base_evaluator import BaseEvaluator, EvalResult, OffspringSearchResult
 
 
@@ -160,7 +161,7 @@ class IDSEvaluator(BaseEvaluator):
 		generation: Optional[int] = None,
 		total_generations: Optional[int] = None,
 		**kwargs,
-	) -> list[EvalResult]:
+	) -> list[Metrics]:
 		if train_subset_idx is None:
 			train_subset_idx = self.next_train_idx()
 
@@ -189,7 +190,7 @@ class IDSEvaluator(BaseEvaluator):
 				genome.bits_per_neuron = adapted_genome.bits_per_neuron
 				genome.neurons_per_cluster = adapted_genome.neurons_per_cluster
 				genome.connections = adapted_genome.connections
-				genome._cached_fitness = adapted_genome._cached_fitness
+				genome.metrics = adapted_genome.metrics
 				results.append(eval_result)
 			return results
 
@@ -251,8 +252,8 @@ class IDSEvaluator(BaseEvaluator):
 		results = []
 		for genome, (ce, acc, f1, fpr, threshold) in zip(genomes, raw_results):
 			genome.threshold = threshold
-			genome._cached_fitness = (ce, acc, f1, fpr)
-			results.append(EvalResult(ce=ce, accuracy=acc, f1_macro=f1, fpr=fpr))
+			genome.metrics = Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=threshold)
+			results.append(genome.metrics)
 		return results
 
 	def score_examples(self, genome) -> list[float]:
@@ -272,7 +273,7 @@ class IDSEvaluator(BaseEvaluator):
 		genomes: list[ClusterGenome],
 		logger: Optional[Callable[[str], None]] = None,
 		override_threshold: Optional[float] = None,
-	) -> list[EvalResult]:
+	) -> list[Metrics]:
 		bits_flat, neurons_flat, connections_flat = self._flatten_genomes(genomes)
 
 		raw_results = self._cache.evaluate_genomes_full_hybrid(
@@ -289,7 +290,8 @@ class IDSEvaluator(BaseEvaluator):
 		results = []
 		for genome, (ce, acc, f1, fpr, threshold) in zip(genomes, raw_results):
 			genome.threshold = threshold
-			results.append(EvalResult(ce=ce, accuracy=acc, f1_macro=f1, fpr=fpr))
+			genome.metrics = Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=threshold)
+			results.append(genome.metrics)
 		return results
 
 	def evaluate_batch_adaptive(
@@ -346,13 +348,13 @@ class IDSEvaluator(BaseEvaluator):
 
 		results = []
 		for ce, acc, f1, fpr, adapted_bits, adapted_neurons, adapted_conns, pruned, grown, added, removed, rewired in raw_results:
-			eval_result = EvalResult(ce=ce, accuracy=acc, f1_macro=f1, fpr=fpr)
+			eval_result = Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr)
 			adapted_genome = ClusterGenome(
 				bits_per_neuron=list(adapted_bits),
 				neurons_per_cluster=list(adapted_neurons),
 				connections=list(adapted_conns) if adapted_conns else None,
 			)
-			adapted_genome._cached_fitness = (ce, acc, f1, fpr)
+			adapted_genome.metrics = Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr)
 			results.append((eval_result, adapted_genome))
 		return results
 
@@ -417,7 +419,7 @@ class IDSEvaluator(BaseEvaluator):
 				neurons_per_cluster=list(neurons),
 				connections=list(connections) if connections else None,
 			)
-			g._cached_fitness = (ce, acc, f1, fpr)
+			g.metrics = Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr)
 			genomes.append(g)
 		return genomes
 
@@ -503,7 +505,7 @@ class IDSEvaluator(BaseEvaluator):
 				neurons_per_cluster=list(neurons),
 				connections=list(connections) if connections else None,
 			)
-			g._cached_fitness = (ce, acc, f1, fpr)
+			g.metrics = Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr)
 			genomes.append(g)
 
 		return OffspringSearchResult(genomes=genomes, evaluated=evaluated, viable=viable)

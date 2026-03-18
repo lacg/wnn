@@ -208,7 +208,7 @@ def create_overfitting_callback(
 		state["call_count"] += 1
 		# Evaluate on full train → validation
 		result = evaluator.evaluate_batch_full([genome])[0]
-		val_acc = result.accuracy
+		val_acc = result.acc
 		val_ce = result.ce
 
 		# Auto-set baseline on first call
@@ -346,11 +346,11 @@ def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 			y_train, num_classes, total_features, seed=cfg.seed,
 		)
 		asym_result = evaluator.evaluate_batch_full([asym_genome])[0]
-		print(f"Asymmetric genome: CE={asym_result.ce:.4f}, Acc={asym_result.accuracy*100:.2f}%")
+		print(f"Asymmetric genome: CE={asym_result.ce:.4f}, Acc={asym_result.acc*100:.2f}%")
 		if asym_result.ce < best_ce:
 			best_genome = asym_genome
 			best_ce = asym_result.ce
-			best_acc = asym_result.accuracy
+			best_acc = asym_result.acc
 			print("  → Using asymmetric genome (better than grid search)")
 		else:
 			print("  → Keeping grid search genome (better than asymmetric)")
@@ -390,8 +390,8 @@ def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 	# ── Final evaluation on 82K test set (175K train → 82K test) ────
 	print("\n=== Final Evaluation (Test Set: 175K train → 82K test) ===")
 	final_result = test_evaluator.evaluate_batch_full([best_genome])[0]
-	print(f"Final: CE={final_result.ce:.4f}, Acc={final_result.accuracy*100:.2f}%"
-		  + (f", F1={final_result.f1_macro:.4f}" if final_result.f1_macro is not None else ""))
+	print(f"Final: CE={final_result.ce:.4f}, Acc={final_result.acc*100:.2f}%"
+		  + (f", F1={final_result.f1:.4f}" if final_result.f1 is not None else ""))
 	print(f"Genome: neurons={best_genome.neurons_per_cluster}, "
 		  f"bits={best_genome.bits_per_neuron[:10]}{'...' if len(best_genome.bits_per_neuron) > 10 else ''}")
 
@@ -414,7 +414,7 @@ def run_ids_experiment(cfg: IDSTrainConfig) -> dict:
 		"num_classes": num_classes,
 		"total_features": total_features,
 		"ce": final_result.ce,
-		"accuracy": final_result.accuracy,
+		"accuracy": final_result.acc,
 		"f1_macro": ids_metrics["f1_macro"],
 		"ids_metrics": ids_metrics,
 		"genome": {
@@ -505,8 +505,8 @@ def _run_adaptation_pass(
 	final_results = evaluator.evaluate_batch_full(adapted_genomes)
 	best_idx = min(range(len(final_results)), key=lambda i: final_results[i].ce)
 	best = final_results[best_idx]
-	print(f"  Adapt {phase_name}: best CE={best.ce:.4f}, Acc={best.accuracy*100:.2f}%"
-		  + (f", F1={best.f1_macro:.4f}" if best.f1_macro else ""))
+	print(f"  Adapt {phase_name}: best CE={best.ce:.4f}, Acc={best.acc*100:.2f}%"
+		  + (f", F1={best.f1:.4f}" if best.f1 else ""))
 
 	return adapted_genomes
 
@@ -647,8 +647,8 @@ def _run_phase(
 	if test_evaluator is not None:
 		test_result = test_evaluator.evaluate_batch_full([best_genome])[0]
 		print(f"  Phase {phase_name} test: CE={test_result.ce:.4f}, "
-			  f"Acc={test_result.accuracy*100:.2f}%"
-			  + (f", F1={test_result.f1_macro:.4f}" if test_result.f1_macro is not None else ""))
+			  f"Acc={test_result.acc*100:.2f}%"
+			  + (f", F1={test_result.f1:.4f}" if test_result.f1 is not None else ""))
 
 	return best_genome, best_ce, best_acc
 
@@ -782,11 +782,11 @@ def run_hierarchical_experiment(cfg: IDSTrainConfig) -> dict:
 		seed=cfg.seed + 2000,
 	)
 	asym_result = s1_evaluator.evaluate_batch_full([asym_genome])[0]
-	print(f"Asymmetric genome: CE={asym_result.ce:.4f}, Acc={asym_result.accuracy*100:.2f}%")
+	print(f"Asymmetric genome: CE={asym_result.ce:.4f}, Acc={asym_result.acc*100:.2f}%")
 	if asym_result.ce < best_ce:
 		best_genome = asym_genome
 		best_ce = asym_result.ce
-		best_acc = asym_result.accuracy
+		best_acc = asym_result.acc
 		print("  → Using asymmetric genome")
 	else:
 		print("  → Keeping grid search genome")
@@ -822,7 +822,7 @@ def run_hierarchical_experiment(cfg: IDSTrainConfig) -> dict:
 	# Final Stage 1 evaluation (full attack train → attack test)
 	print("\n=== Stage 1 Final Evaluation ===")
 	s1_final = s1_test_evaluator.evaluate_batch_full([best_genome])[0]
-	print(f"Stage 1: CE={s1_final.ce:.4f}, Acc={s1_final.accuracy*100:.2f}%")
+	print(f"Stage 1: CE={s1_final.ce:.4f}, Acc={s1_final.acc*100:.2f}%")
 	print(f"Genome: neurons={best_genome.neurons_per_cluster}")
 
 	# ── Combined report ───────────────────────────────────────────────
@@ -831,7 +831,7 @@ def run_hierarchical_experiment(cfg: IDSTrainConfig) -> dict:
 	print("COMBINED RESULTS")
 	print("=" * 60)
 	print(f"Stage 0 (Binary gate):       {s0_metrics['accuracy']*100:.2f}%")
-	print(f"Stage 1 (Attack classifier): {s1_final.accuracy*100:.2f}%")
+	print(f"Stage 1 (Attack classifier): {s1_final.acc*100:.2f}%")
 	print(f"  (Stage 1 tested on {full_attack_dataset.X_test.shape[0]:,} attack examples only)")
 	print()
 	print("At inference:")
@@ -848,7 +848,7 @@ def run_hierarchical_experiment(cfg: IDSTrainConfig) -> dict:
 			"num_classes": num_attack_classes,
 			"class_names": full_attack_dataset.category_names,
 			"ce": s1_final.ce,
-			"accuracy": s1_final.accuracy,
+			"accuracy": s1_final.acc,
 			"genome": {
 				"bits_per_neuron": best_genome.bits_per_neuron,
 				"neurons_per_cluster": best_genome.neurons_per_cluster,
@@ -988,13 +988,13 @@ def run_bitwise_experiment(cfg: IDSTrainConfig) -> dict:
 		bit_time = time.time() - t_bit
 		total_train_time += bit_time
 
-		print(f"  Bit {bit_idx} final: Acc={final.accuracy*100:.2f}%, "
+		print(f"  Bit {bit_idx} final: Acc={final.acc*100:.2f}%, "
 			  f"CE={final.ce:.4f} ({bit_time:.1f}s)")
 		print(f"  Genome: neurons={best_genome.neurons_per_cluster}, "
 			  f"bits={best_genome.bits_per_neuron}")
 
 		bit_genomes.append(best_genome)
-		bit_accuracies.append(final.accuracy)
+		bit_accuracies.append(final.acc)
 
 	# ── Combined evaluation via codeword decoding ─────────────────────
 	print(f"\n{'='*60}")

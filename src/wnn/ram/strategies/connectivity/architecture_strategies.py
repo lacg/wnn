@@ -337,15 +337,15 @@ class ArchitectureStrategyMixin:
 		]
 		bests = self._fitness_calculator.bests(val_population)
 
-		self._log.info(f"  Best by CE:       CE={bests.best_ce.ce:.4f}, Acc={bests.best_ce.accuracy:.4%}")
-		self._log.info(f"  Best by Accuracy: CE={bests.best_acc.ce:.4f}, Acc={bests.best_acc.accuracy:.4%}")
+		self._log.info(f"  Best by CE:       CE={bests.best_ce.metrics.ce:.4f}, Acc={bests.best_ce.metrics.acc:.4%}")
+		self._log.info(f"  Best by Accuracy: CE={bests.best_acc.metrics.ce:.4f}, Acc={bests.best_acc.metrics.acc:.4%}")
 
 		if bests.best_fitness.genome is bests.best_ce.genome:
 			self._log.info(f"  Best by Fitness:  (same as Best by CE)")
 		elif bests.best_fitness.genome is bests.best_acc.genome:
 			self._log.info(f"  Best by Fitness:  (same as Best by Accuracy)")
 		else:
-			self._log.info(f"  Best by Fitness:  CE={bests.best_fitness.ce:.4f}, Acc={bests.best_fitness.accuracy:.4%}")
+			self._log.info(f"  Best by Fitness:  CE={bests.best_fitness.metrics.ce:.4f}, Acc={bests.best_fitness.metrics.acc:.4%}")
 
 		top_k_ce = sum(r[0] for r in full_results) / len(full_results)
 		top_k_acc = sum(r[1] for r in full_results) / len(full_results)
@@ -358,16 +358,16 @@ class ArchitectureStrategyMixin:
 				self._tracker.record_phase_result(
 					experiment_id=self._tracker_experiment_id,
 					metric_type="best_ce",
-					ce=bests.best_ce.ce,
-					accuracy=bests.best_ce.accuracy,
-					improvement_pct=(result.initial_fitness - bests.best_ce.ce) / result.initial_fitness * 100 if result.initial_fitness else 0.0,
+					ce=bests.best_ce.metrics.ce,
+					accuracy=bests.best_ce.metrics.acc,
+					improvement_pct=(result.initial_fitness - bests.best_ce.metrics.ce) / result.initial_fitness * 100 if result.initial_fitness else 0.0,
 				)
 				self._tracker.record_phase_result(
 					experiment_id=self._tracker_experiment_id,
 					metric_type="best_acc",
-					ce=bests.best_acc.ce,
-					accuracy=bests.best_acc.accuracy,
-					improvement_pct=(result.initial_fitness - bests.best_acc.ce) / result.initial_fitness * 100 if result.initial_fitness else 0.0,
+					ce=bests.best_acc.metrics.ce,
+					accuracy=bests.best_acc.metrics.acc,
+					improvement_pct=(result.initial_fitness - bests.best_acc.metrics.ce) / result.initial_fitness * 100 if result.initial_fitness else 0.0,
 				)
 				self._tracker.record_phase_result(
 					experiment_id=self._tracker_experiment_id,
@@ -380,12 +380,12 @@ class ArchitectureStrategyMixin:
 				self._log.debug(f"[{self.name}] Failed to record phase results: {e}")
 
 		# Update result with validation bests
-		improvement_pct = (result.initial_fitness - bests.best_ce.ce) / result.initial_fitness * 100 if result.initial_fitness != 0 else 0.0
+		improvement_pct = (result.initial_fitness - bests.best_ce.metrics.ce) / result.initial_fitness * 100 if result.initial_fitness != 0 else 0.0
 		return OptimizerResult(
 			initial_genome=result.initial_genome,
 			best_genome=bests.best_ce.genome,
 			initial_fitness=result.initial_fitness,
-			final_fitness=bests.best_ce.ce,
+			final_fitness=bests.best_ce.metrics.ce,
 			improvement_percent=improvement_pct,
 			iterations_run=result.iterations_run,
 			method_name=result.method_name,
@@ -395,7 +395,7 @@ class ArchitectureStrategyMixin:
 			final_population=result.final_population,
 			population_metrics=result.population_metrics,
 			initial_accuracy=result.initial_accuracy,
-			final_accuracy=bests.best_acc.accuracy,
+			final_accuracy=bests.best_acc.metrics.acc,
 			final_threshold=result.final_threshold,
 		)
 
@@ -1804,7 +1804,7 @@ class GridSearchStrategy:
 					[genome], train_subset_idx=grid_train_idx,
 				)
 				grid_ev = grid_evals[0]
-				ce, acc, bit_acc = grid_ev.ce, grid_ev.accuracy, grid_ev.bit_accuracy or 0.0
+				ce, acc, bit_acc = grid_ev.ce, grid_ev.acc, grid_ev.bit_accuracy or 0.0
 				f1_macro = getattr(grid_ev, 'f1_macro', None)
 				fpr = getattr(grid_ev, 'fpr', None)
 			elif evaluate_fn is not None:
@@ -1972,7 +1972,7 @@ class GridSearchStrategy:
 					[genome], train_subset_idx=grid_train_idx,
 				)
 				ev = evals[0]
-				ce, acc = ev.ce, ev.accuracy
+				ce, acc = ev.ce, ev.acc
 				g_elapsed = time.time() - t_g
 				expand_elapsed += g_elapsed
 				pop_idx = new_genome_indices[idx_in_new]
@@ -2089,8 +2089,8 @@ class GridSearchStrategy:
 				iter_id = self._tracker.record_iteration(
 					experiment_id=self._tracker_experiment_id,
 					iteration_num=final_iter_num,
-					best_ce=pop_bests.best_ce.ce,
-					best_accuracy=pop_bests.best_acc.accuracy,
+					best_ce=pop_bests.best_ce.metrics.ce,
+					best_accuracy=pop_bests.best_acc.metrics.acc,
 					avg_ce=avg_ce,
 					avg_accuracy=avg_acc,
 					elapsed_secs=batch_elapsed,
@@ -2120,31 +2120,31 @@ class GridSearchStrategy:
 				self._tracker.update_experiment_progress(
 					self._tracker_experiment_id,
 					current_iteration=1,
-					best_ce=pop_bests.best_ce.ce,
-					best_accuracy=pop_bests.best_acc.accuracy,
+					best_ce=pop_bests.best_ce.metrics.ce,
+					best_accuracy=pop_bests.best_acc.metrics.acc,
 				)
 			except Exception as e:
 				self._log(f"  Warning: tracker error: {e}")
 
 		# Build OptimizerResult
 		worst_ce = results[-1]["ce"]
-		improvement = ((worst_ce - pop_bests.best_ce.ce) / worst_ce * 100) if worst_ce > 0 else 0.0
+		improvement = ((worst_ce - pop_bests.best_ce.metrics.ce) / worst_ce * 100) if worst_ce > 0 else 0.0
 
 		return OptimizerResult(
 			initial_genome=best_genome,
 			best_genome=best_genome,
 			initial_fitness=worst_ce,
-			final_fitness=pop_bests.best_ce.ce,
+			final_fitness=pop_bests.best_ce.metrics.ce,
 			improvement_percent=improvement,
 			iterations_run=1,
 			method_name="GridSearch",
-			history=[(1, pop_bests.best_ce.ce)],
+			history=[(1, pop_bests.best_ce.metrics.ce)],
 			early_stopped=False,
 			stop_reason=StopReason.MAX_ITERATIONS,
 			final_population=output_population,
 			population_metrics=population_metrics,
 			initial_accuracy=results[-1]["accuracy"],
-			final_accuracy=pop_bests.best_acc.accuracy,
+			final_accuracy=pop_bests.best_acc.metrics.acc,
 			final_threshold=None,
 		)
 
@@ -2382,11 +2382,11 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 
 				# Update bests independently (CE and accuracy tracked separately, like GA/TS)
 				pop_bests = calculator.bests(pop_tuples)
-				if pop_bests.best_ce.ce < best_ce:
-					best_ce = pop_bests.best_ce.ce
+				if pop_bests.best_ce.metrics.ce < best_ce:
+					best_ce = pop_bests.best_ce.metrics.ce
 					best_genome = pop_bests.best_fitness.genome.clone()
-				if pop_bests.best_acc.accuracy > best_acc:
-					best_acc = pop_bests.best_acc.accuracy
+				if pop_bests.best_acc.metrics.acc > best_acc:
+					best_acc = pop_bests.best_acc.metrics.acc
 
 				history.append((iteration + 1, best_ce))
 				iter_elapsed = _time.time() - iter_start

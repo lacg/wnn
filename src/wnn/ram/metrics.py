@@ -84,6 +84,7 @@ class Metrics:
 	threshold: Optional[float] = None
 	fitness: Optional[float] = None
 	bit_accuracy: Optional[float] = None
+	stage_metrics: Optional[list['Metrics']] = None  # Per-stage breakdown (multi-stage LM)
 
 	def get(self, metric: MetricType) -> Optional[float]:
 		"""Get metric value by type."""
@@ -121,11 +122,16 @@ class Metrics:
 			d["fitness"] = self.fitness
 		if self.bit_accuracy is not None:
 			d["bit_accuracy"] = self.bit_accuracy
+		if self.stage_metrics is not None:
+			d["stage_metrics"] = [sm.to_dict() for sm in self.stage_metrics]
 		return d
 
 	@classmethod
 	def from_dict(cls, d: dict) -> 'Metrics':
 		"""Deserialize from dict."""
+		stage = None
+		if "stage_metrics" in d:
+			stage = [cls.from_dict(sm) for sm in d["stage_metrics"]]
 		return cls(
 			ce=d["ce"],
 			acc=d["acc"],
@@ -134,6 +140,7 @@ class Metrics:
 			threshold=d.get("threshold"),
 			fitness=d.get("fitness"),
 			bit_accuracy=d.get("bit_accuracy"),
+			stage_metrics=stage,
 		)
 
 	def __repr__(self) -> str:
