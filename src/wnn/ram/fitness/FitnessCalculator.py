@@ -1,37 +1,42 @@
 """
 Abstract base class for fitness calculators.
 
-Fitness calculators combine CE and accuracy into a single fitness score
-for ranking genomes during GA/TS optimization.
+Fitness calculators combine metrics (CE, accuracy, F1, FPR) into a single
+fitness score for ranking genomes during GA/TS optimization.
 """
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TypeVar, Generic, Optional
 
+from wnn.ram.metrics import Metrics, GenomeType
+
 G = TypeVar('G')  # Genome type
 
 
 @dataclass
 class GenomeBest(Generic[G]):
-	"""A genome identified as best by a specific metric."""
+	"""A genome identified as best by a specific criterion."""
 	genome: G
-	ce: float
-	accuracy: float
-	fitness_score: float
+	metrics: Metrics
+	genome_type: GenomeType
 
 
 @dataclass
 class PopulationBests(Generic[G]):
-	"""Three independent bests from potentially different genomes.
+	"""Best genomes by different criteria from a population.
 
-	In a well-optimized population, these are typically three DIFFERENT genomes:
-	- best_ce: lowest cross-entropy (best language model)
-	- best_acc: highest accuracy (best classifier)
-	- best_fitness: best combined score (harmonic rank or similar)
+	Each is a different genome selected by a different metric:
+	- best_ce: lowest cross-entropy
+	- best_acc: highest accuracy
+	- best_f1: highest F1-macro (IDS) or same as best_ce (LM)
+	- best_fpr: lowest FPR (IDS) or same as best_acc (LM)
+	- best_fitness: best combined fitness score
 	"""
 	best_ce: GenomeBest[G]
 	best_acc: GenomeBest[G]
+	best_f1: GenomeBest[G]
+	best_fpr: GenomeBest[G]
 	best_fitness: GenomeBest[G]
 
 
@@ -39,142 +44,82 @@ class FitnessCalculator(ABC, Generic[G]):
 	"""
 	Abstract base class for fitness calculation and ranking.
 
-	Subclasses implement different strategies for combining CE and accuracy
-	into a fitness score. Lower fitness = better.
-
-	Usage:
-		calculator = FitnessCalculatorFactory.create(FitnessCalculatorType.HARMONIC_RANK)
-		ranked = calculator.rank(population)
-		# ranked is sorted by fitness (best first)
-
-		bests = calculator.bests(population)
-		# bests.best_ce, bests.best_acc, bests.best_fitness — three independent genomes
+	All calculators accept list[Metrics] and return list[float] scores
+	where lower = better.
 	"""
 
 	@abstractmethod
-	def fitness(self, population: list[tuple[G, float, float]]) -> list[float]:
+	def fitness(self, metrics_list: list[Metrics]) -> list[float]:
 		"""
-		Compute fitness scores for a population.
+		Compute fitness scores for a list of metrics.
 
 		Args:
-			population: List of (genome, ce, accuracy) tuples
-				- ce: Cross-entropy loss (lower is better)
-				- accuracy: Prediction accuracy 0.0-1.0 (higher is better)
+			metrics_list: List of Metrics objects (one per genome)
 
 		Returns:
 			List of fitness scores (lower = better), same order as input
 		"""
 		pass
 
-	def rank(self, population: list[tuple[G, float, float]]) -> list[tuple[G, float]]:
+	def rank(self, genomes: list[G], metrics_list: list[Metrics]) -> list[tuple[G, float]]:
 		"""
-		Rank population by fitness.
-
-		Calls fitness() to compute scores, then sorts by fitness ascending.
-
-		Args:
-			population: List of (genome, ce, accuracy) tuples
+		Rank genomes by fitness.
 
 		Returns:
 			List of (genome, fitness_score) sorted by fitness (lower = better)
 		"""
-		fitness_scores = self.fitness(population)
-		# Pair genomes with their fitness scores
-		ranked = [(t[0], score) for t, score in zip(population, fitness_scores)]
-		# Sort by fitness (lower = better)
+		scores = self.fitness(metrics_list)
+		ranked = list(zip(genomes, scores))
 		ranked.sort(key=lambda x: x[1])
 		return ranked
 
-	def bests(self, population: list[tuple[G, float, Optional[float]]]) -> PopulationBests[G]:
+	def bests(self, genomes: list[G], metrics_list: list[Metrics]) -> PopulationBests[G]:
 		"""
-		Extract the three independent bests from a population.
+		Extract the best genomes by each criterion.
 
-		Returns the genome with the best CE, best accuracy, and best fitness
-		score. These are typically three DIFFERENT genomes.
-
-		For IDS calculators (overridden via _ids_bests):
-		- best_ce → highest F1-macro (dashboard: "Best F1-macro Genome")
-		- best_acc → lowest FPR (dashboard: "Best FPR Genome")
-		- best_fitness → best combined score
-
-		Handles None accuracy values by treating them as 0.0.
-
-		Args:
-			population: List of (genome, ce, accuracy[, f1, fpr]) tuples.
-				Accuracy may be None (treated as 0.0).
-
-		Returns:
-			PopulationBests with best_ce, best_acc, and best_fitness.
+		Returns the genome with best CE, best accuracy, best F1, best FPR,
+		and best fitness. These are typically different genomes.
 		"""
-		if not population:
+		if not genomes or not metrics_list:
 			raise ValueError("Cannot compute bests on empty population")
 
-		# Normalize None accuracy to 0.0 for fitness calculation, preserving extra fields (f1, fpr)
-		normalized = [
-			(t[0], t[1], t[2] if t[2] is not None else 0.0) + t[3:]
-			for t in population
-		]
-		scores = self.fitness(normalized)
+		scores = self.fitness(metrics_list)
 
-		best_ce_idx = min(range(len(normalized)), key=lambda i: normalized[i][1])
-		best_acc_idx = max(range(len(normalized)), key=lambda i: normalized[i][2])
-		best_fit_idx = min(range(len(scores)), key=lambda i: scores[i])
+		# Best by each metric
+		best_ce_idx = min(range(len(metrics_list)), key=lambda i: metrics_list[i].ce)
+		best_acc_idx = max(range(len(metrics_list)), key=lambda i: metrics_list[i].acc)
 
-		def _make(idx: int) -> GenomeBest[G]:
-			return GenomeBest(genome=normalized[idx][0], ce=normalized[idx][1],
-				accuracy=normalized[idx][2], fitness_score=scores[idx])
-
-		return PopulationBests(
-			best_ce=_make(best_ce_idx),
-			best_acc=_make(best_acc_idx),
-			best_fitness=_make(best_fit_idx),
-		)
-
-	def _ids_bests(self, population: list[tuple]) -> PopulationBests[G]:
-		"""IDS-aware bests: select by F1-macro, FPR, and combined fitness.
-
-		For IDS experiments, the dashboard columns are:
-		- "Best F1-macro Genome" → best_ce slot → select by HIGHEST F1-macro
-		- "Best FPR Genome" → best_acc slot → select by LOWEST FPR
-		- "Best Fitness Genome" → best_fitness slot → select by best combined score
-
-		Falls back to standard CE/accuracy selection if F1/FPR not available.
-		"""
-		if not population:
-			raise ValueError("Cannot compute bests on empty population")
-
-		normalized = [
-			(t[0], t[1], t[2] if t[2] is not None else 0.0) + t[3:]
-			for t in population
-		]
-		scores = self.fitness(normalized)
-
-		# Check if IDS metrics are available
-		has_ids = len(normalized[0]) >= 5 and any(
-			t[3] is not None for t in normalized
-		)
-
-		if has_ids:
-			# Select by F1-macro (highest) and FPR (lowest)
-			best_f1_idx = max(range(len(normalized)),
-				key=lambda i: normalized[i][3] if normalized[i][3] is not None else -1.0)
-			best_fpr_idx = min(range(len(normalized)),
-				key=lambda i: normalized[i][4] if normalized[i][4] is not None else 2.0)
+		# F1: highest (fallback to best_ce if not available)
+		if any(m.f1 is not None for m in metrics_list):
+			best_f1_idx = max(range(len(metrics_list)),
+				key=lambda i: metrics_list[i].f1 if metrics_list[i].f1 is not None else -1.0)
 		else:
-			# Fallback to CE/accuracy
-			best_f1_idx = min(range(len(normalized)), key=lambda i: normalized[i][1])
-			best_fpr_idx = max(range(len(normalized)), key=lambda i: normalized[i][2])
+			best_f1_idx = best_ce_idx
 
+		# FPR: lowest (fallback to best_acc if not available)
+		if any(m.fpr is not None for m in metrics_list):
+			best_fpr_idx = min(range(len(metrics_list)),
+				key=lambda i: metrics_list[i].fpr if metrics_list[i].fpr is not None else 2.0)
+		else:
+			best_fpr_idx = best_acc_idx
+
+		# Best fitness
 		best_fit_idx = min(range(len(scores)), key=lambda i: scores[i])
 
-		def _make(idx: int) -> GenomeBest[G]:
-			return GenomeBest(genome=normalized[idx][0], ce=normalized[idx][1],
-				accuracy=normalized[idx][2], fitness_score=scores[idx])
+		def _make(idx: int, gtype: GenomeType) -> GenomeBest[G]:
+			m = metrics_list[idx]
+			return GenomeBest(genome=genomes[idx], metrics=Metrics(
+				ce=m.ce, acc=m.acc, f1=m.f1, fpr=m.fpr,
+				threshold=m.threshold, fitness=scores[idx],
+				bit_accuracy=m.bit_accuracy,
+			), genome_type=gtype)
 
 		return PopulationBests(
-			best_ce=_make(best_f1_idx),
-			best_acc=_make(best_fpr_idx),
-			best_fitness=_make(best_fit_idx),
+			best_ce=_make(best_ce_idx, GenomeType.BEST_CE),
+			best_acc=_make(best_acc_idx, GenomeType.BEST_ACC),
+			best_f1=_make(best_f1_idx, GenomeType.BEST_F1),
+			best_fpr=_make(best_fpr_idx, GenomeType.BEST_FPR),
+			best_fitness=_make(best_fit_idx, GenomeType.BEST_FITNESS),
 		)
 
 	@property

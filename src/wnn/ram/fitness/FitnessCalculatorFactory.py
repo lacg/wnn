@@ -2,8 +2,9 @@
 Factory for creating fitness calculators.
 """
 
-from typing import Optional, TypeVar
+from typing import Optional, Union
 
+from wnn.ram.metrics import FitnessWeights
 from . import FitnessCalculatorType
 from .FitnessCalculator import FitnessCalculator
 from .FitnessCalculatorCE import FitnessCalculatorCE
@@ -14,8 +15,6 @@ from .FitnessCalculatorWithAccuracyFloor import FitnessCalculatorWithAccuracyFlo
 from .FitnessCalculatorIDSSecurity import FitnessCalculatorIDSSecurity
 from .FitnessCalculatorIDSRecall import FitnessCalculatorIDSRecall
 
-G = TypeVar('G')
-
 
 class FitnessCalculatorFactory:
 	"""Factory for creating fitness calculator instances."""
@@ -23,40 +22,35 @@ class FitnessCalculatorFactory:
 	@staticmethod
 	def create(
 		mode: FitnessCalculatorType,
+		weights: Optional[FitnessWeights] = None,
+		min_accuracy_floor: Optional[float] = None,
+		# Legacy individual weight params (used if weights is None)
 		weight_ce: float = 1.0,
 		weight_acc: float = 1.0,
 		weight_f1: float = 0.0,
 		weight_fpr: float = 0.0,
-		min_accuracy_floor: Optional[float] = None,
 	) -> FitnessCalculator:
 		"""
-		Create a fitness calculator of the specified type.
+		Create a fitness calculator.
 
-		Args:
-			mode: Type of fitness calculator to create
-			weight_ce: Weight for CE (used for HARMONIC_RANK and NORMALIZED)
-			weight_acc: Weight for accuracy (used for HARMONIC_RANK and NORMALIZED)
-			weight_f1: Weight for F1-macro (used for HARMONIC_RANK, 0.0 = disabled)
-			weight_fpr: Weight for FPR (used for HARMONIC_RANK, 0.0 = disabled)
-			min_accuracy_floor: If set (> 0), wrap calculator with accuracy floor.
-				Genomes below this accuracy get fitness = infinity.
-
-		Returns:
-			Configured FitnessCalculator instance
-
-		Raises:
-			ValueError: If mode is not recognized
+		Prefer passing `weights=FitnessWeights(...)` over individual weight params.
 		"""
-		# Create base calculator
+		# Build FitnessWeights if not provided
+		if weights is None:
+			weights = FitnessWeights(ce=weight_ce, acc=weight_acc, f1=weight_f1, fpr=weight_fpr)
+
 		match mode:
 			case FitnessCalculatorType.CE:
 				base = FitnessCalculatorCE()
 			case FitnessCalculatorType.HARMONIC_RANK:
-				base = FitnessCalculatorHarmonicRank(weight_ce=weight_ce, weight_acc=weight_acc, weight_f1=weight_f1, weight_fpr=weight_fpr)
+				base = FitnessCalculatorHarmonicRank(
+					weight_ce=weights.ce, weight_acc=weights.acc,
+					weight_f1=weights.f1, weight_fpr=weights.fpr,
+				)
 			case FitnessCalculatorType.NORMALIZED:
-				base = FitnessCalculatorNormalized(weight_ce=weight_ce, weight_acc=weight_acc)
+				base = FitnessCalculatorNormalized(weight_ce=weights.ce, weight_acc=weights.acc)
 			case FitnessCalculatorType.NORMALIZED_HARMONIC:
-				base = FitnessCalculatorNormalizedHarmonic(weight_ce=weight_ce, weight_acc=weight_acc)
+				base = FitnessCalculatorNormalizedHarmonic(weight_ce=weights.ce, weight_acc=weights.acc)
 			case FitnessCalculatorType.IDS_SECURITY:
 				base = FitnessCalculatorIDSSecurity()
 			case FitnessCalculatorType.IDS_RECALL:
@@ -64,7 +58,6 @@ class FitnessCalculatorFactory:
 			case _:
 				raise ValueError(f"Unsupported FitnessCalculatorType: {mode}")
 
-		# Wrap with accuracy floor if specified
 		if min_accuracy_floor is not None and min_accuracy_floor > 0:
 			return FitnessCalculatorWithAccuracyFloor(base, min_accuracy=min_accuracy_floor)
 
