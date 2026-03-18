@@ -2329,11 +2329,19 @@ class Flow:
 			pr = data.get('phase_result', {})
 			metadata = data.get('_metadata', {})
 
-			# Load population metrics (saved as list of [ce, acc, ...] tuples)
+			# Load population metrics (saved as list of Metrics dicts or legacy tuples)
+			from wnn.ram.metrics import Metrics as _Metrics
 			pop_metrics_raw = data.get('population_metrics')
 			pop_metrics = None
 			if pop_metrics_raw is not None:
-				pop_metrics = [tuple(m) for m in pop_metrics_raw]
+				pop_metrics = []
+				for m in pop_metrics_raw:
+					if isinstance(m, dict):
+						pop_metrics.append(_Metrics.from_dict(m))
+					elif isinstance(m, (list, tuple)):
+						pop_metrics.append(_Metrics(ce=m[0], acc=m[1],
+							f1=m[2] if len(m) > 2 else None,
+							fpr=m[3] if len(m) > 3 else None))
 
 			return ExperimentResult(
 				experiment_name=pr.get('phase_name', f"Experiment {idx}"),

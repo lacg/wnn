@@ -724,7 +724,10 @@ class Experiment:
 		}
 		# Save population metrics for cross-experiment reuse (avoids re-evaluation on resume)
 		if result.population_metrics is not None:
-			data["population_metrics"] = result.population_metrics
+			data["population_metrics"] = [
+				m.to_dict() if hasattr(m, 'to_dict') else m
+				for m in result.population_metrics
+			]
 
 		# Save best_ce and best_acc genomes for combined validation (future-proofing)
 		if result.final_population and result.population_metrics:
