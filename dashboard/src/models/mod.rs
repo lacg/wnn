@@ -158,6 +158,8 @@ pub struct ExperimentSpec {
     pub name: String,
     pub experiment_type: ExperimentType,
     #[serde(default)]
+    pub phase_type: Option<String>,
+    #[serde(default)]
     pub optimize_bits: bool,
     #[serde(default)]
     pub optimize_neurons: bool,

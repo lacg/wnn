@@ -1040,28 +1040,32 @@ async fn add_experiment_to_flow(
 
     let sequence_order = req.sequence_order.unwrap_or(existing.len() as i32);
 
-    // Derive phase_type from experiment spec
+    // Use explicit phase_type if provided, otherwise derive from experiment spec
     let exp_spec = &req.experiment;
-    let opt_target = if exp_spec.optimize_bits {
-        "bits"
-    } else if exp_spec.optimize_neurons {
-        "neurons"
+    let phase_type = if let Some(ref pt) = exp_spec.phase_type {
+        pt.clone()
     } else {
-        "connections"
-    };
-    let phase_type = match exp_spec.experiment_type {
-        ExperimentType::GridSearch => "grid_search".to_string(),
-        ExperimentType::LambdaSweep => "lambda_sweep".to_string(),
-        _ => {
-            let exp_type = match exp_spec.experiment_type {
-                ExperimentType::Ga => "ga",
-                ExperimentType::Ts => "ts",
-                ExperimentType::Neurogenesis => "neurogenesis",
-                ExperimentType::Synaptogenesis => "synaptogenesis",
-                ExperimentType::Axonogenesis => "axonogenesis",
-                ExperimentType::GridSearch | ExperimentType::LambdaSweep => unreachable!(),
-            };
-            format!("{}_{}", exp_type, opt_target)
+        let opt_target = if exp_spec.optimize_bits {
+            "bits"
+        } else if exp_spec.optimize_neurons {
+            "neurons"
+        } else {
+            "connections"
+        };
+        match exp_spec.experiment_type {
+            ExperimentType::GridSearch => "grid_search".to_string(),
+            ExperimentType::LambdaSweep => "lambda_sweep".to_string(),
+            _ => {
+                let exp_type = match exp_spec.experiment_type {
+                    ExperimentType::Ga => "ga",
+                    ExperimentType::Ts => "ts",
+                    ExperimentType::Neurogenesis => "neurogenesis",
+                    ExperimentType::Synaptogenesis => "synaptogenesis",
+                    ExperimentType::Axonogenesis => "axonogenesis",
+                    ExperimentType::GridSearch | ExperimentType::LambdaSweep => unreachable!(),
+                };
+                format!("{}_{}", exp_type, opt_target)
+            }
         }
     };
 
