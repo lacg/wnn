@@ -258,6 +258,7 @@
 						<th class="col-rank">Rank</th>
 						<th class="col-score">Score</th>
 						<th class="col-task">Task</th>
+						<th class="col-threshold">Threshold</th>
 						<th class="col-f1">F1</th>
 						<th class="col-fpr">FPR</th>
 						<th class="col-acc">Accuracy</th>
@@ -281,6 +282,9 @@
 							<td class="col-score mono">{genome.fitnessScore.toFixed(1)}</td>
 							<td class="col-task">
 								<span class="tag tag-{genome.task_type}">{genome.task_type.toUpperCase()}</span>
+							</td>
+							<td class="col-threshold">
+								<span class="tag tag-threshold">{genome.threshold_mode || 'train_cal'}</span>
 							</td>
 							<td class="col-f1 mono">{genome.f1_macro !== null ? formatPercent(genome.f1_macro) : '-'}</td>
 							<td class="col-fpr mono">{genome.fpr !== null ? formatPercent(genome.fpr) : '-'}</td>

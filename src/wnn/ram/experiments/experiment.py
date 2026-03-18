@@ -1279,9 +1279,7 @@ class Experiment:
 				# Submit to best genomes leaderboard (final validation only)
 				if self.dashboard_client and validation_point == 'final':
 					try:
-						# Determine task_type from cluster type / IDS metrics
 						task_type = "ids" if f1 is not None else "lm"
-						# Determine stage from experiment name (e.g., "S0: GA Neurons" → "stage_0")
 						exp_name = self.config.name if self.config else ""
 						if exp_name.startswith("S1:") or exp_name.startswith("S1 "):
 							stage = "stage_1"
@@ -1289,7 +1287,6 @@ class Experiment:
 							stage = "stage_2"
 						else:
 							stage = "stage_0"
-						# Determine metric from genome_type
 						metric_map = {
 							GenomeType.BEST_CE: "ce",
 							GenomeType.BEST_ACC: "accuracy",
@@ -1298,8 +1295,7 @@ class Experiment:
 							GenomeType.BEST_FITNESS: "fitness",
 						}
 						metric = metric_map.get(genome_type, "ce")
-						# Serialize genome data for storage
-						genome_data = {
+						base_genome_data = {
 							"config_hash": genome_hash[:16],
 							"tiers_json": str(genome),
 							"total_clusters": len(genome.neurons_per_cluster),
@@ -1307,22 +1303,33 @@ class Experiment:
 							"architecture_type": task_type,
 						}
 						if genome.connections is not None:
-							genome_data["connections_json"] = ",".join(str(c) for c in genome.connections)
-						if threshold_metadata:
-							genome_data["threshold_metadata"] = threshold_metadata
-						self.dashboard_client.submit_best_genomes([{
-							"task_type": task_type,
-							"stage": stage,
-							"metric": metric,
+							base_genome_data["connections_json"] = ",".join(str(c) for c in genome.connections)
+
+						# Submit one leaderboard entry per threshold mode
+						submissions = []
+						# Train-cal (the default — uses train_ce/acc directly)
+						submissions.append({
+							"task_type": task_type, "stage": stage, "metric": metric,
 							"genome_hash": genome_hash,
-							"ce": ce,
-							"accuracy": acc,
-							"f1_macro": f1,
-							"fpr": fpr_val,
-							"flow_id": flow_id,
-							"experiment_id": self.experiment_id,
-							"genome_data": genome_data,
-						}])
+							"ce": ce, "accuracy": acc, "f1_macro": f1, "fpr": fpr_val,
+							"flow_id": flow_id, "experiment_id": self.experiment_id,
+							"genome_data": {**base_genome_data, "threshold_mode": "train_cal"},
+						})
+						# Each threshold mode from threshold_metadata
+						if threshold_metadata:
+							for mode_key, mode_data in threshold_metadata.items():
+								if isinstance(mode_data, dict) and 'f1' in mode_data:
+									submissions.append({
+										"task_type": task_type, "stage": stage, "metric": metric,
+										"genome_hash": genome_hash,
+										"ce": ce,  # CE is threshold-independent
+										"accuracy": mode_data.get('acc', acc),
+										"f1_macro": mode_data.get('f1'),
+										"fpr": mode_data.get('fpr'),
+										"flow_id": flow_id, "experiment_id": self.experiment_id,
+										"genome_data": {**base_genome_data, "threshold_mode": mode_key},
+									})
+						self.dashboard_client.submit_best_genomes(submissions)
 					except Exception as e:
 						self.log(f"  Warning: leaderboard submit failed: {e}")
 

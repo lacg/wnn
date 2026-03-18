@@ -464,6 +464,10 @@ pub struct CombinedValidation {
 // Best Genome Models (Leaderboard)
 // =============================================================================
 
+fn default_threshold_mode() -> String {
+    "train_cal".to_string()
+}
+
 /// A best genome entry in the leaderboard
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BestGenome {
@@ -484,6 +488,8 @@ pub struct BestGenome {
     pub flow_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub experiment_id: Option<i64>,
+    #[serde(default = "default_threshold_mode")]
+    pub threshold_mode: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hf_repo_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

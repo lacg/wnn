@@ -505,11 +505,12 @@ CREATE TABLE IF NOT EXISTS best_genomes (
     fpr REAL,
     flow_id INTEGER,
     experiment_id INTEGER,
+    threshold_mode TEXT NOT NULL DEFAULT 'train_cal',
     hf_repo_id TEXT,
     hf_exported_at TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    UNIQUE(task_type, stage, metric, genome_hash)
+    UNIQUE(task_type, stage, metric, genome_hash, threshold_mode)
 );
 
 CREATE INDEX IF NOT EXISTS idx_best_genomes_ranking
@@ -2694,6 +2695,7 @@ pub mod queries {
                       bg.genome_id, bg.genome_hash, bg.rank,
                       bg.ce, bg.accuracy, bg.f1_macro, bg.fpr,
                       bg.flow_id, bg.experiment_id,
+                      bg.threshold_mode,
                       bg.hf_repo_id, bg.hf_exported_at,
                       bg.created_at, bg.updated_at,
                       g.tiers_json, g.total_clusters, g.total_neurons, g.architecture_type
@@ -2727,6 +2729,7 @@ pub mod queries {
                       bg.genome_id, bg.genome_hash, bg.rank,
                       bg.ce, bg.accuracy, bg.f1_macro, bg.fpr,
                       bg.flow_id, bg.experiment_id,
+                      bg.threshold_mode,
                       bg.hf_repo_id, bg.hf_exported_at,
                       bg.created_at, bg.updated_at,
                       g.tiers_json, g.total_clusters, g.total_neurons, g.architecture_type
@@ -2885,12 +2888,18 @@ pub mod queries {
         };
 
         // Step 2: INSERT OR IGNORE into best_genomes
+        // Extract threshold_mode from genome_data if present
+        let threshold_mode = genome_data
+            .and_then(|d| d.get("threshold_mode"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("train_cal");
+
         let result = sqlx::query(
             r#"INSERT OR IGNORE INTO best_genomes
                (task_type, stage, metric, genome_id, genome_hash,
                 ce, accuracy, f1_macro, fpr, flow_id, experiment_id,
-                created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+                threshold_mode, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         )
         .bind(task_type)
         .bind(stage)
@@ -2903,6 +2912,7 @@ pub mod queries {
         .bind(fpr)
         .bind(flow_id)
         .bind(experiment_id)
+        .bind(threshold_mode)
         .bind(&now)
         .bind(&now)
         .execute(pool)
@@ -3038,6 +3048,7 @@ pub mod queries {
             fpr: row.get("fpr"),
             flow_id: row.get("flow_id"),
             experiment_id: row.get("experiment_id"),
+            threshold_mode: row.try_get("threshold_mode").unwrap_or("train_cal".to_string()),
             hf_repo_id: row.get("hf_repo_id"),
             hf_exported_at: row.get("hf_exported_at"),
             created_at: parse_datetime(row.get("created_at"))?,
