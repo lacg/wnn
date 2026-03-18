@@ -352,6 +352,8 @@ class OptimizerStrategyFactory:
 		fitness_calculator_type: Any = None,  # FitnessCalculatorType enum from wnn.ram.fitness
 		fitness_weight_ce: float = 1.0,
 		fitness_weight_acc: float = 1.0,
+		fitness_weight_f1: float = 0.0,
+		fitness_weight_fpr: float = 0.0,
 		# Accuracy floor: genomes below this accuracy get fitness = infinity
 		min_accuracy_floor: float | None = None,
 		# Grid search params (ARCHITECTURE_GRID_SEARCH only)
@@ -472,6 +474,8 @@ class OptimizerStrategyFactory:
 					fitness_calculator_type=fitness_calculator_type,
 					fitness_weight_ce=fitness_weight_ce,
 					fitness_weight_acc=fitness_weight_acc,
+					fitness_weight_f1=fitness_weight_f1,
+					fitness_weight_fpr=fitness_weight_fpr,
 					min_accuracy_floor=min_accuracy_floor,
 					cluster_crossover_ratio=cluster_crossover_ratio,
 					pool_shuffle_ratio=pool_shuffle_ratio,
@@ -511,6 +515,8 @@ class OptimizerStrategyFactory:
 					fitness_calculator_type=fitness_calculator_type,
 					fitness_weight_ce=fitness_weight_ce,
 					fitness_weight_acc=fitness_weight_acc,
+					fitness_weight_f1=fitness_weight_f1,
+					fitness_weight_fpr=fitness_weight_fpr,
 					min_accuracy_floor=min_accuracy_floor,
 				)
 
@@ -529,6 +535,8 @@ class OptimizerStrategyFactory:
 					fitness_calculator_type=fitness_calculator_type,
 					fitness_weight_ce=fitness_weight_ce,
 					fitness_weight_acc=fitness_weight_acc,
+					fitness_weight_f1=fitness_weight_f1,
+					fitness_weight_fpr=fitness_weight_fpr,
 				)
 
 			case OptimizerStrategyType.CONNECTIVITY_GA:
@@ -596,6 +604,8 @@ class OptimizerStrategyFactory:
 					fitness_calculator_type=fitness_calculator_type,
 					fitness_weight_ce=fitness_weight_ce,
 					fitness_weight_acc=fitness_weight_acc,
+					fitness_weight_f1=fitness_weight_f1,
+					fitness_weight_fpr=fitness_weight_fpr,
 					min_accuracy_floor=min_accuracy_floor,
 					phase_name=phase_name,
 				)
@@ -690,6 +700,8 @@ class OptimizerStrategyFactory:
 			fitness_calculator_type=fitness_calculator_type or FitnessCalculatorType.HARMONIC_RANK,
 			fitness_weight_ce=fitness_weight_ce,
 			fitness_weight_acc=fitness_weight_acc,
+			fitness_weight_f1=fitness_weight_f1,
+			fitness_weight_fpr=fitness_weight_fpr,
 			min_accuracy_floor=min_accuracy_floor or 0.0,
 		)
 		# Pass batch_evaluator as cached_evaluator if it supports search_offspring
@@ -773,6 +785,8 @@ class OptimizerStrategyFactory:
 			fitness_calculator_type=fitness_calculator_type or FitnessCalculatorType.HARMONIC_RANK,
 			fitness_weight_ce=fitness_weight_ce,
 			fitness_weight_acc=fitness_weight_acc,
+			fitness_weight_f1=fitness_weight_f1,
+			fitness_weight_fpr=fitness_weight_fpr,
 			min_accuracy_floor=min_accuracy_floor or 0.0,
 		)
 		return ArchitectureTSStrategy(arch_config, ts_config, seed, logger, batch_evaluator, shutdown_check=shutdown_check)
@@ -889,6 +903,8 @@ class OptimizerStrategyFactory:
 			fitness_calculator_type=fitness_calculator_type or FitnessCalculatorType.HARMONIC_RANK,
 			fitness_weight_ce=fitness_weight_ce,
 			fitness_weight_acc=fitness_weight_acc,
+			fitness_weight_f1=fitness_weight_f1,
+			fitness_weight_fpr=fitness_weight_fpr,
 		)
 		return GridSearchStrategy(
 			config=config,
@@ -958,6 +974,8 @@ class OptimizerStrategyFactory:
 			fitness_calculator_type=fitness_calculator_type or FitnessCalculatorType.HARMONIC_RANK,
 			fitness_weight_ce=fitness_weight_ce,
 			fitness_weight_acc=fitness_weight_acc,
+			fitness_weight_f1=fitness_weight_f1,
+			fitness_weight_fpr=fitness_weight_fpr,
 			min_accuracy_floor=min_accuracy_floor,
 		)
 		return AdaptationStrategy(
