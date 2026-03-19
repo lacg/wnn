@@ -23,7 +23,7 @@ from typing import Optional
 from wnn.ram.fitness import FitnessCalculatorType
 from wnn.ram.experiments.dashboard_client import DashboardClient, DashboardClientConfig
 from wnn.ram.experiments.flow import Flow, FlowConfig
-from wnn.ram.experiments.experiment import ExperimentConfig, ExperimentType
+from wnn.ram.experiments.experiment import ExperimentConfig, ExperimentType, GridSource
 from wnn.ram.experiments.tracker import create_tracker, ExperimentTracker
 
 # How often to send heartbeats (seconds)
@@ -521,13 +521,14 @@ class FlowWorker:
                 flow_config.stage_max_neurons_list = params.get("stage_max_neurons")
                 flow_config.max_bit_delta = params.get("max_bit_delta", 0)
 
-            # Handle leaderboard seeding
-            if params.get("seed_from_leaderboard"):
+            # Handle leaderboard seeding (explicit param or grid_source=leaderboard)
+            use_leaderboard = params.get("seed_from_leaderboard") or params.get("grid_source") == "leaderboard"
+            if use_leaderboard:
                 flow_config.seed_from_leaderboard = True
                 flow_config.seed_leaderboard_task_type = params.get("seed_leaderboard_task_type", "ids" if is_ids else "lm")
                 flow_config.seed_leaderboard_stage = params.get("seed_leaderboard_stage", "stage_0")
                 flow_config.seed_leaderboard_metric = params.get("seed_leaderboard_metric", "f1_macro" if is_ids else "ce")
-                flow_config.seed_leaderboard_count = params.get("seed_leaderboard_count", 150)
+                flow_config.seed_leaderboard_count = params.get("seed_leaderboard_count", params.get("population_size", 150))
                 self._log(f"Seeding from leaderboard: top {flow_config.seed_leaderboard_count} by {flow_config.seed_leaderboard_metric}")
 
             # Handle seed checkpoint
@@ -1169,6 +1170,7 @@ class FlowWorker:
                 neurons_grid=neurons_grid if experiment_type == ExperimentType.GRID_SEARCH else None,
                 bits_grid=bits_grid if experiment_type == ExperimentType.GRID_SEARCH else None,
                 grid_top_k=grid_top_k,
+                grid_source=GridSource.LEADERBOARD if params.get("grid_source") == "leaderboard" or params.get("seed_from_leaderboard") else GridSource.RANDOM,
                 # Multi-stage fields
                 num_stages=params.get("num_stages", 2) if architecture_type == "multi_stage" else 1,
                 stage_k=params.get("stage_k") if architecture_type == "multi_stage" else None,

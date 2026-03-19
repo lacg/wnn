@@ -32,6 +32,12 @@ class ExperimentType(IntEnum):
 	LAMBDA_SWEEP = 6    # Unigram interpolation lambda sweep (eval-only)
 
 
+class GridSource(IntEnum):
+	"""Where grid search gets its initial genomes."""
+	RANDOM = 0       # Generate n×b grid configs with random connections
+	LEADERBOARD = 1  # Load top genomes from best_genomes leaderboard
+
+
 class ClusterType(IntEnum):
 	"""What cluster architecture to use."""
 	TIERED = 0       # Existing RAMLM with tiered clusters (50K)
@@ -128,6 +134,7 @@ class ExperimentConfig:
 	neurons_grid: Optional[list[int]] = None   # e.g. [50, 100, 150, 200]
 	bits_grid: Optional[list[int]] = None       # e.g. [14, 16, 18, 20]
 	grid_top_k: int = 16                        # Top-K configs to seed population (default: all 4×4 grid)
+	grid_source: GridSource = GridSource.RANDOM
 
 	# Multi-stage configuration (only used when cluster_type=MULTI_STAGE)
 	num_stages: int = 2
@@ -494,6 +501,7 @@ class Experiment:
 			strategy_kwargs["bits_grid"] = cfg.bits_grid
 			strategy_kwargs["grid_top_k"] = cfg.grid_top_k
 			strategy_kwargs["population_size"] = cfg.population_size
+			strategy_kwargs["grid_source"] = cfg.grid_source.name.lower()
 		elif is_adaptation:
 			strategy_kwargs["iterations"] = cfg.iterations
 			strategy_kwargs["population_size"] = cfg.population_size

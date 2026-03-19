@@ -359,6 +359,7 @@ class OptimizerStrategyFactory:
 		neurons_grid: list[int] | None = None,
 		bits_grid: list[int] | None = None,
 		grid_top_k: int = 15,
+		grid_source: str = "random",  # "random" or "leaderboard"
 		# Cluster crossover ratio (GA only): 0.0 = phase-specific, 1.0 = all cluster-level
 		cluster_crossover_ratio: float = 0.0,
 		# Pool-and-shuffle crossover ratio (GA only): 0.0 = all uniform (2→2), 1.0 = all pool-and-shuffle (2→1)
@@ -526,7 +527,8 @@ class OptimizerStrategyFactory:
 					batch_evaluator=batch_evaluator,
 					shutdown_check=shutdown_check,
 					fitness_calculator_type=fitness_calculator_type,
-				fitness_weights=fitness_weights,
+					fitness_weights=fitness_weights,
+					grid_source=grid_source,
 				)
 
 			case OptimizerStrategyType.CONNECTIVITY_GA:
@@ -864,6 +866,7 @@ class OptimizerStrategyFactory:
 		shutdown_check: Any,
 		fitness_calculator_type: Any,
 		fitness_weights: FitnessWeights = None,
+		grid_source: str = "random",
 	):
 		"""Create a GridSearchStrategy for architecture evaluation."""
 		from wnn.ram.fitness import FitnessCalculatorType
@@ -879,7 +882,8 @@ class OptimizerStrategyFactory:
 			population_size=population_size,
 			total_input_bits=total_input_bits,
 			fitness_calculator_type=fitness_calculator_type or FitnessCalculatorType.HARMONIC_RANK,
-				fitness_weight_ce=fitness_weights.ce, fitness_weight_acc=fitness_weights.acc, fitness_weight_f1=fitness_weights.f1, fitness_weight_fpr=fitness_weights.fpr,
+			fitness_weight_ce=fitness_weights.ce, fitness_weight_acc=fitness_weights.acc, fitness_weight_f1=fitness_weights.f1, fitness_weight_fpr=fitness_weights.fpr,
+			grid_source=grid_source,
 		)
 		return GridSearchStrategy(
 			config=config,

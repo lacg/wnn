@@ -1673,6 +1673,7 @@ class GridSearchConfig:
 	fitness_weight_acc: float = 1.0
 	fitness_weight_f1: float = 0.0
 	fitness_weight_fpr: float = 0.0
+	grid_source: str = "random"  # "random" or "leaderboard"
 
 
 class GridSearchStrategy:
@@ -1758,20 +1759,33 @@ class GridSearchStrategy:
 								   f1=cfg.fitness_weight_f1, fpr=cfg.fitness_weight_fpr),
 		)
 
-		total_configs = len(cfg.neurons_grid) * len(cfg.bits_grid)
-		self._log(f"\n{'='*70}")
-		self._log(f"Grid Search ({total_configs} configs)")
-		self._log(f"  neurons: {cfg.neurons_grid}")
-		self._log(f"  bits:    {cfg.bits_grid}")
-		self._log(f"  clusters: {cfg.num_clusters}")
-		self._log(f"{'='*70}")
-
-		# Phase 1: Create all genomes upfront
-		config_list = []  # [(neurons, bits, genome)]
-		for neurons in cfg.neurons_grid:
-			for bits in cfg.bits_grid:
-				genome = self._create_genome(neurons, bits)
-				config_list.append((neurons, bits, genome))
+		# Phase 1: Build config list from grid or leaderboard
+		is_leaderboard = cfg.grid_source == "leaderboard"
+		if is_leaderboard and initial_population:
+			config_list = []  # [(neurons, bits, genome)]
+			for genome in initial_population:
+				n = genome.neurons_per_cluster[0] if genome.neurons_per_cluster else 0
+				b = genome.bits_per_neuron[0] if genome.bits_per_neuron else 0
+				config_list.append((n, b, genome))
+			total_configs = len(config_list)
+			self._log(f"\n{'='*70}")
+			self._log(f"Grid Search — Leaderboard ({total_configs} genomes)")
+			self._log(f"  source: leaderboard top-{total_configs}")
+			self._log(f"  clusters: {cfg.num_clusters}")
+			self._log(f"{'='*70}")
+		else:
+			config_list = []
+			for neurons in cfg.neurons_grid:
+				for bits in cfg.bits_grid:
+					genome = self._create_genome(neurons, bits)
+					config_list.append((neurons, bits, genome))
+			total_configs = len(config_list)
+			self._log(f"\n{'='*70}")
+			self._log(f"Grid Search ({total_configs} configs)")
+			self._log(f"  neurons: {cfg.neurons_grid}")
+			self._log(f"  bits:    {cfg.bits_grid}")
+			self._log(f"  clusters: {cfg.num_clusters}")
+			self._log(f"{'='*70}")
 
 		# Phase 2: Evaluate one config at a time for real-time dashboard progress
 		# Fix train subset to a single index so all configs are compared fairly
