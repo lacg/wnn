@@ -1329,7 +1329,17 @@ class Experiment:
 										"flow_id": flow_id, "experiment_id": self.experiment_id,
 										"genome_data": {**base_genome_data, "threshold_mode": mode_key},
 									})
-						self.dashboard_client.submit_best_genomes(submissions)
+						# Quality gate: only submit genomes meeting IDS goals
+						# (at least one of: F1 >= 87%, Acc >= 87%, FPR <= 12%)
+						if task_type == "ids":
+							submissions = [
+								s for s in submissions
+								if (s.get("f1_macro") is not None and s["f1_macro"] >= 0.87)
+								or (s.get("accuracy") is not None and s["accuracy"] >= 0.87)
+								or (s.get("fpr") is not None and s["fpr"] <= 0.12)
+							]
+						if submissions:
+							self.dashboard_client.submit_best_genomes(submissions)
 					except Exception as e:
 						self.log(f"  Warning: leaderboard submit failed: {e}")
 
