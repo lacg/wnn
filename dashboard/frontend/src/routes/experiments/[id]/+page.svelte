@@ -2999,6 +2999,7 @@
   .phase-group tr:first-child td {
     border-top: 1px solid var(--glass-border);
     padding-top: 0.625rem;
+    background: rgba(15, 23, 42, 0.5);
   }
 
   .phase-group tr:first-child td:first-child {
