@@ -2423,12 +2423,12 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 						)
 						# Record genome evaluations
 						if HAS_GENOME_TRACKING:
-							for pos, (genome, ev_tuple, fit) in enumerate(
+							for pos, (genome, ev_m, fit) in enumerate(
 								zip(population, evals, fitness_scores)
 							):
-								ce, acc = ev_tuple[0], ev_tuple[1]
-								ev_f1 = ev_tuple.f1
-								ev_fpr = getattr(ev_tuple, 'fpr', None)
+								ce, acc = ev_m.ce, ev_m.acc
+								ev_f1 = ev_m.f1
+								ev_fpr = ev_m.fpr
 								genome_config = self.genome_to_config(genome)
 								if genome_config:
 									genome_id = self._tracker.get_or_create_genome(
