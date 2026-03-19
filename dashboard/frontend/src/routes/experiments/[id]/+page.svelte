@@ -2848,7 +2848,8 @@
 
   .validation-table {
     width: 100%;
-    border-collapse: collapse;
+    border-collapse: separate;
+    border-spacing: 0 6px;
     font-size: 1rem;
   }
 
@@ -2980,31 +2981,61 @@
     font-style: italic;
   }
 
-  .phase-group {
-    border: 1px solid var(--glass-border);
-    border-radius: 0;
+  /* Glass card effect per phase group via cell borders + radius */
+  .phase-group td {
+    border-left: 1px solid var(--glass-border);
+    border-right: 1px solid var(--glass-border);
+    border-top: none;
+    border-bottom: none;
   }
 
-  .phase-group + .phase-group {
-    border-top: none;
+  .phase-group td:not(:first-child) {
+    border-left: none;
   }
 
   .phase-group tr:first-child td {
     border-top: 1px solid var(--glass-border);
-    padding-top: 0.5rem;
+    padding-top: 0.625rem;
+  }
+
+  .phase-group tr:first-child td:first-child {
+    border-top-left-radius: 8px;
+  }
+
+  .phase-group tr:first-child td:last-child {
+    border-top-right-radius: 8px;
   }
 
   .phase-group tr:last-child td {
-    padding-bottom: 0.5rem;
     border-bottom: 1px solid var(--glass-border);
+    padding-bottom: 0.625rem;
   }
 
-  .phase-group-current {
+  .phase-group tr:last-child td:first-child {
+    border-bottom-left-radius: 8px;
+  }
+
+  .phase-group tr:last-child td:last-child {
+    border-bottom-right-radius: 8px;
+  }
+
+  .phase-group-current td {
     background: rgba(59, 130, 246, 0.04);
   }
 
-  /* Spacing between phase groups */
-  .phase-group + .phase-group tr:first-child td {
-    border-top: 2px solid var(--glass-border);
+  .phase-group-current tr:first-child td {
+    border-top-color: rgba(59, 130, 246, 0.3);
+  }
+
+  .phase-group-current tr:last-child td {
+    border-bottom-color: rgba(59, 130, 246, 0.3);
+  }
+
+  .phase-group-current td:first-child {
+    border-left-color: rgba(59, 130, 246, 0.3);
+  }
+
+  .phase-group-current td:last-child {
+    border-right-color: rgba(59, 130, 246, 0.3);
   }
 </style>
