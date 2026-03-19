@@ -1033,6 +1033,10 @@
                       </tr>
                     {/if}
                   {/each}
+                  <!-- Divider after threshold rows, before next phase -->
+                  {#if idx < cumulativeValidationProgression.length - 1}
+                    <tr class="threshold-divider"><td colspan="10"></td></tr>
+                  {/if}
                 {/if}
               {/each}
             </tbody>
@@ -2977,5 +2981,12 @@
   .threshold-oracle-row td {
     color: #f97316 !important;
     font-style: italic;
+  }
+
+  .threshold-divider td {
+    padding: 0;
+    height: 6px;
+    border-bottom: 2px solid var(--glass-border);
+    background: transparent;
   }
 </style>
