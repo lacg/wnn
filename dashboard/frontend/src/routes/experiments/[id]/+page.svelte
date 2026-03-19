@@ -2924,6 +2924,30 @@
     background: rgba(155, 89, 182, 0.05);
   }
 
+  /* Vertical dividers between genome column groups */
+  /* Col 2: first Best F1 column */
+  .validation-table td:nth-child(2) {
+    border-left: 2px solid rgba(59, 130, 246, 0.3) !important;
+  }
+  /* Col 5: first Best FPR column */
+  .validation-table td:nth-child(5) {
+    border-left: 2px solid rgba(34, 197, 94, 0.3) !important;
+  }
+  /* Col 8: first Best Fitness column */
+  .validation-table td:nth-child(8) {
+    border-left: 2px solid rgba(155, 89, 182, 0.3) !important;
+  }
+  /* Header dividers */
+  .validation-table thead tr:first-child th:nth-child(2) {
+    border-left: 2px solid rgba(59, 130, 246, 0.3);
+  }
+  .validation-table thead tr:first-child th:nth-child(3) {
+    border-left: 2px solid rgba(34, 197, 94, 0.3);
+  }
+  .validation-table thead tr:first-child th:nth-child(4) {
+    border-left: 2px solid rgba(155, 89, 182, 0.3);
+  }
+
   .threshold-sub-row td {
     padding: 0.2rem 0.75rem !important;
     border-bottom: none !important;
