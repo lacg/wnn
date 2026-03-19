@@ -230,6 +230,31 @@
 		return sortAsc ? va - vb : vb - va;
 	});
 
+	// Parse bits range from tiers_json like "ClusterGenome(clusters=1, neurons=100, bits=[28-28], ...)"
+	function parseBits(tiersJson: string | null): string {
+		if (!tiersJson) return '-';
+		const m = tiersJson.match(/bits=\[([^\]]+)\]/);
+		return m ? m[1] : '-';
+	}
+
+	// Virtual scrolling
+	const ROW_HEIGHT = 41;
+	const VISIBLE_BUFFER = 5;
+	let scrollContainer: HTMLDivElement;
+	let scrollTop = 0;
+	let containerHeight = 600;
+
+	$: totalHeight = rankedGenomes.length * ROW_HEIGHT;
+	$: startIdx = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - VISIBLE_BUFFER);
+	$: endIdx = Math.min(rankedGenomes.length, Math.ceil((scrollTop + containerHeight) / ROW_HEIGHT) + VISIBLE_BUFFER);
+	$: visibleGenomes = rankedGenomes.slice(startIdx, endIdx);
+	$: topPad = startIdx * ROW_HEIGHT;
+	$: bottomPad = (rankedGenomes.length - endIdx) * ROW_HEIGHT;
+
+	function onScroll() {
+		scrollTop = scrollContainer.scrollTop;
+	}
+
 	// Expanded row tracking
 	let expandedHash: string | null = null;
 
@@ -358,11 +383,16 @@
 						<th class="col-acc sortable" on:click={() => toggleSort('accuracy')}>Accuracy {sortColumn === 'accuracy' ? (sortAsc ? '▲' : '▼') : ''}</th>
 						<th class="col-ce sortable" on:click={() => toggleSort('ce')}>CE {sortColumn === 'ce' ? (sortAsc ? '▲' : '▼') : ''}</th>
 						<th class="col-arch">Neurons</th>
+						<th class="col-bits">Bits</th>
 						<th class="col-flow">Flow</th>
 					</tr>
 				</thead>
+			</table>
+			<div class="virtual-scroll" bind:this={scrollContainer} on:scroll={onScroll} bind:clientHeight={containerHeight}>
+			<table>
 				<tbody>
-					{#each rankedGenomes as genome}
+					<tr style="height: {topPad}px"><td colspan="11"></td></tr>
+					{#each visibleGenomes as genome}
 						<tr
 							class="genome-row"
 							class:expanded={expandedHash === genome.genome_hash}
@@ -385,6 +415,7 @@
 							<td class="col-acc mono">{formatPercent(genome.accuracy)}</td>
 							<td class="col-ce mono">{formatMetric(genome.ce)}</td>
 							<td class="col-arch mono">{genome.total_neurons ?? '-'}</td>
+							<td class="col-bits mono">{parseBits(genome.tiers_json)}</td>
 							<td class="col-flow">
 								{#if genome.flow_id}
 									<a href="/flows/{genome.flow_id}" class="flow-link" on:click|stopPropagation>F{genome.flow_id}</a>
@@ -395,7 +426,7 @@
 						</tr>
 						{#if expandedHash === genome.genome_hash}
 							<tr class="detail-row">
-								<td colspan="9">
+								<td colspan="11">
 									<div class="detail-content">
 										<div class="detail-grid">
 											<div class="detail-item">
@@ -454,8 +485,10 @@
 							</tr>
 						{/if}
 					{/each}
+					<tr style="height: {bottomPad}px"><td colspan="11"></td></tr>
 				</tbody>
 			</table>
+			</div>
 		</div>
 		<div class="count">{rankedGenomes.length} unique genome{rankedGenomes.length !== 1 ? 's' : ''} (from {rawGenomes.length} entries)</div>
 	{/if}
@@ -730,13 +763,25 @@
 		margin-top: 0.5rem;
 	}
 
-	.col-rank { width: 60px; text-align: center; }
-	.col-score { width: 60px; text-align: right; }
-	.col-task { width: 60px; }
-	.col-threshold { width: 80px; }
-	.col-ce, .col-acc, .col-f1, .col-fpr { width: 80px; text-align: right; }
-	.col-arch { width: 70px; text-align: right; }
-	.col-flow { width: 60px; }
+	.col-rank { width: 55px; text-align: center; }
+	.col-score { width: 55px; text-align: right; }
+	.col-task { width: 50px; }
+	.col-threshold { width: 75px; }
+	.col-ce, .col-acc, .col-f1, .col-fpr { width: 75px; text-align: right; }
+	.col-arch { width: 60px; text-align: right; }
+	.col-bits { width: 55px; text-align: right; }
+	.col-flow { width: 50px; }
+
+	.virtual-scroll {
+		max-height: 75vh;
+		overflow-y: auto;
+		overflow-x: hidden;
+	}
+
+	.virtual-scroll table {
+		width: 100%;
+		border-collapse: collapse;
+	}
 
 	.sortable {
 		cursor: pointer;
