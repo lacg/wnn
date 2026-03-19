@@ -2253,6 +2253,7 @@ class AdaptationStrategy(ArchitectureStrategyMixin):
 		"""
 		import time as _time
 		from wnn.ram.fitness import FitnessCalculatorFactory
+		from wnn.ram.metrics import Metrics as _M
 
 		cfg = self._config
 		evaluator = self._cached_evaluator
