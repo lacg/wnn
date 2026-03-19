@@ -148,7 +148,8 @@
 	}
 
 	// Compute fitness ranking using weighted harmonic mean of ranks
-	function computeFitnessRanking(genomes: BestGenome[]): RankedGenome[] {
+	// Extra params (_wCe etc.) aren't used directly — they trigger Svelte reactivity
+	function computeFitnessRanking(genomes: BestGenome[], _wCe = 0, _wAcc = 0, _wF1 = 0, _wFpr = 0): RankedGenome[] {
 		const n = genomes.length;
 		if (n === 0) return [];
 
@@ -212,7 +213,7 @@
 	$: filteredByThreshold = selectedThresholds.size > 0
 		? deduplicated.filter(g => selectedThresholds.has(g.threshold_mode || 'train_cal'))
 		: deduplicated;
-	$: ranked = computeFitnessRanking(filteredByThreshold);
+	$: ranked = computeFitnessRanking(filteredByThreshold, wCe, wAcc, wF1, wFpr);
 
 	function toggleSort(column: string) {
 		if (sortColumn === column) {
