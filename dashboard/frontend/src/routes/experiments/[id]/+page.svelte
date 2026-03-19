@@ -2913,39 +2913,99 @@
   }
 
   .validation-table .best-ce-col {
-    background: rgba(59, 130, 246, 0.05);
+    background: rgba(59, 130, 246, 0.08);
   }
 
   .validation-table .best-acc-col {
-    background: rgba(34, 197, 94, 0.05);
+    background: rgba(34, 197, 94, 0.08);
   }
 
   .validation-table .best-fit-col {
-    background: rgba(155, 89, 182, 0.05);
+    background: rgba(155, 89, 182, 0.08);
   }
 
-  /* Vertical dividers between genome column groups */
-  /* Col 2: first Best F1 column */
+  /* Glass panels for each genome column group */
+  /* Best F1 group: cols 2-4 */
   .validation-table td:nth-child(2) {
-    border-left: 2px solid rgba(59, 130, 246, 0.3) !important;
+    border-left: 1px solid rgba(59, 130, 246, 0.3) !important;
   }
-  /* Col 5: first Best FPR column */
+  .validation-table td:nth-child(4) {
+    border-right: 1px solid rgba(59, 130, 246, 0.3) !important;
+  }
+  /* Best FPR group: cols 5-7 */
   .validation-table td:nth-child(5) {
-    border-left: 2px solid rgba(34, 197, 94, 0.3) !important;
+    border-left: 1px solid rgba(34, 197, 94, 0.3) !important;
   }
-  /* Col 8: first Best Fitness column */
+  .validation-table td:nth-child(7) {
+    border-right: 1px solid rgba(34, 197, 94, 0.3) !important;
+  }
+  /* Best Fitness group: cols 8-10 */
   .validation-table td:nth-child(8) {
-    border-left: 2px solid rgba(155, 89, 182, 0.3) !important;
+    border-left: 1px solid rgba(155, 89, 182, 0.3) !important;
   }
-  /* Header dividers */
+  .validation-table td:nth-child(10) {
+    border-right: 1px solid rgba(155, 89, 182, 0.3) !important;
+  }
+
+  /* Top/bottom borders on first/last row of each phase group */
+  .phase-group tr:first-child td:nth-child(n+2) {
+    border-top: 1px solid var(--glass-border) !important;
+  }
+  .phase-group tr:first-child td:nth-child(2) { border-top-color: rgba(59, 130, 246, 0.3) !important; }
+  .phase-group tr:first-child td:nth-child(3) { border-top-color: rgba(59, 130, 246, 0.3) !important; }
+  .phase-group tr:first-child td:nth-child(4) { border-top-color: rgba(59, 130, 246, 0.3) !important; }
+  .phase-group tr:first-child td:nth-child(5) { border-top-color: rgba(34, 197, 94, 0.3) !important; }
+  .phase-group tr:first-child td:nth-child(6) { border-top-color: rgba(34, 197, 94, 0.3) !important; }
+  .phase-group tr:first-child td:nth-child(7) { border-top-color: rgba(34, 197, 94, 0.3) !important; }
+  .phase-group tr:first-child td:nth-child(8) { border-top-color: rgba(155, 89, 182, 0.3) !important; }
+  .phase-group tr:first-child td:nth-child(9) { border-top-color: rgba(155, 89, 182, 0.3) !important; }
+  .phase-group tr:first-child td:nth-child(10) { border-top-color: rgba(155, 89, 182, 0.3) !important; }
+
+  .phase-group tr:last-child td:nth-child(n+2) {
+    border-bottom: 1px solid var(--glass-border) !important;
+  }
+  .phase-group tr:last-child td:nth-child(2) { border-bottom-color: rgba(59, 130, 246, 0.3) !important; }
+  .phase-group tr:last-child td:nth-child(3) { border-bottom-color: rgba(59, 130, 246, 0.3) !important; }
+  .phase-group tr:last-child td:nth-child(4) { border-bottom-color: rgba(59, 130, 246, 0.3) !important; }
+  .phase-group tr:last-child td:nth-child(5) { border-bottom-color: rgba(34, 197, 94, 0.3) !important; }
+  .phase-group tr:last-child td:nth-child(6) { border-bottom-color: rgba(34, 197, 94, 0.3) !important; }
+  .phase-group tr:last-child td:nth-child(7) { border-bottom-color: rgba(34, 197, 94, 0.3) !important; }
+  .phase-group tr:last-child td:nth-child(8) { border-bottom-color: rgba(155, 89, 182, 0.3) !important; }
+  .phase-group tr:last-child td:nth-child(9) { border-bottom-color: rgba(155, 89, 182, 0.3) !important; }
+  .phase-group tr:last-child td:nth-child(10) { border-bottom-color: rgba(155, 89, 182, 0.3) !important; }
+
+  /* Rounded corners on column group panels */
+  .phase-group tr:first-child td:nth-child(2) { border-top-left-radius: 6px; }
+  .phase-group tr:first-child td:nth-child(4) { border-top-right-radius: 6px; }
+  .phase-group tr:first-child td:nth-child(5) { border-top-left-radius: 6px; }
+  .phase-group tr:first-child td:nth-child(7) { border-top-right-radius: 6px; }
+  .phase-group tr:first-child td:nth-child(8) { border-top-left-radius: 6px; }
+  .phase-group tr:first-child td:nth-child(10) { border-top-right-radius: 6px; }
+  .phase-group tr:last-child td:nth-child(2) { border-bottom-left-radius: 6px; }
+  .phase-group tr:last-child td:nth-child(4) { border-bottom-right-radius: 6px; }
+  .phase-group tr:last-child td:nth-child(5) { border-bottom-left-radius: 6px; }
+  .phase-group tr:last-child td:nth-child(7) { border-bottom-right-radius: 6px; }
+  .phase-group tr:last-child td:nth-child(8) { border-bottom-left-radius: 6px; }
+  .phase-group tr:last-child td:nth-child(10) { border-bottom-right-radius: 6px; }
+
+  /* Header column group styling */
   .validation-table thead tr:first-child th:nth-child(2) {
-    border-left: 2px solid rgba(59, 130, 246, 0.3);
+    border-left: 1px solid rgba(59, 130, 246, 0.3);
+    border-top: 1px solid rgba(59, 130, 246, 0.3);
+    border-top-left-radius: 6px;
+    background: rgba(59, 130, 246, 0.1);
   }
   .validation-table thead tr:first-child th:nth-child(3) {
-    border-left: 2px solid rgba(34, 197, 94, 0.3);
+    border-left: 1px solid rgba(34, 197, 94, 0.3);
+    border-top: 1px solid rgba(34, 197, 94, 0.3);
+    border-top-left-radius: 6px;
+    background: rgba(34, 197, 94, 0.1);
   }
   .validation-table thead tr:first-child th:nth-child(4) {
-    border-left: 2px solid rgba(155, 89, 182, 0.3);
+    border-left: 1px solid rgba(155, 89, 182, 0.3);
+    border-top: 1px solid rgba(155, 89, 182, 0.3);
+    border-top-left-radius: 6px;
+    background: rgba(155, 89, 182, 0.1);
   }
 
   .threshold-sub-row td {
