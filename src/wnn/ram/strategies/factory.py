@@ -946,7 +946,10 @@ class OptimizerStrategyFactory:
 			threshold_delta=threshold_delta,
 			threshold_reference=threshold_reference,
 			fitness_calculator_type=fitness_calculator_type or FitnessCalculatorType.HARMONIC_RANK,
-				fitness_weights=fitness_weights,
+			fitness_weight_ce=fitness_weights.ce if fitness_weights else 1.0,
+			fitness_weight_acc=fitness_weights.acc if fitness_weights else 1.0,
+			fitness_weight_f1=fitness_weights.f1 if fitness_weights else 0.0,
+			fitness_weight_fpr=fitness_weights.fpr if fitness_weights else 0.0,
 			min_accuracy_floor=min_accuracy_floor,
 		)
 		return AdaptationStrategy(
