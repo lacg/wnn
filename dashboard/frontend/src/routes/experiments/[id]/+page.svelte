@@ -975,12 +975,13 @@
                 </tr>
               {/if}
             </thead>
-            <tbody>
-              {#each cumulativeValidationProgression as point, idx}
-                {@const bestF1Summary = point.summaries.find(s => s.genomeType === 'best_f1') || point.summaries.find(s => s.genomeType === 'best_ce')}
-                {@const bestFprSummary = point.summaries.find(s => s.genomeType === 'best_fpr') || point.summaries.find(s => s.genomeType === 'best_acc')}
-                {@const bestFitSummary = point.summaries.find(s => s.genomeType === 'best_fitness')}
-                {@const isCurrentExp = point.expId === experiment?.id}
+            {#each cumulativeValidationProgression as point, idx}
+              {@const bestF1Summary = point.summaries.find(s => s.genomeType === 'best_f1') || point.summaries.find(s => s.genomeType === 'best_ce')}
+              {@const bestFprSummary = point.summaries.find(s => s.genomeType === 'best_fpr') || point.summaries.find(s => s.genomeType === 'best_acc')}
+              {@const bestFitSummary = point.summaries.find(s => s.genomeType === 'best_fitness')}
+              {@const isCurrentExp = point.expId === experiment?.id}
+              {@const hasThresholds = isIDS && (bestF1Summary?.threshold_metadata || bestFprSummary?.threshold_metadata || bestFitSummary?.threshold_metadata)}
+              <tbody class="phase-group" class:phase-group-current={isCurrentExp && point.validationPoint === 'final'}>
                 <tr class:current-phase={isCurrentExp && point.validationPoint === 'final'}>
                   <td class="phase-name" class:init-phase={point.validationPoint === 'init'}>
                     {point.label}
@@ -1007,7 +1008,7 @@
                     <td class="mono best-fit-col">{bestFitSummary ? (bestFitSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
                   {/if}
                 </tr>
-                {#if isIDS && (bestF1Summary?.threshold_metadata || bestFprSummary?.threshold_metadata || bestFitSummary?.threshold_metadata)}
+                {#if hasThresholds}
                   {#each [
                     { key: 'test_cal', label: '┣ Holdout', cls: 'threshold-holdout-row' },
                     { key: 'platt', label: '┣ Platt', cls: 'threshold-platt-row' },
@@ -1033,13 +1034,9 @@
                       </tr>
                     {/if}
                   {/each}
-                  <!-- Divider after threshold rows, before next phase -->
-                  {#if idx < cumulativeValidationProgression.length - 1}
-                    <tr class="threshold-divider"><td colspan="10"></td></tr>
-                  {/if}
                 {/if}
-              {/each}
-            </tbody>
+              </tbody>
+            {/each}
           </table>
         </div>
       </div>
@@ -2983,10 +2980,31 @@
     font-style: italic;
   }
 
-  .threshold-divider td {
-    padding: 0;
-    height: 6px;
-    border-bottom: 2px solid var(--glass-border);
-    background: transparent;
+  .phase-group {
+    border: 1px solid var(--glass-border);
+    border-radius: 0;
+  }
+
+  .phase-group + .phase-group {
+    border-top: none;
+  }
+
+  .phase-group tr:first-child td {
+    border-top: 1px solid var(--glass-border);
+    padding-top: 0.5rem;
+  }
+
+  .phase-group tr:last-child td {
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--glass-border);
+  }
+
+  .phase-group-current {
+    background: rgba(59, 130, 246, 0.04);
+  }
+
+  /* Spacing between phase groups */
+  .phase-group + .phase-group tr:first-child td {
+    border-top: 2px solid var(--glass-border);
   }
 </style>
