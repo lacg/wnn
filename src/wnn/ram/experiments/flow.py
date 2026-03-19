@@ -2240,10 +2240,9 @@ class Flow:
 		if not population:
 			return None, None
 
-		# Validate connections against current input_bits.
-		# Leaderboard genomes may have been trained with different feature selections
-		# (e.g., "all" 42 features = 321 bits vs "top20" = 160 bits).
-		# Keep architecture (neurons, bits) intact; regenerate only incompatible connections.
+		# Filter out genomes incompatible with current input space.
+		# Connections ARE the learned knowledge — regenerating them would discard
+		# everything the neurons learned. Only use genomes trained on the same input space.
 		total_input_bits = None
 		if self.evaluator and hasattr(self.evaluator, 'total_input_bits'):
 			total_input_bits = self.evaluator.total_input_bits
@@ -2251,17 +2250,19 @@ class Flow:
 			total_input_bits = self.evaluator._total_input_bits
 
 		if total_input_bits:
-			from wnn.ram.strategies.connectivity.adaptive_cluster import generate_connections
-			rng_seed = cfg.seed if hasattr(cfg, 'seed') and cfg.seed else 42
-			fixed = 0
+			compatible = []
+			skipped = 0
 			for genome in population:
 				if genome.connections and max(genome.connections) >= total_input_bits:
-					genome.connections = generate_connections(
-						genome.bits_per_neuron, total_input_bits, rng_seed + fixed
-					)
-					fixed += 1
-			if fixed:
-				self.log(f"  Regenerated connections for {fixed}/{len(population)} genomes (incompatible input_bits)")
+					skipped += 1
+				else:
+					compatible.append(genome)
+			if skipped:
+				self.log(f"  Skipped {skipped}/{len(population)} genomes (connections exceed {total_input_bits} input bits)")
+			population = compatible
+			if not population:
+				self.log("  No compatible genomes found on leaderboard")
+				return None, None
 
 		best = population[0]  # First entry = best ranked
 		return best, population
