@@ -981,6 +981,9 @@
               {@const bestFitSummary = point.summaries.find(s => s.genomeType === 'best_fitness')}
               {@const isCurrentExp = point.expId === experiment?.id}
               {@const hasThresholds = isIDS && (bestF1Summary?.threshold_metadata || bestFprSummary?.threshold_metadata || bestFitSummary?.threshold_metadata)}
+              {#if idx > 0}
+                <tbody class="phase-spacer"><tr><td colspan="10"></td></tr></tbody>
+              {/if}
               <tbody class="phase-group" class:phase-group-current={isCurrentExp && point.validationPoint === 'final'}>
                 <tr class:current-phase={isCurrentExp && point.validationPoint === 'final'}>
                   <td class="phase-name" class:init-phase={point.validationPoint === 'init'}>
@@ -2849,7 +2852,7 @@
   .validation-table {
     width: 100%;
     border-collapse: separate;
-    border-spacing: 0 6px;
+    border-spacing: 0;
     font-size: 1rem;
   }
 
@@ -3037,5 +3040,13 @@
 
   .phase-group-current td:last-child {
     border-right-color: rgba(59, 130, 246, 0.3);
+  }
+
+  /* Spacer row between phase groups */
+  .phase-spacer td {
+    height: 12px;
+    padding: 0;
+    border: none !important;
+    background: transparent !important;
   }
 </style>
