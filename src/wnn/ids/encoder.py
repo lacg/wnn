@@ -8,6 +8,7 @@ Three encoding strategies:
 """
 
 import numpy as np
+import pandas as pd
 from enum import Enum
 
 
@@ -143,7 +144,7 @@ class ThermometerEncoder:
 
 	def _detect_type(self, series) -> str:
 		"""Auto-detect feature type."""
-		if series.dtype == object:
+		if series.dtype == object or pd.api.types.is_string_dtype(series):
 			return "categorical"
 		unique = set(series.dropna().unique())
 		if unique <= {0, 1, 0.0, 1.0}:
