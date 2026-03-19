@@ -16,12 +16,44 @@
 	let sortColumn = 'fitnessScore';
 	let sortAsc = true;
 
-	// Fitness weights (configurable, default: F1+FPR focused for IDS)
-	let wCe = 0.3;
-	let wAcc = 0.3;
-	let wF1 = 1.0;
-	let wFpr = 1.0;
+	// Fitness weights (configurable, default: search config CE=0.4/F1=0.3/FPR=0.3)
+	let wCe = 0.4;
+	let wAcc = 0.0;
+	let wF1 = 0.3;
+	let wFpr = 0.3;
 	let showWeights = false;
+
+	// Presets for quick selection
+	const fitnessPresets = [
+		{ label: 'Search (CE4/F3/R3)', ce: 0.4, acc: 0.0, f1: 0.3, fpr: 0.3 },
+		{ label: 'F1 + FPR balanced', ce: 0.0, acc: 0.0, f1: 1.0, fpr: 1.0 },
+		{ label: 'F1 focused', ce: 0.0, acc: 0.0, f1: 1.0, fpr: 0.3 },
+		{ label: 'FPR focused', ce: 0.0, acc: 0.0, f1: 0.3, fpr: 1.0 },
+		{ label: 'All equal', ce: 1.0, acc: 1.0, f1: 1.0, fpr: 1.0 },
+		{ label: 'CE only', ce: 1.0, acc: 0.0, f1: 0.0, fpr: 0.0 },
+		{ label: 'Custom', ce: -1, acc: -1, f1: -1, fpr: -1 },
+	];
+	let selectedPreset = 'Search (CE4/F3/R3)';
+
+	function applyPreset(label: string) {
+		const preset = fitnessPresets.find(p => p.label === label);
+		if (preset && preset.ce >= 0) {
+			wCe = preset.ce;
+			wAcc = preset.acc;
+			wF1 = preset.f1;
+			wFpr = preset.fpr;
+		}
+		selectedPreset = label;
+		if (label === 'Custom') showWeights = true;
+	}
+
+	// Detect when sliders change away from a preset
+	function onWeightChange() {
+		const match = fitnessPresets.find(p =>
+			p.ce >= 0 && p.ce === wCe && p.acc === wAcc && p.f1 === wF1 && p.fpr === wFpr
+		);
+		selectedPreset = match ? match.label : 'Custom';
+	}
 
 	interface RankedGenome extends BestGenome {
 		fitnessRank: number;
@@ -266,9 +298,17 @@
 				{/each}
 			</div>
 		</div>
+		<div class="filter-group">
+			<label for="fitness-preset">Fitness</label>
+			<select id="fitness-preset" bind:value={selectedPreset} on:change={() => applyPreset(selectedPreset)}>
+				{#each fitnessPresets as p}
+					<option value={p.label}>{p.label}</option>
+				{/each}
+			</select>
+		</div>
 		<div class="filter-group weight-toggle">
 			<button class="weights-btn" on:click={() => showWeights = !showWeights}>
-				{showWeights ? 'Hide' : 'Show'} Weights
+				{showWeights ? 'Hide' : 'Tune'}
 			</button>
 		</div>
 	</div>
@@ -277,19 +317,19 @@
 		<div class="weights-panel">
 			<div class="weight-control">
 				<label for="w-ce">CE: {wCe.toFixed(1)}</label>
-				<input id="w-ce" type="range" min="0" max="2" step="0.1" bind:value={wCe}>
+				<input id="w-ce" type="range" min="0" max="2" step="0.1" bind:value={wCe} on:input={onWeightChange}>
 			</div>
 			<div class="weight-control">
 				<label for="w-acc">Acc: {wAcc.toFixed(1)}</label>
-				<input id="w-acc" type="range" min="0" max="2" step="0.1" bind:value={wAcc}>
+				<input id="w-acc" type="range" min="0" max="2" step="0.1" bind:value={wAcc} on:input={onWeightChange}>
 			</div>
 			<div class="weight-control">
 				<label for="w-f1">F1: {wF1.toFixed(1)}</label>
-				<input id="w-f1" type="range" min="0" max="2" step="0.1" bind:value={wF1}>
+				<input id="w-f1" type="range" min="0" max="2" step="0.1" bind:value={wF1} on:input={onWeightChange}>
 			</div>
 			<div class="weight-control">
 				<label for="w-fpr">FPR: {wFpr.toFixed(1)}</label>
-				<input id="w-fpr" type="range" min="0" max="2" step="0.1" bind:value={wFpr}>
+				<input id="w-fpr" type="range" min="0" max="2" step="0.1" bind:value={wFpr} on:input={onWeightChange}>
 			</div>
 		</div>
 	{/if}
