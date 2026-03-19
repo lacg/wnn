@@ -1616,6 +1616,13 @@
               {@const expType = isGridSearch ? 'GRID' : isAdapt ? exp.phase_type?.toUpperCase()?.slice(0, 5) ?? '—' : exp.phase_type?.startsWith('ga') ? 'GA' : exp.phase_type?.startsWith('ts') ? 'TS' : '—'}
               {@const optimizeTarget = isGridSearch ? '' : isAdapt ? '' : exp.phase_type?.includes('bits') ? 'Bits' : exp.phase_type?.includes('neurons') ? 'Neurons' : exp.phase_type?.includes('connections') ? 'Conn' : '—'}
               {@const expLink = getExperimentLink(exp)}
+              {@const phaseGroup = isGridSearch ? 'grid' : (exp.phase_type?.includes('neuron') || exp.phase_type === 'neurogenesis') ? 'neurons' : (exp.phase_type?.includes('bits') || exp.phase_type === 'synaptogenesis') ? 'bits' : (exp.phase_type?.includes('connection') || exp.phase_type === 'axonogenesis') ? 'connections' : 'other'}
+              {@const prevExp = i > 0 ? displayExperiments[i - 1] : null}
+              {@const prevGroup = prevExp ? (prevExp.phase_type === 'grid_search' ? 'grid' : (prevExp.phase_type?.includes('neuron') || prevExp.phase_type === 'neurogenesis') ? 'neurons' : (prevExp.phase_type?.includes('bits') || prevExp.phase_type === 'synaptogenesis') ? 'bits' : (prevExp.phase_type?.includes('connection') || prevExp.phase_type === 'axonogenesis') ? 'connections' : 'other') : null}
+              {@const showDivider = i > 0 && phaseGroup !== prevGroup}
+              {#if showDivider}
+                <tr class="phase-divider"><td colspan="9"><div class="divider-line"><span class="divider-label">{phaseGroup === 'neurons' ? 'Neurons' : phaseGroup === 'bits' ? 'Bits' : phaseGroup === 'connections' ? 'Connections' : phaseGroup}</span></div></td></tr>
+              {/if}
               <tr class:row-running={isRunning} class:row-completed={isCompleted} class:row-pending={isPending}>
                 <td class="col-reorder">
                   {#if isPending && canEdit}
@@ -2412,6 +2419,33 @@
 
   .row-pending {
     opacity: 0.7;
+  }
+
+  .phase-divider td {
+    padding: 0;
+    border-bottom: none;
+  }
+
+  .divider-line {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 1rem;
+  }
+
+  .divider-line::before, .divider-line::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--glass-border);
+  }
+
+  .divider-label {
+    font-size: 1rem;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
   }
 
   @media (max-width: 768px) {
