@@ -769,7 +769,7 @@
 	.col-rank { width: 55px; text-align: center; }
 	.col-score { width: 55px; text-align: center; }
 	.col-task { width: 50px; }
-	.col-threshold { width: 75px; }
+	.col-threshold { width: 110px; }
 	.col-f1, .col-fpr, .col-ce, .col-bits { width: 75px; text-align: center; }
 	.col-acc { width: 75px; text-align: center; }
 	.col-arch { width: 60px; text-align: center; }
