@@ -914,12 +914,21 @@ WNN_COALESCE_GROUPS=1 WNN_GROUP_LOG=1 python run_coarse_fine_search.py ...
 When asked to investigate or debug an issue, ALWAYS investigate and diagnose first before implementing fixes. Do not skip profiling, analysis, or root cause investigation to jump straight to implementation.
 
 ### Rule 2: Flow/Experiment Creation Protocol
-When creating experiment flows:
-1. Include experiments in the POST body (flows without experiments do nothing)
+**⚠️ CRITICAL: Flows without experiments do NOTHING — the worker marks them "completed" instantly with zero work.**
+
+When creating experiment flows via POST /api/flows:
+1. **ALWAYS include experiments in the POST body** — this is the most common mistake. A flow with 0 experiments is useless.
 2. Use experiment_type `grid_search` for grid searches (not `ga`)
 3. Experiment params go in the flat `params` HashMap, not a nested `config` object
 4. Use `optimize_bits`, `optimize_neurons`, `optimize_connections` booleans to control what gets optimized
-5. Verify the flow has experiments after creation by checking the API response
+5. **ALWAYS verify the flow has experiments after creation** by checking `COUNT(experiments)` in DB or API response
+6. Example experiments array for a 2-phase IDS flow:
+   ```json
+   "experiments": [
+     {"name": "Grid Search (neurons x bits)", "phase_type": "grid_search", "experiment_type": "grid_search"},
+     {"name": "GA Neurons", "phase_type": "ga_neurons", "experiment_type": "ga"}
+   ]
+   ```
 
 ### Rule 3: Minimal Design
 When presenting a plan or architecture, keep it minimal. Prefer simple in-memory solutions over DB-based approaches. Do not use hardcoded field names (`stage0_`, `stage1_`) when indexed vectors/arrays work. Design for the simplest viable approach first.
