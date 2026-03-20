@@ -1,0 +1,98 @@
+\begin{thebibliography}{10}
+\providecommand{\url}[1]{\texttt{#1}}
+\providecommand{\urlprefix}{URL }
+\providecommand{\doi}[1]{https://doi.org/#1}
+
+\bibitem{mdpi2024enhanced}
+Abdalgawad, N., Sajun, A., Kaddoura, Y., Olanrewaju, O.: Enhanced intrusion
+  detection systems performance with {UNSW-NB15} data analysis. Algorithms
+  \textbf{17}(2), ~64 (2024). \doi{10.3390/a17020064},
+  \url{https://www.mdpi.com/1999-4893/17/2/64}
+
+\bibitem{aleksander1984wisard}
+Aleksander, I., Thomas, W.V., Bowden, P.A.: {WISARD}: a radical step forward in
+  image recognition. Sensor Review  \textbf{4}(3),  120--124 (1984).
+  \doi{10.1108/eb007637}, \url{https://doi.org/10.1108/eb007637}
+
+\bibitem{andronic2023polylut}
+Andronic, M., Sherborne, T., Sherborne, L., Sherborne, J., Sherborne, D.,
+  Fraser, N.J.: {PolyLUT}: Learning piecewise polynomials for ultra-low-latency
+  {FPGA} {LUT}-based inference. In: Proceedings of the International Conference
+  on Field-Programmable Logic and Applications (FPL) (2023).
+  \doi{10.1109/FPL60245.2023.00020},
+  \url{https://doi.org/10.1109/FPL60245.2023.00020}
+
+\bibitem{engelen2021cicids}
+Engelen, G., Rimmer, V., Joosen, W.: Troubleshooting an intrusion detection
+  dataset: The {CICIDS2017} case study. In: Proceedings of the IEEE Security
+  and Privacy Workshops (SPW) (2021). \doi{10.1109/SPW53761.2021.00009}
+
+\bibitem{moustafa2015unswnb15}
+Moustafa, N., Slay, J.: {UNSW-NB15}: A comprehensive data set for network
+  intrusion detection systems. Military Communications and Information Systems
+  Conference (MilCIS)  (2015). \doi{10.1109/MilCIS.2015.7348942},
+  \url{https://doi.org/10.1109/MilCIS.2015.7348942}
+
+\bibitem{neto2023ciciot}
+Neto, E.C.P., Dadkhah, S., Ferreira, R., Zohourian, A., Lu, R., Ghorbani, A.A.:
+  {CICIoT2023}: A real-time dataset and benchmark for large-scale attacks in
+  {IoT} environment. Sensors  \textbf{23}(13) (2023). \doi{10.3390/s23135941}
+
+\bibitem{santiago2020fpga}
+Santiago, L.A.Q., Verona, L.T., Rangel, F.d.O., Firmino, F.M., Lima, P.M.V.,
+  França, F.M.G.: {FPGA} implementation of weightless neural networks for
+  network intrusion detection. In: Proceedings of the IEEE International Joint
+  Conference on Neural Networks (IJCNN) (2020).
+  \doi{10.1109/IJCNN48605.2020.9207591},
+  \url{https://doi.org/10.1109/IJCNN48605.2020.9207591}
+
+\bibitem{sharafaldin2018cicids2017}
+Sharafaldin, I., Lashkari, A.H., Ghorbani, A.A.: Toward generating a new
+  intrusion detection dataset and intrusion traffic characterization.
+  Proceedings of the International Conference on Information Systems Security
+  and Privacy (ICISSP)  (2018). \doi{10.5220/0006639801080116},
+  \url{https://doi.org/10.5220/0006639801080116}
+
+\bibitem{susskind2023fwiw}
+Susskind, Z., Arora, A., Bacellar, A.T.L., Dutra, D.L.C., Miranda, I.D.S.,
+  Breternitz~Jr., M., Lima, P.M.V., França, F.M.G., John, L.K.: {FWIW}:
+  Weightless neural network inference at ultra-low cost. In: Proceedings of the
+  ACM/SIGDA International Symposium on Field-Programmable Gate Arrays (FPGA)
+  (2023). \doi{10.1145/3543622.3573140},
+  \url{https://doi.org/10.1145/3543622.3573140}
+
+\bibitem{susskind2022bthowen}
+Susskind, Z., Arora, A., John, L.K., John, E.B., Lima, P.M.V., França, F.M.G.:
+  {BTHOWeN} -- binary thermometer-encoded hashed optimized weightless neural
+  networks. In: Proceedings of the International Conference on Parallel
+  Architectures and Compilation Techniques (PACT) (2022).
+  \doi{10.1145/3559009.3569680}, \url{https://doi.org/10.1145/3559009.3569680}
+
+\bibitem{ludermir1999weightless}
+Teresa Bernarda~Ludermir, André de~Carvalho, A.P.B., de~Souto, M.C.P.:
+  Weightless neural models: A review of current and past works. In: Neural
+  Computing Surveys 2 - ICSI Berkeley. pp. 41--61. Berkeley, USA (1999),
+  \url{https://www.cin.ufpe.br/~tbl/artigos/vol2_2-ncs-1999.pdf}
+
+\bibitem{umuroglu2020logicnets}
+Umuroglu, Y., Akhauri, Y., Fraser, N.J., Blott, M.: {LogicNets}: Co-designed
+  neural networks and circuits for extreme-throughput applications. In:
+  Proceedings of the International Conference on Field-Programmable Logic and
+  Applications (FPL) (2020). \doi{10.1109/FPL50879.2020.00065},
+  \url{https://doi.org/10.1109/FPL50879.2020.00065}
+
+\bibitem{zhao2020pigasus}
+Zhao, Z., Sadok, H., Atre, N., Hoe, J.C., Kim, V.S., Gibbons, P.B.: Achieving
+  100{Gbps} intrusion prevention on a single server. In: Proceedings of the
+  14th USENIX Symposium on Operating Systems Design and Implementation (OSDI)
+  (2020),
+  \url{https://www.usenix.org/conference/osdi20/presentation/zhao-zhipeng}
+
+\bibitem{zoghi2024ids}
+Zoghi, Z., Serpen, G.: Building an intrusion detection system on {UNSW-NB15}:
+  Reducing the margin of error to deal with data overlap and imbalance.
+  Concurrency and Computation: Practice and Experience  (2024).
+  \doi{10.1002/cpe.8242},
+  \url{https://onlinelibrary.wiley.com/doi/full/10.1002/cpe.8242}
+
+\end{thebibliography}

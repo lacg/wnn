@@ -68,7 +68,7 @@ devices. Conversely, lightweight rule-based systems operate at wire speed but
 lack the adaptability to detect novel attack patterns.
 
 % Gap: WNNs exist for IDS but limited evaluation
-Weightless Neural Networks (WNNs)~\cite{aleksander1984,ludermir1999} offer a
+Weightless Neural Networks (WNNs)~\cite{aleksander1984wisard,ludermir1999weightless} offer a
 compelling middle ground: RAM-based neurons perform classification via direct
 memory lookup in $O(1)$ time, with model sizes measured in bytes rather than
 megabytes. Recent work~\cite{susskind2023fwiw} demonstrated WNN-based IDS
@@ -114,7 +114,7 @@ Our contributions are:
 
 % RAM neuron basics
 Unlike conventional neural networks that learn continuous weights through
-gradient descent, Weightless Neural Networks (WNNs)~\cite{aleksander1984}
+gradient descent, Weightless Neural Networks (WNNs)~\cite{aleksander1984wisard}
 use Random Access Memory (RAM) neurons that perform classification via
 direct memory lookup. A RAM neuron consists of $2^n$ memory cells, where
 $n$ is the number of observed input bits---the neuron's \emph{address width}.
@@ -139,7 +139,7 @@ produce a classification decision.
 % QUAD_WEIGHTED memory
 \textbf{Quad-weighted memory.}
 Traditional RAM neurons store binary values (TRUE/FALSE), while
-Probabilistic Logic Nodes (PLN)~\cite{aleksander1984} add an
+Probabilistic Logic Nodes (PLN)~\cite{aleksander1984wisard} add an
 \emph{undefined} state ($u$) for untrained cells, and Multi-valued PLN
 (MPLN) generalize to finer granularity (e.g., 11 levels from 0.0 to 1.0
 in 0.1 steps, starting at 0.5 for undefined).
@@ -184,7 +184,7 @@ training and testing periods, preventing data leakage. We also evaluate on a
 deduplicated random split (1.4M / 158K) for comparison with prior
 work~\cite{susskind2023fwiw}.
 
-\textbf{CICIDS2017}~\cite{sharafaldin2018cicids} comprises five days of
+\textbf{CICIDS2017}~\cite{sharafaldin2018cicids2017} comprises five days of
 network traffic captured at the Canadian Institute for Cybersecurity. We
 define a temporal split using Monday--Thursday for training (2.1M flows) and
 Friday for testing (703K flows), requiring the model to generalize to
@@ -204,9 +204,9 @@ ordering in the source data).
 
 \subsection{WNN-Based Intrusion Detection}
 
-The WiSARD~\cite{ludermir1999} architecture pioneered RAM-based pattern
+The WiSARD~\cite{ludermir1999weightless} architecture pioneered RAM-based pattern
 recognition, and several works have applied WNNs to network security.
-Santiago et al.~\cite{santiago2020} demonstrated WNN-based anomaly detection
+Santiago et al.~\cite{santiago2020fpga} demonstrated WNN-based anomaly detection
 but evaluated only on random splits with random connectivity.
 
 The most directly related work is FWIW~\cite{susskind2023fwiw}, which
@@ -227,13 +227,13 @@ optimization.
 \subsection{Machine Learning for IDS}
 
 Traditional ML approaches---Random Forest, XGBoost, SVM---achieve
-85--90\% F1 on UNSW-NB15's temporal split~\cite{zoghi2024} but require
+85--90\% F1 on UNSW-NB15's temporal split~\cite{zoghi2024ids} but require
 models of 10--50\,MB. Deep learning approaches (BiLSTM~\cite{mdpi2024enhanced},
 CNN-LSTM) push accuracy higher at the cost of GPU inference requirements.
 
 A critical methodological issue pervades the IDS literature: most published
 results use random train/test splits, reporting 97--99\% accuracy that does
-not reflect deployment performance. Zoghi and Serpen~\cite{zoghi2024} showed
+not reflect deployment performance. Zoghi and Serpen~\cite{zoghi2024ids} showed
 that the same models achieving 99\% on random splits drop to 87\% on the
 standard temporal split, a finding consistent with our evaluation. For
 CICIDS2017, the situation is similar---near-perfect random-split results
@@ -482,8 +482,8 @@ cherry-picked across runs.
 \subsection{Phase Progression Analysis}
 
 % Which phases help/hurt
-[TODO: Table showing grid_search → ga_neurons → ga_bits → ga_connections
-progression for each architecture]
+% TODO: Table showing grid_search, ga_neurons, ga_bits, ga_connections
+% progression for each architecture
 
 \subsection{Comparison with Baselines}
 
