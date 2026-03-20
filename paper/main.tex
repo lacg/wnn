@@ -76,16 +76,16 @@ megabytes. Recent work~\cite{susskind2023fwiw} demonstrated WNN-based IDS
 achieving 98\% accuracy on UNSW-NB15 using random train/test splits, which
 show stronger performance than temporal splits due to shared distributional
 characteristics between training and testing data. Additionally, neuron
-connectivity---which input bits each neuron observes---plays a critical role
+connectivity (which input bits each neuron observes) plays a critical role
 in WNN architectures but is traditionally generated randomly, where network
 quality depends significantly on the initial assignment.
 
 % Our contribution
-Our work improves on two fronts. First, we introduce an optimization framework
-combining Darwinian evolution (genetic algorithm), local search (tabu search),
-and Lamarckian refinement (neurogenesis, synaptogenesis, axonogenesis) to
-discover optimal neuron configurations---count, address width, and
-connectivity---with connectivity optimization effectively performing
+Our work improves on two fronts. First, we introduce an optimization
+framework combining Darwinian evolution (genetic algorithm), local search
+(tabu search), and Lamarckian refinement (neurogenesis, synaptogenesis,
+axonogenesis) to discover optimal neuron configurations: count, address
+width, and connectivity. Connectivity optimization effectively performs
 automated feature selection intrinsic to the WNN architecture. Second, we evaluate the resulting networks against unseen data using
 temporal splits across three datasets, with a comprehensive threshold
 calibration study that quantifies the gap between train-time and
@@ -149,15 +149,15 @@ Probabilistic Logic Nodes (PLN)~\cite{aleksander1984wisard} add an
 (MPLN) generalize to finer granularity (e.g., 11 levels from 0.0 to 1.0
 in 0.1 steps, starting at 0.5 for undefined).
 
-We introduce \emph{quad-weighted} (QW) memory: four states encoded in
-just 2 bits---FALSE ($0.0$), WEAK\_FALSE ($0.25$), WEAK\_TRUE ($0.75$),
-and TRUE ($1.0$). Unlike PLN's symmetric undefined state ($0.5$), QW
-cells default to WEAK\_FALSE ($0.25$), biasing untrained neurons toward
+We introduce \emph{quad-weighted} (QW) memory with four states encoded
+in just 2~bits: FALSE~($0.0$), WEAK\_FALSE~($0.25$), WEAK\_TRUE~($0.75$),
+and TRUE~($1.0$). Unlike PLN's symmetric undefined state~($0.5$), QW
+cells default to WEAK\_FALSE~($0.25$), biasing untrained neurons toward
 the majority class (normal traffic). When a cell trained as TRUE is
 subsequently addressed with a normal-class example, it transitions to
 WEAK\_TRUE rather than being overwritten, preserving partial confidence
 from both classes. This provides smoother probability estimates than
-binary voting while requiring only 2 bits per cell---more compact than
+binary voting while requiring only 2~bits per cell, more compact than
 MPLN's multi-level representation.
 
 \subsection{Thermometer Encoding}
