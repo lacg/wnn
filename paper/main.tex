@@ -10,6 +10,8 @@
 \usepackage{multirow}
 \usepackage{algorithm}
 \usepackage{algpseudocode}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,calc}
 
 % Toggle: set to true for submission (anonymous), false for camera-ready
 \newif\ifanonymous
@@ -136,7 +138,7 @@ with no multiply-accumulate operations.
 
 % Generalization through partial connectivity
 The fundamental mechanism enabling WNN generalization is
-\emph{partial connectivity}. A fully-connected neuron ($n = d$) memorizes
+\emph{partial connectivity}~\cite{aleksander1984wisard,ludermir1999weightless}. A fully-connected neuron ($n = d$) memorizes
 every training example without generalizing, since each input maps to a
 unique address. With partial connectivity ($n \ll d$), many distinct inputs
 share the same address---those that agree on the $n$ selected bit
@@ -146,6 +148,98 @@ provides $N$ complementary views of the input, and their aggregated scores
 produce a classification decision. We refer to the neuron count~$N$,
 address width~$n$, and connectivity maps~$C$ collectively as the
 \emph{network parameters}.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[
+  cell/.style={draw, minimum size=6mm, inner sep=0pt, font=\footnotesize},
+  neuron/.style={draw, rounded corners, fill=blue!8, minimum width=22mm,
+                 minimum height=10mm, font=\small\bfseries},
+  conn/.style={-{Stealth[length=2mm]}, thick},
+  memcell/.style={draw, minimum size=5mm, inner sep=0pt, font=\scriptsize},
+]
+
+% Input grid (3x3)
+\node[font=\small\bfseries] at (0, 2.8) {Input bits};
+% Input bits: manually placed to avoid \ifnum issues
+\foreach \i/\val/\clr in {0/1/green!25, 1/0/red!15, 2/1/green!25,
+  3/1/green!25, 4/0/red!15, 5/0/red!15, 6/1/green!25, 7/1/green!25, 8/0/red!15} {
+  \pgfmathtruncatemacro{\col}{mod(\i,3)}
+  \pgfmathtruncatemacro{\row}{2-div(\i,3)}
+  \node[cell, fill=\clr] (in\i)
+    at (\col*0.8, \row*0.8) {\val};
+  \node[font=\tiny, gray] at (\col*0.8, \row*0.8+0.42) {$b_{\i}$};
+}
+
+% Neuron A (selects bits 0, 3, 6)
+\node[neuron] (nA) at (5.5, 2.0) {Neuron A};
+\node[font=\tiny, gray] at (5.5, 1.4) {$C_A = \{0, 3, 6\}$};
+
+% Neuron B (selects bits 2, 4, 7)
+\node[neuron] (nB) at (5.5, -0.2) {Neuron B};
+\node[font=\tiny, gray] at (5.5, -0.8) {$C_B = \{2, 4, 7\}$};
+
+% Connections A (bits 0, 3, 6)
+\draw[conn, blue!70] (in0.east) -- ++(0.5,0) |- (nA.west);
+\draw[conn, blue!70] (in3.east) -- ++(0.8,0) |- ([yshift=0mm]nA.west);
+\draw[conn, blue!70] (in6.east) -- ++(1.1,0) |- ([yshift=-2mm]nA.south west);
+
+% Connections B (bits 2, 4, 7)
+\draw[conn, orange!80] (in2.east) -- ++(1.4,0) |- ([yshift=2mm]nB.north west);
+\draw[conn, orange!80] (in4.east) -- ++(1.7,0) |- (nB.west);
+\draw[conn, orange!80] (in7.east) -- ++(2.0,0) |- ([yshift=-2mm]nB.south west);
+
+% Memory table A: address 101 (bits 0=1, 3=1, 6=1) -> addr 7 (111)
+\node[font=\tiny] at (5.5, 3.2) {addr: $b_0 b_3 b_6 = 111_2 = 7$};
+
+% Memory table A
+\node[font=\scriptsize\bfseries] at (9.2, 2.8) {Memory A};
+\foreach \a/\v/\c in {0/0.25/gray!20, 1/0.25/gray!20, 2/0.75/blue!15,
+  3/0.25/gray!20, 4/0.00/red!15, 5/1.00/green!25, 6/0.75/blue!15,
+  7/1.00/green!25} {
+  \pgfmathtruncatemacro{\col}{mod(\a,4)}
+  \pgfmathtruncatemacro{\row}{1-div(\a,4)}
+  \node[memcell, fill=\c] (mA\a) at (8.2+\col*0.6, 1.6+\row*0.6) {\v};
+  \node[font=\tiny, gray] at (8.2+\col*0.6, 1.6+\row*0.6+0.35) {\a};
+}
+\draw[-{Stealth[length=2mm]}, thick, green!60!black] (nA.east) -- (mA7.west)
+  node[midway, above, font=\tiny] {$\to 1.0$};
+
+% Memory table B: address 100 (bits 2=1, 4=0, 7=1) -> addr 5 (101)
+\node[font=\scriptsize\bfseries] at (9.2, 0.6) {Memory B};
+\foreach \a/\v/\c in {0/0.25/gray!20, 1/0.00/red!15, 2/0.25/gray!20,
+  3/0.75/blue!15, 4/1.00/green!25, 5/0.75/blue!15, 6/0.25/gray!20,
+  7/0.00/red!15} {
+  \pgfmathtruncatemacro{\col}{mod(\a,4)}
+  \pgfmathtruncatemacro{\row}{1-div(\a,4)}
+  \node[memcell, fill=\c] (mB\a) at (8.2+\col*0.6, -0.6+\row*0.6) {\v};
+  \node[font=\tiny, gray] at (8.2+\col*0.6, -0.6+\row*0.6+0.35) {\a};
+}
+\node[font=\tiny] at (5.5, -1.3) {addr: $b_2 b_4 b_7 = 101_2 = 5$};
+\draw[-{Stealth[length=2mm]}, thick, blue!60] (nB.east) -- (mB5.west)
+  node[midway, above, font=\tiny] {$\to 0.75$};
+
+% Output
+\node[draw, rounded corners, fill=yellow!15, minimum width=18mm,
+      font=\small] (out) at (9.2, -1.8)
+  {$\frac{1.0 + 0.75}{2} = 0.875$};
+\node[font=\tiny, gray] at (9.2, -2.5) {score $\geq \tau \Rightarrow$ \textbf{attack}};
+
+\draw[-{Stealth[length=2mm]}, thick] (mA7.south) |- (out.north west);
+\draw[-{Stealth[length=2mm]}, thick] (mB5.south) |- (out.north east);
+
+\end{tikzpicture}
+\caption{RAM neuron architecture with two neurons ($N{=}2$, $n{=}3$
+address bits each). Each neuron selects 3 bits from the 9-bit input via
+its connectivity map, forms a 3-bit address, and looks up its
+quad-weighted memory ($2^3{=}8$ cells). Cell colors:
+\textcolor{green!60!black}{TRUE (1.0)},
+\textcolor{blue!60}{WEAK\_TRUE (0.75)},
+\textcolor{gray}{WEAK\_FALSE (0.25)},
+\textcolor{red!70}{FALSE (0.0)}.
+The mean score is thresholded to classify the input.}
+\label{fig:ram-neuron}
+\end{figure}
 
 % QUAD_WEIGHTED memory
 \textbf{Quad-weighted memory.}
