@@ -74,12 +74,11 @@ compelling middle ground: RAM-based neurons perform classification via direct
 memory lookup in $O(1)$ time, with model sizes measured in bytes rather than
 megabytes. Recent work~\cite{susskind2023fwiw} demonstrated WNN-based IDS
 achieving 98\% accuracy on UNSW-NB15 using random train/test splits, which
-tend to show stronger performance than temporal splits due to shared
-distributional characteristics between training and testing data.
-Additionally, neuron connectivity---which input bits each neuron
-observes---plays a critical role in WNN architectures but is traditionally
-generated randomly, where the quality of the resulting network depends
-significantly on the initial random assignment.
+show stronger performance than temporal splits due to shared distributional
+characteristics between training and testing data. Additionally, neuron
+connectivity---which input bits each neuron observes---plays a critical role
+in WNN architectures but is traditionally generated randomly, where network
+quality depends significantly on the initial assignment.
 
 % Our contribution
 Our work improves on two fronts. First, we introduce an optimization framework
