@@ -81,15 +81,19 @@ in WNN architectures but is traditionally generated randomly, where network
 quality depends significantly on the initial assignment.
 
 % Our contribution
-Our work improves on two fronts. First, we introduce an optimization
-framework combining Darwinian evolution (genetic algorithm), local search
-(tabu search), and Lamarckian refinement (neurogenesis, synaptogenesis,
-axonogenesis) to discover optimal neuron configurations: count, address
-width, and connectivity. Connectivity optimization effectively performs
-automated feature selection intrinsic to the WNN architecture. Second, we evaluate the resulting networks against unseen data using
-temporal splits across three datasets, with a comprehensive threshold
-calibration study that quantifies the gap between train-time and
-deployment-time performance.
+Our work improves on two fronts:
+\begin{itemize}
+\item \emph{How the network is derived.} We introduce an optimization
+  framework combining Darwinian evolution (genetic algorithm), local
+  search (tabu search), and Lamarckian refinement (neurogenesis,
+  synaptogenesis, axonogenesis) to discover optimal neuron configurations:
+  count, address width, and connectivity. These optimizations effectively
+  perform automated feature selection intrinsic to the WNN architecture.
+\item \emph{How the network is evaluated.} We test the resulting networks
+  against unseen data using temporal splits across three datasets, with a
+  comprehensive threshold calibration study that quantifies the gap
+  between train-time and deployment-time performance.
+\end{itemize}
 
 % Contributions list
 Our contributions are:
