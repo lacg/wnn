@@ -152,78 +152,94 @@ address width~$n$, and connectivity maps~$C$ collectively as the
 \begin{figure}[t]
 \centering
 \begin{tikzpicture}[
-  cell/.style={draw, minimum size=6mm, inner sep=0pt, font=\footnotesize},
-  neuron/.style={draw, rounded corners, fill=blue!8, minimum width=22mm,
-                 minimum height=10mm, font=\small\bfseries},
+  cell/.style={draw, minimum size=8mm, inner sep=0pt, font=\footnotesize},
+  neuron/.style={draw, rounded corners, fill=blue!8, minimum width=28mm,
+                 minimum height=14mm, font=\small\bfseries},
   conn/.style={-{Stealth[length=2mm]}, thick},
-  memcell/.style={draw, minimum size=5mm, inner sep=0pt, font=\scriptsize},
+  memcell/.style={draw, minimum size=5.5mm, inner sep=0pt, font=\scriptsize},
 ]
 
-% Input grid (3x3)
-\node[font=\small\bfseries] at (0, 2.8) {Input bits};
-% Input bits: manually placed to avoid \ifnum issues
+% Input grid (3x3) — wider spacing (1.2) for arrow routing
+\node[font=\small\bfseries] at (1.2, 3.6) {Input vector};
 \foreach \i/\val/\clr in {0/1/green!25, 1/0/red!15, 2/1/green!25,
   3/1/green!25, 4/0/red!15, 5/0/red!15, 6/1/green!25, 7/1/green!25, 8/0/red!15} {
   \pgfmathtruncatemacro{\col}{mod(\i,3)}
   \pgfmathtruncatemacro{\row}{2-div(\i,3)}
   \node[cell, fill=\clr] (in\i)
-    at (\col*0.8, \row*0.8) {\val};
-  \node[font=\tiny, gray] at (\col*0.8, \row*0.8+0.42) {$b_{\i}$};
+    at (\col*1.2, \row*1.2) {\val};
+  % Label inside box, top-left corner
+  \node[font=\tiny, gray, anchor=north west] at ([shift={(0.5mm,-0.5mm)}]in\i.north west) {$b_{\i}$};
 }
 
-% Neuron A (selects bits 0, 3, 6)
-\node[neuron] (nA) at (5.5, 2.0) {Neuron A};
-\node[font=\tiny, gray] at (5.5, 1.4) {$C_A = \{0, 3, 6\}$};
+% Neuron A (selects bits 0, 3, 6) — larger box
+\node[neuron] (nA) at (6.0, 2.4) {Neuron A};
+\node[font=\tiny, gray] at (6.0, 1.6) {$C_A = \{0, 3, 6\}$};
 
-% Neuron B (selects bits 2, 4, 7)
-\node[neuron] (nB) at (5.5, -0.2) {Neuron B};
-\node[font=\tiny, gray] at (5.5, -0.8) {$C_B = \{2, 4, 7\}$};
+% Neuron B (selects bits 2, 4, 7) — larger box
+\node[neuron] (nB) at (6.0, -0.4) {Neuron B};
+\node[font=\tiny, gray] at (6.0, -1.2) {$C_B = \{2, 4, 7\}$};
 
-% Connections A (bits 0, 3, 6)
-\draw[conn, blue!70] (in0.east) -- ++(0.5,0) |- (nA.west);
-\draw[conn, blue!70] (in3.east) -- ++(0.8,0) |- ([yshift=0mm]nA.west);
-\draw[conn, blue!70] (in6.east) -- ++(1.1,0) |- ([yshift=-2mm]nA.south west);
+% === Connections to Neuron A (blue): bits 0, 3, 6 ===
+% b0 (top-left, 0,2.4): go UP above grid, then right to Neuron A top
+\draw[conn, blue!70] (in0.north) -- ++(0, 0.6)
+  -| ([yshift=3mm]nA.north west) -- ([yshift=3mm]nA.170);
+\draw[conn, blue!70] ([yshift=3mm]nA.170) -- (nA.170);
 
-% Connections B (bits 2, 4, 7)
-\draw[conn, orange!80] (in2.east) -- ++(1.4,0) |- ([yshift=2mm]nB.north west);
-\draw[conn, orange!80] (in4.east) -- ++(1.7,0) |- (nB.west);
-\draw[conn, orange!80] (in7.east) -- ++(2.0,0) |- ([yshift=-2mm]nB.south west);
+% b3 (middle-left, 0,1.2): go right, straight to Neuron A middle
+\draw[conn, blue!70] (in3.east) -- ++(0.4, 0) |- (nA.west);
 
-% Memory table A: address 101 (bits 0=1, 3=1, 6=1) -> addr 7 (111)
-\node[font=\tiny] at (5.5, 3.2) {addr: $b_0 b_3 b_6 = 111_2 = 7$};
+% b6 (bottom-left, 0,0): go DOWN below grid, then right to Neuron A
+\draw[conn, blue!70] (in6.south) -- ++(0, -0.5) -| (3.6, -0.5)
+  -- (3.6, 1.7) -- ([yshift=-3mm]nA.south west);
+
+% === Connections to Neuron B (orange): bits 2, 4, 7 ===
+% b2 (top-right, 2.4,2.4): go right, then down to Neuron B top
+\draw[conn, orange!80] (in2.east) -- ++(0.7, 0) |- ([yshift=3mm]nB.north west);
+
+% b4 (middle-center, 1.2,1.2): go right past grid, then to Neuron B
+\draw[conn, orange!80] (in4.east) -- ++(1.9, 0) |- (nB.west);
+
+% b7 (bottom-center, 1.2,0): go down, then right to Neuron B
+\draw[conn, orange!80] (in7.south) -- ++(0, -1.0)
+  -| ([xshift=2mm]nB.south west) -- ([yshift=-3mm]nB.south west);
+\draw[conn, orange!80] ([yshift=-3mm]nB.south west) -- ([yshift=-3mm]nB.190);
+\draw[conn, orange!80] ([yshift=-3mm]nB.190) -- (nB.190);
+
+% Address labels
+\node[font=\tiny] at (6.0, 3.4) {addr: $b_0 b_3 b_6 = 111_2 = 7$};
+\node[font=\tiny] at (6.0, -1.6) {addr: $b_2 b_4 b_7 = 101_2 = 5$};
 
 % Memory table A
-\node[font=\scriptsize\bfseries] at (9.2, 2.8) {Memory A};
-\foreach \a/\v/\c in {0/0.25/gray!20, 1/0.25/gray!20, 2/0.75/blue!15,
+\node[font=\scriptsize\bfseries] at (9.8, 3.1) {Memory A};
+\foreach \a/\val/\c in {0/0.25/gray!20, 1/0.25/gray!20, 2/0.75/blue!15,
   3/0.25/gray!20, 4/0.00/red!15, 5/1.00/green!25, 6/0.75/blue!15,
   7/1.00/green!25} {
   \pgfmathtruncatemacro{\col}{mod(\a,4)}
   \pgfmathtruncatemacro{\row}{1-div(\a,4)}
-  \node[memcell, fill=\c] (mA\a) at (8.2+\col*0.6, 1.6+\row*0.6) {\v};
-  \node[font=\tiny, gray] at (8.2+\col*0.6, 1.6+\row*0.6+0.35) {\a};
+  \node[memcell, fill=\c] (mA\a) at (8.7+\col*0.65, 1.8+\row*0.65) {\val};
+  \node[font=\tiny, gray] at (8.7+\col*0.65, 1.8+\row*0.65+0.38) {\a};
 }
 \draw[-{Stealth[length=2mm]}, thick, green!60!black] (nA.east) -- (mA7.west)
   node[midway, above, font=\tiny] {$\to 1.0$};
 
-% Memory table B: address 100 (bits 2=1, 4=0, 7=1) -> addr 5 (101)
-\node[font=\scriptsize\bfseries] at (9.2, 0.6) {Memory B};
-\foreach \a/\v/\c in {0/0.25/gray!20, 1/0.00/red!15, 2/0.25/gray!20,
+% Memory table B
+\node[font=\scriptsize\bfseries] at (9.8, 0.7) {Memory B};
+\foreach \a/\val/\c in {0/0.25/gray!20, 1/0.00/red!15, 2/0.25/gray!20,
   3/0.75/blue!15, 4/1.00/green!25, 5/0.75/blue!15, 6/0.25/gray!20,
   7/0.00/red!15} {
   \pgfmathtruncatemacro{\col}{mod(\a,4)}
   \pgfmathtruncatemacro{\row}{1-div(\a,4)}
-  \node[memcell, fill=\c] (mB\a) at (8.2+\col*0.6, -0.6+\row*0.6) {\v};
-  \node[font=\tiny, gray] at (8.2+\col*0.6, -0.6+\row*0.6+0.35) {\a};
+  \node[memcell, fill=\c] (mB\a) at (8.7+\col*0.65, -0.6+\row*0.65) {\val};
+  \node[font=\tiny, gray] at (8.7+\col*0.65, -0.6+\row*0.65+0.38) {\a};
 }
-\node[font=\tiny] at (5.5, -1.3) {addr: $b_2 b_4 b_7 = 101_2 = 5$};
 \draw[-{Stealth[length=2mm]}, thick, blue!60] (nB.east) -- (mB5.west)
   node[midway, above, font=\tiny] {$\to 0.75$};
 
 % Output
-\node[draw, rounded corners, fill=yellow!15, minimum width=18mm,
-      font=\small] (out) at (9.2, -1.8)
+\node[draw, rounded corners, fill=yellow!15, minimum width=20mm,
+      font=\small] (out) at (9.8, -2.0)
   {$\frac{1.0 + 0.75}{2} = 0.875$};
-\node[font=\tiny, gray] at (9.2, -2.5) {score $\geq \tau \Rightarrow$ \textbf{attack}};
+\node[font=\tiny, gray] at (9.8, -2.7) {score $\geq \tau \Rightarrow$ \textbf{attack}};
 
 \draw[-{Stealth[length=2mm]}, thick] (mA7.south) |- (out.north west);
 \draw[-{Stealth[length=2mm]}, thick] (mB5.south) |- (out.north east);
