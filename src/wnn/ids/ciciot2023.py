@@ -24,8 +24,28 @@ ATTACK_CLASSES = [
 ]
 
 # Top-20 features by Random Forest importance on CIC-IoT-2023.
-# Will be populated after the dataset is created and RF analysis is run.
-TOP20_RF_FEATURES = []  # Populated by create script, stored in feature_importance.json
+TOP20_RF_FEATURES = [
+	"HTTPS",
+	"Number",
+	"Time_To_Live",
+	"Max",
+	"ack_flag_number",
+	"Rate",
+	"IAT",
+	"ack_count",
+	"Header_Length",
+	"Min",
+	"Variance",
+	"psh_flag_number",
+	"Tot sum",
+	"Std",
+	"Tot size",
+	"syn_count",
+	"AVG",
+	"rst_flag_number",
+	"DNS",
+	"rst_count",
+]
 
 VALID_FEATURE_SELECTIONS = ("all", "top20")
 
