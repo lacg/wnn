@@ -3,13 +3,13 @@
 \documentclass[runningheads]{llncs}
 
 \usepackage{graphicx}
-\usepackage{booktabs}
+%\usepackage{booktabs}  % install: sudo tlmgr install booktabs
 \usepackage{amsmath}
 \usepackage{hyperref}
 \usepackage{xcolor}
-\usepackage{multirow}
-\usepackage{algorithm}
-\usepackage{algpseudocode}
+%\usepackage{multirow}  % install: sudo tlmgr install multirow
+%\usepackage{algorithm}  % install: sudo tlmgr install algorithms
+%\usepackage{algpseudocode}  % install: sudo tlmgr install algorithmicx
 
 % Anonymous submission
 \renewcommand{\thefootnote}{}
@@ -129,15 +129,22 @@ produce a classification decision.
 
 % QUAD_WEIGHTED memory
 \textbf{Quad-weighted memory.}
-Traditional RAM neurons store binary values (TRUE/FALSE). We extend this
-with \emph{quad-weighted} (QW) memory using four states that encode
-graduated confidence: FALSE ($0.0$), WEAK\_FALSE ($0.25$), WEAK\_TRUE
-($0.75$), and TRUE ($1.0$). Each cell is stored in 2 bits. When a cell
-is written with a conflicting label, it transitions to the corresponding
-weak state rather than being overwritten, preserving partial information
-from both classes. The neuron's output score---the mean of its $N$
-neurons' cell values---thus provides a smoother probability estimate than
-binary voting.
+Traditional RAM neurons store binary values (TRUE/FALSE), while
+Probabilistic Logic Nodes (PLN)~\cite{aleksander1984} add an
+\emph{undefined} state ($u$) for untrained cells, and Multi-valued PLN
+(MPLN) generalize to finer granularity (e.g., 11 levels from 0.0 to 1.0
+in 0.1 steps, starting at 0.5 for undefined).
+
+We introduce \emph{quad-weighted} (QW) memory: four states encoded in
+just 2 bits---FALSE ($0.0$), WEAK\_FALSE ($0.25$), WEAK\_TRUE ($0.75$),
+and TRUE ($1.0$). Unlike PLN's symmetric undefined state ($0.5$), QW
+cells default to WEAK\_FALSE ($0.25$), biasing untrained neurons toward
+the majority class (normal traffic). When a cell trained as TRUE is
+subsequently addressed with a normal-class example, it transitions to
+WEAK\_TRUE rather than being overwritten, preserving partial confidence
+from both classes. This provides smoother probability estimates than
+binary voting while requiring only 2 bits per cell---more compact than
+MPLN's multi-level representation.
 
 \subsection{Thermometer Encoding}
 
