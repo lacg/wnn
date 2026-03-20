@@ -295,8 +295,11 @@ def load_unsw_nb15(
 	Returns:
 		IDSDataset with binary-encoded features and labels.
 	"""
-	if split not in ("standard", "random"):
-		raise ValueError(f"split must be 'standard' or 'random', got '{split}'")
+	# Alias: "standard" maps to "temporal" (both are the temporal split)
+	if split == "standard":
+		split = "temporal"
+	if split not in ("temporal", "random"):
+		raise ValueError(f"split must be 'temporal', 'standard', or 'random', got '{split}'")
 	if feature_selection not in VALID_FEATURE_SELECTIONS:
 		raise ValueError(f"feature_selection must be one of {VALID_FEATURE_SELECTIONS}, got '{feature_selection}'")
 
