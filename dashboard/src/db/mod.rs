@@ -2927,13 +2927,13 @@ pub mod queries {
                      f1_macro = COALESCE(MAX(f1_macro, ?), ?),
                      fpr = COALESCE(MIN(fpr, ?), ?),
                      updated_at = ?
-                   WHERE task_type = ? AND stage = ? AND metric = ? AND genome_hash = ?"#,
+                   WHERE task_type = ? AND stage = ? AND metric = ? AND genome_hash = ? AND threshold_mode = ?"#,
             )
             .bind(ce).bind(accuracy)
             .bind(f1_macro).bind(f1_macro)
             .bind(fpr).bind(fpr)
             .bind(&now)
-            .bind(task_type).bind(stage).bind(metric).bind(genome_hash)
+            .bind(task_type).bind(stage).bind(metric).bind(genome_hash).bind(threshold_mode)
             .execute(pool)
             .await;
             // Return existing id

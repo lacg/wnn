@@ -1315,15 +1315,8 @@ class Experiment:
 
 						# Submit one leaderboard entry per threshold mode
 						submissions = []
-						# Train-cal (the default — uses train_ce/acc directly)
-						submissions.append({
-							"task_type": task_type, "stage": stage, "metric": metric,
-							"genome_hash": genome_hash,
-							"ce": ce, "accuracy": acc, "f1_macro": f1, "fpr": fpr_val,
-							"flow_id": flow_id, "experiment_id": self.experiment_id,
-							"genome_data": {**base_genome_data, "threshold_mode": "train_cal"},
-						})
-						# Each threshold mode from threshold_metadata
+						# If threshold_metadata is available, submit from it (has all modes including train_cal)
+						# Otherwise fall back to the main validation values as train_cal
 						if threshold_metadata:
 							for mode_key, mode_data in threshold_metadata.items():
 								if isinstance(mode_data, dict) and 'f1' in mode_data:
@@ -1337,6 +1330,15 @@ class Experiment:
 										"flow_id": flow_id, "experiment_id": self.experiment_id,
 										"genome_data": {**base_genome_data, "threshold_mode": mode_key},
 									})
+						else:
+							# No threshold modes — submit with default train_cal
+							submissions.append({
+								"task_type": task_type, "stage": stage, "metric": metric,
+								"genome_hash": genome_hash,
+								"ce": ce, "accuracy": acc, "f1_macro": f1, "fpr": fpr_val,
+								"flow_id": flow_id, "experiment_id": self.experiment_id,
+								"genome_data": {**base_genome_data, "threshold_mode": "train_cal"},
+							})
 						# Quality gate: only submit genomes meeting IDS goals
 						# (at least one of: F1 >= 87%, Acc >= 87%, FPR <= 12%)
 						if task_type == "ids":
