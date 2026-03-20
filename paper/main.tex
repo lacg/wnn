@@ -39,10 +39,10 @@ attractive for edge-deployed intrusion detection systems. However, their
 classification performance depends critically on \emph{connectivity}---which
 input bits each neuron observes---a problem traditionally solved by random
 initialization. We present an evolutionary optimization framework that
-discovers optimal neuron configurations---count, address width, and
-connectivity---through genetic algorithm and tabu search, with connectivity
-optimization effectively performing automated feature selection intrinsic
-to the architecture. We evaluate on three standard IDS benchmarks (UNSW-NB15,
+jointly optimizes neuron count, address width, and connectivity through
+genetic algorithm and tabu search, with connectivity optimization
+effectively performing automated feature selection intrinsic to the
+architecture. We evaluate on three standard IDS benchmarks (UNSW-NB15,
 CICIDS2017, CIC-IoT-2023) using both temporal and random splits, with a
 rigorous eight-mode threshold calibration protocol that exposes the sensitivity
 of binary classifiers to decision boundary selection. Across 100+ independent
