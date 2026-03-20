@@ -558,7 +558,7 @@ pub mod queries {
             sqlx::query(
                 r#"SELECT id, name, description, config_json, created_at, started_at, completed_at, status, seed_checkpoint_id, pid, last_heartbeat, status_message
                    FROM flows WHERE status = ?
-                   ORDER BY created_at DESC
+                   ORDER BY id DESC
                    LIMIT ? OFFSET ?"#,
             )
             .bind(status_filter)
@@ -570,7 +570,7 @@ pub mod queries {
             sqlx::query(
                 r#"SELECT id, name, description, config_json, created_at, started_at, completed_at, status, seed_checkpoint_id, pid, last_heartbeat, status_message
                    FROM flows
-                   ORDER BY created_at DESC
+                   ORDER BY id DESC
                    LIMIT ? OFFSET ?"#,
             )
             .bind(limit)
