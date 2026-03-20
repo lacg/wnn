@@ -825,8 +825,13 @@ class FlowWorker:
         rest_bits = params.get("ids_rest_bits", None)
         kfold_per_gen = params.get("ids_kfold_per_gen", 1)
 
-        self._log(f"Loading UNSW-NB15 dataset (classification={classification}, split={split}, feature_selection={feature_selection})...")
-        full_dataset = load_unsw_nb15(n_bits=n_bits, split=split, feature_selection=feature_selection, rest_bits=rest_bits)
+        dataset_name = params.get("ids_dataset", "unsw-nb15")
+        self._log(f"Loading {dataset_name} dataset (classification={classification}, split={split}, feature_selection={feature_selection})...")
+        if dataset_name == "cicids2017":
+            from wnn.ids.cicids2017 import load_cicids2017
+            full_dataset = load_cicids2017(n_bits=n_bits, split=split, feature_selection=feature_selection)
+        else:
+            full_dataset = load_unsw_nb15(n_bits=n_bits, split=split, feature_selection=feature_selection, rest_bits=rest_bits)
 
         if classification == "hierarchical":
             return self._create_hierarchical_ids_evaluators(
