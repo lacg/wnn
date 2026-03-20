@@ -85,10 +85,10 @@ Our contributions are:
   of neuron connections provides the largest single improvement in
   classification performance, discovering which input features matter
   without external feature selection.
-\item \textbf{Honest temporal evaluation.} First WNN-based IDS evaluated on
-  standard temporal splits for UNSW-NB15 and CICIDS2017, where our
-  sub-1\,KB models match Random Forest performance at 50,000$\times$
-  smaller size.
+\item \textbf{Sub-kilobyte models with nanosecond inference potential.}
+  Our evolved WNN achieves competitive F1 with Random Forest and XGBoost
+  at 50,000$\times$ smaller model size ($<$1\,KB vs.\ $\sim$50\,MB),
+  with $O(1)$ lookup-based inference suitable for FPGA deployment.
 \item \textbf{Eight-mode threshold calibration study.} We identify threshold
   selection as a critical but under-reported factor in IDS evaluation,
   showing [TODO: X]\% F1 gap between oracle and train-calibrated thresholds.
@@ -104,40 +104,138 @@ Our contributions are:
 \subsection{RAM Neurons and Weightless Neural Networks}
 
 % RAM neuron basics
-A RAM neuron consists of a binary memory with $2^n$ cells, where $n$ is the
-number of observed input bits (the neuron's \emph{address width}). Given an
-input vector, the neuron selects $n$ bits through its \emph{connectivity map},
-forms an address, and returns the stored value at that address. Training writes
-target values to addressed cells; inference reads them in $O(1)$ time.
-
-% QUAD_WEIGHTED memory
-We extend the traditional binary (TRUE/FALSE) cell model with
-\emph{quad-weighted} memory: four states representing graduated confidence
-(FALSE=$0.0$, WEAK\_FALSE=$0.25$, WEAK\_TRUE=$0.75$, TRUE=$1.0$). This
-provides smoother probability estimates compared to binary or ternary models.
+Unlike conventional neural networks that learn continuous weights through
+gradient descent, Weightless Neural Networks (WNNs)~\cite{aleksander1984}
+use Random Access Memory (RAM) neurons that perform classification via
+direct memory lookup. A RAM neuron consists of $2^n$ memory cells, where
+$n$ is the number of observed input bits---the neuron's \emph{address width}.
+Given a binary input vector of length $d$, the neuron selects $n$ bits
+through a fixed \emph{connectivity map} $C = \{c_1, \ldots, c_n\}$ where
+$c_i \in \{0, \ldots, d{-}1\}$, concatenates them to form an $n$-bit
+address, and returns the stored value at that address. Training writes
+target labels to addressed cells; inference reads them in $O(1)$ time
+with no multiply-accumulate operations.
 
 % Generalization through partial connectivity
-The key insight is that \emph{partial connectivity enables generalization}.
-A fully-connected neuron ($n$ = total input bits) acts as a lookup table with
-no generalization. By observing only a subset of input bits, the neuron
-maps many different inputs to the same address, effectively learning a
-\emph{feature}---a pattern over the selected bit positions.
+The fundamental mechanism enabling WNN generalization is
+\emph{partial connectivity}. A fully-connected neuron ($n = d$) memorizes
+every training example without generalizing, since each input maps to a
+unique address. With partial connectivity ($n \ll d$), many distinct inputs
+share the same address---those that agree on the $n$ selected bit
+positions---causing the neuron to learn a \emph{feature pattern} over its
+observed bits. An ensemble of $N$ neurons with diverse connectivity maps
+provides $N$ complementary views of the input, and their aggregated scores
+produce a classification decision.
+
+% QUAD_WEIGHTED memory
+\textbf{Quad-weighted memory.}
+Traditional RAM neurons store binary values (TRUE/FALSE). We extend this
+with \emph{quad-weighted} (QW) memory using four states that encode
+graduated confidence: FALSE ($0.0$), WEAK\_FALSE ($0.25$), WEAK\_TRUE
+($0.75$), and TRUE ($1.0$). Each cell is stored in 2 bits. When a cell
+is written with a conflicting label, it transitions to the corresponding
+weak state rather than being overwritten, preserving partial information
+from both classes. The neuron's output score---the mean of its $N$
+neurons' cell values---thus provides a smoother probability estimate than
+binary voting.
 
 \subsection{Thermometer Encoding}
 
-% How continuous features become binary inputs
-WNNs require binary inputs. We convert continuous network flow features to
-binary vectors using \emph{thermometer encoding}~\cite{bacellar2022bthown},
-which maps a value to $k$ bits based on $k$ thresholds. We use distributive
-(quantile-based) thresholds for robustness to skewed distributions. Each
-feature produces $k$ bits, yielding a total input width of $k \times |F|$
-bits for feature set $F$.
+WNNs require binary inputs, but network flow features (packet counts,
+byte rates, inter-arrival times) are continuous. We convert each feature
+to a binary vector using \emph{thermometer encoding}~\cite{susskind2022bthowen}.
+Given a feature value $x$ and $k$ thresholds $\theta_1 < \cdots < \theta_k$,
+the encoding produces $k$ bits: bit $i$ is 1 if $x \geq \theta_i$, else 0.
+This preserves ordinal relationships---similar values differ by few bits,
+enabling RAM neurons to generalize across nearby feature values.
 
-\subsection{UNSW-NB15, CICIDS2017, and CIC-IoT-2023}
+We compute thresholds using the \emph{distributive} (quantile-based) method,
+which places thresholds at equally-spaced quantiles of the training
+distribution. This is robust to skewed distributions common in network
+traffic (e.g., packet sizes follow a heavy-tailed distribution). With $k$
+bits per feature and a feature set $F$, the total input width is
+$d = k \times |F|$ bits.
 
-% Dataset descriptions — brief
-[TODO: Brief dataset descriptions, emphasizing temporal vs random split
-differences and why temporal evaluation is critical for honest assessment.]
+\subsection{Evaluation Datasets}
+
+We evaluate on three standard IDS benchmarks, each with distinct
+characteristics:
+
+\textbf{UNSW-NB15}~\cite{moustafa2015unswnb15} contains network flow records
+from the Australian Centre for Cyber Security, with 44 features and 10 attack
+categories. The standard temporal split (175K train / 82K test) separates
+training and testing periods, preventing data leakage. We also evaluate on a
+deduplicated random split (1.4M / 158K) for comparison with prior
+work~\cite{susskind2023fwiw}.
+
+\textbf{CICIDS2017}~\cite{sharafaldin2018cicids} comprises five days of
+network traffic captured at the Canadian Institute for Cybersecurity. We
+define a temporal split using Monday--Thursday for training (2.1M flows) and
+Friday for testing (703K flows), requiring the model to generalize to
+previously unseen attack types (DDoS, Botnet, PortScan). This split has
+not been previously used in the literature---most work uses random splits
+that achieve $>$99\% accuracy.
+
+\textbf{CIC-IoT-2023}~\cite{neto2023ciciot} captures IoT traffic from 105
+heterogeneous devices with 33 attack types across 7 classes. With 46.7M
+records heavily skewed toward attacks (97.6\%), we subsample to 1.3M records
+for a balanced benchmark. Only a random split is feasible (no temporal
+ordering in the source data).
+
+% ============================================================================
+\section{Related Work}
+\label{sec:related}
+
+\subsection{WNN-Based Intrusion Detection}
+
+The WiSARD~\cite{ludermir1999} architecture pioneered RAM-based pattern
+recognition, and several works have applied WNNs to network security.
+Santiago et al.~\cite{santiago2020} demonstrated WNN-based anomaly detection
+but evaluated only on random splits with random connectivity.
+
+The most directly related work is FWIW~\cite{susskind2023fwiw}, which
+achieves 98\% accuracy on UNSW-NB15 with a 272-byte model deployed on FPGA.
+FWIW uses Bloom filter-based neurons with H3 hashing and backpropagation
+training. However, three limitations remain: (1)~evaluation uses only random
+splits, inflating accuracy through train/test data leakage; (2)~neuron
+connectivity is randomly initialized, leaving significant accuracy on the
+table; and (3)~only a single threshold mode is reported, obscuring the
+sensitivity of binary classification to decision boundary selection.
+
+BTHOWeN~\cite{susskind2022bthowen} introduced thermometer encoding with
+learned thresholds for WNN classification, achieving strong results on
+tabular benchmarks. We adopt their encoding scheme but extend it with
+distributive (quantile-based) thresholds and evolutionary connectivity
+optimization.
+
+\subsection{Machine Learning for IDS}
+
+Traditional ML approaches---Random Forest, XGBoost, SVM---achieve
+85--90\% F1 on UNSW-NB15's temporal split~\cite{zoghi2024} but require
+models of 10--50\,MB. Deep learning approaches (BiLSTM~\cite{mdpi2024enhanced},
+CNN-LSTM) push accuracy higher at the cost of GPU inference requirements.
+
+A critical methodological issue pervades the IDS literature: most published
+results use random train/test splits, reporting 97--99\% accuracy that does
+not reflect deployment performance. Zoghi and Serpen~\cite{zoghi2024} showed
+that the same models achieving 99\% on random splits drop to 87\% on the
+standard temporal split, a finding consistent with our evaluation. For
+CICIDS2017, the situation is similar---near-perfect random-split results
+contrast with the absence of temporal evaluation in the literature. Known
+labeling errors~\cite{engelen2021cicids} further complicate comparisons.
+
+\subsection{FPGA-Based Network Security}
+
+FPGA acceleration for network security spans from packet-level inspection
+(Pigasus~\cite{zhao2020pigasus}) to ML inference
+(LogicNets~\cite{umuroglu2020logicnets}, PolyLUT~\cite{andronic2023polylut}).
+WNNs are particularly well-suited for FPGA deployment because RAM neurons
+map directly to FPGA lookup tables (LUTs) and block RAM (BRAM), requiring
+no multiply-accumulate units. FWIW~\cite{susskind2023fwiw} demonstrated
+this with sub-microsecond inference on a Virtex UltraScale+. Our work
+extends this direction with evolved connectivity that can further reduce
+resource utilization by discovering sparser, more efficient neuron
+configurations.
 
 % ============================================================================
 \section{Architecture}
@@ -301,7 +399,7 @@ Temporal split not available for CIC-IoT-2023.]
 
 \subsection{WNN for Intrusion Detection}
 
-[TODO: FWIW~\cite{susskind2023fwiw}, Santiago et al., BTHOWeN~\cite{bacellar2022bthown}]
+[TODO: FWIW~\cite{susskind2023fwiw}, Santiago et al., BTHOWeN~\cite{susskind2022bthowen}]
 
 \subsection{ML-Based IDS}
 
