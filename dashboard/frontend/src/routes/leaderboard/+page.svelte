@@ -767,12 +767,12 @@
 	}
 
 	.col-rank { width: 55px; text-align: center; }
-	.col-score { width: 55px; text-align: right; }
+	.col-score { width: 55px; text-align: center; }
 	.col-task { width: 50px; }
 	.col-threshold { width: 75px; }
-	.col-ce, .col-acc, .col-f1, .col-fpr { width: 75px; text-align: right; }
-	.col-arch { width: 60px; text-align: right; }
-	.col-bits { width: 55px; text-align: right; }
+	.col-f1, .col-fpr, .col-ce, .col-bits { width: 75px; text-align: center; }
+	.col-acc { width: 75px; text-align: center; }
+	.col-arch { width: 60px; text-align: center; }
 	.col-flow { width: 50px; }
 
 	.virtual-scroll {
