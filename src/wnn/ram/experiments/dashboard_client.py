@@ -984,7 +984,8 @@ class DashboardClient:
 		}) or {}
 
 	def list_best_genomes(self, task_type: str = None, stage: str = None,
-						  metric: str = None, limit: int = 50, offset: int = 0) -> list[dict]:
+						  metric: str = None, limit: int = 50, offset: int = 0,
+					  feature_selection: str = None, n_bits: int = None) -> list[dict]:
 		"""GET /api/best-genomes — paginated leaderboard."""
 		params = {"limit": limit, "offset": offset}
 		if task_type:
@@ -993,6 +994,10 @@ class DashboardClient:
 			params["stage"] = stage
 		if metric:
 			params["metric"] = metric
+		if feature_selection:
+			params["feature_selection"] = feature_selection
+		if n_bits is not None:
+			params["n_bits"] = n_bits
 		return self._request("GET", "/api/best-genomes", params=params) or []
 
 	def get_best_genome(self, best_genome_id: int) -> dict | None:

@@ -510,6 +510,7 @@ class FlowWorker:
                 flow_config.ids_fitness_weight_f1 = params.get("ids_fitness_weight_f1", 0.0)
                 flow_config.ids_fitness_weight_fpr = params.get("ids_fitness_weight_fpr", 0.0)
                 flow_config.ids_split = params.get("ids_split", "standard")
+                flow_config.ids_feature_selection = params.get("ids_feature_selection", "all")
                 # Global and per-stage bounds (shared with bitwise/multi_stage)
                 flow_config.min_bits = params.get("min_bits", 4)
                 flow_config.max_bits = params.get("max_bits", 24)

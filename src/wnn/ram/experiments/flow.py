@@ -231,6 +231,7 @@ class FlowConfig:
 	ids_split: str = "standard"  # "standard" or "random"
 	balance_classes: bool = False  # Class-balanced training (upweight minority class)
 	ids_single_cluster: bool = False  # Single-cluster discriminator (1 cluster, threshold 0.5)
+	ids_feature_selection: str = "all"  # Feature selection mode for leaderboard filtering
 
 	@classmethod
 	def bitwise_7_phase(
@@ -2187,11 +2188,16 @@ class Flow:
 	) -> tuple[Optional[ClusterGenome], Optional[list[ClusterGenome]]]:
 		"""Load seed genome(s) from the best genomes leaderboard."""
 		cfg = self.config
+		# Filter by feature encoding for IDS compatibility
+		feat_sel = cfg.ids_feature_selection if cfg.architecture_type == "ids" else None
+		n_bits = cfg.ids_n_bits if cfg.architecture_type == "ids" else None
 		entries = self.dashboard_client.list_best_genomes(
 			task_type=cfg.seed_leaderboard_task_type,
 			stage=cfg.seed_leaderboard_stage,
 			metric=cfg.seed_leaderboard_metric,
 			limit=cfg.seed_leaderboard_count,
+			feature_selection=feat_sel,
+			n_bits=n_bits,
 		)
 		if not entries:
 			self.log("  No genomes found on leaderboard")

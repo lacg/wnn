@@ -1669,6 +1669,8 @@ struct ListBestGenomesQuery {
     metric: Option<String>,
     limit: Option<i32>,
     offset: Option<i32>,
+    feature_selection: Option<String>,
+    n_bits: Option<i32>,
 }
 
 async fn list_best_genomes(
@@ -1685,6 +1687,8 @@ async fn list_best_genomes(
         query.metric.as_deref(),
         limit,
         offset,
+        query.feature_selection.as_deref(),
+        query.n_bits,
     ).await {
         Ok(genomes) => (StatusCode::OK, Json(genomes)).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),

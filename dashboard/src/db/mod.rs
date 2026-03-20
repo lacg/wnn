@@ -2690,6 +2690,8 @@ pub mod queries {
         metric: Option<&str>,
         limit: i32,
         offset: i32,
+        feature_selection: Option<&str>,
+        n_bits: Option<i32>,
     ) -> Result<Vec<BestGenome>> {
         let rows = sqlx::query(
             r#"SELECT bg.id, bg.task_type, bg.stage, bg.metric,
@@ -2702,15 +2704,20 @@ pub mod queries {
                       g.tiers_json, g.total_clusters, g.total_neurons, g.architecture_type
                FROM best_genomes bg
                LEFT JOIN genomes g ON g.id = bg.genome_id
+               LEFT JOIN flows f ON f.id = bg.flow_id
                WHERE (? IS NULL OR bg.task_type = ?)
                  AND (? IS NULL OR bg.stage = ?)
                  AND (? IS NULL OR bg.metric = ?)
+                 AND (? IS NULL OR json_extract(f.config_json, '$.params.ids_feature_selection') = ?)
+                 AND (? IS NULL OR json_extract(f.config_json, '$.params.ids_n_bits') = ?)
                ORDER BY bg.rank ASC NULLS LAST, bg.f1_macro DESC NULLS LAST, bg.ce ASC
                LIMIT ? OFFSET ?"#,
         )
         .bind(task_type).bind(task_type)
         .bind(stage).bind(stage)
         .bind(metric).bind(metric)
+        .bind(feature_selection).bind(feature_selection)
+        .bind(n_bits).bind(n_bits)
         .bind(limit)
         .bind(offset)
         .fetch_all(pool)
