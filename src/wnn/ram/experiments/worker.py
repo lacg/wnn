@@ -830,6 +830,9 @@ class FlowWorker:
         if dataset_name == "cicids2017":
             from wnn.ids.cicids2017 import load_cicids2017
             full_dataset = load_cicids2017(n_bits=n_bits, split=split, feature_selection=feature_selection)
+        elif dataset_name == "ciciot2023":
+            from wnn.ids.ciciot2023 import load_ciciot2023
+            full_dataset = load_ciciot2023(n_bits=n_bits, split=split, feature_selection=feature_selection)
         else:
             full_dataset = load_unsw_nb15(n_bits=n_bits, split=split, feature_selection=feature_selection, rest_bits=rest_bits)
 
