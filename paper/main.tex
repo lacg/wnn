@@ -99,9 +99,10 @@ Our work improves on two fronts:
 Our contributions are:
 \begin{enumerate}
 \item \textbf{Evolved connectivity as feature selection.} GA, tabu search,
-  and Lamarckian optimization of neuron connections provides the largest
-  single improvement in classification performance, discovering which
-  input features matter without external feature selection.
+  and Lamarckian optimization of network parameters (neuron count, address
+  width, and connectivity) provides the largest single improvement in
+  classification performance, discovering which input features matter
+  without external feature selection.
 \item \textbf{Sub-kilobyte models with nanosecond inference potential.}
   Our evolved WNN achieves competitive F1 with Random Forest and XGBoost
   at 50,000$\times$ smaller model size ($<$1\,KB vs.\ $\sim$50\,MB),
@@ -143,7 +144,9 @@ share the same address---those that agree on the $n$ selected bit
 positions---causing the neuron to learn a \emph{feature pattern} over its
 observed bits. An ensemble of $N$ neurons with diverse connectivity maps
 provides $N$ complementary views of the input, and their aggregated scores
-produce a classification decision.
+produce a classification decision. We refer to the neuron count~$N$,
+address width~$n$, and connectivity maps~$C$ collectively as the
+\emph{network parameters}.
 
 % QUAD_WEIGHTED memory
 \textbf{Quad-weighted memory.}
