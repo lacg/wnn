@@ -371,7 +371,7 @@
 		</div>
 	{:else}
 		<div class="leaderboard-table">
-			<div class="header-scroll">
+			<div class="virtual-scroll" bind:this={scrollContainer} on:scroll={onScroll} bind:clientHeight={containerHeight}>
 			<table>
 				<thead>
 					<tr>
@@ -388,10 +388,6 @@
 						<th class="col-flow">Flow</th>
 					</tr>
 				</thead>
-			</table>
-			</div>
-			<div class="virtual-scroll" bind:this={scrollContainer} on:scroll={onScroll} bind:clientHeight={containerHeight}>
-			<table>
 				<tbody>
 					<tr style="height: {topPad}px"><td colspan="11"></td></tr>
 					{#each visibleGenomes as genome}
@@ -607,7 +603,11 @@
 	}
 
 	thead {
-		background: rgba(15, 23, 42, 0.6);
+		position: sticky;
+		top: 0;
+		z-index: 1;
+		background: rgba(15, 23, 42, 0.95);
+		backdrop-filter: blur(8px);
 	}
 
 	th {
@@ -775,22 +775,10 @@
 	.col-bits { width: 55px; text-align: right; }
 	.col-flow { width: 50px; }
 
-	.header-scroll {
-		overflow-y: scroll;
-		overflow-x: hidden;
-		scrollbar-gutter: stable;
-		max-height: none;
-	}
-
-	.header-scroll::-webkit-scrollbar {
-		background: transparent;
-	}
-
 	.virtual-scroll {
 		max-height: 75vh;
-		overflow-y: scroll;
+		overflow-y: auto;
 		overflow-x: hidden;
-		scrollbar-gutter: stable;
 	}
 
 	.virtual-scroll table {
