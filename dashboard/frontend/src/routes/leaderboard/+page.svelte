@@ -371,6 +371,7 @@
 		</div>
 	{:else}
 		<div class="leaderboard-table">
+			<div class="header-scroll">
 			<table>
 				<thead>
 					<tr>
@@ -388,6 +389,7 @@
 					</tr>
 				</thead>
 			</table>
+			</div>
 			<div class="virtual-scroll" bind:this={scrollContainer} on:scroll={onScroll} bind:clientHeight={containerHeight}>
 			<table>
 				<tbody>
@@ -773,10 +775,22 @@
 	.col-bits { width: 55px; text-align: right; }
 	.col-flow { width: 50px; }
 
+	.header-scroll {
+		overflow-y: scroll;
+		overflow-x: hidden;
+		scrollbar-gutter: stable;
+		max-height: none;
+	}
+
+	.header-scroll::-webkit-scrollbar {
+		background: transparent;
+	}
+
 	.virtual-scroll {
 		max-height: 75vh;
-		overflow-y: auto;
+		overflow-y: scroll;
 		overflow-x: hidden;
+		scrollbar-gutter: stable;
 	}
 
 	.virtual-scroll table {
