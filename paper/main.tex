@@ -11,16 +11,23 @@
 \usepackage{algorithm}
 \usepackage{algpseudocode}
 
-% Anonymous submission
+% Toggle: set to true for submission (anonymous), false for camera-ready
+\newif\ifanonymous
+\anonymoustrue  % Change to \anonymousfalse for camera-ready
+
 \renewcommand{\thefootnote}{}
 
 \begin{document}
 
 \title{Evolved Feature Selection in Weightless Neural Networks\\for Network Intrusion Detection}
 
-% Anonymous for review
-\author{Anonymous}
-\institute{Anonymous Institution}
+\ifanonymous
+  \author{Anonymous}
+  \institute{Anonymous Institution}
+\else
+  \author{Luiz Alberto Crispiniano Garcia}
+  \institute{Independent Researcher \\ \email{lacg@example.com}}
+\fi
 
 \maketitle
 
