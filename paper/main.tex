@@ -38,8 +38,8 @@
 Weightless Neural Networks (WNNs) based on Random Access Memory (RAM) neurons
 offer constant-time inference with sub-kilobyte model sizes, making them
 attractive for edge-deployed intrusion detection systems. However, their
-classification performance depends critically on \emph{connectivity}---which
-input bits each neuron observes---a problem traditionally solved by random
+classification performance depends critically on \emph{connectivity},
+which input bits each neuron observes, a problem traditionally solved by random
 initialization. We present an evolutionary optimization framework that
 jointly optimizes neuron count, address width, and connectivity through
 genetic algorithm and tabu search, with connectivity optimization
@@ -128,7 +128,7 @@ Unlike conventional neural networks that learn continuous weights through
 gradient descent, Weightless Neural Networks (WNNs)~\cite{aleksander1984wisard}
 use Random Access Memory (RAM) neurons that perform classification via
 direct memory lookup. A RAM neuron consists of $2^n$ memory cells, where
-$n$ is the number of observed input bits---the neuron's \emph{address width}.
+$n$ is the number of observed input bits, the neuron's \emph{address width}.
 Given a binary input vector of length $d$, the neuron selects $n$ bits
 through a fixed \emph{connectivity map} $C = \{c_1, \ldots, c_n\}$ where
 $c_i \in \{0, \ldots, d{-}1\}$, concatenates them to form an $n$-bit
@@ -141,8 +141,8 @@ The fundamental mechanism enabling WNN generalization is
 \emph{partial connectivity}~\cite{aleksander1984wisard,ludermir1999weightless}. A fully-connected neuron ($n = d$) memorizes
 every training example without generalizing, since each input maps to a
 unique address. With partial connectivity ($n \ll d$), many distinct inputs
-share the same address---those that agree on the $n$ selected bit
-positions---causing the neuron to learn a \emph{feature pattern} over its
+share the same address (those that agree on the $n$ selected bit
+positions), causing the neuron to learn a \emph{feature pattern} over its
 observed bits. An ensemble of $N$ neurons with diverse connectivity maps
 provides $N$ complementary views of the input, and their aggregated scores
 produce a classification decision. We refer to the neuron count~$N$,
@@ -156,7 +156,7 @@ address width~$n$, and connectivity maps~$C$ collectively as the
   neuron/.style={draw, rounded corners, fill=blue!8, minimum width=28mm,
                  minimum height=14mm, font=\small\bfseries},
   conn/.style={-{Stealth[length=2mm]}, thick},
-  memcell/.style={draw, minimum size=5.5mm, inner sep=0pt, font=\scriptsize},
+  memcell/.style={draw, minimum size=7mm, inner sep=0pt, font=\scriptsize},
 ]
 
 % Input grid (3x3) — wider spacing (1.2) for arrow routing
@@ -183,23 +183,24 @@ address width~$n$, and connectivity maps~$C$ collectively as the
 
 % === Connections to Neuron A (blue): bits 0, 3, 6 ===
 % b0: straight up, straight right, straight down to neuron level, straight right into Neuron A
-\draw[conn, blue!70] (in0.north) -- (0, 3.1)
-  -- (3.4, 3.1) -- (3.4, 2.7) -- ([yshift=3mm]nA.west);
+\draw[conn, blue!70] (in0.north) -- (0, 3)
+  -- (3.4, 3) -- (3.4, 2.7) -- ([yshift=3mm]nA.west);
 
 % b3 (middle-left, 0,1.2): go up between row 0 and row 1, right through gap, up to neuron level
-\draw[conn, blue!70] (in3.north) -- (0, 1.75)
-  -- (3.2, 1.75) -- (3.2, 2.4) -- (nA.west);
+\draw[conn, blue!70] (in3.north) -- (0, 1.8)
+  -- (3.4, 1.8) -- (3.4, 2.4) -- (nA.west);
 
 % b6 (bottom-left, 0,0): go DOWN below grid, right, up to neuron level, right into Neuron A
-\draw[conn, blue!70] (in6.south) -- (0, -0.5)
-  -- (3.6, -0.5) -- (3.6, 2.1) -- ([yshift=-3mm]nA.west);
+\draw[conn, blue!70] (in6.south) -- (0, -0.9)
+  -- (3.6, -0.9) -- (3.6, 2.1) -- ([yshift=-3mm]nA.west);
 
 % === Connections to Neuron B (orange): bits 2, 4, 7 ===
 % b2 (top-right, 2.4,2.4): go right, then down to Neuron B top
-\draw[conn, orange!80] (in2.east) -- ++(0.7, 0) |- ([yshift=3mm]nB.north west);
+\draw[conn, orange!80] (in2.east) -- ++(0.3, 0) |- ([yshift=3mm]nB.west);
 
 % b4 (middle-center, 1.2,1.2): go right past grid, then to Neuron B
-\draw[conn, orange!80] (in4.east) -- ++(1.9, 0) |- (nB.west);
+\draw[conn, orange!80] (in4.south) -- (1.2, 0.6)
+  -- (3, 0.6) |- (nB.west);
 
 % b7 (bottom-center, 1.2,0): go down to Neuron B level, then straight right
 \draw[conn, orange!80] (in7.south) -- (1.2, -0.7)
@@ -216,11 +217,11 @@ address width~$n$, and connectivity maps~$C$ collectively as the
   7/1.00/green!25} {
   \pgfmathtruncatemacro{\col}{mod(\a,4)}
   \pgfmathtruncatemacro{\row}{1-div(\a,4)}
-  \node[memcell, fill=\c] (mA\a) at (8.7+\col*0.65, 1.8+\row*0.65) {\val};
-  \node[font=\tiny, gray] at (8.7+\col*0.65, 1.8+\row*0.65+0.38) {\a};
+  \node[memcell, fill=\c] (mA\a) at (8.7+\col*0.65, 1.8+\row*0.65) {};
+  \node[font=\scriptsize, anchor=center] at ([shift={(0mm,-0.5mm)}]mA\a.center) {\val};
+  \node[font=\tiny, gray, anchor=north west, inner sep=0.5pt] at (mA\a.north west) {\a};
 }
-\draw[-{Stealth[length=2mm]}, thick, green!60!black] (nA.east) -- (mA7.west)
-  node[midway, above, font=\tiny] {$\to 1.0$};
+\draw[-{Stealth[length=2mm]}, thick, green!60!black] (nA.east) -- (7.8, 2.4) -- (7.8, 1.2) -- (10.65, 1.2) -- (mA7.south);
 
 % Memory table B
 \node[font=\scriptsize\bfseries] at (9.8, 0.7) {Memory B};
@@ -229,11 +230,11 @@ address width~$n$, and connectivity maps~$C$ collectively as the
   7/0.00/red!15} {
   \pgfmathtruncatemacro{\col}{mod(\a,4)}
   \pgfmathtruncatemacro{\row}{1-div(\a,4)}
-  \node[memcell, fill=\c] (mB\a) at (8.7+\col*0.65, -0.6+\row*0.65) {\val};
-  \node[font=\tiny, gray] at (8.7+\col*0.65, -0.6+\row*0.65+0.38) {\a};
+  \node[memcell, fill=\c] (mB\a) at (8.7+\col*0.65, -0.6+\row*0.65) {};
+  \node[font=\scriptsize, anchor=center] at ([shift={(0mm,-0.5mm)}]mB\a.center) {\val};
+  \node[font=\tiny, gray, anchor=north west, inner sep=0.5pt] at (mB\a.north west) {\a};
 }
-\draw[-{Stealth[length=2mm]}, thick, blue!60] (nB.east) -- (mB5.west)
-  node[midway, above, font=\tiny] {$\to 0.75$};
+\draw[-{Stealth[length=2mm]}, thick, blue!60] (nB.east) -- (7.8, -0.4) -- (7.8, -1.2) -- (9.25, -1.2) -- ([xshift=-1mm]mB5.south);
 
 % Output
 \node[draw, rounded corners, fill=yellow!15, minimum width=20mm,
@@ -241,8 +242,8 @@ address width~$n$, and connectivity maps~$C$ collectively as the
   {$\frac{1.0 + 0.75}{2} = 0.875$};
 \node[font=\tiny, gray] at (9.8, -2.7) {score $\geq \tau \Rightarrow$ \textbf{attack}};
 
-\draw[-{Stealth[length=2mm]}, thick] (mA7.south) |- (out.north west);
-\draw[-{Stealth[length=2mm]}, thick] (mB5.south) |- (out.north east);
+\draw[-{Stealth[length=2mm]}, thick] (mA7.east) -- (11.4, 1.8) |- (out.east);
+\draw[-{Stealth[length=2mm]}, thick] ([xshift=1mm]mB5.south) -- ([xshift=-3.5mm]out.north);
 
 \end{tikzpicture}
 \caption{RAM neuron architecture with two neurons ($N{=}2$, $n{=}3$
@@ -283,7 +284,7 @@ byte rates, inter-arrival times) are continuous. We convert each feature
 to a binary vector using \emph{thermometer encoding}~\cite{susskind2022bthowen}.
 Given a feature value $x$ and $k$ thresholds $\theta_1 < \cdots < \theta_k$,
 the encoding produces $k$ bits: bit $i$ is 1 if $x \geq \theta_i$, else 0.
-This preserves ordinal relationships---similar values differ by few bits,
+This preserves ordinal relationships: similar values differ by few bits,
 enabling RAM neurons to generalize across nearby feature values.
 
 We compute thresholds using the \emph{distributive} (quantile-based) method,
@@ -311,7 +312,7 @@ network traffic captured at the Canadian Institute for Cybersecurity. We
 define a temporal split using Monday--Thursday for training (2.1M flows) and
 Friday for testing (703K flows), requiring the model to generalize to
 previously unseen attack types (DDoS, Botnet, PortScan). This split has
-not been previously used in the literature---most work uses random splits
+not been previously used in the literature. Most work uses random splits
 that achieve $>$99\% accuracy.
 
 \textbf{CIC-IoT-2023}~\cite{neto2023ciciot} captures IoT traffic from 105
@@ -348,7 +349,7 @@ optimization.
 
 \subsection{Machine Learning for IDS}
 
-Traditional ML approaches---Random Forest, XGBoost, SVM---achieve
+Traditional ML approaches (Random Forest, XGBoost, SVM) achieve
 85--90\% F1 on UNSW-NB15's temporal split~\cite{zoghi2024ids} but require
 models of 10--50\,MB. Deep learning approaches (BiLSTM~\cite{mdpi2024enhanced},
 CNN-LSTM) push accuracy higher at the cost of GPU inference requirements.
@@ -358,7 +359,7 @@ results use random train/test splits, reporting 97--99\% accuracy that does
 not reflect deployment performance. Zoghi and Serpen~\cite{zoghi2024ids} showed
 that the same models achieving 99\% on random splits drop to 87\% on the
 standard temporal split, a finding consistent with our evaluation. For
-CICIDS2017, the situation is similar---near-perfect random-split results
+CICIDS2017, the situation is similar: near-perfect random-split results
 contrast with the absence of temporal evaluation in the literature. Known
 labeling errors~\cite{engelen2021cicids} further complicate comparisons.
 
@@ -405,8 +406,8 @@ neurons and applies a threshold $\tau$ to produce a binary classification:
 \end{cases}
 \end{equation}
 
-This architecture is deliberately simple---a single cluster with one
-threshold---making the connectivity optimization problem tractable while
+This architecture is deliberately simple, a single cluster with one
+threshold, making the connectivity optimization problem tractable while
 still achieving competitive accuracy. The key insight is that
 \emph{classification quality depends primarily on connectivity}, not on
 architectural complexity.
@@ -414,9 +415,9 @@ architectural complexity.
 \subsection{Phased Optimization Pipeline}
 
 We optimize the discriminator's parameters $(N, b, C)$ through a phased
-pipeline. Each phase uses a population-based search strategy---genetic
-algorithm (GA) for broad exploration or tabu search (TS) for focused
-local refinement---with the output population of one phase seeding the
+pipeline. Each phase uses a population-based search strategy,
+genetic algorithm (GA) for broad exploration or tabu search (TS) for
+focused local refinement, with the output population of one phase seeding the
 next.
 
 \textbf{Phase 1: Grid Search.} Exhaustive evaluation of $(N, b)$
@@ -435,7 +436,7 @@ Increasing $b$ expands the address space (more discriminative power but
 requires more training data); decreasing $b$ improves generalization at
 the cost of specificity.
 
-\textbf{Phase 4: GA Connections.} The critical phase---optimizing
+\textbf{Phase 4: GA Connections.} The critical phase, optimizing
 \emph{which input bits} each neuron observes. This is where the
 architecture learns its feature selection. A mutation that redirects a
 neuron's connection from an uninformative input bit to a discriminative
@@ -460,7 +461,7 @@ control.
 
 Beyond the standard GA phases, we introduce three biologically-inspired
 refinement phases that directly modify the genome structure based on
-performance feedback---a form of Lamarckian evolution where acquired
+performance feedback, a form of Lamarckian evolution where acquired
 traits are inherited:
 
 \textbf{Neurogenesis.} New neurons are added to the discriminator,
@@ -469,7 +470,7 @@ neurons. This expands capacity in regions of the input space where
 current coverage is insufficient.
 
 \textbf{Synaptogenesis.} Existing neurons receive new or modified
-connections, guided by the performance gradient---connections that
+connections, guided by the performance gradient. Connections that
 contributed to correct classifications are reinforced, while those
 associated with errors are redirected.
 
@@ -518,7 +519,7 @@ We evaluate under both protocols:
 \begin{itemize}
 \item \textbf{Temporal split (UNSW-NB15):} The official 175K/82K
   split with temporal separation between training and testing periods.
-\item \textbf{Temporal split (CICIDS2017):} Our new day-based split---
+\item \textbf{Temporal split (CICIDS2017):} Our new day-based split,
   Monday--Thursday for training (2.1M flows), Friday for testing (703K
   flows). The model must generalize to attack types not seen during
   training (DDoS, Botnet, PortScan appear only on Friday).
@@ -538,7 +539,7 @@ sensitivity:
 
 \begin{enumerate}
 \item \textbf{Train-calibrated:} Threshold swept on training-set
-  scores (optimistic---same data used for model training).
+  scores (optimistic, same data used for model training).
 \item \textbf{Holdout-calibrated:} Threshold swept on a held-out
   25\% validation split, applied to the test set (simulates having
   labeled calibration data from the deployment environment).
@@ -553,13 +554,13 @@ sensitivity:
   score distribution.
 \item \textbf{Empirical cumulative:} CDF-based threshold selection.
 \item \textbf{Oracle:} Threshold swept on the test set itself
-  (upper bound on achievable performance---not available in
+  (upper bound on achievable performance, not available in
   deployment, but quantifies the calibration gap).
 \end{enumerate}
 
 The gap between oracle and train-calibrated performance
 quantifies how much accuracy is ``left on the table'' by
-imperfect threshold selection---a finding we report for each
+imperfect threshold selection, a finding we report for each
 dataset and configuration.
 
 \subsection{Statistical Protocol}
@@ -567,7 +568,7 @@ dataset and configuration.
 Each configuration is run with 34--100 different random seeds.
 We report mean $\pm$ standard deviation across all runs. With
 $n=34$ runs and typical $\sigma \approx 2.5\%$, the 95\% confidence
-interval for the mean is $\pm 0.84\%$---sufficient to distinguish
+interval for the mean is $\pm 0.84\%$, sufficient to distinguish
 meaningful differences between configurations.
 
 K-fold cross-validation ($k{=}5$) is applied \emph{per generation}
@@ -639,7 +640,7 @@ Implications for deployment.]
 
 % Not implemented, but analyzed
 [TODO: BRAM requirements for our genomes. A neuron with $b=32$ address
-bits needs $2^{32} \times 2$ bits = 1\,GB --- too large for direct mapping.
+bits needs $2^{32} \times 2$ bits = 1\,GB, too large for direct mapping.
 But with sparse memory (most cells empty), only non-empty entries need
 storage. Typical occupancy analysis. Comparison with FWIW FPGA and
 LogicNets.]
