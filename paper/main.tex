@@ -201,11 +201,9 @@ address width~$n$, and connectivity maps~$C$ collectively as the
 % b4 (middle-center, 1.2,1.2): go right past grid, then to Neuron B
 \draw[conn, orange!80] (in4.east) -- ++(1.9, 0) |- (nB.west);
 
-% b7 (bottom-center, 1.2,0): go down, then right to Neuron B
-\draw[conn, orange!80] (in7.south) -- ++(0, -1.0)
-  -| ([xshift=2mm]nB.south west) -- ([yshift=-3mm]nB.south west);
-\draw[conn, orange!80] ([yshift=-3mm]nB.south west) -- ([yshift=-3mm]nB.190);
-\draw[conn, orange!80] ([yshift=-3mm]nB.190) -- (nB.190);
+% b7 (bottom-center, 1.2,0): go down to Neuron B level, then straight right
+\draw[conn, orange!80] (in7.south) -- (1.2, -0.7)
+  -- (3.8, -0.7) -- (3.8, -0.4) -- ([yshift=-3mm]nB.west);
 
 % Address labels
 \node[font=\tiny] at (6.0, 3.4) {addr: $b_0 b_3 b_6 = 111_2 = 7$};
