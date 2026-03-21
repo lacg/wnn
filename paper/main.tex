@@ -186,8 +186,9 @@ address width~$n$, and connectivity maps~$C$ collectively as the
 \draw[conn, blue!70] (in0.north) -- (0, 3.1)
   -- (3.4, 3.1) -- (3.4, 2.7) -- ([yshift=3mm]nA.west);
 
-% b3 (middle-left, 0,1.2): go right, straight to Neuron A middle
-\draw[conn, blue!70] (in3.east) -- ++(0.4, 0) |- (nA.west);
+% b3 (middle-left, 0,1.2): go down between rows, right through gap, up to neuron level
+\draw[conn, blue!70] (in3.south) -- (0, 0.65)
+  -- (3.2, 0.65) -- (3.2, 2.4) -- (nA.west);
 
 % b6 (bottom-left, 0,0): go DOWN below grid, then right to Neuron A
 \draw[conn, blue!70] (in6.south) -- ++(0, -0.5) -| (3.6, -0.5)
