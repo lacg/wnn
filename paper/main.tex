@@ -182,9 +182,9 @@ address width~$n$, and connectivity maps~$C$ collectively as the
 \node[font=\tiny, gray] at (6.0, -1.2) {$C_B = \{2, 4, 7\}$};
 
 % === Connections to Neuron A (blue): bits 0, 3, 6 ===
-% b0 (top-left, 0,2.4): go up slightly, then straight right into Neuron A top
+% b0: go up slightly, right along top of input row, then down to neuron level, then right into Neuron A
 \draw[conn, blue!70] (in0.north) -- ++(0, 0.35)
-  -| (3.4, 2.95) -- ([yshift=3mm]nA.west);
+  -- (3.4, 2.85) -- (3.4, 2.7) -- ([yshift=3mm]nA.west);
 
 % b3 (middle-left, 0,1.2): go right, straight to Neuron A middle
 \draw[conn, blue!70] (in3.east) -- ++(0.4, 0) |- (nA.west);
