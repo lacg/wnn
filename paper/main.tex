@@ -190,9 +190,9 @@ address width~$n$, and connectivity maps~$C$ collectively as the
 \draw[conn, blue!70] (in3.north) -- (0, 1.75)
   -- (3.2, 1.75) -- (3.2, 2.4) -- (nA.west);
 
-% b6 (bottom-left, 0,0): go DOWN below grid, then right to Neuron A
-\draw[conn, blue!70] (in6.south) -- ++(0, -0.5) -| (3.6, -0.5)
-  -- (3.6, 1.7) -- ([yshift=-3mm]nA.south west);
+% b6 (bottom-left, 0,0): go DOWN below grid, right, up to neuron level, right into Neuron A
+\draw[conn, blue!70] (in6.south) -- (0, -0.5)
+  -- (3.6, -0.5) -- (3.6, 2.1) -- ([yshift=-3mm]nA.west);
 
 % === Connections to Neuron B (orange): bits 2, 4, 7 ===
 % b2 (top-right, 2.4,2.4): go right, then down to Neuron B top
