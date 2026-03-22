@@ -27,6 +27,13 @@ Engelen, G., Rimmer, V., Joosen, W.: Troubleshooting an intrusion detection
   dataset: The {CICIDS2017} case study. In: Proceedings of the IEEE Security
   and Privacy Workshops (SPW) (2021). \doi{10.1109/SPW53761.2021.00009}
 
+\bibitem{kull2017beta}
+Kull, M., Silva~Filho, T., Flach, P.: Beta calibration: a well-founded and
+  easily implemented improvement on logistic calibration for binary
+  classifiers. In: Proceedings of the 20th International Conference on
+  Artificial Intelligence and Statistics (AISTATS). vol.~54, pp. 623--631. PMLR
+  (2017)
+
 \bibitem{moustafa2015unswnb15}
 Moustafa, N., Slay, J.: {UNSW-NB15}: A comprehensive data set for network
   intrusion detection systems. Military Communications and Information Systems
@@ -37,6 +44,11 @@ Moustafa, N., Slay, J.: {UNSW-NB15}: A comprehensive data set for network
 Neto, E.C.P., Dadkhah, S., Ferreira, R., Zohourian, A., Lu, R., Ghorbani, A.A.:
   {CICIoT2023}: A real-time dataset and benchmark for large-scale attacks in
   {IoT} environment. Sensors  \textbf{23}(13) (2023). \doi{10.3390/s23135941}
+
+\bibitem{platt1999probabilistic}
+Platt, J.C.: Probabilistic outputs for support vector machines and comparisons
+  to regularized likelihood methods. In: Advances in Large Margin Classifiers.
+  pp. 61--74. MIT Press (1999)
 
 \bibitem{santiago2020fpga}
 Santiago, L.A.Q., Verona, L.T., Rangel, F.d.O., Firmino, F.M., Lima, P.M.V.,
