@@ -309,3 +309,20 @@ dashboard.db
 wnn_dashboard.db
 apps/WNNVerifier/.build/
 run_ids_overnight.sh
+
+# Reference repos
+fwiw-reference/
+
+# DB backups
+db/*.bak-*
+
+# Venv symlink
+wnn
+
+# LaTeX build artifacts
+paper/*.aux
+paper/*.log
+paper/*.blg
+paper/*.out
+paper/*.synctex.gz
+
