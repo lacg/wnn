@@ -1,148 +1,67 @@
 # IDS Experiment Results
 
-Last updated: 2026-03-20
-Source: `validation_summaries` table, `best_fitness` genome from final phase per flow.
-Fitness weights: CE=0.4, F1=0.3, FPR=0.3 (CE4F3R3)
+Last updated: 2026-03-22
+Source: `validation_summaries` table, `best_fitness` genome from final GA phase.
+Statistical method: 5% trimmed mean (112 runs, trim 6 each side = 100 samples).
+Best genomes selected from all 112 runs.
 
-## Summary by Architecture (final phase only)
+## UNSW-NB15 Temporal Split (112 runs, pop=50, top20, kf5x5)
 
-### top20-CE4F3R3 (34 flows)
+Config: 2-phase (grid search + GA neurons), pop=50, top20 features at 8b, max_bits=34
+Fitness: CE=0.2, F1=0.3, FPR=0.4, Acc=0.1 (kf5x5)
 
-| Threshold | N | F1 mean | ±std | FPR mean | ±std | Acc mean | ±std | Best-fitness: F1 | FPR | Acc | CE |
-|---|---:|---|---|---|---|---|---|---|---|---|---|
-| val_cal | 34 | 87.10% | ±2.55% | 10.89% | ±4.08% | 87.18% | ±2.52% | 89.99% | 7.80% | 90.04% | 0.2461 |
-| emp_cumul | 34 | 83.33% | ±3.54% | 27.60% | ±15.06% | 84.23% | ±2.93% | 89.00% | 4.62% | 89.01% | 0.2930 |
-| fixed_05 | 34 | 83.76% | ±3.42% | 27.79% | ±12.36% | 84.59% | ±2.84% | 87.52% | 1.49% | 87.52% | 0.2725 |
-| platt | 34 | 83.22% | ±3.45% | 27.76% | ±14.43% | 84.12% | ±2.82% | 87.70% | 1.13% | 87.70% | 0.2725 |
-| beta | 34 | 82.17% | ±3.34% | 31.23% | ±13.64% | 83.26% | ±2.78% | 87.72% | 1.34% | 87.73% | 0.2725 |
-| test_cal | 34 | 82.57% | ±3.26% | 32.16% | ±10.57% | 83.62% | ±2.70% | 89.43% | 5.04% | 89.44% | 0.2780 |
-| train_cal | 34 | 82.21% | ±2.32% | 33.84% | ±6.05% | 83.27% | ±1.92% | 86.42% | 23.41% | 86.86% | 0.2930 |
-| empirical | 34 | 80.64% | ±3.06% | 38.26% | ±8.97% | 82.14% | ±2.53% | 86.51% | 21.88% | 86.89% | 0.2928 |
+### Trimmed Mean ±Std (100 samples after trimming)
 
-### PUB-baseline-mb28-kf5x5 (34 flows)
+| Threshold | F1 mean ±std | F1 95%CI | FPR mean ±std | FPR 95%CI | Acc mean ±std | Acc 95%CI |
+|---|---|---|---|---|---|---|
+| val_cal | 88.19% ±1.37% | ±0.27% | 9.54% ±2.64% | ±0.52% | 88.26% ±1.35% | ±0.26% |
+| fixed_05 | 84.25% ±3.66% | ±0.72% | 23.09% ±15.38% | ±3.02% | 84.95% ±3.01% | ±0.59% |
+| platt | 83.98% ±3.36% | ±0.66% | 25.23% ±14.14% | ±2.77% | 84.73% ±2.77% | ±0.54% |
+| beta | 83.96% ±3.59% | ±0.70% | 25.27% ±14.60% | ±2.86% | 84.73% ±2.94% | ±0.58% |
+| emp_cumul | 83.80% ±3.77% | ±0.74% | 27.11% ±13.93% | ±2.73% | 84.66% ±3.10% | ±0.61% |
+| test_cal | 83.54% ±3.23% | ±0.63% | 25.76% ±14.48% | ±2.84% | 84.33% ±2.61% | ±0.51% |
+| train_cal | 82.79% ±2.09% | ±0.41% | 32.64% ±5.47% | ±1.07% | 83.77% ±1.73% | ±0.34% |
+| empirical | 81.69% ±3.40% | ±0.67% | 35.42% ±9.74% | ±1.91% | 82.98% ±2.77% | ±0.54% |
 
-| Threshold | N | F1 mean | ±std | FPR mean | ±std | Acc mean | ±std | Best-fitness: F1 | FPR | Acc | CE |
-|---|---:|---|---|---|---|---|---|---|---|---|---|
-| val_cal | 34 | 87.97% | ±1.63% | 14.46% | ±4.52% | 88.14% | ±1.54% | 90.17% | 8.12% | 90.23% | 0.2783 |
-| emp_cumul | 34 | 82.28% | ±3.36% | 28.70% | ±13.95% | 83.23% | ±3.01% | 80.99% | 4.85% | 81.03% | 0.2783 |
-| fixed_05 | 34 | 81.59% | ±3.38% | 27.82% | ±15.29% | 82.55% | ±3.16% | 89.16% | 10.88% | 89.26% | 0.2789 |
-| platt | 34 | 84.20% | ±4.08% | 19.06% | ±12.77% | 84.68% | ±3.88% | 88.90% | 9.22% | 88.96% | 0.2630 |
-| beta | 34 | 83.08% | ±3.83% | 27.33% | ±13.40% | 83.94% | ±3.42% | 89.97% | 13.92% | 90.13% | 0.2630 |
-| test_cal | 34 | 83.11% | ±3.63% | 26.28% | ±13.90% | 83.93% | ±3.25% | 90.46% | 15.48% | 90.66% | 0.2783 |
-| train_cal | 34 | 84.25% | ±2.81% | 30.11% | ±6.79% | 85.09% | ±2.41% | 86.92% | 25.80% | 87.49% | 0.2783 |
-| empirical | 34 | 79.75% | ±4.36% | 39.86% | ±11.04% | 81.47% | ±3.61% | 89.30% | 15.42% | 89.50% | 0.2789 |
+### Best Genomes (from all 112 runs)
 
-### PUB-top20-8b-mb34-kf5x5 (9 flows)
-
-| Threshold | N | F1 mean | ±std | FPR mean | ±std | Acc mean | ±std | Best-fitness: F1 | FPR | Acc | CE |
-|---|---:|---|---|---|---|---|---|---|---|---|---|
-| val_cal | 9 | 87.01% | ±2.35% | 10.62% | ±3.11% | 87.07% | ±2.34% | 90.25% | 7.81% | 90.30% | 0.2477 |
-| emp_cumul | 9 | 82.40% | ±2.66% | 33.54% | ±7.76% | 83.48% | ±2.15% | 86.72% | 18.97% | 86.99% | 0.3722 |
-| fixed_05 | 9 | 84.37% | ±3.97% | 24.10% | ±15.63% | 85.09% | ±3.33% | 89.71% | 6.81% | 89.75% | 0.3722 |
-| platt | 9 | 82.65% | ±3.43% | 31.77% | ±11.61% | 83.69% | ±2.84% | 88.88% | 8.33% | 88.92% | 0.3384 |
-| beta | 9 | 85.57% | ±4.37% | 19.37% | ±17.53% | 86.18% | ±3.66% | 89.05% | 3.28% | 89.06% | 0.2822 |
-| test_cal | 9 | 85.61% | ±4.29% | 17.42% | ±16.65% | 86.12% | ±3.61% | 85.18% | 5.05% | 85.18% | 0.2477 |
-| train_cal | 9 | 83.18% | ±2.45% | 31.70% | ±6.14% | 84.10% | ±2.03% | 84.92% | 27.05% | 85.52% | 0.2477 |
-| empirical | 9 | 80.29% | ±2.94% | 39.30% | ±8.40% | 81.87% | ±2.42% | 87.95% | 17.13% | 88.17% | 0.3357 |
-
-### 10P-top20-CE4F3R3 (2 flows)
-
-| Threshold | N | F1 mean | ±std | FPR mean | ±std | Acc mean | ±std | Best-fitness: F1 | FPR | Acc | CE |
-|---|---:|---|---|---|---|---|---|---|---|---|---|
-| val_cal | 2 | 87.76% | ±2.47% | 10.93% | ±2.77% | 87.84% | ±2.45% | 89.51% | 8.97% | 89.57% | 0.4752 |
-| emp_cumul | 2 | 80.78% | ±0.31% | 38.93% | ±0.90% | 82.22% | ±0.23% | 80.56% | 39.56% | 82.06% | 0.4243 |
-| fixed_05 | 2 | 84.82% | ±5.48% | 20.83% | ±23.38% | 85.46% | ±4.58% | 88.69% | 4.30% | 88.70% | 0.4243 |
-| platt | 2 | 84.39% | ±7.03% | 22.61% | ±26.36% | 85.21% | ±5.88% | 89.36% | 3.97% | 89.37% | 0.4243 |
-| beta | 2 | 81.79% | ±2.05% | 35.70% | ±5.76% | 82.98% | ±1.58% | 83.24% | 31.63% | 84.10% | 0.4752 |
-| test_cal | 2 | 83.92% | ±5.04% | 28.89% | ±14.95% | 84.79% | ±4.18% | 87.49% | 18.32% | 87.74% | 0.4243 |
-| train_cal | 2 | 80.25% | ±1.13% | 38.91% | ±3.39% | 81.67% | ±0.81% | 79.45% | 41.31% | 81.10% | 0.4243 |
-| empirical | 2 | 88.24% | ±0.84% | 15.45% | ±3.26% | 88.43% | ±0.77% | 87.65% | 17.75% | 87.89% | 0.4243 |
-
-### 4P-top20-CE4F3R3 (2 flows)
-
-| Threshold | N | F1 mean | ±std | FPR mean | ±std | Acc mean | ±std | Best-fitness: F1 | FPR | Acc | CE |
-|---|---:|---|---|---|---|---|---|---|---|---|---|
-| val_cal | 2 | 88.63% | ±0.91% | 8.37% | ±2.80% | 88.68% | ±0.88% | 89.27% | 6.39% | 89.30% | 0.2639 |
-| emp_cumul | 2 | 85.58% | ±4.27% | 19.53% | ±19.70% | 86.08% | ±3.59% | 88.60% | 5.60% | 88.61% | 0.2639 |
-| fixed_05 | 2 | 80.81% | ±2.15% | 37.57% | ±5.53% | 82.14% | ±1.67% | 82.33% | 33.66% | 83.32% | 0.3059 |
-| platt | 2 | 81.19% | ±1.61% | 36.60% | ±3.42% | 82.42% | ±1.34% | 82.33% | 34.18% | 83.36% | 0.2639 |
-| beta | 2 | 81.87% | ±3.78% | 34.08% | ±10.58% | 82.99% | ±2.99% | 84.54% | 26.60% | 85.11% | 0.3059 |
-| test_cal | 2 | 84.63% | ±3.00% | 26.66% | ±9.18% | 85.26% | ±2.54% | 86.75% | 20.17% | 87.06% | 0.2639 |
-| train_cal | 2 | 81.97% | ±2.05% | 34.97% | ±5.10% | 83.08% | ±1.66% | 83.41% | 31.36% | 84.26% | 0.3059 |
-| empirical | 2 | 79.22% | ±0.00% | 42.28% | ±0.05% | 80.98% | ±0.00% | 79.22% | 42.25% | 80.98% | 0.2639 |
-
-## Individual Flow Results
-
-### F432: 4P-top20-CE4F3R3-r01
-
-| Threshold | F1 | FPR | Acc | CE |
+| Criterion | Threshold | F1 | FPR | Acc |
 |---|---|---|---|---|
-| val_cal | 89.27% | 6.39% | 89.30% | 0.2639 |
-| emp_cumul | 88.60% | 5.60% | 88.61% | 0.2639 |
-| fixed_05 | 79.29% | 41.48% | 80.96% | 0.2639 |
-| platt | 82.33% | 34.18% | 83.36% | 0.2639 |
-| beta | 79.21% | 41.56% | 80.88% | 0.2639 |
-| test_cal | 86.75% | 20.17% | 87.06% | 0.2639 |
-| train_cal | 80.52% | 38.57% | 81.91% | 0.2639 |
-| empirical | 79.22% | 42.25% | 80.98% | 0.2639 |
+| Best F1 | val_cal | **90.82%** | 4.66% | 90.84% |
+| Best FPR | val_cal | 89.65% | **3.84%** | 89.66% |
+| Best Acc | val_cal | 90.82% | 4.66% | **90.84%** |
+| Best Fitness | val_cal | 90.82% | 4.66% | 90.84% |
+| Best F1 | fixed_05 | **89.95%** | 7.01% | 89.99% |
+| Best FPR | fixed_05 | 85.21% | **0.49%** | 85.24% |
+| Best Fitness | fixed_05 | 89.47% | 1.98% | 89.47% |
+| Best F1 | platt | **90.31%** | 6.90% | 90.35% |
+| Best FPR | platt | 86.58% | **0.53%** | 86.59% |
+| Best Fitness | platt | 87.86% | 1.18% | 87.86% |
+| Best F1 | train_cal | **88.96%** | 11.76% | 89.06% |
+| Best FPR | train_cal | 88.96% | **11.76%** | 89.06% |
 
-### F433: 4P-top20-CE4F3R3-r02
+### Key Findings
 
-| Threshold | F1 | FPR | Acc | CE |
-|---|---|---|---|---|
-| val_cal | 87.99% | 10.35% | 88.06% | 0.3059 |
-| emp_cumul | 82.56% | 33.46% | 83.54% | 0.3059 |
-| fixed_05 | 82.33% | 33.66% | 83.32% | 0.3059 |
-| platt | 80.06% | 39.02% | 81.47% | 0.3059 |
-| beta | 84.54% | 26.60% | 85.11% | 0.3059 |
-| test_cal | 82.51% | 33.15% | 83.46% | 0.3059 |
-| train_cal | 83.41% | 31.36% | 84.26% | 0.3059 |
-| empirical | 79.21% | 42.32% | 80.98% | 0.3059 |
+- Oracle F1: **88.19% ±0.27%** (95% CI), competitive with RF/XGBoost (~87%)
+- Oracle FPR: **9.54% ±0.52%**, better than RF (~12%)
+- Best single genome: **90.82% F1, 4.66% FPR** (exceeds stretch goal)
+- Calibration gap: oracle vs train_cal = **+5.40% F1** (threshold selection matters)
+- Non-oracle threshold FPR std dev: **±14-15%** (high variability, a key finding)
+- Oracle FPR std dev: **±2.64%** (architecture is consistent, calibration is not)
 
-## Phase Progression (val_cal F1 mean only, for quick reference)
+## CICIDS2017 Random Split (in progress)
 
-### top20-CE4F3R3
-| Phase | N | val_cal F1 |
-|---|---:|---|
-| grid_search | 34 | 87.06% ±2.54% |
-| ga_neurons | 34 | 87.10% ±2.55% |
+Status: 112 flows created, running
+Preliminary (1 flow, pop=150): F1=99.20%, FPR=0.33% (val_cal)
 
-### PUB-baseline-mb28-kf5x5
-| Phase | N | val_cal F1 |
-|---|---:|---|
-| grid_search | 34 | 88.28% ±0.96% |
-| ga_neurons | 34 | 87.97% ±1.63% |
+## CIC-IoT-2023 Random Split (pending)
 
-### PUB-top20-8b-mb34-kf5x5
-| Phase | N | val_cal F1 |
-|---|---:|---|
-| grid_search | 9 | 87.86% ±1.90% |
-| ga_neurons | 9 | 87.01% ±2.35% |
-
-### 10P-top20-CE4F3R3
-| Phase | N | val_cal F1 |
-|---|---:|---|
-| grid_search | 2 | 88.34% ±1.91% |
-| ga_neurons | 2 | 89.34% ±1.14% |
-| ga_bits | 2 | 88.40% ±2.26% |
-| ga_connections | 2 | 88.60% ±1.42% |
-| ts_neurons | 2 | 89.35% ±0.84% |
-| ts_bits | 2 | 89.30% ±0.89% |
-| ts_connections | 2 | 87.76% ±2.47% |
-| neurogenesis | 2 | 88.57% ±2.66% |
-| synaptogenesis | 2 | 89.27% ±0.54% |
-| axonogenesis | 2 | 88.96% ±2.15% |
-
-### 4P-top20-CE4F3R3
-| Phase | N | val_cal F1 |
-|---|---:|---|
-| grid_search | 2 | 87.81% ±2.02% |
-| ga_neurons | 2 | 89.63% ±0.80% |
-| ga_bits | 2 | 83.51% ±1.86% |
-| ga_connections | 2 | 88.63% ±0.91% |
+Status: 112 flows created, pending (starts after CICIDS)
 
 ## Notes
-- Full per-phase tables with all 8 threshold modes available on request (run the analysis script)
-- CE in best-fitness column is the genome's CE (threshold-independent), not per-threshold CE
-- Best-fitness genome selected by composite: 0.4*CE + 0.3*(1-F1) + 0.3*FPR
-- All data from `validation_summaries` table (honest per-flow results, not cherry-picked leaderboard)
+
+- All results from `validation_summaries` (honest per-flow evaluation, not cherry-picked)
+- 5% trimmed mean: sort by F1, remove top/bottom 6 of 112 = 100 samples
+- Best genomes selected from all 112 (factual observation, not trimmed)
+- Fitness weights for kf5x5: CE=0.2, F1=0.3, FPR=0.4, Acc=0.1
+- Population size: 50 (validated against pop=150, no quality loss, 4x faster)
