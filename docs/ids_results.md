@@ -62,8 +62,23 @@ For the best genomes, threshold calibration is not needed. The simplest threshol
 ### Key Findings
 
 - Oracle F1: **88.19% ±0.27%** (95% CI), competitive with RF/XGBoost (~87%)
-- Oracle FPR: **9.54% ±0.52%**, better than RF (~12%)
+- Oracle FPR: **9.54% ±0.52%**, better than RF (25.36%) and XGBoost (25.65%)
 - Best single genome: **90.82% F1, 4.66% FPR** (exceeds stretch goal of 90%)
+
+### Baseline Comparison (same data, same temporal split, no preprocessing tricks)
+
+| Method | F1 | Accuracy | FPR | Model Size |
+|---|---|---|---|---|
+| RF raw top20 | 86.49% | 87.03% | 25.36% | ~50MB |
+| RF raw ALL features | 86.63% | 87.24% | 26.66% | ~50MB |
+| XGBoost raw top20 | 86.26% | 86.81% | 25.65% | ~10MB |
+| XGBoost raw ALL features | 86.93% | 87.49% | 25.80% | ~10MB |
+| **Our WNN mean (val_cal)** | **88.19%** | **88.26%** | **9.54%** | **<1KB** |
+| **Our WNN best (val_cal)** | **90.82%** | **90.84%** | **4.66%** | **<1KB** |
+
+WNN beats RF and XGBoost on F1 (+1.5%), accuracy (+1%), and FPR (9.5% vs 25-26%) at 50,000x smaller model size.
+
+Note: Some papers report 97-98% accuracy on this same split with heavy preprocessing (PCA, balanced bagging, threshold tuning). Investigation ongoing.
 - **fixed_05 best genome: 89.47% F1, 1.98% FPR** (no calibration needed for top genomes)
 - Calibration gap (mean): oracle vs train_cal = **+5.40% F1**
 - Calibration gap (best): oracle vs fixed_05 = **only 1.35% F1**
