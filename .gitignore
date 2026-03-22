@@ -326,3 +326,7 @@ paper/*.blg
 paper/*.out
 paper/*.synctex.gz
 
+
+# macOS
+.DS_Store
+
