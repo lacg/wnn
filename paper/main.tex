@@ -241,7 +241,7 @@ address width~$n$, and connectivity maps~$C$ collectively as the
   {$\frac{1.0 + 0.75}{2} = 0.875$};
 \node[font=\tiny, gray] at (9.8, -2.7) {score $\geq \tau \Rightarrow$ \textbf{attack}};
 
-\draw[-{Stealth[length=2mm]}, thick] (mA7.east) -- (11.4, 1.8) |- (out.east);
+\draw[-{Stealth[length=2mm]}, thick] (mA7.east) -- (11.4, 1.8) |- (out.north);
 \draw[-{Stealth[length=2mm]}, thick] ([xshift=1mm]mB5.south) -- ([xshift=-3.5mm]out.north);
 
 \end{tikzpicture}
@@ -260,7 +260,7 @@ The mean score is thresholded to classify the input.}
 % QUAD_WEIGHTED memory
 \textbf{Quad-weighted memory.}
 Traditional RAM neurons store binary values (TRUE/FALSE), while
-Probabilistic Logic Nodes (PLN)~\cite{aleksander1984wisard} add an
+Probabilistic Logic Nodes (PLN)~\cite{ludermir1999weightless} add an
 \emph{undefined} state ($u$) for untrained cells, and Multi-valued PLN
 (MPLN) generalize to finer granularity (e.g., 11 levels from 0.0 to 1.0
 in 0.1 steps, starting at 0.5 for undefined).
