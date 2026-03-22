@@ -42,7 +42,7 @@ classification performance depends on \emph{connectivity},
 which input bits each neuron observes, a problem traditionally solved by random
 initialization. We present an evolutionary optimization framework that
 jointly optimizes neuron count, address width, and connectivity through
-genetic algorithm and tabu search, with connectivity optimization
+genetic algorithm, with connectivity optimization
 effectively performing automated feature selection intrinsic to the
 architecture. We evaluate on three standard IDS benchmarks (UNSW-NB15,
 CICIDS2017, CIC-IoT-2023) using both temporal and random splits, with a
@@ -86,11 +86,10 @@ quality depends on the initial assignment.
 Our work improves on two fronts:
 \begin{itemize}
 \item \emph{How the network is derived.} We introduce an optimization
-  framework combining Darwinian evolution (genetic algorithm), local
-  search (tabu search), and Lamarckian refinement (neurogenesis,
-  synaptogenesis, axonogenesis) to discover optimal neuron configurations:
-  count, address width, and connectivity. These optimizations effectively
-  perform automated feature selection intrinsic to the WNN architecture.
+  framework using genetic algorithm to discover optimal neuron
+  configurations: count, address width, and connectivity. These
+  optimizations effectively perform automated feature selection
+  intrinsic to the WNN architecture.
 \item \emph{How the network is evaluated.} We test the resulting networks
   against unseen data using temporal splits across three datasets, with a
   threshold calibration study that quantifies the gap
@@ -414,11 +413,9 @@ architectural complexity.
 
 \subsection{Phased Optimization Pipeline}
 
-We optimize the discriminator's parameters $(N, b, C)$ through a phased
-pipeline. Each phase uses a population-based search strategy,
-genetic algorithm (GA) for broad exploration or tabu search (TS) for
-focused local refinement, with the output population of one phase seeding the
-next.
+We optimize the discriminator's network parameters $(N, b, C)$ through
+a two-phase pipeline, where the output population of the first phase
+seeds the second.
 
 \textbf{Phase 1: Grid Search.} Exhaustive evaluation of $(N, b)$
 configurations (e.g., $N \in \{5, 10, \ldots, 500\}$,
@@ -431,60 +428,20 @@ $N$ while preserving learned connections. Crossover exchanges neuron groups
 between parents; mutation adds or removes neurons. This phase discovers the
 optimal model capacity for the dataset.
 
-\textbf{Phase 3: GA Bits.} Optimizes address width $b$ per neuron.
-Increasing $b$ expands the address space (more discriminative power but
-requires more training data); decreasing $b$ improves generalization at
-the cost of specificity.
+The framework supports additional phases (GA bits, GA connections, tabu
+search refinement, and Lamarckian evolution) which are evaluated in
+a follow-up study.
 
-\textbf{Phase 4: GA Connections.} The critical phase, optimizing
-\emph{which input bits} each neuron observes. This is where the
-architecture learns its feature selection. A mutation that redirects a
-neuron's connection from an uninformative input bit to a discriminative
-one can dramatically improve classification. Connection optimization
-consistently provides the largest single-phase accuracy improvement in
-our experiments.
-
-\textbf{Fitness function.} All phases rank genomes using a weighted harmonic
-mean of per-metric ranks within the population:
+\textbf{Fitness function.} Both phases rank genomes using a weighted
+harmonic mean of per-metric ranks within the population:
 \begin{equation}
 \text{fitness}(g) = \frac{w_{CE} + w_{F1} + w_{FPR}}{%
   \frac{w_{CE}}{r_{CE}(g)} + \frac{w_{F1}}{r_{F1}(g)} + \frac{w_{FPR}}{r_{FPR}(g)}}
 \label{eq:fitness}
 \end{equation}
 where $r_m(g)$ is genome $g$'s rank for metric $m$ (lower rank = better).
-We use $w_{CE}{=}0.4$, $w_{F1}{=}0.3$, $w_{FPR}{=}0.3$, balancing
-cross-entropy (calibration quality) with detection rate and false positive
-control.
-
-\subsection{Lamarckian Refinement}
-\label{sec:lamarckian}
-
-Beyond the standard GA phases, we introduce three biologically-inspired
-refinement phases that directly modify the genome structure based on
-performance feedback, a form of Lamarckian evolution where acquired
-traits are inherited:
-
-\textbf{Neurogenesis.} New neurons are added to the discriminator,
-initialized with connections derived from the best-performing existing
-neurons. This expands capacity in regions of the input space where
-current coverage is insufficient.
-
-\textbf{Synaptogenesis.} Existing neurons receive new or modified
-connections, guided by the performance gradient. Connections that
-contributed to correct classifications are reinforced, while those
-associated with errors are redirected.
-
-\textbf{Axonogenesis.} Fine-grained connection rewiring within
-individual neurons, searching for locally optimal connectivity patterns
-through tabu search. Each neuron's connections are independently
-optimized while holding the rest of the genome fixed.
-
-The complete 10-phase pipeline (grid search $\to$ GA neurons $\to$
-GA bits $\to$ GA connections $\to$ TS neurons $\to$ TS bits $\to$
-TS connections $\to$ neurogenesis $\to$ synaptogenesis $\to$
-axonogenesis) progressively refines both the macro-structure
-(how many neurons, how many bits) and micro-structure (which exact
-input bits each neuron observes).
+We use $w_{CE}{=}0.2$, $w_{F1}{=}0.3$, $w_{FPR}{=}0.4$, $w_{Acc}{=}0.1$,
+balancing cross-entropy with detection rate and false positive control.
 
 \subsection{GPU-Accelerated Optimization}
 
