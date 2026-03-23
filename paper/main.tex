@@ -21,7 +21,7 @@
 
 \begin{document}
 
-\title{Evolved Feature Selection in Weightless Neural Networks\\for Network Intrusion Detection}
+\title{Evolutionary Weightless Neural Networks\\for Network Intrusion Detection}
 
 \ifanonymous
   \author{Anonymous}
@@ -36,7 +36,7 @@
 % ============================================================================
 \begin{abstract}
 Weightless Neural Networks (WNNs) based on Random Access Memory (RAM) neurons
-offer constant-time inference with sub-kilobyte model sizes, making them
+offer constant-time inference with sub-microsecond lookup, making them
 attractive for edge-deployed intrusion detection systems. However, their
 classification performance depends on \emph{connectivity},
 which input bits each neuron observes, a problem traditionally solved by random
@@ -44,15 +44,18 @@ initialization. We present an evolutionary optimization framework that
 jointly optimizes neuron count, address width, and connectivity through
 genetic algorithm, with connectivity optimization
 effectively performing automated feature selection intrinsic to the
-architecture. We evaluate on three standard IDS benchmarks (UNSW-NB15,
-CICIDS2017, CIC-IoT-2023) using both temporal and random splits, with a
+architecture. The network architecture is specified in a few kilobytes
+(neuron connections), while the trained memory occupies tens of megabytes
+(sparse lookup tables), comparable to traditional ML models but with
+$O(1)$ inference per neuron. We evaluate on three standard IDS benchmarks
 % REMINDER: Change "three" to "two" and remove CIC-IoT-2023 if we don't have results in time
-eight-mode threshold calibration protocol that exposes the sensitivity
-of binary classifiers to decision boundary selection. Across 100+ independent
-runs per configuration, our approach achieves [TODO: headline numbers]
-competitive with Random Forest and gradient-boosted models at 50,000$\times$
-smaller model size ($<$1\,KB vs.\ $\sim$50\,MB), with inference requiring only
-a single memory lookup per neuron.
+(UNSW-NB15, CICIDS2017, CIC-IoT-2023) using both temporal and random
+splits, with an eight-mode threshold calibration protocol that exposes
+the sensitivity of binary classifiers to decision boundary selection.
+Across 100+ independent runs per configuration, our approach achieves
+[TODO: headline numbers] outperforming Random Forest and XGBoost on
+the standard temporal split while maintaining sub-microsecond inference
+potential on FPGA.
 
 \keywords{Intrusion Detection \and Weightless Neural Networks \and
 Evolutionary Optimization \and Feature Selection \and FPGA}
@@ -103,10 +106,10 @@ Our contributions are:
   network parameters discovers which input features matter without
   external feature selection, with connectivity optimization providing
   the largest single improvement in classification performance.
-\item \textbf{Sub-kilobyte models with sub-microsecond inference potential.}
-  Our evolved WNN achieves competitive F1 with Random Forest and XGBoost
-  at 50,000$\times$ smaller model size ($<$1\,KB vs.\ $\sim$50\,MB),
-  with $O(1)$ lookup-based inference suitable for FPGA deployment.
+\item \textbf{Compact architecture with sub-microsecond inference potential.}
+  Our evolved WNN outperforms Random Forest and XGBoost on the standard
+  temporal split, with a network architecture specified in a few kilobytes
+  and $O(1)$ lookup-based inference suitable for FPGA deployment.
 \item \textbf{Eight-mode threshold calibration study.} We identify threshold
   selection as a critical but under-reported factor in IDS evaluation,
   showing [TODO: X]\% F1 gap between oracle and train-calibrated thresholds.
@@ -540,8 +543,9 @@ data partition.
 All reported results use the \emph{best-fitness genome from the
 final optimization phase}, evaluated by the full-dataset evaluator
 (175K train $\to$ 82K test for UNSW-NB15) with all eight threshold
-modes. Results represent per-flow honest evaluation, not
-cherry-picked across runs.
+modes. Each flow contributes one data point to the aggregate
+statistics, ensuring that reported means reflect the full
+distribution of outcomes.
 
 % ============================================================================
 \section{Experimental Results}
