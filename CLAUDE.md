@@ -916,6 +916,8 @@ When asked to investigate or debug an issue, ALWAYS investigate and diagnose fir
 ### Rule 2: Flow/Experiment Creation Protocol
 **⚠️ CRITICAL: Flows without experiments do NOTHING — the worker marks them "completed" instantly with zero work.**
 
+**⚠️ CRITICAL: ALWAYS create flows via the dashboard API (POST /api/flows), NEVER by inserting directly into the SQLite database.** Direct SQL inserts miss critical defaults and propagation logic (e.g., `architecture_type` on experiments defaults to `'tiered'` instead of inheriting from the flow config). This causes subtle bugs like the dashboard showing wrong columns (CE/ACC instead of F1/FPR/ACC for IDS flows).
+
 When creating experiment flows via POST /api/flows:
 1. **ALWAYS include experiments in the POST body** — this is the most common mistake. A flow with 0 experiments is useless.
 2. Use experiment_type `grid_search` for grid searches (not `ga`)
