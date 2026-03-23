@@ -126,8 +126,39 @@ Our model size is comparable to RF, not smaller. The 3KB architecture specificat
 
 ## CICIDS2017 Random Split (in progress)
 
-Status: 112 flows total, running
-Preliminary (1 flow, pop=150): F1=99.20%, FPR=0.33% (val_cal)
+Status: 112 flows total, running (11 completed so far)
+Config: 2-phase, pop=50, top20 features at 8b, max_bits=34, kf5x5 fitness
+
+### Preliminary Results (11 flows)
+
+| Threshold | F1 mean ±std | FPR mean | Acc mean |
+|---|---|---|---|
+| val_cal | 99.26% ±0.07% | 0.30% | 99.53% |
+| train_cal | 99.21% ±0.15% | 0.31% | 99.50% |
+| fixed_05 | 99.05% ±0.27% | 0.49% | 99.40% |
+
+### CICIDS2017 Baseline Comparison (same data, same random split)
+
+| Method | F1 | Accuracy | FPR |
+|---|---|---|---|
+| RF top20 (same data) | 99.83% | 99.89% | 0.07% |
+| XGBoost top20 (same data) | 99.80% | 99.88% | 0.07% |
+| **Our WNN mean (val_cal)** | **99.26%** | **99.53%** | **0.30%** |
+
+RF beats us by 0.57% F1 on the random split (same pattern as UNSW-NB15 random).
+
+### Cross-Dataset Pattern
+
+| Dataset | Split | WNN F1 | RF F1 | Winner |
+|---|---|---|---|---|
+| UNSW-NB15 | **temporal** | **88.19%** | 86.63% | **WNN** |
+| UNSW-NB15 | random | 93.68% | 95.38% | RF |
+| CICIDS2017 | random | 99.26% | 99.83% | RF |
+
+WNN wins on temporal splits (robust to distribution shift due to thermometer encoding).
+RF wins on random splits (exploits full numeric precision when distributions match).
+Hypothesis: increasing thermometer encoding from 8 to 16 bits may close this gap
+by providing finer-grained input resolution. To be tested.
 
 ## CIC-IoT-2023 Random Split (pending)
 
