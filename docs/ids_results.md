@@ -42,8 +42,6 @@ Neurons: mean=224.1 ±119.0 CI=±23.4 | Bits: mean=32.0 ±0.0 CI=±0.0
 
 ### Best-Fitness Genome: Threshold Proximity to Oracle
 
-How close does each threshold's best-fitness genome get to the oracle's best?
-
 | Threshold | Best Fitness F1 | FPR | Acc | F1 gap to oracle | FPR gap to oracle |
 |---|---|---|---|---|---|
 | **val_cal (oracle)** | **90.82%** | **4.66%** | **90.84%** | - | - |
@@ -56,29 +54,67 @@ How close does each threshold's best-fitness genome get to the oracle's best?
 | test_cal | 86.86% | 0.56% | 86.87% | -3.96% | -4.10% (better) |
 
 **Finding**: fixed_05 (no calibration, threshold=0.5) produces the best-fitness genome closest
-to oracle quality: only 1.35% below oracle F1, with *even lower FPR* (1.98% vs 4.66%).
+to oracle quality: only 1.35% below oracle F1, with even lower FPR (1.98% vs 4.66%).
 For the best genomes, threshold calibration is not needed. The simplest threshold works best.
 
-### Key Findings
-
-- Oracle F1: **88.19% ±0.27%** (95% CI), competitive with RF/XGBoost (~87%)
-- Oracle FPR: **9.54% ±0.52%**, better than RF (25.36%) and XGBoost (25.65%)
-- Best single genome: **90.82% F1, 4.66% FPR** (exceeds stretch goal of 90%)
-
-### Baseline Comparison (same data, same temporal split, no preprocessing tricks)
+### Temporal Split Baseline Comparison (same data, no preprocessing tricks)
 
 | Method | F1 | Accuracy | FPR | Model Size |
 |---|---|---|---|---|
 | RF raw top20 | 86.49% | 87.03% | 25.36% | ~50MB |
 | RF raw ALL features | 86.63% | 87.24% | 26.66% | ~50MB |
+| RF + MinMax + balanced | 86.90% | 87.39% | 24.33% | ~50MB |
 | XGBoost raw top20 | 86.26% | 86.81% | 25.65% | ~10MB |
 | XGBoost raw ALL features | 86.93% | 87.49% | 25.80% | ~10MB |
-| **Our WNN mean (val_cal)** | **88.19%** | **88.26%** | **9.54%** | **<1KB** |
-| **Our WNN best (val_cal)** | **90.82%** | **90.84%** | **4.66%** | **<1KB** |
+| XGBoost + MinMax + balanced | 90.27% | 90.51% | 16.87% | ~10MB |
+| **Our WNN mean (val_cal)** | **88.19%** | **88.26%** | **9.54%** | ~47MB (3KB arch) |
+| **Our WNN best (val_cal)** | **90.82%** | **90.84%** | **4.66%** | ~47MB (3KB arch) |
 
-WNN beats RF and XGBoost on F1 (+1.5%), accuracy (+1%), and FPR (9.5% vs 25-26%) at 50,000x smaller model size.
+WNN beats RF on F1 (+1.5%), accuracy (+1%), and FPR (9.5% vs 25-26%).
+WNN best genome (90.82%) also beats balanced XGBoost (90.27%).
+WNN FPR (9.54% mean, 4.66% best) is far better than all baselines.
 
-Note: Some papers report 97-98% accuracy on this same split with heavy preprocessing (PCA, balanced bagging, threshold tuning). Investigation ongoing.
+### Random Split Comparison (UNSW-NB15, 12 flows preliminary)
+
+| Method | Split details | F1 | Accuracy | FPR | Model Size |
+|---|---|---|---|---|---|
+| RF raw top20 | 80/20 | 95.38% | 99.32% | 0.35% | ~50MB |
+| XGBoost balanced top20 | 80/20 | 93.53% | 98.93% | 1.11% | ~10MB |
+| FWIW (Franca team) | 90/10, class-balanced | N/A (acc only) | 98.5% | N/A | 272 bytes |
+| CNN-BiLSTM (arxiv) | reshuffled ~80/20 | 97.90% | 97.90% | ~3.2% | ~5MB |
+| **Our WNN mean (val_cal)** | **80/20** | **93.68%** | **99.01%** | **0.79%** | ~47MB (3KB arch) |
+| **Our WNN best (val_cal)** | **80/20** | **93.97%** | **99.07%** | **0.40%** | ~47MB (3KB arch) |
+
+Random split observations:
+- Our accuracy (99.01%) beats FWIW (98.5%) and CNN-BiLSTM (97.90%)
+- Our FPR (0.79%) beats CNN-BiLSTM (~3.2%)
+- RF beats us on F1 (95.38% vs 93.68%) on random split
+- On temporal split, we beat RF. On random split, RF beats us on F1
+- Explanation: RF exploits full numeric precision. Our thermometer encoding (8 bits = 256 levels) loses some information. On temporal split, this lossy encoding is more robust to distribution shift, which is why we win there
+- FWIW uses 90/10 split with class balancing, not directly comparable to our 80/20
+- BTHOWeN does not evaluate on UNSW-NB15 (tabular benchmarks only, no direct IDS comparison)
+
+### Model Size Breakdown
+
+| Component | Size | Description |
+|---|---|---|
+| Architecture (connections) | ~3 KB | Which input bits each neuron observes. Transferable. |
+| Trained memory (sparse LUTs) | ~47 MB | Neuron cell values from training. Comparable to RF (~50MB). |
+| Total deployed | ~47 MB | Connections + memory |
+
+For comparison:
+- FWIW: 272 bytes total (uses 6-bit Bloom filters with 64 entries each)
+- RF: ~50 MB
+- XGBoost: ~10 MB
+- CNN-BiLSTM: ~5 MB
+
+Our model size is comparable to RF, not smaller. The 3KB architecture specification is small, but the trained memory is large due to 32-bit address width (2^32 possible cells per neuron, stored sparsely).
+
+### Key Findings
+
+- Oracle F1: **88.19% ±0.27%** (95% CI) on temporal split, beats RF (86.63%) and XGBoost (86.93%)
+- Oracle FPR: **9.54% ±0.52%**, far better than RF (25.36%) and XGBoost (25.65%)
+- Best single genome: **90.82% F1, 4.66% FPR** (exceeds stretch goal of 90%)
 - **fixed_05 best genome: 89.47% F1, 1.98% FPR** (no calibration needed for top genomes)
 - Calibration gap (mean): oracle vs train_cal = **+5.40% F1**
 - Calibration gap (best): oracle vs fixed_05 = **only 1.35% F1**
@@ -86,7 +122,7 @@ Note: Some papers report 97-98% accuracy on this same split with heavy preproces
 - All genomes converge to 32 bits (max available in grid), suggesting more bits = better
 - Non-oracle FPR std dev: ±14-15% (threshold calibration is highly variable on average)
 - Oracle FPR std dev: ±2.64% (architecture itself is consistent)
-- Best genomes show low FPR across all thresholds (the variance is in mediocre genomes)
+- Temporal vs random: WNN wins on temporal (robust to distribution shift), RF wins on random (exploits full precision)
 
 ## CICIDS2017 Random Split (in progress)
 
@@ -99,9 +135,11 @@ Status: 112 flows created, pending (starts after CICIDS)
 
 ## Notes
 
-- All results from `validation_summaries` (honest per-flow evaluation)
+- All results from `validation_summaries` (per-flow evaluation)
 - 5% trimmed mean: sort by metric, remove top/bottom 6 of 112 = 100 samples
 - Best genomes selected from all 112 (factual observation, not trimmed)
 - Fitness weights for kf5x5: CE=0.2, F1=0.3, FPR=0.4, Acc=0.1
 - Population size: 50 (validated against pop=150, no quality loss, 4x faster)
 - BestF1/BestFPR/BestAcc/BestFit format: F1%/FPR%/Acc% of the genome with that best metric
+- Model size: architecture (connections) ~3KB, trained memory ~47MB (sparse, 32-bit neurons)
+- Some papers report 97-98% accuracy on the temporal split. CNN-BiLSTM (arxiv 2407.14945) was found to use a reshuffled split (16,467 test samples vs standard 82,332). Zoghi 2024 uses ensemble with preprocessing behind paywall.
