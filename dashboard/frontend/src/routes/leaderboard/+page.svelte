@@ -10,6 +10,8 @@
 	// Filters
 	let taskType = 'ids';
 	let stage = '';
+	let idsDataset = '';
+	let idsSplit = '';
 	let selectedThresholds: Set<string> = new Set();
 
 	// Sorting
@@ -98,6 +100,8 @@
 			const params = new URLSearchParams();
 			if (taskType) params.set('task_type', taskType);
 			if (stage) params.set('stage', stage);
+			if (idsDataset) params.set('ids_dataset', idsDataset);
+			if (idsSplit) params.set('ids_split', idsSplit);
 			params.set('limit', '500');
 
 			const response = await fetch(`/api/best-genomes?${params}`);
@@ -304,6 +308,23 @@
 				{#each stages as s}
 					<option value={s.value}>{s.label}</option>
 				{/each}
+			</select>
+		</div>
+		<div class="filter-group">
+			<label for="ids-dataset">Dataset</label>
+			<select id="ids-dataset" bind:value={idsDataset} on:change={handleFilterChange}>
+				<option value="">All Datasets</option>
+				<option value="unsw-nb15">UNSW-NB15</option>
+				<option value="cicids2017">CICIDS2017</option>
+				<option value="ciciot2023">CIC-IoT-2023</option>
+			</select>
+		</div>
+		<div class="filter-group">
+			<label for="ids-split">Split</label>
+			<select id="ids-split" bind:value={idsSplit} on:change={handleFilterChange}>
+				<option value="">All Splits</option>
+				<option value="temporal">Temporal</option>
+				<option value="random">Random</option>
 			</select>
 		</div>
 		<div class="filter-group threshold-filters">
