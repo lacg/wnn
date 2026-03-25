@@ -25,21 +25,12 @@ module wnn_neuron #(
 	input  logic                    rst_n,
 	input  logic                    start,       // Pulse to begin lookup
 	input  logic [INPUT_BITS-1:0]   input_vec,   // Full thermometer-encoded input
+	input  logic [ADDR_BITS-1:0]    address,     // Pre-gathered address from connection map
 
 	output logic [VALUE_BITS-1:0]   result,      // Neuron output value
 	output logic                    result_valid, // Result ready
 	output logic                    busy          // Lookup in progress
 );
-
-	// --- Connection map (set by RTL generator as parameters) ---
-	// The actual bit indices are passed as a parameter array
-	// Each neuron gathers ADDR_BITS specific bits from INPUT_BITS
-
-	// --- Address formation ---
-	// Gather selected bits from input vector to form the lookup address
-	// (Connections are wired at synthesis time - pure routing, no logic)
-	logic [ADDR_BITS-1:0] address;
-	// Connection wiring is done in the wrapper module that instantiates this
 
 	// --- BRAM for sparse keys and values ---
 	// Initialized from exported genome data
