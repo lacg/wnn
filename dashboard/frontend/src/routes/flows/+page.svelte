@@ -3,6 +3,8 @@
   import { flows } from '$lib/stores';
   import type { Flow } from '$lib/types';
   import { formatDate } from '$lib/dateFormat';
+  import { page } from '$app/stores';
+  import { goto } from '$app/navigation';
 
   // Helper: get experiments count safely (handles {} stored instead of [])
   function getExperimentsCount(flow: Flow): number {
@@ -15,11 +17,22 @@
   let error: string | null = null;
   let deleting: number | null = null;
 
-  // Filtering & pagination
-  let statusFilter: string = 'all';
-  let searchQuery: string = '';
+  // Filtering & pagination — read initial values from URL
+  let statusFilter: string = $page.url.searchParams.get('status') || 'all';
+  let searchQuery: string = $page.url.searchParams.get('q') || '';
   let pageSize = 30;
-  let currentPage = 0;
+  let currentPage = parseInt($page.url.searchParams.get('page') || '0', 10);
+
+  // Sync state to URL without navigation (replaceState)
+  function syncUrl() {
+    const params = new URLSearchParams();
+    if (statusFilter !== 'all') params.set('status', statusFilter);
+    if (searchQuery.trim()) params.set('q', searchQuery.trim());
+    if (currentPage > 0) params.set('page', String(currentPage));
+    const qs = params.toString();
+    const newUrl = qs ? `?${qs}` : window.location.pathname;
+    history.replaceState(history.state, '', newUrl);
+  }
 
   onMount(async () => {
     await loadFlows();
@@ -67,7 +80,14 @@
   }
 
   // Reset to page 0 when filters change
-  $: statusFilter, searchQuery, currentPage = 0;
+  let prevStatusFilter = statusFilter;
+  let prevSearchQuery = searchQuery;
+  $: if (statusFilter !== prevStatusFilter || searchQuery !== prevSearchQuery) {
+    prevStatusFilter = statusFilter;
+    prevSearchQuery = searchQuery;
+    currentPage = 0;
+    syncUrl();
+  }
 
   $: filteredFlows = $flows.filter(f => {
     if (statusFilter !== 'all' && f.status !== statusFilter) return false;
@@ -188,11 +208,11 @@
 
     {#if totalPages > 1}
       <div class="pagination">
-        <button class="page-btn" disabled={currentPage === 0} on:click={() => currentPage = 0}>First</button>
-        <button class="page-btn" disabled={currentPage === 0} on:click={() => currentPage--}>Prev</button>
+        <button class="page-btn" disabled={currentPage === 0} on:click={() => { currentPage = 0; syncUrl(); }}>First</button>
+        <button class="page-btn" disabled={currentPage === 0} on:click={() => { currentPage--; syncUrl(); }}>Prev</button>
         <span class="page-info">Page {currentPage + 1} of {totalPages}</span>
-        <button class="page-btn" disabled={currentPage >= totalPages - 1} on:click={() => currentPage++}>Next</button>
-        <button class="page-btn" disabled={currentPage >= totalPages - 1} on:click={() => currentPage = totalPages - 1}>Last</button>
+        <button class="page-btn" disabled={currentPage >= totalPages - 1} on:click={() => { currentPage++; syncUrl(); }}>Next</button>
+        <button class="page-btn" disabled={currentPage >= totalPages - 1} on:click={() => { currentPage = totalPages - 1; syncUrl(); }}>Last</button>
       </div>
     {/if}
   {/if}
