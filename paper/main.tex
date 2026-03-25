@@ -628,12 +628,16 @@ ${\sim}3{,}500$ unique addresses from 2.26 million training examples, not
 $2^{34}$.  We store only these trained entries as sorted (key, value) pairs
 in BRAM, with binary-search lookup.
 
-Our best 34-bit genome (11 neurons, 99.59\% F1, 0.12\% FPR) requires
-only 362\,KB of sparse storage, fitting in 10 BRAM36 blocks (7\% of Z-7020).
-Binary search over ${\sim}5{,}000$ entries completes in 13 cycles; with
-pipelining, throughput remains one classification per cycle.  At 200\,MHz
-this yields 65\,ns latency and 200\,MS/s throughput, well above the
-12.5\,MS/s needed for 100\,Gbps line-rate inspection.
+Our best 34-bit genome (11 neurons, 99.59\% F1, 0.12\% FPR) contains
+only 41,215 sparse entries (362\,KB).  Vivado 2025.2 synthesis for the
+Zynq Z-7020 inferred \textbf{distributed LUTs} rather than block RAM,
+yielding 622 LUTs (1.17\%), 276 flip-flops (0.26\%), zero BRAMs, and
+zero DSPs.  Binary search over ${\sim}5{,}000$ entries per neuron
+completes in 13 cycles; with pipelining, throughput remains one
+classification per cycle.  At 200\,MHz this yields 65\,ns latency
+and 200\,MS/s throughput, well above the 12.5\,MS/s needed for
+100\,Gbps line-rate inspection.  These are post-synthesis estimates;
+place-and-route typically adds less than 10\% overhead.
 
 \paragraph{Comparison with FWIW.}
 Table~\ref{tab:fpga} summarizes the resource--accuracy trade-off across
