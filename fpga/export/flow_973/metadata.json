@@ -1,0 +1,28 @@
+{
+  "flow_id": 973,
+  "genome_hash": "46cbd295dd2796f5",
+  "phase": "GA Neurons",
+  "total_neurons": 11,
+  "bits_per_neuron": 34,
+  "input_bits": 360,
+  "n_bits_thermometer": 18,
+  "n_features": 20,
+  "total_sparse_entries": 41215,
+  "per_neuron_entries": [
+    3825,
+    3601,
+    3887,
+    2018,
+    5003,
+    5003,
+    3887,
+    3992,
+    3144,
+    3383,
+    3472
+  ],
+  "sparse_bytes_u64_u8": 370935,
+  "sparse_bytes_packed": 247290,
+  "dataset": "cicids2017",
+  "split": "random"
+}
