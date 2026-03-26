@@ -652,30 +652,28 @@ On UNSW-NB15, an 8-bit genome with just 20 neurons (1.3\,KB) achieves
 
 \begin{table}[t]
 \centering
-\caption{FPGA deployment on Xilinx Zynq Z-7020 (53,200 LUTs, 140 BRAMs).
-All ``Ours'' use 16-bit thermometer with evolved connections.
-The 34-bit sparse configuration has been synthesized with Vivado 2025.2
-(622 LUTs, 276 FFs, 0 BRAMs, 0 DSPs --- Vivado inferred distributed LUTs
-for the sparse tables).}
+\caption{FPGA synthesis results on Xilinx Zynq Z-7020 (53,200 LUTs, 106,400 FFs).
+All designs synthesized with Vivado 2025.2 in out-of-context mode.
+Sparse neuron tables are inferred as distributed LUTs (0 BRAMs, 0 DSPs in all cases).
+Latency computed from binary-search depth and post-synthesis Fmax.}
 \label{tab:fpga}
-\begin{tabular}{llrrrrr}
+\begin{tabular}{llrrrrrrr}
 \toprule
-Dataset & Config & F1 & FPR & Neurons & LUTs & Latency \\
+Dataset & Config & F1 & FPR & Neurons & LUTs (\%) & FFs & Fmax & Latency \\
 \midrule
-\multirow{4}{*}{CICIDS2017}
- & Ours (8b dense)   & 96.70\% & 1.02\% & 97  & ${\sim}$400$^\dagger$  & ${\sim}$10\,ns \\
- & Ours (10b dense)  & 97.59\% & 0.30\% & 385 & ${\sim}$13{,}500$^\dagger$ & ${\sim}$10\,ns \\
- & Ours (12b dense)  & 98.53\% & 0.50\% & 104 & ${\sim}$13{,}500$^\dagger$ & ${\sim}$10\,ns \\
- & Ours (34b sparse) & \textbf{99.59\%} & \textbf{0.12\%} & 11  & \textbf{622}$^{\ddagger}$ & ${\sim}$65\,ns \\
+\multirow{3}{*}{CICIDS2017}
+ & 11n (best F1)  & \textbf{99.59\%} & \textbf{0.12\%} & 11  & 622 (1.2\%)    & 276    & 195\,MHz & 77\,ns \\
+ & 91n (mid)      & 99.54\%          & 0.12\%          & 91  & 2{,}907 (5.5\%) & 1{,}252 & 94\,MHz  & 160\,ns \\
+ & 500n (large)   & 99.23\%          & 0.27\%          & 500 & 11{,}818 (22\%) & 4{,}735 & 59\,MHz  & 237\,ns \\
 \midrule
 \multirow{3}{*}{UNSW-NB15}
- & Ours (8b dense)   & 93.53\% & 0.72\% & 101 & ${\sim}$400$^\dagger$  & ${\sim}$10\,ns \\
- & Ours (10b dense)  & 93.28\% & 0.97\% & 182 & ${\sim}$7{,}000$^\dagger$ & ${\sim}$10\,ns \\
- & Ours (12b dense)  & 93.52\% & 1.04\% & 98  & ${\sim}$13{,}500$^\dagger$ & ${\sim}$10\,ns \\
+ & 92n (small)    & 88.18\%          & 8.87\%          & 92  & 1{,}939 (3.6\%) & 734    & 92\,MHz  & 152\,ns \\
+ & 369n (best F1) & \textbf{90.82\%} & \textbf{4.66\%} & 369 & 7{,}090 (13\%)  & 2{,}585 & 61\,MHz  & 214\,ns \\
+ & 500n (large)   & 86.81\%          & 8.98\%          & 500 & 33{,}086 (62\%) & 12{,}869& 64\,MHz  & 203\,ns \\
 \midrule
-\multicolumn{2}{l}{FWIW (6b Bloom, UNSW)} & 98.5\%$^*$ & 1.57\% & ${\sim}$30 & 269$^{\ddagger}$ & 10.8\,ns \\
+\multicolumn{2}{l}{FWIW~\cite{susskind2023fwiw}} & 98.5\%$^*$ & 1.57\% & ${\sim}$30 & 269 & 538 & 740\,MHz & 10.8\,ns \\
 \bottomrule
-\multicolumn{7}{l}{\small $^\dagger$Estimated. $^{\ddagger}$Vivado synthesis. $^*$Accuracy (not F1); different split protocol.}
+\multicolumn{9}{l}{\small $^*$Accuracy (not F1-macro). FWIW uses different split/preprocessing (90/10, deduplicated, oversampled on UNSW-NB15).}
 \end{tabular}
 \end{table}
 

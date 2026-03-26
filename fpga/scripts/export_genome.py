@@ -163,8 +163,8 @@ def write_fpga_files(output_dir: Path, connections, sparse_neurons, genome_info,
 		"per_neuron_entries": [len(k) for k, v in sparse_neurons],
 		"sparse_bytes_u64_u8": total_entries * 9,
 		"sparse_bytes_packed": total_entries * 6,
-		"dataset": params["ids_dataset"],
-		"split": params["ids_split"],
+		"dataset": params.get("ids_dataset", "unsw-nb15"),
+		"split": params.get("ids_split", "temporal"),
 	}
 	with open(output_dir / "metadata.json", "w") as f:
 		json.dump(meta, f, indent=2)
