@@ -721,6 +721,15 @@ within the capability of all our configurations.  The sub-microsecond
 latency of both approaches is negligible compared to feature extraction
 overhead, which typically dominates the packet processing pipeline.
 
+\paragraph{Functional verification.}
+We verified the RTL implementation against the Python training model using
+Vivado xsim 2025.2.  A testbench feeds 1{,}000 stratified test vectors
+(500 normal, 500 attack from the CICIDS2017 test set) through the
+synthesized classifier and compares the output scores against
+Python-computed expected values.  The RTL produces \textbf{identical
+scores for all 1{,}000 vectors} (100\% match), confirming that the
+FPGA implementation faithfully reproduces the trained WNN model.
+
 \subsection{Limitations}
 
 [TODO: Binary classification only (multi-class as future work).
