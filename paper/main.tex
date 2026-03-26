@@ -694,14 +694,14 @@ Latency computed from binary-search depth and post-synthesis Fmax.}
 Dataset & Split & Config & F1 & FPR & Neurons & LUTs (\%) & FFs & Fmax & Latency \\
 \midrule
 \multirow{3}{*}{CICIDS2017} & \multirow{3}{*}{random}
- & 11n (best F1)  & \textbf{99.59\%} & \textbf{0.12\%} & 11  & 622 (1.2\%)    & 276    & 195\,MHz & 77\,ns \\
- & & 91n (mid)      & 99.54\%          & 0.12\%          & 91  & 2{,}907 (5.5\%) & 1{,}252 & 94\,MHz  & 160\,ns \\
- & & 500n (large)   & 99.23\%          & 0.27\%          & 500 & 11{,}818 (22\%) & 4{,}735 & 59\,MHz  & 237\,ns \\
+ & 11n (best F1)  & \textbf{99.59\%} & \textbf{0.12\%} & 11  & 622 (1.2\%)    & 276    & 195\,MHz & 210\,ns \\
+ & & 91n (mid)      & 99.54\%          & 0.12\%          & 91  & 2{,}907 (5.5\%) & 1{,}252 & 94\,MHz  & 436\,ns \\
+ & & 500n (large)   & 99.23\%          & 0.27\%          & 500 & 11{,}818 (22\%) & 4{,}735 & 59\,MHz  & 644\,ns \\
 \midrule
 \multirow{3}{*}{UNSW-NB15} & \multirow{3}{*}{temporal}
- & 92n (small)    & 88.18\%          & 8.87\%          & 92  & 1{,}939 (3.6\%) & 734    & 92\,MHz  & 152\,ns \\
- & & 369n (best F1) & \textbf{90.82\%} & \textbf{4.66\%} & 369 & 7{,}090 (13\%)  & 2{,}585 & 61\,MHz  & 214\,ns \\
- & & 500n (large)   & 86.81\%          & 8.98\%          & 500 & 33{,}086 (62\%) & 12{,}869& 64\,MHz  & 203\,ns \\
+ & 92n (small)    & 88.18\%          & 8.87\%          & 92  & 1{,}939 (3.6\%) & 734    & 92\,MHz  & 413\,ns \\
+ & & 369n (best F1) & \textbf{90.82\%} & \textbf{4.66\%} & 369 & 7{,}090 (13\%)  & 2{,}585 & 61\,MHz  & 574\,ns \\
+ & & 500n (large)   & 86.81\%          & 8.98\%          & 500 & 33{,}086 (62\%) & 12{,}869& 64\,MHz  & 547\,ns \\
 \midrule
 UNSW-NB15 & random$^*$ & FWIW~\cite{susskind2023fwiw} & 98.5\%$^\dagger$ & 1.57\% & ${\sim}$30 & 269 & 538 & 740\,MHz & 10.8\,ns \\
 \bottomrule
@@ -710,8 +710,9 @@ UNSW-NB15 & random$^*$ & FWIW~\cite{susskind2023fwiw} & 98.5\%$^\dagger$ & 1.57\
 \end{table}
 
 \paragraph{Latency and throughput.}
-Our designs exhibit 77--237\,ns latency, compared to FWIW's 10.8\,ns.
-This difference stems from our binary-search lookup (11--13 sequential cycles)
+Our designs exhibit 210--644\,ns latency, compared to FWIW's 10.8\,ns.
+This difference stems from our three-phase binary-search lookup
+(ADDR$\to$WAIT$\to$COMPARE, 3 cycles per search step, 11--13 steps)
 versus FWIW's single-cycle combinational Bloom filter.  However, with
 pipelining (one new classification per cycle), throughput ranges from
 59\,MS/s (500-neuron) to 195\,MS/s (11-neuron).  For network IDS, the
