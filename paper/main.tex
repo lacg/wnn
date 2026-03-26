@@ -381,9 +381,6 @@ configurations.
 \section{Architecture}
 \label{sec:architecture}
 
-% TODO: Figure — 3×3 input grid, 2 neurons with 3 connections each,
-% showing connectivity maps and memory tables
-
 \subsection{Single-Cluster Binary Discriminator}
 
 Our IDS uses a \emph{single-cluster discriminator}: $N$ quad-weighted RAM
@@ -600,6 +597,41 @@ RF importance ranking.]
 calibration challenge. Platt/beta calibration partially closes this gap.
 Implications for deployment.]
 
+\subsection{Encoding Resolution Analysis}
+
+To determine the optimal thermometer encoding width, we swept from 8 to
+64 bits per feature on CICIDS2017 (random split, 2 runs per configuration)
+and UNSW-NB15 (temporal split, 2 runs per configuration).
+Figure~\ref{fig:therm_sweep} shows the results.
+
+On CICIDS2017, F1-macro increases sharply from 8-bit (99.25\%) to 16-bit
+(99.43\%), then plateaus through 64-bit (99.41\%).  The 16-bit encoding
+also yields the fewest neurons (avg.\ 58 vs.\ 223 at 8-bit) and the
+fastest training (0.9\,h vs.\ 1.5\,h at 8-bit), suggesting that 16
+bits provides sufficient resolution for the GA to find compact, accurate
+genomes.  The remaining 0.4\% gap to Random Forest (99.83\%) persists
+regardless of encoding width, indicating an architectural rather than
+precision-related limitation.
+
+On UNSW-NB15, no clear inflection point emerges: F1 ranges from 82\% to
+90\% across all encoding widths, with 64-bit showing the most consistent
+results (89.56\%).  The high variance (only 2 runs per configuration)
+obscures any trend, and the harder temporal split amplifies seed
+sensitivity.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{figures/thermometer_sweep.pdf}
+\caption{Effect of thermometer encoding resolution on classification
+performance.  (a)~CICIDS2017 F1-macro shows a clear knee at 16 bits,
+with diminishing returns beyond.  (b)~The GA finds the fewest neurons
+at 16 bits, suggesting optimal information density.
+(c)~UNSW-NB15 temporal split shows no clear trend (high variance from
+only 2 runs per configuration).  (d)~CICIDS2017 false positive rate
+is lowest around 16--26 bits.}
+\label{fig:therm_sweep}
+\end{figure}
+
 \subsection{FPGA Deployment}
 
 RAM neurons map naturally to FPGA resources: each neuron's lookup table
@@ -694,23 +726,6 @@ overhead, which typically dominates the packet processing pipeline.
 [TODO: Binary classification only (multi-class as future work).
 Threshold sensitivity requires calibration data.
 Temporal split not available for CIC-IoT-2023.]
-
-% ============================================================================
-\section{Related Work}
-\label{sec:related}
-
-\subsection{WNN for Intrusion Detection}
-
-[TODO: FWIW~\cite{susskind2023fwiw}, Santiago et al., BTHOWeN~\cite{susskind2022bthowen}]
-
-\subsection{ML-Based IDS}
-
-[TODO: Zoghi 2024, Kasongo 2020, survey of RF/XGBoost/DL approaches on
-UNSW-NB15 and CICIDS2017]
-
-\subsection{FPGA-Based IDS}
-
-[TODO: LogicNets, PolyLUT, Pigasus. Hardware acceleration landscape.]
 
 % ============================================================================
 \section{Conclusion}
