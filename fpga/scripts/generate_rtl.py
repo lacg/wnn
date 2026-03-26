@@ -116,10 +116,13 @@ def generate_classifier_impl(output_dir: Path, meta, connections, sparse_neurons
 					 f"bits from features {sorted(set(c // n_bits_therm for c in conn))}")
 		lines.append(f"\tlogic [{bits_per_neuron-1}:0] addr_{n_idx};")
 
-		# Wire each address bit to the corresponding input bit
+		# Wire each address bit to the corresponding input bit.
+		# Python bit index k maps to Verilog input_vec[INPUT_BITS-1-k]
+		# because $readmemh loads hex MSB-first into the highest bit.
 		assignments = []
 		for bit_pos, input_idx in enumerate(conn):
-			assignments.append(f"input_vec[{input_idx}]")
+			verilog_idx = input_bits - 1 - input_idx
+			assignments.append(f"input_vec[{verilog_idx}]")
 
 		# Concatenate: MSB first
 		lines.append(f"\tassign addr_{n_idx} = {{{', '.join(assignments)}}};")
@@ -149,33 +152,59 @@ def generate_classifier_impl(output_dir: Path, meta, connections, sparse_neurons
 		lines.append(f"\t// BRAM init: $readmemh(\"mem/neuron_{n_idx:03d}_values.mem\", neuron_{n_idx}.value_mem);")
 		lines.append("")
 
-	# Accumulation
+	# Accumulation — use latching registers since neurons finish at different cycles
 	acc_bits = ceil(log2(num_neurons * 3 + 1))
-	lines.append(f"\t// --- Weighted accumulation ---")
-	lines.append(f"\tlogic all_valid;")
-	lines.append(f"\tassign all_valid = &neuron_valid;")
+	lines.append(f"\t// --- Neuron completion latching ---")
+	lines.append(f"\t// Neurons finish at different cycles (different entry counts).")
+	lines.append(f"\t// Latch each result when valid; fire output when all latched.")
+	lines.append(f"\tlogic [{num_neurons}-1:0] neuron_done;")
+	lines.append(f"\tlogic [7:0] neuron_latched [{num_neurons}];")
+	lines.append(f"\tlogic all_done;")
+	lines.append(f"\tassign all_done = &neuron_done;")
 	lines.append("")
+	lines.append(f"\talways_ff @(posedge clk or negedge rst_n) begin")
+	lines.append(f"\t\tif (!rst_n) begin")
+	lines.append(f"\t\t\tneuron_done <= '0;")
+	lines.append(f"\t\tend else if (neuron_start) begin")
+	lines.append(f"\t\t\t// Reset latches on new classification")
+	lines.append(f"\t\t\tneuron_done <= '0;")
+	lines.append(f"\t\tend else begin")
+	for n_idx in range(num_neurons):
+		lines.append(f"\t\t\tif (neuron_valid[{n_idx}]) begin")
+		lines.append(f"\t\t\t\tneuron_done[{n_idx}] <= 1'b1;")
+		lines.append(f"\t\t\t\tneuron_latched[{n_idx}] <= neuron_result[{n_idx}];")
+		lines.append(f"\t\t\tend")
+	lines.append(f"\t\tend")
+	lines.append(f"\tend")
+	lines.append("")
+
+	lines.append(f"\t// --- Weighted accumulation ---")
 	lines.append(f"\tlogic [ACC_BITS-1:0] weighted_sum;")
 	lines.append(f"\talways_comb begin")
 	lines.append(f"\t\tweighted_sum = '0;")
 	for n_idx in range(num_neurons):
-		lines.append(f"\t\tweighted_sum = weighted_sum + ACC_BITS'(neuron_result[{n_idx}]);")
+		lines.append(f"\t\tweighted_sum = weighted_sum + ACC_BITS'(neuron_latched[{n_idx}]);")
 	lines.append(f"\tend")
 	lines.append("")
 
 	# Output
-	lines.append(f"\t// --- Output ---")
+	lines.append(f"\t// --- Output (fires once when all neurons done) ---")
+	lines.append(f"\tlogic output_fired;")
 	lines.append(f"\talways_ff @(posedge clk or negedge rst_n) begin")
 	lines.append(f"\t\tif (!rst_n) begin")
 	lines.append(f"\t\t\tclass_out    <= 1'b0;")
 	lines.append(f"\t\t\tscore_out    <= '0;")
 	lines.append(f"\t\t\toutput_valid <= 1'b0;")
+	lines.append(f"\t\t\toutput_fired <= 1'b0;")
 	lines.append(f"\t\tend else begin")
 	lines.append(f"\t\t\toutput_valid <= 1'b0;")
-	lines.append(f"\t\t\tif (all_valid) begin")
+	lines.append(f"\t\t\tif (neuron_start) begin")
+	lines.append(f"\t\t\t\toutput_fired <= 1'b0;")
+	lines.append(f"\t\t\tend else if (all_done && !output_fired) begin")
 	lines.append(f"\t\t\t\tscore_out    <= weighted_sum;")
 	lines.append(f"\t\t\t\tclass_out    <= (weighted_sum > ACC_BITS'(THRESHOLD));")
 	lines.append(f"\t\t\t\toutput_valid <= 1'b1;")
+	lines.append(f"\t\t\t\toutput_fired <= 1'b1;")
 	lines.append(f"\t\t\tend")
 	lines.append(f"\t\tend")
 	lines.append(f"\tend")

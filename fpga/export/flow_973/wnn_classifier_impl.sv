@@ -36,47 +36,47 @@ module wnn_classifier_impl #(
 	// --- Per-neuron address formation (evolved connections) ---
 	// Neuron 0: 3825 entries, bits from features [0, 1, 3, 4, 6, 7, 8, 11, 12, 13, 14, 16, 17, 18, 19]
 	logic [33:0] addr_0;
-	assign addr_0 = {input_vec[236], input_vec[329], input_vec[120], input_vec[151], input_vec[359], input_vec[67], input_vec[264], input_vec[160], input_vec[130], input_vec[229], input_vec[295], input_vec[326], input_vec[292], input_vec[63], input_vec[259], input_vec[138], input_vec[318], input_vec[28], input_vec[108], input_vec[25], input_vec[21], input_vec[308], input_vec[79], input_vec[116], input_vec[257], input_vec[212], input_vec[355], input_vec[204], input_vec[304], input_vec[146], input_vec[1], input_vec[229], input_vec[355], input_vec[116]};
+	assign addr_0 = {input_vec[123], input_vec[30], input_vec[239], input_vec[208], input_vec[0], input_vec[292], input_vec[95], input_vec[199], input_vec[229], input_vec[130], input_vec[64], input_vec[33], input_vec[67], input_vec[296], input_vec[100], input_vec[221], input_vec[41], input_vec[331], input_vec[251], input_vec[334], input_vec[338], input_vec[51], input_vec[280], input_vec[243], input_vec[102], input_vec[147], input_vec[4], input_vec[155], input_vec[55], input_vec[213], input_vec[358], input_vec[130], input_vec[4], input_vec[243]};
 
 	// Neuron 1: 3601 entries, bits from features [0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19]
 	logic [33:0] addr_1;
-	assign addr_1 = {input_vec[148], input_vec[271], input_vec[142], input_vec[255], input_vec[274], input_vec[241], input_vec[171], input_vec[236], input_vec[134], input_vec[92], input_vec[351], input_vec[111], input_vec[17], input_vec[136], input_vec[201], input_vec[213], input_vec[349], input_vec[283], input_vec[26], input_vec[358], input_vec[302], input_vec[339], input_vec[147], input_vec[188], input_vec[28], input_vec[133], input_vec[134], input_vec[14], input_vec[293], input_vec[59], input_vec[356], input_vec[232], input_vec[23], input_vec[88]};
+	assign addr_1 = {input_vec[211], input_vec[88], input_vec[217], input_vec[104], input_vec[85], input_vec[118], input_vec[188], input_vec[123], input_vec[225], input_vec[267], input_vec[8], input_vec[248], input_vec[342], input_vec[223], input_vec[158], input_vec[146], input_vec[10], input_vec[76], input_vec[333], input_vec[1], input_vec[57], input_vec[20], input_vec[212], input_vec[171], input_vec[331], input_vec[226], input_vec[225], input_vec[345], input_vec[66], input_vec[300], input_vec[3], input_vec[127], input_vec[336], input_vec[271]};
 
 	// Neuron 2: 3887 entries, bits from features [1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
 	logic [33:0] addr_2;
-	assign addr_2 = {input_vec[107], input_vec[175], input_vec[329], input_vec[294], input_vec[27], input_vec[170], input_vec[214], input_vec[55], input_vec[18], input_vec[136], input_vec[292], input_vec[267], input_vec[251], input_vec[318], input_vec[331], input_vec[127], input_vec[289], input_vec[45], input_vec[349], input_vec[206], input_vec[106], input_vec[278], input_vec[194], input_vec[357], input_vec[311], input_vec[302], input_vec[352], input_vec[152], input_vec[73], input_vec[18], input_vec[247], input_vec[216], input_vec[127], input_vec[309]};
+	assign addr_2 = {input_vec[252], input_vec[184], input_vec[30], input_vec[65], input_vec[332], input_vec[189], input_vec[145], input_vec[304], input_vec[341], input_vec[223], input_vec[67], input_vec[92], input_vec[108], input_vec[41], input_vec[28], input_vec[232], input_vec[70], input_vec[314], input_vec[10], input_vec[153], input_vec[253], input_vec[81], input_vec[165], input_vec[2], input_vec[48], input_vec[57], input_vec[7], input_vec[207], input_vec[286], input_vec[341], input_vec[112], input_vec[143], input_vec[232], input_vec[50]};
 
 	// Neuron 3: 2018 entries, bits from features [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18]
 	logic [33:0] addr_3;
-	assign addr_3 = {input_vec[137], input_vec[280], input_vec[105], input_vec[56], input_vec[92], input_vec[219], input_vec[82], input_vec[200], input_vec[159], input_vec[265], input_vec[110], input_vec[23], input_vec[155], input_vec[149], input_vec[119], input_vec[86], input_vec[224], input_vec[235], input_vec[170], input_vec[121], input_vec[281], input_vec[308], input_vec[174], input_vec[185], input_vec[242], input_vec[334], input_vec[313], input_vec[335], input_vec[159], input_vec[37], input_vec[271], input_vec[225], input_vec[233], input_vec[29]};
+	assign addr_3 = {input_vec[222], input_vec[79], input_vec[254], input_vec[303], input_vec[267], input_vec[140], input_vec[277], input_vec[159], input_vec[200], input_vec[94], input_vec[249], input_vec[336], input_vec[204], input_vec[210], input_vec[240], input_vec[273], input_vec[135], input_vec[124], input_vec[189], input_vec[238], input_vec[78], input_vec[51], input_vec[185], input_vec[174], input_vec[117], input_vec[25], input_vec[46], input_vec[24], input_vec[200], input_vec[322], input_vec[88], input_vec[134], input_vec[126], input_vec[330]};
 
 	// Neuron 4: 5003 entries, bits from features [0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 17, 18, 19]
 	logic [33:0] addr_4;
-	assign addr_4 = {input_vec[349], input_vec[52], input_vec[173], input_vec[70], input_vec[191], input_vec[265], input_vec[57], input_vec[210], input_vec[67], input_vec[306], input_vec[197], input_vec[245], input_vec[129], input_vec[94], input_vec[178], input_vec[26], input_vec[90], input_vec[121], input_vec[25], input_vec[208], input_vec[45], input_vec[214], input_vec[159], input_vec[31], input_vec[267], input_vec[43], input_vec[275], input_vec[331], input_vec[337], input_vec[254], input_vec[20], input_vec[13], input_vec[337], input_vec[239]};
+	assign addr_4 = {input_vec[10], input_vec[307], input_vec[186], input_vec[289], input_vec[168], input_vec[94], input_vec[302], input_vec[149], input_vec[292], input_vec[53], input_vec[162], input_vec[114], input_vec[230], input_vec[265], input_vec[181], input_vec[333], input_vec[269], input_vec[238], input_vec[334], input_vec[151], input_vec[314], input_vec[145], input_vec[200], input_vec[328], input_vec[92], input_vec[316], input_vec[84], input_vec[28], input_vec[22], input_vec[105], input_vec[339], input_vec[346], input_vec[22], input_vec[120]};
 
 	// Neuron 5: 5003 entries, bits from features [0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 17, 18, 19]
 	logic [33:0] addr_5;
-	assign addr_5 = {input_vec[349], input_vec[52], input_vec[173], input_vec[70], input_vec[191], input_vec[265], input_vec[57], input_vec[210], input_vec[67], input_vec[306], input_vec[197], input_vec[245], input_vec[129], input_vec[94], input_vec[178], input_vec[26], input_vec[90], input_vec[121], input_vec[25], input_vec[208], input_vec[45], input_vec[214], input_vec[159], input_vec[31], input_vec[267], input_vec[43], input_vec[275], input_vec[331], input_vec[337], input_vec[254], input_vec[20], input_vec[13], input_vec[337], input_vec[239]};
+	assign addr_5 = {input_vec[10], input_vec[307], input_vec[186], input_vec[289], input_vec[168], input_vec[94], input_vec[302], input_vec[149], input_vec[292], input_vec[53], input_vec[162], input_vec[114], input_vec[230], input_vec[265], input_vec[181], input_vec[333], input_vec[269], input_vec[238], input_vec[334], input_vec[151], input_vec[314], input_vec[145], input_vec[200], input_vec[328], input_vec[92], input_vec[316], input_vec[84], input_vec[28], input_vec[22], input_vec[105], input_vec[339], input_vec[346], input_vec[22], input_vec[120]};
 
 	// Neuron 6: 3887 entries, bits from features [1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
 	logic [33:0] addr_6;
-	assign addr_6 = {input_vec[107], input_vec[175], input_vec[329], input_vec[294], input_vec[27], input_vec[170], input_vec[214], input_vec[55], input_vec[18], input_vec[136], input_vec[292], input_vec[267], input_vec[251], input_vec[318], input_vec[331], input_vec[127], input_vec[289], input_vec[45], input_vec[349], input_vec[206], input_vec[106], input_vec[278], input_vec[194], input_vec[357], input_vec[311], input_vec[302], input_vec[352], input_vec[152], input_vec[73], input_vec[18], input_vec[247], input_vec[216], input_vec[127], input_vec[309]};
+	assign addr_6 = {input_vec[252], input_vec[184], input_vec[30], input_vec[65], input_vec[332], input_vec[189], input_vec[145], input_vec[304], input_vec[341], input_vec[223], input_vec[67], input_vec[92], input_vec[108], input_vec[41], input_vec[28], input_vec[232], input_vec[70], input_vec[314], input_vec[10], input_vec[153], input_vec[253], input_vec[81], input_vec[165], input_vec[2], input_vec[48], input_vec[57], input_vec[7], input_vec[207], input_vec[286], input_vec[341], input_vec[112], input_vec[143], input_vec[232], input_vec[50]};
 
 	// Neuron 7: 3992 entries, bits from features [0, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19]
 	logic [33:0] addr_7;
-	assign addr_7 = {input_vec[105], input_vec[182], input_vec[290], input_vec[350], input_vec[159], input_vec[14], input_vec[38], input_vec[313], input_vec[254], input_vec[43], input_vec[310], input_vec[352], input_vec[213], input_vec[25], input_vec[213], input_vec[2], input_vec[166], input_vec[80], input_vec[187], input_vec[182], input_vec[278], input_vec[221], input_vec[64], input_vec[197], input_vec[291], input_vec[29], input_vec[203], input_vec[19], input_vec[35], input_vec[36], input_vec[266], input_vec[346], input_vec[326], input_vec[292]};
+	assign addr_7 = {input_vec[254], input_vec[177], input_vec[69], input_vec[9], input_vec[200], input_vec[345], input_vec[321], input_vec[46], input_vec[105], input_vec[316], input_vec[49], input_vec[7], input_vec[146], input_vec[334], input_vec[146], input_vec[357], input_vec[193], input_vec[279], input_vec[172], input_vec[177], input_vec[81], input_vec[138], input_vec[295], input_vec[162], input_vec[68], input_vec[330], input_vec[156], input_vec[340], input_vec[324], input_vec[323], input_vec[93], input_vec[13], input_vec[33], input_vec[67]};
 
 	// Neuron 8: 3144 entries, bits from features [0, 1, 2, 3, 4, 5, 6, 7, 9, 11, 12, 13, 15, 17, 18, 19]
 	logic [33:0] addr_8;
-	assign addr_8 = {input_vec[344], input_vec[227], input_vec[5], input_vec[217], input_vec[30], input_vec[53], input_vec[317], input_vec[129], input_vec[20], input_vec[30], input_vec[24], input_vec[275], input_vec[172], input_vec[275], input_vec[75], input_vec[314], input_vec[14], input_vec[130], input_vec[94], input_vec[205], input_vec[215], input_vec[332], input_vec[142], input_vec[83], input_vec[347], input_vec[66], input_vec[104], input_vec[232], input_vec[172], input_vec[123], input_vec[26], input_vec[240], input_vec[99], input_vec[316]};
+	assign addr_8 = {input_vec[15], input_vec[132], input_vec[354], input_vec[142], input_vec[329], input_vec[306], input_vec[42], input_vec[230], input_vec[339], input_vec[329], input_vec[335], input_vec[84], input_vec[187], input_vec[84], input_vec[284], input_vec[45], input_vec[345], input_vec[229], input_vec[265], input_vec[154], input_vec[144], input_vec[27], input_vec[217], input_vec[276], input_vec[12], input_vec[293], input_vec[255], input_vec[127], input_vec[187], input_vec[236], input_vec[333], input_vec[119], input_vec[260], input_vec[43]};
 
 	// Neuron 9: 3383 entries, bits from features [0, 1, 2, 3, 4, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
 	logic [33:0] addr_9;
-	assign addr_9 = {input_vec[257], input_vec[74], input_vec[335], input_vec[60], input_vec[142], input_vec[70], input_vec[10], input_vec[285], input_vec[252], input_vec[272], input_vec[317], input_vec[4], input_vec[340], input_vec[308], input_vec[301], input_vec[75], input_vec[351], input_vec[212], input_vec[246], input_vec[135], input_vec[21], input_vec[143], input_vec[66], input_vec[26], input_vec[289], input_vec[79], input_vec[149], input_vec[22], input_vec[224], input_vec[48], input_vec[52], input_vec[270], input_vec[191], input_vec[63]};
+	assign addr_9 = {input_vec[102], input_vec[285], input_vec[24], input_vec[299], input_vec[217], input_vec[289], input_vec[349], input_vec[74], input_vec[107], input_vec[87], input_vec[42], input_vec[355], input_vec[19], input_vec[51], input_vec[58], input_vec[284], input_vec[8], input_vec[147], input_vec[113], input_vec[224], input_vec[338], input_vec[216], input_vec[293], input_vec[333], input_vec[70], input_vec[280], input_vec[210], input_vec[337], input_vec[135], input_vec[311], input_vec[307], input_vec[89], input_vec[168], input_vec[296]};
 
 	// Neuron 10: 3472 entries, bits from features [0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 13, 15, 16, 17, 18, 19]
 	logic [33:0] addr_10;
-	assign addr_10 = {input_vec[339], input_vec[12], input_vec[71], input_vec[319], input_vec[144], input_vec[332], input_vec[60], input_vec[213], input_vec[176], input_vec[66], input_vec[354], input_vec[26], input_vec[11], input_vec[62], input_vec[78], input_vec[180], input_vec[290], input_vec[76], input_vec[213], input_vec[183], input_vec[246], input_vec[278], input_vec[22], input_vec[167], input_vec[101], input_vec[170], input_vec[114], input_vec[210], input_vec[69], input_vec[78], input_vec[172], input_vec[350], input_vec[53], input_vec[166]};
+	assign addr_10 = {input_vec[20], input_vec[347], input_vec[288], input_vec[40], input_vec[215], input_vec[27], input_vec[299], input_vec[146], input_vec[183], input_vec[293], input_vec[5], input_vec[333], input_vec[348], input_vec[297], input_vec[281], input_vec[179], input_vec[69], input_vec[283], input_vec[146], input_vec[176], input_vec[113], input_vec[81], input_vec[337], input_vec[192], input_vec[258], input_vec[189], input_vec[245], input_vec[149], input_vec[290], input_vec[281], input_vec[187], input_vec[9], input_vec[306], input_vec[193]};
 
 	// --- Neuron instances ---
 	wnn_neuron #(
@@ -277,38 +277,102 @@ module wnn_classifier_impl #(
 	// BRAM init: $readmemh("mem/neuron_010_keys.mem", neuron_10.key_mem);
 	// BRAM init: $readmemh("mem/neuron_010_values.mem", neuron_10.value_mem);
 
-	// --- Weighted accumulation ---
-	logic all_valid;
-	assign all_valid = &neuron_valid;
+	// --- Neuron completion latching ---
+	// Neurons finish at different cycles (different entry counts).
+	// Latch each result when valid; fire output when all latched.
+	logic [11-1:0] neuron_done;
+	logic [7:0] neuron_latched [11];
+	logic all_done;
+	assign all_done = &neuron_done;
 
+	always_ff @(posedge clk or negedge rst_n) begin
+		if (!rst_n) begin
+			neuron_done <= '0;
+		end else if (neuron_start) begin
+			// Reset latches on new classification
+			neuron_done <= '0;
+		end else begin
+			if (neuron_valid[0]) begin
+				neuron_done[0] <= 1'b1;
+				neuron_latched[0] <= neuron_result[0];
+			end
+			if (neuron_valid[1]) begin
+				neuron_done[1] <= 1'b1;
+				neuron_latched[1] <= neuron_result[1];
+			end
+			if (neuron_valid[2]) begin
+				neuron_done[2] <= 1'b1;
+				neuron_latched[2] <= neuron_result[2];
+			end
+			if (neuron_valid[3]) begin
+				neuron_done[3] <= 1'b1;
+				neuron_latched[3] <= neuron_result[3];
+			end
+			if (neuron_valid[4]) begin
+				neuron_done[4] <= 1'b1;
+				neuron_latched[4] <= neuron_result[4];
+			end
+			if (neuron_valid[5]) begin
+				neuron_done[5] <= 1'b1;
+				neuron_latched[5] <= neuron_result[5];
+			end
+			if (neuron_valid[6]) begin
+				neuron_done[6] <= 1'b1;
+				neuron_latched[6] <= neuron_result[6];
+			end
+			if (neuron_valid[7]) begin
+				neuron_done[7] <= 1'b1;
+				neuron_latched[7] <= neuron_result[7];
+			end
+			if (neuron_valid[8]) begin
+				neuron_done[8] <= 1'b1;
+				neuron_latched[8] <= neuron_result[8];
+			end
+			if (neuron_valid[9]) begin
+				neuron_done[9] <= 1'b1;
+				neuron_latched[9] <= neuron_result[9];
+			end
+			if (neuron_valid[10]) begin
+				neuron_done[10] <= 1'b1;
+				neuron_latched[10] <= neuron_result[10];
+			end
+		end
+	end
+
+	// --- Weighted accumulation ---
 	logic [ACC_BITS-1:0] weighted_sum;
 	always_comb begin
 		weighted_sum = '0;
-		weighted_sum = weighted_sum + ACC_BITS'(neuron_result[0]);
-		weighted_sum = weighted_sum + ACC_BITS'(neuron_result[1]);
-		weighted_sum = weighted_sum + ACC_BITS'(neuron_result[2]);
-		weighted_sum = weighted_sum + ACC_BITS'(neuron_result[3]);
-		weighted_sum = weighted_sum + ACC_BITS'(neuron_result[4]);
-		weighted_sum = weighted_sum + ACC_BITS'(neuron_result[5]);
-		weighted_sum = weighted_sum + ACC_BITS'(neuron_result[6]);
-		weighted_sum = weighted_sum + ACC_BITS'(neuron_result[7]);
-		weighted_sum = weighted_sum + ACC_BITS'(neuron_result[8]);
-		weighted_sum = weighted_sum + ACC_BITS'(neuron_result[9]);
-		weighted_sum = weighted_sum + ACC_BITS'(neuron_result[10]);
+		weighted_sum = weighted_sum + ACC_BITS'(neuron_latched[0]);
+		weighted_sum = weighted_sum + ACC_BITS'(neuron_latched[1]);
+		weighted_sum = weighted_sum + ACC_BITS'(neuron_latched[2]);
+		weighted_sum = weighted_sum + ACC_BITS'(neuron_latched[3]);
+		weighted_sum = weighted_sum + ACC_BITS'(neuron_latched[4]);
+		weighted_sum = weighted_sum + ACC_BITS'(neuron_latched[5]);
+		weighted_sum = weighted_sum + ACC_BITS'(neuron_latched[6]);
+		weighted_sum = weighted_sum + ACC_BITS'(neuron_latched[7]);
+		weighted_sum = weighted_sum + ACC_BITS'(neuron_latched[8]);
+		weighted_sum = weighted_sum + ACC_BITS'(neuron_latched[9]);
+		weighted_sum = weighted_sum + ACC_BITS'(neuron_latched[10]);
 	end
 
-	// --- Output ---
+	// --- Output (fires once when all neurons done) ---
+	logic output_fired;
 	always_ff @(posedge clk or negedge rst_n) begin
 		if (!rst_n) begin
 			class_out    <= 1'b0;
 			score_out    <= '0;
 			output_valid <= 1'b0;
+			output_fired <= 1'b0;
 		end else begin
 			output_valid <= 1'b0;
-			if (all_valid) begin
+			if (neuron_start) begin
+				output_fired <= 1'b0;
+			end else if (all_done && !output_fired) begin
 				score_out    <= weighted_sum;
 				class_out    <= (weighted_sum > ACC_BITS'(THRESHOLD));
 				output_valid <= 1'b1;
+				output_fired <= 1'b1;
 			end
 		end
 	end
