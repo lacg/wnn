@@ -1,7 +1,7 @@
 # IDS Experiment Results
 
-Last updated: 2026-03-22
-Source: `validation_summaries` table, `best_fitness` genome from each phase per flow.
+Last updated: 2026-03-26
+Source: `validation_summaries` table, per-flow evaluation.
 Statistical method: 5% trimmed mean (112 runs, trim 6 each side = 100 samples).
 Best genomes selected from all 112 runs.
 
@@ -124,18 +124,100 @@ Our model size is comparable to RF, not smaller. The 3KB architecture specificat
 - Oracle FPR std dev: ±2.64% (architecture itself is consistent)
 - Temporal vs random: WNN wins on temporal (robust to distribution shift), RF wins on random (exploits full precision)
 
-## CICIDS2017 Random Split (in progress)
+## CICIDS2017 Random Split (16-bit thermometer, in progress)
 
-Status: 112 flows total, running (11 completed so far)
-Config: 2-phase, pop=50, top20 features at 8b, max_bits=34, kf5x5 fitness
+Status: 29 of 112 flows completed (as of 2026-03-26)
+Config: 2-phase (grid search + GA neurons), pop=50, top20 features at 16b, max_bits=34, kf5x5 fitness
 
-### Preliminary Results (11 flows)
+### Grid Search — Best F1 Genome (29 flows)
 
-| Threshold | F1 mean ±std | FPR mean | Acc mean |
+Neurons: 359 ±116 | Bits: 32, 34
+
+| Threshold | F1 mean ±std | FPR mean ±std | Acc mean ±std |
 |---|---|---|---|
-| val_cal | 99.26% ±0.07% | 0.30% | 99.53% |
-| train_cal | 99.21% ±0.15% | 0.31% | 99.50% |
-| fixed_05 | 99.05% ±0.27% | 0.49% | 99.40% |
+| val_cal | 99.34% ±0.10% | 0.212% ±0.063% | 99.58% ±0.06% |
+| train_cal | 99.35% ±0.06% | 0.207% ±0.050% | 99.59% ±0.04% |
+| test_cal | 99.22% ±0.21% | 0.217% ±0.082% | 99.51% ±0.13% |
+| fixed_05 | 99.24% ±0.18% | 0.342% ±0.078% | 99.52% ±0.11% |
+| platt | 99.21% ±0.18% | 0.329% ±0.155% | 99.50% ±0.11% |
+| beta | 99.26% ±0.16% | 0.298% ±0.104% | 99.53% ±0.10% |
+| empirical | 98.22% ±0.82% | 1.318% ±0.726% | 98.85% ±0.55% |
+| emp_cumul | 99.18% ±0.24% | 0.303% ±0.180% | 99.48% ±0.15% |
+
+### Grid Search — Best FPR Genome (29 flows)
+
+Neurons: 348 ±130 | Bits: 32, 34
+
+| Threshold | F1 mean ±std | FPR mean ±std | Acc mean ±std |
+|---|---|---|---|
+| val_cal | 99.31% ±0.10% | 0.237% ±0.059% | 99.57% ±0.06% |
+| train_cal | 99.30% ±0.13% | 0.202% ±0.068% | 99.56% ±0.08% |
+| test_cal | 99.15% ±0.25% | 0.242% ±0.126% | 99.46% ±0.16% |
+| fixed_05 | 99.23% ±0.13% | 0.334% ±0.081% | 99.51% ±0.08% |
+| platt | 99.21% ±0.21% | 0.320% ±0.088% | 99.50% ±0.13% |
+| beta | 99.20% ±0.19% | 0.260% ±0.088% | 99.50% ±0.12% |
+| empirical | 98.23% ±0.75% | 1.292% ±0.639% | 98.85% ±0.50% |
+| emp_cumul | 99.15% ±0.26% | 0.234% ±0.110% | 99.47% ±0.16% |
+
+### Grid Search — Best Fitness Genome (29 flows)
+
+Neurons: 362 ±113 | Bits: 32, 34
+
+| Threshold | F1 mean ±std | FPR mean ±std | Acc mean ±std |
+|---|---|---|---|
+| val_cal | 99.34% ±0.11% | 0.204% ±0.063% | 99.59% ±0.07% |
+| train_cal | 99.34% ±0.08% | 0.213% ±0.045% | 99.58% ±0.05% |
+| test_cal | 99.24% ±0.16% | 0.229% ±0.085% | 99.52% ±0.10% |
+| fixed_05 | 99.24% ±0.18% | 0.339% ±0.077% | 99.52% ±0.11% |
+| platt | 99.21% ±0.17% | 0.333% ±0.144% | 99.50% ±0.11% |
+| beta | 99.26% ±0.12% | 0.288% ±0.102% | 99.53% ±0.07% |
+| empirical | 98.21% ±0.81% | 1.320% ±0.716% | 98.84% ±0.54% |
+| emp_cumul | 99.18% ±0.24% | 0.294% ±0.178% | 99.48% ±0.15% |
+
+### GA Neurons — Best F1 Genome (29 flows)
+
+Neurons: 218 ±159 | Bits: 32, 34, 32-34
+
+| Threshold | F1 mean ±std | FPR mean ±std | Acc mean ±std |
+|---|---|---|---|
+| val_cal | 99.40% ±0.06% | 0.192% ±0.056% | 99.62% ±0.04% |
+| train_cal | 99.36% ±0.12% | 0.208% ±0.110% | 99.60% ±0.08% |
+| test_cal | 99.31% ±0.12% | 0.239% ±0.062% | 99.56% ±0.07% |
+| fixed_05 | 99.24% ±0.11% | 0.395% ±0.107% | 99.52% ±0.07% |
+| platt | 99.28% ±0.14% | 0.286% ±0.087% | 99.55% ±0.09% |
+| beta | 99.32% ±0.07% | 0.270% ±0.068% | 99.57% ±0.05% |
+| empirical | 98.61% ±0.72% | 0.983% ±0.638% | 99.10% ±0.48% |
+| emp_cumul | 99.33% ±0.08% | 0.233% ±0.068% | 99.58% ±0.05% |
+
+### GA Neurons — Best FPR Genome (29 flows)
+
+Neurons: 252 ±181 | Bits: 32, 34, 32-34
+
+| Threshold | F1 mean ±std | FPR mean ±std | Acc mean ±std |
+|---|---|---|---|
+| val_cal | 99.24% ±0.25% | 0.260% ±0.145% | 99.52% ±0.16% |
+| train_cal | 99.32% ±0.15% | 0.237% ±0.108% | 99.57% ±0.09% |
+| test_cal | 99.17% ±0.32% | 0.261% ±0.143% | 99.48% ±0.20% |
+| fixed_05 | 99.16% ±0.26% | 0.423% ±0.162% | 99.47% ±0.16% |
+| platt | 99.24% ±0.28% | 0.341% ±0.223% | 99.52% ±0.18% |
+| beta | 99.19% ±0.29% | 0.263% ±0.089% | 99.49% ±0.18% |
+| empirical | 98.45% ±0.60% | 1.075% ±0.561% | 99.00% ±0.40% |
+| emp_cumul | 99.12% ±0.50% | 0.250% ±0.178% | 99.45% ±0.31% |
+
+### GA Neurons — Best Fitness Genome (29 flows)
+
+Neurons: 228 ±167 | Bits: 32, 34, 32-34
+
+| Threshold | F1 mean ±std | FPR mean ±std | Acc mean ±std |
+|---|---|---|---|
+| val_cal | 99.40% ±0.06% | 0.193% ±0.056% | 99.62% ±0.04% |
+| train_cal | 99.36% ±0.12% | 0.208% ±0.110% | 99.60% ±0.08% |
+| test_cal | 99.31% ±0.12% | 0.239% ±0.061% | 99.57% ±0.07% |
+| fixed_05 | 99.24% ±0.12% | 0.394% ±0.108% | 99.52% ±0.08% |
+| platt | 99.28% ±0.14% | 0.288% ±0.086% | 99.55% ±0.09% |
+| beta | 99.30% ±0.14% | 0.264% ±0.072% | 99.56% ±0.08% |
+| empirical | 98.57% ±0.73% | 1.020% ±0.649% | 99.08% ±0.49% |
+| emp_cumul | 99.32% ±0.09% | 0.230% ±0.068% | 99.57% ±0.06% |
 
 ### CICIDS2017 Baseline Comparison (same data, same random split)
 
@@ -153,12 +235,13 @@ RF beats us by 0.57% F1 on the random split (same pattern as UNSW-NB15 random).
 |---|---|---|---|---|
 | UNSW-NB15 | **temporal** | **88.19%** | 86.63% | **WNN** |
 | UNSW-NB15 | random | 93.68% | 95.38% | RF |
-| CICIDS2017 | random | 99.26% | 99.83% | RF |
+| CICIDS2017 (8b) | random | 99.26% | 99.83% | RF |
+| CICIDS2017 (16b) | random | 99.40% | 99.83% | RF (gap narrowed from 0.57% to 0.43%) |
 
 WNN wins on temporal splits (robust to distribution shift due to thermometer encoding).
 RF wins on random splits (exploits full numeric precision when distributions match).
-Hypothesis: increasing thermometer encoding from 8 to 16 bits may close this gap
-by providing finer-grained input resolution. To be tested.
+16-bit thermometer narrows the gap from 0.57% to 0.43% but does not close it.
+Remaining gap is architectural (RAM neuron lookup vs tree splits), not encoding precision.
 
 ## CIC-IoT-2023 Random Split (pending)
 

@@ -941,6 +941,13 @@ When editing Python files, double-check indentation matches surrounding code (ta
 ### Rule 5: Show Real Data
 When asked about data or results, show ACTUAL values from the database — never compute or estimate. Provide combined metrics, not per-stage breakdowns, unless explicitly asked.
 
+### Rule 7: Results Breakdown Format
+When asked for "update results" or "how are the runs going", show the **full breakdown**:
+- **6 tables**: Grid Search × [best_f1, best_fpr, best_fitness] + GA Neurons × [best_f1, best_fpr, best_fitness]
+- **Each table broken by all 8 threshold modes**: val_cal, train_cal, test_cal, fixed_05, platt, beta, empirical, empirical_cumulative
+- **Columns**: F1 mean ±std, FPR mean ±std, Acc mean ±std, Neurons mean ±std, Bits
+- Store results in `docs/ids_results.md` following the existing format
+
 ### Rule 6: Full-Stack Tracing
 This project spans Rust (accelerator), Python (strategies/worker), and Svelte (dashboard). When implementing features, trace the full stack — don't leave gaps in parameter forwarding.
 
