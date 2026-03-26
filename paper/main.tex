@@ -452,13 +452,11 @@ We implement a Rust accelerator with Apple Metal GPU support that
 parallelizes both training (writing target labels to neuron memories)
 and evaluation (computing scores across all test examples).
 
-The accelerator computes neuron addresses via GPU kernel dispatch
-($N_{\text{neurons}} \times N_{\text{examples}}$ parallel threads),
-achieving throughput of $\sim$100M address computations per second on
-an M4 Max GPU (40 cores). This makes the full optimization pipeline
-practical: a complete 2-phase run (grid search + GA neurons)
-completes in 5 minutes on average (range 3--11 minutes) per seed on
-UNSW-NB15, enabling 100+ statistically independent runs.
+The accelerator computes neuron addresses via GPU kernel dispatch,
+achieving ${\sim}$100M address computations per second on an
+M4~Max GPU\@.  A complete two-phase run (grid search + GA~neurons)
+completes in 5~minutes on average per seed on UNSW-NB15, enabling
+100+ statistically independent runs.
 
 % ============================================================================
 \section{Evaluation Methodology}
@@ -480,9 +478,8 @@ for CICIDS2017 and CIC-IoT-2023:
 \item \textbf{Temporal split (UNSW-NB15):} The official 175K/82K
   split with temporal separation between training and testing periods.
 \item \textbf{Random splits (all datasets):} Stratified random splits,
-  enabling comparison with prior work. UNSW-NB15 uses a deduplicated
-  90/10 split (1.4M/158K); CICIDS2017 uses 80/20 (2.3M/566K);
-  CIC-IoT-2023 uses 80/20 (1.1M/268K).
+  enabling comparison with prior work.
+  CICIDS2017 uses 80/20 (2.3M/566K); CIC-IoT-2023 uses 80/20.
 \end{itemize}
 
 \subsection{Eight-Mode Threshold Calibration}
@@ -502,12 +499,10 @@ sensitivity:
   labeled calibration data from the deployment environment).
 \item \textbf{Fixed 0.5:} No calibration; the midpoint threshold
   (distribution-agnostic baseline).
-\item \textbf{Platt scaling~\cite{platt1999probabilistic}:} Logistic
-  regression on held-out scores,
-  learning $P(\text{attack}) = \sigma(a \cdot s + b)$.
-\item \textbf{Beta calibration~\cite{kull2017beta}:} Three-parameter
-  logit model on held-out scores, more flexible than Platt for
-  asymmetric distributions.
+\item \textbf{Platt scaling}~\cite{platt1999probabilistic}: Logistic
+  regression on held-out scores, $P(\text{attack})\!=\!\sigma(as\!+\!b)$.
+\item \textbf{Beta calibration}~\cite{kull2017beta}: Three-parameter
+  logit model, more flexible than Platt for asymmetric distributions.
 \item \textbf{Empirical:} Histogram-based threshold from held-out
   score distribution.
 \item \textbf{Empirical cumulative:} CDF-based threshold selection.
@@ -858,24 +853,25 @@ All designs synthesized with Vivado 2025.2 in out-of-context mode.
 Sparse neuron tables are inferred as distributed LUTs (0 BRAMs, 0 DSPs in all cases).
 Latency computed from binary-search depth and post-synthesis Fmax.}
 \label{tab:fpga}
-\begin{tabular}{lllrrrrrrr}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llrrrrrr}
 \toprule
-Dataset & Split & Config & F1 & FPR & Neurons & LUTs (\%) & FFs & Fmax & Latency \\
+Dataset (split) & Config & F1 & FPR & $N$ & LUTs (\%) & Fmax & Latency \\
 \midrule
-\multirow{3}{*}{CICIDS2017} & \multirow{3}{*}{random}
- & 11n (best F1)  & \textbf{99.59\%} & \textbf{0.12\%} & 11  & 622 (1.2\%)    & 276    & 195\,MHz & 210\,ns \\
- & & 91n (mid)      & 99.54\%          & 0.12\%          & 91  & 2{,}907 (5.5\%) & 1{,}252 & 94\,MHz  & 436\,ns \\
- & & 500n (large)   & 99.23\%          & 0.27\%          & 500 & 11{,}818 (22\%) & 4{,}735 & 59\,MHz  & 644\,ns \\
+\multirow{3}{*}{\shortstack[l]{CICIDS2017\\(random)}}
+ & 11n (best F1)  & \textbf{99.59\%} & \textbf{0.12\%} & 11  & 622 (1.2\%)     & 195\,MHz & 210\,ns \\
+ & 91n (mid)      & 99.54\%          & 0.12\%          & 91  & 2{,}907 (5.5\%)  & 94\,MHz  & 436\,ns \\
+ & 500n (large)   & 99.23\%          & 0.27\%          & 500 & 11{,}818 (22\%)  & 59\,MHz  & 644\,ns \\
 \midrule
-\multirow{3}{*}{UNSW-NB15} & \multirow{3}{*}{temporal}
- & 92n (small)    & 88.18\%          & 8.87\%          & 92  & 1{,}939 (3.6\%) & 734    & 92\,MHz  & 413\,ns \\
- & & 369n (best F1) & \textbf{90.82\%} & \textbf{4.66\%} & 369 & 7{,}090 (13\%)  & 2{,}585 & 61\,MHz  & 574\,ns \\
- & & 500n (large)   & 86.81\%          & 8.98\%          & 500 & 33{,}086 (62\%) & 12{,}869& 64\,MHz  & 547\,ns \\
+\multirow{3}{*}{\shortstack[l]{UNSW-NB15\\(temporal)}}
+ & 92n (small)    & 88.18\%          & 8.87\%          & 92  & 1{,}939 (3.6\%)  & 92\,MHz  & 413\,ns \\
+ & 369n (best F1) & \textbf{90.82\%} & \textbf{4.66\%} & 369 & 7{,}090 (13\%)   & 61\,MHz  & 574\,ns \\
+ & 500n (large)   & 86.81\%          & 8.98\%          & 500 & 33{,}086 (62\%)  & 64\,MHz  & 547\,ns \\
 \midrule
-UNSW-NB15 & random$^*$ & FWIW~\cite{susskind2023fwiw} & 98.5\%$^\dagger$ & 1.57\% & ${\sim}$30 & 269 & 538 & 740\,MHz & 10.8\,ns \\
+\shortstack[l]{UNSW-NB15\\(random$^*$)} & FWIW~\cite{susskind2023fwiw} & 98.5\%$^\dagger$ & 1.57\% & ${\sim}$30 & 269 & 740\,MHz & 10.8\,ns \\
 \bottomrule
-\multicolumn{10}{l}{\small $^\dagger$Accuracy (not F1-macro). $^*$90/10 split, deduplicated, oversampled; not directly comparable to our temporal split.}
-\end{tabular}
+\multicolumn{8}{l}{\small $^\dagger$Accuracy (not F1). $^*$90/10, deduplicated, oversampled. $N$\,=\,neurons. 0 BRAMs, 0 DSPs for all designs.}
+\end{tabular}}
 \end{table}
 
 \paragraph{Latency and throughput.}
