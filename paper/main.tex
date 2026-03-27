@@ -41,13 +41,11 @@ attractive for edge-deployed intrusion detection systems. However, their
 classification performance depends on \emph{connectivity},
 which input bits each neuron observes, a problem traditionally solved by random
 initialization. We present an evolutionary optimization framework that
-jointly optimizes neuron count, address width, and connectivity through
-genetic algorithm, with connectivity optimization
-effectively performing automated feature selection intrinsic to the
-architecture. The network architecture is specified in a few kilobytes
-(neuron connections), while the trained memory occupies tens of megabytes
-(sparse lookup tables), comparable to traditional ML models but with
-$O(1)$ inference per neuron. We evaluate on three standard IDS benchmarks
+optimizes neuron count through grid search and genetic algorithm, with
+each neuron's random connectivity effectively performing feature selection
+intrinsic to the architecture. The sparse trained memory (362\,KB for our
+best genome) fits entirely within the LUT fabric of a \$100 Zynq~Z-7020
+FPGA, enabling $O(1)$ lookup-based inference per neuron. We evaluate on three standard IDS benchmarks
 % REMINDER: Change "three" to "two" and remove CIC-IoT-2023 if we don't have results in time
 (UNSW-NB15, CICIDS2017, CIC-IoT-2023) using both temporal and random
 splits, with an eight-mode threshold calibration protocol that exposes
