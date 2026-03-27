@@ -1,6 +1,6 @@
 # IDS Experiment Results
 
-Last updated: 2026-03-26
+Last updated: 2026-03-27
 Source: `validation_summaries` table, per-flow evaluation.
 Statistical method: 5% trimmed mean (112 runs, trim 6 each side = 100 samples).
 Best genomes selected from all 112 runs.
@@ -126,98 +126,98 @@ Our model size is comparable to RF, not smaller. The 3KB architecture specificat
 
 ## CICIDS2017 Random Split (16-bit thermometer, in progress)
 
-Status: 29 of 112 flows completed (as of 2026-03-26)
+Status: 41 of 112 flows completed (as of 2026-03-27)
 Config: 2-phase (grid search + GA neurons), pop=50, top20 features at 16b, max_bits=34, kf5x5 fitness
 
-### Grid Search — Best F1 Genome (29 flows)
+### Grid Search — Best F1 Genome (41 flows)
 
-Neurons: 359 ±116 | Bits: 32, 34
-
-| Threshold | F1 mean ±std | FPR mean ±std | Acc mean ±std |
-|---|---|---|---|
-| val_cal | 99.34% ±0.10% | 0.212% ±0.063% | 99.58% ±0.06% |
-| train_cal | 99.35% ±0.06% | 0.207% ±0.050% | 99.59% ±0.04% |
-| test_cal | 99.22% ±0.21% | 0.217% ±0.082% | 99.51% ±0.13% |
-| fixed_05 | 99.24% ±0.18% | 0.342% ±0.078% | 99.52% ±0.11% |
-| platt | 99.21% ±0.18% | 0.329% ±0.155% | 99.50% ±0.11% |
-| beta | 99.26% ±0.16% | 0.298% ±0.104% | 99.53% ±0.10% |
-| empirical | 98.22% ±0.82% | 1.318% ±0.726% | 98.85% ±0.55% |
-| emp_cumul | 99.18% ±0.24% | 0.303% ±0.180% | 99.48% ±0.15% |
-
-### Grid Search — Best FPR Genome (29 flows)
-
-Neurons: 348 ±130 | Bits: 32, 34
+Neurons: 332 ±118 | Bits: 32, 34
 
 | Threshold | F1 mean ±std | FPR mean ±std | Acc mean ±std |
 |---|---|---|---|
-| val_cal | 99.31% ±0.10% | 0.237% ±0.059% | 99.57% ±0.06% |
-| train_cal | 99.30% ±0.13% | 0.202% ±0.068% | 99.56% ±0.08% |
-| test_cal | 99.15% ±0.25% | 0.242% ±0.126% | 99.46% ±0.16% |
-| fixed_05 | 99.23% ±0.13% | 0.334% ±0.081% | 99.51% ±0.08% |
-| platt | 99.21% ±0.21% | 0.320% ±0.088% | 99.50% ±0.13% |
-| beta | 99.20% ±0.19% | 0.260% ±0.088% | 99.50% ±0.12% |
-| empirical | 98.23% ±0.75% | 1.292% ±0.639% | 98.85% ±0.50% |
-| emp_cumul | 99.15% ±0.26% | 0.234% ±0.110% | 99.47% ±0.16% |
+| val_cal | 99.34% ±0.09% | 0.219% ±0.066% | 99.59% ±0.05% |
+| train_cal | 99.35% ±0.06% | 0.212% ±0.054% | 99.59% ±0.04% |
+| test_cal | 99.17% ±0.23% | 0.224% ±0.128% | 99.48% ±0.14% |
+| fixed_05 | 99.25% ±0.16% | 0.342% ±0.068% | 99.53% ±0.10% |
+| platt | 99.21% ±0.17% | 0.313% ±0.144% | 99.50% ±0.11% |
+| beta | 99.26% ±0.15% | 0.291% ±0.105% | 99.53% ±0.10% |
+| empirical | 98.28% ±0.73% | 1.262% ±0.639% | 98.89% ±0.49% |
+| emp_cumul | 99.17% ±0.25% | 0.285% ±0.162% | 99.48% ±0.16% |
 
-### Grid Search — Best Fitness Genome (29 flows)
+### Grid Search — Best FPR Genome (41 flows)
 
-Neurons: 362 ±113 | Bits: 32, 34
-
-| Threshold | F1 mean ±std | FPR mean ±std | Acc mean ±std |
-|---|---|---|---|
-| val_cal | 99.34% ±0.11% | 0.204% ±0.063% | 99.59% ±0.07% |
-| train_cal | 99.34% ±0.08% | 0.213% ±0.045% | 99.58% ±0.05% |
-| test_cal | 99.24% ±0.16% | 0.229% ±0.085% | 99.52% ±0.10% |
-| fixed_05 | 99.24% ±0.18% | 0.339% ±0.077% | 99.52% ±0.11% |
-| platt | 99.21% ±0.17% | 0.333% ±0.144% | 99.50% ±0.11% |
-| beta | 99.26% ±0.12% | 0.288% ±0.102% | 99.53% ±0.07% |
-| empirical | 98.21% ±0.81% | 1.320% ±0.716% | 98.84% ±0.54% |
-| emp_cumul | 99.18% ±0.24% | 0.294% ±0.178% | 99.48% ±0.15% |
-
-### GA Neurons — Best F1 Genome (29 flows)
-
-Neurons: 218 ±159 | Bits: 32, 34, 32-34
+Neurons: 339 ±129 | Bits: 32, 34
 
 | Threshold | F1 mean ±std | FPR mean ±std | Acc mean ±std |
 |---|---|---|---|
-| val_cal | 99.40% ±0.06% | 0.192% ±0.056% | 99.62% ±0.04% |
-| train_cal | 99.36% ±0.12% | 0.208% ±0.110% | 99.60% ±0.08% |
-| test_cal | 99.31% ±0.12% | 0.239% ±0.062% | 99.56% ±0.07% |
-| fixed_05 | 99.24% ±0.11% | 0.395% ±0.107% | 99.52% ±0.07% |
-| platt | 99.28% ±0.14% | 0.286% ±0.087% | 99.55% ±0.09% |
-| beta | 99.32% ±0.07% | 0.270% ±0.068% | 99.57% ±0.05% |
-| empirical | 98.61% ±0.72% | 0.983% ±0.638% | 99.10% ±0.48% |
-| emp_cumul | 99.33% ±0.08% | 0.233% ±0.068% | 99.58% ±0.05% |
+| val_cal | 99.32% ±0.09% | 0.226% ±0.061% | 99.57% ±0.05% |
+| train_cal | 99.30% ±0.11% | 0.212% ±0.071% | 99.56% ±0.07% |
+| test_cal | 99.15% ±0.24% | 0.252% ±0.129% | 99.46% ±0.15% |
+| fixed_05 | 99.24% ±0.12% | 0.338% ±0.071% | 99.52% ±0.07% |
+| platt | 99.21% ±0.21% | 0.308% ±0.089% | 99.50% ±0.13% |
+| beta | 99.22% ±0.18% | 0.263% ±0.088% | 99.51% ±0.11% |
+| empirical | 98.23% ±0.78% | 1.295% ±0.669% | 98.85% ±0.52% |
+| emp_cumul | 99.18% ±0.24% | 0.245% ±0.109% | 99.48% ±0.15% |
 
-### GA Neurons — Best FPR Genome (29 flows)
+### Grid Search — Best Fitness Genome (41 flows)
 
-Neurons: 252 ±181 | Bits: 32, 34, 32-34
-
-| Threshold | F1 mean ±std | FPR mean ±std | Acc mean ±std |
-|---|---|---|---|
-| val_cal | 99.24% ±0.25% | 0.260% ±0.145% | 99.52% ±0.16% |
-| train_cal | 99.32% ±0.15% | 0.237% ±0.108% | 99.57% ±0.09% |
-| test_cal | 99.17% ±0.32% | 0.261% ±0.143% | 99.48% ±0.20% |
-| fixed_05 | 99.16% ±0.26% | 0.423% ±0.162% | 99.47% ±0.16% |
-| platt | 99.24% ±0.28% | 0.341% ±0.223% | 99.52% ±0.18% |
-| beta | 99.19% ±0.29% | 0.263% ±0.089% | 99.49% ±0.18% |
-| empirical | 98.45% ±0.60% | 1.075% ±0.561% | 99.00% ±0.40% |
-| emp_cumul | 99.12% ±0.50% | 0.250% ±0.178% | 99.45% ±0.31% |
-
-### GA Neurons — Best Fitness Genome (29 flows)
-
-Neurons: 228 ±167 | Bits: 32, 34, 32-34
+Neurons: 334 ±114 | Bits: 32, 34
 
 | Threshold | F1 mean ±std | FPR mean ±std | Acc mean ±std |
 |---|---|---|---|
-| val_cal | 99.40% ±0.06% | 0.193% ±0.056% | 99.62% ±0.04% |
-| train_cal | 99.36% ±0.12% | 0.208% ±0.110% | 99.60% ±0.08% |
-| test_cal | 99.31% ±0.12% | 0.239% ±0.061% | 99.57% ±0.07% |
-| fixed_05 | 99.24% ±0.12% | 0.394% ±0.108% | 99.52% ±0.08% |
-| platt | 99.28% ±0.14% | 0.288% ±0.086% | 99.55% ±0.09% |
-| beta | 99.30% ±0.14% | 0.264% ±0.072% | 99.56% ±0.08% |
-| empirical | 98.57% ±0.73% | 1.020% ±0.649% | 99.08% ±0.49% |
-| emp_cumul | 99.32% ±0.09% | 0.230% ±0.068% | 99.57% ±0.06% |
+| val_cal | 99.34% ±0.10% | 0.209% ±0.068% | 99.59% ±0.06% |
+| train_cal | 99.34% ±0.07% | 0.217% ±0.051% | 99.58% ±0.05% |
+| test_cal | 99.20% ±0.20% | 0.245% ±0.136% | 99.50% ±0.12% |
+| fixed_05 | 99.25% ±0.16% | 0.339% ±0.067% | 99.53% ±0.10% |
+| platt | 99.22% ±0.17% | 0.308% ±0.135% | 99.51% ±0.11% |
+| beta | 99.27% ±0.12% | 0.279% ±0.100% | 99.54% ±0.08% |
+| empirical | 98.30% ±0.72% | 1.248% ±0.640% | 98.90% ±0.49% |
+| emp_cumul | 99.18% ±0.25% | 0.273% ±0.159% | 99.48% ±0.16% |
+
+### GA Neurons — Best F1 Genome (41 flows)
+
+Neurons: 228 ±154 | Bits: 32, 34, 32-34
+
+| Threshold | F1 mean ±std | FPR mean ±std | Acc mean ±std |
+|---|---|---|---|
+| val_cal | 99.41% ±0.06% | 0.186% ±0.055% | 99.63% ±0.04% |
+| train_cal | 99.38% ±0.11% | 0.197% ±0.098% | 99.61% ±0.07% |
+| test_cal | 99.31% ±0.14% | 0.234% ±0.077% | 99.57% ±0.09% |
+| fixed_05 | 99.24% ±0.12% | 0.406% ±0.116% | 99.52% ±0.08% |
+| platt | 99.29% ±0.14% | 0.285% ±0.105% | 99.55% ±0.09% |
+| beta | 99.33% ±0.07% | 0.261% ±0.065% | 99.58% ±0.04% |
+| empirical | 98.60% ±0.66% | 0.990% ±0.592% | 99.10% ±0.44% |
+| emp_cumul | 99.33% ±0.13% | 0.228% ±0.068% | 99.58% ±0.08% |
+
+### GA Neurons — Best FPR Genome (41 flows)
+
+Neurons: 277 ±175 | Bits: 32, 34, 32-34
+
+| Threshold | F1 mean ±std | FPR mean ±std | Acc mean ±std |
+|---|---|---|---|
+| val_cal | 99.27% ±0.22% | 0.249% ±0.128% | 99.54% ±0.14% |
+| train_cal | 99.32% ±0.16% | 0.230% ±0.100% | 99.57% ±0.10% |
+| test_cal | 99.18% ±0.30% | 0.250% ±0.132% | 99.49% ±0.19% |
+| fixed_05 | 99.17% ±0.24% | 0.405% ±0.147% | 99.48% ±0.15% |
+| platt | 99.24% ±0.25% | 0.317% ±0.200% | 99.52% ±0.16% |
+| beta | 99.20% ±0.26% | 0.265% ±0.099% | 99.49% ±0.16% |
+| empirical | 98.40% ±0.61% | 1.126% ±0.566% | 98.97% ±0.41% |
+| emp_cumul | 99.16% ±0.43% | 0.240% ±0.164% | 99.47% ±0.27% |
+
+### GA Neurons — Best Fitness Genome (41 flows)
+
+Neurons: 235 ±159 | Bits: 32, 34, 32-34
+
+| Threshold | F1 mean ±std | FPR mean ±std | Acc mean ±std |
+|---|---|---|---|
+| val_cal | 99.41% ±0.06% | 0.189% ±0.054% | 99.63% ±0.04% |
+| train_cal | 99.39% ±0.11% | 0.196% ±0.098% | 99.61% ±0.07% |
+| test_cal | 99.31% ±0.14% | 0.235% ±0.077% | 99.57% ±0.09% |
+| fixed_05 | 99.24% ±0.12% | 0.406% ±0.116% | 99.52% ±0.08% |
+| platt | 99.29% ±0.14% | 0.289% ±0.101% | 99.55% ±0.09% |
+| beta | 99.30% ±0.15% | 0.266% ±0.081% | 99.56% ±0.09% |
+| empirical | 98.57% ±0.67% | 1.016% ±0.601% | 99.08% ±0.45% |
+| emp_cumul | 99.32% ±0.13% | 0.222% ±0.071% | 99.57% ±0.08% |
 
 ### CICIDS2017 Baseline Comparison (same data, same random split)
 
@@ -225,22 +225,22 @@ Neurons: 228 ±167 | Bits: 32, 34, 32-34
 |---|---|---|---|
 | RF top20 (same data) | 99.83% | 99.89% | 0.07% |
 | XGBoost top20 (same data) | 99.80% | 99.88% | 0.07% |
-| **Our WNN mean (val_cal)** | **99.26%** | **99.53%** | **0.30%** |
+| **Our WNN mean (val_cal, 16b)** | **99.41%** | **99.63%** | **0.19%** |
 
-RF beats us by 0.57% F1 on the random split (same pattern as UNSW-NB15 random).
+RF beats us by 0.42% F1 on the random split.
 
 ### Cross-Dataset Pattern
 
 | Dataset | Split | WNN F1 | RF F1 | Winner |
 |---|---|---|---|---|
-| UNSW-NB15 | **temporal** | **88.19%** | 86.63% | **WNN** |
+| UNSW-NB15 | **temporal** | **88.06%** | 86.63% | **WNN** |
 | UNSW-NB15 | random | 93.68% | 95.38% | RF |
-| CICIDS2017 (8b) | random | 99.26% | 99.83% | RF |
-| CICIDS2017 (16b) | random | 99.40% | 99.83% | RF (gap narrowed from 0.57% to 0.43%) |
+| CICIDS2017 (8b) | random | 99.25% | 99.83% | RF |
+| CICIDS2017 (16b) | random | 99.41% | 99.83% | RF (gap narrowed from 0.58% to 0.42%) |
 
 WNN wins on temporal splits (robust to distribution shift due to thermometer encoding).
 RF wins on random splits (exploits full numeric precision when distributions match).
-16-bit thermometer narrows the gap from 0.57% to 0.43% but does not close it.
+16-bit thermometer narrows the gap from 0.58% to 0.42% but does not close it.
 Remaining gap is architectural (RAM neuron lookup vs tree splits), not encoding precision.
 
 ## CIC-IoT-2023 Random Split (pending)
