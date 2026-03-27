@@ -424,7 +424,7 @@ seeds the second.
 \textbf{Phase 1: Grid Search.} Exhaustive evaluation of $(N, b)$
 configurations (e.g., $N \in \{5, 10, \ldots, 500\}$,
 $b \in \{4, 8, \ldots, 34\}$) with random connectivity. Each configuration
-is trained and evaluated, then ranked by the fitness function. The top-$k$
+is trained and evaluated, then ranked by a fitness function. The top-$k$
 configurations seed the subsequent GA population.
 
 \textbf{Phase 2: GA Neurons.} A genetic algorithm optimizes neuron count
@@ -436,8 +436,10 @@ The framework supports additional phases (GA bits, GA connections, tabu
 search refinement, and Lamarckian evolution) which are evaluated in
 a follow-up study.
 
-\textbf{Fitness function.} Both phases rank genomes using a weighted
-harmonic mean of per-metric ranks within the population:
+\textbf{Fitness function.} IDS metrics (F1, FPR, cross-entropy) have
+different scales, making direct weighted sums sensitive to normalization.
+Instead, both phases rank genomes per metric within the population, then
+combine ranks using a weighted harmonic mean:
 \begin{equation}
 \text{fitness}(g) = \frac{w_{CE} + w_{F1} + w_{FPR}}{%
   \frac{w_{CE}}{r_{CE}(g)} + \frac{w_{F1}}{r_{F1}(g)} + \frac{w_{FPR}}{r_{FPR}(g)}}
