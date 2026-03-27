@@ -246,10 +246,10 @@ address width~$n$, and connectivity maps~$C$ collectively as the
 \draw[-{Stealth[length=2mm]}, thick] ([xshift=1mm]mB5.south) -- ([xshift=-3.5mm]out.north);
 
 \end{tikzpicture}
-\caption{A \emph{quad-weighted} RAM neuron architecture with two neurons
+\caption{A \emph{Quad-Weighted RAM} (QWR) neuron architecture with two neurons
 ($N{=}2$, $n{=}3$ address bits each). Each neuron selects 3 bits from the
 9-bit input via its connectivity map, forms a 3-bit address, and looks up
-its quad-weighted memory ($2^3{=}8$ cells). Cell colors:
+its QWR memory ($2^3{=}8$ cells). Cell colors:
 \textcolor{green!60!black}{TRUE (1.0)},
 \textcolor{blue!60}{WEAK\_TRUE (0.75)},
 \textcolor{gray}{WEAK\_FALSE (0.25)},
@@ -259,16 +259,16 @@ The mean score is thresholded to classify the input.}
 \end{figure}
 
 % QUAD_WEIGHTED memory
-\textbf{Quad-weighted RAM neurons.}
+\textbf{Quad-Weighted RAM (QWR) neurons.}
 Traditional RAM neurons store binary values (TRUE/FALSE), while
 Probabilistic Logic Nodes (PLN) add an
 \emph{undefined} state ($u$) for untrained cells, and Multi-valued PLN
 (MPLN)~\cite{ludermir1999weightless} generalize to finer granularity (e.g., 11 levels from 0.0 to 1.0
 in 0.1 steps, starting at 0.5 for undefined).
 
-We introduce \emph{quad-weighted} (QW) memory with four states encoded
+We introduce \emph{Quad-Weighted RAM} (QWR) memory with four states encoded
 in just 2~bits: FALSE~($0.0$), WEAK\_FALSE~($0.25$), WEAK\_TRUE~($0.75$),
-and TRUE~($1.0$). Unlike PLN's symmetric undefined state~($0.5$), QW
+and TRUE~($1.0$). Unlike PLN's symmetric undefined state~($0.5$), QWR
 cells default to WEAK\_FALSE~($0.25$), biasing untrained neurons toward
 the majority class (normal traffic). When a cell trained as TRUE is
 subsequently addressed with a normal-class example, it transitions to
@@ -382,7 +382,7 @@ configurations.
 
 \subsection{Single-Cluster Binary Discriminator}
 
-Our IDS uses a \emph{single-cluster discriminator}: $N$ quad-weighted RAM
+Our IDS uses a \emph{single-cluster discriminator}: $N$ QWR
 neurons, each with $b$ address bits, observing the same thermometer-encoded
 input vector $\mathbf{x} \in \{0,1\}^d$. Each neuron $i$ has a connectivity
 map $C_i = \{c_1^i, \ldots, c_b^i\}$ that selects $b$ bits from
@@ -391,7 +391,7 @@ that address in its $2^b$-cell memory.
 
 Training iterates over labeled examples: for each flow, each neuron
 computes its address and writes the target label (0 for normal, 1 for
-attack) to the addressed cell using the quad-weighted update rule
+attack) to the addressed cell using the QWR update rule
 (conflicting writes produce weak states rather than overwriting).
 
 At inference, the discriminator computes the mean score across all $N$
@@ -925,7 +925,7 @@ than precision-related, as increasing to 64 bits yields no further improvement.
 \label{sec:conclusion}
 
 We presented an evolutionary weightless neural network architecture for
-network intrusion detection, combining quad-weighted RAM neurons with
+network intrusion detection, combining Quad-Weighted RAM (QWR) neurons with
 genetic algorithm optimization of neuron connectivity.  Our approach
 contributes three advances over prior WNN-based IDS:
 
