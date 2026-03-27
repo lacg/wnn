@@ -394,10 +394,11 @@ map $C_i = \{c_1^i, \ldots, c_b^i\}$ that selects $b$ bits from
 $\mathbf{x}$ to form an address. The neuron outputs the value stored at
 that address in its $2^b$-cell memory.
 
-Training iterates over labeled examples: for each flow, each neuron
+Training iterates over labeled examples: for each flow, each QSR neuron
 computes its address and writes the target label (0 for normal, 1 for
 attack) to the addressed cell using the QSR update rule
-(conflicting writes produce weak states rather than overwriting).
+(conflicting writes produce weak states, while confirming writes
+produce strong states).
 
 At inference, the discriminator computes the mean score across all $N$
 neurons and applies a threshold $\tau$ to produce a binary classification:
