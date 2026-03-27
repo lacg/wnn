@@ -246,10 +246,10 @@ address width~$n$, and connectivity maps~$C$ collectively as the
 \draw[-{Stealth[length=2mm]}, thick] ([xshift=1mm]mB5.south) -- ([xshift=-3.5mm]out.north);
 
 \end{tikzpicture}
-\caption{RAM neuron architecture with two neurons ($N{=}2$, $n{=}3$
-address bits each). Each neuron selects 3 bits from the 9-bit input via
-its connectivity map, forms a 3-bit address, and looks up its
-quad-weighted memory ($2^3{=}8$ cells). Cell colors:
+\caption{A \emph{quad-weighted} RAM neuron architecture with two neurons
+($N{=}2$, $n{=}3$ address bits each). Each neuron selects 3 bits from the
+9-bit input via its connectivity map, forms a 3-bit address, and looks up
+its quad-weighted memory ($2^3{=}8$ cells). Cell colors:
 \textcolor{green!60!black}{TRUE (1.0)},
 \textcolor{blue!60}{WEAK\_TRUE (0.75)},
 \textcolor{gray}{WEAK\_FALSE (0.25)},
@@ -259,7 +259,7 @@ The mean score is thresholded to classify the input.}
 \end{figure}
 
 % QUAD_WEIGHTED memory
-\textbf{Quad-weighted memory.}
+\textbf{Quad-weighted RAM neurons.}
 Traditional RAM neurons store binary values (TRUE/FALSE), while
 Probabilistic Logic Nodes (PLN) add an
 \emph{undefined} state ($u$) for untrained cells, and Multi-valued PLN
@@ -274,13 +274,14 @@ the majority class (normal traffic). When a cell trained as TRUE is
 subsequently addressed with a normal-class example, it transitions to
 WEAK\_TRUE rather than being overwritten, preserving partial confidence
 from both classes. This provides smoother probability estimates than
-binary voting while requiring only 2~bits per cell, more compact than
-MPLN's multi-level representation.
+binary voting while requiring only 2~bits per cell, matching PLN's
+compactness with richer representation than binary.
 
 \subsection{Thermometer Encoding}
 
 WNNs require binary inputs, but network flow features (packet counts,
-byte rates, inter-arrival times) are continuous. We convert each feature
+byte rates, inter-arrival times) are continuous, usually encoded as
+float64. We convert each feature
 to a binary vector using \emph{thermometer encoding}~\cite{susskind2022bthowen}.
 Given a feature value $x$ and $k$ thresholds $\theta_1 < \cdots < \theta_k$,
 the encoding produces $k$ bits: bit $i$ is 1 if $x \geq \theta_i$, else 0.
