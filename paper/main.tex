@@ -272,7 +272,7 @@ and TRUE~($1.0$). Unlike PLN's symmetric undefined state~($0.5$), QSR
 cells default to WEAK\_FALSE~($0.25$), biasing untrained neurons toward
 the majority class (normal traffic). When a cell trained as TRUE is
 subsequently addressed with a normal-class example, it transitions to
-WEAK\_TRUE rather than being overwritten, preserving partial confidence
+WEAK\_TRUE, preserving partial confidence
 from both classes. This provides smoother probability estimates than
 binary voting while requiring only 2~bits per cell, matching PLN's
 compactness with richer representation than binary.
