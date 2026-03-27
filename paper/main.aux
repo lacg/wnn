@@ -46,9 +46,9 @@
 \@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Single-Cluster Binary Discriminator}{5}{subsection.4.1}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Phased Optimization Pipeline}{6}{subsection.4.2}\protected@file@percent }
 \newlabel{eq:fitness}{{2}{6}{Phased Optimization Pipeline}{equation.2}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}GPU-Accelerated Optimization}{6}{subsection.4.3}\protected@file@percent }
 \citation{platt1999probabilistic}
 \citation{kull2017beta}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}GPU-Accelerated Optimization}{7}{subsection.4.3}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{\numberline {5}Evaluation Methodology}{7}{section.5}\protected@file@percent }
 \newlabel{sec:methodology}{{5}{7}{Evaluation Methodology}{section.5}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Temporal and Random Evaluation Protocols}{7}{subsection.5.1}\protected@file@percent }
@@ -58,12 +58,12 @@
 \newlabel{sec:results}{{6}{8}{Experimental Results}{section.6}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {6.1}UNSW-NB15 Temporal Results}{8}{subsection.6.1}\protected@file@percent }
 \newlabel{sec:results-unsw}{{6.1}{8}{UNSW-NB15 Temporal Results}{subsection.6.1}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}CICIDS2017 Random Results}{8}{subsection.6.2}\protected@file@percent }
-\newlabel{sec:results-cicids}{{6.2}{8}{CICIDS2017 Random Results}{subsection.6.2}{}}
 \@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces UNSW-NB15 temporal split results (112 runs, 8-bit thermometer, GA~Neurons best-fitness genome). Neurons: 232 $\pm $ 132, address bits: 32.}}{9}{table.1}\protected@file@percent }
 \newlabel{tab:unsw}{{1}{9}{UNSW-NB15 temporal split results (112 runs, 8-bit thermometer, GA~Neurons best-fitness genome). Neurons: 232 $\pm $ 132, address bits: 32}{table.1}{}}
 \@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces CICIDS2017 random split results (31 of 112 runs, 16-bit thermometer, GA~Neurons best-fitness genome). Neurons: 236 $\pm $ 167, address bits: 32--34. Final numbers will be updated when all 112 runs complete.}}{9}{table.2}\protected@file@percent }
 \newlabel{tab:cicids}{{2}{9}{CICIDS2017 random split results (31 of 112 runs, 16-bit thermometer, GA~Neurons best-fitness genome). Neurons: 236 $\pm $ 167, address bits: 32--34. Final numbers will be updated when all 112 runs complete}{table.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}CICIDS2017 Random Results}{9}{subsection.6.2}\protected@file@percent }
+\newlabel{sec:results-cicids}{{6.2}{9}{CICIDS2017 Random Results}{subsection.6.2}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {6.3}CIC-IoT-2023 Results}{9}{subsection.6.3}\protected@file@percent }
 \newlabel{sec:results-ciot}{{6.3}{9}{CIC-IoT-2023 Results}{subsection.6.3}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {6.4}Phase Progression Analysis}{9}{subsection.6.4}\protected@file@percent }
@@ -83,26 +83,26 @@
 \newlabel{sec:discussion}{{7}{11}{Discussion}{section.7}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {7.1}Connectivity as Feature Selection}{11}{subsection.7.1}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Threshold Sensitivity}{11}{subsection.7.2}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Effect of thermometer encoding resolution on classification performance. (a)~CICIDS2017 F1-macro shows a clear knee at 16 bits, with diminishing returns beyond. (b)~The GA finds the fewest neurons at 16 bits, suggesting optimal information density. (c)~UNSW-NB15 temporal split shows no clear trend (high variance from only 2 runs per configuration). (d)~CICIDS2017 false positive rate is lowest around 16--26 bits.}}{12}{figure.2}\protected@file@percent }
-\newlabel{fig:therm_sweep}{{2}{12}{Effect of thermometer encoding resolution on classification performance. (a)~CICIDS2017 F1-macro shows a clear knee at 16 bits, with diminishing returns beyond. (b)~The GA finds the fewest neurons at 16 bits, suggesting optimal information density. (c)~UNSW-NB15 temporal split shows no clear trend (high variance from only 2 runs per configuration). (d)~CICIDS2017 false positive rate is lowest around 16--26 bits}{figure.2}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {7.3}Encoding Resolution Analysis}{12}{subsection.7.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.4}FPGA Deployment}{12}{subsection.7.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Dense configuration (8--12-bit addresses).}{12}{section*.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Sparse configuration (34-bit addresses).}{12}{section*.3}\protected@file@percent }
 \citation{susskind2023fwiw}
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.4}FPGA Deployment}{13}{subsection.7.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Dense configuration (8--12-bit addresses).}{13}{section*.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Sparse configuration (34-bit addresses).}{13}{section*.3}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Effect of thermometer encoding resolution on classification performance. (a)~CICIDS2017 F1-macro shows a clear knee at 16 bits, with diminishing returns beyond. (b)~The GA finds the fewest neurons at 16 bits, suggesting optimal information density. (c)~UNSW-NB15 temporal split shows no clear trend (high variance from only 2 runs per configuration). (d)~CICIDS2017 false positive rate is lowest around 16--26 bits.}}{13}{figure.2}\protected@file@percent }
+\newlabel{fig:therm_sweep}{{2}{13}{Effect of thermometer encoding resolution on classification performance. (a)~CICIDS2017 F1-macro shows a clear knee at 16 bits, with diminishing returns beyond. (b)~The GA finds the fewest neurons at 16 bits, suggesting optimal information density. (c)~UNSW-NB15 temporal split shows no clear trend (high variance from only 2 runs per configuration). (d)~CICIDS2017 false positive rate is lowest around 16--26 bits}{figure.2}{}}
 \@writefile{toc}{\contentsline {paragraph}{Comparison with FWIW.}{13}{section*.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Latency and throughput.}{13}{section*.5}\protected@file@percent }
 \@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces FPGA synthesis results on Xilinx Zynq Z-7020 (53,200 LUTs, 106,400 FFs). All designs synthesized with Vivado 2025.2 in out-of-context mode. Sparse neuron tables are inferred as distributed LUTs (0 BRAMs, 0 DSPs in all cases). Latency computed from binary-search depth and post-synthesis Fmax.}}{14}{table.6}\protected@file@percent }
 \newlabel{tab:fpga}{{6}{14}{FPGA synthesis results on Xilinx Zynq Z-7020 (53,200 LUTs, 106,400 FFs). All designs synthesized with Vivado 2025.2 in out-of-context mode. Sparse neuron tables are inferred as distributed LUTs (0 BRAMs, 0 DSPs in all cases). Latency computed from binary-search depth and post-synthesis Fmax}{table.6}{}}
+\@writefile{toc}{\contentsline {paragraph}{Latency and throughput.}{14}{section*.5}\protected@file@percent }
 \@writefile{toc}{\contentsline {paragraph}{Functional verification.}{14}{section*.6}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {7.5}Limitations}{14}{subsection.7.5}\protected@file@percent }
 \bibstyle{splncs04}
 \bibdata{references}
 \bibcite{mdpi2024enhanced}{1}
-\bibcite{aleksander1984wisard}{2}
-\bibcite{andronic2023polylut}{3}
 \@writefile{toc}{\contentsline {section}{\numberline {8}Conclusion}{15}{section.8}\protected@file@percent }
 \newlabel{sec:conclusion}{{8}{15}{Conclusion}{section.8}{}}
+\bibcite{aleksander1984wisard}{2}
+\bibcite{andronic2023polylut}{3}
 \bibcite{engelen2021cicids}{4}
 \bibcite{kull2017beta}{5}
 \bibcite{moustafa2015unswnb15}{6}

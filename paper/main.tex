@@ -287,6 +287,9 @@ Given a feature value $x$ and $k$ thresholds $\theta_1 < \cdots < \theta_k$,
 the encoding produces $k$ bits: bit $i$ is 1 if $x \geq \theta_i$, else 0.
 This preserves ordinal relationships: similar values differ by few bits,
 enabling RAM neurons to generalize across nearby feature values.
+This ordinal encoding also provides natural noise robustness: a small
+measurement error shifts at most one threshold boundary, flipping a
+single bit in the encoded vector.
 
 We compute thresholds using the \emph{distributive} (quantile-based) method,
 which places thresholds at equally-spaced quantiles of the training
