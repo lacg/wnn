@@ -45,7 +45,8 @@ optimizes neuron count through grid search and genetic algorithm, with
 each neuron's random connectivity effectively performing feature selection
 intrinsic to the architecture. The sparse trained memory (362\,KB for our
 best genome) fits entirely within the LUT fabric of a \$100 Zynq~Z-7020
-FPGA, enabling $O(1)$ lookup-based inference per neuron. We evaluate on three standard IDS benchmarks
+FPGA, enabling $O(\log n)$ lookup-based inference per neuron
+(where $n$ is the number of trained entries). We evaluate on three standard IDS benchmarks
 % REMINDER: Change "three" to "two" and remove CIC-IoT-2023 if we don't have results in time
 (UNSW-NB15, CICIDS2017, CIC-IoT-2023) using both temporal and random
 splits, with an eight-mode threshold calibration protocol that exposes
@@ -107,7 +108,7 @@ Our contributions are:
 \item \textbf{Compact architecture with sub-microsecond inference potential.}
   Our evolved WNN outperforms Random Forest and XGBoost on the standard
   temporal split, with a network architecture specified in a few kilobytes
-  and $O(1)$ lookup-based inference suitable for FPGA deployment.
+  and lookup-based inference suitable for FPGA deployment.
 \item \textbf{Eight-mode threshold calibration study.} We identify threshold
   selection as a critical but under-reported factor in IDS evaluation,
   showing a 5.18 percentage point F1 gap between oracle and train-calibrated
