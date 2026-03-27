@@ -41,7 +41,7 @@ attractive for edge-deployed intrusion detection systems. However, their
 classification performance depends on \emph{connectivity},
 which input bits each neuron observes, a problem traditionally solved by random
 initialization. We present an evolutionary optimization framework that
-optimizes neuron count through grid search and genetic algorithm, with
+optimizes neuron count through grid search and genetic algorithm with
 each neuron's random connectivity effectively performing feature selection
 intrinsic to the architecture. The sparse trained memory (362\,KB for our
 best genome) fits entirely within the LUT fabric of a \$100 Zynq~Z-7020
@@ -49,7 +49,7 @@ FPGA, enabling $O(\log n)$ lookup-based inference per neuron
 (where $n$ is the number of trained entries). We evaluate on three standard IDS benchmarks
 % REMINDER: Change "three" to "two" and remove CIC-IoT-2023 if we don't have results in time
 (UNSW-NB15, CICIDS2017, CIC-IoT-2023) using both temporal and random
-splits, with an eight-mode threshold calibration protocol that exposes
+splits with an eight-mode threshold calibration protocol that exposes
 the sensitivity of binary classifiers to decision boundary selection.
 Across 112 independent runs per configuration, our approach achieves
 88.06\% F1 on UNSW-NB15 temporal (outperforming Random Forest by 1.4
@@ -75,7 +75,7 @@ lack the adaptability to detect novel attack patterns.
 % Gap: WNNs exist for IDS but limited evaluation
 Weightless Neural Networks (WNNs)~\cite{aleksander1984wisard,ludermir1999weightless} offer a
 compelling middle ground: RAM-based neurons perform classification via direct
-memory lookup in $O(1)$ time, with model sizes measured in bytes rather than
+memory lookup in $O(1)$ time with model sizes measured in bytes rather than
 megabytes. Recent work~\cite{susskind2023fwiw} demonstrated WNN-based IDS
 achieving 98\% accuracy on UNSW-NB15 using random train/test splits, which
 show stronger performance than temporal splits due to shared distributional
@@ -89,11 +89,10 @@ Our work improves on two fronts:
 \begin{itemize}
 \item \emph{How the network is derived.} We introduce an optimization
   framework using genetic algorithm to discover optimal neuron
-  configurations: count, address width, and connectivity. These
-  optimizations effectively perform automated feature selection
+  counts. This optimization effectively performs automated feature selection
   intrinsic to the WNN architecture.
 \item \emph{How the network is evaluated.} We test the resulting networks
-  against unseen data using temporal splits across three datasets, with a
+  against unseen data using temporal splits across three datasets with a
   threshold calibration study that quantifies the gap
   between train-time and deployment-time performance.
 \end{itemize}
@@ -103,11 +102,11 @@ Our contributions are:
 \begin{enumerate}
 \item \textbf{Evolved connectivity as feature selection.} Optimizing
   network parameters discovers which input features matter without
-  external feature selection, with connectivity optimization providing
+  external feature selection with connectivity optimization providing
   the largest single improvement in classification performance.
 \item \textbf{Compact architecture with sub-microsecond inference potential.}
   Our evolved WNN outperforms Random Forest and XGBoost on the standard
-  temporal split, with a network architecture specified in a few kilobytes
+  temporal split with a network architecture specified in a few kilobytes
   and lookup-based inference suitable for FPGA deployment.
 \item \textbf{Eight-mode threshold calibration study.} We identify threshold
   selection as a critical but under-reported factor in IDS evaluation,
@@ -115,7 +114,7 @@ Our contributions are:
   thresholds on the temporal split.
 \item \textbf{Two-dataset evaluation with FPGA synthesis.} Results on
   UNSW-NB15 (temporal) and CICIDS2017 (random) demonstrate architecture
-  generalizability, with Vivado-verified FPGA deployment on a Zynq~Z-7020.
+  generalizability with Vivado-verified FPGA deployment on a Zynq~Z-7020.
 \end{enumerate}
 
 % ============================================================================
@@ -302,14 +301,14 @@ We evaluate on three standard IDS benchmarks, each with distinct
 characteristics:
 
 \textbf{UNSW-NB15}~\cite{moustafa2015unswnb15} contains network flow records
-from the Australian Centre for Cyber Security, with 42 numeric features and 10 attack
+from the Australian Centre for Cyber Security with 42 numeric features and 10 attack
 categories. The standard temporal split (175K train / 82K test) separates
 training and testing periods, preventing data leakage. We also evaluate on a
 deduplicated random split (1.4M / 158K) for comparison with prior
 work~\cite{susskind2023fwiw}.
 
 \textbf{CICIDS2017}~\cite{sharafaldin2018cicids2017} comprises five days of
-network traffic captured at the Canadian Institute for Cybersecurity, with
+network traffic captured at the Canadian Institute for Cybersecurity with
 78 flow-level features and 14 attack types. We use a stratified 80/20
 random split (2.3M train / 566K test), consistent with the majority of
 published work on this dataset.
@@ -334,7 +333,7 @@ detection with random connectivity.
 The most directly related work is FWIW~\cite{susskind2023fwiw}, which
 achieves 98\% accuracy on UNSW-NB15 with a 272-byte model deployed on FPGA.
 FWIW uses Bloom filter-based neurons with H3 hashing and backpropagation
-training, with random connectivity and one threshold mode. Our work
+training with random connectivity and one threshold mode. Our work
 differs in three ways: (1)~we evaluate on both random and temporal splits,
 as random splits may allow some data leakage between train and test sets;
 (2)~we use random connectivity as a starting point and apply a genetic
@@ -777,7 +776,7 @@ regardless of encoding width, indicating an architectural rather than
 precision-related limitation.
 
 On UNSW-NB15, no clear inflection point emerges: F1 ranges from 82\% to
-90\% across all encoding widths, with 64-bit showing the most consistent
+90\% across all encoding widths with 64-bit showing the most consistent
 results (89.56\%).  The high variance (only 2 runs per configuration)
 obscures any trend, and the harder temporal split amplifies seed
 sensitivity.
@@ -798,7 +797,7 @@ is lowest around 16--26 bits.}
 \subsection{FPGA Deployment}
 
 RAM neurons map naturally to FPGA resources: each neuron's lookup table
-stores in block RAM (BRAM) or distributed LUTs, with the evolved
+stores in block RAM (BRAM) or distributed LUTs with the evolved
 connection map implemented as compile-time wire assignments (pure routing,
 zero logic).  We analyze two deployment configurations targeting the
 Xilinx Zynq Z-7020 (53,200 LUTs, 140 BRAM36 blocks, 612\,KB).
@@ -821,7 +820,7 @@ correlated (bit $k$ is set iff the feature value exceeds threshold $k$),
 a neuron addressing 34 bits across 15--18 features observes only
 ${\sim}3{,}500$ unique addresses from 2.26 million training examples, not
 $2^{34}$.  We store only these trained entries as sorted (key, value) pairs
-in BRAM, with binary-search lookup.
+in BRAM with binary-search lookup.
 
 Our best 34-bit genome (11 neurons, 99.59\% F1, 0.12\% FPR) contains
 only 41,215 sparse entries (362\,KB).  Vivado 2025.2 synthesis for the
@@ -877,7 +876,7 @@ Dataset (split) & Config & F1 & FPR & $N$ & LUTs (\%) & Fmax & Latency \\
 Our designs exhibit 210--644\,ns latency, compared to FWIW's 10.8\,ns.
 This difference stems from our three-phase binary-search lookup
 (ADDR$\to$WAIT$\to$COMPARE, 3 cycles per search step, 11--13 steps)
-versus FWIW's single-cycle combinational Bloom filter.  However, with
+versus FWIW's single-cycle combinational Bloom filter.  However with
 pipelining (one new classification per cycle), throughput ranges from
 59\,MS/s (500-neuron) to 195\,MS/s (11-neuron).  For network IDS, the
 relevant metric is throughput: 100\,Gbps line-rate inspection requires
@@ -937,7 +936,7 @@ contributes three advances over prior WNN-based IDS:
 
 \item \textbf{Encoding resolution analysis.}  A systematic sweep of
   thermometer encoding widths (8--64 bits) reveals a sharp performance
-  knee at 16 bits per feature on CICIDS2017, with diminishing returns
+  knee at 16 bits per feature on CICIDS2017 with diminishing returns
   beyond.  This finding guides practitioners in selecting encoding
   parameters for WNN deployments.
 
@@ -946,7 +945,7 @@ contributes three advances over prior WNN-based IDS:
   (${\sim}$3{,}500 unique addresses per neuron from millions of training
   examples), enabling sparse BRAM-based deployment on a \$100 Zynq Z-7020
   FPGA.  Vivado synthesis yields 622~LUTs for our best genome
-  (99.59\% F1, 0.12\% FPR), with functional verification confirming
+  (99.59\% F1, 0.12\% FPR) with functional verification confirming
   100\% match between RTL and the Python training model across 1{,}000
   test vectors.
 \end{enumerate}
