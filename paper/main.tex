@@ -424,13 +424,20 @@ seeds the second.
 \textbf{Phase 1: Grid Search.} Exhaustive evaluation of $(N, b)$
 configurations (e.g., $N \in \{5, 10, \ldots, 500\}$,
 $b \in \{4, 8, \ldots, 34\}$) with random connectivity. Each configuration
-is trained and evaluated, then ranked by a fitness function. The top-$k$
-configurations seed the subsequent GA population.
+is trained on the full training set and evaluated using 5-fold
+cross-validation, then ranked by a fitness function.  The best $(N, b)$
+configuration is used to generate an initial population of $P$ genomes
+(default $P{=}50$), each with the same architecture but different random
+connectivity, seeding the subsequent GA phase.
 
 \textbf{Phase 2: GA Neurons.} A genetic algorithm optimizes neuron count
-$N$ while preserving learned connections. Crossover exchanges neuron groups
-between parents; mutation adds or removes neurons. This phase discovers the
-optimal model capacity for the dataset.
+$N$ starting from the grid search population. Crossover exchanges neuron
+groups between parents; mutation adds or removes neurons.  The GA
+preserves each neuron's learned connections and trained memory, so
+structural changes (adding/removing neurons) do not discard prior
+training.  This phase discovers the optimal model capacity for the
+dataset, typically reducing neuron count by 30--40\% while maintaining
+or improving accuracy (Section~\ref{sec:phase-progression}).
 
 The framework supports additional phases (GA bits, GA connections, tabu
 search refinement, and Lamarckian evolution) which are evaluated in
@@ -449,7 +456,11 @@ where $r_m(g)$ is genome $g$'s rank for metric $m$ (lower rank = better).
 We use $w_{CE}{=}0.2$, $w_{F1}{=}0.3$, $w_{FPR}{=}0.4$, $w_{Acc}{=}0.1$,
 where CE (cross-entropy) measures prediction confidence, F1 is the
 harmonic mean of precision and recall, and FPR (false positive rate)
-is the fraction of benign flows misclassified as attacks.
+is the fraction of benign flows misclassified as attacks.  These
+weights were selected empirically from a sweep of weight combinations,
+prioritizing low FPR (critical for operational IDS where false alarms
+erode analyst trust) while maintaining strong F1.  The same weights
+are used across all datasets and experiments.
 
 \subsection{GPU-Accelerated Optimization}
 
