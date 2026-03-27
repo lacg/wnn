@@ -15,9 +15,9 @@
 \newlabel{sec:background}{{2}{2}{Background}{section.2}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {2.1}RAM Neurons and Weightless Neural Networks}{2}{subsection.2.1}\protected@file@percent }
 \citation{ludermir1999weightless}
-\citation{susskind2022bthowen}
 \@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces RAM neuron architecture with two neurons ($N{=}2$, $n{=}3$ address bits each). Each neuron selects 3 bits from the 9-bit input via its connectivity map, forms a 3-bit address, and looks up its quad-weighted memory ($2^3{=}8$ cells). Cell colors: \textcolor {green!60!black}{TRUE (1.0)}, \textcolor {blue!60}{WEAK\_TRUE (0.75)}, \textcolor {gray}{WEAK\_FALSE (0.25)}, \textcolor {red!70}{FALSE (0.0)}. The mean score is thresholded to classify the input.}}{3}{figure.1}\protected@file@percent }
 \newlabel{fig:ram-neuron}{{1}{3}{RAM neuron architecture with two neurons ($N{=}2$, $n{=}3$ address bits each). Each neuron selects 3 bits from the 9-bit input via its connectivity map, forms a 3-bit address, and looks up its quad-weighted memory ($2^3{=}8$ cells). Cell colors: \textcolor {green!60!black}{TRUE (1.0)}, \textcolor {blue!60}{WEAK\_TRUE (0.75)}, \textcolor {gray}{WEAK\_FALSE (0.25)}, \textcolor {red!70}{FALSE (0.0)}. The mean score is thresholded to classify the input}{figure.1}{}}
+\citation{susskind2022bthowen}
 \citation{moustafa2015unswnb15}
 \citation{susskind2023fwiw}
 \citation{sharafaldin2018cicids2017}
@@ -56,32 +56,53 @@
 \@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Statistical Protocol}{8}{subsection.5.3}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{\numberline {6}Experimental Results}{8}{section.6}\protected@file@percent }
 \newlabel{sec:results}{{6}{8}{Experimental Results}{section.6}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}UNSW-NB15 Results}{8}{subsection.6.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}CICIDS2017 Results}{8}{subsection.6.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}CIC-IoT-2023 Results}{8}{subsection.6.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}Phase Progression Analysis}{8}{subsection.6.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.5}Comparison with Baselines}{8}{subsection.6.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.6}Model Size Analysis}{8}{subsection.6.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}UNSW-NB15 Temporal Results}{8}{subsection.6.1}\protected@file@percent }
+\newlabel{sec:results-unsw}{{6.1}{8}{UNSW-NB15 Temporal Results}{subsection.6.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}CICIDS2017 Random Results}{8}{subsection.6.2}\protected@file@percent }
+\newlabel{sec:results-cicids}{{6.2}{8}{CICIDS2017 Random Results}{subsection.6.2}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces UNSW-NB15 temporal split results (112 runs, 8-bit thermometer, GA~Neurons best-fitness genome). Neurons: 232 $\pm $ 132, address bits: 32.}}{9}{table.1}\protected@file@percent }
+\newlabel{tab:unsw}{{1}{9}{UNSW-NB15 temporal split results (112 runs, 8-bit thermometer, GA~Neurons best-fitness genome). Neurons: 232 $\pm $ 132, address bits: 32}{table.1}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces CICIDS2017 random split results (31 of 112 runs, 16-bit thermometer, GA~Neurons best-fitness genome). Neurons: 236 $\pm $ 167, address bits: 32--34. Final numbers will be updated when all 112 runs complete.}}{9}{table.2}\protected@file@percent }
+\newlabel{tab:cicids}{{2}{9}{CICIDS2017 random split results (31 of 112 runs, 16-bit thermometer, GA~Neurons best-fitness genome). Neurons: 236 $\pm $ 167, address bits: 32--34. Final numbers will be updated when all 112 runs complete}{table.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}CIC-IoT-2023 Results}{9}{subsection.6.3}\protected@file@percent }
+\newlabel{sec:results-ciot}{{6.3}{9}{CIC-IoT-2023 Results}{subsection.6.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}Phase Progression Analysis}{9}{subsection.6.4}\protected@file@percent }
+\newlabel{sec:phase-progression}{{6.4}{9}{Phase Progression Analysis}{subsection.6.4}{}}
 \citation{susskind2023fwiw}
-\citation{susskind2022bthowen}
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Phase progression on CICIDS2017 (31 runs, val\_cal threshold, best-fitness genome).}}{10}{table.3}\protected@file@percent }
+\newlabel{tab:phase}{{3}{10}{Phase progression on CICIDS2017 (31 runs, val\_cal threshold, best-fitness genome)}{table.3}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Comparison with baselines. ``Ours'' entries trained on identical data with same preprocessing. FWIW uses a different split protocol.}}{10}{table.4}\protected@file@percent }
+\newlabel{tab:baselines}{{4}{10}{Comparison with baselines. ``Ours'' entries trained on identical data with same preprocessing. FWIW uses a different split protocol}{table.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.5}Comparison with Baselines}{10}{subsection.6.5}\protected@file@percent }
+\newlabel{sec:baselines}{{6.5}{10}{Comparison with Baselines}{subsection.6.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.6}Model Size Analysis}{10}{subsection.6.6}\protected@file@percent }
+\newlabel{sec:model-size}{{6.6}{10}{Model Size Analysis}{subsection.6.6}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Deployed model sizes.}}{11}{table.5}\protected@file@percent }
+\newlabel{tab:model-size}{{5}{11}{Deployed model sizes}{table.5}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {7}Discussion}{11}{section.7}\protected@file@percent }
+\newlabel{sec:discussion}{{7}{11}{Discussion}{section.7}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}Connectivity as Feature Selection}{11}{subsection.7.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Threshold Sensitivity}{11}{subsection.7.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Effect of thermometer encoding resolution on classification performance. (a)~CICIDS2017 F1-macro shows a clear knee at 16 bits, with diminishing returns beyond. (b)~The GA finds the fewest neurons at 16 bits, suggesting optimal information density. (c)~UNSW-NB15 temporal split shows no clear trend (high variance from only 2 runs per configuration). (d)~CICIDS2017 false positive rate is lowest around 16--26 bits.}}{12}{figure.2}\protected@file@percent }
+\newlabel{fig:therm_sweep}{{2}{12}{Effect of thermometer encoding resolution on classification performance. (a)~CICIDS2017 F1-macro shows a clear knee at 16 bits, with diminishing returns beyond. (b)~The GA finds the fewest neurons at 16 bits, suggesting optimal information density. (c)~UNSW-NB15 temporal split shows no clear trend (high variance from only 2 runs per configuration). (d)~CICIDS2017 false positive rate is lowest around 16--26 bits}{figure.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.3}Encoding Resolution Analysis}{12}{subsection.7.3}\protected@file@percent }
+\citation{susskind2023fwiw}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.4}FPGA Deployment}{13}{subsection.7.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Dense configuration (8--12-bit addresses).}{13}{section*.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Sparse configuration (34-bit addresses).}{13}{section*.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Comparison with FWIW.}{13}{section*.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Latency and throughput.}{13}{section*.5}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces FPGA synthesis results on Xilinx Zynq Z-7020 (53,200 LUTs, 106,400 FFs). All designs synthesized with Vivado 2025.2 in out-of-context mode. Sparse neuron tables are inferred as distributed LUTs (0 BRAMs, 0 DSPs in all cases). Latency computed from binary-search depth and post-synthesis Fmax.}}{14}{table.6}\protected@file@percent }
+\newlabel{tab:fpga}{{6}{14}{FPGA synthesis results on Xilinx Zynq Z-7020 (53,200 LUTs, 106,400 FFs). All designs synthesized with Vivado 2025.2 in out-of-context mode. Sparse neuron tables are inferred as distributed LUTs (0 BRAMs, 0 DSPs in all cases). Latency computed from binary-search depth and post-synthesis Fmax}{table.6}{}}
+\@writefile{toc}{\contentsline {paragraph}{Functional verification.}{14}{section*.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.5}Limitations}{14}{subsection.7.5}\protected@file@percent }
 \bibstyle{splncs04}
 \bibdata{references}
 \bibcite{mdpi2024enhanced}{1}
-\@writefile{toc}{\contentsline {section}{\numberline {7}Discussion}{9}{section.7}\protected@file@percent }
-\newlabel{sec:discussion}{{7}{9}{Discussion}{section.7}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}Connectivity as Feature Selection}{9}{subsection.7.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Threshold Sensitivity}{9}{subsection.7.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.3}FPGA Deployment Potential}{9}{subsection.7.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.4}Limitations}{9}{subsection.7.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {8}Related Work}{9}{section.8}\protected@file@percent }
-\newlabel{sec:related}{{8}{9}{Related Work}{section.8}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {8.1}WNN for Intrusion Detection}{9}{subsection.8.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {8.2}ML-Based IDS}{9}{subsection.8.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {8.3}FPGA-Based IDS}{9}{subsection.8.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {9}Conclusion}{9}{section.9}\protected@file@percent }
-\newlabel{sec:conclusion}{{9}{9}{Conclusion}{section.9}{}}
 \bibcite{aleksander1984wisard}{2}
 \bibcite{andronic2023polylut}{3}
+\@writefile{toc}{\contentsline {section}{\numberline {8}Conclusion}{15}{section.8}\protected@file@percent }
+\newlabel{sec:conclusion}{{8}{15}{Conclusion}{section.8}{}}
 \bibcite{engelen2021cicids}{4}
 \bibcite{kull2017beta}{5}
 \bibcite{moustafa2015unswnb15}{6}
@@ -95,4 +116,4 @@
 \bibcite{umuroglu2020logicnets}{14}
 \bibcite{zhao2020pigasus}{15}
 \bibcite{zoghi2024ids}{16}
-\gdef \@abspage@last{11}
+\gdef \@abspage@last{17}
