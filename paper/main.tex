@@ -943,7 +943,11 @@ Dataset (split) & Config & F1 & FPR & Acc & $N$ & LUTs (\%) & Fmax & Latency \\
 \paragraph{Latency and throughput.}
 Our dense configuration (12-bit addresses) achieves 10.7\,ns latency
 in 59~LUTs --- matching FWIW's 10.8\,ns while using 4.6$\times$ fewer
-LUTs.  Our sparse configurations (34-bit addresses) exhibit higher
+LUTs.  However, our Fmax (94\,MHz) is significantly lower than FWIW's
+740\,MHz due to the wider accumulation tree across 83 neurons; the
+similar latency results from our single-cycle lookup versus FWIW's
+multi-cycle hashed Bloom filter.  Our sparse configurations (34-bit
+addresses) exhibit higher
 latency (210--644\,ns) due to $O(\log n)$ binary search (3 cycles per
 step, 11--13 steps), but with pipelining throughput ranges from
 59\,MS/s (500-neuron) to 195\,MS/s (11-neuron).  For network IDS,
