@@ -1,0 +1,14 @@
+{
+  "flow_id": 1024,
+  "genome_hash": "98ff5233e9aa9ffe",
+  "phase": "GA Neurons",
+  "total_neurons": 83,
+  "addr_bits": 12,
+  "entries_per_neuron": 4096,
+  "input_bits": 176,
+  "n_bits_thermometer": 16,
+  "dense_bytes": 339968,
+  "dataset": "unsw-nb15",
+  "split": "random",
+  "mode": "dense"
+}
