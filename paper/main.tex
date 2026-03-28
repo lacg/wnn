@@ -709,8 +709,10 @@ On the UNSW-NB15 temporal split, our WNN outperforms both Random Forest
 and XGBoost by 1--2 percentage points in F1, demonstrating that
 thermometer encoding provides robustness to temporal distribution shift.
 On the CICIDS2017 random split, Random Forest leads (99.83\% vs.\
-our 99.40\%), exploiting full float64 precision that our 16-bit
-thermometer encoding cannot match.
+our 99.40\%).  Our thermometer sweep (Section~\ref{sec:discussion})
+shows this gap persists even at 64-bit encoding (99.41\%), indicating
+an architectural limitation of RAM neuron lookup rather than encoding
+precision.
 
 \begin{table}[ht!]
 \centering
