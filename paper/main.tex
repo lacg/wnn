@@ -491,13 +491,14 @@ where training data precedes test data chronologically, better simulate
 deployment conditions where the model must generalize to future traffic
 patterns.
 
-We evaluate under both protocols for UNSW-NB15, and random splits
+We evaluate under the temporal protocol for UNSW-NB15 and random splits
 for CICIDS2017 and CIC-IoT-2023:
 \begin{itemize}
 \item \textbf{Temporal split (UNSW-NB15):} The official 175K/82K
   split with temporal separation between training and testing periods.
 \item \textbf{Random splits (all datasets):} Stratified random splits,
   enabling comparison with prior work.
+  UNSW-NB15 uses 80/20 (206K/52K);
   CICIDS2017 uses 80/20 (2.3M/566K); CIC-IoT-2023 uses 80/20.
 \end{itemize}
 
