@@ -61,7 +61,8 @@ the sensitivity of binary classifiers to decision boundary selection.
 Across 112 independent runs per configuration, our approach achieves
 88.06\% F1 on UNSW-NB15 temporal (outperforming Random Forest by 1.4
 points) and 99.40\% F1 on CICIDS2017 random (0.20\% false positive rate),
-with Vivado-verified FPGA synthesis requiring only 622 LUTs on a Zynq~Z-7020.
+with Vivado-verified FPGA synthesis requiring as few as 82 LUTs on a
+Zynq~Z-7020.
 
 \keywords{Intrusion Detection \and Weightless Neural Networks \and
 Evolutionary Optimization \and Feature Selection \and FPGA}
@@ -869,11 +870,11 @@ configurations across both datasets.  On CICIDS2017, capping at 12 bits
 yields 98.53\% F1 in 104\,KB.  On UNSW-NB15, performance is remarkably
 stable across address widths: 8-bit genomes achieve 93.5\% F1 in just
 6\,KB,
-nearly matching uncapped accuracy.  With $O(1)$ direct LUT lookup
-(1--2 cycles), estimated latency is 5--10\,ns at 200\,MHz, comparable
-to FWIW's 10.8\,ns at 740\,MHz while providing evolved connectivity.
-(Dense configurations were not synthesized; latency is estimated from
-cycle count.)
+nearly matching uncapped accuracy.  Vivado synthesis of our best
+12-bit genome (F1022, 104 neurons, 98.53\% F1) yields just
+\textbf{82~LUTs} (0.15\%), 7~FFs, zero BRAMs --- smaller than FWIW's
+269~LUTs.  With $O(1)$ direct LUT lookup (1 cycle at 90.5\,MHz),
+latency is \textbf{11.0\,ns}, matching FWIW's 10.8\,ns.
 
 \paragraph{Sparse configuration (34-bit addresses).}
 With the full 34-bit address space, a naive dense table would require
@@ -889,9 +890,9 @@ Our best 34-bit genome (11 neurons, 99.59\% F1, 0.12\% FPR) contains
 only 41,215 sparse entries (362\,KB).  Vivado 2025.2 synthesis for the
 Zynq Z-7020 inferred \textbf{distributed LUTs} rather than block RAM,
 yielding 622 LUTs (1.17\%), 276 flip-flops (0.26\%), zero BRAMs, and
-zero DSPs.  Binary search over ${\sim}5{,}000$ entries per neuron
-completes in 13 cycles; with pipelining, throughput remains one
-classification per cycle.  At 200\,MHz this yields 65\,ns latency
+zero DSPs.  $O(\log n)$ binary search over ${\sim}5{,}000$ entries per
+neuron completes in 13 cycles; with pipelining, throughput remains one
+classification per cycle.  At 195\,MHz this yields 210\,ns latency
 and 200\,MS/s throughput, well above the 12.5\,MS/s needed for
 100\,Gbps line-rate inspection.  These are post-synthesis estimates;
 place-and-route typically adds less than 10\% overhead.
@@ -919,7 +920,8 @@ Latency computed from binary-search depth and post-synthesis Fmax.}
 \toprule
 Dataset (split) & Config & F1 & FPR & $N$ & LUTs (\%) & Fmax & Latency \\
 \midrule
-\multirow{3}{*}{\shortstack[l]{CICIDS2017\\(random)}}
+\multirow{4}{*}{\shortstack[l]{CICIDS2017\\(random)}}
+ & 104n (12b dense)$^\S$ & 98.53\% & 0.50\%          & 104 & \textbf{82 (0.15\%)} & 91\,MHz  & \textbf{11\,ns} \\
  & 11n (best F1)  & \textbf{99.59\%} & \textbf{0.12\%} & 11  & 622 (1.2\%)     & 195\,MHz & 210\,ns \\
  & 91n (mid)      & 99.54\%          & 0.12\%          & 91  & 2{,}907 (5.5\%)  & 94\,MHz  & 436\,ns \\
  & 500n (large)   & 99.23\%          & 0.27\%          & 500 & 11{,}818 (22\%)  & 59\,MHz  & 644\,ns \\
@@ -931,7 +933,8 @@ Dataset (split) & Config & F1 & FPR & $N$ & LUTs (\%) & Fmax & Latency \\
 \midrule
 \shortstack[l]{UNSW-NB15\\(random$^*$)} & FWIW~\cite{susskind2023fwiw} & 98.5\%$^\dagger$ & 1.57\% & ${\sim}$30 & 269 & 740\,MHz & 10.8\,ns \\
 \bottomrule
-\multicolumn{8}{l}{\small $^\dagger$Accuracy (not F1). $^*$90/10, deduplicated, oversampled. $N$\,=\,neurons. 0 BRAMs, 0 DSPs for all designs.}
+\multicolumn{8}{l}{\small $^\S$Dense $O(1)$ lookup; all others use $O(\log n)$ sparse search. $^\dagger$Accuracy (not F1).}\\
+\multicolumn{8}{l}{\small $^*$90/10, deduplicated, oversampled. $N$\,=\,neurons. 0 BRAMs, 0 DSPs for all designs.}
 \end{tabular}}
 \end{table}
 
