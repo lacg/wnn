@@ -865,16 +865,17 @@ Xilinx Zynq Z-7020 (53,200 LUTs, 140 BRAM36 blocks, 612\,KB).
 \paragraph{Dense configuration (8--12-bit addresses).}
 With address width capped, each neuron's full lookup table is synthesized
 into distributed LUTs (Vivado infers zero BRAMs), enabling $O(1)$
-direct-lookup inference per neuron.  Table~\ref{tab:fpga} shows
-configurations across both datasets.  On CICIDS2017, capping at 12 bits
-yields 98.53\% F1 in 104\,KB.  On UNSW-NB15, performance is remarkably
-stable across address widths: 8-bit genomes achieve 93.5\% F1 in just
-6\,KB,
-nearly matching uncapped accuracy.  Vivado synthesis of our best
-12-bit genome (F1022, 104 neurons, 98.53\% F1) yields just
-\textbf{82~LUTs} (0.15\%), 7~FFs, zero BRAMs --- smaller than FWIW's
-269~LUTs.  With $O(1)$ direct LUT lookup (1 cycle at 90.5\,MHz),
-latency is \textbf{11.0\,ns}, matching FWIW's 10.8\,ns.
+direct-lookup inference per neuron.
+
+On CICIDS2017, capping at 12 bits yields 98.53\% F1.
+On UNSW-NB15, performance is remarkably stable across address widths:
+8-bit genomes achieve 93.5\% F1 in just 6\,KB, nearly matching uncapped
+accuracy (Table~\ref{tab:fpga}).
+
+Our best dense genome (104 neurons, 12-bit) synthesizes to just
+\textbf{82~LUTs} --- 3.3$\times$ smaller than FWIW's 269~LUTs ---
+with \textbf{11.0\,ns} latency ($O(1)$, single cycle at 90.5\,MHz),
+matching FWIW's 10.8\,ns.
 
 \paragraph{Sparse configuration (34-bit addresses).}
 With the full 34-bit address space, a naive dense table would require
