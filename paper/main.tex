@@ -939,7 +939,7 @@ Dataset (split) & Config & F1 & FPR & $N$ & LUTs (\%) & Fmax & Latency \\
 \end{table}
 
 \paragraph{Latency and throughput.}
-Our designs exhibit 210--644\,ns latency, compared to FWIW's 10.8\,ns.
+Our sparse configuration designs exhibit 210--644\,ns latency, compared to FWIW's 10.8\,ns.
 This difference stems from our three-phase binary-search lookup
 (ADDR$\to$WAIT$\to$COMPARE, 3 cycles per search step, 11--13 steps)
 versus FWIW's single-cycle combinational Bloom filter.  However with
