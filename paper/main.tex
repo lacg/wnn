@@ -987,10 +987,16 @@ near-$O(1)$ speed.
 
 Fourth, the remaining 0.43\% F1 gap to Random Forest on CICIDS2017
 is not explained by encoding precision (64-bit yields no improvement)
-and warrants further investigation.  Promising avenues include
-\emph{connectivity optimization} (GA-evolved neuron wiring, evaluated
-in a follow-up study), multi-cluster discriminators, and hybrid
-encoding strategies.
+and warrants further investigation.  Our framework supports additional
+optimization phases beyond the two evaluated here: \emph{GA bits}
+(evolving address width per neuron), \emph{GA connections} (evolving
+which input bits each neuron reads), \emph{tabu search} variants of
+each (TS neurons, TS bits, TS connections), and \emph{Lamarckian
+genesis phases} (neurogenesis, synaptogenesis, axonogenesis) that
+progressively refine neuron structure.  These phases, combined with
+multi-cluster discriminators and hybrid encoding strategies, offer
+multiple paths to close the accuracy gap while preserving the
+hardware-friendly lookup-based architecture.
 
 % ============================================================================
 \section{Conclusion}
