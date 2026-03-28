@@ -523,16 +523,16 @@ sensitivity:
   regression on held-out scores, $P(\text{attack})\!=\!\sigma(as\!+\!b)$.
 \item \textbf{Beta calibration}~\cite{kull2017beta}: Three-parameter
   logit model, more flexible than Platt for asymmetric distributions.
-\item \textbf{Empirical:} Histogram-based threshold from held-out
+\item \textbf{Histogram:} Histogram-based threshold from held-out
   score distribution.
-\item \textbf{Empirical cumulative:} CDF-based threshold selection.
-\item \textbf{Oracle:} Threshold swept on the held-out validation set
+\item \textbf{Histogram cumulative:} CDF-based threshold selection.
+\item \textbf{Validation:} Threshold swept on the held-out validation set
   (not used during training or GA selection). This represents an upper
   bound on achievable performance, not available in deployment, but
   quantifies the calibration gap.
 \end{enumerate}
 
-The gap between oracle and train-calibrated performance
+The gap between validation and train-calibrated performance
 quantifies how much accuracy is ``left on the table'' by
 imperfect threshold selection, a finding we report for each
 dataset and configuration.
@@ -572,7 +572,7 @@ UNSW-NB15 temporal split (8-bit thermometer, top-20 RF features,
 population size~50).  Each run uses a different random seed, producing
 an independent genome through the two-phase pipeline.
 
-The oracle threshold (val\_cal) achieves 88.06\% $\pm$ 1.84\% F1-macro
+The validation threshold (val\_cal) achieves 88.06\% $\pm$ 1.84\% F1-macro
 with 9.92\% $\pm$ 3.91\% FPR.  The train-calibrated threshold drops to
 82.87\% F1 (a 5.18 percentage point gap), reflecting the difficulty of
 threshold transfer from the balanced validation set to the imbalanced
@@ -589,7 +589,7 @@ GA~Neurons best-fitness genome). Neurons: 232 $\pm$ 132, address bits: 32.}
 \toprule
 Threshold Mode & F1-macro (\%) & FPR (\%) & Accuracy (\%) \\
 \midrule
-Oracle (val\_cal)   & 88.06 $\pm$ 1.84 & 9.92 $\pm$ 3.91  & 88.13 \\
+Validation (val\_cal)   & 88.06 $\pm$ 1.84 & 9.92 $\pm$ 3.91  & 88.13 \\
 Train-cal           & 82.87 $\pm$ 2.47 & 32.26 $\pm$ 6.74 & 83.85 \\
 Holdout (test\_cal) & 83.61 $\pm$ 3.48 & 25.31 $\pm$ 15.24 & 84.42 \\
 Fixed 0.5           & 84.25 $\pm$ 3.85 & 22.94 $\pm$ 15.93 & 84.98 \\
@@ -607,7 +607,7 @@ based on our thermometer sweep analysis (Section~\ref{sec:discussion}),
 which identified 16~bits as the optimal resolution for this dataset.
 
 Performance is substantially higher than UNSW-NB15 temporal, reflecting
-the easier random split.  The oracle threshold achieves 99.40\% $\pm$ 0.06\%
+the easier random split.  The validation threshold achieves 99.40\% $\pm$ 0.06\%
 F1-macro with 0.195\% FPR.  Notably, the variance is an order of magnitude
 smaller than UNSW-NB15 ($\pm$0.06\% vs.\ $\pm$1.84\%), confirming that
 random splits produce more stable evaluations.
@@ -623,7 +623,7 @@ Final numbers will be updated when all 112 runs complete.}
 \toprule
 Threshold Mode & F1-macro (\%) & FPR (\%) & Accuracy (\%) \\
 \midrule
-Oracle (val\_cal)   & 99.40 $\pm$ 0.06 & 0.195 $\pm$ 0.056 & 99.62 \\
+Validation (val\_cal)   & 99.40 $\pm$ 0.06 & 0.195 $\pm$ 0.056 & 99.62 \\
 Train-cal           & 99.37 $\pm$ 0.12 & 0.208 $\pm$ 0.107 & 99.60 \\
 Holdout (test\_cal) & 99.30 $\pm$ 0.15 & 0.237 $\pm$ 0.063 & 99.56 \\
 Fixed 0.5           & 99.25 $\pm$ 0.12 & 0.390 $\pm$ 0.106 & 99.52 \\
@@ -646,7 +646,7 @@ and address widths, then refines the best genome with a genetic algorithm
 that mutates neuron count while preserving evolved connections.
 Table~\ref{tab:phase} compares the two phases on CICIDS2017.
 
-The GA phase improves oracle F1 by 0.06 percentage points on average
+The GA phase improves validation F1 by 0.06 percentage points on average
 (99.34\% $\to$ 99.40\%) while reducing neuron count by 35\%
 (361 $\to$ 236 neurons).  The GA also halves the F1 variance
 ($\pm$0.11\% $\to$ $\pm$0.06\%), indicating that neuron-count
@@ -766,7 +766,7 @@ or improving accuracy (Table~\ref{tab:phase}).
 
 \subsection{Threshold Sensitivity}
 
-The gap between oracle (val\_cal) and deployable (train\_cal) thresholds
+The gap between validation (val\_cal) and deployable (train\_cal) thresholds
 represents the central practical challenge for WNN-based IDS.  On
 UNSW-NB15 temporal, this gap is 5.18 percentage points in F1
 (88.06\% vs.\ 82.87\%), driven by distribution shift between the
@@ -926,7 +926,7 @@ do not exploit.  Multi-class WNN classification (e.g., one discriminator
 per attack category) is a natural extension.
 
 Second, threshold calibration remains a practical challenge.
-The 5\% F1 gap between oracle and train-calibrated thresholds on the
+The 5\% F1 gap between validation and train-calibrated thresholds on the
 temporal split indicates that deployed systems require either a
 representative calibration set from the target distribution or adaptive
 threshold mechanisms.
