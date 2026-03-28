@@ -862,11 +862,13 @@ zero logic).  We analyze two deployment configurations targeting the
 Xilinx Zynq Z-7020 (53,200 LUTs, 140 BRAM36 blocks, 612\,KB).
 
 \paragraph{Dense configuration (8--12-bit addresses).}
-With address width capped, each neuron's full lookup table fits in BRAM or
-distributed LUTs.  Table~\ref{tab:fpga} shows configurations across both
-datasets.  On CICIDS2017, capping at 12 bits yields 98.53\% F1 in 104\,KB
-(16\% of Z-7020 BRAM).  On UNSW-NB15, performance is remarkably stable
-across address widths: 8-bit genomes achieve 93.5\% F1 in just 6\,KB,
+With address width capped, each neuron's full lookup table is synthesized
+into distributed LUTs (Vivado infers zero BRAMs), enabling $O(1)$
+direct-lookup inference per neuron.  Table~\ref{tab:fpga} shows
+configurations across both datasets.  On CICIDS2017, capping at 12 bits
+yields 98.53\% F1 in 104\,KB.  On UNSW-NB15, performance is remarkably
+stable across address widths: 8-bit genomes achieve 93.5\% F1 in just
+6\,KB,
 nearly matching uncapped accuracy.  Classification is a single BRAM read
 (1--2 cycles), yielding 5--10\,ns latency at 200\,MHz, matching FWIW's
 latency class (10.8\,ns at 740\,MHz) while providing evolved connectivity.
