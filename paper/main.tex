@@ -431,13 +431,14 @@ configuration is used to generate an initial population of $P$ genomes
 connectivity, seeding the subsequent GA phase.
 
 \noindent\textbf{Phase 2: GA Neurons.} A genetic algorithm optimizes neuron count
-$N$ starting from the grid search population. Crossover exchanges neuron
-groups between parents; mutation adds or removes neurons.  The GA
-preserves each neuron's learned connections and trained memory, so
-structural changes (adding/removing neurons) do not discard prior
-training.  This phase discovers the optimal model capacity for the
-dataset, typically reducing neuron count by 30--40\% while maintaining
-or improving accuracy (Section~\ref{sec:phase-progression}).
+$N$ starting from the grid search population.  Elitism preserves the top
+20\% of genomes each generation.  Crossover exchanges neuron groups
+between parents; mutation adds or removes neurons.  The GA preserves
+each neuron's learned connections and trained memory, so structural
+changes (adding/removing neurons) do not discard prior training.
+This phase discovers the optimal model capacity for the dataset,
+typically reducing neuron count by 30--40\% while maintaining or
+improving accuracy (Section~\ref{sec:phase-progression}).
 
 The framework supports additional phases (GA bits, GA connections, tabu
 search refinement, and Lamarckian evolution) which are evaluated in
