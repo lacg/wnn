@@ -869,9 +869,11 @@ configurations across both datasets.  On CICIDS2017, capping at 12 bits
 yields 98.53\% F1 in 104\,KB.  On UNSW-NB15, performance is remarkably
 stable across address widths: 8-bit genomes achieve 93.5\% F1 in just
 6\,KB,
-nearly matching uncapped accuracy.  Classification is a single BRAM read
-(1--2 cycles), yielding 5--10\,ns latency at 200\,MHz, matching FWIW's
-latency class (10.8\,ns at 740\,MHz) while providing evolved connectivity.
+nearly matching uncapped accuracy.  With $O(1)$ direct LUT lookup
+(1--2 cycles), estimated latency is 5--10\,ns at 200\,MHz, comparable
+to FWIW's 10.8\,ns at 740\,MHz while providing evolved connectivity.
+(Dense configurations were not synthesized; latency is estimated from
+cycle count.)
 
 \paragraph{Sparse configuration (34-bit addresses).}
 With the full 34-bit address space, a naive dense table would require
