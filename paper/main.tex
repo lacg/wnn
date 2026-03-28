@@ -544,11 +544,12 @@ With $n=100$ and typical $\sigma \approx 1.4\%$, the 95\% confidence
 interval for the mean is $\pm 0.27\%$, sufficient to distinguish
 meaningful differences between configurations.
 
-K-fold cross-validation ($k{=}5$) is applied \emph{per generation}
-within the GA to reduce selection noise: each genome is evaluated
-on 5 different training subsets, and the averaged fitness determines
-selection. This prevents the GA from overfitting to a particular
-data partition.
+K-fold cross-validation ($k{=}5$) is applied \emph{every generation}
+within both phases: the training set is partitioned into 5 folds,
+and each genome is trained and evaluated on all 5 train/validation
+splits every generation. The averaged fitness across all 5 folds
+determines selection, preventing the GA from overfitting to a
+particular data partition and providing more robust genome ranking.
 
 All reported results use the \emph{best-fitness genome from the
 final optimization phase}, evaluated by the full-dataset evaluator
