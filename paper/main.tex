@@ -941,17 +941,18 @@ Dataset (split) & Config & F1 & FPR & Acc & $N$ & LUTs (\%) & Fmax & Latency \\
 \end{table}
 
 \paragraph{Latency and throughput.}
-Our sparse configuration designs exhibit 210--644\,ns latency, compared to FWIW's 10.8\,ns.
-This difference stems from our three-phase binary-search lookup
-(ADDR$\to$WAIT$\to$COMPARE, 3 cycles per search step, 11--13 steps)
-versus FWIW's single-cycle combinational Bloom filter.  However with
-pipelining (one new classification per cycle), throughput ranges from
-59\,MS/s (500-neuron) to 195\,MS/s (11-neuron).  For network IDS, the
-relevant metric is throughput: 100\,Gbps line-rate inspection requires
-only ${\sim}$12.5\,MS/s (at ${\sim}$1{,}000-byte average packets), well
-within the capability of all our configurations.  The sub-microsecond
-latency of both approaches is negligible compared to feature extraction
-overhead, which typically dominates the packet processing pipeline.
+Our dense configuration (12-bit addresses) achieves 10.7\,ns latency
+in 59~LUTs --- matching FWIW's 10.8\,ns while using 4.6$\times$ fewer
+LUTs.  Our sparse configurations (34-bit addresses) exhibit higher
+latency (210--644\,ns) due to $O(\log n)$ binary search (3 cycles per
+step, 11--13 steps), but with pipelining throughput ranges from
+59\,MS/s (500-neuron) to 195\,MS/s (11-neuron).  For network IDS,
+the relevant metric is throughput: 100\,Gbps line-rate inspection
+requires only ${\sim}$12.5\,MS/s (at ${\sim}$1{,}000-byte average
+packets), well within the capability of all our configurations.
+The sub-microsecond latency of both approaches is negligible compared
+to feature extraction overhead, which typically dominates the packet
+processing pipeline.
 
 \paragraph{Functional verification.}
 We verified both sparse and dense RTL implementations against the Python
