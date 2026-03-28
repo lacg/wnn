@@ -13,6 +13,13 @@
 \usepackage{tikz}
 \usetikzlibrary{positioning,arrows.meta,calc}
 
+% Reduce spacing around floats (tables and figures)
+\setlength{\textfloatsep}{8pt plus 2pt minus 2pt}
+\setlength{\floatsep}{6pt plus 2pt minus 2pt}
+\setlength{\intextsep}{6pt plus 2pt minus 2pt}
+\setlength{\abovecaptionskip}{4pt}
+\setlength{\belowcaptionskip}{2pt}
+
 % Toggle: set to true for submission (anonymous), false for camera-ready
 \newif\ifanonymous
 \anonymoustrue  % Change to \anonymousfalse for camera-ready
@@ -620,9 +627,14 @@ which identified 16~bits as the optimal resolution for this dataset.
 
 Performance is substantially higher than UNSW-NB15 temporal, reflecting
 the easier random split.  The validation threshold achieves 99.40\% $\pm$ 0.06\%
-F1-macro with 0.195\% FPR.  Notably, the variance is an order of magnitude
+F1-macro with 0.198\% FPR.  Notably, the variance is an order of magnitude
 smaller than UNSW-NB15 ($\pm$0.06\% vs.\ $\pm$1.84\%), confirming that
 random splits produce more stable evaluations.
+
+Among individual genomes, the best F1 achieves 99.54\% F1 / 0.119\% FPR /
+99.71\% Acc (91 neurons), the best FPR achieves 99.48\% F1 / 0.097\% FPR /
+99.67\% Acc (200 neurons), and a compact genome with only 9 neurons still
+reaches 99.34\% F1 / 0.291\% FPR / 99.58\% Acc.
 
 \begin{table}[ht!]
 \centering
