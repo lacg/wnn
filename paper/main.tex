@@ -578,9 +578,17 @@ with 9.92\% $\pm$ 3.91\% FPR.  The train-calibrated threshold drops to
 threshold transfer from the balanced validation set to the imbalanced
 temporal test split.  The fixed 0.5 threshold (84.25\% F1) outperforms
 train calibration, suggesting that aggressive threshold optimization
-on validation data overfits to the validation distribution.
+on validation data overfits to the validation distribution.  Platt
+scaling and beta calibration perform similarly to fixed 0.5, while
+histogram-based thresholds show the highest variance.
 
-\begin{table}[t]
+Among individual genomes, the best F1 achieves 90.82\% F1 / 4.66\% FPR
+(369 neurons), the best FPR achieves 89.65\% F1 / 3.84\% FPR
+(300 neurons), and a compact genome with only 92 neurons still reaches
+88.18\% F1 / 8.87\% FPR --- demonstrating that small, FPGA-friendly
+architectures remain competitive.
+
+\begin{table}[ht!]
 \centering
 \caption{UNSW-NB15 temporal split results (112 runs, 8-bit thermometer,
 GA~Neurons best-fitness genome). Neurons: 232 $\pm$ 132, address bits: 32.}
@@ -589,10 +597,14 @@ GA~Neurons best-fitness genome). Neurons: 232 $\pm$ 132, address bits: 32.}
 \toprule
 Threshold Mode & F1-macro (\%) & FPR (\%) & Accuracy (\%) \\
 \midrule
-Validation (val\_cal)   & 88.06 $\pm$ 1.84 & 9.92 $\pm$ 3.91   & 88.13 $\pm$ 1.80 \\
-Train-cal              & 82.87 $\pm$ 2.47 & 32.26 $\pm$ 6.74  & 83.85 $\pm$ 2.06 \\
-Holdout (test\_cal)    & 83.61 $\pm$ 3.48 & 25.31 $\pm$ 15.24 & 84.42 $\pm$ 2.84 \\
-Fixed 0.5              & 84.25 $\pm$ 3.85 & 22.94 $\pm$ 15.93 & 84.98 $\pm$ 3.18 \\
+Validation (val\_cal)      & 88.06 $\pm$ 1.84 & 9.92 $\pm$ 3.91    & 88.13 $\pm$ 1.80 \\
+Train-cal                  & 82.87 $\pm$ 2.47 & 32.26 $\pm$ 6.74   & 83.85 $\pm$ 2.06 \\
+Holdout (test\_cal)        & 83.61 $\pm$ 3.48 & 25.31 $\pm$ 15.24  & 84.42 $\pm$ 2.84 \\
+Fixed 0.5                  & 84.25 $\pm$ 3.85 & 22.94 $\pm$ 15.93  & 84.98 $\pm$ 3.18 \\
+Platt                      & 84.03 $\pm$ 3.63 & 24.86 $\pm$ 14.90  & 84.80 $\pm$ 3.01 \\
+Beta                       & 84.02 $\pm$ 3.82 & 24.89 $\pm$ 15.30  & 84.80 $\pm$ 3.16 \\
+Histogram                  & 81.89 $\pm$ 3.73 & 34.65 $\pm$ 10.83  & 83.16 $\pm$ 3.07 \\
+Histogram cumul.           & 83.87 $\pm$ 3.97 & 26.60 $\pm$ 14.68  & 84.73 $\pm$ 3.28 \\
 \bottomrule
 \end{tabular*}
 \end{table}
@@ -612,7 +624,7 @@ F1-macro with 0.195\% FPR.  Notably, the variance is an order of magnitude
 smaller than UNSW-NB15 ($\pm$0.06\% vs.\ $\pm$1.84\%), confirming that
 random splits produce more stable evaluations.
 
-\begin{table}[t]
+\begin{table}[ht!]
 \centering
 \caption{CICIDS2017 random split results (31 of 112 runs, 16-bit
 thermometer, GA~Neurons best-fitness genome).
@@ -623,10 +635,14 @@ Final numbers will be updated when all 112 runs complete.}
 \toprule
 Threshold Mode & F1-macro (\%) & FPR (\%) & Accuracy (\%) \\
 \midrule
-Validation (val\_cal)   & 99.40 $\pm$ 0.06 & 0.195 $\pm$ 0.056 & 99.62 $\pm$ 0.04 \\
-Train-cal              & 99.37 $\pm$ 0.12 & 0.208 $\pm$ 0.107 & 99.62 $\pm$ 0.06 \\
-Holdout (test\_cal)    & 99.30 $\pm$ 0.15 & 0.237 $\pm$ 0.063 & 99.56 $\pm$ 0.10 \\
-Fixed 0.5              & 99.25 $\pm$ 0.12 & 0.390 $\pm$ 0.106 & 99.51 $\pm$ 0.08 \\
+Validation (val\_cal)      & 99.40 $\pm$ 0.06 & 0.198 $\pm$ 0.061  & 99.62 $\pm$ 0.04 \\
+Train-cal                  & 99.39 $\pm$ 0.10 & 0.191 $\pm$ 0.091  & 99.62 $\pm$ 0.06 \\
+Holdout (test\_cal)        & 99.30 $\pm$ 0.16 & 0.222 $\pm$ 0.081  & 99.56 $\pm$ 0.10 \\
+Fixed 0.5                  & 99.23 $\pm$ 0.12 & 0.411 $\pm$ 0.116  & 99.51 $\pm$ 0.08 \\
+Platt                      & 99.29 $\pm$ 0.13 & 0.294 $\pm$ 0.098  & 99.55 $\pm$ 0.08 \\
+Beta                       & 99.30 $\pm$ 0.14 & 0.275 $\pm$ 0.081  & 99.56 $\pm$ 0.09 \\
+Histogram                  & 98.62 $\pm$ 0.66 & 0.965 $\pm$ 0.592  & 99.11 $\pm$ 0.44 \\
+Histogram cumul.           & 99.32 $\pm$ 0.13 & 0.237 $\pm$ 0.086  & 99.57 $\pm$ 0.08 \\
 \bottomrule
 \end{tabular*}
 \end{table}
@@ -653,7 +669,7 @@ The GA phase improves validation F1 by 0.06 percentage points on average
 optimization acts as a regularizer, pruning redundant neurons that
 add noise without improving discrimination.
 
-\begin{table}[t]
+\begin{table}[ht!]
 \centering
 \caption{Phase progression on CICIDS2017 (31 runs, val\_cal threshold,
 best-fitness genome).}
@@ -684,7 +700,7 @@ On the CICIDS2017 random split, Random Forest leads (99.83\% vs.\
 our 99.40\%), exploiting full float64 precision that our 16-bit
 thermometer encoding cannot match.
 
-\begin{table}[t]
+\begin{table}[ht!]
 \centering
 \caption{Comparison with baselines. ``Ours'' entries trained on identical
 data with same preprocessing. FWIW uses a different split protocol.}
@@ -722,7 +738,7 @@ not the $2^{34}$ that a dense representation would require.  The
 ${\sim}$2\,MB.  These are larger than FWIW's 192-byte Bloom filter
 model but orders of magnitude smaller than tree ensembles.
 
-\begin{table}[t]
+\begin{table}[ht!]
 \centering
 \caption{Deployed model sizes.}
 \label{tab:model-size}
@@ -867,7 +883,7 @@ configuration matches FWIW's accuracy class with 3$\times$ lower FPR
 On UNSW-NB15, an 8-bit genome with just 20 neurons (1.3\,KB) achieves
 93.11\% F1, fitting on the smallest FPGAs.
 
-\begin{table}[t]
+\begin{table}[ht!]
 \centering
 \caption{FPGA synthesis results on Xilinx Zynq Z-7020 (53,200 LUTs, 106,400 FFs).
 All designs synthesized with Vivado 2025.2 in out-of-context mode.
