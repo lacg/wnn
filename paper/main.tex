@@ -963,32 +963,33 @@ configurations produce \textbf{identical scores for all 1{,}000 vectors}
 (100\% match on each dataset), confirming that the FPGA implementations
 faithfully reproduce the trained QSR models.
 
-\subsection{Limitations}
+\subsection{Future Directions}
 
-Several limitations should be acknowledged.  First, our evaluation is
-restricted to \emph{binary classification} (normal vs.\ attack); the
-UNSW-NB15 and CICIDS2017 datasets contain multi-class labels that we
-do not exploit.  Multi-class WNN classification (e.g., one discriminator
-per attack category) is a natural extension.
+Several directions offer potential for further improvement.
+First, extending to \emph{multi-class classification} (one discriminator
+per attack category) would exploit the rich multi-class labels available
+in UNSW-NB15 and CICIDS2017, enabling attack-type identification
+beyond binary detection.
 
-Second, threshold calibration remains a practical challenge.
-The 5\% F1 gap between validation and train-calibrated thresholds on the
-temporal split indicates that deployed systems require either a
-representative calibration set from the target distribution or adaptive
-threshold mechanisms.
+Second, the 5\% F1 gap between validation and train-calibrated
+thresholds on the temporal split suggests that \emph{adaptive threshold
+calibration} --- online adjustment using deployment-time feedback ---
+could substantially improve real-world performance without requiring
+a representative calibration set.
 
-Third, our FPGA latency (210--644\,ns) exceeds FWIW's 10.8\,ns by
-20--60$\times$.  While throughput remains sufficient for 100\,Gbps
-line-rate inspection, the higher latency could matter in
-ultra-low-latency applications.  A hash-based lookup (replacing binary
-search) could reduce latency to 15--25\,ns, which we leave for future work.
+Third, our sparse FPGA configuration uses $O(\log n)$ binary search
+(210--644\,ns), while our dense configuration already matches FWIW's
+latency (10.7 vs.\ 10.8\,ns).  For sparse configurations, a
+\emph{hash-based lookup} replacing binary search could reduce latency
+to 15--25\,ns, combining the accuracy of large address spaces with
+near-$O(1)$ speed.
 
-Fourth, thermometer encoding at 16 bits closes but does not eliminate
-the accuracy gap to Random Forest on random splits (99.40\% vs.\ 99.83\%
-on CICIDS2017).  The remaining 0.43\% gap is not explained by encoding
-precision (64-bit yields no further improvement) and requires further
-investigation --- potential avenues include multi-cluster discriminators,
-connectivity optimization, and hybrid encoding strategies.
+Fourth, the remaining 0.43\% F1 gap to Random Forest on CICIDS2017
+is not explained by encoding precision (64-bit yields no improvement)
+and warrants further investigation.  Promising avenues include
+\emph{connectivity optimization} (GA-evolved neuron wiring, evaluated
+in a follow-up study), multi-cluster discriminators, and hybrid
+encoding strategies.
 
 % ============================================================================
 \section{Conclusion}
