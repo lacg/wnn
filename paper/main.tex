@@ -585,16 +585,16 @@ on validation data overfits to the validation distribution.
 \caption{UNSW-NB15 temporal split results (112 runs, 8-bit thermometer,
 GA~Neurons best-fitness genome). Neurons: 232 $\pm$ 132, address bits: 32.}
 \label{tab:unsw}
-\begin{tabular}{lrrr}
+\begin{tabular*}{\textwidth}{l @{\extracolsep{\fill}} rrr}
 \toprule
 Threshold Mode & F1-macro (\%) & FPR (\%) & Accuracy (\%) \\
 \midrule
-Validation (val\_cal)   & 88.06 $\pm$ 1.84 & 9.92 $\pm$ 3.91  & 88.13 \\
-Train-cal           & 82.87 $\pm$ 2.47 & 32.26 $\pm$ 6.74 & 83.85 \\
-Holdout (test\_cal) & 83.61 $\pm$ 3.48 & 25.31 $\pm$ 15.24 & 84.42 \\
-Fixed 0.5           & 84.25 $\pm$ 3.85 & 22.94 $\pm$ 15.93 & 84.98 \\
+Validation (val\_cal)   & 88.06 $\pm$ 1.84 & 9.92 $\pm$ 3.91   & 88.13 $\pm$ 1.80 \\
+Train-cal              & 82.87 $\pm$ 2.47 & 32.26 $\pm$ 6.74  & 83.85 $\pm$ 2.06 \\
+Holdout (test\_cal)    & 83.61 $\pm$ 3.48 & 25.31 $\pm$ 15.24 & 84.42 $\pm$ 2.84 \\
+Fixed 0.5              & 84.25 $\pm$ 3.85 & 22.94 $\pm$ 15.93 & 84.98 $\pm$ 3.18 \\
 \bottomrule
-\end{tabular}
+\end{tabular*}
 \end{table}
 
 \subsection{CICIDS2017 Random Results}
@@ -619,16 +619,16 @@ thermometer, GA~Neurons best-fitness genome).
 Neurons: 236 $\pm$ 167, address bits: 32--34.
 Final numbers will be updated when all 112 runs complete.}
 \label{tab:cicids}
-\begin{tabular}{lrrr}
+\begin{tabular*}{\textwidth}{l @{\extracolsep{\fill}} rrr}
 \toprule
 Threshold Mode & F1-macro (\%) & FPR (\%) & Accuracy (\%) \\
 \midrule
-Validation (val\_cal)   & 99.40 $\pm$ 0.06 & 0.195 $\pm$ 0.056 & 99.62 \\
-Train-cal           & 99.37 $\pm$ 0.12 & 0.208 $\pm$ 0.107 & 99.60 \\
-Holdout (test\_cal) & 99.30 $\pm$ 0.15 & 0.237 $\pm$ 0.063 & 99.56 \\
-Fixed 0.5           & 99.25 $\pm$ 0.12 & 0.390 $\pm$ 0.106 & 99.52 \\
+Validation (val\_cal)   & 99.40 $\pm$ 0.06 & 0.195 $\pm$ 0.056 & 99.62 $\pm$ 0.04 \\
+Train-cal              & 99.37 $\pm$ 0.12 & 0.208 $\pm$ 0.107 & 99.62 $\pm$ 0.06 \\
+Holdout (test\_cal)    & 99.30 $\pm$ 0.15 & 0.237 $\pm$ 0.063 & 99.56 $\pm$ 0.10 \\
+Fixed 0.5              & 99.25 $\pm$ 0.12 & 0.390 $\pm$ 0.106 & 99.51 $\pm$ 0.08 \\
 \bottomrule
-\end{tabular}
+\end{tabular*}
 \end{table}
 
 \subsection{CIC-IoT-2023 Results}
