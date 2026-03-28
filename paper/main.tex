@@ -916,27 +916,27 @@ Sparse neuron tables are inferred as distributed LUTs (0 BRAMs, 0 DSPs in all ca
 Latency computed from binary-search depth and post-synthesis Fmax.}
 \label{tab:fpga}
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{llrrrrrr}
+\begin{tabular}{llrrrrrrr}
 \toprule
-Dataset (split) & Config & F1 & FPR & $N$ & LUTs (\%) & Fmax & Latency \\
+Dataset (split) & Config & F1 & FPR & Acc & $N$ & LUTs (\%) & Fmax & Latency \\
 \midrule
 \multirow{4}{*}{\shortstack[l]{CICIDS2017\\(random)}}
- & 104n (12b dense)$^\S$ & 98.53\% & 0.50\%          & 104 & \textbf{82 (0.15\%)} & 91\,MHz  & \textbf{11\,ns} \\
- & 11n (best F1)  & \textbf{99.59\%} & \textbf{0.12\%} & 11  & 622 (1.2\%)     & 195\,MHz & 210\,ns \\
- & 91n (mid)      & 99.54\%          & 0.12\%          & 91  & 2{,}907 (5.5\%)  & 94\,MHz  & 436\,ns \\
- & 500n (large)   & 99.23\%          & 0.27\%          & 500 & 11{,}818 (22\%)  & 59\,MHz  & 644\,ns \\
+ & 104n (12b dense)$^\S$ & 98.53\% & 0.50\%          & 99.07\% & 104 & \textbf{82 (0.15\%)} & 91\,MHz  & \textbf{11\,ns} \\
+ & 11n (best F1)  & \textbf{99.59\%} & \textbf{0.12\%} & 99.74\% & 11  & 622 (1.2\%)     & 195\,MHz & 210\,ns \\
+ & 91n (mid)      & 99.54\%          & 0.12\%          & 99.71\% & 91  & 2{,}907 (5.5\%)  & 94\,MHz  & 436\,ns \\
+ & 500n (large)   & 99.23\%          & 0.27\%          & 99.51\% & 500 & 11{,}818 (22\%)  & 59\,MHz  & 644\,ns \\
 \midrule
-\multirow{4}{*}{\shortstack[l]{UNSW-NB15\\(temporal)}}
- & 92n (small)    & 88.18\%          & 8.87\%          & 92  & 1{,}939 (3.6\%)  & 92\,MHz  & 413\,ns \\
- & 369n (best F1) & \textbf{90.82\%} & \textbf{4.66\%} & 369 & 7{,}090 (13\%)   & 61\,MHz  & 574\,ns \\
- & 500n (large)   & 86.81\%          & 8.98\%          & 500 & 33{,}086 (62\%)  & 64\,MHz  & 547\,ns \\
+\multirow{3}{*}{\shortstack[l]{UNSW-NB15\\(temporal)}}
+ & 92n (small)    & 88.18\%          & 8.87\%          & 88.23\% & 92  & 1{,}939 (3.6\%)  & 92\,MHz  & 413\,ns \\
+ & 369n (best F1) & \textbf{90.82\%} & \textbf{4.66\%} & 90.84\% & 369 & 7{,}090 (13\%)   & 61\,MHz  & 574\,ns \\
+ & 500n (large)   & 86.81\%          & 8.98\%          & 86.84\% & 500 & 33{,}086 (62\%)  & 64\,MHz  & 547\,ns \\
 \midrule
-\shortstack[l]{UNSW-NB15\\(random)} & 83n (12b dense)$^\S$ & 93.69\% & 0.63\% & 83 & \textbf{59 (0.11\%)} & 94\,MHz & \textbf{10.7\,ns} \\
+\shortstack[l]{UNSW-NB15\\(random)} & 83n (12b dense)$^\S$ & 93.69\% & 0.63\% & \textbf{99.04\%} & 83 & \textbf{59 (0.11\%)} & 94\,MHz & \textbf{10.7\,ns} \\
 \midrule
-\shortstack[l]{UNSW-NB15\\(random$^*$)} & FWIW~\cite{susskind2023fwiw} & 98.5\%$^\dagger$ & 1.57\% & ${\sim}$30 & 269 & 740\,MHz & 10.8\,ns \\
+\shortstack[l]{UNSW-NB15\\(random$^*$)} & FWIW~\cite{susskind2023fwiw} & --- & 1.57\% & 98.50\% & ${\sim}$30 & 269 & 740\,MHz & 10.8\,ns \\
 \bottomrule
-\multicolumn{8}{l}{\small $^\S$Dense $O(1)$ lookup; all others use $O(\log n)$ sparse search. $^\dagger$Accuracy (not F1).}\\
-\multicolumn{8}{l}{\small $^*$90/10, deduplicated, oversampled. $N$\,=\,neurons. 0 BRAMs, 0 DSPs for all designs.}
+\multicolumn{9}{l}{\small $^\S$Dense $O(1)$ lookup; all others use $O(\log n)$ sparse search.}\\
+\multicolumn{9}{l}{\small $^*$90/10, deduplicated, oversampled. $N$\,=\,neurons. 0 BRAMs, 0 DSPs for all designs.}
 \end{tabular}}
 \end{table}
 
