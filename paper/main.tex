@@ -711,8 +711,8 @@ thermometer encoding provides robustness to temporal distribution shift.
 On the CICIDS2017 random split, Random Forest leads (99.83\% vs.\
 our 99.40\%).  Our thermometer sweep (Section~\ref{sec:discussion})
 shows this gap persists even at 64-bit encoding (99.41\%), indicating
-an architectural limitation of RAM neuron lookup rather than encoding
-precision.
+that encoding precision alone does not explain the difference and
+further investigation is needed to understand and close this gap.
 
 \begin{table}[ht!]
 \centering
@@ -776,23 +776,29 @@ CNN-BiLSTM          & ---  & ${\sim}$5\,MB  & Neural weights \\
 
 \subsection{Connectivity as Feature Selection}
 
-Each neuron's 34 address bits are drawn from specific positions in the
-360-bit (CICIDS, 18-bit thermometer) or 152-bit (UNSW, 8-bit thermometer)
-input vector.  The GA evolves which bits each neuron reads, effectively
-performing per-neuron feature selection.  Analysis of our best CICIDS
-genome (F973, 11 neurons) reveals that each neuron's 34 address bits
-span 15--18 of the 20 input features, selecting 1--2 bits from each.
-This scattered connectivity contrasts with FWIW's random permutation,
-where each filter reads a contiguous slice of the input.
+Each neuron's address bits are drawn randomly from specific positions in
+the 320-bit (CICIDS, 16-bit thermometer) or 152-bit (UNSW, 8-bit
+thermometer) input vector at initialization.  The connectivity remains
+fixed throughout training; the GA optimizes only neuron \emph{count},
+selecting which neurons to keep or discard.  This implicitly performs
+feature selection: neurons whose random connectivity happens to capture
+discriminative input combinations survive, while those with uninformative
+connections are pruned.
 
-The GA's evolved connectivity enables two advantages: (1)~each neuron
-captures cross-feature interactions by combining bits from many features,
-and (2)~the population-based search implicitly identifies which bit
-positions carry the most discriminative information.  The grid search
-phase establishes a strong baseline by exhaustively testing neuron-count
-and address-width combinations; the GA then refines connectivity within
-the best configuration, reducing neuron count by 35\% while maintaining
-or improving accuracy (Table~\ref{tab:phase}).
+Analysis of our best CICIDS genome (F973, 11 neurons) reveals that each
+neuron's 34 address bits span 15--18 of the 20 input features, selecting
+1--2 bits from each.  This scattered connectivity contrasts with FWIW's
+random permutation, where each filter reads a contiguous slice of the
+input.  Despite being randomly initialized, the surviving neurons
+collectively cover the most informative feature combinations ---
+the GA acts as a neuron-level selection mechanism rather than a
+connectivity optimizer.
+
+The grid search phase establishes a strong baseline by exhaustively
+testing neuron-count and address-width combinations; the GA then
+prunes within the best configuration, reducing neuron count by 35\%
+while maintaining or improving accuracy
+(Table~\ref{tab:phase}).
 
 \subsection{Threshold Sensitivity}
 
@@ -969,8 +975,10 @@ search) could reduce latency to 15--25\,ns, which we leave for future work.
 
 Fourth, thermometer encoding at 16 bits closes but does not eliminate
 the accuracy gap to Random Forest on random splits (99.40\% vs.\ 99.83\%
-on CICIDS2017).  The remaining 0.43\% gap appears architectural rather
-than precision-related, as increasing to 64 bits yields no further improvement.
+on CICIDS2017).  The remaining 0.43\% gap is not explained by encoding
+precision (64-bit yields no further improvement) and requires further
+investigation --- potential avenues include multi-cluster discriminators,
+connectivity optimization, and hybrid encoding strategies.
 
 % ============================================================================
 \section{Conclusion}
