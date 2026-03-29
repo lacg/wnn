@@ -465,11 +465,17 @@ where $r_m(g)$ is genome $g$'s rank for metric $m$ (lower rank = better).
 We use $w_{CE}{=}0.2$, $w_{F1}{=}0.3$, $w_{FPR}{=}0.4$, $w_{Acc}{=}0.1$,
 where CE (cross-entropy) measures prediction confidence, F1 is the
 harmonic mean of precision and recall, and FPR (false positive rate)
-is the fraction of benign flows misclassified as attacks.  These
-weights were selected empirically from a sweep of weight combinations,
-prioritizing low FPR (critical for operational IDS where false alarms
-erode analyst trust) while maintaining strong F1.  The same weights
-are used across all datasets and experiments.
+is the fraction of benign flows misclassified as attacks.
+FPR receives the highest weight because false alarms erode analyst
+trust in operational IDS\@.  F1 and accuracy are highly correlated
+(both improve together), so accuracy receives minimal weight
+($w_{Acc}{=}0.1$) as a tiebreaker.  CE acts as a regularization
+signal: without it, the GA converges on genomes with high F1 but
+poor prediction confidence, leading to fragile calibration.
+Including CE at $w_{CE}{=}0.2$ maintains population diversity and
+produces genomes that generalize better across threshold modes.
+These weights were selected empirically and are used across all
+datasets and experiments.
 
 \subsection{GPU-Accelerated Optimization}
 

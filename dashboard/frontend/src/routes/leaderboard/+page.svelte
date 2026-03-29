@@ -27,7 +27,7 @@
 
 	// Presets for quick selection
 	const fitnessPresets = [
-		{ label: 'Search (CE4/F3/R3)', ce: 0.4, acc: 0.0, f1: 0.3, fpr: 0.3 },
+		{ label: 'kf5x5 (CE2/F3/R4/A1)', ce: 0.2, acc: 0.1, f1: 0.3, fpr: 0.4 },
 		{ label: 'F1 + FPR balanced', ce: 0.0, acc: 0.0, f1: 1.0, fpr: 1.0 },
 		{ label: 'F1 focused', ce: 0.0, acc: 0.0, f1: 1.0, fpr: 0.3 },
 		{ label: 'FPR focused', ce: 0.0, acc: 0.0, f1: 0.3, fpr: 1.0 },
@@ -35,7 +35,7 @@
 		{ label: 'CE only', ce: 1.0, acc: 0.0, f1: 0.0, fpr: 0.0 },
 		{ label: 'Custom', ce: -1, acc: -1, f1: -1, fpr: -1 },
 	];
-	let selectedPreset = 'Search (CE4/F3/R3)';
+	let selectedPreset = 'kf5x5 (CE2/F3/R4/A1)';
 
 	function applyPreset(label: string) {
 		const preset = fitnessPresets.find(p => p.label === label);

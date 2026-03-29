@@ -50,14 +50,14 @@
 \@writefile{toc}{\contentsline {section}{\numberline {5}Evaluation Methodology}{7}{section.5}\protected@file@percent }
 \newlabel{sec:methodology}{{5}{7}{Evaluation Methodology}{section.5}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Temporal and Random Evaluation Protocols}{7}{subsection.5.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Eight-Mode Threshold Calibration}{7}{subsection.5.2}\protected@file@percent }
 \citation{platt1999probabilistic}
 \citation{kull2017beta}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Eight-Mode Threshold Calibration}{8}{subsection.5.2}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Statistical Protocol}{8}{subsection.5.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {6}Experimental Results}{8}{section.6}\protected@file@percent }
-\newlabel{sec:results}{{6}{8}{Experimental Results}{section.6}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}UNSW-NB15 Temporal Results}{8}{subsection.6.1}\protected@file@percent }
-\newlabel{sec:results-unsw}{{6.1}{8}{UNSW-NB15 Temporal Results}{subsection.6.1}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {6}Experimental Results}{9}{section.6}\protected@file@percent }
+\newlabel{sec:results}{{6}{9}{Experimental Results}{section.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}UNSW-NB15 Temporal Results}{9}{subsection.6.1}\protected@file@percent }
+\newlabel{sec:results-unsw}{{6.1}{9}{UNSW-NB15 Temporal Results}{subsection.6.1}{}}
 \@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces UNSW-NB15 temporal split results (112 runs, 8-bit thermometer, GA~Neurons best-fitness genome). Neurons: 232 $\pm $ 132, address bits: 32.}}{9}{table.1}\protected@file@percent }
 \newlabel{tab:unsw}{{1}{9}{UNSW-NB15 temporal split results (112 runs, 8-bit thermometer, GA~Neurons best-fitness genome). Neurons: 232 $\pm $ 132, address bits: 32}{table.1}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {6.2}CICIDS2017 Random Results}{9}{subsection.6.2}\protected@file@percent }
@@ -70,39 +70,39 @@
 \newlabel{sec:phase-progression}{{6.4}{10}{Phase Progression Analysis}{subsection.6.4}{}}
 \@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Phase progression on CICIDS2017 (82 runs, val\_cal threshold, best-fitness genome).}}{10}{table.3}\protected@file@percent }
 \newlabel{tab:phase}{{3}{10}{Phase progression on CICIDS2017 (82 runs, val\_cal threshold, best-fitness genome)}{table.3}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.5}Comparison with Baselines}{10}{subsection.6.5}\protected@file@percent }
-\newlabel{sec:baselines}{{6.5}{10}{Comparison with Baselines}{subsection.6.5}{}}
 \citation{susskind2023fwiw}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.5}Comparison with Baselines}{11}{subsection.6.5}\protected@file@percent }
+\newlabel{sec:baselines}{{6.5}{11}{Comparison with Baselines}{subsection.6.5}{}}
 \@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Comparison with baselines. ``Ours'' entries trained on identical data with same preprocessing. FWIW uses a different split protocol.}}{11}{table.4}\protected@file@percent }
 \newlabel{tab:baselines}{{4}{11}{Comparison with baselines. ``Ours'' entries trained on identical data with same preprocessing. FWIW uses a different split protocol}{table.4}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {6.6}Model Size Analysis}{11}{subsection.6.6}\protected@file@percent }
 \newlabel{sec:model-size}{{6.6}{11}{Model Size Analysis}{subsection.6.6}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Deployed model sizes.}}{11}{table.5}\protected@file@percent }
-\newlabel{tab:model-size}{{5}{11}{Deployed model sizes}{table.5}{}}
 \@writefile{toc}{\contentsline {section}{\numberline {7}Discussion}{11}{section.7}\protected@file@percent }
 \newlabel{sec:discussion}{{7}{11}{Discussion}{section.7}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {7.1}Connectivity as Feature Selection}{11}{subsection.7.1}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Deployed model sizes.}}{12}{table.5}\protected@file@percent }
+\newlabel{tab:model-size}{{5}{12}{Deployed model sizes}{table.5}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Threshold Sensitivity}{12}{subsection.7.2}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {7.3}Encoding Resolution Analysis}{12}{subsection.7.3}\protected@file@percent }
 \@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Effect of thermometer encoding resolution on classification performance. (a)~CICIDS2017 F1-macro shows a clear knee at 16 bits, with diminishing returns beyond. (b)~The GA finds the fewest neurons at 16 bits, suggesting optimal information density. (c)~UNSW-NB15 temporal split shows no clear trend (high variance from only 2 runs per configuration). (d)~CICIDS2017 false positive rate is lowest around 16--26 bits.}}{13}{figure.2}\protected@file@percent }
 \newlabel{fig:therm_sweep}{{2}{13}{Effect of thermometer encoding resolution on classification performance. (a)~CICIDS2017 F1-macro shows a clear knee at 16 bits, with diminishing returns beyond. (b)~The GA finds the fewest neurons at 16 bits, suggesting optimal information density. (c)~UNSW-NB15 temporal split shows no clear trend (high variance from only 2 runs per configuration). (d)~CICIDS2017 false positive rate is lowest around 16--26 bits}{figure.2}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {7.4}FPGA Deployment}{13}{subsection.7.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Dense configuration (8--12-bit addresses).}{13}{section*.2}\protected@file@percent }
 \citation{susskind2023fwiw}
+\@writefile{toc}{\contentsline {paragraph}{Dense configuration (8--12-bit addresses).}{14}{section*.2}\protected@file@percent }
 \@writefile{toc}{\contentsline {paragraph}{Sparse configuration (34-bit addresses).}{14}{section*.3}\protected@file@percent }
 \@writefile{toc}{\contentsline {paragraph}{Comparison with FWIW.}{14}{section*.4}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces FPGA synthesis results on Xilinx Zynq Z-7020 (53,200 LUTs, 106,400 FFs). All designs synthesized with Vivado 2025.2 in out-of-context mode. Sparse neuron tables are inferred as distributed LUTs (0 BRAMs, 0 DSPs in all cases). Latency computed from binary-search depth and post-synthesis Fmax.}}{14}{table.6}\protected@file@percent }
-\newlabel{tab:fpga}{{6}{14}{FPGA synthesis results on Xilinx Zynq Z-7020 (53,200 LUTs, 106,400 FFs). All designs synthesized with Vivado 2025.2 in out-of-context mode. Sparse neuron tables are inferred as distributed LUTs (0 BRAMs, 0 DSPs in all cases). Latency computed from binary-search depth and post-synthesis Fmax}{table.6}{}}
-\@writefile{toc}{\contentsline {paragraph}{Latency and throughput.}{15}{section*.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Latency and throughput.}{14}{section*.5}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces FPGA synthesis results on Xilinx Zynq Z-7020 (53,200 LUTs, 106,400 FFs). All designs synthesized with Vivado 2025.2 in out-of-context mode. Sparse neuron tables are inferred as distributed LUTs (0 BRAMs, 0 DSPs in all cases). Latency computed from binary-search depth and post-synthesis Fmax.}}{15}{table.6}\protected@file@percent }
+\newlabel{tab:fpga}{{6}{15}{FPGA synthesis results on Xilinx Zynq Z-7020 (53,200 LUTs, 106,400 FFs). All designs synthesized with Vivado 2025.2 in out-of-context mode. Sparse neuron tables are inferred as distributed LUTs (0 BRAMs, 0 DSPs in all cases). Latency computed from binary-search depth and post-synthesis Fmax}{table.6}{}}
 \@writefile{toc}{\contentsline {paragraph}{Functional verification.}{15}{section*.6}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {7.5}Future Directions}{15}{subsection.7.5}\protected@file@percent }
 \bibstyle{splncs04}
 \bibdata{references}
 \bibcite{mdpi2024enhanced}{1}
-\bibcite{aleksander1984wisard}{2}
-\bibcite{andronic2023polylut}{3}
 \@writefile{toc}{\contentsline {section}{\numberline {8}Conclusion}{16}{section.8}\protected@file@percent }
 \newlabel{sec:conclusion}{{8}{16}{Conclusion}{section.8}{}}
+\bibcite{aleksander1984wisard}{2}
+\bibcite{andronic2023polylut}{3}
 \bibcite{engelen2021cicids}{4}
 \bibcite{kull2017beta}{5}
 \bibcite{moustafa2015unswnb15}{6}
