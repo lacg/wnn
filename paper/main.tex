@@ -445,7 +445,7 @@ between parents; mutation adds or removes neurons.  The GA preserves
 each neuron's learned connections and trained memory, so structural
 changes (adding/removing neurons) do not discard prior training.
 This phase discovers the optimal model capacity for the dataset,
-typically reducing neuron count by 40--42\% while maintaining or
+typically reducing neuron count by 40--43\% while maintaining or
 improving accuracy (Section~\ref{sec:phase-progression}).
 
 The framework supports additional phases (GA bits, GA connections, tabu
@@ -645,23 +645,23 @@ reaches 99.34\% F1 / 0.291\% FPR / 99.58\% Acc.
 
 \begin{table}[ht!]
 \centering
-\caption{CICIDS2017 random split results (82 of 112 runs, 16-bit
+\caption{CICIDS2017 random split results (99 of 112 runs, 16-bit
 thermometer, GA~Neurons best-fitness genome).
-Neurons: 197 $\pm$ 145, address bits: 32--34.
+Neurons: 194 $\pm$ 143, address bits: 32--34.
 Final numbers will be updated when all 112 runs complete.}
 \label{tab:cicids}
 \begin{tabular*}{\textwidth}{l @{\extracolsep{\fill}} rrr}
 \toprule
 Threshold Mode & F1-macro (\%) & FPR (\%) & Accuracy (\%) \\
 \midrule
-Validation (val\_cal)      & 99.40 $\pm$ 0.06 & 0.199 $\pm$ 0.061  & 99.62 $\pm$ 0.04 \\
-Train-cal                  & 99.39 $\pm$ 0.09 & 0.197 $\pm$ 0.082  & 99.62 $\pm$ 0.06 \\
-Holdout (test\_cal)        & 99.29 $\pm$ 0.17 & 0.221 $\pm$ 0.080  & 99.55 $\pm$ 0.10 \\
-Fixed 0.5                  & 99.23 $\pm$ 0.12 & 0.418 $\pm$ 0.108  & 99.51 $\pm$ 0.07 \\
-Platt                      & 99.28 $\pm$ 0.14 & 0.304 $\pm$ 0.106  & 99.55 $\pm$ 0.09 \\
-Beta                       & 99.30 $\pm$ 0.18 & 0.273 $\pm$ 0.088  & 99.56 $\pm$ 0.11 \\
-Histogram                  & 98.66 $\pm$ 0.62 & 0.934 $\pm$ 0.550  & 99.14 $\pm$ 0.41 \\
-Histogram cumul.           & 99.32 $\pm$ 0.12 & 0.237 $\pm$ 0.083  & 99.57 $\pm$ 0.07 \\
+Validation (val\_cal)      & 99.40 $\pm$ 0.06 & 0.196 $\pm$ 0.063  & 99.62 $\pm$ 0.04 \\
+Train-cal                  & 99.39 $\pm$ 0.09 & 0.200 $\pm$ 0.082  & 99.61 $\pm$ 0.06 \\
+Holdout (test\_cal)        & 99.30 $\pm$ 0.16 & 0.221 $\pm$ 0.084  & 99.56 $\pm$ 0.10 \\
+Fixed 0.5                  & 99.23 $\pm$ 0.12 & 0.416 $\pm$ 0.104  & 99.51 $\pm$ 0.07 \\
+Platt                      & 99.29 $\pm$ 0.14 & 0.304 $\pm$ 0.107  & 99.55 $\pm$ 0.09 \\
+Beta                       & 99.30 $\pm$ 0.17 & 0.269 $\pm$ 0.085  & 99.56 $\pm$ 0.10 \\
+Histogram                  & 98.65 $\pm$ 0.60 & 0.940 $\pm$ 0.534  & 99.13 $\pm$ 0.40 \\
+Histogram cumul.           & 99.32 $\pm$ 0.12 & 0.237 $\pm$ 0.088  & 99.57 $\pm$ 0.07 \\
 \bottomrule
 \end{tabular*}
 \end{table}
@@ -682,25 +682,25 @@ that mutates neuron count while preserving evolved connections.
 Table~\ref{tab:phase} compares the two phases on CICIDS2017.
 
 The GA phase improves validation F1 by 0.05 percentage points on average
-(99.35\% $\to$ 99.40\%) while reducing neuron count by 42\%
-(338 $\to$ 197 neurons).  The GA also halves the F1 variance
+(99.35\% $\to$ 99.40\%) while reducing neuron count by 43\%
+(340 $\to$ 194 neurons).  The GA also halves the F1 variance
 ($\pm$0.11\% $\to$ $\pm$0.06\%), indicating that neuron-count
 optimization acts as a regularizer, pruning redundant neurons that
 add noise without improving discrimination.
 
 \begin{table}[ht!]
 \centering
-\caption{Phase progression on CICIDS2017 (82 runs, val\_cal threshold,
+\caption{Phase progression on CICIDS2017 (99 runs, val\_cal threshold,
 best-fitness genome).}
 \label{tab:phase}
 \begin{tabular*}{\textwidth}{l @{\extracolsep{\fill}} rrrr}
 \toprule
 Phase & F1-macro (\%) & FPR (\%) & Neurons & Bits \\
 \midrule
-Grid Search    & 99.35 $\pm$ 0.08 & 0.212 $\pm$ 0.062 & 338 $\pm$ 113 & 34 (85\%) \\
-GA Neurons     & 99.40 $\pm$ 0.06 & 0.199 $\pm$ 0.061 & 197 $\pm$ 145 & 32 (62\%) \\
+Grid Search    & 99.35 $\pm$ 0.07 & 0.212 $\pm$ 0.064 & 340 $\pm$ 115 & 34 (84\%) \\
+GA Neurons     & 99.40 $\pm$ 0.06 & 0.196 $\pm$ 0.063 & 194 $\pm$ 143 & 32 (62\%) \\
 \midrule
-$\Delta$       & +0.05            & $-$0.013           & $-$141 ($-$42\%) & \\
+$\Delta$       & +0.05            & $-$0.016           & $-$146 ($-$43\%) & \\
 \bottomrule
 \end{tabular*}
 \end{table}
