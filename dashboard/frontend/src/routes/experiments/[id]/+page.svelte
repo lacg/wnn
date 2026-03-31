@@ -2862,8 +2862,8 @@
   }
 
   .validation-table {
-    width: max-content;
-    min-width: 1800px;
+    width: 100%;
+    min-width: 1600px;
     border-collapse: separate;
     border-spacing: 0;
     font-size: 1rem;
@@ -2894,6 +2894,10 @@
     text-align: left;
     font-weight: 500;
     color: var(--text-primary);
+    max-width: 120px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .validation-table .phase-name.init-phase {
