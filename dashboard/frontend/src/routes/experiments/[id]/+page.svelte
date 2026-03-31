@@ -2862,8 +2862,8 @@
   }
 
   .validation-table {
-    width: 100%;
-    min-width: 1400px;
+    width: max-content;
+    min-width: 1800px;
     border-collapse: separate;
     border-spacing: 0;
     font-size: 1rem;
