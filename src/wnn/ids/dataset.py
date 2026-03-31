@@ -65,6 +65,92 @@ class IDSDataset:
 	feature_names: list[str]  # feature names in order
 
 
+VALID_FEATURE_SELECTIONS = ("all", "top20", "top20_split")
+
+
+def encode_features(
+	df_train: pd.DataFrame,
+	df_test: pd.DataFrame,
+	common_features: list[str],
+	top_features: list[str],
+	n_bits: int = 8,
+	method: ThermometerType = ThermometerType.DISTRIBUTIVE,
+	feature_selection: str = "all",
+	rest_bits: int | None = None,
+) -> tuple[np.ndarray, np.ndarray, ThermometerEncoder, list[str]]:
+	"""Shared thermometer encoding logic for all IDS datasets.
+
+	Feature selection modes:
+	- "all": All features at uniform n_bits
+	- "top20": Top features only at n_bits
+	- "top20_split": Top features at 16 bits + rest at rest_bits
+
+	Args:
+		df_train, df_test: DataFrames with numeric feature columns
+		common_features: all available features
+		top_features: top-N RF features for this dataset
+		n_bits: bits per feature (or for rest features in top20_split)
+		method: thermometer encoding strategy
+		feature_selection: "all", "top20", or "top20_split"
+		rest_bits: bits for non-top features in top20_split (defaults to n_bits)
+
+	Returns:
+		(X_train, X_test, encoder, used_features)
+	"""
+	if feature_selection not in VALID_FEATURE_SELECTIONS:
+		raise ValueError(f"feature_selection must be one of {VALID_FEATURE_SELECTIONS}, got '{feature_selection}'")
+
+	if feature_selection == "all":
+		encoder = ThermometerEncoder(n_bits=n_bits, method=method)
+		encoder.fit(df_train[common_features])
+		X_train = encoder.transform(df_train[common_features])
+		X_test = encoder.transform(df_test[common_features])
+		used_features = common_features
+		print(f"  Encoder: {encoder.total_bits} total bits "
+			  f"({method.value}, {n_bits} bits/feature, feature_selection=all, {len(common_features)} features)")
+
+	elif feature_selection == "top20":
+		selected = [f for f in top_features if f in common_features]
+		if len(selected) < len(top_features):
+			missing = set(top_features) - set(common_features)
+			print(f"  WARNING: {len(missing)} top features not in dataset: {missing}")
+		encoder = ThermometerEncoder(n_bits=n_bits, method=method)
+		encoder.fit(df_train[selected])
+		X_train = encoder.transform(df_train[selected])
+		X_test = encoder.transform(df_test[selected])
+		used_features = selected
+		print(f"  Encoder: {encoder.total_bits} total bits "
+			  f"({method.value}, {n_bits} bits/feature, feature_selection=top20, {len(selected)} features)")
+
+	elif feature_selection == "top20_split":
+		rb = rest_bits if rest_bits is not None else n_bits
+		top = [f for f in top_features if f in common_features]
+		rest = [f for f in common_features if f not in top_features]
+		if len(top) < len(top_features):
+			missing = set(top_features) - set(common_features)
+			print(f"  WARNING: {len(missing)} top features not in dataset: {missing}")
+
+		enc_top = ThermometerEncoder(n_bits=16, method=method)
+		enc_top.fit(df_train[top])
+		X_train_top = enc_top.transform(df_train[top])
+		X_test_top = enc_top.transform(df_test[top])
+
+		enc_rest = ThermometerEncoder(n_bits=rb, method=method)
+		enc_rest.fit(df_train[rest])
+		X_train_rest = enc_rest.transform(df_train[rest])
+		X_test_rest = enc_rest.transform(df_test[rest])
+
+		X_train = np.hstack([X_train_top, X_train_rest])
+		X_test = np.hstack([X_test_top, X_test_rest])
+		encoder = enc_top
+		used_features = top + rest
+		total_bits = X_train.shape[1]
+		print(f"  Encoder: {total_bits} total bits "
+			  f"({method.value}, top-{len(top)}@16b + {len(rest)} rest@{rb}b, feature_selection=top20_split)")
+
+	return X_train, X_test, encoder, used_features
+
+
 def split_train_validation(
 	dataset: IDSDataset,
 	val_fraction: float = 0.25,
@@ -352,60 +438,12 @@ def load_unsw_nb15(
 	y_train_multi = encode_categories(df_train["attack_cat"])
 	y_test_multi = encode_categories(df_test["attack_cat"])
 
-	# ── Encode features based on feature_selection mode ───────────────
-	if feature_selection == "all":
-		# Default: all features at uniform n_bits
-		encoder = ThermometerEncoder(n_bits=n_bits, method=method)
-		encoder.fit(df_train[common_features])
-		X_train = encoder.transform(df_train[common_features])
-		X_test = encoder.transform(df_test[common_features])
-		used_features = common_features
-		print(f"  Encoder: {encoder.total_bits} total bits "
-			  f"({method.value}, {n_bits} bits/feature, feature_selection=all)")
-
-	elif feature_selection == "top20":
-		# Top-20 RF features only, all at n_bits
-		top20 = [f for f in TOP20_RF_FEATURES if f in common_features]
-		if len(top20) < len(TOP20_RF_FEATURES):
-			missing = set(TOP20_RF_FEATURES) - set(common_features)
-			print(f"  WARNING: {len(missing)} top-20 features not in dataset: {missing}")
-		encoder = ThermometerEncoder(n_bits=n_bits, method=method)
-		encoder.fit(df_train[top20])
-		X_train = encoder.transform(df_train[top20])
-		X_test = encoder.transform(df_test[top20])
-		used_features = top20
-		print(f"  Encoder: {encoder.total_bits} total bits "
-			  f"({method.value}, {n_bits} bits/feature, feature_selection=top20, {len(top20)} features)")
-
-	elif feature_selection == "top20_split":
-		# All features: top-20 at 16 bits, rest at rest_bits
-		rb = rest_bits if rest_bits is not None else n_bits
-		top20 = [f for f in TOP20_RF_FEATURES if f in common_features]
-		rest = [f for f in common_features if f not in TOP20_RF_FEATURES]
-		if len(top20) < len(TOP20_RF_FEATURES):
-			missing = set(TOP20_RF_FEATURES) - set(common_features)
-			print(f"  WARNING: {len(missing)} top-20 features not in dataset: {missing}")
-
-		# Encode top-20 at 16 bits
-		enc_top = ThermometerEncoder(n_bits=16, method=method)
-		enc_top.fit(df_train[top20])
-		X_train_top = enc_top.transform(df_train[top20])
-		X_test_top = enc_top.transform(df_test[top20])
-
-		# Encode rest at rest_bits
-		enc_rest = ThermometerEncoder(n_bits=rb, method=method)
-		enc_rest.fit(df_train[rest])
-		X_train_rest = enc_rest.transform(df_train[rest])
-		X_test_rest = enc_rest.transform(df_test[rest])
-
-		# Concatenate: top-20 first, then rest
-		X_train = np.hstack([X_train_top, X_train_rest])
-		X_test = np.hstack([X_test_top, X_test_rest])
-		encoder = enc_top  # Primary encoder (for metadata)
-		used_features = top20 + rest
-		total_bits = X_train.shape[1]
-		print(f"  Encoder: {total_bits} total bits "
-			  f"({method.value}, top-20@16b + {len(rest)} rest@{rb}b, feature_selection=top20_split)")
+	# ── Encode features using shared logic ───────────────
+	X_train, X_test, encoder, used_features = encode_features(
+		df_train, df_test, common_features, TOP20_RF_FEATURES,
+		n_bits=n_bits, method=method, feature_selection=feature_selection,
+		rest_bits=rest_bits,
+	)
 
 	print(f"  X_train: {X_train.shape}, X_test: {X_test.shape}")
 	print(f"  Train: {(y_train_binary == 0).sum():,} normal, "

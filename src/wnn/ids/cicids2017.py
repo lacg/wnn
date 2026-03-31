@@ -8,8 +8,10 @@ Random split: 80/20 stratified.
 
 import numpy as np
 import pandas as pd
+from typing import Optional
 
 from .encoder import ThermometerEncoder, ThermometerType
+from .dataset import IDSDataset, encode_features, VALID_FEATURE_SELECTIONS
 from .dataset import IDSDataset, split_train_validation
 
 # Attack categories in CICIDS2017
@@ -55,7 +57,7 @@ TOP20_RF_FEATURES = [
 	"Bwd Header Length",
 ]
 
-VALID_FEATURE_SELECTIONS = ("all", "top20")
+# Use shared VALID_FEATURE_SELECTIONS from dataset.py
 
 HF_DATASET_ID = "lacg030175/CICIDS2017"
 
@@ -83,6 +85,7 @@ def load_cicids2017(
 	method: ThermometerType = ThermometerType.DISTRIBUTIVE,
 	split: str = "temporal",
 	feature_selection: str = "all",
+	rest_bits: Optional[int] = None,
 ) -> IDSDataset:
 	"""Load CICIDS2017 dataset with thermometer encoding.
 
@@ -92,51 +95,33 @@ def load_cicids2017(
 	- "random": 80/20 stratified random split (literature comparison)
 
 	Feature selection:
-	- "all": All 78 features
-	- "top20": Top-20 RF features
+	- "all": All 78 features at uniform n_bits
+	- "top20": Top-20 RF features at n_bits
+	- "top20_split": Top-20 at 16b + rest at rest_bits
 
 	Args:
 		n_bits: bits per numeric feature for thermometer encoding.
 		method: thermometer encoding strategy.
 		split: "temporal", "standard", or "random".
-		feature_selection: "all" or "top20".
+		feature_selection: "all", "top20", or "top20_split".
+		rest_bits: bits for non-top features in top20_split (defaults to n_bits).
 
 	Returns:
 		IDSDataset with binary-encoded features and labels.
 	"""
-	# Alias: "standard" maps to "temporal"
 	if split == "standard":
 		split = "temporal"
 	if split not in ("temporal", "random"):
 		raise ValueError(f"split must be 'temporal', 'standard', or 'random', got '{split}'")
-	if feature_selection not in VALID_FEATURE_SELECTIONS:
-		raise ValueError(f"feature_selection must be one of {VALID_FEATURE_SELECTIONS}, got '{feature_selection}'")
 
-	# Load raw data
 	print(f"Loading CICIDS2017 (split={split})...")
 	df_train, df_test, common_features = _load_from_huggingface(split)
 
-	# Apply feature selection
-	if feature_selection == "top20":
-		selected = [f for f in TOP20_RF_FEATURES if f in common_features]
-		if len(selected) < len(TOP20_RF_FEATURES):
-			missing = set(TOP20_RF_FEATURES) - set(common_features)
-			print(f"  WARNING: {len(missing)} top-20 features not in dataset: {missing}")
-		encoder = ThermometerEncoder(n_bits=n_bits, method=method)
-		encoder.fit(df_train[selected])
-		X_train = encoder.transform(df_train[selected])
-		X_test = encoder.transform(df_test[selected])
-		used_features = selected
-		print(f"  Encoder: {encoder.total_bits} total bits "
-			  f"({method.value}, {n_bits} bits/feature, feature_selection=top20, {len(selected)} features)")
-	else:
-		encoder = ThermometerEncoder(n_bits=n_bits, method=method)
-		encoder.fit(df_train[common_features])
-		X_train = encoder.transform(df_train[common_features])
-		X_test = encoder.transform(df_test[common_features])
-		used_features = common_features
-		print(f"  Encoder: {encoder.total_bits} total bits "
-			  f"({method.value}, {n_bits} bits/feature, feature_selection=all)")
+	X_train, X_test, encoder, used_features = encode_features(
+		df_train, df_test, common_features, TOP20_RF_FEATURES,
+		n_bits=n_bits, method=method, feature_selection=feature_selection,
+		rest_bits=rest_bits,
+	)
 
 	print(f"  X_train: {X_train.shape}, X_test: {X_test.shape}")
 

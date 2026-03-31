@@ -8,8 +8,9 @@ Only random split available (no temporal ordering in source data).
 import numpy as np
 import pandas as pd
 
+from typing import Optional
 from .encoder import ThermometerEncoder, ThermometerType
-from .dataset import IDSDataset
+from .dataset import IDSDataset, encode_features, VALID_FEATURE_SELECTIONS
 
 # Attack classes (grouped) in CIC-IoT-2023
 ATTACK_CLASSES = [
@@ -47,7 +48,7 @@ TOP20_RF_FEATURES = [
 	"rst_count",
 ]
 
-VALID_FEATURE_SELECTIONS = ("all", "top20")
+# Use shared VALID_FEATURE_SELECTIONS from dataset.py
 
 HF_DATASET_ID = "lacg030175/CIC-IoT-2023"
 
@@ -94,60 +95,46 @@ def load_ciciot2023(
 	method: ThermometerType = ThermometerType.DISTRIBUTIVE,
 	split: str = "random",
 	feature_selection: str = "all",
+	rest_bits: Optional[int] = None,
 ) -> IDSDataset:
 	"""Load CIC-IoT-2023 dataset with thermometer encoding.
 
 	Splits:
 	- "random" (default): 80/20 stratified random split
 
-	Note: No temporal split available for this dataset (data organized by attack type, not time).
+	Note: No temporal split available (data organized by attack type, not time).
 
 	Feature selection:
-	- "all": All features
-	- "top20": Top-20 RF features
+	- "all": All features at uniform n_bits
+	- "top20": Top-20 RF features at n_bits
+	- "top20_split": Top-20 at 16b + rest at rest_bits
 
 	Args:
 		n_bits: bits per numeric feature for thermometer encoding.
 		method: thermometer encoding strategy.
 		split: "random" (only option for this dataset).
-		feature_selection: "all" or "top20".
+		feature_selection: "all", "top20", or "top20_split".
+		rest_bits: bits for non-top features in top20_split (defaults to n_bits).
 
 	Returns:
 		IDSDataset with binary-encoded features and labels.
 	"""
 	if split not in ("random",):
 		raise ValueError(f"CIC-IoT-2023 only supports 'random' split (no temporal ordering), got '{split}'")
-	if feature_selection not in VALID_FEATURE_SELECTIONS:
-		raise ValueError(f"feature_selection must be one of {VALID_FEATURE_SELECTIONS}, got '{feature_selection}'")
 
-	# Load raw data
 	print(f"Loading CIC-IoT-2023 (split={split})...")
 	df_train, df_test, common_features = _load_from_huggingface(split)
 
-	# Apply feature selection
-	if feature_selection == "top20":
-		top20 = _load_top20_features()
-		if not top20:
-			raise ValueError("Could not load top-20 features from HuggingFace")
-		selected = [f for f in top20 if f in common_features]
-		if len(selected) < len(top20):
-			missing = set(top20) - set(common_features)
-			print(f"  WARNING: {len(missing)} top-20 features not in dataset: {missing}")
-		encoder = ThermometerEncoder(n_bits=n_bits, method=method)
-		encoder.fit(df_train[selected])
-		X_train = encoder.transform(df_train[selected])
-		X_test = encoder.transform(df_test[selected])
-		used_features = selected
-		print(f"  Encoder: {encoder.total_bits} total bits "
-			  f"({method.value}, {n_bits} bits/feature, feature_selection=top20, {len(selected)} features)")
-	else:
-		encoder = ThermometerEncoder(n_bits=n_bits, method=method)
-		encoder.fit(df_train[common_features])
-		X_train = encoder.transform(df_train[common_features])
-		X_test = encoder.transform(df_test[common_features])
-		used_features = common_features
-		print(f"  Encoder: {encoder.total_bits} total bits "
-			  f"({method.value}, {n_bits} bits/feature, feature_selection=all)")
+	# Load top-20 features (from HuggingFace for this dataset)
+	top20 = _load_top20_features()
+	if not top20 and feature_selection in ("top20", "top20_split"):
+		raise ValueError("Could not load top-20 features from HuggingFace")
+
+	X_train, X_test, encoder, used_features = encode_features(
+		df_train, df_test, common_features, top20 or [],
+		n_bits=n_bits, method=method, feature_selection=feature_selection,
+		rest_bits=rest_bits,
+	)
 
 	print(f"  X_train: {X_train.shape}, X_test: {X_test.shape}")
 
