@@ -976,9 +976,11 @@
               {/if}
             </thead>
             {#each cumulativeValidationProgression as point, idx}
-              {@const bestF1Summary = point.summaries.find(s => s.genomeType === 'best_f1') || point.summaries.find(s => s.genomeType === 'best_ce')}
-              {@const bestFprSummary = point.summaries.find(s => s.genomeType === 'best_fpr') || point.summaries.find(s => s.genomeType === 'best_acc')}
+              {@const bestF1Summary = point.summaries.find(s => s.genomeType === 'best_f1')}
+              {@const bestFprSummary = point.summaries.find(s => s.genomeType === 'best_fpr')}
               {@const bestFitSummary = point.summaries.find(s => s.genomeType === 'best_fitness')}
+              {@const bestAccSummary = point.summaries.find(s => s.genomeType === 'best_acc')}
+              {@const bestCeSummary = point.summaries.find(s => s.genomeType === 'best_ce')}
               {@const isCurrentExp = point.expId === experiment?.id}
               {@const hasThresholds = isIDS && (bestF1Summary?.threshold_metadata || bestFprSummary?.threshold_metadata || bestFitSummary?.threshold_metadata)}
               {#if idx > 0}
