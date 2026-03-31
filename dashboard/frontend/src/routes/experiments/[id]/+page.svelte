@@ -1948,7 +1948,7 @@
   }
 
   .container {
-    max-width: 1400px;
+    max-width: 1680px;
     margin: 0 auto;
     padding: 1rem;
   }
@@ -2865,23 +2865,23 @@
     width: 100%;
     border-collapse: separate;
     border-spacing: 0;
-    font-size: 0.85rem;
+    font-size: 1rem;
   }
 
   .validation-table th {
     background: rgba(51, 65, 85, 0.4);
-    padding: 0.3rem 0.4rem;
+    padding: 0.4rem 0.5rem;
     text-align: center;
     font-weight: 600;
     color: var(--text-secondary);
-    font-size: 0.8rem;
+    font-size: 1rem;
     text-transform: uppercase;
     border-bottom: 1px solid var(--glass-border);
     white-space: nowrap;
   }
 
   .validation-table td {
-    padding: 0.3rem 0.4rem;
+    padding: 0.4rem 0.5rem;
     text-align: center;
     border-bottom: 1px solid var(--glass-border);
   }
