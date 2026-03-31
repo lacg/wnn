@@ -2863,25 +2863,25 @@
 
   .validation-table {
     width: 100%;
-    min-width: 1600px;
     border-collapse: separate;
     border-spacing: 0;
-    font-size: 1rem;
+    font-size: 0.85rem;
   }
 
   .validation-table th {
     background: rgba(51, 65, 85, 0.4);
-    padding: 0.5rem 0.75rem;
+    padding: 0.3rem 0.4rem;
     text-align: center;
     font-weight: 600;
     color: var(--text-secondary);
-    font-size: 1rem;
+    font-size: 0.8rem;
     text-transform: uppercase;
     border-bottom: 1px solid var(--glass-border);
+    white-space: nowrap;
   }
 
   .validation-table td {
-    padding: 0.5rem 0.75rem;
+    padding: 0.3rem 0.4rem;
     text-align: center;
     border-bottom: 1px solid var(--glass-border);
   }
