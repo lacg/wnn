@@ -1707,6 +1707,8 @@ pub mod queries {
         match s {
             "best_ce" => GenomeValidationType::BestCe,
             "best_acc" => GenomeValidationType::BestAcc,
+            "best_f1" => GenomeValidationType::BestF1,
+            "best_fpr" => GenomeValidationType::BestFpr,
             "best_fitness" => GenomeValidationType::BestFitness,
             "best_overall_ce" => GenomeValidationType::BestOverallCe,
             "best_overall_acc" => GenomeValidationType::BestOverallAcc,

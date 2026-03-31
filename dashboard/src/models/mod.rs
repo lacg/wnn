@@ -417,6 +417,8 @@ pub enum ValidationPoint {
 pub enum GenomeValidationType {
     BestCe,
     BestAcc,
+    BestF1,
+    BestFpr,
     BestFitness,
     BestOverallCe,
     BestOverallAcc,
