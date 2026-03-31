@@ -9,8 +9,29 @@
 use metal::*;
 use std::mem;
 use std::time::Instant;
+use std::thread;
+use std::time::Duration;
 
 use crate::neuron_memory::{NeuronTrainMeta, TrainAddressParams};
+
+/// Wait for a Metal command buffer and check for errors.
+/// Returns Ok(()) if completed successfully, Err if the GPU reported an error.
+/// Logs errors to stderr for debugging GPU hangs.
+pub(crate) fn wait_for_command_buffer(
+	command_buffer: &CommandBufferRef,
+	_timeout_secs: u64,
+	context: &str,
+) -> Result<(), String> {
+	command_buffer.wait_until_completed();
+
+	let status = command_buffer.status();
+	if status == MTLCommandBufferStatus::Error {
+		eprintln!("[GPU] ERROR in {}: command buffer failed (status=Error)", context);
+		Err(format!("GPU error in {}: command buffer status=Error", context))
+	} else {
+		Ok(())
+	}
+}
 
 // =============================================================================
 // Buffer Cache for Training
@@ -228,7 +249,11 @@ impl MetalTrainer {
 		encoder.dispatch_threads(grid_size, thread_group_size);
 		encoder.end_encoding();
 		command_buffer.commit();
-		command_buffer.wait_until_completed();
+
+		wait_for_command_buffer(
+			&command_buffer, 120,
+			&format!("compute_addresses: {} neurons × {} examples", total_neurons, num_examples),
+		)?;
 
 		// Read back results
 		let result_ptr = address_buffer.contents() as *const u32;
