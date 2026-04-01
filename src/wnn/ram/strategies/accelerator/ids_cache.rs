@@ -85,7 +85,15 @@ impl IDSCache {
         seed: u64,
         balance_classes: bool,
         single_cluster: bool,
+        undersample_majority: bool,
     ) -> Self {
+        // Optionally undersample majority class to match minority count
+        let (train_features, train_labels) = if undersample_majority {
+            Self::undersample_to_balance(train_features, train_labels, total_features, num_classes, seed)
+        } else {
+            (train_features, train_labels)
+        };
+
         let num_train = train_labels.len();
         let num_eval = eval_labels.len();
 
@@ -142,6 +150,74 @@ impl IDSCache {
     /// Build an IDSSubset from features and labels.
     ///
     /// Negatives: for each example, all classes except the target.
+    /// Undersample the majority class to match the minority class count.
+    /// Returns balanced (features, labels) with equal representation per class.
+    fn undersample_to_balance(
+        features: Vec<bool>,
+        labels: Vec<i64>,
+        total_features: usize,
+        num_classes: usize,
+        seed: u64,
+    ) -> (Vec<bool>, Vec<i64>) {
+        use rand::seq::SliceRandom;
+        use rand::SeedableRng;
+
+        let num_examples = labels.len();
+        if num_examples == 0 {
+            return (features, labels);
+        }
+
+        // Group example indices by class
+        let mut class_indices: Vec<Vec<usize>> = vec![vec![]; num_classes];
+        for (i, &label) in labels.iter().enumerate() {
+            let c = label as usize;
+            if c < num_classes {
+                class_indices[c].push(i);
+            }
+        }
+
+        // Find minimum class count
+        let min_count = class_indices.iter()
+            .filter(|v| !v.is_empty())
+            .map(|v| v.len())
+            .min()
+            .unwrap_or(0);
+
+        if min_count == 0 {
+            return (features, labels);
+        }
+
+        // Shuffle and take min_count from each class
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed + 999);
+        let mut selected_indices: Vec<usize> = Vec::with_capacity(min_count * num_classes);
+        for indices in &mut class_indices {
+            if !indices.is_empty() {
+                indices.shuffle(&mut rng);
+                selected_indices.extend_from_slice(&indices[..min_count.min(indices.len())]);
+            }
+        }
+        selected_indices.sort_unstable(); // Preserve original order
+
+        let original_count = num_examples;
+        let balanced_count = selected_indices.len();
+
+        // Build balanced features and labels
+        let mut new_features = Vec::with_capacity(balanced_count * total_features);
+        let mut new_labels = Vec::with_capacity(balanced_count);
+        for &idx in &selected_indices {
+            let feat_start = idx * total_features;
+            new_features.extend_from_slice(&features[feat_start..feat_start + total_features]);
+            new_labels.push(labels[idx]);
+        }
+
+        eprintln!(
+            "[IDS_CACHE] Undersampled majority: {} → {} examples ({} per class, {} classes)",
+            original_count, balanced_count, min_count, num_classes
+        );
+
+        (new_features, new_labels)
+    }
+
     /// If num_negatives < num_classes - 1, randomly sample from non-target classes.
     fn build_subset(
         features: &[bool],
@@ -661,6 +737,7 @@ mod tests {
             42,
             false,  // balance_classes
             false,  // single_cluster
+            false,  // undersample_majority
         );
 
         assert_eq!(cache.num_classes(), 2);
@@ -802,6 +879,7 @@ mod tests {
             42,
             false,  // balance_classes
             false,  // single_cluster
+            false,  // undersample_majority
         );
 
         // Each fold should have ~4 examples (12/3)

@@ -48,6 +48,7 @@ class IDSEvaluator(BaseEvaluator):
 		kfold_per_gen: int = 1,  # How many folds to eval per generation (1..k_folds)
 		balance_classes: bool = False,
 		single_cluster: bool = False,  # Single-cluster discriminator mode
+		undersample_majority: bool = False,  # Undersample majority class to match minority
 	):
 		if classification == "binary":
 			y_train = dataset.y_train_binary
@@ -121,6 +122,7 @@ class IDSEvaluator(BaseEvaluator):
 			seed=self._seed,
 			balance_classes=balance_classes,
 			single_cluster=single_cluster,
+			undersample_majority=undersample_majority,
 		)
 
 		self._train_call_count = 0

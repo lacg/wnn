@@ -821,6 +821,7 @@ class FlowWorker:
         neuron_sample_rate = params.get("neuron_sample_rate", 0.25)
         balance_classes = params.get("balance_classes", False)
         single_cluster = params.get("ids_single_cluster", False)
+        undersample_majority = params.get("undersample_majority", False)
         feature_selection = params.get("ids_feature_selection", "all")
         rest_bits = params.get("ids_rest_bits", None)
         kfold_per_gen = params.get("ids_kfold_per_gen", 1)
@@ -861,6 +862,8 @@ class FlowWorker:
         balance_label = ", balanced" if balance_classes else ""
         sc_label = ", single-cluster" if single_cluster else ""
         self._log(f"  neuron_sample_rate={neuron_sample_rate}, balance_classes={balance_classes}{sc_label}")
+        us_label = ", undersample" if undersample_majority else ""
+        self._log(f"  undersample_majority={undersample_majority}{us_label}")
         optimizer_eval = IDSEvaluator(
             dataset=train_val_dataset,
             classification=classification,
@@ -870,9 +873,11 @@ class FlowWorker:
             neuron_sample_rate=neuron_sample_rate,
             balance_classes=balance_classes,
             single_cluster=single_cluster,
+            undersample_majority=undersample_majority,
         )
 
-        # Test evaluator: full 175K train, 82K test (for overfitting monitoring + final reporting)
+        # Test evaluator: full train/test (for overfitting monitoring + final reporting)
+        # Note: test evaluator does NOT undersample — we want unbiased evaluation
         self._log(f"Creating test IDSEvaluator ({len(test_dataset.X_train):,} train / "
                    f"{len(test_dataset.X_test):,} eval, 1 part{balance_label})...")
         test_eval = IDSEvaluator(
@@ -882,6 +887,7 @@ class FlowWorker:
             neuron_sample_rate=neuron_sample_rate,
             balance_classes=balance_classes,
             single_cluster=single_cluster,
+            undersample_majority=undersample_majority,
         )
 
         return optimizer_eval, test_eval
