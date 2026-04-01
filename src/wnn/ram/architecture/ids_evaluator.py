@@ -49,10 +49,14 @@ class IDSEvaluator(BaseEvaluator):
 		balance_classes: bool = False,
 		single_cluster: bool = False,  # Single-cluster discriminator mode
 		undersample_majority: bool = False,  # Undersample majority class to match minority
+		flip_labels: bool = False,  # Swap normal↔attack labels (detect normals in attack-heavy data)
 	):
 		if classification == "binary":
 			y_train = dataset.y_train_binary
 			y_test = dataset.y_test_binary
+			if flip_labels:
+				y_train = 1 - y_train  # 0→1, 1→0
+				y_test = 1 - y_test
 			num_classes = 2
 		elif classification == "multi":
 			y_train = dataset.y_train_multi

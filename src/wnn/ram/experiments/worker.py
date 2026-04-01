@@ -822,6 +822,7 @@ class FlowWorker:
         balance_classes = params.get("balance_classes", False)
         single_cluster = params.get("ids_single_cluster", False)
         undersample_majority = params.get("undersample_majority", False)
+        flip_labels = params.get("flip_labels", False)
         feature_selection = params.get("ids_feature_selection", "all")
         rest_bits = params.get("ids_rest_bits", None)
         kfold_per_gen = params.get("ids_kfold_per_gen", 1)
@@ -874,6 +875,7 @@ class FlowWorker:
             balance_classes=balance_classes,
             single_cluster=single_cluster,
             undersample_majority=undersample_majority,
+            flip_labels=flip_labels,
         )
 
         # Test evaluator: full train/test (for overfitting monitoring + final reporting)
@@ -888,6 +890,7 @@ class FlowWorker:
             balance_classes=balance_classes,
             single_cluster=single_cluster,
             undersample_majority=undersample_majority,
+            flip_labels=flip_labels,
         )
 
         return optimizer_eval, test_eval
