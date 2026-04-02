@@ -1040,7 +1040,7 @@
         </div>
         <div class="info-card">
           <span class="info-label">Dataset</span>
-          <span class="info-value">UNSW-NB15 ({flow.config.params?.ids_split ?? 'standard'})</span>
+          <span class="info-value">{({'unsw-nb15': 'UNSW-NB15', 'cicids2017': 'CICIDS2017', 'ciciot2023': 'CIC-IoT-2023'})[flow.config.params?.ids_dataset] ?? flow.config.params?.ids_dataset ?? 'UNSW-NB15'} ({flow.config.params?.ids_split ?? 'standard'})</span>
         </div>
         <div class="info-card">
           <span class="info-label">Encoding</span>
