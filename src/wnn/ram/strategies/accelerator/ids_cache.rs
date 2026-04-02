@@ -56,6 +56,11 @@ pub struct IDSCache {
     single_cluster: bool,
     num_genome_clusters: usize,
 
+    // Which class index represents "normal/benign" for FPR computation.
+    // Default 0; set to 1 when flip_labels is active so FPR is always
+    // the false alarm rate on original benign traffic.
+    pub normal_class: usize,
+
     // Live progress for observer thread
     pub live_progress: Arc<RwLock<Option<LiveProgress>>>,
 }
@@ -144,6 +149,7 @@ impl IDSCache {
             num_genome_clusters,
             train_rotator: SubsetRotator::new(num_parts, seed + 100),
             live_progress: Arc::new(RwLock::new(None)),
+            normal_class: 0,
         }
     }
 

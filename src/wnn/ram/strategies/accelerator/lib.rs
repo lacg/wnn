@@ -4004,6 +4004,14 @@ impl IDSCacheWrapper {
         self.inner.total_features()
     }
 
+    /// Set which class is "normal" for FPR computation.
+    /// Call with 1 when flip_labels is active so FPR measures false alarms
+    /// on the original benign class (which is class 1 after flipping).
+    fn set_normal_class(&mut self, normal_class: usize) {
+        self.inner.normal_class = normal_class;
+        adaptive::set_normal_class(normal_class);
+    }
+
     /// Evaluate genomes using hybrid CPU+GPU with a specific train subset.
     #[allow(clippy::too_many_arguments)]
     fn evaluate_genomes_hybrid(

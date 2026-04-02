@@ -37,6 +37,19 @@ pub use crate::eval_worker::{EvalData, get_eval_worker};
 // Global counter incremented on each reset
 static RESET_GENERATION: AtomicU64 = AtomicU64::new(0);
 
+// Which class index is "normal/benign" for FPR computation.
+// 0 = default (normal is class 0), 1 = flip_labels active (normal is class 1).
+use std::sync::atomic::AtomicUsize;
+static NORMAL_CLASS: AtomicUsize = AtomicUsize::new(0);
+
+pub fn set_normal_class(c: usize) {
+    NORMAL_CLASS.store(c, Ordering::Relaxed);
+}
+
+pub fn get_normal_class() -> usize {
+    NORMAL_CLASS.load(Ordering::Relaxed)
+}
+
 // Storage for resettable evaluators - uses Arc so callers can hold references
 static METAL_EVALUATOR: RwLock<Option<Arc<crate::metal_ramlm::MetalRAMLMEvaluator>>> = RwLock::new(None);
 static SPARSE_METAL_EVALUATOR: RwLock<Option<Arc<crate::metal_ramlm::MetalSparseEvaluator>>> = RwLock::new(None);
@@ -237,10 +250,16 @@ pub fn compute_f1_macro(predictions: &[u32], targets: &[i64], num_classes: usize
     if num_active_classes == 0 { 0.0 } else { f1_sum / num_active_classes as f64 }
 }
 
-/// Compute both F1-macro and FPR-macro from the same confusion matrix.
-/// FPR(c) = FP(c) / (FP(c) + TN(c))  where TN(c) = total - TP(c) - FP(c) - FN(c)
-/// Returns (f1_macro, fpr_macro).
+/// Compute both F1-macro and FPR from the same confusion matrix.
+/// FPR = fraction of `normal_class` examples misclassified as any other class.
+/// `normal_class` is typically 0, but set to 1 when flip_labels is active
+/// so FPR always measures false alarms on the original benign traffic.
+/// Returns (f1_macro, fpr).
 pub fn compute_f1_fpr(predictions: &[u32], targets: &[i64], num_classes: usize) -> (f64, f64) {
+    compute_f1_fpr_with_normal_class(predictions, targets, num_classes, 0)
+}
+
+pub fn compute_f1_fpr_with_normal_class(predictions: &[u32], targets: &[i64], num_classes: usize, normal_class: usize) -> (f64, f64) {
     if num_classes == 0 || predictions.is_empty() {
         return (0.0, 0.0);
     }
@@ -292,14 +311,14 @@ pub fn compute_f1_fpr(predictions: &[u32], targets: &[i64], num_classes: usize) 
     } else {
         let f1_macro = f1_sum / num_active_classes as f64;
 
-        // IDS FPR: fraction of Normal (class 0) samples misclassified as any
-        // attack class.  Same formula for binary and multi-class — class 0 is
-        // always Normal in UNSW-NB15.
+        // IDS FPR: fraction of Normal samples misclassified as any attack class.
+        // normal_class is 0 by default, but 1 when flip_labels is active, so
+        // FPR always measures false alarms on the original benign traffic.
         //   FPR = (Normal predicted as non-Normal) / (all Normal samples)
         let normal_total: f64 = (0..num_classes)
-            .map(|p| confusion[0 * num_classes + p] as f64)
+            .map(|p| confusion[normal_class * num_classes + p] as f64)
             .sum();
-        let normal_correct = confusion[0] as f64;  // confusion[0*K + 0] = TN
+        let normal_correct = confusion[normal_class * num_classes + normal_class] as f64;
         let fpr = if normal_total > 0.0 {
             (normal_total - normal_correct) / normal_total
         } else {
@@ -1945,7 +1964,7 @@ pub fn evaluate_genomes_parallel(
 
         let avg_ce = total_ce / num_eval as f64;
         let accuracy = total_correct as f64 / num_eval as f64;
-        let (f1, fpr) = compute_f1_fpr(&predictions, eval_targets, num_clusters);
+        let (f1, fpr) = compute_f1_fpr_with_normal_class(&predictions, eval_targets, num_clusters, get_normal_class());
 
         // Progress logging (to log file if WNN_LOG_PATH set, otherwise stderr)
         // Format matches Python's format_genome_log for consistency
@@ -2710,7 +2729,7 @@ pub fn evaluate_genome_hybrid(
             if pred as i64 == eval_targets[ex_idx] { correct += 1; }
         }
         let acc = correct as f64 / num_eval as f64;
-        let (f1, fpr) = compute_f1_fpr(&predictions, eval_targets, 2);
+        let (f1, fpr) = compute_f1_fpr_with_normal_class(&predictions, eval_targets, 2, get_normal_class());
         return (ce, acc, f1, fpr, threshold);
     }
 
@@ -2753,7 +2772,7 @@ pub fn evaluate_genome_hybrid(
                     );
 
                     if let Ok((ce, acc, predictions)) = result {
-                        let (f1, fpr) = compute_f1_fpr(&predictions, eval_targets, num_clusters);
+                        let (f1, fpr) = compute_f1_fpr_with_normal_class(&predictions, eval_targets, num_clusters, get_normal_class());
                         if timing_enabled {
                             let elapsed = call_start.elapsed().as_millis();
                             let total_ms = eval_start.elapsed().as_millis();
@@ -2924,7 +2943,7 @@ pub fn evaluate_genome_hybrid(
                 let ce_time_ms = if phase_timing { ce_start.elapsed().as_micros() as f64 / 1000.0 } else { 0.0 };
 
                 if let Ok((ce, acc, predictions)) = result {
-                    let (f1, fpr) = compute_f1_fpr(&predictions, eval_targets, num_clusters);
+                    let (f1, fpr) = compute_f1_fpr_with_normal_class(&predictions, eval_targets, num_clusters, get_normal_class());
                     if timing_enabled {
                         let elapsed = gpu_start.elapsed().as_millis();
                         if phase_timing {
@@ -2984,7 +3003,7 @@ pub fn evaluate_genome_hybrid(
 
     let avg_ce = total_ce / num_eval as f64;
     let accuracy = total_correct as f64 / num_eval as f64;
-    let (f1, fpr) = compute_f1_fpr(&predictions, eval_targets, num_clusters);
+    let (f1, fpr) = compute_f1_fpr_with_normal_class(&predictions, eval_targets, num_clusters, get_normal_class());
 
     (avg_ce, accuracy, f1, fpr, 0.5)
 }

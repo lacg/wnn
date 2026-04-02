@@ -129,6 +129,12 @@ class IDSEvaluator(BaseEvaluator):
 			undersample_majority=undersample_majority,
 		)
 
+		# When flip_labels is active, original benign is class 1 after flipping.
+		# Tell Rust to compute FPR on class 1 so it always measures false alarms
+		# on the original benign traffic.
+		if flip_labels:
+			self._cache.set_normal_class(1)
+
 		self._train_call_count = 0
 		self._k_folds = k_folds
 		self._kfold_per_gen = min(kfold_per_gen, k_folds) if k_folds > 1 else 1
