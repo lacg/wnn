@@ -232,6 +232,7 @@ class FlowConfig:
 	balance_classes: bool = False  # Class-balanced training (upweight minority class)
 	ids_single_cluster: bool = False  # Single-cluster discriminator (1 cluster, threshold 0.5)
 	ids_feature_selection: str = "all"  # Feature selection mode for leaderboard filtering
+	dataset_key: Optional[str] = None  # e.g. "ciciot2023_8b_random" — scopes validation cache
 
 	@classmethod
 	def bitwise_7_phase(
@@ -1528,6 +1529,7 @@ class Flow:
 					flow_id=self._flow_id,
 					shutdown_check=self.shutdown_check,
 					full_evaluator=self.full_evaluator,
+					dataset_key=self.config.dataset_key,
 				)
 
 				# Random train subset, avoiding previous phase's subset

@@ -304,13 +304,14 @@ async fn create_validation_summary(
 #[derive(Debug, Deserialize)]
 pub struct CheckCachedValidationQuery {
     pub genome_hash: String,
+    pub dataset_key: Option<String>,
 }
 
 async fn check_cached_validation(
     State(state): State<Arc<AppState>>,
     Query(query): Query<CheckCachedValidationQuery>,
 ) -> impl IntoResponse {
-    match crate::db::queries::get_cached_validation(&state.db, &query.genome_hash).await {
+    match crate::db::queries::get_cached_validation(&state.db, &query.genome_hash, query.dataset_key.as_deref()).await {
         Ok(Some((ce, accuracy, f1_macro, fpr, threshold_metadata))) => (StatusCode::OK, Json(serde_json::json!({
             "found": true,
             "ce": ce,

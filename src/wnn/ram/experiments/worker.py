@@ -522,6 +522,12 @@ class FlowWorker:
                 flow_config.stage_max_neurons_list = params.get("stage_max_neurons")
                 flow_config.max_bit_delta = params.get("max_bit_delta", 0)
 
+                # Build dataset_key for validation cache scoping (prevents cross-dataset cache poisoning)
+                ds = params.get("ids_dataset", "unsw-nb15")
+                nb = params.get("ids_n_bits", 8)
+                sp = params.get("ids_split", "standard")
+                flow_config.dataset_key = f"{ds}_{nb}b_{sp}"
+
             # Handle leaderboard seeding (explicit param or grid_source=leaderboard)
             use_leaderboard = params.get("seed_from_leaderboard") or params.get("grid_source") == "leaderboard"
             if use_leaderboard:

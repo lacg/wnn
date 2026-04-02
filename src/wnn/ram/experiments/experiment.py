@@ -291,6 +291,7 @@ class Experiment:
 		flow_id: Optional[int] = None,
 		shutdown_check: Optional[Callable[[], bool]] = None,  # Callable returning True if shutdown requested
 		full_evaluator: Optional[Any] = None,  # Separate evaluator for validation (uses validation set)
+		dataset_key: Optional[str] = None,  # e.g. "ciciot2023_8b_random" — scopes cache lookups
 	):
 		"""
 		Initialize experiment.
@@ -317,6 +318,7 @@ class Experiment:
 		self.tracker = tracker
 		self.flow_id = flow_id
 		self.shutdown_check = shutdown_check
+		self.dataset_key = dataset_key
 
 		# Derived properties
 		self.vocab_size = evaluator.vocab_size
@@ -935,11 +937,11 @@ class Experiment:
 			for genome, genome_type, train_metrics in selected:
 				genome_hash = self._compute_genome_hash(genome)
 
-				# Check if already validated
+				# Check if already validated (scoped by dataset to prevent cross-dataset cache poisoning)
 				cached = None
 				if self.dashboard_client:
 					try:
-						cached = self.dashboard_client.check_cached_validation(genome_hash)
+						cached = self.dashboard_client.check_cached_validation(genome_hash, self.dataset_key)
 					except Exception:
 						pass
 

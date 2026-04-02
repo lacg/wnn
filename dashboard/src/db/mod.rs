@@ -1600,20 +1600,41 @@ pub mod queries {
     }
 
     /// Check if a genome has already been validated (by genome_hash)
-    /// Returns the cached CE, accuracy, f1_macro, fpr, and threshold_metadata if found
+    /// Returns the cached CE, accuracy, f1_macro, fpr, and threshold_metadata if found.
+    /// When dataset_key is provided, only matches validations from flows with the same
+    /// dataset+encoding config to prevent cross-dataset cache poisoning.
     pub async fn get_cached_validation(
         pool: &DbPool,
         genome_hash: &str,
+        dataset_key: Option<&str>,
     ) -> Result<Option<(f64, f64, Option<f64>, Option<f64>, Option<serde_json::Value>)>> {
-        let row = sqlx::query(
-            r#"SELECT ce, accuracy, f1_macro, fpr, threshold_metadata
-               FROM validation_summaries WHERE genome_hash = ?
-               ORDER BY threshold_metadata IS NOT NULL DESC
-               LIMIT 1"#,
-        )
-        .bind(genome_hash)
-        .fetch_optional(pool)
-        .await?;
+        let row = if let Some(dk) = dataset_key {
+            sqlx::query(
+                r#"SELECT vs.ce, vs.accuracy, vs.f1_macro, vs.fpr, vs.threshold_metadata
+                   FROM validation_summaries vs
+                   JOIN flows f ON vs.flow_id = f.id
+                   WHERE vs.genome_hash = ?
+                     AND (json_extract(f.config_json, '$.params.ids_dataset') || '_' ||
+                          json_extract(f.config_json, '$.params.ids_n_bits') || 'b_' ||
+                          json_extract(f.config_json, '$.params.ids_split')) = ?
+                   ORDER BY vs.threshold_metadata IS NOT NULL DESC
+                   LIMIT 1"#,
+            )
+            .bind(genome_hash)
+            .bind(dk)
+            .fetch_optional(pool)
+            .await?
+        } else {
+            sqlx::query(
+                r#"SELECT ce, accuracy, f1_macro, fpr, threshold_metadata
+                   FROM validation_summaries WHERE genome_hash = ?
+                   ORDER BY threshold_metadata IS NOT NULL DESC
+                   LIMIT 1"#,
+            )
+            .bind(genome_hash)
+            .fetch_optional(pool)
+            .await?
+        };
 
         match row {
             Some(r) => {

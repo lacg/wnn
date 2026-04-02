@@ -530,18 +530,23 @@ class DashboardClient:
 	# Validation Summary methods
 	# =========================================================================
 
-	def check_cached_validation(self, genome_hash: str) -> Optional[tuple[float, float, Optional[float], Optional[float], Optional[dict]]]:
+	def check_cached_validation(self, genome_hash: str, dataset_key: Optional[str] = None) -> Optional[tuple[float, float, Optional[float], Optional[float], Optional[dict]]]:
 		"""
 		Check if a genome has already been validated.
 
 		Args:
 			genome_hash: The genome's config hash
+			dataset_key: Optional dataset scope key (e.g. "ciciot2023_8b_random")
+				to prevent cross-dataset cache poisoning
 
 		Returns:
 			Tuple of (ce, accuracy, f1_macro, fpr, threshold_metadata) if found, None if not validated yet
 		"""
 		try:
-			result = self._request("GET", "/api/validations/check", params={"genome_hash": genome_hash})
+			params = {"genome_hash": genome_hash}
+			if dataset_key:
+				params["dataset_key"] = dataset_key
+			result = self._request("GET", "/api/validations/check", params=params)
 			if result.get("found"):
 				return (result["ce"], result["accuracy"], result.get("f1_macro"), result.get("fpr"), result.get("threshold_metadata"))
 			return None
