@@ -1,8 +1,0 @@
-{
-  "num_vectors": 1000,
-  "input_bits": 176,
-  "num_neurons": 83,
-  "addr_bits": 12,
-  "accuracy_pct": 98.0,
-  "flow_id": 1024
-}

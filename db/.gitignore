@@ -1,4 +1,0 @@
-# Keep folder but ignore database files
-*.db
-*.db-shm
-*.db-wal

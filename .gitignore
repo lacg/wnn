@@ -313,11 +313,14 @@ run_ids_overnight.sh
 # Reference repos
 fwiw-reference/
 
-# DB backups
-db/*.bak-*
+# DB (symlinked to external SSD)
+db/
 
 # Venv symlink
 wnn
+
+# FPGA exports (generated, large binary .mem files)
+fpga/export/
 
 # LaTeX build artifacts
 paper/*.aux
