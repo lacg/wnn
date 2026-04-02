@@ -664,7 +664,7 @@
     }
   }
 
-  async function updateFitnessWeight(field: 'fitness_weight_ce' | 'fitness_weight_acc' | 'min_accuracy_floor' | 'threshold_start' | 'threshold_step', value: number) {
+  async function updateFitnessWeight(field: 'fitness_weight_ce' | 'fitness_weight_acc' | 'fitness_weight_f1' | 'fitness_weight_fpr' | 'min_accuracy_floor' | 'threshold_start' | 'threshold_step', value: number) {
     if (!flow) return;
     saving = true;
 
@@ -1382,6 +1382,32 @@
                   max="10"
                   step="0.1"
                   on:change={(e) => updateFitnessWeight('fitness_weight_ce', parseFloat(e.currentTarget.value))}
+                  disabled={saving}
+                />
+              </div>
+              <div class="param-group-item">
+                <span class="param-label">F1 Weight</span>
+                <input
+                  type="number"
+                  class="inline-input"
+                  value={flow.config.params.fitness_weight_f1 ?? 0}
+                  min="0"
+                  max="10"
+                  step="0.1"
+                  on:change={(e) => updateFitnessWeight('fitness_weight_f1', parseFloat(e.currentTarget.value))}
+                  disabled={saving}
+                />
+              </div>
+              <div class="param-group-item">
+                <span class="param-label">FPR Weight</span>
+                <input
+                  type="number"
+                  class="inline-input"
+                  value={flow.config.params.fitness_weight_fpr ?? 0}
+                  min="0"
+                  max="10"
+                  step="0.1"
+                  on:change={(e) => updateFitnessWeight('fitness_weight_fpr', parseFloat(e.currentTarget.value))}
                   disabled={saving}
                 />
               </div>
