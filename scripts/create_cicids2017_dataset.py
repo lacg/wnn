@@ -175,6 +175,23 @@ def main():
 	)
 	print(f"Random split: {len(df_rand_train):,} train, {len(df_rand_test):,} test")
 
+	# Create 80/10/10 three-way splits
+	print("\n--- Creating 80/10/10 three-way splits ---")
+	# Temporal 3-way: split Friday test into test (50%) + validation (50%)
+	df_test_t3w, df_val_t3w = train_test_split(
+		df_test, test_size=0.5, random_state=42, stratify=df_test["label"]
+	)
+	print(f"Temporal 3-way: {len(df_train):,} train, {len(df_test_t3w):,} test, {len(df_val_t3w):,} val")
+
+	# Random 3-way: 80/10/10 from all data
+	df_rand3_train, df_rand3_remaining = train_test_split(
+		df_all, test_size=0.2, random_state=42, stratify=df_all["label"]
+	)
+	df_rand3_test, df_rand3_val = train_test_split(
+		df_rand3_remaining, test_size=0.5, random_state=42, stratify=df_rand3_remaining["label"]
+	)
+	print(f"Random 3-way: {len(df_rand3_train):,} train, {len(df_rand3_test):,} test, {len(df_rand3_val):,} val")
+
 	# Upload to HuggingFace
 	print("\n--- Uploading to HuggingFace ---")
 	api = HfApi()
@@ -195,12 +212,28 @@ def main():
 		df_train.to_parquet(temporal_dir / "train-00000-of-00001.parquet", index=False)
 		df_test.to_parquet(temporal_dir / "test-00000-of-00001.parquet", index=False)
 
-		# Save random split
+		# Save random split (legacy 80/20)
 		print("Saving random split...")
 		random_dir = tmpdir / "random"
 		random_dir.mkdir()
 		df_rand_train.to_parquet(random_dir / "train-00000-of-00001.parquet", index=False)
 		df_rand_test.to_parquet(random_dir / "test-00000-of-00001.parquet", index=False)
+
+		# Save temporal_3way split (train=Mon-Thu, test+val=Friday 50/50)
+		print("Saving temporal_3way split...")
+		t3w_dir = tmpdir / "temporal_3way"
+		t3w_dir.mkdir()
+		df_train.to_parquet(t3w_dir / "train-00000-of-00001.parquet", index=False)
+		df_test_t3w.to_parquet(t3w_dir / "test-00000-of-00001.parquet", index=False)
+		df_val_t3w.to_parquet(t3w_dir / "validation-00000-of-00001.parquet", index=False)
+
+		# Save random_3way split (80/10/10)
+		print("Saving random_3way split...")
+		r3w_dir = tmpdir / "random_3way"
+		r3w_dir.mkdir()
+		df_rand3_train.to_parquet(r3w_dir / "train-00000-of-00001.parquet", index=False)
+		df_rand3_test.to_parquet(r3w_dir / "test-00000-of-00001.parquet", index=False)
+		df_rand3_val.to_parquet(r3w_dir / "validation-00000-of-00001.parquet", index=False)
 
 		# Save feature importance
 		with open(tmpdir / "feature_importance.json", "w") as f:
@@ -223,13 +256,29 @@ tags:
 - binary-classification
 pretty_name: CICIDS2017 Network Intrusion Detection
 configs:
+  - config_name: temporal_3way
+    data_files:
+      - split: train
+        path: temporal_3way/train-*
+      - split: test
+        path: temporal_3way/test-*
+      - split: validation
+        path: temporal_3way/validation-*
+    default: true
+  - config_name: random_3way
+    data_files:
+      - split: train
+        path: random_3way/train-*
+      - split: test
+        path: random_3way/test-*
+      - split: validation
+        path: random_3way/validation-*
   - config_name: temporal
     data_files:
       - split: train
         path: temporal/train-*
       - split: test
         path: temporal/test-*
-    default: true
   - config_name: standard
     data_files:
       - split: train

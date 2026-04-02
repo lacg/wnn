@@ -62,22 +62,24 @@ TOP20_RF_FEATURES = [
 HF_DATASET_ID = "lacg030175/CICIDS2017"
 
 
-def _load_from_huggingface(config: str) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
-	"""Load train/test from our published HuggingFace dataset."""
+def _load_from_huggingface(config: str) -> tuple[pd.DataFrame, pd.DataFrame, list[str], pd.DataFrame | None]:
+	"""Load train/test(/validation) from our published HuggingFace dataset."""
 	from datasets import load_dataset
 
 	print(f"  Loading from HuggingFace: {HF_DATASET_ID} ({config})...")
 	ds = load_dataset(HF_DATASET_ID, config)
 	df_train = ds["train"].to_pandas()
 	df_test = ds["test"].to_pandas()
+	df_val = ds["validation"].to_pandas() if "validation" in ds else None
 
 	# Features: everything except labels
 	exclude = {"Label", "label"}
 	common_features = sorted((set(df_train.columns) - exclude) & (set(df_test.columns) - exclude))
 
-	print(f"  {config.capitalize()} split: {len(df_train):,} train, {len(df_test):,} test")
+	val_str = f", {len(df_val):,} val" if df_val is not None else ""
+	print(f"  {config.capitalize()} split: {len(df_train):,} train, {len(df_test):,} test{val_str}")
 	print(f"  Using {len(common_features)} features")
-	return df_train, df_test, common_features
+	return df_train, df_test, common_features, df_val
 
 
 def load_cicids2017(
@@ -111,11 +113,11 @@ def load_cicids2017(
 	"""
 	if split == "standard":
 		split = "temporal"
-	if split not in ("temporal", "random"):
-		raise ValueError(f"split must be 'temporal', 'standard', or 'random', got '{split}'")
+	if split not in ("temporal", "random", "temporal_3way", "random_3way"):
+		raise ValueError(f"split must be 'temporal', 'standard', 'random', 'temporal_3way', or 'random_3way', got '{split}'")
 
 	print(f"Loading CICIDS2017 (split={split})...")
-	df_train, df_test, common_features = _load_from_huggingface(split)
+	df_train, df_test, common_features, df_val = _load_from_huggingface(split)
 
 	X_train, X_test, encoder, used_features = encode_features(
 		df_train, df_test, common_features, TOP20_RF_FEATURES,
@@ -134,12 +136,18 @@ def load_cicids2017(
 	y_train_multi = df_train["Label"].map(lambda x: cat_to_idx.get(x, 0)).values.astype(np.int64)
 	y_test_multi = df_test["Label"].map(lambda x: cat_to_idx.get(x, 0)).values.astype(np.int64)
 
-	n_train_normal = int((y_train_binary == 0).sum())
-	n_train_attack = int((y_train_binary == 1).sum())
-	n_test_normal = int((y_test_binary == 0).sum())
-	n_test_attack = int((y_test_binary == 1).sum())
-	print(f"  Train: {n_train_normal:,} normal, {n_train_attack:,} attack")
-	print(f"  Test:  {n_test_normal:,} normal, {n_test_attack:,} attack")
+	print(f"  Train: {(y_train_binary == 0).sum():,} normal, {(y_train_binary == 1).sum():,} attack")
+	print(f"  Test:  {(y_test_binary == 0).sum():,} normal, {(y_test_binary == 1).sum():,} attack")
+
+	# Encode validation split if present (3-way splits)
+	X_val = None
+	y_val_binary = None
+	y_val_multi = None
+	if df_val is not None:
+		y_val_binary = df_val["label"].values.astype(np.int64)
+		y_val_multi = df_val["Label"].map(lambda x: cat_to_idx.get(x, 0)).values.astype(np.int64)
+		X_val = encoder.transform(df_val[used_features])
+		print(f"  Val:   {(y_val_binary == 0).sum():,} normal, {(y_val_binary == 1).sum():,} attack")
 
 	return IDSDataset(
 		X_train=X_train,
@@ -151,4 +159,7 @@ def load_cicids2017(
 		encoder=encoder,
 		category_names=ATTACK_CATEGORIES,
 		feature_names=used_features,
+		X_val=X_val,
+		y_val_binary=y_val_binary,
+		y_val_multi=y_val_multi,
 	)

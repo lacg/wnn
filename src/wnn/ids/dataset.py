@@ -63,6 +63,11 @@ class IDSDataset:
 	encoder: ThermometerEncoder
 	category_names: list[str]  # index → category name
 	feature_names: list[str]  # feature names in order
+	# Optional validation split (80/10/10). When present, test is for threshold
+	# calibration and validation is for final reported metrics.
+	X_val: np.ndarray | None = None
+	y_val_binary: np.ndarray | None = None
+	y_val_multi: np.ndarray | None = None
 
 
 VALID_FEATURE_SELECTIONS = ("all", "top20", "top20_split")
@@ -303,10 +308,11 @@ VALID_FEATURE_SELECTIONS = ("all", "top20", "top20_split")
 HF_DATASET_ID = "lacg030175/UNSW-NB15"
 
 
-def _load_from_huggingface(config: str) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
-	"""Load train/test from our published HuggingFace dataset.
+def _load_from_huggingface(config: str) -> tuple[pd.DataFrame, pd.DataFrame, list[str], pd.DataFrame | None]:
+	"""Load train/test(/validation) from our published HuggingFace dataset.
 
-	Configs: "standard" (175K/82K temporal) or "random" (1.4M/158K deduped).
+	Configs: "temporal"/"standard" (175K/82K), "random" (90/10 deduped),
+	"temporal_3way"/"random_3way" (80/10/10 with separate validation).
 	"""
 	from datasets import load_dataset
 
@@ -314,11 +320,12 @@ def _load_from_huggingface(config: str) -> tuple[pd.DataFrame, pd.DataFrame, lis
 	ds = load_dataset(HF_DATASET_ID, config)
 	df_train = ds["train"].to_pandas()
 	df_test = ds["test"].to_pandas()
+	df_val = ds["validation"].to_pandas() if "validation" in ds else None
 
 	# Features: everything except labels and IDs
 	exclude = {"id", "label", "Label", "attack_cat", "Attack_cat"}
-	if config == "random":
-		# Random config has IP/port columns — drop nominal features
+	if config in ("random", "random_3way"):
+		# Random configs have IP/port columns — drop nominal features
 		exclude |= {"srcip", "dstip", "sport", "dsport"}
 	common_features = sorted((set(df_train.columns) - exclude) & (set(df_test.columns) - exclude))
 
@@ -326,9 +333,10 @@ def _load_from_huggingface(config: str) -> tuple[pd.DataFrame, pd.DataFrame, lis
 	# ThermometerEncoder handles them as categoricals with binary coding,
 	# which is correct (no false ordering imposed by LabelEncoder).
 
-	print(f"  {config.capitalize()} split: {len(df_train):,} train, {len(df_test):,} test")
+	val_str = f", {len(df_val):,} val" if df_val is not None else ""
+	print(f"  {config.capitalize()} split: {len(df_train):,} train, {len(df_test):,} test{val_str}")
 	print(f"  Using {len(common_features)} features")
-	return df_train, df_test, common_features
+	return df_train, df_test, common_features, df_val
 
 
 def _load_standard_split_local(data_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
@@ -384,20 +392,21 @@ def load_unsw_nb15(
 	# Alias: "standard" maps to "temporal" (both are the temporal split)
 	if split == "standard":
 		split = "temporal"
-	if split not in ("temporal", "random"):
-		raise ValueError(f"split must be 'temporal', 'standard', or 'random', got '{split}'")
+	if split not in ("temporal", "random", "temporal_3way", "random_3way"):
+		raise ValueError(f"split must be 'temporal', 'standard', 'random', 'temporal_3way', or 'random_3way', got '{split}'")
 	if feature_selection not in VALID_FEATURE_SELECTIONS:
 		raise ValueError(f"feature_selection must be one of {VALID_FEATURE_SELECTIONS}, got '{feature_selection}'")
 
 	# ── Load raw data ──────────────────────────────────────────────────
 	print(f"Loading UNSW-NB15 (split={split})...")
 
+	df_val = None
 	try:
-		df_train, df_test, common_features = _load_from_huggingface(split)
+		df_train, df_test, common_features, df_val = _load_from_huggingface(split)
 	except Exception as e:
-		if split == "random":
+		if split in ("random", "random_3way", "temporal_3way"):
 			raise RuntimeError(
-				f"Random split requires HuggingFace dataset ({HF_DATASET_ID}). "
+				f"{split} split requires HuggingFace dataset ({HF_DATASET_ID}). "
 				f"Install: pip install datasets\nError: {e}"
 			)
 		# Fallback to local CSVs for standard split only
@@ -451,6 +460,18 @@ def load_unsw_nb15(
 	print(f"  Test:  {(y_test_binary == 0).sum():,} normal, "
 		  f"{(y_test_binary == 1).sum():,} attack")
 
+	# Encode validation split if present (3-way splits)
+	X_val = None
+	y_val_binary = None
+	y_val_multi = None
+	if df_val is not None:
+		y_val_binary = df_val["label"].values.astype(np.int32)
+		y_val_multi = encode_categories(df_val["attack_cat"])
+		# Encode validation features using the same encoder fitted on train
+		X_val = encoder.transform(df_val[used_features])
+		print(f"  Val:   {(y_val_binary == 0).sum():,} normal, "
+			  f"{(y_val_binary == 1).sum():,} attack")
+
 	return IDSDataset(
 		X_train=X_train,
 		y_train_binary=y_train_binary,
@@ -461,4 +482,7 @@ def load_unsw_nb15(
 		encoder=encoder,
 		category_names=ATTACK_CATEGORIES,
 		feature_names=used_features,
+		X_val=X_val,
+		y_val_binary=y_val_binary,
+		y_val_multi=y_val_multi,
 	)

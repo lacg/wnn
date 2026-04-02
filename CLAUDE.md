@@ -25,6 +25,21 @@ Always use context7 when I need code generation, setup or configuration steps, o
 - Produce different results (wrong memory mode, missing QUAD_WEIGHTED)
 - Create maintenance burden (two implementations to keep in sync)
 
+### IDS Datasets: Use 80/10/10 Three-Way Splits
+**All new IDS experiment runs MUST use the `_3way` split configs (80/10/10).**
+- **Train (80%)**: Model training, GA/grid search, K-fold cross-validation
+- **Test (10%)**: Threshold calibration only (held out from training)
+- **Validation (10%)**: Final reported metrics (NEVER touched during training or calibration)
+
+HuggingFace configs:
+- UNSW-NB15: `temporal_3way` (default), `random_3way`
+- CICIDS2017: `temporal_3way` (default), `random_3way`
+- CIC-IoT-2023: `random_3way` (default)
+
+Legacy 80/20 configs (`temporal`, `random`) are preserved for backward compatibility with existing UNSW-NB15 and CICIDS2017 runs. Do NOT use legacy configs for new experiments.
+
+The loader code passes `split="random_3way"` (or `"temporal_3way"`) to `load_dataset()`. When a 3-way split is loaded, the worker uses the HF validation split directly instead of carving a holdout from training data — so training gets the full 80%.
+
 ### iOS/iPadOS/macOS Development
 All Apple platform code (Swift/SwiftUI) should:
 - **Target version 26** (iOS 26, iPadOS 26, macOS 26)

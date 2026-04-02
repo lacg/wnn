@@ -815,6 +815,7 @@ class FlowWorker:
         or (s0_opt, s0_test, s1_opt, s1_test) for hierarchical classification.
         """
         from wnn.ids import load_unsw_nb15, split_train_validation
+        from wnn.ids.dataset import IDSDataset
         from wnn.ram.architecture.ids_evaluator import IDSEvaluator
 
         classification = params.get("ids_classification", "binary")
@@ -856,23 +857,57 @@ class FlowWorker:
         self._log(f"  Train: {len(y_train):,} examples, Test: {len(y_test):,} examples, "
                    f"Classes: {num_classes}, Features: {full_dataset.X_train.shape[1]}")
 
-        # Split training data: 75% optimizer train, 25% optimizer eval (validation)
-        train_val_dataset, test_dataset = split_train_validation(
-            full_dataset, val_fraction=val_fraction, seed=seed,
-        )
+        has_val_split = full_dataset.X_val is not None
 
-        # Optimizer evaluator: train (K-fold or subset rotation), validation for fitness
+        if has_val_split:
+            # 3-way split (80/10/10): train=optimizer, test=threshold cal, val=final metrics
+            # No need to carve holdout from training — use the full train set
+            self._log("Using 3-way split: train (optimizer) / test (threshold cal) / val (final metrics)")
+
+            # Optimizer: train on full HF train, eval on HF test (for fitness during GA)
+            optimizer_dataset = IDSDataset(
+                X_train=full_dataset.X_train,
+                y_train_binary=full_dataset.y_train_binary,
+                y_train_multi=full_dataset.y_train_multi,
+                X_test=full_dataset.X_test,
+                y_test_binary=full_dataset.y_test_binary,
+                y_test_multi=full_dataset.y_test_multi,
+                encoder=full_dataset.encoder,
+                category_names=full_dataset.category_names,
+                feature_names=full_dataset.feature_names,
+            )
+
+            # Test evaluator: train on full HF train, eval on HF validation (final reported metrics)
+            test_dataset = IDSDataset(
+                X_train=full_dataset.X_train,
+                y_train_binary=full_dataset.y_train_binary,
+                y_train_multi=full_dataset.y_train_multi,
+                X_test=full_dataset.X_val,
+                y_test_binary=full_dataset.y_val_binary,
+                y_test_multi=full_dataset.y_val_multi,
+                encoder=full_dataset.encoder,
+                category_names=full_dataset.category_names,
+                feature_names=full_dataset.feature_names,
+            )
+        else:
+            # Legacy 2-way split (80/20): carve holdout from training data
+            self._log("Using legacy 2-way split: carving 25% holdout from training data")
+            optimizer_dataset, test_dataset = split_train_validation(
+                full_dataset, val_fraction=val_fraction, seed=seed,
+            )
+
+        # Optimizer evaluator: train (K-fold or subset rotation), test for fitness
         kfold_label = f", k_folds={k_folds}" if k_folds > 1 else ""
         kfpg_label = f", kfold_per_gen={kfold_per_gen}" if kfold_per_gen > 1 else ""
-        self._log(f"Creating optimizer IDSEvaluator ({len(train_val_dataset.X_train):,} train / "
-                   f"{len(train_val_dataset.X_test):,} eval, {num_parts} parts{kfold_label}{kfpg_label})...")
+        self._log(f"Creating optimizer IDSEvaluator ({len(optimizer_dataset.X_train):,} train / "
+                   f"{len(optimizer_dataset.X_test):,} eval, {num_parts} parts{kfold_label}{kfpg_label})...")
         balance_label = ", balanced" if balance_classes else ""
         sc_label = ", single-cluster" if single_cluster else ""
         self._log(f"  neuron_sample_rate={neuron_sample_rate}, balance_classes={balance_classes}{sc_label}")
         us_label = ", undersample" if undersample_majority else ""
         self._log(f"  undersample_majority={undersample_majority}{us_label}")
         optimizer_eval = IDSEvaluator(
-            dataset=train_val_dataset,
+            dataset=optimizer_dataset,
             classification=classification,
             num_parts=num_parts,
             k_folds=k_folds,
@@ -884,8 +919,7 @@ class FlowWorker:
             flip_labels=flip_labels,
         )
 
-        # Test evaluator: full train/test (for overfitting monitoring + final reporting)
-        # Note: test evaluator does NOT undersample — we want unbiased evaluation
+        # Test evaluator: full train → validation (for final reporting)
         self._log(f"Creating test IDSEvaluator ({len(test_dataset.X_train):,} train / "
                    f"{len(test_dataset.X_test):,} eval, 1 part{balance_label})...")
         test_eval = IDSEvaluator(

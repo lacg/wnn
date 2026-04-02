@@ -178,6 +178,17 @@ def main():
 	)
 	print(f"Train: {len(df_train):,}, Test: {len(df_test):,}")
 
+	# Create 80/10/10 three-way split (train / test / validation)
+	# test = threshold calibration, validation = final reported metrics (never touched during training)
+	print(f"\nCreating 80/10/10 three-way split...")
+	df_train_3w, df_remaining = train_test_split(
+		df_all, test_size=0.2, random_state=42, stratify=df_all["label"]
+	)
+	df_test_3w, df_val_3w = train_test_split(
+		df_remaining, test_size=0.5, random_state=42, stratify=df_remaining["label"]
+	)
+	print(f"Train: {len(df_train_3w):,}, Test: {len(df_test_3w):,}, Val: {len(df_val_3w):,}")
+
 	# Upload to HuggingFace
 	print(f"\nUploading to HuggingFace...")
 	try:
@@ -188,11 +199,18 @@ def main():
 	with tempfile.TemporaryDirectory() as tmpdir:
 		tmpdir = Path(tmpdir)
 
-		# Save random split (primary — no temporal available)
+		# Save random split (legacy 80/20 for backward compatibility)
 		random_dir = tmpdir / "random"
 		random_dir.mkdir()
 		df_train.to_parquet(random_dir / "train-00000-of-00001.parquet", index=False)
 		df_test.to_parquet(random_dir / "test-00000-of-00001.parquet", index=False)
+
+		# Save random_3way split (80/10/10 — preferred for new experiments)
+		r3w_dir = tmpdir / "random_3way"
+		r3w_dir.mkdir()
+		df_train_3w.to_parquet(r3w_dir / "train-00000-of-00001.parquet", index=False)
+		df_test_3w.to_parquet(r3w_dir / "test-00000-of-00001.parquet", index=False)
+		df_val_3w.to_parquet(r3w_dir / "validation-00000-of-00001.parquet", index=False)
 
 		# Save feature importance
 		importance_data = {
@@ -222,27 +240,49 @@ tags:
 - binary-classification
 pretty_name: CIC-IoT-2023 IoT Intrusion Detection
 configs:
+  - config_name: random_3way
+    data_files:
+      - split: train
+        path: random_3way/train-*
+      - split: test
+        path: random_3way/test-*
+      - split: validation
+        path: random_3way/validation-*
+    default: true
   - config_name: random
     data_files:
       - split: train
         path: random/train-*
       - split: test
         path: random/test-*
-    default: true
 ---
 
 # CIC-IoT-2023 IoT Intrusion Detection Dataset
 
 The [CICIoT2023](https://www.unb.ca/cic/datasets/iotdataset-2023.html) dataset from the Canadian Institute for Cybersecurity, subsampled and preprocessed for machine learning evaluation.
 
-## Configuration
+## Configurations
 
-### `random` (default) — Stratified Random Split
+### `random_3way` (default) — 80/10/10 Three-Way Split
 
-80/20 stratified random split from subsampled data.
+Stratified random split with fully separated train/test/validation sets:
+- **Train (80%)**: Model training and architecture search
+- **Test (10%)**: Threshold calibration (held out from training)
+- **Validation (10%)**: Final reported metrics (never touched during training or calibration)
 
 ```python
 from datasets import load_dataset
+ds = load_dataset("lacg030175/CIC-IoT-2023", "random_3way")
+# ds["train"]:      {len(df_train_3w):,} rows
+# ds["test"]:       {len(df_test_3w):,} rows
+# ds["validation"]: {len(df_val_3w):,} rows
+```
+
+### `random` (legacy) — 80/20 Split
+
+Original 80/20 split for backward compatibility with existing runs.
+
+```python
 ds = load_dataset("lacg030175/CIC-IoT-2023", "random")
 # ds["train"]: {len(df_train):,} rows
 # ds["test"]:  {len(df_test):,} rows
