@@ -73,8 +73,8 @@ def _load_from_huggingface(config: str) -> tuple[pd.DataFrame, pd.DataFrame, lis
 	return df_train, df_test, common_features, df_val
 
 
-def _load_top20_features() -> list[str]:
-	"""Load top-20 features from the HuggingFace dataset."""
+def _load_ranked_features() -> list[str]:
+	"""Load all RF-ranked features from the HuggingFace dataset."""
 	global TOP20_RF_FEATURES
 	if TOP20_RF_FEATURES:
 		return TOP20_RF_FEATURES
@@ -85,10 +85,11 @@ def _load_top20_features() -> list[str]:
 		path = hf_hub_download(repo_id=HF_DATASET_ID, filename="feature_importance.json", repo_type="dataset")
 		with open(path) as f:
 			data = json.load(f)
-		TOP20_RF_FEATURES = data["top20"]
+		# Load ALL ranked features (not just top 20) for top15/top25 support
+		TOP20_RF_FEATURES = [feat for feat, _ in data["all_ranked"]]
 		return TOP20_RF_FEATURES
 	except Exception as e:
-		print(f"  WARNING: Could not load top-20 features: {e}")
+		print(f"  WARNING: Could not load ranked features: {e}")
 		return []
 
 
@@ -127,9 +128,9 @@ def load_ciciot2023(
 	print(f"Loading CIC-IoT-2023 (split={split})...")
 	df_train, df_test, common_features, df_val = _load_from_huggingface(split)
 
-	# Load top-20 features (from HuggingFace for this dataset)
-	top20 = _load_top20_features()
-	if not top20 and feature_selection in ("top20", "top20_split"):
+	# Load ranked features (from HuggingFace for this dataset)
+	top20 = _load_ranked_features()
+	if not top20 and feature_selection in ("top15", "top20", "top25", "top20_split"):
 		raise ValueError("Could not load top-20 features from HuggingFace")
 
 	X_train, X_test, encoder, used_features = encode_features(

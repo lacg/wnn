@@ -70,7 +70,7 @@ class IDSDataset:
 	y_val_multi: np.ndarray | None = None
 
 
-VALID_FEATURE_SELECTIONS = ("all", "top20", "top20_split")
+VALID_FEATURE_SELECTIONS = ("all", "top15", "top20", "top25", "top20_split")
 
 
 def encode_features(
@@ -87,8 +87,10 @@ def encode_features(
 
 	Feature selection modes:
 	- "all": All features at uniform n_bits
-	- "top20": Top features only at n_bits
-	- "top20_split": Top features at 16 bits + rest at rest_bits
+	- "top15": Top-15 RF features only at n_bits
+	- "top20": Top-20 RF features only at n_bits
+	- "top25": Top-25 RF features only at n_bits
+	- "top20_split": Top-20 at 16 bits + rest at rest_bits
 
 	Args:
 		df_train, df_test: DataFrames with numeric feature columns
@@ -114,18 +116,21 @@ def encode_features(
 		print(f"  Encoder: {encoder.total_bits} total bits "
 			  f"({method.value}, {n_bits} bits/feature, feature_selection=all, {len(common_features)} features)")
 
-	elif feature_selection == "top20":
-		selected = [f for f in top_features if f in common_features]
-		if len(selected) < len(top_features):
-			missing = set(top_features) - set(common_features)
-			print(f"  WARNING: {len(missing)} top features not in dataset: {missing}")
+	elif feature_selection in ("top15", "top20", "top25"):
+		top_n = {"top15": 15, "top20": 20, "top25": 25}[feature_selection]
+		selected = [f for f in top_features[:top_n] if f in common_features]
+		if len(selected) < top_n:
+			available = [f for f in top_features if f in common_features]
+			selected = available[:top_n]
+			if len(selected) < top_n:
+				print(f"  WARNING: Only {len(selected)} of {top_n} top features found in dataset")
 		encoder = ThermometerEncoder(n_bits=n_bits, method=method)
 		encoder.fit(df_train[selected])
 		X_train = encoder.transform(df_train[selected])
 		X_test = encoder.transform(df_test[selected])
 		used_features = selected
 		print(f"  Encoder: {encoder.total_bits} total bits "
-			  f"({method.value}, {n_bits} bits/feature, feature_selection=top20, {len(selected)} features)")
+			  f"({method.value}, {n_bits} bits/feature, feature_selection={feature_selection}, {len(selected)} features)")
 
 	elif feature_selection == "top20_split":
 		rb = rest_bits if rest_bits is not None else n_bits
@@ -303,7 +308,7 @@ TOP20_RF_FEATURES = [
 	"state",
 ]
 
-VALID_FEATURE_SELECTIONS = ("all", "top20", "top20_split")
+VALID_FEATURE_SELECTIONS = ("all", "top15", "top20", "top25", "top20_split")
 
 HF_DATASET_ID = "lacg030175/UNSW-NB15"
 
