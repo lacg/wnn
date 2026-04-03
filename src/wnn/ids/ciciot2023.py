@@ -133,10 +133,10 @@ def load_ciciot2023(
 	if not top20 and feature_selection in ("top15", "top20", "top25", "top20_split"):
 		raise ValueError("Could not load top-20 features from HuggingFace")
 
-	X_train, X_test, encoder, used_features = encode_features(
+	X_train, X_test, encoder, used_features, X_val = encode_features(
 		df_train, df_test, common_features, top20 or [],
 		n_bits=n_bits, method=method, feature_selection=feature_selection,
-		rest_bits=rest_bits,
+		rest_bits=rest_bits, df_val=df_val,
 	)
 
 	print(f"  X_train: {X_train.shape}, X_test: {X_test.shape}")
@@ -153,14 +153,12 @@ def load_ciciot2023(
 	print(f"  Train: {(y_train_binary == 0).sum():,} normal, {(y_train_binary == 1).sum():,} attack")
 	print(f"  Test:  {(y_test_binary == 0).sum():,} normal, {(y_test_binary == 1).sum():,} attack")
 
-	# Encode validation split if present (3-way splits)
-	X_val = None
+	# Validation labels if present (3-way splits)
 	y_val_binary = None
 	y_val_multi = None
 	if df_val is not None:
 		y_val_binary = df_val["label"].values.astype(np.int64)
 		y_val_multi = df_val["attack_class"].map(lambda x: class_to_idx.get(x, 0)).values.astype(np.int64)
-		X_val = encoder.transform(df_val[used_features])
 		print(f"  Val:   {(y_val_binary == 0).sum():,} normal, {(y_val_binary == 1).sum():,} attack")
 
 	return IDSDataset(

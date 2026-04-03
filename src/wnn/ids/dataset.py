@@ -82,7 +82,8 @@ def encode_features(
 	method: ThermometerType = ThermometerType.DISTRIBUTIVE,
 	feature_selection: str = "all",
 	rest_bits: int | None = None,
-) -> tuple[np.ndarray, np.ndarray, ThermometerEncoder, list[str]]:
+	df_val: pd.DataFrame | None = None,
+) -> tuple[np.ndarray, np.ndarray, ThermometerEncoder, list[str], np.ndarray | None]:
 	"""Shared thermometer encoding logic for all IDS datasets.
 
 	Feature selection modes:
@@ -102,16 +103,20 @@ def encode_features(
 		rest_bits: bits for non-top features in top20_split (defaults to n_bits)
 
 	Returns:
-		(X_train, X_test, encoder, used_features)
+		(X_train, X_test, encoder, used_features, X_val) — X_val is None if df_val not provided
 	"""
 	if feature_selection not in VALID_FEATURE_SELECTIONS:
 		raise ValueError(f"feature_selection must be one of {VALID_FEATURE_SELECTIONS}, got '{feature_selection}'")
+
+	X_val = None
 
 	if feature_selection == "all":
 		encoder = ThermometerEncoder(n_bits=n_bits, method=method)
 		encoder.fit(df_train[common_features])
 		X_train = encoder.transform(df_train[common_features])
 		X_test = encoder.transform(df_test[common_features])
+		if df_val is not None:
+			X_val = encoder.transform(df_val[common_features])
 		used_features = common_features
 		print(f"  Encoder: {encoder.total_bits} total bits "
 			  f"({method.value}, {n_bits} bits/feature, feature_selection=all, {len(common_features)} features)")
@@ -128,6 +133,8 @@ def encode_features(
 		encoder.fit(df_train[selected])
 		X_train = encoder.transform(df_train[selected])
 		X_test = encoder.transform(df_test[selected])
+		if df_val is not None:
+			X_val = encoder.transform(df_val[selected])
 		used_features = selected
 		print(f"  Encoder: {encoder.total_bits} total bits "
 			  f"({method.value}, {n_bits} bits/feature, feature_selection={feature_selection}, {len(selected)} features)")
@@ -152,13 +159,15 @@ def encode_features(
 
 		X_train = np.hstack([X_train_top, X_train_rest])
 		X_test = np.hstack([X_test_top, X_test_rest])
+		if df_val is not None:
+			X_val = np.hstack([enc_top.transform(df_val[top]), enc_rest.transform(df_val[rest])])
 		encoder = enc_top
 		used_features = top + rest
 		total_bits = X_train.shape[1]
 		print(f"  Encoder: {total_bits} total bits "
 			  f"({method.value}, top-{len(top)}@16b + {len(rest)} rest@{rb}b, feature_selection=top20_split)")
 
-	return X_train, X_test, encoder, used_features
+	return X_train, X_test, encoder, used_features, X_val
 
 
 def split_train_validation(
@@ -453,10 +462,10 @@ def load_unsw_nb15(
 	y_test_multi = encode_categories(df_test["attack_cat"])
 
 	# ── Encode features using shared logic ───────────────
-	X_train, X_test, encoder, used_features = encode_features(
+	X_train, X_test, encoder, used_features, X_val = encode_features(
 		df_train, df_test, common_features, TOP20_RF_FEATURES,
 		n_bits=n_bits, method=method, feature_selection=feature_selection,
-		rest_bits=rest_bits,
+		rest_bits=rest_bits, df_val=df_val,
 	)
 
 	print(f"  X_train: {X_train.shape}, X_test: {X_test.shape}")
@@ -465,15 +474,12 @@ def load_unsw_nb15(
 	print(f"  Test:  {(y_test_binary == 0).sum():,} normal, "
 		  f"{(y_test_binary == 1).sum():,} attack")
 
-	# Encode validation split if present (3-way splits)
-	X_val = None
+	# Validation labels if present (3-way splits)
 	y_val_binary = None
 	y_val_multi = None
 	if df_val is not None:
 		y_val_binary = df_val["label"].values.astype(np.int32)
 		y_val_multi = encode_categories(df_val["attack_cat"])
-		# Encode validation features using the same encoder fitted on train
-		X_val = encoder.transform(df_val[used_features])
 		print(f"  Val:   {(y_val_binary == 0).sum():,} normal, "
 			  f"{(y_val_binary == 1).sum():,} attack")
 
