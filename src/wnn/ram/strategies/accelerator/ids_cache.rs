@@ -91,6 +91,7 @@ impl IDSCache {
         balance_classes: bool,
         single_cluster: bool,
         undersample_majority: bool,
+        class_weight_multiplier: f32,
     ) -> Self {
         // Optionally undersample majority class to match minority count
         let (train_features, train_labels) = if undersample_majority {
@@ -129,9 +130,9 @@ impl IDSCache {
             actual_negatives, num_parts, seed,
         );
 
-        // Compute class weights: max_count / count per class (upweights minority)
+        // Compute class weights: max_count / count per class * multiplier (upweights minority)
         let class_weights = if balance_classes {
-            Some(crate::adaptive::compute_class_weights(&train_labels, num_classes))
+            Some(crate::adaptive::compute_class_weights_with_multiplier(&train_labels, num_classes, class_weight_multiplier))
         } else {
             None
         };

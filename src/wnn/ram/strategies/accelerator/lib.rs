@@ -3945,7 +3945,7 @@ impl IDSCacheWrapper {
     /// Create a new IDS cache with stratified partitioning.
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (train_features, train_labels, eval_features, eval_labels, num_classes, total_features, num_parts, num_negatives, seed, balance_classes=false, single_cluster=false, undersample_majority=false))]
+    #[pyo3(signature = (train_features, train_labels, eval_features, eval_labels, num_classes, total_features, num_parts, num_negatives, seed, balance_classes=false, single_cluster=false, undersample_majority=false, class_weight_multiplier=1.0))]
     fn new(
         train_features: Vec<bool>,
         train_labels: Vec<i64>,
@@ -3959,6 +3959,7 @@ impl IDSCacheWrapper {
         balance_classes: bool,
         single_cluster: bool,
         undersample_majority: bool,
+        class_weight_multiplier: f32,
     ) -> Self {
         Self {
             inner: ids_cache::IDSCache::new(
@@ -3974,6 +3975,7 @@ impl IDSCacheWrapper {
                 balance_classes,
                 single_cluster,
                 undersample_majority,
+                class_weight_multiplier,
             ),
         }
     }

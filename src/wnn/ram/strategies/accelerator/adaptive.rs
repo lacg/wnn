@@ -2286,6 +2286,10 @@ fn get_available_memory_gb() -> f64 {
 /// Example: labels with 119K attack (class 1) and 56K normal (class 0)
 ///   → weights = [2, 1] (119K/56K ≈ 2, 119K/119K = 1)
 pub fn compute_class_weights(labels: &[i64], num_classes: usize) -> Vec<u32> {
+    compute_class_weights_with_multiplier(labels, num_classes, 1.0)
+}
+
+pub fn compute_class_weights_with_multiplier(labels: &[i64], num_classes: usize, multiplier: f32) -> Vec<u32> {
     let mut counts = vec![0u64; num_classes];
     for &label in labels {
         let c = label as usize;
@@ -2295,7 +2299,10 @@ pub fn compute_class_weights(labels: &[i64], num_classes: usize) -> Vec<u32> {
     }
     let max_count = *counts.iter().max().unwrap_or(&1);
     counts.iter().map(|&c| {
-        if c == 0 { 1 } else { (max_count / c).max(1) as u32 }
+        if c == 0 { 1 } else {
+            let base = (max_count / c).max(1) as f32;
+            (base * multiplier).max(1.0) as u32
+        }
     }).collect()
 }
 

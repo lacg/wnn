@@ -50,6 +50,7 @@ class IDSEvaluator(BaseEvaluator):
 		single_cluster: bool = False,  # Single-cluster discriminator mode
 		undersample_majority: bool = False,  # Undersample majority class to match minority
 		flip_labels: bool = False,  # Swap normal↔attack labels (detect normals in attack-heavy data)
+		class_weight_multiplier: float = 1.0,  # Scale class balancing weights (>1 = stronger minority boost)
 	):
 		if classification == "binary":
 			y_train = dataset.y_train_binary
@@ -127,6 +128,7 @@ class IDSEvaluator(BaseEvaluator):
 			balance_classes=balance_classes,
 			single_cluster=single_cluster,
 			undersample_majority=undersample_majority,
+			class_weight_multiplier=class_weight_multiplier,
 		)
 
 		# When flip_labels is active, original benign is class 1 after flipping.

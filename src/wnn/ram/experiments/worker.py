@@ -830,6 +830,7 @@ class FlowWorker:
         single_cluster = params.get("ids_single_cluster", False)
         undersample_majority = params.get("undersample_majority", False)
         flip_labels = params.get("flip_labels", False)
+        class_weight_multiplier = params.get("class_weight_multiplier", 1.0)
         feature_selection = params.get("ids_feature_selection", "all")
         rest_bits = params.get("ids_rest_bits", None)
         kfold_per_gen = params.get("ids_kfold_per_gen", 1)
@@ -917,6 +918,7 @@ class FlowWorker:
             single_cluster=single_cluster,
             undersample_majority=undersample_majority,
             flip_labels=flip_labels,
+            class_weight_multiplier=class_weight_multiplier,
         )
 
         # Test evaluator: full train → validation (for final reporting)
@@ -931,6 +933,7 @@ class FlowWorker:
             single_cluster=single_cluster,
             undersample_majority=undersample_majority,
             flip_labels=flip_labels,
+            class_weight_multiplier=class_weight_multiplier,
         )
 
         return optimizer_eval, test_eval
