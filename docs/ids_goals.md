@@ -1,6 +1,6 @@
 # IDS Performance Goals
 
-Last updated: 2026-03-20
+Last updated: 2026-03-22
 
 ## Literature Performance & Our Goals
 
@@ -27,17 +27,43 @@ Last updated: 2026-03-20
 
 ### CIC-IoT-2023
 
-| Method | Split | Acc | F1 | FPR | Model Size |
-|---|---|---:|---:|---:|---|
-| XGBoost + RF | random | 99%+ | 99%+ | <1% | ~10MB |
-| CatBoost | random | ~96% | ~96% | ~4% | ~10MB |
-| ANN | random | ~95% | ~95% | ~5% | ~1MB |
+**Important**: Dataset is ~97-98% attack traffic. Accuracy >98% is trivially achievable by always predicting "attack". F1 is the meaningful metric. Almost no papers report FPR. No papers use temporal splits. Data leakage is a documented concern (dedicated study, ResearchGate 2024).
+
+#### Original Paper (Neto et al. 2023, random 80/20, StandardScaler)
+
+| Method | Acc | F1 | FPR | Source |
+|---|---:|---:|---:|---|
+| Random Forest | 99.68% | 96.53% | — | Neto et al. 2023 (original) |
+| AdaBoost | 99.59% | 95.63% | — | Neto et al. 2023 (original) |
+| DNN | 99.44% | 94.03% | — | Neto et al. 2023 (original) |
+| Logistic Regression | 98.90% | 87.63% | — | Neto et al. 2023 (original) |
+| Perceptron | 98.18% | 81.05% | — | Neto et al. 2023 (original) |
+
+#### Follow-up Papers (all random splits)
+
+| Method | Acc | F1 | FPR | Source |
+|---|---:|---:|---:|---|
+| DL (auto features) | 99.71% | 98.47% | — | Ferreira et al. 2023 |
+| CNN-LSTM | 98.42% | 98.57% | 9.17% | Gueriani et al. 2024 |
+| DCNN | 99.50% | 89.72%* | — | Bayaraa et al. 2024 |
+| XGBoost+RF ensemble | 99.87% | 99.85%** | — | Anis 2024 (thesis) |
+| CNN | 99.40% | — | — | Ayo et al. 2024 |
+
+*attack-class F1 only (benign-class F1 = 99.75%)
+**likely inflated by data leakage (near-duplicate flows in random split)
+
+#### Our Results (pending)
+
+| Method | Acc | F1 | FPR | Notes |
+|---|---:|---:|---:|---|
+| Our WNN (8-bit) | — | — | — | 112 flows queued, starts after CICIDS |
+
+#### Our Goals
 
 | Our Goals — CIC-IoT-2023 | Target | Stretch |
 |---|---:|---:|
 | F1 (random) | 93% | 96% |
 | FPR (random) | <5% | <2% |
-| Model size | <1KB | <500B |
 
 ### UNSW-NB15 (existing, for reference)
 
@@ -87,3 +113,8 @@ SOC analyst
 - [Kasongo & Sun 2020](https://journalofbigdata.springeropen.com/articles/10.1186/s40537-020-00379-6)
 - [CICIDS2017 Labeling Errors](https://hal.science/hal-03775466v1/document)
 - [UNSW-NB15 Dataset](https://research.unsw.edu.au/projects/unsw-nb15-dataset)
+- [Neto et al. 2023 — CICIoT2023 original paper](https://www.mdpi.com/1424-8220/23/13/5941)
+- [Ferreira et al. 2023 — Auto vs hand-crafted features](https://arxiv.org/html/2312.00034v1)
+- [Gueriani et al. 2024 — CNN-LSTM IDS](https://arxiv.org/abs/2405.18624)
+- [Bayaraa et al. 2024 — DCNN binary+multiclass](https://link.springer.com/article/10.1186/s13635-024-00184-1)
+- [Ayo et al. 2024 — DNN/CNN/LSTM comparison](https://www.mdpi.com/2227-9709/11/2/32)

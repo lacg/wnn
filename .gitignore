@@ -270,7 +270,7 @@ Thumbs.db
 data/
 # Output files (nohup, monitor, sweep logs, etc.)
 *.out
-/checkpoints/
+checkpoints
 results_*.json
 
 # Experiment results (transient, regenerated per run)
@@ -314,7 +314,7 @@ run_ids_overnight.sh
 fwiw-reference/
 
 # DB (symlinked to external SSD)
-db/
+db
 
 # Venv symlink
 wnn
