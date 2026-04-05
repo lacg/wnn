@@ -1019,7 +1019,6 @@
                 </tr>
                 {#if hasThresholds}
                   {#each [
-                    { key: 'train_cal', label: '┣ Train-cal', cls: 'threshold-train-row' },
                     { key: 'fixed_05', label: '┣ Fixed 0.5', cls: 'threshold-fixed-row' },
                     { key: 'platt', label: '┣ Platt', cls: 'threshold-platt-row' },
                     { key: 'beta', label: '┣ Beta', cls: 'threshold-beta-row' },
@@ -3073,14 +3072,15 @@
     color: var(--text-dim) !important;
   }
 
-  /* Fixed 0.5 — orange */
+  /* Fixed 0.5 — white/bright (simple, no calibration) */
   .threshold-fixed-row td {
-    color: #f59e0b !important;
+    color: #e2e8f0 !important;
+    font-weight: 500;
   }
 
-  /* Oracle — orange/amber, italic */
+  /* Oracle — orange, italic (upper bound) */
   .threshold-oracle-row td {
-    color: #f97316 !important;
+    color: #f59e0b !important;
     font-style: italic;
   }
 
