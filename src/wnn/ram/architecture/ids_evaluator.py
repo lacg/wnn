@@ -138,6 +138,9 @@ class IDSEvaluator(BaseEvaluator):
 		if flip_labels:
 			self._cache.set_normal_class(1)
 
+		# Store fitness weights for potential threshold optimization
+		self._fitness_weights = None
+
 		self._train_call_count = 0
 		self._k_folds = k_folds
 		self._kfold_per_gen = min(kfold_per_gen, k_folds) if k_folds > 1 else 1
@@ -270,6 +273,12 @@ class IDSEvaluator(BaseEvaluator):
 			genome.metrics = Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=threshold)
 			results.append(genome.metrics)
 		return results
+
+	def set_fitness_weights(self, w_ce: float, w_f1: float, w_fpr: float, w_acc: float):
+		"""Set fitness weights for threshold optimization.
+		When set, threshold sweep maximizes fitness instead of F1."""
+		self._fitness_weights = (w_ce, w_f1, w_fpr, w_acc)
+		self._cache.set_fitness_weights(w_ce, w_f1, w_fpr, w_acc)
 
 	def score_examples(self, genome) -> list[float]:
 		"""Get raw per-example scores for a single genome (no thresholding).

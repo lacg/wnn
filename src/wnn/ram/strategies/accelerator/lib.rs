@@ -333,6 +333,20 @@ fn cpu_cores() -> usize {
 /// base_connectivities: [n2_conn, n3_conn, n4_conn, n5_conn, n6_conn]
 /// candidates: candidate connectivities for the RAM at target_ram_idx
 /// target_ram_idx: 0=n2, 1=n3, 2=n4, 3=n5, 4=n6
+/// Find threshold maximizing weighted fitness (F1, FPR, Acc, CE weights).
+/// Returns (threshold, f1, fpr, acc, fitness).
+#[pyfunction]
+fn find_optimal_threshold_fitness_py(
+    scores: Vec<f64>,
+    labels: Vec<i64>,
+    w_ce: f32,
+    w_f1: f32,
+    w_fpr: f32,
+    w_acc: f32,
+) -> PyResult<(f64, f64, f64, f64, f64)> {
+    Ok(adaptive::find_optimal_threshold_fitness(&scores, &labels, w_ce, w_f1, w_fpr, w_acc))
+}
+
 #[pyfunction]
 fn evaluate_cascade_batch_cpu(
     base_connectivities: Vec<Vec<Vec<i64>>>,  // 5 RAMs: [n2, n3, n4, n5, n6]
@@ -4014,6 +4028,13 @@ impl IDSCacheWrapper {
         adaptive::set_normal_class(normal_class);
     }
 
+    /// Set fitness weights for threshold optimization.
+    /// When set, threshold sweep maximizes fitness instead of F1.
+    fn set_fitness_weights(&mut self, w_ce: f32, w_f1: f32, w_fpr: f32, w_acc: f32) {
+        self.inner.fitness_weights = Some((w_ce, w_f1, w_fpr, w_acc));
+        adaptive::set_fitness_weights(w_ce, w_f1, w_fpr, w_acc);
+    }
+
     /// Evaluate genomes using hybrid CPU+GPU with a specific train subset.
     #[allow(clippy::too_many_arguments)]
     fn evaluate_genomes_hybrid(
@@ -6284,5 +6305,6 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Utility: Rust-accelerated random connection generation
     m.add_function(wrap_pyfunction!(generate_random_connections, m)?)?;
     m.add_function(wrap_pyfunction!(generate_random_connections_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(find_optimal_threshold_fitness_py, m)?)?;
     Ok(())
 }

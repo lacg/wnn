@@ -61,6 +61,10 @@ pub struct IDSCache {
     // the false alarm rate on original benign traffic.
     pub normal_class: usize,
 
+    // Fitness weights for threshold optimization.
+    // When set, threshold sweep maximizes fitness instead of F1.
+    pub fitness_weights: Option<(f32, f32, f32, f32)>,  // (w_ce, w_f1, w_fpr, w_acc)
+
     // Live progress for observer thread
     pub live_progress: Arc<RwLock<Option<LiveProgress>>>,
 }
@@ -151,6 +155,7 @@ impl IDSCache {
             train_rotator: SubsetRotator::new(num_parts, seed + 100),
             live_progress: Arc::new(RwLock::new(None)),
             normal_class: 0,
+            fitness_weights: None,
         }
     }
 

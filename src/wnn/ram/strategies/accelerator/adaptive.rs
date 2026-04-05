@@ -50,6 +50,42 @@ pub fn get_normal_class() -> usize {
     NORMAL_CLASS.load(Ordering::Relaxed)
 }
 
+// Fitness weights for threshold optimization (global, set per flow).
+// When set, threshold sweep maximizes fitness instead of F1.
+// Format: [w_ce, w_f1, w_fpr, w_acc] stored as u32 bits.
+use std::sync::atomic::AtomicU32;
+static FITNESS_W_CE: AtomicU32 = AtomicU32::new(0);    // 0.0 = not set
+static FITNESS_W_F1: AtomicU32 = AtomicU32::new(0);
+static FITNESS_W_FPR: AtomicU32 = AtomicU32::new(0);
+static FITNESS_W_ACC: AtomicU32 = AtomicU32::new(0);
+static FITNESS_THRESHOLD_ENABLED: AtomicUsize = AtomicUsize::new(0);
+
+pub fn set_fitness_weights(w_ce: f32, w_f1: f32, w_fpr: f32, w_acc: f32) {
+    FITNESS_W_CE.store(w_ce.to_bits(), Ordering::Relaxed);
+    FITNESS_W_F1.store(w_f1.to_bits(), Ordering::Relaxed);
+    FITNESS_W_FPR.store(w_fpr.to_bits(), Ordering::Relaxed);
+    FITNESS_W_ACC.store(w_acc.to_bits(), Ordering::Relaxed);
+    FITNESS_THRESHOLD_ENABLED.store(1, Ordering::Relaxed);
+}
+
+pub fn clear_fitness_weights() {
+    FITNESS_THRESHOLD_ENABLED.store(0, Ordering::Relaxed);
+}
+
+/// Find optimal threshold using fitness weights if set, otherwise F1.
+pub fn find_optimal_threshold_auto(scores: &[f64], labels: &[i64]) -> (f64, f64, f64) {
+    if FITNESS_THRESHOLD_ENABLED.load(Ordering::Relaxed) == 1 {
+        let w_ce = f32::from_bits(FITNESS_W_CE.load(Ordering::Relaxed));
+        let w_f1 = f32::from_bits(FITNESS_W_F1.load(Ordering::Relaxed));
+        let w_fpr = f32::from_bits(FITNESS_W_FPR.load(Ordering::Relaxed));
+        let w_acc = f32::from_bits(FITNESS_W_ACC.load(Ordering::Relaxed));
+        let (t, f1, fpr, _acc, _fitness) = find_optimal_threshold_fitness(scores, labels, w_ce, w_f1, w_fpr, w_acc);
+        (t, f1, fpr)
+    } else {
+        find_optimal_threshold_f1(scores, labels)
+    }
+}
+
 // Storage for resettable evaluators - uses Arc so callers can hold references
 static METAL_EVALUATOR: RwLock<Option<Arc<crate::metal_ramlm::MetalRAMLMEvaluator>>> = RwLock::new(None);
 static SPARSE_METAL_EVALUATOR: RwLock<Option<Arc<crate::metal_ramlm::MetalSparseEvaluator>>> = RwLock::new(None);
@@ -410,6 +446,107 @@ pub fn find_optimal_threshold_f1(scores: &[f64], labels: &[i64]) -> (f64, f64, f
     }
 
     (best_threshold, best_f1, best_fpr)
+}
+
+/// Find the optimal threshold maximizing weighted fitness instead of F1.
+///
+/// Same O(n log n) sweep as find_optimal_threshold_f1, but at each boundary
+/// computes fitness = w_f1*F1 + w_fpr*(1-FPR) + w_acc*Acc + w_ce*(1-CE_approx)
+/// and picks the threshold with the highest fitness.
+///
+/// Returns (threshold, f1_macro, fpr, accuracy, fitness).
+pub fn find_optimal_threshold_fitness(
+    scores: &[f64],
+    labels: &[i64],
+    w_ce: f32,
+    w_f1: f32,
+    w_fpr: f32,
+    w_acc: f32,
+) -> (f64, f64, f64, f64, f64) {
+    let n = scores.len();
+    if n == 0 {
+        return (0.5, 0.0, 0.0, 0.0, 0.0);
+    }
+
+    let mut pairs: Vec<(f64, i64)> = scores.iter().copied()
+        .zip(labels.iter().copied())
+        .collect();
+    pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let total_pos = labels.iter().filter(|&&l| l == 1).count() as u64;
+    let total_neg = (n as u64) - total_pos;
+
+    if total_pos == 0 || total_neg == 0 {
+        return (0.5, 0.0, 0.0, 0.0, 0.0);
+    }
+
+    // Precompute CE for the full dataset (doesn't change with threshold)
+    let ce: f64 = scores.iter().zip(labels.iter()).map(|(&s, &l)| {
+        let p = s.max(1e-10).min(1.0 - 1e-10);
+        -(l as f64 * p.ln() + (1.0 - l as f64) * (1.0 - p).ln())
+    }).sum::<f64>() / n as f64;
+    let ce_score = (1.0 - ce).max(0.0);
+
+    // Start: threshold = -inf → everything predicted as 1 (attack)
+    let mut tp = total_pos;
+    let mut fp = total_neg;
+    let mut fn_count = 0u64;
+    let mut tn = 0u64;
+
+    let mut best_fitness = -1.0f64;
+    let mut best_threshold = 0.5f64;
+    let mut best_f1 = 0.0f64;
+    let mut best_fpr_val = 1.0f64;
+    let mut best_acc = 0.0f64;
+
+    let n_f64 = n as f64;
+
+    let mut i = 0;
+    while i < n {
+        let current_score = pairs[i].0;
+
+        while i < n && pairs[i].0 == current_score {
+            if pairs[i].1 == 1 {
+                tp -= 1;
+                fn_count += 1;
+            } else {
+                fp -= 1;
+                tn += 1;
+            }
+            i += 1;
+        }
+
+        // F1-macro
+        let f1_pos = if 2 * tp + fp + fn_count > 0 {
+            2.0 * tp as f64 / (2.0 * tp as f64 + fp as f64 + fn_count as f64)
+        } else { 0.0 };
+        let f1_neg = if 2 * tn + fn_count + fp > 0 {
+            2.0 * tn as f64 / (2.0 * tn as f64 + fn_count as f64 + fp as f64)
+        } else { 0.0 };
+        let f1_macro = (f1_pos + f1_neg) / 2.0;
+
+        let fpr = fp as f64 / total_neg as f64;
+        let acc = (tp + tn) as f64 / n_f64;
+
+        let fitness = w_f1 as f64 * f1_macro
+            + w_fpr as f64 * (1.0 - fpr)
+            + w_acc as f64 * acc
+            + w_ce as f64 * ce_score;
+
+        if fitness > best_fitness {
+            best_fitness = fitness;
+            best_threshold = if i < n {
+                (current_score + pairs[i].0) / 2.0
+            } else {
+                current_score + 1e-6
+            };
+            best_f1 = f1_macro;
+            best_fpr_val = fpr;
+            best_acc = acc;
+        }
+    }
+
+    (best_threshold, best_f1, best_fpr_val, best_acc, best_fitness)
 }
 
 /// Check if group coalescing is enabled (set WNN_COALESCE_GROUPS=1)
@@ -2723,7 +2860,7 @@ pub fn evaluate_genome_hybrid(
         // Use override threshold (from training calibration) or find on eval data (fallback)
         let flat_scores: Vec<f64> = all_scores.iter().map(|s| s[0]).collect();
         let threshold = override_threshold.unwrap_or_else(|| {
-            let (t, _f1, _fpr) = find_optimal_threshold_f1(&flat_scores, eval_targets);
+            let (t, _f1, _fpr) = find_optimal_threshold_auto(&flat_scores, eval_targets);
             t
         });
 
@@ -3164,7 +3301,7 @@ pub fn train_and_predict_single(
             memory_mode, metal.as_deref(), sparse_metal.as_deref(),
         );
         let flat_scores: Vec<f64> = train_scores.iter().map(|s| s[0]).collect();
-        let (t, f1, fpr) = find_optimal_threshold_f1(&flat_scores, train_targets);
+        let (t, f1, fpr) = find_optimal_threshold_auto(&flat_scores, train_targets);
         eprintln!(
             "[SINGLE_CLUSTER] Train calibration: threshold={:.4}, train_f1={:.4}, train_fpr={:.4}",
             t, f1, fpr
@@ -3561,7 +3698,7 @@ pub fn evaluate_genomes_parallel_hybrid(
                         sparse_metal_arc.as_ref().map(|a| a.as_ref()),
                     );
                     let flat_scores: Vec<f64> = train_scores.iter().map(|s| s[0]).collect();
-                    let (t, _f1, _fpr) = find_optimal_threshold_f1(&flat_scores, train_targets);
+                    let (t, _f1, _fpr) = find_optimal_threshold_auto(&flat_scores, train_targets);
                     *threshold = Some(t);
                 }
             }

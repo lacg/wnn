@@ -909,6 +909,17 @@ class FlowWorker:
             class_weight_multiplier=class_weight_multiplier,
         )
 
+        # Set fitness weights for threshold optimization
+        # When set, threshold sweep maximizes fitness instead of F1
+        fw_ce = params.get("fitness_weight_ce", 0)
+        fw_f1 = params.get("fitness_weight_f1", 0)
+        fw_fpr = params.get("fitness_weight_fpr", 0)
+        fw_acc = params.get("fitness_weight_acc", 0)
+        if single_cluster and (fw_f1 > 0 or fw_fpr > 0 or fw_acc > 0):
+            self._log(f"  Fitness threshold: CE={fw_ce}, F1={fw_f1}, FPR={fw_fpr}, Acc={fw_acc}")
+            optimizer_eval.set_fitness_weights(fw_ce, fw_f1, fw_fpr, fw_acc)
+            test_eval.set_fitness_weights(fw_ce, fw_f1, fw_fpr, fw_acc)
+
         return optimizer_eval, test_eval
 
     def _create_hierarchical_ids_evaluators(self, full_dataset, params, val_fraction, num_parts, k_folds, seed):
