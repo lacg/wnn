@@ -988,6 +988,9 @@
                 <tr class:current-phase={isCurrentExp && point.validationPoint === 'final'}>
                   <td class="phase-name" class:init-phase={point.validationPoint === 'init'}>
                     {point.label}
+                    {#if isIDS && hasThresholds}
+                      <span class="phase-threshold-hint">(fixed 0.5)</span>
+                    {/if}
                     {#if isCurrentExp && point.validationPoint === 'final'}
                       <span class="current-marker">◀</span>
                     {/if}
@@ -3036,6 +3039,13 @@
 
   .threshold-sub-row:last-child td {
     border-bottom: 1px solid var(--glass-border) !important;
+  }
+
+  .phase-threshold-hint {
+    font-size: 0.8rem;
+    color: #94a3b8;
+    font-weight: 400;
+    margin-left: 0.25rem;
   }
 
   .threshold-mode-label {
