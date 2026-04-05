@@ -561,11 +561,15 @@ interval for the mean is $\pm 0.27\%$, sufficient to distinguish
 meaningful differences between configurations.
 
 K-fold cross-validation ($k{=}5$) is applied \emph{every generation}
-within both phases: the training set is partitioned into 5 folds,
-and each genome is trained and evaluated on all 5 train/validation
-splits every generation. The averaged fitness across all 5 folds
-determines selection, preventing the GA from overfitting to a
-particular data partition and providing more robust genome ranking.
+during evolution within both phases: the training set is partitioned
+into 5 folds, and each genome is trained and evaluated on all 5
+train/validation splits every generation. The averaged fitness across
+all 5 folds determines selection, preventing the GA from overfitting
+to a particular data partition and providing more robust genome ranking.
+Early stopping terminates evolution when the best K-fold fitness does
+not improve by at least $0.05\%$ for 5 consecutive check intervals
+(every 10 generations), avoiding unnecessary computation and further
+guarding against overfitting.
 
 All reported results use the \emph{best-fitness genome from the
 final optimization phase}, evaluated by the full-dataset evaluator
