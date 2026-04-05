@@ -957,9 +957,9 @@ When asked about data or results, show ACTUAL values from the database — never
 
 ### Rule 7: Results Breakdown Format
 When asked for "update results" or "how are the runs going", show the **full breakdown**:
-- **6 tables**: Grid Search × [best_f1, best_fpr, best_fitness] + GA Neurons × [best_f1, best_fpr, best_fitness]
+- **10 tables**: Grid Search × [best_f1, best_fpr, best_acc, best_ce, best_fitness] + GA Neurons × [best_f1, best_fpr, best_acc, best_ce, best_fitness]
 - **Each table broken by all 7 threshold modes**: train_cal, fixed_05, platt, beta, empirical, empirical_cumulative, val_cal (oracle)
-- **Columns**: F1 mean ±std, FPR mean ±std, Acc mean ±std, Neurons mean ±std, Bits
+- **Columns in every row**: F1 mean ±std, FPR mean ±std, Acc mean ±std, Neurons mean ±std, Bits mean ±std
 - Store results in `docs/ids_results.md` following the existing format
 
 ### Rule 6: Full-Stack Tracing
