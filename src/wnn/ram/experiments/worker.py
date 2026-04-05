@@ -859,49 +859,16 @@ class FlowWorker:
         self._log(f"  Train: {len(y_train):,} examples, Test: {len(y_test):,} examples, "
                    f"Classes: {num_classes}, Features: {full_dataset.X_train.shape[1]}")
 
-        has_val_split = full_dataset.X_val is not None
+        # 80/20 split: K-fold on full 80% train, 20% val untouched until reporting
+        # No holdout carving — K-fold's rotating eval prevents overfitting
+        self._log("Using 80/20 split: K-fold on 80% train, 20% val for reporting only")
 
-        if has_val_split:
-            # 3-way dataset (80/10/10): merge test+val into 20% validation set
-            # K-fold on 80% train for GA search, 20% completely untouched until validation report
-            self._log("Using 80/20 split: K-fold on 80% train, 20% (test+val merged) for validation only")
+        # Optimizer: K-fold within 80% train (20% val not used during GA search)
+        # X_test is set to the val set for structure but K-fold ignores it
+        optimizer_dataset = full_dataset
 
-            # Merge test + val into a single validation set
-            merged_val_X = np.vstack([full_dataset.X_test, full_dataset.X_val])
-            merged_val_y_binary = np.concatenate([full_dataset.y_test_binary, full_dataset.y_val_binary])
-            merged_val_y_multi = np.concatenate([full_dataset.y_test_multi, full_dataset.y_val_multi])
-
-            # Optimizer: K-fold within 80% train only (20% val never seen during GA)
-            optimizer_dataset = IDSDataset(
-                X_train=full_dataset.X_train,
-                y_train_binary=full_dataset.y_train_binary,
-                y_train_multi=full_dataset.y_train_multi,
-                X_test=merged_val_X,  # not used by K-fold, but needed for structure
-                y_test_binary=merged_val_y_binary,
-                y_test_multi=merged_val_y_multi,
-                encoder=full_dataset.encoder,
-                category_names=full_dataset.category_names,
-                feature_names=full_dataset.feature_names,
-            )
-
-            # Test evaluator: train on full 80%, eval on merged 20% (final reported metrics)
-            test_dataset = IDSDataset(
-                X_train=full_dataset.X_train,
-                y_train_binary=full_dataset.y_train_binary,
-                y_train_multi=full_dataset.y_train_multi,
-                X_test=merged_val_X,
-                y_test_binary=merged_val_y_binary,
-                y_test_multi=merged_val_y_multi,
-                encoder=full_dataset.encoder,
-                category_names=full_dataset.category_names,
-                feature_names=full_dataset.feature_names,
-            )
-        else:
-            # Legacy 2-way split (80/20): carve holdout from training data
-            self._log("Using legacy 2-way split: carving 25% holdout from training data")
-            optimizer_dataset, test_dataset = split_train_validation(
-                full_dataset, val_fraction=val_fraction, seed=seed,
-            )
+        # Test evaluator: train on full 80%, eval on 20% val (final reported metrics)
+        test_dataset = full_dataset
 
         # Optimizer evaluator: train (K-fold or subset rotation), test for fitness
         kfold_label = f", k_folds={k_folds}" if k_folds > 1 else ""

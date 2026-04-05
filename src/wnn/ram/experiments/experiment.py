@@ -1004,22 +1004,7 @@ class Experiment:
 					}
 					self.log(f"    Fixed 0.5:   F1={fr.f1:.4%}, FPR={fr.fpr:.4%}, Acc={fr.acc:.4%}")
 
-					# 3. Test-calibrated: find threshold on holdout, apply to test
-					# 3a: override=-1.0 sweeps eval data (43K holdout) for optimal threshold
-					self.evaluator.evaluate_batch_full([genome], override_threshold=-1.0)
-					holdout_threshold = genome.threshold  # threshold found on holdout
-
-					# 3b: Apply holdout threshold to full validation (175K train → 82K test)
-					test_cal_results = val_evaluator.evaluate_batch_full(
-						[genome], override_threshold=holdout_threshold,
-					)
-					tcr = test_cal_results[0]
-					threshold_metadata['test_cal'] = {
-						'f1': tcr.f1, 'fpr': tcr.fpr, 'acc': tcr.acc, 'threshold': holdout_threshold,
-					}
-					self.log(f"    Test-cal:    F1={tcr.f1:.4%}, FPR={tcr.fpr:.4%}, Acc={tcr.acc:.4%}, t={holdout_threshold:.4f}")
-
-					# 4. Validation-calibrated (oracle): sweep 82K test for optimal threshold
+					# 3. Validation-calibrated (oracle): sweep val set for optimal threshold
 					# This is the upper bound — in production, you'd update thresholds
 					# periodically using recent labeled data (similar effect)
 					oracle_results = val_evaluator.evaluate_batch_full([genome], override_threshold=-1.0)
@@ -1030,19 +1015,22 @@ class Experiment:
 					}
 					self.log(f"    Val-cal:     F1={or_.f1:.4%}, FPR={or_.fpr:.4%}, Acc={or_.acc:.4%}, t={oracle_threshold:.4f} (oracle)")
 
-					# 5. Platt scaling: fit sigmoid calibration on holdout scores, apply to test
-					# Learns P(attack) = sigmoid(a*score + b) from holdout data,
-					# absorbing distribution shift + class imbalance between train/test
+					# test_cal = val_cal in 80/20 setup (no separate holdout)
+					threshold_metadata['test_cal'] = threshold_metadata['val_cal'].copy()
+
+					# 4. Platt scaling: fit sigmoid calibration on TRAINING scores, apply to val
+					# Learns P(attack) = sigmoid(a*score + b) from training data,
+					# then applies threshold to the untouched validation set
 					try:
-						# score_examples trains on full train, returns raw scores for eval set
-						holdout_scores = self.evaluator.score_examples(genome)
-						holdout_labels_list = self.evaluator._y_test
-						if holdout_scores and holdout_labels_list and len(holdout_scores) == len(holdout_labels_list):
+						# score_train_examples trains on full train, returns scores for TRAINING examples
+						train_scores = val_evaluator.score_train_examples(genome)
+						train_labels_list = val_evaluator._y_train
+						if train_scores and train_labels_list and len(train_scores) == len(train_labels_list):
 							import math
 
 							# Fit Platt scaling: minimize NLL for sigmoid(a*score + b) vs labels
-							scores = holdout_scores
-							labels = holdout_labels_list
+							scores = train_scores
+							labels = train_labels_list
 							n = len(scores)
 							n_pos = sum(1 for l in labels if l == 1)
 							n_neg = n - n_pos
@@ -1113,12 +1101,12 @@ class Experiment:
 
 					# 6. Beta calibration: logit(P) = a*ln(s) - b*ln(1-s) + c
 					# Designed for bounded [0,1] scores — handles bimodal WNN distributions
-					# (Kull et al. 2017, AISTATS)
+					# (Kull et al. 2017, AISTATS) — fitted on training scores
 					try:
-						if holdout_scores and holdout_labels_list:
+						if train_scores and train_labels_list:
 							import math
-							scores = holdout_scores
-							labels = holdout_labels_list
+							scores = train_scores
+							labels = train_labels_list
 							n = len(scores)
 							n_pos = sum(1 for l in labels if l == 1)
 							n_neg = n - n_pos
@@ -1185,11 +1173,11 @@ class Experiment:
 						self.log(f"    Beta:        skipped ({e})")
 
 					# 7. Empirical table: P(attack|score) computed per discrete score value
-					# Zero assumptions — uses WNN's discrete score nature directly
+					# Zero assumptions — fitted on training scores
 					try:
-						if holdout_scores and holdout_labels_list:
-							scores = holdout_scores
-							labels = holdout_labels_list
+						if train_scores and train_labels_list:
+							scores = train_scores
+							labels = train_labels_list
 
 							# Build empirical P(attack|score) table from holdout
 							from collections import defaultdict
@@ -1222,13 +1210,13 @@ class Experiment:
 					except Exception as e:
 						self.log(f"    Empirical:   skipped ({e})")
 
-					# 8. Empirical-cumulative: sort-based F1 maximization on holdout scores
+					# 8. Empirical-cumulative: sort-based F1 maximization on training scores
 					# Unlike per-bin empirical, this considers ALL examples above each threshold
 					try:
-						if holdout_scores and holdout_labels_list:
+						if train_scores and train_labels_list:
 							import numpy as np
-							scores_arr = np.array(holdout_scores)
-							labels_arr = np.array(holdout_labels_list)
+							scores_arr = np.array(train_scores)
+							labels_arr = np.array(train_labels_list)
 
 							# Sort by score descending — sweep threshold from high to low
 							sorted_idx = np.argsort(-scores_arr)
@@ -1259,10 +1247,8 @@ class Experiment:
 					except Exception as e:
 						self.log(f"    Emp-cumul:   skipped ({e})")
 
-					# Use test-calibrated as primary metric (most honest)
-					f1 = tcr.f1
-					fpr_val = tcr.fpr
-					acc = tcr.acc
+					# Use train-calibrated as primary metric (threshold from training, eval on val)
+					# f1, fpr_val, acc already set from train_cal above
 
 				# Collect results keyed by genome_type (use .value for dict key)
 				results[genome_type.value] = {'ce': ce, 'acc': acc, 'f1': f1, 'fpr': fpr_val}

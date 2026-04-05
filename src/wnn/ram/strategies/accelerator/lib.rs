@@ -4257,6 +4257,31 @@ impl IDSCacheWrapper {
         })
     }
 
+    /// Score TRAINING examples for calibration fitting.
+    /// Trains on full train, returns scores for train (not eval).
+    fn score_train_examples(
+        &self,
+        py: Python<'_>,
+        bits_flat: Vec<usize>,
+        neurons_flat: Vec<usize>,
+        connections_flat: Vec<i64>,
+        empty_value: f32,
+        neuron_sample_rate: f32,
+        rng_seed: u64,
+    ) -> PyResult<Vec<f64>> {
+        py.allow_threads(|| {
+            Ok(ids_cache::score_train_examples_ids_cached(
+                &self.inner,
+                &bits_flat,
+                &neurons_flat,
+                &connections_flat,
+                empty_value,
+                neuron_sample_rate,
+                rng_seed,
+            ))
+        })
+    }
+
     /// Search for neighbors above accuracy threshold, all in Rust.
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (

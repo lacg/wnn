@@ -282,6 +282,19 @@ class IDSEvaluator(BaseEvaluator):
 			self._empty_value, self._neuron_sample_rate, 0,
 		)
 
+	def score_train_examples(self, genome) -> list[float]:
+		"""Get raw per-example scores for training examples (no thresholding).
+
+		Trains on full training data, returns raw score for each TRAINING example.
+		Used for fitting calibration (platt/beta/empirical) on training data
+		so the validation set remains untouched.
+		"""
+		bits_flat, neurons_flat, connections_flat = self._flatten_genomes([genome])
+		return self._cache.score_train_examples(
+			bits_flat, neurons_flat, connections_flat,
+			self._empty_value, self._neuron_sample_rate, 0,
+		)
+
 	def evaluate_batch_full(
 		self,
 		genomes: list[ClusterGenome],

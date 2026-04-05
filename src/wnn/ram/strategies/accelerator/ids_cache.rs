@@ -666,6 +666,39 @@ pub fn score_examples_ids_cached(
     )
 }
 
+/// Score TRAINING examples (for calibration fitting on training data).
+/// Trains on full_train, returns scores for full_train (same data).
+pub fn score_train_examples_ids_cached(
+    cache: &IDSCache,
+    bits_flat: &[usize],
+    neurons_flat: &[usize],
+    connections_flat: &[i64],
+    empty_value: f32,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+) -> Vec<f64> {
+    let train = cache.full_train();
+
+    crate::adaptive::train_and_score_single(
+        bits_flat,
+        neurons_flat,
+        connections_flat,
+        cache.num_genome_clusters(),
+        &train.input_bits,
+        &train.targets,
+        &train.negatives,
+        train.num_examples,
+        cache.num_negatives(),
+        &train.input_bits,  // score training data, not eval
+        train.num_examples,
+        cache.total_features(),
+        empty_value,
+        neuron_sample_rate,
+        rng_seed,
+        cache.class_weights.as_deref(),
+    )
+}
+
 /// Evaluate genomes with training-time adaptation (synaptogenesis + neurogenesis).
 ///
 /// Returns adapted genome parameters alongside scores, enabling the Baldwin effect:
