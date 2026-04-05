@@ -814,6 +814,7 @@ class FlowWorker:
         Returns (optimizer_evaluator, test_evaluator) for flat classification,
         or (s0_opt, s0_test, s1_opt, s1_test) for hierarchical classification.
         """
+        import numpy as np
         from wnn.ids import load_unsw_nb15, split_train_validation
         from wnn.ids.dataset import IDSDataset
         from wnn.ram.architecture.ids_evaluator import IDSEvaluator
@@ -861,31 +862,36 @@ class FlowWorker:
         has_val_split = full_dataset.X_val is not None
 
         if has_val_split:
-            # 3-way split (80/10/10): train=optimizer, test=threshold cal, val=final metrics
-            # No need to carve holdout from training — use the full train set
-            self._log("Using 3-way split: train (optimizer) / test (threshold cal) / val (final metrics)")
+            # 3-way dataset (80/10/10): merge test+val into 20% validation set
+            # K-fold on 80% train for GA search, 20% completely untouched until validation report
+            self._log("Using 80/20 split: K-fold on 80% train, 20% (test+val merged) for validation only")
 
-            # Optimizer: train on full HF train, eval on HF test (for fitness during GA)
+            # Merge test + val into a single validation set
+            merged_val_X = np.vstack([full_dataset.X_test, full_dataset.X_val])
+            merged_val_y_binary = np.concatenate([full_dataset.y_test_binary, full_dataset.y_val_binary])
+            merged_val_y_multi = np.concatenate([full_dataset.y_test_multi, full_dataset.y_val_multi])
+
+            # Optimizer: K-fold within 80% train only (20% val never seen during GA)
             optimizer_dataset = IDSDataset(
                 X_train=full_dataset.X_train,
                 y_train_binary=full_dataset.y_train_binary,
                 y_train_multi=full_dataset.y_train_multi,
-                X_test=full_dataset.X_test,
-                y_test_binary=full_dataset.y_test_binary,
-                y_test_multi=full_dataset.y_test_multi,
+                X_test=merged_val_X,  # not used by K-fold, but needed for structure
+                y_test_binary=merged_val_y_binary,
+                y_test_multi=merged_val_y_multi,
                 encoder=full_dataset.encoder,
                 category_names=full_dataset.category_names,
                 feature_names=full_dataset.feature_names,
             )
 
-            # Test evaluator: train on full HF train, eval on HF validation (final reported metrics)
+            # Test evaluator: train on full 80%, eval on merged 20% (final reported metrics)
             test_dataset = IDSDataset(
                 X_train=full_dataset.X_train,
                 y_train_binary=full_dataset.y_train_binary,
                 y_train_multi=full_dataset.y_train_multi,
-                X_test=full_dataset.X_val,
-                y_test_binary=full_dataset.y_val_binary,
-                y_test_multi=full_dataset.y_val_multi,
+                X_test=merged_val_X,
+                y_test_binary=merged_val_y_binary,
+                y_test_multi=merged_val_y_multi,
                 encoder=full_dataset.encoder,
                 category_names=full_dataset.category_names,
                 feature_names=full_dataset.feature_names,

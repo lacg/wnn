@@ -25,20 +25,19 @@ Always use context7 when I need code generation, setup or configuration steps, o
 - Produce different results (wrong memory mode, missing QUAD_WEIGHTED)
 - Create maintenance burden (two implementations to keep in sync)
 
-### IDS Datasets: Use 80/10/10 Three-Way Splits
-**All new IDS experiment runs MUST use the `_3way` split configs (80/10/10).**
-- **Train (80%)**: Model training, GA/grid search, K-fold cross-validation
-- **Test (10%)**: Threshold calibration only (held out from training)
-- **Validation (10%)**: Final reported metrics (NEVER touched during training or calibration)
+### IDS Datasets: 80/20 Split with K-fold on Training
+**All new IDS experiment runs use `_3way` HF configs but merge test+val into a single 20% validation set.**
+- **Train (80%)**: K-fold cross-validation during GA search (never sees validation data)
+- **Validation (20%)**: test+val merged, used ONLY for final validation report (completely untouched during training)
+
+This follows the standard IDS literature approach: K-fold on training for robust search, held-out set for reporting.
 
 HuggingFace configs:
 - UNSW-NB15: `temporal_3way` (default), `random_3way`
 - CICIDS2017: `temporal_3way` (default), `random_3way`
 - CIC-IoT-2023: `random_3way` (default)
 
-Legacy 80/20 configs (`temporal`, `random`) are preserved for backward compatibility with existing UNSW-NB15 and CICIDS2017 runs. Do NOT use legacy configs for new experiments.
-
-The loader code passes `split="random_3way"` (or `"temporal_3way"`) to `load_dataset()`. When a 3-way split is loaded, the worker uses the HF validation split directly instead of carving a holdout from training data — so training gets the full 80%.
+The worker loads 3-way splits and merges test+val into a single 20% validation set. K-fold operates within the 80% training data only. The 20% validation is never seen during GA search — only used for validation progression reports.
 
 ### iOS/iPadOS/macOS Development
 All Apple platform code (Swift/SwiftUI) should:
