@@ -3045,15 +3045,15 @@
     font-family: monospace;
   }
 
-  /* Actual result row (main data — fixed 0.5) — bright white, bold */
+  /* Actual result row (main data — fixed 0.5) — bright green, bold */
   .validation-table tbody tr:not(.threshold-sub-row) td.mono {
-    color: #e2e8f0;
+    color: #22c55e;
     font-weight: 600;
   }
 
-  /* Phase name (Grid Search / GA Neurons) — match fixed 0.5 color */
+  /* Phase name (Grid Search / GA Neurons) — match main row green */
   .validation-table tbody tr:not(.threshold-sub-row) td.phase-name {
-    color: #e2e8f0;
+    color: #22c55e;
     font-weight: 600;
   }
 
@@ -3078,15 +3078,9 @@
     font-weight: 500;
   }
 
-  /* Train-cal — default dim */
+  /* Train-cal — light steel blue */
   .threshold-train-row td {
-    color: var(--text-dim) !important;
-  }
-
-  /* Fixed 0.5 — white/bright (simple, no calibration) */
-  .threshold-fixed-row td {
-    color: #e2e8f0 !important;
-    font-weight: 500;
+    color: #94a3b8 !important;
   }
 
   /* Oracle — orange, italic (upper bound) */
