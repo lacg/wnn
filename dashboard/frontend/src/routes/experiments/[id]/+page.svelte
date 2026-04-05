@@ -993,21 +993,26 @@
                     {/if}
                   </td>
                   {#if isIDS}
-                    <td class="mono best-ce-col">{bestF1Summary?.f1_macro != null ? (bestF1Summary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
-                    <td class="mono best-ce-col">{bestF1Summary?.fpr != null ? (bestF1Summary.fpr * 100).toFixed(2) + '%' : '—'}</td>
-                    <td class="mono best-ce-col">{bestF1Summary ? (bestF1Summary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
-                    <td class="mono best-acc-col">{bestFprSummary?.f1_macro != null ? (bestFprSummary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
-                    <td class="mono best-acc-col">{bestFprSummary?.fpr != null ? (bestFprSummary.fpr * 100).toFixed(2) + '%' : '—'}</td>
-                    <td class="mono best-acc-col">{bestFprSummary ? (bestFprSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
-                    <td class="mono">{bestAccSummary?.f1_macro != null ? (bestAccSummary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
-                    <td class="mono">{bestAccSummary?.fpr != null ? (bestAccSummary.fpr * 100).toFixed(2) + '%' : '—'}</td>
-                    <td class="mono">{bestAccSummary ? (bestAccSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
-                    <td class="mono">{bestCeSummary?.f1_macro != null ? (bestCeSummary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
-                    <td class="mono">{bestCeSummary?.fpr != null ? (bestCeSummary.fpr * 100).toFixed(2) + '%' : '—'}</td>
-                    <td class="mono">{bestCeSummary ? (bestCeSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
-                    <td class="mono best-fit-col">{bestFitSummary?.f1_macro != null ? (bestFitSummary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
-                    <td class="mono best-fit-col">{bestFitSummary?.fpr != null ? (bestFitSummary.fpr * 100).toFixed(2) + '%' : '—'}</td>
-                    <td class="mono best-fit-col">{bestFitSummary ? (bestFitSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+                  {@const f05_f1 = bestF1Summary?.threshold_metadata?.fixed_05}
+                  {@const f05_fpr = bestFprSummary?.threshold_metadata?.fixed_05}
+                  {@const f05_acc = bestAccSummary?.threshold_metadata?.fixed_05}
+                  {@const f05_ce = bestCeSummary?.threshold_metadata?.fixed_05}
+                  {@const f05_fit = bestFitSummary?.threshold_metadata?.fixed_05}
+                    <td class="mono best-ce-col">{f05_f1?.f1 != null ? (f05_f1.f1 * 100).toFixed(2) + '%' : bestF1Summary?.f1_macro != null ? (bestF1Summary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono best-ce-col">{f05_f1?.fpr != null ? (f05_f1.fpr * 100).toFixed(2) + '%' : bestF1Summary?.fpr != null ? (bestF1Summary.fpr * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono best-ce-col">{f05_f1?.acc != null ? (f05_f1.acc * 100).toFixed(2) + '%' : bestF1Summary ? (bestF1Summary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono best-acc-col">{f05_fpr?.f1 != null ? (f05_fpr.f1 * 100).toFixed(2) + '%' : bestFprSummary?.f1_macro != null ? (bestFprSummary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono best-acc-col">{f05_fpr?.fpr != null ? (f05_fpr.fpr * 100).toFixed(2) + '%' : bestFprSummary?.fpr != null ? (bestFprSummary.fpr * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono best-acc-col">{f05_fpr?.acc != null ? (f05_fpr.acc * 100).toFixed(2) + '%' : bestFprSummary ? (bestFprSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono">{f05_acc?.f1 != null ? (f05_acc.f1 * 100).toFixed(2) + '%' : bestAccSummary?.f1_macro != null ? (bestAccSummary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono">{f05_acc?.fpr != null ? (f05_acc.fpr * 100).toFixed(2) + '%' : bestAccSummary?.fpr != null ? (bestAccSummary.fpr * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono">{f05_acc?.acc != null ? (f05_acc.acc * 100).toFixed(2) + '%' : bestAccSummary ? (bestAccSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono">{f05_ce?.f1 != null ? (f05_ce.f1 * 100).toFixed(2) + '%' : bestCeSummary?.f1_macro != null ? (bestCeSummary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono">{f05_ce?.fpr != null ? (f05_ce.fpr * 100).toFixed(2) + '%' : bestCeSummary?.fpr != null ? (bestCeSummary.fpr * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono">{f05_ce?.acc != null ? (f05_ce.acc * 100).toFixed(2) + '%' : bestCeSummary ? (bestCeSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono best-fit-col">{f05_fit?.f1 != null ? (f05_fit.f1 * 100).toFixed(2) + '%' : bestFitSummary?.f1_macro != null ? (bestFitSummary.f1_macro * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono best-fit-col">{f05_fit?.fpr != null ? (f05_fit.fpr * 100).toFixed(2) + '%' : bestFitSummary?.fpr != null ? (bestFitSummary.fpr * 100).toFixed(2) + '%' : '—'}</td>
+                    <td class="mono best-fit-col">{f05_fit?.acc != null ? (f05_fit.acc * 100).toFixed(2) + '%' : bestFitSummary ? (bestFitSummary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
                   {:else}
                     <td class="mono best-ce-col">{bestF1Summary ? bestF1Summary.ce.toFixed(4) : '—'}</td>
                     <td class="mono best-ce-col">{bestF1Summary ? (bestF1Summary.accuracy * 100).toFixed(2) + '%' : '—'}</td>
@@ -1019,7 +1024,7 @@
                 </tr>
                 {#if hasThresholds}
                   {#each [
-                    { key: 'fixed_05', label: '┣ Fixed 0.5', cls: 'threshold-fixed-row' },
+                    { key: 'train_cal', label: '┣ Train-cal', cls: 'threshold-train-row' },
                     { key: 'platt', label: '┣ Platt', cls: 'threshold-platt-row' },
                     { key: 'beta', label: '┣ Beta', cls: 'threshold-beta-row' },
                     { key: 'empirical', label: '┣ Empirical', cls: 'threshold-empirical-row' },
