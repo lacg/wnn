@@ -97,6 +97,7 @@ class IDSEvaluator(BaseEvaluator):
 		self._num_classes = num_classes
 		self._classification = classification
 		self._y_test = [int(y) for y in y_test]
+		self._y_train = [int(y) for y in y_train]
 		self._class_names = list(dataset.category_names) if hasattr(dataset, 'category_names') else None
 
 		# Import and create Rust cache
