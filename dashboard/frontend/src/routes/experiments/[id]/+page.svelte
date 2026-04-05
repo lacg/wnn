@@ -3045,13 +3045,13 @@
     font-family: monospace;
   }
 
-  /* Actual result row (main data — fixed 0.5) — bright green, bold */
+  /* Actual result row (main data — fixed 0.5) — white, bold */
   .validation-table tbody tr:not(.threshold-sub-row) td.mono {
-    color: #22c55e;
+    color: #e2e8f0;
     font-weight: 600;
   }
 
-  /* Phase name (Grid Search / GA Neurons) — match main row green */
+  /* Phase name (Grid Search / GA Neurons) — green to stand out */
   .validation-table tbody tr:not(.threshold-sub-row) td.phase-name {
     color: #22c55e;
     font-weight: 600;
