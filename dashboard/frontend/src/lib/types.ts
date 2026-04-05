@@ -301,10 +301,14 @@ export interface ThresholdResult {
 }
 
 export interface ThresholdMetadata {
-  fixed_05: ThresholdResult;
   train_cal: ThresholdResult;
-  test_cal: ThresholdResult;
+  fixed_05: ThresholdResult;
+  platt?: ThresholdResult;
+  beta?: ThresholdResult;
+  empirical?: ThresholdResult;
+  empirical_cumulative?: ThresholdResult;
   val_cal?: ThresholdResult;
+  test_cal?: ThresholdResult;  // Legacy — equals val_cal in 80/20 setup
 }
 
 export interface ValidationSummary {

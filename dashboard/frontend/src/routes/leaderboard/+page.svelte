@@ -85,12 +85,11 @@
 		{ value: '', label: 'All Thresholds' },
 		{ value: 'train_cal', label: 'Train-cal' },
 		{ value: 'fixed_05', label: 'Fixed 0.5' },
-		{ value: 'test_cal', label: 'Holdout' },
-		{ value: 'val_cal', label: 'Oracle' },
 		{ value: 'platt', label: 'Platt' },
 		{ value: 'beta', label: 'Beta' },
 		{ value: 'empirical', label: 'Empirical' },
 		{ value: 'empirical_cumulative', label: 'Emp-cumul' },
+		{ value: 'val_cal', label: 'Oracle' },
 	];
 
 	async function fetchGenomes() {

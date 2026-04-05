@@ -1015,9 +1015,6 @@ class Experiment:
 					}
 					self.log(f"    Val-cal:     F1={or_.f1:.4%}, FPR={or_.fpr:.4%}, Acc={or_.acc:.4%}, t={oracle_threshold:.4f} (oracle)")
 
-					# test_cal = val_cal in 80/20 setup (no separate holdout)
-					threshold_metadata['test_cal'] = threshold_metadata['val_cal'].copy()
-
 					# 4. Platt scaling: fit sigmoid calibration on TRAINING scores, apply to val
 					# Learns P(attack) = sigmoid(a*score + b) from training data,
 					# then applies threshold to the untouched validation set
