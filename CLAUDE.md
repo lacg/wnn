@@ -960,6 +960,7 @@ When asked for "update results" or "how are the runs going", show the **full bre
 - **10 tables**: Grid Search × [best_f1, best_fpr, best_acc, best_ce, best_fitness] + GA Neurons × [best_f1, best_fpr, best_acc, best_ce, best_fitness]
 - **Each table broken by all 7 threshold modes**: train_cal, fixed_05, platt, beta, empirical, empirical_cumulative, val_cal (oracle)
 - **Columns in every row**: F1 mean ±std, FPR mean ±std, Acc mean ±std, Neurons mean ±std, Bits mean ±std
+- **Format**: Use plain text tables with column separators (pipe-delimited with dashes), NOT markdown tables (which may not render). Use code blocks for tables.
 - Store results in `docs/ids_results.md` following the existing format
 
 ### Rule 6: Full-Stack Tracing
