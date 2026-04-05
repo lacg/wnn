@@ -3042,9 +3042,8 @@
 
   .phase-threshold-hint {
     font-size: 0.8rem;
-    color: #94a3b8;
+    color: #e2e8f0;
     font-weight: 400;
-    margin-left: 0.25rem;
   }
 
   .threshold-mode-label {
@@ -3060,9 +3059,9 @@
     font-weight: 600;
   }
 
-  /* Phase name (Grid Search / GA Neurons) — green to stand out */
+  /* Phase name (Grid Search / GA Neurons) — white */
   .validation-table tbody tr:not(.threshold-sub-row) td.phase-name {
-    color: #22c55e;
+    color: #e2e8f0;
     font-weight: 600;
   }
 
