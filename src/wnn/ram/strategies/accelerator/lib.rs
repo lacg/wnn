@@ -347,6 +347,24 @@ fn find_optimal_threshold_fitness_py(
     Ok(adaptive::find_optimal_threshold_fitness(&scores, &labels, w_ce, w_f1, w_fpr, w_acc))
 }
 
+/// Fit Platt scaling. Returns (threshold, a, b).
+#[pyfunction]
+fn fit_platt_scaling_py(scores: Vec<f64>, labels: Vec<i64>) -> PyResult<(f64, f64, f64)> {
+    Ok(adaptive::fit_platt_scaling(&scores, &labels))
+}
+
+/// Fit Beta calibration. Returns (threshold, a, b, c).
+#[pyfunction]
+fn fit_beta_calibration_py(scores: Vec<f64>, labels: Vec<i64>) -> PyResult<(f64, f64, f64, f64)> {
+    Ok(adaptive::fit_beta_calibration(&scores, &labels))
+}
+
+/// Fit empirical threshold. Returns (threshold, n_bins).
+#[pyfunction]
+fn fit_empirical_threshold_py(scores: Vec<f64>, labels: Vec<i64>) -> PyResult<(f64, usize)> {
+    Ok(adaptive::fit_empirical_threshold(&scores, &labels))
+}
+
 #[pyfunction]
 fn evaluate_cascade_batch_cpu(
     base_connectivities: Vec<Vec<Vec<i64>>>,  // 5 RAMs: [n2, n3, n4, n5, n6]
@@ -6306,5 +6324,8 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(generate_random_connections, m)?)?;
     m.add_function(wrap_pyfunction!(generate_random_connections_batch, m)?)?;
     m.add_function(wrap_pyfunction!(find_optimal_threshold_fitness_py, m)?)?;
+    m.add_function(wrap_pyfunction!(fit_platt_scaling_py, m)?)?;
+    m.add_function(wrap_pyfunction!(fit_beta_calibration_py, m)?)?;
+    m.add_function(wrap_pyfunction!(fit_empirical_threshold_py, m)?)?;
     Ok(())
 }

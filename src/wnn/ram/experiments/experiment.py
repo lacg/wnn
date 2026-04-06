@@ -1019,222 +1019,48 @@ class Experiment:
 					# Learns P(attack) = sigmoid(a*score + b) from training data,
 					# then applies threshold to the untouched validation set
 					try:
-						# score_train_examples trains on full train, returns scores for TRAINING examples
+						import ram_accelerator
+						# Score training examples (Rust — fast)
 						train_scores = val_evaluator.score_train_examples(genome)
 						train_labels_list = val_evaluator._y_train
+
 						if train_scores and train_labels_list and len(train_scores) == len(train_labels_list):
-							import math
-
-							# Fit Platt scaling: minimize NLL for sigmoid(a*score + b) vs labels
-							scores = train_scores
-							labels = train_labels_list
-							n = len(scores)
-							n_pos = sum(1 for l in labels if l == 1)
-							n_neg = n - n_pos
-
-							# Initialize with reasonable values
-							a = 1.0
-							b = 0.0
-
-							# Newton's method (Platt's algorithm)
-							# Target: t_i = (N+ + 1) / (N+ + 2) for positives, 1/(N- + 2) for negatives
-							t_pos = (n_pos + 1) / (n_pos + 2)
-							t_neg = 1.0 / (n_neg + 2)
-
-							for _ in range(100):  # Newton iterations
-								g_a = 0.0  # gradient w.r.t. a
-								g_b = 0.0  # gradient w.r.t. b
-								h_aa = 0.0  # Hessian
-								h_ab = 0.0
-								h_bb = 0.0
-
-								for i in range(n):
-									fval = a * scores[i] + b
-									# Numerically stable sigmoid
-									if fval >= 0:
-										p = 1.0 / (1.0 + math.exp(-fval))
-									else:
-										ef = math.exp(fval)
-										p = ef / (1.0 + ef)
-									p = max(1e-15, min(1 - 1e-15, p))
-
-									t = t_pos if labels[i] == 1 else t_neg
-									d = p - t
-									g_a += d * scores[i]
-									g_b += d
-									w = p * (1 - p)
-									h_aa += w * scores[i] * scores[i]
-									h_ab += w * scores[i]
-									h_bb += w
-
-								# Regularize Hessian
-								h_aa += 1e-6
-								h_bb += 1e-6
-								det = h_aa * h_bb - h_ab * h_ab
-								if abs(det) < 1e-12:
-									break
-								da = -(h_bb * g_a - h_ab * g_b) / det
-								db = -(h_aa * g_b - h_ab * g_a) / det
-								a += da
-								b += db
-								if abs(da) < 1e-8 and abs(db) < 1e-8:
-									break
-
-							# Apply Platt threshold to test: sigmoid(a*score + b) > 0.5
-							# This is equivalent to: score > -b/a (when a > 0)
-							platt_threshold = -b / a if abs(a) > 1e-10 else 0.5
-
-							platt_results = val_evaluator.evaluate_batch_full(
-								[genome], override_threshold=platt_threshold,
-							)
+							# 5. Platt scaling (Rust)
+							platt_threshold, a, b = ram_accelerator.fit_platt_scaling_py(train_scores, train_labels_list)
+							platt_results = val_evaluator.evaluate_batch_full([genome], override_threshold=platt_threshold)
 							pr = platt_results[0]
 							threshold_metadata['platt'] = {
 								'f1': pr.f1, 'fpr': pr.fpr, 'acc': pr.acc,
 								'threshold': platt_threshold, 'a': a, 'b': b,
 							}
 							self.log(f"    Platt:       F1={pr.f1:.4%}, FPR={pr.fpr:.4%}, Acc={pr.acc:.4%}, t={platt_threshold:.4f} (a={a:.4f}, b={b:.4f})")
-					except Exception as e:
-						self.log(f"    Platt:       skipped ({e})")
 
-					# 6. Beta calibration: logit(P) = a*ln(s) - b*ln(1-s) + c
-					# Designed for bounded [0,1] scores — handles bimodal WNN distributions
-					# (Kull et al. 2017, AISTATS) — fitted on training scores
-					try:
-						if train_scores and train_labels_list:
-							import math
-							scores = train_scores
-							labels = train_labels_list
-							n = len(scores)
-							n_pos = sum(1 for l in labels if l == 1)
-							n_neg = n - n_pos
-							t_pos = (n_pos + 1) / (n_pos + 2)
-							t_neg = 1.0 / (n_neg + 2)
-
-							# Transform scores: x1 = ln(s), x2 = -ln(1-s)
-							# Clamp to avoid log(0)
-							EPS = 1e-10
-							x1 = [math.log(max(s, EPS)) for s in scores]
-							x2 = [-math.log(max(1 - s, EPS)) for s in scores]
-
-							# Fit logistic regression on (x1, x2) → same Newton method as Platt
-							a, b, c = 1.0, 1.0, 0.0
-							for _ in range(100):
-								g_a = g_b = g_c = 0.0
-								h_aa = h_ab = h_ac = h_bb = h_bc = h_cc = 0.0
-								for i in range(n):
-									fval = a * x1[i] + b * x2[i] + c
-									if fval >= 0:
-										p = 1.0 / (1.0 + math.exp(-fval))
-									else:
-										ef = math.exp(fval)
-										p = ef / (1.0 + ef)
-									p = max(1e-15, min(1 - 1e-15, p))
-									t = t_pos if labels[i] == 1 else t_neg
-									d = p - t
-									g_a += d * x1[i]; g_b += d * x2[i]; g_c += d
-									w = p * (1 - p)
-									h_aa += w * x1[i]**2; h_ab += w * x1[i] * x2[i]; h_ac += w * x1[i]
-									h_bb += w * x2[i]**2; h_bc += w * x2[i]; h_cc += w
-
-								# 3x3 Newton step (solve H * delta = -g)
-								h_aa += 1e-6; h_bb += 1e-6; h_cc += 1e-6
-								# Use simple iteration instead of full 3x3 inverse
-								a -= 0.1 * g_a / h_aa
-								b -= 0.1 * g_b / h_bb
-								c -= 0.1 * g_c / h_cc
-								if abs(g_a / max(h_aa, 1e-10)) < 1e-6 and abs(g_b / max(h_bb, 1e-10)) < 1e-6:
-									break
-
-							# Find threshold: a*ln(s) + b*(-ln(1-s)) + c = 0
-							# Binary search for the score where this equals 0
-							lo, hi = 0.001, 0.999
-							for _ in range(100):
-								mid = (lo + hi) / 2
-								val = a * math.log(mid) + b * (-math.log(1 - mid)) + c
-								if val < 0:
-									lo = mid
-								else:
-									hi = mid
-							beta_threshold = (lo + hi) / 2
-
-							beta_results = val_evaluator.evaluate_batch_full(
-								[genome], override_threshold=beta_threshold,
-							)
+							# 6. Beta calibration (Rust)
+							beta_threshold, ba, bb, bc = ram_accelerator.fit_beta_calibration_py(train_scores, train_labels_list)
+							beta_results = val_evaluator.evaluate_batch_full([genome], override_threshold=beta_threshold)
 							br = beta_results[0]
 							threshold_metadata['beta'] = {
 								'f1': br.f1, 'fpr': br.fpr, 'acc': br.acc,
-								'threshold': beta_threshold, 'a': a, 'b': b, 'c': c,
+								'threshold': beta_threshold, 'a': ba, 'b': bb, 'c': bc,
 							}
-							self.log(f"    Beta:        F1={br.f1:.4%}, FPR={br.fpr:.4%}, Acc={br.acc:.4%}, t={beta_threshold:.4f} (a={a:.3f}, b={b:.3f}, c={c:.3f})")
-					except Exception as e:
-						self.log(f"    Beta:        skipped ({e})")
+							self.log(f"    Beta:        F1={br.f1:.4%}, FPR={br.fpr:.4%}, Acc={br.acc:.4%}, t={beta_threshold:.4f} (a={ba:.3f}, b={bb:.3f}, c={bc:.3f})")
 
-					# 7. Empirical table: P(attack|score) computed per discrete score value
-					# Zero assumptions — fitted on training scores
-					try:
-						if train_scores and train_labels_list:
-							scores = train_scores
-							labels = train_labels_list
-
-							# Build empirical P(attack|score) table from holdout
-							from collections import defaultdict
-							score_counts = defaultdict(lambda: [0, 0])  # score → [n_normal, n_attack]
-							for s, l in zip(scores, labels):
-								score_counts[round(s, 6)][l] += 1
-
-							# Find threshold: highest score where P(attack) < 0.5
-							sorted_scores = sorted(score_counts.keys())
-							empirical_threshold = 0.5
-							for s in sorted_scores:
-								counts = score_counts[s]
-								total = counts[0] + counts[1]
-								if total > 0:
-									p_attack = counts[1] / total
-									if p_attack >= 0.5:
-										empirical_threshold = s
-										break
-
-							emp_results = val_evaluator.evaluate_batch_full(
-								[genome], override_threshold=empirical_threshold,
-							)
+							# 7. Empirical table (Rust)
+							empirical_threshold, n_bins = ram_accelerator.fit_empirical_threshold_py(train_scores, train_labels_list)
+							emp_results = val_evaluator.evaluate_batch_full([genome], override_threshold=empirical_threshold)
 							er = emp_results[0]
-							n_bins = len(sorted_scores)
 							threshold_metadata['empirical'] = {
 								'f1': er.f1, 'fpr': er.fpr, 'acc': er.acc,
 								'threshold': empirical_threshold, 'n_bins': n_bins,
 							}
 							self.log(f"    Empirical:   F1={er.f1:.4%}, FPR={er.fpr:.4%}, Acc={er.acc:.4%}, t={empirical_threshold:.4f} ({n_bins} bins)")
-					except Exception as e:
-						self.log(f"    Empirical:   skipped ({e})")
 
-					# 8. Empirical-cumulative: sort-based F1 maximization on training scores
-					# Unlike per-bin empirical, this considers ALL examples above each threshold
-					try:
-						if train_scores and train_labels_list:
-							import numpy as np
-							scores_arr = np.array(train_scores)
-							labels_arr = np.array(train_labels_list)
-
-							# Sort by score descending — sweep threshold from high to low
-							sorted_idx = np.argsort(-scores_arr)
-							sorted_labels = labels_arr[sorted_idx]
-							sorted_scores = scores_arr[sorted_idx]
-
-							cum_tp = np.cumsum(sorted_labels)           # attacks above threshold
-							cum_fp = np.cumsum(1 - sorted_labels)       # normals above threshold
-							total_pos = labels_arr.sum()
-							total_neg = len(labels_arr) - total_pos
-
-							prec = np.where(cum_tp + cum_fp > 0, cum_tp / (cum_tp + cum_fp), 0)
-							rec = np.where(total_pos > 0, cum_tp / total_pos, 0)
-							f1_arr = np.where(prec + rec > 0, 2 * prec * rec / (prec + rec), 0)
-
-							best_idx = int(np.argmax(f1_arr))
-							emp_cum_threshold = float(sorted_scores[best_idx])
-
-							ec_results = val_evaluator.evaluate_batch_full(
-								[genome], override_threshold=emp_cum_threshold,
+							# 8. Empirical-cumulative: fitness-aware sweep on training scores (Rust)
+							emp_cum_result = ram_accelerator.find_optimal_threshold_fitness_py(
+								train_scores, train_labels_list, 0.0, 1.0, 0.0, 0.0,  # maximize F1
 							)
+							emp_cum_threshold = emp_cum_result[0]
+							ec_results = val_evaluator.evaluate_batch_full([genome], override_threshold=emp_cum_threshold)
 							ec = ec_results[0]
 							threshold_metadata['empirical_cumulative'] = {
 								'f1': ec.f1, 'fpr': ec.fpr, 'acc': ec.acc,
@@ -1242,7 +1068,7 @@ class Experiment:
 							}
 							self.log(f"    Emp-cumul:   F1={ec.f1:.4%}, FPR={ec.fpr:.4%}, Acc={ec.acc:.4%}, t={emp_cum_threshold:.4f}")
 					except Exception as e:
-						self.log(f"    Emp-cumul:   skipped ({e})")
+						self.log(f"    Calibration: skipped ({e})")
 
 					# Use train-calibrated as primary metric (threshold from training, eval on val)
 					# f1, fpr_val, acc already set from train_cal above

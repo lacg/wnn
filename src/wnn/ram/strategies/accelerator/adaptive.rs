@@ -549,6 +549,165 @@ pub fn find_optimal_threshold_fitness(
     (best_threshold, best_f1, best_fpr_val, best_acc, best_fitness)
 }
 
+/// Fit Platt scaling on scores+labels, return threshold.
+/// Learns sigmoid P(attack) = 1/(1+exp(-(a*score+b))) via Newton's method.
+/// Returns (threshold, a, b) where threshold = -b/a.
+pub fn fit_platt_scaling(scores: &[f64], labels: &[i64]) -> (f64, f64, f64) {
+    let n = scores.len();
+    if n == 0 { return (0.5, 1.0, 0.0); }
+
+    let n_pos = labels.iter().filter(|&&l| l == 1).count() as f64;
+    let n_neg = n as f64 - n_pos;
+    if n_pos == 0.0 || n_neg == 0.0 { return (0.5, 1.0, 0.0); }
+
+    let t_pos = (n_pos + 1.0) / (n_pos + 2.0);
+    let t_neg = 1.0 / (n_neg + 2.0);
+
+    let mut a = 1.0f64;
+    let mut b = 0.0f64;
+
+    for _ in 0..100 {
+        let mut g_a = 0.0f64;
+        let mut g_b = 0.0f64;
+        let mut h_aa = 0.0f64;
+        let mut h_ab = 0.0f64;
+        let mut h_bb = 0.0f64;
+
+        for i in 0..n {
+            let fval = a * scores[i] + b;
+            let p = if fval >= 0.0 {
+                1.0 / (1.0 + (-fval).exp())
+            } else {
+                let ef = fval.exp();
+                ef / (1.0 + ef)
+            };
+            let p = p.max(1e-15).min(1.0 - 1e-15);
+
+            let t = if labels[i] == 1 { t_pos } else { t_neg };
+            let d = p - t;
+            g_a += d * scores[i];
+            g_b += d;
+            let w = p * (1.0 - p);
+            h_aa += w * scores[i] * scores[i];
+            h_ab += w * scores[i];
+            h_bb += w;
+        }
+
+        h_aa += 1e-6;
+        h_bb += 1e-6;
+        let det = h_aa * h_bb - h_ab * h_ab;
+        if det.abs() < 1e-12 { break; }
+        let da = -(h_bb * g_a - h_ab * g_b) / det;
+        let db = -(h_aa * g_b - h_ab * g_a) / det;
+        a += da;
+        b += db;
+        if da.abs() < 1e-8 && db.abs() < 1e-8 { break; }
+    }
+
+    let threshold = if a.abs() > 1e-10 { -b / a } else { 0.5 };
+    (threshold, a, b)
+}
+
+/// Fit Beta calibration on scores+labels, return threshold.
+/// Learns logit(P) = a*ln(s) + b*(-ln(1-s)) + c via gradient descent.
+/// Returns (threshold, a, b, c).
+pub fn fit_beta_calibration(scores: &[f64], labels: &[i64]) -> (f64, f64, f64, f64) {
+    let n = scores.len();
+    if n == 0 { return (0.5, 1.0, 1.0, 0.0); }
+
+    let n_pos = labels.iter().filter(|&&l| l == 1).count() as f64;
+    let n_neg = n as f64 - n_pos;
+    if n_pos == 0.0 || n_neg == 0.0 { return (0.5, 1.0, 1.0, 0.0); }
+
+    let t_pos = (n_pos + 1.0) / (n_pos + 2.0);
+    let t_neg = 1.0 / (n_neg + 2.0);
+
+    let eps = 1e-10f64;
+    let x1: Vec<f64> = scores.iter().map(|&s| s.max(eps).ln()).collect();
+    let x2: Vec<f64> = scores.iter().map(|&s| -(1.0 - s).max(eps).ln()).collect();
+
+    let mut a = 1.0f64;
+    let mut b = 1.0f64;
+    let mut c = 0.0f64;
+
+    for _ in 0..100 {
+        let mut g_a = 0.0f64;
+        let mut g_b = 0.0f64;
+        let mut g_c = 0.0f64;
+        let mut h_aa = 0.0f64;
+        let mut h_bb = 0.0f64;
+        let mut h_cc = 0.0f64;
+
+        for i in 0..n {
+            let fval = a * x1[i] + b * x2[i] + c;
+            let p = if fval >= 0.0 {
+                1.0 / (1.0 + (-fval).exp())
+            } else {
+                let ef = fval.exp();
+                ef / (1.0 + ef)
+            };
+            let p = p.max(1e-15).min(1.0 - 1e-15);
+
+            let t = if labels[i] == 1 { t_pos } else { t_neg };
+            let d = p - t;
+            g_a += d * x1[i];
+            g_b += d * x2[i];
+            g_c += d;
+            let w = p * (1.0 - p);
+            h_aa += w * x1[i] * x1[i];
+            h_bb += w * x2[i] * x2[i];
+            h_cc += w;
+        }
+
+        h_aa += 1e-6;
+        h_bb += 1e-6;
+        h_cc += 1e-6;
+        a -= 0.1 * g_a / h_aa;
+        b -= 0.1 * g_b / h_bb;
+        c -= 0.1 * g_c / h_cc;
+        if (g_a / h_aa.max(1e-10)).abs() < 1e-6 && (g_b / h_bb.max(1e-10)).abs() < 1e-6 {
+            break;
+        }
+    }
+
+    // Binary search for threshold where a*ln(s) + b*(-ln(1-s)) + c = 0
+    let mut lo = 0.001f64;
+    let mut hi = 0.999f64;
+    for _ in 0..100 {
+        let mid = (lo + hi) / 2.0;
+        let val = a * mid.ln() + b * (-(1.0 - mid).ln()) + c;
+        if val < 0.0 { lo = mid; } else { hi = mid; }
+    }
+    let threshold = (lo + hi) / 2.0;
+
+    (threshold, a, b, c)
+}
+
+/// Fit empirical threshold: find lowest score where P(attack|score) >= 0.5.
+/// Returns (threshold, n_bins).
+pub fn fit_empirical_threshold(scores: &[f64], labels: &[i64]) -> (f64, usize) {
+    use std::collections::BTreeMap;
+    let mut bins: BTreeMap<i64, (u64, u64)> = BTreeMap::new(); // score_key → (normal, attack)
+
+    for (&s, &l) in scores.iter().zip(labels.iter()) {
+        let key = (s * 1_000_000.0) as i64; // round to 6 decimals
+        let entry = bins.entry(key).or_insert((0, 0));
+        if l == 1 { entry.1 += 1; } else { entry.0 += 1; }
+    }
+
+    let n_bins = bins.len();
+    let mut threshold = 0.5f64;
+    for (&key, &(normal, attack)) in &bins {
+        let total = normal + attack;
+        if total > 0 && (attack as f64 / total as f64) >= 0.5 {
+            threshold = key as f64 / 1_000_000.0;
+            break;
+        }
+    }
+
+    (threshold, n_bins)
+}
+
 /// Check if group coalescing is enabled (set WNN_COALESCE_GROUPS=1)
 fn use_coalesced_groups() -> bool {
     std::env::var("WNN_COALESCE_GROUPS").is_ok()
