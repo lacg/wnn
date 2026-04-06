@@ -257,3 +257,57 @@ Status: 112 flows created, pending (starts after CICIDS)
 - BestF1/BestFPR/BestAcc/BestFit format: F1%/FPR%/Acc% of the genome with that best metric
 - Model size: architecture (connections) ~3KB, trained memory ~47MB (sparse, 32-bit neurons)
 - Some papers report 97-98% accuracy on the temporal split. CNN-BiLSTM (arxiv 2407.14945) was found to use a reshuffled split (16,467 test samples vs standard 82,332). Zoghi 2024 uses ensemble with preprocessing behind paywall.
+
+## CIC-IoT-2023 Fitness-Aligned Threshold Discovery (2026-04-05)
+
+### Key Finding: Threshold Maximization Must Match Fitness Function
+
+Previously, the threshold sweep maximized F1-macro at each evaluation step, while the GA
+optimized for weighted fitness (CE/F1/FPR/Acc). This misalignment caused the GA to receive
+misleading FPR signals. Fix: threshold sweep now maximizes the same weighted fitness function
+the GA uses for selection. Result: GA discovers diverse architectures with genuine F1/FPR tradeoffs.
+
+### Diverse Architectures Found by Fitness-Aligned GA
+
+Genomes discovered during FITTHRESH weight sweep (1.3M subsample, K-fold on 80% train):
+
+```
+Genome     | Strategy              | F1     | FPR   | Acc    | Model Size | Concept
+-----------|-----------------------|--------|-------|--------|------------|---------------------------
+500n/4b    | Many simple voters    | 72.47% | 1.44% | 79.34% | 500 bytes  | 500 × 16-address tables
+200n/4b    | Medium sweet spot     | 72.17% | 1.40% | 79.01% | 800 bytes  | 200 × 16-address tables
+5n/28b     | Few complex voters    | 74.60% | 1.82% | 81.54% | ~335MB     | 5 × 268M-address tables
+```
+
+These were GA elites found during search — not the final best genomes. Shows that aligned
+fitness signals enable architectural diversity (dense vs sparse memory tradeoffs).
+
+### 200n/4b Genome on Full 46M CIC-IoT-2023 Dataset
+
+Single genome evaluation (no GA evolution on 46M — genome found on 1.3M subsample):
+- Dataset: 30.8M train, 7.7M eval (merged test+val)
+- Train: 878K normal, 29.9M attack
+
+```
+Threshold                      |      t |       F1 |      FPR |      Acc
+train_cal (F1-max)             | 0.6756 |   83.49% |   16.97% |   97.78%
+train_cal (fitness-max)        | 0.7131 |   82.33% |    6.67% |   97.27%
+val_cal oracle (F1-max)        | 0.6619 |   83.92% |   18.79% |   97.91%
+val_cal oracle (fit-max)       | 0.7544 |   78.62% |    1.74% |   96.15%
+```
+
+### Literature Comparison (Neto et al. 2023, same dataset, random 80/20)
+
+```
+Method                    | Acc    | F1     | FPR   | Model Size
+Perceptron (Neto 2023)    | 98.18% | 81.05% | —     | ~10KB
+Our WNN (fitness-max)     | 97.27% | 82.33% | 6.67% | 800 bytes
+Our WNN (oracle fit-max)  | 96.15% | 78.62% | 1.74% | 800 bytes
+RF (Neto 2023)            | 99.68% | 96.53% | —     | ~50MB
+DNN (Neto 2023)           | 99.44% | 94.03% | —     | ~5MB
+AdaBoost (Neto 2023)      | 99.59% | 95.63% | —     | ~10MB
+Logistic Regression       | 98.90% | 87.63% | —     | ~1KB
+```
+
+Beats Perceptron on F1 (82.33% vs 81.05%) with 12.5x smaller model (800 bytes vs ~10KB).
+Reports FPR which literature does not measure.
