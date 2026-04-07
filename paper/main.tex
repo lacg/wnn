@@ -775,11 +775,18 @@ $O(1)$ lookup-table implementation: each neuron stores all 16 possible
 addresses directly, totalling 3.1\,KB of LUT-based ROM (200~neurons
 $\times$~16~entries $\times$~1~byte). We synthesize this configuration
 on the same Xilinx Zynq~Z-7020 used for the UNSW-NB15 and CICIDS2017
-designs; the resource and timing results are reported in
-Table~\ref{tab:fpga} alongside the existing dense and sparse entries.
-% TODO after EC2 Vivado run completes:
-% - Add CIC-IoT row to tab:fpga: 200n 4b dense, LUTs, Fmax, latency from synth report
-% - Update the prose above to cite the actual LUT count
+designs (Table~\ref{tab:fpga}). The synthesized design uses
+\textbf{154 LUTs} (0.29\% of the device), 8 flip-flops, and zero
+BRAMs/DSPs, with single-cycle direct-lookup latency of \textbf{12.7\,ns}
+at $F_\text{max}{=}78$\,MHz. The longer combinational path versus the
+12-bit dense CICIDS and UNSW configurations (104~LUTs / 91\,MHz and
+59~LUTs / 94\,MHz respectively) reflects the deeper accumulator tree
+across 200~neurons; throughput remains 78\,MS/s, well above the
+12.5\,MS/s required for 100\,Gbps line-rate inspection.
+The synthesis was performed with the 1.3M-subsample-trained memory
+contents; resource and timing results would be essentially identical
+for the 46M-trained version, since architecture and connectivity are
+unchanged.
 
 % TODO after PUB50-112 completes:
 % - Update Table~\ref{tab:ciot-phase} with the full n=112 numbers (currently n=32 partial)
@@ -1020,15 +1027,20 @@ Post-synthesis estimates; place-and-route typically adds less than
 
 \paragraph{Comparison with FWIW.}
 Table~\ref{tab:fpga} summarizes the resource--accuracy trade-off across
-the two FPGA-synthesized configurations (UNSW-NB15 and CICIDS2017).
-FWIW achieves the smallest footprint (192 bytes, 269 LUTs)
+the three FPGA-synthesized datasets (UNSW-NB15, CICIDS2017, and
+CIC-IoT-2023). FWIW achieves the smallest footprint (192 bytes, 269 LUTs)
 through Bloom filter neurons with random connections.  Our evolved
 connections require more resources but deliver lower false-positive rates
 and comparable or higher accuracy.  On CICIDS2017, our 12-bit dense
 configuration matches FWIW's accuracy class with 3$\times$ lower FPR
 (0.50\% vs.\ 1.57\%), while the sparse configuration achieves 99.59\% F1.
 On UNSW-NB15, an 8-bit genome with just 20 neurons (1.3\,KB) achieves
-93.11\% F1, fitting on the smallest FPGAs.
+93.11\% F1, fitting on the smallest FPGAs. On CIC-IoT-2023, the
+4-bit dense configuration (200 neurons, 3.1\,KB) consumes only 154
+LUTs --- still 1.7$\times$ smaller than FWIW's 269 LUTs --- and
+achieves the lowest FPR (1.96\%) of any IDS WNN reported on this
+benchmark, at the cost of a more challenging classification task (the
+benchmark mixes 33 attack categories with widely varying signatures).
 
 \begin{table}[ht!]
 \centering
@@ -1055,10 +1067,13 @@ Dataset (split) & Config & F1 & FPR & Acc & $N$ & LUTs (\%) & Fmax & Latency \\
 \midrule
 \shortstack[l]{UNSW-NB15\\(random)} & 83n (12b dense)$^\S$ & 93.69\% & 0.63\% & \textbf{99.04\%} & 83 & \textbf{59 (0.11\%)} & 94\,MHz & \textbf{10.7\,ns} \\
 \midrule
+\shortstack[l]{CIC-IoT-2023\\(random)$^\dag$} & 200n (4b dense)$^\S$ & 73.34\% & 1.96\% & 80.30\% & 200 & 154 (0.29\%) & 78\,MHz & 12.7\,ns \\
+\midrule
 \shortstack[l]{UNSW-NB15\\(random$^*$)} & FWIW~\cite{susskind2023fwiw} & --- & 1.57\% & 98.50\% & ${\sim}$30 & 269 & 740\,MHz & 10.8\,ns \\
 \bottomrule
 \multicolumn{9}{l}{\small $^\S$Dense $O(1)$ lookup; all others use $O(\log n)$ sparse search.}\\
-\multicolumn{9}{l}{\small $^*$90/10, deduplicated, oversampled. $N$\,=\,neurons. 0 BRAMs, 0 DSPs for all designs.}
+\multicolumn{9}{l}{\small $^*$90/10, deduplicated, oversampled. $N$\,=\,neurons. 0 BRAMs, 0 DSPs for all designs.}\\
+\multicolumn{9}{l}{\small $^\dag$Trained on the 1.3M random subsample for FPGA synthesis. The same architecture trained on the full 46M dataset achieves 82.33\% F1 (Table~\ref{tab:ciot-46m}).}
 \end{tabular}}
 \end{table}
 
