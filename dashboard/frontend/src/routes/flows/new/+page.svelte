@@ -18,6 +18,7 @@
   let bitwiseNeuronSampleRate = 0.25;
 
   // IDS-specific config
+  let idsDataset = 'unsw-nb15';
   let idsClassification = 'binary';
   let idsSingleCluster = true;
   let idsNBits = 8;
@@ -35,6 +36,11 @@
   let idsMaxBitDelta = 0;
   let idsNeuronSampleRate = 0.25;
   let idsBalanceClasses = true;
+  // Single-genome eval mode: skip GA Neurons, force min=max for both bits/neurons.
+  // Useful for ad-hoc evaluations like the 46M Pareto sweep.
+  let idsSingleGenome = false;
+  let idsSingleNeurons = 200;
+  let idsSingleBits = 4;
 
   // Multi-stage config
   let numStages = 1;
@@ -664,7 +670,24 @@
           phases.map((exp) => ({ ...exp, params: getSearchParams(exp, stageIdx) }))
         );
       } else {
-        enrichedExperiments = singleStagePhases.map((exp) => ({
+        let phasesToUse = singleStagePhases;
+        // In IDS single-genome mode, drop GA Neurons (and any other GA/TS refinement)
+        // and keep only the grid_search phase (which will evaluate the single point).
+        if (isIDS && idsSingleGenome) {
+          phasesToUse = singleStagePhases.filter((p) => p.phase_type === 'grid_search');
+          if (phasesToUse.length === 0) {
+            // Fallback: synthesize a grid_search phase if none was generated
+            phasesToUse = [{
+              name: 'Grid Search (1 point)',
+              experiment_type: 'grid_search',
+              optimize_bits: false,
+              optimize_neurons: false,
+              optimize_connections: false,
+              phase_type: 'grid_search',
+            } as PhaseSpec];
+          }
+        }
+        enrichedExperiments = phasesToUse.map((exp) => ({
           ...exp, params: getSearchParams(exp, 0),
         }));
       }
@@ -742,6 +765,7 @@
         }
       } else if (isIDS) {
         params.architecture_type = 'ids';
+        params.ids_dataset = idsDataset;
         // Split combined classification into classification + ids_arch_type
         const isBitwiseIds = idsClassification === 'multi_bitwise';
         const classMap: Record<string, string> = {
@@ -765,11 +789,19 @@
         if (idsFeatureSelection === 'top20_split') {
           params.ids_rest_bits = idsRestBits;
         }
-        params.min_bits = idsMinBits;
-        params.max_bits = idsMaxBits;
-        params.min_neurons = idsMinNeurons;
-        params.max_neurons = idsMaxNeurons;
-        if (idsMaxBitDelta > 0) params.max_bit_delta = idsMaxBitDelta;
+        if (idsSingleGenome) {
+          // Single-genome mode: collapse the grid to one (n, b) point
+          params.min_bits = idsSingleBits;
+          params.max_bits = idsSingleBits;
+          params.min_neurons = idsSingleNeurons;
+          params.max_neurons = idsSingleNeurons;
+        } else {
+          params.min_bits = idsMinBits;
+          params.max_bits = idsMaxBits;
+          params.min_neurons = idsMinNeurons;
+          params.max_neurons = idsMaxNeurons;
+          if (idsMaxBitDelta > 0) params.max_bit_delta = idsMaxBitDelta;
+        }
         params.neuron_sample_rate = idsNeuronSampleRate;
         params.balance_classes = idsBalanceClasses;
         params.ids_single_cluster = idsSingleCluster;
@@ -1294,7 +1326,46 @@
         {#if !isMultiStage}
           {#if isIDS}
             <div class="form-section">
-              <h2>IDS Configuration (UNSW-NB15)</h2>
+              <h2>IDS Configuration</h2>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="idsDataset">Dataset</label>
+                  <select id="idsDataset" bind:value={idsDataset}>
+                    <option value="unsw-nb15">UNSW-NB15</option>
+                    <option value="cicids2017">CICIDS2017</option>
+                    <option value="ciciot2023">CIC-IoT-2023 (1.3M subsample)</option>
+                    <option value="ciciot2023_full">CIC-IoT-2023 (full 46M)</option>
+                  </select>
+                  <span class="field-hint">
+                    {#if idsDataset === 'unsw-nb15'}175K train / 82K test (temporal)
+                    {:else if idsDataset === 'cicids2017'}2.3M train / 566K test (random 80/20)
+                    {:else if idsDataset === 'ciciot2023'}1.07M train / 268K test (random 80/20)
+                    {:else}30.8M train / 7.7M test (random 80/20) — needs ~30 GB RAM
+                    {/if}
+                  </span>
+                </div>
+                <div class="form-group">
+                  <label for="idsSingleGenome">
+                    <input type="checkbox" id="idsSingleGenome" bind:checked={idsSingleGenome} />
+                    Single Genome Mode
+                  </label>
+                  <span class="field-hint">Skip GA, evaluate one (neurons, bits) point only — for ad-hoc evals like the 46M sweep</span>
+                </div>
+              </div>
+              {#if idsSingleGenome}
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="idsSingleNeurons">Neurons</label>
+                    <input type="number" id="idsSingleNeurons" bind:value={idsSingleNeurons} min="1" max="1000" />
+                    <span class="field-hint">Single neuron count for this eval</span>
+                  </div>
+                  <div class="form-group">
+                    <label for="idsSingleBits">Bits</label>
+                    <input type="number" id="idsSingleBits" bind:value={idsSingleBits} min="2" max="34" />
+                    <span class="field-hint">Single address width for this eval ({idsSingleNeurons * (1 << idsSingleBits) * 2 / 8} bytes total)</span>
+                  </div>
+                </div>
+              {/if}
               <div class="form-row">
                 <div class="form-group">
                   <label for="idsClassification">Classification</label>
