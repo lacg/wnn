@@ -23,11 +23,17 @@ import urllib.request
 
 def build_flow_request(name: str, description: str, neurons: int, bits: int,
                        seed: int, dataset: str) -> dict:
-	"""Build the POST body for a single-genome 46M evaluation flow.
+	"""Build the POST body for a TRULY single-genome 46M evaluation flow.
 
-	Mirrors the PUB50 ciciot flow config (balanced fitness weights,
-	fitness-aligned threshold, 5x K-fold) but constrains the grid to a
-	single (neurons, bits) point and skips GA refinement.
+	Two critical settings to make this a real "1 genome" eval (not 55):
+	1. Explicit single-element grids (neurons_grid=[N], bits_grid=[B])
+	   bypass the worker's auto-grid expansion which turns min=max=200
+	   into the bounds list [200, 200] and then expands to a 2x2 grid of
+	   duplicates.
+	2. population_size=1 prevents the grid_search phase from expanding
+	   each cell into a 14-genome population for fitness ranking.
+
+	Result: exactly 1 genome trained, 1 set of metrics reported.
 	"""
 	return {
 		"name": name,
@@ -42,7 +48,11 @@ def build_flow_request(name: str, description: str, neurons: int, bits: int,
 				"ids_feature_selection": "top20",
 				"ids_classification": "binary",
 
-				# Single-point grid (not a real grid)
+				# True single-point grid: explicit single-element lists
+				# (these take precedence over min/max which would otherwise
+				# auto-expand to a duplicated [N, N] / [B, B] grid)
+				"neurons_grid": [neurons],
+				"bits_grid": [bits],
 				"min_neurons": neurons,
 				"max_neurons": neurons,
 				"min_bits": bits,
@@ -74,17 +84,18 @@ def build_flow_request(name: str, description: str, neurons: int, bits: int,
 				"threshold_start": 0,
 				"threshold_step": 1,
 
-				# GA settings (only used by Grid Search for population init)
-				"ga_generations": 1,  # minimal — Grid Search uses pop_size combinations
-				"population_size": 50,
-				"neighbors_per_iter": 50,
+				# Single-genome: pop_size=1 disables population expansion.
+				# ga_generations=1 keeps GA infrastructure happy without iterating.
+				"ga_generations": 1,
+				"population_size": 1,
+				"neighbors_per_iter": 1,
 				"patience": 5,
-				"fitness_percentile": 0.75,
+				"fitness_percentile": 1.0,
 				"cluster_crossover_ratio": 0.5,
 				"assortative_mating_ratio": 0.85,
 				"pool_shuffle_ratio": 0.8,
 				"phase_order": "neurons_first",
-				"adaptation_iterations": 50,
+				"adaptation_iterations": 1,
 				"min_accuracy_floor": 0,
 
 				# Reproducibility
