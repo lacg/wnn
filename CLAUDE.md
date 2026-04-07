@@ -958,11 +958,17 @@ When asked about data or results, show ACTUAL values from the database — never
 
 ### Rule 7: Results Breakdown Format
 When asked for "update results" or "how are the runs going", show the **full breakdown**:
-- **10 tables**: Grid Search × [best_f1, best_fpr, best_acc, best_ce, best_fitness] + GA Neurons × [best_f1, best_fpr, best_acc, best_ce, best_fitness]
-- **Each table broken by all 7 threshold modes**: train_cal, fixed_05, platt, beta, empirical, empirical_cumulative, val_cal (oracle)
-- **Columns in every row**: F1 mean ±std, FPR mean ±std, Acc mean ±std, Neurons mean ±std, Bits mean ±std
-- **Format**: Use plain text tables with column separators (pipe-delimited with dashes), NOT markdown tables (which may not render). Use code blocks for tables.
-- **Summary line before each table**: total runs, total duration, average duration per run
+- **5 tables**: one per genome type — `best_f1`, `best_fpr`, `best_acc`, `best_ce`, `best_fitness`
+- **Side-by-side Grid Search vs GA Neurons** layout — each table compares both phases inline
+- **Header block above each table** (two lines, phases do not share neurons/bits):
+  - `Grid Search : NNN±SD neurons | BB±SD bits`
+  - `GA Neurons  : NNN±SD neurons | BB±SD bits`
+- **Rows**: all 7 threshold modes in order: `train_cal, fixed_05, platt, beta, empirical, empirical_cumulative, val_cal`
+- **Columns** (6 data columns, 3 metric pairs): `F1 Grid | F1 GA | FPR Grid | FPR GA | Acc Grid | Acc GA` — all as `mean±std` in percent
+- **Group separators**: pipe `|` between metric pairs (F1 / FPR / Acc) for easy scanning
+- **Format**: plain text tables with column separators (pipe-delimited with dashes), NOT markdown tables (which may not render). Use code blocks.
+- **Top-of-report header** (once, before all 5 tables): completed/total, total duration, avg duration per run, latest done timestamp (DD/MM/YYYY HH:MM UTC)
+- **Per-table summary line**: `genome_type  (runs: N/total)`
 - Store results in `docs/ids_results.md` following the existing format
 
 ### Rule 6: Full-Stack Tracing
