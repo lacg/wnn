@@ -967,7 +967,7 @@ When asked for "update results" or "how are the runs going", show the **full bre
 - **Columns** (6 data columns, 3 metric pairs): `F1 Grid | F1 GA | FPR Grid | FPR GA | Acc Grid | Acc GA` — all as `mean±std` in percent
 - **Group separators**: pipe `|` between metric pairs (F1 / FPR / Acc) for easy scanning
 - **Format**: plain text tables with column separators (pipe-delimited with dashes), NOT markdown tables (which may not render). Use code blocks.
-- **Top-of-report header** (once, before all 5 tables): completed/total, total duration, avg duration per run, latest done timestamp (DD/MM/YYYY HH:MM UTC)
+- **Top-of-report header** (once, before all 5 tables): completed/total, total duration, avg duration per run, latest done timestamp (DD/MM/YYYY HH:MM UTC), and ETA computed as `latest_done + remaining * avg_duration` in both UTC and ET (DD/MM/YYYY HH:MM)
 - **Per-table summary line**: `genome_type  (runs: N/total)`
 - Store results in `docs/ids_results.md` following the existing format
 
