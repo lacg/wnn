@@ -844,6 +844,10 @@ class FlowWorker:
         elif dataset_name == "ciciot2023":
             from wnn.ids.ciciot2023 import load_ciciot2023
             full_dataset = load_ciciot2023(n_bits=n_bits, split=split, feature_selection=feature_selection)
+        elif dataset_name == "ciciot2023_full":
+            # Full 46.7M-record CIC-IoT-2023 from lacg030175/CIC-IoT-2023-full
+            from wnn.ids.ciciot2023 import load_ciciot2023
+            full_dataset = load_ciciot2023(n_bits=n_bits, split=split, feature_selection=feature_selection, dataset_size="full")
         else:
             full_dataset = load_unsw_nb15(n_bits=n_bits, split=split, feature_selection=feature_selection, rest_bits=rest_bits)
 

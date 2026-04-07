@@ -51,14 +51,21 @@ TOP20_RF_FEATURES = [
 # Use shared VALID_FEATURE_SELECTIONS from dataset.py
 
 HF_DATASET_ID = "lacg030175/CIC-IoT-2023"
+HF_DATASET_FULL_ID = "lacg030175/CIC-IoT-2023-full"
 
 
-def _load_from_huggingface(config: str) -> tuple[pd.DataFrame, pd.DataFrame, list[str], pd.DataFrame | None]:
-	"""Load train/test(/validation) from our published HuggingFace dataset."""
+def _load_from_huggingface(config: str, dataset_size: str = "subsample") -> tuple[pd.DataFrame, pd.DataFrame, list[str], pd.DataFrame | None]:
+	"""Load train/test(/validation) from our published HuggingFace dataset.
+
+	Args:
+		config: HF dataset config name (e.g., "random", "random_3way").
+		dataset_size: "subsample" (default, ~1.3M rows) or "full" (~46M rows).
+	"""
 	from datasets import load_dataset
 
-	print(f"  Loading from HuggingFace: {HF_DATASET_ID} ({config})...")
-	ds = load_dataset(HF_DATASET_ID, config)
+	repo_id = HF_DATASET_FULL_ID if dataset_size == "full" else HF_DATASET_ID
+	print(f"  Loading from HuggingFace: {repo_id} ({config})...")
+	ds = load_dataset(repo_id, config)
 	df_train = ds["train"].to_pandas()
 	df_test = ds["test"].to_pandas()
 	df_val = ds["validation"].to_pandas() if "validation" in ds else None
@@ -99,11 +106,13 @@ def load_ciciot2023(
 	split: str = "random",
 	feature_selection: str = "all",
 	rest_bits: Optional[int] = None,
+	dataset_size: str = "subsample",
 ) -> IDSDataset:
 	"""Load CIC-IoT-2023 dataset with thermometer encoding.
 
 	Splits:
 	- "random" (default): 80/20 stratified random split
+	- "random_3way": 80/10/10 stratified split (train/test/validation)
 
 	Note: No temporal split available (data organized by attack type, not time).
 
@@ -115,18 +124,23 @@ def load_ciciot2023(
 	Args:
 		n_bits: bits per numeric feature for thermometer encoding.
 		method: thermometer encoding strategy.
-		split: "random" (only option for this dataset).
+		split: "random" or "random_3way".
 		feature_selection: "all", "top20", or "top20_split".
 		rest_bits: bits for non-top features in top20_split (defaults to n_bits).
+		dataset_size: "subsample" (default, ~1.3M rows) or "full" (~46M rows from
+			lacg030175/CIC-IoT-2023-full).
 
 	Returns:
 		IDSDataset with binary-encoded features and labels.
 	"""
 	if split not in ("random", "random_3way"):
 		raise ValueError(f"CIC-IoT-2023 only supports 'random' or 'random_3way' split, got '{split}'")
+	if dataset_size not in ("subsample", "full"):
+		raise ValueError(f"dataset_size must be 'subsample' or 'full', got '{dataset_size}'")
 
-	print(f"Loading CIC-IoT-2023 (split={split})...")
-	df_train, df_test, common_features, df_val = _load_from_huggingface(split)
+	size_label = "FULL 46M" if dataset_size == "full" else "1.3M subsample"
+	print(f"Loading CIC-IoT-2023 ({size_label}, split={split})...")
+	df_train, df_test, common_features, df_val = _load_from_huggingface(split, dataset_size)
 
 	# Load ranked features (from HuggingFace for this dataset)
 	top20 = _load_ranked_features()

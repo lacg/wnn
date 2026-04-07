@@ -315,7 +315,8 @@
 				<option value="">All Datasets</option>
 				<option value="unsw-nb15">UNSW-NB15</option>
 				<option value="cicids2017">CICIDS2017</option>
-				<option value="ciciot2023">CIC-IoT-2023</option>
+				<option value="ciciot2023">CIC-IoT-2023 (1.3M subsample)</option>
+				<option value="ciciot2023_full">CIC-IoT-2023 (full 46M)</option>
 			</select>
 		</div>
 		<div class="filter-group">

@@ -273,8 +273,8 @@ data/
 checkpoints
 results_*.json
 
-# Experiment results (transient, regenerated per run)
-experiments/
+# Experiment results (transient, regenerated per run) — root-level only
+/experiments/
 
 # Ad-hoc experiment runners (tracked runners are in project root with proper names)
 run_bitwise_experiment.py
@@ -316,8 +316,8 @@ fwiw-reference/
 # DB (symlinked to external SSD)
 db
 
-# Venv symlink
-wnn
+# Venv symlink (root-level only — don't match src/wnn/)
+/wnn
 
 # FPGA exports (generated, large binary .mem files)
 fpga/export/
