@@ -35,8 +35,12 @@ def load_dataset(ids_dataset: str, ids_split: str, n_bits: int, feature_selectio
 		raise ValueError(f"Unknown dataset: {ids_dataset}")
 
 
-def get_genome_connections(db_path: str, flow_id: int, genome_type: str = "best_fitness"):
-	"""Get genome connections and config from the database."""
+def get_genome_connections(db_path: str, flow_id: int, genome_type: str = "best_fitness", phase: str | None = None):
+	"""Get genome connections and config from the database.
+
+	If phase is None, prefers GA Neurons then falls back to Grid Search.
+	If phase is "ga_neurons" or "grid_search", uses only that phase.
+	"""
 	db = sqlite3.connect(db_path)
 
 	# Get flow config
@@ -46,10 +50,21 @@ def get_genome_connections(db_path: str, flow_id: int, genome_type: str = "best_
 	config = json.loads(row[0])
 	params = config["params"]
 
+	# Build phase preference list
+	phase_to_name = {
+		"ga_neurons": "GA Neurons",
+		"grid_search": "Grid Search (neurons x bits)",
+	}
+	if phase is not None:
+		if phase not in phase_to_name:
+			raise ValueError(f"Unknown phase: {phase}. Use 'ga_neurons' or 'grid_search'.")
+		phase_order = [phase_to_name[phase]]
+	else:
+		phase_order = ["GA Neurons", "Grid Search (neurons x bits)"]
+
 	# Get the genome from validation_summaries -> genomes
-	# Try GA Neurons first, then Grid Search
 	genome = None
-	for exp_name in ["GA Neurons", "Grid Search (neurons x bits)"]:
+	for exp_name in phase_order:
 		row = db.execute("""
 			SELECT vs.genome_hash, g.total_neurons, g.connections_json, g.tiers_json
 			FROM validation_summaries vs
@@ -68,7 +83,8 @@ def get_genome_connections(db_path: str, flow_id: int, genome_type: str = "best_
 			break
 
 	if not genome:
-		raise ValueError(f"No {genome_type} genome found for flow {flow_id}")
+		phase_label = phase if phase else "any phase"
+		raise ValueError(f"No {genome_type} genome found for flow {flow_id} in {phase_label}")
 
 	# Parse connections
 	all_conns = list(map(int, genome["connections_csv"].split(",")))
@@ -219,13 +235,15 @@ def main():
 						help="Genome type: best_fitness, best_f1, best_acc, best_ce, best_fpr")
 	parser.add_argument("--db", default="db/wnn.db", help="Database path")
 	parser.add_argument("--output", default=None, help="Output directory")
+	parser.add_argument("--phase", default=None, choices=["ga_neurons", "grid_search"],
+		help="Force a specific phase. Default tries GA Neurons then Grid Search.")
 	args = parser.parse_args()
 
 	db_path = str(Path(__file__).resolve().parents[2] / args.db)
 
 	# 1. Get genome connections and flow config
 	print(f"Loading genome from flow {args.flow_id}...")
-	params, genome, connections = get_genome_connections(db_path, args.flow_id, args.genome_type)
+	params, genome, connections = get_genome_connections(db_path, args.flow_id, args.genome_type, args.phase)
 
 	n_bits = params["ids_n_bits"]
 	dataset_name = params.get("ids_dataset", "unsw-nb15")

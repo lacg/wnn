@@ -87,12 +87,14 @@ def main():
 	parser.add_argument("--genome-type", default="best_fitness")
 	parser.add_argument("--db", default="db/wnn.db")
 	parser.add_argument("--output", default=None)
+	parser.add_argument("--phase", default=None, choices=["ga_neurons", "grid_search"],
+		help="Force a specific phase. Default tries GA Neurons then Grid Search.")
 	args = parser.parse_args()
 
 	db_path = str(Path(__file__).resolve().parents[2] / args.db)
 
 	print(f"Loading genome from flow {args.flow_id}...")
-	params, genome, connections = get_genome_connections(db_path, args.flow_id, args.genome_type)
+	params, genome, connections = get_genome_connections(db_path, args.flow_id, args.genome_type, args.phase)
 
 	n_bits = params["ids_n_bits"]
 	dataset_name = params.get("ids_dataset", "unsw-nb15")

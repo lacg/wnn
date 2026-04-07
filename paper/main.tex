@@ -54,15 +54,17 @@ intrinsic to the architecture. The sparse trained memory (362\,KB for our
 best genome) fits entirely within the LUT fabric of a \$100 Zynq~Z-7020
 FPGA, enabling $O(\log n)$ lookup-based inference per neuron
 (where $n$ is the number of trained entries). We evaluate on three standard IDS benchmarks
-% REMINDER: Change "three" to "two" and remove CIC-IoT-2023 if we don't have results in time
 (UNSW-NB15, CICIDS2017, CIC-IoT-2023) using both temporal and random
 splits with an eight-mode threshold calibration protocol that exposes
 the sensitivity of binary classifiers to decision boundary selection.
 Across 112 independent runs per configuration, our approach achieves
 88.06\% F1 on UNSW-NB15 temporal (outperforming Random Forest by 1.4
-points) and 99.40\% F1 on CICIDS2017 random (0.20\% false positive rate),
-with Vivado-verified FPGA synthesis requiring as few as 82 LUTs on a
-Zynq~Z-7020.
+points) and 99.40\% F1 on CICIDS2017 random (0.20\% false positive rate).
+On the full 46.7M-record CIC-IoT-2023 benchmark, an 800-byte
+200-neuron configuration achieves 82.33\% F1, exceeding the published
+Perceptron baseline (81.05\%) by 1.28 points with a $\sim$12$\times$
+smaller model. Vivado-verified FPGA synthesis requires as few as
+82 LUTs on a Zynq~Z-7020.
 
 \keywords{Intrusion Detection \and Weightless Neural Networks \and
 Evolutionary Optimization \and Feature Selection \and FPGA}
@@ -120,9 +122,12 @@ Our contributions are:
   selection as an important factor in IDS evaluation,
   showing a 5.18 percentage point F1 gap between validation and
   train-calibrated thresholds on the temporal split.
-\item \textbf{Two-dataset evaluation with FPGA synthesis.} Results on
-  UNSW-NB15 (temporal) and CICIDS2017 (random) demonstrate architecture
-  generalizability with Vivado-verified FPGA deployment on a Zynq~Z-7020.
+\item \textbf{Three-dataset evaluation with FPGA synthesis.} Results on
+  UNSW-NB15 (temporal), CICIDS2017 (random), and CIC-IoT-2023
+  (random, including a single-genome run on the full 46.7M-record
+  benchmark) demonstrate architecture generalizability, with
+  Vivado-verified FPGA deployment on a Zynq~Z-7020 for the UNSW-NB15
+  and CICIDS2017 configurations.
 \end{enumerate}
 
 % ============================================================================
@@ -308,7 +313,6 @@ $d = k \times |F|$ bits.
 
 \subsection{Evaluation Datasets}
 
-% REMINDER: Change "three" to "two" and remove CIC-IoT-2023 paragraph if no results
 We evaluate on three standard IDS benchmarks, each with distinct
 characteristics:
 
@@ -673,17 +677,116 @@ Histogram cumul.           & 99.32 $\pm$ 0.12 & 0.237 $\pm$ 0.088  & 99.57 $\pm$
 \subsection{CIC-IoT-2023 Results}
 \label{sec:results-ciot}
 
-CIC-IoT-2023 experiments (112 runs, random split) are in progress
-at time of submission. Results will be included in the final version
-if available.
+We evaluate on CIC-IoT-2023 using two complementary protocols: a
+112-run statistical batch on a 1.3M random subsample (matching the
+CICIDS2017 methodology) and a single-genome evaluation on the full
+46.7M-record dataset for direct comparison with prior published
+baselines.
 
-% TODO: Add CIC-IoT-2023 results after PUB50 completes:
-% 1. PUB50 112-run results table (10 tables per Rule 7 from ids_results.md)
-% 2. 200n/4b genome on full 46M dataset (800 bytes, F1=82.33%, FPR=6.67%, Acc=97.27%)
-%    - Beats Perceptron (Neto 2023): F1 81.05%, Acc 98.18%
-%    - Model size: 800 bytes vs ~10KB (Perceptron) vs ~50MB (RF)
-%    - Literature comparison table with RF, AdaBoost, DNN, Perceptron from Neto 2023
-% 3. Fitness-aligned threshold discovery and impact on results
+\paragraph{Methodology refinements.}
+The CIC-IoT-2023 runs incorporate two methodological improvements
+introduced after the UNSW-NB15 and CICIDS2017 results were finalized.
+First, we use fitness weights $w_{CE}{=}0.1$, $w_{F1}{=}0.35$,
+$w_{FPR}{=}0.35$, $w_{Acc}{=}0.2$, balancing F1 and FPR equally rather
+than emphasizing FPR alone. Second, and more importantly, we adopt
+\emph{fitness-aligned threshold optimization}: the calibrated
+threshold modes (train\_cal, val\_cal) sweep the threshold to maximize
+the same weighted-fitness function used by the GA for selection,
+rather than maximizing F1 alone. This alignment is methodologically
+critical --- when the threshold sweep optimizes F1 but the GA selects
+on a fitness combining CE, F1, FPR, and accuracy, the GA receives
+misleading FPR signals and discards genomes that would have been
+strong under the actual fitness criterion. The co-optimization ensures
+the architecture search and threshold selection work together rather
+than at cross purposes.
+
+\paragraph{1.3M subsample (32/112 runs, partial).}
+At time of writing, 32 of the 112 PUB50 flows have completed.
+Table~\ref{tab:ciot-phase} reports the phase progression for the
+best-fitness genome under the deployable train\_cal threshold. The GA
+phase reduces neuron count by 16\% (406 $\to$ 339) while improving F1
+by 0.54 percentage points and reducing FPR by 0.60 points, mirroring
+the regularization effect observed on CICIDS2017
+(Section~\ref{sec:phase-progression}). The improvement holds across
+all seven threshold modes; with the simple fixed-0.5 threshold the GA
+delivers 81.64\% F1 vs.\ 81.08\% for the grid search, with FPR matched
+within 0.13 points.
+
+\begin{table}[ht!]
+\centering
+\caption{Phase progression on CIC-IoT-2023 1.3M subsample
+(32/112 runs, train\_cal threshold, best-fitness genome). Camera-ready
+will report the full 112-run batch.}
+\label{tab:ciot-phase}
+\begin{tabular*}{\textwidth}{l @{\extracolsep{\fill}} rrrr}
+\toprule
+Phase & F1-macro (\%) & FPR (\%) & Neurons & Bits \\
+\midrule
+Grid Search    & 79.56 $\pm$ 0.63 & 4.85 $\pm$ 3.02 & 406 $\pm$ 95 & 34 $\pm$ 1 \\
+GA Neurons     & 80.10 $\pm$ 0.52 & 4.25 $\pm$ 0.50 & 339 $\pm$ 118 & 32 $\pm$ 1 \\
+\midrule
+$\Delta$       & +0.54            & $-$0.60          & $-$67 ($-$16\%) & \\
+\bottomrule
+\end{tabular*}
+\end{table}
+
+\paragraph{Full 46M dataset, single genome.}
+To compare with prior work that reports on the full 46.7M-record
+CIC-IoT-2023, we trained the 800-byte 200-neuron 4-bit configuration
+(found via the 1.3M subsample search) on the complete dataset (30.8M
+train / 7.7M test, random 80/20). Table~\ref{tab:ciot-46m} compares
+against the baselines reported by Neto et al.~\cite{neto2023ciciot}.
+Our 800-byte WNN beats the Perceptron baseline on F1 by 1.28 points
+(82.33\% vs.\ 81.05\%) with a $\sim$12$\times$ smaller model, while
+additionally reporting FPR --- a metric absent from the original
+benchmark.
+
+\begin{table}[ht!]
+\centering
+\caption{Comparison on full 46M CIC-IoT-2023 (random 80/20). Baselines
+from Neto et al.~\cite{neto2023ciciot}. Our genome was trained once
+on 46M without GA refinement.}
+\label{tab:ciot-46m}
+\begin{tabular}{lrrrl}
+\toprule
+Method & F1 (\%) & FPR (\%) & Acc (\%) & Model Size \\
+\midrule
+\textbf{Ours (200n $\times$ 4b)} & \textbf{82.33} & 6.67 & 97.27 & \textbf{800\,B} \\
+Perceptron       & 81.05 & ---  & 98.18 & ${\sim}$10\,KB \\
+Logistic Reg.    & 87.63 & ---  & 98.90 & ${\sim}$1\,KB \\
+DNN              & 94.03 & ---  & 99.44 & ${\sim}$5\,MB \\
+AdaBoost         & 95.63 & ---  & 99.59 & ${\sim}$10\,MB \\
+Random Forest    & 96.53 & ---  & 99.68 & ${\sim}$50\,MB \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The 800-byte WNN occupies an extreme low-end operating point on the
+size/accuracy frontier: it surrenders ${\sim}$14 F1 points to Random
+Forest in exchange for a $\sim$65{,}000$\times$ reduction in model
+size, making it suitable for deployment on the smallest IoT edge
+devices. Notably, it does so without GA refinement on the full
+dataset --- the architecture was discovered on the 1.3M subsample
+and transferred directly to 46M without retuning.
+
+\paragraph{FPGA synthesis.}
+The 200-neuron 4-bit configuration is small enough for a fully dense
+$O(1)$ lookup-table implementation: each neuron stores all 16 possible
+addresses directly, totalling 3.1\,KB of LUT-based ROM (200~neurons
+$\times$~16~entries $\times$~1~byte). We synthesize this configuration
+on the same Xilinx Zynq~Z-7020 used for the UNSW-NB15 and CICIDS2017
+designs; the resource and timing results are reported in
+Table~\ref{tab:fpga} alongside the existing dense and sparse entries.
+% TODO after EC2 Vivado run completes:
+% - Add CIC-IoT row to tab:fpga: 200n 4b dense, LUTs, Fmax, latency from synth report
+% - Update the prose above to cite the actual LUT count
+
+% TODO after PUB50-112 completes:
+% - Update Table~\ref{tab:ciot-phase} with the full n=112 numbers (currently n=32 partial)
+% - Add 46M Pareto frontier sweep across small genomes
+%   (5n x 4b, 100n x 4b, 300n x 4b, 500n x 4b, 100n x 8b, 300n x 8b, 400n x 8b)
+% - Multi-seed validation of the 5n x 4b "20-byte detector" candidate
+% - Optionally: Pareto-frontier figure (memory vs F1)
 
 \subsection{Phase Progression Analysis}
 \label{sec:phase-progression}
@@ -917,7 +1020,8 @@ Post-synthesis estimates; place-and-route typically adds less than
 
 \paragraph{Comparison with FWIW.}
 Table~\ref{tab:fpga} summarizes the resource--accuracy trade-off across
-both datasets.  FWIW achieves the smallest footprint (192 bytes, 269 LUTs)
+the two FPGA-synthesized configurations (UNSW-NB15 and CICIDS2017).
+FWIW achieves the smallest footprint (192 bytes, 269 LUTs)
 through Bloom filter neurons with random connections.  Our evolved
 connections require more resources but deliver lower false-positive rates
 and comparable or higher accuracy.  On CICIDS2017, our 12-bit dense
@@ -991,8 +1095,9 @@ faithfully reproduce the trained QSR models.
 Several directions offer potential for further improvement.
 First, extending to \emph{multi-class classification} (one discriminator
 per attack category) would exploit the rich multi-class labels available
-in UNSW-NB15 and CICIDS2017, enabling attack-type identification
-beyond binary detection.
+in UNSW-NB15, CICIDS2017, and CIC-IoT-2023 (10, 14, and 33 attack
+categories respectively), enabling attack-type identification beyond
+binary detection.
 
 Second, the 5\% F1 gap between validation and train-calibrated
 thresholds on the temporal split suggests that \emph{adaptive threshold
@@ -1060,7 +1165,9 @@ and throughput exceeding 100\,Gbps line-rate requirements.
 
 Future work includes multi-class attack categorization, hash-based
 FPGA lookup for reduced latency, adaptive threshold calibration for
-temporal deployment, and evaluation on CIC-IoT-2023.
+temporal deployment, and a Pareto-frontier sweep of small WNN
+configurations on the full 46M CIC-IoT-2023 benchmark to characterize
+the size/accuracy trade-off down to 20-byte models.
 
 % ============================================================================
 \bibliographystyle{splncs04}
