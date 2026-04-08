@@ -257,5 +257,36 @@ PYEOF
 
 cat "$REPORT" >> "$LOG"
 log "Report written to $REPORT"
-notify "PUB50-2b 10-run verdict ready"
+
+# ============================================================================
+# AUTO-RATCHET: if verdict is CONFIRMED, queue 102 follow-up flows (seeds 11-112)
+# to complete the full 112-run PUB50-2b batch. If INCONCLUSIVE or NOT CONFIRMED,
+# do nothing and let the user decide.
+# ============================================================================
+if grep -q "2-BIT LIFT CONFIRMED" "$REPORT"; then
+	log "==== Verdict: CONFIRMED — auto-ratcheting to 102 follow-up flows ===="
+	log "Creating seeds 11-112 (102 more flows)..."
+	if python scripts/create_pub50_2b_batch.py \
+		--count 102 \
+		--start-seed 11 \
+		--queue 2>&1 | tee -a "$LOG"; then
+		created=$(sqlite3 "$DB" "SELECT COUNT(*) FROM flows WHERE name LIKE '%${BATCH_TAG}%' AND json_extract(config_json, '\$.params.seed') BETWEEN 11 AND 112;")
+		log "Auto-ratchet complete: ${created} additional flows queued (seeds 11-112)."
+		log "The full 112-run PUB50-2b batch is now in flight."
+		notify "PUB50-2b CONFIRMED — 102 follow-up flows auto-queued"
+	else
+		log "ERROR: auto-ratchet script failed. Check ${LOG} and run manually if desired."
+		notify "PUB50-2b CONFIRMED but auto-ratchet failed — run create script manually"
+	fi
+elif grep -q "INCONCLUSIVE" "$REPORT"; then
+	log "==== Verdict: INCONCLUSIVE — no auto-ratchet. Decision left to user. ===="
+	notify "PUB50-2b INCONCLUSIVE — see ${REPORT} for numbers, no ratchet queued"
+elif grep -q "2-BIT LIFT NOT CONFIRMED" "$REPORT"; then
+	log "==== Verdict: NOT CONFIRMED — no auto-ratchet. Frame 46M finding as scale-dependent. ===="
+	notify "PUB50-2b NOT CONFIRMED — 46M finding is scale-dependent, no ratchet"
+else
+	log "WARNING: verdict section unreadable — no auto-action taken."
+	notify "PUB50-2b verdict unreadable — check ${REPORT} manually"
+fi
+
 log "==== Watcher complete ===="
