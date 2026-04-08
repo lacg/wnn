@@ -22,7 +22,7 @@ import urllib.request
 
 
 def build_flow_request(name: str, description: str, neurons: int, bits: int,
-                       seed: int, dataset: str) -> dict:
+                       seed: int, dataset: str, thermometer_bits: int = 8) -> dict:
 	"""Build the POST body for a TRULY single-genome 46M evaluation flow.
 
 	Two critical settings to make this a real "1 genome" eval (not 55):
@@ -32,6 +32,9 @@ def build_flow_request(name: str, description: str, neurons: int, bits: int,
 	   duplicates.
 	2. population_size=1 prevents the grid_search phase from expanding
 	   each cell into a 14-genome population for fitness ranking.
+
+	The thermometer_bits parameter controls the input encoding width (8/16/32/64).
+	Default is 8-bit for backward compatibility with the original sweep.
 
 	Result: exactly 1 genome trained, 1 set of metrics reported.
 	"""
@@ -44,7 +47,7 @@ def build_flow_request(name: str, description: str, neurons: int, bits: int,
 				# Dataset
 				"ids_dataset": dataset,
 				"ids_split": "random",
-				"ids_n_bits": 8,
+				"ids_n_bits": thermometer_bits,
 				"ids_feature_selection": "top20",
 				"ids_classification": "binary",
 
@@ -147,6 +150,8 @@ def main():
 		help="ciciot2023 = 1.3M subsample, ciciot2023_full = 46M (default)")
 	parser.add_argument("--name", default=None,
 		help="Custom flow name suffix (default: auto-generated)")
+	parser.add_argument("--thermometer-bits", type=int, default=8,
+		help="Thermometer encoding width per feature (default: 8)")
 	parser.add_argument("--api-url", default="https://localhost:3000/api/flows",
 		help="Dashboard API URL (default: https://localhost:3000/api/flows)")
 	args = parser.parse_args()
@@ -154,11 +159,14 @@ def main():
 	# Auto-generate name if not provided
 	dataset_label = "46M" if args.dataset == "ciciot2023_full" else "1p3M"
 	suffix = f"-{args.name}" if args.name else ""
-	name = f"EVAL46M-{dataset_label}-{args.neurons}n{args.bits}b-s{args.seed}{suffix}"
+	# Include thermometer width in name only if non-default
+	thermo_label = f"-t{args.thermometer_bits}b" if args.thermometer_bits != 8 else ""
+	name = f"EVAL46M-{dataset_label}-{args.neurons}n{args.bits}b{thermo_label}-s{args.seed}{suffix}"
 
 	description = (
 		f"Single-genome evaluation: {args.neurons}n × {args.bits}b on "
-		f"{args.dataset} (seed={args.seed}). Grid Search with 1 point, no GA. "
+		f"{args.dataset} (seed={args.seed}, {args.thermometer_bits}b thermometer). "
+		f"Grid Search with 1 point, no GA. "
 		f"Memory footprint: {args.neurons * (1 << args.bits) * 2 // 8} bytes."
 	)
 
@@ -169,6 +177,7 @@ def main():
 		bits=args.bits,
 		seed=args.seed,
 		dataset=args.dataset,
+		thermometer_bits=args.thermometer_bits,
 	)
 
 	print(f"Creating flow: {name}")
