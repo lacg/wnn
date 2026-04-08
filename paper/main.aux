@@ -24,12 +24,9 @@
 \citation{neto2023ciciot}
 \citation{ludermir1999weightless}
 \citation{santiago2020fpga}
-\citation{susskind2023fwiw}
 \@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Thermometer Encoding}{4}{subsection.2.2}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Evaluation Datasets}{4}{subsection.2.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {3}Related Work}{4}{section.3}\protected@file@percent }
-\newlabel{sec:related}{{3}{4}{Related Work}{section.3}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}WNN-Based Intrusion Detection}{4}{subsection.3.1}\protected@file@percent }
+\citation{susskind2023fwiw}
 \citation{susskind2022bthowen}
 \citation{zoghi2024ids}
 \citation{mdpi2024enhanced}
@@ -39,6 +36,9 @@
 \citation{umuroglu2020logicnets}
 \citation{andronic2023polylut}
 \citation{susskind2023fwiw}
+\@writefile{toc}{\contentsline {section}{\numberline {3}Related Work}{5}{section.3}\protected@file@percent }
+\newlabel{sec:related}{{3}{5}{Related Work}{section.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}WNN-Based Intrusion Detection}{5}{subsection.3.1}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Machine Learning for IDS}{5}{subsection.3.2}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {3.3}FPGA-Based Network Security}{5}{subsection.3.3}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{\numberline {4}Architecture}{6}{section.4}\protected@file@percent }
@@ -58,10 +58,10 @@
 \newlabel{sec:results}{{6}{9}{Experimental Results}{section.6}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {6.1}UNSW-NB15 Temporal Results}{9}{subsection.6.1}\protected@file@percent }
 \newlabel{sec:results-unsw}{{6.1}{9}{UNSW-NB15 Temporal Results}{subsection.6.1}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces UNSW-NB15 temporal split results (112 runs, 8-bit thermometer, GA~Neurons best-fitness genome). Neurons: 232 $\pm $ 132, address bits: 32.}}{9}{table.1}\protected@file@percent }
-\newlabel{tab:unsw}{{1}{9}{UNSW-NB15 temporal split results (112 runs, 8-bit thermometer, GA~Neurons best-fitness genome). Neurons: 232 $\pm $ 132, address bits: 32}{table.1}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}CICIDS2017 Random Results}{10}{subsection.6.2}\protected@file@percent }
-\newlabel{sec:results-cicids}{{6.2}{10}{CICIDS2017 Random Results}{subsection.6.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}CICIDS2017 Random Results}{9}{subsection.6.2}\protected@file@percent }
+\newlabel{sec:results-cicids}{{6.2}{9}{CICIDS2017 Random Results}{subsection.6.2}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces UNSW-NB15 temporal split results (112 runs, 8-bit thermometer, GA~Neurons best-fitness genome). Neurons: 232 $\pm $ 132, address bits: 32.}}{10}{table.1}\protected@file@percent }
+\newlabel{tab:unsw}{{1}{10}{UNSW-NB15 temporal split results (112 runs, 8-bit thermometer, GA~Neurons best-fitness genome). Neurons: 232 $\pm $ 132, address bits: 32}{table.1}{}}
 \@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces CICIDS2017 random split results (99 of 112 runs, 16-bit thermometer, GA~Neurons best-fitness genome). Neurons: 194 $\pm $ 143, address bits: 32--34. Final numbers will be updated when all 112 runs complete.}}{10}{table.2}\protected@file@percent }
 \newlabel{tab:cicids}{{2}{10}{CICIDS2017 random split results (99 of 112 runs, 16-bit thermometer, GA~Neurons best-fitness genome). Neurons: 194 $\pm $ 143, address bits: 32--34. Final numbers will be updated when all 112 runs complete}{table.2}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {6.3}CIC-IoT-2023 Results}{10}{subsection.6.3}\protected@file@percent }
@@ -70,45 +70,50 @@
 \citation{neto2023ciciot}
 \citation{neto2023ciciot}
 \citation{neto2023ciciot}
-\@writefile{toc}{\contentsline {paragraph}{1.3M subsample (32/112 runs, partial).}{11}{section*.3}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Phase progression on CIC-IoT-2023 1.3M subsample (32/112 runs, train\_cal threshold, best-fitness genome). Camera-ready will report the full 112-run batch.}}{11}{table.3}\protected@file@percent }
-\newlabel{tab:ciot-phase}{{3}{11}{Phase progression on CIC-IoT-2023 1.3M subsample (32/112 runs, train\_cal threshold, best-fitness genome). Camera-ready will report the full 112-run batch}{table.3}{}}
-\@writefile{toc}{\contentsline {paragraph}{Full 46M dataset, single genome.}{11}{section*.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{FPGA synthesis.}{11}{section*.5}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Comparison on full 46M CIC-IoT-2023 (random 80/20). Baselines from Neto et al.~\cite  {neto2023ciciot}. Our genome was trained once on 46M without GA refinement.}}{12}{table.4}\protected@file@percent }
-\newlabel{tab:ciot-46m}{{4}{12}{Comparison on full 46M CIC-IoT-2023 (random 80/20). Baselines from Neto et al.~\cite {neto2023ciciot}. Our genome was trained once on 46M without GA refinement}{table.4}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}Phase Progression Analysis}{12}{subsection.6.4}\protected@file@percent }
-\newlabel{sec:phase-progression}{{6.4}{12}{Phase Progression Analysis}{subsection.6.4}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Phase progression on CICIDS2017 (99 runs, val\_cal threshold, best-fitness genome).}}{12}{table.5}\protected@file@percent }
-\newlabel{tab:phase}{{5}{12}{Phase progression on CICIDS2017 (99 runs, val\_cal threshold, best-fitness genome)}{table.5}{}}
+\@writefile{toc}{\contentsline {paragraph}{1.3M subsample (43/112 runs, partial).}{11}{section*.3}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Phase progression on CIC-IoT-2023 1.3M subsample (43/112 runs, train\_cal threshold, best-fitness genome). Camera-ready will report the full 112-run batch.}}{11}{table.3}\protected@file@percent }
+\newlabel{tab:ciot-phase}{{3}{11}{Phase progression on CIC-IoT-2023 1.3M subsample (43/112 runs, train\_cal threshold, best-fitness genome). Camera-ready will report the full 112-run batch}{table.3}{}}
+\@writefile{toc}{\contentsline {paragraph}{Full 46M dataset, Pareto frontier across memory tiers.}{11}{section*.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Key observations from the Pareto frontier.}{11}{section*.5}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Pareto frontier on the full 46M CIC-IoT-2023 (random 80/20). Single-genome runs with no GA on 46M; architectures transferred from the 1.3M subsample search. Baselines from Neto et al.~\cite  {neto2023ciciot}. ``--'' indicates a metric not reported by the original work.}}{12}{table.4}\protected@file@percent }
+\newlabel{tab:ciot-46m}{{4}{12}{Pareto frontier on the full 46M CIC-IoT-2023 (random 80/20). Single-genome runs with no GA on 46M; architectures transferred from the 1.3M subsample search. Baselines from Neto et al.~\cite {neto2023ciciot}. ``--'' indicates a metric not reported by the original work}{table.4}{}}
+\@writefile{toc}{\contentsline {paragraph}{Three operating modes of the same trained model.}{12}{section*.6}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Three operating modes of the 800-byte 200n $\times $ 4b model on the 46M CIC-IoT-2023 test set. The threshold is set at deployment time without retraining the underlying memory.}}{13}{table.5}\protected@file@percent }
+\newlabel{tab:ciot-modes}{{5}{13}{Three operating modes of the 800-byte 200n $\times $ 4b model on the 46M CIC-IoT-2023 test set. The threshold is set at deployment time without retraining the underlying memory}{table.5}{}}
+\@writefile{toc}{\contentsline {paragraph}{Address-tap saturation finding.}{13}{section*.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{FPGA synthesis.}{13}{section*.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}Phase Progression Analysis}{13}{subsection.6.4}\protected@file@percent }
+\newlabel{sec:phase-progression}{{6.4}{13}{Phase Progression Analysis}{subsection.6.4}{}}
 \citation{susskind2023fwiw}
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.5}Comparison with Baselines}{13}{subsection.6.5}\protected@file@percent }
-\newlabel{sec:baselines}{{6.5}{13}{Comparison with Baselines}{subsection.6.5}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces Comparison with baselines. ``Ours'' entries trained on identical data with same preprocessing. FWIW uses a different split protocol.}}{13}{table.6}\protected@file@percent }
-\newlabel{tab:baselines}{{6}{13}{Comparison with baselines. ``Ours'' entries trained on identical data with same preprocessing. FWIW uses a different split protocol}{table.6}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.6}Model Size Analysis}{13}{subsection.6.6}\protected@file@percent }
-\newlabel{sec:model-size}{{6.6}{13}{Model Size Analysis}{subsection.6.6}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {7}Discussion}{13}{section.7}\protected@file@percent }
-\newlabel{sec:discussion}{{7}{13}{Discussion}{section.7}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}Connectivity as Feature Selection}{13}{subsection.7.1}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {7}{\ignorespaces Deployed model sizes.}}{14}{table.7}\protected@file@percent }
-\newlabel{tab:model-size}{{7}{14}{Deployed model sizes}{table.7}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Threshold Sensitivity}{14}{subsection.7.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.3}Encoding Resolution Analysis}{14}{subsection.7.3}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Effect of thermometer encoding resolution on classification performance. (a)~CICIDS2017 F1-macro shows a clear knee at 16 bits, with diminishing returns beyond. (b)~The GA finds the fewest neurons at 16 bits, suggesting optimal information density. (c)~UNSW-NB15 temporal split shows no clear trend (high variance from only 2 runs per configuration). (d)~CICIDS2017 false positive rate is lowest around 16--26 bits.}}{15}{figure.2}\protected@file@percent }
-\newlabel{fig:therm_sweep}{{2}{15}{Effect of thermometer encoding resolution on classification performance. (a)~CICIDS2017 F1-macro shows a clear knee at 16 bits, with diminishing returns beyond. (b)~The GA finds the fewest neurons at 16 bits, suggesting optimal information density. (c)~UNSW-NB15 temporal split shows no clear trend (high variance from only 2 runs per configuration). (d)~CICIDS2017 false positive rate is lowest around 16--26 bits}{figure.2}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.4}FPGA Deployment}{15}{subsection.7.4}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces Phase progression on CICIDS2017 (99 runs, val\_cal threshold, best-fitness genome).}}{14}{table.6}\protected@file@percent }
+\newlabel{tab:phase}{{6}{14}{Phase progression on CICIDS2017 (99 runs, val\_cal threshold, best-fitness genome)}{table.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.5}Comparison with Baselines}{14}{subsection.6.5}\protected@file@percent }
+\newlabel{sec:baselines}{{6.5}{14}{Comparison with Baselines}{subsection.6.5}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {7}{\ignorespaces Comparison with baselines. ``Ours'' entries trained on identical data with same preprocessing. FWIW uses a different split protocol.}}{14}{table.7}\protected@file@percent }
+\newlabel{tab:baselines}{{7}{14}{Comparison with baselines. ``Ours'' entries trained on identical data with same preprocessing. FWIW uses a different split protocol}{table.7}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.6}Model Size Analysis}{14}{subsection.6.6}\protected@file@percent }
+\newlabel{sec:model-size}{{6.6}{14}{Model Size Analysis}{subsection.6.6}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {8}{\ignorespaces Deployed model sizes.}}{15}{table.8}\protected@file@percent }
+\newlabel{tab:model-size}{{8}{15}{Deployed model sizes}{table.8}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {7}Discussion}{15}{section.7}\protected@file@percent }
+\newlabel{sec:discussion}{{7}{15}{Discussion}{section.7}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}Connectivity as Feature Selection}{15}{subsection.7.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Threshold Sensitivity}{15}{subsection.7.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.3}Encoding Resolution Analysis}{16}{subsection.7.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.4}FPGA Deployment}{16}{subsection.7.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Dense configuration (8--12-bit addresses).}{16}{section*.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Sparse configuration (34-bit addresses).}{16}{section*.10}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Effect of thermometer encoding resolution on classification performance. (a)~CICIDS2017 F1-macro shows a clear knee at 16 bits, with diminishing returns beyond. (b)~The GA finds the fewest neurons at 16 bits, suggesting optimal information density. (c)~UNSW-NB15 temporal split shows no clear trend (high variance from only 2 runs per configuration). (d)~CICIDS2017 false positive rate is lowest around 16--26 bits.}}{17}{figure.2}\protected@file@percent }
+\newlabel{fig:therm_sweep}{{2}{17}{Effect of thermometer encoding resolution on classification performance. (a)~CICIDS2017 F1-macro shows a clear knee at 16 bits, with diminishing returns beyond. (b)~The GA finds the fewest neurons at 16 bits, suggesting optimal information density. (c)~UNSW-NB15 temporal split shows no clear trend (high variance from only 2 runs per configuration). (d)~CICIDS2017 false positive rate is lowest around 16--26 bits}{figure.2}{}}
+\@writefile{toc}{\contentsline {paragraph}{Comparison with FWIW.}{17}{section*.11}\protected@file@percent }
 \citation{susskind2023fwiw}
-\@writefile{toc}{\contentsline {paragraph}{Dense configuration (8--12-bit addresses).}{16}{section*.6}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Sparse configuration (34-bit addresses).}{16}{section*.7}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Comparison with FWIW.}{16}{section*.8}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Latency and throughput.}{16}{section*.9}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {8}{\ignorespaces FPGA synthesis results on Xilinx Zynq Z-7020 (53,200 LUTs, 106,400 FFs). All designs synthesized with Vivado 2025.2 in out-of-context mode. Sparse neuron tables are inferred as distributed LUTs (0 BRAMs, 0 DSPs in all cases). Latency computed from binary-search depth and post-synthesis Fmax.}}{17}{table.8}\protected@file@percent }
-\newlabel{tab:fpga}{{8}{17}{FPGA synthesis results on Xilinx Zynq Z-7020 (53,200 LUTs, 106,400 FFs). All designs synthesized with Vivado 2025.2 in out-of-context mode. Sparse neuron tables are inferred as distributed LUTs (0 BRAMs, 0 DSPs in all cases). Latency computed from binary-search depth and post-synthesis Fmax}{table.8}{}}
-\@writefile{toc}{\contentsline {paragraph}{Functional verification.}{17}{section*.10}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.5}Future Directions}{17}{subsection.7.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {8}Conclusion}{18}{section.8}\protected@file@percent }
-\newlabel{sec:conclusion}{{8}{18}{Conclusion}{section.8}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {9}{\ignorespaces FPGA synthesis results on Xilinx Zynq Z-7020 (53,200 LUTs, 106,400 FFs). All designs synthesized with Vivado 2025.2 in out-of-context mode. Sparse neuron tables are inferred as distributed LUTs (0 BRAMs, 0 DSPs in all cases). Latency computed from binary-search depth and post-synthesis Fmax.}}{18}{table.9}\protected@file@percent }
+\newlabel{tab:fpga}{{9}{18}{FPGA synthesis results on Xilinx Zynq Z-7020 (53,200 LUTs, 106,400 FFs). All designs synthesized with Vivado 2025.2 in out-of-context mode. Sparse neuron tables are inferred as distributed LUTs (0 BRAMs, 0 DSPs in all cases). Latency computed from binary-search depth and post-synthesis Fmax}{table.9}{}}
+\@writefile{toc}{\contentsline {paragraph}{Latency and throughput.}{18}{section*.12}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Functional verification.}{18}{section*.13}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.5}Future Directions}{19}{subsection.7.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {8}Conclusion}{19}{section.8}\protected@file@percent }
+\newlabel{sec:conclusion}{{8}{19}{Conclusion}{section.8}{}}
 \bibstyle{splncs04}
 \bibdata{references}
 \bibcite{mdpi2024enhanced}{1}
@@ -127,4 +132,4 @@
 \bibcite{umuroglu2020logicnets}{14}
 \bibcite{zhao2020pigasus}{15}
 \bibcite{zoghi2024ids}{16}
-\gdef \@abspage@last{20}
+\gdef \@abspage@last{21}

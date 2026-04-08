@@ -60,11 +60,14 @@ the sensitivity of binary classifiers to decision boundary selection.
 Across 112 independent runs per configuration, our approach achieves
 88.06\% F1 on UNSW-NB15 temporal (outperforming Random Forest by 1.4
 points) and 99.40\% F1 on CICIDS2017 random (0.20\% false positive rate).
-On the full 46.7M-record CIC-IoT-2023 benchmark, an 800-byte
-200-neuron configuration achieves 82.20\% F1, exceeding the published
-Perceptron baseline (81.05\%) by 1.15 points with a $\sim$12$\times$
-smaller model. Vivado-verified FPGA synthesis requires as few as
-82 LUTs on a Zynq~Z-7020.
+On the full 46.7M-record CIC-IoT-2023 benchmark, our approach spans a
+four-order-of-magnitude memory frontier from a 20-byte microcontroller
+detector to a hundred-megabyte sparse peak: a 25\,KB
+400-neuron 8-bit configuration achieves 83.13\% F1 at 2.06\% FPR
+(beating the Perceptron baseline by 2.08 points and fitting within
+the BRAM of the smallest commercial FPGAs), while a peak 245-neuron
+32-bit configuration reaches 84.79\% F1 at 1.59\% FPR. Vivado-verified
+FPGA synthesis requires as few as 82 LUTs on a Zynq~Z-7020.
 
 \keywords{Intrusion Detection \and Weightless Neural Networks \and
 Evolutionary Optimization \and Feature Selection \and FPGA}
@@ -700,12 +703,12 @@ strong under the actual fitness criterion. The co-optimization ensures
 the architecture search and threshold selection work together rather
 than at cross purposes.
 
-\paragraph{1.3M subsample (32/112 runs, partial).}
-At time of writing, 32 of the 112 PUB50 flows have completed.
+\paragraph{1.3M subsample (43/112 runs, partial).}
+At time of writing, 43 of the 112 PUB50 flows have completed.
 Table~\ref{tab:ciot-phase} reports the phase progression for the
 best-fitness genome under the deployable train\_cal threshold. The GA
-phase reduces neuron count by 16\% (406 $\to$ 339) while improving F1
-by 0.54 percentage points and reducing FPR by 0.60 points, mirroring
+phase reduces neuron count by 19\% (414 $\to$ 336) while improving F1
+by 0.52 percentage points and reducing FPR by 0.48 points, mirroring
 the regularization effect observed on CICIDS2017
 (Section~\ref{sec:phase-progression}). The improvement holds across
 all seven threshold modes; with the simple fixed-0.5 threshold the GA
@@ -715,65 +718,144 @@ within 0.13 points.
 \begin{table}[ht!]
 \centering
 \caption{Phase progression on CIC-IoT-2023 1.3M subsample
-(32/112 runs, train\_cal threshold, best-fitness genome). Camera-ready
+(43/112 runs, train\_cal threshold, best-fitness genome). Camera-ready
 will report the full 112-run batch.}
 \label{tab:ciot-phase}
 \begin{tabular*}{\textwidth}{l @{\extracolsep{\fill}} rrrr}
 \toprule
 Phase & F1-macro (\%) & FPR (\%) & Neurons & Bits \\
 \midrule
-Grid Search    & 79.56 $\pm$ 0.63 & 4.85 $\pm$ 3.02 & 406 $\pm$ 95 & 34 $\pm$ 1 \\
-GA Neurons     & 80.10 $\pm$ 0.52 & 4.25 $\pm$ 0.50 & 339 $\pm$ 118 & 32 $\pm$ 1 \\
+Grid Search    & 79.56 $\pm$ 0.56 & 4.75 $\pm$ 2.61 & 414 $\pm$ 89 & 34 $\pm$ 1 \\
+GA Neurons     & 80.09 $\pm$ 0.53 & 4.27 $\pm$ 0.48 & 336 $\pm$ 119 & 32 $\pm$ 1 \\
 \midrule
-$\Delta$       & +0.54            & $-$0.60          & $-$67 ($-$16\%) & \\
+$\Delta$       & +0.52            & $-$0.48          & $-$78 ($-$19\%) & \\
 \bottomrule
 \end{tabular*}
 \end{table}
 
-\paragraph{Full 46M dataset, single genome.}
+\paragraph{Full 46M dataset, Pareto frontier across memory tiers.}
 To compare with prior work that reports on the full 46.7M-record
-CIC-IoT-2023, we trained the 800-byte 200-neuron 4-bit configuration
-(found via the 1.3M subsample search) on the complete dataset (30.8M
-train / 7.7M test, random 80/20). Table~\ref{tab:ciot-46m} compares
-against the baselines reported by Neto et al.~\cite{neto2023ciciot}.
-Our 800-byte WNN beats the Perceptron baseline on F1 by 1.15 points
-(82.20\% vs.\ 81.05\%) with a $\sim$12$\times$ smaller model, while
-additionally reporting FPR --- a metric absent from the original
-benchmark. Because the 800-byte discriminator admits only one
-architecture-level decision (the threshold), we report three
-operating modes of the same trained model: the deployable
-train-calibrated threshold (F1 82.20\%, FPR 6.06\%), a
-validation-calibrated oracle (F1 82.41\%, FPR 3.54\%), and an
-empirical-cumulative ultra-secure mode suitable for deployments where
-false alarms are costly (F1 63.32\%, FPR 0.34\%).
+CIC-IoT-2023, we trained 13 single-genome configurations on the
+complete dataset (30.8M train / 7.7M test, random 80/20), spanning
+four orders of magnitude in memory footprint. Architectures were
+selected from the 1.3M-subsample search and transferred to 46M
+without further GA refinement, isolating the effect of training-data
+volume from architecture-search effects. Table~\ref{tab:ciot-46m}
+groups the results into three deployment tiers --- micro (20\,B to
+2\,KB), small (5--25\,KB), and peak (sparse memory in the
+hundred-megabyte range) --- and compares against the baselines
+reported by Neto et al.~\cite{neto2023ciciot}.
 
 \begin{table}[ht!]
 \centering
-\caption{Comparison on full 46M CIC-IoT-2023 (random 80/20). Baselines
-from Neto et al.~\cite{neto2023ciciot}. Our genome was trained once
-on 46M without GA refinement.}
+\caption{Pareto frontier on the full 46M CIC-IoT-2023 (random 80/20).
+Single-genome runs with no GA on 46M; architectures transferred from
+the 1.3M subsample search. Baselines from Neto et al.~\cite{neto2023ciciot}.
+``--'' indicates a metric not reported by the original work.}
 \label{tab:ciot-46m}
-\begin{tabular}{lrrrl}
+\begin{tabular}{llrrrl}
 \toprule
-Method & F1 (\%) & FPR (\%) & Acc (\%) & Model Size \\
+Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & Model Size \\
 \midrule
-\textbf{Ours (200n $\times$ 4b)} & \textbf{82.20} & 6.06 & 97.22 & \textbf{800\,B} \\
-Perceptron       & 81.05 & ---  & 98.18 & ${\sim}$10\,KB \\
-Logistic Reg.    & 87.63 & ---  & 98.90 & ${\sim}$1\,KB \\
-DNN              & 94.03 & ---  & 99.44 & ${\sim}$5\,MB \\
-AdaBoost         & 95.63 & ---  & 99.59 & ${\sim}$10\,MB \\
-Random Forest    & 96.53 & ---  & 99.68 & ${\sim}$50\,MB \\
+\multirow{5}{*}{Micro}
+ & Ours (5n $\times$ 4b)     & 66.66\,$\pm$\,6.36 & 8.84\,$\pm$\,12.30 & 90.68\,$\pm$\,4.49 & 20\,B \\
+ & Ours (100n $\times$ 4b)   & 80.32 &  2.85 & 96.66 & 400\,B \\
+ & Ours (200n $\times$ 4b)   & 79.37 &  2.38 & 96.38 & 800\,B \\
+ & Ours (300n $\times$ 4b)   & 79.73 &  2.90 & 96.50 & 1.2\,KB \\
+ & Ours (500n $\times$ 4b)   & 79.60 &  3.58 & 96.49 & 2.0\,KB \\
+\midrule
+\multirow{4}{*}{Small}
+ & Ours (5n $\times$ 12b)    & 80.32 &  6.02 & 96.76 & 5.0\,KB \\
+ & Ours (100n $\times$ 8b)   & 79.89 &  1.68 & 96.51 & 6.2\,KB \\
+ & Ours (300n $\times$ 8b)   & 81.58 &  2.11 & 96.96 & 18.8\,KB \\
+ & \textbf{Ours (400n $\times$ 8b)} & \textbf{83.13} & \textbf{2.06} & \textbf{97.33} & \textbf{25\,KB} \\
+\midrule
+\multirow{4}{*}{Peak}
+ & Ours (96n $\times$ 32b)   & 84.36 &  1.61 & 97.59 & ${\sim}$200\,MB$^*$ \\
+ & Ours (198n $\times$ 32b)  & 84.68 &  2.00 & 97.67 & ${\sim}$400\,MB$^*$ \\
+ & Ours (245n $\times$ 32b)  & 84.79 &  1.59 & 97.68 & ${\sim}$500\,MB$^*$ \\
+ & Ours (500n $\times$ 34b)  & 84.73 &  1.91 & 97.68 & ${\sim}$1\,GB$^*$ \\
+\midrule
+\multirow{5}{*}{Baseline}
+ & Perceptron       & 81.05 & ---  & 98.18 & ${\sim}$10\,KB \\
+ & Logistic Reg.    & 87.63 & ---  & 98.90 & ${\sim}$1\,KB \\
+ & DNN              & 94.03 & ---  & 99.44 & ${\sim}$5\,MB \\
+ & AdaBoost         & 95.63 & ---  & 99.59 & ${\sim}$10\,MB \\
+ & Random Forest    & 96.53 & ---  & 99.68 & ${\sim}$50\,MB \\
+\bottomrule
+\multicolumn{6}{l}{\small All ``Ours'' rows use the deployable train\_cal threshold.
+Multi-seed for 5n $\times$ 4b reports mean$\pm$std (10 seeds);}\\
+\multicolumn{6}{l}{\small all other configurations use a single seed. $^*$Sparse memory
+estimate; thermometer encoding causes massive address collisions, so}\\
+\multicolumn{6}{l}{\small the actual stored entries are far below the dense $2^b$ bound.}
+\end{tabular}
+\end{table}
+
+\paragraph{Key observations from the Pareto frontier.}
+First, the 800-byte 200n $\times$ 4b configuration --- the original
+headline --- delivers F1 79.37\% / FPR 2.38\% / Acc 96.38\%, beating
+the Perceptron baseline on FPR (which the original work does not
+report) at 1/12 the model size. Second, scaling memory by 30$\times$ to
+the 25\,KB 400n $\times$ 8b configuration lifts F1 by another
+3.76 points to \textbf{83.13\%} while keeping FPR at 2.06\% --- this
+is the FPGA-deployable sweet spot, fitting comfortably within the
+128\,KB BRAM of an iCE40UP5K and beating Perceptron F1 by 2.08
+points. Third, the peak tier (sparse memory in the hundred-megabyte
+range) reaches 84.79\% F1 at 1.59\% FPR with only 245 neurons --- a
+0.79-point gain on F1 over the 25\,KB configuration in exchange for
+a 20{,}000$\times$ memory increase, well past the diminishing-returns
+elbow.
+
+The 5n $\times$ 4b ``20-byte detector'' is included as an
+extreme-edge data point: across 10 seeds, mean F1 is 66.66\% with
+$\sigma$\,=\,6.36\%, and FPR ranges from 0\% to 30\% across seeds.
+The architecture is genuinely usable on a microcontroller with
+20 bytes of state, but the random connectivity draw matters
+enormously when only 80 cells are available --- a practical
+deployment would need to search for a good seed.
+
+\paragraph{Three operating modes of the same trained model.}
+A single trained 800-byte 200n $\times$ 4b model admits three
+deployment-time threshold choices without retraining, each
+representing a different operating point on the precision/recall
+frontier:
+
+\begin{table}[ht!]
+\centering
+\caption{Three operating modes of the 800-byte 200n $\times$ 4b model
+on the 46M CIC-IoT-2023 test set. The threshold is set at deployment
+time without retraining the underlying memory.}
+\label{tab:ciot-modes}
+\begin{tabular}{llrrr}
+\toprule
+Mode & Threshold & F1 (\%) & FPR (\%) & Acc (\%) \\
+\midrule
+Deployable    & train\_cal (0.69)         & 82.20 & 6.06  & 97.22 \\
+Oracle        & val\_cal (0.90)           & 82.41 & 3.54  & 97.20 \\
+Ultra-secure  & empirical\_cumulative (0.78) & 63.32 & 0.34 & 88.44 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The 800-byte WNN occupies an extreme low-end operating point on the
-size/accuracy frontier: it surrenders ${\sim}$14 F1 points to Random
-Forest in exchange for a $\sim$65{,}000$\times$ reduction in model
-size, making it suitable for deployment on the smallest IoT edge
-devices. Notably, it does so without GA refinement on the full
-dataset --- the architecture was discovered on the 1.3M subsample
-and transferred directly to 46M without retuning.
+The deployable mode is the recommended baseline. The oracle mode
+requires labeled deployment data but achieves the lowest FPR among
+F1-competitive thresholds. The ultra-secure mode trades 19 F1 points
+for a 17$\times$ reduction in FPR --- suitable for environments where
+false alarms are operationally costly (analyst-burden-bounded SOCs).
+
+\paragraph{Address-tap saturation finding.}
+We additionally tested whether the 32-bit address-tap width is the
+discrimination ceiling. Comparing the best 32-bit and 34-bit peak
+genomes (245n $\times$ 32b vs 500n $\times$ 34b) at the train\_cal
+threshold, F1 differs by only 0.06 percentage points
+(84.79\% vs 84.73\%), well within seed noise. The 4$\times$ larger
+address space of 34-bit yields no improvement, confirming our
+hypothesis that thermometer-encoding bit correlation caps effective
+discrimination far below the dense 2$^b$ address bound. With 8-bit
+thermometer encoding, each feature contributes only $\log_2(9)
+\approx 3.17$ effective bits, so a 32-bit address tap on 20 features
+already samples roughly half of the available discriminative
+information.
 
 \paragraph{FPGA synthesis.}
 The 200-neuron 4-bit configuration is small enough for a fully dense
