@@ -3680,8 +3680,10 @@ pub fn evaluate_genomes_parallel_hybrid(
         empty_value,
     });
 
-    // Get persistent eval worker (initialized once, stays alive for session)
-    let eval_worker = get_eval_worker();
+    // Get persistent eval worker (initialized once, stays alive for session).
+    // Side-effect only: ensures the lazy global is initialized here rather
+    // than in the first hot-path call. Return value intentionally unused.
+    let _ = get_eval_worker();
 
     // Collect all results
     let mut all_results: Vec<(usize, f64, f64, f64, f64, f64)> = Vec::with_capacity(num_genomes);

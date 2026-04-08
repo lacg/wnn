@@ -9,8 +9,6 @@
 use metal::*;
 use std::mem;
 use std::time::Instant;
-use std::thread;
-use std::time::Duration;
 
 use crate::neuron_memory::{NeuronTrainMeta, TrainAddressParams};
 
