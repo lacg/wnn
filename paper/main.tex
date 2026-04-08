@@ -61,8 +61,8 @@ Across 112 independent runs per configuration, our approach achieves
 88.06\% F1 on UNSW-NB15 temporal (outperforming Random Forest by 1.4
 points) and 99.40\% F1 on CICIDS2017 random (0.20\% false positive rate).
 On the full 46.7M-record CIC-IoT-2023 benchmark, an 800-byte
-200-neuron configuration achieves 82.33\% F1, exceeding the published
-Perceptron baseline (81.05\%) by 1.28 points with a $\sim$12$\times$
+200-neuron configuration achieves 82.20\% F1, exceeding the published
+Perceptron baseline (81.05\%) by 1.15 points with a $\sim$12$\times$
 smaller model. Vivado-verified FPGA synthesis requires as few as
 82 LUTs on a Zynq~Z-7020.
 
@@ -736,10 +736,16 @@ CIC-IoT-2023, we trained the 800-byte 200-neuron 4-bit configuration
 (found via the 1.3M subsample search) on the complete dataset (30.8M
 train / 7.7M test, random 80/20). Table~\ref{tab:ciot-46m} compares
 against the baselines reported by Neto et al.~\cite{neto2023ciciot}.
-Our 800-byte WNN beats the Perceptron baseline on F1 by 1.28 points
-(82.33\% vs.\ 81.05\%) with a $\sim$12$\times$ smaller model, while
+Our 800-byte WNN beats the Perceptron baseline on F1 by 1.15 points
+(82.20\% vs.\ 81.05\%) with a $\sim$12$\times$ smaller model, while
 additionally reporting FPR --- a metric absent from the original
-benchmark.
+benchmark. Because the 800-byte discriminator admits only one
+architecture-level decision (the threshold), we report three
+operating modes of the same trained model: the deployable
+train-calibrated threshold (F1 82.20\%, FPR 6.06\%), a
+validation-calibrated oracle (F1 82.41\%, FPR 3.54\%), and an
+empirical-cumulative ultra-secure mode suitable for deployments where
+false alarms are costly (F1 63.32\%, FPR 0.34\%).
 
 \begin{table}[ht!]
 \centering
@@ -751,7 +757,7 @@ on 46M without GA refinement.}
 \toprule
 Method & F1 (\%) & FPR (\%) & Acc (\%) & Model Size \\
 \midrule
-\textbf{Ours (200n $\times$ 4b)} & \textbf{82.33} & 6.67 & 97.27 & \textbf{800\,B} \\
+\textbf{Ours (200n $\times$ 4b)} & \textbf{82.20} & 6.06 & 97.22 & \textbf{800\,B} \\
 Perceptron       & 81.05 & ---  & 98.18 & ${\sim}$10\,KB \\
 Logistic Reg.    & 87.63 & ---  & 98.90 & ${\sim}$1\,KB \\
 DNN              & 94.03 & ---  & 99.44 & ${\sim}$5\,MB \\
@@ -1073,7 +1079,7 @@ Dataset (split) & Config & F1 & FPR & Acc & $N$ & LUTs (\%) & Fmax & Latency \\
 \bottomrule
 \multicolumn{9}{l}{\small $^\S$Dense $O(1)$ lookup; all others use $O(\log n)$ sparse search.}\\
 \multicolumn{9}{l}{\small $^*$90/10, deduplicated, oversampled. $N$\,=\,neurons. 0 BRAMs, 0 DSPs for all designs.}\\
-\multicolumn{9}{l}{\small $^\dag$Trained on the 1.3M random subsample for FPGA synthesis. The same architecture trained on the full 46M dataset achieves 82.33\% F1 (Table~\ref{tab:ciot-46m}).}
+\multicolumn{9}{l}{\small $^\dag$Trained on the 1.3M random subsample for FPGA synthesis. The same architecture trained on the full 46M dataset achieves 82.20\% F1 (Table~\ref{tab:ciot-46m}).}
 \end{tabular}}
 \end{table}
 
