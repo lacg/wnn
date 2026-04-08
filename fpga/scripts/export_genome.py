@@ -31,6 +31,10 @@ def load_dataset(ids_dataset: str, ids_split: str, n_bits: int, feature_selectio
 	elif ids_dataset == "ciciot2023":
 		from wnn.ids.ciciot2023 import load_ciciot2023
 		return load_ciciot2023(split=ids_split, n_bits=n_bits, feature_selection=feature_selection)
+	elif ids_dataset == "ciciot2023_full":
+		# Full 46.7M-record CIC-IoT-2023 — same loader, different HF repo via dataset_size="full"
+		from wnn.ids.ciciot2023 import load_ciciot2023
+		return load_ciciot2023(split=ids_split, n_bits=n_bits, feature_selection=feature_selection, dataset_size="full")
 	else:
 		raise ValueError(f"Unknown dataset: {ids_dataset}")
 
@@ -38,8 +42,11 @@ def load_dataset(ids_dataset: str, ids_split: str, n_bits: int, feature_selectio
 def get_genome_connections(db_path: str, flow_id: int, genome_type: str = "best_fitness", phase: str | None = None):
 	"""Get genome connections and config from the database.
 
-	If phase is None, prefers GA Neurons then falls back to Grid Search.
-	If phase is "ga_neurons" or "grid_search", uses only that phase.
+	Matches experiments by `phase_type` column (grid_search / ga_neurons / ...)
+	rather than by `name`, so it works for both PUB50 flows
+	("Grid Search (neurons x bits)") and single-genome flows
+	("Grid Search (1 point)"). If phase is None, prefers ga_neurons then
+	falls back to grid_search.
 	"""
 	db = sqlite3.connect(db_path)
 
@@ -50,35 +57,32 @@ def get_genome_connections(db_path: str, flow_id: int, genome_type: str = "best_
 	config = json.loads(row[0])
 	params = config["params"]
 
-	# Build phase preference list
-	phase_to_name = {
-		"ga_neurons": "GA Neurons",
-		"grid_search": "Grid Search (neurons x bits)",
-	}
+	# Build phase_type preference list
+	valid_phase_types = {"ga_neurons", "grid_search"}
 	if phase is not None:
-		if phase not in phase_to_name:
+		if phase not in valid_phase_types:
 			raise ValueError(f"Unknown phase: {phase}. Use 'ga_neurons' or 'grid_search'.")
-		phase_order = [phase_to_name[phase]]
+		phase_order = [phase]
 	else:
-		phase_order = ["GA Neurons", "Grid Search (neurons x bits)"]
+		phase_order = ["ga_neurons", "grid_search"]
 
-	# Get the genome from validation_summaries -> genomes
+	# Get the genome from validation_summaries -> genomes by phase_type
 	genome = None
-	for exp_name in phase_order:
+	for pt in phase_order:
 		row = db.execute("""
-			SELECT vs.genome_hash, g.total_neurons, g.connections_json, g.tiers_json
+			SELECT vs.genome_hash, g.total_neurons, g.connections_json, g.tiers_json, e.name
 			FROM validation_summaries vs
-			JOIN experiments e ON vs.experiment_id = e.id AND e.name = ?
+			JOIN experiments e ON vs.experiment_id = e.id AND e.phase_type = ?
 			JOIN genomes g ON g.experiment_id = e.id AND g.config_hash = vs.genome_hash
 			WHERE e.flow_id = ? AND vs.validation_point = 'final' AND vs.genome_type = ?
-		""", (exp_name, flow_id, genome_type)).fetchone()
+		""", (pt, flow_id, genome_type)).fetchone()
 		if row:
 			genome = {
 				"hash": row[0],
 				"total_neurons": row[1],
 				"connections_csv": row[2],
 				"tiers_json": row[3],
-				"phase": exp_name,
+				"phase": row[4],
 			}
 			break
 

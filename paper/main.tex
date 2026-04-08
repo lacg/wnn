@@ -1158,6 +1158,12 @@ LUTs --- still 1.7$\times$ smaller than FWIW's 269 LUTs --- and
 achieves the lowest FPR (1.96\%) of any IDS WNN reported on this
 benchmark, at the cost of a more challenging classification task (the
 benchmark mixes 33 attack categories with widely varying signatures).
+Scaling to the peak small-memory Pareto point on the full 46M dataset
+(400 neurons, 8-bit dense, 100\,KB) raises F1 to 83.13\% and accuracy
+to 97.33\% while still using only 304 LUTs (0.57\% of the Z-7020),
+at the cost of a modestly longer critical path (15.0\,ns vs.\ 12.7\,ns).
+Both CIC-IoT configurations fit comfortably alongside the UNSW and
+CICIDS designs on the same \$20 Zynq-7020 part.
 
 \begin{table}[ht!]
 \centering
@@ -1184,13 +1190,16 @@ Dataset (split) & Config & F1 & FPR & Acc & $N$ & LUTs (\%) & Fmax & Latency \\
 \midrule
 \shortstack[l]{UNSW-NB15\\(random)} & 83n (12b dense)$^\S$ & 93.69\% & 0.63\% & \textbf{99.04\%} & 83 & \textbf{59 (0.11\%)} & 94\,MHz & \textbf{10.7\,ns} \\
 \midrule
-\shortstack[l]{CIC-IoT-2023\\(random)$^\dag$} & 200n (4b dense)$^\S$ & 73.34\% & 1.96\% & 80.30\% & 200 & 154 (0.29\%) & 78\,MHz & 12.7\,ns \\
+\multirow{2}{*}{\shortstack[l]{CIC-IoT-2023\\(random)}}
+ & 200n (4b dense)$^{\S\dag}$  & 73.34\% & 1.96\% & 80.30\% & 200 & 154 (0.29\%) & 78\,MHz & 12.7\,ns \\
+ & 400n (8b dense)$^{\S\ddag}$ & \textbf{83.13\%} & 2.06\% & \textbf{97.33\%} & 400 & 304 (0.57\%) & 67\,MHz & 15.0\,ns \\
 \midrule
 \shortstack[l]{UNSW-NB15\\(random$^*$)} & FWIW~\cite{susskind2023fwiw} & --- & 1.57\% & 98.50\% & ${\sim}$30 & 269 & 740\,MHz & 10.8\,ns \\
 \bottomrule
 \multicolumn{9}{l}{\small $^\S$Dense $O(1)$ lookup; all others use $O(\log n)$ sparse search.}\\
 \multicolumn{9}{l}{\small $^*$90/10, deduplicated, oversampled. $N$\,=\,neurons. 0 BRAMs, 0 DSPs for all designs.}\\
-\multicolumn{9}{l}{\small $^\dag$Trained on the 1.3M random subsample for FPGA synthesis. The same architecture trained on the full 46M dataset achieves 82.20\% F1 (Table~\ref{tab:ciot-46m}).}
+\multicolumn{9}{l}{\small $^\dag$Trained on the 1.3M random subsample. The same architecture trained on the full 46M dataset achieves 82.20\% F1 (Table~\ref{tab:ciot-46m}).}\\
+\multicolumn{9}{l}{\small $^\ddag$Trained on the full 46M CIC-IoT-2023 dataset; peak small-memory Pareto point from the 46M sweep (Table~\ref{tab:ciot-46m}).}
 \end{tabular}}
 \end{table}
 

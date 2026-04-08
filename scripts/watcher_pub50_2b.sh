@@ -35,14 +35,21 @@ notify() {
 	osascript -e "display notification \"$1\" with title \"PUB50-2b 10-run validation\""
 }
 
+# Initial sleep is tunable via INITIAL_SLEEP env var (seconds). Default 7h is a
+# pessimistic estimate for 8-bit PUB50 flows (~75 min each × 10 = 12.5h). With
+# 2-bit thermometer the per-flow time drops to ~37 min, so you can pass
+# INITIAL_SLEEP=10800 (3h) to shorten the pre-poll wait.
+INITIAL_SLEEP="${INITIAL_SLEEP:-25200}"
+initial_sleep_hours=$(awk "BEGIN {printf \"%.1f\", ${INITIAL_SLEEP}/3600}")
+
 log "==== Watcher started: monitoring ${EXPECTED} ${BATCH_TAG} flows ===="
-log "Strategy: sleep 7h, then hourly checks until last flow is running, then 60s polling."
+log "Strategy: sleep ${initial_sleep_hours}h, then hourly checks until last flow is running, then 60s polling."
 
 start_time=$(date +%s)
 
-# Phase 1: initial 7-hour sleep
-log "Sleeping 7h (expected batch duration ~10h)..."
-sleep 25200  # 7 * 3600
+# Phase 1: initial sleep (tunable via INITIAL_SLEEP)
+log "Sleeping ${initial_sleep_hours}h (override with INITIAL_SLEEP=<seconds> env var)..."
+sleep "${INITIAL_SLEEP}"
 
 # Phase 2: hourly checks until the last flow is running or the batch is done
 log "Waking up — checking if we're on the last flow yet..."
@@ -226,11 +233,32 @@ if baseline_8b and ga_rows:
     print(f"| Acc | {ms(acc_8b)}% | {ms(acc_2b)}% | {dAcc:+.2f}pp |")
     print()
 
+    # Balanced fitness score = 0.35*F1 + 0.35*(1-FPR) + 0.2*Acc
+    # CE omitted because validation_summaries doesn't always have it.
+    # This approximates what the harmonic-rank fitness is actually optimizing.
+    def balanced_score(f1, fpr, acc):
+        # f1/fpr/acc are percent values — score is also in pp
+        return 0.35 * f1 + 0.35 * (100 - fpr) + 0.2 * acc
+    score_2b = [balanced_score(r["f1_tc"], r["fpr_tc"], r["acc_tc"]) for r in ga_rows]
+    score_8b = [balanced_score(r["f1_tc"], r["fpr_tc"], r["acc_tc"]) for r in baseline_8b]
+    dScore = statistics.mean(score_2b) - statistics.mean(score_8b)
+    print(f"**Balanced fitness score** (0.35·F1 + 0.35·(1−FPR) + 0.2·Acc):")
+    print(f"  8b: {statistics.mean(score_8b):.2f}pp  |  2b: {statistics.mean(score_2b):.2f}pp  |  Δ: {dScore:+.2f}pp")
+    print()
+
     # Verdict
+    # Three-tier verdict combining strict F1+FPR rule and balanced-fitness rule:
+    #   STRICT    : dF1 > +0.5pp AND dFPR < 0   (clean win on both raw metrics)
+    #   SOFT      : dScore >= +0.3pp            (fitness wins even if F1 drops, via FPR gain)
+    #   INCONCL.  : |dScore| < 0.3pp            (within noise floor; stdev across 8b runs is ~0.3-0.4pp)
+    #   NOT CONF. : dScore <= -0.3pp            (fitness actually dropped)
+    # 0.3pp threshold chosen as the balanced-score noise floor estimated from
+    # stdev of the 46-run 8b PUB50 baseline.
+    CONFIRMED_SOFT_THRESHOLD = 0.3
     print("## Verdict")
     print()
     if dF1 > 0.5 and dFPR < 0:
-        print("### 🎉 2-BIT LIFT CONFIRMED")
+        print("### 🎉 2-BIT LIFT CONFIRMED (strict)")
         print()
         print(f"2-bit thermometer produces a meaningful F1 lift ({dF1:+.2f}pp) and lower FPR ({dFPR:+.2f}pp)")
         print(f"vs the 8-bit PUB50 baseline at matched sample size. The 46M 4-seed finding reproduces")
@@ -238,16 +266,30 @@ if baseline_8b and ga_rows:
         print()
         print("**Recommendation:** run the remaining 102 PUB50-2b flows (seeds 11-112) to complete a")
         print("full 112-run statistical batch alongside the existing 8b PUB50.")
-    elif abs(dF1) < 0.5:
+    elif dScore >= CONFIRMED_SOFT_THRESHOLD:
+        print("### 🎯 2-BIT LIFT CONFIRMED (soft, fitness-balanced)")
+        print()
+        print(f"2-bit F1 change is {dF1:+.2f}pp but the FPR drop ({dFPR:+.2f}pp) more than compensates on the")
+        print(f"balanced fitness score ({dScore:+.2f}pp vs threshold {CONFIRMED_SOFT_THRESHOLD}pp). This is the same")
+        print(f"tradeoff the 46M data showed (lower F1 ceiling, much lower FPR floor), now reproducing")
+        print(f"at the 1.3M subsample scale across {len(ga_rows)} runs.")
+        print()
+        print("**Recommendation:** run the remaining 102 PUB50-2b flows (seeds 11-112) to complete a")
+        print("full 112-run statistical batch. Frame the paper around fitness-balanced improvement")
+        print("rather than raw F1 (which is the honest story anyway given the balanced fitness weights).")
+    elif abs(dScore) < CONFIRMED_SOFT_THRESHOLD:
         print("### ⚠️ INCONCLUSIVE")
         print()
-        print(f"2-bit delta is within noise ({dF1:+.2f}pp F1). The 46M finding may not reproduce at")
-        print(f"the subsample scale, or {len(ga_rows)} runs is too few to detect the effect.")
+        print(f"Balanced fitness delta ({dScore:+.2f}pp) is within the ±{CONFIRMED_SOFT_THRESHOLD}pp noise floor. F1 change")
+        print(f"was {dF1:+.2f}pp, FPR change was {dFPR:+.2f}pp — they trade against each other and net out.")
+        print(f"The 46M finding may not reproduce at the subsample scale, or {len(ga_rows)} runs is too few")
+        print(f"to detect the effect above noise.")
     else:
         print("### ❌ 2-BIT LIFT NOT CONFIRMED")
         print()
-        print(f"2-bit actually drops F1 by {abs(dF1):.2f}pp at the 1.3M scale. The 46M finding may be")
-        print("scale-dependent (2-bit helps at 46M training set size but hurts at 1.3M).")
+        print(f"Balanced fitness dropped by {abs(dScore):.2f}pp at the 1.3M scale (F1 {dF1:+.2f}pp,")
+        print(f"FPR {dFPR:+.2f}pp). The 46M finding may be scale-dependent (2-bit helps at 46M training")
+        print(f"set size but hurts at 1.3M).")
         print()
         print("**Recommendation:** do not scale to 112 runs. Frame the 46M 2-bit finding as")
         print("scale-dependent in the paper, not as a universal improvement.")

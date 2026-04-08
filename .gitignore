@@ -322,6 +322,14 @@ db
 # FPGA exports (generated, large binary .mem files)
 fpga/export/
 
+# FPGA Vivado synthesis reports (generated; reproducible via synth_*.tcl)
+fpga/results/
+
+# Flow/genome search logs (large daily dirs + watcher stdout logs).
+# Verdict summaries (logs/*.md) are kept because they document paper findings.
+logs/2026/
+logs/*.log
+
 # LaTeX build artifacts
 paper/*.aux
 paper/*.log
