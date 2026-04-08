@@ -841,10 +841,76 @@ $F_\text{max}{=}78$\,MHz --- 78\,MS/s throughput, well above the
 $F_\text{max}$ vs the 12-bit dense CICIDS/UNSW configurations
 (91--94\,MHz) reflects the deeper accumulator tree across 200~neurons.
 
+\paragraph{Thermometer encoding width saturation.}
+To test whether the 32-bit address-tap saturation observed above is
+bounded by the 8-bit thermometer encoding width rather than the
+address-tap itself, we re-trained the two peak architectures
+(96n $\times$ 32b and 500n $\times$ 34b) at 16-bit, 32-bit, and
+64-bit thermometer encodings on the full 46M dataset (2 seeds per
+cell), combined with the 8-bit baseline already reported in
+Table~\ref{tab:ciot-46m}. Neither architecture shows meaningful
+F1 movement across widths: the entire sweep lands within
+$\pm$0.5 percentage points of the 8-bit baseline on every metric
+and every threshold mode, well inside seed noise
+(Table~\ref{tab:thermo-sweep}).
+
+\begin{table}[ht!]
+\centering
+\caption{46M thermometer encoding sweep on two peak architectures
+(train\_cal threshold, best-fitness genome). The 8-bit columns are the
+baselines from Table~\ref{tab:ciot-46m}; 16/32/64-bit cells report
+mean $\pm$ std across 2 seeds.}
+\label{tab:thermo-sweep}
+\begin{tabular}{lcccc}
+\toprule
+\multirow{2}{*}{Architecture} & \multicolumn{4}{c}{Thermometer width} \\
+\cmidrule(lr){2-5}
+ & 8-bit & 16-bit & 32-bit & 64-bit \\
+\midrule
+\multicolumn{5}{l}{\textit{F1-macro (\%)}} \\
+96n $\times$ 32b  & 84.36 & 84.13 $\pm$ 0.08 & 84.53 $\pm$ 0.25 & 84.59 $\pm$ 0.13 \\
+500n $\times$ 34b & 84.73 & 84.43 $\pm$ 0.21 & 84.46 $\pm$ 0.41 & 84.87 $\pm$ 0.03 \\
+\midrule
+\multicolumn{5}{l}{\textit{FPR (\%)}} \\
+96n $\times$ 32b  & 1.61  & 1.17 $\pm$ 0.22  & 1.50 $\pm$ 0.27  & 1.69 $\pm$ 0.17  \\
+500n $\times$ 34b & 1.91  & 1.51 $\pm$ 0.05  & 1.37 $\pm$ 0.18  & 1.75 $\pm$ 0.02  \\
+\midrule
+\multicolumn{5}{l}{\textit{Accuracy (\%)}} \\
+96n $\times$ 32b  & 97.59 & 97.53 $\pm$ 0.02 & 97.63 $\pm$ 0.06 & 97.64 $\pm$ 0.03 \\
+500n $\times$ 34b & 97.68 & 97.60 $\pm$ 0.05 & 97.61 $\pm$ 0.09 & 97.70 $\pm$ 0.01 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Combined with the 32-bit vs 34-bit address-tap comparison of the
+previous paragraph, this rules out both possible interpretations
+of the 34-bit saturation in our favour: neither the 2-bit
+address-tap expansion nor an 8$\times$ thermometer-encoding expansion
+unlocks additional F1 on CIC-IoT-2023. The information-theoretic
+ceiling for our architecture class on this dataset sits at roughly
+84--85\% F1 under the train\_cal threshold (and 86--87\% F1 under
+the empirical\_cumulative threshold, at the cost of higher FPR).
+Further improvement would require design changes --- different
+feature encoding, non-random connectivity, or fundamentally
+different memory primitives --- rather than hyperparameter
+adjustments within the current design.
+
+An engineering note: the 500n $\times$ 34b configurations at
+32-bit and 64-bit thermometer initially exceeded the Mac Studio's
+compressed-memory budget during training buffer allocation
+(373\,GB peak logical footprint for the 64-bit case), due to a
+Python-list materialization of the input array in the Rust
+accelerator bridge. Replacing that code path with a zero-copy
+numpy transfer (1 byte per bool in place of an 8-byte pointer per
+list slot) reduced the peak footprint to roughly 25\,GB, within
+the 64\,GB hardware budget and allowing the sweep to complete.
+
 % TODO after PUB50-112 completes:
 % - Update tab:ciot-phase with full n=112 numbers (currently n=43 partial)
 % - Add CIC-IoT FPGA synthesis row for the 25 KB 400n × 8b peak
 % - Optionally: Pareto-frontier figure (memory vs F1)
+% - Optionally: downward thermometer sweep (2b, 4b) on 46M to probe
+%   the LOWER bound of the saturation plateau
 
 \subsection{Phase Progression Analysis}
 \label{sec:phase-progression}
