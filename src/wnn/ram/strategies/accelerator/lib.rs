@@ -3975,6 +3975,11 @@ struct IDSCacheWrapper {
 #[pymethods]
 impl IDSCacheWrapper {
     /// Create a new IDS cache with stratified partitioning.
+    ///
+    /// NOTE: This constructor takes `Vec<bool>` which requires a Python list.
+    /// For large datasets (e.g. 46M examples × 1000+ input bits), Python list
+    /// materialization explodes memory to ~8 bytes per element (pointer size)
+    /// totalling hundreds of gigabytes. Prefer `new_from_numpy` for those cases.
     #[new]
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (train_features, train_labels, eval_features, eval_labels, num_classes, total_features, num_parts, num_negatives, seed, balance_classes=false, single_cluster=false, undersample_majority=false, class_weight_multiplier=1.0))]
@@ -4010,6 +4015,78 @@ impl IDSCacheWrapper {
                 class_weight_multiplier,
             ),
         }
+    }
+
+    /// Create a new IDS cache from numpy arrays (zero-copy transfer from Python).
+    ///
+    /// This is the memory-efficient alternative to `new()`. The numpy arrays are
+    /// passed as `PyReadonlyArray1<u8>`, which PyO3 exposes as contiguous byte
+    /// slices without materializing a Python list. For large datasets, peak
+    /// Python memory during the transfer is just the numpy buffer (1 byte per
+    /// bool), not the ~8 bytes per element that `Vec<bool>` via list conversion
+    /// would cost.
+    ///
+    /// For a 30.8M × 1280-bit CIC-IoT-2023 training set, peak memory drops from
+    /// ~315 GB (Python list) to ~20 GB (numpy u8 + Rust `Vec<bool>`).
+    ///
+    /// Args:
+    ///   train_features: numpy u8 array, shape (num_train * total_features,),
+    ///                   values 0 or 1 (will be converted to bool in Rust).
+    ///   eval_features:  numpy u8 array, same layout for eval set.
+    ///   All other args match `new()`.
+    #[staticmethod]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (train_features, train_labels, eval_features, eval_labels, num_classes, total_features, num_parts, num_negatives, seed, balance_classes=false, single_cluster=false, undersample_majority=false, class_weight_multiplier=1.0))]
+    fn new_from_numpy<'py>(
+        train_features: PyReadonlyArray1<'py, u8>,
+        train_labels: Vec<i64>,
+        eval_features: PyReadonlyArray1<'py, u8>,
+        eval_labels: Vec<i64>,
+        num_classes: usize,
+        total_features: usize,
+        num_parts: usize,
+        num_negatives: usize,
+        seed: u64,
+        balance_classes: bool,
+        single_cluster: bool,
+        undersample_majority: bool,
+        class_weight_multiplier: f32,
+    ) -> PyResult<Self> {
+        // Zero-copy views into the numpy arrays (no Python list materialization).
+        let train_slice = train_features.as_slice().map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                format!("train_features array not contiguous: {}", e),
+            )
+        })?;
+        let eval_slice = eval_features.as_slice().map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                format!("eval_features array not contiguous: {}", e),
+            )
+        })?;
+
+        // Convert u8 to bool on the Rust side. Each Rust bool is 1 byte, so
+        // this allocation matches the size of the numpy source buffer — not
+        // the ~8x blowup that Python list storage would cause.
+        let train_bools: Vec<bool> = train_slice.iter().map(|&b| b != 0).collect();
+        let eval_bools: Vec<bool> = eval_slice.iter().map(|&b| b != 0).collect();
+
+        Ok(Self {
+            inner: ids_cache::IDSCache::new(
+                train_bools,
+                train_labels,
+                eval_bools,
+                eval_labels,
+                num_classes,
+                total_features,
+                num_parts,
+                num_negatives,
+                seed,
+                balance_classes,
+                single_cluster,
+                undersample_majority,
+                class_weight_multiplier,
+            ),
+        })
     }
 
     /// Get the next train subset index (advances rotator).

@@ -21,6 +21,8 @@ Usage:
 import time
 from typing import Optional, Callable
 
+import numpy as np
+
 from wnn.ram.strategies.connectivity.adaptive_cluster import ClusterGenome
 from wnn.ram.metrics import Metrics
 from wnn.ram.architecture.base_evaluator import BaseEvaluator, EvalResult, OffspringSearchResult
@@ -109,17 +111,26 @@ class IDSEvaluator(BaseEvaluator):
 				"cd src/wnn/ram/strategies/accelerator && maturin develop --release"
 			)
 
-		# Flatten features to list[bool] for Rust
-		train_features = dataset.X_train.ravel().tolist()
+		# Flatten features as contiguous u8 numpy arrays for zero-copy transfer
+		# to Rust. Using .tolist() here was a memory bomb: for large datasets
+		# (e.g. 46M examples × 1280 bits with 64-bit thermometer) the Python
+		# list would balloon to ~315 GB because each slot holds an 8-byte
+		# pointer to a boxed bool. Numpy u8 is 1 byte per bool and is passed
+		# to Rust zero-copy via PyReadonlyArray1.
+		train_features_np = np.ascontiguousarray(
+			dataset.X_train.ravel().astype(np.uint8, copy=False)
+		)
+		eval_features_np = np.ascontiguousarray(
+			dataset.X_test.ravel().astype(np.uint8, copy=False)
+		)
 		train_labels = [int(y) for y in y_train]
-		eval_features = dataset.X_test.ravel().tolist()
 		eval_labels = [int(y) for y in y_test]
 
 		self._single_cluster = single_cluster
-		self._cache = ram_accelerator.IDSCacheWrapper(
-			train_features=train_features,
+		self._cache = ram_accelerator.IDSCacheWrapper.new_from_numpy(
+			train_features=train_features_np,
 			train_labels=train_labels,
-			eval_features=eval_features,
+			eval_features=eval_features_np,
 			eval_labels=eval_labels,
 			num_classes=num_classes,
 			total_features=total_features,
