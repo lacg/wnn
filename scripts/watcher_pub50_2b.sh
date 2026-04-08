@@ -273,7 +273,26 @@ if grep -q "2-BIT LIFT CONFIRMED" "$REPORT"; then
 		created=$(sqlite3 "$DB" "SELECT COUNT(*) FROM flows WHERE name LIKE '%${BATCH_TAG}%' AND json_extract(config_json, '\$.params.seed') BETWEEN 11 AND 112;")
 		log "Auto-ratchet complete: ${created} additional flows queued (seeds 11-112)."
 		log "The full 112-run PUB50-2b batch is now in flight."
-		notify "PUB50-2b CONFIRMED — 102 follow-up flows auto-queued"
+
+		# SUSPEND (not cancel) remaining 8b PUB50 flows to free compute for
+		# higher-priority roadmap work (UNSW random 80/20 with fitness fix,
+		# 46M full-GA with 2b, etc.). Completed 8b runs are PRESERVED.
+		# Using 'paused' status so they can be unpaused later if desired
+		# — this is reversible, unlike cancellation.
+		log "Suspending remaining 8b PUB50 flows (queued only — completed runs preserved)..."
+		before=$(sqlite3 "$DB" "SELECT COUNT(*) FROM flows WHERE name LIKE 'PUB50-ciciot-random-%' AND status IN ('queued','running');")
+		sqlite3 "$DB" "
+			UPDATE flows
+			SET status='paused',
+			    status_message='Paused: PUB50-2b 10-run validation CONFIRMED the 2-bit lift on 2026-04-08. 102 follow-up 2b flows queued as higher priority. Completed 8b runs preserved for tab:ciot-phase. To resume, UPDATE status back to queued.'
+			WHERE name LIKE 'PUB50-ciciot-random-%'
+			  AND status IN ('queued','running');
+		"
+		after=$(sqlite3 "$DB" "SELECT COUNT(*) FROM flows WHERE name LIKE 'PUB50-ciciot-random-%' AND status IN ('queued','running');")
+		suspended=$((before - after))
+		log "Suspended ${suspended} remaining 8b PUB50 flows (freed ~$((suspended * 78 / 60)) hours; reversible via UPDATE status='queued')."
+
+		notify "PUB50-2b CONFIRMED: 102 2b flows queued, ${suspended} 8b flows suspended (reversible)"
 	else
 		log "ERROR: auto-ratchet script failed. Check ${LOG} and run manually if desired."
 		notify "PUB50-2b CONFIRMED but auto-ratchet failed — run create script manually"
