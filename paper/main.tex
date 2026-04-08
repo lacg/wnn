@@ -792,95 +792,58 @@ estimate; thermometer encoding causes massive address collisions, so}\\
 \end{table}
 
 \paragraph{Key observations from the Pareto frontier.}
-First, the 800-byte 200n $\times$ 4b configuration --- the original
-headline --- delivers F1 79.37\% / FPR 2.38\% / Acc 96.38\%, beating
-the Perceptron baseline on FPR (which the original work does not
-report) at 1/12 the model size. Second, scaling memory by 30$\times$ to
-the 25\,KB 400n $\times$ 8b configuration lifts F1 by another
-3.76 points to \textbf{83.13\%} while keeping FPR at 2.06\% --- this
-is the FPGA-deployable sweet spot, fitting comfortably within the
-128\,KB BRAM of an iCE40UP5K and beating Perceptron F1 by 2.08
-points. Third, the peak tier (sparse memory in the hundred-megabyte
-range) reaches 84.79\% F1 at 1.59\% FPR with only 245 neurons --- a
-0.79-point gain on F1 over the 25\,KB configuration in exchange for
-a 20{,}000$\times$ memory increase, well past the diminishing-returns
-elbow.
+The 800-byte 200n $\times$ 4b headline delivers F1 79.37\% / FPR
+2.38\% / Acc 96.38\% at 1/12 the Perceptron model size. Scaling
+memory by 30$\times$ to the 25\,KB 400n $\times$ 8b lifts F1 by
+3.76 points to \textbf{83.13\%} while keeping FPR at 2.06\% --- the
+FPGA-deployable sweet spot, fitting within the 128\,KB BRAM of an
+iCE40UP5K and beating Perceptron F1 by 2.08 points. The peak tier
+(hundred-megabyte sparse memory) reaches 84.79\% F1 at 1.59\% FPR
+with only 245 neurons --- a 0.79-point gain over the 25\,KB
+configuration for a 20{,}000$\times$ memory increase, well past
+the diminishing-returns elbow. The 5n $\times$ 4b ``20-byte
+detector'' is included as an extreme-edge point: across 10 seeds,
+mean F1 is 66.66\% ($\sigma$\,=\,6.36\%) with FPR ranging 0--30\%
+across seeds, indicating the architecture is usable on
+microcontrollers but seed-search-dependent in practice.
 
-The 5n $\times$ 4b ``20-byte detector'' is included as an
-extreme-edge data point: across 10 seeds, mean F1 is 66.66\% with
-$\sigma$\,=\,6.36\%, and FPR ranges from 0\% to 30\% across seeds.
-The architecture is genuinely usable on a microcontroller with
-20 bytes of state, but the random connectivity draw matters
-enormously when only 80 cells are available --- a practical
-deployment would need to search for a good seed.
-
-\paragraph{Three operating modes of the same trained model.}
-A single trained 800-byte 200n $\times$ 4b model admits three
-deployment-time threshold choices without retraining, each
-representing a different operating point on the precision/recall
-frontier:
-
-\begin{table}[ht!]
-\centering
-\caption{Three operating modes of the 800-byte 200n $\times$ 4b model
-on the 46M CIC-IoT-2023 test set. The threshold is set at deployment
-time without retraining the underlying memory.}
-\label{tab:ciot-modes}
-\begin{tabular}{llrrr}
-\toprule
-Mode & Threshold & F1 (\%) & FPR (\%) & Acc (\%) \\
-\midrule
-Deployable    & train\_cal (0.69)         & 82.20 & 6.06  & 97.22 \\
-Oracle        & val\_cal (0.90)           & 82.41 & 3.54  & 97.20 \\
-Ultra-secure  & empirical\_cumulative (0.78) & 63.32 & 0.34 & 88.44 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-The deployable mode is the recommended baseline. The oracle mode
-requires labeled deployment data but achieves the lowest FPR among
-F1-competitive thresholds. The ultra-secure mode trades 19 F1 points
-for a 17$\times$ reduction in FPR --- suitable for environments where
-false alarms are operationally costly (analyst-burden-bounded SOCs).
+\paragraph{Threshold-tunable operating modes.}
+The same trained 800-byte 200n $\times$ 4b memory admits three
+deployment-time threshold choices without retraining: the deployable
+\emph{train\_cal} (F1 82.20\% / FPR 6.06\%), an oracle \emph{val\_cal}
+that requires labeled deployment data and achieves the lowest FPR
+among F1-competitive thresholds (F1 82.41\% / FPR 3.54\%), and an
+ultra-secure \emph{empirical\_cumulative} mode that trades 19 F1
+points for a 17$\times$ reduction in FPR (F1 63.32\% / FPR 0.34\%),
+suitable for analyst-burden-bounded SOCs where false alarms are
+operationally costly.
 
 \paragraph{Address-tap saturation finding.}
-We additionally tested whether the 32-bit address-tap width is the
-discrimination ceiling. Comparing the best 32-bit and 34-bit peak
-genomes (245n $\times$ 32b vs 500n $\times$ 34b) at the train\_cal
-threshold, F1 differs by only 0.06 percentage points
-(84.79\% vs 84.73\%), well within seed noise. The 4$\times$ larger
-address space of 34-bit yields no improvement, confirming our
-hypothesis that thermometer-encoding bit correlation caps effective
-discrimination far below the dense 2$^b$ address bound. With 8-bit
-thermometer encoding, each feature contributes only $\log_2(9)
-\approx 3.17$ effective bits, so a 32-bit address tap on 20 features
-already samples roughly half of the available discriminative
-information.
+The best 32-bit and 34-bit peak genomes (245n $\times$ 32b vs 500n
+$\times$ 34b) achieve F1 84.79\% vs 84.73\% at the train\_cal
+threshold --- a 0.06-point gap, well within seed noise. The
+4$\times$ larger address space of 34-bit yields no improvement,
+confirming that thermometer-encoding bit correlation caps effective
+discrimination far below the dense 2$^b$ address bound: with 8-bit
+thermometer, each feature contributes only $\log_2(9) \approx 3.17$
+effective bits, so a 32-bit address tap on 20 features already
+samples roughly half the available discriminative information.
 
 \paragraph{FPGA synthesis.}
-The 200-neuron 4-bit configuration is small enough for a fully dense
-$O(1)$ lookup-table implementation: each neuron stores all 16 possible
-addresses directly, totalling 3.1\,KB of LUT-based ROM (200~neurons
-$\times$~16~entries $\times$~1~byte). We synthesize this configuration
-on the same Xilinx Zynq~Z-7020 used for the UNSW-NB15 and CICIDS2017
-designs (Table~\ref{tab:fpga}). The synthesized design uses
-\textbf{154 LUTs} (0.29\% of the device), 8 flip-flops, and zero
-BRAMs/DSPs, with single-cycle direct-lookup latency of \textbf{12.7\,ns}
-at $F_\text{max}{=}78$\,MHz. The longer combinational path versus the
-12-bit dense CICIDS and UNSW configurations (104~LUTs / 91\,MHz and
-59~LUTs / 94\,MHz respectively) reflects the deeper accumulator tree
-across 200~neurons; throughput remains 78\,MS/s, well above the
-12.5\,MS/s required for 100\,Gbps line-rate inspection.
-The synthesis was performed with the 1.3M-subsample-trained memory
-contents; resource and timing results would be essentially identical
-for the 46M-trained version, since architecture and connectivity are
-unchanged.
+The 200n $\times$ 4b configuration is small enough for a fully dense
+$O(1)$ lookup-table implementation (3.1\,KB total ROM). On the same
+Xilinx Zynq~Z-7020 used for the UNSW-NB15 and CICIDS2017 designs
+(Table~\ref{tab:fpga}), the synthesized design uses
+\textbf{154 LUTs} (0.29\% of the device), 8 flip-flops, zero
+BRAMs/DSPs, with single-cycle latency of \textbf{12.7\,ns} at
+$F_\text{max}{=}78$\,MHz --- 78\,MS/s throughput, well above the
+12.5\,MS/s required for 100\,Gbps line-rate inspection. The lower
+$F_\text{max}$ vs the 12-bit dense CICIDS/UNSW configurations
+(91--94\,MHz) reflects the deeper accumulator tree across 200~neurons.
 
 % TODO after PUB50-112 completes:
-% - Update Table~\ref{tab:ciot-phase} with the full n=112 numbers (currently n=32 partial)
-% - Add 46M Pareto frontier sweep across small genomes
-%   (5n x 4b, 100n x 4b, 300n x 4b, 500n x 4b, 100n x 8b, 300n x 8b, 400n x 8b)
-% - Multi-seed validation of the 5n x 4b "20-byte detector" candidate
+% - Update tab:ciot-phase with full n=112 numbers (currently n=43 partial)
+% - Add CIC-IoT FPGA synthesis row for the 25 KB 400n × 8b peak
 % - Optionally: Pareto-frontier figure (memory vs F1)
 
 \subsection{Phase Progression Analysis}
