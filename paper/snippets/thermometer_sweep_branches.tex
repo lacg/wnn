@@ -1,0 +1,115 @@
+% =================================================================
+% Pre-written branches for the 46M thermometer sweep result.
+% Pick ONE based on the watcher's verdict and paste into main.tex
+% just before the "FPGA synthesis" paragraph in §CIC-IoT-2023 Results.
+% Replace ALL_CAPS placeholders with the actual numbers.
+% =================================================================
+
+% =================================================================
+% BRANCH A — both architectures show F1 lift on wider thermometer.
+% Verdict: encoding was the ceiling, paper gets a positive finding.
+% =================================================================
+
+\paragraph{Encoding-width hypothesis confirmed.}
+To test whether the address-tap saturation is bounded by the 8-bit
+thermometer encoding rather than the address-tap width itself, we
+re-trained the 96n $\times$ 32b and 500n $\times$ 34b peak architectures
+at 16, 32, and 64-bit thermometer encodings on the full 46M dataset
+(2 seeds per cell). Both architectures show meaningful F1 lift at
+wider encodings (Table~\ref{tab:thermo-sweep}): the 96n $\times$ 32b
+configuration improves from F1\,=\,A1\_F1\_8B\% (8-bit baseline) to
+A1\_F1\_BEST\% at A1\_BEST\_BITS-bit, a +A1\_LIFT-point gain. The 500n
+$\times$ 34b configuration shows a similar +A2\_LIFT-point gain at
+A2\_BEST\_BITS-bit. \textbf{The 32-bit address-tap saturation observed
+in Table~\ref{tab:ciot-46m} was therefore an encoding-layer ceiling,
+not an address-tap-layer ceiling}: with $\log_2(\text{patterns})$
+effective bits per feature scaling from 3.17 (8-bit) to 4.09 (16-bit)
+to 6.02 (64-bit), wider thermometer encoding genuinely unlocks more
+discriminative information at the input layer.
+
+% =================================================================
+% BRANCH B — both architectures stay flat across thermometer widths.
+% Verdict: address-tap saturation confirmed (the existing narrative).
+% =================================================================
+
+\paragraph{Encoding-width hypothesis ruled out.}
+To test whether the address-tap saturation is bounded by the 8-bit
+thermometer encoding rather than the address-tap width itself, we
+re-trained the 96n $\times$ 32b and 500n $\times$ 34b peak architectures
+at 16, 32, and 64-bit thermometer encodings on the full 46M dataset
+(2 seeds per cell). Neither architecture shows meaningful F1
+movement: the 96n $\times$ 32b stays within $\pm$A1\_DELTApp of the
+8-bit baseline (B1\_F1\_8B\% $\to$ B1\_F1\_RANGE\%), and the 500n
+$\times$ 34b similarly stays within $\pm$A2\_DELTApp (B2\_F1\_8B\%
+$\to$ B2\_F1\_RANGE\%) (Table~\ref{tab:thermo-sweep}).
+\textbf{The 32-bit address-tap is the genuine discrimination ceiling
+on this dataset}, irrespective of input encoding richness ---
+consistent with the hypothesis that thermometer-encoding bit
+correlation already saturates the address-tap's effective sampling
+even at 8-bit width.
+
+% =================================================================
+% BRANCH C — wider thermometer DROPS performance on both architectures.
+% Verdict: dilution effect (also seen in 1.3M existing sweep).
+% =================================================================
+
+\paragraph{Wider thermometer dilutes the signal.}
+Re-training the 96n $\times$ 32b and 500n $\times$ 34b peak
+architectures at 16, 32, and 64-bit thermometer encodings (2 seeds
+per cell) shows F1 \emph{degradation} relative to the 8-bit baseline
+on both architectures: the 96n $\times$ 32b drops by C1\_DROPpp at
+64-bit thermometer (C1\_F1\_8B\% $\to$ C1\_F1\_64B\%), and the 500n
+$\times$ 34b drops by C2\_DROPpp similarly (Table~\ref{tab:thermo-sweep}).
+This is the \emph{dilution effect}: at 64-bit thermometer the
+input vector grows to 1280 bits, of which a 32-bit address tap
+samples only 2.5\% per neuron. The discriminative information per
+neuron drops faster than the per-feature information rises.
+The 8-bit thermometer is therefore the local optimum for this
+combination of feature-set size and address-tap width on
+CIC-IoT-2023, replicating the existing finding from the 1.3M
+subsample sweep~\cite{paper-discussion}.
+
+% =================================================================
+% BRANCH D — architecture-dependent (one lifts, one doesn't, or mixed).
+% Verdict: more nuanced; depends on which arch.
+% =================================================================
+
+\paragraph{Architecture-dependent encoding sensitivity.}
+The two peak architectures behave differently across thermometer
+widths: the 96n $\times$ 32b shows D1\_VERDICT (D1\_F1\_8B\% $\to$
+D1\_F1\_BEST\% at D1\_BEST\_BITS-bit, D1\_LIFT-point change), while
+the 500n $\times$ 34b shows D2\_VERDICT (D2\_F1\_8B\% $\to$
+D2\_F1\_BEST\% at D2\_BEST\_BITS-bit, D2\_LIFT-point change)
+(Table~\ref{tab:thermo-sweep}). The contrasting responses suggest
+that the saturation interacts with the address-tap-to-input ratio:
+the smaller-neuron architecture has comparatively more capacity to
+absorb wider input encodings, while the larger architecture is
+already information-saturated at the 8-bit baseline.
+
+% =================================================================
+% TABLE — same in all branches, just plug in the numbers.
+% =================================================================
+
+\begin{table}[ht!]
+\centering
+\caption{46M thermometer encoding sweep on two peak architectures.
+The 8-bit columns are the baselines from Table~\ref{tab:ciot-46m};
+the 16/32/64-bit columns are new runs (2 seeds per cell, mean
+$\pm$ std reported when $n>1$).}
+\label{tab:thermo-sweep}
+\begin{tabular}{lccccc}
+\toprule
+Architecture & Metric & 8-bit & 16-bit & 32-bit & 64-bit \\
+\midrule
+\multirow{3}{*}{96n $\times$ 32b}
+ & F1 (\%)   & TBD\_8 & TBD\_16 & TBD\_32 & TBD\_64 \\
+ & FPR (\%)  & TBD    & TBD     & TBD     & TBD     \\
+ & Acc (\%)  & TBD    & TBD     & TBD     & TBD     \\
+\midrule
+\multirow{3}{*}{500n $\times$ 34b}
+ & F1 (\%)   & TBD\_8 & TBD\_16 & TBD\_32 & TBD\_64 \\
+ & FPR (\%)  & TBD    & TBD     & TBD     & TBD     \\
+ & Acc (\%)  & TBD    & TBD     & TBD     & TBD     \\
+\bottomrule
+\end{tabular}
+\end{table}
