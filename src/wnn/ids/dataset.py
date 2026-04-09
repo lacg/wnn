@@ -294,21 +294,26 @@ def create_attack_only_dataset(dataset: IDSDataset) -> IDSDataset:
 
 # Top-20 features by Random Forest importance (captures ~87% of total importance).
 # Based on RF analysis of UNSW-NB15 standard split with 100 trees.
+# Names match the HuggingFace dataset columns (lacg030175/UNSW-NB15).
+# Note: the original UNSW CSV uses slightly different column names
+# (e.g. "dinpkt" vs "Dintpkt", "dmean" vs "dmeansz"). These names
+# were updated on 2026-04-09 to match HF — prior runs with top20
+# feature selection on HF data silently dropped 7/20 features.
 TOP20_RF_FEATURES = [
 	"ct_dst_sport_ltm",
 	"ct_src_dport_ltm",
 	"ct_srv_dst",
 	"ct_state_ttl",
-	"dinpkt",
-	"dmean",
-	"dpkts",
+	"Dintpkt",       # was "dinpkt" in original CSV
+	"dmeansz",       # was "dmean" in original CSV
+	"Dpkts",         # was "dpkts" in original CSV (case)
 	"dttl",
 	"dur",
 	"sbytes",
-	"sinpkt",
-	"sjit",
-	"smean",
-	"spkts",
+	"Sintpkt",       # was "sinpkt" in original CSV
+	"Sjit",          # was "sjit" in original CSV (case)
+	"smeansz",       # was "smean" in original CSV
+	"Spkts",         # was "spkts" in original CSV (case)
 	"sttl",
 	"swin",
 	"tcprtt",
