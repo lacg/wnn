@@ -606,20 +606,16 @@ small, FPGA-friendly architectures remain competitive.
 \begin{table}[ht!]
 \centering
 \caption{UNSW-NB15 temporal split results (112 runs, 8-bit thermometer,
-GA~Neurons best-fitness genome). Neurons: 232 $\pm$ 132, address bits: 32.}
+GA~Neurons best-fitness genome). Neurons: 232 $\pm$ 132, address bits: 32.
+Full seven-mode breakdown in Appendix~\ref{app:thresholds}.}
 \label{tab:unsw}
 \begin{tabular*}{\textwidth}{l @{\extracolsep{\fill}} rrr}
 \toprule
 Threshold Mode & F1-macro (\%) & FPR (\%) & Accuracy (\%) \\
 \midrule
-Validation (val\_cal)      & 88.06 $\pm$ 1.84 & 9.92 $\pm$ 3.91    & 88.13 $\pm$ 1.80 \\
 Train-cal                  & 82.87 $\pm$ 2.47 & 32.26 $\pm$ 6.74   & 83.85 $\pm$ 2.06 \\
-Holdout (test\_cal)        & 83.61 $\pm$ 3.48 & 25.31 $\pm$ 15.24  & 84.42 $\pm$ 2.84 \\
 Fixed 0.5                  & 84.25 $\pm$ 3.85 & 22.94 $\pm$ 15.93  & 84.98 $\pm$ 3.18 \\
-Platt                      & 84.03 $\pm$ 3.63 & 24.86 $\pm$ 14.90  & 84.80 $\pm$ 3.01 \\
-Beta                       & 84.02 $\pm$ 3.82 & 24.89 $\pm$ 15.30  & 84.80 $\pm$ 3.16 \\
-Histogram                  & 81.89 $\pm$ 3.73 & 34.65 $\pm$ 10.83  & 83.16 $\pm$ 3.07 \\
-Histogram cumul.           & 83.87 $\pm$ 3.97 & 26.60 $\pm$ 14.68  & 84.73 $\pm$ 3.28 \\
+Validation (val\_cal)      & 88.06 $\pm$ 1.84 & 9.92 $\pm$ 3.91    & 88.13 $\pm$ 1.80 \\
 \bottomrule
 \end{tabular*}
 \end{table}
@@ -644,19 +640,16 @@ Random Forest (Table~\ref{tab:baselines}).
 \begin{table}[ht!]
 \centering
 \caption{CICIDS2017 random split results (120 runs, 16-bit thermometer,
-GA~Neurons best-fitness genome). Neurons: 198 $\pm$ 146, address bits: 32.}
+GA~Neurons best-fitness genome). Neurons: 198 $\pm$ 146, address bits: 32.
+Full seven-mode breakdown in Appendix~\ref{app:thresholds}.}
 \label{tab:cicids}
 \begin{tabular*}{\textwidth}{l @{\extracolsep{\fill}} rrr}
 \toprule
 Threshold Mode & F1-macro (\%) & FPR (\%) & Accuracy (\%) \\
 \midrule
-Validation (val\_cal)      & 99.30 $\pm$ 0.48 & 0.22 $\pm$ 0.12  & 99.56 $\pm$ 0.30 \\
 Train-cal                  & 99.28 $\pm$ 0.52 & 0.24 $\pm$ 0.27  & 99.55 $\pm$ 0.33 \\
 Fixed 0.5                  & 99.09 $\pm$ 0.63 & 0.45 $\pm$ 0.29  & 99.42 $\pm$ 0.40 \\
-Platt                      & 99.18 $\pm$ 0.52 & 0.34 $\pm$ 0.21  & 99.48 $\pm$ 0.33 \\
-Beta                       & 99.16 $\pm$ 0.69 & 0.30 $\pm$ 0.19  & 99.47 $\pm$ 0.42 \\
-Empirical                  & 98.41 $\pm$ 1.31 & 1.14 $\pm$ 1.10  & 98.96 $\pm$ 0.91 \\
-Empirical cumul.           & 99.07 $\pm$ 1.52 & 0.26 $\pm$ 0.16  & 99.43 $\pm$ 0.82 \\
+Validation (val\_cal)      & 99.30 $\pm$ 0.48 & 0.22 $\pm$ 0.12  & 99.56 $\pm$ 0.30 \\
 \bottomrule
 \end{tabular*}
 \end{table}
@@ -1329,5 +1322,75 @@ threshold calibration, and scaling the evolutionary search to the full
 % ============================================================================
 \bibliographystyle{splncs04}
 \bibliography{references}
+
+% ============================================================================
+\appendix
+\section{Full Threshold Mode Breakdown}
+\label{app:thresholds}
+
+Tables~\ref{tab:unsw-full}--\ref{tab:ciot-full} report all seven
+threshold calibration modes for each dataset. The main body
+(Tables~\ref{tab:unsw},~\ref{tab:cicids},~\ref{tab:ciot-phase})
+shows only the three key modes (train\_cal, fixed\_05, val\_cal).
+
+\begin{table}[ht!]
+\centering
+\caption{UNSW-NB15 temporal split, all threshold modes (112 runs,
+GA~Neurons best-fitness genome).}
+\label{tab:unsw-full}
+\begin{tabular*}{\textwidth}{l @{\extracolsep{\fill}} rrr}
+\toprule
+Threshold Mode & F1-macro (\%) & FPR (\%) & Accuracy (\%) \\
+\midrule
+Train-cal          & 82.87 $\pm$ 2.47 & 32.26 $\pm$ 6.74  & 83.85 $\pm$ 2.06 \\
+Fixed 0.5          & 84.25 $\pm$ 3.85 & 22.94 $\pm$ 15.93 & 84.98 $\pm$ 3.18 \\
+Platt              & 84.03 $\pm$ 3.63 & 24.86 $\pm$ 14.90 & 84.80 $\pm$ 3.01 \\
+Beta               & 84.02 $\pm$ 3.82 & 24.89 $\pm$ 15.30 & 84.80 $\pm$ 3.16 \\
+Empirical          & 81.89 $\pm$ 3.73 & 34.65 $\pm$ 10.83 & 83.16 $\pm$ 3.07 \\
+Empirical cumul.   & 83.87 $\pm$ 3.97 & 26.60 $\pm$ 14.68 & 84.73 $\pm$ 3.28 \\
+Validation         & 88.06 $\pm$ 1.84 &  9.92 $\pm$ 3.91  & 88.13 $\pm$ 1.80 \\
+\bottomrule
+\end{tabular*}
+\end{table}
+
+\begin{table}[ht!]
+\centering
+\caption{CICIDS2017 random split, all threshold modes (120 runs,
+16-bit thermometer, GA~Neurons best-fitness genome).}
+\label{tab:cicids-full}
+\begin{tabular*}{\textwidth}{l @{\extracolsep{\fill}} rrr}
+\toprule
+Threshold Mode & F1-macro (\%) & FPR (\%) & Accuracy (\%) \\
+\midrule
+Train-cal          & 99.28 $\pm$ 0.52 & 0.24 $\pm$ 0.27 & 99.55 $\pm$ 0.33 \\
+Fixed 0.5          & 99.09 $\pm$ 0.63 & 0.45 $\pm$ 0.29 & 99.42 $\pm$ 0.40 \\
+Platt              & 99.18 $\pm$ 0.52 & 0.34 $\pm$ 0.21 & 99.48 $\pm$ 0.33 \\
+Beta               & 99.16 $\pm$ 0.69 & 0.30 $\pm$ 0.19 & 99.47 $\pm$ 0.42 \\
+Empirical          & 98.41 $\pm$ 1.31 & 1.14 $\pm$ 1.10 & 98.96 $\pm$ 0.91 \\
+Empirical cumul.   & 99.07 $\pm$ 1.52 & 0.26 $\pm$ 0.16 & 99.43 $\pm$ 0.82 \\
+Validation         & 99.30 $\pm$ 0.48 & 0.22 $\pm$ 0.12 & 99.56 $\pm$ 0.30 \\
+\bottomrule
+\end{tabular*}
+\end{table}
+
+\begin{table}[ht!]
+\centering
+\caption{CIC-IoT-2023 random split (1.3M subsample), all threshold
+modes (56 runs, 8-bit thermometer, GA~Neurons best-fitness genome).}
+\label{tab:ciot-full}
+\begin{tabular*}{\textwidth}{l @{\extracolsep{\fill}} rrr}
+\toprule
+Threshold Mode & F1-macro (\%) & FPR (\%) & Accuracy (\%) \\
+\midrule
+Train-cal          & 80.06 $\pm$ 0.50 &  4.32 $\pm$ 0.46 & 86.85 $\pm$ 0.44 \\
+Fixed 0.5          & 81.60 $\pm$ 0.40 &  9.11 $\pm$ 0.93 & 88.55 $\pm$ 0.34 \\
+Platt              & 81.38 $\pm$ 0.52 & 33.12 $\pm$ 3.25 & 90.72 $\pm$ 0.18 \\
+Beta               & 81.10 $\pm$ 0.67 & 34.78 $\pm$ 3.55 & 90.71 $\pm$ 0.15 \\
+Empirical          & 67.96 $\pm$ 14.22 & 64.87 $\pm$ 24.03 & 88.69 $\pm$ 2.37 \\
+Empirical cumul.   & 82.05 $\pm$ 0.81 & 23.03 $\pm$ 8.19 & 90.21 $\pm$ 0.42 \\
+Validation         & 79.88 $\pm$ 0.50 &  3.97 $\pm$ 0.52 & 86.65 $\pm$ 0.44 \\
+\bottomrule
+\end{tabular*}
+\end{table}
 
 \end{document}
