@@ -749,15 +749,19 @@ Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & Model Size \\
  & Ours (245n $\times$ 32b)  & 84.79 &  1.59 & 97.68 & ${\sim}$500\,MB$^*$ \\
  & Ours (500n $\times$ 34b)  & 84.73 &  1.91 & 97.68 & ${\sim}$1\,GB$^*$ \\
 \midrule
-\multirow{5}{*}{Baseline}
- & Perceptron       & 81.05 & ---  & 98.18 & ${\sim}$10\,KB \\
- & Logistic Reg.    & 87.63 & ---  & 98.90 & ${\sim}$1\,KB \\
- & DNN              & 94.03 & ---  & 99.44 & ${\sim}$5\,MB \\
- & AdaBoost         & 95.63 & ---  & 99.59 & ${\sim}$10\,MB \\
- & Random Forest    & 96.53 & ---  & 99.68 & ${\sim}$50\,MB \\
+\multirow{3}{*}{\shortstack[l]{Baseline\\(46M)}}
+ & RF (ours, 46M)   & 92.64 & 13.48 & 99.18 & ${\sim}$50\,MB \\
+ & XGBoost (ours)    & 91.67 & 14.80 & 99.06 & ${\sim}$5\,MB \\
+ & Perceptron        & 81.05 & ---   & 98.18 & ${\sim}$10\,KB \\
+\midrule
+\multirow{3}{*}{\shortstack[l]{Neto et al.$^\dag$\\(46M)}}
+ & DNN              & 94.03$^\dag$ & ---  & 99.44 & ${\sim}$5\,MB \\
+ & AdaBoost         & 95.63$^\dag$ & ---  & 99.59 & ${\sim}$10\,MB \\
+ & Random Forest    & 96.53$^\dag$ & ---  & 99.68 & ${\sim}$50\,MB \\
 \bottomrule
-\multicolumn{6}{l}{\small All ``Ours'' rows: train\_cal threshold; 5n$\times$4b = mean$\pm$std (10 seeds), rest = single seed.}\\
-\multicolumn{6}{l}{\small $^*$Sparse memory; thermometer collisions reduce actual entries far below $2^b$.}
+\multicolumn{6}{l}{\small All ``Ours'' rows: F1-macro, train\_cal threshold; 5n$\times$4b = mean$\pm$std (10 seeds), rest = single seed.}\\
+\multicolumn{6}{l}{\small $^*$Sparse memory; thermometer collisions reduce actual entries far below $2^b$.}\\
+\multicolumn{6}{l}{\small $^\dag$Neto et al.\ F1 may use weighted averaging; on this 97\%-attack dataset, our RF's F1-weighted is 99.18\%.}
 \end{tabular}}
 \end{table}
 
