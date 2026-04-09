@@ -895,6 +895,28 @@ feature encoding, non-random connectivity, or fundamentally
 different memory primitives --- rather than hyperparameter
 adjustments within the current design.
 
+\paragraph{Narrower thermometer encoding on 46M.}
+A downward sweep (2-bit, 4-bit) on the same two reference architectures
+revealed an unexpected lift at 2-bit: 96n $\times$ 32b reaches
+85.63\% $\pm$ 0.06 F1 ($n{=}2$ seeds, +1.26\,pp over the 8-bit entry in
+Table~\ref{tab:thermo-sweep}), and the 400n $\times$ 8b small-memory
+Pareto peak (Table~\ref{tab:fpga}) reaches 84.17\% $\pm$ 0.11 F1
+(+1.04\,pp). To test whether this effect reproduces at the 1.3M
+random-subsample scale used throughout our PUB50 comparison, we ran a
+4-seed PUB50-2b batch matched to the 46-flow 8-bit baseline on every
+parameter except \texttt{ids\_n\_bits}. Across 4 seeds
+($\sigma_\text{F1}{=}0.44$\,pp, $\sigma_\text{FPR}{=}0.26$\,pp),
+2-bit reached 77.86\% F1 / 2.34\% FPR / 84.70\% accuracy versus the
+46-run 8-bit mean of 80.07\% F1 / 4.25\% FPR / 86.85\% accuracy ---
+a balanced-fitness drop of 0.54\,pp outside the estimated $\pm$0.3\,pp
+noise floor. The 46M 2-bit lift therefore appears to be
+training-set-size-dependent: narrower encodings benefit from the
+examples-per-address density the 46M dataset provides but the 1.3M
+subsample does not. Further validation across additional 46M seeds
+and intermediate dataset sizes would be needed to fully characterize
+the effect; we report it here as a scale-dependent observation rather
+than a universal recommendation.
+
 An engineering note: the 500n $\times$ 34b configurations at
 32-bit and 64-bit thermometer initially exceeded the Mac Studio's
 compressed-memory budget during training buffer allocation
