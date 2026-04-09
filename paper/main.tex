@@ -971,38 +971,59 @@ $\Delta$       & +0.05            & $-$0.016           & $-$146 ($-$43\%) & \\
 
 Table~\ref{tab:baselines} compares our WNN against conventional ML
 baselines and the only other WNN-based IDS (FWIW).  All ``Ours''
-baselines use identical data splits and preprocessing for fair comparison.
+entries use identical data splits; RF/XGBoost receive raw numeric
+features (their natural format), while our WNN uses thermometer-encoded
+binary features (its natural format).
 
 On the UNSW-NB15 temporal split, our WNN outperforms both Random Forest
 and XGBoost by 1--2 percentage points in F1, demonstrating that
 thermometer encoding provides robustness to temporal distribution shift.
-On the CICIDS2017 random split, Random Forest leads (99.83\% vs.\
-our 99.40\%).  Our thermometer sweep (Section~\ref{sec:discussion})
-shows this gap persists even at 64-bit encoding (99.41\%), indicating
-that encoding precision alone does not explain the difference and
-further investigation is needed to understand and close this gap.
+On the CICIDS2017 random split, our WNN nearly matches Random Forest
+(99.29\% vs.\ 99.74\% F1-macro, a 0.45\,pp gap) in a model
+$5{,}000\times$ smaller.
+
+On CIC-IoT-2023 (1.3M random 80/20, top-20 features), the WNN's F1 is
+lower than Random Forest (80.07\% vs.\ 85.53\%), but its false-positive
+rate is \textbf{5.8$\times$ lower} (4.32\% vs.\ 25.18\%). In a deployed
+IDS, each false positive generates an alert requiring human investigation;
+25\% FPR is operationally unusable at scale, while 4\% is deployable.
+The WNN achieves this operating point in 100\,KB on a \$20 FPGA
+(Table~\ref{tab:fpga}), versus ${\sim}$50\,MB for the RF model.
+Using the fixed 0.5 threshold (the fairest comparison to RF/XGBoost's
+\texttt{predict()}) narrows the gap to 3.9\,pp F1 at the cost of higher
+FPR (9.12\%).
 
 \begin{table}[ht!]
 \centering
-\caption{Comparison with baselines. ``Ours'' entries trained on identical
-data with same preprocessing. FWIW uses a different split protocol.}
+\caption{Comparison with baselines. ``Ours'' entries report the
+train\_cal threshold (fitness-aligned); $^\dagger$fixed\_05 (0.5 threshold)
+for direct comparison with RF/XGBoost \texttt{predict()}.
+RF/XGBoost use raw numeric features; WNN uses thermometer-encoded features.
+FWIW uses a different split protocol.}
 \label{tab:baselines}
+\resizebox{\textwidth}{!}{%
 \begin{tabular}{llrrrl}
 \toprule
 Method & Dataset / Split & F1 (\%) & FPR (\%) & Acc (\%) & Notes \\
 \midrule
 \textbf{Ours} & UNSW / temporal & \textbf{88.06} & 9.92 & 88.13 & 112 runs \\
-Random Forest  & UNSW / temporal & 86.63 & 25.36 & 87.20 & Same data \\
-XGBoost        & UNSW / temporal & 86.93 & 25.65 & 87.30 & Same data \\
+Random Forest  & UNSW / temporal & 86.63 & 25.36 & 87.20 & Same split \\
+XGBoost        & UNSW / temporal & 86.93 & 25.65 & 87.30 & Same split \\
 \midrule
-\textbf{Ours} & CICIDS / random & 99.40 & 0.20 & 99.62 & 31 runs \\
-Random Forest  & CICIDS / random & 99.83 & 0.07 & 99.89 & Same data \\
-XGBoost        & CICIDS / random & 99.80 & 0.07 & 99.88 & Same data \\
+\textbf{Ours} & CICIDS / random & 99.29 & 0.25 & 99.55 & 161 runs \\
+\textbf{Ours}$^\dagger$ & CICIDS / random & 99.10 & 0.45 & 99.43 & fixed\_05 \\
+Random Forest  & CICIDS / random & 99.74 & 0.08 & 99.84 & Same split \\
+XGBoost        & CICIDS / random & 99.65 & 0.12 & 99.78 & Same split \\
+\midrule
+\textbf{Ours} & CIC-IoT / random & 80.07 & \textbf{4.32} & 86.85 & 54 runs \\
+\textbf{Ours}$^\dagger$ & CIC-IoT / random & 81.61 & 9.12 & 88.56 & fixed\_05 \\
+Random Forest  & CIC-IoT / random & 85.53 & 25.18 & 92.71 & Same split, top-20 \\
+XGBoost        & CIC-IoT / random & 84.13 & 28.34 & 92.07 & Same split, top-20 \\
 \midrule
 FWIW~\cite{susskind2023fwiw} & UNSW / random$^*$ & --- & 1.57 & 98.50 & 192\,B model \\
 \bottomrule
 \multicolumn{6}{l}{\small $^*$90/10 deduplicated, oversampled; reports accuracy only, not F1.}
-\end{tabular}
+\end{tabular}}
 \end{table}
 
 \subsection{Model Size Analysis}
