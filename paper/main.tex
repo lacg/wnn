@@ -50,16 +50,16 @@ which input bits each neuron observes, a problem traditionally solved by random
 initialization. We present an evolutionary optimization framework that
 optimizes neuron count through grid search and genetic algorithm with
 each neuron's random connectivity effectively performing feature selection
-intrinsic to the architecture. The sparse trained memory (362\,KB for our
-best genome) fits entirely within the LUT fabric of a \$100 Zynq~Z-7020
-FPGA, enabling $O(\log n)$ lookup-based inference per neuron
-(where $n$ is the number of trained entries). We evaluate on three standard IDS benchmarks
-(UNSW-NB15, CICIDS2017, CIC-IoT-2023) using both temporal and random
-splits with an eight-mode threshold calibration protocol that exposes
-the sensitivity of binary classifiers to decision boundary selection.
-Across 112 independent runs per configuration, our approach achieves
-88.06\% F1 on UNSW-NB15 temporal (outperforming Random Forest by 1.4
-points) and 99.40\% F1 on CICIDS2017 random (0.20\% false positive rate).
+intrinsic to the architecture. The trained memory (100\,KB for our best deployable genome) fits
+within the LUT fabric of a \$20 Zynq~Z-7020 FPGA, enabling $O(1)$
+direct-lookup inference per neuron. We evaluate on three standard IDS
+benchmarks (UNSW-NB15, CICIDS2017, CIC-IoT-2023) using both temporal
+and random splits with a seven-mode threshold calibration protocol
+that exposes the sensitivity of binary classifiers to decision boundary
+selection. Across up to 120 independent runs per configuration, our
+approach achieves 88.06\% F1 on UNSW-NB15 temporal (outperforming
+Random Forest by 1.4 points) and 99.28\% F1 on CICIDS2017 random
+(0.24\% false positive rate).
 On the full 46.7M-record CIC-IoT-2023 benchmark, our approach spans a
 four-order-of-magnitude memory frontier from a 20-byte microcontroller
 detector to a hundred-megabyte sparse peak: a 25\,KB
@@ -117,11 +117,11 @@ Our contributions are:
   network parameters discovers which input features matter without
   external feature selection with connectivity optimization providing
   the largest single improvement in classification performance.
-\item \textbf{Compact architecture with sub-microsecond inference potential.}
-  Our evolved WNN outperforms Random Forest and XGBoost on the standard
-  temporal split with a network architecture specified in a few kilobytes
-  and lookup-based inference suitable for FPGA deployment.
-\item \textbf{Eight-mode threshold calibration study.} We identify threshold
+\item \textbf{Compact architecture with sub-microsecond inference.}
+  Our evolved WNN outperforms Random Forest and XGBoost on the UNSW-NB15
+  temporal split and achieves 5.8$\times$ lower FPR than RF on CIC-IoT-2023,
+  in a 100\,KB model deployable on a \$20 FPGA.
+\item \textbf{Seven-mode threshold calibration study.} We identify threshold
   selection as an important factor in IDS evaluation,
   showing a 5.18 percentage point F1 gap between validation and
   train-calibrated thresholds on the temporal split.
@@ -323,7 +323,7 @@ characteristics:
 from the Australian Centre for Cyber Security with 42 numeric features and 10 attack
 categories. The standard temporal split (175K train / 82K test) separates
 training and testing periods, preventing data leakage. We also evaluate on a
-deduplicated random split (1.4M / 158K) for comparison with prior
+deduplicated random 80/20 split (1.27M / 317K) for comparison with prior
 work~\cite{susskind2023fwiw}.
 
 \textbf{CICIDS2017}~\cite{sharafaldin2018cicids2017} comprises five days of
@@ -335,7 +335,7 @@ published work on this dataset.
 \textbf{CIC-IoT-2023}~\cite{neto2023ciciot} captures IoT traffic from 105
 heterogeneous devices with 33 attack types across 7 classes. With 46.7M
 records heavily skewed toward attacks (97.6\%), we subsample to 1.3M records
-for a balanced benchmark, as a random split (no temporal ordering in the
+for a manageable benchmark, as a random split (no temporal ordering in the
 source data).
 
 % ============================================================================
@@ -469,20 +469,13 @@ within the population, then combine ranks via a weighted harmonic mean:
 \label{eq:fitness}
 \end{equation}
 where $r_m(g)$ is genome $g$'s rank for metric $m$ (lower rank = better).
-We use $w_{CE}{=}0.2$, $w_{F1}{=}0.3$, $w_{FPR}{=}0.4$, $w_{Acc}{=}0.1$,
-where CE (cross-entropy) measures prediction confidence, F1 is the
-harmonic mean of precision and recall, and FPR (false positive rate)
-is the fraction of benign flows misclassified as attacks.
-FPR receives the highest weight because false alarms erode analyst
-trust in operational IDS\@.  F1 and accuracy are highly correlated
-(both improve together), so accuracy receives minimal weight
-($w_{Acc}{=}0.1$) as a tiebreaker.  CE acts as a regularization
-signal: without it, the GA converges on genomes with high F1 but
-poor prediction confidence, leading to fragile calibration.
-Including CE at $w_{CE}{=}0.2$ maintains population diversity and
-produces genomes that generalize better across threshold modes.
-These weights were selected empirically and are used across all
-datasets and experiments.
+For UNSW-NB15 and CICIDS2017, we use $w_{CE}{=}0.2$, $w_{F1}{=}0.3$,
+$w_{FPR}{=}0.4$, $w_{Acc}{=}0.1$.  FPR receives the highest weight
+because false alarms erode analyst trust in operational IDS\@.  CE
+acts as a regularization signal, preventing fragile calibration.
+For CIC-IoT-2023, we adopt refined weights $w_{CE}{=}0.1$,
+$w_{F1}{=}0.35$, $w_{FPR}{=}0.35$, $w_{Acc}{=}0.2$, balancing F1
+and FPR equally (Section~\ref{sec:results-ciot}).
 
 \subsection{GPU-Accelerated Optimization}
 
@@ -519,8 +512,8 @@ for CICIDS2017 and CIC-IoT-2023:
   split with temporal separation between training and testing periods.
 \item \textbf{Random splits (all datasets):} Stratified random splits,
   enabling comparison with prior work.
-  UNSW-NB15 uses 80/20 (206K/52K);
-  CICIDS2017 uses 80/20 (2.3M/566K); CIC-IoT-2023 uses 80/20.
+  UNSW-NB15 uses 80/20 (1.27M/317K);
+  CICIDS2017 uses 80/20 (2.3M/566K); CIC-IoT-2023 uses 80/20 (1.07M/268K).
 \end{itemize}
 
 \subsection{Eight-Mode Threshold Calibration}
@@ -529,25 +522,22 @@ Binary IDS classifiers produce a continuous score that must be
 thresholded to yield a classification. The choice of threshold
 dramatically affects F1 and FPR, yet most published work reports
 results under a single (often unspecified) threshold mode. We evaluate
-every genome under eight calibration strategies to expose this
+every genome under seven calibration strategies to expose this
 sensitivity:
 
 \begin{enumerate}
-\item \textbf{Train-calibrated:} Threshold swept on training-set
-  scores (optimistic, same data used for model training).
-\item \textbf{Holdout-calibrated:} Threshold swept on a held-out
-  25\% validation split, applied to the test set (simulates having
-  labeled calibration data from the deployment environment).
+\item \textbf{Train-calibrated (train\_cal):} Threshold swept on training-set
+  scores to maximize the same fitness function used by the GA.
 \item \textbf{Fixed 0.5:} No calibration; the midpoint threshold
   (distribution-agnostic baseline).
 \item \textbf{Platt scaling}~\cite{platt1999probabilistic}: Logistic
   regression on held-out scores, $P(\text{attack})\!=\!\sigma(as\!+\!b)$.
 \item \textbf{Beta calibration}~\cite{kull2017beta}: Three-parameter
   logit model, more flexible than Platt for asymmetric distributions.
-\item \textbf{Histogram:} Histogram-based threshold from held-out
+\item \textbf{Empirical:} Histogram-based threshold from held-out
   score distribution.
-\item \textbf{Histogram cumulative:} CDF-based threshold selection.
-\item \textbf{Validation:} Threshold swept on the held-out validation set
+\item \textbf{Empirical cumulative:} CDF-based threshold selection.
+\item \textbf{Validation (val\_cal):} Threshold swept on the held-out validation set
   (not used during training or GA selection). This represents an upper
   bound on achievable performance, not available in deployment, but
   quantifies the calibration gap.
@@ -560,11 +550,11 @@ dataset and configuration.
 
 \subsection{Statistical Protocol}
 
-Each configuration is run as 112 independent flows with different
-seeds. We report the 5\% trimmed mean (removing the 6 highest and
-6 lowest values, yielding 100 samples) $\pm$ standard deviation.
-With $n=100$ and typical $\sigma \approx 1.4\%$, the 95\% confidence
-interval for the mean is $\pm 0.27\%$, sufficient to distinguish
+Each configuration is run as up to 120 independent flows with different
+seeds (112 for UNSW-NB15, 120 for CICIDS2017, 56/112 in progress
+for CIC-IoT-2023). We report mean $\pm$ standard deviation.
+With $n \geq 56$ and typical $\sigma \approx 0.5\%$, the 95\% confidence
+interval for the mean is $\pm 0.13\%$, sufficient to distinguish
 meaningful differences between configurations.
 
 K-fold cross-validation ($k{=}5$) is applied \emph{every generation}
@@ -637,42 +627,36 @@ Histogram cumul.           & 83.87 $\pm$ 3.97 & 26.60 $\pm$ 14.68  & 84.73 $\pm$
 \subsection{CICIDS2017 Random Results}
 \label{sec:results-cicids}
 
-Table~\ref{tab:cicids} reports preliminary results from 31 of 112 planned
-runs on CICIDS2017 with 16-bit thermometer encoding (top-20 RF features,
-random 80/20 split, population size~50).  The 16-bit encoding was selected
-based on our thermometer sweep analysis (Section~\ref{sec:discussion}),
-which identified 16~bits as the optimal resolution for this dataset.
+Table~\ref{tab:cicids} reports results from 120 runs on CICIDS2017 with
+16-bit thermometer encoding (top-20 RF features, random 80/20 split,
+population size~50).  The 16-bit encoding was selected based on our
+thermometer sweep analysis (Section~\ref{sec:discussion}), which
+identified 16~bits as the optimal resolution for this dataset.
 
 Performance is substantially higher than UNSW-NB15 temporal, reflecting
-the easier random split.  The validation threshold achieves 99.40\% $\pm$ 0.06\%
-F1-macro with 0.198\% FPR.  Notably, the variance is an order of magnitude
-smaller than UNSW-NB15 ($\pm$0.06\% vs.\ $\pm$1.84\%), confirming that
-random splits produce more stable evaluations.
-
-Among individual genomes, the best F1 achieves 99.54\% F1 / 0.119\% FPR /
-99.71\% Acc (91 neurons), the best FPR achieves 99.48\% F1 / 0.097\% FPR /
-99.67\% Acc (200 neurons), and a compact genome with only 9 neurons still
-reaches 99.34\% F1 / 0.291\% FPR / 99.58\% Acc.
+the easier random split.  The validation threshold achieves 99.30\%
+$\pm$ 0.48\% F1-macro with 0.22\% FPR.  The train-calibrated threshold
+nearly matches (99.28\% F1, 0.24\% FPR), confirming minimal calibration
+difficulty on random splits.  Among individual genomes, the best F1
+achieves 99.52\% F1 / 0.13\% FPR / 99.70\% Acc, within 0.22\,pp of
+Random Forest (Table~\ref{tab:baselines}).
 
 \begin{table}[ht!]
 \centering
-\caption{CICIDS2017 random split results (99 of 112 runs, 16-bit
-thermometer, GA~Neurons best-fitness genome).
-Neurons: 194 $\pm$ 143, address bits: 32--34.
-Final numbers will be updated when all 112 runs complete.}
+\caption{CICIDS2017 random split results (120 runs, 16-bit thermometer,
+GA~Neurons best-fitness genome). Neurons: 198 $\pm$ 146, address bits: 32.}
 \label{tab:cicids}
 \begin{tabular*}{\textwidth}{l @{\extracolsep{\fill}} rrr}
 \toprule
 Threshold Mode & F1-macro (\%) & FPR (\%) & Accuracy (\%) \\
 \midrule
-Validation (val\_cal)      & 99.40 $\pm$ 0.06 & 0.196 $\pm$ 0.063  & 99.62 $\pm$ 0.04 \\
-Train-cal                  & 99.39 $\pm$ 0.09 & 0.200 $\pm$ 0.082  & 99.61 $\pm$ 0.06 \\
-Holdout (test\_cal)        & 99.30 $\pm$ 0.16 & 0.221 $\pm$ 0.084  & 99.56 $\pm$ 0.10 \\
-Fixed 0.5                  & 99.23 $\pm$ 0.12 & 0.416 $\pm$ 0.104  & 99.51 $\pm$ 0.07 \\
-Platt                      & 99.29 $\pm$ 0.14 & 0.304 $\pm$ 0.107  & 99.55 $\pm$ 0.09 \\
-Beta                       & 99.30 $\pm$ 0.17 & 0.269 $\pm$ 0.085  & 99.56 $\pm$ 0.10 \\
-Histogram                  & 98.65 $\pm$ 0.60 & 0.940 $\pm$ 0.534  & 99.13 $\pm$ 0.40 \\
-Histogram cumul.           & 99.32 $\pm$ 0.12 & 0.237 $\pm$ 0.088  & 99.57 $\pm$ 0.07 \\
+Validation (val\_cal)      & 99.30 $\pm$ 0.48 & 0.22 $\pm$ 0.12  & 99.56 $\pm$ 0.30 \\
+Train-cal                  & 99.28 $\pm$ 0.52 & 0.24 $\pm$ 0.27  & 99.55 $\pm$ 0.33 \\
+Fixed 0.5                  & 99.09 $\pm$ 0.63 & 0.45 $\pm$ 0.29  & 99.42 $\pm$ 0.40 \\
+Platt                      & 99.18 $\pm$ 0.52 & 0.34 $\pm$ 0.21  & 99.48 $\pm$ 0.33 \\
+Beta                       & 99.16 $\pm$ 0.69 & 0.30 $\pm$ 0.19  & 99.47 $\pm$ 0.42 \\
+Empirical                  & 98.41 $\pm$ 1.31 & 1.14 $\pm$ 1.10  & 98.96 $\pm$ 0.91 \\
+Empirical cumul.           & 99.07 $\pm$ 1.52 & 0.26 $\pm$ 0.16  & 99.43 $\pm$ 0.82 \\
 \bottomrule
 \end{tabular*}
 \end{table}
@@ -942,7 +926,7 @@ add noise without improving discrimination.
 
 \begin{table}[ht!]
 \centering
-\caption{Phase progression on CICIDS2017 (99 runs, val\_cal threshold,
+\caption{Phase progression on CICIDS2017 (120 runs, val\_cal threshold,
 best-fitness genome).}
 \label{tab:phase}
 \begin{tabular*}{\textwidth}{l @{\extracolsep{\fill}} rrrr}
@@ -969,10 +953,10 @@ binary features (its natural format).
 On the UNSW-NB15 temporal split, our WNN outperforms both Random Forest
 and XGBoost by 1--2 percentage points in F1, demonstrating that
 thermometer encoding provides robustness to temporal distribution shift.
-On the CICIDS2017 random split, the average WNN across 161 seeds reaches
-99.29\% F1 (0.45\,pp below RF's 99.74\%) in a model $5{,}000\times$
-smaller; the best individual genome closes this to \textbf{99.58\% F1}
-(0.16\,pp gap), with 0.13\% FPR nearly matching RF's 0.08\%.
+On the CICIDS2017 random split, the average WNN across 120 seeds reaches
+99.28\% F1 (0.46\,pp below RF's 99.74\%) in a model $5{,}000\times$
+smaller; the best individual genome closes this to \textbf{99.52\% F1}
+(0.22\,pp gap), with 0.13\% FPR nearly matching RF's 0.08\%.
 
 On CIC-IoT-2023 (1.3M random 80/20, top-20 features), the average WNN
 trails Random Forest in F1 (80.07\% vs.\ 85.53\%), but its false-positive
@@ -1003,8 +987,8 @@ Method & Dataset / Split & F1 (\%) & FPR (\%) & Acc (\%) & Notes \\
 Random Forest  & UNSW / temporal & 86.63 & 25.36 & 87.20 & Same split \\
 XGBoost        & UNSW / temporal & 86.93 & 25.65 & 87.30 & Same split \\
 \midrule
-\textbf{Ours} & CICIDS / random & 99.29 & 0.25 & 99.55 & 161 runs \\
-\textbf{Ours}$^\ddagger$ & CICIDS / random & \textbf{99.58} & 0.13 & \textbf{99.74} & best genome \\
+\textbf{Ours} & CICIDS / random & 99.28 & 0.24 & 99.55 & 120 runs \\
+\textbf{Ours}$^\ddagger$ & CICIDS / random & \textbf{99.52} & 0.13 & \textbf{99.70} & best genome \\
 Random Forest  & CICIDS / random & 99.74 & 0.08 & 99.84 & Same split \\
 XGBoost        & CICIDS / random & 99.65 & 0.12 & 99.78 & Same split \\
 \midrule
@@ -1291,9 +1275,9 @@ latency (10.7 vs.\ 10.8\,ns).  For sparse configurations, a
 to 15--25\,ns, combining the accuracy of large address spaces with
 near-$O(1)$ speed.
 
-Fourth, the remaining 0.43\% F1 gap to Random Forest on CICIDS2017
-is not explained by encoding precision (64-bit yields no improvement)
-and warrants further investigation.  Our framework supports additional
+Fourth, the remaining 0.46\% F1 gap to Random Forest on CICIDS2017
+(0.22\% for the best genome) is not explained by encoding precision
+(64-bit yields no improvement) and warrants further investigation.  Our framework supports additional
 optimization phases beyond the two evaluated here: \emph{GA bits}
 (evolving address width per neuron), \emph{GA connections} (evolving
 which input bits each neuron reads), \emph{tabu search} variants of
@@ -1323,8 +1307,8 @@ contributes three advances over prior WNN-based IDS:
   UNSW-NB15, CICIDS2017, and CIC-IoT-2023, comparing directly against
   Random Forest and XGBoost on identical splits.  On UNSW-NB15 (temporal,
   112~runs), our WNN outperforms both baselines in F1 (88.06\% vs.\
-  86.93\%).  On CICIDS2017 (random, 161~runs), our best genome reaches
-  99.58\% F1, within 0.16\,pp of RF.  On CIC-IoT-2023 (random, 56~runs),
+  86.93\%).  On CICIDS2017 (random, 120~runs), our best genome reaches
+  99.52\% F1, within 0.22\,pp of RF.  On CIC-IoT-2023 (random, 56~runs),
   the WNN trades 5.5\,pp F1 for \textbf{5.8$\times$ lower FPR}
   (4.32\% vs.\ 25.18\%), a critical advantage for operational deployment
   where false-positive volume determines alert-handling cost.
