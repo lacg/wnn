@@ -703,32 +703,27 @@ strong under the actual fitness criterion. The co-optimization ensures
 the architecture search and threshold selection work together rather
 than at cross purposes.
 
-\paragraph{1.3M subsample (43/112 runs, partial).}
-At time of writing, 43 of the 112 PUB50 flows have completed.
+\paragraph{1.3M subsample (56/112 runs).}
 Table~\ref{tab:ciot-phase} reports the phase progression for the
-best-fitness genome under the deployable train\_cal threshold. The GA
-phase reduces neuron count by 19\% (414 $\to$ 336) while improving F1
-by 0.52 percentage points and reducing FPR by 0.48 points, mirroring
-the regularization effect observed on CICIDS2017
-(Section~\ref{sec:phase-progression}). The improvement holds across
-all seven threshold modes; with the simple fixed-0.5 threshold the GA
-delivers 81.64\% F1 vs.\ 81.08\% for the grid search, with FPR matched
-within 0.13 points.
+best-fitness genome under the deployable train\_cal threshold across
+56 completed PUB50 flows. The GA phase reduces neuron count by 19\%
+(409 $\to$ 330) while improving F1 by 0.49 percentage points and
+reducing FPR by 0.34 points, mirroring the regularization effect
+observed on CICIDS2017 (Section~\ref{sec:phase-progression}).
 
 \begin{table}[ht!]
 \centering
 \caption{Phase progression on CIC-IoT-2023 1.3M subsample
-(43/112 runs, train\_cal threshold, best-fitness genome). Camera-ready
-will report the full 112-run batch.}
+(56/112 runs, train\_cal threshold, best-fitness genome).}
 \label{tab:ciot-phase}
 \begin{tabular*}{\textwidth}{l @{\extracolsep{\fill}} rrrr}
 \toprule
 Phase & F1-macro (\%) & FPR (\%) & Neurons & Bits \\
 \midrule
-Grid Search    & 79.56 $\pm$ 0.56 & 4.75 $\pm$ 2.61 & 414 $\pm$ 89 & 34 $\pm$ 1 \\
-GA Neurons     & 80.09 $\pm$ 0.53 & 4.27 $\pm$ 0.48 & 336 $\pm$ 119 & 32 $\pm$ 1 \\
+Grid Search    & 79.58 $\pm$ 0.49 & 4.66 $\pm$ 2.29 & 409 $\pm$ 96 & 34 $\pm$ 1 \\
+GA Neurons     & 80.06 $\pm$ 0.50 & 4.32 $\pm$ 0.46 & 330 $\pm$ 120 & 32 $\pm$ 1 \\
 \midrule
-$\Delta$       & +0.52            & $-$0.48          & $-$78 ($-$19\%) & \\
+$\Delta$       & +0.49            & $-$0.34          & $-$79 ($-$19\%) & \\
 \bottomrule
 \end{tabular*}
 \end{table}
@@ -925,12 +920,10 @@ numpy transfer (1 byte per bool in place of an 8-byte pointer per
 list slot) reduced the peak footprint to roughly 25\,GB, within
 the 64\,GB hardware budget and allowing the sweep to complete.
 
-% TODO after PUB50-112 completes:
-% - Update tab:ciot-phase with full n=112 numbers (currently n=43 partial)
-% - Add CIC-IoT FPGA synthesis row for the 25 KB 400n × 8b peak
-% - Optionally: Pareto-frontier figure (memory vs F1)
-% - Optionally: downward thermometer sweep (2b, 4b) on 46M to probe
-%   the LOWER bound of the saturation plateau
+% TODO after PUB50-112 completes (ETA 12/04/2026):
+% - Update tab:ciot-phase from n=56 to n=112
+% - Update tab:baselines CIC-IoT avg rows from n=56 to n=112
+% DONE: FPGA row added (400n × 8b, 304 LUTs), thermometer low sweep added
 
 \subsection{Phase Progression Analysis}
 \label{sec:phase-progression}
