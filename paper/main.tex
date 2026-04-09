@@ -459,10 +459,10 @@ The framework supports additional phases (GA bits, GA connections, tabu
 search refinement, and Lamarckian evolution) which are evaluated in
 a follow-up study.
 
-\textbf{Fitness function.} IDS metrics (F1, FPR, cross-entropy) have
-different scales, making direct weighted sums sensitive to normalization.
-Instead, both phases rank genomes per metric within the population, then
-combine ranks using a weighted harmonic mean:
+\textbf{Fitness function.}
+IDS metrics (F1, FPR, cross-entropy) differ in scale, making weighted
+sums sensitive to normalization. Both phases rank genomes per metric
+within the population, then combine ranks via a weighted harmonic mean:
 \begin{equation}
 \text{fitness}(g) = \frac{w_{CE} + w_{F1} + w_{FPR}}{%
   \frac{w_{CE}}{r_{CE}(g)} + \frac{w_{F1}}{r_{F1}(g)} + \frac{w_{FPR}}{r_{FPR}(g)}}
@@ -753,6 +753,7 @@ Single-genome runs with no GA on 46M; architectures transferred from
 the 1.3M subsample search. Baselines from Neto et al.~\cite{neto2023ciciot}.
 ``--'' indicates a metric not reported by the original work.}
 \label{tab:ciot-46m}
+\resizebox{\textwidth}{!}{%
 \begin{tabular}{llrrrl}
 \toprule
 Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & Model Size \\
@@ -783,12 +784,9 @@ Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & Model Size \\
  & AdaBoost         & 95.63 & ---  & 99.59 & ${\sim}$10\,MB \\
  & Random Forest    & 96.53 & ---  & 99.68 & ${\sim}$50\,MB \\
 \bottomrule
-\multicolumn{6}{l}{\small All ``Ours'' rows use the deployable train\_cal threshold.
-Multi-seed for 5n $\times$ 4b reports mean$\pm$std (10 seeds);}\\
-\multicolumn{6}{l}{\small all other configurations use a single seed. $^*$Sparse memory
-estimate; thermometer encoding causes massive address collisions, so}\\
-\multicolumn{6}{l}{\small the actual stored entries are far below the dense $2^b$ bound.}
-\end{tabular}
+\multicolumn{6}{l}{\small All ``Ours'' rows: train\_cal threshold; 5n$\times$4b = mean$\pm$std (10 seeds), rest = single seed.}\\
+\multicolumn{6}{l}{\small $^*$Sparse memory; thermometer collisions reduce actual entries far below $2^b$.}
+\end{tabular}}
 \end{table}
 
 \paragraph{Key observations from the Pareto frontier.}
@@ -1318,44 +1316,38 @@ hardware-friendly lookup-based architecture.
 \label{sec:conclusion}
 
 We presented an evolutionary weightless neural network architecture for
-network intrusion detection, combining Quad-State RAM (QSR) neurons with
+network intrusion detection, combining Quad-State RAM neurons with
 genetic algorithm optimization of neuron connectivity.  Our approach
 contributes three advances over prior WNN-based IDS:
 
 \begin{enumerate}
 \item \textbf{Evolved connectivity.}  A two-phase pipeline (grid search +
   GA neuron optimization) discovers compact, accurate genomes.  The GA
-  reduces neuron count by 42\% while improving F1 and halving variance,
+  reduces neuron count by 42\% while improving F1 and halving variance
   compared to grid search alone.
 
-\item \textbf{Encoding resolution analysis.}  A systematic sweep of
-  thermometer encoding widths (8--64 bits) reveals a sharp performance
-  knee at 16 bits per feature on CICIDS2017 with diminishing returns
-  beyond.  This finding guides practitioners in selecting encoding
-  parameters for WNN deployments.
+\item \textbf{Three-dataset evaluation with ML baselines.}  We evaluate on
+  UNSW-NB15, CICIDS2017, and CIC-IoT-2023, comparing directly against
+  Random Forest and XGBoost on identical splits.  On UNSW-NB15 (temporal,
+  112~runs), our WNN outperforms both baselines in F1 (88.06\% vs.\
+  86.93\%).  On CICIDS2017 (random, 161~runs), our best genome reaches
+  99.58\% F1, within 0.16\,pp of RF.  On CIC-IoT-2023 (random, 56~runs),
+  the WNN trades 5.5\,pp F1 for \textbf{5.8$\times$ lower FPR}
+  (4.32\% vs.\ 25.18\%), a critical advantage for operational deployment
+  where false-positive volume determines alert-handling cost.
 
-\item \textbf{FPGA deployment with sparse lookup.}  We show that
-  thermometer encoding creates massive address collisions
-  (${\sim}$3{,}500 unique addresses per neuron from millions of training
-  examples), enabling sparse BRAM-based deployment on a \$100 Zynq Z-7020
-  FPGA.  Vivado synthesis yields 622~LUTs for our best genome
-  (99.59\% F1, 0.12\% FPR) with functional verification confirming
-  100\% match between RTL and the Python training model across 1{,}000
-  test vectors.
+\item \textbf{FPGA deployment.}  All configurations deploy on a \$20
+  Zynq~Z-7020 with sub-microsecond latency and throughput exceeding
+  100\,Gbps line-rate requirements.  Our dense $O(1)$ lookup
+  configurations use as few as 59~LUTs (0.11\%), and the CIC-IoT-2023
+  peak genome (400n $\times$ 8b, 83.13\% F1) fits in 304~LUTs at
+  67\,MHz in 100\,KB of model storage.
 \end{enumerate}
 
-On UNSW-NB15 with temporal evaluation (112 runs), our WNN achieves
-88.06\% $\pm$ 1.84\% F1, outperforming Random Forest (86.63\%) and
-XGBoost (86.93\%) on identical data.  On CICIDS2017 with random splits
-(31 runs), it achieves 99.40\% $\pm$ 0.06\% F1 with 0.20\% FPR.
-All configurations deploy on a Zynq~Z-7020 with sub-microsecond latency
-and throughput exceeding 100\,Gbps line-rate requirements.
-
-Future work includes multi-class attack categorization, hash-based
-FPGA lookup for reduced latency, adaptive threshold calibration for
-temporal deployment, and a Pareto-frontier sweep of small WNN
-configurations on the full 46M CIC-IoT-2023 benchmark to characterize
-the size/accuracy trade-off down to 20-byte models.
+Future work includes multi-class attack categorization, UNSW-NB15
+random-split evaluation with balanced fitness weights, adaptive
+threshold calibration, and scaling the evolutionary search to the full
+46M CIC-IoT-2023 dataset to close the gap with tree ensembles.
 
 % ============================================================================
 \bibliographystyle{splncs04}
