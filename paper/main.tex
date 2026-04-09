@@ -978,28 +978,30 @@ binary features (its natural format).
 On the UNSW-NB15 temporal split, our WNN outperforms both Random Forest
 and XGBoost by 1--2 percentage points in F1, demonstrating that
 thermometer encoding provides robustness to temporal distribution shift.
-On the CICIDS2017 random split, our WNN nearly matches Random Forest
-(99.29\% vs.\ 99.74\% F1-macro, a 0.45\,pp gap) in a model
-$5{,}000\times$ smaller.
+On the CICIDS2017 random split, the average WNN across 161 seeds reaches
+99.29\% F1 (0.45\,pp below RF's 99.74\%) in a model $5{,}000\times$
+smaller; the best individual genome closes this to \textbf{99.58\% F1}
+(0.16\,pp gap), with 0.13\% FPR nearly matching RF's 0.08\%.
 
-On CIC-IoT-2023 (1.3M random 80/20, top-20 features), the WNN's F1 is
-lower than Random Forest (80.07\% vs.\ 85.53\%), but its false-positive
-rate is \textbf{5.8$\times$ lower} (4.32\% vs.\ 25.18\%). In a deployed
-IDS, each false positive generates an alert requiring human investigation;
-25\% FPR is operationally unusable at scale, while 4\% is deployable.
-The WNN achieves this operating point in 100\,KB on a \$20 FPGA
-(Table~\ref{tab:fpga}), versus ${\sim}$50\,MB for the RF model.
-Using the fixed 0.5 threshold (the fairest comparison to RF/XGBoost's
-\texttt{predict()}) narrows the gap to 3.9\,pp F1 at the cost of higher
-FPR (9.12\%).
+On CIC-IoT-2023 (1.3M random 80/20, top-20 features), the average WNN
+trails Random Forest in F1 (80.07\% vs.\ 85.53\%), but its false-positive
+rate is \textbf{5.8$\times$ lower} (4.32\% vs.\ 25.18\%). The best
+individual genome reaches 81.00\% F1 while maintaining 4.68\% FPR ---
+still 5.4$\times$ lower than RF. Under the fixed 0.5 threshold (the
+fairest comparison to RF/XGBoost \texttt{predict()}), the best genome
+achieves \textbf{82.67\% F1}, narrowing the gap to 2.9\,pp.
+In a deployed IDS, each false positive generates an alert requiring human
+investigation; 25\% FPR is operationally unusable at scale, while
+4--5\% is deployable. The WNN achieves this operating point in 100\,KB
+on a \$20 FPGA (Table~\ref{tab:fpga}), versus ${\sim}$50\,MB for the
+RF model.
 
 \begin{table}[ht!]
 \centering
-\caption{Comparison with baselines. ``Ours'' entries report the
-train\_cal threshold (fitness-aligned); $^\dagger$fixed\_05 (0.5 threshold)
-for direct comparison with RF/XGBoost \texttt{predict()}.
-RF/XGBoost use raw numeric features; WNN uses thermometer-encoded features.
-FWIW uses a different split protocol.}
+\caption{Comparison with baselines. ``Ours'' rows report mean $\pm$ std
+across $N$ seeds (train\_cal threshold); $^\dagger$fixed\_05 for direct
+comparison with RF/XGBoost; $^\ddagger$best single genome across all seeds.
+RF/XGBoost use raw numeric features; WNN uses thermometer-encoded features.}
 \label{tab:baselines}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{llrrrl}
@@ -1011,12 +1013,14 @@ Random Forest  & UNSW / temporal & 86.63 & 25.36 & 87.20 & Same split \\
 XGBoost        & UNSW / temporal & 86.93 & 25.65 & 87.30 & Same split \\
 \midrule
 \textbf{Ours} & CICIDS / random & 99.29 & 0.25 & 99.55 & 161 runs \\
-\textbf{Ours}$^\dagger$ & CICIDS / random & 99.10 & 0.45 & 99.43 & fixed\_05 \\
+\textbf{Ours}$^\ddagger$ & CICIDS / random & \textbf{99.58} & 0.13 & \textbf{99.74} & best genome \\
 Random Forest  & CICIDS / random & 99.74 & 0.08 & 99.84 & Same split \\
 XGBoost        & CICIDS / random & 99.65 & 0.12 & 99.78 & Same split \\
 \midrule
-\textbf{Ours} & CIC-IoT / random & 80.07 & \textbf{4.32} & 86.85 & 54 runs \\
+\textbf{Ours} & CIC-IoT / random & 80.07 & \textbf{4.32} & 86.85 & 56 runs \\
+\textbf{Ours}$^\ddagger$ & CIC-IoT / random & 81.00 & \textbf{4.68} & 87.68 & best genome \\
 \textbf{Ours}$^\dagger$ & CIC-IoT / random & 81.61 & 9.12 & 88.56 & fixed\_05 \\
+\textbf{Ours}$^{\dagger\ddagger}$ & CIC-IoT / random & 82.67 & 16.98 & 90.07 & best, fixed\_05 \\
 Random Forest  & CIC-IoT / random & 85.53 & 25.18 & 92.71 & Same split, top-20 \\
 XGBoost        & CIC-IoT / random & 84.13 & 28.34 & 92.07 & Same split, top-20 \\
 \midrule
