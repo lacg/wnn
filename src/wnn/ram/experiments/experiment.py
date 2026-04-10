@@ -870,8 +870,10 @@ class Experiment:
 					(pop_bests.best_fpr.genome, GenomeType.BEST_FPR, pop_bests.best_fpr.metrics),
 					(pop_bests.best_fitness.genome, GenomeType.BEST_FITNESS, pop_bests.best_fitness.metrics),
 				]
-			except Exception:
-				pass
+			except Exception as e:
+				import traceback
+				self.log(f"  Warning: fitness_calculator.bests() failed: {e}")
+				self.log(f"  {traceback.format_exc().strip()}")
 
 		# Fallback: select by CE and Acc
 		best_ce_idx = min(range(len(metrics_list)), key=lambda i: metrics_list[i].ce)

@@ -167,6 +167,27 @@ class DashboardClient:
 		# Configure SSL verification
 		self._session.verify = self._config.verify_ssl
 
+		# Connection pooling: increase pool size and add transport-level retries
+		# to prevent OSError 55 (No buffer space available) during long-running
+		# batches with concurrent heartbeat + validation API traffic.
+		from urllib3.util.retry import Retry
+		from requests.adapters import HTTPAdapter
+		retry_strategy = Retry(
+			total=5,
+			backoff_factor=1,              # 1s, 2s, 4s, 8s, 16s exponential backoff
+			status_forcelist=[502, 503, 504],
+			allowed_methods=["GET", "POST", "PATCH", "DELETE"],
+			raise_on_status=False,
+		)
+		adapter = HTTPAdapter(
+			max_retries=retry_strategy,
+			pool_connections=1,            # single host (localhost)
+			pool_maxsize=4,                # main thread + heartbeat thread + headroom
+			pool_block=True,               # block instead of creating new connections
+		)
+		self._session.mount("https://", adapter)
+		self._session.mount("http://", adapter)
+
 	def _url(self, path: str) -> str:
 		"""Build full URL from path."""
 		return urljoin(self._config.base_url, path)
