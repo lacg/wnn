@@ -1129,7 +1129,12 @@ RAM neurons map naturally to FPGA resources: each neuron's lookup table
 stores in block RAM (BRAM) or distributed LUTs with the evolved
 connection map implemented as compile-time wire assignments (pure routing,
 zero logic).  We analyze two deployment configurations targeting the
-Xilinx Zynq Z-7020 (53,200 LUTs, 140 BRAM36 blocks, 612\,KB).
+Xilinx Zynq Z-7020\footnote{The XC7Z020-CLG400 is available on
+surplus EBAZ4206 boards (decommissioned Bitcoin miner control boards)
+for under \$25; purpose-built development boards (Arty~Z7, ALINX AX7020)
+range from \$200--350.  Our synthesis targets the chip, not a specific
+board; utilization numbers are identical on any Z-7020 platform.}
+(53,200 LUTs, 140 BRAM36 blocks, 612\,KB).
 
 \paragraph{Dense configuration (8--12-bit addresses).}
 With address width capped, each neuron's full lookup table is synthesized
