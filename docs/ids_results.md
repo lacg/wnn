@@ -65,13 +65,50 @@
     Grid Search : 376±126 neurons | 33±1 bits
     GA Neurons  : 333±140 neurons | 32±1 bits
 
-    Threshold            | F1 Grid    F1 GA    | FPR Grid   FPR GA   | Acc Grid   Acc GA
-    ---------------------+---------------------+---------------------+--------------------
-    train_cal            |79.47±0.50 79.91±0.61 | 4.67±2.33  4.16±0.49 |86.36±0.61 86.70±0.56
-    fixed_05             |81.03±0.23 81.61±0.55 | 9.34±1.09  9.22±1.79 |88.11±0.27 88.56±0.54
-    platt                |80.78±0.58 81.38±0.81 |34.47±3.36 32.70±3.68 |90.46±0.14 90.68±0.22
-    beta                 |80.72±0.69 81.15±0.83 |35.08±3.82 34.37±4.33 |90.49±0.14 90.71±0.19
+    Threshold            | F1 Grid       F1 GA    | FPR Grid      FPR GA   | Acc Grid   Acc GA
+    ---------------------+------------------------+------------------------+--------------------
+    train_cal            |79.47±00.50 79.91±00.61 | 4.67±02.33  4.16±00.49 |86.36±0.61 86.70±0.56
+    fixed_05             |81.03±00.23 81.61±00.55 | 9.34±01.09  9.22±01.79 |88.11±0.27 88.56±0.54
+    platt                |80.78±00.58 81.38±00.81 |34.47±03.36 32.70±03.68 |90.46±0.14 90.68±0.22
+    beta                 |80.72±00.69 81.15±00.83 |35.08±03.82 34.37±04.33 |90.49±0.14 90.71±0.19
     empirical            |68.82±13.81 70.24±14.05 |63.18±23.38 59.89±24.18 |88.76±2.24 89.06±2.31
-    empirical_cumulative |81.40±0.98 82.01±0.94 |25.17±9.30 23.00±8.78 |89.97±0.43 90.20±0.41
-    val_cal              |79.22±0.52 79.78±0.57 | 4.26±2.27  3.88±0.48 |86.10±0.63 86.56±0.50
+    empirical_cumulative |81.40±00.98 82.01±00.94 |25.17±09.30 23.00±08.78 |89.97±0.43 90.20±0.41
+    val_cal              |79.22±00.52 79.78±00.57 | 4.26±02.27  3.88±00.48 |86.10±0.63 86.56±0.50
 
+
+## CIC-IoT-2023 Baseline Comparison (F1-macro vs F1-weighted)
+
+    All models use binary classification (normal vs attack).
+    F1-macro treats both classes equally; F1-weighted favours the 97% attack majority.
+    Dataset is ~97% attack / ~3% normal — F1-weighted ≈ accuracy on this distribution.
+
+### Full 46M dataset
+
+    Source               | F1-macro | F1-weighted |    FPR |    Acc | Data / Features
+    ---------------------|----------|-------------|--------|--------|----------------
+    Neto RF              |  96.53%† |      —      |     —  | 99.68% | 46M, all, StandardScaler
+    Neto AdaBoost        |  95.63%† |      —      |     —  | 99.59% | 46M, all, StandardScaler
+    Neto DNN             |  94.03%† |      —      |     —  | 99.44% | 46M, all, StandardScaler
+    Neto Logistic Reg.   |  87.63%† |      —      |     —  | 98.90% | 46M, all, StandardScaler
+    Neto Perceptron      |  81.05%† |      —      |     —  | 98.18% | 46M, all, StandardScaler
+    Our RF (all 39)      |  92.64%  |   99.18%    | 13.48% | 99.18% | 46M, all, no scaler
+    Our XGBoost (all 39) |  91.67%  |   99.07%    | 14.80% | 99.06% | 46M, all, no scaler
+    Our RF (top-20)      |  92.45%  |   99.16%    | 13.73% | 99.15% | 46M, top-20, no scaler
+    WNN 245n×32b         |  84.79%  |   97.99%    |  1.59% | 97.68% | 46M, top-20, 8b thermo
+    WNN 400n×8b          |  83.13%  |   97.72%    |  2.06% | 97.33% | 46M, top-20, 8b thermo
+    WNN 96n×32b          |  84.36%  |   97.93%    |  1.61% | 97.59% | 46M, top-20, 8b thermo
+
+    † Neto et al. F1 averaging method unspecified; they use StandardScaler + different 80/20 split.
+
+### 1.3M subsample (random 80/20)
+
+    Source               | F1-macro | F1-weighted |    FPR |    Acc | Data / Features
+    ---------------------|----------|-------------|--------|--------|----------------
+    Our RF (all 39)      |  86.08%  |   92.95%    | 24.00% | 92.96% | 1.3M, all, no scaler
+    Our RF (top-20)      |  85.53%  |   92.68%    | 25.18% | 92.71% | 1.3M, top-20, no scaler
+    Our XGBoost (all 39) |  84.90%  |   92.37%    | 26.38% | 92.40% | 1.3M, all, no scaler
+    Our XGBoost (top-20) |  84.13%  |   92.07%    | 28.34% | 92.07% | 1.3M, top-20, no scaler
+    WNN avg (train_cal)  |  80.06%  |   88.23%    |  4.32% | 86.85% | 1.3M, top-20, n=56
+    WNN best (train_cal) |  81.00%  |      —      |  4.68% | 87.68% | 1.3M, top-20
+    WNN avg (fixed_05)   |  81.60%  |   89.53%    |  9.11% | 88.55% | 1.3M, top-20, n=56
+    WNN best (fixed_05)  |  82.67%  |      —      | 16.98% | 90.07% | 1.3M, top-20
