@@ -3,6 +3,8 @@ import { defineConfig } from 'vite';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Agent as HttpsAgent } from 'node:https';
+import { Agent as HttpAgent } from 'node:http';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -20,6 +22,15 @@ const backendScheme = tlsEnabled ? 'https' : 'http';
 const wsScheme = tlsEnabled ? 'wss' : 'ws';
 const backendPort = process.env.DASHBOARD_PORT || '3000';
 
+// Shared HTTP(S) agent for the proxy → backend connection.
+// Without this, each proxied request creates a new TCP connection to the
+// backend. Over days of uptime, closed connections accumulate in CLOSE_WAIT
+// state, eventually exhausting the OS socket buffer (OSError 55). A shared
+// agent with keepAlive reuses connections and caps the pool at maxSockets.
+const proxyAgent = tlsEnabled
+  ? new HttpsAgent({ keepAlive: true, maxSockets: 10, rejectUnauthorized: false })
+  : new HttpAgent({ keepAlive: true, maxSockets: 10 });
+
 export default defineConfig({
   plugins: [sveltekit()],
   server: {
@@ -29,12 +40,13 @@ export default defineConfig({
     proxy: {
       '/api': {
         target: `${backendScheme}://localhost:${backendPort}`,
-        secure: false,  // Accept self-signed certificates
+        secure: false,
+        agent: proxyAgent,
       },
       '/ws': {
         target: `${wsScheme}://localhost:${backendPort}`,
         ws: true,
-        secure: false,  // Accept self-signed certificates
+        secure: false,
       }
     }
   }
