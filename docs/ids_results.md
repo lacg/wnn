@@ -104,3 +104,60 @@
     Our XGBoost (top-20) |  84.13%  |   92.07%    | 28.34% | 92.07% | 1.3M, top-20, no scaler
     WNN avg (train_cal)  |  80.05%  |      —      |  4.24% | 86.83% | 1.3M, top-20, n=93
     WNN avg (fixed_05)   |  81.61%  |      —      |  9.05% | 88.55% | 1.3M, top-20, n=93
+
+## Observation: 6n × 16b best_fpr Pareto Point (flow r020)
+
+During the PUB50 8b batch, flow `PUB50-ciciot-random-r020` (experiment 4964)
+produced a genuinely interesting best_fpr genome:
+
+    Genome        | Size           | train_cal F1 | train_cal FPR | train_cal Acc
+    --------------|----------------|--------------|---------------|---------------
+    best_fitness  | 387n × 32b     |    80.21%    |    4.20%      |    86.96%
+    best_f1       | 387n × 32b     |    80.21%    |    4.20%      |    86.96%
+    best_ce       | 350n × 32b     |    79.89%    |    3.81%      |    86.65%
+    best_acc      | 500n × 34b     |    79.10%    |    4.09%      |    85.99%
+    best_fpr      | **6n × 16b**   |  **73.70%**  |  **1.09%**    |    80.56%
+
+Four of the five genome types converged on the same architectural region
+(350-500 neurons × 32-34 bits). The best_fpr genome is the outlier:
+**65× fewer neurons and half the address width**, yet achieves **1.09% FPR**
+— the lowest of any genome in the batch at any threshold.
+
+### Why this works
+
+With only 6 neurons voting, the score distribution is coarse (0/6, 1/6, ..., 6/6).
+A well-calibrated threshold (train_cal) catches clean attack cases while
+rejecting almost all normal traffic. The penalty: missed borderline attacks,
+lower F1 (73.70%). But the FPR is dramatically lower because a false alarm
+requires almost unanimous (incorrect) agreement across all 6 neurons.
+
+Threshold sensitivity is extreme for small-neuron-count genomes:
+
+    Threshold mode        |    F1    |   FPR
+    ----------------------|----------|--------
+    train_cal             |  73.70%  |   1.09%  ← calibrated sweet spot
+    val_cal (oracle)      |  74.75%  |   1.73%
+    fixed_05              |  77.26%  |  30.76%  ← FPR disaster at 0.5
+    empirical             |  77.08%  |  36.81%
+    platt                 |  72.30%  |  51.64%
+    beta                  |  75.05%  |  48.94%
+    empirical_cumulative  |  76.88%  |  18.73%
+
+The low FPR only emerges under calibrated thresholds. This is a strong
+argument for the threshold-aware fitness function.
+
+### Deployment implication
+
+A **first-stage filter** use case:
+- Stage 1: 6n × 16b WNN filters obvious attacks at very low FPR (~1%)
+- Stage 2: larger WNN or ML model handles the uncertain cases
+
+At ~600-2000 bytes of sparse memory footprint, this could fit as a
+pre-filter in front of the 25 KB 400n × 8b peak genome, reducing load
+on the larger classifier.
+
+### Validation pending
+
+This is a **single-seed 1.3M result**. Pareto point needs 46M validation
+before it's paper-ready. Added to the roadmap as a follow-up 46M run
+after PUB50 8b completes.

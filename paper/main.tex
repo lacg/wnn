@@ -1290,6 +1290,18 @@ multi-cluster discriminators and hybrid encoding strategies, offer
 multiple paths to close the accuracy gap while preserving the
 hardware-friendly lookup-based architecture.
 
+Finally, we observed during the PUB50 batch that best-FPR genomes
+occasionally converge on radically smaller architectures than the
+best-fitness population (e.g., 6 neurons $\times$ 16-bit address
+producing 1.09\% FPR on CIC-IoT-2023 under train\_cal), at the cost
+of lower F1. These extreme-compression outliers suggest a
+\emph{two-stage cascade} design: an ultra-small pre-filter WNN
+eliminates the majority of benign traffic at near-zero FPR,
+forwarding only uncertain or attack-likely flows to a larger
+second-stage classifier. This would amortize per-packet cost across
+the full deployment while preserving the higher-F1 operating point
+for the flows that need it.
+
 % ============================================================================
 \section{Conclusion}
 \label{sec:conclusion}
