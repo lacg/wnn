@@ -101,7 +101,7 @@
 			if (stage) params.set('stage', stage);
 			if (idsDataset) params.set('ids_dataset', idsDataset);
 			if (idsSplit) params.set('ids_split', idsSplit);
-			params.set('limit', '500');
+			params.set('limit', '50000');
 
 			const response = await fetch(`/api/best-genomes?${params}`);
 			if (!response.ok) throw new Error('Failed to fetch leaderboard');
