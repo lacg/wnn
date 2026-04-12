@@ -119,7 +119,11 @@
 		fetchGenomes();
 	}
 
-	// Deduplicate by genome_hash + threshold_mode, keeping the best metrics across duplicates
+	// Deduplicate by genome_hash + threshold_mode.
+	// IMPORTANT: keep ALL columns from ONE entry (the one with the best rank
+	// or most recent flow). Never cherry-pick columns across entries — that
+	// creates "impossible" metric combinations (e.g., F1 from one run + FPR
+	// from a different run on different data).
 	function deduplicateGenomes(genomes: BestGenome[]): BestGenome[] {
 		const map = new Map<string, BestGenome & { sources: string[] }>();
 		for (const g of genomes) {
@@ -128,22 +132,20 @@
 			if (!existing) {
 				map.set(key, { ...g, sources: [g.metric] });
 			} else {
-				// Keep best of each metric
-				if (g.ce < existing.ce) existing.ce = g.ce;
-				if (g.accuracy > existing.accuracy) existing.accuracy = g.accuracy;
-				if (g.f1_macro !== null && (existing.f1_macro === null || g.f1_macro > existing.f1_macro)) {
-					existing.f1_macro = g.f1_macro;
-				}
-				if (g.fpr !== null && (existing.fpr === null || g.fpr < existing.fpr)) {
-					existing.fpr = g.fpr;
-				}
 				if (!existing.sources.includes(g.metric)) {
 					existing.sources.push(g.metric);
 				}
-				// Keep the most recent flow_id
-				if (g.flow_id && (!existing.flow_id || g.flow_id > existing.flow_id)) {
-					existing.flow_id = g.flow_id;
-					existing.experiment_id = g.experiment_id;
+				// Keep the entry with better rank (lower = better), or more
+				// recent flow_id as tiebreaker. Replace ALL columns together
+				// so metrics stay consistent.
+				const existingRank = existing.rank ?? Infinity;
+				const newRank = g.rank ?? Infinity;
+				const isBetter = newRank < existingRank
+					|| (newRank === existingRank && (g.flow_id ?? 0) > (existing.flow_id ?? 0));
+				if (isBetter) {
+					const sources = existing.sources;
+					Object.assign(existing, g);
+					existing.sources = sources;
 				}
 			}
 		}
