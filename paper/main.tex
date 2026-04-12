@@ -680,27 +680,27 @@ strong under the actual fitness criterion. The co-optimization ensures
 the architecture search and threshold selection work together rather
 than at cross purposes.
 
-\paragraph{1.3M subsample (56/112 runs).}
+\paragraph{1.3M subsample (112 runs).}
 Table~\ref{tab:ciot-phase} reports the phase progression for the
 best-fitness genome under the deployable train\_cal threshold across
-56 completed PUB50 flows. The GA phase reduces neuron count by 19\%
-(409 $\to$ 330) while improving F1 by 0.49 percentage points and
-reducing FPR by 0.34 points, mirroring the regularization effect
+all 112 PUB50 flows. The GA phase reduces neuron count by 19\%
+(397 $\to$ 322) while improving F1 by 0.53 percentage points and
+reducing FPR by 0.25 points, mirroring the regularization effect
 observed on CICIDS2017 (Section~\ref{sec:phase-progression}).
 
 \begin{table}[ht!]
 \centering
 \caption{Phase progression on CIC-IoT-2023 1.3M subsample
-(56/112 runs, train\_cal threshold, best-fitness genome).}
+(112 runs, train\_cal threshold, best-fitness genome).}
 \label{tab:ciot-phase}
 \begin{tabular*}{\textwidth}{l @{\extracolsep{\fill}} rrrr}
 \toprule
 Phase & F1-macro (\%) & FPR (\%) & Neurons & Bits \\
 \midrule
-Grid Search    & 79.58 $\pm$ 0.49 & 4.66 $\pm$ 2.29 & 409 $\pm$ 96 & 34 $\pm$ 1 \\
-GA Neurons     & 80.06 $\pm$ 0.50 & 4.32 $\pm$ 0.46 & 330 $\pm$ 120 & 32 $\pm$ 1 \\
+Grid Search    & 79.55 $\pm$ 0.43 & 4.51 $\pm$ 1.65 & 397 $\pm$ 96 & 34 $\pm$ 1 \\
+GA Neurons     & 80.08 $\pm$ 0.48 & 4.26 $\pm$ 0.49 & 322 $\pm$ 124 & 32 $\pm$ 1 \\
 \midrule
-$\Delta$       & +0.49            & $-$0.34          & $-$79 ($-$19\%) & \\
+$\Delta$       & +0.53            & $-$0.25          & $-$75 ($-$19\%) & \\
 \bottomrule
 \end{tabular*}
 \end{table}
@@ -989,10 +989,10 @@ XGBoost        & UNSW / temporal & 86.93 & 25.65 & 87.30 & Same split \\
 Random Forest  & CICIDS / random & 99.74 & 0.08 & 99.84 & Same split \\
 XGBoost        & CICIDS / random & 99.65 & 0.12 & 99.78 & Same split \\
 \midrule
-\textbf{Ours} & CIC-IoT / random & 80.07 & \textbf{4.32} & 86.85 & 56 runs \\
+\textbf{Ours} & CIC-IoT / random & 80.08 & \textbf{4.26} & 86.85 & 112 runs \\
 \textbf{Ours}$^\ddagger$ & CIC-IoT / random & 81.00 & \textbf{4.68} & 87.68 & best genome \\
-\textbf{Ours}$^\dagger$ & CIC-IoT / random & 81.61 & 9.12 & 88.56 & fixed\_05 \\
-\textbf{Ours}$^{\dagger\ddagger}$ & CIC-IoT / random & 82.67 & 16.98 & 90.07 & best, fixed\_05 \\
+\textbf{Ours}$^\dagger$ & CIC-IoT / random & 81.65 & 9.01 & 88.58 & fixed\_05 \\
+\textbf{Ours}$^{\dagger\ddagger}$ & CIC-IoT / random & 82.45 & 16.98 & 90.07 & best, fixed\_05 \\
 Random Forest  & CIC-IoT / random & 85.53 & 25.18 & 92.71 & Same split, top-20 \\
 XGBoost        & CIC-IoT / random & 84.13 & 28.34 & 92.07 & Same split, top-20 \\
 \midrule
@@ -1330,8 +1330,8 @@ contributes three advances over prior WNN-based IDS:
   Random Forest and XGBoost on identical splits.  On UNSW-NB15 (temporal,
   12~runs), our WNN outperforms both baselines in F1 (87.96\% vs.\
   86.93\%).  On CICIDS2017 (random, 120~runs), our best genome reaches
-  99.52\% F1, within 0.22\,pp of RF.  On CIC-IoT-2023 (random, 56~runs),
-  the WNN trades 5.5\,pp F1 for \textbf{5.8$\times$ lower FPR}
+  99.52\% F1, within 0.22\,pp of RF.  On CIC-IoT-2023 (random, 112~runs),
+  the WNN trades 5.5\,pp F1 for \textbf{5.9$\times$ lower FPR}
   (4.32\% vs.\ 25.18\%), a critical advantage for operational deployment
   where false-positive volume determines alert-handling cost.
 
