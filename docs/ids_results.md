@@ -112,3 +112,33 @@
 
     The Pareto point validates at scale: 46M training data lifts F1 by 5pp
     while FPR stays under 2%. Viable first-stage filter for cascade deployment.
+
+
+## UNSW-NB15 Temporal Baselines + WNN Comparison
+
+    Split: temporal (175K train / 82K test, official UNSW split)
+    Note: top-20 features only matched 13/20 on temporal HF config
+    (column naming mismatch: temporal uses dinpkt/dmean/dpkts while
+    random uses Dintpkt/dmeansz/Dpkts). To be fixed for 110-run batch.
+
+### ML Baselines (raw features, 13/20 matched)
+
+    Source               | F1-macro |    FPR |    Acc | Features
+    ---------------------|----------|--------|--------|----------
+    RF (all 42 features) |  86.61%  | 26.69% | 87.22% | all
+    RF (top-13)          |  85.14%  | 27.65% | 85.78% | top-20 (13 matched)
+    XGBoost (top-13)     |  83.78%  | 31.32% | 84.63% | top-20 (13 matched)
+    Zoghi et al. 2024    | 85-90%   |    —   |    —   | literature range
+
+### OLD WNN Results (12 runs, 8b, OLD weights, 13/20 features)
+
+    Threshold            |    F1    |    FPR    |   Acc
+    ---------------------|----------|-----------|--------
+    train_cal            |  82.53%  |  32.65%   | 83.55%
+    fixed_05             |  82.57%  |  27.35%   | 83.58%
+    val_cal (oracle)     |  87.96%  |  10.57%   | 88.03%
+
+### NEW WNN Temporal Mini-Sweep (running, 13/20 features, NEW weights)
+
+    (Results will be added as flows complete — temporal dataset is
+    175K so flows should be faster than random's 1.27M)
