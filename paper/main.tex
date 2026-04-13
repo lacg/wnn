@@ -126,15 +126,15 @@ Our contributions are:
   temporal split and achieves 5.8$\times$ lower FPR than RF on CIC-IoT-2023,
   in a 100\,KB model deployable on a \$20 FPGA.
 \item \textbf{Seven-mode threshold calibration study.} We identify threshold
-  selection as an important factor in IDS evaluation,
-  showing a 5.18 percentage point F1 gap between validation and
-  train-calibrated thresholds on the temporal split.
+  selection as an important factor in IDS evaluation and show that
+  fitness-aligned threshold calibration reduces the temporal transfer
+  gap from 5.43 to 0.61 percentage points on UNSW-NB15.
 \item \textbf{Three-dataset evaluation with FPGA synthesis.} Results on
-  UNSW-NB15 (temporal), CICIDS2017 (random), and CIC-IoT-2023
+  UNSW-NB15 (temporal and random), CICIDS2017 (random), and CIC-IoT-2023
   (random, including a single-genome run on the full 46.7M-record
   benchmark) demonstrate architecture generalizability, with
-  Vivado-verified FPGA deployment on a Zynq~Z-7020 for the UNSW-NB15
-  and CICIDS2017 configurations.
+  Vivado-verified FPGA deployment on a Zynq~Z-7020 for all three
+  datasets.
 \end{enumerate}
 
 % ============================================================================
