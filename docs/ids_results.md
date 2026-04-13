@@ -4,14 +4,16 @@
 
 ### Best individual genomes — CIC-IoT-2023 1.3M Random 8b
 
-    Metric               |      F1 |     FPR |     Acc |     CE | Phase Genome        Threshold       |    N | Flow
-    ---------------------+---------+---------+---------+--------+-----------------------------------+------+------
-    Best F1              |  83.04% |  20.18% |  90.62% | 0.2131 |  GA best_f1       empirical_cumulative |  198 | PUB50-ciciot-random-r079
-    Best FPR (F1>70%)    |  70.34% |   0.03% |  76.93% | 0.3081 |  GS best_fpr      train_cal       |    5 | PUB50-ciciot-random-r107
-    Best Acc             |  81.89% |  33.10% |  91.05% | 0.2112 |  GA best_ce       platt           |  496 | PUB50-ciciot-random-r062
-    Best CE              |  81.14% |   4.15% |  87.75% | 0.2055 |  GA best_ce       train_cal       |  299 | PUB50-ciciot-random-r042
-    Avg/run   : 76.1 min
-    Finished  : 12/04/2026 12:31 UTC
+    Metric                   |      F1 |     FPR |     Acc | Phase Genome        Threshold       |    N
+    -------------------------+---------+---------+---------+-----------------------------------+-----
+    Best F1 (any FPR)        |  83.04% |  20.18% |  90.62% |  GA best_f1       empirical_cumulative |  198
+    Best F1 (FPR<14%)        |  82.76% |  13.54% |  89.84% |  GA best_ce       empirical_cumulative |  374
+    Best F1 (FPR<10%)        |  82.45% |   9.86% |  89.29% |  GA best_acc      fixed_05        |  245
+    Best F1 (FPR<5%)         |  81.14% |   4.15% |  87.75% |  GA best_ce       train_cal       |  299
+    Best FPR (F1>70%)        |  70.34% |   0.03% |  76.93% |  GS best_fpr      train_cal       |    5
+    Best FPR (F1>80%)        |  80.12% |   2.73% |  86.75% |  GA best_fpr      val_cal         |  170
+    Best Acc (any FPR)       |  81.89% |  33.10% |  91.05% |  GA best_ce       platt           |  496
+    Best Acc (FPR<14%)       |  82.76% |  13.54% |  89.84% |  GA best_ce       empirical_cumulative |  374
 
 ## best_fitness  (GS: 111 runs | GA: 112 runs)
     Grid Search : 397±96 neurons | 34±1 bits
@@ -188,12 +190,16 @@
 
 ### Best individual genomes — UNSW-NB15 TEMPORAL 8b
 
-    Metric               |      F1 |     FPR |     Acc |     CE | Phase Genome        Threshold       |    N | Flow
-    ---------------------+---------+---------+---------+--------+-----------------------------------+------+------
-    Best F1              |  90.52% |   4.13% |  90.54% | 0.3017 |  GS best_f1       empirical       |  100 | UNSW-fitfix-t8b-temporal-r106
-    Best FPR (F1>70%)    |  70.71% |   0.00% |  71.68% | 0.3287 |  GS best_acc      beta            |  500 | UNSW-fitfix-t8b-temporal-r087
-    Best Acc             |  90.52% |   4.13% |  90.54% | 0.3017 |  GS best_f1       empirical       |  100 | UNSW-fitfix-t8b-temporal-r106
-    Best CE              |  88.32% |  13.40% |  88.45% | 0.2443 |  GA best_acc      train_cal       |  100 | UNSW-fitfix-t8b-temporal-r093
+    Metric                   |      F1 |     FPR |     Acc | Phase Genome        Threshold       |    N
+    -------------------------+---------+---------+---------+-----------------------------------+-----
+    Best F1 (any FPR)        |  90.52% |   4.13% |  90.54% |  GS best_f1       empirical       |  100
+    Best F1 (FPR<14%)        |  90.52% |   4.13% |  90.54% |  GS best_f1       empirical       |  100
+    Best F1 (FPR<10%)        |  90.52% |   4.13% |  90.54% |  GS best_f1       empirical       |  100
+    Best F1 (FPR<5%)         |  90.52% |   4.13% |  90.54% |  GS best_f1       empirical       |  100
+    Best FPR (F1>70%)        |  70.71% |   0.00% |  71.68% |  GS best_acc      beta            |  500
+    Best FPR (F1>80%)        |  81.80% |   0.22% |  81.91% |  GA best_f1       empirical_cumulative |  500
+    Best Acc (any FPR)       |  90.52% |   4.13% |  90.54% |  GS best_f1       empirical       |  100
+    Best Acc (FPR<14%)       |  90.52% |   4.13% |  90.54% |  GS best_f1       empirical       |  100
 
 ## best_fitness  (GS: 43 runs | GA: 43 runs)
     Grid Search : 351±133 neurons | 32±1 bits
