@@ -140,7 +140,31 @@
     fixed_05             |  82.57%  |  27.35%   | 83.58%
     val_cal (oracle)     |  87.96%  |  10.57%   | 88.03%
 
-### NEW WNN Temporal Mini-Sweep (running, 20/20 features, NEW weights)
+### NEW WNN Temporal Mini-Sweep (in progress, 20/20 features, NEW weights)
 
-    (10 flows running: 4b-64b × 2 seeds, 2b skipped. Results will be
-    added as flows complete — temporal is 175K so should be fast.)
+    Per-flow time: ~13 min (vs ~75 min on random). 175K temporal dataset.
+
+### Full UNSW Temporal Comparison Table
+
+    Source                         |    F1    |    FPR   |    Acc   | Notes
+    -------------------------------|----------|----------|----------|------
+    RF (top-20, raw)               |  86.41%  |  25.22%  |  86.94%  | baseline
+    XGBoost (top-20, raw)          |  85.62%  |  27.29%  |  86.24%  | baseline
+    RF (all 42, raw)               |  86.69%  |  26.58%  |  87.30%  | all features
+    XGBoost (all 42, raw)          |  86.71%  |  26.70%  |  87.32%  | all features
+    Zoghi & Serpen 2024            | 85-90%   |    —     |    —     | literature
+                                   |          |          |          |
+    OLD WNN val_cal (12r, 13ft)    |  87.96%  |  10.57%  |  88.03%  | oracle, OLD weights
+    OLD WNN train_cal (12r, 13ft)  |  82.53%  |  32.65%  |  83.55%  | OLD weights
+                                   |          |          |          |
+    NEW 64b r001 GS best_fpr tc   |  88.31%  |  12.45%  |  88.42%  | train_cal, beats old oracle F1!
+    NEW 64b r002 GS best_ce beta  |  87.86%  |   8.44%  |  87.90%  | low FPR
+    NEW 64b r001 GA best_ce tc    |  87.91%  |  10.22%  |  87.97%  | GA didn't help much on 64b
+    NEW 32b r002 GA best_fpr f05  |  89.07%  |   6.59%  |  89.10%  | ★ HIGHEST F1, beats everything
+    NEW 32b r002 GA best_fpr beta |  82.80%  |   2.04%  |  82.85%  | ultra-low FPR mode
+    NEW 32b r002 GA best_fpr platt|  71.08%  |   0.02%  |  72.00%  | near-zero FPR (1 in 5000)
+    NEW 32b r002 GA best_fpr orac |  81.85%  |   3.66%  |  81.89%  |
+
+    ★ f1241 (32b r002) GA best_fpr genome under fixed_05:
+      89.07% F1 beats RF by +2.66pp AND old oracle by +1.11pp
+      with FPR 3.8× lower than RF (6.59% vs 25.22%)
