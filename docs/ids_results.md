@@ -117,18 +117,20 @@
 ## UNSW-NB15 Temporal Baselines + WNN Comparison
 
     Split: temporal (175K train / 82K test, official UNSW split)
-    Note: top-20 features only matched 13/20 on temporal HF config
-    (column naming mismatch: temporal uses dinpkt/dmean/dpkts while
-    random uses Dintpkt/dmeansz/Dpkts). To be fixed for 110-run batch.
+    HF column names FIXED on 12/04/2026 — all configs now use 20/20 features.
 
-### ML Baselines (raw features, 13/20 matched)
+### ML Baselines (raw features, FIXED 20/20)
 
-    Source               | F1-macro |    FPR |    Acc | Features
-    ---------------------|----------|--------|--------|----------
-    RF (all 42 features) |  86.61%  | 26.69% | 87.22% | all
-    RF (top-13)          |  85.14%  | 27.65% | 85.78% | top-20 (13 matched)
-    XGBoost (top-13)     |  83.78%  | 31.32% | 84.63% | top-20 (13 matched)
-    Zoghi et al. 2024    | 85-90%   |    —   |    —   | literature range
+    Source                    | F1-macro |    FPR |    Acc | Features
+    --------------------------|----------|--------|--------|----------
+    RF (all 42 features)      |  86.69%  | 26.58% | 87.30% | all
+    XGBoost (all 42 features) |  86.71%  | 26.70% | 87.32% | all
+    RF (top-20, FIXED)        |  86.41%  | 25.22% | 86.94% | top-20 (20/20)
+    XGBoost (top-20, FIXED)   |  85.62%  | 27.29% | 86.24% | top-20 (20/20)
+    Zoghi et al. 2024         | 85-90%   |    —   |    —   | literature range
+
+    Note: 20/20 features improved RF by +1.27pp F1 over the old 13/20
+    (85.14% → 86.41%), confirming the feature fix matters.
 
 ### OLD WNN Results (12 runs, 8b, OLD weights, 13/20 features)
 
@@ -138,7 +140,7 @@
     fixed_05             |  82.57%  |  27.35%   | 83.58%
     val_cal (oracle)     |  87.96%  |  10.57%   | 88.03%
 
-### NEW WNN Temporal Mini-Sweep (running, 13/20 features, NEW weights)
+### NEW WNN Temporal Mini-Sweep (running, 20/20 features, NEW weights)
 
-    (Results will be added as flows complete — temporal dataset is
-    175K so flows should be faster than random's 1.27M)
+    (10 flows running: 4b-64b × 2 seeds, 2b skipped. Results will be
+    added as flows complete — temporal is 175K so should be fast.)

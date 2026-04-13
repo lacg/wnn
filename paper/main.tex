@@ -981,8 +981,8 @@ RF/XGBoost use raw numeric features; WNN uses thermometer-encoded features.}
 Method & Dataset / Split & F1 (\%) & FPR (\%) & Acc (\%) & Notes \\
 \midrule
 \textbf{Ours} & UNSW / temporal & \textbf{87.96} & 10.57 & 88.03 & 12 runs \\
-Random Forest  & UNSW / temporal & 86.63 & 25.36 & 87.20 & Same split \\
-XGBoost        & UNSW / temporal & 86.93 & 25.65 & 87.30 & Same split \\
+Random Forest  & UNSW / temporal & 86.41 & 25.22 & 86.94 & Same split, top-20 \\
+XGBoost        & UNSW / temporal & 85.62 & 27.29 & 86.24 & Same split, top-20 \\
 \midrule
 \textbf{Ours} & CICIDS / random & 99.28 & 0.24 & 99.55 & 120 runs \\
 \textbf{Ours}$^\ddagger$ & CICIDS / random & \textbf{99.52} & 0.13 & \textbf{99.70} & best genome \\
