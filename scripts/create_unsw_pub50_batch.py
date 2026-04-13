@@ -32,26 +32,25 @@ import urllib.request
 
 
 def build_flow_request(seed: int, thermometer_bits: int = 8,
-                       name_prefix: str = None) -> dict:
-	"""Build the POST body for a UNSW random 80/20 PUB50-style flow."""
+                       name_prefix: str = None, split: str = "random") -> dict:
+	"""Build the POST body for a UNSW PUB50-style flow."""
 	if name_prefix is None:
-		name_prefix = f"PUB50-{thermometer_bits}b-unsw-random"
+		name_prefix = f"PUB50-{thermometer_bits}b-unsw-{split}"
 
 	return {
 		"name": f"{name_prefix}-r{seed:03d}",
 		"description": (
-			f"UNSW-NB15 random 80/20 with balanced fitness weights "
+			f"UNSW-NB15 {split} with balanced fitness weights "
 			f"(0.1/0.35/0.35/0.2), fitness-aligned threshold, and "
 			f"{thermometer_bits}-bit thermometer encoding. Part of the "
-			f"112-run PUB50-style statistical batch matching the CIC-IoT "
-			f"methodology; seed {seed}."
+			f"112-run PUB50-style statistical batch; seed {seed}."
 		),
 		"config": {
 			"template": "ids-binary-2-phase",
 			"params": {
 				# Dataset
 				"ids_dataset": "unsw-nb15",
-				"ids_split": "random",
+				"ids_split": split,
 				"ids_n_bits": thermometer_bits,
 				"ids_feature_selection": "top20",
 				"ids_classification": "binary",
@@ -147,8 +146,10 @@ def main():
 		help="First seed value (default: 1)")
 	parser.add_argument("--thermometer-bits", type=int, default=8,
 		help="Thermometer encoding width (default: 8, override after mini-sweep)")
+	parser.add_argument("--split", default="random",
+		help="Dataset split: 'random' or 'temporal' (default: random)")
 	parser.add_argument("--name-prefix", default=None,
-		help="Flow name prefix (default: PUB50-{thermo}b-unsw-random)")
+		help="Flow name prefix (default: PUB50-{thermo}b-unsw-{split})")
 	parser.add_argument("--api-url", default="https://localhost:3000/api/flows",
 		help="Dashboard API URL")
 	parser.add_argument("--queue", action="store_true",
@@ -157,13 +158,14 @@ def main():
 		help="Print flow names without creating")
 	args = parser.parse_args()
 
-	name_prefix = args.name_prefix or f"PUB50-{args.thermometer_bits}b-unsw-random"
+	name_prefix = args.name_prefix or f"PUB50-{args.thermometer_bits}b-unsw-{args.split}"
 
 	print(f"Creating {args.count} UNSW-NB15 PUB50 flows:")
 	print(f"  Seeds:       {args.start_seed}..{args.start_seed + args.count - 1}")
 	print(f"  Name prefix: {name_prefix}")
+	print(f"  Split:       {args.split}")
 	print(f"  Thermometer: {args.thermometer_bits}-bit")
-	print(f"  Dataset:     UNSW-NB15 (random 80/20, top-20 features)")
+	print(f"  Dataset:     UNSW-NB15 ({args.split}, top-20 features)")
 	print(f"  Fitness:     balanced (0.1/0.35/0.35/0.2), fitness-aligned threshold")
 	print(f"  Template:    ids-binary-2-phase (grid search + GA neurons)")
 	print()
@@ -174,6 +176,7 @@ def main():
 			seed=seed,
 			thermometer_bits=args.thermometer_bits,
 			name_prefix=name_prefix,
+			split=args.split,
 		)
 		if args.dry_run:
 			print(f"  [dry-run] would create: {body['name']}")
