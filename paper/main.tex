@@ -81,10 +81,13 @@ Evolutionary Optimization \and Feature Selection \and FPGA}
 % Hook: IDS at edge needs speed + small models
 Network intrusion detection systems (NIDS) face a fundamental tension between
 detection accuracy and deployment constraints. Deep learning models achieve
-state-of-the-art accuracy but require megabytes of parameters and GPU
-inference, making them impractical for line-rate packet classification on edge
-devices. Conversely, lightweight rule-based systems operate at wire speed but
-lack the adaptability to detect novel attack patterns.
+high accuracy but require megabytes of parameters, GPU hardware, and
+millisecond-scale inference per sample~\cite{mdpi2024enhanced} ---
+orders of magnitude slower than the ${\sim}$80\,ns per-packet budget
+at 100\,Gbps line rate, making them impractical for inline packet
+classification on edge devices. Conversely, lightweight rule-based
+systems operate at wire speed but lack the adaptability to detect novel
+attack patterns.
 
 % Gap: WNNs exist for IDS but limited evaluation
 Weightless Neural Networks (WNNs)~\cite{aleksander1984wisard,ludermir1999weightless} offer a
