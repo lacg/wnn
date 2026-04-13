@@ -597,9 +597,7 @@ Table~\ref{tab:unsw} reports results from 112 independent runs on the
 UNSW-NB15 temporal split (8-bit thermometer, top-20 RF features,
 population size~50) using the balanced fitness weights and
 fitness-aligned threshold introduced in Section~\ref{sec:results-ciot}.
-These runs use 20 corrected features (a naming mismatch in the
-original HuggingFace upload had silently reduced earlier runs to 13
-features).
+These runs use the top-20 RF-ranked features.
 
 The train-calibrated threshold achieves 87.36\% $\pm$ 1.90\% F1-macro
 with 13.27\% FPR --- outperforming Random Forest (86.41\% F1,
