@@ -14,6 +14,11 @@
     Best FPR (F1>80%)        |  80.12% |   2.73% |  86.75% |  GA best_fpr      val_cal         |  170
     Best Acc (any FPR)       |  81.89% |  33.10% |  91.05% |  GA best_ce       platt           |  496
     Best Acc (FPR<14%)       |  82.76% |  13.54% |  89.84% |  GA best_ce       empirical_cumulative |  374
+    --- baselines ---
+    RF (top-20, raw)         |  85.53% |  25.18% |  92.71% |  sklearn predict()                |    —
+    XGBoost (top-20, raw)    |  84.13% |  28.34% |  92.07% |  sklearn predict()                |    —
+    RF (all 39, raw)         |  86.08% |  24.00% |  92.96% |  sklearn predict()                |    —
+    Neto RF (46M)            |  96.53% |     —   |  99.68% |  StandardScaler, F1 avg unspec    |    —
 
 ## best_fitness  (GS: 111 runs | GA: 112 runs)
     Grid Search : 397±96 neurons | 34±1 bits
@@ -200,6 +205,12 @@
     Best FPR (F1>80%)        |  81.80% |   0.22% |  81.91% |  GA best_f1       empirical_cumulative |  500
     Best Acc (any FPR)       |  90.52% |   4.13% |  90.54% |  GS best_f1       empirical       |  100
     Best Acc (FPR<14%)       |  90.52% |   4.13% |  90.54% |  GS best_f1       empirical       |  100
+    --- baselines ---
+    RF (top-20, raw)         |  86.41% |  25.22% |  86.94% |  sklearn predict()                |    —
+    XGBoost (top-20, raw)    |  85.62% |  27.29% |  86.24% |  sklearn predict()                |    —
+    RF (all 42, raw)         |  86.69% |  26.58% |  87.30% |  sklearn predict()                |    —
+    XGBoost (all 42, raw)    |  86.71% |  26.70% |  87.32% |  sklearn predict()                |    —
+    Zoghi & Serpen 2024      | 85-90%  |     —   |     —   |  literature range                 |    —
 
 ## best_fitness  (GS: 43 runs | GA: 43 runs)
     Grid Search : 351±133 neurons | 32±1 bits
