@@ -1,6 +1,15 @@
 # PUB50 8b CIC-IoT Random — FINAL Results (Generated 12/04/2026 08:36)
 
     Completed : 112/112  ✅ BATCH COMPLETE
+
+### Best individual genomes — CIC-IoT-2023 1.3M Random 8b
+
+    Metric               |      F1 |     FPR |     Acc |     CE | Phase Genome        Threshold       |    N | Flow
+    ---------------------+---------+---------+---------+--------+-----------------------------------+------+------
+    Best F1              |  83.04% |  20.18% |  90.62% | 0.2131 |  GA best_f1       empirical_cumulative |  198 | PUB50-ciciot-random-r079
+    Best FPR (F1>70%)    |  70.34% |   0.03% |  76.93% | 0.3081 |  GS best_fpr      train_cal       |    5 | PUB50-ciciot-random-r107
+    Best Acc             |  81.89% |  33.10% |  91.05% | 0.2112 |  GA best_ce       platt           |  496 | PUB50-ciciot-random-r062
+    Best CE              |  81.14% |   4.15% |  87.75% | 0.2055 |  GA best_ce       train_cal       |  299 | PUB50-ciciot-random-r042
     Avg/run   : 76.1 min
     Finished  : 12/04/2026 12:31 UTC
 
@@ -176,6 +185,15 @@
     Avg/run   : 8.0 min
     Latest    : 13/04/2026 12:10:46 ET
     ETA       : 13/04/2026 21:22:46 ET
+
+### Best individual genomes — UNSW-NB15 TEMPORAL 8b
+
+    Metric               |      F1 |     FPR |     Acc |     CE | Phase Genome        Threshold       |    N | Flow
+    ---------------------+---------+---------+---------+--------+-----------------------------------+------+------
+    Best F1              |  90.52% |   4.13% |  90.54% | 0.3017 |  GS best_f1       empirical       |  100 | UNSW-fitfix-t8b-temporal-r106
+    Best FPR (F1>70%)    |  70.71% |   0.00% |  71.68% | 0.3287 |  GS best_acc      beta            |  500 | UNSW-fitfix-t8b-temporal-r087
+    Best Acc             |  90.52% |   4.13% |  90.54% | 0.3017 |  GS best_f1       empirical       |  100 | UNSW-fitfix-t8b-temporal-r106
+    Best CE              |  88.32% |  13.40% |  88.45% | 0.2443 |  GA best_acc      train_cal       |  100 | UNSW-fitfix-t8b-temporal-r093
 
 ## best_fitness  (GS: 43 runs | GA: 43 runs)
     Grid Search : 351±133 neurons | 32±1 bits
