@@ -327,19 +327,21 @@ from the Australian Centre for Cyber Security with 42 numeric features and 10 at
 categories. The standard temporal split (175K train / 82K test) separates
 training and testing periods, preventing data leakage. We also evaluate on a
 deduplicated random 80/20 split (1.27M / 317K) for comparison with prior
-work~\cite{susskind2023fwiw}.
+work~\cite{susskind2023fwiw}. Both splits are published with
+top-20 feature rankings~\cite{hf_unsw}.
 
 \textbf{CICIDS2017}~\cite{sharafaldin2018cicids2017} comprises five days of
 network traffic captured at the Canadian Institute for Cybersecurity with
 78 flow-level features and 14 attack types. We use a stratified 80/20
-random split (2.3M train / 566K test), consistent with the majority of
-published work on this dataset.
+random split (2.3M train / 566K test)~\cite{hf_cicids}, consistent with
+the majority of published work on this dataset.
 
 \textbf{CIC-IoT-2023}~\cite{neto2023ciciot} captures IoT traffic from 105
 heterogeneous devices with 33 attack types across 7 classes. With 46.7M
 records heavily skewed toward attacks (97.6\%), we subsample to 1.3M records
 for a manageable benchmark, as a random split (no temporal ordering in the
-source data).
+source data). Both the 1.3M subsample and full 46M dataset are
+published~\cite{hf_ciciot}.
 
 % ============================================================================
 \section{Related Work}
