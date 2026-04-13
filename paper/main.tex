@@ -603,10 +603,9 @@ The train-calibrated threshold achieves 87.36\% $\pm$ 1.90\% F1-macro
 with 13.27\% FPR --- outperforming Random Forest (86.41\% F1,
 25.22\% FPR) by 0.95\,pp F1 at half the FPR.  The validation
 threshold reaches 87.59\% $\pm$ 1.65\% F1 at 5.29\% FPR, a gap of
-only 0.23\,pp from train\_cal --- dramatically smaller than the
-5.43\,pp gap observed in preliminary runs with the old
-FPR-heavy weights, confirming that fitness-aligned threshold
-calibration substantially reduces the temporal transfer gap.
+only 0.23\,pp from train\_cal, confirming that fitness-aligned
+threshold calibration transfers well even across temporal
+distribution shift.
 
 \begin{table}[ht!]
 \centering
