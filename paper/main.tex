@@ -328,20 +328,21 @@ categories. The standard temporal split (175K train / 82K test) separates
 training and testing periods, preventing data leakage. We also evaluate on a
 deduplicated random 80/20 split (1.27M / 317K) for comparison with prior
 work~\cite{susskind2023fwiw}. Both splits are published with
-top-20 feature rankings~\cite{hf_unsw}.
+top-20 feature rankings\ifanonymous\footnote{Dataset URLs anonymized
+for review; will be included in camera-ready.}\else~\cite{hf_unsw}\fi.
 
 \textbf{CICIDS2017}~\cite{sharafaldin2018cicids2017} comprises five days of
 network traffic captured at the Canadian Institute for Cybersecurity with
 78 flow-level features and 14 attack types. We use a stratified 80/20
-random split (2.3M train / 566K test)~\cite{hf_cicids}, consistent with
-the majority of published work on this dataset.
+random split (2.3M train / 566K test)\ifanonymous\else~\cite{hf_cicids}\fi,
+consistent with the majority of published work on this dataset.
 
 \textbf{CIC-IoT-2023}~\cite{neto2023ciciot} captures IoT traffic from 105
 heterogeneous devices with 33 attack types across 7 classes. With 46.7M
 records heavily skewed toward attacks (97.6\%), we subsample to 1.3M records
 for a manageable benchmark, as a random split (no temporal ordering in the
 source data). Both the 1.3M subsample and full 46M dataset are
-published~\cite{hf_ciciot}.
+published\ifanonymous\else~\cite{hf_ciciot}\fi.
 
 % ============================================================================
 \section{Related Work}
@@ -515,14 +516,15 @@ deployment conditions where the model must generalize to future traffic
 patterns.
 
 We evaluate under the temporal protocol for UNSW-NB15 and random splits
-for UNSW-NB15, CICIDS2017, and CIC-IoT-2023:
+for UNSW-NB15, CICIDS2017, and CIC-IoT-2023. All splits are published
+on HuggingFace\ifanonymous\else~\cite{hf_unsw,hf_cicids,hf_ciciot}\fi{}
+for reproducibility:
 \begin{itemize}
 \item \textbf{Temporal split (UNSW-NB15):} The official 175K/82K
   split with temporal separation between training and testing periods.
-\item \textbf{Random splits (all datasets):} Stratified random splits,
-  enabling comparison with prior work.
-  UNSW-NB15 uses 80/20 (1.27M/317K);
-  CICIDS2017 uses 80/20 (2.3M/566K); CIC-IoT-2023 uses 80/20 (1.07M/268K).
+\item \textbf{Random splits (all datasets):} Stratified random 80/20 splits:
+  UNSW-NB15 (1.27M/317K),
+  CICIDS2017 (2.3M/566K), CIC-IoT-2023 (1.07M/268K).
 \end{itemize}
 
 \subsection{Seven-Mode Threshold Calibration}
