@@ -1122,11 +1122,12 @@ in UNSW-NB15, CICIDS2017, and CIC-IoT-2023 (10, 14, and 33 attack
 categories respectively), enabling attack-type identification beyond
 binary detection.
 
-Second, the 5\% F1 gap between validation and train-calibrated
-thresholds on the temporal split suggests that \emph{adaptive threshold
-calibration} --- online adjustment using deployment-time feedback ---
-could substantially improve real-world performance without requiring
-a representative calibration set.
+Second, the 0.33\,pp F1 gap between validation and train-calibrated
+thresholds on the temporal split (Section~\ref{sec:discussion})
+suggests that \emph{adaptive threshold calibration}, online
+adjustment using deployment-time feedback, could further improve
+real-world performance without requiring a representative
+calibration set.
 
 Third, our sparse FPGA configuration uses $O(\log n)$ binary search
 (210--644\,ns), while our dense configuration already matches FWIW's
