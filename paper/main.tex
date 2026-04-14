@@ -559,6 +559,17 @@ quantifies how much accuracy is ``left on the table'' by
 imperfect threshold selection, a finding we report for each
 dataset and configuration.
 
+\textbf{Fitness-aligned threshold optimization.}  The train\_cal and
+val\_cal modes sweep the threshold to maximize the \emph{same}
+weighted-fitness function (Equation~\ref{eq:fitness}) that the GA
+uses for genome selection, rather than maximizing F1 alone.  This
+alignment is methodologically critical: when the threshold sweep
+optimizes F1 but the GA selects on a fitness combining CE, F1, FPR,
+and accuracy, the GA receives misleading FPR signals and discards
+genomes that would have been strong under the actual fitness
+criterion.  The co-optimization ensures that architecture search
+and threshold selection work together rather than at cross purposes.
+
 \subsection{Statistical Protocol}
 
 Each configuration is run as at least 100 independent flows with
@@ -596,16 +607,14 @@ distribution of outcomes.
 Table~\ref{tab:unsw} reports results from 112 independent runs on the
 UNSW-NB15 temporal split (8-bit thermometer, top-20 RF features,
 population size~50) using the balanced fitness weights and
-fitness-aligned threshold introduced in Section~\ref{sec:results-ciot}.
+fitness-aligned threshold (Section~\ref{sec:methodology}).
 These runs use the top-20 RF-ranked features.
 
 The train-calibrated threshold achieves 87.36\% $\pm$ 1.90\% F1-macro
 with 13.27\% FPR --- outperforming Random Forest (86.41\% F1,
 25.22\% FPR) by 0.95\,pp F1 at half the FPR.  The validation
 threshold reaches 87.59\% $\pm$ 1.65\% F1 at 5.29\% FPR, a gap of
-only 0.23\,pp from train\_cal, confirming that fitness-aligned
-threshold calibration transfers well even across temporal
-distribution shift.
+only 0.23\,pp from train\_cal.
 
 \begin{table}[ht!]
 \centering
@@ -669,21 +678,11 @@ CICIDS2017 methodology) and a single-genome evaluation on the full
 baselines.
 
 \paragraph{Methodology refinements.}
-The CIC-IoT-2023 runs incorporate two methodological improvements
-introduced after the UNSW-NB15 and CICIDS2017 results were finalized.
-First, we use fitness weights $w_{CE}{=}0.1$, $w_{F1}{=}0.35$,
-$w_{FPR}{=}0.35$, $w_{Acc}{=}0.2$, balancing F1 and FPR equally rather
-than emphasizing FPR alone. Second, and more importantly, we adopt
-\emph{fitness-aligned threshold optimization}: the calibrated
-threshold modes (train\_cal, val\_cal) sweep the threshold to maximize
-the same weighted-fitness function used by the GA for selection,
-rather than maximizing F1 alone. This alignment is methodologically
-critical --- when the threshold sweep optimizes F1 but the GA selects
-on a fitness combining CE, F1, FPR, and accuracy, the GA receives
-misleading FPR signals and discards genomes that would have been
-strong under the actual fitness criterion. The co-optimization ensures
-the architecture search and threshold selection work together rather
-than at cross purposes.
+The CIC-IoT-2023 and UNSW-NB15 temporal runs use refined fitness
+weights ($w_{CE}{=}0.1$, $w_{F1}{=}0.35$, $w_{FPR}{=}0.35$,
+$w_{Acc}{=}0.2$) that balance F1 and FPR equally, combined with the
+fitness-aligned threshold optimization described in
+Section~\ref{sec:methodology}.
 
 \paragraph{1.3M subsample (112 runs).}
 Table~\ref{tab:ciot-phase} reports the phase progression for the
