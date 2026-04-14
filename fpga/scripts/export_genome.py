@@ -227,9 +227,17 @@ def write_fpga_files(output_dir: Path, connections, sparse_neurons, genome_info,
 	print(f"  Neurons: {n_neurons}, Bits/neuron: {len(connections[0])}")
 	print(f"  Input bits: {meta['input_bits']}")
 	print(f"  Total sparse entries: {total_entries:,}")
-	print(f"  Sparse size: {total_bytes/1024:.1f} KB = {total_bytes/1024/1024:.3f} MB")
-	print(f"  Z-7020 BRAM (612 KB):  {'FITS' if total_bytes < 612*1024 else 'TOO BIG'}")
-	print(f"  Virtex US+ (64 MB):    {'FITS' if total_bytes < 64*1024*1024 else 'TOO BIG'}")
+	if total_bytes < 1024:
+		size_str = f"{total_bytes} B"
+	elif total_bytes < 1024*1024:
+		size_str = f"{total_bytes/1024:.1f} KB"
+	else:
+		size_str = f"{total_bytes/1024/1024:.1f} MB"
+	print(f"  Model size (sparse): {size_str}")
+	if total_bytes < 612*1024:
+		print(f"  Z-7020 BRAM (612 KB): FITS in on-chip BRAM")
+	else:
+		print(f"  Z-7020: requires external DDR ({size_str} > 612 KB BRAM)")
 
 
 def main():
