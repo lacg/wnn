@@ -1122,12 +1122,13 @@ in UNSW-NB15, CICIDS2017, and CIC-IoT-2023 (10, 14, and 33 attack
 categories respectively), enabling attack-type identification beyond
 binary detection.
 
-Second, our sparse FPGA configuration uses $O(\log n)$ binary search
-(210--644\,ns), while our dense configuration already matches FWIW's
-latency (10.7 vs.\ 10.8\,ns).  For sparse configurations, a
-\emph{hash-based lookup} replacing binary search could reduce latency
-to 15--25\,ns, combining the accuracy of large address spaces with
-near-$O(1)$ speed.
+Second, our dense FPGA configurations achieve 2--30\,ns $O(1)$
+latency (Table~\ref{tab:ciot-46m}), while sparse configurations
+require 52--227\,ns due to $O(\log n)$ binary search
+(Tables~\ref{tab:unsw}--\ref{tab:ciot-phase}).  A
+\emph{hash-based lookup} replacing binary search for sparse
+genomes could reduce their latency to near-$O(1)$, combining
+the accuracy of large address spaces with dense-like speed.
 
 Third, the remaining 0.46\% F1 gap to Random Forest on CICIDS2017
 (0.22\% for the best genome) is not explained by encoding precision
