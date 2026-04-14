@@ -1,4 +1,4 @@
-# Vivado batch synthesis for WNN genomes
+# Vivado batch synthesis for WNN genomes — RAID 2026 paper tables
 # Target: xc7z020clg400-1 (Zynq Z-7020)
 # Run: vivado -mode batch -source synth_all.tcl
 
@@ -12,13 +12,16 @@ file mkdir ${results_dir}
 # mode: "sparse" (binary search, wnn_neuron.sv + wnn_classifier_impl.sv)
 #       "dense"  (direct lookup, wnn_neuron_dense.sv + wnn_classifier_dense.sv)
 set genomes {
-    {flow_973           "CICIDS_11n_best"          sparse wnn_classifier_impl}
-    {flow_936           "CICIDS_91n_mid"           sparse wnn_classifier_impl}
-    {flow_706           "CICIDS_500n_large"        sparse wnn_classifier_impl}
-    {flow_532           "UNSW_92n_small"           sparse wnn_classifier_impl}
-    {flow_601           "UNSW_369n_best"           sparse wnn_classifier_impl}
-    {flow_517           "UNSW_500n_large"          sparse wnn_classifier_impl}
-    {flow_798_ciciot_200n4b "CICIOT_200n_4b_dense" dense  wnn_classifier_dense}
+    {unsw_temporal_best_f1     "UNSW_temporal_bestF1_100n32b"     sparse wnn_classifier_impl}
+    {unsw_temporal_best_fpr    "UNSW_temporal_bestFPR_200n32b"    sparse wnn_classifier_impl}
+    {cicids_best_f1            "CICIDS_bestF1_94n32b"             sparse wnn_classifier_impl}
+    {ciciot_best_f1            "CICIOT_bestF1_198n34b"            sparse wnn_classifier_impl}
+    {ciciot_best_f1_fpr14      "CICIOT_bestF1_FPR14_374n34b"      sparse wnn_classifier_impl}
+    {ciciot_best_f1_fpr10      "CICIOT_bestF1_FPR10_245n34b"      sparse wnn_classifier_impl}
+    {ciciot_best_f1_fpr5       "CICIOT_bestF1_FPR5_299n34b"       sparse wnn_classifier_impl}
+    {ciciot_best_fpr           "CICIOT_bestFPR_5n4b"              sparse wnn_classifier_impl}
+    {flow_798_ciciot_200n4b    "CICIOT_200n_4b_dense"             dense  wnn_classifier_dense}
+    {flow_1184_ciciot_400n8b   "CICIOT_400n_8b_dense"             dense  wnn_classifier_dense}
 }
 
 foreach genome $genomes {
@@ -42,6 +45,10 @@ foreach genome $genomes {
     if {${mode} eq "sparse"} {
         add_files ${rtl_dir}/wnn_neuron.sv
         add_files ${export_dir}/wnn_classifier_impl.sv
+        # Sparse .mem files need to be on the search path
+        if {[file exists ${export_dir}/mem]} {
+            set_property file_type {Memory File} [add_files [glob ${export_dir}/mem/*.mem]]
+        }
     } else {
         add_files ${rtl_dir}/wnn_neuron_dense.sv
         add_files ${export_dir}/wnn_classifier_dense.sv
@@ -65,12 +72,9 @@ foreach genome $genomes {
 
     # Extract key metrics to a summary file
     set fp [open ${out_dir}/summary.txt w]
-    puts $fp "Flow: ${flow_dir}"
+    puts $fp "Genome: ${flow_dir}"
     puts $fp "Description: ${desc}"
     puts $fp "Mode: ${mode}"
-
-    # Get utilization from report (post-synthesis)
-    puts $fp "--- Post-Synthesis Utilization ---"
 
     # Get timing - WNS from timing report
     set timing_paths [get_timing_paths -max_paths 1 -quiet]

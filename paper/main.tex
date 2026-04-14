@@ -766,14 +766,16 @@ XGBoost                           & 84.13            & 28.34              & 92.0
 \end{tabular}}
 \end{table}
 
-\paragraph{Full 46M dataset, Pareto frontier across memory tiers.}
+\paragraph{Full 46M dataset.}
 To compare with prior work that reports on the full 46.7M-record
 CIC-IoT-2023, we trained 13 single-genome configurations on the
 complete dataset (30.8M train / 7.7M test, random 80/20), spanning
-four orders of magnitude in memory footprint. Architectures were
+four orders of magnitude in memory footprint.  Architectures were
 selected from the 1.3M-subsample search and transferred to 46M
 without further GA refinement, isolating the effect of training-data
-volume from architecture-search effects. Table~\ref{tab:ciot-46m}
+volume from architecture-search effects.  We also ran a grid search
+directly on the 46M dataset to find the best genome without
+architecture transfer.  Table~\ref{tab:ciot-46m}
 groups the results into three deployment tiers --- micro (20\,B to
 2\,KB), small (5--25\,KB), and peak (sparse memory in the
 hundred-megabyte range) --- and compares against the baselines
