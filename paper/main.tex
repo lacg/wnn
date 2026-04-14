@@ -728,15 +728,13 @@ XGBoost                    & 99.65            & 0.12               & 99.78 \\
 \label{sec:results-ciot}
 
 We evaluate on CIC-IoT-2023 using two complementary protocols: a
-112-run statistical batch on a 1.3M random subsample (matching the
-CICIDS2017 methodology) and a single-genome evaluation on the full
-46.7M-record dataset for direct comparison with prior published
-baselines.
-
-\paragraph{Methodology refinements (1.3M subsample, 112 runs).}
-The CIC-IoT-2023 runs use the balanced fitness weights and
-fitness-aligned threshold optimization described in
-Sections~\ref{sec:architecture} and~\ref{sec:methodology}.
+112-run statistical batch on a 1.3M random subsample (8-bit
+thermometer, top-20 RF features, population size~50) using balanced
+fitness weights ($w_{F1}{=}0.35$, $w_{FPR}{=}0.35$, $w_{CE}{=}0.1$,
+$w_{Acc}{=}0.2$) and fitness-aligned threshold optimization
+(Section~\ref{sec:methodology}), and a single-genome evaluation on
+the full 46.7M-record dataset for direct comparison with prior
+published baselines.
 
 \begin{table}[ht!]
 \centering
