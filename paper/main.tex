@@ -911,11 +911,13 @@ all fitting on a single \$20 Zynq Z-7020.
 
 \subsection{Connectivity as Feature Selection}
 
-Each neuron's address bits are drawn randomly from specific positions in
-the 320-bit (CICIDS, 16-bit thermometer) or 152-bit (UNSW, 8-bit
-thermometer) input vector at initialization.  The connectivity remains
-fixed throughout training; the GA optimizes only neuron \emph{count},
-selecting which neurons to keep or discard.  This implicitly performs
+During the grid search phase, each neuron's address bits are drawn
+randomly from specific positions in the thermometer-encoded input
+vector --- for example, 320~bits for CICIDS2017 (16-bit thermometer)
+or 152~bits for UNSW-NB15 (8-bit thermometer).  The connectivity
+remains fixed throughout training; the genetic algorithm (GA) phase
+then optimizes only neuron \emph{count}, selecting which neurons to
+keep or discard.  This implicitly performs
 feature selection: neurons whose random connectivity happens to capture
 discriminative input combinations survive, while those with uninformative
 connections are pruned.
