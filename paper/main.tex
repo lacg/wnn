@@ -892,38 +892,17 @@ Dataset & Phase & F1 (\%) & FPR (\%) & Neurons & Bits \\
 \end{tabular}}
 \end{table}
 
-\subsection{Model Size Analysis}
-\label{sec:model-size}
-
 WNN model size is determined by the sparse memory footprint: only
 addresses visited during training store non-default cell values.
-Table~\ref{tab:model-size} compares deployed model sizes.
-
-Due to thermometer encoding correlation, our 34-bit address neurons
-contain only ${\sim}$3{,}500 trained entries each (Section~\ref{sec:discussion}),
-not the $2^{34}$ that a dense representation would require.  The
-11-neuron CICIDS genome stores 41{,}215 entries in 362\,KB of sparse
-(key, value) pairs, while the 232-neuron average genome requires
-${\sim}$2\,MB.  These are larger than FWIW's 192-byte Bloom filter
-model but orders of magnitude smaller than tree ensembles.
-
-\begin{table}[ht!]
-\centering
-\caption{Deployed model sizes.}
-\label{tab:model-size}
-\begin{tabular}{lrrl}
-\toprule
-Model & Neurons & Model Size & Format \\
-\midrule
-Ours (11n, best)    & 11  & 362\,KB  & Sparse (key, value) \\
-Ours (232n, avg)    & 232 & ${\sim}$2\,MB & Sparse (key, value) \\
-FWIW                & ${\sim}$30 & 192\,B & Bloom filters \\
-Random Forest       & ---  & ${\sim}$50\,MB & Serialized trees \\
-XGBoost             & ---  & ${\sim}$10\,MB & Serialized trees \\
-CNN-BiLSTM          & ---  & ${\sim}$5\,MB  & Neural weights \\
-\bottomrule
-\end{tabular}
-\end{table}
+Due to thermometer encoding correlation, our 32-bit address neurons
+contain only ${\sim}$3{,}500 trained entries each
+(Section~\ref{sec:discussion}),
+not the $2^{32}$ that a dense representation would require.
+Vivado maps these sparse tables entirely to LUT-based distributed RAM
+(zero BRAM), so the model is baked into the FPGA bitstream.
+Deployment sizes range from 156~LUTs (0.3\%, 5-neuron CIC-IoT) to
+28{,}167~LUTs (52.9\%, 299-neuron CIC-IoT),
+all fitting on a single \$20 Zynq Z-7020.
 
 % ============================================================================
 \section{Discussion}
