@@ -810,7 +810,7 @@ Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & Size & LUTs & Latency & Power \\
 \multirow{4}{*}{Peak}
  & Ours (96n $\times$ 32b)   & 84.36 &  1.61 & 97.59 & 3.4\,MB  & ---  & ---     & --- \\
  & Ours (198n $\times$ 32b)  & 84.68 &  2.00 & 97.67 & 6.3\,MB  & ---  & ---     & --- \\
- & Ours (245n $\times$ 32b)  & 84.79 &  1.59 & 97.68 & ---      & ---  & ---     & --- \\
+ & Ours (245n $\times$ 32b)  & 84.79 &  1.59 & 97.68 & 7.8\,MB  & ---  & ---     & --- \\
  & Ours (500n $\times$ 34b)  & 84.73 &  1.91 & 97.68 & ---      & ---  & ---     & --- \\
 \midrule
 \multirow{3}{*}{\shortstack[l]{Baseline\\(46M)}}
@@ -1058,15 +1058,18 @@ is lowest around 16--26 bits.}
 \subsection{FPGA Deployment}
 
 RAM neurons map naturally to FPGA resources: each neuron's lookup table
-stores in block RAM (BRAM) or distributed LUTs with the evolved
+is synthesized into distributed LUTs with the evolved
 connection map implemented as compile-time wire assignments (pure routing,
-zero logic).  We analyze two deployment configurations targeting the
-Xilinx Zynq Z-7020\footnote{The XC7Z020-CLG400 is available on
+zero logic).  Vivado infers zero BRAMs for all configurations ---
+sparse neuron tables are mapped entirely to LUT-based distributed RAM.
+We synthesize all best genomes from Tables~\ref{tab:unsw}--\ref{tab:ciot-phase}
+on the Xilinx Zynq Z-7020\footnote{The XC7Z020-CLG400 is available on
 surplus EBAZ4206 boards (decommissioned Bitcoin miner control boards)
 for under \$25; purpose-built development boards (Arty~Z7, ALINX AX7020)
 range from \$200--350.  Our synthesis targets the chip, not a specific
 board; utilization numbers are identical on any Z-7020 platform.}
-(53,200 LUTs, 140 BRAM36 blocks, 612\,KB).
+(53{,}200 LUTs, 140 BRAM36 blocks) and report LUT utilization, latency,
+and power in each result table.
 
 \paragraph{Dense configuration (8--12-bit addresses).}
 With address width capped, each neuron's full lookup table is synthesized
@@ -1091,7 +1094,8 @@ correlated (bit $k$ is set iff the feature value exceeds threshold $k$),
 a neuron addressing 34 bits across 15--18 features observes only
 ${\sim}3{,}500$ unique addresses from 2.26 million training examples, not
 $2^{34}$.  We store only these trained entries as sorted (key, value) pairs
-in BRAM with binary-search lookup.
+with binary-search lookup; Vivado maps these to distributed LUTs
+rather than block RAM.
 
 Our best 34-bit genome (11 neurons, 99.59\% F1, 0.12\% FPR) contains
 only 41{,}215 sparse entries (362\,KB).  Vivado synthesis inferred
