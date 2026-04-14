@@ -809,7 +809,7 @@ Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & Size & LUTs & Latency & Power \\
 \midrule
 \multirow{4}{*}{Peak}
  & Ours (96n $\times$ 32b)   & 84.36 &  1.61 & 97.59 & 3.4\,MB  & ---  & ---     & --- \\
- & Ours (198n $\times$ 32b)  & 84.68 &  2.00 & 97.67 & ---      & ---  & ---     & --- \\
+ & Ours (198n $\times$ 32b)  & 84.68 &  2.00 & 97.67 & 6.3\,MB  & ---  & ---     & --- \\
  & Ours (245n $\times$ 32b)  & 84.79 &  1.59 & 97.68 & ---      & ---  & ---     & --- \\
  & Ours (500n $\times$ 34b)  & 84.73 &  1.91 & 97.68 & ---      & ---  & ---     & --- \\
 \midrule
@@ -835,30 +835,51 @@ Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & Size & LUTs & Latency & Power \\
 Our two-phase pipeline first performs a grid search over neuron counts
 and address widths, then refines the best genome with a genetic algorithm
 that mutates neuron count while preserving evolved connections.
-Table~\ref{tab:phase} compares the two phases on CICIDS2017.
+Table~\ref{tab:phase} compares the two phases across all three datasets
+(val\_cal threshold, best-fitness genome).
 
-The GA phase improves validation F1 by 0.05 percentage points on average
-(99.35\% $\to$ 99.40\%) while reducing neuron count by 43\%
-(340 $\to$ 194 neurons).  The GA also halves the F1 variance
-($\pm$0.11\% $\to$ $\pm$0.06\%), indicating that neuron-count
-optimization acts as a regularizer, pruning redundant neurons that
-add noise without improving discrimination.
+The GA phase consistently improves F1 while reducing neuron count.
+On CICIDS2017, the GA reduces neurons by 43\% (343$\to$198) while
+improving F1 by 0.11\,pp and halving variance ($\pm$0.76\%
+$\to$ $\pm$0.48\%), indicating that neuron-count optimization acts as
+a regularizer.  On CIC-IoT-2023, the GA achieves its largest F1 gain
+(+0.62\,pp) with a 19\% neuron reduction.  On the harder UNSW-NB15
+temporal split, the GA yields a 0.82\,pp F1 improvement with minimal
+pruning ($-$4\%), suggesting that the temporal distribution shift leaves
+little room for neuron removal.
+
+Since Vivado maps all sparse neuron memory to LUT-based distributed RAM
+(zero BRAM; Section~\ref{sec:discussion}), the neuron reduction
+translates directly to lower LUT utilization: the CICIDS GA genome uses
+3{,}112 LUTs (5.9\% of Z-7020) versus an estimated ${\sim}$5{,}500 for
+the unpruned grid-search genome.
 
 \begin{table}[ht!]
 \centering
-\caption{Phase progression on CICIDS2017 (120 runs, val\_cal threshold,
-best-fitness genome).}
+\caption{Phase progression across datasets (val\_cal threshold,
+best-fitness genome). Neurons and bits are mean $\pm$ std.}
 \label{tab:phase}
-\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llrrrr}
 \toprule
-Phase & F1-macro (\%) & FPR (\%) & Neurons & Bits \\
+Dataset & Phase & F1 (\%) & FPR (\%) & Neurons & Bits \\
 \midrule
-Grid Search    & 99.35 $\pm$ 0.07 & 0.212 $\pm$ 0.064 & 340 $\pm$ 115 & 34 (84\%) \\
-GA Neurons     & 99.40 $\pm$ 0.06 & 0.196 $\pm$ 0.063 & 194 $\pm$ 143 & 32 (62\%) \\
+\multirow{3}{*}{CICIDS2017}
+ & Grid Search    & 99.19 $\pm$ 0.76 & 0.26 $\pm$ 0.31 & 343 $\pm$ 118 & 33 $\pm$ 5 \\
+ & GA Neurons     & 99.30 $\pm$ 0.48 & 0.22 $\pm$ 0.12 & 198 $\pm$ 146 & 31 $\pm$ 5 \\
+ & $\Delta$       & +0.11            & $-$0.04          & $-$145 ($-$42\%) & \\
 \midrule
-$\Delta$       & +0.05            & $-$0.016           & $-$146 ($-$43\%) & \\
+\multirow{3}{*}{CIC-IoT-2023}
+ & Grid Search    & 79.31 $\pm$ 0.39 & 4.08 $\pm$ 1.58 & 397 $\pm$ 95 & 34 $\pm$ 1 \\
+ & GA Neurons     & 79.93 $\pm$ 0.47 & 3.94 $\pm$ 0.52 & 322 $\pm$ 126 & 32 $\pm$ 1 \\
+ & $\Delta$       & +0.62            & $-$0.14          & $-$75 ($-$19\%) & \\
+\midrule
+\multirow{3}{*}{\shortstack[l]{UNSW-NB15\\(temporal)}}
+ & Grid Search    & 86.52 $\pm$ 2.84 & 5.79 $\pm$ 4.81 & 348 $\pm$ 137 & 31 $\pm$ 1 \\
+ & GA Neurons     & 87.34 $\pm$ 2.12 & 5.43 $\pm$ 4.02 & 333 $\pm$ 128 & 32 $\pm$ 2 \\
+ & $\Delta$       & +0.82            & $-$0.36          & $-$15 ($-$4\%) & \\
 \bottomrule
-\end{tabular}
+\end{tabular}}
 \end{table}
 
 \subsection{Model Size Analysis}
