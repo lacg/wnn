@@ -1122,21 +1122,14 @@ in UNSW-NB15, CICIDS2017, and CIC-IoT-2023 (10, 14, and 33 attack
 categories respectively), enabling attack-type identification beyond
 binary detection.
 
-Second, the 0.33\,pp F1 gap between validation and train-calibrated
-thresholds on the temporal split (Section~\ref{sec:discussion})
-suggests that \emph{adaptive threshold calibration}, online
-adjustment using deployment-time feedback, could further improve
-real-world performance without requiring a representative
-calibration set.
-
-Third, our sparse FPGA configuration uses $O(\log n)$ binary search
+Second, our sparse FPGA configuration uses $O(\log n)$ binary search
 (210--644\,ns), while our dense configuration already matches FWIW's
 latency (10.7 vs.\ 10.8\,ns).  For sparse configurations, a
 \emph{hash-based lookup} replacing binary search could reduce latency
 to 15--25\,ns, combining the accuracy of large address spaces with
 near-$O(1)$ speed.
 
-Fourth, the remaining 0.46\% F1 gap to Random Forest on CICIDS2017
+Third, the remaining 0.46\% F1 gap to Random Forest on CICIDS2017
 (0.22\% for the best genome) is not explained by encoding precision
 (64-bit yields no improvement) and warrants further investigation.  Our framework supports additional
 optimization phases beyond the two evaluated here: \emph{GA bits}
