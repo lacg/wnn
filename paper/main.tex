@@ -601,14 +601,17 @@ distribution of outcomes.
 \section{Experimental Results}
 \label{sec:results}
 
-\subsection{UNSW-NB15 Temporal Results}
+\subsection{Dataset Results}
+
+\subsubsection{UNSW-NB15 Temporal Results.}
 \label{sec:results-unsw}
 
 Table~\ref{tab:unsw} reports results from 112 independent runs on the
 UNSW-NB15 temporal split (8-bit thermometer, top-20 RF features,
-population size~50) using the balanced fitness weights and
-fitness-aligned threshold (Section~\ref{sec:methodology}).
-These runs use the top-20 RF-ranked features.
+population size~50, top-20 RF-ranked features) using balanced fitness
+weights ($w_{F1}{=}0.35$, $w_{FPR}{=}0.35$, $w_{CE}{=}0.1$,
+$w_{Acc}{=}0.2$) and fitness-aligned threshold optimization
+(Section~\ref{sec:methodology}).
 
 The train-calibrated threshold achieves 87.36\% $\pm$ 1.90\% F1-macro
 with 13.27\% FPR --- outperforming Random Forest (86.41\% F1,
@@ -634,12 +637,14 @@ Validation (val\_cal)      & 87.59 $\pm$ 1.65 & 5.29 $\pm$ 4.18    & 87.62 $\pm$
 \end{tabular*}
 \end{table}
 
-\subsection{CICIDS2017 Random Results}
+\subsubsection{CICIDS2017 Random Results.}
 \label{sec:results-cicids}
 
 Table~\ref{tab:cicids} reports results from 120 runs on CICIDS2017 with
 16-bit thermometer encoding (top-20 RF features, random 80/20 split,
-population size~50, original FPR-weighted fitness).  The 16-bit encoding
+population size~50) using the original FPR-weighted fitness
+($w_{FPR}{=}0.4$, $w_{F1}{=}0.3$, $w_{CE}{=}0.2$, $w_{Acc}{=}0.1$).
+The 16-bit encoding
 was selected based on our thermometer sweep analysis
 (Section~\ref{sec:discussion}), which identified 16~bits as the optimal
 resolution for this dataset.
@@ -669,7 +674,7 @@ Validation (val\_cal)      & 99.30 $\pm$ 0.48 & 0.22 $\pm$ 0.12  & 99.56 $\pm$ 0
 \end{tabular*}
 \end{table}
 
-\subsection{CIC-IoT-2023 Results}
+\subsubsection{CIC-IoT-2023 Results.}
 \label{sec:results-ciot}
 
 We evaluate on CIC-IoT-2023 using two complementary protocols: a
@@ -678,23 +683,19 @@ CICIDS2017 methodology) and a single-genome evaluation on the full
 46.7M-record dataset for direct comparison with prior published
 baselines.
 
-\paragraph{Methodology refinements.}
+\paragraph{Methodology refinements (1.3M subsample, 112 runs).}
 The CIC-IoT-2023 runs use the balanced fitness weights and
 fitness-aligned threshold optimization described in
 Sections~\ref{sec:architecture} and~\ref{sec:methodology}.
 
-\paragraph{1.3M subsample (112 runs).}
-Table~\ref{tab:ciot-phase} reports the phase progression for the
-best-fitness genome under the deployable train\_cal threshold across
-all 112 PUB50 flows. The GA phase reduces neuron count by 19\%
-(397 $\to$ 322) while improving F1 by 0.53 percentage points and
-reducing FPR by 0.25 points, mirroring the regularization effect
-observed on CICIDS2017 (Section~\ref{sec:phase-progression}).
-
 \begin{table}[ht!]
 \centering
 \caption{Phase progression on CIC-IoT-2023 1.3M subsample
-(112 runs, train\_cal threshold, best-fitness genome).}
+(112 runs, train\_cal threshold, best-fitness genome).
+The GA phase reduces neuron count by 19\%
+(397 $\to$ 322) while improving F1 by 0.53\,pp and
+reducing FPR by 0.25\,pp, mirroring the regularization effect
+observed on CICIDS2017 (Table~\ref{tab:phase}).}
 \label{tab:ciot-phase}
 \begin{tabular*}{\textwidth}{l @{\extracolsep{\fill}} rrrr}
 \toprule
@@ -767,147 +768,6 @@ Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & Model Size \\
 \multicolumn{6}{l}{\small $^\dag$Neto et al.\ use StandardScaler + a different 80/20 split; F1 averaging method unspecified in the original paper.}
 \end{tabular}}
 \end{table}
-
-\paragraph{Key observations from the Pareto frontier.}
-The 800-byte 200n $\times$ 4b headline delivers F1 79.37\% / FPR
-2.38\% / Acc 96.38\% at 1/12 the Perceptron model size. Scaling
-memory by 30$\times$ to the 25\,KB 400n $\times$ 8b lifts F1 by
-3.76 points to \textbf{83.13\%} while keeping FPR at 2.06\% --- the
-FPGA-deployable sweet spot, fitting within the 128\,KB BRAM of an
-iCE40UP5K and beating Perceptron F1 by 2.08 points. The peak tier
-(hundred-megabyte sparse memory) reaches 84.79\% F1 at 1.59\% FPR
-with only 245 neurons --- a 0.79-point gain over the 25\,KB
-configuration for a 20{,}000$\times$ memory increase, well past
-the diminishing-returns elbow. The 5n $\times$ 4b ``20-byte
-detector'' is included as an extreme-edge point: across 10 seeds,
-mean F1 is 66.66\% ($\sigma$\,=\,6.36\%) with FPR ranging 0--30\%
-across seeds, indicating the architecture is usable on
-microcontrollers but seed-search-dependent in practice.
-
-\paragraph{Threshold-tunable operating modes.}
-The same trained 800-byte 200n $\times$ 4b memory admits three
-deployment-time threshold choices without retraining: the deployable
-\emph{train\_cal} (F1 82.20\% / FPR 6.06\%), an oracle \emph{val\_cal}
-that requires labeled deployment data and achieves the lowest FPR
-among F1-competitive thresholds (F1 82.41\% / FPR 3.54\%), and an
-ultra-secure \emph{empirical\_cumulative} mode that trades 19 F1
-points for a 17$\times$ reduction in FPR (F1 63.32\% / FPR 0.34\%),
-suitable for analyst-burden-bounded SOCs where false alarms are
-operationally costly.
-
-\paragraph{Address-tap saturation finding.}
-The best 32-bit and 34-bit peak genomes (245n $\times$ 32b vs 500n
-$\times$ 34b) achieve F1 84.79\% vs 84.73\% at the train\_cal
-threshold --- a 0.06-point gap, well within seed noise. The
-4$\times$ larger address space of 34-bit yields no improvement,
-confirming that thermometer-encoding bit correlation caps effective
-discrimination far below the dense 2$^b$ address bound: with 8-bit
-thermometer, each feature contributes only $\log_2(9) \approx 3.17$
-effective bits, so a 32-bit address tap on 20 features already
-samples roughly half the available discriminative information.
-
-\paragraph{FPGA synthesis.}
-The 200n $\times$ 4b configuration is small enough for a fully dense
-$O(1)$ lookup-table implementation (3.1\,KB total ROM). On the same
-Xilinx Zynq~Z-7020 used for the UNSW-NB15 and CICIDS2017 designs
-(Table~\ref{tab:fpga}), the synthesized design uses
-\textbf{154 LUTs} (0.29\% of the device), 8 flip-flops, zero
-BRAMs/DSPs, with single-cycle latency of \textbf{12.7\,ns} at
-$F_\text{max}{=}78$\,MHz --- 78\,MS/s throughput, well above the
-12.5\,MS/s required for 100\,Gbps line-rate inspection. The lower
-$F_\text{max}$ vs the 12-bit dense CICIDS/UNSW configurations
-(91--94\,MHz) reflects the deeper accumulator tree across 200~neurons.
-
-\paragraph{Thermometer encoding width saturation.}
-To test whether the 32-bit address-tap saturation observed above is
-bounded by the 8-bit thermometer encoding width rather than the
-address-tap itself, we re-trained the two peak architectures
-(96n $\times$ 32b and 500n $\times$ 34b) at 16-bit, 32-bit, and
-64-bit thermometer encodings on the full 46M dataset (2 seeds per
-cell), combined with the 8-bit baseline already reported in
-Table~\ref{tab:ciot-46m}. Neither architecture shows meaningful
-F1 movement across widths: the entire sweep lands within
-$\pm$0.5 percentage points of the 8-bit baseline on every metric
-and every threshold mode, well inside seed noise
-(Table~\ref{tab:thermo-sweep}).
-
-\begin{table}[ht!]
-\centering
-\caption{46M thermometer encoding sweep on two peak architectures
-(train\_cal threshold, best-fitness genome). The 8-bit columns are the
-baselines from Table~\ref{tab:ciot-46m}; 16/32/64-bit cells report
-mean $\pm$ std across 2 seeds.}
-\label{tab:thermo-sweep}
-\begin{tabular}{lcccc}
-\toprule
-\multirow{2}{*}{Architecture} & \multicolumn{4}{c}{Thermometer width} \\
-\cmidrule(lr){2-5}
- & 8-bit & 16-bit & 32-bit & 64-bit \\
-\midrule
-\multicolumn{5}{l}{\textit{F1-macro (\%)}} \\
-96n $\times$ 32b  & 84.36 & 84.13 $\pm$ 0.08 & 84.53 $\pm$ 0.25 & 84.59 $\pm$ 0.13 \\
-500n $\times$ 34b & 84.73 & 84.43 $\pm$ 0.21 & 84.46 $\pm$ 0.41 & 84.87 $\pm$ 0.03 \\
-\midrule
-\multicolumn{5}{l}{\textit{FPR (\%)}} \\
-96n $\times$ 32b  & 1.61  & 1.17 $\pm$ 0.22  & 1.50 $\pm$ 0.27  & 1.69 $\pm$ 0.17  \\
-500n $\times$ 34b & 1.91  & 1.51 $\pm$ 0.05  & 1.37 $\pm$ 0.18  & 1.75 $\pm$ 0.02  \\
-\midrule
-\multicolumn{5}{l}{\textit{Accuracy (\%)}} \\
-96n $\times$ 32b  & 97.59 & 97.53 $\pm$ 0.02 & 97.63 $\pm$ 0.06 & 97.64 $\pm$ 0.03 \\
-500n $\times$ 34b & 97.68 & 97.60 $\pm$ 0.05 & 97.61 $\pm$ 0.09 & 97.70 $\pm$ 0.01 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-Combined with the 32-bit vs 34-bit address-tap comparison of the
-previous paragraph, this rules out both possible interpretations
-of the 34-bit saturation in our favour: neither the 2-bit
-address-tap expansion nor an 8$\times$ thermometer-encoding expansion
-unlocks additional F1 on CIC-IoT-2023. The information-theoretic
-ceiling for our architecture class on this dataset sits at roughly
-84--85\% F1 under the train\_cal threshold (and 86--87\% F1 under
-the empirical\_cumulative threshold, at the cost of higher FPR).
-Further improvement would require design changes --- different
-feature encoding, non-random connectivity, or fundamentally
-different memory primitives --- rather than hyperparameter
-adjustments within the current design.
-
-\paragraph{Narrower thermometer encoding on 46M.}
-A downward sweep (2-bit, 4-bit) on the same two reference architectures
-revealed an unexpected lift at 2-bit: 96n $\times$ 32b reaches
-85.63\% $\pm$ 0.06 F1 ($n{=}2$ seeds, +1.26\,pp over the 8-bit entry in
-Table~\ref{tab:thermo-sweep}), and the 400n $\times$ 8b small-memory
-Pareto peak (Table~\ref{tab:fpga}) reaches 84.17\% $\pm$ 0.11 F1
-(+1.04\,pp). To test whether this effect reproduces at the 1.3M
-random-subsample scale used throughout our PUB50 comparison, we ran a
-4-seed PUB50-2b batch matched to the 46-flow 8-bit baseline on every
-parameter except \texttt{ids\_n\_bits}. Across 4 seeds
-($\sigma_\text{F1}{=}0.44$\,pp, $\sigma_\text{FPR}{=}0.26$\,pp),
-2-bit reached 77.86\% F1 / 2.34\% FPR / 84.70\% accuracy versus the
-46-run 8-bit mean of 80.07\% F1 / 4.25\% FPR / 86.85\% accuracy ---
-a balanced-fitness drop of 0.54\,pp outside the estimated $\pm$0.3\,pp
-noise floor. The 46M 2-bit lift therefore appears to be
-training-set-size-dependent: narrower encodings benefit from the
-examples-per-address density the 46M dataset provides but the 1.3M
-subsample does not. Further validation across additional 46M seeds
-and intermediate dataset sizes would be needed to fully characterize
-the effect; we report it here as a scale-dependent observation rather
-than a universal recommendation.
-
-An engineering note: the 500n $\times$ 34b configurations at
-32-bit and 64-bit thermometer initially exceeded the Mac Studio's
-compressed-memory budget during training buffer allocation
-(373\,GB peak logical footprint for the 64-bit case), due to a
-Python-list materialization of the input array in the Rust
-accelerator bridge. Replacing that code path with a zero-copy
-numpy transfer (1 byte per bool in place of an 8-byte pointer per
-list slot) reduced the peak footprint to roughly 25\,GB, within
-the 64\,GB hardware budget and allowing the sweep to complete.
-
-% TODO after PUB50-112 completes (ETA 12/04/2026):
-% - Update tab:ciot-phase from n=56 to n=112
-% - Update tab:baselines CIC-IoT avg rows from n=56 to n=112
-% DONE: FPGA row added (400n × 8b, 304 LUTs), thermometer low sweep added
 
 \subsection{Phase Progression Analysis}
 \label{sec:phase-progression}
@@ -1076,7 +936,7 @@ while maintaining or improving accuracy
 
 The gap between validation (val\_cal) and deployable (train\_cal) thresholds
 represents the central practical challenge for WNN-based IDS.  On
-UNSW-NB15 temporal, this gap is 5.18 percentage points in F1
+UNSW-NB15 temporal, this gap is 0.61 percentage points in F1
 (87.59\% vs.\ 86.98\%), driven by distribution shift between the
 balanced validation set and the temporally distinct test set.  On
 CICIDS2017 random, the gap shrinks to 0.03 points (99.40\% vs.\ 99.37\%),
@@ -1090,7 +950,7 @@ implications: for temporal deployment scenarios, a fixed threshold may
 be preferable to calibrated thresholds, unless a representative
 calibration set from the deployment distribution is available.
 
-\subsection{Encoding Resolution Analysis}
+\subsection{Encoding Resolution and Saturation}
 
 To determine the optimal thermometer encoding width, we swept from 8 to
 64 bits per feature on CICIDS2017 (random split, 2 runs per configuration)
@@ -1102,7 +962,7 @@ On CICIDS2017, F1-macro increases sharply from 8-bit (99.25\%) to 16-bit
 also yields the fewest neurons (avg.\ 58 vs.\ 223 at 8-bit) and the
 fastest training (0.9\,h vs.\ 1.5\,h at 8-bit), suggesting that 16
 bits provides sufficient resolution for the GA to find compact, accurate
-genomes.  The remaining 0.4\% gap to Random Forest (99.83\%) persists
+genomes.  The remaining 0.46\% gap to Random Forest (99.74\%) persists
 regardless of encoding width, confirming that precision alone does not
 explain the difference.
 
@@ -1111,6 +971,63 @@ On UNSW-NB15, no clear inflection point emerges: F1 ranges from 82\% to
 results (89.56\%).  The high variance (only 2 runs per configuration)
 obscures any trend, and the harder temporal split amplifies seed
 sensitivity.
+
+\paragraph{Address-tap saturation on CIC-IoT-2023.}
+The best 32-bit and 34-bit peak genomes on the 46M dataset
+(245n $\times$ 32b vs 500n $\times$ 34b) achieve F1 84.79\% vs
+84.73\% --- a 0.06-point gap, well within seed noise. The
+4$\times$ larger address space yields no improvement, confirming
+that thermometer-encoding bit correlation caps effective
+discrimination: with 8-bit thermometer, each feature contributes
+only $\log_2(9) \approx 3.17$ effective bits, so a 32-bit address
+tap on 20 features already samples roughly half the available
+discriminative information.
+
+To test whether this saturation is bounded by the 8-bit thermometer
+width, we re-trained both peak architectures at 16/32/64-bit
+thermometer encodings on 46M (2 seeds per cell,
+Table~\ref{tab:thermo-sweep}).  Neither architecture shows
+meaningful F1 movement: the entire sweep lands within $\pm$0.5\,pp
+of the 8-bit baseline, well inside seed noise.  This rules out
+both interpretations of the saturation: neither wider address taps
+nor higher-resolution encoding unlocks additional F1.
+
+\begin{table}[ht!]
+\centering
+\caption{46M thermometer encoding sweep on two peak architectures
+(train\_cal threshold, best-fitness genome). The 8-bit columns are the
+baselines from Table~\ref{tab:ciot-46m}; 16/32/64-bit cells report
+mean $\pm$ std across 2 seeds.}
+\label{tab:thermo-sweep}
+\begin{tabular}{lcccc}
+\toprule
+\multirow{2}{*}{Architecture} & \multicolumn{4}{c}{Thermometer width} \\
+\cmidrule(lr){2-5}
+ & 8-bit & 16-bit & 32-bit & 64-bit \\
+\midrule
+\multicolumn{5}{l}{\textit{F1-macro (\%)}} \\
+96n $\times$ 32b  & 84.36 & 84.13 $\pm$ 0.08 & 84.53 $\pm$ 0.25 & 84.59 $\pm$ 0.13 \\
+500n $\times$ 34b & 84.73 & 84.43 $\pm$ 0.21 & 84.46 $\pm$ 0.41 & 84.87 $\pm$ 0.03 \\
+\midrule
+\multicolumn{5}{l}{\textit{FPR (\%)}} \\
+96n $\times$ 32b  & 1.61  & 1.17 $\pm$ 0.22  & 1.50 $\pm$ 0.27  & 1.69 $\pm$ 0.17  \\
+500n $\times$ 34b & 1.91  & 1.51 $\pm$ 0.05  & 1.37 $\pm$ 0.18  & 1.75 $\pm$ 0.02  \\
+\midrule
+\multicolumn{5}{l}{\textit{Accuracy (\%)}} \\
+96n $\times$ 32b  & 97.59 & 97.53 $\pm$ 0.02 & 97.63 $\pm$ 0.06 & 97.64 $\pm$ 0.03 \\
+500n $\times$ 34b & 97.68 & 97.60 $\pm$ 0.05 & 97.61 $\pm$ 0.09 & 97.70 $\pm$ 0.01 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Scale-dependent 2-bit finding.}
+A downward sweep (2/4-bit) on the same architectures revealed an
+unexpected lift at 2-bit on 46M (+1.26\,pp at 96n $\times$ 32b,
++1.04\,pp at 400n $\times$ 8b).  However, a 4-seed validation at
+the 1.3M scale showed a balanced-fitness drop of 0.54\,pp,
+outside the $\pm$0.3\,pp noise floor.  The lift appears to be
+training-set-size-dependent: narrower encodings benefit from the
+examples-per-address density that 46M provides but 1.3M does not.
 
 \begin{figure}[t]
 \centering
@@ -1172,6 +1089,14 @@ throughput remains one classification per cycle at 210\,ns latency,
 well above the 12.5\,MS/s needed for 100\,Gbps line-rate inspection.
 Post-synthesis estimates; place-and-route typically adds less than
 10\% overhead.
+
+\paragraph{CIC-IoT-2023 dense configuration.}
+The 200n $\times$ 4b configuration (3.1\,KB total ROM) synthesizes to
+\textbf{154 LUTs} (0.29\%), 8 flip-flops, zero BRAMs/DSPs, with
+single-cycle latency of \textbf{12.7\,ns} at $F_\text{max}{=}78$\,MHz.
+Scaling to the 46M Pareto peak (400n $\times$ 8b, 100\,KB) uses
+304~LUTs (0.57\%) at 67\,MHz / 15.0\,ns --- both fit on the same
+\$20 Zynq-7020 alongside the UNSW and CICIDS designs.
 
 \paragraph{Comparison with FWIW.}
 Table~\ref{tab:fpga} summarizes the resource--accuracy trade-off across
