@@ -916,11 +916,10 @@ randomly from the thermometer-encoded input vector --- for example,
 320~bits for CICIDS2017 (16-bit thermometer) or 152~bits for UNSW-NB15
 (8-bit thermometer).  Because this connectivity remains fixed
 throughout training, each neuron is permanently bound to a particular
-subset of input features.  The genetic algorithm (GA) phase exploits
+subset of input features.  Then the genetic algorithm (GA) phase exploits
 this by optimizing neuron \emph{count}: neurons whose random
 connectivity happens to capture discriminative input combinations
-survive, while those with uninformative connections are pruned.  The
-result is an implicit form of feature selection driven entirely by
+survive, while those with uninformative connections are pruned.  This results in an implicit form of feature selection driven entirely by
 neuron-level survival.
 
 Analysis of our best CICIDS genome (F973, 11 neurons) reveals that each
