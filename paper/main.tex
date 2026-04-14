@@ -639,9 +639,10 @@ Validation (val\_cal)      & 87.59 $\pm$ 1.65 & 5.29 $\pm$ 4.18    & 87.62 $\pm$
 
 Table~\ref{tab:cicids} reports results from 120 runs on CICIDS2017 with
 16-bit thermometer encoding (top-20 RF features, random 80/20 split,
-population size~50).  The 16-bit encoding was selected based on our
-thermometer sweep analysis (Section~\ref{sec:discussion}), which
-identified 16~bits as the optimal resolution for this dataset.
+population size~50, original FPR-weighted fitness).  The 16-bit encoding
+was selected based on our thermometer sweep analysis
+(Section~\ref{sec:discussion}), which identified 16~bits as the optimal
+resolution for this dataset.
 
 Performance is substantially higher than UNSW-NB15 temporal, reflecting
 the easier random split.  The validation threshold achieves 99.30\%
@@ -678,11 +679,9 @@ CICIDS2017 methodology) and a single-genome evaluation on the full
 baselines.
 
 \paragraph{Methodology refinements.}
-The CIC-IoT-2023 and UNSW-NB15 temporal runs use refined fitness
-weights ($w_{CE}{=}0.1$, $w_{F1}{=}0.35$, $w_{FPR}{=}0.35$,
-$w_{Acc}{=}0.2$) that balance F1 and FPR equally, combined with the
+The CIC-IoT-2023 runs use the balanced fitness weights and
 fitness-aligned threshold optimization described in
-Section~\ref{sec:methodology}.
+Sections~\ref{sec:architecture} and~\ref{sec:methodology}.
 
 \paragraph{1.3M subsample (112 runs).}
 Table~\ref{tab:ciot-phase} reports the phase progression for the
