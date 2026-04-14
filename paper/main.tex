@@ -780,7 +780,7 @@ connections benefit from larger training sets.
 Table~\ref{tab:ciot-46m}
 groups the transferred results into three deployment tiers --- micro
 (20\,B to 2\,KB), small (5--25\,KB), and peak (sparse LUT-based memory,
-3--15\,MB) --- and compares against the direct 46M search and the
+3--18\,MB) --- and compares against the direct 46M search and the
 baselines reported by Neto et al.~\cite{neto2023ciciot}.
 At matched FPR (${\sim}$1.6\%), the direct search improves F1 by
 0.47\,pp over the best transferred genome (84.83\% vs.\ 84.36\%),
@@ -816,7 +816,7 @@ Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & Size & LUTs & Latency & Power \\
  & Ours (96n $\times$ 32b)   & 84.36 &  1.61 & 97.59 & 3.4\,MB  & 9{,}492 (17.8\%)  & 163\,ns  & 312\,mW \\
  & Ours (198n $\times$ 32b)  & 84.68 &  2.00 & 97.67 & 6.3\,MB  & 19{,}468 (36.6\%) & 194\,ns  & 521\,mW \\
  & Ours (245n $\times$ 32b)  & 84.79 &  1.59 & 97.68 & 7.8\,MB  & 23{,}877 (44.9\%) & 205\,ns  & 620\,mW \\
- & Ours (500n $\times$ 34b)  & 84.73 &  1.91 & 97.68 & ---      & ---               & ---      & --- \\
+ & Ours (500n $\times$ 34b)  & 84.73 &  1.91 & 97.68 & 18.0\,MB & 50{,}527 (95.0\%) & 227\,ns  & 1.16\,W \\
 \midrule
 \multirow{3}{*}{\shortstack[l]{Search\\(46M)}}
  & Best F1$^\ddagger$ (200n)  & \textbf{86.69} & 9.82 & \textbf{98.22} & --- & --- & --- & --- \\
