@@ -625,7 +625,7 @@ only 0.33\,pp from train\_cal.
 balanced fitness weights). Neurons: 333 $\pm$ 128, bits: 31.
 Full seven-mode breakdown in Appendix~\ref{app:thresholds}.}
 \label{tab:unsw}
-\begin{tabular*}{\textwidth}{@{} l @{\extracolsep{\fill}} r r r @{}}
+\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r}
 \toprule
  & F1-macro (\%) & FPR (\%) & Accuracy (\%) \\
 \midrule
@@ -641,7 +641,7 @@ XGBoost                    & 85.62            & 27.29               & 86.24 \\
 \bottomrule
 \multicolumn{4}{l}{\small $^\ddagger$Best single genome across all seeds, genome types, and thresholds.}\\
 \multicolumn{4}{l}{\small RF/XGBoost use raw numeric features (top-20); WNN uses thermometer-encoded.}
-\end{tabular*}
+\end{tabular}
 \end{table}
 
 \subsubsection{UNSW-NB15 Random Results.}
@@ -659,7 +659,7 @@ submission.
 thermometer, balanced fitness weights). Camera-ready will report
 full 100-run batch.}
 \label{tab:unsw-random}
-\begin{tabular*}{\textwidth}{@{} l @{\extracolsep{\fill}} r r r @{}}
+\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r}
 \toprule
  & F1-macro (\%) & FPR (\%) & Accuracy (\%) \\
 \midrule
@@ -676,7 +676,7 @@ FWIW~\cite{susskind2023fwiw} & ---           & 1.57               & 98.50 \\
 \bottomrule
 \multicolumn{4}{l}{\small $^\ddagger$Best single genome. FWIW uses 90/10 deduplicated, oversampled split.}\\
 \multicolumn{4}{l}{\small RF/XGBoost use raw numeric features (top-20); WNN uses thermometer-encoded.}
-\end{tabular*}
+\end{tabular}
 \end{table}
 
 \subsubsection{CICIDS2017 Random Results.}
@@ -705,7 +705,7 @@ Random Forest (Table~\ref{tab:cicids}).
 Neurons: 198 $\pm$ 146, bits: 32.
 Full seven-mode breakdown in Appendix~\ref{app:thresholds}.}
 \label{tab:cicids}
-\begin{tabular*}{\textwidth}{@{} l @{\extracolsep{\fill}} r r r @{}}
+\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r}
 \toprule
  & F1-macro (\%) & FPR (\%) & Accuracy (\%) \\
 \midrule
@@ -721,7 +721,7 @@ XGBoost                    & 99.65            & 0.12               & 99.78 \\
 \bottomrule
 \multicolumn{4}{l}{\small $^\ddagger$Best single genome across all seeds, genome types, and thresholds.}\\
 \multicolumn{4}{l}{\small RF/XGBoost use raw numeric features; WNN uses thermometer-encoded.}
-\end{tabular*}
+\end{tabular}
 \end{table}
 
 \subsubsection{CIC-IoT-2023 Results.}
@@ -741,7 +741,7 @@ published baselines.
 \caption{CIC-IoT-2023 1.3M random subsample (112 runs, 8-bit thermometer,
 balanced fitness weights). GA reduces neurons by 19\% (397$\to$322).}
 \label{tab:ciot-phase}
-\begin{tabular*}{\textwidth}{@{} l @{\extracolsep{\fill}} r r r @{}}
+\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r}
 \toprule
  & F1-macro (\%) & FPR (\%) & Accuracy (\%) \\
 \midrule
@@ -756,7 +756,7 @@ XGBoost                    & 84.13            & 28.34              & 92.07 \\
 \bottomrule
 \multicolumn{4}{l}{\small $^\ddagger$Best single genome across all seeds, genome types, and thresholds.}\\
 \multicolumn{4}{l}{\small RF/XGBoost use raw numeric features (top-20); WNN uses thermometer-encoded.}
-\end{tabular*}
+\end{tabular}
 \end{table}
 
 \paragraph{Full 46M dataset, Pareto frontier across memory tiers.}
@@ -839,7 +839,7 @@ add noise without improving discrimination.
 \caption{Phase progression on CICIDS2017 (120 runs, val\_cal threshold,
 best-fitness genome).}
 \label{tab:phase}
-\begin{tabular*}{\textwidth}{@{} l @{\extracolsep{\fill}} r r r r @{}}
+\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
 \toprule
 Phase & F1-macro (\%) & FPR (\%) & Neurons & Bits \\
 \midrule
@@ -848,7 +848,7 @@ GA Neurons     & 99.40 $\pm$ 0.06 & 0.196 $\pm$ 0.063 & 194 $\pm$ 143 & 32 (62\%
 \midrule
 $\Delta$       & +0.05            & $-$0.016           & $-$146 ($-$43\%) & \\
 \bottomrule
-\end{tabular*}
+\end{tabular}
 \end{table}
 
 \subsection{Model Size Analysis}
@@ -1296,7 +1296,7 @@ shows only the three key modes (train\_cal, fixed\_05, val\_cal).
 \caption{UNSW-NB15 temporal split, all threshold modes (101 runs,
 GA~Neurons best-fitness genome, balanced fitness weights).}
 \label{tab:unsw-full}
-\begin{tabular*}{\textwidth}{@{} l @{\extracolsep{\fill}} r r r @{}}
+\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r}
 \toprule
 Threshold Mode & F1-macro (\%) & FPR (\%) & Accuracy (\%) \\
 \midrule
@@ -1308,7 +1308,7 @@ Empirical          & 75.91 $\pm$ 11.29 & 44.24 $\pm$ 20.28 & 78.86 $\pm$ 7.78 \\
 Empirical cumul.   & 82.02 $\pm$ 6.09 & 29.36 $\pm$ 16.89 & 83.20 $\pm$ 4.96 \\
 Validation         & 87.34 $\pm$ 2.12 &  5.43 $\pm$ 4.02  & 87.37 $\pm$ 2.10 \\
 \bottomrule
-\end{tabular*}
+\end{tabular}
 \end{table}
 
 \begin{table}[ht!]
@@ -1316,7 +1316,7 @@ Validation         & 87.34 $\pm$ 2.12 &  5.43 $\pm$ 4.02  & 87.37 $\pm$ 2.10 \\
 \caption{CICIDS2017 random split, all threshold modes (120 runs,
 16-bit thermometer, GA~Neurons best-fitness genome).}
 \label{tab:cicids-full}
-\begin{tabular*}{\textwidth}{@{} l @{\extracolsep{\fill}} r r r @{}}
+\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r}
 \toprule
 Threshold Mode & F1-macro (\%) & FPR (\%) & Accuracy (\%) \\
 \midrule
@@ -1328,7 +1328,7 @@ Empirical          & 98.41 $\pm$ 1.31 & 1.14 $\pm$ 1.10 & 98.96 $\pm$ 0.91 \\
 Empirical cumul.   & 99.07 $\pm$ 1.52 & 0.26 $\pm$ 0.16 & 99.43 $\pm$ 0.82 \\
 Validation         & 99.30 $\pm$ 0.48 & 0.22 $\pm$ 0.12 & 99.56 $\pm$ 0.30 \\
 \bottomrule
-\end{tabular*}
+\end{tabular}
 \end{table}
 
 \begin{table}[ht!]
@@ -1336,7 +1336,7 @@ Validation         & 99.30 $\pm$ 0.48 & 0.22 $\pm$ 0.12 & 99.56 $\pm$ 0.30 \\
 \caption{CIC-IoT-2023 random split (1.3M subsample), all threshold
 modes (56 runs, 8-bit thermometer, GA~Neurons best-fitness genome).}
 \label{tab:ciot-full}
-\begin{tabular*}{\textwidth}{@{} l @{\extracolsep{\fill}} r r r @{}}
+\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r}
 \toprule
 Threshold Mode & F1-macro (\%) & FPR (\%) & Accuracy (\%) \\
 \midrule
@@ -1348,7 +1348,7 @@ Empirical          & 67.96 $\pm$ 14.22 & 64.87 $\pm$ 24.03 & 88.69 $\pm$ 2.37 \\
 Empirical cumul.   & 82.05 $\pm$ 0.81 & 23.03 $\pm$ 8.19 & 90.21 $\pm$ 0.42 \\
 Validation         & 79.88 $\pm$ 0.50 &  3.97 $\pm$ 0.52 & 86.65 $\pm$ 0.44 \\
 \bottomrule
-\end{tabular*}
+\end{tabular}
 \end{table}
 
 \end{document}
