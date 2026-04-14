@@ -13,6 +13,10 @@
 \usepackage{tikz}
 \usetikzlibrary{positioning,arrows.meta,calc}
 
+% Allow slightly looser paragraphs to avoid overfull hboxes
+\tolerance=1500
+\emergencystretch=1em
+
 % Reduce spacing around floats (tables and figures)
 \setlength{\textfloatsep}{8pt plus 2pt minus 2pt}
 \setlength{\floatsep}{6pt plus 2pt minus 2pt}
@@ -287,7 +291,8 @@ The mean score is thresholded to classify the input.}
 
 We introduce \emph{Quad-State RAM} (QSR) memory (Figure~\ref{fig:ram-neuron})
 with four states encoded in just 2~bits: FALSE~($0.0$),
-WEAK\_FALSE~($0.25$), WEAK\_TRUE~($0.75$), and TRUE~($1.0$). Unlike PLN's symmetric undefined state~($0.5$), QSR
+WEAK\_FALSE~($0.25$), WEAK\_TRUE~($0.75$), and TRUE~($1.0$).
+Unlike PLN's symmetric undefined state~($0.5$), QSR
 cells default to WEAK\_FALSE~($0.25$), biasing untrained neurons toward
 the majority class (normal traffic). When a cell trained as TRUE is
 subsequently addressed with a normal-class example, it transitions to
@@ -522,9 +527,9 @@ for reproducibility:
 \begin{itemize}
 \item \textbf{Temporal split (UNSW-NB15):} The official 175K/82K
   split with temporal separation between training and testing periods.
-\item \textbf{Random splits (all datasets):} Stratified random 80/20 splits:
-  UNSW-NB15 (1.27M/317K),
-  CICIDS2017 (2.3M/566K), CIC-IoT-2023 (1.07M/268K).
+\item \textbf{Random splits (all datasets):} Stratified random
+  80/20 splits: UNSW-NB15 (1.27M/317K), CICIDS2017
+  (2.3M/566K), CIC-IoT-2023 (1.07M/268K).
 \end{itemize}
 
 \subsection{Seven-Mode Threshold Calibration}
@@ -613,11 +618,11 @@ population size~50) using balanced fitness weights
 and fitness-aligned threshold optimization
 (Section~\ref{sec:methodology}).
 
-The train-calibrated threshold achieves 87.02\% $\pm$ 2.58\% F1-macro
-with 13.76\% FPR --- outperforming Random Forest (86.41\% F1,
-25.22\% FPR) by 0.61\,pp F1 at half the FPR.  The validation
-threshold reaches 87.34\% $\pm$ 2.12\% F1 at 5.43\% FPR, a gap of
-only 0.33\,pp from train\_cal.
+The train-calibrated threshold achieves 87.02\% $\pm$ 2.58\%
+F1-macro with 13.76\% FPR, outperforming Random Forest
+(86.41\% F1, 25.22\% FPR) by 0.61\,pp F1 at half the FPR.
+The validation threshold reaches 87.34\% $\pm$ 2.12\% F1 at
+5.43\% FPR, a gap of only 0.33\,pp from train\_cal.
 
 \begin{table}[ht!]
 \centering
@@ -919,8 +924,9 @@ throughout training, each neuron is permanently bound to a particular
 subset of input features.  Then the genetic algorithm (GA) phase exploits
 this by optimizing neuron \emph{count}: neurons whose random
 connectivity happens to capture discriminative input combinations
-survive, while those with uninformative connections are pruned.  This results in an implicit form of feature selection driven entirely by
-neuron-level survival.
+survive, while those with uninformative connections are pruned.
+This results in an implicit form of feature selection driven
+entirely by neuron-level survival.
 
 Analysis of our best CICIDS genome (F973, 11 neurons) reveals that each
 neuron's 34 address bits span 15--18 of the 20 input features, selecting
@@ -979,8 +985,8 @@ sensitivity.
 
 \paragraph{Address-tap saturation on CIC-IoT-2023.}
 The best 32-bit and 34-bit peak genomes on the 46M dataset
-(245n $\times$ 32b vs 500n $\times$ 34b) achieve F1 84.79\% vs
-84.73\% --- a 0.06-point gap, well within seed noise. The
+(245n$\times$32b vs.\ 500n$\times$34b) achieve F1 84.79\% vs.\
+84.73\%, a 0.06-point gap well within seed noise.  The
 4$\times$ larger address space yields no improvement, confirming
 that thermometer-encoding bit correlation caps effective
 discrimination: with 8-bit thermometer, each feature contributes
