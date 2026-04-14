@@ -680,7 +680,7 @@ Val\_cal                   & 94.47$\pm$0.09 & 0.48$\pm$0.05   & 99.18$\pm$0.01 &
 \midrule
 Random Forest              & 96.01          & 0.29             & 99.42 & 9.0\,MB & 13.9\,$\mu$s$^C$ & --- \\
 XGBoost                    & 95.50          & 0.29             & 99.35 & 0.3\,MB & 0.4\,$\mu$s$^C$ & --- \\
-FWIW~\cite{susskind2023fwiw} & ---         & 1.57             & 98.50 & --- & --- & --- \\
+FWIW~\cite{susskind2023fwiw} & ---         & 1.57             & 98.50 & 269 LUTs & 10.8\,ns & --- \\
 \bottomrule
 \multicolumn{7}{l}{\small $^\ddagger$Best single genome. $^S$Sparse FPGA (O(log\,n) binary search). $^C$CPU inference.}\\
 \multicolumn{7}{l}{\small FWIW uses 90/10 deduplicated, oversampled split. RF/XGBoost: raw features, CPU.}
@@ -1049,9 +1049,8 @@ is lowest around 16--26 bits.}
 RAM neurons map naturally to FPGA resources: each neuron's lookup table
 is synthesized into distributed LUTs with the evolved
 connection map implemented as compile-time wire assignments (pure routing,
-zero logic).  Vivado infers zero BRAMs for all configurations ---
-sparse neuron tables are mapped entirely to LUT-based distributed RAM.
-We synthesize all best genomes from Tables~\ref{tab:unsw}--\ref{tab:ciot-phase}
+zero logic).  We synthesize all best genomes from
+Tables~\ref{tab:unsw}--\ref{tab:ciot-46m}
 on the Xilinx Zynq Z-7020\footnote{The XC7Z020-CLG400 is available on
 surplus EBAZ4206 boards (decommissioned Bitcoin miner control boards)
 for under \$25; purpose-built development boards (Arty~Z7, ALINX AX7020)
@@ -1059,129 +1058,49 @@ range from \$200--350.  Our synthesis targets the chip, not a specific
 board; utilization numbers are identical on any Z-7020 platform.}
 (53{,}200 LUTs, 140 BRAM36 blocks) and report LUT utilization, latency,
 and power in each result table.
-Table~\ref{tab:fpga} summarizes the resource--accuracy trade-off
-across all FPGA-synthesized configurations with FWIW as baseline.
 
-\paragraph{Dense configuration (8--12-bit addresses).}
-With address width capped, each neuron's full lookup table is synthesized
-into distributed LUTs (Vivado infers zero BRAMs), enabling $O(1)$
-direct-lookup inference per neuron.
+A key finding is that \textbf{Vivado infers zero BRAMs for all
+configurations}: both dense and sparse neuron memories are mapped
+entirely to LUT-based distributed RAM, with the trained model
+baked into the FPGA bitstream.  This enables deployment of even
+our largest genome (500n $\times$ 34b, 50{,}527 LUTs, 95\% of
+the Z-7020) on a single \$20 chip with no external memory.
 
-On CICIDS2017, capping at 12 bits yields 98.53\% F1.
-On UNSW-NB15, performance is remarkably stable across address widths:
-8-bit genomes achieve 93.5\% F1 in just 6\,KB, nearly matching uncapped
-accuracy (Table~\ref{tab:fpga}).
-
-Our best dense genome (104 neurons, 12-bit) synthesizes to just
-\textbf{82~LUTs} --- 3.3$\times$ smaller than FWIW's 269~LUTs ---
-with \textbf{11.0\,ns} latency ($O(1)$, single cycle at 90.5\,MHz),
-matching FWIW's 10.8\,ns.
-
-\paragraph{Sparse configuration (34-bit addresses).}
-With the full 34-bit address space, a naive dense table would require
-$2^{34} \times 2 = 32$\,Gbit per neuron.  However, thermometer encoding
-creates massive address collisions: because each bit within a feature is
-correlated (bit $k$ is set iff the feature value exceeds threshold $k$),
-a neuron addressing 34 bits across 15--18 features observes only
-${\sim}3{,}500$ unique addresses from 2.26 million training examples, not
-$2^{34}$.  We store only these trained entries as sorted (key, value) pairs
-with binary-search lookup; Vivado maps these to distributed LUTs
-rather than block RAM.
-
-Our best 34-bit genome (11 neurons, 99.59\% F1, 0.12\% FPR) contains
-only 41{,}215 sparse entries (362\,KB).  Vivado synthesis inferred
-distributed LUTs rather than block RAM for all configurations
-(Table~\ref{tab:fpga}).  Binary search over ${\sim}5{,}000$ entries
-per neuron completes in 13 cycles ($O(\log n)$); with pipelining,
-throughput remains one classification per cycle at 210\,ns latency,
-well above the 12.5\,MS/s needed for 100\,Gbps line-rate inspection.
-Post-synthesis estimates; place-and-route typically adds less than
-10\% overhead.
-
-\paragraph{CIC-IoT-2023 dense configuration.}
-The 200n $\times$ 4b configuration (3.1\,KB total ROM) synthesizes to
-\textbf{154 LUTs} (0.29\%), 8 flip-flops, zero BRAMs/DSPs, with
-single-cycle latency of \textbf{12.7\,ns} at $F_\text{max}{=}78$\,MHz.
-Scaling to the 46M Pareto peak (400n $\times$ 8b, 100\,KB) uses
-304~LUTs (0.57\%) at 67\,MHz / 15.0\,ns --- both fit on the same
-\$20 Zynq-7020 alongside the UNSW and CICIDS designs.
+\paragraph{Dense vs.\ sparse deployment.}
+Our architecture supports two deployment modes.
+\emph{Dense} ($O(1)$) mode caps address width at 8--12 bits, storing
+each neuron's full lookup table in distributed LUTs for single-cycle
+inference.  On CIC-IoT-2023, the 5n$\times$4b genome requires just
+2~LUTs with 2\,ns latency, while the 400n$\times$8b peak genome
+uses 304~LUTs at 15\,ns (Table~\ref{tab:ciot-46m}).
+\emph{Sparse} ($O(\log n)$) mode uses the full 32--34-bit address
+space.  Thermometer encoding creates massive address collisions:
+each bit within a feature is correlated (bit $k$ is set iff the
+value exceeds threshold $k$), so a 32-bit neuron observes only
+${\sim}$3{,}500 unique addresses from millions of training examples,
+not $2^{32}$.  Vivado maps these sorted arrays to distributed LUTs,
+achieving 52--227\,ns latency across all datasets
+(Tables~\ref{tab:unsw}--\ref{tab:ciot-phase}).
 
 \paragraph{Comparison with FWIW.}
-FWIW achieves the smallest footprint (192 bytes, 269 LUTs)
-through Bloom filter neurons with random connections.  Our evolved
-connections require more resources but deliver lower false-positive rates
-and comparable or higher accuracy.  On CICIDS2017, our 12-bit dense
-configuration matches FWIW's accuracy class with 3$\times$ lower FPR
-(0.50\% vs.\ 1.57\%), while the sparse configuration achieves 99.59\% F1.
-On UNSW-NB15, an 8-bit genome with just 20 neurons (1.3\,KB) achieves
-93.11\% F1, fitting on the smallest FPGAs. On CIC-IoT-2023, the
-4-bit dense configuration (200 neurons, 3.1\,KB) consumes only 154
-LUTs --- still 1.7$\times$ smaller than FWIW's 269 LUTs --- and
-achieves the lowest FPR (1.96\%) of any IDS WNN reported on this
-benchmark, at the cost of a more challenging classification task (the
-benchmark mixes 33 attack categories with widely varying signatures).
-Scaling to the peak small-memory Pareto point on the full 46M dataset
-(400 neurons, 8-bit dense, 100\,KB) raises F1 to 83.13\% and accuracy
-to 97.33\% while still using only 304 LUTs (0.57\% of the Z-7020),
-at the cost of a modestly longer critical path (15.0\,ns vs.\ 12.7\,ns).
-Both CIC-IoT configurations fit comfortably alongside the UNSW and
-CICIDS designs on the same \$20 Zynq-7020 part.
-
-\begin{table}[t]
-\centering
-\caption{FPGA synthesis results on Xilinx Zynq Z-7020 (53,200 LUTs, 106,400 FFs).
-All designs synthesized with Vivado 2025.2 in out-of-context mode.
-Sparse neuron tables are inferred as distributed LUTs (0 BRAMs, 0 DSPs in all cases).
-Latency computed from binary-search depth and post-synthesis Fmax.}
-\label{tab:fpga}
-\resizebox{\textwidth}{!}{%
-\begin{tabular}{llrrrrrrr}
-\toprule
-Dataset (split) & Config & F1 & FPR & Acc & $N$ & LUTs (\%) & Fmax & Latency \\
-\midrule
-\multirow{4}{*}{\shortstack[l]{CICIDS2017\\(random)}}
- & 104n (12b dense)$^\S$ & 98.53\% & 0.50\%          & 99.07\% & 104 & \textbf{82 (0.15\%)} & 91\,MHz  & \textbf{11\,ns} \\
- & 11n (best F1)  & \textbf{99.59\%} & \textbf{0.12\%} & 99.74\% & 11  & 622 (1.2\%)     & 195\,MHz & 210\,ns \\
- & 91n (mid)      & 99.54\%          & 0.12\%          & 99.71\% & 91  & 2{,}907 (5.5\%)  & 94\,MHz  & 436\,ns \\
- & 500n (large)   & 99.23\%          & 0.27\%          & 99.51\% & 500 & 11{,}818 (22\%)  & 59\,MHz  & 644\,ns \\
-\midrule
-\multirow{3}{*}{\shortstack[l]{UNSW-NB15\\(temporal)}}
- & 92n (small)    & 88.18\%          & 8.87\%          & 88.23\% & 92  & 1{,}939 (3.6\%)  & 92\,MHz  & 413\,ns \\
- & 369n (best F1) & \textbf{90.82\%} & \textbf{4.66\%} & 90.84\% & 369 & 7{,}090 (13\%)   & 61\,MHz  & 574\,ns \\
- & 500n (large)   & 86.81\%          & 8.98\%          & 86.84\% & 500 & 33{,}086 (62\%)  & 64\,MHz  & 547\,ns \\
-\midrule
-\shortstack[l]{UNSW-NB15\\(random)} & 83n (12b dense)$^\S$ & 93.69\% & 0.63\% & \textbf{99.04\%} & 83 & \textbf{59 (0.11\%)} & 94\,MHz & \textbf{10.7\,ns} \\
-\midrule
-\multirow{2}{*}{\shortstack[l]{CIC-IoT-2023\\(random)}}
- & 200n (4b dense)$^{\S\dag}$  & 73.34\% & 1.96\% & 80.30\% & 200 & 154 (0.29\%) & 78\,MHz & 12.7\,ns \\
- & 400n (8b dense)$^{\S\ddag}$ & \textbf{83.13\%} & 2.06\% & \textbf{97.33\%} & 400 & 304 (0.57\%) & 67\,MHz & 15.0\,ns \\
-\midrule
-\shortstack[l]{UNSW-NB15\\(random$^*$)} & FWIW~\cite{susskind2023fwiw} & --- & 1.57\% & 98.50\% & ${\sim}$30 & 269 & 740\,MHz & 10.8\,ns \\
-\bottomrule
-\multicolumn{9}{l}{\small $^\S$Dense $O(1)$ lookup; all others use $O(\log n)$ sparse search.}\\
-\multicolumn{9}{l}{\small $^*$90/10, deduplicated, oversampled. $N$\,=\,neurons. 0 BRAMs, 0 DSPs for all designs.}\\
-\multicolumn{9}{l}{\small $^\dag$Trained on the 1.3M random subsample. The same architecture trained on the full 46M dataset achieves 82.20\% F1 (Table~\ref{tab:ciot-46m}).}\\
-\multicolumn{9}{l}{\small $^\ddag$Trained on the full 46M CIC-IoT-2023 dataset; peak small-memory Pareto point from the 46M sweep (Table~\ref{tab:ciot-46m}).}
-\end{tabular}}
-\end{table}
+FWIW~\cite{susskind2023fwiw} achieves a compact footprint
+(269~LUTs, 10.8\,ns) through Bloom filter neurons with random
+connections on a 90/10 deduplicated UNSW-NB15 split.
+Our sparse genomes on UNSW-NB15 random outperform FWIW on
+every IDS metric: 94.35\% F1, 0.31\% FPR, 99.19\% accuracy
+versus FWIW's 1.57\% FPR and 98.50\% accuracy
+(Table~\ref{tab:unsw-random}).
 
 \paragraph{Latency and throughput.}
-Our dense configuration (12-bit addresses) achieves 10.7\,ns latency
-in 59~LUTs --- matching FWIW's 10.8\,ns while using 4.6$\times$ fewer
-LUTs.  However, our Fmax (94\,MHz) is significantly lower than FWIW's
-740\,MHz due to the wider accumulation tree across 83 neurons; the
-similar latency results from our single-cycle lookup versus FWIW's
-multi-cycle hashed Bloom filter.  Our sparse configurations (34-bit
-addresses) exhibit higher
-latency (210--644\,ns) due to $O(\log n)$ binary search (3 cycles per
-step, 11--13 steps), but with pipelining throughput ranges from
-59\,MS/s (500-neuron) to 195\,MS/s (11-neuron).  For network IDS,
-the relevant metric is throughput: 100\,Gbps line-rate inspection
-requires only ${\sim}$12.5\,MS/s (at ${\sim}$1{,}000-byte average
-packets), well within the capability of all our configurations.
-The sub-microsecond latency of both approaches is negligible compared
-to feature extraction overhead, which typically dominates the packet
-processing pipeline.
+Across all datasets, our configurations achieve sub-microsecond
+latency: 2--30\,ns for dense genomes and 52--227\,ns for sparse
+genomes (Tables~\ref{tab:unsw}--\ref{tab:ciot-46m}).
+For network IDS, the relevant metric is throughput: 100\,Gbps
+line-rate inspection requires only ${\sim}$12.5\,MS/s (at
+${\sim}$1{,}000-byte average packets), well within the capability
+of all our configurations.  The sub-microsecond classification
+latency is negligible compared to feature extraction overhead,
+which typically dominates the packet processing pipeline.
 
 \paragraph{Functional verification.}
 We verified both sparse and dense RTL implementations against the Python
