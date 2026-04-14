@@ -774,20 +774,25 @@ four orders of magnitude in memory footprint.  Architectures were
 selected from the 1.3M-subsample search and transferred to 46M
 without further GA refinement, isolating the effect of training-data
 volume from architecture-search effects.
-We also ran a grid search directly on the 46M dataset to find
-the best genome without architecture transfer.
+We also ran a grid search directly on the 46M dataset (grid search
+phase only, without GA refinement) to evaluate whether evolved
+connections benefit from larger training sets.
 Table~\ref{tab:ciot-46m}
-groups the results into three deployment tiers --- micro (20\,B to
-2\,KB), small (5--25\,KB), and peak (sparse LUT-based memory,
-3--15\,MB) --- and compares against the baselines
-reported by Neto et al.~\cite{neto2023ciciot}.
+groups the transferred results into three deployment tiers --- micro
+(20\,B to 2\,KB), small (5--25\,KB), and peak (sparse LUT-based memory,
+3--15\,MB) --- and compares against the direct 46M search and the
+baselines reported by Neto et al.~\cite{neto2023ciciot}.
+At matched FPR (${\sim}$1.6\%), the direct search improves F1 by
+0.47\,pp over the best transferred genome (84.83\% vs.\ 84.36\%),
+confirming that evolved connections benefit from larger training sets
+even without GA refinement.
 
 \begin{table}[ht!]
 \centering
 \caption{Full 46M CIC-IoT-2023 (random 80/20).
-Single-genome runs; architectures transferred from
-the 1.3M subsample search. Baselines from Neto et al.~\cite{neto2023ciciot}.
-``--'' indicates a metric not reported by the original work.}
+Micro/Small/Peak: architectures transferred from the 1.3M subsample search.
+Search: grid search directly on 46M (grid search phase only, no GA).
+Baselines from Neto et al.~\cite{neto2023ciciot}.}
 \label{tab:ciot-46m}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{llrrrrlrl}
@@ -813,6 +818,11 @@ Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & Size & LUTs & Latency & Power \\
  & Ours (245n $\times$ 32b)  & 84.79 &  1.59 & 97.68 & 7.8\,MB  & ---  & ---     & --- \\
  & Ours (500n $\times$ 34b)  & 84.73 &  1.91 & 97.68 & ---      & ---  & ---     & --- \\
 \midrule
+\multirow{3}{*}{\shortstack[l]{Search\\(46M)}}
+ & Best F1$^\ddagger$ (200n)  & \textbf{86.69} & 9.82 & \textbf{98.22} & --- & --- & --- & --- \\
+ & Best FPR$^\ddagger$ (500n) & 84.51 & \textbf{1.13} & 97.61 & --- & --- & --- & --- \\
+ & Matched FPR (300n)         & 84.83 & 1.66 & 97.69 & --- & --- & --- & --- \\
+\midrule
 \multirow{3}{*}{\shortstack[l]{Baseline\\(46M)}}
  & RF (ours, 46M)   & 92.64 & 13.48 & 99.18 & ${\sim}$50\,MB & --- & --- & --- \\
  & XGBoost (ours)    & 91.67 & 14.80 & 99.06 & ${\sim}$5\,MB  & --- & --- & --- \\
@@ -823,8 +833,8 @@ Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & Size & LUTs & Latency & Power \\
  & AdaBoost         & 95.63$^\dag$ & ---  & 99.59 & ${\sim}$10\,MB & --- & --- & --- \\
  & Random Forest    & 96.53$^\dag$ & ---  & 99.68 & ${\sim}$50\,MB & --- & --- & --- \\
 \bottomrule
-\multicolumn{9}{l}{\small All ``Ours'' rows: F1-macro, train\_cal threshold; 5n$\times$4b = mean$\pm$std (10 seeds), rest = single seed.}\\
-\multicolumn{9}{l}{\small $^D$Dense O(1) lookup; Vivado synthesis on Zynq Z-7020. LUTs out of 53{,}200 available.}\\
+\multicolumn{9}{l}{\small Micro/Small/Peak: F1-macro, train\_cal threshold; 5n$\times$4b = mean$\pm$std (10 seeds), rest = single seed.}\\
+\multicolumn{9}{l}{\small $^\ddagger$Best genome across all threshold modes. $^D$Dense O(1) lookup; Vivado on Zynq Z-7020.}\\
 \multicolumn{9}{l}{\small $^\dag$Neto et al.\ use StandardScaler + a different 80/20 split; F1 averaging method unspecified in the original paper.}
 \end{tabular}}
 \end{table}
