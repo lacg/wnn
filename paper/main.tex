@@ -773,18 +773,19 @@ complete dataset (30.8M train / 7.7M test, random 80/20), spanning
 four orders of magnitude in memory footprint.  Architectures were
 selected from the 1.3M-subsample search and transferred to 46M
 without further GA refinement, isolating the effect of training-data
-volume from architecture-search effects.  We also ran a grid search
-directly on the 46M dataset to find the best genome without
-architecture transfer.  Table~\ref{tab:ciot-46m}
+volume from architecture-search effects.
+We also ran a grid search directly on the 46M dataset to find
+the best genome without architecture transfer.
+Table~\ref{tab:ciot-46m}
 groups the results into three deployment tiers --- micro (20\,B to
-2\,KB), small (5--25\,KB), and peak (sparse memory in the
-hundred-megabyte range) --- and compares against the baselines
+2\,KB), small (5--25\,KB), and peak (sparse LUT-based memory,
+3--15\,MB) --- and compares against the baselines
 reported by Neto et al.~\cite{neto2023ciciot}.
 
 \begin{table}[ht!]
 \centering
-\caption{Pareto frontier on the full 46M CIC-IoT-2023 (random 80/20).
-Single-genome runs with no GA on 46M; architectures transferred from
+\caption{Full 46M CIC-IoT-2023 (random 80/20).
+Single-genome runs; architectures transferred from
 the 1.3M subsample search. Baselines from Neto et al.~\cite{neto2023ciciot}.
 ``--'' indicates a metric not reported by the original work.}
 \label{tab:ciot-46m}
