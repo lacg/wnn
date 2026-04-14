@@ -621,14 +621,13 @@ only 0.33\,pp from train\_cal.
 
 \begin{table}[ht!]
 \centering
-\caption{UNSW-NB15 temporal split results (101 runs, 8-bit thermometer,
-GA~Neurons best-fitness genome, balanced fitness weights).
-Neurons: 333 $\pm$ 128, address bits: 31.
+\caption{UNSW-NB15 temporal split (101 runs, 8-bit thermometer,
+balanced fitness weights). Neurons: 333 $\pm$ 128, bits: 31.
 Full seven-mode breakdown in Appendix~\ref{app:thresholds}.}
 \label{tab:unsw}
 \begin{tabular*}{\textwidth}{l @{\extracolsep{\fill}} rrr}
 \toprule
-Threshold Mode & F1-macro (\%) & FPR (\%) & Accuracy (\%) \\
+ & F1-macro (\%) & FPR (\%) & Accuracy (\%) \\
 \midrule
 Best F1$^\ddagger$         & \textbf{90.52}   & 4.13               & \textbf{90.54} \\
 Best FPR$^\ddagger$        & 71.80             & \textbf{0.00}      & 72.64 \\
@@ -636,8 +635,47 @@ Best FPR$^\ddagger$        & 71.80             & \textbf{0.00}      & 72.64 \\
 Train-cal                  & 87.02 $\pm$ 2.58 & 13.76 $\pm$ 4.63   & 87.16 $\pm$ 2.53 \\
 Fixed 0.5                  & 83.99 $\pm$ 7.26 & 17.99 $\pm$ 15.15  & 84.68 $\pm$ 6.17 \\
 Validation (val\_cal)      & 87.34 $\pm$ 2.12 & 5.43 $\pm$ 4.02    & 87.37 $\pm$ 2.10 \\
+\midrule
+Random Forest              & 86.41            & 25.22               & 86.94 \\
+XGBoost                    & 85.62            & 27.29               & 86.24 \\
 \bottomrule
-\multicolumn{4}{l}{\small $^\ddagger$Best single genome across all 101 seeds, genome types, and thresholds.}
+\multicolumn{4}{l}{\small $^\ddagger$Best single genome across all seeds, genome types, and thresholds.}\\
+\multicolumn{4}{l}{\small RF/XGBoost use raw numeric features (top-20); WNN uses thermometer-encoded.}
+\end{tabular*}
+\end{table}
+
+\subsubsection{UNSW-NB15 Random Results.}
+\label{sec:results-unsw-random}
+
+Table~\ref{tab:unsw-random} reports preliminary results on the
+UNSW-NB15 random 80/20 split (16-bit thermometer, top-20 RF features,
+balanced fitness weights). Full 100-run results will be included in
+the camera-ready version; $N$ runs were completed at time of
+submission.
+
+\begin{table}[ht!]
+\centering
+\caption{UNSW-NB15 random split ($N$ runs at submission, 16-bit
+thermometer, balanced fitness weights). Camera-ready will report
+full 100-run batch.}
+\label{tab:unsw-random}
+\begin{tabular*}{\textwidth}{l @{\extracolsep{\fill}} rrr}
+\toprule
+ & F1-macro (\%) & FPR (\%) & Accuracy (\%) \\
+\midrule
+Best F1$^\ddagger$         & --- & --- & --- \\
+Best FPR$^\ddagger$        & --- & --- & --- \\
+\midrule
+Train-cal                  & --- & --- & --- \\
+Fixed 0.5                  & --- & --- & --- \\
+Validation (val\_cal)      & --- & --- & --- \\
+\midrule
+Random Forest              & 96.01            & 0.29               & 99.42 \\
+XGBoost                    & 95.50            & 0.29               & 99.35 \\
+FWIW~\cite{susskind2023fwiw} & ---           & 1.57               & 98.50 \\
+\bottomrule
+\multicolumn{4}{l}{\small $^\ddagger$Best single genome. FWIW uses 90/10 deduplicated, oversampled split.}\\
+\multicolumn{4}{l}{\small RF/XGBoost use raw numeric features (top-20); WNN uses thermometer-encoded.}
 \end{tabular*}
 \end{table}
 
@@ -659,17 +697,17 @@ $\pm$ 0.48\% F1-macro with 0.22\% FPR.  The train-calibrated threshold
 nearly matches (99.28\% F1, 0.24\% FPR), confirming minimal calibration
 difficulty on random splits.  Among individual genomes, the best F1
 achieves 99.52\% F1 / 0.13\% FPR / 99.70\% Acc, within 0.22\,pp of
-Random Forest (Table~\ref{tab:baselines}).
+Random Forest (Table~\ref{tab:cicids}).
 
 \begin{table}[ht!]
 \centering
-\caption{CICIDS2017 random split results (120 runs, 16-bit thermometer,
-GA~Neurons best-fitness genome). Neurons: 198 $\pm$ 146, address bits: 32.
+\caption{CICIDS2017 random split (120 runs, 16-bit thermometer).
+Neurons: 198 $\pm$ 146, bits: 32.
 Full seven-mode breakdown in Appendix~\ref{app:thresholds}.}
 \label{tab:cicids}
 \begin{tabular*}{\textwidth}{l @{\extracolsep{\fill}} rrr}
 \toprule
-Threshold Mode & F1-macro (\%) & FPR (\%) & Accuracy (\%) \\
+ & F1-macro (\%) & FPR (\%) & Accuracy (\%) \\
 \midrule
 Best F1$^\ddagger$         & \textbf{99.55}   & 0.11              & \textbf{99.71} \\
 Best FPR$^\ddagger$        & 78.90             & \textbf{0.03}     & 89.55 \\
@@ -677,8 +715,12 @@ Best FPR$^\ddagger$        & 78.90             & \textbf{0.03}     & 89.55 \\
 Train-cal                  & 99.28 $\pm$ 0.52 & 0.24 $\pm$ 0.27  & 99.55 $\pm$ 0.33 \\
 Fixed 0.5                  & 99.09 $\pm$ 0.63 & 0.45 $\pm$ 0.29  & 99.42 $\pm$ 0.40 \\
 Validation (val\_cal)      & 99.30 $\pm$ 0.48 & 0.22 $\pm$ 0.12  & 99.56 $\pm$ 0.30 \\
+\midrule
+Random Forest              & 99.74            & 0.08               & 99.84 \\
+XGBoost                    & 99.65            & 0.12               & 99.78 \\
 \bottomrule
-\multicolumn{4}{l}{\small $^\ddagger$Best single genome across all 120 seeds, genome types, and thresholds.}
+\multicolumn{4}{l}{\small $^\ddagger$Best single genome across all seeds, genome types, and thresholds.}\\
+\multicolumn{4}{l}{\small RF/XGBoost use raw numeric features; WNN uses thermometer-encoded.}
 \end{tabular*}
 \end{table}
 
@@ -698,9 +740,8 @@ Sections~\ref{sec:architecture} and~\ref{sec:methodology}.
 
 \begin{table}[ht!]
 \centering
-\caption{CIC-IoT-2023 1.3M subsample (112 runs, train\_cal threshold,
-best-fitness genome). Phase progression and best individual genomes
-across all seeds, genome types, and thresholds.}
+\caption{CIC-IoT-2023 1.3M random subsample (112 runs, 8-bit thermometer,
+balanced fitness weights). GA reduces neurons by 19\% (397$\to$322).}
 \label{tab:ciot-phase}
 \begin{tabular*}{\textwidth}{l @{\extracolsep{\fill}} rrr}
 \toprule
@@ -712,10 +753,11 @@ Best FPR$^\ddagger$        & 70.34             & \textbf{0.03}     & 76.93 \\
 Grid Search (train\_cal)   & 79.55 $\pm$ 0.43 & 4.51 $\pm$ 1.65  & 86.45 $\pm$ 0.56 \\
 GA Neurons (train\_cal)    & 80.08 $\pm$ 0.48 & 4.26 $\pm$ 0.49  & 86.85 $\pm$ 0.42 \\
 \midrule
-$\Delta$ (GA$-$GS)        & +0.53            & $-$0.25           & +0.40 \\
+Random Forest              & 85.53            & 25.18              & 92.71 \\
+XGBoost                    & 84.13            & 28.34              & 92.07 \\
 \bottomrule
-\multicolumn{4}{l}{\small $^\ddagger$Best single genome across all 112 seeds, genome types, and thresholds.}\\
-\multicolumn{4}{l}{\small GA reduces neuron count by 19\% (397$\to$322), mirroring CICIDS2017 (Table~\ref{tab:phase}).}
+\multicolumn{4}{l}{\small $^\ddagger$Best single genome across all seeds, genome types, and thresholds.}\\
+\multicolumn{4}{l}{\small RF/XGBoost use raw numeric features (top-20); WNN uses thermometer-encoded.}
 \end{tabular*}
 \end{table}
 
@@ -809,74 +851,6 @@ GA Neurons     & 99.40 $\pm$ 0.06 & 0.196 $\pm$ 0.063 & 194 $\pm$ 143 & 32 (62\%
 $\Delta$       & +0.05            & $-$0.016           & $-$146 ($-$43\%) & \\
 \bottomrule
 \end{tabular*}
-\end{table}
-
-\subsection{Comparison with Baselines}
-\label{sec:baselines}
-
-Table~\ref{tab:baselines} compares our WNN against conventional ML
-baselines and the only other WNN-based IDS (FWIW).  All ``Ours''
-entries use identical data splits; RF/XGBoost receive raw numeric
-features (their natural format), while our WNN uses thermometer-encoded
-binary features (its natural format).
-
-On the UNSW-NB15 temporal split (101 runs, balanced fitness weights),
-our WNN achieves 87.02\% F1 at 13.76\% FPR under the deployable
-train\_cal threshold, outperforming RF (86.41\% F1, 25.22\% FPR) by
-0.61\,pp F1 at nearly half the FPR.  The best individual genome
-reaches \textbf{90.52\% F1} at 4.13\% FPR --- 4.11\,pp above RF
-with 6$\times$ lower FPR.
-On the CICIDS2017 random split, the average WNN across 120 seeds reaches
-99.28\% F1 (0.46\,pp below RF's 99.74\%) in a model $5{,}000\times$
-smaller; the best individual genome closes this to \textbf{99.52\% F1}
-(0.22\,pp gap), with 0.13\% FPR nearly matching RF's 0.08\%.
-
-On CIC-IoT-2023 (1.3M random 80/20, top-20 features), the average WNN
-trails Random Forest in F1 (80.07\% vs.\ 85.53\%), but its false-positive
-rate is \textbf{5.8$\times$ lower} (4.32\% vs.\ 25.18\%). The best
-individual genome reaches 81.00\% F1 while maintaining 4.68\% FPR ---
-still 5.4$\times$ lower than RF. Under the fixed 0.5 threshold (the
-fairest comparison to RF/XGBoost \texttt{predict()}), the best genome
-achieves \textbf{82.67\% F1}, narrowing the gap to 2.9\,pp.
-In a deployed IDS, each false positive generates an alert requiring human
-investigation; 25\% FPR is operationally unusable at scale, while
-4--5\% is deployable. The WNN achieves this operating point in 100\,KB
-on a \$20 FPGA (Table~\ref{tab:fpga}), versus ${\sim}$50\,MB for the
-RF model.
-
-\begin{table}[ht!]
-\centering
-\caption{Comparison with baselines. ``Ours'' rows report mean $\pm$ std
-across $N$ seeds (train\_cal threshold); $^\dagger$fixed\_05 for direct
-comparison with RF/XGBoost; $^\ddagger$best single genome across all seeds.
-RF/XGBoost use raw numeric features; WNN uses thermometer-encoded features.}
-\label{tab:baselines}
-\resizebox{\textwidth}{!}{%
-\begin{tabular}{llrrrl}
-\toprule
-Method & Dataset / Split & F1 (\%) & FPR (\%) & Acc (\%) & Notes \\
-\midrule
-\textbf{Ours} & UNSW / temporal & \textbf{87.02} & \textbf{13.76} & 87.16 & 101 runs \\
-\textbf{Ours}$^\ddagger$ & UNSW / temporal & \textbf{90.52} & 4.13 & 90.54 & best genome \\
-Random Forest  & UNSW / temporal & 86.41 & 25.22 & 86.94 & Same split, top-20 \\
-XGBoost        & UNSW / temporal & 85.62 & 27.29 & 86.24 & Same split, top-20 \\
-\midrule
-\textbf{Ours} & CICIDS / random & 99.28 & 0.24 & 99.55 & 120 runs \\
-\textbf{Ours}$^\ddagger$ & CICIDS / random & \textbf{99.52} & 0.13 & \textbf{99.70} & best genome \\
-Random Forest  & CICIDS / random & 99.74 & 0.08 & 99.84 & Same split \\
-XGBoost        & CICIDS / random & 99.65 & 0.12 & 99.78 & Same split \\
-\midrule
-\textbf{Ours} & CIC-IoT / random & 80.08 & \textbf{4.26} & 86.85 & 112 runs \\
-\textbf{Ours}$^\ddagger$ & CIC-IoT / random & 81.00 & \textbf{4.68} & 87.68 & best genome \\
-\textbf{Ours}$^\dagger$ & CIC-IoT / random & 81.65 & 9.01 & 88.58 & fixed\_05 \\
-\textbf{Ours}$^{\dagger\ddagger}$ & CIC-IoT / random & 82.45 & 16.98 & 90.07 & best, fixed\_05 \\
-Random Forest  & CIC-IoT / random & 85.53 & 25.18 & 92.71 & Same split, top-20 \\
-XGBoost        & CIC-IoT / random & 84.13 & 28.34 & 92.07 & Same split, top-20 \\
-\midrule
-FWIW~\cite{susskind2023fwiw} & UNSW / random$^*$ & --- & 1.57 & 98.50 & 192\,B model \\
-\bottomrule
-\multicolumn{6}{l}{\small $^*$90/10 deduplicated, oversampled; reports accuracy only, not F1.}
-\end{tabular}}
 \end{table}
 
 \subsection{Model Size Analysis}
