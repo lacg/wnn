@@ -628,7 +628,7 @@ Full seven-mode breakdown in Appendix~\ref{app:thresholds}.}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{lrrrrrl}
 \toprule
- & F1 (\%) & FPR (\%) & Acc (\%) & Size & Latency & Power \\
+ & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \multicolumn{1}{c}{Latency} & \multicolumn{1}{c}{Power} \\
 \midrule
 Best F1$^\ddagger$         & \textbf{90.52}   & 4.13   & \textbf{90.54} & 9{,}192 (17.3\%) & 170\,ns & 289\,mW \\
 Best FPR$^\ddagger$        & 71.80             & \textbf{0.00}  & 72.64  & 18{,}195 (34.2\%) & 197\,ns & 459\,mW \\
@@ -664,7 +664,7 @@ full 100-run batch.}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{lrrrrrl}
 \toprule
- & F1 (\%) & FPR (\%) & Acc (\%) & Size & Latency & Power \\
+ & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \multicolumn{1}{c}{Latency} & \multicolumn{1}{c}{Power} \\
 \midrule
 Best F1$^\ddagger$         & \textbf{94.70}   & 0.52              & \textbf{99.20} & --- & --- & --- \\
 Best FPR$^\ddagger$        & 94.35             & \textbf{0.31}     & 99.19          & --- & --- & --- \\
@@ -711,7 +711,7 @@ Full seven-mode breakdown in Appendix~\ref{app:thresholds}.}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{lrrrrrl}
 \toprule
- & F1 (\%) & FPR (\%) & Acc (\%) & Size & Latency & Power \\
+ & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \multicolumn{1}{c}{Latency} & \multicolumn{1}{c}{Power} \\
 \midrule
 Best F1$^\ddagger$         & \textbf{99.55}   & 0.11              & \textbf{99.71} & 3{,}112 (5.9\%) & 154\,ns & 170\,mW \\
 Best FPR$^\ddagger$        & 98.58             & \textbf{0.05}     & 99.12          & 14{,}633 (27.5\%) & 197\,ns & 413\,mW \\
@@ -748,7 +748,7 @@ balanced fitness weights). GA reduces neurons by 19\% (397$\to$322).}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{lrrrrrl}
 \toprule
- & F1 (\%) & FPR (\%) & Acc (\%) & Size & Latency & Power \\
+ & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \multicolumn{1}{c}{Latency} & \multicolumn{1}{c}{Power} \\
 \midrule
 Best F1$^\ddagger$                & \textbf{83.04}   & 20.18             & 90.62 & 6{,}812 (12.8\%) & 182\,ns & 256\,mW \\
 Best F1 (FPR${<}$14\%)$^\ddagger$ & 82.76            & 13.54             & 89.84 & 10{,}112 (19.0\%) & 220\,ns & 320\,mW \\
@@ -798,7 +798,7 @@ Baselines from Neto et al.~\cite{neto2023ciciot}.}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{llrrrrlrl}
 \toprule
-Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & Size & LUTs & Latency & Power \\
+Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \multicolumn{1}{c}{LUTs} & \multicolumn{1}{c}{Latency} & \multicolumn{1}{c}{Power} \\
 \midrule
 \multirow{5}{*}{Micro}
  & Ours (5n $\times$ 4b)     & 66.66\,$\pm$\,6.36 & 8.84\,$\pm$\,12.30 & 90.68\,$\pm$\,4.49 & 20\,B   & 2 ({<}0.01\%)  & 2\,ns$^D$  & 103\,mW \\
