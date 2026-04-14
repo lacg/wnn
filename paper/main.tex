@@ -680,10 +680,11 @@ Val\_cal                   & 94.47$\pm$0.09 & 0.48$\pm$0.05   & 99.18$\pm$0.01 &
 \midrule
 Random Forest              & 96.01          & 0.29             & 99.42 & 9.0\,MB & 13.9\,$\mu$s$^C$ & --- \\
 XGBoost                    & 95.50          & 0.29             & 99.35 & 0.3\,MB & 0.4\,$\mu$s$^C$ & --- \\
-FWIW~\cite{susskind2023fwiw} & ---         & 1.57             & 98.50 & 269 LUTs & 10.8\,ns & --- \\
+FWIW~\cite{susskind2023fwiw}$^F$ & ---      & 1.57             & 98.50 & 269--354 LUTs$^F$ & 10.8\,ns & --- \\
 \bottomrule
-\multicolumn{7}{l}{\small $^\ddagger$Best single genome. $^S$Sparse FPGA (O(log\,n) binary search). $^C$CPU inference.}\\
-\multicolumn{7}{l}{\small FWIW uses 90/10 deduplicated, oversampled split. RF/XGBoost: raw features, CPU.}
+\multicolumn{7}{l}{\small $^\ddagger$Best single genome. $^C$CPU inference.}\\
+\multicolumn{7}{l}{\small $^F$FWIW: 90/10 deduplicated, oversampled split; 269 LUTs / 73\,pJ on Virtex US+ (14\,nm),}\\
+\multicolumn{7}{l}{\small \phantom{$^F$}299--354 LUTs / 266--340\,pJ on Spartan-7 (28\,nm). Power not directly comparable.}
 \end{tabular}}
 \end{table}
 
