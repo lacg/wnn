@@ -1059,6 +1059,8 @@ range from \$200--350.  Our synthesis targets the chip, not a specific
 board; utilization numbers are identical on any Z-7020 platform.}
 (53{,}200 LUTs, 140 BRAM36 blocks) and report LUT utilization, latency,
 and power in each result table.
+Table~\ref{tab:fpga} summarizes the resource--accuracy trade-off
+across all FPGA-synthesized configurations with FWIW as baseline.
 
 \paragraph{Dense configuration (8--12-bit addresses).}
 With address width capped, each neuron's full lookup table is synthesized
@@ -1105,9 +1107,7 @@ Scaling to the 46M Pareto peak (400n $\times$ 8b, 100\,KB) uses
 \$20 Zynq-7020 alongside the UNSW and CICIDS designs.
 
 \paragraph{Comparison with FWIW.}
-Table~\ref{tab:fpga} summarizes the resource--accuracy trade-off across
-the three FPGA-synthesized datasets (UNSW-NB15, CICIDS2017, and
-CIC-IoT-2023). FWIW achieves the smallest footprint (192 bytes, 269 LUTs)
+FWIW achieves the smallest footprint (192 bytes, 269 LUTs)
 through Bloom filter neurons with random connections.  Our evolved
 connections require more resources but deliver lower false-positive rates
 and comparable or higher accuracy.  On CICIDS2017, our 12-bit dense
@@ -1127,7 +1127,7 @@ at the cost of a modestly longer critical path (15.0\,ns vs.\ 12.7\,ns).
 Both CIC-IoT configurations fit comfortably alongside the UNSW and
 CICIDS designs on the same \$20 Zynq-7020 part.
 
-\begin{table}[ht!]
+\begin{table}[t]
 \centering
 \caption{FPGA synthesis results on Xilinx Zynq Z-7020 (53,200 LUTs, 106,400 FFs).
 All designs synthesized with Vivado 2025.2 in out-of-context mode.
