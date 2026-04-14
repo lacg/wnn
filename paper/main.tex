@@ -901,8 +901,8 @@ contain only ${\sim}$3{,}500 trained entries each
 not the $2^{32}$ that a dense representation would require.
 Vivado maps these sparse tables entirely to LUT-based distributed RAM
 (zero BRAM), so the model is baked into the FPGA bitstream.
-Deployment sizes range from 156~LUTs (0.3\%, 5-neuron CIC-IoT) to
-28{,}167~LUTs (52.9\%, 299-neuron CIC-IoT),
+Deployment sizes range from 2~LUTs ($<$0.01\%, 5-neuron dense CIC-IoT) to
+50{,}527~LUTs (95.0\%, 500-neuron sparse CIC-IoT on the full 46M dataset),
 all fitting on a single \$20 Zynq Z-7020.
 
 % ============================================================================
