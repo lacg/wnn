@@ -625,23 +625,24 @@ only 0.33\,pp from train\_cal.
 balanced fitness weights). Neurons: 333 $\pm$ 128, bits: 31.
 Full seven-mode breakdown in Appendix~\ref{app:thresholds}.}
 \label{tab:unsw}
-\begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrl}
 \toprule
- & F1-macro (\%) & FPR (\%) & Accuracy (\%) \\
+ & F1 (\%) & FPR (\%) & Acc (\%) & Size & Latency & Power \\
 \midrule
-Best F1$^\ddagger$         & \textbf{90.52}   & 4.13               & \textbf{90.54} \\
-Best FPR$^\ddagger$        & 71.80             & \textbf{0.00}      & 72.64 \\
+Best F1$^\ddagger$         & \textbf{90.52}   & 4.13   & \textbf{90.54} & ${\sim}$700\,KB & 574\,ns$^S$ & 103\,mW \\
+Best FPR$^\ddagger$        & 71.80             & \textbf{0.00}  & 72.64  & ${\sim}$1.4\,MB & 574\,ns$^S$ & 103\,mW \\
 \midrule
-Train-cal                  & 87.02 $\pm$ 2.58 & 13.76 $\pm$ 4.63   & 87.16 $\pm$ 2.53 \\
-Fixed 0.5                  & 83.99 $\pm$ 7.26 & 17.99 $\pm$ 15.15  & 84.68 $\pm$ 6.17 \\
-Validation (val\_cal)      & 87.34 $\pm$ 2.12 & 5.43 $\pm$ 4.02    & 87.37 $\pm$ 2.10 \\
+Train-cal                  & 87.02$\pm$2.58 & 13.76$\pm$4.63 & 87.16$\pm$2.53 & ${\sim}$2.3\,MB$^S$ & 574\,ns$^S$ & 103\,mW \\
+Fixed 0.5                  & 83.99$\pm$7.26 & 17.99$\pm$15.15 & 84.68$\pm$6.17 & & & \\
+Val\_cal                   & 87.34$\pm$2.12 & 5.43$\pm$4.02  & 87.37$\pm$2.10 & & & \\
 \midrule
-Random Forest              & 86.41            & 25.22               & 86.94 \\
-XGBoost                    & 85.62            & 27.29               & 86.24 \\
+Random Forest              & 86.41          & 25.22           & 86.94 & ${\sim}$50\,MB & ${\sim}$1\,$\mu$s$^C$ & 65--300\,W \\
+XGBoost                    & 85.62          & 27.29           & 86.24 & ${\sim}$5\,MB & ${\sim}$0.1\,$\mu$s$^C$ & 65--300\,W \\
 \bottomrule
-\multicolumn{4}{l}{\small $^\ddagger$Best single genome across all seeds, genome types, and thresholds.}\\
-\multicolumn{4}{l}{\small RF/XGBoost use raw numeric features (top-20); WNN uses thermometer-encoded.}
-\end{tabular}
+\multicolumn{7}{l}{\small $^\ddagger$Best single genome. $^S$Sparse FPGA (O(log\,n) binary search). $^C$CPU inference.}\\
+\multicolumn{7}{l}{\small RF/XGBoost: raw features, CPU. WNN: thermometer-encoded, Zynq Z-7020 FPGA.}
+\end{tabular}}
 \end{table}
 
 \subsubsection{UNSW-NB15 Random Results.}
@@ -696,7 +697,7 @@ the easier random split.  The validation threshold achieves 99.30\%
 $\pm$ 0.48\% F1-macro with 0.22\% FPR.  The train-calibrated threshold
 nearly matches (99.28\% F1, 0.24\% FPR), confirming minimal calibration
 difficulty on random splits.  Among individual genomes, the best F1
-achieves 99.52\% F1 / 0.13\% FPR / 99.70\% Acc, within 0.22\,pp of
+achieves 99.55\% F1 / 0.11\% FPR / 99.71\% Acc, within 0.19\,pp of
 Random Forest (Table~\ref{tab:cicids}).
 
 \begin{table}[ht!]
@@ -1245,7 +1246,7 @@ contributes three advances over prior WNN-based IDS:
   101~runs), our WNN outperforms both baselines in F1 (87.02\% vs.\
   86.41\%) at half the FPR (13.76\% vs.\ 25.22\%), with the best
   genome reaching 90.52\% F1 at 4.13\% FPR.  On CICIDS2017 (random, 120~runs), our best genome reaches
-  99.52\% F1, within 0.22\,pp of RF.  On CIC-IoT-2023 (random, 112~runs),
+  99.55\% F1, within 0.19\,pp of RF.  On CIC-IoT-2023 (random, 112~runs),
   the WNN trades 5.5\,pp F1 for \textbf{5.9$\times$ lower FPR}
   (4.32\% vs.\ 25.18\%), a critical advantage for operational deployment
   where false-positive volume determines alert-handling cost.
