@@ -912,7 +912,7 @@ all fitting on a single \$20 Zynq Z-7020.
 \subsection{Connectivity as Feature Selection}
 
 During the grid search phase, each neuron's address bits are drawn
-randomly from the thermometer-encoded input vector --- for example,
+randomly from the thermometer-encoded input vector.  For example,
 320~bits for CICIDS2017 (16-bit thermometer) or 152~bits for UNSW-NB15
 (8-bit thermometer).  Because this connectivity remains fixed
 throughout training, each neuron is permanently bound to a particular
@@ -927,7 +927,7 @@ neuron's 34 address bits span 15--18 of the 20 input features, selecting
 1--2 bits from each.  This scattered connectivity contrasts with FWIW's
 random permutation, where each filter reads a contiguous slice of the
 input.  Despite being randomly initialized, the surviving neurons
-collectively cover the most informative feature combinations ---
+collectively cover the most informative feature combinations, whereas
 the GA acts as a neuron-level selection mechanism rather than a
 connectivity optimizer.
 
