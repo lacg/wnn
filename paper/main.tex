@@ -559,16 +559,16 @@ quantifies how much accuracy is ``left on the table'' by
 imperfect threshold selection, a finding we report for each
 dataset and configuration.
 
-\textbf{Fitness-aligned threshold optimization.}  The train\_cal and
-val\_cal modes sweep the threshold to maximize the \emph{same}
-weighted-fitness function (Equation~\ref{eq:fitness}) that the GA
-uses for genome selection, rather than maximizing F1 alone.  This
-alignment is methodologically critical: when the threshold sweep
-optimizes F1 but the GA selects on a fitness combining CE, F1, FPR,
-and accuracy, the GA receives misleading FPR signals and discards
-genomes that would have been strong under the actual fitness
-criterion.  The co-optimization ensures that architecture search
-and threshold selection work together rather than at cross purposes.
+\textbf{Fitness-aligned threshold optimization.}  The train\_cal mode
+sweeps the threshold to maximize the \emph{same} weighted-fitness
+function (Equation~\ref{eq:fitness}) that the GA uses for genome
+selection, rather than maximizing F1 alone.  This alignment is
+methodologically critical: when the threshold sweep optimizes F1 but
+the GA selects on a fitness combining CE, F1, FPR, and accuracy, the
+GA receives misleading FPR signals and discards genomes that would
+have been strong under the actual fitness criterion.  The
+co-optimization ensures that architecture search and threshold
+selection work together rather than at cross purposes.
 
 \subsection{Statistical Protocol}
 
