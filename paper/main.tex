@@ -932,9 +932,9 @@ the GA acts as a neuron-level selection mechanism rather than a
 connectivity optimizer.
 
 The grid search phase establishes a strong baseline by exhaustively
-testing neuron-count and address-width combinations; the GA then
-prunes within the best configuration, reducing neuron count by 35\%
-while maintaining or improving accuracy
+testing neuron-count and address-width combinations; the GA, seeded
+with the top-5 grid search configurations, then prunes neuron count
+by up to 43\% while maintaining or improving accuracy
 (Table~\ref{tab:phase}).
 
 \subsection{Threshold Sensitivity}
