@@ -102,8 +102,10 @@ achieving 98\% accuracy on UNSW-NB15 using random train/test splits, which
 show stronger performance than temporal splits due to shared distributional
 characteristics between training and testing data. Additionally, neuron
 connectivity (which input bits each neuron observes) plays a critical role
-in WNN architectures but is traditionally generated randomly, where network
-quality depends on the initial assignment.
+in WNN architectures but is traditionally generated randomly.
+Garcia and de Souto~\cite{garcia2004connectivity} showed that global
+optimization of connectivity outperforms random initialization, but
+their evaluation was limited to standard classification benchmarks.
 
 % Our contribution
 Our work improves on two fronts:
@@ -366,8 +368,10 @@ FWIW uses Bloom filter-based neurons with H3 hashing and backpropagation
 training with random connectivity and one threshold mode. Our work
 differs in three ways: (1)~we evaluate on both random and temporal splits,
 as random splits may allow some data leakage between train and test sets;
-(2)~we use random connectivity as a starting point and apply a genetic
-algorithm to optimize neuron count; and (3)~we evaluate seven threshold
+(2)~following Garcia and de Souto~\cite{garcia2004connectivity}, who
+showed that global optimization of N-tuple connectivity outperforms
+random initialization, we apply a genetic algorithm to optimize
+neuron count; and (3)~we evaluate seven threshold
 modes to identify which best predicts deployment performance.
 
 BTHOWeN~\cite{susskind2022bthowen} introduced thermometer encoding with
