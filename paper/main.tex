@@ -649,7 +649,7 @@ Val\_cal                   & 87.34$\pm$2.12 & 5.43$\pm$4.02  & 87.37$\pm$2.10 & 
 Random Forest              & 86.41          & 25.22           & 86.94 & 71.9\,MB & 14.0\,$\mu$s$^C$ & --- \\
 XGBoost                    & 85.62          & 27.29           & 86.24 & 0.4\,MB & 0.4\,$\mu$s$^C$ & --- \\
 \bottomrule
-\multicolumn{7}{l}{\small $^\ddagger$Best single genome. Size = LUTs (\% of Z-7020's 53{,}200). $^C$CPU inference.}\\
+\multicolumn{7}{l}{\small $^\ddagger$Best single genome. Size = LUTs (\% of Z-7020's 53{,}200). $^C$CPU (Apple M4 Max; production latency varies with hardware and load).}\\
 \multicolumn{7}{l}{\small WNN: Vivado synthesis on Zynq Z-7020 FPGA, zero BRAM. RF/XGBoost: CPU.}
 \end{tabular}}
 \end{table}
@@ -688,7 +688,7 @@ Ours (47n $\times$ 12b, best F1)$^D$ & 93.97 & 0.62 & 99.09 & 33 LUTs (0.06\%) &
 Ours (47n $\times$ 12b, best FPR)$^D$ & 93.61 & \textbf{0.43} & 99.08 & 33 LUTs (0.06\%) & 9.9\,ns & 103\,mW \\
 FWIW~\cite{susskind2023fwiw}$^F$ & ---      & 1.57             & 98.50 & 269--354 LUTs$^F$ & 10.8\,ns & --- \\
 \bottomrule
-\multicolumn{7}{l}{\small $^\ddagger$Best single genome. $^D$Dense $O(1)$ lookup, Vivado on Zynq Z-7020. $^C$CPU.}\\
+\multicolumn{7}{l}{\small $^\ddagger$Best single genome. $^D$Dense $O(1)$ lookup, Vivado on Zynq Z-7020. $^C$CPU (M4 Max).}\\
 \multicolumn{7}{l}{\small $^F$FWIW: 90/10 deduplicated, oversampled split; 269 LUTs / 73\,pJ on Virtex US+ (14\,nm),}\\
 \multicolumn{7}{l}{\small \phantom{$^F$}299--354 LUTs / 266--340\,pJ on Spartan-7 (28\,nm). Power not directly comparable.}
 \end{tabular}}
@@ -738,7 +738,7 @@ Val\_cal                   & 99.30$\pm$0.48 & 0.22$\pm$0.12  & 99.56$\pm$0.30 & 
 Random Forest              & 99.74          & 0.08             & 99.84 & 6.3\,MB & 13.4\,$\mu$s$^C$ & --- \\
 XGBoost                    & 99.65          & 0.12             & 99.78 & 0.3\,MB & 0.4\,$\mu$s$^C$ & --- \\
 \bottomrule
-\multicolumn{7}{l}{\small $^\ddagger$Best single genome. Size = LUTs (\% of Z-7020's 53{,}200). $^C$CPU inference.}\\
+\multicolumn{7}{l}{\small $^\ddagger$Best single genome. Size = LUTs (\% of Z-7020's 53{,}200). $^C$CPU (Apple M4 Max; production latency varies with hardware and load).}\\
 \multicolumn{7}{l}{\small WNN: Vivado synthesis on Zynq Z-7020 FPGA, zero BRAM. RF/XGBoost: CPU.}
 \end{tabular}}
 \end{table}
@@ -777,7 +777,7 @@ GA Neurons (train\_cal)           & 80.08$\pm$0.48   & 4.26$\pm$0.49     & 86.85
 Random Forest                     & 85.53            & 25.18              & 92.71 & --- & --- & --- \\
 XGBoost                           & 84.13            & 28.34              & 92.07 & --- & --- & --- \\
 \bottomrule
-\multicolumn{7}{l}{\small $^\ddagger$Best single genome. Size = LUTs (\% of Z-7020's 53{,}200). $^C$CPU inference.}\\
+\multicolumn{7}{l}{\small $^\ddagger$Best single genome. Size = LUTs (\% of Z-7020's 53{,}200). $^C$CPU (Apple M4 Max; production latency varies with hardware and load).}\\
 \multicolumn{7}{l}{\small WNN: Vivado synthesis on Zynq Z-7020 FPGA, zero BRAM. RF/XGBoost: CPU.}
 \end{tabular}}
 \end{table}
