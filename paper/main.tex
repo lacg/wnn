@@ -680,8 +680,8 @@ Val\_cal                   & 94.47$\pm$0.09 & 0.48$\pm$0.05   & 99.18$\pm$0.01 &
 \midrule
 Random Forest              & 96.01          & 0.29             & 99.42 & 9.0\,MB & 13.9\,$\mu$s$^C$ & --- \\
 XGBoost                    & 95.50          & 0.29             & 99.35 & 0.3\,MB & 0.4\,$\mu$s$^C$ & --- \\
-Ours (47n $\times$ 12b, best F1)$^D$ & 93.97 & 0.62 & 99.09 & 33 LUTs (0.06\%) & 10\,ns & 103\,mW \\
-Ours (47n $\times$ 12b, best FPR)$^D$ & 93.61 & \textbf{0.43} & 99.08 & 33 LUTs (0.06\%) & 10\,ns & 103\,mW \\
+Ours (47n $\times$ 12b, best F1)$^D$ & 93.97 & 0.62 & 99.09 & 33 LUTs (0.06\%) & 9.9\,ns & 103\,mW \\
+Ours (47n $\times$ 12b, best FPR)$^D$ & 93.61 & \textbf{0.43} & 99.08 & 33 LUTs (0.06\%) & 9.9\,ns & 103\,mW \\
 FWIW~\cite{susskind2023fwiw}$^F$ & ---      & 1.57             & 98.50 & 269--354 LUTs$^F$ & 10.8\,ns & --- \\
 \bottomrule
 \multicolumn{7}{l}{\small $^\ddagger$Best single genome. $^D$Dense $O(1)$ lookup, Vivado on Zynq Z-7020. $^C$CPU.}\\
@@ -1090,7 +1090,7 @@ FWIW~\cite{susskind2023fwiw} achieves a compact footprint
 (269~LUTs on Virtex UltraScale+, 10.8\,ns) through Bloom filter
 neurons with random connections on a 90/10 deduplicated UNSW-NB15
 split.  Our dense 47-neuron, 12-bit genome uses just \textbf{33~LUTs}
-(8.2$\times$ fewer) at 10\,ns latency on the Zynq Z-7020, while
+(8.2$\times$ fewer) at 9.9\,ns latency on the Zynq Z-7020, while
 outperforming FWIW on every IDS metric: 93.97\% F1, 0.62\% FPR,
 99.09\% accuracy versus FWIW's 1.57\% FPR and 98.50\% accuracy.
 Our sparse genomes push further to 94.35\% F1 and 0.31\% FPR
