@@ -557,9 +557,12 @@ sensitivity:
   regression on held-out scores, $P(\text{attack})\!=\!\sigma(as\!+\!b)$.
 \item \textbf{Beta calibration}~\cite{kull2017beta}: Three-parameter
   logit model, more flexible than Platt for asymmetric distributions.
-\item \textbf{Empirical:} Histogram-based threshold from held-out
-  score distribution.
-\item \textbf{Empirical cumulative:} CDF-based threshold selection.
+\item \textbf{Empirical:} Histogram-based threshold selected by
+  sweeping over a discrete grid of held-out scores (simple
+  non-parametric baseline).
+\item \textbf{Empirical cumulative:} Threshold chosen at the score
+  percentile of the cumulative distribution function (CDF) that
+  matches the training positive rate.
 \item \textbf{Validation (val\_cal):} Threshold swept on the held-out validation set
   (not used during training or GA selection). This represents an upper
   bound on achievable performance, not available in deployment, but
