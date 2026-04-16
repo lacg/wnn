@@ -382,9 +382,8 @@ requiring per-feature threshold optimization.
 Traditional ML approaches (Random Forest, XGBoost, SVM) achieve
 85--90\% F1 on UNSW-NB15's temporal split~\cite{zoghi2024ids} but require
 models of 10--50\,MB. Deep learning approaches (BiLSTM~\cite{mdpi2024enhanced},
-CNN-LSTM) push accuracy higher at the cost of microsecond-scale GPU
-inference and 50--300\,W power envelopes, limiting deployment on
-edge devices with single-digit watt budgets.
+CNN-LSTM) push accuracy higher but typically require GPU hardware
+for inference, limiting deployment on power-constrained edge devices.
 
 A critical methodological issue pervades the IDS literature: most published
 results use random train/test splits, reporting 97--99\% accuracy that does
