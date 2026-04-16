@@ -272,6 +272,7 @@
     Completed : 46/100  |  🔄 RUNNING
     Avg/run   : 78.6 min
     Latest    : 16/04/2026 17:13 ET
+    ETA       : 19/04/2026 15:57 ET  (54 remaining × 78.6 min ≈ 71 hours)
 
 ### Best individual genomes
 
