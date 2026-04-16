@@ -1134,7 +1134,17 @@ require 52--227\,ns due to $O(\log n)$ binary search
 genomes could reduce their latency to near-$O(1)$, combining
 the accuracy of large address spaces with dense-like speed.
 
-Third, the remaining 0.46\% F1 gap to Random Forest on CICIDS2017
+Third, our current framework applies a uniform thermometer width to
+all features.  However, feature cardinality varies widely across
+IDS datasets: in UNSW-NB15, \texttt{ct\_state\_ttl} has only 7
+unique values (needing just 6~bits for lossless encoding) while
+\texttt{Sjit} has over 857K (heavily quantized at any practical
+width).  \emph{Per-feature adaptive thermometer encoding} would
+allocate bits proportional to each feature's cardinality, reducing
+wasted resolution on low-cardinality features while improving
+fidelity on continuous ones.
+
+Fourth, the remaining 0.46\% F1 gap to Random Forest on CICIDS2017
 (0.22\% for the best genome) is not explained by encoding precision
 (64-bit yields no improvement) and warrants further investigation.  Our framework supports additional
 optimization phases beyond the two evaluated here: \emph{GA bits}
