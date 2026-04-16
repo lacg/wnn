@@ -472,8 +472,9 @@ between parents; mutation adds or removes neurons.  The GA preserves
 each neuron's learned connections and trained memory, so structural
 changes (adding/removing neurons) do not discard prior training.
 This phase discovers the optimal model capacity for the dataset,
-typically reducing neuron count by 40--43\% while maintaining or
-improving accuracy (Section~\ref{sec:phase-progression}).
+reducing neuron count by up to 42\% (4--42\% across our three
+evaluated datasets) while maintaining or improving accuracy
+(Section~\ref{sec:phase-progression}).
 
 \textbf{Fitness function.}
 IDS metrics (F1, FPR, cross-entropy) differ in scale, making weighted
@@ -859,7 +860,7 @@ Table~\ref{tab:phase} compares the two phases across all three datasets
 (val\_cal threshold, best-fitness genome).
 
 The GA phase consistently improves F1 while reducing neuron count.
-On CICIDS2017, the GA reduces neurons by 43\% (343$\to$198) while
+On CICIDS2017, the GA reduces neurons by 42\% (343$\to$198) while
 improving F1 by 0.11\,pp and halving variance ($\pm$0.76\%
 $\to$ $\pm$0.48\%), indicating that neuron-count optimization acts as
 a regularizer.  On CIC-IoT-2023, the GA achieves its largest F1 gain
@@ -944,7 +945,7 @@ connectivity optimizer.
 The grid search phase establishes a strong baseline by exhaustively
 testing neuron-count and address-width combinations; the GA, seeded
 with the top-5 grid search configurations, then prunes neuron count
-by up to 43\% while maintaining or improving accuracy
+by up to 42\% while maintaining or improving accuracy
 (Table~\ref{tab:phase}).
 
 \subsection{Threshold Sensitivity}
