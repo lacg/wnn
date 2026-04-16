@@ -834,6 +834,7 @@ class FlowWorker:
         class_weight_multiplier = params.get("class_weight_multiplier", 1.0)
         feature_selection = params.get("ids_feature_selection", "all")
         rest_bits = params.get("ids_rest_bits", None)
+        auto_max_bits = params.get("ids_auto_max_bits", 32)
         kfold_per_gen = params.get("ids_kfold_per_gen", 1)
 
         dataset_name = params.get("ids_dataset", "unsw-nb15")
@@ -849,7 +850,7 @@ class FlowWorker:
             from wnn.ids.ciciot2023 import load_ciciot2023
             full_dataset = load_ciciot2023(n_bits=n_bits, split=split, feature_selection=feature_selection, dataset_size="full")
         else:
-            full_dataset = load_unsw_nb15(n_bits=n_bits, split=split, feature_selection=feature_selection, rest_bits=rest_bits)
+            full_dataset = load_unsw_nb15(n_bits=n_bits, split=split, feature_selection=feature_selection, rest_bits=rest_bits, auto_max_bits=auto_max_bits)
 
         if classification == "hierarchical":
             return self._create_hierarchical_ids_evaluators(

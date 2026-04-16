@@ -78,11 +78,12 @@ def encode_features(
 	df_test: pd.DataFrame,
 	common_features: list[str],
 	top_features: list[str],
-	n_bits: int = 8,
+	n_bits: int | str = 8,
 	method: ThermometerType = ThermometerType.DISTRIBUTIVE,
 	feature_selection: str = "all",
 	rest_bits: int | None = None,
 	df_val: pd.DataFrame | None = None,
+	auto_max_bits: int = 32,
 ) -> tuple[np.ndarray, np.ndarray, ThermometerEncoder, list[str], np.ndarray | None]:
 	"""Shared thermometer encoding logic for all IDS datasets.
 
@@ -111,7 +112,7 @@ def encode_features(
 	X_val = None
 
 	if feature_selection == "all":
-		encoder = ThermometerEncoder(n_bits=n_bits, method=method)
+		encoder = ThermometerEncoder(n_bits=n_bits, method=method, auto_max_bits=auto_max_bits)
 		encoder.fit(df_train[common_features])
 		X_train = encoder.transform(df_train[common_features])
 		X_test = encoder.transform(df_test[common_features])
@@ -129,7 +130,7 @@ def encode_features(
 			selected = available[:top_n]
 			if len(selected) < top_n:
 				print(f"  WARNING: Only {len(selected)} of {top_n} top features found in dataset")
-		encoder = ThermometerEncoder(n_bits=n_bits, method=method)
+		encoder = ThermometerEncoder(n_bits=n_bits, method=method, auto_max_bits=auto_max_bits)
 		encoder.fit(df_train[selected])
 		X_train = encoder.transform(df_train[selected])
 		X_test = encoder.transform(df_test[selected])
@@ -377,11 +378,12 @@ def _load_standard_split_local(data_dir: Path) -> tuple[pd.DataFrame, pd.DataFra
 
 def load_unsw_nb15(
 	data_dir: str | Path | None = None,
-	n_bits: int = 8,
+	n_bits: int | str = 8,
 	method: ThermometerType = ThermometerType.DISTRIBUTIVE,
 	split: str = "standard",
 	feature_selection: str = "all",
 	rest_bits: int | None = None,
+	auto_max_bits: int = 32,
 ) -> IDSDataset:
 	"""Load UNSW-NB15 with thermometer encoding.
 
@@ -470,7 +472,7 @@ def load_unsw_nb15(
 	X_train, X_test, encoder, used_features, X_val = encode_features(
 		df_train, df_test, common_features, TOP20_RF_FEATURES,
 		n_bits=n_bits, method=method, feature_selection=feature_selection,
-		rest_bits=rest_bits, df_val=df_val,
+		rest_bits=rest_bits, df_val=df_val, auto_max_bits=auto_max_bits,
 	)
 
 	print(f"  X_train: {X_train.shape}, X_test: {X_test.shape}")
