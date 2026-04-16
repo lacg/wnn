@@ -22,31 +22,17 @@ Andronic, M., Sherborne, T., Sherborne, L., Sherborne, J., Sherborne, D.,
   \doi{10.1109/FPL60245.2023.00020},
   \url{https://doi.org/10.1109/FPL60245.2023.00020}
 
-\bibitem{hf_ciciot}
-Anonymized: {CIC-IoT-2023} preprocessed dataset (1.3m subsample and full 46m).
-  \ifanonymous Anonymized for
-  review\else\url{https://huggingface.co/datasets/lacg030175/CIC-IoT-2023}\fi
-  (2026), huggingFace dataset with random and 3-way splits. Full 46M version
-  also available. \emph{URL anonymized for review.}
-
-\bibitem{hf_cicids}
-Anonymized: {CICIDS2017} preprocessed dataset with temporal and random splits.
-  \ifanonymous Anonymized for
-  review\else\url{https://huggingface.co/datasets/lacg030175/CICIDS2017}\fi
-  (2026), huggingFace dataset with temporal, random, and 3-way splits.
-  \emph{URL anonymized for review.}
-
-\bibitem{hf_unsw}
-Anonymized: {UNSW-NB15} preprocessed dataset with temporal and random splits.
-  \ifanonymous Anonymized for
-  review\else\url{https://huggingface.co/datasets/lacg030175/UNSW-NB15}\fi
-  (2026), huggingFace dataset with temporal, random, and 3-way splits.
-  \emph{URL anonymized for review.}
-
 \bibitem{engelen2021cicids}
 Engelen, G., Rimmer, V., Joosen, W.: Troubleshooting an intrusion detection
   dataset: The {CICIDS2017} case study. In: Proceedings of the IEEE Security
   and Privacy Workshops (SPW) (2021). \doi{10.1109/SPW53761.2021.00009}
+
+\bibitem{garcia2004connectivity}
+Garcia, L.A.C., de~Souto, M.C.P.: Global optimisation methods for choosing the
+  connectivity pattern of {N}-tuple classifiers. In: Proceedings of the IEEE
+  International Joint Conference on Neural Networks (IJCNN). pp. 2263--2266.
+  Budapest, Hungary (2004). \doi{10.1109/IJCNN.2004.1380975},
+  \url{https://doi.org/10.1109/IJCNN.2004.1380975}
 
 \bibitem{kull2017beta}
 Kull, M., Silva~Filho, T., Flach, P.: Beta calibration: a well-founded and
