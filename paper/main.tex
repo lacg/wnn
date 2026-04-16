@@ -48,31 +48,28 @@
 \begin{abstract}
 Weightless Neural Networks (WNNs) based on Random Access Memory (RAM) neurons
 offer constant-time inference with sub-microsecond lookup, making them
-attractive for edge-deployed intrusion detection systems. However, their
-classification performance depends on \emph{connectivity},
-which input bits each neuron observes, a problem traditionally solved by random
-initialization. We present an evolutionary optimization framework that
-optimizes neuron count through grid search and genetic algorithm with
-each neuron's random connectivity effectively performing feature selection
-intrinsic to the architecture. All our configurations fit
-within the LUT fabric of a \$20 Zynq~Z-7020 FPGA, with our
-dense networks enabling $O(1)$ direct-lookup inference per neuron. We evaluate on three standard IDS
-benchmarks (UNSW-NB15, CICIDS2017, CIC-IoT-2023) using temporal
+attractive for edge-deployed Intrusion Detection Systems (IDS). However,
+their classification performance depends on \emph{connectivity},
+which input bits each neuron observes, a problem traditionally solved by
+random initialization. We present an evolutionary optimization framework
+that optimizes neuron count through grid search and genetic algorithm,
+with each neuron's random connectivity effectively performing feature
+selection intrinsic to the architecture. All our configurations fit
+within the logic fabric of a \$20 Zynq~Z-7020
+Field-Programmable Gate Array (FPGA), with our dense networks enabling
+$O(1)$ direct-lookup inference per neuron. We evaluate on three standard
+IDS benchmarks (UNSW-NB15, CICIDS2017, CIC-IoT-2023) using temporal
 and/or random splits with a seven-mode threshold calibration protocol
 that exposes the sensitivity of binary classifiers to decision boundary
 selection. Across up to 120 independent runs per configuration, our
 approach achieves 87.02\% F1 on UNSW-NB15 temporal with a deployable
 train-calibrated threshold (outperforming Random Forest by 0.61 points
-at half the FPR) and 99.28\% F1 on CICIDS2017 random
-(0.24\% false positive rate).
-On the full 46.7M-record CIC-IoT-2023 benchmark, our approach spans a
-four-order-of-magnitude memory frontier from a 20-byte microcontroller
-detector to a hundred-megabyte sparse peak: a 25\,KB
-400-neuron 8-bit configuration achieves 83.13\% F1 at 2.06\% FPR
-(beating the Perceptron baseline by 2.08 points and fitting within
-the BRAM of the smallest commercial FPGAs), while a peak 245-neuron
-32-bit configuration reaches 84.79\% F1 at 1.59\% FPR. Vivado-verified
-FPGA synthesis requires as few as 82 LUTs on a Zynq~Z-7020.
+at half the false-positive rate) and 99.28\% F1 on CICIDS2017 random
+(0.24\% false-positive rate).
+On the full 46.7M-record CIC-IoT-2023 benchmark, a 25\,KB dense
+configuration achieves 83.13\% F1 at 2.06\% FPR in just 304 logic
+elements, while sparse configurations reach 84.79\% F1 at 1.59\% FPR.
+All designs are verified through Vivado synthesis on the Zynq~Z-7020.
 
 \keywords{Intrusion Detection \and Weightless Neural Networks \and
 Evolutionary Optimization \and Feature Selection \and FPGA}
