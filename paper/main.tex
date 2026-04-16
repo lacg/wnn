@@ -522,14 +522,21 @@ patterns.
 
 We evaluate under the temporal protocol for UNSW-NB15 and random splits
 for UNSW-NB15, CICIDS2017, and CIC-IoT-2023. All splits are published
-on HuggingFace\ifanonymous\else~\cite{hf_unsw,hf_cicids,hf_ciciot}\fi{}
-for reproducibility:
+on HuggingFace for reproducibility:
 \begin{itemize}
-\item \textbf{Temporal split (UNSW-NB15):} The official 175K/82K
-  split with temporal separation between training and testing periods.
-\item \textbf{Random splits (all datasets):} Stratified random
-  80/20 splits: UNSW-NB15 (1.27M/317K), CICIDS2017
-  (2.3M/566K), CIC-IoT-2023 (1.07M/268K).
+\item \textbf{Temporal split
+  (UNSW-NB15\ifanonymous\else~\cite{hf_unsw}\fi):} The official
+  175K/82K split with temporal separation between training and
+  testing periods.
+\item \textbf{Random splits (all datasets):} Stratified 80/20 splits
+  on UNSW-NB15\ifanonymous\else~\cite{hf_unsw}\fi{}
+  (1.27M/317K), CICIDS2017\ifanonymous\else~\cite{hf_cicids}\fi{}
+  (2.3M/566K), and CIC-IoT-2023\ifanonymous\else~\cite{hf_ciciot}\fi{}
+  (1.07M/268K; 1.3M subsample).
+\item \textbf{Full-scale CIC-IoT-2023\ifanonymous\else~\cite{hf_ciciot}\fi:}
+  The full 46.7M-record dataset with random 80/20 split (37.4M/9.3M),
+  used for direct comparison with prior published baselines
+  (Section~\ref{sec:results-ciot}).
 \end{itemize}
 
 \subsection{Seven-Mode Threshold Calibration}
