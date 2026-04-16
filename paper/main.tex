@@ -170,11 +170,6 @@ produce a classification decision. We refer to the neuron count~$N$,
 address width~$n$, and connectivity maps~$C$ collectively as the
 \emph{network parameters}.
 
-% QUAD_WEIGHTED memory
-Traditional RAM neurons store binary values (TRUE/FALSE), while
-Probabilistic Logic Nodes (PLN)~\cite{ludermir1999weightless} add an
-\emph{undefined} state ($u$) for untrained cells.
-
 \begin{figure}[t]
 \centering
 \begin{tikzpicture}[
@@ -284,9 +279,14 @@ The mean score is thresholded to classify the input.}
 \label{fig:ram-neuron}
 \end{figure}
 
-We introduce \emph{Quad-State RAM} (QSR) memory (Figure~\ref{fig:ram-neuron})
-with four states encoded in just 2~bits: FALSE~($0.0$),
-WEAK\_FALSE~($0.25$), WEAK\_TRUE~($0.75$), and TRUE~($1.0$).
+Traditional RAM neurons store binary values (TRUE/FALSE), while
+Probabilistic Logic Nodes
+(PLN)~\cite{ludermir1999weightless} add an \emph{undefined}
+state ($u$) for untrained cells.
+We introduce \emph{Quad-State RAM} (QSR) memory
+(Figure~\ref{fig:ram-neuron}) with four states encoded in just
+2~bits: FALSE~($0.0$), WEAK\_FALSE~($0.25$), WEAK\_TRUE~($0.75$),
+and TRUE~($1.0$).
 Unlike PLN's symmetric undefined state~($0.5$), QSR
 cells default to WEAK\_FALSE~($0.25$), biasing untrained neurons toward
 the majority class (normal traffic). When a cell trained as TRUE is
