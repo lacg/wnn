@@ -86,9 +86,14 @@ high accuracy but require megabytes of parameters, GPU hardware, and
 millisecond-scale inference per sample~\cite{mdpi2024enhanced} ---
 orders of magnitude slower than the ${\sim}$80\,ns per-packet budget
 at 100\,Gbps line rate, making them impractical for inline packet
-classification on edge devices. Conversely, lightweight rule-based
-systems operate at wire speed but lack the adaptability to detect novel
-attack patterns.
+classification on edge devices. Classical ML baselines such as
+Random Forest~\cite{breiman2001random} and
+XGBoost~\cite{chen2016xgboost} run in microseconds but typically
+require megabytes of model state. Conversely, lightweight
+signature/rule-based systems such as
+Snort~\cite{roesch1999snort} and Suricata~\cite{oisf_suricata} operate
+at wire speed but lack the adaptability to detect novel attack
+patterns.
 
 % Gap: WNNs exist for IDS but limited evaluation
 Weightless Neural Networks (WNNs)~\cite{aleksander1984wisard,ludermir1999weightless} offer a

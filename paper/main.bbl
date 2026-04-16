@@ -22,6 +22,15 @@ Andronic, M., Sherborne, T., Sherborne, L., Sherborne, J., Sherborne, D.,
   \doi{10.1109/FPL60245.2023.00020},
   \url{https://doi.org/10.1109/FPL60245.2023.00020}
 
+\bibitem{breiman2001random}
+Breiman, L.: Random forests. Machine Learning  \textbf{45}(1),  5--32 (2001).
+  \doi{10.1023/A:1010933404324}
+
+\bibitem{chen2016xgboost}
+Chen, T., Guestrin, C.: {XGBoost}: A scalable tree boosting system. In:
+  Proceedings of the 22nd ACM SIGKDD International Conference on Knowledge
+  Discovery and Data Mining. pp. 785--794 (2016). \doi{10.1145/2939672.2939785}
+
 \bibitem{engelen2021cicids}
 Engelen, G., Rimmer, V., Joosen, W.: Troubleshooting an intrusion detection
   dataset: The {CICIDS2017} case study. In: Proceedings of the IEEE Security
@@ -52,10 +61,19 @@ Neto, E.C.P., Dadkhah, S., Ferreira, R., Zohourian, A., Lu, R., Ghorbani, A.A.:
   {CICIoT2023}: A real-time dataset and benchmark for large-scale attacks in
   {IoT} environment. Sensors  \textbf{23}(13) (2023). \doi{10.3390/s23135941}
 
+\bibitem{oisf_suricata}
+{Open Information Security Foundation}: {Suricata}: Open source ids/ips/nsm
+  engine. \url{https://suricata.io/}, accessed 2026-04-16
+
 \bibitem{platt1999probabilistic}
 Platt, J.C.: Probabilistic outputs for support vector machines and comparisons
   to regularized likelihood methods. In: Advances in Large Margin Classifiers.
   pp. 61--74. MIT Press (1999)
+
+\bibitem{roesch1999snort}
+Roesch, M.: {Snort}: Lightweight intrusion detection for networks. In:
+  Proceedings of the 13th USENIX Conference on System Administration (LISA
+  '99). pp. 229--238. Seattle, WA, USA (1999)
 
 \bibitem{santiago2020fpga}
 Santiago, L.A.Q., Verona, L.T., Rangel, F.d.O., Firmino, F.M., Lima, P.M.V.,
