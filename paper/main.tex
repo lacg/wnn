@@ -54,9 +54,9 @@ which input bits each neuron observes, a problem traditionally solved by random
 initialization. We present an evolutionary optimization framework that
 optimizes neuron count through grid search and genetic algorithm with
 each neuron's random connectivity effectively performing feature selection
-intrinsic to the architecture. The trained memory (100\,KB for our best deployable genome) fits
-within the LUT fabric of a \$20 Zynq~Z-7020 FPGA, enabling $O(1)$
-direct-lookup inference per neuron. We evaluate on three standard IDS
+intrinsic to the architecture. All our configurations fit
+within the LUT fabric of a \$20 Zynq~Z-7020 FPGA, with our
+dense networks enabling $O(1)$ direct-lookup inference per neuron. We evaluate on three standard IDS
 benchmarks (UNSW-NB15, CICIDS2017, CIC-IoT-2023) using temporal
 and/or random splits with a seven-mode threshold calibration protocol
 that exposes the sensitivity of binary classifiers to decision boundary
