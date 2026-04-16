@@ -456,10 +456,14 @@ seeds the second.
 configurations (e.g., $N \in \{5, 10, \ldots, 500\}$,
 $b \in \{4, 8, \ldots, 34\}$) with random connectivity. Each configuration
 is trained on the full training set and evaluated using 5-fold
-cross-validation, then ranked by a fitness function.  The best $(N, b)$
-configuration is used to generate an initial population of $P$ genomes
-(default $P{=}50$), each with the same architecture but different random
-connectivity, seeding the subsequent GA phase.
+cross-validation, then ranked by a fitness function.  The top-$K$
+$(N, b)$ configurations (default $K{=}15$) seed the initial population
+of $P$ genomes (default $P{=}50$), distributed approximately evenly
+across the $K$ architectures; for each selected $(N, b)$ the
+grid-search genome is reused and the remaining quota is filled with
+fresh random-connectivity variants at the same architecture. This
+architectural diversity gives the subsequent GA multiple promising
+starting points rather than collapsing to a single configuration.
 
 \noindent\textbf{Phase 2: GA Neurons.} A genetic algorithm optimizes neuron count
 $N$ starting from the grid search population.  Elitism preserves the top
