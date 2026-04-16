@@ -223,7 +223,7 @@ class FlowConfig:
 
 	# IDS-specific config (architecture_type="ids")
 	ids_classification: str = "binary"  # "binary", "multi", or "hierarchical"
-	ids_n_bits: int = 8  # thermometer encoding bits per feature
+	ids_n_bits: int | str = 8  # thermometer encoding bits per feature, or "auto" for adaptive
 	ids_val_fraction: float = 0.25  # validation holdout fraction
 	ids_num_parts: int = 3  # training data rotation parts
 	ids_fitness_weight_f1: float = 0.0  # F1-macro weight in fitness

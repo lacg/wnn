@@ -32,9 +32,18 @@ class ThermometerEncoder:
 		value=5 → [1, 1, 0, 0]  (5 >= 2, 5 >= 4, 5 < 6, 5 < 8)
 	"""
 
-	def __init__(self, n_bits: int = 8, method: ThermometerType = ThermometerType.DISTRIBUTIVE):
+	def __init__(self, n_bits: int | str = 8, method: ThermometerType = ThermometerType.DISTRIBUTIVE,
+				 auto_max_bits: int = 32):
+		"""
+		Args:
+			n_bits: int for uniform width, or "auto" for per-feature adaptive width.
+			method: threshold placement strategy.
+			auto_max_bits: maximum bits per feature when n_bits="auto".
+		"""
 		self.n_bits = n_bits
 		self.method = method
+		self.auto_max_bits = auto_max_bits
+		self.per_feature_bits_: dict[str, int] = {}  # feature_name → actual bits used
 		self.thresholds_: dict[str, np.ndarray] = {}  # feature_name → thresholds
 		self.categories_: dict[str, list] = {}  # feature_name → sorted unique values
 		self.feature_names_: list[str] = []
@@ -75,7 +84,24 @@ class ThermometerEncoder:
 			else:
 				# Numeric — compute thresholds
 				values = df[col].dropna().values.astype(np.float64)
-				self.thresholds_[col] = self._compute_thresholds(values)
+				n_unique = len(np.unique(values))
+				if self.n_bits == "auto":
+					# Adaptive: use min(unique_values - 1, max_cap)
+					feat_bits = min(max(n_unique - 1, 1), self.auto_max_bits)
+				else:
+					feat_bits = self.n_bits
+				self.per_feature_bits_[col] = feat_bits
+				self.thresholds_[col] = self._compute_thresholds(values, feat_bits)
+
+		if self.n_bits == "auto" and self.per_feature_bits_:
+			bits_list = list(self.per_feature_bits_.values())
+			print(f"  Auto thermometer: {len(bits_list)} features, "
+				  f"{min(bits_list)}-{max(bits_list)} bits/feature "
+				  f"(total {sum(bits_list)} bits, max={self.auto_max_bits})")
+			for col, nb in self.per_feature_bits_.items():
+				n_unique = len(np.unique(df[col].dropna().values))
+				lossless = "lossless" if nb >= n_unique - 1 else f"lossy ({n_unique} unique)"
+				print(f"    {col:<22s}: {nb:>3} bits  ({lossless})")
 
 		return self
 
@@ -128,7 +154,7 @@ class ThermometerEncoder:
 			elif ftype == "categorical":
 				n = max(int(np.ceil(np.log2(max(len(self.categories_[col]), 2)))), 1)
 			else:
-				n = self.n_bits
+				n = self.per_feature_bits_.get(col, self.n_bits if isinstance(self.n_bits, int) else 8)
 			ranges[col] = (offset, offset + n)
 			offset += n
 		return ranges
@@ -151,36 +177,42 @@ class ThermometerEncoder:
 			return "binary"
 		return "numeric"
 
-	def _compute_thresholds(self, values: np.ndarray) -> np.ndarray:
-		"""Compute n_bits thresholds for a numeric feature."""
-		if self.method == ThermometerType.LINEAR:
-			return self._linear_thresholds(values)
-		elif self.method == ThermometerType.GAUSSIAN:
-			return self._gaussian_thresholds(values)
-		else:
-			return self._distributive_thresholds(values)
+	def _compute_thresholds(self, values: np.ndarray, feat_bits: int | None = None) -> np.ndarray:
+		"""Compute thresholds for a numeric feature.
 
-	def _linear_thresholds(self, values: np.ndarray) -> np.ndarray:
+		Args:
+			values: training data for this feature.
+			feat_bits: number of bits for this feature (overrides self.n_bits).
+		"""
+		nb = feat_bits if feat_bits is not None else (self.n_bits if isinstance(self.n_bits, int) else 8)
+		if self.method == ThermometerType.LINEAR:
+			return self._linear_thresholds(values, nb)
+		elif self.method == ThermometerType.GAUSSIAN:
+			return self._gaussian_thresholds(values, nb)
+		else:
+			return self._distributive_thresholds(values, nb)
+
+	def _linear_thresholds(self, values: np.ndarray, nb: int) -> np.ndarray:
 		"""Uniform spacing between min and max."""
 		vmin, vmax = values.min(), values.max()
 		if vmin == vmax:
-			return np.full(self.n_bits, vmin)
-		return np.linspace(vmin, vmax, self.n_bits + 2)[1:-1]  # exclude endpoints
+			return np.full(nb, vmin)
+		return np.linspace(vmin, vmax, nb + 2)[1:-1]  # exclude endpoints
 
-	def _gaussian_thresholds(self, values: np.ndarray) -> np.ndarray:
+	def _gaussian_thresholds(self, values: np.ndarray, nb: int) -> np.ndarray:
 		"""Thresholds placed via Gaussian CDF (more bits in the center)."""
 		from scipy.stats import norm
 		mu, sigma = values.mean(), values.std()
 		if sigma < 1e-10:
-			return np.full(self.n_bits, mu)
+			return np.full(nb, mu)
 		# Quantiles of standard normal, mapped to data distribution
-		quantiles = np.linspace(0, 1, self.n_bits + 2)[1:-1]
+		quantiles = np.linspace(0, 1, nb + 2)[1:-1]
 		return norm.ppf(quantiles, loc=mu, scale=sigma)
 
-	def _distributive_thresholds(self, values: np.ndarray) -> np.ndarray:
+	def _distributive_thresholds(self, values: np.ndarray, nb: int) -> np.ndarray:
 		"""Thresholds placed via empirical CDF (adapts to any distribution)."""
 		# Place thresholds at evenly-spaced quantiles of the data
-		quantiles = np.linspace(0, 100, self.n_bits + 2)[1:-1]
+		quantiles = np.linspace(0, 100, nb + 2)[1:-1]
 		thresholds = np.percentile(values, quantiles)
 		# Deduplicate (can happen for features with few unique values)
 		# If duplicates exist, spread them slightly
