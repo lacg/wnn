@@ -477,12 +477,13 @@ evaluated datasets) while maintaining or improving accuracy
 (Section~\ref{sec:phase-progression}).
 
 \textbf{Fitness function.}
-IDS metrics (F1, FPR, cross-entropy) differ in scale, making weighted
-sums sensitive to normalization. Both phases rank genomes per metric
-within the population, then combine ranks via a weighted harmonic mean:
+IDS metrics (F1, FPR, cross-entropy, accuracy) differ in scale,
+making weighted sums sensitive to normalization. Both phases rank
+genomes per metric within the population, then combine ranks via a
+weighted harmonic mean:
 \begin{equation}
-\text{fitness}(g) = \frac{w_{CE} + w_{F1} + w_{FPR}}{%
-  \frac{w_{CE}}{r_{CE}(g)} + \frac{w_{F1}}{r_{F1}(g)} + \frac{w_{FPR}}{r_{FPR}(g)}}
+\text{fitness}(g) = \frac{w_{CE} + w_{F1} + w_{FPR} + w_{Acc}}{%
+  \frac{w_{CE}}{r_{CE}(g)} + \frac{w_{F1}}{r_{F1}(g)} + \frac{w_{FPR}}{r_{FPR}(g)} + \frac{w_{Acc}}{r_{Acc}(g)}}
 \label{eq:fitness}
 \end{equation}
 where $r_m(g)$ is genome $g$'s rank for metric $m$ (lower rank = better).
