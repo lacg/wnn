@@ -484,23 +484,16 @@ balancing F1 and FPR equally (Section~\ref{sec:results-ciot}). The
 refinement was driven by empirical observation that the original
 FPR-heavy weights caused the GA to over-optimize for low FPR at the
 expense of F1; equal F1/FPR weighting produces genomes with a better
-balanced operating point across threshold modes. On UNSW-NB15 temporal,
-this change reduced the train\_cal--val\_cal gap from 5.43\,pp to
-0.23\,pp (Section~\ref{sec:results-unsw}).
+balanced operating point across threshold modes.
 
 \subsection{GPU-Accelerated Optimization}
 
 Population-based optimization requires evaluating hundreds of genome
 configurations per generation across hundreds of generations.
-We implement a Rust accelerator with Apple Metal GPU support that
-parallelizes both training (writing target labels to neuron memories)
-and evaluation (computing scores across all test examples).
-
-The accelerator computes neuron addresses via GPU kernel dispatch,
-achieving ${\sim}$100M address computations per second on an
-M4~Max GPU\@.  A complete two-phase run (grid search + GA~neurons)
-completes in 5~minutes on average per seed on UNSW-NB15, enabling
-100+ statistically independent runs.
+We implement a Rust accelerator with GPU support that parallelizes
+both training and evaluation.  A complete two-phase run (grid search
++ GA~neurons) completes in ${\sim}$5~minutes per seed on UNSW-NB15,
+enabling 100+ statistically independent runs per dataset.
 
 % ============================================================================
 \section{Evaluation Methodology}
