@@ -596,6 +596,14 @@ With $n \geq 100$ and typical $\sigma \approx 2\%$, the 95\% confidence
 interval for the mean is $\pm 0.39\%$, sufficient to distinguish
 meaningful differences between configurations.
 
+Tree-based baselines (Random Forest, XGBoost) are reported as single
+values with fixed hyperparameters and default library seeds. These
+models are near-deterministic under fixed configuration, so cross-seed
+variance is much smaller than the evolutionary variance of our
+population-based search, and the performance gaps reported in
+Tables~\ref{tab:unsw}--\ref{tab:ciot-phase} are robust to baseline
+seed choice.
+
 K-fold cross-validation ($k{=}5$) is applied \emph{every generation}
 during evolution within both phases: the training set is partitioned
 into 5 folds, and each genome is trained and evaluated on all 5
