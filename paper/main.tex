@@ -997,15 +997,15 @@ On CICIDS2017, F1-macro increases sharply from 8-bit (99.25\%) to 16-bit
 also yields the fewest neurons (avg.\ 58 vs.\ 223 at 8-bit) and the
 fastest training (0.9\,h vs.\ 1.5\,h at 8-bit), suggesting that 16
 bits provides sufficient resolution for the GA to find compact, accurate
-genomes.  The remaining 0.46\% gap to Random Forest (99.74\%) persists
+genomes.  The remaining 0.31\% gap to Random Forest (99.74\%) persists
 regardless of encoding width, confirming that precision alone does not
 explain the difference.
 
-On UNSW-NB15, no clear inflection point emerges: F1 ranges from 82\% to
-90\% across all encoding widths with 64-bit showing the most consistent
-results (89.56\%).  The high variance (only 2 runs per configuration)
-obscures any trend, and the harder temporal split amplifies seed
-sensitivity.
+On UNSW-NB15 temporal, no clear inflection point emerges: F1 ranges
+from 82\% to 90\% across all encoding widths with 64-bit showing the
+most consistent results (89.56\%).  The high variance (only 2 runs
+per configuration) obscures any trend, and the harder temporal split
+amplifies seed sensitivity.
 
 \paragraph{Address-tap saturation on CIC-IoT-2023.}
 The best 32-bit and 34-bit peak genomes on the 46M dataset
@@ -1174,8 +1174,8 @@ allocate bits proportional to each feature's cardinality, reducing
 wasted resolution on low-cardinality features while improving
 fidelity on continuous ones.
 
-Fourth, the remaining 0.46\% F1 gap to Random Forest on CICIDS2017
-(0.22\% for the best genome) is not explained by encoding precision
+Fourth, the remaining 0.31\% F1 gap to Random Forest on CICIDS2017
+(0.19\% for the best genome) is not explained by encoding precision
 (64-bit yields no improvement) and warrants further investigation.  Our framework supports additional
 optimization phases beyond the two evaluated here: \emph{GA bits}
 (evolving address width per neuron), \emph{GA connections} (evolving
