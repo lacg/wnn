@@ -693,8 +693,8 @@ full 100-run batch.}
 \toprule
  & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \multicolumn{1}{c}{Latency} & \multicolumn{1}{c}{Power} \\
 \midrule
-Best F1$^\ddagger$         & \textbf{94.86}   & 0.52              & \textbf{99.23} & --- & --- & --- \\
-Best FPR$^\ddagger$        & 93.72             & \textbf{0.23}     & 99.13          & --- & --- & --- \\
+Best overall F1$^\ddagger$         & \textbf{94.86}   & 0.52              & \textbf{99.23} & --- & --- & --- \\
+Best overall FPR$^\ddagger$        & 93.72             & \textbf{0.23}     & 99.13          & --- & --- & --- \\
 \midrule
 Train-cal                  & 94.40$\pm$0.15 & 0.45$\pm$0.06   & 99.18$\pm$0.02 & --- & --- & --- \\
 Fixed 0.5                  & 93.77$\pm$0.10 & 1.02$\pm$0.04   & 98.98$\pm$0.02 & & & \\
@@ -702,8 +702,8 @@ Val\_cal                   & 94.49$\pm$0.15 & 0.48$\pm$0.05   & 99.18$\pm$0.02 &
 \midrule
 Random Forest              & 96.01          & 0.29             & 99.42 & 9.0\,MB & 13.9\,$\mu$s$^C$ & --- \\
 XGBoost                    & 95.50          & 0.29             & 99.35 & 0.3\,MB & 0.4\,$\mu$s$^C$ & --- \\
-Ours (47n $\times$ 12b, best F1)$^D$ & 93.97 & 0.62 & 99.09 & 33 LUTs (0.06\%) & 9.9\,ns & 103\,mW \\
-Ours (47n $\times$ 12b, best FPR)$^D$ & 93.61 & \textbf{0.43} & 99.08 & 33 LUTs (0.06\%) & 9.9\,ns & 103\,mW \\
+Ours (47n $\times$ 12b, best dense F1)$^D$ & 93.97 & 0.62 & 99.09 & 33 LUTs (0.06\%) & 9.9\,ns & 103\,mW \\
+Ours (47n $\times$ 12b, best dense FPR)$^D$ & 93.61 & \textbf{0.43} & 99.08 & 33 LUTs (0.06\%) & 9.9\,ns & 103\,mW \\
 FWIW~\cite{susskind2023fwiw}$^F$ & ---      & 1.57             & 98.50 & 269--354 LUTs$^F$ & 10.8\,ns & --- \\
 \bottomrule
 \end{tabular}}
