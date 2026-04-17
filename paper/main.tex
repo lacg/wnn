@@ -863,9 +863,9 @@ Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \mult
  & Matched FPR (300n)         & 84.83 & 1.66 & 97.69 & 9.0\,MB & 29{,}443 (55.3\%) & 189\,ns & 729\,mW \\
 \midrule
 \multirow{3}{*}{\shortstack[l]{Baseline\\(46M)}}
- & RF (ours, 46M)   & 92.64 & 13.48 & 99.18 & ${\sim}$50\,MB & --- & --- & --- \\
- & XGBoost (ours)    & 91.67 & 14.80 & 99.06 & ${\sim}$5\,MB  & --- & --- & --- \\
- & Perceptron        & 81.05 & ---   & 98.18 & ${\sim}$10\,KB & --- & --- & --- \\
+ & RF (ours, 46M)   & 92.64 & 13.48 & 99.18 & 3.4\,GB & --- & 0.53\,$\mu$s$^C$ & --- \\
+ & XGBoost (ours)    & 91.67 & 14.80 & 99.06 & 0.3\,MB & --- & 0.13\,$\mu$s$^C$ & --- \\
+ & Perceptron        & 81.05 & ---   & 98.18 & $<$10\,KB & --- & 0.02\,$\mu$s$^C$ & --- \\
 \midrule
 \multirow{3}{*}{\shortstack[l]{Neto et al.$^\dag$\\(46M)}}
  & DNN              & 94.03$^\dag$ & ---  & 99.44 & ${\sim}$5\,MB  & --- & --- & --- \\
