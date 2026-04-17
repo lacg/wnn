@@ -1101,7 +1101,7 @@ configurations}: both dense and sparse neuron memories are mapped
 entirely to LUT-based distributed RAM, with the trained model
 baked into the FPGA bitstream.  This enables deployment of even
 our largest genome (500n $\times$ 34b, 50{,}527 LUTs, 95\% of
-the Z-7020) on a single \$20 chip with no external memory.
+the Z-7020) on a single chip with no external memory.
 
 \paragraph{Dense vs.\ sparse deployment.}
 Our architecture supports two deployment modes.
@@ -1127,8 +1127,8 @@ split.  Our dense 47-neuron, 12-bit genome uses just \textbf{33~LUTs}
 (8.2$\times$ fewer) at 9.9\,ns latency on the Zynq Z-7020, while
 outperforming FWIW on every IDS metric: 93.97\% F1, 0.62\% FPR,
 99.09\% accuracy versus FWIW's 1.57\% FPR and 98.50\% accuracy.
-Our sparse genomes push further to 94.35\% F1 and 0.31\% FPR
-(Table~\ref{tab:unsw-random}).
+Our sparse genomes push further to 94.86\% F1, 0.52\% FPR,
+99.23\% accuracy (Table~\ref{tab:unsw-random}).
 
 \paragraph{Latency and throughput.}
 Across all datasets, our configurations achieve sub-microsecond
