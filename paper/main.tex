@@ -1013,10 +1013,14 @@ The best 32-bit and 34-bit peak genomes on the 46M dataset
 84.73\%, a 0.06-point gap well within seed noise.  The
 4$\times$ larger address space yields no improvement, confirming
 that thermometer-encoding bit correlation caps effective
-discrimination: with 8-bit thermometer, each feature contributes
-only $\log_2(9) \approx 3.17$ effective bits, so a 32-bit address
-tap on 20 features already samples roughly half the available
-discriminative information.
+discrimination: although each feature receives 8 thermometer bits,
+those bits are strongly correlated --- only 9 distinct patterns
+(0 through 8 consecutive ones) are ever observed ---
+so each feature contributes only $\log_2(9) \approx 3.17$ bits
+of entropy. Across 20 features that is roughly 63 bits of
+discriminative information, of which a 32-bit address tap already
+samples about half; adding more tap bits merely re-samples
+already-represented information.
 
 To test whether this saturation is bounded by the 8-bit thermometer
 width, we re-trained both peak architectures at 16/32/64-bit
