@@ -825,6 +825,12 @@ At matched FPR (${\sim}$1.6\%), the direct search improves F1 by
 0.47\,pp over the best transferred genome (84.83\% vs.\ 84.36\%),
 confirming that evolved connections benefit from larger training sets
 even without GA refinement.
+As a side observation: XGBoost's 300\,KB footprint and 130\,ns latency
+would also fit the Z-7020's BRAM and line-rate budget, but its
+14.80\% FPR is $1.5\times$ to $13\times$ higher than our sparse
+Search(46M) genomes (9.82\% at best F1, 1.13\% at best FPR) --- an
+unfavorable trade-off for SOC deployment where false-positive volume
+drives analyst workload.
 
 \begin{table}[ht!]
 \centering
@@ -834,7 +840,7 @@ Search: grid search directly on 46M (grid search phase only, no GA).
 Baselines from Neto et al.~\cite{neto2023ciciot}.}
 \label{tab:ciot-46m}
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{llrrrrlrl}
+\begin{tabular}{llrrrrrrr}
 \toprule
 Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \multicolumn{1}{c}{LUTs} & \multicolumn{1}{c}{Latency} & \multicolumn{1}{c}{Power} \\
 \midrule
@@ -872,10 +878,11 @@ Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \mult
  & AdaBoost         & 95.63$^\dag$ & ---  & 99.59 & ${\sim}$10\,MB & --- & --- & --- \\
  & Random Forest    & 96.53$^\dag$ & ---  & 99.68 & ${\sim}$50\,MB & --- & --- & --- \\
 \bottomrule
-\multicolumn{9}{l}{\small Micro/Small/Peak: F1, train\_cal threshold; 5n$\times$4b = mean$\pm$std (10 seeds), rest = single seed.}\\
-\multicolumn{9}{l}{\small $^\ddagger$Best genome across all threshold modes. $^D$Dense O(1) lookup; Vivado on Zynq Z-7020. $^C$CPU (Apple M4 Max; production latency varies with hardware and load).}\\
-\multicolumn{9}{l}{\small $^\dag$Neto et al.\ use StandardScaler + a different 80/20 split; F1 averaging method unspecified in the original paper.}
 \end{tabular}}
+\\[0.5ex]
+\begin{minipage}{\textwidth}
+\footnotesize Micro/Small/Peak: F1, train\_cal threshold; 5n$\times$4b = mean$\pm$std (10 seeds), rest = single seed. \\ $^\ddagger$Best genome across all threshold modes. $^D$Dense $O(1)$ lookup; Vivado on Zynq Z-7020. $^C$CPU (Apple M4 Max; production latency varies with hardware and load). \\ $^\dag$Neto et al.\ use StandardScaler + a different 80/20 split; F1 averaging method unspecified in the original paper.
+\end{minipage}
 \end{table}
 
 \subsection{Phase Progression Analysis}
