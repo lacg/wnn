@@ -1207,7 +1207,7 @@ genomes (low-FPR, high-F1, high-accuracy variants) run concurrently
 and combine their outputs via weighted voting or learned gating.
 Because single-neuron lookup is $O(1)$ and sub-microsecond, both
 designs remain within the line-rate budget even with two or three
-genomes active simultaneously. A well-chosen pairing should
+genomes active simultaneously. A well-chosen pairing could
 achieve strictly better F1/FPR/Acc than any single genome in the
 population, amortizing per-packet cost across the deployment while
 preserving the high-F1 operating point for the flows that need it.
