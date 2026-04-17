@@ -62,8 +62,8 @@ IDS benchmarks (UNSW-NB15, CICIDS2017, CIC-IoT-2023) using temporal
 and/or random splits with a seven-mode threshold calibration protocol
 that exposes the sensitivity of binary classifiers to decision boundary
 selection. Across up to 112 independent runs per configuration, our
-approach achieves 87.22\% F1-Macro (F1) on UNSW-NB15 temporal with a deployable
-train-calibrated threshold (outperforming Random Forest by 0.81 points
+approach achieves 87.02\% F1-Macro (F1) on UNSW-NB15 temporal with a deployable
+train-calibrated threshold (outperforming Random Forest by 0.61 points
 at half the false-positive rate (FPR)) and 99.38\% F1 on CICIDS2017 random
 (0.20\% FPR).
 On the full 46.7M-record CIC-IoT-2023 benchmark, a 25\,KB dense
@@ -588,7 +588,7 @@ selection work together rather than at cross purposes.
 \subsection{Statistical Protocol}
 
 Each configuration is run as at least 100 independent flows with
-different seeds (104 for UNSW-NB15 temporal, 112 for CICIDS2017,
+different seeds (101 for UNSW-NB15 temporal, 112 for CICIDS2017,
 112 for CIC-IoT-2023). UNSW-NB15 random is reported with 46 runs
 completed at submission; the full 100-run batch will be included in
 the camera-ready version. We report mean $\pm$ standard deviation.
@@ -631,23 +631,23 @@ distribution of outcomes.
 \subsubsection{UNSW-NB15 Temporal Results.}
 \label{sec:results-unsw}
 
-Table~\ref{tab:unsw} reports results from 104 independent runs on the
+Table~\ref{tab:unsw} reports results from 101 independent runs on the
 UNSW-NB15 temporal split (8-bit thermometer, top-20 RF features,
 population size~50) using balanced fitness weights
 ($w_{F1}{=}0.35$, $w_{FPR}{=}0.35$, $w_{CE}{=}0.1$, $w_{Acc}{=}0.2$)
 and fitness-aligned threshold optimization
 (Section~\ref{sec:methodology}).
 
-The train-calibrated threshold achieves 87.22\% $\pm$ 2.81\%
-F1 with 13.37\% FPR, outperforming Random Forest
-(86.41\% F1, 25.22\% FPR) by 0.81\,pp F1 at roughly half the FPR.
-The validation threshold reaches 87.55\% $\pm$ 2.41\% F1 at
-5.29\% FPR, an F1 gap of only 0.33\,pp from train\_cal.
+The train-calibrated threshold achieves 87.02\% $\pm$ 2.58\%
+F1 with 13.76\% FPR, outperforming Random Forest
+(86.41\% F1, 25.22\% FPR) by 0.61\,pp F1 at half the FPR.
+The validation threshold reaches 87.34\% $\pm$ 2.12\% F1 at
+5.43\% FPR, an F1 gap of only 0.33\,pp from train\_cal.
 
 \begin{table}[ht!]
 \centering
-\caption{UNSW-NB15 temporal split (104 runs, 8-bit thermometer,
-balanced fitness weights). Neurons: 341 $\pm$ 129, bits: 32.
+\caption{UNSW-NB15 temporal split (101 runs, 8-bit thermometer,
+balanced fitness weights). Neurons: 333 $\pm$ 128, bits: 31.
 Full seven-mode breakdown in Appendix~\ref{app:thresholds}.}
 \label{tab:unsw}
 \resizebox{\textwidth}{!}{%
@@ -658,9 +658,9 @@ Full seven-mode breakdown in Appendix~\ref{app:thresholds}.}
 Best F1$^\ddagger$         & \textbf{90.52}   & 4.13   & \textbf{90.54} & 9{,}192 (17.3\%) & 170\,ns & 289\,mW \\
 Best FPR$^\ddagger$        & 71.80             & \textbf{0.00}  & 72.64  & 18{,}195 (34.2\%) & 197\,ns & 459\,mW \\
 \midrule
-Train-cal                  & 87.22$\pm$2.81 & 13.37$\pm$5.09 & 87.50$\pm$3.21 & --- & --- & --- \\
-Fixed 0.5                  & 84.28$\pm$7.35 & 17.50$\pm$15.20 & 85.10$\pm$6.54 & & & \\
-Val\_cal                   & 87.55$\pm$2.41 & 5.29$\pm$4.05  & 87.71$\pm$2.87 & & & \\
+Train-cal                  & 87.02$\pm$2.58 & 13.76$\pm$4.63 & 87.16$\pm$2.53 & --- & --- & --- \\
+Fixed 0.5                  & 83.99$\pm$7.26 & 17.99$\pm$15.15 & 84.68$\pm$6.17 & & & \\
+Val\_cal                   & 87.34$\pm$2.12 & 5.43$\pm$4.02  & 87.37$\pm$2.10 & & & \\
 \midrule
 Random Forest              & 86.41          & 25.22           & 86.94 & 71.9\,MB & 14.0\,$\mu$s$^C$ & --- \\
 XGBoost                    & 85.62          & 27.29           & 86.24 & 0.4\,MB & 0.4\,$\mu$s$^C$ & --- \\
@@ -981,7 +981,7 @@ by up to 42\% while maintaining or improving accuracy
 The gap between validation (val\_cal) and deployable (train\_cal) thresholds
 represents the central practical challenge for WNN-based IDS.  On
 UNSW-NB15 temporal, this gap is 0.33 percentage points in F1
-(87.55\% vs.\ 87.22\%), driven by distribution shift between the
+(87.34\% vs.\ 87.02\%), driven by distribution shift between the
 balanced validation set and the temporally distinct test set.  On
 CICIDS2017 random, the gap shrinks to 0.02 points (99.30\% vs.\ 99.28\%),
 confirming that random splits minimize calibration difficulty.
@@ -1230,8 +1230,8 @@ contributes three advances over prior WNN-based IDS:
 \item \textbf{Three-dataset evaluation with ML baselines.}  We evaluate on
   UNSW-NB15, CICIDS2017, and CIC-IoT-2023, comparing directly against
   Random Forest and XGBoost on identical splits.  On UNSW-NB15 (temporal,
-  104~runs), our WNN outperforms both baselines in F1 (87.22\% vs.\
-  86.41\%) at roughly half the FPR (13.37\% vs.\ 25.22\%), with the best
+  101~runs), our WNN outperforms both baselines in F1 (87.02\% vs.\
+  86.41\%) at half the FPR (13.76\% vs.\ 25.22\%), with the best
   genome reaching 90.52\% F1 at 4.13\% FPR.  On CICIDS2017 (random, 112~runs), our best genome reaches
   99.55\% F1, within 0.19\,pp of RF.  On CIC-IoT-2023 (random, 112~runs),
   the WNN trades 5.5\,pp F1 for \textbf{5.9$\times$ lower FPR}
@@ -1295,20 +1295,20 @@ criteria and the full seven-mode sweep.
 \begin{table}[ht!]
 \centering
 \small
-\caption{UNSW-NB15 temporal, best-fitness genome (104 runs, 8-bit thermometer). Grid Search: 356$\pm$133 neurons / 32$\pm$2 bits; GA Neurons: 342$\pm$128 neurons / 32$\pm$1 bits.}
+\caption{UNSW-NB15 temporal, best-fitness genome (101 runs, 8-bit thermometer). Grid Search: 348$\pm$136 neurons / 32$\pm$1 bits; GA Neurons: 335$\pm$129 neurons / 32$\pm$1 bits.}
 \label{tab:app-unsw-temp-bestfitness}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
 \toprule
 Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
 \midrule
-Train-cal          & 87.80$\pm$2.47 & 87.22$\pm$2.81 & 13.54$\pm$4.89 & 13.37$\pm$5.09 & 88.09$\pm$2.87 & 87.50$\pm$3.21 \\
-Fixed 0.5          & 85.02$\pm$3.74 & 84.28$\pm$7.35 & 18.89$\pm$16.22 & 17.50$\pm$15.20 & 85.73$\pm$3.62 & 85.10$\pm$6.54 \\
-Platt              & 83.98$\pm$5.12 & 83.82$\pm$4.88 & 22.05$\pm$16.03 & 22.65$\pm$15.33 & 84.85$\pm$4.86 & 84.69$\pm$4.73 \\
-Beta               & 83.61$\pm$5.36 & 82.42$\pm$5.72 & 20.58$\pm$15.63 & 27.78$\pm$17.21 & 84.43$\pm$5.22 & 83.64$\pm$5.18 \\
-Empirical          & 78.10$\pm$11.62 & 76.41$\pm$11.52 & 38.93$\pm$22.02 & 43.00$\pm$21.26 & 80.76$\pm$8.32 & 79.44$\pm$8.38 \\
-Empirical cumul.   & 82.61$\pm$5.19 & 82.37$\pm$6.34 & 26.32$\pm$17.58 & 28.53$\pm$17.33 & 83.74$\pm$4.84 & 83.66$\pm$5.57 \\
-Val\_cal           & 86.75$\pm$3.09 & 87.55$\pm$2.41 & 5.64$\pm$4.82 & 5.29$\pm$4.05 & 86.92$\pm$3.48 & 87.71$\pm$2.87 \\
+Train-cal          & 87.61$\pm$2.23 & 87.02$\pm$2.58 & 13.93$\pm$4.40 & 13.76$\pm$4.63 & 87.76$\pm$2.17 & 87.16$\pm$2.53 \\
+Fixed 0.5          & 84.76$\pm$3.46 & 83.99$\pm$7.26 & 19.42$\pm$16.16 & 17.99$\pm$15.15 & 85.34$\pm$2.83 & 84.68$\pm$6.17 \\
+Platt              & 83.68$\pm$4.87 & 83.50$\pm$4.58 & 22.68$\pm$15.82 & 23.31$\pm$15.07 & 84.43$\pm$4.25 & 84.26$\pm$4.07 \\
+Beta               & 83.29$\pm$5.10 & 82.07$\pm$5.42 & 21.18$\pm$15.47 & 28.59$\pm$16.80 & 84.00$\pm$4.62 & 83.18$\pm$4.50 \\
+Empirical          & 77.64$\pm$11.48 & 75.91$\pm$11.29 & 40.05$\pm$21.34 & 44.24$\pm$20.28 & 80.22$\pm$7.82 & 78.86$\pm$7.78 \\
+Empirical cumul.   & 82.26$\pm$4.84 & 82.02$\pm$6.09 & 27.08$\pm$17.25 & 29.36$\pm$16.89 & 83.29$\pm$4.10 & 83.20$\pm$4.96 \\
+Val\_cal           & 86.52$\pm$2.84 & 87.34$\pm$2.12 & 5.79$\pm$4.81 & 5.43$\pm$4.02 & 86.55$\pm$2.81 & 87.37$\pm$2.10 \\
 \bottomrule
 \end{tabular}}
 \end{table}
@@ -1316,20 +1316,20 @@ Val\_cal           & 86.75$\pm$3.09 & 87.55$\pm$2.41 & 5.64$\pm$4.82 & 5.29$\pm$
 \begin{table}[ht!]
 \centering
 \small
-\caption{UNSW-NB15 temporal, best-F1 genome (104 runs, 8-bit thermometer). Grid Search: 353$\pm$135 neurons / 32$\pm$2 bits; GA Neurons: 341$\pm$128 neurons / 32$\pm$1 bits.}
+\caption{UNSW-NB15 temporal, best-F1 genome (101 runs, 8-bit thermometer). Grid Search: 348$\pm$136 neurons / 32$\pm$1 bits; GA Neurons: 335$\pm$129 neurons / 32$\pm$1 bits.}
 \label{tab:app-unsw-temp-bestf1}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
 \toprule
 Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
 \midrule
-Train-cal          & 87.80$\pm$2.46 & 87.22$\pm$2.81 & 13.54$\pm$4.89 & 13.37$\pm$5.09 & 88.09$\pm$2.87 & 87.50$\pm$3.21 \\
-Fixed 0.5          & 85.02$\pm$3.74 & 84.28$\pm$7.35 & 18.89$\pm$16.22 & 17.50$\pm$15.20 & 85.73$\pm$3.61 & 85.10$\pm$6.54 \\
-Platt              & 83.98$\pm$5.11 & 83.82$\pm$4.88 & 22.05$\pm$16.03 & 22.65$\pm$15.33 & 84.85$\pm$4.86 & 84.69$\pm$4.73 \\
-Beta               & 83.60$\pm$5.36 & 82.42$\pm$5.72 & 20.58$\pm$15.63 & 27.78$\pm$17.21 & 84.43$\pm$5.21 & 83.64$\pm$5.18 \\
-Empirical          & 78.10$\pm$11.62 & 76.41$\pm$11.52 & 38.93$\pm$22.02 & 43.00$\pm$21.26 & 80.76$\pm$8.32 & 79.44$\pm$8.38 \\
-Empirical cumul.   & 82.61$\pm$5.18 & 82.37$\pm$6.34 & 26.32$\pm$17.58 & 28.53$\pm$17.33 & 83.74$\pm$4.84 & 83.66$\pm$5.57 \\
-Val\_cal           & 86.74$\pm$3.09 & 87.55$\pm$2.41 & 5.64$\pm$4.82 & 5.29$\pm$4.05 & 86.92$\pm$3.48 & 87.71$\pm$2.87 \\
+Train-cal          & 87.61$\pm$2.23 & 87.02$\pm$2.58 & 13.93$\pm$4.40 & 13.76$\pm$4.63 & 87.76$\pm$2.17 & 87.16$\pm$2.53 \\
+Fixed 0.5          & 84.76$\pm$3.46 & 83.99$\pm$7.26 & 19.42$\pm$16.16 & 17.99$\pm$15.15 & 85.34$\pm$2.83 & 84.68$\pm$6.17 \\
+Platt              & 83.68$\pm$4.87 & 83.50$\pm$4.58 & 22.68$\pm$15.82 & 23.31$\pm$15.07 & 84.43$\pm$4.25 & 84.26$\pm$4.07 \\
+Beta               & 83.29$\pm$5.10 & 82.07$\pm$5.42 & 21.18$\pm$15.47 & 28.59$\pm$16.80 & 84.00$\pm$4.62 & 83.18$\pm$4.50 \\
+Empirical          & 77.64$\pm$11.48 & 75.91$\pm$11.29 & 40.05$\pm$21.34 & 44.24$\pm$20.28 & 80.22$\pm$7.82 & 78.86$\pm$7.78 \\
+Empirical cumul.   & 82.26$\pm$4.84 & 82.02$\pm$6.09 & 27.08$\pm$17.25 & 29.36$\pm$16.89 & 83.29$\pm$4.10 & 83.20$\pm$4.96 \\
+Val\_cal           & 86.52$\pm$2.84 & 87.34$\pm$2.12 & 5.79$\pm$4.81 & 5.43$\pm$4.02 & 86.55$\pm$2.81 & 87.37$\pm$2.10 \\
 \bottomrule
 \end{tabular}}
 \end{table}
@@ -1337,20 +1337,20 @@ Val\_cal           & 86.74$\pm$3.09 & 87.55$\pm$2.41 & 5.64$\pm$4.82 & 5.29$\pm$
 \begin{table}[ht!]
 \centering
 \small
-\caption{UNSW-NB15 temporal, best-FPR genome (104 runs, 8-bit thermometer). Grid Search: 292$\pm$142 neurons / 31$\pm$4 bits; GA Neurons: 292$\pm$155 neurons / 29$\pm$5 bits.}
+\caption{UNSW-NB15 temporal, best-FPR genome (101 runs, 8-bit thermometer). Grid Search: 290$\pm$141 neurons / 31$\pm$3 bits; GA Neurons: 300$\pm$152 neurons / 30$\pm$4 bits.}
 \label{tab:app-unsw-temp-bestfpr}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
 \toprule
 Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
 \midrule
-Train-cal          & 87.15$\pm$3.21 & 86.11$\pm$6.97 & 13.62$\pm$5.41 & 14.48$\pm$7.88 & 87.44$\pm$3.54 & 86.60$\pm$5.94 \\
-Fixed 0.5          & 83.65$\pm$8.32 & 83.27$\pm$7.70 & 19.77$\pm$19.24 & 20.89$\pm$18.03 & 84.74$\pm$6.38 & 84.33$\pm$6.36 \\
-Platt              & 82.73$\pm$7.12 & 81.19$\pm$10.66 & 20.65$\pm$17.36 & 23.65$\pm$18.77 & 83.72$\pm$6.53 & 82.69$\pm$8.55 \\
-Beta               & 82.05$\pm$8.23 & 80.12$\pm$9.22 & 25.50$\pm$20.01 & 30.79$\pm$19.66 & 83.39$\pm$6.52 & 81.87$\pm$7.25 \\
-Empirical          & 75.55$\pm$13.95 & 74.65$\pm$13.36 & 42.99$\pm$24.81 & 44.61$\pm$23.49 & 79.07$\pm$9.69 & 78.27$\pm$9.63 \\
-Empirical cumul.   & 81.57$\pm$8.54 & 81.01$\pm$9.91 & 27.93$\pm$18.54 & 28.27$\pm$19.47 & 83.03$\pm$7.00 & 82.67$\pm$7.85 \\
-Val\_cal           & 85.85$\pm$8.36 & 85.83$\pm$5.02 & 5.50$\pm$4.97 & 6.45$\pm$5.78 & 86.29$\pm$6.84 & 86.06$\pm$5.04 \\
+Train-cal          & 86.93$\pm$3.01 & 85.87$\pm$6.93 & 14.01$\pm$4.98 & 14.89$\pm$7.61 & 87.09$\pm$2.94 & 86.23$\pm$5.61 \\
+Fixed 0.5          & 83.34$\pm$8.25 & 82.96$\pm$7.60 & 20.32$\pm$19.25 & 21.48$\pm$17.96 & 84.31$\pm$5.97 & 83.89$\pm$5.92 \\
+Platt              & 82.38$\pm$6.93 & 80.80$\pm$10.57 & 21.24$\pm$17.26 & 24.34$\pm$18.62 & 83.26$\pm$6.05 & 82.20$\pm$8.18 \\
+Beta               & 81.69$\pm$8.07 & 79.70$\pm$9.02 & 26.24$\pm$19.83 & 31.69$\pm$19.24 & 82.92$\pm$6.01 & 81.36$\pm$6.70 \\
+Empirical          & 75.02$\pm$13.81 & 74.09$\pm$13.15 & 44.23$\pm$24.08 & 45.90$\pm$22.58 & 78.48$\pm$9.19 & 77.65$\pm$9.07 \\
+Empirical cumul.   & 81.19$\pm$8.38 & 80.61$\pm$9.78 & 28.74$\pm$18.19 & 29.10$\pm$19.15 & 82.55$\pm$6.52 & 82.18$\pm$7.42 \\
+Val\_cal           & 85.60$\pm$8.35 & 85.58$\pm$4.87 & 5.65$\pm$4.96 & 6.63$\pm$5.77 & 85.90$\pm$6.56 & 85.67$\pm$4.57 \\
 \bottomrule
 \end{tabular}}
 \end{table}
@@ -1358,20 +1358,20 @@ Val\_cal           & 85.85$\pm$8.36 & 85.83$\pm$5.02 & 5.50$\pm$4.97 & 6.45$\pm$
 \begin{table}[ht!]
 \centering
 \small
-\caption{UNSW-NB15 temporal, best-Acc genome (104 runs, 8-bit thermometer). Grid Search: 358$\pm$131 neurons / 31$\pm$2 bits; GA Neurons: 328$\pm$124 neurons / 31$\pm$2 bits.}
+\caption{UNSW-NB15 temporal, best-Acc genome (101 runs, 8-bit thermometer). Grid Search: 350$\pm$132 neurons / 31$\pm$2 bits; GA Neurons: 325$\pm$128 neurons / 31$\pm$2 bits.}
 \label{tab:app-unsw-temp-bestacc}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
 \toprule
 Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
 \midrule
-Train-cal          & 87.67$\pm$2.59 & 87.07$\pm$3.07 & 13.67$\pm$4.98 & 13.94$\pm$5.93 & 87.95$\pm$2.98 & 87.37$\pm$3.39 \\
-Fixed 0.5          & 84.83$\pm$3.98 & 83.38$\pm$8.51 & 18.73$\pm$16.37 & 17.71$\pm$16.49 & 85.54$\pm$3.87 & 84.33$\pm$7.44 \\
-Platt              & 83.66$\pm$5.70 & 83.13$\pm$6.71 & 21.81$\pm$16.30 & 22.95$\pm$17.53 & 84.57$\pm$5.36 & 84.17$\pm$5.76 \\
-Beta               & 83.74$\pm$5.40 & 82.43$\pm$5.72 & 20.24$\pm$15.57 & 27.77$\pm$17.21 & 84.55$\pm$5.24 & 83.65$\pm$5.16 \\
-Empirical          & 77.55$\pm$12.10 & 75.43$\pm$12.88 & 39.91$\pm$22.32 & 43.50$\pm$22.18 & 80.38$\pm$8.53 & 78.76$\pm$9.27 \\
-Empirical cumul.   & 82.72$\pm$5.14 & 81.89$\pm$6.64 & 26.82$\pm$17.21 & 29.56$\pm$17.72 & 83.86$\pm$4.77 & 83.28$\pm$5.79 \\
-Val\_cal           & 86.70$\pm$3.38 & 87.41$\pm$2.47 & 5.97$\pm$5.71 & 5.30$\pm$4.13 & 86.88$\pm$3.72 & 87.58$\pm$2.93 \\
+Train-cal          & 87.47$\pm$2.35 & 86.86$\pm$2.85 & 14.06$\pm$4.49 & 14.34$\pm$5.53 & 87.62$\pm$2.29 & 87.02$\pm$2.74 \\
+Fixed 0.5          & 84.56$\pm$3.72 & 83.06$\pm$8.44 & 19.26$\pm$16.32 & 18.20$\pm$16.47 & 85.14$\pm$3.14 & 83.90$\pm$7.10 \\
+Platt              & 83.35$\pm$5.47 & 82.79$\pm$6.53 & 22.44$\pm$16.11 & 23.62$\pm$17.36 & 84.13$\pm$4.80 & 83.73$\pm$5.22 \\
+Beta               & 83.43$\pm$5.16 & 82.08$\pm$5.42 & 20.82$\pm$15.43 & 28.57$\pm$16.80 & 84.12$\pm$4.66 & 83.19$\pm$4.48 \\
+Empirical          & 77.07$\pm$11.95 & 74.89$\pm$12.68 & 41.06$\pm$21.60 & 44.76$\pm$21.24 & 79.83$\pm$8.02 & 78.17$\pm$8.72 \\
+Empirical cumul.   & 82.37$\pm$4.80 & 81.53$\pm$6.38 & 27.60$\pm$16.84 & 30.42$\pm$17.25 & 83.41$\pm$4.03 & 82.81$\pm$5.18 \\
+Val\_cal           & 86.47$\pm$3.15 & 87.21$\pm$2.20 & 6.13$\pm$5.71 & 5.45$\pm$4.10 & 86.51$\pm$3.10 & 87.24$\pm$2.17 \\
 \bottomrule
 \end{tabular}}
 \end{table}
@@ -1379,30 +1379,29 @@ Val\_cal           & 86.70$\pm$3.38 & 87.41$\pm$2.47 & 5.97$\pm$5.71 & 5.30$\pm$
 \begin{table}[ht!]
 \centering
 \small
-\caption{UNSW-NB15 temporal, best-CE genome (104 runs, 8-bit thermometer). Grid Search: 273$\pm$142 neurons / 32$\pm$0 bits; GA Neurons: 320$\pm$154 neurons / 32$\pm$0 bits.}
+\caption{UNSW-NB15 temporal, best-CE genome (101 runs, 8-bit thermometer). Grid Search: 271$\pm$141 neurons / 32$\pm$0 bits; GA Neurons: 311$\pm$156 neurons / 32$\pm$0 bits.}
 \label{tab:app-unsw-temp-bestce}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
 \toprule
 Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
 \midrule
-Train-cal          & 87.64$\pm$2.33 & 87.77$\pm$2.13 & 13.10$\pm$4.14 & 12.96$\pm$3.81 & 87.91$\pm$2.80 & 88.04$\pm$2.63 \\
-Fixed 0.5          & 84.93$\pm$3.81 & 84.82$\pm$3.91 & 19.68$\pm$16.03 & 20.09$\pm$16.45 & 85.66$\pm$3.68 & 85.58$\pm$3.74 \\
-Platt              & 83.89$\pm$4.55 & 83.94$\pm$5.53 & 22.53$\pm$16.53 & 18.76$\pm$15.96 & 84.77$\pm$4.34 & 84.71$\pm$5.35 \\
-Beta               & 82.98$\pm$5.17 & 82.61$\pm$5.37 & 24.20$\pm$16.65 & 25.80$\pm$16.03 & 83.99$\pm$4.94 & 83.68$\pm$5.07 \\
-Empirical          & 78.82$\pm$10.61 & 77.78$\pm$10.53 & 38.10$\pm$21.01 & 40.44$\pm$20.71 & 81.26$\pm$7.85 & 80.44$\pm$7.82 \\
-Empirical cumul.   & 83.36$\pm$4.98 & 81.56$\pm$6.00 & 26.42$\pm$16.16 & 29.35$\pm$17.76 & 84.43$\pm$4.54 & 82.92$\pm$5.44 \\
-Val\_cal           & 87.09$\pm$3.30 & 86.59$\pm$3.23 & 4.83$\pm$3.55 & 5.18$\pm$4.34 & 87.25$\pm$3.64 & 86.76$\pm$3.59 \\
+Train-cal          & 87.44$\pm$2.06 & 87.58$\pm$1.83 & 13.48$\pm$3.58 & 13.33$\pm$3.18 & 87.57$\pm$2.04 & 87.70$\pm$1.81 \\
+Fixed 0.5          & 84.66$\pm$3.53 & 84.55$\pm$3.64 & 20.24$\pm$15.93 & 20.65$\pm$16.35 & 85.26$\pm$2.90 & 85.19$\pm$2.98 \\
+Platt              & 83.58$\pm$4.23 & 83.63$\pm$5.31 & 23.19$\pm$16.33 & 19.30$\pm$15.88 & 84.35$\pm$3.60 & 84.28$\pm$4.80 \\
+Beta               & 82.66$\pm$4.89 & 82.26$\pm$5.04 & 24.90$\pm$16.38 & 26.55$\pm$15.64 & 83.55$\pm$4.25 & 83.22$\pm$4.37 \\
+Empirical          & 78.38$\pm$10.45 & 77.32$\pm$10.32 & 39.20$\pm$20.31 & 41.61$\pm$19.86 & 80.74$\pm$7.33 & 79.89$\pm$7.24 \\
+Empirical cumul.   & 83.04$\pm$4.68 & 81.18$\pm$5.67 & 27.19$\pm$15.75 & 30.21$\pm$17.30 & 84.00$\pm$3.81 & 82.43$\pm$4.73 \\
+Val\_cal           & 86.87$\pm$3.09 & 86.36$\pm$2.97 & 4.96$\pm$3.52 & 5.32$\pm$4.33 & 86.90$\pm$3.04 & 86.39$\pm$2.92 \\
 \bottomrule
 \end{tabular}}
 \end{table}
 
-% === UNSW-NB15 random (49 completed flows) ===
 
 \begin{table}[ht!]
 \centering
 \small
-\caption{UNSW-NB15 random, best-fitness genome (49 runs, 16-bit thermometer). Grid Search: 360$\pm$123 neurons / 33$\pm$2 bits; GA Neurons: 326$\pm$131 neurons / 32$\pm$2 bits.}
+\caption{UNSW-NB15 random, best-fitness genome (49 runs, 16-bit thermometer). Grid Search: 360$\pm$124 neurons / 33$\pm$2 bits; GA Neurons: 326$\pm$132 neurons / 32$\pm$2 bits.}
 \label{tab:app-unsw-rand-bestfitness}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
@@ -1423,7 +1422,7 @@ Val\_cal           & 94.45$\pm$0.12 & 94.49$\pm$0.15 & 0.47$\pm$0.05 & 0.48$\pm$
 \begin{table}[ht!]
 \centering
 \small
-\caption{UNSW-NB15 random, best-F1 genome (49 runs, 16-bit thermometer). Grid Search: 374$\pm$118 neurons / 33$\pm$2 bits; GA Neurons: 320$\pm$133 neurons / 32$\pm$2 bits.}
+\caption{UNSW-NB15 random, best-F1 genome (49 runs, 16-bit thermometer). Grid Search: 374$\pm$119 neurons / 33$\pm$2 bits; GA Neurons: 320$\pm$134 neurons / 32$\pm$2 bits.}
 \label{tab:app-unsw-rand-bestf1}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
@@ -1444,7 +1443,7 @@ Val\_cal           & 94.46$\pm$0.12 & 94.49$\pm$0.14 & 0.47$\pm$0.05 & 0.48$\pm$
 \begin{table}[ht!]
 \centering
 \small
-\caption{UNSW-NB15 random, best-FPR genome (49 runs, 16-bit thermometer). Grid Search: 376$\pm$117 neurons / 31$\pm$3 bits; GA Neurons: 330$\pm$145 neurons / 32$\pm$1 bits.}
+\caption{UNSW-NB15 random, best-FPR genome (49 runs, 16-bit thermometer). Grid Search: 374$\pm$119 neurons / 31$\pm$3 bits; GA Neurons: 330$\pm$146 neurons / 32$\pm$1 bits.}
 \label{tab:app-unsw-rand-bestfpr}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
@@ -1465,7 +1464,7 @@ Val\_cal           & 94.36$\pm$0.16 & 94.47$\pm$0.15 & 0.51$\pm$0.08 & 0.48$\pm$
 \begin{table}[ht!]
 \centering
 \small
-\caption{UNSW-NB15 random, best-Acc genome (49 runs, 16-bit thermometer). Grid Search: 356$\pm$122 neurons / 33$\pm$2 bits; GA Neurons: 328$\pm$126 neurons / 32$\pm$2 bits.}
+\caption{UNSW-NB15 random, best-Acc genome (49 runs, 16-bit thermometer). Grid Search: 356$\pm$123 neurons / 33$\pm$2 bits; GA Neurons: 328$\pm$127 neurons / 32$\pm$2 bits.}
 \label{tab:app-unsw-rand-bestacc}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
@@ -1486,7 +1485,7 @@ Val\_cal           & 94.45$\pm$0.13 & 94.46$\pm$0.16 & 0.48$\pm$0.06 & 0.47$\pm$
 \begin{table}[ht!]
 \centering
 \small
-\caption{UNSW-NB15 random, best-CE genome (49 runs, 16-bit thermometer). Grid Search: 358$\pm$139 neurons / 33$\pm$2 bits; GA Neurons: 335$\pm$141 neurons / 32$\pm$2 bits.}
+\caption{UNSW-NB15 random, best-CE genome (49 runs, 16-bit thermometer). Grid Search: 358$\pm$140 neurons / 33$\pm$2 bits; GA Neurons: 335$\pm$142 neurons / 32$\pm$2 bits.}
 \label{tab:app-unsw-rand-bestce}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
@@ -1504,7 +1503,6 @@ Val\_cal           & 94.42$\pm$0.12 & 94.49$\pm$0.14 & 0.48$\pm$0.06 & 0.47$\pm$
 \end{tabular}}
 \end{table}
 
-% === CICIDS2017 random (112 completed flows) ===
 
 \begin{table}[ht!]
 \centering
@@ -1530,7 +1528,7 @@ Val\_cal           & 99.35$\pm$0.09 & 99.40$\pm$0.06 & 0.21$\pm$0.07 & 0.20$\pm$
 \begin{table}[ht!]
 \centering
 \small
-\caption{CICIDS2017 random, best-F1 genome (112 runs, 16-bit thermometer). Grid Search: 337$\pm$117 neurons / 34$\pm$1 bits; GA Neurons: 197$\pm$145 neurons / 32$\pm$1 bits.}
+\caption{CICIDS2017 random, best-F1 genome (112 runs, 16-bit thermometer). Grid Search: 337$\pm$117 neurons / 34$\pm$1 bits; GA Neurons: 197$\pm$146 neurons / 32$\pm$1 bits.}
 \label{tab:app-cicids-bestf1}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
@@ -1551,7 +1549,7 @@ Val\_cal           & 99.34$\pm$0.09 & 99.40$\pm$0.06 & 0.22$\pm$0.08 & 0.20$\pm$
 \begin{table}[ht!]
 \centering
 \small
-\caption{CICIDS2017 random, best-FPR genome (112 runs, 16-bit thermometer). Grid Search: 346$\pm$122 neurons / 33$\pm$1 bits; GA Neurons: 228$\pm$166 neurons / 32$\pm$1 bits.}
+\caption{CICIDS2017 random, best-FPR genome (112 runs, 16-bit thermometer). Grid Search: 346$\pm$123 neurons / 33$\pm$1 bits; GA Neurons: 228$\pm$167 neurons / 32$\pm$1 bits.}
 \label{tab:app-cicids-bestfpr}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
@@ -1593,7 +1591,7 @@ Val\_cal           & 99.34$\pm$0.10 & 99.40$\pm$0.06 & 0.22$\pm$0.08 & 0.20$\pm$
 \begin{table}[ht!]
 \centering
 \small
-\caption{CICIDS2017 random, best-CE genome (112 runs, 16-bit thermometer). Grid Search: 276$\pm$142 neurons / 34$\pm$1 bits; GA Neurons: 181$\pm$138 neurons / 32$\pm$1 bits.}
+\caption{CICIDS2017 random, best-CE genome (112 runs, 16-bit thermometer). Grid Search: 276$\pm$142 neurons / 34$\pm$1 bits; GA Neurons: 181$\pm$139 neurons / 32$\pm$1 bits.}
 \label{tab:app-cicids-bestce}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
@@ -1611,12 +1609,11 @@ Val\_cal           & 99.30$\pm$0.17 & 99.38$\pm$0.09 & 0.23$\pm$0.10 & 0.21$\pm$
 \end{tabular}}
 \end{table}
 
-% === CIC-IoT-2023 random (1.3M) (112 completed flows) ===
 
 \begin{table}[ht!]
 \centering
 \small
-\caption{CIC-IoT-2023 random (1.3M), best-fitness genome (112 runs, 8-bit thermometer). Grid Search: 395$\pm$95 neurons / 34$\pm$1 bits; GA Neurons: 314$\pm$123 neurons / 29$\pm$7 bits.}
+\caption{CIC-IoT-2023 random (1.3M), best-fitness genome (112 runs, 8-bit thermometer). Grid Search: 395$\pm$96 neurons / 34$\pm$1 bits; GA Neurons: 317$\pm$123 neurons / 30$\pm$6 bits.}
 \label{tab:app-ciot-bestfitness}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
@@ -1637,7 +1634,7 @@ Val\_cal           & 79.31$\pm$0.39 & 79.93$\pm$0.47 & 4.09$\pm$1.59 & 3.95$\pm$
 \begin{table}[ht!]
 \centering
 \small
-\caption{CIC-IoT-2023 random (1.3M), best-F1 genome (112 runs, 8-bit thermometer). Grid Search: 397$\pm$96 neurons / 34$\pm$1 bits; GA Neurons: 313$\pm$123 neurons / 29$\pm$7 bits.}
+\caption{CIC-IoT-2023 random (1.3M), best-F1 genome (112 runs, 8-bit thermometer). Grid Search: 397$\pm$96 neurons / 34$\pm$1 bits; GA Neurons: 317$\pm$123 neurons / 30$\pm$6 bits.}
 \label{tab:app-ciot-bestf1}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
@@ -1658,7 +1655,7 @@ Val\_cal           & 79.31$\pm$0.39 & 79.93$\pm$0.47 & 4.08$\pm$1.59 & 3.95$\pm$
 \begin{table}[ht!]
 \centering
 \small
-\caption{CIC-IoT-2023 random (1.3M), best-FPR genome (112 runs, 8-bit thermometer). Grid Search: 125$\pm$157 neurons / 16$\pm$10 bits; GA Neurons: 305$\pm$165 neurons / 24$\pm$10 bits.}
+\caption{CIC-IoT-2023 random (1.3M), best-FPR genome (112 runs, 8-bit thermometer). Grid Search: 148$\pm$165 neurons / 14$\pm$10 bits; GA Neurons: 293$\pm$169 neurons / 22$\pm$11 bits.}
 \label{tab:app-ciot-bestfpr}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
@@ -1679,7 +1676,7 @@ Val\_cal           & 74.51$\pm$1.54 & 77.61$\pm$2.27 & 3.38$\pm$2.25 & 3.63$\pm$
 \begin{table}[ht!]
 \centering
 \small
-\caption{CIC-IoT-2023 random (1.3M), best-Acc genome (112 runs, 8-bit thermometer). Grid Search: 391$\pm$97 neurons / 34$\pm$1 bits; GA Neurons: 335$\pm$122 neurons / 30$\pm$6 bits.}
+\caption{CIC-IoT-2023 random (1.3M), best-Acc genome (112 runs, 8-bit thermometer). Grid Search: 392$\pm$98 neurons / 34$\pm$1 bits; GA Neurons: 338$\pm$122 neurons / 30$\pm$6 bits.}
 \label{tab:app-ciot-bestacc}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
@@ -1700,7 +1697,7 @@ Val\_cal           & 79.31$\pm$0.39 & 79.78$\pm$0.54 & 4.08$\pm$1.59 & 3.90$\pm$
 \begin{table}[ht!]
 \centering
 \small
-\caption{CIC-IoT-2023 random (1.3M), best-CE genome (112 runs, 8-bit thermometer). Grid Search: 381$\pm$113 neurons / 33$\pm$1 bits; GA Neurons: 322$\pm$128 neurons / 28$\pm$8 bits.}
+\caption{CIC-IoT-2023 random (1.3M), best-CE genome (112 runs, 8-bit thermometer). Grid Search: 383$\pm$114 neurons / 33$\pm$1 bits; GA Neurons: 324$\pm$129 neurons / 28$\pm$8 bits.}
 \label{tab:app-ciot-bestce}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
@@ -1717,5 +1714,6 @@ Val\_cal           & 79.19$\pm$0.44 & 79.78$\pm$0.59 & 4.02$\pm$1.61 & 3.83$\pm$
 \bottomrule
 \end{tabular}}
 \end{table}
+
 
 \end{document}
