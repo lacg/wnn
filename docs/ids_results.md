@@ -250,12 +250,12 @@
     empirical_cumulative |83.04±4.68 81.18±5.67 | 27.19±15.75  30.21±17.30 |84.00±3.81 82.43±4.73
     val_cal              |86.87±3.09 86.36±2.97 |  4.96±3.52   5.32±4.33 |86.90±3.04 86.39±2.92
 
-# UNSW-NB15 RANDOM 16b — Results (46 runs) (Generated 16/04/2026 22:30)
+# UNSW-NB15 RANDOM 16b — Results (50 runs) (Generated 16/04/2026 22:30)
 
-    Completed : 46/100  |  🔄 RUNNING
+    Completed : 50/100  |  🔄 RUNNING
     Avg/run   : 78.6 min
     Latest    : 16/04/2026 17:13 ET
-    ETA       : 19/04/2026 15:57 ET  (54 remaining × 78.6 min ≈ 71 hours)
+    ETA       : 19/04/2026 15:57 ET  (50 remaining × 78.6 min ≈ 71 hours)
 
 ### Best individual genomes
 
@@ -266,7 +266,7 @@
     Best FPR (F1>80%)        |  93.72% |   0.23% |  99.13% |  GS best_fpr      empirical_cumulative |  500
     Best Acc (any FPR)       |  94.86% |   0.52% |  99.23% |  GA best_f1       val_cal         |  436
 
-## best_fitness  (GS: 46 runs | GA: 46 runs)
+## best_fitness  (GS: 50 runs | GA: 50 runs)
     Grid Search : 372±117 neurons | 32 bits
     GA Neurons  : 325±133 neurons | 32 bits
 
@@ -280,7 +280,7 @@
     empirical_cumulative |94.33±0.27 94.41±0.18 | 0.52±0.12  0.50±0.10 |99.15±0.03 99.17±0.03
     val_cal              |94.45±0.12 94.49±0.15 | 0.47±0.05  0.48±0.05 |99.18±0.02 99.18±0.02
 
-## best_f1  (GS: 46 runs | GA: 46 runs)
+## best_f1  (GS: 50 runs | GA: 50 runs)
     Grid Search : 385±109 neurons | 32 bits
     GA Neurons  : 319±136 neurons | 32 bits
 
@@ -294,7 +294,7 @@
     empirical_cumulative |94.33±0.27 94.41±0.17 | 0.51±0.10  0.50±0.10 |99.15±0.03 99.17±0.03
     val_cal              |94.46±0.12 94.49±0.14 | 0.47±0.05  0.48±0.05 |99.18±0.02 99.18±0.02
 
-## best_fpr  (GS: 46 runs | GA: 46 runs)
+## best_fpr  (GS: 50 runs | GA: 50 runs)
     Grid Search : 380±109 neurons | 32 bits
     GA Neurons  : 328±147 neurons | 32 bits
 
@@ -308,7 +308,7 @@
     empirical_cumulative |94.31±0.19 94.35±0.26 | 0.50±0.11  0.51±0.08 |99.15±0.03 99.16±0.03
     val_cal              |94.34±0.15 94.48±0.15 | 0.51±0.08  0.48±0.05 |99.16±0.03 99.18±0.02
 
-## best_acc  (GS: 46 runs | GA: 46 runs)
+## best_acc  (GS: 50 runs | GA: 50 runs)
     Grid Search : 367±116 neurons | 32 bits
     GA Neurons  : 327±128 neurons | 32 bits
 
@@ -322,7 +322,7 @@
     empirical_cumulative |94.32±0.26 94.36±0.34 | 0.52±0.12  0.50±0.11 |99.15±0.03 99.16±0.04
     val_cal              |94.46±0.13 94.46±0.16 | 0.48±0.06  0.48±0.06 |99.18±0.02 99.18±0.02
 
-## best_ce  (GS: 46 runs | GA: 46 runs)
+## best_ce  (GS: 50 runs | GA: 50 runs)
     Grid Search : 372±131 neurons | 32 bits
     GA Neurons  : 335±144 neurons | 32 bits
 

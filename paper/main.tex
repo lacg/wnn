@@ -589,7 +589,7 @@ selection work together rather than at cross purposes.
 
 Each configuration is run as at least 100 independent flows with
 different seeds (101 for UNSW-NB15 temporal, 112 for CICIDS2017,
-112 for CIC-IoT-2023). UNSW-NB15 random is reported with 46 runs
+112 for CIC-IoT-2023). UNSW-NB15 random is reported with 50 runs
 completed at submission; the full 100-run batch will be included in
 the camera-ready version. We report mean $\pm$ standard deviation.
 With $n \geq 100$ and typical $\sigma \approx 2\%$, the 95\% confidence
@@ -678,13 +678,13 @@ XGBoost                    & 85.62          & 27.29           & 86.24 & 0.4\,MB 
 Table~\ref{tab:unsw-random} reports preliminary results on the
 UNSW-NB15 random 80/20 split (16-bit thermometer, top-20 RF features,
 balanced fitness weights). Full 100-run results will be included in
-the camera-ready version; 46 runs were completed at time of
-submission.  The train-calibrated threshold achieves 94.40\% $\pm$ 0.15\%
-F1 with 0.45\% FPR, within 1.61\,pp of Random Forest (96.01\%).
+the camera-ready version; 50 runs were completed at time of
+submission.  The train-calibrated threshold achieves 94.41\% $\pm$ 0.15\%
+F1 with 0.45\% FPR, within 1.60\,pp of Random Forest (96.01\%).
 
 \begin{table}[ht!]
 \centering
-\caption{UNSW-NB15 random split (46 runs at submission, 16-bit
+\caption{UNSW-NB15 random split (50 runs at submission, 16-bit
 thermometer, balanced fitness weights). Camera-ready will report
 full 100-run batch.}
 \label{tab:unsw-random}
@@ -696,7 +696,7 @@ full 100-run batch.}
 Best overall F1$^\ddagger$         & \textbf{94.86}   & 0.52              & \textbf{99.23} & 7{,}525 (14.1\%) & 224\,ns & 266\,mW \\
 Best overall FPR$^\ddagger$        & 93.72             & \textbf{0.23}     & 99.13          & 50{,}763 (95.4\%) & 260\,ns & 1.16\,W \\
 \midrule
-Train-cal                  & 94.40$\pm$0.15 & 0.45$\pm$0.06   & 99.18$\pm$0.02 & --- & --- & --- \\
+Train-cal                  & 94.41$\pm$0.15 & 0.45$\pm$0.06   & 99.18$\pm$0.02 & --- & --- & --- \\
 Fixed 0.5                  & 93.77$\pm$0.10 & 1.02$\pm$0.04   & 98.98$\pm$0.02 & & & \\
 Val\_cal                   & 94.49$\pm$0.15 & 0.48$\pm$0.05   & 99.18$\pm$0.02 & & & \\
 \midrule
@@ -1401,7 +1401,7 @@ Val\_cal           & 86.87$\pm$3.09 & 86.36$\pm$2.97 & 4.96$\pm$3.52 & 5.32$\pm$
 \begin{table}[ht!]
 \centering
 \small
-\caption{UNSW-NB15 random, best-fitness genome (49 runs, 16-bit thermometer). Grid Search: 360$\pm$124 neurons / 33$\pm$2 bits; GA Neurons: 326$\pm$132 neurons / 32$\pm$2 bits.}
+\caption{UNSW-NB15 random, best-fitness genome (50 runs, 16-bit thermometer). Grid Search: 360$\pm$124 neurons / 33$\pm$2 bits; GA Neurons: 326$\pm$132 neurons / 32$\pm$2 bits.}
 \label{tab:app-unsw-rand-bestfitness}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
@@ -1422,7 +1422,7 @@ Val\_cal           & 94.45$\pm$0.12 & 94.49$\pm$0.15 & 0.47$\pm$0.05 & 0.48$\pm$
 \begin{table}[ht!]
 \centering
 \small
-\caption{UNSW-NB15 random, best-F1 genome (49 runs, 16-bit thermometer). Grid Search: 374$\pm$119 neurons / 33$\pm$2 bits; GA Neurons: 320$\pm$134 neurons / 32$\pm$2 bits.}
+\caption{UNSW-NB15 random, best-F1 genome (50 runs, 16-bit thermometer). Grid Search: 374$\pm$119 neurons / 33$\pm$2 bits; GA Neurons: 320$\pm$134 neurons / 32$\pm$2 bits.}
 \label{tab:app-unsw-rand-bestf1}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
@@ -1443,7 +1443,7 @@ Val\_cal           & 94.46$\pm$0.12 & 94.49$\pm$0.14 & 0.47$\pm$0.05 & 0.48$\pm$
 \begin{table}[ht!]
 \centering
 \small
-\caption{UNSW-NB15 random, best-FPR genome (49 runs, 16-bit thermometer). Grid Search: 374$\pm$119 neurons / 31$\pm$3 bits; GA Neurons: 330$\pm$146 neurons / 32$\pm$1 bits.}
+\caption{UNSW-NB15 random, best-FPR genome (50 runs, 16-bit thermometer). Grid Search: 374$\pm$119 neurons / 31$\pm$3 bits; GA Neurons: 330$\pm$146 neurons / 32$\pm$1 bits.}
 \label{tab:app-unsw-rand-bestfpr}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
@@ -1464,7 +1464,7 @@ Val\_cal           & 94.36$\pm$0.16 & 94.47$\pm$0.15 & 0.51$\pm$0.08 & 0.48$\pm$
 \begin{table}[ht!]
 \centering
 \small
-\caption{UNSW-NB15 random, best-Acc genome (49 runs, 16-bit thermometer). Grid Search: 356$\pm$123 neurons / 33$\pm$2 bits; GA Neurons: 328$\pm$127 neurons / 32$\pm$2 bits.}
+\caption{UNSW-NB15 random, best-Acc genome (50 runs, 16-bit thermometer). Grid Search: 356$\pm$123 neurons / 33$\pm$2 bits; GA Neurons: 328$\pm$127 neurons / 32$\pm$2 bits.}
 \label{tab:app-unsw-rand-bestacc}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
@@ -1485,7 +1485,7 @@ Val\_cal           & 94.45$\pm$0.13 & 94.46$\pm$0.16 & 0.48$\pm$0.06 & 0.47$\pm$
 \begin{table}[ht!]
 \centering
 \small
-\caption{UNSW-NB15 random, best-CE genome (49 runs, 16-bit thermometer). Grid Search: 358$\pm$140 neurons / 33$\pm$2 bits; GA Neurons: 335$\pm$142 neurons / 32$\pm$2 bits.}
+\caption{UNSW-NB15 random, best-CE genome (50 runs, 16-bit thermometer). Grid Search: 358$\pm$140 neurons / 33$\pm$2 bits; GA Neurons: 335$\pm$142 neurons / 32$\pm$2 bits.}
 \label{tab:app-unsw-rand-bestce}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
