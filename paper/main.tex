@@ -62,10 +62,10 @@ IDS benchmarks (UNSW-NB15, CICIDS2017, CIC-IoT-2023) using temporal
 and/or random splits with a seven-mode threshold calibration protocol
 that exposes the sensitivity of binary classifiers to decision boundary
 selection. Across up to 112 independent runs per configuration, our
-approach achieves 87.02\% F1-Macro (F1) on UNSW-NB15 temporal with a deployable
-train-calibrated threshold (outperforming Random Forest by 0.61 points
-at half the false-positive rate (FPR)) and 99.28\% F1 on CICIDS2017 random
-(0.24\% FPR).
+approach achieves 87.22\% F1-Macro (F1) on UNSW-NB15 temporal with a deployable
+train-calibrated threshold (outperforming Random Forest by 0.81 points
+at half the false-positive rate (FPR)) and 99.38\% F1 on CICIDS2017 random
+(0.20\% FPR).
 On the full 46.7M-record CIC-IoT-2023 benchmark, a 25\,KB dense
 configuration achieves 83.13\% F1 at 2.06\% FPR in just 304 logic
 elements, while sparse configurations reach 84.79\% F1 at 1.59\% FPR.
@@ -588,7 +588,7 @@ selection work together rather than at cross purposes.
 \subsection{Statistical Protocol}
 
 Each configuration is run as at least 100 independent flows with
-different seeds (101 for UNSW-NB15 temporal, 112 for CICIDS2017,
+different seeds (104 for UNSW-NB15 temporal, 112 for CICIDS2017,
 112 for CIC-IoT-2023). UNSW-NB15 random is reported with 46 runs
 completed at submission; the full 100-run batch will be included in
 the camera-ready version. We report mean $\pm$ standard deviation.
@@ -631,23 +631,23 @@ distribution of outcomes.
 \subsubsection{UNSW-NB15 Temporal Results.}
 \label{sec:results-unsw}
 
-Table~\ref{tab:unsw} reports results from 101 independent runs on the
+Table~\ref{tab:unsw} reports results from 104 independent runs on the
 UNSW-NB15 temporal split (8-bit thermometer, top-20 RF features,
 population size~50) using balanced fitness weights
 ($w_{F1}{=}0.35$, $w_{FPR}{=}0.35$, $w_{CE}{=}0.1$, $w_{Acc}{=}0.2$)
 and fitness-aligned threshold optimization
 (Section~\ref{sec:methodology}).
 
-The train-calibrated threshold achieves 87.02\% $\pm$ 2.58\%
-F1-macro with 13.76\% FPR, outperforming Random Forest
-(86.41\% F1, 25.22\% FPR) by 0.61\,pp F1 at half the FPR.
-The validation threshold reaches 87.34\% $\pm$ 2.12\% F1 at
-5.43\% FPR, an F1 gap of only 0.33\,pp from train\_cal.
+The train-calibrated threshold achieves 87.22\% $\pm$ 2.81\%
+F1 with 13.37\% FPR, outperforming Random Forest
+(86.41\% F1, 25.22\% FPR) by 0.81\,pp F1 at roughly half the FPR.
+The validation threshold reaches 87.55\% $\pm$ 2.41\% F1 at
+5.29\% FPR, an F1 gap of only 0.33\,pp from train\_cal.
 
 \begin{table}[ht!]
 \centering
-\caption{UNSW-NB15 temporal split (101 runs, 8-bit thermometer,
-balanced fitness weights). Neurons: 333 $\pm$ 128, bits: 31.
+\caption{UNSW-NB15 temporal split (104 runs, 8-bit thermometer,
+balanced fitness weights). Neurons: 341 $\pm$ 129, bits: 32.
 Full seven-mode breakdown in Appendix~\ref{app:thresholds}.}
 \label{tab:unsw}
 \resizebox{\textwidth}{!}{%
@@ -658,9 +658,9 @@ Full seven-mode breakdown in Appendix~\ref{app:thresholds}.}
 Best F1$^\ddagger$         & \textbf{90.52}   & 4.13   & \textbf{90.54} & 9{,}192 (17.3\%) & 170\,ns & 289\,mW \\
 Best FPR$^\ddagger$        & 71.80             & \textbf{0.00}  & 72.64  & 18{,}195 (34.2\%) & 197\,ns & 459\,mW \\
 \midrule
-Train-cal                  & 87.02$\pm$2.58 & 13.76$\pm$4.63 & 87.16$\pm$2.53 & --- & --- & --- \\
-Fixed 0.5                  & 83.99$\pm$7.26 & 17.99$\pm$15.15 & 84.68$\pm$6.17 & & & \\
-Val\_cal                   & 87.34$\pm$2.12 & 5.43$\pm$4.02  & 87.37$\pm$2.10 & & & \\
+Train-cal                  & 87.22$\pm$2.81 & 13.37$\pm$5.09 & 87.50$\pm$3.21 & --- & --- & --- \\
+Fixed 0.5                  & 84.28$\pm$7.35 & 17.50$\pm$15.20 & 85.10$\pm$6.54 & & & \\
+Val\_cal                   & 87.55$\pm$2.41 & 5.29$\pm$4.05  & 87.71$\pm$2.87 & & & \\
 \midrule
 Random Forest              & 86.41          & 25.22           & 86.94 & 71.9\,MB & 14.0\,$\mu$s$^C$ & --- \\
 XGBoost                    & 85.62          & 27.29           & 86.24 & 0.4\,MB & 0.4\,$\mu$s$^C$ & --- \\
@@ -680,7 +680,7 @@ UNSW-NB15 random 80/20 split (16-bit thermometer, top-20 RF features,
 balanced fitness weights). Full 100-run results will be included in
 the camera-ready version; 46 runs were completed at time of
 submission.  The train-calibrated threshold achieves 94.40\% $\pm$ 0.15\%
-F1-macro with 0.45\% FPR, within 1.61\,pp of Random Forest (96.01\%).
+F1 with 0.45\% FPR, within 1.61\,pp of Random Forest (96.01\%).
 
 \begin{table}[ht!]
 \centering
@@ -729,9 +729,9 @@ Performance is higher than UNSW-NB15 temporal, likely because
 random splits allow similar network sessions to appear in both
 training and test sets, and the identical class distributions
 eliminate the temporal distribution shift that makes the standard
-partition more challenging.  The validation threshold achieves 99.30\%
-$\pm$ 0.48\% F1-macro with 0.22\% FPR.  The train-calibrated threshold
-nearly matches (99.28\% F1, 0.24\% FPR), confirming minimal calibration
+partition more challenging.  The validation threshold achieves 99.40\%
+$\pm$ 0.06\% F1 with 0.20\% FPR.  The train-calibrated threshold
+nearly matches (99.38\% F1, 0.20\% FPR), confirming minimal calibration
 difficulty on random splits.  Among individual genomes, the best F1
 achieves 99.55\% F1 / 0.11\% FPR / 99.71\% Acc, within 0.19\,pp of
 Random Forest (Table~\ref{tab:cicids}).
@@ -739,7 +739,7 @@ Random Forest (Table~\ref{tab:cicids}).
 \begin{table}[ht!]
 \centering
 \caption{CICIDS2017 random split (112 runs, 16-bit thermometer).
-Neurons: 198 $\pm$ 146, bits: 32.
+Neurons: 200 $\pm$ 148, bits: 32.
 Full seven-mode breakdown in Appendix~\ref{app:thresholds}.}
 \label{tab:cicids}
 \resizebox{\textwidth}{!}{%
@@ -750,9 +750,9 @@ Full seven-mode breakdown in Appendix~\ref{app:thresholds}.}
 Best F1$^\ddagger$         & \textbf{99.55}   & 0.11              & \textbf{99.71} & 3{,}112 (5.9\%) & 154\,ns & 170\,mW \\
 Best FPR$^\ddagger$        & 98.58             & \textbf{0.05}     & 99.12          & 14{,}633 (27.5\%) & 197\,ns & 413\,mW \\
 \midrule
-Train-cal                  & 99.28$\pm$0.52 & 0.24$\pm$0.27  & 99.55$\pm$0.33 & --- & --- & --- \\
-Fixed 0.5                  & 99.09$\pm$0.63 & 0.45$\pm$0.29  & 99.42$\pm$0.40 & & & \\
-Val\_cal                   & 99.30$\pm$0.48 & 0.22$\pm$0.12  & 99.56$\pm$0.30 & & & \\
+Train-cal                  & 99.38$\pm$0.10 & 0.20$\pm$0.08  & 99.61$\pm$0.06 & --- & --- & --- \\
+Fixed 0.5                  & 99.22$\pm$0.14 & 0.41$\pm$0.11  & 99.51$\pm$0.09 & & & \\
+Val\_cal                   & 99.40$\pm$0.06 & 0.20$\pm$0.06  & 99.62$\pm$0.04 & & & \\
 \midrule
 Random Forest              & 99.74          & 0.08             & 99.84 & 6.3\,MB & 13.4\,$\mu$s$^C$ & --- \\
 XGBoost                    & 99.65          & 0.12             & 99.78 & 0.3\,MB & 0.4\,$\mu$s$^C$ & --- \\
@@ -872,7 +872,7 @@ Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \mult
  & AdaBoost         & 95.63$^\dag$ & ---  & 99.59 & ${\sim}$10\,MB & --- & --- & --- \\
  & Random Forest    & 96.53$^\dag$ & ---  & 99.68 & ${\sim}$50\,MB & --- & --- & --- \\
 \bottomrule
-\multicolumn{9}{l}{\small Micro/Small/Peak: F1-macro, train\_cal threshold; 5n$\times$4b = mean$\pm$std (10 seeds), rest = single seed.}\\
+\multicolumn{9}{l}{\small Micro/Small/Peak: F1, train\_cal threshold; 5n$\times$4b = mean$\pm$std (10 seeds), rest = single seed.}\\
 \multicolumn{9}{l}{\small $^\ddagger$Best genome across all threshold modes. $^D$Dense O(1) lookup; Vivado on Zynq Z-7020.}\\
 \multicolumn{9}{l}{\small $^\dag$Neto et al.\ use StandardScaler + a different 80/20 split; F1 averaging method unspecified in the original paper.}
 \end{tabular}}
@@ -981,7 +981,7 @@ by up to 42\% while maintaining or improving accuracy
 The gap between validation (val\_cal) and deployable (train\_cal) thresholds
 represents the central practical challenge for WNN-based IDS.  On
 UNSW-NB15 temporal, this gap is 0.33 percentage points in F1
-(87.34\% vs.\ 87.02\%), driven by distribution shift between the
+(87.55\% vs.\ 87.22\%), driven by distribution shift between the
 balanced validation set and the temporally distinct test set.  On
 CICIDS2017 random, the gap shrinks to 0.02 points (99.30\% vs.\ 99.28\%),
 confirming that random splits minimize calibration difficulty.
@@ -992,7 +992,7 @@ To determine the optimal thermometer encoding width, we swept from 2 to
 64 bits per feature on all three datasets (2 runs per configuration).
 Figure~\ref{fig:therm_sweep} shows the results.
 
-On CICIDS2017, F1-macro increases sharply from 8-bit (99.25\%) to 16-bit
+On CICIDS2017, F1 increases sharply from 8-bit (99.25\%) to 16-bit
 (99.43\%), then plateaus through 64-bit (99.41\%).  The 16-bit encoding
 also yields the fewest neurons (avg.\ 58 vs.\ 223 at 8-bit) and the
 fastest training (0.9\,h vs.\ 1.5\,h at 8-bit), suggesting that 16
@@ -1044,7 +1044,7 @@ mean $\pm$ std across 2 seeds.}
 \cmidrule(lr){2-5}
  & 8-bit & 16-bit & 32-bit & 64-bit \\
 \midrule
-\multicolumn{5}{l}{\textit{F1-macro (\%)}} \\
+\multicolumn{5}{l}{\textit{F1 (\%)}} \\
 96n $\times$ 32b  & 84.36 & 84.13 $\pm$ 0.08 & 84.53 $\pm$ 0.25 & 84.59 $\pm$ 0.13 \\
 500n $\times$ 34b & 84.73 & 84.43 $\pm$ 0.21 & 84.46 $\pm$ 0.41 & 84.87 $\pm$ 0.03 \\
 \midrule
@@ -1072,7 +1072,7 @@ examples-per-address density that 46M provides but 1.3M does not.
 \centering
 \includegraphics[width=\textwidth]{figures/thermometer_sweep.pdf}
 \caption{Effect of thermometer encoding resolution on classification
-performance.  (a)~CICIDS2017 F1-macro shows a clear knee at 16 bits,
+performance.  (a)~CICIDS2017 F1 shows a clear knee at 16 bits,
 with diminishing returns beyond.  (b)~The GA finds the fewest neurons
 at 16 bits, suggesting optimal information density.
 (c)~UNSW-NB15 temporal split shows no clear trend (high variance from
@@ -1230,8 +1230,8 @@ contributes three advances over prior WNN-based IDS:
 \item \textbf{Three-dataset evaluation with ML baselines.}  We evaluate on
   UNSW-NB15, CICIDS2017, and CIC-IoT-2023, comparing directly against
   Random Forest and XGBoost on identical splits.  On UNSW-NB15 (temporal,
-  101~runs), our WNN outperforms both baselines in F1 (87.02\% vs.\
-  86.41\%) at half the FPR (13.76\% vs.\ 25.22\%), with the best
+  104~runs), our WNN outperforms both baselines in F1 (87.22\% vs.\
+  86.41\%) at roughly half the FPR (13.37\% vs.\ 25.22\%), with the best
   genome reaching 90.52\% F1 at 4.13\% FPR.  On CICIDS2017 (random, 112~runs), our best genome reaches
   99.55\% F1, within 0.19\,pp of RF.  On CIC-IoT-2023 (random, 112~runs),
   the WNN trades 5.5\,pp F1 for \textbf{5.9$\times$ lower FPR}
