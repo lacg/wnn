@@ -698,7 +698,7 @@ Best overall F1$^\ddagger$         & \textbf{94.86}   & 0.52              & \tex
 Best overall FPR$^\ddagger$        & 93.72             & \textbf{0.23}     & 99.13          & 50{,}763 (95.4\%) & 260\,ns & 1.16\,W \\
 \midrule
 Train-cal                  & 94.41$\pm$0.15 & 0.45$\pm$0.06   & 99.18$\pm$0.02 & --- & --- & --- \\
-Fixed 0.5                  & 93.77$\pm$0.10 & 1.02$\pm$0.04   & 98.98$\pm$0.02 & & & \\
+Fixed 0.5                  & 93.76$\pm$0.11 & 1.02$\pm$0.04   & 98.98$\pm$0.02 & & & \\
 Val\_cal                   & 94.49$\pm$0.15 & 0.48$\pm$0.05   & 99.18$\pm$0.02 & & & \\
 \midrule
 Random Forest              & 96.01          & 0.29             & 99.42 & 9.0\,MB & 13.9\,$\mu$s$^C$ & --- \\
@@ -1409,7 +1409,7 @@ Val\_cal           & 86.87$\pm$3.09 & 86.36$\pm$2.97 & 4.96$\pm$3.52 & 5.32$\pm$
 \begin{table}[!ht]
 \centering
 \small
-\caption{UNSW-NB15 random, best-fitness genome (50 runs, 16-bit thermometer). Grid Search: 360$\pm$124 neurons / 33$\pm$2 bits; GA Neurons: 326$\pm$132 neurons / 32$\pm$2 bits.}
+\caption{UNSW-NB15 random, best-fitness genome (50 runs, 16-bit thermometer). Grid Search: 355$\pm$128 neurons / 33$\pm$2 bits; GA Neurons: 329$\pm$132 neurons / 32$\pm$2 bits.}
 \label{tab:app-unsw-rand-bestfitness}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
@@ -1417,11 +1417,11 @@ Val\_cal           & 86.87$\pm$3.09 & 86.36$\pm$2.97 & 4.96$\pm$3.52 & 5.32$\pm$
 Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
 \midrule
 Train-cal          & 94.38$\pm$0.14 & 94.41$\pm$0.15 & 0.44$\pm$0.05 & 0.45$\pm$0.06 & 99.17$\pm$0.02 & 99.18$\pm$0.02 \\
-Fixed 0.5          & 93.78$\pm$0.09 & 93.76$\pm$0.11 & 1.02$\pm$0.03 & 1.02$\pm$0.04 & 98.98$\pm$0.02 & 98.98$\pm$0.02 \\
-Platt              & 94.41$\pm$0.14 & 94.46$\pm$0.14 & 0.53$\pm$0.08 & 0.52$\pm$0.07 & 99.16$\pm$0.03 & 99.17$\pm$0.03 \\
-Beta               & 94.40$\pm$0.23 & 94.43$\pm$0.14 & 0.58$\pm$0.08 & 0.55$\pm$0.11 & 99.15$\pm$0.03 & 99.16$\pm$0.03 \\
-Empirical          & 93.41$\pm$0.15 & 93.34$\pm$0.21 & 1.14$\pm$0.03 & 1.16$\pm$0.04 & 98.90$\pm$0.03 & 98.89$\pm$0.04 \\
-Empirical cumul.   & 94.34$\pm$0.26 & 94.41$\pm$0.18 & 0.52$\pm$0.11 & 0.50$\pm$0.10 & 99.16$\pm$0.03 & 99.17$\pm$0.03 \\
+Fixed 0.5          & 93.77$\pm$0.09 & 93.76$\pm$0.11 & 1.02$\pm$0.03 & 1.02$\pm$0.04 & 98.98$\pm$0.02 & 98.98$\pm$0.02 \\
+Platt              & 94.41$\pm$0.14 & 94.46$\pm$0.14 & 0.53$\pm$0.09 & 0.52$\pm$0.07 & 99.16$\pm$0.03 & 99.17$\pm$0.03 \\
+Beta               & 94.39$\pm$0.23 & 94.43$\pm$0.14 & 0.58$\pm$0.09 & 0.55$\pm$0.11 & 99.15$\pm$0.04 & 99.16$\pm$0.03 \\
+Empirical          & 93.41$\pm$0.15 & 93.33$\pm$0.21 & 1.14$\pm$0.03 & 1.16$\pm$0.04 & 98.90$\pm$0.03 & 98.89$\pm$0.04 \\
+Empirical cumul.   & 94.34$\pm$0.26 & 94.41$\pm$0.18 & 0.52$\pm$0.12 & 0.50$\pm$0.10 & 99.15$\pm$0.03 & 99.17$\pm$0.03 \\
 Val\_cal           & 94.45$\pm$0.12 & 94.49$\pm$0.15 & 0.47$\pm$0.05 & 0.48$\pm$0.05 & 99.18$\pm$0.02 & 99.18$\pm$0.02 \\
 \bottomrule
 \end{tabular}}
@@ -1430,19 +1430,19 @@ Val\_cal           & 94.45$\pm$0.12 & 94.49$\pm$0.15 & 0.47$\pm$0.05 & 0.48$\pm$
 \begin{table}[!ht]
 \centering
 \small
-\caption{UNSW-NB15 random, best-F1 genome (50 runs, 16-bit thermometer). Grid Search: 374$\pm$119 neurons / 33$\pm$2 bits; GA Neurons: 320$\pm$134 neurons / 32$\pm$2 bits.}
+\caption{UNSW-NB15 random, best-F1 genome (50 runs, 16-bit thermometer). Grid Search: 369$\pm$124 neurons / 33$\pm$2 bits; GA Neurons: 324$\pm$135 neurons / 32$\pm$2 bits.}
 \label{tab:app-unsw-rand-bestf1}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
 \toprule
 Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (\%) & Acc GA (\%) \\
 \midrule
-Train-cal          & 94.39$\pm$0.15 & 94.40$\pm$0.18 & 0.45$\pm$0.05 & 0.44$\pm$0.05 & 99.17$\pm$0.02 & 99.18$\pm$0.02 \\
-Fixed 0.5          & 93.78$\pm$0.10 & 93.75$\pm$0.13 & 1.02$\pm$0.03 & 1.03$\pm$0.04 & 98.98$\pm$0.02 & 98.97$\pm$0.03 \\
-Platt              & 94.39$\pm$0.24 & 94.44$\pm$0.16 & 0.52$\pm$0.08 & 0.53$\pm$0.08 & 99.16$\pm$0.03 & 99.17$\pm$0.03 \\
-Beta               & 94.40$\pm$0.23 & 94.39$\pm$0.24 & 0.56$\pm$0.09 & 0.54$\pm$0.11 & 99.15$\pm$0.04 & 99.16$\pm$0.04 \\
+Train-cal          & 94.39$\pm$0.14 & 94.40$\pm$0.18 & 0.45$\pm$0.05 & 0.44$\pm$0.05 & 99.17$\pm$0.02 & 99.18$\pm$0.02 \\
+Fixed 0.5          & 93.78$\pm$0.10 & 93.75$\pm$0.12 & 1.02$\pm$0.03 & 1.03$\pm$0.04 & 98.98$\pm$0.02 & 98.97$\pm$0.03 \\
+Platt              & 94.39$\pm$0.24 & 94.43$\pm$0.16 & 0.53$\pm$0.08 & 0.53$\pm$0.08 & 99.16$\pm$0.03 & 99.17$\pm$0.03 \\
+Beta               & 94.39$\pm$0.24 & 94.39$\pm$0.24 & 0.56$\pm$0.10 & 0.54$\pm$0.11 & 99.15$\pm$0.04 & 99.16$\pm$0.04 \\
 Empirical          & 93.37$\pm$0.17 & 93.36$\pm$0.20 & 1.15$\pm$0.04 & 1.15$\pm$0.04 & 98.89$\pm$0.03 & 98.89$\pm$0.04 \\
-Empirical cumul.   & 94.33$\pm$0.26 & 94.41$\pm$0.17 & 0.51$\pm$0.10 & 0.50$\pm$0.10 & 99.16$\pm$0.03 & 99.17$\pm$0.03 \\
+Empirical cumul.   & 94.33$\pm$0.26 & 94.41$\pm$0.17 & 0.52$\pm$0.11 & 0.50$\pm$0.10 & 99.15$\pm$0.03 & 99.17$\pm$0.03 \\
 Val\_cal           & 94.46$\pm$0.12 & 94.49$\pm$0.14 & 0.47$\pm$0.05 & 0.48$\pm$0.05 & 99.18$\pm$0.02 & 99.18$\pm$0.02 \\
 \bottomrule
 \end{tabular}}
@@ -1451,7 +1451,7 @@ Val\_cal           & 94.46$\pm$0.12 & 94.49$\pm$0.14 & 0.47$\pm$0.05 & 0.48$\pm$
 \begin{table}[!ht]
 \centering
 \small
-\caption{UNSW-NB15 random, best-FPR genome (50 runs, 16-bit thermometer). Grid Search: 374$\pm$119 neurons / 31$\pm$3 bits; GA Neurons: 330$\pm$146 neurons / 32$\pm$1 bits.}
+\caption{UNSW-NB15 random, best-FPR genome (50 runs, 16-bit thermometer). Grid Search: 373$\pm$118 neurons / 31$\pm$3 bits; GA Neurons: 333$\pm$146 neurons / 32$\pm$1 bits.}
 \label{tab:app-unsw-rand-bestfpr}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
@@ -1460,11 +1460,11 @@ Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (
 \midrule
 Train-cal          & 94.36$\pm$0.15 & 94.45$\pm$0.12 & 0.44$\pm$0.04 & 0.46$\pm$0.05 & 99.17$\pm$0.02 & 99.18$\pm$0.02 \\
 Fixed 0.5          & 93.75$\pm$0.10 & 93.75$\pm$0.12 & 1.03$\pm$0.04 & 1.03$\pm$0.04 & 98.97$\pm$0.02 & 98.97$\pm$0.03 \\
-Platt              & 94.30$\pm$0.31 & 94.39$\pm$0.16 & 0.54$\pm$0.08 & 0.53$\pm$0.09 & 99.14$\pm$0.04 & 99.16$\pm$0.03 \\
-Beta               & 94.35$\pm$0.19 & 94.40$\pm$0.15 & 0.56$\pm$0.08 & 0.55$\pm$0.08 & 99.15$\pm$0.03 & 99.16$\pm$0.03 \\
-Empirical          & 93.36$\pm$0.21 & 93.32$\pm$0.22 & 1.15$\pm$0.05 & 1.16$\pm$0.05 & 98.89$\pm$0.04 & 98.89$\pm$0.04 \\
-Empirical cumul.   & 94.31$\pm$0.19 & 94.35$\pm$0.25 & 0.50$\pm$0.11 & 0.51$\pm$0.08 & 99.15$\pm$0.03 & 99.16$\pm$0.03 \\
-Val\_cal           & 94.36$\pm$0.16 & 94.47$\pm$0.15 & 0.51$\pm$0.08 & 0.48$\pm$0.05 & 99.16$\pm$0.03 & 99.18$\pm$0.02 \\
+Platt              & 94.30$\pm$0.31 & 94.40$\pm$0.17 & 0.55$\pm$0.08 & 0.53$\pm$0.09 & 99.14$\pm$0.04 & 99.16$\pm$0.03 \\
+Beta               & 94.35$\pm$0.19 & 94.41$\pm$0.15 & 0.56$\pm$0.08 & 0.55$\pm$0.08 & 99.15$\pm$0.03 & 99.16$\pm$0.03 \\
+Empirical          & 93.36$\pm$0.20 & 93.33$\pm$0.22 & 1.15$\pm$0.05 & 1.16$\pm$0.05 & 98.89$\pm$0.04 & 98.89$\pm$0.04 \\
+Empirical cumul.   & 94.31$\pm$0.19 & 94.35$\pm$0.25 & 0.51$\pm$0.11 & 0.51$\pm$0.09 & 99.15$\pm$0.03 & 99.16$\pm$0.03 \\
+Val\_cal           & 94.35$\pm$0.16 & 94.47$\pm$0.14 & 0.51$\pm$0.08 & 0.48$\pm$0.05 & 99.16$\pm$0.03 & 99.18$\pm$0.02 \\
 \bottomrule
 \end{tabular}}
 \end{table}
@@ -1472,7 +1472,7 @@ Val\_cal           & 94.36$\pm$0.16 & 94.47$\pm$0.15 & 0.51$\pm$0.08 & 0.48$\pm$
 \begin{table}[!ht]
 \centering
 \small
-\caption{UNSW-NB15 random, best-Acc genome (50 runs, 16-bit thermometer). Grid Search: 356$\pm$123 neurons / 33$\pm$2 bits; GA Neurons: 328$\pm$127 neurons / 32$\pm$2 bits.}
+\caption{UNSW-NB15 random, best-Acc genome (50 runs, 16-bit thermometer). Grid Search: 359$\pm$123 neurons / 33$\pm$2 bits; GA Neurons: 332$\pm$128 neurons / 32$\pm$2 bits.}
 \label{tab:app-unsw-rand-bestacc}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
@@ -1481,11 +1481,11 @@ Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (
 \midrule
 Train-cal          & 94.38$\pm$0.13 & 94.40$\pm$0.15 & 0.44$\pm$0.05 & 0.43$\pm$0.04 & 99.17$\pm$0.02 & 99.18$\pm$0.02 \\
 Fixed 0.5          & 93.77$\pm$0.10 & 93.78$\pm$0.09 & 1.02$\pm$0.03 & 1.02$\pm$0.03 & 98.98$\pm$0.02 & 98.98$\pm$0.02 \\
-Platt              & 94.41$\pm$0.15 & 94.47$\pm$0.12 & 0.53$\pm$0.09 & 0.52$\pm$0.08 & 99.16$\pm$0.03 & 99.17$\pm$0.02 \\
-Beta               & 94.40$\pm$0.22 & 94.43$\pm$0.16 & 0.58$\pm$0.08 & 0.54$\pm$0.09 & 99.15$\pm$0.03 & 99.16$\pm$0.03 \\
-Empirical          & 93.41$\pm$0.15 & 93.40$\pm$0.17 & 1.14$\pm$0.03 & 1.14$\pm$0.04 & 98.90$\pm$0.03 & 98.90$\pm$0.03 \\
+Platt              & 94.41$\pm$0.15 & 94.46$\pm$0.12 & 0.53$\pm$0.09 & 0.52$\pm$0.08 & 99.16$\pm$0.03 & 99.17$\pm$0.02 \\
+Beta               & 94.39$\pm$0.22 & 94.43$\pm$0.16 & 0.58$\pm$0.08 & 0.54$\pm$0.09 & 99.15$\pm$0.03 & 99.16$\pm$0.03 \\
+Empirical          & 93.42$\pm$0.15 & 93.40$\pm$0.17 & 1.14$\pm$0.03 & 1.14$\pm$0.04 & 98.90$\pm$0.03 & 98.90$\pm$0.03 \\
 Empirical cumul.   & 94.33$\pm$0.26 & 94.36$\pm$0.33 & 0.51$\pm$0.12 & 0.50$\pm$0.11 & 99.15$\pm$0.03 & 99.16$\pm$0.04 \\
-Val\_cal           & 94.45$\pm$0.13 & 94.46$\pm$0.16 & 0.48$\pm$0.06 & 0.47$\pm$0.06 & 99.18$\pm$0.02 & 99.18$\pm$0.02 \\
+Val\_cal           & 94.45$\pm$0.13 & 94.45$\pm$0.16 & 0.48$\pm$0.06 & 0.47$\pm$0.06 & 99.18$\pm$0.02 & 99.18$\pm$0.02 \\
 \bottomrule
 \end{tabular}}
 \end{table}
@@ -1493,7 +1493,7 @@ Val\_cal           & 94.45$\pm$0.13 & 94.46$\pm$0.16 & 0.48$\pm$0.06 & 0.47$\pm$
 \begin{table}[!ht]
 \centering
 \small
-\caption{UNSW-NB15 random, best-CE genome (50 runs, 16-bit thermometer). Grid Search: 358$\pm$140 neurons / 33$\pm$2 bits; GA Neurons: 335$\pm$142 neurons / 32$\pm$2 bits.}
+\caption{UNSW-NB15 random, best-CE genome (50 runs, 16-bit thermometer). Grid Search: 359$\pm$139 neurons / 33$\pm$2 bits; GA Neurons: 338$\pm$143 neurons / 32$\pm$2 bits.}
 \label{tab:app-unsw-rand-bestce}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{l@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
@@ -1503,9 +1503,9 @@ Threshold & F1 Grid (\%) & F1 GA (\%) & FPR Grid (\%) & FPR GA (\%) & Acc Grid (
 Train-cal          & 94.38$\pm$0.12 & 94.44$\pm$0.15 & 0.45$\pm$0.04 & 0.45$\pm$0.06 & 99.17$\pm$0.01 & 99.18$\pm$0.02 \\
 Fixed 0.5          & 93.77$\pm$0.11 & 93.78$\pm$0.13 & 1.02$\pm$0.04 & 1.02$\pm$0.04 & 98.98$\pm$0.02 & 98.98$\pm$0.03 \\
 Platt              & 94.42$\pm$0.14 & 94.41$\pm$0.12 & 0.54$\pm$0.08 & 0.53$\pm$0.09 & 99.16$\pm$0.02 & 99.16$\pm$0.02 \\
-Beta               & 94.42$\pm$0.14 & 94.41$\pm$0.17 & 0.58$\pm$0.08 & 0.54$\pm$0.08 & 99.15$\pm$0.03 & 99.16$\pm$0.02 \\
-Empirical          & 93.38$\pm$0.17 & 93.34$\pm$0.20 & 1.15$\pm$0.04 & 1.15$\pm$0.04 & 98.90$\pm$0.03 & 98.89$\pm$0.04 \\
-Empirical cumul.   & 94.32$\pm$0.27 & 94.38$\pm$0.27 & 0.53$\pm$0.10 & 0.49$\pm$0.09 & 99.15$\pm$0.03 & 99.17$\pm$0.03 \\
+Beta               & 94.41$\pm$0.14 & 94.41$\pm$0.17 & 0.58$\pm$0.08 & 0.54$\pm$0.08 & 99.15$\pm$0.03 & 99.16$\pm$0.02 \\
+Empirical          & 93.37$\pm$0.18 & 93.34$\pm$0.20 & 1.15$\pm$0.04 & 1.15$\pm$0.04 & 98.89$\pm$0.03 & 98.89$\pm$0.04 \\
+Empirical cumul.   & 94.32$\pm$0.27 & 94.38$\pm$0.26 & 0.52$\pm$0.10 & 0.49$\pm$0.09 & 99.15$\pm$0.03 & 99.17$\pm$0.03 \\
 Val\_cal           & 94.42$\pm$0.12 & 94.49$\pm$0.14 & 0.48$\pm$0.06 & 0.47$\pm$0.05 & 99.17$\pm$0.02 & 99.18$\pm$0.02 \\
 \bottomrule
 \end{tabular}}
