@@ -864,7 +864,7 @@ Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \mult
 \midrule
 \multirow{3}{*}{\shortstack[l]{Baseline\\(46M)}}
  & RF (ours, 46M)   & 92.64 & 13.48 & 99.18 & 3.4\,GB & --- & 530\,ns$^C$ & --- \\
- & XGBoost (ours)    & 91.67 & 14.80 & 99.06 & 0.3\,MB & --- & 130\,ns$^C$ & --- \\
+ & XGBoost (ours)    & 91.67 & 14.80 & 99.06 & 300\,KB & --- & 130\,ns$^C$ & --- \\
  & Perceptron        & 81.05 & ---   & 98.18 & $<$10\,KB & --- & 20\,ns$^C$ & --- \\
 \midrule
 \multirow{3}{*}{\shortstack[l]{Neto et al.$^\dag$\\(46M)}}
@@ -873,7 +873,7 @@ Tier & Method & F1 (\%) & FPR (\%) & Acc (\%) & \multicolumn{1}{c}{Size} & \mult
  & Random Forest    & 96.53$^\dag$ & ---  & 99.68 & ${\sim}$50\,MB & --- & --- & --- \\
 \bottomrule
 \multicolumn{9}{l}{\small Micro/Small/Peak: F1, train\_cal threshold; 5n$\times$4b = mean$\pm$std (10 seeds), rest = single seed.}\\
-\multicolumn{9}{l}{\small $^\ddagger$Best genome across all threshold modes. $^D$Dense O(1) lookup; Vivado on Zynq Z-7020.}\\
+\multicolumn{9}{l}{\small $^\ddagger$Best genome across all threshold modes. $^D$Dense O(1) lookup; Vivado on Zynq Z-7020. $^C$CPU (Apple M4 Max; production latency varies with hardware and load).}\\
 \multicolumn{9}{l}{\small $^\dag$Neto et al.\ use StandardScaler + a different 80/20 split; F1 averaging method unspecified in the original paper.}
 \end{tabular}}
 \end{table}
