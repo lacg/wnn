@@ -48,10 +48,13 @@ All experiments below run on **UNSW-NB15 temporal** (~8 min/run → fast iterati
   - Requires post-hoc ensemble script (not a new worker mode).
   - If promising → escalate to **harder version**: single GA that evolves a population of specialists with diverse fitness objectives (NSGA-II style).
 
-- [ ] **Val-based early stopping** (consistency fix)
-  - Same `fitness` metric throughout, but early stop on **held-out val fitness** instead of **K-fold CV training fitness**.
-  - Requires worker code change: carve out a small held-out "early-stop val" from the 80% training data.
-  - **GATED**: do AFTER current pipeline finishes — we don't want to change the protocol mid-run while UNSW random + 46M GA are still completing toward the paper's camera-ready count.
+- [ ] **3-way split reactivation** (train/test/val) for stronger generalization claim
+  - Current: HF `_3way` configs have 80/10/10 but worker merges test+val into single 20% held-out validation. Early stopping uses K-fold CV training fitness → no training-time holdout signal.
+  - **Proposed**: stop merging; use the 10% test as **training-time holdout** (early stopping, threshold calibration), keep 10% val **completely untouched** for final validation report.
+  - This aligns with standard ML practice: train/val/test where val guides training decisions and test is the final untouched holdout. (Our current "validation" is actually a "test" in the standard nomenclature — which is why the paper uses `val_cal`.)
+  - Worker change: add a toggle `ids_merge_test_val=false` so early stopping uses test fitness, final eval uses val fitness.
+  - **GATED**: do AFTER current pipeline finishes — changing the protocol mid-run would break camera-ready consistency.
+  - **Reviewer appeal**: strengthens the paper's claim from "val is untouched during training" to "val is COMPLETELY untouched AND early stopping uses a separate held-out test set" — closes the only lingering methodology gap.
 
 ### Phase 4: Full pipeline on best config
 
