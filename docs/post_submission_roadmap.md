@@ -35,7 +35,39 @@ All experiments below run on **UNSW-NB15 temporal** (~8 min/run → fast iterati
   - Strategy: run coarse first. If a weight region is Pareto-promising, zoom with fine grid in that region only.
   - **Dedup by scale**: canonical form is normalized by sum — (1,1,0,0), (0.5,0.5,0,0), (0.25,0.25,0,0) produce identical rankings.
 
-### Phase 3: Methodological improvements (code changes)
+### Phase 3: Full 10-phase pipeline on current best config (swapped earlier from Phase 4)
+
+**Rationale for moving this forward**: we want to see whether the 10-phase
+pipeline's behavior has improved under our recent infrastructure changes
+(aligned fitness, K-fold=5, QUAD_WEIGHTED mode, split audit). This runs on
+the CURRENT best-known UNSW temporal config — not one yet to be discovered
+by Phase 1/2. Phase 1/2 findings can later be combined with this data for
+a richer analysis.
+
+- [ ] **#6 10-phase pipeline on the current best UNSW temporal config**
+  - Phases (in correct order, connections last):
+    1. Grid Search (architecture)
+    2. GA Neurons
+    3. TS Neurons
+    4. GA Bits
+    5. TS Bits
+    6. Lamarckian Neurons *(if available)*
+    7. Lamarckian Bits *(if available)*
+    8. GA Connections
+    9. TS Connections
+    10. Lamarckian Connections *(if available)*
+  - 5 flows at the current best-fitness GA config (pop 50, K-fold 5,
+    balanced aligned fitness) — the same setup that produced our 101-run
+    paper numbers and the overnight 11-flow extension.
+  - Expected per-flow time: 20+ min (cascading phases) — so 5 × ~20+ min ≈
+    **2+ hours** minimum, more likely 8-20 hours depending on connection-
+    phase convergence.
+  - **Research question**: does adding bits/connections/Lamarckian phases
+    meaningfully move F1 beyond the 2-phase (Grid + GA Neurons) baseline
+    of 86.95% train-cal / 87.30% val-cal? Or is GA Neurons already
+    saturating the easy gains?
+
+### Phase 4: Methodological improvements (code changes)
 
 - [ ] **Mini-ensemble of 3 seeds** (baseline ensemble approach)
   - Run same config 3× with different seeds, majority vote on predictions.
@@ -56,32 +88,15 @@ All experiments below run on **UNSW-NB15 temporal** (~8 min/run → fast iterati
   - **GATED**: do AFTER current pipeline finishes — changing the protocol mid-run would break camera-ready consistency.
   - **Reviewer appeal**: strengthens the paper's claim from "val is untouched during training" to "val is COMPLETELY untouched AND early stopping uses a separate held-out test set" — closes the only lingering methodology gap.
 
-### Phase 4: Full pipeline on best config
-
-- [ ] **#6 10-phase pipeline on the winning UNSW temporal config**
-  - Phases (in correct order, connections last):
-    1. Grid Search (architecture)
-    2. GA Neurons
-    3. TS Neurons
-    4. GA Bits
-    5. TS Bits
-    6. Lamarckian Neurons *(if available)*
-    7. Lamarckian Bits *(if available)*
-    8. GA Connections
-    9. TS Connections
-    10. Lamarckian Connections *(if available)*
-  - 5 flows at the best (pop, topK, fitness_weights, auto_max_bits) config discovered in Phase 1-2.
-  - Expected per-flow time: 20+ min (cascading phases) — so 5 × ~20+ min ≈ **2+ hours** minimum, more likely 8-20 hours depending on connection-phase convergence.
-
 ## Budget
 
 | Phase | Configs | Flows | Time |
 |-------|---------|-------|------|
-| Phase 1 | 9 | 45 | ~6 hours |
-| Phase 2 (coarse) | 97 | 485 | ~64 hours |
+| Phase 1 (pop + top-K) | 9 | 45 | ~6 hours |
+| Phase 2 (coarse thermo + fitness-weight) | 97 | 485 | ~64 hours |
 | Phase 2 (fine — if needed) | +110 | +550 | +~73 hours |
-| Phase 3 | ~5-10 | 15-50 | varies |
-| Phase 4 | 1 | 5 | ~8-20 hours |
+| Phase 3 (10-phase on current best) | 1 | 5 | ~8-20 hours |
+| Phase 4 (methodology: mini-ensemble, expert voting, 3-way split) | ~5-10 | 15-50 | varies |
 | **Total first pass** | | | **~80-100 hours (~4 days)** |
 
 ## Active research questions
