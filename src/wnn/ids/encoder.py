@@ -18,6 +18,23 @@ class ThermometerType(Enum):
 	DISTRIBUTIVE = "distributive"
 
 
+class InvalidEncoding(Enum):
+	"""How the encoder handles NaN / +Inf / -Inf values.
+
+	NONE        -- (back-compat default) replace invalid with 0 / first category;
+	               invalid values are indistinguishable from real 0 / first category.
+	SINGLE_BIT  -- prepend a 1-bit "is_invalid" flag to each feature's output.
+	               flag=1 clears the feature's value bits (they become 0);
+	               flag=0 emits the normal thermometer / binary / categorical bits.
+	               Cost: +1 bit per feature. Keeps NaN/+Inf/-Inf as a learnable state.
+	THREE_BIT   -- (future) three flags: is_nan, is_posinf, is_neginf.
+	               Cost: +3 bits per feature. Distinguishes invalid causes.
+	"""
+	NONE = "none"
+	SINGLE_BIT = "single_bit"
+	# THREE_BIT = "three_bit"  # reserved — implement if analysis shows predictive value
+
+
 class ThermometerEncoder:
 	"""Encode continuous features as binary thermometer vectors.
 
@@ -33,17 +50,24 @@ class ThermometerEncoder:
 	"""
 
 	def __init__(self, n_bits: int | str = 8, method: ThermometerType = ThermometerType.DISTRIBUTIVE,
-				 auto_max_bits: int = 32):
+				 auto_max_bits: int = 32,
+				 invalid_encoding: InvalidEncoding | str = InvalidEncoding.NONE):
 		"""
 		Args:
 			n_bits: int for uniform width, or "auto" for per-feature adaptive width.
 			method: threshold placement strategy.
 			auto_max_bits: maximum bits per feature when n_bits="auto".
+			invalid_encoding: how to represent NaN/+Inf/-Inf inputs.
+				NONE (default)       -- replace with 0 / first category (back-compat).
+				SINGLE_BIT           -- prepend 1 is_invalid flag per feature (+1 bit/feature);
+				                        when flag=1, the feature's value bits are cleared.
 		"""
 		self.n_bits = n_bits
 		self.method = method
 		self.auto_max_bits = auto_max_bits
-		self.per_feature_bits_: dict[str, int] = {}  # feature_name → actual bits used
+		self.invalid_encoding = (invalid_encoding if isinstance(invalid_encoding, InvalidEncoding)
+								 else InvalidEncoding(invalid_encoding))
+		self.per_feature_bits_: dict[str, int] = {}  # feature_name → actual bits used (excluding invalid flag)
 		self.thresholds_: dict[str, np.ndarray] = {}  # feature_name → thresholds
 		self.categories_: dict[str, list] = {}  # feature_name → sorted unique values
 		self.feature_names_: list[str] = []
@@ -109,44 +133,72 @@ class ThermometerEncoder:
 		"""Transform DataFrame to binary matrix.
 
 		Returns:
-			np.ndarray of shape (n_samples, total_bits) with dtype bool
+			np.ndarray of shape (n_samples, total_bits) with dtype bool.
+			If invalid_encoding=SINGLE_BIT, each feature's output is prepended
+			with a 1-bit is_invalid flag; when the flag is 1, the value bits
+			are cleared (0). This keeps NaN/+Inf/-Inf as a learnable state
+			rather than silently collapsing to the zero encoding.
 		"""
 		parts = []
+		use_flag = (self.invalid_encoding == InvalidEncoding.SINGLE_BIT)
+		n_rows = len(df)
+
 		for col in self.feature_names_:
 			ftype = self.feature_types_[col]
 
+			# Detect invalid (NaN for all types; +Inf/-Inf also invalid for numeric)
+			if ftype == "numeric":
+				raw = df[col].values.astype(np.float64)  # np.float64 represents NaN/±Inf natively
+				invalid_mask = ~np.isfinite(raw)
+			else:
+				invalid_mask = df[col].isna().values  # binary & categorical: only NaN is invalid
+
 			if ftype == "binary":
 				bits = df[col].fillna(0).values.astype(bool).reshape(-1, 1)
-				parts.append(bits)
+				value_bits = bits
 
 			elif ftype == "categorical":
 				cats = self.categories_[col]
 				n_cat_bits = max(int(np.ceil(np.log2(max(len(cats), 2)))), 1)
-				# Map each category to an integer, then to binary
 				cat_to_idx = {c: i for i, c in enumerate(cats)}
 				indices = df[col].fillna(cats[0]).map(
 					lambda x, m=cat_to_idx: m.get(x, 0)
 				).values.astype(int)
-				# Binary encoding (not one-hot — saves bits)
-				bit_matrix = np.zeros((len(df), n_cat_bits), dtype=bool)
+				bit_matrix = np.zeros((n_rows, n_cat_bits), dtype=bool)
 				for b in range(n_cat_bits):
 					bit_matrix[:, b] = (indices >> b) & 1
-				parts.append(bit_matrix)
+				value_bits = bit_matrix
 
 			else:
 				# Numeric — thermometer encoding
 				thresholds = self.thresholds_[col]
-				values = df[col].fillna(0).values.astype(np.float64)
-				# bit_i = 1 if value >= threshold_i
+				# Replace NaN/±Inf with 0 for the dot-product comparison; flag (if used)
+				# carries the is_invalid signal. This prevents comparisons against NaN
+				# from producing undefined behavior.
+				values = np.where(invalid_mask, 0.0, raw)
 				bit_matrix = values[:, np.newaxis] >= thresholds[np.newaxis, :]
-				parts.append(bit_matrix)
+				value_bits = bit_matrix
+
+			if use_flag:
+				# Clear value bits for invalid rows — flag=1 is the only non-zero output
+				value_bits = value_bits & ~invalid_mask[:, np.newaxis]
+				flag_col = invalid_mask.astype(bool).reshape(-1, 1)
+				# Layout: [is_invalid, value_bits...]
+				parts.append(np.hstack([flag_col, value_bits]))
+			else:
+				parts.append(value_bits)
 
 		return np.hstack(parts)
 
 	def feature_bit_ranges(self) -> dict[str, tuple[int, int]]:
-		"""Return (start_bit, end_bit) for each feature."""
+		"""Return (start_bit, end_bit) for each feature.
+
+		When invalid_encoding=SINGLE_BIT, each feature contributes one extra
+		bit for the is_invalid flag (prepended to the value bits).
+		"""
 		ranges = {}
 		offset = 0
+		extra_per_feature = 1 if self.invalid_encoding == InvalidEncoding.SINGLE_BIT else 0
 		for col in self.feature_names_:
 			ftype = self.feature_types_[col]
 			if ftype == "binary":
@@ -155,6 +207,7 @@ class ThermometerEncoder:
 				n = max(int(np.ceil(np.log2(max(len(self.categories_[col]), 2)))), 1)
 			else:
 				n = self.per_feature_bits_.get(col, self.n_bits if isinstance(self.n_bits, int) else 8)
+			n += extra_per_feature
 			ranges[col] = (offset, offset + n)
 			offset += n
 		return ranges
