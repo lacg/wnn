@@ -526,12 +526,15 @@ class FlowWorker:
                 flow_config.stage_max_neurons_list = params.get("stage_max_neurons")
                 flow_config.max_bit_delta = params.get("max_bit_delta", 0)
 
-                # Build dataset_key for validation cache scoping (prevents cross-dataset cache poisoning)
+                # Build dataset_key for validation cache scoping (prevents cross-dataset cache poisoning).
+                # Includes _raw and _inv-<mode> suffixes so canonical/raw flows don't share cache with
+                # plain -full flows even when other params match.
                 ds = params.get("ids_dataset", "unsw-nb15")
                 nb = params.get("ids_n_bits", 8)
                 sp = params.get("ids_split", "standard")
                 raw_suffix = "_raw" if params.get("ids_raw", False) else ""
-                inv_suffix = f"_inv-{params.get('ids_invalid_encoding', 'none')}" if params.get("ids_invalid_encoding", "none") != "none" else ""
+                inv_mode = params.get("ids_invalid_encoding")
+                inv_suffix = f"_inv-{inv_mode}" if inv_mode and inv_mode != "none" else ""
                 flow_config.dataset_key = f"{ds}_{nb}b_{sp}{raw_suffix}{inv_suffix}"
 
             # Handle leaderboard seeding (explicit param or grid_source=leaderboard)
@@ -847,14 +850,15 @@ class FlowWorker:
         auto_max_bits = params.get("ids_auto_max_bits", 32)
         kfold_per_gen = params.get("ids_kfold_per_gen", 1)
         ids_raw = params.get("ids_raw", False)
-        # Default to "single_bit" when raw=True (raw datasets preserve NaN/inf
-        # and that's the whole point — losing it via "none" would defeat the
-        # opt-in). Otherwise default to "none" for back-compat with old flows.
-        ids_invalid_encoding = params.get("ids_invalid_encoding",
-                                          "single_bit" if ids_raw else "none")
-
         dataset_name = params.get("ids_dataset", "unsw-nb15")
-        raw_label = " RAW" if ids_raw else ""
+        # Default to "single_bit" when data is raw — i.e., either ids_raw=True or
+        # the dataset is canonical-neto (raw by construction). Otherwise default
+        # to "none" for back-compat with pre-Phase-C flows (incl. r98).
+        is_raw_data = ids_raw or dataset_name == "ciciot2023_canonical"
+        ids_invalid_encoding = params.get("ids_invalid_encoding",
+                                          "single_bit" if is_raw_data else "none")
+
+        raw_label = " RAW" if is_raw_data else ""
         self._log(f"Loading {dataset_name}{raw_label} dataset (classification={classification}, split={split}, feature_selection={feature_selection}, invalid_encoding={ids_invalid_encoding})...")
         if dataset_name == "cicids2017":
             from wnn.ids.cicids2017 import load_cicids2017
@@ -865,12 +869,19 @@ class FlowWorker:
             full_dataset = load_ciciot2023(n_bits=n_bits, split=split, feature_selection=feature_selection,
                                            raw=ids_raw, invalid_encoding=ids_invalid_encoding)
         elif dataset_name == "ciciot2023_full":
-            # Full 46.7M-record CIC-IoT-2023 from lacg030175/CIC-IoT-2023-full
+            # Full 38.5M-record CIC-IoT-2023 from lacg030175/CIC-IoT-2023-full (bencorn lossy reorg).
             # When ids_raw=True, loads lacg030175/CIC-IoT-2023-full-raw instead.
             from wnn.ids.ciciot2023 import load_ciciot2023
             full_dataset = load_ciciot2023(n_bits=n_bits, split=split, feature_selection=feature_selection,
                                            dataset_size="full",
                                            raw=ids_raw, invalid_encoding=ids_invalid_encoding)
+        elif dataset_name == "ciciot2023_canonical":
+            # Canonical 45M Neto et al. CIC-IoT-2023 from lacg030175/CIC-IoT-2023-canonical-neto.
+            # NaN/inf preserved; loader auto-defaults invalid_encoding="single_bit" when not set.
+            from wnn.ids.ciciot2023 import load_ciciot2023
+            full_dataset = load_ciciot2023(n_bits=n_bits, split=split, feature_selection=feature_selection,
+                                           dataset_size="canonical",
+                                           invalid_encoding=ids_invalid_encoding)
         else:
             full_dataset = load_unsw_nb15(n_bits=n_bits, split=split, feature_selection=feature_selection,
                                           rest_bits=rest_bits, auto_max_bits=auto_max_bits,
