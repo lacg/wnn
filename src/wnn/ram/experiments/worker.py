@@ -249,14 +249,21 @@ class FlowWorker:
         except Exception:
             pass
 
-    def _precache_data(self):
-        """Pre-cache tokenizer and dataset at startup to avoid network issues during flow execution."""
+    def _ensure_lm_cache(self):
+        """Lazily load GPT-2 tokenizer + WikiText-2 cache on first LM-flow demand.
+
+        Idempotent: returns immediately if already loaded. IDS-only workflows
+        never call this and avoid the ~2 GB resident cost.
+        """
+        if self._tokenizer is not None:
+            return
+
         from collections import Counter
 
         from datasets import load_dataset
         from transformers import AutoTokenizer
 
-        self._log("Pre-caching tokenizer and dataset...")
+        self._log("Lazy-loading GPT-2 tokenizer + WikiText-2 cache (first LM flow)...")
 
         # Load tokenizer (will download if not cached)
         self._log("  Loading GPT2 tokenizer...")
@@ -295,15 +302,12 @@ class FlowWorker:
         tokens_with_freq = sum(1 for i in range(self._vocab_size) if freq_counter.get(i, 0) > 0)
         self._log(f"  Tokens with freq > 0: {tokens_with_freq:,}")
 
-        self._log("Pre-caching complete!")
+        self._log("LM cache ready!")
 
     def run(self):
         """Main worker loop."""
         self._log(f"Worker started, polling {self.dashboard_url} every {self.poll_interval}s")
         self._log(f"Checkpoints will be saved to {self.checkpoint_base_dir}")
-
-        # Pre-cache data before entering the polling loop
-        self._precache_data()
 
         while self.running:
             try:
@@ -627,6 +631,7 @@ class FlowWorker:
 
     def _create_evaluator(self, context_size: int, seed: Optional[int] = None, neuron_sample_rate: float = 0.25):
         """Create the cached evaluator using pre-cached data."""
+        self._ensure_lm_cache()
         self._log(f"Creating evaluator (context_size={context_size}, sample_rate={neuron_sample_rate})...")
 
         from wnn.ram.architecture.tiered_evaluator import TieredEvaluator
@@ -655,6 +660,7 @@ class FlowWorker:
         Uses train split for training, test split for fitness scoring (GA/TS).
         Validation split is reserved for full_evaluator (final validation).
         """
+        self._ensure_lm_cache()
         self._log(f"Creating BitwiseEvaluator (context_size={context_size})...")
 
         from wnn.ram.architecture.bitwise_evaluator import BitwiseEvaluator
@@ -692,6 +698,7 @@ class FlowWorker:
 
         Uses train split for training, test split for fitness scoring (GA/TS).
         """
+        self._ensure_lm_cache()
         # Per-stage context sizes (e.g., [2, 4] for S0=2, S1=4)
         stage_context_size = params.get("stage_context_size")
         effective_ctx = stage_context_size if stage_context_size else context_size
@@ -787,6 +794,7 @@ class FlowWorker:
         Trains on train set, evaluates on validation set (held-out).
         GA/TS never touches this evaluator.
         """
+        self._ensure_lm_cache()
         from wnn.ram.architecture.bitwise_evaluator import BitwiseEvaluator
 
         memory_mode_map = {"TERNARY": 0, "QUAD_BINARY": 1, "QUAD_WEIGHTED": 2}
