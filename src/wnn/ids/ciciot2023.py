@@ -52,18 +52,24 @@ TOP20_RF_FEATURES = [
 
 HF_DATASET_ID = "lacg030175/CIC-IoT-2023"
 HF_DATASET_FULL_ID = "lacg030175/CIC-IoT-2023-full"
+HF_DATASET_RAW_ID = "lacg030175/CIC-IoT-2023-raw"
+HF_DATASET_FULL_RAW_ID = "lacg030175/CIC-IoT-2023-full-raw"
 
 
-def _load_from_huggingface(config: str, dataset_size: str = "subsample") -> tuple[pd.DataFrame, pd.DataFrame, list[str], pd.DataFrame | None]:
+def _load_from_huggingface(config: str, dataset_size: str = "subsample", raw: bool = False) -> tuple[pd.DataFrame, pd.DataFrame, list[str], pd.DataFrame | None]:
 	"""Load train/test(/validation) from our published HuggingFace dataset.
 
 	Args:
 		config: HF dataset config name (e.g., "random", "random_3way").
 		dataset_size: "subsample" (default, ~1.3M rows) or "full" (~46M rows).
+		raw: when True, load NaN/inf-preserving variant (-raw or -full-raw).
 	"""
 	from datasets import load_dataset
 
-	repo_id = HF_DATASET_FULL_ID if dataset_size == "full" else HF_DATASET_ID
+	if raw:
+		repo_id = HF_DATASET_FULL_RAW_ID if dataset_size == "full" else HF_DATASET_RAW_ID
+	else:
+		repo_id = HF_DATASET_FULL_ID if dataset_size == "full" else HF_DATASET_ID
 	print(f"  Loading from HuggingFace: {repo_id} ({config})...")
 	ds = load_dataset(repo_id, config)
 	df_train = ds["train"].to_pandas()
@@ -107,6 +113,8 @@ def load_ciciot2023(
 	feature_selection: str = "all",
 	rest_bits: Optional[int] = None,
 	dataset_size: str = "subsample",
+	raw: bool = False,
+	invalid_encoding: str = "none",
 ) -> IDSDataset:
 	"""Load CIC-IoT-2023 dataset with thermometer encoding.
 
@@ -139,8 +147,9 @@ def load_ciciot2023(
 		raise ValueError(f"dataset_size must be 'subsample' or 'full', got '{dataset_size}'")
 
 	size_label = "FULL 46M" if dataset_size == "full" else "1.3M subsample"
-	print(f"Loading CIC-IoT-2023 ({size_label}, split={split})...")
-	df_train, df_test, common_features, df_val = _load_from_huggingface(split, dataset_size)
+	raw_label = " RAW" if raw else ""
+	print(f"Loading CIC-IoT-2023 ({size_label}{raw_label}, split={split}, invalid_encoding={invalid_encoding})...")
+	df_train, df_test, common_features, df_val = _load_from_huggingface(split, dataset_size, raw=raw)
 
 	# Load ranked features (from HuggingFace for this dataset)
 	top20 = _load_ranked_features()
@@ -151,6 +160,7 @@ def load_ciciot2023(
 		df_train, df_test, common_features, top20 or [],
 		n_bits=n_bits, method=method, feature_selection=feature_selection,
 		rest_bits=rest_bits, df_val=df_val,
+		invalid_encoding=invalid_encoding,
 	)
 
 	print(f"  X_train: {X_train.shape}, X_test: {X_test.shape}")

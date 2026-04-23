@@ -84,6 +84,7 @@ def encode_features(
 	rest_bits: int | None = None,
 	df_val: pd.DataFrame | None = None,
 	auto_max_bits: int = 32,
+	invalid_encoding: str = "none",
 ) -> tuple[np.ndarray, np.ndarray, ThermometerEncoder, list[str], np.ndarray | None]:
 	"""Shared thermometer encoding logic for all IDS datasets.
 
@@ -112,7 +113,8 @@ def encode_features(
 	X_val = None
 
 	if feature_selection == "all":
-		encoder = ThermometerEncoder(n_bits=n_bits, method=method, auto_max_bits=auto_max_bits)
+		encoder = ThermometerEncoder(n_bits=n_bits, method=method, auto_max_bits=auto_max_bits,
+									 invalid_encoding=invalid_encoding)
 		encoder.fit(df_train[common_features])
 		X_train = encoder.transform(df_train[common_features])
 		X_test = encoder.transform(df_test[common_features])
@@ -130,7 +132,8 @@ def encode_features(
 			selected = available[:top_n]
 			if len(selected) < top_n:
 				print(f"  WARNING: Only {len(selected)} of {top_n} top features found in dataset")
-		encoder = ThermometerEncoder(n_bits=n_bits, method=method, auto_max_bits=auto_max_bits)
+		encoder = ThermometerEncoder(n_bits=n_bits, method=method, auto_max_bits=auto_max_bits,
+									 invalid_encoding=invalid_encoding)
 		encoder.fit(df_train[selected])
 		X_train = encoder.transform(df_train[selected])
 		X_test = encoder.transform(df_test[selected])
@@ -148,12 +151,12 @@ def encode_features(
 			missing = set(top_features) - set(common_features)
 			print(f"  WARNING: {len(missing)} top features not in dataset: {missing}")
 
-		enc_top = ThermometerEncoder(n_bits=16, method=method)
+		enc_top = ThermometerEncoder(n_bits=16, method=method, invalid_encoding=invalid_encoding)
 		enc_top.fit(df_train[top])
 		X_train_top = enc_top.transform(df_train[top])
 		X_test_top = enc_top.transform(df_test[top])
 
-		enc_rest = ThermometerEncoder(n_bits=rb, method=method)
+		enc_rest = ThermometerEncoder(n_bits=rb, method=method, invalid_encoding=invalid_encoding)
 		enc_rest.fit(df_train[rest])
 		X_train_rest = enc_rest.transform(df_train[rest])
 		X_test_rest = enc_rest.transform(df_test[rest])
@@ -384,6 +387,7 @@ def load_unsw_nb15(
 	feature_selection: str = "all",
 	rest_bits: int | None = None,
 	auto_max_bits: int = 32,
+	invalid_encoding: str = "none",
 ) -> IDSDataset:
 	"""Load UNSW-NB15 with thermometer encoding.
 
@@ -473,6 +477,7 @@ def load_unsw_nb15(
 		df_train, df_test, common_features, TOP20_RF_FEATURES,
 		n_bits=n_bits, method=method, feature_selection=feature_selection,
 		rest_bits=rest_bits, df_val=df_val, auto_max_bits=auto_max_bits,
+		invalid_encoding=invalid_encoding,
 	)
 
 	print(f"  X_train: {X_train.shape}, X_test: {X_test.shape}")

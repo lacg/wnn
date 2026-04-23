@@ -60,14 +60,21 @@ TOP20_RF_FEATURES = [
 # Use shared VALID_FEATURE_SELECTIONS from dataset.py
 
 HF_DATASET_ID = "lacg030175/CICIDS2017"
+HF_DATASET_RAW_ID = "lacg030175/CICIDS2017-raw"
 
 
-def _load_from_huggingface(config: str) -> tuple[pd.DataFrame, pd.DataFrame, list[str], pd.DataFrame | None]:
-	"""Load train/test(/validation) from our published HuggingFace dataset."""
+def _load_from_huggingface(config: str, raw: bool = False) -> tuple[pd.DataFrame, pd.DataFrame, list[str], pd.DataFrame | None]:
+	"""Load train/test(/validation) from our published HuggingFace dataset.
+
+	Args:
+		config: HF dataset config name (e.g., "random", "temporal_3way").
+		raw: when True, load NaN/inf-preserving variant (-raw).
+	"""
 	from datasets import load_dataset
 
-	print(f"  Loading from HuggingFace: {HF_DATASET_ID} ({config})...")
-	ds = load_dataset(HF_DATASET_ID, config)
+	repo_id = HF_DATASET_RAW_ID if raw else HF_DATASET_ID
+	print(f"  Loading from HuggingFace: {repo_id} ({config})...")
+	ds = load_dataset(repo_id, config)
 	df_train = ds["train"].to_pandas()
 	df_test = ds["test"].to_pandas()
 	df_val = ds["validation"].to_pandas() if "validation" in ds else None
@@ -88,6 +95,8 @@ def load_cicids2017(
 	split: str = "temporal",
 	feature_selection: str = "all",
 	rest_bits: Optional[int] = None,
+	raw: bool = False,
+	invalid_encoding: str = "none",
 ) -> IDSDataset:
 	"""Load CICIDS2017 dataset with thermometer encoding.
 
@@ -116,13 +125,15 @@ def load_cicids2017(
 	if split not in ("temporal", "random", "temporal_3way", "random_3way"):
 		raise ValueError(f"split must be 'temporal', 'standard', 'random', 'temporal_3way', or 'random_3way', got '{split}'")
 
-	print(f"Loading CICIDS2017 (split={split})...")
-	df_train, df_test, common_features, df_val = _load_from_huggingface(split)
+	raw_label = " RAW" if raw else ""
+	print(f"Loading CICIDS2017 ({raw_label}split={split}, invalid_encoding={invalid_encoding})...")
+	df_train, df_test, common_features, df_val = _load_from_huggingface(split, raw=raw)
 
 	X_train, X_test, encoder, used_features, X_val = encode_features(
 		df_train, df_test, common_features, TOP20_RF_FEATURES,
 		n_bits=n_bits, method=method, feature_selection=feature_selection,
 		rest_bits=rest_bits, df_val=df_val,
+		invalid_encoding=invalid_encoding,
 	)
 
 	print(f"  X_train: {X_train.shape}, X_test: {X_test.shape}")

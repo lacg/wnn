@@ -526,7 +526,9 @@ class FlowWorker:
                 ds = params.get("ids_dataset", "unsw-nb15")
                 nb = params.get("ids_n_bits", 8)
                 sp = params.get("ids_split", "standard")
-                flow_config.dataset_key = f"{ds}_{nb}b_{sp}"
+                raw_suffix = "_raw" if params.get("ids_raw", False) else ""
+                inv_suffix = f"_inv-{params.get('ids_invalid_encoding', 'none')}" if params.get("ids_invalid_encoding", "none") != "none" else ""
+                flow_config.dataset_key = f"{ds}_{nb}b_{sp}{raw_suffix}{inv_suffix}"
 
             # Handle leaderboard seeding (explicit param or grid_source=leaderboard)
             use_leaderboard = params.get("seed_from_leaderboard") or params.get("grid_source") == "leaderboard"
@@ -836,21 +838,35 @@ class FlowWorker:
         rest_bits = params.get("ids_rest_bits", None)
         auto_max_bits = params.get("ids_auto_max_bits", 32)
         kfold_per_gen = params.get("ids_kfold_per_gen", 1)
+        ids_raw = params.get("ids_raw", False)
+        # Default to "single_bit" when raw=True (raw datasets preserve NaN/inf
+        # and that's the whole point — losing it via "none" would defeat the
+        # opt-in). Otherwise default to "none" for back-compat with old flows.
+        ids_invalid_encoding = params.get("ids_invalid_encoding",
+                                          "single_bit" if ids_raw else "none")
 
         dataset_name = params.get("ids_dataset", "unsw-nb15")
-        self._log(f"Loading {dataset_name} dataset (classification={classification}, split={split}, feature_selection={feature_selection})...")
+        raw_label = " RAW" if ids_raw else ""
+        self._log(f"Loading {dataset_name}{raw_label} dataset (classification={classification}, split={split}, feature_selection={feature_selection}, invalid_encoding={ids_invalid_encoding})...")
         if dataset_name == "cicids2017":
             from wnn.ids.cicids2017 import load_cicids2017
-            full_dataset = load_cicids2017(n_bits=n_bits, split=split, feature_selection=feature_selection)
+            full_dataset = load_cicids2017(n_bits=n_bits, split=split, feature_selection=feature_selection,
+                                           raw=ids_raw, invalid_encoding=ids_invalid_encoding)
         elif dataset_name == "ciciot2023":
             from wnn.ids.ciciot2023 import load_ciciot2023
-            full_dataset = load_ciciot2023(n_bits=n_bits, split=split, feature_selection=feature_selection)
+            full_dataset = load_ciciot2023(n_bits=n_bits, split=split, feature_selection=feature_selection,
+                                           raw=ids_raw, invalid_encoding=ids_invalid_encoding)
         elif dataset_name == "ciciot2023_full":
             # Full 46.7M-record CIC-IoT-2023 from lacg030175/CIC-IoT-2023-full
+            # When ids_raw=True, loads lacg030175/CIC-IoT-2023-full-raw instead.
             from wnn.ids.ciciot2023 import load_ciciot2023
-            full_dataset = load_ciciot2023(n_bits=n_bits, split=split, feature_selection=feature_selection, dataset_size="full")
+            full_dataset = load_ciciot2023(n_bits=n_bits, split=split, feature_selection=feature_selection,
+                                           dataset_size="full",
+                                           raw=ids_raw, invalid_encoding=ids_invalid_encoding)
         else:
-            full_dataset = load_unsw_nb15(n_bits=n_bits, split=split, feature_selection=feature_selection, rest_bits=rest_bits, auto_max_bits=auto_max_bits)
+            full_dataset = load_unsw_nb15(n_bits=n_bits, split=split, feature_selection=feature_selection,
+                                          rest_bits=rest_bits, auto_max_bits=auto_max_bits,
+                                          invalid_encoding=ids_invalid_encoding)
 
         if classification == "hierarchical":
             return self._create_hierarchical_ids_evaluators(
