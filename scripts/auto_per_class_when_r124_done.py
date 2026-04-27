@@ -89,7 +89,21 @@ def main():
 					log(f"  Skipping flow {fid} (status={get_flow_status(fid)})")
 					continue
 				run_analysis(fid)
-			log("All analyses done. Exiting watcher.")
+
+			# Chain into camera-ready draft generation
+			log("Per-class analyses done. Generating camera-ready draft...")
+			env = os.environ.copy()
+			env["PYTHONPATH"] = "/Users/lacg/wnn/src/wnn:" + env.get("PYTHONPATH", "")
+			p = subprocess.run(
+				[sys.executable, str(Path(__file__).resolve().parent / "draft_camera_ready_update.py")],
+				env=env, capture_output=True, text=True,
+			)
+			if p.returncode == 0:
+				log("  ✓ Camera-ready draft generated.")
+				log(f"    stdout tail:\n{p.stdout[-1500:]}")
+			else:
+				log(f"  ✗ Draft generation FAILED (exit={p.returncode}). stderr:\n{p.stderr[-1500:]}")
+			log("Watcher complete. Exiting.")
 			return
 		elif status in ("failed", "cancelled"):
 			log(f"Flow {TARGET_FLOW} ended in {status} state — exiting without analysis.")
