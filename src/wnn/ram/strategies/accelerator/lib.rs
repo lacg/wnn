@@ -365,6 +365,30 @@ fn fit_empirical_threshold_py(scores: Vec<f64>, labels: Vec<i64>) -> PyResult<(f
     Ok(adaptive::fit_empirical_threshold(&scores, &labels))
 }
 
+/// Compute (CE, accuracy, F1-macro, FPR) for a single-cluster binary classifier
+/// from raw scores at a given threshold. CE is binary cross-entropy
+/// (threshold-independent); accuracy/F1/FPR depend on `threshold`.
+/// `normal_class` is 0 by default, set to 1 when flip_labels is active.
+#[pyfunction]
+#[pyo3(signature = (scores, labels, threshold, normal_class=0))]
+fn compute_binary_metrics_at_threshold_py(
+    scores: Vec<f64>,
+    labels: Vec<i64>,
+    threshold: f64,
+    normal_class: usize,
+) -> PyResult<(f64, f64, f64, f64)> {
+    Ok(adaptive::compute_binary_metrics_at_threshold(
+        &scores, &labels, threshold, normal_class,
+    ))
+}
+
+/// Sweep scores for the F1-macro-optimal threshold (binary classification).
+/// Returns (threshold, f1_macro, fpr).
+#[pyfunction]
+fn find_optimal_threshold_f1_py(scores: Vec<f64>, labels: Vec<i64>) -> PyResult<(f64, f64, f64)> {
+    Ok(adaptive::find_optimal_threshold_f1(&scores, &labels))
+}
+
 #[pyfunction]
 fn evaluate_cascade_batch_cpu(
     base_connectivities: Vec<Vec<Vec<i64>>>,  // 5 RAMs: [n2, n3, n4, n5, n6]
@@ -4398,6 +4422,41 @@ impl IDSCacheWrapper {
         })
     }
 
+    /// Train a single genome ONCE and evaluate at multiple thresholds.
+    ///
+    /// Returns a tuple (eval_scores, train_scores, metrics) where
+    /// `metrics[i] = (ce, acc, f1, fpr, resolved_threshold)` for thresholds[i].
+    /// A threshold of -1.0 is the oracle sentinel — sweeps eval scores for the
+    /// optimal F1 threshold and uses that.
+    ///
+    /// Replaces the validation-phase pattern of 7 evaluate_batch_full + 1
+    /// score_examples + 1 score_train_examples (9 trainings) with a single
+    /// training pass.
+    fn evaluate_at_thresholds(
+        &self,
+        py: Python<'_>,
+        bits_flat: Vec<usize>,
+        neurons_flat: Vec<usize>,
+        connections_flat: Vec<i64>,
+        thresholds: Vec<f64>,
+        empty_value: f32,
+        neuron_sample_rate: f32,
+        rng_seed: u64,
+    ) -> PyResult<(Vec<f64>, Vec<f64>, Vec<(f64, f64, f64, f64, f64)>)> {
+        py.allow_threads(|| {
+            Ok(ids_cache::evaluate_at_thresholds_ids_cached(
+                &self.inner,
+                &bits_flat,
+                &neurons_flat,
+                &connections_flat,
+                &thresholds,
+                empty_value,
+                neuron_sample_rate,
+                rng_seed,
+            ))
+        })
+    }
+
     /// Search for neighbors above accuracy threshold, all in Rust.
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (
@@ -6404,5 +6463,7 @@ fn ram_accelerator(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fit_platt_scaling_py, m)?)?;
     m.add_function(wrap_pyfunction!(fit_beta_calibration_py, m)?)?;
     m.add_function(wrap_pyfunction!(fit_empirical_threshold_py, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_binary_metrics_at_threshold_py, m)?)?;
+    m.add_function(wrap_pyfunction!(find_optimal_threshold_f1_py, m)?)?;
     Ok(())
 }

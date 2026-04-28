@@ -671,6 +671,74 @@ pub fn score_examples_ids_cached(
     )
 }
 
+/// Train ONCE and evaluate at multiple thresholds, returning eval/train scores
+/// and per-threshold metrics.
+///
+/// Replaces the validation-phase pattern of calling `evaluate_genomes_ids_cached_full_hybrid`
+/// once per threshold (each with its own training pass) — instead, trains the
+/// genome a single time, scores both eval and train sets from the trained memory,
+/// then derives (CE, accuracy, F1, FPR) at each requested threshold.
+///
+/// Threshold sentinels:
+///   - `t >= 0.0`: fixed threshold
+///   - `t == -1.0`: oracle — find optimal F1 threshold on EVAL scores
+///                  (matches evaluate_genomes_parallel_hybrid_with_override semantics)
+///
+/// Returns `(eval_scores, train_scores, metrics_per_threshold)` where
+/// `metrics_per_threshold[i] = (ce, acc, f1, fpr, resolved_threshold)`.
+pub fn evaluate_at_thresholds_ids_cached(
+    cache: &IDSCache,
+    bits_flat: &[usize],
+    neurons_flat: &[usize],
+    connections_flat: &[i64],
+    thresholds: &[f64],
+    empty_value: f32,
+    neuron_sample_rate: f32,
+    rng_seed: u64,
+) -> (Vec<f64>, Vec<f64>, Vec<(f64, f64, f64, f64, f64)>) {
+    let train = cache.full_train();
+    let eval = cache.full_eval();
+
+    // Train ONCE + score both eval and train sets
+    let (eval_scores, train_scores) = crate::adaptive::train_and_score_eval_and_train(
+        bits_flat,
+        neurons_flat,
+        connections_flat,
+        cache.num_genome_clusters(),
+        &train.input_bits,
+        &train.targets,
+        &train.negatives,
+        train.num_examples,
+        cache.num_negatives(),
+        &eval.input_bits,
+        eval.num_examples,
+        cache.total_features(),
+        empty_value,
+        neuron_sample_rate,
+        rng_seed,
+        cache.class_weights.as_deref(),
+    );
+
+    // Derive metrics at each threshold (handle -1.0 oracle sentinel)
+    let normal_class = cache.normal_class;
+    let metrics: Vec<(f64, f64, f64, f64, f64)> = thresholds.iter().map(|&t| {
+        let resolved = if t < 0.0 {
+            // Oracle: sweep eval scores for optimal F1
+            let (best_t, _f1, _fpr) =
+                crate::adaptive::find_optimal_threshold_f1(&eval_scores, &eval.targets);
+            best_t
+        } else {
+            t
+        };
+        let (ce, acc, f1, fpr) = crate::adaptive::compute_binary_metrics_at_threshold(
+            &eval_scores, &eval.targets, resolved, normal_class,
+        );
+        (ce, acc, f1, fpr, resolved)
+    }).collect();
+
+    (eval_scores, train_scores, metrics)
+}
+
 /// Score TRAINING examples (for calibration fitting on training data).
 /// Trains on full_train, returns scores for full_train (same data).
 pub fn score_train_examples_ids_cached(

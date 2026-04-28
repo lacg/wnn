@@ -1027,108 +1027,117 @@ class Experiment:
 					self.log(f"    Thresholds: (cached from prior validation)")
 
 				elif is_single_cluster and f1 is not None and cached is None:
+					# All 7 threshold modes from a SINGLE training pass. Old path
+					# trained 9× per genome (7 evaluate_batch_full + score_examples
+					# + score_train_examples). The Rust-side evaluate_at_thresholds
+					# trains once, returns eval+train scores, and computes metrics
+					# at the thresholds we hand it. Calibrations (Platt/Beta/
+					# Empirical/Emp-cumul/train_cal) are derived in Python from
+					# train_scores, then per-mode metrics come from the Rust helper
+					# compute_binary_metrics_at_threshold_py. Per-class breakdown
+					# reuses the same eval_scores (no extra forward pass).
 					threshold_metadata = {}
 					train_threshold = genome.threshold  # from train-calibrated run above
-
-					# 1. Train-calibrated (already computed — override=None calibrates on train scores)
-					threshold_metadata['train_cal'] = {
-						'f1': f1, 'fpr': fpr_val, 'acc': acc, 'threshold': train_threshold,
-					}
-					self.log(f"    Train-cal:   F1={f1:.4%}, FPR={fpr_val:.4%}, Acc={acc:.4%}, t={train_threshold:.4f}")
-
-					# 2. Fixed 0.5 — distribution-agnostic baseline
-					fixed_results = val_evaluator.evaluate_batch_full([genome], override_threshold=0.5)
-					fr = fixed_results[0]
-					threshold_metadata['fixed_05'] = {
-						'f1': fr.f1, 'fpr': fr.fpr, 'acc': fr.acc,
-					}
-					self.log(f"    Fixed 0.5:   F1={fr.f1:.4%}, FPR={fr.fpr:.4%}, Acc={fr.acc:.4%}")
-
-					# 3. Validation-calibrated (oracle): sweep val set for optimal threshold
-					# This is the upper bound — in production, you'd update thresholds
-					# periodically using recent labeled data (similar effect)
-					oracle_results = val_evaluator.evaluate_batch_full([genome], override_threshold=-1.0)
-					or_ = oracle_results[0]
-					oracle_threshold = genome.threshold
-					threshold_metadata['val_cal'] = {
-						'f1': or_.f1, 'fpr': or_.fpr, 'acc': or_.acc, 'threshold': oracle_threshold,
-					}
-					self.log(f"    Val-cal:     F1={or_.f1:.4%}, FPR={or_.fpr:.4%}, Acc={or_.acc:.4%}, t={oracle_threshold:.4f} (oracle)")
-
-					# 4. Platt scaling: fit sigmoid calibration on TRAINING scores, apply to val
-					# Learns P(attack) = sigmoid(a*score + b) from training data,
-					# then applies threshold to the untouched validation set
 					try:
 						import ram_accelerator
-						# Score training examples (Rust — fast)
-						train_scores = val_evaluator.score_train_examples(genome)
+						import time as _time
+						_t0 = _time.time()
+						# Single training pass: returns eval/train scores + metrics
+						# at the requested thresholds (-1.0 oracle, 0.5 fixed).
+						eval_scores, train_scores, anchor_metrics = val_evaluator.evaluate_at_thresholds(
+							genome, [-1.0, 0.5],
+						)
+						oracle_metrics, fixed_metrics = anchor_metrics
 						train_labels_list = val_evaluator._y_train
-
-						if train_scores and train_labels_list and len(train_scores) == len(train_labels_list):
-							# 5. Platt scaling (Rust)
-							platt_threshold, a, b = ram_accelerator.fit_platt_scaling_py(train_scores, train_labels_list)
-							platt_results = val_evaluator.evaluate_batch_full([genome], override_threshold=platt_threshold)
-							pr = platt_results[0]
-							threshold_metadata['platt'] = {
-								'f1': pr.f1, 'fpr': pr.fpr, 'acc': pr.acc,
-								'threshold': platt_threshold, 'a': a, 'b': b,
-							}
-							self.log(f"    Platt:       F1={pr.f1:.4%}, FPR={pr.fpr:.4%}, Acc={pr.acc:.4%}, t={platt_threshold:.4f} (a={a:.4f}, b={b:.4f})")
-
-							# 6. Beta calibration (Rust)
-							beta_threshold, ba, bb, bc = ram_accelerator.fit_beta_calibration_py(train_scores, train_labels_list)
-							beta_results = val_evaluator.evaluate_batch_full([genome], override_threshold=beta_threshold)
-							br = beta_results[0]
-							threshold_metadata['beta'] = {
-								'f1': br.f1, 'fpr': br.fpr, 'acc': br.acc,
-								'threshold': beta_threshold, 'a': ba, 'b': bb, 'c': bc,
-							}
-							self.log(f"    Beta:        F1={br.f1:.4%}, FPR={br.fpr:.4%}, Acc={br.acc:.4%}, t={beta_threshold:.4f} (a={ba:.3f}, b={bb:.3f}, c={bc:.3f})")
-
-							# 7. Empirical table (Rust)
-							empirical_threshold, n_bins = ram_accelerator.fit_empirical_threshold_py(train_scores, train_labels_list)
-							emp_results = val_evaluator.evaluate_batch_full([genome], override_threshold=empirical_threshold)
-							er = emp_results[0]
-							threshold_metadata['empirical'] = {
-								'f1': er.f1, 'fpr': er.fpr, 'acc': er.acc,
-								'threshold': empirical_threshold, 'n_bins': n_bins,
-							}
-							self.log(f"    Empirical:   F1={er.f1:.4%}, FPR={er.fpr:.4%}, Acc={er.acc:.4%}, t={empirical_threshold:.4f} ({n_bins} bins)")
-
-							# 8. Empirical-cumulative: fitness-aware sweep on training scores (Rust)
-							emp_cum_result = ram_accelerator.find_optimal_threshold_fitness_py(
-								train_scores, train_labels_list, 0.0, 1.0, 0.0, 0.0,  # maximize F1
-							)
-							emp_cum_threshold = emp_cum_result[0]
-							ec_results = val_evaluator.evaluate_batch_full([genome], override_threshold=emp_cum_threshold)
-							ec = ec_results[0]
-							threshold_metadata['empirical_cumulative'] = {
-								'f1': ec.f1, 'fpr': ec.fpr, 'acc': ec.acc,
-								'threshold': emp_cum_threshold,
-							}
-							self.log(f"    Emp-cumul:   F1={ec.f1:.4%}, FPR={ec.fpr:.4%}, Acc={ec.acc:.4%}, t={emp_cum_threshold:.4f}")
+						eval_labels_list = val_evaluator._y_test
+						normal_class = getattr(val_evaluator, "_normal_class", 0)
+						_score_secs = _time.time() - _t0
+						self.log(f"    Scoring:     train+eval scored in {_score_secs:.1f}s "
+								 f"(was {_score_secs * 9:.0f}s with 9× train passes)")
 					except Exception as e:
-						self.log(f"    Calibration: skipped ({e})")
+						self.log(f"    Threshold sweep skipped ({e})")
+						threshold_metadata = None
+						eval_scores = None
+						train_scores = None
 
-					# Per-class breakdown at ALL threshold modes — single forward pass via
-					# score_examples (raw eval scores), then threshold-N-times in Python
-					# for cheap per-class at each mode (train_cal, fixed_05, val_cal,
-					# platt, beta, empirical, empirical_cumulative).
-					# Cost: 1 extra forward pass per genome (~12 min on 46.7M, ~1.5 min on 1.43M).
-					# Storage:
-					#   threshold_metadata[mode]["per_class"] = {class: {count, predicted_attack, rate}}
-					#   threshold_metadata["per_class"] = train_cal's per_class (kept for back-compat
-					#                                     with dashboards that read top-level)
-					if (val_evaluator is not None
-						and getattr(val_evaluator, "_y_test_multi", None) is not None
-						and getattr(val_evaluator, "_class_names", None) is not None
-						and threshold_metadata is not None):
+					if threshold_metadata is not None and eval_scores is not None and train_scores is not None:
+						def _metrics_at(t):
+							ce_t, acc_t, f1_t, fpr_t = ram_accelerator.compute_binary_metrics_at_threshold_py(
+								eval_scores, eval_labels_list, float(t), normal_class,
+							)
+							return ce_t, acc_t, f1_t, fpr_t
+
+						# 1. Train-calibrated — primary metric, threshold from training sweep
+						threshold_metadata['train_cal'] = {
+							'f1': f1, 'fpr': fpr_val, 'acc': acc, 'threshold': train_threshold,
+						}
+						self.log(f"    Train-cal:   F1={f1:.4%}, FPR={fpr_val:.4%}, Acc={acc:.4%}, t={train_threshold:.4f}")
+
+						# 2. Fixed 0.5 — distribution-agnostic baseline
+						threshold_metadata['fixed_05'] = {
+							'f1': fixed_metrics.f1, 'fpr': fixed_metrics.fpr, 'acc': fixed_metrics.acc,
+						}
+						self.log(f"    Fixed 0.5:   F1={fixed_metrics.f1:.4%}, FPR={fixed_metrics.fpr:.4%}, Acc={fixed_metrics.acc:.4%}")
+
+						# 3. Validation-calibrated (oracle): F1-optimal threshold on val scores
+						threshold_metadata['val_cal'] = {
+							'f1': oracle_metrics.f1, 'fpr': oracle_metrics.fpr, 'acc': oracle_metrics.acc,
+							'threshold': oracle_metrics.threshold,
+						}
+						self.log(f"    Val-cal:     F1={oracle_metrics.f1:.4%}, FPR={oracle_metrics.fpr:.4%}, Acc={oracle_metrics.acc:.4%}, t={oracle_metrics.threshold:.4f} (oracle)")
+
+						# 4-7. Calibrations on TRAINING scores → applied to val via cheap metric helper
 						try:
-							import time as _time
-							import numpy as _np
-							_t0 = _time.time()
-							eval_scores = val_evaluator.score_examples(genome)
-							if eval_scores and len(eval_scores) > 0:
+							if train_scores and train_labels_list and len(train_scores) == len(train_labels_list):
+								# 4. Platt scaling
+								platt_threshold, a, b = ram_accelerator.fit_platt_scaling_py(train_scores, train_labels_list)
+								_, p_acc, p_f1, p_fpr = _metrics_at(platt_threshold)
+								threshold_metadata['platt'] = {
+									'f1': p_f1, 'fpr': p_fpr, 'acc': p_acc,
+									'threshold': platt_threshold, 'a': a, 'b': b,
+								}
+								self.log(f"    Platt:       F1={p_f1:.4%}, FPR={p_fpr:.4%}, Acc={p_acc:.4%}, t={platt_threshold:.4f} (a={a:.4f}, b={b:.4f})")
+
+								# 5. Beta calibration
+								beta_threshold, ba, bb, bc = ram_accelerator.fit_beta_calibration_py(train_scores, train_labels_list)
+								_, b_acc, b_f1, b_fpr = _metrics_at(beta_threshold)
+								threshold_metadata['beta'] = {
+									'f1': b_f1, 'fpr': b_fpr, 'acc': b_acc,
+									'threshold': beta_threshold, 'a': ba, 'b': bb, 'c': bc,
+								}
+								self.log(f"    Beta:        F1={b_f1:.4%}, FPR={b_fpr:.4%}, Acc={b_acc:.4%}, t={beta_threshold:.4f} (a={ba:.3f}, b={bb:.3f}, c={bc:.3f})")
+
+								# 6. Empirical table
+								empirical_threshold, n_bins = ram_accelerator.fit_empirical_threshold_py(train_scores, train_labels_list)
+								_, e_acc, e_f1, e_fpr = _metrics_at(empirical_threshold)
+								threshold_metadata['empirical'] = {
+									'f1': e_f1, 'fpr': e_fpr, 'acc': e_acc,
+									'threshold': empirical_threshold, 'n_bins': n_bins,
+								}
+								self.log(f"    Empirical:   F1={e_f1:.4%}, FPR={e_fpr:.4%}, Acc={e_acc:.4%}, t={empirical_threshold:.4f} ({n_bins} bins)")
+
+								# 7. Empirical-cumulative: F1-optimal sweep on training scores
+								emp_cum_result = ram_accelerator.find_optimal_threshold_fitness_py(
+									train_scores, train_labels_list, 0.0, 1.0, 0.0, 0.0,
+								)
+								emp_cum_threshold = emp_cum_result[0]
+								_, c_acc, c_f1, c_fpr = _metrics_at(emp_cum_threshold)
+								threshold_metadata['empirical_cumulative'] = {
+									'f1': c_f1, 'fpr': c_fpr, 'acc': c_acc,
+									'threshold': emp_cum_threshold,
+								}
+								self.log(f"    Emp-cumul:   F1={c_f1:.4%}, FPR={c_fpr:.4%}, Acc={c_acc:.4%}, t={emp_cum_threshold:.4f}")
+						except Exception as e:
+							self.log(f"    Calibration: skipped ({e})")
+
+						# Per-class breakdown at ALL threshold modes — same eval_scores
+						# already in memory, threshold-and-bucket per mode.
+						if (val_evaluator is not None
+							and getattr(val_evaluator, "_y_test_multi", None) is not None
+							and getattr(val_evaluator, "_class_names", None) is not None):
+							try:
+								import numpy as _np
+								_pc_t0 = _time.time()
 								scores_arr = _np.asarray(eval_scores, dtype=_np.float64)
 								n_modes_done = 0
 								for mode_key, mode_data in list(threshold_metadata.items()):
@@ -1136,7 +1145,7 @@ class Experiment:
 										continue
 									thr = mode_data.get("threshold")
 									if thr is None:
-										thr = 0.5 if mode_key == "fixed_05" else genome.threshold
+										thr = 0.5 if mode_key == "fixed_05" else train_threshold
 									preds = (scores_arr >= float(thr)).astype(int).tolist()
 									pc = _compute_per_class_breakdown(
 										preds,
@@ -1150,11 +1159,9 @@ class Experiment:
 									if "per_class" in threshold_metadata["train_cal"]:
 										threshold_metadata["per_class"] = threshold_metadata["train_cal"]["per_class"]
 								self.log(f"    Per-class:   computed at {n_modes_done} thresholds "
-										 f"({_time.time()-_t0:.1f}s)")
-							else:
-								self.log(f"    Per-class:   skipped (score_examples returned empty)")
-						except Exception as _e:
-							self.log(f"    Per-class:   skipped ({_e})")
+										 f"({_time.time()-_pc_t0:.1f}s)")
+							except Exception as _e:
+								self.log(f"    Per-class:   skipped ({_e})")
 
 					# Use train-calibrated as primary metric (threshold from training, eval on val)
 					# f1, fpr_val, acc already set from train_cal above

@@ -152,6 +152,7 @@ class IDSEvaluator(BaseEvaluator):
 		# When flip_labels is active, original benign is class 1 after flipping.
 		# Tell Rust to compute FPR on class 1 so it always measures false alarms
 		# on the original benign traffic.
+		self._normal_class = 1 if flip_labels else 0
 		if flip_labels:
 			self._cache.set_normal_class(1)
 
@@ -321,6 +322,35 @@ class IDSEvaluator(BaseEvaluator):
 			bits_flat, neurons_flat, connections_flat,
 			self._empty_value, self._neuron_sample_rate, 0,
 		)
+
+	def evaluate_at_thresholds(
+		self,
+		genome,
+		thresholds: list[float],
+	) -> tuple[list[float], list[float], list[Metrics]]:
+		"""Train ONCE, score eval+train, evaluate metrics at multiple thresholds.
+
+		Returns:
+			eval_scores: raw per-example scores on validation set
+			train_scores: raw per-example scores on training set
+			metrics: list of Metrics (ce, acc, f1, fpr, threshold) — one per
+				threshold in `thresholds`. A threshold of -1.0 is the oracle
+				sentinel: sweeps eval scores for the optimal F1 threshold.
+
+		Replaces 7×evaluate_batch_full + score_examples + score_train_examples
+		(9 trainings) with a single training pass.
+		"""
+		bits_flat, neurons_flat, connections_flat = self._flatten_genomes([genome])
+		eval_scores, train_scores, raw_metrics = self._cache.evaluate_at_thresholds(
+			bits_flat, neurons_flat, connections_flat,
+			thresholds,
+			self._empty_value, self._neuron_sample_rate, 0,
+		)
+		metrics = [
+			Metrics(ce=ce, acc=acc, f1=f1, fpr=fpr, threshold=t)
+			for (ce, acc, f1, fpr, t) in raw_metrics
+		]
+		return eval_scores, train_scores, metrics
 
 	def evaluate_batch_full(
 		self,
