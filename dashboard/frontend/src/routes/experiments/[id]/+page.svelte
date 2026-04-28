@@ -20,8 +20,8 @@
   let flowPollInterval: ReturnType<typeof setInterval> | null = null;
 
   // Per-class breakdown: which validation point + threshold mode to display.
-  // perClassPointChoice = -1 means "latest available point" (the default).
-  let perClassPointChoice: number = -1;
+  // Defaults to the first available point (chronologically earliest, e.g. INIT).
+  let perClassPointChoice: number = 0;
   let perClassThresholdChoice: 'train_cal' | 'fixed_05' | 'val_cal' | 'platt' | 'beta' | 'empirical' | 'empirical_cumulative' = 'train_cal';
 
   // Per-class helpers — defined here so TS narrows their parameter types properly.
@@ -1103,9 +1103,7 @@
                 || pcAnySummaryHasMode(all, 'train_cal');
           })}
           {#if pcAvailablePoints.length > 0}
-            {@const _selectedIdx = perClassPointChoice >= 0 && perClassPointChoice < pcAvailablePoints.length
-                                    ? perClassPointChoice
-                                    : pcAvailablePoints.length - 1}
+            {@const _selectedIdx = Math.min(Math.max(0, perClassPointChoice), pcAvailablePoints.length - 1)}
             {@const selectedPcPoint = pcAvailablePoints[_selectedIdx]}
             {@const pcAllSummaries = [selectedPcPoint.summaries.f1, selectedPcPoint.summaries.fpr, selectedPcPoint.summaries.acc, selectedPcPoint.summaries.ce, selectedPcPoint.summaries.fitness]}
             {@const pcByGenome = {
