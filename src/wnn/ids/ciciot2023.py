@@ -55,6 +55,8 @@ HF_DATASET_FULL_ID = "lacg030175/CIC-IoT-2023-full"
 HF_DATASET_RAW_ID = "lacg030175/CIC-IoT-2023-raw"
 HF_DATASET_FULL_RAW_ID = "lacg030175/CIC-IoT-2023-full-raw"
 HF_DATASET_CANONICAL_NETO_ID = "lacg030175/CIC-IoT-2023-canonical-neto"
+HF_DATASET_NETO_FULL_ID = "lacg030175/CIC-IoT-2023-neto-full"
+HF_DATASET_NETO_SUBSAMPLE_ID = "lacg030175/CIC-IoT-2023-neto-subsample"
 
 
 def _load_from_huggingface(config: str, dataset_size: str = "subsample", raw: bool = False) -> tuple[pd.DataFrame, pd.DataFrame, list[str], pd.DataFrame | None]:
@@ -69,7 +71,11 @@ def _load_from_huggingface(config: str, dataset_size: str = "subsample", raw: bo
 	"""
 	from datasets import load_dataset
 
-	if dataset_size == "canonical":
+	if dataset_size == "neto_full":
+		repo_id = HF_DATASET_NETO_FULL_ID  # 46.7M, 46 features, canonical Neto
+	elif dataset_size == "neto_subsample":
+		repo_id = HF_DATASET_NETO_SUBSAMPLE_ID  # 1.43M sample of neto_full, 46 features
+	elif dataset_size == "canonical":
 		repo_id = HF_DATASET_CANONICAL_NETO_ID  # raw flag ignored — canonical IS raw
 	elif raw:
 		repo_id = HF_DATASET_FULL_RAW_ID if dataset_size == "full" else HF_DATASET_RAW_ID
@@ -148,16 +154,22 @@ def load_ciciot2023(
 	"""
 	if split not in ("random", "random_3way"):
 		raise ValueError(f"CIC-IoT-2023 only supports 'random' or 'random_3way' split, got '{split}'")
-	if dataset_size not in ("subsample", "full", "canonical"):
-		raise ValueError(f"dataset_size must be 'subsample', 'full', or 'canonical', got '{dataset_size}'")
+	if dataset_size not in ("subsample", "full", "canonical", "neto_full", "neto_subsample"):
+		raise ValueError(f"dataset_size must be 'subsample', 'full', 'canonical', 'neto_full', or 'neto_subsample', got '{dataset_size}'")
 
-	# canonical-neto is intrinsically raw; auto-default invalid_encoding to single_bit when caller didn't specify
-	is_raw_data = (dataset_size == "canonical") or raw
+	# canonical-neto + neto_full + neto_subsample are intrinsically raw (NaN preserved by build)
+	is_raw_data = dataset_size in ("canonical", "neto_full", "neto_subsample") or raw
 	if invalid_encoding is None:
 		invalid_encoding = "single_bit" if is_raw_data else "none"
 
-	size_label = {"full": "FULL 38.5M", "canonical": "CANONICAL 45M (Neto)", "subsample": "1.3M subsample"}[dataset_size]
-	raw_label = " RAW" if (raw and dataset_size != "canonical") else ""
+	size_label = {
+		"full": "FULL 38.5M",
+		"canonical": "CANONICAL 45M (bencorn-MERGED)",
+		"neto_full": "NETO-FULL 46.7M (canonical)",
+		"neto_subsample": "NETO-SUBSAMPLE 1.43M (canonical)",
+		"subsample": "1.3M subsample (bencorn)",
+	}[dataset_size]
+	raw_label = " RAW" if (raw and dataset_size not in ("canonical", "neto_full", "neto_subsample")) else ""
 	print(f"Loading CIC-IoT-2023 ({size_label}{raw_label}, split={split}, invalid_encoding={invalid_encoding})...")
 	df_train, df_test, common_features, df_val = _load_from_huggingface(split, dataset_size, raw=raw)
 

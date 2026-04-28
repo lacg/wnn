@@ -13,8 +13,9 @@ Source: /Users/lacg/wnn/.cache/kaggle_ciciot_full/ciciot23.csv  (13.75 GB)
 
 Target: lacg030175/CIC-IoT-2023-neto-full
 
-RAM strategy: read full CSV with float32 dtypes for numeric features. Peak ~30-35 GB.
-              If worker is busy, expect tight headroom on 64 GB system.
+RAM strategy: uses Polars for the heavy operations (CSV read, label transform,
+              stratified split, parquet write). Peak ~6-10 GB. Safe to run
+              concurrently with the worker.
 
 Usage:
     cd /Users/lacg/wnn
@@ -30,16 +31,17 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import polars as pl
 from huggingface_hub import HfApi
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
 
 SOURCE_CSV = Path("/Users/lacg/wnn/.cache/kaggle_ciciot_full/ciciot23.csv")
 TARGET_REPO = "lacg030175/CIC-IoT-2023-neto-full"
 
-# Translate UPPERCASE Neto labels → canonical (label_str, attack_class).
-# Same as create_ciciot2023_canonical_neto_dataset.py — Neto's labels are stable.
 NETO_LABEL_MAP = {
+	# Kaggle CSV uses "BenignTraffic" (mixed case) → uppercased "BENIGNTRAFFIC"
+	# bencorn MERGED uses "BENIGN" — both kept here for cross-source compatibility
+	"BENIGNTRAFFIC":                ("BenignTraffic",          "Benign"),
 	"BENIGN":                       ("BenignTraffic",          "Benign"),
 	"BACKDOOR_MALWARE":             ("Backdoor_Malware",       "Web-based"),
 	"BROWSERHIJACKING":             ("BrowserHijacking",       "Web-based"),
@@ -77,72 +79,103 @@ NETO_LABEL_MAP = {
 }
 
 
-def load_and_translate(csv_path: Path) -> pd.DataFrame:
-	"""Read the Kaggle CSV with efficient dtypes, translate labels."""
-	print(f"Reading {csv_path} ({csv_path.stat().st_size/1e9:.2f} GB)...")
+def load_and_translate(csv_path: Path) -> pl.DataFrame:
+	"""Read CSV with polars, translate labels. Returns polars DataFrame."""
+	print(f"Reading {csv_path.name} ({csv_path.stat().st_size/1e9:.2f} GB) with polars...")
 	t0 = time.time()
-	# Read with float32 to halve RAM vs default float64
-	df = pd.read_csv(csv_path, low_memory=False, dtype_backend="numpy_nullable")
+	# Polars reads CSV very efficiently, much lower RAM than pandas
+	df = pl.read_csv(csv_path, infer_schema_length=10000)
 	print(f"  Read {len(df):,} rows × {len(df.columns)} cols in {time.time()-t0:.1f}s")
-	print(f"  Columns: {list(df.columns)[:5]}... (+ {len(df.columns)-5} more, last={df.columns[-1]!r})")
+	print(f"  Columns: {list(df.columns)[:5]}... + {len(df.columns)-5} more (last={df.columns[-1]!r})")
 
-	# Translate labels — Label column is the last one
+	# Last column should be Label
 	label_col = df.columns[-1]
 	if label_col != "Label":
-		print(f"  WARNING: expected last column to be 'Label', got '{label_col}'. Renaming.")
-		df = df.rename(columns={label_col: "Label"})
+		print(f"  Renaming last col {label_col!r} → 'Label'")
+		df = df.rename({label_col: "Label"})
 
-	# Capture provenance
-	df["Label_orig"] = df["Label"]
-	# Map to canonical labels + attack_class
-	mapped = df["Label"].astype(str).str.upper().map(NETO_LABEL_MAP)
-	mask_unknown = mapped.isna()
-	if mask_unknown.any():
-		unk = df.loc[mask_unknown, "Label"].astype(str).unique()
-		print(f"  WARNING: {len(unk)} unknown label values ({mask_unknown.sum()} rows)")
-		for u in unk[:10]:
-			print(f"    repr: {u!r}")
-		# Treat unknowns as ("Unknown_<orig>", "Unknown")
-		mapped = mapped.where(~mask_unknown,
-							  df.loc[mask_unknown, "Label"].apply(lambda x: (str(x), "Unknown")))
-	df["Label"] = mapped.apply(lambda t: t[0])
-	df["attack_class"] = mapped.apply(lambda t: t[1])
-	df["label"] = (df["attack_class"] != "Benign").astype(np.int8)
+	# Build mapping dicts for polars replace_strict
+	label_canonical_map = {k: v[0] for k, v in NETO_LABEL_MAP.items()}
+	class_map = {k: v[1] for k, v in NETO_LABEL_MAP.items()}
+
+	# Translate via uppercased intermediate
+	df = df.with_columns([
+		pl.col("Label").alias("Label_orig"),
+		pl.col("Label").cast(pl.Utf8).str.to_uppercase().alias("_label_upper"),
+	])
+
+	# Apply mappings — replace_strict raises on missing keys, so use replace + handle Unknowns
+	df = df.with_columns([
+		pl.col("_label_upper").replace_strict(label_canonical_map, default=pl.col("Label_orig")).alias("Label"),
+		pl.col("_label_upper").replace_strict(class_map, default=pl.lit("Unknown")).alias("attack_class"),
+	]).drop("_label_upper")
+
+	df = df.with_columns([
+		(pl.col("attack_class") != "Benign").cast(pl.Int8).alias("label")
+	])
+
+	# Report unknowns
+	n_unknown = df.filter(pl.col("attack_class") == "Unknown").height
+	if n_unknown > 0:
+		unknown_labels = df.filter(pl.col("attack_class") == "Unknown")["Label_orig"].unique().to_list()
+		print(f"  WARNING: {n_unknown} rows with Unknown attack_class (Label_orig values: {unknown_labels[:5]}...)")
+
 	return df
 
 
-def coerce_numeric(df: pd.DataFrame) -> list[str]:
-	"""Coerce feature columns to numeric (NaN preserved). Returns feature list."""
+def coerce_numeric(df: pl.DataFrame) -> tuple[pl.DataFrame, list[str]]:
+	"""Coerce feature columns to Float32 (NaN preserved). Returns (df, feature_cols)."""
 	feature_cols = [c for c in df.columns if c not in ("Label", "Label_orig", "attack_class", "label")]
-	for col in feature_cols:
-		df[col] = pd.to_numeric(df[col], errors="coerce")
-	return feature_cols
+	df = df.with_columns([
+		pl.col(c).cast(pl.Float32, strict=False) for c in feature_cols
+	])
+	return df, feature_cols
 
 
-def report_stats(df: pd.DataFrame, feature_cols: list[str]):
-	num_cols = [c for c in feature_cols if df[c].dtype in (np.float32, np.float64, np.int32, np.int64, "Int64", "Float64", "Float32")]
-	n_nan = df[num_cols].isna().any(axis=1).sum()
-	n_inf = df[num_cols].replace([np.inf, -np.inf], np.nan).isna().any(axis=1).sum()
+def report_stats(df: pl.DataFrame, feature_cols: list[str]):
+	# Polars NaN-or-inf detection (after Float32 cast, inf is preserved, NaN is preserved)
+	# A row is "invalid" if any feature is NaN or +/-inf
 	print(f"\nRow stats:")
-	print(f"  Total: {len(df):,}")
-	print(f"  Rows with NaN: {n_nan:,} ({n_nan/len(df)*100:.4f}%)")
-	print(f"  Rows with NaN or ±Inf: {n_inf:,} ({n_inf/len(df)*100:.4f}%)")
+	n_total = df.height
+	# Check NaN
+	n_nan_per_row = df.select([
+		pl.sum_horizontal([pl.col(c).is_nan().cast(pl.Int32) for c in feature_cols]).alias("n_nan_in_row")
+	])["n_nan_in_row"]
+	n_with_nan = (n_nan_per_row > 0).sum()
+	# Check inf
+	n_inf_per_row = df.select([
+		pl.sum_horizontal([pl.col(c).is_infinite().cast(pl.Int32) for c in feature_cols]).alias("n_inf_in_row")
+	])["n_inf_in_row"]
+	n_with_inf = (n_inf_per_row > 0).sum()
+	n_with_invalid = ((n_nan_per_row > 0) | (n_inf_per_row > 0)).sum()
+	print(f"  Total: {n_total:,}")
+	print(f"  Rows with NaN: {n_with_nan:,} ({n_with_nan/n_total*100:.4f}%)")
+	print(f"  Rows with NaN or ±Inf: {n_with_invalid:,} ({n_with_invalid/n_total*100:.4f}%)")
 	print(f"\nClass distribution:")
-	for cls in sorted(df["attack_class"].unique()):
-		count = (df["attack_class"] == cls).sum()
-		print(f"  {cls:<15}: {count:>12,} ({count/len(df)*100:.2f}%)")
-	n_benign = int((df["label"] == 0).sum())
-	n_attack = int((df["label"] == 1).sum())
-	print(f"\nBinary: {n_benign:,} benign, {n_attack:,} attack ({n_benign/len(df)*100:.2f}% / {n_attack/len(df)*100:.2f}%)")
+	dist = df.group_by("attack_class").agg(pl.len().alias("count")).sort("count", descending=True)
+	for row in dist.iter_rows():
+		cls, count = row
+		print(f"  {cls:<15}: {count:>12,} ({count/n_total*100:.2f}%)")
+	n_benign = df.filter(pl.col("label") == 0).height
+	n_attack = df.filter(pl.col("label") == 1).height
+	print(f"\nBinary: {n_benign:,} benign, {n_attack:,} attack ({n_benign/n_total*100:.2f}% / {n_attack/n_total*100:.2f}%)")
 
 
-def compute_rf_importance(df: pd.DataFrame, feature_cols: list[str]) -> tuple[list[str], list[tuple[str, float]]]:
+def compute_rf_importance(df: pl.DataFrame, feature_cols: list[str]) -> tuple[list[str], list[tuple[str, float]]]:
+	"""RF importance on a 100K finite-valued sample (converted to pandas, low RAM)."""
 	print(f"\nRF importance on 100K finite-valued sample...")
-	sample = df.sample(min(200_000, len(df)), random_state=42)
-	sample = sample.replace([np.inf, -np.inf], np.nan).dropna(subset=feature_cols)
-	sample = sample.sample(min(100_000, len(sample)), random_state=42)
-	X = sample[feature_cols].values.astype(np.float64)
-	y = sample["label"].values
+	# Sample 200K, drop nan/inf, take 100K
+	n_sample = min(200_000, df.height)
+	sub = df.sample(n=n_sample, seed=42)
+	# Drop rows with NaN or inf in any feature column
+	sub = sub.filter(~pl.any_horizontal([pl.col(c).is_nan() | pl.col(c).is_infinite() for c in feature_cols]))
+	if len(sub) > 100_000:
+		sub = sub.sample(n=100_000, seed=42)
+	print(f"  Using {len(sub):,} finite samples")
+	# Convert just this small sample to pandas
+	pdf = sub.to_pandas()
+	X = pdf[feature_cols].values.astype(np.float64)
+	y = pdf["label"].values
 	rf = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
 	rf.fit(X, y)
 	ranked = sorted(zip(feature_cols, rf.feature_importances_), key=lambda x: -x[1])
@@ -150,9 +183,27 @@ def compute_rf_importance(df: pd.DataFrame, feature_cols: list[str]) -> tuple[li
 	print(f"  Top-20 features:")
 	for i, (feat, imp) in enumerate(ranked[:20]):
 		print(f"    {i+1:2d}. {feat:<25} {imp:.6f}")
-	del X, y, sample
+	del X, y, pdf, sub
 	gc.collect()
 	return top20, ranked
+
+
+def stratified_split(df: pl.DataFrame, test_frac: float = 0.2, val_frac_of_test: float = 0.5) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+	"""80/10/10 split stratified by binary label. Returns (train, test, val)."""
+	parts_train, parts_test, parts_val = [], [], []
+	for lbl in [0, 1]:
+		sub = df.filter(pl.col("label") == lbl)
+		shuffled = sub.sample(fraction=1.0, seed=42, shuffle=True)
+		n = shuffled.height
+		n_train = int(n * (1 - test_frac))
+		n_test_only = int((n - n_train) * (1 - val_frac_of_test))
+		parts_train.append(shuffled[:n_train])
+		parts_test.append(shuffled[n_train:n_train + n_test_only])
+		parts_val.append(shuffled[n_train + n_test_only:])
+	df_train = pl.concat(parts_train).sample(fraction=1.0, seed=42, shuffle=True)
+	df_test = pl.concat(parts_test).sample(fraction=1.0, seed=42, shuffle=True)
+	df_val = pl.concat(parts_val).sample(fraction=1.0, seed=42, shuffle=True)
+	return df_train, df_test, df_val
 
 
 def main():
@@ -165,20 +216,25 @@ def main():
 		raise FileNotFoundError(f"Source CSV missing: {SOURCE_CSV}")
 
 	df = load_and_translate(SOURCE_CSV)
-	feature_cols = coerce_numeric(df)
-	print(f"\nFeatures coerced: {len(feature_cols)}")
+	df, feature_cols = coerce_numeric(df)
+	print(f"\nFeatures coerced to Float32: {len(feature_cols)}")
 	report_stats(df, feature_cols)
+
 	top20, ranked = compute_rf_importance(df, feature_cols)
 
-	print(f"\nCreating 80/10/10 stratified split...")
-	df_train, df_remaining = train_test_split(df, test_size=0.2, random_state=42, stratify=df["label"])
-	df_test, df_val = train_test_split(df_remaining, test_size=0.5, random_state=42, stratify=df_remaining["label"])
-	del df_remaining
-	gc.collect()
-	print(f"  Train: {len(df_train):,} | Test: {len(df_test):,} | Val: {len(df_val):,}")
+	print(f"\nCreating 80/10/10 stratified split via polars...")
+	df_train, df_test, df_val = stratified_split(df)
+	print(f"  Train: {df_train.height:,} | Test: {df_test.height:,} | Val: {df_val.height:,}")
 
-	df_rand_test = pd.concat([df_test, df_val], ignore_index=True)
-	print(f"  random split: {len(df_train):,} train / {len(df_rand_test):,} test (test+val merged)")
+	df_rand_test = pl.concat([df_test, df_val])
+	print(f"  random split: {df_train.height:,} train / {df_rand_test.height:,} test (test+val merged)")
+
+	# Snapshot for README
+	n_total = df.height
+	class_dist = df.group_by("attack_class").agg(pl.len().alias("count")).sort("count", descending=True)
+	# free df early — we still have the splits
+	del df
+	gc.collect()
 
 	print(f"\nUploading to {TARGET_REPO}...")
 	api = HfApi()
@@ -189,13 +245,13 @@ def main():
 		tmpdir = Path(tmpdir)
 
 		r3w = tmpdir / "random_3way"; r3w.mkdir()
-		df_train.to_parquet(r3w / "train-00000-of-00001.parquet", index=False)
-		df_test.to_parquet(r3w / "test-00000-of-00001.parquet", index=False)
-		df_val.to_parquet(r3w / "validation-00000-of-00001.parquet", index=False)
+		df_train.write_parquet(r3w / "train-00000-of-00001.parquet")
+		df_test.write_parquet(r3w / "test-00000-of-00001.parquet")
+		df_val.write_parquet(r3w / "validation-00000-of-00001.parquet")
 
 		r = tmpdir / "random"; r.mkdir()
-		df_train.to_parquet(r / "train-00000-of-00001.parquet", index=False)
-		df_rand_test.to_parquet(r / "test-00000-of-00001.parquet", index=False)
+		df_train.write_parquet(r / "train-00000-of-00001.parquet")
+		df_rand_test.write_parquet(r / "test-00000-of-00001.parquet")
 
 		with open(tmpdir / "feature_importance.json", "w") as f:
 			json.dump({"top20": top20, "all_ranked": [(ft, float(i)) for ft, i in ranked]}, f, indent=2)
@@ -219,7 +275,7 @@ configs:
 # CIC-IoT-2023 — Neto-Full (Authoritative 46.7M)
 
 This is the **authoritative canonical CIC-IoT-2023 dataset** at the row count
-published by Neto et al. (2023): {len(df):,} rows × {len(feature_cols)} features.
+published by Neto et al. (2023): {n_total:,} rows × {len(feature_cols)} features.
 
 Sourced from the Kaggle mirror `akashdogra/ciciot23csv` (13.75 GB single CSV)
 which itself was derived from CIC's official 169-file distribution. Compared
@@ -245,9 +301,8 @@ as a learnable per-feature flag bit instead of silently collapsing to zero.
 
 ## Class distribution
 """
-		for cls in sorted(df["attack_class"].unique()):
-			count = (df["attack_class"] == cls).sum()
-			readme += f"- {cls}: {count:,} ({count/len(df)*100:.2f}%)\n"
+		for cls, count in class_dist.iter_rows():
+			readme += f"- {cls}: {count:,} ({count/n_total*100:.2f}%)\n"
 
 		(tmpdir / "README.md").write_text(readme)
 
@@ -255,11 +310,11 @@ as a learnable per-feature flag bit instead of silently collapsing to zero.
 			folder_path=str(tmpdir),
 			repo_id=TARGET_REPO,
 			repo_type="dataset",
-			commit_message=f"Initial: canonical Neto 46.7M ({len(df):,} rows × {len(feature_cols)} features)",
+			commit_message=f"Initial: canonical Neto 46.7M ({n_total:,} rows × {len(feature_cols)} features)",
 		)
 
 	print(f"\n✓ Done! Available at: https://huggingface.co/datasets/{TARGET_REPO}")
-	print(f"  Total rows: {len(df):,}, features: {len(feature_cols)}")
+	print(f"  Total rows: {n_total:,}, features: {len(feature_cols)}")
 	print(f"  Total elapsed: {(time.time()-t0)/60:.1f} min")
 
 

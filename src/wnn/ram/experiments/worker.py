@@ -852,9 +852,10 @@ class FlowWorker:
         ids_raw = params.get("ids_raw", False)
         dataset_name = params.get("ids_dataset", "unsw-nb15")
         # Default to "single_bit" when data is raw — i.e., either ids_raw=True or
-        # the dataset is canonical-neto (raw by construction). Otherwise default
+        # the dataset is one of the raw-by-construction variants. Otherwise default
         # to "none" for back-compat with pre-Phase-C flows (incl. r98).
-        is_raw_data = ids_raw or dataset_name == "ciciot2023_canonical"
+        raw_by_dataset = dataset_name in ("ciciot2023_canonical", "ciciot2023_neto_full", "ciciot2023_neto_subsample")
+        is_raw_data = ids_raw or raw_by_dataset
         ids_invalid_encoding = params.get("ids_invalid_encoding",
                                           "single_bit" if is_raw_data else "none")
 
@@ -876,11 +877,26 @@ class FlowWorker:
                                            dataset_size="full",
                                            raw=ids_raw, invalid_encoding=ids_invalid_encoding)
         elif dataset_name == "ciciot2023_canonical":
-            # Canonical 45M Neto et al. CIC-IoT-2023 from lacg030175/CIC-IoT-2023-canonical-neto.
-            # NaN/inf preserved; loader auto-defaults invalid_encoding="single_bit" when not set.
+            # Canonical 45M Neto et al. CIC-IoT-2023 from lacg030175/CIC-IoT-2023-canonical-neto
+            # (bencorn-MERGED-derived, 39 features). NaN/inf preserved; loader auto-defaults
+            # invalid_encoding="single_bit" when not set.
             from wnn.ids.ciciot2023 import load_ciciot2023
             full_dataset = load_ciciot2023(n_bits=n_bits, split=split, feature_selection=feature_selection,
                                            dataset_size="canonical",
+                                           invalid_encoding=ids_invalid_encoding)
+        elif dataset_name == "ciciot2023_neto_full":
+            # Authoritative 46.7M Neto canonical from lacg030175/CIC-IoT-2023-neto-full
+            # (Kaggle-derived, 46 features — vs bencorn's 39). NaN/inf preserved.
+            from wnn.ids.ciciot2023 import load_ciciot2023
+            full_dataset = load_ciciot2023(n_bits=n_bits, split=split, feature_selection=feature_selection,
+                                           dataset_size="neto_full",
+                                           invalid_encoding=ids_invalid_encoding)
+        elif dataset_name == "ciciot2023_neto_subsample":
+            # 1.43M canonical subsample from lacg030175/CIC-IoT-2023-neto-subsample (46 features).
+            # Drop-in replacement for ciciot2023 (bencorn 1.3M, 39 features) for new flows.
+            from wnn.ids.ciciot2023 import load_ciciot2023
+            full_dataset = load_ciciot2023(n_bits=n_bits, split=split, feature_selection=feature_selection,
+                                           dataset_size="neto_subsample",
                                            invalid_encoding=ids_invalid_encoding)
         else:
             full_dataset = load_unsw_nb15(n_bits=n_bits, split=split, feature_selection=feature_selection,
